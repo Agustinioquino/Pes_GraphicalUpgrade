@@ -18,6 +18,7 @@ namespace fx {
 static ID3D11RenderTargetView* s_rtv = nullptr;
 static bool s_keyWas = false;
 static std::string s_status;
+static ImFont* s_fontBig = nullptr; static ImFont* s_fontBold = nullptr;
 
 void OverlayResize() { if (s_rtv) { s_rtv->Release(); s_rtv = nullptr; } }
 
@@ -54,9 +55,28 @@ static void Init(IDXGISwapChain* sc) {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;
-    io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 17.0f, nullptr, io.Fonts->GetGlyphRangesDefault());
+    io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 19.0f, nullptr, io.Fonts->GetGlyphRangesDefault());
+    s_fontBig = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeuib.ttf", 26.0f, nullptr, io.Fonts->GetGlyphRangesDefault());
+    s_fontBold = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeuib.ttf", 19.0f, nullptr, io.Fonts->GetGlyphRangesDefault());
     ImGui::StyleColorsDark();
-    ImGui::GetStyle().WindowRounding = 6.0f;
+    ImGuiStyle& st = ImGui::GetStyle();
+    st.WindowRounding = 10.0f; st.FrameRounding = 6.0f; st.GrabRounding = 6.0f; st.TabRounding = 6.0f; st.PopupRounding = 6.0f;
+    st.WindowPadding = ImVec2(18, 16); st.FramePadding = ImVec2(10, 6); st.ItemSpacing = ImVec2(10, 8); st.ItemInnerSpacing = ImVec2(8, 6);
+    st.GrabMinSize = 14.0f; st.ScrollbarSize = 14.0f; st.WindowBorderSize = 0.0f; st.FrameBorderSize = 0.0f;
+    ImVec4* c = st.Colors;
+    const ImVec4 bg(0.07f, 0.08f, 0.10f, 0.96f), panel(0.11f, 0.12f, 0.15f, 1.0f), panelH(0.15f, 0.17f, 0.21f, 1.0f);
+    const ImVec4 acc(0.20f, 0.72f, 0.46f, 1.0f), accH(0.28f, 0.82f, 0.55f, 1.0f), accA(0.16f, 0.60f, 0.38f, 1.0f);
+    c[ImGuiCol_WindowBg] = bg; c[ImGuiCol_ChildBg] = ImVec4(0, 0, 0, 0); c[ImGuiCol_PopupBg] = panel;
+    c[ImGuiCol_TitleBg] = c[ImGuiCol_TitleBgActive] = c[ImGuiCol_TitleBgCollapsed] = ImVec4(0.05f, 0.06f, 0.08f, 1.0f);
+    c[ImGuiCol_FrameBg] = panel; c[ImGuiCol_FrameBgHovered] = panelH; c[ImGuiCol_FrameBgActive] = panelH;
+    c[ImGuiCol_Header] = panel; c[ImGuiCol_HeaderHovered] = panelH; c[ImGuiCol_HeaderActive] = panelH;
+    c[ImGuiCol_Button] = panelH; c[ImGuiCol_ButtonHovered] = ImVec4(0.21f, 0.24f, 0.29f, 1.0f); c[ImGuiCol_ButtonActive] = accA;
+    c[ImGuiCol_CheckMark] = acc; c[ImGuiCol_SliderGrab] = acc; c[ImGuiCol_SliderGrabActive] = accH;
+    c[ImGuiCol_Tab] = panel; c[ImGuiCol_TabHovered] = panelH; c[ImGuiCol_TabSelected] = ImVec4(0.17f, 0.20f, 0.24f, 1.0f);
+    c[ImGuiCol_TabDimmed] = panel; c[ImGuiCol_TabDimmedSelected] = ImVec4(0.17f, 0.20f, 0.24f, 1.0f);
+    c[ImGuiCol_Separator] = ImVec4(0.22f, 0.25f, 0.30f, 1.0f); c[ImGuiCol_Text] = ImVec4(0.93f, 0.94f, 0.96f, 1.0f);
+    c[ImGuiCol_TextDisabled] = ImVec4(0.55f, 0.58f, 0.64f, 1.0f); c[ImGuiCol_ScrollbarBg] = ImVec4(0, 0, 0, 0);
+    c[ImGuiCol_ScrollbarGrab] = panelH; c[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.3f, 0.33f, 0.38f, 1.0f);
     ImGui_ImplWin32_Init(s_hwnd);
     ImGui_ImplDX11_Init(g_dev.dev, g_dev.imm);
     s_oldProc = (WNDPROC)SetWindowLongPtrW(s_hwnd, GWLP_WNDPROC, (LONG_PTR)MenuProc);
@@ -66,92 +86,134 @@ static void Init(IDXGISwapChain* sc) {
     Log("menu listo (tecla Insert)");
 }
 
+static void DrawGroup(MenuGroup& g, int gid) {
+    ImGui::PushID(1000 + gid);
+    ImGui::BeginChild("card", ImVec2(0, 0), ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_FrameStyle);
+    bool hasT = g.tIdx >= 0;
+    bool on = hasT ? (g_cfg.live[g.tIdx][g.tComp] > 0.5f) : true;
+    if (s_fontBold) ImGui::PushFont(s_fontBold);
+    if (hasT) { if (ImGui::Checkbox(Utf8(g.title).c_str(), &on)) g_cfg.live[g.tIdx][g.tComp] = on ? 1.0f : 0.0f; }
+    else ImGui::TextUnformatted(Utf8(g.title).c_str());
+    if (s_fontBold) ImGui::PopFont();
+    if (!g.desc.empty()) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.66f, 0.69f, 0.74f, 1)); ImGui::TextWrapped("%s", Utf8(g.desc).c_str()); ImGui::PopStyleColor(); }
+    if (!g.sliders.empty()) {
+        ImGui::Spacing();
+        ImGui::BeginDisabled(!on);
+        float w = ImGui::GetContentRegionAvail().x;
+        for (auto& sl : g.sliders) {
+            ImGui::PushID(&sl);
+            ImGui::TextUnformatted(Utf8(sl.label).c_str());
+            ImGui::SetNextItemWidth(w - 70);
+            ImGui::SliderFloat("##s", &g_cfg.live[sl.idx][sl.comp], sl.lo, sl.hi, "%.2f");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("0")) g_cfg.live[sl.idx][sl.comp] = g_cfg.base[sl.idx][sl.comp];
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Volver al valor guardado");
+            ImGui::PopID();
+        }
+        ImGui::EndDisabled();
+    }
+    ImGui::EndChild();
+    ImGui::Spacing();
+    ImGui::PopID();
+}
+
 static void DrawMenu() {
-    ImGui::SetNextWindowSize(ImVec2(560, 640), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(640, 760), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos(ImVec2(40, 60), ImGuiCond_FirstUseEver);
     bool open = true;
-    ImGui::Begin("PES21 FX 0.1", &open);
+    ImGui::Begin("##pes21fx", &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
     if (!open) g_menuOpen = false;
-    ImGui::Text("Shaders propios activos: %d   errores: %d", g_replacedCount.load(), g_failedCount.load());
-    if (ImGui::Button("Guardar")) s_status = SaveConfigValues() ? "Guardado en PES21FX.ini" : "No se pudo guardar";
+    // --- cabecera ---
+    if (s_fontBig) ImGui::PushFont(s_fontBig);
+    ImGui::TextUnformatted("PES21 FX");
+    if (s_fontBig) ImGui::PopFont();
     ImGui::SameLine();
-    if (ImGui::Button("Recargar shaders")) { ReloadShaders(); s_status = "Shaders recargados"; }
+    ImGui::TextDisabled("  0.2   |   Insert: cerrar");
+    ImGui::SameLine(ImGui::GetWindowWidth() - 60);
+    if (ImGui::Button("X", ImVec2(34, 0))) g_menuOpen = false;
+    int rep = g_replacedCount.load(), fail = g_failedCount.load();
+    ImGui::PushStyleColor(ImGuiCol_Text, fail ? ImVec4(0.95f, 0.55f, 0.35f, 1) : ImVec4(0.45f, 0.85f, 0.55f, 1));
+    ImGui::Text("%s  %d shaders propios activos%s", fail ? "!" : "\xe2\x97\x8f", rep, fail ? "" : "");
+    ImGui::PopStyleColor();
+    if (fail) { ImGui::SameLine(); ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.35f, 1), "   %d con error (ver pestana Errores)", fail); }
+    ImGui::Spacing();
+    if (ImGui::Button("Guardar", ImVec2(120, 0))) s_status = SaveConfigValues() ? "Guardado en PES21FX.ini" : "No se pudo guardar";
     ImGui::SameLine();
-    if (ImGui::Button("Recargar config")) { LoadConfig(); ReloadShaders(); s_status = "Configuracion recargada"; }
+    if (ImGui::Button("Recargar shaders", ImVec2(150, 0))) { ReloadShaders(); s_status = "Shaders recargados"; }
+    ImGui::SameLine();
+    if (ImGui::Button("Recargar config", ImVec2(140, 0))) { LoadConfig(); ReloadShaders(); s_status = "Configuracion recargada"; }
     ImGui::SameLine();
     ImGui::Checkbox("Ver original", &g_cfg.bypass);
     if (!s_status.empty()) ImGui::TextDisabled("%s", s_status.c_str());
-    ImGui::Separator();
+    ImGui::Spacing();
 
     std::lock_guard<std::mutex> lk(g_cfgMutex);
-    if (!g_cfg.groups.empty() && ImGui::CollapsingHeader("Mejoras", ImGuiTreeNodeFlags_DefaultOpen)) {
-        std::string lastSec; int gid = 0;
-        for (auto& g : g_cfg.groups) {
-            ImGui::PushID(1000 + gid++);
-            if (!g.section.empty() && g.section != lastSec) { ImGui::SeparatorText(Utf8(g.section).c_str()); lastSec = g.section; }
-            bool hasT = g.tIdx >= 0;
-            bool on = hasT ? (g_cfg.live[g.tIdx][g.tComp] > 0.5f) : true;
-            if (hasT) { if (ImGui::Checkbox(Utf8(g.title).c_str(), &on)) g_cfg.live[g.tIdx][g.tComp] = on ? 1.0f : 0.0f; }
-            else ImGui::TextUnformatted(Utf8(g.title).c_str());
-            if (!g.desc.empty()) { ImGui::Indent(22); ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.72f, 0.72f, 0.72f, 1)); ImGui::TextWrapped("%s", Utf8(g.desc).c_str()); ImGui::PopStyleColor(); ImGui::Unindent(22); }
-            if (!g.sliders.empty()) {
-                ImGui::Indent(22);
-                ImGui::BeginDisabled(!on);
-                for (auto& sl : g.sliders) {
-                    ImGui::SetNextItemWidth(260);
-                    ImGui::SliderFloat(Utf8(sl.label).c_str(), &g_cfg.live[sl.idx][sl.comp], sl.lo, sl.hi, "%.2f");
+    if (ImGui::BeginTabBar("tabs", ImGuiTabBarFlags_FittingPolicyScroll)) {
+        // una pestana por seccion de los grupos
+        std::vector<std::string> secs;
+        for (auto& g : g_cfg.groups) { std::string sname = g.section.empty() ? "Otros" : g.section; bool f = false; for (auto& x : secs) f |= (x == sname); if (!f) secs.push_back(sname); }
+        for (auto& sname : secs) {
+            if (ImGui::BeginTabItem(Utf8(sname).c_str())) {
+                ImGui::BeginChild("scroll", ImVec2(0, 0), ImGuiChildFlags_None);
+                int gid = 0;
+                for (auto& g : g_cfg.groups) { std::string s2 = g.section.empty() ? "Otros" : g.section; if (s2 == sname) DrawGroup(g, gid); gid++; }
+                ImGui::EndChild();
+                ImGui::EndTabItem();
+            }
+        }
+        if (ImGui::BeginTabItem("Avanzado")) {
+            ImGui::BeginChild("scroll2", ImVec2(0, 0), ImGuiChildFlags_None);
+            if (ImGui::CollapsingHeader("Efectos por tecla", ImGuiTreeNodeFlags_DefaultOpen)) {
+                int id = 0;
+                for (auto& k : g_cfg.keys) {
+                    ImGui::PushID(id++);
+                    std::string lab = Utf8(k.label);
+                    if (k.type == KeyBind::Cycle) {
+                        if (ImGui::Button("Siguiente")) KeyActionUnlocked(k, 1);
+                        ImGui::SameLine(); ImGui::TextUnformatted(lab.c_str());
+                    } else if (k.type == KeyBind::Toggle && !k.assigns.empty()) {
+                        bool offSwitch = k.assigns[0].values[0] <= 0.0f;
+                        bool on = offSwitch ? !k.active : k.active;
+                        if (ImGui::Checkbox(lab.c_str(), &on)) KeyActionUnlocked(k, 0);
+                    }
+                    ImGui::PopID();
                 }
-                ImGui::EndDisabled();
-                ImGui::Unindent(22);
             }
-            ImGui::Spacing();
-            ImGui::PopID();
-        }
-    }
-    if (ImGui::CollapsingHeader("Efectos (teclas)")) {
-        int id = 0;
-        for (auto& k : g_cfg.keys) {
-            ImGui::PushID(id++);
-            std::string lab = Utf8(k.label);
-            if (k.type == KeyBind::Cycle) {
-                if (ImGui::Button("Siguiente")) KeyActionUnlocked(k, 1);
-                ImGui::SameLine(); ImGui::TextUnformatted(lab.c_str());
-            } else if (k.type == KeyBind::Toggle && !k.assigns.empty()) {
-                // si la tecla pone 0 (o negativo) es un interruptor de APAGADO; si pone otro valor, lo PRENDE
-                bool offSwitch = k.assigns[0].values[0] <= 0.0f;
-                bool on = offSwitch ? !k.active : k.active;
-                if (ImGui::Checkbox(lab.c_str(), &on)) KeyActionUnlocked(k, 0);
+            if (ImGui::CollapsingHeader("Todos los parametros")) {
+                std::string lastComment;
+                const char* cn = "xyzw";
+                for (int i = 0; i < kParamCount; i++) {
+                    bool any = false;
+                    for (int c = 0; c < 4; c++) any |= g_cfg.info[i][c].defined;
+                    if (!any) continue;
+                    for (int c = 0; c < 4; c++) {
+                        if (!g_cfg.info[i][c].defined) continue;
+                        const std::string& cm = g_cfg.info[i][c].comment;
+                        if (!cm.empty() && cm != lastComment) { ImGui::TextDisabled("%s", Utf8(cm).c_str()); lastComment = cm; }
+                    }
+                    for (int c = 0; c < 4; c++) {
+                        if (!g_cfg.info[i][c].defined) continue;
+                        char name[16]; if (i) snprintf(name, sizeof(name), "%c%d", cn[c], i); else snprintf(name, sizeof(name), "%c", cn[c]);
+                        ImGui::SetNextItemWidth(120);
+                        ImGui::DragFloat(name, &g_cfg.live[i][c], 0.01f, -100.0f, 100.0f, "%.3f");
+                        ImGui::SameLine();
+                    }
+                    ImGui::NewLine();
+                }
             }
-            ImGui::PopID();
+            ImGui::EndChild();
+            ImGui::EndTabItem();
         }
-    }
-    if (ImGui::CollapsingHeader("Parametros")) {
-        std::string lastComment;
-        const char* cn = "xyzw";
-        for (int i = 0; i < kParamCount; i++) {
-            bool any = false;
-            for (int c = 0; c < 4; c++) any |= g_cfg.info[i][c].defined;
-            if (!any) continue;
-            for (int c = 0; c < 4; c++) {
-                if (!g_cfg.info[i][c].defined) continue;
-                const std::string& cm = g_cfg.info[i][c].comment;
-                if (!cm.empty() && cm != lastComment) { ImGui::TextWrapped("%s", Utf8(cm).c_str()); lastComment = cm; }
+        {
+            std::lock_guard<std::mutex> lk2(g_errMutex);
+            if (!g_compileErrors.empty() && ImGui::BeginTabItem("Errores")) {
+                ImGui::BeginChild("scroll3", ImVec2(0, 0), ImGuiChildFlags_None);
+                for (auto& e : g_compileErrors) ImGui::TextWrapped("%s", e.c_str());
+                ImGui::EndChild();
+                ImGui::EndTabItem();
             }
-            for (int c = 0; c < 4; c++) {
-                if (!g_cfg.info[i][c].defined) continue;
-                char name[16]; if (i) snprintf(name, sizeof(name), "%c%d", cn[c], i); else snprintf(name, sizeof(name), "%c", cn[c]);
-                ImGui::SetNextItemWidth(110);
-                ImGui::DragFloat(name, &g_cfg.live[i][c], 0.01f, -100.0f, 100.0f, "%.3f");
-                ImGui::SameLine();
-            }
-            ImGui::NewLine();
         }
-    }
-    {
-        std::lock_guard<std::mutex> lk2(g_errMutex);
-        if (!g_compileErrors.empty() && ImGui::CollapsingHeader("Errores de compilacion")) {
-            for (auto& e : g_compileErrors) ImGui::TextWrapped("%s", e.c_str());
-        }
+        ImGui::EndTabBar();
     }
     ImGui::End();
 }
