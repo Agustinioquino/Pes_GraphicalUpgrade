@@ -133,7 +133,7 @@ static void DrawMenu() {
     if (ImGui::Button("X", ImVec2(34, 0))) g_menuOpen = false;
     int rep = g_replacedCount.load(), fail = g_failedCount.load();
     ImGui::PushStyleColor(ImGuiCol_Text, fail ? ImVec4(0.95f, 0.55f, 0.35f, 1) : ImVec4(0.45f, 0.85f, 0.55f, 1));
-    ImGui::Text("%s  %d shaders propios activos%s", fail ? "!" : "\xe2\x97\x8f", rep, fail ? "" : "");
+    ImGui::Text("%s  %d shaders propios activos", fail ? "!" : "OK", rep);
     ImGui::PopStyleColor();
     if (fail) { ImGui::SameLine(); ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.35f, 1), "   %d con error (ver pestana Errores)", fail); }
     ImGui::Spacing();
