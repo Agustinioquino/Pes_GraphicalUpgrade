@@ -1,0 +1,128 @@
+// PES 2021 - DOF: composicion final [hash b9d609bc416e6858] - DOF v2 (w41)
+// ---- Created with 3Dmigoto v1.3.16 on Thu Oct 08 21:08:15 2026
+
+cbuffer cPSObject : register(b5)
+{
+
+  struct
+  {
+    float4x4 m_viewWorld;
+    float4x4 m_world;
+    float4 m_useWeightCount;
+    float4 m_localParam[9];
+  } g_psObject : packoffset(c0);
+
+}
+
+cbuffer cPSSystem : register(b0)
+{
+
+  struct
+  {
+    float4 m_param;
+    float4 m_renderInfo;
+    float4 m_renderBuffer;
+    float4 m_dominantLightDir;
+    float4 m_timeParam;
+  } g_psSystem : packoffset(c0);
+
+}
+
+SamplerState g_samplerPoint_Clamp_s : register(s9);
+SamplerState g_samplerLinear_Clamp_s : register(s11);
+Texture2D<float4> inImage : register(t0);
+Texture2D<float4> inImageNear : register(t1);
+Texture2D<float4> inImageFar : register(t2);
+
+
+// 3Dmigoto declarations
+#define cmp -
+Texture1D<float4> IniParams : register(t120);
+Texture2D<float4> StereoParams : register(t125);
+
+
+// PES21 DOF v2 (16/10): las capas desenfocadas (cercana y lejana, a media resolucion) se ampliaban con filtro lineal
+// -> bordes en bloques. Ahora con B-spline cubico (4 lecturas), suave y sin escalones.
+float4 PESBicubic(Texture2D<float4> tex, float2 uv, float2 hi)
+{
+  uint tw, th; tex.GetDimensions(tw, th);
+  float2 ts = float2(max(tw, 1u), max(th, 1u));
+  float2 st = uv * ts - 0.5;
+  float2 i = floor(st);
+  float2 f = st - i;
+  float2 f2 = f * f, f3 = f2 * f;
+  float2 w0 = (-f3 + 3.0 * f2 - 3.0 * f + 1.0) / 6.0;
+  float2 w1 = (3.0 * f3 - 6.0 * f2 + 4.0) / 6.0;
+  float2 w2 = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) / 6.0;
+  float2 w3 = f3 / 6.0;
+  float2 g0 = w0 + w1, g1 = w2 + w3;
+  float2 h0 = (i - 1.0 + w1 / max(g0, 1e-5) + 0.5) / ts;
+  float2 h1 = (i + 1.0 + w3 / max(g1, 1e-5) + 0.5) / ts;
+  float4 a = tex.SampleLevel(g_samplerLinear_Clamp_s, clamp(float2(h0.x, h0.y), 0, hi), 0);
+  float4 b = tex.SampleLevel(g_samplerLinear_Clamp_s, clamp(float2(h1.x, h0.y), 0, hi), 0);
+  float4 c = tex.SampleLevel(g_samplerLinear_Clamp_s, clamp(float2(h0.x, h1.y), 0, hi), 0);
+  float4 d = tex.SampleLevel(g_samplerLinear_Clamp_s, clamp(float2(h1.x, h1.y), 0, hi), 0);
+  return g0.y * (g0.x * a + g1.x * b) + g1.y * (g0.x * c + g1.x * d);
+}
+
+void main(
+  float4 v0 : SV_Position0,
+  float2 v1 : TEXCOORD0,
+  out float4 o0 : SV_Target0)
+{
+  float4 r0,r1,r2,r3;
+  uint4 bitmask, uiDest;
+  float4 fDest;
+
+  r0.xyzw = g_psSystem.m_renderBuffer.zwzw * v0.xyxy;
+  r1.xyzw = inImage.Sample(g_samplerPoint_Clamp_s, r0.zw).xyzw;
+  r0.xyzw = max(float4(0,0,0,0), r0.xyzw);
+  r0.xyzw = min(g_psObject.m_localParam[2].zwxy, r0.xyzw);
+  r1.w = -0.5 + r1.w;
+  r1.w = saturate(r1.w + r1.w);
+  r1.w = g_psObject.m_localParam[0].x * r1.w;
+  r1.w = saturate(g_psObject.m_localParam[0].z * r1.w);
+  r1.w = log2(r1.w);
+  r1.w = 0.174999997 * r1.w;
+  r1.w = exp2(r1.w);
+  r1.w = -0.850000024 + r1.w;
+  r1.w = 6.66666794 * r1.w;
+  r1.w = max(0, r1.w);
+  r2.x = r1.w * -2 + 3;
+  r1.w = r1.w * r1.w;
+  r1.w = r2.x * r1.w;
+  r2.x = log2(r1.w);
+  float4 DFc = IniParams.Load(int2(41,0));
+  if (DFc.w > 0.5) {
+    r2.yzw = PESBicubic(inImageFar, r0.zw, g_psObject.m_localParam[2].xy).xyz;
+    r0.xyzw = PESBicubic(inImageNear, r0.xy, g_psObject.m_localParam[2].zw);
+  } else {
+    r2.yzw = inImageFar.Sample(g_samplerLinear_Clamp_s, r0.zw).xyz;
+    r0.xyzw = inImageNear.Sample(g_samplerLinear_Clamp_s, r0.xy).xyzw;
+  }
+  r3.x = dot(float3(0.212599993,0.715200007,0.0722000003), r2.yzw);
+  r3.y = saturate(1 + -r3.x);
+  r3.x = saturate(3 * r3.x);
+  r3.y = r3.y * r3.y;
+  r3.y = max(0.5, r3.y);
+  r3.z = dot(float3(0.212599993,0.715200007,0.0722000003), r1.xyz);
+  r3.z = saturate(1 + -r3.z);
+  r3.z = max(0.25, r3.z);
+  r3.y = min(r3.z, r3.y);
+  r2.x = r3.y * r2.x;
+  r2.x = exp2(r2.x);
+  r3.yzw = saturate(r1.xyz);
+  r3.yzw = r3.yzw + -r1.xyz;
+  r1.xyz = r2.xxx * r3.yzw + r1.xyz;
+  r2.yzw = r2.yzw + -r1.xyz;
+  r1.xyz = r2.xxx * r2.yzw + r1.xyz;
+  r0.xyz = -r1.xyz + r0.xyz;
+  r0.w = saturate(g_psObject.m_localParam[0].y * r0.w);
+  r1.w = r0.w * g_psObject.m_localParam[0].w + r1.w;
+  r0.w = g_psObject.m_localParam[0].w * r0.w;
+  r1.w = saturate(-1 + r1.w);
+  r0.w = -r1.w * r3.x + r0.w;
+  o0.xyz = r0.www * r0.xyz + r1.xyz;
+  o0.w = 1;
+  return;
+}

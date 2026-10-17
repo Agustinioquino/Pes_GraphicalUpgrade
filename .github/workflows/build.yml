@@ -1,0 +1,32 @@
+name: build
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurar
+        run: cmake -S . -B build -A x64
+
+      - name: Compilar
+        run: cmake --build build --config Release --parallel
+
+      - name: Armar el paquete
+        shell: pwsh
+        run: |
+          $out = "dist/PES21FX"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item -Recurse package/PES21FX/* $out
+          Copy-Item build/Release/PES21FX.dll $out
+          Copy-Item package/PES21FX.lua dist/
+          Copy-Item package/LEEME.txt dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PES21FX
+          path: dist/

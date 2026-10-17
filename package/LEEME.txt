@@ -1,0 +1,37 @@
+PES21 FX 0.1 - mod grafico para PES 2021 (sin 3DMigoto)
+=========================================================
+
+Que es
+------
+Una DLL que carga Sider y que hace lo mismo que hacia 3DMigoto con nuestros shaders:
+reemplaza los shaders del juego por los mejorados (piel, pelo, kits, luz, sombras, post),
+pasa los parametros (t120), y aplica las reglas por shader. Mas un menu en pantalla.
+
+Instalacion
+-----------
+1. Copiar PES21FX.lua y la carpeta PES21FX dentro de:
+      eFootball PES 2021\Dream Patch Sider\modules\
+   Debe quedar:  modules\PES21FX.lua   y   modules\PES21FX\PES21FX.dll (+ ini, shaders, textures)
+
+2. En Dream Patch Sider\sider.ini (ya tenes luajit.ext.enabled = 1), agregar al final de la lista de modulos:
+      lua.module = "PES21FX.lua"
+
+3. Desactivar 3DMigoto: en la carpeta del juego renombrar
+      d3d11.dll  ->  d3d11.dll.off
+   (si no, los dos reemplazan los mismos shaders). Para volver a 3DMigoto, al reves y quitar la linea del paso 2.
+
+4. Abrir el juego. Se crea modules\PES21FX\PES21FX.log con lo que paso:
+   "shader propio activo: ..." por cada shader cargado, y errores de compilacion si los hay.
+   La primera vez tarda unos segundos mas (compila los shaders; despues usa shaders\cache).
+
+Uso
+---
+- Insert: abre/cierra el menu (efectos on/off, parametros, guardar, recargar).
+- "Ver original": compara con el juego sin el mod.
+- Las mismas teclas de antes siguen funcionando (estan en PES21FX.ini).
+- Para editar un shader: modules\PES21FX\shaders\<hash>-ps_replace.txt y "Recargar shaders" en el menu.
+
+Notas
+-----
+- La fisica de ropa (cloth-mod, dsound.dll) sigue igual, es independiente.
+- Los shaders son decompilados del juego y modificados: el repositorio conviene que sea privado.

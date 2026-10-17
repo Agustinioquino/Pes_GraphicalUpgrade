@@ -1,0 +1,227 @@
+// ---- Created with 3Dmigoto v1.3.16 on Thu Oct 08 21:08:37 2026
+groupshared struct { float val[2]; } g1[192];
+groupshared struct { float val[4]; } g0[192];
+
+cbuffer Constants : register(b0)
+{
+  uint cBufferWidth : packoffset(c0);
+  uint cBufferHeight : packoffset(c0.y);
+  uint cNumTilesX : packoffset(c0.z);
+  uint cNumTilesY : packoffset(c0.w);
+  float2 cHalfFovRecip : packoffset(c1);
+  float2 cCameraCenterOffset : packoffset(c1.z);
+  float4 cProjectionParam : packoffset(c2);
+  float2 cTweakParams : packoffset(c3);
+  float cFade : packoffset(c3.z);
+  float padding : packoffset(c3.w);
+}
+
+Texture2D<float4> lightBuffer : register(t0);
+Texture2D<float4> depthBuffer : register(t1);
+Texture2D<float4> normalBuffer : register(t2);
+Texture2D<float4> lightBufferOriginal : register(t4);
+RWTexture2D<float4> resultBuffer : register(u0);
+
+
+// 3Dmigoto declarations
+#define cmp -
+Texture1D<float4> IniParams : register(t120);
+Texture2D<float4> StereoParams : register(t125);
+
+
+[numthreads(128, 1, 1)]
+void main(uint3 vThreadID : SV_DispatchThreadID, uint3 vThreadGroupID : SV_GroupID, uint3 vThreadIDInGroup : SV_GroupThreadID)
+{
+  float4 r0,r1,r2,r3,r4,r5,r6,r7,r8;
+  uint4 bitmask, uiDest;
+  float4 fDest;
+
+  float4 x2[7];
+  float4 x3[7];
+  r0.xy = vThreadGroupID.xx ? float2(32,-32) : float2(0,0);
+  r0.z = cmp((uint)vThreadGroupID.x >= cNumTilesY);
+  r0.w = r0.z ? 0 : 32;
+  r1.x = (uint)vThreadGroupID.x << 7;
+  r1.x = cBufferHeight + (int)-r1.x;
+  r1.x = r0.z ? r1.x : 128;
+  r1.y = (int)r1.x + (int)r0.x;
+  r0.w = (int)r1.y + (int)r0.w;
+  r0.y = (int)vThreadID.x + (int)r0.y;
+  r1.y = (int)r0.y + 128;
+  r2.x = vThreadID.y;
+  r2.zw = float2(0,0);
+  r1.z = vThreadIDInGroup.x;
+  while (true) {
+    r1.w = cmp((uint)r1.z >= (uint)r0.w);
+    if (r1.w != 0) break;
+    r1.w = cmp((uint)vThreadIDInGroup.x < (uint)r1.z);
+    r2.y = r1.w ? r1.y : r0.y;
+    r3.xyzw = lightBuffer.Load(r2.xyw).xyzw;
+    g0[r1.z].val[0/4] = r3.x;
+    g0[r1.z].val[0/4+1] = r3.y;
+    g0[r1.z].val[0/4+2] = r3.z;
+    g0[r1.z].val[0/4+3] = r3.w;
+    r1.w = cmp(0 != r3.w);
+    if (r1.w != 0) {
+      r3.x = depthBuffer.Load(r2.xyz).x;
+      r1.w = -cProjectionParam.w + r3.x;
+      r3.y = cProjectionParam.z / r1.w;
+      g1[r1.z].val[0/4] = r3.x;
+      g1[r1.z].val[0/4+1] = r3.y;
+    }
+    r1.z = (int)r1.z + 128;
+  }
+  GroupMemoryBarrierWithGroupSync();
+  r0.y = cmp(cBufferHeight < (uint)vThreadID.x);
+  if (r0.y != 0) {
+    return;
+  }
+  r0.x = (int)r0.x + (int)vThreadIDInGroup.x;
+  r0.y = g0[r0.x].val[12/4];
+  r0.y = cmp(0 != r0.y);
+  if (r0.y == 0) {
+    return;
+  }
+  r2.xy = vThreadID.yx;
+  r2.zw = float2(0,0);
+  r1.yzw = lightBufferOriginal.Load(r2.xyw).xyz;
+  x2[0].x = 0;
+  x2[1].x = 0.166700006;
+  x2[2].x = 0.333299994;
+  x2[3].x = 0.5;
+  x2[4].x = 0.666700006;
+  x2[5].x = 0.833299994;
+  x2[6].x = 1;
+  x3[0].xyz = float3(1,1,1);
+  x3[1].xyz = float3(0.986716986,0.964554012,0.94321698);
+  x3[2].xyz = float3(0.947919011,0.865577996,0.791491985);
+  x3[3].xyz = float3(0.886614978,0.722667992,0.590885997);
+  x3[4].xyz = float3(0.807390988,0.561334014,0.392446011);
+  x3[5].xyz = float3(0.715847015,0.405660987,0.231894001);
+  x3[6].xyz = float3(0.617932975,0.272742987,0.121903002);
+  r0.yw = (uint2)vThreadID.yx;
+  r3.xy = cBufferWidth;
+  r0.yw = r0.yw / r3.xy;
+  r4.xy = r0.yw * float2(2,2) + float2(-1,-1);
+  r2.xyz = normalBuffer.Load(r2.xyz).xyw;
+  r2.xyz = float3(1023,1023,3) * r2.xyz;
+  r2.xyz = (uint3)r2.xyz;
+  r0.y = (uint)r2.x << 1;
+  r0.w = (uint)r2.z >> 1;
+  r0.y = (int)r0.w | (int)r0.y;
+  bitmask.w = ((~(-1 << 31)) << 1) & 0xffffffff;  r0.w = (((uint)r2.y << 1) & bitmask.w) | ((uint)r2.z & ~bitmask.w);
+  r2.xy = (uint2)r0.yw;
+  r0.yw = r2.xy * float2(0.00097703957,0.00097703957) + float2(-1,-1);
+  r2.xyz = float3(1,1,1) + -abs(r0.ywy);
+  r5.z = r2.x + -abs(r0.w);
+  r2.x = cmp(r5.z >= 0);
+  r3.xz = cmp(r0.yw >= float2(0,0));
+  r3.xz = r3.xz ? float2(1,1) : float2(-1,-1);
+  r2.yz = r3.xz * r2.yz;
+  r5.xy = r2.xx ? r0.yw : r2.yz;
+  r0.y = dot(r5.xyz, r5.xyz);
+  r0.y = rsqrt(r0.y);
+  r2.xyz = r5.xyz * r0.yyy;
+  r2.w = -r2.z;
+  r0.y = dot(r2.xyw, r2.xyw);
+  r0.y = rsqrt(r0.y);
+  r2.xyz = r2.xyw * r0.yyy;
+  r4.z = -r4.y;
+  r0.yw = -cCameraCenterOffset.xy + r4.xz;
+  r2.w = g1[r0.x].val[0/4];
+  r0.yw = cProjectionParam.xy * r0.yw;
+  r2.w = -cProjectionParam.w + r2.w;
+  r4.z = cProjectionParam.z / r2.w;
+  r4.xy = r4.zz * r0.yw;
+  r0.y = dot(-r4.xyz, -r4.xyz);
+  r0.y = rsqrt(r0.y);
+  r3.xzw = -r4.xyz * r0.yyy;
+  r0.y = dot(r2.yz, r2.yz);
+  r0.y = rsqrt(r0.y);
+  r0.yw = r2.yz * r0.yy;
+  r2.w = dot(r3.zw, r3.zw);
+  r2.w = rsqrt(r2.w);
+  r5.xy = r3.zw * r2.ww;
+  r2.w = r3.w * r3.w;
+  r2.w = r2.w * abs(r3.w);
+  r4.w = 1;
+  r4.x = dot(r4.xyzw, r4.xyzw);
+  r2.w = r4.x * r2.w;
+  r0.y = dot(r0.yw, r5.xy);
+  r0.y = cHalfFovRecip.y * abs(r0.y);
+  r0.w = 1.6e-005 / r2.w;
+  r0.w = sqrt(r0.w);
+  r0.y = r0.y * r0.w;
+  r0.y = abs(r0.y) * r3.y;
+  r0.y = 0.5 * r0.y;
+  { float4 Psss = IniParams.Load(int2(3,0)); float wK = Psss.x > 0 ? Psss.x : 1.0; r0.y *= wK; }   // PES21: ancho del SSS (x3)
+  r4.xy = float2(0,0);
+  r5.xy = float2(0,0);
+  r6.xy = float2(0,0);
+  r0.w = -6;
+  while (true) {
+    r2.w = cmp(6 < (int)r0.w);
+    if (r2.w != 0) break;
+    r2.w = max((int)r0.w, (int)-r0.w);
+    r3.y = x2[r2.w+0].x;
+    r3.y = r3.y * r0.y;
+    r3.y = cTweakParams.x * r3.y;
+    r3.y = min(32, r3.y);
+    r4.w = cmp(0 < (int)r0.w);
+    r5.z = cmp((int)r0.w < 0);
+    r4.w = (int)r5.z + (int)-r4.w;
+    r4.w = (int)r4.w;
+    // PES21: muestra con interpolacion entre pixeles (antes: redondeo a pixel entero -> grano/bandas)
+    {
+      float sfo = r4.w * r3.y;
+      int   sk  = (int)r2.w;
+      float sfl = floor(sfo);
+      float sfr = sfo - sfl;
+      [unroll] for (int ss = 0; ss < 2; ss++) {
+        float sw = (ss == 0) ? (1.0 - sfr) : sfr;
+        if (sw > 0.001) {
+          int si = (int)sfl + ss + (int)r0.x;
+          int slo = max(0, si);
+          si = vThreadGroupID.x ? si : slo;
+          int shi = min(si, (int)r1.x);
+          si = r0.z ? shi : si;
+          si = clamp(si, 0, 191);
+          if (0 != g0[si].val[3]) {
+            float sd = g1[si].val[1] - r4.z;
+            sd = -sd * sd;
+            float3 se = exp2(float3(313629.344,515248.219,655770.5) * sd);
+            float4 sc = float4(g0[si].val[0], g0[si].val[1], g0[si].val[2], g0[si].val[3]);
+            r4.xy = (x3[sk].x * se.x * sw) * sc.xw + r4.xy;
+            r5.xy = (x3[sk].y * se.y * sw) * sc.yw + r5.xy;
+            r6.xy = (x3[sk].z * se.z * sw) * sc.zw + r6.xy;
+          }
+        }
+      }
+    }
+    r0.w = (int)r0.w + 1;
+  }
+  r0.x = cmp(0 < r4.y);
+  r0.y = r4.x / r4.y;
+  r0.x = r0.x ? r0.y : 0;
+  r0.w = cmp(0 < r5.y);
+  r1.x = r5.x / r5.y;
+  r0.y = r0.w ? r1.x : 0;
+  r0.w = cmp(0 < r6.y);
+  r1.x = r6.x / r6.y;
+  r0.z = r0.w ? r1.x : 0;
+  r0.w = dot(r2.xyz, r3.xzw);
+  r0.w = 9.99999994e-009 + r0.w;
+  r0.w = 1 / r0.w;
+  r0.w = 2 + r0.w;
+  r2.xyz = -r0.www * float3(0.150000006,0.180000007,0.200000003) + float3(1,1,1);
+  { float sK = IniParams.Load(int2(3,0)).y; sK = sK > 0 ? sK : 1.0; r2.xyz = saturate(cTweakParams.yyy * sK * r2.xyz); }   // PES21: intensidad del SSS (y3)
+  r3.xyz = float3(1,1,1) + -r2.xyz;
+  r3.xyz = r3.xyz * r1.yzw;
+  r0.xyz = r2.xyz * r0.xyz + r3.xyz;
+  r0.w = 1 + -cFade;
+  r1.xyz = r0.www * r1.yzw;
+  r0.xyz = cFade * r0.xyz + r1.xyz;
+  r0.w = 1;
+  resultBuffer[vThreadID.yx] = r0.xyzw;
+  return;
+}

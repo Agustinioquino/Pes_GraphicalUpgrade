@@ -1,0 +1,293 @@
+// PES 2021 - Tonemap / gradacion final (bloom + LUT 3D del estadio + curva + gamma)
+// Hash original: 5f32caac5c76ab76  (volcado con 3Dmigoto 1.3.16)
+// Se ejecuta ANTES del HUD, asi que no afecta menus ni marcador.
+//
+// Parametros en vivo (d3dx.ini, [Constants]):
+//   x1 = exposicion (multiplicador lineal antes de la LUT, 1.0 = original)
+//   y1 = saturacion final (1.0 = original)
+//   z1 = contraste en curva S suave (0 = original)
+//   w1 = 1 activa, 0 = shader original
+//   z2 = intensidad del bloom (1.0 = original)
+//   w2 = levantar sombras / profundidad de negros (+ levanta, - hunde; 0 = original)
+// Base decompilada con 3Dmigoto v1.3.16 on Thu Oct 08 20:51:24 2026
+
+cbuffer cPSObject : register(b5)
+{
+
+  struct
+  {
+    float4x4 m_viewWorld;
+    float4x4 m_world;
+    float4 m_useWeightCount;
+    float4 m_localParam[9];
+  } g_psObject : packoffset(c0);
+
+}
+
+cbuffer cPSSystem : register(b0)
+{
+
+  struct
+  {
+    float4 m_param;
+    float4 m_renderInfo;
+    float4 m_renderBuffer;
+    float4 m_dominantLightDir;
+    float4 m_timeParam;
+  } g_psSystem : packoffset(c0);
+
+}
+
+SamplerState g_samplerPoint_Wrap_s : register(s8);
+SamplerState g_samplerLinear_Clamp_s : register(s11);
+Texture2D<float4> inImage : register(t0);
+Texture3D<float4> g_CubeLut : register(t6);
+Texture2D<float4> inBloom : register(t7);
+Texture2D<float4> PESDepth : register(t21);   // PES21: profundidad copiada del shader de composicion (para detectar el cielo)
+
+
+// 3Dmigoto declarations
+#define cmp -
+Texture1D<float4> IniParams : register(t120);
+Texture2D<float4> StereoParams : register(t125);
+
+
+// PES21 sol visible (16/10): copias de los cbuffers de escena (b2 de la composicion) y de luz (b3 de los shaders de luz),
+// las pasa d3dx.ini como ps-cb12 / ps-cb13. Si no llegan (valen 0) no se dibuja nada.
+cbuffer PESSceneCopy : register(b12)
+{
+  float4x4 pS_mat[5];
+  float4 pS_eye;
+  float4 pS_projParam;
+  float4 pS_viewport;
+  float4 pS_exposure;
+  float4 pS_fog[3];
+  float4 pS_fogColor;
+  float4 pS_centerOff;
+  float4 pS_shadowRes;
+}
+cbuffer PESLightCopy : register(b13)
+{
+  float4 pL_dir;     // direccion hacia el sol, espacio de vista
+  float4 pL_color;
+}
+
+void main(
+  float2 v0 : TEXCOORD0,
+  float4 v1 : SV_Position0,
+  out float4 o0 : SV_Target0)
+{
+  float4 r0,r1,r2,r3,r4;
+  uint4 bitmask, uiDest;
+  float4 fDest;
+
+  float4 P1 = IniParams.Load(int2(1,0));
+  float4 P2 = IniParams.Load(int2(2,0));
+  bool  grade    = P1.w > 0.5;
+  float exposure = (grade && P1.x > 0) ? P1.x : 1.0;
+  float sat      = (grade && P1.y > 0) ? P1.y : 1.0;
+  float contrast = grade ? P1.z : 0.0;
+  float bloomInt = (grade && P2.z > 0) ? P2.z : 1.0;
+  float shadows  = grade ? P2.w : 0.0;
+
+  r0.xy = g_psSystem.m_renderBuffer.zw * g_psObject.m_localParam[1].yy;
+  r0.xy = float2(8,8) * r0.xy;
+  r0.zw = v1.xy * g_psSystem.m_renderBuffer.zw + r0.xy;
+  r0.xy = v1.xy * g_psSystem.m_renderBuffer.zw + -r0.xy;
+  r0.xy = max(float2(0,0), r0.xy);
+  r0.xy = min(g_psObject.m_localParam[2].zw, r0.xy);
+  r1.z = inBloom.Sample(g_samplerLinear_Clamp_s, r0.xy).z;
+  r0.xy = max(float2(0,0), r0.zw);
+  r0.xy = min(g_psObject.m_localParam[2].zw, r0.xy);
+  r1.x = inBloom.Sample(g_samplerLinear_Clamp_s, r0.xy).x;
+  r0.xy = g_psSystem.m_renderBuffer.zw * v1.xy;
+  r0.zw = max(float2(0,0), r0.xy);
+  r2.xyzw = inImage.Sample(g_samplerPoint_Wrap_s, r0.xy).xyzw;
+  r0.xy = min(g_psObject.m_localParam[2].zw, r0.zw);
+  r1.y = inBloom.Sample(g_samplerLinear_Clamp_s, r0.xy).y;
+  {
+    // PES21: el bloom se "derrama" en los bordes de la pantalla (halo naranja): se atenua cerca del borde
+    float2 uvE = v1.xy * g_psSystem.m_renderBuffer.zw;
+    float edgeM = smoothstep(0.0, 0.07, uvE.x) * smoothstep(0.0, 0.07, 1.0 - uvE.x) * smoothstep(0.0, 0.09, uvE.y) * smoothstep(0.0, 0.09, 1.0 - uvE.y);
+    r1.xyz *= lerp(0.2, 1.0, edgeM);
+  }
+  r0.xyz = (r2.xyz + r1.xyz * bloomInt) * exposure;
+  // === PES21 v2: look moderno (x6 luces altas suaves, y6 tono partido, z6 claridad, w6 viñeta) ===
+  float4 P6 = IniParams.Load(int2(6,0));
+  float4 P7 = IniParams.Load(int2(7,0));
+  float skyK = grade ? saturate(P7.y) : 0.0;
+  float skyM = 0;
+  if (skyK > 0) {
+    float2 uvS = v1.xy * g_psSystem.m_renderBuffer.zw;
+    float2 pxS = g_psSystem.m_renderBuffer.zw * 1.5;
+    skyM += PESDepth.SampleLevel(g_samplerLinear_Clamp_s, uvS, 0).x < 1e-6 ? 1.0 : 0.0;
+    skyM += PESDepth.SampleLevel(g_samplerLinear_Clamp_s, uvS + float2(pxS.x, 0), 0).x < 1e-6 ? 1.0 : 0.0;
+    skyM += PESDepth.SampleLevel(g_samplerLinear_Clamp_s, uvS - float2(pxS.x, 0), 0).x < 1e-6 ? 1.0 : 0.0;
+    skyM += PESDepth.SampleLevel(g_samplerLinear_Clamp_s, uvS + float2(0, pxS.y), 0).x < 1e-6 ? 1.0 : 0.0;
+    skyM += PESDepth.SampleLevel(g_samplerLinear_Clamp_s, uvS - float2(0, pxS.y), 0).x < 1e-6 ? 1.0 : 0.0;
+    skyM *= 0.2 * skyK;
+    // PES21 cielo v2 (Claude, 16/10): antes el cielo se multiplicaba por 0.55 y quedaba azul marino a mediodia.
+    // Ahora: compresion suave de luces (luminoso sin quemar), zenit azul, horizonte claro con bruma.
+    // x28 brillo (0.8; 1 = sin bajar), y28 azul del zenit (0..1), z28 contraste de nubes, w28 bruma del horizonte
+    float4 SK = IniParams.Load(int2(28,0));
+    float topH = saturate(1.0 - uvS.y * 1.6);
+    float3 skyIn = r0.xyz;
+    float lumS = dot(skyIn, float3(0.2126, 0.7152, 0.0722));
+    float brightS = SK.x > 0 ? SK.x : 0.8;
+    float kneeS = 1.2;
+    float lumC = lumS <= kneeS ? lumS : kneeS + (lumS - kneeS) / (1.0 + (lumS - kneeS) / (kneeS * 1.5));
+    float3 cS = skyIn * (lumC / max(lumS, 1e-4)) * brightS;
+    // 16/10: el azul del zenit solo donde el cielo ya es azul (nublado/gris queda gris, no gris azulado)
+    float blueS = saturate((skyIn.b - skyIn.r) / max(lumS, 1e-3) * 3.0);
+    float3 tintS = lerp(float3(1.0, 1.0, 1.0), float3(0.62, 0.78, 1.12), topH * saturate(SK.y) * blueS);
+    cS *= tintS;
+    float3 hazeS = float3(0.80, 0.88, 0.98) * 0.6;
+    cS = lerp(cS, max(cS, hazeS), (1.0 - topH) * saturate(SK.w));
+    r0.xyz = lerp(r0.xyz, cS, skyM);
+    // --- sol visible: x37 tamano, y37 intensidad, z37 = 1 invierte el eje vertical, w37 on/off [Alt+Shift+4] ---
+    float4 SN = IniParams.Load(int2(37,0));
+    float3 Ls = pL_dir.xyz;
+    if (SN.w > 0.5 && skyM > 0.01 && dot(Ls, Ls) > 1e-6 && abs(pS_projParam.x) > 1e-6 && abs(pS_projParam.y) > 1e-6) {
+      Ls = normalize(Ls);
+      if (Ls.z > 0.02) {
+        float2 scS = Ls.xy / (Ls.z * pS_projParam.xy) + pS_centerOff.xy;
+        float2 sunUV = float2(scS.x * 0.5 + 0.5, (SN.z > 0.5 ? scS.y : -scS.y) * 0.5 + 0.5);
+        float aspS = g_psSystem.m_renderBuffer.w > 0 ? g_psSystem.m_renderBuffer.w / max(g_psSystem.m_renderBuffer.z, 1e-6) : 1.7778;
+        float2 dS = (uvS - sunUV) * float2(aspS, 1.0);
+        float rS = length(dS);
+        float radS = 0.011 * max(SN.x, 0.1);
+        float diskS = 1.0 - smoothstep(radS * 0.8, radS, rS);
+        float glowS = exp(-rS / (radS * 2.5)) * 0.7 + exp(-rS / (radS * 14.0)) * 0.18;
+        float3 colS = max(pL_color.xyz, 0.0);
+        colS = colS / max(dot(colS, float3(0.2126, 0.7152, 0.0722)), 1e-3);
+        r0.xyz += colS * (diskS * 14.0 + glowS * 1.6) * saturate(SN.y) * skyM;
+      }
+    }
+  }
+  float clarK = grade ? saturate(P6.z) : 0.0;
+  float lcDiff = 0.0;
+  {
+    // luces altas: comprime solo lo muy brillante (cielo, reflectores) para no quemarlo
+    float hlK = grade ? saturate(P6.x) : 0.0;
+    float lumH = dot(r0.xyz, float3(0.2126, 0.7152, 0.0722));
+    float knee = 2.5;
+    if (hlK > 0 && lumH > knee) {
+      float ex = lumH - knee;
+      float lumC = knee + ex / (1.0 + ex / (knee * 2.0));
+      r0.xyz *= lerp(1.0, lumC / lumH, hlK);
+    }
+    // claridad: contraste local de la luminancia (radio ~6 px), estable porque no usa ruido
+    if (clarK > 0) {
+      float2 uvI = g_psSystem.m_renderBuffer.zw * v1.xy;
+      float2 px = g_psSystem.m_renderBuffer.zw * 10.0;
+      float lc = log2(max(dot(r2.xyz, float3(0.2126, 0.7152, 0.0722)), 1e-4));
+      float lb = 0, wb = 0;
+      [unroll] for (int k = 0; k < 8; k++) {
+        float a = k * 0.785398;
+        float2 o = float2(cos(a), sin(a)) * px * ((k & 1) ? 1.0 : 0.6);
+        float ls = log2(max(dot(inImage.SampleLevel(g_samplerLinear_Clamp_s, uvI + o, 0).xyz, float3(0.2126, 0.7152, 0.0722)), 1e-4));
+        float d = ls - lc;
+        float w = exp(-d * d * 2.0);      // ignora bordes fuertes: sin halos alrededor de los jugadores
+        lb += ls * w; wb += w;
+      }
+      lcDiff = clamp(lc - lb / max(wb, 1e-3), -0.6, 0.6);
+    }
+  }
+  o0.w = r2.w;
+  r1.x = dot(float3(0.627403975,0.329281986,0.0433136001), r0.xyz);
+  r1.y = dot(float3(0.0690969974,0.919539988,0.0113612004), r0.xyz);
+  r1.z = dot(float3(0.0163915996,0.088013202,0.895595014), r0.xyz);
+  r0.xyz = float3(0.00999999978,0.00999999978,0.00999999978) * r1.xyz;
+  r0.xyz = log2(abs(r0.xyz));
+  r0.xyz = float3(0.159301758,0.159301758,0.159301758) * r0.xyz;
+  r0.xyz = exp2(r0.xyz);
+  r1.xyz = r0.xyz * float3(18.8515625,18.8515625,18.8515625) + float3(0.8359375,0.8359375,0.8359375);
+  r0.xyz = r0.xyz * float3(18.6875,18.6875,18.6875) + float3(1,1,1);
+  r0.xyz = r1.xyz / r0.xyz;
+  r0.xyz = log2(r0.xyz);
+  r0.xyz = float3(78.84375,78.84375,78.84375) * r0.xyz;
+  r0.xyz = exp2(r0.xyz);
+  r0.xyz = r0.xyz * float3(32,32,32) + float3(0.5,0.5,0.5);
+  r0.xyz = float3(0.0303030312,0.0303030312,0.0303030312) * r0.xyz;
+  r0.xyz = g_CubeLut.SampleLevel(g_samplerLinear_Clamp_s, r0.xyz, 0).xyz;
+  r1.xyz = -g_psObject.m_localParam[5].yyy + r0.xyz;
+  r0.w = g_psObject.m_localParam[5].w + -g_psObject.m_localParam[5].y;
+  r1.xyz = saturate(r1.xyz / r0.www);
+  r2.xyz = g_psObject.m_localParam[5].zzz * r1.xyz;
+  r3.xyz = float3(1,1,1) + -r1.xyz;
+  r4.xyz = g_psObject.m_localParam[5].zzz * r3.xyz + r2.xyz;
+  r2.xyz = g_psObject.m_localParam[5].yyy * r3.xyz + r2.xyz;
+  r1.xyz = r4.xyz * r1.xyz;
+  r1.xyz = r2.xyz * r3.xyz + r1.xyz;
+  r1.xyz = min(r1.xyz, r0.xyz);
+  r2.xyz = cmp(g_psObject.m_localParam[5].yyy < r0.xyz);
+  r0.xyz = r2.xyz ? r1.xyz : r0.xyz;
+  r0.xyz = log2(abs(r0.xyz));
+  r0.xyz = float3(0.0126833133,0.0126833133,0.0126833133) * r0.xyz;
+  r0.xyz = exp2(r0.xyz);
+  r1.xyz = float3(-0.8359375,-0.8359375,-0.8359375) + r0.xyz;
+  r0.xyz = -r0.xyz * float3(18.6875,18.6875,18.6875) + float3(18.8515625,18.8515625,18.8515625);
+  r1.xyz = max(float3(0,0,0), r1.xyz);
+  r0.xyz = r1.xyz / r0.xyz;
+  r0.xyz = log2(r0.xyz);
+  r0.xyz = float3(6.27739477,6.27739477,6.27739477) * r0.xyz;
+  r0.xyz = exp2(r0.xyz);
+  r1.x = dot(float3(1.66049027,-0.587639093,-0.0728515983), r0.xyz);
+  r1.y = dot(float3(-0.12454997,1.13289988,-0.00834796391), r0.xyz);
+  r1.z = dot(float3(-0.0181511194,-0.100578725,1.11872983), r0.xyz);
+  r0.x = 9.99999975e-005 * g_psObject.m_localParam[5].x;
+  r0.xyz = r1.xyz / r0.xxx;
+  r0.xyz = max(float3(9.99999975e-006,9.99999975e-006,9.99999975e-006), r0.xyz);
+  r0.xyz = log2(r0.xyz);
+  r0.xyz = float3(0.454545468,0.454545468,0.454545468) * r0.xyz;
+  r0.xyz = exp2(r0.xyz);
+  // ================= GRADACION =================
+  if (grade) {
+    float3 c = saturate(r0.xyz);
+    // sombras: levanta o hunde de forma suave sin tocar las luces altas
+    c = saturate(c + shadows * (1.0 - c) * (1.0 - c) * (1.0 - c));
+    // contraste en S alrededor del gris medio (curva suave, sin recorte)
+    float3 s = c * c * (3.0 - 2.0 * c);
+    c = lerp(c, s, saturate(contrast));
+    // saturacion preservando luminancia, con proteccion de piel/colores ya saturados
+    float lum = dot(c, float3(0.2126, 0.7152, 0.0722));
+    float chroma = max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
+    float satAmt = lerp(sat, 1.0 + (sat - 1.0) * 0.4, saturate(chroma * 2.0));
+    c = saturate(lerp(lum.xxx, c, satAmt));
+    // claridad (contraste local suave)
+    c = saturate(c * exp2(lcDiff * clarK * 0.35 * (1.0 - skyM)));   // 16/10: sin claridad en el cielo (halos oscuros en las nubes)
+    // tono partido: sombras apenas frias, luces apenas calidas (look de transmision moderna)
+    float stK = saturate(P6.y);
+    float lum2 = dot(c, float3(0.2126, 0.7152, 0.0722));
+    float3 tint = lerp(float3(0.975, 1.0, 1.035), float3(1.03, 1.0, 0.965), smoothstep(0.15, 0.75, lum2));
+    c = saturate(lerp(c, c * tint, stK));
+    // nubes con volumen (solo cielo)
+    if (skyM > 0) {   // PES21 cielo v2: la curva S solo en lo claro (nubes), no oscurece el azul
+      float ls = dot(c, float3(0.2126, 0.7152, 0.0722));
+      float3 s2 = c * c * (3.0 - 2.0 * c);
+      c = lerp(c, s2, skyM * saturate(IniParams.Load(int2(28,0)).z) * smoothstep(0.45, 0.75, ls));
+    }
+    // viñeta muy leve
+    float2 uvV = v1.xy * g_psSystem.m_renderBuffer.zw - 0.5;
+    c *= 1.0 - saturate(P6.w) * smoothstep(0.35, 0.85, length(uvV * float2(1.0, 0.75)));
+    r0.xyz = c;
+  }
+  // ==============================================
+  r0.xyz = r0.xyz * g_psObject.m_localParam[4].xxx + float3(-0.5,-0.5,-0.5);
+  r0.xyz = g_psObject.m_localParam[4].yyy * r0.xyz + float3(0.5,0.5,0.5);
+  r1.xyz = float3(0.25,0.25,0.25) * r0.xyz;
+  r0.w = cmp(g_psObject.m_localParam[1].x == 0.000000);
+  o0.xyz = r0.www ? r1.xyz : r0.xyz;
+  // ---- diagnostico: reloj del partido (w9 = 1): barra magenta = segundos, celeste = minutos ----
+  {
+    float4 P9 = IniParams.Load(int2(9,0));
+    if (false) {
+      float tsec = IniParams.Load(int2(10,0)).x * 60.0;   // reloj del partido
+      // barra 1 (fila 40-52): segundos dentro del minuto, 0..1000 px
+      if (v1.y < 52 && v1.x < 20 + fmod(tsec, 60.0) / 60.0 * 1000.0 && v1.x > 20) o0.xyz = float3(1, 0, 1);
+      // barra 2 (fila 56-68): minutos enteros, 20 px por minuto, marcas cada 5
+      if (v1.y > 56 && v1.x > 20 && v1.x < 20 + floor(tsec / 60.0) * 20.0) o0.xyz = (fmod(floor((v1.x - 20) / 20.0), 5) == 4) ? float3(1,1,0) : float3(0,1,1);
+    }
+  }
+  return;
+}

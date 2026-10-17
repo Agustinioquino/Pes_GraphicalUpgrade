@@ -1,0 +1,268 @@
+// PES21 FX - configuracion: PES21FX.ini (mismo formato que el pes_mod.ini de 3DMigoto: [Constants] y [Key...])
+// y PES21FX_rules.ini (reglas por shader: copiar/pasar recursos entre pasadas, parametros por dibujo, eventos).
+#include "core.h"
+#include <algorithm>
+#include <cmath>
+#include <cctype>
+#include <fstream>
+#include <sstream>
+
+namespace fx {
+
+Config g_cfg;
+std::mutex g_cfgMutex;
+
+static std::string Trim(const std::string& s) {
+    size_t a = s.find_first_not_of(" \t\r\n"), b = s.find_last_not_of(" \t\r\n");
+    return a == std::string::npos ? std::string() : s.substr(a, b - a + 1);
+}
+static std::string Lower(std::string s) { for (auto& c : s) c = (char)tolower((unsigned char)c); return s; }
+
+static bool ReadLines(const std::wstring& path, std::vector<std::string>& out) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return false;
+    std::string l;
+    while (std::getline(f, l)) { if (!l.empty() && l.back() == '\r') l.pop_back(); out.push_back(l); }
+    return true;
+}
+
+// "x37" -> idx 37 comp 0 ; "w" -> idx 0 comp 3
+static bool ParseParamName(const std::string& n, int& idx, int& comp) {
+    if (n.empty()) return false;
+    const char* comps = "xyzw";
+    const char* p = strchr(comps, tolower((unsigned char)n[0]));
+    if (!p) return false;
+    comp = int(p - comps);
+    std::string rest = n.substr(1);
+    if (rest.empty()) { idx = 0; return true; }
+    for (char c : rest) if (!isdigit((unsigned char)c)) return false;
+    idx = atoi(rest.c_str());
+    return idx >= 0 && idx < kParamCount;
+}
+
+static int VkFromName(std::string t) {
+    std::string u = t; for (auto& c : u) c = (char)toupper((unsigned char)c);
+    if (u.rfind("VK_", 0) == 0) u = u.substr(3);
+    if (u.size() == 1 && (isalnum((unsigned char)u[0]))) return u[0];
+    if (u[0] == 'F' && u.size() <= 3 && isdigit((unsigned char)u[1])) { int n = atoi(u.c_str() + 1); if (n >= 1 && n <= 24) return VK_F1 + n - 1; }
+    if (u.rfind("NUMPAD", 0) == 0 && u.size() == 7) return VK_NUMPAD0 + (u[6] - '0');
+    static const std::map<std::string, int> m = {
+        {"INSERT", VK_INSERT}, {"DELETE", VK_DELETE}, {"HOME", VK_HOME}, {"END", VK_END}, {"PRIOR", VK_PRIOR},
+        {"NEXT", VK_NEXT}, {"SPACE", VK_SPACE}, {"TAB", VK_TAB}, {"RETURN", VK_RETURN}, {"ESCAPE", VK_ESCAPE},
+        {"UP", VK_UP}, {"DOWN", VK_DOWN}, {"LEFT", VK_LEFT}, {"RIGHT", VK_RIGHT}, {"OEM_PLUS", VK_OEM_PLUS},
+        {"OEM_MINUS", VK_OEM_MINUS}, {"PAUSE", VK_PAUSE}, {"SCROLL", VK_SCROLL}};
+    auto it = m.find(u);
+    return it == m.end() ? 0 : it->second;
+}
+
+static void ParseKey(KeyBind& k, const std::string& v) {
+    std::istringstream ss(v); std::string t;
+    while (ss >> t) {
+        std::string l = Lower(t);
+        if (l == "ctrl") k.ctrl = 1; else if (l == "no_ctrl") k.ctrl = 0;
+        else if (l == "alt") k.alt = 1; else if (l == "no_alt") k.alt = 0;
+        else if (l == "shift") k.shift = 1; else if (l == "no_shift") k.shift = 0;
+        else if (l == "no_modifiers") { k.ctrl = k.alt = k.shift = 0; }
+        else k.vk = VkFromName(t);
+    }
+}
+
+static std::vector<float> ParseFloats(const std::string& v) {
+    std::vector<float> r; std::string s = v; std::replace(s.begin(), s.end(), ',', ' ');
+    std::istringstream ss(s); float f; while (ss >> f) r.push_back(f);
+    return r;
+}
+
+static std::wstring IniPath() { return g_cfg.baseDir + L"PES21FX.ini"; }
+
+bool LoadConfig() {
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    Config& c = g_cfg;
+    memset(c.base, 0, sizeof(c.base));
+    for (auto& a : c.info) for (auto& b : a) b = ParamInfo();
+    c.keys.clear(); c.rules.clear(); c.vars.clear();
+    c.vars["pes_push"] = 0.003f;
+
+    std::vector<std::string> lines;
+    if (!ReadLines(IniPath(), lines)) { Log("no existe PES21FX.ini"); return false; }
+    std::string section, comment;
+    KeyBind* cur = nullptr;
+    for (auto& raw : lines) {
+        std::string l = Trim(raw);
+        if (l.empty()) { comment.clear(); continue; }
+        if (l[0] == ';') { std::string t = Trim(l.substr(1)); if (cur && cur->label.empty()) cur->label = t; else comment = t; continue; }
+        if (l[0] == '[') {
+            section = l.substr(1, l.find(']') - 1);
+            cur = nullptr;
+            if (Lower(section).rfind("key", 0) == 0) { c.keys.emplace_back(); cur = &c.keys.back(); cur->name = section; }
+            continue;
+        }
+        size_t eq = l.find('=');
+        if (eq == std::string::npos) continue;
+        std::string k = Trim(l.substr(0, eq)), v = Trim(l.substr(eq + 1));
+        std::string kl = Lower(k);
+        if (Lower(section) == "constants") {
+            if (kl.rfind("global ", 0) == 0) {   // global $nombre = valor
+                std::string n = Trim(k.substr(7)); if (!n.empty() && n[0] == '$') n = n.substr(1);
+                c.vars[n] = (float)atof(v.c_str()); continue;
+            }
+            int idx, comp;
+            if (ParseParamName(k, idx, comp)) {
+                c.base[idx][comp] = (float)atof(v.c_str());
+                c.info[idx][comp].defined = true;
+                c.info[idx][comp].comment = comment;
+            }
+            continue;
+        }
+        if (Lower(section) == "pes21fx") {
+            if (kl == "menu_key") c.menuKey = VkFromName(v);
+            continue;
+        }
+        if (cur) {
+            if (kl == "key") ParseKey(*cur, v);
+            else if (kl == "type") {
+                std::string t = Lower(v);
+                cur->type = t == "toggle" ? KeyBind::Toggle : t == "cycle" ? KeyBind::Cycle : t == "hold" ? KeyBind::Hold : KeyBind::Activate;
+            } else if (kl == "run") cur->run = v;
+            else {
+                int idx, comp;
+                if (ParseParamName(k, idx, comp)) { Assign a{idx, comp, ParseFloats(v), ""}; if (!a.values.empty()) cur->assigns.push_back(a); }
+            }
+        }
+    }
+    memcpy(c.live, c.base, sizeof(c.base));
+    for (auto& kb : c.keys) if (kb.label.empty()) kb.label = kb.name;
+
+    // ---- reglas ----
+    lines.clear();
+    if (ReadLines(c.baseDir + L"PES21FX_rules.ini", lines)) {
+        Rule* r = nullptr;
+        for (auto& raw : lines) {
+            std::string l = Trim(raw);
+            if (l.empty() || l[0] == ';') continue;
+            if (l[0] == '[') {
+                r = nullptr;
+                std::string s = Trim(l.substr(1, l.find(']') - 1));
+                if (Lower(s).rfind("rule ", 0) == 0) {
+                    uint64_t h = _strtoui64(Trim(s.substr(5)).c_str(), nullptr, 16);
+                    r = &c.rules[h]; r->hash = h;
+                }
+                continue;
+            }
+            if (!r) continue;
+            size_t eq = l.find('=');
+            if (eq == std::string::npos) continue;
+            std::string k = Lower(Trim(l.substr(0, eq))), v = Trim(l.substr(eq + 1));
+            std::istringstream ss(v); RuleAction a{}; std::string arg2;
+            if (k == "copy_cb") { a.kind = RuleAction::CopyCB; ss >> a.slot >> a.name; }
+            else if (k == "ref_srv") { a.kind = RuleAction::RefSRV; ss >> a.slot >> a.name; }
+            else if (k == "cb") { a.kind = RuleAction::BindCB; ss >> a.slot >> a.name; }
+            else if (k == "srv") { a.kind = RuleAction::BindSRV; ss >> a.slot >> a.name; }
+            else if (k == "param") {
+                std::string pn; ss >> pn >> arg2;
+                a.kind = RuleAction::SetParam;
+                if (!ParseParamName(pn, a.idx, a.comp)) continue;
+                if (!arg2.empty() && arg2[0] == '$') a.var = arg2.substr(1); else a.value = (float)atof(arg2.c_str());
+                r->hasParamOverride = true;
+            }
+            else if (k == "event" && Lower(v) == "turf") a.kind = RuleAction::EventTurf;
+            else continue;
+            r->actions.push_back(a);
+        }
+        int set = 0;
+        for (auto& kv : c.rules) if (kv.second.hasParamOverride) kv.second.paramSet = set++;
+    }
+    int nr = 0; for (auto& kv : c.rules) nr += (int)kv.second.actions.size();
+    Log("config: %d teclas, %d reglas (%d acciones)", (int)c.keys.size(), (int)c.rules.size(), nr);
+    return true;
+}
+
+bool SaveConfigValues() {
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    std::vector<std::string> lines;
+    if (!ReadLines(IniPath(), lines)) return false;
+    std::string section;
+    for (auto& raw : lines) {
+        std::string l = Trim(raw);
+        if (l.empty() || l[0] == ';') continue;
+        if (l[0] == '[') { section = Lower(l.substr(1, l.find(']') - 1)); continue; }
+        if (section != "constants") continue;
+        size_t eq = l.find('=');
+        if (eq == std::string::npos) continue;
+        std::string k = Trim(l.substr(0, eq));
+        int idx, comp;
+        if (!ParseParamName(k, idx, comp)) continue;
+        char buf[64]; snprintf(buf, sizeof(buf), "%g", g_cfg.live[idx][comp]);
+        raw = k + " = " + buf;
+        g_cfg.base[idx][comp] = g_cfg.live[idx][comp];
+    }
+    std::ofstream f(IniPath(), std::ios::binary | std::ios::trunc);
+    if (!f) return false;
+    for (auto& l : lines) f << l << "\r\n";
+    for (auto& kb : g_cfg.keys) kb.active = false, kb.cycleIdx = -1;
+    Log("valores guardados en PES21FX.ini");
+    return true;
+}
+
+// ---------------------------------------------------------------- teclas
+static void ApplyAssign(KeyBind& k, bool on, int cycle) {
+    if (on && k.saved.empty()) for (auto& a : k.assigns) k.saved.push_back(g_cfg.live[a.idx][a.comp]);
+    for (size_t i = 0; i < k.assigns.size(); i++) {
+        auto& a = k.assigns[i];
+        if (!on) { if (i < k.saved.size()) g_cfg.live[a.idx][a.comp] = k.saved[i]; continue; }
+        size_t vi = cycle >= 0 ? (size_t)cycle % a.values.size() : 0;
+        g_cfg.live[a.idx][a.comp] = a.values[vi];
+    }
+    if (!on) k.saved.clear();
+}
+
+static double s_matchStart = -1e9, s_lastTurf = -1e9;
+
+// desde el menu (con g_cfgMutex ya tomado): 0 = alternar, 1 = siguiente valor del ciclo
+void KeyActionUnlocked(KeyBind& k, int action) {
+    if (action == 1 || k.type == KeyBind::Cycle) { k.cycleIdx++; ApplyAssign(k, true, k.cycleIdx); return; }
+    k.active = !k.active; ApplyAssign(k, k.active, -1);
+}
+
+void PollKeys(bool focused) {
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    bool ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+    bool alt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+    bool shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+    for (auto& k : g_cfg.keys) {
+        bool down = focused && k.vk && (GetAsyncKeyState(k.vk) & 0x8000) &&
+                    (k.ctrl < 0 || k.ctrl == (int)ctrl) && (k.alt < 0 || k.alt == (int)alt) && (k.shift < 0 || k.shift == (int)shift);
+        bool press = down && !k.wasDown, release = !down && k.wasDown;
+        k.wasDown = down;
+        if (press) {
+            if (!k.run.empty()) {
+                if (Lower(k.run).find("resetsweat") != std::string::npos) s_matchStart = Now();
+            }
+            switch (k.type) {
+            case KeyBind::Toggle: k.active = !k.active; ApplyAssign(k, k.active, -1); break;
+            case KeyBind::Cycle:  k.cycleIdx++; ApplyAssign(k, true, k.cycleIdx); break;
+            case KeyBind::Hold:
+            case KeyBind::Activate: ApplyAssign(k, true, -1); break;
+            }
+        } else if (release && k.type == KeyBind::Hold) ApplyAssign(k, false, -1);
+    }
+}
+
+void OnTurfDrawn() {
+    double t = Now();
+    if (t - s_lastTurf > 20.0) s_matchStart = t;   // cancha sin dibujarse 20 s y vuelve = partido nuevo
+    s_lastTurf = t;
+}
+
+void UpdateTimeParams() {
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    double t = Now();
+    if (s_matchStart < -1e8) s_matchStart = t;
+    auto& p = g_cfg.live;
+    p[10][0] = float((t - s_matchStart) / 60.0);   // minutos reales de partido (sudor)
+    p[23][3] = p[23][2];                            // viento del pelo: tiempo anterior
+    p[23][2] = float(fmod(t, 10000.0));             // tiempo actual
+    p[24][1] = (t - s_lastTurf) < 2.0 ? 1.0f : 0.0f; // en partido
+}
+
+} // namespace fx

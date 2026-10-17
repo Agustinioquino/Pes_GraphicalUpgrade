@@ -1,0 +1,408 @@
+// PES 2021 - Composicion diferida (albedo x luz + especular, oclusion, niebla) [hash f807e74d5b900a15]
+// Menos bruma (imagen menos lavada), ambiente calido y oclusion rojiza en la piel.
+// Base decompilada con 3Dmigoto v1.3.16 on Thu Oct 08 21:08:32 2026
+
+cbuffer cPSScene : register(b2)
+{
+
+  struct
+  {
+    float4x4 m_projectionView;
+    float4x4 m_projection;
+    float4x4 m_view;
+    float4x4 m_shadowProjection;
+    float4x4 m_shadowProjection2;
+    float4 m_eyepos;
+    float4 m_projectionParam;
+    float4 m_viewportSize;
+    float4 m_exposure;
+    float4 m_fogParam[3];
+    float4 m_fogColor;
+    float4 m_cameraCenterOffset;
+    float4 m_shadowMapResolutions;
+  } g_psScene : packoffset(c0);
+
+}
+
+cbuffer cPSMaterial : register(b4)
+{
+
+  struct
+  {
+    float4 m_materials[8];
+  } g_psMaterial : packoffset(c0);
+
+}
+
+cbuffer cPSSystem : register(b0)
+{
+
+  struct
+  {
+    float4 m_param;
+    float4 m_renderInfo;
+    float4 m_renderBuffer;
+    float4 m_dominantLightDir;
+    float4 m_timeParam;
+  } g_psSystem : packoffset(c0);
+
+}
+
+SamplerState g_samplerPoint_Wrap_s : register(s8);
+SamplerState g_samplerPoint_Clamp_s : register(s9);
+SamplerState g_samplerLinear_Wrap_s : register(s10);
+SamplerState g_samplerLinear_Clamp_s : register(s11);
+Texture2D<float4> inGBufferNormal : register(t0);
+Texture2D<float4> inGBufferMaterial : register(t1);
+Texture2D<float4> inAlbedo : register(t8);
+Texture2D<float4> inLightDiffuse : register(t9);
+Texture2D<float4> inLightSpecular : register(t10);
+Texture2D<float4> inDepth : register(t11);
+Texture2D<float4> inFogVolume : register(t12);
+Texture2D<float4> inOcclusion : register(t13);
+Texture2D<float4> inShadow : register(t14);
+
+
+// 3Dmigoto declarations
+#define cmp -
+Texture1D<float4> IniParams : register(t120);
+Texture2D<float4> StereoParams : register(t125);
+
+
+float3 PESDecN(float2 uv) {
+  float4 nb = inGBufferNormal.SampleLevel(g_samplerPoint_Clamp_s, uv, 0);
+  uint3 q = (uint3)(float3(1023,1023,3) * nb.xyw);
+  float2 e = float2((q.x << 1) | (q.z >> 1), (q.y << 1) | (q.z & 1)) * 0.00097703957 - 1;
+  float3 n = float3(e.xy, 1 - abs(e.x) - abs(e.y));
+  if (n.z < 0) n.xy = (1 - abs(e.yx)) * (e.xy >= 0 ? 1 : -1);
+  return normalize(n);
+}
+float PESLinZ(float2 uv) {
+  return g_psScene.m_projectionParam.z / (inDepth.SampleLevel(g_samplerPoint_Clamp_s, uv, 0).x - g_psScene.m_projectionParam.w);
+}
+void main(
+  float4 v0 : SV_Position0,
+  float2 v1 : TEXCOORD0,
+  out float4 o0 : SV_Target0)
+{
+  float4 r0,r1,r2,r3,r4,r5,r6,r7;
+  uint4 bitmask, uiDest;
+  float4 fDest;
+  float4 P11 = IniParams.Load(int2(11,0));   // x11 niebla, y11 calidez ambiente piel, z11 AO color piel, w11 on
+  bool cmpOn = P11.w > 0.5;
+  float2 uvC = g_psSystem.m_renderBuffer.zw * v0.xy;
+  float4 gmC = inGBufferMaterial.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0);
+  float gnZ = inGBufferNormal.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).z;
+  int tyC = (int)((uint)(gnZ * 1023 + 0.5) & 15);
+  bool skinC = cmpOn && (tyC == 0) && (abs(gmC.z - 0.98039) < 0.003);
+
+  r0.xy = g_psSystem.m_renderBuffer.zw * v0.xy;
+  r0.z = inDepth.SampleLevel(g_samplerPoint_Clamp_s, r0.xy, 0).x;
+  r0.z = -g_psScene.m_projectionParam.w + r0.z;
+  r0.z = g_psScene.m_projectionParam.z / r0.z;
+  r1.xyz = inLightSpecular.Sample(g_samplerPoint_Wrap_s, r0.xy).xyz;
+  r2.xyz = inLightDiffuse.Sample(g_samplerPoint_Wrap_s, r0.xy).xyz;
+  r3.xyz = inAlbedo.SampleLevel(g_samplerPoint_Clamp_s, r0.xy, 0).xyz;
+  r4.xyzw = inGBufferNormal.SampleLevel(g_samplerPoint_Clamp_s, r0.xy, 0).xyzw;
+  r5.xy = inGBufferMaterial.SampleLevel(g_samplerPoint_Clamp_s, r0.xy, 0).zw;
+  r0.w = r4.z * 1023 + 0.5;
+  r0.w = (uint)r0.w;
+  r0.w = (int)r0.w & 15;
+  r5.zw = cmp((int2)r0.ww == int2(1,3));
+  if (r5.z != 0) {
+    r1.w = 0;
+  } else {
+    r0.w = cmp((int)r0.w == 3);
+    if (r0.w != 0) {
+      r1.w = 0;
+    } else {
+      r5.x = 0;
+      r1.w = r5.y;
+    }
+  }
+  r0.w = inShadow.Sample(g_samplerPoint_Clamp_s, r0.xy).x;
+  if (r5.w != 0) {
+    r2.w = r0.z * r0.z;
+    r2.w = rsqrt(r2.w);
+    r2.w = r2.w * -r0.z;
+    r3.w = (uint)g_psMaterial.m_materials[2].w;
+    r4.z = g_psMaterial.m_materials[2].z * r2.w;
+    r6.xyz = g_psMaterial.m_materials[5].xyz * r5.yyy;
+    r6.xyz = g_psMaterial.m_materials[3].yyy * r6.xyz;
+    if (r3.w != 0) {
+      r3.w = r4.z * 0.5 + 0.5;
+      r3.w = log2(r3.w);
+      r3.w = g_psMaterial.m_materials[3].x * r3.w;
+      r3.w = exp2(r3.w);
+      r3.w = max(9.99999975e-005, r3.w);
+      r7.xyz = r6.xyz * r3.www;
+      r3.w = 1 + -r0.w;
+      r5.y = 1 + -g_psMaterial.m_materials[4].y;
+      r5.y = -r3.w * r5.y + 1;
+      r7.xyz = r7.xyz * r5.yyy + r3.xyz;
+      r5.y = g_psMaterial.m_materials[2].z * 0.5 + 0.5;
+      r5.w = g_psMaterial.m_materials[3].w + -g_psMaterial.m_materials[3].z;
+      r5.y = r5.y * r5.w + g_psMaterial.m_materials[3].z;
+      r5.w = g_psMaterial.m_materials[4].x + -r5.y;
+      r3.w = r3.w * r5.w + r5.y;
+      r1.xyz = r3.www * r1.xyz;
+    } else {
+      r3.w = 1 + -abs(r4.z);
+      r2.w = g_psMaterial.m_materials[6].z * r2.w;
+      r2.w = g_psMaterial.m_materials[4].z * r2.w;
+      r2.w = 1 + -abs(r2.w);
+      r2.w = r3.w * r2.w;
+      r2.w = saturate(g_psMaterial.m_materials[4].y * r2.w);
+      r2.w = log2(r2.w);
+      r2.w = g_psMaterial.m_materials[3].x * r2.w;
+      r2.w = exp2(r2.w);
+      r2.w = max(9.99999975e-005, r2.w);
+      r7.xyz = r6.xyz * r2.www + r3.xyz;
+      r1.xyz = g_psMaterial.m_materials[3].www * r1.xyz;
+    }
+  } else {
+    r7.xyz = r3.xyz;
+  }
+  r2.w = cmp(0.782352924 < r1.w);
+  r1.w = cmp(r1.w < 0.786274493);
+  r1.w = r1.w ? r2.w : 0;
+  if (r1.w != 0) {
+    r1.w = dot(g_psMaterial.m_materials[2].xyz, g_psMaterial.m_materials[2].xyz);
+    r1.w = sqrt(r1.w);
+    r1.w = cmp(0 != r1.w);
+    if (r1.w != 0) {
+      r1.w = saturate(1 + g_psMaterial.m_materials[2].z);
+      r2.w = 7 * r1.w;
+      r0.w = 1 + -r0.w;
+      r1.w = -r1.w * 7 + 3;
+      r0.w = r0.w * r1.w + r2.w;
+      r1.xyz = r1.xyz * r0.www;
+    } else {
+      r1.xyz = float3(3,3,3) * r1.xyz;
+    }
+  }
+  if (r5.z != 0) {
+    r4.xyz = float3(1023,1023,3) * r4.xyw;
+    r4.xyz = (uint3)r4.xyz;
+    r0.w = (uint)r4.x << 1;
+    r1.w = (uint)r4.z >> 1;
+    r0.w = (int)r0.w | (int)r1.w;
+    bitmask.w = ((~(-1 << 31)) << 1) & 0xffffffff;  r1.w = (((uint)r4.y << 1) & bitmask.w) | ((uint)r4.z & ~bitmask.w);
+    r4.x = (uint)r0.w;
+    r4.y = (uint)r1.w;
+    r4.xy = r4.xy * float2(0.00097703957,0.00097703957) + float2(-1,-1);
+    r5.yzw = float3(1,1,1) + -abs(r4.xyx);
+    r6.z = r5.y + -abs(r4.y);
+    r0.w = cmp(r6.z >= 0);
+    r4.zw = cmp(r4.xy >= float2(0,0));
+    r4.zw = r4.zw ? float2(1,1) : float2(-1,-1);
+    r4.zw = r5.zw * r4.zw;
+    r6.xy = r0.ww ? r4.xy : r4.zw;
+    r0.w = dot(r6.xyz, r6.xyz);
+    r0.w = rsqrt(r0.w);
+    r0.w = saturate(r6.z * r0.w);
+    r0.w = 1 + -r0.w;
+    r0.w = r0.w * r0.w;
+    r0.w = -r0.w * r0.w + 1;
+    r0.w = r0.w * r5.x;
+    r3.xyz = float3(-1,-1,-1) + r3.xyz;
+    r3.xyz = r0.www * r3.xyz + float3(1,1,1);
+    r1.xyz = r3.xyz * r1.xyz;
+    r0.w = 1 + -r5.x;
+    r2.xyz = r2.xyz * r0.www;
+  }
+  // === PES21 dispersion subsuperficial en pantalla (difusion real de la luz bajo la piel) ===
+  if (skinC) {
+    float4 P3s = IniParams.Load(int2(3,0));
+    if (P3s.z > 0.5) {
+      float zc0 = PESLinZ(uvC);
+      float3 nC0 = PESDecN(uvC);
+      float wScale = (P3s.x > 0 ? P3s.x : 1.6) / 1.6;
+      // pixeles por metro a esta profundidad
+      float pxm = 1.0 / max(2.0 * abs(g_psScene.m_projectionParam.x) * zc0 * g_psSystem.m_renderBuffer.z, 1e-5);
+      float3 sig = float3(0.0042, 0.0017, 0.0010) * wScale;        // perfil por canal en metros (rojo viaja mas)
+      float rMaxPx = min(sig.r * 2.5 * pxm, 40.0);
+      if (rMaxPx > 1.0) {
+        float3 acc = r2.xyz, wsum = 1.0;
+        float rot = 6.2831853 * frac(52.9829189 * frac(dot(v0.xy, float2(0.06711056, 0.00583715))));
+        [loop] for (int si = 0; si < 16; si++) {
+          float fr = sqrt((si + 0.5) / 16.0);
+          float ang = si * 2.39996323 + rot;
+          float2 offPx = float2(cos(ang), sin(ang)) * fr * rMaxPx;
+          float2 uvS = uvC + offPx * g_psSystem.m_renderBuffer.zw;
+          float zS = PESLinZ(uvS);
+          float rW = length(offPx) / pxm;                                // distancia en metros
+          float dz = abs(zS - zc0);
+          float3 w = exp(-(rW * rW + dz * dz) / (2.0 * sig * sig));
+          float4 mS = inGBufferMaterial.SampleLevel(g_samplerPoint_Clamp_s, uvS, 0);
+          w *= (abs(mS.z - 0.98039) < 0.003) ? 1.0 : 0.0;               // solo piel
+          float nd = saturate(dot(nC0, PESDecN(uvS))); w *= nd * nd;     // no mezclar entre pliegues (codo, axila)
+          acc += w * inLightDiffuse.SampleLevel(g_samplerPoint_Clamp_s, uvS, 0).xyz;
+          wsum += w;
+        }
+        float3 blurred = acc / wsum;
+        r2.xyz = lerp(r2.xyz, blurred, 0.85);
+      }
+    }
+  }
+  // === PES21 iluminacion global en pantalla (SSGI): un rebote de luz difusa en tiempo real ===
+  float3 giDbg = 0;
+  {
+    float4 P9g = IniParams.Load(int2(9,0));
+    float4 P10g = IniParams.Load(int2(10,0));
+    float giK = P9g.w < 0 ? 0.0 : (P9g.w > 0 ? P9g.w : 1.0);
+    float zg = PESLinZ(uvC);
+    if (cmpOn && giK > 0 && zg > 0.1 && zg < 90.0) {
+      float2 sC = uvC * float2(2, -2) + float2(-1, 1);
+      float3 Pc = float3((sC - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zg, zg);
+      float3 Nc = PESDecN(uvC); Nc.z = -Nc.z;
+      float Rg = P10g.w > 0 ? P10g.w : 1.6;
+      float pxm = 1.0 / max(2.0 * abs(g_psScene.m_projectionParam.x) * zg * g_psSystem.m_renderBuffer.z, 1e-5);
+      float rPx = min(Rg * pxm, 220.0);
+      if (rPx > 3.0) {
+        float rot = 6.2831853 * frac(52.9829189 * frac(dot(v0.xy, float2(0.06711056, 0.00583715))));
+        float3 acc = 0;
+        [loop] for (int gi = 0; gi < 12; gi++) {
+          float fr = 0.08 + 0.92 * sqrt((gi + 0.5) / 12.0);
+          float ang = gi * 2.39996323 + rot;
+          float2 uvS = uvC + float2(cos(ang), sin(ang)) * fr * rPx * g_psSystem.m_renderBuffer.zw;
+          if (any(uvS < 0.0) || any(uvS > 1.0)) continue;
+          float zS = PESLinZ(uvS);
+          float2 sS = uvS * float2(2, -2) + float2(-1, 1);
+          float3 Ps = float3((sS - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zS, zS);
+          float3 d = Ps - Pc; float dist = length(d) + 1e-4; float3 dir = d / dist;
+          float cosC = saturate(dot(Nc, dir));
+          float3 Ns = PESDecN(uvS); Ns.z = -Ns.z;
+          float cosS = saturate(dot(Ns, -dir));
+          float fall = 1.0 / (1.0 + 4.0 * (dist / Rg) * (dist / Rg));
+          float3 Ls = inAlbedo.SampleLevel(g_samplerPoint_Clamp_s, uvS, 0).xyz * inLightDiffuse.SampleLevel(g_samplerPoint_Clamp_s, uvS, 0).xyz;
+          acc += Ls * (cosC * cosS * fall);
+        }
+        float3 ind = acc * (2.2 / 12.0) * giK * saturate((90.0 - zg) / 30.0);
+        r2.xyz += ind;
+        giDbg = ind;
+      }
+    }
+  }
+  r0.x = inOcclusion.Sample(g_samplerLinear_Clamp_s, r0.xy).x;
+  float3 occRGB = r0.xxx;
+  if (skinC) {
+    // la luz ambiente del estadio es gris/verdosa: en la piel se calienta un poco
+    r2.xyz *= lerp(float3(1,1,1), float3(1.07, 0.985, 0.93), saturate(P11.y));
+    // oclusion de la piel con tinte rojizo (la luz rebota dentro del tejido en los pliegues)
+    occRGB = lerp(r0.xxx, pow(max(r0.x, 1e-4), float3(0.72, 1.0, 1.08)), saturate(P11.z));
+  }
+  // === PES21 relieve de pliegues (curvatura de normales en pantalla): telas y ropa menos planas ===
+  {
+    float4 P5c = IniParams.Load(int2(5,0));
+    float cavK = 0.0;   // PES21 estable: relieve en pantalla apagado (causaba aspecto desfasado)
+    float zc = PESLinZ(uvC);
+    if (cmpOn && cavK > 0 && tyC == 0 && !skinC && zc > 0.1 && zc < 15.0) {
+      float2 px = g_psSystem.m_renderBuffer.zw * 2.0;
+      float2 oX = float2(px.x, 0), oY = float2(0, px.y);
+      float zL = PESLinZ(uvC - oX), zR = PESLinZ(uvC + oX), zU = PESLinZ(uvC - oY), zD = PESLinZ(uvC + oY);
+      float tol = 0.03 * zc + 0.02;
+      float wx = (abs(zL - zc) < tol && abs(zR - zc) < tol) ? 1.0 : 0.0;
+      float wy = (abs(zU - zc) < tol && abs(zD - zc) < tol) ? 1.0 : 0.0;
+      float k = wx * (PESDecN(uvC + oX).x - PESDecN(uvC - oX).x) + wy * (PESDecN(uvC - oY).y - PESDecN(uvC + oY).y);
+      // segunda escala (~5 cm en el mundo): pliegues grandes de la tela
+      float2 oW = 0.05 / (2.0 * abs(g_psScene.m_projectionParam.xy) * zc);
+      oW = clamp(oW, px * 2.0, px * 14.0);
+      float2 oWX = float2(oW.x, 0), oWY = float2(0, oW.y);
+      float tol2 = 0.06 * zc + 0.03;
+      float wx2 = (abs(PESLinZ(uvC - oWX) - zc) < tol2 && abs(PESLinZ(uvC + oWX) - zc) < tol2) ? 1.0 : 0.0;
+      float wy2 = (abs(PESLinZ(uvC - oWY) - zc) < tol2 && abs(PESLinZ(uvC + oWY) - zc) < tol2) ? 1.0 : 0.0;
+      k += 0.9 * (wx2 * (PESDecN(uvC + oWX).x - PESDecN(uvC - oWX).x) + wy2 * (PESDecN(uvC - oWY).y - PESDecN(uvC + oWY).y));
+      float f = k < 0 ? 1.0 + k * 1.2 : 1.0 + k * 0.3;
+      f = clamp(f, 0.7, 1.12);
+      f = lerp(1.0, f, saturate(cavK) * saturate((15.0 - zc) / 7.0));
+      r2.xyz *= f;
+    }
+  }
+  // === PES21 reflejos en pantalla (SSR): lo que refleja la superficie se calcula con la imagen real ===
+  {
+    float4 P11r = IniParams.Load(int2(11,0));
+    float4 gmR = inGBufferMaterial.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0);
+    float roughR = saturate(gmR.x);
+    float zr = PESLinZ(uvC);
+    float glossR = saturate(1.0 - roughR * 1.6);
+    if (false && cmpOn && glossR > 0.05 && zr > 0.1 && zr < 70.0) {   // PES21 estable: SSR apagado
+      float2 sC = uvC * float2(2, -2) + float2(-1, 1);
+      float3 Pc = float3((sC - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zr, zr);
+      float3 Nc = PESDecN(uvC); Nc.z = -Nc.z;
+      float3 Vd = normalize(Pc);
+      float3 Rd = reflect(Vd, Nc);
+      float NdV = saturate(dot(Nc, -Vd));
+      float stepL = 0.06 + zr * 0.01;
+      float jit = frac(52.9829189 * frac(dot(v0.xy, float2(0.06711056, 0.00583715))));
+      float3 Q = Pc + Nc * (0.02 + zr * 0.002) + Rd * stepL * jit;
+      float hit = 0; float2 uvH = 0;
+      [loop] for (int ri = 0; ri < 24; ri++) {
+        Q += Rd * stepL;
+        stepL *= 1.12;
+        if (Q.z < 0.1) break;
+        float2 sQ = Q.xy / (Q.z * g_psScene.m_projectionParam.xy) + g_psScene.m_cameraCenterOffset.xy;
+        float2 uvQ = sQ * float2(0.5, -0.5) + 0.5;
+        if (any(uvQ < 0.0) || any(uvQ > 1.0)) break;
+        float zQ = PESLinZ(uvQ);
+        float dz = Q.z - zQ;
+        if (dz > 0.0 && dz < stepL * 0.6 + 0.02) { hit = 1; uvH = uvQ; break; }   // grosor fino: no 'atraviesa' objetos
+      }
+      if (hit > 0) {
+        float2 eM = saturate(min(uvH, 1.0 - uvH) * 8.0);
+        float conf = eM.x * eM.y * saturate(dot(Rd, -Vd) * -1.0 + 1.0);
+        float3 Lr = inAlbedo.SampleLevel(g_samplerLinear_Clamp_s, uvH, 0).xyz * inLightDiffuse.SampleLevel(g_samplerLinear_Clamp_s, uvH, 0).xyz
+                  + inLightSpecular.SampleLevel(g_samplerLinear_Clamp_s, uvH, 0).xyz * 0.5;
+        float F = 0.04 + 0.96 * pow(1.0 - NdV, 5.0);
+        float specLvl = saturate(gmR.y + 0.15);
+        float w = conf * glossR * glossR * (skinC ? 0.0 : 1.0) * smoothstep(0.45, 0.8, glossR) * saturate(gmR.y * 2.0) * saturate((70.0 - zr) / 20.0);   // tela y piel no reflejan el fondo
+        r1.xyz = lerp(r1.xyz, Lr * F * specLvl * 1.6, saturate(w * 0.7));
+      }
+    }
+  }
+  r1.xyz = r7.xyz * r2.xyz + r1.xyz;
+  r0.xyw = r1.xyz * occRGB;
+  r0.z = log2(r0.z);
+  r0.z = g_psScene.m_fogParam[2].y * r0.z;
+  r0.z = r0.z * 0.693147182 + g_psScene.m_fogParam[2].z;
+  r0.z = max(0, r0.z);
+  r0.z = min(g_psScene.m_fogParam[2].w, r0.z);
+  r1.xz = float2(0.0146484403,0.0146484403) * v1.xx + float2(0.015625,0.015625);
+  r1.yw = g_psScene.m_fogParam[1].xx * v1.yy + g_psScene.m_fogParam[1].yy;
+  r2.x = 1 + r0.z;
+  r2.x = max(0, r2.x);
+  r2.x = min(g_psScene.m_fogParam[2].w, r2.x);
+  r2.y = floor(r0.z);
+  r2.w = floor(r2.x);
+  r2.xy = float2(0.03125,0.03125) * r2.yw;
+  r2.zw = frac(r2.xy);
+  r3.xz = g_psScene.m_fogParam[1].zz * r2.zw;
+  r3.yw = floor(r2.xy);
+  r2.xz = float2(32,32);
+  r2.yw = g_psScene.m_fogParam[1].ww;
+  r1.xyzw = r2.xyzw * r3.xyzw + r1.xyzw;
+  r0.z = frac(r0.z);
+  r2.xyzw = inFogVolume.Sample(g_samplerLinear_Wrap_s, r1.xy).xyzw;
+  r1.xyzw = inFogVolume.Sample(g_samplerLinear_Wrap_s, r1.zw).xyzw;
+  r3.x = 1 + -r0.z;
+  r1.xyzw = r1.xyzw * r0.zzzz;
+  r1.xyzw = r3.xxxx * r2.xyzw + r1.xyzw;
+  // niebla/bruma del estadio: es lo que "lava" la imagen; x11 = cuanto se aplica (1 = original)
+  float fogK = cmpOn ? saturate(P11.x) : 1.0;
+  r0.xyz = r0.xyw * lerp(1.0, r1.w, fogK) + r1.xyz * fogK;
+  r0.xyz = min(float3(0,0,0), -r0.xyz);
+  o0.xyz = -r0.xyz;
+  o0.w = 1;
+  if (IniParams.Load(int2(12,0)).w > 1.5) o0.xyz = giDbg * 3.0;   // w12 = 2: ver solo el rebote de luz
+  if (IniParams.Load(int2(12,0)).w < -0.5) {   // PES21 debug: bits de m_shadowMapResolutions y m_exposure en la esquina
+    int bx = (int)(v0.x / 24.0), by = (int)((v0.y - 300.0) / 24.0);
+    if (v0.y >= 300.0 && by < 8 && bx < 32) {
+      float4 vals0 = g_psScene.m_shadowMapResolutions;
+      float4 vals1 = g_psScene.m_exposure;
+      float val = by < 4 ? vals0[by] : vals1[by - 4];
+      uint bits = asuint(val);
+      o0.xyz = ((bits >> (31 - bx)) & 1) ? float3(0.5, 0.5, 0.5) : float3(0, 0, 0);
+    }
+  }
+  return;
+}
