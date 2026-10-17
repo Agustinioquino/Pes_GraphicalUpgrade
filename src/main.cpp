@@ -143,6 +143,47 @@ static int OrphanThreads(uintptr_t b, uintptr_t e, const char* dll) {
     return n;
 }
 
+// volcado de una DLL tal como esta en memoria (para analizar una DLL empaquetada) + sus hilos
+static void DumpModule(const wchar_t* name, const wchar_t* outName) {
+    HMODULE m = GetModuleHandleW(name);
+    if (!m) { Log("volcado: %ls no esta cargada", name); return; }
+    auto* dos = (IMAGE_DOS_HEADER*)m; auto* nt = (IMAGE_NT_HEADERS64*)((uint8_t*)m + dos->e_lfanew);
+    DWORD size = nt->OptionalHeader.SizeOfImage;
+    std::wstring path = g_cfg.baseDir + outName;
+    HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+    if (h == INVALID_HANDLE_VALUE) { Log("volcado: no se pudo crear %ls", outName); return; }
+    DWORD total = 0;
+    for (DWORD off = 0; off < size; off += 0x1000) {
+        uint8_t page[0x1000]; MEMORY_BASIC_INFORMATION mbi{};
+        uintptr_t a = (uintptr_t)m + off;
+        bool ok = VirtualQuery((void*)a, &mbi, sizeof(mbi)) && mbi.State == MEM_COMMIT && !(mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD));
+        if (ok) memcpy(page, (void*)a, sizeof(page)); else memset(page, 0, sizeof(page));
+        DWORD wr; WriteFile(h, page, sizeof(page), &wr, nullptr); total += wr;
+    }
+    CloseHandle(h);
+    Log("volcado: %ls -> %ls (%lu bytes, base %p)", name, outName, total, (void*)m);
+    // hilos que arrancaron en esa DLL
+    HMODULE ntd = GetModuleHandleW(L"ntdll.dll");
+    auto qit = (PFN_NtQIT)GetProcAddress(ntd, "NtQueryInformationThread");
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE) return;
+    THREADENTRY32 te{}; te.dwSize = sizeof(te); DWORD pid = GetCurrentProcessId();
+    for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
+        if (te.th32OwnerProcessID != pid) continue;
+        HANDLE th = OpenThread(THREAD_QUERY_INFORMATION | THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, te.th32ThreadID);
+        if (!th) continue;
+        void* start = nullptr;
+        if (qit && qit(th, 9, &start, sizeof(start), nullptr) == 0 && (uintptr_t)start >= (uintptr_t)m && (uintptr_t)start < (uintptr_t)m + size) {
+            CONTEXT cx{}; cx.ContextFlags = CONTEXT_CONTROL;
+            std::string where = "?";
+            if (SuspendThread(th) != (DWORD)-1) { if (GetThreadContext(th, &cx)) where = ModOff((void*)cx.Rip); ResumeThread(th); }
+            Log("  hilo %lu arranco en %ls+0x%llx, ahora en %s", te.th32ThreadID, name, (unsigned long long)((uintptr_t)start - (uintptr_t)m), where.c_str());
+        }
+        CloseHandle(th);
+    }
+    CloseHandle(snap);
+}
+
 static VOID CALLBACK DllNotify(ULONG reason, const FxLdrData* d, PVOID) {
     if (!d || !d->BaseDllName) return;
     Log("%s %.*ls en %p-%p", reason == 1 ? "DLL cargada:" : "DLL DESCARGADA:", (int)(d->BaseDllName->Length / 2), d->BaseDllName->Buffer,
@@ -156,7 +197,7 @@ static VOID CALLBACK DllNotify(ULONG reason, const FxLdrData* d, PVOID) {
         Log("  la descarga el hilo %lu: %s", GetCurrentThreadId(), who.c_str());
         uintptr_t b = (uintptr_t)d->DllBase, e = b + d->SizeOfImage;
         ScanRefsInto(b, e, nm);
-        OrphanThreads(b, e, nm);
+        if (g_cfg.optOrphan) OrphanThreads(b, e, nm); else Log("  (orphan_fix = 0: no se tocan los hilos)");
     }
 }
 static void WatchDlls() {
@@ -219,6 +260,7 @@ extern "C" __declspec(dllexport) int PES21FX_Init(const char* baseDir) {
     }
     if (!fx::LoadConfig()) fx::Log("aviso: no se pudo leer la configuracion");
     if (fx::g_cfg.optPin) fx::PinGameDlls();
+    if (fx::g_cfg.optDump) fx::DumpModule(L"DreamPatch Switcher.dll", L"dump_switcher.bin");
     if (!fx::g_cfg.optHooks) { fx::Log("hooks = 0: el mod queda cargado pero sin ganchos (prueba)"); return 2; }
     if (!fx::InstallHooks()) { fx::Log("ERROR: no se pudieron instalar los ganchos de D3D11"); return 0; }
     fx::Log("ganchos instalados");

@@ -59,7 +59,7 @@ struct Config {
     int menuKey = VK_INSERT;
     bool bypass = false;                       // ver el juego original
     // [PES21FX] para aislar problemas: replace_shaders / rules / overlay = 0 apagan cada parte
-    bool optReplace = true, optRules = true, optOverlay = true, optPin = false, optHooks = true, optDxgi = true, optPresent = true, optCtx = true, optExports = true;
+    bool optReplace = true, optRules = true, optOverlay = true, optPin = false, optHooks = true, optDxgi = true, optPresent = true, optCtx = true, optExports = true, optOrphan = true, optDump = false;
 };
 extern Config g_cfg;
 extern std::mutex g_cfgMutex;

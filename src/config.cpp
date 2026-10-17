@@ -125,6 +125,8 @@ bool LoadConfig() {
             else if (kl == "present_hook") c.optPresent = atoi(v.c_str()) != 0;
             else if (kl == "context_hooks") c.optCtx = atoi(v.c_str()) != 0;
             else if (kl == "export_hooks") c.optExports = atoi(v.c_str()) != 0;
+            else if (kl == "orphan_fix") c.optOrphan = atoi(v.c_str()) != 0;
+            else if (kl == "dump_switcher") c.optDump = atoi(v.c_str()) != 0;
             continue;
         }
         if (cur) {
