@@ -400,12 +400,15 @@ template<int V> static void STDMETHODCALLTYPE hk_DrawInst(ID3D11DeviceContext* c
 
 // ---------------------------------------------------------------- instalacion sobre vtables
 static std::set<void*> s_hookedFns;
+struct HookRec { const char* name; void* target; void** orig; };
+static std::vector<HookRec> s_hookList;
 static bool Hook(void* target, void* detour, void** orig, const char* name) {
     if (!target || s_hookedFns.count(target)) return false;     // ya enganchada (contextos que comparten codigo)
     MH_STATUS s = MH_CreateHook(target, detour, orig);
     if (s != MH_OK) { Log("no se pudo enganchar %s (%d)", name, (int)s); return false; }
     MH_EnableHook(target);
     s_hookedFns.insert(target);
+    s_hookList.push_back({name, target, orig});
     Log("gancho %s: %s (trampolin %p)", name, ModOff(target).c_str(), orig ? *orig : nullptr);
     return true;
 }
@@ -490,8 +493,10 @@ using PFN_CreateSC = HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory*, IUnknown*, DXGI_
 using PFN_CreateSCHwnd = HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1*, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**);
 static PFN_CreateSC o_CreateSC; static PFN_CreateSCHwnd o_CreateSCHwnd;
 
+static IDXGISwapChain* s_gameSC = nullptr;
 static void OnSwapChain(IUnknown* devUnk, IDXGISwapChain* sc) {
     if (!sc) return;
+    s_gameSC = sc;
     ID3D11Device* d = nullptr;
     if (devUnk && SUCCEEDED(devUnk->QueryInterface(__uuidof(ID3D11Device), (void**)&d)) && d) {
         if (!s_deviceHooked) { Log("AVISO: el dispositivo ya existia al cargar el mod"); HookDevice(d); }
@@ -641,6 +646,80 @@ bool InstallHooks() {
     bool ok = s_hookedFns.count(cd) > 0;
     Hook(cds, (void*)&hk_D3D11CreateDeviceAndSwapChain, (void**)&o_D3D11CreateDeviceAndSwapChain, "D3D11CreateDeviceAndSwapChain");
     return ok;
+}
+
+// ---------------------------------------------------------------- diagnostico: referencias a una DLL que se descarga
+static bool Readable(uintptr_t p, size_t n) {
+    MEMORY_BASIC_INFORMATION m{};
+    if (!VirtualQuery((void*)p, &m, sizeof(m)) || m.State != MEM_COMMIT) return false;
+    if (m.Protect & (PAGE_NOACCESS | PAGE_GUARD)) return false;
+    return p + n <= (uintptr_t)m.BaseAddress + m.RegionSize;
+}
+// sigue saltos (jmp rel32 / jmp [rip] / mov rax,imm;jmp rax) y devuelve la primera direccion dentro de [b,e)
+static uintptr_t Follow(uintptr_t p, uintptr_t b, uintptr_t e) {
+    for (int i = 0; i < 6 && p; i++) {
+        if (p >= b && p < e) return p;
+        if (!Readable(p, 16)) return 0;
+        const uint8_t* c = (const uint8_t*)p;
+        if (c[0] == 0xE9) p = p + 5 + *(int32_t*)(c + 1);
+        else if (c[0] == 0xEB) p = p + 2 + (int8_t)c[1];
+        else if (c[0] == 0xFF && c[1] == 0x25) { uintptr_t q = p + 6 + *(int32_t*)(c + 2); if (!Readable(q, 8)) return 0; p = *(uintptr_t*)q; }
+        else if (c[0] == 0x48 && c[1] == 0xB8 && c[10] == 0xFF && c[11] == 0xE0) p = *(uintptr_t*)(c + 2);
+        else return 0;
+    }
+    return (p >= b && p < e) ? p : 0;
+}
+static int s_refs = 0;
+static void Check(const char* what, int idx, void* v, uintptr_t b, uintptr_t e) {
+    uintptr_t hit = Follow((uintptr_t)v, b, e);
+    if (!hit) return;
+    s_refs++;
+    if (idx >= 0) Log("    -> %s[%d] = %s llega a +0x%llx", what, idx, ModOff(v).c_str(), (unsigned long long)(hit - b));
+    else Log("    -> %s = %s llega a +0x%llx", what, ModOff(v).c_str(), (unsigned long long)(hit - b));
+}
+static void CheckVT(const char* what, void* obj, int n, uintptr_t b, uintptr_t e) {
+    if (!obj || !Readable((uintptr_t)obj, 8)) return;
+    void** vt = *(void***)obj;
+    if (!Readable((uintptr_t)vt, n * sizeof(void*))) return;
+    for (int i = 0; i < n; i++) Check(what, i, vt[i], b, e);
+}
+void ScanRefsInto(uintptr_t b, uintptr_t e, const char* dll) {
+    s_refs = 0;
+    Log("  revisando quien apunta todavia a %s ...", dll);
+    for (auto& h : s_hookList) {
+        Check(h.name, -1, h.target, b, e);                     // el codigo enganchado
+        if (h.orig && *h.orig) Check("trampolin", -1, *h.orig, b, e);   // lo que llamamos como "original"
+    }
+    Check("o_Present", -1, (void*)o_Present, b, e);
+    Check("o_Resize", -1, (void*)o_Resize, b, e);
+    if (s_gameSC) {
+        CheckVT("vtable cadena", s_gameSC, 40, b, e);
+        DXGI_SWAP_CHAIN_DESC sd{};
+        if (SUCCEEDED(s_gameSC->GetDesc(&sd)) && sd.OutputWindow) {
+            Check("WndProc del juego", -1, (void*)GetWindowLongPtrW(sd.OutputWindow, GWLP_WNDPROC), b, e);
+        }
+    }
+    Check("WndProc guardado por el menu", -1, g_overlayOldProc, b, e);
+    if (g_dev.dev) CheckVT("vtable dispositivo", g_dev.dev, 50, b, e);
+    if (g_dev.imm) CheckVT("vtable contexto", g_dev.imm, 145, b, e);
+    struct { const wchar_t* mod; const char* fn; } ex[] = {
+        {L"d3d11.dll", "D3D11CreateDevice"}, {L"d3d11.dll", "D3D11CreateDeviceAndSwapChain"},
+        {L"dxgi.dll", "CreateDXGIFactory"}, {L"dxgi.dll", "CreateDXGIFactory1"}, {L"dxgi.dll", "CreateDXGIFactory2"},
+        {L"kernel32.dll", "LoadLibraryA"}, {L"kernel32.dll", "LoadLibraryW"}, {L"kernel32.dll", "LoadLibraryExW"},
+        {L"kernel32.dll", "GetProcAddress"}, {L"kernel32.dll", "CreateFileW"}, {L"kernel32.dll", "CreateFileA"},
+        {L"kernel32.dll", "ReadFile"}, {L"kernel32.dll", "CreateThread"}, {L"kernel32.dll", "ExitThread"},
+        {L"kernelbase.dll", "LoadLibraryExW"}, {L"kernelbase.dll", "CreateFileW"}, {L"kernelbase.dll", "GetProcAddress"},
+        {L"ntdll.dll", "LdrLoadDll"}, {L"ntdll.dll", "NtCreateFile"}, {L"ntdll.dll", "RtlExitUserThread"},
+        {L"user32.dll", "SetWindowLongPtrW"}, {L"user32.dll", "PeekMessageW"}, {L"user32.dll", "GetMessageW"},
+        {L"user32.dll", "DispatchMessageW"}, {L"user32.dll", "CallWindowProcW"}, {L"user32.dll", "GetAsyncKeyState"},
+        {L"xinput1_4.dll", "XInputGetState"}, {L"xinput1_3.dll", "XInputGetState"}, {L"dinput8.dll", "DirectInput8Create"},
+    };
+    for (auto& x : ex) {
+        HMODULE m = GetModuleHandleW(x.mod); if (!m) continue;
+        void* f = (void*)GetProcAddress(m, x.fn); if (!f) continue;
+        Check(x.fn, -1, f, b, e);
+    }
+    Log("  %d referencias encontradas", s_refs);
 }
 
 } // namespace fx

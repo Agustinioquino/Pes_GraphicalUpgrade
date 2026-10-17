@@ -12,6 +12,9 @@ std::atomic<bool> g_menuOpen{false};
 static bool s_init = false;
 static HWND s_hwnd = nullptr;
 static WNDPROC s_oldProc = nullptr;
+}
+void* fx::g_overlayOldProc = nullptr;
+namespace fx {
 static ID3D11RenderTargetView* s_rtv = nullptr;
 static bool s_keyWas = false;
 static std::string s_status;
@@ -57,6 +60,8 @@ static void Init(IDXGISwapChain* sc) {
     ImGui_ImplWin32_Init(s_hwnd);
     ImGui_ImplDX11_Init(g_dev.dev, g_dev.imm);
     s_oldProc = (WNDPROC)SetWindowLongPtrW(s_hwnd, GWLP_WNDPROC, (LONG_PTR)MenuProc);
+    g_overlayOldProc = (void*)s_oldProc;
+    Log("WndProc del juego antes del menu: %s", ModOff((void*)s_oldProc).c_str());
     s_init = true;
     Log("menu listo (tecla Insert)");
 }

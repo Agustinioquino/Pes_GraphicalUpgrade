@@ -83,6 +83,10 @@ static VOID CALLBACK DllNotify(ULONG reason, const FxLdrData* d, PVOID) {
     if (!d || !d->BaseDllName) return;
     Log("%s %.*ls en %p-%p", reason == 1 ? "DLL cargada:" : "DLL DESCARGADA:", (int)(d->BaseDllName->Length / 2), d->BaseDllName->Buffer,
         d->DllBase, (void*)((uintptr_t)d->DllBase + d->SizeOfImage));
+    if (reason == 2) {
+        char nm[260]; snprintf(nm, sizeof(nm), "%.*ls", (int)(d->BaseDllName->Length / 2), d->BaseDllName->Buffer);
+        ScanRefsInto((uintptr_t)d->DllBase, (uintptr_t)d->DllBase + d->SizeOfImage, nm);
+    }
 }
 static void WatchDlls() {
     static PVOID cookie = nullptr;
@@ -137,12 +141,13 @@ extern "C" __declspec(dllexport) int PES21FX_Init(const char* baseDir) {
     // (cierres en <dll descargada>+0xdcb0). La mantenemos cargada nosotros.
     HMODULE nv = LoadLibraryW(L"nvapi64.dll");
     fx::Log("nvapi64.dll: %s", nv ? "cargada y retenida" : "no esta (placa no NVIDIA?)");
-    fx::PinGameDlls();
+    // (las DLL se "clavan" solo despues de leer la config: ver PES21FX_Init)
     for (const wchar_t* mn : {L"PES21FX.dll", L"sider.dll", L"dsound.dll", L"d3d11.dll", L"dxgi.dll", L"PES2021.exe"}) {
         HMODULE hm = GetModuleHandleW(mn);
         fx::Log("modulo %ls en %p", mn, (void*)hm);
     }
     if (!fx::LoadConfig()) fx::Log("aviso: no se pudo leer la configuracion");
+    if (fx::g_cfg.optPin) fx::PinGameDlls();
     if (!fx::InstallHooks()) { fx::Log("ERROR: no se pudieron instalar los ganchos de D3D11"); return 0; }
     fx::Log("ganchos instalados");
     return 2;

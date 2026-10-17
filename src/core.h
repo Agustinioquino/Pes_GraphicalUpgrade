@@ -17,6 +17,8 @@ namespace fx {
 // ---------------------------------------------------------------- log
 void Log(const char* fmt, ...);
 std::string ModOff(void* p);   // "modulo.dll+0x1234" (diagnostico)
+void ScanRefsInto(uintptr_t base, uintptr_t end, const char* dllName);   // quien apunta todavia a una DLL que se descarga
+extern void* g_overlayOldProc;
 
 // ---------------------------------------------------------------- parametros (lo que en 3DMigoto era IniParams)
 constexpr int kParamCount = 128;           // float4 x 128 -> t120 en los shaders (IniParams.Load(int2(i,0)))
@@ -57,7 +59,7 @@ struct Config {
     int menuKey = VK_INSERT;
     bool bypass = false;                       // ver el juego original
     // [PES21FX] para aislar problemas: replace_shaders / rules / overlay = 0 apagan cada parte
-    bool optReplace = true, optRules = true, optOverlay = true;
+    bool optReplace = true, optRules = true, optOverlay = true, optPin = false;
 };
 extern Config g_cfg;
 extern std::mutex g_cfgMutex;
