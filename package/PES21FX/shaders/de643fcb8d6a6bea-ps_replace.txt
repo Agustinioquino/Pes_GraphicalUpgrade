@@ -104,6 +104,7 @@ float3 PESSunColor() {
 // === PES21 SOMBRAS v2 (Claude, 15/10): filtro estable de 16 muestras + sombras de contacto (PCSS) ===
 // y20: 0 = filtro original del juego, 1 = estable 16 muestras, 2 = PCSS (nitida al pie, mas suave lejos)
 // z20 radio en texeles | x21 escala PCSS, y21 radio maximo, z21 radio de busqueda | w21 = 1 rotar por frame (DLSS/TAA)
+static float g_pesDynMinR = 0.0;   // PES21 sol dinamico: radio minimo del filtro (lo fija main)
 float PESShadowFilter(float2 uv, float ref, float cas, float2 pix, float orig, float rscale)
 {
   float4 SH = IniParams.Load(int2(20,0));
@@ -116,7 +117,7 @@ float PESShadowFilter(float2 uv, float ref, float cas, float2 pix, float orig, f
   float2 p = pix;
   if (SQ.w > 0.5) p += frac(g_psSystem.m_timeParam.z * 61.8034) * 97.0;
   float rot = 6.2831853 * frac(52.9829189 * frac(dot(p, float2(0.06711056, 0.00583715))));
-  float radius = max(SH.z, 0.5) * rscale;
+  float radius = max(max(SH.z, g_pesDynMinR), 0.5) * rscale;
   if (SH.y > 1.5) {
     float searchR = max(SQ.z, 1.0);
     float bsum = 0, bcnt = 0;
@@ -128,7 +129,7 @@ float PESShadowFilter(float2 uv, float ref, float cas, float2 pix, float orig, f
       if (d > ref) { bsum += d - ref; bcnt += 1; }
     }
     if (bcnt < 0.5) return 1.0;
-    radius = clamp((bsum / bcnt) * SQ.x, 0.5, max(SQ.y, 1.0));
+    radius = clamp((bsum / bcnt) * SQ.x, max(0.5, g_pesDynMinR), max(SQ.y, 1.0));
   }
   float sum = 0;
   [unroll] for (int i = 0; i < 16; i++) {
@@ -302,6 +303,20 @@ void main(
   r12.z = r11.x * 0.333333343 + r12.y;
   r9.xyzw = r12.xzxz + r9.xyzw;
   float2 pesShUV = r9.zw; float pesShCas = r11.x; float pesShRef = r0.w;   // PES21 sombras v2
+  // === PES21 sol dinamico (17/10): el Daylight Engine mueve el sol cada cuadro y lo deja bajo. Con el sol rasante
+  // el shadow map hace acne (rayas en pasto y cara) y el borde repta al moverse. x53 sesgo de plano receptor (crece
+  // solo donde la superficie es rasante a la luz, y mas con el sol bajo), y53 radio minimo del filtro en texeles
+  // (estabiliza el borde en movimiento), z53 tope del sesgo (x 0.001), w53 on/off
+  { float4 DS = IniParams.Load(int2(53,0));
+    if (DS.w > 0.5) {
+      float slope = abs(ddx(pesShRef)) + abs(ddy(pesShRef));
+      float3 upW = float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12);
+      float sunUp = saturate(abs(dot(normalize(g_psLight.m_lightDir0.xyz), normalize(upW))));
+      float lowSun = 1.0 - smoothstep(0.08, 0.45, sunUp);
+      float b = slope * max(DS.x, 0.0) * (1.0 + 2.0 * lowSun);
+      pesShRef += min(b, max(DS.z, 0.0) * 0.001);
+      g_pesDynMinR = max(DS.y, 0.0) * (0.5 + 0.5 * lowSun);
+    } }
   // PES21 kits: la sombra del sol se calcula con la ropa SIN simular (el mod de ropa solo mueve la que se ve),
   // y donde la tela simulada se mete adentro de la original aparecen franjas de sombra. Sesgo extra solo en kits:
   // x30 = sesgo (0 = nada), w30 on/off [Alt+Shift+F9 cicla]
