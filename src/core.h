@@ -38,6 +38,14 @@ struct KeyBind {
 
 struct ParamInfo { std::string comment; bool defined = false; };
 
+// grupo del menu ([Menu...] en PES21FX.ini): titulo, descripcion, interruptor y sliders de una mejora
+struct MenuSlider { int idx, comp; std::string label; float lo, hi; };
+struct MenuGroup {
+    std::string title, desc, section;
+    int tIdx = -1, tComp = 0;            // parametro del interruptor (w46, etc.); -1 = sin interruptor
+    std::vector<MenuSlider> sliders;
+};
+
 // ---------------------------------------------------------------- reglas por shader (lo que eran [ShaderOverride])
 struct RuleAction {
     enum Kind { CopyCB, RefSRV, BindCB, BindSRV, SetParam, EventTurf } kind;
@@ -54,6 +62,7 @@ struct Config {
     float live[kParamCount][4] = {};           // valores actuales (teclas / menu)
     ParamInfo info[kParamCount][4];
     std::vector<KeyBind> keys;
+    std::vector<MenuGroup> groups;
     std::map<uint64_t, Rule> rules;
     std::map<std::string, float> vars;         // $pes_push, etc.
     int menuKey = VK_INSERT;

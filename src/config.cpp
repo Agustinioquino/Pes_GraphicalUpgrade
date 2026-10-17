@@ -80,21 +80,23 @@ bool LoadConfig() {
     Config& c = g_cfg;
     memset(c.base, 0, sizeof(c.base));
     for (auto& a : c.info) for (auto& b : a) b = ParamInfo();
-    c.keys.clear(); c.rules.clear(); c.vars.clear();
+    c.keys.clear(); c.rules.clear(); c.vars.clear(); c.groups.clear();
     c.vars["pes_push"] = 0.003f;
 
     std::vector<std::string> lines;
     if (!ReadLines(IniPath(), lines)) { Log("no existe PES21FX.ini"); return false; }
     std::string section, comment;
     KeyBind* cur = nullptr;
+    MenuGroup* grp = nullptr;
     for (auto& raw : lines) {
         std::string l = Trim(raw);
         if (l.empty()) { comment.clear(); continue; }
         if (l[0] == ';') { std::string t = Trim(l.substr(1)); if (cur && cur->label.empty()) cur->label = t; else comment = t; continue; }
         if (l[0] == '[') {
             section = l.substr(1, l.find(']') - 1);
-            cur = nullptr;
+            cur = nullptr; grp = nullptr;
             if (Lower(section).rfind("key", 0) == 0) { c.keys.emplace_back(); cur = &c.keys.back(); cur->name = section; }
+            else if (Lower(section).rfind("menu", 0) == 0) { c.groups.emplace_back(); grp = &c.groups.back(); grp->title = section.substr(4); }
             continue;
         }
         size_t eq = l.find('=');
@@ -127,6 +129,24 @@ bool LoadConfig() {
             else if (kl == "export_hooks") c.optExports = atoi(v.c_str()) != 0;
             else if (kl == "orphan_fix") c.optOrphan = atoi(v.c_str()) != 0;
             else if (kl == "dump_switcher") c.optDump = atoi(v.c_str()) != 0;
+            continue;
+        }
+        if (grp) {
+            if (kl == "title") grp->title = v;
+            else if (kl == "desc") grp->desc = v;
+            else if (kl == "section") grp->section = v;
+            else if (kl == "toggle") { int i2, c2; if (ParseParamName(v, i2, c2)) { grp->tIdx = i2; grp->tComp = c2; } }
+            else if (kl == "slider") {   // slider = x46 | Fuerza | 0 | 1.5
+                std::vector<std::string> parts; std::string cur2; 
+                for (char ch : v) { if (ch == '|') { parts.push_back(Trim(cur2)); cur2.clear(); } else cur2 += ch; }
+                parts.push_back(Trim(cur2));
+                int i2, c2;
+                if (parts.size() >= 2 && ParseParamName(parts[0], i2, c2)) {
+                    MenuSlider sl{i2, c2, parts[1], 0.f, 1.f};
+                    if (parts.size() >= 4) { sl.lo = (float)atof(parts[2].c_str()); sl.hi = (float)atof(parts[3].c_str()); }
+                    grp->sliders.push_back(sl);
+                }
+            }
             continue;
         }
         if (cur) {

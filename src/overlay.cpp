@@ -84,7 +84,31 @@ static void DrawMenu() {
     ImGui::Separator();
 
     std::lock_guard<std::mutex> lk(g_cfgMutex);
-    if (ImGui::CollapsingHeader("Efectos", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (!g_cfg.groups.empty() && ImGui::CollapsingHeader("Mejoras", ImGuiTreeNodeFlags_DefaultOpen)) {
+        std::string lastSec; int gid = 0;
+        for (auto& g : g_cfg.groups) {
+            ImGui::PushID(1000 + gid++);
+            if (!g.section.empty() && g.section != lastSec) { ImGui::SeparatorText(Utf8(g.section).c_str()); lastSec = g.section; }
+            bool hasT = g.tIdx >= 0;
+            bool on = hasT ? (g_cfg.live[g.tIdx][g.tComp] > 0.5f) : true;
+            if (hasT) { if (ImGui::Checkbox(Utf8(g.title).c_str(), &on)) g_cfg.live[g.tIdx][g.tComp] = on ? 1.0f : 0.0f; }
+            else ImGui::TextUnformatted(Utf8(g.title).c_str());
+            if (!g.desc.empty()) { ImGui::Indent(22); ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.72f, 0.72f, 0.72f, 1)); ImGui::TextWrapped("%s", Utf8(g.desc).c_str()); ImGui::PopStyleColor(); ImGui::Unindent(22); }
+            if (!g.sliders.empty()) {
+                ImGui::Indent(22);
+                ImGui::BeginDisabled(!on);
+                for (auto& sl : g.sliders) {
+                    ImGui::SetNextItemWidth(260);
+                    ImGui::SliderFloat(Utf8(sl.label).c_str(), &g_cfg.live[sl.idx][sl.comp], sl.lo, sl.hi, "%.2f");
+                }
+                ImGui::EndDisabled();
+                ImGui::Unindent(22);
+            }
+            ImGui::Spacing();
+            ImGui::PopID();
+        }
+    }
+    if (ImGui::CollapsingHeader("Efectos (teclas)")) {
         int id = 0;
         for (auto& k : g_cfg.keys) {
             ImGui::PushID(id++);
