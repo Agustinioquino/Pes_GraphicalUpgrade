@@ -87,6 +87,7 @@ struct Config {
     int menuKey = VK_INSERT;
     bool bypass = false;                       // ver el juego original
     // [PES21FX] para aislar problemas: replace_shaders / rules / overlay = 0 apagan cada parte
+    bool tutorials = true;                     // tarjetas de tutorial al abrir cada pestana ([PES21FX] tutorials)
     bool optReplace = true, optRules = true, optOverlay = true, optPin = false, optHooks = true, optDxgi = true, optPresent = true, optCtx = true, optExports = true, optOrphan = true, optDump = false;
 };
 extern Config g_cfg;
@@ -94,6 +95,7 @@ extern std::mutex g_cfgMutex;
 
 bool LoadConfig();                              // PES21FX.ini + PES21FX_rules.ini
 bool SaveConfigValues();
+bool SaveOption(const std::string& key, const std::string& value);   // escribe/agrega clave en [PES21FX]
 bool LoadCloth();
 bool SaveCloth();                        // escribe los valores live en PES21FX.ini
 void PollKeys(bool focused);

@@ -119,6 +119,7 @@ bool LoadConfig() {
         }
         if (Lower(section) == "pes21fx") {
             if (kl == "menu_key") c.menuKey = VkFromName(v);
+            else if (kl == "tutorials") c.tutorials = atoi(v.c_str()) != 0;
             else if (kl == "replace_shaders") c.optReplace = atoi(v.c_str()) != 0;
             else if (kl == "rules") c.optRules = atoi(v.c_str()) != 0;
             else if (kl == "overlay") c.optOverlay = atoi(v.c_str()) != 0;
@@ -357,6 +358,30 @@ bool SaveConfigValues() {
     for (auto& l : lines) f << l << "\r\n";
     for (auto& kb : g_cfg.keys) kb.active = false, kb.cycleIdx = -1;
     Log("valores guardados en PES21FX.ini");
+    return true;
+}
+
+bool SaveOption(const std::string& key, const std::string& value) {
+    std::vector<std::string> lines;
+    if (!ReadLines(IniPath(), lines)) return false;
+    std::string section; bool done = false; size_t secEnd = std::string::npos;
+    for (size_t i = 0; i < lines.size(); i++) {
+        std::string l = Trim(lines[i]);
+        if (!l.empty() && l[0] == '[') {
+            if (section == "pes21fx" && secEnd == std::string::npos) secEnd = i;
+            section = Lower(l.substr(1, l.find(']') - 1)); continue;
+        }
+        if (section != "pes21fx" || l.empty() || l[0] == ';') continue;
+        size_t eq = l.find('='); if (eq == std::string::npos) continue;
+        if (Lower(Trim(l.substr(0, eq))) == Lower(key)) { lines[i] = key + " = " + value; done = true; }
+    }
+    if (!done) {
+        if (secEnd == std::string::npos) { lines.insert(lines.begin(), {"[PES21FX]", key + " = " + value, ""}); }
+        else lines.insert(lines.begin() + secEnd, key + " = " + value);
+    }
+    std::ofstream f(IniPath(), std::ios::binary | std::ios::trunc);
+    if (!f) return false;
+    for (auto& l : lines) f << l << "\r\n";
     return true;
 }
 

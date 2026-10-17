@@ -1,5 +1,6 @@
 // PES21 FX - menu en pantalla (Dear ImGui). Tecla Insert (o menu_key en [PES21FX] de PES21FX.ini).
 #include "core.h"
+#include <set>
 #include <imgui.h>
 #include <imgui_impl_dx11.h>
 #include <imgui_impl_win32.h>
@@ -158,6 +159,93 @@ static void DrawGroup(MenuGroup& g, int gid) {
     ImGui::PopID();
 }
 
+
+// --- tutoriales: una tarjeta al principio de cada pestana (se apagan con "No mostrar mas" -> [PES21FX] tutorials = 0) ---
+static std::set<std::string> s_tutDone;   // pestanas con "Entendido" en esta sesion
+static const char* TutorialFor(const std::string& sec) {
+    if (sec.rfind("Ilumina", 0) == 0) return
+        "Como funciona: cada tarjeta es una mejora de luz con su interruptor (arriba a la derecha) y sus sliders. El (?) al lado de cada slider explica que hace. Ctrl+clic sobre un slider para escribir un numero.\n"
+        "Por donde empezar: 1) 'Luz de borde en jugadores' y 'Luz de cielo' son las que mas se notan. 2) 'Atmosfera con sol dinamico' arregla el azul del fondo y el sol apagado en partidos de tarde. 3) 'Rebote de luz' (SSGI) es el mas caro en FPS: si el juego se traba, apagalo.\n"
+        "Como probar: abri una repeticion o una cinematica de cerca, move un slider y mira al jugador; los shaders se actualizan al instante. 'Ver original' (arriba) compara con el juego sin el mod.";
+    if (sec.rfind("Sombras", 0) == 0) return
+        "Que hay aca: el filtro del shadow map del juego (borde, nitidez, penumbra), las sombras de contacto (las finas que el shadow map no resuelve: cuello, brazo sobre el torso, botin contra el pasto) y los ajustes para el sol en movimiento del Daylight Engine.\n"
+        "Por donde empezar: 1) 'Sombras de contacto': subi 'Largo' a 0.8 y mira el brazo sobre el cuerpo. 2) Si ves rayas con el sol bajo, 'Sol dinamico' > 'Sesgo por pendiente' mas alto. 3) Si la sombra flota bajo los pies, bajalo.\n"
+        "Como probar: una repeticion con el sol de costado; el cuello bajo el menton es el mejor lugar para ver la diferencia.";
+    if (sec.rfind("Piel", 0) == 0) return
+        "Que hay aca: como la luz entra y se dispersa en la piel (subsuperficie), el brillo, el color en sombra y a contraluz.\n"
+        "Por donde empezar: 1) 'Dispersion' da la piel blanda y natural; si la cara se ve roja o 'cerosa', bajala. 2) El brillo (especular) con cuidado: mucho = plastico. 3) Los cambios se ven mejor de cerca y a contraluz (orejas, nariz).\n"
+        "Consejo: ajusta de dia y de noche, la luz de torres es mas fria y muestra otra cosa.";
+    if (sec.rfind("Cara", 0) == 0) return
+        "Que hay aca: detalle de la cara: arrugas de expresion, poros, ojos, boca y dientes.\n"
+        "Por donde empezar: 1) 'Arrugas' se activan al gritar o esforzarse: proba en una celebracion. 2) Los ojos: brillo y humedad; poco es mas creible. 3) Si algo se ve 'pegado' o exagerado, baja la fuerza antes que apagarlo.\n"
+        "Como probar: cinematica de gol o primer plano en la repeticion.";
+    if (sec.rfind("Sudor", 0) == 0) return
+        "Que hay aca: el sudor aparece con el tiempo de partido (reloj propio del mod): brillo, gotas, cuanto tarda y cuanto llega.\n"
+        "Por donde empezar: 1) 'Velocidad' define a que minuto se nota. 2) 'Intensidad' el brillo maximo. 3) Ctrl+Shift+F10 reinicia el reloj para probar sin esperar.\n"
+        "Consejo: en partidos con lluvia el juego ya moja a los jugadores; no sumes mucho sudor ahi.";
+    if (sec.rfind("Pelo", 0) == 0) return
+        "Que hay aca: definicion del pelo, brillo en banda (anisotropico, como en pelo real), reaccion al movimiento (inercia) y viento.\n"
+        "Por donde empezar: 1) 'Reaccion del pelo' > 'Inercia' 1 = natural; 2 = pelo largo y pesado. 2) 'Brillo de pelo' > 'Fuerza de la banda' 0.6 es natural; si la banda aparece del lado contrario al sol, cambia 'Direccion de la luz' entre Mundo y Vista. 3) El viento del pelo copia la direccion del viento de la ropa.\n"
+        "Como probar: un jugador de pelo largo corriendo en una repeticion lenta.";
+    if (sec.rfind("Kits", 0) == 0) return
+        "Que hay aca: la tela de los kits (tejido, brillo tipo 'sheen', luz envolvente), dorsales y escudos con relieve, y la sombra limpia sobre la ropa simulada.\n"
+        "Por donde empezar: 1) 'Tejido next-gen' es el efecto principal: mira la camiseta de cerca. 2) Si aparecen franjas de sombra sobre la ropa que se mueve, 'Sombra limpia sobre los kits' mas alto. 3) El brillo de tela con cuidado: mucho = saten.\n"
+        "Como probar: primer plano de la espalda de un jugador (dorsal) con sol de costado.";
+    if (sec.rfind("Cancha", 0) == 0) return
+        "Que hay aca: pasto (sombreado entre hojas, zonas secas, variacion), rebote de luz verde del pasto hacia los jugadores, y cielo.\n"
+        "Por donde empezar: 1) 'Rebote del pasto' tine un poco de verde la cara de abajo de piernas y short, como en TV. 2) El pasto se ve mejor en camara baja. 3) Los cambios de cielo se notan mas de tarde.\n"
+        "Consejo: si el pasto queda 'empastado', baja la variacion macro.";
+    if (sec.rfind("Color", 0) == 0) return
+        "Que hay aca: el color final de la imagen: tono, contraste, saturacion, calidez de sombras y luces.\n"
+        "Por donde empezar: 1) Cambios chicos: 0.05 ya se nota. 2) Ajusta con una escena de dia y una de noche, no solo una. 3) 'Ver original' para no perder la referencia.\n"
+        "Consejo: si tenes un preset de color en otro mod (PostProcessingEditor), no dupliques el mismo cambio aca.";
+    if (sec.rfind("Post", 0) == 0) return
+        "Que hay aca: efectos sobre la imagen terminada: bloom, nitidez, profundidad de campo, grano, vineta.\n"
+        "Por donde empezar: 1) 'Nitidez' es lo que mas se nota en 1080p; en 4K bajala. 2) 'Bloom' con cuidado, lava la imagen. 3) 'Profundidad de campo' solo en repeticiones y cinematicas.\n"
+        "Consejo: todo esto se suma a lo que haga DLSS/TAA del juego; si ves halos, baja la nitidez.";
+    if (sec.rfind("Ropa", 0) == 0) return
+        "Que hay aca: los valores del mod de fisica de ropa (cloth-mod, cloth.ini) editados en vivo: holgura, mangas, short, viento, gravedad, distancia de simulacion.\n"
+        "Como funciona: cada slider escribe cloth.ini al soltarlo y el mod de ropa lo relee solo en ~1 s; no hace falta 'Guardar'. El boton '<' vuelve al valor que tenia al abrir el juego.\n"
+        "Por donde empezar: 1) 'Viento' > 'Rafagas' mas bajo si la camiseta sube y baja sola. 2) 'Short' > rebote en un salto de cabeza. 3) Si no tenes el mod de ropa, esta pestana avisa y no hace nada.";
+    if (sec == "Presets") return
+        "Que es un preset: todos los interruptores y sliders del menu guardados para UN estadio. Cuando Sider avisa en que estadio jugas, el mod lo aplica solo; en un estadio sin preset vuelve a tus valores.\n"
+        "Para crear uno: 1) juga en el estadio y ajusta lo que quieras. 2) Escribi nombre y autor. 3) 'Guardar preset para este estadio'. Se crea PES21FX\\presets\\stadium_<id>.ini.\n"
+        "Para compartir: pasa ese archivo .ini; el otro lo copia en su PES21FX\\presets y listo. 'Aplicar' sirve para probar un preset en cualquier estadio; 'Quitar' vuelve a tus valores.\n"
+        "Si dice 'Sin datos del partido': falta el modulo PES21FX_match.lua en Sider (viene en la carpeta sider del zip).";
+    if (sec == "Avanzado") return
+        "Que hay aca: los efectos por tecla (los mismos atajos del teclado, como botones) y la lista cruda de todos los parametros (x0..w127) que leen los shaders.\n"
+        "Para que sirve: 1) probar un valor exacto que no esta en ningun slider. 2) ver que parametro mueve cada tarjeta (el nombre esta en el (?) de cada slider). 3) si algo queda raro, 'Recargar config' arriba vuelve a leer PES21FX.ini.\n"
+        "Ojo: lo que cambies aca tambien se guarda con 'Guardar'.";
+    return nullptr;
+}
+static void DrawTutorial(const std::string& sec) {
+    if (!g_cfg.tutorials || s_tutDone.count(sec)) return;
+    const char* t = TutorialFor(sec);
+    if (!t) return;
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.10f, 0.16f, 0.22f, 1.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
+    ImGui::BeginChild(("tut_" + sec).c_str(), ImVec2(0, 0), ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding);
+    if (s_fontBold) ImGui::PushFont(s_fontBold);
+    ImGui::TextColored(ImVec4(0.85f, 0.68f, 0.28f, 1), "Tutorial: %s", Utf8(sec).c_str());
+    if (s_fontBold) ImGui::PopFont();
+    std::string txt = t;
+    size_t a = 0;
+    while (a < txt.size()) {
+        size_t b = txt.find('\n', a); if (b == std::string::npos) b = txt.size();
+        ImGui::TextWrapped("%s", txt.substr(a, b - a).c_str());
+        ImGui::Spacing();
+        a = b + 1;
+    }
+    if (ImGui::Button("Entendido", ImVec2(110, 0))) s_tutDone.insert(sec);
+    ImGui::SameLine();
+    if (ImGui::Button("No mostrar mas tutoriales", ImVec2(220, 0))) { g_cfg.tutorials = false; SaveOption("tutorials", "0"); }
+    ImGui::SameLine(); ImGui::TextDisabled("(se vuelven a prender arriba, en 'Tutoriales')");
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+    ImGui::Spacing();
+}
+
 // --- pestana Presets: preset por estadio (se aplica solo cuando Sider informa el estadio) ---
 static int s_presetPending = 0; static std::string s_presetPendingFile;
 static char s_pName[96] = "", s_pAuthor[64] = "";
@@ -270,6 +358,8 @@ static void DrawMenu() {
     if (ImGui::Button("Recargar config", ImVec2(140, 0))) { LoadConfig(); ReloadShaders(); s_status = "Configuracion recargada"; }
     ImGui::SameLine();
     ImGui::Checkbox("Ver original", &g_cfg.bypass);
+    ImGui::SameLine();
+    if (ImGui::Checkbox("Tutoriales", &g_cfg.tutorials)) { SaveOption("tutorials", g_cfg.tutorials ? "1" : "0"); if (g_cfg.tutorials) s_tutDone.clear(); }
     if (!s_status.empty()) ImGui::TextDisabled("%s", s_status.c_str());
     ImGui::Spacing();
 
@@ -281,6 +371,7 @@ static void DrawMenu() {
         for (auto& sname : secs) {
             if (ImGui::BeginTabItem(Utf8(sname).c_str())) {
                 ImGui::BeginChild("scroll", ImVec2(0, 0), ImGuiChildFlags_None);
+                DrawTutorial(sname);
                 if (sname.rfind("Ropa", 0) == 0 && !g_cfg.clothStatus.empty()) { ImGui::TextDisabled("%s", g_cfg.clothStatus.c_str()); ImGui::Spacing(); }
                 int gid = 0;
                 for (auto& g : g_cfg.groups) { std::string s2 = g.section.empty() ? "Otros" : g.section; if (s2 == sname) DrawGroup(g, gid); gid++; }
@@ -290,12 +381,14 @@ static void DrawMenu() {
         }
         if (ImGui::BeginTabItem("Presets")) {
             ImGui::BeginChild("scrollP", ImVec2(0, 0), ImGuiChildFlags_None);
+            DrawTutorial("Presets");
             DrawPresetsTab();
             ImGui::EndChild();
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Avanzado")) {
             ImGui::BeginChild("scroll2", ImVec2(0, 0), ImGuiChildFlags_None);
+            DrawTutorial("Avanzado");
             if (ImGui::CollapsingHeader("Efectos por tecla", ImGuiTreeNodeFlags_DefaultOpen)) {
                 int id = 0;
                 for (auto& k : g_cfg.keys) {
