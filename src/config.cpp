@@ -121,6 +121,9 @@ bool LoadConfig() {
             else if (kl == "overlay") c.optOverlay = atoi(v.c_str()) != 0;
             else if (kl == "pin_dlls") c.optPin = atoi(v.c_str()) != 0;
             else if (kl == "hooks") c.optHooks = atoi(v.c_str()) != 0;
+            else if (kl == "dxgi_hooks") c.optDxgi = atoi(v.c_str()) != 0;
+            else if (kl == "present_hook") c.optPresent = atoi(v.c_str()) != 0;
+            else if (kl == "context_hooks") c.optCtx = atoi(v.c_str()) != 0;
             continue;
         }
         if (cur) {

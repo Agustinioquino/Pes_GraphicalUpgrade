@@ -417,6 +417,7 @@ static void** VT(void* obj) { return *(void***)obj; }
 static std::recursive_mutex s_hookMutex;
 template<int V> static void HookContextV(ID3D11DeviceContext* c) {
     std::lock_guard<std::recursive_mutex> lk(s_hookMutex);
+    if (!g_cfg.optCtx) return;
     void** vt = VT(c);
     int n = 0;
     n += Hook(vt[9], (void*)&hk_SetPS<V>, (void**)&o_SetPS[V], "PSSetShader");
@@ -483,7 +484,7 @@ static void HookDevice(ID3D11Device* d) {
         if (o_CreateDC && SUCCEEDED(o_CreateDC(d, 0, &dc)) && dc) { HookContextV<1>(dc); dc->Release(); }
         Log("dispositivo D3D11 enganchado");
     }
-    HookFactoryOf(d);
+    if (g_cfg.optDxgi) HookFactoryOf(d);
     // el dispositivo del juego se decide al crear la cadena de intercambio (el juego crea varios de prueba)
 }
 
@@ -504,7 +505,7 @@ static void OnSwapChain(IUnknown* devUnk, IDXGISwapChain* sc) {
         s_confirmed = true;
         d->Release();
     }
-    HookSwapChain(sc);
+    if (g_cfg.optPresent) HookSwapChain(sc);
     DXGI_SWAP_CHAIN_DESC sd{}; sc->GetDesc(&sd);
     Log("cadena de intercambio del juego: %ux%u", sd.BufferDesc.Width, sd.BufferDesc.Height);
 }
