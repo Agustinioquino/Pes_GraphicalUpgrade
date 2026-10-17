@@ -55,6 +55,8 @@ struct Config {
     std::map<std::string, float> vars;         // $pes_push, etc.
     int menuKey = VK_INSERT;
     bool bypass = false;                       // ver el juego original
+    // [PES21FX] para aislar problemas: replace_shaders / rules / overlay = 0 apagan cada parte
+    bool optReplace = true, optRules = true, optOverlay = true;
 };
 extern Config g_cfg;
 extern std::mutex g_cfgMutex;

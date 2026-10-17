@@ -116,6 +116,9 @@ bool LoadConfig() {
         }
         if (Lower(section) == "pes21fx") {
             if (kl == "menu_key") c.menuKey = VkFromName(v);
+            else if (kl == "replace_shaders") c.optReplace = atoi(v.c_str()) != 0;
+            else if (kl == "rules") c.optRules = atoi(v.c_str()) != 0;
+            else if (kl == "overlay") c.optOverlay = atoi(v.c_str()) != 0;
             continue;
         }
         if (cur) {
@@ -173,7 +176,8 @@ bool LoadConfig() {
         for (auto& kv : c.rules) if (kv.second.hasParamOverride) kv.second.paramSet = set++;
     }
     int nr = 0; for (auto& kv : c.rules) nr += (int)kv.second.actions.size();
-    Log("config: %d teclas, %d reglas (%d acciones)", (int)c.keys.size(), (int)c.rules.size(), nr);
+    Log("config: %d teclas, %d reglas (%d acciones); shaders=%d reglas=%d menu=%d", (int)c.keys.size(), (int)c.rules.size(), nr,
+        (int)c.optReplace, (int)c.optRules, (int)c.optOverlay);
     return true;
 }
 

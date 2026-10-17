@@ -2,6 +2,7 @@
 #include "core.h"
 #include <MinHook.h>
 #include <d3dcompiler.h>
+#include <dxgi1_2.h>
 #include <DDSTextureLoader.h>
 #include <algorithm>
 #include <set>
@@ -106,6 +107,7 @@ struct ShaderEntry {
     char type = 0;                       // 'p' 'v' 'c'
     ID3D11DeviceChild* repl = nullptr;   // nuestro shader (o null)
     const Rule* rule = nullptr;
+    ID3D11Device* dev = nullptr;         // dispositivo que lo creo
 };
 static std::unordered_map<void*, ShaderEntry> s_shaders;   // nodos estables: los punteros a ShaderEntry no se invalidan
 static std::shared_mutex s_shMutex;
@@ -187,7 +189,7 @@ static void UploadParams() {
 }
 
 // ---------------------------------------------------------------- estado por contexto
-struct CtxState { const ShaderEntry* ps = nullptr; const ShaderEntry* vs = nullptr; };
+struct CtxState { const ShaderEntry* ps = nullptr; const ShaderEntry* vs = nullptr; ID3D11Device* dev = nullptr; bool devKnown = false; };
 static std::unordered_map<ID3D11DeviceContext*, CtxState> s_ctx;
 static std::shared_mutex s_ctxMutex;
 static CtxState& Ctx(ID3D11DeviceContext* c) {
@@ -226,7 +228,7 @@ static const Rule* RuleFor(uint64_t h) {
 }
 
 static ID3D11DeviceChild* BuildReplacement(ID3D11Device* dev, uint64_t h, char type) {
-    if (!dev || !s_available.count({h, type})) return nullptr;
+    if (!dev || !g_cfg.optReplace || !s_available.count({h, type})) return nullptr;
     const char* t = type == 'p' ? "ps" : type == 'v' ? "vs" : "cs";
     const char* prof = type == 'p' ? "ps_5_0" : type == 'v' ? "vs_5_0" : "cs_5_0";
     ID3DBlob* b = CompileFile(h, t, prof);
@@ -244,7 +246,7 @@ static ID3D11DeviceChild* BuildReplacement(ID3D11Device* dev, uint64_t h, char t
 
 static void Register(ID3D11Device* dev, void* obj, const void* code, SIZE_T len, char type) {
     if (!obj || !code) return;
-    ShaderEntry e; e.hash = Fnv64(code, len); e.type = type;
+    ShaderEntry e; e.hash = Fnv64(code, len); e.type = type; e.dev = dev;
     e.repl = BuildReplacement(dev, e.hash, type);
     e.rule = RuleFor(e.hash);
     std::unique_lock<std::shared_mutex> lk(s_shMutex);
@@ -290,7 +292,7 @@ template<int V> static void STDMETHODCALLTYPE hk_SetCS(ID3D11DeviceContext* c, I
     const ShaderEntry* e = FindShader(s);
     if (e && e->repl && !g_cfg.bypass) {
         o_SetCS[V](c, (ID3D11ComputeShader*)e->repl, ci, n);
-        ID3D11ShaderResourceView* v = g_dev.paramSRV; c->CSSetShaderResources(120, 1, &v);
+        if (e->dev == g_dev.dev && g_dev.paramSRV) { ID3D11ShaderResourceView* v = g_dev.paramSRV; c->CSSetShaderResources(120, 1, &v); }
         return;
     }
     o_SetCS[V](c, s, ci, n);
@@ -361,9 +363,16 @@ static void RunRule(ID3D11DeviceContext* c, const ShaderEntry* e, DrawScope& d) 
     }
 }
 
+static std::atomic<bool> s_firstRule{false};
 static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
-    if (g_cfg.bypass) return false;
+    if (g_cfg.bypass || !g_dev.dev) return false;
     CtxState& s = Ctx(c);
+    if (!s.devKnown) {   // nuestros recursos (t120, copias) son del dispositivo del juego: nunca mezclar con otro
+        ID3D11Device* cd = nullptr; c->GetDevice(&cd);
+        s.dev = cd; if (cd) cd->Release();
+        s.devKnown = true;
+    }
+    if (s.dev != g_dev.dev) return false;
     const ShaderEntry *ps = s.ps, *vs = s.vs;
     if (!ps && !vs) return false;
     bool pr = ps && ps->repl, vr = vs && vs->repl;
@@ -374,6 +383,10 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
             if (pr) c->PSSetShaderResources(120, 1, &v);
             if (vr) c->VSSetShaderResources(120, 1, &v);
         }
+    }
+    if (!g_cfg.optRules) return false;
+    if ((ps && ps->rule) || (vs && vs->rule)) {
+        if (!s_firstRule.exchange(true)) Log("primer dibujo con regla");
     }
     if (ps && ps->rule) RunRule(c, ps, d);
     if (vs && vs->rule) RunRule(c, vs, d);
@@ -423,22 +436,20 @@ static void SetActiveDevice(ID3D11Device* d) {
     std::lock_guard<std::recursive_mutex> lk(s_hookMutex);
     if (g_dev.dev == d) return;
     if (g_dev.dev) {
+        // lo viejo se deja vivo a proposito (otro hilo podria estar usandolo); solo se olvida
         Log("cambio de dispositivo D3D11");
-        ReleaseNamed();
-        for (auto* v : g_dev.altSRV) v->Release();
-        for (auto* t : g_dev.altTex) t->Release();
+        { std::lock_guard<std::mutex> lk2(s_namedMutex); s_named.clear(); }
         g_dev.altSRV.clear(); g_dev.altTex.clear();
-        if (g_dev.paramSRV) g_dev.paramSRV->Release();
-        if (g_dev.paramTex) g_dev.paramTex->Release();
-        g_dev.paramSRV = nullptr; g_dev.paramTex = nullptr;
-        if (g_dev.imm) g_dev.imm->Release();
-        g_dev.imm = nullptr;
-        g_dev.dev->Release(); g_dev.dev = nullptr;
+        g_dev.paramSRV = nullptr; g_dev.paramTex = nullptr; g_dev.imm = nullptr; g_dev.dev = nullptr;
     }
-    d->AddRef(); g_dev.dev = d;
-    d->GetImmediateContext(&g_dev.imm);
-    CreateParamTex(&g_dev.paramTex, &g_dev.paramSRV);
-    HookContextV<0>(g_dev.imm);
+    d->AddRef();
+    ID3D11DeviceContext* imm = nullptr; d->GetImmediateContext(&imm);
+    ID3D11Texture1D* t = nullptr; ID3D11ShaderResourceView* v = nullptr;
+    g_dev.dev = d;                       // CreateParamTex usa g_dev.dev
+    CreateParamTex(&t, &v);
+    g_dev.paramTex = t; g_dev.paramSRV = v; g_dev.imm = imm;
+    if (imm) HookContextV<0>(imm);
+    Log("dispositivo del juego: %p (nivel 0x%x)", (void*)d, (unsigned)d->GetFeatureLevel());
 }
 
 static void HookDevice(ID3D11Device* d) {
@@ -456,7 +467,38 @@ static void HookDevice(ID3D11Device* d) {
         if (o_CreateDC && SUCCEEDED(o_CreateDC(d, 0, &dc)) && dc) { HookContextV<1>(dc); dc->Release(); }
         Log("dispositivo D3D11 enganchado");
     }
-    if (!s_confirmed) SetActiveDevice(d);
+    // el dispositivo del juego se decide al crear la cadena de intercambio (el juego crea varios de prueba)
+}
+
+// ---------------------------------------------------------------- cadena de intercambio
+static void HookSwapChain(IDXGISwapChain* sc);
+using PFN_CreateSC = HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**);
+using PFN_CreateSCHwnd = HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1*, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**);
+static PFN_CreateSC o_CreateSC; static PFN_CreateSCHwnd o_CreateSCHwnd;
+
+static void OnSwapChain(IUnknown* devUnk, IDXGISwapChain* sc) {
+    if (!sc) return;
+    ID3D11Device* d = nullptr;
+    if (devUnk && SUCCEEDED(devUnk->QueryInterface(__uuidof(ID3D11Device), (void**)&d)) && d) {
+        if (!s_deviceHooked) { Log("AVISO: el dispositivo ya existia al cargar el mod"); HookDevice(d); }
+        SetActiveDevice(d);
+        s_confirmed = true;
+        d->Release();
+    }
+    HookSwapChain(sc);
+    DXGI_SWAP_CHAIN_DESC sd{}; sc->GetDesc(&sd);
+    Log("cadena de intercambio del juego: %ux%u", sd.BufferDesc.Width, sd.BufferDesc.Height);
+}
+static HRESULT STDMETHODCALLTYPE hk_CreateSC(IDXGIFactory* f, IUnknown* dev, DXGI_SWAP_CHAIN_DESC* d, IDXGISwapChain** sc) {
+    HRESULT hr = o_CreateSC(f, dev, d, sc);
+    if (SUCCEEDED(hr) && sc && *sc) OnSwapChain(dev, *sc);
+    return hr;
+}
+static HRESULT STDMETHODCALLTYPE hk_CreateSCHwnd(IDXGIFactory2* f, IUnknown* dev, HWND w, const DXGI_SWAP_CHAIN_DESC1* d,
+                                                 const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fd, IDXGIOutput* o, IDXGISwapChain1** sc) {
+    HRESULT hr = o_CreateSCHwnd(f, dev, w, d, fd, o, sc);
+    if (SUCCEEDED(hr) && sc && *sc) OnSwapChain(dev, *sc);
+    return hr;
 }
 
 static HRESULT WINAPI hk_D3D11CreateDevice(IDXGIAdapter* a, D3D_DRIVER_TYPE t, HMODULE s, UINT f, const D3D_FEATURE_LEVEL* fl, UINT n, UINT v,
@@ -481,9 +523,11 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
             HookDevice(d);
         }
         if (g_dev.dev != d) SetActiveDevice(d);
-        if (!s_confirmed) { s_confirmed = true; Log("dispositivo del juego confirmado (%d shaders propios activos)", g_replacedCount.load()); }
+        s_confirmed = true;
         d->Release();
     }
+    static bool first = true;
+    if (first) { first = false; Log("primer Present (%d shaders propios activos)", g_replacedCount.load()); }
     {   // liberar shaders viejos de una recarga anterior
         std::lock_guard<std::mutex> lk(s_releaseMutex);
         for (auto* p : s_deferredRelease) p->Release();
@@ -501,6 +545,31 @@ static HRESULT STDMETHODCALLTYPE hk_Resize(IDXGISwapChain* sc, UINT n, UINT w, U
     OverlayResize();
     return o_Resize(sc, n, w, h, f, fl);
 }
+// Present se engancha cambiando el puntero de la vtable (lo mismo que hacen Sider y cloth-mod):
+// asi la cadena queda juego -> ... -> nosotros -> lo que habia antes, sin pisar a nadie
+static bool s_scHooked = false;
+static void PatchSlot(void** slot, void* fn, void** orig) {
+    DWORD old;
+    if (!VirtualProtect(slot, sizeof(void*), PAGE_EXECUTE_READWRITE, &old)) return;
+    *orig = *slot; *slot = fn;
+    VirtualProtect(slot, sizeof(void*), old, &old);
+}
+static std::string ModOf(void* p) {
+    HMODULE m = nullptr; char n[MAX_PATH] = "?";
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)p, &m))
+        GetModuleFileNameA(m, n, MAX_PATH);
+    const char* b = strrchr(n, '\\'); return b ? b + 1 : n;
+}
+static void HookSwapChain(IDXGISwapChain* sc) {
+    std::lock_guard<std::recursive_mutex> lk(s_hookMutex);
+    if (s_scHooked) return;
+    s_scHooked = true;
+    void** vt = VT(sc);
+    Log("Present antes de nosotros: %s", ModOf(vt[8]).c_str());
+    PatchSlot(&vt[8], (void*)&hk_Present, (void**)&o_Present);
+    PatchSlot(&vt[13], (void*)&hk_Resize, (void**)&o_Resize);
+    Log("Present enganchado");
+}
 
 void ReloadShaders() {
     ScanShaderFolder();
@@ -510,7 +579,7 @@ void ReloadShaders() {
     g_failedCount = 0; g_replacedCount = 0;
     for (auto& kv : s_shaders) {
         ShaderEntry& e = kv.second;
-        ID3D11DeviceChild* nr = BuildReplacement(g_dev.dev, e.hash, e.type);
+        ID3D11DeviceChild* nr = BuildReplacement(e.dev, e.hash, e.type);
         if (e.repl) { std::lock_guard<std::mutex> lk3(s_releaseMutex); s_deferredRelease.push_back(e.repl); }
         e.repl = nr; if (nr) n++;
         e.rule = RuleFor(e.hash);
@@ -519,7 +588,6 @@ void ReloadShaders() {
 }
 
 // ---------------------------------------------------------------- arranque
-static LRESULT CALLBACK DummyProc(HWND h, UINT m, WPARAM w, LPARAM l) { return DefWindowProcW(h, m, w, l); }
 
 bool InstallHooks() {
     HMODULE comp = LoadLibraryW(L"d3dcompiler_47.dll");
@@ -542,25 +610,27 @@ bool InstallHooks() {
     void* cd = GetProcAddress(d3d, "D3D11CreateDevice");
     void* cds = GetProcAddress(d3d, "D3D11CreateDeviceAndSwapChain");
 
-    // cadena de intercambio de prueba para sacar la direccion de Present
-    WNDCLASSEXW wc{ sizeof(wc) }; wc.lpfnWndProc = DummyProc; wc.hInstance = GetModuleHandleW(nullptr); wc.lpszClassName = L"PES21FX_dummy";
-    RegisterClassExW(&wc);
-    HWND hw = CreateWindowExW(0, wc.lpszClassName, L"", WS_OVERLAPPEDWINDOW, 0, 0, 64, 64, nullptr, nullptr, wc.hInstance, nullptr);
-    DXGI_SWAP_CHAIN_DESC sd{}; sd.BufferCount = 1; sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM; sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    sd.OutputWindow = hw; sd.SampleDesc.Count = 1; sd.Windowed = TRUE; sd.BufferDesc.Width = 64; sd.BufferDesc.Height = 64;
-    IDXGISwapChain* sc = nullptr; ID3D11Device* dd = nullptr; ID3D11DeviceContext* dc = nullptr;
-    HRESULT hr = cds ? ((PFN_D3D11CreateDeviceAndSwapChain)cds)(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &sd, &sc, &dd, nullptr, &dc) : E_FAIL;
-    if (SUCCEEDED(hr)) {
-        void** vt = VT(sc);
-        Hook(vt[8], (void*)&hk_Present, (void**)&o_Present, "Present");
-        Hook(vt[13], (void*)&hk_Resize, (void**)&o_Resize, "ResizeBuffers");
-        sc->Release(); dc->Release(); dd->Release();
-    } else Log("no se pudo crear la cadena de prueba (0x%08x)", (unsigned)hr);
-    DestroyWindow(hw); UnregisterClassW(wc.lpszClassName, wc.hInstance);
+    // CreateSwapChain de la fabrica DXGI: de ahi salen el dispositivo del juego y su Present
+    bool okSC = false;
+    using PFN_CF1 = HRESULT(WINAPI*)(REFIID, void**);
+    HMODULE dx = LoadLibraryW(L"dxgi.dll");
+    PFN_CF1 cf1 = dx ? (PFN_CF1)GetProcAddress(dx, "CreateDXGIFactory1") : nullptr;
+    IDXGIFactory1* fac = nullptr;
+    if (cf1 && SUCCEEDED(cf1(__uuidof(IDXGIFactory1), (void**)&fac)) && fac) {
+        okSC = Hook(VT(fac)[10], (void*)&hk_CreateSC, (void**)&o_CreateSC, "IDXGIFactory::CreateSwapChain");
+        IDXGIFactory2* f2 = nullptr;
+        if (SUCCEEDED(fac->QueryInterface(__uuidof(IDXGIFactory2), (void**)&f2)) && f2) {
+            Hook(VT(f2)[15], (void*)&hk_CreateSCHwnd, (void**)&o_CreateSCHwnd, "IDXGIFactory2::CreateSwapChainForHwnd");
+            f2->Release();
+        }
+        fac->Release();
+    }
+    Log("ganchos de DXGI: %s", okSC ? "ok" : "FALLARON (sin menu ni parametros)");
 
     Hook(cd, (void*)&hk_D3D11CreateDevice, (void**)&o_D3D11CreateDevice, "D3D11CreateDevice");
+    bool ok = s_hookedFns.count(cd) > 0;
     Hook(cds, (void*)&hk_D3D11CreateDeviceAndSwapChain, (void**)&o_D3D11CreateDeviceAndSwapChain, "D3D11CreateDeviceAndSwapChain");
-    return SUCCEEDED(hr);
+    return ok;
 }
 
 } // namespace fx

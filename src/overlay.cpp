@@ -128,7 +128,7 @@ static void DrawMenu() {
 }
 
 void OverlayPresent(IDXGISwapChain* sc) {
-    if (!g_dev.dev) return;
+    if (!g_dev.dev || !g_cfg.optOverlay) return;
     if (!s_init) Init(sc);
     bool down = (GetAsyncKeyState(g_cfg.menuKey) & 0x8000) != 0 && GetForegroundWindow() == s_hwnd;
     if (down && !s_keyWas) g_menuOpen = !g_menuOpen;
