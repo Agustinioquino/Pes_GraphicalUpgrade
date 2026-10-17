@@ -354,6 +354,21 @@ static bool CatalogWrite(UINT bbW, UINT bbH, std::vector<const ShaderEntry*> all
         f << "\r\n";
     };
     for (auto* e : used) writeEntry(e, &s_stats[Key(e)]);
+    // ensamblador de los usados (catalog\asm\<hash>-xx.txt): para traducir a HLSL los que no tenemos decompilados
+    {
+        std::wstring adir = dir + L"asm\\"; CreateDirectoryW(adir.c_str(), nullptr);
+        int na = 0;
+        for (auto* e : used) {
+            if (!s_disasm || !e->code || e->repl) continue;   // los reemplazados ya tienen HLSL
+            ID3DBlob* blob = nullptr;
+            if (FAILED(s_disasm(e->code->data(), e->code->size(), 0, nullptr, &blob)) || !blob) continue;
+            std::string name = Key(e) + ".txt";
+            std::ofstream a(adir + W(name), std::ios::binary | std::ios::trunc);
+            if (a) { a.write((const char*)blob->GetBufferPointer(), (std::streamsize)blob->GetBufferSize() - 1); na++; }
+            blob->Release();
+        }
+        f << "\r\n(ensamblador de " << na << " shaders usados sin reemplazo en catalog\\asm\\)\r\n";
+    }
     f << "\r\n##### compute shaders vistos #####\r\n\r\n";
     { std::set<std::string> done; for (auto* e : s_csSeen) if (done.insert(Key(e)).second) writeEntry(e, nullptr); }
     f << "\r\n##### cargados pero no usados en la captura #####\r\n\r\n";

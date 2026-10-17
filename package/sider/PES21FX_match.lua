@@ -33,15 +33,17 @@ local function write_match(ctx, o)
         if sd:sub(-1) ~= "\\" and sd:sub(-1) ~= "/" then sd = sd .. "\\" end
         table.insert(paths, sd .. "..\\PES21FX\\match.ini")
     end
+    local errs = {}
     for _, p in ipairs(paths) do
-        local f = io.open(p, "wb")
+        local f, err = io.open(p, "wb")
         if f then
             f:write(text); f:close(); last = text
             log(string.format("PES21FX_match: estadio %d, dia/noche %d, clima %d -> %s", stadium, tod, weather, p))
             return
         end
+        table.insert(errs, tostring(p) .. " (" .. tostring(err) .. ")")
     end
-    log("PES21FX_match: no pude escribir match.ini (no existe la carpeta PES21FX?)")
+    log("PES21FX_match: no pude escribir match.ini. sider_dir=" .. tostring(ctx.sider_dir) .. " intentos: " .. table.concat(errs, " | "))
 end
 
 function m.set_stadium(ctx, options)
