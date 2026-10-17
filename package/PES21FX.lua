@@ -19,9 +19,16 @@ function m.init(ctx)
     ]]
     local K = ffi.C
     local dir = ctx.sider_dir .. "modules\\PES21FX\\"
-    local h = K.fx21_LoadLibraryA(dir .. "PES21FX.dll")
+    -- dll.txt dice que DLL usar: asi una version nueva se puede copiar aunque la vieja este en uso
+    local name = "PES21FX.dll"
+    local f = (type(io) == "table" and type(io.open) == "function") and io.open(dir .. "dll.txt", "r") or nil
+    if f then
+        local l = f:read("*l"); f:close()
+        if l and l:match("%S") then name = l:match("^%s*(.-)%s*$") end
+    end
+    local h = K.fx21_LoadLibraryA(dir .. name)
     if h == nil then
-        log("PES21FX: no se pudo cargar PES21FX.dll (error de Windows " .. tostring(K.fx21_GetLastError()) .. ")")
+        log("PES21FX: no se pudo cargar " .. name .. " (error de Windows " .. tostring(K.fx21_GetLastError()) .. ")")
         return
     end
     local p = K.fx21_GetProcAddress(h, "PES21FX_Init")
