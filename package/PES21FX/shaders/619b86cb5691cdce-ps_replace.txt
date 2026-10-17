@@ -324,6 +324,51 @@ void main(
       r2.xyz += sunC * sunUp * turf * fGround * max(BG.x, 0.0) * saturate((120.0 - zb) / 40.0);
     }
   }
+  // === PES21 luz de cielo (17/10): ambiente hemisferico. Lo que mira hacia arriba recibe un poco de azul del cielo,
+  // lo que mira al costado la mitad; cambia con la altura del sol (mas azul de dia, violaceo al atardecer, nada de noche).
+  // x47 fuerza, y47 cuanto azul (0 = gris), w47 on/off [Alt+Shift+C]
+  float3 Nsk = 0; float3 Vsk = 0; float zsk = PESLinZ(uvC); bool geoOk = false;
+  {
+    float4 SKY = IniParams.Load(int2(47,0));
+    float3 Ld = pLc_dir.xyz;
+    if (cmpOn && zsk > 0.1 && zsk < 400.0 && dot(Ld, Ld) > 1e-6) {
+      geoOk = true;
+      Nsk = PESDecN(uvC); Nsk.z = -Nsk.z;
+      float2 sC = uvC * float2(2, -2) + float2(-1, 1);
+      Vsk = normalize(float3((sC - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zsk, zsk));
+      if (SKY.w > 0.5 && tyC != 1 && tyC != 3) {
+        Ld = normalize(Ld);
+        float3 upV = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
+        if (dot(Ld, upV) < 0) upV = -upV;
+        float sunUp = saturate(dot(Ld, upV));                          // 0 = horizonte, 1 = cenit
+        float day = smoothstep(0.0, 0.25, sunUp);                      // de noche (torres) casi nada
+        float fSky = saturate(0.5 + 0.5 * dot(Nsk, upV));              // arriba = 1, costado = 0.5, abajo = 0
+        float3 sunC = max(pLc_color.xyz, 0.0) * g_psScene.m_exposure.zzz;
+        float lum = dot(sunC, float3(0.3, 0.5, 0.2));
+        float3 tint = lerp(float3(1, 1, 1), lerp(float3(0.62, 0.52, 0.95), float3(0.55, 0.70, 1.0), saturate(sunUp * 2.5)), saturate(SKY.y));
+        r2.xyz += lum * tint * fSky * fSky * max(SKY.x, 0.0) * 0.12 * day * saturate((400.0 - zsk) / 120.0);
+      }
+    }
+  }
+  // === PES21 luz de borde (17/10): con el sol detras del jugador, el contorno (hombros, pelo, brazos) se enciende.
+  // Solo piel y kits, nunca el estadio. x46 fuerza, y46 ancho del borde (2 fino .. 5 muy fino), w46 on/off [Alt+Shift+R]
+  {
+    float4 RIM = IniParams.Load(int2(46,0));
+    bool kitC = cmpOn && (tyC == 0) && (abs(gmC.z - 0.9607843) < 0.002);
+    if (geoOk && RIM.w > 0.5 && (skinC || kitC) && zsk < 80.0) {
+      float3 Ld = normalize(pLc_dir.xyz);
+      float ndv = saturate(dot(Nsk, -Vsk));
+      float back = saturate(dot(Ld, Vsk));                             // sol detras del jugador (visto desde la camara)
+      float side = saturate(dot(Nsk, Ld) * 0.5 + 0.5);                 // el borde que mira al sol
+      float F = pow(1.0 - ndv, clamp(RIM.y, 1.5, 6.0));
+      float shR = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
+      float3 sunC = max(pLc_color.xyz, 0.0) * g_psScene.m_exposure.zzz;
+      float k = F * (0.35 + 0.65 * back) * side * lerp(0.4, 1.0, shR) * max(RIM.x, 0.0) * saturate((80.0 - zsk) / 25.0);
+      k = min(k, 0.9);
+      r2.xyz += sunC * k * (skinC ? 0.6 : 1.0);                        // difuso: toma el color del kit / piel
+      r1.xyz += sunC * k * 0.25;                                       // y un poco blanco en el filo
+    }
+  }
   r0.x = inOcclusion.Sample(g_samplerLinear_Clamp_s, r0.xy).x;
   float3 occRGB = r0.xxx;
   if (skinC) {
