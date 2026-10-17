@@ -363,7 +363,8 @@ static bool CatalogWrite(UINT bbW, UINT bbH, std::vector<const ShaderEntry*> all
             ID3DBlob* blob = nullptr;
             if (FAILED(s_disasm(e->code->data(), e->code->size(), 0, nullptr, &blob)) || !blob) continue;
             std::string name = Key(e) + ".txt";
-            std::ofstream a(adir + W(name), std::ios::binary | std::ios::trunc);
+            std::wstring wname; for (unsigned char ch : name) wname.push_back((wchar_t)ch);
+            std::ofstream a(adir + wname, std::ios::binary | std::ios::trunc);
             if (a) { a.write((const char*)blob->GetBufferPointer(), (std::streamsize)blob->GetBufferSize() - 1); na++; }
             blob->Release();
         }
