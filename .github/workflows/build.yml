@@ -26,8 +26,7 @@ jobs:
           $out = "dist/PES21FX"
           New-Item -ItemType Directory -Force -Path $out | Out-Null
           Copy-Item -Recurse package/PES21FX/* $out
-          Copy-Item build/Release/PES21FX.dll $out
-          Copy-Item package/PES21FX.lua dist/
+          Copy-Item build/Release/d3d11.dll dist/
           Copy-Item package/LEEME.txt dist/
 
       - uses: actions/upload-artifact@v4

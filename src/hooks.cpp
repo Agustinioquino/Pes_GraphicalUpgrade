@@ -218,7 +218,6 @@ static PFN_CreateVS o_CreateVS; static PFN_CreatePS o_CreatePS; static PFN_Creat
 static PFN_SetPS o_SetPS[2]; static PFN_SetVS o_SetVS[2]; static PFN_SetCS o_SetCS[2];
 static PFN_DrawIdx o_DrawIdx[2]; static PFN_Draw o_Draw[2]; static PFN_DrawIdxInst o_DrawIdxInst[2]; static PFN_DrawInst o_DrawInst[2];
 static PFN_Present o_Present; static PFN_Resize o_Resize;
-static PFN_D3D11CreateDevice o_D3D11CreateDevice; static PFN_D3D11CreateDeviceAndSwapChain o_D3D11CreateDeviceAndSwapChain;
 
 // ---------------------------------------------------------------- registro de shaders
 static const Rule* RuleFor(uint64_t h) {
@@ -534,18 +533,6 @@ static void HookFactory(IDXGIFactory* fac) {
     Log("ganchos de DXGI: %s", ok ? "ok" : "FALLARON (sin menu ni parametros)");
 }
 
-static HRESULT WINAPI hk_D3D11CreateDevice(IDXGIAdapter* a, D3D_DRIVER_TYPE t, HMODULE s, UINT f, const D3D_FEATURE_LEVEL* fl, UINT n, UINT v,
-                                           ID3D11Device** d, D3D_FEATURE_LEVEL* ofl, ID3D11DeviceContext** c) {
-    HRESULT hr = o_D3D11CreateDevice(a, t, s, f, fl, n, v, d, ofl, c);
-    if (SUCCEEDED(hr) && d && *d) HookDevice(*d);
-    return hr;
-}
-static HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(IDXGIAdapter* a, D3D_DRIVER_TYPE t, HMODULE s, UINT f, const D3D_FEATURE_LEVEL* fl, UINT n, UINT v,
-        const DXGI_SWAP_CHAIN_DESC* sd, IDXGISwapChain** sc, ID3D11Device** d, D3D_FEATURE_LEVEL* ofl, ID3D11DeviceContext** c) {
-    HRESULT hr = o_D3D11CreateDeviceAndSwapChain(a, t, s, f, fl, n, v, sd, sc, d, ofl, c);
-    if (SUCCEEDED(hr) && d && *d) HookDevice(*d);
-    return hr;
-}
 
 // ---------------------------------------------------------------- Present
 static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT flags) {
@@ -631,35 +618,12 @@ bool InstallHooks() {
     if (comp) GetModuleFileNameW(comp, cpath, MAX_PATH);
     Log("compilador de shaders: %ls", s_compile ? cpath : L"NO ENCONTRADO");
     ScanShaderFolder();
-    if (MH_Initialize() != MH_OK) return false;
-
-    HMODULE d3d = LoadLibraryW(L"d3d11.dll");
-    if (!d3d) return false;
-    wchar_t path[MAX_PATH]; GetModuleFileNameW(d3d, path, MAX_PATH);
-    Log("d3d11.dll: %ls", path);
-    std::wstring lp = path; for (auto& ch : lp) ch = (wchar_t)towlower(ch);
-    if (lp.find(L"system32") == std::wstring::npos)
-        Log("AVISO: d3d11.dll no es el de Windows (3DMigoto sigue activo?). Renombra el d3d11.dll de la carpeta del juego.");
-    void* cd = GetProcAddress(d3d, "D3D11CreateDevice");
-    void* cds = GetProcAddress(d3d, "D3D11CreateDeviceAndSwapChain");
-
-    if (!g_cfg.optExports) {
-        // sin tocar D3D11CreateDevice: un dispositivo propio alcanza para enganchar los metodos (el codigo es el mismo para todos)
-        using PFN_CD = PFN_D3D11CreateDevice;
-        ID3D11Device* dd = nullptr; ID3D11DeviceContext* dc = nullptr;
-        HRESULT hr = cd ? ((PFN_CD)cd)(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &dd, nullptr, &dc) : E_FAIL;
-        Log("dispositivo propio para enganchar: 0x%08x", (unsigned)hr);
-        if (FAILED(hr) || !dd) return false;
-        HookDevice(dd);
-        if (dc) dc->Release();
-        dd->Release();
-        return true;
-    }
-    Hook(cd, (void*)&hk_D3D11CreateDevice, (void**)&o_D3D11CreateDevice, "D3D11CreateDevice");
-    bool ok = s_hookedFns.count(cd) > 0;
-    Hook(cds, (void*)&hk_D3D11CreateDeviceAndSwapChain, (void**)&o_D3D11CreateDeviceAndSwapChain, "D3D11CreateDeviceAndSwapChain");
-    return ok;
+    if (MH_Initialize() != MH_OK) { Log("MinHook no inicio"); return false; }
+    return true;
 }
+
+// llamado por nuestro D3D11CreateDevice (somos el d3d11.dll de la carpeta del juego)
+void OnDeviceCreated(ID3D11Device* d) { if (d) HookDevice(d); }
 
 // ---------------------------------------------------------------- diagnostico: referencias a una DLL que se descarga
 static bool Readable(uintptr_t p, size_t n) {

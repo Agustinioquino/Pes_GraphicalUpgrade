@@ -234,30 +234,28 @@ static LONG WINAPI Unhandled(EXCEPTION_POINTERS* ep) {
 } // namespace fx
 
 static std::atomic<bool> s_inited{false};
+static HMODULE s_self = nullptr;
+bool fx_LoadRealD3D11();
 
-extern "C" __declspec(dllexport) int PES21FX_Init(const char* baseDir) {
+// Inicializa el mod. Se llama la primera vez que el juego pide un dispositivo D3D11 (fuera del loader lock).
+static int InitMod() {
     if (s_inited.exchange(true)) return 1;
-    // carpeta del mod (UTF-8 -> UTF-16)
-    std::string b = baseDir ? baseDir : "";
-    if (!b.empty() && b.back() != '\\' && b.back() != '/') b += '\\';
-    int n = MultiByteToWideChar(CP_UTF8, 0, b.c_str(), -1, nullptr, 0);
-    std::wstring wb(n ? n - 1 : 0, L'\0');
-    if (n) MultiByteToWideChar(CP_UTF8, 0, b.c_str(), -1, wb.data(), n);
+    wchar_t exe[MAX_PATH]; GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    std::wstring wb = exe; wb = wb.substr(0, wb.find_last_of(L"\\/") + 1) + L"PES21FX\\";
     fx::g_cfg.baseDir = wb;
+    CreateDirectoryW(wb.c_str(), nullptr);
     fx::g_log = _wfopen((wb + L"PES21FX.log").c_str(), L"w");
-    fx::Log("PES21 FX 0.1.2 - carpeta: %s", b.c_str());
+    fx::Log("PES21 FX 0.2 (d3d11.dll) - carpeta: %ls", wb.c_str());
     AddVectoredExceptionHandler(1, fx::Vectored);
     fx::s_prevFilter = SetUnhandledExceptionFilter(fx::Unhandled);
     fx::WatchDlls();
-    // 3DMigoto dejaba nvapi64.dll cargada todo el tiempo; sin el, algo del driver la usaba despues de descargarla
-    // (cierres en <dll descargada>+0xdcb0). La mantenemos cargada nosotros.
-    HMODULE nv = LoadLibraryW(L"nvapi64.dll");
+    HMODULE nv = LoadLibraryW(L"nvapi64.dll");   // 3DMigoto la dejaba cargada; hacemos lo mismo
     fx::Log("nvapi64.dll: %s", nv ? "cargada y retenida" : "no esta (placa no NVIDIA?)");
-    // (las DLL se "clavan" solo despues de leer la config: ver PES21FX_Init)
-    for (const wchar_t* mn : {L"sider.dll", L"dsound.dll", L"d3d11.dll", L"dxgi.dll", L"PES2021.exe"}) {
+    for (const wchar_t* mn : {L"sider.dll", L"dsound.dll", L"dxgi.dll", L"DreamPatch Switcher.dll", L"PES2021.exe"}) {
         HMODULE hm = GetModuleHandleW(mn);
         fx::Log("modulo %ls en %p", mn, (void*)hm);
     }
+    fx::Log("modulo propio (d3d11.dll) en %p", (void*)s_self);
     if (!fx::LoadConfig()) fx::Log("aviso: no se pudo leer la configuracion");
     if (fx::g_cfg.optPin) fx::PinGameDlls();
     if (fx::g_cfg.optDump) fx::DumpModule(L"DreamPatch Switcher.dll", L"dump_switcher.bin");
@@ -266,9 +264,13 @@ extern "C" __declspec(dllexport) int PES21FX_Init(const char* baseDir) {
     fx::Log("ganchos instalados");
     return 2;
 }
+void fx_EnsureInit() { InitMod(); }
+
+// compatibilidad con el modulo de Sider viejo (ya no hace falta)
+extern "C" __declspec(dllexport) int PES21FX_Init(const char*) { return InitMod(); }
 
 BOOL APIENTRY DllMain(HMODULE h, DWORD reason, LPVOID reserved) {
-    if (reason == DLL_PROCESS_ATTACH) DisableThreadLibraryCalls(h);
+    if (reason == DLL_PROCESS_ATTACH) { s_self = h; DisableThreadLibraryCalls(h); fx_LoadRealD3D11(); }
     if (reason == DLL_PROCESS_DETACH && fx::g_log) {   // el juego se esta cerrando "normalmente" (ExitProcess)
         fprintf(fx::g_log, "--- fin del proceso (%s)\n", reserved ? "el juego salio" : "DLL descargada");
         fflush(fx::g_log);

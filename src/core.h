@@ -74,6 +74,7 @@ double Now();
 
 // ---------------------------------------------------------------- d3d
 bool InstallHooks();
+void OnDeviceCreated(ID3D11Device* d);
 void ReloadShaders();
 std::wstring ShaderPath(uint64_t hash, const char* type);   // shaders\<hash>-ps_replace.txt
 

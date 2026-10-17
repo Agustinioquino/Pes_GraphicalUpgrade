@@ -1,26 +1,27 @@
-PES21 FX 0.1 - mod grafico para PES 2021 (sin 3DMigoto)
+PES21 FX 0.2 - mod grafico para PES 2021 (sin 3DMigoto)
 =========================================================
 
 Que es
 ------
-Una DLL que carga Sider y que hace lo mismo que hacia 3DMigoto con nuestros shaders:
-reemplaza los shaders del juego por los mejorados (piel, pelo, kits, luz, sombras, post),
-pasa los parametros (t120), y aplica las reglas por shader. Mas un menu en pantalla.
+Un d3d11.dll propio para la carpeta del juego (el mismo lugar que usaba 3DMigoto). Reenvia todo al
+d3d11.dll de Windows y, de paso, hace lo que hacia 3DMigoto con nuestros shaders: reemplaza los shaders
+del juego por los mejorados (piel, pelo, kits, luz, sombras, post), pasa los parametros (t120) y aplica
+las reglas por shader. Mas un menu en pantalla (Insert).
+
+Por que d3d11.dll y no un modulo de Sider: el "DreamPatch Switcher" del Dream Patch revisa cada 5 s las
+DLL que aparecen en el juego despues de arrancar; una DLL sin firma cargada desde Sider la toma como
+"inyectada", bloquea el patch y se descarga de una forma que cierra el juego. Un d3d11.dll en la carpeta
+del juego se carga con el propio juego, antes de ese control, igual que lo hacia 3DMigoto.
 
 Instalacion
 -----------
-1. Copiar PES21FX.lua y la carpeta PES21FX dentro de:
-      eFootball PES 2021\Dream Patch Sider\modules\
-   Debe quedar:  modules\PES21FX.lua   y   modules\PES21FX\PES21FX.dll (+ ini, shaders, textures)
-
-2. En Dream Patch Sider\sider.ini (ya tenes luajit.ext.enabled = 1), agregar al final de la lista de modulos:
-      lua.module = "PES21FX.lua"
-
-3. Desactivar 3DMigoto: en la carpeta del juego renombrar
-      d3d11.dll  ->  d3d11.dll.off
-   (si no, los dos reemplazan los mismos shaders). Para volver a 3DMigoto, al reves y quitar la linea del paso 2.
-
-4. Abrir el juego. Se crea modules\PES21FX\PES21FX.log con lo que paso:
+1. Si tenes 3DMigoto: renombrar su d3d11.dll (en la carpeta del juego) a d3d11.dll.3dmigoto-off.
+2. Copiar a la carpeta del juego (donde esta PES2021.exe):
+      d3d11.dll
+      PES21FX\   (PES21FX.ini, PES21FX_rules.ini, shaders\, textures\)
+3. Si antes usaste la version 0.1 (modulo de Sider): borrar la linea  lua.module = "PES21FX.lua"
+   de Dream Patch Sider\sider.ini y la carpeta modules\PES21FX.
+4. Abrir el juego. Se crea PES21FX\PES21FX.log con lo que paso:
    "shader propio activo: ..." por cada shader cargado, y errores de compilacion si los hay.
    La primera vez tarda unos segundos mas (compila los shaders; despues usa shaders\cache).
 
@@ -29,7 +30,7 @@ Uso
 - Insert: abre/cierra el menu (efectos on/off, parametros, guardar, recargar).
 - "Ver original": compara con el juego sin el mod.
 - Las mismas teclas de antes siguen funcionando (estan en PES21FX.ini).
-- Para editar un shader: modules\PES21FX\shaders\<hash>-ps_replace.txt y "Recargar shaders" en el menu.
+- Para editar un shader: PES21FX\shaders\<hash>-ps_replace.txt y "Recargar shaders" en el menu.
 
 Notas
 -----
