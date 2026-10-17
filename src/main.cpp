@@ -122,7 +122,11 @@ static int OrphanThreads(uintptr_t b, uintptr_t e, const char* dll) {
                 for (uintptr_t a = cx.Rsp & ~(uintptr_t)7; a + 8 <= sb && a < cx.Rsp + 0x20000; a += 8) {
                     if (!ReadableAt(a, 8)) break;
                     uintptr_t v = *(uintptr_t*)a;
-                    if (v >= b && v < e) { orphan = true; snprintf(why, sizeof(why), "va a volver a %s+0x%llx", dll, (unsigned long long)(v - b)); break; }
+                    // solo direcciones de retorno reales: dentro de una pagina ejecutable de la DLL (no el HMODULE ni datos)
+                    if (v < b + 0x1000 || v >= e) continue;
+                    MEMORY_BASIC_INFORMATION mi{};
+                    if (!VirtualQuery((void*)v, &mi, sizeof(mi)) || !(mi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))) continue;
+                    orphan = true; snprintf(why, sizeof(why), "va a volver a %s+0x%llx", dll, (unsigned long long)(v - b)); break;
                 }
             }
         }
@@ -197,7 +201,16 @@ static VOID CALLBACK DllNotify(ULONG reason, const FxLdrData* d, PVOID) {
         Log("  la descarga el hilo %lu: %s", GetCurrentThreadId(), who.c_str());
         uintptr_t b = (uintptr_t)d->DllBase, e = b + d->SizeOfImage;
         ScanRefsInto(b, e, nm);
-        if (g_cfg.optOrphan) OrphanThreads(b, e, nm); else Log("  (orphan_fix = 0: no se tocan los hilos)");
+        // solo para DLL de la carpeta del juego (mods); nunca para las del sistema o del driver
+        wchar_t exe[MAX_PATH]; GetModuleFileNameW(nullptr, exe, MAX_PATH);
+        std::wstring gdir = exe; gdir = gdir.substr(0, gdir.find_last_of(L"\\/") + 1);
+        std::wstring full = d->FullDllName ? std::wstring(d->FullDllName->Buffer, d->FullDllName->Length / 2) : L"";
+        for (auto& ch : gdir) ch = (wchar_t)towlower(ch);
+        for (auto& ch : full) ch = (wchar_t)towlower(ch);
+        bool gameDll = full.rfind(gdir, 0) == 0;
+        if (g_cfg.optOrphan && gameDll) OrphanThreads(b, e, nm);
+        else if (g_cfg.optOrphan) Log("  (DLL del sistema: no se tocan los hilos)");
+        else Log("  (orphan_fix = 0: no se tocan los hilos)");
     }
 }
 static void WatchDlls() {
