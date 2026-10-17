@@ -1,47 +1,36 @@
 -- PES21 FX: mod grafico para PES 2021 (reemplaza a 3DMigoto).
 -- Este modulo solo carga PES21FX.dll desde modules\PES21FX\ y le dice donde esta su carpeta.
 -- Necesita en sider.ini:  luajit.ext.enabled = 1   y   lua.module = "PES21FX.lua"
--- En Sider "ffi" es una variable global (no hay require).
-local ffi = ffi
-if type(ffi) ~= "table" and type(require) == "function" then ffi = require("ffi") end
+-- Sider da "ffi" como global y no tiene require ni pcall: se usa LoadLibrary de Windows directo.
 
-local m = { version = "0.1.1" }
-local keep  -- referencia a la DLL para que no se descargue nunca
-
-local function load_dll(path)
-    -- 1) ffi.load si existe
-    if type(ffi.load) == "function" then
-        local ok, lib = pcall(ffi.load, path)
-        if ok and lib then
-            local ok2, fn = pcall(function() return lib.PES21FX_Init end)
-            if ok2 and fn then return lib, fn end
-        end
-    end
-    -- 2) LoadLibraryA + GetProcAddress
-    pcall(ffi.cdef, [[
-        void* LoadLibraryA(const char* name);
-        void* GetProcAddress(void* mod, const char* name);
-        unsigned long GetLastError(void);
-    ]])
-    local h = ffi.C.LoadLibraryA(path)
-    if h == nil then return nil, "LoadLibrary fallo (error " .. tostring(ffi.C.GetLastError()) .. ")" end
-    local p = ffi.C.GetProcAddress(h, "PES21FX_Init")
-    if p == nil then return nil, "no se encontro PES21FX_Init" end
-    return h, ffi.cast("int (*)(const char*)", p)
-end
+local m = { version = "0.1.2" }
+local keep  -- referencia para que la DLL no se descargue nunca
 
 function m.init(ctx)
-    if type(ffi) ~= "table" then
+    if type(ffi) ~= "table" or type(ffi.cdef) ~= "function" then
         log("PES21FX: ffi no disponible (poner luajit.ext.enabled = 1 en sider.ini)")
         return
     end
+    -- nombres propios (fx21_) para no chocar con otros modulos que declaren las mismas funciones
+    ffi.cdef[[
+        void* fx21_LoadLibraryA(const char* name) __asm__("LoadLibraryA");
+        void* fx21_GetProcAddress(void* mod, const char* name) __asm__("GetProcAddress");
+        unsigned long fx21_GetLastError(void) __asm__("GetLastError");
+    ]]
+    local K = ffi.C
     local dir = ctx.sider_dir .. "modules\\PES21FX\\"
-    local lib, init = load_dll(dir .. "PES21FX.dll")
-    if not lib then
-        log("PES21FX: no se pudo cargar PES21FX.dll: " .. tostring(init))
+    local h = K.fx21_LoadLibraryA(dir .. "PES21FX.dll")
+    if h == nil then
+        log("PES21FX: no se pudo cargar PES21FX.dll (error de Windows " .. tostring(K.fx21_GetLastError()) .. ")")
         return
     end
-    keep = { lib, init }
+    local p = K.fx21_GetProcAddress(h, "PES21FX_Init")
+    if p == nil then
+        log("PES21FX: la DLL no tiene PES21FX_Init")
+        return
+    end
+    local init = ffi.cast("int (*)(const char*)", p)
+    keep = { h, init }
     m.keep = keep
     local r = tonumber(init(dir))
     if r == 2 then
