@@ -301,10 +301,19 @@ static std::string InferRole(const ShaderEntry* e, const Refl& r, const ShaderSt
 
 static std::string Hex(uint64_t h) { char b[24]; snprintf(b, sizeof(b), "%016llx", (unsigned long long)h); return b; }
 
+static bool CatalogWrite(UINT bbW, UINT bbH, std::vector<const ShaderEntry*> allShaders);
+#include <thread>
+// detener: se deja de capturar al instante y la escritura (reflexion de miles de shaders, ~segundos) corre en un hilo
+// aparte para no frenar el render del juego
 bool CatalogStop(UINT bbW, UINT bbH, std::vector<const ShaderEntry*> allShaders) {
     g_catalogActive = false;
+    { std::lock_guard<std::mutex> lk(s_capMutex); if (!s_cbPending) g_catalogHook = false; }
+    g_catalogStatus = "Escribiendo el catalogo en segundo plano...";
+    std::thread([bbW, bbH, allShaders]() { CatalogWrite(bbW, bbH, allShaders); }).detach();
+    return true;
+}
+static bool CatalogWrite(UINT bbW, UINT bbH, std::vector<const ShaderEntry*> allShaders) {
     std::lock_guard<std::mutex> lk(s_capMutex);
-    if (!s_cbPending) g_catalogHook = false;
     std::wstring dir = g_cfg.baseDir + L"catalog\\";
     CreateDirectoryW(dir.c_str(), nullptr);
     std::ofstream f(dir + L"shaders.txt", std::ios::binary | std::ios::trunc);
