@@ -3,6 +3,7 @@
 #include <imgui.h>
 #include <imgui_impl_dx11.h>
 #include <imgui_impl_win32.h>
+#include <DDSTextureLoader.h>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -19,6 +20,7 @@ static ID3D11RenderTargetView* s_rtv = nullptr;
 static bool s_keyWas = false;
 static std::string s_status;
 static ImFont* s_fontBig = nullptr; static ImFont* s_fontBold = nullptr;
+static ID3D11ShaderResourceView* s_logo = nullptr; static float s_logoAspect = 1.0f;
 
 void OverlayResize() { if (s_rtv) { s_rtv->Release(); s_rtv = nullptr; } }
 
@@ -82,6 +84,18 @@ static void Init(IDXGISwapChain* sc) {
     s_oldProc = (WNDPROC)SetWindowLongPtrW(s_hwnd, GWLP_WNDPROC, (LONG_PTR)MenuProc);
     g_overlayOldProc = (void*)s_oldProc;
     Log("WndProc del juego antes del menu: %s", ModOff((void*)s_oldProc).c_str());
+    {   // logo del PES Editor en la cabecera del menu
+        ID3D11Resource* res = nullptr;
+        HRESULT hr = DirectX::CreateDDSTextureFromFile(g_dev.dev, (g_cfg.baseDir + L"textures\\pes_editor_logo.dds").c_str(), &res, &s_logo);
+        if (SUCCEEDED(hr) && res) {
+            ID3D11Texture2D* t = nullptr;
+            if (SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t)) && t) {
+                D3D11_TEXTURE2D_DESC td; t->GetDesc(&td); s_logoAspect = (float)td.Width / (float)td.Height; t->Release();
+            }
+            res->Release();
+        }
+        Log("logo del menu: %s", s_logo ? "ok" : "no encontrado (textures\\pes_editor_logo.dds)");
+    }
     s_init = true;
     Log("menu listo (tecla Insert)");
 }
@@ -123,14 +137,30 @@ static void DrawMenu() {
     bool open = true;
     ImGui::Begin("##pes21fx", &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
     if (!open) g_menuOpen = false;
-    // --- cabecera ---
-    if (s_fontBig) ImGui::PushFont(s_fontBig);
-    ImGui::TextUnformatted("PES21 FX");
-    if (s_fontBig) ImGui::PopFont();
-    ImGui::SameLine();
-    ImGui::TextDisabled("  0.2   |   Insert: cerrar");
+    // --- cabecera: logo del PES Editor + nombre del mod ---
+    float headY = ImGui::GetCursorPosY();
+    if (s_logo) {
+        float h = 64.0f;
+        ImGui::Image((ImTextureID)(intptr_t)s_logo, ImVec2(h * s_logoAspect, h));
+        ImGui::SameLine();
+        ImGui::SetCursorPosY(headY + 6);
+        ImGui::BeginGroup();
+        if (s_fontBold) ImGui::PushFont(s_fontBold);
+        ImGui::TextColored(ImVec4(0.85f, 0.68f, 0.28f, 1), "FX  0.2");
+        if (s_fontBold) ImGui::PopFont();
+        ImGui::TextDisabled("Mod grafico  |  Insert: cerrar");
+        ImGui::EndGroup();
+    } else {
+        if (s_fontBig) ImGui::PushFont(s_fontBig);
+        ImGui::TextUnformatted("PES21 FX");
+        if (s_fontBig) ImGui::PopFont();
+        ImGui::SameLine();
+        ImGui::TextDisabled("  0.2   |   Insert: cerrar");
+    }
     ImGui::SameLine(ImGui::GetWindowWidth() - 60);
+    ImGui::SetCursorPosY(headY);
     if (ImGui::Button("X", ImVec2(34, 0))) g_menuOpen = false;
+    ImGui::Separator();
     int rep = g_replacedCount.load(), fail = g_failedCount.load();
     ImGui::PushStyleColor(ImGuiCol_Text, fail ? ImVec4(0.95f, 0.55f, 0.35f, 1) : ImVec4(0.45f, 0.85f, 0.55f, 1));
     ImGui::Text("%s  %d shaders propios activos", fail ? "!" : "OK", rep);

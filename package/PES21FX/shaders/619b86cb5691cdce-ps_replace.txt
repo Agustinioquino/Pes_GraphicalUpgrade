@@ -370,6 +370,7 @@ void main(
     }
   }
   r0.x = inOcclusion.Sample(g_samplerLinear_Clamp_s, r0.xy).x;
+  float aoRaw = saturate(r0.x);
   float3 occRGB = r0.xxx;
   if (skinC) {
     // la luz ambiente del estadio es gris/verdosa: en la piel se calienta un poco
@@ -445,8 +446,33 @@ void main(
       }
     }
   }
-  r1.xyz = r7.xyz * r2.xyz + r1.xyz;
-  r0.xyw = r1.xyz * occRGB;
+  // === PES21 oclusion ambiental mejorada (17/10) ===
+  // 1) multirebote (GTAO, Jimenez 2016): en superficies claras la luz rebota dentro del pliegue y la oclusion
+  //    no queda gris sucio; en las de color toma el tono de la superficie (camisetas, piel, pasto).
+  // 2) oclusion especular (Lagarde): el brillo se apaga en los huecos segun la rugosidad y el angulo de vista,
+  //    en vez de oscurecer todo igual. x48 multirebote, y48 oclusion especular, z48 fuerza total, w48 on/off
+  float4 AOP = IniParams.Load(int2(48,0));
+  if (cmpOn && AOP.w > 0.5) {
+    float3 diffC = r7.xyz * r2.xyz;
+    float3 specC = r1.xyz;
+    float aoK = lerp(1.0, aoRaw, saturate(AOP.z));
+    float3 alb = saturate(r7.xyz);
+    float3 ma = 2.0404 * alb - 0.3324, mb = -4.7951 * alb + 0.6417, mc = 2.7552 * alb + 0.6903;
+    float3 multi = max(aoK.xxx, ((aoK * ma + mb) * aoK + mc) * aoK);
+    float3 aoD = lerp(occRGB, occRGB * multi / max(aoRaw, 1e-3), saturate(AOP.x));
+    aoD = min(aoD, 1.0);
+    float aoS = aoK;
+    if (geoOk) {
+      float ndvS = saturate(dot(Nsk, -Vsk));
+      float roughS = saturate(gmC.x);
+      float so = saturate(pow(max(ndvS + aoK, 1e-4), exp2(-16.0 * roughS - 1.0)) - 1.0 + aoK);
+      aoS = lerp(aoK, so, saturate(AOP.y));
+    }
+    r0.xyw = diffC * aoD + specC * aoS;
+  } else {
+    r1.xyz = r7.xyz * r2.xyz + r1.xyz;
+    r0.xyw = r1.xyz * occRGB;
+  }
   r0.z = log2(r0.z);
   r0.z = g_psScene.m_fogParam[2].y * r0.z;
   r0.z = r0.z * 0.693147182 + g_psScene.m_fogParam[2].z;
