@@ -2,7 +2,11 @@ name: build
 
 on:
   push:
+    branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   windows:
@@ -30,3 +34,16 @@ jobs:
         with:
           name: PES21FX
           path: dist/
+
+      # copia del paquete en la rama "build" (para instalarlo sin bajar el zip a mano)
+      - name: Publicar en la rama build
+        shell: pwsh
+        run: |
+          cd dist
+          git init -q
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git checkout -q -b build
+          git add -A
+          git commit -q -m "build $env:GITHUB_SHA"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" build
