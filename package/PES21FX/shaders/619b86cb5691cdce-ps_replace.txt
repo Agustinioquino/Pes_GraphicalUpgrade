@@ -369,6 +369,46 @@ void main(
       r1.xyz += sunC * k * 0.25;                                       // y un poco blanco en el filo
     }
   }
+  // === PES21 luces de torre (17/10): de noche el juego usa una sola luz direccional; un estadio real tiene 4 torres.
+  // Se agregan torres virtuales giradas alrededor del eje vertical respecto de la dominante: brillos multiples en piel
+  // y kits y bordes iluminados desde varios lados (sin sombras). Solo con luz fria (noche). x55 brillo, y55 difuso
+  // envolvente, z55 torres extra (selector 0..2 = 1..3), w55 on/off
+  {
+    float4 TW = IniParams.Load(int2(55,0));
+    float3 Ld0 = pLc_dir.xyz;
+    if (geoOk && TW.w > 0.5 && zsk < 90.0 && tyC != 1 && tyC != 3 && dot(Ld0, Ld0) > 1e-6) {
+      float3 sc = max(pLc_color.xyz, 0.0);
+      float kNight = 1.0 - saturate((sc.r / max(sc.b, 1e-4) - 0.85) * 4.0);   // 1 = luz fria de torres
+      if (kNight > 0.01) {
+        Ld0 = normalize(Ld0);
+        float3 upV = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
+        if (dot(Ld0, upV) < 0) upV = -upV;
+        float3 lightC = sc * g_psScene.m_exposure.zzz;
+        float roughT = saturate(gmC.x);
+        float nT = exp2(10.0 * (1.0 - roughT) + 1.0);                       // exponente Blinn-Phong desde la rugosidad
+        bool kitT = (tyC == 0) && (abs(gmC.z - 0.9607843) < 0.002);
+        float specK = max(TW.x, 0.0) * (skinC ? 0.5 : kitT ? 0.9 : 0.35) * kNight;
+        float diffK = max(TW.y, 0.0) * 0.12 * kNight;
+        int nTow = clamp((int)(TW.z + 0.5) + 1, 1, 3);                     // z55 = indice del selector (0..2)
+        float3 specAcc = 0, diffAcc = 0;
+        [unroll] for (int ti = 1; ti <= 3; ti++) {
+          if (ti > nTow) break;
+          float ang = 6.2831853 * ti / (nTow + 1.0);
+          // Rodrigues: girar Ld0 alrededor de upV
+          float ca = cos(ang), sa = sin(ang);
+          float3 Lt = Ld0 * ca + cross(upV, Ld0) * sa + upV * dot(upV, Ld0) * (1.0 - ca);
+          float nl = dot(Nsk, Lt);
+          float3 H = normalize(Lt - Vsk);
+          float nh = saturate(dot(Nsk, H));
+          float fres = 0.04 + 0.96 * pow(1.0 - saturate(dot(H, -Vsk)), 5.0);
+          specAcc += pow(nh, nT) * (nT + 2.0) / 8.0 * fres * saturate(nl * 4.0);
+          diffAcc += saturate((nl + 0.5) / 1.5);                              // envolvente
+        }
+        r1.xyz += lightC * specAcc * specK;
+        r2.xyz += lightC * diffAcc * diffK / nTow;
+      }
+    }
+  }
   r0.x = inOcclusion.Sample(g_samplerLinear_Clamp_s, r0.xy).x;
   float aoRaw = saturate(r0.x);
   float3 occRGB = r0.xxx;
