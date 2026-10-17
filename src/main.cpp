@@ -72,6 +72,22 @@ static LONG CALLBACK Vectored(EXCEPTION_POINTERS* ep) {
     if (IsFatal(ep->ExceptionRecord->ExceptionCode) && n++ < 6) LogCrash(ep, "excepcion");
     return EXCEPTION_CONTINUE_SEARCH;
 }
+// ---------------------------------------------------------------- carga/descarga de DLLs (para cruzar con la direccion de un cierre)
+struct FxUStr { USHORT Length, MaximumLength; PWSTR Buffer; };
+struct FxLdrData { ULONG Flags; const FxUStr* FullDllName; const FxUStr* BaseDllName; PVOID DllBase; ULONG SizeOfImage; };
+using PFN_LdrCb = VOID(CALLBACK*)(ULONG, const FxLdrData*, PVOID);
+using PFN_LdrReg = LONG(NTAPI*)(ULONG, PFN_LdrCb, PVOID, PVOID*);
+static VOID CALLBACK DllNotify(ULONG reason, const FxLdrData* d, PVOID) {
+    if (!d || !d->BaseDllName) return;
+    Log("%s %.*ls en %p-%p", reason == 1 ? "DLL cargada:" : "DLL DESCARGADA:", (int)(d->BaseDllName->Length / 2), d->BaseDllName->Buffer,
+        d->DllBase, (void*)((uintptr_t)d->DllBase + d->SizeOfImage));
+}
+static void WatchDlls() {
+    static PVOID cookie = nullptr;
+    auto reg = (PFN_LdrReg)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "LdrRegisterDllNotification");
+    if (reg) reg(0, DllNotify, nullptr, &cookie);
+}
+
 static LPTOP_LEVEL_EXCEPTION_FILTER s_prevFilter = nullptr;
 static LONG WINAPI Unhandled(EXCEPTION_POINTERS* ep) {
     LogCrash(ep, "CIERRE DEL JUEGO");
@@ -95,6 +111,11 @@ extern "C" __declspec(dllexport) int PES21FX_Init(const char* baseDir) {
     fx::Log("PES21 FX 0.1.2 - carpeta: %s", b.c_str());
     AddVectoredExceptionHandler(1, fx::Vectored);
     fx::s_prevFilter = SetUnhandledExceptionFilter(fx::Unhandled);
+    fx::WatchDlls();
+    // 3DMigoto dejaba nvapi64.dll cargada todo el tiempo; sin el, algo del driver la usaba despues de descargarla
+    // (cierres en <dll descargada>+0xdcb0). La mantenemos cargada nosotros.
+    HMODULE nv = LoadLibraryW(L"nvapi64.dll");
+    fx::Log("nvapi64.dll: %s", nv ? "cargada y retenida" : "no esta (placa no NVIDIA?)");
     for (const wchar_t* mn : {L"PES21FX.dll", L"sider.dll", L"dsound.dll", L"d3d11.dll", L"dxgi.dll", L"PES2021.exe"}) {
         HMODULE hm = GetModuleHandleW(mn);
         fx::Log("modulo %ls en %p", mn, (void*)hm);
