@@ -3,6 +3,8 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <cwctype>
+#include <psapi.h>
 
 namespace fx {
 
@@ -88,6 +90,25 @@ static void WatchDlls() {
     if (reg) reg(0, DllNotify, nullptr, &cookie);
 }
 
+// DreamPatch Switcher.dll se descarga sola a los pocos segundos pero deja algo que la sigue llamando
+// (cierre en "DreamPatch Switcher.dll"+0xdcb0). Se "clavan" en memoria las DLL de la carpeta del juego
+// que ya estan cargadas para que ninguna pueda descargarse con codigo suyo todavia en uso.
+static void PinGameDlls() {
+    wchar_t exe[MAX_PATH]; GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    std::wstring dir = exe; dir = dir.substr(0, dir.find_last_of(L"\\/") + 1);
+    for (auto& ch : dir) ch = (wchar_t)towlower(ch);
+    HMODULE mods[1024]; DWORD need = 0;
+    if (!K32EnumProcessModules(GetCurrentProcess(), mods, sizeof(mods), &need)) return;
+    int n = (int)(need / sizeof(HMODULE));
+    for (int i = 0; i < n && i < 1024; i++) {
+        wchar_t path[MAX_PATH]; if (!GetModuleFileNameW(mods[i], path, MAX_PATH)) continue;
+        std::wstring lp = path; for (auto& ch : lp) ch = (wchar_t)towlower(ch);
+        if (lp.rfind(dir, 0) != 0 || lp.size() < 4 || lp.compare(lp.size() - 4, 4, L".exe") == 0) continue;
+        HMODULE h = nullptr;
+        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN, path, &h)) Log("DLL clavada en memoria: %ls", path + dir.size());
+    }
+}
+
 static LPTOP_LEVEL_EXCEPTION_FILTER s_prevFilter = nullptr;
 static LONG WINAPI Unhandled(EXCEPTION_POINTERS* ep) {
     LogCrash(ep, "CIERRE DEL JUEGO");
@@ -116,6 +137,7 @@ extern "C" __declspec(dllexport) int PES21FX_Init(const char* baseDir) {
     // (cierres en <dll descargada>+0xdcb0). La mantenemos cargada nosotros.
     HMODULE nv = LoadLibraryW(L"nvapi64.dll");
     fx::Log("nvapi64.dll: %s", nv ? "cargada y retenida" : "no esta (placa no NVIDIA?)");
+    fx::PinGameDlls();
     for (const wchar_t* mn : {L"PES21FX.dll", L"sider.dll", L"dsound.dll", L"d3d11.dll", L"dxgi.dll", L"PES2021.exe"}) {
         HMODULE hm = GetModuleHandleW(mn);
         fx::Log("modulo %ls en %p", mn, (void*)hm);
