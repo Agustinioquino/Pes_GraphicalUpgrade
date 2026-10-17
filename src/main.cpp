@@ -5,6 +5,7 @@
 #include <cstring>
 #include <cwctype>
 #include <psapi.h>
+#include <tlhelp32.h>
 
 namespace fx {
 
@@ -79,13 +80,83 @@ struct FxUStr { USHORT Length, MaximumLength; PWSTR Buffer; };
 struct FxLdrData { ULONG Flags; const FxUStr* FullDllName; const FxUStr* BaseDllName; PVOID DllBase; ULONG SizeOfImage; };
 using PFN_LdrCb = VOID(CALLBACK*)(ULONG, const FxLdrData*, PVOID);
 using PFN_LdrReg = LONG(NTAPI*)(ULONG, PFN_LdrCb, PVOID, PVOID*);
+// ---------------------------------------------------------------- hilos huerfanos de una DLL que se descarga
+// Caso real: "DreamPatch Switcher.dll" deja un hilo propio dormido (Sleep) y otro hilo descarga la DLL;
+// cuando el Sleep termina, el hilo vuelve a codigo que ya no existe y el juego se cierra
+// (RIP dentro de la DLL descargada, RCX = direccion de ntdll justo despues del syscall).
+// Aca, en el momento de la descarga, se buscan los hilos que arrancaron en esa DLL, estan ejecutandola
+// o van a volver a ella, y se los hace terminar limpiamente (RIP -> RtlExitUserThread).
+struct FxTBI { LONG ExitStatus; PVOID TebBaseAddress; struct { HANDLE p, t; } ClientId; ULONG_PTR AffinityMask; LONG Priority; LONG BasePriority; };
+using PFN_NtQIT = LONG(NTAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+static bool ReadableAt(uintptr_t p, size_t n) {
+    MEMORY_BASIC_INFORMATION m{};
+    if (!VirtualQuery((void*)p, &m, sizeof(m)) || m.State != MEM_COMMIT || (m.Protect & (PAGE_NOACCESS | PAGE_GUARD))) return false;
+    return p + n <= (uintptr_t)m.BaseAddress + m.RegionSize;
+}
+static int OrphanThreads(uintptr_t b, uintptr_t e, const char* dll) {
+    HMODULE nt = GetModuleHandleW(L"ntdll.dll");
+    auto qit = (PFN_NtQIT)GetProcAddress(nt, "NtQueryInformationThread");
+    void* exitFn = (void*)GetProcAddress(nt, "RtlExitUserThread");
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE) { Log("  (no se pudo listar los hilos)"); return 0; }
+    THREADENTRY32 te{}; te.dwSize = sizeof(te);
+    int n = 0, seen = 0; DWORD me = GetCurrentThreadId(), pid = GetCurrentProcessId();
+    for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
+        if (te.th32OwnerProcessID != pid || te.th32ThreadID == me) continue;
+        HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, te.th32ThreadID);
+        if (!h) continue;
+        seen++;
+        bool orphan = false; char why[96] = "";
+        void* start = nullptr;
+        if (qit && qit(h, 9 /*ThreadQuerySetWin32StartAddress*/, &start, sizeof(start), nullptr) == 0 && (uintptr_t)start >= b && (uintptr_t)start < e) {
+            orphan = true; snprintf(why, sizeof(why), "arranco en %s+0x%llx", dll, (unsigned long long)((uintptr_t)start - b));
+        }
+        if (SuspendThread(h) == (DWORD)-1) { CloseHandle(h); continue; }
+        CONTEXT cx{}; cx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+        bool gotCx = GetThreadContext(h, &cx) != 0;
+        if (gotCx) {
+            if (cx.Rip >= b && cx.Rip < e) { orphan = true; snprintf(why, sizeof(why), "ejecuta %s+0x%llx", dll, (unsigned long long)(cx.Rip - b)); }
+            FxTBI tbi{};
+            if (!orphan && qit && qit(h, 0 /*ThreadBasicInformation*/, &tbi, sizeof(tbi), nullptr) == 0 && tbi.TebBaseAddress && ReadableAt((uintptr_t)tbi.TebBaseAddress, 24)) {
+                uintptr_t sb = *(uintptr_t*)((uintptr_t)tbi.TebBaseAddress + 8);   // NT_TIB.StackBase
+                for (uintptr_t a = cx.Rsp & ~(uintptr_t)7; a + 8 <= sb && a < cx.Rsp + 0x20000; a += 8) {
+                    if (!ReadableAt(a, 8)) break;
+                    uintptr_t v = *(uintptr_t*)a;
+                    if (v >= b && v < e) { orphan = true; snprintf(why, sizeof(why), "va a volver a %s+0x%llx", dll, (unsigned long long)(v - b)); break; }
+                }
+            }
+        }
+        if (orphan && gotCx) {
+            Log("  hilo %lu: %s, parado en %s -> se lo hace terminar", te.th32ThreadID, why, ModOff((void*)cx.Rip).c_str());
+            cx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+            cx.Rip = (DWORD64)exitFn; cx.Rcx = 0;
+            if (exitFn && SetThreadContext(h, &cx)) { ResumeThread(h); n++; }
+            else Log("  (no se pudo redirigir el hilo %lu; queda suspendido)", te.th32ThreadID);
+            CloseHandle(h);
+            continue;
+        }
+        ResumeThread(h);
+        CloseHandle(h);
+    }
+    CloseHandle(snap);
+    Log("  hilos revisados: %d, huerfanos de %s: %d", seen, dll, n);
+    return n;
+}
+
 static VOID CALLBACK DllNotify(ULONG reason, const FxLdrData* d, PVOID) {
     if (!d || !d->BaseDllName) return;
     Log("%s %.*ls en %p-%p", reason == 1 ? "DLL cargada:" : "DLL DESCARGADA:", (int)(d->BaseDllName->Length / 2), d->BaseDllName->Buffer,
         d->DllBase, (void*)((uintptr_t)d->DllBase + d->SizeOfImage));
     if (reason == 2) {
         char nm[260]; snprintf(nm, sizeof(nm), "%.*ls", (int)(d->BaseDllName->Length / 2), d->BaseDllName->Buffer);
-        ScanRefsInto((uintptr_t)d->DllBase, (uintptr_t)d->DllBase + d->SizeOfImage, nm);
+        // quien la descarga (hilo actual)
+        void* fr[16]; USHORT k = RtlCaptureStackBackTrace(1, 16, fr, nullptr);
+        std::string who;
+        for (USHORT i = 0; i < k; i++) { std::string m = ModOff(fr[i]); if (m.rfind("ntdll", 0) == 0) continue; who += m + " < "; if (who.size() > 200) break; }
+        Log("  la descarga el hilo %lu: %s", GetCurrentThreadId(), who.c_str());
+        uintptr_t b = (uintptr_t)d->DllBase, e = b + d->SizeOfImage;
+        ScanRefsInto(b, e, nm);
+        OrphanThreads(b, e, nm);
     }
 }
 static void WatchDlls() {
@@ -142,7 +213,7 @@ extern "C" __declspec(dllexport) int PES21FX_Init(const char* baseDir) {
     HMODULE nv = LoadLibraryW(L"nvapi64.dll");
     fx::Log("nvapi64.dll: %s", nv ? "cargada y retenida" : "no esta (placa no NVIDIA?)");
     // (las DLL se "clavan" solo despues de leer la config: ver PES21FX_Init)
-    for (const wchar_t* mn : {L"PES21FX.dll", L"sider.dll", L"dsound.dll", L"d3d11.dll", L"dxgi.dll", L"PES2021.exe"}) {
+    for (const wchar_t* mn : {L"sider.dll", L"dsound.dll", L"d3d11.dll", L"dxgi.dll", L"PES2021.exe"}) {
         HMODULE hm = GetModuleHandleW(mn);
         fx::Log("modulo %ls en %p", mn, (void*)hm);
     }
