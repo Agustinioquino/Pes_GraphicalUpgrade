@@ -1,0 +1,49 @@
+PES21 FX 0.2 - mod grafico para eFootball PES 2021 (PC, DirectX 11)
+====================================================================
+
+Que trae
+--------
+Piel, pelo, ojos, boca, arrugas de expresion, sudor, kits next-gen (tejido, dorsales con
+relieve), luz de borde, luz de cielo, oclusion ambiental mejorada, sombras, rebote de luz,
+cielo, pasto y post-procesado. Todo se ajusta en vivo desde un menu en pantalla (Insert).
+
+Instalacion
+-----------
+1. Copiar a la carpeta del juego (donde esta PES2021.exe):
+      d3d11.dll
+      la carpeta PES21FX
+2. Si ya tenes un d3d11.dll ahi (3DMigoto u otro mod), renombralo antes, por ejemplo a
+   d3d11.dll.off. ReShade instalado como dxgi.dll puede convivir.
+3. Abrir el juego. La primera vez tarda unos segundos mas en cargar (compila los shaders
+   y los guarda en PES21FX\shaders\cache; despues arranca normal).
+
+Uso
+---
+- Insert: abre/cierra el menu. Pestanas por area (Iluminacion, Sombras, Piel, Cara,
+  Sudor, Pelo, Kits, Cancha y cielo, Color, Post-procesado).
+- Cada mejora tiene su interruptor y sus sliders; el (?) explica cada uno.
+  Ctrl+clic sobre un slider para escribir un valor exacto.
+- "Guardar" deja tus valores en PES21FX\PES21FX.ini.
+- "Ver original" muestra el juego sin el mod para comparar.
+- Pestana "Ropa (fisica)": si tenes el mod de fisica de ropa (cloth-mod), ajusta su cloth.ini
+  en vivo (holgura, mangas, short, viento, gravedad, distancia). Sin ese mod no aparece nada.
+
+Desinstalar
+-----------
+Con el juego cerrado, en la carpeta del juego:
+1. Borrar d3d11.dll (es lo que carga el mod; sin el, el juego arranca como si no existiera).
+2. Borrar la carpeta PES21FX (opcional: sin el d3d11.dll no se usa).
+3. Si habias renombrado un d3d11.dll anterior (3DMigoto u otro), devolverle el nombre.
+Dream Patch, Sider y el mod de fisica de ropa no se tocan.
+Ojo: lo que cambies en la pestana "Ropa (fisica)" queda guardado en cloth-mod\cloth.ini
+aunque desinstales este mod. Para volver a los valores originales, reemplaza ese cloth.ini
+por el que vino con el mod de ropa.
+
+Compatibilidad
+--------------
+- Probado con PES 2021 de Steam + Dream Patch 2021 + Sider 7.3.3.
+- Funciona con el mod de fisica de ropa (cloth-mod, dsound.dll): el viento del pelo usa
+  la misma direccion.
+- Si algo falla, el registro queda en PES21FX\PES21FX.log.
+
+Creditos: PES Editor.
