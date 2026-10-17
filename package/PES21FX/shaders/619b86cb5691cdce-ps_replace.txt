@@ -498,6 +498,26 @@ void main(
   r3.x = 1 + -r0.z;
   r1.xyzw = r1.xyzw * r0.zzzz;
   r1.xyzw = r3.xxxx * r2.xyzw + r1.xyzw;
+  // === PES21 atmosfera con sol dinamico (17/10): la bruma del archivo de luz es azul y tapa el fondo (montanas,
+  // tribunas) de un solo color. x54 desatura la bruma lejana, z54 la calienta cuando el sol esta bajo (horizonte
+  // naranja en vez de azul), w54 on/off. Solo con sol real (no de noche con torres).
+  {
+    float4 ATM = IniParams.Load(int2(54,0));
+    float3 Ld = pLc_dir.xyz;
+    if (cmpOn && ATM.w > 0.5 && dot(Ld, Ld) > 1e-6) {
+      Ld = normalize(Ld);
+      float3 upV = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
+      float sunUp = saturate(abs(dot(Ld, upV)));
+      float3 sc = max(pLc_color.xyz, 0.0);
+      float kSun = saturate((sc.r / max(sc.b, 1e-4) - 0.85) * 4.0);          // sol de verdad vs. luz fria de torres
+      float lowS = 1.0 - smoothstep(0.05, 0.40, sunUp);
+      float fl = dot(r1.xyz, float3(0.3, 0.5, 0.2));
+      float3 fc = lerp(r1.xyz, fl.xxx, saturate(ATM.x) * kSun);
+      float3 warm = float3(1.0, 0.70, 0.46);
+      fc = lerp(fc, fl * warm / dot(warm, float3(0.3, 0.5, 0.2)), saturate(ATM.z) * lowS * kSun);
+      r1.xyz = fc;
+    }
+  }
   // niebla/bruma del estadio: es lo que "lava" la imagen; x11 = cuanto se aplica (1 = original)
   float fogK = cmpOn ? saturate(P11.x) : 1.0;
   r0.xyz = r0.xyw * lerp(1.0, r1.w, fogK) + r1.xyz * fogK;

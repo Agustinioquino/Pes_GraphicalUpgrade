@@ -102,7 +102,7 @@ Texture2D<float4> StereoParams : register(t125);
 float3 PESSunColor() {
   float3 c = g_psLight.m_lightColor0.xyz;
   float4 S = IniParams.Load(int2(4,0));      // z4 = realismo del sol (0 = original), w4 = intensidad
-  if (S.z <= 0) return c;
+  bool sunReal = S.z > 0;
   float3 L = normalize(g_psLight.m_lightDir0.xyz);
   float elev = saturate(abs(dot(L, float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12))));
   float low = 1 - smoothstep(0.10, 0.60, elev);
@@ -110,9 +110,15 @@ float3 PESSunColor() {
   const float3 LW = float3(0.2126, 0.7152, 0.0722);
   float lum = dot(c, LW);
   float warmO = c.r / max(c.b, 1e-4);
-  float k = saturate(S.z) * saturate((warmO - 0.85) * 4.0);   // de noche (luz fria de estadio) casi no toca
+  float k = (sunReal ? saturate(S.z) : 0.0) * saturate((warmO - 0.85) * 4.0);   // de noche (luz fria de estadio) casi no toca
   float3 res = lerp(c, lum * tint / dot(tint, LW), k);
-  return res * (S.w > 0 ? lerp(1.0, S.w, k) : 1.0);
+  res *= (S.w > 0 ? lerp(1.0, S.w, k) : 1.0);
+  // PES21 atmosfera (17/10): con el sol bajo el archivo de luz deja el sol muy apagado; y54 lo compensa (solo sol real,
+  // no luz de torres), proporcional a lo bajo que esta.
+  float4 ATM = IniParams.Load(int2(54,0));
+  if (ATM.w > 0.5) { float lowS = 1.0 - smoothstep(0.05, 0.40, elev); float kSun = saturate((warmO - 0.85) * 4.0);
+    res *= 1.0 + max(ATM.y, 0.0) * lowS * kSun; }
+  return res;
 }
 // === FIN SOL ===
 // === PES21 SOMBRAS v2 (Claude, 15/10): filtro estable de 16 muestras + sombras de contacto (PCSS) ===
