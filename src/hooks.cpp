@@ -643,6 +643,18 @@ bool InstallHooks() {
     void* cd = GetProcAddress(d3d, "D3D11CreateDevice");
     void* cds = GetProcAddress(d3d, "D3D11CreateDeviceAndSwapChain");
 
+    if (!g_cfg.optExports) {
+        // sin tocar D3D11CreateDevice: un dispositivo propio alcanza para enganchar los metodos (el codigo es el mismo para todos)
+        using PFN_CD = PFN_D3D11CreateDevice;
+        ID3D11Device* dd = nullptr; ID3D11DeviceContext* dc = nullptr;
+        HRESULT hr = cd ? ((PFN_CD)cd)(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &dd, nullptr, &dc) : E_FAIL;
+        Log("dispositivo propio para enganchar: 0x%08x", (unsigned)hr);
+        if (FAILED(hr) || !dd) return false;
+        HookDevice(dd);
+        if (dc) dc->Release();
+        dd->Release();
+        return true;
+    }
     Hook(cd, (void*)&hk_D3D11CreateDevice, (void**)&o_D3D11CreateDevice, "D3D11CreateDevice");
     bool ok = s_hookedFns.count(cd) > 0;
     Hook(cds, (void*)&hk_D3D11CreateDeviceAndSwapChain, (void**)&o_D3D11CreateDeviceAndSwapChain, "D3D11CreateDeviceAndSwapChain");
