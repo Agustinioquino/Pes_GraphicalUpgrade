@@ -120,6 +120,7 @@ bool LoadConfig() {
             else if (kl == "rules") c.optRules = atoi(v.c_str()) != 0;
             else if (kl == "overlay") c.optOverlay = atoi(v.c_str()) != 0;
             else if (kl == "pin_dlls") c.optPin = atoi(v.c_str()) != 0;
+            else if (kl == "hooks") c.optHooks = atoi(v.c_str()) != 0;
             continue;
         }
         if (cur) {

@@ -148,6 +148,7 @@ extern "C" __declspec(dllexport) int PES21FX_Init(const char* baseDir) {
     }
     if (!fx::LoadConfig()) fx::Log("aviso: no se pudo leer la configuracion");
     if (fx::g_cfg.optPin) fx::PinGameDlls();
+    if (!fx::g_cfg.optHooks) { fx::Log("hooks = 0: el mod queda cargado pero sin ganchos (prueba)"); return 2; }
     if (!fx::InstallHooks()) { fx::Log("ERROR: no se pudieron instalar los ganchos de D3D11"); return 0; }
     fx::Log("ganchos instalados");
     return 2;
