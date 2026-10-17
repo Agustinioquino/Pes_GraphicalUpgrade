@@ -557,6 +557,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     PollKeys(GetForegroundWindow() == sd.OutputWindow);
     UpdateTimeParams();
     UploadParams();
+    WatchShaderFolder();
     OverlayPresent(sc);
     return o_Present(sc, sync, flags);
 }
@@ -589,6 +590,19 @@ static void HookSwapChain(IDXGISwapChain* sc) {
     PatchSlot(&vt[8], (void*)&hk_Present, (void**)&o_Present);
     PatchSlot(&vt[13], (void*)&hk_Resize, (void**)&o_Resize);
     Log("Present enganchado");
+}
+
+// cada ~1 s se mira si algun shader cambio en disco (fecha y cantidad); si cambio, se recompila solo ese cambio
+void WatchShaderFolder() {
+    static double next = 0; static ULONGLONG lastSig = 0;
+    double t = Now(); if (t < next) return; next = t + 1.0;
+    WIN32_FIND_DATAW fd; ULONGLONG sig = 0; int n = 0;
+    HANDLE h = FindFirstFileW((g_cfg.baseDir + L"shaders\\*_replace.txt").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do { ULONGLONG w = ((ULONGLONG)fd.ftLastWriteTime.dwHighDateTime << 32) | fd.ftLastWriteTime.dwLowDateTime; sig ^= w * 0x9E3779B97F4A7C15ULL + (++n); } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    if (lastSig == 0) { lastSig = sig; return; }
+    if (sig != lastSig) { lastSig = sig; Log("cambio en la carpeta de shaders: recargando"); ReloadShaders(); }
 }
 
 void ReloadShaders() {

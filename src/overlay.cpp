@@ -106,7 +106,7 @@ static void DrawGroup(MenuGroup& g, int gid) {
     bool hasT = g.tIdx >= 0;
     bool on = hasT ? (g_cfg.live[g.tIdx][g.tComp] > 0.5f) : true;
     if (s_fontBold) ImGui::PushFont(s_fontBold);
-    if (hasT) { if (ImGui::Checkbox(Utf8(g.title).c_str(), &on)) g_cfg.live[g.tIdx][g.tComp] = on ? 1.0f : 0.0f; }
+    if (hasT) { if (ImGui::Checkbox(Utf8(g.title).c_str(), &on)) { float b = g_cfg.base[g.tIdx][g.tComp]; g_cfg.live[g.tIdx][g.tComp] = on ? (b > 0.5f ? b : 1.0f) : 0.0f; } }
     else ImGui::TextUnformatted(Utf8(g.title).c_str());
     if (s_fontBold) ImGui::PopFont();
     if (!g.desc.empty()) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.66f, 0.69f, 0.74f, 1)); ImGui::TextWrapped("%s", Utf8(g.desc).c_str()); ImGui::PopStyleColor(); }
@@ -116,12 +116,31 @@ static void DrawGroup(MenuGroup& g, int gid) {
         float w = ImGui::GetContentRegionAvail().x;
         for (auto& sl : g.sliders) {
             ImGui::PushID(&sl);
+            float& val = g_cfg.live[sl.idx][sl.comp];
             ImGui::TextUnformatted(Utf8(sl.label).c_str());
+            if (!sl.help.empty()) {
+                ImGui::SameLine(); ImGui::TextDisabled("(?)");
+                if (ImGui::IsItemHovered()) { ImGui::BeginTooltip(); ImGui::PushTextWrapPos(380); ImGui::TextUnformatted(Utf8(sl.help).c_str()); ImGui::PopTextWrapPos(); ImGui::EndTooltip(); }
+            }
             ImGui::SetNextItemWidth(w - 70);
-            ImGui::SliderFloat("##s", &g_cfg.live[sl.idx][sl.comp], sl.lo, sl.hi, "%.2f");
+            if (!sl.options.empty()) {
+                int cur = (int)(val + 0.5f); if (cur < 0) cur = 0; if (cur >= (int)sl.options.size()) cur = (int)sl.options.size() - 1;
+                std::string prev = Utf8(sl.options[cur]);
+                if (ImGui::BeginCombo("##c", prev.c_str())) {
+                    for (int oi = 0; oi < (int)sl.options.size(); oi++) {
+                        bool sel = oi == cur;
+                        if (ImGui::Selectable(Utf8(sl.options[oi]).c_str(), sel)) val = (float)oi;
+                        if (sel) ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+            } else {
+                ImGui::SliderFloat("##s", &val, sl.lo, sl.hi, sl.fmt.c_str());
+                if (ImGui::IsItemHovered() && !ImGui::IsItemActive()) ImGui::SetTooltip("Ctrl+clic para escribir un valor exacto");
+            }
             ImGui::SameLine();
-            if (ImGui::SmallButton("0")) g_cfg.live[sl.idx][sl.comp] = g_cfg.base[sl.idx][sl.comp];
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Volver al valor guardado");
+            if (ImGui::SmallButton("<")) val = g_cfg.base[sl.idx][sl.comp];
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Volver al valor guardado (%.3f)", g_cfg.base[sl.idx][sl.comp]);
             ImGui::PopID();
         }
         ImGui::EndDisabled();

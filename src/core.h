@@ -39,7 +39,11 @@ struct KeyBind {
 struct ParamInfo { std::string comment; bool defined = false; };
 
 // grupo del menu ([Menu...] en PES21FX.ini): titulo, descripcion, interruptor y sliders de una mejora
-struct MenuSlider { int idx, comp; std::string label; float lo, hi; };
+struct MenuSlider {
+    int idx, comp; std::string label; float lo, hi;
+    std::string help, fmt = "%.2f";
+    std::vector<std::string> options;      // si no esta vacio: selector (valor = indice de la opcion)
+};
 struct MenuGroup {
     std::string title, desc, section;
     int tIdx = -1, tComp = 0;            // parametro del interruptor (w46, etc.); -1 = sin interruptor
@@ -85,6 +89,7 @@ double Now();
 bool InstallHooks();
 void OnDeviceCreated(ID3D11Device* d);
 void ReloadShaders();
+void WatchShaderFolder();                      // recarga sola los shaders que cambian en disco
 std::wstring ShaderPath(uint64_t hash, const char* type);   // shaders\<hash>-ps_replace.txt
 
 struct DeviceState {

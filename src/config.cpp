@@ -136,14 +136,23 @@ bool LoadConfig() {
             else if (kl == "desc") grp->desc = v;
             else if (kl == "section") grp->section = v;
             else if (kl == "toggle") { int i2, c2; if (ParseParamName(v, i2, c2)) { grp->tIdx = i2; grp->tComp = c2; } }
-            else if (kl == "slider") {   // slider = x46 | Fuerza | 0 | 1.5
-                std::vector<std::string> parts; std::string cur2; 
+            else if (kl == "slider" || kl == "choice") {
+                // slider = x46 | Fuerza | min | max | ayuda | formato      choice = y20 | Modo | A;B;C | ayuda
+                std::vector<std::string> parts; std::string cur2;
                 for (char ch : v) { if (ch == '|') { parts.push_back(Trim(cur2)); cur2.clear(); } else cur2 += ch; }
                 parts.push_back(Trim(cur2));
                 int i2, c2;
                 if (parts.size() >= 2 && ParseParamName(parts[0], i2, c2)) {
                     MenuSlider sl{i2, c2, parts[1], 0.f, 1.f};
-                    if (parts.size() >= 4) { sl.lo = (float)atof(parts[2].c_str()); sl.hi = (float)atof(parts[3].c_str()); }
+                    if (kl == "choice") {
+                        if (parts.size() >= 3) { std::string o; for (char ch : parts[2]) { if (ch == ';') { sl.options.push_back(Trim(o)); o.clear(); } else o += ch; } if (!Trim(o).empty()) sl.options.push_back(Trim(o)); }
+                        if (parts.size() >= 4) sl.help = parts[3];
+                        sl.lo = 0; sl.hi = (float)sl.options.size() - 1;
+                    } else {
+                        if (parts.size() >= 4) { sl.lo = (float)atof(parts[2].c_str()); sl.hi = (float)atof(parts[3].c_str()); }
+                        if (parts.size() >= 5) sl.help = parts[4];
+                        if (parts.size() >= 6 && !parts[5].empty()) sl.fmt = parts[5];
+                    }
                     grp->sliders.push_back(sl);
                 }
             }
