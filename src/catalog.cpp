@@ -20,8 +20,16 @@ struct DrawRec {
     const ShaderEntry* vs; const ShaderEntry* ps;
     UINT verts; int kind;          // 0 Draw, 1 DrawIndexed, 2 DrawInstanced, 3 DrawIndexedInstanced
     UINT inst;
+    int ctx;                       // 0 = contexto inmediato, 1.. = contextos diferidos (listas grabadas en otros hilos)
     std::string rt;                // "1920x1080 R11G11B10 x3 +Z" / "sin RT, Z 4096x12288"
 };
+static std::map<ID3D11DeviceContext*, int> s_ctxIds;
+static int CtxId(ID3D11DeviceContext* c) {
+    auto it = s_ctxIds.find(c); if (it != s_ctxIds.end()) return it->second;
+    int id = (g_dev.imm && c == g_dev.imm) ? 0 : (int)s_ctxIds.size() + 1;
+    s_ctxIds[c] = id; return id;
+}
+static std::string Key(const ShaderEntry* e) { char b[32]; snprintf(b, sizeof(b), "%016llx-%c", (unsigned long long)e->hash, e->type); return b; }
 struct ShaderStat {
     const ShaderEntry* e = nullptr;
     long draws = 0; int frames = 0; int lastFrame = -1; int firstOrder = 1 << 30;
