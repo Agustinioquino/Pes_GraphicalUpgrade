@@ -406,6 +406,7 @@ static bool Hook(void* target, void* detour, void** orig, const char* name) {
     if (s != MH_OK) { Log("no se pudo enganchar %s (%d)", name, (int)s); return false; }
     MH_EnableHook(target);
     s_hookedFns.insert(target);
+    Log("gancho %s: %s (trampolin %p)", name, ModOff(target).c_str(), orig ? *orig : nullptr);
     return true;
 }
 static void** VT(void* obj) { return *(void***)obj; }
@@ -452,6 +453,18 @@ static void SetActiveDevice(ID3D11Device* d) {
     Log("dispositivo del juego: %p (nivel 0x%x)", (void*)d, (unsigned)d->GetFeatureLevel());
 }
 
+static void HookFactory(IDXGIFactory* fac);
+static void HookFactoryOf(ID3D11Device* d) {
+    // la fabrica DXGI que usa el juego para crear su cadena de intercambio: dispositivo -> adaptador -> fabrica
+    IDXGIDevice* xd = nullptr; IDXGIAdapter* ad = nullptr; IDXGIFactory* f = nullptr;
+    if (SUCCEEDED(d->QueryInterface(__uuidof(IDXGIDevice), (void**)&xd)) && xd) {
+        if (SUCCEEDED(xd->GetAdapter(&ad)) && ad) {
+            if (SUCCEEDED(ad->GetParent(__uuidof(IDXGIFactory), (void**)&f)) && f) { HookFactory(f); f->Release(); }
+            ad->Release();
+        }
+        xd->Release();
+    }
+}
 static void HookDevice(ID3D11Device* d) {
     std::lock_guard<std::recursive_mutex> lk(s_hookMutex);
     if (!s_deviceHooked) {
@@ -467,6 +480,7 @@ static void HookDevice(ID3D11Device* d) {
         if (o_CreateDC && SUCCEEDED(o_CreateDC(d, 0, &dc)) && dc) { HookContextV<1>(dc); dc->Release(); }
         Log("dispositivo D3D11 enganchado");
     }
+    HookFactoryOf(d);
     // el dispositivo del juego se decide al crear la cadena de intercambio (el juego crea varios de prueba)
 }
 
@@ -499,6 +513,19 @@ static HRESULT STDMETHODCALLTYPE hk_CreateSCHwnd(IDXGIFactory2* f, IUnknown* dev
     HRESULT hr = o_CreateSCHwnd(f, dev, w, d, fd, o, sc);
     if (SUCCEEDED(hr) && sc && *sc) OnSwapChain(dev, *sc);
     return hr;
+}
+static bool s_facHooked = false;
+static void HookFactory(IDXGIFactory* fac) {
+    std::lock_guard<std::recursive_mutex> lk(s_hookMutex);
+    if (s_facHooked) return;
+    s_facHooked = true;
+    bool ok = Hook(VT(fac)[10], (void*)&hk_CreateSC, (void**)&o_CreateSC, "IDXGIFactory::CreateSwapChain");
+    IDXGIFactory2* f2 = nullptr;
+    if (SUCCEEDED(fac->QueryInterface(__uuidof(IDXGIFactory2), (void**)&f2)) && f2) {
+        Hook(VT(f2)[15], (void*)&hk_CreateSCHwnd, (void**)&o_CreateSCHwnd, "IDXGIFactory2::CreateSwapChainForHwnd");
+        f2->Release();
+    }
+    Log("ganchos de DXGI: %s", ok ? "ok" : "FALLARON (sin menu ni parametros)");
 }
 
 static HRESULT WINAPI hk_D3D11CreateDevice(IDXGIAdapter* a, D3D_DRIVER_TYPE t, HMODULE s, UINT f, const D3D_FEATURE_LEVEL* fl, UINT n, UINT v,
@@ -609,23 +636,6 @@ bool InstallHooks() {
         Log("AVISO: d3d11.dll no es el de Windows (3DMigoto sigue activo?). Renombra el d3d11.dll de la carpeta del juego.");
     void* cd = GetProcAddress(d3d, "D3D11CreateDevice");
     void* cds = GetProcAddress(d3d, "D3D11CreateDeviceAndSwapChain");
-
-    // CreateSwapChain de la fabrica DXGI: de ahi salen el dispositivo del juego y su Present
-    bool okSC = false;
-    using PFN_CF1 = HRESULT(WINAPI*)(REFIID, void**);
-    HMODULE dx = LoadLibraryW(L"dxgi.dll");
-    PFN_CF1 cf1 = dx ? (PFN_CF1)GetProcAddress(dx, "CreateDXGIFactory1") : nullptr;
-    IDXGIFactory1* fac = nullptr;
-    if (cf1 && SUCCEEDED(cf1(__uuidof(IDXGIFactory1), (void**)&fac)) && fac) {
-        okSC = Hook(VT(fac)[10], (void*)&hk_CreateSC, (void**)&o_CreateSC, "IDXGIFactory::CreateSwapChain");
-        IDXGIFactory2* f2 = nullptr;
-        if (SUCCEEDED(fac->QueryInterface(__uuidof(IDXGIFactory2), (void**)&f2)) && f2) {
-            Hook(VT(f2)[15], (void*)&hk_CreateSCHwnd, (void**)&o_CreateSCHwnd, "IDXGIFactory2::CreateSwapChainForHwnd");
-            f2->Release();
-        }
-        fac->Release();
-    }
-    Log("ganchos de DXGI: %s", okSC ? "ok" : "FALLARON (sin menu ni parametros)");
 
     Hook(cd, (void*)&hk_D3D11CreateDevice, (void**)&o_D3D11CreateDevice, "D3D11CreateDevice");
     bool ok = s_hookedFns.count(cd) > 0;

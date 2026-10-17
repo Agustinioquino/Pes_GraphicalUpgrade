@@ -26,7 +26,7 @@ double Now() {
 
 // ---------------------------------------------------------------- registro de cuelgues
 // Si el juego se cierra por un error, queda en el log en que modulo y donde paso (y la pila).
-static std::string ModOff(void* p) {
+std::string ModOff(void* p) {
     HMODULE m = nullptr; char n[MAX_PATH] = "?";
     if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)p, &m))
         GetModuleFileNameA(m, n, MAX_PATH);
@@ -43,8 +43,23 @@ static void LogCrash(EXCEPTION_POINTERS* ep, const char* kind) {
     if (er->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && er->NumberParameters >= 2)
         fprintf(g_log, "    %s en la direccion %p\n", er->ExceptionInformation[0] == 1 ? "escritura" : er->ExceptionInformation[0] == 8 ? "ejecucion" : "lectura",
                 (void*)er->ExceptionInformation[1]);
-    void* fr[40]; USHORT k = RtlCaptureStackBackTrace(0, 40, fr, nullptr);
-    for (USHORT i = 0; i < k; i++) fprintf(g_log, "    %s\n", ModOff(fr[i]).c_str());
+    CONTEXT* cx = ep->ContextRecord;
+    fprintf(g_log, "    RIP=%p RSP=%p RCX=%p RDX=%p\n", (void*)cx->Rip, (void*)cx->Rsp, (void*)cx->Rcx, (void*)cx->Rdx);
+    // la pila "a mano": direcciones de retorno que caen dentro de algun modulo (sirve aunque no haya info de unwind)
+    MEMORY_BASIC_INFORMATION mbi{};
+    uintptr_t sp = (uintptr_t)cx->Rsp;
+    if (VirtualQuery((void*)sp, &mbi, sizeof(mbi)) && mbi.State == MEM_COMMIT) {
+        uintptr_t end = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+        int shown = 0;
+        for (uintptr_t a = sp; a + 8 <= end && a < sp + 0x2000 && shown < 24; a += 8) {
+            uintptr_t v = *(uintptr_t*)a;
+            HMODULE m = nullptr;
+            if (v > 0x10000 && GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)v, &m) && m) {
+                fprintf(g_log, "    [rsp+0x%03llx] %s\n", (unsigned long long)(a - sp), ModOff((void*)v).c_str());
+                shown++;
+            }
+        }
+    }
     fflush(g_log);
     if (locked) g_logMutex.unlock();
 }
@@ -80,13 +95,21 @@ extern "C" __declspec(dllexport) int PES21FX_Init(const char* baseDir) {
     fx::Log("PES21 FX 0.1.2 - carpeta: %s", b.c_str());
     AddVectoredExceptionHandler(1, fx::Vectored);
     fx::s_prevFilter = SetUnhandledExceptionFilter(fx::Unhandled);
+    for (const wchar_t* mn : {L"PES21FX.dll", L"sider.dll", L"dsound.dll", L"d3d11.dll", L"dxgi.dll", L"PES2021.exe"}) {
+        HMODULE hm = GetModuleHandleW(mn);
+        fx::Log("modulo %ls en %p", mn, (void*)hm);
+    }
     if (!fx::LoadConfig()) fx::Log("aviso: no se pudo leer la configuracion");
     if (!fx::InstallHooks()) { fx::Log("ERROR: no se pudieron instalar los ganchos de D3D11"); return 0; }
     fx::Log("ganchos instalados");
     return 2;
 }
 
-BOOL APIENTRY DllMain(HMODULE h, DWORD reason, LPVOID) {
+BOOL APIENTRY DllMain(HMODULE h, DWORD reason, LPVOID reserved) {
     if (reason == DLL_PROCESS_ATTACH) DisableThreadLibraryCalls(h);
+    if (reason == DLL_PROCESS_DETACH && fx::g_log) {   // el juego se esta cerrando "normalmente" (ExitProcess)
+        fprintf(fx::g_log, "--- fin del proceso (%s)\n", reserved ? "el juego salio" : "DLL descargada");
+        fflush(fx::g_log);
+    }
     return TRUE;
 }

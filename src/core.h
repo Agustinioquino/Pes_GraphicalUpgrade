@@ -16,6 +16,7 @@ namespace fx {
 
 // ---------------------------------------------------------------- log
 void Log(const char* fmt, ...);
+std::string ModOff(void* p);   // "modulo.dll+0x1234" (diagnostico)
 
 // ---------------------------------------------------------------- parametros (lo que en 3DMigoto era IniParams)
 constexpr int kParamCount = 128;           // float4 x 128 -> t120 en los shaders (IniParams.Load(int2(i,0)))
