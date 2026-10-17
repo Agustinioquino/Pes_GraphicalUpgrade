@@ -89,6 +89,39 @@ float4 PESStrand(Texture2D<float4> tex, float2 uv, float4 HP)
   float v = saturate(HP.y);
   return float4(1.0 + (r1 - 0.5) * 2.0 * v * fade, (r2 - 0.5) * 1.5 * v * fade, fade, acrossU ? 1.0 : 0.0);
 }
+// === PES21 brillo de pelo anisotropico (17/10) ===
+// En el pelo real el brillo es una banda perpendicular a las hebras (Kajiya-Kay / Marschner), no un punto.
+// El motor ilumina en diferido con GGX sobre la normal: si en el G-buffer se escribe la normal que, para esta hebra,
+// refleja la luz hacia la camara (N = H sin su parte a lo largo de la hebra), GGX da exactamente la banda de Kajiya-Kay.
+// x50 fuerza de la banda, y50 desplazamiento (raiz/punta), z50 espacio de la luz (0 mundo, 1 vista), w50 on/off
+// x51 segundo brillo (TRT: color del pelo, hacia la punta), y51 dispersion entre hebras
+float3 PESLightV(float4 HK)
+{
+  float3 L = g_psSystem.m_dominantLightDir.xyz;
+  if (HK.z < 0.5) L = float3(dot(L, g_psScene.m_view._m00_m10_m20), dot(L, g_psScene.m_view._m01_m11_m21), dot(L, g_psScene.m_view._m02_m12_m22));
+  return normalize(L + float3(1e-5, 2e-5, 1e-5));
+}
+void PESHairAniso(inout float3 N, inout float3 alb, float3 T, float3 V, float jitter, float fade)
+{
+  float4 HK = IniParams.Load(int2(50,0));
+  float4 HK2 = IniParams.Load(int2(51,0));
+  if (HK.w < 0.5) return;
+  float3 L = PESLightV(HK);
+  float3 H = normalize(L + V);
+  T = normalize(T);
+  float sh1 = HK.y + jitter * HK2.y;
+  float3 T1 = normalize(T + N * sh1);
+  float3 Nk = H - T1 * dot(H, T1);
+  float nkl = length(Nk);
+  Nk = nkl > 1e-4 ? Nk / nkl : N;
+  if (dot(Nk, V) < 0.05) Nk = N;
+  N = normalize(lerp(N, Nk, saturate(HK.x) * fade));
+  float3 T2 = normalize(T - N * (sh1 * 1.5 + 0.1));
+  float c2 = dot(T2, H);
+  float s2 = sqrt(saturate(1.0 - c2 * c2));
+  float lit = saturate(dot(N, L) * 0.5 + 0.5);
+  alb += alb * pow(s2, 80.0) * max(HK2.x, 0.0) * lit * fade;
+}
 // === FIN PELO ===
 
 void main(
@@ -189,6 +222,7 @@ void main(
   r0.w = r1.x * r0.w;
   r0.w = r0.w * r4.x;
   r0.xyz *= pesSt.x;
+  { float3 nH = r2.xyz; float3 aH = r0.xyz; PESHairAniso(nH, aH, pesSt.w > 0.5 ? v4.xyz : v5.xyz, normalize(v3.xyz), pesSt.y, HP.w > 0.5 ? pesSt.z : 1.0); r2.xyz = nH; r0.xyz = aH; }
   o0.xyz = r0.www * g_psMaterial.m_materials[0].zzz + r0.xyz;
   r0.x = g_psMaterial.m_materials[0].z * r0.w;
   r0.x = r4.x * r0.x;
