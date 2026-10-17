@@ -43,6 +43,8 @@ struct MenuSlider {
     int idx, comp; std::string label; float lo, hi;
     std::string help, fmt = "%.2f";
     std::vector<std::string> options;      // si no esta vacio: selector (valor = indice de la opcion)
+    std::string ext;                       // "seccion.clave" de cloth-mod\cloth.ini (si no esta vacio no usa idx/comp)
+    float def = 0;                         // valor de fabrica si la clave no esta en cloth.ini
 };
 struct MenuGroup {
     std::string title, desc, section;
@@ -67,6 +69,10 @@ struct Config {
     ParamInfo info[kParamCount][4];
     std::vector<KeyBind> keys;
     std::vector<MenuGroup> groups;
+    // cloth-mod\cloth.ini editado desde el menu (el mod de ropa lo relee solo ~1 s despues de guardarlo)
+    std::wstring clothPath; bool clothFound = false;
+    std::map<std::string, float> clothVals, clothLoaded;
+    bool clothDirty = false; double clothChangeT = 0; std::string clothStatus;
     std::map<uint64_t, Rule> rules;
     std::map<std::string, float> vars;         // $pes_push, etc.
     int menuKey = VK_INSERT;
@@ -78,7 +84,9 @@ extern Config g_cfg;
 extern std::mutex g_cfgMutex;
 
 bool LoadConfig();                              // PES21FX.ini + PES21FX_rules.ini
-bool SaveConfigValues();                        // escribe los valores live en PES21FX.ini
+bool SaveConfigValues();
+bool LoadCloth();
+bool SaveCloth();                        // escribe los valores live en PES21FX.ini
 void PollKeys(bool focused);
 void KeyActionUnlocked(KeyBind& k, int action);    // menu: alternar / ciclar (con g_cfgMutex tomado)
 void UpdateTimeParams();                        // reloj del partido, viento, etc.

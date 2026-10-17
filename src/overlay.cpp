@@ -110,13 +110,19 @@ static void DrawGroup(MenuGroup& g, int gid) {
     else ImGui::TextUnformatted(Utf8(g.title).c_str());
     if (s_fontBold) ImGui::PopFont();
     if (!g.desc.empty()) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.66f, 0.69f, 0.74f, 1)); ImGui::TextWrapped("%s", Utf8(g.desc).c_str()); ImGui::PopStyleColor(); }
+    bool anyExt = false; for (auto& sl : g.sliders) anyExt |= !sl.ext.empty();
+    if (anyExt && !g_cfg.clothFound) ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.35f, 1), "No se encontro cloth-mod\\cloth.ini");
     if (!g.sliders.empty()) {
         ImGui::Spacing();
         ImGui::BeginDisabled(!on);
         float w = ImGui::GetContentRegionAvail().x;
         for (auto& sl : g.sliders) {
             ImGui::PushID(&sl);
-            float& val = g_cfg.live[sl.idx][sl.comp];
+            bool isExt = !sl.ext.empty();
+            if (isExt && !g_cfg.clothFound) { ImGui::PopID(); continue; }
+            if (isExt && !g_cfg.clothVals.count(sl.ext)) g_cfg.clothVals[sl.ext] = sl.def;
+            float& val = isExt ? g_cfg.clothVals[sl.ext] : g_cfg.live[sl.idx][sl.comp];
+            float before = val;
             ImGui::TextUnformatted(Utf8(sl.label).c_str());
             if (!sl.help.empty()) {
                 ImGui::SameLine(); ImGui::TextDisabled("(?)");
@@ -139,8 +145,10 @@ static void DrawGroup(MenuGroup& g, int gid) {
                 if (ImGui::IsItemHovered() && !ImGui::IsItemActive()) ImGui::SetTooltip("Ctrl+clic para escribir un valor exacto");
             }
             ImGui::SameLine();
-            if (ImGui::SmallButton("<")) val = g_cfg.base[sl.idx][sl.comp];
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Volver al valor guardado (%.3f)", g_cfg.base[sl.idx][sl.comp]);
+            float saved = isExt ? (g_cfg.clothLoaded.count(sl.ext) ? g_cfg.clothLoaded[sl.ext] : sl.def) : g_cfg.base[sl.idx][sl.comp];
+            if (ImGui::SmallButton("<")) val = saved;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip(isExt ? "Volver al valor que tenia cloth.ini (%.4g); fabrica: %.4g" : "Volver al valor guardado (%.3f)", saved, sl.def);
+            if (isExt && val != before) { g_cfg.clothDirty = true; g_cfg.clothChangeT = Now(); }
             ImGui::PopID();
         }
         ImGui::EndDisabled();
@@ -204,6 +212,7 @@ static void DrawMenu() {
         for (auto& sname : secs) {
             if (ImGui::BeginTabItem(Utf8(sname).c_str())) {
                 ImGui::BeginChild("scroll", ImVec2(0, 0), ImGuiChildFlags_None);
+                if (sname.rfind("Ropa", 0) == 0 && !g_cfg.clothStatus.empty()) { ImGui::TextDisabled("%s", g_cfg.clothStatus.c_str()); ImGui::Spacing(); }
                 int gid = 0;
                 for (auto& g : g_cfg.groups) { std::string s2 = g.section.empty() ? "Otros" : g.section; if (s2 == sname) DrawGroup(g, gid); gid++; }
                 ImGui::EndChild();
@@ -286,6 +295,10 @@ void OverlayPresent(IDXGISwapChain* sc) {
     ImGui::NewFrame();
     ImGui::GetIO().MouseDrawCursor = true;
     DrawMenu();
+    {
+        std::lock_guard<std::mutex> lk(g_cfgMutex);
+        if (g_cfg.clothDirty && Now() - g_cfg.clothChangeT > 0.4) SaveCloth();
+    }
     ImGui::Render();
     ID3D11RenderTargetView* oldRT[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
     ID3D11DepthStencilView* oldDS = nullptr;

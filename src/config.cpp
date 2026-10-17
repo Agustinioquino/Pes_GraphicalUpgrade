@@ -6,6 +6,7 @@
 #include <cctype>
 #include <fstream>
 #include <sstream>
+#include <iterator>
 
 namespace fx {
 
@@ -136,6 +137,29 @@ bool LoadConfig() {
             else if (kl == "desc") grp->desc = v;
             else if (kl == "section") grp->section = v;
             else if (kl == "toggle") { int i2, c2; if (ParseParamName(v, i2, c2)) { grp->tIdx = i2; grp->tComp = c2; } }
+            else if (kl == "cslider" || kl == "cchoice") {
+                // cslider = seccion.clave | etiqueta | min | max | fabrica | ayuda | formato
+                // cchoice = seccion.clave | etiqueta | A;B | fabrica | ayuda
+                std::vector<std::string> parts; std::string cur2;
+                for (char ch : v) { if (ch == '|') { parts.push_back(Trim(cur2)); cur2.clear(); } else cur2 += ch; }
+                parts.push_back(Trim(cur2));
+                if (parts.size() >= 2) {
+                    MenuSlider sl{0, 0, parts[1], 0.f, 1.f};
+                    sl.ext = Lower(parts[0]);
+                    if (kl == "cchoice") {
+                        if (parts.size() >= 3) { std::string o; for (char ch : parts[2]) { if (ch == ';') { sl.options.push_back(Trim(o)); o.clear(); } else o += ch; } if (!Trim(o).empty()) sl.options.push_back(Trim(o)); }
+                        if (parts.size() >= 4) sl.def = (float)atof(parts[3].c_str());
+                        if (parts.size() >= 5) sl.help = parts[4];
+                        sl.hi = (float)sl.options.size() - 1;
+                    } else {
+                        if (parts.size() >= 4) { sl.lo = (float)atof(parts[2].c_str()); sl.hi = (float)atof(parts[3].c_str()); }
+                        if (parts.size() >= 5) sl.def = (float)atof(parts[4].c_str());
+                        if (parts.size() >= 6) sl.help = parts[5];
+                        if (parts.size() >= 7 && !parts[6].empty()) sl.fmt = parts[6];
+                    }
+                    grp->sliders.push_back(sl);
+                }
+            }
             else if (kl == "slider" || kl == "choice") {
                 // slider = x46 | Fuerza | min | max | ayuda | formato      choice = y20 | Modo | A;B;C | ayuda
                 std::vector<std::string> parts; std::string cur2;
@@ -171,6 +195,7 @@ bool LoadConfig() {
         }
     }
     memcpy(c.live, c.base, sizeof(c.base));
+    LoadCloth();
     for (auto& kb : c.keys) if (kb.label.empty()) kb.label = kb.name;
 
     // ---- reglas ----
@@ -215,6 +240,96 @@ bool LoadConfig() {
     int nr = 0; for (auto& kv : c.rules) nr += (int)kv.second.actions.size();
     Log("config: %d teclas, %d reglas (%d acciones); shaders=%d reglas=%d menu=%d", (int)c.keys.size(), (int)c.rules.size(), nr,
         (int)c.optReplace, (int)c.optRules, (int)c.optOverlay);
+    return true;
+}
+
+// ---------------------------------------------------------------- cloth-mod\cloth.ini
+static std::wstring ClothPath() { return g_cfg.baseDir + L"..\\cloth-mod\\cloth.ini"; }
+
+// lee "clave = valor ; comentario" por seccion -> clothVals["seccion.clave"]
+bool LoadCloth() {
+    // se llama con g_cfgMutex tomado
+    Config& c = g_cfg;
+    c.clothPath = ClothPath();
+    c.clothVals.clear(); c.clothLoaded.clear(); c.clothDirty = false;
+    std::vector<std::string> lines;
+    c.clothFound = ReadLines(c.clothPath, lines);
+    if (!c.clothFound) { c.clothStatus = "No se encontro cloth-mod\\cloth.ini (mod de ropa no instalado)"; return false; }
+    std::string sec;
+    for (auto& raw : lines) {
+        std::string l = raw; size_t sc = l.find(';'); if (sc != std::string::npos) l = l.substr(0, sc);
+        l = Trim(l);
+        if (l.empty()) continue;
+        if (l[0] == '[') { sec = Lower(Trim(l.substr(1, l.find(']') - 1))); continue; }
+        size_t eq = l.find('=');
+        if (eq == std::string::npos) continue;
+        std::string k = Lower(Trim(l.substr(0, eq))), v = Trim(l.substr(eq + 1));
+        if (v.empty()) continue;
+        char* end = nullptr; double d = strtod(v.c_str(), &end);
+        if (end == v.c_str()) continue;            // valores no numericos (teclas) no se tocan
+        c.clothVals[sec + "." + k] = (float)d;
+    }
+    c.clothLoaded = c.clothVals;
+    c.clothStatus = "cloth.ini cargado: los cambios se aplican solos en ~1 segundo";
+    return true;
+}
+
+// escribe solo las claves que cambiaron, conservando comentarios y el resto del archivo
+bool SaveCloth() {
+    Config& c = g_cfg;
+    if (!c.clothFound) return false;
+    std::ifstream f(c.clothPath, std::ios::binary);
+    if (!f) return false;
+    std::string all((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    f.close();
+    bool crlf = all.find("\r\n") != std::string::npos;
+    std::vector<std::string> lines; { std::string cur; for (char ch : all) { if (ch == '\n') { if (!cur.empty() && cur.back() == '\r') cur.pop_back(); lines.push_back(cur); cur.clear(); } else cur += ch; } if (!cur.empty()) lines.push_back(cur); }
+    int changed = 0;
+    for (auto& kv : c.clothVals) {
+        auto it = c.clothLoaded.find(kv.first);
+        if (it != c.clothLoaded.end() && it->second == kv.second) continue;
+        std::string sec = kv.first.substr(0, kv.first.find('.')), key = kv.first.substr(kv.first.find('.') + 1);
+        char val[64]; snprintf(val, sizeof(val), "%g", kv.second);
+        std::string s; int secLine = -1, lastKey = -1, hit = -1;
+        for (int i = 0; i < (int)lines.size(); i++) {
+            std::string l = Trim(lines[i]);
+            if (!l.empty() && l[0] == '[') { s = Lower(Trim(l.substr(1, l.find(']') - 1))); if (s == sec) secLine = i; continue; }
+            if (s != sec) continue;
+            std::string body = l; size_t sc = body.find(';'); if (sc != std::string::npos) body = body.substr(0, sc);
+            size_t eq = body.find('=');
+            if (eq == std::string::npos) continue;
+            lastKey = i;
+            if (Lower(Trim(body.substr(0, eq))) == key) { hit = i; break; }
+        }
+        if (hit >= 0) {
+            std::string& L = lines[hit];
+            size_t sc = L.find(';');
+            std::string comment = sc != std::string::npos ? L.substr(sc) : "";
+            std::string nl = key + " = " + val;
+            if (!comment.empty()) { while (nl.size() < 24) nl += ' '; nl += comment; }
+            L = nl;
+        } else if (secLine >= 0) {
+            lines.insert(lines.begin() + (lastKey >= 0 ? lastKey : secLine) + 1, key + " = " + val + "    ; (PES21 FX)");
+        } else {
+            lines.push_back(""); lines.push_back("[" + sec + "]"); lines.push_back(key + " = " + val + "    ; (PES21 FX)");
+        }
+        changed++;
+    }
+    if (!changed) { c.clothDirty = false; return true; }
+    std::ofstream o(c.clothPath, std::ios::binary | std::ios::trunc);
+    if (!o) { c.clothStatus = "No se pudo escribir cloth.ini"; return false; }
+    for (auto& l : lines) o << l << (crlf ? "\r\n" : "\n");
+    o.close();
+    c.clothLoaded = c.clothVals;
+    c.clothDirty = false;
+    // el pelo usa la misma direccion de viento que la ropa
+    auto wx = c.clothVals.find("sim.wind_x"), wz = c.clothVals.find("sim.wind_z");
+    if (wx != c.clothVals.end() || wz != c.clothVals.end()) {
+        float x = wx != c.clothVals.end() ? wx->second : 2.0f, z = wz != c.clothVals.end() ? wz->second : 0.0f;
+        float m = (std::max)(fabsf(x), fabsf(z)); if (m > 1e-4f) { c.live[23][0] = x / m; c.live[23][1] = z / m; }
+    }
+    c.clothStatus = "cloth.ini guardado (" + std::to_string(changed) + " valores): el mod de ropa lo aplica en ~1 s";
+    Log("cloth.ini: %d valores cambiados desde el menu", changed);
     return true;
 }
 
