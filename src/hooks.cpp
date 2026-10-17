@@ -558,6 +558,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     UpdateTimeParams();
     UploadParams();
     WatchShaderFolder();
+    PollMatch();
     OverlayPresent(sc);
     return o_Present(sc, sync, flags);
 }

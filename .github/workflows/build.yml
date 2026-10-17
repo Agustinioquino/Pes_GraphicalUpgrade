@@ -28,6 +28,7 @@ jobs:
           Copy-Item -Recurse package/PES21FX/* $out
           Copy-Item build/Release/d3d11.dll dist/
           Copy-Item package/LEEME.txt dist/
+          Copy-Item -Recurse package/sider dist/sider
 
       - uses: actions/upload-artifact@v4
         with:

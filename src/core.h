@@ -62,6 +62,11 @@ struct RuleAction {
 };
 struct Rule { uint64_t hash = 0; std::vector<RuleAction> actions; bool hasParamOverride = false; int paramSet = -1; };
 
+// presets por estadio (presets\stadium_<id>.ini; el estadio lo informa Sider via match.ini)
+struct PresetValue { int idx, comp; float value; };
+struct PresetFile { std::string file, name, author; int stadium = -1, timeofday = -1; std::vector<PresetValue> values; };
+struct MatchInfo { bool known = false; int stadium = -1, timeofday = -1, weather = -1, season = -1, tournament = -1; };
+
 struct Config {
     std::wstring baseDir;                      // carpeta del mod (termina en '\')
     float base[kParamCount][4] = {};           // valores del ini
@@ -73,6 +78,10 @@ struct Config {
     std::wstring clothPath; bool clothFound = false;
     std::map<std::string, float> clothVals, clothLoaded;
     bool clothDirty = false; double clothChangeT = 0; std::string clothStatus;
+    MatchInfo match;                           // partido actual (match.ini)
+    PresetFile presetActive;                   // preset aplicado (file vacio = ninguno)
+    std::vector<PresetValue> presetKeys;       // claves que toco el preset (se restauran a base al salir)
+    bool presetManual = false;                 // el usuario aplico/quito un preset a mano: no pisar hasta el proximo partido
     std::map<uint64_t, Rule> rules;
     std::map<std::string, float> vars;         // $pes_push, etc.
     int menuKey = VK_INSERT;
@@ -92,6 +101,14 @@ void KeyActionUnlocked(KeyBind& k, int action);    // menu: alternar / ciclar (c
 void UpdateTimeParams();                        // reloj del partido, viento, etc.
 void OnTurfDrawn();
 double Now();
+// presets por estadio (presets.cpp)
+bool ReadPreset(const std::wstring& path, PresetFile& out);
+bool ApplyPresetFile(const std::string& file);
+void ClearPreset();
+void ScanPresets(std::vector<PresetFile>& out);
+void PollMatch();                               // cada ~1 s: match.ini -> preset del estadio
+bool SavePresetForMatch(const std::string& name, const std::string& author, bool onlyThisTime, std::string& outFile);
+bool DeletePresetFile(const std::string& file);
 
 // ---------------------------------------------------------------- d3d
 bool InstallHooks();

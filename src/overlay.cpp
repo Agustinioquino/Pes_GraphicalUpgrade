@@ -158,6 +158,75 @@ static void DrawGroup(MenuGroup& g, int gid) {
     ImGui::PopID();
 }
 
+// --- pestana Presets: preset por estadio (se aplica solo cuando Sider informa el estadio) ---
+static int s_presetPending = 0; static std::string s_presetPendingFile;
+static char s_pName[96] = "", s_pAuthor[64] = "";
+static bool s_pOnlyTime = false;
+static std::vector<PresetFile> s_presets; static double s_presetsT = 0;
+static std::string s_pStatus;
+static void DrawPresetsTab() {
+    // se llama con g_cfgMutex tomado por DrawMenu; las operaciones de archivo que toman el mutex se difieren
+    static int pending = 0; static std::string pendingFile;   // 1 aplicar, 2 borrar, 3 quitar, 4 guardar
+    const MatchInfo& m = g_cfg.match;
+    ImGui::TextWrapped("Un preset guarda todos los interruptores y sliders del menu para un estadio. Cuando Sider avisa en que estadio se juega, el mod lo aplica solo; al cambiar a un estadio sin preset vuelve a tus valores.");
+    ImGui::Spacing();
+    if (!m.known) {
+        ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.35f, 1), "Sin datos del partido.");
+        ImGui::TextWrapped("Falta el modulo de Sider: copiar PES21FX_match.lua a la carpeta modules de Sider y agregar  lua.module = \"PES21FX_match.lua\"  en sider.ini. Hasta que empiece un partido tampoco hay datos.");
+    } else if (m.stadium < 0) {
+        ImGui::TextDisabled("Todavia no empezo un partido (sin estadio).");
+    } else {
+        ImGui::Text("Estadio actual: id %d", m.stadium);
+        ImGui::SameLine(); ImGui::TextDisabled("  %s  |  %s", m.timeofday == 1 ? "noche" : m.timeofday == 0 ? "dia" : "hora ?", m.weather == 1 ? "lluvia" : m.weather == 0 ? "despejado" : "clima ?");
+    }
+    if (!g_cfg.presetActive.file.empty()) {
+        ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.55f, 1), "Preset activo: %s", g_cfg.presetActive.name.empty() ? g_cfg.presetActive.file.c_str() : g_cfg.presetActive.name.c_str());
+        if (!g_cfg.presetActive.author.empty()) { ImGui::SameLine(); ImGui::TextDisabled(" por %s", g_cfg.presetActive.author.c_str()); }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Quitar (volver a mis valores)")) pending = 3;
+        ImGui::TextDisabled("Ojo: con un preset activo, el boton Guardar de arriba escribe estos valores como tuyos.");
+    } else {
+        ImGui::TextDisabled("Preset activo: ninguno (tus valores).");
+    }
+    ImGui::Separator();
+    if (s_fontBold) ImGui::PushFont(s_fontBold);
+    ImGui::TextUnformatted("Guardar los valores actuales como preset de este estadio");
+    if (s_fontBold) ImGui::PopFont();
+    ImGui::SetNextItemWidth(300); ImGui::InputText("Nombre", s_pName, sizeof(s_pName));
+    ImGui::SetNextItemWidth(300); ImGui::InputText("Autor", s_pAuthor, sizeof(s_pAuthor));
+    ImGui::Checkbox("Solo para esta hora (dia / noche)", &s_pOnlyTime);
+    ImGui::SameLine(); ImGui::TextDisabled("(?)"); if (ImGui::IsItemHovered()) ImGui::SetTooltip("Marcado: el preset vale solo de dia o solo de noche (segun el partido actual).\nSin marcar: vale para el estadio a cualquier hora.");
+    ImGui::BeginDisabled(m.stadium < 0);
+    if (ImGui::Button("Guardar preset para este estadio", ImVec2(280, 0))) pending = 4;
+    ImGui::EndDisabled();
+    if (!s_pStatus.empty()) ImGui::TextDisabled("%s", s_pStatus.c_str());
+    ImGui::Separator();
+    if (s_fontBold) ImGui::PushFont(s_fontBold);
+    ImGui::TextUnformatted("Presets instalados");
+    if (s_fontBold) ImGui::PopFont();
+    ImGui::TextDisabled("Carpeta PES21FX\\presets. Para compartir uno: pasar el archivo; el otro lo copia ahi y listo.");
+    if (Now() - s_presetsT > 2.0) { s_presetsT = Now(); ScanPresets(s_presets); }
+    if (s_presets.empty()) ImGui::TextDisabled("(ninguno)");
+    int id = 0;
+    for (auto& p : s_presets) {
+        ImGui::PushID(id++);
+        bool active = p.file == g_cfg.presetActive.file;
+        if (active) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.85f, 0.55f, 1));
+        ImGui::Text("%s", p.name.empty() ? p.file.c_str() : p.name.c_str());
+        if (active) ImGui::PopStyleColor();
+        ImGui::SameLine(); ImGui::TextDisabled("  %s%s%s  estadio %d%s  (%d valores)", p.author.empty() ? "" : "por ", p.author.c_str(), p.author.empty() ? "" : "  |", p.stadium, p.timeofday == 1 ? " noche" : p.timeofday == 0 ? " dia" : "", (int)p.values.size());
+        ImGui::SameLine(ImGui::GetWindowWidth() - 150);
+        if (ImGui::SmallButton("Aplicar")) { pending = 1; pendingFile = p.file; }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Borrar")) { pending = 2; pendingFile = p.file; }
+        ImGui::PopID();
+    }
+    // acciones diferidas: se ejecutan despues de soltar g_cfgMutex (ver DrawMenu)
+    if (pending) {
+        s_presetPending = pending; s_presetPendingFile = pendingFile; pending = 0;
+    }
+}
+
 static void DrawMenu() {
     ImGui::SetNextWindowSize(ImVec2(640, 760), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos(ImVec2(40, 60), ImGuiCond_FirstUseEver);
@@ -218,6 +287,12 @@ static void DrawMenu() {
                 ImGui::EndChild();
                 ImGui::EndTabItem();
             }
+        }
+        if (ImGui::BeginTabItem("Presets")) {
+            ImGui::BeginChild("scrollP", ImVec2(0, 0), ImGuiChildFlags_None);
+            DrawPresetsTab();
+            ImGui::EndChild();
+            ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Avanzado")) {
             ImGui::BeginChild("scroll2", ImVec2(0, 0), ImGuiChildFlags_None);
@@ -295,6 +370,15 @@ void OverlayPresent(IDXGISwapChain* sc) {
     ImGui::NewFrame();
     ImGui::GetIO().MouseDrawCursor = true;
     DrawMenu();
+    if (s_presetPending) {
+        int a = s_presetPending; s_presetPending = 0;
+        std::string f = s_presetPendingFile, out;
+        if (a == 1) s_pStatus = ApplyPresetFile(f) ? "Preset aplicado: " + f : "No se pudo leer " + f;
+        else if (a == 2) s_pStatus = DeletePresetFile(f) ? "Borrado: " + f : "No se pudo borrar " + f;
+        else if (a == 3) { ClearPreset(); s_pStatus = "Preset quitado: tus valores."; }
+        else if (a == 4) s_pStatus = SavePresetForMatch(s_pName, s_pAuthor, s_pOnlyTime, out) ? "Guardado en presets\\" + out : "No se pudo guardar (sin estadio?)";
+        s_presetsT = 0;
+    }
     {
         std::lock_guard<std::mutex> lk(g_cfgMutex);
         if (g_cfg.clothDirty && Now() - g_cfg.clothChangeT > 0.4) SaveCloth();

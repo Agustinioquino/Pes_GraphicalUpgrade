@@ -28,11 +28,22 @@ Uso
 - Pestana "Ropa (fisica)": si tenes el mod de fisica de ropa (cloth-mod), ajusta su cloth.ini
   en vivo (holgura, mangas, short, viento, gravedad, distancia). Sin ese mod no aparece nada.
 
+Presets por estadio
+-------------------
+- Pestana "Presets" del menu (Insert): guarda todos los valores del menu para el estadio actual,
+  con nombre y autor, en PES21FX\presets\stadium_<id>.ini (o _day / _night si es solo de dia o de noche).
+  Al jugar en ese estadio el mod los aplica solo; en un estadio sin preset vuelve a tus valores.
+- Para que el mod sepa en que estadio estas hace falta un modulo chico de Sider (viene en la carpeta sider):
+  copiar sider\PES21FX_match.lua a la carpeta modules de tu Sider y agregar en sider.ini la linea
+      lua.module = "PES21FX_match.lua"
+- Compartir un preset = pasar ese archivo .ini. Quien lo recibe lo copia en su PES21FX\presets y listo.
+
 Desinstalar
 -----------
 Con el juego cerrado, en la carpeta del juego:
 1. Borrar d3d11.dll (es lo que carga el mod; sin el, el juego arranca como si no existiera).
 2. Borrar la carpeta PES21FX (opcional: sin el d3d11.dll no se usa).
+   Si usabas presets: borrar tambien modules\PES21FX_match.lua y su linea de sider.ini.
 3. Si habias renombrado un d3d11.dll anterior (3DMigoto u otro), devolverle el nombre.
 Dream Patch, Sider y el mod de fisica de ropa no se tocan.
 Ojo: lo que cambies en la pestana "Ropa (fisica)" queda guardado en cloth-mod\cloth.ini

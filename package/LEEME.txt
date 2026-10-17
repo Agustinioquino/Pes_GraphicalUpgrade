@@ -32,6 +32,15 @@ Uso
 - Las mismas teclas de antes siguen funcionando (estan en PES21FX.ini).
 - Para editar un shader: PES21FX\shaders\<hash>-ps_replace.txt y "Recargar shaders" en el menu.
 
+Presets por estadio
+-------------------
+- Pestana "Presets" del menu: guarda todos los valores del menu para el estadio actual (nombre y autor
+  opcionales) en PES21FX\presets\stadium_<id>.ini (o _day / _night si es solo para esa hora).
+  Al entrar a ese estadio el mod los aplica solo; en un estadio sin preset vuelve a tus valores.
+- Para que el mod sepa el estadio hace falta el modulo de Sider  sider\PES21FX_match.lua :
+  copiarlo a la carpeta modules de Sider y agregar en sider.ini:   lua.module = "PES21FX_match.lua"
+- Compartir un preset = pasar ese archivo .ini; el otro lo copia en su PES21FX\presets y listo.
+
 Notas
 -----
 - La fisica de ropa (cloth-mod, dsound.dll) sigue igual, es independiente.
