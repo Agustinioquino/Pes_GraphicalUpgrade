@@ -28,7 +28,11 @@ local function write_match(ctx, o)
     if text == last then return end
     -- 1) PES21FX junto al exe (cwd del juego); 2) relativo a la carpeta de Sider
     local paths = { "PES21FX\\match.ini" }
-    if ctx.sider_dir then table.insert(paths, ctx.sider_dir .. "..\\PES21FX\\match.ini") end
+    if ctx.sider_dir then
+        local sd = tostring(ctx.sider_dir)
+        if sd:sub(-1) ~= "\\" and sd:sub(-1) ~= "/" then sd = sd .. "\\" end
+        table.insert(paths, sd .. "..\\PES21FX\\match.ini")
+    end
     for _, p in ipairs(paths) do
         local f = io.open(p, "wb")
         if f then

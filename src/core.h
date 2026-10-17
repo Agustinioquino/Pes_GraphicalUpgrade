@@ -133,13 +133,14 @@ struct ShaderEntry {
 std::vector<const ShaderEntry*> AllShaders();
 
 // catalogo de shaders (catalog.cpp)
-extern std::atomic<bool> g_catalogActive;
+extern std::atomic<bool> g_catalogActive, g_catalogHook;
 extern std::string g_catalogStatus;
 void CatalogStart();
 bool CatalogStop(UINT bbW, UINT bbH, std::vector<const ShaderEntry*> all);
 void CatalogDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, const ShaderEntry* ps, UINT verts, int kind, UINT inst);
 void CatalogCS(const ShaderEntry* cs);
 void CatalogPresent();
+void CatalogDumpCBs();                           // proximo cuadro: volcar los cbuffers de composicion y luz del sol
 
 struct DeviceState {
     ID3D11Device* dev = nullptr;

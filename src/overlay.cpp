@@ -377,6 +377,9 @@ static void DrawMenu() {
         }
         ImGui::PopStyleColor();
     }
+    ImGui::SameLine();
+    if (ImGui::Button("Volcar cbuffers", ImVec2(130, 0))) CatalogDumpCBs();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Escribe catalog\\cbuffers.txt: los valores que el motor le pasa a la composicion y a la luz del sol\n(sol, exposicion, niebla, matrices de sombra) con el nombre de cada campo. Hacelo con un partido en pantalla.");
     if (!g_catalogStatus.empty()) { ImGui::SameLine(); ImGui::TextDisabled("%s", g_catalogStatus.c_str()); }
     ImGui::Spacing();
 
