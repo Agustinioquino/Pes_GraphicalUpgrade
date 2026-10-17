@@ -361,6 +361,23 @@ static void DrawMenu() {
     ImGui::SameLine();
     if (ImGui::Checkbox("Tutoriales", &g_cfg.tutorials)) { SaveOption("tutorials", g_cfg.tutorials ? "1" : "0"); if (g_cfg.tutorials) s_tutDone.clear(); }
     if (!s_status.empty()) ImGui::TextDisabled("%s", s_status.c_str());
+    // --- catalogo de shaders: capturar lo que se dibuja y escribir las fichas ---
+    if (!g_catalogActive) {
+        if (ImGui::Button("Capturar shaders", ImVec2(150, 0))) CatalogStart();
+        ImGui::SameLine(); ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Anota cada shader que se dibuja (render target, vertices, orden) mientras jugas.\nDetener escribe PES21FX\\catalog\\shaders.txt con una ficha por shader (rol, cbuffers, texturas, uso)\ny catalog\\frame.txt con la linea de tiempo del ultimo cuadro. Pasalo a Claude para que sepa que toca cada uno.");
+    } else {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.25f, 0.2f, 1));
+        if (ImGui::Button("Detener y escribir catalogo", ImVec2(230, 0))) {
+            UINT w = 0, h = 0;
+            if (s_rtv) { ID3D11Resource* res = nullptr; s_rtv->GetResource(&res); ID3D11Texture2D* t = nullptr;
+                if (res && SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t)) && t) { D3D11_TEXTURE2D_DESC d; t->GetDesc(&d); w = d.Width; h = d.Height; t->Release(); }
+                if (res) res->Release(); }
+            CatalogStop(w, h, AllShaders());
+        }
+        ImGui::PopStyleColor();
+    }
+    if (!g_catalogStatus.empty()) { ImGui::SameLine(); ImGui::TextDisabled("%s", g_catalogStatus.c_str()); }
     ImGui::Spacing();
 
     std::lock_guard<std::mutex> lk(g_cfgMutex);

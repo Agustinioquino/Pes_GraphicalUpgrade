@@ -4,6 +4,7 @@
 #include <d3d11.h>
 #include <dxgi.h>
 #include <atomic>
+#include <memory>
 #include <cstdint>
 #include <map>
 #include <mutex>
@@ -118,6 +119,27 @@ void OnDeviceCreated(ID3D11Device* d);
 void ReloadShaders();
 void WatchShaderFolder();                      // recarga sola los shaders que cambian en disco
 std::wstring ShaderPath(uint64_t hash, const char* type);   // shaders\<hash>-ps_replace.txt
+
+// un shader creado por el juego (tabla en hooks.cpp)
+struct Rule;
+struct ShaderEntry {
+    uint64_t hash = 0;
+    char type = 0;                       // 'p' 'v' 'c'
+    ID3D11DeviceChild* repl = nullptr;   // nuestro shader (o null)
+    const Rule* rule = nullptr;
+    ID3D11Device* dev = nullptr;         // dispositivo que lo creo
+    std::shared_ptr<std::vector<uint8_t>> code;   // bytecode original (para el catalogo: reflexion)
+};
+std::vector<const ShaderEntry*> AllShaders();
+
+// catalogo de shaders (catalog.cpp)
+extern std::atomic<bool> g_catalogActive;
+extern std::string g_catalogStatus;
+void CatalogStart();
+bool CatalogStop(UINT bbW, UINT bbH, std::vector<const ShaderEntry*> all);
+void CatalogDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, const ShaderEntry* ps, UINT verts, int kind, UINT inst);
+void CatalogCS(const ShaderEntry* cs);
+void CatalogPresent();
 
 struct DeviceState {
     ID3D11Device* dev = nullptr;

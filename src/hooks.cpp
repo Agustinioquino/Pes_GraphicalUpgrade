@@ -102,18 +102,17 @@ static ID3DBlob* CompileFile(uint64_t hash, const char* type, const char* profil
 }
 
 // ---------------------------------------------------------------- tabla de shaders creados por el juego
-struct ShaderEntry {
-    uint64_t hash = 0;
-    char type = 0;                       // 'p' 'v' 'c'
-    ID3D11DeviceChild* repl = nullptr;   // nuestro shader (o null)
-    const Rule* rule = nullptr;
-    ID3D11Device* dev = nullptr;         // dispositivo que lo creo
-};
 static std::unordered_map<void*, ShaderEntry> s_shaders;   // nodos estables: los punteros a ShaderEntry no se invalidan
 static std::shared_mutex s_shMutex;
 static std::vector<IUnknown*> s_deferredRelease;
 static std::mutex s_releaseMutex;
 
+std::vector<const ShaderEntry*> AllShaders() {
+    std::shared_lock<std::shared_mutex> lk(s_shMutex);
+    std::vector<const ShaderEntry*> v; v.reserve(s_shaders.size());
+    for (auto& kv : s_shaders) v.push_back(&kv.second);
+    return v;
+}
 static const ShaderEntry* FindShader(void* p) {
     if (!p) return nullptr;
     std::shared_lock<std::shared_mutex> lk(s_shMutex);
@@ -246,6 +245,7 @@ static ID3D11DeviceChild* BuildReplacement(ID3D11Device* dev, uint64_t h, char t
 static void Register(ID3D11Device* dev, void* obj, const void* code, SIZE_T len, char type) {
     if (!obj || !code) return;
     ShaderEntry e; e.hash = Fnv64(code, len); e.type = type; e.dev = dev;
+    e.code = std::make_shared<std::vector<uint8_t>>((const uint8_t*)code, (const uint8_t*)code + len);
     e.repl = BuildReplacement(dev, e.hash, type);
     e.rule = RuleFor(e.hash);
     std::unique_lock<std::shared_mutex> lk(s_shMutex);
@@ -289,6 +289,7 @@ template<int V> static void STDMETHODCALLTYPE hk_SetVS(ID3D11DeviceContext* c, I
 }
 template<int V> static void STDMETHODCALLTYPE hk_SetCS(ID3D11DeviceContext* c, ID3D11ComputeShader* s, ID3D11ClassInstance* const* ci, UINT n) {
     const ShaderEntry* e = FindShader(s);
+    CatalogCS(e);
     if (e && e->repl && !g_cfg.bypass) {
         o_SetCS[V](c, (ID3D11ComputeShader*)e->repl, ci, n);
         if (e->dev == g_dev.dev && g_dev.paramSRV) { ID3D11ShaderResourceView* v = g_dev.paramSRV; c->CSSetShaderResources(120, 1, &v); }
@@ -391,11 +392,11 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (vs && vs->rule) RunRule(c, vs, d);
     return d.n > 0;
 }
-#define FX_DRAW(call) DrawScope ds; bool r = BeforeDraw(c, ds); call; if (r) Restore(c, ds);
-template<int V> static void STDMETHODCALLTYPE hk_DrawIdx(ID3D11DeviceContext* c, UINT a, UINT b, INT d) { FX_DRAW(o_DrawIdx[V](c, a, b, d)) }
-template<int V> static void STDMETHODCALLTYPE hk_Draw(ID3D11DeviceContext* c, UINT a, UINT b) { FX_DRAW(o_Draw[V](c, a, b)) }
-template<int V> static void STDMETHODCALLTYPE hk_DrawIdxInst(ID3D11DeviceContext* c, UINT a, UINT b, UINT d, INT e, UINT f) { FX_DRAW(o_DrawIdxInst[V](c, a, b, d, e, f)) }
-template<int V> static void STDMETHODCALLTYPE hk_DrawInst(ID3D11DeviceContext* c, UINT a, UINT b, UINT d, UINT e) { FX_DRAW(o_DrawInst[V](c, a, b, d, e)) }
+#define FX_DRAW(verts, kind, inst, call) if (g_catalogActive) { CtxState& cs_ = Ctx(c); CatalogDraw(c, cs_.vs, cs_.ps, verts, kind, inst); } DrawScope ds; bool r = BeforeDraw(c, ds); call; if (r) Restore(c, ds);
+template<int V> static void STDMETHODCALLTYPE hk_DrawIdx(ID3D11DeviceContext* c, UINT a, UINT b, INT d) { FX_DRAW(a, 1, 1, o_DrawIdx[V](c, a, b, d)) }
+template<int V> static void STDMETHODCALLTYPE hk_Draw(ID3D11DeviceContext* c, UINT a, UINT b) { FX_DRAW(a, 0, 1, o_Draw[V](c, a, b)) }
+template<int V> static void STDMETHODCALLTYPE hk_DrawIdxInst(ID3D11DeviceContext* c, UINT a, UINT b, UINT d, INT e, UINT f) { FX_DRAW(a, 3, b, o_DrawIdxInst[V](c, a, b, d, e, f)) }
+template<int V> static void STDMETHODCALLTYPE hk_DrawInst(ID3D11DeviceContext* c, UINT a, UINT b, UINT d, UINT e) { FX_DRAW(a, 2, b, o_DrawInst[V](c, a, b, d, e)) }
 
 // ---------------------------------------------------------------- instalacion sobre vtables
 static std::set<void*> s_hookedFns;
@@ -559,6 +560,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     UploadParams();
     WatchShaderFolder();
     PollMatch();
+    CatalogPresent();
     OverlayPresent(sc);
     return o_Present(sc, sync, flags);
 }
