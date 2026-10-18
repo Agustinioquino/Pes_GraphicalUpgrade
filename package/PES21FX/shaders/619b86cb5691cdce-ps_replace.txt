@@ -601,14 +601,14 @@ void main(
   o0.w = 1;
   { float dbg = IniParams.Load(int2(12,0)).w;
     if (dbg > 1.5 && dbg < 2.5) o0.xyz = giDbg * 3.0;   // w12 = 2: ver solo el rebote de luz
-    // w12 = 3 (Ctrl+Alt+F11): brujula del sol arriba a la derecha. Linea = hacia donde esta el sol en pantalla;
+    // w12 = 3 (Ctrl+Alt+F11): brujula del sol arriba al centro. Linea = hacia donde esta el sol en pantalla;
     // punto AMARILLO = el sol esta adelante de la camara (contraluz), CELESTE = detras de la camara (luz frontal);
     // barra inferior = altura del sol sobre el horizonte (llena = cenit). Si no hay sol (noche) no se dibuja.
     if (dbg > 2.5 && dbg < 3.5 && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {
       float3 Ld = normalize(pLc_dir.xyz);
       float2 res = g_psSystem.m_renderInfo.xy;
       float R = res.y * 0.09;
-      float2 C = float2(res.x - R * 1.6, R * 1.6);
+      float2 C = float2(res.x * 0.5, R * 1.6);   // centro arriba (la esquina derecha la tapa el logo de la transmision)
       float2 d = v0.xy - C;
       float r = length(d);
       float2 sd = float2(Ld.x, -Ld.y);
