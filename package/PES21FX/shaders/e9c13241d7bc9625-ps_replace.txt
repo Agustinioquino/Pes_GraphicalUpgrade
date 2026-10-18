@@ -392,6 +392,21 @@ void main(
   { float4 SH = IniParams.Load(int2(20,0));   // PES21 (Claude): definicion de sombras, x20 fuerza, w20 on/off
     if (SH.w > 0.5 && pesShScale < 1.01) { float sd = saturate(SH.x) * 1.0; float lo = 0.3 * sd;
       r0.x = lerp(r0.x, smoothstep(lo, 1.0 - lo, r0.x), sd); } }   // solo la penumbra (0 y 1 no cambian)
+  // === PES21 sombra de nubes (18/10): la misma capa de nubes del cielo tapa el sol en la cancha (z85 = fuerza) ===
+  { PESCloudParams CPs = PESCloudLoad(g_psSystem.m_timeParam.z); float cK = saturate(IniParams.Load(int2(85,0)).z);
+    if (CPs.on > 0.5 && cK > 0.001) {
+      float dC0 = g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, uvG, 0).x;
+      float zC0 = g_psScene.m_projectionParam.z / (dC0 - g_psScene.m_projectionParam.w);
+      float3 PvC = float3((v0.xy / v0.ww - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zC0, zC0);
+      float3 vXc = float3(g_psScene.m_view._m00, g_psScene.m_view._m01, g_psScene.m_view._m02);
+      float3 vYc = float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12);
+      float3 vZc = float3(g_psScene.m_view._m20, g_psScene.m_view._m21, g_psScene.m_view._m22);
+      float3 pWc = g_psScene.m_eyepos.xyz + float3(dot(PvC, vXc), dot(PvC, vYc), dot(PvC, vZc));
+      float3 Lc0 = normalize(g_psLight.m_lightDir0.xyz);
+      float3 sunWc = normalize(float3(dot(Lc0, vXc), dot(Lc0, vYc), dot(Lc0, vZc)));
+      float cT = PESCloudShadow(pWc, sunWc, CPs);
+      r0.x *= lerp(1.0, cT, cK);
+    } }
   r0.y = r0.x * r0.x;
   r7.xy = float2(-0,-0);
   r7.zw = -g_psLight.m_lightSourceParam3.xy;
