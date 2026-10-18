@@ -44,6 +44,7 @@ struct MenuSlider {
     int idx, comp; std::string label; float lo, hi;
     std::string help, fmt = "%.2f";
     std::vector<std::string> options;      // si no esta vacio: selector (valor = indice de la opcion)
+    std::vector<float> optVals;            // si no esta vacio: valor de cada opcion ("Etiqueta=valor")
     std::string ext;                       // "seccion.clave" de cloth-mod\cloth.ini (si no esta vacio no usa idx/comp)
     float def = 0;                         // valor de fabrica si la clave no esta en cloth.ini
 };
@@ -169,6 +170,11 @@ extern DeviceState g_dev;
 
 // ---------------------------------------------------------------- overlay
 void OverlayPresent(IDXGISwapChain* sc);
+// prueba automatica del menu (menutest.cpp)
+void MenuTestPresent(IDXGISwapChain* sc);
+void MenuTestStart(); void MenuTestStop(); bool MenuTestActive();
+int MenuTestCount(int what); float MenuTestNoise(); const std::string& MenuTestStatus();
+size_t MenuTestResults(); bool MenuTestResult_(size_t i, std::string& group, std::string& section, float& diff, int& state);
 LRESULT OverlayWndProc(HWND, UINT, WPARAM, LPARAM, bool& handled);
 extern std::atomic<bool> g_menuOpen;
 extern std::atomic<int> g_replacedCount, g_failedCount;

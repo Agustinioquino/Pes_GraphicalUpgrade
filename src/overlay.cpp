@@ -1,6 +1,7 @@
 // PES21 FX - menu en pantalla (Dear ImGui). Tecla Insert (o menu_key en [PES21FX] de PES21FX.ini).
 #include "core.h"
 #include <set>
+#include <cmath>
 #include <imgui.h>
 #include <imgui_impl_dx11.h>
 #include <imgui_impl_win32.h>
@@ -132,11 +133,12 @@ static void DrawGroup(MenuGroup& g, int gid) {
             ImGui::SetNextItemWidth(w - 70);
             if (!sl.options.empty()) {
                 int cur = (int)(val + 0.5f); if (cur < 0) cur = 0; if (cur >= (int)sl.options.size()) cur = (int)sl.options.size() - 1;
+                if (!sl.optVals.empty()) { cur = 0; for (int oi = 1; oi < (int)sl.optVals.size(); oi++) if (fabsf(sl.optVals[oi] - val) < fabsf(sl.optVals[cur] - val)) cur = oi; }
                 std::string prev = Utf8(sl.options[cur]);
                 if (ImGui::BeginCombo("##c", prev.c_str())) {
                     for (int oi = 0; oi < (int)sl.options.size(); oi++) {
                         bool sel = oi == cur;
-                        if (ImGui::Selectable(Utf8(sl.options[oi]).c_str(), sel)) val = (float)oi;
+                        if (ImGui::Selectable(Utf8(sl.options[oi]).c_str(), sel)) val = sl.optVals.empty() ? (float)oi : sl.optVals[oi];
                         if (sel) ImGui::SetItemDefaultFocus();
                     }
                     ImGui::EndCombo();
@@ -167,6 +169,10 @@ static const char* TutorialFor(const std::string& sec) {
         "Como funciona: cada tarjeta es una mejora de luz con su interruptor (arriba a la derecha) y sus sliders. El (?) al lado de cada slider explica que hace. Ctrl+clic sobre un slider para escribir un numero.\n"
         "Por donde empezar: 1) 'Luz de borde en jugadores' y 'Luz de cielo' son las que mas se notan. 2) 'Atmosfera con sol dinamico' arregla el azul del fondo y el sol apagado en partidos de tarde. 3) 'Rebote de luz' (SSGI) es el mas caro en FPS: si el juego se traba, apagalo.\n"
         "Como probar: abri una repeticion o una cinematica de cerca, move un slider y mira al jugador; los shaders se actualizan al instante. 'Ver original' (arriba) compara con el juego sin el mod.";
+    if (sec.rfind("Diagn", 0) == 0) return
+        "Que hay aca: herramientas para ver que esta haciendo el mod, no para jugar. 'Vista de diagnostico' pinta informacion sobre la imagen (brujula del sol, grosor de la piel, rebote de luz). 'Probar todo el menu' toca cada grupo y mide si cambia la imagen.\n"
+        "Como probar el menu: pausa una repeticion con jugadores de cerca, no toques la camara y apreta 'Probar todo el menu'. Tarda unos 30 segundos y te lista que grupos cambian la imagen en esa escena. 'Sin efecto' no siempre es un error: un grupo de piel no cambia nada si no hay piel en pantalla, y uno de noche no hace nada de dia.\n"
+        "Consejo: cuando termines, volve la vista a 'Ninguna'.";
     if (sec.rfind("Sombras", 0) == 0) return
         "Que hay aca: el filtro del shadow map del juego (borde, nitidez, penumbra), las sombras de contacto (las finas que el shadow map no resuelve: cuello, brazo sobre el torso, botin contra el pasto) y los ajustes para el sol en movimiento del Daylight Engine.\n"
         "Por donde empezar: 1) 'Sombras de contacto': subi 'Largo' a 0.8 y mira el brazo sobre el cuerpo. 2) Si ves rayas con el sol bajo, 'Sol dinamico' > 'Sesgo por pendiente' mas alto. 3) Si la sombra flota bajo los pies, bajalo.\n"
@@ -400,6 +406,30 @@ static void DrawMenu() {
                 ImGui::BeginChild("scroll", ImVec2(0, 0), ImGuiChildFlags_None);
                 DrawTutorial(sname);
                 if (sname.rfind("Ropa", 0) == 0 && !g_cfg.clothStatus.empty()) { ImGui::TextDisabled("%s", g_cfg.clothStatus.c_str()); ImGui::Spacing(); }
+                if (sname.rfind("Diagn", 0) == 0) {
+                    ImGui::TextWrapped("Prueba automatica: toca cada grupo del menu (su interruptor o su primer deslizador), espera unos cuadros y mide si la imagen cambia. Pausa una repeticion con jugadores de cerca antes de correrla; tarda unos 30 segundos.");
+                    if (!MenuTestActive()) { if (ImGui::Button("Probar todo el menu", ImVec2(180, 0))) MenuTestStart(); }
+                    else { if (ImGui::Button("Cancelar", ImVec2(180, 0))) MenuTestStop(); }
+                    ImGui::SameLine(); ImGui::TextUnformatted(Utf8(MenuTestStatus()).c_str());
+                    size_t nres = MenuTestResults();
+                    if (nres) {
+                        ImGui::TextDisabled("ruido de la escena: %.4f (si es alto, la camara se movio: pausa y repeti)", MenuTestNoise());
+                        if (ImGui::BeginTable("mt", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+                            for (size_t i = 0; i < nres; i++) {
+                                std::string grp, sec; float df; int st;
+                                if (!MenuTestResult_(i, grp, sec, df, st)) break;
+                                ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted(Utf8(sec).c_str());
+                                ImGui::TableSetColumnIndex(1); ImGui::TextUnformatted(Utf8(grp).c_str());
+                                ImGui::TableSetColumnIndex(2);
+                                if (st == 1) ImGui::TextColored(ImVec4(0.45f, 0.9f, 0.45f, 1), "cambia la imagen (%.4f)", df);
+                                else if (st == 0) ImGui::TextColored(ImVec4(0.95f, 0.5f, 0.4f, 1), "sin efecto en esta escena (%.4f)", df);
+                                else ImGui::TextDisabled("no se prueba (ropa)");
+                            }
+                            ImGui::EndTable();
+                        }
+                    }
+                    ImGui::Spacing();
+                }
                 if (sname.rfind("Cancha", 0) == 0) { ImGui::TextDisabled("Pasto: parcelas lejanas del juego escaladas: %d en 3 s. Extendido: %d parcelas/cuadro (anillos %d/%d/%d), variante %u idx, camara %s (%.0f, %.0f), estado: %s", g_grassDbg.sparseLast, g_grassDbg.patches, g_grassDbg.ring[0], g_grassDbg.ring[1], g_grassDbg.ring[2], g_grassDbg.lod, g_grassDbg.cam ? "ok" : "no", g_grassDbg.ex, g_grassDbg.ez, g_grassDbg.why ? g_grassDbg.why : "-"); ImGui::Spacing(); }
                 int gid = 0;
                 for (auto& g : g_cfg.groups) { std::string s2 = g.section.empty() ? "Otros" : g.section; if (s2 == sname) DrawGroup(g, gid); gid++; }

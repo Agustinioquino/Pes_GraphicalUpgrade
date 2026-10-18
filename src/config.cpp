@@ -173,6 +173,9 @@ bool LoadConfig() {
                         if (parts.size() >= 3) { std::string o; for (char ch : parts[2]) { if (ch == ';') { sl.options.push_back(Trim(o)); o.clear(); } else o += ch; } if (!Trim(o).empty()) sl.options.push_back(Trim(o)); }
                         if (parts.size() >= 4) sl.help = parts[3];
                         sl.lo = 0; sl.hi = (float)sl.options.size() - 1;
+                        // "Etiqueta=valor": el selector asigna ese valor en vez del indice
+                        { bool anyEq = false; for (auto& o : sl.options) anyEq |= o.find('=') != std::string::npos;
+                          if (anyEq) for (auto& o : sl.options) { size_t e = o.rfind('='); if (e != std::string::npos) { sl.optVals.push_back((float)atof(o.substr(e + 1).c_str())); o = Trim(o.substr(0, e)); } else sl.optVals.push_back((float)sl.optVals.size()); } }
                     } else {
                         if (parts.size() >= 4) { sl.lo = (float)atof(parts[2].c_str()); sl.hi = (float)atof(parts[3].c_str()); }
                         if (parts.size() >= 5) sl.help = parts[4];
