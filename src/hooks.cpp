@@ -67,12 +67,37 @@ static std::wstring CachePath(uint64_t hash, const char* type, uint64_t srcHash)
     return g_cfg.baseDir + L"shaders\\cache\\" + b;
 }
 
+// #include "pes_common.hlsli" dentro de un shader: se busca en la carpeta shaders
+struct PesInclude : public ID3DInclude {
+    HRESULT __stdcall Open(D3D_INCLUDE_TYPE, LPCSTR file, LPCVOID, LPCVOID* data, UINT* bytes) override {
+        std::wstring w; for (const char* c = file; *c; c++) w.push_back((wchar_t)(unsigned char)*c);
+        std::string src;
+        if (!ReadFileA(g_cfg.baseDir + L"shaders\\" + w, src)) { Log("include no encontrado: shaders\\%s", file); return E_FAIL; }
+        char* buf = (char*)malloc(src.size() + 1); if (!buf) return E_OUTOFMEMORY;
+        memcpy(buf, src.data(), src.size()); buf[src.size()] = 0;
+        *data = buf; *bytes = (UINT)src.size();
+        return S_OK;
+    }
+    HRESULT __stdcall Close(LPCVOID data) override { free((void*)data); return S_OK; }
+};
+static PesInclude s_include;
+// hash de todos los .hlsli (si cambia un include, se recompila todo lo que lo usa)
+static uint64_t IncludesHash() {
+    uint64_t h = 0; WIN32_FIND_DATAW fd;
+    HANDLE f = FindFirstFileW((g_cfg.baseDir + L"shaders\\*.hlsli").c_str(), &fd);
+    if (f == INVALID_HANDLE_VALUE) return 0;
+    do { std::string src; if (ReadFileA(g_cfg.baseDir + L"shaders\\" + fd.cFileName, src)) h ^= Fnv64(src.data(), src.size()) * 0x9E3779B97F4A7C15ULL; } while (FindNextFileW(f, &fd));
+    FindClose(f);
+    return h;
+}
+
 static ID3DBlob* CompileFile(uint64_t hash, const char* type, const char* profile) {
     if (!s_compile) return nullptr;
     std::string src;
     std::wstring path = ShaderPath(hash, type);
     if (!ReadFileA(path, src)) return nullptr;
     uint64_t srcHash = Fnv64(src.data(), src.size()) ^ 0x5045533231465831ULL;
+    if (src.find("#include") != std::string::npos) srcHash ^= IncludesHash();
     std::wstring cpath = CachePath(hash, type, srcHash);
     {
         std::string bin;
@@ -83,7 +108,7 @@ static ID3DBlob* CompileFile(uint64_t hash, const char* type, const char* profil
     }
     ID3DBlob *code = nullptr, *err = nullptr;
     char name[64]; snprintf(name, sizeof(name), "%016llx-%s_replace.txt", (unsigned long long)hash, type);
-    HRESULT hr = s_compile(src.data(), src.size(), name, nullptr, nullptr, "main", profile,
+    HRESULT hr = s_compile(src.data(), src.size(), name, nullptr, &s_include, "main", profile,
                            D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &err);
     if (FAILED(hr)) {
         std::string e = err ? std::string((const char*)err->GetBufferPointer(), err->GetBufferSize()) : "error desconocido";
@@ -629,10 +654,14 @@ void WatchShaderFolder() {
     static double next = 0; static ULONGLONG lastSig = 0;
     double t = Now(); if (t < next) return; next = t + 1.0;
     WIN32_FIND_DATAW fd; ULONGLONG sig = 0; int n = 0;
-    HANDLE h = FindFirstFileW((g_cfg.baseDir + L"shaders\\*_replace.txt").c_str(), &fd);
-    if (h == INVALID_HANDLE_VALUE) return;
-    do { ULONGLONG w = ((ULONGLONG)fd.ftLastWriteTime.dwHighDateTime << 32) | fd.ftLastWriteTime.dwLowDateTime; sig ^= w * 0x9E3779B97F4A7C15ULL + (++n); } while (FindNextFileW(h, &fd));
-    FindClose(h);
+    const wchar_t* masks[2] = { L"shaders\\*_replace.txt", L"shaders\\*.hlsli" };
+    for (int mi = 0; mi < 2; mi++) {
+        HANDLE h = FindFirstFileW((g_cfg.baseDir + masks[mi]).c_str(), &fd);
+        if (h == INVALID_HANDLE_VALUE) continue;
+        do { ULONGLONG w = ((ULONGLONG)fd.ftLastWriteTime.dwHighDateTime << 32) | fd.ftLastWriteTime.dwLowDateTime; sig ^= w * 0x9E3779B97F4A7C15ULL + (++n); } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    if (sig == 0) return;
     if (lastSig == 0) { lastSig = sig; return; }
     if (sig != lastSig) { lastSig = sig; Log("cambio en la carpeta de shaders: recargando"); ReloadShaders(); }
 }

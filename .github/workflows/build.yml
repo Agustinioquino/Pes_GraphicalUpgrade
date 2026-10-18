@@ -43,6 +43,41 @@ jobs:
           git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" buildlog
           exit 1
 
+      # compila cada shader con fxc (el mismo compilador que usa el juego) y publica los errores en shadercheck.txt
+      - name: Verificar shaders
+        id: shaders
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $fxc = Get-ChildItem "C:/Program Files (x86)/Windows Kits/10/bin/*/x64/fxc.exe" | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $fxc) { Write-Host "fxc no encontrado"; exit 0 }
+          $bad = 0; $n = 0
+          "" | Set-Content shadercheck.txt
+          Get-ChildItem package/PES21FX/shaders/*_replace.txt | ForEach-Object {
+            $n++
+            $t = if ($_.Name -match '-ps_') { 'ps_5_0' } elseif ($_.Name -match '-vs_') { 'vs_5_0' } else { 'cs_5_0' }
+            $r = & $fxc.FullName /nologo /T $t /E main /I package/PES21FX/shaders /Fo NUL $_.FullName 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) { $bad++; Add-Content shadercheck.txt ("==== " + $_.Name + "`n" + $r) }
+          }
+          Write-Host "shaders: $n, con errores: $bad"
+          if ($bad -gt 0) { Get-Content shadercheck.txt; exit 1 }
+
+      - name: Publicar errores de shaders
+        if: steps.shaders.outcome == 'failure'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path faillog | Out-Null
+          Copy-Item shadercheck.txt faillog/
+          cd faillog
+          git init -q
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git checkout -q -b buildlog
+          git add -A
+          git commit -q -m "shaders $env:GITHUB_SHA"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" buildlog
+          exit 1
+
       - name: Armar el paquete
         shell: pwsh
         run: |

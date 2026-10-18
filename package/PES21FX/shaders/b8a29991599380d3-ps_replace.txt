@@ -96,6 +96,7 @@ Texture2D<float4> g_WorldShadowMask : register(t13);
 #define cmp -
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
+#include "pes_common.hlsli"   // PES21 (18/10): curva del dia, transmision de piel, tamano del sol
 
 
 // === PES21 SOL: color del sol segun su altura (calido al atardecer, blanco calido al mediodia) ===
@@ -113,6 +114,8 @@ float3 PESSunColor() {
   float k = (sunReal ? saturate(S.z) : 0.0) * saturate((warmO - 0.85) * 4.0);   // de noche (luz fria de estadio) casi no toca
   float3 res = lerp(c, lum * tint / dot(tint, LW), k);
   res *= (S.w > 0 ? lerp(1.0, S.w, k) : 1.0);
+  // PES21 curva del dia (18/10): intensidad y calidez del sol segun su altura (solo sol real, no torres)
+  { PESDay dy = PESDayCurve(elev, saturate((warmO - 0.85) * 4.0)); res *= dy.sun; res = PESWarmTint(res, dy.warm); }
   // PES21 atmosfera (17/10): con el sol bajo el archivo de luz deja el sol muy apagado; y54 lo compensa (solo sol real,
   // no luz de torres), proporcional a lo bajo que esta.
   float4 ATM = IniParams.Load(int2(54,0));
@@ -180,6 +183,8 @@ void main(
   float sssBleed = P3.y;
   float skinSpec = P3.w > 0 ? P3.w : 1.0;
   float rawNdotL = 0, trans = 0, transFloor = 0, skinTag = 0, shadowScalar = 1;
+  float pesSunE = 1.0;   // PES21 sol de calidad (18/10): normalizacion de energia por el tamano del disco solar
+  float4 P64 = IniParams.Load(int2(64,0));   // x64 on | y64 diametro del sol (grados) | z64 transmision por shadow map | w64 densidad de la piel
 
   r0.xy = float2(-0.5,-0.5) + v2.xy;
   r0.zw = v1.xy / v1.ww;
@@ -457,9 +462,18 @@ void main(
   r2.x = saturate(max(r2.x, r2.w));
   r1.w = saturate(r1.w);
   r3.xyz = r2.xxx * r7.xyz;
+  // PES21 (18/10): curvatura en pantalla (cuanto gira la normal por metro); fuera de los if para poder usar derivadas
+  float pesCurv = 0.0;
+  { float3 nC = normalize(r3.xyw);
+    float dzC = g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, uvG, 0).x;
+    float zLC = abs(g_psScene.m_projectionParam.z / (dzC - g_psScene.m_projectionParam.w));
+    float mpp = max(zLC * g_psScene.m_projectionParam.x * 2.0 / max(g_psSystem.m_renderBuffer.x, 1.0), 1e-6);
+    pesCurv = saturate(length(fwidth(nC)) / mpp * 0.02); }   // radio de 2 cm = 1, frente (radio 10 cm) = 0.2
   bool isSkin = sssOn && (matType == 0) && (trans > 0.004) && (abs(skinTag - 0.98039) < 0.003);
   if (isSkin) {
     float3 w = saturate(trans) * sssWidth * float3(1.0, 0.6, 0.45);   // 16/10 (era 1/0.42/0.28): difusion mas pareja, menos tinte rojo
+    // PES21 piel pre-integrada (18/10): la dispersion depende de la curvatura real de la superficie (Penner 2011)
+    { float4 Q62 = IniParams.Load(int2(62,0)); if (Q62.x > 0.5 && Q62.w > 0.0) w *= lerp(1.0, 0.45 + 1.4 * pesCurv, saturate(Q62.w)); }
     float3 d = saturate((rawNdotL + w) / (1.0 + w));
     d = max(d, transFloor.xxx);
     r3.xyz = d * r7.xyz;
@@ -470,6 +484,7 @@ void main(
   r1.y = saturate(r1.y);
   r2.y = max(0.0199999996, r2.y);
   r2.y = r2.y * r2.y;
+  if (P64.x > 0.5 && P64.y > 0.0) { float eS; r2.y = PESSunWidenAlpha(r2.y, P64.y, eS); pesSunE = eS; }   // PES21: el sol no es un punto
   r4.x = 0.5 * r2.y;
   r4.y = r2.y * r2.y;
   r1.z = r1.z * r1.z;
@@ -486,6 +501,7 @@ void main(
   r1.y = r1.z * r1.y;
   r1.y = r1.y * r1.w;
   r1.y = 0.25 * r1.y;
+  r1.y *= pesSunE;   // PES21 sol de calidad
   r1.yzw = r1.yyy * r7.xyz;
   r1.yzw = r1.yzw * r2.xzw;
   float csDbg = 1.0;
@@ -618,7 +634,26 @@ void main(
     float3 Tr = exp(-(1.15 - thin) * sigT) * thin;
     float visT = lerp(0.25, 1.0, saturate(r0.x));   // la luz entra por el lado de atras aunque el frente este en sombra
     float3 transm = Tr * (0.65 * fwd + 0.35 * back) * P5.x * 2.0;
-    if (P34.w > 0.5) o0.xyz += transm * lightC * visT;
+    // PES21 transmision por shadow map (18/10, Jimenez 2010): el grosor real que atraviesa la luz = distancia entre lo
+    // que ve el sol (shadow map) y este pixel. Orejas y nariz se encienden solo cuando el sol esta realmente detras.
+    if (P64.x > 0.5 && P64.z > 0.0 && pesShCas > -0.5 && g_psScene.m_shadowMapResolutions.x > 1.0) {
+      float casS = pesShCas < 0.5 ? 1.0 : (pesShCas < 1.5 ? g_psScene.m_shadowProjection2._m03 : g_psScene.m_shadowProjection2._m13);
+      float refPerM = max(length(g_psScene.m_shadowProjection._m02_m12_m22) * abs(g_psScene.m_shadowProjection2._m30) * abs(casS), 1e-5);
+      float resS = g_psScene.m_shadowMapResolutions.x;
+      float2 txS = float2(1.0 / resS, 1.0 / (3.0 * resS));
+      float dS = g_ShadowTexture.SampleLevel(g_samplerPoint_Clamp_s, pesShUV, 0).x;
+      dS += g_ShadowTexture.SampleLevel(g_samplerPoint_Clamp_s, pesShUV + float2( txS.x, 0), 0).x;
+      dS += g_ShadowTexture.SampleLevel(g_samplerPoint_Clamp_s, pesShUV + float2(-txS.x, 0), 0).x;
+      dS += g_ShadowTexture.SampleLevel(g_samplerPoint_Clamp_s, pesShUV + float2(0,  txS.y), 0).x;
+      dS += g_ShadowTexture.SampleLevel(g_samplerPoint_Clamp_s, pesShUV + float2(0, -txS.y), 0).x;
+      dS *= 0.2;
+      float thickM = max(dS - pesShRef, 0.0) / refPerM;
+      float dens = (P64.w > 0 ? P64.w : 30.0) * (1.25 - thin);   // el mapa de SSS afina: orejas/nariz dejan pasar mas luz
+      float3 Tt = PESSkinTransmittance(thickM * dens);
+      float backL = saturate(0.3 + dot(L, -n)) * (1.0 - saturate(rawNdotL * 3.0));
+      float3 transSM = Tt * backL * P64.z * 0.8;
+      o0.xyz += max(transSM, transm * visT * 0.5) * lightC;   // sin perder el contraluz direccional cuando el shadow map no alcanza
+    } else if (P34.w > 0.5) o0.xyz += transm * lightC * visT;
     else {
       float3 transmO = thin * pow(saturate(dot(V, -Lt)), 3.0) * float3(1.0, 0.24, 0.10) * P5.x;
       o0.xyz += transmO * lightC * sqrt(saturate(r0.x));
@@ -639,12 +674,14 @@ void main(
     float3 H2 = normalize(L2 + V2);
     float nl2 = saturate(dot(n2, L2));
     // lobulo fino (pelicula de grasa/sudor): GGX con rugosidad 0.18
-    float a2 = 0.18 * 0.18; float a4 = a2 * a2;
+    float a2 = 0.18 * 0.18; float eF = 1.0;
+    if (P64.x > 0.5 && P64.y > 0.0) a2 = PESSunWidenAlpha(a2, P64.y, eF);   // PES21 sol de calidad
+    float a4 = a2 * a2;
     float nh = saturate(dot(n2, H2));
     float dd = nh * nh * (a4 - 1) + 1;
     float D2 = a4 / (3.14159 * dd * dd);
     float F2 = 0.028 + 0.972 * pow(1 - saturate(dot(V2, H2)), 5);
-    float sharp = D2 * F2 * nl2 * 0.25 * P5.y;
+    float sharp = D2 * F2 * nl2 * 0.25 * P5.y * eF;
     r1.xyz += sharp * PESSunColor() * g_psScene.m_exposure.zzz * shadowScalar * saturate(specInt * 2 + 0.3);
   }
   o1.xyz = min(float3(10000,10000,10000), r1.xyz);

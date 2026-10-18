@@ -71,6 +71,7 @@ Texture2D<float4> g_tex_mesh : register(t15);
 // texturas remasterizadas (las carga d3dx.ini: ResourcePESWrinkleN / ResourcePESWrinkleM)
 Texture2D<float4> pesWrinkleN : register(t20);   // normal de arrugas 2048 (mismo formato que el juego)
 Texture2D<float4> pesWrinkleM : register(t21);   // mascara de zonas 512x1024 (+ surco nasogeniano y pomulos)
+Texture2D<float4> pesSSSMap   : register(t22);   // PES21 (18/10) mapa de SSS de la cara: R finura, G curvatura, B sangre, A piel
 
 // 3Dmigoto declarations
 #define cmp -
@@ -385,6 +386,18 @@ void main(
 
   // ---- translucidez (mapa de grosor de la piel) ----
   r1.w = g_tex_translucent.Sample(g_samplerLinear_Clamp_s, v2.xy).y;
+  // === PES21 mapa de SSS (18/10): generado a partir de 5 caras reales del juego (orejas, nariz, labios, parpados).
+  // x62 on | y62 cuanto sube la translucidez en las zonas finas | z62 sangre (tinte rojizo donde la piel es fina) | w62 reservado
+  float4 P62 = IniParams.Load(int2(62,0));
+  float4 sssMap = pesSSSMap.Sample(g_samplerLinear_Clamp_s, v2.xy);
+  float mapBlood = 0.0;
+  if (enhance && P62.x > 0.5) {
+    float k = sssMap.w;                                           // solo piel (el pelo del mapa queda afuera)
+    float mapThin = sssMap.x * saturate(P62.y);
+    r1.w = lerp(r1.w, max(r1.w, mapThin), k);                     // nunca baja la del juego: solo afina donde corresponde
+    r1.w = saturate(r1.w + 0.12 * sssMap.z * saturate(P62.y) * k);  // la sangre bajo la piel tambien dispersa
+    mapBlood = sssMap.z * k * saturate(P62.z);
+  }
   float thin = r1.w;
 
   // ---- dithering de LOD / fade ----
@@ -407,6 +420,7 @@ void main(
     r2.xyz = max(0, lerp(lum.xxx, r2.xyz, albedoSat));
     float3 bloodTint = float3(1.06, 0.97, 0.94);
     r2.xyz *= lerp(float3(1,1,1), bloodTint, saturate(thin * thinWarmth));
+    r2.xyz *= lerp(float3(1,1,1), float3(1.0, 0.90, 0.88), saturate(mapBlood));   // PES21 mapa de SSS: zonas irrigadas
     r2.xyz = saturate(r2.xyz);
     // rubor progresivo por el esfuerzo (sube con el reloj del partido)
     float flushF = sweatProg * IniParams.Load(int2(12,0)).x;

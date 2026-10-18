@@ -80,6 +80,7 @@ Texture2D<float4> g_MaterialTexture : register(t10);
 #define cmp -
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
+#include "pes_common.hlsli"   // PES21 (18/10): curva del dia, transmision de piel, tamano del sol
 
 
 // === PES21 SOL: color del sol segun su altura (calido al atardecer, blanco calido al mediodia) ===
@@ -97,6 +98,8 @@ float3 PESSunColor() {
   float k = (sunReal ? saturate(S.z) : 0.0) * saturate((warmO - 0.85) * 4.0);   // de noche (luz fria de estadio) casi no toca
   float3 res = lerp(c, lum * tint / dot(tint, LW), k);
   res *= (S.w > 0 ? lerp(1.0, S.w, k) : 1.0);
+  // PES21 curva del dia (18/10): intensidad y calidez del sol segun su altura (solo sol real, no torres)
+  { PESDay dy = PESDayCurve(elev, saturate((warmO - 0.85) * 4.0)); res *= dy.sun; res = PESWarmTint(res, dy.warm); }
   // PES21 atmosfera (17/10): con el sol bajo el archivo de luz deja el sol muy apagado; y54 lo compensa (solo sol real,
   // no luz de torres), proporcional a lo bajo que esta.
   float4 ATM = IniParams.Load(int2(54,0));
