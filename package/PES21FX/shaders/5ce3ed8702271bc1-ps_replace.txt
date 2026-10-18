@@ -537,7 +537,7 @@ void main(
     if (enhance && P74.x > 0.5) {
       float4 sm = pesSeedMap.SampleLevel(g_samplerPoint_Wrap_s, v2.xy, 0);
       float dbg75 = IniParams.Load(int2(75,0)).z;
-      if (dbg75 > 1.5 && sm.a > 0.5) o0.xyz = float3(1.0, 0.0, 1.0);   // diagnostico 2: celdas con semilla en magenta sobre la cara
+      if (dbg75 > 1.5 && dbg75 < 2.5) { if (sm.a > 0.5) o0.xyz = float3(1.0, 0.0, 1.0); else if (sm.a > 0.2) o0.xyz = float3(0.1, 0.2, 1.0); }   // diagnostico 2: semilla = magenta, zona de ceja sin semilla = azul
       if (sm.a > 0.5) {
         float2 cell = floor(v2.xy * 256.0);
         float2 jit = float2(h21(cell + 0.37), h21(cell + 1.7)) - 0.5;

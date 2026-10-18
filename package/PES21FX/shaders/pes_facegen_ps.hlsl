@@ -96,6 +96,7 @@ void main(float4 pos : SV_Position, float2 uv : TEXCOORD0, out float4 o0 : SV_Ta
 
   // --- semillas de cejas ---
   o2 = 0;
+  float browZoneDbg = 0.0;
   {
     float2 cell = floor(uv * 256.0);
     float2 cuv = (cell + 0.5) / 256.0;
@@ -103,6 +104,7 @@ void main(float4 pos : SV_Position, float2 uv : TEXCOORD0, out float4 o0 : SV_Ta
     float browL = Ell(cuv, float2(0.395, 0.312), float2(0.105, 0.030), 0.5);
     float browR = Ell(cuv, float2(0.605, 0.312), float2(0.105, 0.030), 0.5);
     float brow = max(browL, browR);
+    browZoneDbg = brow;
     // pelo pintado en la celda: alpha del color (capas de pelo) + oscuridad relativa, en el mip de la celda
     float4 dc = tDiffuse.SampleLevel(sLin, cuv, 3.0);
     float3 dc5 = tDiffuse.SampleLevel(sLin, cuv, 6.0).xyz;
@@ -122,5 +124,7 @@ void main(float4 pos : SV_Position, float2 uv : TEXCOORD0, out float4 o0 : SV_Ta
       float len = 0.55 + 0.45 * h21(cell + 5.1);
       o2 = float4(dir * 0.5 + 0.5, len, 1.0);
     }
+    // diagnostico: la zona de ceja (sin semilla) queda con alpha 0.3 para poder verla sobre la cara
+    if (o2.a < 0.5 && browZoneDbg > 0.05) o2 = float4(0.5, 0.5, 0.0, 0.3);
   }
 }
