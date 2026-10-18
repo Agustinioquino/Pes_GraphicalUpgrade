@@ -74,6 +74,7 @@ Texture2D<float4> pesWrinkleM : register(t21);   // mascara de zonas 512x1024 (+
 Texture2D<float4> pesSSSMap   : register(t22);   // PES21 (18/10) mapa de SSS de la cara: R finura, G curvatura, B sangre, A piel
 Texture2D<float4> pesFaceA    : register(t23);   // PES21 (18/10) quinta textura generada en vivo por cara: R cavidad, G curvatura, B grosor, A vello/pelo
 Texture2D<float4> pesFaceB    : register(t24);   //   R poros, G zona de brillo, B convexidad grande, A = 1 si existe
+Texture2D<float4> pesZones    : register(t25);   // PES21 (18/10) zonas de la cara: R sudor, G labios, B cuello, A piel (textures\pes_face_zones.dds)
 
 // 3Dmigoto declarations
 #define cmp -
@@ -307,6 +308,17 @@ void main(
   float4 FB = pesFaceB.Sample(g_samplerLinear_Clamp_s, v2.xy);
   bool fgOk = enhance && P68.x > 0.5 && FB.a > 0.5;
   float4 FA = fgOk ? pesFaceA.Sample(g_samplerLinear_Clamp_s, v2.xy) : float4(0, 0.5, 0, 0);
+  // === PES21 zonas de la cara (18/10): sudor por zonas, labios, cuello ===
+  // x72 pelicula de sudor, y72 contraste entre zonas, z72 color de labios, w72 on/off | x73 brillo de labios, y73 tono (rosado..rojo), z73 gotas por zona
+  float4 P72 = IniParams.Load(int2(72,0));
+  float4 P73 = IniParams.Load(int2(73,0));
+  float4 FZ = pesZones.Sample(g_samplerLinear_Clamp_s, v2.xy);
+  bool zonesOn = enhance && P72.w > 0.5;
+  float zoneSw = zonesOn ? lerp(1.0, saturate(FZ.r * 1.25), saturate(P72.y)) : 1.0;   // propension al sudor de esta zona
+  float lipM = zonesOn ? FZ.g : 0.0;
+  // no toda la cara suda a la vez: la frente, las sienes y la nariz arrancan antes; mandibula y mejillas despues
+  float sweatProgZ = zonesOn ? saturate(sweatProg * lerp(1.0, 0.35 + 1.1 * saturate(FZ.r * 1.25), saturate(P73.z))) : sweatProg;
+  float filmWet = zonesOn ? saturate(sweatProgZ * zoneSw) * saturate(P72.x) : 0.0;
   if (enhance && P9.z > 0) {
     // vello facial pintado (barba, cejas, bigote): mascara por color oscuro y poco saturado
     float3 albE = g_tex_diffuse.Sample(g_samplerAnisotropic_Clamp_s, v2.xy).xyz;
@@ -327,6 +339,7 @@ void main(
     }
   }
   if (fgOk) fhMask = max(fhMask, FA.a * saturate(P68.w));   // PES21 quinta textura: vello y nacimiento del pelo exactos
+  fhMask *= 1.0 - lipM;   // PES21 zonas: los labios no son barba
   float poreAmt = 0;
   if (enhance) {
     // poros y microrrelieve de la piel (se apaga a distancia para no titilar)
@@ -338,8 +351,8 @@ void main(
   }
   if (enhance && P8.w > 0.5 && sweatProg > 0.001) {
     float t = g_psSystem.m_timeParam.z * max(P8.z, 0.01);
-    float4 sA = SweatLayer(v2.xy, 70.0, P8.x * sweatProg, max(P8.y, 0.1), t, true);
-    float4 sB = SweatLayer(v2.xy + 0.37, 150.0, P8.x * 1.3 * sweatProg, max(P8.y, 0.1) * 0.8, t, false);
+    float4 sA = SweatLayer(v2.xy, 70.0, P8.x * sweatProgZ, max(P8.y, 0.1), t, true);          // PES21 zonas: gotas donde se suda
+    float4 sB = SweatLayer(v2.xy + 0.37, 150.0, P8.x * 1.3 * sweatProgZ, max(P8.y, 0.1) * 0.8, t, false);
     float2 sg = sA.xy + sB.xy * 0.7;
     sweatWet = saturate(max(sA.z, sB.z * 0.9));
     r1.xy += sg;
@@ -408,6 +421,7 @@ void main(
     mapBlood = sssMap.z * k * saturate(P62.z);
   }
   if (fgOk) r1.w = max(r1.w, FA.b * saturate(P68.z));   // PES21 quinta textura: grosor de ESTA cara (orejas, nariz, labios, parpados)
+  r1.w = max(r1.w, 0.85 * lipM * saturate(P72.z));         // PES21 zonas: los labios son finos e irrigados (mas luz adentro)
   float thin = r1.w;
 
   // ---- dithering de LOD / fade ----
@@ -431,6 +445,9 @@ void main(
     float3 bloodTint = float3(1.06, 0.97, 0.94);
     r2.xyz *= lerp(float3(1,1,1), bloodTint, saturate(thin * thinWarmth));
     r2.xyz *= lerp(float3(1,1,1), float3(1.0, 0.90, 0.88), saturate(mapBlood));   // PES21 mapa de SSS: zonas irrigadas
+    // PES21 zonas (18/10): color de labios propio (rosado natural .. rojo), conservando la textura del juego
+    { float3 lipTint = lerp(float3(1.10, 0.84, 0.86), float3(1.16, 0.70, 0.72), saturate(P73.y));
+      r2.xyz = lerp(r2.xyz, r2.xyz * lipTint, lipM * saturate(P72.z)); }
     if (fgOk) {   // PES21 quinta textura: cavidades (pliegues, alas de nariz, comisuras) mas oscuras y rojizas, y mas mates
       float cavK = FA.r * saturate(P68.y);
       r2.xyz *= lerp(float3(1,1,1), float3(0.78, 0.66, 0.62), cavK);   // 18/10: mas suave (manchaba las mejillas)
@@ -466,6 +483,12 @@ void main(
   r0.z = saturate(r0.z * specScale);
   // 3) Brillo/gloss (entrada de la curva de rugosidad)
   r0.w = saturate(r0.w * glossScale);
+  // PES21 zonas (18/10): labios mas lisos y brillosos que la piel; pelicula de sudor progresiva por zonas (antes de las gotas)
+  r0.w = lerp(r0.w, min(r0.w, 0.30), lipM * saturate(P73.x));
+  r0.z = lerp(r0.z, max(r0.z, 0.55), lipM * saturate(P73.x) * 0.8);
+  r0.w = lerp(r0.w, r0.w * 0.45, filmWet);
+  r0.z = lerp(r0.z, max(r0.z, 0.5), filmWet * 0.8);
+  r2.xyz *= 1.0 - 0.06 * filmWet;
   // superficie mojada: muy brillante y lisa, albedo apenas mas oscuro
   r0.w = lerp(r0.w, 0.0, sweatWet);   // r0.w es rugosidad: mojado = liso
   // vello facial: no es traslucido, es mas aspero y refleja menos
