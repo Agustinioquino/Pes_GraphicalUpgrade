@@ -17,6 +17,11 @@
 #define PES_GRAVITY_SLIDE  0.70   // 0 = como antes; 1 = resbala al maximo
 #define PES_SLIDE_PIN      10.0   // cuanto se afloja el resorte hacia la posicion de fabrica donde resbala
 #define PES_SLIDE_TETHER   2.5    // cuanto se alarga la correa de distancia maxima donde resbala
+// COLISION PRECISA CON LAS PIERNAS: ademas del plano promedio del mod, cada vertice de la pierna emparejado empuja con su
+// propio plano tangente (el muslo doblado deja de atravesar el short), en varias pasadas por sub-paso.
+#define PES_LEG_PRECISE    1
+#define PES_LEG_ITER       2      // pasadas por sub-paso
+#define PES_LEG_REACH      0.12   // (m) solo cuentan los vertices de pierna a menos de esta distancia
 cbuffer Bones : register(b0) { float4 g_bones[192]; };
 cbuffer Obj   : register(b1) { float4 g_obj[18]; };
 cbuffer Params : register(b2)
@@ -349,6 +354,35 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
                     float3 corr = ln * (g_legMargin - d);
                     x += corr;
                     xPrev += corr * (1.0 - g_bodyBounce);
+                }
+            }
+            // PES21 FX: colision precisa. El plano promedio subestima el muslo cuando la rodilla se dobla o el muslo
+            // gira: aca cada vertice emparejado empuja con su propio plano tangente (se aplica el mas violado), dos veces.
+            if (PES_LEG_PRECISE) {
+                [loop] for (uint it = 0; it < PES_LEG_ITER; ++it) {
+                    float worst = 0.0; float3 wn = 0;
+                    [loop] for (uint k2 = 0; k2 < 8; ++k2) {
+                        uint v2 = (lp[k2 >> 1] >> ((k2 & 1) * 16)) & 0xffff;
+                        if (v2 == 0xffff) break;
+                        uint lo2 = (s_palBase / (2 * MAXPARTS * 192)) * g_legCount * 2 + v2 * 2;
+                        float3 yk2 = g_legSkin[lo2].xyz;
+                        float3 nk2 = g_legSkin[lo2 + 1].xyz;
+                        if (dot(nk2, nk2) < 1e-8 || !all(isfinite(yk2))) continue;
+                        float3 dxy = x - yk2;
+                        float dk2 = length(dxy);
+                        if (dk2 > PES_LEG_REACH) continue;
+                        nk2 = normalize(nk2);
+                        float dpl = dot(dxy, nk2);
+                        // el plano tangente solo vale cerca del vertice: lejos de el, la esfera (distancia al punto)
+                        float lateral = length(dxy - nk2 * dpl);
+                        float dEff = lateral < 0.035 ? dpl : dk2 * sign(dpl + 1e-6);
+                        float viol = g_legMargin - dEff;
+                        if (viol > worst) { worst = viol; wn = lateral < 0.035 ? nk2 : normalize(dxy + nk2 * 1e-4); }
+                    }
+                    if (worst <= 0.0) break;
+                    float3 corr2 = wn * worst;
+                    x += corr2;
+                    xPrev += corr2 * (1.0 - g_bodyBounce);
                 }
             }
         }
