@@ -21,6 +21,7 @@ namespace fx {
 static ID3D11RenderTargetView* s_rtv = nullptr;
 static bool s_keyWas = false;
 static std::string s_status;
+static std::string s_btnPending;   // accion de un "button =" del ini (se ejecuta fuera de g_cfgMutex)
 static ImFont* s_fontBig = nullptr; static ImFont* s_fontBold = nullptr;
 static ID3D11ShaderResourceView* s_logo = nullptr; static float s_logoAspect = 1.0f;
 
@@ -265,7 +266,6 @@ static void DrawTutorial(const std::string& sec) {
 
 // --- pestana Presets: preset por estadio (se aplica solo cuando Sider informa el estadio) ---
 static int s_presetPending = 0; static std::string s_presetPendingFile;
-static std::string s_btnPending;   // accion de un "button =" del ini (se ejecuta fuera de g_cfgMutex)
 static char s_pName[96] = "", s_pAuthor[64] = "";
 static bool s_pOnlyTime = false;
 static std::vector<PresetFile> s_presets; static double s_presetsT = 0;
