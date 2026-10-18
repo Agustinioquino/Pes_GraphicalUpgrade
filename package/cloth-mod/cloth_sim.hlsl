@@ -62,6 +62,12 @@
 // de PES21 FX lo lee (la interpolacion entre vertices es suave: no se ven los triangulos) y pone los pliegues ahi.
 #define PES_STRAIN_ENC     1      // PES21FX_LIVE_STRAIN
 #define PES_STRAIN_GAIN    6.0    // 1/6 = 17 % de perdida de area -> maximo
+// COSTURAS COSIDAS (18/10): el cuello y los punos son mallas aparte que el juego mueve con el esqueleto; la camiseta
+// simulada se "cose" a ellos: en una franja junto al escote y al final de la manga la tela sigue exactamente al esqueleto,
+// con transicion suave hacia adentro. 0 = como antes.
+#define PES_SEAM_LOCK      1.0    // PES21FX_LIVE_SEAM_LOCK   fuerza (0..1)
+#define PES_SEAM_WIDTH     3.5    // PES21FX_LIVE_SEAM_WIDTH  ancho de la franja de transicion (cm)
+#define PES_NECK_RADIUS    0.11   // (m) distancia maxima al eje del cuerpo para considerar "escote" (hombros quedan fuera)
 // COMPARACION: PES_CLOTH_FX = 0 deja el simulador como viene de fabrica (todas las mejoras de PES21 FX neutras).
 // Lo escribe PES21 FX desde el menu (Ropa (fisica) -> Comparar con la version base).
 #define PES_CLOTH_FX       1      // PES21FX_LIVE_CLOTH_FX
@@ -108,6 +114,8 @@
 #define PES_LIMB_GAIN 0.0
 #undef PES_STRAIN_ENC
 #define PES_STRAIN_ENC 0
+#undef PES_SEAM_LOCK
+#define PES_SEAM_LOCK 0.0
 #endif
 cbuffer Bones : register(b0) { float4 g_bones[192]; };
 cbuffer Obj   : register(b1) { float4 g_obj[18]; };
@@ -742,6 +750,27 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
                         xPrev += corr;
                     }
                 }
+            }
+        }
+        // PES21 FX (18/10): costuras cosidas (camiseta): escote y punos siguen al esqueleto como el cuello/puno del juego
+        if (PES_SEAM_LOCK > 0.0 && g_legCount == 0 && s_tOk) {
+            float3 r0s = rest1 - rnrm1 * g_rest[p].nrm.w;
+            float wS = max(PES_SEAM_WIDTH, 0.5) * 0.01;
+            float seamK = 0.0;
+            // puno: final de la manga (peso de manga -> 1)
+            float swS = float((g_rest[p].skin.w >> 8) & 255) / 255.0;
+            if (swS > 0.2) seamK = smoothstep(1.0 - wS * 4.0, 1.0, swS);   // el peso de manga va 0..1 a lo largo de la manga (~25 cm)
+            else {
+                // escote: franja superior del cuerpo, cerca del eje (los hombros quedan afuera por el radio)
+                float3 rl = r0s - s_tC;
+                float hS = dot(rl, s_tUp);
+                float radS = length(rl - s_tUp * hS);
+                if (radS < PES_NECK_RADIUS) seamK = smoothstep(s_tH1 - wS * 1.5, s_tH1 - wS * 0.3, hS);
+            }
+            seamK = saturate(seamK * PES_SEAM_LOCK);
+            if (seamK > 0.001) {
+                float3 dS = (rest1 - x) * seamK;
+                x += dS; xPrev += dS;
             }
         }
         gx[p] = x;
