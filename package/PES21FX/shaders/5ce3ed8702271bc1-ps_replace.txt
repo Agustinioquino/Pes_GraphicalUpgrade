@@ -78,6 +78,16 @@ struct PesSeed { float4 posV; float4 nrmV; float4 dirV; float4 col; };
 Texture2D<float4> pesSeedMap  : register(t26);   // PES21 (18/10) semillas de cejas por celda (salida C del generador)
 RWStructuredBuffer<PesSeed> pesSeeds : register(u5);   // PES21 (18/10) semillas animadas de este dibujo (las lee pes_brow_vs)
 RWByteAddressBuffer pesSeedArgs : register(u6);          // PES21 (18/10 b) {verts por instancia, instancias, 0, 0}: cuenta de semillas para DrawInstancedIndirect
+// PES21 (18/10) tipo de pelo de ESTA cara (PES21FX_hair.ini, lo enlaza la DLL en b11; si no esta enlazado todo vale 0 y pesHairMisc.x = 0)
+cbuffer PESHair : register(b11)
+{
+  float4 pesHairA;      // largo_cm, rizo, rigidez, peso
+  float4 pesHairB;      // grosor_mm, densidad, brillo, flequillo
+  float4 pesHairRoot;   // color raiz rgb, w = 1 si esta definido
+  float4 pesHairTip;    // color punta rgb, w = 1 si esta definido
+  float4 pesHairBrow;   // ceja: grosor, densidad, elevacion, largo (multiplicadores)
+  float4 pesHairMisc;   // x = 1 enlazado, y = 1 mapa de pelo propio del usuario
+}
 Texture2D<float4> pesZones    : register(t25);   // PES21 (18/10) zonas de la cara: R sudor, G labios, B cuello, A piel (textures\pes_face_zones.dds)
 
 // 3Dmigoto declarations
@@ -535,11 +545,14 @@ void main(
   // x74 on/off | w75 = -1 invierte la direccion (si las cejas crecen al reves)
   { float4 P74 = IniParams.Load(int2(74,0));
     if (enhance && P74.x > 0.5) {
-      float4 sm = pesSeedMap.SampleLevel(g_samplerPoint_Wrap_s, v2.xy, 0);
+      // mapa de pelo (automatico o hair\<id>.png del usuario): R densidad, G largo, B angulo de peinado, A zona (1 = ceja)
+      float2 cell = floor(v2.xy * 256.0);
+      float4 sm = pesSeedMap.SampleLevel(g_samplerPoint_Wrap_s, (cell + 0.5) / 256.0, 0);
+      float densMul = pesHairMisc.x > 0.5 ? pesHairB.y * pesHairBrow.y : 1.0;
+      bool seedHere = sm.r > 0.01 && h21(cell + 0.37) < saturate(sm.r * densMul);
       float dbg75 = IniParams.Load(int2(75,0)).z;
-      if (dbg75 > 1.5 && dbg75 < 2.5) { if (sm.a > 0.5) o0.xyz = float3(1.0, 0.0, 1.0); else if (sm.a > 0.2) o0.xyz = float3(0.1, 0.2, 1.0); }   // diagnostico 2: semilla = magenta, zona de ceja sin semilla = azul
-      if (sm.a > 0.5) {
-        float2 cell = floor(v2.xy * 256.0);
+      if (dbg75 > 1.5 && dbg75 < 2.5) { if (seedHere) o0.xyz = float3(1.0, 0.0, 1.0); else if (sm.a > 0.95) o0.xyz = float3(0.1, 0.2, 1.0); }   // diagnostico 2: semilla = magenta, zona de ceja sin semilla = azul
+      if (seedHere) {
         float2 jit = float2(h21(cell + 0.37), h21(cell + 1.7)) - 0.5;
         float2 suv = (cell + 0.5 + jit * 0.6) / 256.0;
         float fp = max(fwidth(v2.x), fwidth(v2.y)) * 2048.0;         // texeles por pixel
@@ -554,13 +567,14 @@ void main(
           // hebras nacian a medio camino entre la camara y la cara)
           float depthV = 1.0 / max(v0.w, 1e-6);
           float3 posV = dirC * (depthV / max(abs(dirC.z), 1e-4));
-          float2 d2 = sm.xy * 2.0 - 1.0;
+          float angH = sm.z * 6.2831853;
+          float2 d2 = float2(cos(angH), sin(angH));
           float flipD = IniParams.Load(int2(75,0)).w < -0.5 ? -1.0 : 1.0;
           float3 dirV = normalize(v4.xyz) * d2.x * flipD - normalize(v5.xyz) * d2.y * flipD;
           PesSeed sd;
           sd.posV = float4(posV, 1.0);
           sd.nrmV = float4(normalize(r1.xyz), 0.0);
-          sd.dirV = float4(normalize(dirV + 1e-5), sm.z);
+          sd.dirV = float4(normalize(dirV + 1e-5), sm.y);
           sd.col = float4(o0.xyz, asfloat(f32tof16(pesMotionRaw.x) | (f32tof16(pesMotionRaw.y) << 16)));
           if (idx < 65536u) { pesSeeds[idx] = sd; pesSeedArgs.InterlockedMax(0, 24u); }
           if (dbg75 > 1.5) o0.xyz = float3(0.0, 1.0, 1.0);   // diagnostico 2: pixel que escribio la semilla en cian

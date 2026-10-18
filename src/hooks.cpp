@@ -436,6 +436,8 @@ static void RunRule(ID3D11DeviceContext* c, const ShaderEntry* e, DrawScope& d) 
             if (FaceGenLookup(c, &fa, &fb, &ex)) {
                 Remember(c, d, true, true, a.slot); c->PSSetShaderResources(a.slot, 1, &fa);
                 Remember(c, d, true, true, a.idx);  c->PSSetShaderResources(a.idx, 1, &fb);
+                // 18/10 pelo: parametros del tipo de pelo de ESTA cara (PES21FX_hair.ini) en b11
+                if (ex.hairCB) { Remember(c, d, true, false, 11); c->PSSetConstantBuffers(11, 1, &ex.hairCB); }
                 // cejas con hebras: mapa de semillas en t26 y buffer de semillas (UAV 5) limpio para este dibujo
                 if (ex.seedMap && ex.seedsUAV && g_cfg.live[74][0] > 0.5f) {
                     Remember(c, d, true, true, 26); c->PSSetShaderResources(26, 1, &ex.seedMap);

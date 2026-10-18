@@ -48,10 +48,12 @@ struct MenuSlider {
     std::string ext;                       // "seccion.clave" de cloth-mod\cloth.ini (si no esta vacio no usa idx/comp)
     float def = 0;                         // valor de fabrica si la clave no esta en cloth.ini
 };
+struct MenuButton { std::string action, label, help; };   // button = accion | etiqueta | ayuda  (acciones: hair_export, hair_reload)
 struct MenuGroup {
     std::string title, desc, section;
     int tIdx = -1, tComp = 0;            // parametro del interruptor (w46, etc.); -1 = sin interruptor
     std::vector<MenuSlider> sliders;
+    std::vector<MenuButton> buttons;
 };
 
 // ---------------------------------------------------------------- reglas por shader (lo que eran [ShaderOverride])
@@ -68,6 +70,15 @@ struct Rule { uint64_t hash = 0; std::vector<RuleAction> actions; bool hasParamO
 struct PresetValue { int idx, comp; float value; };
 struct PresetFile { std::string file, name, author; int stadium = -1, timeofday = -1; std::vector<PresetValue> values; };
 struct MatchInfo { bool known = false; int stadium = -1, timeofday = -1, weather = -1, season = -1, tournament = -1; };
+
+// --- pelo en hebras (18/10): tipos de pelo (PES21FX_hair.ini) y asignacion por cara ---
+struct HairType {
+    std::string name = "corto";
+    float largo = 3.5f, rizo = 0.1f, rigidez = 0.8f, peso = 0.5f, grosor = 0.08f, densidad = 1.0f, brillo = 0.6f, flequillo = 0.0f;
+    float raiz[3] = { -1, -1, -1 }, punta[3] = { -1, -1, -1 };   // -1 = del propio bsm
+    float cejaGrosor = 1.0f, cejaDens = 1.0f, cejaElev = 1.0f, cejaLargo = 1.0f;
+};
+struct HairCfg { std::vector<HairType> types; std::map<std::string, std::string> faces; std::string defType = "corto"; bool loaded = false; };
 
 struct Config {
     std::wstring baseDir;                      // carpeta del mod (termina en '\')
@@ -86,6 +97,7 @@ struct Config {
     bool presetManual = false;                 // el usuario aplico/quito un preset a mano: no pisar hasta el proximo partido
     std::map<uint64_t, Rule> rules;
     std::map<std::string, float> vars;         // $pes_push, etc.
+    HairCfg hair;                              // PES21FX_hair.ini
     int menuKey = VK_INSERT;
     bool bypass = false;                       // ver el juego original
     // [PES21FX] para aislar problemas: replace_shaders / rules / overlay = 0 apagan cada parte
@@ -173,11 +185,15 @@ extern DeviceState g_dev;
 // ---------------------------------------------------------------- overlay
 void OverlayPresent(IDXGISwapChain* sc);
 // quinta textura de la cara generada en vivo (facegen.cpp)
-struct FaceGenExtra { ID3D11ShaderResourceView* seedMap = nullptr; ID3D11UnorderedAccessView* seedsUAV = nullptr; ID3D11ShaderResourceView* seedsSRV = nullptr; ID3D11Buffer* args = nullptr; ID3D11UnorderedAccessView* argsUAV = nullptr; int rtCount = 0; };
+struct FaceGenExtra { ID3D11ShaderResourceView* seedMap = nullptr; ID3D11UnorderedAccessView* seedsUAV = nullptr; ID3D11ShaderResourceView* seedsSRV = nullptr; ID3D11Buffer* args = nullptr; ID3D11UnorderedAccessView* argsUAV = nullptr; ID3D11Buffer* hairCB = nullptr; int rtCount = 0; };
 extern std::atomic<int> g_depthClearZero, g_depthClearOne;
 bool FaceGenLookup(ID3D11DeviceContext* c, ID3D11ShaderResourceView** outA, ID3D11ShaderResourceView** outB, FaceGenExtra* ex);
 void BrowDrawAfterFace(ID3D11DeviceContext* c, FaceGenExtra* ex);
 void FaceGenPresent(); void FaceGenClear(); void FaceGenReloadShaders(); int FaceGenCount();
+void FaceGenHairChanged();                     // PES21FX_hair.ini recargado: refrescar los cbuffers por cara
+int FaceGenExportHair(std::string& status);   // vuelca hair\\auto\\<id>.dds de cada cara generada (plantillas para editar)
+bool LoadHairConfig();                         // PES21FX_hair.ini
+const HairType* HairTypeFor(const std::string& id, std::string* outName);
 ID3DBlob* CompileNamedShader(const wchar_t* file, const char* profile);   // shaders\<file> con #include
 // prueba automatica del menu (menutest.cpp)
 void MenuTestPresent(IDXGISwapChain* sc);

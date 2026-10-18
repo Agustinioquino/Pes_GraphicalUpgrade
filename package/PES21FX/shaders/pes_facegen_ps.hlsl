@@ -28,8 +28,11 @@ float Ell(float2 uv, float2 c, float2 r, float soft) {
   return saturate(1.0 - (d - (1.0 - soft)) / soft);
 }
 
-// Salida C (o2): semillas de hebras de ceja por celda de 8x8 texeles (grilla 256x256): R,G direccion (x0.5+0.5),
-// B largo (0..1), A = 1 si en esta celda nace una hebra. La misma celda guarda lo mismo en todos sus texeles.
+// Salida C (o2): MAPA DE PELO automatico (mismo formato que el que puede pintar el usuario en PES21FX\hair\<id>.dds):
+//   R densidad (0 nada .. 1 maxima), G largo (0..1 del largo del tipo), B direccion de peinado (angulo 0..1 = 0..360 grados
+//   en el plano UV: 0 = hacia +U/derecha, 0.25 = hacia +V/abajo, 0.5 = izquierda, 0.75 = arriba), A = 1 en la zona de
+//   ceja y 0.9 fuera (casi opaco para que el png se pueda editar; solo lo usa el diagnostico).
+// Se calcula por celda de 8x8 texeles (grilla 256x256); el shader de cara decide la semilla con la densidad.
 float h21(float2 p) { return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453); }
 void main(float4 pos : SV_Position, float2 uv : TEXCOORD0, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out float4 o2 : SV_Target2)
 {
@@ -95,7 +98,7 @@ void main(float4 pos : SV_Position, float2 uv : TEXCOORD0, out float4 o0 : SV_Ta
   o1 = float4(pores, specZone, convB, 1.0);
 
   // --- semillas de cejas ---
-  o2 = 0;
+  o2 = float4(0, 0, 0, 0.9);
   float browZoneDbg = 0.0;
   {
     float2 cell = floor(uv * 256.0);
@@ -112,8 +115,7 @@ void main(float4 pos : SV_Position, float2 uv : TEXCOORD0, out float4 o0 : SV_Ta
     float darkC = smoothstep(0.75, 0.40, lc / max(l5, 0.005));
     float alphaC = 1.0 - saturate((dc.a - 0.90) * 10.0);
     float browHair = brow * saturate(max(darkC, alphaC * 0.8) * 1.3);
-    float dens = h21(cell + 0.37);
-    if (browHair > 0.15 && dens < browHair * 0.95) {
+    if (browHair > 0.15) {
       float side = cuv.x < 0.5 ? -1.0 : 1.0;
       // direccion: hacia afuera, levemente hacia arriba (UV: -y) siguiendo el arco; ruido de +-15 grados
       float arch = (abs(cuv.x - 0.5) - 0.105) / 0.105;            // -1 en el entrecejo .. +1 en la cola
@@ -122,9 +124,10 @@ void main(float4 pos : SV_Position, float2 uv : TEXCOORD0, out float4 o0 : SV_Ta
       float cs = cos(ang), sn = sin(ang);
       dir = float2(dir.x * cs - dir.y * sn, dir.x * sn + dir.y * cs);
       float len = 0.55 + 0.45 * h21(cell + 5.1);
-      o2 = float4(dir * 0.5 + 0.5, len, 1.0);
+      float angN = frac(atan2(dir.y, dir.x) / 6.2831853 + 1.0);
+      o2 = float4(saturate(browHair * 0.95), len, angN, 1.0);
     }
-    // diagnostico: la zona de ceja (sin semilla) queda con alpha 0.3 para poder verla sobre la cara
-    if (o2.a < 0.5 && browZoneDbg > 0.05) o2 = float4(0.5, 0.5, 0.0, 0.3);
+    // zona de ceja: alpha 1 (el diagnostico "semillas sobre la cara" pinta de azul la zona sin semilla)
+    if (browZoneDbg > 0.05) o2.a = 1.0;
   }
 }

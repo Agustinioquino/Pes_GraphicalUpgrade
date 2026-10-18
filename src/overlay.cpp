@@ -156,6 +156,17 @@ static void DrawGroup(MenuGroup& g, int gid) {
         }
         ImGui::EndDisabled();
     }
+    if (!g.buttons.empty()) {
+        ImGui::Spacing();
+        for (auto& b : g.buttons) {
+            ImGui::PushID(&b);
+            if (ImGui::Button(Utf8(b.label).c_str())) s_btnPending = b.action;
+            if (!b.help.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Utf8(b.help).c_str());
+            ImGui::PopID();
+            ImGui::SameLine();
+        }
+        ImGui::NewLine();
+    }
     ImGui::EndChild();
     ImGui::Spacing();
     ImGui::PopID();
@@ -254,6 +265,7 @@ static void DrawTutorial(const std::string& sec) {
 
 // --- pestana Presets: preset por estadio (se aplica solo cuando Sider informa el estadio) ---
 static int s_presetPending = 0; static std::string s_presetPendingFile;
+static std::string s_btnPending;   // accion de un "button =" del ini (se ejecuta fuera de g_cfgMutex)
 static char s_pName[96] = "", s_pAuthor[64] = "";
 static bool s_pOnlyTime = false;
 static std::vector<PresetFile> s_presets; static double s_presetsT = 0;
@@ -521,6 +533,12 @@ void OverlayPresent(IDXGISwapChain* sc) {
     ImGui::NewFrame();
     ImGui::GetIO().MouseDrawCursor = true;
     DrawMenu();
+    if (!s_btnPending.empty()) {
+        std::string a = s_btnPending; s_btnPending.clear();
+        if (a == "hair_export") { std::string st; FaceGenExportHair(st); s_status = st; }
+        else if (a == "hair_reload") { LoadHairConfig(); s_status = "PES21FX_hair.ini recargado (" + std::to_string(g_cfg.hair.types.size()) + " tipos, " + std::to_string(g_cfg.hair.faces.size()) + " caras asignadas)"; }
+        else s_status = "Accion desconocida: " + a;
+    }
     if (s_presetPending) {
         int a = s_presetPending; s_presetPending = 0;
         std::string f = s_presetPendingFile, out;

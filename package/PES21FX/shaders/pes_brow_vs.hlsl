@@ -19,6 +19,16 @@ cbuffer cVSScene : register(b2)
   float4 m_cameraCenterOffset;
   float4 m_shadowMapResolutions;
 }
+// PES21 (18/10) tipo de pelo de ESTA cara (PES21FX_hair.ini, lo enlaza la DLL en b11; si no esta enlazado todo vale 0 y pesHairMisc.x = 0)
+cbuffer PESHair : register(b11)
+{
+  float4 pesHairA;      // largo_cm, rizo, rigidez, peso
+  float4 pesHairB;      // grosor_mm, densidad, brillo, flequillo
+  float4 pesHairRoot;   // color raiz rgb, w = 1 si esta definido
+  float4 pesHairTip;    // color punta rgb, w = 1 si esta definido
+  float4 pesHairBrow;   // ceja: grosor, densidad, elevacion, largo (multiplicadores)
+  float4 pesHairMisc;   // x = 1 enlazado, y = 1 mapa de pelo propio del usuario
+}
 struct Seed { float4 posV; float4 nrmV; float4 dirV; float4 col; };   // posV.w = 1 valida; dirV.w = largo 0..1; col.w = motion packed
 StructuredBuffer<Seed> gSeeds : register(t30);
 Texture1D<float4> IniParams : register(t120);
@@ -32,6 +42,7 @@ struct VSOut {
   float2 tw : TEXCOORD2;     // t a lo largo (0 raiz .. 1 punta), u a lo ancho (-1..1)
   float2 motion : TEXCOORD3;
   float3 viewV : TEXCOORD4;
+  float3 col2 : TEXCOORD5;   // color de la punta (tipo de pelo)
 };
 
 VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID)
@@ -72,11 +83,14 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID)
   // giro individual de +-18 grados en el plano de la piel
   float ang = (r3 - 0.5) * 0.63;
   float3 dd = normalize(d * cos(ang) + bt * sin(ang));
-  float len = max(P74.z, 0.1) * 0.01 * (0.55 + 0.45 * s.dirV.w) * (0.8 + 0.4 * r2);
-  float lift = clamp(P75.x, 0.0, 1.5);
-  // curva: sale levantada y se acuesta hacia la punta (como el pelo de ceja real)
-  float3 p = root + dd * len * t + n * len * lift * (0.35 * sin(t * 3.14159) + 0.1 * t);
-  float wid = max(P74.w, 0.05) * 0.001 * (1.0 - 0.85 * t) * 0.5;
+  // tipo de pelo de esta cara (PES21FX_hair.ini): multiplicadores de largo, grosor, elevacion y rizo
+  bool hb = pesHairMisc.x > 0.5;
+  float mLen = hb ? max(pesHairBrow.w, 0.05) : 1.0, mWid = hb ? max(pesHairBrow.x, 0.05) : 1.0, mLift = hb ? pesHairBrow.z : 1.0, curl = hb ? saturate(pesHairA.y) : 0.1;
+  float len = max(P74.z, 0.1) * 0.01 * mLen * (0.55 + 0.45 * s.dirV.w) * (0.8 + 0.4 * r2);
+  float lift = clamp(P75.x * mLift, 0.0, 1.5);
+  // curva: sale levantada y se acuesta hacia la punta (como el pelo de ceja real); el rizo tuerce la hebra en el plano de la piel
+  float3 p = root + dd * len * t + n * len * lift * (0.35 * sin(t * 3.14159) + 0.1 * t) + bt * len * curl * 0.5 * sin(t * 6.2831853 + r3 * 6.2831853) * t;
+  float wid = max(P74.w, 0.05) * 0.001 * mWid * (1.0 - 0.85 * t) * 0.5;
   // ancho minimo en pantalla: una hebra de 0.35 mm a 1 m es menos de medio pixel y el rasterizador no la cubre nunca.
   // Se garantiza ~1.2 px de ancho (2.5 px en diagnostico); la punta se afina en el pixel shader por descarte.
   float vpH = m_viewportSize.y > 16.0 ? m_viewportSize.y : 1080.0;
@@ -90,7 +104,8 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID)
   // normal: mezcla de la normal de la piel (raiz) con una normal cilindrica de la hebra
   float3 nCyl = normalize(V * 0.6 + sideV * side * 0.8);
   o.nrmV = normalize(lerp(n, nCyl, 0.65));
-  o.col = s.col.xyz;
+  o.col = (hb && pesHairRoot.w > 0.5) ? pesHairRoot.xyz : s.col.xyz;
+  o.col2 = (hb && pesHairTip.w > 0.5) ? pesHairTip.xyz : o.col * float3(1.1, 1.05, 1.0);
   o.tw = float2(t, side);
   // movimiento: el de la raiz (lo guardo el shader de cara)
   uint mp = asuint(s.col.w);

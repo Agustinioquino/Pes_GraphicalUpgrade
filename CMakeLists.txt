@@ -54,9 +54,11 @@ add_library(PES21FX SHARED
   ${imgui_SOURCE_DIR}/imgui_widgets.cpp
   ${imgui_SOURCE_DIR}/backends/imgui_impl_dx11.cpp
   ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp
-  ${directxtk_SOURCE_DIR}/Src/DDSTextureLoader.cpp)
+  ${directxtk_SOURCE_DIR}/Src/DDSTextureLoader.cpp
+  ${directxtk_SOURCE_DIR}/Src/ScreenGrab.cpp
+  ${directxtk_SOURCE_DIR}/Src/WICTextureLoader.cpp)
 target_include_directories(PES21FX PRIVATE src ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends
   ${directxtk_SOURCE_DIR}/Inc ${directxtk_SOURCE_DIR}/Src)
 target_compile_definitions(PES21FX PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
-target_link_libraries(PES21FX PRIVATE minhook dxgi dxguid)
+target_link_libraries(PES21FX PRIVATE minhook dxgi dxguid ole32 uuid windowscodecs)
 set_target_properties(PES21FX PROPERTIES OUTPUT_NAME "d3d11" PREFIX "")

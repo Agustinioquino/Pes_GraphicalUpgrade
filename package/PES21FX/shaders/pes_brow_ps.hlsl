@@ -9,6 +9,16 @@ cbuffer cPSMaterial : register(b4)
 {
   struct { float4 m_materials[8]; } g_psMaterial;
 }
+// PES21 (18/10) tipo de pelo de ESTA cara (PES21FX_hair.ini, lo enlaza la DLL en b11; si no esta enlazado todo vale 0 y pesHairMisc.x = 0)
+cbuffer PESHair : register(b11)
+{
+  float4 pesHairA;      // largo_cm, rizo, rigidez, peso
+  float4 pesHairB;      // grosor_mm, densidad, brillo, flequillo
+  float4 pesHairRoot;   // color raiz rgb, w = 1 si esta definido
+  float4 pesHairTip;    // color punta rgb, w = 1 si esta definido
+  float4 pesHairBrow;   // ceja: grosor, densidad, elevacion, largo (multiplicadores)
+  float4 pesHairMisc;   // x = 1 enlazado, y = 1 mapa de pelo propio del usuario
+}
 Texture1D<float4> IniParams : register(t120);
 
 struct VSOut {
@@ -18,6 +28,7 @@ struct VSOut {
   float2 tw : TEXCOORD2;
   float2 motion : TEXCOORD3;
   float3 viewV : TEXCOORD4;
+  float3 col2 : TEXCOORD5;
 };
 
 void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out float4 o2 : SV_Target2, out float4 o3 : SV_Target3, out float4 o4 : SV_Target4)
@@ -29,7 +40,7 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   // con cintas de ~1 px el descarte tiene que ser suave: solo el borde exterior y la punta
   if (P75.z < 0.5 && edge < 0.08 + 0.35 * t * t) discard;
   // color: la raiz mas oscura, la punta un poco mas clara y calida
-  float3 col = i.col * (0.55 + 0.6 * t) * float3(1.0, 0.97, 0.94);
+  float3 col = lerp(i.col, i.col2, t) * (0.55 + 0.6 * t) * float3(1.0, 0.97, 0.94);
   if (P75.z > 0.5) col = float3(1, 0, 1);   // diagnosticos 1 y 3: magenta
   o0 = float4(saturate(col), 1.0);
   // normal + translucidez (hebra: 0.15) empaquetadas como en el shader de cara
@@ -54,7 +65,7 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   float rc = rough * 0.0361702144 + 0.0904255286;
   rc = rc * rough + 0.180851057; rc = rc * rough + 0.271276593; rc = rc * rough + 0.271276593;
   o2.x = rc * rough + 0.150000006;
-  o2.y = 0.30;
+  o2.y = 0.30 * (pesHairMisc.x > 0.5 ? saturate(pesHairB.z) / 0.6 : 1.0);   // brillo del tipo de pelo (0.6 = natural)
   o2.z = 1.0;                                   // sin marca de piel ni de kit
   o2.w = g_psMaterial.m_materials[0].x;
   o3.xy = g_psSystem.m_renderBuffer.xy * i.motion;

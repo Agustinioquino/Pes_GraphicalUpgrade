@@ -76,7 +76,7 @@ static std::vector<float> ParseFloats(const std::string& v) {
 
 static std::wstring IniPath() { return g_cfg.baseDir + L"PES21FX.ini"; }
 
-bool LoadConfig() {
+static bool LoadConfigLocked() {
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     Config& c = g_cfg;
     memset(c.base, 0, sizeof(c.base));
@@ -138,6 +138,12 @@ bool LoadConfig() {
             else if (kl == "desc") grp->desc = v;
             else if (kl == "section") grp->section = v;
             else if (kl == "toggle") { int i2, c2; if (ParseParamName(v, i2, c2)) { grp->tIdx = i2; grp->tComp = c2; } }
+            else if (kl == "button") {
+                std::vector<std::string> parts; std::string cur2;
+                for (char ch : v) { if (ch == '|') { parts.push_back(Trim(cur2)); cur2.clear(); } else cur2 += ch; }
+                parts.push_back(Trim(cur2));
+                if (parts.size() >= 2) { MenuButton b; b.action = Lower(parts[0]); b.label = parts[1]; if (parts.size() >= 3) b.help = parts[2]; grp->buttons.push_back(b); }
+            }
             else if (kl == "cslider" || kl == "cchoice") {
                 // cslider = seccion.clave | etiqueta | min | max | fabrica | ayuda | formato
                 // cchoice = seccion.clave | etiqueta | A;B | fabrica | ayuda
@@ -514,6 +520,65 @@ void UpdateClothFit(double t) {
     std::ofstream o(path, std::ios::binary | std::ios::trunc); if (!o) return;
     o << src; o.close();
     Log("ropa: ajuste al fisico %s (delgado +%.0f mm, ancho -%.0f mm, rango %.2f); mejoras de tela %s", v[0] > 0.5f ? "on" : "off", v[1], v[2], v[3], v[4] > 0.5f ? "activas" : "APAGADAS (version base)");
+}
+
+bool LoadConfig() { bool r = LoadConfigLocked(); LoadHairConfig(); return r; }
+
+// ---------------------------------------------------------------- PES21FX_hair.ini (pelo en hebras)
+// [tipos]  nombre = largo_cm, rizo, rigidez, peso, grosor_mm, densidad, brillo, flequillo [, raizR,G,B, puntaR,G,B]
+// [cejas]  nombre = grosor, densidad, elevacion, largo      (multiplicadores del grupo "Cejas con hebras")
+// [caras]  id = tipo                                          (id = el que muestra el log "pelo: cara <id>" o hair\auto\lista.txt)
+// [auto]   default = corto
+bool LoadHairConfig() {
+    HairCfg h;
+    std::vector<std::string> lines;
+    bool ok = ReadLines(g_cfg.baseDir + L"PES21FX_hair.ini", lines);
+    std::string sec;
+    std::map<std::string, HairType> types;
+    if (ok) for (auto& raw : lines) {
+        std::string l = Trim(raw);
+        if (l.empty() || l[0] == ';' || l[0] == '#') continue;
+        if (l[0] == '[') { sec = Lower(Trim(l.substr(1, l.find(']') - 1))); continue; }
+        size_t eq = l.find('='); if (eq == std::string::npos) continue;
+        std::string k = Lower(Trim(l.substr(0, eq))), v = Trim(l.substr(eq + 1));
+        size_t sc = v.find(';'); if (sc != std::string::npos) v = Trim(v.substr(0, sc));
+        if (sec == "tipos") {
+            std::vector<float> f = ParseFloats(v);
+            HairType t = types.count(k) ? types[k] : HairType(); t.name = k;
+            if (f.size() > 0) t.largo = f[0]; if (f.size() > 1) t.rizo = f[1]; if (f.size() > 2) t.rigidez = f[2]; if (f.size() > 3) t.peso = f[3];
+            if (f.size() > 4) t.grosor = f[4]; if (f.size() > 5) t.densidad = f[5]; if (f.size() > 6) t.brillo = f[6]; if (f.size() > 7) t.flequillo = f[7];
+            if (f.size() > 10) { t.raiz[0] = f[8]; t.raiz[1] = f[9]; t.raiz[2] = f[10]; }
+            if (f.size() > 13) { t.punta[0] = f[11]; t.punta[1] = f[12]; t.punta[2] = f[13]; }
+            types[k] = t;
+        } else if (sec == "cejas") {
+            std::vector<float> f = ParseFloats(v);
+            HairType& t = types[k]; t.name = k;
+            if (f.size() > 0) t.cejaGrosor = f[0]; if (f.size() > 1) t.cejaDens = f[1]; if (f.size() > 2) t.cejaElev = f[2]; if (f.size() > 3) t.cejaLargo = f[3];
+        } else if (sec == "caras") {
+            h.faces[k] = Lower(v);
+        } else if (sec == "auto") {
+            if (k == "default") h.defType = Lower(v);
+        }
+    }
+    for (auto& kv : types) h.types.push_back(kv.second);
+    if (h.types.empty()) { HairType t; t.name = "corto"; h.types.push_back(t); }
+    h.loaded = ok;
+    { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.hair = h; }
+    FaceGenHairChanged();
+    Log("pelo: %s (%d tipos, %d caras asignadas, default '%s')", ok ? "PES21FX_hair.ini leido" : "sin PES21FX_hair.ini (tipos por defecto)", (int)h.types.size(), (int)h.faces.size(), h.defType.c_str());
+    return ok;
+}
+const HairType* HairTypeFor(const std::string& id, std::string* outName) {
+    // sin candado: se llama desde Present con g_cfg estable; el vector solo cambia en LoadHairConfig
+    const HairCfg& h = g_cfg.hair;
+    std::string want = h.defType;
+    auto it = h.faces.find(Lower(id)); if (it != h.faces.end()) want = it->second;
+    const HairType* best = nullptr;
+    for (auto& t : h.types) { if (t.name == want) { best = &t; break; } }
+    if (!best) for (auto& t : h.types) { if (t.name == h.defType) { best = &t; break; } }
+    if (!best && !h.types.empty()) best = &h.types[0];
+    if (outName) *outName = best ? best->name : "";
+    return best;
 }
 
 } // namespace fx
