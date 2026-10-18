@@ -22,6 +22,9 @@ struct FaceEntry {
 };
 static const UINT kSeedCount = 65536;   // grilla 256x256 de la quinta textura
 static const UINT kSeedBytes = 64;
+// 18/10: estadisticas para el log (cada 10 s): consultas, aciertos, sin entradas, pendientes, dibujos de hebras
+static std::atomic<int> s_stLook{0}, s_stHit{0}, s_stNoIn{0}, s_stPend{0}, s_stFull{0}, s_stDraw{0};
+static double s_stNext = 0;
 struct FaceReq { ID3D11Resource* key; ID3D11ShaderResourceView* in[4]; UINT w, h; };
 
 static std::unordered_map<ID3D11Resource*, FaceEntry> s_cache;
@@ -135,9 +138,6 @@ static bool MakeTarget(UINT w, UINT h, ID3D11Texture2D** tex, ID3D11RenderTarget
 
 // en Present, contexto inmediato: genera hasta 2 caras por cuadro
 static std::atomic<int> s_browFaces{0};   // caras con hebras dibujadas en este cuadro (x77 = maximo por pantalla)
-// 18/10: estadisticas para el log (cada 10 s): consultas, aciertos, sin entradas, pendientes, dibujos de hebras
-static std::atomic<int> s_stLook{0}, s_stHit{0}, s_stNoIn{0}, s_stPend{0}, s_stFull{0}, s_stDraw{0};
-static double s_stNext = 0;
 void FaceGenPresent() {
     s_browFaces.store(0);
     { double t = Now(); if (t > s_stNext) { s_stNext = t + 10.0;
