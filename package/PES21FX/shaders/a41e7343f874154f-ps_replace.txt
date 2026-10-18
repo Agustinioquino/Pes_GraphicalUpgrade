@@ -316,13 +316,22 @@ void main(
         float aniso = sqrt(lmax / lmin);                           // 1 = sin compresion
         // direccion (en UV) de MENOS metros por UV = la comprimida
         float2 cdir = abs(G._12) > 1e-14 ? normalize(float2(lmin - G._22, G._12)) : (G._11 < G._22 ? float2(1, 0) : float2(0, 1));
+        // 18/10 v2: la medicion es constante por triangulo (derivadas de pantalla): para que no se vean los
+        // triangulos, la respuesta es muy gradual y nunca llega al maximo de golpe
         float sens = max(WR.y, 0.01);
-        float amtC = smoothstep(1.0 + sens * 0.5, 1.0 + sens * 2.5, aniso);
+        float amtC = smoothstep(1.0 + sens * 0.8, 1.0 + sens * 4.0, aniso);
+        amtC = amtC * amtC * 0.6;
         // pliegue ya formado: la normal gira mucho en pocos texeles
         float curvW = saturate((dxn.x + dxn.y) / max(fpW * 0.002, 1e-4) * 0.08);
-        float amt = saturate(amtC + curvW * 0.6) * saturate(WR.x) * farW * (1.0 - 0.6 * pesPrint);
+        // base continua: pliegues suaves siempre presentes (sin saltos entre triangulos) + parte dinamica encima
+        float amtBase = 0.18;
+        float amt = saturate(amtBase + amtC + curvW * 0.4) * saturate(WR.x) * farW * (1.0 - 0.6 * pesPrint);
         if (amt > 0.002) {
-          // tile rotado: sus crestas (eje X del tile) perpendiculares a la compresion
+          // orientacion: con poca compresion las crestas siguen la trama (vertical del kit); con mucha, la compresion.
+          // Asi la orientacion tampoco salta entre triangulos vecinos
+          float2 cdir0 = float2(0.0, 1.0);
+          float wdir = saturate(amtC / 0.25);
+          cdir = normalize(lerp(cdir0 * sign(dot(cdir0, cdir) + 1e-3), cdir, wdir));
           float2 ax = float2(-cdir.y, cdir.x);
           float sc = 7.0 / max(WR.z, 0.2);
           float2 fuv = float2(dot(v2.xy, ax), dot(v2.xy, cdir)) * sc;
