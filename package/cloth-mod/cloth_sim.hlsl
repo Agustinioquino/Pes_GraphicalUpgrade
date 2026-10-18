@@ -49,6 +49,7 @@
 #define PES_ARM_BANDS      4
 #define PES_ARM_SHRINK     0.88
 #define PES_ARM_MAXPUSH    0.006  // (m) por sub-paso
+#define PES_SHIRT_LIFT     1.2    // (18/10) la camiseta se suelta del cuerpo al saltar/caer/arrancar: cuanto mas, mas se levanta el ruedo
 #define PES_FIT_HANG       2.5    // delgado: la remera cuelga mas larga (metros de caida por metro de holgura: 10 mm -> 2.5 cm)
 #define PES_FIT_CLING      0.15   // ancho: la tela que queda separada del cuerpo se acerca a el por sub-paso
 cbuffer Bones : register(b0) { float4 g_bones[192]; };
@@ -400,14 +401,24 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
         // Cuerpo delgado (fit > 0): anclaje mas suelto, correa mas larga y la tela se mantiene separada del cuerpo.
         float pesFit = pesFitOf(p);
         float fitFree = saturate(1.0 - pin * 1.5);
+        // PES21 FX (18/10): levantada de la camiseta con el movimiento vertical del cuerpo (salto, caida, arranque):
+        // mientras el cuerpo acelera, el anclaje de la tela libre se afloja y la correa se alarga -> el ruedo se despega.
+        float pesLift = 0.0;
+        if (g_legCount == 0 && PES_SHIRT_LIFT > 0.0) {
+            float3 vB = (rest1 - restPrev) / max(h, 1e-5);
+            float gl2 = length(s_grav);
+            float vUp = gl2 > 1e-4 ? abs(dot(vB, s_grav / gl2)) : 0.0;
+            pesLift = PES_SHIRT_LIFT * saturate((vUp - 0.4) / 1.5) * fitFree;
+        }
         alpha *= (pesFit < 0.0) ? clamp(1.0 + pesFit * 120.0, 0.4, 1.0) : clamp(1.0 + pesFit * 80.0, 1.0, 1.6);   // (18/10 b) rangos suaves
+        alpha *= 1.0 + pesLift * 2.0;
         // delgado: el punto de reposo baja con la gravedad -> la remera cuelga mas larga (solo tela libre)
         float3 restT = rest1;
         if (pesFit > 0.0) { float gl = length(s_grav); if (gl > 1e-4) restT += (s_grav / gl) * pesFit * PES_FIT_HANG * fitFree; }
         x += (restT - x) * (1.0 / (1.0 + alpha / hh));
         float3 off = x - restT;
         float maxD0 = g_tetherRadius * (1.0 - pin);
-        float maxD = maxD0 * (1.0 + pesSlide * PES_SLIDE_TETHER) * clamp(1.0 + pesFit * 25.0, 0.7, 1.3);
+        float maxD = maxD0 * (1.0 + pesSlide * PES_SLIDE_TETHER) * clamp(1.0 + pesFit * 25.0, 0.7, 1.3) * (1.0 + pesLift * 0.6);
         float dl = length(off);
         if (dl > maxD) x = restT + off * (maxD / dl);
         float sd = dot(x - rest1, rnrm1) + g_rest[p].nrm.w;
