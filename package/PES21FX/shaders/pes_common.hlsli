@@ -117,6 +117,7 @@ float PESCloudDensity(float3 pW, PESCloudParams c, int oct)
 {
   float hN = saturate((pW.y - c.hBase) / c.thick);
   float3 q = (pW + c.wind * c.t) / c.scale;
+  q += float3(0.0, c.t * 0.004, c.t * 0.002);   // evolucion lenta de la forma (turbulencia), ademas del viento
   q.y *= lerp(2.5, 1.2, c.shape);                 // cumulos: mas altos que anchos; estratos: capas chatas
   float base = PESFbm3(q, oct);
   // perfil vertical: base plana y tope redondeado (cumulo) o capa uniforme (estrato)
@@ -134,8 +135,9 @@ float PESCloudShadow(float3 pW, float3 sunW, PESCloudParams c)
   float tb = (c.hBase - pW.y) / sunW.y;
   float3 p0 = pW + sunW * (tb + c.thick * 0.25 / sunW.y);
   float3 p1 = pW + sunW * (tb + c.thick * 0.60 / sunW.y);
-  float d = PESCloudDensity(p0, c, 3) + PESCloudDensity(p1, c, 3);
-  return exp(-d * 1.6);
+  float3 p2 = pW + sunW * (tb + c.thick * 0.85 / sunW.y);
+  float d = PESCloudDensity(p0, c, 3) + PESCloudDensity(p1, c, 3) + PESCloudDensity(p2, c, 3);
+  return exp(-d * 3.0);   // 18/10 b: mas opaca (antes 1.6 con 2 muestras: casi no se notaba)
 }
 
 #endif

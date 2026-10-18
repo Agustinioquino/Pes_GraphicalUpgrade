@@ -30,7 +30,7 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   if (P75.z < 0.5 && edge < 0.08 + 0.35 * t * t) discard;
   // color: la raiz mas oscura, la punta un poco mas clara y calida
   float3 col = i.col * (0.55 + 0.6 * t) * float3(1.0, 0.97, 0.94);
-  if (P75.z > 0.5) col = float3(1, 0, 1);
+  if (P75.z > 0.5) col = float3(1, 0, 1);   // diagnosticos 1 y 3: magenta
   o0 = float4(saturate(col), 1.0);
   // normal + translucidez (hebra: 0.15) empaquetadas como en el shader de cara
   float3 n = normalize(i.nrmV);
