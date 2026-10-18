@@ -472,10 +472,13 @@ void UpdateClothWet(double t) {
     size_t m = src.find("// PES21FX_LIVE_WET"); if (m == std::string::npos) return;
     size_t ls = src.rfind('\n', m); ls = (ls == std::string::npos) ? 0 : ls + 1;
     char line[96]; snprintf(line, sizeof(line), "#define PES_WET            %.2f   ", wet);
+    std::string before = src;
     src.replace(ls, m - ls, line);
+    last = wet;
+    if (src == before) return;   // 18/10: el archivo ya dice lo mismo: no se reescribe (cada escritura hace recompilar al mod de ropa)
+    if (t < 45.0) { next = 45.0; last = -1.0f; return; }   // nunca en el arranque del juego (el mod esta creando sus recursos)
     std::ofstream o(path, std::ios::binary | std::ios::trunc); if (!o) return;
     o << src; o.close();
-    last = wet;
     Log("ropa: tela mojada = %.2f (sudor %.2f, lluvia %s)", wet, sweat, (g_cfg.match.known && g_cfg.match.weather == 1) ? "si" : "no");
 }
 
@@ -492,6 +495,7 @@ void UpdateClothFit(double t) {
     std::wstring path = g_cfg.baseDir + L"..\\cloth-mod\\shaders\\cloth_sim.hlsl";
     std::ifstream f(path, std::ios::binary); if (!f) return;
     std::string src((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>()); f.close();
+    std::string before = src;
     const char* marks[10] = { "// PES21FX_LIVE_FIT_ON", "// PES21FX_LIVE_FIT_THIN", "// PES21FX_LIVE_FIT_FAT", "// PES21FX_LIVE_FIT_RANGE", "// PES21FX_LIVE_CLOTH_FX", "// PES21FX_LIVE_THIGH_REF", "// PES21FX_LIVE_LIMB_GAIN", "// PES21FX_LIVE_STRAIN", "// PES21FX_LIVE_SEAM_LOCK", "// PES21FX_LIVE_SEAM_WIDTH" };
     const char* names[10] = { "PES_FIT_ON  ", "PES_FIT_THIN", "PES_FIT_FAT ", "PES_FIT_RANGE", "PES_CLOTH_FX", "PES_THIGH_REF", "PES_LIMB_GAIN", "PES_STRAIN_ENC", "PES_SEAM_LOCK", "PES_SEAM_WIDTH" };
     int done = 0;
@@ -504,9 +508,11 @@ void UpdateClothFit(double t) {
         src.replace(ls, m - ls, line); done++;
     }
     if (!done) return;
+    for (int i = 0; i < 10; i++) last[i] = v[i];
+    if (src == before) return;   // 18/10: sin cambios reales no se reescribe (cada escritura hace recompilar al mod de ropa)
+    if (t < 45.0) { next = 45.0; for (int i = 0; i < 10; i++) last[i] = -1; return; }   // nunca en el arranque
     std::ofstream o(path, std::ios::binary | std::ios::trunc); if (!o) return;
     o << src; o.close();
-    for (int i = 0; i < 10; i++) last[i] = v[i];
     Log("ropa: ajuste al fisico %s (delgado +%.0f mm, ancho -%.0f mm, rango %.2f); mejoras de tela %s", v[0] > 0.5f ? "on" : "off", v[1], v[2], v[3], v[4] > 0.5f ? "activas" : "APAGADAS (version base)");
 }
 
