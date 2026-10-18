@@ -33,7 +33,7 @@
 #define PES_WET            0.00   // PES21FX_LIVE_WET
 // PES21 FX (18/10): ajuste de la tela al fisico. La escala de los huesos (fisico del editor: ancho de hombros, pecho,
 // cintura) se lee de la matriz de skinning de cada particula: >1 cuerpo ancho -> la tela se pega; <1 delgado -> cuelga.
-#define PES_FIT_ON         0      // PES21FX_LIVE_FIT_ON
+#define PES_FIT_ON         1      // PES21FX_LIVE_FIT_ON
 #define PES_FIT_THIN       10.0   // PES21FX_LIVE_FIT_THIN   mm de holgura extra en el cuerpo mas delgado
 #define PES_FIT_FAT        6.0    // PES21FX_LIVE_FIT_FAT    mm mas pegada en el cuerpo mas ancho
 #define PES_FIT_RANGE      0.15   // PES21FX_LIVE_FIT_RANGE  escala de hueso (+-) con la que se llega al maximo
@@ -211,7 +211,9 @@ float pesBodyScale(uint p)
 float pesFitOf(uint p)
 {
 #if PES_FIT_ON
-    float sc = pesBodyScale(p);
+    // (18/10 b) en el juego la escala sale INVERTIDA: cuerpo ancho -> escala < 1 (lo confirmo el usuario: el pesado
+    // quedaba holgado y el liviano pegado). Se usa 1/escala.
+    float sc = 1.0 / max(pesBodyScale(p), 1e-3);
     float r = max(PES_FIT_RANGE, 0.01);
     float f = (sc < 1.0) ? PES_FIT_THIN * 0.001 * saturate((1.0 - sc) / r) : -PES_FIT_FAT * 0.001 * saturate((sc - 1.0) / r);
     if (g_legCount > 0) f *= 0.5;   // el short responde la mitad
@@ -363,11 +365,11 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
         // PES21 FX: ajuste al fisico. Cuerpo ancho (fit < 0): el anclaje tira mas y la correa es mas corta (se pega).
         // Cuerpo delgado (fit > 0): anclaje mas suelto, correa mas larga y la tela se mantiene separada del cuerpo.
         float pesFit = pesFitOf(p);
-        alpha *= clamp(1.0 + pesFit * 200.0, 0.35, 3.0);
+        alpha *= clamp(1.0 + pesFit * 80.0, 0.6, 1.6);    // (18/10 b) rangos suaves: con 200 / 0.35..3 las mangas y el short se descontrolaban
         x += (rest1 - x) * (1.0 / (1.0 + alpha / hh));
         float3 off = x - rest1;
         float maxD0 = g_tetherRadius * (1.0 - pin);
-        float maxD = maxD0 * (1.0 + pesSlide * PES_SLIDE_TETHER) * clamp(1.0 + pesFit * 60.0, 0.3, 2.5);
+        float maxD = maxD0 * (1.0 + pesSlide * PES_SLIDE_TETHER) * clamp(1.0 + pesFit * 25.0, 0.7, 1.3);
         float dl = length(off);
         if (dl > maxD) x = rest1 + off * (maxD / dl);
         float sd = dot(x - rest1, rnrm1) + g_rest[p].nrm.w;
@@ -376,7 +378,7 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
         uint4 lp = (s_flags & 128) && g_legCount ? g_legPair[p] : uint4(0xffffffff, 0, 0, 0);
         bool legTracked = lp.x != 0xffffffff;
         if (legTracked && (g_rest[p].skin.w & 1)) inset = max(inset, g_legMaxRoom);
-        float insetF = inset - max(pesFit, 0.0);   // PES21 FX: delgado = la tela queda a 'fit' del cuerpo
+        float insetF = inset - min(max(pesFit, 0.0), 0.008);   // PES21 FX: delgado = la tela queda a 'fit' del cuerpo
         if (capN == 0 && sd < -insetF) {
             float3 corr = -(sd + insetF) * rnrm1;
             x += corr;
