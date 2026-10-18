@@ -41,7 +41,7 @@ Texture2D<float4> g_tex_stain : register(t4);
 Texture2D<float4> g_tex_stainMask : register(t5);
 Texture2D<float4> g_tex_badge : register(t6);
 Texture2D<float4> g_tex_mesh : register(t15);
-Texture2D<float4> pesKnit : register(t27);   // PES21: normal map de tejido de punto (ShaderFixes_v2\pes_knit_normal.dds)
+Texture2DArray<float4> pesKnit : register(t27);   // PES21 (18/10): 8 tramas de tela (textures\pes_knit_array.dds): 0 jersey, 1 pique, 2 malla aireada, 3 poliester liso, 4 acanalado, 5 algodon pesado, 6 jacquard, 7 puntos
 Texture2D<float4> pesFolds : register(t28);   // PES21 (18/10): tile de pliegues de tela (textures\pes_cloth_folds.dds)
 
 
@@ -279,10 +279,19 @@ void main(
   // PES21 tejido next-gen (17/10): punto de la tela en alta frecuencia sobre la trama del juego.
   // x45 escala (sobre la trama), y45 fuerza del relieve, z45 oclusion entre puntos, w45 on/off [Alt+Shift+N]
   float4 KN = IniParams.Load(int2(45,0));
-  float2 kuv = g_psMaterial.m_materials[1].xy * v2.zw * max(KN.x, 0.1);
+  // 18/10: tipo de trama segun el tipo de tela que pide el kit (indice de patron del material; el kit server lo elige
+  // por tipo de kit) o forzado desde el menu (x81: 0 auto, 1..8). Cada tipo tiene su escala y su relieve propios.
+  float kForce = IniParams.Load(int2(81,0)).x;
+  float kType = (kForce > 0.5) ? (kForce - 1.0) : g_psMaterial.m_materials[1].z;
+  kType = clamp(round(kType), 0.0, 7.0);
+  float kScaleT[8] = { 1.0, 0.9, 0.55, 1.6, 0.8, 0.7, 0.85, 0.8 };
+  float kReliefT[8] = { 1.0, 1.1, 1.3, 0.45, 1.2, 1.0, 1.1, 0.9 };
+  int kI = (int)kType;
+  float2 kuv = g_psMaterial.m_materials[1].xy * v2.zw * max(KN.x, 0.1) * kScaleT[kI];
   float2 kdx = ddx(kuv), kdy = ddy(kuv);
   if (KN.w > 0.5) {
-    float4 kn = pesKnit.SampleGrad(g_sampler_pattern_array_s, kuv, kdx, kdy);
+    float4 kn = pesKnit.SampleGrad(g_sampler_pattern_array_s, float3(kuv, kType), kdx, kdy);
+    kn.xy = lerp(0.5, kn.xy, kReliefT[kI]);
     float fpK = max(length(kdx), length(kdy)) * 512.0;          // texeles del tejido por pixel
     float kf = saturate(2.0 - fpK / 48.0);                       // muy lejos se apaga del todo
     float2 kxy = (kn.xy * 2.0 - 1.0) * saturate(KN.y) * kf * (1.0 - 0.7 * pesPrint);   // el estampado deja ver un poco la trama
