@@ -52,6 +52,49 @@
 #define PES_SHIRT_LIFT     1.2    // (18/10) la camiseta se suelta del cuerpo al saltar/caer/arrancar: cuanto mas, mas se levanta el ruedo
 #define PES_FIT_HANG       2.5    // delgado: la remera cuelga mas larga (metros de caida por metro de holgura: 10 mm -> 2.5 cm)
 #define PES_FIT_CLING      0.15   // ancho: la tela que queda separada del cuerpo se acerca a el por sub-paso
+// COMPARACION: PES_CLOTH_FX = 0 deja el simulador como viene de fabrica (todas las mejoras de PES21 FX neutras).
+// Lo escribe PES21 FX desde el menu (Ropa (fisica) -> Comparar con la version base).
+#define PES_CLOTH_FX       1      // PES21FX_LIVE_CLOTH_FX
+#if !PES_CLOTH_FX
+#undef PES_SHORTS_DAMP
+#define PES_SHORTS_DAMP 1.0
+#undef PES_SHORTS_KICK
+#define PES_SHORTS_KICK 1.0
+#undef PES_SHORTS_BEND
+#define PES_SHORTS_BEND 1.0
+#undef PES_SHORTS_FLUTTER
+#define PES_SHORTS_FLUTTER 0.0
+#undef PES_AIR_SPEED
+#define PES_AIR_SPEED 0.0
+#undef PES_HEM_FREE
+#define PES_HEM_FREE 0.0
+#undef PES_FLUTTER_ON
+#define PES_FLUTTER_ON 0
+#undef PES_GRAVITY_SLIDE
+#define PES_GRAVITY_SLIDE 0.0
+#undef PES_LEG_PRECISE
+#define PES_LEG_PRECISE 0
+#undef PES_LEG_DRAPE
+#define PES_LEG_DRAPE 0.0
+#undef PES_LAG
+#define PES_LAG 0.0
+#undef PES_SPIN
+#define PES_SPIN 0.0
+#undef PES_WET
+#define PES_WET 0.0
+#undef PES_FIT_ON
+#define PES_FIT_ON 0
+#undef PES_CAP_FIT
+#define PES_CAP_FIT 0.0
+#undef PES_CAP_MAXPUSH
+#define PES_CAP_MAXPUSH 10.0
+#undef PES_TORSO_ON
+#define PES_TORSO_ON 0
+#undef PES_ARM_ON
+#define PES_ARM_ON 0
+#undef PES_SHIRT_LIFT
+#define PES_SHIRT_LIFT 0.0
+#endif
 cbuffer Bones : register(b0) { float4 g_bones[192]; };
 cbuffer Obj   : register(b1) { float4 g_obj[18]; };
 cbuffer Params : register(b2)
