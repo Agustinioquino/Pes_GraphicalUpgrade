@@ -441,14 +441,18 @@ void main(
     float zLC = abs(g_psScene.m_projectionParam.z / (dzC - g_psScene.m_projectionParam.w));
     float mpp = max(zLC * g_psScene.m_projectionParam.x * 2.0 / max(g_psSystem.m_renderBuffer.x, 1.0), 1e-6);
     pesCurv = saturate(length(fwidth(nC)) / mpp * 0.02); }   // radio de 2 cm = 1, frente (radio 10 cm) = 0.2
-  bool isSkin = sssOn && (matType == 0) && (trans > 0.004) && (abs(skinTag - 0.98039) < 0.003);
-  if (isSkin) {
+  bool isSkinGeo = (matType == 0) && (trans > 0.004) && (abs(skinTag - 0.98039) < 0.003);
+  bool isSkin = sssOn && isSkinGeo;
+  // SSS v3 (18/10): la piel SIEMPRE usa el terminador suave, con el SSS apagado queda casi duro. Antes, con el SSS
+  // apagado, la formula del motor envolvia la cara con la translucidez (que el mapa de SSS sube) y la luz no seguia al sol.
+  if (isSkinGeo) {
     float3 w = saturate(trans) * sssWidth * float3(1.0, 0.6, 0.45);   // 16/10 (era 1/0.42/0.28): difusion mas pareja, menos tinte rojo
     // PES21 piel pre-integrada (18/10): la dispersion depende de la curvatura real de la superficie (Penner 2011)
     { float4 Q62 = IniParams.Load(int2(62,0)); if (Q62.x > 0.5 && Q62.w > 0.0) w *= lerp(1.0, 0.45 + 1.4 * pesCurv, saturate(Q62.w)); }
-    w = min(w * 0.35, float3(0.40, 0.22, 0.16));                 // 18/10: ancho del borde acotado (antes envolvia la cara y corria la luz)
+    w = min(w * 0.12, float3(0.22, 0.11, 0.07));   // SSS v3: borde angosto (antes 0.35 / tope 0.40: la luz entraba 24 grados en la sombra)
+    if (!sssOn) w = 0.03;                 // 18/10: ancho del borde acotado (antes envolvia la cara y corria la luz)
     float3 d = saturate(PESSoftTerm(rawNdotL, w));
-    d = max(d, min(transFloor, 0.08).xxx);                     // piso de translucidez del motor, acotado (no ilumina el lado de atras)
+    d = max(d, min(transFloor, 0.03).xxx);   // SSS v3: piso casi nulo (el lado de atras queda en sombra)                     // piso de translucidez del motor, acotado (no ilumina el lado de atras)
     r3.xyz = d * r8.xyz;
   }
   r2.xzw = r9.xyz * r2.zzz;
@@ -527,7 +531,7 @@ void main(
       float2 eM = saturate(min(uvC, 1.0 - uvC) * 10.0);           // sin cortes en los bordes de pantalla
       float cs = 1.0 - saturate(occ * fade * csK * eM.x * eM.y);
       csDbg = cs;
-      if (isSkin) cs = lerp(1.0, cs, 0.6);                        // en la piel la luz se difunde: sombra mas suave
+      if (isSkin) cs = lerp(1.0, cs, 0.85);                        // en la piel la luz se difunde: sombra mas suave
       r0.xyz *= cs;
     }
   }
@@ -536,7 +540,7 @@ void main(
   if (isSkin) {
     float sh = saturate(r0.x);
     // sombra mas suave sobre la piel (la luz se difunde dentro del tejido)
-    sh = lerp(sh, smoothstep(0.0, 1.0, sqrt(sh)), saturate(P5.z));
+    sh = lerp(sh, smoothstep(0.0, 1.0, sh), saturate(P5.z));   // SSS v3: solo suaviza el borde, no aclara la sombra (antes sqrt)
     // 18/10 v2: rojo solo en la PENUMBRA (borde de la sombra), la sombra plena queda neutra.
     // Antes pow(sh,0.55) en el rojo dejaba toda la sombra de la cara naranja.
     float pen = sh * (1.0 - sh) * 4.0;   // 1 en el medio del borde, 0 en luz plena y en sombra plena
