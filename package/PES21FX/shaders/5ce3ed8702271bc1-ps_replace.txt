@@ -77,6 +77,7 @@ Texture2D<float4> pesFaceB    : register(t24);   //   R poros, G zona de brillo,
 struct PesSeed { float4 posV; float4 nrmV; float4 dirV; float4 col; };
 Texture2D<float4> pesSeedMap  : register(t26);   // PES21 (18/10) semillas de cejas por celda (salida C del generador)
 RWStructuredBuffer<PesSeed> pesSeeds : register(u5);   // PES21 (18/10) semillas animadas de este dibujo (las lee pes_brow_vs)
+RWByteAddressBuffer pesSeedArgs : register(u6);          // PES21 (18/10 b) {verts por instancia, instancias, 0, 0}: cuenta de semillas para DrawInstancedIndirect
 Texture2D<float4> pesZones    : register(t25);   // PES21 (18/10) zonas de la cara: R sudor, G labios, B cuello, A piel (textures\pes_face_zones.dds)
 
 // 3Dmigoto declarations
@@ -544,7 +545,10 @@ void main(
         float fp = max(fwidth(v2.x), fwidth(v2.y)) * 2048.0;         // texeles por pixel
         float rad = max(1.2, fp * 0.8);
         if (length((v2.xy - suv) * 2048.0) < rad) {
-          uint idx = (uint)cell.y * 256u + (uint)cell.x;
+          // 18/10 b: semillas compactas: cada una toma el siguiente lugar libre (contador en los argumentos del dibujo)
+          uint perS = (uint)clamp(P74.y, 1.0, 3.0);
+          uint slotS; pesSeedArgs.InterlockedAdd(4, perS, slotS);
+          uint idx = slotS / perS;
           float3 dirC = -normalize(v3.xyz);
           // v0 es SV_Position: su w es 1/w (ERROR corregido 18/10: antes se usaba como si fuera la profundidad y las
           // hebras nacian a medio camino entre la camara y la cara)
@@ -558,7 +562,7 @@ void main(
           sd.nrmV = float4(normalize(r1.xyz), 0.0);
           sd.dirV = float4(normalize(dirV + 1e-5), sm.z);
           sd.col = float4(o0.xyz, asfloat(f32tof16(pesMotionRaw.x) | (f32tof16(pesMotionRaw.y) << 16)));
-          pesSeeds[idx] = sd;
+          if (idx < 65536u) { pesSeeds[idx] = sd; pesSeedArgs.InterlockedMax(0, 24u); }
           if (dbg75 > 1.5) o0.xyz = float3(0.0, 1.0, 1.0);   // diagnostico 2: pixel que escribio la semilla en cian
         }
       }

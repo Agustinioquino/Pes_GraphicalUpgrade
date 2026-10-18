@@ -17,6 +17,7 @@ namespace fx {
 struct FaceEntry {
     ID3D11ShaderResourceView* a = nullptr; ID3D11ShaderResourceView* b = nullptr; ID3D11ShaderResourceView* c = nullptr;   // c = semillas de cejas
     ID3D11Buffer* seeds = nullptr; ID3D11UnorderedAccessView* seedsUAV = nullptr; ID3D11ShaderResourceView* seedsSRV = nullptr;
+    ID3D11Buffer* args = nullptr; ID3D11UnorderedAccessView* argsUAV = nullptr;   // 18/10: argumentos de DrawInstancedIndirect (cuenta de semillas que escribe la cara)
     bool pending = false; bool failed = false;
 };
 static const UINT kSeedCount = 65536;   // grilla 256x256 de la quinta textura
@@ -37,6 +38,7 @@ static void ReleaseEntry(FaceEntry& e) {
     if (e.a) e.a->Release(); if (e.b) e.b->Release(); if (e.c) e.c->Release(); e.a = e.b = e.c = nullptr;
     if (e.seedsUAV) e.seedsUAV->Release(); if (e.seedsSRV) e.seedsSRV->Release(); if (e.seeds) e.seeds->Release();
     e.seedsUAV = nullptr; e.seedsSRV = nullptr; e.seeds = nullptr;
+    if (e.argsUAV) e.argsUAV->Release(); if (e.args) e.args->Release(); e.argsUAV = nullptr; e.args = nullptr;
 }
 // hebras de ceja: shaders propios (se compilan en Present, no en los hilos del juego)
 static ID3D11VertexShader* s_browVS = nullptr; static ID3D11PixelShader* s_browPS = nullptr; static bool s_browTried = false; static ID3D11RasterizerState* s_browRS = nullptr;
@@ -85,7 +87,7 @@ bool FaceGenLookup(ID3D11DeviceContext* c, ID3D11ShaderResourceView** outA, ID3D
         auto it = s_cache.find(key);
         if (it != s_cache.end()) {
             if (it->second.a) { *outA = it->second.a; *outB = it->second.b; found = true;
-                if (ex) { ex->seedMap = it->second.c; ex->seedsUAV = it->second.seedsUAV; ex->seedsSRV = it->second.seedsSRV; } }
+                if (ex) { ex->seedMap = it->second.c; ex->seedsUAV = it->second.seedsUAV; ex->seedsSRV = it->second.seedsSRV; ex->args = it->second.args; ex->argsUAV = it->second.argsUAV; } }
         } else if (in[0] && in[2] && in[3] && s_cache.size() < 96) {
             D3D11_RESOURCE_DIMENSION dim; key->GetType(&dim);
             if (dim == D3D11_RESOURCE_DIMENSION_TEXTURE2D) {
@@ -173,6 +175,13 @@ void FaceGenPresent() {
                     D3D11_SHADER_RESOURCE_VIEW_DESC sd{}; sd.Format = DXGI_FORMAT_UNKNOWN; sd.ViewDimension = D3D11_SRV_DIMENSION_BUFFER; sd.Buffer.NumElements = kSeedCount;
                     g_dev.dev->CreateShaderResourceView(e.seeds, &sd, &e.seedsSRV);
                 }
+                // argumentos del dibujo indirecto: {vertices por instancia, instancias, 0, 0}; la cara los escribe (contador de semillas)
+                { D3D11_BUFFER_DESC ad{}; ad.ByteWidth = 16; ad.Usage = D3D11_USAGE_DEFAULT; ad.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+                  ad.MiscFlags = D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS | D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+                  if (SUCCEEDED(g_dev.dev->CreateBuffer(&ad, nullptr, &e.args))) {
+                      D3D11_UNORDERED_ACCESS_VIEW_DESC au{}; au.Format = DXGI_FORMAT_R32_TYPELESS; au.ViewDimension = D3D11_UAV_DIMENSION_BUFFER; au.Buffer.NumElements = 4; au.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+                      g_dev.dev->CreateUnorderedAccessView(e.args, &au, &e.argsUAV);
+                  } }
                 ID3D11RenderTargetView* rts[3] = { ra, rb, rc };
                 c->OMSetRenderTargets(3, rts, nullptr);
                 D3D11_VIEWPORT vp{ 0, 0, (float)r.w, (float)r.h, 0, 1 }; c->RSSetViewports(1, &vp);
@@ -211,13 +220,13 @@ void FaceGenPresent() {
 // (el G-buffer sigue enlazado). Se guarda y restaura el estado que se toca.
 void BrowDrawAfterFace(ID3D11DeviceContext* c, FaceGenExtra* ex) {
     if (!ex || !ex->seedsUAV) return;
-    // 1) soltar el UAV del shader de cara
-    ID3D11UnorderedAccessView* nullUav = nullptr;
-    c->OMSetRenderTargetsAndUnorderedAccessViews(D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 5, 1, &nullUav, nullptr);
+    // 1) soltar los UAV del shader de cara (semillas y argumentos)
+    ID3D11UnorderedAccessView* nullUav[2] = { nullptr, nullptr };
+    c->OMSetRenderTargetsAndUnorderedAccessViews(D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 5, 2, nullUav, nullptr);
     if (!s_browVS || !s_browPS || !s_browRS || !ex->seedsSRV) return;
     float on = g_cfg.live[74][0]; if (on < 0.5f) return;
     UINT perSeed = (UINT)std::max(1.0f, std::min(3.0f, g_cfg.live[74][1]));
-    int maxFaces = (int)g_cfg.live[77][0]; if (maxFaces < 1) maxFaces = 3;
+    int maxFaces = (int)g_cfg.live[77][0]; if (maxFaces < 1) maxFaces = 22;
     if (s_browFaces.fetch_add(1) >= maxFaces) return;   // solo las primeras N caras del cuadro (rendimiento)
     // 2) guardar estado
     ID3D11VertexShader* oVS = nullptr; ID3D11PixelShader* oPS = nullptr; ID3D11GeometryShader* oGS = nullptr; ID3D11HullShader* oHS = nullptr; ID3D11DomainShader* oDS = nullptr;
@@ -261,7 +270,10 @@ void BrowDrawAfterFace(ID3D11DeviceContext* c, FaceGenExtra* ex) {
     c->VSSetShaderResources(30, 1, &ex->seedsSRV);
     ID3D11ShaderResourceView* prm = g_dev.paramSRV; c->VSSetShaderResources(120, 1, &prm); c->PSSetShaderResources(120, 1, &prm);
     c->RSSetState(s_browRS);   // sin culling (cintas vistas de ambos lados)
-    c->DrawInstanced(6 * 4, kSeedCount * perSeed, 0, 0);
+    // 18/10: dibujo indirecto: tantas instancias como semillas escribio ESTA cara en este cuadro (las caras lejanas casi
+    // no escriben semillas y cuestan nada). En la "prueba de dibujo" (z75 = 3) se dibuja una grilla fija.
+    if (g_cfg.live[75][2] > 2.5f || !ex->args) c->DrawInstanced(6 * 4, 4096 * perSeed, 0, 0);
+    else c->DrawInstancedIndirect(ex->args, 0);
     // 4) restaurar
     c->VSSetShader(oVS, nullptr, 0); c->PSSetShader(oPS, nullptr, 0); c->GSSetShader(oGS, nullptr, 0); c->HSSetShader(oHS, nullptr, 0); c->DSSetShader(oDS, nullptr, 0);
     if (oVS) oVS->Release(); if (oPS) oPS->Release(); if (oGS) oGS->Release(); if (oHS) oHS->Release(); if (oDS) oDS->Release();

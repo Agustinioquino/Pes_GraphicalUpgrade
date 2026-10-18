@@ -43,12 +43,12 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID)
   uint sIdx = iid / perSeed, sub = iid % perSeed;
   Seed s = gSeeds[sIdx];
   float3 viewDirFwd = float3(0, 0, 1);
-  // diagnostico 3 (18/10): "prueba de dibujo": sin semillas, una grilla de hebras a 1.5 m delante de la camara.
+  // diagnostico 3 (18/10): "prueba de dibujo": sin semillas, una grilla de hebras a 6 m delante de la camara.
   // Si esto no se ve, falla el dibujo (shaders/estado); si se ve, fallan las semillas que escribe la cara.
   if (P75.z > 2.5) {
     if (sIdx >= 4096) { o.pos = float4(0, 0, -2, 1); return o; }
     uint gx = sIdx % 64, gy = sIdx / 64;
-    s.posV = float4((gx - 32.0) * 0.012, (gy - 32.0) * 0.012, 1.5, 1.0);
+    s.posV = float4((gx - 32.0) * 0.05, (gy - 32.0) * 0.05, 6.0, 1.0);   // 18/10 b: a 6 m (el plano cercano de las repeticiones llega a 3 m)
     s.nrmV = float4(0, 0, -1, 0);
     s.dirV = float4(1, 0.3, 0, 1.0);
     s.col = float4(1, 0, 1, 0);

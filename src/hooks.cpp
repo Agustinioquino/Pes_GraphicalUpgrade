@@ -439,12 +439,14 @@ static void RunRule(ID3D11DeviceContext* c, const ShaderEntry* e, DrawScope& d) 
                 // cejas con hebras: mapa de semillas en t26 y buffer de semillas (UAV 5) limpio para este dibujo
                 if (ex.seedMap && ex.seedsUAV && g_cfg.live[74][0] > 0.5f) {
                     Remember(c, d, true, true, 26); c->PSSetShaderResources(26, 1, &ex.seedMap);
-                    const UINT z[4] = { 0, 0, 0, 0 }; c->ClearUnorderedAccessViewUint(ex.seedsUAV, z);   // buffer estructurado: limpieza por bits
+                    const UINT z[4] = { 0, 0, 0, 0 };
+                    if (ex.argsUAV) c->ClearUnorderedAccessViewUint(ex.argsUAV, z);   // 18/10: solo se limpia el contador (las semillas se escriben compactas)
+                    else c->ClearUnorderedAccessViewUint(ex.seedsUAV, z);
                     // el UAV va en el slot 5 (u5): hay que enlazarlo con la cuenta real de render targets (<= 5), no con "mantener",
                     // porque si el juego dejo 8 slots declarados la llamada se rechaza en silencio
                     ID3D11RenderTargetView* rts[8] = {}; ID3D11DepthStencilView* dsv = nullptr; c->OMGetRenderTargets(8, rts, &dsv);
                     UINT nrt = 0; for (UINT i = 0; i < 8; i++) if (rts[i]) nrt = i + 1;
-                    if (nrt <= 5) { c->OMSetRenderTargetsAndUnorderedAccessViews(nrt, rts, dsv, 5, 1, &ex.seedsUAV, nullptr); d.brow = ex; d.brow.rtCount = (int)nrt; }
+                    if (nrt <= 5) { ID3D11UnorderedAccessView* uavs[2] = { ex.seedsUAV, ex.argsUAV }; c->OMSetRenderTargetsAndUnorderedAccessViews(nrt, rts, dsv, 5, ex.argsUAV ? 2 : 1, uavs, nullptr); d.brow = ex; d.brow.rtCount = (int)nrt; }
                     else { static std::atomic<bool> warned{false}; if (!warned.exchange(true)) Log("cejas: la cara se dibuja con %u render targets, no puedo enlazar el buffer de semillas", nrt); }
                     for (auto* v : rts) if (v) v->Release(); if (dsv) dsv->Release();
                 }
