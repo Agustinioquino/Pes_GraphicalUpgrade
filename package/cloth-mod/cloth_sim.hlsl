@@ -37,6 +37,8 @@
 #define PES_FIT_THIN       10.0   // PES21FX_LIVE_FIT_THIN   mm de holgura extra en el cuerpo mas delgado
 #define PES_FIT_FAT        6.0    // PES21FX_LIVE_FIT_FAT    mm mas pegada en el cuerpo mas ancho
 #define PES_FIT_RANGE      0.15   // PES21FX_LIVE_FIT_RANGE  escala de hueso (+-) con la que se llega al maximo
+#define PES_FIT_HANG       2.5    // delgado: la remera cuelga mas larga (metros de caida por metro de holgura: 10 mm -> 2.5 cm)
+#define PES_FIT_CLING      0.15   // ancho: la tela que queda separada del cuerpo se acerca a el por sub-paso
 cbuffer Bones : register(b0) { float4 g_bones[192]; };
 cbuffer Obj   : register(b1) { float4 g_obj[18]; };
 cbuffer Params : register(b2)
@@ -365,13 +367,17 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
         // PES21 FX: ajuste al fisico. Cuerpo ancho (fit < 0): el anclaje tira mas y la correa es mas corta (se pega).
         // Cuerpo delgado (fit > 0): anclaje mas suelto, correa mas larga y la tela se mantiene separada del cuerpo.
         float pesFit = pesFitOf(p);
-        alpha *= clamp(1.0 + pesFit * 80.0, 0.6, 1.6);    // (18/10 b) rangos suaves: con 200 / 0.35..3 las mangas y el short se descontrolaban
-        x += (rest1 - x) * (1.0 / (1.0 + alpha / hh));
-        float3 off = x - rest1;
+        float fitFree = saturate(1.0 - pin * 1.5);
+        alpha *= (pesFit < 0.0) ? clamp(1.0 + pesFit * 120.0, 0.4, 1.0) : clamp(1.0 + pesFit * 80.0, 1.0, 1.6);   // (18/10 b) rangos suaves
+        // delgado: el punto de reposo baja con la gravedad -> la remera cuelga mas larga (solo tela libre)
+        float3 restT = rest1;
+        if (pesFit > 0.0) { float gl = length(s_grav); if (gl > 1e-4) restT += (s_grav / gl) * pesFit * PES_FIT_HANG * fitFree; }
+        x += (restT - x) * (1.0 / (1.0 + alpha / hh));
+        float3 off = x - restT;
         float maxD0 = g_tetherRadius * (1.0 - pin);
         float maxD = maxD0 * (1.0 + pesSlide * PES_SLIDE_TETHER) * clamp(1.0 + pesFit * 25.0, 0.7, 1.3);
         float dl = length(off);
-        if (dl > maxD) x = rest1 + off * (maxD / dl);
+        if (dl > maxD) x = restT + off * (maxD / dl);
         float sd = dot(x - rest1, rnrm1) + g_rest[p].nrm.w;
         uint capN = (g_rest[p].skin.w & 1) ? min(g_capsuleCount, MAXCAPS) : 0;
         float inset = max(g_collisionInset, float(g_rest[p].skin.w >> 24) * 0.001);
@@ -383,6 +389,10 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
             float3 corr = -(sd + insetF) * rnrm1;
             x += corr;
             xPrev += corr * (1.0 - g_bodyBounce);
+        } else if (pesFit < 0.0 && sd > 0.0) {
+            // ancho: la tela que quedo despegada se acerca al cuerpo (se marca el torso), sin inyectar velocidad
+            float pull = min(sd, 0.03) * saturate(-pesFit / 0.006) * PES_FIT_CLING * fitFree;
+            x -= rnrm1 * pull; xPrev -= rnrm1 * pull;
         }
         if (legTracked) {
             float3 ly = 0, ln = 0;
