@@ -173,7 +173,7 @@ void OverlayPresent(IDXGISwapChain* sc);
 // quinta textura de la cara generada en vivo (facegen.cpp)
 bool FaceGenLookup(ID3D11DeviceContext* c, ID3D11ShaderResourceView** outA, ID3D11ShaderResourceView** outB);
 void FaceGenPresent(); void FaceGenClear(); void FaceGenReloadShaders(); int FaceGenCount();
-struct ID3D10Blob; ID3D10Blob* CompileNamedShader(const wchar_t* file, const char* profile);   // shaders\<file> con #include
+ID3DBlob* CompileNamedShader(const wchar_t* file, const char* profile);   // shaders\<file> con #include
 // prueba automatica del menu (menutest.cpp)
 void MenuTestPresent(IDXGISwapChain* sc);
 void MenuTestStart(); void MenuTestStop(); bool MenuTestActive();
