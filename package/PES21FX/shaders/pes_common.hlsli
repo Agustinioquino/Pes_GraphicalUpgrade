@@ -72,4 +72,70 @@ float PESSunWidenAlpha(float alpha, float sunDeg, out float energy)
   return a2;
 }
 
+// ---------------------------------------------------------------- nubes volumetricas (slots 83..86)
+// x83 on | y83 cobertura 0..1 | z83 densidad | w83 altura de la base (m)
+// x84 espesor (m) | y84 viento (m/s) | z84 direccion del viento (grados) | w84 tamano de las nubes (m)
+// x85 luz del sol en la nube | y85 luz ambiente en la nube | z85 sombra de nubes en el suelo 0..1 | w85 pasos (calidad)
+// x86 forma: 0 cumulo .. 1 estrato | y86 invertir eje vertical | z86 invertir adelante/atras | w86 tiempo propio (0 = reloj del juego)
+float PESHash1(float3 p)
+{
+  p = frac(p * 0.3183099 + float3(0.1, 0.17, 0.23));
+  p *= 17.0;
+  return frac(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+float PESNoise3(float3 x)
+{
+  float3 i = floor(x); float3 f = frac(x); f = f * f * (3.0 - 2.0 * f);
+  return lerp(lerp(lerp(PESHash1(i + float3(0,0,0)), PESHash1(i + float3(1,0,0)), f.x),
+                   lerp(PESHash1(i + float3(0,1,0)), PESHash1(i + float3(1,1,0)), f.x), f.y),
+              lerp(lerp(PESHash1(i + float3(0,0,1)), PESHash1(i + float3(1,0,1)), f.x),
+                   lerp(PESHash1(i + float3(0,1,1)), PESHash1(i + float3(1,1,1)), f.x), f.y), f.z);
+}
+float PESFbm3(float3 p, int oct)
+{
+  float a = 0.5, s = 0.0, n = 0.0;
+  [loop] for (int i = 0; i < oct; i++) { s += a * PESNoise3(p); n += a; p = p * 2.03 + 11.7; a *= 0.5; }
+  return s / max(n, 1e-4);
+}
+struct PESCloudParams { float on; float cover; float dens; float hBase; float thick; float3 wind; float scale; float shape; float t; };
+PESCloudParams PESCloudLoad(float tGame)
+{
+  PESCloudParams c;
+  float4 A = IniParams.Load(int2(83,0)), B = IniParams.Load(int2(84,0)), D = IniParams.Load(int2(86,0));
+  c.on = A.x; c.cover = saturate(A.y); c.dens = A.z > 0 ? A.z : 1.0;
+  c.hBase = A.w > 100.0 ? A.w : 1500.0;
+  c.thick = B.x > 100.0 ? B.x : 1200.0;
+  float ang = radians(B.z);
+  c.wind = float3(cos(ang), 0.0, sin(ang)) * max(B.y, 0.0);
+  c.scale = B.w > 100.0 ? B.w : 2500.0;
+  c.shape = saturate(D.x);
+  c.t = D.w > 0.0 ? D.w : tGame;
+  return c;
+}
+// densidad en un punto del mundo (m): 0 = aire, ~1 = nube densa. hN = altura relativa dentro de la capa (0 base .. 1 tope)
+float PESCloudDensity(float3 pW, PESCloudParams c, int oct)
+{
+  float hN = saturate((pW.y - c.hBase) / c.thick);
+  float3 q = (pW + c.wind * c.t) / c.scale;
+  q.y *= lerp(2.5, 1.2, c.shape);                 // cumulos: mas altos que anchos; estratos: capas chatas
+  float base = PESFbm3(q, oct);
+  // perfil vertical: base plana y tope redondeado (cumulo) o capa uniforme (estrato)
+  float prof = lerp(smoothstep(0.0, 0.12, hN) * (1.0 - smoothstep(0.45, 1.0, hN)), smoothstep(0.0, 0.08, hN) * (1.0 - smoothstep(0.7, 1.0, hN)), c.shape);
+  float cov = lerp(0.72, 0.30, c.cover);          // umbral: mas cobertura = umbral mas bajo
+  float d = saturate((base - cov) / max(1.0 - cov, 0.05)) * prof;
+  // erosion en los bordes con detalle fino
+  if (d > 0.001 && oct >= 4) { float det = PESFbm3(q * 6.3 + 3.1, 2); d = saturate(d - (1.0 - d) * det * 0.35); }
+  return d * c.dens;
+}
+// sombra de nubes sobre un punto del mundo: transmitancia 0..1 a lo largo de la direccion del sol (2 muestras en la capa)
+float PESCloudShadow(float3 pW, float3 sunW, PESCloudParams c)
+{
+  if (c.on < 0.5 || sunW.y < 0.03) return 1.0;
+  float tb = (c.hBase - pW.y) / sunW.y;
+  float3 p0 = pW + sunW * (tb + c.thick * 0.25 / sunW.y);
+  float3 p1 = pW + sunW * (tb + c.thick * 0.60 / sunW.y);
+  float d = PESCloudDensity(p0, c, 3) + PESCloudDensity(p1, c, 3);
+  return exp(-d * 1.6);
+}
+
 #endif

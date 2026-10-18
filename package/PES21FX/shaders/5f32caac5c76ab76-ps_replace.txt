@@ -50,6 +50,7 @@ Texture2D<float4> PESDepth : register(t21);   // PES21: profundidad copiada del 
 #define cmp -
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
+#include "pes_common.hlsli"   // PES21 (18/10): nubes volumetricas
 
 
 // PES21 sol visible (16/10): copias de los cbuffers de escena (b2 de la composicion) y de luz (b3 de los shaders de luz),
@@ -147,6 +148,7 @@ void main(
     // --- sol visible: x37 tamano, y37 intensidad, z37 = 1 invierte el eje vertical, w37 on/off [Alt+Shift+4] ---
     float4 SN = IniParams.Load(int2(37,0));
     float3 Ls = pL_dir.xyz;
+    float3 pesCloudCol = 0.0; float pesCloudT = 1.0;   // se aplican despues del sol (las nubes lo tapan)
     if (SN.w > 0.5 && skyM > 0.01 && dot(Ls, Ls) > 1e-6 && abs(pS_projParam.x) > 1e-6 && abs(pS_projParam.y) > 1e-6) {
       Ls = normalize(Ls);
       if (Ls.z > 0.02) {
@@ -162,6 +164,57 @@ void main(
         colS = colS / max(dot(colS, float3(0.2126, 0.7152, 0.0722)), 1e-3);
         r0.xyz += colS * (diskS * 14.0 + glowS * 1.6) * saturate(SN.y) * skyM;
       }
+    }
+    // === PES21 nubes volumetricas (18/10): raymarch en una capa de nubes sobre los pixeles de cielo ===
+    // El rayo de cada pixel se arma con la proyeccion (como el sol visible) y se pasa a mundo con las filas de m_view
+    // (misma convencion que la brujula del sol). Campo de nubes compartido con la sombra de nubes de los shaders de luz.
+    { PESCloudParams CP = PESCloudLoad(g_psSystem.m_timeParam.z);
+      float4 Q85 = IniParams.Load(int2(85,0)); float4 Q86 = IniParams.Load(int2(86,0));
+      if (CP.on > 0.5 && skyM > 0.01 && abs(pS_projParam.x) > 1e-6 && abs(pS_projParam.y) > 1e-6 && dot(Ls, Ls) > 1e-6) {
+        float2 ndc = float2(uvS.x * 2.0 - 1.0, (Q86.y > 0.5 ? 1.0 : -1.0) * (uvS.y * 2.0 - 1.0));
+        float3 dirV = normalize(float3((ndc - pS_centerOff.xy) * pS_projParam.xy, Q86.z > 0.5 ? -1.0 : 1.0));
+        float3 vX = float3(pS_mat[2]._m00, pS_mat[2]._m01, pS_mat[2]._m02);
+        float3 vY = float3(pS_mat[2]._m10, pS_mat[2]._m11, pS_mat[2]._m12);
+        float3 vZ = float3(pS_mat[2]._m20, pS_mat[2]._m21, pS_mat[2]._m22);
+        float3 dW = normalize(float3(dot(dirV, vX), dot(dirV, vY), dot(dirV, vZ)));
+        float3 Ln = normalize(Ls);
+        float3 sunW = normalize(float3(dot(Ln, vX), dot(Ln, vY), dot(Ln, vZ)));
+        if (dW.y > 0.015) {
+          float t0 = CP.hBase / dW.y, t1 = (CP.hBase + CP.thick) / dW.y;
+          t1 = min(t1, 45000.0);
+          int steps = (int)clamp(Q85.w > 0 ? Q85.w : 24.0, 8.0, 48.0);
+          float dt = (t1 - t0) / steps;
+          float jit = frac(52.9829189 * frac(dot(uvS * g_psSystem.m_renderBuffer.xy, float2(0.06711056, 0.00583715))) + frac(g_psSystem.m_timeParam.z * 7.31));
+          float3 sunC = max(pL_color.xyz, 0.0); float sunL = max(dot(sunC, float3(0.2126, 0.7152, 0.0722)), 1e-3); sunC /= sunL;
+          float3 ambC = r0.xyz;                                    // el cielo de atras alimenta la luz ambiente de la nube
+          float mu = dot(dW, sunW);
+          float g1 = 0.65, g2 = -0.25;
+          float ph = lerp(0.0597 * (1.0 - g1 * g1) / pow(1.0 + g1 * g1 - 2.0 * g1 * mu, 1.5), 0.0597 * (1.0 - g2 * g2) / pow(1.0 + g2 * g2 - 2.0 * g2 * mu, 1.5), 0.3) * 4.0;
+          float T = 1.0; float3 C = 0.0;
+          float sunK = Q85.x > 0 ? Q85.x : 1.0, ambK = Q85.y > 0 ? Q85.y : 1.0;
+          float sigma = 0.0028 * dt;                               // extincion por metro x paso
+          [loop] for (int i = 0; i < steps && T > 0.02; i++) {
+            float3 pW = dW * (t0 + (i + jit) * dt);
+            float d = PESCloudDensity(pW, CP, 4);
+            if (d < 0.002) continue;
+            // luz del sol: 3 pasos hacia el sol dentro de la capa
+            float dl = 0.0;
+            [unroll] for (int k = 1; k <= 3; k++) dl += PESCloudDensity(pW + sunW * (k * k * 90.0), CP, 3);
+            float Tsun = exp(-dl * 0.26) ;
+            float powder = 1.0 - exp(-d * 2.0);
+            float hN = saturate((pW.y - CP.hBase) / CP.thick);
+            float3 amb = ambC * lerp(0.35, 1.0, hN) * ambK;
+            float3 S = sunC * Tsun * ph * 1.8 * sunK * lerp(0.6, 1.0, powder) + amb;
+            float a = 1.0 - exp(-d * sigma);
+            C += T * S * a; T *= 1.0 - a;
+          }
+          // bruma: las nubes lejanas se funden con el horizonte
+          float hz = saturate((dW.y - 0.015) / 0.12);
+          pesCloudT = lerp(1.0, T, hz);
+          pesCloudCol = lerp(ambC * (1.0 - T), C, hz);   // radiancia ya premultiplicada por la opacidad
+        }
+      }
+      r0.xyz = lerp(r0.xyz, r0.xyz * pesCloudT + pesCloudCol, skyM);
     }
   }
   float clarK = grade ? saturate(P6.z) : 0.0;
