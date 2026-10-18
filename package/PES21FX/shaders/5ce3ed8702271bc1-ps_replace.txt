@@ -535,6 +535,8 @@ void main(
   { float4 P74 = IniParams.Load(int2(74,0));
     if (enhance && P74.x > 0.5) {
       float4 sm = pesSeedMap.SampleLevel(g_samplerPoint_Wrap_s, v2.xy, 0);
+      float dbg75 = IniParams.Load(int2(75,0)).z;
+      if (dbg75 > 1.5 && sm.a > 0.5) o0.xyz = float3(1.0, 0.0, 1.0);   // diagnostico 2: celdas con semilla en magenta sobre la cara
       if (sm.a > 0.5) {
         float2 cell = floor(v2.xy * 256.0);
         float2 jit = float2(h21(cell + 0.37), h21(cell + 1.7)) - 0.5;
@@ -554,6 +556,7 @@ void main(
           sd.dirV = float4(normalize(dirV + 1e-5), sm.z);
           sd.col = float4(o0.xyz, asfloat(f32tof16(pesMotionRaw.x) | (f32tof16(pesMotionRaw.y) << 16)));
           pesSeeds[idx] = sd;
+          if (dbg75 > 1.5) o0.xyz = float3(0.0, 1.0, 1.0);   // diagnostico 2: pixel que escribio la semilla en cian
         }
       }
     } }

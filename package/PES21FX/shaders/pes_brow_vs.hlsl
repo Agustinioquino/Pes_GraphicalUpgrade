@@ -67,6 +67,11 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID)
   // curva: sale levantada y se acuesta hacia la punta (como el pelo de ceja real)
   float3 p = root + dd * len * t + n * len * lift * (0.35 * sin(t * 3.14159) + 0.1 * t);
   float wid = max(P74.w, 0.05) * 0.001 * (1.0 - 0.85 * t) * 0.5;
+  // ancho minimo en pantalla: una hebra de 0.35 mm a 1 m es menos de medio pixel y el rasterizador no la cubre nunca.
+  // Se garantiza ~1.2 px de ancho (2.5 px en diagnostico); la punta se afina en el pixel shader por descarte.
+  float vpH = m_viewportSize.y > 16.0 ? m_viewportSize.y : 1080.0;
+  float pxV = 2.0 * abs(p.z) / (max(abs(m_projection[1].y), 1e-4) * vpH);   // tamano de un pixel en espacio de vista a esta distancia
+  wid = max(wid, pxV * (P75.z > 0.5 ? 1.25 : 0.6));
   float3 V = normalize(-p);                              // hacia la camara (espacio de vista: camara en el origen)
   float3 sideV = normalize(cross(dd, V));
   p += sideV * wid * side;

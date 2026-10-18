@@ -26,7 +26,8 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   float t = i.tw.x;
   // borde de la cinta transparente por descarte (sin alpha blend en el G-buffer): perfil redondeado
   float edge = 1.0 - abs(i.tw.y);
-  if (edge < 0.18 + 0.5 * t) discard;
+  // con cintas de ~1 px el descarte tiene que ser suave: solo el borde exterior y la punta
+  if (P75.z < 0.5 && edge < 0.08 + 0.35 * t * t) discard;
   // color: la raiz mas oscura, la punta un poco mas clara y calida
   float3 col = i.col * (0.55 + 0.6 * t) * float3(1.0, 0.97, 0.94);
   if (P75.z > 0.5) col = float3(1, 0, 1);
