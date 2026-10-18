@@ -10,8 +10,13 @@
 #define PES_SHORTS_FLUTTER 0.12   // aleteo del borde al correr, proporcional a la velocidad del cuerpo (m/s)
 // CAMISETA Y SHORT:
 #define PES_AIR_SPEED      0.25   // resistencia del aire que crece con la velocidad: la tela se pega al correr y flamea al frenar
-#define PES_HEM_FREE       0.35
-#define PES_FLUTTER_ON     1      // 0 = sin aleteo   // el borde libre (sin pin) se amortigua menos que la tela cerca de las costuras
+#define PES_HEM_FREE       0.35   // el borde libre (sin pin) se amortigua menos que la tela cerca de las costuras
+#define PES_FLUTTER_ON     1      // 0 = sin aleteo
+// DESLIZAMIENTO POR GRAVEDAD (short con la pierna arriba, manga con el brazo arriba): donde la gravedad queda tangente a la
+// superficie del cuerpo, la tela deja de estar "cosida" a su posicion de fabrica y resbala hasta donde le da el largo.
+#define PES_GRAVITY_SLIDE  0.70   // 0 = como antes; 1 = resbala al maximo
+#define PES_SLIDE_PIN      10.0   // cuanto se afloja el resorte hacia la posicion de fabrica donde resbala
+#define PES_SLIDE_TETHER   2.5    // cuanto se alarga la correa de distancia maxima donde resbala
 cbuffer Bones : register(b0) { float4 g_bones[192]; };
 cbuffer Obj   : register(b1) { float4 g_obj[18]; };
 cbuffer Params : register(b2)
@@ -97,6 +102,7 @@ static uint   s_stamp, s_substeps, s_flags, s_coupleOn, s_otherCaps;
 static uint   s_stateBase, s_palBase, s_cacheBase, s_outBase0, s_outBase1, s_pnrmBase, s_otherCacheBase;
 static float4 s_W[3], s_Wp[3];
 static float3 s_kick;
+static float3 s_grav;   // PES21 FX: gravedad en el espacio de la prenda (para el deslizamiento)
 RWByteAddressBuffer             g_outPos    : register(u0);
 RWByteAddressBuffer             g_outNrm    : register(u1);
 RWStructuredBuffer<float4>      g_state     : register(u2);
@@ -293,9 +299,19 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
         float3 x = gx[p];
         float rel = (1.0 - pin) / max(pin, 1e-4);
         float alpha = g_pinCompliance * rel * rel;
+        // PES21 FX: deslizamiento por gravedad. Componente de la gravedad tangente a la superficie del cuerpo:
+        // grande = la tela quiere resbalar (muslo levantado, brazo arriba). Solo tela lejos de las costuras (pin bajo).
+        float pesSlide = 0.0;
+        { float gl = length(s_grav);
+          if (gl > 1e-4) {
+            float3 gd = s_grav / gl;
+            float3 tg = gd - rnrm1 * dot(gd, rnrm1);
+            pesSlide = saturate(length(tg)) * PES_GRAVITY_SLIDE * saturate(1.0 - pin * 1.5);
+          } }
+        alpha *= 1.0 + pesSlide * PES_SLIDE_PIN;
         x += (rest1 - x) * (1.0 / (1.0 + alpha / hh));
         float3 off = x - rest1;
-        float maxD = g_tetherRadius * (1.0 - pin);
+        float maxD = g_tetherRadius * (1.0 - pin) * (1.0 + pesSlide * PES_SLIDE_TETHER);
         float dl = length(off);
         if (dl > maxD) x = rest1 + off * (maxD / dl);
         float sd = dot(x - rest1, rnrm1) + g_rest[p].nrm.w;
@@ -525,6 +541,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
             float3x3 W = (s_flags & 32) ? float3x3(1, 0, 0, 0, 1, 0, 0, 0, 1)
                                         : float3x3(s_W[0].xyz, s_W[1].xyz, s_W[2].xyz);
             float3 grav = mul(transpose(W), g_gravity.xyz);
+            s_grav = grav;   // PES21 FX
             float3 windBase = mul(transpose(W), g_wind.xyz);
             for (uint s = 0; s < s_substeps; ++s) {
                 float t = float(s + 1) / float(s_substeps);
