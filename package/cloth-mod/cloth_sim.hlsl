@@ -39,6 +39,11 @@
 #define PES_FIT_RANGE      0.15   // PES21FX_LIVE_FIT_RANGE  escala de hueso (+-) con la que se llega al maximo
 #define PES_CAP_FIT        0.94   // (18/10) capsulas ajustadas: radio = la distancia minima de la tela en reposo al eje del hueso x esto (0 = radio del mod)
 #define PES_CAP_MAXPUSH    0.006  // (18/10) empuje maximo de una capsula por sub-paso (m): sin esto la tela salia volando al mover el brazo
+// torso como volumen (18/10): un "cuerpo" de 8 rodajas elipticas medido de la tela en reposo de la camiseta
+#define PES_TORSO_ON       1      // 0 = apagado
+#define PES_TORSO_BANDS    8
+#define PES_TORSO_SHRINK   0.90   // la elipse del cuerpo = la de la tela en reposo (sin holgura) x esto
+#define PES_TORSO_MAXPUSH  0.005  // (m) empuje maximo por sub-paso
 #define PES_FIT_HANG       2.5    // delgado: la remera cuelga mas larga (metros de caida por metro de holgura: 10 mm -> 2.5 cm)
 #define PES_FIT_CLING      0.15   // ancho: la tela que queda separada del cuerpo se acerca a el por sub-paso
 cbuffer Bones : register(b0) { float4 g_bones[192]; };
@@ -144,6 +149,11 @@ groupshared uint   gFirstVisit;
 groupshared float3 gCapA[MAXCAPS];
 groupshared float3 gCapB[MAXCAPS];
 groupshared float  gCapR[MAXCAPS];
+// PES21 FX torso: acumuladores (enteros de 0.1 mm y floats positivos como uint)
+groupshared int    gTorsoSum[4];          // sx, sy, sz, n
+groupshared uint   gTorsoH[2];            // min/max altura (+10 m)
+groupshared uint   gTorsoB[PES_TORSO_BANDS][4];   // por rodaja: min e1, max e1, min e2, max e2 (+10 m)
+static float3 s_tUp, s_tE1, s_tE2, s_tC; static float s_tH0, s_tH1; static bool s_tOk;
 groupshared uint   gCapFit[MAXCAPS];   // PES21 FX: radio ajustado por hueso (float positivo como uint, para InterlockedMin)
 float3x4 identity34() { return float3x4(1,0,0,0, 0,1,0,0, 0,0,1,0); }
 float3x4 mulAffine(float3x4 A, float3x4 B)
@@ -490,6 +500,33 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
             }
             contactD = dd - R;
         }
+        // PES21 FX (18/10): torso como volumen (ver arriba). Solo tela de cuerpo de la camiseta.
+        if (PES_TORSO_ON && s_tOk && g_legCount == 0 && (g_rest[p].skin.w & 1)) {
+            float3 rl = x - s_tC;
+            float hT = dot(rl, s_tUp);
+            float fb = clamp((hT - s_tH0) / max(s_tH1 - s_tH0, 1e-3) * PES_TORSO_BANDS - 0.5, 0.0, PES_TORSO_BANDS - 1.0);
+            uint b0 = (uint)fb, b1 = min(b0 + 1, PES_TORSO_BANDS - 1); float fw = fb - b0;
+            float4 B0 = float4(asfloat(gTorsoB[b0][0]), asfloat(gTorsoB[b0][1]), asfloat(gTorsoB[b0][2]), asfloat(gTorsoB[b0][3])) - 10.0;
+            float4 B1 = float4(asfloat(gTorsoB[b1][0]), asfloat(gTorsoB[b1][1]), asfloat(gTorsoB[b1][2]), asfloat(gTorsoB[b1][3])) - 10.0;
+            bool ok0 = all(abs(B0) < 5.0), ok1 = all(abs(B1) < 5.0);
+            if (ok0 || ok1) {
+                float4 Bb = (ok0 && ok1) ? lerp(B0, B1, fw) : (ok0 ? B0 : B1);
+                float2 c = float2(Bb.x + Bb.y, Bb.z + Bb.w) * 0.5;
+                float2 a = max(float2(Bb.y - Bb.x, Bb.w - Bb.z) * 0.5 * PES_TORSO_SHRINK, 0.01);
+                float2 q = float2(dot(rl, s_tE1), dot(rl, s_tE2)) - c;
+                float2 qn = q / a;
+                float e = length(qn);
+                if (e < 1.0 && e > 1e-4 && hT > s_tH0 - 0.02 && hT < s_tH1 + 0.02) {
+
+                    float2 tgt = q * (1.0 / e);                               // punto sobre la elipse en la misma direccion
+                    float3 push = (s_tE1 * (tgt.x - q.x) + s_tE2 * (tgt.y - q.y));
+                    float pl = length(push);
+                    if (pl > PES_TORSO_MAXPUSH) push *= PES_TORSO_MAXPUSH / pl;
+                    x += push; xPrev += push;
+                    contactD = min(contactD, 0.0);
+                }
+            }
+        }
         float contact = contactD <= 0 ? 1.0 : (g_contactBand > 0 ? saturate(1.0 - contactD / g_contactBand) : 0.0);
         if (contact > 0) {
             float3 dRel = (x - xPrev) - (rest1 - restPrev);
@@ -709,6 +746,50 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                         float fit = asfloat(gCapFit[gi]);
                         if (fit < 1.0) gCapR[gi] = min(gCapR[gi], fit * PES_CAP_FIT / max(g_capsuleRadiusScale, 1e-3));
                     }
+                    GroupMemoryBarrierWithGroupSync();
+                }
+                // PES21 FX (18/10): torso como volumen. Solo camiseta (sin pierna), una vez por cuadro (sub-paso 0).
+                // Eje = vertical (gravedad), centro = centroide de la tela de cuerpo; 8 rodajas con su elipse (min/max en dos
+                // ejes horizontales) medidas de la tela en reposo sin holgura y sin mangas. En collideParticle la tela no
+                // puede entrar en esa elipse: el cuerpo deja de estar vacio por debajo.
+                if (PES_TORSO_ON && g_legCount == 0 && s == 0) {
+                    if (gi < 4) gTorsoSum[gi] = 0;
+                    if (gi < 2) gTorsoH[gi] = gi == 0 ? 0x7f7fffffu : 0u;
+                    if (gi < PES_TORSO_BANDS) { gTorsoB[gi][0] = 0x7f7fffffu; gTorsoB[gi][1] = 0u; gTorsoB[gi][2] = 0x7f7fffffu; gTorsoB[gi][3] = 0u; }
+                    GroupMemoryBarrierWithGroupSync();
+                    float gl0 = length(grav); float3 upT = gl0 > 1e-4 ? -grav / gl0 : float3(0, 1, 0);
+                    for (uint pa = gi; pa < P; pa += THREADS) {
+                        if (!(g_rest[pa].skin.w & 1)) continue;
+                        if (float((g_rest[pa].skin.w >> 8) & 255) / 255.0 > 0.2) continue;   // sin mangas
+                        float3 rr = (pa == gi) ? rest10 : rest11, rn = (pa == gi) ? rnrm10 : rnrm11;
+                        if (dot(rr, rr) < 1e-8 || dot(rn, rn) < 1e-8) continue;
+                        float3 r0f = rr - rn * g_rest[pa].nrm.w;
+                        InterlockedAdd(gTorsoSum[0], int(r0f.x * 10000.0)); InterlockedAdd(gTorsoSum[1], int(r0f.y * 10000.0));
+                        InterlockedAdd(gTorsoSum[2], int(r0f.z * 10000.0)); InterlockedAdd(gTorsoSum[3], 1);
+                        uint hu = asuint(dot(r0f, upT) + 10.0);
+                        InterlockedMin(gTorsoH[0], hu); InterlockedMax(gTorsoH[1], hu);
+                    }
+                    GroupMemoryBarrierWithGroupSync();
+                    s_tOk = gTorsoSum[3] >= 64;
+                    s_tUp = upT;
+                    s_tC = float3(gTorsoSum[0], gTorsoSum[1], gTorsoSum[2]) / (10000.0 * max(gTorsoSum[3], 1));
+                    s_tH0 = asfloat(gTorsoH[0]) - 10.0; s_tH1 = asfloat(gTorsoH[1]) - 10.0;
+                    float3 anyV = abs(upT.x) < 0.9 ? float3(1, 0, 0) : float3(0, 0, 1);
+                    s_tE1 = normalize(cross(upT, anyV)); s_tE2 = cross(upT, s_tE1);
+                    if (s_tOk && s_tH1 - s_tH0 > 0.05) {
+                        for (uint pb = gi; pb < P; pb += THREADS) {
+                            if (!(g_rest[pb].skin.w & 1)) continue;
+                            if (float((g_rest[pb].skin.w >> 8) & 255) / 255.0 > 0.2) continue;
+                            float3 rr = (pb == gi) ? rest10 : rest11, rn = (pb == gi) ? rnrm10 : rnrm11;
+                            if (dot(rr, rr) < 1e-8 || dot(rn, rn) < 1e-8) continue;
+                            float3 r0f = rr - rn * g_rest[pb].nrm.w - s_tC;
+                            float hh0 = dot(r0f, upT);
+                            uint b = (uint)clamp((hh0 - s_tH0) / (s_tH1 - s_tH0) * PES_TORSO_BANDS, 0.0, PES_TORSO_BANDS - 1.0);
+                            uint u1 = asuint(dot(r0f, s_tE1) + 10.0), u2 = asuint(dot(r0f, s_tE2) + 10.0);
+                            InterlockedMin(gTorsoB[b][0], u1); InterlockedMax(gTorsoB[b][1], u1);
+                            InterlockedMin(gTorsoB[b][2], u2); InterlockedMax(gTorsoB[b][3], u2);
+                        }
+                    } else s_tOk = false;
                     GroupMemoryBarrierWithGroupSync();
                 }
                 if ((s_flags & 128) && g_legCount) {
