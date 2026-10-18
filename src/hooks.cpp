@@ -482,12 +482,21 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         }
         t_sparseGrass = false;
     }
+    if (ps && ps->hash == 0x5ce3ed8702271bc1ULL) {   // 18/10 c: diagnostico de la cara: cuantos dibujos llegan aca y con que
+        g_stFaceDraws++; if (ps->rule) g_stFaceRule++;
+        if (c->GetType() == D3D11_DEVICE_CONTEXT_DEFERRED) g_stFaceCtxDef++;
+    }
     if (!g_cfg.optRules) return false;
     if ((ps && ps->rule) || (vs && vs->rule)) {
         if (!s_firstRule.exchange(true)) Log("primer dibujo con regla");
     }
     if (ps && ps->rule) RunRule(c, ps, d);
     if (vs && vs->rule) RunRule(c, vs, d);
+    if (ps && ps->hash == 0x5ce3ed8702271bc1ULL) {
+        ID3D11ShaderResourceView* chk[4] = {}; c->PSGetShaderResources(23, 4, chk);
+        if (chk[0]) g_stFaceT23++; if (chk[3]) g_stFaceT26++;
+        for (auto* v : chk) if (v) v->Release();
+    }
     return d.n > 0;
 }
 #define FX_DRAW(verts, kind, inst, call) if (g_catalogHook) { CtxState& cs_ = Ctx(c); CatalogDraw(c, cs_.vs, cs_.ps, verts, kind, inst); } DrawScope ds; bool r = BeforeDraw(c, ds); call; if (r) Restore(c, ds); if (ds.brow.seedsUAV) BrowDrawAfterFace(c, &ds.brow);

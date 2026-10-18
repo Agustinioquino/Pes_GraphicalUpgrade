@@ -544,14 +544,18 @@ void main(
   // (espacio de vista), la direccion de crecimiento y el color, en el buffer que lee el dibujo de hebras de la DLL.
   // x74 on/off | w75 = -1 invierte la direccion (si las cejas crecen al reves)
   { float4 P74 = IniParams.Load(int2(74,0));
+    { float dbgT = IniParams.Load(int2(75,0)).z;   // diagnostico 2, prueba de paso: verde = el shader llega hasta aca pero el bloque de cejas no entra
+      if (dbgT > 1.5 && dbgT < 2.5 && !(enhance && P74.x > 0.5)) o0.xyz = float3(0.0, 1.0, 0.0); }
     if (enhance && P74.x > 0.5) {
       // mapa de pelo (automatico o hair\<id>.png del usuario): R densidad, G largo, B angulo de peinado, A zona (1 = ceja)
       float2 cell = floor(v2.xy * 256.0);
-      float4 sm = pesSeedMap.SampleLevel(g_samplerPoint_Wrap_s, (cell + 0.5) / 256.0, 0);
+      float4 sm = pesSeedMap.SampleLevel(g_samplerLinear_Clamp_s, (cell + 0.5) / 256.0, 0);   // (s11: el s8 del juego puede no estar enlazado en este dibujo)
       float densMul = pesHairMisc.x > 0.5 ? pesHairB.y * pesHairBrow.y : 1.0;
       bool seedHere = sm.r > 0.01 && h21(cell + 0.37) < saturate(sm.r * densMul);
       float dbg75 = IniParams.Load(int2(75,0)).z;
-      if (dbg75 > 1.5 && dbg75 < 2.5) { if (seedHere) o0.xyz = float3(1.0, 0.0, 1.0); else if (sm.a > 0.95) o0.xyz = float3(0.1, 0.2, 1.0); }   // diagnostico 2: semilla = magenta, zona de ceja sin semilla = azul
+      // diagnostico 2: semilla = magenta, zona de ceja sin semilla = azul; el resto de la cara muestra el mapa crudo
+      // (rojo = densidad, verde = alfa; azul oscuro parejo = t26 vacio o sin enlazar)
+      if (dbg75 > 1.5 && dbg75 < 2.5) { if (seedHere) o0.xyz = float3(1.0, 0.0, 1.0); else if (sm.a > 0.95) o0.xyz = float3(0.1, 0.2, 1.0); else o0.xyz = float3(FB.a, sm.a * 0.5, 0.25); }   // rojo = t23/t24 llegan; verde = t26 llega
       if (seedHere) {
         float2 jit = float2(h21(cell + 0.37), h21(cell + 1.7)) - 0.5;
         float2 suv = (cell + 0.5 + jit * 0.6) / 256.0;

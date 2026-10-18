@@ -84,6 +84,7 @@ static const UINT kSeedBytes = 64;
 // 18/10: estadisticas para el log (cada 10 s): consultas, aciertos, sin entradas, pendientes, dibujos de hebras
 static std::atomic<int> s_stLook{0}, s_stHit{0}, s_stNoIn{0}, s_stPend{0}, s_stFull{0}, s_stDraw{0};
 static double s_stNext = 0;
+std::atomic<int> g_stFaceDraws{0}, g_stFaceRule{0}, g_stFaceT23{0}, g_stFaceT26{0}, g_stFaceCtxDef{0};   // 18/10 c: dibujos con el PS de cara, con regla, con t23/t26 enlazados al final, en contexto diferido
 struct FaceReq { ID3D11Resource* key; ID3D11ShaderResourceView* in[4]; UINT w, h; };
 
 static std::unordered_map<ID3D11Resource*, FaceEntry> s_cache;
@@ -202,8 +203,8 @@ static std::atomic<int> s_browFaces{0};   // caras con hebras dibujadas en este 
 void FaceGenPresent() {
     s_browFaces.store(0);
     { double t = Now(); if (t > s_stNext) { s_stNext = t + 10.0;
-        if (s_stLook.load() > 0) Log("facegen: 10 s: %d consultas, %d con texturas, %d pendientes, %d sin t1, %d en cache, %d dibujos de hebras", s_stLook.load(), s_stHit.load(), s_stPend.load(), s_stNoIn.load(), (int)s_cache.size(), s_stDraw.load());
-        s_stLook = 0; s_stHit = 0; s_stPend = 0; s_stNoIn = 0; s_stDraw = 0; } }
+        if (s_stLook.load() > 0 || g_stFaceDraws.load() > 0) Log("facegen: 10 s: %d consultas, %d con texturas, %d pendientes, %d sin t1, %d en cache, %d dibujos de hebras | PS cara: %d dibujos, %d con regla, %d con t23, %d con t26, %d diferidos", s_stLook.load(), s_stHit.load(), s_stPend.load(), s_stNoIn.load(), (int)s_cache.size(), s_stDraw.load(), g_stFaceDraws.load(), g_stFaceRule.load(), g_stFaceT23.load(), g_stFaceT26.load(), g_stFaceCtxDef.load());
+        s_stLook = 0; s_stHit = 0; s_stPend = 0; s_stNoIn = 0; s_stDraw = 0; g_stFaceDraws = 0; g_stFaceRule = 0; g_stFaceT23 = 0; g_stFaceT26 = 0; g_stFaceCtxDef = 0; } }
     if (!g_dev.dev || !g_dev.imm) return;
     // PES21FX_hair.ini recargado: tipo y parametros nuevos para cada cara ya generada (aca, en el hilo de Present)
     { static int seenGen = 0; int g = s_hairGen.load();
