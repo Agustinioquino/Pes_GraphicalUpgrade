@@ -497,6 +497,7 @@ void main(
     float sharp = D2 * F2 * nl2 * 0.25 * P5.y;
     r0.xyz += sharp * PESSunColor() * g_psScene.m_exposure.zzz * shadowScalar * saturate(specInt * 2 + 0.3);
   }
+  if (IniParams.Load(int2(12,0)).w > 2.5 && abs(skinTag - 0.98039) < 0.003) { o0.xyz = float3(4.0, 2.0, 0.0); r0.xyz = 0; }   // diagnostico: naranja = esta variante (sin shadow map) ilumina la piel
   o1.xyz = min(float3(10000,10000,10000), r0.xyz);
   o0.w = 1;
   o1.w = 1;
