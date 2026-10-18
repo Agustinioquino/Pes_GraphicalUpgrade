@@ -16,12 +16,12 @@
 // superficie del cuerpo, la tela deja de estar "cosida" a su posicion de fabrica y resbala hasta donde le da el largo.
 #define PES_GRAVITY_SLIDE  0.70   // 0 = como antes; 1 = resbala al maximo
 #define PES_SLIDE_PIN      10.0   // cuanto se afloja el resorte hacia la posicion de fabrica donde resbala
-#define PES_SLIDE_TETHER   2.5    // cuanto se alarga la correa de distancia maxima donde resbala
+#define PES_SLIDE_TETHER   1.2    // cuanto se alarga la correa de distancia maxima donde resbala
 // COLISION PRECISA CON LAS PIERNAS: ademas del plano promedio del mod, cada vertice de la pierna emparejado empuja con su
 // propio plano tangente (el muslo doblado deja de atravesar el short), en varias pasadas por sub-paso.
 #define PES_LEG_PRECISE    1
 #define PES_LEG_ITER       2      // pasadas por sub-paso
-#define PES_LEG_REACH      0.12   // (m) solo cuentan los vertices de pierna a menos de esta distancia
+#define PES_LEG_REACH      0.06   // (m) solo cuentan los vertices de pierna a menos de esta distancia
 cbuffer Bones : register(b0) { float4 g_bones[192]; };
 cbuffer Obj   : register(b1) { float4 g_obj[18]; };
 cbuffer Params : register(b2)
@@ -375,9 +375,12 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
                         float dpl = dot(dxy, nk2);
                         // el plano tangente solo vale cerca del vertice: lejos de el, la esfera (distancia al punto)
                         float lateral = length(dxy - nk2 * dpl);
-                        float dEff = lateral < 0.035 ? dpl : dk2 * sign(dpl + 1e-6);
-                        float viol = g_legMargin - dEff;
-                        if (viol > worst) { worst = viol; wn = lateral < 0.035 ? nk2 : normalize(dxy + nk2 * 1e-4); }
+                        // cerca del vertice: su plano tangente. Al costado: solo una esfera chica alrededor del vertice
+                        // (ERROR corregido 18/10: la version anterior empujaba desde lejos y hacia globos)
+                        float viol; float3 pushN;
+                        if (lateral < 0.035) { viol = g_legMargin - dpl; pushN = nk2; }
+                        else { viol = g_legMargin * 0.7 - dk2; pushN = dxy / max(dk2, 1e-5); }
+                        if (viol > worst) { worst = viol; wn = pushN; }
                     }
                     if (worst <= 0.0) break;
                     float3 corr2 = wn * worst;
