@@ -34,7 +34,27 @@ static bool PParamName(const std::string& n, int& idx, int& comp) {
     return idx >= 0 && idx < kParamCount;
 }
 static std::wstring PresetDir() { return g_cfg.baseDir + L"presets\\"; }
-static std::wstring MatchPath() { return g_cfg.baseDir + L"match.ini"; }
+// match.ini: en PES21FX\ si el modulo pudo escribir ahi; si no, PES21FX_match.ini en la carpeta de Sider
+// (Sider solo deja escribir a los modulos dentro de su carpeta). La carpeta de Sider se busca una vez: la que tenga sider.ini.
+static std::wstring MatchPath() {
+    std::wstring a = g_cfg.baseDir + L"match.ini";
+    if (GetFileAttributesW(a.c_str()) != INVALID_FILE_ATTRIBUTES) return a;
+    static std::wstring siderMatch; static bool searched = false;
+    if (!searched) {
+        searched = true;
+        std::wstring game = g_cfg.baseDir + L"..\\";
+        WIN32_FIND_DATAW fd; HANDLE h = FindFirstFileW((game + L"*").c_str(), &fd);
+        if (h != INVALID_HANDLE_VALUE) {
+            do {
+                if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || fd.cFileName[0] == L'.') continue;
+                std::wstring d = game + fd.cFileName + L"\\";
+                if (GetFileAttributesW((d + L"sider.ini").c_str()) != INVALID_FILE_ATTRIBUTES) { siderMatch = d + L"PES21FX_match.ini"; Log("carpeta de Sider: %ls", d.c_str()); break; }
+            } while (FindNextFileW(h, &fd));
+            FindClose(h);
+        }
+    }
+    return siderMatch.empty() ? a : siderMatch;
+}
 static std::wstring W(const std::string& s) { std::wstring w; for (unsigned char c : s) w.push_back((wchar_t)c); return w; }
 static std::string A(const std::wstring& s) { std::string a; for (wchar_t c : s) a.push_back(c < 256 ? (char)c : '?'); return a; }
 

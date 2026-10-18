@@ -26,13 +26,16 @@ local function write_match(ctx, o)
         "[Match]\r\nstadium = %d\r\ntimeofday = %d\r\nweather = %d\r\nseason = %d\r\ntournament = %d\r\nhome = %d\r\naway = %d\r\n",
         stadium, tod, weather, season, tid, num(ctx.home_team, -1), num(ctx.away_team, -1))
     if text == last then return end
-    -- 1) PES21FX junto al exe (cwd del juego); 2) relativo a la carpeta de Sider
-    local paths = { "PES21FX\\match.ini" }
+    -- Sider solo deja escribir dentro de su propia carpeta: se escribe ahi (PES21FX_match.ini) y el mod la busca
+    -- (busca la carpeta que tenga sider.ini al lado del juego). Las otras rutas quedan por si alguna version lo permite.
+    local paths = {}
     if ctx.sider_dir then
         local sd = tostring(ctx.sider_dir)
         if sd:sub(-1) ~= "\\" and sd:sub(-1) ~= "/" then sd = sd .. "\\" end
+        table.insert(paths, sd .. "PES21FX_match.ini")
         table.insert(paths, sd .. "..\\PES21FX\\match.ini")
     end
+    table.insert(paths, "PES21FX\\match.ini")
     local errs = {}
     for _, p in ipairs(paths) do
         local f, err = io.open(p, "wb")
