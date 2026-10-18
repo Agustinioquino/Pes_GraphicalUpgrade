@@ -79,15 +79,17 @@ bool FaceGenLookup(ID3D11DeviceContext* c, ID3D11ShaderResourceView** outA, ID3D
     *outA = *outB = nullptr; if (ex) { ex->seedMap = nullptr; ex->seedsUAV = nullptr; ex->seedsSRV = nullptr; }
     ID3D11ShaderResourceView* in[4] = {};
     c->PSGetShaderResources(0, 4, in);
-    if (!in[1]) { for (int i = 0; i < 4; i++) if (in[i]) in[i]->Release(); return false; }
+    s_stLook++;
+    if (!in[1]) { s_stNoIn++; for (int i = 0; i < 4; i++) if (in[i]) in[i]->Release(); return false; }
     ID3D11Resource* key = nullptr; in[1]->GetResource(&key);
     bool found = false;
     {
         std::lock_guard<std::mutex> lk(s_mx);
         auto it = s_cache.find(key);
         if (it != s_cache.end()) {
-            if (it->second.a) { *outA = it->second.a; *outB = it->second.b; found = true;
+            if (it->second.a) { s_stHit++; *outA = it->second.a; *outB = it->second.b; found = true;
                 if (ex) { ex->seedMap = it->second.c; ex->seedsUAV = it->second.seedsUAV; ex->seedsSRV = it->second.seedsSRV; ex->args = it->second.args; ex->argsUAV = it->second.argsUAV; } }
+            else s_stPend++;
         } else if (in[0] && in[2] && in[3] && s_cache.size() < 96) {
             D3D11_RESOURCE_DIMENSION dim; key->GetType(&dim);
             if (dim == D3D11_RESOURCE_DIMENSION_TEXTURE2D) {
@@ -133,8 +135,14 @@ static bool MakeTarget(UINT w, UINT h, ID3D11Texture2D** tex, ID3D11RenderTarget
 
 // en Present, contexto inmediato: genera hasta 2 caras por cuadro
 static std::atomic<int> s_browFaces{0};   // caras con hebras dibujadas en este cuadro (x77 = maximo por pantalla)
+// 18/10: estadisticas para el log (cada 10 s): consultas, aciertos, sin entradas, pendientes, dibujos de hebras
+static std::atomic<int> s_stLook{0}, s_stHit{0}, s_stNoIn{0}, s_stPend{0}, s_stFull{0}, s_stDraw{0};
+static double s_stNext = 0;
 void FaceGenPresent() {
     s_browFaces.store(0);
+    { double t = Now(); if (t > s_stNext) { s_stNext = t + 10.0;
+        if (s_stLook.load() > 0) Log("facegen: 10 s: %d consultas, %d con texturas, %d pendientes, %d sin t1, %d en cache, %d dibujos de hebras", s_stLook.load(), s_stHit.load(), s_stPend.load(), s_stNoIn.load(), (int)s_cache.size(), s_stDraw.load());
+        s_stLook = 0; s_stHit = 0; s_stPend = 0; s_stNoIn = 0; s_stDraw = 0; } }
     if (!g_dev.dev || !g_dev.imm) return;
     std::vector<FaceReq> todo;
     {
@@ -272,6 +280,7 @@ void BrowDrawAfterFace(ID3D11DeviceContext* c, FaceGenExtra* ex) {
     c->RSSetState(s_browRS);   // sin culling (cintas vistas de ambos lados)
     // 18/10: dibujo indirecto: tantas instancias como semillas escribio ESTA cara en este cuadro (las caras lejanas casi
     // no escriben semillas y cuestan nada). En la "prueba de dibujo" (z75 = 3) se dibuja una grilla fija.
+    s_stDraw++;
     if (g_cfg.live[75][2] > 2.5f || !ex->args) c->DrawInstanced(6 * 4, 4096 * perSeed, 0, 0);
     else c->DrawInstancedIndirect(ex->args, 0);
     // 4) restaurar
