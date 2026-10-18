@@ -26,6 +26,8 @@ static std::atomic<int> s_stageCopied{-1};
 static float s_pv[16]; static float s_eye[3]; static bool s_camValid = false;
 static int s_lastCount = 0; static double s_lastMs = 0;
 int g_grassPatchesLastFrame = 0;
+GrassDbg g_grassDbg;
+static void Why(const char* w) { g_grassDbg.why = w; }
 UINT g_bbW = 0, g_bbH = 0;
 
 static void EnsureBuffers() {
@@ -56,6 +58,11 @@ void GrassPresent() {
         s_stageCopied = -1;
     }
     g_grassPatchesLastFrame = s_lastCount;
+    static double nextLog = 0; double t = Now();
+    if (t > nextLog && g_cfg.live[58][3] > 0.5f) { nextLog = t + 3.0;
+        Log("pasto extendido: llamadas %d, emisiones %d, parcelas %d, variante %u idx, camara %s (%.1f, %.1f), rt %u/%u, estado: %s",
+            g_grassDbg.calls, g_grassDbg.emits, g_grassDbg.patches, g_grassDbg.lod, g_grassDbg.cam ? "ok" : "no", g_grassDbg.ex, g_grassDbg.ez, g_grassDbg.rtW, g_bbW, g_grassDbg.why ? g_grassDbg.why : "-");
+        g_grassDbg.calls = 0; g_grassDbg.emits = 0; }
     (void)f;
 }
 
@@ -106,13 +113,14 @@ static void BuildPatches(std::vector<Patch>& out, float from, float to, float de
 // se llama desde el gancho de DrawIndexed antes de cada dibujo con el VS del pasto
 void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT start, INT base) {
     if (!vs || vs->hash != kGrassVS || g_cfg.bypass || !g_dev.dev) return;
-    if (!vs->repl) return;                      // hace falta nuestro VS (lee la escala en cb5[8])
+    g_grassDbg.calls++;
+    if (!vs->repl) { Why("el VS del pasto no tiene reemplazo (ver Errores)"); return; }                      // hace falta nuestro VS (lee la escala en cb5[8])
     // variante mas liviana que usa el juego (menos indices)
     UINT prev = s_lodCount.load();
     while (count < prev && !s_lodCount.compare_exchange_weak(prev, count)) {}
     if (count <= s_lodCount.load()) { s_lodStart = start; s_lodBase = base; }
     const float* p58 = g_cfg.live[58]; const float* p59 = g_cfg.live[59];
-    if (p58[3] < 0.5f) return;
+    if (p58[3] < 0.5f) { Why("apagado (w58)"); return; }
     // solo la pasada principal (G-buffer del tamano de la pantalla): el pasto tambien se dibuja para camaras secundarias
     if (g_bbW) {
         ID3D11RenderTargetView* rtv = nullptr; c->OMGetRenderTargets(1, &rtv, nullptr);
@@ -121,29 +129,33 @@ void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT
         ID3D11Texture2D* t = nullptr; UINT w = 0;
         if (res && SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t)) && t) { D3D11_TEXTURE2D_DESC d; t->GetDesc(&d); w = d.Width; t->Release(); }
         if (res) res->Release();
-        if (w != g_bbW) return;
+        g_grassDbg.rtW = w;
+        if (w != g_bbW) { Why("pasada secundaria (target de otro tamano)"); return; }
     }
     int f = s_frame.load();
     int exp = s_emittedFrame.load();
     if (exp == f) return;
     if (!s_emittedFrame.compare_exchange_strong(exp, f)) return;   // otro contexto ya emitio este cuadro
     EnsureBuffers();
-    if (!s_cb) return;
+    if (!s_cb) { Why("sin cbuffer propio"); return; }
+    g_grassDbg.emits++;
     // copiar cb2 (camara) a un staging para el cuadro que viene
     { ID3D11Buffer* cb2 = nullptr; c->VSGetConstantBuffers(2, 1, &cb2);
       if (cb2) { D3D11_BUFFER_DESC d; cb2->GetDesc(&d);
         if (d.ByteWidth >= 480 && s_stageCopied.load() < 0) { int w = s_stageW; s_stageW = (s_stageW + 1) % 3;
           D3D11_BOX b = { 0, 0, 0, 480, 1, 1 }; c->CopySubresourceRegion(s_cb2Stage[w], 0, 0, 0, 0, cb2, 0, &b); s_stageCopied = w; }
         cb2->Release(); } }
-    if (s_lodCount.load() == 0xffffffff) return;
+    if (s_lodCount.load() == 0xffffffff) { Why("todavia sin variante de malla"); return; }
+    g_grassDbg.lod = s_lodCount.load(); g_grassDbg.cam = s_camValid; g_grassDbg.ex = s_eye[0]; g_grassDbg.ez = s_eye[2];
     float dens = p58[0] > 0.05f ? p58[0] : 1.0f;
     float from = p58[1] > 1.0f ? p58[1] : 14.0f;
     float to = p58[2] > from ? p58[2] : 120.0f;
     float tall = p59[0] > 0.05f ? p59[0] : 1.3f;
     float wide = p59[1] >= 0.0f ? p59[1] : 1.0f;
     static std::vector<Patch> patches; BuildPatches(patches, from, to, dens);
-    s_lastCount = (int)patches.size();
-    if (patches.empty()) return;
+    s_lastCount = (int)patches.size(); g_grassDbg.patches = (int)patches.size();
+    if (patches.empty()) { Why("0 parcelas tras el descarte (camara/limites)"); return; }
+    Why("emitiendo");
     // dibujar: por parcela se actualiza nuestro cb5 (UpdateSubresource respeta el orden en el contexto) y se dibuja
     ID3D11Buffer* old = nullptr; c->VSGetConstantBuffers(5, 1, &old);
     ID3D11DeviceContext1* c1 = nullptr; UINT oldFirst = 0, oldNum = 0;
