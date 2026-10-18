@@ -11,6 +11,8 @@
 #include <atomic>
 #include <cmath>
 #include <vector>
+#include <mutex>
+#include <algorithm>
 
 namespace fx {
 
@@ -20,6 +22,23 @@ static const int kMaxPatches = 4096;
 static std::atomic<int> s_frame{0};
 static std::atomic<int> s_emittedFrame{-1};
 static std::atomic<UINT> s_lodCount{0xffffffff}; static UINT s_lodStart = 0; static INT s_lodBase = 0;
+struct Variant { UINT count, start; INT base; };
+static std::mutex s_varMutex; static std::vector<Variant> s_variants;   // variantes de malla vistas (ordenadas por indices)
+static void NoteVariant(UINT count, UINT start, INT base) {
+    std::lock_guard<std::mutex> lk(s_varMutex);
+    for (auto& v : s_variants) if (v.start == start) return;
+    if (s_variants.size() >= 160) return;
+    s_variants.push_back({ count, start, base });
+    std::sort(s_variants.begin(), s_variants.end(), [](const Variant& a, const Variant& b) { return a.count < b.count; });
+}
+// calidad 0 = la mas liviana, 1 = media (percentil 40), 2 = alta (percentil 70), 3 = maxima (percentil 90)
+static Variant PickVariant(int quality) {
+    std::lock_guard<std::mutex> lk(s_varMutex);
+    if (s_variants.empty()) return { s_lodCount.load(), s_lodStart, s_lodBase };
+    float pct[4] = { 0.0f, 0.40f, 0.70f, 0.90f };
+    int i = (int)(pct[(std::max)(0, (std::min)(quality, 3))] * (s_variants.size() - 1) + 0.5f);
+    return s_variants[i];
+}
 static ID3D11Buffer* s_cb = nullptr;
 static ID3D11Buffer* s_cb2Stage[3] = {}; static int s_stageW = 0;
 static std::atomic<int> s_stageCopied{-1};
@@ -121,6 +140,7 @@ void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT
     UINT prev = s_lodCount.load();
     while (count < prev && !s_lodCount.compare_exchange_weak(prev, count)) {}
     if (count <= s_lodCount.load()) { s_lodStart = start; s_lodBase = base; }
+    NoteVariant(count, start, base);
     // parcela lejana del juego (variante minima, grilla de 3 m): el VS la escala si w60 esta prendido
     if (count == s_lodCount.load() && g_cfg.live[60][3] > 0.5f) { t_sparseGrass = true; g_grassDbg.sparse++; }
     const float* p58 = g_cfg.live[58]; const float* p59 = g_cfg.live[59];
@@ -159,6 +179,8 @@ void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT
     float to = p58[2] > from ? p58[2] : 120.0f;
     float tall = p59[0] > 0.05f ? p59[0] : 1.3f;
     float wide = p59[1] >= 0.0f ? p59[1] : 1.0f;
+    Variant var = PickVariant((int)(g_cfg.live[61][0] + 0.5f));
+    g_grassDbg.lod = var.count;
     static std::vector<Patch> patches; BuildPatches(patches, from, to, dens);
     s_lastCount = (int)patches.size(); g_grassDbg.patches = (int)patches.size();
     if (patches.empty()) { Why("0 parcelas tras el descarte (camara/limites)"); return; }
@@ -184,7 +206,7 @@ void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT
         q[36] = p59[2] > 0.5f ? 1.f : 0.f;                                                  // cb5[9].x: pintar de magenta (depuracion)
         c->UpdateSubresource(s_cb, 0, nullptr, q, 0, 0);
         c->VSSetConstantBuffers(5, 1, &s_cb);
-        c->DrawIndexed(s_lodCount.load(), s_lodStart, s_lodBase);   // pasa por nuestro gancho (t120, reglas)
+        c->DrawIndexed(var.count, var.start, var.base);   // pasa por nuestro gancho (t120, reglas)
     }
     if (old) { if (c1 && oldNum) c1->VSSetConstantBuffers1(5, 1, &old, &oldFirst, &oldNum); else c->VSSetConstantBuffers(5, 1, &old); old->Release(); }
     else { ID3D11Buffer* nul = nullptr; c->VSSetConstantBuffers(5, 1, &nul); }
