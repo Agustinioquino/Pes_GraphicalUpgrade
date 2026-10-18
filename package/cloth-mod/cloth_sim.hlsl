@@ -26,9 +26,9 @@
 #define PES_LEG_DRAPE_RANGE 0.03  // (m) desde que distancia al muslo empieza a acostarse
 // INERCIA POR ZONA: al arrancar, la tela del lado opuesto a la aceleracion (espalda, faldon) se queda atras; al frenar
 // se adelanta. Se aplica como impulso extra en la cara que mira en contra de la aceleracion.
-#define PES_LAG            0.80
+#define PES_LAG            0.50   // (18/10 c: era 0.80; el usuario veia la tela "atrasada")
 // FALDON AL GIRAR: fuerza centrifuga por la velocidad angular de la prenda (giros de cadera): la tela se abre.
-#define PES_SPIN           0.60
+#define PES_SPIN           0.45   // (18/10 c: era 0.60)
 // TELA MOJADA (0..1): mas pesada, mas amortiguada y mas pegada al cuerpo. Lo escribe PES21 FX con el sudor/lluvia.
 #define PES_WET            0.00   // PES21FX_LIVE_WET
 // PES21 FX (18/10): ajuste de la tela al fisico. La escala de los huesos (fisico del editor: ancho de hombros, pecho,
@@ -62,6 +62,9 @@
 // de PES21 FX lo lee (la interpolacion entre vertices es suave: no se ven los triangulos) y pone los pliegues ahi.
 #define PES_STRAIN_ENC     1      // PES21FX_LIVE_STRAIN
 #define PES_STRAIN_GAIN    6.0    // 1/6 = 17 % de perdida de area -> maximo
+// SEGUIMIENTO A ALTA VELOCIDAD (18/10 c): cuando el cuerpo va rapido (sprint, cambio de direccion) la tela libre se
+// atrasa de mas; el anclaje se endurece y la correa se acorta en proporcion a la velocidad del cuerpo. 0 = como antes.
+#define PES_FOLLOW         0.8    // PES21FX_LIVE_FOLLOW
 // COSTURAS COSIDAS (18/10): el cuello y los punos son mallas aparte que el juego mueve con el esqueleto; la camiseta
 // simulada se "cose" a ellos: en una franja junto al escote y al final de la manga la tela sigue exactamente al esqueleto,
 // con transicion suave hacia adentro. 0 = como antes.
@@ -116,6 +119,8 @@
 #define PES_STRAIN_ENC 0
 #undef PES_SEAM_LOCK
 #define PES_SEAM_LOCK 0.0
+#undef PES_FOLLOW
+#define PES_FOLLOW 0.0
 #endif
 cbuffer Bones : register(b0) { float4 g_bones[192]; };
 cbuffer Obj   : register(b1) { float4 g_obj[18]; };
@@ -469,15 +474,18 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
         float fitFree = saturate(1.0 - pin * 1.5);
         // PES21 FX (18/10): levantada de la camiseta con el movimiento vertical del cuerpo (salto, caida, arranque):
         // mientras el cuerpo acelera, el anclaje de la tela libre se afloja y la correa se alarga -> el ruedo se despega.
-        float pesLift = 0.0;
-        if (g_legCount == 0 && PES_SHIRT_LIFT > 0.0) {
+        float pesLift = 0.0, pesFollow = 0.0;
+        {
             float3 vB = (rest1 - restPrev) / max(h, 1e-5);
             float gl2 = length(s_grav);
             float vUp = gl2 > 1e-4 ? abs(dot(vB, s_grav / gl2)) : 0.0;
-            pesLift = PES_SHIRT_LIFT * saturate((vUp - 0.4) / 1.5) * fitFree;
+            if (g_legCount == 0 && PES_SHIRT_LIFT > 0.0) pesLift = PES_SHIRT_LIFT * saturate((vUp - 0.4) / 1.5) * fitFree;
+            // seguimiento: velocidad horizontal del cuerpo por encima de 3 m/s endurece la tela (menos atraso)
+            float vH = gl2 > 1e-4 ? length(vB - (s_grav / gl2) * dot(vB, s_grav / gl2)) : length(vB);
+            pesFollow = PES_FOLLOW * saturate((vH - 3.0) / 4.0) * fitFree;
         }
         alpha *= (pesFit < 0.0) ? clamp(1.0 + pesFit * 120.0, 0.4, 1.0) : clamp(1.0 + pesFit * 80.0, 1.0, 1.6);   // (18/10 b) rangos suaves
-        alpha *= 1.0 + pesLift * 2.0;
+        alpha *= (1.0 + pesLift * 2.0) / (1.0 + pesFollow * 1.5);
         // grosor del miembro: muslo/brazo grueso -> anclaje mas firme y correa mas corta; fino -> mas suelto
         float pesLimbK = 0.0;
         if (PES_LIMB_GAIN > 0.0 && s_tOk) {
@@ -500,7 +508,7 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
         x += (restT - x) * (1.0 / (1.0 + alpha / hh));
         float3 off = x - restT;
         float maxD0 = g_tetherRadius * (1.0 - pin);
-        float maxD = maxD0 * (1.0 + pesSlide * PES_SLIDE_TETHER) * clamp(1.0 + pesFit * 25.0, 0.7, 1.3) * (1.0 + pesLift * 0.6) * clamp(1.0 - pesLimbK * 0.6, 0.6, 1.3);
+        float maxD = maxD0 * (1.0 + pesSlide * PES_SLIDE_TETHER) * clamp(1.0 + pesFit * 25.0, 0.7, 1.3) * (1.0 + pesLift * 0.6) * clamp(1.0 - pesLimbK * 0.6, 0.6, 1.3) / (1.0 + pesFollow * 0.5);
         float dl = length(off);
         if (dl > maxD) x = restT + off * (maxD / dl);
         float sd = dot(x - rest1, rnrm1) + g_rest[p].nrm.w;
