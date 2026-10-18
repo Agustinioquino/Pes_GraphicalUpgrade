@@ -121,7 +121,8 @@ static const ShaderEntry* FindShader(void* p) {
 }
 
 // ---------------------------------------------------------------- recursos con nombre (copias de cbuffers, referencias, texturas)
-struct NamedRes { ID3D11Buffer* buf = nullptr; ID3D11ShaderResourceView* srv = nullptr; bool failed = false; };
+struct NamedRes { ID3D11Buffer* buf = nullptr; ID3D11ShaderResourceView* srv = nullptr; bool failed = false; int copied = -1; bool cleared = false; };
+static std::atomic<int> s_presentNo{0};
 static std::map<std::string, NamedRes> s_named;
 static std::mutex s_namedMutex;
 
@@ -335,7 +336,7 @@ static void RunRule(ID3D11DeviceContext* c, const ShaderEntry* e, DrawScope& d) 
                 sd.Usage = D3D11_USAGE_DEFAULT; sd.CPUAccessFlags = 0; sd.MiscFlags = 0; sd.BindFlags = D3D11_BIND_CONSTANT_BUFFER; sd.StructureByteStride = 0;
                 g_dev.dev->CreateBuffer(&sd, nullptr, &r.buf);
             }
-            if (r.buf) c->CopyResource(r.buf, src);
+            if (r.buf) { c->CopyResource(r.buf, src); r.copied = s_presentNo.load(); r.cleared = false; }
             src->Release();
             break; }
         case RuleAction::RefSRV: {
@@ -561,6 +562,21 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     DXGI_SWAP_CHAIN_DESC sd; sc->GetDesc(&sd);
     g_bbW = sd.BufferDesc.Width; g_bbH = sd.BufferDesc.Height;
     PollKeys(GetForegroundWindow() == sd.OutputWindow);
+    // copias de cbuffers de luz que no se renovaron en el ultimo cuadro (menus 3D, editor, pre-partido: no corre la
+    // pasada de luz del sol): se ponen en cero para que los efectos que las leen se apaguen en vez de usar el sol
+    // del ultimo partido
+    {
+        int now = s_presentNo.fetch_add(1);
+        std::lock_guard<std::mutex> lk(s_namedMutex);
+        for (auto& kv : s_named) {
+            NamedRes& r = kv.second;
+            if (!r.buf || r.cleared || kv.first.find("Light") == std::string::npos) continue;
+            if (r.copied >= now - 1) continue;
+            D3D11_BUFFER_DESC bd; r.buf->GetDesc(&bd);
+            static std::vector<char> zeros; if (zeros.size() < bd.ByteWidth) zeros.assign(bd.ByteWidth, 0);
+            if (g_dev.imm) { g_dev.imm->UpdateSubresource(r.buf, 0, nullptr, zeros.data(), 0, 0); r.cleared = true; }
+        }
+    }
     UpdateTimeParams();
     UploadParams();
     WatchShaderFolder();
