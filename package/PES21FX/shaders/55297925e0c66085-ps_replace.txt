@@ -298,7 +298,7 @@ void main(
         // base continua: pliegues suaves siempre presentes (sin saltos entre triangulos) + parte dinamica encima
         float amtBase = 0.18;
         // v3: donde hay medicion fisica manda ella (suave); la medicion por triangulo (amtC) queda como respaldo atenuado
-        float amtP = smoothstep(0.0, 1.0, svPhys) * 0.9;
+        float amtP = smoothstep(0.0, 1.0, svPhys) * 0.55;   // 18/10 b: tope mas bajo (0.9 oscurecia zonas enteras)
         amtC = lerp(amtC, amtC * 0.25, saturate(svPhys * 4.0));
         float amt = saturate(amtBase + amtP + amtC + curvW * 0.4) * saturate(WR.x) * farW * (1.0 - 0.6 * pesPrint);
         if (amt > 0.002) {
@@ -316,7 +316,7 @@ void main(
           // volver la perturbacion del espacio del tile al espacio UV
           float2 pxy = fxy.x * ax + fxy.y * cdir;
           r0.xyz = normalize(float3(r0.xy + pxy * amt * 0.9, max(r0.z, 0.001)));
-          pesKitCav *= lerp(1.0, 0.75 + 0.25 * fo.w, amt * 0.8);
+          pesKitCav *= lerp(1.0, 0.85 + 0.15 * fo.w, amt * 0.6);   // 18/10 b: oclusion de pliegue suave (antes 25 % de oscurecido)
         }
       }
     } }

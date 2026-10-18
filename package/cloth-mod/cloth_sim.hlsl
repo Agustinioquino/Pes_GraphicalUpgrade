@@ -227,6 +227,7 @@ groupshared uint   gTorsoB[PES_TORSO_BANDS][4];   // por rodaja: min e1, max e1,
 static float3 s_tUp, s_tE1, s_tE2, s_tC; static float s_tH0, s_tH1; static bool s_tOk;
 groupshared int    gArmSum[2][PES_ARM_BANDS][4];   // por lado y tramo: sx, sy, sz, n (0.1 mm)
 groupshared uint   gArmR[2][PES_ARM_BANDS];        // radio minimo (float como uint)
+groupshared int    gStrainSum[2];                  // PES21 FX: suma de (area ahora / reposo) x 4096 y cuenta, para la compresion RELATIVA
 static float3 s_armC[2][PES_ARM_BANDS]; static float s_armR[2][PES_ARM_BANDS]; static bool s_armOk[2]; static float3 s_tSide;
 groupshared uint   gCapFit[MAXCAPS];   // PES21 FX: radio ajustado por hueso (float positivo como uint, para InterlockedMin)
 float3x4 identity34() { return float3x4(1,0,0,0, 0,1,0,0, 0,0,1,0); }
@@ -1063,6 +1064,11 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
         // PES21 FX: compresion por particula (antes de pisar g_pnrm, que todavia tiene las posiciones de reposo)
         float strainA = 0.0, strainB = 0.0;
         if (PES_STRAIN_ENC) {
+            // 18/10 b: compresion RELATIVA al promedio de la prenda. Con el ajuste al fisico y el torso como volumen toda la
+            // tela se acerca al cuerpo y pierde area pareja: eso no es arruga. Solo cuenta lo que se comprime MAS que el resto.
+            if (gi < 2) gStrainSum[gi] = 0;
+            GroupMemoryBarrierWithGroupSync();
+            float ratioA = 1.0, ratioB = 1.0;
             for (uint ps = gi; ps < P && !(s_flags & (1 << 12)); ps += THREADS) {
                 float aNow = 0.0, aRest = 0.0;
                 for (uint j = g_adjOff[ps]; j < g_adjOff[ps + 1]; ++j) {
@@ -1071,10 +1077,15 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                     float3 ra = g_pnrm[s_pnrmBase + tr.x].xyz, rb = g_pnrm[s_pnrmBase + tr.y].xyz, rc = g_pnrm[s_pnrmBase + tr.z].xyz;
                     aRest += length(cross(rb - ra, rc - ra));
                 }
-                float ratio = aRest > 1e-10 ? aNow / aRest : 1.0;
-                float st = saturate((1.0 - ratio) * PES_STRAIN_GAIN);
-                if (ps == gi) strainA = st; else strainB = st;
+                float ratio = aRest > 1e-10 ? clamp(aNow / aRest, 0.25, 2.0) : 1.0;
+                if (ps == gi) ratioA = ratio; else ratioB = ratio;
+                InterlockedAdd(gStrainSum[0], int(ratio * 4096.0)); InterlockedAdd(gStrainSum[1], 1);
             }
+            GroupMemoryBarrierWithGroupSync();
+            float meanR = gStrainSum[1] > 0 ? float(gStrainSum[0]) / (4096.0 * float(gStrainSum[1])) : 1.0;
+            meanR = min(meanR, 1.0);   // si la prenda en promedio se estiro, la referencia sigue siendo el reposo
+            strainA = saturate((meanR - ratioA - 0.02) * PES_STRAIN_GAIN);
+            strainB = saturate((meanR - ratioB - 0.02) * PES_STRAIN_GAIN);
             DeviceMemoryBarrierWithGroupSync();
         }
         for (uint p = gi; p < P && !(s_flags & (1 << 12)); p += THREADS) {
