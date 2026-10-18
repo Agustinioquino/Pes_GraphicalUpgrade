@@ -38,7 +38,7 @@ void main(
   // === PES21 pasto extendido: parcela emitida por el mod (cb5[8].y = 1): x escala horizontal (1 parcela = 0.5 m x escala),
   // z alto de las hojas, w ensanche de la hoja hacia la camara en metros. El juego no usa cb5[8] en este VS.
   float4 pesExt = cb5[8];
-  bool pesIsExt = pesExt.y > 0.5;
+  bool pesIsExt = abs(pesExt.y - 1234.5) < 0.01;   // marca del mod (el juego usa cb5[8] con otros valores)
   float4 v0 = v0_in;
   if (pesIsExt) { v0.xz *= max(pesExt.x, 1.0); v0.y *= max(pesExt.z, 0.1); }
 

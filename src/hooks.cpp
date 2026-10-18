@@ -559,6 +559,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
         s_deferredRelease.clear();
     }
     DXGI_SWAP_CHAIN_DESC sd; sc->GetDesc(&sd);
+    g_bbW = sd.BufferDesc.Width; g_bbH = sd.BufferDesc.Height;
     PollKeys(GetForegroundWindow() == sd.OutputWindow);
     UpdateTimeParams();
     UploadParams();

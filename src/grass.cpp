@@ -26,6 +26,7 @@ static std::atomic<int> s_stageCopied{-1};
 static float s_pv[16]; static float s_eye[3]; static bool s_camValid = false;
 static int s_lastCount = 0; static double s_lastMs = 0;
 int g_grassPatchesLastFrame = 0;
+UINT g_bbW = 0, g_bbH = 0;
 
 static void EnsureBuffers() {
     if (!g_dev.dev) return;
@@ -112,6 +113,16 @@ void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT
     if (count <= s_lodCount.load()) { s_lodStart = start; s_lodBase = base; }
     const float* p58 = g_cfg.live[58]; const float* p59 = g_cfg.live[59];
     if (p58[3] < 0.5f) return;
+    // solo la pasada principal (G-buffer del tamano de la pantalla): el pasto tambien se dibuja para camaras secundarias
+    if (g_bbW) {
+        ID3D11RenderTargetView* rtv = nullptr; c->OMGetRenderTargets(1, &rtv, nullptr);
+        if (!rtv) return;
+        ID3D11Resource* res = nullptr; rtv->GetResource(&res); rtv->Release();
+        ID3D11Texture2D* t = nullptr; UINT w = 0;
+        if (res && SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t)) && t) { D3D11_TEXTURE2D_DESC d; t->GetDesc(&d); w = d.Width; t->Release(); }
+        if (res) res->Release();
+        if (w != g_bbW) return;
+    }
     int f = s_frame.load();
     int exp = s_emittedFrame.load();
     if (exp == f) return;
@@ -149,7 +160,7 @@ void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT
         w[4] = 0;   w[5] = 1; w[6] = 0;   w[7] = 0;
         w[8] = -sn; w[9] = 0; w[10] = cs; w[11] = p.z;
         w[12] = 0;  w[13] = 0; w[14] = 0; w[15] = 1;
-        q[32] = scale; q[33] = 1.0f; q[34] = tall; q[35] = 0.012f * scale * wide;   // cb5[8]: escala, flag, alto, ensanche
+        q[32] = scale; q[33] = 1234.5f; q[34] = tall; q[35] = 0.012f * scale * wide;   // cb5[8]: escala, flag, alto, ensanche
         for (int k = 36; k < 72; k++) q[k] = 0.f;
         c->UpdateSubresource(s_cb, 0, nullptr, q, 0, 0);
         c->VSSetConstantBuffers(5, 1, &s_cb);

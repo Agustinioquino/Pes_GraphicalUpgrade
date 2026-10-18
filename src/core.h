@@ -147,6 +147,7 @@ void CatalogProbeGrass();                        // "Volcar pasto": mide las par
 void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT start, INT base);
 void GrassPresent();
 extern int g_grassPatchesLastFrame;
+extern UINT g_bbW, g_bbH;                       // tamano del back buffer (lo fija Present)
 void CatalogGrassDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT start, INT base);                           // proximo cuadro: volcar los cbuffers de composicion y luz del sol
 
 struct DeviceState {
