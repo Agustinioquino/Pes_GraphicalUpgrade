@@ -37,6 +37,7 @@
 #define PES_FIT_THIN       10.0   // PES21FX_LIVE_FIT_THIN   mm de holgura extra en el cuerpo mas delgado
 #define PES_FIT_FAT        6.0    // PES21FX_LIVE_FIT_FAT    mm mas pegada en el cuerpo mas ancho
 #define PES_FIT_RANGE      0.15   // PES21FX_LIVE_FIT_RANGE  escala de hueso (+-) con la que se llega al maximo
+#define PES_CAP_FIT        0.94   // (18/10) capsulas ajustadas: radio = la distancia minima de la tela en reposo al eje del hueso x esto (0 = radio del mod)
 #define PES_FIT_HANG       2.5    // delgado: la remera cuelga mas larga (metros de caida por metro de holgura: 10 mm -> 2.5 cm)
 #define PES_FIT_CLING      0.15   // ancho: la tela que queda separada del cuerpo se acerca a el por sub-paso
 cbuffer Bones : register(b0) { float4 g_bones[192]; };
@@ -142,6 +143,7 @@ groupshared uint   gFirstVisit;
 groupshared float3 gCapA[MAXCAPS];
 groupshared float3 gCapB[MAXCAPS];
 groupshared float  gCapR[MAXCAPS];
+groupshared uint   gCapFit[MAXCAPS];   // PES21 FX: radio ajustado por hueso (float positivo como uint, para InterlockedMin)
 float3x4 identity34() { return float3x4(1,0,0,0, 0,1,0,0, 0,0,1,0); }
 float3x4 mulAffine(float3x4 A, float3x4 B)
 {
@@ -677,6 +679,33 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                 float3 rest10 = 0, rnrm10 = 0, rest11 = 0, rnrm11 = 0;
                 if (gi < P && !(s_flags & (16 << 12))) predictParticle(gi, s, h, grav, windBase, gust, xPrev0, vel0, restPrev0, rest10, rnrm10);
                 if (gi + THREADS < P) predictParticle(gi + THREADS, s, h, grav, windBase, gust, xPrev1, vel1, restPrev1, rest11, rnrm11);
+                // PES21 FX (18/10): capsulas ajustadas por hueso. Cada capsula toma como radio la distancia minima de la
+                // tela en reposo (menos la holgura) a su eje: brazo fino, muslo grueso, torso ancho, en vez de un radio global.
+                if (PES_CAP_FIT > 0.0 && g_capsuleCount > 0) {
+                    if (gi < MAXCAPS) gCapFit[gi] = 0x7f7fffffu;
+                    GroupMemoryBarrierWithGroupSync();
+                    uint capNF = min(g_capsuleCount, MAXCAPS);
+                    for (uint pp = gi; pp < P; pp += THREADS) {
+                        if (!(g_rest[pp].skin.w & 1)) continue;
+                        float3 rr = (pp == gi) ? rest10 : rest11;
+                        float3 rn = (pp == gi) ? rnrm10 : rnrm11;
+                        float3 r0f = rr - rn * g_rest[pp].nrm.w;
+                        if (dot(rr, rr) < 1e-8 || dot(rn, rn) < 1e-8) continue;   // reposo no calculado en este paso
+                        for (uint ci = 0; ci < capNF; ++ci) {
+                            float3 ab = gCapB[ci] - gCapA[ci];
+                            float tt = dot(r0f - gCapA[ci], ab) / max(dot(ab, ab), 1e-8);
+                            if (tt < 0.1 || tt > 0.9) continue;   // solo tela alrededor del segmento, no de las puntas
+                            float d0 = length(r0f - (gCapA[ci] + ab * tt));
+                            InterlockedMin(gCapFit[ci], asuint(max(d0, 0.0)));
+                        }
+                    }
+                    GroupMemoryBarrierWithGroupSync();
+                    if (gi < capNF) {
+                        float fit = asfloat(gCapFit[gi]);
+                        if (fit < 1.0) gCapR[gi] = min(gCapR[gi], fit * PES_CAP_FIT / max(g_capsuleRadiusScale, 1e-3));
+                    }
+                    GroupMemoryBarrierWithGroupSync();
+                }
                 if ((s_flags & 128) && g_legCount) {
                     uint lb = (s_palBase / (2 * MAXPARTS * 192)) * g_legCount * 2;
                     for (uint lv = gi; lv < g_legCount; lv += THREADS) {
