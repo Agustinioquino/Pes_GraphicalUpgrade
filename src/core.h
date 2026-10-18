@@ -104,6 +104,7 @@ void PollKeys(bool focused);
 void KeyActionUnlocked(KeyBind& k, int action);    // menu: alternar / ciclar (con g_cfgMutex tomado)
 void UpdateTimeParams();                        // reloj del partido, viento, etc.
 void OnTurfDrawn();
+void UpdateClothWet(double t);
 double Now();
 // presets por estadio (presets.cpp)
 bool ReadPreset(const std::wstring& path, PresetFile& out);

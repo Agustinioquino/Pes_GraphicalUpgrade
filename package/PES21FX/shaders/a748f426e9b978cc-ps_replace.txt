@@ -592,6 +592,31 @@ void main(
       r1.yzw += sheenK * 0.3 * lightK;
       // 3) la tela no tiene el brillo plastico del GGX: lo baja a la mitad
       r1.yzw *= 0.5;
+      // === PES21 kits v4 (18/10): brillo anisotropico de la trama + translucidez de la tela a contraluz ===
+      // x71 brillo anisotropico (banda a lo largo del tejido, vertical en la camiseta), y71 translucidez,
+      // z71 cuanto se estira la banda, w71 on/off
+      { float4 KA = IniParams.Load(int2(71,0));
+        if (KA.w > 0.5) {
+          float3 upK = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
+          float3 TK = upK - nK * dot(upK, nK);
+          float tl = length(TK);
+          if (tl > 1e-3) {
+            TK /= tl;
+            // Kajiya-Kay: el brillo se estira perpendicular a la trama (a lo largo de la fibra horizontal del punto)
+            float3 HK2 = normalize(LK + VK);
+            float th = dot(TK, HK2);
+            float sinTH = sqrt(saturate(1.0 - th * th));
+            float expo = lerp(14.0, 60.0, saturate(KA.z));
+            float an = pow(sinTH, expo) * saturate(nlK) * saturate(nlK * 4.0);
+            float3 anC = an * KA.x * 0.18 * lightK * shadowScalar;
+            o0.xyz += anC * 0.6; r1.yzw += anC * 0.4;
+          }
+          // translucidez: con el sol detras de la camiseta (y de frente a la camara), la tela se "enciende"
+          float backK = saturate(dot(-nK, LK));
+          float fwdK = pow(saturate(dot(VK, -LK)), 2.0);
+          float thinK = 0.5;   // tela fina de futbol
+          o0.xyz += lightK * backK * (0.5 + 0.5 * fwdK) * thinK * KA.y * 0.35;
+        } }
       // diagnostico: w26 = 2 pinta de magenta todo lo que se detecta como kit
       if (KC.w > 1.5) { o0.xyz = float3(1.0, 0.0, 1.0) * dot(lightK, float3(0.3, 0.3, 0.3)); r1.yzw = 0; }
     }

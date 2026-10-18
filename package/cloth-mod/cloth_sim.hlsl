@@ -22,6 +22,13 @@
 #define PES_LEG_PRECISE    1
 #define PES_LEG_ITER       2      // pasadas por sub-paso
 #define PES_LEG_REACH      0.06   // (m) solo cuentan los vertices de pierna a menos de esta distancia
+// INERCIA POR ZONA: al arrancar, la tela del lado opuesto a la aceleracion (espalda, faldon) se queda atras; al frenar
+// se adelanta. Se aplica como impulso extra en la cara que mira en contra de la aceleracion.
+#define PES_LAG            0.80
+// FALDON AL GIRAR: fuerza centrifuga por la velocidad angular de la prenda (giros de cadera): la tela se abre.
+#define PES_SPIN           0.60
+// TELA MOJADA (0..1): mas pesada, mas amortiguada y mas pegada al cuerpo. Lo escribe PES21 FX con el sudor/lluvia.
+#define PES_WET            0.00   // PES21FX_LIVE_WET
 cbuffer Bones : register(b0) { float4 g_bones[192]; };
 cbuffer Obj   : register(b1) { float4 g_obj[18]; };
 cbuffer Params : register(b2)
@@ -108,6 +115,8 @@ static uint   s_stateBase, s_palBase, s_cacheBase, s_outBase0, s_outBase1, s_pnr
 static float4 s_W[3], s_Wp[3];
 static float3 s_kick;
 static float3 s_grav;   // PES21 FX: gravedad en el espacio de la prenda (para el deslizamiento)
+static float3 s_omega;  // PES21 FX: velocidad angular de la prenda (rad/s, espacio de la prenda)
+static float3 s_center; // PES21 FX: origen de la prenda
 RWByteAddressBuffer             g_outPos    : register(u0);
 RWByteAddressBuffer             g_outNrm    : register(u1);
 RWStructuredBuffer<float4>      g_state     : register(u2);
@@ -253,6 +262,13 @@ void predictParticle(uint p, uint s, float h, float3 grav, float3 windBase, floa
     float damp = g_damping + g_sleeveDamping * sleeveW;
     bool pesShorts = g_legCount > 0;                                   // PES21 FX: esta prenda es el short
     if (pesShorts) { damp *= PES_SHORTS_DAMP; if (s == 0) v += s_kick * (PES_SHORTS_KICK - 1.0); }
+    // PES21 FX inercia por zona: la cara que mira en contra de la aceleracion recibe mas impulso (se queda atras)
+    if (s == 0) { float kl = length(s_kick); if (kl > 1e-5) v += s_kick * (PES_LAG * saturate(-dot(rnrm1, s_kick / kl)) * saturate(1.0 - pin * 1.5)); }
+    // PES21 FX faldon al girar: aceleracion centrifuga w x (w x r)
+    { float3 rr = gx[p] - s_center; float3 ac = cross(s_omega, cross(s_omega, rr)); v -= ac * h * PES_SPIN * saturate(1.0 - pin * 1.5); }
+    // PES21 FX tela mojada: mas amortiguacion y mas peso
+    damp *= 1.0 + 1.5 * PES_WET;
+    v += grav * h * (0.6 * PES_WET);
     damp *= lerp(1.0, 1.0 - PES_HEM_FREE, saturate(1.0 - pin * 2.0));  // PES21 FX: el borde libre se frena menos
     float3 vRel = (v - vBody) * exp(-damp * h);
     float rs = length(vRel);
@@ -418,7 +434,7 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
         if (contact > 0) {
             float3 dRel = (x - xPrev) - (rest1 - restPrev);
             float3 dTan = dRel - rnrm1 * dot(dRel, rnrm1);
-            x -= dTan * (g_friction * contact);
+            x -= dTan * (min(g_friction * (1.0 + 3.0 * PES_WET), 0.9) * contact);   // PES21 FX: mojada se pega
         }
         if (s_coupleOn) {
             uint4 cd = g_couple[3 * p + 1];
@@ -579,6 +595,18 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                                         : float3x3(s_W[0].xyz, s_W[1].xyz, s_W[2].xyz);
             float3 grav = mul(transpose(W), g_gravity.xyz);
             s_grav = grav;   // PES21 FX
+            // PES21 FX: velocidad angular de la prenda a partir de la rotacion entre el cuadro anterior y este
+            {
+              float3x3 R0 = float3x3(s_Wp[0].xyz, s_Wp[1].xyz, s_Wp[2].xyz), R1 = float3x3(s_W[0].xyz, s_W[1].xyz, s_W[2].xyz);
+              float3x3 dR = mul(R1, transpose(R0));   // aprox. rotacion incremental (mundo)
+              float3 axisW = float3(dR[2][1] - dR[1][2], dR[0][2] - dR[2][0], dR[1][0] - dR[0][1]) * 0.5;
+              float dt = max(h * float(s_substeps), 1e-4);
+              float3 omegaW = axisW / dt;
+              float ol = length(omegaW);
+              if (ol > 12.0) omegaW *= 12.0 / ol;   // tope: cortes de camara / teletransportes no son giros
+              s_omega = (s_flags & 32) ? omegaW : mul(transpose(W), omegaW);
+              s_center = (s_flags & 32) ? float3(s_W[0].w, s_W[1].w, s_W[2].w) : 0;
+            }
             float3 windBase = mul(transpose(W), g_wind.xyz);
             for (uint s = 0; s < s_substeps; ++s) {
                 float t = float(s + 1) / float(s_substeps);

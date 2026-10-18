@@ -448,6 +448,34 @@ void UpdateTimeParams() {
     p[23][3] = p[23][2];                            // viento del pelo: tiempo anterior
     p[23][2] = float(fmod(t, 10000.0));             // tiempo actual
     p[24][1] = (t - s_lastTurf) < 2.0 ? 1.0f : 0.0f; // en partido
+    UpdateClothWet(t);
+}
+
+// ---------------------------------------------------------------- tela mojada -> shader del mod de ropa
+// El mod de ropa recompila cloth_sim.hlsl en caliente; PES21 FX le escribe el valor de "mojado" (sudor por reloj de
+// partido y lluvia) en la linea marcada PES21FX_LIVE_WET, como mucho cada 20 s y solo si cambio bastante.
+// w70 on/off, x70 cuanto moja el sudor al maximo, y70 cuanto moja la lluvia
+void UpdateClothWet(double t) {
+    static double next = 0; static float last = -1.0f;
+    if (t < next) return; next = t + 20.0;
+    const auto& p = g_cfg.live;
+    if (p[70][3] < 0.5 || !g_cfg.clothFound) return;
+    float tmin = p[10][0], t0 = p[9][0], t1 = p[9][1];
+    float sweat = (p[8][3] > 0.5 && t1 > t0 && p[24][1] > 0.5) ? std::clamp((tmin - t0) / (t1 - t0), 0.0f, 1.0f) : 0.0f;
+    float wet = sweat * std::clamp(p[70][0], 0.0f, 1.0f);
+    if (g_cfg.match.known && g_cfg.match.weather == 1) wet = std::max(wet, std::clamp(p[70][1], 0.0f, 1.0f));
+    if (last >= 0 && fabsf(wet - last) < 0.08) return;
+    std::wstring path = g_cfg.baseDir + L"..\\cloth-mod\\shaders\\cloth_sim.hlsl";
+    std::ifstream f(path, std::ios::binary); if (!f) return;
+    std::string src((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>()); f.close();
+    size_t m = src.find("// PES21FX_LIVE_WET"); if (m == std::string::npos) return;
+    size_t ls = src.rfind('\n', m); ls = (ls == std::string::npos) ? 0 : ls + 1;
+    char line[96]; snprintf(line, sizeof(line), "#define PES_WET            %.2f   ", wet);
+    src.replace(ls, m - ls, line);
+    std::ofstream o(path, std::ios::binary | std::ios::trunc); if (!o) return;
+    o << src; o.close();
+    last = wet;
+    Log("ropa: tela mojada = %.2f (sudor %.2f, lluvia %s)", wet, sweat, (g_cfg.match.known && g_cfg.match.weather == 1) ? "si" : "no");
 }
 
 } // namespace fx
