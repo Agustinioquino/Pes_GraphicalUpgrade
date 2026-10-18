@@ -545,7 +545,7 @@ void main(
         float dS2 = g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, uv, 0).x;
         float zS = g_psScene.m_projectionParam.z / (dS2 - g_psScene.m_projectionParam.w);
         float dz = (R.z - zS) * zSgn;                              // > 0: el rayo quedo detras de lo que ve la camara
-        float thick = 0.04 + 0.22 * t + 0.002 * RzA;               // grosor aceptado: crece con el largo del rayo
+        float thick = 0.22 + 0.40 * t + 0.003 * RzA;   // 18/10 d: grosor aceptado del oclusor. Con 4 cm NUNCA habia impacto: una cabeza o un brazo miden 10-25 cm y el rayo pasa por detras de su cara visible (verificado con una simulacion numerica)               // grosor aceptado: crece con el largo del rayo
         if (dz > 0.003 + 0.0008 * RzA && dz < thick && (zC - zS) * zSgn > 0.03 + 0.002 * zA) {
           // oclusor cerca = sombra plena; lejos = penumbra (segun suavidad). Primer impacto = el mas cercano.
           occ = (1.0 - csSoft * f) * saturate(dz / (0.35 * thick));
