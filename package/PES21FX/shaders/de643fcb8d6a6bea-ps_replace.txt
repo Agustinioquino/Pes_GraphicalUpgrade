@@ -724,7 +724,7 @@ void main(
   // cian = marcada como piel pero el SSS esta apagado o sin translucidez (isSkin falso)
   if (dbgT && abs(skinTag - 0.98039) < 0.003 && !tookSM) { o0.xyz = isSkin ? float3(4.0, 0.0, 4.0) : float3(0.0, 4.0, 4.0); r1.xyz = 0; }
   // diagnostico w12 = 4: la escena en gris y las sombras de contacto en rojo (mas rojo = mas oscura)
-  if (dbgC) { float lum = dot(o0.xyz, float3(0.2126, 0.7152, 0.0722)); o0.xyz = csDbg < 0.995 ? float3(1.0 + 6.0 * (1.0 - csDbg), 0.0, 0.0) : lum.xxx; r1.xyz = 0; }
+  if (dbgC) { o0.xyz = lerp(o0.xyz, float3(10.0, 0.0, 0.0), saturate((1.0 - csDbg) * 3.0)); r1.xyz = 0; }   // 18/10 d: rojo donde hay sombra de contacto (el gris no se veia: esta salida es irradiancia, el color lo pone el albedo despues)
   o1.xyz = min(float3(10000,10000,10000), r1.xyz);
   o0.w = 1;
   o1.w = 1;
