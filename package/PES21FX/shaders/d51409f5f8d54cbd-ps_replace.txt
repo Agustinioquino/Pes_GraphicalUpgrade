@@ -170,6 +170,8 @@ void main(
 
   float4 P3 = IniParams.Load(int2(3,0));
   float4 P5 = IniParams.Load(int2(5,0));
+  float4 P76 = IniParams.Load(int2(76,0));   // PES21 SSS v2 (18/10): x76 intensidad general | y76 zonas que transmiten (0 solo finas .. 1 toda la piel) | z76 rojo de la penumbra
+  float sssV2 = P76.x > 0.0 ? P76.x : 1.0;
   bool  sssOn    = P3.z > 0.5;
   float sssWidth = P3.x > 0 ? P3.x : 1.0;
   float sssBleed = P3.y;
@@ -536,7 +538,7 @@ void main(
     // 18/10 v2: rojo solo en la PENUMBRA (borde de la sombra), la sombra plena queda neutra.
     // Antes pow(sh,0.55) en el rojo dejaba toda la sombra de la cara naranja.
     float pen = sh * (1.0 - sh) * 4.0;   // 1 en el medio del borde, 0 en luz plena y en sombra plena
-    float3 shC = saturate(sh.xxx + pen * float3(0.10, -0.02, -0.04));
+    float3 shC = saturate(sh.xxx + pen * float3(0.10, -0.02, -0.04) * sssV2 * (P76.z > 0.0 ? P76.z : 1.0));
     shadowRGB = lerp(sh.xxx, shC, saturate(saturate(trans * 2.0) * sssBleed));
   }
   o0.xyz = r3.xyz * shadowRGB;
@@ -632,8 +634,8 @@ void main(
     float visT = lerp(0.25, 1.0, saturate(r0.x));   // la luz entra por el lado de atras aunque el frente este en sombra
     // 18/10 v2: solo donde la piel es fina de verdad (orejas, aletas, labios) y el sol esta detras; sin el
     // termino 'de atras' amplio que encendia de naranja todo el lado en sombra de la cara
-    float thinGate = smoothstep(0.45, 0.85, thin);
-    float3 transm = Tr * fwd * (0.6 + 0.4 * back) * thinGate * P5.x * 1.6;
+    float thinGate = lerp(smoothstep(0.45, 0.85, thin), 1.0, saturate(P76.y));   // y76: 0 = solo orejas/nariz/labios, 1 = toda la piel (como antes)
+    float3 transm = Tr * fwd * (0.6 + 0.4 * back) * thinGate * P5.x * 1.6 * sssV2;
     // PES21 transmision por shadow map (18/10, Jimenez 2010): el grosor real que atraviesa la luz = distancia entre lo
     // que ve el sol (shadow map) y este pixel. Orejas y nariz se encienden solo cuando el sol esta realmente detras.
     if (P64.x > 0.5 && P64.z > 0.0 && pesShCas > -0.5 && g_psScene.m_shadowMapResolutions.x > 1.0) {

@@ -281,6 +281,14 @@ static PFN_CreateVS o_CreateVS; static PFN_CreatePS o_CreatePS; static PFN_Creat
 static PFN_SetPS o_SetPS[2]; static PFN_SetVS o_SetVS[2]; static PFN_SetCS o_SetCS[2];
 static PFN_DrawIdx o_DrawIdx[2]; static PFN_Draw o_Draw[2]; static PFN_DrawIdxInst o_DrawIdxInst[2]; static PFN_DrawInst o_DrawInst[2];
 static PFN_Present o_Present; static PFN_Resize o_Resize;
+using PFN_ClearDSV = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11DepthStencilView*, UINT, FLOAT, UINT8);
+static PFN_ClearDSV o_ClearDSV[2];
+// cejas (18/10): para dibujar las hebras hace falta saber si el juego usa profundidad invertida (limpia a 0) o normal (limpia a 1)
+std::atomic<int> g_depthClearZero{0}, g_depthClearOne{0};
+template<int V> static void STDMETHODCALLTYPE hk_ClearDSV(ID3D11DeviceContext* c, ID3D11DepthStencilView* v, UINT f, FLOAT d, UINT8 st) {
+    if (f & D3D11_CLEAR_DEPTH) { if (d < 0.5f) g_depthClearZero++; else g_depthClearOne++; }
+    o_ClearDSV[V](c, v, f, d, st);
+}
 
 // ---------------------------------------------------------------- registro de shaders
 static const Rule* RuleFor(uint64_t h) {
@@ -431,9 +439,14 @@ static void RunRule(ID3D11DeviceContext* c, const ShaderEntry* e, DrawScope& d) 
                 // cejas con hebras: mapa de semillas en t26 y buffer de semillas (UAV 5) limpio para este dibujo
                 if (ex.seedMap && ex.seedsUAV && g_cfg.live[74][0] > 0.5f) {
                     Remember(c, d, true, true, 26); c->PSSetShaderResources(26, 1, &ex.seedMap);
-                    const float z[4] = { 0, 0, 0, 0 }; c->ClearUnorderedAccessViewFloat(ex.seedsUAV, z);
-                    c->OMSetRenderTargetsAndUnorderedAccessViews(D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 5, 1, &ex.seedsUAV, nullptr);
-                    d.brow = ex;
+                    const UINT z[4] = { 0, 0, 0, 0 }; c->ClearUnorderedAccessViewUint(ex.seedsUAV, z);   // buffer estructurado: limpieza por bits
+                    // el UAV va en el slot 5 (u5): hay que enlazarlo con la cuenta real de render targets (<= 5), no con "mantener",
+                    // porque si el juego dejo 8 slots declarados la llamada se rechaza en silencio
+                    ID3D11RenderTargetView* rts[8] = {}; ID3D11DepthStencilView* dsv = nullptr; c->OMGetRenderTargets(8, rts, &dsv);
+                    UINT nrt = 0; for (UINT i = 0; i < 8; i++) if (rts[i]) nrt = i + 1;
+                    if (nrt <= 5) { c->OMSetRenderTargetsAndUnorderedAccessViews(nrt, rts, dsv, 5, 1, &ex.seedsUAV, nullptr); d.brow = ex; d.brow.rtCount = (int)nrt; }
+                    else { static std::atomic<bool> warned{false}; if (!warned.exchange(true)) Log("cejas: la cara se dibuja con %u render targets, no puedo enlazar el buffer de semillas", nrt); }
+                    for (auto* v : rts) if (v) v->Release(); if (dsv) dsv->Release();
                 }
             }
             break; }
@@ -512,6 +525,7 @@ template<int V> static void HookContextV(ID3D11DeviceContext* c) {
     n += Hook(vt[20], (void*)&hk_DrawIdxInst<V>, (void**)&o_DrawIdxInst[V], "DrawIndexedInstanced");
     n += Hook(vt[21], (void*)&hk_DrawInst<V>, (void**)&o_DrawInst[V], "DrawInstanced");
     n += Hook(vt[69], (void*)&hk_SetCS<V>, (void**)&o_SetCS[V], "CSSetShader");
+    n += Hook(vt[53], (void*)&hk_ClearDSV<V>, (void**)&o_ClearDSV[V], "ClearDepthStencilView");
     if (n) Log("contexto enganchado (variante %d, %d funciones)", V, n);
 }
 static void HookContext(ID3D11DeviceContext* c, int v) {

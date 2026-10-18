@@ -426,7 +426,7 @@ void main(
   }
   // 18/10 v2: solo sube la translucidez donde el grosor generado dice 'fino' (orejas, aletas, labios, parpados);
   // antes la subia en casi toda la cara y el SSS se veia ceroso y naranja
-  if (fgOk) r1.w = max(r1.w, saturate((FA.b - 0.45) / 0.55) * saturate(P68.z));
+  if (fgOk) r1.w = max(r1.w, FA.b * saturate(P68.z));   // 18/10: grosor de la quinta textura tal cual (la version con umbral no gusto)
   r1.w = max(r1.w, 0.85 * lipM * saturate(P72.z));         // PES21 zonas: los labios son finos e irrigados (mas luz adentro)
   float thin = r1.w;
 

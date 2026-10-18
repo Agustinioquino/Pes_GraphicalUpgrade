@@ -10,6 +10,7 @@
 #include <vector>
 #include <mutex>
 #include <algorithm>
+#include <cstring>
 
 namespace fx {
 
@@ -222,6 +223,28 @@ void BrowDrawAfterFace(ID3D11DeviceContext* c, FaceGenExtra* ex) {
     ID3D11ShaderResourceView* oVS30 = nullptr; c->VSGetShaderResources(30, 1, &oVS30);
     ID3D11ShaderResourceView* oVS120 = nullptr; c->VSGetShaderResources(120, 1, &oVS120);
     ID3D11RasterizerState* oRS = nullptr; c->RSGetState(&oRS);
+    // profundidad: la cara se dibuja con "igual" (hay pre-pasada de profundidad) y eso descartaria todas las hebras.
+    // Se usa el mismo estado pero con comparacion "menor o igual" (o "mayor o igual" si el juego usa profundidad invertida).
+    ID3D11DepthStencilState* oDSS = nullptr; UINT oRef = 0; c->OMGetDepthStencilState(&oDSS, &oRef);
+    ID3D11DepthStencilState* useDSS = nullptr;
+    D3D11_DEPTH_STENCIL_DESC dd{};
+    if (oDSS) oDSS->GetDesc(&dd); else { dd.DepthEnable = TRUE; dd.StencilEnable = FALSE; }
+    bool reversed = g_depthClearZero.load() > g_depthClearOne.load();
+    D3D11_COMPARISON_FUNC origFunc = dd.DepthFunc;
+    dd.DepthEnable = TRUE; dd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+    dd.DepthFunc = reversed ? D3D11_COMPARISON_GREATER_EQUAL : D3D11_COMPARISON_LESS_EQUAL;
+    {
+        static ID3D11DepthStencilState* cacheDSS[2] = {}; static D3D11_DEPTH_STENCIL_DESC cacheDesc[2] = {}; static bool cacheOk[2] = {};
+        int ci = reversed ? 1 : 0;
+        if (!cacheOk[ci] || memcmp(&cacheDesc[ci], &dd, sizeof(dd)) != 0) {
+            if (cacheDSS[ci]) { cacheDSS[ci]->Release(); cacheDSS[ci] = nullptr; }
+            g_dev.dev->CreateDepthStencilState(&dd, &cacheDSS[ci]); cacheDesc[ci] = dd; cacheOk[ci] = true;
+        }
+        useDSS = cacheDSS[ci];
+    }
+    if (useDSS) c->OMSetDepthStencilState(useDSS, oRef);
+    static std::atomic<int> s_logged{0};
+    if (s_logged.load() < 1) { s_logged++; Log("cejas: primer dibujo de hebras (RTs %d, profundidad del juego func %d, %s, %u semillas x %u)", ex->rtCount, (int)origFunc, reversed ? "invertida" : "normal", (unsigned)kSeedCount, perSeed); }
     // 3) dibujar
     c->VSSetShader(s_browVS, nullptr, 0); c->PSSetShader(s_browPS, nullptr, 0); c->GSSetShader(nullptr, nullptr, 0); c->HSSetShader(nullptr, nullptr, 0); c->DSSetShader(nullptr, nullptr, 0);
     c->IASetInputLayout(nullptr); c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -237,6 +260,7 @@ void BrowDrawAfterFace(ID3D11DeviceContext* c, FaceGenExtra* ex) {
     c->VSSetShaderResources(30, 1, &oVS30); if (oVS30) oVS30->Release();
     c->VSSetShaderResources(120, 1, &oVS120); if (oVS120) oVS120->Release();
     c->RSSetState(oRS); if (oRS) oRS->Release();
+    c->OMSetDepthStencilState(oDSS, oRef); if (oDSS) oDSS->Release();
 }
 
 } // namespace fx
