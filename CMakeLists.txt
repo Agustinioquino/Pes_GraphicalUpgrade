@@ -45,6 +45,7 @@ add_library(PES21FX SHARED
   src/overlay.cpp
   src/presets.cpp
   src/catalog.cpp
+  src/grass.cpp
   ${imgui_SOURCE_DIR}/imgui.cpp
   ${imgui_SOURCE_DIR}/imgui_draw.cpp
   ${imgui_SOURCE_DIR}/imgui_tables.cpp

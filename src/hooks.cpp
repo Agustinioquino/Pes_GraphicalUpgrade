@@ -394,7 +394,9 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
 }
 #define FX_DRAW(verts, kind, inst, call) if (g_catalogHook) { CtxState& cs_ = Ctx(c); CatalogDraw(c, cs_.vs, cs_.ps, verts, kind, inst); } DrawScope ds; bool r = BeforeDraw(c, ds); call; if (r) Restore(c, ds);
 template<int V> static void STDMETHODCALLTYPE hk_DrawIdx(ID3D11DeviceContext* c, UINT a, UINT b, INT d) {
-    if (g_grassProbeOn) CatalogGrassDraw(c, Ctx(c).vs, a, b, d);
+    { const ShaderEntry* gvs = Ctx(c).vs;
+      if (g_grassProbeOn) CatalogGrassDraw(c, gvs, a, b, d);
+      if (gvs && gvs->hash == 0x498b30bad256e8edULL) GrassOnDraw(c, gvs, a, b, d); }
     FX_DRAW(a, 1, 1, o_DrawIdx[V](c, a, b, d)) }
 template<int V> static void STDMETHODCALLTYPE hk_Draw(ID3D11DeviceContext* c, UINT a, UINT b) { FX_DRAW(a, 0, 1, o_Draw[V](c, a, b)) }
 template<int V> static void STDMETHODCALLTYPE hk_DrawIdxInst(ID3D11DeviceContext* c, UINT a, UINT b, UINT d, INT e, UINT f) { FX_DRAW(a, 3, b, o_DrawIdxInst[V](c, a, b, d, e, f)) }
@@ -563,6 +565,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     WatchShaderFolder();
     PollMatch();
     CatalogPresent();
+    GrassPresent();
     OverlayPresent(sc);
     return o_Present(sc, sync, flags);
 }

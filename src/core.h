@@ -143,6 +143,10 @@ void CatalogPresent();
 void CatalogDumpCBs();
 extern std::atomic<bool> g_grassProbeOn;
 void CatalogProbeGrass();                        // "Volcar pasto": mide las parcelas de pasto de un cuadro
+// pasto extendido (grass.cpp)
+void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT start, INT base);
+void GrassPresent();
+extern int g_grassPatchesLastFrame;
 void CatalogGrassDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT start, INT base);                           // proximo cuadro: volcar los cbuffers de composicion y luz del sol
 
 struct DeviceState {

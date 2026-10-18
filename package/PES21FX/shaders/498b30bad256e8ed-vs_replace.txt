@@ -23,7 +23,7 @@ Texture2D<float4> g_tex_detailNormal : register(t6);
 Texture1D<float4> IniParams : register(t120);
 
 void main(
-  float4 v0 : POSITION0,
+  float4 v0_in : POSITION0,
   float2 v1 : TEXCOORD0,
   out float4 o0 : SV_Position0,
   out float4 o1 : TEXCOORD0,
@@ -35,6 +35,12 @@ void main(
   out float2 o7 : TEXCOORD6)
 {
   float4 r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11;
+  // === PES21 pasto extendido: parcela emitida por el mod (cb5[8].y = 1): x escala horizontal (1 parcela = 0.5 m x escala),
+  // z alto de las hojas, w ensanche de la hoja hacia la camara en metros. El juego no usa cb5[8] en este VS.
+  float4 pesExt = cb5[8];
+  bool pesIsExt = pesExt.y > 0.5;
+  float4 v0 = v0_in;
+  if (pesIsExt) { v0.xz *= max(pesExt.x, 1.0); v0.y *= max(pesExt.z, 0.1); }
 
   // --- posicion en el mundo y doblado por jugador / pelota ---
   r0.x = v0.y + 10.0;
@@ -80,6 +86,11 @@ void main(
   r0.y = saturate(r0.y + 0.06);
   r6.y = r0.y - 0.06;
   r6.w = dot(v0, cb5[7]);
+  if (pesIsExt) {
+    // ensanche hacia la camara: la hoja se corre a lo largo del eje derecha de la camara segun su u (0..1)
+    float3 camRight = normalize(cb2[8].xyz);
+    r6.xyz += camRight * ((v1.x - 0.5) * pesExt.w);
+  }
   // --- proyeccion ---
   r8.x = dot(r6, cb2[8]);
   r8.y = dot(r6, cb2[9]);
@@ -110,6 +121,7 @@ void main(
   r8 = g_tex_planarShadow.SampleLevel(g_samplerLinear_Clamp_s, r0.yz, 0);
   r0.y = dot(r8, float4(1, 1, 1, 1));
   o1.z = saturate(1.0 - r0.y);
+  if (pesIsExt) o1.z = 1.0;   // sin sombra plana en las extendidas (su viewWorld es identidad)
   o1.xy = v1.xy;
   r0.yz = r2.xy * float2(32.0, 24.0);
   r2 = g_tex_grain.SampleLevel(g_samplerLinear_Clamp_s, r2.xy, 0);

@@ -195,6 +195,7 @@ static void GrassProbePresent() {
         g_dev.imm->Unmap(stg, 0);
     }
     stg->Release();
+    if (s_gpBuf) { s_gpBuf->Release(); s_gpBuf = nullptr; }
     char b[96]; snprintf(b, sizeof(b), "Escrito catalog\\grass.txt (%d parcelas de pasto)", n); g_catalogStatus = b; Log("catalogo: %s", b);
 }
 
