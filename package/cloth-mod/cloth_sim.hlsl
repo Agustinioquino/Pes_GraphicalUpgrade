@@ -22,7 +22,7 @@
 #define PES_LEG_PRECISE    1
 #define PES_LEG_ITER       2      // pasadas por sub-paso
 #define PES_LEG_REACH      0.06   // (m) solo cuentan los vertices de pierna a menos de esta distancia
-#define PES_LEG_DRAPE      0.22   // (18/10) cuanto se acuesta el short sobre el muslo por sub-paso (0 = flota como antes)
+#define PES_LEG_DRAPE      0.0    // (18/10) cuanto se acuesta el short sobre el muslo por sub-paso (0 = flota como antes)
 #define PES_LEG_DRAPE_RANGE 0.03  // (m) desde que distancia al muslo empieza a acostarse
 // INERCIA POR ZONA: al arrancar, la tela del lado opuesto a la aceleracion (espalda, faldon) se queda atras; al frenar
 // se adelanta. Se aplica como impulso extra en la cara que mira en contra de la aceleracion.
@@ -33,7 +33,7 @@
 #define PES_WET            0.00   // PES21FX_LIVE_WET
 // PES21 FX (18/10): ajuste de la tela al fisico. La escala de los huesos (fisico del editor: ancho de hombros, pecho,
 // cintura) se lee de la matriz de skinning de cada particula: >1 cuerpo ancho -> la tela se pega; <1 delgado -> cuelga.
-#define PES_FIT_ON         1      // PES21FX_LIVE_FIT_ON
+#define PES_FIT_ON         0      // PES21FX_LIVE_FIT_ON
 #define PES_FIT_THIN       10.0   // PES21FX_LIVE_FIT_THIN   mm de holgura extra en el cuerpo mas delgado
 #define PES_FIT_FAT        6.0    // PES21FX_LIVE_FIT_FAT    mm mas pegada en el cuerpo mas ancho
 #define PES_FIT_RANGE      0.15   // PES21FX_LIVE_FIT_RANGE  escala de hueso (+-) con la que se llega al maximo
