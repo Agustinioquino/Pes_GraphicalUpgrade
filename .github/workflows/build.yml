@@ -50,7 +50,7 @@ jobs:
         continue-on-error: true
         run: |
           $fxc = Get-ChildItem "C:/Program Files (x86)/Windows Kits/10/bin/*/x64/fxc.exe" | Sort-Object FullName -Descending | Select-Object -First 1
-          if (-not $fxc) { Write-Host "fxc no encontrado"; exit 0 }
+          if (-not $fxc) { "fxc no encontrado" | Set-Content shadercheck.txt; Write-Host "fxc no encontrado"; exit 0 }
           $bad = 0; $n = 0
           "" | Set-Content shadercheck.txt
           Get-ChildItem package/PES21FX/shaders/*_replace.txt | ForEach-Object {
@@ -60,6 +60,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { $bad++; Add-Content shadercheck.txt ("==== " + $_.Name + "`n" + $r) }
           }
           Write-Host "shaders: $n, con errores: $bad"
+          Add-Content shadercheck.txt "shaders: $n, con errores: $bad (fxc: $($fxc.FullName))"
           if ($bad -gt 0) { Get-Content shadercheck.txt; exit 1 }
 
       - name: Publicar errores de shaders
@@ -87,6 +88,7 @@ jobs:
           Copy-Item build/Release/d3d11.dll dist/
           Copy-Item package/LEEME.txt dist/
           Copy-Item -Recurse package/sider dist/sider
+          if (Test-Path shadercheck.txt) { Copy-Item shadercheck.txt dist/ }
 
       - uses: actions/upload-artifact@v4
         with:
