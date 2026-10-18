@@ -611,7 +611,7 @@ void main(
       float2 C = float2(res.x * 0.5, R * 1.6);   // centro arriba (la esquina derecha la tapa el logo de la transmision)
       float2 d = v0.xy - C;
       float r = length(d);
-      float2 sd = float2(Ld.x, -Ld.y);
+      float2 sd = float2(-Ld.x, -Ld.y);   // 18/10: el eje X del espacio de vista del motor va al reves que la pantalla
       float sl = length(sd);
       float2 sdn = sl > 1e-4 ? sd / sl : float2(0, -1);
       float along = dot(d, sdn), perp = abs(dot(d, float2(-sdn.y, sdn.x)));

@@ -37,7 +37,9 @@ void main(float4 pos : SV_Position, float2 uv : TEXCOORD0, out float4 o0 : SV_Ta
   float dFine = Div(uv, 1.0, texel);
   float dMid  = Div(uv, 3.0, texel);
   float dBig  = Div(uv, 5.0, texel);
-  float cav   = saturate(-(dFine * 0.6 + dMid * 1.4) * 4.0);          // concavo fino/medio = pliegue, ala de nariz, comisura
+  float dFine0 = Div(uv, 0.0, texel);
+  float cav   = saturate(-(dFine0 * 0.5 + dFine * 0.5 + dMid * 0.35) * 2.2);   // concavo fino = pliegue, ala de nariz, comisura (el medio apenas, para no manchar)
+  cav = cav * cav;   // solo los huecos marcados
   float curv  = saturate(0.5 + dMid * 3.0);                            // curvatura media (piel pre-integrada)
   float convB = saturate(dBig * 6.0);                                  // convexidad grande = orejas, punta de nariz, labios
 

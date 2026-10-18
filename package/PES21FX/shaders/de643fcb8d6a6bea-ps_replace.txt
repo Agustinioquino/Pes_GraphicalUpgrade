@@ -618,8 +618,8 @@ void main(
       float backL = saturate(0.3 + dot(L, -n)) * (1.0 - saturate(rawNdotL * 3.0));
       float3 transSM = Tt * backL * P64.z * 0.8;
       o0.xyz += max(transSM, transm * visT * 0.5) * lightC;   // sin perder el contraluz direccional cuando el shadow map no alcanza
-      // diagnostico w12 = 3: rojo = grosor medido (1 = opaco), verde = luz transmitida, azul = de espaldas al sol
-      if (IniParams.Load(int2(12,0)).w > 2.5) o0.xyz = float3(saturate(thickM * dens), saturate(dot(transSM, 1.0)), saturate(dot(L, -n))) * 2.0;
+      // diagnostico w12 = 3: rojo = grosor medido (10 cm = 1), verde = de espaldas al sol, azul = en sombra segun el shadow map
+      if (IniParams.Load(int2(12,0)).w > 2.5) o0.xyz = float3(saturate(thickM / 0.10), saturate(dot(L, -n)), r0.x < 0.5 ? 0.6 : 0.0);
     } else if (P34.w > 0.5) o0.xyz += transm * lightC * visT;
     else {
       float3 transmO = thin * pow(saturate(dot(V, -Lt)), 3.0) * float3(1.0, 0.24, 0.10) * P5.x;
