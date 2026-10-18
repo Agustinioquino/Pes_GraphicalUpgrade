@@ -76,6 +76,7 @@ void main(
   }
   r1.xyz = v3.xyz * r0.yyy;
   o0.xyz = v1.zzz * r1.xyz;
+  if (v5.w > 0.5) o0.xyz = float3(1.0, 0.0, 1.0);   // PES21 depuracion: parcelas extendidas en magenta (z59)
   r0.y = v5.x + r0.x;
   r0.x = v5.y * r0.z;
   r0.zw = v5.yx + -r0.xy;

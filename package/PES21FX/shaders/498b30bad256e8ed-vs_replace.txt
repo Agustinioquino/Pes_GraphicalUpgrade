@@ -8,7 +8,7 @@
 cbuffer cVSSystem : register(b0) { float4 cb0[3]; }
 cbuffer cVSScene : register(b2) { float4 cb2[21]; }
 cbuffer cVSMaterial : register(b4) { float4 cb4[5]; }
-cbuffer cVSObject : register(b5) { float4 cb5[9]; }
+cbuffer cVSObject : register(b5) { float4 cb5[10]; }
 
 SamplerState g_samplerLinear_Wrap_s : register(s10);
 SamplerState g_samplerLinear_Clamp_s : register(s11);
@@ -276,7 +276,7 @@ void main(
   o5.y = r0.z;
   o5.x = r0.x * r1.z;
   o5.z = r0.y * r1.y;
-  o5.w = 0.0;
+  o5.w = (pesIsExt && cb5[9].x > 0.5) ? 1.0 : 0.0;   // PES21: depuracion, el PS pinta magenta
   o6.z = dot(r6, cb2[16]);
   o6.w = dot(r6, cb2[17]);
   o7.y = dot(r6, cb2[19]);

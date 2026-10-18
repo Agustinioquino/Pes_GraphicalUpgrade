@@ -60,8 +60,8 @@ void GrassPresent() {
     g_grassPatchesLastFrame = s_lastCount;
     static double nextLog = 0; double t = Now();
     if (t > nextLog && g_cfg.live[58][3] > 0.5f) { nextLog = t + 3.0;
-        Log("pasto extendido: llamadas %d, emisiones %d, parcelas %d, variante %u idx, camara %s (%.1f, %.1f), rt %u/%u, estado: %s",
-            g_grassDbg.calls, g_grassDbg.emits, g_grassDbg.patches, g_grassDbg.lod, g_grassDbg.cam ? "ok" : "no", g_grassDbg.ex, g_grassDbg.ez, g_grassDbg.rtW, g_bbW, g_grassDbg.why ? g_grassDbg.why : "-");
+        Log("pasto extendido: llamadas %d, emisiones %d, parcelas %d, variante %u idx, camara %s (%.1f, %.1f) off %u, rt %u/%u, estado: %s",
+            g_grassDbg.calls, g_grassDbg.emits, g_grassDbg.patches, g_grassDbg.lod, g_grassDbg.cam ? "ok" : "no", g_grassDbg.ex, g_grassDbg.ez, g_grassDbg.cb2off, g_grassDbg.rtW, g_bbW, g_grassDbg.why ? g_grassDbg.why : "-");
         g_grassDbg.calls = 0; g_grassDbg.emits = 0; }
     (void)f;
 }
@@ -140,10 +140,13 @@ void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT
     if (!s_cb) { Why("sin cbuffer propio"); return; }
     g_grassDbg.emits++;
     // copiar cb2 (camara) a un staging para el cuadro que viene
-    { ID3D11Buffer* cb2 = nullptr; c->VSGetConstantBuffers(2, 1, &cb2);
-      if (cb2) { D3D11_BUFFER_DESC d; cb2->GetDesc(&d);
-        if (d.ByteWidth >= 480 && s_stageCopied.load() < 0) { int w = s_stageW; s_stageW = (s_stageW + 1) % 3;
-          D3D11_BOX b = { 0, 0, 0, 480, 1, 1 }; c->CopySubresourceRegion(s_cb2Stage[w], 0, 0, 0, 0, cb2, 0, &b); s_stageCopied = w; }
+    { ID3D11Buffer* cb2 = nullptr; UINT f2 = 0, n2 = 0;
+      ID3D11DeviceContext1* cq = nullptr;
+      if (SUCCEEDED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&cq)) && cq) { cq->VSGetConstantBuffers1(2, 1, &cb2, &f2, &n2); cq->Release(); }
+      else c->VSGetConstantBuffers(2, 1, &cb2);
+      if (cb2) { D3D11_BUFFER_DESC d; cb2->GetDesc(&d); UINT off = f2 * 16;   // el juego usa un buffer grande con offset por dibujo
+        if (d.ByteWidth >= off + 480 && s_stageCopied.load() < 0) { int w = s_stageW; s_stageW = (s_stageW + 1) % 3;
+          D3D11_BOX b = { off, 0, 0, off + 480, 1, 1 }; c->CopySubresourceRegion(s_cb2Stage[w], 0, 0, 0, 0, cb2, 0, &b); s_stageCopied = w; g_grassDbg.cb2off = off; }
         cb2->Release(); } }
     if (s_lodCount.load() == 0xffffffff) { Why("todavia sin variante de malla"); return; }
     g_grassDbg.lod = s_lodCount.load(); g_grassDbg.cam = s_camValid; g_grassDbg.ex = s_eye[0]; g_grassDbg.ez = s_eye[2];
@@ -174,6 +177,7 @@ void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT
         w[12] = 0;  w[13] = 0; w[14] = 0; w[15] = 1;
         q[32] = scale; q[33] = 1234.5f; q[34] = tall; q[35] = 0.012f * scale * wide;   // cb5[8]: escala, flag, alto, ensanche
         for (int k = 36; k < 72; k++) q[k] = 0.f;
+        q[36] = p59[2] > 0.5f ? 1.f : 0.f;                                                  // cb5[9].x: pintar de magenta (depuracion)
         c->UpdateSubresource(s_cb, 0, nullptr, q, 0, 0);
         c->VSSetConstantBuffers(5, 1, &s_cb);
         c->DrawIndexed(s_lodCount.load(), s_lodStart, s_lodBase);   // pasa por nuestro gancho (t120, reglas)
