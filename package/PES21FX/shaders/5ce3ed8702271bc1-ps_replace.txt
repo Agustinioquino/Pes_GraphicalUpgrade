@@ -546,7 +546,10 @@ void main(
         if (length((v2.xy - suv) * 2048.0) < rad) {
           uint idx = (uint)cell.y * 256u + (uint)cell.x;
           float3 dirC = -normalize(v3.xyz);
-          float3 posV = dirC * (v0.w / max(abs(dirC.z), 1e-4));
+          // v0 es SV_Position: su w es 1/w (ERROR corregido 18/10: antes se usaba como si fuera la profundidad y las
+          // hebras nacian a medio camino entre la camara y la cara)
+          float depthV = 1.0 / max(v0.w, 1e-6);
+          float3 posV = dirC * (depthV / max(abs(dirC.z), 1e-4));
           float2 d2 = sm.xy * 2.0 - 1.0;
           float flipD = IniParams.Load(int2(75,0)).w < -0.5 ? -1.0 : 1.0;
           float3 dirV = normalize(v4.xyz) * d2.x * flipD - normalize(v5.xyz) * d2.y * flipD;
