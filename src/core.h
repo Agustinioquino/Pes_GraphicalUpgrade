@@ -142,7 +142,9 @@ void CatalogCS(const ShaderEntry* cs);
 void CatalogPresent();
 void CatalogDumpCBs();
 extern std::atomic<bool> g_grassProbeOn;
-void CatalogProbeGrass();                        // "Volcar pasto": mide las parcelas de pasto de un cuadro
+void CatalogProbeGrass();
+extern std::atomic<bool> g_recordOn;
+void CatalogRecord(bool on);                     // "Grabar partido": volcados periodicos numerados en catalog\rec                        // "Volcar pasto": mide las parcelas de pasto de un cuadro
 // pasto extendido (grass.cpp)
 void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT start, INT base);
 void GrassPresent();

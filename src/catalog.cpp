@@ -156,6 +156,21 @@ void CatalogGrassDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count,
     if (cb5) { D3D11_BOX b = { r.cb5off, 0, 0, r.cb5off + 128, 1, 1 }; c->CopySubresourceRegion(s_gpBuf, 0, i * kGpStride, 0, 0, cb5, 0, &b); cb5->Release(); }
     if (cb2) { D3D11_BOX b = { r.cb2off + 320, 0, 0, r.cb2off + 336, 1, 1 }; c->CopySubresourceRegion(s_gpBuf, 0, i * kGpStride + 128, 0, 0, cb2, 0, &b); cb2->Release(); }
 }
+// ---------------------------------------------------------------- grabacion de partido (volcados periodicos numerados)
+std::atomic<bool> g_recordOn{false};
+static int s_recSeq = 0; static double s_recNext = 0;
+static std::wstring RecName(const wchar_t* base) {
+    if (!g_recordOn && s_recSeq == 0) return g_cfg.baseDir + L"catalog\\" + base + L".txt";
+    std::wstring dir = g_cfg.baseDir + L"catalog\\rec\\"; CreateDirectoryW((g_cfg.baseDir + L"catalog\\").c_str(), nullptr); CreateDirectoryW(dir.c_str(), nullptr);
+    wchar_t b[64]; swprintf(b, 64, L"%s_%02d.txt", base, s_recSeq);
+    return dir + b;
+}
+void CatalogRecord(bool on) {
+    if (on == g_recordOn) return;
+    g_recordOn = on;
+    if (on) { s_recSeq = 0; s_recNext = 0; if (!g_catalogActive) CatalogStart(); g_catalogStatus = "Grabando partido: cada 5 s se vuelcan pasto y cbuffers en catalog\\rec\\"; Log("grabacion de partido: inicio"); }
+    else { char b[128]; snprintf(b, sizeof(b), "Grabacion detenida: %d volcados en catalog\\rec\\ (shaders al detener la captura)", s_recSeq); g_catalogStatus = b; Log("grabacion de partido: fin (%d volcados)", s_recSeq); s_recSeq = 0; }
+}
 static void GrassProbePresent() {
     int st = s_gpState;
     if (st == 0) return;
@@ -173,7 +188,7 @@ static void GrassProbePresent() {
     s_gpState = 0; g_grassProbeOn = false;
     int n = (std::min)((int)s_gpN, kGpMax);
     std::wstring dir = g_cfg.baseDir + L"catalog\\"; CreateDirectoryW(dir.c_str(), nullptr);
-    std::ofstream f(dir + L"grass.txt", std::ios::binary | std::ios::trunc);
+    std::ofstream f(RecName(L"grass"), std::ios::binary | std::ios::trunc);
     if (!f || n == 0) { g_catalogStatus = n == 0 ? "Sonda del pasto: no se dibujo pasto (entra a un partido)" : "Sonda: no se pudo escribir"; return; }
     D3D11_BUFFER_DESC d = {}; s_gpBuf->GetDesc(&d); d.Usage = D3D11_USAGE_STAGING; d.BindFlags = 0; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
     ID3D11Buffer* stg = nullptr; g_dev.dev->CreateBuffer(&d, nullptr, &stg);
@@ -181,7 +196,7 @@ static void GrassProbePresent() {
     g_dev.imm->CopyResource(stg, s_gpBuf);
     D3D11_MAPPED_SUBRESOURCE m;
     if (SUCCEEDED(g_dev.imm->Map(stg, 0, D3D11_MAP_READ, 0, &m))) {
-        f << "PES21 FX - sonda del pasto: " << n << " dibujos del VS 498b30bad256e8ed en un cuadro\r\n";
+        f << "PES21 FX - sonda del pasto: " << n << " dibujos del VS 498b30bad256e8ed en un cuadro" << (g_recordOn ? " (grabacion)" : "") << ", pantalla " << g_bbW << "x" << g_bbH << "\r\n";
         f << "# | ctx | indices start base | IB VB stride | cb5off | world fila0 | fila1 | fila2 (traslacion = .w) | viewWorld fila0 | eyepos\r\n";
         for (int i = 0; i < n; i++) {
             const float* q = (const float*)((const char*)m.pData + i * kGpStride);
@@ -200,6 +215,10 @@ static void GrassProbePresent() {
 }
 
 void CatalogPresent() {
+    if (g_recordOn) {
+        double t = Now();
+        if (t >= s_recNext && s_gpState == 0 && !s_cbPending) { s_recNext = t + 5.0; s_recSeq++; CatalogProbeGrass(); CatalogDumpCBs(); }
+    }
     GrassProbePresent();
     { std::lock_guard<std::mutex> lk(s_capMutex); if (s_cbPending && !s_cbGrabs.empty()) { WriteCBs(); s_cbPending = false; if (!g_catalogActive) g_catalogHook = false; } }
     if (!g_catalogActive) return;
@@ -508,7 +527,7 @@ static void CBLayout(const ShaderEntry* e, std::map<UINT, std::pair<std::string,
 static void WriteCBs() {
     if (!g_dev.dev || !g_dev.imm) return;
     std::wstring dir = g_cfg.baseDir + L"catalog\\"; CreateDirectoryW(dir.c_str(), nullptr);
-    std::ofstream f(dir + L"cbuffers.txt", std::ios::binary | std::ios::trunc);
+    std::ofstream f(RecName(L"cbuffers"), std::ios::binary | std::ios::trunc);
     int written = 0;
     for (auto& g : s_cbGrabs) {
         std::map<UINT, std::pair<std::string, std::vector<CBField>>> lay; CBLayout(g.ps, lay);

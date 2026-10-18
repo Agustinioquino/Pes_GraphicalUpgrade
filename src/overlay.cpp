@@ -382,6 +382,10 @@ static void DrawMenu() {
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Escribe catalog\\cbuffers.txt: los valores que el motor le pasa a la composicion y a la luz del sol\n(sol, exposicion, niebla, matrices de sombra) con el nombre de cada campo. Hacelo con un partido en pantalla.");
     ImGui::SameLine();
     if (ImGui::Button("Volcar pasto", ImVec2(110, 0))) CatalogProbeGrass();
+    ImGui::SameLine();
+    if (!g_recordOn) { if (ImGui::Button("Grabar partido", ImVec2(130, 0))) CatalogRecord(true); }
+    else { ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.25f, 0.2f, 1)); if (ImGui::Button("Detener grabacion", ImVec2(150, 0))) CatalogRecord(false); ImGui::PopStyleColor(); }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Mientras jugas, cada 5 s vuelca pasto y cbuffers numerados en catalog\\rec\\ (con la camara de ese momento)\ny deja la captura de shaders andando. Al terminar: Detener grabacion y despues Detener y escribir catalogo.");
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Mide las parcelas de pasto que dibuja el juego en un cuadro (tamano, grilla, cantidad)\ny lo escribe en catalog\\grass.txt. Hacelo con un partido en pantalla.");
     { std::string cst = g_catalogStatus; if (!cst.empty()) { ImGui::SameLine(); ImGui::TextDisabled("%s", cst.c_str()); } }
     ImGui::Spacing();
