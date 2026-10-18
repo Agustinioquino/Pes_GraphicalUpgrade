@@ -180,7 +180,9 @@ void main(
   float skinSpec = P3.w > 0 ? P3.w : 1.0;
   float rawNdotL = 0, trans = 0, transFloor = 0, skinTag = 0, shadowScalar = 1;
   float pesSunE = 1.0;   // PES21 sol de calidad (18/10): normalizacion de energia por el tamano del disco solar
-  bool dbgT = IniParams.Load(int2(12,0)).w > 2.5; bool tookSM = false;   // diagnostico de transmision
+  float dbgW12 = IniParams.Load(int2(12,0)).w;
+  bool dbgT = dbgW12 > 2.5 && dbgW12 < 3.5; bool tookSM = false;   // diagnostico de transmision
+  bool dbgC = dbgW12 > 3.5 && dbgW12 < 4.5;   // diagnostico 4: sombras de contacto en rojo
   float4 P64 = IniParams.Load(int2(64,0));   // x64 on | y64 diametro del sol (grados) | z64 transmision por shadow map | w64 densidad de la piel
 
   r0.xy = float2(-0.5,-0.5) + v2.yx;
@@ -698,6 +700,8 @@ void main(
   // diagnostico w12 = 3 sobre piel: magenta = es piel pero no se midio el grosor (sin cascada / transmision apagada);
   // cian = marcada como piel pero el SSS esta apagado o sin translucidez (isSkin falso)
   if (dbgT && abs(skinTag - 0.98039) < 0.003 && !tookSM) { o0.xyz = isSkin ? float3(4.0, 0.0, 4.0) : float3(0.0, 4.0, 4.0); r1.xyz = 0; }
+  // diagnostico w12 = 4: la escena en gris y las sombras de contacto en rojo (mas rojo = mas oscura)
+  if (dbgC) { float lum = dot(o0.xyz, float3(0.2126, 0.7152, 0.0722)); o0.xyz = csDbg < 0.995 ? float3(1.0 + 6.0 * (1.0 - csDbg), 0.0, 0.0) : lum.xxx; r1.xyz = 0; }
   o1.xyz = min(float3(10000,10000,10000), r1.xyz);
   o0.w = 1;
   o1.w = 1;

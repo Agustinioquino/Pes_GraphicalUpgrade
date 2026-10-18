@@ -233,8 +233,14 @@ void BrowDrawAfterFace(ID3D11DeviceContext* c, FaceGenExtra* ex) {
     ID3D11DepthStencilState* useDSS = nullptr;
     D3D11_DEPTH_STENCIL_DESC dd{};
     if (oDSS) oDSS->GetDesc(&dd); else { dd.DepthEnable = TRUE; dd.StencilEnable = FALSE; }
-    bool reversed = g_depthClearZero.load() > g_depthClearOne.load();
     D3D11_COMPARISON_FUNC origFunc = dd.DepthFunc;
+    // la direccion de la profundidad se toma de la propia cara (mayor = invertida); solo si la cara usa "igual"
+    // (pre-pasada) se recurre al conteo de limpiezas. Antes se usaba siempre el conteo y, como el juego limpia mas
+    // shadow maps (a 1) que buffers principales (a 0), al segundo cambiaba de signo y las hebras desaparecian.
+    bool reversed;
+    if (origFunc == D3D11_COMPARISON_GREATER || origFunc == D3D11_COMPARISON_GREATER_EQUAL) reversed = true;
+    else if (origFunc == D3D11_COMPARISON_LESS || origFunc == D3D11_COMPARISON_LESS_EQUAL) reversed = false;
+    else reversed = g_depthClearZero.load() > g_depthClearOne.load();
     dd.DepthEnable = TRUE; dd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
     dd.DepthFunc = reversed ? D3D11_COMPARISON_GREATER_EQUAL : D3D11_COMPARISON_LESS_EQUAL;
     {
