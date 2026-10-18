@@ -3,9 +3,12 @@ PES21 FX 0.2 - mod grafico para eFootball PES 2021 (PC, DirectX 11)
 
 Que trae
 --------
-Piel, pelo, ojos, boca, arrugas de expresion, sudor, kits next-gen (tejido, dorsales con
-relieve), luz de borde, luz de cielo, oclusion ambiental mejorada, sombras, rebote de luz,
-cielo, pasto y post-procesado. Todo se ajusta en vivo desde un menu en pantalla (Insert).
+Piel (SSS con mapa de grosor de la cara, transmision por shadow map, piel pre-integrada),
+pelo, ojos, boca, arrugas de expresion, sudor, kits next-gen (tejido, dorsales con relieve),
+luz de borde, luz de cielo, sol con tamano angular, curva del dia (sol, ambiente, niebla y
+calidez segun la altura del sol: ideal con Daylight Engine), oclusion ambiental mejorada,
+sombras, rebote de luz, cielo, pasto y post-procesado. Todo se ajusta en vivo desde un menu
+en pantalla (Insert).
 
 Instalacion
 -----------
