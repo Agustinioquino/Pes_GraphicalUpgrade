@@ -22,6 +22,8 @@
 #define PES_LEG_PRECISE    1
 #define PES_LEG_ITER       2      // pasadas por sub-paso
 #define PES_LEG_REACH      0.06   // (m) solo cuentan los vertices de pierna a menos de esta distancia
+#define PES_LEG_DRAPE      0.22   // (18/10) cuanto se acuesta el short sobre el muslo por sub-paso (0 = flota como antes)
+#define PES_LEG_DRAPE_RANGE 0.03  // (m) desde que distancia al muslo empieza a acostarse
 // INERCIA POR ZONA: al arrancar, la tela del lado opuesto a la aceleracion (espalda, faldon) se queda atras; al frenar
 // se adelanta. Se aplica como impulso extra en la cara que mira en contra de la aceleracion.
 #define PES_LAG            0.80
@@ -404,6 +406,11 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
                     float3 corr = ln * (g_legMargin - d);
                     x += corr;
                     xPrev += corr * (1.0 - g_bodyBounce);
+                } else if (d < g_legMargin + PES_LEG_DRAPE_RANGE) {
+                    // PES21 FX (18/10): la tela que queda cerca del muslo se acuesta sobre el (caida natural, short mas
+                    // pegado a la pierna). Solo tela libre (pin bajo) y sin inyectar velocidad.
+                    float pull = (d - g_legMargin) * PES_LEG_DRAPE * saturate(1.0 - pin * 1.5);
+                    x -= ln * pull; xPrev -= ln * pull;
                 }
             }
             // PES21 FX: colision precisa. El plano promedio subestima el muslo cuando la rodilla se dobla o el muslo
