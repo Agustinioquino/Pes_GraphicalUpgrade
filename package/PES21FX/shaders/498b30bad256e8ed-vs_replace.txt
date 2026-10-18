@@ -8,7 +8,7 @@
 cbuffer cVSSystem : register(b0) { float4 cb0[3]; }
 cbuffer cVSScene : register(b2) { float4 cb2[21]; }
 cbuffer cVSMaterial : register(b4) { float4 cb4[5]; }
-cbuffer cVSObject : register(b5) { float4 cb5[10]; }
+cbuffer cVSObject : register(b5) { float4 cb5[12]; }
 
 SamplerState g_samplerLinear_Wrap_s : register(s10);
 SamplerState g_samplerLinear_Clamp_s : register(s11);
@@ -21,10 +21,12 @@ Texture2D<float4> g_tex_planarShadow : register(t5);
 Texture2D<float4> g_tex_detailNormal : register(t6);
 
 Texture1D<float4> IniParams : register(t120);
+StructuredBuffer<float4> PESGrassInst : register(t121);   // PES21: parcelas del pasto extra (x, z, escala, giro)
 
 void main(
   float4 v0_in : POSITION0,
   float2 v1 : TEXCOORD0,
+  uint iid : SV_InstanceID,
   out float4 o0 : SV_Position0,
   out float4 o1 : TEXCOORD0,
   out float4 o2 : TEXCOORD1,
@@ -40,7 +42,37 @@ void main(
   float4 pesExt = cb5[8];
   bool pesIsExt = abs(pesExt.y - 1234.5) < 0.01;   // marca del mod (el juego usa cb5[8] con otros valores)
   float4 v0 = v0_in;
-  if (pesIsExt) { v0.xz *= max(pesExt.x, 1.0); v0.y *= max(pesExt.z, 0.1); }
+  bool pesKill = false;
+  float3 pesExtW = 0; float2 pesExtRoot = 0; float pesExtScale = 1;
+  float4 P58 = IniParams.Load(int2(58, 0));
+  if (pesIsExt) {
+    // v2 instanciado: la parcela sale del buffer de instancias; fundido por altura en los bordes de la banda y
+    // descarte exacto con la camara de este cuadro
+    float4 ins = PESGrassInst[(uint)cb5[9].y + iid];
+    pesExtScale = max(ins.z, 1.0);
+    int rot = (int)(ins.w + 0.5);
+    float cs = rot == 0 ? 1.0 : (rot == 2 ? -1.0 : 0.0), sn = rot == 1 ? 1.0 : (rot == 3 ? -1.0 : 0.0);
+    float2 lp = v0_in.xz * pesExtScale;
+    float2 rp = float2(cs * lp.x + sn * lp.y, -sn * lp.x + cs * lp.y);
+    pesExtRoot = ins.xy + rp;
+    float d = length(ins.xy - cb2[20].xz);
+    float k = smoothstep(cb5[9].z, cb5[9].w, d) * (1.0 - smoothstep(cb5[10].x, cb5[10].y, d));
+    v0.y = v0_in.y * max(pesExt.z, 0.1) * k;
+    pesExtW = float3(pesExtRoot.x, v0.y, pesExtRoot.y);
+    // descarte por pantalla: centro de la parcela con margen del tamano de la parcela
+    float4 cv = float4(dot(float4(ins.x, 0, ins.y, 1), cb2[8]), dot(float4(ins.x, 0, ins.y, 1), cb2[9]), dot(float4(ins.x, 0, ins.y, 1), cb2[10]), dot(float4(ins.x, 0, ins.y, 1), cb2[11]));
+    float4 cc = float4(dot(cv, cb2[4]), dot(cv, cb2[5]), dot(cv, cb2[6]), dot(cv, cb2[7]));
+    float rad = 0.5 * pesExtScale + 0.15;
+    float px = abs(cb2[4].x) * rad + abs(cb2[4].z) * rad, py = abs(cb2[5].y) * rad + abs(cb2[5].z) * rad;
+    if (cc.w < -rad || cc.x < -cc.w - px || cc.x > cc.w + px || cc.y < -cc.w - py || cc.y > cc.w + py || k < 0.01) pesKill = true;
+  } else if (P58.w > 0.5) {
+    // pasto extra prendido: el pasto del juego se apaga (achicandose) entre "desde" y "desde" + 6 m
+    float2 wr = float2(dot(v0_in, cb5[4]), dot(v0_in, cb5[6]));
+    float from = P58.y > 1.0 ? P58.y : 14.0;
+    float ko = 1.0 - smoothstep(from, from + 6.0, length(wr - cb2[20].xz));
+    v0.y *= ko;
+    if (ko < 0.01) pesKill = true;
+  }
   // === PES21 parcelas lejanas del juego (18/10): mas alla de ~30 m el juego pone su variante minima en una grilla de
   // 3 m sin escalarla (un matorral de 0.5 m cada 3 m: el pasto "desaparece"). La DLL marca esos dibujos con w60 = 1 y
   // aca se escalan para cubrir la celda, con transicion por distancia para no tocar la zona densa.
@@ -48,7 +80,8 @@ void main(
   float4 FAR = IniParams.Load(int2(60, 0));
   float4 FA2 = IniParams.Load(int2(59, 0));
   float pesFarK = 0.0;
-  if (FAR.w > 0.5 && !pesIsExt) {
+  // solo los dibujos marcados por la DLL (w63 = 1 existe solo en su textura de parametros) y con el pasto extra apagado
+  if (FAR.w > 0.5 && IniParams.Load(int2(63, 0)).w > 0.5 && !pesIsExt && P58.w < 0.5) {
     float3 pw0 = float3(dot(v0_in, cb5[4]), 0.0, dot(v0_in, cb5[6]));
     float dEye = length(pw0.xz - cb2[20].xz);
     float d0 = FAR.y > 1.0 ? FAR.y : 20.0, dl = max(FAR.z, 1.0);
@@ -66,6 +99,7 @@ void main(
   r1.y = dot(v0, cb5[5]);
   r1.x = dot(v0, cb5[4]);
   r1.z = dot(v0, cb5[6]);
+  if (pesIsExt) r1.xyz = pesExtW;
   r2.xyz = r1.xyz - cb4[3].xyz;
   r0.z = dot(r2.xyz, r2.xyz);
   r2.xyz = r1.xyz - cb4[4].xyz;
@@ -107,11 +141,11 @@ void main(
   } else if (pesFarK > 0.0) {
     r6.y = lerp(r6.y, min(v0.y, 0.06 * max(FA2.x, 0.1)), pesFarK);
   }
-  r6.w = dot(v0, cb5[7]);
+  r6.w = pesIsExt ? 1.0 : dot(v0, cb5[7]);
   if (pesIsExt || pesFarK > 0.0) {
     // ensanche hacia la camara: la hoja se corre a lo largo del eje derecha de la camara segun su u (0..1)
     float3 camRight = normalize(cb2[8].xyz);
-    float wid = pesIsExt ? pesExt.w : 0.012 * max(FAR.x, 1.0) * max(FA2.y, 0.0) * pesFarK;
+    float wid = pesIsExt ? pesExt.w * max(cb5[10].z, 0.0) * pesExtScale : 0.012 * max(FAR.x, 1.0) * max(FA2.y, 0.0) * pesFarK;
     r6.xyz += camRight * ((v1.x - 0.5) * wid);
   }
   // --- proyeccion ---
@@ -132,6 +166,10 @@ void main(
   r8.y = dot(r1.xyz, cb5[1].xzw);
   r8.z = dot(r1.xyz, cb5[2].xzw);
   r8.w = dot(r1.xyz, cb5[3].xzw);
+  if (pesIsExt) {   // sombra plana (jugadores y pelota) tambien sobre el pasto extra: raiz en espacio de vista con la camara real
+    float4 Pr = float4(pesExtRoot.x, 0.0, pesExtRoot.y, 1.0);
+    r8 = float4(dot(Pr, cb2[8]), dot(Pr, cb2[9]), dot(Pr, cb2[10]), dot(Pr, cb2[11]));
+  }
   r0.y = dot(r8, cb2[4]);
   r0.z = dot(r8, cb2[7]);
   r1.x = dot(r8, cb2[5]);
@@ -144,7 +182,6 @@ void main(
   r8 = g_tex_planarShadow.SampleLevel(g_samplerLinear_Clamp_s, r0.yz, 0);
   r0.y = dot(r8, float4(1, 1, 1, 1));
   o1.z = saturate(1.0 - r0.y);
-  if (pesIsExt) o1.z = 1.0;   // sin sombra plana en las extendidas (su viewWorld es identidad)
   o1.xy = v1.xy;
   r0.yz = r2.xy * float2(32.0, 24.0);
   r2 = g_tex_grain.SampleLevel(g_samplerLinear_Clamp_s, r2.xy, 0);
@@ -303,4 +340,5 @@ void main(
   o6.z = dot(r6, cb2[16]);
   o6.w = dot(r6, cb2[17]);
   o7.y = dot(r6, cb2[19]);
+  if (pesKill) o0 = float4(0.0, 0.0, -2.0, 1.0);   // todos los vertices iguales: triangulos nulos, no se rasteriza
 }

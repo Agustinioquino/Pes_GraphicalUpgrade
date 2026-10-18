@@ -178,7 +178,7 @@ static void UploadParams() {
     // textura de parametros para las parcelas lejanas del pasto (la variante minima del juego): igual que la normal
     // con la marca w60 = 1 -> el VS del pasto las escala para que cubran su celda de 3 m
     if (!g_dev.grassTex) CreateParamTex(&g_dev.grassTex, &g_dev.grassSRV);
-    if (g_dev.grassTex) { memcpy(q, p, sizeof(q)); q[60][3] = 1.0f;
+    if (g_dev.grassTex) { memcpy(q, p, sizeof(q)); q[63][3] = 1.0f;
         if (SUCCEEDED(g_dev.imm->Map(g_dev.grassTex, 0, D3D11_MAP_WRITE_DISCARD, 0, &m))) { memcpy(m.pData, q, sizeof(q)); g_dev.imm->Unmap(g_dev.grassTex, 0); } }
     int maxSet = -1; for (auto& o : ovs) maxSet = (std::max)(maxSet, o.set);
     for (int s = 0; s <= maxSet; s++) {
