@@ -170,6 +170,9 @@ void main(
     // (misma convencion que la brujula del sol). Campo de nubes compartido con la sombra de nubes de los shaders de luz.
     { PESCloudParams CP = PESCloudLoad(g_psSystem.m_timeParam.z);
       float4 Q85 = IniParams.Load(int2(85,0)); float4 Q86 = IniParams.Load(int2(86,0));
+      // etapa de diagnostico (w12 = 5): 1 = nubes apagadas, 2 = sin cbuffer de escena, 3 = sin sol, 4 = rayo bajo el horizonte, 5 = sin densidad, 6 = nube
+      int cloudStage = 0;
+      if (CP.on < 0.5) cloudStage = 1; else if (!(abs(pS_projParam.x) > 1e-6 && abs(pS_projParam.y) > 1e-6)) cloudStage = 2; else if (!(dot(Ls, Ls) > 1e-6)) cloudStage = 3;
       if (CP.on > 0.5 && skyM > 0.01 && abs(pS_projParam.x) > 1e-6 && abs(pS_projParam.y) > 1e-6 && dot(Ls, Ls) > 1e-6) {
         float2 ndc = float2(uvS.x * 2.0 - 1.0, (Q86.y > 0.5 ? 1.0 : -1.0) * (uvS.y * 2.0 - 1.0));
         float3 dirV = normalize(float3((ndc - pS_centerOff.xy) * pS_projParam.xy, Q86.z > 0.5 ? -1.0 : 1.0));
@@ -179,7 +182,9 @@ void main(
         float3 dW = normalize(float3(dot(dirV, vX), dot(dirV, vY), dot(dirV, vZ)));
         float3 Ln = normalize(Ls);
         float3 sunW = normalize(float3(dot(Ln, vX), dot(Ln, vY), dot(Ln, vZ)));
+        cloudStage = 4;
         if (dW.y > 0.015) {
+          cloudStage = 5;
           float t0 = CP.hBase / dW.y, t1 = (CP.hBase + CP.thick) / dW.y;
           t1 = min(t1, 45000.0);
           int steps = (int)clamp(Q85.w > 0 ? Q85.w : 24.0, 8.0, 48.0);
@@ -212,6 +217,7 @@ void main(
           float hz = saturate((dW.y - 0.015) / 0.12);
           pesCloudT = lerp(1.0, T, hz);
           pesCloudCol = lerp(ambC * (1.0 - T), C, hz);   // radiancia ya premultiplicada por la opacidad
+          if (T < 0.98) cloudStage = 6;
         }
       }
       r0.xyz = lerp(r0.xyz, r0.xyz * pesCloudT + pesCloudCol, skyM);
@@ -222,6 +228,8 @@ void main(
         float3 vXd = float3(pS_mat[2]._m00, pS_mat[2]._m01, pS_mat[2]._m02), vYd = float3(pS_mat[2]._m10, pS_mat[2]._m11, pS_mat[2]._m12), vZd = float3(pS_mat[2]._m20, pS_mat[2]._m21, pS_mat[2]._m22);
         float3 dWd = normalize(float3(dot(dirVD, vXd), dot(dirVD, vYd), dot(dirVD, vZd)));
         r0.xyz = lerp(abs(dWd) * 2.0, float3(3.0, 0.0, 0.0), 1.0 - pesCloudT);
+        // franja superior: color de etapa (rojo apagadas, naranja sin cbuffer, amarillo sin sol, violeta bajo horizonte, cian sin densidad, verde nube)
+        if (uvS.y < 0.06) { float3 stc[7] = { float3(0,0,0), float3(1,0,0), float3(1,0.5,0), float3(1,1,0), float3(0.6,0,1), float3(0,1,1), float3(0,1,0) }; r0.xyz = stc[cloudStage] * 3.0; }
       }
     }
   }
