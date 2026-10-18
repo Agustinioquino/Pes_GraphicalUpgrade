@@ -85,6 +85,10 @@ void main(
   r0.y = min(r0.y, r6.y);
   r0.y = saturate(r0.y + 0.06);
   r6.y = r0.y - 0.06;
+  if (pesIsExt) {
+    // parcelas extendidas: sin mascara de desgaste ni hundimiento (lejos no se ven); altura = la de la hoja, tope 6 cm x alto
+    r6.y = min(v0.y, 0.06 * max(pesExt.z, 0.1));
+  }
   r6.w = dot(v0, cb5[7]);
   if (pesIsExt) {
     // ensanche hacia la camara: la hoja se corre a lo largo del eje derecha de la camara segun su u (0..1)

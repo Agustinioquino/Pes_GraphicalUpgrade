@@ -86,10 +86,12 @@ static inline bool Visible(float x, float z, float r) {
 
 static void BuildPatches(std::vector<Patch>& out, float from, float to, float dens) {
     out.clear();
-    const float halfL = 52.5f + 1.0f, halfW = 34.0f + 1.0f;
+    const float halfL = 52.5f + 3.0f, halfW = 34.0f + 3.0f;
     float ex = s_eye[0], ez = s_eye[2];
     struct Ring { float r0, r1, cell; } rings[3] = { { from, 30.0f, 1.5f / dens }, { 30.0f, 60.0f, 3.0f / dens }, { 60.0f, to, 6.0f / dens } };
+    int ringIdx = 0;
     for (auto& rg : rings) {
+        int& rc = g_grassDbg.ring[ringIdx++]; rc = 0;
         if (rg.r1 <= rg.r0) continue;
         float cell = (std::max)(rg.cell, 0.5f);
         // recorrer la grilla de la cancha alineada al origen; solo las celdas cuyo centro cae en el anillo
@@ -103,7 +105,7 @@ static void BuildPatches(std::vector<Patch>& out, float from, float to, float de
                 if (d2 < r0sq || d2 >= r1sq) continue;
                 if (!Visible(x, z, cell * 0.75f)) continue;
                 int rot = ((ix * 7 + iz * 13) ^ (ix * iz)) & 3;
-                out.push_back({ x, z, cell, rot });
+                out.push_back({ x, z, cell, rot }); rc++;
                 if ((int)out.size() >= kMaxPatches) return;
             }
         }

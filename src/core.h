@@ -149,7 +149,7 @@ void CatalogRecord(bool on);                     // "Grabar partido": volcados p
 void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT start, INT base);
 void GrassPresent();
 extern int g_grassPatchesLastFrame;
-struct GrassDbg { int calls = 0, emits = 0, patches = 0; UINT lod = 0, rtW = 0, cb2off = 0; bool cam = false; float ex = 0, ez = 0; const char* why = nullptr; };
+struct GrassDbg { int calls = 0, emits = 0, patches = 0; int ring[3] = {0, 0, 0}; UINT lod = 0, rtW = 0, cb2off = 0; bool cam = false; float ex = 0, ez = 0; const char* why = nullptr; };
 extern GrassDbg g_grassDbg;
 extern UINT g_bbW, g_bbH;                       // tamano del back buffer (lo fija Present)
 void CatalogGrassDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT start, INT base);                           // proximo cuadro: volcar los cbuffers de composicion y luz del sol
