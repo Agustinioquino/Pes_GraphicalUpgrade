@@ -6,7 +6,7 @@
 // SHORT (se reconoce porque es la unica prenda con seguimiento de piernas):
 #define PES_SHORTS_DAMP    0.55   // amortiguacion relativa al cuerpo: <1 = el short sigue balanceandose mas tiempo tras cada paso
 #define PES_SHORTS_KICK    1.60   // cuanto responde al salto / caida / arranque (multiplica el impulso del cuerpo)
-#define PES_SHORTS_BEND    1.70   // pliegues mas blandos (>1 = la tela se dobla mas facil)
+#define PES_SHORTS_BEND    1.25   // pliegues mas blandos (>1 = la tela se dobla mas facil)
 #define PES_SHORTS_FLUTTER 0.12   // aleteo del borde al correr, proporcional a la velocidad del cuerpo (m/s)
 // CAMISETA Y SHORT:
 #define PES_AIR_SPEED      0.25   // resistencia del aire que crece con la velocidad: la tela se pega al correr y flamea al frenar
@@ -328,6 +328,9 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
             float3 gd = s_grav / gl;
             float3 tg = gd - rnrm1 * dot(gd, rnrm1);
             pesSlide = saturate(length(tg)) * PES_GRAVITY_SLIDE * saturate(1.0 - pin * 1.5);
+            // 18/10 v2: el short tiene cintura elastica y esta rodeado por las piernas: resbala poco. Con mucho
+            // deslizamiento se doblaba sobre si mismo con la pierna arriba (se veia el interior oscuro como un corte)
+            if (g_legCount > 0) pesSlide *= 0.3;
           } }
         alpha *= 1.0 + pesSlide * PES_SLIDE_PIN;
         x += (rest1 - x) * (1.0 / (1.0 + alpha / hh));
