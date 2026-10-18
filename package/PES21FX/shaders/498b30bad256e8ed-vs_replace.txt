@@ -1,0 +1,271 @@
+// PES 2021 - Pasto 3D: vertex shader de las hojas  [hash 498b30bad256e8ed]
+// Traducido a HLSL desde el ensamblador (PES21 FX catalogo, 18/10), instruccion por instruccion.
+// Cada parcela de pasto la manda el juego con su matriz de mundo (b5); la hoja se dobla con el jugador/pelota
+// (cb4[3], cb4[4]), toma altura y desgaste de la mascara de la cancha (t1) y el color del pasto de la base (t4)
+// con la tabla de pendiente (t3) segun el grano (t2) y la vista: de ahi salen las franjas de corte.
+// PES21 FX: x57/w57 amplifican las franjas tambien en las hojas (igual que en la base de la cancha).
+
+cbuffer cVSSystem : register(b0) { float4 cb0[3]; }
+cbuffer cVSScene : register(b2) { float4 cb2[21]; }
+cbuffer cVSMaterial : register(b4) { float4 cb4[5]; }
+cbuffer cVSObject : register(b5) { float4 cb5[8]; }
+
+SamplerState g_samplerLinear_Wrap_s : register(s10);
+SamplerState g_samplerLinear_Clamp_s : register(s11);
+Texture2D<float4> g_tex_diffuse : register(t0);
+Texture2D<float4> g_tex_mask : register(t1);
+Texture2D<float4> g_tex_grain : register(t2);
+Texture2D<float4> g_tex_turfSlopeTable : register(t3);
+Texture2D<float4> g_tex_base : register(t4);
+Texture2D<float4> g_tex_planarShadow : register(t5);
+Texture2D<float4> g_tex_detailNormal : register(t6);
+
+Texture1D<float4> IniParams : register(t120);
+
+void main(
+  float4 v0 : POSITION0,
+  float2 v1 : TEXCOORD0,
+  out float4 o0 : SV_Position0,
+  out float4 o1 : TEXCOORD0,
+  out float4 o2 : TEXCOORD1,
+  out float4 o3 : TEXCOORD2,
+  out float4 o4 : TEXCOORD3,
+  out float4 o5 : TEXCOORD4,
+  out float4 o6 : TEXCOORD5,
+  out float2 o7 : TEXCOORD6)
+{
+  float4 r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11;
+
+  // --- posicion en el mundo y doblado por jugador / pelota ---
+  r0.x = v0.y + 10.0;
+  r0.yzw = cb4[3].xyz - cb4[4].xyz;
+  r0.y = dot(r0.yzw, r0.yzw);
+  r0.y = r0.y * 0.3 + 0.012544;
+  r1.y = dot(v0, cb5[5]);
+  r1.x = dot(v0, cb5[4]);
+  r1.z = dot(v0, cb5[6]);
+  r2.xyz = r1.xyz - cb4[3].xyz;
+  r0.z = dot(r2.xyz, r2.xyz);
+  r2.xyz = r1.xyz - cb4[4].xyz;
+  r0.w = dot(r2.xyz, r2.xyz);
+  r0.z = r0.w + r0.z;
+  r0.y = -r0.z * 0.5 + r0.y;
+  r0.y = max(r0.y, 0.0);
+  r0.x = r0.y * r0.x;
+  r0.x = r0.x * 16.0;
+  r0.yz = cb4[3].xz + cb4[4].xz;
+  r0.yz = -r0.yz * 0.5 + r1.xz;
+  r0.xz = r0.yz * r0.xx;
+  r2.xy = r1.xz * cb4[1].xy + cb4[1].zw;
+  r3 = g_tex_diffuse.SampleLevel(g_samplerLinear_Clamp_s, r2.xy, 0);
+  r0.w = 1.0 - r3.z;
+  r4 = g_tex_mask.SampleLevel(g_samplerLinear_Clamp_s, r2.xy, 0);
+  r5 = r4.zzwz * float4(0.5, 1.0, 0.01, 0.5);
+  r1.w = max(r3.y, r4.y);
+  r2.z = max(r5.z, r1.w);
+  r0.w = max(r0.w, r2.z);
+  r2.z = max(r0.w, r5.w);
+  r2.z = r2.z * 0.06;
+  r2.z = max(r2.z, 0.0);
+  r0.y = -r2.z;
+  r6.xyz = r0.xyz + r1.xyz;
+  r7 = -r1.yxyz + cb2[20].yxyz;
+  r8 = r1.zxzx - cb4[2].xyxy;
+  r8 = r8 * 0.083333;
+  r0.x = dot(r8, r8);
+  r0.x = min(r0.x, 1.0);
+  r0.y = -r4.w + 0.99;
+  r0.y = r0.y * 0.06;
+  r0.y = min(r0.y, r6.y);
+  r0.y = saturate(r0.y + 0.06);
+  r6.y = r0.y - 0.06;
+  r6.w = dot(v0, cb5[7]);
+  // --- proyeccion ---
+  r8.x = dot(r6, cb2[8]);
+  r8.y = dot(r6, cb2[9]);
+  r8.z = dot(r6, cb2[10]);
+  r8.w = dot(r6, cb2[11]);
+  r9.x = dot(r8, cb2[4]);
+  r9.y = dot(r8, cb2[5]);
+  r9.w = dot(r8, cb2[7]);
+  o0.z = dot(r8, cb2[6]);
+  o0.x = r9.x; o0.y = r9.y; o0.w = r9.w;
+  o6.xy = r9.xy;
+  // --- sombra plana proyectada desde la raiz de la hoja ---
+  r1.xy = v0.xz;
+  r1.z = 1.0;
+  r8.x = dot(r1.xyz, cb5[0].xzw);
+  r8.y = dot(r1.xyz, cb5[1].xzw);
+  r8.z = dot(r1.xyz, cb5[2].xzw);
+  r8.w = dot(r1.xyz, cb5[3].xzw);
+  r0.y = dot(r8, cb2[4]);
+  r0.z = dot(r8, cb2[7]);
+  r1.x = dot(r8, cb2[5]);
+  r1.y = r0.z - r1.x;
+  r1.x = r0.y + r0.z;
+  r1.xy = r1.xy * cb4[2].zw;
+  r2.zw = cb0[1].xy * cb0[2].zw;
+  r1.xy = r1.xy * r2.zw;
+  r0.yz = r1.xy / r0.zz;
+  r8 = g_tex_planarShadow.SampleLevel(g_samplerLinear_Clamp_s, r0.yz, 0);
+  r0.y = dot(r8, float4(1, 1, 1, 1));
+  o1.z = saturate(1.0 - r0.y);
+  o1.xy = v1.xy;
+  r0.yz = r2.xy * float2(32.0, 24.0);
+  r2 = g_tex_grain.SampleLevel(g_samplerLinear_Clamp_s, r2.xy, 0);
+  // --- nivel de mip segun distancia/altura de la camara ---
+  r1.xz = r6.xz;
+  r1.y = 0.0;
+  r1.xyz = r1.xyz - cb2[20].xyz;
+  r1.x = dot(r1.xyz, r1.xyz);
+  r1.x = rsqrt(r1.x);
+  r1.x = r1.x * r1.y;
+  r1.y = -r1.x * cb2[5].y;
+  r1.y = r1.y * 12.0;
+  r1.z = max(r9.w, 0.0625);
+  o7.x = r9.w;
+  r1.y = r1.y / r1.z;
+  r1.y = log2(r1.y);
+  r1.x = r1.x * -1.7 - r1.y;
+  r8 = g_tex_base.SampleLevel(g_samplerLinear_Wrap_s, r0.yz, r1.x);
+  r9.xyz = g_tex_detailNormal.SampleLevel(g_samplerLinear_Wrap_s, r0.yz, r1.x).xyw;
+  // --- color base ---
+  r0.y = log2(r8.w);
+  r0.y = r0.y * 0.454545;
+  r0.y = exp2(r0.y);
+  r10.xyz = r0.yyy * float3(1.0, 0.239, 0.196078) + float3(0.0, 0.761, 0.196);
+  r10.xyz = min(r10.xyz, float3(1, 1, 1));
+  r5.xy = saturate(r5.xy);
+  r1.yz = 1.0 - r5.xy;
+  o1.w = r1.y * r10.z;
+  o2.xyz = r6.xyz;
+  r0.z = r3.w * 1.5;
+  r1.y = r3.x * r0.y;
+  r1.y = log2(r1.y);
+  r3.xyz = r1.yyy * float3(0.1, 1.5, 17.094);
+  r3.xyz = exp2(r3.xyz);
+  r0.z = max(r4.x, r0.z);
+  r0.z = r1.w * -r0.z + r0.z;
+  o2.w = r0.z;
+  r1.y = -r1.w + 0.04;
+  r1.y = r1.y * 25.0;
+  r4.xy = r1.ww + float2(-0.04, -0.21);
+  r4.xy = r4.yx * float2(2.702703, 10.0);
+  r1.y = max(r1.y, r4.y);
+  r4.x = saturate(r4.x);
+  r1.y = saturate(1.0 - r1.y);
+  r5.xyz = -r8.xyz + float3(0.145098, 0.321569, 0.035294);
+  r5.xyz = r1.yyy * r5.xyz + r8.xyz;
+  r11.xyz = -r5.xyz + float3(0.270588, 0.301961, 0.227451);
+  r4.xyw = r4.xxx * r11.xyz + r5.xyz;
+  r5.xyz = -r4.xyw + r8.xyz;
+  r1.y = saturate(r7.x * 0.8 - 0.5);
+  r0.w = 2.0 * r1.y * r0.w;
+  r0.w = max(r0.w, r5.w);
+  r0.x = saturate(r0.w + r0.x);
+  r0.z = saturate(r0.z + r0.z);
+  r4.xyw = r0.xxx * r5.xyz + r4.xyw;
+  r5.xyz = -r4.xyw + float3(0.312435, 0.401709, 0.0);
+  r4.xyw = r2.www * r5.xyz + r4.xyw;
+  r2.xyz = r2.xzy * 2.0 - 1.0;
+  r5.xyz = saturate(r8.xyz * float3(0.78, 0.78, 0.961) + float3(0.098, 0.071, 0.039));
+  r8.xyz = 1.0 - r8.xyz;
+  r5.xyz = -r4.xyw + r5.xyz;
+  r4.xyw = r1.www * r5.xyz + r4.xyw;
+  o4.w = r4.z + r1.w;
+  // --- grano, vista y tabla de pendiente (franjas) ---
+  r0.w = dot(r2.xyz, r2.xyz);
+  r0.w = rsqrt(r0.w);
+  r2.xyz = r0.www * r2.xyz;
+  float3 pesGrain = r2.xyz;
+  r5.xyz = r2.xyz * float3(0, 0, 1);
+  r5.xyz = r2.zxy * float3(0, 1, 0) - r5.xyz;
+  r11.xyz = r2.zxy * r5.xyz;
+  r5.xyz = r2.yzx * r5.yzx - r11.xyz;
+  r0.w = dot(r5.xyz, r5.xyz);
+  r0.w = rsqrt(r0.w);
+  r5.xyz = r0.www * r5.xyz;
+  r0.w = dot(r7.yzw, r7.yzw);
+  r0.w = rsqrt(r0.w);
+  r7.xyz = r0.www * r7.yzw;
+  r5.y = dot(r7.xyz, r5.xyz);
+  r5.x = dot(r7.xyz, r2.xyz);
+  r1.yw = r5.xy * 0.5 + 0.5;
+  r2.xyz = g_tex_turfSlopeTable.SampleLevel(g_samplerLinear_Clamp_s, r1.yw, r1.x).xyz;
+  // PES21: franjas de corte tambien en las hojas (misma cuenta que en la base de la cancha)
+  {
+    float4 ST = IniParams.Load(int2(57, 0));
+    if (ST.w > 0.5 && ST.x > 0) {
+      float3 gm = float3(-pesGrain.x, pesGrain.y, -pesGrain.z);
+      float3 tm = float3(gm.x * gm.y, -(gm.z * gm.z + gm.x * gm.x), gm.z * gm.y);
+      tm *= rsqrt(max(dot(tm, tm), 1e-8));
+      float2 uvm = float2(dot(r7.xyz, gm), dot(r7.xyz, tm)) * 0.5 + 0.5;
+      float stm = g_tex_turfSlopeTable.SampleLevel(g_samplerLinear_Clamp_s, uvm, r1.x).y;
+      r2.y = saturate(r2.y + (r2.y - stm) * 0.5 * ST.x);
+    }
+  }
+  r5.y = max(r1.x, 0.0);
+  r1.xy = -r3.xx + r3.yz;
+  r0.w = r7.y * r1.x + r3.x;
+  r1.x = log2(r7.y);
+  r1.x = r1.x * 0.05;
+  r1.x = exp2(r1.x);
+  r3.z = r1.x * r1.y + r3.x;
+  r0.w = 1.0 - r0.w;
+  r3.xy = -r0.ww * float2(0.85, 0.85) + 1.0;
+  r0.w = -r2.y * r3.y + 1.0;
+  r1.xy = r2.xz * r3.xz;
+  r2.xyz = -r8.xyz * r0.www + 1.0;
+  r0.w = r0.x * 0.2 + 0.6;
+  o3.w = r0.x;
+  r3.xyz = -r4.xyw * r2.xyz + r0.www;
+  r2.xyz = r2.xyz * r4.xyw;
+  o3.xyz = saturate(r0.zzz * r3.xyz + r2.xyz);
+  // --- normal de la hoja (detalle) ---
+  r9.x = r9.z * r9.x;
+  r2.xy = r9.xy * 2.0 - 1.0;
+  r0.x = -r2.x * r2.x + 1.0;
+  r0.x = -r2.y * r2.y + r0.x;
+  r0.x = max(r0.x, 0.0);
+  r0.x = r0.x + 0.0001;
+  r0.z = rsqrt(r0.x);
+  r2.z = r0.z * r0.x;
+  r0.x = 0.0; r0.z = 0.0; r0.w = r2.z * 4.0;
+  r0.x = r0.x / 2.0; r0.z = r0.z / 2.0; r0.w = r0.w / 2.0;
+  r2.x = r2.x + r0.x;
+  r2.y = r2.y + r0.z;
+  r2.z = -r2.z + r0.w;
+  r2.w = max(r2.z, 0.0);
+  r0.x = dot(r2.xyw, r2.xyw);
+  r0.x = rsqrt(r0.x);
+  r3.xyz = r0.xxx * r2.xwy;
+  r0.xzw = -r2.xwy * r0.xxx + float3(0.0, 1.0, 0.0);
+  r0.xzw = r4.zzz * r0.xzw + r3.xyz;
+  r1.w = dot(r0.xzw, r0.xzw);
+  r1.w = rsqrt(r1.w);
+  r0.xzw = r0.xzw * r1.www;
+  o4.x = dot(r0.xzw, cb2[8].xyz);
+  o4.y = dot(r0.xzw, cb2[9].xyz);
+  o4.z = dot(r0.xzw, cb2[10].xyz);
+  // --- parametros de material ---
+  r5.z = r5.y * r5.y;
+  r5.w = r5.y * r5.z;
+  r5.x = 0.392868;
+  r0.x = dot(r5, float4(1.0, 0.016671, 0.001178, -0.000208));
+  r0.x = saturate(r0.x + 0.5);
+  r2.y = r10.y + r0.x;
+  r5.x = -0.069282;
+  r0.x = dot(r5, float4(1.0, 0.048773, -0.004529, 0.000109));
+  r0.x = saturate(r0.x + 0.5);
+  r2.x = r10.x + r0.x;
+  r0.x = r2.x - 0.5;
+  r0.z = r2.y - 0.5;
+  r0.x = r1.x * r0.x;
+  o5.y = r0.z;
+  o5.x = r0.x * r1.z;
+  o5.z = r0.y * r1.y;
+  o5.w = 0.0;
+  o6.z = dot(r6, cb2[16]);
+  o6.w = dot(r6, cb2[17]);
+  o7.y = dot(r6, cb2[19]);
+}
