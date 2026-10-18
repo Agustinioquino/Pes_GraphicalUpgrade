@@ -52,6 +52,11 @@
 #define PES_SHIRT_LIFT     1.2    // (18/10) la camiseta se suelta del cuerpo al saltar/caer/arrancar: cuanto mas, mas se levanta el ruedo
 #define PES_FIT_HANG       2.5    // delgado: la remera cuelga mas larga (metros de caida por metro de holgura: 10 mm -> 2.5 cm)
 #define PES_FIT_CLING      0.15   // ancho: la tela que queda separada del cuerpo se acerca a el por sub-paso
+// GROSOR DEL MIEMBRO (18/10): la libertad del short depende del grosor real del muslo (y la de la manga, del brazo), medido
+// del volumen de pierna/brazo: muslo grueso -> menos espacio para moverse al saltar; muslo fino -> mas vuelo.
+#define PES_THIGH_REF      8.5    // PES21FX_LIVE_THIGH_REF   radio de referencia del muslo con el short puesto (cm)
+#define PES_ARM_REF        4.8    // radio de referencia del brazo con la manga puesta (cm)
+#define PES_LIMB_GAIN      1.0    // PES21FX_LIVE_LIMB_GAIN   cuanto pesa el grosor (0 = nada)
 // COMPARACION: PES_CLOTH_FX = 0 deja el simulador como viene de fabrica (todas las mejoras de PES21 FX neutras).
 // Lo escribe PES21 FX desde el menu (Ropa (fisica) -> Comparar con la version base).
 #define PES_CLOTH_FX       1      // PES21FX_LIVE_CLOTH_FX
@@ -94,6 +99,8 @@
 #define PES_ARM_ON 0
 #undef PES_SHIRT_LIFT
 #define PES_SHIRT_LIFT 0.0
+#undef PES_LIMB_GAIN
+#define PES_LIMB_GAIN 0.0
 #endif
 cbuffer Bones : register(b0) { float4 g_bones[192]; };
 cbuffer Obj   : register(b1) { float4 g_obj[18]; };
@@ -455,13 +462,29 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
         }
         alpha *= (pesFit < 0.0) ? clamp(1.0 + pesFit * 120.0, 0.4, 1.0) : clamp(1.0 + pesFit * 80.0, 1.0, 1.6);   // (18/10 b) rangos suaves
         alpha *= 1.0 + pesLift * 2.0;
+        // grosor del miembro: muslo/brazo grueso -> anclaje mas firme y correa mas corta; fino -> mas suelto
+        float pesLimbK = 0.0;
+        if (PES_LIMB_GAIN > 0.0 && s_tOk) {
+            float3 r0k = rest1 - rnrm1 * g_rest[p].nrm.w;
+            float swk = pesLimbW(p, r0k);
+            if (swk > 0.2) {
+                uint sideK = dot(r0k - s_tC, s_tSide) < 0.0 ? 0u : 1u;
+                if (s_armOk[sideK]) {
+                    // radio del tramo medio del miembro (muslo / brazo), en cm
+                    float rK = (s_armR[sideK][1] + s_armR[sideK][2]) * 0.5 * 100.0;
+                    float refK = g_legCount > 0 ? PES_THIGH_REF : PES_ARM_REF;
+                    if (rK > 0.5) pesLimbK = clamp((rK / refK - 1.0) * 4.0, -0.5, 0.6) * PES_LIMB_GAIN * fitFree;
+                }
+            }
+        }
+        alpha *= clamp(1.0 - pesLimbK * 0.8, 0.5, 1.5);
         // delgado: el punto de reposo baja con la gravedad -> la remera cuelga mas larga (solo tela libre)
         float3 restT = rest1;
         if (pesFit > 0.0) { float gl = length(s_grav); if (gl > 1e-4) restT += (s_grav / gl) * pesFit * PES_FIT_HANG * fitFree; }
         x += (restT - x) * (1.0 / (1.0 + alpha / hh));
         float3 off = x - restT;
         float maxD0 = g_tetherRadius * (1.0 - pin);
-        float maxD = maxD0 * (1.0 + pesSlide * PES_SLIDE_TETHER) * clamp(1.0 + pesFit * 25.0, 0.7, 1.3) * (1.0 + pesLift * 0.6);
+        float maxD = maxD0 * (1.0 + pesSlide * PES_SLIDE_TETHER) * clamp(1.0 + pesFit * 25.0, 0.7, 1.3) * (1.0 + pesLift * 0.6) * clamp(1.0 - pesLimbK * 0.6, 0.6, 1.3);
         float dl = length(off);
         if (dl > maxD) x = restT + off * (maxD / dl);
         float sd = dot(x - rest1, rnrm1) + g_rest[p].nrm.w;
