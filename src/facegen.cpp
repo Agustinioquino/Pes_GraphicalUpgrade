@@ -130,7 +130,9 @@ static bool MakeTarget(UINT w, UINT h, ID3D11Texture2D** tex, ID3D11RenderTarget
 }
 
 // en Present, contexto inmediato: genera hasta 2 caras por cuadro
+static std::atomic<int> s_browFaces{0};   // caras con hebras dibujadas en este cuadro (x77 = maximo por pantalla)
 void FaceGenPresent() {
+    s_browFaces.store(0);
     if (!g_dev.dev || !g_dev.imm) return;
     std::vector<FaceReq> todo;
     {
@@ -215,6 +217,8 @@ void BrowDrawAfterFace(ID3D11DeviceContext* c, FaceGenExtra* ex) {
     if (!s_browVS || !s_browPS || !s_browRS || !ex->seedsSRV) return;
     float on = g_cfg.live[74][0]; if (on < 0.5f) return;
     UINT perSeed = (UINT)std::max(1.0f, std::min(3.0f, g_cfg.live[74][1]));
+    int maxFaces = (int)g_cfg.live[77][0]; if (maxFaces < 1) maxFaces = 3;
+    if (s_browFaces.fetch_add(1) >= maxFaces) return;   // solo las primeras N caras del cuadro (rendimiento)
     // 2) guardar estado
     ID3D11VertexShader* oVS = nullptr; ID3D11PixelShader* oPS = nullptr; ID3D11GeometryShader* oGS = nullptr; ID3D11HullShader* oHS = nullptr; ID3D11DomainShader* oDS = nullptr;
     c->VSGetShader(&oVS, nullptr, nullptr); c->PSGetShader(&oPS, nullptr, nullptr); c->GSGetShader(&oGS, nullptr, nullptr); c->HSGetShader(&oHS, nullptr, nullptr); c->DSGetShader(&oDS, nullptr, nullptr);
