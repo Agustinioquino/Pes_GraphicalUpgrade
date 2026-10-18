@@ -29,6 +29,12 @@
 #define PES_SPIN           0.60
 // TELA MOJADA (0..1): mas pesada, mas amortiguada y mas pegada al cuerpo. Lo escribe PES21 FX con el sudor/lluvia.
 #define PES_WET            0.00   // PES21FX_LIVE_WET
+// PES21 FX (18/10): ajuste de la tela al fisico. La escala de los huesos (fisico del editor: ancho de hombros, pecho,
+// cintura) se lee de la matriz de skinning de cada particula: >1 cuerpo ancho -> la tela se pega; <1 delgado -> cuelga.
+#define PES_FIT_ON         1      // PES21FX_LIVE_FIT_ON
+#define PES_FIT_THIN       10.0   // PES21FX_LIVE_FIT_THIN   mm de holgura extra en el cuerpo mas delgado
+#define PES_FIT_FAT        6.0    // PES21FX_LIVE_FIT_FAT    mm mas pegada en el cuerpo mas ancho
+#define PES_FIT_RANGE      0.15   // PES21FX_LIVE_FIT_RANGE  escala de hueso (+-) con la que se llega al maximo
 cbuffer Bones : register(b0) { float4 g_bones[192]; };
 cbuffer Obj   : register(b1) { float4 g_obj[18]; };
 cbuffer Params : register(b2)
@@ -190,6 +196,28 @@ float3x3 inverse3(float3x3 m, out float det)
     det = dot(m[0], r0);
     return transpose(float3x3(r0, r1, r2)) / det;
 }
+// PES21 FX: escala volumetrica de la matriz de skinning de la particula (1 = cuerpo de fabrica)
+float pesBodyScale(uint p)
+{
+    ParticleRest r = g_rest[p];
+    float3x4 M = skinC(r.skin.z, r.skin.x, r.skin.y);
+    float3 c0 = float3(M[0].x, M[1].x, M[2].x), c1 = float3(M[0].y, M[1].y, M[2].y), c2 = float3(M[0].z, M[1].z, M[2].z);
+    float d = abs(dot(c0, cross(c1, c2)));
+    return pow(max(d, 1e-6), 1.0 / 3.0);
+}
+// metros de ajuste: + = holgado (delgado), - = pegado (ancho)
+float pesFitOf(uint p)
+{
+#if PES_FIT_ON
+    float sc = pesBodyScale(p);
+    float r = max(PES_FIT_RANGE, 0.01);
+    float f = (sc < 1.0) ? PES_FIT_THIN * 0.001 * saturate((1.0 - sc) / r) : -PES_FIT_FAT * 0.001 * saturate((sc - 1.0) / r);
+    if (g_legCount > 0) f *= 0.5;   // el short responde la mitad
+    return f;
+#else
+    return 0.0;
+#endif
+}
 void restAt(uint p, float t, out float3 pos, out float3 nrm)
 {
     ParticleRest r = g_rest[p];
@@ -330,10 +358,14 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
             pesSlide = saturate(length(tg)) * PES_GRAVITY_SLIDE * saturate(1.0 - pin * 1.5);
           } }
         alpha *= 1.0 + pesSlide * PES_SLIDE_PIN;
+        // PES21 FX: ajuste al fisico. Cuerpo ancho (fit < 0): el anclaje tira mas y la correa es mas corta (se pega).
+        // Cuerpo delgado (fit > 0): anclaje mas suelto, correa mas larga y la tela se mantiene separada del cuerpo.
+        float pesFit = pesFitOf(p);
+        alpha *= clamp(1.0 + pesFit * 200.0, 0.35, 3.0);
         x += (rest1 - x) * (1.0 / (1.0 + alpha / hh));
         float3 off = x - rest1;
         float maxD0 = g_tetherRadius * (1.0 - pin);
-        float maxD = maxD0 * (1.0 + pesSlide * PES_SLIDE_TETHER);
+        float maxD = maxD0 * (1.0 + pesSlide * PES_SLIDE_TETHER) * clamp(1.0 + pesFit * 60.0, 0.3, 2.5);
         float dl = length(off);
         if (dl > maxD) x = rest1 + off * (maxD / dl);
         float sd = dot(x - rest1, rnrm1) + g_rest[p].nrm.w;
@@ -342,8 +374,9 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
         uint4 lp = (s_flags & 128) && g_legCount ? g_legPair[p] : uint4(0xffffffff, 0, 0, 0);
         bool legTracked = lp.x != 0xffffffff;
         if (legTracked && (g_rest[p].skin.w & 1)) inset = max(inset, g_legMaxRoom);
-        if (capN == 0 && sd < -inset) {
-            float3 corr = -(sd + inset) * rnrm1;
+        float insetF = inset - max(pesFit, 0.0);   // PES21 FX: delgado = la tela queda a 'fit' del cuerpo
+        if (capN == 0 && sd < -insetF) {
+            float3 corr = -(sd + insetF) * rnrm1;
             x += corr;
             xPrev += corr * (1.0 - g_bodyBounce);
         }

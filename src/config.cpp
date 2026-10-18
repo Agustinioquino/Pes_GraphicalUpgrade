@@ -449,6 +449,7 @@ void UpdateTimeParams() {
     p[23][2] = float(fmod(t, 10000.0));             // tiempo actual
     p[24][1] = (t - s_lastTurf) < 2.0 ? 1.0f : 0.0f; // en partido
     UpdateClothWet(t);
+    UpdateClothFit(t);
 }
 
 // ---------------------------------------------------------------- tela mojada -> shader del mod de ropa
@@ -476,6 +477,37 @@ void UpdateClothWet(double t) {
     o << src; o.close();
     last = wet;
     Log("ropa: tela mojada = %.2f (sudor %.2f, lluvia %s)", wet, sweat, (g_cfg.match.known && g_cfg.match.weather == 1) ? "si" : "no");
+}
+
+// ---------------------------------------------------------------- ajuste al fisico -> shader del mod de ropa
+// x78 on/off, y78 holgura en delgados (mm), z78 pegado en anchos (mm), w78 rango de escala de hueso
+void UpdateClothFit(double t) {
+    static double next = 0; static float last[4] = { -1, -1, -1, -1 };
+    if (t < next) return; next = t + 5.0;
+    if (!g_cfg.clothFound) return;
+    const auto& p = g_cfg.live;
+    float v[4] = { p[78][0] > 0.5f ? 1.0f : 0.0f, std::clamp(p[78][1], 0.0f, 40.0f), std::clamp(p[78][2], 0.0f, 40.0f), std::clamp(p[78][3] > 0 ? p[78][3] : 0.15f, 0.02f, 1.0f) };
+    bool same = true; for (int i = 0; i < 4; i++) if (fabsf(v[i] - last[i]) > 0.01f) same = false;
+    if (same) return;
+    std::wstring path = g_cfg.baseDir + L"..\\cloth-mod\\shaders\\cloth_sim.hlsl";
+    std::ifstream f(path, std::ios::binary); if (!f) return;
+    std::string src((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>()); f.close();
+    const char* marks[4] = { "// PES21FX_LIVE_FIT_ON", "// PES21FX_LIVE_FIT_THIN", "// PES21FX_LIVE_FIT_FAT", "// PES21FX_LIVE_FIT_RANGE" };
+    const char* names[4] = { "PES_FIT_ON  ", "PES_FIT_THIN", "PES_FIT_FAT ", "PES_FIT_RANGE" };
+    int done = 0;
+    for (int i = 0; i < 4; i++) {
+        size_t m = src.find(marks[i]); if (m == std::string::npos) continue;
+        size_t ls = src.rfind('\n', m); ls = (ls == std::string::npos) ? 0 : ls + 1;
+        char line[96];
+        if (i == 0) snprintf(line, sizeof(line), "#define %s       %d      ", names[i], (int)v[i]);
+        else snprintf(line, sizeof(line), "#define %s       %.2f   ", names[i], v[i]);
+        src.replace(ls, m - ls, line); done++;
+    }
+    if (!done) return;
+    std::ofstream o(path, std::ios::binary | std::ios::trunc); if (!o) return;
+    o << src; o.close();
+    for (int i = 0; i < 4; i++) last[i] = v[i];
+    Log("ropa: ajuste al fisico %s (delgado +%.0f mm, ancho -%.0f mm, rango %.2f)", v[0] > 0.5f ? "on" : "off", v[1], v[2], v[3]);
 }
 
 } // namespace fx

@@ -105,6 +105,7 @@ void KeyActionUnlocked(KeyBind& k, int action);    // menu: alternar / ciclar (c
 void UpdateTimeParams();                        // reloj del partido, viento, etc.
 void OnTurfDrawn();
 void UpdateClothWet(double t);
+void UpdateClothFit(double t);
 double Now();
 // presets por estadio (presets.cpp)
 bool ReadPreset(const std::wstring& path, PresetFile& out);
