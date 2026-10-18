@@ -8,7 +8,7 @@
 cbuffer cVSSystem : register(b0) { float4 cb0[3]; }
 cbuffer cVSScene : register(b2) { float4 cb2[21]; }
 cbuffer cVSMaterial : register(b4) { float4 cb4[5]; }
-cbuffer cVSObject : register(b5) { float4 cb5[8]; }
+cbuffer cVSObject : register(b5) { float4 cb5[9]; }
 
 SamplerState g_samplerLinear_Wrap_s : register(s10);
 SamplerState g_samplerLinear_Clamp_s : register(s11);
