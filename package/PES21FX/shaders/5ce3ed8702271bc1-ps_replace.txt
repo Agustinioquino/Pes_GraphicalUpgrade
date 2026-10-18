@@ -74,6 +74,9 @@ Texture2D<float4> pesWrinkleM : register(t21);   // mascara de zonas 512x1024 (+
 Texture2D<float4> pesSSSMap   : register(t22);   // PES21 (18/10) mapa de SSS de la cara: R finura, G curvatura, B sangre, A piel
 Texture2D<float4> pesFaceA    : register(t23);   // PES21 (18/10) quinta textura generada en vivo por cara: R cavidad, G curvatura, B grosor, A vello/pelo
 Texture2D<float4> pesFaceB    : register(t24);   //   R poros, G zona de brillo, B convexidad grande, A = 1 si existe
+struct PesSeed { float4 posV; float4 nrmV; float4 dirV; float4 col; };
+Texture2D<float4> pesSeedMap  : register(t26);   // PES21 (18/10) semillas de cejas por celda (salida C del generador)
+RWStructuredBuffer<PesSeed> pesSeeds : register(u5);   // PES21 (18/10) semillas animadas de este dibujo (las lee pes_brow_vs)
 Texture2D<float4> pesZones    : register(t25);   // PES21 (18/10) zonas de la cara: R sudor, G labios, B cuello, A piel (textures\pes_face_zones.dds)
 
 // 3Dmigoto declarations
@@ -203,6 +206,7 @@ void main(
   r1.xyzw = r1.zwxy * float4(1,-1,1,-1) + float4(0,1,0,1);
   r0.zw = r1.zw + -r1.xy;
   o3.xy = g_psSystem.m_renderBuffer.xy * r0.zw;
+  float2 pesMotionRaw = r0.zw;   // PES21 cejas: movimiento sin escalar (para las hebras)
 
   // ---- arrugas animadas ----
   r0.z = cmp(v2.x < 0.5);
@@ -523,6 +527,34 @@ void main(
   r0.x = r0.x * r0.w + 0.271276593;
   o2.x = r0.x * r0.w + 0.150000006;
 
+  // === PES21 cejas con hebras (18/10): esta cara escribe, para cada celda con semilla, la posicion y normal animadas
+  // (espacio de vista), la direccion de crecimiento y el color, en el buffer que lee el dibujo de hebras de la DLL.
+  // x74 on/off | w75 = -1 invierte la direccion (si las cejas crecen al reves)
+  { float4 P74 = IniParams.Load(int2(74,0));
+    if (enhance && P74.x > 0.5) {
+      float4 sm = pesSeedMap.SampleLevel(g_samplerPoint_Wrap_s, v2.xy, 0);
+      if (sm.a > 0.5) {
+        float2 cell = floor(v2.xy * 256.0);
+        float2 jit = float2(h21(cell + 0.37), h21(cell + 1.7)) - 0.5;
+        float2 suv = (cell + 0.5 + jit * 0.6) / 256.0;
+        float fp = max(fwidth(v2.x), fwidth(v2.y)) * 2048.0;         // texeles por pixel
+        float rad = max(1.2, fp * 0.8);
+        if (length((v2.xy - suv) * 2048.0) < rad) {
+          uint idx = (uint)cell.y * 256u + (uint)cell.x;
+          float3 dirC = -normalize(v3.xyz);
+          float3 posV = dirC * (v0.w / max(abs(dirC.z), 1e-4));
+          float2 d2 = sm.xy * 2.0 - 1.0;
+          float flipD = IniParams.Load(int2(75,0)).w < -0.5 ? -1.0 : 1.0;
+          float3 dirV = normalize(v4.xyz) * d2.x * flipD - normalize(v5.xyz) * d2.y * flipD;
+          PesSeed sd;
+          sd.posV = float4(posV, 1.0);
+          sd.nrmV = float4(normalize(r1.xyz), 0.0);
+          sd.dirV = float4(normalize(dirV + 1e-5), sm.z);
+          sd.col = float4(o0.xyz, asfloat(f32tof16(pesMotionRaw.x) | (f32tof16(pesMotionRaw.y) << 16)));
+          pesSeeds[idx] = sd;
+        }
+      }
+    } }
   // ---- empaquetado normal octaedrica + translucidez ----
   r0.x = r1.w * 63 + 0.5;
   r0.y = abs(r1.x) + abs(r1.y);

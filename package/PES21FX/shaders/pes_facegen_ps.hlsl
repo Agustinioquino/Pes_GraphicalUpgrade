@@ -28,7 +28,10 @@ float Ell(float2 uv, float2 c, float2 r, float soft) {
   return saturate(1.0 - (d - (1.0 - soft)) / soft);
 }
 
-void main(float4 pos : SV_Position, float2 uv : TEXCOORD0, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1)
+// Salida C (o2): semillas de hebras de ceja por celda de 8x8 texeles (grilla 256x256): R,G direccion (x0.5+0.5),
+// B largo (0..1), A = 1 si en esta celda nace una hebra. La misma celda guarda lo mismo en todos sus texeles.
+float h21(float2 p) { return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453); }
+void main(float4 pos : SV_Position, float2 uv : TEXCOORD0, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out float4 o2 : SV_Target2)
 {
   float w, h; tNormal.GetDimensions(w, h);
   float2 texel = 1.0 / float2(max(w, 1), max(h, 1));
@@ -90,4 +93,34 @@ void main(float4 pos : SV_Position, float2 uv : TEXCOORD0, out float4 o0 : SV_Ta
 
   o0 = float4(cav * (1.0 - hair), curv, thick * (1.0 - hair), hair);
   o1 = float4(pores, specZone, convB, 1.0);
+
+  // --- semillas de cejas ---
+  o2 = 0;
+  {
+    float2 cell = floor(uv * 256.0);
+    float2 cuv = (cell + 0.5) / 256.0;
+    // zona de cejas (plano UV comun de las caras): dos arcos sobre los ojos
+    float browL = Ell(cuv, float2(0.395, 0.312), float2(0.105, 0.030), 0.5);
+    float browR = Ell(cuv, float2(0.605, 0.312), float2(0.105, 0.030), 0.5);
+    float brow = max(browL, browR);
+    // pelo pintado en la celda: alpha del color (capas de pelo) + oscuridad relativa, en el mip de la celda
+    float4 dc = tDiffuse.SampleLevel(sLin, cuv, 3.0);
+    float3 dc5 = tDiffuse.SampleLevel(sLin, cuv, 6.0).xyz;
+    float lc = dot(dc.xyz, float3(0.2126, 0.7152, 0.0722)), l5 = dot(dc5, float3(0.2126, 0.7152, 0.0722));
+    float darkC = smoothstep(0.75, 0.40, lc / max(l5, 0.005));
+    float alphaC = 1.0 - saturate((dc.a - 0.90) * 10.0);
+    float browHair = brow * saturate(max(darkC, alphaC * 0.8) * 1.3);
+    float dens = h21(cell + 0.37);
+    if (browHair > 0.15 && dens < browHair * 0.95) {
+      float side = cuv.x < 0.5 ? -1.0 : 1.0;
+      // direccion: hacia afuera, levemente hacia arriba (UV: -y) siguiendo el arco; ruido de +-15 grados
+      float arch = (abs(cuv.x - 0.5) - 0.105) / 0.105;            // -1 en el entrecejo .. +1 en la cola
+      float2 dir = normalize(float2(side, -0.45 + 0.55 * saturate(arch + 0.5)));
+      float ang = (h21(cell + 1.7) - 0.5) * 0.52;
+      float cs = cos(ang), sn = sin(ang);
+      dir = float2(dir.x * cs - dir.y * sn, dir.x * sn + dir.y * cs);
+      float len = 0.55 + 0.45 * h21(cell + 5.1);
+      o2 = float4(dir * 0.5 + 0.5, len, 1.0);
+    }
+  }
 }

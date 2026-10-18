@@ -365,7 +365,7 @@ template<int V> static void STDMETHODCALLTYPE hk_SetCS(ID3D11DeviceContext* c, I
 // ---------------------------------------------------------------- reglas antes de cada dibujo
 // lo que una regla enlaza se devuelve a como estaba despues del dibujo (como "post ps-t20 = ..." en 3DMigoto)
 struct Saved { bool ps; bool srv; int slot; IUnknown* prev; };
-struct DrawScope { Saved s[12]; int n = 0; };
+struct DrawScope { Saved s[12]; int n = 0; FaceGenExtra brow; };
 
 static void Remember(ID3D11DeviceContext* c, DrawScope& d, bool ps, bool srv, int slot) {
     if (d.n >= 12) return;
@@ -424,10 +424,17 @@ static void RunRule(ID3D11DeviceContext* c, const ShaderEntry* e, DrawScope& d) 
         case RuleAction::EventTurf: OnTurfDrawn(); break;
         case RuleAction::FaceGen: {
             if (!ps) break;
-            ID3D11ShaderResourceView *fa = nullptr, *fb = nullptr;
-            if (FaceGenLookup(c, &fa, &fb)) {
+            ID3D11ShaderResourceView *fa = nullptr, *fb = nullptr; FaceGenExtra ex;
+            if (FaceGenLookup(c, &fa, &fb, &ex)) {
                 Remember(c, d, true, true, a.slot); c->PSSetShaderResources(a.slot, 1, &fa);
                 Remember(c, d, true, true, a.idx);  c->PSSetShaderResources(a.idx, 1, &fb);
+                // cejas con hebras: mapa de semillas en t26 y buffer de semillas (UAV 5) limpio para este dibujo
+                if (ex.seedMap && ex.seedsUAV && g_cfg.live[74][0] > 0.5f) {
+                    Remember(c, d, true, true, 26); c->PSSetShaderResources(26, 1, &ex.seedMap);
+                    const float z[4] = { 0, 0, 0, 0 }; c->ClearUnorderedAccessViewFloat(ex.seedsUAV, z);
+                    c->OMSetRenderTargetsAndUnorderedAccessViews(D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 5, 1, &ex.seedsUAV, nullptr);
+                    d.brow = ex;
+                }
             }
             break; }
         case RuleAction::SetParam: break;   // ya resuelto con la textura de parametros alternativa
@@ -466,7 +473,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (vs && vs->rule) RunRule(c, vs, d);
     return d.n > 0;
 }
-#define FX_DRAW(verts, kind, inst, call) if (g_catalogHook) { CtxState& cs_ = Ctx(c); CatalogDraw(c, cs_.vs, cs_.ps, verts, kind, inst); } DrawScope ds; bool r = BeforeDraw(c, ds); call; if (r) Restore(c, ds);
+#define FX_DRAW(verts, kind, inst, call) if (g_catalogHook) { CtxState& cs_ = Ctx(c); CatalogDraw(c, cs_.vs, cs_.ps, verts, kind, inst); } DrawScope ds; bool r = BeforeDraw(c, ds); call; if (r) Restore(c, ds); if (ds.brow.seedsUAV) BrowDrawAfterFace(c, &ds.brow);
 template<int V> static void STDMETHODCALLTYPE hk_DrawIdx(ID3D11DeviceContext* c, UINT a, UINT b, INT d) {
     { const ShaderEntry* gvs = Ctx(c).vs;
       if (g_grassProbeOn) CatalogGrassDraw(c, gvs, a, b, d);
