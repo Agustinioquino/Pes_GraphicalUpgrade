@@ -175,6 +175,11 @@ static void UploadParams() {
     }
     D3D11_MAPPED_SUBRESOURCE m;
     if (SUCCEEDED(g_dev.imm->Map(g_dev.paramTex, 0, D3D11_MAP_WRITE_DISCARD, 0, &m))) { memcpy(m.pData, p, sizeof(p)); g_dev.imm->Unmap(g_dev.paramTex, 0); }
+    // textura de parametros para las parcelas lejanas del pasto (la variante minima del juego): igual que la normal
+    // con la marca w60 = 1 -> el VS del pasto las escala para que cubran su celda de 3 m
+    if (!g_dev.grassTex) CreateParamTex(&g_dev.grassTex, &g_dev.grassSRV);
+    if (g_dev.grassTex) { memcpy(q, p, sizeof(q)); q[60][3] = 1.0f;
+        if (SUCCEEDED(g_dev.imm->Map(g_dev.grassTex, 0, D3D11_MAP_WRITE_DISCARD, 0, &m))) { memcpy(m.pData, q, sizeof(q)); g_dev.imm->Unmap(g_dev.grassTex, 0); } }
     int maxSet = -1; for (auto& o : ovs) maxSet = (std::max)(maxSet, o.set);
     for (int s = 0; s <= maxSet; s++) {
         while ((int)g_dev.altTex.size() <= s) {
@@ -365,6 +370,7 @@ static void RunRule(ID3D11DeviceContext* c, const ShaderEntry* e, DrawScope& d) 
 }
 
 static std::atomic<bool> s_firstRule{false};
+thread_local bool t_sparseGrass = false;   // el dibujo en curso es una parcela lejana del pasto (lo marca GrassOnDraw)
 static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (g_cfg.bypass || !g_dev.dev) return false;
     CtxState& s = Ctx(c);
@@ -382,8 +388,9 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         ID3D11ShaderResourceView* v = (ps && ps->rule && ps->rule->paramSet >= 0) ? ParamSRVFor(ps) : ParamSRVFor(vs);
         if (v) {
             if (pr) c->PSSetShaderResources(120, 1, &v);
-            if (vr) c->VSSetShaderResources(120, 1, &v);
+            if (vr) { ID3D11ShaderResourceView* vv = (t_sparseGrass && g_dev.grassSRV) ? g_dev.grassSRV : v; c->VSSetShaderResources(120, 1, &vv); }
         }
+        t_sparseGrass = false;
     }
     if (!g_cfg.optRules) return false;
     if ((ps && ps->rule) || (vs && vs->rule)) {

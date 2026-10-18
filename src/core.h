@@ -148,8 +148,9 @@ void CatalogRecord(bool on);                     // "Grabar partido": volcados p
 // pasto extendido (grass.cpp)
 void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT start, INT base);
 void GrassPresent();
+extern thread_local bool t_sparseGrass;
 extern int g_grassPatchesLastFrame;
-struct GrassDbg { int calls = 0, emits = 0, patches = 0; int ring[3] = {0, 0, 0}; UINT lod = 0, rtW = 0, cb2off = 0; bool cam = false; float ex = 0, ez = 0; const char* why = nullptr; };
+struct GrassDbg { int calls = 0, emits = 0, patches = 0, sparse = 0, sparseLast = 0; int ring[3] = {0, 0, 0}; UINT lod = 0, rtW = 0, cb2off = 0; bool cam = false; float ex = 0, ez = 0; const char* why = nullptr; };
 extern GrassDbg g_grassDbg;
 extern UINT g_bbW, g_bbH;                       // tamano del back buffer (lo fija Present)
 void CatalogGrassDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT start, INT base);                           // proximo cuadro: volcar los cbuffers de composicion y luz del sol
@@ -159,6 +160,8 @@ struct DeviceState {
     ID3D11DeviceContext* imm = nullptr;
     ID3D11Texture1D* paramTex = nullptr;
     ID3D11ShaderResourceView* paramSRV = nullptr;
+    ID3D11Texture1D* grassTex = nullptr;       // parametros con la marca de parcela lejana (w60 = 1)
+    ID3D11ShaderResourceView* grassSRV = nullptr;
     std::vector<ID3D11Texture1D*> altTex;      // conjuntos de parametros con cambios por shader (p.ej. w5 = $pes_push)
     std::vector<ID3D11ShaderResourceView*> altSRV;
 };

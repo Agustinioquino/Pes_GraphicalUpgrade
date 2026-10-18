@@ -41,6 +41,22 @@ void main(
   bool pesIsExt = abs(pesExt.y - 1234.5) < 0.01;   // marca del mod (el juego usa cb5[8] con otros valores)
   float4 v0 = v0_in;
   if (pesIsExt) { v0.xz *= max(pesExt.x, 1.0); v0.y *= max(pesExt.z, 0.1); }
+  // === PES21 parcelas lejanas del juego (18/10): mas alla de ~30 m el juego pone su variante minima en una grilla de
+  // 3 m sin escalarla (un matorral de 0.5 m cada 3 m: el pasto "desaparece"). La DLL marca esos dibujos con w60 = 1 y
+  // aca se escalan para cubrir la celda, con transicion por distancia para no tocar la zona densa.
+  // x60 escala (6 = celda de 3 m), y60 desde (m), z60 largo de la transicion (m); x59 alto, y59 ancho
+  float4 FAR = IniParams.Load(int2(60, 0));
+  float4 FA2 = IniParams.Load(int2(59, 0));
+  float pesFarK = 0.0;
+  if (FAR.w > 0.5 && !pesIsExt) {
+    float3 pw0 = float3(dot(v0_in, cb5[4]), 0.0, dot(v0_in, cb5[6]));
+    float dEye = length(pw0.xz - cb2[20].xz);
+    float d0 = FAR.y > 1.0 ? FAR.y : 20.0, dl = max(FAR.z, 1.0);
+    pesFarK = smoothstep(d0, d0 + dl, dEye);
+    float sc = lerp(1.0, max(FAR.x, 1.0), pesFarK);
+    v0.xz *= sc;
+    v0.y *= lerp(1.0, max(FA2.x, 0.1), pesFarK);
+  }
 
   // --- posicion en el mundo y doblado por jugador / pelota ---
   r0.x = v0.y + 10.0;
@@ -88,12 +104,15 @@ void main(
   if (pesIsExt) {
     // parcelas extendidas: sin mascara de desgaste ni hundimiento (lejos no se ven); altura = la de la hoja, tope 6 cm x alto
     r6.y = min(v0.y, 0.06 * max(pesExt.z, 0.1));
+  } else if (pesFarK > 0.0) {
+    r6.y = lerp(r6.y, min(v0.y, 0.06 * max(FA2.x, 0.1)), pesFarK);
   }
   r6.w = dot(v0, cb5[7]);
-  if (pesIsExt) {
+  if (pesIsExt || pesFarK > 0.0) {
     // ensanche hacia la camara: la hoja se corre a lo largo del eje derecha de la camara segun su u (0..1)
     float3 camRight = normalize(cb2[8].xyz);
-    r6.xyz += camRight * ((v1.x - 0.5) * pesExt.w);
+    float wid = pesIsExt ? pesExt.w : 0.012 * max(FAR.x, 1.0) * max(FA2.y, 0.0) * pesFarK;
+    r6.xyz += camRight * ((v1.x - 0.5) * wid);
   }
   // --- proyeccion ---
   r8.x = dot(r6, cb2[8]);

@@ -62,7 +62,7 @@ void GrassPresent() {
     if (t > nextLog && g_cfg.live[58][3] > 0.5f) { nextLog = t + 3.0;
         Log("pasto extendido: llamadas %d, emisiones %d, parcelas %d, variante %u idx, camara %s (%.1f, %.1f) off %u, rt %u/%u, estado: %s",
             g_grassDbg.calls, g_grassDbg.emits, g_grassDbg.patches, g_grassDbg.lod, g_grassDbg.cam ? "ok" : "no", g_grassDbg.ex, g_grassDbg.ez, g_grassDbg.cb2off, g_grassDbg.rtW, g_bbW, g_grassDbg.why ? g_grassDbg.why : "-");
-        g_grassDbg.calls = 0; g_grassDbg.emits = 0; }
+        g_grassDbg.calls = 0; g_grassDbg.emits = 0; g_grassDbg.sparseLast = g_grassDbg.sparse; g_grassDbg.sparse = 0; }
     (void)f;
 }
 
@@ -121,6 +121,8 @@ void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT
     UINT prev = s_lodCount.load();
     while (count < prev && !s_lodCount.compare_exchange_weak(prev, count)) {}
     if (count <= s_lodCount.load()) { s_lodStart = start; s_lodBase = base; }
+    // parcela lejana del juego (variante minima, grilla de 3 m): el VS la escala si w60 esta prendido
+    if (count == s_lodCount.load() && g_cfg.live[60][3] > 0.5f) { t_sparseGrass = true; g_grassDbg.sparse++; }
     const float* p58 = g_cfg.live[58]; const float* p59 = g_cfg.live[59];
     if (p58[3] < 0.5f) { Why("apagado (w58)"); return; }
     // solo la pasada principal (G-buffer del tamano de la pantalla): el pasto tambien se dibuja para camaras secundarias
