@@ -501,33 +501,37 @@ void main(
     float dC = g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, uvC, 0).x;
     float zC = g_psScene.m_projectionParam.z / (dC - g_psScene.m_projectionParam.w);
     // solo donde hay sol que quitar: pixel de frente a la luz y fuera de la sombra plena del shadow map
-    if (CS.w > 0.5 && csK > 0 && zC > 0.1 && zC < 60.0 && rawNdotL > 0.02 && r0.x > 0.03) {
+    // 18/10 c: el espacio de vista del motor tiene z NEGATIVA hacia adelante: con "zC > 0.1" el trazado no corria nunca
+    // (por eso el interruptor "no hacia nada"). Ahora todo va con el signo de zC.
+    float zSgn = zC < 0.0 ? -1.0 : 1.0, zA = abs(zC);
+    if (CS.w > 0.5 && csK > 0 && zA > 0.1 && zA < 60.0 && rawNdotL > 0.02 && r0.x > 0.03) {
       float3 Pv = float3((sC - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zC, zC);
       float3 Lc = normalize(g_psLight.m_lightDir0.xyz);
       float ign = frac(52.9829189 * frac(dot(v2.xy, float2(0.06711056, 0.00583715))) + frac(g_psSystem.m_timeParam.z * 7.31));
       // arranque separado de la superficie: mas en angulo rasante (evita el acne) y con la distancia
-      float bias = (0.008 + 0.0018 * zC) * (0.6 + 0.4 / max(rawNdotL, 0.12));
+      float bias = (0.008 + 0.0018 * zA) * (0.6 + 0.4 / max(rawNdotL, 0.12));
       float3 Q = Pv + Lc * bias;
       float occ = 0;
       [loop] for (int ci = 0; ci < 12; ci++) {
         float f = (ci + ign) / 12.0;
         float t = f * f * csLen;                                   // muestras densas junto al pixel (detalle fino)
         float3 R = Q + Lc * t;
-        if (R.z < 0.1) break;
+        float RzA = R.z * zSgn;
+        if (RzA < 0.1) break;
         float2 s = R.xy / (R.z * g_psScene.m_projectionParam.xy) + g_psScene.m_cameraCenterOffset.xy;
         float2 uv = Am * s + Bm;
         if (any(uv < 0.0) || any(uv > 1.0)) break;
         float dS2 = g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, uv, 0).x;
         float zS = g_psScene.m_projectionParam.z / (dS2 - g_psScene.m_projectionParam.w);
-        float dz = R.z - zS;
-        float thick = 0.04 + 0.22 * t + 0.002 * R.z;               // grosor aceptado: crece con el largo del rayo
-        if (dz > 0.003 + 0.0008 * R.z && dz < thick && (zC - zS) > 0.03 + 0.002 * zC) {
+        float dz = (R.z - zS) * zSgn;                              // > 0: el rayo quedo detras de lo que ve la camara
+        float thick = 0.04 + 0.22 * t + 0.002 * RzA;               // grosor aceptado: crece con el largo del rayo
+        if (dz > 0.003 + 0.0008 * RzA && dz < thick && (zC - zS) * zSgn > 0.03 + 0.002 * zA) {
           // oclusor cerca = sombra plena; lejos = penumbra (segun suavidad). Primer impacto = el mas cercano.
           occ = (1.0 - csSoft * f) * saturate(dz / (0.35 * thick));
           break;
         }
       }
-      float fade = saturate((60.0 - zC) / 20.0);
+      float fade = saturate((60.0 - zA) / 20.0);
       float2 eM = saturate(min(uvC, 1.0 - uvC) * 10.0);           // sin cortes en los bordes de pantalla
       float cs = 1.0 - saturate(occ * fade * csK * eM.x * eM.y);
       csDbg = cs;
