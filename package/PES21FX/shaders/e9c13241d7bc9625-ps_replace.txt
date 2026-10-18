@@ -184,6 +184,7 @@ void main(
   float skinSpec = P3.w > 0 ? P3.w : 1.0;
   float rawNdotL = 0, trans = 0, transFloor = 0, skinTag = 0, shadowScalar = 1;
   float pesSunE = 1.0;   // PES21 sol de calidad (18/10): normalizacion de energia por el tamano del disco solar
+  bool dbgT = IniParams.Load(int2(12,0)).w > 2.5; bool tookSM = false;   // diagnostico de transmision
   float4 P64 = IniParams.Load(int2(64,0));   // x64 on | y64 diametro del sol (grados) | z64 transmision por shadow map | w64 densidad de la piel
 
   r0.xy = float2(-0.5,-0.5) + v2.yx;
@@ -652,7 +653,6 @@ void main(
     float3 transm = Tr * (0.65 * fwd + 0.35 * back) * P5.x * 2.0;
     // PES21 transmision por shadow map (18/10, Jimenez 2010): el grosor real que atraviesa la luz = distancia entre lo
     // que ve el sol (shadow map) y este pixel. Orejas y nariz se encienden solo cuando el sol esta realmente detras.
-    bool dbgT = IniParams.Load(int2(12,0)).w > 2.5; bool tookSM = false;
     if (P64.x > 0.5 && P64.z > 0.0 && pesShCas > -0.5 && g_psScene.m_shadowMapResolutions.x > 1.0) {
       tookSM = true;
       float casS = pesShCas < 0.5 ? 1.0 : (pesShCas < 1.5 ? g_psScene.m_shadowProjection2._m03 : g_psScene.m_shadowProjection2._m13);
@@ -678,7 +678,6 @@ void main(
       float3 transmO = thin * pow(saturate(dot(V, -Lt)), 3.0) * float3(1.0, 0.24, 0.10) * P5.x;
       o0.xyz += transmO * lightC * sqrt(saturate(r0.x));
     }
-    if (dbgT && !tookSM) o0.xyz = float3(4.0, 0.0, 4.0);   // diagnostico: magenta = sin cascada de sombra para este pixel
   }
   r1.xyz = r1.yzw * r1.xxx;
   if (isSkin) {
@@ -705,6 +704,9 @@ void main(
     float sharp = D2 * F2 * nl2 * 0.25 * P5.y * eF;
     r1.xyz += sharp * PESSunColor() * g_psScene.m_exposure.zzz * shadowScalar * saturate(specInt * 2 + 0.3);
   }
+  // diagnostico w12 = 3 sobre piel: magenta = es piel pero no se midio el grosor (sin cascada / transmision apagada);
+  // cian = marcada como piel pero el SSS esta apagado o sin translucidez (isSkin falso)
+  if (dbgT && abs(skinTag - 0.98039) < 0.003 && !tookSM) { o0.xyz = isSkin ? float3(4.0, 0.0, 4.0) : float3(0.0, 4.0, 4.0); r1.xyz = 0; }
   o1.xyz = min(float3(10000,10000,10000), r1.xyz);
   o0.w = 1;
   o1.w = 1;
