@@ -326,8 +326,11 @@ void main(
     float sh = saturate(r6.x);
     // sombra mas suave sobre la piel (la luz se difunde dentro del tejido)
     sh = lerp(sh, smoothstep(0.0, 1.0, sqrt(sh)), saturate(P5.z));
-    float3 shC = pow(max(sh, 1e-4), float3(0.55, 1.0, 1.12));
-    shadowRGB = lerp(sh.xxx, shC, saturate(trans * 2.0) * sssBleed);
+    // 18/10 v2: rojo solo en la PENUMBRA (borde de la sombra), la sombra plena queda neutra.
+    // Antes pow(sh,0.55) en el rojo dejaba toda la sombra de la cara naranja.
+    float pen = sh * (1.0 - sh) * 4.0;   // 1 en el medio del borde, 0 en luz plena y en sombra plena
+    float3 shC = saturate(sh.xxx + pen * float3(0.10, -0.02, -0.04));
+    shadowRGB = lerp(sh.xxx, shC, saturate(saturate(trans * 2.0) * sssBleed));
   }
   o0.xyz = r3.xyz * shadowRGB;
   // === PES21 tela: brillo aterciopelado en los bordes (sheen) para ropa/uniformes ===
@@ -369,7 +372,7 @@ void main(
     float3 Lt = normalize(L + n * 0.3);
     float tv = pow(saturate(dot(V, -Lt)), 3.0);
     float thick = saturate(trans * 1.6);
-    float3 transm = thick * tv * float3(1.0, 0.24, 0.10) * P5.x;
+    float3 transm = thick * smoothstep(0.45, 0.85, thick) * tv * float3(1.0, 0.24, 0.10) * P5.x;   // 18/10 v2: solo zonas finas
     o0.xyz += transm * lightC * sqrt(saturate(r6.x));
   }
   r0.xyz = r0.xyz * r6.xyz;

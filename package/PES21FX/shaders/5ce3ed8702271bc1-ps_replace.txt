@@ -424,7 +424,9 @@ void main(
     r1.w = saturate(r1.w + 0.12 * sssMap.z * saturate(P62.y) * k);  // la sangre bajo la piel tambien dispersa
     mapBlood = sssMap.z * k * saturate(P62.z);
   }
-  if (fgOk) r1.w = max(r1.w, FA.b * saturate(P68.z));   // PES21 quinta textura: grosor de ESTA cara (orejas, nariz, labios, parpados)
+  // 18/10 v2: solo sube la translucidez donde el grosor generado dice 'fino' (orejas, aletas, labios, parpados);
+  // antes la subia en casi toda la cara y el SSS se veia ceroso y naranja
+  if (fgOk) r1.w = max(r1.w, saturate((FA.b - 0.45) / 0.55) * saturate(P68.z));
   r1.w = max(r1.w, 0.85 * lipM * saturate(P72.z));         // PES21 zonas: los labios son finos e irrigados (mas luz adentro)
   float thin = r1.w;
 

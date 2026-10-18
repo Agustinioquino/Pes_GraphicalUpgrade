@@ -551,8 +551,11 @@ void main(
     float sh = saturate(r0.x);
     // sombra mas suave sobre la piel (la luz se difunde dentro del tejido)
     sh = lerp(sh, smoothstep(0.0, 1.0, sqrt(sh)), saturate(P5.z));
-    float3 shC = pow(max(sh, 1e-4), float3(0.55, 1.0, 1.12));
-    shadowRGB = lerp(sh.xxx, shC, saturate(saturate(trans * 2.0) * sssBleed));   // 16/10: sin pasarse de 1 (piel roja)
+    // 18/10 v2: rojo solo en la PENUMBRA (borde de la sombra), la sombra plena queda neutra.
+    // Antes pow(sh,0.55) en el rojo dejaba toda la sombra de la cara naranja.
+    float pen = sh * (1.0 - sh) * 4.0;   // 1 en el medio del borde, 0 en luz plena y en sombra plena
+    float3 shC = saturate(sh.xxx + pen * float3(0.10, -0.02, -0.04));
+    shadowRGB = lerp(sh.xxx, shC, saturate(saturate(trans * 2.0) * sssBleed));
   }
   o0.xyz = r3.xyz * shadowRGB;
   // === PES21 tela v2 (Claude, 16/10): iluminacion de tela para los kits ===
@@ -645,7 +648,10 @@ void main(
     float3 sigT = float3(1.0, 3.6, 6.5) * (P34.y > 0 ? P34.y : 1.0);
     float3 Tr = exp(-(1.15 - thin) * sigT) * thin;
     float visT = lerp(0.25, 1.0, saturate(r0.x));   // la luz entra por el lado de atras aunque el frente este en sombra
-    float3 transm = Tr * (0.65 * fwd + 0.35 * back) * P5.x * 2.0;
+    // 18/10 v2: solo donde la piel es fina de verdad (orejas, aletas, labios) y el sol esta detras; sin el
+    // termino 'de atras' amplio que encendia de naranja todo el lado en sombra de la cara
+    float thinGate = smoothstep(0.45, 0.85, thin);
+    float3 transm = Tr * fwd * (0.6 + 0.4 * back) * thinGate * P5.x * 1.6;
     // PES21 transmision por shadow map (18/10, Jimenez 2010): el grosor real que atraviesa la luz = distancia entre lo
     // que ve el sol (shadow map) y este pixel. Orejas y nariz se encienden solo cuando el sol esta realmente detras.
     if (P64.x > 0.5 && P64.z > 0.0 && pesShCas > -0.5 && g_psScene.m_shadowMapResolutions.x > 1.0) {
@@ -670,7 +676,7 @@ void main(
       if (dbgT) o0.xyz = float3(saturate(thickM / 0.10), saturate(dot(L, -n)), r0.x < 0.5 ? 0.6 : 0.0) * 4.0;
     } else if (P34.w > 0.5) o0.xyz += transm * lightC * visT;
     else {
-      float3 transmO = thin * pow(saturate(dot(V, -Lt)), 3.0) * float3(1.0, 0.24, 0.10) * P5.x;
+      float3 transmO = thin * smoothstep(0.45, 0.85, thin) * pow(saturate(dot(V, -Lt)), 3.0) * float3(1.0, 0.24, 0.10) * P5.x;
       o0.xyz += transmO * lightC * sqrt(saturate(r0.x));
     }
   }
