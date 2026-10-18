@@ -140,9 +140,11 @@ void main(
       float vl = length(vel);
       if (m > 0.001 && vl > 1e-5) {
         // solo la parte del movimiento perpendicular a la pierna (a lo largo del hueso la media no resbala)
-        float3 lag = -vel * (P82.y > 0 ? P82.y : 0.25);
+        // calibrado (18/10 b): una media elastica se retrasa ~1 mm caminando y ~4-5 mm en sprint (13 cm de hueso por
+        // cuadro a 60 fps): factor 0.05 del desplazamiento del cuadro, tope 6 mm en la cana
+        float3 lag = -vel * (P82.y > 0 ? P82.y : 0.05);
         float ll = length(lag);
-        float lmax = 0.010 * m;                                                  // hasta 1 cm en la cana
+        float lmax = 0.006 * m;
         if (ll > lmax) lag *= lmax / ll;
         r4.xyz += lag * m;
       }
