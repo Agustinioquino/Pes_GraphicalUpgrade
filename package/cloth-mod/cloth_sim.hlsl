@@ -22,7 +22,7 @@
 #define PES_LEG_PRECISE    1
 #define PES_LEG_ITER       2      // pasadas por sub-paso
 #define PES_LEG_REACH      0.06   // (m) solo cuentan los vertices de pierna a menos de esta distancia
-#define PES_LEG_DRAPE      0.0    // (18/10) cuanto se acuesta el short sobre el muslo por sub-paso (0 = flota como antes)
+#define PES_LEG_DRAPE      0.15   // (18/10) cuanto se acuesta el short sobre el muslo por sub-paso (0 = flota como antes)
 #define PES_LEG_DRAPE_RANGE 0.03  // (m) desde que distancia al muslo empieza a acostarse
 // INERCIA POR ZONA: al arrancar, la tela del lado opuesto a la aceleracion (espalda, faldon) se queda atras; al frenar
 // se adelanta. Se aplica como impulso extra en la cara que mira en contra de la aceleracion.
@@ -244,6 +244,17 @@ float pesFitOf(uint p)
 #else
     return 0.0;
 #endif
+}
+// PES21 FX: coordenada a lo largo del miembro (0.2 = raiz .. 1 = extremo; <= 0.2 = no es miembro).
+// Camiseta: peso de manga del mod (0 hombro .. 1 puno). Short: altura de la tela de cuerpo (cintura .. ruedo).
+float pesLimbW(uint p, float3 r0f)
+{
+    if (g_legCount > 0) {
+        if (!(g_rest[p].skin.w & 1)) return 0.0;
+        float hN = saturate((dot(r0f - s_tC, s_tUp) - s_tH0) / max(s_tH1 - s_tH0, 1e-3));
+        return 0.2 + 0.8 * (1.0 - hN);
+    }
+    return float((g_rest[p].skin.w >> 8) & 255) / 255.0;
 }
 void restAt(uint p, float t, out float3 pos, out float3 nrm)
 {
@@ -536,10 +547,10 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
             }
         }
         // PES21 FX (18/10): brazo como volumen. La tela de la manga no entra en el cilindro conico de su propio tramo.
-        if (PES_ARM_ON && g_legCount == 0) {
-            float swp = float((g_rest[p].skin.w >> 8) & 255) / 255.0;
+        if (PES_ARM_ON && s_tOk) {
+            float3 r0a = rest1 - rnrm1 * g_rest[p].nrm.w;
+            float swp = pesLimbW(p, r0a);
             if (swp > 0.2) {
-                float3 r0a = rest1 - rnrm1 * g_rest[p].nrm.w;
                 uint side = dot(r0a - s_tC, s_tSide) < 0.0 ? 0u : 1u;
                 if (s_armOk[side]) {
                     float fbA = clamp((swp - 0.2) / 0.8 * PES_ARM_BANDS - 0.5, 0.0, PES_ARM_BANDS - 1.0);
@@ -785,7 +796,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                 // Eje = vertical (gravedad), centro = centroide de la tela de cuerpo; 8 rodajas con su elipse (min/max en dos
                 // ejes horizontales) medidas de la tela en reposo sin holgura y sin mangas. En collideParticle la tela no
                 // puede entrar en esa elipse: el cuerpo deja de estar vacio por debajo.
-                if (PES_TORSO_ON && g_legCount == 0 && s == 0) {
+                if (PES_TORSO_ON && (g_legCount == 0 ? s == 0 : true)) {   // camiseta: 1 vez por cuadro; short: cada sub-paso (las piernas van rapido)
                     if (gi < 4) gTorsoSum[gi] = 0;
                     if (gi < 2) gTorsoH[gi] = gi == 0 ? 0x7f7fffffu : 0u;
                     if (gi < PES_TORSO_BANDS) { gTorsoB[gi][0] = 0x7f7fffffu; gTorsoB[gi][1] = 0u; gTorsoB[gi][2] = 0x7f7fffffu; gTorsoB[gi][3] = 0u; }
@@ -834,16 +845,16 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                 // PES21 FX (18/10): brazos como volumen. Cada manga se divide en 4 tramos por su peso de manga (0 hombro ..
                 // 1 puno); por tramo, el centro de la tela en reposo (sin holgura) y el radio minimo. Se rehace cada sub-paso
                 // porque el brazo se mueve rapido. Lado = signo respecto del eje de anchura del torso.
-                if (PES_ARM_ON && g_legCount == 0 && s_tOk) {
+                if (PES_ARM_ON && s_tOk) {   // camiseta: mangas por peso de manga; short: dos piernas por altura (cintura -> ruedo)
                     if (gi < 2 * PES_ARM_BANDS * 4) gArmSum[gi / (PES_ARM_BANDS * 4)][(gi / 4) % PES_ARM_BANDS][gi % 4] = 0;
                     if (gi < 2 * PES_ARM_BANDS) gArmR[gi / PES_ARM_BANDS][gi % PES_ARM_BANDS] = 0x7f7fffffu;
                     GroupMemoryBarrierWithGroupSync();
                     for (uint pa = gi; pa < P; pa += THREADS) {
-                        float sw = float((g_rest[pa].skin.w >> 8) & 255) / 255.0;
-                        if (sw <= 0.2) continue;
                         float3 rr = (pa == gi) ? rest10 : rest11, rn = (pa == gi) ? rnrm10 : rnrm11;
                         if (dot(rr, rr) < 1e-8 || dot(rn, rn) < 1e-8) continue;
                         float3 r0f = rr - rn * g_rest[pa].nrm.w;
+                        float sw = pesLimbW(pa, r0f);
+                        if (sw <= 0.2) continue;
                         uint side = dot(r0f - s_tC, s_tSide) < 0.0 ? 0u : 1u;
                         uint b = (uint)clamp((sw - 0.2) / 0.8 * PES_ARM_BANDS, 0.0, PES_ARM_BANDS - 1.0);
                         InterlockedAdd(gArmSum[side][b][0], int(r0f.x * 10000.0)); InterlockedAdd(gArmSum[side][b][1], int(r0f.y * 10000.0));
@@ -859,11 +870,11 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                         }
                     }
                     for (uint pb = gi; pb < P; pb += THREADS) {
-                        float sw = float((g_rest[pb].skin.w >> 8) & 255) / 255.0;
-                        if (sw <= 0.2) continue;
                         float3 rr = (pb == gi) ? rest10 : rest11, rn = (pb == gi) ? rnrm10 : rnrm11;
                         if (dot(rr, rr) < 1e-8 || dot(rn, rn) < 1e-8) continue;
                         float3 r0f = rr - rn * g_rest[pb].nrm.w;
+                        float sw = pesLimbW(pb, r0f);
+                        if (sw <= 0.2) continue;
                         uint side = dot(r0f - s_tC, s_tSide) < 0.0 ? 0u : 1u;
                         if (!s_armOk[side]) continue;
                         uint b = (uint)clamp((sw - 0.2) / 0.8 * PES_ARM_BANDS, 0.0, PES_ARM_BANDS - 1.0);
