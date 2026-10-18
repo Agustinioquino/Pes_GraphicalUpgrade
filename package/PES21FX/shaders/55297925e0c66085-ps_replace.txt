@@ -42,6 +42,7 @@ Texture2D<float4> g_tex_stainMask : register(t5);
 Texture2D<float4> g_tex_number : register(t6);
 Texture2D<float4> g_tex_mesh : register(t15);
 Texture2D<float4> pesKnit : register(t27);   // PES21: normal map de tejido de punto (ShaderFixes_v2\pes_knit_normal.dds)
+Texture2D<float4> pesFolds : register(t28);   // PES21 (18/10): tile de pliegues de tela (textures\pes_cloth_folds.dds)
 
 
 // 3Dmigoto declarations
@@ -254,6 +255,54 @@ void main(
     r0.xyz = normalize(float3(r0.xy + kxy, max(r0.z, 0.001)));
     pesKitCav *= lerp(1.0, 0.8 + 0.2 * kn.w, saturate(KN.z) * kf * (1.0 - 0.8 * pesPrint));
   }
+  // === PES21 arrugas dinamicas (18/10): pliegues que aparecen donde la tela se COMPRIME, en vivo ===
+  // La tela simulada llega ya deformada: midiendo cuantos metros de tela hay por unidad de textura en cada direccion
+  // (jacobiano UV->posicion con derivadas de pantalla) sale la anisotropia: si en una direccion hay menos tela por UV
+  // que en la otra, la tela esta comprimida ahi y se arruga en crestas perpendiculares. El tile pes_cloth_folds.dds
+  // (crestas a lo largo de X) se rota para alinear sus crestas con esa direccion. Tambien se suma donde la superficie
+  // esta muy curvada (pliegue ya formado). x69 fuerza, y69 sensibilidad (compresion minima), z69 tamano, w69 on/off
+  { float4 WR = IniParams.Load(int2(69,0));
+    float2 dxu2 = ddx(v2.xy), dyu2 = ddy(v2.xy);
+    float3 dxp = ddx(v3.xyz), dyp = ddy(v3.xyz);
+    float3 nW = normalize(v6.xyz);
+    float2 dxn = float2(length(ddx(nW)), length(ddy(nW)));
+    if (WR.w > 0.5) {
+      // metrica G = A^-T (B B^T) A^-1 : metros^2 por UV^2 (ver arriba)
+      float det = dxu2.x * dyu2.y - dxu2.y * dyu2.x;
+      float fpW = max(length(dxu2), length(dyu2)) * 2048.0;        // texeles por pixel (distancia)
+      float farW = saturate((12.0 - fpW) / 6.0);                   // lejos no se calcula
+      if (abs(det) > 1e-12 && farW > 0.0 && dot(dxp, dxp) > 1e-12) {
+        float2x2 Ai = float2x2(dyu2.y, -dxu2.y, -dyu2.x, dxu2.x) / det;      // inversa de A = [dxu; dyu]
+        float bxx = dot(dxp, dxp), bxy = dot(dxp, dyp), byy = dot(dyp, dyp);
+        // G = Ai^T * B * Ai  (B simetrica 2x2)
+        float2x2 B2 = float2x2(bxx, bxy, bxy, byy);
+        float2x2 G = mul(transpose(Ai), mul(B2, Ai));
+        float tr = G._11 + G._22, dg = G._11 * G._22 - G._12 * G._21;
+        float disc = sqrt(max(tr * tr * 0.25 - dg, 0.0));
+        float lmax = tr * 0.5 + disc, lmin = max(tr * 0.5 - disc, 1e-12);
+        float aniso = sqrt(lmax / lmin);                           // 1 = sin compresion
+        // direccion (en UV) de MENOS metros por UV = la comprimida
+        float2 cdir = abs(G._12) > 1e-14 ? normalize(float2(lmin - G._22, G._12)) : (G._11 < G._22 ? float2(1, 0) : float2(0, 1));
+        float sens = max(WR.y, 0.01);
+        float amtC = smoothstep(1.0 + sens * 0.5, 1.0 + sens * 2.5, aniso);
+        // pliegue ya formado: la normal gira mucho en pocos texeles
+        float curvW = saturate((dxn.x + dxn.y) / max(fpW * 0.002, 1e-4) * 0.08);
+        float amt = saturate(amtC + curvW * 0.6) * saturate(WR.x) * farW * (1.0 - 0.6 * pesPrint);
+        if (amt > 0.002) {
+          // tile rotado: sus crestas (eje X del tile) perpendiculares a la compresion
+          float2 ax = float2(-cdir.y, cdir.x);
+          float sc = 7.0 / max(WR.z, 0.2);
+          float2 fuv = float2(dot(v2.xy, ax), dot(v2.xy, cdir)) * sc;
+          float2 fdx = float2(dot(dxu2, ax), dot(dxu2, cdir)) * sc, fdy = float2(dot(dyu2, ax), dot(dyu2, cdir)) * sc;
+          float4 fo = pesFolds.SampleGrad(g_sampler_pattern_array_s, fuv, fdx, fdy);
+          float2 fxy = fo.xy * 2.0 - 1.0;
+          // volver la perturbacion del espacio del tile al espacio UV
+          float2 pxy = fxy.x * ax + fxy.y * cdir;
+          r0.xyz = normalize(float3(r0.xy + pxy * amt * 0.9, max(r0.z, 0.001)));
+          pesKitCav *= lerp(1.0, 0.75 + 0.25 * fo.w, amt * 0.8);
+        }
+      }
+    } }
   r0.w = dot(v5.xyz, v5.xyz);
   r0.w = rsqrt(r0.w);
   r2.yzw = v5.xyz * r0.www;
