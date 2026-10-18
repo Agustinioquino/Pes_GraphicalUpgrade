@@ -73,6 +73,14 @@ Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 
 
+// PES21 (18/10): valor "y" de la tabla de pendiente del juego para un grano g (vector de la hoja peinada) y la
+// direccion de vista mezclada r4: es lo que hace que una franja se vea clara o oscura segun desde donde la miras.
+float PESStripeST(float3 g, float3 r4) {
+  float3 t = float3(g.x * g.y, -(g.z * g.z + g.x * g.x), g.z * g.y);
+  t *= rsqrt(max(dot(t, t), 1e-8));
+  float2 uv = float2(dot(r4, g), dot(r4, t)) * 0.5 + 0.5;
+  return g_tex_turfSlopTable.SampleLevel(g_samplerLinear_Clamp_s, uv, 0).y;
+}
 float bh21(float2 p) { p = frac(p * float2(123.34, 456.21)); p += dot(p, p + 45.32); return frac(p.x * p.y); }
 float bnoise(float2 p) { float2 i = floor(p), f = frac(p); f = f * f * (3 - 2 * f);
   return lerp(lerp(bh21(i), bh21(i + float2(1,0)), f.x), lerp(bh21(i + float2(0,1)), bh21(i + 1), f.x), f.y); }
@@ -113,6 +121,7 @@ void main(
   r1.x = dot(r0.xyz, r0.xyz);
   r1.x = rsqrt(r1.x);
   r0.xyz = r1.xxx * r0.xyz;
+  float3 pesGrain = r0.xyz;   // PES21: grano (direccion en que esta peinado el pasto, cambia por franja)
   r1.xyz = float3(0,0,1) * r0.xyz;
   r1.xyz = r0.zxy * float3(0,1,0) + -r1.xyz;
   r3.xyz = r1.xyz * r0.zxy;
@@ -140,6 +149,15 @@ void main(
   r0.yz = g_tex_turfSlopTable.Sample(g_samplerLinear_Clamp_s, r0.yz).xz;
   r1.xy = r5.xy * float2(0.5,0.5) + float2(0.5,0.5);
   r1.x = g_tex_turfSlopTable.Sample(g_samplerLinear_Clamp_s, r1.xy).y;
+  // === PES21 franjas de corte (18/10): se amplifica la diferencia entre esta franja y la vecina (grano opuesto),
+  // asi el contraste sigue el angulo de la camara como en TV. x57 fuerza (0 = original), w57 on/off
+  {
+    float4 ST = IniParams.Load(int2(57,0));
+    if (ST.w > 0.5 && ST.x > 0) {
+      float stMirror = PESStripeST(float3(-pesGrain.x, pesGrain.y, -pesGrain.z), r4.xyz);
+      r1.x = saturate(r1.x + (r1.x - stMirror) * 0.5 * ST.x);
+    }
+  }
   r1.y = g_psMaterial.m_materials[1].x * r0.x;
   r0.x = g_psMaterial.m_materials[0].y * r0.x;
   r0.x = exp2(r0.x);

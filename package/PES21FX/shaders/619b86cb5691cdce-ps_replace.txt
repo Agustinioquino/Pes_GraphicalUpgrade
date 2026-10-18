@@ -350,6 +350,22 @@ void main(
       }
     }
   }
+  // === PES21 pasto a contraluz (18/10): con el sol de frente a la camara las hojas dejan pasar la luz y se encienden
+  // amarillo-verdosas (como en TV al atardecer). Pasto 3D y base de la cancha (tipo 3). y57 fuerza, w57 on/off
+  {
+    float4 STg = IniParams.Load(int2(57,0));
+    if (geoOk && STg.w > 0.5 && STg.y > 0 && tyC == 3 && zsk < 250.0) {
+      float3 Ld = normalize(pLc_dir.xyz);
+      float fwd = saturate(dot(Ld, Vsk));                                // mirando hacia el sol
+      float tr = pow(fwd, 3.0) * 0.8 + pow(fwd, 12.0) * 0.6;
+      float3 upV = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
+      if (dot(Ld, upV) < 0) upV = -upV;
+      float low = 1.0 - saturate(dot(Ld, upV));                          // mas fuerte con el sol bajo
+      float shG = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
+      float3 sunC = max(pLc_color.xyz, 0.0) * g_psScene.m_exposure.zzz;
+      r2.xyz += sunC * tr * (0.35 + 0.65 * low) * shG * STg.y * 0.35 * float3(1.0, 1.05, 0.55);
+    }
+  }
   // === PES21 luz de borde (17/10): con el sol detras del jugador, el contorno (hombros, pelo, brazos) se enciende.
   // Solo piel y kits, nunca el estadio. x46 fuerza, y46 ancho del borde (2 fino .. 5 muy fino), w46 on/off [Alt+Shift+R]
   {

@@ -140,7 +140,10 @@ bool CatalogStop(UINT bbW, UINT bbH, std::vector<const ShaderEntry*> all);
 void CatalogDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, const ShaderEntry* ps, UINT verts, int kind, UINT inst);
 void CatalogCS(const ShaderEntry* cs);
 void CatalogPresent();
-void CatalogDumpCBs();                           // proximo cuadro: volcar los cbuffers de composicion y luz del sol
+void CatalogDumpCBs();
+extern std::atomic<bool> g_grassProbeOn;
+void CatalogProbeGrass();                        // "Volcar pasto": mide las parcelas de pasto de un cuadro
+void CatalogGrassDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT start, INT base);                           // proximo cuadro: volcar los cbuffers de composicion y luz del sol
 
 struct DeviceState {
     ID3D11Device* dev = nullptr;

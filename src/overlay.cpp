@@ -380,6 +380,9 @@ static void DrawMenu() {
     ImGui::SameLine();
     if (ImGui::Button("Volcar cbuffers", ImVec2(130, 0))) CatalogDumpCBs();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Escribe catalog\\cbuffers.txt: los valores que el motor le pasa a la composicion y a la luz del sol\n(sol, exposicion, niebla, matrices de sombra) con el nombre de cada campo. Hacelo con un partido en pantalla.");
+    ImGui::SameLine();
+    if (ImGui::Button("Volcar pasto", ImVec2(110, 0))) CatalogProbeGrass();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Mide las parcelas de pasto que dibuja el juego en un cuadro (tamano, grilla, cantidad)\ny lo escribe en catalog\\grass.txt. Hacelo con un partido en pantalla.");
     { std::string cst = g_catalogStatus; if (!cst.empty()) { ImGui::SameLine(); ImGui::TextDisabled("%s", cst.c_str()); } }
     ImGui::Spacing();
 

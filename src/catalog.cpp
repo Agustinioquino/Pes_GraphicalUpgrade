@@ -4,6 +4,7 @@
 // uso real y rol inferido) y catalog\frame.txt (linea de tiempo del ultimo cuadro capturado).
 #include "core.h"
 #include <d3dcompiler.h>
+#include <d3d11_1.h>
 #include <algorithm>
 #include <fstream>
 #include <map>
@@ -126,7 +127,79 @@ void CatalogCS(const ShaderEntry* cs) {
     s_csSeen.insert(cs);
 }
 
+
+// ---------------------------------------------------------------- sonda del pasto ("Volcar pasto")
+// Durante un cuadro, por cada dibujo del VS del pasto (498b...) se anotan buffers e indices y se copia (en el mismo
+// contexto, en GPU) su cbuffer de objeto b5 (matrices de la parcela) y la posicion de la camara (b2) a un buffer
+// nuestro; dos cuadros despues se lee y se escribe catalog\grass.txt. Sirve para saber el tamano y la grilla de las
+// parcelas de pasto (para el pasto extendido).
+std::atomic<bool> g_grassProbeOn{false};
+static std::atomic<int> s_gpState{0};       // 0 nada, 1 armado, 2 grabando, 3 esperar, 4 leer
+static ID3D11Buffer* s_gpBuf = nullptr;
+static const int kGpMax = 2048, kGpStride = 160;   // b5 [0..128) + b2 eyepos [128..144) + relleno
+struct GpRec { int ctx; UINT count, start; INT base; void* ib; void* vb; UINT stride, voff; UINT cb5off, cb2off; };
+static GpRec s_gp[kGpMax]; static std::atomic<int> s_gpN{0};
+void CatalogProbeGrass() { if (s_gpState == 0) { s_gpState = 1; g_grassProbeOn = true; g_catalogStatus = "Sonda del pasto: esperando un cuadro de partido..."; } }
+void CatalogGrassDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT start, INT base) {
+    if (s_gpState != 2 || !vs || vs->hash != 0x498b30bad256e8edULL || !s_gpBuf) return;
+    int i = s_gpN.fetch_add(1); if (i >= kGpMax) return;
+    GpRec& r = s_gp[i]; r = GpRec{}; r.count = count; r.start = start; r.base = base;
+    { std::lock_guard<std::mutex> lk(s_capMutex); r.ctx = CtxId(c); }
+    ID3D11Buffer* ib = nullptr; DXGI_FORMAT f; UINT ioff = 0; c->IAGetIndexBuffer(&ib, &f, &ioff); r.ib = ib; if (ib) ib->Release();
+    ID3D11Buffer* vb = nullptr; c->IAGetVertexBuffers(0, 1, &vb, &r.stride, &r.voff); r.vb = vb; if (vb) vb->Release();
+    ID3D11Buffer* cb5 = nullptr; ID3D11Buffer* cb2 = nullptr; UINT f5 = 0, n5 = 0, f2 = 0, n2 = 0;
+    ID3D11DeviceContext1* c1 = nullptr;
+    if (SUCCEEDED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) && c1) {
+        c1->VSGetConstantBuffers1(5, 1, &cb5, &f5, &n5); c1->VSGetConstantBuffers1(2, 1, &cb2, &f2, &n2); c1->Release();
+    } else { c->VSGetConstantBuffers(5, 1, &cb5); c->VSGetConstantBuffers(2, 1, &cb2); }
+    r.cb5off = f5 * 16; r.cb2off = f2 * 16;
+    if (cb5) { D3D11_BOX b = { r.cb5off, 0, 0, r.cb5off + 128, 1, 1 }; c->CopySubresourceRegion(s_gpBuf, 0, i * kGpStride, 0, 0, cb5, 0, &b); cb5->Release(); }
+    if (cb2) { D3D11_BOX b = { r.cb2off + 320, 0, 0, r.cb2off + 336, 1, 1 }; c->CopySubresourceRegion(s_gpBuf, 0, i * kGpStride + 128, 0, 0, cb2, 0, &b); cb2->Release(); }
+}
+static void GrassProbePresent() {
+    int st = s_gpState;
+    if (st == 0) return;
+    if (st == 1) {
+        if (!s_gpBuf && g_dev.dev) {
+            D3D11_BUFFER_DESC d = {}; d.ByteWidth = kGpMax * kGpStride; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            g_dev.dev->CreateBuffer(&d, nullptr, &s_gpBuf);
+        }
+        if (!s_gpBuf) { s_gpState = 0; g_grassProbeOn = false; g_catalogStatus = "Sonda del pasto: no se pudo crear el buffer"; return; }
+        s_gpN = 0; s_gpState = 2; return;
+    }
+    if (st == 2) { s_gpState = 3; return; }
+    if (st == 3) { s_gpState = 4; return; }
+    // leer
+    s_gpState = 0; g_grassProbeOn = false;
+    int n = (std::min)((int)s_gpN, kGpMax);
+    std::wstring dir = g_cfg.baseDir + L"catalog\\"; CreateDirectoryW(dir.c_str(), nullptr);
+    std::ofstream f(dir + L"grass.txt", std::ios::binary | std::ios::trunc);
+    if (!f || n == 0) { g_catalogStatus = n == 0 ? "Sonda del pasto: no se dibujo pasto (entra a un partido)" : "Sonda: no se pudo escribir"; return; }
+    D3D11_BUFFER_DESC d = {}; s_gpBuf->GetDesc(&d); d.Usage = D3D11_USAGE_STAGING; d.BindFlags = 0; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    ID3D11Buffer* stg = nullptr; g_dev.dev->CreateBuffer(&d, nullptr, &stg);
+    if (!stg) { g_catalogStatus = "Sonda: sin staging"; return; }
+    g_dev.imm->CopyResource(stg, s_gpBuf);
+    D3D11_MAPPED_SUBRESOURCE m;
+    if (SUCCEEDED(g_dev.imm->Map(stg, 0, D3D11_MAP_READ, 0, &m))) {
+        f << "PES21 FX - sonda del pasto: " << n << " dibujos del VS 498b30bad256e8ed en un cuadro\r\n";
+        f << "# | ctx | indices start base | IB VB stride | cb5off | world fila0 | fila1 | fila2 (traslacion = .w) | viewWorld fila0 | eyepos\r\n";
+        for (int i = 0; i < n; i++) {
+            const float* q = (const float*)((const char*)m.pData + i * kGpStride);
+            const GpRec& r = s_gp[i];
+            char b[640];
+            snprintf(b, sizeof(b), "%d | %d | %u %u %d | %p %p %u | %u | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f\r\n",
+                i, r.ctx, r.count, r.start, r.base, r.ib, r.vb, r.stride, r.cb5off,
+                q[16], q[17], q[18], q[19], q[20], q[21], q[22], q[23], q[24], q[25], q[26], q[27], q[0], q[1], q[2], q[3], q[32], q[33], q[34]);
+            f << b;
+        }
+        g_dev.imm->Unmap(stg, 0);
+    }
+    stg->Release();
+    char b[96]; snprintf(b, sizeof(b), "Escrito catalog\\grass.txt (%d parcelas de pasto)", n); g_catalogStatus = b; Log("catalogo: %s", b);
+}
+
 void CatalogPresent() {
+    GrassProbePresent();
     { std::lock_guard<std::mutex> lk(s_capMutex); if (s_cbPending && !s_cbGrabs.empty()) { WriteCBs(); s_cbPending = false; if (!g_catalogActive) g_catalogHook = false; } }
     if (!g_catalogActive) return;
     std::lock_guard<std::mutex> lk(s_capMutex);
