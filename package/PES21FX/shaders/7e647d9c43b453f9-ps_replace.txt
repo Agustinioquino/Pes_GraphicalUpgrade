@@ -274,6 +274,7 @@ void main(
   // PES21 kits (Claude, 15/10): relieve mas marcado y oclusion de pliegues desde el propio relieve de la tela
   // x22 fuerza del relieve (1 = original), y22 oscurecido en pliegues (0 = nada), w22 on/off [Ctrl+Alt+Shift+F3]
   float pesKitCav = 1;
+  float pesSvDbg = 0.0;   // PES21 v3
   { float4 KS = IniParams.Load(int2(22,0));
     if (KS.w > 0.5) {
       float nz = saturate(r0.z);
@@ -330,6 +331,10 @@ void main(
     float2 dxu2 = ddx(v2.xy), dyu2 = ddy(v2.xy);
     float3 dxp = ddx(v3.xyz), dyp = ddy(v3.xyz);
     float3 nW = normalize(v6.xyz);
+    // 18/10 v3: compresion REAL medida por el simulador de ropa, codificada en el largo de la normal (1 + compresion).
+    // Es suave entre vertices (no se ven los triangulos). Si el simulador no la manda, vale 0 y queda la v2.
+    float svPhys = saturate(length(v6.xyz) - 1.0);
+    pesSvDbg = svPhys;
     float2 dxn = float2(length(ddx(nW)), length(ddy(nW)));
     if (WR.w > 0.5) {
       // metrica G = A^-T (B B^T) A^-1 : metros^2 por UV^2 (ver arriba)
@@ -357,12 +362,15 @@ void main(
         float curvW = saturate((dxn.x + dxn.y) / max(fpW * 0.002, 1e-4) * 0.08);
         // base continua: pliegues suaves siempre presentes (sin saltos entre triangulos) + parte dinamica encima
         float amtBase = 0.18;
-        float amt = saturate(amtBase + amtC + curvW * 0.4) * saturate(WR.x) * farW * (1.0 - 0.6 * pesPrint);
+        // v3: donde hay medicion fisica manda ella (suave); la medicion por triangulo (amtC) queda como respaldo atenuado
+        float amtP = smoothstep(0.0, 1.0, svPhys) * 0.9;
+        amtC = lerp(amtC, amtC * 0.25, saturate(svPhys * 4.0));
+        float amt = saturate(amtBase + amtP + amtC + curvW * 0.4) * saturate(WR.x) * farW * (1.0 - 0.6 * pesPrint);
         if (amt > 0.002) {
           // orientacion: con poca compresion las crestas siguen la trama (vertical del kit); con mucha, la compresion.
           // Asi la orientacion tampoco salta entre triangulos vecinos
           float2 cdir0 = float2(0.0, 1.0);
-          float wdir = saturate(amtC / 0.25);
+          float wdir = saturate(max(amtC / 0.25, amtP / 0.3));
           cdir = normalize(lerp(cdir0 * sign(dot(cdir0, cdir) + 1e-3), cdir, wdir));
           float2 ax = float2(-cdir.y, cdir.x);
           float sc = 7.0 / max(WR.z, 0.2);
@@ -437,6 +445,7 @@ void main(
   o3.zw = float2(0,0);
   o4.xyzw = float4(0,0,0,1);
   o0.xyz = o0.xyz * pesKitCav;   // PES21 kits: oclusion de pliegues
+  { float4 D80 = IniParams.Load(int2(80,0)); if (D80.x > 0.5) o0.xyz = float3(pesSvDbg, pesSvDbg * 0.25, 0.08); }   // diagnostico: compresion medida por la fisica
   o2.z = 0.9607843;   // PES21: marca de kit para la iluminacion de tela (los shaders de luz no usan o2.z en este material)
   return;
 }

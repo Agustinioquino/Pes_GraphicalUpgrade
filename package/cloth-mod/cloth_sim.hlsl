@@ -57,6 +57,11 @@
 #define PES_THIGH_REF      8.5    // PES21FX_LIVE_THIGH_REF   radio de referencia del muslo con el short puesto (cm)
 #define PES_ARM_REF        4.8    // radio de referencia del brazo con la manga puesta (cm)
 #define PES_LIMB_GAIN      1.0    // PES21FX_LIVE_LIMB_GAIN   cuanto pesa el grosor (0 = nada)
+// ARRUGAS DESDE LA FISICA (18/10 v3): el simulador mide por vertice cuanto se COMPRIME la tela (area de los triangulos
+// vecinos ahora / en reposo) y lo codifica en el LARGO de la normal de salida (1 = nada .. 2 = maximo). El shader de kit
+// de PES21 FX lo lee (la interpolacion entre vertices es suave: no se ven los triangulos) y pone los pliegues ahi.
+#define PES_STRAIN_ENC     1      // PES21FX_LIVE_STRAIN
+#define PES_STRAIN_GAIN    6.0    // 1/6 = 17 % de perdida de area -> maximo
 // COMPARACION: PES_CLOTH_FX = 0 deja el simulador como viene de fabrica (todas las mejoras de PES21 FX neutras).
 // Lo escribe PES21 FX desde el menu (Ropa (fisica) -> Comparar con la version base).
 #define PES_CLOTH_FX       1      // PES21FX_LIVE_CLOTH_FX
@@ -101,6 +106,8 @@
 #define PES_SHIRT_LIFT 0.0
 #undef PES_LIMB_GAIN
 #define PES_LIMB_GAIN 0.0
+#undef PES_STRAIN_ENC
+#define PES_STRAIN_ENC 0
 #endif
 cbuffer Bones : register(b0) { float4 g_bones[192]; };
 cbuffer Obj   : register(b1) { float4 g_obj[18]; };
@@ -1024,6 +1031,23 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
             if (gi < P) storeParticle(gi, vel0);
             if (gi + THREADS < P) storeParticle(gi + THREADS, vel1);
         }
+        // PES21 FX: compresion por particula (antes de pisar g_pnrm, que todavia tiene las posiciones de reposo)
+        float strainA = 0.0, strainB = 0.0;
+        if (PES_STRAIN_ENC) {
+            for (uint ps = gi; ps < P && !(s_flags & (1 << 12)); ps += THREADS) {
+                float aNow = 0.0, aRest = 0.0;
+                for (uint j = g_adjOff[ps]; j < g_adjOff[ps + 1]; ++j) {
+                    uint4 tr = g_tris[g_adjTri[j]];
+                    aNow += length(cross(gx[tr.y] - gx[tr.x], gx[tr.z] - gx[tr.x]));
+                    float3 ra = g_pnrm[s_pnrmBase + tr.x].xyz, rb = g_pnrm[s_pnrmBase + tr.y].xyz, rc = g_pnrm[s_pnrmBase + tr.z].xyz;
+                    aRest += length(cross(rb - ra, rc - ra));
+                }
+                float ratio = aRest > 1e-10 ? aNow / aRest : 1.0;
+                float st = saturate((1.0 - ratio) * PES_STRAIN_GAIN);
+                if (ps == gi) strainA = st; else strainB = st;
+            }
+            DeviceMemoryBarrierWithGroupSync();
+        }
         for (uint p = gi; p < P && !(s_flags & (1 << 12)); p += THREADS) {
             float3 n = 0;
             for (uint j = g_adjOff[p]; j < g_adjOff[p + 1]; ++j) {
@@ -1031,7 +1055,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                 n += cross(gx[tr.y] - gx[tr.x], gx[tr.z] - gx[tr.x]);
             }
             n *= g_normalSign;
-            g_pnrm[s_pnrmBase + (p)] = float4(n, 0);
+            g_pnrm[s_pnrmBase + (p)] = float4(n, (p == gi) ? strainA : strainB);
         }
         DeviceMemoryBarrierWithGroupSync();
     }
@@ -1055,6 +1079,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
             float3 nRest = normalize(mul(A, nB));
             float3 tRest = mul(A, tB);
             float3 n = g_pnrm[s_pnrmBase + (p)].xyz;
+            float strainO = PES_STRAIN_ENC ? saturate(g_pnrm[s_pnrmBase + (p)].w) : 0.0;   // PES21 FX: compresion (0..1)
             n = dot(n, n) > 1e-12 ? normalize(n) : nRest;
             float3 t = rotateBetween(nRest, n, tRest);
             float det;
@@ -1063,7 +1088,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
             uint4 outNT = nt;
             if (abs(det) > 1e-8 && all(isfinite(x))) {
                 outV = mul(Ai, x - tr);
-                float3 nb = normalize(mul(Ai, n));
+                float3 nb = normalize(mul(Ai, n)) * (1.0 + strainO);   // PES21 FX: largo de la normal = 1 + compresion (lo lee el shader de kit)
                 float3 tb = normalize(mul(Ai, t));
                 outNT.x = packHalf2(nb.x, nb.y);
                 outNT.y = f32tof16(nb.z) | (nt.y & 0xffff0000);
