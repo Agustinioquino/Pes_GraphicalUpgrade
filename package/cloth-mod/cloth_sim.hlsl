@@ -807,7 +807,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                 // Eje = vertical (gravedad), centro = centroide de la tela de cuerpo; 8 rodajas con su elipse (min/max en dos
                 // ejes horizontales) medidas de la tela en reposo sin holgura y sin mangas. En collideParticle la tela no
                 // puede entrar en esa elipse: el cuerpo deja de estar vacio por debajo.
-                if (PES_TORSO_ON && (g_legCount == 0 ? s == 0 : true)) {   // camiseta: 1 vez por cuadro; short: cada sub-paso (las piernas van rapido)
+                if (PES_TORSO_ON) {   // cada sub-paso (fxc exige que las barreras no dependan de datos; el costo es chico)
                     if (gi < 4) gTorsoSum[gi] = 0;
                     if (gi < 2) gTorsoH[gi] = gi == 0 ? 0x7f7fffffu : 0u;
                     if (gi < PES_TORSO_BANDS) { gTorsoB[gi][0] = 0x7f7fffffu; gTorsoB[gi][1] = 0u; gTorsoB[gi][2] = 0x7f7fffffu; gTorsoB[gi][3] = 0u; }
