@@ -11,7 +11,7 @@
 #include <cmath>
 #include <algorithm>
 
-void Log(const char* fmt, ...);
+namespace fx {
 
 struct MenuTestResult { std::string group, section; float diff = 0; int state = 0; };   // 0 sin cambio, 1 cambia, 2 no probado
 struct MenuTestState {
@@ -173,3 +173,5 @@ void MenuTestPresent(IDXGISwapChain* sc) {
         s_t.wait = 8;
     }
 }
+
+} // namespace fx
