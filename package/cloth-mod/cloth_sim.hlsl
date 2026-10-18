@@ -856,11 +856,12 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                 // PES21 FX (18/10): brazos como volumen. Cada manga se divide en 4 tramos por su peso de manga (0 hombro ..
                 // 1 puno); por tramo, el centro de la tela en reposo (sin holgura) y el radio minimo. Se rehace cada sub-paso
                 // porque el brazo se mueve rapido. Lado = signo respecto del eje de anchura del torso.
-                if (PES_ARM_ON && s_tOk) {   // camiseta: mangas por peso de manga; short: dos piernas por altura (cintura -> ruedo)
+                if (PES_ARM_ON) {   // camiseta: mangas por peso de manga; short: dos piernas por altura (cintura -> ruedo)
+                    // (las barreras quedan fuera de todo if dependiente de datos: fxc X3663)
                     if (gi < 2 * PES_ARM_BANDS * 4) gArmSum[gi / (PES_ARM_BANDS * 4)][(gi / 4) % PES_ARM_BANDS][gi % 4] = 0;
                     if (gi < 2 * PES_ARM_BANDS) gArmR[gi / PES_ARM_BANDS][gi % PES_ARM_BANDS] = 0x7f7fffffu;
                     GroupMemoryBarrierWithGroupSync();
-                    for (uint pa = gi; pa < P; pa += THREADS) {
+                    if (s_tOk) for (uint pa = gi; pa < P; pa += THREADS) {
                         float3 rr = (pa == gi) ? rest10 : rest11, rn = (pa == gi) ? rnrm10 : rnrm11;
                         if (dot(rr, rr) < 1e-8 || dot(rn, rn) < 1e-8) continue;
                         float3 r0f = rr - rn * g_rest[pa].nrm.w;
@@ -880,7 +881,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                             s_armC[sd0][bb] = float3(gArmSum[sd0][bb][0], gArmSum[sd0][bb][1], gArmSum[sd0][bb][2]) / (10000.0 * max(n, 1));
                         }
                     }
-                    for (uint pb = gi; pb < P; pb += THREADS) {
+                    if (s_tOk) for (uint pb = gi; pb < P; pb += THREADS) {
                         float3 rr = (pb == gi) ? rest10 : rest11, rn = (pb == gi) ? rnrm10 : rnrm11;
                         if (dot(rr, rr) < 1e-8 || dot(rn, rn) < 1e-8) continue;
                         float3 r0f = rr - rn * g_rest[pb].nrm.w;
@@ -899,6 +900,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                     [unroll] for (uint sd1 = 0; sd1 < 2; ++sd1) [unroll] for (uint bb1 = 0; bb1 < PES_ARM_BANDS; ++bb1) {
                         float r = asfloat(gArmR[sd1][bb1]); s_armR[sd1][bb1] = (r < 0.5) ? r : 0.0;
                     }
+                    if (!s_tOk) { s_armOk[0] = false; s_armOk[1] = false; }
                 } else { s_armOk[0] = false; s_armOk[1] = false; }
                 if ((s_flags & 128) && g_legCount) {
                     uint lb = (s_palBase / (2 * MAXPARTS * 192)) * g_legCount * 2;
