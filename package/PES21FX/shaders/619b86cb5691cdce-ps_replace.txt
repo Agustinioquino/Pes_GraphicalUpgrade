@@ -525,6 +525,18 @@ void main(
       float so = saturate(pow(max(ndvS + aoK, 1e-4), exp2(-16.0 * roughS - 1.0)) - 1.0 + aoK);
       aoS = lerp(aoK, so, saturate(AOP.y));
     }
+    // PES21 micro-sombras (18/10, Naughty Dog "micro-shadowing"): los poros, pliegues y la trama de la tela se hacen
+    // sombra a si mismos con la luz rasante del sol. La apertura la da la oclusion ambiental; solo del lado iluminado.
+    // x88 fuerza, y88 on/off
+    { float4 MS = IniParams.Load(int2(88,0));
+      if (MS.y > 0.5 && MS.x > 0.0 && geoOk && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {
+        float ndlM = dot(Nsk, normalize(pLc_dir.xyz));
+        float aper = 2.0 * aoRaw * aoRaw;
+        float micro = saturate(abs(ndlM) + aper - 1.0);
+        float litSide = saturate(ndlM * 4.0);                         // solo donde pega el sol
+        float msK = lerp(1.0, micro, saturate(MS.x) * litSide);
+        diffC *= msK; specC *= lerp(1.0, msK, 0.5);
+      } }
     r0.xyw = diffC * aoD + specC * aoS;
   } else {
     r1.xyz = r7.xyz * r2.xyz + r1.xyz;

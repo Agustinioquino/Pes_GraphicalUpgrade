@@ -114,7 +114,7 @@ float3 PESSunColor() {
 // y20: 0 = filtro original del juego, 1 = estable 16 muestras, 2 = PCSS (nitida al pie, mas suave lejos)
 // z20 radio en texeles | x21 escala PCSS, y21 radio maximo, z21 radio de busqueda | w21 = 1 rotar por frame (DLSS/TAA)
 static float g_pesDynMinR = 0.0;   // PES21 sol dinamico: radio minimo del filtro (lo fija main)
-float PESShadowFilter(float2 uv, float ref, float cas, float2 pix, float orig, float rscale)
+float PESShadowFilter(float2 uv, float ref, float cas, float2 pix, float orig, float rscale, float2 dzduv)
 {
   float4 SH = IniParams.Load(int2(20,0));
   float4 SQ = IniParams.Load(int2(21,0));
@@ -127,25 +127,44 @@ float PESShadowFilter(float2 uv, float ref, float cas, float2 pix, float orig, f
   if (SQ.w > 0.5) p += frac(g_psSystem.m_timeParam.z * 61.8034) * 97.0;
   float rot = 6.2831853 * frac(52.9829189 * frac(dot(p, float2(0.06711056, 0.00583715))));
   float radius = max(max(SH.z, g_pesDynMinR), 0.5) * rscale;
+  // PES21 sombras fisicas (18/10): x87 sesgo por plano receptor | z87 penumbra fisica por tamano del sol | w87 tope del ajuste (x0.001 por texel)
+  float4 PH = IniParams.Load(int2(87,0));
+  float limT = (PH.w > 0.0 ? PH.w : 10.0) * 0.001;
+  bool rpb = PH.x > 0.5;
+  float casS = cas < 0.5 ? 1.0 : (cas < 1.5 ? g_psScene.m_shadowProjection2._m03 : g_psScene.m_shadowProjection2._m13);
   if (SH.y > 1.5) {
     float searchR = max(SQ.z, 1.0);
     float bsum = 0, bcnt = 0;
     [unroll] for (int j = 0; j < 8; j++) {
       float rj = sqrt((j + 0.5) / 8.0);
       float aj = j * 2.39996323 + rot;
-      float2 suj = clamp(uv + float2(cos(aj), sin(aj)) * (rj * searchR) * tx, lo, hi);
+      float2 offj = float2(cos(aj), sin(aj)) * (rj * searchR) * tx;
+      float2 suj = clamp(uv + offj, lo, hi);
+      float refj = ref + (rpb ? clamp(dot(offj, dzduv), -limT * rj * searchR, limT * rj * searchR) : 0.0);
       float d = g_ShadowTexture.SampleLevel(g_samplerPoint_Clamp_s, suj, 0).x;
-      if (d > ref) { bsum += d - ref; bcnt += 1; }
+      if (d > refj) { bsum += d - refj; bcnt += 1; }
     }
     if (bcnt < 0.5) return 1.0;
-    radius = clamp((bsum / bcnt) * SQ.x, max(0.5, g_pesDynMinR), max(SQ.y, 1.0));
+    float avgB = bsum / bcnt;
+    float4 P64s = IniParams.Load(int2(64,0));
+    if (PH.z > 0.5 && P64s.x > 0.5 && P64s.y > 0.0) {
+      // penumbra fisica: ancho = distancia receptor-oclusor x tan(diametro angular del sol), pasado a texeles de esta cascada
+      float refPerM = max(length(g_psScene.m_shadowProjection._m02_m12_m22) * abs(g_psScene.m_shadowProjection2._m30) * abs(casS), 1e-6);
+      float texPerM = length(g_psScene.m_shadowProjection._m00_m10_m20) * abs(casS) * res * 0.5;
+      float distM = avgB / refPerM;
+      float penTex = distM * tan(radians(P64s.y)) * texPerM * (SQ.x > 0 ? SQ.x / 200.0 : 1.0);   // x21 = 200 -> 1:1 fisico
+      radius = clamp(penTex, max(0.5, g_pesDynMinR), max(SQ.y, 1.0));
+    } else radius = clamp(avgB * SQ.x, max(0.5, g_pesDynMinR), max(SQ.y, 1.0));
   }
   float sum = 0;
   [unroll] for (int i = 0; i < 16; i++) {
     float ri = sqrt((i + 0.5) / 16.0);
     float ai = i * 2.39996323 + rot;
-    float2 sui = clamp(uv + float2(cos(ai), sin(ai)) * (ri * radius) * tx, lo, hi);
-    sum += g_ShadowTexture.SampleCmpLevelZero(g_samplerComparisonLess_Linear_Clmap_s, sui, ref).x;
+    float2 offi = float2(cos(ai), sin(ai)) * (ri * radius) * tx;
+    float2 sui = clamp(uv + offi, lo, hi);
+    // plano receptor: cada muestra se compara con la profundidad que el plano de la superficie tiene en ESE texel
+    float refi = ref + (rpb ? clamp(dot(offi, dzduv), -limT * ri * radius, limT * ri * radius) : 0.0);
+    sum += g_ShadowTexture.SampleCmpLevelZero(g_samplerComparisonLess_Linear_Clmap_s, sui, refi).x;
   }
   return 1.0 - sum / 16.0;
 }
@@ -281,6 +300,9 @@ void main(
   r12.z = g_psScene.m_shadowProjection2._m30 * r0.x;
   r0.x = 1 + r1.x;
   r13.z = g_psScene.m_shadowProjection2._m30 * r0.x;
+  // PES21 sombras fisicas (18/10): candidatas de las 3 cascadas (xy en [-1,1] de cada cascada, z = profundidad de referencia)
+  float3 pesCas[3] = { float3(r11.xy, r11.z), float3(r12.xy, r12.z), float3(r13.xy, r13.z) };
+  float pesBound = sqrt(max(r0.y, 0.0));
   r0.xw = r11.xy * r11.xy;
   r1.xw = r12.xy * r12.xy;
   r5.zw = r13.xy * r13.xy;
@@ -325,8 +347,15 @@ void main(
   r1.xw = -r9.zw * float2(2,2) + float2(1,1);
   r12.xy = min(r1.xw, r0.xy);
   r12.z = r11.x * 0.333333343 + r12.y;
+  float2 pesHalfTx = r9.zw;   // PES21: medio texel del atlas (x, y/3)
   r9.xyzw = r12.xzxz + r9.xyzw;
   float2 pesShUV = r9.zw; float pesShCas = r11.x; float pesShRef = r0.w;   // PES21 sombras v2
+  float pesShRefBase = pesShRef;
+  // PES21 sombras fisicas (18/10): gradiente de la profundidad de sombra respecto de las UV del shadow map (plano receptor, Isidoro 2006)
+  float2 pesDzduv = 0.0;
+  { float2 duvdx = ddx(pesShUV), duvdy = ddy(pesShUV); float dzdx = ddx(pesShRef), dzdy = ddy(pesShRef);
+    float detR = duvdx.x * duvdy.y - duvdx.y * duvdy.x;
+    if (abs(detR) > 1e-14) pesDzduv = float2(duvdy.y * dzdx - duvdx.y * dzdy, -duvdy.x * dzdx + duvdx.x * dzdy) / detR; }
   // === PES21 sol dinamico (17/10): el Daylight Engine mueve el sol cada cuadro y lo deja bajo. Con el sol rasante
   // el shadow map hace acne (rayas en pasto y cara) y el borde repta al moverse. x53 sesgo de plano receptor (crece
   // solo donde la superficie es rasante a la luz, y mas con el sol bajo), y53 radio minimo del filtro en texeles
@@ -373,7 +402,22 @@ void main(
   // PES21 piel (16/10): sobre la cara el borde de la sombra del sol se filtra mas ancho (x34) -> sin escalones
   float4 P34 = IniParams.Load(int2(34,0));
   float pesShScale = (P34.w > 0.5 && matType == 0 && abs(skinTag - 0.98039) < 0.003) ? max(P34.x, 1.0) : 1.0;
-  r0.x = PESShadowFilter(pesShUV, pesShRef, pesShCas, v2.xy, r0.x, pesShScale);   // PES21 sombras v2
+  r0.x = PESShadowFilter(pesShUV, pesShRef, pesShCas, v2.xy, r0.x, pesShScale, pesDzduv);   // PES21 sombras v2 + plano receptor
+  // PES21 fusion de cascadas (18/10): en la franja del borde de la cascada se mezcla con la siguiente (sin salto de nitidez). y87 = ancho
+  { float4 PHb = IniParams.Load(int2(87,0)); float4 SHb = IniParams.Load(int2(20,0));
+    if (PHb.y > 0.001 && SHb.y > 0.5 && pesShCas > -0.5 && pesShCas < 1.5) {
+      int ci = (int)(pesShCas + 0.5); float3 curC = pesCas[ci]; float3 nxC = pesCas[ci + 1];
+      float eC = max(abs(curC.x), abs(curC.y));
+      float wB = smoothstep(pesBound - PHb.y, pesBound, eC);
+      if (wB > 0.001 && nxC.z >= 0.0 && max(abs(nxC.x), abs(nxC.y)) < pesBound) {
+        float casN = ci + 1.0;
+        float sc0 = ci == 0 ? 1.0 : g_psScene.m_shadowProjection2._m03;
+        float sc1 = ci == 0 ? g_psScene.m_shadowProjection2._m03 : g_psScene.m_shadowProjection2._m13;
+        float2 uvN = float2(min(1.0 - 2.0 * pesHalfTx.x, nxC.x * 0.5 + 0.5) + pesHalfTx.x, casN / 3.0 + min(1.0 - 2.0 * pesHalfTx.y, (1.0 - (nxC.y * 0.5 + 0.5)) / 3.0) + pesHalfTx.y);
+        float refN = max(9.99999997e-007, nxC.z) + (pesShRef - pesShRefBase) * (sc1 / max(sc0, 1e-6));
+        float sN = PESShadowFilter(uvN, refN, casN, v2.xy, 1.0, pesShScale, pesDzduv);
+        r0.x = lerp(r0.x, sN, wB);
+      } } }
   { float4 SH = IniParams.Load(int2(20,0));   // PES21 (Claude): definicion de sombras, x20 fuerza, w20 on/off
     if (SH.w > 0.5 && pesShScale < 1.01) { float sd = saturate(SH.x) * 1.0; float lo = 0.3 * sd;
       r0.x = lerp(r0.x, smoothstep(lo, 1.0 - lo, r0.x), sd); } }   // solo la penumbra (0 y 1 no cambian)
