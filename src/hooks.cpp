@@ -126,6 +126,39 @@ static ID3DBlob* CompileFile(uint64_t hash, const char* type, const char* profil
     return code;
 }
 
+// shaders propios por nombre (generadores): shaders\<file>, con #include y cache como los demas
+ID3DBlob* CompileNamedShader(const wchar_t* file, const char* profile) {
+    if (!s_compile) return nullptr;
+    std::string src;
+    if (!ReadFileA(g_cfg.baseDir + L"shaders\\" + file, src)) { Log("shader %ls: no encontrado", file); return nullptr; }
+    uint64_t srcHash = Fnv64(src.data(), src.size()) ^ 0x50455346414345ULL;
+    if (src.find("#include") != std::string::npos) srcHash ^= IncludesHash();
+    uint64_t nameHash = 0; for (const wchar_t* p = file; *p; p++) nameHash = nameHash * 31 + *p;
+    std::wstring cpath = CachePath(nameHash, profile, srcHash);
+    {
+        std::string bin;
+        if (s_createBlob && ReadFileA(cpath, bin) && !bin.empty()) {
+            ID3DBlob* b = nullptr;
+            if (SUCCEEDED(s_createBlob(bin.size(), &b)) && b) { memcpy(b->GetBufferPointer(), bin.data(), bin.size()); return b; }
+        }
+    }
+    ID3DBlob *code = nullptr, *err = nullptr;
+    char name[96]; snprintf(name, sizeof(name), "%ls", file);
+    HRESULT hr = s_compile(src.data(), src.size(), name, nullptr, &s_include, "main", profile, D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &err);
+    if (FAILED(hr)) {
+        std::string e = err ? std::string((const char*)err->GetBufferPointer(), err->GetBufferSize()) : "error desconocido";
+        Log("ERROR compilando %s:\n%s", name, e.c_str());
+        { std::lock_guard<std::mutex> lk(g_errMutex); g_compileErrors.push_back(std::string(name) + ": " + e.substr(0, 300)); }
+        if (err) err->Release(); if (code) code->Release();
+        return nullptr;
+    }
+    if (err) err->Release();
+    CreateDirectoryW((g_cfg.baseDir + L"shaders\\cache").c_str(), nullptr);
+    HANDLE h = CreateFileW(cpath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+    if (h != INVALID_HANDLE_VALUE) { DWORD wr; WriteFile(h, code->GetBufferPointer(), (DWORD)code->GetBufferSize(), &wr, nullptr); CloseHandle(h); }
+    return code;
+}
+
 // ---------------------------------------------------------------- tabla de shaders creados por el juego
 static std::unordered_map<void*, ShaderEntry> s_shaders;   // nodos estables: los punteros a ShaderEntry no se invalidan
 static std::shared_mutex s_shMutex;
@@ -389,6 +422,14 @@ static void RunRule(ID3D11DeviceContext* c, const ShaderEntry* e, DrawScope& d) 
             if (v) { Remember(c, d, ps, true, a.slot); if (ps) c->PSSetShaderResources(a.slot, 1, &v); else c->VSSetShaderResources(a.slot, 1, &v); }
             break; }
         case RuleAction::EventTurf: OnTurfDrawn(); break;
+        case RuleAction::FaceGen: {
+            if (!ps) break;
+            ID3D11ShaderResourceView *fa = nullptr, *fb = nullptr;
+            if (FaceGenLookup(c, &fa, &fb)) {
+                Remember(c, d, true, true, a.slot); c->PSSetShaderResources(a.slot, 1, &fa);
+                Remember(c, d, true, true, a.idx);  c->PSSetShaderResources(a.idx, 1, &fb);
+            }
+            break; }
         case RuleAction::SetParam: break;   // ya resuelto con la textura de parametros alternativa
         }
     }
@@ -615,6 +656,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     PollMatch();
     CatalogPresent();
     GrassPresent();
+    FaceGenPresent();
     MenuTestPresent(sc);
     OverlayPresent(sc);
     return o_Present(sc, sync, flags);
@@ -669,6 +711,7 @@ void WatchShaderFolder() {
 
 void ReloadShaders() {
     ScanShaderFolder();
+    FaceGenReloadShaders();
     std::unique_lock<std::shared_mutex> lk(s_shMutex);
     int n = 0;
     { std::lock_guard<std::mutex> lk2(g_errMutex); g_compileErrors.clear(); }

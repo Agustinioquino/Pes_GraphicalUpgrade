@@ -56,7 +56,7 @@ struct MenuGroup {
 
 // ---------------------------------------------------------------- reglas por shader (lo que eran [ShaderOverride])
 struct RuleAction {
-    enum Kind { CopyCB, RefSRV, BindCB, BindSRV, SetParam, EventTurf } kind;
+    enum Kind { CopyCB, RefSRV, BindCB, BindSRV, SetParam, EventTurf, FaceGen } kind;   // FaceGen: slot = mapa A, idx = mapa B
     int slot = 0;
     std::string name;          // recurso con nombre, o "file:ruta.dds"
     int idx = 0, comp = 0;     // SetParam
@@ -170,6 +170,10 @@ extern DeviceState g_dev;
 
 // ---------------------------------------------------------------- overlay
 void OverlayPresent(IDXGISwapChain* sc);
+// quinta textura de la cara generada en vivo (facegen.cpp)
+bool FaceGenLookup(ID3D11DeviceContext* c, ID3D11ShaderResourceView** outA, ID3D11ShaderResourceView** outB);
+void FaceGenPresent(); void FaceGenClear(); void FaceGenReloadShaders(); int FaceGenCount();
+struct ID3D10Blob; ID3D10Blob* CompileNamedShader(const wchar_t* file, const char* profile);   // shaders\<file> con #include
 // prueba automatica del menu (menutest.cpp)
 void MenuTestPresent(IDXGISwapChain* sc);
 void MenuTestStart(); void MenuTestStop(); bool MenuTestActive();

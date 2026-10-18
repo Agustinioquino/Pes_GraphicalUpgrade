@@ -235,6 +235,7 @@ bool LoadConfig() {
                 r->hasParamOverride = true;
             }
             else if (k == "event" && Lower(v) == "turf") a.kind = RuleAction::EventTurf;
+            else if (k == "facegen") { a.kind = RuleAction::FaceGen; ss >> a.slot >> a.idx; if (a.idx <= 0) a.idx = a.slot + 1; }
             else continue;
             r->actions.push_back(a);
         }
@@ -434,7 +435,7 @@ void PollKeys(bool focused) {
 
 void OnTurfDrawn() {
     double t = Now();
-    if (t - s_lastTurf > 20.0) s_matchStart = t;   // cancha sin dibujarse 20 s y vuelve = partido nuevo
+    if (t - s_lastTurf > 20.0) { s_matchStart = t; FaceGenClear(); }   // cancha sin dibujarse 20 s y vuelve = partido nuevo
     s_lastTurf = t;
 }
 

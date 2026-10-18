@@ -53,9 +53,9 @@ jobs:
           if (-not $fxc) { "fxc no encontrado" | Set-Content shadercheck.txt; Write-Host "fxc no encontrado"; exit 0 }
           $bad = 0; $n = 0
           "" | Set-Content shadercheck.txt
-          Get-ChildItem package/PES21FX/shaders/*_replace.txt | ForEach-Object {
+          Get-ChildItem package/PES21FX/shaders/*_replace.txt, package/PES21FX/shaders/*.hlsl | ForEach-Object {
             $n++
-            $t = if ($_.Name -match '-ps_') { 'ps_5_0' } elseif ($_.Name -match '-vs_') { 'vs_5_0' } else { 'cs_5_0' }
+            $t = if ($_.Name -match '-ps_|_ps\.hlsl') { 'ps_5_0' } elseif ($_.Name -match '-vs_|_vs\.hlsl') { 'vs_5_0' } else { 'cs_5_0' }
             $r = & $fxc.FullName /nologo /T $t /E main /I package/PES21FX/shaders /Fo NUL $_.FullName 2>&1 | Out-String
             if ($LASTEXITCODE -ne 0) { $bad++; Add-Content shadercheck.txt ("==== " + $_.Name + "`n" + $r) }
           }
