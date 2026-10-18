@@ -38,6 +38,7 @@
 #define PES_FIT_FAT        6.0    // PES21FX_LIVE_FIT_FAT    mm mas pegada en el cuerpo mas ancho
 #define PES_FIT_RANGE      0.15   // PES21FX_LIVE_FIT_RANGE  escala de hueso (+-) con la que se llega al maximo
 #define PES_CAP_FIT        0.94   // (18/10) capsulas ajustadas: radio = la distancia minima de la tela en reposo al eje del hueso x esto (0 = radio del mod)
+#define PES_CAP_MAXPUSH    0.006  // (18/10) empuje maximo de una capsula por sub-paso (m): sin esto la tela salia volando al mover el brazo
 #define PES_FIT_HANG       2.5    // delgado: la remera cuelga mas larga (metros de caida por metro de holgura: 10 mm -> 2.5 cm)
 #define PES_FIT_CLING      0.15   // ancho: la tela que queda separada del cuerpo se acerca a el por sub-paso
 cbuffer Bones : register(b0) { float4 g_bones[192]; };
@@ -479,9 +480,13 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
             float R = max(min(best - g_collisionInset, gCapR[own] * g_capsuleRadiusScale), 0.0);
             if (dd < R && dd > 1e-6) {
                 float3 corr = dq * (R / dd - 1.0);
+                // PES21 FX (18/10): empuje acotado y sin inyectar velocidad (la capsula del brazo se mueve rapido
+                // respecto del reposo de la tela y el empuje completo la disparaba)
+                float cl = length(corr);
+                if (cl > PES_CAP_MAXPUSH) corr *= PES_CAP_MAXPUSH / cl;
                 x += corr;
-                xPrev += corr * (1.0 - g_bodyBounce);
-                dd = R;
+                xPrev += corr;
+                dd = length(x - q);
             }
             contactD = dd - R;
         }
