@@ -105,6 +105,14 @@ float3 PESSunColor() {
   return res;
 }
 // === FIN SOL ===
+// PES21 (18/10): terminador suave SIN correr la luz. Igual a max(NdotL,0) cuando NdotL >= w (lado iluminado intacto,
+// misma direccion que el sol); entre -w y w una curva suave (C1) que solo entra un poco en la sombra.
+float3 PESSoftTerm(float nl, float3 w) {
+  w = max(w, 1e-3);
+  float3 x = nl.xxx;
+  float3 s = (x + w) * (x + w) / (4.0 * w);
+  return x >= w ? x : (x > -w ? s : 0.0);
+}
 void main(
   float4 v0 : TEXCOORD0,
   float4 v1 : TEXCOORD1,
@@ -229,8 +237,9 @@ void main(
   bool isSkin = sssOn && (matType == 0) && (trans > 0.004) && (abs(skinTag - 0.98039) < 0.003);
   if (isSkin) {
     float3 w = saturate(trans) * sssWidth * float3(1.0, 0.42, 0.28);
-    float3 d = saturate((rawNdotL + w) / (1.0 + w));
-    d = max(d, transFloor.xxx);
+    w = min(w * 0.35, float3(0.40, 0.22, 0.16));                 // 18/10: ancho del borde acotado (antes envolvia la cara y corria la luz)
+    float3 d = saturate(PESSoftTerm(rawNdotL, w));
+    d = max(d, min(transFloor, 0.08).xxx);                     // piso de translucidez del motor, acotado (no ilumina el lado de atras)
     r3.xyz = d * r1.yzw;
   }
   r4.xyz = r8.xyz * r2.zzz;
