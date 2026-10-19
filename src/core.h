@@ -102,6 +102,9 @@ struct Config {
     bool bypass = false;                       // ver el juego original
     // [PES21FX] para aislar problemas: replace_shaders / rules / overlay = 0 apagan cada parte
     bool tutorials = true;                     // tarjetas de tutorial al abrir cada pestana ([PES21FX] tutorials)
+    std::string favorites;                     // 19/10: titulos de grupos favoritos separados por '|' ([PES21FX] favoritos)
+    float uiScale = 1.0f;                      // 19/10: tamano del menu ([PES21FX] ui_scale)
+    bool compact = false;                      // 19/10: grupos contraidos por defecto ([PES21FX] compacto)
     bool optReplace = true, optRules = true, optOverlay = true, optPin = false, optHooks = true, optDxgi = true, optPresent = true, optCtx = true, optExports = true, optOrphan = true, optDump = false;
 };
 extern Config g_cfg;

@@ -100,18 +100,66 @@ static void Init(IDXGISwapChain* sc) {
         Log("logo del menu: %s", s_logo ? "ok" : "no encontrado (textures\\pes_editor_logo.dds)");
     }
     s_init = true;
+    ImGui::GetIO().FontGlobalScale = g_cfg.uiScale;
     Log("menu listo (tecla Insert)");
 }
+
+// --- 19/10: comodidad del menu: busqueda, favoritos, contraer grupos, "solo activos", tamano ---
+static char s_search[96] = "";
+static bool s_onlyActive = false;
+static bool s_focusSearch = false;
+static std::map<std::string, bool> s_collapsed;   // titulo -> contraido (sesion)
+static int s_collapseAll = 0;                     // 1 = contraer todo, 2 = expandir todo (se aplica en el proximo dibujo)
+static std::string LowerU(std::string x) { for (auto& ch : x) ch = (char)tolower((unsigned char)ch); return x; }
+static bool IsFav(const std::string& title) { return (g_cfg.favorites.find("|" + title + "|") != std::string::npos); }
+static void SetFav(const std::string& title, bool on) {
+    std::string f = g_cfg.favorites; if (f.empty() || f[0] != '|') f = "|" + f; if (f.back() != '|') f += "|";
+    size_t p = f.find("|" + title + "|");
+    if (on && p == std::string::npos) f += title + "|";
+    if (!on && p != std::string::npos) f.erase(p, title.size() + 1);
+    if (f == "|") f.clear();
+    g_cfg.favorites = f; SaveOption("favoritos", f);
+}
+static bool GroupMatches(const MenuGroup& g, const std::string& q) {
+    if (q.empty()) return true;
+    std::string hay = LowerU(g.title + " " + g.desc + " " + g.section);
+    for (auto& sl : g.sliders) hay += " " + LowerU(sl.label);
+    // todas las palabras de la busqueda tienen que aparecer
+    size_t a = 0; while (a < q.size()) { size_t b = q.find(' ', a); if (b == std::string::npos) b = q.size(); std::string w = q.substr(a, b - a); if (!w.empty() && hay.find(w) == std::string::npos) return false; a = b + 1; }
+    return true;
+}
+static bool GroupActive(const MenuGroup& g) { return g.tIdx < 0 || g_cfg.live[g.tIdx][g.tComp] > 0.5f; }
 
 static void DrawGroup(MenuGroup& g, int gid) {
     ImGui::PushID(1000 + gid);
     ImGui::BeginChild("card", ImVec2(0, 0), ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_FrameStyle);
     bool hasT = g.tIdx >= 0;
     bool on = hasT ? (g_cfg.live[g.tIdx][g.tComp] > 0.5f) : true;
+    // contraer / favorito / restablecer (fila de la derecha)
+    if (s_collapsed.find(g.title) == s_collapsed.end()) s_collapsed[g.title] = g_cfg.compact;
+    bool& col = s_collapsed[g.title];
+    float rightW = 96; float availW = ImGui::GetContentRegionAvail().x;
+    ImGui::BeginGroup();
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+    if (ImGui::SmallButton(col ? "+" : "-")) col = !col;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip(col ? "Expandir" : "Contraer");
+    ImGui::PopStyleColor();
+    ImGui::SameLine();
     if (s_fontBold) ImGui::PushFont(s_fontBold);
     if (hasT) { if (ImGui::Checkbox(Utf8(g.title).c_str(), &on)) { float b = g_cfg.base[g.tIdx][g.tComp]; g_cfg.live[g.tIdx][g.tComp] = on ? (b > 0.5f ? b : 1.0f) : 0.0f; } }
     else ImGui::TextUnformatted(Utf8(g.title).c_str());
     if (s_fontBold) ImGui::PopFont();
+    ImGui::EndGroup();
+    ImGui::SameLine(availW - rightW);
+    { bool fav = IsFav(g.title);
+      if (fav) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.78f, 0.3f, 1));
+      if (ImGui::SmallButton(fav ? "* fav" : "+ fav")) SetFav(g.title, !fav);
+      if (fav) ImGui::PopStyleColor();
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip(fav ? "Quitar de Favoritos" : "Agregar a la pestana Favoritos");
+      ImGui::SameLine();
+      if (ImGui::SmallButton("<<")) { for (auto& sl : g.sliders) if (sl.ext.empty()) g_cfg.live[sl.idx][sl.comp] = g_cfg.base[sl.idx][sl.comp]; if (hasT) g_cfg.live[g.tIdx][g.tComp] = g_cfg.base[g.tIdx][g.tComp]; }
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Volver todo el grupo a lo guardado"); }
+    if (col) { if (!g.desc.empty()) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.52f, 0.56f, 1)); ImGui::TextUnformatted(Utf8(g.desc.substr(0, 90) + (g.desc.size() > 90 ? "..." : "")).c_str()); ImGui::PopStyleColor(); } ImGui::EndChild(); ImGui::Spacing(); ImGui::PopID(); return; }
     if (!g.desc.empty()) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.66f, 0.69f, 0.74f, 1)); ImGui::TextWrapped("%s", Utf8(g.desc).c_str()); ImGui::PopStyleColor(); }
     bool anyExt = false; for (auto& sl : g.sliders) anyExt |= !sl.ext.empty();
     if (anyExt && !g_cfg.clothFound) ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.35f, 1), "No se encontro cloth-mod\\cloth.ini");
@@ -126,7 +174,11 @@ static void DrawGroup(MenuGroup& g, int gid) {
             if (isExt && !g_cfg.clothVals.count(sl.ext)) g_cfg.clothVals[sl.ext] = sl.def;
             float& val = isExt ? g_cfg.clothVals[sl.ext] : g_cfg.live[sl.idx][sl.comp];
             float before = val;
-            ImGui::TextUnformatted(Utf8(sl.label).c_str());
+            { float savedV = isExt ? (g_cfg.clothLoaded.count(sl.ext) ? g_cfg.clothLoaded[sl.ext] : sl.def) : g_cfg.base[sl.idx][sl.comp];
+              bool changed = fabsf(savedV - val) > 1e-4f;
+              if (changed) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.85f, 0.45f, 1));
+              ImGui::TextUnformatted(Utf8(sl.label).c_str());
+              if (changed) { ImGui::PopStyleColor(); if (ImGui::IsItemHovered()) ImGui::SetTooltip("Cambiado (sin guardar). Guardado: %.3f", savedV); } }
             if (!sl.help.empty()) {
                 ImGui::SameLine(); ImGui::TextDisabled("(?)");
                 if (ImGui::IsItemHovered()) { ImGui::BeginTooltip(); ImGui::PushTextWrapPos(380); ImGui::TextUnformatted(Utf8(sl.help).c_str()); ImGui::PopTextWrapPos(); ImGui::EndTooltip(); }
@@ -414,7 +466,48 @@ static void DrawMenu() {
     ImGui::Spacing();
 
     std::lock_guard<std::mutex> lk(g_cfgMutex);
+    // --- 19/10: barra de comodidad: buscar (Ctrl+F), solo activos, contraer/expandir, tamano ---
+    {
+        if (ImGui::IsKeyPressed(ImGuiKey_F) && ImGui::GetIO().KeyCtrl) s_focusSearch = true;
+        if (s_focusSearch) { ImGui::SetKeyboardFocusHere(); s_focusSearch = false; }
+        ImGui::SetNextItemWidth(220);
+        ImGui::InputTextWithHint("##buscar", "Buscar opcion (Ctrl+F)", s_search, sizeof(s_search));
+        ImGui::SameLine(); if (ImGui::SmallButton("x")) s_search[0] = 0;
+        ImGui::SameLine(); ImGui::Checkbox("Solo activos", &s_onlyActive);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Mostrar solo los grupos con el interruptor prendido");
+        ImGui::SameLine(); if (ImGui::SmallButton("Contraer todo")) s_collapseAll = 1;
+        ImGui::SameLine(); if (ImGui::SmallButton("Expandir todo")) s_collapseAll = 2;
+        ImGui::SameLine(); ImGui::SetNextItemWidth(90);
+        float sc = g_cfg.uiScale;
+        if (ImGui::SliderFloat("##uiscale", &sc, 0.8f, 1.6f, "x%.2f")) { g_cfg.uiScale = sc; ImGui::GetIO().FontGlobalScale = sc; }
+        if (ImGui::IsItemDeactivatedAfterEdit()) { char b[32]; snprintf(b, sizeof(b), "%.2f", g_cfg.uiScale); SaveOption("ui_scale", b); }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Tamano del menu");
+        ImGui::SameLine(); if (ImGui::Checkbox("Compacto", &g_cfg.compact)) { SaveOption("compacto", g_cfg.compact ? "1" : "0"); s_collapseAll = g_cfg.compact ? 1 : 2; }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Abrir los grupos contraidos (solo el titulo y el interruptor); + para desplegar uno");
+    }
+    if (s_collapseAll) { for (auto& g : g_cfg.groups) s_collapsed[g.title] = (s_collapseAll == 1); s_collapseAll = 0; }
+    std::string q = LowerU(s_search);
     if (ImGui::BeginTabBar("tabs", ImGuiTabBarFlags_FittingPolicyScroll)) {
+        if (!q.empty()) {   // resultados de la busqueda, de todas las pestanas
+            if (ImGui::BeginTabItem("Resultados", nullptr, ImGuiTabItemFlags_SetSelected)) {
+                ImGui::BeginChild("scrollR", ImVec2(0, 0), ImGuiChildFlags_None);
+                int gid = 0, n = 0;
+                for (auto& g : g_cfg.groups) { if (GroupMatches(g, q) && (!s_onlyActive || GroupActive(g))) { ImGui::TextDisabled("%s", Utf8(g.section).c_str()); DrawGroup(g, gid); n++; } gid++; }
+                if (!n) ImGui::TextDisabled("Nada coincide con \"%s\"", s_search);
+                ImGui::EndChild();
+                ImGui::EndTabItem();
+            }
+        }
+        if (!g_cfg.favorites.empty()) {
+            if (ImGui::BeginTabItem("Favoritos")) {
+                ImGui::BeginChild("scrollF", ImVec2(0, 0), ImGuiChildFlags_None);
+                ImGui::TextDisabled("Tus grupos marcados con * fav, de todas las pestanas.");
+                int gid = 0;
+                for (auto& g : g_cfg.groups) { if (IsFav(g.title) && (!s_onlyActive || GroupActive(g))) { ImGui::TextDisabled("%s", Utf8(g.section).c_str()); DrawGroup(g, gid); } gid++; }
+                ImGui::EndChild();
+                ImGui::EndTabItem();
+            }
+        }
         // una pestana por seccion de los grupos
         std::vector<std::string> secs;
         for (auto& g : g_cfg.groups) { std::string sname = g.section.empty() ? "Otros" : g.section; bool f = false; for (auto& x : secs) f |= (x == sname); if (!f) secs.push_back(sname); }
@@ -449,7 +542,7 @@ static void DrawMenu() {
                 }
                 if (sname.rfind("Cancha", 0) == 0) { ImGui::TextDisabled("Pasto: parcelas lejanas del juego escaladas: %d en 3 s. Extendido: %d parcelas/cuadro (anillos %d/%d/%d), variante %u idx, camara %s (%.0f, %.0f), estado: %s", g_grassDbg.sparseLast, g_grassDbg.patches, g_grassDbg.ring[0], g_grassDbg.ring[1], g_grassDbg.ring[2], g_grassDbg.lod, g_grassDbg.cam ? "ok" : "no", g_grassDbg.ex, g_grassDbg.ez, g_grassDbg.why ? g_grassDbg.why : "-"); ImGui::Spacing(); }
                 int gid = 0;
-                for (auto& g : g_cfg.groups) { std::string s2 = g.section.empty() ? "Otros" : g.section; if (s2 == sname) DrawGroup(g, gid); gid++; }
+                for (auto& g : g_cfg.groups) { std::string s2 = g.section.empty() ? "Otros" : g.section; if (s2 == sname && (!s_onlyActive || GroupActive(g))) DrawGroup(g, gid); gid++; }
                 ImGui::EndChild();
                 ImGui::EndTabItem();
             }

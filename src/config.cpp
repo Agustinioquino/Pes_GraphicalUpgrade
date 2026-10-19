@@ -120,6 +120,9 @@ static bool LoadConfigLocked() {
         if (Lower(section) == "pes21fx") {
             if (kl == "menu_key") c.menuKey = VkFromName(v);
             else if (kl == "tutorials") c.tutorials = atoi(v.c_str()) != 0;
+            else if (kl == "favoritos") c.favorites = v;
+            else if (kl == "ui_scale") c.uiScale = std::clamp((float)atof(v.c_str()), 0.7f, 2.0f);
+            else if (kl == "compacto") c.compact = atoi(v.c_str()) != 0;
             else if (kl == "replace_shaders") c.optReplace = atoi(v.c_str()) != 0;
             else if (kl == "rules") c.optRules = atoi(v.c_str()) != 0;
             else if (kl == "overlay") c.optOverlay = atoi(v.c_str()) != 0;
