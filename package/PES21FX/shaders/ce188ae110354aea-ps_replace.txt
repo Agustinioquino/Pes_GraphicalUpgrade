@@ -313,7 +313,7 @@ void main(
   r1.xyz = r1.xyz * r0.zzz;
   // === PES21 (19/10) micro normal de poros: mosaico fino sobre la normal del juego, solo de cerca.
   // x94 intensidad, y94 escala (repeticiones sobre la cara), w94 on/off
-  float pesPoreA = 0.0;
+  float pesPoreA = 0.0, pesMicroVar = 0.0;   // pesMicroVar: varianza de la micro normal (Toksvig) -> rugosidad extra en el especular
   { float4 P94 = IniParams.Load(int2(94,0));
     if (enhance && P94.w > 0.5) {
       float sc = max(P94.y, 1.0);
@@ -334,6 +334,12 @@ void main(
         r1.xy += tn.xy * str;
         r1.xyz = normalize(r1.xyz);
         pesPoreA = mn.a * near;
+        // Toksvig (GPU Gems 3 / dqlin): la micro normal promediada en un area mas grande pierde largo; ese acortamiento
+        // es la varianza de la micro-geometria y se convierte en rugosidad para el brillo (y de lejos, donde el mosaico ya no se ve,
+        // la rugosidad se mantiene y el brillo no destella)
+        { float4 ma = pesSkinMicro.SampleGrad(g_samplerAnisotropic_Clamp_s, frac(muv), mdx * 6.0, mdy * 6.0);
+          float ln = length(ma.xyz * 2.0 - 1.0);
+          pesMicroVar = saturate((1.0 - ln) * 8.0) * saturate(P94.x) * skinM; } 
       } } }
   // 16/10: oclusion de cavidades a partir del normal map (pliegues de la oreja, arco de la ceja, aletas de la nariz):
   // donde la normal se inclina mucho la superficie esta dentro de un hueco y le llega menos luz. x35 fuerza, w35 on/off
@@ -540,6 +546,10 @@ void main(
   r0.w = lerp(r0.w, 0.0, sweatWet);   // r0.w es rugosidad: mojado = liso
   // vello facial: no es traslucido, es mas aspero y refleja menos
   r0.w = lerp(r0.w, max(r0.w, 0.75), fhMask);
+  // micro-geometria de poros en el especular (19/10): dentro del poro el brillo baja y la superficie es mas aspera;
+  // la varianza de la micro normal (Toksvig) suma rugosidad para que el brillo no sea un plastico liso
+  r0.w = saturate(r0.w + pesMicroVar * 0.30 + pesPoreA * 0.20);
+  r0.z *= (1.0 - 0.45 * pesPoreA);
   r0.z *= (1.0 - 0.6 * fhMask);
   r0.z = lerp(r0.z, max(r0.z, 0.75), sweatWet);
   r2.xyz *= lerp(1.0, 0.9, sweatWet);
