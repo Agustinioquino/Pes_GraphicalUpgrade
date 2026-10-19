@@ -336,10 +336,11 @@ void InspectDrawOverlay() {
         ImVec2 fa(colX, y), fb(io.DisplaySize.x - 10, y + h);
         dl->AddRectFilled(fa, fb, IM_COL32(20, 22, 28, 215), 4.0f);
         dl->AddRect(fa, fb, col, 4.0f, 0, isSel ? 2.0f : 1.0f);
-        char t[200]; snprintf(t, sizeof(t), "%s   %u vert %s", s_classes[i].name.c_str(), f.verts, f.deferred ? "(dif)" : "(inm)");
+        bool hid = false; { std::lock_guard<std::mutex> lk2(s_layMx); for (uint64_t hh : s_classes[i].ps) { auto it = s_layers.find(hh); if (it != s_layers.end() && it->second.hidden) hid = true; } int so = s_solo.load(); if (so >= 0 && so != i) hid = true; }
+        char t[200]; snprintf(t, sizeof(t), "%s   %u vert %s%s", s_classes[i].name.c_str(), f.verts, f.deferred ? "(dif)" : "(inm)", hid ? "   (OCULTO)" : "");
         dl->AddText(ImVec2(fa.x + 8, fa.y + 5), col, t);
         // sin flechas (19/10): el nombre va pegado al rectangulo
-        { char nm[96]; snprintf(nm, sizeof(nm), " %s ", s_classes[i].name.c_str()); ImVec2 ts = ImGui::CalcTextSize(nm);
+        { char nm[96]; snprintf(nm, sizeof(nm), " %s%s ", s_classes[i].name.c_str(), hid ? " (oculto)" : ""); ImVec2 ts = ImGui::CalcTextSize(nm);
           ImVec2 la(a.x, a.y - ts.y - 2), lb(a.x + ts.x, a.y - 2); if (la.y < 0) { la.y = a.y + 2; lb.y = a.y + ts.y + 2; }
           dl->AddRectFilled(la, lb, IM_COL32(20, 22, 28, 200), 3.0f); dl->AddText(ImVec2(la.x, la.y), col, nm); }
         if (isSel) { if (io.MouseClicked[0] && io.MousePos.x >= fa.x && io.MousePos.x <= fb.x && io.MousePos.y >= fa.y && io.MousePos.y <= fb.y) g_inspectSel = -1; y += h + 6; continue; }
@@ -354,11 +355,11 @@ void InspectDrawOverlay() {
         ImGui::SetNextWindowSize(ImVec2(560, 620), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 1010, 70), ImGuiCond_FirstUseEver);
         bool open = true;
-        if (ImGui::Begin(("Capas: " + cl.name + "##capas").c_str(), &open)) {
+        LayerOv ov; { std::lock_guard<std::mutex> lk(s_layMx); auto it = s_layers.find(cl.ps.empty() ? 0 : cl.ps[0]); if (it != s_layers.end()) ov = it->second; }
+        if (ImGui::Begin(("Capas: " + cl.name + (ov.hidden ? " (OCULTO)" : "") + "##capas").c_str(), &open)) {
             ImGui::TextWrapped("%s", cl.desc.c_str());
             char hs[200] = ""; for (uint64_t h : cl.ps) { char t[24]; snprintf(t, sizeof(t), "%016llx ", (unsigned long long)h); strncat(hs, t, sizeof(hs) - strlen(hs) - 1); }
             ImGui::TextDisabled("shader(s): %s | %u vert, VS %016llx, %s", hs, f.verts, (unsigned long long)f.vs, f.deferred ? "diferido" : "inmediato");
-            LayerOv ov; { std::lock_guard<std::mutex> lk(s_layMx); auto it = s_layers.find(cl.ps.empty() ? 0 : cl.ps[0]); if (it != s_layers.end()) ov = it->second; }
             // --- vista debug ---
             ImGui::TextUnformatted("Vista:"); ImGui::SameLine();
             { int so = s_solo.load();
