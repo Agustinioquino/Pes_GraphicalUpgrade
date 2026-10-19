@@ -12,6 +12,7 @@
 #include <map>
 #include <cstdio>
 #include <algorithm>
+#include <cmath>
 #include "imgui.h"
 
 namespace fx {
@@ -42,6 +43,19 @@ static const InspClass kDefaults[] = {
     { { 0x18afff0f79d9aaa5ULL }, "Pasto 3D",           "Shader 18af: hojas; desgaste, sombreado entre hojas, zonas secas", {} },
     { { 0x9adf9d4673d24359ULL }, "Cielo (domo)",       "Shader 9adf: cielo del juego (nubes volumetricas: pendiente de mover aca)", {} },
 };
+// parametros del mod (xN..wN) que lee un shader: se buscan "IniParams.Load(int2(N" en shaders\<hash>-ps_replace.txt (una vez)
+static std::map<uint64_t, std::vector<int>> s_paramsUsed;
+static const std::vector<int>& ParamsUsedBy(uint64_t h) {
+    auto it = s_paramsUsed.find(h); if (it != s_paramsUsed.end()) return it->second;
+    std::vector<int>& v = s_paramsUsed[h];
+    wchar_t nm[64]; swprintf(nm, 64, L"shaders\\%016llx-ps_replace.txt", (unsigned long long)h);
+    std::string txt; FILE* fp = _wfopen((g_cfg.baseDir + nm).c_str(), L"rb");
+    if (fp) { char buf[4096]; size_t n; while ((n = fread(buf, 1, sizeof(buf), fp)) > 0) txt.append(buf, n); fclose(fp); }
+    size_t pos = 0; const std::string key = "IniParams.Load(int2(";
+    while ((pos = txt.find(key, pos)) != std::string::npos) { pos += key.size(); int n = atoi(txt.c_str() + pos); if (n >= 0 && n < kParamCount && std::find(v.begin(), v.end(), n) == v.end()) v.push_back(n); }
+    std::sort(v.begin(), v.end());
+    return v;
+}
 static std::string Trim2(const std::string& x) { size_t a = x.find_first_not_of(" \t\r\n"), b = x.find_last_not_of(" \t\r\n"); return a == std::string::npos ? "" : x.substr(a, b - a + 1); }
 static std::string Lower2(std::string x) { for (auto& ch : x) ch = (char)tolower((unsigned char)ch); return x; }
 static bool ReadAll(const std::wstring& path, std::string& out) { FILE* f = _wfopen(path.c_str(), L"rb"); if (!f) return false; char buf[4096]; size_t n; while ((n = fread(buf, 1, sizeof(buf), f)) > 0) out.append(buf, n); fclose(f); return true; }
@@ -69,13 +83,19 @@ static void LoadClasses() {
     if (s_classes.empty()) for (auto& d : kDefaults) s_classes.push_back(d);
 }
 static const int kW = 192, kH = 108;   // 19/10: mas chico (alcanza para el rectangulo)
-static std::atomic<int> s_frame{0};   // se captura 1 de cada 3 cuadros (el rectangulo no necesita mas)
+static std::atomic<int> s_frame{0};
+static float s_pickX = -1, s_pickY = -1;   // selector por pixel (boton derecho): coordenadas de pantalla; -1 = sin seleccion
+static bool s_sceneOpen = false;            // ventana "Escena" (luz, sol, camara, niebla)   // se captura 1 de cada 3 cuadros (el rectangulo no necesita mas)
 
 struct TexInfo { int slot; std::string desc; ID3D11ShaderResourceView* srv = nullptr; };   // srv con referencia propia (miniatura en la ficha)
 struct ClassFrame {
     bool seen = false; bool bboxOk = false; int extra = 0; float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
     UINT verts = 0; int kind = 0; bool deferred = false; uint64_t vs = 0;
     std::vector<TexInfo> tex;
+    std::vector<TexInfo> vtex;                 // texturas del vertex shader
+    int order = 0, nrt = 0, draws = 0, drawsShown = 0; char rtDesc[96] = ""; bool depthOn = false; bool underPick = false;
+    ID3D11Buffer* matCopy = nullptr; ID3D11Buffer* matStg = nullptr; float mat[32] = {}; bool matOk = false;   // b4 m_materials[8]
+    ID3D11Buffer* objCopy = nullptr; ID3D11Buffer* objStg = nullptr; float obj[16] = {}; bool objOk = false;   // b5 m_world (4x4) + m_useWeightCount
     // recursos
     ID3D11Texture2D* rt = nullptr; ID3D11RenderTargetView* rtv = nullptr; ID3D11Texture2D* st[2] = {}; int stIdx = 0; bool stValid[2] = {};
 };
@@ -203,7 +223,7 @@ bool InspectBegin(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEnt
     EnsureRes(); if (!s_whitePS) return false;
     int ci = -1;
     std::lock_guard<std::mutex> lk(s_mx);
-    if (!s_loaded) { LoadClasses(); LoadLayers(); ScanFiles(); s_loaded = true; for (auto& f : s_cls) { if (f.rt) f.rt->Release(); if (f.rtv) f.rtv->Release(); for (auto* t : f.st) if (t) t->Release(); for (auto& t : f.tex) if (t.srv) t.srv->Release(); } s_cls.clear(); s_unkHash.clear(); s_cls.resize(s_classes.size()); }
+    if (!s_loaded) { LoadClasses(); LoadLayers(); ScanFiles(); s_loaded = true; for (auto& f : s_cls) { if (f.rt) f.rt->Release(); if (f.rtv) f.rtv->Release(); for (auto* t : f.st) if (t) t->Release(); for (auto& t : f.tex) if (t.srv) t.srv->Release(); for (auto& t : f.vtex) if (t.srv) t.srv->Release(); if (f.matCopy) f.matCopy->Release(); if (f.matStg) f.matStg->Release(); if (f.objCopy) f.objCopy->Release(); if (f.objStg) f.objStg->Release(); } s_cls.clear(); s_unkHash.clear(); s_cls.resize(s_classes.size()); }
     for (size_t i = 0; i < s_classes.size() && ci < 0; i++) for (uint64_t h : s_classes[i].ps) if (h == ps->hash) { ci = (int)i; break; }
     if (ci < 0) {
         // desconocido: solo geometria con bastantes vertices en un dibujo con varios render targets (G-buffer), hasta kMaxUnknown
@@ -223,6 +243,7 @@ bool InspectBegin(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEnt
     if (s_group != "todo" && s_classes[ci].group != s_group) return false;   // solo el grupo elegido (cara, pelo, kit...)
     ClassFrame& f = s_cls[ci];
     {
+        f.draws++;
         if (f.seen) { if (f.extra >= 8) return false; f.extra++; f.verts += verts; goto drawOnly; }   // 19/10: todas las partes de la clase (la cara viene en varios dibujos)
         f.seen = true; f.extra = 0;
         if (!EnsureClassRT(f)) return false;
@@ -232,6 +253,25 @@ bool InspectBegin(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEnt
         ID3D11ShaderResourceView* srv[32] = {}; c->PSGetShaderResources(0, 32, srv);
         for (int i = 0; i < 32; i++) if (srv[i]) { std::string d = DescribeSRV(srv[i]); auto sn = s_classes[ci].slotNames.find(i); if (sn != s_classes[ci].slotNames.end()) d = sn->second + ": " + d;
             TexInfo ti; ti.slot = i; ti.desc = d; ti.srv = srv[i]; f.tex.push_back(ti); }   // la referencia queda en la ficha (se dibuja como miniatura)
+        // vertex shader: texturas (t0..t15)
+        for (auto& t : f.vtex) if (t.srv) t.srv->Release(); f.vtex.clear();
+        { ID3D11ShaderResourceView* vsrv[16] = {}; c->VSGetShaderResources(0, 16, vsrv);
+          for (int i = 0; i < 16; i++) if (vsrv[i]) { TexInfo ti; ti.slot = i; ti.desc = DescribeSRV(vsrv[i]); ti.srv = vsrv[i]; f.vtex.push_back(ti); } }
+        // orden, render targets, profundidad
+        f.order = g_drawOrder.load();
+        { ID3D11RenderTargetView* rts[8] = {}; ID3D11DepthStencilView* dsv = nullptr; c->OMGetRenderTargets(8, rts, &dsv);
+          f.nrt = 0; f.rtDesc[0] = 0; for (int i = 0; i < 8; i++) if (rts[i]) { f.nrt = i + 1; if (i == 0) { ID3D11Resource* r = nullptr; rts[i]->GetResource(&r); if (r) { D3D11_RESOURCE_DIMENSION dm; r->GetType(&dm); if (dm == D3D11_RESOURCE_DIMENSION_TEXTURE2D) { D3D11_TEXTURE2D_DESC td; ((ID3D11Texture2D*)r)->GetDesc(&td); snprintf(f.rtDesc, sizeof(f.rtDesc), "%ux%u fmt %d", td.Width, td.Height, (int)td.Format); } r->Release(); } } rts[i]->Release(); }
+          f.depthOn = dsv != nullptr; if (dsv) dsv->Release(); }
+        // cbuffers: material (b4) y objeto (b5) -> copia DEFAULT (lectura en Present)
+        { ID3D11Buffer* cb4 = nullptr; c->PSGetConstantBuffers(4, 1, &cb4);
+          if (cb4) { if (!f.matCopy) { D3D11_BUFFER_DESC d{}; d.ByteWidth = 128; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER; g_dev.dev->CreateBuffer(&d, nullptr, &f.matCopy); d.Usage = D3D11_USAGE_STAGING; d.BindFlags = 0; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; g_dev.dev->CreateBuffer(&d, nullptr, &f.matStg); }
+            D3D11_BUFFER_DESC sd; cb4->GetDesc(&sd); if (f.matCopy && sd.ByteWidth >= 128) { D3D11_BOX bx{ 0, 0, 0, 128, 1, 1 }; c->CopySubresourceRegion(f.matCopy, 0, 0, 0, 0, cb4, 0, &bx); }
+            cb4->Release(); }
+          ID3D11Buffer* cb5 = nullptr; c->VSGetConstantBuffers(5, 1, &cb5);
+          if (cb5) { if (!f.objCopy) { D3D11_BUFFER_DESC d{}; d.ByteWidth = 144; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER; g_dev.dev->CreateBuffer(&d, nullptr, &f.objCopy); d.Usage = D3D11_USAGE_STAGING; d.BindFlags = 0; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; g_dev.dev->CreateBuffer(&d, nullptr, &f.objStg); }
+            D3D11_BUFFER_DESC sd; cb5->GetDesc(&sd); if (f.objCopy && sd.ByteWidth >= 144) { D3D11_BOX bx{ 64, 0, 0, 64 + 80, 1, 1 }; c->CopySubresourceRegion(f.objCopy, 0, 0, 0, 0, cb5, 0, &bx); }   // m_world (offset 64) + m_useWeightCount
+            cb5->Release(); }
+        }
     }
 drawOnly:
     Saved& s = t_sv; s.cls = ci;
@@ -283,6 +323,9 @@ void InspectPresent() {
             D3D11_MAPPED_SUBRESOURCE m{};
             if (SUCCEEDED(g_dev.imm->Map(f.st[rd], 0, D3D11_MAP_READ, 0, &m))) {
                 int minx = kW, miny = kH, maxx = -1, maxy = -1;
+                f.underPick = false;
+                if (s_pickX >= 0) { int px = (int)(s_pickX * kW / (s_screenW > 1 ? s_screenW : 1920.f)), py = (int)(s_pickY * kH / (s_screenH > 1 ? s_screenH : 1080.f));
+                    if (px >= 0 && px < kW && py >= 0 && py < kH) { const uint8_t* row = (const uint8_t*)m.pData + (size_t)py * m.RowPitch; f.underPick = row[px] > 8; } }
                 for (int y = 0; y < kH; y++) { const uint8_t* row = (const uint8_t*)m.pData + (size_t)y * m.RowPitch;
                     for (int x = 0; x < kW; x++) if (row[x] > 8) { if (x < minx) minx = x; if (x > maxx) maxx = x; if (y < miny) miny = y; if (y > maxy) maxy = y; } }
                 g_dev.imm->Unmap(f.st[rd], 0);
@@ -290,6 +333,10 @@ void InspectPresent() {
                 else f.bboxOk = false;
             }
         }
+        // 1b) cbuffers: leer la copia del cuadro anterior y copiar la de este
+        if (f.matStg && f.matCopy) { D3D11_MAPPED_SUBRESOURCE m{}; if (SUCCEEDED(g_dev.imm->Map(f.matStg, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) { memcpy(f.mat, m.pData, 128); f.matOk = true; g_dev.imm->Unmap(f.matStg, 0); } if (f.seen) g_dev.imm->CopyResource(f.matStg, f.matCopy); }
+        if (f.objStg && f.objCopy) { D3D11_MAPPED_SUBRESOURCE m{}; if (SUCCEEDED(g_dev.imm->Map(f.objStg, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) { memcpy(f.obj, m.pData, 64); float* uw = (float*)m.pData + 16; f.obj[15] = f.obj[15]; (void)uw; f.objOk = true; g_dev.imm->Unmap(f.objStg, 0); } if (f.seen) g_dev.imm->CopyResource(f.objStg, f.objCopy); }
+        f.drawsShown = f.draws; f.draws = 0;
         // 2) copiar lo de este cuadro y limpiar
         if (f.seen) { g_dev.imm->CopyResource(f.st[f.stIdx], f.rt); f.stValid[f.stIdx] = true; }
         else { f.stValid[f.stIdx] = false; f.bboxOk = false; }
@@ -325,7 +372,11 @@ void InspectDrawOverlay() {
           dl->AddText(ImVec2(ba.x + 6, ba.y + 1), IM_COL32(255, 255, 255, 255), lab.c_str());
           if (io.MouseClicked[0] && io.MousePos.x >= ba.x && io.MousePos.x <= bb.x && io.MousePos.y >= ba.y && io.MousePos.y <= bb.y) { s_group = g; g_inspectSel = -1; }
           gx = bb.x + 6;
-      } }
+      }
+      { ImVec2 ts = ImGui::CalcTextSize("Escena (luz)"); ImVec2 ba(gx + 10, gy + 3), bb(gx + 10 + ts.x + 12, gy + 21);
+        dl->AddRectFilled(ba, bb, s_sceneOpen ? IM_COL32(120, 90, 50, 255) : IM_COL32(45, 48, 58, 255), 3.0f);
+        dl->AddText(ImVec2(ba.x + 6, ba.y + 1), IM_COL32(255, 255, 255, 255), "Escena (luz)");
+        if (io.MouseClicked[0] && io.MousePos.x >= ba.x && io.MousePos.x <= bb.x && io.MousePos.y >= ba.y && io.MousePos.y <= bb.y) s_sceneOpen = !s_sceneOpen; } }
     for (int i = 0; i < (int)s_cls.size() && i < (int)s_classes.size(); i++) {
         ClassFrame& f = s_cls[i];
         if (s_group != "todo" && s_classes[i].group != s_group) continue;
@@ -354,6 +405,70 @@ void InspectDrawOverlay() {
         y += h + 6;
     }
     if (k == 0) dl->AddText(ImVec2(colX, 70), IM_COL32(255, 220, 120, 255), s_group == "todo" ? "Sin dibujos conocidos en pantalla (abri un partido / repeticion)." : "Nada de este grupo en pantalla.");
+    // ---- selector por pixel: boton derecho = "que hay aca"; lista en orden de dibujo; clic en un nombre abre su ventana
+    if (io.MouseClicked[1] && !ImGui::GetIO().WantCaptureMouse) { s_pickX = io.MousePos.x / sx; s_pickY = io.MousePos.y / sy; }
+    if (s_pickX >= 0) {
+        ImVec2 p(s_pickX * sx, s_pickY * sy);
+        dl->AddCircle(p, 7, IM_COL32(255, 255, 255, 255), 12, 2.0f); dl->AddCircle(p, 9, IM_COL32(0, 0, 0, 255), 12, 1.0f);
+        std::vector<int> under; for (int i = 0; i < (int)s_cls.size() && i < (int)s_classes.size(); i++) if (s_cls[i].bboxOk && s_cls[i].underPick) under.push_back(i);
+        std::sort(under.begin(), under.end(), [](int a2, int b2) { return s_cls[a2].order < s_cls[b2].order; });
+        float lx = p.x + 14, ly = p.y - 10; float lw = 300, lh = 22 + 18.0f * (float)(under.empty() ? 1 : under.size());
+        if (lx + lw > io.DisplaySize.x) lx = p.x - 14 - lw;
+        dl->AddRectFilled(ImVec2(lx, ly), ImVec2(lx + lw, ly + lh), IM_COL32(20, 22, 28, 230), 4.0f);
+        dl->AddText(ImVec2(lx + 6, ly + 3), IM_COL32(255, 255, 255, 255), "En este pixel (orden de dibujo):");
+        float ty = ly + 20;
+        if (under.empty()) dl->AddText(ImVec2(lx + 6, ty), IM_COL32(180, 180, 180, 255), "nada conocido (fondo / sin clase)");
+        for (int i : under) { char t[160]; snprintf(t, sizeof(t), "#%d  %s", s_cls[i].order, s_classes[i].name.c_str());
+            bool hov = io.MousePos.x >= lx && io.MousePos.x <= lx + lw && io.MousePos.y >= ty && io.MousePos.y <= ty + 18;
+            dl->AddText(ImVec2(lx + 6, ty), hov ? IM_COL32(255, 230, 120, 255) : IM_COL32(220, 220, 220, 255), t);
+            if (hov && io.MouseClicked[0]) g_inspectSel = i;
+            ty += 18; }
+        if (io.MouseClicked[1] && ImGui::GetIO().WantCaptureMouse) {}
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape)) s_pickX = -1;
+    }
+    // ---- ventana "Escena": sol, luces, camara, niebla, exposicion (de los cbuffers copiados por regla)
+    if (s_sceneOpen) {
+        ImGui::SetNextWindowSize(ImVec2(520, 520), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowPos(ImVec2(40, io.DisplaySize.y - 560), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Escena: luz y camara##escena", &s_sceneOpen)) {
+            std::vector<float> L, S;
+            bool lok = NamedCBRead("LightCB", L), sok = NamedCBRead("SceneCB", S);
+            if (lok && L.size() >= 44) {
+                float dx = L[0], dy = L[1], dz = L[2]; float len = sqrtf(dx * dx + dy * dy + dz * dz); if (len > 1e-4f) { dx /= len; dy /= len; dz /= len; }
+                float elev = asinf(fmaxf(-1.f, fminf(1.f, dy))) * 57.2958f, azi = atan2f(dx, dz) * 57.2958f;
+                ImGui::TextUnformatted("SOL / luz direccional (cPSLight b3)");
+                ImGui::Text("direccion (hacia el sol): %.3f  %.3f  %.3f", dx, dy, dz);
+                ImGui::Text("elevacion: %.1f grados   azimut: %.1f grados", elev, azi);
+                ImGui::Text("color/intensidad (m_lightColor0): %.0f  %.0f  %.0f", L[4], L[5], L[6]);
+                float mx = fmaxf(L[4], fmaxf(L[5], L[6])); if (mx > 1e-3f) ImGui::Text("   tinte: %.3f %.3f %.3f   (blanco = 1 1 1)", L[4] / mx, L[5] / mx, L[6] / mx);
+                ImGui::Text("m_lightColor1 (ambiente/segunda): %.3f  %.3f  %.3f  %.3f", L[8], L[9], L[10], L[11]);
+                ImGui::Text("m_lightSourcePos: %.1f  %.1f  %.1f  %.3g", L[12], L[13], L[14], L[15]);
+                ImGui::Text("m_lightSourceColor: %.2f  %.2f  %.2f  %.2f", L[16], L[17], L[18], L[19]);
+                ImGui::Text("m_lightSourceDir: %.3f  %.3f  %.3f  %.2f", L[20], L[21], L[22], L[23]);
+                ImGui::Text("m_lightSourceParam1/2/3: %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f", L[24], L[25], L[26], L[27], L[28], L[29], L[30], L[31], L[32], L[33], L[34], L[35]);
+                ImGui::Text("m_lightPos0: %.2f %.2f %.2f %.2f   m_lightParam2: %.3f %.3f %.3f %.3f", L[36], L[37], L[38], L[39], L[40], L[41], L[42], L[43]);
+            } else ImGui::TextDisabled("LightCB todavia no copiado (hace falta un dibujo de la pasada de luz).");
+            ImGui::Separator();
+            if (sok && S.size() >= 120) {
+                ImGui::TextUnformatted("CAMARA / ESCENA (cPSScene b2)");
+                ImGui::Text("posicion de la camara: %.2f  %.2f  %.2f", S[80], S[81], S[82]);
+                ImGui::Text("adelante (vista): %.3f  %.3f  %.3f   arriba: %.3f %.3f %.3f", S[40], S[41], S[42], S[36], S[37], S[38]);
+                float fovy = 2.0f * atanf(1.0f / fmaxf(fabsf(S[21]), 1e-4f)) * 57.2958f; ImGui::Text("FOV vertical: %.1f grados   viewport: %.0fx%.0f   lejos: %.0f", fovy, S[88], S[89], S[91]);
+                ImGui::Text("exposicion: %.3f %.3f %.3f %.3f", S[92], S[93], S[94], S[95]);
+                ImGui::Text("niebla param: %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.3f %.3f %.3f %.0f", S[96], S[97], S[98], S[99], S[100], S[101], S[102], S[103], S[104], S[105], S[106], S[107]);
+                ImGui::Text("color de niebla: %.2f %.2f %.2f %.2f", S[108], S[109], S[110], S[111]);
+                ImGui::Text("shadow maps: %.0f %.0f %.0f %.0f", S[116], S[117], S[118], S[119]);
+                ImGui::Text("cascadas: escala1 %.4f escala2 %.4f   escala prof. %.4f", S[64 + 3], S[64 + 7], S[64 + 12]);
+            } else ImGui::TextDisabled("SceneCB todavia no copiado.");
+            ImGui::Separator();
+            ImGui::TextUnformatted("MOD (parametros de luz en vivo)");
+            ImGui::Text("sol: realismo color x60=%.2f intensidad y60=%.2f | calidad: diametro x64=%.2f transmision y64=%.2f", g_cfg.live[60][0], g_cfg.live[60][1], g_cfg.live[64][0], g_cfg.live[64][1]);
+            ImGui::Text("curva del dia 65/66/67: %.2f %.2f %.2f %.2f | %.2f %.2f %.2f %.2f | %.2f %.2f %.2f %.2f", g_cfg.live[65][0], g_cfg.live[65][1], g_cfg.live[65][2], g_cfg.live[65][3], g_cfg.live[66][0], g_cfg.live[66][1], g_cfg.live[66][2], g_cfg.live[66][3], g_cfg.live[67][0], g_cfg.live[67][1], g_cfg.live[67][2], g_cfg.live[67][3]);
+            ImGui::Text("sombras fisicas 87: %.2f %.2f %.2f %.2f   micro-sombras 88: %.2f %.2f", g_cfg.live[87][0], g_cfg.live[87][1], g_cfg.live[87][2], g_cfg.live[87][3], g_cfg.live[88][0], g_cfg.live[88][1]);
+            ImGui::TextDisabled("(estos valores se editan en las pestanas Iluminacion / Sombras del menu)");
+        }
+        ImGui::End();
+    }
     // ---- ventana "Capas" de la clase elegida: miniatura + nombre + selector por slot, ocultar, guardar
     if (sel >= 0 && sel < (int)s_cls.size() && sel < (int)s_classes.size()) {
         ClassFrame& f = s_cls[sel]; InspClass& cl = s_classes[sel];
@@ -402,6 +517,8 @@ void InspectDrawOverlay() {
                 for (auto& o : leg) { ImGui::PushID(100 + o.v); ImGui::ColorButton("##l", o.c, ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoPicker, ImVec2(14, 14)); ImGui::SameLine(); ImGui::TextDisabled("%s", o.t); ImGui::PopID(); if (o.v < 4) ImGui::SameLine(); }
             }
             ImGui::Separator();
+            if (ImGui::BeginTabBar("##insp")) {
+            if (ImGui::BeginTabItem("Capas")) {
             ImGui::BeginChild("slots", ImVec2(0, 0));
             std::vector<int> slots; for (auto& t : f.tex) slots.push_back(t.slot); for (auto& kv : ov.slot) if (std::find(slots.begin(), slots.end(), kv.first) == slots.end()) slots.push_back(kv.first);
             std::sort(slots.begin(), slots.end());
@@ -440,6 +557,47 @@ void InspectDrawOverlay() {
             ImGui::SetNextItemWidth(80); ImGui::InputInt("##ns", &newSlot); ImGui::SameLine();
             if (ImGui::Button("Agregar capa en ese slot")) { std::lock_guard<std::mutex> lk(s_layMx); for (uint64_t h : cl.ps) if (!s_layers[h].slot.count(newSlot)) s_layers[h].slot[newSlot] = "none"; LayersUpdateAny(); }
             ImGui::EndChild();
+            ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Material")) {
+                ImGui::BeginChild("mat", ImVec2(0, 0));
+                ImGui::TextUnformatted("cPSMaterial b4 -> m_materials[8] (lo que el juego le pasa a este shader: brillo, rugosidad, mezclas...)");
+                if (f.matOk) { for (int r = 0; r < 8; r++) ImGui::Text("m_materials[%d] = %9.4f  %9.4f  %9.4f  %9.4f", r, f.mat[r * 4], f.mat[r * 4 + 1], f.mat[r * 4 + 2], f.mat[r * 4 + 3]); }
+                else ImGui::TextDisabled("(sin cbuffer b4 en este dibujo)");
+                ImGui::Separator();
+                ImGui::TextUnformatted("cVSObject b5 -> m_world (posicion del objeto en el mundo) y m_useWeightCount");
+                if (f.objOk) { ImGui::Text("posicion: %.2f  %.2f  %.2f   (m_world._m03/_m13/_m23)", f.obj[3], f.obj[7], f.obj[11]); for (int r = 0; r < 4; r++) ImGui::TextDisabled("  %8.3f %8.3f %8.3f %8.3f", f.obj[r * 4], f.obj[r * 4 + 1], f.obj[r * 4 + 2], f.obj[r * 4 + 3]); }
+                else ImGui::TextDisabled("(sin cbuffer b5)");
+                ImGui::Separator();
+                ImGui::TextUnformatted("Texturas del vertex shader:");
+                if (f.vtex.empty()) ImGui::TextDisabled("(ninguna)");
+                for (auto& t : f.vtex) { if (t.srv) { ImGui::Image((ImTextureID)(uintptr_t)t.srv, ImVec2(40, 40)); ImGui::SameLine(); } ImGui::Text("vs t%d", t.slot); ImGui::SameLine(); ImGui::TextDisabled("%s", t.desc.c_str()); }
+                ImGui::EndChild();
+                ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Shader")) {
+                ImGui::BeginChild("sh", ImVec2(0, 0));
+                ImGui::Text("Orden en el cuadro: %d   dibujos de esta clase por cuadro: %d", f.order, f.drawsShown);
+                ImGui::Text("Render targets: %d (%s)%s", f.nrt, f.rtDesc, f.depthOn ? ", con profundidad" : "");
+                ImGui::Text("Contexto: %s   VS: %016llx", f.deferred ? "diferido" : "inmediato", (unsigned long long)f.vs);
+                for (uint64_t h : cl.ps) {
+                    const Rule* ru = RuleForHash(h);
+                    wchar_t nm[64]; swprintf(nm, 64, L"shaders\\%016llx-ps_replace.txt", (unsigned long long)h);
+                    bool repl = GetFileAttributesW((g_cfg.baseDir + nm).c_str()) != INVALID_FILE_ATTRIBUTES;
+                    ImGui::Separator();
+                    ImGui::Text("PS %016llx: %s", (unsigned long long)h, repl ? "REEMPLAZADO por el mod" : "del juego (sin reemplazo)");
+                    if (ru) { ImGui::TextUnformatted("Regla (PES21FX_rules.ini):");
+                        for (auto& a : ru->actions) {
+                            const char* k = a.kind == RuleAction::CopyCB ? "copy_cb" : a.kind == RuleAction::RefSRV ? "ref_srv" : a.kind == RuleAction::BindCB ? "cb" : a.kind == RuleAction::BindSRV ? "srv" : a.kind == RuleAction::SetParam ? "param" : a.kind == RuleAction::EventTurf ? "event" : "facegen";
+                            if (a.kind == RuleAction::FaceGen) ImGui::BulletText("facegen: quinta textura en t%d / t%d, mapa de pelo en t26, semillas u5/u6", a.slot, a.idx);
+                            else if (a.kind == RuleAction::SetParam) ImGui::BulletText("param %d.%d = %s", a.idx, a.comp, a.var.empty() ? std::to_string(a.value).c_str() : a.var.c_str());
+                            else ImGui::BulletText("%s %d %s", k, a.slot, a.name.c_str()); } }
+                    else ImGui::TextDisabled("sin regla");
+                    if (repl) { const std::vector<int>& pv = ParamsUsedBy(h);
+                        ImGui::Text("Parametros del mod que lee (%d):", (int)pv.size());
+                        for (int n : pv) ImGui::BulletText("%d: x=%.3f y=%.3f z=%.3f w=%.3f", n, g_cfg.live[n][0], g_cfg.live[n][1], g_cfg.live[n][2], g_cfg.live[n][3]); }
+                }
+                ImGui::EndChild();
+                ImGui::EndTabItem(); }
+            ImGui::EndTabBar(); }
         }
         ImGui::End();
         if (!open) g_inspectSel = -1;

@@ -212,6 +212,26 @@ static ID3D11ShaderResourceView* FileTexture(const std::string& rel) {
 }
 
 ID3D11ShaderResourceView* FileTextureAny(const std::string& rel) { return FileTexture(rel); }
+// 19/10 inspector: lee un cbuffer copiado por regla (copy_cb) -> floats. Se llama en Present (contexto inmediato):
+// copia a staging y lee la copia del cuadro anterior (sin esperar a la GPU).
+bool NamedCBRead(const std::string& name, std::vector<float>& out) {
+    static std::map<std::string, ID3D11Buffer*> stg;
+    ID3D11Buffer* src = nullptr; UINT bytes = 0;
+    { std::lock_guard<std::mutex> lk(s_namedMutex); auto it = s_named.find(name); if (it == s_named.end() || !it->second.buf) return false; src = it->second.buf; D3D11_BUFFER_DESC d; src->GetDesc(&d); bytes = d.ByteWidth; src->AddRef(); }
+    ID3D11Buffer*& st = stg[name];
+    if (st) { D3D11_BUFFER_DESC d; st->GetDesc(&d); if (d.ByteWidth != bytes) { st->Release(); st = nullptr; } }
+    if (!st) { D3D11_BUFFER_DESC d{}; d.ByteWidth = bytes; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; g_dev.dev->CreateBuffer(&d, nullptr, &st); }
+    bool ok = false;
+    if (st && g_dev.imm) {
+        D3D11_MAPPED_SUBRESOURCE m{};
+        if (SUCCEEDED(g_dev.imm->Map(st, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) { out.assign((const float*)m.pData, (const float*)m.pData + bytes / 4); g_dev.imm->Unmap(st, 0); ok = true; }
+        g_dev.imm->CopyResource(st, src);
+    }
+    src->Release();
+    return ok;
+}
+const Rule* RuleForHash(uint64_t h) { auto it = g_cfg.rules.find(h); return it == g_cfg.rules.end() ? nullptr : &it->second; }
+std::atomic<int> g_drawOrder{0};   // numero de orden del dibujo dentro del cuadro (se reinicia en Present)
 std::string NamedOrigin(ID3D11ShaderResourceView* v) {
     std::lock_guard<std::mutex> lk(s_namedMutex);
     for (auto& kv : s_named) if (kv.second.srv == v) return kv.first.rfind("file:", 0) == 0 ? "archivo del mod: " + kv.first.substr(5) : "recurso del mod: " + kv.first;
@@ -513,6 +533,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (ps && ps->rule) RunRule(c, ps, d);
     if (vs && vs->rule) RunRule(c, vs, d);
     // 19/10: capas editadas desde el inspector (PES21FX_capas.ini): textura por slot u "ocultar" el dibujo
+    g_drawOrder++;
     if (ps && g_layersAny.load()) { LayerOv ov;
         if (InspectShouldSkip(ps->hash)) { d.skip = true; g_layerSkips++; }
         if (ID3D11PixelShader* hp = InspectHighlightPS(ps->hash)) { c->PSGetShader(&d.restorePS, nullptr, nullptr); c->PSSetShader(hp, nullptr, 0); g_layerSkips++; }
@@ -721,7 +742,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     // pasada de luz del sol): se ponen en cero para que los efectos que las leen se apaguen en vez de usar el sol
     // del ultimo partido
     {
-        int now = s_presentNo.fetch_add(1);
+        int now = s_presentNo.fetch_add(1); g_drawOrder = 0;
         std::lock_guard<std::mutex> lk(s_namedMutex);
         for (auto& kv : s_named) {
             NamedRes& r = kv.second;
