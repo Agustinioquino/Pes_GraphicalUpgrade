@@ -807,6 +807,11 @@ void main(
   o1.xyz = min(float3(10000,10000,10000), r1.xyz);
   o0.w = 1;
   o1.w = 1;
+  // PES21 inspector (19/10): LUZ PLANA (x89 = 1): irradiancia constante (y89) sin direccion, sombras ni brillos, para ver
+  // texturas y materiales sin la iluminacion. z89 = 1 deja el brillo especular.
+  { float4 P89 = IniParams.Load(int2(89,0));
+    if (P89.x > 0.5) { float fl = P89.y > 0.0 ? P89.y : 1.0; float3 c89 = g_psLight.m_lightColor0.xyz; float m89 = max(max(c89.x, c89.y), c89.z); if (m89 < 1e-3) m89 = 1.0;
+      o0.xyz = (c89 / m89) * fl * 0.6; if (P89.z < 0.5) o1.xyz = 0; } }
   o2.xyzw = r0.xyzw;
   return;
 }

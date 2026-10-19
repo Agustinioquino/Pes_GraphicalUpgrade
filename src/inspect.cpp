@@ -172,6 +172,9 @@ static bool SaveLayers() {
         out += "\n"; }
     FILE* f = _wfopen((g_cfg.baseDir + L"PES21FX_capas.ini").c_str(), L"wb"); if (!f) return false; fwrite(out.data(), 1, out.size(), f); fclose(f); return true;
 }
+// "Guardar informe": todo lo recopilado de una clase (shaders, texturas, material, regla, parametros, capas) + luz de la escena
+static std::string FmtCB(const std::vector<float>& v, int from, int n) { std::string o; char b[64]; for (int i = 0; i < n && from + i < (int)v.size(); i++) { snprintf(b, sizeof(b), "%s%.4f", i ? " " : "", v[from + i]); o += b; } return o; }
+static bool SaveReport(int ci, std::string& outPath);
 void InspectReload() { std::lock_guard<std::mutex> lk(s_mx); s_loaded = false; }
 static ID3D11DepthStencilState* s_noDepth = nullptr; static ID3D11BlendState* s_noBlend = nullptr;
 static float s_screenW = 1920, s_screenH = 1080;
@@ -354,6 +357,42 @@ void InspectPresent() {
     }
 }
 
+static bool SaveReport(int ci, std::string& outPath) {
+    if (ci < 0 || ci >= (int)s_cls.size() || ci >= (int)s_classes.size()) return false;
+    ClassFrame& f = s_cls[ci]; InspClass& cl = s_classes[ci];
+    std::wstring dir = g_cfg.baseDir + L"inspector"; CreateDirectoryW(dir.c_str(), nullptr);
+    char hn[32]; snprintf(hn, sizeof(hn), "%016llx", (unsigned long long)(cl.ps.empty() ? 0 : cl.ps[0]));
+    std::string safe; for (char ch : cl.name) safe += (isalnum((unsigned char)ch) ? ch : '_');
+    std::string fn = safe + "_" + hn + ".txt"; outPath = "PES21FX\\inspector\\" + fn;
+    std::string r; char b[512];
+    SYSTEMTIME st; GetLocalTime(&st); snprintf(b, sizeof(b), "PES21 FX - informe del inspector  %04d-%02d-%02d %02d:%02d\n", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute); r += b;
+    r += "clase: " + cl.name + "  (grupo " + cl.group + ")\n" + "que hace el mod: " + cl.desc + "\n";
+    r += "pixel shaders: "; for (uint64_t h : cl.ps) { snprintf(b, sizeof(b), "%016llx ", (unsigned long long)h); r += b; } r += "\n";
+    snprintf(b, sizeof(b), "vertex shader: %016llx | vertices: %u | dibujos por cuadro: %d | orden: %d | render targets: %d (%s)%s | contexto: %s\n", (unsigned long long)f.vs, f.verts, f.drawsShown, f.order, f.nrt, f.rtDesc, f.depthOn ? " + profundidad" : "", f.deferred ? "diferido" : "inmediato"); r += b;
+    r += "\n[texturas del pixel shader]\n";
+    for (auto& t : f.tex) { auto sn = cl.slotNames.find(t.slot); snprintf(b, sizeof(b), "t%-2d %s%s%s\n", t.slot, sn != cl.slotNames.end() ? sn->second.c_str() : "", sn != cl.slotNames.end() ? ": " : "", t.desc.c_str()); r += b; }
+    r += "\n[texturas del vertex shader]\n"; for (auto& t : f.vtex) { snprintf(b, sizeof(b), "vs t%-2d %s\n", t.slot, t.desc.c_str()); r += b; }
+    r += "\n[material cPSMaterial b4: m_materials[8]]\n";
+    if (f.matOk) for (int i = 0; i < 8; i++) { snprintf(b, sizeof(b), "m_materials[%d] = %.4f %.4f %.4f %.4f\n", i, f.mat[i * 4], f.mat[i * 4 + 1], f.mat[i * 4 + 2], f.mat[i * 4 + 3]); r += b; } else r += "(sin b4)\n";
+    if (f.objOk) { snprintf(b, sizeof(b), "\nposicion del objeto (m_world): %.3f %.3f %.3f\n", f.obj[3], f.obj[7], f.obj[11]); r += b; }
+    for (uint64_t h : cl.ps) {
+        const Rule* ru = RuleForHash(h); wchar_t nm[64]; swprintf(nm, 64, L"shaders\\%016llx-ps_replace.txt", (unsigned long long)h);
+        bool repl = GetFileAttributesW((g_cfg.baseDir + nm).c_str()) != INVALID_FILE_ATTRIBUTES;
+        snprintf(b, sizeof(b), "\n[shader %016llx] %s\n", (unsigned long long)h, repl ? "reemplazado por el mod" : "del juego"); r += b;
+        if (ru) for (auto& a : ru->actions) { const char* k = a.kind == RuleAction::CopyCB ? "copy_cb" : a.kind == RuleAction::RefSRV ? "ref_srv" : a.kind == RuleAction::BindCB ? "cb" : a.kind == RuleAction::BindSRV ? "srv" : a.kind == RuleAction::SetParam ? "param" : a.kind == RuleAction::EventTurf ? "event" : "facegen";
+            snprintf(b, sizeof(b), "regla: %s %d %s %d\n", k, a.slot, a.name.c_str(), a.idx); r += b; }
+        if (repl) for (int n : ParamsUsedBy(h)) { snprintf(b, sizeof(b), "param %d: %.4f %.4f %.4f %.4f\n", n, g_cfg.live[n][0], g_cfg.live[n][1], g_cfg.live[n][2], g_cfg.live[n][3]); r += b; }
+        std::lock_guard<std::mutex> lk(s_layMx); auto it = s_layers.find(h);
+        if (it != s_layers.end()) { if (it->second.hidden) r += "capa: OCULTA\n"; if (it->second.highlight) r += "capa: resaltada\n"; for (auto& sl : it->second.slot) { snprintf(b, sizeof(b), "capa t%d = %s\n", sl.first, sl.second.c_str()); r += b; } }
+    }
+    std::vector<float> L, S;
+    if (NamedCBRead("LightCB", L) && L.size() >= 44) { r += "\n[luz de la escena cPSLight b3]\nm_lightDir0 = " + FmtCB(L, 0, 4) + "\nm_lightColor0 = " + FmtCB(L, 4, 4) + "\nm_lightColor1 = " + FmtCB(L, 8, 4) + "\nm_lightSourcePos = " + FmtCB(L, 12, 4) + "\nm_lightSourceColor = " + FmtCB(L, 16, 4) + "\nm_lightSourceDir = " + FmtCB(L, 20, 4) + "\nm_lightSourceParam1 = " + FmtCB(L, 24, 4) + "\nm_lightSourceParam2 = " + FmtCB(L, 28, 4) + "\nm_lightSourceParam3 = " + FmtCB(L, 32, 4) + "\nm_lightPos0 = " + FmtCB(L, 36, 4) + "\nm_lightParam2 = " + FmtCB(L, 40, 4) + "\n"; }
+    if (NamedCBRead("SceneCB", S) && S.size() >= 120) { r += "\n[escena cPSScene b2]\nm_eyepos = " + FmtCB(S, 80, 4) + "\nm_projectionParam = " + FmtCB(S, 84, 4) + "\nm_viewportSize = " + FmtCB(S, 88, 4) + "\nm_exposure = " + FmtCB(S, 92, 4) + "\nm_fogParam = " + FmtCB(S, 96, 12) + "\nm_fogColor = " + FmtCB(S, 108, 4) + "\nm_shadowMapResolutions = " + FmtCB(S, 116, 4) + "\n"; }
+    FILE* fp = _wfopen((dir + L"\\" + std::wstring(fn.begin(), fn.end())).c_str(), L"wb"); if (!fp) return false; fwrite(r.data(), 1, r.size(), fp); fclose(fp);
+    Log("inspector: informe guardado en %s", outPath.c_str());
+    return true;
+}
+
 // capa de ImGui: rectangulos, flechas y fichas (se dibuja con el menu abierto o cerrado)
 void InspectDrawOverlay() {
     if (!g_inspectOn) return;
@@ -510,6 +549,12 @@ void InspectDrawOverlay() {
             if (ImGui::Checkbox("Resaltar en magenta", &hl)) { std::lock_guard<std::mutex> lk(s_layMx); for (uint64_t h : cl.ps) s_layers[h].highlight = hl; LayersUpdateAny(); }
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Dibuja esta capa con un shader magenta plano: lo que se pinte de magenta es exactamente lo que dibuja este shader.");
             ImGui::SameLine(); if (ImGui::Button("Guardar capas")) Log("capas: %s", SaveLayers() ? "guardadas en PES21FX_capas.ini" : "no se pudo guardar");
+            ImGui::SameLine(); { static std::string rep; static double repT = 0; if (ImGui::Button("Guardar informe")) { std::string pth; rep = SaveReport(sel, pth) ? "Informe: " + pth : "No se pudo guardar el informe"; repT = Now(); }
+              if (ImGui::IsItemHovered()) ImGui::SetTooltip("Escribe PES21FX\\inspector\\<clase>_<hash>.txt con todo lo recopilado: shaders, texturas (origen y formato), material, regla, parametros del mod, capas cambiadas y la luz de la escena.");
+              if (!rep.empty() && Now() - repT < 6.0) { ImGui::SameLine(); ImGui::TextDisabled("%s", rep.c_str()); } }
+            { bool flat = g_cfg.live[89][0] > 0.5f; if (ImGui::Checkbox("Luz plana", &flat)) g_cfg.live[89][0] = flat ? 1.0f : 0.0f;
+              if (ImGui::IsItemHovered()) ImGui::SetTooltip("Apaga la iluminacion del sol (sin direccion, sombras ni brillos): se ven las texturas y materiales tal cual. Nivel y brillo en Iluminacion > Luz plana.");
+              ImGui::SameLine(); ImGui::SetNextItemWidth(120); ImGui::SliderFloat("nivel##flat", &g_cfg.live[89][1], 0.2f, 3.0f, "%.2f"); }
             ImGui::SameLine(); if (ImGui::Button("Releer archivos")) ScanFiles();
             ImGui::SameLine(); if (ImGui::Button("Quitar todas")) { std::lock_guard<std::mutex> lk(s_layMx); for (uint64_t h : cl.ps) s_layers.erase(h); LayersUpdateAny(); }
             bool isFace = false; for (uint64_t h : cl.ps) if (h == 0x5ce3ed8702271bc1ULL) isFace = true;
