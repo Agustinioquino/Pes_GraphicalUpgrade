@@ -161,6 +161,9 @@ void main(
   out float4 o4 : SV_Target4)
 {
   float2 v2 = v2in.zw;   // PES21 (19/10): variante de la cara con animacion facial (primeros planos)
+  float2 uvD = v2in.xy;  // PES21 (19/10 b): en el original la DIFUSA (t0) se lee con TEXCOORD0.xy y el resto (normal, srm, suciedad,
+                         // animacion, mascaras) con .zw. Las caras genericas de Konami (VS 455eb97bc2c3a958) traen dos UV distintos:
+                         // con un solo UV la difusa salia como un barrido diagonal.
   float4 r0,r1,r2,r3,r4;
   uint4 bitmask, uiDest;
   float4 fDest;
@@ -337,12 +340,12 @@ void main(
   float filmWet = zonesOn ? saturate(sweatProgZ * zoneSw) * saturate(P72.x) : 0.0;
   if (enhance && P9.z > 0) {
     // vello facial pintado (barba, cejas, bigote): mascara por color oscuro y poco saturado
-    float3 albE = g_tex_diffuse.Sample(g_samplerAnisotropic_Clamp_s, v2.xy).xyz;
+    float3 albE = g_tex_diffuse.Sample(g_samplerAnisotropic_Clamp_s, uvD).xyz;
     float lumE = dot(albE, float3(0.2126, 0.7152, 0.0722));
     float mxE = max(albE.r, max(albE.g, albE.b)), mnE = min(albE.r, min(albE.g, albE.b));
     float satE = (mxE - mnE) / max(mxE, 1e-3);
     // relativo al tono de piel local (mip alto = color medio de la zona): sirve para pieles claras y oscuras
-    float3 albA = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy, 5.0).xyz;
+    float3 albA = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, uvD, 5.0).xyz;
     float lumA = dot(albA, float3(0.2126, 0.7152, 0.0722));
     float ratioE = lumE / max(lumA, 0.005);
     fhMask = smoothstep(0.62, 0.38, ratioE) * smoothstep(0.15, 0.06, lumE) * smoothstep(0.45, 0.20, satE) * saturate(P9.z);
@@ -405,9 +408,9 @@ void main(
 
   // ---- especular / brillo / albedo / suciedad ----
   r0.zw = g_tex_srm.SampleBias(g_sampler_srm_s, v2.xy, faceBD).xy;
-  r1.w = g_tex_diffuse.CalculateLevelOfDetail(g_samplerAnisotropic_Clamp_s, v2.xy);
+  r1.w = g_tex_diffuse.CalculateLevelOfDetail(g_samplerAnisotropic_Clamp_s, uvD);
   r1.w = clamp(r1.w + faceBD, 0, 5);
-  r2.xyz = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy, r1.w).xyz;
+  r2.xyz = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, uvD, r1.w).xyz;
   r3.xyz = g_tex_Dirty.Sample(g_sampler_Dirty_s, v2.xy).xyz;
   r1.w = saturate(dot(g_psMaterial.m_materials[1].yzw, r3.xyz));
   r3.xy = r0.ww * float2(255,255) + float2(-205,-170);
