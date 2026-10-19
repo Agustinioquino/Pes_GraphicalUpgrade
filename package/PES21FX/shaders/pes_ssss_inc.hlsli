@@ -10,6 +10,7 @@ cbuffer cPSScene : register(b2) {
   float4 m_eyepos; float4 m_projectionParam; float4 m_viewportSize; float4 m_exposure; float4 m_fogParam[3]; float4 m_fogColor;
   float4 m_cameraCenterOffset; float4 m_shadowMapResolutions;
 };
+cbuffer cPSSystem : register(b0) { float4 m_param; float4 m_renderInfo; float4 m_renderBuffer; float4 m_dominantLightDir; float4 m_timeParam; };
 Texture2D<float4> inLight : register(t0);
 Texture2D<float4> inDepth : register(t1);
 Texture2D<float4> inMat   : register(t2);
@@ -56,8 +57,11 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   float z0 = LinZ(uv);
   float3 n0 = DecN(uv);
   // pixeles por metro a esta profundidad (m_projectionParam.x = 1/(2*proj[0][0]) aprox, igual que en la composicion)
-  float2 rb = 1.0 / m_viewportSize.xy;                       // tamano de un pixel en uv
-  float pxm = 1.0 / max(2.0 * abs(m_projectionParam.x) * z0 * rb.x, 1e-5);
+  // tamano de un pixel en uv: del propio triangulo (exacto, no depende de como venga m_viewportSize)
+  float2 rb = abs(float2(ddx(uv.x), ddy(uv.y)));
+  float pxm = 1.0 / max(2.0 * abs(m_projectionParam.x) * z0 * m_renderBuffer.z, 1e-5);   // misma formula que la composicion
+  // diagnostico: x95 >= 2.95 pinta la piel: verde = pasa por aca, con el ancho en pixeles como brillo
+  if (P.x >= 2.95) return float4(0, saturate(6.0 * 0.001 * pxm / 40.0), 0, 1);
   float widthScale = (P.x > 0 ? P.x : 1.0);
   float mmToPx = 0.001 * pxm * widthScale;
   float rMaxPx = 6.0 * mmToPx;
