@@ -104,6 +104,17 @@ void main(
   float mRefl    = (Q18.x > 0) ? Q18.x : 1.0;
   float mTrans   = (Q18.y > 0) ? Q18.y : 1.0;
   float mTeeth = 0, mTissue = 0, mDeep = 0;
+  // === PES21 (19/10) boca v2: calibrada con las texturas volcadas (oral 512: dientes de arriba v 0.08..0.33, de abajo 0.38..0.62,
+  // lengua abajo-izquierda, garganta abajo-derecha). x96 translucidez del esmalte, y96 brillo del esmalte, z96 encias (color/humedad),
+  // w96 sombra del labio superior; x97 tono del esmalte (0 blanco .. 1 marfil/amarillento), y97 linea de encia (oclusion), z97 on/off
+  float4 Q96 = IniParams.Load(int2(96,0));
+  float4 Q97 = IniParams.Load(int2(97,0));
+  bool  m2On = mOn && Q97.z > 0.5;
+  float mUpper = smoothstep(0.36, 0.34, v2.y) * smoothstep(0.05, 0.08, v2.y);   // fila de arriba
+  float mLower = smoothstep(0.36, 0.38, v2.y) * smoothstep(0.65, 0.62, v2.y);   // fila de abajo
+  // posicion dentro del diente: 0 = linea de encia, 1 = borde incisal
+  float mIncisal = mUpper * saturate((v2.y - 0.10) / 0.22) + mLower * saturate((0.60 - v2.y) / 0.20);
+  float mEnamelT = 0, mGumLine = 0, mLipShadow = 0;
   uint4 bitmask, uiDest;
   float4 fDest;
 
@@ -205,6 +216,30 @@ void main(
     // oclusion de la cavidad: la luz casi no entra al fondo de la boca
     float occ = 1.0 - mCavity * (0.25 * mTeeth + 0.45 * mTissue + 0.75 * mDeep);
     r0.xyz *= occ;
+    if (m2On) {
+      float trmT = g_tex_translucent.Sample(g_sampler_translucent_s, v2.xy).y;   // grosor del esmalte (claro = fino)
+      // ESMALTE: translucido y azulado-gris en el borde incisal, calido (dentina) hacia la encia
+      mEnamelT = mTeeth * saturate(Q96.x) * smoothstep(0.45, 0.95, mIncisal) * saturate(trmT * 1.5);
+      float3 dentin = float3(1.0, 0.93, 0.80);                                  // dentina calida
+      float3 edge   = float3(0.86, 0.92, 1.0);                                   // borde translucido (deja ver la boca oscura)
+      float3 tooth  = lerp(dentin, float3(1, 1, 1), mIncisal * 0.6);
+      tooth = lerp(tooth, edge * 0.75, mEnamelT * 0.7);
+      float age = saturate(Q97.x);
+      tooth *= lerp(float3(1, 1, 1), float3(1.0, 0.92, 0.72), age * (1.0 - 0.5 * mIncisal));   // marfil hacia la encia
+      r0.xyz = lerp(r0.xyz, r0.xyz * tooth, mTeeth);
+      // linea de encia: oclusion fina donde el diente nace de la encia
+      mGumLine = saturate(Q97.y) * (mUpper * smoothstep(0.16, 0.09, v2.y) + mLower * smoothstep(0.54, 0.61, v2.y)) * (mTeeth + mTissue * 0.6);
+      r0.xyz *= 1.0 - 0.35 * mGumLine;
+      // ENCIAS: rosado sano, menos "carne cruda": subir un poco la saturacion y llevar el tono a rosa-coral
+      float gum = mTissue * saturate(Q96.z);
+      float lum = dot(r0.xyz, float3(0.3, 0.59, 0.11));
+      float3 pink = lerp(r0.xyz, float3(1.0, 0.45, 0.48) * lum * 1.9, 0.35);
+      r0.xyz = lerp(r0.xyz, pink, gum);
+      // SOMBRA DEL LABIO SUPERIOR: la fila de arriba recibe la sombra del labio (mas cerca de la encia, mas sombra),
+      // la de abajo la del propio labio inferior pero mucho menos
+      mLipShadow = saturate(Q96.w) * (mUpper * (1.0 - 0.75 * mIncisal) * 0.45 + mLower * 0.12);
+      r0.xyz *= 1.0 - mLipShadow;
+    }
   }
   r0.xyz = r0.xyz * r0.www + r3.xyz;
   r3.xyz = max(float3(9.99999975e-006,9.99999975e-006,9.99999975e-006), r0.xyz);
@@ -286,6 +321,16 @@ void main(
   o4.xyzw = float4(0,0,0,1);
   if (mOn) {
     o2.y = saturate(mSpec * (1.0 + 0.4 * mWet * mTissue) + 0.04 * mWet * mTissue) * (1.0 - 0.5 * mCavity * mDeep);
+    if (m2On) {
+      // esmalte: brillo alto y nitido (como vidrio mojado); encias humedas con brillo mas ancho
+      float en = mTeeth * saturate(Q96.y);
+      o2.y = saturate(o2.y + 0.10 * en + 0.05 * mTissue * saturate(Q96.z));
+      o2.x = lerp(o2.x, max(0.13, min(o2.x, 0.16)), en);
+      o2.x = lerp(o2.x, max(0.13, min(o2.x, 0.22)), mTissue * saturate(Q96.z) * 0.8);
+      o2.x = max(0.13, o2.x);
+      // translucidez del esmalte al G-buffer (la luz de piel la usa): borde incisal translucido
+      o1.z = max(o1.z, 0.000977517106 * ((uint)(saturate(mEnamelT) * 63 + 0.5) << 4));
+    }
     if (Q18.z > 0.5) o0.xyz = float3(mTissue, mDeep, mTeeth);   // diagnostico
   }
   return;
