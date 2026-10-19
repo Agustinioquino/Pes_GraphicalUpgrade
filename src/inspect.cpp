@@ -101,7 +101,7 @@ struct ClassFrame {
 };
 static std::vector<ClassFrame> s_cls;   // una por clase (misma posicion que s_classes), mas las desconocidas al final
 static std::vector<uint64_t> s_unkHash;   // hash de cada clase desconocida (indices >= s_classes.size())
-static const int kMaxUnknown = 12;
+static const int kMaxUnknown = 24;
 static bool s_loaded = false;
 static ID3D11PixelShader* s_whitePS = nullptr; static bool s_psTried = false;
 static std::mutex s_mx;
@@ -218,24 +218,30 @@ static std::string DescribeSRV(ID3D11ShaderResourceView* v) {
 
 // llamado desde FX_DRAW despues del dibujo real. Si devuelve true, el dibujo se repite (con nuestro PS y RT) y luego InspectEnd.
 bool InspectBegin(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEntry* vs, int kind, UINT verts, UINT inst) {
-    if (!ps || !g_dev.dev) return false;
+    if (!g_dev.dev) return false;
     if ((s_frame.load() % 3) != 0) return false;
     EnsureRes(); if (!s_whitePS) return false;
+    // PS no registrado por el mod (creado antes del enganche u otro camino): se identifica por puntero
+    uint64_t psHash = ps ? ps->hash : 0; bool unreg = false;
+    if (!ps) { ID3D11PixelShader* raw = nullptr; c->PSGetShader(&raw, nullptr, nullptr); if (!raw) return false; psHash = 0xF000000000000000ULL | ((uintptr_t)raw & 0x0FFFFFFFFFFFFFFFULL); raw->Release(); unreg = true; }
     int ci = -1;
     std::lock_guard<std::mutex> lk(s_mx);
     if (!s_loaded) { LoadClasses(); LoadLayers(); ScanFiles(); s_loaded = true; for (auto& f : s_cls) { if (f.rt) f.rt->Release(); if (f.rtv) f.rtv->Release(); for (auto* t : f.st) if (t) t->Release(); for (auto& t : f.tex) if (t.srv) t.srv->Release(); for (auto& t : f.vtex) if (t.srv) t.srv->Release(); if (f.matCopy) f.matCopy->Release(); if (f.matStg) f.matStg->Release(); if (f.objCopy) f.objCopy->Release(); if (f.objStg) f.objStg->Release(); } s_cls.clear(); s_unkHash.clear(); s_cls.resize(s_classes.size()); }
-    for (size_t i = 0; i < s_classes.size() && ci < 0; i++) for (uint64_t h : s_classes[i].ps) if (h == ps->hash) { ci = (int)i; break; }
+    for (size_t i = 0; i < s_classes.size() && ci < 0; i++) for (uint64_t h : s_classes[i].ps) if (h == psHash) { ci = (int)i; break; }
     if (ci < 0) {
-        // desconocido: solo geometria con bastantes vertices en un dibujo con varios render targets (G-buffer), hasta kMaxUnknown
-        if (!s_unknownOn || verts < 300) return false;
-        for (size_t i = 0; i < s_unkHash.size(); i++) if (s_unkHash[i] == ps->hash) { ci = (int)(s_classes.size() + i); break; }
+        // desconocido: geometria (>= 100 vertices) en un dibujo con render target de pantalla (G-buffer), hasta kMaxUnknown
+        if (!s_unknownOn || verts < 100) return false;
+        for (size_t i = 0; i < s_unkHash.size(); i++) if (s_unkHash[i] == psHash) { ci = (int)(s_classes.size() + i); break; }
         if (ci < 0) {
             if ((int)s_unkHash.size() >= kMaxUnknown) return false;
             ID3D11RenderTargetView* rts[8] = {}; c->OMGetRenderTargets(8, rts, nullptr); int nrt = 0; for (auto* r : rts) if (r) { nrt++; r->Release(); }
-            if (nrt < 3) return false;
-            s_unkHash.push_back(ps->hash); s_cls.push_back(ClassFrame()); ci = (int)s_cls.size() - 1;
-            char nm[64]; snprintf(nm, sizeof(nm), "%016llx", (unsigned long long)ps->hash);
-            InspClass u; u.ps.push_back(ps->hash); u.name = std::string("Desconocido ") + nm; u.desc = "Shader sin clase: agregalo a PES21FX_inspector.ini ([seccion] ps = " + std::string(nm) + ", nombre = ..., que = ..., grupo = ...)"; u.unknown = true; u.group = "desconocidos";
+            if (nrt < 2) return false;   // (la pasada de sombras tiene 0-1 targets)
+            s_unkHash.push_back(psHash); s_cls.push_back(ClassFrame()); ci = (int)s_cls.size() - 1;
+            char nm[64]; snprintf(nm, sizeof(nm), "%016llx", (unsigned long long)psHash);
+            InspClass u; u.ps.push_back(psHash);
+            if (unreg) { u.name = std::string("SIN REGISTRAR ") + (nm + 4); u.desc = "Pixel shader que el mod no vio crearse (puntero " + std::string(nm + 4) + "): el juego lo creo antes del enganche o por otro camino. Hace falta capturarlo con 'Capturar shaders' o reiniciar el juego con el mod ya cargado."; }
+            else { u.name = std::string("Desconocido ") + nm; u.desc = "Shader sin clase: agregalo a PES21FX_inspector.ini ([seccion] ps = " + std::string(nm) + ", nombre = ..., que = ..., grupo = ...)"; }
+            u.unknown = true; u.group = "desconocidos";
             s_classes.push_back(u);
         }
     }
