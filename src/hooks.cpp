@@ -495,6 +495,22 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (ps && ps->hash == 0x5ce3ed8702271bc1ULL) {
         ID3D11ShaderResourceView* chk[4] = {}; c->PSGetShaderResources(23, 4, chk);
         if (chk[0]) g_stFaceT23++; if (chk[3]) g_stFaceT26++;
+        // 19/10: una vez cada 10 s, describir lo que hay en t23..t26 (es nuestra textura generada o es otra cosa?)
+        static double nextDesc = 0; double tn = Now();
+        if (tn > nextDesc) { nextDesc = tn + 10.0;
+            char line[512]; int n = snprintf(line, sizeof(line), "cara: t23..t26 en el dibujo:");
+            for (int i = 0; i < 4 && n < 480; i++) {
+                if (!chk[i]) { n += snprintf(line + n, sizeof(line) - n, " [t%d vacio]", 23 + i); continue; }
+                ID3D11Resource* res = nullptr; chk[i]->GetResource(&res);
+                D3D11_RESOURCE_DIMENSION dim = D3D11_RESOURCE_DIMENSION_UNKNOWN; if (res) res->GetType(&dim);
+                if (res && dim == D3D11_RESOURCE_DIMENSION_TEXTURE2D) { D3D11_TEXTURE2D_DESC td; ((ID3D11Texture2D*)res)->GetDesc(&td);
+                    D3D11_SHADER_RESOURCE_VIEW_DESC vd; chk[i]->GetDesc(&vd);
+                    n += snprintf(line + n, sizeof(line) - n, " [t%d %ux%u fmt %d mips %u bind %u misc %u vista mip %u/%u]", 23 + i, td.Width, td.Height, (int)td.Format, td.MipLevels, td.BindFlags, td.MiscFlags, vd.Texture2D.MostDetailedMip, vd.Texture2D.MipLevels); }
+                else n += snprintf(line + n, sizeof(line) - n, " [t%d dim %d]", 23 + i, (int)dim);
+                if (res) res->Release();
+            }
+            Log("%s", line);
+        }
         for (auto* v : chk) if (v) v->Release();
     }
     return d.n > 0;

@@ -186,6 +186,7 @@ static bool EnsureShaders() {
         g_dev.dev->CreateSamplerState(&sd, &s_samp);
     }
     if (!s_shadersOk) Log("facegen: no se pudieron compilar los shaders del generador (ver errores arriba)");
+    else Log("facegen: generador compilado (shaders\\pes_facegen_ps.hlsl)");
     return s_shadersOk;
 }
 
