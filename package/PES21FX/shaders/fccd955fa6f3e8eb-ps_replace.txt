@@ -248,7 +248,10 @@ void main(
     float ndv = saturate(dot(eyeNc, eyeV));
     float F = 0.025 + 0.975 * pow(1 - ndv, 5);
     float rmask = max(eyeMask, irisM);
-    float3 refl = eyeRefl * rmask * lerp(1.0, (0.35 + 6.0 * F), saturate(P90.y)) * (0.6 + 0.8 * P90.y);
+    // 19/10 b: menos reflejo de frente que el juego (Fresnel real: 0.25x de frente, crece de costado); antes el ojo quedaba
+    // lechoso y con brillo de mas
+    float fres = lerp(1.0, 0.25 + 4.0 * F, saturate(P90.y));
+    float3 refl = eyeRefl * rmask * fres;
     // reflejo en espacio de pantalla: lo que de verdad hay delante del jugador (cuadro anterior), si el rayo cae en pantalla
     { float3 Rv = normalize(2 * eyeNc * dot(eyeNc, eyeV) - eyeV);    // reflejo en espacio de vista
       float3 dirC = -eyeV;
@@ -263,8 +266,10 @@ void main(
         if (edge > 0.001) {
           float3 sc = pesFrame.SampleLevel(g_samplerLinear_Wrap_s, saturate(suv), 2).xyz;
           sc = sc * sc;   // sRGB aprox -> lineal
-          float3 ssr = sc * rmask * (0.35 + 6.0 * F) * saturate(P90.y) * 0.5;
-          refl = lerp(refl, ssr, edge * 0.7);
+          // solo sobre la cornea del iris (en la esclerotica blanca volvia el ojo lechoso)
+          float ssrM = smoothstep(1.35, 1.0, irisR);
+          float3 ssr = sc * fres * saturate(P90.y) * 0.3;
+          refl = lerp(refl, ssr, edge * 0.5 * ssrM);
         } } }
     o0.xyz = base + refl;
     // brillo del sol/focos sobre la cornea: rugosidad baja donde hay cornea (lo resuelve la luz diferida del juego).
