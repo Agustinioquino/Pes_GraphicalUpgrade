@@ -79,8 +79,8 @@ static std::vector<ClassFrame> s_cls;   // una por clase (misma posicion que s_c
 static std::vector<uint64_t> s_unkHash;   // hash de cada clase desconocida (indices >= s_classes.size())
 static const int kMaxUnknown = 6;
 static bool s_loaded = false;
-void InspectReload() { std::lock_guard<std::mutex> lk(s_mx); s_loaded = false; }
 static std::mutex s_mx;
+void InspectReload() { std::lock_guard<std::mutex> lk(s_mx); s_loaded = false; }
 static ID3D11PixelShader* s_whitePS = nullptr; static bool s_psTried = false;
 static ID3D11DepthStencilState* s_noDepth = nullptr; static ID3D11BlendState* s_noBlend = nullptr;
 static float s_screenW = 1920, s_screenH = 1080;
