@@ -33,14 +33,16 @@ struct FaceEntry {
 struct HairCB { float a[4]; float b[4]; float root[4]; float tip[4]; float brow[4]; float misc[4]; };
 static std::atomic<int> s_hairGen{0};
 void FaceGenHairChanged() { s_hairGen++; }
-static HairCB MakeHairCB(const HairType& t, bool userMap) {
+static float FaceSeed(const std::string& id) {   // 19/10: semilla 0..1 estable por cara (para variar dientes/encias por jugador)
+    uint32_t h = 2166136261u; for (unsigned char ch : id) { h ^= ch; h *= 16777619u; } return (h & 0xffffff) / 16777216.0f; }
+static HairCB MakeHairCB(const HairType& t, bool userMap, const std::string& id = "") {
     HairCB cb{};
     cb.a[0] = t.largo; cb.a[1] = t.rizo; cb.a[2] = t.rigidez; cb.a[3] = t.peso;
     cb.b[0] = t.grosor; cb.b[1] = t.densidad; cb.b[2] = t.brillo; cb.b[3] = t.flequillo;
     for (int i = 0; i < 3; i++) { cb.root[i] = t.raiz[i] < 0 ? 0 : t.raiz[i]; cb.tip[i] = t.punta[i] < 0 ? 0 : t.punta[i]; }
     cb.root[3] = t.raiz[0] >= 0 ? 1.f : 0.f; cb.tip[3] = t.punta[0] >= 0 ? 1.f : 0.f;
     cb.brow[0] = t.cejaGrosor; cb.brow[1] = t.cejaDens; cb.brow[2] = t.cejaElev; cb.brow[3] = t.cejaLargo;
-    cb.misc[0] = 1.f; cb.misc[1] = userMap ? 1.f : 0.f; cb.misc[2] = 0; cb.misc[3] = 0;
+    cb.misc[0] = 1.f; cb.misc[1] = userMap ? 1.f : 0.f; cb.misc[2] = FaceSeed(id); cb.misc[3] = 0;
     return cb;
 }
 // identidad estable de una cara: hash FNV-1a de un mip chico (<= 64 px) de su mapa de normales (copia a staging, contexto inmediato)
@@ -213,7 +215,7 @@ void FaceGenPresent() {
       if (g != seenGen) { seenGen = g; std::lock_guard<std::mutex> lk(s_mx);
         for (auto& kv : s_cache) { FaceEntry& fe = kv.second; if (!fe.hairCB) continue;
             const HairType* ht = HairTypeFor(fe.id, &fe.type);
-            if (ht) { HairCB cb = MakeHairCB(*ht, fe.userMap); g_dev.imm->UpdateSubresource(fe.hairCB, 0, nullptr, &cb, 0, 0); fe.hairGen = g; } } } }
+            if (ht) { HairCB cb = MakeHairCB(*ht, fe.userMap, fe.id); g_dev.imm->UpdateSubresource(fe.hairCB, 0, nullptr, &cb, 0, 0); fe.hairGen = g; } } } }
     std::vector<FaceReq> todo;
     {
         std::lock_guard<std::mutex> lk(s_mx);
@@ -281,7 +283,7 @@ void FaceGenPresent() {
                 }
                 const HairType* ht = HairTypeFor(e.id, &e.type);
                 if (ht) {
-                    HairCB cb = MakeHairCB(*ht, e.userMap);
+                    HairCB cb = MakeHairCB(*ht, e.userMap, e.id);
                     D3D11_BUFFER_DESC cd{}; cd.ByteWidth = sizeof(HairCB); cd.Usage = D3D11_USAGE_DEFAULT; cd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
                     D3D11_SUBRESOURCE_DATA init{ &cb, 0, 0 };
                     g_dev.dev->CreateBuffer(&cd, &init, &e.hairCB); e.hairGen = s_hairGen.load();

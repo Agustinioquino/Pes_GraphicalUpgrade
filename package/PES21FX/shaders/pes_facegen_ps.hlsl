@@ -129,5 +129,23 @@ void main(float4 pos : SV_Position, float2 uv : TEXCOORD0, out float4 o0 : SV_Ta
     }
     // zona de ceja: alpha 1 (el diagnostico "semillas sobre la cara" pinta de azul la zona sin semilla)
     if (browZoneDbg > 0.05) o2.a = 1.0;
+    // --- (19/10) semillas de CUERO CABELLUDO: pelo con hebras. Fuera de la zona de ceja y de la cara central, donde el
+    // color marca pelo (alpha de las capas de pelo o alta frecuencia oscura). Direccion: hacia atras/abajo desde la coronilla
+    // (en el plano UV de la cara el pelo sale por arriba y los lados), con ruido. Largo relativo por celda. A = 0.9 (no ceja).
+    if (o2.a < 0.95 && browZoneDbg < 0.05) {
+      float scalpZone = 1.0 - Ell(cuv, float2(0.5, 0.52), float2(0.30, 0.30), 0.6);   // fuera del ovalo de la cara
+      scalpZone *= smoothstep(0.80, 0.70, cuv.y);                                      // no el cuello
+      float hairC = saturate(max(alphaC * 0.9, darkC)) * scalpZone;
+      if (hairC > 0.25) {
+        // direccion: desde la coronilla (0.5, 0.12) hacia afuera y abajo en UV, con ruido de +-25 grados
+        float2 dir = normalize(cuv - float2(0.5, 0.12) + float2(0, 0.001));
+        float ang = (h21(cell + 3.3) - 0.5) * 0.87;
+        float cs = cos(ang), sn = sin(ang);
+        dir = float2(dir.x * cs - dir.y * sn, dir.x * sn + dir.y * cs);
+        float len = 0.6 + 0.4 * h21(cell + 9.2);
+        float angN = frac(atan2(dir.y, dir.x) / 6.2831853 + 1.0);
+        o2 = float4(saturate(hairC * 0.9), len, angN, 0.9);
+      }
+    }
   }
 }

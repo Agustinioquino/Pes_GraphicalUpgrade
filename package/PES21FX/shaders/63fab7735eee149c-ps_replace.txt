@@ -68,6 +68,8 @@ Texture2D<float4> g_tex_normal : register(t1);
 Texture2D<float4> g_tex_srm : register(t2);
 Texture2D<float4> g_tex_translucent : register(t3);
 Texture2D<float4> g_MaterialTexture : register(t10);
+// (19/10) b11 de la cara (lo enlaza la DLL): pesHairMisc.z = semilla 0..1 de esta cara -> variacion de dientes/encias por jugador
+cbuffer PESHair : register(b11) { float4 pesHairA; float4 pesHairB; float4 pesHairRoot; float4 pesHairTip; float4 pesHairBrow; float4 pesHairMisc; }
 TextureCube<float4> g_ReflectionTexture : register(t11);
 Texture2D<float4> g_tex_mesh : register(t15);
 
@@ -224,14 +226,18 @@ void main(
       float3 edge   = float3(0.86, 0.92, 1.0);                                   // borde translucido (deja ver la boca oscura)
       float3 tooth  = lerp(dentin, float3(1, 1, 1), mIncisal * 0.6);
       tooth = lerp(tooth, edge * 0.75, mEnamelT * 0.7);
-      float age = saturate(Q97.x);
+      // variacion por jugador (semilla de la cara): tono marfil +-, encias mas o menos rosadas, esmalte mas o menos translucido
+      float fs = pesHairMisc.x > 0.5 ? pesHairMisc.z : 0.5;
+      float v1 = frac(fs * 7.31), v2 = frac(fs * 13.7 + 0.3), v3 = frac(fs * 29.1 + 0.7);
+      float age = saturate(Q97.x + (v1 - 0.5) * 0.5 * saturate(Q97.w));
       tooth *= lerp(float3(1, 1, 1), float3(1.0, 0.92, 0.72), age * (1.0 - 0.5 * mIncisal));   // marfil hacia la encia
       r0.xyz = lerp(r0.xyz, r0.xyz * tooth, mTeeth);
       // linea de encia: oclusion fina donde el diente nace de la encia
       mGumLine = saturate(Q97.y) * (mUpper * smoothstep(0.16, 0.09, v2.y) + mLower * smoothstep(0.54, 0.61, v2.y)) * (mTeeth + mTissue * 0.6);
       r0.xyz *= 1.0 - 0.35 * mGumLine;
       // ENCIAS: rosado sano, menos "carne cruda": subir un poco la saturacion y llevar el tono a rosa-coral
-      float gum = mTissue * saturate(Q96.z);
+      float gum = mTissue * saturate(Q96.z) * (0.75 + 0.5 * v2 * saturate(Q97.w) + 0.25 * (1 - saturate(Q97.w)));
+      mEnamelT *= (0.8 + 0.4 * v3 * saturate(Q97.w) + 0.2 * (1 - saturate(Q97.w)));
       float lum = dot(r0.xyz, float3(0.3, 0.59, 0.11));
       float3 pink = lerp(r0.xyz, float3(1.0, 0.45, 0.48) * lum * 1.9, 0.35);
       r0.xyz = lerp(r0.xyz, pink, gum);

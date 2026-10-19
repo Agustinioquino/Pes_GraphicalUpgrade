@@ -606,7 +606,10 @@ void main(
       // mapa de pelo (automatico o hair\<id>.png del usuario): R densidad, G largo, B angulo de peinado, A zona (1 = ceja)
       float2 cell = floor(v2.xy * 256.0);
       float4 sm = pesSeedMap.SampleLevel(g_samplerLinear_Clamp_s, (cell + 0.5) / 256.0, 0);   // (s11: el s8 del juego puede no estar enlazado en este dibujo)
-      float densMul = pesHairMisc.x > 0.5 ? pesHairB.y * pesHairBrow.y : 1.0;
+      bool isBrowZ = sm.a > 0.95;
+      float4 P76s = IniParams.Load(int2(76,0));   // x76 = pelo con hebras en el cuero cabelludo on/off, y76 densidad
+      float densMul = pesHairMisc.x > 0.5 ? (isBrowZ ? pesHairB.y * pesHairBrow.y : pesHairB.y) : 1.0;
+      if (!isBrowZ) densMul *= (P76s.x > 0.5 ? max(P76s.y, 0.0) * 0.35 : 0.0);   // cuero cabelludo: solo si esta prendido, menos denso (las tarjetas siguen)
       bool seedHere = sm.r > 0.01 && h21(cell + 0.37) < saturate(sm.r * densMul);
       float dbg75 = IniParams.Load(int2(75,0)).z;
       // diagnostico 2: semilla = magenta, zona de ceja sin semilla = azul; el resto de la cara muestra el mapa crudo
@@ -633,7 +636,7 @@ void main(
           float3 dirV = normalize(v4.xyz) * d2.x * flipD - normalize(v5.xyz) * d2.y * flipD;
           PesSeed sd;
           sd.posV = float4(posV, 1.0);
-          sd.nrmV = float4(normalize(r1.xyz), 0.0);
+          sd.nrmV = float4(normalize(r1.xyz), isBrowZ ? 0.0 : 1.0);   // w = 1: semilla de cuero cabelludo (pelo), 0: ceja
           sd.dirV = float4(normalize(dirV + 1e-5), sm.y);
           sd.col = float4(o0.xyz, asfloat(f32tof16(pesMotionRaw.x) | (f32tof16(pesMotionRaw.y) << 16)));
           if (idx < 65536u) { pesSeeds[idx] = sd; pesSeedArgs.InterlockedMax(0, 24u); }
