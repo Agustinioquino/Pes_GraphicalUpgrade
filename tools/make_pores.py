@@ -1,43 +1,64 @@
-# PES21 FX - textures\pes_skin_micro_n.dds: micro normal de piel en mosaico (1024, periodica): poros de dos tamanos,
-# lineas finas de la piel (red de celdas) y rugosidad fina. RGB normal tangente, A = mascara de poro (para brillo).
+# PES21 FX - textures\pes_skin_micro_n.dds: micro-relieve de piel en mosaico (1024, periodico), como la piel real de cerca:
+# islas poligonales algo abombadas separadas por surcos (red de la piel), sub-islas mas finas adentro, arrugas finas, y poros
+# escasos en los cruces de los surcos. RGB normal tangente, A = surcos + poros (oclusion/brillo).
 import numpy as np, struct, sys, os
-N = 1024; rng = np.random.default_rng(3)
-yy, xx = np.mgrid[0:N, 0:N].astype(np.float32)
-def crater_field(count, rmin, rmax, depth):
-    h = np.zeros((N, N), np.float32)
-    cx = rng.random(count) * N; cy = rng.random(count) * N; r = rng.uniform(rmin, rmax, count); d = depth * rng.uniform(0.5, 1.0, count)
-    for i in range(count):
-        R = int(r[i] * 3) + 1; x0 = int(cx[i]); y0 = int(cy[i])
-        ys = (np.arange(y0 - R, y0 + R + 1) % N); xs = (np.arange(x0 - R, x0 + R + 1) % N)
-        dy = (np.arange(y0 - R, y0 + R + 1) - cy[i])[:, None]; dx = (np.arange(x0 - R, x0 + R + 1) - cx[i])[None, :]
-        g = np.exp(-(dx * dx + dy * dy) / (2 * (r[i] * 0.55) ** 2))
-        h[np.ix_(ys, xs)] -= d[i] * g
-    return h
-# poros grandes (zona T) y chicos
-h = crater_field(2600, 3.0, 6.5, 1.0) + crater_field(14000, 1.2, 2.6, 0.45)
-# red de celdas: distancia al borde de Voronoi periodico (lineas finas hundidas)
-pts = rng.random((900, 2)) * N
 from scipy.spatial import cKDTree
-tiled = np.concatenate([pts + np.array([dx, dy]) * N for dx in (-1, 0, 1) for dy in (-1, 0, 1)])
-tree = cKDTree(tiled)
-q = np.stack([xx.ravel(), yy.ravel()], 1)
-d, _ = tree.query(q, k=2)
-edge = (d[:, 1] - d[:, 0]).reshape(N, N)
-lines = np.exp(-(edge / 1.3) ** 2)
-h -= 0.25 * lines
-# rugosidad fina
-fine = rng.random((N // 4, N // 4)).astype(np.float32)
-fine = np.kron(fine, np.ones((4, 4), np.float32))
 from scipy.ndimage import gaussian_filter
-fine = gaussian_filter(fine, 1.2, mode='wrap'); fine = (fine - fine.mean()) / (fine.std() + 1e-6)
-h += 0.06 * fine
-h = gaussian_filter(h, 0.6, mode='wrap')
-# normal
-s = 1.6
+N = 1024; rng = np.random.default_rng(11)
+yy, xx = np.mgrid[0:N, 0:N].astype(np.float32)
+# deformacion del dominio (ruido suave periodico) para que las islas no sean poligonos regulares
+def pnoise(cells, seed, sig):
+    r = np.random.default_rng(seed); g = r.random((cells, cells)).astype(np.float32)
+    g = np.kron(g, np.ones((N // cells, N // cells), np.float32)); g = gaussian_filter(g, sig, mode='wrap')
+    return (g - g.mean()) / (g.std() + 1e-6)
+wx = pnoise(16, 21, 18) * 9.0; wy = pnoise(16, 22, 18) * 9.0
+q = np.stack([((xx + wx) % N).ravel(), ((yy + wy) % N).ravel()], 1)
+def voronoi(count, seed, k=3):
+    r = np.random.default_rng(seed); pts = r.random((count, 2)) * N
+    tiled = np.concatenate([pts + np.array([dx, dy]) * N for dx in (-1, 0, 1) for dy in (-1, 0, 1)])
+    d, _ = cKDTree(tiled).query(q, k=k)
+    return [d[:, i].reshape(N, N) for i in range(k)]
+# --- islas primarias (red de la piel): bordes = surcos, interior abombado
+d1, d2, d3 = voronoi(520, 1)
+edge = d2 - d1                                   # 0 en el surco
+plateau = np.clip(edge / 11.0, 0, 1); plateau = plateau * plateau * (3 - 2 * plateau)   # subida suave desde el surco (surco ancho)
+dome = 1.0 - 0.55 * np.clip(d1 / 30.0, 0, 1) ** 1.5   # islas bien abombadas (empedrado)
+h = plateau * dome
+h = gaussian_filter(h, 2.5, mode='wrap')
+# bultos grandes de baja frecuencia (la piel no es plana)
+h += 0.25 * pnoise(32, 31, 6)
+# --- sub-islas (mas finas) solo dentro de las islas
+s1, s2, _ = voronoi(3000, 2)
+sub = np.clip((s2 - s1) / 3.0, 0, 1); sub = sub * sub * (3 - 2 * sub)
+h = h + 0.22 * plateau * gaussian_filter(sub, 1.0, mode='wrap')
+# --- arrugas finas: lineas direccionales (dos direcciones) de muy baja amplitud
+def lines(angle, freq, seed):
+    r = np.random.default_rng(seed)
+    g = r.random((N // 8, N // 8)).astype(np.float32); g = np.kron(g, np.ones((8, 8), np.float32))
+    g = gaussian_filter(g, (6.0, 0.8), mode='wrap')      # alargado en x
+    g = (g - g.mean()) / (g.std() + 1e-6)
+    # rotar por remuestreo periodico
+    c, s = np.cos(angle), np.sin(angle)
+    xr = (xx * c - yy * s) % N; yr = (xx * s + yy * c) % N
+    return g[yr.astype(int), xr.astype(int)]
+h += 0.035 * lines(0.6, 1, 3) + 0.03 * lines(-0.9, 1, 4)
+# --- poros: pocos, en cruces de surcos (d3 - d1 chico) elegidos al azar
+junction = (d3 - d1) < 4.0
+cand = np.argwhere(junction); sel = cand[rng.choice(len(cand), size=min(900, len(cand)), replace=False)]
+pore = np.zeros((N, N), np.float32)
+for (py, px) in sel:
+    R = 7; rad = rng.uniform(2.2, 4.2)
+    ys = np.arange(py - R, py + R + 1) % N; xs = np.arange(px - R, px + R + 1) % N
+    dy = (np.arange(-R, R + 1))[:, None]; dx = (np.arange(-R, R + 1))[None, :]
+    pore[np.ix_(ys, xs)] = np.maximum(pore[np.ix_(ys, xs)], np.exp(-(dx * dx + dy * dy) / (2 * rad * rad)))
+h -= 0.9 * pore
+h = gaussian_filter(h, 0.7, mode='wrap')
+# --- normal (la altura de surco a isla ~ 1 unidad; la escala la pone el shader)
+s = 2.2
 dx = (np.roll(h, -1, 1) - np.roll(h, 1, 1)) * 0.5 * s; dy = (np.roll(h, -1, 0) - np.roll(h, 1, 0)) * 0.5 * s
 n = np.stack([-dx, -dy, np.ones_like(h)], -1); n /= np.linalg.norm(n, axis=-1, keepdims=True)
-pore = np.clip(-h / 0.8, 0, 1)
-img = np.stack([n[..., 0] * 0.5 + 0.5, n[..., 1] * 0.5 + 0.5, n[..., 2] * 0.5 + 0.5, pore], -1)
+occ = np.clip((1.0 - plateau) * 0.6 + pore, 0, 1)     # surcos + poros (para oclusion y menos brillo)
+img = np.stack([n[..., 0] * 0.5 + 0.5, n[..., 1] * 0.5 + 0.5, n[..., 2] * 0.5 + 0.5, occ], -1)
 def write_dds(path, img):
     mips = []; cur = img.astype(np.float32)
     while True:
@@ -53,5 +74,5 @@ def write_dds(path, img):
 out = sys.argv[1] if len(sys.argv) > 1 else '.'
 write_dds(os.path.join(out, 'pes_skin_micro_n.dds'), img)
 from PIL import Image
-Image.fromarray((img[..., :3] * 255).astype(np.uint8)[:256, :256]).resize((512, 512)).save(os.path.join(out, 'pes_skin_micro_preview.png'))
+Image.fromarray((img[..., :3] * 255).astype(np.uint8)[:512, :512]).save(os.path.join(out, 'pes_skin_micro_preview.png'))
 print('ok')
