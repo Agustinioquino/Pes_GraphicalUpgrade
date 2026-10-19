@@ -500,7 +500,8 @@ static void RunRule(ID3D11DeviceContext* c, const ShaderEntry* e, DrawScope& d) 
 }
 
 static std::atomic<bool> s_firstRule{false};
-thread_local bool t_sparseGrass = false;   // el dibujo en curso es una parcela lejana del pasto (lo marca GrassOnDraw)
+thread_local bool t_sparseGrass = false;
+thread_local UINT t_drawVerts = 0;   // vertices del dibujo en curso (para "solo esta capa" del inspector)   // el dibujo en curso es una parcela lejana del pasto (lo marca GrassOnDraw)
 static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (g_cfg.bypass || !g_dev.dev) return false;
     CtxState& s = Ctx(c);
@@ -535,7 +536,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     // 19/10: capas editadas desde el inspector (PES21FX_capas.ini): textura por slot u "ocultar" el dibujo
     g_drawOrder++;
     if (ps && g_layersAny.load()) { LayerOv ov;
-        if (InspectShouldSkip(ps->hash)) { d.skip = true; g_layerSkips++; }
+        if (InspectShouldSkip(ps->hash, t_drawVerts)) { d.skip = true; g_layerSkips++; }
         if (ID3D11PixelShader* hp = InspectHighlightPS(ps->hash)) { c->PSGetShader(&d.restorePS, nullptr, nullptr); c->PSSetShader(hp, nullptr, 0); g_layerSkips++; }
         if (InspectLayerFor(ps->hash, ov)) {
             for (auto& kv : ov.slot) {
@@ -566,7 +567,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     }
     return d.n > 0;
 }
-#define FX_DRAW(verts, kind, inst, call) if (g_catalogHook) { CtxState& cs_ = Ctx(c); CatalogDraw(c, cs_.vs, cs_.ps, verts, kind, inst); } DrawScope ds; bool r = BeforeDraw(c, ds); if (!ds.skip) { call; } if (ds.restorePS) { c->PSSetShader(ds.restorePS, nullptr, 0); ds.restorePS->Release(); } \
+#define FX_DRAW(verts, kind, inst, call) if (g_catalogHook) { CtxState& cs_ = Ctx(c); CatalogDraw(c, cs_.vs, cs_.ps, verts, kind, inst); } t_drawVerts = (UINT)(verts); DrawScope ds; bool r = BeforeDraw(c, ds); if (!ds.skip) { call; } if (ds.restorePS) { c->PSSetShader(ds.restorePS, nullptr, 0); ds.restorePS->Release(); } \
     if (g_inspectOn) { CtxState& ci_ = Ctx(c); if (InspectBegin(c, ci_.ps, ci_.vs, kind, verts, inst)) { call; InspectEnd(c); } } \
     if (r) Restore(c, ds); if (ds.brow.seedsUAV) BrowDrawAfterFace(c, &ds.brow);
 template<int V> static void STDMETHODCALLTYPE hk_DrawIdx(ID3D11DeviceContext* c, UINT a, UINT b, INT d) {

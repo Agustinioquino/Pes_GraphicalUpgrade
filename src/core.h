@@ -198,7 +198,7 @@ void InspectEnd(ID3D11DeviceContext* c); void InspectPresent(); void InspectDraw
 struct LayerOv { std::map<int, std::string> slot; bool hidden = false; bool highlight = false; };   // highlight: dibujar con PS magenta plano   // slot -> "file:ruta" | "none"
 extern std::atomic<bool> g_layersAny;   // hay alguna capa definida (evita el costo cuando no se usa)
 bool InspectLayerFor(uint64_t ps, LayerOv& out);
-bool InspectShouldSkip(uint64_t ps);
+bool InspectShouldSkip(uint64_t ps, UINT verts);
 ID3D11PixelShader* InspectHighlightPS(uint64_t ps);   // PS magenta si la capa esta en "resaltar", si no null   // capa oculta o "solo esta" activo
 extern std::atomic<int> g_layerSkips;   // true si hay capas definidas para ese shader (copia)
 ID3D11ShaderResourceView* FileTextureAny(const std::string& rel);   // hooks.cpp: "file:..." dds o png (cache)

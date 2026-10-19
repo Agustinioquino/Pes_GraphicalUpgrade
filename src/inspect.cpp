@@ -111,14 +111,16 @@ static std::map<uint64_t, LayerOv> s_layers; static std::mutex s_layMx;
 static std::vector<std::string> s_files;   // "file:textures\\x.dds", "file:hair\\x.png", ... (para el selector)
 std::atomic<int> g_layerSkips{0}; static int s_skipsShown = 0;
 static std::atomic<int> s_solo{-1};   // clase "solo esta" (las demas clases conocidas no se dibujan)
-bool InspectShouldSkip(uint64_t ps) {
+static std::atomic<bool> s_soloAll{false};   // "solo esta capa": tambien oculta todo lo que no tiene clase (geometria; las pasadas de pantalla completa siguen)
+bool InspectShouldSkip(uint64_t ps, UINT verts) {
     if (!g_inspectOn) return false;   // ocultar y "solo esta" son de debug: solo con el inspector prendido
     std::lock_guard<std::mutex> lk(s_layMx);
     auto it = s_layers.find(ps); if (it != s_layers.end() && it->second.hidden) return true;
     int so = s_solo.load();
     if (so >= 0 && so < (int)s_classes.size()) {
         for (uint64_t h : s_classes[so].ps) if (h == ps) return false;
-        for (auto& c : s_classes) for (uint64_t h : c.ps) if (h == ps) return true;   // solo afecta a las clases conocidas
+        for (auto& c : s_classes) for (uint64_t h : c.ps) if (h == ps) return true;   // las clases conocidas
+        if (s_soloAll.load() && verts > 6) return true;                                 // y todo lo demas que sea geometria (no las pasadas de 3 vertices)
     }
     return false;
 }
@@ -312,7 +314,7 @@ void InspectPresent() {
     if (!g_dev.imm) return;
     // al apagar el inspector vuelven todas las capas ocultas (y la prueba de cejas); las texturas elegidas por slot se mantienen
     { static bool wasOn = false; bool on = g_inspectOn.load();
-      if (wasOn && !on) { { std::lock_guard<std::mutex> lk(s_layMx); for (auto& kv : s_layers) { kv.second.hidden = false; kv.second.highlight = false; } s_solo = -1; LayersUpdateAny(); }
+      if (wasOn && !on) { { std::lock_guard<std::mutex> lk(s_layMx); for (auto& kv : s_layers) { kv.second.hidden = false; kv.second.highlight = false; } s_solo = -1; s_soloAll = false; LayersUpdateAny(); }
           if (g_cfg.live[75][2] > 0.5f) g_cfg.live[75][2] = 0; g_inspectSel = -1; }
       wasOn = on; }
     s_skipsShown = g_layerSkips.exchange(0);
@@ -489,8 +491,11 @@ void InspectDrawOverlay() {
             // --- vista debug ---
             ImGui::TextUnformatted("Vista:"); ImGui::SameLine();
             { int so = s_solo.load();
-              if (ImGui::RadioButton("todo", so < 0)) { s_solo = -1; std::lock_guard<std::mutex> lk(s_layMx); LayersUpdateAny(); } ImGui::SameLine();
-              if (ImGui::RadioButton("solo esta capa", so == sel)) { s_solo = sel; std::lock_guard<std::mutex> lk(s_layMx); LayersUpdateAny(); } ImGui::SameLine();
+              if (ImGui::RadioButton("todo", so < 0)) { s_solo = -1; s_soloAll = false; std::lock_guard<std::mutex> lk(s_layMx); LayersUpdateAny(); } ImGui::SameLine();
+              if (ImGui::RadioButton("solo esta capa", so == sel && !s_soloAll.load())) { s_solo = sel; s_soloAll = false; std::lock_guard<std::mutex> lk(s_layMx); LayersUpdateAny(); } ImGui::SameLine();
+              if (ImGui::RadioButton("SOLO ESTA (ocultar todo lo demas)", so == sel && s_soloAll.load())) { s_solo = sel; s_soloAll = true; std::lock_guard<std::mutex> lk(s_layMx); LayersUpdateAny(); }
+              if (ImGui::IsItemHovered()) ImGui::SetTooltip("Oculta todas las demas partes del juego (conocidas o no): queda solo esta capa sobre el fondo. La luz y el post-proceso siguen.");
+              ImGui::SameLine();
               bool browOnly = false; int pi = -1; for (int ci2 = 0; ci2 < (int)s_classes.size(); ci2++) for (uint64_t h : s_classes[ci2].ps) if (h == 0x0b3f9684ad026e54ULL) pi = ci2;
               if (pi >= 0) { std::lock_guard<std::mutex> lk(s_layMx); auto it = s_layers.find(0x0b3f9684ad026e54ULL); browOnly = it != s_layers.end() && it->second.hidden; }
               if (pi >= 0 && ImGui::Checkbox("cejas: solo hebras", &browOnly)) {
