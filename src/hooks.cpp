@@ -486,7 +486,7 @@ static void RunRule(ID3D11DeviceContext* c, const ShaderEntry* e, DrawScope& d) 
             if (!ps) break;
             ID3D11ShaderResourceView *fa = nullptr, *fb = nullptr; FaceGenExtra ex;
             if (FaceGenLookup(c, &fa, &fb, &ex)) {
-                if (ex.hairCB) s.lastHairCB = ex.hairCB;
+                if (ex.hairCB) Ctx(c).lastHairCB = ex.hairCB;
                 Remember(c, d, true, true, a.slot); c->PSSetShaderResources(a.slot, 1, &fa);
                 Remember(c, d, true, true, a.idx);  c->PSSetShaderResources(a.idx, 1, &fb);
                 // 18/10 pelo: parametros del tipo de pelo de ESTA cara (PES21FX_hair.ini) en b11
