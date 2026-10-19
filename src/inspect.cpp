@@ -27,7 +27,7 @@ std::atomic<int> g_inspectSel{-1};
 //   que = SSS por zonas, arrugas...  (que hace el mod ahi)
 //   t0 = difusa  t1 = normal ...     (nombre de cada slot de textura del juego; opcional)
 //   [inspector]  desconocidos = 1    tambien marcar los shaders de geometria que no estan en ninguna clase (hasta 6), con su hash
-struct InspClass { std::vector<uint64_t> ps; std::string name, desc; std::map<int, std::string> slotNames; bool unknown = false; std::string group = "otros"; };
+struct InspClass { std::vector<uint64_t> ps; std::string name, desc; std::map<int, std::string> slotNames; bool unknown = false; std::string group = "otros"; uint64_t alias = 0; };
 static std::string s_group = "todo";   // filtro de grupo del inspector (todo | cara | pelo | kit | estadio | desconocidos | ...)
 static std::vector<InspClass> s_classes;
 static bool s_unknownOn = true;
@@ -76,6 +76,7 @@ static void LoadClasses() {
             else if (k == "nombre") cur->name = v;
             else if (k == "que") cur->desc = v;
             else if (k == "grupo") cur->group = Lower2(v);
+            else if (k == "como") cur->alias = strtoull(v.c_str(), nullptr, 16);
             else if (k.size() > 1 && k[0] == 't' && isdigit((unsigned char)k[1])) cur->slotNames[atoi(k.c_str() + 1)] = v;
         }
         Log("inspector: PES21FX_inspector.ini leido (%d clases)", (int)s_classes.size());
@@ -109,7 +110,7 @@ static std::mutex s_mx;
 std::atomic<bool> g_layersAny{false};
 static std::map<uint64_t, LayerOv> s_layers; static std::mutex s_layMx;
 static std::vector<std::string> s_files;   // "file:textures\\x.dds", "file:hair\\x.png", ... (para el selector)
-std::atomic<int> g_layerSkips{0}; static int s_skipsShown = 0;
+std::atomic<int> g_layerSkips{0}; static int s_skipsShown = 0; static int s_aliasShown = 0;
 static std::atomic<int> s_solo{-1};   // clase "solo esta" (las demas clases conocidas no se dibujan)
 static std::atomic<bool> s_soloAll{false};   // "solo esta capa": tambien oculta todo lo que no tiene clase (geometria; las pasadas de pantalla completa siguen)
 bool InspectShouldSkip(uint64_t ps, UINT verts) {
@@ -222,6 +223,23 @@ static std::string DescribeSRV(ID3D11ShaderResourceView* v) {
 }
 
 // llamado desde FX_DRAW despues del dibujo real. Si devuelve true, el dibujo se repite (con nuestro PS y RT) y luego InspectEnd.
+// huella estable de un PS sin registrar: VS + formato y tipo (array) de cada textura t0..t7 (sin tamanos: las caras vienen en 1024 y 2048)
+uint64_t InspectFingerprint(ID3D11DeviceContext* c, const ShaderEntry* vs) {
+    uint64_t h = 1469598103934665603ULL; auto mix = [&](uint64_t v) { h ^= v; h *= 1099511628211ULL; };
+    mix(vs ? vs->hash : 0);
+    ID3D11ShaderResourceView* sv[8] = {}; c->PSGetShaderResources(0, 8, sv);
+    for (int i = 0; i < 8; i++) { if (!sv[i]) { mix(0); continue; } ID3D11Resource* r = nullptr; sv[i]->GetResource(&r);
+        if (r) { D3D11_RESOURCE_DIMENSION dm; r->GetType(&dm); if (dm == D3D11_RESOURCE_DIMENSION_TEXTURE2D) { D3D11_TEXTURE2D_DESC td; ((ID3D11Texture2D*)r)->GetDesc(&td); mix(((uint64_t)td.Format << 8) | (td.ArraySize > 1 ? 1 : 0)); } else mix(7); r->Release(); }
+        sv[i]->Release(); }
+    return 0xF000000000000000ULL | (h & 0x0FFFFFFFFFFFFFFFULL);
+}
+// alias: "como = <hash>" en el ini -> el dibujo se trata como ese shader del juego (reemplazo + reglas). 0 = sin alias
+uint64_t InspectAliasFor(uint64_t fingerprint) {
+    std::lock_guard<std::mutex> lk(s_mx);
+    if (!s_loaded) { LoadClasses(); LoadLayers(); ScanFiles(); s_loaded = true; s_cls.clear(); s_unkHash.clear(); s_cls.resize(s_classes.size()); }
+    for (auto& c : s_classes) if (c.alias) for (uint64_t h : c.ps) if (h == fingerprint) return c.alias;
+    return 0;
+}
 bool InspectBegin(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEntry* vs, int kind, UINT verts, UINT inst) {
     if (!g_dev.dev) return false;
     if ((s_frame.load() % 3) != 0) return false;
@@ -232,13 +250,7 @@ bool InspectBegin(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEnt
         // PS sin registrar (lo creo otra DLL por fuera de nuestro enganche): huella ESTABLE entre sesiones = VS + formato/tamano de
         // sus texturas (t0..t7). Asi se puede nombrar en PES21FX_inspector.ini y ocultar/resaltar como cualquier clase.
         ID3D11PixelShader* raw = nullptr; c->PSGetShader(&raw, nullptr, nullptr); if (!raw) return false; raw->Release();
-        uint64_t h = 1469598103934665603ULL; auto mix = [&](uint64_t v) { h ^= v; h *= 1099511628211ULL; };
-        mix(vs ? vs->hash : 0);
-        ID3D11ShaderResourceView* sv[8] = {}; c->PSGetShaderResources(0, 8, sv);
-        for (int i = 0; i < 8; i++) { if (!sv[i]) { mix(0); continue; } ID3D11Resource* r = nullptr; sv[i]->GetResource(&r);
-            if (r) { D3D11_RESOURCE_DIMENSION dm; r->GetType(&dm); if (dm == D3D11_RESOURCE_DIMENSION_TEXTURE2D) { D3D11_TEXTURE2D_DESC td; ((ID3D11Texture2D*)r)->GetDesc(&td); mix(((uint64_t)td.Format << 40) | ((uint64_t)td.Width << 20) | td.Height | ((uint64_t)td.ArraySize << 56)); } else mix(7); r->Release(); }
-            sv[i]->Release(); }
-        psHash = 0xF000000000000000ULL | (h & 0x0FFFFFFFFFFFFFFFULL); unreg = true;
+        psHash = InspectFingerprint(c, vs); unreg = true;
     }
     int ci = -1;
     std::lock_guard<std::mutex> lk(s_mx);
@@ -255,7 +267,7 @@ bool InspectBegin(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEnt
             s_unkHash.push_back(psHash); s_cls.push_back(ClassFrame()); ci = (int)s_cls.size() - 1;
             char nm[64]; snprintf(nm, sizeof(nm), "%016llx", (unsigned long long)psHash);
             InspClass u; u.ps.push_back(psHash);
-            if (unreg) { u.name = std::string("SIN REGISTRAR ") + (nm + 4); u.desc = "Pixel shader creado por otra DLL (cloth-mod / 3DMigoto), fuera de nuestro enganche. Huella estable " + std::string(nm) + " (VS + texturas): podes nombrarlo en PES21FX_inspector.ini con ps = " + std::string(nm) + ".";
+            if (unreg) { u.name = std::string("SIN REGISTRAR ") + (nm + 4); u.desc = "Pixel shader creado por otra DLL (cloth-mod / 3DMigoto), fuera de nuestro enganche. Huella estable " + std::string(nm) + " (VS + formatos de texturas). En PES21FX_inspector.ini: ps = " + std::string(nm) + " y 'como = <hash del juego>' para que reciba el reemplazo del mod (p.ej. como = 5ce3ed8702271bc1).";
                 Log("inspector: PS sin registrar, huella %s (VS %016llx, %u vertices)", nm, (unsigned long long)(vs ? vs->hash : 0), verts); }
             else { u.name = std::string("Desconocido ") + nm; u.desc = "Shader sin clase: agregalo a PES21FX_inspector.ini ([seccion] ps = " + std::string(nm) + ", nombre = ..., que = ..., grupo = ...)"; }
             u.unknown = true; u.group = "desconocidos";
@@ -332,7 +344,7 @@ void InspectPresent() {
       if (wasOn && !on) { { std::lock_guard<std::mutex> lk(s_layMx); for (auto& kv : s_layers) { kv.second.hidden = false; kv.second.highlight = false; } s_solo = -1; s_soloAll = false; LayersUpdateAny(); }
           if (g_cfg.live[75][2] > 0.5f) g_cfg.live[75][2] = 0; g_inspectSel = -1; }
       wasOn = on; }
-    s_skipsShown = g_layerSkips.exchange(0);
+    s_skipsShown = g_layerSkips.exchange(0); s_aliasShown = g_aliasDraws.exchange(0);
     s_frame++;
     if ((s_frame.load() % 3) != 1) return;   // leer/limpiar solo en el cuadro siguiente a una captura
     std::lock_guard<std::mutex> lk(s_mx);
@@ -554,6 +566,7 @@ void InspectDrawOverlay() {
                   g_cfg.live[75][2] = browOnly ? 1.0f : 0.0f;   // hebras en magenta para verlas solas
               }
               if (ImGui::IsItemHovered()) ImGui::SetTooltip("Oculta las cejas/barba/pestanas pintadas del juego (capa alfa 0b3f/1fc2) y pinta las hebras de magenta."); }
+            if (cl.alias) ImGui::Text("alias: se trata como %016llx  (dibujos redirigidos por cuadro: %d)", (unsigned long long)cl.alias, s_aliasShown);
             ImGui::TextDisabled("dibujos ocultados por cuadro: %d%s", s_skipsShown, s_skipsShown == 0 && (ov.hidden || s_solo.load() >= 0) ? "  (ninguno: esta capa no paso por el filtro)" : "");
             bool hidden = ov.hidden;
             if (ImGui::Checkbox("Ocultar esta capa (no dibujar esta parte)", &hidden)) { std::lock_guard<std::mutex> lk(s_layMx); for (uint64_t h : cl.ps) s_layers[h].hidden = hidden; LayersUpdateAny(); }

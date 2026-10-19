@@ -199,13 +199,16 @@ struct LayerOv { std::map<int, std::string> slot; bool hidden = false; bool high
 extern std::atomic<bool> g_layersAny;   // hay alguna capa definida (evita el costo cuando no se usa)
 bool InspectLayerFor(uint64_t ps, LayerOv& out);
 bool InspectShouldSkip(uint64_t ps, UINT verts);
+uint64_t InspectFingerprint(ID3D11DeviceContext* c, const ShaderEntry* vs);
+uint64_t InspectAliasFor(uint64_t fingerprint);
+const ShaderEntry* FindShaderByHash(uint64_t h);
 ID3D11PixelShader* InspectHighlightPS(uint64_t ps);   // PS magenta si la capa esta en "resaltar", si no null   // capa oculta o "solo esta" activo
 extern std::atomic<int> g_layerSkips;   // true si hay capas definidas para ese shader (copia)
 ID3D11ShaderResourceView* FileTextureAny(const std::string& rel);   // hooks.cpp: "file:..." dds o png (cache)
 void EnsureComInit();
 bool NamedCBRead(const std::string& name, std::vector<float>& out);   // hooks.cpp (Present)
 const Rule* RuleForHash(uint64_t h);
-extern std::atomic<int> g_drawOrder;
+extern std::atomic<int> g_drawOrder; extern std::atomic<int> g_aliasDraws;
 std::string NamedOrigin(ID3D11ShaderResourceView* v);     // hooks.cpp: "archivo: textures\x.dds" o recurso con nombre
 std::string FaceGenOrigin(ID3D11ShaderResourceView* v);   // facegen.cpp: "generada: quinta textura A" etc.
 extern std::atomic<int> g_stFaceDraws, g_stFaceRule, g_stFaceT23, g_stFaceT26, g_stFaceCtxDef;

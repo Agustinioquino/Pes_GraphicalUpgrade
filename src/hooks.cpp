@@ -172,6 +172,11 @@ std::vector<const ShaderEntry*> AllShaders() {
     for (auto& kv : s_shaders) v.push_back(&kv.second);
     return v;
 }
+const ShaderEntry* FindShaderByHash(uint64_t h) {
+    std::shared_lock<std::shared_mutex> lk(s_shMutex);
+    for (auto& kv : s_shaders) if (kv.second.hash == h && kv.second.dev == g_dev.dev) return &kv.second;
+    return nullptr;
+}
 static const ShaderEntry* FindShader(void* p) {
     if (!p) return nullptr;
     std::shared_lock<std::shared_mutex> lk(s_shMutex);
@@ -231,7 +236,8 @@ bool NamedCBRead(const std::string& name, std::vector<float>& out) {
     return ok;
 }
 const Rule* RuleForHash(uint64_t h) { auto it = g_cfg.rules.find(h); return it == g_cfg.rules.end() ? nullptr : &it->second; }
-std::atomic<int> g_drawOrder{0};   // numero de orden del dibujo dentro del cuadro (se reinicia en Present)
+std::atomic<int> g_drawOrder{0};
+std::atomic<int> g_aliasDraws{0};   // dibujos redirigidos por alias en el cuadro (diagnostico)   // numero de orden del dibujo dentro del cuadro (se reinicia en Present)
 std::string NamedOrigin(ID3D11ShaderResourceView* v) {
     std::lock_guard<std::mutex> lk(s_namedMutex);
     for (auto& kv : s_named) if (kv.second.srv == v) return kv.first.rfind("file:", 0) == 0 ? "archivo del mod: " + kv.first.substr(5) : "recurso del mod: " + kv.first;
@@ -512,6 +518,17 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     }
     if (s.dev != g_dev.dev) return false;
     const ShaderEntry *ps = s.ps, *vs = s.vs;
+    // 19/10: PS sin registrar (lo creo otra DLL, p.ej. cloth-mod): si el ini lo declara "como = <hash>", se trata como ese shader
+    // (nuestro reemplazo + sus reglas) solo durante este dibujo
+    if (!ps && vs && g_cfg.optRules) {
+        ID3D11PixelShader* raw = nullptr; c->PSGetShader(&raw, nullptr, nullptr);
+        if (raw) {
+            uint64_t fp = InspectFingerprint(c, vs); uint64_t al = InspectAliasFor(fp);
+            const ShaderEntry* e = al ? FindShaderByHash(al) : nullptr;
+            if (e && e->repl && !g_cfg.bypass) { d.restorePS = raw; c->PSSetShader((ID3D11PixelShader*)e->repl, nullptr, 0); ps = e; g_aliasDraws++; }
+            else raw->Release();
+        }
+    }
     if (!ps && !vs) return false;
     bool pr = ps && ps->repl, vr = vs && vs->repl;
     if (pr || vr) {
@@ -537,7 +554,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     g_drawOrder++;
     if (ps && g_layersAny.load()) { LayerOv ov;
         if (InspectShouldSkip(ps->hash, t_drawVerts)) { d.skip = true; g_layerSkips++; }
-        if (ID3D11PixelShader* hp = InspectHighlightPS(ps->hash)) { c->PSGetShader(&d.restorePS, nullptr, nullptr); c->PSSetShader(hp, nullptr, 0); g_layerSkips++; }
+        if (ID3D11PixelShader* hp = InspectHighlightPS(ps->hash)) { if (!d.restorePS) c->PSGetShader(&d.restorePS, nullptr, nullptr); c->PSSetShader(hp, nullptr, 0); g_layerSkips++; }
         if (InspectLayerFor(ps->hash, ov)) {
             for (auto& kv : ov.slot) {
                 ID3D11ShaderResourceView* v = (kv.second == "none") ? nullptr : FileTexture(kv.second);
