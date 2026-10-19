@@ -355,7 +355,7 @@ void BrowDrawAfterFace(ID3D11DeviceContext* c, FaceGenExtra* ex) {
     float on = g_cfg.live[74][0]; if (on < 0.5f) return;
     // 19/10: solo en partido. En el editor / pre-partido la camara y los targets de la cara son otros y las hebras salian
     // como cintas gigantes por toda la pantalla (y24 = 1 en partido, lo pone PollMatch al ver el pasto)
-    if (g_cfg.live[24][1] < 0.5f) return;
+    if (g_cfg.live[93][3] < 0.5f) return;
     UINT perSeed = (UINT)std::max(1.0f, std::min(3.0f, g_cfg.live[74][1]));
     int maxFaces = (int)g_cfg.live[77][0]; if (maxFaces < 1) maxFaces = 22;
     if (s_browFaces.fetch_add(1) >= maxFaces) return;   // solo las primeras N caras del cuadro (rendimiento)

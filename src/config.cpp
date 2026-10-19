@@ -457,6 +457,20 @@ void UpdateTimeParams() {
     p[23][3] = p[23][2];                            // viento del pelo: tiempo anterior
     p[23][2] = float(fmod(t, 10000.0));             // tiempo actual
     p[24][1] = (t - s_lastTurf) < 2.0 ? 1.0f : 0.0f; // en partido
+    p[93][3] = (t - s_lastTurf) < 15.0 ? 1.0f : 0.0f; // 19/10: en partido (tolerante): primeros planos sin cancha a la vista siguen contando
+    // 19/10: pupila reactiva: brillo de la escena por la luz del sol/focos (m_lightColor0 de cPSLight), adaptado en el tiempo
+    // como una pupila real (se contrae rapido, ~0.4 s; se dilata lento, ~3 s). x93 brillo adaptado 0 (noche) .. 1 (sol pleno)
+    { static double lastT = t; static float adapt = 0.7f; std::vector<float> L;
+      float dt = (float)std::clamp(t - lastT, 0.0, 0.5); lastT = t;
+      if (NamedCBRead("LightCB", L) && L.size() >= 8) {
+          float lum = 0.2126f * L[4] + 0.7152f * L[5] + 0.0722f * L[6];
+          if (lum > 1.0f) {
+              float b = std::clamp((log10f(lum) - 2.3f) / 1.6f, 0.0f, 1.0f);   // ~200 (focos) -> 0, ~8000 (sol) -> 1
+              float tau = b > adapt ? 0.4f : 3.0f;
+              adapt += (b - adapt) * std::min(1.0f, dt / tau);
+          }
+      }
+      p[93][0] = adapt; }
     UpdateClothWet(t);
     UpdateClothFit(t);
 }
