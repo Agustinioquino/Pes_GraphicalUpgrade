@@ -126,8 +126,13 @@ void main(
   // (medido en las texturas volcadas). Con eso se pasa a polares y se leen las texturas de detalle del mod (t20/t21),
   // que sirven para cualquier color: el color sigue saliendo de la textura del juego (t6).
   float4 P90 = IniParams.Load(int2(90,0));
+  float4 P91 = IniParams.Load(int2(91,0));   // x91 relieve del iris, y91 criptas/contraste, z91 sombra del parpado sobre el iris, w91 tamano de la pupila (1 = del juego)
+  float4 P92 = IniParams.Load(int2(92,0));   // x92 reflejo en pantalla, y92 humedad (brillo de la esclerotica), z92 saturacion del iris, w92 brillo del iris
   float2 irisD = r0.xy - 0.5;
   float irisR = length(irisD) / 0.245;
+  // pupila: w91 < 1 la achica, > 1 la agranda (se remapea el radio dentro del iris; el borde del iris no se mueve)
+  { float pup = clamp(P91.w, 0.6, 1.6); float rIn = 0.36 * pup;
+    irisR = irisR < rIn ? irisR / pup : lerp(0.36, 1.0, (irisR - rIn) / max(1.0 - rIn, 1e-3)) ; }
   float irisTh = atan2(irisD.y, irisD.x) * 0.15915494 + 0.5;
   float irisVt = saturate((irisR - 0.36) / 0.64);                    // 0 = borde de la pupila, 1 = borde del iris
   float irisIn = (1 - smoothstep(0.97, 1.03, irisR)) * smoothstep(0.30, 0.37, irisR);   // 1 dentro del iris (sin pupila)
@@ -137,7 +142,12 @@ void main(
   float irisOn = (P90.w > 0.5) ? irisIn * saturate(P90.x) : 0.0;
   r0.xyz = g_tex_base2.Sample(g_sampler_base2_s, r0.xy).xyz;
   // detalle de albedo: fibras, criptas, collarete y surcos multiplican el color del juego
-  r0.xyz *= lerp(1.0, irisDet.xyz * 2.0, irisOn);
+  { float3 d = irisDet.xyz * 2.0;
+    d = lerp(1.0, d, saturate(P91.y));                     // criptas / contraste del detalle
+    r0.xyz *= lerp(1.0, d, irisOn);
+    // saturacion y brillo del iris (sobre el color del juego)
+    float l = dot(r0.xyz, float3(0.2126, 0.7152, 0.0722));
+    r0.xyz = lerp(r0.xyz, lerp(l.xxx, r0.xyz, max(P92.z, 0.0)) * max(P92.w, 0.0), irisOn); }
   r0.xyz = r0.xyz + -r2.xyz;
   r0.xyz = r0.www * r0.xyz + r2.xyz;
   r1.xyz = g_tex_normal2.Sample(g_sampler_normal2_s, v2.xy).xyw;
@@ -192,7 +202,7 @@ void main(
   { // relieve del iris (fibras y criptas) sobre la normal del G-buffer: del marco polar al marco UV
     float2 rad = normalize(irisD + 1e-5), tng = float2(-rad.y, rad.x);
     float2 nUV = irisNt.x * tng + irisNt.y * rad;
-    r0.xy += nUV * 0.6 * irisOn; }
+    r0.xy += nUV * 0.6 * saturate(P91.x) * irisOn; }
   r1.xyz = r2.xyz * r0.yyy;
   r1.xyz = r3.xyz * r0.xxx + r1.xyz;
   r0.x = -r0.x * r0.x + 1;
@@ -243,7 +253,7 @@ void main(
   if (P90.w > 0.5) {
     float irisM = irisIn;
     // sombra del parpado/limbo sobre el iris (ambient occlusion suave en el borde)
-    float3 base = eyeBase * lerp(1.0, 0.82, smoothstep(0.85, 1.0, irisR) * irisOn);
+    float3 base = eyeBase * lerp(1.0, 1.0 - 0.18 * saturate(P91.z) / 0.5, smoothstep(0.85, 1.0, irisR) * irisOn);
     // cornea: Fresnel de Schlick (n = 1.376 -> F0 = 0.025), mas fuerte de costado
     float ndv = saturate(dot(eyeNc, eyeV));
     float F = 0.025 + 0.975 * pow(1 - ndv, 5);
@@ -270,7 +280,7 @@ void main(
           // solo sobre la cornea del iris (en la esclerotica blanca volvia el ojo lechoso)
           float ssrM = smoothstep(1.35, 1.0, irisR);
           float3 ssr = sc * fres * saturate(P90.y) * 0.3;
-          refl = lerp(refl, ssr, edge * 0.5 * ssrM);
+          refl = lerp(refl, ssr, edge * saturate(P92.x) * ssrM);
         } } }
     o0.xyz = base + refl;
     // brillo del sol/focos sobre la cornea: rugosidad baja donde hay cornea (lo resuelve la luz diferida del juego).
@@ -278,6 +288,9 @@ void main(
     // o2.y es metalicidad: no se toca, con 0.7 el ojo quedaba negro con un punto de brillo)
     float rough = lerp(0.17, 0.13, saturate(P90.z));
     o2.x = lerp(o2.x, max(0.13, min(o2.x, rough)), rmask);
+    // humedad: la esclerotica tambien brilla (ojo mojado); 0 = como el juego
+    float scl = (1 - irisM) * saturate(P92.y);
+    o2.x = lerp(o2.x, max(0.13, min(o2.x, 0.2)), scl * 0.8);
   }
     {
     // === PES21 ojos: esclerotica menos blanca, anillo limbal, iris con mas color, cornea mojada ===
