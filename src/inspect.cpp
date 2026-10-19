@@ -71,7 +71,7 @@ static std::atomic<int> s_frame{0};   // se captura 1 de cada 3 cuadros (el rect
 
 struct TexInfo { int slot; std::string desc; ID3D11ShaderResourceView* srv = nullptr; };   // srv con referencia propia (miniatura en la ficha)
 struct ClassFrame {
-    bool seen = false; bool bboxOk = false; float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+    bool seen = false; bool bboxOk = false; int extra = 0; float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
     UINT verts = 0; int kind = 0; bool deferred = false; uint64_t vs = 0;
     std::vector<TexInfo> tex;
     // recursos
@@ -86,10 +86,22 @@ static std::mutex s_mx;
 std::atomic<bool> g_layersAny{false};
 static std::map<uint64_t, LayerOv> s_layers; static std::mutex s_layMx;
 static std::vector<std::string> s_files;   // "file:textures\\x.dds", "file:hair\\x.png", ... (para el selector)
+std::atomic<int> g_layerSkips{0}; static int s_skipsShown = 0;
+static std::atomic<int> s_solo{-1};   // clase "solo esta" (las demas clases conocidas no se dibujan)
+bool InspectShouldSkip(uint64_t ps) {
+    std::lock_guard<std::mutex> lk(s_layMx);
+    auto it = s_layers.find(ps); if (it != s_layers.end() && it->second.hidden) return true;
+    int so = s_solo.load();
+    if (so >= 0 && so < (int)s_classes.size()) {
+        for (uint64_t h : s_classes[so].ps) if (h == ps) return false;
+        for (auto& c : s_classes) for (uint64_t h : c.ps) if (h == ps) return true;   // solo afecta a las clases conocidas
+    }
+    return false;
+}
 bool InspectLayerFor(uint64_t ps, LayerOv& out) {
     std::lock_guard<std::mutex> lk(s_layMx); auto it = s_layers.find(ps); if (it == s_layers.end()) return false; out = it->second; return true;
 }
-static void LayersUpdateAny() { bool any = false; for (auto& kv : s_layers) if (kv.second.hidden || !kv.second.slot.empty()) any = true; g_layersAny = any; }
+static void LayersUpdateAny() { bool any = s_solo.load() >= 0; for (auto& kv : s_layers) if (kv.second.hidden || !kv.second.slot.empty()) any = true; g_layersAny = any; }
 static void ScanFiles() {
     s_files.clear();
     const wchar_t* dirs[] = { L"textures\\*.dds", L"textures\\*.png", L"hair\\*.png", L"hair\\*.dds", L"hair\\auto\\*.png" };
@@ -202,8 +214,8 @@ bool InspectBegin(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEnt
     { int selNow = g_inspectSel.load(); if (selNow >= 0 && selNow != ci) return false; }   // con Capas abierta solo se captura la clase elegida
     ClassFrame& f = s_cls[ci];
     {
-        if (f.seen) return false;       // una muestra por clase y cuadro (la primera)
-        f.seen = true;
+        if (f.seen) { if (f.extra >= 8) return false; f.extra++; f.verts += verts; goto drawOnly; }   // 19/10: todas las partes de la clase (la cara viene en varios dibujos)
+        f.seen = true; f.extra = 0;
         if (!EnsureClassRT(f)) return false;
         f.verts = verts; f.kind = kind; f.deferred = c->GetType() == D3D11_DEVICE_CONTEXT_DEFERRED; f.vs = vs ? vs->hash : 0;
         for (auto& t : f.tex) if (t.srv) t.srv->Release();
@@ -212,6 +224,7 @@ bool InspectBegin(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEnt
         for (int i = 0; i < 32; i++) if (srv[i]) { std::string d = DescribeSRV(srv[i]); auto sn = s_classes[ci].slotNames.find(i); if (sn != s_classes[ci].slotNames.end()) d = sn->second + ": " + d;
             TexInfo ti; ti.slot = i; ti.desc = d; ti.srv = srv[i]; f.tex.push_back(ti); }   // la referencia queda en la ficha (se dibuja como miniatura)
     }
+drawOnly:
     Saved& s = t_sv; s.cls = ci;
     c->PSGetShader(&s.ps, nullptr, nullptr);
     c->OMGetRenderTargets(8, s.rt, &s.ds);
@@ -242,6 +255,7 @@ void InspectEnd(ID3D11DeviceContext* c) {
 // en Present (contexto inmediato): leer la textura del cuadro anterior, calcular el rectangulo, limpiar para el proximo
 void InspectPresent() {
     if (!g_dev.imm) return;
+    s_skipsShown = g_layerSkips.exchange(0);
     s_frame++;
     if ((s_frame.load() % 3) != 1) return;   // leer/limpiar solo en el cuadro siguiente a una captura
     std::lock_guard<std::mutex> lk(s_mx);
@@ -322,6 +336,19 @@ void InspectDrawOverlay() {
             char hs[200] = ""; for (uint64_t h : cl.ps) { char t[24]; snprintf(t, sizeof(t), "%016llx ", (unsigned long long)h); strncat(hs, t, sizeof(hs) - strlen(hs) - 1); }
             ImGui::TextDisabled("shader(s): %s | %u vert, VS %016llx, %s", hs, f.verts, (unsigned long long)f.vs, f.deferred ? "diferido" : "inmediato");
             LayerOv ov; { std::lock_guard<std::mutex> lk(s_layMx); auto it = s_layers.find(cl.ps.empty() ? 0 : cl.ps[0]); if (it != s_layers.end()) ov = it->second; }
+            // --- vista debug ---
+            ImGui::TextUnformatted("Vista:"); ImGui::SameLine();
+            { int so = s_solo.load();
+              if (ImGui::RadioButton("todo", so < 0)) { s_solo = -1; std::lock_guard<std::mutex> lk(s_layMx); LayersUpdateAny(); } ImGui::SameLine();
+              if (ImGui::RadioButton("solo esta capa", so == sel)) { s_solo = sel; std::lock_guard<std::mutex> lk(s_layMx); LayersUpdateAny(); } ImGui::SameLine();
+              bool browOnly = false; int pi = -1; for (int ci2 = 0; ci2 < (int)s_classes.size(); ci2++) for (uint64_t h : s_classes[ci2].ps) if (h == 0x0b3f9684ad026e54ULL) pi = ci2;
+              if (pi >= 0) { std::lock_guard<std::mutex> lk(s_layMx); auto it = s_layers.find(0x0b3f9684ad026e54ULL); browOnly = it != s_layers.end() && it->second.hidden; }
+              if (pi >= 0 && ImGui::Checkbox("cejas: solo hebras", &browOnly)) {
+                  std::lock_guard<std::mutex> lk(s_layMx); for (uint64_t h : s_classes[pi].ps) s_layers[h].hidden = browOnly; LayersUpdateAny();
+                  g_cfg.live[75][2] = browOnly ? 1.0f : 0.0f;   // hebras en magenta para verlas solas
+              }
+              if (ImGui::IsItemHovered()) ImGui::SetTooltip("Oculta las cejas/barba/pestanas pintadas del juego (capa alfa 0b3f/1fc2) y pinta las hebras de magenta."); }
+            ImGui::TextDisabled("dibujos ocultados por cuadro: %d%s", s_skipsShown, s_skipsShown == 0 && (ov.hidden || s_solo.load() >= 0) ? "  (ninguno: esta capa no paso por el filtro)" : "");
             bool hidden = ov.hidden;
             if (ImGui::Checkbox("Ocultar esta capa (no dibujar esta parte)", &hidden)) { std::lock_guard<std::mutex> lk(s_layMx); for (uint64_t h : cl.ps) s_layers[h].hidden = hidden; LayersUpdateAny(); }
             ImGui::SameLine(); if (ImGui::Button("Guardar capas")) Log("capas: %s", SaveLayers() ? "guardadas en PES21FX_capas.ini" : "no se pudo guardar");
@@ -357,10 +384,19 @@ void InspectDrawOverlay() {
                 ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 440); ImGui::TextDisabled("%s", ti ? ti->desc.c_str() : "(no enlazada por el juego)"); ImGui::PopTextWrapPos();
                 auto cur = ov.slot.find(slot); std::string curV = cur != ov.slot.end() ? cur->second : "";
                 const char* label = curV.empty() ? "Del juego / del mod (sin cambio)" : curV.c_str();
-                ImGui::SetNextItemWidth(440);
+                // ojo: ocultar esta textura con un valor neutro (normal plana si el slot es una normal, gris si no)
+                { bool off = !curV.empty(); std::string nm = sn != cl.slotNames.end() ? sn->second : "";
+                  std::string neutral = (nm.find("normal") != std::string::npos) ? "gen:normal" : "gen:gris";
+                  ImGui::PushStyleColor(ImGuiCol_Button, off ? ImVec4(0.65f, 0.25f, 0.2f, 1) : ImVec4(0.2f, 0.45f, 0.3f, 1));
+                  if (ImGui::Button(off ? "oculta" : "visible", ImVec2(70, 0))) { std::lock_guard<std::mutex> lk(s_layMx); for (uint64_t h : cl.ps) { if (off) s_layers[h].slot.erase(slot); else s_layers[h].slot[slot] = neutral; } LayersUpdateAny(); }
+                  ImGui::PopStyleColor(); ImGui::SameLine(); }
+                ImGui::SetNextItemWidth(360);
                 if (ImGui::BeginCombo("##capa", label)) {
                     if (ImGui::Selectable("Del juego / del mod (sin cambio)", curV.empty())) { std::lock_guard<std::mutex> lk(s_layMx); for (uint64_t h : cl.ps) s_layers[h].slot.erase(slot); LayersUpdateAny(); }
                     if (ImGui::Selectable("Ninguna (negra)", curV == "none")) { std::lock_guard<std::mutex> lk(s_layMx); for (uint64_t h : cl.ps) s_layers[h].slot[slot] = "none"; LayersUpdateAny(); }
+                    const char* gens[] = { "gen:gris", "gen:blanco", "gen:negro", "gen:normal" };
+                    const char* gensL[] = { "Neutra: gris 50%", "Neutra: blanca", "Neutra: negra (alfa 1)", "Neutra: normal plana" };
+                    for (int g = 0; g < 4; g++) if (ImGui::Selectable(gensL[g], curV == gens[g])) { std::lock_guard<std::mutex> lk(s_layMx); for (uint64_t h : cl.ps) s_layers[h].slot[slot] = gens[g]; LayersUpdateAny(); }
                     for (auto& fn : s_files) if (ImGui::Selectable(fn.c_str(), curV == fn)) { std::lock_guard<std::mutex> lk(s_layMx); for (uint64_t h : cl.ps) s_layers[h].slot[slot] = fn; LayersUpdateAny(); }
                     ImGui::EndCombo();
                 }

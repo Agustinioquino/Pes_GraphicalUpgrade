@@ -197,7 +197,9 @@ void InspectEnd(ID3D11DeviceContext* c); void InspectPresent(); void InspectDraw
 // capas editables (ventana "Capas" del inspector; PES21FX_capas.ini): por hash de pixel shader, textura por slot y "oculta"
 struct LayerOv { std::map<int, std::string> slot; bool hidden = false; };   // slot -> "file:ruta" | "none"
 extern std::atomic<bool> g_layersAny;   // hay alguna capa definida (evita el costo cuando no se usa)
-bool InspectLayerFor(uint64_t ps, LayerOv& out);   // true si hay capas definidas para ese shader (copia)
+bool InspectLayerFor(uint64_t ps, LayerOv& out);
+bool InspectShouldSkip(uint64_t ps);   // capa oculta o "solo esta" activo
+extern std::atomic<int> g_layerSkips;   // true si hay capas definidas para ese shader (copia)
 ID3D11ShaderResourceView* FileTextureAny(const std::string& rel);   // hooks.cpp: "file:..." dds o png (cache)
 void EnsureComInit();
 std::string NamedOrigin(ID3D11ShaderResourceView* v);     // hooks.cpp: "archivo: textures\x.dds" o recurso con nombre

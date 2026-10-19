@@ -186,10 +186,19 @@ static std::map<std::string, NamedRes> s_named;
 static std::mutex s_namedMutex;
 
 static ID3D11ShaderResourceView* FileTexture(const std::string& rel) {
-    // rel = "file:textures\\algo.dds" -> se carga una sola vez
+    // rel = "file:textures\\algo.dds" -> se carga una sola vez;  "gen:gris|blanco|negro|normal" -> textura neutra 4x4
     std::lock_guard<std::mutex> lk(s_namedMutex);
     auto& r = s_named[rel];
     if (r.srv || r.failed || !g_dev.dev) return r.srv;
+    if (rel.rfind("gen:", 0) == 0) {
+        uint32_t px = rel == "gen:blanco" ? 0xffffffffu : rel == "gen:negro" ? 0xff000000u : rel == "gen:normal" ? 0xffff8080u : 0xff808080u;   // RGBA8 (A en el byte alto)
+        uint32_t data[16]; for (auto& d0 : data) d0 = px;
+        D3D11_TEXTURE2D_DESC td{}; td.Width = td.Height = 4; td.MipLevels = 1; td.ArraySize = 1; td.Format = DXGI_FORMAT_R8G8B8A8_UNORM; td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_IMMUTABLE; td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        D3D11_SUBRESOURCE_DATA sd{ data, 16, 0 }; ID3D11Texture2D* t = nullptr;
+        if (SUCCEEDED(g_dev.dev->CreateTexture2D(&td, &sd, &t))) { g_dev.dev->CreateShaderResourceView(t, nullptr, &r.srv); t->Release(); }
+        if (!r.srv) r.failed = true;
+        return r.srv;
+    }
     std::string p = rel.substr(5);
     int n = MultiByteToWideChar(CP_UTF8, 0, p.c_str(), -1, nullptr, 0);
     std::wstring wp(n ? n - 1 : 0, L'\0'); if (n) MultiByteToWideChar(CP_UTF8, 0, p.c_str(), -1, wp.data(), n);
@@ -505,8 +514,8 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (vs && vs->rule) RunRule(c, vs, d);
     // 19/10: capas editadas desde el inspector (PES21FX_capas.ini): textura por slot u "ocultar" el dibujo
     if (ps && g_layersAny.load()) { LayerOv ov;
+        if (InspectShouldSkip(ps->hash)) { d.skip = true; g_layerSkips++; }
         if (InspectLayerFor(ps->hash, ov)) {
-            if (ov.hidden) d.skip = true;
             for (auto& kv : ov.slot) {
                 ID3D11ShaderResourceView* v = (kv.second == "none") ? nullptr : FileTexture(kv.second);
                 if (kv.second == "none" || v) { Remember(c, d, true, true, kv.first); c->PSSetShaderResources(kv.first, 1, &v); }
