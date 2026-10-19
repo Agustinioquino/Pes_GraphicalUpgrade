@@ -117,6 +117,11 @@ void main(
   // posicion dentro del diente: 0 = linea de encia, 1 = borde incisal
   float mIncisal = mUpper * saturate((v2.y - 0.10) / 0.22) + mLower * saturate((0.60 - v2.y) / 0.20);
   float mEnamelT = 0, mGumLine = 0, mLipShadow = 0;
+  // (19/10 c) boca v3: x98 lengua (humedad/color), y98 sombra entre dientes, z98 oscurecimiento hacia la garganta, w98 saliva
+  float4 Q98 = IniParams.Load(int2(98,0));
+  float mTongueZ = smoothstep(0.64, 0.68, v2.y) * smoothstep(0.52, 0.48, v2.x);   // lengua: abajo-izquierda del atlas
+  float mThroatZ = smoothstep(0.64, 0.68, v2.y) * smoothstep(0.48, 0.52, v2.x);   // garganta / paladar: abajo-derecha
+  float mRows = saturate(mUpper + mLower);
   uint4 bitmask, uiDest;
   float4 fDest;
 
@@ -140,8 +145,12 @@ void main(
     float cRG  = r3.x - r3.y;
     mTeeth  = saturate(smoothstep(0.30, 0.45, cMx) * smoothstep(0.38, 0.26, cSat)
                      + 0.5 * smoothstep(0.35, 0.60, trmY) * smoothstep(0.25, 0.40, cMx)) * smoothstep(0.16, 0.11, cRG);
+    // (v3) en las filas de dientes el mapa de translucidez es la verdad: claro = diente, oscuro = encia
+    if (m2On) mTeeth = max(mTeeth * (1.0 - 0.5 * mRows), mRows * smoothstep(0.30, 0.55, trmY));
     mTissue = (1.0 - mTeeth) * smoothstep(0.07, 0.13, cRG) * smoothstep(0.13, 0.22, cMx);
+    if (m2On) mTissue = max(mTissue, (1.0 - mTeeth) * max(mTongueZ, mRows * smoothstep(0.45, 0.25, trmY)));
     mDeep   = saturate(1.0 - mTeeth - mTissue);     // fondo oscuro: garganta, paladar, mejilla interna
+    if (m2On) mDeep = max(mDeep, mThroatZ * (1.0 - mTeeth));
   }
   r0.x = r3.w;
   r0.xy = -r2.xy + r0.xy;
@@ -244,7 +253,24 @@ void main(
       // SOMBRA DEL LABIO SUPERIOR: la fila de arriba recibe la sombra del labio (mas cerca de la encia, mas sombra),
       // la de abajo la del propio labio inferior pero mucho menos
       mLipShadow = saturate(Q96.w) * (mUpper * (1.0 - 0.75 * mIncisal) * 0.45 + mLower * 0.12);
+      // con el sol alto la sombra del labio de arriba es mas marcada (m_dominantLightDir: y hacia arriba)
+      mLipShadow *= 0.7 + 0.6 * saturate(g_psSystem.m_dominantLightDir.y);
       r0.xyz *= 1.0 - mLipShadow;
+      // --- v3 ---
+      // sombra entre dientes (espacio interproximal): donde la normal del mapa se inclina de costado dentro de las filas
+      { float3 nm = g_tex_normal.Sample(g_sampler_normal_s, v2.xy).xyw; float nx = abs(nm.x * nm.z * 2.0 - 1.0);
+        float gap = smoothstep(0.25, 0.6, nx) * mRows * mTeeth;
+        r0.xyz *= 1.0 - 0.45 * gap * saturate(Q98.y); }
+      // oscurecimiento hacia la garganta: cuanto mas atras en la boca, menos luz (y la lengua, mas atras tambien)
+      { float back = saturate((v2.y - 0.66) / 0.30);
+        float deepG = (mThroatZ * (0.35 + 0.65 * back) + mTongueZ * 0.35 * back) * saturate(Q98.z);
+        r0.xyz *= 1.0 - 0.6 * deepG; }
+      // lengua: rosa-rojo humedo con mas saturacion, papilas (ruido fino) y sin el gris del original
+      { float tz = mTongueZ * mTissue * saturate(Q98.x);
+        float lumT = dot(r0.xyz, float3(0.3, 0.59, 0.11));
+        float pap = 0.9 + 0.2 * frac(sin(dot(floor(v2.xy * 900.0), float2(12.9898, 78.233))) * 43758.5453);
+        float3 tongue = lerp(r0.xyz, float3(0.95, 0.42, 0.45) * lumT * 2.0 * pap, 0.5);
+        r0.xyz = lerp(r0.xyz, tongue, tz); }
     }
   }
   r0.xyz = r0.xyz * r0.www + r3.xyz;
@@ -336,6 +362,13 @@ void main(
       o2.x = max(0.13, o2.x);
       // translucidez del esmalte al G-buffer (la luz de piel la usa): borde incisal translucido
       o1.z = max(o1.z, 0.000977517106 * ((uint)(saturate(mEnamelT) * 63 + 0.5) << 4));
+      // v3: lengua mojada (brillo ancho) y saliva: pelicula brillante en la linea de encia y entre dientes
+      { float tz = mTongueZ * mTissue * saturate(Q98.x);
+        o2.x = lerp(o2.x, max(0.13, min(o2.x, 0.19)), tz);
+        o2.y = saturate(o2.y + 0.08 * tz);
+        float sal = saturate(Q98.w) * (mGumLine + 0.5 * mRows * mTissue);
+        o2.x = lerp(o2.x, max(0.13, min(o2.x, 0.15)), sal);
+        o2.y = saturate(o2.y + 0.10 * sal); }
     }
     if (Q18.z > 0.5) o0.xyz = float3(mTissue, mDeep, mTeeth);   // diagnostico
   }
