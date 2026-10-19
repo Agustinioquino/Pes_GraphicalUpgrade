@@ -10,10 +10,13 @@
 #include <mutex>
 #include <cstring>
 #include <map>
+#include <set>
 #include <cstdio>
 #include <algorithm>
 #include <cmath>
 #include "imgui.h"
+#include <ScreenGrab.h>
+#include <wincodec.h>
 
 namespace fx {
 
@@ -204,6 +207,43 @@ static bool EnsureClassRT(ClassFrame& f) {
     return true;
 }
 
+// ---- historial de texturas (19/10): cada textura distinta que pasa por una clase inspeccionada se anota una vez
+// (hash de recurso, tamano, formato, clase y slot) en PES21FX\inspector\historial.txt y, si "Volcar texturas" esta
+// prendido, se guarda como png en PES21FX\inspector\texturas\<clase>\t<slot>_<id>.png (solo una vez por textura).
+static std::atomic<bool> s_dumpOn{false};
+static std::set<uint64_t> s_seenTex; static std::mutex s_histMx;
+static std::vector<std::pair<ID3D11Resource*, std::wstring>> s_dumpQueue;   // (recurso con AddRef, ruta) -> se vuelca en Present
+static int s_dumpCount = 0, s_histCount = 0;
+static void HistAdd(ID3D11ShaderResourceView* v, const std::string& cls, int slot, const std::string& desc) {
+    ID3D11Resource* res = nullptr; v->GetResource(&res); if (!res) return;
+    uint64_t key = (uint64_t)(uintptr_t)res;
+    bool isNew; { std::lock_guard<std::mutex> lk(s_histMx); isNew = s_seenTex.insert(key).second; }
+    if (!isNew) { res->Release(); return; }
+    std::wstring dir = g_cfg.baseDir + L"inspector"; CreateDirectoryW(dir.c_str(), nullptr);
+    { FILE* f = _wfopen((dir + L"\\historial.txt").c_str(), L"ab");
+      if (f) { SYSTEMTIME st; GetLocalTime(&st); char b[512]; snprintf(b, sizeof(b), "%02d:%02d:%02d | %s | t%d | %s\n", st.wHour, st.wMinute, st.wSecond, cls.c_str(), slot, desc.c_str()); fwrite(b, 1, strlen(b), f); fclose(f); s_histCount++; } }
+    if (s_dumpOn) {
+        D3D11_RESOURCE_DIMENSION dm; res->GetType(&dm);
+        if (dm == D3D11_RESOURCE_DIMENSION_TEXTURE2D) {
+            std::string safe; for (char ch : cls) safe += (isalnum((unsigned char)ch) ? ch : '_');
+            std::wstring sub = dir + L"\\texturas"; CreateDirectoryW(sub.c_str(), nullptr); sub += L"\\" + std::wstring(safe.begin(), safe.end()); CreateDirectoryW(sub.c_str(), nullptr);
+            wchar_t nm[96]; swprintf(nm, 96, L"\\t%02d_%06llx.png", slot, (unsigned long long)((key >> 4) & 0xffffff));
+            res->AddRef(); std::lock_guard<std::mutex> lk(s_histMx); s_dumpQueue.push_back({ res, sub + nm });
+        }
+    }
+    res->Release();
+}
+static void HistFlush() {   // Present: volcar hasta 2 texturas por cuadro (SaveWIC hace una copia a staging y espera a la GPU)
+    for (int n = 0; n < 2; n++) {
+        std::pair<ID3D11Resource*, std::wstring> it; { std::lock_guard<std::mutex> lk(s_histMx); if (s_dumpQueue.empty()) return; it = s_dumpQueue.back(); s_dumpQueue.pop_back(); }
+        EnsureComInit();
+        HRESULT hr = DirectX::SaveWICTextureToFile(g_dev.imm, it.first, GUID_ContainerFormatPng, it.second.c_str(), nullptr, nullptr, false);
+        if (FAILED(hr)) { // formatos comprimidos o de profundidad: WIC no los convierte; se guardan como dds
+            std::wstring dds = it.second.substr(0, it.second.size() - 4) + L".dds"; hr = DirectX::SaveDDSTextureToFile(g_dev.imm, it.first, dds.c_str()); }
+        if (SUCCEEDED(hr)) s_dumpCount++;
+        it.first->Release();
+    }
+}
 static std::string DescribeSRV(ID3D11ShaderResourceView* v) {
     if (!v) return "";
     std::string origin = FaceGenOrigin(v);
@@ -287,7 +327,8 @@ bool InspectBegin(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEnt
         f.tex.clear();
         ID3D11ShaderResourceView* srv[32] = {}; c->PSGetShaderResources(0, 32, srv);
         for (int i = 0; i < 32; i++) if (srv[i]) { std::string d = DescribeSRV(srv[i]); auto sn = s_classes[ci].slotNames.find(i); if (sn != s_classes[ci].slotNames.end()) d = sn->second + ": " + d;
-            TexInfo ti; ti.slot = i; ti.desc = d; ti.srv = srv[i]; f.tex.push_back(ti); }   // la referencia queda en la ficha (se dibuja como miniatura)
+            TexInfo ti; ti.slot = i; ti.desc = d; ti.srv = srv[i]; f.tex.push_back(ti);
+            HistAdd(srv[i], s_classes[ci].name, i, d); }   // la referencia queda en la ficha (se dibuja como miniatura)
         // vertex shader: texturas (t0..t15)
         for (auto& t : f.vtex) if (t.srv) t.srv->Release(); f.vtex.clear();
         { ID3D11ShaderResourceView* vsrv[16] = {}; c->VSGetShaderResources(0, 16, vsrv);
@@ -339,6 +380,7 @@ void InspectEnd(ID3D11DeviceContext* c) {
 // en Present (contexto inmediato): leer la textura del cuadro anterior, calcular el rectangulo, limpiar para el proximo
 void InspectPresent() {
     if (!g_dev.imm) return;
+    HistFlush();
     // al apagar el inspector vuelven todas las capas ocultas (y la prueba de cejas); las texturas elegidas por slot se mantienen
     { static bool wasOn = false; bool on = g_inspectOn.load();
       if (wasOn && !on) { { std::lock_guard<std::mutex> lk(s_layMx); for (auto& kv : s_layers) { kv.second.hidden = false; kv.second.highlight = false; } s_solo = -1; s_soloAll = false; LayersUpdateAny(); }
@@ -577,6 +619,9 @@ void InspectDrawOverlay() {
             ImGui::SameLine(); { static std::string rep; static double repT = 0; if (ImGui::Button("Guardar informe")) { std::string pth; rep = SaveReport(sel, pth) ? "Informe: " + pth : "No se pudo guardar el informe"; repT = Now(); }
               if (ImGui::IsItemHovered()) ImGui::SetTooltip("Escribe PES21FX\\inspector\\<clase>_<hash>.txt con todo lo recopilado: shaders, texturas (origen y formato), material, regla, parametros del mod, capas cambiadas y la luz de la escena.");
               if (!rep.empty() && Now() - repT < 6.0) { ImGui::SameLine(); ImGui::TextDisabled("%s", rep.c_str()); } }
+            { bool dmp = s_dumpOn.load(); if (ImGui::Checkbox("Volcar texturas", &dmp)) s_dumpOn = dmp;
+              if (ImGui::IsItemHovered()) ImGui::SetTooltip("Guarda como png/dds cada textura nueva que pase por las capas inspeccionadas (PES21FX\\inspector\\texturas\\<clase>\\). El historial de texturas (historial.txt) se escribe siempre con el inspector prendido.");
+              ImGui::SameLine(); ImGui::TextDisabled("historial: %d texturas, volcadas: %d, en cola: %d", s_histCount, s_dumpCount, (int)s_dumpQueue.size()); }
             { bool flat = g_cfg.live[89][0] > 0.5f; if (ImGui::Checkbox("Luz plana", &flat)) g_cfg.live[89][0] = flat ? 1.0f : 0.0f;
               if (ImGui::IsItemHovered()) ImGui::SetTooltip("Apaga la iluminacion del sol (sin direccion, sombras ni brillos): se ven las texturas y materiales tal cual. Nivel y brillo en Iluminacion > Luz plana.");
               ImGui::SameLine(); ImGui::SetNextItemWidth(120); ImGui::SliderFloat("nivel##flat", &g_cfg.live[89][1], 0.2f, 3.0f, "%.2f"); }
