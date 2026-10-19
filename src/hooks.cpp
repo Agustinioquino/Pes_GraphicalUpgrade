@@ -558,6 +558,10 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     }
     if (ps && ps->rule) RunRule(c, ps, d);
     if (vs && vs->rule) RunRule(c, vs, d);
+    // 19/10: SSS separable en pantalla antes de la composicion: la irradiancia (t9) llega ya difundida sobre la piel
+    if (ps && (ps->hash == 0x619b86cb5691cdceULL || ps->hash == 0xf807e74d5b900a15ULL) && ps->repl) {
+        if (ID3D11ShaderResourceView* v = SSSSBeforeComposition(c)) { Remember(c, d, true, true, 9); c->PSSetShaderResources(9, 1, &v); }
+    }
     // 19/10: capas editadas desde el inspector (PES21FX_capas.ini): textura por slot u "ocultar" el dibujo
     g_drawOrder++;
     if (ps && g_layersAny.load()) { LayerOv ov;
@@ -877,6 +881,7 @@ void WatchShaderFolder() {
 void ReloadShaders() {
     ScanShaderFolder();
     FaceGenReloadShaders();
+    SSSSReloadShaders();
     std::unique_lock<std::shared_mutex> lk(s_shMutex);
     int n = 0;
     { std::lock_guard<std::mutex> lk2(g_errMutex); g_compileErrors.clear(); }

@@ -235,7 +235,8 @@ void main(
   // === PES21 dispersion subsuperficial en pantalla (difusion real de la luz bajo la piel) ===
   if (skinC) {
     float4 P3s = IniParams.Load(int2(3,0));
-    if (P3s.z > 0.5) {
+    // 19/10: si la SSS separable (DLL, w95) esta activa, la irradiancia ya llega difundida: no se repite aca
+    if (P3s.z > 0.5 && IniParams.Load(int2(95,0)).w < 0.5) {
       float zc0 = PESLinZ(uvC);
       float3 nC0 = PESDecN(uvC);
       float wScale = (P3s.x > 0 ? P3s.x : 1.6) / 1.6;
