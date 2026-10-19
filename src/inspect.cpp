@@ -83,6 +83,7 @@ static std::vector<ClassFrame> s_cls;   // una por clase (misma posicion que s_c
 static std::vector<uint64_t> s_unkHash;   // hash de cada clase desconocida (indices >= s_classes.size())
 static const int kMaxUnknown = 12;
 static bool s_loaded = false;
+static ID3D11PixelShader* s_whitePS = nullptr; static bool s_psTried = false;
 static std::mutex s_mx;
 // ---- capas editables (PES21FX_capas.ini): [<hash>]  tN = file:ruta | none   oculta = 1
 std::atomic<bool> g_layersAny{false};
@@ -101,10 +102,15 @@ bool InspectShouldSkip(uint64_t ps) {
     }
     return false;
 }
+ID3D11PixelShader* InspectHighlightPS(uint64_t ps) {
+    if (!g_inspectOn || !s_whitePS) return nullptr;
+    std::lock_guard<std::mutex> lk(s_layMx);
+    auto it = s_layers.find(ps); return (it != s_layers.end() && it->second.highlight) ? s_whitePS : nullptr;
+}
 bool InspectLayerFor(uint64_t ps, LayerOv& out) {
     std::lock_guard<std::mutex> lk(s_layMx); auto it = s_layers.find(ps); if (it == s_layers.end()) return false; out = it->second; return true;
 }
-static void LayersUpdateAny() { bool any = s_solo.load() >= 0; for (auto& kv : s_layers) if (kv.second.hidden || !kv.second.slot.empty()) any = true; g_layersAny = any; }
+static void LayersUpdateAny() { bool any = s_solo.load() >= 0; for (auto& kv : s_layers) if (kv.second.hidden || kv.second.highlight || !kv.second.slot.empty()) any = true; g_layersAny = any; }
 static void ScanFiles() {
     s_files.clear();
     const wchar_t* dirs[] = { L"textures\\*.dds", L"textures\\*.png", L"hair\\*.png", L"hair\\*.dds", L"hair\\auto\\*.png" };
@@ -145,7 +151,6 @@ static bool SaveLayers() {
     FILE* f = _wfopen((g_cfg.baseDir + L"PES21FX_capas.ini").c_str(), L"wb"); if (!f) return false; fwrite(out.data(), 1, out.size(), f); fclose(f); return true;
 }
 void InspectReload() { std::lock_guard<std::mutex> lk(s_mx); s_loaded = false; }
-static ID3D11PixelShader* s_whitePS = nullptr; static bool s_psTried = false;
 static ID3D11DepthStencilState* s_noDepth = nullptr; static ID3D11BlendState* s_noBlend = nullptr;
 static float s_screenW = 1920, s_screenH = 1080;
 // estado guardado entre InspectBegin e InspectEnd (por hilo: cada contexto diferido vive en su hilo)
@@ -261,7 +266,7 @@ void InspectPresent() {
     if (!g_dev.imm) return;
     // al apagar el inspector vuelven todas las capas ocultas (y la prueba de cejas); las texturas elegidas por slot se mantienen
     { static bool wasOn = false; bool on = g_inspectOn.load();
-      if (wasOn && !on) { { std::lock_guard<std::mutex> lk(s_layMx); for (auto& kv : s_layers) kv.second.hidden = false; s_solo = -1; LayersUpdateAny(); }
+      if (wasOn && !on) { { std::lock_guard<std::mutex> lk(s_layMx); for (auto& kv : s_layers) { kv.second.hidden = false; kv.second.highlight = false; } s_solo = -1; LayersUpdateAny(); }
           if (g_cfg.live[75][2] > 0.5f) g_cfg.live[75][2] = 0; g_inspectSel = -1; }
       wasOn = on; }
     s_skipsShown = g_layerSkips.exchange(0);
@@ -375,6 +380,9 @@ void InspectDrawOverlay() {
             ImGui::TextDisabled("dibujos ocultados por cuadro: %d%s", s_skipsShown, s_skipsShown == 0 && (ov.hidden || s_solo.load() >= 0) ? "  (ninguno: esta capa no paso por el filtro)" : "");
             bool hidden = ov.hidden;
             if (ImGui::Checkbox("Ocultar esta capa (no dibujar esta parte)", &hidden)) { std::lock_guard<std::mutex> lk(s_layMx); for (uint64_t h : cl.ps) s_layers[h].hidden = hidden; LayersUpdateAny(); }
+            bool hl = ov.highlight; ImGui::SameLine();
+            if (ImGui::Checkbox("Resaltar en magenta", &hl)) { std::lock_guard<std::mutex> lk(s_layMx); for (uint64_t h : cl.ps) s_layers[h].highlight = hl; LayersUpdateAny(); }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Dibuja esta capa con un shader magenta plano: lo que se pinte de magenta es exactamente lo que dibuja este shader.");
             ImGui::SameLine(); if (ImGui::Button("Guardar capas")) Log("capas: %s", SaveLayers() ? "guardadas en PES21FX_capas.ini" : "no se pudo guardar");
             ImGui::SameLine(); if (ImGui::Button("Releer archivos")) ScanFiles();
             ImGui::SameLine(); if (ImGui::Button("Quitar todas")) { std::lock_guard<std::mutex> lk(s_layMx); for (uint64_t h : cl.ps) s_layers.erase(h); LayersUpdateAny(); }
