@@ -301,15 +301,11 @@ void InspectDrawOverlay() {
         dl->AddRect(fa, fb, col, 4.0f, 0, isSel ? 2.0f : 1.0f);
         char t[200]; snprintf(t, sizeof(t), "%s   %u vert %s", s_classes[i].name.c_str(), f.verts, f.deferred ? "(dif)" : "(inm)");
         dl->AddText(ImVec2(fa.x + 8, fa.y + 5), col, t);
-        // flecha: de la ficha al centro del rectangulo (no con la ventana Capas abierta)
+        // sin flechas (19/10): el nombre va pegado al rectangulo
+        { char nm[96]; snprintf(nm, sizeof(nm), " %s ", s_classes[i].name.c_str()); ImVec2 ts = ImGui::CalcTextSize(nm);
+          ImVec2 la(a.x, a.y - ts.y - 2), lb(a.x + ts.x, a.y - 2); if (la.y < 0) { la.y = a.y + 2; lb.y = a.y + ts.y + 2; }
+          dl->AddRectFilled(la, lb, IM_COL32(20, 22, 28, 200), 3.0f); dl->AddText(ImVec2(la.x, la.y), col, nm); }
         if (isSel) { if (io.MouseClicked[0] && io.MousePos.x >= fa.x && io.MousePos.x <= fb.x && io.MousePos.y >= fa.y && io.MousePos.y <= fb.y) g_inspectSel = -1; y += h + 6; continue; }
-        ImVec2 from(fa.x, fa.y + 13);
-        ImVec2 to = center;
-        // punta en el borde del rectangulo mas cercano a la ficha
-        if (from.x > b.x) to = ImVec2(b.x, center.y); else if (from.x < a.x) to = ImVec2(a.x, center.y);
-        dl->AddLine(from, to, col, isSel ? 2.5f : 1.5f);
-        ImVec2 dir(to.x - from.x, to.y - from.y); float len = sqrtf(dir.x * dir.x + dir.y * dir.y); if (len > 1) { dir.x /= len; dir.y /= len;
-            ImVec2 n(-dir.y, dir.x); dl->AddTriangleFilled(to, ImVec2(to.x - dir.x * 12 + n.x * 6, to.y - dir.y * 12 + n.y * 6), ImVec2(to.x - dir.x * 12 - n.x * 6, to.y - dir.y * 12 - n.y * 6), col); }
         // clic en la ficha
         if (io.MouseClicked[0] && io.MousePos.x >= fa.x && io.MousePos.x <= fb.x && io.MousePos.y >= fa.y && io.MousePos.y <= fb.y) g_inspectSel = isSel ? -1 : i;
         y += h + 6;
