@@ -393,6 +393,18 @@ void main(
   r0.xyz = min(float3(0,0,0), -r0.xyz);
   o0.xyz = -r0.xyz;
   o0.w = 1;
+  // PES21 inspector (19/10): LUZ PLANA (x89): como la vista "material" de Blender: albedo x luz de estudio desde la camara
+  // (N.V suave), sin sol, sombras, GI, niebla ni brillos. y89 nivel; z89 = 1 agrega un brillo de estudio chico.
+  { float4 P89 = IniParams.Load(int2(89,0));
+    if (P89.x > 0.5) {
+      float3 n89 = PESDecN(uvC); n89.z = -n89.z;
+      float nv = abs(dot(normalize(n89), float3(0, 0, 1)));                 // hacia la camara (sin depender del signo de z)
+      float3 alb89 = saturate(r7.xyz);
+      float lv = P89.y > 0.0 ? P89.y : 1.0;
+      float3 c89 = alb89 * (0.35 + 0.65 * nv) * lv;
+      if (P89.z > 0.5) c89 += pow(nv, 24.0) * 0.08 * lv;
+      o0.xyz = c89;
+    } }
   if (IniParams.Load(int2(12,0)).w > 1.5) o0.xyz = giDbg * 3.0;   // w12 = 2: ver solo el rebote de luz
   if (IniParams.Load(int2(12,0)).w < -0.5) {   // PES21 debug: bits de m_shadowMapResolutions y m_exposure en la esquina
     int bx = (int)(v0.x / 24.0), by = (int)((v0.y - 300.0) / 24.0);
