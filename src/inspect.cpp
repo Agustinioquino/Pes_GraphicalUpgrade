@@ -30,7 +30,7 @@ std::atomic<int> g_inspectSel{-1};
 //   que = SSS por zonas, arrugas...  (que hace el mod ahi)
 //   t0 = difusa  t1 = normal ...     (nombre de cada slot de textura del juego; opcional)
 //   [inspector]  desconocidos = 1    tambien marcar los shaders de geometria que no estan en ninguna clase (hasta 6), con su hash
-struct InspClass { std::vector<uint64_t> ps; std::string name, desc; std::map<int, std::string> slotNames; bool unknown = false; std::string group = "otros"; uint64_t alias = 0; std::vector<uint64_t> vsAny; };   // vsAny: "vs = <hash>": cualquier PS sin registrar con ese vertex shader es de esta clase (comodin)
+struct InspClass { std::vector<uint64_t> ps; std::string name, desc; std::map<int, std::string> slotNames; bool unknown = false; std::string group = "otros"; uint64_t alias = 0; std::vector<uint64_t> vsAny; UINT minVerts = 0; };   // minVerts: el comodin de VS solo vale para dibujos con al menos tantos vertices   // vsAny: "vs = <hash>": cualquier PS sin registrar con ese vertex shader es de esta clase (comodin)
 static std::string s_group = "todo";   // filtro de grupo del inspector (todo | cara | pelo | kit | estadio | desconocidos | ...)
 static std::vector<InspClass> s_classes;
 static bool s_unknownOn = true;
@@ -80,6 +80,7 @@ static void LoadClasses() {
             else if (k == "que") cur->desc = v;
             else if (k == "grupo") cur->group = Lower2(v);
             else if (k == "como") cur->alias = strtoull(v.c_str(), nullptr, 16);
+            else if (k == "minverts") cur->minVerts = (UINT)atoi(v.c_str());
             else if (k == "vs") { std::string h; for (char ch : v + ",") { if (ch == ',' || ch == ' ') { h = Trim2(h); if (!h.empty()) cur->vsAny.push_back(strtoull(h.c_str(), nullptr, 16)); h.clear(); } else h += ch; } }
             else if (k.size() > 1 && k[0] == 't' && isdigit((unsigned char)k[1])) cur->slotNames[atoi(k.c_str() + 1)] = v;
         }
@@ -277,18 +278,18 @@ uint64_t InspectFingerprint(ID3D11DeviceContext* c, const ShaderEntry* vs) {
 }
 // alias: "como = <hash>" en el ini -> el dibujo se trata como ese shader del juego (reemplazo + reglas). 0 = sin alias
 // clase de un PS sin registrar: por huella exacta o por comodin de VS ("vs = ..."); en ese caso la huella se agrega a la clase
-static int ClassForUnreg(uint64_t fingerprint, uint64_t vsHash) {
+static int ClassForUnreg(uint64_t fingerprint, uint64_t vsHash, UINT verts) {
     for (size_t i = 0; i < s_classes.size(); i++) for (uint64_t h : s_classes[i].ps) if (h == fingerprint) return (int)i;
-    if (vsHash) for (size_t i = 0; i < s_classes.size(); i++) if (!s_classes[i].unknown) for (uint64_t h : s_classes[i].vsAny) if (h == vsHash) {
+    if (vsHash) for (size_t i = 0; i < s_classes.size(); i++) if (!s_classes[i].unknown && verts >= s_classes[i].minVerts) for (uint64_t h : s_classes[i].vsAny) if (h == vsHash) {
         s_classes[i].ps.push_back(fingerprint);
-        Log("inspector: PS sin registrar huella %016llx (VS %016llx) -> clase '%s' por comodin de VS", (unsigned long long)fingerprint, (unsigned long long)vsHash, s_classes[i].name.c_str());
+        Log("inspector: PS sin registrar huella %016llx (VS %016llx, %u vertices) -> clase '%s' por comodin de VS", (unsigned long long)fingerprint, (unsigned long long)vsHash, verts, s_classes[i].name.c_str());
         return (int)i; }
     return -1;
 }
-uint64_t InspectAliasFor(uint64_t fingerprint, uint64_t vsHash) {
+uint64_t InspectAliasFor(uint64_t fingerprint, uint64_t vsHash, UINT verts) {
     std::lock_guard<std::mutex> lk(s_mx);
     if (!s_loaded) { LoadClasses(); LoadLayers(); ScanFiles(); s_loaded = true; s_cls.clear(); s_unkHash.clear(); s_cls.resize(s_classes.size()); }
-    int ci = ClassForUnreg(fingerprint, vsHash);
+    int ci = ClassForUnreg(fingerprint, vsHash, verts);
     return ci >= 0 ? s_classes[ci].alias : 0;
 }
 bool InspectBegin(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEntry* vs, int kind, UINT verts, UINT inst) {
@@ -306,7 +307,7 @@ bool InspectBegin(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEnt
     int ci = -1;
     std::lock_guard<std::mutex> lk(s_mx);
     if (!s_loaded) { LoadClasses(); LoadLayers(); ScanFiles(); s_loaded = true; for (auto& f : s_cls) { if (f.rt) f.rt->Release(); if (f.rtv) f.rtv->Release(); for (auto* t : f.st) if (t) t->Release(); for (auto& t : f.tex) if (t.srv) t.srv->Release(); for (auto& t : f.vtex) if (t.srv) t.srv->Release(); if (f.matCopy) f.matCopy->Release(); if (f.matStg) f.matStg->Release(); if (f.objCopy) f.objCopy->Release(); if (f.objStg) f.objStg->Release(); } s_cls.clear(); s_unkHash.clear(); s_cls.resize(s_classes.size()); }
-    if (unreg) ci = ClassForUnreg(psHash, vs ? vs->hash : 0);
+    if (unreg) ci = ClassForUnreg(psHash, vs ? vs->hash : 0, verts);
     else for (size_t i = 0; i < s_classes.size() && ci < 0; i++) for (uint64_t h : s_classes[i].ps) if (h == psHash) { ci = (int)i; break; }
     if (ci < 0) {
         // desconocido: geometria (>= 100 vertices) en un dibujo con render target de pantalla (G-buffer), hasta kMaxUnknown
