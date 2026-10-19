@@ -68,16 +68,12 @@ Texture2D<float4> g_tex_mesh : register(t15);
 
 // 3Dmigoto declarations
 #define cmp -
+Texture2D<float4> pesIrisPolar  : register(t20);   // PES21 (19/10) iris en polares: RGB detalle (0.5 = sin cambio), A altura
+Texture2D<float4> pesIrisPolarN : register(t21);   //   normal tangente del iris (x = tangencial, y = radial)
+Texture2D<float4> pesFrame      : register(t22);   //   copia de la imagen final del cuadro anterior (reflejo en pantalla)
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 
-
-// PES21 (19/10) ojos realistas: ruido para las fibras del iris
-float pesEyeH1(float x) { return frac(sin(x * 127.1) * 43758.5453); }
-float pesEyeN1(float x) { float i = floor(x), f = frac(x); f = f * f * (3 - 2 * f); return lerp(pesEyeH1(i), pesEyeH1(i + 1), f); }
-float pesEyeH2(float2 p) { return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453); }
-float pesEyeN2(float2 p) { float2 i = floor(p), f = frac(p); f = f * f * (3 - 2 * f);
-  return lerp(lerp(pesEyeH2(i), pesEyeH2(i + float2(1, 0)), f.x), lerp(pesEyeH2(i + float2(0, 1)), pesEyeH2(i + 1), f.x), f.y); }
 
 void main(
   float4 v0 : SV_Position0,
@@ -126,7 +122,22 @@ void main(
   r0.xy = float2(0.25,0.25) * r0.xy;
   r0.xy = r0.xy / r0.zz;
   r0.xy = v2.xy + -r0.xy;
+  // === PES21 (19/10) iris realista: la textura del ojo esta centrada en (0.5, 0.5); el iris llega a r = 0.245 y la pupila a 0.088
+  // (medido en las texturas volcadas). Con eso se pasa a polares y se leen las texturas de detalle del mod (t20/t21),
+  // que sirven para cualquier color: el color sigue saliendo de la textura del juego (t6).
+  float4 P90 = IniParams.Load(int2(90,0));
+  float2 irisD = r0.xy - 0.5;
+  float irisR = length(irisD) / 0.245;
+  float irisTh = atan2(irisD.y, irisD.x) * 0.15915494 + 0.5;
+  float irisVt = saturate((irisR - 0.36) / 0.64);                    // 0 = borde de la pupila, 1 = borde del iris
+  float irisIn = (1 - smoothstep(0.97, 1.03, irisR)) * smoothstep(0.30, 0.37, irisR);   // 1 dentro del iris (sin pupila)
+  float2 irisPuv = float2(irisTh, irisVt);
+  float4 irisDet = pesIrisPolar.SampleGrad(g_samplerLinear_Wrap_s, irisPuv, float2(ddx(irisTh), ddx(irisVt)) , float2(ddy(irisTh), ddy(irisVt)));
+  float3 irisNt = pesIrisPolarN.Sample(g_samplerLinear_Wrap_s, irisPuv).xyz * 2 - 1;
+  float irisOn = (P90.w > 0.5) ? irisIn * saturate(P90.x) : 0.0;
   r0.xyz = g_tex_base2.Sample(g_sampler_base2_s, r0.xy).xyz;
+  // detalle de albedo: fibras, criptas, collarete y surcos multiplican el color del juego
+  r0.xyz *= lerp(1.0, irisDet.xyz * 2.0, irisOn);
   r0.xyz = r0.xyz + -r2.xyz;
   r0.xyz = r0.www * r0.xyz + r2.xyz;
   r1.xyz = g_tex_normal2.Sample(g_sampler_normal2_s, v2.xy).xyw;
@@ -178,6 +189,10 @@ void main(
   r0.xyz = g_tex_normal.Sample(g_sampler_normal_s, v2.xy).xyw;
   r0.x = r0.x * r0.z;
   r0.xy = r0.xy * float2(2,2) + float2(-1,-1);
+  { // relieve del iris (fibras y criptas) sobre la normal del G-buffer: del marco polar al marco UV
+    float2 rad = normalize(irisD + 1e-5), tng = float2(-rad.y, rad.x);
+    float2 nUV = irisNt.x * tng + irisNt.y * rad;
+    r0.xy += nUV * 0.6 * irisOn; }
   r1.xyz = r2.xyz * r0.yyy;
   r1.xyz = r3.xyz * r0.xxx + r1.xyz;
   r0.x = -r0.x * r0.x + 1;
@@ -223,37 +238,41 @@ void main(
   o3.xy = g_psSystem.m_renderBuffer.xy * r0.xy;
   o3.zw = float2(0,0);
   o4.xyzw = float4(0,0,0,1);
-  // === PES21 (19/10) ojos realistas: fibras y criptas del iris, cornea con reflejo de Fresnel y brillo puntual nitido.
+  // === PES21 (19/10) ojos realistas (2): cornea con Fresnel, reflejo en espacio de pantalla y brillo nitido.
   // x90 detalle del iris, y90 reflejo de la cornea, z90 nitidez del brillo, w90 on/off
-  { float4 P90 = IniParams.Load(int2(90,0));
-    if (P90.w > 0.5) {
-      float irisM = smoothstep(0.25, 0.6, eyeIris);
-      // direccion hacia el centro del iris: gradiente del mapa de altura (el iris es una cupula en ese mapa)
-      float dd = max(fwidth(v2.x), fwidth(v2.y)) * 1.5 + 1.0 / 1024.0;
-      float hx = g_tex_height.SampleLevel(g_sampler_height_s, v2.xy + float2(dd, 0), 0).y - g_tex_height.SampleLevel(g_sampler_height_s, v2.xy - float2(dd, 0), 0).y;
-      float hy = g_tex_height.SampleLevel(g_sampler_height_s, v2.xy + float2(0, dd), 0).y - g_tex_height.SampleLevel(g_sampler_height_s, v2.xy - float2(0, dd), 0).y;
-      float gl = length(float2(hx, hy));
-      float gOk = smoothstep(0.002, 0.02, gl);
-      float th = atan2(hy, hx) * 0.15915494 + 0.5;   // angulo 0..1 alrededor del centro
-      float rr = saturate(1 - eyeH);                  // 0 centro .. 1 borde
-      // fibras radiales (dos escalas) + criptas (huecos oscuros) + collarete (anillo claro a media distancia)
-      float fib = pesEyeN1(th * 180 + rr * 3) * 0.6 + pesEyeN1(th * 61 + 17.3) * 0.4;
-      float cry = smoothstep(0.62, 0.85, pesEyeN2(float2(th * 38, rr * 7)));
-      float col = exp(-pow((rr - 0.35) / 0.08, 2));
-      float det = 0.78 + 0.44 * fib - 0.35 * cry + 0.18 * col;
-      det = lerp(1.0, det, irisM * gOk * saturate(P90.x));
-      float3 base = eyeBase * det;
-      // cornea: reflejo del entorno con Fresnel (Schlick, n = 1.376 -> F0 = 0.025), mas fuerte de costado
-      float ndv = saturate(dot(eyeNc, eyeV));
-      float F = 0.025 + 0.975 * pow(1 - ndv, 5);
-      float rmask = max(eyeMask, irisM);
-      float3 refl = eyeRefl * rmask * lerp(1.0, (0.35 + 6.0 * F), saturate(P90.y)) * (0.6 + 0.8 * P90.y);
-      o0.xyz = base + refl;
-      // brillo del sol/focos sobre la cornea: rugosidad muy baja donde hay cornea (lo resuelve la luz diferida del juego)
-      float rough = lerp(0.12, 0.03, saturate(P90.z));
-      o2.x = lerp(o2.x, min(o2.x, rough), rmask);
-      o2.y = lerp(o2.y, max(o2.y, 0.7), rmask * saturate(P90.z));
-    } }
+  if (P90.w > 0.5) {
+    float irisM = irisIn;
+    // sombra del parpado/limbo sobre el iris (ambient occlusion suave en el borde)
+    float3 base = eyeBase * lerp(1.0, 0.82, smoothstep(0.85, 1.0, irisR) * irisOn);
+    // cornea: Fresnel de Schlick (n = 1.376 -> F0 = 0.025), mas fuerte de costado
+    float ndv = saturate(dot(eyeNc, eyeV));
+    float F = 0.025 + 0.975 * pow(1 - ndv, 5);
+    float rmask = max(eyeMask, irisM);
+    float3 refl = eyeRefl * rmask * lerp(1.0, (0.35 + 6.0 * F), saturate(P90.y)) * (0.6 + 0.8 * P90.y);
+    // reflejo en espacio de pantalla: lo que de verdad hay delante del jugador (cuadro anterior), si el rayo cae en pantalla
+    { float3 Rv = normalize(2 * eyeNc * dot(eyeNc, eyeV) - eyeV);    // reflejo en espacio de vista
+      float3 dirC = -eyeV;
+      float depthV = 1.0 / max(v0.w, 1e-6);
+      float3 posV = dirC * (depthV / max(abs(dirC.z), 1e-4));
+      float3 Pf = posV + Rv * 6.0;                                     // 6 m: el estadio queda lejos del ojo
+      float4 clip = mul(float4(Pf, 1), g_psScene.m_projection);   // misma convencion que pes_brow_vs (fila de registro = columna)
+      if (clip.w > 0.05) {
+        float2 suv = clip.xy / clip.w * float2(0.5, -0.5) + 0.5;
+        float2 e = abs(suv - 0.5) * 2;
+        float edge = (1 - smoothstep(0.7, 1.0, max(e.x, e.y)));
+        if (edge > 0.001) {
+          float3 sc = pesFrame.SampleLevel(g_samplerLinear_Wrap_s, saturate(suv), 2).xyz;
+          sc = sc * sc;   // sRGB aprox -> lineal
+          float3 ssr = sc * rmask * (0.35 + 6.0 * F) * saturate(P90.y) * 0.5;
+          refl = lerp(refl, ssr, edge * 0.7);
+        } } }
+    o0.xyz = base + refl;
+    // brillo del sol/focos sobre la cornea: rugosidad baja donde hay cornea (lo resuelve la luz diferida del juego).
+    // o2.x es la rugosidad CODIFICADA del juego (minimo valido ~0.13: por debajo la pasada de luz devuelve negro;
+    // o2.y es metalicidad: no se toca, con 0.7 el ojo quedaba negro con un punto de brillo)
+    float rough = lerp(0.17, 0.13, saturate(P90.z));
+    o2.x = lerp(o2.x, max(0.13, min(o2.x, rough)), rmask);
+  }
     {
     // === PES21 ojos: esclerotica menos blanca, anillo limbal, iris con mas color, cornea mojada ===
     if (IniParams.Load(int2(0,0)).w > 0.5) {

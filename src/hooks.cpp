@@ -737,6 +737,40 @@ static void HookFactory(IDXGIFactory* fac) {
 
 
 // ---------------------------------------------------------------- Present
+// 19/10: copia de la imagen final de cada cuadro (antes del menu), como recurso con nombre "pes_frame" para las reglas
+// (srv = N pes_frame): la usan los reflejos en espacio de pantalla de los ojos. Se renueva en cada Present.
+static ID3D11Texture2D* s_frameTex = nullptr; static UINT s_frameW = 0, s_frameH = 0; static DXGI_FORMAT s_frameFmt = DXGI_FORMAT_UNKNOWN;
+static void FrameCopyPresent(IDXGISwapChain* sc) {
+    if (!g_dev.dev || !g_dev.imm || !g_cfg.optPresent) return;
+    ID3D11Texture2D* bb = nullptr; if (FAILED(sc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb)) || !bb) return;
+    D3D11_TEXTURE2D_DESC bd; bb->GetDesc(&bd);
+    if (bd.SampleDesc.Count != 1) { bb->Release(); return; }
+    DXGI_FORMAT fmt = bd.Format;
+    switch (fmt) {   // formatos typeless: vista con el equivalente UNORM
+        case DXGI_FORMAT_R8G8B8A8_TYPELESS: fmt = DXGI_FORMAT_R8G8B8A8_UNORM; break;
+        case DXGI_FORMAT_B8G8R8A8_TYPELESS: fmt = DXGI_FORMAT_B8G8R8A8_UNORM; break;
+        case DXGI_FORMAT_R10G10B10A2_TYPELESS: fmt = DXGI_FORMAT_R10G10B10A2_UNORM; break;
+        case DXGI_FORMAT_R16G16B16A16_TYPELESS: fmt = DXGI_FORMAT_R16G16B16A16_FLOAT; break;
+        default: break;
+    }
+    if (!s_frameTex || s_frameW != bd.Width || s_frameH != bd.Height || s_frameFmt != bd.Format) {
+        ID3D11ShaderResourceView* oldSrv = nullptr;
+        { std::lock_guard<std::mutex> lk(s_namedMutex); auto& r = s_named["pes_frame"]; oldSrv = r.srv; r.srv = nullptr; r.failed = false; }
+        if (oldSrv) oldSrv->Release();
+        if (s_frameTex) { s_frameTex->Release(); s_frameTex = nullptr; }
+        D3D11_TEXTURE2D_DESC td = bd; td.BindFlags = D3D11_BIND_SHADER_RESOURCE; td.MiscFlags = 0; td.Usage = D3D11_USAGE_DEFAULT; td.CPUAccessFlags = 0; td.MipLevels = 1; td.ArraySize = 1;
+        if (SUCCEEDED(g_dev.dev->CreateTexture2D(&td, nullptr, &s_frameTex)) && s_frameTex) {
+            D3D11_SHADER_RESOURCE_VIEW_DESC vd{}; vd.Format = fmt; vd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D; vd.Texture2D.MipLevels = 1;
+            ID3D11ShaderResourceView* v = nullptr;
+            if (SUCCEEDED(g_dev.dev->CreateShaderResourceView(s_frameTex, &vd, &v)) && v) { std::lock_guard<std::mutex> lk(s_namedMutex); s_named["pes_frame"].srv = v; }
+            else { s_frameTex->Release(); s_frameTex = nullptr; }
+            Log("pes_frame: copia del cuadro %ux%u fmt %d: %s", bd.Width, bd.Height, (int)bd.Format, s_frameTex ? "ok" : "NO SE PUDO CREAR");
+        }
+        s_frameW = bd.Width; s_frameH = bd.Height; s_frameFmt = bd.Format;
+    }
+    if (s_frameTex) g_dev.imm->CopyResource(s_frameTex, bb);
+    bb->Release();
+}
 static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT flags) {
     ID3D11Device* d = nullptr;
     if (SUCCEEDED(sc->GetDevice(__uuidof(ID3D11Device), (void**)&d)) && d) {
@@ -781,6 +815,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     GrassPresent();
     FaceGenPresent();
     InspectPresent();
+    FrameCopyPresent(sc);   // antes del menu, para que el menu no se refleje en los ojos
     MenuTestPresent(sc);
     OverlayPresent(sc);
     return o_Present(sc, sync, flags);
