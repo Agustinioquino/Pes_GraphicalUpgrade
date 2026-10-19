@@ -324,7 +324,13 @@ void main(
       if (near > 0.001) {
         float4 mn = pesSkinMicro.SampleGrad(g_samplerAnisotropic_Clamp_s, frac(muv), mdx, mdy);   // frac + grad: sin costura de mip
         float3 tn = mn.xyz * 2.0 - 1.0;
-        float str = saturate(P94.x) * near * 0.9;
+        // solo piel: se atenua donde la quinta textura marca pelo/barba (A) y donde el mapa de zonas no es piel (A)
+        float skinM = 1.0;
+        { float4 P68e = IniParams.Load(int2(68,0));
+          float4 FBe = pesFaceB.Sample(g_samplerLinear_Clamp_s, v2.xy);
+          if (P68e.x > 0.5 && FBe.a > 0.5) { float4 FAe = pesFaceA.Sample(g_samplerLinear_Clamp_s, v2.xy); skinM *= 1.0 - saturate(FAe.a * 1.5); }
+          skinM *= lerp(0.5, 1.0, pesZones.Sample(g_samplerLinear_Clamp_s, v2.xy).a); }
+        float str = saturate(P94.x) * near * 0.9 * skinM;
         r1.xy += tn.xy * str;
         r1.xyz = normalize(r1.xyz);
         pesPoreA = mn.a * near;
