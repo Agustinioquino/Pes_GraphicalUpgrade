@@ -314,8 +314,10 @@ void main(
       float sc = max(P94.y, 1.0);
       float2 muv = v2.xy * sc;
       float2 mdx = ddx(muv), mdy = ddy(muv);
-      float tpp = max(length(mdx), length(mdy)) * 1024.0;            // texeles del mosaico por pixel
-      float near = saturate((3.0 - tpp) / 2.5);                       // se apaga cuando ya no se distingue (evita ruido)
+      // 19/10 b: el fundido va por la densidad de la TEXTURA DE CARA en pantalla (texeles de 2048 por pixel): en primer plano
+      // ~1-2, a media distancia 6+. (Antes se media en texeles del mosaico y se apagaba siempre: no se veia ningun cambio.)
+      float fpx = max(fwidth(v2.x), fwidth(v2.y)) * 2048.0;
+      float near = saturate((5.0 - fpx) / 3.5);
       if (near > 0.001) {
         float4 mn = pesSkinMicro.SampleGrad(g_samplerAnisotropic_Clamp_s, frac(muv), mdx, mdy);   // frac + grad: sin costura de mip
         float3 tn = mn.xyz * 2.0 - 1.0;
