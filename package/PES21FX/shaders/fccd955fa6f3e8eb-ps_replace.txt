@@ -72,6 +72,13 @@ Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 
 
+// PES21 (19/10) ojos realistas: ruido para las fibras del iris
+float pesEyeH1(float x) { return frac(sin(x * 127.1) * 43758.5453); }
+float pesEyeN1(float x) { float i = floor(x), f = frac(x); f = f * f * (3 - 2 * f); return lerp(pesEyeH1(i), pesEyeH1(i + 1), f); }
+float pesEyeH2(float2 p) { return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453); }
+float pesEyeN2(float2 p) { float2 i = floor(p), f = frac(p); f = f * f * (3 - 2 * f);
+  return lerp(lerp(pesEyeH2(i), pesEyeH2(i + float2(1, 0)), f.x), lerp(pesEyeH2(i + float2(0, 1)), pesEyeH2(i + 1), f.x), f.y); }
+
 void main(
   float4 v0 : SV_Position0,
   float4 v1 : COLOR0,
@@ -109,6 +116,7 @@ void main(
   r0.w = rsqrt(r0.w);
   r0.xyz = r0.xyz * r0.www;
   r0.w = g_tex_height.Sample(g_sampler_height_s, v2.xy).y;
+  float eyeH = r0.w;
   r0.xy = r0.xy * r0.ww;
   r0.w = 1 + -r0.w;
   r0.w = r0.w * r0.w;
@@ -145,9 +153,11 @@ void main(
   r0.w = dot(r1.xyz, r1.xyz);
   r0.w = rsqrt(r0.w);
   r1.xyz = r1.xyz * r0.www;
+  float3 eyeNc = r1.xyz;   // normal de la cornea (vista)
   r0.w = dot(v3.xyz, v3.xyz);
   r0.w = rsqrt(r0.w);
   r5.xyz = v3.xyz * r0.www;
+  float3 eyeV = r5.xyz;    // hacia la camara
   r0.w = dot(-r5.xyz, r1.xyz);
   r0.w = r0.w + r0.w;
   r1.xyz = r1.xyz * -r0.www + -r5.xyz;
@@ -157,6 +167,7 @@ void main(
   r1.xyz = g_tex_cube.Sample(g_samplerLinear_Wrap_s, r1.xyz).xyz;
   r1.xyz = g_psMaterial.m_materials[2].xxx * r1.xyz;
   r5.xy = g_tex_translucentMask.Sample(g_sampler_translucentMask_s, v2.xy).yw;
+  float3 eyeBase = r0.xyz, eyeRefl = r1.xyz; float eyeMask = r5.y;
   o0.xyz = r1.xyz * r5.yyy + r0.xyz;
   r0.x = r5.x * 63 + 0.5;
   r0.x = (uint)r0.x;
@@ -212,6 +223,37 @@ void main(
   o3.xy = g_psSystem.m_renderBuffer.xy * r0.xy;
   o3.zw = float2(0,0);
   o4.xyzw = float4(0,0,0,1);
+  // === PES21 (19/10) ojos realistas: fibras y criptas del iris, cornea con reflejo de Fresnel y brillo puntual nitido.
+  // x90 detalle del iris, y90 reflejo de la cornea, z90 nitidez del brillo, w90 on/off
+  { float4 P90 = IniParams.Load(int2(90,0));
+    if (P90.w > 0.5) {
+      float irisM = smoothstep(0.25, 0.6, eyeIris);
+      // direccion hacia el centro del iris: gradiente del mapa de altura (el iris es una cupula en ese mapa)
+      float dd = max(fwidth(v2.x), fwidth(v2.y)) * 1.5 + 1.0 / 1024.0;
+      float hx = g_tex_height.SampleLevel(g_sampler_height_s, v2.xy + float2(dd, 0), 0).y - g_tex_height.SampleLevel(g_sampler_height_s, v2.xy - float2(dd, 0), 0).y;
+      float hy = g_tex_height.SampleLevel(g_sampler_height_s, v2.xy + float2(0, dd), 0).y - g_tex_height.SampleLevel(g_sampler_height_s, v2.xy - float2(0, dd), 0).y;
+      float gl = length(float2(hx, hy));
+      float gOk = smoothstep(0.002, 0.02, gl);
+      float th = atan2(hy, hx) * 0.15915494 + 0.5;   // angulo 0..1 alrededor del centro
+      float rr = saturate(1 - eyeH);                  // 0 centro .. 1 borde
+      // fibras radiales (dos escalas) + criptas (huecos oscuros) + collarete (anillo claro a media distancia)
+      float fib = pesEyeN1(th * 180 + rr * 3) * 0.6 + pesEyeN1(th * 61 + 17.3) * 0.4;
+      float cry = smoothstep(0.62, 0.85, pesEyeN2(float2(th * 38, rr * 7)));
+      float col = exp(-pow((rr - 0.35) / 0.08, 2));
+      float det = 0.78 + 0.44 * fib - 0.35 * cry + 0.18 * col;
+      det = lerp(1.0, det, irisM * gOk * saturate(P90.x));
+      float3 base = eyeBase * det;
+      // cornea: reflejo del entorno con Fresnel (Schlick, n = 1.376 -> F0 = 0.025), mas fuerte de costado
+      float ndv = saturate(dot(eyeNc, eyeV));
+      float F = 0.025 + 0.975 * pow(1 - ndv, 5);
+      float rmask = max(eyeMask, irisM);
+      float3 refl = eyeRefl * rmask * lerp(1.0, (0.35 + 6.0 * F), saturate(P90.y)) * (0.6 + 0.8 * P90.y);
+      o0.xyz = base + refl;
+      // brillo del sol/focos sobre la cornea: rugosidad muy baja donde hay cornea (lo resuelve la luz diferida del juego)
+      float rough = lerp(0.12, 0.03, saturate(P90.z));
+      o2.x = lerp(o2.x, min(o2.x, rough), rmask);
+      o2.y = lerp(o2.y, max(o2.y, 0.7), rmask * saturate(P90.z));
+    } }
     {
     // === PES21 ojos: esclerotica menos blanca, anillo limbal, iris con mas color, cornea mojada ===
     if (IniParams.Load(int2(0,0)).w > 0.5) {

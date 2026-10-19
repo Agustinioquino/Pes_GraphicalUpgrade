@@ -555,7 +555,7 @@ void main(
       float dbg75 = IniParams.Load(int2(75,0)).z;
       // diagnostico 2: semilla = magenta, zona de ceja sin semilla = azul; el resto de la cara muestra el mapa crudo
       // (rojo = densidad, verde = alfa; azul oscuro parejo = t26 vacio o sin enlazar)
-      if (dbg75 > 1.5 && dbg75 < 2.5) { if (seedHere) o0.xyz = float3(1.0, 0.0, 1.0); else o0.xyz = float3(FB.a, saturate(sm.r * 4.0), sm.a); }   // rojo = t24 (quinta textura) llega; verde = densidad del mapa de pelo; azul = alfa de t26
+      if (dbg75 > 1.5 && dbg75 < 2.5) { if (seedHere) o0.xyz = float3(1.0, 0.0, 1.0); else o0.xyz = float3(FB.a * 0.3, saturate(sm.r * 4.0), sm.a > 0.95 ? 1.0 : 0.15); }   // (19/10: apagado, para que el magenta sea solo semilla)   // rojo = t24 (quinta textura) llega; verde = densidad del mapa de pelo; azul = alfa de t26
       if (seedHere) {
         float2 jit = float2(h21(cell + 0.37), h21(cell + 1.7)) - 0.5;
         float2 suv = (cell + 0.5 + jit * 0.6) / 256.0;
