@@ -162,6 +162,8 @@ ID3DBlob* CompileNamedShader(const wchar_t* file, const char* profile) {
 
 // ---------------------------------------------------------------- tabla de shaders creados por el juego
 static std::unordered_map<void*, ShaderEntry> s_shaders;   // nodos estables: los punteros a ShaderEntry no se invalidan
+static std::unordered_map<void*, void*> s_replToObj;         // 19/10: nuestro shader de reemplazo -> shader del juego (para cuando
+                                                            // alguien vuelve a enlazar el reemplazo, p.ej. al restaurar estado)
 static std::shared_mutex s_shMutex;
 static std::vector<IUnknown*> s_deferredRelease;
 static std::mutex s_releaseMutex;
@@ -181,7 +183,10 @@ static const ShaderEntry* FindShader(void* p) {
     if (!p) return nullptr;
     std::shared_lock<std::shared_mutex> lk(s_shMutex);
     auto it = s_shaders.find(p);
-    return it == s_shaders.end() ? nullptr : &it->second;
+    if (it != s_shaders.end()) return &it->second;
+    auto r = s_replToObj.find(p);   // es uno de nuestros reemplazos (lo volvio a enlazar BrowDrawAfterFace o un restore)
+    if (r != s_replToObj.end()) { it = s_shaders.find(r->second); if (it != s_shaders.end()) return &it->second; }
+    return nullptr;
 }
 
 // ---------------------------------------------------------------- recursos con nombre (copias de cbuffers, referencias, texturas)
@@ -369,9 +374,10 @@ static void Register(ID3D11Device* dev, void* obj, const void* code, SIZE_T len,
     std::unique_lock<std::shared_mutex> lk(s_shMutex);
     auto it = s_shaders.find(obj);
     if (it != s_shaders.end()) {   // el juego libero un shader y la direccion se reutilizo
-        if (it->second.repl) { std::lock_guard<std::mutex> lk2(s_releaseMutex); s_deferredRelease.push_back(it->second.repl); }
+        if (it->second.repl) { std::lock_guard<std::mutex> lk2(s_releaseMutex); s_deferredRelease.push_back(it->second.repl); s_replToObj.erase(it->second.repl); }
         it->second = e;
     } else s_shaders.emplace(obj, e);
+    if (e.repl) s_replToObj[e.repl] = obj;
 }
 
 static HRESULT STDMETHODCALLTYPE hk_CreateVS(ID3D11Device* d, const void* c, SIZE_T n, ID3D11ClassLinkage* l, ID3D11VertexShader** o) {
@@ -878,8 +884,8 @@ void ReloadShaders() {
     for (auto& kv : s_shaders) {
         ShaderEntry& e = kv.second;
         ID3D11DeviceChild* nr = BuildReplacement(e.dev, e.hash, e.type);
-        if (e.repl) { std::lock_guard<std::mutex> lk3(s_releaseMutex); s_deferredRelease.push_back(e.repl); }
-        e.repl = nr; if (nr) n++;
+        if (e.repl) { std::lock_guard<std::mutex> lk3(s_releaseMutex); s_deferredRelease.push_back(e.repl); s_replToObj.erase(e.repl); }
+        e.repl = nr; if (nr) { n++; s_replToObj[nr] = kv.first; }
         e.rule = RuleFor(e.hash);
     }
     Log("recarga: %d shaders propios", n);
