@@ -48,6 +48,7 @@ add_library(PES21FX SHARED
   src/grass.cpp
   src/menutest.cpp
   src/facegen.cpp
+  src/inspect.cpp
   ${imgui_SOURCE_DIR}/imgui.cpp
   ${imgui_SOURCE_DIR}/imgui_draw.cpp
   ${imgui_SOURCE_DIR}/imgui_tables.cpp

@@ -28,7 +28,7 @@ static ID3D11ShaderResourceView* s_logo = nullptr; static float s_logoAspect = 1
 void OverlayResize() { if (s_rtv) { s_rtv->Release(); s_rtv = nullptr; } }
 
 static LRESULT CALLBACK MenuProc(HWND h, UINT m, WPARAM w, LPARAM l) {
-    if (g_menuOpen && s_init) {
+    if ((g_menuOpen || g_inspectOn) && s_init) {
         ImGui_ImplWin32_WndProcHandler(h, m, w, l);
         ImGuiIO& io = ImGui::GetIO();
         bool mouse = m >= WM_MOUSEFIRST && m <= WM_MOUSELAST;
@@ -381,6 +381,11 @@ static void DrawMenu() {
     if (!s_status.empty()) ImGui::TextDisabled("%s", s_status.c_str());
     // --- catalogo de shaders: capturar lo que se dibuja y escribir las fichas ---
     if (!g_catalogActive) {
+    { bool ins = g_inspectOn.load(); if (ins) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.25f, 0.2f, 1));
+      if (ImGui::Button(ins ? "Inspector: ON" : "Inspector", ImVec2(110, 0))) { g_inspectOn = !ins; s_status = ins ? "Inspector apagado" : "Inspector visual: flechas sobre cada parte conocida; clic en una ficha para ver sus texturas"; }
+      if (ins) ImGui::PopStyleColor();
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Modo debug visual: marca en pantalla cara, pelo, kit, medias, botines, pasto y cielo, que hace el mod en cada uno y de donde sale cada textura (juego / archivo / generada)."); }
+        ImGui::SameLine();
         if (ImGui::Button("Capturar shaders", ImVec2(150, 0))) CatalogStart();
         ImGui::SameLine(); ImGui::TextDisabled("(?)");
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Anota cada shader que se dibuja (render target, vertices, orden) mientras jugas.\nDetener escribe PES21FX\\catalog\\shaders.txt con una ficha por shader (rol, cbuffers, texturas, uso)\ny catalog\\frame.txt con la linea de tiempo del ultimo cuadro. Pasalo a Claude para que sepa que toca cada uno.");
@@ -520,7 +525,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
     bool down = (GetAsyncKeyState(g_cfg.menuKey) & 0x8000) != 0 && GetForegroundWindow() == s_hwnd;
     if (down && !s_keyWas) g_menuOpen = !g_menuOpen;
     s_keyWas = down;
-    if (!g_menuOpen) return;
+    if (!g_menuOpen && !g_inspectOn) return;
     if (!s_rtv) {
         ID3D11Texture2D* bb = nullptr;
         if (FAILED(sc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb)) || !bb) return;
@@ -531,8 +536,9 @@ void OverlayPresent(IDXGISwapChain* sc) {
     ImGui_ImplDX11_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
-    ImGui::GetIO().MouseDrawCursor = true;
-    DrawMenu();
+    ImGui::GetIO().MouseDrawCursor = g_menuOpen.load();
+    if (g_menuOpen) DrawMenu();
+    InspectDrawOverlay();
     if (!s_btnPending.empty()) {
         std::string a = s_btnPending; s_btnPending.clear();
         if (a == "hair_export") { std::string st; FaceGenExportHair(st); s_status = st; }

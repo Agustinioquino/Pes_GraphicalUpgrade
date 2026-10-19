@@ -198,6 +198,12 @@ static ID3D11ShaderResourceView* FileTexture(const std::string& rel) {
     return r.srv;
 }
 
+std::string NamedOrigin(ID3D11ShaderResourceView* v) {
+    std::lock_guard<std::mutex> lk(s_namedMutex);
+    for (auto& kv : s_named) if (kv.second.srv == v) return kv.first.rfind("file:", 0) == 0 ? "archivo del mod: " + kv.first.substr(5) : "recurso del mod: " + kv.first;
+    if (v == g_dev.paramSRV) return "parametros del mod (t120)";
+    return "";
+}
 static void ReleaseNamed() {
     std::lock_guard<std::mutex> lk(s_namedMutex);
     for (auto& kv : s_named) { if (kv.second.buf) kv.second.buf->Release(); if (kv.second.srv) kv.second.srv->Release(); }
@@ -515,7 +521,9 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     }
     return d.n > 0;
 }
-#define FX_DRAW(verts, kind, inst, call) if (g_catalogHook) { CtxState& cs_ = Ctx(c); CatalogDraw(c, cs_.vs, cs_.ps, verts, kind, inst); } DrawScope ds; bool r = BeforeDraw(c, ds); call; if (r) Restore(c, ds); if (ds.brow.seedsUAV) BrowDrawAfterFace(c, &ds.brow);
+#define FX_DRAW(verts, kind, inst, call) if (g_catalogHook) { CtxState& cs_ = Ctx(c); CatalogDraw(c, cs_.vs, cs_.ps, verts, kind, inst); } DrawScope ds; bool r = BeforeDraw(c, ds); call; \
+    if (g_inspectOn) { CtxState& ci_ = Ctx(c); if (InspectBegin(c, ci_.ps, ci_.vs, kind, verts, inst)) { call; InspectEnd(c); } } \
+    if (r) Restore(c, ds); if (ds.brow.seedsUAV) BrowDrawAfterFace(c, &ds.brow);
 template<int V> static void STDMETHODCALLTYPE hk_DrawIdx(ID3D11DeviceContext* c, UINT a, UINT b, INT d) {
     { const ShaderEntry* gvs = Ctx(c).vs;
       if (g_grassProbeOn) CatalogGrassDraw(c, gvs, a, b, d);
@@ -707,6 +715,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     CatalogPresent();
     GrassPresent();
     FaceGenPresent();
+    InspectPresent();
     MenuTestPresent(sc);
     OverlayPresent(sc);
     return o_Present(sc, sync, flags);

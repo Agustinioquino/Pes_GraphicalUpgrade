@@ -522,7 +522,7 @@ void UpdateClothFit(double t) {
     Log("ropa: ajuste al fisico %s (delgado +%.0f mm, ancho -%.0f mm, rango %.2f); mejoras de tela %s", v[0] > 0.5f ? "on" : "off", v[1], v[2], v[3], v[4] > 0.5f ? "activas" : "APAGADAS (version base)");
 }
 
-bool LoadConfig() { bool r = LoadConfigLocked(); LoadHairConfig(); return r; }
+bool LoadConfig() { bool r = LoadConfigLocked(); LoadHairConfig(); InspectReload(); return r; }
 
 // ---------------------------------------------------------------- PES21FX_hair.ini (pelo en hebras)
 // [tipos]  nombre = largo_cm, rizo, rigidez, peso, grosor_mm, densidad, brillo, flequillo [, raizR,G,B, puntaR,G,B]

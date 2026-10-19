@@ -308,6 +308,17 @@ void FaceGenPresent() {
 }
 
 
+std::string FaceGenOrigin(ID3D11ShaderResourceView* v) {
+    if (!v) return "";
+    std::lock_guard<std::mutex> lk(s_mx);
+    for (auto& kv : s_cache) { FaceEntry& e = kv.second;
+        if (v == e.a) return "generada: quinta textura A (cavidad/curvatura/grosor/vello) cara " + e.id;
+        if (v == e.b) return "generada: quinta textura B (poros/brillo/convexidad) cara " + e.id;
+        if (v == e.c) return std::string(e.userMap ? "mapa de pelo PROPIO hair\\" : "mapa de pelo automatico, cara ") + e.id + (e.userMap ? ".png" : "");
+        if (v == e.seedsSRV) return "semillas de cejas (buffer) cara " + e.id; }
+    return "";
+}
+
 // 18/10 pelo: "Volcar mapas de pelo": escribe hair\auto\<id>.png (el mapa de pelo automatico de cada cara generada, listo para
 // editar y copiar a hair\<id>.png) y hair\auto\lista.txt (id, tamano, tipo). Se llama desde el menu (Present, contexto inmediato).
 int FaceGenExportHair(std::string& status) {
