@@ -69,7 +69,8 @@ static std::string HashFaceTexture(ID3D11DeviceContext* c, ID3D11Resource* res) 
     return out;
 }
 static std::wstring Widen(const std::string& a) { return std::wstring(a.begin(), a.end()); }
-static void EnsureCom() { static bool done = false; if (!done) { done = true; CoInitializeEx(nullptr, COINIT_MULTITHREADED); } }   // WIC (png) en el hilo de Present
+static void EnsureCom() { static thread_local bool done = false; if (!done) { done = true; CoInitializeEx(nullptr, COINIT_MULTITHREADED); } }   // WIC (png): COM por hilo
+void EnsureComInit() { EnsureCom(); }
 static bool FileExists(const std::wstring& p) { return GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES; }
 // mapa de pelo propio del usuario: PES21FX\hair\<id>.png (o .dds)
 static ID3D11ShaderResourceView* LoadUserHairMap(const std::string& id) {

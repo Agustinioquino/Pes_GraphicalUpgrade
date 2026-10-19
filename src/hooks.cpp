@@ -4,6 +4,7 @@
 #include <d3dcompiler.h>
 #include <dxgi1_2.h>
 #include <DDSTextureLoader.h>
+#include <WICTextureLoader.h>
 #include <algorithm>
 #include <set>
 #include <cwctype>
@@ -192,12 +193,16 @@ static ID3D11ShaderResourceView* FileTexture(const std::string& rel) {
     std::string p = rel.substr(5);
     int n = MultiByteToWideChar(CP_UTF8, 0, p.c_str(), -1, nullptr, 0);
     std::wstring wp(n ? n - 1 : 0, L'\0'); if (n) MultiByteToWideChar(CP_UTF8, 0, p.c_str(), -1, wp.data(), n);
-    HRESULT hr = DirectX::CreateDDSTextureFromFile(g_dev.dev, (g_cfg.baseDir + wp).c_str(), nullptr, &r.srv);
+    HRESULT hr;
+    bool png = wp.size() > 4 && _wcsicmp(wp.c_str() + wp.size() - 4, L".png") == 0;
+    if (png) { EnsureComInit(); hr = DirectX::CreateWICTextureFromFileEx(g_dev.dev, nullptr, (g_cfg.baseDir + wp).c_str(), 0, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE, 0, 0, DirectX::WIC_LOADER_IGNORE_SRGB, nullptr, &r.srv); }
+    else hr = DirectX::CreateDDSTextureFromFile(g_dev.dev, (g_cfg.baseDir + wp).c_str(), nullptr, &r.srv);
     Log("textura %s: %s (0x%08x)", p.c_str(), SUCCEEDED(hr) ? "ok" : "NO SE PUDO CARGAR", (unsigned)hr);
     if (FAILED(hr)) { r.srv = nullptr; r.failed = true; }
     return r.srv;
 }
 
+ID3D11ShaderResourceView* FileTextureAny(const std::string& rel) { return FileTexture(rel); }
 std::string NamedOrigin(ID3D11ShaderResourceView* v) {
     std::lock_guard<std::mutex> lk(s_namedMutex);
     for (auto& kv : s_named) if (kv.second.srv == v) return kv.first.rfind("file:", 0) == 0 ? "archivo del mod: " + kv.first.substr(5) : "recurso del mod: " + kv.first;
@@ -379,7 +384,7 @@ template<int V> static void STDMETHODCALLTYPE hk_SetCS(ID3D11DeviceContext* c, I
 // ---------------------------------------------------------------- reglas antes de cada dibujo
 // lo que una regla enlaza se devuelve a como estaba despues del dibujo (como "post ps-t20 = ..." en 3DMigoto)
 struct Saved { bool ps; bool srv; int slot; IUnknown* prev; };
-struct DrawScope { Saved s[12]; int n = 0; FaceGenExtra brow; };
+struct DrawScope { Saved s[12]; int n = 0; FaceGenExtra brow; bool skip = false; };
 
 static void Remember(ID3D11DeviceContext* c, DrawScope& d, bool ps, bool srv, int slot) {
     if (d.n >= 12) return;
@@ -498,6 +503,15 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     }
     if (ps && ps->rule) RunRule(c, ps, d);
     if (vs && vs->rule) RunRule(c, vs, d);
+    // 19/10: capas editadas desde el inspector (PES21FX_capas.ini): textura por slot u "ocultar" el dibujo
+    if (ps && g_layersAny.load()) { LayerOv ov;
+        if (InspectLayerFor(ps->hash, ov)) {
+            if (ov.hidden) d.skip = true;
+            for (auto& kv : ov.slot) {
+                ID3D11ShaderResourceView* v = (kv.second == "none") ? nullptr : FileTexture(kv.second);
+                if (kv.second == "none" || v) { Remember(c, d, true, true, kv.first); c->PSSetShaderResources(kv.first, 1, &v); }
+            }
+        } }
     if (ps && ps->hash == 0x5ce3ed8702271bc1ULL) {
         ID3D11ShaderResourceView* chk[4] = {}; c->PSGetShaderResources(23, 4, chk);
         if (chk[0]) g_stFaceT23++; if (chk[3]) g_stFaceT26++;
@@ -521,7 +535,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     }
     return d.n > 0;
 }
-#define FX_DRAW(verts, kind, inst, call) if (g_catalogHook) { CtxState& cs_ = Ctx(c); CatalogDraw(c, cs_.vs, cs_.ps, verts, kind, inst); } DrawScope ds; bool r = BeforeDraw(c, ds); call; \
+#define FX_DRAW(verts, kind, inst, call) if (g_catalogHook) { CtxState& cs_ = Ctx(c); CatalogDraw(c, cs_.vs, cs_.ps, verts, kind, inst); } DrawScope ds; bool r = BeforeDraw(c, ds); if (!ds.skip) { call; } \
     if (g_inspectOn) { CtxState& ci_ = Ctx(c); if (InspectBegin(c, ci_.ps, ci_.vs, kind, verts, inst)) { call; InspectEnd(c); } } \
     if (r) Restore(c, ds); if (ds.brow.seedsUAV) BrowDrawAfterFace(c, &ds.brow);
 template<int V> static void STDMETHODCALLTYPE hk_DrawIdx(ID3D11DeviceContext* c, UINT a, UINT b, INT d) {

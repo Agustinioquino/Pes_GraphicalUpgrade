@@ -11,6 +11,7 @@
 #include <cstring>
 #include <map>
 #include <cstdio>
+#include <algorithm>
 #include "imgui.h"
 
 namespace fx {
@@ -80,6 +81,53 @@ static std::vector<uint64_t> s_unkHash;   // hash de cada clase desconocida (ind
 static const int kMaxUnknown = 6;
 static bool s_loaded = false;
 static std::mutex s_mx;
+// ---- capas editables (PES21FX_capas.ini): [<hash>]  tN = file:ruta | none   oculta = 1
+std::atomic<bool> g_layersAny{false};
+static std::map<uint64_t, LayerOv> s_layers; static std::mutex s_layMx;
+static std::vector<std::string> s_files;   // "file:textures\\x.dds", "file:hair\\x.png", ... (para el selector)
+bool InspectLayerFor(uint64_t ps, LayerOv& out) {
+    std::lock_guard<std::mutex> lk(s_layMx); auto it = s_layers.find(ps); if (it == s_layers.end()) return false; out = it->second; return true;
+}
+static void LayersUpdateAny() { bool any = false; for (auto& kv : s_layers) if (kv.second.hidden || !kv.second.slot.empty()) any = true; g_layersAny = any; }
+static void ScanFiles() {
+    s_files.clear();
+    const wchar_t* dirs[] = { L"textures\\*.dds", L"textures\\*.png", L"hair\\*.png", L"hair\\*.dds", L"hair\\auto\\*.png" };
+    for (auto* d : dirs) {
+        std::wstring pat = g_cfg.baseDir + d; std::wstring sub = pat.substr(g_cfg.baseDir.size()); sub = sub.substr(0, sub.find_last_of(L'\\') + 1);
+        WIN32_FIND_DATAW fd; HANDLE h = FindFirstFileW(pat.c_str(), &fd);
+        if (h == INVALID_HANDLE_VALUE) continue;
+        do { if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) { std::wstring w = sub + fd.cFileName; std::string a; for (wchar_t ch : w) a += (char)(ch < 128 ? ch : '?'); s_files.push_back("file:" + a); } } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+}
+static void LoadLayers() {
+    std::lock_guard<std::mutex> lk(s_layMx); s_layers.clear();
+    std::string txt; uint64_t cur = 0;
+    if (ReadAll(g_cfg.baseDir + L"PES21FX_capas.ini", txt)) {
+        size_t pos = 0;
+        while (pos <= txt.size()) {
+            size_t e = txt.find('\n', pos); std::string l = Trim2(txt.substr(pos, e == std::string::npos ? std::string::npos : e - pos)); pos = e == std::string::npos ? txt.size() + 1 : e + 1;
+            if (l.empty() || l[0] == ';') continue;
+            if (l[0] == '[') { cur = strtoull(l.substr(1, l.find(']') - 1).c_str(), nullptr, 16); continue; }
+            size_t eq = l.find('='); if (eq == std::string::npos || !cur) continue;
+            std::string k = Lower2(Trim2(l.substr(0, eq))), v = Trim2(l.substr(eq + 1));
+            if (k == "oculta") s_layers[cur].hidden = atoi(v.c_str()) != 0;
+            else if (k.size() > 1 && k[0] == 't') s_layers[cur].slot[atoi(k.c_str() + 1)] = v;
+        }
+        Log("capas: PES21FX_capas.ini leido (%d shaders)", (int)s_layers.size());
+    }
+    LayersUpdateAny();
+}
+static bool SaveLayers() {
+    std::lock_guard<std::mutex> lk(s_layMx);
+    std::string out = "; PES21 FX - capas editadas desde el inspector (ventana Capas). [hash del pixel shader]  tN = file:ruta | none   oculta = 1\n";
+    for (auto& kv : s_layers) { if (!kv.second.hidden && kv.second.slot.empty()) continue;
+        char h[32]; snprintf(h, sizeof(h), "[%016llx]\n", (unsigned long long)kv.first); out += h;
+        if (kv.second.hidden) out += "oculta = 1\n";
+        for (auto& sl : kv.second.slot) out += "t" + std::to_string(sl.first) + " = " + sl.second + "\n";
+        out += "\n"; }
+    FILE* f = _wfopen((g_cfg.baseDir + L"PES21FX_capas.ini").c_str(), L"wb"); if (!f) return false; fwrite(out.data(), 1, out.size(), f); fclose(f); return true;
+}
 void InspectReload() { std::lock_guard<std::mutex> lk(s_mx); s_loaded = false; }
 static ID3D11PixelShader* s_whitePS = nullptr; static bool s_psTried = false;
 static ID3D11DepthStencilState* s_noDepth = nullptr; static ID3D11BlendState* s_noBlend = nullptr;
@@ -133,7 +181,7 @@ bool InspectBegin(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEnt
     EnsureRes(); if (!s_whitePS) return false;
     int ci = -1;
     std::lock_guard<std::mutex> lk(s_mx);
-    if (!s_loaded) { LoadClasses(); s_loaded = true; for (auto& f : s_cls) { if (f.rt) f.rt->Release(); if (f.rtv) f.rtv->Release(); for (auto* t : f.st) if (t) t->Release(); for (auto& t : f.tex) if (t.srv) t.srv->Release(); } s_cls.clear(); s_unkHash.clear(); s_cls.resize(s_classes.size()); }
+    if (!s_loaded) { LoadClasses(); LoadLayers(); ScanFiles(); s_loaded = true; for (auto& f : s_cls) { if (f.rt) f.rt->Release(); if (f.rtv) f.rtv->Release(); for (auto* t : f.st) if (t) t->Release(); for (auto& t : f.tex) if (t.srv) t.srv->Release(); } s_cls.clear(); s_unkHash.clear(); s_cls.resize(s_classes.size()); }
     for (size_t i = 0; i < s_classes.size() && ci < 0; i++) for (uint64_t h : s_classes[i].ps) if (h == ps->hash) { ci = (int)i; break; }
     if (ci < 0) {
         // desconocido: solo geometria con bastantes vertices en un dibujo con varios render targets (G-buffer), hasta kMaxUnknown
@@ -240,23 +288,13 @@ void InspectDrawOverlay() {
         bool isSel = sel == i;
         dl->AddRect(a, b, col, 3.0f, 0, isSel ? 3.0f : 1.5f);
         ImVec2 center((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
-        // ficha
-        const float th = 64.0f;   // miniatura por textura (la dibuja ImGui con el SRV real: si aca se ve y el shader no la ve, el problema es del shader)
-        float h = isSel ? 26.0f + 32.0f + (th + 6.0f) * (float)f.tex.size() : 26.0f;
+        // ficha (el detalle, con miniaturas y selectores, va en la ventana "Capas")
+        float h = 26.0f;
         ImVec2 fa(colX, y), fb(io.DisplaySize.x - 10, y + h);
         dl->AddRectFilled(fa, fb, IM_COL32(20, 22, 28, 215), 4.0f);
         dl->AddRect(fa, fb, col, 4.0f, 0, isSel ? 2.0f : 1.0f);
         char t[200]; snprintf(t, sizeof(t), "%s   %u vert %s", s_classes[i].name.c_str(), f.verts, f.deferred ? "(dif)" : "(inm)");
         dl->AddText(ImVec2(fa.x + 8, fa.y + 5), col, t);
-        if (isSel) {
-            float ty = fa.y + 24;
-            dl->AddText(nullptr, 0.0f, ImVec2(fa.x + 8, ty), IM_COL32(220, 220, 220, 255), s_classes[i].desc.c_str(), nullptr, fb.x - fa.x - 16); ty += 32;
-            for (auto& tx : f.tex) {
-                if (tx.srv) { dl->AddImage((ImTextureID)(uintptr_t)tx.srv, ImVec2(fa.x + 8, ty), ImVec2(fa.x + 8 + th, ty + th)); dl->AddRect(ImVec2(fa.x + 8, ty), ImVec2(fa.x + 8 + th, ty + th), IM_COL32(90, 90, 100, 255)); }
-                char l[260]; snprintf(l, sizeof(l), "t%d", tx.slot); dl->AddText(ImVec2(fa.x + 16 + th, ty), col, l);
-                dl->AddText(nullptr, 0.0f, ImVec2(fa.x + 16 + th, ty + 16), IM_COL32(200, 210, 230, 255), tx.desc.c_str(), nullptr, fb.x - fa.x - 24 - th);
-                ty += th + 6.0f; }
-        }
         // flecha: de la ficha al centro del rectangulo
         ImVec2 from(fa.x, fa.y + 13);
         ImVec2 to = center;
@@ -270,6 +308,56 @@ void InspectDrawOverlay() {
         y += h + 6;
     }
     if (k == 0) dl->AddText(ImVec2(colX, 70), IM_COL32(255, 220, 120, 255), "Sin dibujos conocidos en pantalla (abri un partido / repeticion).");
+    // ---- ventana "Capas" de la clase elegida: miniatura + nombre + selector por slot, ocultar, guardar
+    if (sel >= 0 && sel < (int)s_cls.size() && sel < (int)s_classes.size()) {
+        ClassFrame& f = s_cls[sel]; InspClass& cl = s_classes[sel];
+        ImGui::SetNextWindowSize(ImVec2(560, 620), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 1010, 70), ImGuiCond_FirstUseEver);
+        bool open = true;
+        if (ImGui::Begin(("Capas: " + cl.name + "##capas").c_str(), &open)) {
+            ImGui::TextWrapped("%s", cl.desc.c_str());
+            char hs[200] = ""; for (uint64_t h : cl.ps) { char t[24]; snprintf(t, sizeof(t), "%016llx ", (unsigned long long)h); strncat(hs, t, sizeof(hs) - strlen(hs) - 1); }
+            ImGui::TextDisabled("shader(s): %s | %u vert, VS %016llx, %s", hs, f.verts, (unsigned long long)f.vs, f.deferred ? "diferido" : "inmediato");
+            LayerOv ov; { std::lock_guard<std::mutex> lk(s_layMx); auto it = s_layers.find(cl.ps.empty() ? 0 : cl.ps[0]); if (it != s_layers.end()) ov = it->second; }
+            bool hidden = ov.hidden;
+            if (ImGui::Checkbox("Ocultar esta capa (no dibujar esta parte)", &hidden)) { std::lock_guard<std::mutex> lk(s_layMx); for (uint64_t h : cl.ps) s_layers[h].hidden = hidden; LayersUpdateAny(); }
+            ImGui::SameLine(); if (ImGui::Button("Guardar capas")) Log("capas: %s", SaveLayers() ? "guardadas en PES21FX_capas.ini" : "no se pudo guardar");
+            ImGui::SameLine(); if (ImGui::Button("Releer archivos")) ScanFiles();
+            ImGui::SameLine(); if (ImGui::Button("Quitar todas")) { std::lock_guard<std::mutex> lk(s_layMx); for (uint64_t h : cl.ps) s_layers.erase(h); LayersUpdateAny(); }
+            ImGui::Separator();
+            ImGui::BeginChild("slots", ImVec2(0, 0));
+            std::vector<int> slots; for (auto& t : f.tex) slots.push_back(t.slot); for (auto& kv : ov.slot) if (std::find(slots.begin(), slots.end(), kv.first) == slots.end()) slots.push_back(kv.first);
+            std::sort(slots.begin(), slots.end());
+            for (int slot : slots) {
+                ImGui::PushID(slot);
+                const TexInfo* ti = nullptr; for (auto& t : f.tex) if (t.slot == slot) ti = &t;
+                if (ti && ti->srv) ImGui::Image((ImTextureID)(uintptr_t)ti->srv, ImVec2(56, 56)); else ImGui::Dummy(ImVec2(56, 56));
+                ImGui::SameLine();
+                ImGui::BeginGroup();
+                auto sn = cl.slotNames.find(slot);
+                ImGui::Text("t%d  %s", slot, sn != cl.slotNames.end() ? sn->second.c_str() : "");
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 440); ImGui::TextDisabled("%s", ti ? ti->desc.c_str() : "(no enlazada por el juego)"); ImGui::PopTextWrapPos();
+                auto cur = ov.slot.find(slot); std::string curV = cur != ov.slot.end() ? cur->second : "";
+                const char* label = curV.empty() ? "Del juego / del mod (sin cambio)" : curV.c_str();
+                ImGui::SetNextItemWidth(440);
+                if (ImGui::BeginCombo("##capa", label)) {
+                    if (ImGui::Selectable("Del juego / del mod (sin cambio)", curV.empty())) { std::lock_guard<std::mutex> lk(s_layMx); for (uint64_t h : cl.ps) s_layers[h].slot.erase(slot); LayersUpdateAny(); }
+                    if (ImGui::Selectable("Ninguna (negra)", curV == "none")) { std::lock_guard<std::mutex> lk(s_layMx); for (uint64_t h : cl.ps) s_layers[h].slot[slot] = "none"; LayersUpdateAny(); }
+                    for (auto& fn : s_files) if (ImGui::Selectable(fn.c_str(), curV == fn)) { std::lock_guard<std::mutex> lk(s_layMx); for (uint64_t h : cl.ps) s_layers[h].slot[slot] = fn; LayersUpdateAny(); }
+                    ImGui::EndCombo();
+                }
+                ImGui::EndGroup();
+                ImGui::Separator();
+                ImGui::PopID();
+            }
+            static int newSlot = 26;
+            ImGui::SetNextItemWidth(80); ImGui::InputInt("##ns", &newSlot); ImGui::SameLine();
+            if (ImGui::Button("Agregar capa en ese slot")) { std::lock_guard<std::mutex> lk(s_layMx); for (uint64_t h : cl.ps) if (!s_layers[h].slot.count(newSlot)) s_layers[h].slot[newSlot] = "none"; LayersUpdateAny(); }
+            ImGui::EndChild();
+        }
+        ImGui::End();
+        if (!open) g_inspectSel = -1;
+    }
 }
 
 } // namespace fx

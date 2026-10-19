@@ -194,6 +194,12 @@ void FaceGenPresent(); void FaceGenClear(); void FaceGenReloadShaders(); int Fac
 extern std::atomic<bool> g_inspectOn; extern std::atomic<int> g_inspectSel;
 bool InspectBegin(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEntry* vs, int kind, UINT verts, UINT inst);
 void InspectEnd(ID3D11DeviceContext* c); void InspectPresent(); void InspectDrawOverlay(); void InspectReload();
+// capas editables (ventana "Capas" del inspector; PES21FX_capas.ini): por hash de pixel shader, textura por slot y "oculta"
+struct LayerOv { std::map<int, std::string> slot; bool hidden = false; };   // slot -> "file:ruta" | "none"
+extern std::atomic<bool> g_layersAny;   // hay alguna capa definida (evita el costo cuando no se usa)
+bool InspectLayerFor(uint64_t ps, LayerOv& out);   // true si hay capas definidas para ese shader (copia)
+ID3D11ShaderResourceView* FileTextureAny(const std::string& rel);   // hooks.cpp: "file:..." dds o png (cache)
+void EnsureComInit();
 std::string NamedOrigin(ID3D11ShaderResourceView* v);     // hooks.cpp: "archivo: textures\x.dds" o recurso con nombre
 std::string FaceGenOrigin(ID3D11ShaderResourceView* v);   // facegen.cpp: "generada: quinta textura A" etc.
 extern std::atomic<int> g_stFaceDraws, g_stFaceRule, g_stFaceT23, g_stFaceT26, g_stFaceCtxDef;
