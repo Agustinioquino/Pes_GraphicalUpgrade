@@ -332,17 +332,17 @@ void main(
           float4 FBe = pesFaceB.Sample(g_samplerLinear_Clamp_s, v2.xy);
           if (P68e.x > 0.5 && FBe.a > 0.5) { float4 FAe = pesFaceA.Sample(g_samplerLinear_Clamp_s, v2.xy); skinM *= 1.0 - saturate(FAe.a * 1.5); }
           skinM *= lerp(0.5, 1.0, pesZones.Sample(g_samplerLinear_Clamp_s, v2.xy).a); }
-        float str = saturate(P94.x) * near * 0.9 * skinM;
+        float str = clamp(P94.x, 0.0, 2.0) * near * 1.1 * skinM;   // 19/10 c: rango 0..2, mas rango util
         r1.xy += tn.xy * str;
         r1.xyz = normalize(r1.xyz);
         pesPoreA = mn.a * near;
-        if (P94.x >= 0.995) pesMicroDbg = float3(mn.xy, near);   // diagnostico: con Intensidad al tope se ve el mosaico en crudo (rojo/verde) y el fundido en azul
+        if (P94.x >= 1.995) pesMicroDbg = float3(mn.xy, near);   // diagnostico: con Intensidad al tope se ve el mosaico en crudo (rojo/verde) y el fundido en azul
         // Toksvig (GPU Gems 3 / dqlin): la micro normal promediada en un area mas grande pierde largo; ese acortamiento
         // es la varianza de la micro-geometria y se convierte en rugosidad para el brillo (y de lejos, donde el mosaico ya no se ve,
         // la rugosidad se mantiene y el brillo no destella)
         { float4 ma = pesSkinMicro.SampleGrad(g_samplerAnisotropic_Clamp_s, frac(muv), mdx * 6.0, mdy * 6.0);
           float ln = length(ma.xyz * 2.0 - 1.0);
-          pesMicroVar = saturate((1.0 - ln) * 8.0) * saturate(P94.x) * skinM; } 
+          pesMicroVar = saturate((1.0 - ln) * 8.0) * saturate(P94.x * 0.7) * skinM; } 
       } } }
   // 16/10: oclusion de cavidades a partir del normal map (pliegues de la oreja, arco de la ceja, aletas de la nariz):
   // donde la normal se inclina mucho la superficie esta dentro de un hueco y le llega menos luz. x35 fuerza, w35 on/off
