@@ -76,7 +76,8 @@ Texture2D<float4> pesFaceA    : register(t23);   // PES21 (18/10) quinta textura
 Texture2D<float4> pesFaceB    : register(t24);   //   R poros, G zona de brillo, B convexidad grande, A = 1 si existe
 struct PesSeed { float4 posV; float4 nrmV; float4 dirV; float4 col; };
 Texture2D<float4> pesSeedMap  : register(t26);
-Texture2D<float4> pesSkinMicro : register(t27);   // PES21 (19/10) micro normal de poros en mosaico (textures\pes_skin_micro_n.dds), A = poro   // PES21 (18/10) semillas de cejas por celda (salida C del generador)
+Texture2D<float4> pesSkinMicro : register(t27);
+Texture2D<float4> pesFacePores : register(t28);   // PES21 (19/10 b) guia de poros por zona (textures\pes_face_pores.dds): R densidad, G tamano, B zona T (brillo), A oclusion   // PES21 (19/10) micro normal de poros en mosaico (textures\pes_skin_micro_n.dds), A = poro   // PES21 (18/10) semillas de cejas por celda (salida C del generador)
 RWStructuredBuffer<PesSeed> pesSeeds : register(u5);   // PES21 (18/10) semillas animadas de este dibujo (las lee pes_brow_vs)
 RWByteAddressBuffer pesSeedArgs : register(u6);          // PES21 (18/10 b) {verts por instancia, instancias, 0, 0}: cuenta de semillas para DrawInstancedIndirect
 // PES21 (18/10) tipo de pelo de ESTA cara (PES21FX_hair.ini, lo enlaza la DLL en b11; si no esta enlazado todo vale 0 y pesHairMisc.x = 0)
@@ -308,7 +309,7 @@ void main(
   r1.xyz = r1.xyz * r0.zzz;
   // === PES21 (19/10) micro normal de poros: mosaico fino sobre la normal del juego, solo de cerca.
   // x94 intensidad, y94 escala (repeticiones sobre la cara), w94 on/off
-  float pesPoreA = 0.0, pesMicroVar = 0.0; float3 pesMicroDbg = float3(-1, 0, 0);   // dbg: intensidad = 1.00 pinta el mosaico   // pesMicroVar: varianza de la micro normal (Toksvig) -> rugosidad extra en el especular
+  float pesPoreA = 0.0, pesMicroVar = 0.0, pesPoreOcc = 1.0, pesTZone = 0.0; float3 pesMicroDbg = float3(-1, 0, 0);   // dbg: intensidad = 1.00 pinta el mosaico   // pesMicroVar: varianza de la micro normal (Toksvig) -> rugosidad extra en el especular
   { float4 P94 = IniParams.Load(int2(94,0));
     if (enhance && P94.w > 0.5) {
       float sc = max(P94.y, 1.0);
@@ -319,7 +320,14 @@ void main(
       float fpx = max(fwidth(v2.x), fwidth(v2.y)) * 2048.0;
       float near = saturate((5.0 - fpx) / 3.5);
       if (near > 0.001) {
+        float4 guide = pesFacePores.Sample(g_samplerLinear_Clamp_s, v2.xy);   // por zona: densidad, tamano, zona T, oclusion
+        pesTZone = guide.b;
         float4 mn = pesSkinMicro.SampleGrad(g_samplerAnisotropic_Clamp_s, frac(muv), mdx, mdy);   // frac + grad: sin costura de mip
+        // poros grandes (nariz, barbilla): el mismo mosaico a la mitad de escala, mezclado segun el tamano de la zona
+        float2 muv2 = muv * 0.5 + 0.37; float2 mdx2 = mdx * 0.5, mdy2 = mdy * 0.5;
+        float4 mn2 = pesSkinMicro.SampleGrad(g_samplerAnisotropic_Clamp_s, frac(muv2), mdx2, mdy2);
+        float big = guide.g;
+        mn = lerp(mn, mn2, big * 0.7);
         float3 tn = mn.xyz * 2.0 - 1.0;
         // solo piel: se atenua donde la quinta textura marca pelo/barba (A) y donde el mapa de zonas no es piel (A)
         float skinM = 1.0;
@@ -327,10 +335,12 @@ void main(
           float4 FBe = pesFaceB.Sample(g_samplerLinear_Clamp_s, v2.xy);
           if (P68e.x > 0.5 && FBe.a > 0.5) { float4 FAe = pesFaceA.Sample(g_samplerLinear_Clamp_s, v2.xy); skinM *= 1.0 - saturate(FAe.a * 1.5); }
           skinM *= lerp(0.5, 1.0, pesZones.Sample(g_samplerLinear_Clamp_s, v2.xy).a); }
-        float str = clamp(P94.x, 0.0, 2.0) * near * 1.1 * skinM;   // 19/10 c: rango 0..2, mas rango util
+        float str = clamp(P94.x, 0.0, 2.0) * near * 1.1 * skinM * (0.25 + 1.0 * guide.r);   // 19/10 d: densidad por zona (guia)
         r1.xy += tn.xy * str;
         r1.xyz = normalize(r1.xyz);
-        pesPoreA = mn.a * near;
+        pesPoreA = mn.a * near * (0.3 + guide.r);
+        // oclusion de poro: el fondo del poro recibe menos luz (ambiente y directa). Mas donde la guia marca oclusion.
+        pesPoreOcc = 1.0 - pesPoreA * guide.a * 0.55 * saturate(P94.x);
         if (P94.x >= 1.995) pesMicroDbg = float3(mn.xy, near);   // diagnostico: con Intensidad al tope se ve el mosaico en crudo (rojo/verde) y el fundido en azul
         // Toksvig (GPU Gems 3 / dqlin): la micro normal promediada en un area mas grande pierde largo; ese acortamiento
         // es la varianza de la micro-geometria y se convierte en rugosidad para el brillo (y de lejos, donde el mosaico ya no se ve,
@@ -547,7 +557,10 @@ void main(
   // micro-geometria de poros en el especular (19/10): dentro del poro el brillo baja y la superficie es mas aspera;
   // la varianza de la micro normal (Toksvig) suma rugosidad para que el brillo no sea un plastico liso
   r0.w = saturate(r0.w + pesMicroVar * 0.30 + pesPoreA * 0.20);
-  r0.z *= (1.0 - 0.45 * pesPoreA);
+  // zona T mas brillante (grasa natural), mejillas mas mate; y el albedo se oscurece en el fondo de los poros
+  r0.w = saturate(r0.w * lerp(1.06, 0.86, pesTZone * saturate(P94.x)));
+  r0.z *= (1.0 - 0.45 * pesPoreA) * lerp(0.95, 1.12, pesTZone * saturate(P94.x));
+  r2.xyz *= pesPoreOcc;
   r0.z *= (1.0 - 0.6 * fhMask);
   r0.z = lerp(r0.z, max(r0.z, 0.75), sweatWet);
   r2.xyz *= lerp(1.0, 0.9, sweatWet);
