@@ -308,7 +308,7 @@ void main(
   r1.xyz = r1.xyz * r0.zzz;
   // === PES21 (19/10) micro normal de poros: mosaico fino sobre la normal del juego, solo de cerca.
   // x94 intensidad, y94 escala (repeticiones sobre la cara), w94 on/off
-  float pesPoreA = 0.0, pesMicroVar = 0.0;   // pesMicroVar: varianza de la micro normal (Toksvig) -> rugosidad extra en el especular
+  float pesPoreA = 0.0, pesMicroVar = 0.0; float3 pesMicroDbg = float3(-1, 0, 0);   // dbg: intensidad = 1.00 pinta el mosaico   // pesMicroVar: varianza de la micro normal (Toksvig) -> rugosidad extra en el especular
   { float4 P94 = IniParams.Load(int2(94,0));
     if (enhance && P94.w > 0.5) {
       float sc = max(P94.y, 1.0);
@@ -331,6 +331,7 @@ void main(
         r1.xy += tn.xy * str;
         r1.xyz = normalize(r1.xyz);
         pesPoreA = mn.a * near;
+        if (P94.x >= 0.995) pesMicroDbg = float3(mn.xy, near);   // diagnostico: con Intensidad al tope se ve el mosaico en crudo (rojo/verde) y el fundido en azul
         // Toksvig (GPU Gems 3 / dqlin): la micro normal promediada en un area mas grande pierde largo; ese acortamiento
         // es la varianza de la micro-geometria y se convierte en rugosidad para el brillo (y de lejos, donde el mosaico ya no se ve,
         // la rugosidad se mantiene y el brillo no destella)
@@ -646,6 +647,7 @@ void main(
   r0.x = (uint)r0.x;
   o1.z = 0.000977517106 * r0.x;
   o0.w = 1;
+  if (pesMicroDbg.x >= 0) o0.xyz = pesMicroDbg;
   o2.y = r0.z;
   o2.z = enhance ? 0.98039 : 1;   // marca de piel para los shaders de luz (250/255)
   o2.w = g_psMaterial.m_materials[0].x;
