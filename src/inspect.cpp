@@ -26,7 +26,7 @@ std::atomic<int> g_inspectSel{-1};
 //   que = SSS por zonas, arrugas...  (que hace el mod ahi)
 //   t0 = difusa  t1 = normal ...     (nombre de cada slot de textura del juego; opcional)
 //   [inspector]  desconocidos = 1    tambien marcar los shaders de geometria que no estan en ninguna clase (hasta 6), con su hash
-struct InspClass { std::vector<uint64_t> ps; std::string name, desc, group = "otros"; std::map<int, std::string> slotNames; bool unknown = false; };
+struct InspClass { std::vector<uint64_t> ps; std::string name, desc; std::map<int, std::string> slotNames; bool unknown = false; std::string group = "otros"; };
 static std::string s_group = "todo";   // filtro de grupo del inspector (todo | cara | pelo | kit | estadio | desconocidos | ...)
 static std::vector<InspClass> s_classes;
 static bool s_unknownOn = true;
