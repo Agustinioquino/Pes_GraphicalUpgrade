@@ -66,7 +66,8 @@ static void LoadClasses() {
     }
     if (s_classes.empty()) for (auto& d : kDefaults) s_classes.push_back(d);
 }
-static const int kW = 320, kH = 180;
+static const int kW = 192, kH = 108;   // 19/10: mas chico (alcanza para el rectangulo)
+static std::atomic<int> s_frame{0};   // se captura 1 de cada 3 cuadros (el rectangulo no necesita mas)
 
 struct TexInfo { int slot; std::string desc; ID3D11ShaderResourceView* srv = nullptr; };   // srv con referencia propia (miniatura en la ficha)
 struct ClassFrame {
@@ -178,6 +179,7 @@ static std::string DescribeSRV(ID3D11ShaderResourceView* v) {
 // llamado desde FX_DRAW despues del dibujo real. Si devuelve true, el dibujo se repite (con nuestro PS y RT) y luego InspectEnd.
 bool InspectBegin(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEntry* vs, int kind, UINT verts, UINT inst) {
     if (!ps || !g_dev.dev) return false;
+    if ((s_frame.load() % 3) != 0) return false;
     EnsureRes(); if (!s_whitePS) return false;
     int ci = -1;
     std::lock_guard<std::mutex> lk(s_mx);
@@ -197,6 +199,7 @@ bool InspectBegin(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEnt
             s_classes.push_back(u);
         }
     }
+    { int selNow = g_inspectSel.load(); if (selNow >= 0 && selNow != ci) return false; }   // con Capas abierta solo se captura la clase elegida
     ClassFrame& f = s_cls[ci];
     {
         if (f.seen) return false;       // una muestra por clase y cuadro (la primera)
@@ -239,6 +242,8 @@ void InspectEnd(ID3D11DeviceContext* c) {
 // en Present (contexto inmediato): leer la textura del cuadro anterior, calcular el rectangulo, limpiar para el proximo
 void InspectPresent() {
     if (!g_dev.imm) return;
+    s_frame++;
+    if ((s_frame.load() % 3) != 1) return;   // leer/limpiar solo en el cuadro siguiente a una captura
     std::lock_guard<std::mutex> lk(s_mx);
     for (size_t i = 0; i < s_cls.size(); i++) {
         ClassFrame& f = s_cls[i];
@@ -331,11 +336,15 @@ void InspectDrawOverlay() {
                 ImGui::Separator();
                 ImGui::TextUnformatted("Prueba de cejas con hebras:");
                 int dz = (int)(g_cfg.live[75][2] + 0.5f);
-                if (ImGui::RadioButton("normal", dz == 0)) g_cfg.live[75][2] = 0; ImGui::SameLine();
-                if (ImGui::RadioButton("hebras en magenta", dz == 1)) g_cfg.live[75][2] = 1; ImGui::SameLine();
-                if (ImGui::RadioButton("semillas sobre la cara", dz == 2)) g_cfg.live[75][2] = 2; ImGui::SameLine();
-                if (ImGui::RadioButton("grilla de prueba", dz == 3)) g_cfg.live[75][2] = 3;
-                ImGui::TextDisabled("'semillas': magenta = celda con semilla, azul = zona de ceja, resto = mapa crudo (rojo t24, verde densidad, azul alfa). La miniatura de t26 abajo es lo que recibe el shader.");
+                struct Opt { int v; ImVec4 c; const char* t; };
+                const Opt opts[] = { {0, ImVec4(0.5f,0.5f,0.5f,1), "normal"}, {1, ImVec4(1,0,1,1), "hebras en magenta"}, {2, ImVec4(1,0.3f,1,1), "semillas sobre la cara"}, {3, ImVec4(1,0.6f,0.2f,1), "grilla de prueba"} };
+                for (auto& o : opts) { ImGui::PushID(o.v);
+                    if (ImGui::ColorButton("##c", o.c, ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoPicker, ImVec2(18, 18))) g_cfg.live[75][2] = (float)o.v;
+                    ImGui::SameLine(); if (ImGui::Selectable(o.t, dz == o.v, 0, ImVec2(150, 0))) g_cfg.live[75][2] = (float)o.v;
+                    ImGui::PopID(); if (o.v < 3) ImGui::SameLine(); }
+                // leyenda de colores del modo "semillas"
+                const Opt leg[] = { {0, ImVec4(1,0,1,1), "celda con semilla"}, {1, ImVec4(0.1f,0.2f,1,1), "zona de ceja sin semilla"}, {2, ImVec4(1,0,0,1), "t24 llega (rojo)"}, {3, ImVec4(0,1,0,1), "densidad del mapa (verde)"}, {4, ImVec4(0,0,0.9f,1), "alfa del mapa (azul)"} };
+                for (auto& o : leg) { ImGui::PushID(100 + o.v); ImGui::ColorButton("##l", o.c, ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoPicker, ImVec2(14, 14)); ImGui::SameLine(); ImGui::TextDisabled("%s", o.t); ImGui::PopID(); if (o.v < 4) ImGui::SameLine(); }
             }
             ImGui::Separator();
             ImGui::BeginChild("slots", ImVec2(0, 0));
