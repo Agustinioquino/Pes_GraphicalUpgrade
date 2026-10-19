@@ -290,7 +290,11 @@ uint64_t InspectAliasFor(uint64_t fingerprint, uint64_t vsHash, UINT verts) {
     std::lock_guard<std::mutex> lk(s_mx);
     if (!s_loaded) { LoadClasses(); LoadLayers(); ScanFiles(); s_loaded = true; s_cls.clear(); s_unkHash.clear(); s_cls.resize(s_classes.size()); }
     int ci = ClassForUnreg(fingerprint, vsHash, verts);
-    return ci >= 0 ? s_classes[ci].alias : 0;
+    if (ci < 0 || !s_classes[ci].alias) return 0;
+    // si la clase declara "vs = ...", el alias solo vale para dibujos con esos VS (las caras genericas de Konami comparten clase pero usan otro VS)
+    const auto& va = s_classes[ci].vsAny;
+    if (!va.empty() && std::find(va.begin(), va.end(), vsHash) == va.end()) return 0;
+    return s_classes[ci].alias;
 }
 bool InspectBegin(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEntry* vs, int kind, UINT verts, UINT inst) {
     if (!g_dev.dev) return false;
