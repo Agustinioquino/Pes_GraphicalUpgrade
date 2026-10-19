@@ -486,7 +486,9 @@ static void RunRule(ID3D11DeviceContext* c, const ShaderEntry* e, DrawScope& d) 
             if (!ps) break;
             ID3D11ShaderResourceView *fa = nullptr, *fb = nullptr; FaceGenExtra ex;
             if (FaceGenLookup(c, &fa, &fb, &ex)) {
-                if (ex.hairCB) Ctx(c).lastHairCB = ex.hairCB;
+                // 19/10 c: la boca hereda este b11; se retiene con AddRef porque la entrada de cara puede liberarse (partido nuevo,
+                // recarga de tipos de pelo) antes del dibujo de la boca -> puntero colgado -> el driver se caia (nvwgf2umx 0xc0000005)
+                if (ex.hairCB) { CtxState& cs = Ctx(c); if (cs.lastHairCB != ex.hairCB) { ex.hairCB->AddRef(); if (cs.lastHairCB) cs.lastHairCB->Release(); cs.lastHairCB = ex.hairCB; } }
                 Remember(c, d, true, true, a.slot); c->PSSetShaderResources(a.slot, 1, &fa);
                 Remember(c, d, true, true, a.idx);  c->PSSetShaderResources(a.idx, 1, &fb);
                 // 18/10 pelo: parametros del tipo de pelo de ESTA cara (PES21FX_hair.ini) en b11
