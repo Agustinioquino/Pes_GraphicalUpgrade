@@ -67,7 +67,7 @@ static void LoadClasses() {
 }
 static const int kW = 320, kH = 180;
 
-struct TexInfo { int slot; std::string desc; };
+struct TexInfo { int slot; std::string desc; ID3D11ShaderResourceView* srv = nullptr; };   // srv con referencia propia (miniatura en la ficha)
 struct ClassFrame {
     bool seen = false; bool bboxOk = false; float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
     UINT verts = 0; int kind = 0; bool deferred = false; uint64_t vs = 0;
@@ -133,7 +133,7 @@ bool InspectBegin(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEnt
     EnsureRes(); if (!s_whitePS) return false;
     int ci = -1;
     std::lock_guard<std::mutex> lk(s_mx);
-    if (!s_loaded) { LoadClasses(); s_loaded = true; for (auto& f : s_cls) { if (f.rt) f.rt->Release(); if (f.rtv) f.rtv->Release(); for (auto* t : f.st) if (t) t->Release(); } s_cls.clear(); s_unkHash.clear(); s_cls.resize(s_classes.size()); }
+    if (!s_loaded) { LoadClasses(); s_loaded = true; for (auto& f : s_cls) { if (f.rt) f.rt->Release(); if (f.rtv) f.rtv->Release(); for (auto* t : f.st) if (t) t->Release(); for (auto& t : f.tex) if (t.srv) t.srv->Release(); } s_cls.clear(); s_unkHash.clear(); s_cls.resize(s_classes.size()); }
     for (size_t i = 0; i < s_classes.size() && ci < 0; i++) for (uint64_t h : s_classes[i].ps) if (h == ps->hash) { ci = (int)i; break; }
     if (ci < 0) {
         // desconocido: solo geometria con bastantes vertices en un dibujo con varios render targets (G-buffer), hasta kMaxUnknown
@@ -155,9 +155,11 @@ bool InspectBegin(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEnt
         f.seen = true;
         if (!EnsureClassRT(f)) return false;
         f.verts = verts; f.kind = kind; f.deferred = c->GetType() == D3D11_DEVICE_CONTEXT_DEFERRED; f.vs = vs ? vs->hash : 0;
+        for (auto& t : f.tex) if (t.srv) t.srv->Release();
         f.tex.clear();
         ID3D11ShaderResourceView* srv[32] = {}; c->PSGetShaderResources(0, 32, srv);
-        for (int i = 0; i < 32; i++) if (srv[i]) { std::string d = DescribeSRV(srv[i]); auto sn = s_classes[ci].slotNames.find(i); if (sn != s_classes[ci].slotNames.end()) d = sn->second + ": " + d; f.tex.push_back({ i, d }); srv[i]->Release(); }
+        for (int i = 0; i < 32; i++) if (srv[i]) { std::string d = DescribeSRV(srv[i]); auto sn = s_classes[ci].slotNames.find(i); if (sn != s_classes[ci].slotNames.end()) d = sn->second + ": " + d;
+            TexInfo ti; ti.slot = i; ti.desc = d; ti.srv = srv[i]; f.tex.push_back(ti); }   // la referencia queda en la ficha (se dibuja como miniatura)
     }
     Saved& s = t_sv; s.cls = ci;
     c->PSGetShader(&s.ps, nullptr, nullptr);
@@ -193,7 +195,7 @@ void InspectPresent() {
     for (size_t i = 0; i < s_cls.size(); i++) {
         ClassFrame& f = s_cls[i];
         if (!f.rt) continue;
-        if (!g_inspectOn) { f.seen = false; f.bboxOk = false; continue; }
+        if (!g_inspectOn) { f.seen = false; f.bboxOk = false; for (auto& t : f.tex) if (t.srv) t.srv->Release(); f.tex.clear(); continue; }
         // 1) leer la copia de hace un cuadro
         int rd = f.stIdx ^ 1;
         if (f.stValid[rd]) {
@@ -239,7 +241,8 @@ void InspectDrawOverlay() {
         dl->AddRect(a, b, col, 3.0f, 0, isSel ? 3.0f : 1.5f);
         ImVec2 center((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
         // ficha
-        float h = isSel ? 26.0f + 16.0f * (2 + (float)f.tex.size()) : 26.0f;
+        const float th = 64.0f;   // miniatura por textura (la dibuja ImGui con el SRV real: si aca se ve y el shader no la ve, el problema es del shader)
+        float h = isSel ? 26.0f + 32.0f + (th + 6.0f) * (float)f.tex.size() : 26.0f;
         ImVec2 fa(colX, y), fb(io.DisplaySize.x - 10, y + h);
         dl->AddRectFilled(fa, fb, IM_COL32(20, 22, 28, 215), 4.0f);
         dl->AddRect(fa, fb, col, 4.0f, 0, isSel ? 2.0f : 1.0f);
@@ -248,7 +251,11 @@ void InspectDrawOverlay() {
         if (isSel) {
             float ty = fa.y + 24;
             dl->AddText(nullptr, 0.0f, ImVec2(fa.x + 8, ty), IM_COL32(220, 220, 220, 255), s_classes[i].desc.c_str(), nullptr, fb.x - fa.x - 16); ty += 32;
-            for (auto& tx : f.tex) { char l[260]; snprintf(l, sizeof(l), "t%-2d %s", tx.slot, tx.desc.c_str()); dl->AddText(ImVec2(fa.x + 8, ty), IM_COL32(200, 210, 230, 255), l); ty += 16; }
+            for (auto& tx : f.tex) {
+                if (tx.srv) { dl->AddImage((ImTextureID)(uintptr_t)tx.srv, ImVec2(fa.x + 8, ty), ImVec2(fa.x + 8 + th, ty + th)); dl->AddRect(ImVec2(fa.x + 8, ty), ImVec2(fa.x + 8 + th, ty + th), IM_COL32(90, 90, 100, 255)); }
+                char l[260]; snprintf(l, sizeof(l), "t%d", tx.slot); dl->AddText(ImVec2(fa.x + 16 + th, ty), col, l);
+                dl->AddText(nullptr, 0.0f, ImVec2(fa.x + 16 + th, ty + 16), IM_COL32(200, 210, 230, 255), tx.desc.c_str(), nullptr, fb.x - fa.x - 24 - th);
+                ty += th + 6.0f; }
         }
         // flecha: de la ficha al centro del rectangulo
         ImVec2 from(fa.x, fa.y + 13);
