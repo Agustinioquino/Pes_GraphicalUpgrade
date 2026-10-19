@@ -286,6 +286,7 @@ void InspectDrawOverlay() {
         ImU32 col = cols[(k++) % ncol];
         ImVec2 a(f.x0 * sx, f.y0 * sy), b(f.x1 * sx, f.y1 * sy);
         bool isSel = sel == i;
+        if (sel >= 0 && !isSel) { k++; continue; }   // con la ventana Capas abierta solo queda el rectangulo de la clase elegida (sin flechas)
         dl->AddRect(a, b, col, 3.0f, 0, isSel ? 3.0f : 1.5f);
         ImVec2 center((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
         // ficha (el detalle, con miniaturas y selectores, va en la ventana "Capas")
@@ -295,7 +296,8 @@ void InspectDrawOverlay() {
         dl->AddRect(fa, fb, col, 4.0f, 0, isSel ? 2.0f : 1.0f);
         char t[200]; snprintf(t, sizeof(t), "%s   %u vert %s", s_classes[i].name.c_str(), f.verts, f.deferred ? "(dif)" : "(inm)");
         dl->AddText(ImVec2(fa.x + 8, fa.y + 5), col, t);
-        // flecha: de la ficha al centro del rectangulo
+        // flecha: de la ficha al centro del rectangulo (no con la ventana Capas abierta)
+        if (isSel) { if (io.MouseClicked[0] && io.MousePos.x >= fa.x && io.MousePos.x <= fb.x && io.MousePos.y >= fa.y && io.MousePos.y <= fb.y) g_inspectSel = -1; y += h + 6; continue; }
         ImVec2 from(fa.x, fa.y + 13);
         ImVec2 to = center;
         // punta en el borde del rectangulo mas cercano a la ficha
@@ -324,6 +326,17 @@ void InspectDrawOverlay() {
             ImGui::SameLine(); if (ImGui::Button("Guardar capas")) Log("capas: %s", SaveLayers() ? "guardadas en PES21FX_capas.ini" : "no se pudo guardar");
             ImGui::SameLine(); if (ImGui::Button("Releer archivos")) ScanFiles();
             ImGui::SameLine(); if (ImGui::Button("Quitar todas")) { std::lock_guard<std::mutex> lk(s_layMx); for (uint64_t h : cl.ps) s_layers.erase(h); LayersUpdateAny(); }
+            bool isFace = false; for (uint64_t h : cl.ps) if (h == 0x5ce3ed8702271bc1ULL) isFace = true;
+            if (isFace) {
+                ImGui::Separator();
+                ImGui::TextUnformatted("Prueba de cejas con hebras:");
+                int dz = (int)(g_cfg.live[75][2] + 0.5f);
+                if (ImGui::RadioButton("normal", dz == 0)) g_cfg.live[75][2] = 0; ImGui::SameLine();
+                if (ImGui::RadioButton("hebras en magenta", dz == 1)) g_cfg.live[75][2] = 1; ImGui::SameLine();
+                if (ImGui::RadioButton("semillas sobre la cara", dz == 2)) g_cfg.live[75][2] = 2; ImGui::SameLine();
+                if (ImGui::RadioButton("grilla de prueba", dz == 3)) g_cfg.live[75][2] = 3;
+                ImGui::TextDisabled("'semillas': magenta = celda con semilla, azul = zona de ceja, resto = mapa crudo (rojo t24, verde densidad, azul alfa). La miniatura de t26 abajo es lo que recibe el shader.");
+            }
             ImGui::Separator();
             ImGui::BeginChild("slots", ImVec2(0, 0));
             std::vector<int> slots; for (auto& t : f.tex) slots.push_back(t.slot); for (auto& kv : ov.slot) if (std::find(slots.begin(), slots.end(), kv.first) == slots.end()) slots.push_back(kv.first);
