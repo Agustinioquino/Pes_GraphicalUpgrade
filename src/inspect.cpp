@@ -228,7 +228,18 @@ bool InspectBegin(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEnt
     EnsureRes(); if (!s_whitePS) return false;
     // PS no registrado por el mod (creado antes del enganche u otro camino): se identifica por puntero
     uint64_t psHash = ps ? ps->hash : 0; bool unreg = false;
-    if (!ps) { ID3D11PixelShader* raw = nullptr; c->PSGetShader(&raw, nullptr, nullptr); if (!raw) return false; psHash = 0xF000000000000000ULL | ((uintptr_t)raw & 0x0FFFFFFFFFFFFFFFULL); raw->Release(); unreg = true; }
+    if (!ps) {
+        // PS sin registrar (lo creo otra DLL por fuera de nuestro enganche): huella ESTABLE entre sesiones = VS + formato/tamano de
+        // sus texturas (t0..t7). Asi se puede nombrar en PES21FX_inspector.ini y ocultar/resaltar como cualquier clase.
+        ID3D11PixelShader* raw = nullptr; c->PSGetShader(&raw, nullptr, nullptr); if (!raw) return false; raw->Release();
+        uint64_t h = 1469598103934665603ULL; auto mix = [&](uint64_t v) { h ^= v; h *= 1099511628211ULL; };
+        mix(vs ? vs->hash : 0);
+        ID3D11ShaderResourceView* sv[8] = {}; c->PSGetShaderResources(0, 8, sv);
+        for (int i = 0; i < 8; i++) { if (!sv[i]) { mix(0); continue; } ID3D11Resource* r = nullptr; sv[i]->GetResource(&r);
+            if (r) { D3D11_RESOURCE_DIMENSION dm; r->GetType(&dm); if (dm == D3D11_RESOURCE_DIMENSION_TEXTURE2D) { D3D11_TEXTURE2D_DESC td; ((ID3D11Texture2D*)r)->GetDesc(&td); mix(((uint64_t)td.Format << 40) | ((uint64_t)td.Width << 20) | td.Height | ((uint64_t)td.ArraySize << 56)); } else mix(7); r->Release(); }
+            sv[i]->Release(); }
+        psHash = 0xF000000000000000ULL | (h & 0x0FFFFFFFFFFFFFFFULL); unreg = true;
+    }
     int ci = -1;
     std::lock_guard<std::mutex> lk(s_mx);
     if (!s_loaded) { LoadClasses(); LoadLayers(); ScanFiles(); s_loaded = true; for (auto& f : s_cls) { if (f.rt) f.rt->Release(); if (f.rtv) f.rtv->Release(); for (auto* t : f.st) if (t) t->Release(); for (auto& t : f.tex) if (t.srv) t.srv->Release(); for (auto& t : f.vtex) if (t.srv) t.srv->Release(); if (f.matCopy) f.matCopy->Release(); if (f.matStg) f.matStg->Release(); if (f.objCopy) f.objCopy->Release(); if (f.objStg) f.objStg->Release(); } s_cls.clear(); s_unkHash.clear(); s_cls.resize(s_classes.size()); }
@@ -244,7 +255,8 @@ bool InspectBegin(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEnt
             s_unkHash.push_back(psHash); s_cls.push_back(ClassFrame()); ci = (int)s_cls.size() - 1;
             char nm[64]; snprintf(nm, sizeof(nm), "%016llx", (unsigned long long)psHash);
             InspClass u; u.ps.push_back(psHash);
-            if (unreg) { u.name = std::string("SIN REGISTRAR ") + (nm + 4); u.desc = "Pixel shader que el mod no vio crearse (puntero " + std::string(nm + 4) + "): el juego lo creo antes del enganche o por otro camino. Hace falta capturarlo con 'Capturar shaders' o reiniciar el juego con el mod ya cargado."; }
+            if (unreg) { u.name = std::string("SIN REGISTRAR ") + (nm + 4); u.desc = "Pixel shader creado por otra DLL (cloth-mod / 3DMigoto), fuera de nuestro enganche. Huella estable " + std::string(nm) + " (VS + texturas): podes nombrarlo en PES21FX_inspector.ini con ps = " + std::string(nm) + ".";
+                Log("inspector: PS sin registrar, huella %s (VS %016llx, %u vertices)", nm, (unsigned long long)(vs ? vs->hash : 0), verts); }
             else { u.name = std::string("Desconocido ") + nm; u.desc = "Shader sin clase: agregalo a PES21FX_inspector.ini ([seccion] ps = " + std::string(nm) + ", nombre = ..., que = ..., grupo = ...)"; }
             u.unknown = true; u.group = "desconocidos";
             s_classes.push_back(u);
