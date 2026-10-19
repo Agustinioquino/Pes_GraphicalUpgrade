@@ -75,7 +75,8 @@ Texture2D<float4> pesSSSMap   : register(t22);   // PES21 (18/10) mapa de SSS de
 Texture2D<float4> pesFaceA    : register(t23);   // PES21 (18/10) quinta textura generada en vivo por cara: R cavidad, G curvatura, B grosor, A vello/pelo
 Texture2D<float4> pesFaceB    : register(t24);   //   R poros, G zona de brillo, B convexidad grande, A = 1 si existe
 struct PesSeed { float4 posV; float4 nrmV; float4 dirV; float4 col; };
-Texture2D<float4> pesSeedMap  : register(t26);   // PES21 (18/10) semillas de cejas por celda (salida C del generador)
+Texture2D<float4> pesSeedMap  : register(t26);
+Texture2D<float4> pesSkinMicro : register(t27);   // PES21 (19/10) micro normal de poros en mosaico (textures\pes_skin_micro_n.dds), A = poro   // PES21 (18/10) semillas de cejas por celda (salida C del generador)
 RWStructuredBuffer<PesSeed> pesSeeds : register(u5);   // PES21 (18/10) semillas animadas de este dibujo (las lee pes_brow_vs)
 RWByteAddressBuffer pesSeedArgs : register(u6);          // PES21 (18/10 b) {verts por instancia, instancias, 0, 0}: cuenta de semillas para DrawInstancedIndirect
 // PES21 (18/10) tipo de pelo de ESTA cara (PES21FX_hair.ini, lo enlaza la DLL en b11; si no esta enlazado todo vale 0 y pesHairMisc.x = 0)
@@ -305,6 +306,24 @@ void main(
   r0.z = dot(r1.xyz, r1.xyz);
   r0.z = rsqrt(r0.z);
   r1.xyz = r1.xyz * r0.zzz;
+  // === PES21 (19/10) micro normal de poros: mosaico fino sobre la normal del juego, solo de cerca.
+  // x94 intensidad, y94 escala (repeticiones sobre la cara), w94 on/off
+  float pesPoreA = 0.0;
+  { float4 P94 = IniParams.Load(int2(94,0));
+    if (enhance && P94.w > 0.5) {
+      float sc = max(P94.y, 1.0);
+      float2 muv = v2.xy * sc;
+      float2 mdx = ddx(muv), mdy = ddy(muv);
+      float tpp = max(length(mdx), length(mdy)) * 1024.0;            // texeles del mosaico por pixel
+      float near = saturate((3.0 - tpp) / 2.5);                       // se apaga cuando ya no se distingue (evita ruido)
+      if (near > 0.001) {
+        float4 mn = pesSkinMicro.SampleGrad(g_samplerAnisotropic_Clamp_s, frac(muv), mdx, mdy);   // frac + grad: sin costura de mip
+        float3 tn = mn.xyz * 2.0 - 1.0;
+        float str = saturate(P94.x) * near * 0.9;
+        r1.xy += tn.xy * str;
+        r1.xyz = normalize(r1.xyz);
+        pesPoreA = mn.a * near;
+      } } }
   // 16/10: oclusion de cavidades a partir del normal map (pliegues de la oreja, arco de la ceja, aletas de la nariz):
   // donde la normal se inclina mucho la superficie esta dentro de un hueco y le llega menos luz. x35 fuerza, w35 on/off
   float4 P35 = IniParams.Load(int2(35,0));
