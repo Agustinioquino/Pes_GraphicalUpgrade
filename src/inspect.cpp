@@ -30,7 +30,7 @@ std::atomic<int> g_inspectSel{-1};
 //   que = SSS por zonas, arrugas...  (que hace el mod ahi)
 //   t0 = difusa  t1 = normal ...     (nombre de cada slot de textura del juego; opcional)
 //   [inspector]  desconocidos = 1    tambien marcar los shaders de geometria que no estan en ninguna clase (hasta 6), con su hash
-struct InspClass { std::vector<uint64_t> ps; std::string name, desc; std::map<int, std::string> slotNames; bool unknown = false; std::string group = "otros"; uint64_t alias = 0; };
+struct InspClass { std::vector<uint64_t> ps; std::string name, desc; std::map<int, std::string> slotNames; bool unknown = false; std::string group = "otros"; uint64_t alias = 0; std::vector<uint64_t> vsAny; };   // vsAny: "vs = <hash>": cualquier PS sin registrar con ese vertex shader es de esta clase (comodin)
 static std::string s_group = "todo";   // filtro de grupo del inspector (todo | cara | pelo | kit | estadio | desconocidos | ...)
 static std::vector<InspClass> s_classes;
 static bool s_unknownOn = true;
@@ -80,6 +80,7 @@ static void LoadClasses() {
             else if (k == "que") cur->desc = v;
             else if (k == "grupo") cur->group = Lower2(v);
             else if (k == "como") cur->alias = strtoull(v.c_str(), nullptr, 16);
+            else if (k == "vs") { std::string h; for (char ch : v + ",") { if (ch == ',' || ch == ' ') { h = Trim2(h); if (!h.empty()) cur->vsAny.push_back(strtoull(h.c_str(), nullptr, 16)); h.clear(); } else h += ch; } }
             else if (k.size() > 1 && k[0] == 't' && isdigit((unsigned char)k[1])) cur->slotNames[atoi(k.c_str() + 1)] = v;
         }
         Log("inspector: PES21FX_inspector.ini leido (%d clases)", (int)s_classes.size());
@@ -211,18 +212,19 @@ static bool EnsureClassRT(ClassFrame& f) {
 // (hash de recurso, tamano, formato, clase y slot) en PES21FX\inspector\historial.txt y, si "Volcar texturas" esta
 // prendido, se guarda como png en PES21FX\inspector\texturas\<clase>\t<slot>_<id>.png (solo una vez por textura).
 static std::atomic<bool> s_dumpOn{false};
-static std::set<uint64_t> s_seenTex; static std::mutex s_histMx;
+static std::set<uint64_t> s_seenTex, s_dumpedTex; static std::mutex s_histMx;
 static std::vector<std::pair<ID3D11Resource*, std::wstring>> s_dumpQueue;   // (recurso con AddRef, ruta) -> se vuelca en Present
 static int s_dumpCount = 0, s_histCount = 0;
 static void HistAdd(ID3D11ShaderResourceView* v, const std::string& cls, int slot, const std::string& desc) {
     ID3D11Resource* res = nullptr; v->GetResource(&res); if (!res) return;
     uint64_t key = (uint64_t)(uintptr_t)res;
     bool isNew; { std::lock_guard<std::mutex> lk(s_histMx); isNew = s_seenTex.insert(key).second; }
-    if (!isNew) { res->Release(); return; }
+    bool dump = false; if (s_dumpOn) { std::lock_guard<std::mutex> lk(s_histMx); dump = s_dumpedTex.insert(key).second; }
+    if (!isNew && !dump) { res->Release(); return; }
     std::wstring dir = g_cfg.baseDir + L"inspector"; CreateDirectoryW(dir.c_str(), nullptr);
-    { FILE* f = _wfopen((dir + L"\\historial.txt").c_str(), L"ab");
+    if (isNew) { FILE* f = _wfopen((dir + L"\\historial.txt").c_str(), L"ab");
       if (f) { SYSTEMTIME st; GetLocalTime(&st); char b[512]; snprintf(b, sizeof(b), "%02d:%02d:%02d | %s | t%d | %s\n", st.wHour, st.wMinute, st.wSecond, cls.c_str(), slot, desc.c_str()); fwrite(b, 1, strlen(b), f); fclose(f); s_histCount++; } }
-    if (s_dumpOn) {
+    if (dump) {
         D3D11_RESOURCE_DIMENSION dm; res->GetType(&dm);
         if (dm == D3D11_RESOURCE_DIMENSION_TEXTURE2D) {
             std::string safe; for (char ch : cls) safe += (isalnum((unsigned char)ch) ? ch : '_');
@@ -274,11 +276,20 @@ uint64_t InspectFingerprint(ID3D11DeviceContext* c, const ShaderEntry* vs) {
     return 0xF000000000000000ULL | (h & 0x0FFFFFFFFFFFFFFFULL);
 }
 // alias: "como = <hash>" en el ini -> el dibujo se trata como ese shader del juego (reemplazo + reglas). 0 = sin alias
-uint64_t InspectAliasFor(uint64_t fingerprint) {
+// clase de un PS sin registrar: por huella exacta o por comodin de VS ("vs = ..."); en ese caso la huella se agrega a la clase
+static int ClassForUnreg(uint64_t fingerprint, uint64_t vsHash) {
+    for (size_t i = 0; i < s_classes.size(); i++) for (uint64_t h : s_classes[i].ps) if (h == fingerprint) return (int)i;
+    if (vsHash) for (size_t i = 0; i < s_classes.size(); i++) if (!s_classes[i].unknown) for (uint64_t h : s_classes[i].vsAny) if (h == vsHash) {
+        s_classes[i].ps.push_back(fingerprint);
+        Log("inspector: PS sin registrar huella %016llx (VS %016llx) -> clase '%s' por comodin de VS", (unsigned long long)fingerprint, (unsigned long long)vsHash, s_classes[i].name.c_str());
+        return (int)i; }
+    return -1;
+}
+uint64_t InspectAliasFor(uint64_t fingerprint, uint64_t vsHash) {
     std::lock_guard<std::mutex> lk(s_mx);
     if (!s_loaded) { LoadClasses(); LoadLayers(); ScanFiles(); s_loaded = true; s_cls.clear(); s_unkHash.clear(); s_cls.resize(s_classes.size()); }
-    for (auto& c : s_classes) if (c.alias) for (uint64_t h : c.ps) if (h == fingerprint) return c.alias;
-    return 0;
+    int ci = ClassForUnreg(fingerprint, vsHash);
+    return ci >= 0 ? s_classes[ci].alias : 0;
 }
 bool InspectBegin(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEntry* vs, int kind, UINT verts, UINT inst) {
     if (!g_dev.dev) return false;
@@ -295,7 +306,8 @@ bool InspectBegin(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEnt
     int ci = -1;
     std::lock_guard<std::mutex> lk(s_mx);
     if (!s_loaded) { LoadClasses(); LoadLayers(); ScanFiles(); s_loaded = true; for (auto& f : s_cls) { if (f.rt) f.rt->Release(); if (f.rtv) f.rtv->Release(); for (auto* t : f.st) if (t) t->Release(); for (auto& t : f.tex) if (t.srv) t.srv->Release(); for (auto& t : f.vtex) if (t.srv) t.srv->Release(); if (f.matCopy) f.matCopy->Release(); if (f.matStg) f.matStg->Release(); if (f.objCopy) f.objCopy->Release(); if (f.objStg) f.objStg->Release(); } s_cls.clear(); s_unkHash.clear(); s_cls.resize(s_classes.size()); }
-    for (size_t i = 0; i < s_classes.size() && ci < 0; i++) for (uint64_t h : s_classes[i].ps) if (h == psHash) { ci = (int)i; break; }
+    if (unreg) ci = ClassForUnreg(psHash, vs ? vs->hash : 0);
+    else for (size_t i = 0; i < s_classes.size() && ci < 0; i++) for (uint64_t h : s_classes[i].ps) if (h == psHash) { ci = (int)i; break; }
     if (ci < 0) {
         // desconocido: geometria (>= 100 vertices) en un dibujo con render target de pantalla (G-buffer), hasta kMaxUnknown
         if (!s_unknownOn || verts < 100) return false;

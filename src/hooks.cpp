@@ -523,8 +523,10 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (!ps && vs && g_cfg.optRules) {
         ID3D11PixelShader* raw = nullptr; c->PSGetShader(&raw, nullptr, nullptr);
         if (raw) {
-            uint64_t fp = InspectFingerprint(c, vs); uint64_t al = InspectAliasFor(fp);
+            uint64_t fp = InspectFingerprint(c, vs); uint64_t al = InspectAliasFor(fp, vs->hash);
             const ShaderEntry* e = al ? FindShaderByHash(al) : nullptr;
+            { static std::mutex mx; static std::set<uint64_t> seen; bool first; { std::lock_guard<std::mutex> lk(mx); first = seen.insert(fp).second; }
+              if (first && (al || g_cfg.optDump)) Log("alias: huella %016llx (VS %016llx) -> como %016llx: entrada %s, reemplazo %s", (unsigned long long)fp, (unsigned long long)vs->hash, (unsigned long long)al, e ? "si" : "NO", (e && e->repl) ? "si" : "NO"); }
             if (e && e->repl && !g_cfg.bypass) { d.restorePS = raw; c->PSSetShader((ID3D11PixelShader*)e->repl, nullptr, 0); ps = e; g_aliasDraws++; }
             else raw->Release();
         }

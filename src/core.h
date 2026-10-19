@@ -200,7 +200,7 @@ extern std::atomic<bool> g_layersAny;   // hay alguna capa definida (evita el co
 bool InspectLayerFor(uint64_t ps, LayerOv& out);
 bool InspectShouldSkip(uint64_t ps, UINT verts);
 uint64_t InspectFingerprint(ID3D11DeviceContext* c, const ShaderEntry* vs);
-uint64_t InspectAliasFor(uint64_t fingerprint);
+uint64_t InspectAliasFor(uint64_t fingerprint, uint64_t vsHash);
 const ShaderEntry* FindShaderByHash(uint64_t h);
 ID3D11PixelShader* InspectHighlightPS(uint64_t ps);   // PS magenta si la capa esta en "resaltar", si no null   // capa oculta o "solo esta" activo
 extern std::atomic<int> g_layerSkips;   // true si hay capas definidas para ese shader (copia)
