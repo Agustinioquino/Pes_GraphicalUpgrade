@@ -26,7 +26,8 @@ std::atomic<int> g_inspectSel{-1};
 //   que = SSS por zonas, arrugas...  (que hace el mod ahi)
 //   t0 = difusa  t1 = normal ...     (nombre de cada slot de textura del juego; opcional)
 //   [inspector]  desconocidos = 1    tambien marcar los shaders de geometria que no estan en ninguna clase (hasta 6), con su hash
-struct InspClass { std::vector<uint64_t> ps; std::string name, desc; std::map<int, std::string> slotNames; bool unknown = false; };
+struct InspClass { std::vector<uint64_t> ps; std::string name, desc, group = "otros"; std::map<int, std::string> slotNames; bool unknown = false; };
+static std::string s_group = "todo";   // filtro de grupo del inspector (todo | cara | pelo | kit | estadio | desconocidos | ...)
 static std::vector<InspClass> s_classes;
 static bool s_unknownOn = true;
 static const InspClass kDefaults[] = {
@@ -60,6 +61,7 @@ static void LoadClasses() {
             if (k == "ps") { std::string h; for (char ch : v + ",") { if (ch == ',' || ch == ' ') { h = Trim2(h); if (!h.empty()) cur->ps.push_back(strtoull(h.c_str(), nullptr, 16)); h.clear(); } else h += ch; } }
             else if (k == "nombre") cur->name = v;
             else if (k == "que") cur->desc = v;
+            else if (k == "grupo") cur->group = Lower2(v);
             else if (k.size() > 1 && k[0] == 't' && isdigit((unsigned char)k[1])) cur->slotNames[atoi(k.c_str() + 1)] = v;
         }
         Log("inspector: PES21FX_inspector.ini leido (%d clases)", (int)s_classes.size());
@@ -79,7 +81,7 @@ struct ClassFrame {
 };
 static std::vector<ClassFrame> s_cls;   // una por clase (misma posicion que s_classes), mas las desconocidas al final
 static std::vector<uint64_t> s_unkHash;   // hash de cada clase desconocida (indices >= s_classes.size())
-static const int kMaxUnknown = 6;
+static const int kMaxUnknown = 12;
 static bool s_loaded = false;
 static std::mutex s_mx;
 // ---- capas editables (PES21FX_capas.ini): [<hash>]  tN = file:ruta | none   oculta = 1
@@ -89,6 +91,7 @@ static std::vector<std::string> s_files;   // "file:textures\\x.dds", "file:hair
 std::atomic<int> g_layerSkips{0}; static int s_skipsShown = 0;
 static std::atomic<int> s_solo{-1};   // clase "solo esta" (las demas clases conocidas no se dibujan)
 bool InspectShouldSkip(uint64_t ps) {
+    if (!g_inspectOn) return false;   // ocultar y "solo esta" son de debug: solo con el inspector prendido
     std::lock_guard<std::mutex> lk(s_layMx);
     auto it = s_layers.find(ps); if (it != s_layers.end() && it->second.hidden) return true;
     int so = s_solo.load();
@@ -207,11 +210,12 @@ bool InspectBegin(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEnt
             if (nrt < 3) return false;
             s_unkHash.push_back(ps->hash); s_cls.push_back(ClassFrame()); ci = (int)s_cls.size() - 1;
             char nm[64]; snprintf(nm, sizeof(nm), "%016llx", (unsigned long long)ps->hash);
-            InspClass u; u.ps.push_back(ps->hash); u.name = std::string("Desconocido ") + nm; u.desc = "Shader sin clase: agregalo a PES21FX_inspector.ini ([seccion] ps = " + std::string(nm) + ", nombre = ..., que = ...)"; u.unknown = true;
+            InspClass u; u.ps.push_back(ps->hash); u.name = std::string("Desconocido ") + nm; u.desc = "Shader sin clase: agregalo a PES21FX_inspector.ini ([seccion] ps = " + std::string(nm) + ", nombre = ..., que = ..., grupo = ...)"; u.unknown = true; u.group = "desconocidos";
             s_classes.push_back(u);
         }
     }
     { int selNow = g_inspectSel.load(); if (selNow >= 0 && selNow != ci) return false; }   // con Capas abierta solo se captura la clase elegida
+    if (s_group != "todo" && s_classes[ci].group != s_group) return false;   // solo el grupo elegido (cara, pelo, kit...)
     ClassFrame& f = s_cls[ci];
     {
         if (f.seen) { if (f.extra >= 8) return false; f.extra++; f.verts += verts; goto drawOnly; }   // 19/10: todas las partes de la clase (la cara viene en varios dibujos)
@@ -255,6 +259,11 @@ void InspectEnd(ID3D11DeviceContext* c) {
 // en Present (contexto inmediato): leer la textura del cuadro anterior, calcular el rectangulo, limpiar para el proximo
 void InspectPresent() {
     if (!g_dev.imm) return;
+    // al apagar el inspector vuelven todas las capas ocultas (y la prueba de cejas); las texturas elegidas por slot se mantienen
+    { static bool wasOn = false; bool on = g_inspectOn.load();
+      if (wasOn && !on) { { std::lock_guard<std::mutex> lk(s_layMx); for (auto& kv : s_layers) kv.second.hidden = false; s_solo = -1; LayersUpdateAny(); }
+          if (g_cfg.live[75][2] > 0.5f) g_cfg.live[75][2] = 0; g_inspectSel = -1; }
+      wasOn = on; }
     s_skipsShown = g_layerSkips.exchange(0);
     s_frame++;
     if ((s_frame.load() % 3) != 1) return;   // leer/limpiar solo en el cuadro siguiente a una captura
@@ -262,7 +271,7 @@ void InspectPresent() {
     for (size_t i = 0; i < s_cls.size(); i++) {
         ClassFrame& f = s_cls[i];
         if (!f.rt) continue;
-        if (!g_inspectOn) { f.seen = false; f.bboxOk = false; for (auto& t : f.tex) if (t.srv) t.srv->Release(); f.tex.clear(); continue; }
+        if (!g_inspectOn) { f.seen = false; f.bboxOk = false; f.extra = 0; for (auto& t : f.tex) if (t.srv) t.srv->Release(); f.tex.clear(); continue; }
         // 1) leer la copia de hace un cuadro
         int rd = f.stIdx ^ 1;
         if (f.stValid[rd]) {
@@ -297,10 +306,24 @@ void InspectDrawOverlay() {
     int sel = g_inspectSel.load();
     ImU32 cols[] = { IM_COL32(255, 80, 200, 255), IM_COL32(80, 220, 255, 255), IM_COL32(255, 200, 60, 255), IM_COL32(120, 255, 120, 255), IM_COL32(255, 120, 80, 255), IM_COL32(180, 140, 255, 255) };
     int ncol = 6, k = 0;
-    dl->AddRectFilled(ImVec2(colX - 10, 40), ImVec2(io.DisplaySize.x - 10, 62), IM_COL32(20, 22, 28, 220), 4.0f);
-    dl->AddText(ImVec2(colX, 44), IM_COL32(255, 255, 255, 255), "INSPECTOR VISUAL  (clic en una ficha = detalle; clases en PES21FX_inspector.ini; Inspector en el menu = apagar)");
+    // barra de grupos: Todo | Cara | Pelo | Kit | ... | Desconocidos (clic = filtrar rectangulos, fichas y capturas)
+    { std::vector<std::string> groups; groups.push_back("todo");
+      for (auto& c : s_classes) if (!c.unknown && std::find(groups.begin(), groups.end(), c.group) == groups.end()) groups.push_back(c.group);
+      groups.push_back("desconocidos");
+      float gx = colX, gy = 40.0f;
+      dl->AddRectFilled(ImVec2(colX - 10, gy), ImVec2(io.DisplaySize.x - 10, gy + 24), IM_COL32(20, 22, 28, 220), 4.0f);
+      for (auto& g : groups) {
+          std::string lab = g; lab[0] = (char)toupper((unsigned char)lab[0]);
+          ImVec2 ts = ImGui::CalcTextSize(lab.c_str()); ImVec2 ba(gx, gy + 3), bb(gx + ts.x + 12, gy + 21);
+          bool on = s_group == g;
+          dl->AddRectFilled(ba, bb, on ? IM_COL32(60, 120, 90, 255) : IM_COL32(45, 48, 58, 255), 3.0f);
+          dl->AddText(ImVec2(ba.x + 6, ba.y + 1), IM_COL32(255, 255, 255, 255), lab.c_str());
+          if (io.MouseClicked[0] && io.MousePos.x >= ba.x && io.MousePos.x <= bb.x && io.MousePos.y >= ba.y && io.MousePos.y <= bb.y) { s_group = g; g_inspectSel = -1; }
+          gx = bb.x + 6;
+      } }
     for (int i = 0; i < (int)s_cls.size() && i < (int)s_classes.size(); i++) {
         ClassFrame& f = s_cls[i];
+        if (s_group != "todo" && s_classes[i].group != s_group) continue;
         if (!f.bboxOk) continue;
         ImU32 col = cols[(k++) % ncol];
         ImVec2 a(f.x0 * sx, f.y0 * sy), b(f.x1 * sx, f.y1 * sy);
@@ -324,7 +347,7 @@ void InspectDrawOverlay() {
         if (io.MouseClicked[0] && io.MousePos.x >= fa.x && io.MousePos.x <= fb.x && io.MousePos.y >= fa.y && io.MousePos.y <= fb.y) g_inspectSel = isSel ? -1 : i;
         y += h + 6;
     }
-    if (k == 0) dl->AddText(ImVec2(colX, 70), IM_COL32(255, 220, 120, 255), "Sin dibujos conocidos en pantalla (abri un partido / repeticion).");
+    if (k == 0) dl->AddText(ImVec2(colX, 70), IM_COL32(255, 220, 120, 255), s_group == "todo" ? "Sin dibujos conocidos en pantalla (abri un partido / repeticion)." : "Nada de este grupo en pantalla.");
     // ---- ventana "Capas" de la clase elegida: miniatura + nombre + selector por slot, ocultar, guardar
     if (sel >= 0 && sel < (int)s_cls.size() && sel < (int)s_classes.size()) {
         ClassFrame& f = s_cls[sel]; InspClass& cl = s_classes[sel];
