@@ -81,7 +81,7 @@ static bool LoadConfigLocked() {
     Config& c = g_cfg;
     memset(c.base, 0, sizeof(c.base));
     for (auto& a : c.info) for (auto& b : a) b = ParamInfo();
-    c.keys.clear(); c.rules.clear(); c.vars.clear(); c.groups.clear();
+    c.keys.clear(); c.rules.clear(); c.pairRules.clear(); c.vars.clear(); c.groups.clear();
     c.vars["pes_push"] = 0.003f;
 
     std::vector<std::string> lines;
@@ -235,8 +235,13 @@ static bool LoadConfigLocked() {
                 r = nullptr;
                 std::string s = Trim(l.substr(1, l.find(']') - 1));
                 if (Lower(s).rfind("rule ", 0) == 0) {
-                    uint64_t h = _strtoui64(Trim(s.substr(5)).c_str(), nullptr, 16);
-                    r = &c.rules[h]; r->hash = h;
+                    std::string rest = Trim(s.substr(5));
+                    size_t vp = Lower(rest).find(" vs ");
+                    uint64_t h = _strtoui64(Trim(rest.substr(0, vp)).c_str(), nullptr, 16);
+                    if (vp != std::string::npos) {   // (20/10) [rule <ps> vs <vs>]
+                        uint64_t vh = _strtoui64(Trim(rest.substr(vp + 4)).c_str(), nullptr, 16);
+                        r = &c.pairRules[{h, vh}]; r->hash = h; r->vsCond = vh;
+                    } else { r = &c.rules[h]; r->hash = h; }
                 }
                 continue;
             }
@@ -250,6 +255,7 @@ static bool LoadConfigLocked() {
             else if (k == "cb") { a.kind = RuleAction::BindCB; ss >> a.slot >> a.name; }
             else if (k == "srv") { a.kind = RuleAction::BindSRV; ss >> a.slot >> a.name; }
             else if (k == "param") {
+                if (r->vsCond) continue;   // las reglas con VS no tienen juego de parametros propio
                 std::string pn; ss >> pn >> arg2;
                 a.kind = RuleAction::SetParam;
                 if (!ParseParamName(pn, a.idx, a.comp)) continue;
@@ -265,6 +271,7 @@ static bool LoadConfigLocked() {
         for (auto& kv : c.rules) if (kv.second.hasParamOverride) kv.second.paramSet = set++;
     }
     int nr = 0; for (auto& kv : c.rules) nr += (int)kv.second.actions.size();
+    for (auto& kv : c.pairRules) nr += (int)kv.second.actions.size();
     Log("config: %d teclas, %d reglas (%d acciones); shaders=%d reglas=%d menu=%d", (int)c.keys.size(), (int)c.rules.size(), nr,
         (int)c.optReplace, (int)c.optRules, (int)c.optOverlay);
     return true;

@@ -64,7 +64,7 @@ struct RuleAction {
     int idx = 0, comp = 0;     // SetParam
     float value = 0; std::string var;
 };
-struct Rule { uint64_t hash = 0; std::vector<RuleAction> actions; bool hasParamOverride = false; int paramSet = -1; };
+struct Rule { uint64_t hash = 0; uint64_t vsCond = 0; std::vector<RuleAction> actions; bool hasParamOverride = false; int paramSet = -1; };   // vsCond: [rule <ps> vs <vs>] (20/10)
 
 // presets por estadio (presets\stadium_<id>.ini; el estadio lo informa Sider via match.ini)
 struct PresetValue { int idx, comp; float value; };
@@ -96,6 +96,7 @@ struct Config {
     std::vector<PresetValue> presetKeys;       // claves que toco el preset (se restauran a base al salir)
     bool presetManual = false;                 // el usuario aplico/quito un preset a mano: no pisar hasta el proximo partido
     std::map<uint64_t, Rule> rules;
+    std::map<std::pair<uint64_t, uint64_t>, Rule> pairRules;   // (20/10) [rule <ps> vs <vs>]: acciones solo cuando ese PS se dibuja con ese VS
     std::map<std::string, float> vars;         // $pes_push, etc.
     HairCfg hair;                              // PES21FX_hair.ini
     int menuKey = VK_INSERT;
@@ -147,6 +148,7 @@ struct ShaderEntry {
     char type = 0;                       // 'p' 'v' 'c'
     ID3D11DeviceChild* repl = nullptr;   // nuestro shader (o null)
     const Rule* rule = nullptr;
+    std::vector<const Rule*> pairRules;  // (20/10) reglas de este PS que solo valen con cierto VS
     ID3D11Device* dev = nullptr;         // dispositivo que lo creo
     std::shared_ptr<std::vector<uint8_t>> code;   // bytecode original (para el catalogo: reflexion)
 };

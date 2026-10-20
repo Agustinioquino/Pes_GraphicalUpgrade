@@ -377,6 +377,22 @@ void main(
   float4 FB = pesFaceB.Sample(g_samplerLinear_Clamp_s, v2.xy);
   bool fgOk = enhance && P68.x > 0.5 && FB.a > 0.5;
   float4 FA = fgOk ? pesFaceA.Sample(g_samplerLinear_Clamp_s, v2.xy) : float4(0, 0.5, 0, 0);
+  // === PES21 (20/10) caras genericas sin corte (x147): la cara generica de Konami es un MONTAJE (textura FaceSKIN pegada en
+  // el rectangulo u 0.148..0.852, v 0.152..0.856 del plano de la cabeza; medido registrando las texturas) y el resto de la
+  // cabeza (cuello, orejas, nuca) es otra pieza que dibuja el shader de piel del cuerpo. Todo lo propio de este shader
+  // terminaba de golpe en ese borde: debajo de la mandibula la cara quedaba naranja (translucidez x1.41 + mapa de SSS) y el
+  // cuello no. En una franja de ~5% junto al borde: la quinta textura se apaga siempre; y si la DLL no iguala la pieza del
+  // cuello (w147, lo pone la DLL nueva), tambien vuelven al juego color, translucidez y brillo (igual que el cuello).
+  float4 P147 = IniParams.Load(int2(147,0));
+  float pesEdge = 0.0;
+  {
+    bool gen = enhance && P147.x > 0.5 && any(abs(uvD - v2) > 0.003);   // dos UV distintos = montaje generico (la difusa va en el uv del montaje)
+    float2 gr = uvD;
+    float dE = min(min(gr.x, 1.0 - gr.x), min(gr.y, 1.0 - gr.y)) * 0.7044;   // distancia al borde en el plano de la cabeza
+    pesEdge = gen ? 1.0 - smoothstep(0.012, 0.07, dE) : 0.0;
+  }
+  float pesEdgeAll = (P147.w > 0.5) ? 0.0 : pesEdge;
+  FA = lerp(FA, float4(0, 0.5, 0, 0), pesEdge);
   // === PES21 zonas de la cara (18/10): sudor por zonas, labios, cuello ===
   // x72 pelicula de sudor, y72 contraste entre zonas, z72 color de labios, w72 on/off | x73 brillo de labios, y73 tono (rosado..rojo), z73 gotas por zona
   float4 P72 = IniParams.Load(int2(72,0));
@@ -463,6 +479,7 @@ void main(
 
   // ---- especular / brillo / albedo / suciedad ----
   r0.zw = g_tex_srm.SampleBias(g_sampler_srm_s, v2.xy, faceBD).xy;
+  float pesSpec0 = r0.z, pesSrmY = r0.w;   // (20/10) valores del juego, para el borde de las genericas
   r1.w = g_tex_diffuse.CalculateLevelOfDetail(g_samplerAnisotropic_Clamp_s, uvD);
   r1.w = clamp(r1.w + faceBD, 0, 5);
   r2.xyz = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, uvD, r1.w).xyz;
@@ -479,9 +496,11 @@ void main(
   r2.xyz = r1.www * r3.yzw + r2.xyz;
   r2.w = r0.w * r3.x + -r0.w;
   r0.w = r1.w * r2.w + r0.w;
+  float3 pesAlb0 = r2.xyz; float pesRough0 = max(min(0.56078434, pesSrmY), r0.w);   // (20/10) como los deja el shader del cuerpo
 
   // ---- translucidez (mapa de grosor de la piel) ----
   r1.w = g_tex_translucent.Sample(g_samplerLinear_Clamp_s, v2.xy).y;
+  float pesTrans0 = r1.w;
   // === PES21 mapa de SSS (18/10): generado a partir de 5 caras reales del juego (orejas, nariz, labios, parpados).
   // x62 on | y62 cuanto sube la translucidez en las zonas finas | z62 sangre (tinte rojizo donde la piel es fina) | w62 reservado
   float4 P62 = IniParams.Load(int2(62,0));
@@ -583,6 +602,12 @@ void main(
   //    scattering subsuperficial. Subirlo da piel con luz "dentro",
   //    terminador rojizo y sombras menos duras.
   r1.w = saturate(r1.w * sssBoost) * (1.0 - fhMask);
+  if (pesEdgeAll > 0.0) {   // (20/10) borde de la mascara generica: igual que la pieza del cuello (shader del cuerpo)
+    r2.xyz = lerp(r2.xyz, pesAlb0 * pesCav, pesEdgeAll);
+    r0.z = lerp(r0.z, saturate(pesSpec0 * specScale) * lerp(1.0, pesCav, 0.8), pesEdgeAll);
+    r0.w = lerp(r0.w, pesRough0, pesEdgeAll);
+    r1.w = lerp(r1.w, pesTrans0, pesEdgeAll);
+  }
   // ===================================================
 
   // ---- velo de borde (fresnel) del material ----
@@ -598,6 +623,7 @@ void main(
   r0.x = r0.x * r0.y;
   r3.xyz = g_psMaterial.m_materials[2].xyz + -r2.xyz;
   o0.xyz = r0.xxx * r3.xyz + r2.xyz;
+  if (P147.y > 0.5) o0.xyz = lerp(o0.xyz, float3(1.0, 0.0, 0.0), pesEdge);   // (20/10) diagnostico y147: rojo = franja del borde de la mascara generica
 
   // ---- rugosidad codificada ----
   r0.x = r0.w * 0.0361702144 + 0.0904255286;

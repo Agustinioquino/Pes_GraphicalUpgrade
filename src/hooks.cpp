@@ -288,6 +288,7 @@ static void UploadParams() {
         std::lock_guard<std::mutex> lk(g_cfgMutex);
         memcpy(p, g_cfg.live, sizeof(p));
         if (p[139][0] > 0.5f) p[104][0] = 1.0f;   // (20/10) pasto v5: necesita el pasto v3 (x104) prendido en la GPU
+        p[147][3] = 1.0f;   // (20/10) w147: esta DLL iguala la cabeza de las caras genericas con la cara (reglas PS + VS)
         for (auto& kv : g_cfg.rules) {
             if (kv.second.paramSet < 0) continue;
             for (auto& a : kv.second.actions) if (a.kind == RuleAction::SetParam) {
@@ -362,6 +363,12 @@ static const Rule* RuleFor(uint64_t h) {
     auto it = g_cfg.rules.find(h);
     return it == g_cfg.rules.end() ? nullptr : &it->second;
 }
+static std::vector<const Rule*> PairRulesFor(uint64_t h) {   // (20/10) [rule <ps> vs <vs>]
+    std::vector<const Rule*> out;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    for (auto& kv : g_cfg.pairRules) if (kv.first.first == h) out.push_back(&kv.second);
+    return out;
+}
 
 static ID3D11DeviceChild* BuildReplacement(ID3D11Device* dev, uint64_t h, char type) {
     if (!dev || !g_cfg.optReplace || !s_available.count({h, type})) return nullptr;
@@ -386,6 +393,7 @@ static void Register(ID3D11Device* dev, void* obj, const void* code, SIZE_T len,
     e.code = std::make_shared<std::vector<uint8_t>>((const uint8_t*)code, (const uint8_t*)code + len);
     e.repl = BuildReplacement(dev, e.hash, type);
     e.rule = RuleFor(e.hash);
+    if (type == 'p') e.pairRules = PairRulesFor(e.hash);
     std::unique_lock<std::shared_mutex> lk(s_shMutex);
     auto it = s_shaders.find(obj);
     if (it != s_shaders.end()) {   // el juego libero un shader y la direccion se reutilizo
@@ -497,9 +505,10 @@ static void Restore(ID3D11DeviceContext* c, DrawScope& d) {
 }
 
 extern thread_local UINT t_drawVerts; extern thread_local UINT t_drawStart; extern thread_local INT t_drawBase; extern thread_local bool t_lodNoted;   // (definidas mas abajo)
-static void RunRule(ID3D11DeviceContext* c, const ShaderEntry* e, DrawScope& d) {
-    const bool ps = e->type == 'p';
-    for (auto& a : e->rule->actions) {
+static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, uint64_t hash, DrawScope& d);
+static void RunRule(ID3D11DeviceContext* c, const ShaderEntry* e, DrawScope& d) { RunRuleActions(c, e->rule, e->type == 'p', e->hash, d); }
+static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, uint64_t hash, DrawScope& d) {
+    for (auto& a : rule->actions) {
         switch (a.kind) {
         case RuleAction::CopyCB: {
             ID3D11Buffer* src = nullptr;
@@ -541,7 +550,7 @@ static void RunRule(ID3D11DeviceContext* c, const ShaderEntry* e, DrawScope& d) 
             ID3D11ShaderResourceView *fa = nullptr, *fb = nullptr; FaceGenExtra ex;
             bool fgFound = FaceGenLookup(c, &fa, &fb, &ex);
             // (20/10) LOD de caras: anotar la malla de este dibujo y, con LOD0 forzado, cambiarla por la de mas detalle
-            if (g_lodAny && ex.key && t_drawVerts > 0) { const ShaderEntry* vse = Ctx(c).vs; t_lodNoted = true; LodNoteFace(c, ex.key, ex.t0, ex.id, vse ? vse->hash : 0, e->hash, t_drawVerts, t_drawStart, t_drawBase, &d.lod); }
+            if (g_lodAny && ex.key && t_drawVerts > 0) { const ShaderEntry* vse = Ctx(c).vs; t_lodNoted = true; LodNoteFace(c, ex.key, ex.t0, ex.id, vse ? vse->hash : 0, hash, t_drawVerts, t_drawStart, t_drawBase, &d.lod); }
             if (fgFound) {
                 // 19/10 c: la boca hereda este b11; se retiene con AddRef porque la entrada de cara puede liberarse (partido nuevo,
                 // recarga de tipos de pelo) antes del dibujo de la boca -> puntero colgado -> el driver se caia (nvwgf2umx 0xc0000005)
@@ -618,6 +627,8 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     }
     if (ps && ps->rule) RunRule(c, ps, d);
     if (vs && vs->rule) RunRule(c, vs, d);
+    // (20/10) reglas por pareja PS + VS: p.ej. la piel del cuerpo (aa7d1833) cuando dibuja la cabeza de una cara generica (VS faab87ee)
+    if (ps && vs && !ps->pairRules.empty()) for (const Rule* pr : ps->pairRules) if (pr->vsCond == vs->hash) RunRuleActions(c, pr, true, ps->hash, d);
     // 19/10: la boca (63fab7) hereda el b11 (tipo de pelo + semilla de la cara) de la ultima cara dibujada en este contexto:
     // variacion de dientes/encias por jugador
     if (ps && ps->hash == 0x63fab7735eee149cULL && ps->repl && s.lastHairCB) { Remember(c, d, true, false, 11); c->PSSetConstantBuffers(11, 1, &s.lastHairCB); }
@@ -1082,6 +1093,7 @@ void ReloadShaders() {
         if (e.repl) { std::lock_guard<std::mutex> lk3(s_releaseMutex); s_deferredRelease.push_back(e.repl); s_replToObj.erase(e.repl); }
         e.repl = nr; if (nr) { n++; s_replToObj[nr] = kv.first; }
         e.rule = RuleFor(e.hash);
+        e.pairRules = (e.type == 'p') ? PairRulesFor(e.hash) : std::vector<const Rule*>();
     }
     Log("recarga: %d shaders propios", n);
 }
