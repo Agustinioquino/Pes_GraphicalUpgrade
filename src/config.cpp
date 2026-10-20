@@ -123,6 +123,9 @@ static bool LoadConfigLocked() {
             else if (kl == "favoritos") c.favorites = v;
             else if (kl == "ui_scale") c.uiScale = std::clamp((float)atof(v.c_str()), 0.7f, 2.0f);
             else if (kl == "compacto") c.compact = atoi(v.c_str()) != 0;
+            else if (kl == "auto_captura") c.autoCap = atoi(v.c_str()) != 0;
+            else if (kl == "auto_captura_seg") c.autoCapSec = std::clamp((float)atof(v.c_str()), 3.0f, 600.0f);
+            else if (kl == "auto_captura_max") c.autoCapMax = std::clamp(atoi(v.c_str()), 1, 2000);
             else if (kl == "replace_shaders") c.optReplace = atoi(v.c_str()) != 0;
             else if (kl == "rules") c.optRules = atoi(v.c_str()) != 0;
             else if (kl == "overlay") c.optOverlay = atoi(v.c_str()) != 0;

@@ -483,6 +483,8 @@ static void DrawMenu() {
         if (ImGui::IsItemDeactivatedAfterEdit()) { char b[32]; snprintf(b, sizeof(b), "%.2f", g_cfg.uiScale); SaveOption("ui_scale", b); }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Tamano del menu");
         ImGui::SameLine(); if (ImGui::Checkbox("Compacto", &g_cfg.compact)) { SaveOption("compacto", g_cfg.compact ? "1" : "0"); s_collapseAll = g_cfg.compact ? 1 : 2; }
+        ImGui::SameLine(); if (ImGui::Checkbox("Captura auto", &g_cfg.autoCap)) SaveOption("auto_captura", g_cfg.autoCap ? "1" : "0");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("En partido, cada %.0f s guarda una imagen (jpg) en PES21FX\\capturas\\ y los valores de luz de ese momento en capturas\\luz.txt,\npara que Claude calibre la luz sin que tengas que sacar capturas. Tope: %d imagenes por sesion.", g_cfg.autoCapSec, g_cfg.autoCapMax);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Abrir los grupos contraidos (solo el titulo y el interruptor); + para desplegar uno");
     }
     if (s_collapseAll) { for (auto& g : g_cfg.groups) s_collapsed[g.title] = (s_collapseAll == 1); s_collapseAll = 0; }

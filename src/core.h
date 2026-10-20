@@ -105,6 +105,7 @@ struct Config {
     std::string favorites;                     // 19/10: titulos de grupos favoritos separados por '|' ([PES21FX] favoritos)
     float uiScale = 1.0f;                      // 19/10: tamano del menu ([PES21FX] ui_scale)
     bool compact = false;                      // 19/10: grupos contraidos por defecto ([PES21FX] compacto)
+    bool autoCap = false; float autoCapSec = 20.0f; int autoCapMax = 150;   // 19/10: captura automatica en partido ([PES21FX] auto_captura, auto_captura_seg, auto_captura_max)
     bool optReplace = true, optRules = true, optOverlay = true, optPin = false, optHooks = true, optDxgi = true, optPresent = true, optCtx = true, optExports = true, optOrphan = true, optDump = false;
 };
 extern Config g_cfg;
@@ -220,6 +221,7 @@ int FaceGenExportHair(std::string& status);   // vuelca hair\\auto\\<id>.dds de 
 bool LoadHairConfig();                         // PES21FX_hair.ini
 const HairType* HairTypeFor(const std::string& id, std::string* outName);
 ID3DBlob* CompileNamedShader(const wchar_t* file, const char* profile);   // shaders\<file> con #include
+void AutoCapturePresent(ID3D11Texture2D* frame);   // hooks.cpp
 ID3D11ShaderResourceView* SSSSBeforeComposition(ID3D11DeviceContext* c); void SSSSReloadShaders(); extern std::atomic<int> g_ssssDraws;   // ssss.cpp
 // prueba automatica del menu (menutest.cpp)
 void MenuTestPresent(IDXGISwapChain* sc);

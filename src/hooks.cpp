@@ -2,6 +2,10 @@
 #include "core.h"
 #include <MinHook.h>
 #include <d3dcompiler.h>
+#include <ScreenGrab.h>
+#include <wincodec.h>
+#include <algorithm>
+#include <cmath>
 #include <dxgi1_2.h>
 #include <DDSTextureLoader.h>
 #include <WICTextureLoader.h>
@@ -792,6 +796,50 @@ static void FrameCopyPresent(IDXGISwapChain* sc) {
     if (s_frameTex) g_dev.imm->CopyResource(s_frameTex, bb);
     bb->Release();
 }
+// 19/10: CAPTURA AUTOMATICA en partido: cada N segundos guarda la imagen final (jpg) en PES21FX\capturas\ y una linea en
+// capturas\luz.txt con la luz de la escena (sol, color, exposicion, niebla) y los parametros del mod. Sirve para calibrar
+// la luz sin que el usuario tenga que sacar capturas. [PES21FX] auto_captura = 1, auto_captura_seg, auto_captura_max
+static float ReadElev(const std::vector<float>& L, const std::vector<float>& S, float* azOut) {
+    // m_lightDir0 (b3) esta en espacio de vista; el "arriba" del mundo en vista es la fila 1 de m_view (b2: offset 32 floats)
+    if (L.size() < 4 || S.size() < 48) { if (azOut) *azOut = 0; return 0; }
+    float lx = L[0], ly = L[1], lz = L[2]; float n = sqrtf(lx * lx + ly * ly + lz * lz); if (n < 1e-6f) return 0; lx /= n; ly /= n; lz /= n;
+    float ux = S[32 + 4], uy = S[32 + 5], uz = S[32 + 6];   // m_view fila 1 (_m10,_m11,_m12)
+    float fx = S[32 + 8], fy = S[32 + 9], fz = S[32 + 10];  // fila 2 (adelante)
+    float rx = S[32 + 0], ry = S[32 + 1], rz = S[32 + 2];   // fila 0 (derecha)
+    float up = lx * ux + ly * uy + lz * uz;
+    float e = asinf(std::clamp(up, -1.f, 1.f)) * 57.2958f; if (e < 0) e = -e;
+    if (azOut) { float x = lx * rx + ly * ry + lz * rz, z = lx * fx + ly * fy + lz * fz; *azOut = atan2f(x, z) * 57.2958f; if (*azOut < 0) *azOut += 360.f; }
+    return e;
+}
+void AutoCapturePresent(ID3D11Texture2D* frame) {
+    static double last = 0; static int count = 0; static bool dirOk = false;
+    if (!g_cfg.autoCap || !frame || !g_dev.imm) return;
+    if (g_cfg.live[93][3] < 0.5f) return;                 // solo en partido
+    double t = Now(); if (t - last < g_cfg.autoCapSec) return; last = t;
+    if (count >= g_cfg.autoCapMax) return;
+    std::wstring dir = g_cfg.baseDir + L"capturas"; if (!dirOk) { CreateDirectoryW(dir.c_str(), nullptr); dirOk = true; }
+    std::vector<float> L, S; bool lok = NamedCBRead("LightCB", L), sok = NamedCBRead("SceneCB", S);
+    float az = 0, el = lok && sok ? ReadElev(L, S, &az) : 0;
+    SYSTEMTIME st; GetLocalTime(&st);
+    wchar_t name[96]; swprintf(name, 96, L"%02d%02d%02d_sol%02.0f.jpg", st.wHour, st.wMinute, st.wSecond, el);
+    EnsureComInit();
+    HRESULT hr = DirectX::SaveWICTextureToFile(g_dev.imm, frame, GUID_ContainerFormatJpeg, (dir + L"\\" + name).c_str(), nullptr, nullptr, false);
+    if (FAILED(hr)) { Log("captura automatica: no se pudo guardar (0x%08x)", (unsigned)hr); return; }
+    count++;
+    FILE* f = _wfopen((dir + L"\\luz.txt").c_str(), L"ab");
+    if (f) {
+        fprintf(f, "%02d:%02d:%02d | %ls | ", st.wHour, st.wMinute, st.wSecond, name);
+        if (lok && L.size() >= 12) fprintf(f, "sol elev=%.1f az=%.0f dir=(%.3f %.3f %.3f) color0=(%.0f %.0f %.0f %.2f) color1=(%.0f %.0f %.0f) | ", el, az, L[0], L[1], L[2], L[4], L[5], L[6], L[7], L[8], L[9], L[10]);
+        else fprintf(f, "sin LightCB | ");
+        if (sok && S.size() >= 120) fprintf(f, "exposure=(%.4g %.4g %.4g %.4g) fog=(%.3f %.3f %.3f) fogP=(%.3g %.3g %.3g %.3g) | ", S[92], S[93], S[94], S[95], S[108], S[109], S[110], S[96], S[97], S[98], S[99]);
+        else fprintf(f, "sin SceneCB | ");
+        const auto& p = g_cfg.live;
+        fprintf(f, "mod: sol z4=%.2f w4=%.2f curva x65=%.0f (%.2f %.2f %.2f) amb(%.2f %.2f) niebla(%.2f %.2f) calidez %.2f azul %.2f | cielo w47=%.0f x47=%.2f | rebote w42=%.0f x42=%.2f | sssss w95=%.0f | brillo piel w103=%.0f | pupila %.2f\n",
+            p[4][2], p[4][3], p[65][0], p[65][1], p[65][2], p[65][3], p[66][0], p[66][1], p[66][2], p[66][3], p[67][0], p[67][1], p[47][3], p[47][0], p[42][3], p[42][0], p[95][3], p[103][3], p[93][0]);
+        fclose(f);
+    }
+    if (count == 1) Log("captura automatica: primera imagen en capturas\\ (cada %.0f s, maximo %d)", g_cfg.autoCapSec, g_cfg.autoCapMax);
+}
 static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT flags) {
     ID3D11Device* d = nullptr;
     if (SUCCEEDED(sc->GetDevice(__uuidof(ID3D11Device), (void**)&d)) && d) {
@@ -837,6 +885,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     FaceGenPresent();
     InspectPresent();
     FrameCopyPresent(sc);   // antes del menu, para que el menu no se refleje en los ojos
+    AutoCapturePresent(s_frameTex);
     MenuTestPresent(sc);
     OverlayPresent(sc);
     return o_Present(sc, sync, flags);
