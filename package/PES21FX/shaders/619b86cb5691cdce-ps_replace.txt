@@ -102,6 +102,7 @@ void main(
   float4 gmC = inGBufferMaterial.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0);
   float gnZ = inGBufferNormal.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).z;
   int tyC = (int)((uint)(gnZ * 1023 + 0.5) & 15);
+  float trC = (float)(((uint)(gnZ * 1023 + 0.5) >> 4) & 63) / 63.0;   // PES21 pasto v3: translucidez por pixel del G-buffer (hojas: grosor)
   bool skinC = cmpOn && (tyC == 0) && (abs(gmC.z - 0.98039) < 0.003);
 
   r0.xy = g_psSystem.m_renderBuffer.zw * v0.xy;
@@ -391,7 +392,9 @@ void main(
       float low = 1.0 - saturate(dot(Ld, upV));                          // mas fuerte con el sol bajo
       float shG = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
       float3 sunC = max(pLc_color.xyz, 0.0) * g_psScene.m_exposure.zzz;
-      r2.xyz += sunC * tr * (0.35 + 0.65 * low) * shG * STg.y * 0.35 * float3(1.0, 1.05, 0.55);
+      // pasto v3: las hojas finas (puntas) dejan pasar mas luz que la base; la translucidez viene del G-buffer
+      float trK = IniParams.Load(int2(104,0)).x > 0.5 ? lerp(0.85, 1.6, saturate(trC)) : 1.0;
+      r2.xyz += sunC * tr * (0.35 + 0.65 * low) * shG * STg.y * 0.35 * trK * float3(1.0, 1.05, 0.55);
     }
   }
   // === PES21 luz de borde (17/10): con el sol detras del jugador, el contorno (hombros, pelo, brazos) se enciende.

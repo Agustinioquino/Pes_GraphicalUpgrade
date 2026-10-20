@@ -123,8 +123,10 @@ void main(
   r1.x = rsqrt(r1.x);
   r0.xyz = r1.xxx * r0.xyz;
   float3 pesGrain = r0.xyz;   // PES21: grano (direccion en que esta peinado el pasto, cambia por franja)
+  float2 pesWearB = float2(0.0, 0.0);   // PES21 pasto v3: (seco, pelado) de este pixel, se calcula una vez
   { // PES21 pasto v3: patron de corte sintetizado (franjas, damero, diagonal, rombos, circulos) en vez del grano del juego
     float4 Q4g = IniParams.Load(int2(104,0)), Q5g = IniParams.Load(int2(105,0));
+    if (Q4g.x > 0.5) { float4 Q7g = IniParams.Load(int2(107,0)); pesWearB = PESWear(PESPitchMeters(v1.xy), v9.xz, Q4g.w, Q7g.x, Q7g.z); }
     if (Q4g.x > 0.5 && Q5g.x > 0.5) { r0.xyz = PESMowGrain(PESPitchMeters(v1.xy), r0.xyz, Q5g.x, Q5g.y, 0.55 * clamp(Q5g.z, 0.2, 3.0)); pesGrain = r0.xyz; }
   }
   r1.xyz = float3(0,0,1) * r0.xyz;
@@ -216,6 +218,7 @@ void main(
   r7.xyz = float3(-1,-1,1) * r4.xyz;
   r8.xyw = g_tex_turfNormal.Sample(g_samplerAnisotropic_Wrap_s, v1.xy).xyz;
   r8.xyw = r8.xyw * float3(2,2,2) + float3(-1,-1,-1);
+  r8.xy *= (1.0 - pesWearB.y * 0.85);   // PES21 pasto v3: la tierra es mas lisa que el relieve del cesped
   r9.xyz = float3(0,0,1) + -r8.xyw;
   r8.xyw = g_psMaterial.m_materials[3].xxx * r9.xyz + r8.xyw;
   r8.xyw = float3(0,0,1) + r8.xyw;
@@ -377,9 +380,8 @@ void main(
     float4 Q4 = IniParams.Load(int2(104,0));
     if (Q4.x > 0.5) {
       float4 Q6 = IniParams.Load(int2(106,0)), Q7 = IniParams.Load(int2(107,0));
-      float2 pm = PESPitchMeters(v1.xy);
       float2 wxz = v9.xz;
-      float2 wr = PESWear(pm, wxz, Q4.w, Q7.x, Q7.z);
+      float2 wr = pesWearB;
       float3 c = o0.xyz * PESGrassZones(wxz, Q6.x);
       c = PESDryTint(c, wr.x * saturate(Q7.y) * 0.85);
       float3 dirt = PESDirt(wxz);
