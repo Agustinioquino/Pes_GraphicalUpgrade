@@ -57,6 +57,16 @@ Pasto v3 (Cancha y cielo)
   base y las hojas, desgaste profesional -> potrero, inclinacion real por el corte y viento.
 - tools\make_grass_atlas.py regenera el atlas; tools\merge_ini.py fusiona el ini del PC con la plantilla.
 
+LOD de caras (Cara -> "LOD de caras")
+-------------------------------------
+- El motor elige en la CPU que malla dibuja de cada jugador (LOD) y a cuales les calcula la animacion facial; los
+  "mods de LOD" que parchean bytes del exe no cambian eso.
+- Diagnostico (x118): anota en el log cada 20 s, por cara, con cuantos indices se dibuja, con que VS/PS, los
+  cbuffers del VS (paleta de huesos) y a que distancia pasa de una malla a otra. Leerlo primero.
+- LOD0 forzado (y118): la DLL se aprende, por cara, los buffers de la malla de mas detalle que vio y cuando esa cara
+  vuelve con la reducida dibuja la de mas detalle (solo con el mismo VS y cbuffers; "permisiva" acepta el mismo
+  layout). Las expresiones de los jugadores lejanos no existen en la GPU: no se pueden forzar.
+
 Notas
 -----
 - La fisica de ropa (cloth-mod, dsound.dll) sigue igual, es independiente.

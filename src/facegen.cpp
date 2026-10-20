@@ -143,17 +143,19 @@ void FaceGenReloadShaders() {
 
 // llamado antes de un dibujo con regla facegen (cualquier contexto): devuelve las dos texturas si ya existen
 bool FaceGenLookup(ID3D11DeviceContext* c, ID3D11ShaderResourceView** outA, ID3D11ShaderResourceView** outB, FaceGenExtra* ex) {
-    *outA = *outB = nullptr; if (ex) { ex->seedMap = nullptr; ex->seedsUAV = nullptr; ex->seedsSRV = nullptr; ex->hairCB = nullptr; }
+    *outA = *outB = nullptr; if (ex) { ex->seedMap = nullptr; ex->seedsUAV = nullptr; ex->seedsSRV = nullptr; ex->hairCB = nullptr; ex->key = nullptr; ex->t0 = nullptr; ex->id.clear(); }
     ID3D11ShaderResourceView* in[4] = {};
     c->PSGetShaderResources(0, 4, in);
     s_stLook++;
     if (!in[1]) { s_stNoIn++; for (int i = 0; i < 4; i++) if (in[i]) in[i]->Release(); return false; }
     ID3D11Resource* key = nullptr; in[1]->GetResource(&key);
+    if (ex) { ex->key = key; if (in[0]) { ID3D11Resource* r0 = nullptr; in[0]->GetResource(&r0); if (r0) { ex->t0 = r0; r0->Release(); } } }   // (20/10) identidad para el LOD (punteros, sin retener)
     bool found = false;
     {
         std::lock_guard<std::mutex> lk(s_mx);
         auto it = s_cache.find(key);
         if (it != s_cache.end()) {
+            if (ex && g_lodAny) ex->id = it->second.id;
             if (it->second.a) { s_stHit++; *outA = it->second.a; *outB = it->second.b; found = true;
                 FaceEntry& fe = it->second;
                 if (ex) { ex->seedMap = fe.c; ex->seedsUAV = fe.seedsUAV; ex->seedsSRV = fe.seedsSRV; ex->args = fe.args; ex->argsUAV = fe.argsUAV; ex->hairCB = fe.hairCB; } }

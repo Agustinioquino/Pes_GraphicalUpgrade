@@ -448,6 +448,7 @@ void PollKeys(bool focused) {
 }
 
 std::atomic<int> g_matchGen{0};
+float g_eyePos[4] = {}; bool g_eyeValid = false;
 void OnTurfDrawn() {
     double t = Now();
     if (t - s_lastTurf > 20.0) { s_matchStart = t; FaceGenClear(); g_matchGen++; }   // cancha sin dibujarse 20 s y vuelve = partido nuevo
@@ -496,6 +497,7 @@ void UpdateTimeParams() {
           p[112][3] = 0.2126f * cr + 0.7152f * cg + 0.0722f * cb;
           p[113][0] = S[108]; p[113][1] = S[109]; p[113][2] = S[110]; p[113][3] = S[94];   // niebla rgb, exposicion z
           p[114][1] = S[81];                                                             // altura de la camara (m_eyepos.y)
+          g_eyePos[0] = S[80]; g_eyePos[1] = S[81]; g_eyePos[2] = S[82]; g_eyePos[3] = 1; g_eyeValid = true;   // (20/10) para el LOD de caras
           bool sunny = (cr / std::max(cb, 1e-4f)) > 1.06f && p[112][3] > 600.0f;         // luz calida y fuerte = sol (de noche: torres frias)
           p[114][3] = sunny ? 1.0f : 0.0f;
       }
