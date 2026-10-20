@@ -99,6 +99,7 @@ void main(
   // raiz en el mundo para que coincida con la base de la cancha (misma funcion, pes_grass.hlsli).
   float4 Q4 = IniParams.Load(int2(104, 0));
   float pesH = 1.0; float2 pesWear = float2(0.0, 0.0); float3 pesZone = float3(1.0, 1.0, 1.0); float2 pesPm = float2(0.0, 0.0); float pesBand = 1.0;
+  float2 pesLean = float2(0.0, 0.0);   // corrimiento horizontal de la punta (inclinacion por el corte + viento), por metro de alto
   bool pesV3 = Q4.x > 0.5;
   float2 pesRoot = pesIsExt ? pesExtRoot : float2(dot(v0_in, cb5[4]), dot(v0_in, cb5[6]));
   if (pesV3) {
@@ -118,6 +119,22 @@ void main(
     pesH = hT * clamp(Q4.z, 0.3, 3.0) * (1.0 + (n - 0.5) * 2.0 * hv) * (1.0 - pesWear.x * 0.35) * (1.0 - pesWear.y);
     v0.y *= pesH;
     pesExtW.y = v0.y;   // las parcelas extra toman la misma altura
+    // (20/10) inclinacion real de la hoja segun el grano del corte (las franjas se ven en 3D de cerca) y viento:
+    // onda que recorre la cancha con rafagas, en la direccion del viento de las nubes (z84). z108 corte, y108 viento
+    float4 Q8 = IniParams.Load(int2(108, 0));
+    if (Q8.z > 0.001 || Q8.y > 0.001) {
+      float4 Q5e = IniParams.Load(int2(105, 0));
+      float4 gt = g_tex_grain.SampleLevel(g_samplerLinear_Clamp_s, puv, 0);
+      float3 gr = normalize(gt.xzy * 2.0 - 1.0);
+      if (Q5e.x > 0.5) gr = PESMowGrain(pesPm, gr, Q5e.x, Q5e.y, 0.55 * clamp(Q5e.z, 0.2, 3.0));
+      pesLean += gr.xz * 0.7 * saturate(Q8.z);
+      float tw = IniParams.Load(int2(23, 0)).z;
+      float ang = radians(IniParams.Load(int2(84, 0)).z);
+      float2 wd = float2(cos(ang), sin(ang));
+      float phw = dot(pesRoot, wd) * 0.6 - tw * 2.2;
+      float gust = sin(phw) * 0.6 + sin(phw * 2.7 + tw * 0.9) * 0.25 + sin(tw * 0.7 + pesRoot.x * 0.13) * 0.15;
+      pesLean += wd * (0.25 + 0.75 * saturate(gust * 0.5 + 0.5)) * 0.45 * saturate(Q8.y);
+    }
   }
   // --- posicion en el mundo y doblado por jugador / pelota ---
   r0.x = v0.y + 10.0;
@@ -128,6 +145,7 @@ void main(
   r1.x = dot(v0, cb5[4]);
   r1.z = dot(v0, cb5[6]);
   if (pesIsExt) r1.xyz = pesExtW;
+  r1.xz += pesLean * v0.y * saturate(v0.y * 25.0);   // PES21 pasto v3: la hoja se curva (mas en la punta) por el corte y el viento
   r2.xyz = r1.xyz - cb4[3].xyz;
   r0.z = dot(r2.xyz, r2.xyz);
   r2.xyz = r1.xyz - cb4[4].xyz;
