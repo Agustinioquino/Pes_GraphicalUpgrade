@@ -34,6 +34,11 @@ PESDay PESDayCurve(float sinElev, float dayK)
   return d;
 }
 
+// contraste de dia (20/10): x109 (0..1) sube el sol y baja la luz ambiente a la vez, solo con sol real (kSun):
+// en las capturas automaticas el lado en sombra de los jugadores quedaba casi tan claro como el lado al sol
+float PESDaySunMul(float kSun) { float k = saturate(IniParams.Load(int2(109,0)).x) * saturate(kSun); return 1.0 + 0.5 * k; }
+float PESDayAmbMul(float kSun) { float k = saturate(IniParams.Load(int2(109,0)).x) * saturate(kSun); return 1.0 - 0.4 * k; }
+
 // tinte calido del sol: 0 = blanco calido, 1 = naranja de atardecer (conserva la luminancia)
 float3 PESWarmTint(float3 c, float warm)
 {

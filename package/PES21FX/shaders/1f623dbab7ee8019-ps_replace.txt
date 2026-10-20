@@ -100,6 +100,7 @@ float3 PESSunColor() {
   res *= (S.w > 0 ? lerp(1.0, S.w, k) : 1.0);
   // PES21 curva del dia (18/10): intensidad y calidez del sol segun su altura (solo sol real, no torres)
   { PESDay dy = PESDayCurve(elev, saturate((warmO - 0.85) * 4.0)); res *= dy.sun; res = PESWarmTint(res, dy.warm); }
+  res *= PESDaySunMul(saturate((warmO - 0.85) * 4.0));   // PES21 contraste de dia (x109)
   // PES21 atmosfera (17/10): con el sol bajo el archivo de luz deja el sol muy apagado; y54 lo compensa (solo sol real,
   // no luz de torres), proporcional a lo bajo que esta.
   float4 ATM = IniParams.Load(int2(54,0));
