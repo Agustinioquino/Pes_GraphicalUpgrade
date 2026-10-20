@@ -42,6 +42,21 @@ Presets por estadio
   (escribe PES21FX_match.ini en la carpeta de Sider; el mod la encuentra solo)
 - Compartir un preset = pasar ese archivo .ini; el otro lo copia en su PES21FX\presets y listo.
 
+Capturas automaticas (para calibrar sin sacar capturas a mano)
+--------------------------------------------------------------
+- [PES21FX] auto_captura = 1: en partido guarda un jpg cada auto_captura_seg segundos (tope auto_captura_max)
+  en PES21FX\capturas\HHMMSS_solEE.jpg (EE = altura del sol) y anota en capturas\luz.txt el sol (altura,
+  azimut, color), la exposicion, la niebla y los parametros del mod. tools\read_luz.py lo resume.
+- [inspector] por clase, "volcar = 1": sus texturas se guardan solas en inspector\texturas\<clase> la primera
+  vez que se ven (sin abrir el inspector).
+
+Pasto v3 (Cancha y cielo)
+-------------------------
+- Atlas propio de hojas (textures\pes_grass_blades*.dds, 4 manojos: corto / medio / largo / variante), normal
+  por hoja, tipo de pasto, patron de corte (franjas, damero, diagonal, rombos, circulos) coherente entre la
+  base y las hojas, desgaste profesional -> potrero, inclinacion real por el corte y viento.
+- tools\make_grass_atlas.py regenera el atlas; tools\merge_ini.py fusiona el ini del PC con la plantilla.
+
 Notas
 -----
 - La fisica de ropa (cloth-mod, dsound.dll) sigue igual, es independiente.
