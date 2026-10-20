@@ -592,7 +592,8 @@ void InspectDrawOverlay() {
             } else ImGui::TextDisabled("SceneCB todavia no copiado.");
             ImGui::Separator();
             ImGui::TextUnformatted("MOD (parametros de luz en vivo)");
-            ImGui::Text("sol: realismo color x60=%.2f intensidad y60=%.2f | calidad: diametro x64=%.2f transmision y64=%.2f", g_cfg.live[60][0], g_cfg.live[60][1], g_cfg.live[64][0], g_cfg.live[64][1]);
+            ImGui::Text("sol realista: color z4=%.2f intensidad w4=%.2f | sol de calidad: on x64=%.0f diametro y64=%.2f transmision z64=%.2f", g_cfg.live[4][2], g_cfg.live[4][3], g_cfg.live[64][0], g_cfg.live[64][1], g_cfg.live[64][2]);
+            ImGui::Text("pupila (brillo adaptado x93): %.2f   en partido (w93): %.0f", g_cfg.live[93][0], g_cfg.live[93][3]);
             ImGui::Text("curva del dia 65/66/67: %.2f %.2f %.2f %.2f | %.2f %.2f %.2f %.2f | %.2f %.2f %.2f %.2f", g_cfg.live[65][0], g_cfg.live[65][1], g_cfg.live[65][2], g_cfg.live[65][3], g_cfg.live[66][0], g_cfg.live[66][1], g_cfg.live[66][2], g_cfg.live[66][3], g_cfg.live[67][0], g_cfg.live[67][1], g_cfg.live[67][2], g_cfg.live[67][3]);
             ImGui::Text("sombras fisicas 87: %.2f %.2f %.2f %.2f   micro-sombras 88: %.2f %.2f", g_cfg.live[87][0], g_cfg.live[87][1], g_cfg.live[87][2], g_cfg.live[87][3], g_cfg.live[88][0], g_cfg.live[88][1]);
             ImGui::TextDisabled("(estos valores se editan en las pestanas Iluminacion / Sombras del menu)");
