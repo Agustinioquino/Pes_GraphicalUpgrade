@@ -255,6 +255,7 @@ bool NamedCBRead(const std::string& name, std::vector<float>& out) {
 }
 const Rule* RuleForHash(uint64_t h) { auto it = g_cfg.rules.find(h); return it == g_cfg.rules.end() ? nullptr : &it->second; }
 std::atomic<int> g_drawOrder{0};
+std::atomic<int> g_lightAltFrames{0};   // (20/10) cuadros en que el sol llego por una variante no reemplazada de la luz
 std::atomic<int> g_aliasDraws{0};   // dibujos redirigidos por alias en el cuadro (diagnostico)   // numero de orden del dibujo dentro del cuadro (se reinicia en Present)
 std::string NamedOrigin(ID3D11ShaderResourceView* v) {
     std::lock_guard<std::mutex> lk(s_namedMutex);
@@ -964,6 +965,15 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     {
         int now = s_presentNo.fetch_add(1); g_drawOrder = 0;
         std::lock_guard<std::mutex> lk(s_namedMutex);
+        // (20/10) el juego tiene 21 variantes de la pasada de luz del sol (sombras / tipo de camara); las 7 reemplazadas copian
+        // LightCB y las otras 14 copian LightCBAlt. Si en el cuadro no corrio ninguna de las 7 (primeros planos, algunas
+        // camaras de repeticion), LightCB se rellena con la copia alternativa en vez de apagarse: el sol sigue llegando a
+        // la composicion, el tonemap y la DLL en todas las camaras.
+        { auto a = s_named.find("LightCBAlt"), m = s_named.find("LightCB");
+          if (a != s_named.end() && m != s_named.end() && a->second.buf && m->second.buf && a->second.copied >= now - 1 && m->second.copied < now - 1 && g_dev.imm) {
+              D3D11_BUFFER_DESC da, dm; a->second.buf->GetDesc(&da); m->second.buf->GetDesc(&dm);
+              if (da.ByteWidth == dm.ByteWidth) { g_dev.imm->CopyResource(m->second.buf, a->second.buf); m->second.copied = now; m->second.cleared = false; g_lightAltFrames++; }
+          } }
         for (auto& kv : s_named) {
             NamedRes& r = kv.second;
             if (!r.buf || r.cleared || kv.first.find("Light") == std::string::npos) continue;
