@@ -225,17 +225,22 @@ ID3D11ShaderResourceView* FileTextureAny(const std::string& rel) { return FileTe
 // 19/10 inspector: lee un cbuffer copiado por regla (copy_cb) -> floats. Se llama en Present (contexto inmediato):
 // copia a staging y lee la copia del cuadro anterior (sin esperar a la GPU).
 bool NamedCBRead(const std::string& name, std::vector<float>& out) {
-    static std::map<std::string, ID3D11Buffer*> stg;
+    // 19/10 c: anillo de 3 staging por nombre: se copia al de hoy y se lee el de hace 2 cuadros (DO_NOT_WAIT ya no falla
+    // cuando la GPU va 1-2 cuadros atras); si aun asi no esta listo se devuelve la ultima lectura buena
+    struct Ring { ID3D11Buffer* st[3] = {}; int i = 0; UINT bytes = 0; std::vector<float> last; };
+    static std::map<std::string, Ring> rings;
     ID3D11Buffer* src = nullptr; UINT bytes = 0;
     { std::lock_guard<std::mutex> lk(s_namedMutex); auto it = s_named.find(name); if (it == s_named.end() || !it->second.buf) return false; src = it->second.buf; D3D11_BUFFER_DESC d; src->GetDesc(&d); bytes = d.ByteWidth; src->AddRef(); }
-    ID3D11Buffer*& st = stg[name];
-    if (st) { D3D11_BUFFER_DESC d; st->GetDesc(&d); if (d.ByteWidth != bytes) { st->Release(); st = nullptr; } }
-    if (!st) { D3D11_BUFFER_DESC d{}; d.ByteWidth = bytes; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; g_dev.dev->CreateBuffer(&d, nullptr, &st); }
+    Ring& r = rings[name];
+    if (r.bytes != bytes) { for (auto*& b : r.st) { if (b) b->Release(); b = nullptr; } r.bytes = bytes; r.last.clear(); }
+    for (auto*& b : r.st) if (!b) { D3D11_BUFFER_DESC d{}; d.ByteWidth = bytes; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; g_dev.dev->CreateBuffer(&d, nullptr, &b); }
     bool ok = false;
-    if (st && g_dev.imm) {
+    if (g_dev.imm && r.st[0] && r.st[1] && r.st[2]) {
+        ID3D11Buffer* rd = r.st[(r.i + 1) % 3];   // el mas viejo (copiado hace 2 llamadas)
         D3D11_MAPPED_SUBRESOURCE m{};
-        if (SUCCEEDED(g_dev.imm->Map(st, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) { out.assign((const float*)m.pData, (const float*)m.pData + bytes / 4); g_dev.imm->Unmap(st, 0); ok = true; }
-        g_dev.imm->CopyResource(st, src);
+        if (SUCCEEDED(g_dev.imm->Map(rd, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) { out.assign((const float*)m.pData, (const float*)m.pData + bytes / 4); g_dev.imm->Unmap(rd, 0); r.last = out; ok = true; }
+        else if (!r.last.empty()) { out = r.last; ok = true; }
+        g_dev.imm->CopyResource(r.st[r.i], src); r.i = (r.i + 1) % 3;
     }
     src->Release();
     return ok;
