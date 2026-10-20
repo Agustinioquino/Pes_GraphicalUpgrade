@@ -400,6 +400,25 @@ static HRESULT STDMETHODCALLTYPE hk_CreatePS(ID3D11Device* d, const void* c, SIZ
 static HRESULT STDMETHODCALLTYPE hk_CreateCS(ID3D11Device* d, const void* c, SIZE_T n, ID3D11ClassLinkage* l, ID3D11ComputeShader** o) {
     HRESULT hr = o_CreateCS(d, c, n, l, o); if (SUCCEEDED(hr) && o) Register(d, *o, c, n, 'c'); return hr; }
 
+// (20/10) formatos de entrada: se anota cada input layout que crea el juego (elementos con semantica, formato, slot y
+// offset) para poder describir la malla de un dibujo (el pasto, para armar una malla propia)
+struct ILElem { std::string sem; UINT idx, fmt, slot, off, cls, step; };
+static std::map<void*, std::vector<ILElem>> s_layouts; static std::mutex s_layoutMutex;
+typedef HRESULT(STDMETHODCALLTYPE* PFN_CreateIL)(ID3D11Device*, const D3D11_INPUT_ELEMENT_DESC*, UINT, const void*, SIZE_T, ID3D11InputLayout**);
+static PFN_CreateIL o_CreateIL = nullptr;
+static HRESULT STDMETHODCALLTYPE hk_CreateIL(ID3D11Device* d, const D3D11_INPUT_ELEMENT_DESC* e, UINT n, const void* bc, SIZE_T bn, ID3D11InputLayout** o) {
+    HRESULT hr = o_CreateIL(d, e, n, bc, bn, o);
+    if (SUCCEEDED(hr) && o && *o && e && n > 0 && n < 32) {
+        std::vector<ILElem> v; for (UINT i = 0; i < n; i++) v.push_back({ e[i].SemanticName ? e[i].SemanticName : "?", e[i].SemanticIndex, (UINT)e[i].Format, e[i].InputSlot, e[i].AlignedByteOffset, (UINT)e[i].InputSlotClass, e[i].InstanceDataStepRate });
+        std::lock_guard<std::mutex> lk(s_layoutMutex); if (s_layouts.size() < 4096) s_layouts[*o] = v;
+    }
+    return hr;
+}
+std::string DescribeInputLayout(ID3D11InputLayout* il) {
+    std::lock_guard<std::mutex> lk(s_layoutMutex); auto it = s_layouts.find(il); if (it == s_layouts.end()) return "(layout no anotado)";
+    std::string r; for (auto& e : it->second) { char b[128]; snprintf(b, sizeof(b), "%s%u fmt %u slot %u off %u%s; ", e.sem.c_str(), e.idx, e.fmt, e.slot, e.off, e.cls ? " (instancia)" : ""); r += b; }
+    return r;
+}
 static void HookContext(ID3D11DeviceContext* c, int v);
 static HRESULT STDMETHODCALLTYPE hk_CreateDC(ID3D11Device* d, UINT f, ID3D11DeviceContext** o) {
     HRESULT hr = o_CreateDC(d, f, o); if (SUCCEEDED(hr) && o && *o) HookContext(*o, 1); return hr; }
@@ -707,6 +726,7 @@ static void HookDevice(ID3D11Device* d) {
     if (!s_deviceHooked) {
         s_deviceHooked = true;
         void** vt = VT(d);
+        Hook(vt[11], (void*)&hk_CreateIL, (void**)&o_CreateIL, "CreateInputLayout");
         Hook(vt[12], (void*)&hk_CreateVS, (void**)&o_CreateVS, "CreateVertexShader");
         Hook(vt[15], (void*)&hk_CreatePS, (void**)&o_CreatePS, "CreatePixelShader");
         Hook(vt[18], (void*)&hk_CreateCS, (void**)&o_CreateCS, "CreateComputeShader");

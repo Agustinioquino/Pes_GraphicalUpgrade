@@ -222,7 +222,8 @@ int FaceGenExportHair(std::string& status);   // vuelca hair\\auto\\<id>.dds de 
 bool LoadHairConfig();                         // PES21FX_hair.ini
 const HairType* HairTypeFor(const std::string& id, std::string* outName);
 ID3DBlob* CompileNamedShader(const wchar_t* file, const char* profile);   // shaders\<file> con #include
-void NamedSetSRV(const std::string& name, ID3D11ShaderResourceView* v);   // publica un SRV como recurso con nombre (srv = N nombre en las reglas)
+void NamedSetSRV(const std::string& name, ID3D11ShaderResourceView* v);
+std::string DescribeInputLayout(ID3D11InputLayout* il);   // elementos de un input layout anotado al crearse   // publica un SRV como recurso con nombre (srv = N nombre en las reglas)
 extern std::atomic<int> g_matchGen;                                        // sube en cada partido nuevo (reloj del cesped)
 void PitchWearNotePlayer(ID3D11DeviceContext* c); void PitchWearPresent(); void PitchWearReloadShaders();   // desgaste de la cancha en vivo
 void PitchClipsDraw(ID3D11DeviceContext* c, int frame);   // recortes de pasto volando (desde el dibujo del pasto)

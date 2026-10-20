@@ -103,6 +103,9 @@ void GrassPresent() {
             for (int i = 0; i < 48; i++) { char t[8]; snprintf(t, 8, " %02x", b[i]); line += t; if (i % 12 == 11) line += " |"; }
             line += "\n  como half:"; for (int i = 0; i < 24; i++) { char t[24]; snprintf(t, 24, " %.3f", half(h[i])); line += t; if (i % 6 == 5) line += " |"; }
             line += "\n  como float:"; for (int i = 0; i < 12; i++) { char t[24]; snprintf(t, 24, " %.3f", f[i]); line += t; if (i % 3 == 2) line += " |"; }
+            line += "\n  slot 1 hex:"; for (int i = 256; i < 256 + 32; i++) { char t[8]; snprintf(t, 8, " %02x", b[i]); line += t; if ((i - 256) % 8 == 7) line += " |"; }
+            line += "\n  slot 1 como half:"; for (int i = 128; i < 128 + 16; i++) { char t[24]; snprintf(t, 24, " %.3f", half(h[i])); line += t; if ((i - 128) % 4 == 3) line += " |"; }
+            line += "\n  slot 1 como float:"; for (int i = 64; i < 64 + 8; i++) { char t[24]; snprintf(t, 24, " %.3f", f[i]); line += t; if ((i - 64) % 2 == 1) line += " |"; }
             Log("%s", line.c_str());
             g_dev.imm->Unmap(s_vbStage, 0); s_vbState = 2;
         }
@@ -164,14 +167,21 @@ void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT
     if (!vs->repl) { Why("el VS del pasto no tiene reemplazo (ver Errores)"); return; }
     if (s_vbState.load() == 0 && count > 1000) {   // volcado unico del formato de vertices (parcela densa)
         int z = 0; if (s_vbState.compare_exchange_strong(z, 1)) {
-            ID3D11Buffer* vb = nullptr; UINT stride = 0, off = 0; c->IAGetVertexBuffers(0, 1, &vb, &stride, &off);
+            ID3D11Buffer* vbs[4] = {}; UINT strides[4] = {}, offs[4] = {}; c->IAGetVertexBuffers(0, 4, vbs, strides, offs);
             ID3D11Buffer* ib = nullptr; DXGI_FORMAT ifmt = DXGI_FORMAT_UNKNOWN; UINT ioff = 0; c->IAGetIndexBuffer(&ib, &ifmt, &ioff); if (ib) ib->Release();
-            s_vbStride = stride; s_vbOffset = off; s_ibFmt = (UINT)ifmt;
+            ID3D11InputLayout* il = nullptr; c->IAGetInputLayout(&il);
+            Log("pasto: layout: %s | VB strides %u %u %u %u (offsets %u %u %u %u)", il ? DescribeInputLayout(il).c_str() : "(sin layout)", strides[0], strides[1], strides[2], strides[3], offs[0], offs[1], offs[2], offs[3]);
+            if (il) il->Release();
+            s_vbStride = strides[0]; s_vbOffset = offs[0]; s_ibFmt = (UINT)ifmt;
+            ID3D11Buffer* vb = vbs[0]; UINT stride = strides[0], off = offs[0];
             if (vb) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 512; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
                 if (!s_vbStage) g_dev.dev->CreateBuffer(&d, nullptr, &s_vbStage);
-                if (s_vbStage) { D3D11_BOX bx = { off + (UINT)base * stride, 0, 0, off + (UINT)base * stride + 512, 1, 1 }; c->CopySubresourceRegion(s_vbStage, 0, 0, 0, 0, vb, 0, &bx); }
+                if (s_vbStage) { D3D11_BOX bx = { off + (UINT)base * stride, 0, 0, off + (UINT)base * stride + 256, 1, 1 }; c->CopySubresourceRegion(s_vbStage, 0, 0, 0, 0, vb, 0, &bx);
+                    // segundo slot (uv) a continuacion, 256 bytes
+                    if (vbs[1] && strides[1]) { D3D11_BOX b2 = { offs[1] + (UINT)base * strides[1], 0, 0, offs[1] + (UINT)base * strides[1] + 256, 1, 1 }; c->CopySubresourceRegion(s_vbStage, 0, 256, 0, 0, vbs[1], 0, &b2); } }
                 else s_vbState = 2;
-                vb->Release(); } else s_vbState = 2;
+            } else s_vbState = 2;
+            for (auto* b : vbs) if (b) b->Release();
         } }
     UINT prev = s_lodCount.load();
     while (count < prev && !s_lodCount.compare_exchange_weak(prev, count)) {}
