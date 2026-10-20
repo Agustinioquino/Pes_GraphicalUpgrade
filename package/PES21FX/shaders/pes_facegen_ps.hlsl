@@ -133,7 +133,13 @@ void main(float4 pos : SV_Position, float2 uv : TEXCOORD0, out float4 o0 : SV_Ta
     // color marca pelo (alpha de las capas de pelo o alta frecuencia oscura). Direccion: hacia atras/abajo desde la coronilla
     // (en el plano UV de la cara el pelo sale por arriba y los lados), con ruido. Largo relativo por celda. A = 0.9 (no ceja).
     if (o2.a < 0.95 && browZoneDbg < 0.05) {
-      float scalpZone = 1.0 - Ell(cuv, float2(0.5, 0.52), float2(0.30, 0.30), 0.6);   // fuera del ovalo de la cara
+      // (20/10) el ovalo era blando (0.6) y dejaba un 35 % de densidad sobre los OJOS (pestanas y pupilas oscuras = "pelo"):
+      // en la presentacion del jugador salian dos manchones grises de hebras cayendo sobre los ojos. Ahora el ovalo es
+      // duro y mas grande, y los ojos y la boca quedan excluidos aparte.
+      float scalpZone = 1.0 - Ell(cuv, float2(0.5, 0.50), float2(0.34, 0.36), 0.25);  // fuera del ovalo de la cara
+      scalpZone *= 1.0 - Ell(cuv, float2(0.395, 0.365), float2(0.14, 0.09), 0.3);     // ojo izquierdo
+      scalpZone *= 1.0 - Ell(cuv, float2(0.605, 0.365), float2(0.14, 0.09), 0.3);     // ojo derecho
+      scalpZone *= 1.0 - Ell(cuv, float2(0.5, 0.60), float2(0.16, 0.10), 0.3);        // boca
       scalpZone *= smoothstep(0.80, 0.70, cuv.y);                                      // no el cuello
       float hairC = saturate(max(alphaC * 0.9, darkC)) * scalpZone;
       if (hairC > 0.25) {
