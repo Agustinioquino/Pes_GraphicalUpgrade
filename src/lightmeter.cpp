@@ -207,7 +207,7 @@ void LightMeterPresent() {
           s_eLong  += (e - s_eLong)  * (float)(1.0 - exp(-dtE / mem));
       }
       float cT = 1.0f;
-      if (E[0] > 0.5f && s_eShort > 1e-4f && s_eLong > 1e-4f) cT = std::clamp(s_eLong / s_eShort, 0.6f, 1.7f);
+      if (E[0] > 0.5f && s_eShort > 1e-4f && s_eLong > 1e-4f) cT = std::clamp(s_eLong / s_eShort, 0.6f, 1.15f);   // (20/10) baja mas de lo que sube: subir quemaba la cancha en algunas camaras
       cT = 1.0f + (cT - 1.0f) * std::clamp(E[1], 0.0f, 1.0f);
       if (!have && E[0] > 0.5f) cT = s_expC;   // sin medida: se mantiene
       s_expC += (cT - s_expC) * (float)(1.0 - exp(-dtE / 0.5));

@@ -413,12 +413,17 @@ void main(
       float rough = 0.42 + 0.25 * saturate(SH.y);                           // y134: brillo mas abierto (pasto seco / cortado al ras)
       float a2 = rough * rough * rough * rough;
       float dd = nh * nh * (a2 - 1.0) + 1.0; float D = a2 / max(3.14159 * dd * dd, 1e-4);   // GGX
-      float F = 0.04 + 0.96 * pow(1.0 - saturate(dot(Vw, H)), 5.0);
-      float G = 1.0 / max(4.0 * max(nv, 0.15) * max(nl, 0.15), 1e-3);
+      // (20/10) sin brillo excesivo: antes F llegaba a 1 en angulo rasante y G = 1/(4 nv nl) explotaba con la camara baja
+      // (repeticiones, camaras bajas: la cancha al sol salia quemada). Fresnel acotado (cera: 0.04 .. 0.3), Smith-GGX real
+      // y el lobulo nunca pasa de la mitad del difuso del sol sobre el pasto.
+      float F = 0.04 + 0.26 * pow(1.0 - saturate(dot(Vw, H)), 5.0);
+      float kG = rough * rough * 0.5;
+      float G = 1.0 / max(4.0 * (nv * (1.0 - kG) + kG) * (nl * (1.0 - kG) + kG), 1e-3);
       float shS = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
       float3 sunC = max(pLc_color.xyz, 0.0) * g_psScene.m_exposure.zzz;
       float wet = PESGroundWet();
-      r1.xyz += sunC * (D * F * G * nl) * shS * saturate(SH.x) * (1.0 + 2.0 * wet) * float3(1.0, 1.0, 0.96);
+      float lobe = min(D * F * G * nl, 0.5 * nl) * (1.0 + 2.0 * wet);
+      r1.xyz += sunC * lobe * shS * saturate(SH.x) * float3(1.0, 1.0, 0.96);
     } }
   // === PES21 luz de borde (17/10): con el sol detras del jugador, el contorno (hombros, pelo, brazos) se enciende.
   // Solo piel y kits, nunca el estadio. x46 fuerza, y46 ancho del borde (2 fino .. 5 muy fino), w46 on/off [Alt+Shift+R]
