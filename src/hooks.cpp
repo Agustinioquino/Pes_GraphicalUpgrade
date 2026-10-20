@@ -890,12 +890,12 @@ void AutoCapturePresent(ID3D11Texture2D* frame) {
         if (++s_ab.frames >= 3) {
             EnsureComInit(); s_ab.frames = 0;
             if (s_ab.stage == 1) {
-                HRESULT hr = DirectX::SaveWICTextureToFile(g_dev.imm, frame, GUID_ContainerFormatJpeg, (s_ab.base + L"_B.jpg").c_str(), nullptr, nullptr, false);
+                HRESULT hr = AsyncShot(frame, s_ab.base + L"_B.jpg") ? S_OK : E_FAIL;
                 if (s_ab.idx >= 0) g_cfg.live[s_ab.idx][s_ab.comp] = s_ab.prev;
                 if (FAILED(hr)) { Log("captura A/B: no se pudo guardar B (0x%08x)", (unsigned)hr); s_ab = ABState(); }
                 else s_ab.stage = 2;
             } else {
-                DirectX::SaveWICTextureToFile(g_dev.imm, frame, GUID_ContainerFormatJpeg, (s_ab.base + L"_A2.jpg").c_str(), nullptr, nullptr, false);
+                AsyncShot(frame, s_ab.base + L"_A2.jpg");
                 s_ab = ABState();
             }
         }
@@ -921,7 +921,7 @@ void AutoCapturePresent(ID3D11Texture2D* frame) {
             SYSTEMTIME st; GetLocalTime(&st); wchar_t nm[64]; swprintf(nm, 64, L"%02d%02d%02d_", st.wHour, st.wMinute, st.wSecond);
             s_ab.base = dir + L"\\ab\\" + nm + SlugW(g.title);
             EnsureComInit();
-            HRESULT hr = DirectX::SaveWICTextureToFile(g_dev.imm, frame, GUID_ContainerFormatJpeg, (s_ab.base + L"_A.jpg").c_str(), nullptr, nullptr, false);
+            HRESULT hr = AsyncShot(frame, s_ab.base + L"_A.jpg") ? S_OK : E_FAIL;
             if (SUCCEEDED(hr)) { s_ab.on = true; s_ab.stage = 1; s_ab.idx = g.tIdx; s_ab.comp = g.tComp; s_ab.prev = g_cfg.live[g.tIdx][g.tComp]; s_ab.frames = 0; s_ab.title = g.title; g_cfg.live[g.tIdx][g.tComp] = 0.0f;
                 static bool said = false; if (!said) { said = true; Log("captura A/B: pares en capturas\\ab\\ (A = todo, B = un grupo apagado), primero '%s'", g.title.c_str()); }
                 return; }
@@ -932,7 +932,7 @@ void AutoCapturePresent(ID3D11Texture2D* frame) {
     SYSTEMTIME st; GetLocalTime(&st);
     wchar_t name[96]; swprintf(name, 96, L"%02d%02d%02d_sol%02.0f.jpg", st.wHour, st.wMinute, st.wSecond, el);
     EnsureComInit();
-    HRESULT hr = DirectX::SaveWICTextureToFile(g_dev.imm, frame, GUID_ContainerFormatJpeg, (dir + L"\\" + name).c_str(), nullptr, nullptr, false);
+    HRESULT hr = AsyncShot(frame, dir + L"\\" + name) ? S_OK : E_FAIL;   // (20/10) asincronica: sin tiron
     if (FAILED(hr)) { Log("captura automatica: no se pudo guardar (0x%08x)", (unsigned)hr); return; }
     count++;
     FILE* f = _wfopen((dir + L"\\luz.txt").c_str(), L"ab");
@@ -1009,6 +1009,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     FaceGenPresent();
     InspectPresent();
     FrameCopyPresent(sc);   // antes del menu, para que el menu no se refleje en los ojos
+    AsyncShotPresent();
     AutoCapturePresent(s_frameTex);
     MenuTestPresent(sc);
     OverlayPresent(sc);

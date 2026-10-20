@@ -245,7 +245,8 @@ void LodBind(ID3D11DeviceContext* c, const LodIA& L, LodIA& sv); void LodRestore
 extern float g_eyePos[4]; extern bool g_eyeValid;
 extern thread_local LodIA t_grassSub;   // (20/10) pasto v4: malla propia para el dibujo de pasto en curso (la llena GrassOnDraw, la consume hk_DrawIdx)
 void GrassDenseReset();
-void ExeDumpPresent();   // (20/10) volcado de las secciones del exe desempaquetado en memoria (exedump.cpp)
+void ExeDumpPresent();
+bool AsyncShot(ID3D11Texture2D* frame, const std::wstring& path); void AsyncShotPresent();   // (20/10) capturas JPEG sin frenar el juego (asyncshot.cpp)   // (20/10) volcado de las secciones del exe desempaquetado en memoria (exedump.cpp)
 // (20/10) medidor de luz y luz ambiente calibrada (lightmeter.cpp): 125 = salida (x ganancia ambiente), 126 = controles
 extern std::atomic<bool> g_meterHook;
 ID3D11ShaderResourceView* GTAOBeforeComposition(ID3D11DeviceContext* c, int frame); void GTAOReloadShaders(); extern std::atomic<int> g_gtaoDraws;   // (20/10) GTAO (gtao.cpp) -> t27

@@ -501,6 +501,20 @@ void main(
     float chroma = max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
     float satAmt = lerp(sat, 1.0 + (sat - 1.0) * 0.4, saturate(chroma * 2.0));
     c = saturate(lerp(lum.xxx, c, satAmt));
+    // PES21 vibrancia (20/10, x133): sube los colores apagados (pasto lavado, cielo palido, tribuna gris) y casi no toca
+    // lo ya saturado ni la piel (tonos calidos de saturacion media): mas color sin pisar la LUT del estadio
+    { float4 VB = IniParams.Load(int2(133,0));
+      if (VB.x > 0.001) {
+        float l3 = dot(c, float3(0.2126, 0.7152, 0.0722));
+        float mx = max(c.r, max(c.g, c.b)), mn = min(c.r, min(c.g, c.b));
+        float satC = (mx - mn) / max(mx, 1e-3);
+        float skin = saturate(1.0 - abs(c.r - c.b * 1.6 - 0.12) * 4.0) * step(c.b, c.g) * step(c.g, c.r) * smoothstep(0.1, 0.35, satC) * (1.0 - smoothstep(0.55, 0.75, satC));
+        float k = saturate(VB.x) * (1.0 - satC) * (1.0 - 0.8 * skin) * smoothstep(0.03, 0.12, l3);
+        c = saturate(lerp(l3.xxx, c, 1.0 + k * 0.9));
+        // verde del pasto un poco mas vivo (y133): solo tonos verdes de saturacion media/baja
+        float gK = saturate(VB.y) * saturate((c.g - max(c.r, c.b)) * 6.0) * (1.0 - satC * 0.6);
+        c = saturate(lerp(dot(c, float3(0.2126, 0.7152, 0.0722)).xxx, c, 1.0 + gK * 0.35));
+      } }
     // claridad (contraste local suave)
     c = saturate(c * exp2(lcDiff * clarK * 0.35 * (1.0 - skyM)));   // 16/10: sin claridad en el cielo (halos oscuros en las nubes)
     // tono partido: sombras apenas frias, luces apenas calidas (look de transmision moderna)
