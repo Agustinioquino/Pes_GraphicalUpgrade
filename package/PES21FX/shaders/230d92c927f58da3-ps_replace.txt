@@ -332,6 +332,7 @@ void main(
   if (isSkin) {
     float sh = saturate(r6.x);
     // sombra mas suave sobre la piel (la luz se difunde dentro del tejido)
+    bool pesSSSS = IniParams.Load(int2(95,0)).w > 0.5;   // dispersion unificada prendida -> sin suavizado viejo
     sh = lerp(sh, smoothstep(0.0, 1.0, sh), saturate(P5.z) * (pesSSSS ? 0.0 : 1.0));   // SSS v3: solo suaviza el borde (apagado con SSSS)
     // 18/10 v2: rojo solo en la PENUMBRA (borde de la sombra), la sombra plena queda neutra.
     // Antes pow(sh,0.55) en el rojo dejaba toda la sombra de la cara naranja.
