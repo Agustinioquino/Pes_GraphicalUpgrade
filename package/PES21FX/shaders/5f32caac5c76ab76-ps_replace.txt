@@ -117,6 +117,7 @@ void main(
   { float ec = IniParams.Load(int2(128,0)).x; if (ec > 0.05) r0.xyz *= ec; }   // PES21 (20/10) exposicion estable entre camaras (la calcula la DLL con el medidor de luz)
   // === PES21 v2: look moderno (x6 luces altas suaves, y6 tono partido, z6 claridad, w6 viñeta) ===
   float4 P6 = IniParams.Load(int2(6,0));
+  float3 colS_g = max(pL_color.xyz, 0.0); colS_g = colS_g / max(dot(colS_g, float3(0.2126, 0.7152, 0.0722)), 1e-3);   // (20/10) color del sol normalizado (perspectiva aerea)
   float4 P7 = IniParams.Load(int2(7,0));
   float skyK = grade ? saturate(P7.y) : 0.0;
   float skyM = 0;
@@ -159,12 +160,29 @@ void main(
         float aspS = g_psSystem.m_renderBuffer.w > 0 ? g_psSystem.m_renderBuffer.w / max(g_psSystem.m_renderBuffer.z, 1e-6) : 1.7778;
         float2 dS = (uvS - sunUV) * float2(aspS, 1.0);
         float rS = length(dS);
-        float radS = 0.011 * max(SN.x, 0.1);
-        float diskS = 1.0 - smoothstep(radS * 0.8, radS, rS);
-        float glowS = exp(-rS / (radS * 2.5)) * 0.7 + exp(-rS / (radS * 14.0)) * 0.18;
+        float4 SP = IniParams.Load(int2(130,0));   // (20/10) sol fisico: x on | y oscurecimiento del limbo | z destello (glare) | w bruma alrededor
         float3 colS = max(pL_color.xyz, 0.0);
         colS = colS / max(dot(colS, float3(0.2126, 0.7152, 0.0722)), 1e-3);
-        r0.xyz += colS * (diskS * 14.0 + glowS * 1.6) * saturate(SN.y) * skyM;
+        if (SP.x > 0.5) {
+          // disco de 0.53 grados (radio 0.265) en unidades de pantalla: 1 unidad vertical = 2 tan(fov/2) -> radio = tan(0.265 deg) / projParam.y
+          float radP = (0.004625 / max(abs(pS_projParam.y), 1e-4)) * 0.5 * max(SN.x, 0.1);
+          float u = saturate(rS / max(radP, 1e-5));
+          // oscurecimiento del limbo (Hestroffer-Magnan, aprox.): I(u) = 1 - a (1 - sqrt(1 - u^2))
+          float limb = 1.0 - saturate(SP.y) * 0.6 * (1.0 - sqrt(max(1.0 - u * u, 0.0)));
+          float aaP = max(g_psSystem.m_renderBuffer.w, 1e-4);
+          float diskP = (1.0 - smoothstep(radP - aaP, radP + aaP, rS)) * limb;
+          // glare de camara de TV: PSF con cola 1/r^2.2 (difraccion + bloom del sensor), mas un halo ancho de la bruma
+          float rr = rS / max(radP, 1e-5);
+          float psf = (0.35 / pow(1.0 + rr, 2.2)) * saturate(SP.z);
+          float haze = exp(-rS / (radP * 22.0)) * 0.12 * saturate(SP.w);
+          // energia del disco: con el limbo y el tamano real el disco es chico: brillo alto (saturado por el tonemap)
+          r0.xyz += colS * (diskP * 60.0 + psf * 6.0 + haze * 1.5) * saturate(SN.y) * skyM;
+        } else {
+          float radS = 0.011 * max(SN.x, 0.1);
+          float diskS = 1.0 - smoothstep(radS * 0.8, radS, rS);
+          float glowS = exp(-rS / (radS * 2.5)) * 0.7 + exp(-rS / (radS * 14.0)) * 0.18;
+          r0.xyz += colS * (diskS * 14.0 + glowS * 1.6) * saturate(SN.y) * skyM;
+        }
       }
     }
     // === PES21 nubes volumetricas (18/10): raymarch en una capa de nubes sobre los pixeles de cielo ===
@@ -232,6 +250,36 @@ void main(
         r0.xyz = lerp(abs(dWd) * 2.0, float3(3.0, 0.0, 0.0), 1.0 - pesCloudT);
         // franja superior: color de etapa (rojo apagadas, naranja sin cbuffer, amarillo sin sol, violeta bajo horizonte, cian sin densidad, verde nube)
         if (uvS.y < 0.06) { float3 stc[7] = { float3(0,0,0), float3(1,0,0), float3(1,0.5,0), float3(1,1,0), float3(0.6,0,1), float3(0,1,1), float3(0,1,0) }; r0.xyz = stc[cloudStage] * 3.0; }
+      }
+    }
+  }
+  // === PES21 perspectiva aerea fisica (20/10): la luz que llega de lejos pierde parte por la atmosfera (extincion) y se le
+  // suma luz dispersada (in-scatter): Rayleigh azula lo lejano, Mie (bruma) blanquea hacia el sol. Se calcula por pixel con
+  // la profundidad real, no con la niebla del juego. 131: x on | y turbiedad extra (bruma, 0..3) | z distancia de referencia (m) | w fuerza
+  { float4 AP = IniParams.Load(int2(131,0));
+    if (AP.x > 0.5 && abs(pS_projParam.x) > 1e-6 && abs(pS_projParam.y) > 1e-6 && abs(pS_projParam.z) > 1e-6) {
+      float2 uvA = v1.xy * g_psSystem.m_renderBuffer.zw;
+      float dA = PESDepth.SampleLevel(g_samplerPoint_Wrap_s, uvA, 0).x;
+      if (dA > 1e-6) {
+        float zA = abs(pS_projParam.z / (dA - pS_projParam.w));
+        float dRef = AP.z > 10.0 ? AP.z : 600.0;                                 // distancia a la que la bruma llega a ~63 %
+        float3 betaR = float3(5.8e-6, 13.5e-6, 33.1e-6) * 1.8;                   // Rayleigh por metro (x1.8: aire con aerosoles finos)
+        float betaM = 4.0e-6 * (1.0 + max(AP.y, 0.0) * 2.0);                     // Mie por metro
+        float scale = 600.0 / dRef;
+        float3 tau = (betaR + betaM) * zA * scale;
+        float3 T = exp(-tau);
+        // direccion del pixel y del sol en vista: fase de Mie hacia el sol (g 0.76), Rayleigh casi isotropica
+        float4 Q86a = IniParams.Load(int2(86,0));
+        float2 ndcA = float2(uvA.x * 2.0 - 1.0, (Q86a.y > 0.5 ? 1.0 : -1.0) * (uvA.y * 2.0 - 1.0));
+        float3 dirA = normalize(float3((ndcA - pS_centerOff.xy) * pS_projParam.xy, Q86a.z > 0.5 ? -1.0 : 1.0));
+        float3 Lsa = pL_dir.xyz; float mu = dot(Lsa, Lsa) > 1e-6 ? dot(dirA, normalize(Lsa)) : 0.0;
+        float g = 0.76; float phM = (1.0 - g * g) / (12.566 * pow(1.0 + g * g - 2.0 * g * mu, 1.5));
+        float phR = 0.0597 * (1.0 + mu * mu);
+        float3 sunA = colS_g * max(dot(max(pL_color.xyz, 0.0), float3(0.2126, 0.7152, 0.0722)) * pS_exposure.z, 0.0);
+        float3 skyA = float3(0.55, 0.70, 1.0) * 0.35;                              // luz difusa del cielo (relativa)
+        float3 inS = (betaR * phR * 4.0 + betaM * phM * 4.0) * (sunA * 0.25 + skyA) / max(betaR + betaM, 1e-9) * (1.0 - T);
+        float k = saturate(AP.w) * (1.0 - skyM);                                    // el cielo ya trae su color
+        r0.xyz = lerp(r0.xyz, r0.xyz * T + inS, k);
       }
     }
   }
