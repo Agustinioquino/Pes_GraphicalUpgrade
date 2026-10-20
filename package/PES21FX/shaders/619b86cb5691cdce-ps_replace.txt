@@ -469,6 +469,13 @@ void main(
     // oclusion de la piel con tinte rojizo (la luz rebota dentro del tejido en los pliegues)
     occRGB = lerp(r0.xxx, pow(max(r0.x, 1e-4), float3(0.72, 1.0, 1.08)), saturate(P11.z));
   }
+  { // PES21 ojos (20/10): blanco del ojo neutro. La esclerotica es casi blanca y copia el color de la luz difusa del estadio
+    // (verdosa por el rebote del cesped): en los primeros planos salia amarillo-verdosa. El shader del ojo marca el pixel con
+    // 0.99608 en el canal de material y aca se le quita el color a la luz difusa (x122, 0 = como el juego)
+    float4 PE = IniParams.Load(int2(122,0));
+    bool eyeC = cmpOn && (tyC == 0) && (abs(gmC.z - 0.99608) < 0.0015);
+    if (eyeC && PE.x > 0.001) { float lE = dot(r2.xyz, float3(0.2126, 0.7152, 0.0722)); r2.xyz = lerp(r2.xyz, lE.xxx, saturate(PE.x)); }
+  }
   // === PES21 relieve de pliegues (curvatura de normales en pantalla): telas y ropa menos planas ===
   {
     float4 P5c = IniParams.Load(int2(5,0));

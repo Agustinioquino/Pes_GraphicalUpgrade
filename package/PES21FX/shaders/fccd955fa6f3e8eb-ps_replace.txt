@@ -242,7 +242,7 @@ void main(
   r0.z = r0.z * r0.y + 0.271276593;
   o2.x = r0.z * r0.y + 0.150000006;
   o2.y = r0.x;
-  o2.z = 1;
+  o2.z = IniParams.Load(int2(122,0)).x > 0.001 ? 0.99608 : 1;   // PES21 (20/10): marca de ojo en el canal de material (254/255) para que la composicion neutralice el tinte de la luz ambiente sobre la esclerotica (x122)
   o2.w = g_psMaterial.m_materials[0].x;
   r0.xyzw = v8.xyzw / w2.xxyy;
   r0.xyzw = r0.xyzw * float4(0.5,0.5,0.5,0.5) + float4(0.5,0.5,0.5,0.5);
