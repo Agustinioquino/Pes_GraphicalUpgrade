@@ -61,6 +61,7 @@ Texture2D<float4> inDepth : register(t11);
 Texture2D<float4> inFogVolume : register(t12);
 Texture2D<float4> inOcclusion : register(t13);
 Texture2D<float4> inShadow : register(t14);
+Texture2D<float4> PESGtao : register(t27);   // PES21 (20/10): GTAO de la DLL (1 = sin oclusion); se mezcla con el SSAO del juego (y132)
 
 
 // 3Dmigoto declarations
@@ -458,6 +459,10 @@ void main(
     }
   }
   r0.x = inOcclusion.Sample(g_samplerLinear_Clamp_s, r0.xy).x;
+  { // PES21 GTAO (20/10): oclusion por horizontes de la DLL mezclada con el SSAO del juego (y132: 0 solo juego .. 1 solo GTAO)
+    float4 GT = IniParams.Load(int2(132,0));
+    if (GT.x > 0.5) { float g = PESGtao.SampleLevel(g_samplerLinear_Clamp_s, r0.xy, 0).x; r0.x = lerp(r0.x, min(r0.x * 0.35 + 0.65, g), saturate(GT.y)); }
+  }
   float aoRaw = saturate(r0.x);
   float3 occRGB = r0.xxx;
   { // PES21 pasto v3 (20/10): el SSAO del motor entre las hojas apaga el pasto cercano (se ve gris y sin sol); x108 lo alivia solo en el cesped

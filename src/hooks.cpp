@@ -626,6 +626,10 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (ps && (ps->hash == 0x619b86cb5691cdceULL || ps->hash == 0xf807e74d5b900a15ULL) && ps->repl) {
         if (ID3D11ShaderResourceView* v = SSSSBeforeComposition(c)) { Remember(c, d, true, true, 9); c->PSSetShaderResources(9, 1, &v); }
     }
+    // 20/10: GTAO (HBAO actual) para la luz global y la composicion: t27 (se calcula una vez por cuadro)
+    if (ps && (ps->hash == 0x619b86cb5691cdceULL || ps->hash == 0xfda6da09737592b1ULL) && ps->repl) {
+        if (ID3D11ShaderResourceView* v = GTAOBeforeComposition(c, s_presentNo.load())) { Remember(c, d, true, true, 27); c->PSSetShaderResources(27, 1, &v); }
+    }
     // 19/10: capas editadas desde el inspector (PES21FX_capas.ini): textura por slot u "ocultar" el dibujo
     g_drawOrder++;
     if (ps && g_layersAny.load()) { LayerOv ov;
@@ -1054,6 +1058,7 @@ void ReloadShaders() {
     SSSSReloadShaders();
     PitchWearReloadShaders();
     LightMeterReloadShaders();
+    GTAOReloadShaders();
     std::unique_lock<std::shared_mutex> lk(s_shMutex);
     int n = 0;
     { std::lock_guard<std::mutex> lk2(g_errMutex); g_compileErrors.clear(); }
