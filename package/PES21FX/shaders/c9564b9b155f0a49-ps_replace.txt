@@ -125,13 +125,13 @@ void main(
           const float2 tx = float2(2.0 / 1024.0, 2.0 / 512.0);
           float fx = PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, v1.xy + float2(tx.x, 0), 0).x - PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, v1.xy - float2(tx.x, 0), 0).x;
           float fz = PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, v1.xy + float2(0, tx.y), 0).x - PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, v1.xy - float2(0, tx.y), 0).x;
-          float2 g = float2(fx, fz) * 6.0;
-          float k = saturate(fl) * clamp(Q36.y, 0.0, 2.0);
-          r0.xyz = normalize(float3(r0.x - g.x * k, r0.y * (1.0 - 0.6 * saturate(k)), r0.z - g.y * k)); } } }
+          float2 g = clamp(float2(fx, fz) * 2.0, -0.5, 0.5);   // (20/10) acotado: una pisada cambia el grano, no lo da vuelta
+          float k = saturate(fl) * clamp(Q36.y, 0.0, 2.0) * 0.5;
+          r0.xyz = normalize(float3(r0.x - g.x * k, r0.y * (1.0 - 0.3 * saturate(k)), r0.z - g.y * k)); } } }
     { float4 W35 = IniParams.Load(int2(135,0)); float4 Q8w = IniParams.Load(int2(108,0));   // (20/10) olas de viento (ver 5e92)
       if (Q4g.x > 0.5 && W35.x > 0.001 && Q8w.y > 0.001) {
         float3 wf = PESWindField(v8.xz);
-        float k = wf.z * saturate(W35.x) * saturate(Q8w.y) * 0.9;
+        float k = wf.z * saturate(W35.x) * saturate(Q8w.y) * 0.2;   // (20/10) antes 0.9: la tabla de reflectancia del juego (amplificada) convertia la rafaga en manchones amarillos / negros de 15 m
         r0.xyz = normalize(r0.xyz + float3(wf.x, 0.0, wf.y) * k); } }
   }
   r1.xyz = float3(0,0,1) * r0.xyz;
