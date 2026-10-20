@@ -68,6 +68,20 @@ Luz moderna (20/10)
 - Atmosfera fisica (Iluminacion -> "Atmosfera fisica", 121): el color del sol sale de la transmitancia Rayleigh + Mie
   (masa de aire), normalizada al cenit; reemplaza el tinte calido a mano de la curva del dia.
 
+Pasto v4: manojos curvos (Cancha y cielo -> "Pasto v4", 123)
+------------------------------------------------------------
+- El juego dibuja cada parcela de 0.5 m con tarjetas planas (manojo de ~1.2 x 5.8 cm; 27744 / ~9000 / ~6000 indices
+  segun la distancia). La DLL cambia el dibujo por una malla propia con el mismo formato de vertices (POSITION float3
+  en el slot 0, TEXCOORD0 half2 en el slot 3): tarjetas de 3 tramos (2 a media distancia) que salen verticales y se
+  doblan, con giro, ancho, alto y curva al azar y raices Halton. Mismo VS/PS: alto, corte, viento, pisadas y atlas
+  siguen funcionando. y123 densidad (x las del juego), z123 curvatura, w123 solo el nivel cercano.
+
+Rasgos de la cara (Cara -> "Rasgos de la cara", x124)
+-----------------------------------------------------
+- Frente al juego original la cara salia mas clara y lavada: el sol se apilaba (curva del dia x sol realista x
+  contraste de dia = 1.58x; ahora w4 1.0 y x109 0.25) y el multirebote del GTAO + el SSGI rellenaban las cuencas.
+  x124: oclusion de la piel mas honda y sin multirebote, mitad de SSGI sobre la piel.
+
 LOD de caras (Cara -> "LOD de caras")
 -------------------------------------
 - El motor elige en la CPU que malla dibuja de cada jugador (LOD) y a cuales les calcula la animacion facial; los
