@@ -181,7 +181,6 @@ void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT
     bool extraOn = p58[3] > 0.5f;
     // con el pasto extra prendido, el escalado de las parcelas lejanas del juego no se usa (lo reemplazan las bandas)
     if (!extraOn && count == s_lodCount.load() && g_cfg.live[60][3] > 0.5f) { t_sparseGrass = true; g_grassDbg.sparse++; }
-    if (!extraOn) { Why("apagado (w58)"); return; }
     if (g_bbW) {
         ID3D11RenderTargetView* rtv = nullptr; c->OMGetRenderTargets(1, &rtv, nullptr);
         if (!rtv) return;
@@ -190,8 +189,10 @@ void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT
         if (res && SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t)) && t) { D3D11_TEXTURE2D_DESC d; t->GetDesc(&d); w = d.Width; t->Release(); }
         if (res) res->Release();
         g_grassDbg.rtW = w;
-        if (w != g_bbW) { Why("pasada secundaria (target de otro tamano)"); return; }
+        if (w != g_bbW) { if (extraOn) Why("pasada secundaria (target de otro tamano)"); return; }
     }
+    PitchClipsDraw(c, s_frame.load());   // recortes de pasto volando (una vez por cuadro; el estado del pasto ya esta puesto)
+    if (!extraOn) { Why("apagado (w58)"); return; }
     int f = s_frame.load();
     int exp = s_emittedFrame.load();
     if (exp == f) return;

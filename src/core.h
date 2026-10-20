@@ -225,6 +225,7 @@ ID3DBlob* CompileNamedShader(const wchar_t* file, const char* profile);   // sha
 void NamedSetSRV(const std::string& name, ID3D11ShaderResourceView* v);   // publica un SRV como recurso con nombre (srv = N nombre en las reglas)
 extern std::atomic<int> g_matchGen;                                        // sube en cada partido nuevo (reloj del cesped)
 void PitchWearNotePlayer(ID3D11DeviceContext* c); void PitchWearPresent(); void PitchWearReloadShaders();   // desgaste de la cancha en vivo
+void PitchClipsDraw(ID3D11DeviceContext* c, int frame);   // recortes de pasto volando (desde el dibujo del pasto)
 void AutoCapturePresent(ID3D11Texture2D* frame);   // hooks.cpp
 ID3D11ShaderResourceView* SSSSBeforeComposition(ID3D11DeviceContext* c); void SSSSReloadShaders(); extern std::atomic<int> g_ssssDraws;   // ssss.cpp
 // prueba automatica del menu (menutest.cpp)
