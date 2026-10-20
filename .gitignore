@@ -2,3 +2,4 @@ build/
 dist/
 *.log
 package/PES21FX/shaders/cache/
+__pycache__/
