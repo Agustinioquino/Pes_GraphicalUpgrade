@@ -877,7 +877,7 @@ static float ReadElev(const std::vector<float>& L, const std::vector<float>& S, 
 // (20/10) capturas A/B: con auto_captura_ab = 1, en cada captura se guarda ademas un par: A = todo como esta, B = el mismo
 // cuadro (3 despues) con UN grupo del menu apagado (su interruptor), ciclando por todos los grupos activos. Asi se ve el
 // efecto real de cada funcion en la misma escena sin que nadie toque el menu. capturas\ab\HHMMSS_<grupo>_A.jpg / _B.jpg
-struct ABState { bool on = false; int idx = -1, comp = 0; float prev = 0; int frames = 0; std::wstring base; std::string title; };
+struct ABState { bool on = false; int idx = -1, comp = 0; float prev = 0; int frames = 0; int stage = 0; std::wstring base; std::string title; };   // stage 1 = esperando B, 2 = esperando A2
 static ABState s_ab; static int s_abNext = 0;
 static std::wstring SlugW(const std::string& t) {
     std::wstring o; for (unsigned char ch : t) { if (o.size() >= 28) break; if (isalnum(ch)) o += (wchar_t)tolower(ch); else if (ch == ' ' || ch == '_' || ch == '-') { if (!o.empty() && o.back() != L'_') o += L'_'; } }
@@ -886,13 +886,18 @@ static std::wstring SlugW(const std::string& t) {
 void AutoCapturePresent(ID3D11Texture2D* frame) {
     static double last = 0; static int count = 0; static bool dirOk = false;
     if (!g_cfg.autoCap || !frame || !g_dev.imm) return;
-    if (s_ab.on) {   // captura B pendiente: 3 cuadros con el grupo apagado y se guarda
+    if (s_ab.on) {   // (20/10) A -> B (grupo apagado 3 cuadros) -> A2 (prendido de nuevo 3 cuadros): si A y A2 difieren, la camara se movio
         if (++s_ab.frames >= 3) {
-            EnsureComInit();
-            HRESULT hr = DirectX::SaveWICTextureToFile(g_dev.imm, frame, GUID_ContainerFormatJpeg, (s_ab.base + L"_B.jpg").c_str(), nullptr, nullptr, false);
-            if (s_ab.idx >= 0) g_cfg.live[s_ab.idx][s_ab.comp] = s_ab.prev;
-            if (FAILED(hr)) Log("captura A/B: no se pudo guardar B (0x%08x)", (unsigned)hr);
-            s_ab = ABState();
+            EnsureComInit(); s_ab.frames = 0;
+            if (s_ab.stage == 1) {
+                HRESULT hr = DirectX::SaveWICTextureToFile(g_dev.imm, frame, GUID_ContainerFormatJpeg, (s_ab.base + L"_B.jpg").c_str(), nullptr, nullptr, false);
+                if (s_ab.idx >= 0) g_cfg.live[s_ab.idx][s_ab.comp] = s_ab.prev;
+                if (FAILED(hr)) { Log("captura A/B: no se pudo guardar B (0x%08x)", (unsigned)hr); s_ab = ABState(); }
+                else s_ab.stage = 2;
+            } else {
+                DirectX::SaveWICTextureToFile(g_dev.imm, frame, GUID_ContainerFormatJpeg, (s_ab.base + L"_A2.jpg").c_str(), nullptr, nullptr, false);
+                s_ab = ABState();
+            }
         }
         return;
     }
@@ -903,17 +908,21 @@ void AutoCapturePresent(ID3D11Texture2D* frame) {
     static int cycle = 0; cycle++;
     if (g_cfg.autoCapAB && (cycle & 1) && !g_cfg.groups.empty()) {   // un ciclo si, uno no: la captura normal (con luz.txt) sigue
         // siguiente grupo con interruptor prendido (no diagnostico, no ropa: esa necesita recompilar)
-        int n = (int)g_cfg.groups.size(); int pick = -1;
-        for (int k = 0; k < n; k++) { int gi = (s_abNext + k) % n; const MenuGroup& g = g_cfg.groups[gi];
+        // orden: primero Iluminacion, despues Cara / Piel / Cancha, despues el resto
+        static std::vector<int> order; if (order.size() != g_cfg.groups.size()) { order.clear();
+            auto pri = [](const std::string& sec) { if (sec.rfind("Ilumin", 0) == 0) return 0; if (sec.rfind("Cara", 0) == 0 || sec.rfind("Piel", 0) == 0 || sec.rfind("Cancha", 0) == 0 || sec.rfind("Sombras", 0) == 0) return 1; return 2; };
+            for (int p = 0; p < 3; p++) for (int i = 0; i < (int)g_cfg.groups.size(); i++) if (pri(g_cfg.groups[i].section) == p) order.push_back(i); }
+        int n = (int)order.size(); int pick = -1;
+        for (int k = 0; k < n; k++) { int gi = order[(s_abNext + k) % n]; const MenuGroup& g = g_cfg.groups[gi];
             if (g.tIdx < 0 || g.tIdx >= kParamCount) continue; if (g.section.rfind("Diagn", 0) == 0 || g.section.rfind("Ropa", 0) == 0) continue;
-            if (g_cfg.live[g.tIdx][g.tComp] < 0.5f) continue; pick = gi; s_abNext = gi + 1; break; }
+            if (g_cfg.live[g.tIdx][g.tComp] < 0.5f) continue; pick = gi; s_abNext = (s_abNext + k + 1) % n; break; }
         if (pick >= 0) {
             const MenuGroup& g = g_cfg.groups[pick];
             SYSTEMTIME st; GetLocalTime(&st); wchar_t nm[64]; swprintf(nm, 64, L"%02d%02d%02d_", st.wHour, st.wMinute, st.wSecond);
             s_ab.base = dir + L"\\ab\\" + nm + SlugW(g.title);
             EnsureComInit();
             HRESULT hr = DirectX::SaveWICTextureToFile(g_dev.imm, frame, GUID_ContainerFormatJpeg, (s_ab.base + L"_A.jpg").c_str(), nullptr, nullptr, false);
-            if (SUCCEEDED(hr)) { s_ab.on = true; s_ab.idx = g.tIdx; s_ab.comp = g.tComp; s_ab.prev = g_cfg.live[g.tIdx][g.tComp]; s_ab.frames = 0; s_ab.title = g.title; g_cfg.live[g.tIdx][g.tComp] = 0.0f;
+            if (SUCCEEDED(hr)) { s_ab.on = true; s_ab.stage = 1; s_ab.idx = g.tIdx; s_ab.comp = g.tComp; s_ab.prev = g_cfg.live[g.tIdx][g.tComp]; s_ab.frames = 0; s_ab.title = g.title; g_cfg.live[g.tIdx][g.tComp] = 0.0f;
                 static bool said = false; if (!said) { said = true; Log("captura A/B: pares en capturas\\ab\\ (A = todo, B = un grupo apagado), primero '%s'", g.title.c_str()); }
                 return; }
         }
