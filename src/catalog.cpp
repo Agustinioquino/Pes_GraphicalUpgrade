@@ -464,7 +464,7 @@ static bool CatalogWrite(UINT bbW, UINT bbH, std::vector<const ShaderEntry*> all
             // redondea a 6 decimales: 0.000978 en vez de 1/1023)
             ID3DBlob* hb = nullptr;
             if (SUCCEEDED(s_disasm(e->code->data(), e->code->size(), 0x80 /*D3D_DISASM_PRINT_HEX_LITERALS*/, nullptr, &hb)) && hb) {
-                std::wstring hdir = adir + L"hex\"; CreateDirectoryW(hdir.c_str(), nullptr);
+                std::wstring hdir = adir + L"hex\\"; CreateDirectoryW(hdir.c_str(), nullptr);
                 std::ofstream ah(hdir + wname, std::ios::binary | std::ios::trunc);
                 if (ah) ah.write((const char*)hb->GetBufferPointer(), (std::streamsize)hb->GetBufferSize() - 1);
                 hb->Release();

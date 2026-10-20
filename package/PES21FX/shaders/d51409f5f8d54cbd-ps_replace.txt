@@ -518,8 +518,9 @@ void main(
   { float3 nC = normalize(r3.xyw);
     float dzC = g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, uvG, 0).x;
     float zLC = abs(g_psScene.m_projectionParam.z / (dzC - g_psScene.m_projectionParam.w));
-    float mpp = max(zLC * g_psScene.m_projectionParam.x * 2.0 / max(g_psSystem.m_renderBuffer.x, 1.0), 1e-6);
+    float mpp = max(zLC * abs(g_psScene.m_projectionParam.x) * 2.0 / max(g_psSystem.m_renderBuffer.x, 1.0), 1e-6);   // (20/10) abs: el parametro es negativo (antes la curvatura daba siempre 1)
     pesCurv = saturate(length(fwidth(nC)) / mpp * 0.02); }   // radio de 2 cm = 1, frente (radio 10 cm) = 0.2
+  float pesSsssK = 0.0;   // (20/10) cuanto de la difusion de la piel ya resuelve la SSSS en pantalla (0 = nada, 1 = todo)
   bool isSkinGeo = (matType == 0) && (trans > 0.004) && (abs(skinTag - 0.98039) < 0.003);
   bool isSkin = sssOn && isSkinGeo;
   // SSS v3 (18/10): la piel SIEMPRE usa el terminador suave, con el SSS apagado queda casi duro. Antes, con el SSS
@@ -529,6 +530,17 @@ void main(
     // PES21 piel pre-integrada (18/10): la dispersion depende de la curvatura real de la superficie (Penner 2011)
     { float4 Q62 = IniParams.Load(int2(62,0)); if (Q62.x > 0.5 && Q62.w > 0.0) w *= lerp(1.0, 0.45 + 1.4 * pesCurv, saturate(Q62.w)); }
     w = min(w * 0.12, float3(0.22, 0.11, 0.07));   // SSS v3: borde angosto (antes 0.35 / tope 0.40: la luz entraba 24 grados en la sombra)
+    // (20/10) sin doble SSS: con la dispersion separable (w95) prendida, de cerca la difusion la hace esa pasada en milimetros reales
+    // sobre la luz real; aca solo queda la parte mas chica que un pixel (piel pre-integrada para lo que no se resuelve en pantalla).
+    // Antes las dos se sumaban de cerca: borde de sombra doble de ancho y doble de rojo (piel encerada).
+    if (IniParams.Load(int2(95,0)).w > 0.5) {
+      float dS0 = g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, uvG, 0).x;
+      float zS0 = abs(g_psScene.m_projectionParam.z / (dS0 - g_psScene.m_projectionParam.w));
+      float mppS = max(zS0 * abs(g_psScene.m_projectionParam.x) * 2.0 / max(g_psScene.m_viewportSize.x, 1.0), 1e-6);
+      float rPx = 0.006 * max(IniParams.Load(int2(95,0)).x, 0.3) / mppS;   // radio de la SSSS en pixeles (6 mm x ancho)
+      pesSsssK = saturate((rPx - 1.0) / 5.0) * (IniParams.Load(int2(146,0)).x > 0.5 ? 1.0 : 0.0);
+      w *= 1.0 - 0.85 * pesSsssK;
+    }
     if (!sssOn) w = 0.03;                 // 18/10: ancho del borde acotado (antes envolvia la cara y corria la luz)
     float3 d = saturate(PESSoftTerm(rawNdotL, w));
     d = max(d, min(transFloor, 0.03).xxx);   // SSS v3: piso casi nulo (el lado de atras queda en sombra)                     // piso de translucidez del motor, acotado (no ilumina el lado de atras)
@@ -627,7 +639,7 @@ void main(
     // 18/10 v2: rojo solo en la PENUMBRA (borde de la sombra), la sombra plena queda neutra.
     // Antes pow(sh,0.55) en el rojo dejaba toda la sombra de la cara naranja.
     float pen = sh * (1.0 - sh) * 4.0;   // 1 en el medio del borde, 0 en luz plena y en sombra plena
-    float3 shC = saturate(sh.xxx + pen * float3(0.10, -0.02, -0.04) * sssV2 * (P76.z > 0.0 ? P76.z : 1.0));
+    float3 shC = saturate(sh.xxx + pen * float3(0.10, -0.02, -0.04) * (1.0 - pesSsssK) * sssV2 * (P76.z > 0.0 ? P76.z : 1.0));
     shadowRGB = lerp(sh.xxx, shC, saturate(saturate(trans * 2.0) * sssBleed));
   }
   o0.xyz = r3.xyz * shadowRGB;
