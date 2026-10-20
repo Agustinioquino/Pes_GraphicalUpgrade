@@ -20,6 +20,7 @@ Texture2D<float4> g_tex_base : register(t4);
 Texture2D<float4> g_tex_planarShadow : register(t5);
 Texture2D<float4> g_tex_detailNormal : register(t6);
 Texture2D<float4> PESTurfN : register(t7);   // PES21 pasto v3: relieve propio del cesped (regla del VS)
+Texture2D<float4> PESWearMap : register(t8);   // PES21 pasto v3: desgaste en vivo (recurso pes_wear, lo pinta la DLL)
 
 Texture1D<float4> IniParams : register(t120);
 StructuredBuffer<float4> PESGrassInst : register(t121);   // PES21: parcelas del pasto extra (x, z, escala, giro)
@@ -107,7 +108,8 @@ void main(
     float4 Q6 = IniParams.Load(int2(106, 0)), Q7 = IniParams.Load(int2(107, 0));
     float2 puv = pesRoot * cb4[1].xy + cb4[1].zw;
     pesPm = PESPitchMeters(puv);
-    pesWear = PESWear(pesPm, pesRoot, Q4.w, Q7.x, Q7.z);
+    float pesLive = PESWearMap.SampleLevel(g_samplerLinear_Clamp_s, puv, 0).x;   // desgaste en vivo (mapa de la DLL, t8)
+    pesWear = PESWear(pesPm, pesRoot, Q4.w, Q7.x, Q7.z, pesLive);
     pesZone = PESGrassZones(pesRoot, Q6.x);
     int tipo = (int)(Q4.y + 0.5);
     // banda del atlas por parcela: corto = manojo 0 (y 1 en una de cada 4), medio = 1 / 3, largo = 2 (y 1 en una de cada 4)
@@ -117,7 +119,7 @@ void main(
     float hT = tipo == 0 ? 0.9 : (tipo == 2 ? 1.45 : 1.0);   // (el manojo corto ya ocupa menos tarjeta)
     float hv = tipo == 0 ? 0.10 : (tipo == 2 ? 0.35 : 0.20);
     float n = PESGnoise(pesRoot * 1.7 + 0.37);
-    pesH = hT * clamp(Q4.z, 0.3, 3.0) * (1.0 + (n - 0.5) * 2.0 * hv) * (1.0 - pesWear.x * 0.35) * (1.0 - pesWear.y);
+    pesH = hT * clamp(Q4.z, 0.3, 3.0) * (1.0 + (n - 0.5) * 2.0 * hv) * (1.0 - pesWear.x * 0.35) * (1.0 - pesWear.y) * PESWearLiveHeight(pesLive);
     v0.y *= pesH;
     pesExtW.y = v0.y;   // las parcelas extra toman la misma altura
     // (20/10) inclinacion real de la hoja segun el grano del corte (las franjas se ven en 3D de cerca) y viento:

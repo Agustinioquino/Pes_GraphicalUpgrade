@@ -199,6 +199,10 @@ static std::atomic<int> s_presentNo{0};
 static std::map<std::string, NamedRes> s_named;
 static std::mutex s_namedMutex;
 
+void NamedSetSRV(const std::string& name, ID3D11ShaderResourceView* v) {
+    std::lock_guard<std::mutex> lk(s_namedMutex); auto& r = s_named[name];
+    if (r.srv == v) return; if (v) v->AddRef(); if (r.srv) r.srv->Release(); r.srv = v; r.failed = false;
+}
 static ID3D11ShaderResourceView* FileTexture(const std::string& rel) {
     // rel = "file:textures\\algo.dds" -> se carga una sola vez;  "gen:gris|blanco|negro|normal" -> textura neutra 4x4
     std::lock_guard<std::mutex> lk(s_namedMutex);
@@ -573,6 +577,8 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     // 19/10: la boca (63fab7) hereda el b11 (tipo de pelo + semilla de la cara) de la ultima cara dibujada en este contexto:
     // variacion de dientes/encias por jugador
     if (ps && ps->hash == 0x63fab7735eee149cULL && ps->repl && s.lastHairCB) { Remember(c, d, true, false, 11); c->PSSetConstantBuffers(11, 1, &s.lastHairCB); }
+    // 20/10: desgaste de la cancha en vivo: la posicion de cada jugador sale del dibujo de su short / medias (b5 del VS)
+    if (ps && ps->hash == 0x55297925e0c66085ULL) PitchWearNotePlayer(c);
     // 19/10: SSS separable en pantalla antes de la composicion: la irradiancia (t9) llega ya difundida sobre la piel
     if (ps && (ps->hash == 0x619b86cb5691cdceULL || ps->hash == 0xf807e74d5b900a15ULL) && ps->repl) {
         if (ID3D11ShaderResourceView* v = SSSSBeforeComposition(c)) { Remember(c, d, true, true, 9); c->PSSetShaderResources(9, 1, &v); }
@@ -882,6 +888,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     WatchShaderFolder();
     PollMatch();
     CatalogPresent();
+    PitchWearPresent();
     GrassPresent();
     FaceGenPresent();
     InspectPresent();
@@ -943,6 +950,7 @@ void ReloadShaders() {
     ScanShaderFolder();
     FaceGenReloadShaders();
     SSSSReloadShaders();
+    PitchWearReloadShaders();
     std::unique_lock<std::shared_mutex> lk(s_shMutex);
     int n = 0;
     { std::lock_guard<std::mutex> lk2(g_errMutex); g_compileErrors.clear(); }

@@ -445,9 +445,10 @@ void PollKeys(bool focused) {
     }
 }
 
+std::atomic<int> g_matchGen{0};
 void OnTurfDrawn() {
     double t = Now();
-    if (t - s_lastTurf > 20.0) { s_matchStart = t; FaceGenClear(); }   // cancha sin dibujarse 20 s y vuelve = partido nuevo
+    if (t - s_lastTurf > 20.0) { s_matchStart = t; FaceGenClear(); g_matchGen++; }   // cancha sin dibujarse 20 s y vuelve = partido nuevo
     s_lastTurf = t;
 }
 

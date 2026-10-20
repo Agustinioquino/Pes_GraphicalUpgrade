@@ -43,21 +43,32 @@ float3 PESMowGrain(float2 pm, float3 gIn, float pat, float widthM, float lean)
 // desgaste: wear 0 = cancha profesional .. 1 = potrero. Devuelve x = desgaste de color (seco, 0..1), y = pelado (tierra, 0..1).
 // Las manchas van en metros del mundo (wxz) asi la base y las hojas coinciden; las zonas de mas uso (bocas de arco,
 // circulo central) se marcan en metros de la cancha (pm).
-float2 PESWear(float2 pm, float2 wxz, float wear, float areas, float bald)
+// live = desgaste en vivo (mapa que pinta la DLL con los jugadores, 0..1): seca y, al maximo, pela (z115)
+float2 PESWear(float2 pm, float2 wxz, float wear, float areas, float bald, float live)
 {
-  if (wear <= 0.001) return float2(0.0, 0.0);
-  float n1 = PESGnoise(wxz * 0.22 + 3.1), n2 = PESGnoise(wxz * 0.9 + 7.7), n3 = PESGnoise(wxz * 3.3 + 1.3);
-  float n = n1 * 0.55 + n2 * 0.3 + n3 * 0.15;
-  float2 ga = abs(pm) - float2(52.5 - 5.0, 0.0);
-  float goal = exp(-dot(ga * ga, float2(1.0 / 36.0, 1.0 / 81.0)));
-  float centre = exp(-dot(pm * pm, float2(1.0 / 81.0, 1.0 / 49.0)));
-  float use = saturate(goal + centre * 0.8) * saturate(areas);
-  float k = saturate(wear * (0.6 + 0.8 * use));
-  float col = saturate((n - 0.5 + k * 0.9) * 1.6);
-  float thr = 1.0 - k * 0.7 * saturate(bald);
-  float bare = smoothstep(thr - 0.12, thr + 0.02, n + use * 0.25) * (bald > 0.001 ? 1.0 : 0.0);
+  float col = 0.0, bare = 0.0;
+  if (wear > 0.001) {
+    float n1 = PESGnoise(wxz * 0.22 + 3.1), n2 = PESGnoise(wxz * 0.9 + 7.7), n3 = PESGnoise(wxz * 3.3 + 1.3);
+    float n = n1 * 0.55 + n2 * 0.3 + n3 * 0.15;
+    float2 ga = abs(pm) - float2(52.5 - 5.0, 0.0);
+    float goal = exp(-dot(ga * ga, float2(1.0 / 36.0, 1.0 / 81.0)));
+    float centre = exp(-dot(pm * pm, float2(1.0 / 81.0, 1.0 / 49.0)));
+    float use = saturate(goal + centre * 0.8) * saturate(areas);
+    float k = saturate(wear * (0.6 + 0.8 * use));
+    col = saturate((n - 0.5 + k * 0.9) * 1.6);
+    float thr = 1.0 - k * 0.7 * saturate(bald);
+    bare = smoothstep(thr - 0.12, thr + 0.02, n + use * 0.25) * (bald > 0.001 ? 1.0 : 0.0);
+  }
+  float4 LW = IniParams.Load(int2(115, 0));
+  if (LW.w > 0.5 && live > 0.001) {
+    float n4 = PESGnoise(wxz * 2.1 + 4.4);                       // el pisoteo no es parejo
+    float lv = saturate(live * (0.8 + 0.4 * n4));
+    col = saturate(col + lv * 0.9);
+    bare = max(bare, smoothstep(0.55, 1.0, lv) * saturate(LW.z));
+  }
   return float2(col, bare);
 }
+float PESWearLiveHeight(float live) { float4 LW = IniParams.Load(int2(115, 0)); return LW.w > 0.5 ? 1.0 - 0.45 * saturate(live) : 1.0; }
 
 // variacion de color por zonas (manchas de 2-6 m mas verdes / mas palidas, y detalle de 0.5 m): multiplicador rgb
 float3 PESGrassZones(float2 wxz, float k)
