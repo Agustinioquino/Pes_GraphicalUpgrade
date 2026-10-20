@@ -51,6 +51,7 @@ Texture2D<float4> PESDepth : register(t21);   // PES21: profundidad copiada del 
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 #include "pes_common.hlsli"   // PES21 (18/10): nubes volumetricas
+#include "pes_grass.hlsli"    // PES21 (20/10): estado del suelo (PESGround) para los reflejos de la cancha mojada
 
 
 // PES21 sol visible (16/10): copias de los cbuffers de escena (b2 de la composicion) y de luz (b3 de los shaders de luz),
@@ -230,6 +231,115 @@ void main(
         r0.xyz = lerp(abs(dWd) * 2.0, float3(3.0, 0.0, 0.0), 1.0 - pesCloudT);
         // franja superior: color de etapa (rojo apagadas, naranja sin cbuffer, amarillo sin sol, violeta bajo horizonte, cian sin densidad, verde nube)
         if (uvS.y < 0.06) { float3 stc[7] = { float3(0,0,0), float3(1,0,0), float3(1,0.5,0), float3(1,1,0), float3(0.6,0,1), float3(0,1,1), float3(0,1,0) }; r0.xyz = stc[cloudStage] * 3.0; }
+      }
+    }
+  }
+  // === PES21 rayos de sol (20/10): dispersion de la luz del sol en pantalla (light shafts / god rays) ===
+  // Marcha radial desde cada pixel hacia el sol leyendo la profundidad: solo el cielo (profundidad 0) aporta luz, asi los
+  // rayos salen por los huecos del techo y entre las tribunas y los cortan los jugadores. Se apaga con el sol fuera de
+  // pantalla, de noche (sin sol real, 114.w) y detras de las nubes volumetricas (misma capa que dibuja el cielo).
+  // 119: x on | y intensidad | z largo (fraccion del camino al sol que se recorre) | w extension alrededor del sol
+  { float4 GR = IniParams.Load(int2(119,0)); float4 SNg = IniParams.Load(int2(37,0));
+    float3 Lg = pL_dir.xyz; bool sunnyG = IniParams.Load(int2(114,0)).w > 0.5;
+    if (GR.x > 0.5 && sunnyG && dot(Lg, Lg) > 1e-6 && abs(pS_projParam.x) > 1e-6 && abs(pS_projParam.y) > 1e-6) {
+      Lg = normalize(Lg);
+      if (Lg.z > 0.05) {
+        float2 uvG = v1.xy * g_psSystem.m_renderBuffer.zw;
+        float2 scG = Lg.xy / (Lg.z * pS_projParam.xy) + pS_centerOff.xy;
+        float2 sunUVg = float2(scG.x * 0.5 + 0.5, (SNg.z > 0.5 ? scG.y : -scG.y) * 0.5 + 0.5);
+        float outG = max(max(-sunUVg.x, sunUVg.x - 1.0), max(-sunUVg.y, sunUVg.y - 1.0));
+        float offK = 1.0 - smoothstep(0.05, 0.5, outG);                  // sol fuera de pantalla: se apaga de a poco
+        float aspG = g_psSystem.m_renderBuffer.w > 0 ? g_psSystem.m_renderBuffer.w / max(g_psSystem.m_renderBuffer.z, 1e-6) : 1.7778;
+        float2 dG = sunUVg - uvG;
+        float distG = length(dG * float2(aspG, 1.0));
+        float ext = max(GR.w, 0.1);                                       // 1 = media pantalla alrededor del sol
+        float gate = offK * exp(-distG / (0.45 * ext));
+        if (gate > 0.004) {
+          float3 vXg = float3(pS_mat[2]._m00, pS_mat[2]._m01, pS_mat[2]._m02), vYg = float3(pS_mat[2]._m10, pS_mat[2]._m11, pS_mat[2]._m12), vZg = float3(pS_mat[2]._m20, pS_mat[2]._m21, pS_mat[2]._m22);
+          float3 sunWg = normalize(float3(dot(Lg, vXg), dot(Lg, vYg), dot(Lg, vZg)));
+          PESCloudParams CPg = PESCloudLoad(g_psSystem.m_timeParam.z);
+          float Tc = PESCloudShadow(float3(0.0, 0.0, 0.0), sunWg, CPg);    // nubes delante del sol (campo relativo a la camara, como el cielo)
+          if (Tc > 0.02) {
+            const int NG = 24;
+            float lenG = clamp(GR.z, 0.2, 1.0);
+            float2 stepG = dG * (lenG / NG);
+            float jitG = frac(52.9829189 * frac(dot(v1.xy, float2(0.06711056, 0.00583715))));
+            float2 pG = uvG + stepG * jitG;
+            float acc = 0.0, wsum = 0.0, decay = 1.0;
+            [loop] for (int i = 0; i < NG; i++) {
+              pG += stepG;
+              float dep = PESDepth.SampleLevel(g_samplerPoint_Wrap_s, saturate(pG), 0).x;
+              float rT = length((sunUVg - pG) * float2(aspG, 1.0));
+              float wT = decay * exp(-rT / (0.35 * ext));
+              acc += (dep < 1e-6 ? 1.0 : 0.0) * wT; wsum += wT; decay *= 0.97;
+            }
+            float shaft = acc / max(wsum, 1e-4);
+            float3 colG = max(pL_color.xyz, 0.0); colG /= max(dot(colG, float3(0.2126, 0.7152, 0.0722)), 1e-3);
+            r0.xyz += colG * shaft * gate * Tc * (saturate(GR.y) * 1.2);
+          }
+        }
+      }
+    }
+  }
+  // === PES21 reflejos en la cancha mojada (20/10): reflexion en espacio de pantalla (SSR) solo sobre el plano de la cancha ===
+  // Con lluvia (estado del suelo humedo) el cesped se vuelve un espejo rugoso: se reconstruye la posicion en mundo con la
+  // profundidad, y para los pixeles que estan sobre el plano de la cancha (y ~ 0, dentro del rectangulo) se marcha el rayo
+  // reflejado por el buffer de profundidad hasta tocar algo (jugadores, tribunas, torres de luz) y se mezcla ese color con
+  // Fresnel (fuerte en angulos rasantes, como en las transmisiones con lluvia). 120: x on | y intensidad | z desenfoque (px) | w depuracion
+  { float4 SR = IniParams.Load(int2(120,0)); float2 gW = PESGround(); float4 Q86r = IniParams.Load(int2(86,0));
+    float wetR = gW.x * saturate(SR.y);
+    if (SR.x > 0.5 && wetR > 0.01 && abs(pS_projParam.x) > 1e-6 && abs(pS_projParam.y) > 1e-6 && abs(pS_projParam.z) > 1e-6) {
+      float2 uvR = v1.xy * g_psSystem.m_renderBuffer.zw;
+      float depR = PESDepth.SampleLevel(g_samplerPoint_Wrap_s, uvR, 0).x;
+      if (depR > 1e-6) {
+        float zl = pS_projParam.z / (depR - pS_projParam.w);
+        float ySgn = (Q86r.y > 0.5 ? 1.0 : -1.0), zSgn = (Q86r.z > 0.5 ? -1.0 : 1.0);
+        float2 ndcR = float2(uvR.x * 2.0 - 1.0, ySgn * (uvR.y * 2.0 - 1.0));
+        float3 posV = float3((ndcR - pS_centerOff.xy) * pS_projParam.xy, zSgn) * abs(zl);
+        float3 vXr = float3(pS_mat[2]._m00, pS_mat[2]._m01, pS_mat[2]._m02), vYr = float3(pS_mat[2]._m10, pS_mat[2]._m11, pS_mat[2]._m12), vZr = float3(pS_mat[2]._m20, pS_mat[2]._m21, pS_mat[2]._m22);
+        float3 eyeR = pS_eye.xyz;
+        float3 posW = eyeR + float3(dot(posV, vXr), dot(posV, vYr), dot(posV, vZr));   // vista -> mundo, misma convencion que las nubes / brujula
+        bool onPitch = abs(posW.y) < 0.16 && abs(posW.x) < 56.0 && abs(posW.z) < 37.0;
+        if (SR.w > 0.5) r0.xyz = onPitch ? float3(0.0, 2.0, 0.0) : float3(abs(posW.y) < 2.0 ? 2.0 : 0.0, 0.0, frac(posW.x * 0.1) * 2.0);
+        if (onPitch) {
+          float3 V = normalize(posW - eyeR);
+          if (V.y < -0.01) {
+            float3 R = float3(V.x, -V.y, V.z);
+            float cosT = saturate(-V.y);
+            float F = 0.02 + 0.98 * pow(1.0 - cosT, 5.0);                 // Fresnel de la lamina de agua
+            float jitR = frac(52.9829189 * frac(dot(v1.xy, float2(0.06711056, 0.00583715))));
+            float t = 0.35 * (1.0 + 0.5 * jitR); float hitK = 0.0; float2 hitUV = 0.0; float travel = 0.0;
+            float3 p0 = posW + float3(0.0, 0.02, 0.0);
+            [loop] for (int i = 0; i < 26 && hitK < 0.5; i++) {
+              float3 pW = p0 + R * t;
+              float3 dWr = pW - eyeR; float3 pV = dWr.x * vXr + dWr.y * vYr + dWr.z * vZr;   // mundo -> vista (traspuesta)
+              float pz = pV.z * zSgn;
+              if (pz < 0.05) break;
+              float2 sc = pV.xy / (pz * pS_projParam.xy) + pS_centerOff.xy;
+              float2 uvH = float2(sc.x * 0.5 + 0.5, ySgn * sc.y * 0.5 + 0.5);
+              if (any(uvH < 0.0) || any(uvH > 1.0)) break;
+              float dH = PESDepth.SampleLevel(g_samplerPoint_Wrap_s, uvH, 0).x;
+              float zH = dH > 1e-6 ? pS_projParam.z / (dH - pS_projParam.w) : 1e6;
+              float thick = 0.25 + pz * 0.06;
+              if (zH < pz && pz - zH < thick + t * 0.35) { hitK = 1.0; hitUV = uvH; travel = t; }
+              t *= 1.28;
+            }
+            if (hitK > 0.5) {
+              // el cesped mojado refleja borroso: promedio de 5 muestras, mas abierto cuanto mas lejos
+              float2 px = g_psSystem.m_renderBuffer.zw * (max(SR.z, 0.0) * (1.0 + travel * 0.08));
+              float3 rc = inImage.SampleLevel(g_samplerLinear_Clamp_s, hitUV, 0).xyz * 0.36;
+              rc += inImage.SampleLevel(g_samplerLinear_Clamp_s, hitUV + float2(px.x, 0), 0).xyz * 0.16;
+              rc += inImage.SampleLevel(g_samplerLinear_Clamp_s, hitUV - float2(px.x, 0), 0).xyz * 0.16;
+              rc += inImage.SampleLevel(g_samplerLinear_Clamp_s, hitUV + float2(0, px.y), 0).xyz * 0.16;
+              rc += inImage.SampleLevel(g_samplerLinear_Clamp_s, hitUV - float2(0, px.y), 0).xyz * 0.16;
+              rc *= exposure;
+              // desvanecer en los bordes de la pantalla y con la distancia recorrida (el reflejo se funde con el pasto)
+              float edge = smoothstep(0.0, 0.08, hitUV.x) * smoothstep(0.0, 0.08, 1.0 - hitUV.x) * smoothstep(0.0, 0.08, hitUV.y) * smoothstep(0.0, 0.08, 1.0 - hitUV.y);
+              float k = saturate(F * 1.6) * wetR * edge * (1.0 - smoothstep(60.0, 140.0, travel));
+              r0.xyz = lerp(r0.xyz, rc, k);
+            }
+          }
+        }
       }
     }
   }
