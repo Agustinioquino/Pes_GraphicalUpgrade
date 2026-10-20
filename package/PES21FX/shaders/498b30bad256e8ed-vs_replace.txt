@@ -117,6 +117,7 @@ void main(
     float n = PESGnoise(pesRoot * 1.7 + 0.37);
     pesH = hT * clamp(Q4.z, 0.3, 3.0) * (1.0 + (n - 0.5) * 2.0 * hv) * (1.0 - pesWear.x * 0.35) * (1.0 - pesWear.y);
     v0.y *= pesH;
+    pesExtW.y = v0.y;   // las parcelas extra toman la misma altura
   }
   // --- posicion en el mundo y doblado por jugador / pelota ---
   r0.x = v0.y + 10.0;
