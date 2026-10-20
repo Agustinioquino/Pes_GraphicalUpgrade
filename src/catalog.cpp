@@ -460,6 +460,15 @@ static bool CatalogWrite(UINT bbW, UINT bbH, std::vector<const ShaderEntry*> all
             std::ofstream a(adir + wname, std::ios::binary | std::ios::trunc);
             if (a) { a.write((const char*)blob->GetBufferPointer(), (std::streamsize)blob->GetBufferSize() - 1); na++; }
             blob->Release();
+            // (20/10) copia con los literales en hexadecimal (bits exactos): tools/asm2hlsl.py la prefiere (el texto normal
+            // redondea a 6 decimales: 0.000978 en vez de 1/1023)
+            ID3DBlob* hb = nullptr;
+            if (SUCCEEDED(s_disasm(e->code->data(), e->code->size(), 0x80 /*D3D_DISASM_PRINT_HEX_LITERALS*/, nullptr, &hb)) && hb) {
+                std::wstring hdir = adir + L"hex\"; CreateDirectoryW(hdir.c_str(), nullptr);
+                std::ofstream ah(hdir + wname, std::ios::binary | std::ios::trunc);
+                if (ah) ah.write((const char*)hb->GetBufferPointer(), (std::streamsize)hb->GetBufferSize() - 1);
+                hb->Release();
+            }
         }
         f << "\r\n(ensamblador de " << na << " shaders usados sin reemplazo en catalog\\asm\\)\r\n";
     }
