@@ -29,6 +29,8 @@ struct MeterRes { float n[6] = {}, lum[6] = {}, r[6] = {}, g[6] = {}, b[6] = {};
 static MeterRes s_res;                       // ultima lectura (promedios)
 static float s_gain = 1.0f, s_target = 0.0f, s_ratio[3] = {}, s_tintSh = 0.0f, s_tintLit = 0.0f;
 static double s_lastUpd = 0;
+// (20/10) exposicion estable: brillo del pasto al sol (despues de la exposicion del motor) promediado corto y largo
+static float s_eShort = 0.0f, s_eLong = 0.0f, s_expC = 1.0f; static int s_expMatch = -1; static double s_lastExp = 0;
 
 static bool MeterOn() { return g_cfg.live[126][0] > 0.5f; }   // y126 = 0: solo mide (sin calibrar)
 std::atomic<bool> g_meterHook{false};
@@ -147,7 +149,7 @@ static float TargetRatio(float elevDeg) {
 void LightMeterPresent() {
     float* p125 = g_cfg.live[125];
     s_frame++;
-    if (!MeterOn()) { g_meterHook = false; s_gain += (1.0f - s_gain) * 0.05f; p125[0] = s_gain; return; }
+    if (!MeterOn()) { g_meterHook = false; s_gain += (1.0f - s_gain) * 0.05f; p125[0] = s_gain; g_cfg.live[128][0] = 1.0f; return; }
     if (!g_dev.imm) return;
     // lectura: el staging mas viejo ya listo
     int best = -1, bestF = 1 << 30;
@@ -189,14 +191,35 @@ void LightMeterPresent() {
     }
     p125[0] = 1.0f + (s_gain - 1.0f) * k;
     p125[1] = s_ratio[0]; p125[2] = s_target; p125[3] = s_tintSh;
+    // exposicion estable entre camaras (129: x on, y fuerza, z segundos de memoria): el motor cambia la exposicion en cada
+    // toma (primeros planos, repeticiones); una camara de TV expone para la cancha al sol y casi no salta. Se compara el
+    // brillo del pasto al sol de esta toma (corto) con el de los ultimos ~40 s (largo) y se corrige la diferencia en el
+    // tonemap (128.x). Sin pasto al sol en pantalla (primer plano, tribuna) se mantiene la ultima correccion.
+    { const float* E = g_cfg.live[129]; float* o = g_cfg.live[128];
+      if (g_matchGen.load() != s_expMatch) { s_expMatch = g_matchGen.load(); s_eShort = s_eLong = 0.0f; s_expC = 1.0f; }
+      double dtE = (std::min)(t - s_lastExp, 0.5); s_lastExp = t;
+      bool have = s_res.valid && s_res.n[0] > 300 && s_res.lum[0] > 1e-4f;
+      if (have) {
+          float e = s_res.lum[0];
+          if (s_eShort <= 0.0f) s_eShort = e; if (s_eLong <= 0.0f) s_eLong = e;
+          float mem = std::clamp(E[2] > 1.0f ? E[2] : 40.0f, 5.0f, 300.0f);
+          s_eShort += (e - s_eShort) * (float)(1.0 - exp(-dtE / 0.4));
+          s_eLong  += (e - s_eLong)  * (float)(1.0 - exp(-dtE / mem));
+      }
+      float cT = 1.0f;
+      if (E[0] > 0.5f && s_eShort > 1e-4f && s_eLong > 1e-4f) cT = std::clamp(s_eLong / s_eShort, 0.6f, 1.7f);
+      cT = 1.0f + (cT - 1.0f) * std::clamp(E[1], 0.0f, 1.0f);
+      if (!have && E[0] > 0.5f) cT = s_expC;   // sin medida: se mantiene
+      s_expC += (cT - s_expC) * (float)(1.0 - exp(-dtE / 0.5));
+      o[0] = E[0] > 0.5f ? s_expC : 1.0f; o[1] = s_eShort; o[2] = s_eLong; }
     g_meterHook = true;
 }
 
 std::string LightMeterSummary() {
     char b[320];
     if (!s_res.valid) return "medidor: sin datos";
-    snprintf(b, sizeof b, "medidor: pasto sol/sombra %.2f (objetivo %.2f) | piel %.2f | camisetas %.2f | sombra b/r %.2f (sol %.2f) | ganancia ambiente %.2f | muestras pasto %.0f/%.0f",
-        s_ratio[0], s_target, s_ratio[1], s_ratio[2], s_tintSh, s_tintLit, g_cfg.live[125][0], s_res.n[0], s_res.n[1]);
+    snprintf(b, sizeof b, "medidor: pasto sol/sombra %.2f (objetivo %.2f) | piel %.2f | camisetas %.2f | sombra b/r %.2f (sol %.2f) | ganancia ambiente %.2f | exposicion %.2f | muestras pasto %.0f/%.0f",
+        s_ratio[0], s_target, s_ratio[1], s_ratio[2], s_tintSh, s_tintLit, g_cfg.live[125][0], g_cfg.live[128][0], s_res.n[0], s_res.n[1]);
     return b;
 }
 

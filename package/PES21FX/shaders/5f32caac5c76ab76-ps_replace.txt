@@ -114,6 +114,7 @@ void main(
     r1.xyz *= lerp(0.2, 1.0, edgeM);
   }
   r0.xyz = (r2.xyz + r1.xyz * bloomInt) * exposure;
+  { float ec = IniParams.Load(int2(128,0)).x; if (ec > 0.05) r0.xyz *= ec; }   // PES21 (20/10) exposicion estable entre camaras (la calcula la DLL con el medidor de luz)
   // === PES21 v2: look moderno (x6 luces altas suaves, y6 tono partido, z6 claridad, w6 viñeta) ===
   float4 P6 = IniParams.Load(int2(6,0));
   float4 P7 = IniParams.Load(int2(7,0));
