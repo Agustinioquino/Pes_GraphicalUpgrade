@@ -56,7 +56,8 @@ jobs:
           Get-ChildItem package/PES21FX/shaders/*_replace.txt, package/PES21FX/shaders/*.hlsl, package/cloth-mod/*.hlsl | ForEach-Object {
             $n++
             $t = if ($_.Name -match '-ps_|_ps\.hlsl') { 'ps_5_0' } elseif ($_.Name -match '-vs_|_vs\.hlsl') { 'vs_5_0' } else { 'cs_5_0' }
-            $r = & $fxc.FullName /nologo /T $t /E main /I package/PES21FX/shaders /Fo NUL $_.FullName 2>&1 | Out-String
+            New-Item -ItemType Directory -Force -Path shaderasm | Out-Null
+            $r = & $fxc.FullName /nologo /T $t /E main /I package/PES21FX/shaders /Fo NUL /Fc ("shaderasm/" + $_.BaseName + ".asm") $_.FullName 2>&1 | Out-String
             if ($LASTEXITCODE -ne 0) { $bad++; Add-Content shadercheck.txt ("==== " + $_.Name + "`n" + $r) }
           }
           Write-Host "shaders: $n, con errores: $bad"
@@ -89,6 +90,7 @@ jobs:
           Copy-Item package/LEEME.txt dist/
           Copy-Item -Recurse package/sider dist/sider
           if (Test-Path shadercheck.txt) { Copy-Item shadercheck.txt dist/ }
+          if (Test-Path shaderasm) { Copy-Item -Recurse shaderasm dist/shaderasm }   # desensamblado de cada reemplazo (firmas y codigo, para comparar con el original)
 
       - uses: actions/upload-artifact@v4
         with:
