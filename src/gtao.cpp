@@ -64,6 +64,9 @@ ID3D11ShaderResourceView* GTAOBeforeComposition(ID3D11DeviceContext* c, int fram
     if (!depth || !nrm) { rel(); return nullptr; }
     ID3D11Resource* res = nullptr; depth->GetResource(&res); if (!res) { rel(); return nullptr; }
     D3D11_TEXTURE2D_DESC td; ((ID3D11Texture2D*)res)->GetDesc(&td); res->Release();
+    // (20/10) solo a pantalla completa: la luz global tambien corre para una sonda de 16x16; si se calculaba ahi, ese AO chico
+    // quedaba como el del cuadro y la composicion lo usaba -> parpadeo oscuro / en bloques (y se recreaban las texturas 650 veces)
+    if (td.Width < 640 || (g_bbW && (td.Width < g_bbW * 3 / 4 || td.Width > g_bbW * 3))) { rel(); return nullptr; }
     if (td.SampleDesc.Count != 1 || !EnsureTargets(td.Width, td.Height)) { rel(); return nullptr; }
     ID3D11Buffer* scb = nullptr; c->PSGetConstantBuffers(2, 1, &scb);
     ID3D11Buffer* sys = nullptr; c->PSGetConstantBuffers(0, 1, &sys);

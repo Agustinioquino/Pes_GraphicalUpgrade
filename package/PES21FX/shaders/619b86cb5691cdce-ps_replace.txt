@@ -482,7 +482,8 @@ void main(
   r0.x = inOcclusion.Sample(g_samplerLinear_Clamp_s, r0.xy).x;
   { // PES21 GTAO (20/10): oclusion por horizontes de la DLL mezclada con el SSAO del juego (y132: 0 solo juego .. 1 solo GTAO)
     float4 GT = IniParams.Load(int2(132,0));
-    if (GT.x > 0.5) { float g = PESGtao.SampleLevel(g_samplerLinear_Clamp_s, r0.xy, 0).x; r0.x = lerp(r0.x, min(r0.x * 0.35 + 0.65, g), saturate(GT.y)); }
+    uint gw, gh; PESGtao.GetDimensions(gw, gh);   // (20/10) solo un GTAO de pantalla completa (sin enlazar / sonda chica = el AO del juego)
+    if (GT.x > 0.5 && gw >= 640) { float g = PESGtao.SampleLevel(g_samplerLinear_Clamp_s, r0.xy, 0).x; if (g > 0.002) r0.x = lerp(r0.x, min(r0.x * 0.35 + 0.65, g), saturate(GT.y)); }
   }
   float aoRaw = saturate(r0.x);
   float3 occRGB = r0.xxx;
