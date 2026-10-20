@@ -494,6 +494,7 @@ static void Restore(ID3D11DeviceContext* c, DrawScope& d) {
     d.n = 0;
 }
 
+extern thread_local UINT t_drawVerts; extern thread_local UINT t_drawStart; extern thread_local INT t_drawBase; extern thread_local bool t_lodNoted;   // (definidas mas abajo)
 static void RunRule(ID3D11DeviceContext* c, const ShaderEntry* e, DrawScope& d) {
     const bool ps = e->type == 'p';
     for (auto& a : e->rule->actions) {
