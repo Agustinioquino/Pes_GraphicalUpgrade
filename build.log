@@ -1,0 +1,45 @@
+MSBuild version 18.11.0-1.26475.11+3cde5c8ec for .NET Framework
+
+  1>Checking Build System
+  Building Custom Rule D:/a/Pes_GraphicalUpgrade/Pes_GraphicalUpgrade/CMakeLists.txt
+  buffer.c
+  hook.c
+  trampoline.c
+  hde64.c
+  Generating Code...
+  minhook.vcxproj -> D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\Release\minhook.lib
+  Building Custom Rule D:/a/Pes_GraphicalUpgrade/Pes_GraphicalUpgrade/CMakeLists.txt
+  Assembling D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\d3d11_exports.asm...
+  main.cpp
+  d3d11_proxy.cpp
+  config.cpp
+  hooks.cpp
+  overlay.cpp
+  presets.cpp
+  catalog.cpp
+  grass.cpp
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\catalog.cpp(467,44): error C2001: newline in string literal [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\catalog.cpp(468,22): error C2143: syntax error: missing ';' before 'std::ofstream' [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+  menutest.cpp
+  facegen.cpp
+  inspect.cpp
+  ssss.cpp
+  pitchwear.cpp
+  lod.cpp
+  lightmeter.cpp
+  gtao.cpp
+  exedump.cpp
+  asyncshot.cpp
+  exepatch.cpp
+  imgui.cpp
+  Generating Code...
+  Compiling...
+  imgui_draw.cpp
+  imgui_tables.cpp
+  imgui_widgets.cpp
+  imgui_impl_dx11.cpp
+  imgui_impl_win32.cpp
+  DDSTextureLoader.cpp
+  ScreenGrab.cpp
+  WICTextureLoader.cpp
+  Generating Code...

@@ -1,0 +1,2 @@
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\catalog.cpp(467,44): error C2001: newline in string literal [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\catalog.cpp(468,22): error C2143: syntax error: missing ';' before 'std::ofstream' [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
