@@ -303,6 +303,7 @@ void main(
           acc += Ls * (cosC * cosS * fall);
         }
         float3 ind = acc * (2.2 / 16.0) * giK * saturate((90.0 - zg) / 30.0);
+        if (skinC) ind *= 1.0 - 0.5 * saturate(IniParams.Load(int2(124,0)).x);   // PES21 rasgos (20/10): menos relleno en las cuencas de la cara
         r2.xyz += ind;
         giDbg = ind;
       }
@@ -550,6 +551,11 @@ void main(
   // 2) oclusion especular (Lagarde): el brillo se apaga en los huecos segun la rugosidad y el angulo de vista,
   //    en vez de oscurecer todo igual. x48 multirebote, y48 oclusion especular, z48 fuerza total, w48 on/off
   float4 AOP = IniParams.Load(int2(48,0));
+  // PES21 rasgos de la cara (20/10, x124): comparando con el juego original, la cara del mod salia mas clara y "sin rasgos":
+  // el multirebote del GTAO aclara la oclusion en superficies claras (en la piel una cuenca de 0.5 pasaba a 0.72), y el SSGI
+  // rellena las cuencas. En la piel: oclusion mas honda (potencia) y sin multirebote, segun x124 (0 = como antes).
+  float faceK = (cmpOn && skinC) ? saturate(IniParams.Load(int2(124,0)).x) : 0.0;
+  if (faceK > 0.0) { aoRaw = pow(aoRaw, 1.0 + 0.8 * faceK); occRGB = pow(max(occRGB, 1e-4), 1.0 + 0.8 * faceK); }
   if (cmpOn && AOP.w > 0.5) {
     float3 diffC = r7.xyz * r2.xyz;
     float3 specC = r1.xyz;
@@ -557,7 +563,7 @@ void main(
     float3 alb = saturate(r7.xyz);
     float3 ma = 2.0404 * alb - 0.3324, mb = -4.7951 * alb + 0.6417, mc = 2.7552 * alb + 0.6903;
     float3 multi = max(aoK.xxx, ((aoK * ma + mb) * aoK + mc) * aoK);
-    float3 aoD = lerp(occRGB, occRGB * multi / max(aoRaw, 1e-3), saturate(AOP.x));
+    float3 aoD = lerp(occRGB, occRGB * multi / max(aoRaw, 1e-3), saturate(AOP.x) * (1.0 - faceK));
     aoD = min(aoD, 1.0);
     float aoS = aoK;
     if (geoOk) {

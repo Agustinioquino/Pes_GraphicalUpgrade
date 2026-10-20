@@ -24,6 +24,12 @@ def keyvals(body):
         k, v = t.split('=', 1); d[k.strip()] = v.strip()
     return d
 
+# (20/10) --set clave=valor: fuerza un valor aunque el PC tenga otro (cambios deliberados del mod)
+force = {}
+args = [a for a in sys.argv[1:]]
+while '--set' in args:
+    i = args.index('--set'); k, v = args[i + 1].split('=', 1); force[k.strip()] = v.strip(); del args[i:i + 2]
+sys.argv = [sys.argv[0]] + args
 dev, rep = sections(read(sys.argv[1])), sections(read(sys.argv[2]))
 devmap = {}
 for name, body in dev:
@@ -43,6 +49,9 @@ for name, body in rep:
             t = l.strip()
             if t and not t.startswith(';') and '=' in t:
                 k, v = t.split('=', 1); k = k.strip()
+                if k in force:
+                    seen.add(k); stats['forced'] = stats.get('forced', 0) + 1
+                    nb.append('%s = %s' % (k, force[k])); continue
                 if k in dv:
                     seen.add(k)
                     if dv[k] != v.strip(): stats['kept'] += 1
@@ -69,4 +78,4 @@ for item in out:
 txt = '\r\n'.join(res)
 if not txt.endswith('\r\n'): txt += '\r\n'
 open(sys.argv[3], 'wb').write(txt.encode('cp1252'))
-print('ok: %d valores del PC conservados (distintos del repo), %d claves nuevas del repo, %d solo del PC' % (stats['kept'], stats['new'], stats['devonly']))
+print('ok: %d valores del PC conservados (distintos del repo), %d claves nuevas del repo, %d solo del PC, %d forzados' % (stats['kept'], stats['new'], stats['devonly'], stats.get('forced', 0)))
