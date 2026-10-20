@@ -68,6 +68,12 @@ Luz moderna (20/10)
 - Atmosfera fisica (Iluminacion -> "Atmosfera fisica", 121): el color del sol sale de la transmitancia Rayleigh + Mie
   (masa de aire), normalizada al cenit; reemplaza el tinte calido a mano de la curva del dia.
 
+Presets de color/luz (menu -> pestana Presets -> Aplicar)
+---------------------------------------------------------
+- presets\look_pes_real.ini (base), look_pes_vivo.ini (vivo como el juego), look_tv.ini (transmision), look_cine.ini
+  (AgX con punch, tono partido, vineta). "Aplicar" prueba uno en cualquier estadio, "Quitar" vuelve a tus valores.
+  Para hacer el tuyo: ajusta y "Guardar preset" (o copia uno de estos y cambia los valores).
+
 Pasto v4: manojos curvos (Cancha y cielo -> "Pasto v4", 123)
 ------------------------------------------------------------
 - El juego dibuja cada parcela de 0.5 m con tarjetas planas (manojo de ~1.2 x 5.8 cm; 27744 / ~9000 / ~6000 indices
