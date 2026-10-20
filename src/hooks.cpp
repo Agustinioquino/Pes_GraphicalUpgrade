@@ -419,6 +419,25 @@ std::string DescribeInputLayout(ID3D11InputLayout* il) {
     std::string r; for (auto& e : it->second) { char b[128]; snprintf(b, sizeof(b), "%s%u fmt %u slot %u off %u%s; ", e.sem.c_str(), e.idx, e.fmt, e.slot, e.off, e.cls ? " (instancia)" : ""); r += b; }
     return r;
 }
+// (20/10) LOD de texturas como lo hacen los drivers: todos los samplers lineales del juego pasan a anisotropico N
+// ([PES21FX] aniso = 16) y reciben un sesgo de mip global (mip_bias, negativo = mas nitido). Los samplers "point"
+// (G-buffer, profundidad) y los de comparacion (sombras) no se tocan.
+typedef HRESULT(STDMETHODCALLTYPE* PFN_CreateSS)(ID3D11Device*, const D3D11_SAMPLER_DESC*, ID3D11SamplerState**);
+static PFN_CreateSS o_CreateSS = nullptr; static std::atomic<int> s_ssUpgraded{0};
+static HRESULT STDMETHODCALLTYPE hk_CreateSS(ID3D11Device* d, const D3D11_SAMPLER_DESC* sd, ID3D11SamplerState** o) {
+    if (sd && (g_cfg.aniso > 1 || g_cfg.mipBias != 0.0f)) {
+        D3D11_SAMPLER_DESC m = *sd; bool changed = false;
+        bool point = m.Filter == D3D11_FILTER_MIN_MAG_MIP_POINT || m.Filter == D3D11_FILTER_MIN_MAG_POINT_MIP_LINEAR;
+        bool cmpF = (m.Filter & 0x80) != 0;   // D3D11_FILTER_COMPARISON_*
+        bool linear = !point && !cmpF && m.Filter < D3D11_FILTER_MINIMUM_MIN_MAG_MIP_POINT;
+        if (linear && m.MaxLOD > 0.0f) {
+            if (g_cfg.aniso > 1 && (m.Filter != D3D11_FILTER_ANISOTROPIC || m.MaxAnisotropy < (UINT)g_cfg.aniso)) { m.Filter = D3D11_FILTER_ANISOTROPIC; m.MaxAnisotropy = (UINT)g_cfg.aniso; changed = true; }
+            if (g_cfg.mipBias != 0.0f) { m.MipLODBias += g_cfg.mipBias; changed = true; }
+        }
+        if (changed) { HRESULT hr = o_CreateSS(d, &m, o); if (SUCCEEDED(hr)) { if (s_ssUpgraded.fetch_add(1) == 0) Log("samplers: anisotropico %dx y sesgo de mip %.2f forzados", g_cfg.aniso, g_cfg.mipBias); return hr; } }
+    }
+    return o_CreateSS(d, sd, o);
+}
 static void HookContext(ID3D11DeviceContext* c, int v);
 static HRESULT STDMETHODCALLTYPE hk_CreateDC(ID3D11Device* d, UINT f, ID3D11DeviceContext** o) {
     HRESULT hr = o_CreateDC(d, f, o); if (SUCCEEDED(hr) && o && *o) HookContext(*o, 1); return hr; }
@@ -727,6 +746,7 @@ static void HookDevice(ID3D11Device* d) {
         s_deviceHooked = true;
         void** vt = VT(d);
         Hook(vt[11], (void*)&hk_CreateIL, (void**)&o_CreateIL, "CreateInputLayout");
+        Hook(vt[23], (void*)&hk_CreateSS, (void**)&o_CreateSS, "CreateSamplerState");
         Hook(vt[12], (void*)&hk_CreateVS, (void**)&o_CreateVS, "CreateVertexShader");
         Hook(vt[15], (void*)&hk_CreatePS, (void**)&o_CreatePS, "CreatePixelShader");
         Hook(vt[18], (void*)&hk_CreateCS, (void**)&o_CreateCS, "CreateComputeShader");

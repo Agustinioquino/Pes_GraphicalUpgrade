@@ -105,7 +105,8 @@ struct Config {
     std::string favorites;                     // 19/10: titulos de grupos favoritos separados por '|' ([PES21FX] favoritos)
     float uiScale = 1.0f;                      // 19/10: tamano del menu ([PES21FX] ui_scale)
     bool compact = false;                      // 19/10: grupos contraidos por defecto ([PES21FX] compacto)
-    bool autoCap = false; float autoCapSec = 20.0f; int autoCapMax = 150;   // 19/10: captura automatica en partido ([PES21FX] auto_captura, auto_captura_seg, auto_captura_max)
+    bool autoCap = false; float autoCapSec = 20.0f; int autoCapMax = 150;
+    int aniso = 16; float mipBias = 0.0f;   // 20/10: filtrado anisotropico forzado (1 = el del juego) y sesgo de mip global ([PES21FX] aniso, mip_bias)   // 19/10: captura automatica en partido ([PES21FX] auto_captura, auto_captura_seg, auto_captura_max)
     bool optReplace = true, optRules = true, optOverlay = true, optPin = false, optHooks = true, optDxgi = true, optPresent = true, optCtx = true, optExports = true, optOrphan = true, optDump = false;
 };
 extern Config g_cfg;
