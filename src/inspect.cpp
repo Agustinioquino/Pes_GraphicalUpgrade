@@ -417,6 +417,10 @@ void InspectEnd(ID3D11DeviceContext* c) {
 // en Present (contexto inmediato): leer la textura del cuadro anterior, calcular el rectangulo, limpiar para el proximo
 void InspectPresent() {
     if (!g_dev.imm) return;
+    // (20/10) las clases se cargan en el primer Present (antes solo al abrir el inspector o al buscar un alias): asi el
+    // volcado automatico ("volcar = 1") funciona desde el arranque sin abrir nada
+    { std::lock_guard<std::mutex> lk(s_mx);
+      if (!s_loaded) { LoadClasses(); LoadLayers(); ScanFiles(); s_loaded = true; s_cls.clear(); s_unkHash.clear(); s_cls.resize(s_classes.size()); } }
     HistFlush();
     // al apagar el inspector vuelven todas las capas ocultas (y la prueba de cejas); las texturas elegidas por slot se mantienen
     { static bool wasOn = false; bool on = g_inspectOn.load();

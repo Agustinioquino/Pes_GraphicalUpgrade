@@ -120,6 +120,19 @@ void main(
     float3 c = o0.xyz * (0.55 + 0.9 * pesLight);
     float tipK = smoothstep(0.55, 1.0, pesN.z) * (0.18 + 0.6 * v8.x);
     c = PESDryTint(c, tipK + v8.x * saturate(Q7.y) * 0.85);
+    { // misma correccion de color que la base de la cancha ("Pasto v2", x29): antes las hojas quedaban mas amarillas/grises que el suelo
+      float4 GV = IniParams.Load(int2(29,0));
+      if (GV.w > 0.5) {
+        const float3 LWg = float3(0.2126, 0.7152, 0.0722);
+        float lg = dot(c, LWg);
+        float yel = saturate((c.r / max(c.g, 1e-3) - 0.55) * 2.5);
+        float3 natural = c * float3(0.80, 1.0, 0.95);
+        natural *= lg / max(dot(natural, LWg), 1e-4);
+        c = lerp(c, natural, saturate(GV.x) * yel);
+        c = lerp(dot(c, LWg).xxx, c, GV.z > 0 ? GV.z : 1.0);
+        c *= GV.y > 0 ? GV.y : 1.0;
+      }
+    }
     o0.xyz = saturate(c);
   }
   if (v5.w > 0.5) o0.xyz = float3(1.0, 0.0, 1.0);   // PES21 depuracion: parcelas extendidas en magenta (z59)

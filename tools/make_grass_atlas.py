@@ -75,7 +75,7 @@ def make_tuft(nbL, nbS, lenL, lenS, wid, fan, droopR, seed):
         streak = noise1(256, sd, 3.0)[np.clip((s * 0.5 + 0.5) * 255, 0, 255).astype(int)] * 0.045
         along = noise1(512, sd + 1, 14.0)[np.clip(bt * 511, 0, 511).astype(int)] * 0.05
         lightness = 0.5 + tone + vein + streak + along + 0.06 * (bt - 0.3)
-        ao = (0.22 + 0.78 * np.clip(bt / 0.62, 0, 1) ** 0.9) * (0.78 + 0.22 * depth_rank[i])
+        ao = (0.40 + 0.60 * np.clip(bt / 0.55, 0, 1) ** 0.8) * (0.85 + 0.15 * depth_rank[i])   # raiz 0.34 .. punta 1 (antes 0.17: visto desde arriba quedaba todo hundido)
         gloss = (1.0 - 0.55 * s * s) * (0.55 + 0.45 * np.clip(bt, 0, 1)) * (0.85 + 0.15 * depth_rank[i])
         nx = -s * 0.55 + np.sign(s) * np.exp(-(s / 0.18) ** 2) * 0.25
         ny = 0.14 * np.sin(bt * 11.0 + float(sd % 7)) * (0.4 + 0.6 * bt)

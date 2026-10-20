@@ -459,6 +459,10 @@ void main(
   r0.x = inOcclusion.Sample(g_samplerLinear_Clamp_s, r0.xy).x;
   float aoRaw = saturate(r0.x);
   float3 occRGB = r0.xxx;
+  { // PES21 pasto v3 (20/10): el SSAO del motor entre las hojas apaga el pasto cercano (se ve gris y sin sol); x108 lo alivia solo en el cesped
+    float4 GA = IniParams.Load(int2(108,0));
+    if (tyC == 3 && GA.x > 0.001 && IniParams.Load(int2(104,0)).x > 0.5) { float k = saturate(1.0 - GA.x); aoRaw = lerp(1.0, aoRaw, k); occRGB = lerp(float3(1,1,1), occRGB, k); }
+  }
   if (skinC) {
     // la luz ambiente del estadio es gris/verdosa: en la piel se calienta un poco
     r2.xyz *= lerp(float3(1,1,1), float3(1.07, 0.985, 0.93), saturate(P11.y));
