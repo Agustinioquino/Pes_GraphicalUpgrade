@@ -202,9 +202,9 @@ void main(
   // === PES21 (19/10) SOL LIBRE (experimentar): x101 on, y101 azimut (grados), z101 elevacion (grados), w101 intensidad,
   // x102 calidez (0 = color del juego, 1 = naranja atardecer). Mueve la direccion y el color del sol que ve ESTA pasada de luz;
   // las sombras siguen siendo las del sol real del juego (el shadow map lo arma el motor).
-  float4 pesLDir = g_psLight.m_lightDir0; float4 pesLCol = g_psLight.m_lightColor0;
+  float4 pesLDir = g_psLight.m_lightDir0; float4 pesLCol = g_psLight.m_lightColor0; bool pesFreeSun = false;
   { float4 SF = IniParams.Load(int2(101,0));
-    if (SF.x > 0.5) {
+    if (SF.x > 0.5) { pesFreeSun = true;
       float az = radians(SF.y), el = radians(SF.z);
       float3 w = normalize(float3(cos(el) * sin(az), sin(el), cos(el) * cos(az)));   // mundo: Y arriba
       float3 v = float3(dot(float3(g_psScene.m_view._m00, g_psScene.m_view._m01, g_psScene.m_view._m02), w),
@@ -776,14 +776,14 @@ void main(
     float thin = saturate(trans * 1.6);
     float3 sigT = float3(1.0, 3.6, 6.5) * (P34.y > 0 ? P34.y : 1.0);
     float3 Tr = exp(-(1.15 - thin) * sigT) * thin;
-    float visT = lerp(0.25, 1.0, saturate(r0.x));   // la luz entra por el lado de atras aunque el frente este en sombra
+    float visT = pesFreeSun ? 1.0 : lerp(0.25, 1.0, saturate(r0.x));   // la luz entra por el lado de atras aunque el frente este en sombra (sol libre: sin la sombra real)
     // 18/10 v2: solo donde la piel es fina de verdad (orejas, aletas, labios) y el sol esta detras; sin el
     // termino 'de atras' amplio que encendia de naranja todo el lado en sombra de la cara
     float thinGate = lerp(smoothstep(0.45, 0.85, thin), 1.0, saturate(P76.y));   // y76: 0 = solo orejas/nariz/labios, 1 = toda la piel (como antes)
     float3 transm = Tr * fwd * (0.6 + 0.4 * back) * thinGate * P5.x * 1.6 * sssV2;
     // PES21 transmision por shadow map (18/10, Jimenez 2010): el grosor real que atraviesa la luz = distancia entre lo
     // que ve el sol (shadow map) y este pixel. Orejas y nariz se encienden solo cuando el sol esta realmente detras.
-    if (P64.x > 0.5 && P64.z > 0.0 && pesShCas > -0.5 && g_psScene.m_shadowMapResolutions.x > 1.0) {
+    if (P64.x > 0.5 && P64.z > 0.0 && pesShCas > -0.5 && g_psScene.m_shadowMapResolutions.x > 1.0 && !pesFreeSun) {   // sol libre: el shadow map es del sol real, no sirve para medir grosor
       tookSM = true;
       float casS = pesShCas < 0.5 ? 1.0 : (pesShCas < 1.5 ? g_psScene.m_shadowProjection2._m03 : g_psScene.m_shadowProjection2._m13);
       float refPerM = max(length(g_psScene.m_shadowProjection._m02_m12_m22) * abs(g_psScene.m_shadowProjection2._m30) * abs(casS), 1e-5);
