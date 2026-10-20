@@ -608,7 +608,7 @@ void main(
       float2 cell = floor(v2.xy * 256.0);
       float4 sm = pesSeedMap.SampleLevel(g_samplerLinear_Clamp_s, (cell + 0.5) / 256.0, 0);   // (s11: el s8 del juego puede no estar enlazado en este dibujo)
       bool isBrowZ = sm.a > 0.95;
-      float4 P76s = IniParams.Load(int2(76,0));   // x76 = pelo con hebras en el cuero cabelludo on/off, y76 densidad
+      float4 P76s = IniParams.Load(int2(99,0));   // x99 = pelo con hebras en el cuero cabelludo on/off, y99 densidad (19/10 c: era 76, chocaba con la dispersion v2)
       float densMul = pesHairMisc.x > 0.5 ? (isBrowZ ? pesHairB.y * pesHairBrow.y : pesHairB.y) : 1.0;
       if (!isBrowZ) densMul *= (P76s.x > 0.5 ? max(P76s.y, 0.0) * 0.35 : 0.0);   // cuero cabelludo: solo si esta prendido, menos denso (las tarjetas siguen)
       bool seedHere = sm.r > 0.01 && h21(cell + 0.37) < saturate(sm.r * densMul);

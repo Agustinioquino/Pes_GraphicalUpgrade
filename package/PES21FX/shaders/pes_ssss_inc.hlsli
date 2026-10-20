@@ -67,10 +67,14 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   float rMaxPx = 6.0 * mmToPx;
   if (rMaxPx < 0.6) return float4(c0, 1);
   float2 dir = SSSS_DIR * rb;
+  // x100 = sangrado rojo extra: el canal rojo se difunde mas lejos (muestra propia, mas ancha); w100 = tinte rojizo de la penumbra
+  float4 P2 = IniParams.Load(int2(100,0));
+  float redW = 1.0 + 1.5 * saturate(P2.x);
   float3 acc = 0, wsum = 0;
   [unroll] for (int i = 0; i < 17; i++) {
     float4 k = kSSSS[i];
     float2 uvS = uv + dir * (k.w * mmToPx);
+    float2 uvR = uv + dir * (k.w * mmToPx * redW);
     float3 w = k.xyz;
     if (i != 8) {
       bool sk = IsSkin(uvS);
@@ -79,10 +83,18 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
       float depthW = exp(-dzmm * dzmm * P.z * 0.25);           // mas de ~2 mm de salto en profundidad: casi no mezcla
       float nd = saturate(dot(n0, DecN(uvS))); nd *= nd;
       w *= (sk ? 1.0 : 0.0) * depthW * nd;
+      if (redW > 1.01) { bool skR = IsSkin(uvR); float dzR = abs(LinZ(uvR) - z0) * 1000.0; w.r *= (skR ? 1.0 : 0.0) * exp(-dzR * dzR * P.z * 0.25) / max((sk ? 1.0 : 0.0) * depthW, 1e-3); }
     }
-    acc += w * inLight.SampleLevel(sLinear, uvS, 0).xyz;
+    float3 cS = inLight.SampleLevel(sLinear, uvS, 0).xyz;
+    if (redW > 1.01) cS.r = inLight.SampleLevel(sLinear, uvR, 0).r;
+    acc += w * cS;
     wsum += w;
   }
   float3 blurred = acc / max(wsum, 1e-4);
-  return float4(lerp(c0, blurred, saturate(P.y)), 1);
+  // tinte de la penumbra: donde la difusion aclara respecto al pixel (borde de sombra), el rojo gana un poco
+  float3 res = lerp(c0, blurred, saturate(P.y));
+  float pen = saturate((dot(blurred, 1.0) - dot(c0, 1.0)) * 2.0);
+  res.r *= 1.0 + 0.25 * pen * saturate(P2.w);
+  res.gb *= 1.0 - 0.08 * pen * saturate(P2.w);
+  return float4(res, 1);
 }

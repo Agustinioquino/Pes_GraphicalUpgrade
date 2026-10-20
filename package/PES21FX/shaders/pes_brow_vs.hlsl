@@ -86,7 +86,7 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID)
   // tipo de pelo de esta cara (PES21FX_hair.ini): multiplicadores de largo, grosor, elevacion y rizo
   bool hb = pesHairMisc.x > 0.5;
   bool scalp = s.nrmV.w > 0.5;   // (19/10) semilla de cuero cabelludo: usa los parametros de PELO del tipo (largo cm, rizo, rigidez, peso)
-  float4 P76 = IniParams.Load(int2(76,0));   // x76 on, y76 densidad, z76 largo (x), w76 caida (peso)
+  float4 P76 = IniParams.Load(int2(99,0));   // x99 on, y99 densidad, z99 largo (x), w99 caida (peso)
   float mLen = hb ? max(pesHairBrow.w, 0.05) : 1.0, mWid = hb ? max(pesHairBrow.x, 0.05) : 1.0, mLift = hb ? pesHairBrow.z : 1.0, curl = hb ? saturate(pesHairA.y) : 0.1;
   float len = max(P74.z, 0.1) * 0.01 * mLen * (0.55 + 0.45 * s.dirV.w) * (0.8 + 0.4 * r2);
   float lift = clamp(P75.x * mLift, 0.0, 1.5);

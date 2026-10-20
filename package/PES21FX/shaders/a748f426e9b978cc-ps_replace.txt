@@ -412,7 +412,8 @@ void main(
   r0.x = -r0.x * 0.125 + 1;
   // PES21 piel (16/10): sobre la cara el borde de la sombra del sol se filtra mas ancho (x34) -> sin escalones
   float4 P34 = IniParams.Load(int2(34,0));
-  float pesShScale = (P34.w > 0.5 && matType == 0 && abs(skinTag - 0.98039) < 0.003) ? max(P34.x, 1.0) : 1.0;
+  bool pesSSSS = IniParams.Load(int2(95,0)).w > 0.5;   // 19/10: dispersion unificada (SSSS) prendida -> las difusiones viejas de la piel se apagan solas
+  float pesShScale = (P34.w > 0.5 && !pesSSSS && matType == 0 && abs(skinTag - 0.98039) < 0.003) ? max(P34.x, 1.0) : 1.0;
   r0.x = PESShadowFilter(pesShUV, pesShRef, pesShCas, v2.xy, r0.x, pesShScale, pesDzduv);   // PES21 sombras v2 + plano receptor
   // PES21 fusion de cascadas (18/10): en la franja del borde de la cascada se mezcla con la siguiente (sin salto de nitidez). y87 = ancho
   { float4 PHb = IniParams.Load(int2(87,0)); float4 SHb = IniParams.Load(int2(20,0));
@@ -621,7 +622,7 @@ void main(
   if (isSkin) {
     float sh = saturate(r0.x);
     // sombra mas suave sobre la piel (la luz se difunde dentro del tejido)
-    sh = lerp(sh, smoothstep(0.0, 1.0, sh), saturate(P5.z));   // SSS v3: solo suaviza el borde, no aclara la sombra (antes sqrt)
+    sh = lerp(sh, smoothstep(0.0, 1.0, sh), saturate(P5.z) * (pesSSSS ? 0.0 : 1.0));   // SSS v3: solo suaviza el borde (apagado con SSSS)
     // 18/10 v2: rojo solo en la PENUMBRA (borde de la sombra), la sombra plena queda neutra.
     // Antes pow(sh,0.55) en el rojo dejaba toda la sombra de la cara naranja.
     float pen = sh * (1.0 - sh) * 4.0;   // 1 en el medio del borde, 0 en luz plena y en sombra plena
