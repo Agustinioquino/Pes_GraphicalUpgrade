@@ -71,7 +71,7 @@ ID3D11ShaderResourceView* SSSSBeforeComposition(ID3D11DeviceContext* c) {
     ID3D11SamplerState* oS[2] = {}; c->PSGetSamplers(0, 2, oS);
     ID3D11ShaderResourceView* oVS120 = nullptr; c->PSGetShaderResources(120, 1, &oVS120);
     // estado comun
-    ID3D11ShaderResourceView* nulls[4] = {};
+    ID3D11ShaderResourceView* nulls[5] = {};
     c->VSSetShader(s_vs, nullptr, 0); c->GSSetShader(nullptr, nullptr, 0); c->HSSetShader(nullptr, nullptr, 0); c->DSSetShader(nullptr, nullptr, 0);
     c->IASetInputLayout(nullptr); c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     c->RSSetState(s_rs); c->OMSetDepthStencilState(s_dss, 0); float bf[4] = {}; c->OMSetBlendState(s_bs, bf, 0xffffffff);
@@ -80,14 +80,14 @@ ID3D11ShaderResourceView* SSSSBeforeComposition(ID3D11DeviceContext* c) {
     ID3D11ShaderResourceView* prm = g_dev.paramSRV; c->PSSetShaderResources(120, 1, &prm);
     // pasada H: light -> tex0
     c->OMSetRenderTargets(1, &s_rtv[0], nullptr);
-    ID3D11ShaderResourceView* sv0[4] = { light, depth, mat, nrm }; c->PSSetShaderResources(0, 4, sv0);
+    ID3D11ShaderResourceView* sv0[5] = { light, depth, mat, nrm, in[8] }; c->PSSetShaderResources(0, 5, sv0);   // t4 = albedo (tono de piel)
     c->PSSetShader(s_psH, nullptr, 0); c->Draw(3, 0);
     // pasada V: tex0 -> tex1
-    c->PSSetShaderResources(0, 4, nulls);
+    c->PSSetShaderResources(0, 5, nulls);
     c->OMSetRenderTargets(1, &s_rtv[1], nullptr);
-    ID3D11ShaderResourceView* sv1[4] = { s_srv[0], depth, mat, nrm }; c->PSSetShaderResources(0, 4, sv1);
+    ID3D11ShaderResourceView* sv1[5] = { s_srv[0], depth, mat, nrm, in[8] }; c->PSSetShaderResources(0, 5, sv1);
     c->PSSetShader(s_psV, nullptr, 0); c->Draw(3, 0);
-    c->PSSetShaderResources(0, 4, nulls);
+    c->PSSetShaderResources(0, 5, nulls);
     // restaurar
     c->OMSetRenderTargets(8, oRT, oDS); for (auto* r : oRT) if (r) r->Release(); if (oDS) oDS->Release();
     c->RSSetViewports(nvp, ovp);

@@ -15,6 +15,7 @@ Texture2D<float4> inLight : register(t0);
 Texture2D<float4> inDepth : register(t1);
 Texture2D<float4> inMat   : register(t2);
 Texture2D<float4> inNrm   : register(t3);
+Texture2D<float4> inAlb   : register(t4);   // (20/10) albedo del G-buffer: tono de la piel (melanina)
 Texture1D<float4> IniParams : register(t120);
 SamplerState sPoint : register(s0);
 SamplerState sLinear : register(s1);
@@ -69,7 +70,14 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   float2 dir = SSSS_DIR * rb;
   // x100 = sangrado rojo extra: el canal rojo se difunde mas lejos (muestra propia, mas ancha); w100 = tinte rojizo de la penumbra
   float4 P2 = IniParams.Load(int2(100,0));
-  float redW = 1.0 + 1.5 * saturate(P2.x);
+  // (20/10, 140) SSS segun el tono de piel: con mas melanina la epidermis absorbe mas y el rojo que viaja por la dermis
+  // se ve mucho menos (la penumbra de una piel oscura es marron calida, no roja): menos sangrado rojo, menos tinte y algo
+  // menos fuerza; en piel clara queda como antes. z140 = cuanto manda el tono (0 = igual para todos)
+  float4 SK = IniParams.Load(int2(140,0));
+  float alb0L = dot(inAlb.SampleLevel(sPoint, uv, 0).xyz, float3(0.2126, 0.7152, 0.0722));
+  float mel = saturate(log2(0.47 / max(alb0L, 1e-3)) / 2.85);
+  float km = SK.x > 0.5 ? mel * saturate(SK.z > 0.0 ? SK.z : 1.0) : 0.0;
+  float redW = 1.0 + 1.5 * saturate(P2.x) * (1.0 - 0.7 * km);
   float3 acc = 0, wsum = 0;
   [unroll] for (int i = 0; i < 17; i++) {
     float4 k = kSSSS[i];
@@ -92,9 +100,9 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   }
   float3 blurred = acc / max(wsum, 1e-4);
   // tinte de la penumbra: donde la difusion aclara respecto al pixel (borde de sombra), el rojo gana un poco
-  float3 res = lerp(c0, blurred, saturate(P.y));
+  float3 res = lerp(c0, blurred, saturate(P.y) * (1.0 - 0.3 * km));
   float pen = saturate((dot(blurred, 1.0) - dot(c0, 1.0)) * 2.0);
-  res.r *= 1.0 + 0.25 * pen * saturate(P2.w);
-  res.gb *= 1.0 - 0.08 * pen * saturate(P2.w);
+  res.r *= 1.0 + 0.25 * pen * saturate(P2.w) * (1.0 - 0.75 * km);
+  res.gb *= 1.0 - 0.08 * pen * saturate(P2.w) * (1.0 - 0.75 * km);
   return float4(res, 1);
 }

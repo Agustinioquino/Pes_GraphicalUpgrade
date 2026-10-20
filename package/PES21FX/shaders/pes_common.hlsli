@@ -170,4 +170,29 @@ float PESCloudShadow(float3 pW, float3 sunW, PESCloudParams c)
   return exp(-d * 3.0);   // 18/10 b: mas opaca (antes 1.6 con 2 muestras: casi no se notaba)
 }
 
+
+// ---------------------------------------------------------------- tono de piel (20/10, 140)
+// Indice de melanina 0 (piel muy clara) .. 1 (piel muy oscura) desde el albedo lineal de la piel: la luminancia de la piel
+// real va de ~0.47 (muy clara) a ~0.065 (muy oscura); en escala logaritmica, como la percibe el ojo.
+float PESMelanin(float3 alb) {
+  float L = dot(alb, float3(0.2126, 0.7152, 0.0722));
+  return saturate(log2(0.47 / max(L, 1e-3)) / 2.85);
+}
+// Lugar de la piel ("skin locus"): todas las pieles humanas caen en una franja angosta de cromaticidad (R > G > B, matiz
+// ~20-25 grados) que se corre de rosado-palido a marron-calido con la melanina (mediciones de reflectancia, p. ej. la base
+// de Weyrich 2006). Las texturas del juego y la luz del estadio a veces la sacan de esa franja (naranja, amarillo, gris
+// verdoso). Se acerca la cromaticidad al lugar de la piel PARA ESA MISMA CLARIDAD (el tono propio de cada jugador se
+// conserva) y solo en pixeles que ya parecen piel (barba, cejas y pelo pintados quedan como estan).
+float3 PESSkinLocus(float3 alb, float k) {
+  float sum = alb.r + alb.g + alb.b;
+  if (sum < 0.03 || k <= 0.0) return alb;
+  float L = dot(alb, float3(0.2126, 0.7152, 0.0722));
+  float m = PESMelanin(alb);
+  const float3 cL = float3(0.437, 0.310, 0.253), cM = float3(0.493, 0.301, 0.206), cD = float3(0.522, 0.289, 0.189);
+  float3 tgt = m < 0.5 ? lerp(cL, cM, m * 2.0) : lerp(cM, cD, m * 2.0 - 1.0);
+  float3 c = alb / sum;
+  float w = saturate(k) * saturate(1.0 - length(c - tgt) / 0.15);
+  float3 o = lerp(c, tgt, w) * sum;
+  return o * (L / max(dot(o, float3(0.2126, 0.7152, 0.0722)), 1e-4));
+}
 #endif

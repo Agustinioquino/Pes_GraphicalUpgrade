@@ -113,6 +113,13 @@ void main(
   r1.xyz = inLightSpecular.Sample(g_samplerPoint_Wrap_s, r0.xy).xyz;
   r2.xyz = inLightDiffuse.Sample(g_samplerPoint_Wrap_s, r0.xy).xyz;
   r3.xyz = inAlbedo.SampleLevel(g_samplerPoint_Clamp_s, r0.xy, 0).xyz;
+  { // PES21 tono de piel (20/10, 140): cromaticidad dentro del lugar de la piel real para su claridad (cada tono se conserva)
+    float4 SK = IniParams.Load(int2(140,0));
+    if (skinC && SK.x > 0.5) {
+      r3.xyz = PESSkinLocus(r3.xyz, SK.y > 0.0 ? SK.y : 0.35);
+      if (SK.w > 0.5) { float mD = PESMelanin(r3.xyz); r3.xyz = float3(mD, 0.25, 1.0 - mD) * 0.5; }   // depuracion: rojo = piel oscura, azul = clara
+    }
+  }
   r4.xyzw = inGBufferNormal.SampleLevel(g_samplerPoint_Clamp_s, r0.xy, 0).xyzw;
   r5.xy = inGBufferMaterial.SampleLevel(g_samplerPoint_Clamp_s, r0.xy, 0).zw;
   r0.w = r4.z * 1023 + 0.5;
