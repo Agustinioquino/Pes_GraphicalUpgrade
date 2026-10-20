@@ -784,6 +784,17 @@ void main(
     float3 L2 = normalize(pesLDir.xyz);
     float3 H2 = normalize(L2 + V2);
     float nl2 = saturate(dot(n2, L2));
+    // === PES21 (19/10) brillo de piel fisico: x103 el brillo toma el color del sol (no el tinte del material -> menos cera
+    // amarilla), y103 Fresnel de piel (F0 0.028: debil de frente, crece en la silueta), z103 fuerza total, w103 on/off
+    { float4 Q103 = IniParams.Load(int2(103,0));
+      if (Q103.w > 0.5) {
+        float nv2 = saturate(dot(n2, V2));
+        float rim = pow(1.0 - nv2, 4.0);
+        float3 sunN = PESSunColor(); float sl = max(dot(sunN, float3(0.3, 0.59, 0.11)), 1e-4); sunN /= sl;
+        float lumS = dot(r1.xyz, float3(0.3, 0.59, 0.11));
+        r1.xyz = lerp(r1.xyz, lumS * sunN, saturate(Q103.x));
+        r1.xyz *= lerp(1.0, lerp(0.55, 1.7, rim), saturate(Q103.y)) * (Q103.z > 0 ? Q103.z : 1.0);
+      } }
     // lobulo fino (pelicula de grasa/sudor): GGX con rugosidad 0.18
     float a2 = 0.18 * 0.18; float eF = 1.0;
     if (P64.x > 0.5 && P64.y > 0.0) a2 = PESSunWidenAlpha(a2, P64.y, eF);   // PES21 sol de calidad
