@@ -399,6 +399,27 @@ void main(
       r2.xyz += sunC * tr * (0.35 + 0.65 * low) * shG * STg.y * 0.35 * trK * float3(1.0, 1.05, 0.55);
     }
   }
+  // === PES21 brillo del cesped (20/10, x134): la cuticula cerosa de las hojas refleja el sol. Mirando hacia el sol en angulo
+  // rasante la cancha se aclara y blanquea (lo que en TV se ve como el "brillo" del pasto por la tarde). El juego trata el
+  // pasto (tipo 3) sin especular; se agrega un lobulo ancho con la normal del suelo (la cancha, no la hoja), Fresnel de
+  // cera (F0 0.04) y la visibilidad del sol. Va a la luz especular (no se tine con el verde del albedo).
+  { float4 SH = IniParams.Load(int2(134,0));
+    if (geoOk && SH.x > 0.001 && tyC == 3 && zsk < 300.0 && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {
+      float3 Ld = normalize(pLc_dir.xyz); float3 Vw = -Vsk;
+      float3 upV = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
+      if (dot(Ld, upV) < 0) upV = -upV;
+      float3 H = normalize(Ld + Vw);
+      float nh = saturate(dot(upV, H)), nl = saturate(dot(upV, Ld)), nv = saturate(dot(upV, Vw));
+      float rough = 0.42 + 0.25 * saturate(SH.y);                           // y134: brillo mas abierto (pasto seco / cortado al ras)
+      float a2 = rough * rough * rough * rough;
+      float dd = nh * nh * (a2 - 1.0) + 1.0; float D = a2 / max(3.14159 * dd * dd, 1e-4);   // GGX
+      float F = 0.04 + 0.96 * pow(1.0 - saturate(dot(Vw, H)), 5.0);
+      float G = 1.0 / max(4.0 * max(nv, 0.15) * max(nl, 0.15), 1e-3);
+      float shS = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
+      float3 sunC = max(pLc_color.xyz, 0.0) * g_psScene.m_exposure.zzz;
+      float wet = PESGroundWet();
+      r1.xyz += sunC * (D * F * G * nl) * shS * saturate(SH.x) * (1.0 + 2.0 * wet) * float3(1.0, 1.0, 0.96);
+    } }
   // === PES21 luz de borde (17/10): con el sol detras del jugador, el contorno (hombros, pelo, brazos) se enciende.
   // Solo piel y kits, nunca el estadio. x46 fuerza, y46 ancho del borde (2 fino .. 5 muy fino), w46 on/off [Alt+Shift+R]
   {
