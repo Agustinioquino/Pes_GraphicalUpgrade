@@ -36,7 +36,7 @@ void main(
   out float4 o5 : TEXCOORD4,
   out float4 o6 : TEXCOORD5,
   out float2 o7 : TEXCOORD6,
-  out float4 o8 : TEXCOORD7)   // PES21 pasto v3: x seco (0..1), y pelado, z alto relativo, w 1 = v3 activo
+  out float4 o8 : TEXCOORD7)   // PES21 pasto v3: x seco (0..1), y pelado, z alto relativo, w = 1 + banda del atlas (0 = sin v3)
 {
   float4 r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11;
   // === PES21 pasto extendido: parcela emitida por el mod (cb5[8].y = 1): x escala horizontal (1 parcela = 0.5 m x escala),
@@ -45,12 +45,13 @@ void main(
   bool pesIsExt = abs(pesExt.y - 1234.5) < 0.01;   // marca del mod (el juego usa cb5[8] con otros valores)
   float4 v0 = v0_in;
   bool pesKill = false;
-  float3 pesExtW = 0; float2 pesExtRoot = 0; float pesExtScale = 1;
+  float3 pesExtW = 0; float2 pesExtRoot = 0; float pesExtScale = 1; float2 pesExtOrg = 0;
   float4 P58 = IniParams.Load(int2(58, 0));
   if (pesIsExt) {
     // v2 instanciado: la parcela sale del buffer de instancias; fundido por altura en los bordes de la banda y
     // descarte exacto con la camara de este cuadro
     float4 ins = PESGrassInst[(uint)cb5[9].y + iid];
+    pesExtOrg = ins.xy;
     pesExtScale = max(ins.z, 1.0);
     int rot = (int)(ins.w + 0.5);
     float cs = rot == 0 ? 1.0 : (rot == 2 ? -1.0 : 0.0), sn = rot == 1 ? 1.0 : (rot == 3 ? -1.0 : 0.0);
@@ -97,7 +98,7 @@ void main(
   // (profesional -> potrero: hojas mas cortas donde esta seco y sin hojas donde esta pelado). Todo en funcion de la
   // raiz en el mundo para que coincida con la base de la cancha (misma funcion, pes_grass.hlsli).
   float4 Q4 = IniParams.Load(int2(104, 0));
-  float pesH = 1.0; float2 pesWear = float2(0.0, 0.0); float3 pesZone = float3(1.0, 1.0, 1.0); float2 pesPm = float2(0.0, 0.0);
+  float pesH = 1.0; float2 pesWear = float2(0.0, 0.0); float3 pesZone = float3(1.0, 1.0, 1.0); float2 pesPm = float2(0.0, 0.0); float pesBand = 1.0;
   bool pesV3 = Q4.x > 0.5;
   float2 pesRoot = pesIsExt ? pesExtRoot : float2(dot(v0_in, cb5[4]), dot(v0_in, cb5[6]));
   if (pesV3) {
@@ -107,7 +108,11 @@ void main(
     pesWear = PESWear(pesPm, pesRoot, Q4.w, Q7.x, Q7.z);
     pesZone = PESGrassZones(pesRoot, Q6.x);
     int tipo = (int)(Q4.y + 0.5);
-    float hT = tipo == 0 ? 0.78 : (tipo == 2 ? 1.45 : 1.0);
+    // banda del atlas por parcela: corto = manojo 0 (y 1 en una de cada 4), medio = 1 / 3, largo = 2 (y 1 en una de cada 4)
+    float2 porg = pesIsExt ? pesExtOrg : float2(cb5[4].w, cb5[6].w);
+    float ph = PESGh21(porg * 0.37 + 0.11);
+    pesBand = tipo == 0 ? (ph < 0.75 ? 0.0 : 1.0) : (tipo == 2 ? (ph < 0.75 ? 2.0 : 1.0) : (ph < 0.5 ? 1.0 : 3.0));
+    float hT = tipo == 0 ? 0.9 : (tipo == 2 ? 1.45 : 1.0);   // (el manojo corto ya ocupa menos tarjeta)
     float hv = tipo == 0 ? 0.10 : (tipo == 2 ? 0.35 : 0.20);
     float n = PESGnoise(pesRoot * 1.7 + 0.37);
     pesH = hT * clamp(Q4.z, 0.3, 3.0) * (1.0 + (n - 0.5) * 2.0 * hv) * (1.0 - pesWear.x * 0.35) * (1.0 - pesWear.y);
@@ -371,6 +376,6 @@ void main(
   o6.z = dot(r6, cb2[16]);
   o6.w = dot(r6, cb2[17]);
   o7.y = dot(r6, cb2[19]);
-  o8 = float4(pesWear.x, pesWear.y, pesH, pesV3 ? 1.0 : 0.0);
+  o8 = float4(pesWear.x, pesWear.y, pesH, pesV3 ? 1.0 + pesBand : 0.0);   // w = 1 + banda del atlas (0 = sin v3)
   if (pesKill) o0 = float4(0.0, 0.0, -2.0, 1.0);   // todos los vertices iguales: triangulos nulos, no se rasteriza
 }

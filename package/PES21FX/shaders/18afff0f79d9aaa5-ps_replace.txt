@@ -20,7 +20,7 @@ cbuffer cPSSystem : register(b0)
 
 SamplerState g_samplerLinear_Wrap_s : register(s10);
 Texture2D<float4> g_tex_grassDiffuse : register(t7);
-Texture2D<float4> PESGrassAtlas : register(t8);    // PES21: textures\pes_grass_blades.dds (R claridad, G oclusion, B brillo, A alfa)
+Texture2D<float4> PESGrassAtlas : register(t8);    // PES21: textures\pes_grass_blades.dds, 4 manojos de 512 en tira (R claridad, G oclusion, B brillo, A alfa)
 Texture2D<float4> PESGrassAtlasN : register(t9);   // PES21: textures\pes_grass_blades_n.dds (RG normal, B altura raiz->punta, A grosor)
 
 
@@ -61,10 +61,14 @@ void main(
   if (r0.x != 0) discard;
   // === PES21 pasto v3: atlas propio
   float4 Q4 = IniParams.Load(int2(104,0));
-  bool pesV3 = Q4.x > 0.5 && v8.w > 0.5;
+  bool pesV3 = Q4.x > 0.5 && v8.w > 0.5;   // v8.w = 1 + banda del atlas (0 = VS sin v3)
   float4 Q5 = IniParams.Load(int2(105,0)), Q6 = IniParams.Load(int2(106,0)), Q7 = IniParams.Load(int2(107,0));
   float2 uvA = v1.xy;
-  if (pesV3 && Q5.w > 0.5) uvA.y = 1.0 - uvA.y;   // raiz del atlas arriba
+  if (pesV3) {
+    if (Q5.w > 0.5) uvA.y = 1.0 - uvA.y;   // raiz del atlas arriba
+    float band = clamp(floor(v8.w - 0.5), 0.0, 3.0);   // banda del manojo (la elige el VS: tipo de pasto + parcela)
+    uvA.x = (saturate(v1.x) + band) * 0.25;
+  }
   float atlasPx = 128.0;   // el fundido de la oclusion por distancia se mide como el juego (tamano en pantalla, no del atlas)
   float4 pesN = float4(0.5, 0.5, 0.0, 1.0);
   // derivadas fuera de la rama (muestreo con gradiente explicito adentro)
@@ -73,7 +77,7 @@ void main(
     r0.xyzw = PESGrassAtlas.SampleGrad(g_samplerLinear_Wrap_s, uvA, dUx, dUy).xyzw;
     pesN = PESGrassAtlasN.SampleGrad(g_samplerLinear_Wrap_s, uvA, dUx, dUy).xyzw;
     // de lejos el filtrado adelgaza el alfa: se compensa un poco con el nivel de mip
-    float2 dd = max(abs(dUx), abs(dUy)) * 1024.0;
+    float2 dd = max(abs(dUx), abs(dUy)) * float2(2048.0, 512.0);
     float lod = log2(max(max(dd.x, dd.y), 1.0));
     r0.w = saturate(r0.w * (1.0 + 0.12 * lod));
   } else {
