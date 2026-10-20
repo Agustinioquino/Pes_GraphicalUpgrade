@@ -663,6 +663,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if ((kind) == 1 && g_lodAny) { if (!t_lodNoted && !ds.lod.count) { CtxState& cl_ = Ctx(c); LodNoteAnyDraw(c, cl_.vs ? cl_.vs->hash : 0, cl_.ps ? cl_.ps->hash : 0, verts, t_drawStart, t_drawBase, &ds.lod); } t_lodNoted = false; } \
     if ((kind) == 1 && t_grassSub.count) { if (!ds.lod.count) ds.lod = t_grassSub; else t_grassSub.Release(); t_grassSub = LodIA(); } \
     if (!ds.skip) { call; } if (ds.restorePS) { c->PSSetShader(ds.restorePS, nullptr, 0); ds.restorePS->Release(); } \
+    if (g_meterHook) { CtxState& cm_ = Ctx(c); if (cm_.ps && cm_.ps->hash == 0x619b86cb5691cdceULL) LightMeterAfterComposition(c); } \
     if (g_inspectOn) { CtxState& ci_ = Ctx(c); if (InspectBegin(c, ci_.ps, ci_.vs, kind, verts, inst)) { call; InspectEnd(c); } } \
     if (r) Restore(c, ds); if (ds.brow.seedsUAV) BrowDrawAfterFace(c, &ds.brow); if (ds.lod.count) ds.lod.Release();
 // (20/10) LOD0 forzado: el dibujo sale con los buffers/cuentas de la malla de mas detalle y se devuelve el estado del juego
@@ -928,8 +929,10 @@ void AutoCapturePresent(ID3D11Texture2D* frame) {
         if (sok && S.size() >= 120) fprintf(f, "exposure=(%.4g %.4g %.4g %.4g) fog=(%.3f %.3f %.3f) fogP=(%.3g %.3g %.3g %.3g) | ", S[92], S[93], S[94], S[95], S[108], S[109], S[110], S[96], S[97], S[98], S[99]);
         else fprintf(f, "sin SceneCB | ");
         const auto& p = g_cfg.live;
-        fprintf(f, "mod: sol z4=%.2f w4=%.2f curva x65=%.0f (%.2f %.2f %.2f) amb(%.2f %.2f) niebla(%.2f %.2f) calidez %.2f azul %.2f | cielo w47=%.0f x47=%.2f | rebote w42=%.0f x42=%.2f | sssss w95=%.0f | brillo piel w103=%.0f | pupila %.2f\n",
+        fprintf(f, "mod: sol z4=%.2f w4=%.2f curva x65=%.0f (%.2f %.2f %.2f) amb(%.2f %.2f) niebla(%.2f %.2f) calidez %.2f azul %.2f | cielo w47=%.0f x47=%.2f | rebote w42=%.0f x42=%.2f | sssss w95=%.0f | brillo piel w103=%.0f | pupila %.2f",
             p[4][2], p[4][3], p[65][0], p[65][1], p[65][2], p[65][3], p[66][0], p[66][1], p[66][2], p[66][3], p[67][0], p[67][1], p[47][3], p[47][0], p[42][3], p[42][0], p[95][3], p[103][3], p[93][0]);
+        // (20/10) el medidor de luz en la misma linea
+        fprintf(f, " | %s\n", LightMeterSummary().c_str());
         fclose(f);
     }
     if (count == 1) Log("captura automatica: primera imagen en capturas\\ (cada %.0f s, maximo %d)", g_cfg.autoCapSec, g_cfg.autoCapMax);
@@ -971,6 +974,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
         }
     }
     UpdateTimeParams();
+    LightMeterPresent();
     UploadParams();
     WatchShaderFolder();
     PollMatch();
@@ -1039,6 +1043,7 @@ void ReloadShaders() {
     FaceGenReloadShaders();
     SSSSReloadShaders();
     PitchWearReloadShaders();
+    LightMeterReloadShaders();
     std::unique_lock<std::shared_mutex> lk(s_shMutex);
     int n = 0;
     { std::lock_guard<std::mutex> lk2(g_errMutex); g_compileErrors.clear(); }

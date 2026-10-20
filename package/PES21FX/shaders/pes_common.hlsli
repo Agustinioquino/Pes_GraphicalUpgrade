@@ -37,6 +37,8 @@ PESDay PESDayCurve(float sinElev, float dayK)
 // contraste de dia (20/10): x109 (0..1) sube el sol y baja la luz ambiente a la vez, solo con sol real (kSun):
 // en las capturas automaticas el lado en sombra de los jugadores quedaba casi tan claro como el lado al sol
 float PESDaySunMul(float kSun) { float k = saturate(IniParams.Load(int2(109,0)).x) * saturate(kSun); return 1.0 + 0.5 * k; }
+// (20/10) ganancia de la luz ambiente calibrada por el medidor de luz de la DLL (125.x; 1 = sin cambio)
+float PESAmbGain() { float g = IniParams.Load(int2(125,0)).x; return g > 0.05 ? g : 1.0; }
 float PESDayAmbMul(float kSun) { float k = saturate(IniParams.Load(int2(109,0)).x) * saturate(kSun); return 1.0 - 0.4 * k; }
 
 // tinte calido del sol: 0 = blanco calido, 1 = naranja de atardecer (conserva la luminancia)
