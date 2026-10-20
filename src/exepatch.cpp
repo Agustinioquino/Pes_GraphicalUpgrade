@@ -15,7 +15,8 @@ static const unsigned kExeStamp = 0x62787C6A;
 // cada lector: prologo [mov [rsp+10],rbx ; push rdi ; sub rsp,20 ; mov rdi,rdx ; mov rbx,rcx] (16 bytes)
 static const unsigned char kReaderSig[16] = { 0x48,0x89,0x5c,0x24,0x10,0x57,0x48,0x83,0xec,0x20,0x48,0x8b,0xfa,0x48,0x8b,0xd9 };
 // cada busqueda en el mapa de configuraciones: [mov r11,rsp ; push rdi ; sub rsp,40 ; mov qword [r11-18],-2]
-static const unsigned char kLookupSig[8] = { 0x4c,0x8b,0xdc,0x57,0x48,0x83,0xec,0x40 };
+static const unsigned char kLookupSig[8]  = { 0x4c,0x8b,0xdc,0x57,0x48,0x83,0xec,0x40 };
+static const unsigned char kLookupSig2[10] = { 0x4c,0x8b,0xdc,0x55,0x56,0x57,0x48,0x83,0xec,0x40 };   // GrShadowSettings (guarda rbp/rsi)
 
 typedef int  (__fastcall *ReaderFn)(void* self, void* L, void* a3, void* key);
 typedef void*(__fastcall *LookupFn)(void* map, void* key);
@@ -73,7 +74,7 @@ void ExePatchInstall() {
     int n = 0;
     for (int i = 0; i < 3; i++) {
         Patch& p = s_p[i];
-        if (!SigOk(p.reader, kReaderSig, sizeof kReaderSig) || !SigOk(p.lookup, kLookupSig, sizeof kLookupSig)) { Log("motor: %s: la firma no coincide, se omite", p.name); continue; }
+        if (!SigOk(p.reader, kReaderSig, sizeof kReaderSig) || !(SigOk(p.lookup, kLookupSig, sizeof kLookupSig) || SigOk(p.lookup, kLookupSig2, sizeof kLookupSig2))) { Log("motor: %s: la firma no coincide, se omite", p.name); continue; }
         if (MH_CreateHook((void*)p.lookup, lookups[i], (void**)&p.oLookup) != MH_OK || MH_CreateHook((void*)p.reader, readers[i], (void**)&p.oReader) != MH_OK) { Log("motor: %s: no se pudo enganchar", p.name); continue; }
         MH_EnableHook((void*)p.lookup); MH_EnableHook((void*)p.reader); n++;
     }

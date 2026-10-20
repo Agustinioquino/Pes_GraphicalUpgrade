@@ -65,6 +65,32 @@ float4 PESBicubic(Texture2D<float4> tex, float2 uv, float2 hi)
   return g0.y * (g0.x * a + g1.x * b) + g1.y * (g0.x * c + g1.x * d);
 }
 
+
+// PES21 (20/10) bokeh real (137): desenfoque de fondo calculado a resolucion completa con un disco de lente en vez de las
+// capas chicas del juego (480x270 / 240x135 ampliadas: el fondo quedaba como una mancha lavada y con halos alrededor de
+// los jugadores). 48 muestras en espiral de Vogel dentro del radio de cada pixel; cada muestra solo cuenta si su propio
+// circulo de confusion llega hasta el pixel (dispersion como recoleccion): el jugador enfocado (radio 0) nunca se mezcla
+// con el fondo -> bordes limpios, y las luces fuertes del estadio forman discos de bokeh porque la imagen es HDR.
+float3 PESBokehFar(float2 uv, float4 c0, float maxPx, float boost) {
+  float R0 = saturate((c0.w - 0.5) * 2.0) * maxPx;
+  if (R0 < 0.6) return c0.xyz;
+  float2 px = g_psSystem.m_renderBuffer.zw;
+  float3 acc = c0.xyz; float wsum = 1.0;
+  [loop] for (int k = 0; k < 48; k++) {
+    float r = sqrt((k + 0.5) / 48.0) * R0;
+    float a = k * 2.39996323;
+    float2 o = float2(cos(a), sin(a)) * r;
+    float4 sm = inImage.SampleLevel(g_samplerLinear_Clamp_s, saturate(uv + o * px), 0);
+    float Rs = saturate((sm.w - 0.5) * 2.0) * maxPx;
+    float w = saturate(Rs - r + 1.0);
+    float3 col = min(sm.xyz, 64.0);
+    float l = dot(col, float3(0.2126, 0.7152, 0.0722));
+    w *= 1.0 + boost * saturate(l - 1.0);                       // z137: realza los discos de las luces fuertes
+    acc += col * w; wsum += w;
+  }
+  return acc / wsum;
+}
+
 void main(
   float4 v0 : SV_Position0,
   float2 v1 : TEXCOORD0,
@@ -99,6 +125,13 @@ void main(
   } else {
     r2.yzw = inImageFar.Sample(g_samplerLinear_Clamp_s, r0.zw).xyz;
     r0.xyzw = inImageNear.Sample(g_samplerLinear_Clamp_s, r0.xy).xyzw;
+  }
+  float4 BK = IniParams.Load(int2(137,0));
+  if (BK.x > 0.5) {
+    float maxPx = clamp(BK.y > 0.5 ? BK.y : 12.0, 2.0, 32.0) * (1.0 / max(g_psSystem.m_renderBuffer.w * 1080.0, 1e-3));
+    float2 uvF = g_psSystem.m_renderBuffer.zw * v0.xy;
+    float3 g = PESBokehFar(uvF, inImage.SampleLevel(g_samplerPoint_Clamp_s, uvF, 0), maxPx, max(BK.z, 0.0));
+    r1.xyz = g; r2.yzw = g;
   }
   r3.x = dot(float3(0.212599993,0.715200007,0.0722000003), r2.yzw);
   r3.y = saturate(1 + -r3.x);
