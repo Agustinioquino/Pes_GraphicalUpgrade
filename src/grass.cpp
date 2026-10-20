@@ -114,6 +114,7 @@ struct Band { float r0, r1, cell, fadeIn0, fadeIn1, fadeOut0, fadeOut1, widthMul
 
 // arma la lista de instancias de una banda (grilla de la cancha alineada al origen)
 static int BuildBand(GInst* out, int cap, const Band& b) {
+    if (cap <= 0) return 0;   // (20/10) sin lugar: antes se escribia una instancia pasada del final del buffer -> 0xc0000005
     const float halfL = 52.5f + 3.0f, halfW = 34.0f + 3.0f;
     float ex = s_eye[0], ez = s_eye[2];
     float rIn = (std::max)(0.0f, b.fadeIn0), rOut = b.fadeOut1;
@@ -132,9 +133,9 @@ static int BuildBand(GInst* out, int cap, const Band& b) {
             float dx = x - ex, dz = z - ez, d2 = dx * dx + dz * dz;
             if (s_camValid && (d2 < r0sq || d2 >= r1sq)) continue;
             if (!RoughVisible(x, z, b.cell)) continue;
+            if (n >= cap) return n;   // (20/10) el tope se mira ANTES de escribir
             int rot = ((ix * 7 + iz * 13) ^ (ix * iz)) & 3;
             out[n++] = GInst{ x, z, b.cell / 0.5f, (float)rot };
-            if (n >= cap) return n;
         }
     }
     return n;
@@ -180,6 +181,7 @@ void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT
           D3D11_BOX bx = { off, 0, 0, off + 480, 1, 1 }; c->CopySubresourceRegion(s_cb2Stage[w], 0, 0, 0, 0, cb2, 0, &bx); s_stageFrame[w] = f; g_grassDbg.cb2off = off; }
         cb2->Release(); } }
     if (s_lodCount.load() == 0xffffffff) { Why("todavia sin variante de malla"); return; }
+    if (!s_camValid) { Why("todavia sin camara (se emite desde el proximo cuadro)"); return; }   // (20/10) sin camara la cancha entera a 0.5 m desborda el buffer
     g_grassDbg.cam = s_camValid; g_grassDbg.ex = s_eye[0]; g_grassDbg.ez = s_eye[2];
     float dens = p58[0] > 0.05f ? p58[0] : 1.0f;
     float from = p58[1] > 1.0f ? p58[1] : 14.0f;
