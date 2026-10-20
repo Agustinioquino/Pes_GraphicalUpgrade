@@ -217,22 +217,26 @@ static void ResolveBody() {
 }
 
 // aplica el estado de LOD0 (guardando el del juego en 'sv') / lo devuelve
+// Los slots de VB nulos en L conservan el buffer del juego (pasto v4 solo trae posicion y uv); layout, topologia y VS
+// solo se tocan si L los trae (null / UNDEFINED = dejar los del juego)
 void LodBind(ID3D11DeviceContext* c, const LodIA& L, LodIA& sv) {
     c->IAGetVertexBuffers(0, 4, sv.vb, sv.stride, sv.offset);
     c->IAGetIndexBuffer(&sv.ib, &sv.ibFmt, &sv.ibOff);
     c->IAGetInputLayout(&sv.il); c->IAGetPrimitiveTopology(&sv.topo); c->VSGetShader(&sv.vs, nullptr, nullptr);
-    c->IASetVertexBuffers(0, 4, L.vb, L.stride, L.offset);
+    ID3D11Buffer* vbs[4]; UINT st[4], of[4];
+    for (int i = 0; i < 4; i++) { if (L.vb[i]) { vbs[i] = L.vb[i]; st[i] = L.stride[i]; of[i] = L.offset[i]; } else { vbs[i] = sv.vb[i]; st[i] = sv.stride[i]; of[i] = sv.offset[i]; } }
+    c->IASetVertexBuffers(0, 4, vbs, st, of);
     c->IASetIndexBuffer(L.ib, L.ibFmt, L.ibOff);
-    if (L.il != sv.il) c->IASetInputLayout(L.il);
-    if (L.topo != sv.topo) c->IASetPrimitiveTopology(L.topo);
-    if (L.vs != sv.vs && L.vs) c->VSSetShader(L.vs, nullptr, 0);
+    if (L.il && L.il != sv.il) c->IASetInputLayout(L.il);
+    if (L.topo != D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED && L.topo != sv.topo) c->IASetPrimitiveTopology(L.topo);
+    if (L.vs && L.vs != sv.vs) c->VSSetShader(L.vs, nullptr, 0);
 }
 void LodRestore(ID3D11DeviceContext* c, LodIA& sv, const LodIA& L) {
     c->IASetVertexBuffers(0, 4, sv.vb, sv.stride, sv.offset);
     c->IASetIndexBuffer(sv.ib, sv.ibFmt, sv.ibOff);
-    if (L.il != sv.il) c->IASetInputLayout(sv.il);
-    if (L.topo != sv.topo) c->IASetPrimitiveTopology(sv.topo);
-    if (L.vs != sv.vs && L.vs) c->VSSetShader(sv.vs, nullptr, 0);
+    if (L.il && L.il != sv.il) c->IASetInputLayout(sv.il);
+    if (L.topo != D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED && L.topo != sv.topo) c->IASetPrimitiveTopology(sv.topo);
+    if (L.vs && L.vs != sv.vs) c->VSSetShader(sv.vs, nullptr, 0);
     sv.Release();
 }
 

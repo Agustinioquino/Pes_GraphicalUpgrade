@@ -571,7 +571,7 @@ static void RunRule(ID3D11DeviceContext* c, const ShaderEntry* e, DrawScope& d) 
 
 static std::atomic<bool> s_firstRule{false};
 thread_local bool t_sparseGrass = false;
-thread_local UINT t_drawVerts = 0; thread_local UINT t_drawStart = 0; thread_local INT t_drawBase = 0; thread_local bool t_lodNoted = false;   // (20/10) DrawIndexed en curso (LOD de caras)   // vertices del dibujo en curso (para "solo esta capa" del inspector)   // el dibujo en curso es una parcela lejana del pasto (lo marca GrassOnDraw)
+thread_local UINT t_drawVerts = 0; thread_local UINT t_drawStart = 0; thread_local INT t_drawBase = 0; thread_local bool t_lodNoted = false; thread_local LodIA t_grassSub;   // (20/10) DrawIndexed en curso (LOD de caras)   // vertices del dibujo en curso (para "solo esta capa" del inspector)   // el dibujo en curso es una parcela lejana del pasto (lo marca GrassOnDraw)
 static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (g_cfg.bypass || !g_dev.dev) return false;
     CtxState& s = Ctx(c);
@@ -661,6 +661,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
 }
 #define FX_DRAW(verts, kind, inst, call) if (g_catalogHook) { CtxState& cs_ = Ctx(c); CatalogDraw(c, cs_.vs, cs_.ps, verts, kind, inst); } t_drawVerts = (UINT)(verts); DrawScope ds; bool r = BeforeDraw(c, ds); \
     if ((kind) == 1 && g_lodAny) { if (!t_lodNoted && !ds.lod.count) { CtxState& cl_ = Ctx(c); LodNoteAnyDraw(c, cl_.vs ? cl_.vs->hash : 0, cl_.ps ? cl_.ps->hash : 0, verts, t_drawStart, t_drawBase, &ds.lod); } t_lodNoted = false; } \
+    if ((kind) == 1 && t_grassSub.count) { if (!ds.lod.count) ds.lod = t_grassSub; else t_grassSub.Release(); t_grassSub = LodIA(); } \
     if (!ds.skip) { call; } if (ds.restorePS) { c->PSSetShader(ds.restorePS, nullptr, 0); ds.restorePS->Release(); } \
     if (g_inspectOn) { CtxState& ci_ = Ctx(c); if (InspectBegin(c, ci_.ps, ci_.vs, kind, verts, inst)) { call; InspectEnd(c); } } \
     if (r) Restore(c, ds); if (ds.brow.seedsUAV) BrowDrawAfterFace(c, &ds.brow); if (ds.lod.count) ds.lod.Release();

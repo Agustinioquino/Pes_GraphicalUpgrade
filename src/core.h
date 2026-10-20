@@ -242,7 +242,9 @@ extern std::atomic<bool> g_lodAny; extern std::atomic<int> g_lodSubs, g_lodFaces
 bool LodNoteFace(ID3D11DeviceContext* c, ID3D11Resource* key, ID3D11Resource* t0, const std::string& id, uint64_t vsHash, uint64_t psHash, UINT count, UINT start, INT base, LodIA* out);
 bool LodNoteAnyDraw(ID3D11DeviceContext* c, uint64_t vsHash, uint64_t psHash, UINT count, UINT start, INT base, LodIA* out);
 void LodBind(ID3D11DeviceContext* c, const LodIA& L, LodIA& sv); void LodRestore(ID3D11DeviceContext* c, LodIA& sv, const LodIA& L); void LodPresent();
-extern float g_eyePos[4]; extern bool g_eyeValid;   // posicion de la camara (m_eyepos del SceneCB, config.cpp, 2 cuadros de atraso)
+extern float g_eyePos[4]; extern bool g_eyeValid;
+extern thread_local LodIA t_grassSub;   // (20/10) pasto v4: malla propia para el dibujo de pasto en curso (la llena GrassOnDraw, la consume hk_DrawIdx)
+void GrassDenseReset();   // posicion de la camara (m_eyepos del SceneCB, config.cpp, 2 cuadros de atraso)
 void AutoCapturePresent(ID3D11Texture2D* frame);   // hooks.cpp
 ID3D11ShaderResourceView* SSSSBeforeComposition(ID3D11DeviceContext* c); void SSSSReloadShaders(); extern std::atomic<int> g_ssssDraws;   // ssss.cpp
 // prueba automatica del menu (menutest.cpp)

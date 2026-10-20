@@ -13,6 +13,7 @@
 #include <vector>
 #include <mutex>
 #include <algorithm>
+#include <cstring>
 
 namespace fx {
 
@@ -75,6 +76,85 @@ static void EnsureBuffers() {
     }
 }
 
+// ---------------------------------------------------------------- pasto v4 (20/10): malla propia de manojos curvos
+// El juego dibuja cada parcela de 0.5 m con tarjetas planas (manojo de ~1.2 x 5.8 cm; 4624 por parcela de cerca, menos
+// lejos: 27744 / ~9000 / ~6000 indices). Con x123 la DLL cambia esas tarjetas por las suyas, en el mismo formato de
+// vertices (POSITION float3 en el slot 0, TEXCOORD0 half2 en el slot 3): raices propias bien repartidas, 3 tramos (2 en el
+// nivel intermedio) y una curva por tarjeta (sale vertical y se dobla), giro, ancho y alto al azar. El VS del juego
+// (reemplazado) las trata igual que a las del juego: altura, corte, viento, pisadas, atlas propio.
+//   x123 on | y123 densidad (x las del juego) | z123 curvatura | w123 nivel minimo (0 = cerca y medio, 1 = solo cerca)
+struct DenseLevel { ID3D11Buffer* pos = nullptr; ID3D11Buffer* uv = nullptr; ID3D11Buffer* ib = nullptr; UINT cards = 0, vertsPerCard = 0, idxPerCard = 0; };
+static DenseLevel s_dense[2]; static bool s_denseBuilt = false; static float s_denseCurv = -1.0f;
+static std::atomic<int> g_denseDraws{0};
+static inline uint16_t F16(float v) {   // float -> half (sin NaN/inf)
+    uint32_t x; memcpy(&x, &v, 4); uint32_t sgn = (x >> 16) & 0x8000; int32_t e = ((x >> 23) & 0xff) - 127 + 15; uint32_t m = x & 0x7fffff;
+    if (e <= 0) { if (e < -10) return (uint16_t)sgn; m |= 0x800000; uint32_t sh = (uint32_t)(14 - e); return (uint16_t)(sgn | ((m + (1u << (sh - 1))) >> sh)); }
+    if (e >= 31) return (uint16_t)(sgn | 0x7bff);
+    return (uint16_t)(sgn | (e << 10) | (m >> 13));
+}
+static float Halton(int i, int b) { float f = 1.0f, r = 0.0f; while (i > 0) { f /= b; r += f * (i % b); i /= b; } return r; }
+static void DenseRelease() { for (auto& L : s_dense) { if (L.pos) L.pos->Release(); if (L.uv) L.uv->Release(); if (L.ib) L.ib->Release(); L = DenseLevel(); } s_denseBuilt = false; }
+static void BuildDense(float curv) {
+    DenseRelease(); if (!g_dev.dev) return;
+    const UINT kMaxCards = 9248;                       // hasta 2x las 4624 tarjetas del juego
+    uint32_t rs = 0x9E3779B9u; auto rnd = [&]() { rs ^= rs << 13; rs ^= rs >> 17; rs ^= rs << 5; return (rs & 0xffffff) / 16777216.0f; };
+    for (int lvl = 0; lvl < 2; lvl++) {
+        int segs = lvl == 0 ? 3 : 2; UINT vpc = (UINT)(segs + 1) * 2, ipc = (UINT)segs * 6;
+        std::vector<float> pos; pos.reserve(kMaxCards * vpc * 3); std::vector<uint16_t> uv; uv.reserve(kMaxCards * vpc * 2); std::vector<uint32_t> ib; ib.reserve(kMaxCards * ipc);
+        rs = 0x9E3779B9u + lvl * 7919;
+        for (UINT i = 0; i < kMaxCards; i++) {
+            // raiz: secuencia de Halton (bien repartida, sin grilla) con un poco de ruido; las primeras N son un subconjunto parejo
+            float rx = (Halton((int)i + 1, 2) - 0.5f) * 0.5f + (rnd() - 0.5f) * 0.004f, rz = (Halton((int)i + 1, 3) - 0.5f) * 0.5f + (rnd() - 0.5f) * 0.004f;
+            float yaw = rnd() * 6.2831853f, h = 0.058f * (0.8f + 0.35f * rnd()), w = 0.012f * (0.8f + 0.4f * rnd());
+            float ba = rnd() * 6.2831853f, bend = curv * (0.15f + 0.3f * rnd());     // curva: hacia donde y cuanto (fraccion del alto)
+            float ta = rnd() * 6.2831853f, tilt = 0.12f * rnd();                      // inclinacion leve de toda la tarjeta
+            float sx = cosf(yaw) * w * 0.5f, sz = sinf(yaw) * w * 0.5f, bx = cosf(ba), bz = sinf(ba), tx = cosf(ta), tz = sinf(ta);
+            UINT v0 = (UINT)pos.size() / 3;
+            for (int k = 0; k <= segs; k++) {
+                float t = (float)k / segs;
+                float cx = rx + tx * tilt * h * t + bx * bend * h * t * t, cz = rz + tz * tilt * h * t + bz * bend * h * t * t;
+                float cy = h * t * (1.0f - 0.35f * bend * t);                                        // la curva acorta un poco el alto
+                float taper = 1.0f - 0.3f * t;
+                pos.push_back(cx - sx * taper); pos.push_back(cy); pos.push_back(cz - sz * taper);
+                pos.push_back(cx + sx * taper); pos.push_back(cy); pos.push_back(cz + sz * taper);
+                float v = 0.995f - 0.985f * t;                                                       // raiz abajo del atlas, punta arriba
+                uv.push_back(F16(0.0f)); uv.push_back(F16(v)); uv.push_back(F16(1.0f)); uv.push_back(F16(v));
+            }
+            for (int k = 0; k < segs; k++) { UINT a = v0 + k * 2, b = a + 1, c2 = a + 2, d = a + 3;
+                ib.push_back(a); ib.push_back(b); ib.push_back(c2); ib.push_back(b); ib.push_back(d); ib.push_back(c2); }
+        }
+        DenseLevel& L = s_dense[lvl]; L.cards = kMaxCards; L.vertsPerCard = vpc; L.idxPerCard = ipc;
+        D3D11_BUFFER_DESC d = {}; D3D11_SUBRESOURCE_DATA sd = {};
+        d.Usage = D3D11_USAGE_IMMUTABLE; d.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+        d.ByteWidth = (UINT)(pos.size() * 4); sd.pSysMem = pos.data(); if (FAILED(g_dev.dev->CreateBuffer(&d, &sd, &L.pos))) { L.pos = nullptr; }
+        d.ByteWidth = (UINT)(uv.size() * 2); sd.pSysMem = uv.data(); if (FAILED(g_dev.dev->CreateBuffer(&d, &sd, &L.uv))) { L.uv = nullptr; }
+        d.BindFlags = D3D11_BIND_INDEX_BUFFER; d.ByteWidth = (UINT)(ib.size() * 4); sd.pSysMem = ib.data(); if (FAILED(g_dev.dev->CreateBuffer(&d, &sd, &L.ib))) { L.ib = nullptr; }
+        if (!L.pos || !L.uv || !L.ib) { Log("pasto v4: no se pudo crear la malla del nivel %d", lvl); DenseRelease(); return; }
+    }
+    s_denseBuilt = true; s_denseCurv = curv;
+    Log("pasto v4: mallas de manojos curvos listas (%u tarjetas x %u/%u indices, curvatura %.2f)", kMaxCards, s_dense[0].idxPerCard, s_dense[1].idxPerCard, curv);
+}
+// decide si este dibujo del juego se cambia por la malla propia; llena 'out' (con referencias) y devuelve true
+static bool DensePick(UINT count, LodIA* out) {
+    const float* P = g_cfg.live[123];
+    if (P[0] < 0.5f) return false;
+    float curv = std::clamp(P[2], 0.0f, 1.5f);
+    if (!s_denseBuilt || fabsf(curv - s_denseCurv) > 0.01f) BuildDense(curv);
+    if (!s_denseBuilt) return false;
+    int lvl; if (count >= 20000) lvl = 0; else if (count >= 8000 && P[3] < 0.5f) lvl = 1; else return false;
+    UINT gameCards = count / 6; float dens = P[1] > 0.05f ? std::clamp(P[1], 0.25f, 2.0f) : 1.0f;
+    UINT cards = (std::min)((UINT)(gameCards * dens + 0.5f), s_dense[lvl].cards); if (cards < 16) return false;
+    DenseLevel& L = s_dense[lvl];
+    *out = LodIA();
+    out->vb[0] = L.pos; out->stride[0] = 12; out->offset[0] = 0;
+    out->vb[3] = L.uv; out->stride[3] = 4; out->offset[3] = 0;
+    out->ib = L.ib; out->ibFmt = DXGI_FORMAT_R32_UINT; out->ibOff = 0;
+    out->count = cards * L.idxPerCard; out->start = 0; out->base = 0;
+    out->AddRefAll(); g_denseDraws++;
+    return true;
+}
+void GrassDenseReset() { DenseRelease(); }
+
 // camara para el descarte grueso: el staging mas nuevo que ya este listo (2-3 cuadros de atraso; el VS corrige)
 void GrassPresent() {
     int f = s_frame.fetch_add(1) + 1;
@@ -104,17 +184,20 @@ void GrassPresent() {
             line += "\n  como half:"; for (int i = 0; i < 24; i++) { char t[24]; snprintf(t, 24, " %.3f", half(h[i])); line += t; if (i % 6 == 5) line += " |"; }
             line += "\n  como float:"; for (int i = 0; i < 12; i++) { char t[24]; snprintf(t, 24, " %.3f", f[i]); line += t; if (i % 3 == 2) line += " |"; }
             line += "\n  slot 1 hex:"; for (int i = 256; i < 256 + 32; i++) { char t[8]; snprintf(t, 8, " %02x", b[i]); line += t; if ((i - 256) % 8 == 7) line += " |"; }
-            line += "\n  slot 1 como half:"; for (int i = 128; i < 128 + 16; i++) { char t[24]; snprintf(t, 24, " %.3f", half(h[i])); line += t; if ((i - 128) % 4 == 3) line += " |"; }
-            line += "\n  slot 1 como float:"; for (int i = 64; i < 64 + 8; i++) { char t[24]; snprintf(t, 24, " %.3f", f[i]); line += t; if ((i - 64) % 2 == 1) line += " |"; }
+            // (20/10) slot 1 = normal half4 @0, tangente half4 @8, uv half2 @16 (stride 20): se listan 12 vertices con su posicion
+            line += "\n  vertices (pos | normal | tangente | uv):";
+            for (int v = 0; v < 12; v++) { const float* pv = f + v * 3; const unsigned short* hv = h + 128 + v * 10; char t[200];
+                snprintf(t, sizeof t, "\n   %2d: (%.3f %.3f %.3f) | (%.2f %.2f %.2f) | (%.2f %.2f %.2f) | uv (%.3f %.3f)", v, pv[0], pv[1], pv[2], half(hv[0]), half(hv[1]), half(hv[2]), half(hv[4]), half(hv[5]), half(hv[6]), half(hv[8]), half(hv[9])); line += t; }
+            line += "\n  indices:"; for (int i = 0; i < 48; i++) { char t[12]; snprintf(t, 12, " %u", (unsigned)h[384 + i]); line += t; if (i % 3 == 2) line += " |"; }
             Log("%s", line.c_str());
             g_dev.imm->Unmap(s_vbStage, 0); s_vbState = 2;
         }
     }
     static double nextLog = 0; double t = Now();
     if (t > nextLog && g_cfg.live[58][3] > 0.5f) { nextLog = t + 3.0;
-        Log("pasto extra: llamadas %d, emisiones %d, instancias %d (bandas %d/%d/%d), variante %u idx, camara %s (%.1f, %.1f), estado: %s",
+        Log("pasto extra: llamadas %d, emisiones %d, instancias %d (bandas %d/%d/%d), variante %u idx, camara %s (%.1f, %.1f), estado: %s | v4: %d dibujos con manojos curvos",
             g_grassDbg.calls, g_grassDbg.emits, g_grassDbg.patches, g_grassDbg.ring[0], g_grassDbg.ring[1], g_grassDbg.ring[2], g_grassDbg.lod,
-            g_grassDbg.cam ? "ok" : "no", g_grassDbg.ex, g_grassDbg.ez, g_grassDbg.why ? g_grassDbg.why : "-");
+            g_grassDbg.cam ? "ok" : "no", g_grassDbg.ex, g_grassDbg.ez, g_grassDbg.why ? g_grassDbg.why : "-", g_denseDraws.exchange(0));
         g_grassDbg.calls = 0; g_grassDbg.emits = 0; g_grassDbg.sparseLast = g_grassDbg.sparse; g_grassDbg.sparse = 0; }
 }
 
@@ -174,11 +257,14 @@ void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT
             if (il) il->Release();
             s_vbStride = strides[0]; s_vbOffset = offs[0]; s_ibFmt = (UINT)ifmt;
             ID3D11Buffer* vb = vbs[0]; UINT stride = strides[0], off = offs[0];
-            if (vb) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 512; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+            if (vb) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 1024; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
                 if (!s_vbStage) g_dev.dev->CreateBuffer(&d, nullptr, &s_vbStage);
                 if (s_vbStage) { D3D11_BOX bx = { off + (UINT)base * stride, 0, 0, off + (UINT)base * stride + 256, 1, 1 }; c->CopySubresourceRegion(s_vbStage, 0, 0, 0, 0, vb, 0, &bx);
-                    // segundo slot (uv) a continuacion, 256 bytes
-                    if (vbs[1] && strides[1]) { D3D11_BOX b2 = { offs[1] + (UINT)base * strides[1], 0, 0, offs[1] + (UINT)base * strides[1] + 256, 1, 1 }; c->CopySubresourceRegion(s_vbStage, 0, 256, 0, 0, vbs[1], 0, &b2); } }
+                    // segundo slot (normal, tangente, uv: 20 bytes por vertice) a continuacion, 512 bytes = 25 vertices
+                    if (vbs[1] && strides[1]) { D3D11_BOX b2 = { offs[1] + (UINT)base * strides[1], 0, 0, offs[1] + (UINT)base * strides[1] + 512, 1, 1 }; c->CopySubresourceRegion(s_vbStage, 0, 256, 0, 0, vbs[1], 0, &b2); }
+                    // (20/10) los primeros 128 bytes del IB de este dibujo (64 indices de 16 bits): estructura de las tarjetas
+                    ID3D11Buffer* ibd = nullptr; DXGI_FORMAT ifd; UINT iod = 0; c->IAGetIndexBuffer(&ibd, &ifd, &iod);
+                    if (ibd) { UINT isz = ifd == DXGI_FORMAT_R16_UINT ? 2 : 4; D3D11_BOX b3 = { iod + start * isz, 0, 0, iod + start * isz + 128, 1, 1 }; c->CopySubresourceRegion(s_vbStage, 0, 768, 0, 0, ibd, 0, &b3); ibd->Release(); } }
                 else s_vbState = 2;
             } else s_vbState = 2;
             for (auto* b : vbs) if (b) b->Release();
@@ -202,6 +288,7 @@ void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT
         if (w != g_bbW) { if (extraOn) Why("pasada secundaria (target de otro tamano)"); return; }
     }
     PitchClipsDraw(c, s_frame.load());   // recortes de pasto volando (una vez por cuadro; el estado del pasto ya esta puesto)
+    if (!t_grassSub.count) DensePick(count, &t_grassSub);   // (20/10) pasto v4: tarjetas curvas propias en vez de las del juego (cerca)
     if (!extraOn) { Why("apagado (w58)"); return; }
     int f = s_frame.load();
     int exp = s_emittedFrame.load();
