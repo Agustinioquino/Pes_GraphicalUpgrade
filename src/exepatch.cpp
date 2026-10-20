@@ -8,6 +8,7 @@
 #include "core.h"
 #include <MinHook.h>
 #include <cstring>
+#include <algorithm>
 
 namespace fx {
 
@@ -34,15 +35,23 @@ template<int I> static void* __fastcall hk_Lookup(void* map, void* key) {
     if (t_capIdx == I) t_capPtr = r;
     return r;
 }
+// resolucion pedida para el mapa de sombras del sol: [Motor] sombra_resolucion manda; si no, el menu (x142... y142 = 1 -> 5120).
+// El juego apila las 3 cascadas en vertical (4096 x 12288 en calidad alta) y D3D11 no admite texturas de mas de 16384:
+// 5120 (x3 = 15360) es lo maximo que entra; 8192 (el preset maximo de Konami) no se podria crear en PC.
+static int WantShadowRes() {
+    if (g_cfg.motorShadowRes > 0) return (std::min)(g_cfg.motorShadowRes, 5440);
+    return g_cfg.live[142][1] > 0.5f ? 5120 : 0;
+}
 static void Apply(int i, void* p) {
     if (!p) { Log("motor: %s leido pero no se pudo ubicar la estructura", s_p[i].name); return; }
     int* v = (int*)p; float* f = (float*)p;
+    int want = WantShadowRes();
     if (i == 0) {
         Log("motor: %s = %d", s_p[i].name, v[0]);
-        if (g_cfg.motorShadowRes > 0 && v[0] > 0 && v[0] != g_cfg.motorShadowRes) { Log("motor:   -> %d (PES21FX.ini [Motor] sombra_resolucion)", g_cfg.motorShadowRes); v[0] = g_cfg.motorShadowRes; }
+        if (want > 0 && v[0] > 0 && v[0] != want) { Log("motor:   -> %d (sombras del sol mas finas)", want); v[0] = want; }
     } else if (i == 1) {
         Log("motor: %s: direccional %d, spot %d, point %d, escala de cascadas %.3f, mezcla de cascadas %.3f", s_p[i].name, v[0], v[1], v[2], f[3], f[4]);
-        if (g_cfg.motorShadowRes > 0 && v[0] > 0 && v[0] != g_cfg.motorShadowRes) { Log("motor:   direccional -> %d", g_cfg.motorShadowRes); v[0] = g_cfg.motorShadowRes; }
+        if (want > 0 && v[0] > 0 && v[0] != want) { Log("motor:   direccional -> %d", want); v[0] = want; }
         if (g_cfg.motorCascadeScale > 0.0f && f[3] > 0.0f) { Log("motor:   escala de cascadas -> %.3f", g_cfg.motorCascadeScale); f[3] = g_cfg.motorCascadeScale; }
     } else {
         Log("motor: %s = %d", s_p[i].name, v[0]);
@@ -79,6 +88,36 @@ void ExePatchInstall() {
         MH_EnableHook((void*)p.lookup); MH_EnableHook((void*)p.reader); n++;
     }
     Log("motor: %d lectores de configuracion enganchados (sombra_resolucion = %d, sombra_cascadas = %.2f)", n, g_cfg.motorShadowRes, g_cfg.motorCascadeScale);
+}
+
+// ---------------------------------------------------------------- LOD de modelos (20/10, x142)
+// El motor elige el nivel de detalle de cada modelo (jugadores, publico, estadio) con un factor de tamano en pantalla que
+// usa una "resolucion de LOD" global (0x14374cd94; en PES 2021 vale 1800 aunque la pantalla sea 1080: Konami ya lo sube).
+// Funcion del motor en 0x141686380: factor = resolucion x LodScale x ModelLodScale / ... -> mas resolucion = cada modelo se
+// considera mas grande en pantalla = conserva la malla detallada hasta mas lejos. La DLL la multiplica por x142 (1 = juego).
+// Si el juego la cambia (menu de opciones) se toma el valor nuevo como base.
+static int s_lodBase = -1, s_lodLast = -1; static bool s_lodChecked = false, s_lodOk = false; static double s_lodT = 0;
+void ExePatchPresent() {
+    if (!g_cfg.motorPatch) return;
+    double t = Now(); if (t - s_lodT < 1.0) return; s_lodT = t;
+    volatile int* g = (volatile int*)0x14374cd94ull;
+    if (!s_lodChecked) {
+        s_lodChecked = true;
+        HMODULE mod = GetModuleHandleW(nullptr);
+        auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
+        MEMORY_BASIC_INFORMATION mi{};
+        s_lodOk = (uintptr_t)mod == 0x140000000ull && nt->FileHeader.TimeDateStamp == kExeStamp && VirtualQuery((void*)g, &mi, sizeof mi)
+               && mi.State == MEM_COMMIT && (mi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_WRITECOPY));
+        if (!s_lodOk) { Log("motor: LOD de modelos no disponible (exe distinto o memoria protegida %08X)", (unsigned)mi.Protect); return; }
+    }
+    if (!s_lodOk) return;
+    int cur = *g;
+    if (cur <= 100 || cur > 30000) return;
+    if (s_lodBase < 0 || (cur != s_lodBase && cur != s_lodLast)) { s_lodBase = cur; Log("motor: resolucion de LOD del juego = %d", cur); }
+    float m = g_cfg.live[142][0]; if (m < 1.01f) m = 1.0f; if (m > 3.0f) m = 3.0f;
+    int want = (int)(s_lodBase * m + 0.5f);
+    if (cur != want) { *g = want; Log("motor: resolucion de LOD %d -> %d (x%.2f: mallas detalladas hasta mas lejos)", cur, want, m); }
+    s_lodLast = want;
 }
 
 } // namespace fx

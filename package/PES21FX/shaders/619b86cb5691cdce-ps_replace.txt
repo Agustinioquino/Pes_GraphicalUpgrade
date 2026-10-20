@@ -601,6 +601,19 @@ void main(
     r1.xyz = r7.xyz * r2.xyz + r1.xyz;
     r0.xyw = r1.xyz * occRGB;
   }
+  { // PES21 carteles LED (20/10, 141): los shaders de los carteles marcan el pixel (rugosidad 253/255, especular 1/255, metal 0).
+    // Un LED emite: se le suma luz propia en unidades fisicas (luminancia fija x la exposicion del motor), asi se ve encendido
+    // en la sombra y de noche brilla mucho mas que lo iluminado (como en TV). El sol que le pega lo lava un poco (y141 = brillo,
+    // w141 = caida por angulo: los paneles LED se ven mas oscuros de costado).
+    float4 LD = IniParams.Load(int2(141,0));
+    if (LD.x > 0.5 && abs(gmC.x - 0.99215686) < 0.0025 && abs(gmC.y - 0.00392157) < 0.0018 && gmC.z < 0.002) {
+      float3 albL = inAlbedo.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).xyz;
+      float B = LD.y > 0.0 ? LD.y : 1.0;
+      float angK = 1.0;
+      if (geoOk) angK = lerp(1.0, pow(saturate(dot(Nsk, -Vsk)), 0.6), saturate(LD.w));
+      r0.xyw = r0.xyw * (1.0 - 0.35 * saturate(B)) + albL * (B * 2500.0 * g_psScene.m_exposure.z * angK);
+    }
+  }
   r0.z = log2(r0.z);
   r0.z = g_psScene.m_fogParam[2].y * r0.z;
   r0.z = r0.z * 0.693147182 + g_psScene.m_fogParam[2].z;

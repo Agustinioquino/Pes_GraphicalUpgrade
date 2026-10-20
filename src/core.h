@@ -248,6 +248,7 @@ extern thread_local LodIA t_grassSub;   // (20/10) pasto v4: malla propia para e
 void GrassDenseReset();
 void ExeDumpPresent();
 void ExePatchInstall();
+void ExePatchPresent();   // (20/10) LOD de modelos (x142) cada segundo
 bool AsyncShot(ID3D11Texture2D* frame, const std::wstring& path); void AsyncShotPresent();   // (20/10) capturas JPEG sin frenar el juego (asyncshot.cpp)   // (20/10) volcado de las secciones del exe desempaquetado en memoria (exedump.cpp)
 // (20/10) medidor de luz y luz ambiente calibrada (lightmeter.cpp): 125 = salida (x ganancia ambiente), 126 = controles
 extern std::atomic<bool> g_meterHook;

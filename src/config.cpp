@@ -375,6 +375,9 @@ bool SaveConfigValues() {
         std::string k = Trim(l.substr(0, eq));
         int idx, comp;
         if (!ParseParamName(k, idx, comp)) continue;
+        // (20/10) una clave que no estaba cuando se leyo el ini (se agrego con el juego abierto, sin "Recargar config")
+        // conserva el valor del archivo: antes se guardaba el valor vivo (0) y se perdian opciones nuevas
+        if (!g_cfg.info[idx][comp].defined) continue;
         char buf[64]; snprintf(buf, sizeof(buf), "%g", g_cfg.live[idx][comp]);
         raw = k + " = " + buf;
         g_cfg.base[idx][comp] = g_cfg.live[idx][comp];
