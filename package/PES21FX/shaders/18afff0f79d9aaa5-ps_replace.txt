@@ -65,7 +65,7 @@ void main(
   float4 Q5 = IniParams.Load(int2(105,0)), Q6 = IniParams.Load(int2(106,0)), Q7 = IniParams.Load(int2(107,0));
   float2 uvA = v1.xy;
   if (pesV3 && Q5.w > 0.5) uvA.y = 1.0 - uvA.y;   // raiz del atlas arriba
-  float atlasPx = pesV3 ? 1024.0 : 128.0;
+  float atlasPx = 128.0;   // el fundido de la oclusion por distancia se mide como el juego (tamano en pantalla, no del atlas)
   float4 pesN = float4(0.5, 0.5, 0.0, 1.0);
   // derivadas fuera de la rama (muestreo con gradiente explicito adentro)
   float2 dUx = ddx(uvA), dUy = ddy(uvA);
