@@ -84,7 +84,8 @@ static void EnsureBuffers() {
 // (reemplazado) las trata igual que a las del juego: altura, corte, viento, pisadas, atlas propio.
 //   x123 on | y123 densidad (x las del juego) | z123 curvatura | w123 nivel minimo (0 = cerca y medio, 1 = solo cerca)
 struct DenseLevel { ID3D11Buffer* pos = nullptr; ID3D11Buffer* uv = nullptr; ID3D11Buffer* ib = nullptr; UINT cards = 0, vertsPerCard = 0, idxPerCard = 0; };
-static DenseLevel s_dense[2]; static bool s_denseBuilt = false; static float s_denseCurv = -1.0f;
+static DenseLevel s_dense[2]; static std::atomic<bool> s_denseBuilt{false}; static float s_denseCurv = -1.0f;
+static std::mutex s_denseMx;   // (20/10) la malla se arma una vez, bajo llave: el pasto se dibuja desde varios hilos (contextos diferidos)
 static std::atomic<int> g_denseDraws{0};
 static inline uint16_t F16(float v) {   // float -> half (sin NaN/inf)
     uint32_t x; memcpy(&x, &v, 4); uint32_t sgn = (x >> 16) & 0x8000; int32_t e = ((x >> 23) & 0xff) - 127 + 15; uint32_t m = x & 0x7fffff;
@@ -139,8 +140,16 @@ static bool DensePick(UINT count, LodIA* out) {
     const float* P = g_cfg.live[123];
     if (P[0] < 0.5f) return false;
     float curv = std::clamp(P[2], 0.0f, 1.5f);
-    if (!s_denseBuilt || fabsf(curv - s_denseCurv) > 0.01f) BuildDense(curv);
-    if (!s_denseBuilt) return false;
+    if (!s_denseBuilt.load() || fabsf(curv - s_denseCurv) > 0.01f) {
+        // solo un hilo arma; los demas no esperan (dibujan las tarjetas del juego este cuadro). Un cambio de curvatura
+        // reconstruye solo cuando nadie esta usando la malla: se arma en buffers nuevos y se cambian bajo la llave.
+        std::unique_lock<std::mutex> lk(s_denseMx, std::try_to_lock);
+        if (!lk.owns_lock()) return false;
+        if (!s_denseBuilt.load() || fabsf(curv - s_denseCurv) > 0.01f) BuildDense(curv);
+        if (!s_denseBuilt.load()) return false;
+    }
+    std::lock_guard<std::mutex> lk2(s_denseMx);   // AddRef de la malla bajo la llave (no se libera a mitad de camino)
+    if (!s_denseBuilt.load()) return false;
     int lvl; if (count >= 20000) lvl = 0; else if (count >= 8000 && P[3] < 0.5f) lvl = 1; else return false;
     UINT gameCards = count / 6; float dens = P[1] > 0.05f ? std::clamp(P[1], 0.25f, 2.0f) : 1.0f;
     UINT cards = (std::min)((UINT)(gameCards * dens + 0.5f), s_dense[lvl].cards); if (cards < 16) return false;

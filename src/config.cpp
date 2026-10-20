@@ -127,6 +127,7 @@ static bool LoadConfigLocked() {
             else if (kl == "auto_captura_seg") c.autoCapSec = std::clamp((float)atof(v.c_str()), 3.0f, 600.0f);
             else if (kl == "auto_captura_max") c.autoCapMax = std::clamp(atoi(v.c_str()), 1, 2000);
             else if (kl == "auto_captura_ab") c.autoCapAB = atoi(v.c_str()) != 0;
+            else if (kl == "exe_dump") c.exeDump = atoi(v.c_str()) != 0;
             else if (kl == "aniso") c.aniso = std::clamp(atoi(v.c_str()), 1, 16);
             else if (kl == "mip_bias") c.mipBias = std::clamp((float)atof(v.c_str()), -2.0f, 2.0f);
             else if (kl == "replace_shaders") c.optReplace = atoi(v.c_str()) != 0;
