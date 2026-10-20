@@ -68,7 +68,6 @@ Texture2D<float4> g_tex_mesh : register(t15);
 #define cmp -
 Texture2D<float4> PESTurfN : register(t17);   // PES21 pasto v3: relieve propio del cesped (mosaico)
 Texture2D<float4> PESWearMap : register(t18);   // PES21 pasto v3: desgaste en vivo (recurso pes_wear)
-Texture2D<float4> PESFlatMap : register(t19);   // PES21 (20/10): pasto aplastado temporal (jugadores + pelota)
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 #include "pes_grass.hlsli"   // PES21 pasto v3 (19/10): patrones de corte, desgaste y zonas (compartido con las hojas)
@@ -118,21 +117,6 @@ void main(
     float4 Q4g = IniParams.Load(int2(104,0)), Q5g = IniParams.Load(int2(105,0));
     if (Q4g.x > 0.5) { float4 Q7g = IniParams.Load(int2(107,0)); float lv = PESWearMap.Sample(g_samplerLinear_Clamp_s, v1.xy).x; pesWearB = PESWear(PESPitchMeters(v1.xy), v8.xz, Q4g.w, Q7g.x, Q7g.z, lv); }
     if (Q4g.x > 0.5 && Q5g.x > 0.5) r0.xyz = PESMowGrain(PESPitchMeters(v1.xy), r0.xyz, Q5g.x, Q5g.y, 0.55 * clamp(Q5g.z, 0.2, 3.0));
-    { float4 Q36 = IniParams.Load(int2(136,0));   // (20/10) pasto aplastado: pisadas y rastro de la pelota cambian el grano (se ven y se recuperan)
-      if (Q4g.x > 0.5 && Q36.x > 0.5) {
-        float fl = PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, v1.xy, 0).x;
-        if (fl > 0.003) {
-          const float2 tx = float2(2.0 / 1024.0, 2.0 / 512.0);
-          float fx = PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, v1.xy + float2(tx.x, 0), 0).x - PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, v1.xy - float2(tx.x, 0), 0).x;
-          float fz = PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, v1.xy + float2(0, tx.y), 0).x - PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, v1.xy - float2(0, tx.y), 0).x;
-          float2 g = clamp(float2(fx, fz) * 2.0, -0.5, 0.5);   // (20/10) acotado: una pisada cambia el grano, no lo da vuelta
-          float k = saturate(fl) * clamp(Q36.y, 0.0, 2.0) * 0.5;
-          r0.xyz = normalize(float3(r0.x - g.x * k, r0.y * (1.0 - 0.3 * saturate(k)), r0.z - g.y * k)); } } }
-    { float4 W35 = IniParams.Load(int2(135,0)); float4 Q8w = IniParams.Load(int2(108,0));   // (20/10) olas de viento (ver 5e92)
-      if (Q4g.x > 0.5 && W35.x > 0.001 && Q8w.y > 0.001) {
-        float3 wf = PESWindField(v8.xz);
-        float k = wf.z * saturate(W35.x) * saturate(Q8w.y) * 0.2;   // (20/10) antes 0.9: la tabla de reflectancia del juego (amplificada) convertia la rafaga en manchones amarillos / negros de 15 m
-        r0.xyz = normalize(r0.xyz + float3(wf.x, 0.0, wf.y) * k); } }
   }
   r1.xyz = float3(0,0,1) * r0.xyz;
   r1.xyz = r0.zxy * float3(0,1,0) + -r1.xyz;

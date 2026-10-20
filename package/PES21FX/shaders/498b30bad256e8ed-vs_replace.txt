@@ -21,7 +21,6 @@ Texture2D<float4> g_tex_planarShadow : register(t5);
 Texture2D<float4> g_tex_detailNormal : register(t6);
 Texture2D<float4> PESTurfN : register(t7);   // PES21 pasto v3: relieve propio del cesped (regla del VS)
 Texture2D<float4> PESWearMap : register(t8);   // PES21 pasto v3: desgaste en vivo (recurso pes_wear, lo pinta la DLL)
-Texture2D<float4> PESFlatMap : register(t9);   // PES21 (20/10): pasto aplastado temporal (jugadores + pelota), mapa de la DLL
 
 Texture1D<float4> IniParams : register(t120);
 StructuredBuffer<float4> PESGrassInst : register(t121);   // PES21: parcelas del pasto extra (x, z, escala, giro)
@@ -121,20 +120,6 @@ void main(
     float hv = tipo == 0 ? 0.10 : (tipo == 2 ? 0.35 : 0.20);
     float n = PESGnoise(pesRoot * 1.7 + 0.37);
     pesH = hT * clamp(Q4.z, 0.3, 3.0) * (1.0 + (n - 0.5) * 2.0 * hv) * (1.0 - pesWear.x * 0.35) * (1.0 - pesWear.y) * PESWearLiveHeight(pesLive);
-    // (20/10) pasto aplastado: se agacha donde pisan los jugadores y por donde rodo la pelota, y se abre hacia afuera del
-    // rastro (gradiente del mapa); se recupera solo en ~2 s (136: x on, y fuerza)
-    { float4 Q36 = IniParams.Load(int2(136, 0));
-      if (Q36.x > 0.5) {
-        float fl = PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puv, 0).x;
-        if (fl > 0.003) {
-          const float2 tx = float2(2.0 / 1024.0, 2.0 / 512.0);
-          float fx = PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puv + float2(tx.x, 0), 0).x - PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puv - float2(tx.x, 0), 0).x;
-          float fz = PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puv + float2(0, tx.y), 0).x - PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puv - float2(0, tx.y), 0).x;
-          float2 g = float2(fx / (2.0 * tx.x * 140.0), fz / (2.0 * tx.y * 79.0));   // por metro (u = x del mundo, v = z)
-          float k = saturate(fl) * clamp(Q36.y, 0.0, 2.0);
-          pesH *= 1.0 - 0.6 * saturate(k);
-          pesLean += -g * 1.6 * clamp(Q36.y, 0.0, 2.0);                               // se acuesta hacia afuera del rastro
-        } } }
     v0.y *= pesH;
     pesExtW.y = v0.y;   // las parcelas extra toman la misma altura
     // (20/10) inclinacion real de la hoja segun el grano del corte (las franjas se ven en 3D de cerca) y viento:
@@ -146,12 +131,12 @@ void main(
       float3 gr = normalize(gt.xzy * 2.0 - 1.0);
       if (Q5e.x > 0.5) gr = PESMowGrain(pesPm, gr, Q5e.x, Q5e.y, 0.55 * clamp(Q5e.z, 0.2, 3.0));
       pesLean += gr.xz * 0.7 * saturate(Q8.z);
-      // (20/10) mismo campo de rafagas que la base de la cancha (las olas que se ven a lo lejos y las hojas se mueven juntas);
-      // un temblor fino por hoja encima para que no se muevan en bloque
-      float3 wf = PESWindField(pesRoot);
       float tw = IniParams.Load(int2(23, 0)).z;
-      float flutter = sin(tw * 7.3 + dot(pesRoot, float2(12.9, 7.7))) * 0.12 * (0.3 + wf.z);
-      pesLean += wf.xy * (0.2 + 0.8 * wf.z + flutter) * 0.5 * saturate(Q8.y);
+      float ang = radians(IniParams.Load(int2(84, 0)).z);
+      float2 wd = float2(cos(ang), sin(ang));
+      float phw = dot(pesRoot, wd) * 0.6 - tw * 2.2;
+      float gust = sin(phw) * 0.6 + sin(phw * 2.7 + tw * 0.9) * 0.25 + sin(tw * 0.7 + pesRoot.x * 0.13) * 0.15;
+      pesLean += wd * (0.25 + 0.75 * saturate(gust * 0.5 + 0.5)) * 0.45 * saturate(Q8.y);
     }
   }
   // --- posicion en el mundo y doblado por jugador / pelota ---
