@@ -323,6 +323,24 @@ void main(
       float sunUp = saturate(dot(Ld, upV));
       float3 sunC = max(pLc_color.xyz, 0.0) * g_psScene.m_exposure.zzz;
       float3 turf = lerp(float3(0.20, 0.20, 0.20), float3(0.14, 0.24, 0.07), saturate(BG.y));
+      // 19/10 v2 (z42 > 0): el color del rebote sale del SUELO REAL que hay debajo en pantalla (albedo del G-buffer de los
+      // pixeles de cancha mas abajo, con su sombra): cada estadio rebota su propio verde, y un jugador parado en la sombra
+      // recibe menos rebote que uno al sol.
+      float3 gSum = 0; float gW = 0;
+      if (BG.z > 0.0) {
+        float2 offs[5] = { float2(0, 0.10), float2(0, 0.22), float2(-0.09, 0.16), float2(0.09, 0.16), float2(0, 0.34) };
+        [unroll] for (int gi = 0; gi < 5; gi++) {
+          float2 ug = uvC + offs[gi]; if (ug.y > 0.995) continue;
+          float gz = inGBufferNormal.SampleLevel(g_samplerPoint_Clamp_s, ug, 0).z;
+          int ty = (int)((uint)(gz * 1023 + 0.5) & 15);
+          if (ty != 3) continue;                                       // solo cancha (pasto)
+          float zg = PESLinZ(ug); if (abs(zg - zb) > 25.0) continue;   // suelo cerca del objeto (no el fondo)
+          float3 alb = inAlbedo.SampleLevel(g_samplerPoint_Clamp_s, ug, 0).xyz;
+          float shg = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, ug, 0).x);
+          gSum += alb * (0.25 + 0.75 * shg); gW += 1.0;
+        }
+      }
+      if (gW > 0.5) turf = lerp(turf, gSum / gW * 1.35, saturate(BG.z));
       r2.xyz += sunC * sunUp * turf * fGround * max(BG.x, 0.0) * saturate((120.0 - zb) / 40.0);
     }
   }
@@ -348,7 +366,15 @@ void main(
         float3 sunC = max(pLc_color.xyz, 0.0) * g_psScene.m_exposure.zzz;
         float lum = dot(sunC, float3(0.3, 0.5, 0.2));
         float3 tint = lerp(float3(1, 1, 1), lerp(float3(0.62, 0.52, 0.95), float3(0.55, 0.70, 1.0), saturate(sunUp * 2.5)), saturate(SKY.y));
-        r2.xyz += lum * tint * fSky * fSky * max(SKY.x, 0.0) * 0.12 * day * saturate((400.0 - zsk) / 120.0);
+        // 19/10 v2 (z47 > 0): el color del cielo sale del propio motor: el color de la niebla del estadio es el horizonte
+        // (gris-celeste de dia, naranja al atardecer); el cenit es mas azul. Y la luz de cielo se ocluye con el AO, como
+        // corresponde a una luz que viene de todo el hemisferio.
+        { float3 hor = max(g_psScene.m_fogColor.xyz, 0.0); float lh = dot(hor, float3(0.3, 0.59, 0.11));
+          if (lh > 1e-4) { float3 horN = hor / lh; float3 zen = normalize(horN * float3(0.75, 0.9, 1.25)) * 1.7;
+            float3 skyC = lerp(horN, zen, saturate(fSky * 1.3));
+            tint = lerp(tint, skyC, saturate(SKY.z)); } }
+        float aoSky = lerp(1.0, saturate(inOcclusion.SampleLevel(g_samplerLinear_Clamp_s, uvC, 0).x), 0.7 * saturate(SKY.z));
+        r2.xyz += lum * tint * fSky * fSky * max(SKY.x, 0.0) * 0.12 * day * aoSky * saturate((400.0 - zsk) / 120.0);
       }
     }
   }
