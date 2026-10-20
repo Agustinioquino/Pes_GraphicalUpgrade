@@ -263,6 +263,7 @@ void main(
     }
   }
   o0.w = r2.w;
+  float3 pesHdrIn = r0.xyz;   // PES21 curva de tono (20/10): escena lineal (con cielo, sol y nubes) antes de la LUT del estadio
   r1.x = dot(float3(0.627403975,0.329281986,0.0433136001), r0.xyz);
   r1.y = dot(float3(0.0690969974,0.919539988,0.0113612004), r0.xyz);
   r1.z = dot(float3(0.0163915996,0.088013202,0.895595014), r0.xyz);
@@ -310,6 +311,24 @@ void main(
   r0.xyz = log2(r0.xyz);
   r0.xyz = float3(0.454545468,0.454545468,0.454545468) * r0.xyz;
   r0.xyz = exp2(r0.xyz);
+  { // === PES21 curva de tono (20/10): AgX (la curva neutra de los motores actuales: Blender 4 / Godot) en vez de la
+    // LUT PQ del estadio. x117: 0 del juego, 1 AgX, 2 AgX con punch; y117 exposicion (EV); z117 cuanto se mezcla con la LUT
+    float4 TC = IniParams.Load(int2(117,0));
+    int tone = (int)(TC.x + 0.5);
+    if (tone >= 1) {
+      float3 lin = max(pesHdrIn, 0.0) * exp2(TC.y);
+      const float3x3 agxM = { 0.842479062, 0.078433600, 0.079223745, 0.042328242, 0.878468636, 0.079166127, 0.042375655, 0.078433600, 0.879142974 };
+      const float3x3 agxI = { 1.196879005, -0.098020881, -0.099029744, -0.052896852, 1.151903130, -0.098961177, -0.052971636, -0.098043450, 1.151073673 };
+      float3 v = mul(agxM, lin);
+      v = clamp(log2(max(v, 1e-10)), -12.47393, 4.026069);
+      v = (v + 12.47393) / (4.026069 + 12.47393);
+      float3 x2 = v * v, x4 = x2 * x2;
+      v = 15.5 * x4 * x2 - 40.14 * x4 * v + 31.96 * x4 - 6.868 * x2 * v + 0.4298 * x2 + 0.1191 * v - 0.00232;
+      if (tone == 2) { float lm = dot(v, float3(0.2126, 0.7152, 0.0722)); v = pow(max(v, 0.0), 1.35); v = lm + 1.4 * (v - lm); }
+      float3 agx = saturate(mul(agxI, v));   // sale codificado para pantalla (sRGB)
+      r0.xyz = lerp(agx, r0.xyz, saturate(TC.z));
+    }
+  }
   // ================= GRADACION =================
   if (grade) {
     float3 c = saturate(r0.xyz);
