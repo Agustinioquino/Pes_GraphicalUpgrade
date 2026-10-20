@@ -37,7 +37,13 @@ struct LodFace {
     std::vector<LodVar> var; LodIA best; int subs = 0, incompat = 0; uint64_t incompatVS = 0;
     float lastDist = -1;      // ultima distancia leida (2 cuadros de atraso)
     bool parts = false;       // dos cuentas distintas con el mismo VS/PS en el mismo cuadro = partes de la malla, no LODs: no sustituir
+    std::vector<LodVar> body; // (diagnostico) las demas mallas del mismo jugador (mismo bloque de cbuffer por objeto b5 en el cuadro): cuerpo, pelo, botines...
 };
+// (diagnostico) el bloque de constantes por objeto (b5: buffer + primer constante) identifica al jugador dentro del cuadro:
+// los dibujos de cara anotan el suyo y los demas dibujos del cuadro se atribuyen en Present
+struct ObjRef { void* cb; UINT first; LodFace* f; };
+struct PendDraw { void* cb; UINT first; uint64_t vs, ps; UINT count, start; INT base; void* vb0; void* ib; };
+static std::vector<ObjRef> s_faceObjs; static std::vector<PendDraw> s_pend; static bool s_objAmbiguous = false;
 // clave de sustitucion por malla reducida: (VB0, IB, cuenta, inicio, base) -> cara
 struct SubKey { void* vb0; void* ib; UINT count, start; INT base; bool operator==(const SubKey& o) const { return vb0 == o.vb0 && ib == o.ib && count == o.count && start == o.start && base == o.base; } };
 struct SubKeyHash { size_t operator()(const SubKey& k) const { return std::hash<void*>()(k.vb0) ^ (std::hash<void*>()(k.ib) << 1) ^ (size_t)k.count * 1315423911u ^ (size_t)k.start * 2654435761u ^ (size_t)(unsigned)k.base * 97u; } };
@@ -80,16 +86,22 @@ static void CaptureIA(ID3D11DeviceContext* c, LodIA& L, uint64_t vsHash, uint64_
     for (int i = 0; i < 8; i++) { L.cb[i] = 0; if (cbs[i]) { D3D11_BUFFER_DESC d; cbs[i]->GetDesc(&d); L.cb[i] = d.ByteWidth; cbs[i]->Release(); } }
 }
 
-static void NoteDistance(ID3D11DeviceContext* c, LodFace* f, int var) {
-    int w = s_stageW; if (!s_stage[w]) return;
-    int i = s_count.fetch_add(1); if (i >= kNotes) return;
-    ID3D11Buffer* cb = nullptr; UINT first = 0, num = 0; ID3D11DeviceContext1* c1 = nullptr;
-    if (SUCCEEDED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) && c1) { c1->VSGetConstantBuffers1(5, 1, &cb, &first, &num); c1->Release(); }
+static ID3D11Buffer* GetVSCB5(ID3D11DeviceContext* c, UINT* first) {   // b5 del VS (puntero retenido) y su primer constante (VSSetConstantBuffers1)
+    ID3D11Buffer* cb = nullptr; UINT num = 0; *first = 0; ID3D11DeviceContext1* c1 = nullptr;
+    if (SUCCEEDED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) && c1) { c1->VSGetConstantBuffers1(5, 1, &cb, first, &num); c1->Release(); }
     else c->VSGetConstantBuffers(5, 1, &cb);
-    if (!cb) { s_notes[w][i] = { nullptr, 0 }; return; }
-    D3D11_BUFFER_DESC d; cb->GetDesc(&d); UINT off = first * 16 + 112;
-    if (d.ByteWidth >= off + 16) { D3D11_BOX bx = { off, 0, 0, off + 16, 1, 1 }; c->CopySubresourceRegion(s_stage[w], 0, (UINT)i * 16, 0, 0, cb, 0, &bx); s_notes[w][i] = { f, var }; }
-    else s_notes[w][i] = { nullptr, 0 };
+    return cb;
+}
+static void NoteDistance(ID3D11DeviceContext* c, LodFace* f, int var) {
+    UINT first = 0; ID3D11Buffer* cb = GetVSCB5(c, &first);
+    if (!cb) return;
+    if (DiagOn()) { std::lock_guard<std::mutex> lk(s_mx); if (s_faceObjs.size() < 128) s_faceObjs.push_back({ (void*)cb, first, f }); }
+    int w = s_stageW; int i = s_stage[w] ? s_count.fetch_add(1) : kNotes;
+    if (i < kNotes) {
+        D3D11_BUFFER_DESC d; cb->GetDesc(&d); UINT off = first * 16 + 112;
+        if (d.ByteWidth >= off + 16) { D3D11_BOX bx = { off, 0, 0, off + 16, 1, 1 }; c->CopySubresourceRegion(s_stage[w], 0, (UINT)i * 16, 0, 0, cb, 0, &bx); s_notes[w][i] = { f, var }; }
+        else s_notes[w][i] = { nullptr, 0 };
+    }
     cb->Release();
 }
 
@@ -178,9 +190,30 @@ bool LodNoteAnyDraw(ID3D11DeviceContext* c, uint64_t vsHash, uint64_t psHash, UI
             for (auto* v : in) if (v) v->Release();
             if (!f) { auto it = s_byVB.find(vb0); if (it != s_byVB.end()) f = it->second; }   // o por su buffer de vertices (prepaso / sombras: sin texturas)
             if (f) { int vi = 0; LodVar& v = Variant(f, count, start, base, vsHash, psHash, vb0, ib, &vi); v.draws++; if (v.draws == 1) { ID3D11Buffer* cbs[8] = {}; c->VSGetConstantBuffers(0, 8, cbs); for (int i = 0; i < 8; i++) if (cbs[i]) { D3D11_BUFFER_DESC d; cbs[i]->GetDesc(&d); v.cb[i] = d.ByteWidth; cbs[i]->Release(); } } }
+            else if (!s_faces.empty() && s_pend.size() < 4096) {   // puede ser otra parte de un jugador: se resuelve en Present por el bloque b5
+                UINT first = 0; ID3D11Buffer* cb = GetVSCB5(c, &first);
+                if (cb) { s_pend.push_back({ (void*)cb, first, vsHash, psHash, count, start, base, vb0, ib }); cb->Release(); }
+            }
         }
     }
     return sub;
+}
+// (diagnostico, Present) atribuye los dibujos pendientes del cuadro a los jugadores por su bloque b5
+static void ResolveBody() {
+    if (s_faceObjs.empty() || s_pend.empty()) { s_faceObjs.clear(); s_pend.clear(); return; }
+    // el mismo bloque para dos caras distintas en el cuadro = el motor reutiliza el cbuffer entre jugadores: no sirve para atribuir
+    for (size_t i = 0; i < s_faceObjs.size() && !s_objAmbiguous; i++) for (size_t j = i + 1; j < s_faceObjs.size(); j++)
+        if (s_faceObjs[i].cb == s_faceObjs[j].cb && s_faceObjs[i].first == s_faceObjs[j].first && s_faceObjs[i].f != s_faceObjs[j].f) { s_objAmbiguous = true; Log("lod caras: el bloque b5 por objeto se comparte entre jugadores en el mismo cuadro: no se puede atribuir el cuerpo"); break; }
+    if (!s_objAmbiguous) {
+        for (auto& p : s_pend) {
+            LodFace* f = nullptr; for (auto& o : s_faceObjs) if (o.cb == p.cb && o.first == p.first) { f = o.f; break; }
+            if (!f) continue;
+            bool found = false;
+            for (auto& v : f->body) if (v.count == p.count && v.vs == p.vs && v.ps == p.ps && v.vb0 == p.vb0 && v.start == p.start && v.base == p.base) { v.draws++; v.lastFrame = s_frame; found = true; break; }
+            if (!found && f->body.size() < 24) { LodVar v; v.count = p.count; v.start = p.start; v.base = p.base; v.vs = p.vs; v.ps = p.ps; v.vb0 = p.vb0; v.ib = p.ib; v.draws = 1; v.lastFrame = s_frame; f->body.push_back(v); }
+        }
+    }
+    s_faceObjs.clear(); s_pend.clear();
 }
 
 // aplica el estado de LOD0 (guardando el del juego en 'sv') / lo devuelve
@@ -213,11 +246,12 @@ void LodPresent() {
     if (mg != s_matchSeen) {
         std::lock_guard<std::mutex> lk(s_mx);
         s_matchSeen = mg;
-        if (!s_faces.empty()) { for (auto& kv : s_faces) s_old.push_back(kv.second); s_faces.clear(); s_byTex.clear(); s_sub.clear(); s_byVB.clear(); s_oldFrame = s_frame; g_lodFaces = 0; }
+        if (!s_faces.empty()) { for (auto& kv : s_faces) s_old.push_back(kv.second); s_faces.clear(); s_byTex.clear(); s_sub.clear(); s_byVB.clear(); s_faceObjs.clear(); s_pend.clear(); s_oldFrame = s_frame; g_lodFaces = 0; }
     }
     if (!s_old.empty() && s_frame - s_oldFrame > 90) { std::lock_guard<std::mutex> lk(s_mx); for (auto* f : s_old) { f->best.Release(); delete f; } s_old.clear(); }
     g_lodAny = DiagOn() || ForceOn();
-    if (!g_lodAny) { s_count = 0; return; }
+    if (!g_lodAny) { s_count = 0; std::lock_guard<std::mutex> lk(s_mx); s_faceObjs.clear(); s_pend.clear(); return; }
+    { std::lock_guard<std::mutex> lk(s_mx); ResolveBody(); }
     // anillo de distancias: este cuadro escribio en w; se lee el de hace 2 cuadros
     int w = s_stageW; int n = std::min(s_count.exchange(0), kNotes);
     s_stageN[w] = n; int rd = (w + 1) % kRing; int pending = s_stageN[rd]; s_stageN[rd] = -1; s_stageW = rd;
@@ -256,6 +290,12 @@ void LodPresent() {
                 std::string cb; for (int i = 0; i < 8; i++) if (v->cb[i]) { char q[32]; snprintf(q, sizeof q, "%sb%d=%u", cb.empty() ? " [" : " ", i, v->cb[i]); cb += q; }
                 if (!cb.empty()) line += cb + "]";
                 if (v->vb0 == (void*)f->best.vb[0] && v->count != f->best.count) line += " (mismo VB que LOD0)";
+            }
+            if (!f->body.empty()) {
+                std::vector<const LodVar*> bs; for (auto& v : f->body) bs.push_back(&v);
+                std::sort(bs.begin(), bs.end(), [](const LodVar* a, const LodVar* b) { return a->count > b->count; });
+                char b[64]; snprintf(b, sizeof b, " | cuerpo (%d mallas):", (int)bs.size()); line += b;
+                for (auto* v : bs) { char q[160]; snprintf(q, sizeof q, " %u idx VS %s PS %s x%d;", v->count, Hex8(v->vs).c_str(), v->ps ? Hex8(v->ps).c_str() : "sin PS", v->draws); line += q; }
             }
             if (f->parts) line += " | (en partes)";
             if (f->incompat) { char b[64]; snprintf(b, sizeof b, " | incompatibles: %d", f->incompat); line += b; }
