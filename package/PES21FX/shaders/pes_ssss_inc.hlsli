@@ -76,7 +76,7 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   float4 SK = IniParams.Load(int2(140,0));
   float alb0L = dot(inAlb.SampleLevel(sPoint, uv, 0).xyz, float3(0.2126, 0.7152, 0.0722));
   float mel = saturate(log2(0.47 / max(alb0L, 1e-3)) / 2.85);
-  float km = SK.x > 0.5 ? mel * saturate(SK.z > 0.0 ? SK.z : 1.0) : 0.0;
+  float km = (SK.x > 0.5 && alb0L > 0.004) ? mel * saturate(SK.z > 0.0 ? SK.z : 1.0) : 0.0;   // sin albedo enlazado (DLL vieja) = como antes
   float redW = 1.0 + 1.5 * saturate(P2.x) * (1.0 - 0.7 * km);
   float3 acc = 0, wsum = 0;
   [unroll] for (int i = 0; i < 17; i++) {
