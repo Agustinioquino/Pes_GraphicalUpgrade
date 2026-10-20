@@ -868,13 +868,50 @@ static float ReadElev(const std::vector<float>& L, const std::vector<float>& S, 
     if (azOut) { float x = lx * rx + ly * ry + lz * rz, z = lx * fx + ly * fy + lz * fz; *azOut = atan2f(x, z) * 57.2958f; if (*azOut < 0) *azOut += 360.f; }
     return e;
 }
+// (20/10) capturas A/B: con auto_captura_ab = 1, en cada captura se guarda ademas un par: A = todo como esta, B = el mismo
+// cuadro (3 despues) con UN grupo del menu apagado (su interruptor), ciclando por todos los grupos activos. Asi se ve el
+// efecto real de cada funcion en la misma escena sin que nadie toque el menu. capturas\ab\HHMMSS_<grupo>_A.jpg / _B.jpg
+struct ABState { bool on = false; int idx = -1, comp = 0; float prev = 0; int frames = 0; std::wstring base; std::string title; };
+static ABState s_ab; static int s_abNext = 0;
+static std::wstring SlugW(const std::string& t) {
+    std::wstring o; for (unsigned char ch : t) { if (o.size() >= 28) break; if (isalnum(ch)) o += (wchar_t)tolower(ch); else if (ch == ' ' || ch == '_' || ch == '-') { if (!o.empty() && o.back() != L'_') o += L'_'; } }
+    while (!o.empty() && o.back() == L'_') o.pop_back(); return o.empty() ? L"grupo" : o;
+}
 void AutoCapturePresent(ID3D11Texture2D* frame) {
     static double last = 0; static int count = 0; static bool dirOk = false;
     if (!g_cfg.autoCap || !frame || !g_dev.imm) return;
+    if (s_ab.on) {   // captura B pendiente: 3 cuadros con el grupo apagado y se guarda
+        if (++s_ab.frames >= 3) {
+            EnsureComInit();
+            HRESULT hr = DirectX::SaveWICTextureToFile(g_dev.imm, frame, GUID_ContainerFormatJpeg, (s_ab.base + L"_B.jpg").c_str(), nullptr, nullptr, false);
+            if (s_ab.idx >= 0) g_cfg.live[s_ab.idx][s_ab.comp] = s_ab.prev;
+            if (FAILED(hr)) Log("captura A/B: no se pudo guardar B (0x%08x)", (unsigned)hr);
+            s_ab = ABState();
+        }
+        return;
+    }
     if (g_cfg.live[93][3] < 0.5f) return;                 // solo en partido
     double t = Now(); if (t - last < g_cfg.autoCapSec) return; last = t;
     if (count >= g_cfg.autoCapMax) return;
-    std::wstring dir = g_cfg.baseDir + L"capturas"; if (!dirOk) { CreateDirectoryW(dir.c_str(), nullptr); dirOk = true; }
+    std::wstring dir = g_cfg.baseDir + L"capturas"; if (!dirOk) { CreateDirectoryW(dir.c_str(), nullptr); CreateDirectoryW((dir + L"\\ab").c_str(), nullptr); dirOk = true; }
+    static int cycle = 0; cycle++;
+    if (g_cfg.autoCapAB && (cycle & 1) && !g_cfg.groups.empty()) {   // un ciclo si, uno no: la captura normal (con luz.txt) sigue
+        // siguiente grupo con interruptor prendido (no diagnostico, no ropa: esa necesita recompilar)
+        int n = (int)g_cfg.groups.size(); int pick = -1;
+        for (int k = 0; k < n; k++) { int gi = (s_abNext + k) % n; const MenuGroup& g = g_cfg.groups[gi];
+            if (g.tIdx < 0 || g.tIdx >= kParamCount) continue; if (g.section.rfind("Diagn", 0) == 0 || g.section.rfind("Ropa", 0) == 0) continue;
+            if (g_cfg.live[g.tIdx][g.tComp] < 0.5f) continue; pick = gi; s_abNext = gi + 1; break; }
+        if (pick >= 0) {
+            const MenuGroup& g = g_cfg.groups[pick];
+            SYSTEMTIME st; GetLocalTime(&st); wchar_t nm[64]; swprintf(nm, 64, L"%02d%02d%02d_", st.wHour, st.wMinute, st.wSecond);
+            s_ab.base = dir + L"\\ab\\" + nm + SlugW(g.title);
+            EnsureComInit();
+            HRESULT hr = DirectX::SaveWICTextureToFile(g_dev.imm, frame, GUID_ContainerFormatJpeg, (s_ab.base + L"_A.jpg").c_str(), nullptr, nullptr, false);
+            if (SUCCEEDED(hr)) { s_ab.on = true; s_ab.idx = g.tIdx; s_ab.comp = g.tComp; s_ab.prev = g_cfg.live[g.tIdx][g.tComp]; s_ab.frames = 0; s_ab.title = g.title; g_cfg.live[g.tIdx][g.tComp] = 0.0f;
+                static bool said = false; if (!said) { said = true; Log("captura A/B: pares en capturas\\ab\\ (A = todo, B = un grupo apagado), primero '%s'", g.title.c_str()); }
+                return; }
+        }
+    }
     std::vector<float> L, S; bool lok = NamedCBRead("LightCB", L), sok = NamedCBRead("SceneCB", S);
     float az = 0, el = lok && sok ? ReadElev(L, S, &az) : 0;
     SYSTEMTIME st; GetLocalTime(&st);

@@ -47,6 +47,9 @@ Capturas automaticas (para calibrar sin sacar capturas a mano)
 - [PES21FX] auto_captura = 1: en partido guarda un jpg cada auto_captura_seg segundos (tope auto_captura_max)
   en PES21FX\capturas\HHMMSS_solEE.jpg (EE = altura del sol) y anota en capturas\luz.txt el sol (altura,
   azimut, color), la exposicion, la niebla y los parametros del mod. tools\read_luz.py lo resume.
+- [PES21FX] auto_captura_ab = 1: ademas, un ciclo si y uno no, guarda un par en capturas\ab\: HHMMSS_<grupo>_A.jpg (todo
+  como esta) y _B.jpg (3 cuadros despues con ese grupo del menu apagado), ciclando por todos los grupos activos: el
+  efecto real de cada funcion en la misma escena, sin tocar el menu.
 - [inspector] por clase, "volcar = 1": sus texturas se guardan solas en inspector\texturas\<clase> la primera
   vez que se ven (sin abrir el inspector).
 
