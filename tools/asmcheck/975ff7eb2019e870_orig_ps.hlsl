@@ -1,4 +1,4 @@
-// generado por tools/asm2hlsl.py (traduccion mecanica, identica al juego)
+// generado por tools/asm2hlsl.py (traduccion mecanica, identica al juego; registros con valores)
 cbuffer cb0 : register(b0) { float4 cb0[1]; }
 SamplerState s0 : register(s0);
 SamplerState s1 : register(s1);
@@ -10,7 +10,7 @@ Texture2D<float4> t1 : register(t1);
 Texture2D<float4> t2 : register(t2);
 Texture2D<float4> t3 : register(t3);
 Texture2D<float4> t15 : register(t15);
-uint4 PESBfi(uint4 w, uint4 o, uint4 ins, uint4 b) { uint4 m = (((1u << w) - 1u) << o); return ((ins << o) & m) | (b & ~m); }
+uint4 PESBfi(uint4 w, uint4 o, uint4 ins, uint4 b) { uint4 m = (w >= 32u) ? 0xffffffffu : (((1u << w) - 1u) << o); return ((ins << o) & m) | (b & ~m); }
 Texture1D<float4> IniParams : register(t120);
 
 void main(
@@ -46,20 +46,20 @@ void main(
   r0.x = (v1.wwww).x;
   r1.xyzw = ((v0.xyxy + float4(-0.500000, -0.500000, -1.000000, -1.000000))).xyzw;
   r0.yz = ((r1.xxyx * float4(0.000000, 0.125000, 0.125000, 0.000000))).yz;
-  r1.xy = (asfloat(int4(r1.zwzz))).xy;
-  r1.xy = (asfloat((asuint(r1.xyxx) & uint4(1U, 1U, 0U, 0U)))).xy;
-  r1.xy = (float4(asint(r1.xyxx))).xy;
+  r1.xy = (float4(int4(r1.zwzz))).xy;
+  r1.xy = (float4((float)((int)r1.x & 1), (float)((int)r1.y & 1), 0.0, 0.0)).xy;
+  r1.xy = (float4(int4(r1.xyxx))).xy;
   r2.yz = ((t15.Sample(s8, (r0.yzyy).xy)).yxwz).yz;
   r2.x = ((r2.zzzz * cb0[0].wwww)).x;
   r3.xyzw = ((t0.Sample(s0, (v2.xyxx).xy)).xyzw).xyzw;
   r0.w = (r3.wwww).w;
   o0.xyzw = (r3.xyzw).xyzw;
   r0.xy = ((r0.wxww + -(r2.xyxx))).xy;
-  r0.xy = (((r0.xyxx < float4(0.000000, 0.000000, 0.000000, 0.000000)) ? float4(-1,-1,-1,-1) : float4(0,0,0,0))).xy;
-  r0.x = (asfloat((asuint(r0.yyyy) | asuint(r0.xxxx)))).x;
-  if (asuint(r0.xxxx).x != 0) discard;
-  r0.x = (((v1.wwww >= float4(0.900000, 0.900000, 0.900000, 0.900000)) ? float4(-1,-1,-1,-1) : float4(0,0,0,0))).x;
-  if (asuint(r0.xxxx).x == 0) discard;
+  r0.xy = (((r0.xyxx < float4(0.000000, 0.000000, 0.000000, 0.000000)) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).xy;
+  r0.x = (float4((float)((int)r0.y | (int)r0.x), 0.0, 0.0, 0.0)).x;
+  if ((r0.xxxx).x != 0) discard;
+  r0.x = (((v1.wwww >= float4(0.900000, 0.900000, 0.900000, 0.900000)) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).x;
+  if ((r0.xxxx).x == 0) discard;
   r0.x = ((dot((v3.xyzx).xyz, (v3.xyzx).xyz)).xxxx).x;
   r0.x = (rsqrt(r0.xxxx)).x;
   r0.xyz = ((r0.xxxx * v3.xyzx)).xyz;
@@ -87,17 +87,17 @@ void main(
   r1.z = ((abs(r0.yyyy) + abs(r0.xxxx))).z;
   r1.z = ((abs(r0.zzzz) + r1.zzzz)).z;
   r1.zw = ((r0.xxxy / r1.zzzz)).zw;
-  r2.xy = (((r1.zwzz >= float4(0.000000, 0.000000, 0.000000, 0.000000)) ? float4(-1,-1,-1,-1) : float4(0,0,0,0))).xy;
-  r2.xy = (((asuint(r2.xyxx) != 0) ? float4(1.000000, 1.000000, 0, 0) : float4(-1.000000, -1.000000, 0, 0))).xy;
+  r2.xy = (((r1.zwzz >= float4(0.000000, 0.000000, 0.000000, 0.000000)) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).xy;
+  r2.xy = (((r2.xyxx != 0) ? float4(1.000000, 1.000000, 0.0, 0.0) : float4(-1.000000, -1.000000, 0.0, 0.0))).xy;
   r2.zw = ((-(abs(r1.wwwz)) + float4(0.000000, 0.000000, 1.000000, 1.000000))).zw;
   r2.xy = ((r2.xyxx * r2.zwzz)).xy;
-  r2.z = (((float4(0.000000, 0.000000, 0.000000, 0.000000) < -(r0.zzzz)) ? float4(-1,-1,-1,-1) : float4(0,0,0,0))).z;
-  r1.zw = (((asuint(r2.zzzz) != 0) ? r1.zzzw : r2.xxxy)).zw;
+  r2.z = (((float4(0.000000, 0.000000, 0.000000, 0.000000) < -(r0.zzzz)) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).z;
+  r1.zw = (((r2.zzzz != 0) ? r1.zzzw : r2.xxxy)).zw;
   r1.zw = ((r1.zzzw * float4(0.000000, 0.000000, 0.500000, 0.500000) + float4(0.000000, 0.000000, 0.500000, 0.500000))).zw;
   r1.zw = ((r1.zzzw * float4(0.000000, 0.000000, 2047.000000, 2047.000000))).zw;
-  r1.zw = (asfloat(uint4(r1.zzzw))).zw;
-  r1.zw = (asfloat((asuint(r1.zzzw) >> (uint4(0U, 0U, 1U, 1U) & 31)))).zw;
-  r1.zw = (float4(asuint(r1.zzzw))).zw;
+  r1.zw = (float4(uint4(r1.zzzw))).zw;
+  r1.zw = (float4((uint4(int4(r1.zzzw)) >> (uint4(0U, 0U, 1U, 1U) & 31)))).zw;
+  r1.zw = (float4(uint4(int4(r1.zzzw)))).zw;
   o1.xy = ((r1.zwzz * float4(0.000977517106, 0.000977517106, 0.000000, 0.000000))).xy;
   o1.w = (r0.wwww).w;
   o2.w = (r0.wwww).w;
@@ -132,6 +132,6 @@ void main(
   o2.x = (sqrt(r0.xxxx)).x;
   r0.x = ((t3.Sample(s3, (v2.xyxx).xy)).xyzw).x;
   o2.z = (r0.xxxx).z;
-  o4.xyzw = (float4(0, 0, 0, 0)).xyzw;
+  o4.xyzw = (float4(0.0, 0.0, 0.0, 0.0)).xyzw;
   return;
 }

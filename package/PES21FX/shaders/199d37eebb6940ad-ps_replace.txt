@@ -23,8 +23,8 @@ Texture2D<float4> t8 : register(t8);
 Texture2D<float4> t12 : register(t12);
 Texture2D<float4> t14 : register(t14);
 Texture2D<float4> t15 : register(t15);
-static const float4 icb[4] = { float4(1.000000, 0, 0, 0), float4(0, 1.000000, 0, 0), float4(0, 0, 1.000000, 0), float4(0, 0, 0, 1.000000) };
-uint4 PESBfi(uint4 w, uint4 o, uint4 ins, uint4 b) { uint4 m = (((1u << w) - 1u) << o); return ((ins << o) & m) | (b & ~m); }
+static const float4 icb[4] = { float4(1.000000, 0.0, 0.0, 0.0), float4(0.0, 1.000000, 0.0, 0.0), float4(0.0, 0.0, 1.000000, 0.0), float4(0.0, 0.0, 0.0, 1.000000) };
+uint4 PESBfi(uint4 w, uint4 o, uint4 ins, uint4 b) { uint4 m = (w >= 32u) ? 0xffffffffu : (((1u << w) - 1u) << o); return ((ins << o) & m) | (b & ~m); }
 Texture1D<float4> IniParams : register(t120);
 
 void main(
@@ -61,7 +61,7 @@ void main(
   float4 v8 = 0;
   v8.xyzw = i_texcoord7;
   float4 v9 = 0;
-  v9.x = i_ff ? asfloat(0xffffffffU) : 0.0;
+  v9.x = i_ff ? -1.0 : 0.0;
   r0.xy = ((v0.xyxx + float4(-0.500000, -0.500000, 0.000000, 0.000000))).xy;
   r1.xyzw = ((v2.xyzw / v3.xxyy)).xyzw;
   r1.xyzw = ((r1.xyzw * float4(0.500000, 0.500000, 0.500000, 0.500000) + float4(0.500000, 0.500000, 0.500000, 0.500000))).xyzw;
@@ -71,8 +71,8 @@ void main(
   r1.xyzw = ((t0.Sample(s12, (v1.xyxx).xy)).xyzw).xyzw;
   r1.xyz = ((r1.xyzx * v6.wwww)).xyz;
   r0.z = ((r1.wwww + float4(-0.100000, -0.100000, -0.100000, -0.100000))).z;
-  r0.z = (((r0.zzzz < float4(0.000000, 0.000000, 0.000000, 0.000000)) ? float4(-1,-1,-1,-1) : float4(0,0,0,0))).z;
-  if (asuint(r0.zzzz).x != 0) discard;
+  r0.z = (((r0.zzzz < float4(0.000000, 0.000000, 0.000000, 0.000000)) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).z;
+  if ((r0.zzzz).x != 0) discard;
   r2.xyz = ((-(v4.xyzx) + cb5[11].xyzx)).xyz;
   r0.z = ((dot((r2.xyzx).xyz, (r2.xyzx).xyz)).xxxx).z;
   r0.z = (sqrt(r0.zzzz)).z;
@@ -178,18 +178,18 @@ void main(
   r0.w = ((r2.wwww + float4(1.000000, 1.000000, 1.000000, 1.000000))).w;
   r8.z = ((r0.wwww * cb2[16].wwww)).z;
   r10.xy = ((v5.xyxx * v5.xyxx)).xy;
-  r10.xy = (((r0.zzzz >= r10.xyxx) ? float4(-1,-1,-1,-1) : float4(0,0,0,0))).xy;
-  r0.w = (((r9.zzzz >= float4(0.000000, 0.000000, 0.000000, 0.000000)) ? float4(-1,-1,-1,-1) : float4(0,0,0,0))).w;
+  r10.xy = (((r0.zzzz >= r10.xyxx) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).xy;
+  r0.w = (((r9.zzzz >= float4(0.000000, 0.000000, 0.000000, 0.000000)) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).w;
   r10.zw = ((r7.xxxy * r7.xxxy)).zw;
-  r10.zw = (((r0.zzzz >= r10.zzzw) ? float4(-1,-1,-1,-1) : float4(0,0,0,0))).zw;
-  r10.xyzw = (asfloat((asuint(r10.xyzw) & uint4(0x3f800000U, 0x3f800000U, 0x3f800000U, 0x3f800000U)))).xyzw;
-  r2.w = (((r7.zzzz >= float4(0.000000, 0.000000, 0.000000, 0.000000)) ? float4(-1,-1,-1,-1) : float4(0,0,0,0))).w;
-  r2.w = (asfloat((asuint(r2.wwww) & uint4(0x3f800000U, 0x3f800000U, 0x3f800000U, 0x3f800000U)))).w;
+  r10.zw = (((r0.zzzz >= r10.zzzw) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).zw;
+  r10.xyzw = (float4(((r10.x != 0) ? 1.0 : 0.0), ((r10.y != 0) ? 1.0 : 0.0), ((r10.z != 0) ? 1.0 : 0.0), ((r10.w != 0) ? 1.0 : 0.0))).xyzw;
+  r2.w = (((r7.zzzz >= float4(0.000000, 0.000000, 0.000000, 0.000000)) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).w;
+  r2.w = (float4(0.0, 0.0, 0.0, ((r2.w != 0) ? 1.0 : 0.0))).w;
   r11.xy = ((r8.xyxx * r8.xyxx)).xy;
-  r11.xy = (((r0.zzzz >= r11.xyxx) ? float4(-1,-1,-1,-1) : float4(0,0,0,0))).xy;
-  r11.xy = (asfloat((asuint(r11.xyxx) & uint4(0x3f800000U, 0x3f800000U, 0U, 0U)))).xy;
-  r0.z = (((r8.zzzz >= float4(0.000000, 0.000000, 0.000000, 0.000000)) ? float4(-1,-1,-1,-1) : float4(0,0,0,0))).z;
-  r0.zw = (asfloat((asuint(r0.zzzw) & uint4(0U, 0U, 0x3f800000U, 0x3f800000U)))).zw;
+  r11.xy = (((r0.zzzz >= r11.xyxx) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).xy;
+  r11.xy = (float4(((r11.x != 0) ? 1.0 : 0.0), ((r11.y != 0) ? 1.0 : 0.0), 0.0, 0.0)).xy;
+  r0.z = (((r8.zzzz >= float4(0.000000, 0.000000, 0.000000, 0.000000)) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).z;
+  r0.zw = (float4(0.0, 0.0, ((r0.z != 0) ? 1.0 : 0.0), ((r0.w != 0) ? 1.0 : 0.0))).zw;
   r3.w = ((r10.yyyy * r10.xxxx)).w;
   r4.w = ((r0.wwww * r3.wwww)).w;
   r5.w = ((r10.wwww * r10.zzzz)).w;
@@ -202,7 +202,7 @@ void main(
   r2.w = ((r2.wwww * r5.wwww)).w;
   r5.w = ((r0.zzzz * r2.wwww)).w;
   r9.xy = (v5.xyxx).xy;
-  r9.w = (float4(0, 0, 0, 0)).w;
+  r9.w = (float4(0.0, 0.0, 0.0, 0.0)).w;
   r7.w = (float4(1.000000, 1.000000, 1.000000, 1.000000)).w;
   r7.xyzw = ((r7.xyzw * r10.xxxx)).xyzw;
   r7.xyzw = ((r9.xyzw * r4.wwww + r7.xyzw)).xyzw;
@@ -211,8 +211,8 @@ void main(
   r4.w = (max(r7.wwww, float4(9.99999997e-07, 9.99999997e-07, 9.99999997e-07, 9.99999997e-07))).w;
   r0.w = ((r3.wwww * r0.wwww + r10.xxxx)).w;
   r0.z = ((r0.zzzz * r2.wwww + r0.wwww)).z;
-  r0.z = (((r0.zzzz == float4(0.000000, 0.000000, 0.000000, 0.000000)) ? float4(-1,-1,-1,-1) : float4(0,0,0,0))).z;
-  if (asuint(r0.zzzz).x != 0) {
+  r0.z = (((r0.zzzz == float4(0.000000, 0.000000, 0.000000, 0.000000)) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).z;
+  if ((r0.zzzz).x != 0) {
     r7.x = (float4(-1.000000, -1.000000, -1.000000, -1.000000)).x;
   }
   r8.xy = ((r7.yzyy * float4(0.500000, 0.500000, 0.000000, 0.000000) + float4(0.500000, 0.500000, 0.000000, 0.000000))).xy;
@@ -225,17 +225,17 @@ void main(
   r8.xyzw = ((float4(0.606217802, -0.350000, -0.606217802, -0.350000) / cb2[29].xxxx)).xyzw;
   r2.w = ((t8.SampleCmp(s15, (r0.zwzz).xy, (r4.wwww).x)).xxxx).w;
   r3.w = (r2.wwww).w;
-  r5.w = (float4(0, 0, 0, 0)).w;
+  r5.w = (float4(0.0, 0.0, 0.0, 0.0)).w;
   [loop] while (true) {
-    r6.x = (((asint(r5.wwww) >= int4(3, 3, 3, 3)) ? float4(-1,-1,-1,-1) : float4(0,0,0,0))).x;
-    if (asuint(r6.xxxx).x != 0) break;
-    r6.xw = ((r8.xxxy * icb[asint(r5.w) + 0].yyyy)).xw;
-    r6.xw = ((icb[asint(r5.w) + 0].xxxx * r6.yyyz + r6.xxxw)).xw;
-    r6.xw = ((icb[asint(r5.w) + 0].zzzz * r8.zzzw + r6.xxxw)).xw;
+    r6.x = (((int4(r5.wwww) >= int4(3, 3, 3, 3)) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).x;
+    if ((r6.xxxx).x != 0) break;
+    r6.xw = ((r8.xxxy * icb[(int)r5.w + 0].yyyy)).xw;
+    r6.xw = ((icb[(int)r5.w + 0].xxxx * r6.yyyz + r6.xxxw)).xw;
+    r6.xw = ((icb[(int)r5.w + 0].zzzz * r8.zzzw + r6.xxxw)).xw;
     r6.xw = ((r0.zzzw + r6.xxxw)).xw;
     r6.x = ((t8.SampleCmp(s15, (r6.xwxx).xy, (r4.wwww).x)).xxxx).x;
     r3.w = ((r3.wwww + r6.xxxx)).w;
-    r5.w = (asfloat((asint(r5.wwww) + int4(1, 1, 1, 1)))).w;
+    r5.w = (float4((int4(r5.wwww) + int4(1, 1, 1, 1)))).w;
   }
   r0.z = ((-(r3.wwww) * float4(0.250000, 0.250000, 0.250000, 0.250000) + float4(1.000000, 1.000000, 1.000000, 1.000000))).z;
   r0.w = ((r0.zzzz * r0.zzzz)).w;
@@ -244,8 +244,8 @@ void main(
   r0.z = ((r0.zzzz * r2.wwww + r0.wwww)).z;
   r0.z = ((r0.zzzz + -(cb3[6].wwww))).z;
   r0.z = (max(r0.zzzz, float4(0.000000, 0.000000, 0.000000, 0.000000))).z;
-  r0.w = (((r7.xxxx == float4(-1.000000, -1.000000, -1.000000, -1.000000)) ? float4(-1,-1,-1,-1) : float4(0,0,0,0))).w;
-  r0.z = (((asuint(r0.wwww) != 0) ? float4(1.000000, 1.000000, 1.000000, 1.000000) : r0.zzzz)).z;
+  r0.w = (((r7.xxxx == float4(-1.000000, -1.000000, -1.000000, -1.000000)) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).w;
+  r0.z = (((r0.wwww != 0) ? float4(1.000000, 1.000000, 1.000000, 1.000000) : r0.zzzz)).z;
   r6.xyz = (v4.xyzx).xyz;
   r6.w = (float4(1.000000, 1.000000, 1.000000, 1.000000)).w;
   r7.x = ((dot((r6.xyzw).xyzw, (cb5[13].xyzw).xyzw)).xxxx).x;
@@ -259,8 +259,8 @@ void main(
   r0.w = (exp2(r0.wwww)).w;
   r6.xy = ((r6.xyxx * float4(1.000000, -1.000000, 0.000000, 0.000000) + float4(0.500000, 0.500000, 0.000000, 0.000000))).xy;
   r6.xy = ((t14.Sample(s10, (r6.xyxx).xy)).xyzw).xy;
-  r2.w = (((r6.xxxx < r0.wwww) ? float4(-1,-1,-1,-1) : float4(0,0,0,0))).w;
-  if (asuint(r2.wwww).x != 0) {
+  r2.w = (((r6.xxxx < r0.wwww) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).w;
+  if ((r2.wwww).x != 0) {
     r2.w = ((-(r6.xxxx) * r6.xxxx + r6.yyyy)).w;
     r0.w = ((r0.wwww + -(r6.xxxx))).w;
     r0.w = ((r0.wwww * r0.wwww + r2.wwww)).w;
@@ -339,12 +339,12 @@ void main(
   r2.y = (floor(r0.wwww)).y;
   r2.w = (floor(r1.wwww)).w;
   r2.xz = ((r2.yywy * float4(0.031250, 0.000000, 0.031250, 0.000000))).xz;
-  r4.xy = (((r2.xzxx >= -(r2.xzxx)) ? float4(-1,-1,-1,-1) : float4(0,0,0,0))).xy;
+  r4.xy = (((r2.xzxx >= -(r2.xzxx)) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).xy;
   r4.zw = (frac(abs(r2.xxxz))).zw;
-  r4.xy = (((asuint(r4.xyxx) != 0) ? r4.zwzz : -(r4.zwzz))).xy;
+  r4.xy = (((r4.xyxx != 0) ? r4.zwzz : -(r4.zwzz))).xy;
   r4.xz = ((r4.xxyx * cb2[25].zzzz)).xz;
   r4.yw = (floor(r2.xxxz)).yw;
-  r5.xz = (float4(32.000000, 0, 32.000000, 0)).xz;
+  r5.xz = (float4(32.000000, 0.0, 32.000000, 0.0)).xz;
   r5.yw = (cb2[25].wwww).yw;
   r3.xyzw = ((r5.xyzw * r4.xyzw + r3.xyzw)).xyzw;
   r0.w = ((r0.wwww + -(r2.yyyy))).w;
@@ -360,6 +360,6 @@ void main(
   r0.xyw = ((r1.xyxz * r2.wwww + r2.xyxz)).xyw;
   o0.xyz = ((r0.zzzz * r0.xywx)).xyz;
   o0.w = (r0.zzzz).w;
-  o1.zw = (float4(0, 0, 0, 1.000000)).zw;
+  o1.zw = (float4(0.0, 0.0, 0.0, 1.000000)).zw;
   return;
 }

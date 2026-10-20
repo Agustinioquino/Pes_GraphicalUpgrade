@@ -1,4 +1,4 @@
-// generado por tools/asm2hlsl.py (traduccion mecanica, identica al juego)
+// generado por tools/asm2hlsl.py (traduccion mecanica, identica al juego; registros con valores)
 cbuffer cb0 : register(b0) { float4 cb0[3]; }
 cbuffer cb4 : register(b4) { float4 cb4[2]; }
 SamplerState s0 : register(s0);
@@ -13,7 +13,7 @@ Texture2D<float4> t2 : register(t2);
 Texture2D<float4> t3 : register(t3);
 Texture2D<float4> t4 : register(t4);
 Texture2D<float4> t15 : register(t15);
-uint4 PESBfi(uint4 w, uint4 o, uint4 ins, uint4 b) { uint4 m = (((1u << w) - 1u) << o); return ((ins << o) & m) | (b & ~m); }
+uint4 PESBfi(uint4 w, uint4 o, uint4 ins, uint4 b) { uint4 m = (w >= 32u) ? 0xffffffffu : (((1u << w) - 1u) << o); return ((ins << o) & m) | (b & ~m); }
 Texture1D<float4> IniParams : register(t120);
 
 void main(
@@ -54,9 +54,9 @@ void main(
   r2.xyzw = ((t0.Sample(s0, (v2.xyxx).xy)).xyzw).xyzw;
   r1.x = (r2.wwww).x;
   r0.xy = ((-(r0.yxyy) * cb0[0].wwww + r1.xyxx)).xy;
-  r0.xy = (((r0.xyxx < float4(0.000000, 0.000000, 0.000000, 0.000000)) ? float4(-1,-1,-1,-1) : float4(0,0,0,0))).xy;
-  r0.x = (asfloat((asuint(r0.yyyy) | asuint(r0.xxxx)))).x;
-  if (asuint(r0.xxxx).x != 0) discard;
+  r0.xy = (((r0.xyxx < float4(0.000000, 0.000000, 0.000000, 0.000000)) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).xy;
+  r0.x = (float4((float)((int)r0.y | (int)r0.x), 0.0, 0.0, 0.0)).x;
+  if ((r0.xxxx).x != 0) discard;
   r0.xyzw = ((t4.Sample(s4, (v2.xyxx).xy)).xyzw).xyzw;
   r1.x = ((r0.wwww + float4(-0.250000, -0.250000, -0.250000, -0.250000))).x;
   r1.x = ((-(r1.xxxx) + float4(1.000000, 1.000000, 1.000000, 1.000000))).x;
@@ -96,19 +96,19 @@ void main(
   r1.x = ((abs(r0.yyyy) + abs(r0.xxxx))).x;
   r1.x = ((abs(r0.zzzz) + r1.xxxx)).x;
   r0.xy = ((r0.xyxx / r1.xxxx)).xy;
-  r0.z = (((float4(0.000000, 0.000000, 0.000000, 0.000000) < -(r0.zzzz)) ? float4(-1,-1,-1,-1) : float4(0,0,0,0))).z;
-  r1.xy = (((r0.xyxx >= float4(0.000000, 0.000000, 0.000000, 0.000000)) ? float4(-1,-1,-1,-1) : float4(0,0,0,0))).xy;
-  r1.xy = (((asuint(r1.xyxx) != 0) ? float4(1.000000, 1.000000, 0, 0) : float4(-1.000000, -1.000000, 0, 0))).xy;
+  r0.z = (((float4(0.000000, 0.000000, 0.000000, 0.000000) < -(r0.zzzz)) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).z;
+  r1.xy = (((r0.xyxx >= float4(0.000000, 0.000000, 0.000000, 0.000000)) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).xy;
+  r1.xy = (((r1.xyxx != 0) ? float4(1.000000, 1.000000, 0.0, 0.0) : float4(-1.000000, -1.000000, 0.0, 0.0))).xy;
   r1.zw = ((-(abs(r0.yyyx)) + float4(0.000000, 0.000000, 1.000000, 1.000000))).zw;
   r1.xy = ((r1.xyxx * r1.zwzz)).xy;
-  r0.xy = (((asuint(r0.zzzz) != 0) ? r0.xyxx : r1.xyxx)).xy;
+  r0.xy = (((r0.zzzz != 0) ? r0.xyxx : r1.xyxx)).xy;
   r0.xy = ((r0.xyxx * float4(0.500000, 0.500000, 0.000000, 0.000000) + float4(0.500000, 0.500000, 0.000000, 0.000000))).xy;
   r0.xy = ((r0.xyxx * float4(2047.000000, 2047.000000, 0.000000, 0.000000))).xy;
-  r0.xy = (asfloat(uint4(r0.xyxx))).xy;
-  r0.z = (asfloat(PESBfi(uint4(1U, 1U, 1U, 1U), uint4(1U, 1U, 1U, 1U), asuint(r0.xxxx), uint4(0U, 0U, 0U, 0U)))).z;
-  r0.z = (asfloat(PESBfi(uint4(1U, 1U, 1U, 1U), uint4(0U, 0U, 0U, 0U), asuint(r0.yyyy), asuint(r0.zzzz)))).z;
-  r0.xy = (asfloat((asuint(r0.xyxx) >> (uint4(1U, 1U, 0U, 0U) & 31)))).xy;
-  r1.xyw = (float4(asuint(r0.xyxz))).xyw;
+  r0.xy = (float4(uint4(r0.xyxx))).xy;
+  r0.z = (float4(PESBfi(uint4(1U, 1U, 1U, 1U), uint4(1U, 1U, 1U, 1U), uint4(int4(r0.xxxx)), uint4(0U, 0U, 0U, 0U)))).z;
+  r0.z = (float4(PESBfi(uint4(1U, 1U, 1U, 1U), uint4(0U, 0U, 0U, 0U), uint4(int4(r0.yyyy)), uint4(int4(r0.zzzz))))).z;
+  r0.xy = (float4((uint4(int4(r0.xyxx)) >> (uint4(1U, 1U, 0U, 0U) & 31)))).xy;
+  r1.xyw = (float4(uint4(int4(r0.xyxz)))).xyw;
   o1.xyw = ((r1.xyxw * float4(0.000977517106, 0.000977517106, 0.000000, 0.333333343))).xyw;
   o1.z = (float4(0.000977517106, 0.000977517106, 0.000977517106, 0.000977517106)).z;
   r0.x = ((t3.Sample(s3, (v2.xyxx).xy)).xyzw).x;
@@ -116,13 +116,13 @@ void main(
   r0.xy = ((t2.Sample(s2, (v2.xyxx).xy)).xyzw).xy;
   o2.y = ((r0.wwww * r0.xxxx)).y;
   o2.x = (max(r0.yyyy, float4(0.004000, 0.004000, 0.004000, 0.004000))).x;
-  o2.w = (float4(0, 0, 0, 0)).w;
+  o2.w = (float4(0.0, 0.0, 0.0, 0.0)).w;
   r0.xyzw = ((v6.xyzw / v2.zzww)).xyzw;
   r0.xyzw = ((r0.xyzw * float4(0.500000, 0.500000, 0.500000, 0.500000) + float4(0.500000, 0.500000, 0.500000, 0.500000))).xyzw;
   r0.xyzw = ((r0.zwxy * float4(1.000000, -1.000000, 1.000000, -1.000000) + float4(0.000000, 1.000000, 0.000000, 1.000000))).xyzw;
   r0.xy = ((-(r0.xyxx) + r0.zwzz)).xy;
   o3.xy = ((r0.xyxx * cb0[2].xyxx)).xy;
-  o3.zw = (float4(0, 0, 0, 0)).zw;
-  o4.xyzw = (float4(0, 0, 0, 1.000000)).xyzw;
+  o3.zw = (float4(0.0, 0.0, 0.0, 0.0)).zw;
+  o4.xyzw = (float4(0.0, 0.0, 0.0, 1.000000)).xyzw;
   return;
 }
