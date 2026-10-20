@@ -30,7 +30,9 @@ std::atomic<int> g_inspectSel{-1};
 //   que = SSS por zonas, arrugas...  (que hace el mod ahi)
 //   t0 = difusa  t1 = normal ...     (nombre de cada slot de textura del juego; opcional)
 //   [inspector]  desconocidos = 1    tambien marcar los shaders de geometria que no estan en ninguna clase (hasta 6), con su hash
-struct InspClass { std::vector<uint64_t> ps; std::string name, desc; std::map<int, std::string> slotNames; bool unknown = false; std::string group = "otros"; uint64_t alias = 0; std::vector<uint64_t> vsAny; UINT minVerts = 0; };   // minVerts: el comodin de VS solo vale para dibujos con al menos tantos vertices   // vsAny: "vs = <hash>": cualquier PS sin registrar con ese vertex shader es de esta clase (comodin)
+struct InspClass { std::vector<uint64_t> ps; std::string name, desc; std::map<int, std::string> slotNames; bool unknown = false; std::string group = "otros"; uint64_t alias = 0; std::vector<uint64_t> vsAny; UINT minVerts = 0; bool autoDump = false; };   // autoDump: "volcar = 1": sus texturas se vuelcan solas (sin abrir el inspector)   // minVerts: el comodin de VS solo vale para dibujos con al menos tantos vertices   // vsAny: "vs = <hash>": cualquier PS sin registrar con ese vertex shader es de esta clase (comodin)
+static std::mutex s_autoMx; static std::vector<std::pair<uint64_t, std::string>> s_autoDump;   // volcado automatico (clases con "volcar = 1")
+std::atomic<bool> g_autoDumpAny{false};
 static std::string s_group = "todo";   // filtro de grupo del inspector (todo | cara | pelo | kit | estadio | desconocidos | ...)
 static std::vector<InspClass> s_classes;
 static bool s_unknownOn = true;
@@ -81,12 +83,16 @@ static void LoadClasses() {
             else if (k == "grupo") cur->group = Lower2(v);
             else if (k == "como") cur->alias = strtoull(v.c_str(), nullptr, 16);
             else if (k == "minverts") cur->minVerts = (UINT)atoi(v.c_str());
+            else if (k == "volcar") cur->autoDump = atoi(v.c_str()) != 0;
             else if (k == "vs") { std::string h; for (char ch : v + ",") { if (ch == ',' || ch == ' ') { h = Trim2(h); if (!h.empty()) cur->vsAny.push_back(strtoull(h.c_str(), nullptr, 16)); h.clear(); } else h += ch; } }
             else if (k.size() > 1 && k[0] == 't' && isdigit((unsigned char)k[1])) cur->slotNames[atoi(k.c_str() + 1)] = v;
         }
         Log("inspector: PES21FX_inspector.ini leido (%d clases)", (int)s_classes.size());
     }
     if (s_classes.empty()) for (auto& d : kDefaults) s_classes.push_back(d);
+    { std::lock_guard<std::mutex> lk(s_autoMx); s_autoDump.clear();
+      for (auto& cl : s_classes) if (cl.autoDump) for (uint64_t h : cl.ps) s_autoDump.push_back({ h, cl.name });
+      g_autoDumpAny = !s_autoDump.empty(); if (g_autoDumpAny) Log("inspector: volcado automatico de texturas para %d shaders", (int)s_autoDump.size()); }
 }
 static const int kW = 192, kH = 108;   // 19/10: mas chico (alcanza para el rectangulo)
 static std::atomic<int> s_frame{0};
@@ -214,13 +220,14 @@ static bool EnsureClassRT(ClassFrame& f) {
 // prendido, se guarda como png en PES21FX\inspector\texturas\<clase>\t<slot>_<id>.png (solo una vez por textura).
 static std::atomic<bool> s_dumpOn{false};
 static std::set<uint64_t> s_seenTex, s_dumpedTex; static std::mutex s_histMx;
+
 static std::vector<std::pair<ID3D11Resource*, std::wstring>> s_dumpQueue;   // (recurso con AddRef, ruta) -> se vuelca en Present
 static int s_dumpCount = 0, s_histCount = 0;
-static void HistAdd(ID3D11ShaderResourceView* v, const std::string& cls, int slot, const std::string& desc) {
+static void HistAdd(ID3D11ShaderResourceView* v, const std::string& cls, int slot, const std::string& desc, bool force = false) {
     ID3D11Resource* res = nullptr; v->GetResource(&res); if (!res) return;
     uint64_t key = (uint64_t)(uintptr_t)res;
     bool isNew; { std::lock_guard<std::mutex> lk(s_histMx); isNew = s_seenTex.insert(key).second; }
-    bool dump = false; if (s_dumpOn) { std::lock_guard<std::mutex> lk(s_histMx); dump = s_dumpedTex.insert(key).second; }
+    bool dump = false; if (s_dumpOn || force) { std::lock_guard<std::mutex> lk(s_histMx); dump = s_dumpedTex.insert(key).second; }
     if (!isNew && !dump) { res->Release(); return; }
     std::wstring dir = g_cfg.baseDir + L"inspector"; CreateDirectoryW(dir.c_str(), nullptr);
     if (isNew) { FILE* f = _wfopen((dir + L"\\historial.txt").c_str(), L"ab");
@@ -246,6 +253,19 @@ static void HistFlush() {   // Present: volcar hasta 2 texturas por cuadro (Save
         if (SUCCEEDED(hr)) s_dumpCount++;
         it.first->Release();
     }
+}
+static std::string DescribeSRV(ID3D11ShaderResourceView* v);
+// volcado automatico (19/10): las clases con "volcar = 1" en PES21FX_inspector.ini vuelcan sus texturas (t0..t15 del PS) la primera
+// vez que se ven, sin abrir el inspector. Se mira una vez por segundo por shader.
+void InspectAutoDump(ID3D11DeviceContext* c, const ShaderEntry* ps) {
+    if (!ps || !g_dev.dev) return;
+    std::string cls;
+    { std::lock_guard<std::mutex> lk(s_autoMx); for (auto& e : s_autoDump) if (e.first == ps->hash) { cls = e.second; break; } }
+    if (cls.empty()) return;
+    static std::map<uint64_t, double> next; double t = Now();
+    { std::lock_guard<std::mutex> lk(s_autoMx); double& nx = next[ps->hash]; if (t < nx) return; nx = t + 1.0; }
+    ID3D11ShaderResourceView* srv[16] = {}; c->PSGetShaderResources(0, 16, srv);
+    for (int i = 0; i < 16; i++) if (srv[i]) { HistAdd(srv[i], cls, i, DescribeSRV(srv[i]), true); srv[i]->Release(); }
 }
 static std::string DescribeSRV(ID3D11ShaderResourceView* v) {
     if (!v) return "";

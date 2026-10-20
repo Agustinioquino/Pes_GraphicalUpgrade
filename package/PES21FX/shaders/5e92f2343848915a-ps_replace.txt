@@ -71,6 +71,7 @@ Texture2D<float4> g_tex_mesh : register(t15);
 #define cmp -
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
+#include "pes_grass.hlsli"   // PES21 pasto v3 (19/10): patrones de corte, desgaste y zonas (compartido con las hojas)
 
 
 // PES21 (18/10): valor "y" de la tabla de pendiente del juego para un grano g (vector de la hoja peinada) y la
@@ -122,6 +123,10 @@ void main(
   r1.x = rsqrt(r1.x);
   r0.xyz = r1.xxx * r0.xyz;
   float3 pesGrain = r0.xyz;   // PES21: grano (direccion en que esta peinado el pasto, cambia por franja)
+  { // PES21 pasto v3: patron de corte sintetizado (franjas, damero, diagonal, rombos, circulos) en vez del grano del juego
+    float4 Q4g = IniParams.Load(int2(104,0)), Q5g = IniParams.Load(int2(105,0));
+    if (Q4g.x > 0.5 && Q5g.x > 0.5) { r0.xyz = PESMowGrain(PESPitchMeters(v1.xy), r0.xyz, Q5g.x, Q5g.y, 0.55 * clamp(Q5g.z, 0.2, 3.0)); pesGrain = r0.xyz; }
+  }
   r1.xyz = float3(0,0,1) * r0.xyz;
   r1.xyz = r0.zxy * float3(0,1,0) + -r1.xyz;
   r3.xyz = r1.xyz * r0.zxy;
@@ -368,5 +373,20 @@ void main(
       o0.xyz = saturate(cg);
     }
   }
+  { // === PES21 pasto v3 (19/10): desgaste (seco / tierra) y zonas de color, con las mismas funciones que las hojas
+    float4 Q4 = IniParams.Load(int2(104,0));
+    if (Q4.x > 0.5) {
+      float4 Q6 = IniParams.Load(int2(106,0)), Q7 = IniParams.Load(int2(107,0));
+      float2 pm = PESPitchMeters(v1.xy);
+      float2 wxz = v9.xz;
+      float2 wr = PESWear(pm, wxz, Q4.w, Q7.x, Q7.z);
+      float3 c = o0.xyz * PESGrassZones(wxz, Q6.x);
+      c = PESDryTint(c, wr.x * saturate(Q7.y) * 0.85);
+      float3 dirt = PESDirt(wxz);
+      c = lerp(c, dirt, wr.y);
+      o0.xyz = saturate(c);
+      o2.y = saturate(o2.y * (1.0 - wr.y * 0.6 - wr.x * 0.25));   // tierra y pasto seco: mate
+      if (Q7.w > 1.5 && Q7.w < 2.5) o0.xyz = float3(wr.x, wr.y, 0.0);   // depuracion: desgaste
+    }
+  }
   return;
-}

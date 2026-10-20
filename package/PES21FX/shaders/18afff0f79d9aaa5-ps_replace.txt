@@ -1,4 +1,8 @@
 // ---- Created with 3Dmigoto v1.3.16 on Thu Oct 08 21:08:33 2026
+// PES 2021 - Pasto 3D: pixel shader de las hojas  [hash 18afff0f79d9aaa5]
+// PES21 pasto v3 (19/10): atlas propio de hojas (t8 color/oclusion/brillo/alfa, t9 normal/altura/grosor) en vez del
+// manojo de 128x128 del juego, normal por hoja (cada hoja se ve cilindrica), sombra entre hojas que crece con el sol
+// bajo, puntas mas palidas, pasto seco por desgaste, brillo y translucidez por grosor. x104 on/off.
 
 cbuffer cPSSystem : register(b0)
 {
@@ -16,12 +20,15 @@ cbuffer cPSSystem : register(b0)
 
 SamplerState g_samplerLinear_Wrap_s : register(s10);
 Texture2D<float4> g_tex_grassDiffuse : register(t7);
+Texture2D<float4> PESGrassAtlas : register(t8);    // PES21: textures\pes_grass_blades.dds (R claridad, G oclusion, B brillo, A alfa)
+Texture2D<float4> PESGrassAtlasN : register(t9);   // PES21: textures\pes_grass_blades_n.dds (RG normal, B altura raiz->punta, A grosor)
 
 
 // 3Dmigoto declarations
 #define cmp -
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
+#include "pes_grass.hlsli"
 
 
 float bh21(float2 p) { p = frac(p * float2(123.34, 456.21)); p += dot(p, p + 45.32); return frac(p.x * p.y); }
@@ -34,6 +41,7 @@ void main(
   float4 v5 : TEXCOORD4,
   float4 v6 : TEXCOORD5,
   float2 v7 : TEXCOORD6,
+  float4 v8 : TEXCOORD7,
   out float4 o0 : SV_Target0,
   out float4 o1 : SV_Target1,
   out float4 o2 : SV_Target2,
@@ -51,16 +59,43 @@ void main(
   o3.xy = g_psSystem.m_renderBuffer.xy * r0.xy;
   r0.x = cmp(v2.y < 0);
   if (r0.x != 0) discard;
-  r0.xyzw = g_tex_grassDiffuse.Sample(g_samplerLinear_Wrap_s, v1.xy).xyzw;
+  // === PES21 pasto v3: atlas propio
+  float4 Q4 = IniParams.Load(int2(104,0));
+  bool pesV3 = Q4.x > 0.5 && v8.w > 0.5;
+  float4 Q5 = IniParams.Load(int2(105,0)), Q6 = IniParams.Load(int2(106,0)), Q7 = IniParams.Load(int2(107,0));
+  float2 uvA = v1.xy;
+  if (pesV3 && Q5.w > 0.5) uvA.y = 1.0 - uvA.y;   // raiz del atlas arriba
+  float atlasPx = pesV3 ? 1024.0 : 128.0;
+  float4 pesN = float4(0.5, 0.5, 0.0, 1.0);
+  // derivadas fuera de la rama (muestreo con gradiente explicito adentro)
+  float2 dUx = ddx(uvA), dUy = ddy(uvA);
+  if (pesV3) {
+    r0.xyzw = PESGrassAtlas.SampleGrad(g_samplerLinear_Wrap_s, uvA, dUx, dUy).xyzw;
+    pesN = PESGrassAtlasN.SampleGrad(g_samplerLinear_Wrap_s, uvA, dUx, dUy).xyzw;
+    // de lejos el filtrado adelgaza el alfa: se compensa un poco con el nivel de mip
+    float2 dd = max(abs(dUx), abs(dUy)) * 1024.0;
+    float lod = log2(max(max(dd.x, dd.y), 1.0));
+    r0.w = saturate(r0.w * (1.0 + 0.12 * lod));
+  } else {
+    r0.xyzw = g_tex_grassDiffuse.SampleGrad(g_samplerLinear_Wrap_s, v1.xy, dUx, dUy).xyzw;
+  }
   r0.w = -0.300000012 + r0.w;
   r0.w = cmp(r0.w < 0);
   if (r0.w != 0) discard;
+  float pesLight = r0.x;                     // claridad (0.5 neutro) del atlas propio
+  float pesGloss = r0.z;
   r0.w = r0.y + r0.y;
   r0.y = -r0.y * 2 + 1;
   r0.y = v3.w * r0.y + r0.w;
+  if (pesV3) {
+    // sombra entre hojas: oclusion del atlas (2*G), mas fuerte con el sol bajo (las raices quedan en sombra)
+    float sunUp = saturate(abs(g_psSystem.m_dominantLightDir.y));
+    float aoK = clamp(Q6.y, 0.0, 2.0) * (1.15 - 0.45 * sunUp);
+    r0.y = 1.0 - (1.0 - r0.w) * aoK;
+  }
   r0.w = cmp(r0.y < 1);
   if (r0.w != 0) {
-    r1.xy = float2(128,128) * v1.xy;
+    r1.xy = float2(atlasPx, atlasPx) * v1.xy;
     r1.zw = ddx_coarse(r1.xy);
     r1.xy = ddy_coarse(r1.xy);
     r0.w = dot(r1.zw, r1.zw);
@@ -76,15 +111,40 @@ void main(
   }
   r1.xyz = v3.xyz * r0.yyy;
   o0.xyz = v1.zzz * r1.xyz;
+  if (pesV3) {
+    // claridad por hoja (nervio, bordes, vetas) y puntas mas palidas; pasto seco donde hay desgaste (v8.x)
+    float3 c = o0.xyz * (0.55 + 0.9 * pesLight);
+    float tipK = smoothstep(0.55, 1.0, pesN.z) * (0.18 + 0.6 * v8.x);
+    c = PESDryTint(c, tipK + v8.x * saturate(Q7.y) * 0.85);
+    o0.xyz = saturate(c);
+  }
   if (v5.w > 0.5) o0.xyz = float3(1.0, 0.0, 1.0);   // PES21 depuracion: parcelas extendidas en magenta (z59)
   r0.y = v5.x + r0.x;
   r0.x = v5.y * r0.z;
   r0.zw = v5.yx + -r0.xy;
   o2.xy = v3.ww * r0.zw + r0.xy;
+  if (pesV3) {
+    // brillo: la hoja es mas lustrosa en el centro (B del atlas) y se regula con z106; seca = mate
+    float gl = clamp(Q6.z, 0.0, 2.0);
+    o2.y = saturate(o2.y * gl * (0.5 + pesGloss) * (1.0 - v8.x * 0.5));
+  }
   r0.x = dot(v4.xyz, v4.xyz);
   r0.x = rsqrt(r0.x);
   r0.xyz = v4.xyz * r0.xxx;
-  r0.w = v1.w * 63 + 0.5;
+  if (pesV3 && Q6.w > 0.001) {
+    // normal por hoja: la normal del juego es la de la cancha (hacia arriba): todas las hojas se iluminan igual.
+    // Se le suma la normal del atlas en un marco con "a lo ancho" = la derecha de la camara proyectada, asi cada hoja
+    // se ve cilindrica (clara de un lado, oscura del otro) y el sol da brillos por hoja.
+    float3 N = r0.xyz;
+    float3 T = float3(1.0, 0.0, 0.0) - N * N.x; T = normalize(T + float3(0.0, 0.0, 1e-4));
+    float3 B = cross(N, T);
+    float2 nm = (pesN.xy * 2.0 - 1.0) * clamp(Q6.w, 0.0, 1.5);
+    float nz = sqrt(saturate(1.0 - dot(nm, nm)));
+    r0.xyz = normalize(T * nm.x + B * nm.y + N * nz);
+  }
+  float pesTr = v1.w;
+  if (pesV3) pesTr = saturate(v1.w * (1.35 - 0.8 * pesN.w));   // puntas finas mas translucidas (A = grosor)
+  r0.w = pesTr * 63 + 0.5;
   r1.x = abs(r0.x) + abs(r0.y);
   r1.x = r1.x + abs(r0.z);
   r0.xy = r0.xy / r1.xx;
@@ -120,6 +180,12 @@ void main(
       c = lerp(c, dot(c, float3(0.2126,0.7152,0.0722)) * float3(1.12, 1.04, 0.74), saturate(n * 3.0 - 2.2) * 0.18 * G.z);
       o0.xyz = c;
     }
+  }
+  if (pesV3) {   // depuracion w107: 1 = uv del atlas (rojo u, verde v), 2 = desgaste (rojo seco, verde pelado), 3 = normal
+    int dbg = (int)(Q7.w + 0.5);
+    if (dbg == 1) o0.xyz = float3(v1.x, v1.y, 0.0);
+    else if (dbg == 2) o0.xyz = float3(v8.x, v8.y, 0.0);
+    else if (dbg == 3) o0.xyz = pesN.xyz;
   }
   return;
 }
