@@ -66,6 +66,7 @@ Texture2D<float4> g_tex_mesh : register(t15);
 
 // 3Dmigoto declarations
 #define cmp -
+Texture2D<float4> PESTurfN : register(t17);   // PES21 pasto v3: relieve propio del cesped (mosaico)
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 #include "pes_grass.hlsli"   // PES21 pasto v3 (19/10): patrones de corte, desgaste y zonas (compartido con las hojas)
@@ -151,6 +152,18 @@ void main(
   r3.xyzw = g_tex_base.Sample(g_sampler_base_s, r1.zw).xyzw;
   float hK = pow(saturate(r3.w), 0.4545);
   r4.xyz = g_tex_normal.Sample(g_sampler_normal_s, r1.zw).xyw;
+  { // PES21 pasto v3 (20/10): relieve propio del cesped (textures\pes_turf_n.dds en t17): matas vistas desde arriba, en vez del
+    // mosaico de 512 px del juego. x110 fuerza (0 = el del juego), y110 repeticiones extra del mosaico
+    float4 Q10 = IniParams.Load(int2(110,0));
+    if (Q10.x > 0.001) {
+      float4 tn = PESTurfN.Sample(g_sampler_normal_s, r1.zw * max(Q10.y, 0.25));
+      float3 nn = float3(tn.xy * 2.0 - 1.0, 1.0);
+      float3 ng = float3(r4.xy * 2.0 - 1.0, 1.0);
+      // r4.xyw del juego: x*z y y van a 2*v-1 mas abajo; se mezcla en ese mismo espacio
+      float3 nb = normalize(lerp(ng, nn * float3(1.0, 1.0, 1.0), saturate(Q10.x)));
+      r4.xy = nb.xy * 0.5 + 0.5; r4.z = 1.0;
+    }
+  }
   r1.z = log2(r3.w);
   r1.z = 0.454545468 * r1.z;
   r1.z = exp2(r1.z);
@@ -297,6 +310,7 @@ void main(
       c = lerp(c, dirt, wr.y);
       o0.xyz = saturate(c);
       o2.y = saturate(o2.y * (1.0 - wr.y * 0.6 - wr.x * 0.25));   // tierra y pasto seco: mate
+      { float3 cg = o0.xyz; float sp = o2.y, rg = o2.x; PESGroundLook(cg, sp, rg, PESGround()); o0.xyz = cg; o2.y = sp; o2.x = rg; }   // suelo humedo / seco
       if (Q7.w > 1.5 && Q7.w < 2.5) o0.xyz = float3(wr.x, wr.y, 0.0);   // depuracion: desgaste
     }
   }

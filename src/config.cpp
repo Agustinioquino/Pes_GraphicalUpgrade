@@ -474,6 +474,30 @@ void UpdateTimeParams() {
           }
       }
       p[93][0] = adapt; }
+    // (20/10) inyeccion de luz: la DLL publica cada cuadro, para todos los shaders, el sol en espacio MUNDO (111: xyz + altura
+    // en grados), su color normalizado (112: rgb con el canal mayor = 1, w = luminancia cruda), la niebla/horizonte del motor y
+    // la exposicion (113), y el estado de la escena (114: x suelo automatico 0 normal / 1 humedo (lluvia) / 2 seco, y altura
+    // de la camara, z estacion, w 1 = de dia con sol real). Antes cada shader lo derivaba a mano de m_view.
+    { std::vector<float> L, S;
+      bool lok = NamedCBRead("LightCB", L) && L.size() >= 8, sok = NamedCBRead("SceneCB", S) && S.size() >= 120;
+      if (lok && sok) {
+          float lx = L[0], ly = L[1], lz = L[2]; float n = sqrtf(lx * lx + ly * ly + lz * lz);
+          if (n > 1e-6f) { lx /= n; ly /= n; lz /= n;
+              const float* M = &S[32];   // m_view (filas = ejes de la camara en el mundo)
+              float wx = lx * M[0] + ly * M[4] + lz * M[8], wy = lx * M[1] + ly * M[5] + lz * M[9], wz = lx * M[2] + ly * M[6] + lz * M[10];
+              float wn = sqrtf(wx * wx + wy * wy + wz * wz); if (wn > 1e-6f) { wx /= wn; wy /= wn; wz /= wn; }
+              if (wy < 0) { wx = -wx; wy = -wy; wz = -wz; }   // siempre "hacia el sol"
+              p[111][0] = wx; p[111][1] = wy; p[111][2] = wz; p[111][3] = asinf(std::clamp(wy, -1.f, 1.f)) * 57.2958f; }
+          float cr = L[4], cg = L[5], cb = L[6]; float mx = std::max(cr, std::max(cg, cb));
+          if (mx > 1e-4f) { p[112][0] = cr / mx; p[112][1] = cg / mx; p[112][2] = cb / mx; }
+          p[112][3] = 0.2126f * cr + 0.7152f * cg + 0.0722f * cb;
+          p[113][0] = S[108]; p[113][1] = S[109]; p[113][2] = S[110]; p[113][3] = S[94];   // niebla rgb, exposicion z
+          p[114][1] = S[81];                                                             // altura de la camara (m_eyepos.y)
+          bool sunny = (cr / std::max(cb, 1e-4f)) > 1.06f && p[112][3] > 600.0f;         // luz calida y fuerte = sol (de noche: torres frias)
+          p[114][3] = sunny ? 1.0f : 0.0f;
+      }
+      int ground = 0; if (g_cfg.match.known && g_cfg.match.weather == 1) ground = 1;
+      p[114][0] = (float)ground; p[114][2] = g_cfg.match.known ? (float)g_cfg.match.season : -1.0f; }
     UpdateClothWet(t);
     UpdateClothFit(t);
 }

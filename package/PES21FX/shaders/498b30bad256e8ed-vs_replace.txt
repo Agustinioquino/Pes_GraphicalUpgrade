@@ -19,6 +19,7 @@ Texture2D<float4> g_tex_turfSlopeTable : register(t3);
 Texture2D<float4> g_tex_base : register(t4);
 Texture2D<float4> g_tex_planarShadow : register(t5);
 Texture2D<float4> g_tex_detailNormal : register(t6);
+Texture2D<float4> PESTurfN : register(t7);   // PES21 pasto v3: relieve propio del cesped (regla del VS)
 
 Texture1D<float4> IniParams : register(t120);
 StructuredBuffer<float4> PESGrassInst : register(t121);   // PES21: parcelas del pasto extra (x, z, escala, giro)
@@ -247,6 +248,12 @@ void main(
   r1.x = r1.x * -1.7 - r1.y;
   r8 = g_tex_base.SampleLevel(g_samplerLinear_Wrap_s, r0.yz, r1.x);
   r9.xyz = g_tex_detailNormal.SampleLevel(g_samplerLinear_Wrap_s, r0.yz, r1.x).xyw;
+  { // PES21 pasto v3 (20/10): relieve propio del cesped tambien en la normal base de las hojas (t7 del VS = pes_turf_n.dds)
+    float4 Q10 = IniParams.Load(int2(110, 0));
+    if (Q10.x > 0.001) { float4 tn = PESTurfN.SampleLevel(g_samplerLinear_Wrap_s, r0.yz * max(Q10.y, 0.25), r1.x);
+      float2 ng = float2(r9.x * r9.z, r9.y) * 2.0 - 1.0; float2 nn = tn.xy * 2.0 - 1.0;
+      float2 nb = lerp(ng, nn, saturate(Q10.x)); r9.xy = nb * 0.5 + 0.5; r9.z = 1.0; }
+  }
   // --- color base ---
   r0.y = log2(r8.w);
   r0.y = r0.y * 0.454545;

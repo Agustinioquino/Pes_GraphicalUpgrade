@@ -93,7 +93,7 @@ void main(
   r0.y = v3.w * r0.y + r0.w;
   if (pesV3) {
     // sombra entre hojas: oclusion del atlas (2*G), mas fuerte con el sol bajo (las raices quedan en sombra)
-    float sunUp = saturate(abs(g_psSystem.m_dominantLightDir.y));
+    float sunUp = saturate(PESSunWorld().y);   // (20/10) sol en mundo publicado por la DLL
     float aoK = clamp(Q6.y, 0.0, 2.0) * (1.15 - 0.45 * sunUp);
     r0.y = 1.0 - (1.0 - r0.w) * aoK;
   }
@@ -144,6 +144,7 @@ void main(
     // brillo: la hoja es mas lustrosa en el centro (B del atlas) y se regula con z106; seca = mate
     float gl = clamp(Q6.z, 0.0, 2.0);
     o2.y = saturate(o2.y * gl * (0.5 + pesGloss) * (1.0 - v8.x * 0.5));
+    { float3 cg = o0.xyz; float sp = o2.y, rg = o2.x; PESGroundLook(cg, sp, rg, PESGround()); o0.xyz = cg; o2.y = sp; o2.x = rg; }   // suelo humedo / seco
   }
   r0.x = dot(v4.xyz, v4.xyz);
   r0.x = rsqrt(r0.x);

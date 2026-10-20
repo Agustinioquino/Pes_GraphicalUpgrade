@@ -79,4 +79,23 @@ float3 PESDirt(float2 wxz) {
   float n = PESGnoise(wxz * 6.0 + 2.2) * 0.5 + PESGnoise(wxz * 23.0) * 0.5;
   return float3(0.34, 0.26, 0.16) * (0.75 + 0.5 * n);
 }
+// (20/10) estado del suelo: x = humedo (0..1), y = seco (0..1). z110: 0 automatico (lluvia del partido via Sider -> humedo),
+// 1 normal, 2 humedo, 3 seco; w110 fuerza. La DLL publica en 114.x el estado automatico (0 normal, 1 humedo, 2 seco)
+float2 PESGround()
+{
+  float4 Q = IniParams.Load(int2(110, 0)); float4 L = IniParams.Load(int2(114, 0));
+  int m = (int)(Q.z + 0.5); float wet = 0.0, dry = 0.0;
+  if (m == 0) { int a = (int)(L.x + 0.5); wet = a == 1 ? 1.0 : 0.0; dry = a == 2 ? 1.0 : 0.0; }
+  else if (m == 2) wet = 1.0; else if (m == 3) dry = 1.0;
+  float k = Q.w > 0.001 ? saturate(Q.w) : 1.0;
+  return float2(wet * k, dry * k);
+}
+// pasto mojado: mas oscuro y saturado, brillo de agua; seco: pajizo y mate. c albedo, spec = o2.y, rough = o2.x
+void PESGroundLook(inout float3 c, inout float spec, inout float rough, float2 g)
+{
+  if (g.x > 0.001) { c = lerp(c, pow(max(c, 1e-4), 1.25) * 0.72, g.x); spec = lerp(spec, saturate(spec * 2.2 + 0.25), g.x); rough = lerp(rough, max(0.14, rough * 0.6), g.x); }
+  if (g.y > 0.001) { c = PESDryTint(c, g.y * 0.4); spec = lerp(spec, spec * 0.7, g.y); }
+}
+// sol en espacio mundo (lo publica la DLL en 111: xyz hacia el sol, w altura en grados); (0,1,0) si todavia no hay dato
+float3 PESSunWorld() { float4 L = IniParams.Load(int2(111, 0)); return dot(L.xyz, L.xyz) > 0.5 ? L.xyz : float3(0.0, 1.0, 0.0); }
 #endif

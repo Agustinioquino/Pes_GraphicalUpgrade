@@ -45,6 +45,10 @@ static const int kStages = 4;
 static ID3D11Buffer* s_cb2Stage[kStages] = {}; static int s_stageW = 0; static int s_stageFrame[kStages] = { -1, -1, -1, -1 };
 static float s_pv[16]; static float s_eye[3]; static bool s_camValid = false;
 static int s_lastCount = 0;
+// (20/10) volcado unico del formato de vertices de la malla de pasto del juego (para armar una malla propia mas densa):
+// se copian 512 bytes del VB en el dibujo y se leen en Present
+static ID3D11Buffer* s_vbStage = nullptr; static std::atomic<int> s_vbState{0};   // 0 nada, 1 copiado (pendiente de leer), 2 listo
+static UINT s_vbStride = 0, s_vbOffset = 0; static UINT s_ibFmt = 0;
 int g_grassPatchesLastFrame = 0;
 GrassDbg g_grassDbg;
 static void Why(const char* w) { g_grassDbg.why = w; }
@@ -90,6 +94,19 @@ void GrassPresent() {
         }
     }
     g_grassPatchesLastFrame = s_lastCount;
+    if (s_vbState.load() == 1 && s_vbStage && g_dev.imm) {
+        D3D11_MAPPED_SUBRESOURCE m;
+        if (SUCCEEDED(g_dev.imm->Map(s_vbStage, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) {
+            const unsigned char* b = (const unsigned char*)m.pData; const unsigned short* h = (const unsigned short*)m.pData; const float* f = (const float*)m.pData;
+            auto half = [](unsigned short x) { unsigned s = (x >> 15) & 1, e = (x >> 10) & 31, mt = x & 1023; float v; if (e == 0) v = ldexpf((float)mt, -24); else if (e == 31) v = 0.f; else v = ldexpf((float)(mt | 1024), (int)e - 25); return s ? -v : v; };
+            std::string line = "pasto: formato de vertices (stride " + std::to_string(s_vbStride) + ", offset " + std::to_string(s_vbOffset) + ", IB fmt " + std::to_string(s_ibFmt) + ")\n  hex:";
+            for (int i = 0; i < 48; i++) { char t[8]; snprintf(t, 8, " %02x", b[i]); line += t; if (i % 12 == 11) line += " |"; }
+            line += "\n  como half:"; for (int i = 0; i < 24; i++) { char t[24]; snprintf(t, 24, " %.3f", half(h[i])); line += t; if (i % 6 == 5) line += " |"; }
+            line += "\n  como float:"; for (int i = 0; i < 12; i++) { char t[24]; snprintf(t, 24, " %.3f", f[i]); line += t; if (i % 3 == 2) line += " |"; }
+            Log("%s", line.c_str());
+            g_dev.imm->Unmap(s_vbStage, 0); s_vbState = 2;
+        }
+    }
     static double nextLog = 0; double t = Now();
     if (t > nextLog && g_cfg.live[58][3] > 0.5f) { nextLog = t + 3.0;
         Log("pasto extra: llamadas %d, emisiones %d, instancias %d (bandas %d/%d/%d), variante %u idx, camara %s (%.1f, %.1f), estado: %s",
@@ -145,6 +162,17 @@ void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT
     if (!vs || vs->hash != kGrassVS || g_cfg.bypass || !g_dev.dev) return;
     g_grassDbg.calls++;
     if (!vs->repl) { Why("el VS del pasto no tiene reemplazo (ver Errores)"); return; }
+    if (s_vbState.load() == 0 && count > 1000) {   // volcado unico del formato de vertices (parcela densa)
+        int z = 0; if (s_vbState.compare_exchange_strong(z, 1)) {
+            ID3D11Buffer* vb = nullptr; UINT stride = 0, off = 0; c->IAGetVertexBuffers(0, 1, &vb, &stride, &off);
+            ID3D11Buffer* ib = nullptr; DXGI_FORMAT ifmt = DXGI_FORMAT_UNKNOWN; UINT ioff = 0; c->IAGetIndexBuffer(&ib, &ifmt, &ioff); if (ib) ib->Release();
+            s_vbStride = stride; s_vbOffset = off; s_ibFmt = (UINT)ifmt;
+            if (vb) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 512; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+                if (!s_vbStage) g_dev.dev->CreateBuffer(&d, nullptr, &s_vbStage);
+                if (s_vbStage) { D3D11_BOX bx = { off + (UINT)base * stride, 0, 0, off + (UINT)base * stride + 512, 1, 1 }; c->CopySubresourceRegion(s_vbStage, 0, 0, 0, 0, vb, 0, &bx); }
+                else s_vbState = 2;
+                vb->Release(); } else s_vbState = 2;
+        } }
     UINT prev = s_lodCount.load();
     while (count < prev && !s_lodCount.compare_exchange_weak(prev, count)) {}
     if (count <= s_lodCount.load()) { s_lodStart = start; s_lodBase = base; }
