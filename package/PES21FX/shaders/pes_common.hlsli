@@ -46,6 +46,29 @@ float3 PESWarmTint(float3 c, float warm)
   float3 tint = lerp(float3(1.0, 1.0, 1.0), float3(1.0, 0.72, 0.46), warm);
   return c * tint * (dot(c, LW) / max(dot(c * tint, LW), 1e-4));
 }
+// PES21 atmosfera fisica (20/10): transmitancia del sol por la atmosfera (Rayleigh + Mie con la masa de aire de
+// Kasten-Young), normalizada al cenit: con el sol alto no cambia el color del archivo de luz y, al bajar, vira a naranja
+// y luego a rojo como de verdad (la curva del dia a mano solo llega a naranja). Solo el color: la intensidad la sigue
+// llevando la curva del dia. 121: x on | y turbiedad (2 aire limpio .. 8 bruma) | z fuerza
+float3 PESAtmoSunTint(float sinElev, float turb)
+{
+  float e = saturate(sinElev); float elevDeg = degrees(asin(e));
+  float m = 1.0 / (e + 0.50572 * pow(elevDeg + 6.07995, -1.6364));          // masa de aire relativa (1 al cenit, ~38 en el horizonte)
+  float3 tauR = float3(5.8e-6, 13.5e-6, 33.1e-6) * 8000.0;                   // Rayleigh vertical (680 / 550 / 440 nm)
+  float3 tauM = (0.02 * max(turb - 1.0, 0.0)) * float3(0.92, 1.0, 1.1);      // Mie (aerosoles): casi gris
+  float3 T = exp(-(tauR + tauM) * m);
+  float3 Tz = exp(-(tauR + tauM));
+  return T / max(Tz, 1e-4);
+}
+float3 PESSunTintFinal(float3 c, float warm, float sinElev, float kSun)
+{
+  float4 AT = IniParams.Load(int2(121,0));
+  if (AT.x < 0.5) return PESWarmTint(c, warm);
+  const float3 LW = float3(0.2126, 0.7152, 0.0722);
+  float3 Tn = PESAtmoSunTint(sinElev, AT.y > 0.5 ? AT.y : 2.5);
+  float3 t = c * Tn * (dot(c, LW) / max(dot(c * Tn, LW), 1e-4));
+  return lerp(c, t, saturate(AT.z > 0.0 ? AT.z : 1.0) * saturate(kSun));
+}
 // tinte azulado de la luz ambiente en la hora azul
 float3 PESBlueTint(float3 c, float blue)
 {
