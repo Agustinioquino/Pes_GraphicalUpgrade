@@ -57,6 +57,17 @@ Pasto v3 (Cancha y cielo)
   base y las hojas, desgaste profesional -> potrero, inclinacion real por el corte y viento.
 - tools\make_grass_atlas.py regenera el atlas; tools\merge_ini.py fusiona el ini del PC con la plantilla.
 
+Luz moderna (20/10)
+-------------------
+- Rayos de sol (Iluminacion -> "Rayos de sol", 119): dispersion en pantalla hacia el sol leyendo la profundidad; solo el
+  cielo aporta luz, asi los rayos entran por los huecos del techo y los cortan tribunas y jugadores. Se apaga de noche,
+  con el sol fuera de pantalla y detras de las nubes volumetricas.
+- Reflejos en la cancha mojada (Cancha y cielo -> "Reflejos en la cancha mojada", 120): con suelo humedo, SSR solo
+  sobre el plano de la cancha (posicion por profundidad, rayo reflejado por el buffer de profundidad, Fresnel rasante).
+  w120 = 1 pinta de verde los pixeles tomados como cancha (para comprobar el plano).
+- Atmosfera fisica (Iluminacion -> "Atmosfera fisica", 121): el color del sol sale de la transmitancia Rayleigh + Mie
+  (masa de aire), normalizada al cenit; reemplaza el tinte calido a mano de la curva del dia.
+
 LOD de caras (Cara -> "LOD de caras")
 -------------------------------------
 - El motor elige en la CPU que malla dibuja de cada jugador (LOD) y a cuales les calcula la animacion facial; los
