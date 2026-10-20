@@ -21,6 +21,7 @@ Texture2D<float4> g_tex_planarShadow : register(t5);
 Texture2D<float4> g_tex_detailNormal : register(t6);
 Texture2D<float4> PESTurfN : register(t7);   // PES21 pasto v3: relieve propio del cesped (regla del VS)
 Texture2D<float4> PESWearMap : register(t8);   // PES21 pasto v3: desgaste en vivo (recurso pes_wear, lo pinta la DLL)
+Texture2D<float4> PESFlatMap : register(t9);   // PES21 pasto v5: pasto aplastado por jugadores y pelota (pes_flat, DLL, x136)
 
 Texture1D<float4> IniParams : register(t120);
 StructuredBuffer<float4> PESGrassInst : register(t121);   // PES21: parcelas del pasto extra (x, z, escala, giro)
@@ -103,6 +104,9 @@ void main(
   float pesH = 1.0; float2 pesWear = float2(0.0, 0.0); float3 pesZone = float3(1.0, 1.0, 1.0); float2 pesPm = float2(0.0, 0.0); float pesBand = 1.0;
   float2 pesLean = float2(0.0, 0.0);   // corrimiento horizontal de la punta (inclinacion por el corte + viento), por metro de alto
   bool pesV3 = Q4.x > 0.5;
+  float4 Q39 = IniParams.Load(int2(139, 0));   // (20/10) pasto v5: x on | y viento extra en la luz (olas de brillo) | z aplastado en las hojas
+  bool pesV5 = pesV3 && Q39.x > 0.5;
+  float pesGust = 0.0;
   float2 pesRoot = pesIsExt ? pesExtRoot : float2(dot(v0_in, cb5[4]), dot(v0_in, cb5[6]));
   if (pesV3) {
     float4 Q6 = IniParams.Load(int2(106, 0)), Q7 = IniParams.Load(int2(107, 0));
@@ -134,9 +138,40 @@ void main(
       float tw = IniParams.Load(int2(23, 0)).z;
       float ang = radians(IniParams.Load(int2(84, 0)).z);
       float2 wd = float2(cos(ang), sin(ang));
+      if (pesV5) {
+        // (20/10) pasto v5: viento fisico. Rafagas = campo de ruido que VIAJA con el viento (3 m/s): frentes irregulares que
+        // recorren la cancha (no una onda senoidal pareja); cada hoja suma su propio aleteo de alta frecuencia con fase al
+        // azar (las hojas no se mueven todas juntas) y un balanceo lento. Solo mueve las hojas: el grano de la base no se toca.
+        float2 wc = float2(-wd.y, wd.x);
+        float2 q = pesRoot - wd * tw * 3.0;
+        float g = PESGnoise(q * 0.08) * 0.6 + PESGnoise(float2(dot(q, wd) * 0.30, dot(q, wc) * 0.07) + 5.1) * 0.4;
+        float gust = smoothstep(0.30, 0.85, g);
+        float hb = PESGh21(floor(pesRoot * 40.0) * 0.173 + 0.31);          // fase por manojo
+        float fl = sin(tw * (7.0 + 5.0 * hb) + hb * 6.2832);
+        float sw = sin(tw * (1.6 + 0.8 * hb) + hb * 3.1 + dot(pesRoot, wd) * 0.9);
+        float W = saturate(Q8.y);
+        pesLean += wd * ((0.12 + 0.88 * gust) * 0.55 + sw * 0.07) * W;
+        pesLean += wc * fl * (0.05 + 0.10 * gust) * W;
+        pesGust = gust * W;
+      } else {
       float phw = dot(pesRoot, wd) * 0.6 - tw * 2.2;
       float gust = sin(phw) * 0.6 + sin(phw * 2.7 + tw * 0.9) * 0.25 + sin(tw * 0.7 + pesRoot.x * 0.13) * 0.15;
       pesLean += wd * (0.25 + 0.75 * saturate(gust * 0.5 + 0.5)) * 0.45 * saturate(Q8.y);
+      }
+    }
+  }
+  if (pesV5 && Q39.z > 0.001) {
+    // (20/10) pasto v5: pisadas y rastro de la pelota (mapa pes_flat de la DLL) solo doblan las hojas hacia afuera del
+    // rastro y las agachan; la base de la cancha no cambia de color (eso daba manchones)
+    float2 puvF = pesRoot * cb4[1].xy + cb4[1].zw;
+    float fl0 = PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF, 0).x;
+    if (fl0 > 0.003) {
+      const float2 tx = float2(2.0 / 1024.0, 2.0 / 512.0);
+      float2 gF = float2(PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF + float2(tx.x, 0), 0).x - PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF - float2(tx.x, 0), 0).x,
+                         PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF + float2(0, tx.y), 0).x - PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF - float2(0, tx.y), 0).x);
+      float kF = saturate(fl0) * clamp(Q39.z, 0.0, 2.0);
+      float lg = length(gF);
+      pesLean += (lg > 1e-4 ? -gF / lg : float2(0.0, 0.0)) * 1.2 * kF;   // se abren hacia afuera del rastro
     }
   }
   // --- posicion en el mundo y doblado por jugador / pelota ---
@@ -148,6 +183,13 @@ void main(
   r1.x = dot(v0, cb5[4]);
   r1.z = dot(v0, cb5[6]);
   if (pesIsExt) r1.xyz = pesExtW;
+  float pesHref = 0.06 * max(pesH, 0.2);
+  if (pesV5) {
+    // (20/10) pasto v5: la hoja se dobla en curva (la raiz queda firme, la punta se dobla mas: desplazamiento ~ t^2) en vez
+    // de inclinarse recta como una tarjeta; la punta llega al mismo lugar que antes
+    float tB = saturate(v0.y / pesHref);
+    r1.xz += pesLean * pesHref * tB * tB;
+  } else
   r1.xz += pesLean * v0.y * saturate(v0.y * 25.0);   // PES21 pasto v3: la hoja se curva (mas en la punta) por el corte y el viento
   r2.xyz = r1.xyz - cb4[3].xyz;
   r0.z = dot(r2.xyz, r2.xyz);
@@ -189,6 +231,15 @@ void main(
     r6.y = min(v0.y, 0.06 * max(pesExt.z, 0.1));
   } else if (pesFarK > 0.0) {
     r6.y = lerp(r6.y, min(v0.y, 0.06 * max(FA2.x, 0.1)), pesFarK);
+  }
+  float2 pesBend = float2(0.0, 0.0);
+  if (pesV5) {
+    // (20/10) pasto v5: largo constante. Toda la deformacion (corte, viento, pisadas, jugador / pelota del juego) corre la
+    // hoja de costado; una hoja real no se estira: la altura baja para que el largo raiz -> vertice se mantenga
+    pesBend = r6.xz - (pesIsExt ? pesExtRoot : pesRoot);
+    float yy = max(r6.y, 0.0);
+    float bb = min(dot(pesBend, pesBend), yy * yy * 0.9375);
+    r6.y = sqrt(max(yy * yy - bb, 0.0));
   }
   r6.w = pesIsExt ? 1.0 : dot(v0, cb5[7]);
   if (pesIsExt || pesFarK > 0.0) {
@@ -380,6 +431,14 @@ void main(
   r1.w = dot(r0.xzw, r0.xzw);
   r1.w = rsqrt(r1.w);
   r0.xzw = r0.xzw * r1.www;
+  if (pesV5) {
+    // (20/10) pasto v5: la normal se inclina con la curva de la hoja (pendiente = 2 desplazamiento / alto): las rafagas
+    // se ven como olas de brillo que recorren las hojas (las que se doblan hacia el sol se aclaran), igual que en un cesped real
+    float2 sl = 2.0 * pesBend / max(r6.y + 0.004, 0.006);
+    float ls = length(sl); if (ls > 1.5) sl *= 1.5 / ls;
+    float kN = 0.55 + clamp(Q39.y, 0.0, 2.0) * 0.5 * pesGust;
+    r0.xzw = normalize(r0.xzw + float3(sl.x, 0.0, sl.y) * kN);
+  }
   o4.x = dot(r0.xzw, cb2[8].xyz);
   o4.y = dot(r0.xzw, cb2[9].xyz);
   o4.z = dot(r0.xzw, cb2[10].xyz);

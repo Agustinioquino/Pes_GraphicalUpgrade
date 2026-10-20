@@ -287,6 +287,7 @@ static void UploadParams() {
     {
         std::lock_guard<std::mutex> lk(g_cfgMutex);
         memcpy(p, g_cfg.live, sizeof(p));
+        if (p[139][0] > 0.5f) p[104][0] = 1.0f;   // (20/10) pasto v5: necesita el pasto v3 (x104) prendido en la GPU
         for (auto& kv : g_cfg.rules) {
             if (kv.second.paramSet < 0) continue;
             for (auto& a : kv.second.actions) if (a.kind == RuleAction::SetParam) {

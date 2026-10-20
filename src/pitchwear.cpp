@@ -148,7 +148,7 @@ static void EnsureFlat() {
 }
 // desde GrassOnDraw (una vez por cuadro): la capsula de la pelota (cb4[3], cb4[4] del VS de las hojas) al staging
 void PitchBallNote(ID3D11DeviceContext* c, int frame) {
-    if (!g_dev.dev || g_cfg.live[136][0] < 0.5f) return;
+    if (!g_dev.dev || (g_cfg.live[136][0] < 0.5f && !(g_cfg.live[139][0] > 0.5f && g_cfg.live[139][2] > 0.001f))) return;
     int prev = s_ballNoted.load(); if (prev == frame || !s_ballNoted.compare_exchange_strong(prev, frame)) return;
     int w = s_ballW.load(); if (!s_ballStage[w]) return;
     ID3D11Buffer* cb = nullptr; UINT first = 0, num = 0; ID3D11DeviceContext1* c1 = nullptr;
@@ -161,7 +161,8 @@ void PitchBallNote(ID3D11DeviceContext* c, int frame) {
 }
 static void PitchFlatPresent() {
     const float* F = g_cfg.live[136];
-    if (F[0] < 0.5f || !g_dev.imm) return;
+    bool v5 = g_cfg.live[139][0] > 0.5f && g_cfg.live[139][2] > 0.001f;   // (20/10) pasto v5: las hojas se doblan con el mapa
+    if ((F[0] < 0.5f && !v5) || !g_dev.imm) return;
     EnsureFlat(); if (!s_flatRTV || !s_fsVS || !s_zeroPS || !s_vs || !s_ps || !s_flatCB) return;
     double t = Now(); float dt = (float)std::clamp(t - s_flatT, 0.001, 0.1); s_flatT = t; s_flatFrame++;
     if (g_matchGen.load() != s_flatMatch) { s_flatMatch = g_matchGen.load(); float z[4] = {}; g_dev.imm->ClearRenderTargetView(s_flatRTV, z); s_ballOk = false; }

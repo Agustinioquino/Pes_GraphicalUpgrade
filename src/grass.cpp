@@ -137,8 +137,9 @@ static void BuildDense(float curv) {
 }
 // decide si este dibujo del juego se cambia por la malla propia; llena 'out' (con referencias) y devuelve true
 static bool DensePick(UINT count, LodIA* out) {
-    const float* P = g_cfg.live[123];
-    if (P[0] < 0.5f) return false;
+    // (20/10) pasto v5 (x139): usa los manojos curvos del v4 aunque el v4 este apagado (densidad 1.25, curvatura 0.6)
+    float P[4] = { g_cfg.live[123][0], g_cfg.live[123][1], g_cfg.live[123][2], g_cfg.live[123][3] };
+    if (P[0] < 0.5f) { if (g_cfg.live[139][0] < 0.5f) return false; P[1] = 1.25f; P[2] = 0.6f; P[3] = 0.0f; }
     float curv = std::clamp(P[2], 0.0f, 1.5f);
     if (!s_denseBuilt.load() || fabsf(curv - s_denseCurv) > 0.01f) {
         // solo un hilo arma; los demas no esperan (dibujan las tarjetas del juego este cuadro). Un cambio de curvatura
