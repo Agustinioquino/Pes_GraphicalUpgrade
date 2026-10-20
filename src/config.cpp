@@ -117,6 +117,12 @@ static bool LoadConfigLocked() {
             }
             continue;
         }
+        if (Lower(section) == "motor") {   // (20/10) parches en memoria del motor (exepatch.cpp)
+            if (kl == "motor") c.motorPatch = atoi(v.c_str()) != 0;
+            else if (kl == "sombra_resolucion") c.motorShadowRes = std::clamp(atoi(v.c_str()), 0, 8192);
+            else if (kl == "sombra_cascadas") c.motorCascadeScale = std::clamp((float)atof(v.c_str()), 0.0f, 4.0f);
+            continue;
+        }
         if (Lower(section) == "pes21fx") {
             if (kl == "menu_key") c.menuKey = VkFromName(v);
             else if (kl == "tutorials") c.tutorials = atoi(v.c_str()) != 0;

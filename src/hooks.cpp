@@ -1096,6 +1096,7 @@ bool InstallHooks() {
     Log("compilador de shaders: %ls", s_compile ? cpath : L"NO ENCONTRADO");
     ScanShaderFolder();
     if (MH_Initialize() != MH_OK) { Log("MinHook no inicio"); return false; }
+    ExePatchInstall();   // (20/10) parches en memoria del motor (antes de que el juego lea su configuracion grafica)
     return true;
 }
 
