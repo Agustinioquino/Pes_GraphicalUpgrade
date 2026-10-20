@@ -82,6 +82,13 @@ Pasto v4: manojos curvos (Cancha y cielo -> "Pasto v4", 123)
   doblan, con giro, ancho, alto y curva al azar y raices Halton. Mismo VS/PS: alto, corte, viento, pisadas y atlas
   siguen funcionando. y123 densidad (x las del juego), z123 curvatura, w123 solo el nivel cercano.
 
+Luz ambiente rebalanceada (20/10)
+--------------------------------
+- Antes: volumen de irradiancia del motor al 33 % (x56) y encima rellenos sumados (luz de cielo 1.0 = 12 % del sol
+  en lo que mira arriba, SSGI 0.8, rebote del pasto 0.6) + sol apilado 1.58x: jugadores claros y chatos. Ahora el
+  volumen del motor vuelve al 80 %, luz de cielo 0.4, SSGI 0.5, rebote 0.45, sol ~1.2x. presets\luz_anterior.ini
+  aplica la cadena vieja para comparar.
+
 Rasgos de la cara (Cara -> "Rasgos de la cara", x124)
 -----------------------------------------------------
 - Frente al juego original la cara salia mas clara y lavada: el sol se apilaba (curva del dia x sol realista x
