@@ -110,8 +110,138 @@ static void EnsureRes() {
         Log("desgaste en vivo: shaders %s", (s_vs && s_ps) ? "listos" : "NO compilaron (ver errores)");
     }
 }
+// ---------------------------------------------------------------- pasto aplastado temporal (20/10)
+// Segundo mapa ("pes_flat", R16, mismas uv que el desgaste) que se apaga solo: cada cuadro se multiplica por exp(-dt/tau)
+// y se suman pinceles donde estan los jugadores y donde rueda la pelota (con el rastro entre la posicion anterior y la
+// actual). Las hojas lo leen para agacharse y abrirse hacia afuera del rastro y la base de la cancha para cambiar el grano
+// (pisadas y rastro de la pelota que se ven y se recuperan en ~2 s). La pelota sale del dibujo del pasto del juego:
+// cb4[3] y cb4[4] del VS de las hojas son la capsula de la pelota (posicion actual y anterior, radio 0.112 m).
+//   136: x on | y fuerza | z recuperacion (s) | w fuerza de la pelota
+static ID3D11Texture2D* s_flatTex = nullptr; static ID3D11RenderTargetView* s_flatRTV = nullptr; static ID3D11ShaderResourceView* s_flatSRV = nullptr;
+static ID3D11VertexShader* s_fsVS = nullptr; static ID3D11PixelShader* s_zeroPS = nullptr; static bool s_flatTried = false;
+static ID3D11BlendState* s_bsDecay = nullptr; static ID3D11Buffer* s_flatCB = nullptr;
+static ID3D11Buffer* s_ballStage[kStages] = {}; static int s_ballStageFrame[kStages] = { -1, -1, -1 }; static std::atomic<int> s_ballW{0}; static std::atomic<int> s_ballNoted{-1};
+static float s_ball[3] = {}, s_ballPrev[3] = {}; static bool s_ballOk = false; static int s_flatFrame = 0; static double s_flatT = 0; static int s_flatMatch = -1;
+static void EnsureFlat() {
+    if (!g_dev.dev) return;
+    if (!s_flatTex) {
+        D3D11_TEXTURE2D_DESC td{}; td.Width = 1024; td.Height = 512; td.MipLevels = 1; td.ArraySize = 1; td.Format = DXGI_FORMAT_R16_UNORM; td.SampleDesc.Count = 1;
+        td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        if (SUCCEEDED(g_dev.dev->CreateTexture2D(&td, nullptr, &s_flatTex))) {
+            g_dev.dev->CreateRenderTargetView(s_flatTex, nullptr, &s_flatRTV); g_dev.dev->CreateShaderResourceView(s_flatTex, nullptr, &s_flatSRV);
+            if (s_flatSRV) NamedSetSRV("pes_flat", s_flatSRV);
+            if (s_flatRTV && g_dev.imm) { float z[4] = {}; g_dev.imm->ClearRenderTargetView(s_flatRTV, z); }
+        }
+        D3D11_BLEND_DESC bd{}; auto& rt = bd.RenderTarget[0]; rt.BlendEnable = TRUE; rt.SrcBlend = D3D11_BLEND_ZERO; rt.DestBlend = D3D11_BLEND_BLEND_FACTOR; rt.BlendOp = D3D11_BLEND_OP_ADD;
+        rt.SrcBlendAlpha = D3D11_BLEND_ZERO; rt.DestBlendAlpha = D3D11_BLEND_BLEND_FACTOR; rt.BlendOpAlpha = D3D11_BLEND_OP_ADD; rt.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+        g_dev.dev->CreateBlendState(&bd, &s_bsDecay);
+        D3D11_BUFFER_DESC d = {}; d.ByteWidth = kMaxPlayers * 16 + 16; d.Usage = D3D11_USAGE_DYNAMIC; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER; d.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        g_dev.dev->CreateBuffer(&d, nullptr, &s_flatCB);
+    }
+    for (int i = 0; i < kStages; i++) if (!s_ballStage[i]) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 32; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; g_dev.dev->CreateBuffer(&d, nullptr, &s_ballStage[i]); }
+    if (!s_flatTried) { s_flatTried = true;
+        ID3DBlob* vb = CompileNamedShader(L"pes_fs_vs.hlsl", "vs_5_0"); ID3DBlob* pb = CompileNamedShader(L"pes_zero_ps.hlsl", "ps_5_0");
+        if (vb) { g_dev.dev->CreateVertexShader(vb->GetBufferPointer(), vb->GetBufferSize(), nullptr, &s_fsVS); vb->Release(); }
+        if (pb) { g_dev.dev->CreatePixelShader(pb->GetBufferPointer(), pb->GetBufferSize(), nullptr, &s_zeroPS); pb->Release(); }
+        Log("pasto aplastado: shaders %s", (s_fsVS && s_zeroPS) ? "listos" : "NO compilaron");
+    }
+}
+// desde GrassOnDraw (una vez por cuadro): la capsula de la pelota (cb4[3], cb4[4] del VS de las hojas) al staging
+void PitchBallNote(ID3D11DeviceContext* c, int frame) {
+    if (!g_dev.dev || g_cfg.live[136][0] < 0.5f) return;
+    int prev = s_ballNoted.load(); if (prev == frame || !s_ballNoted.compare_exchange_strong(prev, frame)) return;
+    int w = s_ballW.load(); if (!s_ballStage[w]) return;
+    ID3D11Buffer* cb = nullptr; UINT first = 0, num = 0; ID3D11DeviceContext1* c1 = nullptr;
+    if (SUCCEEDED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) && c1) { c1->VSGetConstantBuffers1(4, 1, &cb, &first, &num); c1->Release(); }
+    else c->VSGetConstantBuffers(4, 1, &cb);
+    if (!cb) return;
+    D3D11_BUFFER_DESC d; cb->GetDesc(&d); UINT off = first * 16 + 48;
+    if (d.ByteWidth >= off + 32) { D3D11_BOX bx = { off, 0, 0, off + 32, 1, 1 }; c->CopySubresourceRegion(s_ballStage[w], 0, 0, 0, 0, cb, 0, &bx); s_ballStageFrame[w] = frame; }
+    cb->Release();
+}
+static void PitchFlatPresent() {
+    const float* F = g_cfg.live[136];
+    if (F[0] < 0.5f || !g_dev.imm) return;
+    EnsureFlat(); if (!s_flatRTV || !s_fsVS || !s_zeroPS || !s_vs || !s_ps || !s_flatCB) return;
+    double t = Now(); float dt = (float)std::clamp(t - s_flatT, 0.001, 0.1); s_flatT = t; s_flatFrame++;
+    if (g_matchGen.load() != s_flatMatch) { s_flatMatch = g_matchGen.load(); float z[4] = {}; g_dev.imm->ClearRenderTargetView(s_flatRTV, z); s_ballOk = false; }
+    // pelota: el staging mas viejo ya listo (anillo de 3)
+    { int w = s_ballW.load(), rd = (w + 1) % kStages; s_ballW = rd;
+      if (s_ballStageFrame[rd] >= 0 && s_ballStage[rd]) {
+          D3D11_MAPPED_SUBRESOURCE m;
+          if (SUCCEEDED(g_dev.imm->Map(s_ballStage[rd], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) {
+              const float* q = (const float*)m.pData;
+              bool ok = fabsf(q[0]) < 70.f && fabsf(q[2]) < 45.f && q[1] > -0.5f && q[1] < 20.f && (fabsf(q[0]) + fabsf(q[2]) > 0.01f);
+              if (ok) { if (s_ballOk) { s_ballPrev[0] = s_ball[0]; s_ballPrev[1] = s_ball[1]; s_ballPrev[2] = s_ball[2]; } else { s_ballPrev[0] = q[0]; s_ballPrev[1] = q[1]; s_ballPrev[2] = q[2]; }
+                        s_ball[0] = q[0]; s_ball[1] = q[1]; s_ball[2] = q[2]; s_ballOk = true; }
+              g_dev.imm->Unmap(s_ballStage[rd], 0);
+          }
+          s_ballStageFrame[rd] = -1;
+      } }
+    float brush[kMaxPlayers][4]; int nb = 0;
+    float k = std::clamp(F[1] > 0.f ? F[1] : 1.0f, 0.f, 2.f);
+    // jugadores (ultimas posiciones conocidas del desgaste en vivo): pisada suave
+    for (size_t i = 0; i + 1 < s_prev.size() && nb < kMaxPlayers - 16; i += 2) {
+        brush[nb][0] = s_prev[i] / 140.f + 0.5f; brush[nb][1] = s_prev[i + 1] / 79.f + 0.5f; brush[nb][2] = 2.5f * dt * k; brush[nb][3] = 0.45f; nb++;
+    }
+    // pelota en el piso: rastro entre la posicion anterior y la actual
+    if (s_ballOk) {
+        float onGround = std::clamp(1.0f - (s_ball[1] - 0.12f) / 0.25f, 0.0f, 1.0f);
+        float dx = s_ball[0] - s_ballPrev[0], dz = s_ball[2] - s_ballPrev[2]; float dist = sqrtf(dx * dx + dz * dz);
+        if (dist > 4.0f) dist = 0.0f;   // salto de camara / saque
+        int steps = std::clamp((int)(dist / 0.08f) + 1, 1, 15);
+        float kb = (F[3] > 0.f ? F[3] : 1.0f) * k * onGround;
+        for (int sIdx = 0; sIdx < steps && nb < kMaxPlayers; sIdx++) {
+            float a = steps > 1 ? (float)sIdx / (steps - 1) : 1.0f;
+            float bx = s_ballPrev[0] + dx * a, bz = s_ballPrev[2] + dz * a;
+            brush[nb][0] = bx / 140.f + 0.5f; brush[nb][1] = bz / 79.f + 0.5f; brush[nb][2] = std::min(0.35f, 0.08f + 6.0f * dt) * kb; brush[nb][3] = 0.18f; nb++;
+        }
+        // pelota rapida al ras: algunos recortes de pasto
+        float sp = dist / dt;
+        if (onGround > 0.5f && sp > 9.0f && sp < 45.0f && g_cfg.live[116][3] > 0.5f && s_clips.size() < kMaxClips && Rand01() < 0.6f) {
+            Clip cp; cp.x = s_ball[0]; cp.z = s_ball[2]; cp.y = 0.02f; float ix = dist > 0 ? dx / dist : 0, iz = dist > 0 ? dz / dist : 0;
+            cp.vx = ix * (1.0f + Rand01() * 2.0f) + (Rand01() - 0.5f); cp.vz = iz * (1.0f + Rand01() * 2.0f) + (Rand01() - 0.5f); cp.vy = 1.0f + 2.0f * Rand01();
+            cp.age = 0; cp.life = 0.4f + 0.5f * Rand01(); cp.size = 0.02f * (0.6f + 0.8f * Rand01()); cp.rot = Rand01() * 6.2832f; s_clips.push_back(cp);
+        }
+    }
+    ID3D11DeviceContext* c = g_dev.imm;
+    ID3D11RenderTargetView* oRT[8] = {}; ID3D11DepthStencilView* oDS = nullptr; c->OMGetRenderTargets(8, oRT, &oDS);
+    UINT nvp = 8; D3D11_VIEWPORT ovp[8]; c->RSGetViewports(&nvp, ovp);
+    ID3D11VertexShader* oVS = nullptr; ID3D11PixelShader* oPS = nullptr; ID3D11GeometryShader* oGS = nullptr;
+    c->VSGetShader(&oVS, nullptr, nullptr); c->PSGetShader(&oPS, nullptr, nullptr); c->GSGetShader(&oGS, nullptr, nullptr);
+    ID3D11InputLayout* oIL = nullptr; c->IAGetInputLayout(&oIL); D3D11_PRIMITIVE_TOPOLOGY oTopo; c->IAGetPrimitiveTopology(&oTopo);
+    ID3D11RasterizerState* oRS = nullptr; c->RSGetState(&oRS); ID3D11DepthStencilState* oDSS = nullptr; UINT oRef = 0; c->OMGetDepthStencilState(&oDSS, &oRef);
+    ID3D11BlendState* oBS = nullptr; float oBF[4]; UINT oSM = 0; c->OMGetBlendState(&oBS, oBF, &oSM);
+    ID3D11Buffer* oCB = nullptr; c->VSGetConstantBuffers(0, 1, &oCB);
+    c->OMSetRenderTargets(1, &s_flatRTV, nullptr); D3D11_VIEWPORT vp{ 0, 0, 1024, 512, 0, 1 }; c->RSSetViewports(1, &vp);
+    c->GSSetShader(nullptr, nullptr, 0); c->IASetInputLayout(nullptr);
+    c->RSSetState(s_rs); c->OMSetDepthStencilState(s_dss, 0);
+    // 1) se apaga de a poco: dest *= exp(-dt / tau)
+    float tau = std::clamp(F[2] > 0.1f ? F[2] : 2.0f, 0.3f, 10.0f); float f = expf(-dt / tau); float bfD[4] = { f, f, f, f };
+    c->VSSetShader(s_fsVS, nullptr, 0); c->PSSetShader(s_zeroPS, nullptr, 0); c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    c->OMSetBlendState(s_bsDecay, bfD, 0xffffffff); c->Draw(3, 0);
+    // 2) pinceles nuevos (suma)
+    if (nb > 0) {
+        D3D11_MAPPED_SUBRESOURCE mc;
+        if (SUCCEEDED(c->Map(s_flatCB, 0, D3D11_MAP_WRITE_DISCARD, 0, &mc))) {
+            float* cbp = (float*)mc.pData; cbp[0] = (float)nb; cbp[1] = 140.f; cbp[2] = 79.f; cbp[3] = 0.f; memcpy(cbp + 4, brush, nb * 16); c->Unmap(s_flatCB, 0);
+            float bf[4] = {}; c->OMSetBlendState(s_bsAdd, bf, 0xffffffff);
+            c->VSSetShader(s_vs, nullptr, 0); c->PSSetShader(s_ps, nullptr, 0); c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+            c->VSSetConstantBuffers(0, 1, &s_flatCB); c->DrawInstanced(4, (UINT)nb, 0, 0);
+        }
+    }
+    c->OMSetRenderTargets(8, oRT, oDS); for (auto* v : oRT) if (v) v->Release(); if (oDS) oDS->Release();
+    c->RSSetViewports(nvp, ovp);
+    c->VSSetShader(oVS, nullptr, 0); c->PSSetShader(oPS, nullptr, 0); c->GSSetShader(oGS, nullptr, 0); if (oVS) oVS->Release(); if (oPS) oPS->Release(); if (oGS) oGS->Release();
+    c->IASetInputLayout(oIL); if (oIL) oIL->Release(); c->IASetPrimitiveTopology(oTopo);
+    c->RSSetState(oRS); if (oRS) oRS->Release(); c->OMSetDepthStencilState(oDSS, oRef); if (oDSS) oDSS->Release();
+    c->OMSetBlendState(oBS, oBF, oSM); if (oBS) oBS->Release();
+    c->VSSetConstantBuffers(0, 1, &oCB); if (oCB) oCB->Release();
+    static int logged = 0; if (logged < 2 && s_ballOk) { logged++; Log("pasto aplastado: pelota en (%.1f, %.2f, %.1f), %d pinceles", s_ball[0], s_ball[1], s_ball[2], nb); }
+}
+
 void PitchClipsReloadShaders();
-void PitchWearReloadShaders() { if (s_vs) { s_vs->Release(); s_vs = nullptr; } if (s_ps) { s_ps->Release(); s_ps = nullptr; } s_tried = false; PitchClipsReloadShaders(); }
+void PitchWearReloadShaders() { if (s_vs) { s_vs->Release(); s_vs = nullptr; } if (s_ps) { s_ps->Release(); s_ps = nullptr; } s_tried = false; if (s_fsVS) { s_fsVS->Release(); s_fsVS = nullptr; } if (s_zeroPS) { s_zeroPS->Release(); s_zeroPS = nullptr; } s_flatTried = false; PitchClipsReloadShaders(); }
 
 // en el dibujo del short / medias: copiar la traslacion de m_world (b5 del VS, fila 3 = bytes 112..127) al staging del cuadro
 void PitchWearNotePlayer(ID3D11DeviceContext* c) {
@@ -129,6 +259,8 @@ void PitchWearNotePlayer(ID3D11DeviceContext* c) {
 
 void PitchWearPresent() {
     if (!g_dev.dev || !g_dev.imm) return;
+    EnsureRes();
+    PitchFlatPresent();   // (20/10) pasto aplastado temporal (jugadores + pelota)
     const float* P = g_cfg.live[115];
     if (P[3] < 0.5f) { s_count = 0; return; }
     EnsureRes(); if (!s_tex || !s_cb) return;

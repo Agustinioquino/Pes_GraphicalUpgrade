@@ -107,6 +107,20 @@ void PESGroundLook(inout float3 c, inout float spec, inout float rough, float2 g
   if (g.x > 0.001) { c = lerp(c, pow(max(c, 1e-4), 1.25) * 0.72, g.x); spec = lerp(spec, saturate(spec * 2.2 + 0.25), g.x); rough = lerp(rough, max(0.14, rough * 0.6), g.x); }
   if (g.y > 0.001) { c = PESDryTint(c, g.y * 0.4); spec = lerp(spec, spec * 0.7, g.y); }
 }
+// (20/10) campo de viento compartido (hojas 3D y base de la cancha): rafagas que VIAJAN con el viento (el campo se desplaza a
+// ~3.5 m/s en la direccion del viento de las nubes, z84) con frentes alargados perpendiculares al viento, como las olas en un
+// trigal. Devuelve xy = direccion del viento (mundo xz), z = rafaga 0..1. Tiempo = 23.z, fuerza general y108.
+float3 PESWindField(float2 p)
+{
+  float t = IniParams.Load(int2(23, 0)).z;
+  float ang = radians(IniParams.Load(int2(84, 0)).z);
+  float2 wd = float2(cos(ang), sin(ang)), wc = float2(-wd.y, wd.x);
+  float2 q = p - wd * t * 3.5;
+  float n1 = PESGnoise(q * 0.07), n2 = PESGnoise(q * 0.19 + 3.7);
+  float n3 = PESGnoise(float2(dot(q, wd) * 0.35, dot(q, wc) * 0.06) + 9.1);   // frentes de ola: finos a lo largo del viento, largos a lo ancho
+  float g = n1 * 0.45 + n2 * 0.2 + n3 * 0.35;
+  return float3(wd, saturate((g - 0.32) * 2.4));
+}
 // sol en espacio mundo (lo publica la DLL en 111: xyz hacia el sol, w altura en grados); (0,1,0) si todavia no hay dato
 float3 PESSunWorld() { float4 L = IniParams.Load(int2(111, 0)); return dot(L.xyz, L.xyz) > 0.5 ? L.xyz : float3(0.0, 1.0, 0.0); }
 #endif

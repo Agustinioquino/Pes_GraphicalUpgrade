@@ -296,6 +296,7 @@ void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT
         g_grassDbg.rtW = w;
         if (w != g_bbW) { if (extraOn) Why("pasada secundaria (target de otro tamano)"); return; }
     }
+    PitchBallNote(c, s_frame.load());    // (20/10) posicion de la pelota para el pasto aplastado
     PitchClipsDraw(c, s_frame.load());   // recortes de pasto volando (una vez por cuadro; el estado del pasto ya esta puesto)
     if (!t_grassSub.count) DensePick(count, &t_grassSub);   // (20/10) pasto v4: tarjetas curvas propias en vez de las del juego (cerca)
     if (!extraOn) { Why("apagado (w58)"); return; }
