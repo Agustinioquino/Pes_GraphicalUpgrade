@@ -140,9 +140,9 @@ static float TargetRatio(float elevDeg) {
     float turb = g_cfg.live[121][1] > 0.5f ? g_cfg.live[121][1] : 2.5f;
     float C = 0.09f + 0.015f * std::clamp(turb - 2.0f, 0.0f, 6.0f);                 // mas bruma = mas luz difusa
     float s = sinf(std::clamp(elevDeg, 2.0f, 90.0f) * 0.0174533f);
-    float k = std::clamp(P[2] > 0.05f ? P[2] : 1.0f, 0.3f, 2.0f) * 0.6f;             // 1 = transmision de TV (comprime 40 %)
+    float k = std::clamp(P[2] > 0.05f ? P[2] : 1.0f, 0.3f, 2.0f) * 0.5f;             // 1 = transmision de TV (comprime 50 %)
     float occl = std::clamp(P[3], 0.0f, 0.8f);                                        // el estadio tapa parte del cielo
-    float r = 1.0f + k * s / (C * (1.0f - occl));
+    float r = 1.0f + k * s / (C * (1.0f - 0.5f * occl));                              // (20/10) a 40 grados ~4.8 (antes daba 7.5)
     return std::clamp(r, 1.5f, 9.0f);
 }
 

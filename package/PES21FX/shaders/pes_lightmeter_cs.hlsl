@@ -43,11 +43,9 @@ void main(uint3 tid : SV_DispatchThreadID, uint gi : SV_GroupIndex)
         int ty = (int)((uint)(nb.z * 1023 + 0.5) & 15);
         float mz = tMat.Load(int3(p, 0)).z;
         int cat = -1;
-        if (ty == 3) {
-          float3 N = DecN(nb); N.z = -N.z;
-          float3 up = normalize(float3(m_view._m10, m_view._m11, m_view._m12));
-          if (abs(dot(N, up)) > 0.6) cat = 0;
-        }
+        // (20/10) pasto: cualquier normal. Cerca de la camara casi todo el cesped son hojas 3D con la normal de costado
+        // (antes se exigia normal hacia arriba y no entraba ninguna muestra); lo que importa es el contraste que se ve
+        if (ty == 3) cat = 0;
         else if (ty == 0 && abs(mz - 0.98039) < 0.003) cat = 1;
         else if (ty == 0 && abs(mz - 0.9607843) < 0.002) cat = 2;
         if (cat >= 0) {
