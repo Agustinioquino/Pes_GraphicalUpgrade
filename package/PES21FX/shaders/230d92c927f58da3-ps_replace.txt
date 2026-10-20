@@ -121,6 +121,24 @@ void main(
   out float4 o1 : SV_Target1,
   out float4 o2 : SV_Target2)
 {
+  // === PES21 (19/10) SOL LIBRE (experimentar): x101 on, y101 azimut (grados), z101 elevacion (grados), w101 intensidad,
+  // x102 calidez (0 = color del juego, 1 = naranja atardecer). Mueve la direccion y el color del sol que ve ESTA pasada de luz;
+  // las sombras siguen siendo las del sol real del juego (el shadow map lo arma el motor).
+  float4 pesLDir = g_psLight.m_lightDir0; float4 pesLCol = g_psLight.m_lightColor0;
+  { float4 SF = IniParams.Load(int2(101,0));
+    if (SF.x > 0.5) {
+      float az = radians(SF.y), el = radians(SF.z);
+      float3 w = normalize(float3(cos(el) * sin(az), sin(el), cos(el) * cos(az)));   // mundo: Y arriba
+      float3 v = float3(dot(float3(g_psScene.m_view._m00, g_psScene.m_view._m01, g_psScene.m_view._m02), w),
+                        dot(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12), w),
+                        dot(float3(g_psScene.m_view._m20, g_psScene.m_view._m21, g_psScene.m_view._m22), w));
+      // el juego guarda la direccion HACIA el sol o desde el sol? se respeta el signo original (mismo sentido que m_lightDir0.y)
+      float sgn = (g_psLight.m_lightDir0.y < 0) ? -1.0 : 1.0;
+      pesLDir.xyz = normalize(v) * sgn;
+      float warm = saturate(IniParams.Load(int2(102,0)).x);
+      float3 tint = lerp(float3(1, 1, 1), float3(1.0, 0.62, 0.32), warm);
+      pesLCol.xyz = g_psLight.m_lightColor0.xyz * max(SF.w, 0.0) * tint;
+    } }
   float4 r0,r1,r2,r3,r4,r5,r6,r7,r8;
   uint4 bitmask, uiDest;
   float4 fDest;
@@ -210,15 +228,15 @@ void main(
     }
   }
   r3.w = -r3.z;
-  r0.w = dot(g_psLight.m_lightDir0.xyz, r3.xyw);
+  r0.w = dot(pesLDir.xyz, r3.xyw);
   r1.x = dot(-r0.xyz, r3.xyw);
   r2.x = r1.x + r1.x;
   r4.xyz = r3.xyw * -r2.xxx + -r0.xyz;
-  r4.xyz = -g_psLight.m_lightDir0.xyz + -r4.xyz;
+  r4.xyz = -pesLDir.xyz + -r4.xyz;
   r2.x = dot(r4.xyz, r4.xyz);
   r2.x = sqrt(r2.x);
-  r2.x = saturate(g_psLight.m_lightColor0.w / r2.x);
-  r4.xyz = r2.xxx * r4.xyz + g_psLight.m_lightDir0.xyz;
+  r2.x = saturate(pesLCol.w / r2.x);
+  r4.xyz = r2.xxx * r4.xyz + pesLDir.xyz;
   r2.x = dot(r4.xyz, r4.xyz);
   r2.x = rsqrt(r2.x);
   r0.xyz = r4.xyz * r2.xxx + -r0.xyz;
@@ -247,7 +265,7 @@ void main(
     r3.xyz = d * r1.yzw;
   }
   r4.xyz = r8.xyz * r2.zzz;
-  r7.x = dot(r0.xyz, g_psLight.m_lightDir0.xyz);
+  r7.x = dot(r0.xyz, pesLDir.xyz);
   r0.x = g_lut1.Sample(g_samplerLinear_Clamp_s, r7.xy).x;
   r1.x = saturate(r1.x);
   r0.y = max(0.0199999996, r2.y);
@@ -294,7 +312,7 @@ void main(
     float zSgn = zC < 0.0 ? -1.0 : 1.0, zA = abs(zC);
     if (CS.w > 0.5 && csK > 0 && zA > 0.1 && zA < 60.0 && rawNdotL > 0.02 && r6.x > 0.03) {
       float3 Pv = float3((sC - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zC, zC);
-      float3 Lc = normalize(g_psLight.m_lightDir0.xyz);
+      float3 Lc = normalize(pesLDir.xyz);
       float ign = frac(52.9829189 * frac(dot(v2.xy, float2(0.06711056, 0.00583715))));   // sin reloj en esta variante
       // arranque separado de la superficie: mas en angulo rasante (evita el acne) y con la distancia
       float bias = (0.008 + 0.0018 * zA) * (0.6 + 0.4 / max(rawNdotL, 0.12));
@@ -355,7 +373,7 @@ void main(
       nS = normalize(nS); nS.z = -nS.z;
       float2 ppS = (v0.xy / v0.ww - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy;
       float3 VS = -normalize(float3(ppS, 1));
-      float3 LS = normalize(g_psLight.m_lightDir0.xyz);
+      float3 LS = normalize(pesLDir.xyz);
       float nvS = saturate(dot(nS, VS));
       float sheen = pow(1.0 - nvS, 4.0) * saturate(dot(nS, LS) * 0.6 + 0.4);
       float clothW = saturate((spc.y - 0.42) * 4.0);
@@ -374,7 +392,7 @@ void main(
     n = normalize(n); n.z = -n.z;
     float2 pp = (v0.xy / v0.ww - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy;
     float3 V = -normalize(float3(pp, 1));
-    float3 L = normalize(g_psLight.m_lightDir0.xyz);
+    float3 L = normalize(pesLDir.xyz);
     float3 lightC = PESSunColor() * g_psScene.m_exposure.zzz;
     // --- transmision a contraluz ---
     float3 Lt = normalize(L + n * 0.3);
@@ -396,7 +414,7 @@ void main(
     n2 = normalize(n2); n2.z = -n2.z;
     float2 pp2 = (v0.xy / v0.ww - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy;
     float3 V2 = -normalize(float3(pp2, 1));
-    float3 L2 = normalize(g_psLight.m_lightDir0.xyz);
+    float3 L2 = normalize(pesLDir.xyz);
     float3 H2 = normalize(L2 + V2);
     float nl2 = saturate(dot(n2, L2));
     // lobulo fino (pelicula de grasa/sudor): GGX con rugosidad 0.18
@@ -416,7 +434,7 @@ void main(
   // PES21 inspector (19/10): LUZ PLANA (x89 = 1): irradiancia constante (y89) sin direccion, sombras ni brillos, para ver
   // texturas y materiales sin la iluminacion. z89 = 1 deja el brillo especular.
   { float4 P89 = IniParams.Load(int2(89,0));
-    if (P89.x > 0.5) { float fl = P89.y > 0.0 ? P89.y : 1.0; float3 c89 = g_psLight.m_lightColor0.xyz; float m89 = max(max(c89.x, c89.y), c89.z); if (m89 < 1e-3) m89 = 1.0;
+    if (P89.x > 0.5) { float fl = P89.y > 0.0 ? P89.y : 1.0; float3 c89 = pesLCol.xyz; float m89 = max(max(c89.x, c89.y), c89.z); if (m89 < 1e-3) m89 = 1.0;
       o0.xyz = (c89 / m89) * fl * 0.6; if (P89.z < 0.5) o1.xyz = 0; } }
   o2.xyzw = r6.xyzw;
   return;
