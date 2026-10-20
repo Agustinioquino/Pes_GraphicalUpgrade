@@ -64,7 +64,13 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID)
     s.dirV = float4(1, 0.3, 0, 1.0);
     s.col = float4(1, 0, 1, 0);
   }
-  if (P74.x < 0.5 || s.posV.w < 0.5 || s.posV.z > max(P75.y, 0.5)) { o.pos = float4(0, 0, -2, 1); return o; }   // fuera de pantalla
+  // (20/10) corte por TAMANO EN PANTALLA y no por metros: la camara "de jugador" de las repeticiones es un teleobjetivo
+  // (FOV ~2 grados a 12 m) y con el corte en metros las cejas no salian aunque la cara llenara la pantalla.
+  // y75 sigue siendo "distancia maxima" pero medida a zoom normal (FOV de juego): se convierte a pixeles por metro.
+  float vpH0 = m_viewportSize.y > 16.0 ? m_viewportSize.y : 1080.0;
+  float ppm = abs(m_projection[1].y) * vpH0 * 0.5 / max(s.posV.z, 0.05);      // pixeles por metro a la distancia de la semilla
+  float ppmMin = 1.73 * 540.0 / max(P75.y, 0.5);                               // lo que daba y75 metros con el FOV de juego
+  if (P74.x < 0.5 || s.posV.w < 0.5 || s.posV.z < 0.05 || ppm < ppmMin) { o.pos = float4(0, 0, -2, 1); return o; }   // fuera de pantalla / muy chico
   // geometria de la cinta: 2 vertices por anillo, (PES_SEG+1) anillos -> triangulos en lista: 6 por segmento
   uint seg = vid / 6, k = vid % 6;
   // k: 0=(seg,L) 1=(seg,R) 2=(seg+1,L) 3=(seg+1,L) 4=(seg,R) 5=(seg+1,R)
