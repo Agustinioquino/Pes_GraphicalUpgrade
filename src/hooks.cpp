@@ -1,6 +1,7 @@
 // PES21 FX - ganchos de D3D11: reemplazo de shaders por hash, parametros en t120, reglas por shader y Present.
 #include "core.h"
 #include <MinHook.h>
+#include <d3d11_1.h>
 #include <d3dcompiler.h>
 #include <ScreenGrab.h>
 #include <wincodec.h>
@@ -511,18 +512,33 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
     for (auto& a : rule->actions) {
         switch (a.kind) {
         case RuleAction::CopyCB: {
-            ID3D11Buffer* src = nullptr;
-            if (ps) c->PSGetConstantBuffers(a.slot, 1, &src); else c->VSGetConstantBuffers(a.slot, 1, &src);
+            // (20/10) con ID3D11DeviceContext1 el juego puede enlazar una ventana (first/num constantes) de un buffer grande:
+            // se copia solo esa ventana; si el enlace es el buffer entero (lo normal) se copia todo como antes
+            ID3D11Buffer* src = nullptr; UINT first = 0, num = 0;
+            ID3D11DeviceContext1* c1 = nullptr;
+            if (SUCCEEDED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) && c1) {
+                if (ps) c1->PSGetConstantBuffers1(a.slot, 1, &src, &first, &num); else c1->VSGetConstantBuffers1(a.slot, 1, &src, &first, &num);
+                c1->Release();
+            } else { if (ps) c->PSGetConstantBuffers(a.slot, 1, &src); else c->VSGetConstantBuffers(a.slot, 1, &src); }
             if (!src) break;
+            D3D11_BUFFER_DESC sd; src->GetDesc(&sd);
+            UINT off = first * 16, len = sd.ByteWidth;
+            bool window = num && (off > 0 || num * 16 < sd.ByteWidth);
+            if (window) len = off < sd.ByteWidth ? (std::min)(num * 16, sd.ByteWidth - off) & ~15u : 0;
+            if (!len) { src->Release(); break; }
             std::lock_guard<std::mutex> lk(s_namedMutex);
             auto& r = s_named[a.name];
-            D3D11_BUFFER_DESC sd; src->GetDesc(&sd);
-            if (r.buf) { D3D11_BUFFER_DESC dd; r.buf->GetDesc(&dd); if (dd.ByteWidth != sd.ByteWidth) { r.buf->Release(); r.buf = nullptr; } }
+            if (r.buf) { D3D11_BUFFER_DESC dd; r.buf->GetDesc(&dd); if (dd.ByteWidth != len) { r.buf->Release(); r.buf = nullptr; } }
             if (!r.buf && g_dev.dev) {
-                sd.Usage = D3D11_USAGE_DEFAULT; sd.CPUAccessFlags = 0; sd.MiscFlags = 0; sd.BindFlags = D3D11_BIND_CONSTANT_BUFFER; sd.StructureByteStride = 0;
-                g_dev.dev->CreateBuffer(&sd, nullptr, &r.buf);
+                D3D11_BUFFER_DESC nd = {}; nd.ByteWidth = len;
+                nd.Usage = D3D11_USAGE_DEFAULT; nd.CPUAccessFlags = 0; nd.MiscFlags = 0; nd.BindFlags = D3D11_BIND_CONSTANT_BUFFER; nd.StructureByteStride = 0;
+                g_dev.dev->CreateBuffer(&nd, nullptr, &r.buf);
             }
-            if (r.buf) { c->CopyResource(r.buf, src); r.copied = s_presentNo.load(); r.cleared = false; }
+            if (r.buf) {
+                if (window) { D3D11_BOX bx = { off, 0, 0, off + len, 1, 1 }; c->CopySubresourceRegion(r.buf, 0, 0, 0, 0, src, 0, &bx); }
+                else c->CopyResource(r.buf, src);
+                r.copied = s_presentNo.load(); r.cleared = false;
+            }
             src->Release();
             break; }
         case RuleAction::RefSRV: {

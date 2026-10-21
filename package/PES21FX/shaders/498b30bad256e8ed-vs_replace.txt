@@ -25,6 +25,9 @@ Texture2D<float4> PESFlatMap : register(t9);   // PES21 pasto v5: pasto aplastad
 
 Texture1D<float4> IniParams : register(t120);
 StructuredBuffer<float4> PESGrassInst : register(t121);   // PES21: parcelas del pasto extra (x, z, escala, giro)
+// PES21 (20/10): m_materials del PS de la base de la cancha (5e92 / c956), copiado por la DLL (regla copy_cb 4 TurfMatCB)
+// y enlazado aca en b6: con eso las hojas calculan el MISMO color que el suelo de la vista de juego (x148)
+cbuffer PESTurfMatC : register(b6) { float4 pTM[8]; }
 #include "pes_grass.hlsli"   // PES21 pasto v3 (19/10): tipo, alto, patrones de corte, desgaste, zonas
 
 void main(
@@ -204,9 +207,12 @@ void main(
   r0.yz = -r0.yz * 0.5 + r1.xz;
   r0.xz = r0.yz * r0.xx;
   r2.xy = r1.xz * cb4[1].xy + cb4[1].zw;
+  float2 pesUV = r2.xy;   // PES21: uv de la cancha en este vertice (la misma v1.xy de la base)
   r3 = g_tex_diffuse.SampleLevel(g_samplerLinear_Clamp_s, r2.xy, 0);
+  float4 pesDif = r3;
   r0.w = 1.0 - r3.z;
   r4 = g_tex_mask.SampleLevel(g_samplerLinear_Clamp_s, r2.xy, 0);
+  float4 pesMsk = r4;
   r5 = r4.zzwz * float4(0.5, 1.0, 0.01, 0.5);
   r1.w = max(r3.y, r4.y);
   r2.z = max(r5.z, r1.w);
@@ -285,6 +291,7 @@ void main(
   o1.xy = v1.xy;
   r0.yz = r2.xy * float2(32.0, 24.0);
   r2 = g_tex_grain.SampleLevel(g_samplerLinear_Clamp_s, r2.xy, 0);
+  float pesGrW = r2.w;
   // --- nivel de mip segun distancia/altura de la camara ---
   r1.xz = r6.xz;
   r1.y = 0.0;
@@ -299,6 +306,7 @@ void main(
   r1.y = r1.y / r1.z;
   r1.y = log2(r1.y);
   r1.x = r1.x * -1.7 - r1.y;
+  float pesMip = r1.x;
   r8 = g_tex_base.SampleLevel(g_samplerLinear_Wrap_s, r0.yz, r1.x);
   r9.xyz = g_tex_detailNormal.SampleLevel(g_samplerLinear_Wrap_s, r0.yz, r1.x).xyw;
   { // PES21 pasto v3 (20/10): relieve propio del cesped tambien en la normal base de las hojas (t7 del VS = pes_turf_n.dds)
@@ -403,9 +411,61 @@ void main(
   r3.xyz = -r4.xyw * r2.xyz + r0.www;
   r2.xyz = r2.xyz * r4.xyw;
   o3.xyz = saturate(r0.zzz * r3.xyz + r2.xyz);
+  // === PES21 pasto 3D con el color del suelo (20/10): x148 cuanto, y148 brillo, z148 franjas, w148 on/off ===
+  // El color de la hoja del juego sale de otra cuenta (colores fijos + la textura base en mosaico) y no coincide con el
+  // suelo que se ve en la vista de juego: de cerca el pasto 3D tenia otro verde. Aca se calcula, en la raiz de la hoja,
+  // la MISMA cuenta de albedo que el PS de la base de la cancha (textura base con su escala, tinte por el grano, color
+  // del material, lineas pintadas, franjas de la tabla de pendiente con la vista, variacion macro y saturacion), con los
+  // m_materials reales del estadio que copia la DLL. Lo que se agrega despues (zonas, x29, suelo humedo) es igual en los dos.
+  bool pesMatch = false;
+  {
+    float4 GM = IniParams.Load(int2(148, 0));
+    if (GM.w > 0.5 && GM.x > 0.001 && pTM[2].x > 0.0 && pTM[2].y > 0.0) {
+      pesMatch = true;
+      float3 g = pesGrain;
+      float3 tg = float3(g.x * g.y, -(g.z * g.z + g.x * g.x), g.z * g.y); tg *= rsqrt(max(dot(tg, tg), 1e-8));
+      float3 Vg = normalize(cb2[20].xyz - r6.xyz);
+      float3 fw = normalize(cb2[10].xyz);
+      float3 r4g = normalize(lerp(Vg, -fw, pTM[4].w));
+      float st = g_tex_turfSlopeTable.SampleLevel(g_samplerLinear_Clamp_s, float2(dot(r4g, g), dot(r4g, tg)) * 0.5 + 0.5, 0).y;
+      float4 ST = IniParams.Load(int2(57, 0));
+      if (ST.w > 0.5 && ST.x > 0) {
+        float3 gmr = float3(-g.x, g.y, -g.z);
+        float3 tmr = float3(gmr.x * gmr.y, -(gmr.z * gmr.z + gmr.x * gmr.x), gmr.z * gmr.y); tmr *= rsqrt(max(dot(tmr, tmr), 1e-8));
+        float stm = g_tex_turfSlopeTable.SampleLevel(g_samplerLinear_Clamp_s, float2(dot(r4g, gmr), dot(r4g, tmr)) * 0.5 + 0.5, 0).y;
+        st = saturate(st + (st - stm) * 0.5 * ST.x);
+      }
+      st = lerp(0.5, st, saturate(GM.z));   // z148: 0 = sin franjas en las hojas, 1 = como el suelo
+      float vy = max(Vg.y, 1e-4);
+      float4 bs = g_tex_base.SampleLevel(g_samplerLinear_Wrap_s, pesUV * pTM[2].xy, max(pesMip, 0.0));
+      float bw = pow(saturate(bs.w), 0.454545);
+      float q = max(bw * pesDif.x, 1e-6);
+      float qa = pow(q, pTM[1].y), qb = pow(q, pTM[1].z);
+      float lr = 1.0 - (pow(vy, pTM[1].x) * (qb - qa) + qa);
+      float kS = 1.0 - st * (1.0 - lr * pTM[1].w);
+      float3 c1 = 1.0 - (1.0 - bs.xyz) * kS;
+      float3 c7 = lerp(bs.xyz, pTM[4].xyz, pesGrW);
+      float3 c8 = saturate(float3(bs.x * pTM[5].x + pTM[5].w, bs.y * pTM[5].y + pTM[6].x, bs.z * pTM[5].z + pTM[6].y));
+      float mx = max(pesMsk.x, pesDif.w), my = max(pesMsk.y, pesDif.y);
+      float3 col = lerp(c7, c8, my) * c1 * (1.0 - saturate(0.1 * pesMsk.z));
+      col = saturate(lerp(col, float3(0.8, 0.8, 0.8), mx));          // lineas pintadas
+      float4 G10 = IniParams.Load(int2(10, 0));
+      if (G10.y > 0) {   // variacion macro, manchas secas y saturacion de la base (y10 / z10), sin las matas finas (las hojas ya son eso)
+        float2 wp = pesRoot;
+        float m1 = PESGnoise(wp * 0.045), m2 = PESGnoise(wp * 0.16 + 5.3), m3 = PESGnoise(wp * 0.85 + 1.7);
+        const float3 LW = float3(0.2126, 0.7152, 0.0722);
+        col *= 1 + ((m1 * 0.55 + m2 * 0.3 + m3 * 0.15) - 0.5) * 0.20 * G10.z;
+        float dry = saturate((m2 * 0.7 + m1 * 0.3) * 2.2 - 1.25) * 0.16 * G10.z;
+        col = lerp(col, dot(col, LW) * float3(1.12, 1.04, 0.72), dry);
+        col = lerp(dot(col, LW).xxx, col, 1.12) * 0.95;
+      }
+      o3.xyz = lerp(o3.xyz, saturate(col * (GM.y > 0 ? GM.y : 1.0)), saturate(GM.x));
+    }
+  }
   if (pesV3) {   // PES21 pasto v3: zonas de color y pasto seco (la base de la cancha hace lo mismo)
     float4 Q7b = IniParams.Load(int2(107, 0));
-    o3.xyz = saturate(PESDryTint(o3.xyz * pesZone, pesWear.x * saturate(Q7b.y) * 0.85));
+    // con el color del suelo (x148) el seco lo pone solo el PS de la hoja (antes se aplicaba dos veces: VS + PS)
+    o3.xyz = saturate(PESDryTint(o3.xyz * pesZone, pesMatch ? 0.0 : pesWear.x * saturate(Q7b.y) * 0.85));
     o1.w = saturate(o1.w * (1.0 - pesWear.x * 0.5) * ((int)(Q4.y + 0.5) == 2 ? 1.3 : 1.0));
   }
   // --- normal de la hoja (detalle) ---
