@@ -544,7 +544,7 @@ static void UpdatePhysSky(float (*p)[4]) {
         for (int k = 0; k < 3; k++) { float sref = sgE[k] + (sgZ[k] - sgE[k]) * atmo; rel[k] = (acc[k] / (std::max)(skyL, 1e-6f)) / (std::max)(sref, 1e-6f); }
         float rl = 0.2126f * rel[0] + 0.7152f * rel[1] + 0.0722f * rel[2];
         for (int k = 0; k < 3; k++) res[k] = rel[k] / (std::max)(rl, 1e-6f);
-        res[3] = skyL;
+        res[3] = skyL / 3.14159265f;   // iluminancia del cielo / del sol
     }
     for (int k = 0; k < 4; k++) p[150][k] = res[k];
 }
