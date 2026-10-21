@@ -413,6 +413,15 @@ void main(
           if (lh > 1e-4) { float3 horN = hor / lh; float3 zen = normalize(horN * float3(0.75, 0.9, 1.25)) * 1.7;
             float3 skyC = lerp(horN, zen, saturate(fSky * 1.3));
             tint = lerp(tint, skyC, saturate(SKY.z)); } }
+        // (21/10) cielo fisico (149): el color de la luz de cielo relativo al sol sale del modelo de atmosfera (DLL, 150);
+        // lo que mira al cenit recibe un poco mas de azul que lo que mira al costado (horizonte mas blanco)
+        { float4 PHk = IniParams.Load(int2(149,0)), SKk = IniParams.Load(int2(150,0));
+          if (PHk.x > 0.5 && SKk.y > 0.01) {
+            float3 snk = sunC / max(lum, 1e-4);
+            float3 tk = snk * SKk.xyz; tk /= max(dot(tk, float3(0.3, 0.5, 0.2)), 1e-4);
+            tk = lerp(lerp(float3(1, 1, 1), tk, 0.6), tk * float3(0.95, 1.0, 1.08), saturate(fSky * 2.0 - 1.0));
+            tint = lerp(float3(1, 1, 1), tk, saturate(SKY.y > 0 ? SKY.y : 1.0));
+          } }
         float aoSky = lerp(1.0, saturate(inOcclusion.SampleLevel(g_samplerLinear_Clamp_s, uvC, 0).x), 0.7 * saturate(SKY.z));
         r2.xyz += lum * tint * fSky * fSky * max(SKY.x, 0.0) * 0.12 * day * aoSky * saturate((400.0 - zsk) / 120.0) * PESAmbGain();
       }

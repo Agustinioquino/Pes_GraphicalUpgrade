@@ -142,7 +142,11 @@ void main(float4 v0 : SV_Position0, out float4 o0 : SV_Target0, out float4 o1 : 
         if (ST.x > 0.001 && kSun > 0.01) {
           const float3 LWs = float3(0.2126, 0.7152, 0.0722);
           float3 sn = sc / max(dot(sc, LWs), 1e-4);
-          float3 skyC = sn * float3(0.80, 0.93, 1.32); skyC /= max(dot(skyC, LWs), 1e-4);
+          float3 skyC = sn * float3(0.80, 0.93, 1.32);
+          // (21/10) cielo fisico (149): el color de la luz del cielo relativo al sol sale del modelo de atmosfera (la DLL lo
+          // integra sobre el hemisferio en 150): con el sol bajo el cielo queda mucho mas azul que el sol
+          { float4 PHs = IniParams.Load(int2(149,0)), SKs = IniParams.Load(int2(150,0)); if (PHs.x > 0.5 && SKs.y > 0.01) skyC = sn * SKs.xyz; }
+          skyC /= max(dot(skyC, LWs), 1e-4);
           float upS = saturate(0.5 + 0.5 * Nw.y);
           float lS = dot(irr, LWs);
           irr = lerp(irr, lS * skyC, saturate(ST.x) * upS * kSun);

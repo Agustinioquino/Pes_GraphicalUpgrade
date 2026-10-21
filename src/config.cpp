@@ -473,6 +473,83 @@ void OnTurfDrawn() {
     s_lastTurf = t;
 }
 
+// (21/10) cielo fisico: el mismo modelo de atmosfera que pes_common.hlsli (PESSkyPhys). La DLL integra la luz del cielo
+// sobre el hemisferio (superficie horizontal) y publica en 150 su color RELATIVO al del sol (xyz, luminancia 1) y el
+// cociente cielo / sol (w = iluminancia horizontal del cielo / iluminancia normal del sol). Se recalcula solo si el sol o
+// la turbiedad cambian (el sol se mueve lento con el Daylight Engine).
+namespace {
+struct V3 { float x, y, z; };
+static inline V3 V(float x, float y, float z) { return { x, y, z }; }
+static inline float Dot(const V3& a, const V3& b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+static const float kBR[3] = { 5.802e-6f, 13.558e-6f, 33.1e-6f }, kBO[3] = { 0.650e-6f, 1.881e-6f, 0.085e-6f }, kSunTOA[3] = { 1.1099f, 0.9762f, 0.9125f };
+static float AirMass(float sinE) { float e = asinf(std::clamp(sinE, 0.0f, 1.0f)) * 57.29578f; return 1.0f / ((std::max)(sinE, 0.0f) + 0.50572f * powf(e + 6.07995f, -1.6364f)); }
+static void SunGround(float sinE, float turb, float out[3]) {
+    float m = AirMass(sinE), aod = 0.09f * (std::max)(turb - 1.0f, 0.1f);
+    for (int k = 0; k < 3; k++) out[k] = kSunTOA[k] * expf(-(kBR[k] * 8000.0f + aod + kBO[k] * 15000.0f) * m);
+}
+static void SkyPhys(V3 d, const V3& s, float turb, int N, float out[3]) {
+    const float Re = 6360e3f, Ra = 6460e3f, HR = 8000.0f, HM = 1200.0f;
+    float aod = 0.09f * (std::max)(turb - 1.0f, 0.1f), bMe = aod / HM, bMs = bMe * 0.9f;
+    d.y = (std::max)(d.y, 1e-4f); float dn = sqrtf(Dot(d, d)); d = V(d.x / dn, d.y / dn, d.z / dn);
+    V3 p0 = V(0, Re + 20.0f, 0);
+    float b = Dot(p0, d), c = Dot(p0, p0) - Ra * Ra, tmax = -b + sqrtf((std::max)(b * b - c, 0.0f));
+    float mu = Dot(d, s), PR = 0.0596831f * (1 + mu * mu); const float g = 0.8f;
+    float PM = 0.1193662f * (1 - g * g) * (1 + mu * mu) / ((2 + g * g) * powf((std::max)(1 + g * g - 2 * g * mu, 1e-4f), 1.5f));
+    const float msT[3] = { 0.80f, 1.0f, 1.42f };
+    float L[3] = {}, tau[3] = {}, prev = 0;
+    for (int i = 0; i < N; i++) {
+        float f1 = (i + 1.0f) / N, t1 = tmax * f1 * f1, t = 0.5f * (prev + t1), ds = t1 - prev; prev = t1;
+        V3 p = V(p0.x + d.x * t, p0.y + d.y * t, p0.z + d.z * t); float r = sqrtf(Dot(p, p)), h = (std::max)(r - Re, 0.0f);
+        float rR = expf(-h / HR), rM = expf(-h / HM);
+        float sinE = (p.x * s.x + p.y * s.y + p.z * s.z) / r, m = AirMass(sinE);
+        float Ts[3], dtau[3];
+        for (int k = 0; k < 3; k++) { dtau[k] = (kBR[k] * rR + bMe * rM) * ds; Ts[k] = sinE > -0.05f ? expf(-(kBR[k] * HR * rR + bMe * HM * rM + kBO[k] * 15000.0f) * m) : 0.0f; }
+        float tsL = 0.2126f * Ts[0] + 0.7152f * Ts[1] + 0.0722f * Ts[2];
+        float psi = (0.15f + 0.25f * ((std::max)(sinE, 0.0f) + 0.15f)) * 0.1114085f;
+        for (int k = 0; k < 3; k++) {
+            float Tv = expf(-(tau[k] + 0.5f * dtau[k]));
+            L[k] += ((kBR[k] * rR * PR + bMs * rM * PM) * Ts[k] + (kBR[k] * rR + bMs * rM) * tsL * msT[k] * psi) * Tv * ds;
+            tau[k] += dtau[k];
+        }
+    }
+    float sg[3]; SunGround(s.y, turb, sg); float sgL = 0.2126f * sg[0] + 0.7152f * sg[1] + 0.0722f * sg[2];
+    for (int k = 0; k < 3; k++) out[k] = 3.14159265f * L[k] * kSunTOA[k] / (std::max)(sgL, 1e-6f);
+}
+// p150: x y z = color del cielo relativo al sol (luminancia 1), w = cielo horizontal / sol normal. 0 = sin dato
+static void UpdatePhysSky(float (*p)[4]) {
+    static float last[5] = { -9, -9, -9, -9, -9 }; static float res[4] = {};
+    bool sunny = p[114][3] > 0.5f; float sx = p[111][0], sy = p[111][1], sz = p[111][2];
+    if (!sunny || sy < 0.017f) { for (int k = 0; k < 4; k++) p[150][k] = 0.0f; return; }
+    float turb = p[121][1] > 0.5f ? p[121][1] : 2.5f;
+    float atmo = p[121][0] > 0.5f ? std::clamp(p[121][2] > 0.0f ? p[121][2] : 1.0f, 0.0f, 1.0f) : 0.0f;   // con el color fisico del sol (x121) prendido
+    if (fabsf(sx - last[0]) + fabsf(sy - last[1]) + fabsf(sz - last[2]) > 0.002f || fabsf(turb - last[3]) > 0.01f || fabsf(atmo - last[4]) > 0.01f) {
+        last[0] = sx; last[1] = sy; last[2] = sz; last[3] = turb; last[4] = atmo;
+        V3 s = V(sx, sy, sz);
+        float acc[3] = {}; const int NT = 8, NP = 16;
+        for (int i = 0; i < NT; i++) {
+            float th = (i + 0.5f) / NT * 1.5707963f, st = sinf(th), ct = cosf(th);
+            for (int j = 0; j < NP; j++) {
+                float ph = (j + 0.5f) / NP * 6.2831853f; float L[3];
+                SkyPhys(V(st * cosf(ph), ct, st * sinf(ph)), s, turb, 12, L);
+                float w = ct * st * (1.5707963f / NT) * (6.2831853f / NP);
+                for (int k = 0; k < 3; k++) acc[k] += L[k] * w;
+            }
+        }
+        // acc = iluminancia horizontal del cielo relativa a la del sol normal en el suelo (luminancia de "sol" = 1)
+        float skyL = 0.2126f * acc[0] + 0.7152f * acc[1] + 0.0722f * acc[2];
+        // el sol de referencia: el del suelo a esta altura; con x121 el juego ya tine el sol por altura sobre un color "de
+        // mediodia", asi que el cielo se mide contra el sol alto
+        float sgE[3], sgZ[3]; SunGround(sy, turb, sgE); SunGround(0.94f, turb, sgZ);
+        float rel[3];
+        for (int k = 0; k < 3; k++) { float sref = sgE[k] + (sgZ[k] - sgE[k]) * atmo; rel[k] = (acc[k] / (std::max)(skyL, 1e-6f)) / (std::max)(sref, 1e-6f); }
+        float rl = 0.2126f * rel[0] + 0.7152f * rel[1] + 0.0722f * rel[2];
+        for (int k = 0; k < 3; k++) res[k] = rel[k] / (std::max)(rl, 1e-6f);
+        res[3] = skyL;
+    }
+    for (int k = 0; k < 4; k++) p[150][k] = res[k];
+}
+} // namespace
+
 void UpdateTimeParams() {
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     double t = Now();
@@ -521,6 +598,7 @@ void UpdateTimeParams() {
       }
       int ground = 0; if (g_cfg.match.known && g_cfg.match.weather == 1) ground = 1;
       p[114][0] = (float)ground; p[114][2] = g_cfg.match.known ? (float)g_cfg.match.season : -1.0f; }
+    UpdatePhysSky(p);   // (21/10) cielo fisico: color de la luz del cielo para la sombra y la luz de cielo (150)
     UpdateClothWet(t);
     UpdateClothFit(t);
 }

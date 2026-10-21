@@ -79,6 +79,62 @@ float3 PESBlueTint(float3 c, float blue)
   return c * tint * (dot(c, LW) / max(dot(c * tint, LW), 1e-4));
 }
 
+// ---------------------------------------------------------------- cielo fisico (21/10, slots 149 / 150)
+// Dispersion de Rayleigh y de Mie (aerosoles segun la turbiedad y121: espesor optico 0.09 x (T - 1)) integrada a lo largo
+// del rayo de vista en una atmosfera esferica, con la transmitancia hacia el sol por masa de aire local (Kasten-Young) y
+// el ozono en el camino del sol (azul del cenit al atardecer), mas un termino de dispersion multiple aproximado (fuente
+// isotropica azulada). Mismo modelo que la DLL (config.cpp, PhysSky) para el color de la luz de cielo (150).
+// Devuelve la radiancia del cielo en la direccion d (mundo, Y arriba) con el sol en s, RELATIVA a la de una superficie
+// blanca iluminada de frente por el sol que llega al suelo: en la convencion del juego (luz = albedo x color del sol)
+// basta multiplicar por la luminancia del sol del juego.
+static const float3 PES_SKY_BR = float3(5.802e-6, 13.558e-6, 33.1e-6);   // Rayleigh por metro (680 / 550 / 440 nm)
+static const float3 PES_SKY_BO = float3(0.650e-6, 1.881e-6, 0.085e-6);   // ozono por metro (densidad pico; columna ~15 km)
+static const float3 PES_SUN_TOA = float3(1.1099, 0.9762, 0.9125);        // sol fuera de la atmosfera (5778 K), luminancia 1
+float PESAirMass(float sinE)
+{
+  float e = degrees(asin(saturate(sinE)));
+  return 1.0 / (max(sinE, 0.0) + 0.50572 * pow(e + 6.07995, -1.6364));
+}
+float3 PESSunGroundPhys(float sinE, float turb)   // color del sol al llegar al suelo (sin normalizar)
+{
+  float m = PESAirMass(sinE);
+  float aod = 0.09 * max(turb - 1.0, 0.1);
+  return PES_SUN_TOA * exp(-(PES_SKY_BR * 8000.0 + aod + PES_SKY_BO * 15000.0) * m);
+}
+float3 PESSkyPhys(float3 d, float3 s, float turb, int N)
+{
+  const float Re = 6360e3, Ra = 6460e3, HR = 8000.0, HM = 1200.0;
+  const float3 LW = float3(0.2126, 0.7152, 0.0722);
+  float aod = 0.09 * max(turb - 1.0, 0.1);
+  float bMe = aod / HM, bMs = bMe * 0.9;
+  d = normalize(float3(d.x, max(d.y, 1e-4), d.z));                     // bajo el horizonte: el del horizonte
+  float3 p0 = float3(0.0, Re + 20.0, 0.0);
+  float b = dot(p0, d), c = dot(p0, p0) - Ra * Ra;
+  float tmax = -b + sqrt(max(b * b - c, 0.0));
+  float mu = dot(d, s);
+  float PR = 0.0596831 * (1.0 + mu * mu);
+  const float g = 0.8;
+  float PM = 0.1193662 * (1.0 - g * g) * (1.0 + mu * mu) / ((2.0 + g * g) * pow(max(1.0 + g * g - 2.0 * g * mu, 1e-4), 1.5));
+  const float3 msTint = float3(0.80, 1.0, 1.42);
+  float3 L = 0.0, tau = 0.0; float prev = 0.0;
+  [loop] for (int i = 0; i < N; i++) {
+    float f1 = (i + 1.0) / N;
+    float t1 = tmax * f1 * f1;                                        // pasos mas cortos cerca de la camara
+    float t = 0.5 * (prev + t1), ds = t1 - prev; prev = t1;
+    float3 p = p0 + d * t; float r = length(p); float h = max(r - Re, 0.0);
+    float rR = exp(-h / HR), rM = exp(-h / HM);
+    float3 dtau = (PES_SKY_BR * rR + bMe * rM) * ds;
+    float3 Tv = exp(-(tau + 0.5 * dtau));
+    float sinE = dot(p / r, s);
+    float m = PESAirMass(sinE);
+    float3 Ts = sinE > -0.05 ? exp(-(PES_SKY_BR * HR * rR + bMe * HM * rM + PES_SKY_BO * 15000.0) * m) : 0.0;
+    float psi = (0.15 + 0.25 * (max(sinE, 0.0) + 0.15)) * 0.1114085;   // (luz del cielo + rebote del suelo) / 4 pi x 1.4
+    L += ((PES_SKY_BR * rR * PR + bMs * rM * PM) * Ts + (PES_SKY_BR * rR + bMs * rM) * dot(Ts, LW) * msTint * psi) * Tv * ds;
+    tau += dtau;
+  }
+  return 3.14159265 * L * PES_SUN_TOA / max(dot(PESSunGroundPhys(s.y, turb), LW), 1e-6);
+}
+
 // ---------------------------------------------------------------- piel: transmision (perfil de Jimenez 2010)
 // d = grosor que atraviesa la luz, ya escalado (0 = nada, ~1 = ya casi no pasa luz). Devuelve cuanta luz pasa por canal.
 float3 PESSkinTransmittance(float d)

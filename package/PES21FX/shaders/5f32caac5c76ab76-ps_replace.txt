@@ -114,14 +114,17 @@ void main(
     r1.xyz *= lerp(0.2, 1.0, edgeM);
   }
   r0.xyz = (r2.xyz + r1.xyz * bloomInt) * exposure;
-  { float ec = IniParams.Load(int2(128,0)).x; if (ec > 0.05) r0.xyz *= ec; }   // PES21 (20/10) exposicion estable entre camaras (la calcula la DLL con el medidor de luz)
+  float ecK = IniParams.Load(int2(128,0)).x; ecK = ecK > 0.05 ? ecK : 1.0; r0.xyz *= ecK;   // PES21 (20/10) exposicion estable entre camaras (la calcula la DLL con el medidor de luz)
+  float expoK = exposure * ecK;   // (21/10) factor de exposicion total del tonemap (para el cielo fisico)
   // === PES21 v2: look moderno (x6 luces altas suaves, y6 tono partido, z6 claridad, w6 viñeta) ===
   float4 P6 = IniParams.Load(int2(6,0));
   float3 colS_g = max(pL_color.xyz, 0.0); colS_g = colS_g / max(dot(colS_g, float3(0.2126, 0.7152, 0.0722)), 1e-3);   // (20/10) color del sol normalizado (perspectiva aerea)
   float4 P7 = IniParams.Load(int2(7,0));
   float skyK = grade ? saturate(P7.y) : 0.0;
   float skyM = 0;
-  if (skyK > 0) {
+  float4 PH = IniParams.Load(int2(149,0));   // (21/10) cielo fisico: x on | y brillo | z cuanto | w conservar las nubes del estadio
+  bool physOn = PH.x > 0.5;
+  if (skyK > 0 || physOn) {
     float2 uvS = v1.xy * g_psSystem.m_renderBuffer.zw;
     float2 pxS = g_psSystem.m_renderBuffer.zw * 1.5;
     skyM += PESDepth.SampleLevel(g_samplerLinear_Clamp_s, uvS, 0).x < 1e-6 ? 1.0 : 0.0;
@@ -129,11 +132,65 @@ void main(
     skyM += PESDepth.SampleLevel(g_samplerLinear_Clamp_s, uvS - float2(pxS.x, 0), 0).x < 1e-6 ? 1.0 : 0.0;
     skyM += PESDepth.SampleLevel(g_samplerLinear_Clamp_s, uvS + float2(0, pxS.y), 0).x < 1e-6 ? 1.0 : 0.0;
     skyM += PESDepth.SampleLevel(g_samplerLinear_Clamp_s, uvS - float2(0, pxS.y), 0).x < 1e-6 ? 1.0 : 0.0;
-    skyM *= 0.2 * skyK;
+    skyM *= 0.2;
+    float skyRaw = skyM;   // mascara de cielo (0..1)
+    skyM *= skyK;
     // PES21 cielo v2 (Claude, 16/10): antes el cielo se multiplicaba por 0.55 y quedaba azul marino a mediodia.
     // Ahora: compresion suave de luces (luminoso sin quemar), zenit azul, horizonte claro con bruma.
     // x28 brillo (0.8; 1 = sin bajar), y28 azul del zenit (0..1), z28 contraste de nubes, w28 bruma del horizonte
     float4 SK = IniParams.Load(int2(28,0));
+    // === PES21 cielo fisico (21/10): el cielo despejado sale de un modelo de atmosfera (PESSkyPhys, pes_common.hlsli) con
+    // el sol real de este cuadro: azul profundo en el cenit, horizonte claro, mas blanco alrededor del sol, y al bajar el
+    // sol el horizonte se calienta y el cenit se pone mas azul. El brillo queda atado al sol del juego (misma convencion que
+    // la luz de la cancha). Las nubes pintadas del cielo del estadio se conservan: lo que no es azul se deja, escalado para
+    // que mantenga su relacion con el cielo (grilla fija de puntos de cielo despejado: brillo del juego contra el del modelo).
+    // Con el cielo del estadio cubierto (casi sin azul) no se toca. 149: x on | y brillo | z cuanto | w conservar nubes
+    float physW = 0.0;
+    if (physOn && skyRaw > 0.01 && IniParams.Load(int2(114,0)).w > 0.5 && dot(pL_dir.xyz, pL_dir.xyz) > 1e-6 && abs(pS_projParam.x) > 1e-6 && abs(pS_projParam.y) > 1e-6) {
+      const float3 LWp = float3(0.2126, 0.7152, 0.0722);
+      float4 Q86p = IniParams.Load(int2(86,0));
+      float3 vXp = float3(pS_mat[2]._m00, pS_mat[2]._m01, pS_mat[2]._m02);
+      float3 vYp = float3(pS_mat[2]._m10, pS_mat[2]._m11, pS_mat[2]._m12);
+      float3 vZp = float3(pS_mat[2]._m20, pS_mat[2]._m21, pS_mat[2]._m22);
+      float3 Lnp = normalize(pL_dir.xyz);
+      float3 sunWp = normalize(float3(dot(Lnp, vXp), dot(Lnp, vYp), dot(Lnp, vZp)));
+      float kEl = smoothstep(0.02, 0.10, sunWp.y);                        // el modelo es de dia: se apaga con el sol en el horizonte
+      if (kEl > 0.001) {
+        float4 ATp = IniParams.Load(int2(121,0));
+        float turbP = ATp.y > 0.5 ? ATp.y : 2.5;
+        float Eimg = max(dot(max(pL_color.xyz, 0.0), LWp), 0.0) * pS_exposure.z * expoK * (PH.y > 0 ? PH.y : 1.0);
+        float2 ndcP = float2(uvS.x * 2.0 - 1.0, (Q86p.y > 0.5 ? 1.0 : -1.0) * (uvS.y * 2.0 - 1.0));
+        float3 dvP = normalize(float3((ndcP - pS_centerOff.xy) * pS_projParam.xy, Q86p.z > 0.5 ? -1.0 : 1.0));
+        float3 dWp = normalize(float3(dot(dvP, vXp), dot(dvP, vYp), dot(dvP, vZp)));
+        float3 phys = PESSkyPhys(dWp, sunWp, turbP, 12) * Eimg;
+        // cuanto de este pixel es nube pintada (lo que no es azul)
+        float3 gIn = r0.xyz; float lumG = dot(gIn, LWp);
+        float clr = smoothstep(0.35, 0.85, saturate((gIn.b - gIn.r) / max(lumG, 1e-4) * 3.0));
+        float cK = saturate(PH.w) * (1.0 - clr);
+        // grilla fija (igual para todos los pixeles): puntos de cielo, cuantos son azules, y brillo juego / modelo en esos
+        float nSky = 0.0, nClr = 0.0, gSum = 0.0, pSum = 0.0;
+        [loop] for (int gi = 0; gi < 12; gi++) {
+          float2 ug = float2(0.0833 * (gi % 6) + 0.0417, gi < 6 ? 0.07 : 0.24);
+          if (PESDepth.SampleLevel(g_samplerPoint_Wrap_s, ug, 0).x > 1e-6) continue;
+          nSky += 1.0;
+          float3 cg = inImage.SampleLevel(g_samplerPoint_Wrap_s, ug, 0).xyz * expoK;
+          float lg = dot(cg, LWp);
+          if (saturate((cg.b - cg.r) / max(lg, 1e-4) * 3.0) < 0.6) continue;
+          nClr += 1.0; gSum += lg;
+          if (cK > 0.02) {
+            float2 ng = float2(ug.x * 2.0 - 1.0, (Q86p.y > 0.5 ? 1.0 : -1.0) * (ug.y * 2.0 - 1.0));
+            float3 dvg = normalize(float3((ng - pS_centerOff.xy) * pS_projParam.xy, Q86p.z > 0.5 ? -1.0 : 1.0));
+            float3 dWg = normalize(float3(dot(dvg, vXp), dot(dvg, vYp), dot(dvg, vZp)));
+            pSum += dot(PESSkyPhys(dWg, sunWp, turbP, 8), LWp);
+          }
+        }
+        float Rc = (nClr > 0.5 && cK > 0.02) ? clamp(pSum * Eimg / max(gSum, 1e-6), 0.25, 4.0) : 1.0;
+        // cielo del estadio cubierto (varios puntos de cielo y casi ninguno azul): se deja el del juego
+        float ovK = (nSky >= 3.0 && PH.w > 0.5) ? smoothstep(0.10, 0.35, nClr / nSky) : 1.0;
+        physW = saturate(PH.z) * kEl * ovK;
+        r0.xyz = lerp(r0.xyz, lerp(phys, gIn * Rc, cK), skyRaw * physW);
+      }
+    }
     float topH = saturate(1.0 - uvS.y * 1.6);
     float3 skyIn = r0.xyz;
     float lumS = dot(skyIn, float3(0.2126, 0.7152, 0.0722));
@@ -143,11 +200,11 @@ void main(
     float3 cS = skyIn * (lumC / max(lumS, 1e-4)) * brightS;
     // 16/10: el azul del zenit solo donde el cielo ya es azul (nublado/gris queda gris, no gris azulado)
     float blueS = saturate((skyIn.b - skyIn.r) / max(lumS, 1e-3) * 3.0);
-    float3 tintS = lerp(float3(1.0, 1.0, 1.0), float3(0.62, 0.78, 1.12), topH * saturate(SK.y) * blueS);
+    float3 tintS = lerp(float3(1.0, 1.0, 1.0), float3(0.62, 0.78, 1.12), topH * saturate(SK.y) * blueS * (1.0 - physW));   // (21/10) el cielo fisico ya trae su azul
     cS *= tintS;
     float3 hazeS = float3(0.80, 0.88, 0.98) * 0.6;
-    cS = lerp(cS, max(cS, hazeS), (1.0 - topH) * saturate(SK.w));
-    r0.xyz = lerp(r0.xyz, cS, skyM);
+    cS = lerp(cS, max(cS, hazeS), (1.0 - topH) * saturate(SK.w) * (1.0 - physW));
+    r0.xyz = lerp(r0.xyz, cS, max(skyM, skyRaw * physW));
     // --- sol visible: x37 tamano, y37 intensidad, z37 = 1 invierte el eje vertical, w37 on/off [Alt+Shift+4] ---
     float4 SN = IniParams.Load(int2(37,0));
     float3 Ls = pL_dir.xyz;
@@ -277,6 +334,7 @@ void main(
         float phR = 0.0597 * (1.0 + mu * mu);
         float3 sunA = colS_g * max(dot(max(pL_color.xyz, 0.0), float3(0.2126, 0.7152, 0.0722)) * pS_exposure.z, 0.0);
         float3 skyA = float3(0.55, 0.70, 1.0) * 0.35;                              // luz difusa del cielo (relativa)
+        { float4 SKp = IniParams.Load(int2(150,0)); if (physOn && SKp.y > 0.01) skyA = colS_g * SKp.xyz * 0.35 / max(dot(colS_g * SKp.xyz, float3(0.2126, 0.7152, 0.0722)), 1e-4) * 0.68; }   // (21/10) color del cielo fisico (DLL)
         float3 inS = (betaR * phR * 4.0 + betaM * phM * 4.0) * (sunA * 0.25 + skyA) / max(betaR + betaM, 1e-9) * (1.0 - T);
         float k = saturate(AP.w) * (1.0 - skyM);                                    // el cielo ya trae su color
         r0.xyz = lerp(r0.xyz, r0.xyz * T + inS, k);
