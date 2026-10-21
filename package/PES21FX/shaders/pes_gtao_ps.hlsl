@@ -46,6 +46,8 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   float pxm = 1.0 / max(2.0 * abs(m_projectionParam.x) * z0 * m_renderBuffer.z, 1e-5);   // pixeles por metro
   float rPx = clamp(radiusM * pxm, 2.0, 160.0);
   float2 px = m_renderBuffer.zw;
+  // tolerancia: la posicion de cada muestra puede estar corrida hasta un escalon de profundidad (y la del centro tambien)
+  float depthEps = max(0.0015, z0 * 5e-4 + z0 * z0 * 1e-5);   // error de 2 escalones (crece con z^2) + piso
   // ruido por pixel (4x4 interleaved) + rotacion por cuadro: el TAA del juego promedia
   float2 ip = pos.xy;
   float noiseDir = frac(52.9829189 * frac(dot(ip, float2(0.06711056, 0.00583715))));
@@ -80,6 +82,10 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
         float3 dS = Ps - Pc; float lenS = length(dS);
         if (lenS < 1e-4) continue;
         float cosS = dot(dS, V) / lenS;
+        // (21/10 b) la profundidad que llega tiene escalones de ~1 cm a 30 m (camara de TV con tele: un pixel son <1 mm):
+        // en una superficie curva lisa esos escalones parecian bordes y salian curvas de nivel oscuras. Lo que sobresale
+        // del plano tangente menos que el escalon de profundidad no tapa nada
+        if (dot(dS, N) < depthEps) cosS = -1.0;
         // atenuacion con la distancia (falloff): lo muy lejano en profundidad no tapa
         float w = saturate(1.0 - (lenS / (radiusM * 1.5)) * (lenS / (radiusM * 1.5)));
         cosS = lerp(-1.0, cosS, w);
