@@ -46,12 +46,18 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   float pxm = 1.0 / max(2.0 * abs(m_projectionParam.x) * z0 * m_renderBuffer.z, 1e-5);   // pixeles por metro
   float rPx = clamp(radiusM * pxm, 2.0, 160.0);
   float2 px = m_renderBuffer.zw;
+  float4 G156 = IniParams.Load(int2(156, 0));
   // tolerancia: la posicion de cada muestra puede estar corrida hasta un escalon de profundidad (y la del centro tambien)
-  float depthEps = max(0.0015, z0 * 5e-4 + z0 * z0 * 1e-5);   // error de 2 escalones (crece con z^2) + piso
+  // escalon de la profundidad segun el formato real del buffer (156.x, lo mide la DLL: 1/65535 en 16 bits, 1/16777215 en
+  // 24 bits, 0 si es float) mas la precision del float: dz = z^2 / pp.z x escalon. Se tolera 2.5 escalones + un piso
+  float qD = max(G156.x, 0.0) + d0 * 1.2e-7;
+  float depthEps = max(0.0008, 2.5 * z0 * z0 / max(abs(m_projectionParam.z), 1e-4) * qD + z0 * 1e-4);
   // ruido por pixel (4x4 interleaved) + rotacion por cuadro: el TAA del juego promedia
   float2 ip = pos.xy;
-  float noiseDir = frac(52.9829189 * frac(dot(ip, float2(0.06711056, 0.00583715))));
-  float noiseOff = frac(dot(ip, float2(0.25, 0.5)) + m_timeParam.z * 7.31 * 0.0);
+  // (21/10) con la acumulacion temporal de la DLL (156.y = 1) el patron gira cada cuadro (155.y = contador de cuadros)
+  float frT = G156.y > 0.5 ? IniParams.Load(int2(155, 0)).y : 0.0;
+  float noiseDir = frac(52.9829189 * frac(dot(ip, float2(0.06711056, 0.00583715))) + frT * 0.618034);
+  float noiseOff = frac(dot(ip, float2(0.25, 0.5)) + frT * 0.381966);
   const int kSlices = 3, kSteps = 6;
   float vis = 0.0;
   [unroll] for (int s = 0; s < kSlices; s++) {

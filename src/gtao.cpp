@@ -6,7 +6,10 @@
 
 namespace fx {
 
-static ID3D11VertexShader* s_vs = nullptr; static ID3D11PixelShader* s_ps = nullptr; static ID3D11PixelShader* s_bh = nullptr; static ID3D11PixelShader* s_bv = nullptr; static bool s_tried = false;
+static ID3D11VertexShader* s_vs = nullptr; static ID3D11PixelShader* s_ps = nullptr; static ID3D11PixelShader* s_bh = nullptr; static ID3D11PixelShader* s_bv = nullptr; static ID3D11PixelShader* s_tp = nullptr; static bool s_tried = false;
+// (21/10) acumulacion temporal: historia RG16F (oclusion, profundidad lineal) en ping-pong + camara del cuadro anterior
+static ID3D11Texture2D* s_hTex[2] = {}; static ID3D11RenderTargetView* s_hRTV[2] = {}; static ID3D11ShaderResourceView* s_hSRV[2] = {}; static int s_hPing = 0;
+static ID3D11Buffer* s_prev = nullptr; static bool s_prevOk = false; static DXGI_FORMAT s_loggedFmt = DXGI_FORMAT_FORCE_UINT;
 static ID3D11Texture2D* s_tex[2] = {}; static ID3D11RenderTargetView* s_rtv[2] = {}; static ID3D11ShaderResourceView* s_srv[2] = {};
 static UINT s_w = 0, s_h = 0;
 static ID3D11SamplerState* s_sampP = nullptr; static ID3D11SamplerState* s_sampL = nullptr;
@@ -20,6 +23,8 @@ static void EnsureShaders() {
     ID3DBlob* pb = CompileNamedShader(L"pes_gtao_ps.hlsl", "ps_5_0");
     ID3DBlob* hb = CompileNamedShader(L"pes_gtao_bh_ps.hlsl", "ps_5_0");
     ID3DBlob* vb2 = CompileNamedShader(L"pes_gtao_bv_ps.hlsl", "ps_5_0");
+    ID3DBlob* tpb = CompileNamedShader(L"pes_gtao_tp_ps.hlsl", "ps_5_0");
+    if (tpb) { g_dev.dev->CreatePixelShader(tpb->GetBufferPointer(), tpb->GetBufferSize(), nullptr, &s_tp); tpb->Release(); }
     if (vb) { g_dev.dev->CreateVertexShader(vb->GetBufferPointer(), vb->GetBufferSize(), nullptr, &s_vs); vb->Release(); }
     if (pb) { g_dev.dev->CreatePixelShader(pb->GetBufferPointer(), pb->GetBufferSize(), nullptr, &s_ps); pb->Release(); }
     if (hb) { g_dev.dev->CreatePixelShader(hb->GetBufferPointer(), hb->GetBufferSize(), nullptr, &s_bh); hb->Release(); }
@@ -34,7 +39,7 @@ static void EnsureShaders() {
     Log("gtao: shaders %s", (s_vs && s_ps && s_bh && s_bv) ? "listos" : "NO compilaron (ver errores)");
 }
 void GTAOReloadShaders() {
-    if (s_vs) { s_vs->Release(); s_vs = nullptr; } if (s_ps) { s_ps->Release(); s_ps = nullptr; } if (s_bh) { s_bh->Release(); s_bh = nullptr; } if (s_bv) { s_bv->Release(); s_bv = nullptr; }
+    if (s_vs) { s_vs->Release(); s_vs = nullptr; } if (s_ps) { s_ps->Release(); s_ps = nullptr; } if (s_bh) { s_bh->Release(); s_bh = nullptr; } if (s_bv) { s_bv->Release(); s_bv = nullptr; } if (s_tp) { s_tp->Release(); s_tp = nullptr; }
     s_tried = false;
 }
 static bool EnsureTargets(UINT w, UINT h) {
@@ -46,8 +51,15 @@ static bool EnsureTargets(UINT w, UINT h) {
         if (FAILED(g_dev.dev->CreateRenderTargetView(s_tex[i], nullptr, &s_rtv[i]))) return false;
         if (FAILED(g_dev.dev->CreateShaderResourceView(s_tex[i], nullptr, &s_srv[i]))) return false;
     }
-    s_w = w; s_h = h;
-    Log("gtao: targets %ux%u R8", w, h);
+    td.Format = DXGI_FORMAT_R16G16_FLOAT;
+    for (int i = 0; i < 2; i++) {
+        if (s_hSRV[i]) s_hSRV[i]->Release(); if (s_hRTV[i]) s_hRTV[i]->Release(); if (s_hTex[i]) s_hTex[i]->Release(); s_hSRV[i] = nullptr; s_hRTV[i] = nullptr; s_hTex[i] = nullptr;
+        if (FAILED(g_dev.dev->CreateTexture2D(&td, nullptr, &s_hTex[i]))) return false;
+        if (FAILED(g_dev.dev->CreateRenderTargetView(s_hTex[i], nullptr, &s_hRTV[i]))) return false;
+        if (FAILED(g_dev.dev->CreateShaderResourceView(s_hTex[i], nullptr, &s_hSRV[i]))) return false;
+    }
+    s_w = w; s_h = h; s_prevOk = false;
+    Log("gtao: targets %ux%u R8 + historia RG16F", w, h);
     return true;
 }
 
@@ -64,6 +76,15 @@ ID3D11ShaderResourceView* GTAOBeforeComposition(ID3D11DeviceContext* c, int fram
     if (!depth || !nrm) { rel(); return nullptr; }
     ID3D11Resource* res = nullptr; depth->GetResource(&res); if (!res) { rel(); return nullptr; }
     D3D11_TEXTURE2D_DESC td; ((ID3D11Texture2D*)res)->GetDesc(&td); res->Release();
+    { // (21/10) formato real de la profundidad -> escalon (156.x) para la tolerancia del GTAO
+      D3D11_SHADER_RESOURCE_VIEW_DESC vd; depth->GetDesc(&vd); DXGI_FORMAT f = vd.Format;
+      float q = 0.0f;
+      switch (f) { case DXGI_FORMAT_R16_UNORM: case DXGI_FORMAT_D16_UNORM: case DXGI_FORMAT_R16_TYPELESS: q = 1.0f / 65535.0f; break;
+        case DXGI_FORMAT_R24_UNORM_X8_TYPELESS: case DXGI_FORMAT_D24_UNORM_S8_UINT: case DXGI_FORMAT_R24G8_TYPELESS: q = 1.0f / 16777215.0f; break;
+        case DXGI_FORMAT_R16_FLOAT: q = 1.0f / 2048.0f; break;
+        default: q = 0.0f; break; }
+      if (td.Width >= 640 && f != s_loggedFmt) { s_loggedFmt = f; Log("gtao: profundidad %ux%u formato %d (vista) / %d (textura), escalon %.3g", td.Width, td.Height, (int)f, (int)td.Format, q); }
+      g_cfg.live[156][0] = q; }
     // (20/10) solo a pantalla completa: la luz global tambien corre para una sonda de 16x16; si se calculaba ahi, ese AO chico
     // quedaba como el del cuadro y la composicion lo usaba -> parpadeo oscuro / en bloques (y se recreaban las texturas 650 veces)
     if (td.Width < 640 || (g_bbW && (td.Width < g_bbW * 3 / 4 || td.Width > g_bbW * 3))) { rel(); return nullptr; }
@@ -103,6 +124,28 @@ ID3D11ShaderResourceView* GTAOBeforeComposition(ID3D11DeviceContext* c, int fram
     ID3D11ShaderResourceView* sv2[2] = { s_srv[1], depth }; c->PSSetShaderResources(0, 2, sv2);
     c->PSSetShader(s_bv, nullptr, 0); c->Draw(3, 0);
     c->PSSetShaderResources(0, 2, nulls);
+    // 4) (21/10) acumulacion temporal: tex0 + historia anterior -> historia nueva (la que se usa)
+    ID3D11ShaderResourceView* outSRV = s_srv[0];
+    bool temporal = s_tp && s_hRTV[0] && s_hRTV[1];
+    if (temporal) {
+        D3D11_BUFFER_DESC bd; scb->GetDesc(&bd);
+        if (s_prev) { D3D11_BUFFER_DESC pd; s_prev->GetDesc(&pd); if (pd.ByteWidth != bd.ByteWidth) { s_prev->Release(); s_prev = nullptr; } }
+        if (!s_prev && bd.ByteWidth >= 480) { D3D11_BUFFER_DESC pd = bd; pd.Usage = D3D11_USAGE_DEFAULT; pd.CPUAccessFlags = 0; pd.MiscFlags = 0; pd.BindFlags = D3D11_BIND_CONSTANT_BUFFER; pd.StructureByteStride = 0; g_dev.dev->CreateBuffer(&pd, nullptr, &s_prev); s_prevOk = false; }
+        if (s_prev) {
+            if (!s_prevOk) { c->CopyResource(s_prev, scb); s_prevOk = true; }
+            ID3D11Buffer* o3 = nullptr; c->PSGetConstantBuffers(3, 1, &o3);
+            int hn = s_hPing, ho = 1 - s_hPing; s_hPing = 1 - s_hPing;
+            c->OMSetRenderTargets(1, &s_hRTV[hn], nullptr);
+            ID3D11ShaderResourceView* sv3[3] = { s_srv[0], s_hSRV[ho], depth }; c->PSSetShaderResources(0, 3, sv3);
+            c->PSSetConstantBuffers(3, 1, &s_prev);
+            c->PSSetShader(s_tp, nullptr, 0); c->Draw(3, 0);
+            ID3D11ShaderResourceView* n3[3] = {}; c->PSSetShaderResources(0, 3, n3);
+            c->CopyResource(s_prev, scb);
+            c->PSSetConstantBuffers(3, 1, &o3); if (o3) o3->Release();
+            outSRV = s_hSRV[hn];
+        } else temporal = false;
+    }
+    g_cfg.live[156][1] = temporal ? 1.0f : 0.0f;
     // restaurar
     c->OMSetRenderTargets(8, oRT, oDS); for (auto* r : oRT) if (r) r->Release(); if (oDS) oDS->Release();
     c->RSSetViewports(nvp, ovp);
@@ -117,8 +160,8 @@ ID3D11ShaderResourceView* GTAOBeforeComposition(ID3D11DeviceContext* c, int fram
     c->PSSetShaderResources(120, 1, &o120); if (o120) o120->Release();
     c->PSSetConstantBuffers(2, 1, &scb); scb->Release(); if (sys) { c->PSSetConstantBuffers(0, 1, &sys); sys->Release(); }
     rel();
-    g_gtaoDraws++; s_lastFrame = frame; s_last = s_srv[0];
-    return s_srv[0];
+    g_gtaoDraws++; s_lastFrame = frame; s_last = outSRV;
+    return outSRV;
 }
 
 } // namespace fx
