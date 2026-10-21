@@ -537,15 +537,15 @@ void main(
   {
     float lum = dot(r2.xyz, float3(0.2126, 0.7152, 0.0722));
     r2.xyz = max(0, lerp(lum.xxx, r2.xyz, albedoSat));
-    float3 bloodTint = float3(1.06, 0.97, 0.94);
+    float3 bloodTint = float3(1.04, 0.98, 0.96);   // 21/10: mas sutil
     r2.xyz *= lerp(float3(1,1,1), bloodTint, saturate(thin * thinWarmth));
-    r2.xyz *= lerp(float3(1,1,1), float3(1.0, 0.90, 0.88), saturate(mapBlood));   // PES21 mapa de SSS: zonas irrigadas
+    r2.xyz *= lerp(float3(1,1,1), float3(1.0, 0.95, 0.94), saturate(mapBlood));   // 21/10: mas sutil   // PES21 mapa de SSS: zonas irrigadas
     // PES21 zonas (18/10): color de labios propio (rosado natural .. rojo), conservando la textura del juego
     { float3 lipTint = lerp(float3(1.10, 0.84, 0.86), float3(1.16, 0.70, 0.72), saturate(P73.y));
       r2.xyz = lerp(r2.xyz, r2.xyz * lipTint, lipM * saturate(P72.z)); }
     if (fgOk) {   // PES21 quinta textura: cavidades (pliegues, alas de nariz, comisuras) mas oscuras y rojizas, y mas mates
       float cavK = FA.r * saturate(P68.y);
-      r2.xyz *= lerp(float3(1,1,1), float3(0.78, 0.66, 0.62), cavK);   // 18/10: mas suave (manchaba las mejillas)
+      r2.xyz *= lerp(float3(1,1,1), float3(0.88, 0.83, 0.81), cavK);   // 21/10: casi neutro (con el rojo-marron fuerte la cara quedaba naranja y manchada; el AO ya oscurece el hueco)
       r0.w = lerp(r0.w, max(r0.w, 0.7), cavK * 0.4);
     }
     r2.xyz = saturate(r2.xyz);

@@ -196,8 +196,8 @@ void main(
     float aSat = P0b.y > 0 ? P0b.y : 1.0;
     float lum = dot(r2.yzw, float3(0.2126, 0.7152, 0.0722));
     r2.yzw = max(0, lerp(lum.xxx, r2.yzw, aSat));
-    r2.yzw *= lerp(float3(1,1,1), float3(1.06, 0.97, 0.94), saturate(hpThin * P2h.x));
-    r2.yzw *= lerp(float3(1,1,1), float3(1.0, 0.90, 0.88), saturate(hpBlood));
+    r2.yzw *= lerp(float3(1,1,1), float3(1.04, 0.98, 0.96), saturate(hpThin * P2h.x));
+    r2.yzw *= lerp(float3(1,1,1), float3(1.0, 0.95, 0.94), saturate(hpBlood));   // 21/10: mas sutil
     r2.yzw = saturate(r2.yzw);
     float4 P9h = IniParams.Load(int2(9,0));
     float swP = saturate((IniParams.Load(int2(10,0)).x - P9h.x) / max(P9h.y - P9h.x, 0.1));
