@@ -55,14 +55,18 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   [unroll] for (int s = 0; s < kSlices; s++) {
     float phi = (s + noiseDir) * (3.14159265 / kSlices);
     float2 dir = float2(cos(phi), sin(phi));
-    float3 dirV = float3(dir, 0);
+    // (21/10) direccion de la rebanada en espacio de vista: un paso en pantalla mueve la posicion en (du * 2 pp.x, -dv * 2 pp.y)
+    // (el eje x de la vista del juego va hacia la izquierda de la pantalla: pp.x < 0). Antes se usaba (dir, 0) tal cual: la
+    // rebanada quedaba girada 180 grados y los horizontes de cada lado se asignaban al reves -> en superficies inclinadas
+    // (y con el relieve del mapa de normales) la oclusion salia con manchas oscuras en forma de curvas de nivel
+    float3 dirV = normalize(float3(dir.x * m_projectionParam.x, -dir.y * m_projectionParam.y, 0));
     // plano de la rebanada: proyeccion de la normal (Jimenez 2016, sec. 3.3)
     float3 orthoDir = dirV - dot(dirV, V) * V;
     float3 axis = normalize(cross(orthoDir, V));
     float3 projN = N - axis * dot(N, axis);
     float projLen = length(projN);
     float cosN = clamp(dot(projN, V) / max(projLen, 1e-4), -1, 1);
-    float n = -sign(dot(projN, orthoDir)) * acos(cosN);
+    float n = sign(dot(orthoDir, projN)) * acos(cosN);   // XeGTAO
     float2 h = float2(-1, -1);   // cos de los horizontes a ambos lados
     [unroll] for (int side = 0; side < 2; side++) {
       float sgn = side == 0 ? 1.0 : -1.0;
@@ -83,7 +87,7 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
       }
       h[side] = cosH;
     }
-    float h0 = -acos(h.x), h1 = acos(h.y);
+    float h0 = -acos(h.y), h1 = acos(h.x);   // h.x = horizonte hacia +dir, h.y = hacia -dir (XeGTAO: h1 = +dir)
     h0 = n + max(h0 - n, -1.5707963); h1 = n + min(h1 - n, 1.5707963);
     // integral analitica de la visibilidad pesada por coseno
     float a = 0.25 * (-cos(2.0 * h0 - n) + cos(n) + 2.0 * h0 * sin(n)) + 0.25 * (-cos(2.0 * h1 - n) + cos(n) + 2.0 * h1 * sin(n));
