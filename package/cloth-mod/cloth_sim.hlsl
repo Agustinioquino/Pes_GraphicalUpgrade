@@ -122,6 +122,15 @@
 #undef PES_FOLLOW
 #define PES_FOLLOW 0.0
 #endif
+#ifdef CM_COHERENT
+#define COH globallycoherent
+#else
+#define COH
+#endif
+#ifdef CM_ALL_BARRIERS
+#define GroupMemoryBarrierWithGroupSync AllMemoryBarrierWithGroupSync
+#define DeviceMemoryBarrierWithGroupSync AllMemoryBarrierWithGroupSync
+#endif
 cbuffer Bones : register(b0) { float4 g_bones[192]; };
 cbuffer Obj   : register(b1) { float4 g_obj[18]; };
 cbuffer Params : register(b2)
@@ -169,7 +178,8 @@ cbuffer Params : register(b2)
     float  g_legMaxRoom;
     uint   g_legCount;
     uint   g_otherVertexCount;
-    uint3  g_pad5;
+    uint   g_mapped;
+    uint2  g_pad5;
 };
 struct ParticleRest { float4 posPin; float4 nrm; uint4 skin; };
 struct Capsule      { float4 a; float4 b; };
@@ -194,6 +204,8 @@ StructuredBuffer<uint>          g_p2r       : register(t17);
 struct LegV { float4 pos; float4 nrm; uint4 skin; };
 StructuredBuffer<LegV>          g_legV      : register(t19);
 StructuredBuffer<uint4>         g_legPair   : register(t20);
+StructuredBuffer<uint4>         g_partOut   : register(t23);
+StructuredBuffer<uint4>         g_rmap      : register(t22);
 struct Inst {
     uint stamp, substeps, flags, coupleOn;
     uint otherCaps, stateBase, palBase, cacheBase;
@@ -210,14 +222,14 @@ static float3 s_kick;
 static float3 s_grav;   // PES21 FX: gravedad en el espacio de la prenda (para el deslizamiento)
 static float3 s_omega;  // PES21 FX: velocidad angular de la prenda (rad/s, espacio de la prenda)
 static float3 s_center; // PES21 FX: origen de la prenda
-RWByteAddressBuffer             g_outPos    : register(u0);
-RWByteAddressBuffer             g_outNrm    : register(u1);
-RWStructuredBuffer<float4>      g_state     : register(u2);
-RWStructuredBuffer<float4>      g_pnrm      : register(u3);
-RWStructuredBuffer<float4>      g_legSkin   : register(u6);
-RWStructuredBuffer<float4>      g_coupleSkin : register(u7);
-RWStructuredBuffer<float4>      g_boneCache : register(u4);
-RWByteAddressBuffer             g_cache     : register(u5);
+COH RWByteAddressBuffer             g_outPos    : register(u0);
+COH RWByteAddressBuffer             g_outNrm    : register(u1);
+COH RWStructuredBuffer<float4>      g_state     : register(u2);
+COH RWStructuredBuffer<float4>      g_pnrm      : register(u3);
+COH RWStructuredBuffer<float4>      g_legSkin   : register(u6);
+COH RWStructuredBuffer<float4>      g_coupleSkin : register(u7);
+COH RWStructuredBuffer<float4>      g_boneCache : register(u4);
+COH RWByteAddressBuffer             g_cache     : register(u5);
 StructuredBuffer<float4>        g_pal       : register(t21);
 groupshared float3 gx[MAXP];
 groupshared uint   gMode;
@@ -258,11 +270,22 @@ float4 unpackWeights(uint w) { return float4(w & 255, (w >> 8) & 255, (w >> 16) 
 uint4  unpackIndices(uint i) { return uint4(i & 255, (i >> 8) & 255, (i >> 16) & 255, i >> 24); }
 float3x4 skinSlot(uint slot, uint wpk, uint ipk, float t)
 {
+#ifdef CM_FIX_SKINC
+    float3x4 M = identity34();
+    if (g_skinned) {
+        float4 w = unpackWeights(wpk);
+        uint4  i = unpackIndices(ipk);
+        M = boneSlot(slot, i.x, t) * w.x + boneSlot(slot, i.y, t) * w.y + boneSlot(slot, i.z, t) * w.z +
+            boneSlot(slot, i.w, t) * w.w;
+    }
+    return M;
+#else
     if (!g_skinned) return identity34();
     float4 w = unpackWeights(wpk);
     uint4  i = unpackIndices(ipk);
     return boneSlot(slot, i.x, t) * w.x + boneSlot(slot, i.y, t) * w.y + boneSlot(slot, i.z, t) * w.z +
            boneSlot(slot, i.w, t) * w.w;
+#endif
 }
 float3x4 boneC(uint slot, uint i)
 {
@@ -271,10 +294,20 @@ float3x4 boneC(uint slot, uint i)
 }
 float3x4 skinC(uint slot, uint wpk, uint ipk)
 {
+#ifdef CM_FIX_SKINC
+    float3x4 M = identity34();
+    if (g_skinned) {
+        float4 w = unpackWeights(wpk);
+        uint4  i = unpackIndices(ipk);
+        M = boneC(slot, i.x) * w.x + boneC(slot, i.y) * w.y + boneC(slot, i.z) * w.z + boneC(slot, i.w) * w.w;
+    }
+    return M;
+#else
     if (!g_skinned) return identity34();
     float4 w = unpackWeights(wpk);
     uint4  i = unpackIndices(ipk);
     return boneC(slot, i.x) * w.x + boneC(slot, i.y) * w.y + boneC(slot, i.z) * w.z + boneC(slot, i.w) * w.w;
+#endif
 }
 float3x4 skinBound(uint wpk, uint ipk)
 {
@@ -311,7 +344,7 @@ float pesFitOf(uint p)
     float sc = 1.0 / max(pesBodyScale(p), 1e-3);
     float r = max(PES_FIT_RANGE, 0.01);
     float f = (sc < 1.0) ? PES_FIT_THIN * 0.001 * saturate((1.0 - sc) / r) : -PES_FIT_FAT * 0.001 * saturate((sc - 1.0) / r);
-    if (g_legCount > 0) f *= 0.5;   // el short responde la mitad
+    if (g_legCount > 0) f *= 0.8;   // (21/10) el short responde casi igual al peso (antes la mitad); el muslo suma aparte (PES_LIMB_GAIN)
     return f;
 #else
     return 0.0;
@@ -389,7 +422,9 @@ void predictParticle(uint p, uint s, float h, float3 grav, float3 windBase, floa
                      inout float3 vel, float3 restPrev, out float3 rest1, out float3 rnrm1)
 {
     restAtC(p, rest1, rnrm1);
+#ifndef CM_TEST_STALE_REST
     g_pnrm[s_pnrmBase + (p)] = float4(rest1, 0);
+#endif
     float pin = pinOf(p);
     xPrev = gx[p];
     float3 vBody = (rest1 - restPrev) / h;
@@ -792,6 +827,68 @@ void storeParticle(uint p, float3 vel)
     g_state[s_stateBase + (2 * p)] = float4(gx[p], 0);
     g_state[s_stateBase + (2 * p + 1)] = float4(vel, 0);
 }
+#ifndef CM_OLD_STATE
+void loadM(uint p, uint mode)
+{
+    float3 xPrev, vel, restPrev;
+    loadParticle(p, mode, xPrev, vel, restPrev);
+    g_pnrm[s_pnrmBase + (p)] = float4(restPrev, 0);
+    if (mode & 2) {
+        g_state[s_stateBase + (2 * p)] = float4(xPrev, 0);
+        g_state[s_stateBase + (2 * p + 1)] = float4(vel, 0);
+    }
+}
+void predictM(uint p, uint s, float h, float3 grav, float3 windBase, float gust)
+{
+    float3 restPrev = g_pnrm[s_pnrmBase + (p)].xyz;
+    float3 vel = g_state[s_stateBase + (2 * p + 1)].xyz;
+    float3 xPrev, rest1, rnrm1;
+    predictParticle(p, s, h, grav, windBase, gust, xPrev, vel, restPrev, rest1, rnrm1);
+    g_state[s_stateBase + (2 * p)] = float4(xPrev, 0);
+    g_state[s_stateBase + (2 * p + 1)] = float4(pinOf(p) >= 0.999 ? vel : restPrev, 0);
+}
+void collideM(uint p, float t, float h, float hh)
+{
+    if (pinOf(p) >= 0.999) return;
+    float3 rest1, rnrm1;
+    restAtC(p, rest1, rnrm1);
+    float3 xPrev = g_state[s_stateBase + (2 * p)].xyz;
+    float3 restPrev = g_state[s_stateBase + (2 * p + 1)].xyz;
+    float3 vel = 0;
+    collideParticle(p, t, h, hh, xPrev, vel, restPrev, rest1, rnrm1);
+    g_state[s_stateBase + (2 * p + 1)] = float4(vel, 0);
+}
+#endif
+void storeOut(uint i, uint q, float3 outV, uint4 outNT)
+{
+    uint4 a = g_partOut[2 * q], b = g_partOut[2 * q + 1];
+    g_outPos.Store3(s_outBase0 + a.y + (i - a.x) * a.z, asuint(outV));
+    g_outNrm.Store4(s_outBase1 + a.w + (i - a.x) * b.x, outNT);
+}
+float restLength(uint4 cn)
+{
+    float L = asfloat(cn.z);
+    float ad = max(g_restAdapt, float((cn.w >> 8) & 255) / 255.0);
+    if (ad > 0)
+        L = lerp(L, distance(g_pnrm[s_pnrmBase + (cn.x)].xyz, g_pnrm[s_pnrmBase + (cn.y)].xyz), ad);
+    return L;
+}
+void solveConstraint(uint4 cn, float L, float hh)
+{
+    bool tuckedPins = (s_flags & 256) != 0;
+    float wa = (cn.w & (tuckedPins ? 8u : 2u)) ? 0.0 : 1.0;
+    float wb = (cn.w & (tuckedPins ? 16u : 4u)) ? 0.0 : 1.0;
+    float3 d = gx[cn.x] - gx[cn.y];
+    float len = length(d);
+    if (len < 1e-7) return;
+    float C = len - L;
+    float alpha = (cn.w & 1) == 0 ? (C < 0 ? g_compressCompliance : g_stretchCompliance) : g_bendCompliance * (g_legCount > 0 ? PES_SHORTS_BEND : 1.0);   // PES21 FX: short con pliegues mas blandos
+    float denom = wa + wb + alpha / hh;
+    if (denom < 1e-9) return;
+    float3 corr = (-C / denom) * (d / len);
+    gx[cn.x] += wa * corr;
+    gx[cn.y] -= wb * corr;
+}
 [numthreads(THREADS, 1, 1)]
 void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
 {
@@ -848,12 +945,20 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
     if (mode & 1) {
         fillBoneCache(gi, (mode & 4) ? 1.0 : 0.0);
         DeviceMemoryBarrierWithGroupSync();
+#ifndef CM_OLD_STATE
+        if (gi < P) loadM(gi, mode);
+        if (gi + THREADS < P) loadM(gi + THREADS, mode);
+#else
         float3 xPrev0 = 0, vel0 = 0, restPrev0 = 0, xPrev1 = 0, vel1 = 0, restPrev1 = 0;
         if (gi < P) loadParticle(gi, mode, xPrev0, vel0, restPrev0);
         if (gi + THREADS < P) loadParticle(gi + THREADS, mode, xPrev1, vel1, restPrev1);
+#ifdef CM_TEST_LOST_SECOND
+        restPrev1 = 0;
+#endif
+#endif
         GroupMemoryBarrierWithGroupSync();
         if ((mode & 2) && !(mode & 4) && s_substeps > 0) {
-            float h = g_h;
+            float h = me.kick.w > 0 ? me.kick.w : g_h;
             float3x3 W = (s_flags & 32) ? float3x3(1, 0, 0, 0, 1, 0, 0, 0, 1)
                                         : float3x3(s_W[0].xyz, s_W[1].xyz, s_W[2].xyz);
             float3 grav = mul(transpose(W), g_gravity.xyz);
@@ -873,7 +978,8 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
             float3 windBase = mul(transpose(W), g_wind.xyz);
             for (uint s = 0; s < s_substeps; ++s) {
                 float t = float(s + 1) / float(s_substeps);
-                float gust = 1.0 + g_wind.w * sin(g_time * 1.7 + s * 0.05) * sin(g_time * 0.63);
+                float tg = g_time + float(s) * h;
+                float gust = 1.0 + g_wind.w * sin(tg * 1.7) * sin(tg * 0.63);
                 fillBoneCache(gi, t);
                 DeviceMemoryBarrierWithGroupSync();
                 if (gi < g_capsuleCount && gi < MAXCAPS) {
@@ -884,9 +990,17 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                     gCapB[gi] = xform(B, c.b.xyz);
                     gCapR[gi] = c.a.w;
                 }
+#ifndef CM_OLD_STATE
+                if (gi < P && !(s_flags & (16 << 12))) predictM(gi, s, h, grav, windBase, gust);
+                if (gi + THREADS < P && !(s_flags & (16 << 12))) predictM(gi + THREADS, s, h, grav, windBase, gust);
+#else
                 float3 rest10 = 0, rnrm10 = 0, rest11 = 0, rnrm11 = 0;
+#ifdef CM_TEST_LOST_SECOND
+                restPrev1 = 0;
+#endif
                 if (gi < P && !(s_flags & (16 << 12))) predictParticle(gi, s, h, grav, windBase, gust, xPrev0, vel0, restPrev0, rest10, rnrm10);
                 if (gi + THREADS < P) predictParticle(gi + THREADS, s, h, grav, windBase, gust, xPrev1, vel1, restPrev1, rest11, rnrm11);
+#endif
                 // PES21 FX (18/10): capsulas ajustadas por hueso. Cada capsula toma como radio la distancia minima de la
                 // tela en reposo (menos la holgura) a su eje: brazo fino, muslo grueso, torso ancho, en vez de un radio global.
                 if (PES_CAP_FIT > 0.0 && g_capsuleCount > 0) {
@@ -895,8 +1009,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                     uint capNF = min(g_capsuleCount, MAXCAPS);
                     for (uint pp = gi; pp < P; pp += THREADS) {
                         if (!(g_rest[pp].skin.w & 1)) continue;
-                        float3 rr = (pp == gi) ? rest10 : rest11;
-                        float3 rn = (pp == gi) ? rnrm10 : rnrm11;
+                        float3 rr, rn; restAtC(pp, rr, rn);   // (21/10) reposo recalculado: vale con el estado nuevo del mod (predictM) y el viejo
                         float3 r0f = rr - rn * g_rest[pp].nrm.w;
                         if (dot(rr, rr) < 1e-8 || dot(rn, rn) < 1e-8) continue;   // reposo no calculado en este paso
                         for (uint ci = 0; ci < capNF; ++ci) {
@@ -927,7 +1040,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                     for (uint pa = gi; pa < P; pa += THREADS) {
                         if (!(g_rest[pa].skin.w & 1)) continue;
                         if (float((g_rest[pa].skin.w >> 8) & 255) / 255.0 > 0.2) continue;   // sin mangas
-                        float3 rr = (pa == gi) ? rest10 : rest11, rn = (pa == gi) ? rnrm10 : rnrm11;
+                        float3 rr, rn; restAtC(pa, rr, rn);
                         if (dot(rr, rr) < 1e-8 || dot(rn, rn) < 1e-8) continue;
                         float3 r0f = rr - rn * g_rest[pa].nrm.w;
                         InterlockedAdd(gTorsoSum[0], int(r0f.x * 10000.0)); InterlockedAdd(gTorsoSum[1], int(r0f.y * 10000.0));
@@ -946,7 +1059,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                         for (uint pb = gi; pb < P; pb += THREADS) {
                             if (!(g_rest[pb].skin.w & 1)) continue;
                             if (float((g_rest[pb].skin.w >> 8) & 255) / 255.0 > 0.2) continue;
-                            float3 rr = (pb == gi) ? rest10 : rest11, rn = (pb == gi) ? rnrm10 : rnrm11;
+                            float3 rr, rn; restAtC(pb, rr, rn);
                             if (dot(rr, rr) < 1e-8 || dot(rn, rn) < 1e-8) continue;
                             float3 r0f = rr - rn * g_rest[pb].nrm.w - s_tC;
                             float hh0 = dot(r0f, upT);
@@ -973,7 +1086,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                     if (gi < 2 * PES_ARM_BANDS) gArmR[gi / PES_ARM_BANDS][gi % PES_ARM_BANDS] = 0x7f7fffffu;
                     GroupMemoryBarrierWithGroupSync();
                     if (s_tOk) for (uint pa = gi; pa < P; pa += THREADS) {
-                        float3 rr = (pa == gi) ? rest10 : rest11, rn = (pa == gi) ? rnrm10 : rnrm11;
+                        float3 rr, rn; restAtC(pa, rr, rn);
                         if (dot(rr, rr) < 1e-8 || dot(rn, rn) < 1e-8) continue;
                         float3 r0f = rr - rn * g_rest[pa].nrm.w;
                         float sw = pesLimbW(pa, r0f);
@@ -993,7 +1106,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                         }
                     }
                     if (s_tOk) for (uint pb = gi; pb < P; pb += THREADS) {
-                        float3 rr = (pb == gi) ? rest10 : rest11, rn = (pb == gi) ? rnrm10 : rnrm11;
+                        float3 rr, rn; restAtC(pb, rr, rn);
                         if (dot(rr, rr) < 1e-8 || dot(rn, rn) < 1e-8) continue;
                         float3 r0f = rr - rn * g_rest[pb].nrm.w;
                         float sw = pesLimbW(pb, r0f);
@@ -1036,38 +1149,47 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                 }
                 AllMemoryBarrierWithGroupSync();
                 float hh = h * h;
-                for (uint c = 0; c < g_colorCount && !(s_flags & (4 << 12)); ++c) {
-                    uint a0 = g_colorOff[c], a1 = g_colorOff[c + 1];
-                    for (uint i = a0 + gi; i < a1; i += THREADS) {
-                        uint4 cn = g_cons[i];
-                        bool tuckedPins = (s_flags & 256) != 0;
-                        float wa = (cn.w & (tuckedPins ? 8u : 2u)) ? 0.0 : 1.0;
-                        float wb = (cn.w & (tuckedPins ? 16u : 4u)) ? 0.0 : 1.0;
-                        float3 d = gx[cn.x] - gx[cn.y];
-                        float len = length(d);
-                        if (len < 1e-7) continue;
-                        float L = asfloat(cn.z);
-                        float ad = max(g_restAdapt, float((cn.w >> 8) & 255) / 255.0);
-                        if (ad > 0)
-                            L = lerp(L, distance(g_pnrm[s_pnrmBase + (cn.x)].xyz, g_pnrm[s_pnrmBase + (cn.y)].xyz), ad);
-                        float C = len - L;
-                        float alpha = (cn.w & 1) == 0 ? (C < 0 ? g_compressCompliance : g_stretchCompliance) : g_bendCompliance * (g_legCount > 0 ? PES_SHORTS_BEND : 1.0);   // PES21 FX
-                        float denom = wa + wb + alpha / hh;
-                        if (denom < 1e-9) continue;
-                        float3 corr = (-C / denom) * (d / len);
-                        gx[cn.x] += wa * corr;
-                        gx[cn.y] -= wb * corr;
+                if (!(s_flags & (4 << 12))) {
+                    uint4 nCn = uint4(0, 0, 0, 0);
+                    float nL = 0;
+                    if (g_colorCount > 0 && g_colorOff[0] + gi < g_colorOff[1]) {
+                        nCn = g_cons[g_colorOff[0] + gi];
+                        nL = restLength(nCn);
                     }
-                    GroupMemoryBarrierWithGroupSync();
+                    for (uint c = 0; c < g_colorCount; ++c) {
+                        uint a0 = g_colorOff[c], a1 = g_colorOff[c + 1];
+                        uint4 cCn = nCn;
+                        float cL = nL;
+                        if (c + 1 < g_colorCount && g_colorOff[c + 1] + gi < g_colorOff[c + 2]) {
+                            nCn = g_cons[g_colorOff[c + 1] + gi];
+                            nL = restLength(nCn);
+                        }
+                        if (a0 + gi < a1) solveConstraint(cCn, cL, hh);
+                        for (uint i = a0 + gi + THREADS; i < a1; i += THREADS) {
+                            uint4 cn = g_cons[i];
+                            solveConstraint(cn, restLength(cn), hh);
+                        }
+                        GroupMemoryBarrierWithGroupSync();
+                    }
                 }
+#ifndef CM_OLD_STATE
+                if (gi < P && !(s_flags & (8 << 12))) collideM(gi, t, h, hh);
+                if (gi + THREADS < P && !(s_flags & (8 << 12))) collideM(gi + THREADS, t, h, hh);
+#else
                 if (gi < P && !(s_flags & (8 << 12))) collideParticle(gi, t, h, hh, xPrev0, vel0, restPrev0, rest10, rnrm10);
                 if (gi + THREADS < P) collideParticle(gi + THREADS, t, h, hh, xPrev1, vel1, restPrev1, rest11, rnrm11);
+#endif
                 GroupMemoryBarrierWithGroupSync();
             }
         }
         if (mode & 2) {
+#ifndef CM_OLD_STATE
+            if (gi < P) g_state[s_stateBase + (2 * gi)] = float4(gx[gi], 0);
+            if (gi + THREADS < P) g_state[s_stateBase + (2 * (gi + THREADS))] = float4(gx[gi + THREADS], 0);
+#else
             if (gi < P) storeParticle(gi, vel0);
             if (gi + THREADS < P) storeParticle(gi + THREADS, vel1);
+#endif
         }
         // PES21 FX: compresion por particula (antes de pisar g_pnrm, que todavia tiene las posiciones de reposo)
         float strainA = 0.0, strainB = 0.0;
@@ -1112,6 +1234,14 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
             fillBoneCache(gi, 1.0);
             DeviceMemoryBarrierWithGroupSync();
         }
+        if (g_mapped) {
+            for (uint q = gi; q < P; q += THREADS) {
+                float3 rp, rn;
+                restAtC(q, rp, rn);
+                gx[q] -= rp;
+            }
+            GroupMemoryBarrierWithGroupSync();
+        }
         uint pEnd = min(g_partStart + g_partCount, g_vertexCount);
         for (uint i = gi; i < g_vertexCount && !(s_flags & (2 << 12)); i += THREADS) {
             float3 v  = asfloat(g_bindPos.Load3(i * 12));
@@ -1128,6 +1258,29 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
             float3 tRest = mul(A, tB);
             float3 n = g_pnrm[s_pnrmBase + (p)].xyz;
             float strainO = PES_STRAIN_ENC ? saturate(g_pnrm[s_pnrmBase + (p)].w) : 0.0;   // PES21 FX: compresion (0..1)
+            if (g_mapped) {
+                uint4 rm = g_rmap[i];
+                float w0 = float(rm.w & 0xffff) / 65535.0, w1 = float(rm.w >> 16) / 65535.0, w2 = max(1.0 - w0 - w1, 0.0);
+                uint3 pp = min(rm.xyz, MAXP - 1);
+                x = mul(A, v) + tr + gx[pp.x] * w0 + gx[pp.y] * w1 + gx[pp.z] * w2;
+                float3 rp, r0, r1, r2;
+                restAtC(pp.x, rp, r0);
+                restAtC(pp.y, rp, r1);
+                restAtC(pp.z, rp, r2);
+                float3 n0 = g_pnrm[s_pnrmBase + pp.x].xyz, n1 = g_pnrm[s_pnrmBase + pp.y].xyz, n2 = g_pnrm[s_pnrmBase + pp.z].xyz;
+                float3 nc = (dot(n0, n0) > 1e-12 ? normalize(n0) : r0) * w0 + (dot(n1, n1) > 1e-12 ? normalize(n1) : r1) * w1 +
+                            (dot(n2, n2) > 1e-12 ? normalize(n2) : r2) * w2;
+                float3 nr = r0 * w0 + r1 * w1 + r2 * w2;
+                if (dot(nc, nc) > 1e-12 && dot(nr, nr) > 1e-12) {
+                    nc = normalize(nc);
+                    nr = normalize(nr);
+                    n = rotateBetween(nr, nc, nRest);
+                    tRest = rotateBetween(nr, nc, tRest);
+                } else {
+                    n = nRest;
+                }
+                nRest = n;
+            }
             n = dot(n, n) > 1e-12 ? normalize(n) : nRest;
             float3 t = rotateBetween(nRest, n, tRest);
             float det;
@@ -1146,8 +1299,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
             g_cache.Store4(s_cacheBase + i * 32, uint4(asuint(outV), 0));
             g_cache.Store4(s_cacheBase + i * 32 + 16, outNT);
             if (i >= g_partStart && i < pEnd) {
-                g_outPos.Store3(s_outBase0 + i * g_stride0, asuint(outV));
-                g_outNrm.Store4(s_outBase1 + i * g_stride1, outNT);
+                storeOut(i, min(g_rpart[i], MAXPARTS - 1), outV, outNT);
             }
         }
         return;
@@ -1163,7 +1315,6 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
             outV = asfloat(g_bindPos.Load3(i * 12));
             outNT = g_nrmTan.Load4(i * 16);
         }
-        g_outPos.Store3(s_outBase0 + i * g_stride0, asuint(outV));
-        g_outNrm.Store4(s_outBase1 + i * g_stride1, outNT);
+        storeOut(i, min(g_rpart[i], MAXPARTS - 1), outV, outNT);
     }
 }
