@@ -595,6 +595,13 @@ void main(
     float csK = max(CS.x, 0.0);
     float csLen = clamp(CS.y > 0 ? CS.y : 0.35, 0.05, 1.5);
     float csSoft = saturate(CS.z);
+    // (20/10) sin sombras fantasma: el trazado en pantalla tomaba como oclusor cualquier cosa que estuviera DELANTE del pixel
+    // (entre la camara y el) si el rayo pasaba por detras dentro del grosor aceptado (22 a 45 cm): en el pasto detras de un
+    // jugador y en la ropa (manos y brazos delante del short, pliegues) aparecia otra sombra con la silueta. Grosor mas real
+    // y, en la tela, solo el contacto de verdad (cuello, dobladillo, brazo pegado): rayo de 10 cm y grosor de 5 cm
+    bool csCloth = (matType == 0) && (abs(skinTag - 0.9607843) < 0.002);
+    float csThk = csCloth ? 0.05 : 0.10;
+    if (csCloth) csLen = min(csLen, 0.10);
     float dC = g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, uvC, 0).x;
     float zC = g_psScene.m_projectionParam.z / (dC - g_psScene.m_projectionParam.w);
     // solo donde hay sol que quitar: pixel de frente a la luz y fuera de la sombra plena del shadow map
@@ -621,7 +628,7 @@ void main(
         float dS2 = g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, uv, 0).x;
         float zS = g_psScene.m_projectionParam.z / (dS2 - g_psScene.m_projectionParam.w);
         float dz = (R.z - zS) * zSgn;                              // > 0: el rayo quedo detras de lo que ve la camara
-        float thick = 0.22 + 0.40 * t + 0.003 * RzA;   // 18/10 d: grosor aceptado del oclusor. Con 4 cm NUNCA habia impacto: una cabeza o un brazo miden 10-25 cm y el rayo pasa por detras de su cara visible (verificado con una simulacion numerica)               // grosor aceptado: crece con el largo del rayo
+        float thick = csThk + 0.25 * t + 0.0015 * RzA;   // (20/10) antes 0.22 + 0.40 t + 0.003 z: sombras fantasma de lo que estaba delante.   // 18/10 d: grosor aceptado del oclusor. Con 4 cm NUNCA habia impacto: una cabeza o un brazo miden 10-25 cm y el rayo pasa por detras de su cara visible (verificado con una simulacion numerica)               // grosor aceptado: crece con el largo del rayo
         if (dz > 0.003 + 0.0008 * RzA && dz < thick && (zC - zS) * zSgn > 0.03 + 0.002 * zA) {
           // oclusor cerca = sombra plena; lejos = penumbra (segun suavidad). Primer impacto = el mas cercano.
           occ = (1.0 - csSoft * f) * saturate(dz / (0.35 * thick));
