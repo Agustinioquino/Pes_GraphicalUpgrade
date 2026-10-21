@@ -381,9 +381,11 @@ void main(
   float4 P147 = IniParams.Load(int2(147,0));
   float pesEdge = 0.0;
   {
-    uint gw, gh; g_tex_diffuse.GetDimensions(gw, gh);
-    bool gen = enhance && P147.x > 0.5 && gw <= 1024;                     // las genericas son de 1024 (las reales, 2048)
-    float2 gr = (v2.xy - float2(0.1479, 0.1518)) / 0.7044;               // uv del montaje
+    // (20/10 b) en este shader NO: las genericas en partido usan una sola malla para toda la cabeza (textura de 1024 con el
+    // montaje ya pegado en el plano de la cabeza), sin pieza aparte para el cuello. Fundir el borde aca le sacaba la mascara de
+    // pelo de la quinta textura al cuero cabelludo (el pelo rapado se veia gris y brilloso). Solo aplica a ce188 (dos UV).
+    bool gen = false;
+    float2 gr = float2(0.5, 0.5);
     float dE = min(min(gr.x, 1.0 - gr.x), min(gr.y, 1.0 - gr.y)) * 0.7044;   // distancia al borde en el plano de la cabeza
     pesEdge = gen ? 1.0 - smoothstep(0.012, 0.07, dE) : 0.0;
   }
