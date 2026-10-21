@@ -442,8 +442,8 @@ void main(
     if (SH.w > 0.5 && pesShScale < 1.01) { float sd = saturate(SH.x) * 1.0; float lo = 0.3 * sd;
       r0.x = lerp(r0.x, smoothstep(lo, 1.0 - lo, r0.x), sd); } }   // solo la penumbra (0 y 1 no cambian)
   // === PES21 sombra de nubes (18/10): la misma capa de nubes del cielo tapa el sol en la cancha (z85 = fuerza) ===
-  { PESCloudParams CPs = PESCloudLoad(g_psSystem.m_timeParam.z); float cK = saturate(IniParams.Load(int2(85,0)).z);
-    if (CPs.on > 0.5 && cK > 0.001) {
+  { PESCloudParams CPs = PESCloudLoad(g_psSystem.m_timeParam.z); float cK = saturate(CPs.shK);   // (21/10) z85 con nubes volumetricas, z152 con solo sombras
+    if (CPs.sh > 0.5 && cK > 0.001) {
       float dC0 = g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, uvG, 0).x;
       float zC0 = g_psScene.m_projectionParam.z / (dC0 - g_psScene.m_projectionParam.w);
       float3 PvC = float3((v0.xy / v0.ww - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zC0, zC0);

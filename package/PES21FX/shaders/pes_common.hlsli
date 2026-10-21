@@ -183,7 +183,7 @@ float PESFbm3(float3 p, int oct)
   [loop] for (int i = 0; i < oct; i++) { s += a * PESNoise3(p); n += a; p = p * 2.03 + 11.7; a *= 0.5; }
   return s / max(n, 1e-4);
 }
-struct PESCloudParams { float on; float cover; float dens; float hBase; float thick; float3 wind; float scale; float shape; float t; };
+struct PESCloudParams { float on; float cover; float dens; float hBase; float thick; float3 wind; float scale; float shape; float t; float sh; float shK; };
 PESCloudParams PESCloudLoad(float tGame)
 {
   PESCloudParams c;
@@ -196,6 +196,12 @@ PESCloudParams PESCloudLoad(float tGame)
   c.scale = B.w > 100.0 ? B.w : 2500.0;
   c.shape = saturate(D.x);
   c.t = D.w > 0.0 ? D.w : tGame;
+  // (21/10) sombras de nubes sin dibujar las nubes en el cielo (152: x on | y cobertura | z fuerza | w tamano en m): para el
+  // cielo pintado del estadio o el cielo fisico. Con las nubes volumetricas prendidas manda su capa (y su fuerza z85).
+  float4 S2 = IniParams.Load(int2(152,0)), Q85c = IniParams.Load(int2(85,0));
+  c.sh = (A.x > 0.5 || S2.x > 0.5) ? 1.0 : 0.0;
+  c.shK = A.x > 0.5 ? Q85c.z : S2.z;
+  if (A.x < 0.5 && S2.x > 0.5) { c.cover = saturate(S2.y); c.scale = S2.w > 100.0 ? S2.w : 2500.0; c.shape = 0.0; }
   return c;
 }
 // densidad en un punto del mundo (m): 0 = aire, ~1 = nube densa. hN = altura relativa dentro de la capa (0 base .. 1 tope)
@@ -217,7 +223,7 @@ float PESCloudDensity(float3 pW, PESCloudParams c, int oct)
 // sombra de nubes sobre un punto del mundo: transmitancia 0..1 a lo largo de la direccion del sol (2 muestras en la capa)
 float PESCloudShadow(float3 pW, float3 sunW, PESCloudParams c)
 {
-  if (c.on < 0.5 || sunW.y < 0.03) return 1.0;
+  if (c.sh < 0.5 || sunW.y < 0.03) return 1.0;
   float tb = (c.hBase - pW.y) / sunW.y;
   float3 p0 = pW + sunW * (tb + c.thick * 0.25 / sunW.y);
   float3 p1 = pW + sunW * (tb + c.thick * 0.60 / sunW.y);

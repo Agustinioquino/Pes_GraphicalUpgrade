@@ -62,6 +62,8 @@ Texture2D<float4> inFogVolume : register(t12);
 Texture2D<float4> inOcclusion : register(t13);
 Texture2D<float4> inShadow : register(t14);
 Texture2D<float4> PESGtao : register(t27);   // PES21 (20/10): GTAO de la DLL (1 = sin oclusion); se mezcla con el SSAO del juego (y132)
+Texture2DArray<float4> PESSkyEnv : register(t28);   // PES21 (21/10): panorama del cielo fisico para los reflejos (DLL, pes_skyenv): capa 0 nitida, 1 desenfocada
+Texture2D<float4> PESSsgi : register(t26);   // PES21 (21/10): SSGI temporal de la DLL (media resolucion: rgb luz indirecta, a profundidad)
 
 
 // 3Dmigoto declarations
@@ -283,6 +285,24 @@ void main(
     float4 P10g = IniParams.Load(int2(10,0));
     float giK = P9g.w < 0 ? 0.0 : (P9g.w > 0 ? P9g.w : 1.0);
     float zg = PESLinZ(uvC);
+    float4 SGt = IniParams.Load(int2(155,0));   // (21/10) x = 1: la DLL ya calculo el SSGI acumulado en el tiempo (t26)
+    if (cmpOn && giK > 0 && zg > 0.1 && zg < 90.0 && SGt.x > 0.5) {
+      // subir de media resolucion respetando bordes: los 4 texeles vecinos, pesados por cercania y por profundidad parecida
+      float Wg, Hg; PESSsgi.GetDimensions(Wg, Hg);
+      float2 tcg = uvC * float2(Wg, Hg) - 0.5; float2 fg = frac(tcg); float2 b0g = (floor(tcg) + 0.5) / float2(Wg, Hg);
+      float3 accU = 0; float wU = 0; float3 nearU = 0; float bestU = 1e9;
+      [unroll] for (int gy = 0; gy < 2; gy++) [unroll] for (int gx = 0; gx < 2; gx++) {
+        float4 sg = PESSsgi.SampleLevel(g_samplerPoint_Clamp_s, b0g + float2(gx, gy) / float2(Wg, Hg), 0);
+        float dzg = abs(sg.w - zg);
+        float wb = (gx ? fg.x : 1.0 - fg.x) * (gy ? fg.y : 1.0 - fg.y) * exp(-dzg / (0.03 * zg + 0.02));
+        accU += sg.rgb * wb; wU += wb;
+        if (dzg < bestU) { bestU = dzg; nearU = sg.rgb; }
+      }
+      float3 ind = (wU > 1e-4 ? accU / wU : nearU) * giK * saturate((90.0 - zg) / 30.0);
+      if (skinC) ind *= 1.0 - 0.5 * saturate(IniParams.Load(int2(124,0)).x);
+      r2.xyz += ind * PESAmbGain();
+      giDbg = ind;
+    } else
     if (cmpOn && giK > 0 && zg > 0.1 && zg < 90.0) {
       float2 sC = uvC * float2(2, -2) + float2(-1, 1);
       float3 Pc = float3((sC - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zg, zg);
@@ -639,6 +659,58 @@ void main(
   } else {
     r1.xyz = r7.xyz * r2.xyz + r1.xyz;
     r0.xyw = r1.xyz * occRGB;
+  }
+  { // === PES21 reflejos del cielo (21/10, 151) ===
+    // Brillo ambiental: cada superficie refleja el cielo fisico (panorama que arma la DLL con el mismo modelo que el cielo,
+    // capa nitida para lo liso y desenfocada para lo aspero) o, hacia abajo, el pasto iluminado. Antes no habia reflejo de
+    // entorno salvo los "matcap" fijos de algunos materiales: botines, pelota, piel transpirada y carteles no veian el cielo.
+    // Fresnel y rugosidad con la BRDF de entorno (Karis); en los huecos se apaga con oclusion especular (Lagarde) y con la
+    // visibilidad del cielo (oclusion ambiental). 151: x on | y fuerza | z oclusion especular | w pasto en los reflejos
+    float4 RS = IniParams.Load(int2(151,0)), SKr = IniParams.Load(int2(150,0));
+    if (cmpOn && RS.x > 0.5 && geoOk && SKr.y > 0.01 && tyC != 1 && tyC != 3 && gmC.y > 0.004 && zsk < 300.0) {
+      float3 Rv = reflect(Vsk, Nsk);
+      float3 vXr = float3(g_psScene.m_view._m00, g_psScene.m_view._m01, g_psScene.m_view._m02);
+      float3 vYr = float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12);
+      float3 vZr = float3(g_psScene.m_view._m20, g_psScene.m_view._m21, g_psScene.m_view._m22);
+      float3 Rw = normalize(float3(dot(Rv, vXr), dot(Rv, vYr), dot(Rv, vZr)));
+      float roughE = saturate(gmC.x);
+      float uE = atan2(Rw.z, Rw.x) * 0.15915494 + 0.5;
+      float vE = clamp(sqrt(saturate(asin(saturate(Rw.y)) / 1.5707963)), 0.5 / 16.0, 1.0 - 0.5 / 16.0);
+      float3 eS = PESSkyEnv.SampleLevel(g_samplerLinear_Wrap_s, float3(uE, vE, 0), 0).xyz;
+      float3 eB = PESSkyEnv.SampleLevel(g_samplerLinear_Wrap_s, float3(uE, vE, 1), 0).xyz;
+      float3 env = lerp(eS, eB, saturate(roughE * 1.7));
+      // hacia abajo: el pasto al sol (albedo tipico x (sol + cielo)); lo aspero ya lo trae la capa desenfocada
+      float4 SW = IniParams.Load(int2(111,0));
+      float3 gnd = float3(0.10, 0.17, 0.05) * (saturate(SW.y) + SKr.w) * (RS.w > 0 ? saturate(RS.w) : 1.0);
+      env = lerp(env, lerp(gnd, eB, saturate(roughE * 1.2)), saturate(-Rw.y * 10.0));
+      // BRDF de entorno (aprox. analitica de Karis): especular del G-buffer 0.5 = F0 0.04
+      float NdVe = saturate(dot(Nsk, -Vsk));
+      float F0 = skinC ? 0.028 : 0.08 * saturate(gmC.y);
+      float4 rr = roughE * float4(-1.0, -0.0275, -0.572, 0.022) + float4(1.0, 0.0425, 1.04, -0.04);
+      float a004 = min(rr.x * rr.x, exp2(-9.28 * NdVe)) * rr.x + rr.y;
+      float2 AB = float2(-1.04, 1.04) * a004 + rr.zw;
+      float specE = (F0 * AB.x + AB.y) * saturate(gmC.y * 10.0);
+      // oclusion especular: Lagarde (cuenca segun rugosidad y angulo) y visibilidad del cielo
+      float aoE = saturate(aoRaw);
+      float soL = saturate(pow(max(NdVe + aoE, 1e-4), exp2(-16.0 * roughE - 1.0)) - 1.0 + aoE);
+      // oclusion de horizonte (Jimenez 2016): con el mapa de normales el reflejo puede apuntar hacia adentro de la superficie
+      // real (pliegues de la tela, poros): se apaga contra la normal geometrica, que sale de la profundidad
+      float hzK = 1.0;
+      { float2 pxh = g_psSystem.m_renderBuffer.zw;
+        float zX = PESLinZ(uvC + float2(pxh.x, 0)), zY = PESLinZ(uvC + float2(0, pxh.y));
+        float2 s0 = uvC * float2(2, -2) + float2(-1, 1), sX = (uvC + float2(pxh.x, 0)) * float2(2, -2) + float2(-1, 1), sY = (uvC + float2(0, pxh.y)) * float2(2, -2) + float2(-1, 1);
+        float3 P0 = float3((s0 - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zsk, zsk);
+        float3 PX = float3((sX - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zX, zX);
+        float3 PY = float3((sY - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zY, zY);
+        float3 Ng = cross(PX - P0, PY - P0);
+        if (abs(zX - zsk) < 0.05 * zsk && abs(zY - zsk) < 0.05 * zsk && dot(Ng, Ng) > 1e-12) {
+          Ng = normalize(Ng); if (dot(Ng, -Vsk) < 0) Ng = -Ng;
+          hzK = saturate(1.0 + 1.1 * dot(Rv, Ng)); hzK *= hzK;
+        } }
+      float soK = lerp(1.0, soL * lerp(1.0, aoE, 0.5) * hzK, RS.z > 0 ? saturate(RS.z) : 1.0);
+      float sunLe = max(dot(max(pLc_color.xyz, 0.0), float3(0.2126, 0.7152, 0.0722)), 0.0) * g_psScene.m_exposure.z;
+      r0.xyw += env * sunLe * specE * soK * max(RS.y, 0.0);
+    }
   }
   { // PES21 carteles LED (20/10, 141): los shaders de los carteles marcan el pixel (rugosidad 253/255, especular 1/255, metal 0).
     // Un LED emite: se le suma luz propia en unidades fisicas (luminancia fija x la exposicion del motor), asi se ve encendido

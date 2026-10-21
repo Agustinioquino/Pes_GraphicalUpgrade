@@ -515,6 +515,51 @@ static void SkyPhys(V3 d, const V3& s, float turb, int N, float out[3]) {
     float sg[3]; SunGround(s.y, turb, sg); float sgL = 0.2126f * sg[0] + 0.7152f * sg[1] + 0.0722f * sg[2];
     for (int k = 0; k < 3; k++) out[k] = 3.14159265f * L[k] * kSunTOA[k] / (std::max)(sgL, 1e-6f);
 }
+// (21/10) reflejos del cielo: panorama del hemisferio superior (32 x 16, elevacion con mapeo v^2 para tener detalle cerca del
+// horizonte) en dos capas: 0 = nitida (superficies lisas), 1 = desenfocada con un lobulo coseno^6 que incluye el pasto de abajo
+// (superficies asperas). Valores relativos al sol (como PESSkyPhys); el shader multiplica por la luminancia del sol del juego.
+// Se publica como recurso con nombre "pes_skyenv" (regla de la composicion: srv = 28 pes_skyenv).
+static ID3D11Texture2D* s_envTex = nullptr; static ID3D11ShaderResourceView* s_envSRV = nullptr;
+static void BuildSkyEnv(const V3& s, float turb, float skyRatio) {
+    if (!g_dev.dev || !g_dev.imm) return;
+    const int W = 32, H = 16;
+    if (!s_envTex) {
+        D3D11_TEXTURE2D_DESC td = {}; td.Width = W; td.Height = H; td.MipLevels = 1; td.ArraySize = 2; td.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        if (FAILED(g_dev.dev->CreateTexture2D(&td, nullptr, &s_envTex))) { s_envTex = nullptr; return; }
+        if (FAILED(g_dev.dev->CreateShaderResourceView(s_envTex, nullptr, &s_envSRV))) { s_envSRV = nullptr; return; }
+        NamedSetSRV("pes_skyenv", s_envSRV);
+        Log("cielo fisico: panorama de reflejos %dx%d x2 (pes_skyenv)", W, H);
+    }
+    static float sharp[H][W][4], blur[H][W][4];
+    static V3 dir[H][W]; static float dOm[H];
+    for (int j = 0; j < H; j++) {
+        float v = (j + 0.5f) / H, el = v * v * 1.5707963f, ce = cosf(el), se = sinf(el);
+        dOm[j] = ce * (3.14159265f * v / H) * (6.2831853f / W);
+        for (int i = 0; i < W; i++) {
+            float az = (i + 0.5f) / W * 6.2831853f - 3.14159265f;
+            dir[j][i] = V(ce * cosf(az), se, ce * sinf(az));
+            float L[3]; SkyPhys(dir[j][i], s, turb, 12, L);
+            for (int k = 0; k < 3; k++) sharp[j][i][k] = L[k]; sharp[j][i][3] = 1.0f;
+        }
+    }
+    const float turf[3] = { 0.10f, 0.17f, 0.05f };
+    float gK = (std::max)(s.y, 0.0f) + skyRatio, G[3];
+    for (int k = 0; k < 3; k++) G[k] = turf[k] * gK;
+    for (int j = 0; j < H; j++) for (int i = 0; i < W; i++) {
+        const V3& d = dir[j][i]; float acc[3] = {}, wsum = 0, wg = 0;
+        for (int jj = 0; jj < H; jj++) for (int ii = 0; ii < W; ii++) {
+            const V3& q = dir[jj][ii];
+            float c = Dot(d, q); if (c > 0) { float c2 = c * c, w = c2 * c2 * c2 * dOm[jj]; for (int k = 0; k < 3; k++) acc[k] += sharp[jj][ii][k] * w; wsum += w; }
+            float cg = d.x * q.x - d.y * q.y + d.z * q.z;   // el mismo punto espejado bajo el horizonte = pasto
+            if (cg > 0) { float c2 = cg * cg; wg += c2 * c2 * c2 * dOm[jj]; }
+        }
+        float tot = (std::max)(wsum + wg, 1e-6f);
+        for (int k = 0; k < 3; k++) blur[j][i][k] = (acc[k] + G[k] * wg) / tot; blur[j][i][3] = 1.0f;
+    }
+    g_dev.imm->UpdateSubresource(s_envTex, 0, nullptr, sharp, W * 16, W * H * 16);
+    g_dev.imm->UpdateSubresource(s_envTex, 1, nullptr, blur, W * 16, W * H * 16);
+}
 // p150: x y z = color del cielo relativo al sol (luminancia 1), w = cielo horizontal / sol normal. 0 = sin dato
 static void UpdatePhysSky(float (*p)[4]) {
     static float last[5] = { -9, -9, -9, -9, -9 }; static float res[4] = {};
@@ -545,6 +590,7 @@ static void UpdatePhysSky(float (*p)[4]) {
         float rl = 0.2126f * rel[0] + 0.7152f * rel[1] + 0.0722f * rel[2];
         for (int k = 0; k < 3; k++) res[k] = rel[k] / (std::max)(rl, 1e-6f);
         res[3] = skyL / 3.14159265f;   // iluminancia del cielo / del sol
+        BuildSkyEnv(s, turb, res[3]);
     }
     for (int k = 0; k < 4; k++) p[150][k] = res[k];
 }

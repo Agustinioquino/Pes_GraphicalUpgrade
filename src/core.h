@@ -255,6 +255,7 @@ bool AsyncShot(ID3D11Texture2D* frame, const std::wstring& path); void AsyncShot
 // (20/10) medidor de luz y luz ambiente calibrada (lightmeter.cpp): 125 = salida (x ganancia ambiente), 126 = controles
 extern std::atomic<bool> g_meterHook;
 ID3D11ShaderResourceView* GTAOBeforeComposition(ID3D11DeviceContext* c, int frame); void GTAOReloadShaders(); extern std::atomic<int> g_gtaoDraws;   // (20/10) GTAO (gtao.cpp) -> t27
+ID3D11ShaderResourceView* SSGIBeforeComposition(ID3D11DeviceContext* c, int frame); void SSGIReloadShaders(); void SSGIPresent(int presentNo);   // (21/10) SSGI temporal (ssgi.cpp) -> t26
 void LightMeterAfterComposition(ID3D11DeviceContext* c); void LightMeterPresent(); void LightMeterReloadShaders(); std::string LightMeterSummary();   // posicion de la camara (m_eyepos del SceneCB, config.cpp, 2 cuadros de atraso)
 void AutoCapturePresent(ID3D11Texture2D* frame);   // hooks.cpp
 ID3D11ShaderResourceView* SSSSBeforeComposition(ID3D11DeviceContext* c); void SSSSReloadShaders(); extern std::atomic<int> g_ssssDraws;   // ssss.cpp
