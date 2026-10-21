@@ -39,8 +39,22 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   float z0 = LinZ(uv);
   if (z0 < 0.05 || z0 > 300.0) return 1.0;
   float3 Pc = PosV(uv, z0);
-  float3 N = DecN(uv);
   float3 V = -normalize(Pc);
+  // (21/10 c) normal GEOMETRICA reconstruida de la profundidad (32 bits float: limpia), no la del G-buffer: la del G-buffer
+  // trae los mapas de normales (poros, arrugas, trama y estampados de la tela) y el GTAO, que compara esa normal con la
+  // superficie real de la profundidad, sombreaba esos dibujos (curvas oscuras en el cuello, la oreja y la camiseta).
+  // De cada lado se toma el vecino mas parecido en profundidad (no cruza bordes). Si no hay vecinos validos, la del G-buffer.
+  float3 N = DecN(uv);
+  { float2 pxn = m_renderBuffer.zw;
+    float zL = LinZ(uv - float2(pxn.x, 0)), zR = LinZ(uv + float2(pxn.x, 0)), zU = LinZ(uv - float2(0, pxn.y)), zD = LinZ(uv + float2(0, pxn.y));
+    float3 dx = abs(zR - z0) < abs(z0 - zL) ? PosV(uv + float2(pxn.x, 0), zR) - Pc : Pc - PosV(uv - float2(pxn.x, 0), zL);
+    float3 dy = abs(zD - z0) < abs(z0 - zU) ? PosV(uv + float2(0, pxn.y), zD) - Pc : Pc - PosV(uv - float2(0, pxn.y), zU);
+    float3 Ng = cross(dx, dy);
+    float tolN = 0.05 * z0;
+    if (dot(Ng, Ng) > 1e-14 && min(abs(zR - z0), abs(z0 - zL)) < tolN && min(abs(zD - z0), abs(z0 - zU)) < tolN) {
+      Ng = normalize(Ng); if (dot(Ng, V) < 0) Ng = -Ng;
+      N = Ng;
+    } }
   // radio en pantalla: metros -> pixeles a esta profundidad
   float radiusM = P.z > 0.02 ? P.z : 0.6;
   float pxm = 1.0 / max(2.0 * abs(m_projectionParam.x) * z0 * m_renderBuffer.z, 1e-5);   // pixeles por metro
