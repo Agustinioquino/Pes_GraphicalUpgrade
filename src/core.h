@@ -216,6 +216,7 @@ extern std::atomic<int> g_layerSkips;   // true si hay capas definidas para ese 
 ID3D11ShaderResourceView* FileTextureAny(const std::string& rel);   // hooks.cpp: "file:..." dds o png (cache)
 void EnsureComInit();
 bool NamedCBRead(const std::string& name, std::vector<float>& out);   // hooks.cpp (Present)
+int NamedAge(const std::string& name);                                // hooks.cpp: cuadros desde la ultima copia (-1 = nunca)
 const Rule* RuleForHash(uint64_t h);
 extern std::atomic<int> g_drawOrder; extern std::atomic<int> g_aliasDraws;
 std::string NamedOrigin(ID3D11ShaderResourceView* v);     // hooks.cpp: "archivo: textures\x.dds" o recurso con nombre

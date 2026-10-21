@@ -254,6 +254,12 @@ bool NamedCBRead(const std::string& name, std::vector<float>& out) {
     src->Release();
     return ok;
 }
+// (21/10) cuadros desde la ultima copia de un cbuffer con nombre (-1 = nunca se copio)
+int NamedAge(const std::string& name) {
+    std::lock_guard<std::mutex> lk(s_namedMutex);
+    auto it = s_named.find(name); if (it == s_named.end() || !it->second.buf || it->second.copied < 0) return -1;
+    return s_presentNo.load() - it->second.copied;
+}
 const Rule* RuleForHash(uint64_t h) { auto it = g_cfg.rules.find(h); return it == g_cfg.rules.end() ? nullptr : &it->second; }
 std::atomic<int> g_drawOrder{0};
 std::atomic<int> g_lightAltFrames{0};   // (20/10) cuadros en que el sol llego por una variante no reemplazada de la luz

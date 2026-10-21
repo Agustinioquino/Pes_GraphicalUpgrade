@@ -633,6 +633,17 @@ void UpdateTimeParams() {
               logT = t; logR = t; for (int k = 0; k < 4; k++) logG[k] = g[k];
           }
       }
+      // (21/10) cielo del juego (domo 9adf9d46, regla copy_cb = 4 SkyMatCB): si se dibujo hace poco, el sol y las nubes
+      // volumetricas van dentro de el (w159) y el tonemap no los repite
+      { int age = NamedAge("SkyMatCB"); p[159][3] = (age >= 0 && age <= 30) ? 1.0f : 0.0f;
+        static double skyLogT = 0.0;
+        if (age >= 0 && age <= 30 && t - skyLogT >= 30.0) { skyLogT = t; std::vector<float> K;
+          if (NamedCBRead("SkyMatCB", K) && K.size() >= 16) {
+              float ax = K[12], ay = K[13], az = K[14], bx = p[111][0], by = p[111][1], bz = p[111][2];
+              float na = sqrtf(ax * ax + ay * ay + az * az), nb = sqrtf(bx * bx + by * by + bz * bz);
+              float ang = (na > 1e-4f && nb > 1e-4f) ? acosf(std::clamp((ax * bx + ay * by + az * bz) / (na * nb), -1.0f, 1.0f)) * 57.2958f : -1.0f;
+              Log("cielo: sol del archivo del cielo (%.3f, %.3f, %.3f) | sol de la luz (%.3f, %.3f, %.3f) | diferencia %.1f grados", ax, ay, az, bx, by, bz, ang);
+          } } }
       cloudT += adv; if (cloudT > 100000.0) cloudT -= 100000.0;
       p[157][0] = (float)cloudT; p[157][1] = 1.0f; p[157][2] = (good > 120) ? rate : 1.0f; p[157][3] = (good > 120) ? 1.0f : 0.0f; }
     // 19/10: pupila reactiva: brillo de la escena por la luz del sol/focos (m_lightColor0 de cPSLight), adaptado en el tiempo
