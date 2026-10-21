@@ -139,12 +139,12 @@ void main(
     // Ahora: compresion suave de luces (luminoso sin quemar), zenit azul, horizonte claro con bruma.
     // x28 brillo (0.8; 1 = sin bajar), y28 azul del zenit (0..1), z28 contraste de nubes, w28 bruma del horizonte
     float4 SK = IniParams.Load(int2(28,0));
-    // === PES21 cielo fisico (21/10): el cielo despejado sale de un modelo de atmosfera (PESSkyPhys, pes_common.hlsli) con
-    // el sol real de este cuadro: azul profundo en el cenit, horizonte claro, mas blanco alrededor del sol, y al bajar el
-    // sol el horizonte se calienta y el cenit se pone mas azul. El brillo queda atado al sol del juego (misma convencion que
-    // la luz de la cancha). Las nubes pintadas del cielo del estadio se conservan: lo que no es azul se deja, escalado para
-    // que mantenga su relacion con el cielo (grilla fija de puntos de cielo despejado: brillo del juego contra el del modelo).
-    // Con el cielo del estadio cubierto (casi sin azul) no se toca. 149: x on | y brillo | z cuanto | w conservar nubes
+    // === PES21 cielo fisico (21/10 b): el COLOR del cielo despejado sale de un modelo de atmosfera (PESSkyPhys,
+    // pes_common.hlsli) con el sol real: azul profundo arriba, horizonte mas claro, al atardecer horizonte tibio y cenit mas
+    // azul. El BRILLO sigue siendo el del cielo del estadio (el modelo solo lo modula un poco, con un gradiente fijo en el
+    // mundo): antes el brillo absoluto del modelo salia mucho mas oscuro que el del estadio y, para emparejar las nubes
+    // pintadas, se usaba una grilla de puntos de pantalla que cambiaba al mover la camara (el cielo "se movia" y quedaba
+    // azul marino con nubes grises). Las nubes pintadas (lo que no es azul) no se tocan. 149: x on | y brillo | z cuanto
     float physW = 0.0;
     if (physOn && skyRaw > 0.01 && IniParams.Load(int2(114,0)).w > 0.5 && dot(pL_dir.xyz, pL_dir.xyz) > 1e-6 && abs(pS_projParam.x) > 1e-6 && abs(pS_projParam.y) > 1e-6) {
       const float3 LWp = float3(0.2126, 0.7152, 0.0722);
@@ -154,41 +154,27 @@ void main(
       float3 vZp = float3(pS_mat[2]._m20, pS_mat[2]._m21, pS_mat[2]._m22);
       float3 Lnp = normalize(pL_dir.xyz);
       float3 sunWp = normalize(float3(dot(Lnp, vXp), dot(Lnp, vYp), dot(Lnp, vZp)));
-      float kEl = smoothstep(0.02, 0.10, sunWp.y);                        // el modelo es de dia: se apaga con el sol en el horizonte
+      float kEl = smoothstep(0.02, 0.10, sunWp.y);
       if (kEl > 0.001) {
         float4 ATp = IniParams.Load(int2(121,0));
         float turbP = ATp.y > 0.5 ? ATp.y : 2.5;
-        float Eimg = max(dot(max(pL_color.xyz, 0.0), LWp), 0.0) * pS_exposure.z * expoK * (PH.y > 0 ? PH.y : 1.0);
         float2 ndcP = float2(uvS.x * 2.0 - 1.0, (Q86p.y > 0.5 ? 1.0 : -1.0) * (uvS.y * 2.0 - 1.0));
         float3 dvP = normalize(float3((ndcP - pS_centerOff.xy) * pS_projParam.xy, Q86p.z > 0.5 ? -1.0 : 1.0));
         float3 dWp = normalize(float3(dot(dvP, vXp), dot(dvP, vYp), dot(dvP, vZp)));
-        float3 phys = PESSkyPhys(dWp, sunWp, turbP, 12) * Eimg;
-        // cuanto de este pixel es nube pintada (lo que no es azul)
+        float3 phys = PESSkyPhys(dWp, sunWp, turbP, 12);
+        float lP = max(dot(phys, LWp), 1e-6);
+        // referencia fija en el mundo: 35 grados de altura, del lado opuesto al sol (el cielo "medio")
+        float2 sh = normalize(sunWp.xz + float2(1e-4, 0.0));
+        float3 dRef = normalize(float3(-sh.x * 0.819, 0.574, -sh.y * 0.819));
+        float lRef = max(dot(PESSkyPhys(dRef, sunWp, turbP, 8), LWp), 1e-6);
+        // modulacion del brillo acotada: el horizonte un poco mas claro y la zona del sol mas luminosa, sin quemar
+        float gK = clamp(pow(lP / lRef, 0.5), 0.7, 1.8) * (PH.y > 0 ? PH.y : 1.0);
         float3 gIn = r0.xyz; float lumG = dot(gIn, LWp);
-        float clr = smoothstep(0.35, 0.85, saturate((gIn.b - gIn.r) / max(lumG, 1e-4) * 3.0));
-        float cK = saturate(PH.w) * (1.0 - clr);
-        // grilla fija (igual para todos los pixeles): puntos de cielo, cuantos son azules, y brillo juego / modelo en esos
-        float nSky = 0.0, nClr = 0.0, gSum = 0.0, pSum = 0.0;
-        [loop] for (int gi = 0; gi < 12; gi++) {
-          float2 ug = float2(0.0833 * (gi % 6) + 0.0417, gi < 6 ? 0.07 : 0.24);
-          if (PESDepth.SampleLevel(g_samplerPoint_Wrap_s, ug, 0).x > 1e-6) continue;
-          nSky += 1.0;
-          float3 cg = inImage.SampleLevel(g_samplerPoint_Wrap_s, ug, 0).xyz * expoK;
-          float lg = dot(cg, LWp);
-          if (saturate((cg.b - cg.r) / max(lg, 1e-4) * 3.0) < 0.6) continue;
-          nClr += 1.0; gSum += lg;
-          if (cK > 0.02) {
-            float2 ng = float2(ug.x * 2.0 - 1.0, (Q86p.y > 0.5 ? 1.0 : -1.0) * (ug.y * 2.0 - 1.0));
-            float3 dvg = normalize(float3((ng - pS_centerOff.xy) * pS_projParam.xy, Q86p.z > 0.5 ? -1.0 : 1.0));
-            float3 dWg = normalize(float3(dot(dvg, vXp), dot(dvg, vYp), dot(dvg, vZp)));
-            pSum += dot(PESSkyPhys(dWg, sunWp, turbP, 8), LWp);
-          }
-        }
-        float Rc = (nClr > 0.5 && cK > 0.02) ? clamp(pSum * Eimg / max(gSum, 1e-6), 0.25, 4.0) : 1.0;
-        // cielo del estadio cubierto (varios puntos de cielo y casi ninguno azul): se deja el del juego
-        float ovK = (nSky >= 3.0 && PH.w > 0.5) ? smoothstep(0.10, 0.35, nClr / nSky) : 1.0;
-        physW = saturate(PH.z) * kEl * ovK;
-        r0.xyz = lerp(r0.xyz, lerp(phys, gIn * Rc, cK), skyRaw * physW);
+        float clr = smoothstep(0.30, 0.80, saturate((gIn.b - gIn.r) / max(lumG, 1e-4) * 3.0));   // 1 = cielo azul, 0 = nube / cielo cubierto
+        float3 tgt = (phys / lP) * lumG * gK;
+        physW = saturate(PH.z) * kEl;
+        r0.xyz = lerp(r0.xyz, tgt, skyRaw * physW * lerp(1.0 - saturate(PH.w), 1.0, clr));
+        physW *= clr;
       }
     }
     float topH = saturate(1.0 - uvS.y * 1.6);
@@ -233,7 +219,7 @@ void main(
           float psf = (0.35 / pow(1.0 + rr, 2.2)) * saturate(SP.z);
           float haze = exp(-rS / (radP * 22.0)) * 0.12 * saturate(SP.w);
           // energia del disco: con el limbo y el tamano real el disco es chico: brillo alto (saturado por el tonemap)
-          r0.xyz += colS * (diskP * 60.0 + psf * 6.0 + haze * 1.5) * saturate(SN.y) * skyM;
+          r0.xyz += colS * (diskP * 22.0 + psf * 2.5 + haze * 0.8) * saturate(SN.y) * skyM;   // (21/10 b) menos energia: apuntando al sol quemaba todo el cielo
         } else {
           float radS = 0.011 * max(SN.x, 0.1);
           float diskS = 1.0 - smoothstep(radS * 0.8, radS, rS);
@@ -549,19 +535,24 @@ void main(
   { // === PES21 look de TV (21/10, 154): la curva de una camara de transmision en vez de la del juego. Una camara de TV codifica
     // con la curva BT.709 (gris medio ~0.41) y una rodilla que comprime las luces altas antes del blanco: camisetas blancas
     // al sol, nubes y carteles conservan detalle en vez de quemarse; vista en una pantalla da el contraste tipico de TV.
-    // Rodilla por canal (los colores muy brillantes van hacia el blanco, como en camara) con la luminancia corregida a
-    // medias para que no cambien de tono. 154: x on | y mezcla con la LUT del estadio | z contraste en los medios | w rodilla
+    // La rodilla va sobre la luminancia conservando el color; lo muy brillante y saturado se lleva hacia el blanco. 154: x on | y mezcla con la LUT del estadio | z contraste en los medios | w rodilla
     float4 TV = IniParams.Load(int2(154,0));
     if (TV.x > 0.5) {
       const float3 LWt = float3(0.2126, 0.7152, 0.0722);
       float3 lin = max(pesHdrIn, 0.0) * exp2(IniParams.Load(int2(117,0)).y);
       float kn = clamp(TV.w > 0.0 ? TV.w : 0.80, 0.5, 0.95);
-      float3 Vc = lin < 0.018 ? 4.5 * lin : 1.099 * pow(max(lin, 0.018), 0.45) - 0.099;
-      float Lt = dot(lin, LWt);
-      float Ve = Lt < 0.018 ? 4.5 * Lt : 1.099 * pow(max(Lt, 0.018), 0.45) - 0.099;
-      Vc = Vc > kn ? kn + (1.0 - kn) * (1.0 - exp(-(Vc - kn) / (1.0 - kn))) : Vc;
+      // (21/10 b) la rodilla se aplica a la LUMINANCIA y el color se conserva (antes era por canal: en los degradados
+      // brillantes, como alrededor del sol, cada canal llegaba al blanco en otro punto y salian anillos de colores).
+      // Lo que despues queda fuera de rango se lleva hacia el blanco de a poco (como el "knee saturation" de una camara).
+      float Lt = max(dot(lin, LWt), 1e-6);
+      float Ve = Lt < 0.018 ? 4.5 * Lt : 1.099 * pow(Lt, 0.45) - 0.099;
       Ve = Ve > kn ? kn + (1.0 - kn) * (1.0 - exp(-(Ve - kn) / (1.0 - kn))) : Ve;
-      Vc *= lerp(1.0, Ve / max(dot(Vc, LWt), 1e-4), 0.5);
+      float Lc = Ve < 0.081 ? Ve / 4.5 : pow((Ve + 0.099) / 1.099, 1.0 / 0.45);   // luminancia lineal ya comprimida
+      float3 lc = lin * (Lc / Lt);
+      float mxc = max(lc.r, max(lc.g, lc.b));
+      if (mxc > 1.0) lc = Lc + (lc - Lc) * saturate((1.0 - Lc) / max(mxc - Lc, 1e-5));
+      lc = max(lc, 0.0);
+      float3 Vc = lc < 0.018 ? 4.5 * lc : 1.099 * pow(max(lc, 0.018), 0.45) - 0.099;
       // contraste en los medios alrededor del gris medio de la camara
       float zc = TV.z > 0.0 ? TV.z : 1.1;
       float3 wm = saturate(1.0 - abs(Vc - 0.41) * 2.2);
