@@ -81,6 +81,11 @@ void main(
   // cabeza de una cara generica: la DLL enlazo el mapa de SSS de la cara (1024x1024) en t22
   uint hpW = 0, hpH = 0; pesSSSMap.GetDimensions(hpW, hpH);
   bool headPiece = (P0b.w > 0.5) && IniParams.Load(int2(147,0)).x > 0.5 && hpW == 1024 && hpH == 1024;
+  // (20/10 b) solo el cuello y las orejas reciben lo de la cara: el cuero cabelludo (pelo rapado pintado, o la piel que asoma
+  // entre el pelo corto) quedaba brilloso y grisaceo con la pelicula de sudor y los poros de la cara. Peso hpK: cuello (v > 0.5
+  // del plano de la cabeza) u orejas (zonas finas del mapa de SSS), y solo donde el mapa dice piel (la nuca/pelo queda afuera)
+  float4 hpSM = headPiece ? pesSSSMap.SampleLevel(g_samplerLinear_Clamp_s, v2.xy, 0) : float4(0, 0, 0, 0);
+  float hpK = headPiece ? saturate(max(smoothstep(0.50, 0.62, v2.y), saturate((hpSM.x - 0.25) * 3.0)) * hpSM.w) : 0.0;
   float bSpec = ((bodyOn || headPiece) && P0b.z > 0) ? P0b.z : 1.0;
   float bCav = 1.0;
   // poros de la cara (x94), igual que el shader de cara: derivadas fuera de las ramas
@@ -109,7 +114,7 @@ void main(
   r2.xyz = g_tex_normal.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN).xyw;
   r2.x = r2.x * r2.z;
   r2.xy = r2.xy * float2(2,2) + float2(-1,-1);
-  if (headPiece && P94h.w > 0.5) {   // (20/10) micro normal de poros, misma escala y mismo plano UV que la cara: sigue sin costura
+  if (hpK > 0.001 && P94h.w > 0.5) {   // (20/10) micro normal de poros, misma escala y mismo plano UV que la cara: sigue sin costura
     float near = saturate((5.0 - hpFpx) / 3.5);
     if (near > 0.001) {
       float4 guide = pesFacePores.Sample(g_samplerLinear_Clamp_s, v2.xy);
@@ -120,7 +125,7 @@ void main(
       mn = lerp(mn, mn2, guide.g * 0.7);
       float3 tn = mn.xyz * 2.0 - 1.0;
       float skinM = lerp(0.5, 1.0, pesZones.Sample(g_samplerLinear_Clamp_s, v2.xy).a);
-      float str = clamp(P94h.x, 0.0, 2.0) * near * 1.1 * skinM * (0.25 + 1.0 * guide.r);
+      float str = clamp(P94h.x, 0.0, 2.0) * near * 1.1 * skinM * (0.25 + 1.0 * guide.r) * hpK;
       r2.xy += tn.xy * str;
       hpPoreA = mn.a * near * (0.3 + guide.r);
       hpPoreOcc = 1.0 - hpPoreA * guide.a * 0.55 * saturate(P94h.x);
@@ -175,7 +180,8 @@ void main(
   // (20/10) cabeza de las genericas: el mismo color y la misma translucidez que el shader de cara (5ce3 / ce188)
   float hpTrans = g_tex_translucent.Sample(g_samplerLinear_Clamp_s, v2.xy).y;
   float hpFilm = 0.0;
-  if (headPiece) {
+  if (hpK > 0.001) {
+    float3 hpAlb0 = r2.yzw; float hpTr0 = hpTrans;
     float4 P2h = IniParams.Load(int2(2,0));
     float4 P62h = IniParams.Load(int2(62,0));
     float hpBlood = 0.0;
@@ -207,6 +213,8 @@ void main(
     r2.yzw *= (1.0 - 0.06 * hpFilm) * hpPoreOcc;
     float sssB = P0b.x > 0 ? P0b.x : 1.0;
     hpTrans = saturate(hpTrans * sssB);
+    r2.yzw = lerp(hpAlb0, r2.yzw, hpK);
+    hpTrans = lerp(hpTr0, hpTrans, hpK);
   }
   r3.xyz = g_psMaterial.m_materials[2].xyz + -r2.yzw;
   o0.xyz = r0.www * r3.xyz + r2.yzw;
@@ -238,7 +246,8 @@ void main(
   r0.x = min(0.56078434, r1.y);
   o2.y = saturate(r1.x * bSpec * lerp(1.0, bCav, 0.8));
   r0.x = max(r0.x, r2.x);
-  if (headPiece) {   // (20/10) brillo como la cara: pelicula de sudor, poros (Toksvig) y zona T
+  if (hpK > 0.001) {   // (20/10) brillo como la cara: pelicula de sudor, poros (Toksvig) y zona T
+    float hpR0 = r0.x, hpS0 = o2.y;
     float gS = IniParams.Load(int2(2,0)).y; gS = gS > 0 ? gS : 1.0;
     r0.x = saturate(r0.x * gS);
     r0.x = lerp(r0.x, r0.x * 0.45, hpFilm);
@@ -246,6 +255,7 @@ void main(
     r0.x = saturate(r0.x * lerp(1.06, 0.86, hpTZone * saturate(P94h.x)));
     o2.y = lerp(o2.y, max(o2.y, 0.5), hpFilm * 0.8);
     o2.y *= (1.0 - 0.45 * hpPoreA) * lerp(0.95, 1.12, hpTZone * saturate(P94h.x));
+    r0.x = lerp(hpR0, r0.x, hpK); o2.y = lerp(hpS0, o2.y, hpK);
   }
   r0.y = r0.x * 0.0361702144 + 0.0904255286;
   r0.y = r0.y * r0.x + 0.180851057;

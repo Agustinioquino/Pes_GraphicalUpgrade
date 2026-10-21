@@ -391,7 +391,7 @@ void main(
     float dE = min(min(gr.x, 1.0 - gr.x), min(gr.y, 1.0 - gr.y)) * 0.7044;   // distancia al borde en el plano de la cabeza
     pesEdge = gen ? 1.0 - smoothstep(0.012, 0.07, dE) : 0.0;
   }
-  float pesEdgeAll = (P147.w > 0.5) ? 0.0 : pesEdge;
+  float pesEdgeAll = (P147.w > 0.5) ? pesEdge * (1.0 - smoothstep(0.50, 0.62, v2.y)) : pesEdge;   // con la DLL nueva la cabeza solo iguala cuello y orejas
   FA = lerp(FA, float4(0, 0.5, 0, 0), pesEdge);
   // === PES21 zonas de la cara (18/10): sudor por zonas, labios, cuello ===
   // x72 pelicula de sudor, y72 contraste entre zonas, z72 color de labios, w72 on/off | x73 brillo de labios, y73 tono (rosado..rojo), z73 gotas por zona
