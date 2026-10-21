@@ -25,7 +25,9 @@ static const int kRing = 3;
 static ID3D11Buffer* s_stage[kRing] = {}; static std::atomic<int> s_stageFrame[kRing]; static std::atomic<int> s_ringW{0};
 static std::atomic<int> s_frame{0}; static std::atomic<int> s_lastRun{-100};
 static std::mutex s_srvMx; static std::map<ID3D11Resource*, ID3D11ShaderResourceView*> s_colorSRV;
-struct MeterRes { float n[6] = {}, lum[6] = {}, r[6] = {}, g[6] = {}, b[6] = {}; bool valid = false; };
+struct MeterRes { float n[6] = {}, lum[6] = {}, r[6] = {}, g[6] = {}, b[6] = {}; float tn = 0, ta[3] = {}, tl = 0; bool valid = false; };   // (21/10) cancha: muestras, albedo, fraccion al sol
+// (21/10) rebote del pasto: albedo promedio del pasto al sol y fraccion del pasto visible al sol, suavizados -> 158
+static float s_turf[3] = {}, s_turfLit = 0.0f; static bool s_turfOk = false, s_turfSnap = true; static int s_turfMatch = -1; static double s_turfT = 0;
 static MeterRes s_res;                       // ultima lectura (promedios)
 static float s_gain = 1.0f, s_target = 0.0f, s_ratio[3] = {}, s_tintSh = 0.0f, s_tintLit = 0.0f;
 static double s_lastUpd = 0;
@@ -45,14 +47,14 @@ static void EnsureRes() {
         for (auto& f : s_stageFrame) f = -1;
     }
     if (!s_buf) {
-        D3D11_BUFFER_DESC d = {}; d.ByteWidth = 128; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_UNORDERED_ACCESS; d.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+        D3D11_BUFFER_DESC d = {}; d.ByteWidth = 256; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_UNORDERED_ACCESS; d.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
         if (SUCCEEDED(g_dev.dev->CreateBuffer(&d, nullptr, &s_buf))) {
-            D3D11_UNORDERED_ACCESS_VIEW_DESC u = {}; u.Format = DXGI_FORMAT_R32_TYPELESS; u.ViewDimension = D3D11_UAV_DIMENSION_BUFFER; u.Buffer.NumElements = 32; u.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+            D3D11_UNORDERED_ACCESS_VIEW_DESC u = {}; u.Format = DXGI_FORMAT_R32_TYPELESS; u.ViewDimension = D3D11_UAV_DIMENSION_BUFFER; u.Buffer.NumElements = 64; u.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
             if (FAILED(g_dev.dev->CreateUnorderedAccessView(s_buf, &u, &s_uav))) s_uav = nullptr;
         }
     }
     if (!s_cb) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 16; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER; g_dev.dev->CreateBuffer(&d, nullptr, &s_cb); }
-    for (auto& st : s_stage) if (!st) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 128; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; g_dev.dev->CreateBuffer(&d, nullptr, &st); }
+    for (auto& st : s_stage) if (!st) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 256; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; g_dev.dev->CreateBuffer(&d, nullptr, &st); }
 }
 
 static DXGI_FORMAT TypedFormat(DXGI_FORMAT f) {
@@ -153,7 +155,7 @@ static float TargetRatio(float elevDeg) {
 void LightMeterPresent() {
     float* p125 = g_cfg.live[125];
     s_frame++;
-    if (!MeterOn()) { g_meterHook = false; s_gain += (1.0f - s_gain) * 0.05f; p125[0] = s_gain; g_cfg.live[128][0] = 1.0f; return; }
+    if (!MeterOn()) { g_meterHook = false; s_gain += (1.0f - s_gain) * 0.05f; p125[0] = s_gain; g_cfg.live[128][0] = 1.0f; for (int c = 0; c < 4; c++) g_cfg.live[158][c] = 0.0f; return; }
     if (!g_dev.imm) return;
     // lectura: el staging mas viejo ya listo
     int best = -1, bestF = 1 << 30;
@@ -163,7 +165,22 @@ void LightMeterPresent() {
         if (SUCCEEDED(g_dev.imm->Map(s_stage[best], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) {
             const uint32_t* u = (const uint32_t*)m.pData; MeterRes r;
             for (int k = 0; k < 6; k++) { float n = (float)u[k * 5]; r.n[k] = n; if (n > 0) { r.lum[k] = u[k * 5 + 1] / 128.0f / n; r.r[k] = u[k * 5 + 2] / 128.0f / n; r.g[k] = u[k * 5 + 3] / 128.0f / n; r.b[k] = u[k * 5 + 4] / 128.0f / n; } }
+            r.tn = (float)u[30];
+            if (r.tn > 0) { for (int c = 0; c < 3; c++) r.ta[c] = u[31 + c] / 1024.0f / r.tn; r.tl = u[34] / 1024.0f / r.tn; }
             r.valid = true; s_res = r;
+            { // (21/10) rebote del pasto: promedio de miles de puntos de la cancha (hasta 150 m), suavizado en el tiempo
+              // (~4 s el color, ~3 s cuanto esta al sol): un valor estable aunque la camara se mueva o cambie de toma
+              if (g_matchGen.load() != s_turfMatch) { s_turfMatch = g_matchGen.load(); s_turfSnap = true; }
+              double tN = Now(); double dT = std::clamp(tN - s_turfT, 0.0, 1.0); s_turfT = tN;
+              if (r.tn > 300 && r.ta[1] > 0.01f) {
+                  if (s_turfSnap || !s_turfOk) { for (int c = 0; c < 3; c++) s_turf[c] = r.ta[c]; s_turfLit = r.tl; s_turfOk = true; s_turfSnap = false; }
+                  else {
+                      float aC = (float)(1.0 - exp(-dT / 4.0)), aL = (float)(1.0 - exp(-dT / 3.0));
+                      for (int c = 0; c < 3; c++) s_turf[c] += (r.ta[c] - s_turf[c]) * aC;
+                      s_turfLit += (r.tl - s_turfLit) * aL;
+                  }
+              }
+            }
             g_dev.imm->Unmap(s_stage[best], 0);
             s_stageFrame[best] = -1;
             for (int c = 0; c < 3; c++) s_ratio[c] = (r.n[c * 2] > 150 && r.n[c * 2 + 1] > 150 && r.lum[c * 2 + 1] > 1e-4f) ? r.lum[c * 2] / r.lum[c * 2 + 1] : 0.0f;
@@ -195,6 +212,8 @@ void LightMeterPresent() {
     }
     p125[0] = 1.0f + (s_gain - 1.0f) * k;
     p125[1] = s_ratio[0]; p125[2] = s_target; p125[3] = s_tintSh;
+    { float* t158 = g_cfg.live[158];
+      if (s_turfOk) { t158[0] = s_turf[0]; t158[1] = s_turf[1]; t158[2] = s_turf[2]; t158[3] = s_turfLit; } else for (int c = 0; c < 4; c++) t158[c] = 0.0f; }
     // exposicion estable entre camaras (129: x on, y fuerza, z segundos de memoria): el motor cambia la exposicion en cada
     // toma (primeros planos, repeticiones); una camara de TV expone para la cancha al sol y casi no salta. Se compara el
     // brillo del pasto al sol de esta toma (corto) con el de los ultimos ~40 s (largo) y se corrige la diferencia en el

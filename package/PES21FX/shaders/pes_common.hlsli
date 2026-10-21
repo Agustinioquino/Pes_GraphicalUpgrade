@@ -195,7 +195,10 @@ PESCloudParams PESCloudLoad(float tGame)
   c.wind = float3(cos(ang), 0.0, sin(ang)) * max(B.y, 0.0);
   c.scale = B.w > 100.0 ? B.w : 2500.0;
   c.shape = saturate(D.x);
-  c.t = D.w > 0.0 ? D.w : tGame;
+  // (21/10) tiempo de las nubes: el reloj del juego que acumula la DLL (157.x: la pausa congela las nubes y la camara lenta
+  // las frena); con una DLL vieja, el tiempo que pasa el juego al shader
+  float4 CKt = IniParams.Load(int2(157,0));
+  c.t = D.w > 0.0 ? D.w : (CKt.y > 0.5 ? CKt.x : tGame);
   // (21/10) sombras de nubes sin dibujar las nubes en el cielo (152: x on | y cobertura | z fuerza | w tamano en m): para el
   // cielo pintado del estadio o el cielo fisico. Con las nubes volumetricas prendidas manda su capa (y su fuerza z85).
   float4 S2 = IniParams.Load(int2(152,0)), Q85c = IniParams.Load(int2(85,0));
@@ -209,7 +212,7 @@ float PESCloudDensity(float3 pW, PESCloudParams c, int oct)
 {
   float hN = saturate((pW.y - c.hBase) / c.thick);
   float3 q = (pW + c.wind * c.t) / c.scale;
-  q += float3(0.0, c.t * 0.004, c.t * 0.002);   // evolucion lenta de la forma (turbulencia), ademas del viento
+  q += float3(0.0, c.t * 0.0012, c.t * 0.0005);   // evolucion lenta de la forma, ademas del viento (21/10: 3.3x mas lenta)
   q.y *= lerp(2.5, 1.2, c.shape);                 // cumulos: mas altos que anchos; estratos: capas chatas
   float base = PESFbm3(q, oct);
   // perfil vertical: base plana y tope redondeado (cumulo) o capa uniforme (estrato)

@@ -606,6 +606,35 @@ void UpdateTimeParams() {
     p[23][2] = float(fmod(t, 10000.0));             // tiempo actual
     p[24][1] = (t - s_lastTurf) < 2.0 ? 1.0f : 0.0f; // en partido
     p[93][3] = (t - s_lastTurf) < 15.0 ? 1.0f : 0.0f; // 19/10: en partido (tolerante): primeros planos sin cancha a la vista siguen contando
+    // (21/10) reloj de las nubes (157): las nubes y sus sombras avanzan con el reloj del JUEGO, no con el reloj real: la
+    // pausa las congela y la camara lenta de las repeticiones las frena (como la ropa y el pelo). El reloj sale de
+    // cPSSystem.m_timeParam.x de la composicion (regla copy_cb = 0 SysCB en PES21FX_rules.ini). Se acumulan solo los
+    // avances normales (un salto hacia atras al empezar una repeticion o un salto grande no mueven las nubes). Hasta que ese
+    // reloj no se vea avanzar a ritmo normal un par de segundos se usa el reloj real. 157: x tiempo (s), y 1 = lo escribe
+    // esta DLL, z ritmo medido (s de juego por s real), w 1 = siguiendo el reloj del juego.
+    { static double lastR = -1.0, cloudT = 0.0, logT = 0.0, logR = 0.0; static float lastG[4] = {}, logG[4] = {}; static int good = 0; static bool have = false;
+      double dR = lastR < 0 ? 0.0 : std::clamp(t - lastR, 0.0, 0.25); lastR = t;
+      std::vector<float> Y; bool ok = NamedCBRead("SysCB", Y) && Y.size() >= 20;
+      double adv = dR; float rate = 1.0f;
+      if (ok) {
+          float g[4] = { Y[16], Y[17], Y[18], Y[19] };
+          if (have) {
+              double dG = (double)g[0] - (double)lastG[0];
+              if (dR > 1e-4) rate = (float)(dG / dR);
+              if (dR > 1e-4 && dG > 0.5 * dR && dG < 2.0 * dR) good = (std::min)(good + 1, 1 << 20);
+              if (good > 120) adv = std::clamp(dG, 0.0, 3.0 * dR + 0.02);
+          } else { for (int k = 0; k < 4; k++) logG[k] = g[k]; logR = t; }
+          for (int k = 0; k < 4; k++) lastG[k] = g[k]; have = true;
+          if (t - logT >= 30.0) {   // diagnostico: que componente se comporta como reloj del juego
+              double w = (std::max)(t - logR, 1e-3);
+              Log("reloj: m_timeParam = (%.3f, %.3f, %.3f, %.3f), ritmo en %.0f s = (%.2f, %.2f, %.2f, %.2f), nubes %s, t nubes %.1f s",
+                  g[0], g[1], g[2], g[3], w, (g[0] - logG[0]) / w, (g[1] - logG[1]) / w, (g[2] - logG[2]) / w, (g[3] - logG[3]) / w,
+                  good > 120 ? "con el reloj del juego" : "con el reloj real (el del juego todavia no se vio avanzar)", cloudT);
+              logT = t; logR = t; for (int k = 0; k < 4; k++) logG[k] = g[k];
+          }
+      }
+      cloudT += adv; if (cloudT > 100000.0) cloudT -= 100000.0;
+      p[157][0] = (float)cloudT; p[157][1] = 1.0f; p[157][2] = (good > 120) ? rate : 1.0f; p[157][3] = (good > 120) ? 1.0f : 0.0f; }
     // 19/10: pupila reactiva: brillo de la escena por la luz del sol/focos (m_lightColor0 de cPSLight), adaptado en el tiempo
     // como una pupila real (se contrae rapido, ~0.4 s; se dilata lento, ~3 s). x93 brillo adaptado 0 (noche) .. 1 (sol pleno)
     { static double lastT = t; static float adapt = 0.7f; std::vector<float> L;

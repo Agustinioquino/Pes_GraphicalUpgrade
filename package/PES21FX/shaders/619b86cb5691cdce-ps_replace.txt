@@ -353,53 +353,17 @@ void main(
       float sunUp = saturate(dot(Ld, upV));
       float3 sunC = max(pLc_color.xyz, 0.0) * g_psScene.m_exposure.zzz;
       float3 turf = lerp(float3(0.20, 0.20, 0.20), float3(0.14, 0.24, 0.07), saturate(BG.y));
-      // 20/10 v3 (z42 > 0): el color sale del SUELO REAL, pero ya no de pixeles fijos de pantalla debajo de cada pixel: eso
-      // copiaba el dibujo del pasto (rayas del corte, lineas, hojas 3D) y las sombras de otros jugadores sobre la camiseta y
-      // el short, corrido hacia arriba (manchas y franjas). Ahora:
-      //  (1) color = promedio del pasto en una grilla fija de 20 puntos de la pantalla, la misma para todos los pixeles:
-      //      un solo verde estable por cuadro, el de cada estadio;
-      //  (2) sombra = 8 puntos del suelo en un anillo de 0.9 m alrededor del pie del pixel, en espacio de mundo: todos los
-      //      pixeles de un jugador caen en el mismo anillo, asi que es suave; un jugador parado en la sombra del estadio
-      //      sigue recibiendo menos rebote. Los puntos tapados (por el mismo jugador u otro) no cuentan.
+      // 21/10 v4 (z42 > 0): el verde y la sombra del suelo ya no se calculan por pixel con muestras de pantalla (la v3 usaba
+      // una grilla de puntos de pantalla para el color y un anillo de 8 puntos alrededor del pie de cada pixel para la sombra:
+      // al mover la camara o el jugador esas muestras cambiaban y el rebote titilaba, y dentro de un mismo jugador cada parte
+      // tomaba otro anillo -> manchas). Ahora lo mide la DLL con el medidor de luz sobre miles de puntos de pasto y lo
+      // suaviza en el tiempo (158: xyz albedo promedio del pasto al sol, w fraccion del pasto visible que esta al sol): un solo
+      // valor estable por estadio y momento. El rebote local con su sombra real ya lo pone el SSGI.
       float shadeB = 1.0;
-      if (BG.z > 0.0 && fGround > 0.001) {
-        float3 aSum = 0; float aW = 0, hSum = 0, sSum = 0;
-        [unroll] for (int gy = 0; gy < 4; gy++) {
-          [unroll] for (int gx = 0; gx < 5; gx++) {
-            float2 ug = float2(0.1 + 0.2 * gx, 0.42 + 0.17 * gy);
-            int ty = (int)((uint)(inGBufferNormal.SampleLevel(g_samplerPoint_Clamp_s, ug, 0).z * 1023 + 0.5) & 15);
-            if (ty != 3) continue;                                      // solo cancha (pasto)
-            float zg = PESLinZ(ug); if (zg < 0.1 || zg > 150.0) continue;
-            float2 sG = ug * float2(2, -2) + float2(-1, 1);
-            float3 Pg = float3((sG - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zg, zg);
-            aSum += inAlbedo.SampleLevel(g_samplerPoint_Clamp_s, ug, 0).xyz;
-            hSum += dot(Pg, upV);
-            sSum += saturate(inShadow.SampleLevel(g_samplerLinear_Clamp_s, ug, 0).x);
-            aW += 1.0;
-          }
-        }
-        if (aW > 0.5) {
-          turf = lerp(turf, aSum / aW * 1.35, saturate(BG.z));
-          float2 sC = uvC * float2(2, -2) + float2(-1, 1);
-          float3 Pc = float3((sC - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zb, zb);
-          float3 F = Pc - (dot(Pc, upV) - hSum / aW) * upV;            // pie del pixel sobre el plano de la cancha
-          float3 t1 = cross(upV, float3(0, 0, 1)); if (dot(t1, t1) < 1e-3) t1 = cross(upV, float3(1, 0, 0));
-          t1 = normalize(t1); float3 t2 = cross(upV, t1);
-          float rS = 0, rW = 0;
-          [unroll] for (int k = 0; k < 8; k++) {
-            float3 Q = F + (t1 * cos(k * 0.7853982) + t2 * sin(k * 0.7853982)) * 0.9;
-            if (Q.z < 0.2) continue;
-            float2 sQ = Q.xy / (Q.z * g_psScene.m_projectionParam.xy) + g_psScene.m_cameraCenterOffset.xy;
-            float2 uq = float2(sQ.x * 0.5 + 0.5, 0.5 - sQ.y * 0.5);
-            if (any(uq < 0.002) || any(uq > 0.998)) continue;
-            int tq = (int)((uint)(inGBufferNormal.SampleLevel(g_samplerPoint_Clamp_s, uq, 0).z * 1023 + 0.5) & 15);
-            if (tq != 3) continue;
-            if (abs(PESLinZ(uq) - Q.z) > max(0.6, 0.02 * Q.z)) continue;
-            rS += saturate(inShadow.SampleLevel(g_samplerLinear_Clamp_s, uq, 0).x); rW += 1.0;
-          }
-          float sh = (rW > 0.5) ? rS / rW : sSum / aW;
-          shadeB = lerp(1.0, 0.25 + 0.75 * sh, saturate(BG.z));
-        }
+      float4 TB = IniParams.Load(int2(158,0));
+      if (BG.z > 0.0 && TB.y > 0.01) {
+        turf = lerp(turf, TB.xyz * 1.35, saturate(BG.z));
+        shadeB = lerp(1.0, 0.25 + 0.75 * saturate(TB.w), saturate(BG.z));
       }
       r2.xyz += sunC * sunUp * turf * shadeB * fGround * max(BG.x, 0.0) * saturate((120.0 - zb) / 40.0) * PESAmbGain();
     }
