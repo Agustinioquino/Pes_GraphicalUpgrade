@@ -420,7 +420,9 @@ void main(
   bool pesMatch = false;
   {
     float4 GM = IniParams.Load(int2(148, 0));
-    if (GM.w > 0.5 && GM.x > 0.001 && pTM[2].x > 0.0 && pTM[2].y > 0.0) {
+    // b6 sin la copia de la DLL (o con otro buffer del juego): la escala de la base tiene que ser la de la cancha (32 x 24 tipico)
+    bool tmOk = pTM[2].x >= 1.0 && pTM[2].x <= 2048.0 && pTM[2].y >= 1.0 && pTM[2].y <= 2048.0 && abs(pTM[4].w) <= 1.0001 && abs(pTM[1].w) <= 4.0;
+    if (GM.w > 0.5 && GM.x > 0.001 && tmOk) {
       pesMatch = true;
       float3 g = pesGrain;
       float3 tg = float3(g.x * g.y, -(g.z * g.z + g.x * g.x), g.z * g.y); tg *= rsqrt(max(dot(tg, tg), 1e-8));
