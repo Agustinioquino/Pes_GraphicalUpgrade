@@ -106,6 +106,8 @@ void LightMeterAfterComposition(ID3D11DeviceContext* c) {
         ID3D11ShaderResourceView* psrv[6] = {}; c->CSGetShaderResources(0, 6, psrv);
         ID3D11UnorderedAccessView* puav = nullptr; c->CSGetUnorderedAccessViews(0, 1, &puav);
         ID3D11Buffer* pcb0 = nullptr; ID3D11Buffer* pcb2 = nullptr; c->CSGetConstantBuffers(0, 1, &pcb0); c->CSGetConstantBuffers(2, 1, &pcb2);
+        ID3D11Buffer* pcb1 = nullptr; c->CSGetConstantBuffers(1, 1, &pcb1); ID3D11ShaderResourceView* p120 = nullptr; c->CSGetShaderResources(120, 1, &p120);
+        ID3D11Buffer* sysPS = nullptr; c->PSGetConstantBuffers(0, 1, &sysPS);   // (21/10) reloj del juego para las sombras de nubes
         // la salida de la composicion sigue enlazada como render target: desenlazar mientras se lee
         c->OMSetRenderTargets(0, nullptr, nullptr);
         const UINT stride = 2;
@@ -116,6 +118,7 @@ void LightMeterAfterComposition(ID3D11DeviceContext* c) {
         c->CSSetShaderResources(0, 6, srv);
         c->CSSetUnorderedAccessViews(0, 1, &s_uav, nullptr);
         c->CSSetConstantBuffers(0, 1, &s_cb); c->CSSetConstantBuffers(2, 1, &scb);
+        c->CSSetConstantBuffers(1, 1, &sysPS); { ID3D11ShaderResourceView* prm = g_dev.paramSRV; c->CSSetShaderResources(120, 1, &prm); }
         c->Dispatch((W / stride + 15) / 16, (H / stride + 15) / 16, 1);
         // restaurar
         ID3D11ShaderResourceView* nul[6] = {}; c->CSSetShaderResources(0, 6, nul);
@@ -123,6 +126,7 @@ void LightMeterAfterComposition(ID3D11DeviceContext* c) {
         c->CSSetShader(pcs, nullptr, 0); c->CSSetShaderResources(0, 6, psrv);
         c->CSSetUnorderedAccessViews(0, 1, &puav, nullptr);
         c->CSSetConstantBuffers(0, 1, &pcb0); c->CSSetConstantBuffers(2, 1, &pcb2);
+        c->CSSetConstantBuffers(1, 1, &pcb1); c->CSSetShaderResources(120, 1, &p120); if (pcb1) pcb1->Release(); if (p120) p120->Release(); if (sysPS) sysPS->Release();
         if (pcs) pcs->Release(); for (auto* v : psrv) if (v) v->Release(); if (puav) puav->Release(); if (pcb0) pcb0->Release(); if (pcb2) pcb2->Release();
         UINT nrt = 0; for (UINT i = 0; i < 8; i++) if (rtv[i]) nrt = i + 1;
         c->OMSetRenderTargets(nrt, rtv, dsv);

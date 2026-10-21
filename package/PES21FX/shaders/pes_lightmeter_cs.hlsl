@@ -17,6 +17,11 @@ Texture2D<float4> tColor  : register(t3);   // salida de la composicion (HDR, an
 Texture2D<float4> tDepth  : register(t4);
 Texture2D<float4> tShadow : register(t5);
 RWByteAddressBuffer uOut : register(u0);
+// (21/10) sombras de nubes: el pasto "al sol" que esta bajo una nube no cuenta (si no, el medidor creeria que la relacion
+// sol / sombra bajo y oscureceria la luz ambiente cada vez que pasa una nube)
+cbuffer cPSSystem : register(b1) { float4 m_param; float4 m_renderInfo; float4 m_renderBuffer; float4 m_dominantLightDir; float4 m_timeParam; };
+Texture1D<float4> IniParams : register(t120);
+#include "pes_common.hlsli"
 
 groupshared uint gs[30];
 
@@ -51,6 +56,17 @@ void main(uint3 tid : SV_DispatchThreadID, uint gi : SV_GroupIndex)
         if (cat >= 0) {
           float sh = tShadow.Load(int3(p, 0)).x;
           int side = sh > 0.9 ? 0 : (sh < 0.1 ? 1 : -1);
+          if (side == 0) {
+            PESCloudParams CPm = PESCloudLoad(m_timeParam.z);
+            float4 SWm = IniParams.Load(int2(111, 0));
+            if (CPm.sh > 0.5 && CPm.shK > 0.001 && SWm.y > 0.03) {
+              float2 uvm = (float2(p) + 0.5) / float2(gSize);
+              float2 sCm = uvm * float2(2, -2) + float2(-1, 1);
+              float3 Pvm = float3((sCm - m_cameraCenterOffset.xy) * m_projectionParam.xy * z, z);
+              float3 pWm = m_eyepos.xyz + float3(dot(Pvm, float3(m_view._m00, m_view._m01, m_view._m02)), dot(Pvm, float3(m_view._m10, m_view._m11, m_view._m12)), dot(Pvm, float3(m_view._m20, m_view._m21, m_view._m22)));
+              if (PESCloudShadow(pWm, normalize(SWm.xyz), CPm) < 0.85) side = -1;
+            }
+          }
           if (side >= 0) {
             float3 alb = tAlbedo.Load(int3(p, 0)).xyz;
             float3 col = tColor.Load(int3(p, 0)).xyz;
