@@ -264,6 +264,10 @@ void MuscleDrawPlayerPanel();                     // (24/10) tarjeta "Musculatur
 bool MusclePhysiqueActive();                      // (24/10) el menu Fisico del juego (Editar > Jugadores) esta en pantalla
 double MusclePhysiqueSince();                     // segundos desde que se entro al menu Fisico
 std::string MuscleLatestPlayerName();             // nombre del ultimo jugador armado ("" si no hay)
+float MuscleProfileGet(uint32_t id, int idx, int comp);                          // (24/10) valor propio del jugador o el general
+void MuscleProfileSet(uint32_t id, const char* name, int idx, int comp, float v); // crea el perfil si hace falta; se guarda solo
+void FisicoInstall();                             // (24/10) filas de musculatura dentro del menu Fisico del juego (fisico.cpp)
+bool FisicoEditing(uint32_t* id);                 // el menu Fisico del juego esta armado para un jugador (su id)
 // (24/10) personajes del motor (personajes.cpp): que jugador es cada esqueleto (HumanList -> handle -> SceneCharacterNode)
 constexpr int kCharSlots = 64;
 struct CharInfo {
@@ -276,6 +280,7 @@ struct CharInfo {
 };
 void CharTrackInstall(); void CharTrackPresent(); bool CharTrackOk();
 int CharSlotForSkel(const void* skel);            // lugar del personaje de ese esqueleto (-1 = no se sabe); sin candado (Eval)
+bool CharPlayerName(uint64_t key, char* out, size_t n);   // nombre del jugador de esa clave (base de datos del juego)
 bool CharGet(int slot, CharInfo& out);
 int CharSnapshot(CharInfo out[kCharSlots], bool alive[kCharSlots]);   // copia de la tabla (devuelve cuantos vivos)
 unsigned CharTableGen();                          // sube cada vez que cambia la tabla

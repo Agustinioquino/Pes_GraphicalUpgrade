@@ -248,6 +248,7 @@ void CharTrackInstall() {
 }
 
 bool CharTrackOk() { return s_okNode; }
+bool CharPlayerName(uint64_t key, char* out, size_t n) { if (!out || !n) return false; return PlayerName(key, out, n); }
 unsigned CharTableGen() { return s_gen.load(); }
 bool CharGet(int slot, CharInfo& out) {
     if (slot < 0 || slot >= kCharSlots) return false;

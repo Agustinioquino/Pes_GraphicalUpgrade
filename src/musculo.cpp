@@ -173,6 +173,7 @@ static void ComputeFactors(const float (*P)[4], bool on, bool ropa, bool trans, 
 // Archivo: PES21FX\musculatura_jugadores.ini ([id] + claves del menu; lo que falta = 1, como el juego).
 struct Profile { std::string name; float v[8][4]; };
 static std::map<uint32_t, Profile> s_prof;
+static std::mutex s_profMx;   // s_prof lo tocan Present (factores, tarjeta, archivo) y el menu Fisico del juego (fisico.cpp)
 static bool s_profLoaded = false, s_profDirty = false; static double s_profDirtyT = 0;
 static std::string s_profStatus;
 static Fac s_slotFac[kCharSlots][M_COUNT];
@@ -242,6 +243,26 @@ static bool SaveProfiles() {
     return true;
 }
 
+// valor de un slider para un jugador: el suyo, o el general si no tiene valores propios (lo usa el menu Fisico del juego)
+float MuscleProfileGet(uint32_t id, int idx, int comp) {
+    if (idx < 164 || idx > 171 || comp < 0 || comp > 3) return 1.0f;
+    std::lock_guard<std::mutex> lk(s_profMx);
+    if (!s_profLoaded) LoadProfiles();
+    auto it = id ? s_prof.find(id) : s_prof.end();
+    return it != s_prof.end() ? it->second.v[idx - 164][comp] : g_cfg.live[idx][comp];
+}
+// cambia un valor del jugador (si no tenia valores propios, arrancan iguales a los generales); se guarda solo
+void MuscleProfileSet(uint32_t id, const char* name, int idx, int comp, float v) {
+    if (!id || idx < 164 || idx > 171 || comp < 0 || comp > 3) return;
+    std::lock_guard<std::mutex> lk(s_profMx);
+    if (!s_profLoaded) LoadProfiles();
+    auto it = s_prof.find(id);
+    if (it == s_prof.end()) { Profile p; ProfFromGeneral(p); if (name) p.name = name; it = s_prof.emplace(id, p).first; }
+    else if (name && *name && it->second.name != name) it->second.name = name;
+    it->second.v[idx - 164][comp] = std::clamp(v, 0.3f, 3.0f);
+    ProfDirty();
+}
+
 static void UpdateFactors() {
     const float (*L)[4] = &g_cfg.live[164];
     const bool on = L[0][0] > 0.5f, ropa = g_cfg.live[166][1] > 0.5f, trans = g_cfg.live[170][2] > 0.5f;
@@ -250,13 +271,19 @@ static void UpdateFactors() {
     s_on = on;
     for (int i = 0; i < M_COUNT; i++) s_fac[i] = f[i];
     // por jugador: un juego de factores por cada personaje en pantalla que tenga valores propios
+    std::lock_guard<std::mutex> lk(s_profMx);
     if (!s_profLoaded) LoadProfiles();
     unsigned g = CharTableGen();
     if (g != s_slotGen) { s_slotGen = g; CharSnapshot(s_slotInfo, s_slotAlive); }
+    // en el menu Fisico del juego, un personaje que no paso por HumanList (si el modelo de Editar se arma por otro lado)
+    // usa los valores del jugador que se esta editando
+    uint32_t editId = 0;
+    if (!FisicoEditing(&editId) || !MusclePhysiqueActive()) editId = 0;
     bool any = false; int own = 0;
     for (int i = 0; i < kCharSlots; i++) {
         const Profile* p = nullptr;
-        if (on && s_slotAlive[i] && s_slotInfo[i].known && s_slotInfo[i].id) { auto it = s_prof.find(s_slotInfo[i].id); if (it != s_prof.end()) p = &it->second; }
+        uint32_t id = !s_slotAlive[i] ? 0 : s_slotInfo[i].known ? s_slotInfo[i].id : editId;
+        if (on && id) { auto it = s_prof.find(id); if (it != s_prof.end()) p = &it->second; }
         if (!p) { s_slotUse[i].store(0, std::memory_order_relaxed); continue; }
         Fac fp[M_COUNT];
         ComputeFactors(p->v, on, ropa, trans, fp);
@@ -415,6 +442,7 @@ static bool Readable(const void* p, size_t n) {
 // el paso por cuadro (comun a los menus de Editar; solo se cambia en la vtable de Fisico) y *(this + 0x78) + 0x50 = activo.
 // Mientras esta en pantalla, Insert abre una ventana chica con la musculatura de ese jugador y abajo aparece un aviso.
 static const uintptr_t kPhysVt = 0x142708848ull, kPhysCol = 0x142cd5c40ull, kPhysStep = 0x141fa9d60ull;
+static const uintptr_t kBodyVt = 0x142704dd8ull, kBodyCol = 0x142cd50d8ull;   // menu::MenuEditPlBodySetting (el Fisico de Editar)
 typedef void* (__fastcall* PhysStepFn)(void* self, void* a2, void* a3, void* a4);
 static PhysStepFn o_physStep = nullptr;
 static std::atomic<long long> s_physLast{0}, s_physEnter{0};   // QPC del ultimo paso activo / de la entrada
@@ -452,17 +480,22 @@ static void Install() {
         s_ok++;
     }
     Log("musculatura v6: %d de %d huesos de musculo enganchados%s%s", s_ok, kN, bad.empty() ? "" : "; no coinciden:", bad.c_str());
-    {   // menu Fisico del juego
-        void** vt = (void**)kPhysVt; DWORD old = 0; bool ok = false;
-        if (Readable(vt - 1, 2 * sizeof(void*)) && (uintptr_t)vt[-1] == kPhysCol && (uintptr_t)vt[0] == kPhysStep &&
-            VirtualProtect(&vt[0], sizeof(void*), PAGE_READWRITE, &old)) {
-            o_physStep = (PhysStepFn)vt[0];
-            InterlockedExchangePointer(&vt[0], (void*)&hk_PhysStep);
-            VirtualProtect(&vt[0], sizeof(void*), old, &old);
-            ok = true;
+    {   // menus Fisico del juego (Editar > Jugadores > Fisico = MenuEditPlBodySetting; tambien MenuEditPlBodyPhysiqueSetting)
+        int ok = 0;
+        const uintptr_t vts[2][2] = { { kBodyVt, kBodyCol }, { kPhysVt, kPhysCol } };
+        for (auto& v : vts) {
+            void** vt = (void**)v[0]; DWORD old = 0;
+            if (Readable(vt - 1, 2 * sizeof(void*)) && (uintptr_t)vt[-1] == v[1] && (uintptr_t)vt[0] == kPhysStep &&
+                VirtualProtect(&vt[0], sizeof(void*), PAGE_READWRITE, &old)) {
+                o_physStep = (PhysStepFn)kPhysStep;
+                InterlockedExchangePointer(&vt[0], (void*)&hk_PhysStep);
+                VirtualProtect(&vt[0], sizeof(void*), old, &old);
+                ok++;
+            }
         }
         Log("musculatura: menu Fisico del juego %s", ok ? "enganchado (Insert ahi = musculatura de ese jugador)" : "NO (vtable distinta)");
     }
+    FisicoInstall();   // filas de musculatura dentro del menu Fisico del juego (fisico.cpp)
 }
 
 void MuscleHookPresent() {
@@ -544,6 +577,7 @@ std::string MuscleLatestPlayerName() {
     return "id " + std::to_string(best->id);
 }
 void MuscleDrawPlayerPanel() {
+    std::lock_guard<std::mutex> lk(s_profMx);
     if (!s_profLoaded) LoadProfiles();
     const ImVec4 warn(0.95f, 0.55f, 0.35f, 1), good(0.45f, 0.85f, 0.55f, 1);
     if (!CharTrackOk()) {

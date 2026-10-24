@@ -649,11 +649,10 @@ static void DrawPhysiqueHint() {
     ImGui::SetNextWindowBgAlpha(0.78f);
     ImGui::Begin("##fisico_aviso", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_AlwaysAutoResize |
         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
-    std::string nm = MuscleLatestPlayerName();
     ImGui::TextColored(ImVec4(0.85f, 0.68f, 0.28f, 1), "PES21 FX");
     ImGui::SameLine();
-    if (nm.empty()) ImGui::TextUnformatted("Insert: musculatura de este jugador");
-    else ImGui::Text("Insert: musculatura de %s", nm.c_str());
+    ImGui::TextUnformatted("Musculatura: ultima fila de la lista");
+    ImGui::SameLine(); ImGui::TextDisabled("(Insert: ventana del mod)");
     ImGui::End();
 }
 

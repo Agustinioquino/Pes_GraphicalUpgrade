@@ -98,3 +98,19 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
 | Base de datos de jugadores | registro de 0x17c bytes: clave en + 0x2c (u16 lugar, u32 id en + 0x30), nombre UTF-8 en + 0x38 (`PlayerRec_GetName` 0x1414c5d70; si + 0x144 tiene el bit 31 usa el nombre de admin + 0x98) |
 | config del personaje + 0x40 | NO es el jugador: es un tipo (0..3; 4 = sin cambio), lo pone 0x141a0aea0 desde 0x141ecc5c0 |
 | Menu Fisico del juego (`menu::MenuEditPlBodyPhysiqueSetting`) | vtable 0x142708848 (COL 0x142cd5c40), [0] = 0x141fa9d60 paso por cuadro (comun a los menus de Editar), [3] = 0x140c33870 destructor; *(this + 0x78) + 0x50 = activo; fabrica 0x140c338c0 (tabla 0x14266c3b8 "Edit/Player/EditPlBodyPhysiqueSetting") |
+
+## Menu Fisico del juego por dentro (fisico.cpp, 24/10)
+
+| Que | Donde |
+|---|---|
+| Editar > Jugadores > Fisico | `menu::MenuEditPlBodySetting`, vtable 0x142704dd8 (COL 0x142cd50d8), fabrica 0x140c2ded0; 13 filas (altura +155 cm, peso +30 kg y 11 campos de apariencia) |
+| Tablas del Fisico | textos 0x142704d10, campos 0x142704d48 (descriptor `App_FieldDesc` 0x141e5f470, tabla 0x143529110 de 0x30 bytes: setter + 0x10, min + 0x18, max + 0x20) |
+| vtable (menus de Editar jugador) | [49] decidir (base 0x140cd35d0), [50] atras, [52] restablecer, [62] valor cambiado (lee el selector) / [63] valor nuevo (fila, valor), [76] armar filas, [78] cantidad de filas (Fisico: 13), [81] texto del titulo |
+| Lista generica "editSettingList" (cpk_dat/common/menu/mode/editSettingList.bin) | hasta 17 filas; PlBase_SetRow 0x140cd39f0 (menu, estado, fila): estado 0 c_jump, 1 c_selector, 2 c_slider, 3 c_checkBox, 4 c_onOffSwitch, 5 c_color, 6 c_text, 7 c_textInput, 8 c_playerName, 9 c_teamName, 10 c_subHeader (estado -> tipo 0x14273a560: 255, 0, 1, 3, 5, 6, 255, 7) |
+| Filas visibles | PlBase_SetNumRows 0x140cd3680 (menu, n; -1 = vtable[78]) -> animacion "setNumChoicesAuto_n" + rango del cursor (0x140e44410) |
+| Entrada del menu base | 0x140e3ec40: arriba/abajo vtable[45]/[46]; izquierda/derecha 0x140e3c770 (selector: tipo 0/9; barra: tipo 1, componente 0x11) -> vtable[63] + [62]; botones vtable[70](pad, n): 0 decidir (0x140e3c660 por tipo de fila; tipo 255 -> vtable[49]), 1 atras -> [50], 3 triangulo -> [52] |
+| UI | hijo i de un nodo: vector + 0x170 (0x140e8fa80); componente por nombre: (+ 0x98)->vtable[1](contenedor, "setName" / "selector" / "headline"); por tipo 0x140e4f5d0 (contenedor, tipo, n); texto 0x140e4b030 (componente, std::string*, 0, 0) (suele estar desviada por Sider) |
+| Selector | limpiar 0x140e54140, agregar 0x140e53ee0 (char*), elegir 0x140e54180, actual 0x140e540f0 (+ 0xd8) |
+| Barra (componente 0x11) | rango 0x140e5bf80 (barra, max, min, valor): max + 0xc8, min + 0xcc, valor + 0xd0; poner valor 0x140e5c190 |
+| Cursor / titulo | 0x140e42300 (menu, lista, fila) / titulo: "headline" del objeto en controlador + 0x90, 0x140e56ca0 (char*) o 0x140e56c10 (id) |
+| Jugador editado | EditWork (0x1438040a8) + 0xe0 = clave (id en los 32 bits altos) |
