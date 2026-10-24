@@ -259,12 +259,14 @@ static void GoPage(void* menu, int page, int cursor) {
     PageHints(menu, page);
     Log("fisico: pagina %d (%s, id %u)", page, s_editName[0] ? s_editName : "jugador", s_editId);
 }
+static std::atomic<bool> s_hlChanged{false};   // un valor cambio: el resaltado vuelve a empezar
 static void ApplyValue(int row, int steps) {
     const MRow* r = RowOf(s_page, row);
     if (!r || !s_editId) return;
     float cur = MuscleProfileGet(s_editId, r->idx, r->comp);
     if (ToSteps(cur) == std::clamp(steps, -kSteps, kSteps)) return;   // sin cambio (p. ej. al pasar el cursor)
     MuscleProfileSet(s_editId, s_editName, r->idx, r->comp, FromSteps(steps));
+    s_hlChanged = true;
 }
 static int ReadRowSteps(void* menu, int row) {
     void* w = Child(List(menu), (unsigned)row);
@@ -336,6 +338,77 @@ static void* __fastcall hk_valset(void* menu, void* a2, void* a3, void* a4) {   
     }
     if (Mine(menu) && row >= kJump0) return nullptr;
     return o_valset(menu, a2, a3, a4);
+}
+
+// ---------------------------------------------------------------- resaltado del musculo de la fila elegida (24/10)
+// Como el brillo que late en los menus de la cara del juego: la piel del musculo que se esta editando se aclara y late
+// despacio. El VS de la piel del cuerpo (1c02a92ab4ae3362, reemplazo propio) calcula por vertice cuanto cae adentro de unas
+// capsulas en el espacio del modelo EN REPOSO (pose A de 45 grados; X = izquierda, Y = arriba, Z = adelante; con |x| cada
+// una vale para los dos lados; medidas con los huesos de musculo del log y los modelos de TorsoBody) y el PS (aa7d1833)
+// mezcla el color con blanco segun el pulso que manda la DLL.
+//   x174 pulso (0 = apagado) | y174 capsulas (hasta 4) | z174 todo el cuerpo ("General"); 175 + 2k = (A, radio), 176 + 2k = B
+//   x183 prendido | y183 intensidad | z183 segundos que dura despues de moverse o cambiar un valor (0 = siempre) | w183 latido (s)
+struct HlCap { float ax, ay, az, bx, by, bz, r; };
+struct HlSet { int n; HlCap c[2]; bool all; };
+static HlSet HlFor(int idx, int comp) {
+    static const HlCap kDelt = { 0.205f, 1.455f, 0.030f, 0.215f, 1.445f, 0.030f, 0.075f };
+    static const HlCap kTrap = { 0.040f, 1.570f, -0.025f, 0.150f, 1.500f, -0.020f, 0.055f };
+    HlSet h{}; auto one = [&](HlCap c) { h.c[h.n++] = c; };
+    switch (idx * 4 + comp) {
+    case 167 * 4 + 0: h.all = true; break;                                                          // general
+    case 164 * 4 + 1: one(kDelt); break;                                                             // hombros
+    case 171 * 4 + 3: one(kDelt); one(kTrap); break;                                                 // ancho de hombros
+    case 164 * 4 + 2: one({ 0.235f, 1.425f, 0.065f, 0.365f, 1.295f, 0.070f, 0.048f }); break;        // biceps (frente del brazo)
+    case 164 * 4 + 3: one({ 0.235f, 1.425f, -0.015f, 0.365f, 1.290f, -0.010f, 0.048f }); break;      // triceps (atras)
+    case 165 * 4 + 0: one({ 0.425f, 1.235f, 0.040f, 0.575f, 1.095f, 0.060f, 0.050f }); break;        // antebrazos
+    case 165 * 4 + 1: one({ 0.035f, 1.375f, 0.165f, 0.145f, 1.385f, 0.130f, 0.080f }); break;        // pecho
+    case 170 * 4 + 1: one({ 0.030f, 1.470f, 0.115f, 0.130f, 1.470f, 0.100f, 0.050f }); break;        // pecho alto
+    case 165 * 4 + 2: one({ 0.070f, 1.480f, -0.075f, 0.060f, 1.080f, -0.085f, 0.130f }); break;      // espalda (toda)
+    case 167 * 4 + 1: one(kTrap); break;                                                             // trapecio
+    case 167 * 4 + 2: one({ 0.080f, 1.420f, -0.100f, 0.100f, 1.370f, -0.100f, 0.075f }); break;      // omoplatos
+    case 167 * 4 + 3: one({ 0.150f, 1.400f, -0.050f, 0.130f, 1.200f, -0.040f, 0.065f }); break;      // dorsales
+    case 168 * 4 + 0: one({ 0.035f, 1.180f, -0.100f, 0.035f, 1.040f, -0.090f, 0.075f }); break;      // espalda baja
+    case 170 * 4 + 0: one({ 0.000f, 1.530f, 0.030f, 0.000f, 1.650f, 0.020f, 0.060f }); break;        // cuello
+    case 168 * 4 + 1: one({ 0.045f, 1.260f, 0.150f, 0.045f, 1.040f, 0.160f, 0.060f }); break;        // abdominales
+    case 168 * 4 + 2: one({ 0.150f, 1.220f, 0.070f, 0.150f, 1.040f, 0.075f, 0.055f }); break;        // oblicuos
+    case 171 * 4 + 1: one({ 0.160f, 1.200f, 0.030f, 0.155f, 1.060f, 0.030f, 0.065f }); break;        // cintura
+    case 168 * 4 + 3: one({ 0.000f, 1.130f, 0.150f, 0.000f, 1.090f, 0.155f, 0.090f }); break;        // panza
+    case 169 * 4 + 0: one({ 0.085f, 0.970f, -0.060f, 0.085f, 0.930f, -0.060f, 0.085f }); break;      // gluteos
+    case 171 * 4 + 2: one({ 0.160f, 0.980f, 0.030f, 0.160f, 0.930f, 0.030f, 0.070f }); break;        // caderas
+    case 165 * 4 + 3: one({ 0.100f, 0.900f, 0.060f, 0.140f, 0.600f, 0.090f, 0.090f }); break;        // muslos (todo)
+    case 169 * 4 + 1: one({ 0.100f, 0.880f, 0.110f, 0.140f, 0.620f, 0.120f, 0.060f }); break;        // cuadriceps
+    case 169 * 4 + 2: one({ 0.100f, 0.880f, 0.010f, 0.140f, 0.620f, 0.040f, 0.060f }); break;        // isquiotibiales
+    case 169 * 4 + 3: one({ 0.050f, 0.860f, 0.060f, 0.100f, 0.660f, 0.080f, 0.050f }); break;        // aductores
+    case 166 * 4 + 0: one({ 0.155f, 0.500f, 0.025f, 0.165f, 0.280f, 0.025f, 0.060f }); break;        // pantorrillas
+    case 171 * 4 + 0: one({ 0.142f, 0.550f, 0.090f, 0.142f, 0.530f, 0.090f, 0.065f }); break;        // rodillas
+    }
+    return h;
+}
+static int s_hlRow = -1, s_hlPage = -1; static double s_hlT0 = 0; static bool s_hlOn = false;
+static void HlClear() { for (int i = 174; i <= 182; i++) for (int c = 0; c < 4; c++) g_cfg.live[i][c] = 0.0f; }
+void FisicoHighlightPresent() {
+    void* menu = s_menu;
+    const bool want = s_ok && g_cfg.live[183][0] > 0.5f && menu && s_page > 0 && MusclePhysiqueActive();
+    const MRow* r = want ? RowOf(s_page, CursorRow(menu)) : nullptr;
+    if (!r) { if (s_hlOn) { HlClear(); s_hlOn = false; s_hlRow = -1; } return; }
+    const double t = Now();
+    const int row = CursorRow(menu);
+    if (row != s_hlRow || s_page != s_hlPage || s_hlChanged.exchange(false)) { s_hlRow = row; s_hlPage = s_page; s_hlT0 = t; }
+    const float dur = g_cfg.live[183][2], age = (float)(t - s_hlT0);
+    float fade = 1.0f;
+    if (dur > 0.05f) fade = age <= dur ? 1.0f : std::max(0.0f, 1.0f - (age - dur) / 0.6f);
+    const float per = std::clamp(g_cfg.live[183][3] > 0.05f ? g_cfg.live[183][3] : 1.6f, 0.4f, 4.0f);
+    const float pulse = 0.5f + 0.5f * sinf(6.2831853f * (float)fmod(t - s_hlT0, 1000.0) / per - 1.5707963f);   // arranca abajo y sube
+    const float k = std::clamp(g_cfg.live[183][1], 0.0f, 1.5f) * (0.35f + 0.65f * pulse) * fade;
+    const HlSet h = HlFor(r->idx, r->comp);
+    HlClear();
+    g_cfg.live[174][0] = k; g_cfg.live[174][1] = (float)h.n; g_cfg.live[174][2] = h.all ? 1.0f : 0.0f;
+    for (int i = 0; i < h.n; i++) {
+        const HlCap& c = h.c[i];
+        float* A = g_cfg.live[175 + 2 * i]; float* B = g_cfg.live[176 + 2 * i];
+        A[0] = c.ax; A[1] = c.ay; A[2] = c.az; A[3] = c.r; B[0] = c.bx; B[1] = c.by; B[2] = c.bz; B[3] = 0.0f;
+    }
+    s_hlOn = true;
 }
 
 static bool Readable(const void* p, size_t n) {

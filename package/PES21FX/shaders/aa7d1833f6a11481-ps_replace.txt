@@ -1,4 +1,5 @@
 // PES 2021 - piel del cuerpo (brazos, piernas, cuello) [hash aa7d1833f6a11481] - piel v2 (w43)
+// PES21 (24/10): con el VS 1c02a92a (reemplazo propio) aclara y hace latir el musculo elegido en el menu Fisico (x174).
 // PES21 (20/10, x147): este shader tambien dibuja la CABEZA de las caras genericas (cuello, orejas, nuca; VS faab87ee). La DLL
 // la reconoce (regla "aa7d1833 vs faab87ee" en PES21FX_rules.ini) y le enlaza los mapas de la cara en t22/t25/t27/t28: con eso
 // recibe lo mismo que la cara (translucidez con el mapa de SSS, orejas finas, saturacion, sangre, rubor, pelicula de sudor,
@@ -229,6 +230,12 @@ void main(
   r3.xyz = g_psMaterial.m_materials[2].xyz + -r2.yzw;
   o0.xyz = r0.www * r3.xyz + r2.yzw;
   o0.xyz *= bCav;
+  {   // (24/10) resaltado del musculo elegido en el menu Fisico (como el brillo que late en los menus de la cara): el VS
+      // 1c02a92a deja el peso del vertice en v3.w (+2; otros VS no lo escriben) y la DLL manda el pulso en x174
+    float hlW = (v3.w > 1.999 && v3.w < 3.001) ? saturate(v3.w - 2.0) : 0.0;
+    float hlK = hlW * saturate(IniParams.Load(int2(174,0)).x);
+    if (hlK > 0.001) o0.xyz = lerp(o0.xyz, float3(0.93, 0.97, 1.0), hlK * 0.6);
+  }
   o0.w = 1;
   r0.w = abs(r0.x) + abs(r0.y);
   r0.w = r0.w + abs(r0.z);

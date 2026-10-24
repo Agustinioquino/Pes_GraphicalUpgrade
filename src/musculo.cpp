@@ -503,6 +503,7 @@ void MuscleHookPresent() {
     if (!s_tried) Install();
     if (!s_ok) return;
     UpdateFactors();
+    FisicoHighlightPresent();   // (24/10) brillo que late sobre el musculo de la fila elegida (fisico.cpp)
     {   // entrada / salida del menu Fisico
         static bool s_was = false;
         bool a = MusclePhysiqueActive();
