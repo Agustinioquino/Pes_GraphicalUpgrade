@@ -278,7 +278,9 @@ bool SkinToneGain(int gameIdx, int tono, int matiz, float out[3]);   // ganancia
 void SkinToneSwatch(int tono, unsigned char rgb[3]);
 bool SkinToneGet(uint32_t id, int* tono, int* matiz);
 void SkinToneSet(uint32_t id, const char* name, int tono, int matiz);
-void SkinTonePresent();                           // guardado diferido + vista previa del jugador editado (x185..w185)
+void SkinTonePresent();                           // guardado diferido + tabla de jugadores con tono propio (194..242)
+bool SkinToneParams(int gameIdx, int tono, int matiz, float k, float out[3]);   // (24/10 c) (kL, m0, m1) en Oklab para pes_skintone.hlsli
+int SkinToneGame(uint32_t id);                    // color de piel del juego guardado para ese jugador (0 = no se sabe)
 int FisicoSkinIndex();                            // color de piel del juego (1..6) del jugador del menu Fisico (0 = no se sabe)
 void CodeWatchStart();                            // (24/10) vigila la seccion .text del exe: anota en el log lo que cambie (codewatch.cpp)
 bool CodeWatchOrig(uintptr_t a, unsigned char* out, size_t n);   // bytes de la copia (registro de cierres)
@@ -319,12 +321,22 @@ int MenuTestCount(int what); float MenuTestNoise(); const std::string& MenuTestS
 size_t MenuTestResults(); bool MenuTestResult_(size_t i, std::string& group, std::string& section, float& diff, int& state);
 LRESULT OverlayWndProc(HWND, UINT, WPARAM, LPARAM, bool& handled);
 // (24/10) vidrio de los menus del juego, estilo Liquid Glass (glass.cpp): GS + PS propios para los dibujos del menu (55a003da),
-// copia desenfocada del fondo antes de los paneles; 189..191 opciones
-struct GlassScope { bool on = false; ID3D11PixelShader* ps = nullptr; ID3D11ShaderResourceView* srv[2] = {}; ID3D11ShaderResourceView* t120 = nullptr; ID3D11SamplerState* samp = nullptr; ID3D11Buffer* cb = nullptr; };
+// copia desenfocada del fondo antes de los paneles; 189..192 opciones. v2 (24/10 c): el GS decide por triangulo, sin buffer
+struct GlassScope { bool on = false; ID3D11PixelShader* ps = nullptr; ID3D11ShaderResourceView* srv[2] = {}; ID3D11ShaderResourceView* t120 = nullptr; ID3D11SamplerState* samp = nullptr; ID3D11Buffer* cb = nullptr;
+                    ID3D11ShaderResourceView* gsT8 = nullptr; ID3D11ShaderResourceView* gsT21 = nullptr; ID3D11ShaderResourceView* gsT120 = nullptr; ID3D11SamplerState* gsS0 = nullptr; };
 bool GlassBeforeDraw(ID3D11DeviceContext* c, uint64_t ps, uint64_t vs, UINT verts, GlassScope& g);
 void GlassAfterDraw(ID3D11DeviceContext* c, GlassScope& g);
 void GlassPresent(); void GlassReloadShaders();
 extern std::atomic<int> g_glassDraws, g_glassSnaps;
+// (24/10 c) aro y punto blanco del musculo elegido como capa de interfaz (ring.cpp): variante de la piel que junta las marcas
+// en u5 y un dibujo extra encima de la imagen del jugador del menu Fisico
+struct RingScope { bool on = false, overlay = false; ID3D11PixelShader* prevPS = nullptr; ID3D11PixelShader* oPS = nullptr; ID3D11BlendState* oBS = nullptr; float oBF[4] = {}; UINT oSM = 0;
+                   ID3D11DepthStencilState* oDSS = nullptr; UINT oRef = 0; ID3D11ShaderResourceView* oT20 = nullptr; ID3D11ShaderResourceView* oT120 = nullptr; };
+bool RingBeforeDraw(ID3D11DeviceContext* c, uint64_t ps, uint64_t vs, RingScope& r);
+void RingAfterDraw(ID3D11DeviceContext* c, RingScope& r);
+void RingOverlayBegin(ID3D11DeviceContext* c, RingScope& r);
+void RingOverlayEnd(ID3D11DeviceContext* c, RingScope& r);
+void RingReloadShaders();
 extern std::atomic<bool> g_menuOpen;
 extern std::atomic<int> g_replacedCount, g_failedCount;
 extern std::vector<std::string> g_compileErrors;

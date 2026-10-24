@@ -1,12 +1,14 @@
-// PES21 FX - vidrio de los menus del juego (24/10), estilo "Liquid Glass" del iPhone.
-// Los menus de PES (y el marcador del partido) se dibujan con un solo pixel shader (55a003da: textura x color, alfa) sobre la
-// imagen RGB10A2 que despues compone 87552b53. Con la opcion prendida, cada dibujo de ese shader pasa por nuestro geometry
-// shader (le agrega el rectangulo del elemento en pantalla) y nuestro PS (shaders\pes_glass_ps.hlsl), que decide por
-// elemento si es un panel (vidrio: fondo esmerilado con borde brillante y refraccion) o texto / icono / foto (sin cambios).
-// El fondo del vidrio es una copia de la imagen del menu tomada justo antes del primer panel (y otra vez antes de un panel
-// que pisa algo dibujado despues de la ultima copia: paneles dentro de paneles), desenfocada en 3 niveles (Kawase doble).
-// Cada pasada del menu anota en un buffer (u1) que dibujos fueron vidrio y su rectangulo; esa lista vuelve a la CPU unos
-// cuadros despues (los menus son quietos) y decide donde tomar las copias en las pasadas siguientes.
+// PES21 FX - vidrio en el menu Fisico (24/10), estilo "Liquid Glass" del iPhone.
+// Los menus de PES se dibujan con un solo pixel shader (55a003da: textura x color, alfa) sobre la imagen RGB10A2 que despues
+// compone 87552b53. Con la opcion prendida (y por defecto solo en Editar > Jugadores > Fisico), cada dibujo de ese shader pasa
+// por nuestro geometry shader (pes_glass_gs.hlsl: decide una vez por triangulo si el elemento es un panel y le agrega su
+// rectangulo en pantalla) y nuestro PS (pes_glass_ps.hlsl: vidrio con fondo desenfocado, borde brillante, refraccion y
+// esquinas redondeadas; texto, iconos y fotos quedan igual). El fondo del vidrio es una copia de la imagen del menu tomada
+// antes del primer dibujo con una textura chica (los fondos de pantalla completa del menu usan texturas grandes y quedan en
+// la copia), desenfocada en 3 niveles (Kawase doble).
+// v2 (24/10 c): la v1 bajaba mucho los cuadros: cada dibujo escribia un buffer (u1) y la placa esperaba a que terminara el
+// anterior, la decision se hacia en cada pixel (25 lecturas) y la pasada se cortaba en cada mascara del menu (una copia del
+// fondo por cada corte). Ahora no hay buffer, la decision es por triangulo y la pasada solo se corta por tiempo.
 //   189: x on | y esmerilado | z radio del desenfoque | w tinte;  190: x brillo del borde | y refraccion | z radio de las
 //   esquinas (px) | w brillo de arriba;  191: x opacidad de paneles opacos | y tamano minimo (px) | z tolerancia | w log
 //   192: x donde (0 = solo el menu Fisico de Editar > Jugadores, 1 = todos los menus)
@@ -19,46 +21,30 @@
 namespace fx {
 
 static const uint64_t kUiPS = 0x55a003da3f888a81ULL, kUiVS1 = 0xfb68a5a0762dad46ULL, kUiVS2 = 0x1932d77df62c65beULL;
-static const uint64_t kFinalPS = 0x87552b538a1356edULL, kTaaPS = 0x1a7534929602c747ULL;
-static const int kMaxDraws = 1024, kRing = 8, kMaxSnaps = 16;
 
-static std::mutex s_mx;   // creacion de recursos, plan de copias y anillo de lectura
+static std::mutex s_mx;   // creacion de recursos
 static bool s_tried = false;
 static ID3D11VertexShader* s_fsVS = nullptr; static ID3D11GeometryShader* s_gs = nullptr;
 static ID3D11PixelShader *s_ps = nullptr, *s_down = nullptr, *s_up = nullptr;
 static ID3D11SamplerState* s_samp = nullptr; static ID3D11RasterizerState* s_rs = nullptr;
 static ID3D11DepthStencilState* s_dss = nullptr; static ID3D11BlendState* s_bs = nullptr;
-static ID3D11Buffer* s_drawCB[kMaxDraws * 2 + 2] = {};   // inmutables (k, premultiplicada): un cbuffer por numero de dibujo
+static ID3D11Buffer* s_drawCB[2] = {};   // inmutables: (0, premultiplicada, 0, 0)
 // copia de la imagen y niveles del desenfoque: 0 = 1/2, 1 = 1/4, 2 = 1/8 (bajada), 3 = 1/4, 4 = 1/2 (subida: el que se usa)
 static ID3D11Texture2D* s_snap = nullptr; static ID3D11ShaderResourceView* s_snapSRV = nullptr;
 static ID3D11Texture2D* s_lv[5] = {}; static ID3D11RenderTargetView* s_lvRTV[5] = {}; static ID3D11ShaderResourceView* s_lvSRV[5] = {};
 static UINT s_w = 0, s_h = 0; static DXGI_FORMAT s_fmt = DXGI_FORMAT_UNKNOWN;
 static std::atomic<bool> s_haveSnap{false};
-// lo que anota el PS por dibujo y su vuelta a la CPU
-static ID3D11Buffer* s_rec = nullptr; static ID3D11UnorderedAccessView* s_recUAV = nullptr;
-static ID3D11Buffer* s_stage[kRing] = {}; static int s_stageSeq[kRing];
-static std::atomic<int> s_passSeq{0}; static int s_lastParsed = 0;
-static std::vector<int> s_sched;   // numeros de dibujo antes de los que se copia el fondo (bajo s_mx)
-static std::atomic<int> s_armSeq{-1}; static double s_nextLog = 0;
 std::atomic<int> g_glassDraws{0}, g_glassSnaps{0};
-// diagnostico: lo que sabe la CPU de cada dibujo de la pasada anotada
-struct GlassNote { uint64_t vs = 0; UINT verts = 0, tw = 0, th = 0; int fmt = 0; int src = 0, dst = 0; bool bound = false; };
-static GlassNote s_notes[kRing][kMaxDraws]; static int s_noteN[kRing] = {};
-static ID3D11Resource* s_uiTex = nullptr;   // ultima imagen del menu (sin retener: solo para comparar punteros en el log)
+// diagnostico (w191): resumen de la ultima pasada
+struct PassInfo { int draws = 0, snapAt = -1, bound = 0; UINT tw[6] = {}, th[6] = {}; };
+static PassInfo s_last; static std::mutex s_lastMx; static double s_nextLog = 0;
 
-// una pasada del menu = los dibujos de 55a003da sobre la misma imagen, en el mismo contexto, sin dibujos a otra imagen en el
-// medio (los de otros shaders sobre la misma imagen, p.ej. las mascaras cdff1e1b, no la cortan) y sin una pausa de mas de
-// 4 ms (en los menus 2D el contexto puede grabar solo menu cuadro tras cuadro)
-struct GlassPass { ID3D11DeviceContext* ctx = nullptr; ID3D11Resource* tex = nullptr; bool inUI = false; double lastT = 0; int k = 0, seq = 0, snaps = 0; size_t next = 0; std::vector<int> sched; };
+// una pasada del menu = los dibujos de 55a003da sobre la misma imagen, en el mismo contexto, sin una pausa de mas de 6 ms
+// (otros dibujos en el medio, como las mascaras del menu a otra imagen, no la cortan)
+struct GlassPass { ID3D11DeviceContext* ctx = nullptr; ID3D11Resource* tex = nullptr; bool inUI = false, snapped = false; double lastT = 0; int k = 0; PassInfo info; };
 static thread_local GlassPass t_gp;
 
 template<class T> static void RelT(T*& p) { if (p) { p->Release(); p = nullptr; } }
-static ID3D11Resource* RT0Resource(ID3D11DeviceContext* c) {   // con AddRef
-    ID3D11RenderTargetView* rtv = nullptr; c->OMGetRenderTargets(1, &rtv, nullptr);
-    if (!rtv) return nullptr;
-    ID3D11Resource* r = nullptr; rtv->GetResource(&r); rtv->Release();
-    return r;
-}
 
 static void EnsureShaders() {
     if (s_tried || !g_dev.dev) return; s_tried = true;
@@ -74,34 +60,19 @@ static void EnsureShaders() {
         D3D11_RASTERIZER_DESC rd{}; rd.FillMode = D3D11_FILL_SOLID; rd.CullMode = D3D11_CULL_NONE; rd.DepthClipEnable = TRUE; d->CreateRasterizerState(&rd, &s_rs);
         D3D11_DEPTH_STENCIL_DESC dd{}; dd.DepthEnable = FALSE; dd.StencilEnable = FALSE; d->CreateDepthStencilState(&dd, &s_dss);
         D3D11_BLEND_DESC bd{}; bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL; d->CreateBlendState(&bd, &s_bs);
-    }
-    if (!s_drawCB[0]) {
-        for (int i = 0; i < kMaxDraws * 2 + 2; i++) {
-            UINT v[4] = { i < kMaxDraws * 2 ? (UINT)(i >> 1) : 0xffffu, (UINT)(i & 1), 0, 0 };
-            D3D11_BUFFER_DESC bd{}; bd.ByteWidth = 16; bd.Usage = D3D11_USAGE_IMMUTABLE; bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-            D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = v;
-            d->CreateBuffer(&bd, &sd, &s_drawCB[i]);
+        for (int i = 0; i < 2; i++) {
+            UINT v[4] = { 0, (UINT)i, 0, 0 };
+            D3D11_BUFFER_DESC cb{}; cb.ByteWidth = 16; cb.Usage = D3D11_USAGE_IMMUTABLE; cb.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+            D3D11_SUBRESOURCE_DATA sd2{}; sd2.pSysMem = v;
+            d->CreateBuffer(&cb, &sd2, &s_drawCB[i]);
         }
     }
-    Log("vidrio: shaders %s", (s_fsVS && s_gs && s_ps && s_down && s_up) ? "listos" : "NO compilaron (ver errores)");
+    Log("vidrio: shaders %s", (s_fsVS && s_gs && s_ps && s_down && s_up) ? "listos (v2)" : "NO compilaron (ver errores)");
 }
 void GlassReloadShaders() {
     std::lock_guard<std::mutex> lk(s_mx);
     RelT(s_fsVS); RelT(s_gs); RelT(s_ps); RelT(s_down); RelT(s_up);
     s_tried = false;
-}
-
-static bool EnsureRec() {
-    if (s_rec) return true;
-    D3D11_BUFFER_DESC bd{}; bd.ByteWidth = kMaxDraws * 16; bd.Usage = D3D11_USAGE_DEFAULT; bd.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
-    bd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED; bd.StructureByteStride = 16;
-    std::vector<uint32_t> zero(kMaxDraws * 4, 0); D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = zero.data();
-    if (FAILED(g_dev.dev->CreateBuffer(&bd, &sd, &s_rec))) return false;
-    D3D11_UNORDERED_ACCESS_VIEW_DESC ud{}; ud.Format = DXGI_FORMAT_UNKNOWN; ud.ViewDimension = D3D11_UAV_DIMENSION_BUFFER; ud.Buffer.NumElements = kMaxDraws;
-    if (FAILED(g_dev.dev->CreateUnorderedAccessView(s_rec, &ud, &s_recUAV))) { RelT(s_rec); return false; }
-    D3D11_BUFFER_DESC st = bd; st.Usage = D3D11_USAGE_STAGING; st.BindFlags = 0; st.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-    for (int i = 0; i < kRing; i++) { g_dev.dev->CreateBuffer(&st, nullptr, &s_stage[i]); s_stageSeq[i] = -1; }
-    return true;
 }
 
 static bool EnsureTargets(const D3D11_TEXTURE2D_DESC& rd) {
@@ -174,21 +145,11 @@ static void Snapshot(ID3D11DeviceContext* c, ID3D11Texture2D* tex) {
     g_glassSnaps++;
 }
 
-// comienzo de una pasada del menu: lo anotado por la pasada anterior va al anillo de lectura y el buffer se limpia
-static void PassBegin(ID3D11DeviceContext* c, GlassPass& st) {
-    int prev = st.seq - 1;
-    if (prev >= 1) { int slot = prev % kRing; c->CopyResource(s_stage[slot], s_rec); s_stageSeq[slot] = prev; }
-    st.sched = s_sched; st.next = 0;
-    const UINT z[4] = { 0, 0, 0, 0 }; c->ClearUnorderedAccessViewUint(s_recUAV, z);
-    if (s_armSeq.load() == st.seq) s_noteN[st.seq % kRing] = 0;
-}
-
 // 0 = no sirve (sin mezcla, aditiva...), 1 = alfa normal (SRC_ALPHA, INV_SRC_ALPHA), 2 = premultiplicada (ONE, INV_SRC_ALPHA)
-static int BlendMode(ID3D11BlendState* bs, int* src, int* dst) {
-    if (!bs) { *src = *dst = 0; return 0; }
+static int BlendMode(ID3D11BlendState* bs) {
+    if (!bs) return 0;
     D3D11_BLEND_DESC bd; bs->GetDesc(&bd);
     const auto& r = bd.RenderTarget[0];
-    *src = r.BlendEnable ? (int)r.SrcBlend : 0; *dst = r.BlendEnable ? (int)r.DestBlend : 0;
     if (!r.BlendEnable || r.BlendOp != D3D11_BLEND_OP_ADD || r.DestBlend != D3D11_BLEND_INV_SRC_ALPHA) return 0;
     if ((r.RenderTargetWriteMask & 7) != 7) return 0;
     if (r.SrcBlend == D3D11_BLEND_SRC_ALPHA) return 1;
@@ -203,92 +164,92 @@ static bool GlassWanted() {
     return g_cfg.live[192][0] > 0.5f || MusclePhysiqueAge() < 0.15;
 }
 
+static void EndPass(GlassPass& st) {
+    if (!st.inUI) return;
+    st.inUI = false;
+    std::lock_guard<std::mutex> lk(s_lastMx); s_last = st.info;
+}
+
 bool GlassBeforeDraw(ID3D11DeviceContext* c, uint64_t ps, uint64_t vs, UINT verts, GlassScope& g) {
+    (void)verts;
+    if (ps != kUiPS) return false;   // los demas dibujos no cortan la pasada (solo el tiempo o otra imagen)
     GlassPass& st = t_gp;
-    if (st.ctx != c) { st.ctx = c; st.inUI = false; }
-    if (ps != kUiPS || !GlassWanted() || !g_dev.dev) {
-        // otro shader en medio de la pasada: si dibuja sobre la misma imagen la pasada sigue
-        if (st.inUI) { ID3D11Resource* r = RT0Resource(c); if (r != st.tex) st.inUI = false; if (r) r->Release(); }
-        // (diagnostico) la composicion final y el TAA: leen / escriben la misma imagen que el menu?
-        if ((ps == kFinalPS || ps == kTaaPS) && g_cfg.live[191][3] > 0.5f && s_uiTex) {
-            static std::atomic<int> n{0};
-            if (n < 6) {
-                bool same = false;
-                if (ps == kFinalPS) { ID3D11ShaderResourceView* t0 = nullptr; c->PSGetShaderResources(0, 1, &t0); if (t0) { ID3D11Resource* r = nullptr; t0->GetResource(&r); same = r == s_uiTex; if (r) r->Release(); t0->Release(); } }
-                else { ID3D11RenderTargetView* rt[2] = {}; c->OMGetRenderTargets(2, rt, nullptr); for (auto* v : rt) if (v) { ID3D11Resource* r = nullptr; v->GetResource(&r); same |= r == s_uiTex; if (r) r->Release(); v->Release(); } }
-                n++; Log("vidrio: %s %s la imagen del menu", ps == kFinalPS ? "la composicion final (87552b53)" : "el TAA (1a753492)", same ? (ps == kFinalPS ? "LEE" : "ESCRIBE") : (ps == kFinalPS ? "no lee" : "no escribe"));
-            }
-        }
-        if (ps != kUiPS) return false;
-        st.inUI = false; return false;
-    }
+    if (st.ctx != c) { EndPass(st); st.ctx = c; }
+    if (!GlassWanted() || !g_dev.dev) { EndPass(st); return false; }
     ID3D11Texture2D* tex = nullptr;
-    { ID3D11Resource* r = RT0Resource(c); if (r) { r->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&tex); r->Release(); } }
-    if (!tex) { st.inUI = false; return false; }
+    {
+        ID3D11RenderTargetView* rtv = nullptr; c->OMGetRenderTargets(1, &rtv, nullptr);
+        if (rtv) { ID3D11Resource* r = nullptr; rtv->GetResource(&r); rtv->Release(); if (r) { r->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&tex); r->Release(); } }
+    }
+    if (!tex) return false;
     D3D11_TEXTURE2D_DESC td; tex->GetDesc(&td);
     bool fmtOk = td.Format == DXGI_FORMAT_R10G10B10A2_TYPELESS || td.Format == DXGI_FORMAT_R10G10B10A2_UNORM;
     UINT minW = g_bbW ? g_bbW * 3 / 4 : 1024;
-    if (!fmtOk || td.SampleDesc.Count != 1 || td.ArraySize != 1 || td.Width < minW) { tex->Release(); st.inUI = false; return false; }
-    std::lock_guard<std::mutex> lk(s_mx);   // los recursos compartidos (copias, buffer de anotaciones) no cambian mientras se usan
+    if (!fmtOk || td.SampleDesc.Count != 1 || td.ArraySize != 1 || td.Width < minW) { tex->Release(); return false; }
+    std::lock_guard<std::mutex> lk(s_mx);   // los recursos compartidos (copias, shaders) no cambian mientras se usan
     EnsureShaders();
-    if (!s_fsVS || !s_gs || !s_ps || !s_down || !s_up || !EnsureRec() || !EnsureTargets(td)) { tex->Release(); st.inUI = false; return false; }
-    double now = Now();
-    if (!st.inUI || st.tex != (ID3D11Resource*)tex || now - st.lastT > 0.004) {
-        st.inUI = true; st.tex = tex; st.k = 0; st.snaps = 0; st.seq = ++s_passSeq;
-        PassBegin(c, st);
-        if (s_uiTex != tex) { s_uiTex = tex; static std::atomic<int> n{0}; if (n++ < 4) Log("vidrio: pasada del menu sobre %ux%u formato %d (contexto %s)", td.Width, td.Height, (int)td.Format, c->GetType() == D3D11_DEVICE_CONTEXT_DEFERRED ? "diferido" : "inmediato"); }
+    if (!s_fsVS || !s_gs || !s_ps || !s_down || !s_up || !EnsureTargets(td)) { tex->Release(); return false; }
+    const double now = Now();
+    if (!st.inUI || st.tex != (ID3D11Resource*)tex || now - st.lastT > 0.006) {
+        EndPass(st);
+        st.inUI = true; st.tex = tex; st.k = 0; st.snapped = false; st.info = PassInfo();
     }
     st.lastT = now;
-    int k = st.k++;
-    // copias del fondo: antes del primer panel de vidrio (sin plan todavia: antes del primer dibujo) y donde diga el plan
-    bool want = false;
-    if (st.sched.empty()) want = st.snaps == 0;
-    else while (st.next < st.sched.size() && st.sched[st.next] <= k) { st.next++; want = true; }
-    if (want && st.snaps < kMaxSnaps) { Snapshot(c, tex); st.snaps++; s_haveSnap = true; }
-    tex->Release();
-
-    bool armed = s_armSeq.load() == st.seq && k < kMaxDraws;
-    GlassNote* note = nullptr;
-    if (armed) {
-        note = &s_notes[st.seq % kRing][k]; *note = GlassNote(); note->vs = vs; note->verts = verts;
+    const int k = st.k++;
+    st.info.draws = st.k;
+    // textura del dibujo: los fondos de pantalla completa usan texturas grandes; la copia del fondo se toma antes del primer
+    // dibujo con una textura chica (un panel, un texto), una vez por pasada
+    UINT tw = 0, th = 0;
+    {
         ID3D11ShaderResourceView* t8 = nullptr; c->PSGetShaderResources(8, 1, &t8);
         if (t8) { ID3D11Resource* r = nullptr; t8->GetResource(&r); ID3D11Texture2D* t2 = nullptr; if (r) { r->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t2); r->Release(); }
-            if (t2) { D3D11_TEXTURE2D_DESC d8; t2->GetDesc(&d8); note->tw = d8.Width; note->th = d8.Height; note->fmt = (int)d8.Format; t2->Release(); }
+            if (t2) { D3D11_TEXTURE2D_DESC d8; t2->GetDesc(&d8); tw = d8.Width; th = d8.Height; t2->Release(); }
             t8->Release(); }
-        int& nn = s_noteN[st.seq % kRing]; if (k + 1 > nn) nn = k + 1;
     }
+    if (k < 6) { st.info.tw[k] = tw; st.info.th[k] = th; }
+    if (!st.snapped && (tw < 1024 || th < 512)) {
+        Snapshot(c, tex); st.snapped = true; s_haveSnap = true; st.info.snapAt = k;
+    }
+    tex->Release();
     if (!s_haveSnap || (vs != kUiVS1 && vs != kUiVS2)) return false;
     D3D11_PRIMITIVE_TOPOLOGY topo; c->IAGetPrimitiveTopology(&topo);
     if (topo != D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST && topo != D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP) return false;
     { ID3D11GeometryShader* ogs = nullptr; c->GSGetShader(&ogs, nullptr, nullptr); if (ogs) { ogs->Release(); return false; } }
-    ID3D11BlendState* bs = nullptr; float bf[4]; UINT sm = 0; c->OMGetBlendState(&bs, bf, &sm);
-    int bsrc = 0, bdst = 0; int mode = BlendMode(bs, &bsrc, &bdst); if (bs) bs->Release();
-    if (note) { note->src = bsrc; note->dst = bdst; }
+    int mode = 0;
+    { ID3D11BlendState* bs = nullptr; float bf[4]; UINT sm = 0; c->OMGetBlendState(&bs, bf, &sm); mode = BlendMode(bs); if (bs) bs->Release(); }
     if (!mode) return false;
-    // enlazar nuestro GS + PS, el fondo (t20 desenfocado, t21 nitido), los parametros, el sampler y el numero de dibujo
+    // PS: el nuestro, el fondo (t20 desenfocado, t21 nitido), parametros, sampler y la mezcla (b13)
     c->PSGetShader(&g.ps, nullptr, nullptr);
     c->PSGetShaderResources(20, 2, g.srv);
     c->PSGetShaderResources(120, 1, &g.t120);
     c->PSGetSamplers(15, 1, &g.samp);
     c->PSGetConstantBuffers(13, 1, &g.cb);
+    // GS: la textura y el sampler del dibujo (para decidir que es), la copia (tamano de pantalla) y los parametros
+    ID3D11ShaderResourceView* t8 = nullptr; c->PSGetShaderResources(8, 1, &t8);
+    ID3D11SamplerState* s0 = nullptr; c->PSGetSamplers(0, 1, &s0);
+    c->GSGetShaderResources(8, 1, &g.gsT8); c->GSGetShaderResources(21, 1, &g.gsT21); c->GSGetShaderResources(120, 1, &g.gsT120); c->GSGetSamplers(0, 1, &g.gsS0);
+    c->GSSetShaderResources(8, 1, &t8); c->GSSetSamplers(0, 1, &s0);
+    c->GSSetShaderResources(21, 1, &s_snapSRV);
+    ID3D11ShaderResourceView* prm = g_dev.paramSRV; c->GSSetShaderResources(120, 1, &prm);
+    if (t8) t8->Release(); if (s0) s0->Release();
     c->GSSetShader(s_gs, nullptr, 0); c->PSSetShader(s_ps, nullptr, 0);
     ID3D11ShaderResourceView* sv[2] = { s_lvSRV[4], s_snapSRV }; c->PSSetShaderResources(20, 2, sv);
-    ID3D11ShaderResourceView* prm = g_dev.paramSRV; c->PSSetShaderResources(120, 1, &prm);
+    c->PSSetShaderResources(120, 1, &prm);
     c->PSSetSamplers(15, 1, &s_samp);
-    ID3D11Buffer* cb = s_drawCB[k < kMaxDraws ? k * 2 + (mode == 2 ? 1 : 0) : kMaxDraws * 2 + (mode == 2 ? 1 : 0)];
-    c->PSSetConstantBuffers(13, 1, &cb);
-    c->OMSetRenderTargetsAndUnorderedAccessViews(D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 1, 1, &s_recUAV, nullptr);
+    c->PSSetConstantBuffers(13, 1, &s_drawCB[mode == 2 ? 1 : 0]);
     g.on = true;
-    if (note) note->bound = true;
+    st.info.bound++;
     g_glassDraws++;
     return true;
 }
 
 void GlassAfterDraw(ID3D11DeviceContext* c, GlassScope& g) {
     if (!g.on) return;
-    ID3D11UnorderedAccessView* nu = nullptr;
-    c->OMSetRenderTargetsAndUnorderedAccessViews(D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 1, 1, &nu, nullptr);
     c->GSSetShader(nullptr, nullptr, 0);
+    c->GSSetShaderResources(8, 1, &g.gsT8); if (g.gsT8) g.gsT8->Release();
+    c->GSSetShaderResources(21, 1, &g.gsT21); if (g.gsT21) g.gsT21->Release();
+    c->GSSetShaderResources(120, 1, &g.gsT120); if (g.gsT120) g.gsT120->Release();
+    c->GSSetSamplers(0, 1, &g.gsS0); if (g.gsS0) g.gsS0->Release();
     c->PSSetShader(g.ps, nullptr, 0); if (g.ps) g.ps->Release();
     c->PSSetShaderResources(20, 2, g.srv); for (auto* v : g.srv) if (v) v->Release();
     c->PSSetShaderResources(120, 1, &g.t120); if (g.t120) g.t120->Release();
@@ -297,67 +258,18 @@ void GlassAfterDraw(ID3D11DeviceContext* c, GlassScope& g) {
     g = GlassScope();
 }
 
-// en Present: leer lo que anoto una pasada de hace unos cuadros, armar el plan de copias y (con w191) anotar en el log
+// en Present: (w191) cada 20 s, como fue la ultima pasada del menu
 void GlassPresent() {
-    if (!g_dev.imm || g_cfg.live[189][0] < 0.5f) return;
-    double now = Now();
-    bool logOn = g_cfg.live[191][3] > 0.5f;
-    if (logOn && now > s_nextLog && s_armSeq.load() < s_passSeq.load()) { s_armSeq = s_passSeq.load() + 2; s_nextLog = now + 20.0; }
-    int cur = s_passSeq.load();
-    int target = cur - 3;
-    if (target < 1 || target <= s_lastParsed || !s_rec) return;
-    int slot = target % kRing;
-    { std::lock_guard<std::mutex> lk(s_mx); if (s_stageSeq[slot] != target) return; }
-    D3D11_MAPPED_SUBRESOURCE m{};
-    HRESULT hr = g_dev.imm->Map(s_stage[slot], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m);
-    if (hr == DXGI_ERROR_WAS_STILL_DRAWING || FAILED(hr)) return;
-    std::vector<uint32_t> rec(kMaxDraws * 4);
-    memcpy(rec.data(), m.pData, kMaxDraws * 16);
-    g_dev.imm->Unmap(s_stage[slot], 0);
-    s_lastParsed = target;
-
-    struct R { int k, x0, y0, x1, y1; uint32_t f, w; };
-    std::vector<R> drawn;
-    for (int k = 0; k < kMaxDraws; k++) {
-        uint32_t f = rec[k * 4 + 2]; if (!(f & 1)) continue;
-        R r; r.k = k; r.x0 = rec[k * 4] & 0xffff; r.y0 = rec[k * 4] >> 16; r.x1 = rec[k * 4 + 1] & 0xffff; r.y1 = rec[k * 4 + 1] >> 16; r.f = f; r.w = rec[k * 4 + 3];
-        drawn.push_back(r);
-    }
-    // plan: copiar antes del primer panel de vidrio y antes de cada panel que pisa algo dibujado despues de la ultima copia
-    std::vector<int> sched; std::vector<const R*> since;
-    auto over = [](const R& a, const R& b) { int w = (std::min)(a.x1, b.x1) - (std::max)(a.x0, b.x0), h = (std::min)(a.y1, b.y1) - (std::max)(a.y0, b.y0); return w > 2 && h > 2; };
-    int nGlass = 0, nSheen = 0;
-    for (const R& r : drawn) {
-        if (r.f & 32) nSheen++;
-        if (r.f & 16) {
-            nGlass++;
-            bool need = sched.empty();
-            if (!need) for (const R* s : since) if (over(*s, r)) { need = true; break; }
-            if (need && (int)sched.size() < kMaxSnaps) { sched.push_back(r.k); since.clear(); }
-        }
-        since.push_back(&r);
-    }
-    { std::lock_guard<std::mutex> lk(s_mx); s_sched = sched; }
-
-    if (logOn && target == s_armSeq.load()) {
-        std::string sp; for (int v : sched) { char b[16]; snprintf(b, sizeof(b), " #%d", v); sp += b; }
-        Log("vidrio: pasada %d: %d dibujos visibles, %d de vidrio, %d con brillo; copias del fondo antes de:%s (%d dibujos con nuestro shader, %d copias desde el inicio)",
-            target, (int)drawn.size(), nGlass, nSheen, sp.empty() ? " (ninguna)" : sp.c_str(), g_glassDraws.load(), g_glassSnaps.load());
-        const GlassNote* notes = s_notes[target % kRing]; int nn = s_noteN[target % kRing];
-        int shown = 0;
-        for (const R& r : drawn) {
-            bool interesting = (r.f & (16 | 32)) || ((r.x1 - r.x0) >= 64 && (r.y1 - r.y0) >= 24);
-            if (!interesting || shown >= 70) continue;
-            shown++;
-            const GlassNote* nt = r.k < nn ? &notes[r.k] : nullptr;
-            Log("vidrio:  #%d (%d,%d)-(%d,%d) %dx%d |%s%s%s%s%s%s%s%s | alfa %.2f lum %.2f dif %.2f dentro %u | VS %08x %u vert | tex %ux%u fmt %d | mezcla %d/%d%s",
-                r.k, r.x0, r.y0, r.x1, r.y1, r.x1 - r.x0, r.y1 - r.y0,
-                (r.f & 2) ? " recto" : " girado", (r.f & 4) ? " parejo" : "", (r.f & 8) ? " transl" : " opaco", (r.f & 16) ? " VIDRIO" : "", (r.f & 32) ? " BRILLO" : "",
-                (r.f & 64) ? " tex-entera" : " tex-parte", (r.f & 128) ? " rect" : "", (r.f & 256) ? " suave" : "",
-                (r.w & 255) / 255.0f, ((r.w >> 8) & 255) / 255.0f, ((r.w >> 16) & 255) / 255.0f, r.w >> 24,
-                nt ? (unsigned)(nt->vs >> 32) : 0u, nt ? nt->verts : 0u, nt ? nt->tw : 0u, nt ? nt->th : 0u, nt ? nt->fmt : 0, nt ? nt->src : 0, nt ? nt->dst : 0, (nt && !nt->bound) ? " (sin nuestro shader)" : "");
-        }
-    }
+    if (g_cfg.live[189][0] < 0.5f || g_cfg.live[191][3] < 0.5f) return;
+    const double now = Now();
+    if (now < s_nextLog) return;
+    PassInfo p; { std::lock_guard<std::mutex> lk(s_lastMx); p = s_last; s_last = PassInfo(); }
+    if (p.draws <= 0) return;
+    s_nextLog = now + 20.0;
+    char tex[160]; int n = 0; tex[0] = 0;
+    for (int i = 0; i < 6 && i < p.draws && n < 140; i++) n += snprintf(tex + n, sizeof tex - n, " %ux%u", p.tw[i], p.th[i]);
+    Log("vidrio: pasada del menu de %d dibujos, %d con nuestro shader, copia del fondo antes del #%d | texturas de los primeros:%s | %d copias desde el inicio",
+        p.draws, p.bound, p.snapAt, tex, g_glassSnaps.load());
 }
 
 } // namespace fx

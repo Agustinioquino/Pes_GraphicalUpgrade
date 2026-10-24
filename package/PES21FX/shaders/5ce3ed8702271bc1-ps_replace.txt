@@ -96,6 +96,7 @@ Texture2D<float4> pesZones    : register(t25);   // PES21 (18/10) zonas de la ca
 #define cmp -
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
+#include "pes_skintone.hlsli"
 
 
 // ===================== gotas de sudor procedurales =====================
@@ -619,11 +620,13 @@ void main(
   r0.y = g_psMaterial.m_materials[1].x * r0.y;
   r0.y = exp2(r0.y);
   r0.x = r0.x * r0.y;
-  {   // (24/10) tono de piel propio del jugador (skintone.cpp): ganancia lineal en x185..z185 cuando w185 = 1
-    float4 ST = IniParams.Load(int2(185,0));
-    if (ST.w > 0.5) r2.xyz = saturate(r2.xyz * ST.xyz);
+  float3 stVeil = g_psMaterial.m_materials[2].xyz;
+  {   // (24/10 c) tono de piel propio del jugador (skintone.cpp + pes_skintone.hlsli): Oklab, tambien el velo de borde; el
+      // VS faab87ee (reemplazo propio) dice el jugador en o6.w
+    int stE = PesSkinEntry(v6.w);
+    if (stE >= 0) { float3 stP = PesSkinParams(stE); r2.xyz = PesSkinApply(r2.xyz, stP); stVeil = PesSkinApply(stVeil, stP); }
   }
-  r3.xyz = g_psMaterial.m_materials[2].xyz + -r2.xyz;
+  r3.xyz = stVeil + -r2.xyz;
   o0.xyz = r0.xxx * r3.xyz + r2.xyz;
   if (P147.y > 0.5) o0.xyz = lerp(o0.xyz, float3(1.0, 0.0, 0.0), pesEdge);   // (20/10) diagnostico y147: rojo = franja del borde de la mascara generica
 

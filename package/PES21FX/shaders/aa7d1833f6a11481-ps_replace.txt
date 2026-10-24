@@ -1,5 +1,8 @@
 // PES 2021 - piel del cuerpo (brazos, piernas, cuello) [hash aa7d1833f6a11481] - piel v2 (w43)
 // PES21 (24/10): con el VS 1c02a92a (reemplazo propio) aclara y hace latir el musculo elegido en el menu Fisico (x174).
+// PES21 (24/10 c): tono de piel por jugador en Oklab (pes_skintone.hlsli; el VS dice el jugador en o6.w). El aro y el punto
+// blanco del musculo ya no se pintan en la piel: la variante pes_skin_hl_ps.hlsl (PES_HL_ACC, solo en el menu Fisico) junta en
+// u5 donde quedo cada marca y la DLL los dibuja encima como capa de interfaz.
 // PES21 (20/10, x147): este shader tambien dibuja la CABEZA de las caras genericas (cuello, orejas, nuca; VS faab87ee). La DLL
 // la reconoce (regla "aa7d1833 vs faab87ee" en PES21FX_rules.ini) y le enlaza los mapas de la cara en t22/t25/t27/t28: con eso
 // recibe lo mismo que la cara (translucidez con el mapa de SSS, orejas finas, saturacion, sangre, rubor, pelicula de sudor,
@@ -49,8 +52,15 @@ Texture2D<float4> pesFacePores : register(t28);
 #define cmp -
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
+#include "pes_skintone.hlsli"
+#ifdef PES_HL_ACC
+RWByteAddressBuffer gHlAcc : register(u5);   // por marca y lado: suma x, suma y, pixeles (4 x 16 bytes)
+#endif
 
 
+#ifdef PES_HL_ACC
+[earlydepthstencil]   // solo pixeles visibles (en el menu Fisico el jugador no se desvanece)
+#endif
 void main(
   float4 v0 : SV_Position0,
   float4 v1 : COLOR0,
@@ -227,11 +237,12 @@ void main(
     r2.yzw = lerp(hpAlb0, r2.yzw, hpK);
     hpTrans = lerp(hpTr0, hpTrans, hpK);
   }
-  {   // (24/10) tono de piel propio del jugador (skintone.cpp): ganancia lineal en x185..z185 cuando w185 = 1
-    float4 ST = IniParams.Load(int2(185,0));
-    if (ST.w > 0.5) r2.yzw = saturate(r2.yzw * ST.xyz);
+  float3 stVeil = g_psMaterial.m_materials[2].xyz;
+  {   // (24/10 c) tono de piel propio del jugador (skintone.cpp + pes_skintone.hlsli): Oklab, tambien el velo de borde
+    int stE = PesSkinEntry(v6.w);
+    if (stE >= 0) { float3 stP = PesSkinParams(stE); r2.yzw = PesSkinApply(r2.yzw, stP); stVeil = PesSkinApply(stVeil, stP); }
   }
-  r3.xyz = g_psMaterial.m_materials[2].xyz + -r2.yzw;
+  r3.xyz = stVeil + -r2.yzw;
   o0.xyz = r0.www * r3.xyz + r2.yzw;
   o0.xyz *= bCav;
   {   // (24/10) resaltado del musculo elegido en el menu Fisico (como el brillo que late en los menus de la cara): el VS
@@ -243,23 +254,21 @@ void main(
     float hlW = hlOk ? saturate(v3.w - 2.0) : 0.0;
     float hlK = hlW * saturate(HL.x);
     if (hlK > 0.001) o0.xyz = lerp(o0.xyz, float3(0.93, 0.97, 1.0), hlK * 0.6);
-    float3 hlP = float3(abs(v4.w), v5.w, v6.w);
-    float hlPw = max(fwidth(hlP.x), max(fwidth(hlP.y), fwidth(hlP.z)));   // fuera de las ramas (derivadas)
-    if (hlOk && HL.w > 0.5) {
-      float4 HP = IniParams.Load(int2(186,0));
-      float hlRing = 0, hlDot = 0;
-      [loop] for (int hm = 0; hm < 2; hm++) {
-        if (hm >= (int)(HL.w + 0.5)) break;
-        float4 M = IniParams.Load(int2(187 + hm, 0));
-        float d = length(hlP - M.xyz);
-        float R = M.w * (0.94 + 0.12 * HP.x);   // el aro late, como el de la cara (radio +- 6 %)
-        float aa = hlPw * 1.5 + 0.0012;
-        hlRing = max(hlRing, 1.0 - smoothstep(0.0012, 0.0012 + aa, abs(d - R)));
-        hlDot = max(hlDot, 1.0 - smoothstep(0.004, 0.004 + aa + 0.004, d));
+#ifdef PES_HL_ACC
+    // (24/10 c) donde quedo cada marca en la pantalla: suma de las posiciones de los pixeles cerca de la marca (por lado)
+    if (hlOk && HL.x > 0.001) {
+      float w0 = abs(v4.w), w1 = abs(v5.w);
+      uint slot = 99;
+      if (w0 > 0.5) slot = v4.w >= 0 ? 0 : 1;
+      else if (w1 > 0.5) slot = v5.w >= 0 ? 2 : 3;
+      if (slot < 4) {
+        uint base = slot * 16, dmy;
+        gHlAcc.InterlockedAdd(base + 0, (uint)v0.x, dmy);
+        gHlAcc.InterlockedAdd(base + 4, (uint)v0.y, dmy);
+        gHlAcc.InterlockedAdd(base + 8, 1u, dmy);
       }
-      float hlA = saturate(max(hlRing * (0.55 + 0.45 * HP.x), hlDot) * HP.y);
-      o0.xyz = lerp(o0.xyz, float3(1.0, 1.0, 1.0), hlA);
     }
+#endif
   }
   o0.w = 1;
   r0.w = abs(r0.x) + abs(r0.y);

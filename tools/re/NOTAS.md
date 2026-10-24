@@ -125,3 +125,14 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
 | PS del menu | 55a003da3f888a81: t8 inTexture (s0 g_sampler) x COLOR0 x g_mulColor (TEXCOORD1) + g_addColor (TEXCOORD2); alpha test contra g_alpharef (TEXCOORD0.z); con VS fb68a5a0 (2D: g_projection) y 1932d77d (con g_transform, m_world y cVSWork); quads de 4 / 6 indices (hasta 18 vertices) |
 | Otros en la misma imagen | cdff1e1b (VS 0ad638e3): textura x color sin x 0.25 (mascaras, ~17 por cuadro, mezcladas con los quads); 765e1433 (VS 537a35c9): el ultimo dibujo de la pasada, t8 x t9 + t10 |
 | Contexto | la pasada del menu se graba en un contexto diferido (el mismo que las sombras del jugador del menu) |
+| Vidrio v2 (24/10 c) | la v1 bajaba mucho los cuadros: UAV por dibujo (la placa esperaba al anterior), 25 lecturas por pixel para decidir y una copia del fondo por cada corte de la pasada (los cdff1e1b la cortaban). v2: el GS decide una vez por triangulo (t8 / s0 copiados del PS al GS), sin UAV; una copia por pasada, antes del primer dibujo con textura chica (w < 1024 o h < 512); la pasada se corta solo por otra imagen o 6 ms sin dibujos del menu |
+| Imagen del jugador en el Fisico | 765e1433 (VS 537a35c9: TEXCOORD0, TEXCOORD1, SV_Position) dibuja la escena (t8, del tamano del viewport de la piel: 1238x1080) al final de la pasada: el aro del musculo se dibuja con el mismo quad justo despues (ring.cpp) |
+| Rotulos dobles de la barra (24/10 c) | 12 = flechas izq / der, 14 = L1 R1 (el visor lo usa con el texto 0x3e0020 "girar"), 15 = L2 R2 (0x3e001f), 16 = palanca R (0x3800ec) |
+
+## Tono de piel en los partidos (skintone.cpp, 24/10 c)
+
+| Que | Donde |
+|---|---|
+| Paleta del juego | kGameSkin 0x14352a910 (6 colores): en Oklab el matiz (~56 grados) y el croma (~0.066) son casi iguales en los 6, solo cambia L: por eso la ganancia por canal se veia como brillo |
+| Posicion de cada personaje | SceneCharacterNode + 0x40 = matriz de mundo (0x1419c61e0 es `lea rax, [rcx + 0x40]`), traslacion en + 0x70 |
+| De quien es cada dibujo | VS de la piel 1c02a92a y de la cabeza faab87ee: hueso 0 (`m_boneMatrices[0]._m30_m31_m32`) x m_world = punto del personaje; la entrada mas cercana de la tabla (filas 194..242) en el plano del piso va al PS en o6.w (1000 + i) |
