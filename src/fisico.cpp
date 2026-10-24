@@ -289,6 +289,7 @@ static bool G_SelFillList(void* sel, const char* const* items, int n, int idx) {
 // juego con los 30 tonos (y "crear color" para uno propio). Si la fila no tiene componente de color queda el selector de antes.
 static uint32_t s_toneRgba[kSkinTones]; static bool s_toneRgbaInit = false;   // bytes r, g, b, a (como los lee Ui_SetColor)
 static void* s_colorComp = nullptr; static uint32_t s_colorShown = 0; static bool s_colorRow = false;
+static bool s_filling = false;   // (24/10 f) rellenando filas: el juego avisa "cambio de valor" al rellenar un selector y hay que ignorarlo
 static uint32_t Rgba(unsigned char r, unsigned char g, unsigned char b) { return (uint32_t)r | ((uint32_t)g << 8) | ((uint32_t)b << 16) | 0xff000000u; }
 static uint32_t ToneRgba(int t) { unsigned char c[3]; SkinToneSwatch(t, c); return Rgba(c[0], c[1], c[2]); }
 static uint32_t ProfileRgba(int tono, uint32_t rgb) {
@@ -327,6 +328,7 @@ static void FillBarRow(void* menu, void* list, int row, const char* label, int v
 static void FillSkinPage(void* menu) {
     void* list = List(menu);
     if (!list) return;
+    struct Guard { Guard() { s_filling = true; } ~Guard() { s_filling = false; } } guard;
     static char tones[kSkinTones + 1][24]; static const char* toneP[kSkinTones + 1];
     static bool init = false;
     if (!init) {
@@ -380,7 +382,7 @@ static void ApplySkin(int row, int idx) {
     SkinToneProf q; SkinToneGetProf(s_editId, q);
     switch (row) {
     case 0: q.tono = std::clamp(idx, 0, kSkinTones); q.rgb = 0; break;   // selector de numeros (sin componente de color)
-    case 1: if (idx >= 1 && idx <= 10) { q.tono = kMonk[idx - 1]; q.rgb = 0; } else if (idx == 0 && !q.rgb) q.tono = 0; break;
+    case 1: if (idx >= 1 && idx <= 10) { q.tono = kMonk[idx - 1]; q.rgb = 0; } else return; break;   // "-" no cambia nada
     case 2: q.luz = std::clamp(idx, -kSteps, kSteps); break;
     case 3: q.sat = std::clamp(idx, -kSteps, kSteps); break;
     case 4: q.matiz = std::clamp(idx, -kSteps, kSteps); break;
@@ -448,7 +450,7 @@ static void SkinColorPoll(void* menu) {
     void* w = Child(List(menu), 0u);
     if (w) { char lab[64]; ToneLabel(lab, sizeof lab, q.tono, q.rgb); SetLabel(w, lab); }
     void* w1 = Child(List(menu), 1u); void* sel = w1 ? FindComp(w1, "selector") : nullptr;   // el tono conocido sigue al color
-    if (sel) G_SelFillList(sel, kMonkName, 11, q.rgb ? 0 : MonkOf(q.tono));
+    if (sel) { s_filling = true; G_SelFillList(sel, kMonkName, 11, q.rgb ? 0 : MonkOf(q.tono)); s_filling = false; }
     static int n = 0; if (n++ < 20) Log("fisico: color de piel elegido %08x -> %s", v, q.rgb ? "propio" : q.tono ? "tono" : "del juego");
 }
 // despues de que el menu base abrio la paleta (decidir sobre la fila de color): ponerle los 30 tonos en lugar de los 72
@@ -573,6 +575,7 @@ static void* __fastcall hk_reset(void* menu, void* a2, void* a3, void* a4) {
 static void* __fastcall hk_val(void* menu, void* a2, void* a3, void* a4) {   // (menu, lista, fila): leer el valor de la fila
     const int list = (int)(intptr_t)a2, row = (int)(intptr_t)a3;
     if (Mine(menu) && s_page == 3) {
+        if (s_filling) return nullptr;
         if (list == 0 && row == 0 && s_colorRow) SkinColorPoll(menu);   // la paleta se cerro
         else if (list == 0 && row >= 2 && row <= 4) ApplySkin(row, ReadRowSteps(menu, row));
         else if (list == 0) { void* sel = FindComp(Child(List(menu), (unsigned)row), "selector"); if (sel) ApplySkin(row, G_SelGet(sel)); }
@@ -585,6 +588,7 @@ static void* __fastcall hk_val(void* menu, void* a2, void* a3, void* a4) {   // 
 static void* __fastcall hk_valset(void* menu, void* a2, void* a3, void* a4) {   // (menu, lista, fila, valor nuevo)
     const int list = (int)(intptr_t)a2, row = (int)(intptr_t)a3, v = (int)(intptr_t)a4;
     if (Mine(menu) && s_page == 3) {
+        if (s_filling) return nullptr;
         if (list == 0 && row >= 2 && row <= 4) ApplySkin(row, s_sliderMode.load() == 1 ? v : v - kSteps);
         else if (list == 0 && !(row == 0 && s_colorRow)) ApplySkin(row, v);
         return nullptr;

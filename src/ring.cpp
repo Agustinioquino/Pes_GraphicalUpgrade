@@ -183,7 +183,7 @@ void RingOverlayEnd(ID3D11DeviceContext* c, RingScope& r) {
 // en el menu Fisico la escena se dibuja en el mismo lugar de la pantalla donde se ve)
 void RingPresent(IDXGISwapChain* sc) {
     if (!g_dev.dev || !g_dev.imm || !sc) return;
-    const int f = PresentNo();
+    const int f = PresentNo() - 1;   // el contador ya subio al entrar a Present: los dibujos de este cuadro llevan el anterior
     if (s_lastSkinFrame.load() != f) return;   // este cuadro no dibujo piel con la variante
     std::lock_guard<std::mutex> lk(s_mx);
     if (!Ensure()) return;
@@ -232,7 +232,7 @@ void RingPresent(IDXGISwapChain* sc) {
     c->VSSetShader(s_fsVS, nullptr, 0); c->GSSetShader(nullptr, nullptr, 0); c->PSSetShader(s_screenPS, nullptr, 0);
     c->IASetInputLayout(nullptr); c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     c->RSSetState(s_rs); c->OMSetDepthStencilState(s_dss, 0); float bf[4] = {}; c->OMSetBlendState(s_bs, bf, 0xffffffff);
-    c->PSSetShaderResources(20, 1, &s_accSRV[PresentNo() & 1]);   // lo que anoto ESTE cuadro
+    c->PSSetShaderResources(20, 1, &s_accSRV[f & 1]);   // lo que anoto ESTE cuadro
     ID3D11ShaderResourceView* prm = g_dev.paramSRV; c->PSSetShaderResources(120, 1, &prm);
     c->Draw(3, 0);
 
