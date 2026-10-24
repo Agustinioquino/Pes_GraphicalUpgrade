@@ -181,16 +181,28 @@ static void SetTitle(void* menu, const char* s, int id) {   // "headline" del ob
 // L1 / R1 cambian de pagina; el rotulo de abajo dice a cual va cada uno. Modo 2 = "recien apretado" (Menu_v70 0x140e48f80
 // lee el modo en controlador + 0x120 + boton * 4: 0 apagado, 1 / 2 / 3 = funciones 0x48 / 0x40 / 0x38 del pad); sin destino
 // queda apagado (ni sonido ni llamada)
+// (24/10 b) la barra de abajo no muestra rotulos sueltos de L1 / R1 (Bar_SetItem 0x140e37540: los indices 6..9 no tienen
+// lugar); los dobles van en 12..16 (12 -> lugar 6, 13 -> 7, 14 -> 11 (stick R), 15 -> 9, 16 -> 8): el 12 es el de L1 R1,
+// antes del L2 R2 del zoom
+enum { H_L1R1 = 12 };
 static void PageHints(void* menu, int page) {
-    static const char* kL1[] = { "", "F\xC3\xADsico", "Torso y brazos", "Cintura y piernas" };
-    static const char* kR1[] = { "Musculatura", "Cintura y piernas", "Piel", "" };
     if (page < 0 || page > kLastPage) return;
     __try {
-        ((SetBtnModeFn)kSetBtnMode)(menu, B_L1, kL1[page][0] ? 2 : 0);
-        ((SetBtnModeFn)kSetBtnMode)(menu, B_R1, kR1[page][0] ? 2 : 0);
-        ((SetHintStrFn)kSetHintStr)(menu, B_L1, kL1[page]);
-        ((SetHintStrFn)kSetHintStr)(menu, B_R1, kR1[page]);
+        ((SetBtnModeFn)kSetBtnMode)(menu, B_L1, page > 0 ? 2 : 0);
+        ((SetBtnModeFn)kSetBtnMode)(menu, B_R1, page < kLastPage ? 2 : 0);
+        ((SetHintStrFn)kSetHintStr)(menu, B_L1, "");
+        ((SetHintStrFn)kSetHintStr)(menu, B_R1, "");
+        ((SetHintStrFn)kSetHintStr)(menu, H_L1R1, "Cambiar p\xC3\xA1gina");
     } __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+// titulo con contador de paginas
+static const char* PageTitle(int page) {
+    switch (page) {
+    case 0: return "F\xC3\xADsico  (1/4)";
+    case 1: return "Musculatura: torso y brazos  (2/4)";
+    case 2: return "Musculatura: cintura y piernas  (3/4)";
+    default: return "Piel: tono propio  (4/4)";
+    }
 }
 
 static int ToSteps(float f) { return std::clamp((int)lroundf((f - 1.0f) / kStep), -kSteps, kSteps); }
@@ -310,13 +322,13 @@ static void GoPage(void* menu, int page, int cursor) {
     if (page == 0) {
         o_rows(menu, nullptr, nullptr, nullptr);   // el juego vuelve a armar sus 13 filas (y sus valores)
         AddJump(menu, kJump0, "Musculatura  >");
-        SetTitle(menu, nullptr, 0x23001b);
+        SetTitle(menu, PageTitle(0), 0);
     } else if (page == 3) {
         FillSkinPage(menu);
-        SetTitle(menu, "Piel: tono propio (FX)", 0);
+        SetTitle(menu, PageTitle(3), 0);
     } else {
         FillMusclePage(menu, page);
-        SetTitle(menu, page == 1 ? "Musculatura (1/3): torso y brazos" : "Musculatura (2/3): cintura y piernas", 0);
+        SetTitle(menu, PageTitle(page), 0);
     }
     G_SetNumRows(menu, CountOf(page));
     G_SetCursor(menu, cursor);
@@ -348,6 +360,7 @@ static void* __fastcall hk_rows(void* menu, void* a2, void* a3, void* a4) {
     ReadEditPlayer();
     AddJump(menu, kJump0, "Musculatura  >");
     PageHints(menu, 0);
+    SetTitle(menu, PageTitle(0), 0);
     static int s_n = 0;
     if (s_n++ < 20) Log("fisico: menu armado (%s, id %u): fila 'Musculatura' agregada", s_editName[0] ? s_editName : "jugador", s_editId);
     return r;
@@ -422,12 +435,43 @@ static void* __fastcall hk_valset(void* menu, void* a2, void* a3, void* a4) {   
 // mezcla el color con blanco segun el pulso que manda la DLL.
 //   x174 pulso (0 = apagado) | y174 capsulas (hasta 4) | z174 todo el cuerpo ("General"); 175 + 2k = (A, radio), 176 + 2k = B
 //   x183 prendido | y183 intensidad | z183 segundos que dura despues de moverse o cambiar un valor (0 = siempre) | w183 latido (s)
+// (24/10 b) ademas del brillo, como en la cara: un aro y un punto blanco brillante sobre el musculo. Marca = punto de la piel
+// en reposo (lado izquierdo; el shader espeja X) y radio del aro: x174..w174 = brillo, capsulas, todo, marcas; x186 latido
+// (0..1), y186 desvanecido; 187 + k = marca k (punto, radio). El aro late como el de la cara (radio +- 6 %).
 struct HlCap { float ax, ay, az, bx, by, bz, r; };
-struct HlSet { int n; HlCap c[2]; bool all; };
+struct HlMark { float x, y, z, r; };
+struct HlSet { int n; HlCap c[2]; bool all; int nm; HlMark m[2]; };
 static HlSet HlFor(int idx, int comp) {
     static const HlCap kDelt = { 0.205f, 1.455f, 0.030f, 0.215f, 1.445f, 0.030f, 0.075f };
     static const HlCap kTrap = { 0.040f, 1.570f, -0.025f, 0.150f, 1.500f, -0.020f, 0.055f };
     HlSet h{}; auto one = [&](HlCap c) { h.c[h.n++] = c; };
+    auto mark = [&](float x, float y, float z, float r) { if (h.nm < 2) h.m[h.nm++] = { x, y, z, r }; };
+    switch (idx * 4 + comp) {   // marcas: punto sobre la piel en reposo y radio del aro
+    case 164 * 4 + 1: case 171 * 4 + 3: mark(0.235f, 1.460f, 0.030f, 0.045f); break;   // hombros / ancho de hombros
+    case 164 * 4 + 2: mark(0.300f, 1.360f, 0.070f, 0.035f); break;                     // biceps
+    case 164 * 4 + 3: mark(0.300f, 1.355f, -0.020f, 0.035f); break;                    // triceps
+    case 165 * 4 + 0: mark(0.500f, 1.170f, 0.085f, 0.030f); break;                     // antebrazos
+    case 165 * 4 + 1: mark(0.090f, 1.375f, 0.170f, 0.050f); break;                     // pecho
+    case 170 * 4 + 1: mark(0.080f, 1.470f, 0.130f, 0.035f); break;                     // pecho alto
+    case 165 * 4 + 2: mark(0.080f, 1.300f, -0.120f, 0.070f); break;                    // espalda (toda)
+    case 167 * 4 + 1: mark(0.100f, 1.545f, -0.010f, 0.035f); break;                    // trapecio
+    case 167 * 4 + 2: mark(0.090f, 1.400f, -0.125f, 0.045f); break;                    // omoplatos
+    case 167 * 4 + 3: mark(0.150f, 1.300f, -0.070f, 0.045f); break;                    // dorsales
+    case 168 * 4 + 0: mark(0.040f, 1.120f, -0.120f, 0.040f); break;                    // espalda baja
+    case 170 * 4 + 0: mark(0.000f, 1.580f, 0.080f, 0.035f); break;                     // cuello
+    case 168 * 4 + 1: mark(0.045f, 1.150f, 0.180f, 0.045f); break;                     // abdominales
+    case 168 * 4 + 2: mark(0.150f, 1.130f, 0.100f, 0.040f); break;                     // oblicuos
+    case 171 * 4 + 1: mark(0.170f, 1.130f, 0.030f, 0.040f); break;                     // cintura
+    case 168 * 4 + 3: mark(0.000f, 1.100f, 0.190f, 0.050f); break;                     // panza
+    case 169 * 4 + 0: mark(0.085f, 0.950f, -0.120f, 0.050f); break;                    // gluteos
+    case 171 * 4 + 2: mark(0.180f, 0.950f, 0.030f, 0.040f); break;                     // caderas
+    case 165 * 4 + 3: mark(0.120f, 0.750f, 0.150f, 0.060f); break;                     // muslos (todo)
+    case 169 * 4 + 1: mark(0.120f, 0.760f, 0.160f, 0.050f); break;                     // cuadriceps
+    case 169 * 4 + 2: mark(0.120f, 0.760f, -0.020f, 0.050f); break;                    // isquiotibiales
+    case 169 * 4 + 3: mark(0.060f, 0.760f, 0.070f, 0.040f); break;                     // aductores
+    case 166 * 4 + 0: mark(0.160f, 0.400f, -0.020f, 0.040f); break;                    // pantorrillas
+    case 171 * 4 + 0: mark(0.142f, 0.545f, 0.120f, 0.035f); break;                     // rodillas
+    }
     switch (idx * 4 + comp) {
     case 167 * 4 + 0: h.all = true; break;                                                          // general
     case 164 * 4 + 1: one(kDelt); break;                                                             // hombros
@@ -459,7 +503,8 @@ static HlSet HlFor(int idx, int comp) {
     return h;
 }
 static int s_hlRow = -1, s_hlPage = -1; static double s_hlT0 = 0; static bool s_hlOn = false;
-static void HlClear() { for (int i = 174; i <= 182; i++) for (int c = 0; c < 4; c++) g_cfg.live[i][c] = 0.0f; }
+static void HlClear() { for (int i = 174; i <= 182; i++) for (int c = 0; c < 4; c++) g_cfg.live[i][c] = 0.0f;
+                        for (int i = 186; i <= 188; i++) for (int c = 0; c < 4; c++) g_cfg.live[i][c] = 0.0f; }
 void FisicoHighlightPresent() {
     void* menu = s_menu;
     const bool want = s_ok && g_cfg.live[183][0] > 0.5f && menu && s_page > 0 && MusclePhysiqueActive();
@@ -476,12 +521,14 @@ void FisicoHighlightPresent() {
     const float k = std::clamp(g_cfg.live[183][1], 0.0f, 1.5f) * (0.35f + 0.65f * pulse) * fade;
     const HlSet h = HlFor(r->idx, r->comp);
     HlClear();
-    g_cfg.live[174][0] = k; g_cfg.live[174][1] = (float)h.n; g_cfg.live[174][2] = h.all ? 1.0f : 0.0f;
+    g_cfg.live[174][0] = k; g_cfg.live[174][1] = (float)h.n; g_cfg.live[174][2] = h.all ? 1.0f : 0.0f; g_cfg.live[174][3] = (float)h.nm;
     for (int i = 0; i < h.n; i++) {
         const HlCap& c = h.c[i];
         float* A = g_cfg.live[175 + 2 * i]; float* B = g_cfg.live[176 + 2 * i];
         A[0] = c.ax; A[1] = c.ay; A[2] = c.az; A[3] = c.r; B[0] = c.bx; B[1] = c.by; B[2] = c.bz; B[3] = 0.0f;
     }
+    g_cfg.live[186][0] = pulse; g_cfg.live[186][1] = fade;
+    for (int i = 0; i < h.nm; i++) { float* M = g_cfg.live[187 + i]; M[0] = h.m[i].x; M[1] = h.m[i].y; M[2] = h.m[i].z; M[3] = h.m[i].r; }
     s_hlOn = true;
 }
 
@@ -514,7 +561,7 @@ void FisicoInstall() {
     for (int k = 0; k < (int)(sizeof hooks / sizeof hooks[0]); k++) { *origs[k] = vt[kVt[k].i]; InterlockedExchangePointer(&vt[kVt[k].i], hooks[k]); }
     VirtualProtect(&vt[V_DECIDE], (V_COUNT - V_DECIDE + 1) * sizeof(void*), old, &old);
     s_ok = true;
-    Log("fisico: menu Fisico del juego enganchado: fila 'Musculatura' (2 paginas: %d + %d valores, -%d..+%d; L1 / R1 cambian de pagina)", kN1, kN2, kSteps, kSteps);
+    Log("fisico: menu Fisico del juego enganchado: fila 'Musculatura' (paginas: %d + %d valores, -%d..+%d, y piel; L1 / R1 cambian de pagina)", kN1, kN2, kSteps, kSteps);
 }
 bool FisicoEditing(uint32_t* id) { if (id) *id = s_editId; return s_ok && s_menu && s_editId; }
 

@@ -664,7 +664,9 @@ void OverlayPresent(IDXGISwapChain* sc) {
     s_keyWas = down;
     const bool fis = MusclePhysiqueActive();
     { static bool s_fisWas = false; if (fis && !s_fisWas) s_fullMenu = false; s_fisWas = fis; }
-    const bool hint = fis && !g_menuOpen && MusclePhysiqueSince() < 8.0 && g_cfg.live[164][0] > 0.5f;
+    // (24/10 b) el aviso de abajo ya no hace falta (la musculatura tiene sus paginas y L1 / R1 en el menu del juego) y tapaba
+    // la barra de botones
+    const bool hint = false;
     if (!g_menuOpen && !g_inspectOn && !hint) return;
     if (!s_rtv) {
         ID3D11Texture2D* bb = nullptr;

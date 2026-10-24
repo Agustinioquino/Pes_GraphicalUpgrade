@@ -235,10 +235,31 @@ void main(
   o0.xyz = r0.www * r3.xyz + r2.yzw;
   o0.xyz *= bCav;
   {   // (24/10) resaltado del musculo elegido en el menu Fisico (como el brillo que late en los menus de la cara): el VS
-      // 1c02a92a deja el peso del vertice en v3.w (+2; otros VS no lo escriben) y la DLL manda el pulso en x174
-    float hlW = (v3.w > 1.999 && v3.w < 3.001) ? saturate(v3.w - 2.0) : 0.0;
-    float hlK = hlW * saturate(IniParams.Load(int2(174,0)).x);
+      // 1c02a92a deja el peso del vertice en v3.w (+2; otros VS no lo escriben) y la DLL manda el pulso en x174.
+      // (24/10 b) y como en la cara, un aro y un punto blanco brillante sobre el musculo: posicion de reposo en v4.w..v6.w,
+      // marcas en 187 + k (punto, radio), latido y desvanecido en x186 / y186
+    bool hlOk = v3.w > 1.999 && v3.w < 3.001;
+    float4 HL = IniParams.Load(int2(174,0));
+    float hlW = hlOk ? saturate(v3.w - 2.0) : 0.0;
+    float hlK = hlW * saturate(HL.x);
     if (hlK > 0.001) o0.xyz = lerp(o0.xyz, float3(0.93, 0.97, 1.0), hlK * 0.6);
+    float3 hlP = float3(abs(v4.w), v5.w, v6.w);
+    float hlPw = max(fwidth(hlP.x), max(fwidth(hlP.y), fwidth(hlP.z)));   // fuera de las ramas (derivadas)
+    if (hlOk && HL.w > 0.5) {
+      float4 HP = IniParams.Load(int2(186,0));
+      float hlRing = 0, hlDot = 0;
+      [loop] for (int hm = 0; hm < 2; hm++) {
+        if (hm >= (int)(HL.w + 0.5)) break;
+        float4 M = IniParams.Load(int2(187 + hm, 0));
+        float d = length(hlP - M.xyz);
+        float R = M.w * (0.94 + 0.12 * HP.x);   // el aro late, como el de la cara (radio +- 6 %)
+        float aa = hlPw * 1.5 + 0.0012;
+        hlRing = max(hlRing, 1.0 - smoothstep(0.0012, 0.0012 + aa, abs(d - R)));
+        hlDot = max(hlDot, 1.0 - smoothstep(0.004, 0.004 + aa + 0.004, d));
+      }
+      float hlA = saturate(max(hlRing * (0.55 + 0.45 * HP.x), hlDot) * HP.y);
+      o0.xyz = lerp(o0.xyz, float3(1.0, 1.0, 1.0), hlA);
+    }
   }
   o0.w = 1;
   r0.w = abs(r0.x) + abs(r0.y);

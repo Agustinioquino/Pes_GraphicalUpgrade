@@ -148,10 +148,10 @@ static bool Interesting(uint64_t ps, uint64_t vs) {
     }
     return vs == 0x1c02a92ab4ae3362ULL || vs == 0x1c9bde0e3060b6e0ULL;
 }
-static ID3D11Buffer* CbOf(ID3D11DeviceContext1* c1, bool ps, UINT slot, UINT* first) {   // con AddRef
+static ID3D11Buffer* CbOf(ID3D11DeviceContext1* c1, bool ps, UINT slot, UINT* first, UINT* num = nullptr) {   // con AddRef
     ID3D11Buffer* b = nullptr; UINT f = 0, n = 0;
     if (ps) c1->PSGetConstantBuffers1(slot, 1, &b, &f, &n); else c1->VSGetConstantBuffers1(slot, 1, &b, &f, &n);
-    *first = f;
+    *first = f; if (num) *num = n;
     return b;
 }
 static bool CopyBlock(ID3D11DeviceContext* c, ID3D11Buffer* src, UINT first, UINT bytes, UINT dstOff) {
@@ -175,14 +175,18 @@ void SkinDiagDraw(ID3D11DeviceContext* c, uint64_t ps, uint64_t vs, UINT count) 
     if (PresentNo() != s_armFrame.load(std::memory_order_relaxed)) return;
     std::lock_guard<std::mutex> lk(s_mx);
     const int order = s_order++;
-    if (!Interesting(ps, vs)) return;
-    s_total++;
-    if (s_lines.size() >= 60) return;
     ID3D11DeviceContext1* c1 = nullptr;
-    ID3D11Buffer *b4 = nullptr, *b5 = nullptr, *b6 = nullptr; UINT f4 = 0, f5 = 0, f6 = 0;
+    ID3D11Buffer *b4 = nullptr, *b5 = nullptr, *b6 = nullptr; UINT f4 = 0, f5 = 0, f6 = 0, n6 = 0;
     if (SUCCEEDED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) && c1) {
-        b4 = CbOf(c1, true, 4, &f4); b5 = CbOf(c1, false, 5, &f5); b6 = CbOf(c1, false, 6, &f6); c1->Release();
+        b4 = CbOf(c1, true, 4, &f4); b5 = CbOf(c1, false, 5, &f5); b6 = CbOf(c1, false, 6, &f6, &n6); c1->Release();
     }
+    // de interes: los shaders de piel / cara / kit conocidos, o cualquier dibujo con paleta de huesos de personaje en b6
+    // (cbuffer de 3072 bytes: 32 + 32 matrices 4x3, la de este cuadro y la del anterior)
+    bool bones = false;
+    if (b6) { D3D11_BUFFER_DESC d; b6->GetDesc(&d); bones = d.ByteWidth == 3072 || n6 * 16 == 3072; }
+    if (!Interesting(ps, vs) && !bones) { if (b4) b4->Release(); if (b5) b5->Release(); if (b6) b6->Release(); return; }
+    s_total++;
+    if (s_lines.size() >= 60) { if (b4) b4->Release(); if (b5) b5->Release(); if (b6) b6->Release(); return; }
     char b[320];
     snprintf(b, sizeof b, "  #%d %s PS %016llx VS %016llx %u idx | b4 %p+%u b5 %p+%u b6 %p+%u | t0 %p t1 %p", order,
              c->GetType() == D3D11_DEVICE_CONTEXT_DEFERRED ? "dif" : "inm", (unsigned long long)ps, (unsigned long long)vs, count,

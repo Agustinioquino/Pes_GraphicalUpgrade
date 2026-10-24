@@ -2,7 +2,8 @@
 // PES21 FX (24/10): igual al del juego (volcado por 3Dmigoto) mas el resaltado del musculo elegido en el menu Fisico: un
 // peso por vertice segun su posicion de REPOSO (v0, espacio del modelo: X = izquierda, Y = arriba, Z = adelante; con |x|
 // cada capsula sirve para los dos lados). Las capsulas las arma la DLL (fisico.cpp) en x174..182; el PS lee el peso en
-// o3.w (+2, para distinguirlo de los VS que no lo escriben: o3.w queda en [2, 3]).
+// o3.w (+2, para distinguirlo de los VS que no lo escriben: o3.w queda en [2, 3]). La posicion de reposo va en o4.w..o6.w
+// (el PS dibuja ahi el aro y el punto blanco de cada musculo, x186..188).
 // ---- Created with 3Dmigoto v1.3.16 on Thu Oct 08 21:08:23 2026
 
 cbuffer cVSScene : register(b2)
@@ -203,6 +204,8 @@ void main(
       }
     }
     o3.w = 2.0 + hw;
+    // (24/10 b) posicion de reposo para el aro y el punto del PS (se calculan por pixel: el aro es fino)
+    o4.w = v0.x; o5.w = v0.y; o6.w = v0.z;
   }
   return;
 }
