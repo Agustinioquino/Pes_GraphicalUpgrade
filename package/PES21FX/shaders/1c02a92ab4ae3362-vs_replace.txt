@@ -83,7 +83,7 @@ void main(
   out float4 o0 : SV_Position0,
   out float4 o1 : COLOR0,
   out float2 o2 : TEXCOORD0,
-  out float2 p2 : TEXCOORD9,
+  out float4 p2 : TEXCOORD9,
   out float4 o3 : TEXCOORD4,
   out float4 o4 : TEXCOORD5,
   out float4 o5 : TEXCOORD6,
@@ -187,6 +187,7 @@ void main(
   o7.xy = r3.xy;
   o2.xy = v6.xy;
   p2.x = r3.w;
+  p2.zw = v0.yx;   // (24/10 e) posicion de reposo (y, x) del vertice: el PS mide el color del cuello con esto
   {   // ---- PES21 (24/10): resaltado del musculo elegido (x174 pulso, y174 capsulas, z174 todo el cuerpo; 175 + 2k = A y radio,
       // 176 + 2k = B): 1 adentro de la capsula, baja suave hasta 0 en el borde
     float4 HL = IniParams.Load(int2(174,0));

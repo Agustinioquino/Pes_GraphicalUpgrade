@@ -117,7 +117,8 @@ static const MRow* RowOf(int page, int row) {
     if (page == 2 && row >= 0 && row < kN2) return &kPage2[row];
     return nullptr;
 }
-static int CountOf(int page) { return page == 1 ? kN1 + 1 : page == 2 ? kN2 + 1 : page == 3 ? 2 : kJump0 + 1; }
+static const int kSkinRows = 6;   // (24/10 e) pagina 3: color, tono conocido, luz, saturacion, matiz, cuerpo como la cara
+static int CountOf(int page) { return page == 1 ? kN1 + 1 : page == 2 ? kN2 + 1 : page == 3 ? kSkinRows : kJump0 + 1; }
 
 // estado de la pagina (el menu es uno solo a la vez; se reinicia cada vez que el juego arma las filas)
 static void* s_menu = nullptr; static int s_page = 0;
@@ -306,11 +307,27 @@ static void ToneLabel(char* out, size_t n, int tono, uint32_t rgb) {
     else if (tono > 0) snprintf(out, n, "Tono de piel (FX): %d", tono);
     else snprintf(out, n, "Tono de piel (FX): del juego");
 }
+// (24/10 e) tonos conocidos: escala Monk (1 muy claro .. 10 muy oscuro) llevada a la escala de 30 tonos
+static const int kMonk[10] = { 1, 2, 3, 6, 9, 15, 21, 27, 29, 30 };
+static const char* kMonkName[11] = { "-", "1 Muy claro", "2 Claro", "3 Claro c\xC3\xA1lido", "4 Medio claro", "5 Medio", "6 Medio oscuro", "7 Bronceado", "8 Moreno", "9 Oscuro", "10 Muy oscuro" };
+static int MonkOf(int tono) { for (int i = 0; i < 10; i++) if (kMonk[i] == tono) return i + 1; return 0; }
+static const char* kSiNo[2] = { "No", "S\xC3\xAD" };
+// filas 2..4: barras -25..+25 (o selectores con numeros si la fila no tiene barra)
+static void FillBarRow(void* menu, void* list, int row, const char* label, int v) {
+    void* w = Child(list, (unsigned)row);
+    if (!w) return;
+    bool done = false;
+    if (s_sliderMode.load() != 0) {
+        void* sl = CompOfType(w, 0x11);
+        if (sl) { G_SetRow(menu, 2, (unsigned)row); G_SetEnable(w); SetLabel(w, label); done = G_SliderRange(sl, v) == 0; }
+        if (s_sliderMode.load() < 0) s_sliderMode = done ? 1 : 0;
+    }
+    if (!done) { G_SetRow(menu, 1, (unsigned)row); G_SetEnable(w); SetLabel(w, label); void* sel = FindComp(w, "selector"); if (sel) G_SelFill(sel, v + kSteps); }
+}
 static void FillSkinPage(void* menu) {
     void* list = List(menu);
     if (!list) return;
     static char tones[kSkinTones + 1][24]; static const char* toneP[kSkinTones + 1];
-    static char hues[21][20]; static const char* hueP[21];
     static bool init = false;
     if (!init) {
         snprintf(tones[0], sizeof tones[0], "Del juego"); toneP[0] = tones[0];
@@ -319,15 +336,10 @@ static void FillSkinPage(void* menu) {
             else snprintf(tones[t], sizeof tones[t], "%d", t);
             toneP[t] = tones[t];
         }
-        for (int m = -10; m <= 10; m++) {
-            if (m == 0) snprintf(hues[m + 10], sizeof hues[0], "0 (neutro)");
-            else snprintf(hues[m + 10], sizeof hues[0], m < 0 ? "%d oliva" : "+%d rosado", m);
-            hueP[m + 10] = hues[m + 10];
-        }
         init = true;
     }
     if (!s_toneRgbaInit) { for (int t = 1; t <= kSkinTones; t++) s_toneRgba[t - 1] = ToneRgba(t); s_toneRgbaInit = true; }
-    int tono = 0, matiz = 0; uint32_t rgb = 0; SkinToneGet(s_editId, &tono, &matiz, &rgb);
+    SkinToneProf q; SkinToneGetProf(s_editId, q);
     // fila 0: color
     s_colorComp = nullptr; s_colorRow = false;
     {
@@ -337,8 +349,8 @@ static void FillSkinPage(void* menu) {
         static int logged = 0;
         if (comp) {
             G_SetEnable(w);
-            char lab[64]; ToneLabel(lab, sizeof lab, tono, rgb); SetLabel(w, lab);
-            const uint32_t c = ProfileRgba(tono, rgb);
+            char lab[64]; ToneLabel(lab, sizeof lab, q.tono, q.rgb); SetLabel(w, lab);
+            const uint32_t c = ProfileRgba(q.tono, q.rgb);
             G_UiSetColor(comp, c);
             uint32_t back = 0; Rd((char*)comp + 0xb4, back);
             s_colorComp = comp; s_colorShown = back; s_colorRow = true;
@@ -347,23 +359,38 @@ static void FillSkinPage(void* menu) {
             if (logged++ < 3) Log("fisico: la fila 0 no tiene componente de color (estado 5): queda el selector con numeros");
             G_SetRow(menu, 1, 0u); G_SetEnable(w); SetLabel(w, "Tono de piel (FX)");
             void* sel = FindComp(w, "selector");
-            if (sel) G_SelFillList(sel, toneP, kSkinTones + 1, tono);
+            if (sel) G_SelFillList(sel, toneP, kSkinTones + 1, q.tono);
         }
     }
-    {   // fila 1: matiz
+    {   // fila 1: tono conocido (escala Monk)
         void* w = Child(list, 1u);
-        if (w) {
-            G_SetRow(menu, 1, 1u); G_SetEnable(w); SetLabel(w, "Matiz: oliva / rosado");
-            void* sel = FindComp(w, "selector");
-            if (sel) G_SelFillList(sel, hueP, 21, matiz + 10);
-        }
+        if (w) { G_SetRow(menu, 1, 1u); G_SetEnable(w); SetLabel(w, "Tono conocido (escala Monk)"); void* sel = FindComp(w, "selector"); if (sel) G_SelFillList(sel, kMonkName, 11, q.rgb ? 0 : MonkOf(q.tono)); }
+    }
+    FillBarRow(menu, list, 2, "Luminosidad", q.luz);
+    FillBarRow(menu, list, 3, "Saturaci\xC3\xB3n", q.sat);
+    FillBarRow(menu, list, 4, "Matiz: oliva / rosado", q.matiz);
+    {   // fila 5: el cuerpo toma el color de la cara (medido en la base del cuello)
+        void* w = Child(list, 5u);
+        if (w) { G_SetRow(menu, 1, 5u); G_SetEnable(w); SetLabel(w, "Cuerpo del color de la cara"); void* sel = FindComp(w, "selector"); if (sel) G_SelFillList(sel, kSiNo, 2, q.igualar ? 1 : 0); }
     }
 }
-static void ApplySkin(int row, int idx) {   // selector de numeros (fila 0 sin componente de color) o matiz (fila 1)
-    if (!s_editId || row < 0 || row > 1) return;
-    int tono = 0, matiz = 0; uint32_t rgb = 0; SkinToneGet(s_editId, &tono, &matiz, &rgb);
-    if (row == 0) { tono = std::clamp(idx, 0, kSkinTones); rgb = 0; } else matiz = std::clamp(idx - 10, -10, 10);
-    SkinToneSet(s_editId, s_editName, tono, matiz, rgb);
+// valor nuevo de una fila de la pagina de piel (idx = indice del selector o valor de la barra -25..25)
+static void ApplySkin(int row, int idx) {
+    if (!s_editId || row < 0 || row >= kSkinRows) return;
+    SkinToneProf q; SkinToneGetProf(s_editId, q);
+    switch (row) {
+    case 0: q.tono = std::clamp(idx, 0, kSkinTones); q.rgb = 0; break;   // selector de numeros (sin componente de color)
+    case 1: if (idx >= 1 && idx <= 10) { q.tono = kMonk[idx - 1]; q.rgb = 0; } else if (idx == 0 && !q.rgb) q.tono = 0; break;
+    case 2: q.luz = std::clamp(idx, -kSteps, kSteps); break;
+    case 3: q.sat = std::clamp(idx, -kSteps, kSteps); break;
+    case 4: q.matiz = std::clamp(idx, -kSteps, kSteps); break;
+    case 5: q.igualar = idx ? 1 : 0; break;
+    }
+    SkinToneSetProf(s_editId, s_editName, q);
+    if (row == 1 && s_colorRow && s_colorComp) {   // el cuadradito y el rotulo de la fila 0 siguen al tono
+        const uint32_t c = ProfileRgba(q.tono, q.rgb); G_UiSetColor(s_colorComp, c); Rd((char*)s_colorComp + 0xb4, s_colorShown);
+        void* w = Child(List(s_menu), 0u); if (w) { char lab[64]; ToneLabel(lab, sizeof lab, q.tono, q.rgb); SetLabel(w, lab); }
+    }
 }
 // el color que muestra la fila (lo cambia la paleta del juego mientras esta abierta): si cambio, al perfil del jugador
 static void SkinColorPoll(void* menu) {
@@ -371,17 +398,19 @@ static void SkinColorPoll(void* menu) {
     uint32_t v = 0; if (!Rd((char*)s_colorComp + 0xb4, v) || v == s_colorShown) return;
     s_colorShown = v;
     const uint32_t rgb24 = v & 0xffffffu;
-    int tono = 0, matiz = 0; uint32_t rgb = 0; SkinToneGet(s_editId, &tono, &matiz, &rgb);
+    SkinToneProf q; SkinToneGetProf(s_editId, q);
     int t = 0; for (int i = 0; i < kSkinTones; i++) if ((s_toneRgba[i] & 0xffffffu) == rgb24) { t = i + 1; break; }
     const int gi = FisicoSkinIndex();
-    uint32_t nrgb = 0;
-    if (t > 0) { tono = t; }
-    else if (gi >= 1 && (ToneRgba(5 * gi - 2) & 0xffffffu) == rgb24) { tono = 0; }
-    else { tono = 0; nrgb = ((v & 0xff) << 16) | (v & 0xff00) | ((v >> 16) & 0xff); }
-    SkinToneSet(s_editId, s_editName, tono, matiz, nrgb);
+    q.rgb = 0;
+    if (t > 0) q.tono = t;
+    else if (gi >= 1 && (ToneRgba(5 * gi - 2) & 0xffffffu) == rgb24) q.tono = 0;
+    else { q.tono = 0; q.rgb = ((v & 0xff) << 16) | (v & 0xff00) | ((v >> 16) & 0xff); }
+    SkinToneSetProf(s_editId, s_editName, q);
     void* w = Child(List(menu), 0u);
-    if (w) { char lab[64]; ToneLabel(lab, sizeof lab, tono, nrgb); SetLabel(w, lab); }
-    static int n = 0; if (n++ < 20) Log("fisico: color de piel elegido %08x -> %s", v, nrgb ? "propio" : tono ? "tono" : "del juego");
+    if (w) { char lab[64]; ToneLabel(lab, sizeof lab, q.tono, q.rgb); SetLabel(w, lab); }
+    void* w1 = Child(List(menu), 1u); void* sel = w1 ? FindComp(w1, "selector") : nullptr;   // el tono conocido sigue al color
+    if (sel) G_SelFillList(sel, kMonkName, 11, q.rgb ? 0 : MonkOf(q.tono));
+    static int n = 0; if (n++ < 20) Log("fisico: color de piel elegido %08x -> %s", v, q.rgb ? "propio" : q.tono ? "tono" : "del juego");
 }
 // despues de que el menu base abrio la paleta (decidir sobre la fila de color): ponerle los 30 tonos en lugar de los 72
 // colores genericos. La ventana queda como hija del menu (+ 0x40, lista circular por + 0x48 / + 0x50)
@@ -486,7 +515,7 @@ static void* __fastcall hk_r1(void* menu, void* a2, void* a3, void* a4) {   // p
 }
 static void* __fastcall hk_reset(void* menu, void* a2, void* a3, void* a4) {
     if (Mine(menu) && s_page == 3) {   // Restablecer en la pagina de piel: vuelve al color del juego
-        if (s_editId) SkinToneSet(s_editId, s_editName, 0, 0, 0);
+        if (s_editId) SkinToneSetProf(s_editId, s_editName, SkinToneProf());
         int cur = CursorRow(menu);
         FillSkinPage(menu);
         G_SetCursor(menu, cur < 0 ? 0 : cur);
@@ -506,6 +535,7 @@ static void* __fastcall hk_val(void* menu, void* a2, void* a3, void* a4) {   // 
     const int list = (int)(intptr_t)a2, row = (int)(intptr_t)a3;
     if (Mine(menu) && s_page == 3) {
         if (list == 0 && row == 0 && s_colorRow) SkinColorPoll(menu);   // la paleta se cerro
+        else if (list == 0 && row >= 2 && row <= 4) ApplySkin(row, ReadRowSteps(menu, row));
         else if (list == 0) { void* sel = FindComp(Child(List(menu), (unsigned)row), "selector"); if (sel) ApplySkin(row, G_SelGet(sel)); }
         return nullptr;
     }
@@ -515,7 +545,11 @@ static void* __fastcall hk_val(void* menu, void* a2, void* a3, void* a4) {   // 
 }
 static void* __fastcall hk_valset(void* menu, void* a2, void* a3, void* a4) {   // (menu, lista, fila, valor nuevo)
     const int list = (int)(intptr_t)a2, row = (int)(intptr_t)a3, v = (int)(intptr_t)a4;
-    if (Mine(menu) && s_page == 3) { if (list == 0 && !(row == 0 && s_colorRow)) ApplySkin(row, v); return nullptr; }
+    if (Mine(menu) && s_page == 3) {
+        if (list == 0 && row >= 2 && row <= 4) ApplySkin(row, s_sliderMode.load() == 1 ? v : v - kSteps);
+        else if (list == 0 && !(row == 0 && s_colorRow)) ApplySkin(row, v);
+        return nullptr;
+    }
     if (Mine(menu) && s_page > 0) {
         if (list == 0) ApplyValue(row, s_sliderMode.load() == 1 ? v : v - kSteps);
         return nullptr;

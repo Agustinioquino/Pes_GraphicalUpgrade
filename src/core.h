@@ -278,10 +278,15 @@ void SkinToneCheckDraw(ID3D11DeviceContext* c, uint64_t ps, uint64_t vs);
 constexpr int kSkinTones = 30;                    // (24/10) tonos de piel propios (skintone.cpp); los 6 del juego son 3, 8, ..., 28
 bool SkinToneGain(int gameIdx, int tono, int matiz, float out[3]);   // ganancia lineal (tono elegido / color del juego)
 void SkinToneSwatch(int tono, unsigned char rgb[3]);
+struct SkinToneProf { int tono = 0, matiz = 0, luz = 0, sat = 0, juego = 0, igualar = 0; uint32_t rgb = 0, cuerpo = 0, cara = 0; };   // (24/10 e) perfil de piel de un jugador
+bool SkinToneGetProf(uint32_t id, SkinToneProf& out);   // true si tiene algo propio
+void SkinToneSetProf(uint32_t id, const char* name, const SkinToneProf& q);
 bool SkinToneGet(uint32_t id, int* tono, int* matiz, uint32_t* rgb = nullptr);   // rgb: color propio 0xRRGGBB (0 = ninguno)
 void SkinToneSet(uint32_t id, const char* name, int tono, int matiz, uint32_t rgb = 0);
+extern std::atomic<bool> g_skinMeasure;             // (24/10 e) medir el color del cuello del cuerpo y de la cara (menu Fisico)
+void SkinMeasureReport(const uint32_t* body, const uint32_t* face, uint32_t yMinInv, uint32_t yMax, uint32_t faceN);
 void SkinTonePresent();                           // guardado diferido + tabla de jugadores con tono propio (194..254)
-bool SkinToneParams(int gameIdx, int tono, int matiz, uint32_t rgb, float k, float out[3]);   // (24/10 c) (kL, m0, m1) en Oklab para pes_skintone.hlsli
+bool SkinToneParams(int gameIdx, const SkinToneProf& q, float k, float out[3], float outBody[3]);   // (24/10 c) (kL, m0, m1) en Oklab para pes_skintone.hlsli
 int SkinToneGame(uint32_t id);                    // color de piel del juego guardado para ese jugador (0 = no se sabe)
 int FisicoSkinIndex();                            // color de piel del juego (1..6) del jugador del menu Fisico (0 = no se sabe)
 void CodeWatchStart();                            // (24/10) vigila la seccion .text del exe: anota en el log lo que cambie (codewatch.cpp)
@@ -339,6 +344,7 @@ void RingAfterDraw(ID3D11DeviceContext* c, RingScope& r);
 void RingOverlayBegin(ID3D11DeviceContext* c, RingScope& r);
 void RingOverlayEnd(ID3D11DeviceContext* c, RingScope& r);
 void RingReloadShaders();
+void RingPresent(IDXGISwapChain* sc);               // (24/10 e) el aro sobre la imagen final, con las marcas de este cuadro
 extern std::atomic<bool> g_menuOpen;
 extern std::atomic<int> g_replacedCount, g_failedCount;
 extern std::vector<std::string> g_compileErrors;

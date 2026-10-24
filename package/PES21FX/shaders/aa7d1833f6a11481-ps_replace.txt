@@ -65,7 +65,7 @@ void main(
   float4 v0 : SV_Position0,
   float4 v1 : COLOR0,
   float2 v2 : TEXCOORD0,
-  float2 w2 : TEXCOORD9,
+  float4 w2 : TEXCOORD9,   // (24/10 e) zw = posicion de reposo (y, x) del VS 1c02a92a
   float4 v3 : TEXCOORD4,
   float4 v4 : TEXCOORD5,
   float4 v5 : TEXCOORD6,
@@ -238,9 +238,15 @@ void main(
     hpTrans = lerp(hpTr0, hpTrans, hpK);
   }
   float3 stVeil = g_psMaterial.m_materials[2].xyz;
-  {   // (24/10 c) tono de piel propio del jugador (skintone.cpp + pes_skintone.hlsli): Oklab, tambien el velo de borde
+  bool stBody = v3.w > 1.999 && v3.w < 3.001;   // (24/10 e) VS 1c02a92a = cuerpo (la cabeza generica viene con faab87ee)
+#ifdef PES_HL_ACC
+  // (24/10 e) medicion: color del cuerpo en la base del cuello (posicion de reposo: y 1.47..1.60, |x| < 0.07) -> lugar 4
+  if (stBody && w2.z > 1.47 && w2.z < 1.60 && abs(w2.w) < 0.07) PesSkinAccum(gHlAcc, 4u, r2.yzw);
+#endif
+  {   // (24/10 c) tono de piel propio del jugador (skintone.cpp + pes_skintone.hlsli): Oklab, tambien el velo de borde;
+      // (24/10 e) el cuerpo usa su fila (con la correccion "cuerpo como la cara"), la cabeza la de la cara
     int stE = PesSkinEntry(v6.w);
-    if (stE >= 0) { float3 stP = PesSkinParams(stE); r2.yzw = PesSkinApply(r2.yzw, stP); stVeil = PesSkinApply(stVeil, stP); }
+    if (stE >= 0) { float3 stP = stBody ? PesSkinParamsBody(stE) : PesSkinParams(stE); r2.yzw = PesSkinApply(r2.yzw, stP); stVeil = PesSkinApply(stVeil, stP); }
   }
   r3.xyz = stVeil + -r2.yzw;
   o0.xyz = r0.www * r3.xyz + r2.yzw;

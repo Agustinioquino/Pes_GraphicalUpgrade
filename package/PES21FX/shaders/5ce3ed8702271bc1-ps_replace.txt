@@ -97,6 +97,9 @@ Texture2D<float4> pesZones    : register(t25);   // PES21 (18/10) zonas de la ca
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 #include "pes_skintone.hlsli"
+#ifdef PES_HL_ACC
+RWByteAddressBuffer gHlAcc : register(u5);   // (24/10 e) medicion del color de la cara (ring.cpp / skintone.cpp)
+#endif
 
 
 // ===================== gotas de sudor procedurales =====================
@@ -151,6 +154,9 @@ float4 SweatLayer(float2 uv, float cells, float amount, float size, float t, boo
 }
 // =======================================================================
 
+#ifdef PES_HL_ACC
+[earlydepthstencil]
+#endif
 void main(
   float4 v0 : SV_Position0,
   float4 v1 : COLOR0,
@@ -623,6 +629,15 @@ void main(
   float3 stVeil = g_psMaterial.m_materials[2].xyz;
   {   // (24/10 c) tono de piel propio del jugador (skintone.cpp + pes_skintone.hlsli): Oklab, tambien el velo de borde; el
       // VS faab87ee (reemplazo propio) dice el jugador en o6.w
+#ifdef PES_HL_ACC
+    {   // (24/10 e) medicion: alto de la cara en pantalla (lugar 6: y minimo, y maximo) y color de la franja de abajo (el
+        // cuello, 12 % inferior del alto del cuadro anterior: z192 / w192) -> lugar 5
+      uint yq = (uint)clamp(v0.y, 0.0, 8191.0), d;
+      gHlAcc.InterlockedMax(6u * 16 + 0, 8192u - yq, d); gHlAcc.InterlockedMax(6u * 16 + 4, yq, d); gHlAcc.InterlockedAdd(6u * 16 + 12, 1u, d);
+      float4 FB = IniParams.Load(int2(192, 0));   // z = y minimo, w = y maximo de la cara (cuadro anterior; skintone.cpp)
+      if (FB.w > FB.z + 8.0 && v0.y > FB.z + 0.88 * (FB.w - FB.z)) PesSkinAccum(gHlAcc, 5u, r2.xyz);
+    }
+#endif
     int stE = PesSkinEntry(v6.w);
     if (stE >= 0) { float3 stP = PesSkinParams(stE); r2.xyz = PesSkinApply(r2.xyz, stP); stVeil = PesSkinApply(stVeil, stP); }
   }

@@ -4,10 +4,11 @@
 // partir de una escala de piel real (la luminosidad de los 6 colores del juego y el matiz / saturacion de una escala de
 // tonos de piel medida): kL multiplica la luminosidad de Oklab y (m0, m1) giran y escalan el matiz y la saturacion
 // (ab' = kC * R(dh) * ab). Asi se conserva el detalle de la textura (poros, venas, rubor) y cambia el tono de verdad.
-// Tabla de la DLL (t120): 194 = (entradas, activo, distancia maxima en m, -); por entrada i (hasta 30): 195 + 2i = posicion
-// del personaje en el mundo (su raiz), 196 + 2i = (kL, m0, m1, 1 = tono propio / 0 = tapon: un personaje sin tono propio
-// cerca de uno con tono, para que no se lo lleve). El VS de la piel elige la entrada mas cercana al dibujo y la pasa al PS en
-// o6.w (1000 + i; cualquier otro valor = sin tono propio).
+// Tabla de la DLL (t120): 194 = (entradas, activo, distancia maxima en m, -); por entrada i (hasta 20): 195 + 3i = posicion
+// del personaje en el mundo (su raiz), 196 + 3i = (kL, m0, m1, 1 = tono propio / 0 = tapon: un personaje sin tono propio
+// cerca de uno con tono, para que no se lo lleve) para la cara, 197 + 3i = lo mismo para el cuerpo (con la correccion
+// "cuerpo como la cara" compuesta). El VS de la piel elige la entrada mas cercana al dibujo y la pasa al PS en o6.w
+// (1000 + i; cualquier otro valor = sin tono propio).
 #ifndef PES_SKINTONE_HLSLI
 #define PES_SKINTONE_HLSLI
 
@@ -42,9 +43,10 @@ int PesSkinEntry(float code) {
   float4 H = IniParams.Load(int2(194, 0));
   int i = (int)round(code) - 1000;
   if (!(H.y > 0.5 && i >= 0 && i < (int)(H.x + 0.5))) return -1;
-  return IniParams.Load(int2(196 + 2 * i, 0)).w > 0.5 ? i : -1;
+  return IniParams.Load(int2(196 + 3 * i, 0)).w > 0.5 ? i : -1;
 }
-float3 PesSkinParams(int i) { return IniParams.Load(int2(196 + 2 * i, 0)).xyz; }
+float3 PesSkinParams(int i) { return IniParams.Load(int2(196 + 3 * i, 0)).xyz; }       // cara (y cabeza)
+float3 PesSkinParamsBody(int i) { return IniParams.Load(int2(197 + 3 * i, 0)).xyz; }   // cuerpo
 // para el VS: un punto del personaje en el mundo. w194 dice como sacarlo (la DLL lo comprueba cada 30 s copiando los bloques
 // de constantes de unos dibujos y se queda con la manera que cae sobre algun personaje): 0 = hueso 0 x m_world, 1 = hueso 0
 // de la segunda paleta, 2 = traslacion de m_world, 3 = inversa de m_view x m_viewWorld x hueso 0 (no depende de m_world)
@@ -67,9 +69,9 @@ int PesSkinNearest(float3 wp) {
   int best = -1;
   if (H.y > 0.5 && H.x > 0.5) {
     float bd = H.z * H.z;
-    int n = min((int)(H.x + 0.5), 30);
+    int n = min((int)(H.x + 0.5), 20);
     [loop] for (int i = 0; i < n; i++) {
-      float3 p = IniParams.Load(int2(195 + 2 * i, 0)).xyz;
+      float3 p = IniParams.Load(int2(195 + 3 * i, 0)).xyz;
       float2 d = wp.xz - p.xz;
       float d2 = dot(d, d);
       if (d2 < bd) { bd = d2; best = i; }
@@ -77,4 +79,13 @@ int PesSkinNearest(float3 wp) {
   }
   return best;
 }
+// (24/10 e) medicion del color de la piel (variantes con PES_HL_ACC, solo en el menu Fisico): suma de albedo en punto fijo
+// (x 4095) y cantidad de pixeles, por lugar del buffer (slot * 16: r, g, b, n)
+#ifdef PES_HL_ACC
+void PesSkinAccum(RWByteAddressBuffer buf, uint slot, float3 c) {
+  uint3 q = (uint3)(saturate(c) * 4095.0 + 0.5); uint d;
+  buf.InterlockedAdd(slot * 16 + 0, q.x, d); buf.InterlockedAdd(slot * 16 + 4, q.y, d); buf.InterlockedAdd(slot * 16 + 8, q.z, d);
+  buf.InterlockedAdd(slot * 16 + 12, 1u, d);
+}
+#endif
 #endif
