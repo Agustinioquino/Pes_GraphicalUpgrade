@@ -348,6 +348,7 @@ void FisicoInstall() {
     if (s_tried) return;
     s_tried = true;
     if (!g_cfg.motorPatch) return;
+    if (!DiagOn(1)) { Log("fisico: ganchos del menu Fisico apagados (y173 = 0, Diagnostico > Ganchos nuevos)"); return; }
     HMODULE mod = GetModuleHandleW(nullptr);
     auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
     if ((uintptr_t)mod != 0x140000000ull || nt->FileHeader.TimeDateStamp != kStamp) { Log("fisico: exe distinto, sin musculatura en el menu Fisico"); return; }

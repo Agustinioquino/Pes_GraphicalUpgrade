@@ -268,6 +268,11 @@ float MuscleProfileGet(uint32_t id, int idx, int comp);                         
 void MuscleProfileSet(uint32_t id, const char* name, int idx, int comp, float v); // crea el perfil si hace falta; se guarda solo
 void FisicoInstall();                             // (24/10) filas de musculatura dentro del menu Fisico del juego (fisico.cpp)
 bool FisicoEditing(uint32_t* id);                 // el menu Fisico del juego esta armado para un jugador (su id)
+void CodeWatchStart();                            // (24/10) vigila la seccion .text del exe: anota en el log lo que cambie (codewatch.cpp)
+bool CodeWatchOrig(uintptr_t a, unsigned char* out, size_t n);   // bytes de la copia (registro de cierres)
+// (24/10) ganchos que se pueden apagar para buscar un cierre (x173 personajes, y173 menu Fisico, z173 vigilancia del codigo,
+// w173 huesos de musculatura); se leen al arrancar
+inline bool DiagOn(int comp) { return g_cfg.live[173][comp] > 0.5f; }
 // (24/10) personajes del motor (personajes.cpp): que jugador es cada esqueleto (HumanList -> handle -> SceneCharacterNode)
 constexpr int kCharSlots = 64;
 struct CharInfo {

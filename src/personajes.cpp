@@ -234,6 +234,7 @@ void CharTrackInstall() {
     if (s_tried) return;
     s_tried = true;
     if (!g_cfg.motorPatch) { Log("personajes: parches en memoria apagados (motor = 0)"); return; }
+    if (!DiagOn(0)) { Log("personajes: seguimiento de jugadores apagado (x173 = 0, Diagnostico > Ganchos nuevos)"); return; }
     HMODULE mod = GetModuleHandleW(nullptr);
     auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
     if ((uintptr_t)mod != 0x140000000ull || nt->FileHeader.TimeDateStamp != kStamp) { Log("personajes: exe distinto, sin ganchos"); return; }

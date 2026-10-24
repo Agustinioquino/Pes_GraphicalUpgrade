@@ -469,7 +469,8 @@ static void Install() {
     auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
     if ((uintptr_t)mod != 0x140000000ull || nt->FileHeader.TimeDateStamp != kStamp) { Log("musculatura: exe distinto, sin ganchos"); return; }
     std::string bad;
-    for (int i = 0; i < kN; i++) {
+    if (!DiagOn(3)) Log("musculatura: huesos de musculo sin enganchar (w173 = 0, Diagnostico > Ganchos nuevos)");
+    for (int i = 0; i < kN && DiagOn(3); i++) {
         void** vt = (void**)s_cls[i].vt;
         if (!Readable(vt - 1, 6 * sizeof(void*)) || (uintptr_t)vt[-1] != s_cls[i].col || (uintptr_t)vt[4] != s_cls[i].eval) { bad += std::string(" ") + s_cls[i].name; continue; }
         DWORD old = 0;
@@ -480,7 +481,7 @@ static void Install() {
         s_ok++;
     }
     Log("musculatura v6: %d de %d huesos de musculo enganchados%s%s", s_ok, kN, bad.empty() ? "" : "; no coinciden:", bad.c_str());
-    {   // menus Fisico del juego (Editar > Jugadores > Fisico = MenuEditPlBodySetting; tambien MenuEditPlBodyPhysiqueSetting)
+    if (DiagOn(1)) {   // menus Fisico del juego (Editar > Jugadores > Fisico = MenuEditPlBodySetting; tambien MenuEditPlBodyPhysiqueSetting)
         int ok = 0;
         const uintptr_t vts[2][2] = { { kBodyVt, kBodyCol }, { kPhysVt, kPhysCol } };
         for (auto& v : vts) {

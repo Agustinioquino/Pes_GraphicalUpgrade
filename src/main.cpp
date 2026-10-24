@@ -38,6 +38,18 @@ std::string ModOff(void* p) {
     snprintf(out, sizeof(out), "%s+0x%llx", b ? b + 1 : n, (unsigned long long)((uintptr_t)p - (uintptr_t)m));
     return out;
 }
+// (24/10) bytes del codigo alrededor de RIP: si no coinciden con la copia de la vigilancia (codewatch.cpp), el codigo del
+// juego estaba cambiado cuando se cayo
+static bool SafeReadCode(void* dst, uintptr_t src, size_t n) {
+    MEMORY_BASIC_INFORMATION mi{};
+    if (!VirtualQuery((void*)src, &mi, sizeof mi) || mi.State != MEM_COMMIT || (mi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) return false;
+    if (src + n > (uintptr_t)mi.BaseAddress + mi.RegionSize) return false;
+    __try { memcpy(dst, (const void*)src, n); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+static void HexMark(char* out, size_t cap, const unsigned char* b, size_t n, size_t mark) {
+    size_t k = 0; out[0] = 0;
+    for (size_t i = 0; i < n && k + 6 < cap; i++) k += snprintf(out + k, cap - k, i == mark ? "[%02x] " : "%02x ", b[i]);
+}
 static void LogCrash(EXCEPTION_POINTERS* ep, const char* kind) {
     if (!g_log) return;
     bool locked = g_logMutex.try_lock();
@@ -48,6 +60,21 @@ static void LogCrash(EXCEPTION_POINTERS* ep, const char* kind) {
                 (void*)er->ExceptionInformation[1]);
     CONTEXT* cx = ep->ContextRecord;
     fprintf(g_log, "    RIP=%p RSP=%p RCX=%p RDX=%p\n", (void*)cx->Rip, (void*)cx->Rsp, (void*)cx->Rcx, (void*)cx->Rdx);
+    fprintf(g_log, "    RAX=%p RBX=%p RBP=%p RSI=%p RDI=%p R8=%p R9=%p\n    R10=%p R11=%p R12=%p R13=%p R14=%p R15=%p\n",
+            (void*)cx->Rax, (void*)cx->Rbx, (void*)cx->Rbp, (void*)cx->Rsi, (void*)cx->Rdi, (void*)cx->R8, (void*)cx->R9,
+            (void*)cx->R10, (void*)cx->R11, (void*)cx->R12, (void*)cx->R13, (void*)cx->R14, (void*)cx->R15);
+    {
+        unsigned char cb[48], sb[48]; char line[48 * 5 + 8];
+        const uintptr_t c0 = (uintptr_t)cx->Rip - 16;
+        if (SafeReadCode(cb, c0, sizeof cb)) {
+            HexMark(line, sizeof line, cb, sizeof cb, 16);
+            fprintf(g_log, "    codigo en RIP-16: %s\n", line);
+            if (CodeWatchOrig(c0, sb, sizeof sb)) {
+                if (memcmp(cb, sb, sizeof cb) != 0) { HexMark(line, sizeof line, sb, sizeof sb, 16); fprintf(g_log, "    copia de antes  : %s <- EL CODIGO ESTABA CAMBIADO\n", line); }
+                else fprintf(g_log, "    (el codigo es igual a la copia de la vigilancia)\n");
+            }
+        } else fprintf(g_log, "    codigo en RIP: no se puede leer\n");
+    }
     // la pila "a mano": direcciones de retorno que caen dentro de algun modulo (sirve aunque no haya info de unwind)
     MEMORY_BASIC_INFORMATION mbi{};
     uintptr_t sp = (uintptr_t)cx->Rsp;
@@ -275,6 +302,8 @@ static int InitMod() {
     if (!fx::g_cfg.optHooks) { fx::Log("hooks = 0: el mod queda cargado pero sin ganchos (prueba)"); return 2; }
     if (!fx::InstallHooks()) { fx::Log("ERROR: no se pudieron instalar los ganchos de D3D11"); return 0; }
     fx::Log("ganchos instalados");
+    if (fx::DiagOn(2)) fx::CodeWatchStart();
+    else fx::Log("codigo: vigilancia del codigo del juego apagada (z173 = 0)");
     return 2;
 }
 void fx_EnsureInit() { InitMod(); }
