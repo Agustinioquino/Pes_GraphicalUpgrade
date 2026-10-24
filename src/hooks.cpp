@@ -648,7 +648,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         g_stFaceDraws++; if (ps->rule) g_stFaceRule++;
         if (c->GetType() == D3D11_DEVICE_CONTEXT_DEFERRED) g_stFaceCtxDef++;
     }
-    if (!g_cfg.optRules) return false;
+    if (!g_cfg.optRules) { RingFaceBind(c, d.ring); return false; }
     if ((ps && ps->rule) || (vs && vs->rule)) {
         if (!s_firstRule.exchange(true)) Log("primer dibujo con regla");
     }
@@ -705,6 +705,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         }
         for (auto* v : chk) if (v) v->Release();
     }
+    RingFaceBind(c, d.ring);   // (24/10 e) medicion del color de la cara: u7 (despues de las cejas en u5 / u6)
     return d.n > 0;
 }
 #define FX_DRAW(verts, kind, inst, call) if (g_catalogHook) { CtxState& cs_ = Ctx(c); CatalogDraw(c, cs_.vs, cs_.ps, verts, kind, inst); } t_drawVerts = (UINT)(verts); DrawScope ds; bool r = BeforeDraw(c, ds); \

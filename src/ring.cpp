@@ -130,18 +130,30 @@ bool RingBeforeDraw(ID3D11DeviceContext* c, uint64_t ps, uint64_t vs, RingScope&
     if (!face && nvp >= 1 && vp.Width > 1.0f) { g_cfg.live[193][0] = vp.TopLeftX; g_cfg.live[193][1] = vp.TopLeftY; g_cfg.live[193][2] = vp.Width; g_cfg.live[193][3] = vp.Height; }
     c->PSGetShader(&r.prevPS, nullptr, nullptr);
     c->PSSetShader(ps == kFacePS ? s_faceHlPS : ps == kFace2PS ? s_face2HlPS : s_hlPS, nullptr, 0);
-    c->OMSetRenderTargetsAndUnorderedAccessViews(D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 5, 1, &s_accUAV[w], nullptr);
+    if (face) { r.face = true; r.uav = s_accUAV[w]; }   // la cara va en u7 (u5 / u6 son las semillas de las cejas): se enlaza al final (RingFaceBind)
+    else c->OMSetRenderTargetsAndUnorderedAccessViews(D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 5, 1, &s_accUAV[w], nullptr);
     r.on = true;
     s_skinBinds++;
     return true;
 }
 
+// al final de BeforeDraw (despues de que la regla de las cejas puso sus UAV en u5 / u6): u7 = el buffer de medicion
+void RingFaceBind(ID3D11DeviceContext* c, RingScope& r) {
+    if (!r.on || !r.face || !r.uav) return;
+    ID3D11UnorderedAccessView* u[3] = {};
+    c->OMGetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 5, 3, u);
+    if (u[2]) u[2]->Release();
+    u[2] = r.uav;
+    c->OMSetRenderTargetsAndUnorderedAccessViews(D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 5, 3, u, nullptr);
+    if (u[0]) u[0]->Release(); if (u[1]) u[1]->Release();
+}
 void RingAfterDraw(ID3D11DeviceContext* c, RingScope& r) {
     if (!r.on) return;
-    ID3D11UnorderedAccessView* nu = nullptr;
-    c->OMSetRenderTargetsAndUnorderedAccessViews(D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 5, 1, &nu, nullptr);
+    ID3D11UnorderedAccessView* nu[3] = {};
+    if (r.face) c->OMSetRenderTargetsAndUnorderedAccessViews(D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 5, 3, nu, nullptr);
+    else c->OMSetRenderTargetsAndUnorderedAccessViews(D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 5, 1, nu, nullptr);
     c->PSSetShader(r.prevPS, nullptr, 0); if (r.prevPS) r.prevPS->Release();
-    r.prevPS = nullptr; r.on = false;
+    r.prevPS = nullptr; r.on = false; r.face = false; r.uav = nullptr;
 }
 
 void RingOverlayBegin(ID3D11DeviceContext* c, RingScope& r) {

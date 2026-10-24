@@ -337,10 +337,11 @@ void GlassPresent(); void GlassReloadShaders();
 extern std::atomic<int> g_glassDraws, g_glassSnaps;
 // (24/10 c) aro y punto blanco del musculo elegido como capa de interfaz (ring.cpp): variante de la piel que junta las marcas
 // en u5 y un dibujo extra encima de la imagen del jugador del menu Fisico
-struct RingScope { bool on = false, overlay = false; ID3D11PixelShader* prevPS = nullptr; ID3D11PixelShader* oPS = nullptr; ID3D11BlendState* oBS = nullptr; float oBF[4] = {}; UINT oSM = 0;
+struct RingScope { bool on = false, overlay = false, face = false; ID3D11UnorderedAccessView* uav = nullptr; ID3D11PixelShader* prevPS = nullptr; ID3D11PixelShader* oPS = nullptr; ID3D11BlendState* oBS = nullptr; float oBF[4] = {}; UINT oSM = 0;
                    ID3D11DepthStencilState* oDSS = nullptr; UINT oRef = 0; ID3D11ShaderResourceView* oT20 = nullptr; ID3D11ShaderResourceView* oT120 = nullptr; };
 bool RingBeforeDraw(ID3D11DeviceContext* c, uint64_t ps, uint64_t vs, RingScope& r);
 void RingAfterDraw(ID3D11DeviceContext* c, RingScope& r);
+void RingFaceBind(ID3D11DeviceContext* c, RingScope& r);   // (24/10 e) u7 para la medicion de la cara, despues de las cejas
 void RingOverlayBegin(ID3D11DeviceContext* c, RingScope& r);
 void RingOverlayEnd(ID3D11DeviceContext* c, RingScope& r);
 void RingReloadShaders();
