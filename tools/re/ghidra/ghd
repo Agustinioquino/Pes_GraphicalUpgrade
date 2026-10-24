@@ -1,0 +1,5 @@
+#!/bin/bash
+# descompila funciones de PES2021.exe con Ghidra: ghd salida.c 0x14198d3b0=Nombre 0x... (o @lista.txt)
+out="$1"; shift
+"${GHIDRA:-/home/claude/tools/ghidra_11.3.2_PUBLIC}"/support/analyzeHeadless "${GHIDRA_PROJ:-/home/claude/tools/ghidra_proj}" PES2021 -process _text.bin -noanalysis \
+  -scriptPath "$(dirname "$0")" -postScript Decomp.java "$out" "$@" 2>&1 | grep -E "ERROR|Exception|fallo|REPORT: Save" | head -20

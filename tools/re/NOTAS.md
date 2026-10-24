@@ -10,6 +10,29 @@ Konami). Scripts (Python 3 + numpy + objdump; sin capstone):
   encadenados) y desensamblado con objdump. `rtti.py`: vtables de una clase por su nombre RTTI
   (`python3 rtti.py ".?AVAntiAliasing@plugins@dg@gr@fox@@"`). `pat.py`: búsqueda de patrones de bytes.
 
+## Ghidra (descompilador, 23/10)
+
+Ghidra 11.3.2 (Java 21) en modo sin ventana, sobre el mismo volcado: `ghidra/SetupPES.java` arma el programa (importa
+`_text.bin` en 0x140001000 como binario crudo x86-64 / Visual Studio, agrega las otras secciones y etiqueta las 837
+importaciones de `imports.txt` como `imp_*`); `ghidra/Decomp.java` crea la función en cada dirección (siguiendo el
+flujo), le pone nombre y escribe el C. `ghidra/ghd salida.c 0x14198d3b0=Nombre ...` (o `@nombres.txt`).
+
+    analyzeHeadless <proyecto> PES2021 -import <volcado>/_text.bin -loader BinaryLoader -loader-baseAddr 0x140001000 \
+      -processor x86:LE:64:default -cspec windows -noanalysis -scriptPath tools/re/ghidra -postScript SetupPES.java <volcado>
+
+`nombres.txt`: funciones ya identificadas (se aplican con `ghd x.c @nombres.txt`).
+
+## Base de datos de jugadores (23/10)
+
+| Qué | Dónde |
+|---|---|
+| Administrador de la base | puntero global 0x143714240 (`PlayerDB_Get` 0x1414bc550) |
+| Registro de un jugador por id | `PlayerDB_Find(*(admin+0x48), id)` 0x1414c0e40 (registros de 0x17c bytes; id en +0x2c) |
+| Campos empaquetados del registro | `PlayerRec_GetField(reg, campo, &valor)` 0x1414cc040: 0x2e = altura (byte 0, cm), 0x2f = peso (byte 1, kg), 0x2d = edad, 0x0f..0x27 = habilidades (7 bits), 0x48+ = habilidades especiales (1 bit) |
+
+Falta: la contextura (cuello, hombros, pecho, cintura, brazos, muslos, pantorrillas, largo de piernas: otra tabla, la de
+apariencia) y el vínculo entre cada jugador dibujado y su id.
+
 ## Cámara y TAA (camhook.cpp, 23/10)
 
 | Qué | Dónde |
