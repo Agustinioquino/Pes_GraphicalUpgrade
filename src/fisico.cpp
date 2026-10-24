@@ -412,6 +412,65 @@ static void SkinColorPoll(void* menu) {
     if (sel) G_SelFillList(sel, kMonkName, 11, q.rgb ? 0 : MonkOf(q.tono));
     static int n = 0; if (n++ < 20) Log("fisico: color de piel elegido %08x -> %s", v, q.rgb ? "propio" : q.tono ? "tono" : "del juego");
 }
+// (24/10 e) la paleta la abre el menu base por su cuenta (no pasa por decidir), y toma sus 72 colores genericos de una
+// tabla fija del exe (p_all, 0x1434d1dc0, solo lectura). Mientras la pagina Piel esta activa, esa tabla lleva en memoria
+// los 30 tonos + los 6 colores del juego + 18 variantes rosadas y 18 oliva; al salir vuelve la original (el exe en disco no
+// se toca). Los colores de los lugares 30.. se reconocen como "color propio" (rgb)
+static const uintptr_t kPalAll = 0x1434d1dc0ull; static const int kPalN = 72;
+static uint32_t s_palOrig[kPalN]; static bool s_palSaved = false, s_palPatched = false;
+static void PalWrite(const uint32_t* v) {
+    DWORD old = 0; void* dst = (void*)kPalAll;
+    if (!VirtualProtect(dst, sizeof(uint32_t) * kPalN, PAGE_READWRITE, &old)) { Log("fisico: no se pudo escribir la tabla de la paleta"); return; }
+    memcpy(dst, v, sizeof(uint32_t) * kPalN);
+    VirtualProtect(dst, sizeof(uint32_t) * kPalN, old, &old);
+}
+static uint32_t VariantRgba(int t, float dh, float kc) {   // tono t con el matiz corrido dh grados y el croma x kc (en Oklab)
+    unsigned char c[3]; SkinToneSwatch(t, c);
+    float lin[3]; for (int k = 0; k < 3; k++) { float v = c[k] / 255.0f; lin[k] = v <= 0.04045f ? v / 12.92f : powf((v + 0.055f) / 1.055f, 2.4f); }
+    float l = 0.4122214708f * lin[0] + 0.5363325363f * lin[1] + 0.0514459929f * lin[2], m = 0.2119034982f * lin[0] + 0.6806995451f * lin[1] + 0.1073969566f * lin[2], sc = 0.0883024619f * lin[0] + 0.2817188376f * lin[1] + 0.6299787005f * lin[2];
+    l = cbrtf(l); m = cbrtf(m); sc = cbrtf(sc);
+    float L = 0.2104542553f * l + 0.7936177850f * m - 0.0040720468f * sc, A = 1.9779984951f * l - 2.4285922050f * m + 0.4505937099f * sc, B = 0.0259040371f * l + 0.7827717662f * m - 0.8086757660f * sc;
+    const float r = dh * 3.14159265f / 180.0f, cs = cosf(r) * kc, sn = sinf(r) * kc; const float A2 = A * cs - B * sn, B2 = A * sn + B * cs; A = A2; B = B2;
+    const float l_ = L + 0.3963377774f * A + 0.2158037573f * B, m_ = L - 0.1055613458f * A - 0.0638541728f * B, s_ = L - 0.0894841775f * A - 1.2914855480f * B;
+    const float l3 = l_ * l_ * l_, m3 = m_ * m_ * m_, s3 = s_ * s_ * s_;
+    float o[3] = { 4.0767416621f * l3 - 3.3077115913f * m3 + 0.2309699292f * s3, -1.2684380046f * l3 + 2.6097574011f * m3 - 0.3413193965f * s3, -0.0041960863f * l3 - 0.7034186147f * m3 + 1.7076147010f * s3 };
+    unsigned char q[3]; for (int k = 0; k < 3; k++) { float v = std::clamp(o[k], 0.0f, 1.0f); v = v <= 0.0031308f ? v * 12.92f : 1.055f * powf(v, 1.0f / 2.4f) - 0.055f; q[k] = (unsigned char)std::clamp((int)lroundf(v * 255.0f), 0, 255); }
+    return Rgba(q[0], q[1], q[2]);
+}
+static void PalApply(bool on) {
+    if (on == s_palPatched) return;
+    if (on) {
+        if (!s_palSaved) { if (!Rd((void*)kPalAll, s_palOrig)) return; s_palSaved = true; }
+        uint32_t v[kPalN];
+        for (int t = 1; t <= kSkinTones; t++) v[t - 1] = s_toneRgba[t - 1];
+        for (int g = 1; g <= 6; g++) v[29 + g] = ToneRgba(5 * g - 2);
+        static const int kVar[18] = { 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 25, 26, 27, 28, 29, 30 };
+        for (int i = 0; i < 18; i++) { v[36 + i] = VariantRgba(kVar[i], -10.0f, 1.12f); v[54 + i] = VariantRgba(kVar[i], 9.0f, 0.92f); }   // rosadas / oliva
+        PalWrite(v);
+        Log("fisico: paleta del juego con los 30 tonos (+ 6 del juego, 18 rosados, 18 oliva)");
+    } else if (s_palSaved) PalWrite(s_palOrig);
+    s_palPatched = on;
+}
+// el color que muestra la fila (lo cambia la paleta del juego mientras esta abierta): si cambio, al perfil del jugador
+static void SkinColorPoll(void* menu) {
+    if (!s_colorRow || !s_colorComp || !s_editId) return;
+    uint32_t v = 0; if (!Rd((char*)s_colorComp + 0xb4, v) || v == s_colorShown) return;
+    s_colorShown = v;
+    const uint32_t rgb24 = v & 0xffffffu;
+    SkinToneProf q; SkinToneGetProf(s_editId, q);
+    int t = 0; for (int i = 0; i < kSkinTones; i++) if ((s_toneRgba[i] & 0xffffffu) == rgb24) { t = i + 1; break; }
+    const int gi = FisicoSkinIndex();
+    q.rgb = 0;
+    if (t > 0) q.tono = t;
+    else if (gi >= 1 && (ToneRgba(5 * gi - 2) & 0xffffffu) == rgb24) q.tono = 0;
+    else { q.tono = 0; q.rgb = ((v & 0xff) << 16) | (v & 0xff00) | ((v >> 16) & 0xff); }
+    SkinToneSetProf(s_editId, s_editName, q);
+    void* w = Child(List(menu), 0u);
+    if (w) { char lab[64]; ToneLabel(lab, sizeof lab, q.tono, q.rgb); SetLabel(w, lab); }
+    void* w1 = Child(List(menu), 1u); void* sel = w1 ? FindComp(w1, "selector") : nullptr;   // el tono conocido sigue al color
+    if (sel) G_SelFillList(sel, kMonkName, 11, q.rgb ? 0 : MonkOf(q.tono));
+    static int n = 0; if (n++ < 20) Log("fisico: color de piel elegido %08x -> %s", v, q.rgb ? "propio" : q.tono ? "tono" : "del juego");
+}
 // despues de que el menu base abrio la paleta (decidir sobre la fila de color): ponerle los 30 tonos en lugar de los 72
 // colores genericos. La ventana queda como hija del menu (+ 0x40, lista circular por + 0x48 / + 0x50)
 static void PatchPalette(void* menu) {
@@ -496,7 +555,7 @@ static void* __fastcall hk_decide(void* menu, void* a2, void* a3, void* a4) {
         if (s_page == 0 && row == kJump0) { GoPage(menu, 1, 0); return nullptr; }
         if (s_page == 1 && row == kJump1) { GoPage(menu, 2, 0); return nullptr; }
         if (s_page == 2 && row == kJump2) { GoPage(menu, 3, 0); return nullptr; }
-        if (s_page == 3 && row == 0 && s_colorRow) { void* r = o_decide(menu, a2, a3, a4); PatchPalette(menu); return r; }   // abre la paleta del juego
+        if (s_page == 3 && row == 0 && s_colorRow) return o_decide(menu, a2, a3, a4);   // la paleta del juego la abre el menu base
         if (s_page > 0) return nullptr;   // decidir sobre una barra: nada
     }
     return o_decide(menu, a2, a3, a4);
@@ -638,7 +697,9 @@ static void HlClear() { for (int i = 174; i <= 182; i++) for (int c = 0; c < 4; 
                         for (int i = 186; i <= 188; i++) for (int c = 0; c < 4; c++) g_cfg.live[i][c] = 0.0f; }
 void FisicoHighlightPresent() {
     void* menu = s_menu;
-    if (s_ok && menu && s_page == 3 && MusclePhysiqueActive()) SkinColorPoll(menu);
+    const bool skinPage = s_ok && menu && s_page == 3 && MusclePhysiqueActive();
+    if (skinPage) SkinColorPoll(menu);
+    PalApply(skinPage && s_colorRow && s_toneRgbaInit);
     const bool want = s_ok && g_cfg.live[183][0] > 0.5f && menu && s_page > 0 && MusclePhysiqueActive();
     const MRow* r = want ? RowOf(s_page, CursorRow(menu)) : nullptr;
     if (!r) { if (s_hlOn) { HlClear(); s_hlOn = false; s_hlRow = -1; } return; }
