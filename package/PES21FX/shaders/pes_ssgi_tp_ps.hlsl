@@ -34,8 +34,10 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   float cw = dot(q[3], hp);
   float4 P153 = IniParams.Load(int2(153, 0));
   float frames = clamp(P153.z > 0 ? P153.z : 12.0, 2.0, 40.0);
-  float a = 1.0;
-  float3 hist = cur.rgb;
+  // (23/10) sin historia valida (corte de camara, algo que aparece): en vez del valor de 8 muestras de este cuadro (ruidoso:
+  // se veia "recalcular" el rebote en cada corte) se arranca del promedio de los vecinos de la misma superficie
+  float a = 0.3;
+  float3 hist = m1;
   if (cw > 0.05 && q[21].z != 0.0) {
     float2 ndc = float2(dot(q[0], hp), dot(q[1], hp)) / cw + q[28].xy;
     float2 uvP = ndc * float2(0.5, -0.5) + 0.5;

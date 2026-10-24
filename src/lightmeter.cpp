@@ -27,7 +27,7 @@ static std::atomic<int> s_frame{0}; static std::atomic<int> s_lastRun{-100};
 static std::mutex s_srvMx; static std::map<ID3D11Resource*, ID3D11ShaderResourceView*> s_colorSRV;
 struct MeterRes { float n[6] = {}, lum[6] = {}, r[6] = {}, g[6] = {}, b[6] = {}; float tn = 0, ta[3] = {}, tl = 0; bool valid = false; };   // (21/10) cancha: muestras, albedo, fraccion al sol
 // (21/10) rebote del pasto: albedo promedio del pasto al sol y fraccion del pasto visible al sol, suavizados -> 158
-static float s_turf[3] = {}, s_turfLit = 0.0f; static bool s_turfOk = false, s_turfSnap = true; static int s_turfMatch = -1; static double s_turfT = 0;
+static float s_turf[3] = {}, s_turfLit = 0.0f; static bool s_turfOk = false, s_turfSnap = true; static int s_turfMatch = -1; static double s_turfT = 0, s_turfSince = 0;
 static MeterRes s_res;                       // ultima lectura (promedios)
 static float s_gain = 1.0f, s_target = 0.0f, s_ratio[3] = {}, s_tintSh = 0.0f, s_tintLit = 0.0f;
 static double s_lastUpd = 0;
@@ -168,14 +168,17 @@ void LightMeterPresent() {
             r.tn = (float)u[30];
             if (r.tn > 0) { for (int c = 0; c < 3; c++) r.ta[c] = u[31 + c] / 1024.0f / r.tn; r.tl = u[34] / 1024.0f / r.tn; }
             r.valid = true; s_res = r;
-            { // (21/10) rebote del pasto: promedio de miles de puntos de la cancha (hasta 150 m), suavizado en el tiempo
-              // (~4 s el color, ~3 s cuanto esta al sol): un valor estable aunque la camara se mueva o cambie de toma
+            { // (21/10) rebote del pasto: promedio de miles de puntos de la cancha (hasta 150 m), suavizado en el tiempo.
+              // (23/10) el verde del pasto no cambia en el partido: los primeros 10 s se ajusta rapido (~2 s) y despues casi
+              // nada (~60 s), asi un corte de camara (rayas del corte, primer plano) no lo hace "recalcular". La sombra del
+              // suelo ya no sale de aca (la composicion la toma del shadow map del sol).
               if (g_matchGen.load() != s_turfMatch) { s_turfMatch = g_matchGen.load(); s_turfSnap = true; }
               double tN = Now(); double dT = std::clamp(tN - s_turfT, 0.0, 1.0); s_turfT = tN;
               if (r.tn > 300 && r.ta[1] > 0.01f) {
-                  if (s_turfSnap || !s_turfOk) { for (int c = 0; c < 3; c++) s_turf[c] = r.ta[c]; s_turfLit = r.tl; s_turfOk = true; s_turfSnap = false; }
+                  if (s_turfSnap || !s_turfOk) { for (int c = 0; c < 3; c++) s_turf[c] = r.ta[c]; s_turfLit = r.tl; s_turfOk = true; s_turfSnap = false; s_turfSince = tN; }
                   else {
-                      float aC = (float)(1.0 - exp(-dT / 4.0)), aL = (float)(1.0 - exp(-dT / 3.0));
+                      double tauC = (tN - s_turfSince) < 10.0 ? 2.0 : 60.0;
+                      float aC = (float)(1.0 - exp(-dT / tauC)), aL = (float)(1.0 - exp(-dT / 3.0));
                       for (int c = 0; c < 3; c++) s_turf[c] += (r.ta[c] - s_turf[c]) * aC;
                       s_turfLit += (r.tl - s_turfLit) * aL;
                   }

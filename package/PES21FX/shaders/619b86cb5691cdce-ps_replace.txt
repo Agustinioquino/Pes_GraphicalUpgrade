@@ -63,7 +63,8 @@ Texture2D<float4> inOcclusion : register(t13);
 Texture2D<float4> inShadow : register(t14);
 Texture2D<float4> PESGtao : register(t27);   // PES21 (20/10): GTAO de la DLL (1 = sin oclusion); se mezcla con el SSAO del juego (y132)
 Texture2DArray<float4> PESSkyEnv : register(t28);   // PES21 (21/10): panorama del cielo fisico para los reflejos (DLL, pes_skyenv): capa 0 nitida, 1 desenfocada
-Texture2D<float4> PESSsgi : register(t26);   // PES21 (21/10): SSGI temporal de la DLL (media resolucion: rgb luz indirecta, a profundidad)
+Texture2D<float4> PESSsgi : register(t26);
+Texture2D<float4> PESShadowMap : register(t29);   // PES21 (23/10): atlas del shadow map del sol (3 cascadas apiladas), referencia tomada de los shaders de luz   // PES21 (21/10): SSGI temporal de la DLL (media resolucion: rgb luz indirecta, a profundidad)
 
 
 // 3Dmigoto declarations
@@ -353,17 +354,56 @@ void main(
       float sunUp = saturate(dot(Ld, upV));
       float3 sunC = max(pLc_color.xyz, 0.0) * g_psScene.m_exposure.zzz;
       float3 turf = lerp(float3(0.20, 0.20, 0.20), float3(0.14, 0.24, 0.07), saturate(BG.y));
-      // 21/10 v4 (z42 > 0): el verde y la sombra del suelo ya no se calculan por pixel con muestras de pantalla (la v3 usaba
-      // una grilla de puntos de pantalla para el color y un anillo de 8 puntos alrededor del pie de cada pixel para la sombra:
-      // al mover la camara o el jugador esas muestras cambiaban y el rebote titilaba, y dentro de un mismo jugador cada parte
-      // tomaba otro anillo -> manchas). Ahora lo mide la DLL con el medidor de luz sobre miles de puntos de pasto y lo
-      // suaviza en el tiempo (158: xyz albedo promedio del pasto al sol, w fraccion del pasto visible que esta al sol): un solo
-      // valor estable por estadio y momento. El rebote local con su sombra real ya lo pone el SSGI.
+      // 23/10 v5 (z42 > 0): la sombra del suelo alrededor del jugador sale del SHADOW MAP DEL SOL, que son datos del mundo:
+      // dan lo mismo con cualquier camara y en cualquier toma (la v4 media que fraccion del pasto VISIBLE estaba al sol y se
+      // "recalculaba" en cada corte de camara; la v3 usaba puntos de pantalla y titilaba). 12 puntos fijos en un disco de
+      // hasta 2.2 m alrededor del pie del pixel, 12 cm sobre la cancha (y = 0 del mundo), cada uno con su prueba de sombra en
+      // la cascada que lo contiene; pesos de un disco horizontal visto desde la altura del pixel (lo de abajo pesa mas). El
+      // jugador parado en su propia sombra o en la del estadio recibe menos rebote. El verde lo mide la DLL una vez por
+      // partido (158.xyz, casi fijo).
       float shadeB = 1.0;
       float4 TB = IniParams.Load(int2(158,0));
-      if (BG.z > 0.0 && TB.y > 0.01) {
-        turf = lerp(turf, TB.xyz * 1.35, saturate(BG.z));
-        shadeB = lerp(1.0, 0.25 + 0.75 * saturate(TB.w), saturate(BG.z));
+      if (BG.z > 0.0 && fGround > 0.02) {
+        if (TB.y > 0.01) turf = lerp(turf, TB.xyz * 1.35, saturate(BG.z));
+        float resS = g_psScene.m_shadowMapResolutions.x;
+        float smW = 0, smH = 0; PESShadowMap.GetDimensions(smW, smH);
+        float2 sCb = uvC * float2(2, -2) + float2(-1, 1);
+        float3 Pcb = float3((sCb - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zb, zb);
+        float hP = g_psScene.m_eyepos.y + dot(Pcb, upV);                    // altura del pixel sobre la cancha (m)
+        if (resS > 1.0 && smW > 1.0 && smH > 2.5 * smW && hP > -0.3 && hP < 6.0) {
+          float3 Fb = Pcb - hP * upV;                                        // pie del pixel sobre la cancha
+          float3 t1 = cross(upV, float3(0, 0, 1)); if (dot(t1, t1) < 1e-3) t1 = cross(upV, float3(1, 0, 0));
+          t1 = normalize(t1); float3 t2 = cross(upV, t1);
+          float hK = clamp(hP, 0.15, 2.5);
+          float bnd = 1.0 - 8.0 / resS;
+          float swt = 0.0, slt = 0.0;
+          [unroll] for (int rI = 0; rI < 3; rI++) {
+            float rr = rI == 0 ? 0.45 : (rI == 1 ? 1.1 : 2.2);
+            float wr = rr * hK / pow(hK * hK + rr * rr, 1.5);                 // anillo de un disco horizontal visto desde arriba
+            [unroll] for (int aI = 0; aI < 4; aI++) {
+              float ang = aI * 1.5707963 + rI * 0.7853982;                    // patron fijo: no gira por pixel ni por cuadro
+              float3 Q = Fb + (t1 * cos(ang) + t2 * sin(ang)) * rr + upV * 0.12;
+              float4 hq = float4(Q.x, Q.y, Q.z + g_psScene.m_shadowProjection2._m33, 1.0);
+              float3 s0 = float3(dot(hq, g_psScene.m_shadowProjection._m00_m10_m20_m30), dot(hq, g_psScene.m_shadowProjection._m01_m11_m21_m31), dot(hq, g_psScene.m_shadowProjection._m02_m12_m22_m32));
+              float litQ = 1.0; bool done = false;                              // fuera de las 3 cascadas: al sol
+              [unroll] for (int cI = 0; cI < 3; cI++) {
+                float scl = cI == 0 ? 1.0 : (cI == 1 ? g_psScene.m_shadowProjection2._m03 : g_psScene.m_shadowProjection2._m13);
+                float3 ofs = cI == 0 ? float3(0, 0, 0) : (cI == 1 ? g_psScene.m_shadowProjection2._m00_m01_m02 : g_psScene.m_shadowProjection2._m10_m11_m12);
+                float3 sp = s0 * scl + ofs;
+                float zr = g_psScene.m_shadowProjection2._m30 * (1.0 + sp.z);
+                if (!done && abs(sp.x) <= bnd && abs(sp.y) <= bnd && zr >= 0.0) {
+                  float2 uvM = float2(sp.x * 0.5 + 0.5, (cI + 0.5 - sp.y * 0.5) / 3.0);
+                  float dS = PESShadowMap.Load(int3(min(uvM * float2(smW, smH), float2(smW, smH) - 1.0), 0)).x;
+                  litQ = dS > zr ? 0.0 : 1.0;                                    // como los shaders de luz: guardado > referencia = tapado
+                  done = true;
+                }
+              }
+              slt += litQ * wr; swt += wr;
+            }
+          }
+          float litF = swt > 0.0 ? slt / swt : 1.0;
+          shadeB = lerp(1.0, 0.2 + 0.8 * litF, saturate(BG.z));
+        }
       }
       r2.xyz += sunC * sunUp * turf * shadeB * fGround * max(BG.x, 0.0) * saturate((120.0 - zb) / 40.0) * PESAmbGain();
     }
