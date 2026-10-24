@@ -396,8 +396,7 @@ static void ApplySkin(int row, int idx) {
 }
 // (24/10 e) la paleta la abre el menu base por su cuenta (no pasa por decidir), y toma sus 72 colores genericos de una
 // tabla fija del exe (p_all, 0x1434d1dc0, solo lectura). Mientras la pagina Piel esta activa, esa tabla lleva en memoria
-// los 30 tonos + los 6 colores del juego + 18 variantes rosadas y 18 oliva; al salir vuelve la original (el exe en disco no
-// se toca). Los colores de los lugares 30.. se reconocen como "color propio" (rgb)
+// una grilla ordenada de tonos (ver PalApply); al salir vuelve la original (el exe en disco no se toca)
 static const uintptr_t kPalAll = 0x1434d1dc0ull; static const int kPalN = 72;
 static uint32_t s_palOrig[kPalN]; static bool s_palSaved = false, s_palPatched = false;
 static void PalWrite(const uint32_t* v) {
@@ -423,13 +422,18 @@ static void PalApply(bool on) {
     if (on == s_palPatched) return;
     if (on) {
         if (!s_palSaved) { if (!Rd((void*)kPalAll, s_palOrig)) return; s_palSaved = true; }
+        // (24/10 f) grilla de 12 x 6 (la vio el usuario): columnas = claro a oscuro (12 pasos de la escala), filas = matiz
+        // (rosado fuerte, rosado, neutro = la escala tal cual, oliva, oliva fuerte); ultima fila: los 6 colores del juego y 6
+        // tonos medios apagados. Solo la fila neutra se reconoce como "tono N"; el resto queda como color propio
+        static const int kCol[12] = { 1, 3, 6, 9, 12, 15, 18, 21, 24, 27, 29, 30 };
+        static const float kRowH[5] = { 10.0f, 5.0f, 0.0f, -5.0f, -10.0f }, kRowC[5] = { 1.10f, 1.05f, 1.0f, 0.97f, 0.92f };
         uint32_t v[kPalN];
-        for (int t = 1; t <= kSkinTones; t++) v[t - 1] = s_toneRgba[t - 1];
-        for (int g = 1; g <= 6; g++) v[29 + g] = ToneRgba(5 * g - 2);
-        static const int kVar[18] = { 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 25, 26, 27, 28, 29, 30 };
-        for (int i = 0; i < 18; i++) { v[36 + i] = VariantRgba(kVar[i], -10.0f, 1.12f); v[54 + i] = VariantRgba(kVar[i], 9.0f, 0.92f); }   // rosadas / oliva
+        for (int r = 0; r < 5; r++) for (int c = 0; c < 12; c++) v[r * 12 + c] = r == 2 ? s_toneRgba[kCol[c] - 1] : VariantRgba(kCol[c], kRowH[r], kRowC[r]);
+        for (int g = 1; g <= 6; g++) v[60 + g - 1] = ToneRgba(5 * g - 2);
+        static const int kMuted[6] = { 6, 10, 14, 18, 22, 26 };
+        for (int i = 0; i < 6; i++) v[66 + i] = VariantRgba(kMuted[i], 0.0f, 0.72f);
         PalWrite(v);
-        Log("fisico: paleta del juego con los 30 tonos (+ 6 del juego, 18 rosados, 18 oliva)");
+        Log("fisico: paleta del juego con la tabla de tonos (12 pasos x 5 matices + 6 del juego + 6 apagados)");
     } else if (s_palSaved) PalWrite(s_palOrig);
     s_palPatched = on;
 }
