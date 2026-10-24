@@ -22,11 +22,12 @@ float4 main(float3 uv : TEXCOORD0, float4 mulc : TEXCOORD1, float4 addc : TEXCOO
       float r = sqrt((float)acc.z / 3.14159);           // radio de la mancha visible (pixeles de la escena)
       float d = length(ip - c) / sc;                     // distancia en pixeles de pantalla
       float R = clamp(r * 1.15 / sc + 7.0, 16.0, 150.0) * (0.95 + 0.10 * HP.x);   // late como el de la cara (+- 5 %)
+      // (24/10 d) semitransparente y con el latido lento (HP.x sube y baja en w183 segundos), sin parpadeo
       float ring = 1.0 - smoothstep(1.1, 2.3, abs(d - R));
-      float halo = exp(-((d - R) * (d - R)) / 12.0) * 0.30;
+      float halo = exp(-((d - R) * (d - R)) / 12.0) * 0.18;
       float dotA = 1.0 - smoothstep(3.2, 4.8, d);
-      float dotH = exp(-(d * d) / 50.0) * 0.55;
-      a = max(a, max(max(ring * (0.70 + 0.30 * HP.x), halo), max(dotA, dotH)));
+      float dotH = exp(-(d * d) / 50.0) * 0.40;
+      a = max(a, max(max(ring * (0.40 + 0.25 * HP.x), halo), max(dotA * (0.65 + 0.25 * HP.x), dotH)));
     }
   }
   a *= saturate(HP.y) * (VP.z > 1.0 ? 1.0 : 0.0);

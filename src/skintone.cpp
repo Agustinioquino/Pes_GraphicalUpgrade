@@ -102,12 +102,14 @@ static void ToneOklab(int t, float* L, float* C, float* hDeg) {
 // elegido + matiz: (kL, m0, m1). El tono es absoluto: el mismo numero se ve igual en todos los jugadores, sea cual sea su
 // color del juego (antes se movia desde la posicion del color del juego en la escala y dos jugadores con el mismo tono
 // quedaban distintos); tono 0 = el color del juego (solo el matiz)
-bool SkinToneParams(int gameIdx, int tono, int matiz, float k, float out[3]) {
+// (24/10 d) rgb != 0: color propio (0xRRGGBB, de la paleta del juego) en vez del tono de la escala
+bool SkinToneParams(int gameIdx, int tono, int matiz, uint32_t rgb, float k, float out[3]) {
     out[0] = 1.0f; out[1] = 1.0f; out[2] = 0.0f;
-    if ((tono <= 0 && matiz == 0) || gameIdx < 1) return false;
+    if ((tono <= 0 && matiz == 0 && !rgb) || gameIdx < 1) return false;
     float LB, CB, HB, LT, CT, HT;
     { float c[3]; GameLin(std::clamp(gameIdx, 1, 6), c); LinToLCh(c, &LB, &CB, &HB); }
-    if (tono > 0) ToneOklab(tono, &LT, &CT, &HT); else { LT = LB; CT = CB; HT = HB; }
+    if (rgb) { float c[3] = { Lin((float)((rgb >> 16) & 255)), Lin((float)((rgb >> 8) & 255)), Lin((float)(rgb & 255)) }; LinToLCh(c, &LT, &CT, &HT); LT = std::clamp(LT, 0.15f, 0.99f); }
+    else if (tono > 0) ToneOklab(tono, &LT, &CT, &HT); else { LT = LB; CT = CB; HT = HB; }
     float kL = LT / std::max(LB, 0.05f), kC = CT / std::max(CB, 0.005f), dh = HT - HB;
     const int mz = std::clamp(matiz, -10, 10);
     dh -= 1.5f * (float)mz;                                   // + rosado (mas rojo), - oliva (mas amarillo-verde)
@@ -133,7 +135,9 @@ void SkinToneSwatch(int tono, unsigned char rgb[3]) {   // para rotulos: el tono
 }
 
 // ---------------------------------------------------------------- por jugador (piel_jugadores.ini)
-struct SkinProf { std::string name; int tono = 0, matiz = 0, juego = 0; };   // juego: color de piel del juego (1..6, 0 = no se sabe)
+// juego: color de piel del juego (1..6, 0 = no se sabe); rgb: color propio elegido en la paleta del juego (0xRRGGBB, 0 = ninguno;
+// manda sobre el tono)
+struct SkinProf { std::string name; int tono = 0, matiz = 0, juego = 0; uint32_t rgb = 0; };
 static std::map<uint32_t, SkinProf> s_skin; static std::mutex s_skinMx;
 static bool s_skinLoaded = false, s_skinDirty = false; static double s_skinDirtyT = 0;
 static std::wstring SkinPath() { return g_cfg.baseDir + L"piel_jugadores.ini"; }
@@ -152,6 +156,7 @@ static void LoadSkin() {
         else if (k == "tono") cur->tono = std::clamp(atoi(v.c_str()), 0, kSkinTones);
         else if (k == "matiz") cur->matiz = std::clamp(atoi(v.c_str()), -10, 10);
         else if (k == "juego") cur->juego = std::clamp(atoi(v.c_str()), 0, 6);
+        else if (k == "rgb") cur->rgb = (uint32_t)strtoul(v.c_str(), nullptr, 16) & 0xffffffu;
     }
     Log("piel: %d jugadores con tono propio en piel_jugadores.ini", (int)s_skin.size());
 }
@@ -159,21 +164,24 @@ static void SaveSkin() {
     std::ofstream f(SkinPath(), std::ios::binary | std::ios::trunc); if (!f) { Log("piel: no se pudo escribir piel_jugadores.ini"); return; }
     f << "; PES21 FX - tono de piel por jugador (lo escribe el menu Fisico del juego, pagina Piel).\r\n"
          "; [id] = id del jugador; tono = 1..30 (0 = el color del juego; los 6 colores del juego son 3, 8, 13, 18, 23 y 28),\r\n"
-         "; matiz = -10 (oliva) .. +10 (rosado); juego = color de piel del juego del jugador (1..6, lo anota el menu Fisico).\r\n";
+         "; matiz = -10 (oliva) .. +10 (rosado); juego = color de piel del juego del jugador (1..6, lo anota el menu Fisico);\r\n"
+         "; rgb = RRGGBB (hex): color propio elegido en la paleta del juego (manda sobre el tono).\r\n";
     for (auto& kv : s_skin) {
-        if (kv.second.tono <= 0 && kv.second.matiz == 0) continue;
+        if (kv.second.tono <= 0 && kv.second.matiz == 0 && !kv.second.rgb) continue;
         f << "\r\n[" << kv.first << "]\r\n";
         if (!kv.second.name.empty()) f << "nombre = " << kv.second.name << "\r\n";
         f << "tono = " << kv.second.tono << "\r\nmatiz = " << kv.second.matiz << "\r\n";
+        if (kv.second.rgb) { char h[16]; snprintf(h, sizeof h, "%06X", kv.second.rgb & 0xffffffu); f << "rgb = " << h << "\r\n"; }
         if (kv.second.juego > 0) f << "juego = " << kv.second.juego << "\r\n";
     }
 }
-bool SkinToneGet(uint32_t id, int* tono, int* matiz) {
+bool SkinToneGet(uint32_t id, int* tono, int* matiz, uint32_t* rgb) {
     std::lock_guard<std::mutex> lk(s_skinMx);
     if (!s_skinLoaded) LoadSkin();
     auto it = id ? s_skin.find(id) : s_skin.end();
     *tono = it != s_skin.end() ? it->second.tono : 0; *matiz = it != s_skin.end() ? it->second.matiz : 0;
-    return it != s_skin.end() && (*tono > 0 || *matiz != 0);
+    const uint32_t c = it != s_skin.end() ? it->second.rgb : 0; if (rgb) *rgb = c;
+    return it != s_skin.end() && (*tono > 0 || *matiz != 0 || c != 0);
 }
 int SkinToneGame(uint32_t id) {
     std::lock_guard<std::mutex> lk(s_skinMx);
@@ -189,13 +197,13 @@ static void SkinToneSetGame(uint32_t id, int gi) {
     if (it == s_skin.end() || it->second.juego == gi) return;
     it->second.juego = gi; s_skinDirty = true; s_skinDirtyT = Now();
 }
-void SkinToneSet(uint32_t id, const char* name, int tono, int matiz) {
+void SkinToneSet(uint32_t id, const char* name, int tono, int matiz, uint32_t rgb) {
     if (!id) return;
     std::lock_guard<std::mutex> lk(s_skinMx);
     if (!s_skinLoaded) LoadSkin();
     SkinProf& p = s_skin[id];
     if (name && *name) p.name = name;
-    p.tono = std::clamp(tono, 0, kSkinTones); p.matiz = std::clamp(matiz, -10, 10);
+    p.tono = std::clamp(tono, 0, kSkinTones); p.matiz = std::clamp(matiz, -10, 10); p.rgb = rgb & 0xffffffu;
     s_skinDirty = true; s_skinDirtyT = Now();
 }
 // por cuadro: guardado diferido y la tabla de jugadores con tono propio y los tapones (194..254; ver pes_skintone.hlsli)
@@ -242,9 +250,10 @@ void SkinTonePresent() {
         x.P[0] = 1.0f; x.P[1] = 1.0f; x.P[2] = 0.0f; x.own = false; x.d2 = 1e30f; x.id = ci[sl].known ? ci[sl].id : 0; x.gi = x.tono = x.matiz = 0;
         if (x.id) {
             if (fis && x.id == eid && fgi >= 1) SkinToneSetGame(x.id, fgi);   // recordar el color del juego de este jugador
-            if (SkinToneGet(x.id, &x.tono, &x.matiz)) {
+            uint32_t rgb = 0;
+            if (SkinToneGet(x.id, &x.tono, &x.matiz, &rgb)) {
                 x.gi = (fis && x.id == eid && fgi >= 1) ? fgi : SkinToneGame(x.id);
-                x.own = SkinToneParams(x.gi, x.tono, x.matiz, k, x.P);
+                x.own = SkinToneParams(x.gi, x.tono, x.matiz, rgb, k, x.P);
             }
         }
         if (x.own) nOwn++;

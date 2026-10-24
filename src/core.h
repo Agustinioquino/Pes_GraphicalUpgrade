@@ -278,10 +278,10 @@ void SkinToneCheckDraw(ID3D11DeviceContext* c, uint64_t ps, uint64_t vs);
 constexpr int kSkinTones = 30;                    // (24/10) tonos de piel propios (skintone.cpp); los 6 del juego son 3, 8, ..., 28
 bool SkinToneGain(int gameIdx, int tono, int matiz, float out[3]);   // ganancia lineal (tono elegido / color del juego)
 void SkinToneSwatch(int tono, unsigned char rgb[3]);
-bool SkinToneGet(uint32_t id, int* tono, int* matiz);
-void SkinToneSet(uint32_t id, const char* name, int tono, int matiz);
+bool SkinToneGet(uint32_t id, int* tono, int* matiz, uint32_t* rgb = nullptr);   // rgb: color propio 0xRRGGBB (0 = ninguno)
+void SkinToneSet(uint32_t id, const char* name, int tono, int matiz, uint32_t rgb = 0);
 void SkinTonePresent();                           // guardado diferido + tabla de jugadores con tono propio (194..254)
-bool SkinToneParams(int gameIdx, int tono, int matiz, float k, float out[3]);   // (24/10 c) (kL, m0, m1) en Oklab para pes_skintone.hlsli
+bool SkinToneParams(int gameIdx, int tono, int matiz, uint32_t rgb, float k, float out[3]);   // (24/10 c) (kL, m0, m1) en Oklab para pes_skintone.hlsli
 int SkinToneGame(uint32_t id);                    // color de piel del juego guardado para ese jugador (0 = no se sabe)
 int FisicoSkinIndex();                            // color de piel del juego (1..6) del jugador del menu Fisico (0 = no se sabe)
 void CodeWatchStart();                            // (24/10) vigila la seccion .text del exe: anota en el log lo que cambie (codewatch.cpp)

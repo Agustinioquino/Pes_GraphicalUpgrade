@@ -20,28 +20,32 @@ static const uint64_t kSkinPS = 0xaa7d1833f6a11481ULL, kSkinVS = 0x1c02a92ab4ae3
 static std::mutex s_mx;
 static bool s_tried = false;
 static ID3D11PixelShader *s_hlPS = nullptr, *s_ringPS = nullptr;
-static ID3D11Buffer* s_acc = nullptr; static ID3D11UnorderedAccessView* s_accUAV = nullptr; static ID3D11ShaderResourceView* s_accSRV = nullptr;
+// (24/10 d) dos buffers alternados por cuadro: la piel del cuadro f anota en [f & 1] y el aro del cuadro f lee lo que
+// anoto el cuadro f - 1 (completo); antes se leia a medio anotar y se borraba al usarse, y el aro parpadeaba
+static ID3D11Buffer* s_acc[2] = {}; static ID3D11UnorderedAccessView* s_accUAV[2] = {}; static ID3D11ShaderResourceView* s_accSRV[2] = {};
 static ID3D11BlendState* s_bs = nullptr; static ID3D11DepthStencilState* s_dss = nullptr;
 static std::atomic<int> s_lastSkinFrame{-1}, s_lastRingFrame{-100};
 static std::atomic<int> s_skinBinds{0}, s_rings{0};
 
 static bool Ensure() {
-    if (s_tried) return s_hlPS && s_ringPS && s_acc;
+    if (s_tried) return s_hlPS && s_ringPS && s_acc[0] && s_acc[1];
     s_tried = true;
     ID3D11Device* d = g_dev.dev; if (!d) return false;
     if (ID3DBlob* b = CompileNamedShader(L"pes_skin_hl_ps.hlsl", "ps_5_0")) { d->CreatePixelShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_hlPS); b->Release(); }
     if (ID3DBlob* b = CompileNamedShader(L"pes_ring_ps.hlsl", "ps_5_0")) { d->CreatePixelShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_ringPS); b->Release(); }
-    if (!s_acc) {
-        D3D11_BUFFER_DESC bd{}; bd.ByteWidth = 64; bd.Usage = D3D11_USAGE_DEFAULT; bd.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
-        bd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
-        UINT zero[16] = {}; D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = zero;
-        if (SUCCEEDED(d->CreateBuffer(&bd, &sd, &s_acc))) {
-            D3D11_UNORDERED_ACCESS_VIEW_DESC ud{}; ud.Format = DXGI_FORMAT_R32_TYPELESS; ud.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-            ud.Buffer.NumElements = 16; ud.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
-            d->CreateUnorderedAccessView(s_acc, &ud, &s_accUAV);
-            D3D11_SHADER_RESOURCE_VIEW_DESC sv{}; sv.Format = DXGI_FORMAT_R32_TYPELESS; sv.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
-            sv.BufferEx.NumElements = 16; sv.BufferEx.Flags = D3D11_BUFFEREX_SRV_FLAG_RAW;
-            d->CreateShaderResourceView(s_acc, &sv, &s_accSRV);
+    if (!s_acc[0]) {
+        for (int i = 0; i < 2; i++) {
+            D3D11_BUFFER_DESC bd{}; bd.ByteWidth = 64; bd.Usage = D3D11_USAGE_DEFAULT; bd.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
+            bd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+            UINT zero[16] = {}; D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = zero;
+            if (SUCCEEDED(d->CreateBuffer(&bd, &sd, &s_acc[i]))) {
+                D3D11_UNORDERED_ACCESS_VIEW_DESC ud{}; ud.Format = DXGI_FORMAT_R32_TYPELESS; ud.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+                ud.Buffer.NumElements = 16; ud.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+                d->CreateUnorderedAccessView(s_acc[i], &ud, &s_accUAV[i]);
+                D3D11_SHADER_RESOURCE_VIEW_DESC sv{}; sv.Format = DXGI_FORMAT_R32_TYPELESS; sv.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
+                sv.BufferEx.NumElements = 16; sv.BufferEx.Flags = D3D11_BUFFEREX_SRV_FLAG_RAW;
+                d->CreateShaderResourceView(s_acc[i], &sv, &s_accSRV[i]);
+            }
         }
         D3D11_BLEND_DESC bl{}; auto& r = bl.RenderTarget[0];
         r.BlendEnable = TRUE; r.SrcBlend = D3D11_BLEND_SRC_ALPHA; r.DestBlend = D3D11_BLEND_INV_SRC_ALPHA; r.BlendOp = D3D11_BLEND_OP_ADD;
@@ -49,7 +53,7 @@ static bool Ensure() {
         d->CreateBlendState(&bl, &s_bs);
         D3D11_DEPTH_STENCIL_DESC dd{}; dd.DepthEnable = FALSE; dd.StencilEnable = FALSE; d->CreateDepthStencilState(&dd, &s_dss);
     }
-    bool ok = s_hlPS && s_ringPS && s_acc && s_accUAV && s_accSRV && s_bs && s_dss;
+    bool ok = s_hlPS && s_ringPS && s_acc[0] && s_accUAV[0] && s_accSRV[0] && s_acc[1] && s_accUAV[1] && s_accSRV[1] && s_bs && s_dss;
     Log("aro del musculo: %s", ok ? "listo (capa de interfaz)" : "NO se pudo preparar (ver errores de shaders)");
     return ok;
 }
@@ -92,15 +96,15 @@ bool RingBeforeDraw(ID3D11DeviceContext* c, uint64_t ps, uint64_t vs, RingScope&
     UINT nrt = 0; for (UINT i = 0; i < 8; i++) if (rts[i]) nrt = i + 1;
     for (auto* v : rts) if (v) v->Release(); if (dsv) dsv->Release();
     if (nrt > 5) return false;
-    const int f = PresentNo();
-    if (s_lastSkinFrame.exchange(f) != f && f - s_lastRingFrame.load() > 2) {   // nadie las leyo: empezar de cero
-        const UINT z[4] = { 0, 0, 0, 0 }; c->ClearUnorderedAccessViewUint(s_accUAV, z);
+    const int f = PresentNo(); const int w = f & 1;
+    if (s_lastSkinFrame.exchange(f) != f) {   // primer dibujo de piel del cuadro: el buffer de este cuadro empieza de cero
+        const UINT z[4] = { 0, 0, 0, 0 }; c->ClearUnorderedAccessViewUint(s_accUAV[w], z);
     }
     UINT nvp = 1; D3D11_VIEWPORT vp{}; c->RSGetViewports(&nvp, &vp);
     if (nvp >= 1 && vp.Width > 1.0f) { g_cfg.live[193][0] = vp.TopLeftX; g_cfg.live[193][1] = vp.TopLeftY; g_cfg.live[193][2] = vp.Width; g_cfg.live[193][3] = vp.Height; }
     c->PSGetShader(&r.prevPS, nullptr, nullptr);
     c->PSSetShader(s_hlPS, nullptr, 0);
-    c->OMSetRenderTargetsAndUnorderedAccessViews(D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 5, 1, &s_accUAV, nullptr);
+    c->OMSetRenderTargetsAndUnorderedAccessViews(D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 5, 1, &s_accUAV[w], nullptr);
     r.on = true;
     s_skinBinds++;
     return true;
@@ -123,7 +127,7 @@ void RingOverlayBegin(ID3D11DeviceContext* c, RingScope& r) {
     c->PSSetShader(s_ringPS, nullptr, 0);
     float bf[4] = {}; c->OMSetBlendState(s_bs, bf, 0xffffffff);
     c->OMSetDepthStencilState(s_dss, 0);
-    c->PSSetShaderResources(20, 1, &s_accSRV);
+    c->PSSetShaderResources(20, 1, &s_accSRV[(PresentNo() + 1) & 1]);   // lo que anoto el cuadro anterior
     ID3D11ShaderResourceView* prm = g_dev.paramSRV; c->PSSetShaderResources(120, 1, &prm);
 }
 void RingOverlayEnd(ID3D11DeviceContext* c, RingScope& r) {
@@ -132,7 +136,6 @@ void RingOverlayEnd(ID3D11DeviceContext* c, RingScope& r) {
     c->OMSetDepthStencilState(r.oDSS, r.oRef); if (r.oDSS) r.oDSS->Release();
     c->PSSetShaderResources(20, 1, &r.oT20); if (r.oT20) r.oT20->Release();
     c->PSSetShaderResources(120, 1, &r.oT120); if (r.oT120) r.oT120->Release();
-    const UINT z[4] = { 0, 0, 0, 0 }; c->ClearUnorderedAccessViewUint(s_accUAV, z);   // el proximo cuadro junta de nuevo
     s_lastRingFrame = PresentNo();
     s_rings++;
     r = RingScope();
