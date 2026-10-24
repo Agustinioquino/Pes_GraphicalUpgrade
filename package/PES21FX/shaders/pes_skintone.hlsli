@@ -45,6 +45,22 @@ int PesSkinEntry(float code) {
   return IniParams.Load(int2(196 + 2 * i, 0)).w > 0.5 ? i : -1;
 }
 float3 PesSkinParams(int i) { return IniParams.Load(int2(196 + 2 * i, 0)).xyz; }
+// para el VS: un punto del personaje en el mundo. w194 dice como sacarlo (la DLL lo comprueba cada 30 s copiando los bloques
+// de constantes de unos dibujos y se queda con la manera que cae sobre algun personaje): 0 = hueso 0 x m_world, 1 = hueso 0
+// de la segunda paleta, 2 = traslacion de m_world, 3 = inversa de m_view x m_viewWorld x hueso 0 (no depende de m_world)
+float3 PesSkinPoint(float4x4 W, float4x4 VW, float4x4 V, float3 b0, float3 b0b, bool sk) {
+  float mode = IniParams.Load(int2(194, 0)).w;
+  if (!sk) b0 = float3(0, 0, 0);
+  float4 p = float4(b0, 1.0);
+  if (mode > 2.5) {
+    float3 v = float3(dot(p, VW._m00_m10_m20_m30), dot(p, VW._m01_m11_m21_m31), dot(p, VW._m02_m12_m22_m32));
+    float3 d = v - float3(V._m30, V._m31, V._m32);
+    return float3(dot(d, float3(V._m00, V._m01, V._m02)), dot(d, float3(V._m10, V._m11, V._m12)), dot(d, float3(V._m20, V._m21, V._m22)));
+  }
+  if (mode > 0.5 && mode < 1.5 && sk) return b0b;
+  if (mode > 0.5) return float3(W._m30, W._m31, W._m32);
+  return float3(dot(p, W._m00_m10_m20_m30), dot(p, W._m01_m11_m21_m31), dot(p, W._m02_m12_m22_m32));
+}
 // para el VS: la entrada mas cercana (en el plano del piso) a un punto del personaje, o -1
 int PesSkinNearest(float3 wp) {
   float4 H = IniParams.Load(int2(194, 0));

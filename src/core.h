@@ -273,6 +273,8 @@ void FisicoHighlightPresent();                    // (24/10) resaltado del muscu
 extern std::atomic<bool> g_skinDiagArmed;         // (24/10) skintone.cpp: el proximo cuadro se anotan los dibujos de personajes
 void SkinDiagDraw(ID3D11DeviceContext* c, uint64_t ps, uint64_t vs, UINT count);
 void SkinDiagPresent();
+extern std::atomic<bool> g_toneChkArmed;          // (24/10 c) skintone.cpp: comprobacion del punto de los dibujos de piel (cada 30 s)
+void SkinToneCheckDraw(ID3D11DeviceContext* c, uint64_t ps, uint64_t vs);
 constexpr int kSkinTones = 30;                    // (24/10) tonos de piel propios (skintone.cpp); los 6 del juego son 3, 8, ..., 28
 bool SkinToneGain(int gameIdx, int tono, int matiz, float out[3]);   // ganancia lineal (tono elegido / color del juego)
 void SkinToneSwatch(int tono, unsigned char rgb[3]);

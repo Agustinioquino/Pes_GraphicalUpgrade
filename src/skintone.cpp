@@ -183,12 +183,23 @@ void SkinToneSet(uint32_t id, const char* name, int tono, int matiz) {
     s_skinDirty = true; s_skinDirtyT = Now();
 }
 // por cuadro: guardado diferido y la tabla de jugadores con tono propio y los tapones (194..254; ver pes_skintone.hlsli)
-static bool NodePos(void* node, float out[3]) {
+// posicion del personaje: matriz de mundo del nodo en + 0x40; la traslacion en + 0x70 (fila 3) o en + 0x4c / 0x5c / 0x6c
+// (columna 3) segun como la guarde el motor: lo decide la comprobacion de abajo (s_nodeLayout)
+static std::atomic<int> s_nodeLayout{0}, s_posMode{0};
+static bool NodeMat(void* node, float m[16]) {
     if (!node) return false;
-    __try { memcpy(out, (const char*)node + 0x70, 12); } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    __try { memcpy(m, (const char*)node + 0x40, 64); } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    return true;
+}
+static bool NodePosL(const float m[16], int layout, float out[3]) {
+    if (layout == 0) { out[0] = m[12]; out[1] = m[13]; out[2] = m[14]; } else { out[0] = m[3]; out[1] = m[7]; out[2] = m[11]; }
     for (int i = 0; i < 3; i++) if (!(out[i] == out[i]) || fabsf(out[i]) > 2000.0f) return false;
     return true;
 }
+static bool NodePos(void* node, float out[3]) {
+    float m[16]; return NodeMat(node, m) && NodePosL(m, s_nodeLayout.load(), out);
+}
+static void ToneCheckPresent(const CharInfo* ci, const bool* alive);   // abajo
 static double s_tabLog = 0;
 // (24/10 c) la tabla lleva primero a los jugadores con tono propio y despues, como "tapones" (tono del juego), a los demas
 // personajes que estan cerca de alguno de ellos: si no, en un corner o una marca personal el VS del rival encontraria como
@@ -204,7 +215,8 @@ void SkinTonePresent() {
     uint32_t eid = 0; const bool fis = FisicoEditing(&eid) && MusclePhysiqueActive();
     const int fgi = fis ? FisicoSkinIndex() : 0;
     const float k = g_cfg.live[184][1] > 0.0f ? g_cfg.live[184][1] : 1.0f;
-    const float maxD = 1.4f;
+    // en el menu Fisico hay un solo personaje: cualquier distancia sirve (asi la vista previa no depende de la comprobacion)
+    const float maxD = fis ? 10000.0f : 1.4f;
     struct Ent { float pos[3], P[3]; bool own; float d2; uint32_t id; int gi, tono, matiz; };
     static Ent e[kCharSlots]; int ne = 0, nOwn = 0;
     for (int sl = 0; sl < kCharSlots; sl++) {
@@ -250,9 +262,10 @@ void SkinTonePresent() {
             put(e[b]); e[b].d2 = 1e30f; nBlk++;
         }
     }
-    g_cfg.live[194][0] = (float)n; g_cfg.live[194][1] = n > 0 ? 1.0f : 0.0f; g_cfg.live[194][2] = maxD;
+    g_cfg.live[194][0] = (float)n; g_cfg.live[194][1] = n > 0 ? 1.0f : 0.0f; g_cfg.live[194][2] = maxD; g_cfg.live[194][3] = (float)s_posMode.load();
     const double t = Now();
-    if (n > 0 && t > s_tabLog) { s_tabLog = t + 30.0; Log("piel: tabla de tonos, %d con tono propio y %d cerca sin tono (de %d personajes)%s", n - nBlk, nBlk, ne, line); }
+    if (n > 0 && t > s_tabLog) { s_tabLog = t + 30.0; Log("piel: tabla de tonos, %d con tono propio y %d cerca sin tono (de %d personajes; punto %d, nodo %d)%s", n - nBlk, nBlk, ne, s_posMode.load(), s_nodeLayout.load(), line); }
+    if (ne > 0) ToneCheckPresent(ci, alive);
 }
 
 std::atomic<bool> g_skinDiagArmed{false};
@@ -377,6 +390,134 @@ void SkinDiagPresent() {
         }
         { std::lock_guard<std::mutex> lk(s_mx); s_order = 0; s_total = 0; s_lines.clear(); s_nSlots = 0; }
         s_armFrame = f + 1; g_skinDiagArmed = true;
+    }
+}
+
+// ---------------------------------------------------------------- (24/10 c) comprobacion del punto de cada dibujo
+// El VS de la piel elige el jugador por la distancia entre un punto del dibujo y la posicion de cada personaje (su nodo). Para
+// no depender de suposiciones, cada 30 s (con personajes en pantalla) se copian en un cuadro los bloques de constantes de
+// hasta 8 dibujos de piel (m_viewWorld, m_world y m_useWeightCount de b5, el hueso 0 de las dos paletas de b6 y m_view de b2)
+// y 2 cuadros despues se calcula el punto de 4 maneras (como en pes_skintone.hlsli: 0 = hueso 0 x m_world, 1 = hueso 0 de la
+// segunda paleta, 2 = traslacion de m_world, 3 = vista inversa x m_viewWorld x hueso 0) contra las dos formas de leer la
+// posicion del nodo: se queda la combinacion con mas dibujos a menos de 0.6 m de algun personaje (w194 y s_nodeLayout).
+std::atomic<bool> g_toneChkArmed{false};
+static std::atomic<int> s_chkFrame{-1};
+static const int kChkSlots = 8, kChkBytes = 320;
+static ID3D11Buffer* s_chkStage = nullptr;
+static std::mutex s_chkMx; static int s_chkN = 0; static uint64_t s_chkPS[kChkSlots], s_chkVS[kChkSlots];
+static int s_chkRead = -1, s_chkTries = 0; static double s_chkNext = 0; static int s_chkLogs = 0;
+static float s_chkNode[kCharSlots][16]; static int s_chkNodes = 0;
+static bool CopyTo(ID3D11DeviceContext* c, ID3D11Buffer* src, UINT srcOff, UINT bytes, UINT dstOff) {
+    if (!src || !s_chkStage) return false;
+    D3D11_BUFFER_DESC d; src->GetDesc(&d);
+    if (d.ByteWidth < srcOff + bytes || d.Usage == D3D11_USAGE_STAGING) return false;
+    D3D11_BOX bx = { srcOff, 0, 0, srcOff + bytes, 1, 1 };
+    c->CopySubresourceRegion(s_chkStage, 0, dstOff, 0, 0, src, 0, &bx);
+    return true;
+}
+void SkinToneCheckDraw(ID3D11DeviceContext* c, uint64_t ps, uint64_t vs) {
+    if (vs != 0x1c02a92ab4ae3362ULL && vs != 0xfaab87ee4ef8b783ULL && vs != 0x455eb97bc2c3a958ULL) return;
+    if (PresentNo() != s_chkFrame.load(std::memory_order_relaxed)) return;
+    std::lock_guard<std::mutex> lk(s_chkMx);
+    if (s_chkN >= kChkSlots || !s_chkStage) return;
+    ID3D11DeviceContext1* c1 = nullptr;
+    if (FAILED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) || !c1) return;
+    UINT f5 = 0, f6 = 0, f2 = 0;
+    ID3D11Buffer* b5 = CbOf(c1, false, 5, &f5); ID3D11Buffer* b6 = CbOf(c1, false, 6, &f6); ID3D11Buffer* b2 = CbOf(c1, false, 2, &f2);
+    c1->Release();
+    const UINT o = (UINT)s_chkN * kChkBytes;
+    // [0, 144) b5 c0..c8 | [144, 192) hueso 0 paleta 1 | [192, 240) hueso 0 paleta 2 | [240, 288) b2 c8..c10 (m_view)
+    const bool ok = CopyTo(c, b5, f5 * 16, 144, o) && CopyTo(c, b6, f6 * 16, 48, o + 144) && CopyTo(c, b6, f6 * 16 + 1536, 48, o + 192) &&
+                    CopyTo(c, b2, f2 * 16 + 128, 48, o + 240);
+    if (b5) b5->Release(); if (b6) b6->Release(); if (b2) b2->Release();
+    if (ok) { s_chkPS[s_chkN] = ps; s_chkVS[s_chkN] = vs; s_chkN++; }
+}
+// punto del dibujo de la manera "mode" con los bloques copiados (q: floats del lugar)
+static void ChkPoint(const float* q, int mode, float out[3]) {
+    const float* VW = q; const float* W = q + 16; const float sk = q[32];
+    const float* B1 = q + 36; const float* B2 = q + 48; const float* V = q + 60;
+    float b0[3] = { 0, 0, 0 };
+    if (sk != 0.0f) { b0[0] = B1[3]; b0[1] = B1[7]; b0[2] = B1[11]; }
+    if (mode == 1 && sk != 0.0f) { out[0] = B2[3]; out[1] = B2[7]; out[2] = B2[11]; return; }
+    if (mode == 2 || mode == 1) { out[0] = W[3]; out[1] = W[7]; out[2] = W[11]; return; }
+    if (mode == 3) {
+        float v[3], d[3];
+        for (int k = 0; k < 3; k++) v[k] = VW[4 * k] * b0[0] + VW[4 * k + 1] * b0[1] + VW[4 * k + 2] * b0[2] + VW[4 * k + 3];
+        for (int k = 0; k < 3; k++) d[k] = v[k] - V[4 * k + 3];
+        for (int j = 0; j < 3; j++) out[j] = V[j] * d[0] + V[4 + j] * d[1] + V[8 + j] * d[2];
+        return;
+    }
+    for (int k = 0; k < 3; k++) out[k] = W[4 * k] * b0[0] + W[4 * k + 1] * b0[1] + W[4 * k + 2] * b0[2] + W[4 * k + 3];
+}
+static void ToneCheckPresent(const CharInfo* ci, const bool* alive) {
+    const int f = PresentNo();
+    if (s_chkRead >= 0 && f >= s_chkRead && g_dev.imm && s_chkStage) {
+        D3D11_MAPPED_SUBRESOURCE m;
+        if (SUCCEEDED(g_dev.imm->Map(s_chkStage, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) {
+            int nd; { std::lock_guard<std::mutex> lk(s_chkMx); nd = s_chkN; s_chkN = 0; }
+            int hits[4][2] = {}; float best[4][2][kChkSlots];
+            for (int i = 0; i < nd; i++) {
+                const float* q = (const float*)((const char*)m.pData + (size_t)i * kChkBytes);
+                for (int md = 0; md < 4; md++) {
+                    float pt[3]; ChkPoint(q, md, pt);
+                    for (int L = 0; L < 2; L++) {
+                        float bd = 1e30f;
+                        for (int j = 0; j < s_chkNodes; j++) {
+                            float np[3]; if (!NodePosL(s_chkNode[j], L, np)) continue;
+                            const float dx = pt[0] - np[0], dz = pt[2] - np[2]; bd = (std::min)(bd, dx * dx + dz * dz);
+                        }
+                        best[md][L][i] = sqrtf(bd);
+                        if (bd < 0.36f) hits[md][L]++;
+                    }
+                }
+            }
+            // la combinacion actual se mantiene si sigue entre las mejores; otra la reemplaza si gana dos comprobaciones seguidas
+            int bm = -1, bl = 0, bh = 0;
+            const int cm = s_posMode.load(), cl = s_nodeLayout.load();
+            for (int md = 0; md < 4; md++) for (int L = 0; L < 2; L++) if (hits[md][L] > bh) { bh = hits[md][L]; bm = md; bl = L; }
+            if (bm >= 0 && hits[cm][cl] == bh) { bm = cm; bl = cl; }
+            const bool good = nd > 0 && bm >= 0 && bh >= 2 && bh * 2 >= nd;
+            static int candM = -1, candL = -1, candN = 0;
+            if (good && (bm != cm || bl != cl)) {
+                if (bm == candM && bl == candL) candN++; else { candM = bm; candL = bl; candN = 1; }
+                if (candN >= 2) { s_posMode = bm; s_nodeLayout = bl; candN = 0; candM = candL = -1; }
+            } else if (good) { candN = 0; candM = candL = -1; }
+            if (nd > 0 && s_chkLogs < 12) {
+                s_chkLogs++;
+                char l[1400]; int n = snprintf(l, sizeof l, "piel: comprobacion del punto de %d dibujos de piel (%d personajes): coinciden a menos de 0.6 m", nd, s_chkNodes);
+                static const char* kM[4] = { "hueso x mundo", "paleta 2", "mundo", "vista inversa" };
+                for (int md = 0; md < 4; md++) n += snprintf(l + n, sizeof l - n, " | %s %d/%d", kM[md], hits[md][0], hits[md][1]);
+                n += snprintf(l + n, sizeof l - n, " -> %s (punto %d, nodo %d)", !good ? "ninguna alcanza, sigo con" : (bm == s_posMode.load() && bl == s_nodeLayout.load()) ? "uso" : "otra gana (se cambia si se repite), sigo con", s_posMode.load(), s_nodeLayout.load());
+                if (nd > 0) {
+                    const float* q = (const float*)m.pData; float pt[3];
+                    n += snprintf(l + n, sizeof l - n, " | #0 = PS %08llx VS %08llx, pesos %.0f", (unsigned long long)(s_chkPS[0] >> 32), (unsigned long long)(s_chkVS[0] >> 32), q[32]);
+                    for (int md = 0; md < 4 && n < 1200; md++) { ChkPoint(q, md, pt); n += snprintf(l + n, sizeof l - n, " | #0 %s (%.2f, %.2f, %.2f) a %.2f m", kM[md], pt[0], pt[1], pt[2], best[md][s_nodeLayout.load()][0]); }
+                    float np[3];
+                    if (s_chkNodes > 0 && NodePosL(s_chkNode[0], 0, np) && n < 1300) n += snprintf(l + n, sizeof l - n, " | nodo 0 fila (%.2f, %.2f, %.2f)", np[0], np[1], np[2]);
+                    if (s_chkNodes > 0 && NodePosL(s_chkNode[0], 1, np) && n < 1360) n += snprintf(l + n, sizeof l - n, " columna (%.2f, %.2f, %.2f)", np[0], np[1], np[2]);
+                }
+                Log("%s", l);
+            }
+            g_dev.imm->Unmap(s_chkStage, 0);
+            s_chkRead = -1;
+        } else if (++s_chkTries > 20) { std::lock_guard<std::mutex> lk(s_chkMx); s_chkN = 0; s_chkRead = -1; }
+    }
+    const int armed = s_chkFrame.load();
+    if (armed >= 0 && f > armed) {   // el cuadro capturado ya paso: leer 2 cuadros despues
+        s_chkFrame = -1; g_toneChkArmed = false;
+        int nd; { std::lock_guard<std::mutex> lk(s_chkMx); nd = s_chkN; }
+        if (nd > 0) { s_chkRead = f + 2; s_chkTries = 0; }
+    }
+    const double t = Now();
+    if (s_chkFrame.load() < 0 && s_chkRead < 0 && t > s_chkNext && g_dev.dev) {
+        s_chkNext = t + 30.0;
+        if (!s_chkStage) {
+            D3D11_BUFFER_DESC d = {}; d.ByteWidth = kChkSlots * kChkBytes; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+            g_dev.dev->CreateBuffer(&d, nullptr, &s_chkStage);
+        }
+        s_chkNodes = 0;
+        for (int sl = 0; sl < kCharSlots && s_chkNodes < kCharSlots; sl++) if (alive[sl] && ci[sl].node && NodeMat(ci[sl].node, s_chkNode[s_chkNodes])) s_chkNodes++;
+        if (s_chkNodes > 0 && s_chkStage) { std::lock_guard<std::mutex> lk(s_chkMx); s_chkN = 0; s_chkFrame = f + 1; g_toneChkArmed = true; }
     }
 }
 

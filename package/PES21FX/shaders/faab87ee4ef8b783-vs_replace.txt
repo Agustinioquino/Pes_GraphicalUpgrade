@@ -181,11 +181,11 @@ void main(
   o7.xy = r3.xy;
   o2.xy = v5.xy;
   p2.x = r3.w;
-  {   // (24/10 c) tono de piel por jugador: hueso 0 de la paleta del dibujo llevado al mundo -> entrada mas cercana
-    float3 sp = float3(0, 0, 0);
-    if (g_vsObject.m_useWeightCount.x != 0) sp = float3(g_vsBone.m_boneMatrices[0]._m30, g_vsBone.m_boneMatrices[0]._m31, g_vsBone.m_boneMatrices[0]._m32);
-    float4 sp4 = float4(sp, 1.0);
-    float3 sw = float3(dot(sp4, g_vsObject.m_world._m00_m10_m20_m30), dot(sp4, g_vsObject.m_world._m01_m11_m21_m31), dot(sp4, g_vsObject.m_world._m02_m12_m22_m32));
+  {   // (24/10 c) tono de piel por jugador: un punto del dibujo en el mundo (pes_skintone.hlsli) -> entrada mas cercana
+    bool sk = g_vsObject.m_useWeightCount.x != 0;
+    float3 b0 = float3(g_vsBone.m_boneMatrices[0]._m30, g_vsBone.m_boneMatrices[0]._m31, g_vsBone.m_boneMatrices[0]._m32);
+    float3 b0b = float3(g_vsPrevBone.m_boneMatrices[0]._m30, g_vsPrevBone.m_boneMatrices[0]._m31, g_vsPrevBone.m_boneMatrices[0]._m32);
+    float3 sw = PesSkinPoint(g_vsObject.m_world, g_vsObject.m_viewWorld, g_vsScene.m_view, b0, b0b, sk);
     int se = PesSkinNearest(sw);
     o6.w = se >= 0 ? 1000.0 + se : 999.0;
   }
