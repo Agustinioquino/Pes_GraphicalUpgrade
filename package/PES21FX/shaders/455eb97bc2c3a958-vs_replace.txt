@@ -62,6 +62,7 @@ cbuffer VSBones : register(b6)
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 #include "pes_skintone.hlsli"
+#include "pes_cloth.hlsli"
 
 
 void main(
@@ -103,6 +104,7 @@ void main(
     r1.xyzw = g_vsBone.m_boneMatrices[v3.w]._m00_m10_m20_m30 * v4.wwww + r1.xyzw;
     r2.xyzw = g_vsBone.m_boneMatrices[v3.w]._m01_m11_m21_m31 * v4.wwww + r2.xyzw;
     r3.xyzw = g_vsBone.m_boneMatrices[v3.w]._m02_m12_m22_m32 * v4.wwww + r3.xyzw;
+    PesClothScale(r1, r2, r3);   // (24/10 f) ropa: escala de la musculatura atenuada (x163 / w163)
     r4.x = dot(v0.xyzw, r1.xyzw);
     r4.y = dot(v0.xyzw, r2.xyzw);
     r4.z = dot(v0.xyzw, r3.xyzw);
