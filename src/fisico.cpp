@@ -49,11 +49,12 @@ static const Sig kSigs[] = {
     { kSetHintStr,  { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x20 } },
 };
 // entradas de la vtable que se cambian
-// botones del menu (0x140e3ec40; tabla boton -> codigo de pad 0x1427bcdf0, orden de DirectInput de PlayStation: 0x13 cuadrado,
-// 0x16 triangulo, 0x17 L1, 0x18 R1, 0x19 L2, 0x1a R2): boton 8 = L1 -> vtable[55], boton 9 = R1 -> vtable[56] (en el Fisico
-// no hacen nada: el juego no los habilita; se habilitan con 0x140e433d0 (menu, boton, 2) y se rotulan con vtable[23] 0x140e43500)
-enum { V_DECIDE = 49, V_BACK = 50, V_RESET = 52, V_L1 = 55, V_R1 = 56, V_VAL = 62, V_VALSET = 63, V_ROWS = 76, V_COUNT = 78 };
-enum { B_L1 = 8, B_R1 = 9 };
+// botones del menu (0x140e3ec40; tabla boton -> codigo de pad 0x1427bcdf0: 0 decidir 0x24, 1 atras 0x23, 2 cuadrado 0x13,
+// 3 triangulo 0x16, 6 0x19, 7 0x1a, 8 0x17, 9 0x18): en la prueba del 24/10 los botones 8 / 9 resultaron ser L2 / R2 (los del
+// zoom de la camara) -> 6 = L1 -> vtable[53], 7 = R1 -> vtable[54] (en el Fisico no hacen nada: el juego no los habilita; se
+// habilitan con 0x140e433d0 (menu, boton, 2) y se rotulan con vtable[23] 0x140e43500 (indice = boton))
+enum { V_DECIDE = 49, V_BACK = 50, V_RESET = 52, V_L1 = 53, V_R1 = 54, V_VAL = 62, V_VALSET = 63, V_ROWS = 76, V_COUNT = 78 };
+enum { B_L1 = 6, B_R1 = 7 };
 static const struct { int i; uintptr_t orig; } kVt[] = {
     { V_DECIDE, 0x140cd35d0ull }, { V_BACK, 0x140c2e3e0ull }, { V_RESET, 0x140c2e420ull }, { V_VAL, 0x140c2e120ull },
     { V_VALSET, 0x140c2e140ull }, { V_ROWS, 0x140c2e1e0ull }, { V_COUNT, 0x14217f830ull },
