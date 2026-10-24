@@ -181,11 +181,11 @@ static float SideFor(const MusCls& C, void* self, const Xf* rb, const Xf* rt, co
     switch (C.side) {
     case 0: return 1.0f;
     case 1: { int v = -1; if (SafeCopy(&v, (const char*)self + 0x80, 4) && (v == 0 || v == 1)) return v == 0 ? 1.0f : -1.0f; break; }
-    case 2: if (rt && fabsf(rt->t[0]) > 0.02f) return rt->t[0] > 0.0f ? 1.0f : -1.0f; break;
-    case 3: { void* p = nullptr; Xf x; if (ReadPtr((const char*)self + 0x80, p) && ReadXf((const char*)p + 0x40, x) && fabsf(x.t[0]) > 0.02f) return x.t[0] > 0.0f ? 1.0f : -1.0f; break; }
+    case 2: if (rt && fabsf(rt->t[0]) > 0.01f) return rt->t[0] > 0.0f ? 1.0f : -1.0f; break;
+    case 3: { void* p = nullptr; Xf x; if (ReadPtr((const char*)self + 0x80, p) && ReadXf((const char*)p + 0x40, x) && fabsf(x.t[0]) > 0.01f) return x.t[0] > 0.0f ? 1.0f : -1.0f; break; }
     }
-    if (rb && fabsf(rb->t[0]) > 0.02f) { *src = 4; return rb->t[0] > 0.0f ? 1.0f : -1.0f; }
-    if (rt && fabsf(rt->t[0]) > 0.02f) { *src = 5; return rt->t[0] > 0.0f ? 1.0f : -1.0f; }
+    if (rb && fabsf(rb->t[0]) > 0.01f) { *src = 4; return rb->t[0] > 0.0f ? 1.0f : -1.0f; }
+    if (rt && fabsf(rt->t[0]) > 0.01f) { *src = 5; return rt->t[0] > 0.0f ? 1.0f : -1.0f; }
     *src = 6; return SideOfCur(self, a2);
 }
 
@@ -234,7 +234,7 @@ static void Apply(int i, void* self, const float* a2, float* out, const Fac fc, 
     if (diag) Diag(i, self, side, src, okB, rb, okT, rt, okB ? u : nullptr);
     if (!s_on || (fc.e == 0.0f && fc.bz == 0.0f)) return;
     if (!okB) { s_noRest[i].fetch_add(1, std::memory_order_relaxed); return; }
-    if (u[0] * u[0] + u[1] * u[1] + u[2] * u[2] > 0.64f) { s_far[i].fetch_add(1, std::memory_order_relaxed); return; }   // > 80 cm: algo no cuadra
+    if (u[0] * u[0] + u[1] * u[1] + u[2] * u[2] > 4.0f) { s_far[i].fetch_add(1, std::memory_order_relaxed); return; }   // > 2 m: algo no cuadra (un pivote lejano, p. ej. en el piso, igual anda: la cuenta lo compensa)
     // factores por eje del modelo -> ejes del hueso (en el esqueleto de Fox el reposo no rota: son los mismos)
     float fm[3] = { 1.0f + C.kx * fc.e, 1.0f + C.ky * fc.e, 1.0f + C.kz * fc.e }, f[3];
     for (auto& v : fm) v = std::clamp(v, 0.4f, 2.5f);
