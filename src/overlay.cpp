@@ -616,13 +616,57 @@ static void DrawMenu() {
     ImGui::End();
 }
 
+// --- 24/10: menu Fisico del juego (Editar > Jugadores > Fisico): Insert abre una ventana chica con la musculatura de ese
+// jugador (la tarjeta "Musculatura por jugador"); "Menu completo" pasa al menu de siempre. Al entrar, un aviso abajo.
+static bool s_fullMenu = false;
+static void DrawPhysiqueWindow() {
+    ImGui::SetNextWindowSize(ImVec2(560, 680), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(40, 60), ImGuiCond_FirstUseEver);
+    bool open = true;
+    ImGui::Begin("Musculatura del jugador##fisico", &open, ImGuiWindowFlags_NoCollapse);
+    if (!open) g_menuOpen = false;
+    if (s_fontBold) ImGui::PushFont(s_fontBold);
+    ImGui::TextColored(ImVec4(0.85f, 0.68f, 0.28f, 1), "PES21 FX  -  musculatura en Fisico");
+    if (s_fontBold) ImGui::PopFont();
+    ImGui::SameLine(ImGui::GetWindowWidth() - 150);
+    if (ImGui::Button("Menu completo", ImVec2(130, 0))) s_fullMenu = true;
+    ImGui::TextDisabled("Insert: cerrar. Los valores de este jugador se guardan solos.");
+    ImGui::Separator();
+    {
+        std::lock_guard<std::mutex> lk(g_cfgMutex);
+        bool on = g_cfg.live[164][0] > 0.5f;
+        if (ImGui::Checkbox("Musculatura prendida", &on)) { float b = g_cfg.base[164][0]; g_cfg.live[164][0] = on ? (b > 0.5f ? b : 1.0f) : 0.0f; }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("El interruptor de \"Musculatura (prueba)\" (vale para todos; se guarda con Guardar en el menu completo).");
+        ImGui::BeginChild("fisico_panel", ImVec2(0, 0), ImGuiChildFlags_None);
+        MuscleDrawPlayerPanel();
+        ImGui::EndChild();
+    }
+    ImGui::End();
+}
+static void DrawPhysiqueHint() {
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + 28, vp->Pos.y + vp->Size.y - 28), ImGuiCond_Always, ImVec2(0, 1));
+    ImGui::SetNextWindowBgAlpha(0.78f);
+    ImGui::Begin("##fisico_aviso", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_AlwaysAutoResize |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
+    std::string nm = MuscleLatestPlayerName();
+    ImGui::TextColored(ImVec4(0.85f, 0.68f, 0.28f, 1), "PES21 FX");
+    ImGui::SameLine();
+    if (nm.empty()) ImGui::TextUnformatted("Insert: musculatura de este jugador");
+    else ImGui::Text("Insert: musculatura de %s", nm.c_str());
+    ImGui::End();
+}
+
 void OverlayPresent(IDXGISwapChain* sc) {
     if (!g_dev.dev || !g_cfg.optOverlay) return;
     if (!s_init) Init(sc);
     bool down = (GetAsyncKeyState(g_cfg.menuKey) & 0x8000) != 0 && GetForegroundWindow() == s_hwnd;
     if (down && !s_keyWas) g_menuOpen = !g_menuOpen;
     s_keyWas = down;
-    if (!g_menuOpen && !g_inspectOn) return;
+    const bool fis = MusclePhysiqueActive();
+    { static bool s_fisWas = false; if (fis && !s_fisWas) s_fullMenu = false; s_fisWas = fis; }
+    const bool hint = fis && !g_menuOpen && MusclePhysiqueSince() < 8.0 && g_cfg.live[164][0] > 0.5f;
+    if (!g_menuOpen && !g_inspectOn && !hint) return;
     if (!s_rtv) {
         ID3D11Texture2D* bb = nullptr;
         if (FAILED(sc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb)) || !bb) return;
@@ -634,7 +678,8 @@ void OverlayPresent(IDXGISwapChain* sc) {
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
     ImGui::GetIO().MouseDrawCursor = g_menuOpen.load();
-    if (g_menuOpen) DrawMenu();
+    if (g_menuOpen) { if (fis && !s_fullMenu) DrawPhysiqueWindow(); else DrawMenu(); }
+    else if (hint) DrawPhysiqueHint();
     InspectDrawOverlay();
     if (!s_btnPending.empty()) {
         std::string a = s_btnPending; s_btnPending.clear();

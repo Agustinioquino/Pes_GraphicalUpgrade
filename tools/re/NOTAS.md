@@ -97,3 +97,4 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
 | Restriccion -> esqueleto | + 0x10 (lo pone `Skel_AddConstraint` 0x1419f5eb0); es el mismo puntero que nodo + 0x88 |
 | Base de datos de jugadores | registro de 0x17c bytes: clave en + 0x2c (u16 lugar, u32 id en + 0x30), nombre UTF-8 en + 0x38 (`PlayerRec_GetName` 0x1414c5d70; si + 0x144 tiene el bit 31 usa el nombre de admin + 0x98) |
 | config del personaje + 0x40 | NO es el jugador: es un tipo (0..3; 4 = sin cambio), lo pone 0x141a0aea0 desde 0x141ecc5c0 |
+| Menu Fisico del juego (`menu::MenuEditPlBodyPhysiqueSetting`) | vtable 0x142708848 (COL 0x142cd5c40), [0] = 0x141fa9d60 paso por cuadro (comun a los menus de Editar), [3] = 0x140c33870 destructor; *(this + 0x78) + 0x50 = activo; fabrica 0x140c338c0 (tabla 0x14266c3b8 "Edit/Player/EditPlBodyPhysiqueSetting") |

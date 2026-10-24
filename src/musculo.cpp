@@ -410,6 +410,30 @@ static bool Readable(const void* p, size_t n) {
     return (uintptr_t)p + n <= (uintptr_t)mi.BaseAddress + mi.RegionSize;
 }
 
+// ---------------------------------------------------------------- menu Fisico del juego (24/10)
+// menu::MenuEditPlBodyPhysiqueSetting (Editar > Jugadores > Fisico): vtable 0x142708848 (COL 0x142cd5c40); [0] = 0x141fa9d60 es
+// el paso por cuadro (comun a los menus de Editar; solo se cambia en la vtable de Fisico) y *(this + 0x78) + 0x50 = activo.
+// Mientras esta en pantalla, Insert abre una ventana chica con la musculatura de ese jugador y abajo aparece un aviso.
+static const uintptr_t kPhysVt = 0x142708848ull, kPhysCol = 0x142cd5c40ull, kPhysStep = 0x141fa9d60ull;
+typedef void* (__fastcall* PhysStepFn)(void* self, void* a2, void* a3, void* a4);
+static PhysStepFn o_physStep = nullptr;
+static std::atomic<long long> s_physLast{0}, s_physEnter{0};   // QPC del ultimo paso activo / de la entrada
+static long long Qpc() { LARGE_INTEGER q; QueryPerformanceCounter(&q); return q.QuadPart; }
+static double QpcSec(long long d) { static LARGE_INTEGER f = [] { LARGE_INTEGER x; QueryPerformanceFrequency(&x); return x; }(); return (double)d / (double)f.QuadPart; }
+static void* __fastcall hk_PhysStep(void* self, void* a2, void* a3, void* a4) {
+    bool active = false;
+    void* st = nullptr; unsigned char fl = 0;
+    if (self && ReadPtr((const char*)self + 0x78, st) && SafeCopy(&fl, (const char*)st + 0x50, 1)) active = fl != 0;
+    if (active) {
+        long long now = Qpc(), last = s_physLast.load(std::memory_order_relaxed);
+        if (!last || QpcSec(now - last) > 0.5) s_physEnter.store(now, std::memory_order_relaxed);
+        s_physLast.store(now, std::memory_order_relaxed);
+    }
+    return o_physStep(self, a2, a3, a4);
+}
+bool MusclePhysiqueActive() { long long l = s_physLast.load(); return l && QpcSec(Qpc() - l) < 0.4; }
+double MusclePhysiqueSince() { long long e = s_physEnter.load(); return e ? QpcSec(Qpc() - e) : 1e9; }
+
 static void Install() {
     s_tried = true;
     if (!g_cfg.motorPatch) { Log("musculatura: parches en memoria apagados (motor = 0)"); return; }
@@ -428,12 +452,28 @@ static void Install() {
         s_ok++;
     }
     Log("musculatura v6: %d de %d huesos de musculo enganchados%s%s", s_ok, kN, bad.empty() ? "" : "; no coinciden:", bad.c_str());
+    {   // menu Fisico del juego
+        void** vt = (void**)kPhysVt; DWORD old = 0; bool ok = false;
+        if (Readable(vt - 1, 2 * sizeof(void*)) && (uintptr_t)vt[-1] == kPhysCol && (uintptr_t)vt[0] == kPhysStep &&
+            VirtualProtect(&vt[0], sizeof(void*), PAGE_READWRITE, &old)) {
+            o_physStep = (PhysStepFn)vt[0];
+            InterlockedExchangePointer(&vt[0], (void*)&hk_PhysStep);
+            VirtualProtect(&vt[0], sizeof(void*), old, &old);
+            ok = true;
+        }
+        Log("musculatura: menu Fisico del juego %s", ok ? "enganchado (Insert ahi = musculatura de ese jugador)" : "NO (vtable distinta)");
+    }
 }
 
 void MuscleHookPresent() {
     if (!s_tried) Install();
     if (!s_ok) return;
     UpdateFactors();
+    {   // entrada / salida del menu Fisico
+        static bool s_was = false;
+        bool a = MusclePhysiqueActive();
+        if (a != s_was) { s_was = a; Log("musculatura: menu Fisico del juego %s", a ? "abierto" : "cerrado"); }
+    }
     {   // diagnostico (una vez por clase y lado)
         static const char* kSrc[] = { "central", "constructor", "destino", "hombro", "hueso", "destino*", "pose" };
         int n = s_diagN.load();
@@ -492,6 +532,17 @@ static std::string U8(const std::string& x) {   // el ini puede venir en Latin-1
     return o;
 }
 static uint32_t s_selId = 0; static bool s_selManual = false; static unsigned s_selSeq = 0;
+// el ultimo jugador armado (con nombre si hay): para el aviso del menu Fisico
+std::string MuscleLatestPlayerName() {
+    const CharInfo* best = nullptr;
+    for (int i = 0; i < kCharSlots; i++) {
+        if (!s_slotAlive[i] || !s_slotInfo[i].known || !s_slotInfo[i].id) continue;
+        if (!best || s_slotInfo[i].seq > best->seq) best = &s_slotInfo[i];
+    }
+    if (!best) return "";
+    if (best->name[0]) return best->name;
+    return "id " + std::to_string(best->id);
+}
 void MuscleDrawPlayerPanel() {
     if (!s_profLoaded) LoadProfiles();
     const ImVec4 warn(0.95f, 0.55f, 0.35f, 1), good(0.45f, 0.85f, 0.55f, 1);
