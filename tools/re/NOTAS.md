@@ -127,7 +127,7 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
 | Contexto | la pasada del menu se graba en un contexto diferido (el mismo que las sombras del jugador del menu) |
 | Vidrio v2 (24/10 c) | la v1 bajaba mucho los cuadros: UAV por dibujo (la placa esperaba al anterior), 25 lecturas por pixel para decidir y una copia del fondo por cada corte de la pasada (los cdff1e1b la cortaban). v2: el GS decide una vez por triangulo (t8 / s0 copiados del PS al GS), sin UAV; una copia por pasada, antes del primer dibujo con textura chica (w < 1024 o h < 512); la pasada se corta solo por otra imagen o 6 ms sin dibujos del menu |
 | Imagen del jugador en el Fisico | 765e1433 (VS 537a35c9: TEXCOORD0, TEXCOORD1, SV_Position) dibuja la escena (t8, del tamano del viewport de la piel: 1238x1080) al final de la pasada: el aro del musculo se dibuja con el mismo quad justo despues (ring.cpp) |
-| Rotulos dobles de la barra (24/10 c) | 12 = flechas izq / der, 14 = L1 R1 (el visor lo usa con el texto 0x3e0020 "girar"), 15 = L2 R2 (0x3e001f), 16 = palanca R (0x3800ec) |
+| Rotulos dobles de la barra (24/10 c) | indice -> lugar 12 -> 6, 13 -> 7, 14 -> 11, 15 -> 9, 16 -> 8 (lugares 6..11 = L1, R1, L2, R2, L3, R3); vistos en el juego: 12 = flechas, 14 = palanca derecha ("girar" del visor), 15 = L2 R2 (0x3e001f); el par se dibuja en el lugar del boton derecho -> 13 = L1 R1 |
 
 ## Tono de piel en los partidos (skintone.cpp, 24/10 c)
 

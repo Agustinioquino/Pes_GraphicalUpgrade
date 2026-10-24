@@ -184,9 +184,10 @@ static void SetTitle(void* menu, const char* s, int id) {   // "headline" del ob
 // (24/10 b) la barra de abajo no muestra rotulos sueltos de L1 / R1 (Bar_SetItem 0x140e37540: los indices 6..9 no tienen
 // lugar); los dobles van en 12..16 (12 -> lugar 6, 13 -> 7, 14 -> 11 (stick R), 15 -> 9, 16 -> 8): el 12 es el de L1 R1,
 // antes del L2 R2 del zoom
-// (24/10 c) rotulo doble de la barra: 12 = flechas izq / der (lo vio el usuario), 15 = L2 R2 (acercar / alejar del visor, texto
-// 0x3e001f), 16 = palanca R (0x3800ec), 14 = L1 R1 (el visor lo usa para girar: texto 0x3e0020 con 14 y 0x3e001f con 15)
-enum { H_L1R1 = 14, H_ARROWS = 12 };
+// (24/10 c) rotulo doble de la barra (indice -> lugar: 12 -> 6, 13 -> 7, 14 -> 11, 15 -> 9, 16 -> 8; los lugares 6..11 son los
+// botones L1, R1, L2, R2, L3, R3): 12 = flechas izq / der y 14 = palanca derecha (los vio el usuario; el visor usa el 14 para
+// "girar"), 15 = L2 R2 (acercar / alejar, texto 0x3e001f) -> el par cae en el lugar del boton derecho: 13 (lugar 7 = R1) = L1 R1
+enum { H_L1R1 = 13, H_ARROWS = 12, H_STICK = 14 };
 static void PageHints(void* menu, int page) {
     if (page < 0 || page > kLastPage) return;
     __try {
@@ -194,7 +195,8 @@ static void PageHints(void* menu, int page) {
         ((SetBtnModeFn)kSetBtnMode)(menu, B_R1, page < kLastPage ? 2 : 0);
         ((SetHintStrFn)kSetHintStr)(menu, B_L1, "");
         ((SetHintStrFn)kSetHintStr)(menu, B_R1, "");
-        ((SetHintStrFn)kSetHintStr)(menu, H_ARROWS, "");   // la version anterior lo ponia en 12 (flechas)
+        ((SetHintStrFn)kSetHintStr)(menu, H_ARROWS, "");   // versiones anteriores lo ponian en 12 (flechas) y 14 (palanca)
+        ((SetHintStrFn)kSetHintStr)(menu, H_STICK, "");
         ((SetHintStrFn)kSetHintStr)(menu, H_L1R1, "Cambiar p\xC3\xA1gina");
     } __except (EXCEPTION_EXECUTE_HANDLER) {}
 }
