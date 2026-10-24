@@ -55,7 +55,7 @@ jobs:
           "" | Set-Content shadercheck.txt
           Get-ChildItem package/PES21FX/shaders/*_replace.txt, package/PES21FX/shaders/*.hlsl, package/cloth-mod/*.hlsl, tools/asmcheck/*.hlsl | ForEach-Object {
             $n++
-            $t = if ($_.Name -match '-ps_|_ps\.hlsl') { 'ps_5_0' } elseif ($_.Name -match '-vs_|_vs\.hlsl') { 'vs_5_0' } else { 'cs_5_0' }
+            $t = if ($_.Name -match '-ps_|_ps\.hlsl') { 'ps_5_0' } elseif ($_.Name -match '-vs_|_vs\.hlsl') { 'vs_5_0' } elseif ($_.Name -match '_gs\.hlsl') { 'gs_5_0' } else { 'cs_5_0' }
             New-Item -ItemType Directory -Force -Path shaderasm | Out-Null
             $r = & $fxc.FullName /nologo /T $t /E main /I package/PES21FX/shaders /Fo NUL /Fc ("shaderasm/" + $_.BaseName + ".asm") $_.FullName 2>&1 | Out-String
             if ($LASTEXITCODE -ne 0) { $bad++; Add-Content shadercheck.txt ("==== " + $_.Name + "`n" + $r) }

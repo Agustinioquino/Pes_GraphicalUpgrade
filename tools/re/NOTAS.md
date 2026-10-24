@@ -116,3 +116,12 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
 | Jugador editado | EditWork (0x1438040a8) + 0xe0 = clave (id en los 32 bits altos) |
 | Botones del menu (L1 / R1 y demas) | boton -> codigo de pad: tabla 0x1427bcdf0 (0x24, 0x23, 0x13, 0x16, 0x1c, 0x1b, 0x19, 0x1a, 0x17, 0x18, 0x1d, 0x1e); 0 decidir -> vtable[49] por tipo, 1 atras [50], 2 cuadrado [51], 3 triangulo [52], 6 L1 [53] (sonido 7), 7 R1 [54] (sonido 7), 8 L2 [55] (sonido 0xb), 9 R2 [56] (sonido 0xb), 10 / 11 L3 / R3 [57] / [58] (6..9 confirmados en el juego el 24/10: con 8 / 9 la pagina cambiaba con el zoom); modo por boton en controlador + 0x120 + n * 4 (Menu_SetBtnMode 0x140e433d0 (menu, n, modo): 0 apagado, 2 recien apretado); el Fisico solo prende 0, 1 y 3 ([53]..[56] son 0x141b42640, que no hace nada; el zoom L2 / R2 lo lee el visor 3D por su cuenta) |
 | Rotulos de la barra de abajo | Menu_v23 0x140e43500 (menu, n, char*; "" lo borra): std::string en controlador + 0x168 + n * 0x20, + 0xf8 = 1 la redibuja; Menu_v24 0x140e43460 (menu, n, id de texto) |
+
+## Dibujo de los menus del juego (glass.cpp, 24/10)
+
+| Que | Donde |
+|---|---|
+| Imagen del menu | 1920x1080 RGB10A2 con profundidad; guarda sRGB / 4: el PS del menu multiplica la salida x 0.25 y el compuesto final 87552b53 (t0 inColor) hace x 4 + sRGB -> lineal hacia la RGBA8 |
+| PS del menu | 55a003da3f888a81: t8 inTexture (s0 g_sampler) x COLOR0 x g_mulColor (TEXCOORD1) + g_addColor (TEXCOORD2); alpha test contra g_alpharef (TEXCOORD0.z); con VS fb68a5a0 (2D: g_projection) y 1932d77d (con g_transform, m_world y cVSWork); quads de 4 / 6 indices (hasta 18 vertices) |
+| Otros en la misma imagen | cdff1e1b (VS 0ad638e3): textura x color sin x 0.25 (mascaras, ~17 por cuadro, mezcladas con los quads); 765e1433 (VS 537a35c9): el ultimo dibujo de la pasada, t8 x t9 + t10 |
+| Contexto | la pasada del menu se graba en un contexto diferido (el mismo que las sombras del jugador del menu) |

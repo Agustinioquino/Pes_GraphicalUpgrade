@@ -317,6 +317,13 @@ void MenuTestStart(); void MenuTestStop(); bool MenuTestActive();
 int MenuTestCount(int what); float MenuTestNoise(); const std::string& MenuTestStatus();
 size_t MenuTestResults(); bool MenuTestResult_(size_t i, std::string& group, std::string& section, float& diff, int& state);
 LRESULT OverlayWndProc(HWND, UINT, WPARAM, LPARAM, bool& handled);
+// (24/10) vidrio de los menus del juego, estilo Liquid Glass (glass.cpp): GS + PS propios para los dibujos del menu (55a003da),
+// copia desenfocada del fondo antes de los paneles; 189..191 opciones
+struct GlassScope { bool on = false; ID3D11PixelShader* ps = nullptr; ID3D11ShaderResourceView* srv[2] = {}; ID3D11ShaderResourceView* t120 = nullptr; ID3D11SamplerState* samp = nullptr; ID3D11Buffer* cb = nullptr; };
+bool GlassBeforeDraw(ID3D11DeviceContext* c, uint64_t ps, uint64_t vs, UINT verts, GlassScope& g);
+void GlassAfterDraw(ID3D11DeviceContext* c, GlassScope& g);
+void GlassPresent(); void GlassReloadShaders();
+extern std::atomic<int> g_glassDraws, g_glassSnaps;
 extern std::atomic<bool> g_menuOpen;
 extern std::atomic<int> g_replacedCount, g_failedCount;
 extern std::vector<std::string> g_compileErrors;
