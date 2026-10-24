@@ -114,6 +114,16 @@ void main(
   r2.xyz = g_tex_normal.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN).xyw;
   r2.x = r2.x * r2.z;
   r2.xy = r2.xy * float2(2,2) + float2(-1,-1);
+  {   // (24/10) definicion muscular (x172, menu Musculatura): agranda o achica solo el relieve grande del normal map
+      // (los musculos: el mismo mapa visto 11 veces mas chico), no los poros ni las lineas finas de la piel
+    float defM = IniParams.Load(int2(172,0)).x; defM = defM > 0.01 ? clamp(defM, 0.0, 3.0) : 1.0;
+    if (abs(defM - 1.0) > 0.01) {
+      float3 nM = g_tex_normal.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN + 3.5).xyw;
+      float2 mM = float2(nM.x * nM.z, nM.y) * 2.0 - 1.0;
+      r2.xy += (defM - 1.0) * mM;
+      float l2 = dot(r2.xy, r2.xy); if (l2 > 0.94) r2.xy *= rsqrt(l2 / 0.94);
+    }
+  }
   if (hpK > 0.001 && P94h.w > 0.5) {   // (20/10) micro normal de poros, misma escala y mismo plano UV que la cara: sigue sin costura
     float near = saturate((5.0 - hpFpx) / 3.5);
     if (near > 0.001) {

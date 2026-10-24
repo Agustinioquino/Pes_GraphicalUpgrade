@@ -91,7 +91,13 @@ def meshes(f):
         if ix is not None and grp:
             ids = np.array(grp + [0] * (256 - len(grp)), dtype=np.int32)
             ix = ids[np.clip(ix, 0, 255)]
-        out.append({"pos": pos, "w": w, "idx": ix, "group": bgroup, "nvert": nvert, "mat": matinst})
+        # caras: indices u16 locales de la malla en el buffer de indices (tipo 1)
+        ff, fc = struct.unpack_from("<II", e, 0x10)
+        faces = None
+        ib = [b for b in bufs if b[0] == 1]
+        if ib and fc:
+            faces = np.frombuffer(d, dtype="<u2", count=fc, offset=buf_base + ib[0][2] + 2 * ff).astype(np.int32).reshape(-1, 3)
+        out.append({"pos": pos, "w": w, "idx": ix, "group": bgroup, "nvert": nvert, "mat": matinst, "faces": faces})
     return out
 
 def bone_weights(f, m, name):

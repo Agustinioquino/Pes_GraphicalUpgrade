@@ -74,3 +74,12 @@ dsk_belly_o BellyOx (oblicuos), dsk_belly_ba BellyBax (lumbares), dsk_back Back,
 dsk_pants Pants, dsk_hip_l Hip (parte alta del gluteo; el resto del gluteo pesa a dsk_hip, que no tiene restriccion),
 dsk_thighmain ThighMain, dsk_thigh Thigh (aductores), dsk_hem Hem (+ HemFx / HemIx / HemBax / HemODelayx), dsk_leg Leg
 (pantorrilla), dsk_foot Foot, dsk_toe Toe, orejas Ear.
+
+Reposos reales (log de la v4, "musculatura: reposo ..."): los huesos SI rotan en reposo. En brazos, antebrazos, muslos,
+pantorrillas, short y mangas el eje X del hueso va a lo largo del miembro e Y hacia adelante (los dos lados espejados), asi
+que engordar = escalar Y y Z del hueso. El pectoral tiene el pivote 4 cm delante de la piel y ejes girados: escalarlo corria
+su borde contra el brazo; por eso los musculos de superficie se corren (traslacion) en vez de escalarse.
+
+Previsualizacion sin el juego: `tools/fox/sim` (sim.py / compare.py / variant.py / exp.py) deforma los FMDL del cuerpo con
+la tabla de musculo.cpp y los reposos del log y dibuja vistas con `rast.c` (compilar: `clang -O2 -o tools/fox/sim/rast
+tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> salida.png hombro hombros=1.5`.
