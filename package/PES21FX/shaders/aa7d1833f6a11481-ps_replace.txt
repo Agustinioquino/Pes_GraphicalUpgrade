@@ -227,6 +227,10 @@ void main(
     r2.yzw = lerp(hpAlb0, r2.yzw, hpK);
     hpTrans = lerp(hpTr0, hpTrans, hpK);
   }
+  {   // (24/10) tono de piel propio del jugador (skintone.cpp): ganancia lineal en x185..z185 cuando w185 = 1
+    float4 ST = IniParams.Load(int2(185,0));
+    if (ST.w > 0.5) r2.yzw = saturate(r2.yzw * ST.xyz);
+  }
   r3.xyz = g_psMaterial.m_materials[2].xyz + -r2.yzw;
   o0.xyz = r0.www * r3.xyz + r2.yzw;
   o0.xyz *= bCav;

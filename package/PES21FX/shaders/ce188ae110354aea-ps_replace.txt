@@ -621,6 +621,10 @@ void main(
   r0.y = g_psMaterial.m_materials[1].x * r0.y;
   r0.y = exp2(r0.y);
   r0.x = r0.x * r0.y;
+  {   // (24/10) tono de piel propio del jugador (skintone.cpp): ganancia lineal en x185..z185 cuando w185 = 1
+    float4 ST = IniParams.Load(int2(185,0));
+    if (ST.w > 0.5) r2.xyz = saturate(r2.xyz * ST.xyz);
+  }
   r3.xyz = g_psMaterial.m_materials[2].xyz + -r2.xyz;
   o0.xyz = r0.xxx * r3.xyz + r2.xyz;
   if (P147.y > 0.5) o0.xyz = lerp(o0.xyz, float3(1.0, 0.0, 0.0), pesEdge);   // (20/10) diagnostico y147: rojo = franja del borde de la mascara generica

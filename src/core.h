@@ -272,6 +272,13 @@ void FisicoHighlightPresent();                    // (24/10) resaltado del muscu
 extern std::atomic<bool> g_skinDiagArmed;         // (24/10) skintone.cpp: el proximo cuadro se anotan los dibujos de personajes
 void SkinDiagDraw(ID3D11DeviceContext* c, uint64_t ps, uint64_t vs, UINT count);
 void SkinDiagPresent();
+constexpr int kSkinTones = 30;                    // (24/10) tonos de piel propios (skintone.cpp); los 6 del juego son 3, 8, ..., 28
+bool SkinToneGain(int gameIdx, int tono, int matiz, float out[3]);   // ganancia lineal (tono elegido / color del juego)
+void SkinToneSwatch(int tono, unsigned char rgb[3]);
+bool SkinToneGet(uint32_t id, int* tono, int* matiz);
+void SkinToneSet(uint32_t id, const char* name, int tono, int matiz);
+void SkinTonePresent();                           // guardado diferido + vista previa del jugador editado (x185..w185)
+int FisicoSkinIndex();                            // color de piel del juego (1..6) del jugador del menu Fisico (0 = no se sabe)
 void CodeWatchStart();                            // (24/10) vigila la seccion .text del exe: anota en el log lo que cambie (codewatch.cpp)
 bool CodeWatchOrig(uintptr_t a, unsigned char* out, size_t n);   // bytes de la copia (registro de cierres)
 // (24/10) ganchos que se pueden apagar para buscar un cierre (x173 personajes, y173 menu Fisico, z173 vigilancia del codigo,

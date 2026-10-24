@@ -101,14 +101,15 @@ static const MRow kPage2[] = {   // cintura y piernas
     { "Pantorrillas", 166, 0 }, { "Rodillas", 171, 0 },
 };
 static const int kN1 = (int)(sizeof kPage1 / sizeof kPage1[0]), kN2 = (int)(sizeof kPage2 / sizeof kPage2[0]);
-static const int kJump0 = 13, kJump1 = kN1;   // fila del salto en la pagina 0 (Fisico) y en la 1
+static const int kJump0 = 13, kJump1 = kN1, kJump2 = kN2;   // fila del salto en la pagina 0 (Fisico), en la 1 y en la 2
+static const int kLastPage = 3;   // (24/10) pagina 3 = piel: tono (1..30, 0 = el del juego) y matiz (-10..+10)
 static const int kSteps = 25; static const float kStep = 0.02f;   // -25..+25 -> x0.50..x1.50
 static const MRow* RowOf(int page, int row) {
     if (page == 1 && row >= 0 && row < kN1) return &kPage1[row];
     if (page == 2 && row >= 0 && row < kN2) return &kPage2[row];
     return nullptr;
 }
-static int CountOf(int page) { return page == 1 ? kN1 + 1 : page == 2 ? kN2 : kJump0 + 1; }
+static int CountOf(int page) { return page == 1 ? kN1 + 1 : page == 2 ? kN2 + 1 : page == 3 ? 2 : kJump0 + 1; }
 
 // estado de la pagina (el menu es uno solo a la vez; se reinicia cada vez que el juego arma las filas)
 static void* s_menu = nullptr; static int s_page = 0;
@@ -181,9 +182,9 @@ static void SetTitle(void* menu, const char* s, int id) {   // "headline" del ob
 // lee el modo en controlador + 0x120 + boton * 4: 0 apagado, 1 / 2 / 3 = funciones 0x48 / 0x40 / 0x38 del pad); sin destino
 // queda apagado (ni sonido ni llamada)
 static void PageHints(void* menu, int page) {
-    static const char* kL1[] = { "", "F\xC3\xADsico", "Torso y brazos" };
-    static const char* kR1[] = { "Musculatura", "Cintura y piernas", "" };
-    if (page < 0 || page > 2) return;
+    static const char* kL1[] = { "", "F\xC3\xADsico", "Torso y brazos", "Cintura y piernas" };
+    static const char* kR1[] = { "Musculatura", "Cintura y piernas", "Piel", "" };
+    if (page < 0 || page > kLastPage) return;
     __try {
         ((SetBtnModeFn)kSetBtnMode)(menu, B_L1, kL1[page][0] ? 2 : 0);
         ((SetBtnModeFn)kSetBtnMode)(menu, B_R1, kR1[page][0] ? 2 : 0);
@@ -244,6 +245,65 @@ static void FillMusclePage(void* menu, int page) {
         }
     }
     if (page == 1) AddJump(menu, kJump1, "Cintura y piernas  >");
+    if (page == 2) AddJump(menu, kJump2, "Piel  >");
+}
+// ---------------------------------------------------------------- pagina 3: piel (24/10)
+// fila 0 = tono (selector: "Del juego" + 1..30; los 6 colores del juego son 3, 8, 13, 18, 23 y 28), fila 1 = matiz -10..+10
+static bool G_SelFillList(void* sel, const char* const* items, int n, int idx) {
+    __try {
+        ((SelClearFn)kSelClear)(sel);
+        for (int i = 0; i < n; i++) ((SelAddFn)kSelAdd)(sel, items[i]);
+        ((SelSetFn)kSelSet)(sel, (unsigned)std::clamp(idx, 0, n - 1));
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+static void FillSkinPage(void* menu) {
+    void* list = List(menu);
+    if (!list) return;
+    static char tones[kSkinTones + 1][24]; static const char* toneP[kSkinTones + 1];
+    static char hues[21][20]; static const char* hueP[21];
+    static bool init = false;
+    if (!init) {
+        snprintf(tones[0], sizeof tones[0], "Del juego"); toneP[0] = tones[0];
+        for (int t = 1; t <= kSkinTones; t++) {
+            if ((t - 3) % 5 == 0 && t >= 3 && t <= 28) snprintf(tones[t], sizeof tones[t], "%d (color %d)", t, (t - 3) / 5 + 1);
+            else snprintf(tones[t], sizeof tones[t], "%d", t);
+            toneP[t] = tones[t];
+        }
+        for (int m = -10; m <= 10; m++) {
+            if (m == 0) snprintf(hues[m + 10], sizeof hues[0], "0 (neutro)");
+            else snprintf(hues[m + 10], sizeof hues[0], m < 0 ? "%d oliva" : "+%d rosado", m);
+            hueP[m + 10] = hues[m + 10];
+        }
+        init = true;
+    }
+    int tono = 0, matiz = 0; SkinToneGet(s_editId, &tono, &matiz);
+    struct { const char* label; const char* const* items; int n, idx; } rows[2] = {
+        { "Tono de piel (FX)", toneP, kSkinTones + 1, tono },
+        { "Matiz: oliva / rosado", hueP, 21, matiz + 10 },
+    };
+    for (int i = 0; i < 2; i++) {
+        void* w = Child(list, (unsigned)i);
+        if (!w) continue;
+        G_SetRow(menu, 1, (unsigned)i);   // selector
+        G_SetEnable(w);
+        SetLabel(w, rows[i].label);
+        void* sel = FindComp(w, "selector");
+        if (sel) G_SelFillList(sel, rows[i].items, rows[i].n, rows[i].idx);
+    }
+}
+static void ApplySkin(int row, int idx) {
+    if (!s_editId || row < 0 || row > 1) return;
+    int tono = 0, matiz = 0; SkinToneGet(s_editId, &tono, &matiz);
+    if (row == 0) tono = std::clamp(idx, 0, kSkinTones); else matiz = std::clamp(idx - 10, -10, 10);
+    SkinToneSet(s_editId, s_editName, tono, matiz);
+}
+// color de piel del juego (1..6) del jugador del menu: copia de su apariencia en menu + 0xf8 (+ 0x2c, bits 8..10; campo 0x50)
+int FisicoSkinIndex() {
+    void* menu = s_menu; uint32_t v = 0;
+    if (!s_ok || !menu || !Rd((char*)menu + 0xf8 + 0x2c, v)) return 0;
+    int i = (int)((v >> 8) & 7);
+    return i >= 1 && i <= 6 ? i : 0;
 }
 static void GoPage(void* menu, int page, int cursor) {
     s_page = page;
@@ -251,9 +311,12 @@ static void GoPage(void* menu, int page, int cursor) {
         o_rows(menu, nullptr, nullptr, nullptr);   // el juego vuelve a armar sus 13 filas (y sus valores)
         AddJump(menu, kJump0, "Musculatura  >");
         SetTitle(menu, nullptr, 0x23001b);
+    } else if (page == 3) {
+        FillSkinPage(menu);
+        SetTitle(menu, "Piel: tono propio (FX)", 0);
     } else {
         FillMusclePage(menu, page);
-        SetTitle(menu, page == 1 ? "Musculatura (1/2): torso y brazos" : "Musculatura (2/2): cintura y piernas", 0);
+        SetTitle(menu, page == 1 ? "Musculatura (1/3): torso y brazos" : "Musculatura (2/3): cintura y piernas", 0);
     }
     G_SetNumRows(menu, CountOf(page));
     G_SetCursor(menu, cursor);
@@ -298,12 +361,13 @@ static void* __fastcall hk_decide(void* menu, void* a2, void* a3, void* a4) {
         int row = CursorRow(menu);
         if (s_page == 0 && row == kJump0) { GoPage(menu, 1, 0); return nullptr; }
         if (s_page == 1 && row == kJump1) { GoPage(menu, 2, 0); return nullptr; }
+        if (s_page == 2 && row == kJump2) { GoPage(menu, 3, 0); return nullptr; }
         if (s_page > 0) return nullptr;   // decidir sobre una barra: nada
     }
     return o_decide(menu, a2, a3, a4);
 }
 static void* __fastcall hk_back(void* menu, void* a2, void* a3, void* a4) {
-    if (Mine(menu) && s_page > 0) { int p = s_page; GoPage(menu, p - 1, p == 1 ? kJump0 : kJump1); return nullptr; }
+    if (Mine(menu) && s_page > 0) { int p = s_page; GoPage(menu, p - 1, p == 1 ? kJump0 : p == 2 ? kJump1 : kJump2); return nullptr; }
     return o_back(menu, a2, a3, a4);
 }
 static void* __fastcall hk_l1(void* menu, void* a2, void* a3, void* a4) {   // pagina anterior (arriba de todo)
@@ -311,10 +375,17 @@ static void* __fastcall hk_l1(void* menu, void* a2, void* a3, void* a4) {   // p
     return o_l1(menu, a2, a3, a4);
 }
 static void* __fastcall hk_r1(void* menu, void* a2, void* a3, void* a4) {   // pagina siguiente
-    if (Mine(menu) && s_page < 2) { GoPage(menu, s_page + 1, 0); return nullptr; }
+    if (Mine(menu) && s_page < kLastPage) { GoPage(menu, s_page + 1, 0); return nullptr; }
     return o_r1(menu, a2, a3, a4);
 }
 static void* __fastcall hk_reset(void* menu, void* a2, void* a3, void* a4) {
+    if (Mine(menu) && s_page == 3) {   // Restablecer en la pagina de piel: vuelve al color del juego
+        if (s_editId) SkinToneSet(s_editId, s_editName, 0, 0);
+        int cur = CursorRow(menu);
+        FillSkinPage(menu);
+        G_SetCursor(menu, cur < 0 ? 0 : cur);
+        return nullptr;
+    }
     if (Mine(menu) && s_page > 0) {   // Restablecer en una pagina de musculatura: esa pagina vuelve a +0 (como el juego)
         const int n = s_page == 1 ? kN1 : kN2;
         for (int i = 0; i < n; i++) { const MRow* r = RowOf(s_page, i); if (r && s_editId) MuscleProfileSet(s_editId, s_editName, r->idx, r->comp, 1.0f); }
@@ -327,12 +398,14 @@ static void* __fastcall hk_reset(void* menu, void* a2, void* a3, void* a4) {
 }
 static void* __fastcall hk_val(void* menu, void* a2, void* a3, void* a4) {   // (menu, lista, fila): leer el valor de la fila
     const int list = (int)(intptr_t)a2, row = (int)(intptr_t)a3;
+    if (Mine(menu) && s_page == 3) { if (list == 0) { void* sel = FindComp(Child(List(menu), (unsigned)row), "selector"); if (sel) ApplySkin(row, G_SelGet(sel)); } return nullptr; }
     if (Mine(menu) && s_page > 0) { if (list == 0) ApplyValue(row, ReadRowSteps(menu, row)); return nullptr; }
     if (Mine(menu) && row >= kJump0) return nullptr;
     return o_val(menu, a2, a3, a4);
 }
 static void* __fastcall hk_valset(void* menu, void* a2, void* a3, void* a4) {   // (menu, lista, fila, valor nuevo)
     const int list = (int)(intptr_t)a2, row = (int)(intptr_t)a3, v = (int)(intptr_t)a4;
+    if (Mine(menu) && s_page == 3) { if (list == 0) ApplySkin(row, v); return nullptr; }
     if (Mine(menu) && s_page > 0) {
         if (list == 0) ApplyValue(row, s_sliderMode.load() == 1 ? v : v - kSteps);
         return nullptr;

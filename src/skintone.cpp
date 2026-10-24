@@ -5,15 +5,125 @@
 // huesos: buffer + primer constante) y texturas t0 / t1 del PS. Con eso se ve si la cara sale antes que el cuerpo, si los
 // bloques se repiten de un cuadro al otro (servirian de clave del jugador) y si el material o la textura son propios de
 // cada jugador.
+//
+// El tono (24/10): 30 tonos (los 6 del juego quedan en 3, 8, 13, 18, 23 y 28; 4 intermedios entre cada par, 2 mas claros y 2
+// mas oscuros) y un matiz (-10 oliva .. +10 rosado). La piel se tine en los shaders (piel del cuerpo aa7d1833, cara 5ce3ed87
+// y ce188ae1) con ganancia = tono elegido / tono del color del juego del jugador (los 6 colores del juego: tabla 0x14352a910,
+// los mismos de la paleta del menu). Por jugador en PES21FX\piel_jugadores.ini. Vista previa: en el menu Fisico del juego
+// (pagina "Piel") el tinte del jugador editado va en x185..z185 (w185 = 1); en los partidos falta saber de quien es cada
+// dibujo (para eso es el diagnostico de arriba).
 #include "core.h"
 #include <d3d11_1.h>
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <map>
 #include <mutex>
 #include <string>
 #include <vector>
 
 namespace fx {
+
+// ---------------------------------------------------------------- paleta y ganancia
+static const unsigned char kGameSkin[6][3] = { { 255, 210, 179 }, { 224, 179, 146 }, { 194, 149, 116 }, { 163, 120, 90 }, { 133, 94, 66 }, { 102, 69, 46 } };
+static float Lin(float c) { c /= 255.0f; return c <= 0.04045f ? c / 12.92f : powf((c + 0.055f) / 1.055f, 2.4f); }
+static void GameLin(int idx, float o[3]) { idx = std::clamp(idx, 1, 6) - 1; for (int k = 0; k < 3; k++) o[k] = Lin(kGameSkin[idx][k]); }
+// tono 1..30 en lineal (el 3 + 5 * (i - 1) es el color i del juego)
+static void ToneLin(int t, float o[3]) {
+    t = std::clamp(t, 1, kSkinTones);
+    const float p = (float)(t - 3) / 5.0f;   // posicion en la escala del juego (0 = color 1, 5 = color 6)
+    int a = (int)floorf(p); a = std::clamp(a, 0, 4);
+    const float f = p - (float)a;            // fuera de [0, 5] extrapola (mas claro / mas oscuro)
+    float A[3], B[3]; GameLin(a + 1, A); GameLin(a + 2, B);
+    for (int k = 0; k < 3; k++) o[k] = std::clamp(A[k] + (B[k] - A[k]) * f, 0.004f, 1.0f);
+}
+// matiz: + rosado (mas rojo), - oliva (menos rojo y azul, algo mas verde); conserva la luminancia
+static void ApplyHue(float c[3], int m) {
+    const float l0 = 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2];
+    if (m > 0) { c[0] *= 1.0f + 0.03f * m; c[1] *= 1.0f - 0.01f * m; c[2] *= 1.0f - 0.005f * m; }
+    else if (m < 0) { const float k = (float)-m; c[0] *= 1.0f - 0.02f * k; c[1] *= 1.0f + 0.01f * k; c[2] *= 1.0f - 0.03f * k; }
+    const float l1 = 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2];
+    if (l1 > 1e-5f) for (int k = 0; k < 3; k++) c[k] = std::clamp(c[k] * l0 / l1, 0.0f, 1.0f);
+}
+bool SkinToneGain(int gameIdx, int tono, int matiz, float out[3]) {
+    out[0] = out[1] = out[2] = 1.0f;
+    if (tono <= 0 && matiz == 0) return false;
+    float base[3], tgt[3]; GameLin(gameIdx, base);
+    if (tono > 0) ToneLin(tono, tgt); else for (int k = 0; k < 3; k++) tgt[k] = base[k];
+    ApplyHue(tgt, std::clamp(matiz, -10, 10));
+    for (int k = 0; k < 3; k++) out[k] = std::clamp(tgt[k] / std::max(base[k], 1e-4f), 0.25f, 4.0f);
+    return true;
+}
+void SkinToneSwatch(int tono, unsigned char rgb[3]) {   // para rotulos: el tono en sRGB
+    float c[3]; ToneLin(tono, c);
+    for (int k = 0; k < 3; k++) { float v = c[k] <= 0.0031308f ? c[k] * 12.92f : 1.055f * powf(c[k], 1.0f / 2.4f) - 0.055f; rgb[k] = (unsigned char)std::clamp((int)lroundf(v * 255.0f), 0, 255); }
+}
+
+// ---------------------------------------------------------------- por jugador (piel_jugadores.ini)
+struct SkinProf { std::string name; int tono = 0, matiz = 0; };
+static std::map<uint32_t, SkinProf> s_skin; static std::mutex s_skinMx;
+static bool s_skinLoaded = false, s_skinDirty = false; static double s_skinDirtyT = 0;
+static std::wstring SkinPath() { return g_cfg.baseDir + L"piel_jugadores.ini"; }
+static std::string Trim2(const std::string& x) { size_t a = x.find_first_not_of(" \t\r\n"), b = x.find_last_not_of(" \t\r\n"); return a == std::string::npos ? std::string() : x.substr(a, b - a + 1); }
+static void LoadSkin() {
+    s_skin.clear(); s_skinLoaded = true;
+    std::ifstream f(SkinPath(), std::ios::binary); if (!f) return;
+    std::string l; SkinProf* cur = nullptr;
+    while (std::getline(f, l)) {
+        l = Trim2(l); if (l.empty() || l[0] == ';') continue;
+        if (l[0] == '[') { char* e = nullptr; unsigned long v = strtoul(l.c_str() + 1, &e, 10); cur = (v && e && *e == ']') ? &s_skin[(uint32_t)v] : nullptr; continue; }
+        if (!cur) continue;
+        size_t eq = l.find('='); if (eq == std::string::npos) continue;
+        std::string k = Trim2(l.substr(0, eq)), v = Trim2(l.substr(eq + 1));
+        if (k == "nombre") cur->name = v;
+        else if (k == "tono") cur->tono = std::clamp(atoi(v.c_str()), 0, kSkinTones);
+        else if (k == "matiz") cur->matiz = std::clamp(atoi(v.c_str()), -10, 10);
+    }
+    Log("piel: %d jugadores con tono propio en piel_jugadores.ini", (int)s_skin.size());
+}
+static void SaveSkin() {
+    std::ofstream f(SkinPath(), std::ios::binary | std::ios::trunc); if (!f) { Log("piel: no se pudo escribir piel_jugadores.ini"); return; }
+    f << "; PES21 FX - tono de piel por jugador (lo escribe el menu Fisico del juego, pagina Piel).\r\n"
+         "; [id] = id del jugador; tono = 1..30 (0 = el color del juego; los 6 colores del juego son 3, 8, 13, 18, 23 y 28),\r\n"
+         "; matiz = -10 (oliva) .. +10 (rosado).\r\n";
+    for (auto& kv : s_skin) {
+        if (kv.second.tono <= 0 && kv.second.matiz == 0) continue;
+        f << "\r\n[" << kv.first << "]\r\n";
+        if (!kv.second.name.empty()) f << "nombre = " << kv.second.name << "\r\n";
+        f << "tono = " << kv.second.tono << "\r\nmatiz = " << kv.second.matiz << "\r\n";
+    }
+}
+bool SkinToneGet(uint32_t id, int* tono, int* matiz) {
+    std::lock_guard<std::mutex> lk(s_skinMx);
+    if (!s_skinLoaded) LoadSkin();
+    auto it = id ? s_skin.find(id) : s_skin.end();
+    *tono = it != s_skin.end() ? it->second.tono : 0; *matiz = it != s_skin.end() ? it->second.matiz : 0;
+    return it != s_skin.end() && (*tono > 0 || *matiz != 0);
+}
+void SkinToneSet(uint32_t id, const char* name, int tono, int matiz) {
+    if (!id) return;
+    std::lock_guard<std::mutex> lk(s_skinMx);
+    if (!s_skinLoaded) LoadSkin();
+    SkinProf& p = s_skin[id];
+    if (name && *name) p.name = name;
+    p.tono = std::clamp(tono, 0, kSkinTones); p.matiz = std::clamp(matiz, -10, 10);
+    s_skinDirty = true; s_skinDirtyT = Now();
+}
+// por cuadro: guardado diferido y la vista previa del jugador editado (x185..w185)
+void SkinTonePresent() {
+    { std::lock_guard<std::mutex> lk(s_skinMx); if (s_skinDirty && Now() - s_skinDirtyT > 0.6) { s_skinDirty = false; SaveSkin(); } }
+    float* T = g_cfg.live[185];
+    uint32_t id = 0; int gi = 0, tono = 0, matiz = 0; float g[3];
+    if (g_cfg.live[184][0] > 0.5f && FisicoEditing(&id) && MusclePhysiqueActive() && (gi = FisicoSkinIndex()) >= 1 &&
+        SkinToneGet(id, &tono, &matiz) && SkinToneGain(gi, tono, matiz, g)) {
+        const float k = std::clamp(g_cfg.live[184][1] > 0.0f ? g_cfg.live[184][1] : 1.0f, 0.0f, 1.5f);
+        for (int c = 0; c < 3; c++) T[c] = 1.0f + (g[c] - 1.0f) * k;
+        T[3] = 1.0f;
+    } else { T[0] = T[1] = T[2] = 1.0f; T[3] = 0.0f; }
+}
 
 std::atomic<bool> g_skinDiagArmed{false};
 static std::atomic<int> s_armFrame{-1};
