@@ -5,7 +5,7 @@
 // selector, barra ("c_slider"), salto ("c_jump"), etc. (estado -> animacion 0x1434ca010, estado -> tipo 0x14273a560), y la
 // lista muestra N filas con la animacion "setNumChoicesAuto_N" (PlBase_SetNumRows 0x140cd3680; N = vtable[78]).
 // El mod agrega la fila 13 "Musculatura" (salto). Al elegirla, la lista pasa a la pagina 1 (16 barras + salto a la 2); la
-// pagina 2 tiene 10 barras; Atras vuelve a la pagina anterior. Los valores (-25..+25 = x0.50..x1.50) van al perfil del
+// pagina 2 tiene 10 barras; Atras vuelve a la pagina anterior y L1 / R1 pasan de una pagina a otra. Los valores (-25..+25 = x0.50..x1.50) van al perfil del
 // jugador editado (EditWork + 0xe0 = su clave; musculatura_jugadores.ini) y el modelo cambia al instante.
 //  vtable: [49] decidir 0x140cd35d0, [50] atras 0x140c2e3e0, [52] restablecer 0x140c2e420, [62] / [63] cambio de valor
 //  0x140c2e120 / 0x140c2e140 (el menu base los llama desde 0x140e3c770 con fila y valor), [76] armar filas 0x140c2e1e0,
@@ -29,7 +29,7 @@ static const uintptr_t kEditWorkGlobal = 0x1438040a8ull;
 static const uintptr_t kGetComp = 0x140e4f5d0ull, kSetRow = 0x140cd39f0ull, kSetNumRows = 0x140cd3680ull, kSetCursor = 0x140e42300ull,
     kSetEnable = 0x140e4dfc0ull, kSelClear = 0x140e54140ull, kSelAdd = 0x140e53ee0ull, kSelSet = 0x140e54180ull, kSelGet = 0x140e540f0ull,
     kSliderRange = 0x140e5bf80ull, kSliderGet = 0x140e5b9d0ull, kTitleSetStr = 0x140e56ca0ull, kTitleSetId = 0x140e56c10ull,
-    kSetText = 0x140e4b030ull;
+    kSetText = 0x140e4b030ull, kSetBtnMode = 0x140e433d0ull, kSetHintStr = 0x140e43500ull;
 struct Sig { uintptr_t a; unsigned char b[10]; };
 static const Sig kSigs[] = {
     { kGetComp,     { 0x48, 0x8b, 0x49, 0x78, 0x44, 0x8b, 0xd2, 0x45, 0x33, 0xc9 } },
@@ -45,17 +45,24 @@ static const Sig kSigs[] = {
     { kSliderGet,   { 0x8b, 0x81, 0xd0, 0x00, 0x00, 0x00, 0xc3, 0xcc, 0xcc, 0xcc } },
     { kTitleSetStr, { 0x4c, 0x8b, 0xdc, 0x57, 0x48, 0x83, 0xec, 0x60, 0x49, 0xc7 } },
     { kTitleSetId,  { 0x40, 0x53, 0x48, 0x83, 0xec, 0x60, 0x48, 0xc7, 0x44, 0x24 } },
+    { kSetBtnMode,  { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0x48 } },
+    { kSetHintStr,  { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x20 } },
 };
 // entradas de la vtable que se cambian
-enum { V_DECIDE = 49, V_BACK = 50, V_RESET = 52, V_VAL = 62, V_VALSET = 63, V_ROWS = 76, V_COUNT = 78 };
+// botones del menu (0x140e3ec40; tabla boton -> codigo de pad 0x1427bcdf0, orden de DirectInput de PlayStation: 0x13 cuadrado,
+// 0x16 triangulo, 0x17 L1, 0x18 R1, 0x19 L2, 0x1a R2): boton 8 = L1 -> vtable[55], boton 9 = R1 -> vtable[56] (en el Fisico
+// no hacen nada: el juego no los habilita; se habilitan con 0x140e433d0 (menu, boton, 2) y se rotulan con vtable[23] 0x140e43500)
+enum { V_DECIDE = 49, V_BACK = 50, V_RESET = 52, V_L1 = 55, V_R1 = 56, V_VAL = 62, V_VALSET = 63, V_ROWS = 76, V_COUNT = 78 };
+enum { B_L1 = 8, B_R1 = 9 };
 static const struct { int i; uintptr_t orig; } kVt[] = {
     { V_DECIDE, 0x140cd35d0ull }, { V_BACK, 0x140c2e3e0ull }, { V_RESET, 0x140c2e420ull }, { V_VAL, 0x140c2e120ull },
     { V_VALSET, 0x140c2e140ull }, { V_ROWS, 0x140c2e1e0ull }, { V_COUNT, 0x14217f830ull },
+    { V_L1, 0x141b42640ull }, { V_R1, 0x141b42640ull },
 };
 
 typedef void* (__fastcall* Fn4)(void*, void*, void*, void*);
 typedef int (__fastcall* CountFn)(void*);
-static Fn4 o_decide = nullptr, o_back = nullptr, o_reset = nullptr, o_val = nullptr, o_valset = nullptr, o_rows = nullptr;
+static Fn4 o_decide = nullptr, o_back = nullptr, o_reset = nullptr, o_val = nullptr, o_valset = nullptr, o_rows = nullptr, o_l1 = nullptr, o_r1 = nullptr;
 static CountFn o_count = nullptr;
 
 typedef void* (__fastcall* GetCompFn)(void* cont, int type, int idx);
@@ -73,6 +80,8 @@ typedef void (__fastcall* TitleSetStrFn)(void* headline, const char* s);
 typedef void (__fastcall* TitleSetIdFn)(void* headline, int id);
 struct GameStr { union { char buf[16]; char* ptr; }; size_t size, cap; };   // std::string de MSVC (32 bytes)
 typedef void (__fastcall* SetTextFn)(void* comp, const GameStr* s, int a, int b);
+typedef void (__fastcall* SetBtnModeFn)(void* menu, int button, int mode);
+typedef void (__fastcall* SetHintStrFn)(void* menu, int idx, const char* s);
 
 static bool s_ok = false, s_tried = false;
 static std::atomic<int> s_sliderMode{-1};   // -1 sin probar, 1 barras, 0 selectores (la fila no tiene barra)
@@ -167,6 +176,21 @@ static void SetTitle(void* menu, const char* s, int id) {   // "headline" del ob
     __try { if (s) ((TitleSetStrFn)kTitleSetStr)(h, s); else ((TitleSetIdFn)kTitleSetId)(h, id); } __except (EXCEPTION_EXECUTE_HANDLER) {}
 }
 
+// L1 / R1 cambian de pagina; el rotulo de abajo dice a cual va cada uno. Modo 2 = "recien apretado" (Menu_v70 0x140e48f80
+// lee el modo en controlador + 0x120 + boton * 4: 0 apagado, 1 / 2 / 3 = funciones 0x48 / 0x40 / 0x38 del pad); sin destino
+// queda apagado (ni sonido ni llamada)
+static void PageHints(void* menu, int page) {
+    static const char* kL1[] = { "", "F\xC3\xADsico", "Torso y brazos" };
+    static const char* kR1[] = { "Musculatura", "Cintura y piernas", "" };
+    if (page < 0 || page > 2) return;
+    __try {
+        ((SetBtnModeFn)kSetBtnMode)(menu, B_L1, kL1[page][0] ? 2 : 0);
+        ((SetBtnModeFn)kSetBtnMode)(menu, B_R1, kR1[page][0] ? 2 : 0);
+        ((SetHintStrFn)kSetHintStr)(menu, B_L1, kL1[page]);
+        ((SetHintStrFn)kSetHintStr)(menu, B_R1, kR1[page]);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+
 static int ToSteps(float f) { return std::clamp((int)lroundf((f - 1.0f) / kStep), -kSteps, kSteps); }
 static float FromSteps(int n) { return 1.0f + kStep * (float)std::clamp(n, -kSteps, kSteps); }
 
@@ -232,6 +256,7 @@ static void GoPage(void* menu, int page, int cursor) {
     }
     G_SetNumRows(menu, CountOf(page));
     G_SetCursor(menu, cursor);
+    PageHints(menu, page);
     Log("fisico: pagina %d (%s, id %u)", page, s_editName[0] ? s_editName : "jugador", s_editId);
 }
 static void ApplyValue(int row, int steps) {
@@ -256,6 +281,7 @@ static void* __fastcall hk_rows(void* menu, void* a2, void* a3, void* a4) {
     s_menu = menu; s_page = 0;
     ReadEditPlayer();
     AddJump(menu, kJump0, "Musculatura  >");
+    PageHints(menu, 0);
     static int s_n = 0;
     if (s_n++ < 20) Log("fisico: menu armado (%s, id %u): fila 'Musculatura' agregada", s_editName[0] ? s_editName : "jugador", s_editId);
     return r;
@@ -276,6 +302,14 @@ static void* __fastcall hk_decide(void* menu, void* a2, void* a3, void* a4) {
 static void* __fastcall hk_back(void* menu, void* a2, void* a3, void* a4) {
     if (Mine(menu) && s_page > 0) { int p = s_page; GoPage(menu, p - 1, p == 1 ? kJump0 : kJump1); return nullptr; }
     return o_back(menu, a2, a3, a4);
+}
+static void* __fastcall hk_l1(void* menu, void* a2, void* a3, void* a4) {   // pagina anterior (arriba de todo)
+    if (Mine(menu) && s_page > 0) { GoPage(menu, s_page - 1, 0); return nullptr; }
+    return o_l1(menu, a2, a3, a4);
+}
+static void* __fastcall hk_r1(void* menu, void* a2, void* a3, void* a4) {   // pagina siguiente
+    if (Mine(menu) && s_page < 2) { GoPage(menu, s_page + 1, 0); return nullptr; }
+    return o_r1(menu, a2, a3, a4);
 }
 static void* __fastcall hk_reset(void* menu, void* a2, void* a3, void* a4) {
     if (Mine(menu) && s_page > 0) {   // Restablecer en una pagina de musculatura: esa pagina vuelve a +0 (como el juego)
@@ -324,14 +358,15 @@ void FisicoInstall() {
     void** vt = (void**)kBodyVt;
     if (!Readable(vt - 1, 90 * sizeof(void*)) || (uintptr_t)vt[-1] != kBodyCol) { Log("fisico: la vtable de MenuEditPlBodySetting no coincide"); return; }
     for (auto& e : kVt) if ((uintptr_t)vt[e.i] != e.orig) { Log("fisico: vtable[%d] = %p (se esperaba 0x%llx): sin cambios", e.i, vt[e.i], (unsigned long long)e.orig); return; }
-    void* hooks[] = { (void*)&hk_decide, (void*)&hk_back, (void*)&hk_reset, (void*)&hk_val, (void*)&hk_valset, (void*)&hk_rows, (void*)&hk_count };
-    void** origs[] = { (void**)&o_decide, (void**)&o_back, (void**)&o_reset, (void**)&o_val, (void**)&o_valset, (void**)&o_rows, (void**)&o_count };
+    void* hooks[] = { (void*)&hk_decide, (void*)&hk_back, (void*)&hk_reset, (void*)&hk_val, (void*)&hk_valset, (void*)&hk_rows, (void*)&hk_count, (void*)&hk_l1, (void*)&hk_r1 };
+    void** origs[] = { (void**)&o_decide, (void**)&o_back, (void**)&o_reset, (void**)&o_val, (void**)&o_valset, (void**)&o_rows, (void**)&o_count, (void**)&o_l1, (void**)&o_r1 };
+    static_assert(sizeof hooks / sizeof hooks[0] == sizeof kVt / sizeof kVt[0], "un gancho por entrada de la vtable");
     DWORD old = 0;
     if (!VirtualProtect(&vt[V_DECIDE], (V_COUNT - V_DECIDE + 1) * sizeof(void*), PAGE_READWRITE, &old)) { Log("fisico: VirtualProtect fallo (%lu)", GetLastError()); return; }
-    for (int k = 0; k < 7; k++) { *origs[k] = vt[kVt[k].i]; InterlockedExchangePointer(&vt[kVt[k].i], hooks[k]); }
+    for (int k = 0; k < (int)(sizeof hooks / sizeof hooks[0]); k++) { *origs[k] = vt[kVt[k].i]; InterlockedExchangePointer(&vt[kVt[k].i], hooks[k]); }
     VirtualProtect(&vt[V_DECIDE], (V_COUNT - V_DECIDE + 1) * sizeof(void*), old, &old);
     s_ok = true;
-    Log("fisico: menu Fisico del juego enganchado: fila 'Musculatura' (2 paginas: %d + %d valores, -%d..+%d)", kN1, kN2, kSteps, kSteps);
+    Log("fisico: menu Fisico del juego enganchado: fila 'Musculatura' (2 paginas: %d + %d valores, -%d..+%d; L1 / R1 cambian de pagina)", kN1, kN2, kSteps, kSteps);
 }
 bool FisicoEditing(uint32_t* id) { if (id) *id = s_editId; return s_ok && s_menu && s_editId; }
 
