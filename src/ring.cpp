@@ -3,8 +3,9 @@
 //  1) mientras late el resaltado (x174), cada dibujo de la piel del cuerpo con nuestro VS (aa7d1833 + 1c02a92a) usa la
 //     variante pes_skin_hl_ps.hlsl, que suma en un buffer (u5, despues de los 5 render targets del G-buffer) la posicion de
 //     los pixeles visibles cerca de cada marca del musculo (el VS dice la cercania y el lado en o4.w / o5.w);
-//  2) cuando el menu dibuja la imagen del jugador (PS 765e1433, el ultimo dibujo de la pasada del menu) se repite ese
-//     mismo dibujo con pes_ring_ps.hlsl, que pone el aro y el punto en el promedio de cada marca, y el buffer se limpia.
+//  2) cuando el menu dibuja la imagen del jugador (PS 55a003da con la textura de la escena, del tamano del viewport de la
+//     piel) se repite ese mismo dibujo con pes_ring_ps.hlsl, que pone el aro y el punto en el promedio de cada marca, y el
+//     buffer se limpia.
 // El viewport de la escena (para pasar de pixeles de la escena a la imagen del jugador) va en x193..w193.
 #include "core.h"
 #include <atomic>
@@ -13,7 +14,9 @@
 
 namespace fx {
 
-static const uint64_t kSkinPS = 0xaa7d1833f6a11481ULL, kSkinVS = 0x1c02a92ab4ae3362ULL, kViewPS = 0x765e1433238f156cULL;
+// (24/10 d) la imagen del jugador la pone el PS comun del menu (55a003da) como segundo dibujo de la pasada, con la textura
+// de la escena (1238x1080, el tamano del viewport de la piel); 765e1433 era otra cosa (textura de 128x128)
+static const uint64_t kSkinPS = 0xaa7d1833f6a11481ULL, kSkinVS = 0x1c02a92ab4ae3362ULL, kViewPS = 0x55a003da3f888a81ULL;
 static std::mutex s_mx;
 static bool s_tried = false;
 static ID3D11PixelShader *s_hlPS = nullptr, *s_ringPS = nullptr;
@@ -76,7 +79,7 @@ bool RingBeforeDraw(ID3D11DeviceContext* c, uint64_t ps, uint64_t vs, RingScope&
                 const float vw = g_cfg.live[193][2], vh = g_cfg.live[193][3];
                 ok = vw > 1.0f && fabsf((float)td.Width - vw) <= 4.0f && fabsf((float)td.Height - vh) <= 4.0f;
                 static std::atomic<int> n{0};
-                if (n < 4) { n++; Log("aro del musculo: imagen del jugador en el menu %ux%u, escena %.0fx%.0f -> %s", td.Width, td.Height, vw, vh, ok ? "aro encima" : "NO coincide (sin aro)"); }
+                if (ok && n < 4) { n++; Log("aro del musculo: imagen del jugador en el menu %ux%u = escena %.0fx%.0f -> aro encima", td.Width, td.Height, vw, vh); }
             }
             t8->Release();
         }

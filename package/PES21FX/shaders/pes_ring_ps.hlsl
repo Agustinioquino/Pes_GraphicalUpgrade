@@ -1,13 +1,14 @@
 // PES21 FX - aro y punto blanco del musculo elegido en el menu Fisico (24/10 c), como capa de interfaz encima del jugador.
-// La DLL (ring.cpp) lo dibuja justo despues del dibujo que pone la imagen del jugador en el menu (PS 765e1433, VS 537a35c9),
-// con el mismo quad: TEXCOORD0.xy recorre la imagen del jugador de 0 a 1. La variante de la piel (pes_skin_hl_ps.hlsl) dejo
+// La DLL (ring.cpp) lo dibuja justo despues del dibujo que pone la imagen del jugador en el menu (el PS comun del menu
+// 55a003da con los VS fb68a5a0 / 1932d77d: TEXCOORD0.xyz = uv y alpharef, TEXCOORD1 / 2 = colores, COLOR0), con el mismo
+// quad: TEXCOORD0.xy recorre la imagen del jugador de 0 a 1. La variante de la piel (pes_skin_hl_ps.hlsl) dejo
 // en t20 (u5 en su pasada), por marca y lado, la suma de las posiciones de los pixeles visibles cerca de la marca: el
 // centro del aro es el promedio y el tamano sale de la cantidad de pixeles. La imagen del menu guarda sRGB / 4.
 //   174: x pulso del resaltado | 186: x latido, y desvanecido | 193: viewport de la escena (x, y, ancho, alto)
 ByteAddressBuffer gHlAcc : register(t20);
 Texture1D<float4> IniParams : register(t120);
 
-float4 main(float4 uv : TEXCOORD0, float4 mc : TEXCOORD1, float4 pos : SV_Position) : SV_Target0 {
+float4 main(float3 uv : TEXCOORD0, float4 mulc : TEXCOORD1, float4 addc : TEXCOORD2, float4 col : COLOR0, float4 pos : SV_Position) : SV_Target0 {
   float4 HP = IniParams.Load(int2(186, 0));
   float4 VP = IniParams.Load(int2(193, 0));
   float2 ip = uv.xy * max(VP.zw, 1.0) + VP.xy;          // pixel de la escena que cae aca
