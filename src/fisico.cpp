@@ -392,26 +392,6 @@ static void ApplySkin(int row, int idx) {
         void* w = Child(List(s_menu), 0u); if (w) { char lab[64]; ToneLabel(lab, sizeof lab, q.tono, q.rgb); SetLabel(w, lab); }
     }
 }
-// el color que muestra la fila (lo cambia la paleta del juego mientras esta abierta): si cambio, al perfil del jugador
-static void SkinColorPoll(void* menu) {
-    if (!s_colorRow || !s_colorComp || !s_editId) return;
-    uint32_t v = 0; if (!Rd((char*)s_colorComp + 0xb4, v) || v == s_colorShown) return;
-    s_colorShown = v;
-    const uint32_t rgb24 = v & 0xffffffu;
-    SkinToneProf q; SkinToneGetProf(s_editId, q);
-    int t = 0; for (int i = 0; i < kSkinTones; i++) if ((s_toneRgba[i] & 0xffffffu) == rgb24) { t = i + 1; break; }
-    const int gi = FisicoSkinIndex();
-    q.rgb = 0;
-    if (t > 0) q.tono = t;
-    else if (gi >= 1 && (ToneRgba(5 * gi - 2) & 0xffffffu) == rgb24) q.tono = 0;
-    else { q.tono = 0; q.rgb = ((v & 0xff) << 16) | (v & 0xff00) | ((v >> 16) & 0xff); }
-    SkinToneSetProf(s_editId, s_editName, q);
-    void* w = Child(List(menu), 0u);
-    if (w) { char lab[64]; ToneLabel(lab, sizeof lab, q.tono, q.rgb); SetLabel(w, lab); }
-    void* w1 = Child(List(menu), 1u); void* sel = w1 ? FindComp(w1, "selector") : nullptr;   // el tono conocido sigue al color
-    if (sel) G_SelFillList(sel, kMonkName, 11, q.rgb ? 0 : MonkOf(q.tono));
-    static int n = 0; if (n++ < 20) Log("fisico: color de piel elegido %08x -> %s", v, q.rgb ? "propio" : q.tono ? "tono" : "del juego");
-}
 // (24/10 e) la paleta la abre el menu base por su cuenta (no pasa por decidir), y toma sus 72 colores genericos de una
 // tabla fija del exe (p_all, 0x1434d1dc0, solo lectura). Mientras la pagina Piel esta activa, esa tabla lleva en memoria
 // los 30 tonos + los 6 colores del juego + 18 variantes rosadas y 18 oliva; al salir vuelve la original (el exe en disco no
