@@ -901,6 +901,21 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
     s_W[0] = me.world[0]; s_W[1] = me.world[1]; s_W[2] = me.world[2];
     s_Wp[0] = me.worldPrev[0]; s_Wp[1] = me.worldPrev[1]; s_Wp[2] = me.worldPrev[2];
     s_kick = me.kick.xyz;
+    // PES21 FX (23/10): MODO EDITAR. El juego pone a los jugadores del editor a ~10 km del origen. El short se simula en
+    // coordenadas de mundo (modo mundo del mod) y a 10 km un float solo distingue ~1 mm: la pose, los choques con la pierna
+    // y las velocidades recibian ruido de 1 mm por sub-paso (0.5 m/s) y el short aleteaba como con viento. Lejos del origen
+    // se corre el origen de la simulacion en bloques de 256 m (resta exacta): queda a unos metros y la precision vuelve a
+    // ser de micrones. En el partido (jugadores a menos de 2 km del origen) no cambia nada. El empuje por movimiento del
+    // cuerpo tambien se apaga ahi (en el editor el jugador esta quieto: solo seria ruido).
+    if (s_flags & 32) {
+        float3 Tw = float3(s_W[0].w, s_W[1].w, s_W[2].w);
+        if (max(abs(Tw.x), max(abs(Tw.y), abs(Tw.z))) > 2000.0) {
+            float3 Ow = floor(Tw / 256.0) * 256.0;
+            s_W[0].w -= Ow.x; s_W[1].w -= Ow.y; s_W[2].w -= Ow.z;
+            s_Wp[0].w -= Ow.x; s_Wp[1].w -= Ow.y; s_Wp[2].w -= Ow.z;
+            s_kick = 0;
+        }
+    }
     uint P = min(g_particleCount, MAXP);
     uint part = min(g_part, MAXPARTS - 1);
     bool preStep = (s_flags & 16) != 0;
