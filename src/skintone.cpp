@@ -71,14 +71,18 @@ bool SkinToneGain(int gameIdx, int tono, int matiz, float out[3]) {
 }
 // (24/10 c) tono en Oklab: luminosidad de la escala del juego (posiciones 3, 8, ..., 28 = colores 1..6; afuera se extrapola
 // con el paso de los extremos) y croma / matiz de una escala de piel medida, por posicion
-static void GameOklabL(int idx, float* L) {
-    float c[3]; GameLin(idx, c);
+static void LinToLCh(const float c[3], float* L, float* C, float* hDeg) {
     float l = 0.4122214708f * c[0] + 0.5363325363f * c[1] + 0.0514459929f * c[2];
     float m = 0.2119034982f * c[0] + 0.6806995451f * c[1] + 0.1073969566f * c[2];
     float s = 0.0883024619f * c[0] + 0.2817188376f * c[1] + 0.6299787005f * c[2];
     l = cbrtf(l); m = cbrtf(m); s = cbrtf(s);
     *L = 0.2104542553f * l + 0.7936177850f * m - 0.0040720468f * s;
+    const float a = 1.9779984951f * l - 2.4285922050f * m + 0.4505937099f * s;
+    const float b = 0.0259040371f * l + 0.7827717662f * m - 0.8086757660f * s;
+    if (C) *C = sqrtf(a * a + b * b);
+    if (hDeg) *hDeg = atan2f(b, a) * 180.0f / 3.14159265f;
 }
+static void GameOklabL(int idx, float* L) { float c[3]; GameLin(idx, c); LinToLCh(c, L, nullptr, nullptr); }
 static void ToneOklab(int t, float* L, float* C, float* hDeg) {
     t = std::clamp(t, 1, kSkinTones);
     const float p = (float)(t - 3) / 5.0f;   // 0 = color 1 del juego, 5 = color 6
@@ -87,20 +91,23 @@ static void ToneOklab(int t, float* L, float* C, float* hDeg) {
     *L = std::clamp(LA + (LB - LA) * f, 0.15f, 0.99f);
     // croma y matiz (grados) por posicion: muy claro poco saturado, medio oliva / canela, oscuro marron rojizo
     static const float kT[8] = { 1, 3, 8, 13, 18, 23, 28, 30 };
-    static const float kC[8] = { 0.036f, 0.046f, 0.058f, 0.066f, 0.066f, 0.060f, 0.050f, 0.042f };
-    static const float kH[8] = { 62.0f, 63.0f, 68.0f, 70.0f, 63.0f, 54.0f, 47.0f, 48.0f };
+    // (24/10 c) medios un poco mas saturados (canela / caramelo en vez de caqui); la paleta del juego tiene croma ~0.07
+    static const float kC[8] = { 0.036f, 0.048f, 0.064f, 0.075f, 0.074f, 0.066f, 0.054f, 0.046f };
+    static const float kH[8] = { 62.0f, 63.0f, 68.0f, 69.0f, 64.0f, 56.0f, 48.0f, 46.0f };
     int j = 0; while (j < 6 && (float)t > kT[j + 1]) j++;
     const float u = std::clamp(((float)t - kT[j]) / (kT[j + 1] - kT[j]), 0.0f, 1.0f);
     *C = kC[j] + (kC[j + 1] - kC[j]) * u; *hDeg = kH[j] + (kH[j + 1] - kH[j]) * u;
 }
-// de tono "base" (el color del juego del jugador, en la posicion 5 * juego - 2) a tono elegido + matiz: (kL, m0, m1)
+// del color del juego del jugador (su textura esta hecha con ese color: L, croma y matiz medidos de la paleta) al tono
+// elegido + matiz: (kL, m0, m1). El tono es absoluto: el mismo numero se ve igual en todos los jugadores, sea cual sea su
+// color del juego (antes se movia desde la posicion del color del juego en la escala y dos jugadores con el mismo tono
+// quedaban distintos); tono 0 = el color del juego (solo el matiz)
 bool SkinToneParams(int gameIdx, int tono, int matiz, float k, float out[3]) {
     out[0] = 1.0f; out[1] = 1.0f; out[2] = 0.0f;
     if ((tono <= 0 && matiz == 0) || gameIdx < 1) return false;
-    const int base = 5 * std::clamp(gameIdx, 1, 6) - 2;
     float LB, CB, HB, LT, CT, HT;
-    ToneOklab(base, &LB, &CB, &HB);
-    ToneOklab(tono > 0 ? tono : base, &LT, &CT, &HT);
+    { float c[3]; GameLin(std::clamp(gameIdx, 1, 6), c); LinToLCh(c, &LB, &CB, &HB); }
+    if (tono > 0) ToneOklab(tono, &LT, &CT, &HT); else { LT = LB; CT = CB; HT = HB; }
     float kL = LT / std::max(LB, 0.05f), kC = CT / std::max(CB, 0.005f), dh = HT - HB;
     const int mz = std::clamp(matiz, -10, 10);
     dh -= 1.5f * (float)mz;                                   // + rosado (mas rojo), - oliva (mas amarillo-verde)
@@ -111,8 +118,17 @@ bool SkinToneParams(int gameIdx, int tono, int matiz, float k, float out[3]) {
     out[0] = kL; out[1] = kC * cosf(r); out[2] = kC * sinf(r);
     return true;
 }
-void SkinToneSwatch(int tono, unsigned char rgb[3]) {   // para rotulos: el tono en sRGB
-    float c[3]; ToneLin(tono, c);
+void SkinToneSwatch(int tono, unsigned char rgb[3]) {   // para rotulos: el tono en sRGB (el de la escala en Oklab)
+    float c[3];
+    {
+        float L, C, h; ToneOklab(tono, &L, &C, &h);
+        const float r = h * 3.14159265f / 180.0f, a = C * cosf(r), b = C * sinf(r);
+        const float l_ = L + 0.3963377774f * a + 0.2158037573f * b, m_ = L - 0.1055613458f * a - 0.0638541728f * b, s_ = L - 0.0894841775f * a - 1.2914855480f * b;
+        const float l3 = l_ * l_ * l_, m3 = m_ * m_ * m_, s3 = s_ * s_ * s_;
+        c[0] = std::clamp(4.0767416621f * l3 - 3.3077115913f * m3 + 0.2309699292f * s3, 0.0f, 1.0f);
+        c[1] = std::clamp(-1.2684380046f * l3 + 2.6097574011f * m3 - 0.3413193965f * s3, 0.0f, 1.0f);
+        c[2] = std::clamp(-0.0041960863f * l3 - 0.7034186147f * m3 + 1.7076147010f * s3, 0.0f, 1.0f);
+    }
     for (int k = 0; k < 3; k++) { float v = c[k] <= 0.0031308f ? c[k] * 12.92f : 1.055f * powf(c[k], 1.0f / 2.4f) - 0.055f; rgb[k] = (unsigned char)std::clamp((int)lroundf(v * 255.0f), 0, 255); }
 }
 
