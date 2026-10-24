@@ -278,7 +278,7 @@ bool SkinToneGain(int gameIdx, int tono, int matiz, float out[3]);   // ganancia
 void SkinToneSwatch(int tono, unsigned char rgb[3]);
 bool SkinToneGet(uint32_t id, int* tono, int* matiz);
 void SkinToneSet(uint32_t id, const char* name, int tono, int matiz);
-void SkinTonePresent();                           // guardado diferido + tabla de jugadores con tono propio (194..242)
+void SkinTonePresent();                           // guardado diferido + tabla de jugadores con tono propio (194..254)
 bool SkinToneParams(int gameIdx, int tono, int matiz, float k, float out[3]);   // (24/10 c) (kL, m0, m1) en Oklab para pes_skintone.hlsli
 int SkinToneGame(uint32_t id);                    // color de piel del juego guardado para ese jugador (0 = no se sabe)
 int FisicoSkinIndex();                            // color de piel del juego (1..6) del jugador del menu Fisico (0 = no se sabe)

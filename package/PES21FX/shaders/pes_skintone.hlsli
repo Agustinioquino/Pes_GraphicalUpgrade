@@ -4,9 +4,10 @@
 // partir de una escala de piel real (la luminosidad de los 6 colores del juego y el matiz / saturacion de una escala de
 // tonos de piel medida): kL multiplica la luminosidad de Oklab y (m0, m1) giran y escalan el matiz y la saturacion
 // (ab' = kC * R(dh) * ab). Asi se conserva el detalle de la textura (poros, venas, rubor) y cambia el tono de verdad.
-// Tabla de la DLL (t120): 194 = (entradas, activo, distancia maxima en m, -); por entrada i: 195 + 2i = posicion del
-// jugador en el mundo (raiz del personaje), 196 + 2i = (kL, m0, m1, -). El VS de la piel elige la entrada mas cercana al
-// dibujo y la pasa al PS en o6.w (1000 + i; cualquier otro valor = sin tono propio).
+// Tabla de la DLL (t120): 194 = (entradas, activo, distancia maxima en m, -); por entrada i (hasta 30): 195 + 2i = posicion
+// del personaje en el mundo (su raiz), 196 + 2i = (kL, m0, m1, 1 = tono propio / 0 = tapon: un personaje sin tono propio
+// cerca de uno con tono, para que no se lo lleve). El VS de la piel elige la entrada mas cercana al dibujo y la pasa al PS en
+// o6.w (1000 + i; cualquier otro valor = sin tono propio).
 #ifndef PES_SKINTONE_HLSLI
 #define PES_SKINTONE_HLSLI
 
@@ -36,11 +37,12 @@ float3 PesSkinApply(float3 c, float3 P) {
   lab.yz = float2(lab.y * P.y - lab.z * P.z, lab.y * P.z + lab.z * P.y);
   return saturate(PesOklabToLin(lab));
 }
-// entrada de la tabla que eligio el VS (o6.w = 1000 + i), o -1
+// entrada de la tabla que eligio el VS (o6.w = 1000 + i) si tiene tono propio, o -1
 int PesSkinEntry(float code) {
   float4 H = IniParams.Load(int2(194, 0));
   int i = (int)round(code) - 1000;
-  return (H.y > 0.5 && i >= 0 && i < (int)(H.x + 0.5)) ? i : -1;
+  if (!(H.y > 0.5 && i >= 0 && i < (int)(H.x + 0.5))) return -1;
+  return IniParams.Load(int2(196 + 2 * i, 0)).w > 0.5 ? i : -1;
 }
 float3 PesSkinParams(int i) { return IniParams.Load(int2(196 + 2 * i, 0)).xyz; }
 // para el VS: la entrada mas cercana (en el plano del piso) a un punto del personaje, o -1
@@ -49,7 +51,7 @@ int PesSkinNearest(float3 wp) {
   int best = -1;
   if (H.y > 0.5 && H.x > 0.5) {
     float bd = H.z * H.z;
-    int n = min((int)(H.x + 0.5), 24);
+    int n = min((int)(H.x + 0.5), 30);
     [loop] for (int i = 0; i < n; i++) {
       float3 p = IniParams.Load(int2(195 + 2 * i, 0)).xyz;
       float2 d = wp.xz - p.xz;
