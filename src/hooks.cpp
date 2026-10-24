@@ -616,6 +616,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     }
     if (s.dev != g_dev.dev) return false;
     const ShaderEntry *ps = s.ps, *vs = s.vs;
+    if (g_skinDiagArmed.load(std::memory_order_relaxed)) SkinDiagDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0, t_drawVerts);   // (24/10) skintone.cpp
     // 19/10: PS sin registrar (lo creo otra DLL, p.ej. cloth-mod): si el ini lo declara "como = <hash>", se trata como ese shader
     // (nuestro reemplazo + sus reglas) solo durante este dibujo
     if (!ps && vs && g_cfg.optRules) {
@@ -1040,6 +1041,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     LightMeterPresent();
     CamHookPresent();   // (23/10) camara del motor: ganchos (primer Present), cortes de camara -> 160, log
     CharTrackPresent();    // (24/10) personajes: que jugador es cada esqueleto (ganchos en el primer Present, log)
+    SkinDiagPresent();     // (24/10) tono de piel: diagnostico de los dibujos de personajes (w184)
     MuscleHookPresent();   // (23/10) musculatura: ganchos a los huesos de musculo del motor (primer Present)
     UploadParams();
     WatchShaderFolder();
