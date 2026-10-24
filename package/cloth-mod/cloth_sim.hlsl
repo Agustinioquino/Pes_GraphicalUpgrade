@@ -344,7 +344,9 @@ float pesFitOf(uint p)
     float sc = 1.0 / max(pesBodyScale(p), 1e-3);
     float r = max(PES_FIT_RANGE, 0.01);
     float f = (sc < 1.0) ? PES_FIT_THIN * 0.001 * saturate((1.0 - sc) / r) : -PES_FIT_FAT * 0.001 * saturate((sc - 1.0) / r);
-    if (g_legCount > 0) f *= 0.8;   // (21/10) el short responde casi igual al peso (antes la mitad); el muslo suma aparte (PES_LIMB_GAIN)
+    // (23/10) el short se PEGA con el peso casi como la camiseta (0.8), pero en los delgados casi no se agranda (0.4):
+    // con 0.8 el short de los flacos tenia el doble de aire que antes y con el viento parecia volar
+    if (g_legCount > 0) f *= (f > 0.0) ? 0.4 : 0.8;
     return f;
 #else
     return 0.0;
@@ -532,7 +534,7 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
                     // radio del tramo medio del miembro (muslo / brazo), en cm
                     float rK = (s_armR[sideK][1] + s_armR[sideK][2]) * 0.5 * 100.0;
                     float refK = g_legCount > 0 ? PES_THIGH_REF : PES_ARM_REF;
-                    if (rK > 0.5) pesLimbK = clamp((rK / refK - 1.0) * 4.0, -0.5, 0.6) * PES_LIMB_GAIN * fitFree;
+                    if (rK > 0.5) pesLimbK = clamp((rK / refK - 1.0) * 4.0, g_legCount > 0 ? -0.2 : -0.5, 0.6) * PES_LIMB_GAIN * fitFree;   // (23/10) muslo fino: el short se suelta poco
                 }
             }
         }
