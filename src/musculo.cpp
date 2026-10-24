@@ -460,6 +460,7 @@ static void* __fastcall hk_PhysStep(void* self, void* a2, void* a3, void* a4) {
     return o_physStep(self, a2, a3, a4);
 }
 bool MusclePhysiqueActive() { long long l = s_physLast.load(); return l && QpcSec(Qpc() - l) < 0.4; }
+double MusclePhysiqueAge() { long long l = s_physLast.load(); return l ? QpcSec(Qpc() - l) : 1e9; }   // (24/10) segundos desde el ultimo paso activo del menu Fisico
 double MusclePhysiqueSince() { long long e = s_physEnter.load(); return e ? QpcSec(Qpc() - e) : 1e9; }
 
 static void Install() {

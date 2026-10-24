@@ -9,6 +9,7 @@
 // cuadros despues (los menus son quietos) y decide donde tomar las copias en las pasadas siguientes.
 //   189: x on | y esmerilado | z radio del desenfoque | w tinte;  190: x brillo del borde | y refraccion | z radio de las
 //   esquinas (px) | w brillo de arriba;  191: x opacidad de paneles opacos | y tamano minimo (px) | z tolerancia | w log
+//   192: x donde (0 = solo el menu Fisico de Editar > Jugadores, 1 = todos los menus)
 #include "core.h"
 #include <algorithm>
 #include <atomic>
@@ -195,10 +196,17 @@ static int BlendMode(ID3D11BlendState* bs, int* src, int* dst) {
     return 0;
 }
 
+// (24/10) por pedido: solo en Editar > Jugadores > Fisico (y sus paginas de musculatura y piel); x192 = 1 lo lleva a todos los
+// menus. El menu Fisico se da por activo hasta 0.15 s despues de su ultimo paso (asi no queda vidrio en el menu siguiente)
+static bool GlassWanted() {
+    if (g_cfg.live[189][0] < 0.5f) return false;
+    return g_cfg.live[192][0] > 0.5f || MusclePhysiqueAge() < 0.15;
+}
+
 bool GlassBeforeDraw(ID3D11DeviceContext* c, uint64_t ps, uint64_t vs, UINT verts, GlassScope& g) {
     GlassPass& st = t_gp;
     if (st.ctx != c) { st.ctx = c; st.inUI = false; }
-    if (ps != kUiPS || g_cfg.live[189][0] < 0.5f || !g_dev.dev) {
+    if (ps != kUiPS || !GlassWanted() || !g_dev.dev) {
         // otro shader en medio de la pasada: si dibuja sobre la misma imagen la pasada sigue
         if (st.inUI) { ID3D11Resource* r = RT0Resource(c); if (r != st.tex) st.inUI = false; if (r) r->Release(); }
         // (diagnostico) la composicion final y el TAA: leen / escriben la misma imagen que el menu?

@@ -262,6 +262,7 @@ bool EngineCamera(float pos[3], float tgt[3], int* frame);   // ultima camara ap
 void MuscleHookPresent();                         // (23/10) musculatura (musculo.cpp): huesos de musculo del juego x 164..171 (v5: 32 clases)
 void MuscleDrawPlayerPanel();                     // (24/10) tarjeta "Musculatura por jugador" (ImGui; la llama DrawGroup con g_cfgMutex tomado)
 bool MusclePhysiqueActive();                      // (24/10) el menu Fisico del juego (Editar > Jugadores) esta en pantalla
+double MusclePhysiqueAge();                       // (24/10) segundos desde el ultimo cuadro con el menu Fisico activo (1e9 = nunca)
 double MusclePhysiqueSince();                     // segundos desde que se entro al menu Fisico
 std::string MuscleLatestPlayerName();             // nombre del ultimo jugador armado ("" si no hay)
 float MuscleProfileGet(uint32_t id, int idx, int comp);                          // (24/10) valor propio del jugador o el general
