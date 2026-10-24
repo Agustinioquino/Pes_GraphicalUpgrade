@@ -7,8 +7,8 @@
 // musculos (sin tocar codigo; solo si coinciden el sello del exe, el COL de cada vtable y la funcion original) y, despues
 // del Eval del juego, multiplica la escala del hueso por el slider: el musculo crece y todo lo que esta pegado a ese hueso
 // (el cuerpo y, si la ropa usa el mismo hueso, la camiseta) lo sigue. Se evalua cada cuadro: el cambio se ve al instante.
-//   162: x on | y brazos y hombros | z pecho y espalda | w piernas (1 = como el juego)
-//   163: x la ropa acompana (mangas, short, borde de la camiseta) | y ejes: 0 = los que ya infla el juego, 1 = parejo
+//   164: x on | y hombros | z biceps | w triceps        165: x antebrazos | y pecho | z espalda | w muslos
+//   166: x pantorrillas | y la ropa acompana (mangas, short) | z 0 = hacia afuera (sin tocar el largo), 1 = parejo
 #include "core.h"
 #include <atomic>
 #include <cstring>
@@ -19,54 +19,69 @@
 namespace fx {
 
 static const unsigned kStamp = 0x62787C6A;
-// grupo: 0 brazos y hombros, 1 pecho y espalda, 2 piernas; 10..12 = ropa que acompana al grupo (g - 10)
-// ejes: bit k = escala del eje k (los que el Eval del juego ya modula para ese musculo)
+// grupo: 0 hombros, 1 brazo (biceps / triceps), 2 antebrazos, 3 pecho, 4 espalda, 5 muslos, 6 pantorrillas;
+// 10 + g = ropa que acompana al grupo g. ejes: bit k = escala del eje k del hueso. Los huesos de Fox no guardan
+// rotacion de reposo (el FMDL solo trae posiciones): en reposo sus ejes son los del modelo, X = costado, Y = arriba,
+// Z = adelante. Por eso el brazo (que en la pose de reposo va hacia el costado) crece en Y y Z, la pierna (hacia abajo)
+// en X y Z, el pecho y la espalda hacia afuera (Z) y el trapecio hacia arriba y atras (Y, Z). El largo nunca se toca.
 struct MusCls { const char* name; uintptr_t vt, col, eval; int group; unsigned axes; };
 static const MusCls s_cls[] = {
     { "deltoides",      0x142ab2f18ull, 0x142da5818ull, 0x141a58a80ull, 0, 6 },
-    { "brazo",          0x142ab2f50ull, 0x142da58b0ull, 0x141a67300ull, 0, 6 },
-    { "brazo piel",     0x142ab2f88ull, 0x142da5948ull, 0x141a68820ull, 0, 6 },
-    { "brazo piel 2",   0x142ab2fc0ull, 0x142da59e0ull, 0x141a67e60ull, 0, 6 },
-    { "antebrazo",      0x142ab3158ull, 0x142da5e08ull, 0x141a5a5a0ull, 0, 6 },
-    { "pectoral",       0x142ab32a8ull, 0x142da6198ull, 0x141a605c0ull, 1, 1 },
-    { "trapecio",       0x142ab3068ull, 0x142da5ba8ull, 0x141a647f0ull, 1, 1 },
-    { "omoplato",       0x142ab3398ull, 0x142da63f8ull, 0x141a619d0ull, 1, 1 },
-    { "muslo",          0x142ab3550ull, 0x142da68a8ull, 0x141a64180ull, 2, 4 },
-    { "pantorrilla",    0x142ab3748ull, 0x142da6e08ull, 0x141a5cf10ull, 2, 1 },
-    { "manga",          0x142ab2ff8ull, 0x142da5a78ull, 0x141a62e20ull, 10, 2 },
-    { "borde camiseta", 0x142ab35f8ull, 0x142da6a70ull, 0x141a5ad80ull, 11, 7 },
-    { "short",          0x142ab35c0ull, 0x142da69d8ull, 0x141a5dd30ull, 12, 3 },
+    { "brazo",          0x142ab2f50ull, 0x142da58b0ull, 0x141a67300ull, 1, 6 },
+    { "brazo piel",     0x142ab2f88ull, 0x142da5948ull, 0x141a68820ull, 1, 6 },
+    { "brazo piel 2",   0x142ab2fc0ull, 0x142da59e0ull, 0x141a67e60ull, 1, 6 },
+    { "antebrazo",      0x142ab3158ull, 0x142da5e08ull, 0x141a5a5a0ull, 2, 6 },
+    { "pectoral",       0x142ab32a8ull, 0x142da6198ull, 0x141a605c0ull, 3, 4 },
+    { "trapecio",       0x142ab3068ull, 0x142da5ba8ull, 0x141a647f0ull, 4, 6 },
+    { "omoplato",       0x142ab3398ull, 0x142da63f8ull, 0x141a619d0ull, 4, 4 },
+    { "espalda baja",   0x142ab32e0ull, 0x142da6230ull, 0x141a54d70ull, 4, 4 },
+    { "muslo",          0x142ab3550ull, 0x142da68a8ull, 0x141a64180ull, 5, 5 },
+    { "pantorrilla",    0x142ab3748ull, 0x142da6e08ull, 0x141a5cf10ull, 6, 5 },
+    { "manga",          0x142ab2ff8ull, 0x142da5a78ull, 0x141a62e20ull, 11, 6 },
+    { "borde del short",0x142ab35f8ull, 0x142da6a70ull, 0x141a5ad80ull, 15, 5 },
+    { "short",          0x142ab35c0ull, 0x142da69d8ull, 0x141a5dd30ull, 15, 5 },
 };
 static const int kN = (int)(sizeof(s_cls) / sizeof(s_cls[0]));
+static const float kArmR = 0.045f;   // medio grosor del brazo de adelante hacia atras (m, medido en arm.fmdl)
 
 typedef void (__fastcall* EvalFn)(void* self, void* a2, float* out);
 static EvalFn s_orig[kN] = {};
 static std::atomic<unsigned> s_calls[kN];
 static bool s_tried = false; static int s_ok = 0;
 
-static float Factor(int i) {
-    const float* P = g_cfg.live[162]; const float* Q = g_cfg.live[163];
-    if (P[0] < 0.5f) return 1.0f;
-    int g = s_cls[i].group;
-    if (g >= 10) { if (Q[0] < 0.5f) return 1.0f; g -= 10; }
-    float f = P[1 + g];
-    if (f < 0.05f) return 1.0f;   // sin valor en el ini
-    return std::clamp(f, 0.5f, 2.0f);
+static float F(float v) { return v < 0.05f ? 1.0f : std::clamp(v, 0.5f, 2.0f); }   // 0 = sin valor en el ini
+static float GroupF(int g) {
+    const float* A = g_cfg.live[164]; const float* B = g_cfg.live[165]; const float* C = g_cfg.live[166];
+    switch (g) { case 0: return F(A[1]); case 2: return F(B[0]); case 3: return F(B[1]); case 4: return F(B[2]); case 5: return F(B[3]); case 6: return F(C[0]); }
+    return 1.0f;
 }
 
 template<int I> static void __fastcall hk_Eval(void* self, void* a2, float* out) {
     s_orig[I](self, a2, out);
     s_calls[I].fetch_add(1, std::memory_order_relaxed);
-    float f = Factor(I);
-    if (f != 1.0f && out) {
-        unsigned ax = g_cfg.live[163][1] > 0.5f ? 7u : s_cls[I].axes;
-        for (int k = 0; k < 3; k++) if (ax & (1u << k)) out[k] *= f;
+    if (!out || g_cfg.live[164][0] < 0.5f) return;
+    int g = s_cls[I].group; bool ropa = g >= 10;
+    if (ropa) { if (g_cfg.live[166][1] < 0.5f) return; g -= 10; }
+    bool parejo = g_cfg.live[166][2] > 0.5f;
+    if (g == 1) {
+        // biceps adelante (+Z) y triceps atras: el grosor de adelante hacia atras crece con los dos y el hueso se corre
+        // hacia el lado que mas crece (asi el otro lado queda donde estaba); el ancho crece con el promedio
+        float b = F(g_cfg.live[164][2]) - 1.0f, t = F(g_cfg.live[164][3]) - 1.0f;
+        if (b == 0.0f && t == 0.0f) return;
+        if (parejo) { float sp = 1.0f + 0.5f * (b + t); out[0] *= sp; out[1] *= sp; out[2] *= sp; return; }
+        out[2] *= 1.0f + b + t; out[1] *= 1.0f + 0.5f * (b + t);
+        if (!ropa) out[10] += kArmR * (b - t);
+        return;
     }
+    float f = GroupF(g);
+    if (f == 1.0f) return;
+    unsigned ax = parejo ? 7u : s_cls[I].axes;
+    for (int k = 0; k < 3; k++) if (ax & (1u << k)) out[k] *= f;
 }
 template<int... Is> struct HookList { static void* const v[sizeof...(Is)]; };
 template<int... Is> void* const HookList<Is...>::v[sizeof...(Is)] = { (void*)&hk_Eval<Is>... };
-static void* const* Hooks() { return HookList<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12>::v; }
-static_assert(kN == 13, "la lista de ganchos tiene que tener una entrada por musculo");
+static void* const* Hooks() { return HookList<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13>::v; }
+static_assert(kN == 14, "la lista de ganchos tiene que tener una entrada por musculo");
 
 static bool Readable(const void* p, size_t n) {
     MEMORY_BASIC_INFORMATION mi{};
@@ -106,9 +121,9 @@ void MuscleHookPresent() {
         unsigned c = s_calls[i].load(), d = c - s_prev[i]; s_prev[i] = c; total += d;
         snprintf(b, sizeof b, " %s %.0f/s", s_cls[i].name, d / (t - s_t)); line += b;
     }
-    const float* P = g_cfg.live[162];
-    if (total) Log("musculatura (30 s, %s: brazos %.2f pecho %.2f piernas %.2f, ropa %s, ejes %s):%s", P[0] > 0.5f ? "prendida" : "apagada",
-                   P[1], P[2], P[3], g_cfg.live[163][0] > 0.5f ? "si" : "no", g_cfg.live[163][1] > 0.5f ? "parejo" : "del juego", line.c_str());
+    const float* A = g_cfg.live[164]; const float* B = g_cfg.live[165]; const float* C = g_cfg.live[166];
+    if (total) Log("musculatura (30 s, %s: hombros %.2f biceps %.2f triceps %.2f antebrazos %.2f pecho %.2f espalda %.2f muslos %.2f pantorrillas %.2f, ropa %s, %s):%s",
+                   A[0] > 0.5f ? "prendida" : "apagada", A[1], A[2], A[3], B[0], B[1], B[2], B[3], C[0], C[1] > 0.5f ? "si" : "no", C[2] > 0.5f ? "parejo" : "hacia afuera", line.c_str());
     s_t = t;
 }
 
