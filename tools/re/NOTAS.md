@@ -83,3 +83,17 @@ su borde contra el brazo; por eso los musculos de superficie se corren (traslaci
 Previsualizacion sin el juego: `tools/fox/sim` (sim.py / compare.py / variant.py / exp.py) deforma los FMDL del cuerpo con
 la tabla de musculo.cpp y los reposos del log y dibuja vistas con `rast.c` (compilar: `clang -O2 -o tools/fox/sim/rast
 tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> salida.png hombro hombros=1.5`.
+
+## Que jugador es cada esqueleto (personajes.cpp, 24/10)
+
+| Que | Donde |
+|---|---|
+| Crear un personaje (lado del juego): `draw::load::HumanList` vtable 0x142b98c00 (COL 0x142e083e8) [14] | 0x141ecd100 (this, HumanData* e) |
+| HumanData | + 8 clave del jugador (u64; 32 bits altos = id con banderas), + 0x54 tipo, + 0xa8 CharacterImpl* (al volver) |
+| Id de la cara real | (clave >> 32) & 0x800bffff, formateado "%d" en 0x141ecc5c0 (arbitros "referee%03d"); "/Assets/pes16/model/character/face/" + "real/" + id + "/face.fpk" (0x141a08e20) |
+| CharacterImpl (cliente de la escena, 0x50 bytes, 0x1419e0c30) | + 8 handle del nodo; 0x1419e0ff0 arma el comando 0xb (tipo en +4 = 0x50b, handle +8, clave del asset +0x10, config serializada +0x18) |
+| Comando 0xb (0x1419c9700) | CharCfg_Leer 0x141a0a490 -> SceneCharNode_Create 0x141a23210 (handle -> nodo + 0x10) -> Init 0x141a23a60 |
+| SceneCharacterNode (vtable 0x142aab948, COL 0x142da4618, 0x1b0 bytes) | [0] 0x141a22f50 destructor, [3] 0x141a232b0 -> 0x141a26260 arma el rig: esqueleto principal + 0x88 (+ 0x90 / 0x98 / 0xa0 otros); altura + 0x114 |
+| Restriccion -> esqueleto | + 0x10 (lo pone `Skel_AddConstraint` 0x1419f5eb0); es el mismo puntero que nodo + 0x88 |
+| Base de datos de jugadores | registro de 0x17c bytes: clave en + 0x2c (u16 lugar, u32 id en + 0x30), nombre UTF-8 en + 0x38 (`PlayerRec_GetName` 0x1414c5d70; si + 0x144 tiene el bit 31 usa el nombre de admin + 0x98) |
+| config del personaje + 0x40 | NO es el jugador: es un tipo (0..3; 4 = sin cambio), lo pone 0x141a0aea0 desde 0x141ecc5c0 |

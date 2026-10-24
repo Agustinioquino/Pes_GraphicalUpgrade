@@ -1,4 +1,4 @@
-// PES21 FX - musculatura v5 (24/10). Ingenieria inversa de PES2021.exe 1.07.02 (sello 62787C6A).
+// PES21 FX - musculatura v6 (24/10: por jugador). Ingenieria inversa de PES2021.exe 1.07.02 (sello 62787C6A).
 // El esqueleto del motor tiene huesos de deformacion por musculo (dsk_deltoid, dsk_pectoralis, dsk_thighmain, ...) y a
 // cada uno lo mueve una "restriccion" de su clase (cobra::rd::DeltoidConstraint, PectConstraint, ...; la lista completa
 // hueso -> clase sale de la funcion que arma el rig, 0x141a6cd80). Cada cuadro, CharacterConstraint::Update (vtable[3],
@@ -25,6 +25,8 @@
 //   169: x gluteos | y cuadriceps | z isquiotibiales | w aductores
 //   170: x cuello | y pecho alto | z codos y rodillas acompanan
 //   171: x rodillas | y cintura | z caderas | w ancho de hombros
+// v6: por jugador. personajes.cpp sabe que jugador es cada esqueleto (restriccion + 0x10); un jugador con valores propios
+// (PES21FX\musculatura_jugadores.ini, tarjeta "Musculatura por jugador") usa su juego de factores, el resto los del menu.
 #include "core.h"
 #include <atomic>
 #include <cstring>
@@ -33,6 +35,11 @@
 #include <string>
 #include <mutex>
 #include <cmath>
+#include <cstdlib>
+#include <fstream>
+#include <map>
+#include <vector>
+#include <imgui.h>
 
 namespace fx {
 
@@ -111,56 +118,154 @@ static void Push(Fac& f, float x, float y, float z, float metros, float e) {
     float n = sqrtf(x * x + y * y + z * z); if (n < 1e-6f || e == 0.0f) return;
     float k = metros * e / n; f.t[0] += x * k; f.t[1] += y * k; f.t[2] += z * k;
 }
-static void UpdateFactors() {
-    const float* A = g_cfg.live[164]; const float* B = g_cfg.live[165]; const float* C = g_cfg.live[166];
-    const float* D = g_cfg.live[167]; const float* E = g_cfg.live[168]; const float* H = g_cfg.live[169];
-    const float* N = g_cfg.live[170]; const float* Z = g_cfg.live[171];
-    Fac f[M_COUNT] = {};
-    s_on = A[0] > 0.5f;
-    if (s_on) {
-        const float G = Gv(D[0]);
-        auto m = [G](float g) { return std::clamp(g * G, 0.4f, 2.5f) - 1.0f; };
-        const bool ropa = C[1] > 0.5f, trans = N[2] > 0.5f;
-        const float esp = Gv(B[2]), mus = Gv(B[3]);
-        const float bic = m(Gv(A[2])), tri = m(Gv(A[3])), arm = 0.5f * (bic + tri), armB = kArmR * 0.5f * (bic - tri);
-        const float fore = m(Gv(B[0]));
-        const float quad = m(mus * Gv(H[1])), ham = m(mus * Gv(H[2])), thigh = 0.5f * (quad + ham), thighB = kThighR * 0.5f * (quad - ham);
-        const float calf = m(Gv(C[0])), trap = m(esp * Gv(D[1])), neck = m(Gv(N[0]));
-        const float pec = m(Gv(B[1])), clav = m(Gv(B[1]) * Gv(N[1])), dor = m(esp * Gv(D[3])), omo = m(esp * Gv(D[2])), baja = m(esp * Gv(E[0]));
-        const float rod = Gv(Z[0]) - 1.0f, cint = Gv(Z[1]) - 1.0f, cad = Gv(Z[2]) - 1.0f, anch = Gv(Z[3]) - 1.0f;
-        f[M_DELT].e = m(Gv(A[1]));                         Push(f[M_DELT], 1.0f, 0.12f, 0.0f, 0.030f, anch);
-        const float delt = f[M_DELT].e;   // el trapecio, el pecho alto y el omoplato acompanan un poco al hombro (sin escalon)
-        Push(f[M_TRAP], 0.6f, 0.8f, 0.0f, 0.012f, delt); Push(f[M_CLAV], 0.7f, 0.5f, 0.3f, 0.010f, delt); Push(f[M_SCAP], 0.5f, 0.3f, -0.6f, 0.008f, delt);
-        f[M_ARM].e = arm;                                  f[M_ARM].t[2] = armB;
-        f[M_FORE].e = fore;
-        f[M_ELBOW].e = trans ? 0.4f * 0.5f * (arm + fore) : 0.0f;
-        f[M_WRIST].e = trans ? 0.3f * fore : 0.0f;
-        // la ropa solo crece (si se achicara con el musculo, lo que hay debajo y no se achica la atravesaria)
-        if (ropa && arm > 0.0f) { f[M_SLEEVE].e = 1.1f * arm; f[M_SLEEVE].t[2] = 1.1f * armB; }
-        Push(f[M_PECT], 0.25f, 0.10f, 1.0f, 0.035f, pec);
-        Push(f[M_CLAV], 0.10f, 0.30f, 1.0f, 0.025f, clav);  Push(f[M_CLAV], 1.0f, 0.0f, 0.0f, 0.012f, anch);
-        Push(f[M_UNDERARM], 0.20f, 0.0f, 1.0f, 0.020f, 0.6f * pec);
-        Push(f[M_RIB], 1.0f, 0.0f, 0.10f, 0.025f, 0.6f * dor + 0.3f * cint);
-        Push(f[M_LAT], 1.0f, -0.10f, -0.40f, 0.035f, dor);
-        Push(f[M_SCAP], 0.20f, 0.10f, -1.0f, 0.030f, omo);
-        Push(f[M_TRAP], 0.25f, 1.0f, -0.35f, 0.030f, trap); Push(f[M_TRAP], 1.0f, 0.0f, 0.0f, 0.012f, anch);
-        Push(f[M_COLLAR], 0.30f, 1.0f, 0.0f, 0.015f, 0.5f * neck + 0.3f * trap);
-        Push(f[M_BACK], 0.0f, 0.0f, -1.0f, 0.025f, baja);
-        Push(f[M_LUMB], 0.40f, 0.0f, -1.0f, 0.025f, baja); Push(f[M_LUMB], 1.0f, 0.0f, 0.0f, 0.020f, cint);
-        Push(f[M_ABS], 0.10f, 0.0f, 1.0f, 0.020f, m(Gv(E[1])));
-        Push(f[M_OBL], 1.0f, 0.0f, 0.15f, 0.030f, m(Gv(E[2]))); Push(f[M_OBL], 1.0f, 0.0f, 0.10f, 0.030f, cint);
-        Push(f[M_BELLY], 0.0f, -0.10f, 1.0f, 0.050f, Gv(E[3]) - 1.0f);   // la panza no es musculo: no la mueve "General"
-        Push(f[M_GLUTE], 0.25f, -0.25f, -1.0f, 0.030f, m(Gv(H[0]))); Push(f[M_GLUTE], 1.0f, 0.0f, 0.0f, 0.025f, cad);
-        f[M_THIGH].e = thigh;                              f[M_THIGH].t[2] = thighB;
-        f[M_ADD].e = m(mus * Gv(H[3]));                    Push(f[M_ADD], -1.0f, 0.0f, 0.10f, 0.020f, f[M_ADD].e);
-        f[M_CALF].e = calf;                                Push(f[M_CALF], 0.0f, 0.0f, -1.0f, 0.015f, calf);
-        f[M_KNEE].e = rod + (trans ? 0.3f * 0.5f * (thigh + calf) : 0.0f);
-        // el short es mas ancho que el muslo: con 0.7 de lo que engorda el muslo ya no lo atraviesa (con 1.1 quedaba acampanado)
-        if (ropa && thigh > 0.0f) { f[M_HEM].e = 0.7f * thigh; f[M_HEM].t[2] = 0.8f * thighB; f[M_PANTS].e = 0.5f * thigh; }
-        if (ropa && cad > 0.0f) Push(f[M_PANTS], 1.0f, 0.0f, 0.0f, 0.020f, cad);
-        f[M_NECK].e = neck;
+// P = los 8 float4 de 164..171 (los del menu, o los de un jugador); on / ropa / trans = interruptores de todos
+static void ComputeFactors(const float (*P)[4], bool on, bool ropa, bool trans, Fac* f) {
+    for (int i = 0; i < M_COUNT; i++) f[i] = Fac{};
+    if (!on) return;
+    const float* A = P[0]; const float* B = P[1]; const float* C = P[2]; const float* D = P[3];
+    const float* E = P[4]; const float* H = P[5]; const float* N = P[6]; const float* Z = P[7];
+    const float G = Gv(D[0]);
+    auto m = [G](float g) { return std::clamp(g * G, 0.4f, 2.5f) - 1.0f; };
+    const float esp = Gv(B[2]), mus = Gv(B[3]);
+    const float bic = m(Gv(A[2])), tri = m(Gv(A[3])), arm = 0.5f * (bic + tri), armB = kArmR * 0.5f * (bic - tri);
+    const float fore = m(Gv(B[0]));
+    const float quad = m(mus * Gv(H[1])), ham = m(mus * Gv(H[2])), thigh = 0.5f * (quad + ham), thighB = kThighR * 0.5f * (quad - ham);
+    const float calf = m(Gv(C[0])), trap = m(esp * Gv(D[1])), neck = m(Gv(N[0]));
+    const float pec = m(Gv(B[1])), clav = m(Gv(B[1]) * Gv(N[1])), dor = m(esp * Gv(D[3])), omo = m(esp * Gv(D[2])), baja = m(esp * Gv(E[0]));
+    const float rod = Gv(Z[0]) - 1.0f, cint = Gv(Z[1]) - 1.0f, cad = Gv(Z[2]) - 1.0f, anch = Gv(Z[3]) - 1.0f;
+    f[M_DELT].e = m(Gv(A[1]));                         Push(f[M_DELT], 1.0f, 0.12f, 0.0f, 0.030f, anch);
+    const float delt = f[M_DELT].e;   // el trapecio, el pecho alto y el omoplato acompanan un poco al hombro (sin escalon)
+    Push(f[M_TRAP], 0.6f, 0.8f, 0.0f, 0.012f, delt); Push(f[M_CLAV], 0.7f, 0.5f, 0.3f, 0.010f, delt); Push(f[M_SCAP], 0.5f, 0.3f, -0.6f, 0.008f, delt);
+    f[M_ARM].e = arm;                                  f[M_ARM].t[2] = armB;
+    f[M_FORE].e = fore;
+    f[M_ELBOW].e = trans ? 0.4f * 0.5f * (arm + fore) : 0.0f;
+    f[M_WRIST].e = trans ? 0.3f * fore : 0.0f;
+    // la ropa solo crece (si se achicara con el musculo, lo que hay debajo y no se achica la atravesaria)
+    if (ropa && arm > 0.0f) { f[M_SLEEVE].e = 1.1f * arm; f[M_SLEEVE].t[2] = 1.1f * armB; }
+    Push(f[M_PECT], 0.25f, 0.10f, 1.0f, 0.035f, pec);
+    Push(f[M_CLAV], 0.10f, 0.30f, 1.0f, 0.025f, clav);  Push(f[M_CLAV], 1.0f, 0.0f, 0.0f, 0.012f, anch);
+    Push(f[M_UNDERARM], 0.20f, 0.0f, 1.0f, 0.020f, 0.6f * pec);
+    Push(f[M_RIB], 1.0f, 0.0f, 0.10f, 0.025f, 0.6f * dor + 0.3f * cint);
+    Push(f[M_LAT], 1.0f, -0.10f, -0.40f, 0.035f, dor);
+    Push(f[M_SCAP], 0.20f, 0.10f, -1.0f, 0.030f, omo);
+    Push(f[M_TRAP], 0.25f, 1.0f, -0.35f, 0.030f, trap); Push(f[M_TRAP], 1.0f, 0.0f, 0.0f, 0.012f, anch);
+    Push(f[M_COLLAR], 0.30f, 1.0f, 0.0f, 0.015f, 0.5f * neck + 0.3f * trap);
+    Push(f[M_BACK], 0.0f, 0.0f, -1.0f, 0.025f, baja);
+    Push(f[M_LUMB], 0.40f, 0.0f, -1.0f, 0.025f, baja); Push(f[M_LUMB], 1.0f, 0.0f, 0.0f, 0.020f, cint);
+    Push(f[M_ABS], 0.10f, 0.0f, 1.0f, 0.020f, m(Gv(E[1])));
+    Push(f[M_OBL], 1.0f, 0.0f, 0.15f, 0.030f, m(Gv(E[2]))); Push(f[M_OBL], 1.0f, 0.0f, 0.10f, 0.030f, cint);
+    Push(f[M_BELLY], 0.0f, -0.10f, 1.0f, 0.050f, Gv(E[3]) - 1.0f);   // la panza no es musculo: no la mueve "General"
+    Push(f[M_GLUTE], 0.25f, -0.25f, -1.0f, 0.030f, m(Gv(H[0]))); Push(f[M_GLUTE], 1.0f, 0.0f, 0.0f, 0.025f, cad);
+    f[M_THIGH].e = thigh;                              f[M_THIGH].t[2] = thighB;
+    f[M_ADD].e = m(mus * Gv(H[3]));                    Push(f[M_ADD], -1.0f, 0.0f, 0.10f, 0.020f, f[M_ADD].e);
+    f[M_CALF].e = calf;                                Push(f[M_CALF], 0.0f, 0.0f, -1.0f, 0.015f, calf);
+    f[M_KNEE].e = rod + (trans ? 0.3f * 0.5f * (thigh + calf) : 0.0f);
+    // el short es mas ancho que el muslo: con 0.7 de lo que engorda el muslo ya no lo atraviesa (con 1.1 quedaba acampanado)
+    if (ropa && thigh > 0.0f) { f[M_HEM].e = 0.7f * thigh; f[M_HEM].t[2] = 0.8f * thighB; f[M_PANTS].e = 0.5f * thigh; }
+    if (ropa && cad > 0.0f) Push(f[M_PANTS], 1.0f, 0.0f, 0.0f, 0.020f, cad);
+    f[M_NECK].e = neck;
+}
+
+// ---------------------------------------------------------------- por jugador (24/10)
+// Un perfil = los sliders de musculatura (164..171) de un jugador; el resto de los jugadores usa los del menu. Los
+// interruptores (x164 prendido, y166 la ropa acompana, z170 codos y rodillas) y la definicion (x172, shader) son de todos.
+// Cada esqueleto se busca por la restriccion (+ 0x10) en la tabla de personajes.cpp (handle -> id del jugador).
+// Archivo: PES21FX\musculatura_jugadores.ini ([id] + claves del menu; lo que falta = 1, como el juego).
+struct Profile { std::string name; float v[8][4]; };
+static std::map<uint32_t, Profile> s_prof;
+static bool s_profLoaded = false, s_profDirty = false; static double s_profDirtyT = 0;
+static std::string s_profStatus;
+static Fac s_slotFac[kCharSlots][M_COUNT];
+static std::atomic<unsigned char> s_slotUse[kCharSlots];
+static std::atomic<bool> s_anyOwn{false};
+static CharInfo s_slotInfo[kCharSlots]; static bool s_slotAlive[kCharSlots] = {}; static unsigned s_slotGen = 0;
+static int s_ownOnScreen = 0;
+static std::atomic<unsigned> s_skHit{0}, s_skMiss{0};
+// los sliders que van por jugador (los de las tarjetas de musculatura menos los interruptores)
+static const struct { int idx, comp; } kPlayerParams[] = {
+    {164, 1}, {164, 2}, {164, 3}, {165, 0}, {165, 1}, {165, 2}, {165, 3}, {166, 0}, {167, 0}, {167, 1}, {167, 2}, {167, 3},
+    {168, 0}, {168, 1}, {168, 2}, {168, 3}, {169, 0}, {169, 1}, {169, 2}, {169, 3}, {170, 0}, {170, 1}, {171, 0}, {171, 1}, {171, 2}, {171, 3},
+};
+static bool IsPlayerParam(int idx, int comp) { for (auto& k : kPlayerParams) if (k.idx == idx && k.comp == comp) return true; return false; }
+static std::wstring ProfPath() { return g_cfg.baseDir + L"musculatura_jugadores.ini"; }
+static void ProfFromGeneral(Profile& p) { for (int r = 0; r < 8; r++) for (int c = 0; c < 4; c++) p.v[r][c] = g_cfg.live[164 + r][c]; }
+static void ProfDirty() { s_profDirty = true; s_profDirtyT = Now(); }
+static std::string TrimS(const std::string& x) {
+    size_t a = x.find_first_not_of(" \t\r\n"), b = x.find_last_not_of(" \t\r\n");
+    return a == std::string::npos ? std::string() : x.substr(a, b - a + 1);
+}
+static void LoadProfiles() {
+    s_prof.clear(); s_profLoaded = true;
+    std::ifstream f(ProfPath(), std::ios::binary);
+    if (!f) return;
+    std::string l; Profile* cur = nullptr;
+    while (std::getline(f, l)) {
+        l = TrimS(l);
+        if (l.empty() || l[0] == ';') continue;
+        if (l[0] == '[') {
+            size_t e = l.find(']'); std::string id = TrimS(l.substr(1, e == std::string::npos ? std::string::npos : e - 1));
+            char* end = nullptr; unsigned long v = strtoul(id.c_str(), &end, 10);
+            cur = nullptr;
+            if (!id.empty() && end && *end == 0 && v) {
+                Profile p; for (auto& row : p.v) for (auto& x : row) x = 1.0f;
+                cur = &(s_prof[(uint32_t)v] = p);
+            }
+            continue;
+        }
+        if (!cur) continue;
+        size_t eq = l.find('='); if (eq == std::string::npos) continue;
+        std::string k = TrimS(l.substr(0, eq)), val = TrimS(l.substr(eq + 1));
+        if (k == "nombre") { cur->name = val; continue; }
+        const char* comps = "xyzw"; const char* pc = k.empty() ? nullptr : strchr(comps, tolower((unsigned char)k[0]));
+        if (!pc || k.size() < 2) continue;
+        int idx = atoi(k.c_str() + 1), comp = (int)(pc - comps);
+        if (idx >= 164 && idx <= 171 && IsPlayerParam(idx, comp)) cur->v[idx - 164][comp] = std::clamp((float)atof(val.c_str()), 0.3f, 3.0f);
     }
+    Log("musculatura por jugador: %d jugadores con valores propios en musculatura_jugadores.ini", (int)s_prof.size());
+}
+static bool SaveProfiles() {
+    std::ofstream f(ProfPath(), std::ios::binary | std::ios::trunc);
+    if (!f) { s_profStatus = "No se pudo escribir musculatura_jugadores.ini"; return false; }
+    f << "; PES21 FX - musculatura por jugador. Lo escribe el menu (Cuerpo > Musculatura por jugador).\r\n"
+         "; [id] = id del jugador en el juego (en los que tienen cara real es el de la carpeta face\\real\\<id>).\r\n"
+         "; Las claves son las de las tarjetas de musculatura (y164 = hombros, z164 = biceps, ...): 1 = como el juego; lo que\r\n"
+         "; falta tambien vale 1. Los interruptores (x164, y166, z170) y la definicion (x172) son los de PES21FX.ini, de todos.\r\n";
+    for (auto& kv : s_prof) {
+        f << "\r\n[" << kv.first << "]\r\n";
+        if (!kv.second.name.empty()) f << "nombre = " << kv.second.name << "\r\n";
+        for (auto& k : kPlayerParams) {
+            char b[48]; snprintf(b, sizeof b, "%c%d = %g\r\n", "xyzw"[k.comp], k.idx, kv.second.v[k.idx - 164][k.comp]);
+            f << b;
+        }
+    }
+    s_profStatus = "Guardado en musculatura_jugadores.ini (" + std::to_string(s_prof.size()) + " jugadores)";
+    return true;
+}
+
+static void UpdateFactors() {
+    const float (*L)[4] = &g_cfg.live[164];
+    const bool on = L[0][0] > 0.5f, ropa = g_cfg.live[166][1] > 0.5f, trans = g_cfg.live[170][2] > 0.5f;
+    Fac f[M_COUNT];
+    ComputeFactors(L, on, ropa, trans, f);
+    s_on = on;
     for (int i = 0; i < M_COUNT; i++) s_fac[i] = f[i];
+    // por jugador: un juego de factores por cada personaje en pantalla que tenga valores propios
+    if (!s_profLoaded) LoadProfiles();
+    unsigned g = CharTableGen();
+    if (g != s_slotGen) { s_slotGen = g; CharSnapshot(s_slotInfo, s_slotAlive); }
+    bool any = false; int own = 0;
+    for (int i = 0; i < kCharSlots; i++) {
+        const Profile* p = nullptr;
+        if (on && s_slotAlive[i] && s_slotInfo[i].known && s_slotInfo[i].id) { auto it = s_prof.find(s_slotInfo[i].id); if (it != s_prof.end()) p = &it->second; }
+        if (!p) { s_slotUse[i].store(0, std::memory_order_relaxed); continue; }
+        Fac fp[M_COUNT];
+        ComputeFactors(p->v, on, ropa, trans, fp);
+        for (int k = 0; k < M_COUNT; k++) s_slotFac[i][k] = fp[k];
+        s_slotUse[i].store(1, std::memory_order_release);
+        any = true; own++;
+    }
+    s_anyOwn = any; s_ownOnScreen = own;
+    if (s_profDirty && Now() - s_profDirtyT > 0.6) { s_profDirty = false; SaveProfiles(); }
 }
 
 static bool SafeCopy(void* dst, const void* src, size_t n) {
@@ -276,9 +381,18 @@ static void Apply(int i, void* self, const float* a2, float* out, const Fac fc, 
 
 template<int I> static void __fastcall hk_Eval(void* self, void* a2, float* out) {
     s_orig[I](self, a2, out);
-    s_calls[I].fetch_add(1, std::memory_order_relaxed);
+    const unsigned nc = s_calls[I].fetch_add(1, std::memory_order_relaxed);
     if (!self || !out) return;
-    const Fac fc = s_fac[s_cls[I].mus];
+    const int mus = s_cls[I].mus;
+    Fac fc = s_fac[mus];
+    // por jugador: el esqueleto de la restriccion (+ 0x10) -> personaje -> sus factores (si tiene valores propios)
+    const bool own = s_anyOwn.load(std::memory_order_relaxed);
+    if (own || (nc & 255) == 0) {
+        void* skel = *(void* const volatile*)((const char*)self + 0x10);
+        int slot = CharSlotForSkel(skel);
+        if ((nc & 255) == 0) (slot >= 0 ? s_skHit : s_skMiss).fetch_add(1, std::memory_order_relaxed);
+        if (own && slot >= 0 && s_slotUse[slot].load(std::memory_order_acquire)) fc = s_slotFac[slot][mus];
+    }
     bool diag = s_diagCnt[I].load(std::memory_order_relaxed) < (s_cls[I].side == 0 ? 1 : 2);
     if (!diag && (!s_on || Idle(fc))) return;
     Apply(I, self, (const float*)a2, out, fc, diag);
@@ -313,7 +427,7 @@ static void Install() {
         VirtualProtect(&vt[4], sizeof(void*), old, &old);
         s_ok++;
     }
-    Log("musculatura v5: %d de %d huesos de musculo enganchados%s%s", s_ok, kN, bad.empty() ? "" : "; no coinciden:", bad.c_str());
+    Log("musculatura v6: %d de %d huesos de musculo enganchados%s%s", s_ok, kN, bad.empty() ? "" : "; no coinciden:", bad.c_str());
 }
 
 void MuscleHookPresent() {
@@ -352,7 +466,149 @@ void MuscleHookPresent() {
             s_on ? "prendida" : "apagada", active, kN, total / (t - s_t), D[0], A[1], Z[3], A[2], A[3], B[0], B[1], N[1], B[2], D[1], D[2], D[3], E[0], N[0], E[1], E[2], Z[1], E[3],
             H[0], Z[2], B[3], H[1], H[2], H[3], Z[0], C[0], C[1] > 0.5f ? "si" : "no", N[2] > 0.5f ? "si" : "no",
             quiet.empty() ? "" : " | sin llamadas:", quiet.c_str(), prob.empty() ? "" : " | problemas:", prob.c_str());
+    {
+        unsigned hit = s_skHit.exchange(0), miss = s_skMiss.exchange(0);
+        if (hit || miss || !s_prof.empty())
+            Log("musculatura por jugador: %d guardados, %d personajes en pantalla con valores propios; esqueletos de personaje conocido: %u de %u muestras",
+                (int)s_prof.size(), s_ownOnScreen, hit, hit + miss);
+    }
     s_t = t;
+}
+
+// ---------------------------------------------------------------- tarjeta "Musculatura por jugador" (menu, 24/10)
+// Se dibuja dentro de DrawGroup (g_cfgMutex tomado; el hilo es el de Present, el mismo que UpdateFactors).
+static std::string U8(const std::string& x) {   // el ini puede venir en Latin-1; los nombres del juego ya son UTF-8
+    bool ok = true;
+    for (size_t i = 0; i < x.size() && ok;) {
+        unsigned char c = (unsigned char)x[i];
+        int n = c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : (c >> 3) == 30 ? 4 : 0;
+        if (!n || i + n > x.size()) { ok = false; break; }
+        for (int k = 1; k < n; k++) if (((unsigned char)x[i + k] >> 6) != 2) ok = false;
+        i += n;
+    }
+    if (ok) return x;
+    std::string o;
+    for (unsigned char c : x) { if (c < 0x80) o += (char)c; else { o += (char)(0xC0 | (c >> 6)); o += (char)(0x80 | (c & 0x3F)); } }
+    return o;
+}
+static uint32_t s_selId = 0; static bool s_selManual = false; static unsigned s_selSeq = 0;
+void MuscleDrawPlayerPanel() {
+    if (!s_profLoaded) LoadProfiles();
+    const ImVec4 warn(0.95f, 0.55f, 0.35f, 1), good(0.45f, 0.85f, 0.55f, 1);
+    if (!CharTrackOk()) {
+        ImGui::TextColored(warn, "No se pudo seguir a los jugadores del motor (exe distinto o parches apagados: ver 'personajes' en PES21FX.log).");
+        return;
+    }
+    if (g_cfg.live[164][0] < 0.5f) ImGui::TextColored(warn, "La musculatura esta apagada: prende \"Musculatura (prueba)\" para ver los cambios.");
+    // jugadores en pantalla: uno por id (el armado mas reciente); con nombre primero
+    struct Row { uint32_t id; std::string name; unsigned seq; int slot; };
+    std::vector<Row> rows;
+    bool anyNamed = false;
+    for (int i = 0; i < kCharSlots; i++) {
+        if (!s_slotAlive[i] || !s_slotInfo[i].known || !s_slotInfo[i].id) continue;
+        const CharInfo& c = s_slotInfo[i];
+        bool found = false;
+        for (auto& r : rows) if (r.id == c.id) { found = true; if (c.seq > r.seq) { r.seq = c.seq; r.slot = i; } if (r.name.empty() && c.name[0]) r.name = c.name; }
+        if (!found) rows.push_back({ c.id, c.name, c.seq, i });
+        anyNamed |= c.name[0] != 0;
+    }
+    if (anyNamed) rows.erase(std::remove_if(rows.begin(), rows.end(), [](const Row& r) { return r.name.empty(); }), rows.end());
+    std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.name != b.name ? a.name < b.name : a.id < b.id; });
+    // el seleccionado sigue al ultimo jugador armado (p. ej. el que se elige en Editar), salvo que se haya elegido a mano
+    const Row* latest = nullptr;
+    for (auto& r : rows) if (!latest || r.seq > latest->seq) latest = &r;
+    if (latest && latest->seq != s_selSeq) { s_selSeq = latest->seq; if (!s_selManual) s_selId = latest->id; }
+    const Row* sel = nullptr;
+    for (auto& r : rows) if (r.id == s_selId) sel = &r;
+    if (!sel) { s_selManual = false; sel = latest; s_selId = sel ? sel->id : 0; }
+    auto label = [](const Row& r) {
+        char b[160]; snprintf(b, sizeof b, "%s  (id %u)%s", r.name.empty() ? "(sin nombre)" : r.name.c_str(), r.id, s_prof.count(r.id) ? "  - valores propios" : "");
+        return std::string(b);
+    };
+    if (!sel) {
+        ImGui::TextWrapped("No hay jugadores en pantalla. Entra a Editar > Jugadores y elegi uno (el que se ve aparece aca solo), o abri este menu durante un partido o una repeticion para elegir cualquiera de la cancha.");
+    } else {
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 90);
+        if (ImGui::BeginCombo("Jugador", U8(label(*sel)).c_str())) {
+            for (auto& r : rows) {
+                bool is = r.id == sel->id;
+                if (ImGui::Selectable(U8(label(r)).c_str(), is)) { s_selId = r.id; s_selManual = true; }
+                if (is) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Los jugadores que el juego tiene armados ahora. Se elige solo el ultimo que aparecio (en Editar, el que estas editando).");
+        auto it = s_prof.find(sel->id);
+        if (it == s_prof.end()) {
+            ImGui::TextWrapped("Usa los valores generales (los de las tarjetas de musculatura).");
+            if (ImGui::Button("Darle valores propios")) {
+                Profile p; ProfFromGeneral(p); p.name = sel->name; s_prof[sel->id] = p; ProfDirty();
+                s_profStatus = "Valores propios para " + (sel->name.empty() ? std::to_string(sel->id) : sel->name) + ": arrancan iguales a los generales";
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copia los valores generales a este jugador; despues se cambian aca abajo sin tocar al resto.");
+        } else {
+            Profile& p = it->second;
+            if (!sel->name.empty() && p.name != sel->name) { p.name = sel->name; ProfDirty(); }
+            ImGui::TextColored(good, "Tiene valores propios: se ven al instante y se guardan solos.");
+            if (ImGui::Button("Copiar los generales")) { ProfFromGeneral(p); ProfDirty(); }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Le pone los valores de las tarjetas generales (sigue teniendo valores propios).");
+            ImGui::SameLine();
+            bool erase = ImGui::Button("Quitar sus valores");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Vuelve a usar los valores generales (borra los suyos del archivo).");
+            if (erase) { s_prof.erase(it); ProfDirty(); s_profStatus = "Quitados los valores propios de " + (sel->name.empty() ? std::to_string(sel->id) : sel->name); }
+            else {
+                const float w = ImGui::GetContentRegionAvail().x;
+                for (auto& g : g_cfg.groups) {
+                    if (!g.special.empty() || g.title.rfind("Musculatura", 0) != 0) continue;
+                    bool head = false;
+                    for (auto& sl : g.sliders) {
+                        if (!sl.ext.empty() || !sl.options.empty() || !IsPlayerParam(sl.idx, sl.comp)) continue;
+                        if (!head) {
+                            std::string t = g.title.rfind("Musculatura: ", 0) == 0 ? g.title.substr(13) : std::string("General");
+                            if (!t.empty()) t[0] = (char)toupper((unsigned char)t[0]);
+                            ImGui::SeparatorText(U8(t).c_str()); head = true;
+                        }
+                        float& val = p.v[sl.idx - 164][sl.comp];
+                        const float gen = g_cfg.live[sl.idx][sl.comp];
+                        ImGui::PushID(sl.idx * 4 + sl.comp);
+                        bool diff = fabsf(val - gen) > 1e-4f;
+                        if (diff) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.85f, 0.45f, 1));
+                        ImGui::TextUnformatted(U8(sl.label).c_str());
+                        if (diff) ImGui::PopStyleColor();
+                        if (!sl.help.empty()) {
+                            ImGui::SameLine(); ImGui::TextDisabled("(?)");
+                            if (ImGui::IsItemHovered()) { ImGui::BeginTooltip(); ImGui::PushTextWrapPos(380); ImGui::TextUnformatted(U8(sl.help).c_str()); ImGui::PopTextWrapPos(); ImGui::EndTooltip(); }
+                        }
+                        ImGui::SetNextItemWidth(w - 70);
+                        if (ImGui::SliderFloat("##p", &val, sl.lo, sl.hi, sl.fmt.c_str())) ProfDirty();
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("<")) { val = gen; ProfDirty(); }
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Volver al valor general (%.2f)", gen);
+                        ImGui::PopID();
+                    }
+                }
+            }
+        }
+    }
+    if (!s_prof.empty()) {
+        ImGui::Spacing();
+        char hb[96]; snprintf(hb, sizeof hb, "Jugadores con valores propios (%d)###musjug", (int)s_prof.size());
+        if (ImGui::TreeNode(hb)) {
+            uint32_t del = 0;
+            for (auto& kv : s_prof) {
+                ImGui::PushID((int)kv.first);
+                ImGui::Text("%s  (id %u)", kv.second.name.empty() ? "(sin nombre)" : U8(kv.second.name).c_str(), kv.first);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Quitar")) del = kv.first;
+                ImGui::PopID();
+            }
+            if (del) { s_prof.erase(del); ProfDirty(); }
+            ImGui::TreePop();
+        }
+    }
+    if (ImGui::SmallButton("Releer el archivo")) { LoadProfiles(); s_profStatus = "musculatura_jugadores.ini releido (" + std::to_string(s_prof.size()) + " jugadores)"; }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Vuelve a leer PES21FX\\musculatura_jugadores.ini (si lo editaste a mano).");
+    if (!s_profStatus.empty()) { ImGui::SameLine(); ImGui::TextDisabled("%s", U8(s_profStatus).c_str()); }
 }
 
 } // namespace fx

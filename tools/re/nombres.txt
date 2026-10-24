@@ -25,3 +25,16 @@
 -0x1419f6510=Skel_GetBone
 -0x1419f7fe0=Bone_UpdateCache
 -0x1419f7b20=Skel_ReposoLocal
+-0x1414c5d70=PlayerRec_GetName
+-0x141ecd100=HumanList_CrearPersonaje
+-0x141ecc5c0=Pes_ArmarConfigPersonaje
+-0x141ecd920=Human_Apariencia
+-0x1419e1240=Scene_CrearPersonaje
+-0x1419e0ff0=CharImpl_ComandoCrear
+-0x1419c9700=SceneCmd_Despachar
+-0x141a23a60=SceneCharNode_Init
+-0x141a26260=SceneCharNode_ArmarRig
+-0x141a22f50=SceneCharNode_Destruir
+-0x1419f5eb0=Skel_AgregarRestriccion
+-0x141a0a490=CharCfg_Leer
+-0x141a0aea0=CharCfg_SetTipo40

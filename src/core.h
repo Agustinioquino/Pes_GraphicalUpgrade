@@ -54,6 +54,7 @@ struct MenuGroup {
     int tIdx = -1, tComp = 0;            // parametro del interruptor (w46, etc.); -1 = sin interruptor
     std::vector<MenuSlider> sliders;
     std::vector<MenuButton> buttons;
+    std::string special;                 // (24/10) tarjeta dibujada por el codigo: "musculatura_jugador"
 };
 
 // ---------------------------------------------------------------- reglas por shader (lo que eran [ShaderOverride])
@@ -259,6 +260,22 @@ bool CamCutSince(int& seen);                      // true una vez por cada corte
 int CamLastCutFrame();
 bool EngineCamera(float pos[3], float tgt[3], int* frame);   // ultima camara aplicada por el motor (sin atraso)
 void MuscleHookPresent();                         // (23/10) musculatura (musculo.cpp): huesos de musculo del juego x 164..171 (v5: 32 clases)
+void MuscleDrawPlayerPanel();                     // (24/10) tarjeta "Musculatura por jugador" (ImGui; la llama DrawGroup con g_cfgMutex tomado)
+// (24/10) personajes del motor (personajes.cpp): que jugador es cada esqueleto (HumanList -> handle -> SceneCharacterNode)
+constexpr int kCharSlots = 64;
+struct CharInfo {
+    bool known = false;                           // se sabe que jugador es (paso por HumanList)
+    uint32_t id = 0, rawId = 0;                   // id del jugador (& 0x800bffff, el de face\real\<id>) y como viene en la clave
+    uint64_t key = 0; int type = -1;              // clave de la base de datos del juego y tipo de personaje
+    char name[64] = {};                           // nombre (UTF-8) o vacio
+    void* node = nullptr; void* skel = nullptr;   // SceneCharacterNode y su esqueleto principal (+0x88 = restriccion + 0x10)
+    uint64_t handle = 0; unsigned seq = 0; double t = 0;   // handle del nodo, orden de armado, hora
+};
+void CharTrackInstall(); void CharTrackPresent(); bool CharTrackOk();
+int CharSlotForSkel(const void* skel);            // lugar del personaje de ese esqueleto (-1 = no se sabe); sin candado (Eval)
+bool CharGet(int slot, CharInfo& out);
+int CharSnapshot(CharInfo out[kCharSlots], bool alive[kCharSlots]);   // copia de la tabla (devuelve cuantos vivos)
+unsigned CharTableGen();                          // sube cada vez que cambia la tabla
 bool CamCutPeek(int seen);                        // hay un corte nuevo para este consumidor (sin consumirlo)
 void ZeroBuffer(ID3D11DeviceContext* c, ID3D11Buffer* b);   // pone en cero un buffer DEFAULT (cbuffer "anterior" -> sin historia)
 extern std::atomic<int> g_cutUse[3];              // cortes usados: 0 SSGI, 1 GTAO, 2 medidor (exposicion)

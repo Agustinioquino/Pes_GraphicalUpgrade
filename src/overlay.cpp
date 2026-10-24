@@ -209,6 +209,7 @@ static void DrawGroup(MenuGroup& g, int gid) {
         }
         ImGui::EndDisabled();
     }
+    if (g.special == "musculatura_jugador") { ImGui::Spacing(); MuscleDrawPlayerPanel(); }
     if (!g.buttons.empty()) {
         ImGui::Spacing();
         for (auto& b : g.buttons) {

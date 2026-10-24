@@ -153,6 +153,7 @@ static bool LoadConfigLocked() {
             if (kl == "title") grp->title = v;
             else if (kl == "desc") grp->desc = v;
             else if (kl == "section") grp->section = v;
+            else if (kl == "special") grp->special = Lower(v);
             else if (kl == "toggle") { int i2, c2; if (ParseParamName(v, i2, c2)) { grp->tIdx = i2; grp->tComp = c2; } }
             else if (kl == "button") {
                 std::vector<std::string> parts; std::string cur2;
