@@ -197,6 +197,7 @@ static const ShaderEntry* FindShader(void* p) {
 // ---------------------------------------------------------------- recursos con nombre (copias de cbuffers, referencias, texturas)
 struct NamedRes { ID3D11Buffer* buf = nullptr; ID3D11ShaderResourceView* srv = nullptr; bool failed = false; int copied = -1; bool cleared = false; };
 static std::atomic<int> s_presentNo{0};
+int PresentNo() { return s_presentNo.load(); }   // (23/10) numero de cuadro (sube en cada Present): camhook.cpp, medidor
 static std::map<std::string, NamedRes> s_named;
 static std::mutex s_namedMutex;
 
@@ -1037,6 +1038,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     UpdateTimeParams();
     SSGIPresent(s_presentNo.load());
     LightMeterPresent();
+    CamHookPresent();   // (23/10) camara del motor: ganchos (primer Present), cortes de camara -> 160, log
     UploadParams();
     WatchShaderFolder();
     PollMatch();

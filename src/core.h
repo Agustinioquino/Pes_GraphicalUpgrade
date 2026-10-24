@@ -252,6 +252,15 @@ void GrassDenseReset();
 void ExeDumpPresent();
 void ExePatchInstall();
 void ExePatchPresent();   // (20/10) LOD de modelos (x142) cada segundo
+// (23/10) camara del motor (camhook.cpp): cortes de camara del juego (CameraSystem 0x14198d3b0) y reinicios del TAA del juego
+int PresentNo();                                  // numero de cuadro (sube en cada Present)
+void CamHookPresent();                            // ganchos (primer Present), 160 = cuadros desde el corte / cortes / TAA / ok
+bool CamCutSince(int& seen);                      // true una vez por cada corte nuevo (cada consumidor guarda su 'seen'); x161 = 1
+int CamLastCutFrame();
+bool EngineCamera(float pos[3], float tgt[3], int* frame);   // ultima camara aplicada por el motor (sin atraso)
+bool CamCutPeek(int seen);                        // hay un corte nuevo para este consumidor (sin consumirlo)
+void ZeroBuffer(ID3D11DeviceContext* c, ID3D11Buffer* b);   // pone en cero un buffer DEFAULT (cbuffer "anterior" -> sin historia)
+extern std::atomic<int> g_cutUse[3];              // cortes usados: 0 SSGI, 1 GTAO, 2 medidor (exposicion)
 bool AsyncShot(ID3D11Texture2D* frame, const std::wstring& path); void AsyncShotPresent();   // (20/10) capturas JPEG sin frenar el juego (asyncshot.cpp)   // (20/10) volcado de las secciones del exe desempaquetado en memoria (exedump.cpp)
 // (20/10) medidor de luz y luz ambiente calibrada (lightmeter.cpp): 125 = salida (x ganancia ambiente), 126 = controles
 extern std::atomic<bool> g_meterHook;

@@ -33,6 +33,8 @@ static float s_gain = 1.0f, s_target = 0.0f, s_ratio[3] = {}, s_tintSh = 0.0f, s
 static double s_lastUpd = 0;
 // (20/10) exposicion estable: brillo del pasto al sol (despues de la exposicion del motor) promediado corto y largo
 static float s_eShort = 0.0f, s_eLong = 0.0f, s_expC = 1.0f; static int s_expMatch = -1; static double s_lastExp = 0;
+// (23/10) cortes de camara del motor (camhook.cpp): la medida tomada despues de un corte es la primera de la toma nueva
+static bool s_stageCut[kRing] = {}; static int s_meterCutSeen = 0; static bool s_expSnap = false;
 
 static bool MeterOn() { return g_cfg.live[126][0] > 0.5f; }   // y126 = 0: solo mide (sin calibrar)
 std::atomic<bool> g_meterHook{false};
@@ -88,7 +90,8 @@ static ID3D11ShaderResourceView* ColorSRV(ID3D11Resource* res) {
 void LightMeterAfterComposition(ID3D11DeviceContext* c) {
     if (!MeterOn() || !g_dev.dev) return;
     int f = s_frame.load();
-    int last = s_lastRun.load(); if (f - last < 4) return;
+    int last = s_lastRun.load();
+    if (f == last || (f - last < 4 && !CamCutPeek(s_meterCutSeen))) return;   // (23/10) tras un corte se mide en seguida
     if (!s_lastRun.compare_exchange_strong(last, f)) return;
     EnsureRes(); if (!s_cs || !s_uav || !s_cb) return;
     int w = s_ringW.load(); if (!s_stage[w]) return;
@@ -133,6 +136,7 @@ void LightMeterAfterComposition(ID3D11DeviceContext* c) {
         UINT nrt = 0; for (UINT i = 0; i < 8; i++) if (rtv[i]) nrt = i + 1;
         c->OMSetRenderTargets(nrt, rtv, dsv);
         c->CopyResource(s_stage[w], s_buf);
+        s_stageCut[w] = CamCutSince(s_meterCutSeen);
         s_stageFrame[w] = f;
         s_ringW = (w + 1) % kRing;
     }
@@ -186,6 +190,7 @@ void LightMeterPresent() {
             }
             g_dev.imm->Unmap(s_stage[best], 0);
             s_stageFrame[best] = -1;
+            if (s_stageCut[best]) { s_stageCut[best] = false; s_expSnap = true; g_cutUse[2]++; }
             for (int c = 0; c < 3; c++) s_ratio[c] = (r.n[c * 2] > 150 && r.n[c * 2 + 1] > 150 && r.lum[c * 2 + 1] > 1e-4f) ? r.lum[c * 2] / r.lum[c * 2 + 1] : 0.0f;
             auto tint = [&](int k) { return r.n[k] > 150 ? r.b[k] / (std::max)(r.r[k], 1e-4f) : 0.0f; };
             s_tintLit = tint(0); s_tintSh = tint(1);
@@ -227,7 +232,7 @@ void LightMeterPresent() {
       bool have = s_res.valid && s_res.n[0] > 300 && s_res.lum[0] > 1e-4f;
       if (have) {
           float e = s_res.lum[0];
-          if (s_eShort <= 0.0f) s_eShort = e; if (s_eLong <= 0.0f) s_eLong = e;
+          if (s_eShort <= 0.0f || s_expSnap) s_eShort = e; if (s_eLong <= 0.0f) s_eLong = e;   // (23/10) toma nueva: su propia medida
           float mem = std::clamp(E[2] > 1.0f ? E[2] : 40.0f, 5.0f, 300.0f);
           s_eShort += (e - s_eShort) * (float)(1.0 - exp(-dtE / 0.4));
           s_eLong  += (e - s_eLong)  * (float)(1.0 - exp(-dtE / mem));
@@ -236,7 +241,9 @@ void LightMeterPresent() {
       if (E[0] > 0.5f && s_eShort > 1e-4f && s_eLong > 1e-4f) cT = std::clamp(s_eLong / s_eShort, 0.6f, 1.15f);   // (20/10) baja mas de lo que sube: subir quemaba la cancha en algunas camaras
       cT = 1.0f + (cT - 1.0f) * std::clamp(E[1], 0.0f, 1.0f);
       if (!have && E[0] > 0.5f) cT = s_expC;   // sin medida: se mantiene
-      s_expC += (cT - s_expC) * (float)(1.0 - exp(-dtE / 0.5));
+      if (s_expSnap && have && E[0] > 0.5f) s_expC = cT;   // (23/10) corte de camara: la correccion salta a la toma nueva (antes ~1 s de bombeo)
+      else s_expC += (cT - s_expC) * (float)(1.0 - exp(-dtE / 0.5));
+      s_expSnap = false;
       o[0] = E[0] > 0.5f ? s_expC : 1.0f; o[1] = s_eShort; o[2] = s_eLong; }
     g_meterHook = true;
 }

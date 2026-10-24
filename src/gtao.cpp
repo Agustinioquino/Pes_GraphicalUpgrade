@@ -133,6 +133,7 @@ ID3D11ShaderResourceView* GTAOBeforeComposition(ID3D11DeviceContext* c, int fram
         if (!s_prev && bd.ByteWidth >= 480) { D3D11_BUFFER_DESC pd = bd; pd.Usage = D3D11_USAGE_DEFAULT; pd.CPUAccessFlags = 0; pd.MiscFlags = 0; pd.BindFlags = D3D11_BIND_CONSTANT_BUFFER; pd.StructureByteStride = 0; g_dev.dev->CreateBuffer(&pd, nullptr, &s_prev); s_prevOk = false; }
         if (s_prev) {
             if (!s_prevOk) { c->CopyResource(s_prev, scb); s_prevOk = true; }
+            { static int s_cutSeen = 0; if (CamCutSince(s_cutSeen)) { ZeroBuffer(c, s_prev); g_cutUse[1]++; } }   // (23/10) corte de camara del motor: sin historia
             ID3D11Buffer* o3 = nullptr; c->PSGetConstantBuffers(3, 1, &o3);
             int hn = s_hPing, ho = 1 - s_hPing; s_hPing = 1 - s_hPing;
             c->OMSetRenderTargets(1, &s_hRTV[hn], nullptr);

@@ -85,6 +85,9 @@ ID3D11ShaderResourceView* SSGIBeforeComposition(ID3D11DeviceContext* c, int fram
     if (!s_prev) { D3D11_BUFFER_DESC pd = bd; pd.Usage = D3D11_USAGE_DEFAULT; pd.CPUAccessFlags = 0; pd.MiscFlags = 0; pd.BindFlags = D3D11_BIND_CONSTANT_BUFFER; pd.StructureByteStride = 0; g_dev.dev->CreateBuffer(&pd, nullptr, &s_prev); s_prevOk = false; }
     if (!s_prev) { rel(); scb->Release(); if (sys) sys->Release(); return nullptr; }
     if (!s_prevOk) { c->CopyResource(s_prev, scb); s_prevOk = true; }
+    // (23/10) corte de camara del motor (camhook.cpp): en este cuadro no hay historia (el paso 2 ve q[21].z = 0 y arranca
+    // del promedio de los vecinos) en vez de reproyectar con la camara de la toma anterior
+    { static int s_cutSeen = 0; if (CamCutSince(s_cutSeen)) { ZeroBuffer(c, s_prev); g_cutUse[0]++; } }
     // guardar estado
     ID3D11RenderTargetView* oRT[8] = {}; ID3D11DepthStencilView* oDS = nullptr; c->OMGetRenderTargets(8, oRT, &oDS);
     UINT nvp = 8; D3D11_VIEWPORT ovp[8]; c->RSGetViewports(&nvp, ovp);
