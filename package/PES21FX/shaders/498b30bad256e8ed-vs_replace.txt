@@ -60,18 +60,25 @@ void main(
     // descarte exacto con la camara de este cuadro
     float4 ins = PESGrassInst[(uint)cb5[9].y + iid];
     pesExtOrg = ins.xy;
-    pesExtScale = max(ins.z, 1.0);
+    pesExtScale = max(floor(ins.z + 0.01), 1.0);
+    float pesLastK = saturate((ins.z - floor(ins.z + 0.01)) * 2.0);   // altura de la ultima tarjeta (parte fraccionaria de la cuenta)
+    bool pesIsLast = false;
     // (25/10 c) w = tope de tarjetas * 4 + giro: la celda lleva solo las tarjetas que cubren su tamano en pantalla (densidad
     // constante en pantalla, la cuenta el compute); las de mas se anulan aca, antes de cualquier cuenta cara
     int insW = (int)(ins.w + 0.5);
     int rot = insW & 3;
     int lim = insW >> 2;
-    if (lim > 0 && cb5[8].x > 0.5 && (int)(vid / (uint)(cb5[8].x + 0.5)) >= lim) {
-      o0 = float4(0.0, 0.0, -2.0, 1.0); o1 = 0; o2 = 0; o3 = 0; o4 = 0; o5 = 0; o6 = 0; o7 = 0; o8 = 0;
-      return;
+    if (lim > 0 && cb5[8].x > 0.5) {
+      int card = (int)(vid / (uint)(cb5[8].x + 0.5));
+      if (card >= lim) {
+        o0 = float4(0.0, 0.0, -2.0, 1.0); o1 = 0; o2 = 0; o3 = 0; o4 = 0; o5 = 0; o6 = 0; o7 = 0; o8 = 0;
+        return;
+      }
+      pesIsLast = card == lim - 1;
     }
     float cs = rot == 0 ? 1.0 : (rot == 2 ? -1.0 : 0.0), sn = rot == 1 ? 1.0 : (rot == 3 ? -1.0 : 0.0);
-    float2 lp = v0_in.xz * pesExtScale;
+    // (25/10 c) cb5[9].z = 1: la malla ya trae las raices repartidas en la celda y los desplazamientos de la hoja en metros (no se escalan)
+    float2 lp = (cb5[11].z > 0.5 && cb5[9].z > 0.5) ? v0_in.xz : v0_in.xz * pesExtScale;
     float2 rp = float2(cs * lp.x + sn * lp.y, -sn * lp.x + cs * lp.y);
     pesExtRoot = ins.xy + rp;
     float4 cv = float4(dot(float4(ins.x, 0, ins.y, 1), cb2[8]), dot(float4(ins.x, 0, ins.y, 1), cb2[9]), dot(float4(ins.x, 0, ins.y, 1), cb2[10]), dot(float4(ins.x, 0, ins.y, 1), cb2[11]));
@@ -89,6 +96,7 @@ void main(
       float d = length(ins.xy - cb2[20].xz);
       k = smoothstep(cb5[9].z, cb5[9].w, d) * (1.0 - smoothstep(cb5[10].x, cb5[10].y, d));
     }
+    if (pesIsLast) k *= pesLastK;
     v0.y = v0_in.y * max(pesExt.z, 0.1) * k;
     pesExtW = float3(pesExtRoot.x, v0.y, pesExtRoot.y);
     // descarte por pantalla: centro de la parcela con margen del tamano de la parcela
@@ -118,7 +126,10 @@ void main(
       ko = 1.0 - smoothstep(from, from + 6.0, length(wr - cb2[20].xz));
     }
     v0.y *= ko;
-    if (ko < 0.01) pesKill = true;
+    if (ko < 0.01) {   // (25/10 c) salida temprana: antes la parcela corria todo el VS (17 muestras) y se anulaba al final
+      o0 = float4(0.0, 0.0, -2.0, 1.0); o1 = 0; o2 = 0; o3 = 0; o4 = 0; o5 = 0; o6 = 0; o7 = 0; o8 = 0;
+      return;
+    }
   }
   // === PES21 parcelas lejanas del juego (18/10): mas alla de ~30 m el juego pone su variante minima en una grilla de
   // 3 m sin escalarla (un matorral de 0.5 m cada 3 m: el pasto "desaparece"). La DLL marca esos dibujos con w60 = 1 y

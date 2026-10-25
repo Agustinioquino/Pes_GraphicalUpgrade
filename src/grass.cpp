@@ -79,6 +79,10 @@ static void EnsureBuffers() {
 //   x123 on | y123 densidad (x las del juego) | z123 curvatura | w123 nivel minimo (0 = cerca y medio, 1 = solo cerca)
 struct DenseLevel { ID3D11Buffer* pos = nullptr; ID3D11Buffer* uv = nullptr; ID3D11Buffer* ib = nullptr; UINT cards = 0, vertsPerCard = 0, idxPerCard = 0; };
 static DenseLevel s_dense[2]; static std::atomic<bool> s_denseBuilt{false}; static float s_denseCurv = -1.0f;
+// (25/10 c) mallas para las parcelas del mod (celdas de 0.5 / 1 / 2 m): 2 tramos, raices repartidas en la celda entera y los
+// desplazamientos de la hoja (ancho, inclinacion, curva) en metros reales: antes el VS escalaba toda la posicion por la celda y
+// las hojas de 2 m quedaban tumbadas 4x
+static DenseLevel s_denseExt[3];
 static std::mutex s_denseMx;   // (20/10) la malla se arma una vez, bajo llave: el pasto se dibuja desde varios hilos (contextos diferidos)
 static std::atomic<int> g_denseDraws{0};
 static inline uint16_t F16(float v) {   // float -> half (sin NaN/inf)
@@ -88,18 +92,20 @@ static inline uint16_t F16(float v) {   // float -> half (sin NaN/inf)
     return (uint16_t)(sgn | (e << 10) | (m >> 13));
 }
 static float Halton(int i, int b) { float f = 1.0f, r = 0.0f; while (i > 0) { f /= b; r += f * (i % b); i /= b; } return r; }
-static void DenseRelease() { for (auto& L : s_dense) { if (L.pos) L.pos->Release(); if (L.uv) L.uv->Release(); if (L.ib) L.ib->Release(); L = DenseLevel(); } s_denseBuilt = false; }
+static void DenseRelease() { auto rel = [](DenseLevel& L) { if (L.pos) L.pos->Release(); if (L.uv) L.uv->Release(); if (L.ib) L.ib->Release(); L = DenseLevel(); }; for (auto& L : s_dense) rel(L); for (auto& L : s_denseExt) rel(L); s_denseBuilt = false; }
 static void BuildDense(float curv) {
     DenseRelease(); if (!g_dev.dev) return;
     const UINT kMaxCards = 9248;                       // hasta 2x las 4624 tarjetas del juego
     uint32_t rs = 0x9E3779B9u; auto rnd = [&]() { rs ^= rs << 13; rs ^= rs >> 17; rs ^= rs << 5; return (rs & 0xffffff) / 16777216.0f; };
-    for (int lvl = 0; lvl < 2; lvl++) {
+    for (int lvl = 0; lvl < 5; lvl++) {
+        // 0 / 1: las del juego (3 / 2 tramos, parcela de 0.5 m); 2 / 3 / 4: las del mod (2 tramos, celda de 0.5 / 1 / 2 m)
         int segs = lvl == 0 ? 3 : 2; UINT vpc = (UINT)(segs + 1) * 2, ipc = (UINT)segs * 6;
+        float rootScale = lvl == 3 ? 2.0f : (lvl == 4 ? 4.0f : 1.0f);
         std::vector<float> pos; pos.reserve(kMaxCards * vpc * 3); std::vector<uint16_t> uv; uv.reserve(kMaxCards * vpc * 2); std::vector<uint32_t> ib; ib.reserve(kMaxCards * ipc);
         rs = 0x9E3779B9u + lvl * 7919;
         for (UINT i = 0; i < kMaxCards; i++) {
             // raiz: secuencia de Halton (bien repartida, sin grilla) con un poco de ruido; las primeras N son un subconjunto parejo
-            float rx = (Halton((int)i + 1, 2) - 0.5f) * 0.5f + (rnd() - 0.5f) * 0.004f, rz = (Halton((int)i + 1, 3) - 0.5f) * 0.5f + (rnd() - 0.5f) * 0.004f;
+            float rx = ((Halton((int)i + 1, 2) - 0.5f) * 0.5f + (rnd() - 0.5f) * 0.004f) * rootScale, rz = ((Halton((int)i + 1, 3) - 0.5f) * 0.5f + (rnd() - 0.5f) * 0.004f) * rootScale;
             float yaw = rnd() * 6.2831853f, h = 0.058f * (0.8f + 0.35f * rnd()), w = 0.012f * (0.8f + 0.4f * rnd());
             float ba = rnd() * 6.2831853f, bend = curv * (0.15f + 0.3f * rnd());     // curva: hacia donde y cuanto (fraccion del alto)
             float ta = rnd() * 6.2831853f, tilt = 0.12f * rnd();                      // inclinacion leve de toda la tarjeta
@@ -118,7 +124,7 @@ static void BuildDense(float curv) {
             for (int k = 0; k < segs; k++) { UINT a = v0 + k * 2, b = a + 1, c2 = a + 2, d = a + 3;
                 ib.push_back(a); ib.push_back(b); ib.push_back(c2); ib.push_back(b); ib.push_back(d); ib.push_back(c2); }
         }
-        DenseLevel& L = s_dense[lvl]; L.cards = kMaxCards; L.vertsPerCard = vpc; L.idxPerCard = ipc;
+        DenseLevel& L = lvl < 2 ? s_dense[lvl] : s_denseExt[lvl - 2]; L.cards = kMaxCards; L.vertsPerCard = vpc; L.idxPerCard = ipc;
         D3D11_BUFFER_DESC d = {}; D3D11_SUBRESOURCE_DATA sd = {};
         d.Usage = D3D11_USAGE_IMMUTABLE; d.BindFlags = D3D11_BIND_VERTEX_BUFFER;
         d.ByteWidth = (UINT)(pos.size() * 4); sd.pSysMem = pos.data(); if (FAILED(g_dev.dev->CreateBuffer(&d, &sd, &L.pos))) { L.pos = nullptr; }
@@ -147,6 +153,10 @@ static bool DensePick(UINT count, LodIA* out) {
     if (!s_denseBuilt.load()) return false;
     int lvl; if (count >= 20000) lvl = 0; else if (count >= 8000 && P[3] < 0.5f) lvl = 1; else return false;
     UINT gameCards = count / 6; float dens = P[1] > 0.05f ? std::clamp(P[1], 0.25f, 2.0f) : 1.0f;
+    {   // (25/10 c) con el pasto del mod prendido, el lado del juego sigue a Calidad (x61) y Densidad (x58) como el del mod (empalme parejo en 240 px/m)
+        if (g_cfg.live[58][3] > 0.5f) { static const float cMulQ[4] = { 0.6f, 1.0f, 1.4f, 1.8f }; int q = std::clamp((int)(g_cfg.live[61][0] + 0.5f), 0, 3);
+            float d58 = g_cfg.live[58][0] > 0.05f ? std::clamp(g_cfg.live[58][0], 0.3f, 2.0f) : 1.0f; dens = std::clamp(dens * cMulQ[q] * d58, 0.25f, 2.0f); }
+    }
     UINT cards = (std::min)((UINT)(gameCards * dens + 0.5f), s_dense[lvl].cards); if (cards < 16) return false;
     DenseLevel& L = s_dense[lvl];
     *out = LodIA();
@@ -383,17 +393,20 @@ static void GrassEmit(ID3D11DeviceContext* c, int f, bool bound) {
     const float cBase = 0.30f * cMul[q] * dens, minPx = minPxQ[q];
     Level L[3] = { { 0.5f, kSlotCap, 0, 1.0f }, { 1.0f, kSlotCap, 0, 1.6f }, { 2.0f, kSlotCap, 0, 2.0f } };
     // (25/10) con el cesped lejano de la base prendido (y61) el nivel 3D lejano se apaga por debajo de T3 px/m y la base lo sigue
-    const bool farBase = g_cfg.live[61][1] > 0.001f; const float loFar = farBase ? T[3] : 0.0f; const float fadeM = 0.25f;
+    // (25/10 c) el fundido entre niveles es por CANTIDAD de tarjetas en el compute (nivel saliente lim*k, entrante lim*(1-k), mismo
+    // margen 0.88 / 1.12 que el pasto del juego), no por altura en el VS: antes en la banda se dibujaban los dos niveles enteros y
+    // todas las hojas quedaban a media altura a una distancia fija de la camara
+    const bool farBase = g_cfg.live[61][1] > 0.001f; const float loFar = farBase ? T[3] : 0.0f; const float fadeM = 0.12f;
     // malla propia (manojos curvos de 2 tramos: 6 vertices / 12 indices por tarjeta)
     float curv = g_cfg.live[123][0] > 0.5f ? std::clamp(g_cfg.live[123][2], 0.0f, 1.5f) : 0.6f;
-    ID3D11Buffer* mPos = nullptr; ID3D11Buffer* mUv = nullptr; ID3D11Buffer* mIb = nullptr; UINT mCards = 0, mIpc = 12, mVpc = 6;
+    ID3D11Buffer* mPos[3] = {}; ID3D11Buffer* mUv[3] = {}; ID3D11Buffer* mIb[3] = {}; UINT mCards = 0, mIpc = 12, mVpc = 6;
     {
         std::lock_guard<std::mutex> lk(s_denseMx);
         static float triedCurv = -2.0f;   // si la malla no se pudo crear, no se reintenta en cada cuadro (log y CPU)
         if ((s_denseBuilt.load() && fabsf(curv - s_denseCurv) > 0.01f) || (!s_denseBuilt.load() && fabsf(curv - triedCurv) > 0.01f)) { triedCurv = curv; BuildDense(curv); }
-        if (s_denseBuilt.load()) { DenseLevel& D = s_dense[1]; mPos = D.pos; mUv = D.uv; mIb = D.ib; mCards = D.cards; mIpc = D.idxPerCard; mVpc = D.vertsPerCard; mPos->AddRef(); mUv->AddRef(); mIb->AddRef(); }
+        if (s_denseBuilt.load()) for (int i = 0; i < 3; i++) { DenseLevel& D = s_denseExt[i]; mPos[i] = D.pos; mUv[i] = D.uv; mIb[i] = D.ib; mCards = D.cards; mIpc = D.idxPerCard; mVpc = D.vertsPerCard; mPos[i]->AddRef(); mUv[i]->AddRef(); mIb[i]->AddRef(); }
     }
-    if (!mPos) { Why("sin malla propia de manojos (ver Errores)"); if (!bound) st.Release(); return; }
+    if (!mPos[0] || !mPos[1] || !mPos[2]) { Why("sin malla propia de manojos (ver Errores)"); if (!bound) st.Release(); return; }
     g_grassDbg.lod = mCards * mIpc;
     const float halfL = 52.5f + 3.0f, halfW = 34.0f + 3.0f, halfH = 0.5f * (float)(g_bbH ? g_bbH : 1080);
     ID3D11DeviceContext1* c1 = nullptr; c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1);
@@ -437,6 +450,9 @@ static void GrassEmit(ID3D11DeviceContext* c, int f, bool bound) {
         for (int k = 0; k < 40; k++) cull[k] = 0.f;
         cull[4] = halfH; cull[5] = (float)kSlotCap; cull[9] = fadeM; cull[10] = halfL; cull[11] = halfW;
         cull[13] = minPx; cull[14] = cBase; cull[15] = (float)mIpc; cull[16] = (float)mCards; cull[17] = (float)kBins;
+        // gP4.z alto de la hoja (m), gP4.w tope de capas de hojas por pixel: con la camara baja la celda se ve como una banda angosta y la
+        // cuenta de frente ((celda * p)^2) sobraba 14-46x; el tope sigue a Calidad / Densidad
+        cull[18] = 0.058f * tall; cull[19] = 6.0f * cMul[q] * dens;
         for (int i = 0; i < 3; i++) {
             UINT gw = (UINT)ceilf(2.0f * halfL / L[i].cell), gh = (UINT)ceilf(2.0f * halfW / L[i].cell);
             cull[0] = (float)i; cull[1] = L[i].cell; cull[2] = i == 2 ? loFar : T[i + 1]; cull[3] = T[i];   // nivel 2: sin limite inferior (toda la cancha) salvo con cesped lejano en la base
@@ -451,23 +467,25 @@ static void GrassEmit(ID3D11DeviceContext* c, int f, bool bound) {
         c->CSSetShader(oldCS, nullptr, 0); c->CSSetConstantBuffers(0, 3, oldCB); c->CSSetUnorderedAccessViews(0, 3, oldUAV, nullptr);
         if (oldCS) oldCS->Release(); for (auto* b : oldCB) if (b) b->Release(); for (auto* u : oldUAV) if (u) u->Release();
         cb2->Release();
-        // --- malla propia en la entrada (posicion en el slot 0, uv en el slot 3, indices de 32 bits) ---
+        // --- malla propia en la entrada (posicion en el slot 0, uv en el slot 3, indices de 32 bits), una por nivel ---
         ID3D11Buffer* svVb[4] = {}; UINT svSt[4] = {}, svOf[4] = {}; c->IAGetVertexBuffers(0, 4, svVb, svSt, svOf);
         ID3D11Buffer* svIb = nullptr; DXGI_FORMAT svFmt = DXGI_FORMAT_UNKNOWN; UINT svIo = 0; c->IAGetIndexBuffer(&svIb, &svFmt, &svIo);
-        { ID3D11Buffer* vbs[4] = { mPos, svVb[1], svVb[2], mUv }; UINT sts[4] = { 12, svSt[1], svSt[2], 4 }, ofs2[4] = { 0, svOf[1], svOf[2], 0 };
-          c->IASetVertexBuffers(0, 4, vbs, sts, ofs2); c->IASetIndexBuffer(mIb, DXGI_FORMAT_R32_UINT, 0); }
+        int boundMesh = -1;
         // --- dibujos: uno por ranura (nivel x subnivel), indirectos (pasan por nuestro gancho: reglas y t120) ---
         c->VSSetShaderResources(121, 1, &s_instGSRV);
         float cbq[72];
         for (int sl = 0; sl < kSlots; sl++) {
             int i = sl / kBins;
+            if (boundMesh != i) { ID3D11Buffer* vbs[4] = { mPos[i], svVb[1], svVb[2], mUv[i] }; UINT sts[4] = { 12, svSt[1], svSt[2], 4 }, ofs2[4] = { 0, svOf[1], svOf[2], 0 };
+                c->IASetVertexBuffers(0, 4, vbs, sts, ofs2); c->IASetIndexBuffer(mIb[i], DXGI_FORMAT_R32_UINT, 0); boundMesh = i; }
             for (int k = 0; k < 72; k++) cbq[k] = 0.f;
-            // cb5[8]: (vertices por tarjeta, marca, alto, ancho base)  cb5[9]: (magenta, offset de instancias, fadeIn0, fadeIn1)
-            // cb5[10]: (ancho minimo px, fadeOut1, multiplicador de ancho, mitad del alto de pantalla)  cb5[11]: (pLo, pHi, 1 = por tamano, margen)
+            // cb5[8]: (vertices por tarjeta, marca, alto, ancho base)  cb5[9]: (magenta, offset de instancias, 1 = raices ya escaladas en la malla, -)
+            // cb5[10]: (ancho minimo px, -, multiplicador de ancho, mitad del alto de pantalla)  cb5[11]: (pLo, pHi, 1 = por tamano, margen)
+            // pLo / pHi = 0: el VS no funde por altura (el fundido es por cantidad en el compute)
             cbq[32] = (float)mVpc; cbq[33] = 1234.5f; cbq[34] = tall; cbq[35] = 0.012f * wide;
-            cbq[36] = p59[2] > 0.5f ? 1.f : 0.f; cbq[37] = (float)(sl * kSlotCap);
+            cbq[36] = p59[2] > 0.5f ? 1.f : 0.f; cbq[37] = (float)(sl * kSlotCap); cbq[38] = 1.0f;
             cbq[40] = minPx; cbq[42] = L[i].widthMul; cbq[43] = halfH;
-            cbq[44] = i == 2 ? loFar : T[i + 1]; cbq[45] = T[i]; cbq[46] = 1.0f; cbq[47] = fadeM;
+            cbq[44] = 0.0f; cbq[45] = 0.0f; cbq[46] = 1.0f; cbq[47] = fadeM;
             c->UpdateSubresource(s_cb, 0, nullptr, cbq, 0, 0);
             c->VSSetConstantBuffers(5, 1, &s_cb);
             c->DrawIndexedInstancedIndirect(s_args, (UINT)sl * 20);
@@ -477,7 +495,7 @@ static void GrassEmit(ID3D11DeviceContext* c, int f, bool bound) {
         s_okFrame.store(f);
         Why(bound ? "emitiendo (desde el pasto del juego)" : "emitiendo (desde la base de la cancha)");
     }
-    mPos->Release(); mUv->Release(); mIb->Release();
+    for (int i = 0; i < 3; i++) { mPos[i]->Release(); mUv[i]->Release(); mIb[i]->Release(); }
     // --- devolver el estado ---
     c->VSSetShaderResources(121, 1, &oldT); if (oldT) oldT->Release();
     if (oldCb5) { if (c1 && oldN5) c1->VSSetConstantBuffers1(5, 1, &oldCb5, &oldF5, &oldN5); else c->VSSetConstantBuffers(5, 1, &oldCb5); oldCb5->Release(); }

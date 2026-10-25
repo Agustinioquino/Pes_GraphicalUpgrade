@@ -14,7 +14,7 @@ cbuffer PESGrassCull : register(b0) {
   float4 gP1;       // x mitad del alto de la pantalla (px) | y tope de instancias por ranura | z primera ranura del nivel | w celdas a lo largo
   float4 gP2;       // x celdas a lo ancho | y margen del fundido (fraccion) | z semi largo de la grilla (m) | w semi ancho (m)
   float4 gP3;       // x ancho de la hoja (m) | y ancho minimo (px) | z C base | w indices por tarjeta
-  float4 gP4;       // x tarjetas de la malla | y subniveles | z, w sin uso
+  float4 gP4;       // x tarjetas de la malla | y subniveles | z alto de la hoja (m) | w tope de capas de hojas por pixel
   float4 gPad[5];
 }
 RWStructuredBuffer<float4> Inst : register(u0);
@@ -56,6 +56,9 @@ void main(uint3 id : SV_DispatchThreadID)
   float m = gP2.y;
   if (p < gP0.z * (1.0 - m)) return;
   if (gP0.w > 0.0 && p >= gP0.w * (1.0 + m)) return;
+  // fundido entre niveles por cantidad: el nivel saliente queda con lim * k y el entrante con lim * (1 - k) (suman 1)
+  float kf = (gP0.z > 0.0 ? smoothstep(gP0.z * (1.0 - m), gP0.z * (1.0 + m), p) : 1.0) * (gP0.w > 0.0 ? 1.0 - smoothstep(gP0.w * (1.0 - m), gP0.w * (1.0 + m), p) : 1.0);
+  if (kf < 0.002) return;
   // descarte por pantalla con margen del tamano de la celda (como el VS)
   float px = (abs(cb2[4].x) + abs(cb2[4].z)) * rad, py = (abs(cb2[5].y) + abs(cb2[5].z)) * rad;
   if (cc.x < -w - px || cc.x > w + px || cc.y < -w - py || cc.y > w + py) return;
@@ -63,13 +66,27 @@ void main(uint3 id : SV_DispatchThreadID)
   float pc = clamp(p, 4.0, 2000.0);
   float wpx = max(gP3.x * pc, gP3.y);
   float C = clamp(gP3.z * sqrt(pc / 35.0), 0.05, 2.0);
-  float cards = clamp(C * (cell * pc) * (cell * pc) / wpx, 4.0, (float)cardsMax);
-  uint b = (uint)clamp((int)floor(log2((float)cardsMax / cards)), 0, (int)nb - 1);   // la ranura mas chica con >= tarjetas
+  float cards = C * (cell * pc) * (cell * pc) / wpx;
+  // con la camara baja la celda no se ve de frente: ocupa una banda de (celda * p) x (celda * p * sen(elevacion) + alto de la hoja);
+  // tope de capas de hojas por pixel sobre esa banda (si no, en las repeticiones cercanas el solapamiento llegaba a 14-46x)
+  {
+    float3 eye = cb2[20].xyz;
+    float dist = max(length(float3(x, 0.0, z) - eye), 0.5);
+    float sinE = clamp(abs(eye.y) / dist, 0.03, 1.0);
+    float hpx = max(gP4.z * pc, 1.0);
+    float band = (cell * pc) * (cell * pc * sinE + hpx);
+    cards = min(cards, gP4.w * band / (wpx * hpx));
+  }
+  cards = clamp(cards * kf, 0.0, (float)cardsMax);
+  if (cards < 0.5) return;
+  uint lim = (uint)ceil(cards - 0.0001);           // la ultima tarjeta sale a la altura de la parte fraccionaria (sin saltos al mover la camara)
+  float fr = saturate(cards - (float)(lim - 1u));
+  uint b = (uint)clamp((int)floor(log2((float)cardsMax / (float)lim)), 0, (int)nb - 1);   // la ranura mas chica con >= tarjetas
   uint slot = (uint)(gP1.z + 0.5) + b;
   uint idx;
   Count.InterlockedAdd(slot * 4, 1u, idx);
   if (idx >= (uint)(gP1.y + 0.5)) return;          // tope de la ranura
   uint rot = ((id.x * 7u + id.y * 13u) ^ (id.x * id.y)) & 3u;
-  uint lim = max((uint)(cards + 0.5), 1u);
-  Inst[slot * (uint)(gP1.y + 0.5) + idx] = float4(x, z, cell / 0.5, (float)(lim * 4u + rot));
+  // z = escala de la celda (1 / 2 / 4) + fraccion de la ultima tarjeta * 0.5
+  Inst[slot * (uint)(gP1.y + 0.5) + idx] = float4(x, z, cell / 0.5 + fr * 0.5, (float)(lim * 4u + rot));
 }

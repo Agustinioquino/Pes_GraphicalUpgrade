@@ -413,8 +413,8 @@ void main(
     if (Q61.y > 0.001 && P58f.w > 0.5 && P63f.y > 0.0) {
       float3 pesE = g_psScene.m_eyepos.xyz - v9.xyz; float pesD = max(length(pesE), 0.05); float3 pesV = pesE / pesD;
       float pxm = abs(g_psScene.m_projection._m11) * P63f.z / pesD;
-      float dens = clamp(P58f.x > 0.05 ? P58f.x : 1.0, 0.3, 2.0);
-      float T2 = 35.0 / dens, T3 = 15.0 / dens;
+      // (25/10 c) umbrales fijos, los mismos que la DLL (Thresholds): la densidad ya no los corre
+      float T2 = 45.0, T3 = 15.0;
       float kFar = 1.0 - smoothstep(T3 * 0.75, T2 * 1.25, pxm);
       if (kFar > 0.001) { float3 cg = o0.xyz; float sp = o2.y; PESFarTurf(cg, sp, pesV, v9.xz, pxm, kFar * saturate(Q61.y), Q61.z, Q61.w); o0.xyz = cg; o2.y = sp; }
     }
