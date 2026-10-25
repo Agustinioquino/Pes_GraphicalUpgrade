@@ -268,9 +268,12 @@ bool EngineCamera(float pos[3], float tgt[3], int* frame);   // ultima camara ap
 ID3D11ShaderResourceView* MuscleClothSRV();     // (25/10) zonas de la musculatura para la fisica de la ropa (t121 del simulador)
 // (25/10) la ropa choca con el cuerpo real (cuerpo.cpp): piel del cuerpo deformada por personaje para el simulador (t122..t124)
 void BodyOnDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base);   // en cada dibujo de la piel del cuerpo (VS 1c02a92a)
-void BodyPresent();                                // registro de mallas nuevas, cuadro nuevo, log
+void BodyPresent();                                // registro de mallas nuevas, lote del cuadro (personajes + piel), log
 void BodyClothSRVs(ID3D11ShaderResourceView* out[3]);   // tablas, vertices, listas (null si no esta listo)
-ID3D11UnorderedAccessView* BodyClothUAV();         // contadores del simulador (u8, solo dispositivo 11.1)
+void BodyOnFinish(ID3D11DeviceContext* c, ID3D11CommandList* l);    // (25/10 e) FinishCommandList: los dibujos del contexto pasan a la lista
+void BodyOnExecute(ID3D11DeviceContext* c, ID3D11CommandList* l);   // (25/10 e) ExecuteCommandList: cuentan para el lote del cuadro
+extern std::atomic<bool> g_bodyDiagArmed;                            // (25/10 e) diagnostico: copiar las instancias del simulador de la ropa
+void BodyNoteClothDispatch(ID3D11DeviceContext* c, UINT groups);    // en el Dispatch del simulador (contexto con su CS puesto)
 void BodySimSeen();                                // el simulador del mod de ropa se uso en este cuadro
 void BodyReloadShaders();
 struct InputElemInfo { std::string sem; UINT idx, fmt, slot, off; };

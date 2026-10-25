@@ -1,23 +1,25 @@
 // PES21 FX (25/10) - la ropa choca con el cuerpo real (TorsoBody: torso, brazos, cuello).
 // El simulador del mod de ropa (cloth_sim.hlsl, con las mejoras de PES21 FX) no conoce el cuerpo que hay debajo de la camiseta:
 // adivina uno a partir de la propia camiseta en reposo. Con TorsoBody el cuerpo es una malla real (y la musculatura la deforma),
-// asi que la tela flotaba en unos lados y el cuerpo la atravesaba en otros. Aca, en cada dibujo de la piel del cuerpo (VS
-// 1c02a92a) se despacha un CS propio (shaders\pes_body_cs.hlsl) que deforma esa malla con los huesos de ESE dibujo (los mismos
-// que usa el juego para dibujarla, con la musculatura incluida) y deja la piel en el espacio del modelo en una tabla hash por
-// personaje. El simulador de la ropa la lee (t122..t124) y empuja cada punto de la tela afuera de la piel.
+// asi que la tela flotaba en unos lados y el cuerpo la atravesaba en otros. Aca la piel del cuerpo (VS 1c02a92a) de cada
+// personaje se deforma con los huesos de su dibujo (los mismos que usa el juego, con la musculatura incluida) y queda en el
+// espacio del modelo en una tabla hash por personaje. El simulador de la ropa la lee (t122..t124) y empuja la tela afuera.
 //
 //   - Mallas: la primera vez que se ve una malla de piel se copian sus indices y vertices (posicion, normal, huesos, pesos) a
-//     la CPU, se decodifican segun el input layout y, si es del torso / brazos / cuello (por altura y tamano: las manos y las
-//     piernas quedan afuera), se suben a una copia propia (t0 del CS).
-//   - Registros: por dibujo, los vertices deformados van a un anillo (1 M vertices: alcanza para 2 cuadros); la tabla del
-//     personaje (128 tablas en anillo, una por personaje y contexto en el cuadro: el bloque b5 identifica al personaje) se
-//     limpia antes del primer dibujo y recibe todas sus partes. La cabecera lleva el cuadro (fila 257) y la posicion del
-//     personaje en el mundo, que el simulador compara con la de cada prenda.
+//     la CPU, se decodifican segun el input layout y, si es del torso / brazos / cuello (por altura y lugar: manos y piernas
+//     quedan afuera), se suben a una copia propia (t0 de los CS).
+//   - (25/10 e) En cada dibujo solo se COPIAN sus constantes (m_view de b2, el bloque por objeto b5 y los huesos b6) a un lugar
+//     propio: nada de compute entre los dibujos del juego. Los registros de cada contexto diferido pasan a su lista de comandos
+//     (FinishCommandList) y cuentan cuando la lista se ejecuta (ExecuteCommandList): en Present se procesa todo lo ejecutado en
+//     el cuadro de una vez: pes_body_assign_cs.hlsl agrupa los dibujos por personaje (origen del modelo en el mundo a menos de
+//     2 cm: el bloque b5 se reusa entre jugadores en el mismo cuadro, no sirve para separarlos), saca las pasadas repetidas de
+//     la misma malla y da una tabla a cada personaje; pes_body_cs.hlsl deforma todos los vertices y llena las tablas.
+//   - Cabecera de cada tabla: [0] cuadro (el que vera el simulador: fila 257), [1] partes, [2] vertices, [3] 1 = valida, [4..6]
+//     origen del personaje en el mundo (el simulador lo compara con el de cada prenda), [7] primer registro.
 //   - Parametros (fila 256): x prendido, y separacion de la tela con la piel (mm), z cuantos cm mas adentro puede ir la tela que
 //     el cuerpo que adivina el mod, w empuje maximo por sub-paso (mm). Fila 257.x = numero de cuadro (lo escribe la DLL).
-//   - El simulador corre antes que los dibujos del cuadro (el mod despacha la fisica antes de ejecutar la lista de comandos), asi
-//     que normalmente usa la piel del cuadro anterior: la lleva al momento de cada sub-paso con los huesos de la propia prenda y
-//     le suma lo que la piel se movio por su cuenta (un brazo que se acerca al costado).
+//   - El simulador corre antes que los dibujos del cuadro, asi que usa la piel del cuadro anterior: la lleva al momento de cada
+//     sub-paso con los huesos de la propia prenda y le suma lo que la piel se movio por su cuenta (un brazo que se acerca).
 #include "core.h"
 #include <d3d11_1.h>
 #include <algorithm>
@@ -33,9 +35,14 @@
 namespace fx {
 
 static const UINT kCells = 8192, kTabStride = 16 + kCells, kTables = 128;
-static const UINT kRing = 1u << 20;      // vertices del anillo de registros
+static const UINT kRing = 1u << 20;      // vertices deformados por cuadro (maximo)
 static const UINT kStatic = 1u << 18;    // vertices de las mallas registradas
-static const UINT kMeshMax = 12288;      // vertices por malla (las manos de TorsoBody tienen 25.900)
+static const UINT kMeshMax = 12288;      // vertices por malla
+static const UINT kSlots = 1024;         // lugares para las constantes de los dibujos (anillo: varios cuadros)
+static const UINT kRecF4 = 208;          // float4 por lugar: [0..3] m_view (b2 filas 8..11), [4..12] b5 (filas 0..8), [16..207] b6
+static const UINT kMaxRec = 512;         // dibujos por cuadro (tienen que coincidir con pes_body_assign_cs.hlsl)
+static const UINT kMaxGroups = kRing / 64 + kMaxRec;
+static const UINT kDiag = 64;
 static const uint64_t kSkinVS = 0x1c02a92ab4ae3362ULL;
 
 struct Elem { int slot = -1; UINT off = 0; DXGI_FORMAT fmt = DXGI_FORMAT_UNKNOWN; };
@@ -50,95 +57,160 @@ struct BodyMesh {
     float bmin[3] = { 0, 0, 0 }, bmax[3] = { 0, 0, 0 };
     std::string why;
 };
-struct TabKey { void* ctx; void* cb; UINT first; bool operator==(const TabKey& o) const { return ctx == o.ctx && cb == o.cb && first == o.first; } };
-struct TabKeyHash { size_t operator()(const TabKey& k) const { return std::hash<void*>()(k.ctx) ^ (std::hash<void*>()(k.cb) * 31u) ^ ((size_t)k.first * 2654435761u); } };
-struct TabUse { UINT tab = 0; std::vector<int> meshes; };
+struct Rec { UINT slot, sBase, nv, mesh; };   // un dibujo de la piel: lugar de sus constantes y su malla
 
 static std::mutex s_mx;
 static std::unordered_map<uint64_t, BodyMesh*> s_meshes;
 static std::vector<BodyMesh*> s_pending;
-static std::unordered_map<TabKey, TabUse, TabKeyHash> s_gen;   // tablas usadas desde el ultimo Present
-static UINT s_tabNext = 0, s_ringPos = 0, s_genVerts = 0;
+static std::unordered_map<ID3D11DeviceContext*, std::vector<Rec>> s_pendCtx;   // contexto diferido -> hasta FinishCommandList
+static std::unordered_map<ID3D11CommandList*, std::vector<Rec>> s_pendList;    // lista de comandos -> hasta ExecuteCommandList
+static std::vector<Rec> s_execRecs;                                             // ejecutados: van al lote del proximo Present
+static UINT s_slotNext = 0;
 static int s_nextId = 1;
 static std::vector<std::pair<UINT, UINT>> s_free;              // huecos de la copia propia (inicio, cantidad)
 static std::atomic<int> s_simSeen{-100000};
-static std::atomic<int> s_recs{0}, s_tabs{0}, s_skipBudget{0}, s_skipNoTab{0};
-static int s_logRecs = 0, s_logFrames = 0, s_logVerts = 0, s_logTabs = 0;
+static std::atomic<int> s_skipWin{0};
+static int s_logRecs = 0, s_logFrames = 0, s_logVerts = 0, s_logBatches = 0, s_dropRec = 0, s_dropRing = 0, s_dropList = 0;
 
 // recursos (dispositivo del juego)
 static ID3D11Device* s_dev = nullptr;
-static ID3D11ComputeShader* s_cs = nullptr;
+static ID3D11ComputeShader *s_csSkin = nullptr, *s_csAssign = nullptr;
 static ID3D11Buffer *s_static = nullptr, *s_ringV = nullptr, *s_ringN = nullptr, *s_tab = nullptr, *s_cb = nullptr;
+static ID3D11Buffer *s_recData = nullptr, *s_desc = nullptr, *s_grp = nullptr, *s_recTab = nullptr, *s_diag = nullptr, *s_diagStage = nullptr;
 static ID3D11ShaderResourceView *s_staticSRV = nullptr, *s_ringVSRV = nullptr, *s_ringNSRV = nullptr, *s_tabSRV = nullptr;
-static ID3D11UnorderedAccessView *s_ringVUAV = nullptr, *s_ringNUAV = nullptr;
-static ID3D11UnorderedAccessView* s_tabUAV[kTables] = {};
-// diagnostico que escribe el simulador de la ropa (u8; ver cloth_sim.hlsl): se lee cada 20 s
-static ID3D11Buffer* s_diag = nullptr; static ID3D11UnorderedAccessView* s_diagUAV = nullptr; static ID3D11Buffer* s_diagStage = nullptr;
-static int s_diagState = 0, s_diagFrame = 0; static bool s_diag11_1 = false;
+static ID3D11ShaderResourceView *s_recSRV = nullptr, *s_descSRV = nullptr, *s_grpSRV = nullptr;
+static ID3D11UnorderedAccessView *s_ringVUAV = nullptr, *s_ringNUAV = nullptr, *s_tabUAV = nullptr, *s_recTabUAV = nullptr, *s_diagUAV = nullptr;
+static int s_diagState = 0, s_diagFrame = 0;
 static std::atomic<bool> s_ready{false};
-static bool s_failed = false, s_csTried = false;
+static bool s_failed = false;
 
 void BodySimSeen() { s_simSeen.store(PresentNo(), std::memory_order_relaxed); }
 
+// (25/10 e) diagnostico: las instancias que ve el simulador de la ropa (t18, Inst de cloth_sim.hlsl: 160 bytes, matriz de mundo
+// en + 48). Cada 20 s se copian las de hasta 8 despachos del cuadro para comparar su origen con el de los personajes del lote.
+std::atomic<bool> g_bodyDiagArmed{false};
+static const UINT kInstBytes = 160, kInstMax = 16;
+static ID3D11Buffer* s_instStage[8] = {};
+static UINT s_instGroups[8] = {}, s_instStride[8] = {};
+static int s_instN = 0, s_instFrame = 0, s_instState = 0;
+void BodyNoteClothDispatch(ID3D11DeviceContext* c, UINT groups) {
+    if (s_instN >= 8 || !s_dev || c->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return;
+    ID3D11ShaderResourceView* v = nullptr; c->CSGetShaderResources(18, 1, &v);
+    if (!v) return;
+    ID3D11Resource* r = nullptr; v->GetResource(&r); v->Release();
+    if (!r) return;
+    D3D11_RESOURCE_DIMENSION dim = D3D11_RESOURCE_DIMENSION_UNKNOWN; r->GetType(&dim);
+    if (dim == D3D11_RESOURCE_DIMENSION_BUFFER) {
+        ID3D11Buffer* b = (ID3D11Buffer*)r; D3D11_BUFFER_DESC d; b->GetDesc(&d);
+        const int k = s_instN;
+        // la copia de lectura con el mismo tipo de buffer (estructurado, mismo paso): copiar entre buffers distintos puede no valer
+        const bool structured = (d.MiscFlags & D3D11_RESOURCE_MISC_BUFFER_STRUCTURED) != 0;
+        if (structured && d.StructureByteStride != kInstBytes) { r->Release(); return; }
+        if (!s_instStage[k]) {
+            D3D11_BUFFER_DESC sd{}; sd.ByteWidth = kInstBytes * kInstMax; sd.Usage = D3D11_USAGE_STAGING; sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+            if (structured) { sd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED; sd.StructureByteStride = kInstBytes; }
+            if (FAILED(s_dev->CreateBuffer(&sd, nullptr, &s_instStage[k]))) s_instStage[k] = nullptr;
+        }
+        const UINT bytes = (std::min)(d.ByteWidth, kInstBytes * kInstMax) / kInstBytes * kInstBytes;
+        if (s_instStage[k] && bytes) {
+            D3D11_BOX bx = { 0, 0, 0, bytes, 1, 1 };
+            c->CopySubresourceRegion(s_instStage[k], 0, 0, 0, 0, b, 0, &bx);
+            s_instGroups[k] = (std::min)(groups, bytes / kInstBytes); s_instStride[k] = d.StructureByteStride;
+            s_instN++;
+        }
+    }
+    r->Release();
+}
+static void ReadInstances(ID3D11DeviceContext* imm) {
+    char l[1600]; int k = snprintf(l, sizeof l, "ropa (lo que ve el simulador): %d despachos", s_instN);
+    for (int i = 0; i < s_instN && k < (int)sizeof l - 200; i++) {
+        D3D11_MAPPED_SUBRESOURCE mp;
+        if (!s_instStage[i] || FAILED(imm->Map(s_instStage[i], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mp))) { k += snprintf(l + k, sizeof l - k, " | #%d sin leer", i); continue; }
+        k += snprintf(l + k, sizeof l - k, " | #%d (%u prendas, paso %u):", i, s_instGroups[i], s_instStride[i]);
+        for (UINT j = 0; j < s_instGroups[i] && j < 4 && k < (int)sizeof l - 120; j++) {
+            const uint8_t* p = (const uint8_t*)mp.pData + j * kInstBytes;
+            uint32_t flags; float w[12]; memcpy(&flags, p + 8, 4); memcpy(w, p + 48, 48);
+            k += snprintf(l + k, sizeof l - k, " [banderas 0x%x origen (%.2f, %.2f, %.2f) escala %.3f]", flags, w[3], w[7], w[11], sqrtf(w[0] * w[0] + w[4] * w[4] + w[8] * w[8]));
+        }
+        imm->Unmap(s_instStage[i], 0);
+    }
+    Log("%s", l);
+}
+
+static ID3D11ComputeShader* CompileOne(const wchar_t* file) {
+    ID3D11ComputeShader* cs = nullptr;
+    if (ID3DBlob* b = CompileNamedShader(file, "cs_5_0")) { s_dev->CreateComputeShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &cs); b->Release(); }
+    if (!cs) Log("cuerpo: no se pudo compilar %ls (la ropa no choca con el cuerpo real)", file);
+    return cs;
+}
 static void CompileCS() {
     if (!s_dev) return;
-    ID3D11ComputeShader* cs = nullptr;
-    if (ID3DBlob* b = CompileNamedShader(L"pes_body_cs.hlsl", "cs_5_0")) { s_dev->CreateComputeShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &cs); b->Release(); }
-    if (!cs) { Log("cuerpo: no se pudo compilar pes_body_cs.hlsl (la ropa no choca con el cuerpo real)"); return; }
-    s_cs = cs;   // el anterior se deja vivo (otro hilo podria estar usandolo)
+    // los anteriores se dejan vivos (el lote del Present podria estar usandolos en otro hilo: no, pero no cuesta nada)
+    if (ID3D11ComputeShader* a = CompileOne(L"pes_body_assign_cs.hlsl")) s_csAssign = a;
+    if (ID3D11ComputeShader* b = CompileOne(L"pes_body_cs.hlsl")) s_csSkin = b;
 }
 void BodyReloadShaders() { std::lock_guard<std::mutex> lk(s_mx); if (s_dev) CompileCS(); }
 
-static bool MakeBuf(UINT bytes, UINT stride, UINT bind, UINT misc, ID3D11Buffer** out) {
-    D3D11_BUFFER_DESC d{}; d.ByteWidth = bytes; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = bind; d.MiscFlags = misc; d.StructureByteStride = stride;
+static bool MakeBuf(UINT bytes, UINT stride, UINT bind, UINT misc, ID3D11Buffer** out, D3D11_USAGE usage = D3D11_USAGE_DEFAULT) {
+    D3D11_BUFFER_DESC d{}; d.ByteWidth = bytes; d.Usage = usage; d.BindFlags = bind; d.MiscFlags = misc; d.StructureByteStride = stride;
+    if (usage == D3D11_USAGE_DYNAMIC) d.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     return SUCCEEDED(s_dev->CreateBuffer(&d, nullptr, out)) && *out;
+}
+static bool TypedSRV(ID3D11Buffer* b, DXGI_FORMAT f, UINT n, ID3D11ShaderResourceView** out) {
+    D3D11_SHADER_RESOURCE_VIEW_DESC sd{}; sd.ViewDimension = D3D11_SRV_DIMENSION_BUFFER; sd.Format = f; sd.Buffer.FirstElement = 0; sd.Buffer.NumElements = n;
+    return SUCCEEDED(s_dev->CreateShaderResourceView(b, &sd, out)) && *out;
+}
+static bool TypedUAV(ID3D11Buffer* b, DXGI_FORMAT f, UINT n, ID3D11UnorderedAccessView** out) {
+    D3D11_UNORDERED_ACCESS_VIEW_DESC ud{}; ud.ViewDimension = D3D11_UAV_DIMENSION_BUFFER; ud.Format = f; ud.Buffer.FirstElement = 0; ud.Buffer.NumElements = n;
+    return SUCCEEDED(s_dev->CreateUnorderedAccessView(b, &ud, out)) && *out;
 }
 static bool CreateResources() {
     s_dev = g_dev.dev;
-    const UINT B = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+    const UINT SU = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
     bool ok = MakeBuf(kStatic * 32, 16, D3D11_BIND_SHADER_RESOURCE, D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, &s_static) &&
-              MakeBuf(kRing * 16, 16, B, D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, &s_ringV) &&
-              MakeBuf(kRing * 4, 4, B, D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, &s_ringN) &&
-              MakeBuf(kTables * kTabStride * 4, 0, B, 0, &s_tab);
-    if (ok) {
-        D3D11_BUFFER_DESC d{}; d.ByteWidth = 16; d.Usage = D3D11_USAGE_DYNAMIC; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER; d.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-        ok = SUCCEEDED(s_dev->CreateBuffer(&d, nullptr, &s_cb)) && s_cb;
-    }
+              MakeBuf(kRing * 16, 16, SU, D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, &s_ringV) &&
+              MakeBuf(kRing * 4, 4, SU, D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, &s_ringN) &&
+              MakeBuf(kTables * kTabStride * 4, 0, SU, 0, &s_tab) &&
+              MakeBuf(kSlots * kRecF4 * 16, 0, D3D11_BIND_SHADER_RESOURCE, 0, &s_recData) &&
+              MakeBuf(kMaxRec * 32, 0, D3D11_BIND_SHADER_RESOURCE, 0, &s_desc, D3D11_USAGE_DYNAMIC) &&
+              MakeBuf(kMaxGroups * 8, 0, D3D11_BIND_SHADER_RESOURCE, 0, &s_grp, D3D11_USAGE_DYNAMIC) &&
+              MakeBuf(kMaxRec * 4, 0, D3D11_BIND_UNORDERED_ACCESS, 0, &s_recTab) &&
+              MakeBuf(kDiag * 4, 0, D3D11_BIND_UNORDERED_ACCESS, 0, &s_diag) &&
+              MakeBuf(16, 0, D3D11_BIND_CONSTANT_BUFFER, 0, &s_cb, D3D11_USAGE_DYNAMIC);
     if (ok) {
         D3D11_SHADER_RESOURCE_VIEW_DESC sd{}; sd.ViewDimension = D3D11_SRV_DIMENSION_BUFFER; sd.Format = DXGI_FORMAT_UNKNOWN;
         sd.Buffer.FirstElement = 0; sd.Buffer.NumElements = kStatic * 2; ok = ok && SUCCEEDED(s_dev->CreateShaderResourceView(s_static, &sd, &s_staticSRV));
         sd.Buffer.NumElements = kRing; ok = ok && SUCCEEDED(s_dev->CreateShaderResourceView(s_ringV, &sd, &s_ringVSRV));
         ok = ok && SUCCEEDED(s_dev->CreateShaderResourceView(s_ringN, &sd, &s_ringNSRV));
-        sd.Format = DXGI_FORMAT_R32_UINT; sd.Buffer.NumElements = kTables * kTabStride; ok = ok && SUCCEEDED(s_dev->CreateShaderResourceView(s_tab, &sd, &s_tabSRV));
         D3D11_UNORDERED_ACCESS_VIEW_DESC ud{}; ud.ViewDimension = D3D11_UAV_DIMENSION_BUFFER; ud.Format = DXGI_FORMAT_UNKNOWN;
         ud.Buffer.FirstElement = 0; ud.Buffer.NumElements = kRing;
         ok = ok && SUCCEEDED(s_dev->CreateUnorderedAccessView(s_ringV, &ud, &s_ringVUAV)) && SUCCEEDED(s_dev->CreateUnorderedAccessView(s_ringN, &ud, &s_ringNUAV));
-        ud.Format = DXGI_FORMAT_R32_UINT; ud.Buffer.NumElements = kTabStride;
-        for (UINT t = 0; t < kTables && ok; t++) { ud.Buffer.FirstElement = t * kTabStride; ok = SUCCEEDED(s_dev->CreateUnorderedAccessView(s_tab, &ud, &s_tabUAV[t])); }
+        ok = ok && TypedSRV(s_tab, DXGI_FORMAT_R32_UINT, kTables * kTabStride, &s_tabSRV) && TypedUAV(s_tab, DXGI_FORMAT_R32_UINT, kTables * kTabStride, &s_tabUAV) &&
+             TypedSRV(s_recData, DXGI_FORMAT_R32G32B32A32_FLOAT, kSlots * kRecF4, &s_recSRV) &&
+             TypedSRV(s_desc, DXGI_FORMAT_R32G32B32A32_UINT, kMaxRec * 2, &s_descSRV) &&
+             TypedSRV(s_grp, DXGI_FORMAT_R32G32_UINT, kMaxGroups, &s_grpSRV) &&
+             TypedUAV(s_recTab, DXGI_FORMAT_R32_UINT, kMaxRec, &s_recTabUAV) &&
+             TypedUAV(s_diag, DXGI_FORMAT_R32_UINT, kDiag, &s_diagUAV);
+    }
+    if (ok) {
+        D3D11_BUFFER_DESC sd{}; sd.ByteWidth = kDiag * 4; sd.Usage = D3D11_USAGE_STAGING; sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        if (FAILED(s_dev->CreateBuffer(&sd, nullptr, &s_diagStage))) s_diagStage = nullptr;
     }
     if (!ok) { Log("cuerpo: no se pudieron crear los buffers (la ropa no choca con el cuerpo real)"); s_failed = true; return false; }
     // la tabla arranca en cero: ninguna cabecera valida hasta que se escriba
     const UINT z[4] = { 0, 0, 0, 0 };
-    for (UINT t = 0; t < kTables; t++) g_dev.imm->ClearUnorderedAccessViewUint(s_tabUAV[t], z);
-    // contadores del simulador en u8: solo con un dispositivo 11.1 (64 UAV por etapa; el del juego lo es)
-    s_diag11_1 = s_dev->GetFeatureLevel() >= D3D_FEATURE_LEVEL_11_1;
-    if (s_diag11_1 && MakeBuf(64 * 4, 0, D3D11_BIND_UNORDERED_ACCESS, 0, &s_diag)) {
-        D3D11_UNORDERED_ACCESS_VIEW_DESC ud{}; ud.ViewDimension = D3D11_UAV_DIMENSION_BUFFER; ud.Format = DXGI_FORMAT_R32_UINT; ud.Buffer.NumElements = 64;
-        if (FAILED(s_dev->CreateUnorderedAccessView(s_diag, &ud, &s_diagUAV))) s_diagUAV = nullptr;
-        D3D11_BUFFER_DESC sd{}; sd.ByteWidth = 64 * 4; sd.Usage = D3D11_USAGE_STAGING; sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-        if (FAILED(s_dev->CreateBuffer(&sd, nullptr, &s_diagStage))) s_diagStage = nullptr;
-        if (s_diagUAV) g_dev.imm->ClearUnorderedAccessViewUint(s_diagUAV, z);
-    }
+    g_dev.imm->ClearUnorderedAccessViewUint(s_tabUAV, z);
+    g_dev.imm->ClearUnorderedAccessViewUint(s_diagUAV, z);
     s_free.assign(1, { 0u, kStatic });
     CompileCS();
-    Log("cuerpo: listo (%u KB de tablas, anillo de %u vertices, copia de %u vertices)%s", kTables * kTabStride * 4 / 1024, kRing, kStatic, s_cs ? "" : " - SIN el CS");
+    Log("cuerpo: listo (%u KB de tablas, %u vertices por cuadro, copia de %u vertices, %u lugares de constantes)%s", kTables * kTabStride * 4 / 1024, kRing, kStatic, kSlots,
+        (s_csSkin && s_csAssign) ? "" : " - SIN los CS");
     return true;
 }
 void BodyClothSRVs(ID3D11ShaderResourceView* out[3]) {
     const bool on = s_ready.load(std::memory_order_acquire);
     out[0] = on ? s_tabSRV : nullptr; out[1] = on ? s_ringVSRV : nullptr; out[2] = on ? s_ringNSRV : nullptr;
 }
-ID3D11UnorderedAccessView* BodyClothUAV() { return s_ready.load(std::memory_order_acquire) && s_diag11_1 ? s_diagUAV : nullptr; }
 
 // ---------------------------------------------------------------- formatos de vertice
 static UINT FmtBytes(DXGI_FORMAT f) {
@@ -218,15 +290,22 @@ static void FreeStatic(UINT start, UINT n) {
 
 // ---------------------------------------------------------------- en cada dibujo de la piel del cuerpo
 struct CBSlot { ID3D11Buffer* b = nullptr; UINT f = 0, n = 0; };
-static void GetCB(ID3D11DeviceContext1* c1, bool vs, UINT slot, CBSlot& s) { if (vs) c1->VSGetConstantBuffers1(slot, 1, &s.b, &s.f, &s.n); else c1->CSGetConstantBuffers1(slot, 1, &s.b, &s.f, &s.n); }
-static void SetCSCB(ID3D11DeviceContext1* c1, UINT slot, const CBSlot& s) {
-    bool window = false;
-    if (s.b) { D3D11_BUFFER_DESC d; s.b->GetDesc(&d); window = s.f > 0 || (s.n > 0 && s.n * 16 < d.ByteWidth); }
-    if (window) c1->CSSetConstantBuffers1(slot, 1, &s.b, &s.f, &s.n); else c1->CSSetConstantBuffers(slot, 1, &s.b);
+// ventana enlazada de un cbuffer (ID3D11DeviceContext1: el juego enlaza ventanas de buffers grandes): desplazamiento y largo
+static bool CBWindow(const CBSlot& s, UINT need, UINT* off) {
+    if (!s.b) return false;
+    D3D11_BUFFER_DESC d; s.b->GetDesc(&d);
+    UINT o = s.f * 16, len = d.ByteWidth;
+    if (s.n && (o > 0 || s.n * 16 < d.ByteWidth)) len = o < d.ByteWidth ? (std::min)(s.n * 16, d.ByteWidth - o) : 0;
+    if (len < need || o + need > d.ByteWidth) return false;
+    *off = o; return true;
+}
+static void CopyPart(ID3D11DeviceContext* c, ID3D11Buffer* src, UINT srcOff, UINT bytes, UINT dstOff) {
+    D3D11_BOX bx = { srcOff, 0, 0, srcOff + bytes, 1, 1 };
+    c->CopySubresourceRegion(s_recData, 0, dstOff, 0, 0, src, 0, &bx);
 }
 
 void BodyOnDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base) {
-    if (!s_ready.load(std::memory_order_acquire) || !s_cs || count < 3) return;
+    if (!s_ready.load(std::memory_order_acquire) || count < 3) return;
     if (g_cfg.live[256][0] < 0.5f) return;
     const int frame = PresentNo();
     if (frame - s_simSeen.load(std::memory_order_relaxed) > 300) return;   // el mod de ropa no esta simulando (F5, menus sin ropa)
@@ -239,7 +318,7 @@ void BodyOnDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base) {
     if (!ib || !il || (ibFmt != DXGI_FORMAT_R16_UINT && ibFmt != DXGI_FORMAT_R32_UINT)) { releaseIA(); return; }
     uint64_t key = 0xcbf29ce484222325ULL;
     key = Fnv(key, (uint64_t)ib); key = Fnv(key, ibOff); key = Fnv(key, start); key = Fnv(key, count); key = Fnv(key, (uint64_t)(int64_t)base);
-    key = Fnv(key, (uint64_t)il); for (int i = 0; i < 4; i++) { key = Fnv(key, (uint64_t)vb[i]); key = Fnv(key, off[i]); }
+    key = Fnv(key, (uint64_t)il); for (int i = 0; i < 4; i++) { key = Fnv(key, (uint64_t)vb[i]); key = Fnv(key, off[i]); key = Fnv(key, stride[i]); }
     BodyMesh* m = nullptr;
     {
         std::lock_guard<std::mutex> lk(s_mx);
@@ -280,53 +359,46 @@ void BodyOnDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base) {
     }
     releaseIA();
     if (m->state != 3) return;
-    // personaje del dibujo: bloque de constantes por objeto (b5) en este contexto
+    // constantes del dibujo: m_view (b2 filas 8..11), bloque por objeto (b5 filas 0..8) y huesos (b6: actuales + anteriores)
     ID3D11DeviceContext1* c1 = nullptr;
     if (FAILED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) || !c1) return;
-    CBSlot g2, g5, g6; GetCB(c1, true, 2, g2); GetCB(c1, true, 5, g5); GetCB(c1, true, 6, g6);
-    auto releaseCB = [&]() { if (g2.b) g2.b->Release(); if (g5.b) g5.b->Release(); if (g6.b) g6.b->Release(); c1->Release(); };
-    if (!g2.b || !g5.b || !g6.b) { releaseCB(); return; }
-    UINT tab = 0, oBase = 0; bool first = false;
-    {
+    CBSlot g2, g5, g6;
+    c1->VSGetConstantBuffers1(2, 1, &g2.b, &g2.f, &g2.n); c1->VSGetConstantBuffers1(5, 1, &g5.b, &g5.f, &g5.n); c1->VSGetConstantBuffers1(6, 1, &g6.b, &g6.f, &g6.n);
+    c1->Release();
+    UINT o2 = 0, o5 = 0, o6 = 0;
+    if (CBWindow(g2, 192, &o2) && CBWindow(g5, 144, &o5) && CBWindow(g6, 3072, &o6)) {
+        UINT slot;
+        { std::lock_guard<std::mutex> lk(s_mx); slot = s_slotNext++ % kSlots; }
+        const UINT dst = slot * kRecF4 * 16;
+        CopyPart(c, g2.b, o2 + 128, 64, dst);
+        CopyPart(c, g5.b, o5, 144, dst + 64);
+        CopyPart(c, g6.b, o6, 3072, dst + 256);
+        const Rec r{ slot, m->sBase, m->nv, (UINT)m->id };
         std::lock_guard<std::mutex> lk(s_mx);
-        TabKey k{ c, g5.b, g5.f };
-        auto it = s_gen.find(k);
-        if (it == s_gen.end()) {
-            if (s_gen.size() >= kTables / 2) { s_skipNoTab++; releaseCB(); return; }   // mas de 64 personajes en un cuadro
-            TabUse u; u.tab = s_tabNext++ % kTables; it = s_gen.emplace(k, u).first; first = true; s_tabs++;
-        }
-        TabUse& u = it->second;
-        if (std::find(u.meshes.begin(), u.meshes.end(), m->id) != u.meshes.end()) { releaseCB(); return; }   // la misma parte otra vez (otra pasada)
-        if (s_genVerts + m->nv > kRing / 2) { s_skipBudget++; releaseCB(); return; }   // el anillo tiene que guardar dos cuadros
-        u.meshes.push_back(m->id);
-        tab = u.tab;
-        if (s_ringPos + m->nv > kRing) s_ringPos = 0;
-        oBase = s_ringPos; s_ringPos += m->nv; s_genVerts += m->nv;
-    }
-    D3D11_MAPPED_SUBRESOURCE mp;
-    if (FAILED(c->Map(s_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mp))) { releaseCB(); return; }
-    const UINT prm[4] = { m->sBase, m->nv, oBase, (UINT)m->id };
-    memcpy(mp.pData, prm, sizeof(prm)); c->Unmap(s_cb, 0);
-    // estado del CS del juego (se devuelve igual)
-    ID3D11ComputeShader* pcs = nullptr; c->CSGetShader(&pcs, nullptr, nullptr);
-    CBSlot p2, p5, p6, p7; GetCB(c1, false, 2, p2); GetCB(c1, false, 5, p5); GetCB(c1, false, 6, p6); GetCB(c1, false, 7, p7);
-    ID3D11ShaderResourceView* ps0 = nullptr; ID3D11ShaderResourceView* ps120 = nullptr; c->CSGetShaderResources(0, 1, &ps0); c->CSGetShaderResources(120, 1, &ps120);
-    ID3D11UnorderedAccessView* pu[3] = {}; c->CSGetUnorderedAccessViews(0, 3, pu);
-    if (first) { const UINT z[4] = { 0, 0, 0, 0 }; c->ClearUnorderedAccessViewUint(s_tabUAV[tab], z); }
-    c->CSSetShader(s_cs, nullptr, 0);
-    SetCSCB(c1, 2, g2); SetCSCB(c1, 5, g5); SetCSCB(c1, 6, g6);
-    { ID3D11Buffer* b = s_cb; c->CSSetConstantBuffers(7, 1, &b); }
-    { ID3D11ShaderResourceView* v = s_staticSRV; c->CSSetShaderResources(0, 1, &v); ID3D11ShaderResourceView* pv = g_dev.paramSRV; c->CSSetShaderResources(120, 1, &pv); }
-    { ID3D11UnorderedAccessView* u[3] = { s_ringVUAV, s_ringNUAV, s_tabUAV[tab] }; c->CSSetUnorderedAccessViews(0, 3, u, nullptr); }
-    c->Dispatch((m->nv + 63) / 64, 1, 1);
-    c->CSSetUnorderedAccessViews(0, 3, pu, nullptr);
-    c->CSSetShaderResources(0, 1, &ps0); c->CSSetShaderResources(120, 1, &ps120);
-    SetCSCB(c1, 2, p2); SetCSCB(c1, 5, p5); SetCSCB(c1, 6, p6); SetCSCB(c1, 7, p7);
-    c->CSSetShader(pcs, nullptr, 0);
-    if (pcs) pcs->Release(); if (ps0) ps0->Release(); if (ps120) ps120->Release(); for (auto* u : pu) if (u) u->Release();
-    for (CBSlot* s : { &p2, &p5, &p6, &p7 }) if (s->b) s->b->Release();
-    releaseCB();
-    s_recs++;
+        std::vector<Rec>& list = (c->GetType() == D3D11_DEVICE_CONTEXT_DEFERRED) ? s_pendCtx[c] : s_execRecs;
+        if (list.size() < 4096) list.push_back(r); else s_dropRec++;
+    } else s_skipWin++;
+    for (CBSlot* s : { &g2, &g5, &g6 }) if (s->b) s->b->Release();
+}
+// (25/10 e) los registros de un contexto diferido quedan en su lista de comandos; cuentan cuando la lista se ejecuta
+void BodyOnFinish(ID3D11DeviceContext* c, ID3D11CommandList* l) {
+    if (!s_ready.load(std::memory_order_acquire) || !l) return;
+    std::lock_guard<std::mutex> lk(s_mx);
+    auto it = s_pendCtx.find(c);
+    if (it == s_pendCtx.end() || it->second.empty()) { s_pendList.erase(l); return; }
+    if (s_pendList.size() >= 256) { s_pendList.clear(); s_dropList++; }   // listas que nunca se ejecutaron
+    s_pendList[l] = std::move(it->second);
+    it->second.clear();
+}
+void BodyOnExecute(ID3D11DeviceContext* c, ID3D11CommandList* l) {
+    if (!s_ready.load(std::memory_order_acquire) || !l) return;
+    std::lock_guard<std::mutex> lk(s_mx);
+    auto it = s_pendList.find(l);
+    if (it == s_pendList.end()) return;
+    // una lista ejecutada dentro de otro contexto diferido pasa a ese contexto (cuenta cuando se ejecute la de afuera)
+    std::vector<Rec>& dst = (c->GetType() == D3D11_DEVICE_CONTEXT_DEFERRED) ? s_pendCtx[c] : s_execRecs;
+    dst.insert(dst.end(), it->second.begin(), it->second.end());
+    s_pendList.erase(it);
 }
 
 // ---------------------------------------------------------------- registro de mallas (Present, contexto inmediato)
@@ -336,7 +408,7 @@ static ID3D11Buffer* Staging(UINT bytes) {
 }
 static void Reject(BodyMesh* m, const char* why) {
     m->state = 4; m->why = why; ReleaseMesh(m);
-    static int n = 0; if (n++ < 40) Log("cuerpo: malla %d descartada (%u indices desde %u): %s", m->id, m->count, m->start, why);
+    static int n = 0; if (n++ < 40) Log("cuerpo: malla %d descartada (%u indices desde %u, base %d): %s", m->id, m->count, m->start, m->base, why);
 }
 static void StepMesh(ID3D11DeviceContext* imm, BodyMesh* m) {
     const UINT isz = m->ibFmt == DXGI_FORMAT_R16_UINT ? 2 : 4;
@@ -363,7 +435,12 @@ static void StepMesh(ID3D11DeviceContext* imm, BodyMesh* m) {
             if (s < 0 || m->stVB[s]) continue;
             D3D11_BUFFER_DESC d; m->vb[s]->GetDesc(&d);
             const UINT64 a = (UINT64)m->off[s] + (UINT64)((INT64)m->base + lo) * m->stride[s], b = a + (UINT64)m->nv * m->stride[s];
-            if (!m->stride[s] || b > d.ByteWidth) { Reject(m, "vertices fuera del buffer"); return; }
+            if (!m->stride[s] || b > d.ByteWidth) {
+                char w[240]; snprintf(w, sizeof w, "vertices fuera del buffer (ranura %d: paso %u, desplazamiento %u, vertices %u..%u, el buffer tiene %u bytes = %u vertices; elementos pos %d normal %d huesos %d pesos %d)",
+                                      s, m->stride[s], m->off[s], lo, hi, d.ByteWidth, m->stride[s] ? (d.ByteWidth - (std::min)(d.ByteWidth, m->off[s])) / m->stride[s] : 0,
+                                      m->pos.slot, m->nrm.slot, m->idx.slot, m->wgt.slot);
+                Reject(m, w); return;
+            }
             if (!(m->stVB[s] = Staging((UINT)(b - a)))) { Reject(m, "sin memoria para la copia"); return; }
             D3D11_BOX bx = { (UINT)a, 0, 0, (UINT)b, 1, 1 }; imm->CopySubresourceRegion(m->stVB[s], 0, 0, 0, 0, m->vb[s], 0, &bx);
         }
@@ -411,6 +488,8 @@ static void StepMesh(ID3D11DeviceContext* imm, BodyMesh* m) {
         memcpy(m->bmin, bmin, sizeof(bmin)); memcpy(m->bmax, bmax, sizeof(bmax));
         // solo lo que puede tocar la camiseta: torso, brazos y cuello (en reposo, de 0.9 a 1.85 m); piernas y pies afuera
         if (bmax[1] < 0.95f || bmin[1] > 1.85f) { Reject(m, "fuera de la zona de la camiseta"); return; }
+        // (25/10 e) las manos (al costado, lejos del eje: x 0.57..0.73 en el reposo de TorsoBody) tampoco: la manga no llega
+        if (bmin[0] > 0.45f || bmax[0] < -0.45f) { Reject(m, "mano (la manga no llega)"); return; }
         UINT sb = 0;
         if (!AllocStatic(m->nv, &sb)) { Reject(m, "copia propia llena"); return; }
         m->sBase = sb;
@@ -424,6 +503,58 @@ static void StepMesh(ID3D11DeviceContext* imm, BodyMesh* m) {
     }
 }
 
+// ---------------------------------------------------------------- lote del cuadro (Present, contexto inmediato)
+// todo lo que se ejecuto en el cuadro: tablas limpias, personajes (assign) y piel (skin) en dos despachos seguidos
+static bool RunBatch(ID3D11DeviceContext* imm, std::vector<Rec>& recs, int frame) {
+    D3D11_MAPPED_SUBRESOURCE mp;
+    if (FAILED(imm->Map(s_desc, 0, D3D11_MAP_WRITE_DISCARD, 0, &mp))) return false;
+    uint32_t* d = (uint32_t*)mp.pData;
+    static std::vector<uint32_t> grp; grp.clear();
+    UINT n = 0, ring = 0;
+    for (const Rec& r : recs) {
+        if (n >= kMaxRec) { s_dropRec++; continue; }
+        if (ring + r.nv > kRing) { s_dropRing++; continue; }
+        uint32_t* e = d + 8 * n;
+        e[0] = r.slot; e[1] = r.sBase; e[2] = r.nv; e[3] = ring; e[4] = r.mesh; e[5] = e[6] = e[7] = 0;
+        for (UINT v0 = 0; v0 < r.nv; v0 += 64) { grp.push_back(n); grp.push_back(v0); }
+        ring += r.nv; n++;
+    }
+    imm->Unmap(s_desc, 0);
+    const UINT ng = (UINT)(grp.size() / 2);
+    if (!n || !ng || ng > kMaxGroups) return false;
+    if (FAILED(imm->Map(s_grp, 0, D3D11_MAP_WRITE_DISCARD, 0, &mp))) return false;
+    memcpy(mp.pData, grp.data(), grp.size() * 4); imm->Unmap(s_grp, 0);
+    if (FAILED(imm->Map(s_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mp))) return false;
+    const UINT prm[4] = { 0u, n, (UINT)frame, ng };
+    memcpy(mp.pData, prm, sizeof(prm)); imm->Unmap(s_cb, 0);
+    // estado del CS del contexto inmediato (se devuelve igual)
+    ID3D11ComputeShader* pcs = nullptr; imm->CSGetShader(&pcs, nullptr, nullptr);
+    ID3D11Buffer* pcb = nullptr; imm->CSGetConstantBuffers(0, 1, &pcb);
+    ID3D11ShaderResourceView* psrv[4] = {}; imm->CSGetShaderResources(0, 4, psrv);
+    ID3D11UnorderedAccessView* puav[5] = {}; imm->CSGetUnorderedAccessViews(0, 5, puav);
+    const UINT z[4] = { 0, 0, 0, 0 };
+    imm->ClearUnorderedAccessViewUint(s_tabUAV, z);
+    { ID3D11Buffer* b = s_cb; imm->CSSetConstantBuffers(0, 1, &b); }
+    // personajes
+    { ID3D11ShaderResourceView* v[4] = { nullptr, s_descSRV, s_recSRV, nullptr }; imm->CSSetShaderResources(0, 4, v); }
+    { ID3D11UnorderedAccessView* u[5] = { nullptr, nullptr, s_tabUAV, s_recTabUAV, s_diagUAV }; imm->CSSetUnorderedAccessViews(0, 5, u, nullptr); }
+    imm->CSSetShader(s_csAssign, nullptr, 0);
+    imm->Dispatch(1, 1, 1);
+    // piel
+    { ID3D11UnorderedAccessView* u[5] = { s_ringVUAV, s_ringNUAV, s_tabUAV, s_recTabUAV, nullptr }; imm->CSSetUnorderedAccessViews(0, 5, u, nullptr); }
+    { ID3D11ShaderResourceView* v[4] = { s_staticSRV, s_descSRV, s_recSRV, s_grpSRV }; imm->CSSetShaderResources(0, 4, v); }
+    imm->CSSetShader(s_csSkin, nullptr, 0);
+    imm->Dispatch(ng, 1, 1);
+    imm->CSSetUnorderedAccessViews(0, 5, puav, nullptr);
+    imm->CSSetShaderResources(0, 4, psrv);
+    imm->CSSetConstantBuffers(0, 1, &pcb);
+    imm->CSSetShader(pcs, nullptr, 0);
+    if (pcs) pcs->Release(); if (pcb) pcb->Release();
+    for (auto* v : psrv) if (v) v->Release(); for (auto* u : puav) if (u) u->Release();
+    s_logRecs += (int)n; s_logVerts += (int)ring; s_logBatches++;
+    return true;
+}
+
 void BodyPresent() {
     if (!g_dev.dev || !g_dev.imm || s_failed) return;
     if (!s_ready.load(std::memory_order_acquire)) {
@@ -433,12 +564,12 @@ void BodyPresent() {
         s_ready.store(true, std::memory_order_release);
     }
     if (g_dev.dev != s_dev) return;
-    const int frame = PresentNo();
+    const int frame = PresentNo();   // el numero que la DLL sube en este Present (fila 257): el que vera el simulador
     std::vector<BodyMesh*> dead;
+    std::vector<Rec> recs;
     {
         std::lock_guard<std::mutex> lk(s_mx);
-        s_logVerts += s_genVerts; s_logTabs += (int)s_gen.size();
-        s_gen.clear(); s_genVerts = 0;
+        recs.swap(s_execRecs);
         // mallas nuevas: hasta 3 pasos por cuadro (cada malla tarda 3 cuadros: indices, vertices, subida)
         int steps = 0;
         for (size_t i = 0; i < s_pending.size() && steps < 3;) {
@@ -455,37 +586,41 @@ void BodyPresent() {
         }
     }
     for (auto* m : dead) delete m;
-    s_logRecs += s_recs.exchange(0); s_logFrames++;
-    // contadores del simulador (u8): copia + limpieza cada 20 s, lectura 2 cuadros despues
+    s_logFrames++;
+    bool ran = false;
+    if (!recs.empty() && s_csSkin && s_csAssign && g_cfg.live[256][0] > 0.5f) ran = RunBatch(g_dev.imm, recs, frame);
+    // resumen del lote (personajes encontrados y donde estan): copia cada 20 s, lectura 2 cuadros despues
     if (s_diagState == 1 && s_diagStage && frame >= s_diagFrame + 2) {
         D3D11_MAPPED_SUBRESOURCE mp;
         HRESULT hr = g_dev.imm->Map(s_diagStage, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mp);
         if (SUCCEEDED(hr)) {
-            uint32_t d[16]; memcpy(d, mp.pData, sizeof(d)); g_dev.imm->Unmap(s_diagStage, 0);
+            uint32_t q[kDiag]; memcpy(q, mp.pData, sizeof(q)); g_dev.imm->Unmap(s_diagStage, 0);
             s_diagState = 0;
-            if (d[0] > 0) {
-                const double perShirt = d[1] ? (double)d[2] / d[1] : 0.0;
-                Log("cuerpo (fisica de la ropa): %u pasos de camiseta, %u con su cuerpo (%u con piel del cuadro anterior, %u de este); %.0f puntos de tela con piel cerca por paso; %u empujes, el mayor %.1f mm; tabla valida mas cercana a %s mm; %.1f tablas validas por paso",
-                    d[0], d[1], d[7], d[6], perShirt, d[3], d[8] / 10.0, d[4] ? std::to_string(0xFFFFFFFFu - d[4]).c_str() : "-", d[0] ? (double)d[5] / d[0] : 0.0);
+            if (q[1] > 0) {
+                char l[900]; int k = snprintf(l, sizeof l, "cuerpo (lote del cuadro %u): %u dibujos de piel -> %u personajes, %u repetidos (otra pasada), %u sin tabla", q[0], q[1], q[2], q[3], q[4]);
+                for (UINT c = 0; c < 8 && c < q[2] && k < (int)sizeof l - 80; c++) {
+                    float w[3]; memcpy(w, &q[16 + 4 * c], 12);
+                    k += snprintf(l + k, sizeof l - k, "%s(%.2f, %.2f, %.2f) %u partes", c ? "; " : "; personajes en ", w[0], w[1], w[2], q[19 + 4 * c]);
+                }
+                Log("%s", l);
             }
         } else if (hr != DXGI_ERROR_WAS_STILL_DRAWING) s_diagState = 0;
     }
+    // instancias del simulador copiadas en el cuadro anterior: se dejan de copiar y se leen 2 cuadros despues
+    if (s_instState == 1 && frame >= s_instFrame + 1) { g_bodyDiagArmed = false; s_instState = 2; }
+    if (s_instState == 2 && frame >= s_instFrame + 3) { if (s_instN) ReadInstances(g_dev.imm); s_instState = 0; }
     static double nextLog = 0; const double t = Now();
-    if (t > nextLog) {
+    if (t > nextLog && (ran || s_logBatches > 0 || frame - s_simSeen.load() < 300)) {
         nextLog = t + 20.0;
-        if (s_diagUAV && s_diagStage && s_diagState == 0) {
-            g_dev.imm->CopyResource(s_diagStage, s_diag);
-            const UINT z[4] = { 0, 0, 0, 0 }; g_dev.imm->ClearUnorderedAccessViewUint(s_diagUAV, z);
-            s_diagState = 1; s_diagFrame = frame;
-        }
-        if (s_logFrames > 0 && (s_logRecs > 0 || frame - s_simSeen.load() < 300)) {
-            int ready = 0, rej = 0, pend = 0;
-            { std::lock_guard<std::mutex> lk(s_mx); for (auto& kv : s_meshes) { if (kv.second->state == 3) ready++; else if (kv.second->state == 4) rej++; else pend++; } }
-            Log("cuerpo: %d mallas de piel listas (%d descartadas, %d en camino); por cuadro %.1f partes de cuerpo en %.1f personajes, %.0f vertices%s%s",
-                ready, rej, pend, s_logRecs / (float)s_logFrames, s_logTabs / (float)s_logFrames, s_logVerts / (float)s_logFrames,
-                s_skipBudget.load() ? " (anillo lleno: se saltearon partes)" : "", s_skipNoTab.load() ? " (mas de 64 personajes)" : "");
-        }
-        s_logRecs = s_logFrames = s_logVerts = s_logTabs = 0; s_skipBudget = 0; s_skipNoTab = 0;
+        if (s_instState == 0 && frame - s_simSeen.load() < 300) { s_instN = 0; s_instFrame = frame; s_instState = 1; g_bodyDiagArmed = true; }
+        if (ran && s_diagStage && s_diagState == 0) { g_dev.imm->CopyResource(s_diagStage, s_diag); s_diagState = 1; s_diagFrame = frame; }
+        int ready = 0, rej = 0, pend = 0;
+        { std::lock_guard<std::mutex> lk(s_mx); for (auto& kv : s_meshes) { if (kv.second->state == 3) ready++; else if (kv.second->state == 4) rej++; else pend++; } }
+        Log("cuerpo: %d mallas de piel listas (%d descartadas, %d en camino); por cuadro %.1f dibujos de piel, %.0f vertices (%d lotes en %d cuadros)%s%s%s%s",
+            ready, rej, pend, s_logBatches ? s_logRecs / (float)s_logBatches : 0.0f, s_logBatches ? s_logVerts / (float)s_logBatches : 0.0f, s_logBatches, s_logFrames,
+            s_dropRec ? " (mas de 512 dibujos: se saltearon)" : "", s_dropRing ? " (mas de 1 M de vertices: se saltearon)" : "",
+            s_skipWin.load() ? " (dibujos con constantes incompletas)" : "", s_dropList ? " (listas de comandos sin ejecutar)" : "");
+        s_logRecs = s_logFrames = s_logVerts = s_logBatches = 0; s_dropRec = s_dropRing = s_dropList = 0; s_skipWin = 0;
     }
 }
 

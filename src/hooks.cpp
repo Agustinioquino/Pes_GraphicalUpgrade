@@ -329,7 +329,7 @@ static void UploadParams() {
 }
 
 // ---------------------------------------------------------------- estado por contexto
-struct CtxState { const ShaderEntry* ps = nullptr; const ShaderEntry* vs = nullptr; ID3D11Device* dev = nullptr; bool devKnown = false; ID3D11Buffer* lastHairCB = nullptr; };   // lastHairCB: b11 de la ultima cara dibujada en este contexto (la boca la hereda)
+struct CtxState { const ShaderEntry* ps = nullptr; const ShaderEntry* vs = nullptr; ID3D11Device* dev = nullptr; bool devKnown = false; ID3D11Buffer* lastHairCB = nullptr; bool clothCS = false; };   // clothCS: el CS puesto es el simulador del mod de ropa (diagnostico en Dispatch)   // lastHairCB: b11 de la ultima cara dibujada en este contexto (la boca la hereda)
 static std::unordered_map<ID3D11DeviceContext*, CtxState> s_ctx;
 static std::shared_mutex s_ctxMutex;
 static CtxState& Ctx(ID3D11DeviceContext* c) {
@@ -362,6 +362,27 @@ static PFN_DrawIdxInstInd o_DrawIdxInstInd[2];   // (25/10) DrawIndexedInstanced
 static PFN_Present o_Present; static PFN_Resize o_Resize;
 using PFN_ClearDSV = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11DepthStencilView*, UINT, FLOAT, UINT8);
 static PFN_ClearDSV o_ClearDSV[2];
+// (25/10 e) listas de comandos: los dibujos de la piel grabados en un contexto diferido cuentan cuando su lista se ejecuta
+using PFN_ExecCL = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11CommandList*, BOOL);
+using PFN_FinishCL = HRESULT(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, BOOL, ID3D11CommandList**);
+static PFN_ExecCL o_ExecCL[2]; static PFN_FinishCL o_FinishCL[2];
+// (25/10 e) diagnostico de la ropa contra el cuerpo: en el despacho del simulador del mod de ropa se copia su lista de
+// instancias (t18: matriz de mundo de cada prenda) para comparar con los personajes del lote (cada 20 s, ver cuerpo.cpp)
+using PFN_Dispatch = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, UINT);
+static PFN_Dispatch o_Dispatch[2];
+template<int V> static void STDMETHODCALLTYPE hk_Dispatch(ID3D11DeviceContext* c, UINT x, UINT y, UINT z) {
+    if (g_bodyDiagArmed.load(std::memory_order_relaxed) && Ctx(c).clothCS) BodyNoteClothDispatch(c, x);
+    o_Dispatch[V](c, x, y, z);
+}
+template<int V> static void STDMETHODCALLTYPE hk_ExecCL(ID3D11DeviceContext* c, ID3D11CommandList* l, BOOL r) {
+    BodyOnExecute(c, l);
+    o_ExecCL[V](c, l, r);
+}
+template<int V> static HRESULT STDMETHODCALLTYPE hk_FinishCL(ID3D11DeviceContext* c, BOOL r, ID3D11CommandList** l) {
+    HRESULT hr = o_FinishCL[V](c, r, l);
+    if (SUCCEEDED(hr) && l && *l) BodyOnFinish(c, *l);
+    return hr;
+}
 // cejas (18/10): para dibujar las hebras hace falta saber si el juego usa profundidad invertida (limpia a 0) o normal (limpia a 1)
 std::atomic<int> g_depthClearZero{0}, g_depthClearOne{0};
 template<int V> static void STDMETHODCALLTYPE hk_ClearDSV(ID3D11DeviceContext* c, ID3D11DepthStencilView* v, UINT f, FLOAT d, UINT8 st) {
@@ -524,6 +545,7 @@ ShaderBind BindShadersRaw(ID3D11DeviceContext* c, const ShaderBind& b) {
 template<int V> static void STDMETHODCALLTYPE hk_SetCS(ID3D11DeviceContext* c, ID3D11ComputeShader* s, ID3D11ClassInstance* const* ci, UINT n) {
     const ShaderEntry* e = FindShader(s);
     CatalogCS(e);
+    Ctx(c).clothCS = e && e->clothSim;
     if (e && e->repl && !g_cfg.bypass) {
         o_SetCS[V](c, (ID3D11ComputeShader*)e->repl, ci, n);
         if (e->dev == g_dev.dev && g_dev.paramSRV) { ID3D11ShaderResourceView* v = g_dev.paramSRV; c->CSSetShaderResources(120, 1, &v); }
@@ -537,7 +559,6 @@ template<int V> static void STDMETHODCALLTYPE hk_SetCS(ID3D11DeviceContext* c, I
         ID3D11ShaderResourceView* v[5] = { g_dev.paramSRV, MuscleClothSRV(), nullptr, nullptr, nullptr };
         BodyClothSRVs(v + 2);
         c->CSSetShaderResources(120, 5, v);
-        if (ID3D11UnorderedAccessView* du = BodyClothUAV()) c->CSSetUnorderedAccessViews(8, 1, &du, nullptr);   // contadores (u8)
         BodySimSeen();
     }
 }
@@ -820,6 +841,9 @@ template<int V> static void HookContextV(ID3D11DeviceContext* c) {
     n += Hook(vt[39], (void*)&hk_DrawIdxInstInd<V>, (void**)&o_DrawIdxInstInd[V], "DrawIndexedInstancedIndirect");
     n += Hook(vt[69], (void*)&hk_SetCS<V>, (void**)&o_SetCS[V], "CSSetShader");
     n += Hook(vt[53], (void*)&hk_ClearDSV<V>, (void**)&o_ClearDSV[V], "ClearDepthStencilView");
+    n += Hook(vt[41], (void*)&hk_Dispatch<V>, (void**)&o_Dispatch[V], "Dispatch");
+    n += Hook(vt[58], (void*)&hk_ExecCL<V>, (void**)&o_ExecCL[V], "ExecuteCommandList");
+    n += Hook(vt[114], (void*)&hk_FinishCL<V>, (void**)&o_FinishCL[V], "FinishCommandList");
     if (n) Log("contexto enganchado (variante %d, %d funciones)", V, n);
 }
 static void HookContext(ID3D11DeviceContext* c, int v) {
