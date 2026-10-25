@@ -1,0 +1,423 @@
+// ---- Created with 3Dmigoto v1.3.16 on Thu Oct 08 21:08:33 2026
+
+cbuffer cPSScene : register(b2)
+{
+
+  struct
+  {
+    float4x4 m_projectionView;
+    float4x4 m_projection;
+    float4x4 m_view;
+    float4x4 m_shadowProjection;
+    float4x4 m_shadowProjection2;
+    float4 m_eyepos;
+    float4 m_projectionParam;
+    float4 m_viewportSize;
+    float4 m_exposure;
+    float4 m_fogParam[3];
+    float4 m_fogColor;
+    float4 m_cameraCenterOffset;
+    float4 m_shadowMapResolutions;
+  } g_psScene : packoffset(c0);
+
+}
+
+cbuffer cPSMaterial : register(b4)
+{
+
+  struct
+  {
+    float4 m_materials[8];
+  } g_psMaterial : packoffset(c0);
+
+}
+
+cbuffer cPSSystem : register(b0)
+{
+
+  struct
+  {
+    float4 m_param;
+    float4 m_renderInfo;
+    float4 m_renderBuffer;
+    float4 m_dominantLightDir;
+    float4 m_timeParam;
+  } g_psSystem : packoffset(c0);
+
+}
+
+SamplerState g_sampler_normal_s : register(s1);
+SamplerState g_sampler_base_s : register(s3);
+SamplerState g_sampler_mask_s : register(s6);
+SamplerState g_sampler_grain_s : register(s7);
+SamplerState g_samplerPoint_Wrap_s : register(s8);
+SamplerState g_samplerLinear_Clamp_s : register(s11);
+SamplerState g_samplerAnisotropic_Wrap_s : register(s12);
+SamplerState g_samplerAnisotropic_Wrap_High_Quality_s : register(s14);
+Texture2D<float4> g_tex_diffuse : register(t0);
+Texture2D<float4> g_tex_normal : register(t1);
+Texture2D<float4> g_tex_base : register(t3);
+Texture2D<float4> g_tex_turfNormal : register(t4);
+Texture2D<float4> g_tex_turfSlopTable : register(t5);
+Texture2D<float4> g_tex_mask : register(t6);
+Texture2D<float4> g_tex_grain : register(t7);
+Texture2D<float4> g_irradianceTexture : register(t12);
+Texture2D<float4> g_directionalTexture : register(t13);
+Texture2D<float4> g_radiosityNormalTexture : register(t14);
+Texture2D<float4> g_tex_mesh : register(t15);
+
+
+// 3Dmigoto declarations
+#define cmp -
+Texture2D<float4> PESTurfN : register(t17);   // PES21 pasto v3: relieve propio del cesped (mosaico)
+Texture2D<float4> PESWearMap : register(t18);   // PES21 pasto v3: desgaste en vivo (recurso pes_wear)
+Texture1D<float4> IniParams : register(t120);
+Texture2D<float4> StereoParams : register(t125);
+#include "pes_grass.hlsli"   // PES21 pasto v3 (19/10): patrones de corte, desgaste y zonas (compartido con las hojas)
+
+
+// PES21 (18/10): valor "y" de la tabla de pendiente del juego para un grano g (vector de la hoja peinada) y la
+// direccion de vista mezclada r4: es lo que hace que una franja se vea clara o oscura segun desde donde la miras.
+float PESStripeST(float3 g, float3 r4) {
+  float3 t = float3(g.x * g.y, -(g.z * g.z + g.x * g.x), g.z * g.y);
+  t *= rsqrt(max(dot(t, t), 1e-8));
+  float2 uv = float2(dot(r4, g), dot(r4, t)) * 0.5 + 0.5;
+  return g_tex_turfSlopTable.SampleLevel(g_samplerLinear_Clamp_s, uv, 0).y;
+}
+float bh21(float2 p) { p = frac(p * float2(123.34, 456.21)); p += dot(p, p + 45.32); return frac(p.x * p.y); }
+float bnoise(float2 p) { float2 i = floor(p), f = frac(p); f = f * f * (3 - 2 * f);
+  return lerp(lerp(bh21(i), bh21(i + float2(1,0)), f.x), lerp(bh21(i + float2(0,1)), bh21(i + 1), f.x), f.y); }
+void main(
+  float4 v0 : SV_Position0,
+  float4 v1 : TEXCOORD0,
+  float4 v2 : TEXCOORD1,
+  float4 v3 : TEXCOORD4,
+  float4 v4 : TEXCOORD5,
+  float4 v5 : TEXCOORD6,
+  float4 v6 : TEXCOORD7,
+  float4 v7 : TEXCOORD8,
+  float4 v8 : TEXCOORD9,
+  float4 v9 : TEXCOORD10,
+  out float4 o0 : SV_Target0,
+  out float4 o1 : SV_Target1,
+  out float4 o2 : SV_Target2,
+  out float4 o3 : SV_Target3,
+  out float4 o4 : SV_Target4)
+{
+  float4 r0,r1,r2,r3,r4,r5,r6,r7,r8,r9;
+  uint4 bitmask, uiDest;
+  float4 fDest;
+
+  r0.xy = float2(-0.5,-0.5) + v0.xy;
+  r0.xy = float2(0.125,0.125) * r0.xy;
+  r0.yz = g_tex_mesh.Sample(g_samplerPoint_Wrap_s, r0.xy).xw;
+  r0.x = g_psSystem.m_param.w * r0.z;
+  r1.y = v9.w;
+  r2.xyzw = g_tex_diffuse.Sample(g_samplerAnisotropic_Wrap_High_Quality_s, v1.xy).xyzw;
+  r1.x = r2.z;
+  r0.xy = r1.xy + -r0.xy;
+  r0.xy = cmp(r0.xy < float2(0,0));
+  r0.x = (int)r0.y | (int)r0.x;
+  if (r0.x != 0) discard;
+  r0.xyzw = g_tex_grain.Sample(g_sampler_grain_s, v1.xy).xyzw;
+  r0.xyz = r0.xzy * float3(2,2,2) + float3(-1,-1,-1);
+  r1.x = dot(r0.xyz, r0.xyz);
+  r1.x = rsqrt(r1.x);
+  r0.xyz = r1.xxx * r0.xyz;
+  float3 pesGrain = r0.xyz;   // PES21: grano (direccion en que esta peinado el pasto, cambia por franja)
+  float2 pesWearB = float2(0.0, 0.0);   // PES21 pasto v3: (seco, pelado) de este pixel, se calcula una vez
+  { // PES21 pasto v3: patron de corte sintetizado (franjas, damero, diagonal, rombos, circulos) en vez del grano del juego
+    float4 Q4g = IniParams.Load(int2(104,0)), Q5g = IniParams.Load(int2(105,0));
+    if (Q4g.x > 0.5) { float4 Q7g = IniParams.Load(int2(107,0)); float lv = PESWearMap.Sample(g_samplerLinear_Clamp_s, v1.xy).x; pesWearB = PESWear(PESPitchMeters(v1.xy), v9.xz, Q4g.w, Q7g.x, Q7g.z, lv); }
+    if (Q4g.x > 0.5 && Q5g.x > 0.5) { r0.xyz = PESMowGrain(PESPitchMeters(v1.xy), r0.xyz, Q5g.x, Q5g.y, 0.55 * clamp(Q5g.z, 0.2, 3.0)); pesGrain = r0.xyz; }
+  }
+  r1.xyz = float3(0,0,1) * r0.xyz;
+  r1.xyz = r0.zxy * float3(0,1,0) + -r1.xyz;
+  r3.xyz = r1.xyz * r0.zxy;
+  r1.xyz = r0.yzx * r1.yzx + -r3.xyz;
+  r1.w = dot(r1.xyz, r1.xyz);
+  r1.w = rsqrt(r1.w);
+  r1.xyz = r1.xyz * r1.www;
+  r1.w = dot(g_psScene.m_view._m02_m12_m22, g_psScene.m_view._m02_m12_m22);
+  r1.w = rsqrt(r1.w);
+  r3.xyz = g_psScene.m_eyepos.xyz + -v9.xyz;
+  r2.z = dot(r3.xyz, r3.xyz);
+  r2.z = rsqrt(r2.z);
+  r3.xyz = r3.xyz * r2.zzz;
+  r4.xyz = -g_psScene.m_view._m02_m12_m22 * r1.www + -r3.xyz;
+  r4.xyz = g_psMaterial.m_materials[4].www * r4.xyz + r3.xyz;
+  r1.w = dot(r4.xyz, r4.xyz);
+  r1.w = rsqrt(r1.w);
+  r4.xyz = r4.xyz * r1.www;
+  r5.y = dot(r4.xyz, r1.xyz);
+  r1.y = dot(r3.xyz, r1.xyz);
+  r5.x = dot(r4.xyz, r0.xyz);
+  r1.x = dot(r3.xyz, r0.xyz);
+  r0.x = log2(r3.y);
+  r0.yz = r1.xy * float2(0.5,0.5) + float2(0.5,0.5);
+  r0.yz = g_tex_turfSlopTable.Sample(g_samplerLinear_Clamp_s, r0.yz).xz;
+  r1.xy = r5.xy * float2(0.5,0.5) + float2(0.5,0.5);
+  r1.x = g_tex_turfSlopTable.Sample(g_samplerLinear_Clamp_s, r1.xy).y;
+  // === PES21 franjas de corte (18/10): se amplifica la diferencia entre esta franja y la vecina (grano opuesto),
+  // asi el contraste sigue el angulo de la camara como en TV. x57 fuerza (0 = original), w57 on/off
+  {
+    float4 ST = IniParams.Load(int2(57,0));
+    if (ST.w > 0.5 && ST.x > 0) {
+      float stMirror = PESStripeST(float3(-pesGrain.x, pesGrain.y, -pesGrain.z), r4.xyz);
+      r1.x = saturate(r1.x + (r1.x - stMirror) * 0.5 * ST.x);
+    }
+  }
+  r1.y = g_psMaterial.m_materials[1].x * r0.x;
+  r0.x = g_psMaterial.m_materials[0].y * r0.x;
+  r0.x = exp2(r0.x);
+  r1.y = exp2(r1.y);
+  r1.zw = g_psMaterial.m_materials[2].xy * v1.xy;
+  r3.xyzw = g_tex_base.Sample(g_sampler_base_s, r1.zw).xyzw;
+  float hK = pow(saturate(r3.w), 0.4545);
+  r4.xyz = g_tex_normal.Sample(g_sampler_normal_s, r1.zw).xyw;
+  { // PES21 pasto v3 (20/10): relieve propio del cesped (textures\pes_turf_n.dds en t17): matas vistas desde arriba, en vez del
+    // mosaico de 512 px del juego. x110 fuerza (0 = el del juego), y110 repeticiones extra del mosaico
+    float4 Q10 = IniParams.Load(int2(110,0));
+    if (Q10.x > 0.001) {
+      float4 tn = PESTurfN.Sample(g_sampler_normal_s, r1.zw * max(Q10.y, 0.25));
+      float3 nn = float3(tn.xy * 2.0 - 1.0, 1.0);
+      float3 ng = float3(r4.xy * 2.0 - 1.0, 1.0);
+      // r4.xyw del juego: x*z y y van a 2*v-1 mas abajo; se mezcla en ese mismo espacio
+      float3 nb = normalize(lerp(ng, nn * float3(1.0, 1.0, 1.0), saturate(Q10.x)));
+      r4.xy = nb.xy * 0.5 + 0.5; r4.z = 1.0;
+    }
+  }
+  r1.z = log2(r3.w);
+  r1.z = 0.454545468 * r1.z;
+  r1.z = exp2(r1.z);
+  r1.w = r1.z * r2.x;
+  r1.w = log2(r1.w);
+  r2.xz = g_psMaterial.m_materials[1].yz * r1.ww;
+  r5.xy = g_psMaterial.m_materials[0].zw * r1.ww;
+  r5.xy = exp2(r5.xy);
+  r2.xz = exp2(r2.xz);
+  r1.w = r2.z + -r2.x;
+  r1.y = r1.y * r1.w + r2.x;
+  r1.y = 1 + -r1.y;
+  r6.xy = -r1.yy * g_psMaterial.m_materials[1].ww + float2(1,1);
+  r1.x = -r1.x * r6.y + 1;
+  r7.xyz = float3(1,1,1) + -r3.xyz;
+  r1.xyw = -r7.xyz * r1.xxx + float3(1,1,1);
+  r7.xyz = g_psMaterial.m_materials[4].xyz + -r3.xyz;
+  r7.xyz = r0.www * r7.xyz + r3.xyz;
+  r8.x = saturate(r3.x * g_psMaterial.m_materials[5].x + g_psMaterial.m_materials[5].w);
+  r8.yz = saturate(r3.yz * g_psMaterial.m_materials[5].yz + g_psMaterial.m_materials[6].xy);
+  r3.xyz = r8.xyz + -r7.xyz;
+  r8.xyz = g_tex_mask.Sample(g_sampler_mask_s, v1.xy).xyz;
+  r2.xy = max(r8.xy, r2.wy);
+  r2.yzw = r2.yyy * r3.xyz + r7.xyz;
+  r1.xyw = r2.yzw * r1.xyw;
+  r2.yzw = saturate(float3(0.100000001,0.5,1) * r8.zzz);
+  r2.yzw = float3(1,1,1) + -r2.yzw;
+  r3.xyz = r2.yyy * r1.xyw;
+  r1.xyw = -r1.xyw * r2.yyy + float3(0.800000012,0.800000012,0.800000012);
+  r1.xyw = saturate(r2.xxx * r1.xyw + r3.xyz);
+  o0.xyz = r1.xyw;
+  r3.xyzw = g_radiosityNormalTexture.Sample(g_samplerLinear_Clamp_s, v2.xy).xyzw;
+  o0.w = r3.w;
+  r3.xyz = r3.xyz * float3(2,2,2) + float3(-1,-1,-1);
+  r4.x = r4.x * r4.z;
+  r4.xy = r4.xy * float2(2,2) + float2(-1,-1);
+  r0.w = -r4.x * r4.x + 1;
+  r0.w = -r4.y * r4.y + r0.w;
+  r0.w = max(0, r0.w);
+  r0.w = 9.99999975e-005 + r0.w;
+  r2.x = rsqrt(r0.w);
+  r4.z = r2.x * r0.w;
+  r7.xyz = float3(-1,-1,1) * r4.xyz;
+  r8.xyw = g_tex_turfNormal.Sample(g_samplerAnisotropic_Wrap_s, v1.xy).xyz;
+  r8.xyw = r8.xyw * float3(2,2,2) + float3(-1,-1,-1);
+  r8.xy *= (1.0 - pesWearB.y * 0.85);   // PES21 pasto v3: la tierra es mas lisa que el relieve del cesped
+  r9.xyz = float3(0,0,1) + -r8.xyw;
+  r8.xyw = g_psMaterial.m_materials[3].xxx * r9.xyz + r8.xyw;
+  r8.xyw = float3(0,0,1) + r8.xyw;
+  r0.w = dot(r8.xyw, r7.xyz);
+  r7.xyz = r8.xyw * r0.www;
+  r7.xyz = r7.xyz / r8.www;
+  r4.xyz = -r4.xyz * float3(-1,-1,1) + r7.xyz;
+  r4.w = max(0, r4.z);
+  r0.w = dot(r4.xyw, r4.xyw);
+  r0.w = rsqrt(r0.w);
+  r7.xyz = r4.xwy * r0.www;
+  r4.xyz = -r4.xwy * r0.www + float3(0,1,0);
+  r4.xyz = r8.zzz * r4.xyz + r7.xyz;
+  r0.w = dot(r4.xyz, r4.xyz);
+  r0.w = rsqrt(r0.w);
+  r4.xyz = r4.xyz * r0.www;
+  r7.z = dot(r4.xyz, g_psScene.m_view._m02_m12_m22);
+  r0.w = cmp(0 < -r7.z);
+  r7.x = dot(r4.xyz, g_psScene.m_view._m00_m10_m20);
+  r7.y = dot(r4.xyz, g_psScene.m_view._m01_m11_m21);
+  r2.x = abs(r7.x) + abs(r7.y);
+  r2.x = r2.x + abs(r7.z);
+  r2.xy = r7.xy / r2.xx;
+  r4.xy = cmp(r2.xy >= float2(0,0));
+  r4.xy = r4.xy ? float2(1,1) : float2(-1,-1);
+  r4.zw = float2(1,1) + -abs(r2.yx);
+  r4.xy = r4.zw * r4.xy;
+  r2.xy = r0.ww ? r2.xy : r4.xy;
+  r2.xy = r2.xy * float2(0.5,0.5) + float2(0.5,0.5);
+  r2.xy = float2(2047,2047) * r2.xy;
+  r2.xy = (uint2)r2.xy;
+  bitmask.w = ((~(-1 << 1)) << 1) & 0xffffffff;  r0.w = (((uint)r2.x << 1) & bitmask.w) | ((uint)0 & ~bitmask.w);
+  bitmask.w = ((~(-1 << 1)) << 0) & 0xffffffff;  r0.w = (((uint)r2.y << 0) & bitmask.w) | ((uint)r0.w & ~bitmask.w);
+  r2.xy = (uint2)r2.xy >> int2(1,1);
+  r4.xy = (uint2)r2.xy;
+  r4.w = (uint)r0.w;
+  o1.xyw = float3(0.000977517106,0.000977517106,0.333333343) * r4.xyw;
+  r4.xy = g_psMaterial.m_materials[6].zw * r1.zz;
+  r4.z = g_psMaterial.m_materials[7].x * r1.z;
+  r4.xyz = saturate(g_psMaterial.m_materials[7].yzw + r4.xyz);
+  r0.w = r4.z * r2.z;
+  r2.xy = v8.zw + r4.xy;
+  r0.w = r0.w * 63 + 0.5;
+  r0.w = (uint)r0.w;
+  r0.w = mad((int)r0.w, 16, 3);
+  r0.w = (uint)r0.w;
+  o1.z = 0.000977517106 * r0.w;
+  r0.w = r5.y + -r5.x;
+  r6.z = r0.x * r0.w + r5.x;
+  r0.xy = r6.xz * r0.yz;
+  o2.w = r1.z * r0.y;
+  r0.x = r2.x * r0.x;
+  o2.x = r2.y;
+  o2.y = r0.x * r2.w;
+  o2.z = 0;
+  r0.xyzw = v7.xyzw / v8.xxyy;
+  r0.xyzw = r0.xyzw * float4(0.5,0.5,0.5,0.5) + float4(0.5,0.5,0.5,0.5);
+  r0.xyzw = r0.zwxy * float4(1,-1,1,-1) + float4(0,1,0,1);
+  r0.xy = r0.zw + -r0.xy;
+  o3.xy = g_psSystem.m_renderBuffer.xy * r0.xy;
+  o3.zw = float2(0,0);
+  r0.x = dot(r3.xyz, g_psScene.m_view._m00_m10_m20);
+  r0.y = dot(r3.xyz, g_psScene.m_view._m01_m11_m21);
+  r0.z = dot(r3.xyz, g_psScene.m_view._m02_m12_m22);
+  r0.w = dot(r0.xyz, r0.xyz);
+  r0.w = rsqrt(r0.w);
+  r0.xyz = r0.xyz * r0.www;
+  r2.xyz = g_directionalTexture.Sample(g_samplerLinear_Clamp_s, v2.xy).xyz;
+  r2.xyz = r2.xyz * float3(2,2,2) + float3(-1,-1,-1);
+  r3.x = dot(r2.xyz, g_psScene.m_view._m00_m10_m20);
+  r3.y = dot(r2.xyz, g_psScene.m_view._m01_m11_m21);
+  r3.z = dot(r2.xyz, g_psScene.m_view._m02_m12_m22);
+  r0.w = dot(r3.xyz, r3.xyz);
+  r0.w = rsqrt(r0.w);
+  r2.xyz = r3.xyz * r0.www;
+  r0.w = dot(r0.xyz, r2.xyz);
+  r2.xyz = r2.xyz + r2.xyz;
+  r2.xyz = -r0.xyz * r0.www + r2.xyz;
+  r0.w = dot(r2.xyz, r2.xyz);
+  r0.w = rsqrt(r0.w);
+  r2.xyz = r2.xyz * r0.www;
+  r0.w = dot(r7.xyz, r2.xyz);
+  r1.z = dot(r0.xyz, r2.xyz);
+  r0.x = dot(r0.xyz, r7.xyz);
+  r0.x = -r0.x * 0.5 + 0.5;
+  r0.y = 1 + r0.w;
+  r0.y = 0.5 * r0.y;
+  r0.z = r0.y * r0.y;
+  r0.y = dot(r0.zz, r0.yy);
+  r0.y = -r0.z * r0.z + r0.y;
+  r0.y = r0.y * 3.33333325 + -1;
+  r0.z = min(0, r1.z);
+  r0.w = 1 + r1.z;
+  r0.w = 0.5 * r0.w;
+  r0.z = 1 + r0.z;
+  r0.y = r0.z * r0.y + 1;
+  r1.z = r0.w * r0.w;
+  r1.z = r1.z * r0.w;
+  r2.x = r1.z + r1.z;
+  r0.w = -r1.z * r0.w + r2.x;
+  r0.w = r0.w * 3.33333325 + -1;
+  r0.z = r0.z * r0.w + 1;
+  r0.y = r0.y / r0.z;
+  r0.z = 1 + -r0.x;
+  r0.y = r0.z * r0.y;
+  r0.xyz = r0.xxx * r1.xyw + r0.yyy;
+  r1.xyz = g_irradianceTexture.Sample(g_samplerLinear_Clamp_s, v2.xy).xyz;
+  r0.xyz = r1.xyz * r0.xyz;
+  o4.xyz = g_psScene.m_exposure.zzz * r0.xyz;
+  o4.w = 1;
+    {
+    // === PES21 mod: pasto con variacion macro, zonas secas y oclusion entre hojas ===
+    float4 G = IniParams.Load(int2(10,0));   // y10 = sombreado del pasto, z10 = variacion
+    if (G.y > 0) {
+      float2 wp = v9.xz;
+      float m1 = bnoise(wp * 0.045), m2 = bnoise(wp * 0.16 + 5.3), m3 = bnoise(wp * 0.85 + 1.7);
+      float macro = (m1 * 0.55 + m2 * 0.3 + m3 * 0.15) - 0.5;
+      float3 c = o0.xyz;
+      const float3 LW = float3(0.2126, 0.7152, 0.0722);
+      float lum = dot(c, LW);
+      c *= 1 + macro * 0.20 * G.z;
+      // detalle fino de matas de pasto donde ya no llega el pasto 3D (se desvanece con la distancia para no titilar)
+      float pxw = length(g_psScene.m_eyepos.xyz - v9.xyz) * 0.0015;
+      c *= 1.0 + (bnoise(wp * 7.0) - 0.5) * 0.16 * saturate(1.0 - pxw / 0.12) * G.z
+                + (bnoise(wp * 19.0 + 2.1) - 0.5) * 0.14 * saturate(1.0 - pxw / 0.045) * G.z;
+      float dry = saturate((m2 * 0.7 + m1 * 0.3) * 2.2 - 1.25) * 0.16 * G.z;
+      c = lerp(c, dot(c, LW) * float3(1.12, 1.04, 0.72), dry);
+      float hh = hK;
+      float cav = lerp(0.70, 1.0, smoothstep(0.0, 0.85, hh));
+      cav = lerp(1.0, cav, saturate(G.y));
+      // pasto al sol menos lavado: un poco mas de saturacion y algo menos de brillo base
+      float lc = dot(c, LW);
+      c = lerp(lc.xxx, c, 1.12) * 0.95;
+      o0.xyz = saturate(c * cav);
+      o2.y *= lerp(1.0, 0.85, saturate(G.y));
+      o2.x = saturate(o2.x + 0.04 * G.y);
+      o4.xyz *= cav * cav * lerp(float3(1,1,1), float3(0.965, 1.0, 1.05), saturate(G.y) * 0.6);
+    }
+  }
+  { // === PES21 pasto v2 (Claude, 16/10): color natural al sol ===
+    // x29 corrige el amarillo lima (0 = original, 1 = verde natural), y29 brillo del pasto (1 = igual),
+    // z29 saturacion del pasto (1 = igual), w29 on/off [Alt+Shift+F7]
+    float4 GV = IniParams.Load(int2(29,0));
+    if (GV.w > 0.5) {
+      float3 cg = o0.xyz;
+      const float3 LWg = float3(0.2126, 0.7152, 0.0722);
+      float lg = dot(cg, LWg);
+      // cuanto "amarillea": rojo cerca del verde = lima; el pasto sano tiene el rojo bastante mas bajo
+      float yel = saturate((cg.r / max(cg.g, 1e-3) - 0.55) * 2.5);
+      float3 natural = cg * float3(0.80, 1.0, 0.95);
+      natural *= lg / max(dot(natural, LWg), 1e-4);   // misma luminancia: solo cambia el tono
+      cg = lerp(cg, natural, saturate(GV.x) * yel);
+      cg = lerp(dot(cg, LWg).xxx, cg, GV.z > 0 ? GV.z : 1.0);
+      cg *= GV.y > 0 ? GV.y : 1.0;
+      o0.xyz = saturate(cg);
+    }
+  }
+  { float3 cg = o0.xyz; PESGrassColorGrade(cg); o0.xyz = saturate(cg); }   // (25/10 b) color del pasto (112): matiz, verde, contraste
+  { // === PES21 pasto v3 (19/10): desgaste (seco / tierra) y zonas de color, con las mismas funciones que las hojas
+    float4 Q4 = IniParams.Load(int2(104,0));
+    if (Q4.x > 0.5) {
+      float4 Q6 = IniParams.Load(int2(106,0)), Q7 = IniParams.Load(int2(107,0));
+      float2 wxz = v9.xz;
+      float2 wr = pesWearB;
+      float3 c = o0.xyz * PESGrassZones(wxz, Q6.x);
+      c = PESDryTint(c, wr.x * saturate(Q7.y) * 0.85);
+      float3 dirt = PESDirt(wxz);
+      c = lerp(c, dirt, wr.y);
+      o0.xyz = saturate(c);
+      o2.y = saturate(o2.y * (1.0 - wr.y * 0.6 - wr.x * 0.25));   // tierra y pasto seco: mate
+      { float3 cg = o0.xyz; float sp = o2.y, rg = o2.x; PESGroundLook(cg, sp, rg, PESGround()); o0.xyz = cg; o2.y = sp; o2.x = rg; }   // suelo humedo / seco
+      if (Q7.w > 1.5 && Q7.w < 2.5) o0.xyz = float3(wr.x, wr.y, 0.0);   // depuracion: desgaste
+    }
+  }
+  { // === PES21 pasto v3 (25/10): cesped lejano en la base (PESFarTurf, pes_grass.hlsli). Entra donde se va el nivel medio
+    // del pasto 3D (tamano en pantalla < 35 px/m / densidad) y es pleno donde ya no hay hojas. y61 fuerza, z61 matas, w61 cobertura
+    float4 Q61 = IniParams.Load(int2(61,0)), P58f = IniParams.Load(int2(58,0)), P63f = IniParams.Load(int2(63,0));
+    if (Q61.y > 0.001 && P58f.w > 0.5 && P63f.y > 0.0) {
+      float3 pesE = g_psScene.m_eyepos.xyz - v9.xyz; float pesD = max(length(pesE), 0.05); float3 pesV = pesE / pesD;
+      float pxm = abs(g_psScene.m_projection._m11) * P63f.z / pesD;
+      float dens = clamp(P58f.x > 0.05 ? P58f.x : 1.0, 0.3, 2.0);
+      float T2 = 35.0 / dens, T3 = 15.0 / dens;
+      float kFar = 1.0 - smoothstep(T3 * 0.75, T2 * 1.25, pxm);
+      if (kFar > 0.001) { float3 cg = o0.xyz; float sp = o2.y; PESFarTurf(cg, sp, pesV, v9.xz, pxm, kFar * saturate(Q61.y), Q61.z, Q61.w); o0.xyz = cg; o2.y = sp; }
+    }
+  }
+  return;
+}

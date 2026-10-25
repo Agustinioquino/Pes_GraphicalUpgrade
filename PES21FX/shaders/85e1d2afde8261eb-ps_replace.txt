@@ -1,0 +1,108 @@
+// PES 2021 - Carteles del estadio / objetos PBR genericos (G-buffer)  [hash 85e1d2afde8261eb]  - PES21 (20/10, 141)
+// Traducido a HLSL desde el ensamblador (catalogo PES21 FX), instruccion por instruccion: difusa, normal (uv propia),
+// srm y metal, fundido con tramado, normal de doble cara y antialiasing especular del propio juego. Lo usan los carteles
+// de publicidad junto a la cancha (textura de la publicidad 972x192) y otros objetos del estadio.
+// PES21 FX (141, x on): CARTELES LED. Solo si la textura difusa es una publicidad (bien apaisada, ancho >= 3.5 alto):
+// el pixel se marca en el G-buffer (rugosidad 253/255 + especular 1/255 + metal 0) y la composicion le suma luz propia
+// (un LED emite: se ve encendido en la sombra y de noche brilla), con caida por angulo de vista y la grilla de LEDs de
+// cerca (z141). Los demas objetos que usan este shader no cambian.
+cbuffer cPSSystem : register(b0) { float4 m_param; float4 m_renderInfo; float4 m_renderBuffer; float4 m_dominantLightDir; float4 m_timeParam; }
+
+SamplerState g_sampler_diffuse_s : register(s0);
+SamplerState g_sampler_normal_s : register(s1);
+SamplerState g_sampler_srm_s : register(s2);
+SamplerState g_sampler_metalnessmap_s : register(s3);
+SamplerState g_samplerPoint_Wrap_s : register(s8);
+Texture2D<float4> g_tex_diffuse : register(t0);
+Texture2D<float4> g_tex_normal : register(t1);
+Texture2D<float4> g_tex_srm : register(t2);
+Texture2D<float4> g_tex_metalnessmap : register(t3);
+Texture2D<float4> g_tex_mesh : register(t15);
+Texture1D<float4> IniParams : register(t120);
+
+void main(
+  float4 v0 : SV_Position0,
+  float4 v1 : COLOR0,
+  float4 v2 : TEXCOORD0,
+  float3 v3 : TEXCOORD5,
+  float3 v4 : TEXCOORD6,
+  float3 v5 : TEXCOORD7,
+  float4 v6 : TEXCOORD8,
+  float2 v7 : TEXCOORD9,
+  bool v8 : SV_IsFrontFace,
+  out float4 o0 : SV_Target0,
+  out float4 o1 : SV_Target1,
+  out float4 o2 : SV_Target2,
+  out float4 o3 : SV_Target3,
+  out float4 o4 : SV_Target4)
+{
+  float4 r0, r1, r2, r3;
+  // --- fundido con tramado ---
+  r1 = v0.xyxy + float4(-0.5, -0.5, -1.0, -1.0);
+  float2 par = (float2)((int2)r1.zw & 1) - 0.5;                     // paridad del pixel (para el antialiasing especular)
+  float4 tm = g_tex_mesh.Sample(g_samplerPoint_Wrap_s, r1.xy * 0.125);
+  r3 = g_tex_diffuse.Sample(g_sampler_diffuse_s, v2.xy);
+  o0.xyz = r3.xyz;
+  if (r3.w - tm.w * m_param.w < 0.0 || v1.w - tm.x < 0.0) discard;
+  o0.w = 1.0;
+  // --- normal (doble cara) ---
+  float3 n2 = normalize((v8 ? 1.0 : -1.0) * v5);
+  float3 n0 = normalize(v3), n1 = normalize(v4);
+  float4 tn = g_tex_normal.Sample(g_sampler_normal_s, v2.zw);
+  float2 nm = float2(tn.w * tn.x, tn.y) * 2.0 - 1.0;
+  float nz = max(1.0 - nm.x * nm.x - nm.y * nm.y, 0.0) + 0.0001;
+  nz = nz * rsqrt(nz);
+  float3 N = normalize(n2 * nz + (n0 * nm.x + n1 * nm.y));
+  {
+    float s = abs(N.y) + abs(N.x) + abs(N.z);
+    float2 p = N.xy / s;
+    float2 sg = float2(p.x >= 0.0 ? 1.0 : -1.0, p.y >= 0.0 ? 1.0 : -1.0);
+    float2 wr = sg * (1.0 - abs(p.yx));
+    p = (0.0 < -N.z) ? p : wr;
+    uint2 q = (uint2)((p * 0.5 + 0.5) * 2047.0);
+    uint lo = ((q.x & 1u) << 1) | (q.y & 1u);
+    q >>= 1;
+    o1.xy = (float2)q * 0.000977517106;
+    o1.w = (float)lo * 0.333333343;
+    o1.z = 0.000977517106;
+  }
+  // --- antialiasing especular del juego (variacion de la normal en el cuadrado de 2x2) ---
+  float3 dX = ddx_fine(N);
+  float3 nA = N - dX * par.x;
+  float3 dY = ddy_fine(nA);
+  float3 nB = nA - dY * par.y;
+  nB /= dot(N, nB);
+  float3 T = normalize(v3 - N * dot(N, v3));
+  float3 Bt = N.yzx * T.zxy - N.zxy * T.yzx;
+  float ct = dot(nB, T), cb = dot(nB, Bt);
+  float2 vv = float2(abs(ddy_fine(ct)) + abs(ddx_fine(ct)), abs(ddy_fine(cb)) + abs(ddx_fine(cb)));
+  vv = min(vv * 0.5, 0.300010);
+  vv = vv * vv * 2.0;
+  float aa = max(vv.y, vv.x);
+  float2 srm = g_tex_srm.Sample(g_sampler_srm_s, v2.xy).xy;
+  o2.y = srm.x;
+  o2.x = sqrt(srm.y * srm.y + aa);
+  o2.z = g_tex_metalnessmap.Sample(g_sampler_metalnessmap_s, v2.xy).x;
+  o2.w = 0.0;
+  // --- PES21 carteles LED (141) ---
+  {
+    float4 LD = IniParams.Load(int2(141, 0));
+    uint tw, th; g_tex_diffuse.GetDimensions(tw, th);
+    float2 uvT = v2.xy * float2(tw, th);
+    float2 fw = fwidth(uvT);                                          // fuera de la rama
+    if (LD.x > 0.5 && th > 0 && (float)tw >= 3.5 * (float)th) {
+      float fade = saturate(1.0 - (max(fw.x, fw.y) - 0.25) / 0.35);    // grilla solo cuando un LED ocupa varios pixeles
+      float2 f = frac(uvT) - 0.5;
+      float g = smoothstep(0.48, 0.28, length(f));
+      o0.xyz *= lerp(1.0, 0.35 + 0.9 * g, saturate(LD.z) * fade);
+      o2.x = 0.99215686; o2.y = 0.00392157; o2.z = 0.0;                 // marca LED para la composicion
+    }
+  }
+  // --- velocidad en pantalla ---
+  r0 = v6 / v7.xxyy;
+  r0 = r0 * 0.5 + 0.5;
+  r0 = r0.zwxy * float4(1.0, -1.0, 1.0, -1.0) + float4(0.0, 1.0, 0.0, 1.0);
+  o3.xy = (r0.zw - r0.xy) * m_renderBuffer.xy;
+  o3.zw = 0.0;
+  o4 = float4(0.0, 0.0, 0.0, 1.0);
+}
