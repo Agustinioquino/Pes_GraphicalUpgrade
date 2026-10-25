@@ -78,7 +78,8 @@ void main(uint3 vThreadID : SV_DispatchThreadID, uint3 vThreadGroupID : SV_Group
   r0.x = (int)r0.x + (int)vThreadIDInGroup.x;
   r0.y = g0[r0.x].val[12/4];
   r0.y = cmp(0 != r0.y);
-  if (r0.y == 0) {
+  // PES21 (25/10) SSS unificada (w95): la difusion de la piel la hace solo la SSSS de la DLL; el SSS nativo pasa la luz tal cual
+  if (r0.y == 0 || IniParams.Load(int2(95,0)).w > 0.5) {
     r2.x = g0[r0.x].val[0/4];
     r2.y = g0[r0.x].val[0/4+1];
     r2.z = g0[r0.x].val[0/4+2];
