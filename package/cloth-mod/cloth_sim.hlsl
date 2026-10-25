@@ -825,6 +825,8 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
                     float d = side * dot(q - y, n);
                     if (d < gap) {
                         float3 corr = mul((float3x3)M, n) * (side * (gap - d) * 0.5);
+                        // PES21 FX (25/10): tope por sub-paso (con el short de otro dibujo, en los menus, tironeaba la camiseta)
+                        if (PES_CLOTH_FX) { float cl = length(corr); if (cl > 0.02) corr *= 0.02 / cl; }
                         x += corr;
                         xPrev += corr;
                     }
