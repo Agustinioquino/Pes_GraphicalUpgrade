@@ -155,3 +155,13 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
 | Material de los kits | las luces del juego usan o2.z solo en materiales tipo 1 / 3 (piel especial / pasto); en el tipo 0 (kits) lo ignoran: la marca 0.96 no cambia nada ahi. Para el tipo 0 usan o2.w (id de material -> g_MaterialTexture) |
 | GTAO en la composicion | 619b leia PESGtao en (r0.x = oclusion del juego, v): columna equivocada; ahora en uvC. En escenas donde el GTAO no corre (escena mas chica que la pantalla) la DLL enlaza una textura 1x1 = 1 en t27 |
 | Aro del Fisico (24/10 g) | el editor presenta ~100 cuadros por segundo y dibuja la escena 3D en ~60 % (TAA 0.6 por cuadro): en los cuadros sin escena el aro (que dependia de que ese cuadro tuviera piel) desaparecia. Ahora un CS en Present (pes_ring_snap_cs.hlsl) pasa a una foto lo que vio el cuadro y deja lo ultimo en los cuadros sin escena; el aro lee la foto |
+
+## Short que "explota" con el mod de ropa en el editor (24/10 h)
+
+| Tema | Resultado |
+|---|---|
+| Escena | el editor (y la presentacion de equipos antes del partido) tiene 6-7 modelos de jugador a 1-3 m uno de otro; el mod de ropa los ve a todos ("5 player(s) in view") |
+| Que hace el mod | con [shorts] merge_parts = 1 junta al short las "bandas del ruedo" (336/364 vertices, y 0.60..0.73) aunque vengan de OTRO buffer de vertices y otro contexto (otro modelo): "shorts template #5 from parts #5+#19". En la presentacion llego a juntar dos shorts enteros de jugadores distintos ("template #9 from parts #6+#28") y su propio control dio "fit check WRONG ... off 148 mm" (los pines siguen huesos de otro dibujo) |
+| Sesion de las 22:23-22:25 | los 6 jugadores del editor (el editado incluido) usaban la plantilla mezclada #5, con un borde libre suelto en el medio ("7@0.24(free)"): la union mal soldada. En la de las 22:27 el editado uso la plantilla sin mezclar y el short se veia bien |
+| Nuestro VS del short | descartado: con el vertice que escribe el mod (A^-1 (x - t)) PesClothScale da x - r (A - A') n, menos de 1 mm |
+| Prueba | cloth-mod\cloth.ini [shorts] merge_parts = 0 (copia del original en cloth.ini.antes-merge). La banda queda con la forma del juego y el short se simula solo |
