@@ -24,8 +24,9 @@ namespace fx {
 
 static const uint64_t kGrassVS = 0x498b30bad256e8edULL;
 static const uint64_t kGrassPS = 0x18afff0f79d9aaa5ULL;   // PS de las hojas (G-buffer): solo desde ese dibujo se guarda estado y se emite
-// (25/10 c) 3 niveles x 6 subniveles de densidad (tarjetas por parcela: 9248 >> b), 4096 parcelas por ranura
-static const int kSlotCap = 4096, kBins = 6, kSlots = 18;
+// (25/10 c) 3 niveles x 6 subniveles de densidad (tarjetas por parcela: 9248 >> b), 8192 parcelas por ranura (con la
+// camara cenital todas las celdas de un nivel caen en la misma ranura: a 4K el nivel 0 llega a ~4800 celdas)
+static const int kSlotCap = 8192, kBins = 6, kSlots = 18;
 static const int kMaxInst = kSlotCap * kSlots;
 struct GInst { float x, z, s, r; };   // instancia: posicion, escala, giro (multiplos de 90 grados)
 
@@ -388,7 +389,8 @@ static void GrassEmit(ID3D11DeviceContext* c, int f, bool bound) {
     ID3D11Buffer* mPos = nullptr; ID3D11Buffer* mUv = nullptr; ID3D11Buffer* mIb = nullptr; UINT mCards = 0, mIpc = 12, mVpc = 6;
     {
         std::lock_guard<std::mutex> lk(s_denseMx);
-        if (!s_denseBuilt.load() || fabsf(curv - s_denseCurv) > 0.01f) BuildDense(curv);
+        static float triedCurv = -2.0f;   // si la malla no se pudo crear, no se reintenta en cada cuadro (log y CPU)
+        if ((s_denseBuilt.load() && fabsf(curv - s_denseCurv) > 0.01f) || (!s_denseBuilt.load() && fabsf(curv - triedCurv) > 0.01f)) { triedCurv = curv; BuildDense(curv); }
         if (s_denseBuilt.load()) { DenseLevel& D = s_dense[1]; mPos = D.pos; mUv = D.uv; mIb = D.ib; mCards = D.cards; mIpc = D.idxPerCard; mVpc = D.vertsPerCard; mPos->AddRef(); mUv->AddRef(); mIb->AddRef(); }
     }
     if (!mPos) { Why("sin malla propia de manojos (ver Errores)"); if (!bound) st.Release(); return; }
