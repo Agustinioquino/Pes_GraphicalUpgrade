@@ -148,6 +148,18 @@ float3 PESSkinTransmittance(float d)
        + float3(0.078, 0.000, 0.000) * exp(dd / 7.41);
 }
 
+// (25/10) color de la contraluz: la transmitancia fisica (perfil de Jimenez) es casi rojo puro y despues la composicion la
+// multiplica por el albedo de la piel, que ya es rojizo: orejas y nariz quedaban naranja saturado. Como en los perfiles de
+// subsuperficie de los motores nuevos (tinte de transmision + albedo), k lleva el color hacia un rosado calido con el mismo
+// brillo, y el albedo pone el resto. k = 0: rojo fisico puro.
+float3 PESTransColor(float3 T, float k)
+{
+  const float3 lw = float3(0.2126, 0.7152, 0.0722);
+  const float3 tint = float3(1.0, 0.56, 0.40);
+  float3 warm = dot(T, lw) / dot(tint, lw) * tint;
+  return lerp(T, warm, saturate(k));
+}
+
 // ---------------------------------------------------------------- sol con tamano angular (Karis 2013)
 // La rugosidad efectiva crece con el disco del sol; se devuelve la rugosidad nueva y la normalizacion de energia.
 float PESSunWidenAlpha(float alpha, float sunDeg, out float energy)

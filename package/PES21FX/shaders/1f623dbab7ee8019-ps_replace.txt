@@ -535,6 +535,7 @@ void main(
     float4 P76 = IniParams.Load(int2(76,0));   // PES21 SSS v2: x76 intensidad | y76 zonas que transmiten
     float gateT = lerp(smoothstep(0.45, 0.85, thick), 1.0, saturate(P76.y));
     float3 transm = thick * gateT * tv * float3(1.0, 0.24, 0.10) * P5.x * (P76.x > 0.0 ? P76.x : 1.0);   // 18/10 v2
+    transm = PESTransColor(transm, IniParams.Load(int2(34,0)).z);   // (25/10) z34 color de la contraluz
     o0.xyz += transm * lightC * sqrt(saturate(r6.x));
   }
   r0.xyz = r0.xyz * r6.xyz;

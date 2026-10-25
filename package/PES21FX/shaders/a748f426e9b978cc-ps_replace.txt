@@ -766,6 +766,7 @@ void main(
     // termino 'de atras' amplio que encendia de naranja todo el lado en sombra de la cara
     float thinGate = lerp(smoothstep(0.45, 0.85, thin), 1.0, saturate(P76.y));   // y76: 0 = solo orejas/nariz/labios, 1 = toda la piel (como antes)
     float3 transm = Tr * fwd * (0.6 + 0.4 * back) * thinGate * P5.x * 1.6 * sssV2;
+    transm = PESTransColor(transm, IniParams.Load(int2(34,0)).z);   // (25/10) z34 color de la contraluz
     // PES21 transmision por shadow map (18/10, Jimenez 2010): el grosor real que atraviesa la luz = distancia entre lo
     // que ve el sol (shadow map) y este pixel. Orejas y nariz se encienden solo cuando el sol esta realmente detras.
     if (P64.x > 0.5 && P64.z > 0.0 && pesShCas > -0.5 && g_psScene.m_shadowMapResolutions.x > 1.0 && !pesFreeSun) {   // sol libre: el shadow map es del sol real, no sirve para medir grosor
@@ -783,6 +784,7 @@ void main(
       float thickM = max(abs(dS - pesShRef) - 0.5 / refPerM * 0.004, 0.0) / refPerM;   // 18/10: distancia sin asumir el sentido del eje Z del shadow map
       float dens = (P64.w > 0 ? P64.w : 30.0) * (1.25 - thin);   // el mapa de SSS afina: orejas/nariz dejan pasar mas luz
       float3 Tt = PESSkinTransmittance(thickM * dens);
+      Tt = PESTransColor(Tt, IniParams.Load(int2(34,0)).z);
       float backL = saturate(0.3 + dot(L, -n)) * (1.0 - saturate(rawNdotL * 3.0));
       float3 transSM = Tt * backL * P64.z * 0.8;
       o0.xyz += max(transSM, transm * visT * 0.5) * lightC;   // sin perder el contraluz direccional cuando el shadow map no alcanza
@@ -791,6 +793,7 @@ void main(
     } else if (P34.w > 0.5) o0.xyz += transm * lightC * visT;
     else {
       float3 transmO = thin * smoothstep(0.45, 0.85, thin) * pow(saturate(dot(V, -Lt)), 3.0) * float3(1.0, 0.24, 0.10) * P5.x;
+      transmO = PESTransColor(transmO, IniParams.Load(int2(34,0)).z);   // (25/10) z34 color de la contraluz
       o0.xyz += transmO * lightC * sqrt(saturate(r0.x));
     }
   }

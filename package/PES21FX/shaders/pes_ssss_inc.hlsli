@@ -114,5 +114,17 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   float pen = saturate((dot(blurred, 1.0) - dot(c0, 1.0)) * 2.0);
   res.r *= 1.0 + 0.25 * pen * saturate(P2.w) * (1.0 - 0.75 * km);
   res.gb *= 1.0 - 0.08 * pen * saturate(P2.w) * (1.0 - 0.75 * km);
+  // (25/10) color natural (w76): la difusion suaviza igual, pero la luz que agrega o quita (borde de la sombra) toma el color de
+  // la luz que ya habia en el pixel en vez de tenirse de rojo; asi la piel queda del color de la textura del juego y el rojo queda
+  // solo en una franja fina de la penumbra y en la contraluz. 0 = rojo fisico completo (como antes), 1 = casi sin cambio de color
+  float natK = saturate(IniParams.Load(int2(76,0)).w);
+  if (natK > 0.001) {
+    const float3 lw = float3(0.2126, 0.7152, 0.0722);
+    float l0 = dot(c0, lw), lr = dot(res, lw);
+    float3 cRef = c0 + 0.3 * res;                                   // en la sombra profunda c0 casi no tiene color: se ayuda con la difusion
+    float3 chroma = cRef / max(dot(cRef, lw), 1e-5);
+    float3 resN = max(c0 + (lr - l0) * chroma, 0.0);
+    res = lerp(res, resN, natK * 0.85);                             // siempre queda un 15 % del rojo fisico
+  }
   return float4(res, 1);
 }
