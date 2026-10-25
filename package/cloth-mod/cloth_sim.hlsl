@@ -86,6 +86,20 @@
 // LA ROPA SIGUE A LA MUSCULATURA (25/10): pecho, espalda, abdomen, trapecio, hombros y gluteos de PES21 FX corren huesos del
 // cuerpo que la ropa no usa; la tela corre su reposo lo mismo que la piel en esa zona (tabla g_pesMus, la manda la DLL).
 #define PES_MUS_FOLLOW     1
+// LA ROPA CHOCA CON EL CUERPO REAL (25/10): la DLL de PES21 FX deja en t122..t124 la piel del cuerpo de cada personaje (torso
+// de TorsoBody, brazos y cuello) deformada en el espacio del modelo, con la musculatura incluida (cuerpo.cpp + pes_body_cs.hlsl).
+// La camiseta busca su personaje (posicion en el mundo), cada punto de tela busca la piel cercana una vez por cuadro y en cada
+// sub-paso no puede quedar mas cerca que la separacion de los planos tangentes de esa piel. Parametros en la fila 256 (x
+// prendido, y separacion en mm, z cuantos cm mas adentro que el cuerpo que adivina el mod, w empuje maximo por sub-paso en mm).
+#define PES_BODY           1
+#define PES_BODY_TABLES    128    // tienen que coincidir con cuerpo.cpp / pes_body_cs.hlsl
+#define PES_BODY_CELLS     8192
+#define PES_BODY_CELL      0.025
+#define PES_BODY_STRIDE    (16 + PES_BODY_CELLS)
+#define PES_BODY_MATCH     0.5    // (m) la prenda y el cuerpo son del mismo personaje si sus origenes en el mundo estan a menos de esto
+#define PES_BODY_RADIUS    0.025  // (m) piel a buscar alrededor de cada punto de tela
+#define PES_BODY_LATERAL   0.03   // (m) el plano tangente de un vertice de la piel vale hasta esta distancia al costado
+#define PES_BODY_WALK      40     // vertices por celda como maximo
 #if !PES_CLOTH_FX
 #undef PES_SHORTS_DAMP
 #define PES_SHORTS_DAMP 1.0
@@ -135,6 +149,8 @@
 #define PES_FOLLOW 0.0
 #undef PES_MUS_FOLLOW
 #define PES_MUS_FOLLOW 0
+#undef PES_BODY
+#define PES_BODY 0
 #endif
 #ifdef CM_COHERENT
 #define COH globallycoherent
@@ -252,6 +268,18 @@ StructuredBuffer<float4>        g_pal       : register(t21);
 // y mangas, z la ropa sigue a la musculatura, w escena de menu); g_pesMus = zonas de la musculatura (ver pesMusField).
 Texture1D<float4>               IniParams   : register(t120);
 StructuredBuffer<float4>        g_pesMus    : register(t121);
+// (25/10) el cuerpo real: tablas por personaje ([0] cuadro, [1] partes, [2] vertices, [3] 1 = valida, [4..6] origen en el mundo,
+// [16 + celda] primer vertice + 1), vertices de la piel (posicion, normal y movimiento empaquetados) y siguiente de cada lista
+Buffer<uint>                    g_bodyTab   : register(t122);
+StructuredBuffer<uint4>         g_bodyV     : register(t123);
+StructuredBuffer<uint>          g_bodyNext  : register(t124);
+groupshared uint gBodyKey;
+groupshared uint gBodyIdx;
+static uint   s_bodyTab;      // tabla del cuerpo de esta prenda (0xffffffff = ninguna)
+static float  s_bodyTc;       // 0 = la piel es del cuadro anterior (comienzo de la interpolacion), 1 = de este cuadro
+static float4 s_bodyPrm;      // fila 256
+static float4 s_bq[2][2];     // por particula del hilo (k) y plano (j): punto en el reposo de la prenda, w = normal (octaedro)
+static uint2  s_bv[2][2];     // movimiento propio de la piel (half x3, en el espacio de la simulacion) y bit 16 de y = valido
 groupshared float3 gx[MAXP];
 groupshared uint   gMode;
 groupshared uint   gFirstVisit;
@@ -551,12 +579,150 @@ void predictParticle(uint p, uint s, float h, float3 grav, float3 windBase, floa
     vel = v;
     gx[p] += v * h;
 }
+// ---- PES21 FX (25/10): la ropa contra el cuerpo real (ver PES_BODY) ----
+// piel de la prenda en el espacio del MODELO (sin el mundo), con los huesos del final del cuadro o del comienzo (prev)
+float3x4 pesPalModel(uint slot, uint i, bool prev)
+{
+    uint b = s_palBase + slot * 192 + i * 3 + (prev ? 96 : 0);
+    return float3x4(g_pal[b], g_pal[b + 1], g_pal[b + 2]);
+}
+float3x4 pesSkinModelRaw(ParticleRest r, bool prev)
+{
+    float4 w = unpackWeights(r.skin.x);
+    uint4  i = unpackIndices(r.skin.y);
+    return pesPalModel(r.skin.z, i.x, prev) * w.x + pesPalModel(r.skin.z, i.y, prev) * w.y +
+           pesPalModel(r.skin.z, i.z, prev) * w.z + pesPalModel(r.skin.z, i.w, prev) * w.w;
+}
+float3x4 pesSkinModel(ParticleRest r, bool prev)
+{
+    if (!g_skinned) return identity34();
+    float3x4 M = pesSkinModelRaw(r, prev);
+    if (prev && dot(M[0], M[0]) + dot(M[1], M[1]) + dot(M[2], M[2]) < 1e-6) M = pesSkinModelRaw(r, false);   // sin cuadro anterior
+    return M;
+}
+uint pesBodyHash(int3 c) { return ((uint)c.x * 73856093u ^ (uint)c.y * 19349663u ^ (uint)c.z * 83492791u) & (PES_BODY_CELLS - 1); }
+float2 pesOctEnc(float3 n)
+{
+    n /= max(abs(n.x) + abs(n.y) + abs(n.z), 1e-8);
+    float2 o = n.xy;
+    if (n.z < 0.0) o = (1.0 - abs(n.yx)) * float2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+    return o;
+}
+float3 pesOctDec(float2 o)
+{
+    float3 n = float3(o, 1.0 - abs(o.x) - abs(o.y));
+    if (n.z < 0.0) n.xy = (1.0 - abs(n.yx)) * float2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+    return normalize(n + 1e-12);
+}
+void pesBodyVertex(uint v, out float3 y, out float3 n, out float3 u)
+{
+    uint4 V = g_bodyV[v];
+    y = float3(V.x & 0xffff, V.x >> 16, V.y & 0xffff) / 65535.0 * float3(3.2, 4.0, 3.2) - float3(1.6, 1.0, 1.6);
+    n = pesOctDec(float2(V.y >> 16, V.z & 0xffff) / 65535.0 * 2.0 - 1.0);
+    u = f16tof32(uint3(V.z >> 16, V.w & 0xffff, V.w >> 16));
+}
+// una vez por cuadro (sub-paso 0): la piel mas cercana al punto de tela. El punto se lleva al momento de la piel por los
+// huesos de la propia prenda (reposo de la prenda -> modelo en ese momento); se guardan hasta dos planos tangentes (el mas
+// cercano y el mejor con otra orientacion: axila, costado contra el brazo) en el reposo de la prenda, mas lo que la piel se
+// mueve por su cuenta respecto de la prenda (un brazo que se acerca al torso), para seguirlos en los sub-pasos.
+void pesBodyQuery(uint p, uint k, float3 x)
+{
+    s_bv[k][0] = uint2(0, 0); s_bv[k][1] = uint2(0, 0);
+    if (s_bodyTab == 0xffffffffu || g_legCount > 0) return;
+    ParticleRest r = g_rest[p];
+    float3x4 A = skinC(r.skin.z, r.skin.x, r.skin.y);
+    float det;
+    float3x3 Ai = inverse3((float3x3)A, det);
+    if (!(abs(det) > 1e-9)) return;
+    float3 b = mul(Ai, x - float3(A[0].w, A[1].w, A[2].w));
+    bool prevC = s_bodyTc < 0.5;
+    float3x4 B0 = pesSkinModel(r, prevC);
+    float3x4 Bp = pesSkinModel(r, true), B1 = pesSkinModel(r, false);
+    float3 xm = xform(B0, b);
+    if (!all(isfinite(xm))) return;
+    int3 c0 = (int3)floor(xm / PES_BODY_CELL) - 1;
+    uint tb = s_bodyTab * PES_BODY_STRIDE + 16;
+    const float R2 = PES_BODY_RADIUS * PES_BODY_RADIUS;
+    float dA = R2, dB = R2; uint vA = 0, vB = 0; float3 nA = 0, nB = 0;
+    [loop] for (uint ci = 0; ci < 27; ++ci) {
+        int3 c = c0 + int3(ci % 3, (ci / 3) % 3, ci / 9);
+        uint e = g_bodyTab[tb + pesBodyHash(c)];
+        [loop] for (uint it = 0; it < PES_BODY_WALK && e != 0; ++it) {
+            uint v = e - 1;
+            float3 y, n, u;
+            pesBodyVertex(v, y, n, u);
+            float3 dv = xm - y;
+            float d2 = dot(dv, dv);
+            if (d2 < dA) {
+                if (vA != 0 && dot(nA, n) < 0.7) { vB = vA; dB = dA; nB = nA; }
+                else if (vB != 0 && dot(nB, n) >= 0.7) { vB = 0; dB = R2; }
+                vA = e; dA = d2; nA = n;
+            } else if (d2 < dB && dot(nA, n) < 0.7) { vB = e; dB = d2; nB = n; }
+            e = g_bodyNext[v];
+        }
+    }
+    if (vA == 0) return;
+    float det0;
+    float3x3 B0i = inverse3((float3x3)B0, det0);
+    if (!(abs(det0) > 1e-9)) return;
+    float3x3 Rw = (s_flags & 32) ? float3x3(s_W[0].xyz, s_W[1].xyz, s_W[2].xyz) : float3x3(1, 0, 0, 0, 1, 0, 0, 0, 1);
+    [unroll] for (uint j = 0; j < 2; ++j) {
+        uint e = j == 0 ? vA : vB;
+        if (e == 0) continue;
+        float3 y, n, u;
+        pesBodyVertex(e - 1, y, n, u);
+        float3 qb = mul(B0i, y - float3(B0[0].w, B0[1].w, B0[2].w));          // en el reposo de la prenda
+        float3 nb = normalize(mul(transpose((float3x3)B0), n) + 1e-12);
+        float3 rv = u - (xform(B1, qb) - xform(Bp, qb));                        // la piel respecto de la prenda, por cuadro
+        float rl = length(rv);
+        if (rl > 0.05) rv *= 0.05 / rl;
+        rv = mul(Rw, rv);
+        if (!all(isfinite(qb)) || !all(isfinite(rv))) continue;
+        uint2 o = (uint2)((pesOctEnc(nb) * 0.5 + 0.5) * 65535.0 + 0.5);
+        uint3 hv = f32tof16(rv);
+        s_bq[k][j] = float4(qb, asfloat(o.x | (o.y << 16)));
+        s_bv[k][j] = uint2(hv.x | (hv.y << 16), hv.z | 0x10000u);
+    }
+}
+// en cada sub-paso: la tela no queda mas cerca de la piel que la separacion (empuje acotado, sin velocidad nueva)
+void pesBodyCollide(uint p, uint k, float t, inout float3 x, inout float3 xPrev, inout float contactD)
+{
+    if (((s_bv[k][0].y | s_bv[k][1].y) & 0x10000u) == 0) return;
+    ParticleRest r = g_rest[p];
+    float3x4 A = skinC(r.skin.z, r.skin.x, r.skin.y);
+    float3 T = float3(A[0].w, A[1].w, A[2].w);
+    float3 c0 = cross(A[1].xyz, A[2].xyz), c1 = cross(A[2].xyz, A[0].xyz), c2 = cross(A[0].xyz, A[1].xyz);
+    float sg = dot(A[0].xyz, c0) < 0.0 ? -1.0 : 1.0;
+    float m = clamp(s_bodyPrm.y * 0.001, 0.0, 0.03), mp = clamp(s_bodyPrm.w * 0.001, 0.001, 0.05);   // mm
+    [unroll] for (uint j = 0; j < 2; ++j) {
+        if ((s_bv[k][j].y & 0x10000u) == 0) continue;
+        uint on = asuint(s_bq[k][j].w);
+        float3 nb = pesOctDec(float2(on & 0xffff, on >> 16) / 65535.0 * 2.0 - 1.0);
+        float3 rv = f16tof32(uint3(s_bv[k][j].x & 0xffff, s_bv[k][j].x >> 16, s_bv[k][j].y & 0xffff));
+        float3 q = mul((float3x3)A, s_bq[k][j].xyz) + T + rv * (t - s_bodyTc);
+        float3 n = normalize(float3(dot(c0, nb), dot(c1, nb), dot(c2, nb)) * sg + 1e-12);
+        float3 dq = x - q;
+        float d = dot(dq, n);
+        float3 lat = dq - n * d;
+        if (dot(lat, lat) < PES_BODY_LATERAL * PES_BODY_LATERAL && d < m) {
+            float pu = min(m - d, mp);
+            x += n * pu; xPrev += n * pu;
+            contactD = min(contactD, 0.0);
+        }
+    }
+}
 void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, inout float3 vel,
-                     inout float3 restPrev, float3 rest1, float3 rnrm1)
+                     inout float3 restPrev, float3 rest1, float3 rnrm1, uint s, uint k)
 {
     float pin = pinOf(p);
     if (pin < 0.999) {
         float3 x = gx[p];
+#if PES_BODY
+        if (s == 0) pesBodyQuery(p, k, x);   // (25/10) la piel cercana, una vez por cuadro
+        bool pesBodyHas = ((s_bv[k][0].y | s_bv[k][1].y) & 0x10000u) != 0;
+#else
+        bool pesBodyHas = false;
+#endif
         float rel = (1.0 - pin) / max(pin, 1e-4);
         float alpha = g_pinCompliance * rel * rel;
         // PES21 FX: deslizamiento por gravedad. Componente de la gravedad tangente a la superficie del cuerpo:
@@ -620,6 +786,8 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
         bool legTracked = lp.x != 0xffffffff;
         if (legTracked && (g_rest[p].skin.w & 1)) inset = max(inset, g_legMaxRoom);
         float insetF = inset - min(max(pesFit, 0.0), 0.008);   // PES21 FX: delgado = la tela queda a 'fit' del cuerpo
+        // (25/10) donde se conoce la piel real, la tela puede ir mas adentro que el cuerpo que adivina el mod: la frena la piel
+        if (pesBodyHas) insetF += clamp(s_bodyPrm.z * 0.01, 0.0, 0.08);   // cm
         if (capN == 0 && sd < -insetF) {
             float3 corr = -(sd + insetF) * rnrm1;
             x += corr;
@@ -778,6 +946,9 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
                 }
             }
         }
+#if PES_BODY
+        if (pesBodyHas) pesBodyCollide(p, k, t, x, xPrev, contactD);   // (25/10) la piel real: la tela no la atraviesa
+#endif
         float contact = contactD <= 0 ? 1.0 : (g_contactBand > 0 ? saturate(1.0 - contactD / g_contactBand) : 0.0);
         if (contact > 0) {
             float3 dRel = (x - xPrev) - (rest1 - restPrev);
@@ -920,7 +1091,7 @@ void predictM(uint p, uint s, float h, float3 grav, float3 windBase, float gust)
     g_state[s_stateBase + (2 * p)] = float4(xPrev, 0);
     g_state[s_stateBase + (2 * p + 1)] = float4(pinOf(p) >= 0.999 ? vel : restPrev, 0);
 }
-void collideM(uint p, float t, float h, float hh)
+void collideM(uint p, float t, float h, float hh, uint s, uint k)
 {
     if (pinOf(p) >= 0.999) return;
     float3 rest1, rnrm1;
@@ -928,7 +1099,7 @@ void collideM(uint p, float t, float h, float hh)
     float3 xPrev = g_state[s_stateBase + (2 * p)].xyz;
     float3 restPrev = g_state[s_stateBase + (2 * p + 1)].xyz;
     float3 vel = 0;
-    collideParticle(p, t, h, hh, xPrev, vel, restPrev, rest1, rnrm1);
+    collideParticle(p, t, h, hh, xPrev, vel, restPrev, rest1, rnrm1, s, k);
     g_state[s_stateBase + (2 * p + 1)] = float4(vel, 0);
 }
 #endif
@@ -1070,6 +1241,30 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
               s_center = (s_flags & 32) ? float3(s_W[0].w, s_W[1].w, s_W[2].w) : 0;
             }
             float3 windBase = mul(transpose(W), g_wind.xyz);
+            // PES21 FX (25/10): el cuerpo real de este personaje (cuerpo.cpp): de las tablas del cuadro anterior (o de este), la que
+            // tiene su origen en el mundo junto al de la prenda; si hay varias (otra pasada del dibujo), la mas completa y cercana
+            s_bodyTab = 0xffffffffu; s_bodyTc = 0.0;
+            s_bodyPrm = IniParams.Load(int2(256, 0));
+            s_bv[0][0] = uint2(0, 0); s_bv[0][1] = uint2(0, 0); s_bv[1][0] = uint2(0, 0); s_bv[1][1] = uint2(0, 0);
+            if (gi == 0) { gBodyKey = 0; gBodyIdx = 0xffffffffu; }
+            GroupMemoryBarrierWithGroupSync();
+            uint bodyKey = 0;
+            if (PES_BODY && s_bodyPrm.x > 0.5 && g_legCount == 0 && gi < PES_BODY_TABLES) {
+                uint S = (uint)(IniParams.Load(int2(257, 0)).x + 0.5);
+                uint tb = gi * PES_BODY_STRIDE;
+                uint st = g_bodyTab[tb], nrec = g_bodyTab[tb + 1], nvt = g_bodyTab[tb + 2], okT = g_bodyTab[tb + 3];
+                float3 wt = asfloat(uint3(g_bodyTab[tb + 4], g_bodyTab[tb + 5], g_bodyTab[tb + 6]));
+                float dd = distance(wt, float3(me.world[0].w, me.world[1].w, me.world[2].w));
+                bool age1 = st + 1 == S, age0 = st == S;
+                if (okT == 1 && (age1 || age0) && nvt > 0 && all(isfinite(wt)) && dd < PES_BODY_MATCH)
+                    bodyKey = (age1 ? 0x80000000u : 0u) | (min(nrec, 63u) << 25) | (min(nvt >> 8, 255u) << 17) | (0x1FFFFu - (uint)min(dd * 100000.0, 131071.0));
+                InterlockedMax(gBodyKey, bodyKey);
+            }
+            GroupMemoryBarrierWithGroupSync();
+            if (bodyKey != 0 && bodyKey == gBodyKey) InterlockedMin(gBodyIdx, gi);
+            GroupMemoryBarrierWithGroupSync();
+            s_bodyTab = gBodyIdx;
+            s_bodyTc = (gBodyKey & 0x80000000u) ? 0.0 : 1.0;
             for (uint s = 0; s < s_substeps; ++s) {
                 float t = float(s + 1) / float(s_substeps);
                 float tg = g_time + float(s) * h;
@@ -1273,11 +1468,11 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                     }
                 }
 #ifndef CM_OLD_STATE
-                if (gi < P && !(s_flags & (8 << 12))) collideM(gi, t, h, hh);
-                if (gi + THREADS < P && !(s_flags & (8 << 12))) collideM(gi + THREADS, t, h, hh);
+                if (gi < P && !(s_flags & (8 << 12))) collideM(gi, t, h, hh, s, 0);
+                if (gi + THREADS < P && !(s_flags & (8 << 12))) collideM(gi + THREADS, t, h, hh, s, 1);
 #else
-                if (gi < P && !(s_flags & (8 << 12))) collideParticle(gi, t, h, hh, xPrev0, vel0, restPrev0, rest10, rnrm10);
-                if (gi + THREADS < P) collideParticle(gi + THREADS, t, h, hh, xPrev1, vel1, restPrev1, rest11, rnrm11);
+                if (gi < P && !(s_flags & (8 << 12))) collideParticle(gi, t, h, hh, xPrev0, vel0, restPrev0, rest10, rnrm10, s, 0);
+                if (gi + THREADS < P) collideParticle(gi + THREADS, t, h, hh, xPrev1, vel1, restPrev1, rest11, rnrm11, s, 1);
 #endif
                 GroupMemoryBarrierWithGroupSync();
             }

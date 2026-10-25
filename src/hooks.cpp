@@ -444,6 +444,11 @@ static HRESULT STDMETHODCALLTYPE hk_CreateIL(ID3D11Device* d, const D3D11_INPUT_
     }
     return hr;
 }
+bool InputLayoutInfo(ID3D11InputLayout* il, std::vector<InputElemInfo>& out) {   // (25/10) cuerpo.cpp: formato de la malla de la piel
+    std::lock_guard<std::mutex> lk(s_layoutMutex); auto it = s_layouts.find(il); if (it == s_layouts.end()) return false;
+    out.clear(); for (auto& e : it->second) if (!e.cls) out.push_back({ e.sem, e.idx, e.fmt, e.slot, e.off });
+    return true;
+}
 std::string DescribeInputLayout(ID3D11InputLayout* il) {
     std::lock_guard<std::mutex> lk(s_layoutMutex); auto it = s_layouts.find(il); if (it == s_layouts.end()) return "(layout no anotado)";
     std::string r; for (auto& e : it->second) { char b[128]; snprintf(b, sizeof(b), "%s%u fmt %u slot %u off %u%s; ", e.sem.c_str(), e.idx, e.fmt, e.slot, e.off, e.cls ? " (instancia)" : ""); r += b; }
@@ -504,8 +509,11 @@ template<int V> static void STDMETHODCALLTYPE hk_SetCS(ID3D11DeviceContext* c, I
     // (25/10) simulador del mod de ropa: parametros (t120: escena de menu, fuerza) y zonas de la musculatura (t121). Es fisica,
     // no un shader reemplazado: no depende de "Ver original". Sin esto el simulador lee ceros y esas mejoras quedan apagadas.
     if (e && e->clothSim && e->dev == g_dev.dev && g_dev.paramSRV) {
-        ID3D11ShaderResourceView* v[2] = { g_dev.paramSRV, MuscleClothSRV() };
-        c->CSSetShaderResources(120, 2, v);
+        // (25/10) t122..t124: el cuerpo real de cada personaje (cuerpo.cpp) para que la tela choque con la piel
+        ID3D11ShaderResourceView* v[5] = { g_dev.paramSRV, MuscleClothSRV(), nullptr, nullptr, nullptr };
+        BodyClothSRVs(v + 2);
+        c->CSSetShaderResources(120, 5, v);
+        BodySimSeen();
     }
 }
 
@@ -742,6 +750,7 @@ template<int V> static void STDMETHODCALLTYPE hk_DrawIdx(ID3D11DeviceContext* c,
     { CtxState& cg = Ctx(c); const ShaderEntry* gvs = cg.vs;
       if (g_grassProbeOn) CatalogGrassDraw(c, gvs, a, b, d);
       if (gvs && gvs->hash == 0x498b30bad256e8edULL) GrassOnDraw(c, gvs, a, b, d);
+      if (gvs && gvs->hash == 0x1c02a92ab4ae3362ULL) BodyOnDraw(c, a, b, d);   // (25/10) piel del cuerpo -> la ropa choca con ella (es fisica: no depende de "Ver original")
       if (g_autoDumpAny) InspectAutoDump(c, cg.ps); }
     t_drawStart = b; t_drawBase = d;
     FX_DRAW(a, 1, 1, (ds.lod.count ? LodDrawSub<V>(c, ds) : o_DrawIdx[V](c, a, b, d))) }
@@ -1075,6 +1084,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     SkinTonePresent();     // (24/10) tono de piel por jugador: guardado y vista previa en el menu Fisico
     GlassPresent();        // (24/10) vidrio de los menus: lectura de lo anotado por el PS y plan de copias del fondo
     MuscleHookPresent();   // (23/10) musculatura: ganchos a los huesos de musculo del motor (primer Present)
+    BodyPresent();         // (25/10) la ropa contra el cuerpo real: mallas de piel nuevas, cuadro nuevo
     UploadParams();
     WatchShaderFolder();
     PollMatch();
@@ -1152,6 +1162,7 @@ void ReloadShaders() {
     GlassReloadShaders();
     RingReloadShaders();
     SSGIReloadShaders();
+    BodyReloadShaders();
     std::unique_lock<std::shared_mutex> lk(s_shMutex);
     int n = 0;
     { std::lock_guard<std::mutex> lk2(g_errMutex); g_compileErrors.clear(); }

@@ -610,6 +610,7 @@ void UpdateTimeParams() {
     p[24][1] = (t - s_lastTurf) < 2.0 ? 1.0f : 0.0f; // en partido
     p[93][3] = (t - s_lastTurf) < 15.0 ? 1.0f : 0.0f; // 19/10: en partido (tolerante): primeros planos sin cancha a la vista siguen contando
     p[255][3] = (t - s_lastTurf) < 15.0 ? 0.0f : 1.0f; // (25/10) escena de menu (editor, presentacion): la fisica de la ropa no recibe empujes por movimiento
+    p[257][0] = (float)PresentNo();                     // (25/10) numero de cuadro: el cuerpo real (cuerpo.cpp) y la fisica de la ropa lo comparan
     // (21/10) reloj de las nubes (157): las nubes y sus sombras avanzan con el reloj del JUEGO, no con el reloj real: la
     // pausa las congela y la camara lenta de las repeticiones las frena (como la ropa y el pelo). El reloj sale de
     // cPSSystem.m_timeParam.x de la composicion (regla copy_cb = 0 SysCB en PES21FX_rules.ini). Se acumulan solo los

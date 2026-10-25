@@ -22,7 +22,7 @@ void ScanRefsInto(uintptr_t base, uintptr_t end, const char* dllName);   // quie
 extern void* g_overlayOldProc;
 
 // ---------------------------------------------------------------- parametros (lo que en 3DMigoto era IniParams)
-constexpr int kParamCount = 256;           // float4 x 256 -> t120 en los shaders (IniParams.Load(int2(i,0))). (20/10: era 128 y los parametros 128+ se perdian)
+constexpr int kParamCount = 320;           // float4 x 320 -> t120 en los shaders (IniParams.Load(int2(i,0))). (20/10: era 128 y los parametros 128+ se perdian; 25/10: 256 -> 320, la ropa contra el cuerpo usa 256 / 257)
 
 struct Assign { int idx; int comp; std::vector<float> values; std::string var; };
 struct KeyBind {
@@ -261,6 +261,14 @@ bool CamCutSince(int& seen);                      // true una vez por cada corte
 int CamLastCutFrame();
 bool EngineCamera(float pos[3], float tgt[3], int* frame);   // ultima camara aplicada por el motor (sin atraso)
 ID3D11ShaderResourceView* MuscleClothSRV();     // (25/10) zonas de la musculatura para la fisica de la ropa (t121 del simulador)
+// (25/10) la ropa choca con el cuerpo real (cuerpo.cpp): piel del cuerpo deformada por personaje para el simulador (t122..t124)
+void BodyOnDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base);   // en cada dibujo de la piel del cuerpo (VS 1c02a92a)
+void BodyPresent();                                // registro de mallas nuevas, cuadro nuevo, log
+void BodyClothSRVs(ID3D11ShaderResourceView* out[3]);   // tablas, vertices, listas (null si no esta listo)
+void BodySimSeen();                                // el simulador del mod de ropa se uso en este cuadro
+void BodyReloadShaders();
+struct InputElemInfo { std::string sem; UINT idx, fmt, slot, off; };
+bool InputLayoutInfo(ID3D11InputLayout* il, std::vector<InputElemInfo>& out);   // hooks.cpp: elementos anotados al crearse el layout
 void MuscleHookPresent();                         // (23/10) musculatura (musculo.cpp): huesos de musculo del juego x 164..171 (v5: 32 clases)
 void MuscleDrawPlayerPanel();                     // (24/10) tarjeta "Musculatura por jugador" (ImGui; la llama DrawGroup con g_cfgMutex tomado)
 bool MusclePhysiqueActive();                      // (24/10) el menu Fisico del juego (Editar > Jugadores) esta en pantalla
