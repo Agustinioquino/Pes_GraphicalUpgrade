@@ -1261,8 +1261,8 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
               s_center = (s_flags & 32) ? float3(s_W[0].w, s_W[1].w, s_W[2].w) : 0;
             }
             float3 windBase = mul(transpose(W), g_wind.xyz);
-            // PES21 FX (25/10): el cuerpo real de este personaje (cuerpo.cpp): de las tablas del cuadro anterior (o de este), la que
-            // tiene su origen en el mundo junto al de la prenda; si hay varias (otra pasada del dibujo), la mas completa y cercana
+            // PES21 FX (25/10): el cuerpo real de este personaje (cuerpo.cpp): de las tablas que la DLL armo en el ultimo Present (una
+            // por personaje, con la piel del cuadro anterior), la que tiene su origen en el mundo mas cerca del de la prenda
             s_bodyTab = 0xffffffffu; s_bodyTc = 0.0;
             s_bodyPrm = IniParams.Load(int2(256, 0));
             s_bv[0][0] = uint2(0, 0); s_bv[0][1] = uint2(0, 0); s_bv[1][0] = uint2(0, 0); s_bv[1][1] = uint2(0, 0);
@@ -1276,19 +1276,19 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                 uint st = g_bodyTab[tb], nrec = g_bodyTab[tb + 1], nvt = g_bodyTab[tb + 2], okT = g_bodyTab[tb + 3];
                 float3 wt = asfloat(uint3(g_bodyTab[tb + 4], g_bodyTab[tb + 5], g_bodyTab[tb + 6]));
                 float dd = distance(wt, float3(me.world[0].w, me.world[1].w, me.world[2].w));
-                bool age1 = st + 1 == S, age0 = st == S;
-                if (okT == 1 && (age1 || age0) && nvt > 0 && all(isfinite(wt)) && dd < PES_BODY_MATCH)
-                    bodyKey = (age1 ? 0x80000000u : 0u) | (min(nrec, 63u) << 25) | (min(nvt >> 8, 255u) << 17) | (0x1FFFFu - (uint)min(dd * 100000.0, 131071.0));
+                // (25/10 e) la tabla es del ultimo Present (cuadro S): la piel es la del cuadro anterior = comienzo de la interpolacion
+                if (okT == 1 && st == S && nvt > 0 && nrec > 0 && all(isfinite(wt)) && dd < PES_BODY_MATCH)
+                    bodyKey = 0xFFFFFFFFu - (uint)min(dd * 1.0e6, 4.0e9);   // la mas cercana (micrones)
                 InterlockedMax(gBodyKey, bodyKey);
 #if PES_BODY_DIAG
-                if (okT == 1 && (age1 || age0) && all(isfinite(wt))) { uint dg; InterlockedAdd(g_bodyDiag[5], 1u, dg); InterlockedMax(g_bodyDiag[4], 0xFFFFFFFFu - (uint)min(dd * 1000.0, 4.0e9), dg); }
+                if (okT == 1 && st == S && all(isfinite(wt))) { uint dg; InterlockedAdd(g_bodyDiag[5], 1u, dg); InterlockedMax(g_bodyDiag[4], 0xFFFFFFFFu - (uint)min(dd * 1000.0, 4.0e9), dg); }
 #endif
             }
             GroupMemoryBarrierWithGroupSync();
             if (bodyKey != 0 && bodyKey == gBodyKey) InterlockedMin(gBodyIdx, gi);
             GroupMemoryBarrierWithGroupSync();
             s_bodyTab = gBodyIdx;
-            s_bodyTc = (gBodyKey & 0x80000000u) ? 0.0 : 1.0;
+            s_bodyTc = 0.0;
 #if PES_BODY_DIAG
             if (gi == 0 && s_bodyWant) {
                 uint dg; InterlockedAdd(g_bodyDiag[0], 1u, dg);
