@@ -264,7 +264,45 @@ int NamedAge(const std::string& name) {
 const Rule* RuleForHash(uint64_t h) { auto it = g_cfg.rules.find(h); return it == g_cfg.rules.end() ? nullptr : &it->second; }
 std::atomic<int> g_drawOrder{0};
 std::atomic<int> g_lightAltFrames{0};   // (20/10) cuadros en que el sol llego por una variante no reemplazada de la luz
-std::atomic<int> g_aliasDraws{0};   // dibujos redirigidos por alias en el cuadro (diagnostico)   // numero de orden del dibujo dentro del cuadro (se reinicia en Present)
+std::atomic<int> g_aliasDraws{0};
+// (25/10) luz del sol: cuales de las 21 variantes de la pasada direccional corren en cada cuadro. Las 7 primeras tienen
+// reemplazo (filtro de sombras, color del sol, piel); las otras 14 son las del juego. Si al mover la camara el juego pasa de
+// unas a otras, la sombra y el color del sol cambian de golpe: el log lo deja escrito ("luz del sol: variantes ...").
+static const uint64_t kSunPass[21] = {
+    0xa748f426e9b978ccULL, 0xb8a29991599380d3ULL, 0xd51409f5f8d54cbdULL, 0xde643fcb8d6a6beaULL, 0xe9c13241d7bc9625ULL,
+    0x1f623dbab7ee8019ULL, 0x230d92c927f58da3ULL,
+    0xd0e9d81c09b3da66ULL, 0x03b955fa0df6521bULL, 0x142c18270479a113ULL, 0x16c135a014d253b2ULL, 0x2a809f328b164023ULL,
+    0x5ae81b14fd75960eULL, 0x68d58aa84c0256f5ULL, 0x7bd80690738f243fULL, 0x7dbbc922c9ae74c5ULL, 0x9ce9d8463800b399ULL,
+    0xc33576f12dd818bfULL, 0xca8a31c98b1584acULL, 0xd5037e255559ea13ULL, 0xf9f5dc3e044ba823ULL };
+static std::atomic<int> s_sunDraws[21];
+static inline void SunPassNote(uint64_t h) {
+    for (int i = 0; i < 21; i++) if (kSunPass[i] == h) { s_sunDraws[i].fetch_add(1, std::memory_order_relaxed); return; }
+}
+static std::string SunPassList(uint32_t mask, const int* n) {
+    std::string r; char b[48];
+    for (int i = 0; i < 21; i++) if (mask & (1u << i)) { snprintf(b, sizeof(b), "%s%08llx%s x%d", r.empty() ? "" : ", ", (unsigned long long)(kSunPass[i] >> 32), i < 7 ? "" : " (original)", n ? n[i] : 0); r += b; }
+    return r.empty() ? "ninguna" : r;
+}
+static void SunPassPresent() {
+    static uint32_t lastMask = 0xffffffffu; static int lines = 0; static double nextSum = 0;
+    static int frames = 0, framesOrig = 0, framesNone = 0, switches = 0, sums = 0;
+    int n[21]; uint32_t mask = 0;
+    for (int i = 0; i < 21; i++) { n[i] = s_sunDraws[i].exchange(0, std::memory_order_relaxed); if (n[i]) mask |= 1u << i; }
+    frames++; if (!mask) framesNone++; else if (mask >> 7) framesOrig++;
+    if (mask != lastMask) {
+        if (lastMask != 0xffffffffu) switches++;
+        if (lines < 200) { lines++; Log("luz del sol: variantes en el cuadro %d: %s", s_presentNo.load(), SunPassList(mask, n).c_str()); }
+        lastMask = mask;
+    }
+    double t = Now();
+    if (t > nextSum) {
+        if (nextSum > 0 && frames > 0 && framesNone < frames && sums++ < 120)
+            Log("luz del sol (10 s): %d cuadros, %d con alguna variante sin reemplazo, %d sin pasada de sol, %d cambios de variante, LightCB desde la copia alternativa %d",
+                frames, framesOrig, framesNone, switches, g_lightAltFrames.exchange(0));
+        nextSum = t + 10.0; frames = framesOrig = framesNone = switches = 0;
+    }
+}
+   // dibujos redirigidos por alias en el cuadro (diagnostico)   // numero de orden del dibujo dentro del cuadro (se reinicia en Present)
 std::string NamedOrigin(ID3D11ShaderResourceView* v) {
     std::lock_guard<std::mutex> lk(s_namedMutex);
     for (auto& kv : s_named) if (kv.second.srv == v) return kv.first.rfind("file:", 0) == 0 ? "archivo del mod: " + kv.first.substr(5) : "recurso del mod: " + kv.first;
@@ -705,6 +743,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         g_stFaceDraws++; if (ps->rule) g_stFaceRule++;
         if (c->GetType() == D3D11_DEVICE_CONTEXT_DEFERRED) g_stFaceCtxDef++;
     }
+    if (ps) SunPassNote(ps->hash);   // (25/10) variantes de la luz del sol por cuadro (log)
     if (!g_cfg.optRules) { RingFaceBind(c, d.ring); return false; }
     if ((ps && ps->rule) || (vs && vs->rule)) {
         if (!s_firstRule.exchange(true)) Log("primer dibujo con regla");
@@ -1109,6 +1148,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
             if (g_dev.imm) { g_dev.imm->UpdateSubresource(r.buf, 0, nullptr, zeros.data(), 0, 0); r.cleared = true; }
         }
     }
+    SunPassPresent();   // (25/10) variantes de la luz del sol: log de cambios
     UpdateTimeParams();
     SSGIPresent(s_presentNo.load());
     LightMeterPresent();
