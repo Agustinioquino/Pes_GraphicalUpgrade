@@ -713,7 +713,11 @@ void pesBodyCollide(uint p, uint k, float t, inout float3 x, inout float3 xPrev,
         float3 lat = dq - n * d;
         if (dot(lat, lat) < PES_BODY_LATERAL * PES_BODY_LATERAL && d < m) {
             float pu = min(m - d, mp);
-            x += n * pu; xPrev += n * pu;
+            // contacto inelastico: se saca la velocidad hacia adentro de la piel y no se agrega velocidad hacia afuera (si
+            // xPrev se corria con el empuje, la velocidad hacia adentro se acumulaba sub-paso tras sub-paso; si no se corria,
+            // el empuje lanzaba la tela)
+            float vn = dot(x - xPrev, n);
+            x += n * pu; xPrev += n * (pu + min(vn, 0.0));
             contactD = min(contactD, 0.0);
 #if PES_BODY_DIAG
             uint dg; InterlockedAdd(gBodyCnt[1], 1u, dg); InterlockedMax(gBodyCnt[2], (uint)min((m - d) * 10000.0, 1.0e6), dg);
