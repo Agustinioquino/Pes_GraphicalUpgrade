@@ -195,3 +195,14 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
 | Emparejar | la prenda (Inst.world, la matriz modelo -> mundo del mod) con la tabla del ultimo Present (cuadro == fila 257) cuyo origen esta mas cerca (< 0.5 m). La piel es la del cuadro anterior (el mod simula antes de ejecutar la lista de comandos) = comienzo de la interpolacion de la prenda |
 | Por punto de tela | sub-paso 0: el punto vuelve al reposo de la prenda con sus huesos y de ahi al modelo en el momento de la piel; 27 celdas, hasta dos planos tangentes (el mas cercano y otro con distinta normal) guardados en el reposo de la prenda + el movimiento propio de la piel (velocidad de la piel menos la que le da la prenda). Cada sub-paso: separacion y256 (mm), empuje maximo w256 (mm); donde hay piel, el cuerpo que adivina el mod se afloja z256 (cm); contacto inelastico |
 | Diagnostico | NO usar UAV extra en el simulador: con u8 declarado el mod de ropa compilaba el shader pero no lo despachaba nunca (la ropa sin fisica). El lote escribe un resumen propio que la DLL lee cada 20 s: "cuerpo (lote del cuadro N): D dibujos de piel -> P personajes, R repetidos, ...; personajes en (x, y, z) k partes" (comparar con "new player #n at (x, y, z)" de cloth.log) |
+
+## Estado al cerrar (25/10 07:05) - kits genericos y cierres
+
+| Tema | Resultado |
+|---|---|
+| Sintoma | desde la manana del 25/10 los kits normales (p1 / los que no vienen del kitserver) salen genericos del PES 2021; los alternativos del kitserver cargan bien. Cierres en PES2021.exe+0x3fe31d (administrador de memoria del juego: escribe en +0x38 de un bloque sin memoria) |
+| Descartado | la DLL: con la de antes de las 5 (94cb6b25, backup_20261025_055937) pasa igual. El sider.ini "limpiado" a las 05:49 (vuelto al de antes, copia en sider.ini.despues-limpieza) tampoco |
+| Sospechas | texturas 4K de los brazos de TorsoBody puestas a las 05:42 (livecpk\TorsoBody\...\sourceimages\#windx11\arm_*.ftex, ~83 MB); common_package.fpk + hand_l/r.fmdl de Global Model reempaquetados a las 06:37 (sesion de las manos); el juego abierto desde el .exe sin el Switcher (carpeta save en vez de drmp, 24/10 22:10). MenuUniformes.lua no encuentra su firma en tiempo de ejecucion (en pes_text.bin esta en .text + 0x16829a5) |
+| Prueba pendiente | sider.ini con TorsoBody comentado (cpk.root y TorsoBody_cuello.lua); si sigue, reaplicar la opcion en el Switcher |
+| Estado en el PC | d3d11.dll = 94cb6b25 (antes de las 5), PES21FX.ini y shaders de pasto/cuerpo de las 05:59; lo nuevo en PES21FX\backup_20261025_0645_antes_de_restaurar. La DLL nueva (lote del cuerpo, 6518e810) esta en build-integracion-ropa-pasto |
+| Coordinacion | tres sesiones instalaban en el PC a la vez (pasto, manos, ropa): no instalar en vivo sin avisar |
