@@ -149,7 +149,8 @@ struct ShaderEntry {
     char type = 0;                       // 'p' 'v' 'c'
     ID3D11DeviceChild* repl = nullptr;   // nuestro shader (o null)
     const Rule* rule = nullptr;
-    std::vector<const Rule*> pairRules;  // (20/10) reglas de este PS que solo valen con cierto VS
+    const std::vector<const Rule*>* pairRules = nullptr;  // (20/10) reglas de este PS que solo valen con cierto VS (25/10 d: lista inmutable;
+                                                          // al recargar se cambia el puntero y la vieja no se libera, porque un dibujo puede estar recorriendola)
     ID3D11Device* dev = nullptr;         // dispositivo que lo creo
     std::shared_ptr<std::vector<uint8_t>> code;   // bytecode original (para el catalogo: reflexion)
     bool clothSim = false;               // (25/10) simulador del mod de ropa (cloth_sim.hlsl): se le enlazan t120 / t121

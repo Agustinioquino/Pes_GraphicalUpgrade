@@ -314,7 +314,9 @@ static void UploadParams() {
     if (g_dev.grassTex) { memcpy(q, p, sizeof(q)); q[63][3] = 1.0f;
         if (SUCCEEDED(g_dev.imm->Map(g_dev.grassTex, 0, D3D11_MAP_WRITE_DISCARD, 0, &m))) { memcpy(m.pData, q, sizeof(q)); g_dev.imm->Unmap(g_dev.grassTex, 0); } }
     int maxSet = -1; for (auto& o : ovs) maxSet = (std::max)(maxSet, o.set);
-    for (int s = 0; s <= maxSet; s++) {
+    // (25/10 d) los hilos de dibujo leen altSRV sin lock (ParamSRVFor): con lugar reservado, agregar texturas no mueve el arreglo
+    if (g_dev.altSRV.capacity() < 64) { g_dev.altSRV.reserve(64); g_dev.altTex.reserve(64); }
+    for (int s = 0; s <= maxSet && s < 64; s++) {
         while ((int)g_dev.altTex.size() <= s) {
             ID3D11Texture1D* t = nullptr; ID3D11ShaderResourceView* v = nullptr;
             if (!CreateParamTex(&t, &v)) return;
@@ -371,11 +373,13 @@ static const Rule* RuleFor(uint64_t h) {
     auto it = g_cfg.rules.find(h);
     return it == g_cfg.rules.end() ? nullptr : &it->second;
 }
-static std::vector<const Rule*> PairRulesFor(uint64_t h) {   // (20/10) [rule <ps> vs <vs>]
+static const std::vector<const Rule*>* PairRulesFor(uint64_t h) {   // (20/10) [rule <ps> vs <vs>]
+    // (25/10 d) la lista no se modifica nunca despues de crearla y no se libera (son pocas y solo cambian al recargar): los hilos
+    // de dibujo la recorren sin lock, y reasignar un std::vector mientras otro hilo lo recorre podia leer memoria liberada
     std::vector<const Rule*> out;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     for (auto& kv : g_cfg.pairRules) if (kv.first.first == h) out.push_back(&kv.second);
-    return out;
+    return out.empty() ? nullptr : new std::vector<const Rule*>(std::move(out));
 }
 
 static ID3D11DeviceChild* BuildReplacement(ID3D11Device* dev, uint64_t h, char type) {
@@ -479,7 +483,10 @@ static HRESULT STDMETHODCALLTYPE hk_CreateDC(ID3D11Device* d, UINT f, ID3D11Devi
 
 // ---------------------------------------------------------------- bind de shaders
 static inline ID3D11ShaderResourceView* ParamSRVFor(const ShaderEntry* e) {
-    if (e && e->rule && e->rule->paramSet >= 0 && e->rule->paramSet < (int)g_dev.altSRV.size()) return g_dev.altSRV[e->rule->paramSet];
+    // (25/10 d) el puntero a la regla se lee una sola vez: al recargar la configuracion ReloadShaders lo cambia (o lo deja en null)
+    // mientras los hilos de dibujo lo usan
+    const Rule* r = e ? e->rule : nullptr;
+    if (r && r->paramSet >= 0 && r->paramSet < (int)g_dev.altSRV.size()) return g_dev.altSRV[r->paramSet];
     return g_dev.paramSRV;
 }
 
@@ -543,6 +550,7 @@ extern thread_local UINT t_drawVerts; extern thread_local UINT t_drawStart; exte
 static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, uint64_t hash, DrawScope& d);
 static void RunRule(ID3D11DeviceContext* c, const ShaderEntry* e, DrawScope& d) { RunRuleActions(c, e->rule, e->type == 'p', e->hash, d); }
 static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, uint64_t hash, DrawScope& d) {
+    if (!rule) return;   // (25/10 d) una recarga pudo dejar la regla en null entre la comprobacion y esta llamada
     for (auto& a : rule->actions) {
         switch (a.kind) {
         case RuleAction::CopyCB: {
@@ -664,7 +672,8 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     bool pr = ps && ps->repl, vr = vs && vs->repl;
     if (pr || vr) {
         // si el PS tiene parametros propios (p.ej. w5 = $pes_push) los ven el PS y el VS de ese dibujo
-        ID3D11ShaderResourceView* v = (ps && ps->rule && ps->rule->paramSet >= 0) ? ParamSRVFor(ps) : ParamSRVFor(vs);
+        const Rule* psr = ps ? ps->rule : nullptr;
+        ID3D11ShaderResourceView* v = (psr && psr->paramSet >= 0) ? ParamSRVFor(ps) : ParamSRVFor(vs);
         if (v) {
             if (pr) c->PSSetShaderResources(120, 1, &v);
             if (vr) { ID3D11ShaderResourceView* vv = (t_sparseGrass && g_dev.grassSRV) ? g_dev.grassSRV : v; c->VSSetShaderResources(120, 1, &vv); }
@@ -682,7 +691,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (ps && ps->rule) RunRule(c, ps, d);
     if (vs && vs->rule) RunRule(c, vs, d);
     // (20/10) reglas por pareja PS + VS: p.ej. la piel del cuerpo (aa7d1833) cuando dibuja la cabeza de una cara generica (VS faab87ee)
-    if (ps && vs && !ps->pairRules.empty()) for (const Rule* pr : ps->pairRules) if (pr->vsCond == vs->hash) RunRuleActions(c, pr, true, ps->hash, d);
+    if (ps && vs) if (const std::vector<const Rule*>* prs = ps->pairRules) for (const Rule* pr : *prs) if (pr->vsCond == vs->hash) RunRuleActions(c, pr, true, ps->hash, d);
     // 19/10: la boca (63fab7) hereda el b11 (tipo de pelo + semilla de la cara) de la ultima cara dibujada en este contexto:
     // variacion de dientes/encias por jugador
     if (ps && ps->hash == 0x63fab7735eee149cULL && ps->repl && s.lastHairCB) { Remember(c, d, true, false, 11); c->PSSetConstantBuffers(11, 1, &s.lastHairCB); }
@@ -1174,7 +1183,7 @@ void ReloadShaders() {
         if (e.repl) { std::lock_guard<std::mutex> lk3(s_releaseMutex); s_deferredRelease.push_back(e.repl); s_replToObj.erase(e.repl); }
         e.repl = nr; if (nr) { n++; s_replToObj[nr] = kv.first; }
         e.rule = RuleFor(e.hash);
-        e.pairRules = (e.type == 'p') ? PairRulesFor(e.hash) : std::vector<const Rule*>();
+        e.pairRules = (e.type == 'p') ? PairRulesFor(e.hash) : nullptr;
     }
     Log("recarga: %d shaders propios", n);
 }
