@@ -81,6 +81,12 @@ static bool LoadConfigLocked() {
     Config& c = g_cfg;
     memset(c.base, 0, sizeof(c.base));
     for (auto& a : c.info) for (auto& b : a) b = ParamInfo();
+    // (25/10 d) las reglas viejas NO se destruyen: los shaders del juego las apuntan (ShaderEntry::rule / pairRules) y los
+    // hilos de dibujo las recorren mientras se relee el ini; hasta que ReloadShaders apunta a las nuevas, un dibujo podia leer
+    // una regla liberada (cierre en RunRuleActions al recargar la configuracion con el juego abierto). Mover el mapa conserva
+    // los nodos; quedan en un cementerio (pocos KB por recarga).
+    { static std::vector<std::map<uint64_t, Rule>> oldRules; static std::vector<std::map<std::pair<uint64_t, uint64_t>, Rule>> oldPair;
+      oldRules.push_back(std::move(c.rules)); oldPair.push_back(std::move(c.pairRules)); }
     c.keys.clear(); c.rules.clear(); c.pairRules.clear(); c.vars.clear(); c.groups.clear();
     c.vars["pes_push"] = 0.003f;
 
