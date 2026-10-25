@@ -64,21 +64,48 @@ void main(
     float2 lp = v0_in.xz * pesExtScale;
     float2 rp = float2(cs * lp.x + sn * lp.y, -sn * lp.x + cs * lp.y);
     pesExtRoot = ins.xy + rp;
-    float d = length(ins.xy - cb2[20].xz);
-    float k = smoothstep(cb5[9].z, cb5[9].w, d) * (1.0 - smoothstep(cb5[10].x, cb5[10].y, d));
+    float4 cv = float4(dot(float4(ins.x, 0, ins.y, 1), cb2[8]), dot(float4(ins.x, 0, ins.y, 1), cb2[9]), dot(float4(ins.x, 0, ins.y, 1), cb2[10]), dot(float4(ins.x, 0, ins.y, 1), cb2[11]));
+    float4 cc = float4(dot(cv, cb2[4]), dot(cv, cb2[5]), dot(cv, cb2[6]), dot(cv, cb2[7]));
+    float k;
+    if (cb5[11].z > 0.5) {
+      // (25/10) v3: fundido por TAMANO EN PANTALLA (pixeles por metro en el centro de la parcela), el mismo criterio con el
+      // que el compute shader eligio el nivel: cb5[11].x = limite inferior (0 = sin limite: el nivel lejano cubre toda la
+      // cancha), .y = limite superior (donde entra el nivel mas fino o el pasto del juego), .w = margen del fundido
+      float p = abs(cb2[5].y) * cb5[10].w / max(cc.w, 0.05);
+      float m = cb5[11].w, lo = cb5[11].x, hi = cb5[11].y;
+      k = (lo > 0.0 ? smoothstep(lo * (1.0 - m), lo * (1.0 + m), p) : 1.0) * (hi > 0.0 ? 1.0 - smoothstep(hi * (1.0 - m), hi * (1.0 + m), p) : 1.0);
+    } else {
+      float d = length(ins.xy - cb2[20].xz);
+      k = smoothstep(cb5[9].z, cb5[9].w, d) * (1.0 - smoothstep(cb5[10].x, cb5[10].y, d));
+    }
     v0.y = v0_in.y * max(pesExt.z, 0.1) * k;
     pesExtW = float3(pesExtRoot.x, v0.y, pesExtRoot.y);
     // descarte por pantalla: centro de la parcela con margen del tamano de la parcela
-    float4 cv = float4(dot(float4(ins.x, 0, ins.y, 1), cb2[8]), dot(float4(ins.x, 0, ins.y, 1), cb2[9]), dot(float4(ins.x, 0, ins.y, 1), cb2[10]), dot(float4(ins.x, 0, ins.y, 1), cb2[11]));
-    float4 cc = float4(dot(cv, cb2[4]), dot(cv, cb2[5]), dot(cv, cb2[6]), dot(cv, cb2[7]));
     float rad = 0.5 * pesExtScale + 0.15;
     float px = abs(cb2[4].x) * rad + abs(cb2[4].z) * rad, py = abs(cb2[5].y) * rad + abs(cb2[5].z) * rad;
     if (cc.w < -rad || cc.x < -cc.w - px || cc.x > cc.w + px || cc.y < -cc.w - py || cc.y > cc.w + py || k < 0.01) pesKill = true;
-  } else if (P58.w > 0.5) {
-    // pasto extra prendido: el pasto del juego se apaga (achicandose) entre "desde" y "desde" + 6 m
+  }
+  // (25/10) x63 lo escribe la DLL: 1 = en el cuadro anterior el mod NO emitio pasto (camara sin pasto del juego, pasada
+  // secundaria, camara todavia sin leer...). Entonces el pasto del juego se queda como esta: antes se apagaba igual y la
+  // cancha quedaba pelada, peor que sin mod
+  float4 P63 = IniParams.Load(int2(63, 0));
+  bool pesExtMissing = P63.x > 0.5;
+  if (!pesIsExt && P58.w > 0.5 && !pesExtMissing) {
     float2 wr = float2(dot(v0_in, cb5[4]), dot(v0_in, cb5[6]));
-    float from = P58.y > 1.0 ? P58.y : 14.0;
-    float ko = 1.0 - smoothstep(from, from + 6.0, length(wr - cb2[20].xz));
+    float ko;
+    if (P63.y > 0.0) {
+      // (25/10) v3: el pasto del juego se queda donde una hoja todavia mide en pantalla (pixeles por metro >= y63, lo
+      // publica la DLL; z63 = mitad del alto de pantalla) y se achica donde el mod lo reemplaza: mismo criterio que el
+      // compute shader y el fundido de las parcelas del mod, en cualquier camara
+      float4 Pw = float4(wr.x, 0.0, wr.y, 1.0);
+      float wv = dot(float4(dot(Pw, cb2[8]), dot(Pw, cb2[9]), dot(Pw, cb2[10]), dot(Pw, cb2[11])), cb2[7]);
+      float p = abs(cb2[5].y) * P63.z / max(wv, 0.05);
+      ko = smoothstep(P63.y * 0.88, P63.y * 1.12, p);
+    } else {
+      // modo viejo: el pasto del juego se apaga (achicandose) entre "desde" y "desde" + 6 m
+      float from = P58.y > 1.0 ? P58.y : 14.0;
+      ko = 1.0 - smoothstep(from, from + 6.0, length(wr - cb2[20].xz));
+    }
     v0.y *= ko;
     if (ko < 0.01) pesKill = true;
   }
@@ -90,7 +117,8 @@ void main(
   float4 FA2 = IniParams.Load(int2(59, 0));
   float pesFarK = 0.0;
   // solo los dibujos marcados por la DLL (w63 = 1 existe solo en su textura de parametros) y con el pasto extra apagado
-  if (FAR.w > 0.5 && IniParams.Load(int2(63, 0)).w > 0.5 && !pesIsExt && P58.w < 0.5) {
+  // (o prendido pero sin emitir en este cuadro, 25/10: la alternativa liviana cubre el hueco)
+  if (FAR.w > 0.5 && IniParams.Load(int2(63, 0)).w > 0.5 && !pesIsExt && (P58.w < 0.5 || pesExtMissing)) {
     float3 pw0 = float3(dot(v0_in, cb5[4]), 0.0, dot(v0_in, cb5[6]));
     float dEye = length(pw0.xz - cb2[20].xz);
     float d0 = FAR.y > 1.0 ? FAR.y : 20.0, dl = max(FAR.z, 1.0);

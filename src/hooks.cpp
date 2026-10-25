@@ -355,6 +355,8 @@ using PFN_D3D11CreateDeviceAndSwapChain = HRESULT(WINAPI*)(IDXGIAdapter*, D3D_DR
 static PFN_CreateVS o_CreateVS; static PFN_CreatePS o_CreatePS; static PFN_CreateCS o_CreateCS; static PFN_CreateDC o_CreateDC;
 static PFN_SetPS o_SetPS[2]; static PFN_SetVS o_SetVS[2]; static PFN_SetCS o_SetCS[2];
 static PFN_DrawIdx o_DrawIdx[2]; static PFN_Draw o_Draw[2]; static PFN_DrawIdxInst o_DrawIdxInst[2]; static PFN_DrawInst o_DrawInst[2];
+using PFN_DrawIdxInstInd = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Buffer*, UINT);
+static PFN_DrawIdxInstInd o_DrawIdxInstInd[2];   // (25/10) DrawIndexedInstancedIndirect: lo usa el pasto v3 (lista de parcelas en la GPU)
 static PFN_Present o_Present; static PFN_Resize o_Resize;
 using PFN_ClearDSV = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11DepthStencilView*, UINT, FLOAT, UINT8);
 static PFN_ClearDSV o_ClearDSV[2];
@@ -496,6 +498,21 @@ template<int V> static void STDMETHODCALLTYPE hk_SetVS(ID3D11DeviceContext* c, I
     Ctx(c).vs = e;
     if (e && e->repl && !g_cfg.bypass) { o_SetVS[V](c, (ID3D11VertexShader*)e->repl, ci, n); return; }
     o_SetVS[V](c, s, ci, n);
+}
+// (25/10) pasto v3: la DLL enlaza los shaders de un dibujo del juego (entradas + objetos tal como estaban puestos) desde otro
+// dibujo, de modo que BeforeDraw los vea como ese dibujo (reglas, t120). Devuelve lo que habia (con referencias a los
+// objetos) para volver a ponerlo con la misma funcion; quien llama libera vsObj / psObj devueltos.
+ShaderBind BindShadersRaw(ID3D11DeviceContext* c, const ShaderBind& b) {
+    int V = c->GetType() == D3D11_DEVICE_CONTEXT_DEFERRED ? 1 : 0;
+    PFN_SetVS fv = o_SetVS[V] ? o_SetVS[V] : (o_SetVS[0] ? o_SetVS[0] : o_SetVS[1]);
+    PFN_SetPS fp = o_SetPS[V] ? o_SetPS[V] : (o_SetPS[0] ? o_SetPS[0] : o_SetPS[1]);
+    CtxState& s = Ctx(c);
+    ShaderBind old; old.vs = s.vs; old.ps = s.ps; old.vsObj = nullptr; old.psObj = nullptr;
+    c->VSGetShader(&old.vsObj, nullptr, nullptr); c->PSGetShader(&old.psObj, nullptr, nullptr);
+    s.vs = b.vs; s.ps = b.ps;
+    if (fv) fv(c, b.vsObj, nullptr, 0); else c->VSSetShader(b.vsObj, nullptr, 0);
+    if (fp) fp(c, b.psObj, nullptr, 0); else c->PSSetShader(b.psObj, nullptr, 0);
+    return old;
 }
 template<int V> static void STDMETHODCALLTYPE hk_SetCS(ID3D11DeviceContext* c, ID3D11ComputeShader* s, ID3D11ClassInstance* const* ci, UINT n) {
     const ShaderEntry* e = FindShader(s);
@@ -750,12 +767,16 @@ template<int V> static void LodDrawSub(ID3D11DeviceContext* c, DrawScope& ds) { 
 template<int V> static void STDMETHODCALLTYPE hk_DrawIdx(ID3D11DeviceContext* c, UINT a, UINT b, INT d) {
     { CtxState& cg = Ctx(c); const ShaderEntry* gvs = cg.vs;
       if (g_grassProbeOn) CatalogGrassDraw(c, gvs, a, b, d);
-      if (gvs && gvs->hash == 0x498b30bad256e8edULL) GrassOnDraw(c, gvs, a, b, d);
+      if (gvs && gvs->hash == 0x498b30bad256e8edULL) GrassOnDraw(c, gvs, cg.ps, a, b, d);
       if (gvs && gvs->hash == 0x1c02a92ab4ae3362ULL) BodyOnDraw(c, a, b, d);   // (25/10) piel del cuerpo -> la ropa choca con ella (es fisica: no depende de "Ver original")
       if (g_autoDumpAny) InspectAutoDump(c, cg.ps); }
     t_drawStart = b; t_drawBase = d;
-    FX_DRAW(a, 1, 1, (ds.lod.count ? LodDrawSub<V>(c, ds) : o_DrawIdx[V](c, a, b, d))) }
+    FX_DRAW(a, 1, 1, (ds.lod.count ? LodDrawSub<V>(c, ds) : o_DrawIdx[V](c, a, b, d)))
+    // (25/10) pasto v3: al terminar la base de la cancha (PS 5e92 / c956, existe en todas las camaras) se emite el pasto del mod
+    { CtxState& cb_ = Ctx(c); if (cb_.ps && (cb_.ps->hash == 0x5e92f2343848915aULL || cb_.ps->hash == 0xc9564b9b155f0a49ULL)) GrassOnBaseDraw(c); } }
 template<int V> static void STDMETHODCALLTYPE hk_Draw(ID3D11DeviceContext* c, UINT a, UINT b) { FX_DRAW(a, 0, 1, o_Draw[V](c, a, b)) }
+// (25/10) dibujo indirecto (pasto v3): pasa por BeforeDraw como cualquier dibujo (reglas, t120); vertices e instancias desconocidos
+template<int V> static void STDMETHODCALLTYPE hk_DrawIdxInstInd(ID3D11DeviceContext* c, ID3D11Buffer* a, UINT b) { FX_DRAW(0, 3, 0, o_DrawIdxInstInd[V](c, a, b)) }
 template<int V> static void STDMETHODCALLTYPE hk_DrawIdxInst(ID3D11DeviceContext* c, UINT a, UINT b, UINT d, INT e, UINT f) { FX_DRAW(a, 3, b, o_DrawIdxInst[V](c, a, b, d, e, f)) }
 template<int V> static void STDMETHODCALLTYPE hk_DrawInst(ID3D11DeviceContext* c, UINT a, UINT b, UINT d, UINT e) { FX_DRAW(a, 2, b, o_DrawInst[V](c, a, b, d, e)) }
 
@@ -787,6 +808,7 @@ template<int V> static void HookContextV(ID3D11DeviceContext* c) {
     n += Hook(vt[13], (void*)&hk_Draw<V>, (void**)&o_Draw[V], "Draw");
     n += Hook(vt[20], (void*)&hk_DrawIdxInst<V>, (void**)&o_DrawIdxInst[V], "DrawIndexedInstanced");
     n += Hook(vt[21], (void*)&hk_DrawInst<V>, (void**)&o_DrawInst[V], "DrawInstanced");
+    n += Hook(vt[39], (void*)&hk_DrawIdxInstInd<V>, (void**)&o_DrawIdxInstInd[V], "DrawIndexedInstancedIndirect");
     n += Hook(vt[69], (void*)&hk_SetCS<V>, (void**)&o_SetCS[V], "CSSetShader");
     n += Hook(vt[53], (void*)&hk_ClearDSV<V>, (void**)&o_ClearDSV[V], "ClearDepthStencilView");
     if (n) Log("contexto enganchado (variante %d, %d funciones)", V, n);
