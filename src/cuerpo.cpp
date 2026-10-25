@@ -86,6 +86,53 @@ static bool s_failed = false;
 
 void BodySimSeen() { s_simSeen.store(PresentNo(), std::memory_order_relaxed); }
 
+// (25/10 e) diagnostico: las instancias que ve el simulador de la ropa (t18, Inst de cloth_sim.hlsl: 160 bytes, matriz de mundo
+// en + 48). Cada 20 s se copian las de hasta 8 despachos del cuadro para comparar su origen con el de los personajes del lote.
+std::atomic<bool> g_bodyDiagArmed{false};
+static const UINT kInstBytes = 160, kInstMax = 16;
+static ID3D11Buffer* s_instStage[8] = {};
+static UINT s_instGroups[8] = {}, s_instStride[8] = {};
+static int s_instN = 0, s_instFrame = 0, s_instState = 0;
+void BodyNoteClothDispatch(ID3D11DeviceContext* c, UINT groups) {
+    if (s_instN >= 8 || !s_dev || c->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return;
+    ID3D11ShaderResourceView* v = nullptr; c->CSGetShaderResources(18, 1, &v);
+    if (!v) return;
+    ID3D11Resource* r = nullptr; v->GetResource(&r); v->Release();
+    if (!r) return;
+    D3D11_RESOURCE_DIMENSION dim = D3D11_RESOURCE_DIMENSION_UNKNOWN; r->GetType(&dim);
+    if (dim == D3D11_RESOURCE_DIMENSION_BUFFER) {
+        ID3D11Buffer* b = (ID3D11Buffer*)r; D3D11_BUFFER_DESC d; b->GetDesc(&d);
+        const int k = s_instN;
+        if (!s_instStage[k]) {
+            D3D11_BUFFER_DESC sd{}; sd.ByteWidth = kInstBytes * kInstMax; sd.Usage = D3D11_USAGE_STAGING; sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+            if (FAILED(s_dev->CreateBuffer(&sd, nullptr, &s_instStage[k]))) s_instStage[k] = nullptr;
+        }
+        const UINT bytes = (std::min)(d.ByteWidth, kInstBytes * kInstMax) / kInstBytes * kInstBytes;
+        if (s_instStage[k] && bytes) {
+            D3D11_BOX bx = { 0, 0, 0, bytes, 1, 1 };
+            c->CopySubresourceRegion(s_instStage[k], 0, 0, 0, 0, b, 0, &bx);
+            s_instGroups[k] = (std::min)(groups, bytes / kInstBytes); s_instStride[k] = d.StructureByteStride;
+            s_instN++;
+        }
+    }
+    r->Release();
+}
+static void ReadInstances(ID3D11DeviceContext* imm) {
+    char l[1600]; int k = snprintf(l, sizeof l, "ropa (lo que ve el simulador): %d despachos", s_instN);
+    for (int i = 0; i < s_instN && k < (int)sizeof l - 200; i++) {
+        D3D11_MAPPED_SUBRESOURCE mp;
+        if (!s_instStage[i] || FAILED(imm->Map(s_instStage[i], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mp))) { k += snprintf(l + k, sizeof l - k, " | #%d sin leer", i); continue; }
+        k += snprintf(l + k, sizeof l - k, " | #%d (%u prendas, paso %u):", i, s_instGroups[i], s_instStride[i]);
+        for (UINT j = 0; j < s_instGroups[i] && j < 4 && k < (int)sizeof l - 120; j++) {
+            const uint8_t* p = (const uint8_t*)mp.pData + j * kInstBytes;
+            uint32_t flags; float w[12]; memcpy(&flags, p + 8, 4); memcpy(w, p + 48, 48);
+            k += snprintf(l + k, sizeof l - k, " [banderas 0x%x origen (%.2f, %.2f, %.2f) escala %.3f]", flags, w[3], w[7], w[11], sqrtf(w[0] * w[0] + w[4] * w[4] + w[8] * w[8]));
+        }
+        imm->Unmap(s_instStage[i], 0);
+    }
+    Log("%s", l);
+}
+
 static ID3D11ComputeShader* CompileOne(const wchar_t* file) {
     ID3D11ComputeShader* cs = nullptr;
     if (ID3DBlob* b = CompileNamedShader(file, "cs_5_0")) { s_dev->CreateComputeShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &cs); b->Release(); }
@@ -555,9 +602,13 @@ void BodyPresent() {
             }
         } else if (hr != DXGI_ERROR_WAS_STILL_DRAWING) s_diagState = 0;
     }
+    // instancias del simulador copiadas en el cuadro anterior: se dejan de copiar y se leen 2 cuadros despues
+    if (s_instState == 1 && frame >= s_instFrame + 1) { g_bodyDiagArmed = false; s_instState = 2; }
+    if (s_instState == 2 && frame >= s_instFrame + 3) { if (s_instN) ReadInstances(g_dev.imm); s_instState = 0; }
     static double nextLog = 0; const double t = Now();
     if (t > nextLog && (ran || s_logBatches > 0 || frame - s_simSeen.load() < 300)) {
         nextLog = t + 20.0;
+        if (s_instState == 0 && frame - s_simSeen.load() < 300) { s_instN = 0; s_instFrame = frame; s_instState = 1; g_bodyDiagArmed = true; }
         if (ran && s_diagStage && s_diagState == 0) { g_dev.imm->CopyResource(s_diagStage, s_diag); s_diagState = 1; s_diagFrame = frame; }
         int ready = 0, rej = 0, pend = 0;
         { std::lock_guard<std::mutex> lk(s_mx); for (auto& kv : s_meshes) { if (kv.second->state == 3) ready++; else if (kv.second->state == 4) rej++; else pend++; } }
