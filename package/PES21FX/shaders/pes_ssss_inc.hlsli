@@ -64,12 +64,22 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   // diagnostico: x95 >= 2.95 pinta la piel: verde = pasa por aca, con el ancho en pixeles como brillo
   if (P.x >= 2.95) return float4(0, saturate(6.0 * 0.001 * pxm / 40.0), 0, 1);
   float widthScale = (P.x > 0 ? P.x : 1.0);
+  // x100 = sangrado rojo extra: el canal rojo se difunde mas lejos (muestra propia, mas ancha); w100 = tinte rojizo de la penumbra
+  float4 P2 = IniParams.Load(int2(100,0));
+  // (25/10) SSSS guiada por el trm: el juego usaba la translucidez (face_trm, gris, 6 bits en el G-buffer) solo para envolver la
+  // luz igual en los tres canales. Aca decide cuanto viaja la luz bajo la piel en ESTE pixel: donde la piel es fina (orejas, aletas,
+  // labios, parpados) la difusion es mas ancha, mas roja y mas fuerte; donde es gruesa (mejillas, frente) mas angosta y sin cera.
+  // y100 = cuanto manda el trm (0 = como antes), z100 = cuanto mas ancha en lo fino (1 = hasta 1.8 veces)
+  uint tq = (uint)(inNrm.SampleLevel(sPoint, uv, 0).z * 1023.0 + 0.5);
+  float trans0 = (float)(tq >> 4) / 63.0;
+  float thinK = smoothstep(0.08, 0.70, trans0);
+  float trmK = saturate(P2.y);
+  float thinWide = 1.0 + 0.8 * (P2.z > 0.0 ? P2.z : 1.0);
+  widthScale *= lerp(1.0, lerp(0.7, thinWide, thinK), trmK);
   float mmToPx = 0.001 * pxm * widthScale;
   float rMaxPx = 6.0 * mmToPx;
   if (rMaxPx < 0.6) return float4(c0, 1);
   float2 dir = SSSS_DIR * rb;
-  // x100 = sangrado rojo extra: el canal rojo se difunde mas lejos (muestra propia, mas ancha); w100 = tinte rojizo de la penumbra
-  float4 P2 = IniParams.Load(int2(100,0));
   // (20/10, 140) SSS segun el tono de piel: con mas melanina la epidermis absorbe mas y el rojo que viaja por la dermis
   // se ve mucho menos (la penumbra de una piel oscura es marron calida, no roja): menos sangrado rojo, menos tinte y algo
   // menos fuerza; en piel clara queda como antes. z140 = cuanto manda el tono (0 = igual para todos)
@@ -77,7 +87,7 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   float alb0L = dot(inAlb.SampleLevel(sPoint, uv, 0).xyz, float3(0.2126, 0.7152, 0.0722));
   float mel = saturate(log2(0.47 / max(alb0L, 1e-3)) / 2.85);
   float km = (SK.x > 0.5 && alb0L > 0.004) ? mel * saturate(SK.z > 0.0 ? SK.z : 1.0) : 0.0;   // sin albedo enlazado (DLL vieja) = como antes
-  float redW = 1.0 + 1.5 * saturate(P2.x) * (1.0 - 0.7 * km);
+  float redW = (1.0 + 1.5 * saturate(P2.x) * (1.0 - 0.7 * km)) * lerp(1.0, 1.0 + 0.6 * thinK, trmK);   // lo fino deja pasar mas rojo
   float3 acc = 0, wsum = 0;
   [unroll] for (int i = 0; i < 17; i++) {
     float4 k = kSSSS[i];
@@ -100,7 +110,7 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   }
   float3 blurred = acc / max(wsum, 1e-4);
   // tinte de la penumbra: donde la difusion aclara respecto al pixel (borde de sombra), el rojo gana un poco
-  float3 res = lerp(c0, blurred, saturate(P.y) * (1.0 - 0.3 * km));
+  float3 res = lerp(c0, blurred, saturate(P.y * (1.0 - 0.3 * km) * lerp(1.0, lerp(0.8, 1.15, thinK), trmK)));
   float pen = saturate((dot(blurred, 1.0) - dot(c0, 1.0)) * 2.0);
   res.r *= 1.0 + 0.25 * pen * saturate(P2.w) * (1.0 - 0.75 * km);
   res.gb *= 1.0 - 0.08 * pen * saturate(P2.w) * (1.0 - 0.75 * km);
