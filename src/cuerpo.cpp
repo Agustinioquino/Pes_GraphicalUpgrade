@@ -371,8 +371,8 @@ void BodyOnDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base) {
         CopyPart(c, g6.b, o6, 3072, dst + 256);
         const Rec r{ slot, m->sBase, m->nv, (UINT)m->id };
         std::lock_guard<std::mutex> lk(s_mx);
-        std::vector<Rec>& dst = (c->GetType() == D3D11_DEVICE_CONTEXT_DEFERRED) ? s_pendCtx[c] : s_execRecs;
-        if (dst.size() < 4096) dst.push_back(r); else s_dropRec++;
+        std::vector<Rec>& list = (c->GetType() == D3D11_DEVICE_CONTEXT_DEFERRED) ? s_pendCtx[c] : s_execRecs;
+        if (list.size() < 4096) list.push_back(r); else s_dropRec++;
     } else s_skipWin++;
     for (CBSlot* s : { &g2, &g5, &g6 }) if (s->b) s->b->Release();
 }
