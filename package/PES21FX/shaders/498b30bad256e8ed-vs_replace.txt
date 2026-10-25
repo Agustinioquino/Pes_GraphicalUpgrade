@@ -74,8 +74,13 @@ void main(
     float rad = 0.5 * pesExtScale + 0.15;
     float px = abs(cb2[4].x) * rad + abs(cb2[4].z) * rad, py = abs(cb2[5].y) * rad + abs(cb2[5].z) * rad;
     if (cc.w < -rad || cc.x < -cc.w - px || cc.x > cc.w + px || cc.y < -cc.w - py || cc.y > cc.w + py || k < 0.01) pesKill = true;
-  } else if (P58.w > 0.5) {
-    // pasto extra prendido: el pasto del juego se apaga (achicandose) entre "desde" y "desde" + 6 m
+  }
+  // (25/10) x63 lo escribe la DLL: 1 = en el cuadro anterior el mod NO emitio pasto (camara sin pasto del juego, pasada
+  // secundaria, camara todavia sin leer...). Entonces el pasto del juego se queda como esta: antes se apagaba igual y la
+  // cancha quedaba pelada, peor que sin mod
+  bool pesExtMissing = IniParams.Load(int2(63, 0)).x > 0.5;
+  if (!pesIsExt && P58.w > 0.5 && !pesExtMissing) {
+    // pasto extra prendido y emitiendo: el pasto del juego se apaga (achicandose) entre "desde" y "desde" + 6 m
     float2 wr = float2(dot(v0_in, cb5[4]), dot(v0_in, cb5[6]));
     float from = P58.y > 1.0 ? P58.y : 14.0;
     float ko = 1.0 - smoothstep(from, from + 6.0, length(wr - cb2[20].xz));
@@ -90,7 +95,8 @@ void main(
   float4 FA2 = IniParams.Load(int2(59, 0));
   float pesFarK = 0.0;
   // solo los dibujos marcados por la DLL (w63 = 1 existe solo en su textura de parametros) y con el pasto extra apagado
-  if (FAR.w > 0.5 && IniParams.Load(int2(63, 0)).w > 0.5 && !pesIsExt && P58.w < 0.5) {
+  // (o prendido pero sin emitir en este cuadro, 25/10: la alternativa liviana cubre el hueco)
+  if (FAR.w > 0.5 && IniParams.Load(int2(63, 0)).w > 0.5 && !pesIsExt && (P58.w < 0.5 || pesExtMissing)) {
     float3 pw0 = float3(dot(v0_in, cb5[4]), 0.0, dot(v0_in, cb5[6]));
     float dEye = length(pw0.xz - cb2[20].xz);
     float d0 = FAR.y > 1.0 ? FAR.y : 20.0, dl = max(FAR.z, 1.0);

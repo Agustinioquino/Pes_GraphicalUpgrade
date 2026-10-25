@@ -165,8 +165,12 @@ static bool DensePick(UINT count, LodIA* out) {
 }
 void GrassDenseReset() { DenseRelease(); }
 
+// (25/10) ultimo cuadro en el que el mod emitio parcelas de verdad: si el cuadro anterior no emitio (sin pasto del juego
+// en esa camara, pasada secundaria, sin camara todavia, 0 parcelas), x63 = 1 y el VS no achica el pasto del juego
+static std::atomic<int> s_okFrame{-1};
 // camara para el descarte grueso: el staging mas nuevo que ya este listo (2-3 cuadros de atraso; el VS corrige)
 void GrassPresent() {
+    { int prev = s_frame.load(); g_cfg.live[63][0] = (s_okFrame.load() == prev) ? 0.0f : 1.0f; }
     int f = s_frame.fetch_add(1) + 1;
     if (g_dev.imm) {
         int best = -1, bestF = -1;
@@ -286,7 +290,7 @@ void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT
     const float* p58 = g_cfg.live[58]; const float* p59 = g_cfg.live[59];
     bool extraOn = p58[3] > 0.5f;
     // con el pasto extra prendido, el escalado de las parcelas lejanas del juego no se usa (lo reemplazan las bandas)
-    if (!extraOn && count == s_lodCount.load() && g_cfg.live[60][3] > 0.5f) { t_sparseGrass = true; g_grassDbg.sparse++; }
+    if ((!extraOn || g_cfg.live[63][0] > 0.5f) && count == s_lodCount.load() && g_cfg.live[60][3] > 0.5f) { t_sparseGrass = true; g_grassDbg.sparse++; }
     if (g_bbW) {
         ID3D11RenderTargetView* rtv = nullptr; c->OMGetRenderTargets(1, &rtv, nullptr);
         if (!rtv) return;
@@ -348,6 +352,7 @@ void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT
     c->Unmap(s_inst, 0);
     s_lastCount = total; g_grassDbg.patches = total;
     if (total == 0) { Why("0 parcelas tras el descarte"); return; }
+    s_okFrame.store(f);   // (25/10) este cuadro si tiene pasto del mod: el VS puede apagar el del juego
     Why("emitiendo");
     // estado del juego que tocamos: cb5 y t121 del VS
     ID3D11Buffer* old = nullptr; UINT oldFirst = 0, oldNum = 0;
