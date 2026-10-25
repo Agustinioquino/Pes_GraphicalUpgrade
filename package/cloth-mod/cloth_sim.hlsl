@@ -100,7 +100,8 @@
 #define PES_BODY_RADIUS    0.025  // (m) piel a buscar alrededor de cada punto de tela
 #define PES_BODY_LATERAL   0.03   // (m) el plano tangente de un vertice de la piel vale hasta esta distancia al costado
 #define PES_BODY_WALK      40     // vertices por celda como maximo
-#define PES_BODY_DIAG      1      // contadores para el log de la DLL (u8: el dispositivo del juego es 11.1, admite 64 UAV)
+#define PES_BODY_DIAG      0      // contadores para el log de la DLL en u8. (25/10 d) APAGADO: con un UAV en u8 el mod de ropa
+                                  // compilaba el simulador pero no lo despachaba nunca (la ropa quedaba sin fisica)
 #if !PES_CLOTH_FX
 #undef PES_SHORTS_DAMP
 #define PES_SHORTS_DAMP 1.0
@@ -280,7 +281,9 @@ groupshared uint gBodyCnt[3];  // diagnostico: puntos con piel cerca, empujes, m
 // diagnostico (lo lee la DLL cada 20 s): [0] camisetas simuladas, [1] con cuerpo, [2] puntos con piel cerca, [3] empujes,
 // [4] 0xffffffff - menor distancia a una tabla valida (mm), [5] tablas validas vistas, [6] / [7] con piel de este cuadro / del anterior,
 // [8] mayor penetracion (0.1 mm)
+#if PES_BODY_DIAG
 RWBuffer<uint>                  g_bodyDiag  : register(u8);
+#endif
 static bool   s_bodyWant;
 static uint   s_bodyTab;      // tabla del cuerpo de esta prenda (0xffffffff = ninguna)
 static float  s_bodyTc;       // 0 = la piel es del cuadro anterior (comienzo de la interpolacion), 1 = de este cuadro
