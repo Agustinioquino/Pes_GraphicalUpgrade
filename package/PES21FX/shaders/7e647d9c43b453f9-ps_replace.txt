@@ -74,8 +74,14 @@ void main(
   // PES21 detalle de textura del kit (Claude, 16/10): sesgo de mip negativo = la textura usa un nivel mas nitido
   // a media y larga distancia. x31 color/brillo/numeros, y31 normal map (relieve), w31 on/off [Alt+Shift+F10]
   float4 pesTB = IniParams.Load(int2(31,0));
-  float pesBD = pesTB.w > 0.5 ? pesTB.x : 0.0;
-  float pesBN = pesTB.w > 0.5 ? pesTB.y : 0.0;
+  // PES21 (24/10 g) sin la luz del sol (menus 3D, editor, previa): el juego ilumina con un mapa esferico de estudio calculado a
+  // MEDIA resolucion con la normal del G-buffer (6d24904d): el detalle fino de la tela no se puede resolver ahi y se volvia
+  // ruido y manchas oscuras en el short. En esos casos el kit sale como el original. w44 = 1: la DLL vio la pasada de luz
+  // del sol hace poco (partido); x44 = 1 deja el detalle tambien sin sol (pruebas)
+  float4 pesSun = IniParams.Load(int2(44,0));
+  bool pesFine = pesSun.w > 0.5 || pesSun.x > 0.5;
+  float pesBD = (pesTB.w > 0.5 && pesFine) ? pesTB.x : 0.0;
+  float pesBN = (pesTB.w > 0.5 && pesFine) ? pesTB.y : 0.0;
 
   r0.xy = float2(-0.5,-0.5) + v0.xy;
   r0.xy = float2(0.125,0.125) * r0.xy;
@@ -276,7 +282,7 @@ void main(
   float pesKitCav = 1;
   float pesSvDbg = 0.0;   // PES21 v3
   { float4 KS = IniParams.Load(int2(22,0));
-    if (KS.w > 0.5) {
+    if (KS.w > 0.5 && pesFine) {
       float nz = saturate(r0.z);
       pesKitCav = lerp(1.0, nz * nz, saturate(KS.y));
       r0.xy = r0.xy * max(KS.x, 0.0);
@@ -288,7 +294,7 @@ void main(
   float2 dxu = ddx(v2.xy), dyu = ddy(v2.xy);   // derivadas fuera del if
   float pmx = ddx(pesPrint), pmy = ddy(pesPrint);
   { float4 PR = IniParams.Load(int2(38,0));
-    if (PR.w > 0.5) {
+    if (PR.w > 0.5 && pesFine) {
       float m = pesPrint;
       float mx = pmx, my = pmy;
       float det = dxu.x * dyu.y - dxu.y * dyu.x;
@@ -321,7 +327,7 @@ void main(
   int kI = (int)kType;
   float2 kuv = g_psMaterial.m_materials[1].xy * v2.zw * max(KN.x, 0.1) * kScaleT[kI];
   float2 kdx = ddx(kuv), kdy = ddy(kuv);
-  if (KN.w > 0.5) {
+  if (KN.w > 0.5 && pesFine) {
     float4 kn = pesKnit.SampleGrad(g_sampler_pattern_array_s, float3(kuv, kType), kdx, kdy);
     kn.xy = lerp(0.5, kn.xy, kReliefT[kI]);
     float fpK = max(length(kdx), length(kdy)) * 512.0;          // texeles del tejido por pixel
@@ -345,7 +351,7 @@ void main(
     float svPhys = saturate(length(v6.xyz) - 1.0);
     pesSvDbg = svPhys;
     float2 dxn = float2(length(ddx(nW)), length(ddy(nW)));
-    if (WR.w > 0.5) {
+    if (WR.w > 0.5 && pesFine) {
       // metrica G = A^-T (B B^T) A^-1 : metros^2 por UV^2 (ver arriba)
       float det = dxu2.x * dyu2.y - dxu2.y * dyu2.x;
       float fpW = max(length(dxu2), length(dyu2)) * 2048.0;        // texeles por pixel (distancia)

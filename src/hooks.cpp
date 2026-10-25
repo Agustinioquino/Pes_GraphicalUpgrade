@@ -667,7 +667,9 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     }
     // 20/10: GTAO (HBAO actual) para la luz global y la composicion: t27 (se calcula una vez por cuadro)
     if (ps && (ps->hash == 0x619b86cb5691cdceULL || ps->hash == 0xfda6da09737592b1ULL) && ps->repl) {
-        if (ID3D11ShaderResourceView* v = GTAOBeforeComposition(c, s_presentNo.load())) { Remember(c, d, true, true, 27); c->PSSetShaderResources(27, 1, &v); }
+        ID3D11ShaderResourceView* v = GTAOBeforeComposition(c, s_presentNo.load());
+        if (!v && g_cfg.live[132][0] > 0.5f) v = GTAONeutralSRV();   // (24/10 g) escena sin GTAO (editor): sin oclusion, no 0
+        if (v) { Remember(c, d, true, true, 27); c->PSSetShaderResources(27, 1, &v); }
     }
     // 21/10: SSGI temporal para la composicion: t26 (media resolucion, acumulado en el tiempo)
     if (ps && ps->hash == 0x619b86cb5691cdceULL && ps->repl) {
@@ -1032,6 +1034,11 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
               D3D11_BUFFER_DESC da, dm; a->second.buf->GetDesc(&da); m->second.buf->GetDesc(&dm);
               if (da.ByteWidth == dm.ByteWidth) { g_dev.imm->CopyResource(m->second.buf, a->second.buf); m->second.copied = now; m->second.cleared = false; g_lightAltFrames++; }
           } }
+        // (24/10 g) w44: la pasada de luz del sol corrio hace poco (partido). Sin ella (menus 3D, editor, previa) el juego ilumina
+        // con un mapa esferico de estudio a media resolucion y los kits dejan su detalle fino (ver 55297925)
+        { auto m2 = s_named.find("LightCB"), a2 = s_named.find("LightCBAlt");
+          const bool sun = (m2 != s_named.end() && m2->second.copied >= now - 30) || (a2 != s_named.end() && a2->second.copied >= now - 30);
+          g_cfg.live[44][3] = sun ? 1.0f : 0.0f; }
         for (auto& kv : s_named) {
             NamedRes& r = kv.second;
             if (!r.buf || r.cleared || kv.first.find("Light") == std::string::npos) continue;

@@ -102,7 +102,7 @@ void main(
     r1.xyzw = g_vsBone.m_boneMatrices[v4.w]._m00_m10_m20_m30 * v5.wwww + r1.xyzw;
     r2.xyzw = g_vsBone.m_boneMatrices[v4.w]._m01_m11_m21_m31 * v5.wwww + r2.xyzw;
     r3.xyzw = g_vsBone.m_boneMatrices[v4.w]._m02_m12_m22_m32 * v5.wwww + r3.xyzw;
-    PesClothScale(r1, r2, r3);   // (24/10 f) ropa: escala de la musculatura atenuada (x163 / w163)
+    PesClothScale(r1, r2, r3, v0.xyz, v1.xyz);   // (24/10 f) ropa: escala de la musculatura atenuada (x163 / w163)
     r4.x = dot(v0.xyzw, r1.xyzw);
     r4.y = dot(v0.xyzw, r2.xyzw);
     r4.z = dot(v0.xyzw, r3.xyzw);
@@ -121,6 +121,7 @@ void main(
     r2.xyzw = g_vsPrevBone.m_boneMatrices[v4.w]._m00_m10_m20_m30 * v5.wwww + r2.xyzw;
     r3.xyzw = g_vsPrevBone.m_boneMatrices[v4.w]._m01_m11_m21_m31 * v5.wwww + r3.xyzw;
     r0.xyzw = g_vsPrevBone.m_boneMatrices[v4.w]._m02_m12_m22_m32 * v5.wwww + r5.xyzw;
+    PesClothScale(r2, r3, r0, v0.xyz, v1.xyz);   // (24/10 g) la posicion anterior con la misma escala (vectores de movimiento)
     r2.x = dot(v0.xyzw, r2.xyzw);
     r2.y = dot(v0.xyzw, r3.xyzw);
     r2.z = dot(v0.xyzw, r0.xyzw);

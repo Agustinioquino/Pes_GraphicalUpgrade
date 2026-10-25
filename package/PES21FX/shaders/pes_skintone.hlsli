@@ -7,7 +7,7 @@
 // Tabla de la DLL (t120): 194 = (entradas, activo, distancia maxima en m, -); por entrada i (hasta 20): 195 + 3i = posicion
 // del personaje en el mundo (su raiz), 196 + 3i = (kL, m0, m1, 1 = tono propio / 0 = tapon: un personaje sin tono propio
 // cerca de uno con tono, para que no se lo lleve) para la cara, 197 + 3i = lo mismo para el cuerpo (con la correccion
-// "cuerpo como la cara" compuesta). El VS de la piel elige la entrada mas cercana al dibujo y la pasa al PS en o6.w
+// "cuerpo como la cara" compuesta; w = 2: "solo el torso", el resto del cuerpo queda como el juego). El VS de la piel elige la entrada mas cercana al dibujo y la pasa al PS en o6.w
 // (1000 + i; cualquier otro valor = sin tono propio).
 #ifndef PES_SKINTONE_HLSLI
 #define PES_SKINTONE_HLSLI
@@ -79,6 +79,26 @@ int PesSkinNearest(float3 wp) {
   }
   return best;
 }
+// (24/10 g) "solo el torso": cuanto de torso es un punto del cuerpo en reposo (1 en el torso, 0 en brazos, cuello y piernas).
+// Costuras medidas en los modelos de TorsoBody v11 (arm.fmdl, neck.fmdl, pants_in/out_sub.fmdl): el anillo donde el brazo se
+// une al torso es casi un plano (centro (0.263, 1.370, 0.020), normal (0.761, -0.643, -0.084), radio 4-5 cm); el del cuello
+// esta inclinado (adelante mas bajo: 1.478, atras 1.55) y se sigue con su altura segun el angulo alrededor del cuello. Con
+// esto el 99 % del torso da 1 y el 99 % de brazos y cuello da 0; en la costura queda una franja de ~1 cm de transicion.
+float PesSS(float a, float b, float x) { float t = saturate((x - a) / (b - a)); return t * t * (3.0 - 2.0 * t); }
+float PesTorsoMask(float3 v) {
+  float3 p = float3(abs(v.x), v.y, v.z);
+  const float3 cA = float3(0.2631, 1.3704, 0.0195), nA = float3(0.7611, -0.6432, -0.0839);
+  float3 qa = p - cA; float sA = dot(qa, nA); float rA = length(qa - sA * nA);
+  float arm = PesSS(-0.004, 0.004, sA) * (1.0 - PesSS(0.11, 0.13, rA));
+  const float3 cN = float3(0.0, 1.5223, 0.0552), nN = float3(0.0, 0.8564, 0.5163), e2 = float3(0.0, 0.5163, -0.8564);
+  float3 qn = p - cN; float sN = dot(qn, nN); float3 wn = qn - sN * nN;
+  float lw = max(length(wn), 1e-5); float ct = dot(wn, e2) / lw;          // coseno del angulo alrededor del cuello
+  float hN = 0.00037 - 0.00183 * ct - 0.01279 * (2.0 * ct * ct - 1.0);    // altura del anillo del cuello en ese angulo
+  float neck = PesSS(-0.004, 0.004, sN - hN) * (1.0 - PesSS(0.10, 0.12, p.x));
+  return (1.0 - arm) * (1.0 - neck) * PesSS(0.86, 0.90, p.y) * (1.0 - PesSS(1.561, 1.569, p.y));
+}
+// el VS del cuerpo la manda en la parte fraccionaria del codigo del jugador (o6.w = 1000 + i + 0.4 * torso)
+float PesSkinTorso(float code) { return saturate((code - round(code)) / 0.4); }
 // (24/10 e) medicion del color de la piel (variantes con PES_HL_ACC, solo en el menu Fisico): suma de albedo en punto fijo
 // (x 4095) y cantidad de pixeles, por lugar del buffer (slot * 16: r, g, b, n)
 #ifdef PES_HL_ACC

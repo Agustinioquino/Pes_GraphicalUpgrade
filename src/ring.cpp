@@ -7,6 +7,9 @@
 //     piel) se repite ese mismo dibujo con pes_ring_ps.hlsl, que pone el aro y el punto en el promedio de cada marca, y el
 //     buffer se limpia.
 // El viewport de la escena (para pasar de pixeles de la escena a la imagen del jugador) va en x193..w193.
+// (24/10 g) Hoy el aro se dibuja en Present sobre la imagen final con una "foto" de las marcas que arma un compute shader en el
+// orden de la GPU (pes_ring_snap_cs.hlsl): sin depender del numero de cuadro de la CPU y sin apagarse en los cuadros en que el
+// menu no dibuja la escena 3D (ahi parpadeaba).
 #include "core.h"
 #include <dxgi.h>
 #include <atomic>
@@ -22,24 +25,30 @@ static const uint64_t kSkinPS = 0xaa7d1833f6a11481ULL, kSkinVS = 0x1c02a92ab4ae3
 // (5ce3ed87 / ce188ae1) acumulan en el mismo buffer (lugares 4..6); se copia a un buffer de lectura y se lee 2 cuadros despues
 static const uint64_t kFacePS = 0x5ce3ed8702271bc1ULL, kFace2PS = 0xce188ae110354aeaULL;
 static ID3D11PixelShader *s_faceHlPS = nullptr, *s_face2HlPS = nullptr;
-static ID3D11Buffer* s_read[3] = {}; static int s_readFrame[3] = { -1, -1, -1 };
+static ID3D11Buffer* s_read[3] = {}; static int s_readFrame[3] = { -1, -1, -1 }; static double s_readT = 0.0;
 static std::mutex s_mx;
 static bool s_tried = false;
 static ID3D11PixelShader *s_hlPS = nullptr, *s_ringPS = nullptr;
-// (24/10 d) dos buffers alternados por cuadro: la piel del cuadro f anota en [f & 1] y el aro del cuadro f lee lo que
-// anoto el cuadro f - 1 (completo); antes se leia a medio anotar y se borraba al usarse, y el aro parpadeaba
-static ID3D11Buffer* s_acc[2] = {}; static ID3D11UnorderedAccessView* s_accUAV[2] = {}; static ID3D11ShaderResourceView* s_accSRV[2] = {};
+// (24/10 g) un solo buffer donde suman los dibujos de la piel (s_acc) y una foto (s_snap) que arma en Present, en el orden de
+// la GPU, un compute shader (pes_ring_snap_cs.hlsl): pasa a la foto cada marca que este cuadro vio y deja la ultima vista en
+// los cuadros sin escena 3D (el editor presenta mas cuadros que los que dibuja la escena: ahi el aro desaparecia y parpadeaba),
+// y vuelve s_acc a cero. Antes se elegia el buffer por el numero de cuadro de la CPU, que no es el del cuadro en que se
+// ejecutan los dibujos grabados en contextos diferidos.
+static ID3D11Buffer* s_acc = nullptr; static ID3D11UnorderedAccessView* s_accUAV = nullptr;
+static ID3D11Buffer* s_snap = nullptr; static ID3D11UnorderedAccessView* s_snapUAV = nullptr; static ID3D11ShaderResourceView* s_snapSRV = nullptr;
+static ID3D11ComputeShader* s_snapCS = nullptr;
 static ID3D11BlendState* s_bs = nullptr; static ID3D11DepthStencilState* s_dss = nullptr;
 // (24/10 e) el aro se dibuja en Present sobre la imagen final (pes_ring_screen_ps.hlsl, triangulo de pantalla completa) con
 // las marcas del mismo cuadro (ya todos los dibujos de la piel pasaron): sin atraso al mover la camara y sin parpadeo. El
 // dibujo repetido sobre la imagen del jugador en el menu (RingOverlay*) queda apagado salvo x193 < 0 (prueba)
 static ID3D11VertexShader* s_fsVS = nullptr; static ID3D11PixelShader* s_screenPS = nullptr; static ID3D11RasterizerState* s_rs = nullptr;
 static ID3D11RenderTargetView* s_bbRTV = nullptr; static ID3D11Texture2D* s_bbTex = nullptr;
-static std::atomic<int> s_lastSkinFrame{-1}, s_lastRingFrame{-100};
+static std::atomic<int> s_lastRingFrame{-100};
 static std::atomic<int> s_skinBinds{0}, s_rings{0};
+static std::atomic<long long> s_lastSkinMs{0};   // ultimo dibujo de piel con la variante (ms de Now())
 
 static bool Ensure() {
-    if (s_tried) return s_hlPS && s_ringPS && s_acc[0] && s_acc[1];
+    if (s_tried) return s_hlPS && s_ringPS && s_acc && s_snap && s_snapCS;
     s_tried = true;
     ID3D11Device* d = g_dev.dev; if (!d) return false;
     if (ID3DBlob* b = CompileNamedShader(L"pes_skin_hl_ps.hlsl", "ps_5_0")) { d->CreatePixelShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_hlPS); b->Release(); }
@@ -48,21 +57,25 @@ static bool Ensure() {
     if (ID3DBlob* b = CompileNamedShader(L"pes_ring_ps.hlsl", "ps_5_0")) { d->CreatePixelShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_ringPS); b->Release(); }
     if (ID3DBlob* b = CompileNamedShader(L"pes_ring_screen_ps.hlsl", "ps_5_0")) { d->CreatePixelShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_screenPS); b->Release(); }
     if (ID3DBlob* b = CompileNamedShader(L"pes_fs_vs.hlsl", "vs_5_0")) { d->CreateVertexShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_fsVS); b->Release(); }
+    if (ID3DBlob* b = CompileNamedShader(L"pes_ring_snap_cs.hlsl", "cs_5_0")) { d->CreateComputeShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_snapCS); b->Release(); }
     if (!s_rs) { D3D11_RASTERIZER_DESC rd{}; rd.FillMode = D3D11_FILL_SOLID; rd.CullMode = D3D11_CULL_NONE; rd.DepthClipEnable = TRUE; d->CreateRasterizerState(&rd, &s_rs); }
-    if (!s_acc[0]) {
-        for (int i = 0; i < 2; i++) {
-            D3D11_BUFFER_DESC bd{}; bd.ByteWidth = 128; bd.Usage = D3D11_USAGE_DEFAULT; bd.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
-            bd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
-            UINT zero[32] = {}; D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = zero;
-            if (SUCCEEDED(d->CreateBuffer(&bd, &sd, &s_acc[i]))) {
-                D3D11_UNORDERED_ACCESS_VIEW_DESC ud{}; ud.Format = DXGI_FORMAT_R32_TYPELESS; ud.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-                ud.Buffer.NumElements = 32; ud.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
-                d->CreateUnorderedAccessView(s_acc[i], &ud, &s_accUAV[i]);
+    if (!s_acc) {
+        auto mk = [&](UINT bytes, bool srv, ID3D11Buffer** b, ID3D11UnorderedAccessView** u, ID3D11ShaderResourceView** v) {
+            D3D11_BUFFER_DESC bd{}; bd.ByteWidth = bytes; bd.Usage = D3D11_USAGE_DEFAULT;
+            bd.BindFlags = D3D11_BIND_UNORDERED_ACCESS | (srv ? D3D11_BIND_SHADER_RESOURCE : 0); bd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+            UINT zero[64] = {}; D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = zero;
+            if (FAILED(d->CreateBuffer(&bd, &sd, b))) return;
+            D3D11_UNORDERED_ACCESS_VIEW_DESC ud{}; ud.Format = DXGI_FORMAT_R32_TYPELESS; ud.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+            ud.Buffer.NumElements = bytes / 4; ud.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+            d->CreateUnorderedAccessView(*b, &ud, u);
+            if (srv && v) {
                 D3D11_SHADER_RESOURCE_VIEW_DESC sv{}; sv.Format = DXGI_FORMAT_R32_TYPELESS; sv.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
-                sv.BufferEx.NumElements = 32; sv.BufferEx.Flags = D3D11_BUFFEREX_SRV_FLAG_RAW;
-                d->CreateShaderResourceView(s_acc[i], &sv, &s_accSRV[i]);
+                sv.BufferEx.NumElements = bytes / 4; sv.BufferEx.Flags = D3D11_BUFFEREX_SRV_FLAG_RAW;
+                d->CreateShaderResourceView(*b, &sv, v);
             }
-        }
+        };
+        mk(128, false, &s_acc, &s_accUAV, nullptr);
+        mk(256, true, &s_snap, &s_snapUAV, &s_snapSRV);
         for (int i = 0; i < 3; i++) { D3D11_BUFFER_DESC rd{}; rd.ByteWidth = 128; rd.Usage = D3D11_USAGE_STAGING; rd.CPUAccessFlags = D3D11_CPU_ACCESS_READ; d->CreateBuffer(&rd, nullptr, &s_read[i]); }
         D3D11_BLEND_DESC bl{}; auto& r = bl.RenderTarget[0];
         r.BlendEnable = TRUE; r.SrcBlend = D3D11_BLEND_SRC_ALPHA; r.DestBlend = D3D11_BLEND_INV_SRC_ALPHA; r.BlendOp = D3D11_BLEND_OP_ADD;
@@ -70,7 +83,7 @@ static bool Ensure() {
         d->CreateBlendState(&bl, &s_bs);
         D3D11_DEPTH_STENCIL_DESC dd{}; dd.DepthEnable = FALSE; dd.StencilEnable = FALSE; d->CreateDepthStencilState(&dd, &s_dss);
     }
-    bool ok = s_hlPS && s_faceHlPS && s_face2HlPS && s_ringPS && s_screenPS && s_fsVS && s_rs && s_acc[0] && s_accUAV[0] && s_accSRV[0] && s_acc[1] && s_accUAV[1] && s_accSRV[1] && s_bs && s_dss;
+    bool ok = s_hlPS && s_faceHlPS && s_face2HlPS && s_ringPS && s_screenPS && s_fsVS && s_snapCS && s_rs && s_acc && s_accUAV && s_snap && s_snapUAV && s_snapSRV && s_bs && s_dss;
     Log("aro del musculo: %s", ok ? "listo (capa de interfaz)" : "NO se pudo preparar (ver errores de shaders)");
     return ok;
 }
@@ -82,6 +95,7 @@ void RingReloadShaders() {
     if (s_ringPS) { s_ringPS->Release(); s_ringPS = nullptr; }
     if (s_screenPS) { s_screenPS->Release(); s_screenPS = nullptr; }
     if (s_fsVS) { s_fsVS->Release(); s_fsVS = nullptr; }
+    if (s_snapCS) { s_snapCS->Release(); s_snapCS = nullptr; }
     s_tried = false;
 }
 
@@ -122,16 +136,13 @@ bool RingBeforeDraw(ID3D11DeviceContext* c, uint64_t ps, uint64_t vs, RingScope&
     UINT nrt = 0; for (UINT i = 0; i < 8; i++) if (rts[i]) nrt = i + 1;
     for (auto* v : rts) if (v) v->Release(); if (dsv) dsv->Release();
     if (nrt > 5) return false;
-    const int f = PresentNo(); const int w = f & 1;
-    if (s_lastSkinFrame.exchange(f) != f) {   // primer dibujo de piel del cuadro: el buffer de este cuadro empieza de cero
-        const UINT z[4] = { 0, 0, 0, 0 }; c->ClearUnorderedAccessViewUint(s_accUAV[w], z);
-    }
+    s_lastSkinMs.store((long long)(Now() * 1000.0));   // (24/10 g) el buffer lo vacia el compute shader de Present
     UINT nvp = 1; D3D11_VIEWPORT vp{}; c->RSGetViewports(&nvp, &vp);
     if (!face && nvp >= 1 && vp.Width > 1.0f) { g_cfg.live[193][0] = vp.TopLeftX; g_cfg.live[193][1] = vp.TopLeftY; g_cfg.live[193][2] = vp.Width; g_cfg.live[193][3] = vp.Height; }
     c->PSGetShader(&r.prevPS, nullptr, nullptr);
     c->PSSetShader(ps == kFacePS ? s_faceHlPS : ps == kFace2PS ? s_face2HlPS : s_hlPS, nullptr, 0);
-    if (face) { r.face = true; r.uav = s_accUAV[w]; }   // la cara va en u7 (u5 / u6 son las semillas de las cejas): se enlaza al final (RingFaceBind)
-    else c->OMSetRenderTargetsAndUnorderedAccessViews(D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 5, 1, &s_accUAV[w], nullptr);
+    if (face) { r.face = true; r.uav = s_accUAV; }   // la cara va en u7 (u5 / u6 son las semillas de las cejas): se enlaza al final (RingFaceBind)
+    else c->OMSetRenderTargetsAndUnorderedAccessViews(D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 5, 1, &s_accUAV, nullptr);
     r.on = true;
     s_skinBinds++;
     return true;
@@ -165,7 +176,7 @@ void RingOverlayBegin(ID3D11DeviceContext* c, RingScope& r) {
     c->PSSetShader(s_ringPS, nullptr, 0);
     float bf[4] = {}; c->OMSetBlendState(s_bs, bf, 0xffffffff);
     c->OMSetDepthStencilState(s_dss, 0);
-    c->PSSetShaderResources(20, 1, &s_accSRV[(PresentNo() + 1) & 1]);   // lo que anoto el cuadro anterior
+    c->PSSetShaderResources(20, 1, &s_snapSRV);   // la foto que armo el ultimo Present
     ID3D11ShaderResourceView* prm = g_dev.paramSRV; c->PSSetShaderResources(120, 1, &prm);
 }
 void RingOverlayEnd(ID3D11DeviceContext* c, RingScope& r) {
@@ -179,29 +190,54 @@ void RingOverlayEnd(ID3D11DeviceContext* c, RingScope& r) {
     r = RingScope();
 }
 
+// (24/10 g) foto de las marcas en el orden de la GPU (pes_ring_snap_cs.hlsl): en el contexto inmediato, despues de todos los
+// dibujos de este cuadro y antes de los del siguiente
+static void SnapRun(ID3D11DeviceContext* c) {
+    ID3D11ComputeShader* pcs = nullptr; c->CSGetShader(&pcs, nullptr, nullptr);
+    ID3D11UnorderedAccessView* pu[2] = {}; c->CSGetUnorderedAccessViews(0, 2, pu);
+    ID3D11UnorderedAccessView* u[2] = { s_accUAV, s_snapUAV };
+    c->CSSetShader(s_snapCS, nullptr, 0);
+    c->CSSetUnorderedAccessViews(0, 2, u, nullptr);
+    c->Dispatch(1, 1, 1);
+    ID3D11UnorderedAccessView* nu[2] = {}; c->CSSetUnorderedAccessViews(0, 2, nu, nullptr);
+    c->CSSetShader(pcs, nullptr, 0); if (pcs) pcs->Release();
+    c->CSSetUnorderedAccessViews(0, 2, pu, nullptr); for (auto* v : pu) if (v) v->Release();
+}
+
 // en Present: el aro sobre la imagen final, en el rectangulo de pantalla donde quedo el viewport de la escena (x193..w193;
 // en el menu Fisico la escena se dibuja en el mismo lugar de la pantalla donde se ve)
 void RingPresent(IDXGISwapChain* sc) {
     if (!g_dev.dev || !g_dev.imm || !sc) return;
-    const int f = PresentNo() - 1;   // el contador ya subio al entrar a Present: los dibujos de este cuadro llevan el anterior
-    if (s_lastSkinFrame.load() != f) return;   // este cuadro no dibujo piel con la variante
+    const bool act = Active(), meas = g_skinMeasure.load();
+    const int binds = s_skinBinds.load();
+    static int s_snapBinds = -1;
+    // nada que hacer: ni aro ni medicion, y ningun dibujo con la variante desde la ultima foto (que dejo el buffer en cero)
+    if (!act && !meas && binds == s_snapBinds) return;
     std::lock_guard<std::mutex> lk(s_mx);
     if (!Ensure()) return;
     ID3D11DeviceContext* c = g_dev.imm;
-    if (g_skinMeasure.load()) {   // (24/10 e) medicion: copiar lo de este cuadro y leer lo de hace 2
-        const int w = f % 3;
-        if (s_read[w]) { c->CopyResource(s_read[w], s_acc[f & 1]); s_readFrame[w] = f; }
-        const int rd = (f + 1) % 3;
-        if (s_read[rd] && s_readFrame[rd] >= 0 && s_readFrame[rd] <= f - 2) {
-            D3D11_MAPPED_SUBRESOURCE m;
-            if (SUCCEEDED(c->Map(s_read[rd], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) {
-                const uint32_t* q = (const uint32_t*)m.pData;
-                SkinMeasureReport(q + 16, q + 20, q[24], q[25], q[27]);
-                c->Unmap(s_read[rd], 0); s_readFrame[rd] = -1;
+    SnapRun(c); s_snapBinds = binds;
+    const int f = PresentNo();
+    if (meas) {   // (24/10 e) medicion: cada 0.25 s se copia la foto a un buffer de lectura y se lee cuando la GPU termino
+        const double t = Now();
+        if (t >= s_readT) {
+            for (int i = 0; i < 3; i++) if (s_read[i] && s_readFrame[i] < 0) {
+                D3D11_BOX bx{ 0, 0, 0, 128, 1, 1 }; c->CopySubresourceRegion(s_read[i], 0, 0, 0, 0, s_snap, 0, &bx);
+                s_readFrame[i] = f; s_readT = t + 0.25; break;
             }
         }
+        for (int i = 0; i < 3; i++) if (s_read[i] && s_readFrame[i] >= 0 && f - s_readFrame[i] >= 2) {
+            D3D11_MAPPED_SUBRESOURCE m;
+            if (SUCCEEDED(c->Map(s_read[i], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) {
+                const uint32_t* q = (const uint32_t*)m.pData;
+                SkinMeasureReport(q + 16, q + 20, q[24], q[25], q[27]);
+                c->Unmap(s_read[i], 0); s_readFrame[i] = -1;
+            } else if (f - s_readFrame[i] > 60) s_readFrame[i] = -1;   // no deberia pasar: se descarta
+        }
     }
-    if (!Active()) return;
+    if (!act) return;
+    // sin dibujos de piel con la variante hace mas de 1 s (la escena no se ve): no hay aro
+    if ((long long)(Now() * 1000.0) - s_lastSkinMs.load() > 1000) return;
     ID3D11Texture2D* bb = nullptr;
     if (FAILED(sc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb)) || !bb) return;
     if (bb != s_bbTex || !s_bbRTV) {
@@ -232,7 +268,7 @@ void RingPresent(IDXGISwapChain* sc) {
     c->VSSetShader(s_fsVS, nullptr, 0); c->GSSetShader(nullptr, nullptr, 0); c->PSSetShader(s_screenPS, nullptr, 0);
     c->IASetInputLayout(nullptr); c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     c->RSSetState(s_rs); c->OMSetDepthStencilState(s_dss, 0); float bf[4] = {}; c->OMSetBlendState(s_bs, bf, 0xffffffff);
-    c->PSSetShaderResources(20, 1, &s_accSRV[f & 1]);   // lo que anoto ESTE cuadro
+    c->PSSetShaderResources(20, 1, &s_snapSRV);   // la foto de las marcas (la de este cuadro, o la ultima vista)
     ID3D11ShaderResourceView* prm = g_dev.paramSRV; c->PSSetShaderResources(120, 1, &prm);
     c->Draw(3, 0);
 
@@ -248,7 +284,7 @@ void RingPresent(IDXGISwapChain* sc) {
     c->PSSetShaderResources(120, 1, &oT120); if (oT120) oT120->Release();
     s_rings++;
     static int n = 0;
-    if (n++ < 2) Log("aro del musculo: dibujado en Present sobre la imagen final (escena en %.0f, %.0f, %.0fx%.0f; pantalla %ux%u)", g_cfg.live[193][0], g_cfg.live[193][1], g_cfg.live[193][2], g_cfg.live[193][3], g_bbW, g_bbH);
+    if (n++ < 2) Log("aro del musculo: dibujado en Present sobre la imagen final con la foto de las marcas (escena en %.0f, %.0f, %.0fx%.0f; pantalla %ux%u)", g_cfg.live[193][0], g_cfg.live[193][1], g_cfg.live[193][2], g_cfg.live[193][3], g_bbW, g_bbH);
 }
 
 } // namespace fx

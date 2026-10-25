@@ -239,14 +239,23 @@ void main(
   }
   float3 stVeil = g_psMaterial.m_materials[2].xyz;
   bool stBody = v3.w > 1.999 && v3.w < 3.001;   // (24/10 e) VS 1c02a92a = cuerpo (la cabeza generica viene con faab87ee)
+  int stE = PesSkinEntry(v6.w);
+  float4 stPB = stE >= 0 ? IniParams.Load(int2(197 + 3 * stE, 0)) : float4(1, 1, 0, 0);
+  bool stTorso = stPB.w > 1.5;                                   // (24/10 g) "solo el torso"
+  float stTm = stBody ? PesSkinTorso(v6.w) : 0.0;                // cuanto de torso es este pixel (VS)
 #ifdef PES_HL_ACC
-  // (24/10 e) medicion: color del cuerpo en la base del cuello (posicion de reposo: y 1.47..1.60, |x| < 0.07) -> lugar 4
-  if (stBody && w2.z > 1.47 && w2.z < 1.60 && abs(w2.w) < 0.07) PesSkinAccum(gHlAcc, 4u, r2.yzw);
+  // (24/10 e) medicion: color del cuerpo en la base del cuello (posicion de reposo: y 1.47..1.60, |x| < 0.07) -> lugar 4.
+  // (24/10 g) con "solo el torso", en el pecho alto (y 1.36..1.46, |x| < 0.10, solo piel del torso): el cuello no es torso
+  if (stBody && !stTorso && w2.z > 1.47 && w2.z < 1.60 && abs(w2.w) < 0.07) PesSkinAccum(gHlAcc, 4u, r2.yzw);
+  if (stBody && stTorso && stTm > 0.5 && w2.z > 1.36 && w2.z < 1.46 && abs(w2.w) < 0.10) PesSkinAccum(gHlAcc, 4u, r2.yzw);
 #endif
   {   // (24/10 c) tono de piel propio del jugador (skintone.cpp + pes_skintone.hlsli): Oklab, tambien el velo de borde;
-      // (24/10 e) el cuerpo usa su fila (con la correccion "cuerpo como la cara"), la cabeza la de la cara
-    int stE = PesSkinEntry(v6.w);
-    if (stE >= 0) { float3 stP = stBody ? PesSkinParamsBody(stE) : PesSkinParams(stE); r2.yzw = PesSkinApply(r2.yzw, stP); stVeil = PesSkinApply(stVeil, stP); }
+      // (24/10 e) el cuerpo usa su fila (con la correccion "cuerpo como la cara"), la cabeza la de la cara; (24/10 g) con
+      // "solo el torso" la fila del cuerpo va solo al torso (brazos, cuello y piernas quedan como el juego)
+    if (stE >= 0) {
+      float3 stP = stBody ? (stTorso ? lerp(float3(1, 1, 0), stPB.xyz, stTm) : stPB.xyz) : PesSkinParams(stE);
+      r2.yzw = PesSkinApply(r2.yzw, stP); stVeil = PesSkinApply(stVeil, stP);
+    }
   }
   r3.xyz = stVeil + -r2.yzw;
   o0.xyz = r0.www * r3.xyz + r2.yzw;

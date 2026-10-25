@@ -63,6 +63,20 @@ static bool EnsureTargets(UINT w, UINT h) {
     return true;
 }
 
+// (24/10 g) textura neutra (1x1, 1 = sin oclusion) para t27 cuando el GTAO no se calcula en esta escena (editor, menus: la
+// escena es mas chica que la pantalla): la composicion lo pide igual si el GTAO esta prendido y sin nada enlazado leia 0
+ID3D11ShaderResourceView* GTAONeutralSRV() {
+    static ID3D11ShaderResourceView* s_v = nullptr; static bool tried = false;
+    if (tried || !g_dev.dev) return s_v;
+    tried = true;
+    D3D11_TEXTURE2D_DESC td{}; td.Width = 1; td.Height = 1; td.MipLevels = 1; td.ArraySize = 1; td.Format = DXGI_FORMAT_R8_UNORM;
+    td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_IMMUTABLE; td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    const uint8_t one[4] = { 255, 255, 255, 255 }; D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = one; sd.SysMemPitch = 4;
+    ID3D11Texture2D* t = nullptr;
+    if (SUCCEEDED(g_dev.dev->CreateTexture2D(&td, &sd, &t)) && t) { g_dev.dev->CreateShaderResourceView(t, nullptr, &s_v); t->Release(); }
+    return s_v;
+}
+
 // Devuelve el SRV de la oclusion GTAO para t27 (null si esta apagado o fallo). Se llama en BeforeDraw de la composicion
 // y de la luz global; se calcula una vez por cuadro (la luz global corre antes y la composicion reutiliza).
 ID3D11ShaderResourceView* GTAOBeforeComposition(ID3D11DeviceContext* c, int frame) {

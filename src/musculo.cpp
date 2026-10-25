@@ -49,7 +49,7 @@ static const unsigned kStamp = 0x62787C6A;
 enum Mus : int {
     M_DELT, M_ARM, M_FORE, M_ELBOW, M_WRIST, M_SLEEVE,
     M_PECT, M_CLAV, M_UNDERARM, M_RIB, M_LAT, M_SCAP, M_TRAP, M_COLLAR, M_BACK, M_LUMB,
-    M_ABS, M_OBL, M_BELLY, M_GLUTE, M_THIGH, M_ADD, M_CALF, M_KNEE, M_HEM, M_PANTS, M_NECK,
+    M_ABS, M_OBL, M_BELLY, M_GLUTE, M_THIGH, M_ADD, M_CALF, M_KNEE, M_HEM, M_PANTS, M_NECK, M_NAPE,
     M_COUNT
 };
 // lado: 0 central (sin espejo), 1 entero del constructor en + 0x80 (0 = izquierdo = +X), 2 signo de X del destino en
@@ -94,7 +94,7 @@ static const MusCls s_cls[] = {
     { "short",           0x142ab35c0ull, 0x142da69d8ull, 0x141a5dd30ull, M_PANTS,    1, 0.110f, 1.000f,  0.065f, 0.0f, 1.0f, 1.0f },
     // cuello (scm: ejes del modelo; nuca: X atras, Z costado): engorda alrededor del eje vertical
     { "cuello",          0x142ab31c8ull, 0x142da5f38ull, 0x141a61e40ull, M_NECK,     0, 0.000f, 1.580f,  0.025f, 1.0f, 0.0f, 1.0f },
-    { "nuca",            0x142ab3190ull, 0x142da5ea0ull, 0x141a5d3a0ull, M_NECK,     0, 0.000f, 1.560f,  0.025f, 1.0f, 0.0f, 1.0f },
+    { "nuca",            0x142ab3190ull, 0x142da5ea0ull, 0x141a5d3a0ull, M_NAPE,     0, 0.000f, 1.560f,  0.025f, 1.0f, 0.0f, 1.0f },   // (24/10 g) slider propio
 };
 static const int kN = (int)(sizeof(s_cls) / sizeof(s_cls[0]));
 static const float kArmR = 0.044f;     // medio grosor del brazo de adelante hacia atras (m, arm.fmdl)
@@ -118,12 +118,16 @@ static void Push(Fac& f, float x, float y, float z, float metros, float e) {
     float n = sqrtf(x * x + y * y + z * z); if (n < 1e-6f || e == 0.0f) return;
     float k = metros * e / n; f.t[0] += x * k; f.t[1] += y * k; f.t[2] += z * k;
 }
-// P = los 8 float4 de 164..171 (los del menu, o los de un jugador); on / ropa / trans = interruptores de todos
-static void ComputeFactors(const float (*P)[4], bool on, bool ropa, bool trans, Fac* f) {
+// P = 9 float4: 164..171 y 162 (los del menu, o los de un jugador); on / ropa / trans / vec = interruptores de todos.
+// (24/10 g) 162: x axilas | y costados (serratos) | z lumbares | w base del cuello; 166.z nuca, 166.w codos, 170.w munecas.
+// vec ("Unir musculos vecinos", x255): los vecinos acompanan a un musculo (el trapecio, el pecho alto y el omoplato al
+// hombro; la axila al pecho; el costado a los dorsales; la base del cuello al cuello y al trapecio; los lumbares a la espalda
+// baja). Apagado (por defecto) cada slider mueve solo su musculo.
+static void ComputeFactors(const float (*P)[4], bool on, bool ropa, bool trans, bool vec, Fac* f) {
     for (int i = 0; i < M_COUNT; i++) f[i] = Fac{};
     if (!on) return;
     const float* A = P[0]; const float* B = P[1]; const float* C = P[2]; const float* D = P[3];
-    const float* E = P[4]; const float* H = P[5]; const float* N = P[6]; const float* Z = P[7];
+    const float* E = P[4]; const float* H = P[5]; const float* N = P[6]; const float* Z = P[7]; const float* X = P[8];
     const float G = Gv(D[0]);
     auto m = [G](float g) { return std::clamp(g * G, 0.4f, 2.5f) - 1.0f; };
     const float esp = Gv(B[2]), mus = Gv(B[3]);
@@ -134,24 +138,24 @@ static void ComputeFactors(const float (*P)[4], bool on, bool ropa, bool trans, 
     const float pec = m(Gv(B[1])), clav = m(Gv(B[1]) * Gv(N[1])), dor = m(esp * Gv(D[3])), omo = m(esp * Gv(D[2])), baja = m(esp * Gv(E[0]));
     const float rod = Gv(Z[0]) - 1.0f, cint = Gv(Z[1]) - 1.0f, cad = Gv(Z[2]) - 1.0f, anch = Gv(Z[3]) - 1.0f;
     f[M_DELT].e = m(Gv(A[1]));                         Push(f[M_DELT], 1.0f, 0.12f, 0.0f, 0.030f, anch);
-    const float delt = f[M_DELT].e;   // el trapecio, el pecho alto y el omoplato acompanan un poco al hombro (sin escalon)
-    Push(f[M_TRAP], 0.6f, 0.8f, 0.0f, 0.012f, delt); Push(f[M_CLAV], 0.7f, 0.5f, 0.3f, 0.010f, delt); Push(f[M_SCAP], 0.5f, 0.3f, -0.6f, 0.008f, delt);
+    const float delt = f[M_DELT].e;   // con "unir vecinos": el trapecio, el pecho alto y el omoplato acompanan un poco al hombro
+    if (vec) { Push(f[M_TRAP], 0.6f, 0.8f, 0.0f, 0.012f, delt); Push(f[M_CLAV], 0.7f, 0.5f, 0.3f, 0.010f, delt); Push(f[M_SCAP], 0.5f, 0.3f, -0.6f, 0.008f, delt); }
     f[M_ARM].e = arm;                                  f[M_ARM].t[2] = armB;
     f[M_FORE].e = fore;
-    f[M_ELBOW].e = trans ? 0.4f * 0.5f * (arm + fore) : 0.0f;
-    f[M_WRIST].e = trans ? 0.3f * fore : 0.0f;
+    f[M_ELBOW].e = (trans ? 0.4f * 0.5f * (arm + fore) : 0.0f) + (Gv(C[3]) - 1.0f);   // (24/10 g) + codos (166.w; no es musculo: sin "General")
+    f[M_WRIST].e = (trans ? 0.3f * fore : 0.0f) + (Gv(N[3]) - 1.0f);                  // + munecas (170.w)
     // la ropa solo crece (si se achicara con el musculo, lo que hay debajo y no se achica la atravesaria)
     if (ropa && arm > 0.0f) { f[M_SLEEVE].e = 1.1f * arm; f[M_SLEEVE].t[2] = 1.1f * armB; }
     Push(f[M_PECT], 0.25f, 0.10f, 1.0f, 0.035f, pec);
     Push(f[M_CLAV], 0.10f, 0.30f, 1.0f, 0.025f, clav);  Push(f[M_CLAV], 1.0f, 0.0f, 0.0f, 0.012f, anch);
-    Push(f[M_UNDERARM], 0.20f, 0.0f, 1.0f, 0.020f, 0.6f * pec);
-    Push(f[M_RIB], 1.0f, 0.0f, 0.10f, 0.025f, 0.6f * dor + 0.3f * cint);
+    Push(f[M_UNDERARM], 0.20f, 0.0f, 1.0f, 0.020f, (vec ? 0.6f * pec : 0.0f) + m(Gv(X[0])));          // axilas
+    Push(f[M_RIB], 1.0f, 0.0f, 0.10f, 0.025f, (vec ? 0.6f * dor : 0.0f) + 0.3f * cint + m(Gv(X[1])));  // costados (serratos)
     Push(f[M_LAT], 1.0f, -0.10f, -0.40f, 0.035f, dor);
     Push(f[M_SCAP], 0.20f, 0.10f, -1.0f, 0.030f, omo);
     Push(f[M_TRAP], 0.25f, 1.0f, -0.35f, 0.030f, trap); Push(f[M_TRAP], 1.0f, 0.0f, 0.0f, 0.012f, anch);
-    Push(f[M_COLLAR], 0.30f, 1.0f, 0.0f, 0.015f, 0.5f * neck + 0.3f * trap);
+    Push(f[M_COLLAR], 0.30f, 1.0f, 0.0f, 0.015f, (vec ? 0.5f * neck + 0.3f * trap : 0.0f) + m(Gv(X[3])));   // base del cuello
     Push(f[M_BACK], 0.0f, 0.0f, -1.0f, 0.025f, baja);
-    Push(f[M_LUMB], 0.40f, 0.0f, -1.0f, 0.025f, baja); Push(f[M_LUMB], 1.0f, 0.0f, 0.0f, 0.020f, cint);
+    Push(f[M_LUMB], 0.40f, 0.0f, -1.0f, 0.025f, (vec ? baja : 0.0f) + m(Gv(X[2]))); Push(f[M_LUMB], 1.0f, 0.0f, 0.0f, 0.020f, cint);   // lumbares
     Push(f[M_ABS], 0.10f, 0.0f, 1.0f, 0.020f, m(Gv(E[1])));
     Push(f[M_OBL], 1.0f, 0.0f, 0.15f, 0.030f, m(Gv(E[2]))); Push(f[M_OBL], 1.0f, 0.0f, 0.10f, 0.030f, cint);
     Push(f[M_BELLY], 0.0f, -0.10f, 1.0f, 0.050f, Gv(E[3]) - 1.0f);   // la panza no es musculo: no la mueve "General"
@@ -164,6 +168,7 @@ static void ComputeFactors(const float (*P)[4], bool on, bool ropa, bool trans, 
     if (ropa && thigh > 0.0f) { f[M_HEM].e = 0.7f * thigh; f[M_HEM].t[2] = 0.8f * thighB; f[M_PANTS].e = 0.5f * thigh; }
     if (ropa && cad > 0.0f) Push(f[M_PANTS], 1.0f, 0.0f, 0.0f, 0.020f, cad);
     f[M_NECK].e = neck;
+    f[M_NAPE].e = m(Gv(N[0]) * Gv(C[2]));   // (24/10 g) nuca: se multiplica con "Cuello" (1 = acompana al cuello)
 }
 
 // ---------------------------------------------------------------- por jugador (24/10)
@@ -171,7 +176,8 @@ static void ComputeFactors(const float (*P)[4], bool on, bool ropa, bool trans, 
 // interruptores (x164 prendido, y166 la ropa acompana, z170 codos y rodillas) y la definicion (x172, shader) son de todos.
 // Cada esqueleto se busca por la restriccion (+ 0x10) en la tabla de personajes.cpp (handle -> id del jugador).
 // Archivo: PES21FX\musculatura_jugadores.ini ([id] + claves del menu; lo que falta = 1, como el juego).
-struct Profile { std::string name; float v[8][4]; };
+struct Profile { std::string name; float v[9][4]; };   // 164..171 y (24/10 g) 162 en v[8]
+static int PRow(int idx) { return idx >= 164 && idx <= 171 ? idx - 164 : idx == 162 ? 8 : -1; }
 static std::map<uint32_t, Profile> s_prof;
 static std::mutex s_profMx;   // s_prof lo tocan Present (factores, tarjeta, archivo) y el menu Fisico del juego (fisico.cpp)
 static bool s_profLoaded = false, s_profDirty = false; static double s_profDirtyT = 0;
@@ -186,10 +192,12 @@ static std::atomic<unsigned> s_skHit{0}, s_skMiss{0};
 static const struct { int idx, comp; } kPlayerParams[] = {
     {164, 1}, {164, 2}, {164, 3}, {165, 0}, {165, 1}, {165, 2}, {165, 3}, {166, 0}, {167, 0}, {167, 1}, {167, 2}, {167, 3},
     {168, 0}, {168, 1}, {168, 2}, {168, 3}, {169, 0}, {169, 1}, {169, 2}, {169, 3}, {170, 0}, {170, 1}, {171, 0}, {171, 1}, {171, 2}, {171, 3},
+    {162, 0}, {162, 1}, {162, 2}, {162, 3}, {166, 2}, {166, 3}, {170, 3},   // (24/10 g) detalles
 };
 static bool IsPlayerParam(int idx, int comp) { for (auto& k : kPlayerParams) if (k.idx == idx && k.comp == comp) return true; return false; }
 static std::wstring ProfPath() { return g_cfg.baseDir + L"musculatura_jugadores.ini"; }
-static void ProfFromGeneral(Profile& p) { for (int r = 0; r < 8; r++) for (int c = 0; c < 4; c++) p.v[r][c] = g_cfg.live[164 + r][c]; }
+static void ProfFromGeneral(Profile& p) { for (int r = 0; r < 8; r++) for (int c = 0; c < 4; c++) p.v[r][c] = g_cfg.live[164 + r][c];
+                                         for (int c = 0; c < 4; c++) p.v[8][c] = g_cfg.live[162][c]; }
 static void ProfDirty() { s_profDirty = true; s_profDirtyT = Now(); }
 static std::string TrimS(const std::string& x) {
     size_t a = x.find_first_not_of(" \t\r\n"), b = x.find_last_not_of(" \t\r\n");
@@ -220,7 +228,7 @@ static void LoadProfiles() {
         const char* comps = "xyzw"; const char* pc = k.empty() ? nullptr : strchr(comps, tolower((unsigned char)k[0]));
         if (!pc || k.size() < 2) continue;
         int idx = atoi(k.c_str() + 1), comp = (int)(pc - comps);
-        if (idx >= 164 && idx <= 171 && IsPlayerParam(idx, comp)) cur->v[idx - 164][comp] = std::clamp((float)atof(val.c_str()), 0.3f, 3.0f);
+        if (PRow(idx) >= 0 && IsPlayerParam(idx, comp)) cur->v[PRow(idx)][comp] = std::clamp((float)atof(val.c_str()), 0.3f, 3.0f);
     }
     Log("musculatura por jugador: %d jugadores con valores propios en musculatura_jugadores.ini", (int)s_prof.size());
 }
@@ -235,7 +243,7 @@ static bool SaveProfiles() {
         f << "\r\n[" << kv.first << "]\r\n";
         if (!kv.second.name.empty()) f << "nombre = " << kv.second.name << "\r\n";
         for (auto& k : kPlayerParams) {
-            char b[48]; snprintf(b, sizeof b, "%c%d = %g\r\n", "xyzw"[k.comp], k.idx, kv.second.v[k.idx - 164][k.comp]);
+            char b[48]; snprintf(b, sizeof b, "%c%d = %g\r\n", "xyzw"[k.comp], k.idx, kv.second.v[PRow(k.idx)][k.comp]);
             f << b;
         }
     }
@@ -245,29 +253,29 @@ static bool SaveProfiles() {
 
 // valor de un slider para un jugador: el suyo, o el general si no tiene valores propios (lo usa el menu Fisico del juego)
 float MuscleProfileGet(uint32_t id, int idx, int comp) {
-    if (idx < 164 || idx > 171 || comp < 0 || comp > 3) return 1.0f;
+    if (PRow(idx) < 0 || comp < 0 || comp > 3) return 1.0f;
     std::lock_guard<std::mutex> lk(s_profMx);
     if (!s_profLoaded) LoadProfiles();
     auto it = id ? s_prof.find(id) : s_prof.end();
-    return it != s_prof.end() ? it->second.v[idx - 164][comp] : g_cfg.live[idx][comp];
+    return it != s_prof.end() ? it->second.v[PRow(idx)][comp] : g_cfg.live[idx][comp];
 }
 // cambia un valor del jugador (si no tenia valores propios, arrancan iguales a los generales); se guarda solo
 void MuscleProfileSet(uint32_t id, const char* name, int idx, int comp, float v) {
-    if (!id || idx < 164 || idx > 171 || comp < 0 || comp > 3) return;
+    if (!id || PRow(idx) < 0 || comp < 0 || comp > 3) return;
     std::lock_guard<std::mutex> lk(s_profMx);
     if (!s_profLoaded) LoadProfiles();
     auto it = s_prof.find(id);
     if (it == s_prof.end()) { Profile p; ProfFromGeneral(p); if (name) p.name = name; it = s_prof.emplace(id, p).first; }
     else if (name && *name && it->second.name != name) it->second.name = name;
-    it->second.v[idx - 164][comp] = std::clamp(v, 0.3f, 3.0f);
+    it->second.v[PRow(idx)][comp] = std::clamp(v, 0.3f, 3.0f);
     ProfDirty();
 }
 
 static void UpdateFactors() {
-    const float (*L)[4] = &g_cfg.live[164];
-    const bool on = L[0][0] > 0.5f, ropa = g_cfg.live[166][1] > 0.5f, trans = g_cfg.live[170][2] > 0.5f;
+    float L[9][4]; memcpy(L, &g_cfg.live[164], sizeof(float) * 32); memcpy(L[8], g_cfg.live[162], sizeof(float) * 4);   // (24/10 g) + 162
+    const bool on = L[0][0] > 0.5f, ropa = g_cfg.live[166][1] > 0.5f, trans = g_cfg.live[170][2] > 0.5f, vec = g_cfg.live[255][0] > 0.5f;
     Fac f[M_COUNT];
-    ComputeFactors(L, on, ropa, trans, f);
+    ComputeFactors(L, on, ropa, trans, vec, f);
     s_on = on;
     for (int i = 0; i < M_COUNT; i++) s_fac[i] = f[i];
     // por jugador: un juego de factores por cada personaje en pantalla que tenga valores propios
@@ -286,7 +294,7 @@ static void UpdateFactors() {
         if (on && id) { auto it = s_prof.find(id); if (it != s_prof.end()) p = &it->second; }
         if (!p) { s_slotUse[i].store(0, std::memory_order_relaxed); continue; }
         Fac fp[M_COUNT];
-        ComputeFactors(p->v, on, ropa, trans, fp);
+        ComputeFactors(p->v, on, ropa, trans, vec, fp);
         for (int k = 0; k < M_COUNT; k++) s_slotFac[i][k] = fp[k];
         s_slotUse[i].store(1, std::memory_order_release);
         any = true; own++;
@@ -656,7 +664,7 @@ void MuscleDrawPlayerPanel() {
                             if (!t.empty()) t[0] = (char)toupper((unsigned char)t[0]);
                             ImGui::SeparatorText(U8(t).c_str()); head = true;
                         }
-                        float& val = p.v[sl.idx - 164][sl.comp];
+                        float& val = p.v[PRow(sl.idx)][sl.comp];
                         const float gen = g_cfg.live[sl.idx][sl.comp];
                         ImGui::PushID(sl.idx * 4 + sl.comp);
                         bool diff = fabsf(val - gen) > 1e-4f;

@@ -529,9 +529,10 @@ void main(
     }
   }
   r0.x = inOcclusion.Sample(g_samplerLinear_Clamp_s, r0.xy).x;
-  { // PES21 GTAO (20/10): oclusion por horizontes de la DLL mezclada con el SSAO del juego (y132: 0 solo juego .. 1 solo GTAO)
+  { // PES21 GTAO (20/10): oclusion por horizontes de la DLL mezclada con el SSAO del juego (y132: 0 solo juego .. 1 solo GTAO).
+    // (24/10 g) se lee en uvC: r0.x ya tiene la oclusion del juego (antes se leia en (oclusion, v): una columna equivocada)
     float4 GT = IniParams.Load(int2(132,0));
-    if (GT.x > 0.5) { float g = PESGtao.SampleLevel(g_samplerLinear_Clamp_s, r0.xy, 0).x; r0.x = lerp(r0.x, min(r0.x * 0.35 + 0.65, g), saturate(GT.y)); }
+    if (GT.x > 0.5) { float g = PESGtao.SampleLevel(g_samplerLinear_Clamp_s, uvC, 0).x; r0.x = lerp(r0.x, min(r0.x * 0.35 + 0.65, g), saturate(GT.y)); }
   }
   float aoRaw = saturate(r0.x);
   float3 occRGB = r0.xxx;

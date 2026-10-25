@@ -25,8 +25,13 @@ float3x3 PesSymPow(float3x3 B, float e) {
   float3x3 D = float3x3(d.x, 0, 0, 0, d.y, 0, 0, 0, d.z);
   return mul(V, mul(D, transpose(V)));
 }
-// r1, r2, r3 = filas de salida (x, y, z) de la matriz de piel mezclada (xyz = 3x3, w = traslacion)
-void PesClothScale(inout float4 r1, inout float4 r2, inout float4 r3) {
+// r1, r2, r3 = filas de salida (x, y, z) de la matriz de piel mezclada (xyz = 3x3, w = traslacion); v / n = posicion y normal
+// del vertice en reposo.
+// (24/10 g) la musculatura escala cada hueso alrededor de un ancla sobre el eje del miembro (musculo.cpp), no del origen del
+// modelo: cambiar solo la parte lineal (L -> L') corria la ropa (L - L') x ancla, varios cm con el biceps en 1.3 (la manga se
+// despegaba del brazo). La ropa esta a unos r metros del eje, hacia adentro de su normal, y lo que se mueve en el eje del
+// miembro no escala: p' = p - (L - L') (r n), o sea traslacion t' = t + (L - L') (v - r n). z163 = r (0 = 0.07 m)
+void PesClothScale(inout float4 r1, inout float4 r2, inout float4 r3, float3 v, float3 n) {
   float4 C = IniParams.Load(int2(163, 0));
   if (C.x < 0.5 || C.w < 0.5) return;
   float3x3 A = float3x3(r1.xyz, r2.xyz, r3.xyz);
@@ -36,6 +41,10 @@ void PesClothScale(inout float4 r1, inout float4 r2, inout float4 r3) {
   float e = (clamp(C.y, 0.0, 1.0) - 1.0) * 0.5;
   float3x3 M = PesSymPow(B, e);
   float3x3 A2 = mul(A, M);
+  float rr = C.z > 0.001 ? C.z : 0.07;
+  float3 nn = dot(n, n) > 1e-8 ? normalize(n) : float3(0, 0, 0);
+  float3 d = mul(A - A2, v - rr * nn);
   r1.xyz = A2[0]; r2.xyz = A2[1]; r3.xyz = A2[2];
+  r1.w += d.x; r2.w += d.y; r3.w += d.z;
 }
 #endif

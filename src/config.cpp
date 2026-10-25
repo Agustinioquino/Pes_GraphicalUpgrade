@@ -602,7 +602,9 @@ void UpdateTimeParams() {
     double t = Now();
     if (s_matchStart < -1e8) s_matchStart = t;
     auto& p = g_cfg.live;
-    p[10][0] = float((t - s_matchStart) / 60.0);   // minutos reales de partido (sudor)
+    // minutos reales de partido (sudor). (24/10 g) fuera del partido (menus, editor: sin cancha hace 15 s) vale 0: antes seguia
+    // contando desde que se abrio el juego y en el editor la camiseta y la piel salian transpiradas
+    p[10][0] = (t - s_lastTurf) < 15.0 ? float((t - s_matchStart) / 60.0) : 0.0f;
     p[23][3] = p[23][2];                            // viento del pelo: tiempo anterior
     p[23][2] = float(fmod(t, 10000.0));             // tiempo actual
     p[24][1] = (t - s_lastTurf) < 2.0 ? 1.0f : 0.0f; // en partido

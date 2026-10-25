@@ -227,7 +227,7 @@ void main(
     float3 b0b = float3(g_vsPrevBone.m_boneMatrices[0]._m30, g_vsPrevBone.m_boneMatrices[0]._m31, g_vsPrevBone.m_boneMatrices[0]._m32);
     float3 sw = PesSkinPoint(g_vsObject.m_world, g_vsObject.m_viewWorld, g_vsScene.m_view, b0, b0b, sk);
     int se = PesSkinNearest(sw);
-    o6.w = se >= 0 ? 1000.0 + se : 999.0;
+    o6.w = se >= 0 ? 1000.0 + se + 0.4 * PesTorsoMask(v0.xyz) : 999.0;   // (24/10 g) + cuanto de torso (solo el torso)
   }
   return;
 }
