@@ -144,8 +144,11 @@ static void ComputeFactors(const float (*P)[4], bool on, bool ropa, bool trans, 
     f[M_FORE].e = fore;
     f[M_ELBOW].e = (trans ? 0.4f * 0.5f * (arm + fore) : 0.0f) + (Gv(C[3]) - 1.0f);   // (24/10 g) + codos (166.w; no es musculo: sin "General")
     f[M_WRIST].e = (trans ? 0.3f * fore : 0.0f) + (Gv(N[3]) - 1.0f);                  // + munecas (170.w)
-    // la ropa solo crece (si se achicara con el musculo, lo que hay debajo y no se achica la atravesaria)
-    if (ropa && arm > 0.0f) { f[M_SLEEVE].e = 1.1f * arm; f[M_SLEEVE].t[2] = 1.1f * armB; }
+    // la ropa solo crece (si se achicara con el musculo, lo que hay debajo y no se achica la atravesaria).
+    // (25/10) y255: cuanto del crecimiento del brazo recibe el hueso de la manga. La manga esta mas lejos del eje que la piel
+    // (~6 cm contra ~4,4): con 1.1 ganaba 1,5 veces los centimetros del brazo y quedaba inflada; con 0.6 gana lo mismo.
+    const float sleeveK = std::clamp(g_cfg.live[255][1], 0.0f, 1.5f);
+    if (ropa && arm > 0.0f) { f[M_SLEEVE].e = sleeveK * arm; f[M_SLEEVE].t[2] = sleeveK * armB; }
     Push(f[M_PECT], 0.25f, 0.10f, 1.0f, 0.035f, pec);
     Push(f[M_CLAV], 0.10f, 0.30f, 1.0f, 0.025f, clav);  Push(f[M_CLAV], 1.0f, 0.0f, 0.0f, 0.012f, anch);
     Push(f[M_UNDERARM], 0.20f, 0.0f, 1.0f, 0.020f, (vec ? 0.6f * pec : 0.0f) + m(Gv(X[0])));          // axilas
@@ -271,6 +274,7 @@ void MuscleProfileSet(uint32_t id, const char* name, int idx, int comp, float v)
     ProfDirty();
 }
 
+static void MuscleClothPresent(const Fac* fac, bool on);   // (25/10) tabla para la fisica de la ropa (mas abajo)
 static void UpdateFactors() {
     float L[9][4]; memcpy(L, &g_cfg.live[164], sizeof(float) * 32); memcpy(L[8], g_cfg.live[162], sizeof(float) * 4);   // (24/10 g) + 162
     const bool on = L[0][0] > 0.5f, ropa = g_cfg.live[166][1] > 0.5f, trans = g_cfg.live[170][2] > 0.5f, vec = g_cfg.live[255][0] > 0.5f;
@@ -301,6 +305,90 @@ static void UpdateFactors() {
     }
     s_anyOwn = any; s_ownOnScreen = own;
     if (s_profDirty && Now() - s_profDirtyT > 0.6) { s_profDirty = false; SaveProfiles(); }
+    // (25/10) tabla para la fisica de la ropa: los valores generales; en el menu Fisico, los del jugador que se edita
+    {
+        Fac fe[M_COUNT]; const Fac* use = s_fac;
+        if (editId) { auto it = s_prof.find(editId); if (it != s_prof.end()) { ComputeFactors(it->second.v, on, ropa, trans, vec, fe); use = fe; } }
+        MuscleClothPresent(use, on);
+    }
+}
+
+// ---------------------------------------------------------------- la ropa sigue al cuerpo en la fisica (25/10)
+// Pecho, espalda, abdomen, trapecio, hombros y gluteos se hacen corriendo huesos del cuerpo que la ropa no usa: la piel sale y
+// la remera / el short se quedan donde estaban, y el cuerpo los atraviesa. El simulador del mod de ropa (cloth_sim.hlsl, con
+// las mejoras de PES21 FX) lee esta tabla en t121 (la enlaza hooks.cpp cuando el mod pone ese shader) y corre el reposo de
+// cada particula de tela lo mismo que la piel en esa zona. Zonas = capsulas en el modelo en reposo (lado izquierdo; el shader
+// espeja X), las del resaltado del menu Fisico; el shader las ensancha un poco (la tela esta 1-2 cm afuera de la piel).
+// Tabla: [0] = (zonas, fuerza z255, -, -); por zona (A, radio), (B, tipo 0 corre V / 1 crece V.x alrededor), (V, en la manga).
+struct MusZone { int mus; float ax, ay, az, bx, by, bz, r; int kind; float sleeve; };
+static const MusZone kZones[] = {
+    { M_PECT,     0.035f, 1.375f, 0.165f,  0.145f, 1.385f, 0.130f,  0.080f, 0, 0.0f },   // pecho
+    { M_CLAV,     0.030f, 1.470f, 0.115f,  0.130f, 1.470f, 0.100f,  0.050f, 0, 0.0f },   // pecho alto
+    { M_UNDERARM, 0.150f, 1.400f, 0.070f,  0.170f, 1.330f, 0.050f,  0.045f, 0, 0.3f },   // axila
+    { M_RIB,      0.140f, 1.320f, 0.080f,  0.150f, 1.200f, 0.070f,  0.050f, 0, 0.0f },   // costado
+    { M_LAT,      0.150f, 1.400f, -0.050f, 0.130f, 1.200f, -0.040f, 0.065f, 0, 0.0f },   // dorsal
+    { M_SCAP,     0.080f, 1.420f, -0.100f, 0.100f, 1.370f, -0.100f, 0.075f, 0, 0.0f },   // omoplato
+    { M_TRAP,     0.040f, 1.570f, -0.025f, 0.150f, 1.500f, -0.020f, 0.055f, 0, 0.0f },   // trapecio
+    { M_COLLAR,   0.030f, 1.520f, 0.040f,  0.080f, 1.500f, 0.020f,  0.045f, 0, 0.0f },   // base del cuello
+    { M_BACK,     0.035f, 1.180f, -0.100f, 0.035f, 1.040f, -0.090f, 0.075f, 0, 0.0f },   // espalda baja
+    { M_LUMB,     0.070f, 1.220f, -0.090f, 0.070f, 1.100f, -0.090f, 0.050f, 0, 0.0f },   // lumbar
+    { M_ABS,      0.045f, 1.260f, 0.150f,  0.045f, 1.040f, 0.160f,  0.060f, 0, 0.0f },   // abdominales
+    { M_OBL,      0.150f, 1.220f, 0.070f,  0.150f, 1.040f, 0.075f,  0.055f, 0, 0.0f },   // oblicuos
+    { M_BELLY,    0.000f, 1.130f, 0.150f,  0.000f, 1.090f, 0.155f,  0.090f, 0, 0.0f },   // panza
+    { M_GLUTE,    0.085f, 0.970f, -0.060f, 0.085f, 0.930f, -0.060f, 0.085f, 0, 0.0f },   // gluteo
+    { M_ADD,      0.050f, 0.860f, 0.060f,  0.100f, 0.660f, 0.080f,  0.050f, 0, 0.0f },   // aductor (adentro del muslo)
+    { M_DELT,     0.205f, 1.455f, 0.030f,  0.215f, 1.445f, 0.030f,  0.075f, 0, 0.3f },   // hombro: corrimiento por "ancho de hombros"
+    { M_DELT,     0.180f, 1.440f, 0.026f,  0.180f, 1.440f, 0.026f,  0.090f, 1, 0.3f },   // hombro: crece alrededor de la articulacion
+};
+static const int kMzMax = 24;
+static_assert(sizeof(kZones) / sizeof(kZones[0]) <= kMzMax, "zonas de mas para la tabla de la ropa");
+static std::atomic<ID3D11ShaderResourceView*> s_mzSRV{nullptr};
+static ID3D11Buffer* s_mzBuf = nullptr; static ID3D11Device* s_mzDev = nullptr;
+static float s_mzData[1 + 3 * kMzMax][4] = {}; static bool s_mzSent = false;
+static int s_mzZones = 0; static float s_mzMax = 0.0f;
+ID3D11ShaderResourceView* MuscleClothSRV() { return s_mzSRV.load(std::memory_order_acquire); }
+static void MuscleClothPresent(const Fac* fac, bool on) {
+    ID3D11Device* dev = g_dev.dev; ID3D11DeviceContext* imm = g_dev.imm;
+    if (!dev || !imm) return;
+    if (s_mzDev != dev) {   // (re)crear en el dispositivo del juego; lo viejo se deja vivo (otro hilo podria tenerlo enlazado)
+        s_mzDev = dev; s_mzBuf = nullptr; s_mzSent = false;
+        D3D11_BUFFER_DESC bd{}; bd.ByteWidth = sizeof(s_mzData); bd.Usage = D3D11_USAGE_DYNAMIC; bd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE; bd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED; bd.StructureByteStride = 16;
+        ID3D11Buffer* b = nullptr;
+        if (FAILED(dev->CreateBuffer(&bd, nullptr, &b)) || !b) { Log("ropa: no se pudo crear la tabla de la musculatura"); return; }
+        D3D11_SHADER_RESOURCE_VIEW_DESC sd{}; sd.Format = DXGI_FORMAT_UNKNOWN; sd.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+        sd.Buffer.FirstElement = 0; sd.Buffer.NumElements = 1 + 3 * kMzMax;
+        ID3D11ShaderResourceView* v = nullptr;
+        if (FAILED(dev->CreateShaderResourceView(b, &sd, &v)) || !v) { b->Release(); Log("ropa: no se pudo crear la vista de la tabla de la musculatura"); return; }
+        s_mzBuf = b; s_mzSRV.store(v, std::memory_order_release);
+    }
+    if (!s_mzBuf) return;
+    float d[1 + 3 * kMzMax][4] = {};
+    int n = 0; float mx = 0.0f;
+    const float str = std::clamp(g_cfg.live[255][2], 0.0f, 2.0f);
+    if (on && str > 0.0f) for (const MusZone& z : kZones) {
+        const Fac& f = fac[z.mus];
+        float v[3] = { 0, 0, 0 };
+        if (z.kind == 0) { v[0] = f.t[0]; v[1] = f.t[1]; v[2] = f.t[2]; }
+        else v[0] = 0.65f * f.e;   // el deltoides crece 0.8 / 0.8 / 0.35 en los ejes del hueso: en promedio 0.65
+        const float mag = z.kind == 0 ? sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) : fabsf(v[0]) * z.r;
+        if (mag < 1e-5f || n >= kMzMax) continue;
+        mx = (std::max)(mx, mag);
+        float* A = d[1 + 3 * n]; float* B = d[2 + 3 * n]; float* V = d[3 + 3 * n];
+        A[0] = z.ax; A[1] = z.ay; A[2] = z.az; A[3] = z.r;
+        B[0] = z.bx; B[1] = z.by; B[2] = z.bz; B[3] = (float)z.kind;
+        V[0] = v[0]; V[1] = v[1]; V[2] = v[2]; V[3] = z.sleeve;
+        n++;
+    }
+    d[0][0] = (float)n; d[0][1] = str;
+    if (s_mzSent && !memcmp(d, s_mzData, sizeof d)) return;
+    D3D11_MAPPED_SUBRESOURCE m{};
+    if (FAILED(imm->Map(s_mzBuf, 0, D3D11_MAP_WRITE_DISCARD, 0, &m))) return;
+    memcpy(m.pData, d, sizeof d); imm->Unmap(s_mzBuf, 0);
+    memcpy(s_mzData, d, sizeof d); s_mzSent = true;
+    if (n != s_mzZones || fabsf(mx - s_mzMax) > 0.002f)
+        Log("ropa: la tela sigue a la musculatura en %d zonas (empuje mayor %.1f mm, fuerza %.2f)", n, mx * 1000.0f, str);
+    s_mzZones = n; s_mzMax = mx;
 }
 
 static bool SafeCopy(void* dst, const void* src, size_t n) {

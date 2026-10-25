@@ -152,6 +152,7 @@ struct ShaderEntry {
     std::vector<const Rule*> pairRules;  // (20/10) reglas de este PS que solo valen con cierto VS
     ID3D11Device* dev = nullptr;         // dispositivo que lo creo
     std::shared_ptr<std::vector<uint8_t>> code;   // bytecode original (para el catalogo: reflexion)
+    bool clothSim = false;               // (25/10) simulador del mod de ropa (cloth_sim.hlsl): se le enlazan t120 / t121
 };
 std::vector<const ShaderEntry*> AllShaders();
 
@@ -259,6 +260,7 @@ void CamHookPresent();                            // ganchos (primer Present), 1
 bool CamCutSince(int& seen);                      // true una vez por cada corte nuevo (cada consumidor guarda su 'seen'); x161 = 1
 int CamLastCutFrame();
 bool EngineCamera(float pos[3], float tgt[3], int* frame);   // ultima camara aplicada por el motor (sin atraso)
+ID3D11ShaderResourceView* MuscleClothSRV();     // (25/10) zonas de la musculatura para la fisica de la ropa (t121 del simulador)
 void MuscleHookPresent();                         // (23/10) musculatura (musculo.cpp): huesos de musculo del juego x 164..171 (v5: 32 clases)
 void MuscleDrawPlayerPanel();                     // (24/10) tarjeta "Musculatura por jugador" (ImGui; la llama DrawGroup con g_cfgMutex tomado)
 bool MusclePhysiqueActive();                      // (24/10) el menu Fisico del juego (Editar > Jugadores) esta en pantalla

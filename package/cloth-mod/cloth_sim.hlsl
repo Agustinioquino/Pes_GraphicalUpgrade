@@ -74,6 +74,9 @@
 // COMPARACION: PES_CLOTH_FX = 0 deja el simulador como viene de fabrica (todas las mejoras de PES21 FX neutras).
 // Lo escribe PES21 FX desde el menu (Ropa (fisica) -> Comparar con la version base).
 #define PES_CLOTH_FX       1      // PES21FX_LIVE_CLOTH_FX
+// LA ROPA SIGUE A LA MUSCULATURA (25/10): pecho, espalda, abdomen, trapecio, hombros y gluteos de PES21 FX corren huesos del
+// cuerpo que la ropa no usa; la tela corre su reposo lo mismo que la piel en esa zona (tabla g_pesMus, la manda la DLL).
+#define PES_MUS_FOLLOW     1
 #if !PES_CLOTH_FX
 #undef PES_SHORTS_DAMP
 #define PES_SHORTS_DAMP 1.0
@@ -121,6 +124,8 @@
 #define PES_SEAM_LOCK 0.0
 #undef PES_FOLLOW
 #define PES_FOLLOW 0.0
+#undef PES_MUS_FOLLOW
+#define PES_MUS_FOLLOW 0
 #endif
 #ifdef CM_COHERENT
 #define COH globallycoherent
@@ -222,6 +227,8 @@ static float3 s_kick;
 static float3 s_grav;   // PES21 FX: gravedad en el espacio de la prenda (para el deslizamiento)
 static float3 s_omega;  // PES21 FX: velocidad angular de la prenda (rad/s, espacio de la prenda)
 static float3 s_center; // PES21 FX: origen de la prenda
+static bool   s_menu;   // PES21 FX (25/10): escena de menu (editor, presentacion): sin empujes por movimiento del cuerpo
+static float3 s_ref;    // PES21 FX (25/10): punto cerca de la prenda; las sumas en enteros van relativas a el
 COH RWByteAddressBuffer             g_outPos    : register(u0);
 COH RWByteAddressBuffer             g_outNrm    : register(u1);
 COH RWStructuredBuffer<float4>      g_state     : register(u2);
@@ -231,6 +238,11 @@ COH RWStructuredBuffer<float4>      g_coupleSkin : register(u7);
 COH RWStructuredBuffer<float4>      g_boneCache : register(u4);
 COH RWByteAddressBuffer             g_cache     : register(u5);
 StructuredBuffer<float4>        g_pal       : register(t21);
+// PES21 FX (25/10): datos de PES21 FX. Los enlaza la DLL de PES21 FX cuando el mod de ropa pone este shader; sin ella se leen
+// ceros y todo lo que dependa de esto queda apagado. IniParams = parametros del menu (fila 255: x unir musculos vecinos,
+// y mangas, z la ropa sigue a la musculatura, w escena de menu); g_pesMus = zonas de la musculatura (ver pesMusField).
+Texture1D<float4>               IniParams   : register(t120);
+StructuredBuffer<float4>        g_pesMus    : register(t121);
 groupshared float3 gx[MAXP];
 groupshared uint   gMode;
 groupshared uint   gFirstVisit;
@@ -363,11 +375,48 @@ float pesLimbW(uint p, float3 r0f)
     }
     return float((g_rest[p].skin.w >> 8) & 255) / 255.0;
 }
+// PES21 FX (25/10): la ropa sigue a la musculatura. Pecho, espalda, abdomen, trapecio, hombros y gluteos se hacen corriendo
+// huesos del cuerpo que la ropa no usa: la piel salia y la tela quedaba adentro (el cuerpo atravesaba la remera). La DLL
+// manda en g_pesMus las zonas (capsulas en el modelo en reposo, lado izquierdo; X se espeja) y el corrimiento que recibe la
+// piel en cada una; aca el reposo de la tela se corre lo mismo, mezclado como los pesos de la piel (dos zonas que se pisan
+// no se suman). pb = posicion de reposo (modelo), sw = peso de manga (en la manga actua menos, V.w = cuanto).
+//   g_pesMus[0] = (zonas, fuerza, -, -); por zona 3 float4: (A, radio), (B, tipo: 0 corre V / 1 crece V.x alrededor), (V, manga)
+float3 pesMusField(float3 pb, float sw)
+{
+#if PES_MUS_FOLLOW
+    float4 H = g_pesMus[0];
+    uint n = min((uint)max(H.x, 0.0), 24u);
+    if (n == 0 || !(H.y > 0.0)) return float3(0, 0, 0);
+    float sx = pb.x < 0.0 ? -1.0 : 1.0;
+    float3 q = float3(abs(pb.x), pb.y, pb.z);
+    float3 acc = 0; float wsum = 0;
+    [loop] for (uint k = 0; k < n; ++k) {
+        float4 A = g_pesMus[1 + 3 * k], B = g_pesMus[2 + 3 * k], V = g_pesMus[3 + 3 * k];
+        float3 ab = B.xyz - A.xyz;
+        float tt = saturate(dot(q - A.xyz, ab) / max(dot(ab, ab), 1e-8));
+        float3 dq = q - (A.xyz + ab * tt);
+        float d = length(dq);
+        float w = 1.0 - smoothstep(0.6 * A.w, 1.4 * A.w + 0.02, d);   // la tela esta 1-2 cm afuera de la piel
+        w *= lerp(1.0, saturate(V.w), saturate(sw));
+        if (w <= 0.0) continue;
+        acc += (B.w > 0.5 ? dq * V.x : V.xyz) * w;
+        wsum += w;
+    }
+    acc /= max(wsum, 1.0);
+    acc.x *= sx;
+    float al = length(acc);
+    if (al > 0.06) acc *= 0.06 / al;   // tope de seguridad (6 cm)
+    return all(isfinite(acc)) ? acc * min(H.y, 2.0) : float3(0, 0, 0);
+#else
+    return float3(0, 0, 0);
+#endif
+}
+float3 pesMusOf(ParticleRest r) { return pesMusField(r.posPin.xyz, g_legCount > 0 ? 0.0 : float((r.skin.w >> 8) & 255) / 255.0); }
 void restAt(uint p, float t, out float3 pos, out float3 nrm)
 {
     ParticleRest r = g_rest[p];
     float3x4 M = skinSlot(r.skin.z, r.skin.x, r.skin.y, t);
-    pos = xform(M, r.posPin.xyz);
+    pos = xform(M, r.posPin.xyz + pesMusOf(r));
     nrm = normalize(mul((float3x3)M, r.nrm.xyz));
 }
 void fillBoneCache(uint gi, float t)
@@ -384,7 +433,7 @@ void restAtC(uint p, out float3 pos, out float3 nrm)
 {
     ParticleRest r = g_rest[p];
     float3x4 M = skinC(r.skin.z, r.skin.x, r.skin.y);
-    pos = xform(M, r.posPin.xyz);
+    pos = xform(M, r.posPin.xyz + pesMusOf(r));
     nrm = normalize(mul((float3x3)M, r.nrm.xyz));
 }
 float3 rotateBetween(float3 a, float3 b, float3 v)
@@ -440,7 +489,7 @@ void predictParticle(uint p, uint s, float h, float3 grav, float3 windBase, floa
     // PES21 FX inercia por zona: la cara que mira en contra de la aceleracion recibe mas impulso (se queda atras)
     if (s == 0) { float kl = length(s_kick); if (kl > 1e-5) v += s_kick * (PES_LAG * saturate(-dot(rnrm1, s_kick / kl)) * saturate(1.0 - pin * 1.5)); }
     // PES21 FX faldon al girar: aceleracion centrifuga w x (w x r)
-    { float3 rr = gx[p] - s_center; float3 ac = cross(s_omega, cross(s_omega, rr)); v -= ac * h * PES_SPIN * saturate(1.0 - pin * 1.5); }
+    if (!s_menu) { float3 rr = gx[p] - s_center; float3 ac = cross(s_omega, cross(s_omega, rr)); v -= ac * h * PES_SPIN * saturate(1.0 - pin * 1.5); }
     // PES21 FX tela mojada: mas amortiguacion y mas peso
     damp *= 1.0 + 1.5 * PES_WET;
     v += grav * h * (0.6 * PES_WET);
@@ -520,6 +569,7 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
             // seguimiento: velocidad horizontal del cuerpo por encima de 3 m/s endurece la tela (menos atraso)
             float vH = gl2 > 1e-4 ? length(vB - (s_grav / gl2) * dot(vB, s_grav / gl2)) : length(vB);
             pesFollow = PES_FOLLOW * saturate((vH - 3.0) / 4.0) * fitFree;
+            if (s_menu) { pesLift = 0.0; pesFollow = 0.0; }   // (25/10) en los menus el cuerpo no corre ni salta
         }
         alpha *= (pesFit < 0.0) ? clamp(1.0 + pesFit * 120.0, 0.4, 1.0) : clamp(1.0 + pesFit * 80.0, 1.0, 1.6);   // (18/10 b) rangos suaves
         alpha *= (1.0 + pesLift * 2.0) / (1.0 + pesFollow * 1.5);
@@ -584,8 +634,12 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
                 ly /= wsum;
                 ln = normalize(ln);
                 float d = dot(x - ly, ln);
+                // PES21 FX (25/10): una pierna lejos (de otro dibujo o con huesos viejos: pasa en los menus, con varios
+                // modelos en la escena) armaba un plano a metros de la tela y la tiraba de golpe: el short explotaba.
+                // Lejos de la tela no cuenta, y el empuje por sub-paso tiene tope.
+                if (PES_CLOTH_FX && distance(x, ly) > 0.15) d = g_legMargin + PES_LEG_DRAPE_RANGE;
                 if (d < g_legMargin) {
-                    float3 corr = ln * (g_legMargin - d);
+                    float3 corr = ln * (PES_CLOTH_FX ? min(g_legMargin - d, 0.02) : (g_legMargin - d));
                     x += corr;
                     xPrev += corr * (1.0 - g_bodyBounce);
                 } else if (d < g_legMargin + PES_LEG_DRAPE_RANGE) {
@@ -901,6 +955,12 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
     s_W[0] = me.world[0]; s_W[1] = me.world[1]; s_W[2] = me.world[2];
     s_Wp[0] = me.worldPrev[0]; s_Wp[1] = me.worldPrev[1]; s_Wp[2] = me.worldPrev[2];
     s_kick = me.kick.xyz;
+    // PES21 FX (25/10): escena de menu (editor, presentacion de equipos). El juego la arma a ~10 km del origen y el modelo
+    // gira en la plataforma: los empujes por movimiento del cuerpo (arranque, giro, salto) solo meten ruido. La DLL marca
+    // la escena de menu (w255: sin cancha hace 15 s); sin la DLL, lejos del origen (mundo a mas de 2 km) cuenta igual.
+    { float3 Tw0 = float3(me.world[0].w, me.world[1].w, me.world[2].w);
+      s_menu = PES_CLOTH_FX && (IniParams.Load(int2(255, 0)).w > 0.5 || max(abs(Tw0.x), max(abs(Tw0.y), abs(Tw0.z))) > 2000.0); }
+    if (s_menu) s_kick = 0;
     // PES21 FX (23/10): MODO EDITAR. El juego pone a los jugadores del editor a ~10 km del origen. El short se simula en
     // coordenadas de mundo (modo mundo del mod) y a 10 km un float solo distingue ~1 mm: la pose, los choques con la pierna
     // y las velocidades recibian ruido de 1 mm por sub-paso (0.5 m/s) y el short aleteaba como con viento. Lejos del origen
@@ -1054,12 +1114,15 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                     if (gi < PES_TORSO_BANDS) { gTorsoB[gi][0] = 0x7f7fffffu; gTorsoB[gi][1] = 0u; gTorsoB[gi][2] = 0x7f7fffffu; gTorsoB[gi][3] = 0u; }
                     GroupMemoryBarrierWithGroupSync();
                     float gl0 = length(grav); float3 upT = gl0 > 1e-4 ? -grav / gl0 : float3(0, 1, 0);
+                    // (25/10) sumas relativas a un punto de la prenda: con posiciones absolutas, lejos del origen (menus: el
+                    // juego arma la escena a ~10 km) las sumas en enteros de 0.1 mm se desbordaban y el volumen salia cualquier cosa
+                    { float3 rp0, rn0; restAtC(0, rp0, rn0); s_ref = all(isfinite(rp0)) ? rp0 : float3(0, 0, 0); }
                     for (uint pa = gi; pa < P; pa += THREADS) {
                         if (!(g_rest[pa].skin.w & 1)) continue;
                         if (float((g_rest[pa].skin.w >> 8) & 255) / 255.0 > 0.2) continue;   // sin mangas
                         float3 rr, rn; restAtC(pa, rr, rn);
                         if (dot(rr, rr) < 1e-8 || dot(rn, rn) < 1e-8) continue;
-                        float3 r0f = rr - rn * g_rest[pa].nrm.w;
+                        float3 r0f = rr - rn * g_rest[pa].nrm.w - s_ref;
                         InterlockedAdd(gTorsoSum[0], int(r0f.x * 10000.0)); InterlockedAdd(gTorsoSum[1], int(r0f.y * 10000.0));
                         InterlockedAdd(gTorsoSum[2], int(r0f.z * 10000.0)); InterlockedAdd(gTorsoSum[3], 1);
                         uint hu = asuint(dot(r0f, upT) + 10.0);
@@ -1068,8 +1131,10 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                     GroupMemoryBarrierWithGroupSync();
                     s_tOk = gTorsoSum[3] >= 64;
                     s_tUp = upT;
-                    s_tC = float3(gTorsoSum[0], gTorsoSum[1], gTorsoSum[2]) / (10000.0 * max(gTorsoSum[3], 1));
-                    s_tH0 = asfloat(gTorsoH[0]) - 10.0; s_tH1 = asfloat(gTorsoH[1]) - 10.0;
+                    s_tC = s_ref + float3(gTorsoSum[0], gTorsoSum[1], gTorsoSum[2]) / (10000.0 * max(gTorsoSum[3], 1));
+                    // (25/10) alturas respecto del centro del torso: todos los usos miden dot(x - s_tC, arriba); antes eran
+                    // absolutas y nunca coincidian (las rodajas caian todas en la primera y el volumen no actuaba)
+                    { float hC = dot(s_tC - s_ref, upT); s_tH0 = asfloat(gTorsoH[0]) - 10.0 - hC; s_tH1 = asfloat(gTorsoH[1]) - 10.0 - hC; }
                     float3 anyV = abs(upT.x) < 0.9 ? float3(1, 0, 0) : float3(0, 0, 1);
                     s_tE1 = normalize(cross(upT, anyV)); s_tE2 = cross(upT, s_tE1);
                     if (s_tOk && s_tH1 - s_tH0 > 0.05) {
@@ -1110,8 +1175,9 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                         if (sw <= 0.2) continue;
                         uint side = dot(r0f - s_tC, s_tSide) < 0.0 ? 0u : 1u;
                         uint b = (uint)clamp((sw - 0.2) / 0.8 * PES_ARM_BANDS, 0.0, PES_ARM_BANDS - 1.0);
-                        InterlockedAdd(gArmSum[side][b][0], int(r0f.x * 10000.0)); InterlockedAdd(gArmSum[side][b][1], int(r0f.y * 10000.0));
-                        InterlockedAdd(gArmSum[side][b][2], int(r0f.z * 10000.0)); InterlockedAdd(gArmSum[side][b][3], 1);
+                        float3 rq = r0f - s_ref;   // (25/10) relativo: sin desborde lejos del origen
+                        InterlockedAdd(gArmSum[side][b][0], int(rq.x * 10000.0)); InterlockedAdd(gArmSum[side][b][1], int(rq.y * 10000.0));
+                        InterlockedAdd(gArmSum[side][b][2], int(rq.z * 10000.0)); InterlockedAdd(gArmSum[side][b][3], 1);
                     }
                     GroupMemoryBarrierWithGroupSync();
                     [unroll] for (uint sd0 = 0; sd0 < 2; ++sd0) {
@@ -1119,7 +1185,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                         [unroll] for (uint bb = 0; bb < PES_ARM_BANDS; ++bb) {
                             int n = gArmSum[sd0][bb][3];
                             if (n < 6) s_armOk[sd0] = false;
-                            s_armC[sd0][bb] = float3(gArmSum[sd0][bb][0], gArmSum[sd0][bb][1], gArmSum[sd0][bb][2]) / (10000.0 * max(n, 1));
+                            s_armC[sd0][bb] = s_ref + float3(gArmSum[sd0][bb][0], gArmSum[sd0][bb][1], gArmSum[sd0][bb][2]) / (10000.0 * max(n, 1));
                         }
                     }
                     if (s_tOk) for (uint pb = gi; pb < P; pb += THREADS) {
@@ -1279,7 +1345,8 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                 uint4 rm = g_rmap[i];
                 float w0 = float(rm.w & 0xffff) / 65535.0, w1 = float(rm.w >> 16) / 65535.0, w2 = max(1.0 - w0 - w1, 0.0);
                 uint3 pp = min(rm.xyz, MAXP - 1);
-                x = mul(A, v) + tr + gx[pp.x] * w0 + gx[pp.y] * w1 + gx[pp.z] * w2;
+                // PES21 FX (25/10): el vertice mapeado tambien sigue a la musculatura (gx ya es el desplazamiento sobre el reposo corrido)
+                x = mul(A, v + pesMusField(v, g_legCount > 0 ? 0.0 : float((g_rest[pp.x].skin.w >> 8) & 255) / 255.0)) + tr + gx[pp.x] * w0 + gx[pp.y] * w1 + gx[pp.z] * w2;
                 float3 rp, r0, r1, r2;
                 restAtC(pp.x, rp, r0);
                 restAtC(pp.y, rp, r1);

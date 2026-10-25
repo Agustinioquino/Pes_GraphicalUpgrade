@@ -395,9 +395,21 @@ static ID3D11DeviceChild* BuildReplacement(ID3D11Device* dev, uint64_t h, char t
     return out;
 }
 
+// (25/10) el simulador del mod de ropa (cloth_sim.hlsl, que compila el mod al arrancar): se reconoce por los nombres de sus
+// recursos en la reflexion del bytecode. Al ponerlo se le enlazan los parametros (t120) y la tabla de la musculatura (t121).
+static bool HasBytes(const void* code, SIZE_T len, const char* s) {
+    const size_t n = strlen(s); const char* c = (const char*)code;
+    if (!code || len < n) return false;
+    for (SIZE_T i = 0; i + n <= len; i++) if (c[i] == s[0] && !memcmp(c + i, s, n)) return true;
+    return false;
+}
 static void Register(ID3D11Device* dev, void* obj, const void* code, SIZE_T len, char type) {
     if (!obj || !code) return;
     ShaderEntry e; e.hash = Fnv64(code, len); e.type = type; e.dev = dev;
+    if (type == 'c' && HasBytes(code, len, "g_legSkin") && HasBytes(code, len, "g_boneCache")) {
+        e.clothSim = true;
+        Log("ropa: simulador del mod de ropa reconocido (%016llx): recibe los parametros de PES21 FX y la tabla de la musculatura", (unsigned long long)e.hash);
+    }
     e.code = std::make_shared<std::vector<uint8_t>>((const uint8_t*)code, (const uint8_t*)code + len);
     e.repl = BuildReplacement(dev, e.hash, type);
     e.rule = RuleFor(e.hash);
@@ -489,6 +501,12 @@ template<int V> static void STDMETHODCALLTYPE hk_SetCS(ID3D11DeviceContext* c, I
         return;
     }
     o_SetCS[V](c, s, ci, n);
+    // (25/10) simulador del mod de ropa: parametros (t120: escena de menu, fuerza) y zonas de la musculatura (t121). Es fisica,
+    // no un shader reemplazado: no depende de "Ver original". Sin esto el simulador lee ceros y esas mejoras quedan apagadas.
+    if (e && e->clothSim && e->dev == g_dev.dev && g_dev.paramSRV) {
+        ID3D11ShaderResourceView* v[2] = { g_dev.paramSRV, MuscleClothSRV() };
+        c->CSSetShaderResources(120, 2, v);
+    }
 }
 
 // ---------------------------------------------------------------- reglas antes de cada dibujo
