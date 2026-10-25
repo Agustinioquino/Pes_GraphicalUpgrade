@@ -361,6 +361,7 @@ void RingOverlayBegin(ID3D11DeviceContext* c, RingScope& r);
 void RingOverlayEnd(ID3D11DeviceContext* c, RingScope& r);
 void RingReloadShaders();
 void RingPresent(IDXGISwapChain* sc);               // (24/10 e) el aro sobre la imagen final, con las marcas de este cuadro
+ID3D11ShaderResourceView* HandDataFor(uint64_t vsHash, UINT indexCount, UINT start, INT base);   // (25/10) manos.cpp: datos por vertice de la mano (t126 del VS)
 extern std::atomic<bool> g_menuOpen;
 extern std::atomic<int> g_replacedCount, g_failedCount;
 extern std::vector<std::string> g_compileErrors;

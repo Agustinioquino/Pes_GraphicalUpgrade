@@ -3,6 +3,7 @@
 // peso por vertice segun su posicion de REPOSO (v0, espacio del modelo: X = izquierda, Y = arriba, Z = adelante; con |x|
 // cada capsula sirve para los dos lados). Las capsulas las arma la DLL (fisico.cpp) en x174..182; el PS lee el peso en
 // o3.w (+2, para distinguirlo de los VS que no lo escriben: o3.w queda en [2, 3]).
+// (25/10) manos: si el dibujo es una mano de TorsoBody, el skinning lo hace pes_hands.hlsli (t126 enlazado por manos.cpp).
 // (24/10 c) o4.w / o5.w = cercania a las marcas 0 / 1 del musculo (187 / 188; signo = lado: + izquierdo, - derecho): con eso el
 // PS de la piel (variante pes_skin_hl_ps.hlsl, solo en el menu Fisico) junta en u5 donde quedo cada marca en la pantalla y la
 // DLL dibuja encima el aro y el punto blanco, como una capa de interfaz. o6.w = jugador de la tabla de tonos de piel
@@ -67,6 +68,7 @@ cbuffer VSBones : register(b6)
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 #include "pes_skintone.hlsli"
+#include "pes_hands.hlsli"   // (25/10) manos: cuaterniones duales + correctivas por pose (solo en los dibujos de la mano)
 
 
 void main(
@@ -80,6 +82,7 @@ void main(
   float4 v7 : TEXCOORD1,
   float4 v8 : TEXCOORD2,
   float2 v9 : TEXCOORD3,
+  uint vid : SV_VertexID,
   out float4 o0 : SV_Position0,
   out float4 o1 : COLOR0,
   out float2 o2 : TEXCOORD0,
@@ -95,7 +98,11 @@ void main(
   float4 fDest;
 
   r0.x = cmp(g_vsObject.m_useWeightCount.x != 0.000000);
-  if (r0.x != 0) {
+  float3 hP, hN, hT, hPP; float hDbg;
+  bool handDone = (r0.x != 0) && PesHandSkin(vid, v0.xyz, v1.xyz, v3.xyz, v4, v5, hP, hN, hT, hPP, hDbg);
+  if (handDone) {
+    r4.xyz = hP; r5.xyz = hN; r1.xyz = hT; r2.xyz = hPP;
+  } else if (r0.x != 0) {
     r0.xyzw = (int4)v4.xyzw * int4(3,3,3,3);
     r1.xyzw = g_vsBone.m_boneMatrices[v4.y]._m00_m10_m20_m30 * v5.yyyy;
     r2.xyzw = g_vsBone.m_boneMatrices[v4.y]._m01_m11_m21_m31 * v5.yyyy;
