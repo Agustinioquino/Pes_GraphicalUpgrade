@@ -44,11 +44,20 @@
 #define PES_TORSO_BANDS    8
 #define PES_TORSO_SHRINK   0.90   // la elipse del cuerpo = la de la tela en reposo (sin holgura) x esto
 #define PES_TORSO_MAXPUSH  0.005  // (m) empuje maximo por sub-paso
+// (25/10 b) EMPUJE del torso como volumen: apagado. Hasta el 25/10 las alturas estaban mal y el volumen nunca actuaba; con las
+// alturas corregidas actuo y la rodaja de arriba (cuello + hombros, que no es una elipse) dejaba el escote "adentro del cuerpo":
+// lo empujaba hacia afuera y la camiseta se separaba del cuello. Las medidas (centro, alturas) se siguen usando (costuras, short).
+#define PES_TORSO_PUSH     0
 // brazos como volumen (18/10): por manga, 4 tramos (hombro -> puno) con su eje y radio medidos de la tela en reposo, cada sub-paso
 #define PES_ARM_ON         1
 #define PES_ARM_BANDS      4
 #define PES_ARM_SHRINK     0.88
 #define PES_ARM_MAXPUSH    0.006  // (m) por sub-paso
+// (25/10 b) EMPUJE de brazos / piernas como volumen y grosor del brazo en la manga: apagados. Con las medidas corregidas el 25/10
+// empezaron a actuar de verdad (antes el lado de cada manga salia mal y casi no hacian nada) y la camiseta se movia mucho menos:
+// la manga no podia acercarse al brazo y el grosor del brazo endurecia la manga. Vuelve a como se veia.
+#define PES_ARM_PUSH       0
+#define PES_LIMB_SLEEVE    0      // 1 = el grosor del brazo tambien sujeta la manga (el del muslo sigue sujetando el short)
 #define PES_SHIRT_LIFT     1.2    // (18/10) la camiseta se suelta del cuerpo al saltar/caer/arrancar: cuanto mas, mas se levanta el ruedo
 #define PES_FIT_HANG       2.5    // delgado: la remera cuelga mas larga (metros de caida por metro de holgura: 10 mm -> 2.5 cm)
 #define PES_FIT_CLING      0.15   // ancho: la tela que queda separada del cuerpo se acerca a el por sub-paso
@@ -411,7 +420,11 @@ float3 pesMusField(float3 pb, float sw)
     return float3(0, 0, 0);
 #endif
 }
-float3 pesMusOf(ParticleRest r) { return pesMusField(r.posPin.xyz, g_legCount > 0 ? 0.0 : float((r.skin.w >> 8) & 255) / 255.0); }
+// (25/10 b) las costuras (escote, punos, cintura: el mod las sujeta con pin alto) no se corren: el cuello y los punos son mallas
+// aparte que siguen al esqueleto sin la musculatura, y si la tela de la costura se corria quedaba separada del cuello
+float pesPinRest(ParticleRest r) { return (s_flags & 256) ? float((r.skin.w >> 2) & 63) / 63.0 : r.posPin.w; }
+float pesSeamFade(float pin) { return 1.0 - smoothstep(0.25, 0.85, pin); }
+float3 pesMusOf(ParticleRest r) { return pesMusField(r.posPin.xyz, g_legCount > 0 ? 0.0 : float((r.skin.w >> 8) & 255) / 255.0) * pesSeamFade(pesPinRest(r)); }
 void restAt(uint p, float t, out float3 pos, out float3 nrm)
 {
     ParticleRest r = g_rest[p];
@@ -489,7 +502,9 @@ void predictParticle(uint p, uint s, float h, float3 grav, float3 windBase, floa
     // PES21 FX inercia por zona: la cara que mira en contra de la aceleracion recibe mas impulso (se queda atras)
     if (s == 0) { float kl = length(s_kick); if (kl > 1e-5) v += s_kick * (PES_LAG * saturate(-dot(rnrm1, s_kick / kl)) * saturate(1.0 - pin * 1.5)); }
     // PES21 FX faldon al girar: aceleracion centrifuga w x (w x r)
-    if (!s_menu) { float3 rr = gx[p] - s_center; float3 ac = cross(s_omega, cross(s_omega, rr)); v -= ac * h * PES_SPIN * saturate(1.0 - pin * 1.5); }
+    // (25/10 b) tambien en los menus: el giro sale de la rotacion del mundo de la prenda (no de posiciones a 10 km) y es el
+    // vuelo de la camiseta cuando el jugador gira en la plataforma del editor; sin el se movia mucho menos
+    { float3 rr = gx[p] - s_center; float3 ac = cross(s_omega, cross(s_omega, rr)); v -= ac * h * PES_SPIN * saturate(1.0 - pin * 1.5); }
     // PES21 FX tela mojada: mas amortiguacion y mas peso
     damp *= 1.0 + 1.5 * PES_WET;
     v += grav * h * (0.6 * PES_WET);
@@ -575,7 +590,7 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
         alpha *= (1.0 + pesLift * 2.0) / (1.0 + pesFollow * 1.5);
         // grosor del miembro: muslo/brazo grueso -> anclaje mas firme y correa mas corta; fino -> mas suelto
         float pesLimbK = 0.0;
-        if (PES_LIMB_GAIN > 0.0 && s_tOk) {
+        if (PES_LIMB_GAIN > 0.0 && s_tOk && (g_legCount > 0 || PES_LIMB_SLEEVE)) {
             float3 r0k = rest1 - rnrm1 * g_rest[p].nrm.w;
             float swk = pesLimbW(p, r0k);
             if (swk > 0.2) {
@@ -712,7 +727,7 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
             contactD = dd - R;
         }
         // PES21 FX (18/10): torso como volumen (ver arriba). Solo tela de cuerpo de la camiseta.
-        if (PES_TORSO_ON && s_tOk && g_legCount == 0 && (g_rest[p].skin.w & 1)) {
+        if (PES_TORSO_ON && PES_TORSO_PUSH && s_tOk && g_legCount == 0 && (g_rest[p].skin.w & 1)) {
             float3 rl = x - s_tC;
             float hT = dot(rl, s_tUp);
             float fb = clamp((hT - s_tH0) / max(s_tH1 - s_tH0, 1e-3) * PES_TORSO_BANDS - 0.5, 0.0, PES_TORSO_BANDS - 1.0);
@@ -739,7 +754,7 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
             }
         }
         // PES21 FX (18/10): brazo como volumen. La tela de la manga no entra en el cilindro conico de su propio tramo.
-        if (PES_ARM_ON && s_tOk) {
+        if (PES_ARM_ON && PES_ARM_PUSH && s_tOk) {
             float3 r0a = rest1 - rnrm1 * g_rest[p].nrm.w;
             float swp = pesLimbW(p, r0a);
             if (swp > 0.2) {
@@ -1348,7 +1363,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                 float w0 = float(rm.w & 0xffff) / 65535.0, w1 = float(rm.w >> 16) / 65535.0, w2 = max(1.0 - w0 - w1, 0.0);
                 uint3 pp = min(rm.xyz, MAXP - 1);
                 // PES21 FX (25/10): el vertice mapeado tambien sigue a la musculatura (gx ya es el desplazamiento sobre el reposo corrido)
-                x = mul(A, v + pesMusField(v, g_legCount > 0 ? 0.0 : float((g_rest[pp.x].skin.w >> 8) & 255) / 255.0)) + tr + gx[pp.x] * w0 + gx[pp.y] * w1 + gx[pp.z] * w2;
+                x = mul(A, v + pesMusField(v, g_legCount > 0 ? 0.0 : float((g_rest[pp.x].skin.w >> 8) & 255) / 255.0) * pesSeamFade(pinOf(pp.x))) + tr + gx[pp.x] * w0 + gx[pp.y] * w1 + gx[pp.z] * w2;
                 float3 rp, r0, r1, r2;
                 restAtC(pp.x, rp, r0);
                 restAtC(pp.y, rp, r1);
