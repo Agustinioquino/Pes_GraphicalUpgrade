@@ -24,7 +24,9 @@ namespace fx {
 
 static const uint64_t kGrassVS = 0x498b30bad256e8edULL;
 static const uint64_t kGrassPS = 0x18afff0f79d9aaa5ULL;   // PS de las hojas (G-buffer): solo desde ese dibujo se guarda estado y se emite
-static const int kMaxInst = 20480;    // 8192 + 8192 + 4096 (topes maximos de los 3 niveles)
+// (25/10 c) 3 niveles x 6 subniveles de densidad (tarjetas por parcela: 9248 >> b), 4096 parcelas por ranura
+static const int kSlotCap = 4096, kBins = 6, kSlots = 18;
+static const int kMaxInst = kSlotCap * kSlots;
 struct GInst { float x, z, s, r; };   // instancia: posicion, escala, giro (multiplos de 90 grados)
 
 static std::atomic<int> s_frame{0};
@@ -209,7 +211,7 @@ static bool EnsureGPU() {
     }
     if (!s_cs) return false;
     auto cb = [](UINT bytes, ID3D11Buffer** out) { if (*out) return; D3D11_BUFFER_DESC d = {}; d.ByteWidth = bytes; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER; g_dev.dev->CreateBuffer(&d, nullptr, out); };
-    cb(144, &s_cullCb); cb(64, &s_cpVs0); cb(80, &s_cpVs4); cb(80, &s_cpPs0); cb(352, &s_sceneCb);
+    cb(160, &s_cullCb); cb(64, &s_cpVs0); cb(80, &s_cpVs4); cb(80, &s_cpPs0); cb(352, &s_sceneCb);
     if (!s_instG) {
         D3D11_BUFFER_DESC d = {}; d.ByteWidth = kMaxInst * 16; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
         d.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED; d.StructureByteStride = 16;
@@ -227,9 +229,9 @@ static bool EnsureGPU() {
         D3D11_UNORDERED_ACCESS_VIEW_DESC ud = {}; ud.Format = DXGI_FORMAT_R32_TYPELESS; ud.ViewDimension = D3D11_UAV_DIMENSION_BUFFER; ud.Buffer.NumElements = bytes / 4; ud.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
         if (FAILED(g_dev.dev->CreateUnorderedAccessView(*b, &ud, u))) *u = nullptr;
     };
-    raw(16, 0, &s_count, &s_countUAV);
-    raw(64, D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS, &s_args, &s_argsUAV);
-    for (auto& st : s_countStage) if (!st) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 16; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; g_dev.dev->CreateBuffer(&d, nullptr, &st); }
+    raw(80, 0, &s_count, &s_countUAV);
+    raw(kSlots * 20, D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS, &s_args, &s_argsUAV);
+    for (auto& st : s_countStage) if (!st) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 80; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; g_dev.dev->CreateBuffer(&d, nullptr, &st); }
     for (auto& st : s_sceneStage) if (!st) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 352; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; g_dev.dev->CreateBuffer(&d, nullptr, &st); }
     return s_cullCb && s_sceneCb && s_cpVs0 && s_cpVs4 && s_cpPs0 && s_instG && s_instGSRV && s_instGUAV && s_count && s_countUAV && s_args && s_argsUAV;
 }
@@ -295,9 +297,10 @@ struct Level { float cell; UINT cap; UINT target; float widthMul; };
 // umbrales de tamano en pantalla (pixeles por metro): mas = mas cerca. x58 (densidad) los corre: 1.5 = cada nivel llega
 // 1.5x mas lejos. T0: hasta aca el pasto del juego (una hoja de 1.2 cm mide >= 2 px); T1 / T2: limites de los niveles.
 static void Thresholds(float* T) {
-    float dens = g_cfg.live[58][0] > 0.05f ? std::clamp(g_cfg.live[58][0], 0.3f, 2.0f) : 1.0f;
-    T[0] = 160.0f / dens; T[1] = 80.0f / dens; T[2] = 35.0f / dens;
-    T[3] = 15.0f / dens;   // (25/10) limite inferior del nivel lejano cuando el cesped lejano de la base (y61) esta prendido
+    // (25/10 c) fijos: la densidad (x58) ya no corre los niveles, cambia cuantas tarjetas lleva cada parcela (densidad
+    // constante en pantalla, ver GrassEmit). El pasto del juego queda solo muy cerca (>= 240 px/m: primeros planos)
+    T[0] = 240.0f; T[1] = 110.0f; T[2] = 45.0f;
+    T[3] = 15.0f;   // (25/10) limite inferior del nivel lejano cuando el cesped lejano de la base (y61) esta prendido
 }
 
 void GrassPresent() {
@@ -310,7 +313,7 @@ void GrassPresent() {
     if (g_dev.imm) for (int i = 0; i < 4; i++) if (s_countStage[i] && s_countFrame[i] >= 0 && s_countFrame[i] <= f - 3) {
         D3D11_MAPPED_SUBRESOURCE m;
         if (SUCCEEDED(g_dev.imm->Map(s_countStage[i], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) {
-            const UINT* q = (const UINT*)m.pData; for (int k = 0; k < 3; k++) g_grassDbg.ring[k] = (int)q[k];
+            const UINT* q = (const UINT*)m.pData; for (int k = 0; k < 3; k++) { int n = 0; for (int b = 0; b < kBins; b++) n += (int)q[k * kBins + b]; g_grassDbg.ring[k] = n; }
             g_dev.imm->Unmap(s_countStage[i], 0); s_countFrame[i] = -1;
             s_lastCount = g_grassDbg.ring[0] + g_grassDbg.ring[1] + g_grassDbg.ring[2]; g_grassDbg.patches = s_lastCount;
         }
@@ -369,13 +372,27 @@ static void GrassEmit(ID3D11DeviceContext* c, int f, bool bound) {
     float tall = p59[0] > 0.05f ? p59[0] : 1.3f;
     float wide = p59[1] >= 0.0f ? p59[1] : 1.0f;
     int q = (int)(g_cfg.live[61][0] + 0.5f); q = (std::max)(0, (std::min)(q, 3));
-    static const UINT tgt0[4] = { 4000, 6000, 9000, 14000 }, cap0[4] = { 3000, 4000, 6000, 8192 }, cap1[4] = { 4000, 6000, 8192, 8192 };
-    Level L[3] = { { 0.5f, cap0[q], tgt0[q], 1.0f }, { 1.0f, cap1[q], tgt0[q] / 3, 2.0f }, { 2.0f, 4096, 1000, 2.2f } };
+    // (25/10 c) densidad constante en pantalla: cada parcela lleva las tarjetas que hacen falta para cubrir su tamano en
+    // pantalla (tarjetas = C(p) * (celda * p)^2 / ancho_px, con p = pixeles por metro; C sube suave hacia la camara), con
+    // la malla propia de manojos curvos (orden de Halton: las primeras N tarjetas estan bien repartidas) en 6 subniveles
+    // (9248 >> b tarjetas) y un tope exacto por parcela que el VS aplica por SV_VertexID. Calidad (x61): cuanto cubre y el
+    // ancho minimo de la hoja en pixeles (hojas de menos de ~1.4 px titilan). Densidad (x58) multiplica C.
+    static const float cMul[4] = { 0.6f, 1.0f, 1.4f, 1.8f }, minPxQ[4] = { 1.8f, 1.5f, 1.3f, 1.2f };
+    float dens = g_cfg.live[58][0] > 0.05f ? std::clamp(g_cfg.live[58][0], 0.3f, 2.0f) : 1.0f;
+    const float cBase = 0.30f * cMul[q] * dens, minPx = minPxQ[q];
+    Level L[3] = { { 0.5f, kSlotCap, 0, 1.0f }, { 1.0f, kSlotCap, 0, 1.6f }, { 2.0f, kSlotCap, 0, 2.0f } };
     // (25/10) con el cesped lejano de la base prendido (y61) el nivel 3D lejano se apaga por debajo de T3 px/m y la base lo sigue
     const bool farBase = g_cfg.live[61][1] > 0.001f; const float loFar = farBase ? T[3] : 0.0f; const float fadeM = 0.25f;
-    UINT offs[3] = { 0, 8192, 16384 };
-    Variant var[3]; for (int i = 0; i < 3; i++) var[i] = PickVariantNear(L[i].target);
-    g_grassDbg.lod = var[0].count;
+    // malla propia (manojos curvos de 2 tramos: 6 vertices / 12 indices por tarjeta)
+    float curv = g_cfg.live[123][0] > 0.5f ? std::clamp(g_cfg.live[123][2], 0.0f, 1.5f) : 0.6f;
+    ID3D11Buffer* mPos = nullptr; ID3D11Buffer* mUv = nullptr; ID3D11Buffer* mIb = nullptr; UINT mCards = 0, mIpc = 12, mVpc = 6;
+    {
+        std::lock_guard<std::mutex> lk(s_denseMx);
+        if (!s_denseBuilt.load() || fabsf(curv - s_denseCurv) > 0.01f) BuildDense(curv);
+        if (s_denseBuilt.load()) { DenseLevel& D = s_dense[1]; mPos = D.pos; mUv = D.uv; mIb = D.ib; mCards = D.cards; mIpc = D.idxPerCard; mVpc = D.vertsPerCard; mPos->AddRef(); mUv->AddRef(); mIb->AddRef(); }
+    }
+    if (!mPos) { Why("sin malla propia de manojos (ver Errores)"); if (!bound) st.Release(); return; }
+    g_grassDbg.lod = mCards * mIpc;
     const float halfL = 52.5f + 3.0f, halfW = 34.0f + 3.0f, halfH = 0.5f * (float)(g_bbH ? g_bbH : 1080);
     ID3D11DeviceContext1* c1 = nullptr; c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1);
     // estado del contexto que se toca (se devuelve al final)
@@ -408,18 +425,21 @@ static void GrassEmit(ID3D11DeviceContext* c, int f, bool bound) {
             c->CSSetConstantBuffers(2, 1, &s_sceneCb);
         }
         c->CSSetConstantBuffers(0, 1, &s_cullCb);
-        UINT zeros[4] = { 0, 0, 0, 0 }; c->UpdateSubresource(s_count, 0, nullptr, zeros, 0, 0);
+        UINT zeros[20] = {}; c->UpdateSubresource(s_count, 0, nullptr, zeros, 0, 0);
         ID3D11UnorderedAccessView* uavs[3] = { s_instGUAV, s_countUAV, s_argsUAV }; UINT ini[3] = { (UINT)-1, (UINT)-1, (UINT)-1 };
         c->CSSetUnorderedAccessViews(0, 3, uavs, ini);
-        float cull[36];
-        for (int k = 0; k < 36; k++) cull[k] = 0.f;
-        for (int i = 0; i < 3; i++) { cull[12 + i * 4] = (float)var[i].count; cull[13 + i * 4] = (float)var[i].start; cull[14 + i * 4] = (float)var[i].base; }
-        cull[24] = (float)L[0].cap; cull[25] = (float)L[1].cap; cull[26] = (float)L[2].cap;
-        cull[4] = halfH; cull[9] = fadeM; cull[10] = halfL; cull[11] = halfW;
+        // gP0 (nivel, celda, pLo, pHi) gP1 (mitad alto, tope por ranura, primera ranura del nivel, celdas a lo largo)
+        // gP2 (celdas a lo ancho, margen, semi largo, semi ancho) gP3 (ancho de la hoja m, ancho minimo px, C base, indices por tarjeta)
+        // gP4 (tarjetas de la malla, subniveles, 0, 0)
+        float cull[40];
+        for (int k = 0; k < 40; k++) cull[k] = 0.f;
+        cull[4] = halfH; cull[5] = (float)kSlotCap; cull[9] = fadeM; cull[10] = halfL; cull[11] = halfW;
+        cull[13] = minPx; cull[14] = cBase; cull[15] = (float)mIpc; cull[16] = (float)mCards; cull[17] = (float)kBins;
         for (int i = 0; i < 3; i++) {
             UINT gw = (UINT)ceilf(2.0f * halfL / L[i].cell), gh = (UINT)ceilf(2.0f * halfW / L[i].cell);
             cull[0] = (float)i; cull[1] = L[i].cell; cull[2] = i == 2 ? loFar : T[i + 1]; cull[3] = T[i];   // nivel 2: sin limite inferior (toda la cancha) salvo con cesped lejano en la base
-            cull[5] = (float)L[i].cap; cull[6] = (float)offs[i]; cull[7] = (float)gw; cull[8] = (float)gh;
+            cull[6] = (float)(i * kBins); cull[7] = (float)gw; cull[8] = (float)gh;
+            cull[12] = 0.012f * wide * L[i].widthMul * (L[i].cell / 0.5f);   // ancho de la hoja en metros (la malla escala con la celda)
             c->UpdateSubresource(s_cullCb, 0, nullptr, cull, 0, 0);
             c->Dispatch((gw + 7) / 8, (gh + 7) / 8, 1);
         }
@@ -429,24 +449,33 @@ static void GrassEmit(ID3D11DeviceContext* c, int f, bool bound) {
         c->CSSetShader(oldCS, nullptr, 0); c->CSSetConstantBuffers(0, 3, oldCB); c->CSSetUnorderedAccessViews(0, 3, oldUAV, nullptr);
         if (oldCS) oldCS->Release(); for (auto* b : oldCB) if (b) b->Release(); for (auto* u : oldUAV) if (u) u->Release();
         cb2->Release();
-        // --- dibujos: uno por nivel, indirectos (pasan por nuestro gancho: reglas y t120) ---
+        // --- malla propia en la entrada (posicion en el slot 0, uv en el slot 3, indices de 32 bits) ---
+        ID3D11Buffer* svVb[4] = {}; UINT svSt[4] = {}, svOf[4] = {}; c->IAGetVertexBuffers(0, 4, svVb, svSt, svOf);
+        ID3D11Buffer* svIb = nullptr; DXGI_FORMAT svFmt = DXGI_FORMAT_UNKNOWN; UINT svIo = 0; c->IAGetIndexBuffer(&svIb, &svFmt, &svIo);
+        { ID3D11Buffer* vbs[4] = { mPos, svVb[1], svVb[2], mUv }; UINT sts[4] = { 12, svSt[1], svSt[2], 4 }, ofs2[4] = { 0, svOf[1], svOf[2], 0 };
+          c->IASetVertexBuffers(0, 4, vbs, sts, ofs2); c->IASetIndexBuffer(mIb, DXGI_FORMAT_R32_UINT, 0); }
+        // --- dibujos: uno por ranura (nivel x subnivel), indirectos (pasan por nuestro gancho: reglas y t120) ---
         c->VSSetShaderResources(121, 1, &s_instGSRV);
         float cbq[72];
-        for (int i = 0; i < 3; i++) {
+        for (int sl = 0; sl < kSlots; sl++) {
+            int i = sl / kBins;
             for (int k = 0; k < 72; k++) cbq[k] = 0.f;
-            // cb5[8]: (sin uso, marca, alto, ancho base)  cb5[9]: (magenta, offset de instancias, fadeIn0, fadeIn1)
-            // cb5[10]: (fadeOut0, fadeOut1, multiplicador de ancho, mitad del alto de pantalla)  cb5[11]: (pLo, pHi, 1 = por tamano, margen)
-            cbq[32] = 1.0f; cbq[33] = 1234.5f; cbq[34] = tall; cbq[35] = 0.012f * wide;
-            cbq[36] = p59[2] > 0.5f ? 1.f : 0.f; cbq[37] = (float)offs[i];
-            cbq[42] = L[i].widthMul; cbq[43] = halfH;
+            // cb5[8]: (vertices por tarjeta, marca, alto, ancho base)  cb5[9]: (magenta, offset de instancias, fadeIn0, fadeIn1)
+            // cb5[10]: (ancho minimo px, fadeOut1, multiplicador de ancho, mitad del alto de pantalla)  cb5[11]: (pLo, pHi, 1 = por tamano, margen)
+            cbq[32] = (float)mVpc; cbq[33] = 1234.5f; cbq[34] = tall; cbq[35] = 0.012f * wide;
+            cbq[36] = p59[2] > 0.5f ? 1.f : 0.f; cbq[37] = (float)(sl * kSlotCap);
+            cbq[40] = minPx; cbq[42] = L[i].widthMul; cbq[43] = halfH;
             cbq[44] = i == 2 ? loFar : T[i + 1]; cbq[45] = T[i]; cbq[46] = 1.0f; cbq[47] = fadeM;
             c->UpdateSubresource(s_cb, 0, nullptr, cbq, 0, 0);
             c->VSSetConstantBuffers(5, 1, &s_cb);
-            c->DrawIndexedInstancedIndirect(s_args, (UINT)i * 20);
+            c->DrawIndexedInstancedIndirect(s_args, (UINT)sl * 20);
         }
+        c->IASetVertexBuffers(0, 4, svVb, svSt, svOf); c->IASetIndexBuffer(svIb, svFmt, svIo);
+        for (auto* b : svVb) if (b) b->Release(); if (svIb) svIb->Release();
         s_okFrame.store(f);
         Why(bound ? "emitiendo (desde el pasto del juego)" : "emitiendo (desde la base de la cancha)");
     }
+    mPos->Release(); mUv->Release(); mIb->Release();
     // --- devolver el estado ---
     c->VSSetShaderResources(121, 1, &oldT); if (oldT) oldT->Release();
     if (oldCb5) { if (c1 && oldN5) c1->VSSetConstantBuffers1(5, 1, &oldCb5, &oldF5, &oldN5); else c->VSSetConstantBuffers(5, 1, &oldCb5); oldCb5->Release(); }

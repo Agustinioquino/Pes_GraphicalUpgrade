@@ -345,7 +345,9 @@ void main(
     float4 BG = IniParams.Load(int2(42,0));
     float zb = PESLinZ(uvC);
     float3 Ld = pLc_dir.xyz;
-    if (cmpOn && BG.w > 0.5 && zb > 0.1 && zb < 120.0 && dot(Ld, Ld) > 1e-6) {
+    // (25/10 c) nunca sobre el cesped (tyC == 3: base y hojas del pasto): el rebote es del suelo hacia los jugadores; sobre las
+    // hojas salia como puntitos sueltos (12 lecturas del shadow map por pixel en toda la cancha, caras de cada hoja)
+    if (cmpOn && BG.w > 0.5 && zb > 0.1 && zb < 120.0 && dot(Ld, Ld) > 1e-6 && tyC != 3) {
       Ld = normalize(Ld);
       float3 upV = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
       if (dot(Ld, upV) < 0) upV = -upV;                          // el sol (o las torres) siempre estan arriba
@@ -506,6 +508,9 @@ void main(
         if (dot(Lf, upV) < 0) upV = -upV;
         float3 lightC = sc * g_psScene.m_exposure.zzz;
         float graz = 1.0 - saturate(dot(Nsk, -Vsk));
+        // (25/10 c) con la sombra del juego: antes las torres virtuales rellenaban las sombras de los jugadores sobre el cesped
+        float shF = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
+        lightC *= 0.25 + 0.75 * shF;
         float specAcc = 0.0, diffAcc = 0.0;
         [unroll] for (int ti = 0; ti < 4; ti++) {
           float ang = 1.5707963 * ti + 0.7853982;
@@ -517,7 +522,7 @@ void main(
           specAcc += pow(nh, 24.0) * (0.3 + 0.7 * graz) * nl;
           diffAcc += nl;
         }
-        r1.xyz += lightC * specAcc * 0.12 * max(FL.x, 0.0) * kNight;
+        r1.xyz += lightC * specAcc * 0.07 * max(FL.x, 0.0) * kNight * shF;
         r2.xyz += lightC * diffAcc * 0.025 * max(FL.y, 0.0) * kNight;
       }
     }

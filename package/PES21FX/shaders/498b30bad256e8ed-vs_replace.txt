@@ -34,6 +34,7 @@ void main(
   float4 v0_in : POSITION0,
   float2 v1 : TEXCOORD0,
   uint iid : SV_InstanceID,
+  uint vid : SV_VertexID,   // (25/10 c) tope exacto de tarjetas por parcela (malla propia de la DLL)
   out float4 o0 : SV_Position0,
   out float4 o1 : TEXCOORD0,
   out float4 o2 : TEXCOORD1,
@@ -51,7 +52,7 @@ void main(
   bool pesIsExt = abs(pesExt.y - 1234.5) < 0.01;   // marca del mod (el juego usa cb5[8] con otros valores)
   float4 v0 = v0_in;
   bool pesKill = false;
-  float3 pesExtW = 0; float2 pesExtRoot = 0; float pesExtScale = 1; float2 pesExtOrg = 0;
+  float3 pesExtW = 0; float2 pesExtRoot = 0; float pesExtScale = 1; float2 pesExtOrg = 0; float pesPx = 0.0;
   float4 P58 = IniParams.Load(int2(58, 0));
   if (pesIsExt) {
     // v2 instanciado: la parcela sale del buffer de instancias; fundido por altura en los bordes de la banda y
@@ -59,7 +60,15 @@ void main(
     float4 ins = PESGrassInst[(uint)cb5[9].y + iid];
     pesExtOrg = ins.xy;
     pesExtScale = max(ins.z, 1.0);
-    int rot = (int)(ins.w + 0.5);
+    // (25/10 c) w = tope de tarjetas * 4 + giro: la celda lleva solo las tarjetas que cubren su tamano en pantalla (densidad
+    // constante en pantalla, la cuenta el compute); las de mas se anulan aca, antes de cualquier cuenta cara
+    int insW = (int)(ins.w + 0.5);
+    int rot = insW & 3;
+    int lim = insW >> 2;
+    if (lim > 0 && cb5[8].x > 0.5 && (int)(vid / (uint)(cb5[8].x + 0.5)) >= lim) {
+      o0 = float4(0.0, 0.0, -2.0, 1.0); o1 = 0; o2 = 0; o3 = 0; o4 = 0; o5 = 0; o6 = 0; o7 = 0; o8 = 0;
+      return;
+    }
     float cs = rot == 0 ? 1.0 : (rot == 2 ? -1.0 : 0.0), sn = rot == 1 ? 1.0 : (rot == 3 ? -1.0 : 0.0);
     float2 lp = v0_in.xz * pesExtScale;
     float2 rp = float2(cs * lp.x + sn * lp.y, -sn * lp.x + cs * lp.y);
@@ -72,6 +81,7 @@ void main(
       // que el compute shader eligio el nivel: cb5[11].x = limite inferior (0 = sin limite: el nivel lejano cubre toda la
       // cancha), .y = limite superior (donde entra el nivel mas fino o el pasto del juego), .w = margen del fundido
       float p = abs(cb2[5].y) * cb5[10].w / max(cc.w, 0.05);
+      pesPx = p;
       float m = cb5[11].w, lo = cb5[11].x, hi = cb5[11].y;
       k = (lo > 0.0 ? smoothstep(lo * (1.0 - m), lo * (1.0 + m), p) : 1.0) * (hi > 0.0 ? 1.0 - smoothstep(hi * (1.0 - m), hi * (1.0 + m), p) : 1.0);
     } else {
@@ -280,6 +290,8 @@ void main(
     // ensanche hacia la camara: la hoja se corre a lo largo del eje derecha de la camara segun su u (0..1)
     float3 camRight = normalize(cb2[8].xyz);
     float wid = pesIsExt ? pesExt.w * max(cb5[10].z, 0.0) * pesExtScale : 0.012 * max(FAR.x, 1.0) * max(FA2.y, 0.0) * pesFarK;
+    // (25/10 c) ancho minimo en pixeles (cb5[10].x): una hoja de menos de ~1.4 px titila al mover la camara
+    if (pesIsExt && cb5[10].x > 0.0 && pesPx > 1.0) wid = max(wid, cb5[10].x / pesPx);
     r6.xyz += camRight * ((v1.x - 0.5) * wid);
   }
   // --- proyeccion ---
