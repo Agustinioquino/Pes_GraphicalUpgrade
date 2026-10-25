@@ -1,0 +1,239 @@
+// ---- Created with 3Dmigoto v1.3.16 on Thu Oct 08 21:08:27 2026
+
+cbuffer cPSMaterial : register(b4)
+{
+
+  struct
+  {
+    float4 m_materials[8];
+  } g_psMaterial : packoffset(c0);
+
+}
+
+cbuffer cPSSystem : register(b0)
+{
+
+  struct
+  {
+    float4 m_param;
+    float4 m_renderInfo;
+    float4 m_renderBuffer;
+    float4 m_dominantLightDir;
+    float4 m_timeParam;
+  } g_psSystem : packoffset(c0);
+
+}
+
+SamplerState g_sampler_diffuse_s : register(s0);
+SamplerState g_sampler_normal_s : register(s1);
+SamplerState g_sampler_srm_s : register(s2);
+SamplerState g_sampler_translucent_s : register(s3);
+SamplerState g_sampler_viewReflection_s : register(s4);
+SamplerState g_sampler_height_s : register(s5);
+SamplerState g_sampler_base2_s : register(s6);
+SamplerState g_samplerPoint_Wrap_s : register(s8);
+Texture2D<float4> g_tex_diffuse : register(t0);
+Texture2D<float4> g_tex_normal : register(t1);
+Texture2D<float4> g_tex_srm : register(t2);
+Texture2D<float4> g_tex_translucent : register(t3);
+Texture2D<float4> g_tex_viewReflection : register(t4);
+Texture2D<float4> g_tex_height : register(t5);
+Texture2D<float4> g_tex_base2 : register(t6);
+Texture2D<float4> g_tex_mesh : register(t15);
+
+
+// 3Dmigoto declarations
+#define cmp -
+Texture1D<float4> IniParams : register(t120);
+Texture2D<float4> StereoParams : register(t125);
+
+
+void main(
+  float4 v0 : SV_Position0,
+  float4 v1 : COLOR0,
+  float2 v2 : TEXCOORD0,
+  float2 w2 : TEXCOORD9,
+  float4 v3 : TEXCOORD1,
+  float4 v4 : TEXCOORD2,
+  float4 v5 : TEXCOORD4,
+  float4 v6 : TEXCOORD5,
+  float4 v7 : TEXCOORD6,
+  float4 v8 : TEXCOORD7,
+  float4 v9 : TEXCOORD8,
+  out float4 o0 : SV_Target0,
+  out float4 o1 : SV_Target1,
+  out float4 o2 : SV_Target2,
+  out float4 o3 : SV_Target3,
+  out float4 o4 : SV_Target4)
+{
+  float4 r0,r1,r2,r3,r4;
+  uint4 bitmask, uiDest;
+  float4 fDest;
+
+  r0.y = v1.w;
+  r1.xyzw = float4(-0.5,-0.5,-1,-1) + v0.xyxy;
+  r0.zw = float2(0.125,0.125) * r1.xy;
+  r1.xy = (int2)r1.zw;
+  r1.xy = (int2)r1.xy & int2(1,1);
+  r1.xy = (int2)r1.xy;
+  r1.xy = float2(-0.5,-0.5) + r1.xy;
+  r2.yz = g_tex_mesh.Sample(g_samplerPoint_Wrap_s, r0.zw).xw;
+  r2.x = g_psSystem.m_param.w * r2.z;
+  r3.xyzw = g_tex_diffuse.Sample(g_sampler_diffuse_s, v2.xy).xyzw;
+  r0.x = r3.w;
+  r0.xy = -r2.xy + r0.xy;
+  r0.xy = cmp(r0.xy < float2(0,0));
+  r0.x = (int)r0.y | (int)r0.x;
+  if (r0.x != 0) discard;
+  r0.xyz = float3(1,-1,1) * v4.xyz;
+  r0.w = dot(r0.xyz, r0.xyz);
+  r0.w = rsqrt(r0.w);
+  r0.xyz = r0.xyz * r0.www;
+  r0.w = g_tex_height.Sample(g_sampler_height_s, v2.xy).y;
+  r0.xy = r0.xy * r0.ww;
+  r0.w = 1 + -r0.w;
+  r0.w = r0.w * r0.w;
+  r0.w = -r0.w * r0.w + 1;
+  float eyeIris = r0.w;
+  r0.xy = g_psMaterial.m_materials[1].xx * r0.xy;
+  r0.xy = float2(0.25,0.25) * r0.xy;
+  r0.xy = r0.xy / r0.zz;
+  r0.xy = v2.xy + -r0.xy;
+  r0.xyz = g_tex_base2.Sample(g_sampler_base2_s, r0.xy).xyz;
+  r0.xyz = r0.xyz + -r3.xyz;
+  r0.xyz = r0.www * r0.xyz + r3.xyz;
+  r0.w = dot(v6.xyz, v6.xyz);
+  r0.w = rsqrt(r0.w);
+  r2.xyz = v6.xyz * r0.www;
+  r0.w = dot(v7.xyz, v7.xyz);
+  r0.w = rsqrt(r0.w);
+  r3.xyz = v7.xyz * r0.www;
+  r4.xyz = g_tex_normal.Sample(g_sampler_normal_s, v2.xy).xyw;
+  r4.x = r4.x * r4.z;
+  r1.zw = r4.xy * float2(2,2) + float2(-1,-1);
+  r3.xyz = r3.xyz * r1.www;
+  r2.xyz = r2.xyz * r1.zzz + r3.xyz;
+  r0.w = dot(v8.xyz, v8.xyz);
+  r0.w = rsqrt(r0.w);
+  r3.xyz = v8.xyz * r0.www;
+  r0.w = -r1.z * r1.z + 1;
+  r0.w = -r1.w * r1.w + r0.w;
+  r0.w = max(0, r0.w);
+  r0.w = 9.99999975e-005 + r0.w;
+  r1.z = rsqrt(r0.w);
+  r0.w = r1.z * r0.w;
+  r2.xyz = r3.xyz * r0.www + r2.xyz;
+  r0.w = dot(r2.xyz, r2.xyz);
+  r0.w = rsqrt(r0.w);
+  r2.xyz = r2.xyz * r0.www;
+  r1.zw = r2.xy * float2(0.5,-0.5) + float2(0.5,0.5);
+  r3.xyz = g_tex_viewReflection.Sample(g_sampler_viewReflection_s, r1.zw).xyz;
+  float3 eyeN = r2.xyz; float3 eyeRefl = r3.xyz;
+  r1.zw = g_tex_srm.Sample(g_sampler_srm_s, v2.xy).xy;
+  float3 eyeAlb = r0.xyz; float eyeSpec = r1.z;
+  o0.xyz = saturate(r3.xyz * r1.zzz + r0.xyz);
+  o0.w = 1;
+  r0.x = abs(r2.x) + abs(r2.y);
+  r0.x = r0.x + abs(r2.z);
+  r0.xy = r2.xy / r0.xx;
+  r0.zw = cmp(r0.xy >= float2(0,0));
+  r0.zw = r0.zw ? float2(1,1) : float2(-1,-1);
+  r3.xy = float2(1,1) + -abs(r0.yx);
+  r0.zw = r3.xy * r0.zw;
+  r2.w = cmp(0 < -r2.z);
+  r0.xy = r2.ww ? r0.xy : r0.zw;
+  r0.xy = r0.xy * float2(0.5,0.5) + float2(0.5,0.5);
+  r0.xy = float2(2047,2047) * r0.xy;
+  r0.xy = (uint2)r0.xy;
+  bitmask.z = ((~(-1 << 1)) << 1) & 0xffffffff;  r0.z = (((uint)r0.x << 1) & bitmask.z) | ((uint)0 & ~bitmask.z);
+  bitmask.z = ((~(-1 << 1)) << 0) & 0xffffffff;  r0.z = (((uint)r0.y << 0) & bitmask.z) | ((uint)r0.z & ~bitmask.z);
+  r0.xy = (uint2)r0.xy >> int2(1,1);
+  r0.xyw = (uint3)r0.xyz;
+  o1.xyw = float3(0.000977517106,0.000977517106,0.333333343) * r0.xyw;
+  r0.x = g_tex_translucent.Sample(g_sampler_translucent_s, v2.xy).y;
+  r0.x = r0.x * 63 + 0.5;
+  r0.x = (uint)r0.x;
+  r0.x = (uint)r0.x << 4;
+  r0.x = (uint)r0.x;
+  o1.z = 0.000977517106 * r0.x;
+  r0.xyz = ddx_fine(r2.xyz);
+  r0.xyz = -r0.xyz * r1.xxx + r2.xyz;
+  r3.xyz = ddy_fine(r0.xyz);
+  r0.xyz = -r3.xyz * r1.yyy + r0.xyz;
+  r0.w = dot(r2.xyz, r0.xyz);
+  r0.xyz = r0.xyz / r0.www;
+  r0.w = dot(r2.xyz, v6.xyz);
+  r3.xyz = -r2.xyz * r0.www + v6.xyz;
+  r0.w = dot(r3.xyz, r3.xyz);
+  r0.w = rsqrt(r0.w);
+  r3.xyz = r3.xyz * r0.www;
+  r4.xyz = r3.yzx * r2.zxy;
+  r2.xyz = r2.yzx * r3.zxy + -r4.xyz;
+  r0.w = dot(r0.xyz, r3.xyz);
+  r0.x = dot(r0.xyz, r2.xyz);
+  r0.y = ddy_fine(r0.x);
+  r1.xy = ddx_fine(r0.wx);
+  r0.x = ddy_fine(r0.w);
+  r0.xy = abs(r1.xy) + abs(r0.xy);
+  r0.xy = float2(0.5,0.5) * r0.xy;
+  r0.xy = min(float2(0.300010026,0.300010026), r0.xy);
+  r0.xy = r0.xy * r0.xy;
+  r0.xy = r0.xy + r0.xy;
+  r0.x = max(r0.x, r0.y);
+  r0.x = r1.w * r1.w + r0.x;
+  o2.y = r1.z;
+  r0.x = sqrt(r0.x);
+  r0.y = r0.x * 0.0361702144 + 0.0904255286;
+  r0.y = r0.y * r0.x + 0.180851057;
+  r0.y = r0.y * r0.x + 0.271276593;
+  r0.y = r0.y * r0.x + 0.271276593;
+  o2.x = r0.y * r0.x + 0.150000006;
+  o2.z = 1;
+  o2.w = g_psMaterial.m_materials[0].x;
+  r0.xyzw = v9.xyzw / w2.xxyy;
+  r0.xyzw = r0.xyzw * float4(0.5,0.5,0.5,0.5) + float4(0.5,0.5,0.5,0.5);
+  r0.xyzw = r0.zwxy * float4(1,-1,1,-1) + float4(0,1,0,1);
+  r0.xy = r0.zw + -r0.xy;
+  o3.xy = g_psSystem.m_renderBuffer.xy * r0.xy;
+  o3.zw = float2(0,0);
+  o4.xyzw = float4(0,0,0,1);
+    {
+    // === PES21 ojos: esclerotica menos blanca, anillo limbal, iris con mas color, cornea mojada ===
+    if (IniParams.Load(int2(0,0)).w > 0.5) {
+      float3 c = o0.xyz;
+      float sclera = 1.0 - smoothstep(0.02, 0.22, eyeIris);
+      float limbal = smoothstep(0.04, 0.25, eyeIris) * (1.0 - smoothstep(0.3, 0.75, eyeIris));
+      c *= lerp(float3(1,1,1), float3(0.96, 0.94, 0.92), sclera);
+      c *= 1.0 - 0.22 * limbal;
+      float l = dot(c, float3(0.2126, 0.7152, 0.0722));
+      c = lerp(c, saturate(lerp(l.xxx, c, 1.1)), smoothstep(0.4, 0.8, eyeIris));
+      o0.xyz = saturate(c);
+      o2.x = min(o2.x, 0.12);
+      o2.y = max(o2.y, 0.55);
+    }
+  }
+  // === PES21 ojos v2 (Claude): mascaras radiales exactas del UV del globo ocular ===
+  // pupila r<0.07, iris hasta ~0.21, limbo 0.19-0.24, esclerotica despues (medido de cm_eyes0_def_bsm / lens_hgm)
+  // x19 anillo limbal, y19 sombra de parpado/cuenca, z19 brillo nitido (menos halo), w19 on/off
+  {
+    float4 E = IniParams.Load(int2(19,0));
+    if (E.w > 0.5) {
+      float rr = length(v2.xy - 0.5);
+      float scl  = smoothstep(0.235, 0.29, rr);                 // 0 iris/cornea -> 1 esclerotica
+      float limb = exp(-((rr - 0.212) * (rr - 0.212)) / (0.021 * 0.021));
+      float3 alb = eyeAlb;
+      // anillo limbal: borde del iris definido (oscurece, nunca aclara)
+      alb *= 1.0 - saturate(E.x) * limb;
+      // esclerotica: oclusion hacia los bordes del globo + sombra del parpado superior
+      float edge = smoothstep(0.30, 0.47, rr) * scl;
+      float lid  = saturate(eyeN.y * 1.6 - 0.15);
+      alb *= 1.0 - saturate(E.y) * saturate(0.6 * edge + 0.55 * lid);
+      // brillo (catchlight): mismo pico, menos halo lechoso -> se ve mojado, no mas fuerte
+      float cl = dot(eyeRefl, float3(0.299, 0.587, 0.114));
+      float3 refl = eyeRefl * lerp(1.0, smoothstep(0.06, 0.40, cl), saturate(E.z));
+      refl *= lerp(1.0, 0.75, scl);                             // la cornea refleja mas que la esclerotica
+      o0.xyz = saturate(refl * eyeSpec + alb);
+    }
+  }
+  return;
+}
