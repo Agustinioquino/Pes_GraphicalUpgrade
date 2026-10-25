@@ -390,6 +390,7 @@ void main(
       o0.xyz = saturate(cg);
     }
   }
+  { float3 cg = o0.xyz; PESGrassColorGrade(cg); o0.xyz = saturate(cg); }   // (25/10 b) color del pasto (112): matiz, verde, contraste
   { // === PES21 pasto v3 (19/10): desgaste (seco / tierra) y zonas de color, con las mismas funciones que las hojas
     float4 Q4 = IniParams.Load(int2(104,0));
     if (Q4.x > 0.5) {

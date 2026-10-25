@@ -135,6 +135,7 @@ void main(
     }
     o0.xyz = saturate(c);
   }
+  { float3 cg = o0.xyz; PESGrassColorGrade(cg); o0.xyz = saturate(cg); }   // (25/10 b) color del pasto (112), igual que la base
   if (v5.w > 0.5) o0.xyz = float3(1.0, 0.0, 1.0);   // PES21 depuracion: parcelas extendidas en magenta (z59)
   r0.y = v5.x + r0.x;
   r0.x = v5.y * r0.z;

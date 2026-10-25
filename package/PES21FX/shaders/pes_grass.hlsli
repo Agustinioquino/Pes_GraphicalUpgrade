@@ -135,4 +135,26 @@ void PESFarTurf(inout float3 c, inout float spec, float3 V, float2 wxz, float px
   c = lerp(c, saturate(g), k);
   spec = lerp(spec, saturate(spec * (1.0 + 0.5 * graz) + 0.03 * graz), k);
 }
+
+// (25/10 b) color del pasto, el mismo para la base y las hojas (fila 112): x matiz (giro del tono en grados, -60..60),
+// y verde (acerca el tono a un verde de cesped sano con la misma claridad; negativo = lo aleja), z contraste (alrededor
+// del gris medio del cesped). Se aplica despues de la correccion del amarillo (29) y antes del desgaste / cesped lejano.
+void PESGrassColorGrade(inout float3 c)
+{
+  float4 C = IniParams.Load(int2(112, 0));
+  if (abs(C.x) < 0.01 && abs(C.y) < 0.001 && abs(C.z) < 0.001) return;
+  const float3 LW = float3(0.2126, 0.7152, 0.0722);
+  float l = dot(c, LW);
+  if (abs(C.x) > 0.01) {
+    float3 yiq = float3(l, dot(c, float3(0.596, -0.274, -0.322)), dot(c, float3(0.211, -0.523, 0.312)));
+    float a = radians(clamp(C.x, -60.0, 60.0)); float ca = cos(a), sa = sin(a);
+    float2 iq = float2(yiq.y * ca - yiq.z * sa, yiq.y * sa + yiq.z * ca);
+    c = max(float3(yiq.x + 0.956 * iq.x + 0.621 * iq.y, yiq.x - 0.272 * iq.x - 0.647 * iq.y, yiq.x - 1.106 * iq.x + 1.703 * iq.y), 0.0);
+  }
+  if (abs(C.y) > 0.001) {
+    float3 g = float3(0.19, 0.42, 0.10); g *= l / dot(g, LW);
+    c = max(lerp(c, g, clamp(C.y, -1.0, 1.0) * 0.6), 0.0);
+  }
+  if (abs(C.z) > 0.001) { float k = 1.0 + clamp(C.z, -0.8, 1.0); c = max((c - 0.18) * k + 0.18, 0.0); }
+}
 #endif
