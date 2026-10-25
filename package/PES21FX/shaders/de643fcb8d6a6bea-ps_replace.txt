@@ -810,8 +810,8 @@ void main(
         r1.xyz = lerp(r1.xyz, lumS * sunN, saturate(Q103.x));
         r1.xyz *= lerp(1.0, lerp(0.55, 1.7, rim), saturate(Q103.y)) * (Q103.z > 0 ? Q103.z : 1.0);
       } }
-    // lobulo fino (pelicula de grasa/sudor): GGX con rugosidad 0.18
-    float a2 = 0.18 * 0.18; float eF = 1.0;
+    // lobulo fino (pelicula de grasa/sudor): GGX, rugosidad del pixel por zona (w5, 0 = 0.18 fija)
+    float w5k = IniParams.Load(int2(5,0)).w; float rS = PESSkinSharpRough(g_SpecularTexture.Sample(g_samplerPoint_Wrap_s, uvG).x, w5k); float a2 = rS * rS; float eF = 1.0;
     if (P64.x > 0.5 && P64.y > 0.0) a2 = PESSunWidenAlpha(a2, P64.y, eF);   // PES21 sol de calidad
     float a4 = a2 * a2;
     float nh = saturate(dot(n2, H2));
@@ -819,7 +819,7 @@ void main(
     float D2 = a4 / (3.14159 * dd * dd);
     float F2 = 0.028 + 0.972 * pow(1 - saturate(dot(V2, H2)), 5);
     float sharp = D2 * F2 * nl2 * 0.25 * P5.y * eF;
-    r1.xyz += sharp * PESSunColor() * g_psScene.m_exposure.zzz * shadowScalar * saturate(specInt * 2 + 0.3);
+    r1.xyz += sharp * PESSunColor() * g_psScene.m_exposure.zzz * shadowScalar * PESSkinSharpOcc(specInt, w5k);
   }
   // diagnostico w12 = 3 sobre piel: magenta = es piel pero no se midio el grosor (sin cascada / transmision apagada);
   // cian = marcada como piel pero el SSS esta apagado o sin translucidez (isSkin falso)

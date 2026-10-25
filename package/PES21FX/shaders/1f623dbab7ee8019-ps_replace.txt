@@ -563,14 +563,14 @@ void main(
         r1.xyz = lerp(r1.xyz, lumS * sunN, saturate(Q103.x));
         r1.xyz *= lerp(1.0, lerp(0.55, 1.7, rim), saturate(Q103.y)) * (Q103.z > 0 ? Q103.z : 1.0);
       } }
-    // lobulo fino (pelicula de grasa/sudor): GGX con rugosidad 0.18
-    float a2 = 0.18 * 0.18; float a4 = a2 * a2;
+    // lobulo fino (pelicula de grasa/sudor): GGX, rugosidad del pixel por zona (w5, 0 = 0.18 fija)
+    float w5k = IniParams.Load(int2(5,0)).w; float rS = PESSkinSharpRough(g_SpecularTexture.Sample(g_samplerPoint_Wrap_s, uvG).x, w5k); float a2 = rS * rS; float a4 = a2 * a2;
     float nh = saturate(dot(n2, H2));
     float dd = nh * nh * (a4 - 1) + 1;
     float D2 = a4 / (3.14159 * dd * dd);
     float F2 = 0.028 + 0.972 * pow(1 - saturate(dot(V2, H2)), 5);
     float sharp = D2 * F2 * nl2 * 0.25 * P5.y;
-    r0.xyz += sharp * PESSunColor() * g_psScene.m_exposure.zzz * shadowScalar * saturate(specInt * 2 + 0.3);
+    r0.xyz += sharp * PESSunColor() * g_psScene.m_exposure.zzz * shadowScalar * PESSkinSharpOcc(specInt, w5k);
   }
   { float dbgW12 = IniParams.Load(int2(12,0)).w; if (dbgW12 > 3.5 && dbgW12 < 4.5) { float lum = dot(o0.xyz, float3(0.2126, 0.7152, 0.0722)); o0.xyz = lerp(o0.xyz, float3(10.0, 0.0, 0.0), saturate((1.0 - csDbg) * 3.0)); r0.xyz = 0; } }   // diagnostico 4: sombras de contacto
   if (IniParams.Load(int2(12,0)).w > 2.5 && IniParams.Load(int2(12,0)).w < 3.5 && abs(skinTag - 0.98039) < 0.003) { o0.xyz = float3(4.0, 2.0, 0.0); r0.xyz = 0; }   // diagnostico: naranja = esta variante (sin shadow map) ilumina la piel

@@ -160,6 +160,21 @@ float3 PESTransColor(float3 T, float k)
   return lerp(T, warm, saturate(k));
 }
 
+// (25/10) brillo fino de la piel por zona (doble lobulo como Unreal / MetaHuman): la rugosidad del lobulo fino sale de la del
+// pixel (G-buffer de la cara, que ya trae zona T, poros, sudor y Toksvig) en vez de 0.18 fijo: nariz y frente brillan mas
+// fino, mejillas mas mate, y de lejos los poros no titilan. k = w5 (0 = como antes). Devuelve la rugosidad perceptual.
+float PESSkinSharpRough(float roughG, float k)
+{
+  float r = clamp(roughG * 0.45, 0.12, 0.32);
+  return lerp(0.18, r, saturate(k));
+}
+// oclusion del lobulo fino: el piso de 0.3 hacia brillar el fondo de pliegues y comisuras aunque la cara bajara ahi la
+// intensidad especular (cavidades x35 / t23). Con k = 1 el piso se apaga solo donde la intensidad cae casi a cero.
+float PESSkinSharpOcc(float specInt, float k)
+{
+  return saturate(specInt * 2 + 0.3 * lerp(1.0, saturate(specInt * 6.0), saturate(k)));
+}
+
 // ---------------------------------------------------------------- sol con tamano angular (Karis 2013)
 // La rugosidad efectiva crece con el disco del sol; se devuelve la rugosidad nueva y la normalizacion de energia.
 float PESSunWidenAlpha(float alpha, float sunDeg, out float energy)
