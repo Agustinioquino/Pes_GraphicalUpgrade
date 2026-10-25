@@ -103,8 +103,12 @@ void BodyNoteClothDispatch(ID3D11DeviceContext* c, UINT groups) {
     if (dim == D3D11_RESOURCE_DIMENSION_BUFFER) {
         ID3D11Buffer* b = (ID3D11Buffer*)r; D3D11_BUFFER_DESC d; b->GetDesc(&d);
         const int k = s_instN;
+        // la copia de lectura con el mismo tipo de buffer (estructurado, mismo paso): copiar entre buffers distintos puede no valer
+        const bool structured = (d.MiscFlags & D3D11_RESOURCE_MISC_BUFFER_STRUCTURED) != 0;
+        if (structured && d.StructureByteStride != kInstBytes) { r->Release(); return; }
         if (!s_instStage[k]) {
             D3D11_BUFFER_DESC sd{}; sd.ByteWidth = kInstBytes * kInstMax; sd.Usage = D3D11_USAGE_STAGING; sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+            if (structured) { sd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED; sd.StructureByteStride = kInstBytes; }
             if (FAILED(s_dev->CreateBuffer(&sd, nullptr, &s_instStage[k]))) s_instStage[k] = nullptr;
         }
         const UINT bytes = (std::min)(d.ByteWidth, kInstBytes * kInstMax) / kInstBytes * kInstBytes;
