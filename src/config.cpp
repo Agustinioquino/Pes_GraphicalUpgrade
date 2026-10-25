@@ -81,6 +81,12 @@ static bool LoadConfigLocked() {
     Config& c = g_cfg;
     memset(c.base, 0, sizeof(c.base));
     for (auto& a : c.info) for (auto& b : a) b = ParamInfo();
+    // (25/10 d) las reglas viejas NO se destruyen: los shaders del juego las apuntan (ShaderEntry::rule / pairRules) y los
+    // hilos de dibujo las recorren mientras se relee el ini; hasta que ReloadShaders apunta a las nuevas, un dibujo podia leer
+    // una regla liberada (cierre en RunRuleActions al recargar la configuracion con el juego abierto). Mover el mapa conserva
+    // los nodos; quedan en un cementerio (pocos KB por recarga).
+    { static std::vector<std::map<uint64_t, Rule>> oldRules; static std::vector<std::map<std::pair<uint64_t, uint64_t>, Rule>> oldPair;
+      oldRules.push_back(std::move(c.rules)); oldPair.push_back(std::move(c.pairRules)); }
     c.keys.clear(); c.rules.clear(); c.pairRules.clear(); c.vars.clear(); c.groups.clear();
     c.vars["pes_push"] = 0.003f;
 
@@ -610,6 +616,7 @@ void UpdateTimeParams() {
     p[24][1] = (t - s_lastTurf) < 2.0 ? 1.0f : 0.0f; // en partido
     p[93][3] = (t - s_lastTurf) < 15.0 ? 1.0f : 0.0f; // 19/10: en partido (tolerante): primeros planos sin cancha a la vista siguen contando
     p[255][3] = (t - s_lastTurf) < 15.0 ? 0.0f : 1.0f; // (25/10) escena de menu (editor, presentacion): la fisica de la ropa no recibe empujes por movimiento
+    p[257][0] = (float)PresentNo();                     // (25/10) numero de cuadro: el cuerpo real (cuerpo.cpp) y la fisica de la ropa lo comparan
     // (21/10) reloj de las nubes (157): las nubes y sus sombras avanzan con el reloj del JUEGO, no con el reloj real: la
     // pausa las congela y la camara lenta de las repeticiones las frena (como la ropa y el pelo). El reloj sale de
     // cPSSystem.m_timeParam.x de la composicion (regla copy_cb = 0 SysCB en PES21FX_rules.ini). Se acumulan solo los

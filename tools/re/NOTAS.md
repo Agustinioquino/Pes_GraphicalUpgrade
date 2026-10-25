@@ -156,12 +156,40 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
 | GTAO en la composicion | 619b leia PESGtao en (r0.x = oclusion del juego, v): columna equivocada; ahora en uvC. En escenas donde el GTAO no corre (escena mas chica que la pantalla) la DLL enlaza una textura 1x1 = 1 en t27 |
 | Aro del Fisico (24/10 g) | el editor presenta ~100 cuadros por segundo y dibuja la escena 3D en ~60 % (TAA 0.6 por cuadro): en los cuadros sin escena el aro (que dependia de que ese cuadro tuviera piel) desaparecia. Ahora un CS en Present (pes_ring_snap_cs.hlsl) pasa a una foto lo que vio el cuadro y deja lo ultimo en los cuadros sin escena; el aro lee la foto |
 
-## Short que "explota" con el mod de ropa en el editor (24/10 h)
+## Short que "explota" con el mod de ropa en el editor (24/10 h, corregido 25/10)
 
 | Tema | Resultado |
 |---|---|
-| Escena | el editor (y la presentacion de equipos antes del partido) tiene 6-7 modelos de jugador a 1-3 m uno de otro; el mod de ropa los ve a todos ("5 player(s) in view") |
-| Que hace el mod | con [shorts] merge_parts = 1 junta al short las "bandas del ruedo" (336/364 vertices, y 0.60..0.73) aunque vengan de OTRO buffer de vertices y otro contexto (otro modelo): "shorts template #5 from parts #5+#19". En la presentacion llego a juntar dos shorts enteros de jugadores distintos ("template #9 from parts #6+#28") y su propio control dio "fit check WRONG ... off 148 mm" (los pines siguen huesos de otro dibujo) |
-| Sesion de las 22:23-22:25 | los 6 jugadores del editor (el editado incluido) usaban la plantilla mezclada #5, con un borde libre suelto en el medio ("7@0.24(free)"): la union mal soldada. En la de las 22:27 el editado uso la plantilla sin mezclar y el short se veia bien |
+| Donde pasa | solo en los menus (editor, presentacion de equipos) y con los shaders de PES21 FX prendidos o apagados: es la fisica (cloth_sim.hlsl con las mejoras de PES21 FX), no los shaders de dibujo. En el partido no pasa |
+| Escena | el editor tiene 6-7 modelos a 1-3 m y el juego la arma a ~10 km del origen. El mod de ropa junta al short la banda del ruedo (es del mismo short: con merge_parts = 0 queda separada, se volvio a 1) |
+| Errores encontrados en nuestra parte | volumenes de torso / brazos / piernas: alturas absolutas comparadas con alturas relativas al centro (nunca actuaban) y sumas en enteros de 0.1 mm con posiciones absolutas (lejos del origen se desbordan). La colision con la pierna usaba un plano promedio sin limite de distancia: una pierna de otro dibujo / con huesos viejos a metros tiraba la tela de golpe |
+| Arreglo (25/10) | sumas relativas a un punto de la prenda, alturas relativas al centro, pierna lejos (>15 cm) ignorada y tope de 2 cm por sub-paso (tambien en el acople camiseta-short), y en los menus (w255 de la DLL o mundo a >2 km) sin empujes por movimiento del cuerpo |
 | Nuestro VS del short | descartado: con el vertice que escribe el mod (A^-1 (x - t)) PesClothScale da x - r (A - A') n, menos de 1 mm |
-| Prueba | cloth-mod\cloth.ini [shorts] merge_parts = 0 (copia del original en cloth.ini.antes-merge). La banda queda con la forma del juego y el short se simula solo |
+
+## La ropa sigue al cuerpo musculoso (fisica, 25/10)
+
+| Tema | Resultado |
+|---|---|
+| Por que el cuerpo atravesaba la remera | pecho, espalda, abdomen, trapecio, hombros y gluteos se hacen corriendo huesos dsk que la remera no usa: la piel sale y la tela queda. El mod de ropa solo choca con piel real en el short (leg_vs_hash); para la remera no hay opcion |
+| Arreglo | la DLL arma una tabla de zonas (capsulas del resaltado del menu Fisico, lado izquierdo, X espejado) con el corrimiento de cada musculo (Fac.t) y el crecimiento del hombro (0.65 e alrededor de la articulacion) y la enlaza en t121 (y los parametros en t120) cuando el mod pone su simulador (se reconoce por "g_legSkin" / "g_boneCache" en la reflexion). cloth_sim.hlsl corre el reposo de cada particula con esa tabla (mezcla pesada, tope 6 cm, en la manga 30 %); los vertices mapeados tambien. z255 = fuerza |
+| Limite | usa los valores generales (o los del jugador que se edita en el menu Fisico); los jugadores con valores propios en el partido usan los generales para la ropa |
+| Mangas | el hueso de la manga (SleeveConstraint, destino = brazo principal sin escala) recibia 1.1 x el crecimiento del brazo: la manga (radio ~6 cm) ganaba 1,5 veces los cm del brazo (~4,4 cm). Ahora y255 (0.6). Ojo: la camiseta comun se dibuja con 055b4570 o con la variante del mod de ropa; PesClothScale (x163) solo llega al short y a las medias (1c9bde0e / 455eb97b) |
+
+## Volumenes del simulador y el escote (25/10 b)
+
+| Tema | Resultado |
+|---|---|
+| Sintoma (v12) | la camiseta se movia menos y el escote quedaba separado del cuello |
+| Causa | con las alturas corregidas el torso como volumen empezo a actuar: la rodaja de arriba (cuello + hombros) no es una elipse y el escote quedaba "adentro" (lo empujaba afuera). Brazos / piernas como volumen y el grosor del brazo en la manga tambien empezaron a actuar de verdad (antes el lado de cada manga salia mal) y frenaban la manga |
+| Arreglo | PES_TORSO_PUSH / PES_ARM_PUSH = 0 (las medidas siguen: costuras, short), PES_LIMB_SLEEVE = 0 (el grosor del muslo sigue en el short), la musculatura no corre las costuras (pin alto: pesSeamFade) y el vuelo por giro vuelve en los menus |
+
+## La ropa choca con el cuerpo real (cuerpo.cpp, 25/10 c)
+
+| Tema | Resultado |
+|---|---|
+| Idea | en cada dibujo de la piel del cuerpo (VS 1c02a92a: torso de TorsoBody, brazos, cuello) un CS propio (pes_body_cs.hlsl) deforma esa malla con los huesos de ese dibujo (b6 actuales y anteriores; b5 / b2 para el origen en el mundo) en el espacio del modelo y la deja en una tabla hash por personaje (celdas de 2.5 cm, 8192 por tabla, listas enlazadas). El simulador lee t122 (tablas), t123 (vertices) y t124 (siguiente) |
+| Mallas | se registran una vez: copia de los indices del dibujo (min / max) y de los vertices (POSITION0, NORMAL0, BLENDINDICES0, BLENDWEIGHT0 segun el input layout anotado), decodificadas en la CPU; se descartan las de mas de 12288 vertices (manos) y las que no llegan a 0.95 m de alto (piernas) |
+| Personaje | tabla = (contexto, bloque b5 + primera constante) en el cuadro; se limpia antes del primer dibujo. Cabecera: cuadro (x257), partes, vertices, valida, origen del modelo en el mundo = inversa(m_view) x m_viewWorld |
+| Emparejar | la prenda (Inst.world, la matriz modelo -> mundo del mod) con la tabla cuyo origen esta a < 0.5 m, del cuadro anterior (lo normal: el mod simula antes de ejecutar la lista de comandos) o de este |
+| Por punto de tela | sub-paso 0: el punto vuelve al reposo de la prenda con sus huesos y de ahi al modelo en el momento de la piel; 27 celdas, hasta dos planos tangentes (el mas cercano y otro con distinta normal) guardados en el reposo de la prenda + el movimiento propio de la piel (velocidad de la piel menos la que le da la prenda). Cada sub-paso: separacion y256 (mm), empuje maximo w256 (mm); donde hay piel, el cuerpo que adivina el mod se afloja z256 (cm) |
+| Diagnostico | u8 del simulador (dispositivo 11.1): pasos de camiseta, con cuerpo, puntos con piel, empujes, mayor penetracion, distancia a la tabla mas cercana; la DLL lo escribe cada 20 s ("cuerpo (fisica de la ropa): ...") |

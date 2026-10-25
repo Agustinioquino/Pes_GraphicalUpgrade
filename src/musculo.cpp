@@ -291,9 +291,10 @@ static void UpdateFactors() {
     // usa los valores del jugador que se esta editando
     uint32_t editId = 0;
     if (!FisicoEditing(&editId) || !MusclePhysiqueActive()) editId = 0;
-    bool any = false; int own = 0;
+    bool any = false; int own = 0, newest = -1;   // newest = el personaje armado mas reciente (el que se ve en el editor)
     for (int i = 0; i < kCharSlots; i++) {
         const Profile* p = nullptr;
+        if (s_slotAlive[i] && s_slotInfo[i].known && (newest < 0 || s_slotInfo[i].seq > s_slotInfo[newest].seq)) newest = i;
         uint32_t id = !s_slotAlive[i] ? 0 : s_slotInfo[i].known ? s_slotInfo[i].id : editId;
         if (on && id) { auto it = s_prof.find(id); if (it != s_prof.end()) p = &it->second; }
         if (!p) { s_slotUse[i].store(0, std::memory_order_relaxed); continue; }
@@ -305,10 +306,13 @@ static void UpdateFactors() {
     }
     s_anyOwn = any; s_ownOnScreen = own;
     if (s_profDirty && Now() - s_profDirtyT > 0.6) { s_profDirty = false; SaveProfiles(); }
-    // (25/10) tabla para la fisica de la ropa: los valores generales; en el menu Fisico, los del jugador que se edita
+    // (25/10) tabla para la fisica de la ropa (una sola para todos los que simula el mod): en el menu Fisico, los valores del
+    // jugador que se edita; en los demas menus (editor, sin cancha) los del ultimo jugador armado (el que se ve), si tiene
+    // valores propios; en el partido, los generales (los jugadores con valores propios usan los generales para la ropa)
     {
         Fac fe[M_COUNT]; const Fac* use = s_fac;
         if (editId) { auto it = s_prof.find(editId); if (it != s_prof.end()) { ComputeFactors(it->second.v, on, ropa, trans, vec, fe); use = fe; } }
+        else if (newest >= 0 && g_cfg.live[255][3] > 0.5f && s_slotUse[newest].load(std::memory_order_relaxed)) use = s_slotFac[newest];
         MuscleClothPresent(use, on);
     }
 }
