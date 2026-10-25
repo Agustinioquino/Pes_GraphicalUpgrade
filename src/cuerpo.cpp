@@ -72,6 +72,9 @@ static ID3D11Buffer *s_static = nullptr, *s_ringV = nullptr, *s_ringN = nullptr,
 static ID3D11ShaderResourceView *s_staticSRV = nullptr, *s_ringVSRV = nullptr, *s_ringNSRV = nullptr, *s_tabSRV = nullptr;
 static ID3D11UnorderedAccessView *s_ringVUAV = nullptr, *s_ringNUAV = nullptr;
 static ID3D11UnorderedAccessView* s_tabUAV[kTables] = {};
+// diagnostico que escribe el simulador de la ropa (u8; ver cloth_sim.hlsl): se lee cada 20 s
+static ID3D11Buffer* s_diag = nullptr; static ID3D11UnorderedAccessView* s_diagUAV = nullptr; static ID3D11Buffer* s_diagStage = nullptr;
+static int s_diagState = 0, s_diagFrame = 0; static bool s_diag11_1 = false;
 static std::atomic<bool> s_ready{false};
 static bool s_failed = false, s_csTried = false;
 
@@ -117,6 +120,15 @@ static bool CreateResources() {
     // la tabla arranca en cero: ninguna cabecera valida hasta que se escriba
     const UINT z[4] = { 0, 0, 0, 0 };
     for (UINT t = 0; t < kTables; t++) g_dev.imm->ClearUnorderedAccessViewUint(s_tabUAV[t], z);
+    // contadores del simulador en u8: solo con un dispositivo 11.1 (64 UAV por etapa; el del juego lo es)
+    s_diag11_1 = s_dev->GetFeatureLevel() >= D3D_FEATURE_LEVEL_11_1;
+    if (s_diag11_1 && MakeBuf(64 * 4, 0, D3D11_BIND_UNORDERED_ACCESS, 0, &s_diag)) {
+        D3D11_UNORDERED_ACCESS_VIEW_DESC ud{}; ud.ViewDimension = D3D11_UAV_DIMENSION_BUFFER; ud.Format = DXGI_FORMAT_R32_UINT; ud.Buffer.NumElements = 64;
+        if (FAILED(s_dev->CreateUnorderedAccessView(s_diag, &ud, &s_diagUAV))) s_diagUAV = nullptr;
+        D3D11_BUFFER_DESC sd{}; sd.ByteWidth = 64 * 4; sd.Usage = D3D11_USAGE_STAGING; sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        if (FAILED(s_dev->CreateBuffer(&sd, nullptr, &s_diagStage))) s_diagStage = nullptr;
+        if (s_diagUAV) g_dev.imm->ClearUnorderedAccessViewUint(s_diagUAV, z);
+    }
     s_free.assign(1, { 0u, kStatic });
     CompileCS();
     Log("cuerpo: listo (%u KB de tablas, anillo de %u vertices, copia de %u vertices)%s", kTables * kTabStride * 4 / 1024, kRing, kStatic, s_cs ? "" : " - SIN el CS");
@@ -126,6 +138,7 @@ void BodyClothSRVs(ID3D11ShaderResourceView* out[3]) {
     const bool on = s_ready.load(std::memory_order_acquire);
     out[0] = on ? s_tabSRV : nullptr; out[1] = on ? s_ringVSRV : nullptr; out[2] = on ? s_ringNSRV : nullptr;
 }
+ID3D11UnorderedAccessView* BodyClothUAV() { return s_ready.load(std::memory_order_acquire) && s_diag11_1 ? s_diagUAV : nullptr; }
 
 // ---------------------------------------------------------------- formatos de vertice
 static UINT FmtBytes(DXGI_FORMAT f) {
@@ -443,9 +456,28 @@ void BodyPresent() {
     }
     for (auto* m : dead) delete m;
     s_logRecs += s_recs.exchange(0); s_logFrames++;
+    // contadores del simulador (u8): copia + limpieza cada 20 s, lectura 2 cuadros despues
+    if (s_diagState == 1 && s_diagStage && frame >= s_diagFrame + 2) {
+        D3D11_MAPPED_SUBRESOURCE mp;
+        HRESULT hr = g_dev.imm->Map(s_diagStage, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mp);
+        if (SUCCEEDED(hr)) {
+            uint32_t d[16]; memcpy(d, mp.pData, sizeof(d)); g_dev.imm->Unmap(s_diagStage, 0);
+            s_diagState = 0;
+            if (d[0] > 0) {
+                const double perShirt = d[1] ? (double)d[2] / d[1] : 0.0;
+                Log("cuerpo (fisica de la ropa): %u pasos de camiseta, %u con su cuerpo (%u con piel del cuadro anterior, %u de este); %.0f puntos de tela con piel cerca por paso; %u empujes, el mayor %.1f mm; tabla valida mas cercana a %s mm; %.1f tablas validas por paso",
+                    d[0], d[1], d[7], d[6], perShirt, d[3], d[8] / 10.0, d[4] ? std::to_string(0xFFFFFFFFu - d[4]).c_str() : "-", d[0] ? (double)d[5] / d[0] : 0.0);
+            }
+        } else if (hr != DXGI_ERROR_WAS_STILL_DRAWING) s_diagState = 0;
+    }
     static double nextLog = 0; const double t = Now();
     if (t > nextLog) {
         nextLog = t + 20.0;
+        if (s_diagUAV && s_diagStage && s_diagState == 0) {
+            g_dev.imm->CopyResource(s_diagStage, s_diag);
+            const UINT z[4] = { 0, 0, 0, 0 }; g_dev.imm->ClearUnorderedAccessViewUint(s_diagUAV, z);
+            s_diagState = 1; s_diagFrame = frame;
+        }
         if (s_logFrames > 0 && (s_logRecs > 0 || frame - s_simSeen.load() < 300)) {
             int ready = 0, rej = 0, pend = 0;
             { std::lock_guard<std::mutex> lk(s_mx); for (auto& kv : s_meshes) { if (kv.second->state == 3) ready++; else if (kv.second->state == 4) rej++; else pend++; } }

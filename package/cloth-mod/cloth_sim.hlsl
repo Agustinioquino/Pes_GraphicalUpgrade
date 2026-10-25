@@ -100,6 +100,7 @@
 #define PES_BODY_RADIUS    0.025  // (m) piel a buscar alrededor de cada punto de tela
 #define PES_BODY_LATERAL   0.03   // (m) el plano tangente de un vertice de la piel vale hasta esta distancia al costado
 #define PES_BODY_WALK      40     // vertices por celda como maximo
+#define PES_BODY_DIAG      1      // contadores para el log de la DLL (u8: el dispositivo del juego es 11.1, admite 64 UAV)
 #if !PES_CLOTH_FX
 #undef PES_SHORTS_DAMP
 #define PES_SHORTS_DAMP 1.0
@@ -275,6 +276,12 @@ StructuredBuffer<uint4>         g_bodyV     : register(t123);
 StructuredBuffer<uint>          g_bodyNext  : register(t124);
 groupshared uint gBodyKey;
 groupshared uint gBodyIdx;
+groupshared uint gBodyCnt[3];  // diagnostico: puntos con piel cerca, empujes, mayor penetracion (0.1 mm)
+// diagnostico (lo lee la DLL cada 20 s): [0] camisetas simuladas, [1] con cuerpo, [2] puntos con piel cerca, [3] empujes,
+// [4] 0xffffffff - menor distancia a una tabla valida (mm), [5] tablas validas vistas, [6] / [7] con piel de este cuadro / del anterior,
+// [8] mayor penetracion (0.1 mm)
+RWBuffer<uint>                  g_bodyDiag  : register(u8);
+static bool   s_bodyWant;
 static uint   s_bodyTab;      // tabla del cuerpo de esta prenda (0xffffffff = ninguna)
 static float  s_bodyTc;       // 0 = la piel es del cuadro anterior (comienzo de la interpolacion), 1 = de este cuadro
 static float4 s_bodyPrm;      // fila 256
@@ -708,6 +715,9 @@ void pesBodyCollide(uint p, uint k, float t, inout float3 x, inout float3 xPrev,
             float pu = min(m - d, mp);
             x += n * pu; xPrev += n * pu;
             contactD = min(contactD, 0.0);
+#if PES_BODY_DIAG
+            uint dg; InterlockedAdd(gBodyCnt[1], 1u, dg); InterlockedMax(gBodyCnt[2], (uint)min((m - d) * 10000.0, 1.0e6), dg);
+#endif
         }
     }
 }
@@ -720,6 +730,9 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
 #if PES_BODY
         if (s == 0) pesBodyQuery(p, k, x);   // (25/10) la piel cercana, una vez por cuadro
         bool pesBodyHas = ((s_bv[k][0].y | s_bv[k][1].y) & 0x10000u) != 0;
+#if PES_BODY_DIAG
+        if (s == 0 && pesBodyHas) { uint dg; InterlockedAdd(gBodyCnt[0], 1u, dg); }
+#endif
 #else
         bool pesBodyHas = false;
 #endif
@@ -1246,10 +1259,11 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
             s_bodyTab = 0xffffffffu; s_bodyTc = 0.0;
             s_bodyPrm = IniParams.Load(int2(256, 0));
             s_bv[0][0] = uint2(0, 0); s_bv[0][1] = uint2(0, 0); s_bv[1][0] = uint2(0, 0); s_bv[1][1] = uint2(0, 0);
-            if (gi == 0) { gBodyKey = 0; gBodyIdx = 0xffffffffu; }
+            if (gi == 0) { gBodyKey = 0; gBodyIdx = 0xffffffffu; gBodyCnt[0] = 0; gBodyCnt[1] = 0; gBodyCnt[2] = 0; }
             GroupMemoryBarrierWithGroupSync();
             uint bodyKey = 0;
-            if (PES_BODY && s_bodyPrm.x > 0.5 && g_legCount == 0 && gi < PES_BODY_TABLES) {
+            s_bodyWant = PES_BODY && s_bodyPrm.x > 0.5 && g_legCount == 0;
+            if (s_bodyWant && gi < PES_BODY_TABLES) {
                 uint S = (uint)(IniParams.Load(int2(257, 0)).x + 0.5);
                 uint tb = gi * PES_BODY_STRIDE;
                 uint st = g_bodyTab[tb], nrec = g_bodyTab[tb + 1], nvt = g_bodyTab[tb + 2], okT = g_bodyTab[tb + 3];
@@ -1259,12 +1273,21 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                 if (okT == 1 && (age1 || age0) && nvt > 0 && all(isfinite(wt)) && dd < PES_BODY_MATCH)
                     bodyKey = (age1 ? 0x80000000u : 0u) | (min(nrec, 63u) << 25) | (min(nvt >> 8, 255u) << 17) | (0x1FFFFu - (uint)min(dd * 100000.0, 131071.0));
                 InterlockedMax(gBodyKey, bodyKey);
+#if PES_BODY_DIAG
+                if (okT == 1 && (age1 || age0) && all(isfinite(wt))) { uint dg; InterlockedAdd(g_bodyDiag[5], 1u, dg); InterlockedMax(g_bodyDiag[4], 0xFFFFFFFFu - (uint)min(dd * 1000.0, 4.0e9), dg); }
+#endif
             }
             GroupMemoryBarrierWithGroupSync();
             if (bodyKey != 0 && bodyKey == gBodyKey) InterlockedMin(gBodyIdx, gi);
             GroupMemoryBarrierWithGroupSync();
             s_bodyTab = gBodyIdx;
             s_bodyTc = (gBodyKey & 0x80000000u) ? 0.0 : 1.0;
+#if PES_BODY_DIAG
+            if (gi == 0 && s_bodyWant) {
+                uint dg; InterlockedAdd(g_bodyDiag[0], 1u, dg);
+                if (s_bodyTab != 0xffffffffu) { InterlockedAdd(g_bodyDiag[1], 1u, dg); InterlockedAdd(g_bodyDiag[s_bodyTc < 0.5 ? 7 : 6], 1u, dg); }
+            }
+#endif
             for (uint s = 0; s < s_substeps; ++s) {
                 float t = float(s + 1) / float(s_substeps);
                 float tg = g_time + float(s) * h;
@@ -1476,6 +1499,11 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
 #endif
                 GroupMemoryBarrierWithGroupSync();
             }
+#if PES_BODY && PES_BODY_DIAG
+            if (gi == 0 && s_bodyWant && s_bodyTab != 0xffffffffu) {
+                uint dg; InterlockedAdd(g_bodyDiag[2], gBodyCnt[0], dg); InterlockedAdd(g_bodyDiag[3], gBodyCnt[1], dg); InterlockedMax(g_bodyDiag[8], gBodyCnt[2], dg);
+            }
+#endif
         }
         if (mode & 2) {
 #ifndef CM_OLD_STATE

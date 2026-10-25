@@ -174,3 +174,22 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
 | Arreglo | la DLL arma una tabla de zonas (capsulas del resaltado del menu Fisico, lado izquierdo, X espejado) con el corrimiento de cada musculo (Fac.t) y el crecimiento del hombro (0.65 e alrededor de la articulacion) y la enlaza en t121 (y los parametros en t120) cuando el mod pone su simulador (se reconoce por "g_legSkin" / "g_boneCache" en la reflexion). cloth_sim.hlsl corre el reposo de cada particula con esa tabla (mezcla pesada, tope 6 cm, en la manga 30 %); los vertices mapeados tambien. z255 = fuerza |
 | Limite | usa los valores generales (o los del jugador que se edita en el menu Fisico); los jugadores con valores propios en el partido usan los generales para la ropa |
 | Mangas | el hueso de la manga (SleeveConstraint, destino = brazo principal sin escala) recibia 1.1 x el crecimiento del brazo: la manga (radio ~6 cm) ganaba 1,5 veces los cm del brazo (~4,4 cm). Ahora y255 (0.6). Ojo: la camiseta comun se dibuja con 055b4570 o con la variante del mod de ropa; PesClothScale (x163) solo llega al short y a las medias (1c9bde0e / 455eb97b) |
+
+## Volumenes del simulador y el escote (25/10 b)
+
+| Tema | Resultado |
+|---|---|
+| Sintoma (v12) | la camiseta se movia menos y el escote quedaba separado del cuello |
+| Causa | con las alturas corregidas el torso como volumen empezo a actuar: la rodaja de arriba (cuello + hombros) no es una elipse y el escote quedaba "adentro" (lo empujaba afuera). Brazos / piernas como volumen y el grosor del brazo en la manga tambien empezaron a actuar de verdad (antes el lado de cada manga salia mal) y frenaban la manga |
+| Arreglo | PES_TORSO_PUSH / PES_ARM_PUSH = 0 (las medidas siguen: costuras, short), PES_LIMB_SLEEVE = 0 (el grosor del muslo sigue en el short), la musculatura no corre las costuras (pin alto: pesSeamFade) y el vuelo por giro vuelve en los menus |
+
+## La ropa choca con el cuerpo real (cuerpo.cpp, 25/10 c)
+
+| Tema | Resultado |
+|---|---|
+| Idea | en cada dibujo de la piel del cuerpo (VS 1c02a92a: torso de TorsoBody, brazos, cuello) un CS propio (pes_body_cs.hlsl) deforma esa malla con los huesos de ese dibujo (b6 actuales y anteriores; b5 / b2 para el origen en el mundo) en el espacio del modelo y la deja en una tabla hash por personaje (celdas de 2.5 cm, 8192 por tabla, listas enlazadas). El simulador lee t122 (tablas), t123 (vertices) y t124 (siguiente) |
+| Mallas | se registran una vez: copia de los indices del dibujo (min / max) y de los vertices (POSITION0, NORMAL0, BLENDINDICES0, BLENDWEIGHT0 segun el input layout anotado), decodificadas en la CPU; se descartan las de mas de 12288 vertices (manos) y las que no llegan a 0.95 m de alto (piernas) |
+| Personaje | tabla = (contexto, bloque b5 + primera constante) en el cuadro; se limpia antes del primer dibujo. Cabecera: cuadro (x257), partes, vertices, valida, origen del modelo en el mundo = inversa(m_view) x m_viewWorld |
+| Emparejar | la prenda (Inst.world, la matriz modelo -> mundo del mod) con la tabla cuyo origen esta a < 0.5 m, del cuadro anterior (lo normal: el mod simula antes de ejecutar la lista de comandos) o de este |
+| Por punto de tela | sub-paso 0: el punto vuelve al reposo de la prenda con sus huesos y de ahi al modelo en el momento de la piel; 27 celdas, hasta dos planos tangentes (el mas cercano y otro con distinta normal) guardados en el reposo de la prenda + el movimiento propio de la piel (velocidad de la piel menos la que le da la prenda). Cada sub-paso: separacion y256 (mm), empuje maximo w256 (mm); donde hay piel, el cuerpo que adivina el mod se afloja z256 (cm) |
+| Diagnostico | u8 del simulador (dispositivo 11.1): pasos de camiseta, con cuerpo, puntos con piel, empujes, mayor penetracion, distancia a la tabla mas cercana; la DLL lo escribe cada 20 s ("cuerpo (fisica de la ropa): ...") |

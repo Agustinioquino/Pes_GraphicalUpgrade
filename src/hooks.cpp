@@ -513,6 +513,7 @@ template<int V> static void STDMETHODCALLTYPE hk_SetCS(ID3D11DeviceContext* c, I
         ID3D11ShaderResourceView* v[5] = { g_dev.paramSRV, MuscleClothSRV(), nullptr, nullptr, nullptr };
         BodyClothSRVs(v + 2);
         c->CSSetShaderResources(120, 5, v);
+        if (ID3D11UnorderedAccessView* du = BodyClothUAV()) c->CSSetUnorderedAccessViews(8, 1, &du, nullptr);   // contadores (u8)
         BodySimSeen();
     }
 }

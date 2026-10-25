@@ -265,6 +265,7 @@ ID3D11ShaderResourceView* MuscleClothSRV();     // (25/10) zonas de la musculatu
 void BodyOnDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base);   // en cada dibujo de la piel del cuerpo (VS 1c02a92a)
 void BodyPresent();                                // registro de mallas nuevas, cuadro nuevo, log
 void BodyClothSRVs(ID3D11ShaderResourceView* out[3]);   // tablas, vertices, listas (null si no esta listo)
+ID3D11UnorderedAccessView* BodyClothUAV();         // contadores del simulador (u8, solo dispositivo 11.1)
 void BodySimSeen();                                // el simulador del mod de ropa se uso en este cuadro
 void BodyReloadShaders();
 struct InputElemInfo { std::string sem; UINT idx, fmt, slot, off; };
