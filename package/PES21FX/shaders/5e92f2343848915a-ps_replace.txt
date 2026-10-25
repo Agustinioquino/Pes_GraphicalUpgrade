@@ -406,5 +406,17 @@ void main(
       if (Q7.w > 1.5 && Q7.w < 2.5) o0.xyz = float3(wr.x, wr.y, 0.0);   // depuracion: desgaste
     }
   }
+  { // === PES21 pasto v3 (25/10): cesped lejano en la base (PESFarTurf, pes_grass.hlsli). Entra donde se va el nivel medio
+    // del pasto 3D (tamano en pantalla < 35 px/m / densidad) y es pleno donde ya no hay hojas. y61 fuerza, z61 matas, w61 cobertura
+    float4 Q61 = IniParams.Load(int2(61,0)), P58f = IniParams.Load(int2(58,0)), P63f = IniParams.Load(int2(63,0));
+    if (Q61.y > 0.001 && P58f.w > 0.5 && P63f.y > 0.0) {
+      float3 pesE = g_psScene.m_eyepos.xyz - v9.xyz; float pesD = max(length(pesE), 0.05); float3 pesV = pesE / pesD;
+      float pxm = abs(g_psScene.m_projection._m11) * P63f.z / pesD;
+      float dens = clamp(P58f.x > 0.05 ? P58f.x : 1.0, 0.3, 2.0);
+      float T2 = 35.0 / dens, T3 = 15.0 / dens;
+      float kFar = 1.0 - smoothstep(T3 * 0.75, T2 * 1.25, pxm);
+      if (kFar > 0.001) { float3 cg = o0.xyz; float sp = o2.y; PESFarTurf(cg, sp, pesV, v9.xz, pxm, kFar * saturate(Q61.y), Q61.z, Q61.w); o0.xyz = cg; o2.y = sp; }
+    }
+  }
   return;
 }
