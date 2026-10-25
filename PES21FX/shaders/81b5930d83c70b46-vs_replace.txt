@@ -1,0 +1,220 @@
+// PES 2021 - pelo (sombra/profundidad) [hash 81b5930d83c70b46] - viento en el pelo (x23..x25)
+// ---- Created with 3Dmigoto v1.3.16 on Thu Oct 08 21:08:35 2026
+
+cbuffer cVSSystem : register(b0)
+{
+  struct
+  {
+    float4 m_param;
+    float4 m_renderInfo;
+    float4 m_renderBuffer;
+    float4 m_dominantLightDir;
+    float4 m_timeParam;   // x = reloj del juego (cuadro actual), y = cuadro anterior
+  } g_vsSystem : packoffset(c0);
+}
+
+cbuffer cVSScene : register(b2)
+{
+
+  struct
+  {
+    float4x4 m_projectionView;
+    float4x4 m_projection;
+    float4x4 m_view;
+    float4x4 m_shadowProjection;
+    float4x4 m_shadowProjection2;
+    float4 m_eyepos;
+    float4 m_projectionParam;
+    float4 m_viewportSize;
+    float4 m_exposure;
+    float4 m_fogParam[3];
+    float4 m_fogColor;
+    float4 m_cameraCenterOffset;
+    float4 m_shadowMapResolutions;
+  } g_vsScene : packoffset(c0);
+
+}
+
+cbuffer cVSObject : register(b5)
+{
+
+  struct
+  {
+    float4x4 m_viewWorld;
+    float4x4 m_world;
+    float4 m_useWeightCount;
+    float4 m_localParam[9];
+  } g_vsObject : packoffset(c0);
+
+}
+
+cbuffer cVSMaterial : register(b4)
+{
+
+  struct
+  {
+    float4 m_materials[8];
+  } g_vsMaterial : packoffset(c0);
+
+}
+
+cbuffer VSBones : register(b6)
+{
+
+  struct
+  {
+    float4x3 m_boneMatrices[32];
+  } g_vsBone : packoffset(c0);
+
+
+  struct
+  {
+    float4x3 m_boneMatrices[32];
+  } g_vsPrevBone : packoffset(c96);
+
+}
+
+
+
+// 3Dmigoto declarations
+#define cmp -
+Texture1D<float4> IniParams : register(t120);
+Texture2D<float4> StereoParams : register(t125);
+
+
+void main(
+  float4 v0 : POSITION0,
+  float4 v1 : NORMAL0,
+  float4 v2 : COLOR0,
+  float4 v3 : TANGENT0,
+  uint4 v4 : BLENDINDICES0,
+  float4 v5 : BLENDWEIGHT0,
+  float2 v6 : TEXCOORD0,
+  out float4 o0 : SV_Position0,
+  out float2 o1 : TEXCOORD0)
+{
+  // PES21 viento en el pelo (Claude, 15/10): usa el balanceo de vegetacion que el motor ya trae en este shader
+  // (peso por mechon en el color del vertice: raiz quieta, puntas libres) y le inyecta viento propio.
+  // x23/y23 direccion del viento en X/Z (igual que la ropa), z23/w23 tiempo actual/anterior (desde [Present]),
+  // x24 fuerza, y24 = 1 en partido (0 en menus), z24 rafagas, w24 on/off, x25 velocidad del balanceo
+  float4 pesM6 = g_vsMaterial.m_materials[6];
+  float4 pesM7 = g_vsMaterial.m_materials[7];
+  { float4 HW = IniParams.Load(int2(23,0)); float4 HV = IniParams.Load(int2(24,0)); float4 HS = IniParams.Load(int2(25,0));
+    if (HV.w > 0.5 && HV.y > 0.5) {
+      // 16/10: el viento del pelo sigue el reloj del juego (como la ropa): la pausa lo congela y la camara lenta lo frena
+      float tN = g_vsSystem.m_timeParam.x, tP = g_vsSystem.m_timeParam.y;
+      if (tN == 0 && tP == 0) { tN = HW.z; tP = HW.w; }   // por si el juego no pasa el reloj a este shader
+      float gN = max(0.2, 1.0 + HV.z * sin(tN * 1.7) * sin(tN * 0.63));
+      float gP = max(0.2, 1.0 + HV.z * sin(tP * 1.7) * sin(tP * 0.63));
+      float3 wd = float3(HW.x, 0, HW.y) * HV.x;
+      pesM6.xyz += wd * gN; pesM6.w += tN * HS.x;
+      pesM7.xyz += wd * gP; pesM7.w += tP * HS.x;
+    } }
+  float4 r0,r1,r2,r3,r4,r5,r6,r7,r8;
+  uint4 bitmask, uiDest;
+  float4 fDest;
+
+  r0.x = cmp(g_vsObject.m_useWeightCount.x != 0.000000);
+  if (r0.x != 0) {
+    r0.xyzw = (int4)v4.xyzw * int4(3,3,3,3);
+    r1.xyzw = g_vsBone.m_boneMatrices[v4.y]._m00_m10_m20_m30 * v5.yyyy;
+    r2.xyzw = g_vsBone.m_boneMatrices[v4.y]._m01_m11_m21_m31 * v5.yyyy;
+    r3.xyzw = g_vsBone.m_boneMatrices[v4.y]._m02_m12_m22_m32 * v5.yyyy;
+    r1.xyzw = g_vsBone.m_boneMatrices[v4.x]._m00_m10_m20_m30 * v5.xxxx + r1.xyzw;
+    r2.xyzw = g_vsBone.m_boneMatrices[v4.x]._m01_m11_m21_m31 * v5.xxxx + r2.xyzw;
+    r3.xyzw = g_vsBone.m_boneMatrices[v4.x]._m02_m12_m22_m32 * v5.xxxx + r3.xyzw;
+    r1.xyzw = g_vsBone.m_boneMatrices[v4.z]._m00_m10_m20_m30 * v5.zzzz + r1.xyzw;
+    r2.xyzw = g_vsBone.m_boneMatrices[v4.z]._m01_m11_m21_m31 * v5.zzzz + r2.xyzw;
+    r3.xyzw = g_vsBone.m_boneMatrices[v4.z]._m02_m12_m22_m32 * v5.zzzz + r3.xyzw;
+    r1.xyzw = g_vsBone.m_boneMatrices[v4.w]._m00_m10_m20_m30 * v5.wwww + r1.xyzw;
+    r2.xyzw = g_vsBone.m_boneMatrices[v4.w]._m01_m11_m21_m31 * v5.wwww + r2.xyzw;
+    r0.xyzw = g_vsBone.m_boneMatrices[v4.w]._m02_m12_m22_m32 * v5.wwww + r3.xyzw;
+    r1.x = dot(v0.xyzw, r1.xyzw);
+    r1.y = dot(v0.xyzw, r2.xyzw);
+    r1.z = dot(v0.xyzw, r0.xyzw);
+  } else {
+    r1.xyz = v0.xyz;
+  }
+  r0.x = saturate(v2.x);
+  r1.w = v0.w;
+  r2.x = dot(r1.xyzw, g_vsObject.m_world._m00_m10_m20_m30);
+  r2.y = dot(r1.xyzw, g_vsObject.m_world._m01_m11_m21_m31);
+  r2.z = dot(r1.xyzw, g_vsObject.m_world._m02_m12_m22_m32);
+  r3.w = dot(r1.xyzw, g_vsObject.m_world._m03_m13_m23_m33);
+  r0.y = pesM6.w * 10 + v2.z;
+  r0.z = dot(pesM6.xyz, pesM6.xyz);
+  r0.w = log2(r0.z);
+  r0.w = 0.300000012 * r0.w;
+  r0.w = exp2(r0.w);
+  r4.xyz = r0.yyy + r2.xyz;
+  r4.xyz = cos(r4.xyz);
+  r0.y = min(0.349999994, r0.w);
+  r4.xyz = r4.xyz * r0.yyy + pesM6.xyz;
+  r0.y = sqrt(abs(pesM6.y));
+  r5.y = r0.y * 6 + r0.z;
+  r5.xz = float2(0,0);
+  r5.xyz = r5.xyz * r0.xxx;
+  r5.xyz = r0.zzz * float3(0.25,0.25,0.25) + r5.xyz;
+  r0.y = v6.y * 0.5 + 0.5;
+  r6.xyzw = float4(0.239999995,1.79999995,2.79999995,0.200000003) * r1.zzzz;
+  r1.xyzw = r1.xxxx * float4(0.479999989,1.60000002,2.4000001,0.959999979) + r6.xyzw;
+  r0.z = -0.5 + -v2.z;
+  r0.z = pesM6.w * r0.z;
+  r1.xyzw = r0.zzzz * float4(0.120000005,0.200000003,0.160000011,0.480000019) + r1.xyzw;
+  r1.xyzw = frac(r1.xyzw);
+  r1.xyzw = r1.xyzw * float4(6.40884876,6.40884876,6.40884876,6.40884876) + float4(-3.14159274,-3.14159274,-3.14159274,-3.14159274);
+  r6.xyzw = r1.xyzw * r1.xyzw;
+  r7.xyzw = r6.xyzw * r1.xyzw;
+  r8.xyzw = r7.xyzw * r6.xyzw;
+  r6.xyzw = r8.xyzw * r6.xyzw;
+  r1.xyzw = r7.xyzw * float4(-0.161616161,-0.161616161,-0.161616161,-0.161616161) + r1.xyzw;
+  r1.xyzw = r8.xyzw * float4(0.00833330024,0.00833330024,0.00833330024,0.00833330024) + r1.xyzw;
+  r1.xyzw = r6.xyzw * float4(-0.000198409994,-0.000198409994,-0.000198409994,-0.000198409994) + r1.xyzw;
+  r1.xyzw = r1.xyzw * r0.yyyy;
+  r1.xyzw = float4(0.215387449,0.358979076,0.287183255,0.861549795) * r1.xyzw;
+  r1.xyzw = r1.xyzw * r1.xyzw;
+  r1.xyzw = r1.xyzw * r1.xyzw;
+  r6.x = dot(r1.xyzw, float4(0.360000014,0.600000024,-1.79999995,1.44000006));
+  r6.z = dot(r1.xyzw, float4(0.0900000036,0.300000012,-0.300000012,1.5));
+  r0.yz = r6.xz * r0.ww;
+  r1.xz = float2(1.5,1.5) * r0.yz;
+  r1.y = 0;
+  r0.yzw = r4.xyz * r5.xyz + r1.xyz;
+  r0.yzw = r0.yzw * r0.xxx;
+  r1.x = g_vsObject.m_world._m00;
+  r1.y = g_vsObject.m_world._m01;
+  r1.z = g_vsObject.m_world._m02;
+  r1.x = dot(r1.xyz, r1.xyz);
+  r1.x = rsqrt(r1.x);
+  r1.x = g_vsObject.m_world._m01 * r1.x;
+  r1.x = r1.x * 0.5 + 0.5;
+  r1.x = 1 + -r1.x;
+  r1.x = sqrt(r1.x);
+  r0.x = r1.x * r0.x;
+  r1.xyz = float3(0,-0.100000001,0) * r0.xxx;
+  r0.xyz = r0.yzw * float3(0.0399999991,0.0399999991,0.0399999991) + r1.xyz;
+  r1.xyz = g_vsMaterial.m_materials[2].xyz + -r2.xyz;
+  r0.w = dot(r1.xyz, r1.xyz);
+  r0.w = rsqrt(r0.w);
+  r1.xyz = r1.xyz * r0.www;
+  r4.xyz = float3(0.00999999978,0.00999999978,0.00999999978) + r0.xyz;
+  r0.w = dot(r4.xyz, r4.xyz);
+  r0.w = rsqrt(r0.w);
+  r4.xyz = r4.xyz * r0.www;
+  r0.w = dot(r4.xyz, r1.xyz);
+  r1.x = cmp(r0.w < 0);
+  r0.w = 1 + -r0.w;
+  r0.w = r1.x ? 1 : r0.w;
+  r0.w = r0.w * r0.w;
+  r1.xyz = cmp(r0.xyz == float3(0,0,0));
+  r0.w = r0.w * 0.699999988 + 0.300000012;
+  r1.xyz = r1.xyz ? float3(0,0,0) : r0.www;
+  r3.xyz = r0.xyz * r1.xyz + r2.xyz;
+  o0.x = dot(r3.xyzw, g_vsScene.m_projectionView._m00_m10_m20_m30);
+  o0.y = dot(r3.xyzw, g_vsScene.m_projectionView._m01_m11_m21_m31);
+  r0.x = dot(r3.xyzw, g_vsScene.m_projectionView._m02_m12_m22_m32);
+  o0.w = dot(r3.xyzw, g_vsScene.m_projectionView._m03_m13_m23_m33);
+  o0.z = 9.99999975e-005 + r0.x;
+  o1.xy = v6.xy;
+  return;
+}

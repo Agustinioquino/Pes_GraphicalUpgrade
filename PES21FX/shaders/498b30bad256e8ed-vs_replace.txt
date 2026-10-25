@@ -1,0 +1,530 @@
+// PES 2021 - Pasto 3D: vertex shader de las hojas  [hash 498b30bad256e8ed]
+// Traducido a HLSL desde el ensamblador (PES21 FX catalogo, 18/10), instruccion por instruccion.
+// Cada parcela de pasto la manda el juego con su matriz de mundo (b5); la hoja se dobla con el jugador/pelota
+// (cb4[3], cb4[4]), toma altura y desgaste de la mascara de la cancha (t1) y el color del pasto de la base (t4)
+// con la tabla de pendiente (t3) segun el grano (t2) y la vista: de ahi salen las franjas de corte.
+// PES21 FX: x57/w57 amplifican las franjas tambien en las hojas (igual que en la base de la cancha).
+
+cbuffer cVSSystem : register(b0) { float4 cb0[3]; }
+cbuffer cVSScene : register(b2) { float4 cb2[21]; }
+cbuffer cVSMaterial : register(b4) { float4 cb4[5]; }
+cbuffer cVSObject : register(b5) { float4 cb5[12]; }
+
+SamplerState g_samplerLinear_Wrap_s : register(s10);
+SamplerState g_samplerLinear_Clamp_s : register(s11);
+Texture2D<float4> g_tex_diffuse : register(t0);
+Texture2D<float4> g_tex_mask : register(t1);
+Texture2D<float4> g_tex_grain : register(t2);
+Texture2D<float4> g_tex_turfSlopeTable : register(t3);
+Texture2D<float4> g_tex_base : register(t4);
+Texture2D<float4> g_tex_planarShadow : register(t5);
+Texture2D<float4> g_tex_detailNormal : register(t6);
+Texture2D<float4> PESTurfN : register(t7);   // PES21 pasto v3: relieve propio del cesped (regla del VS)
+Texture2D<float4> PESWearMap : register(t8);   // PES21 pasto v3: desgaste en vivo (recurso pes_wear, lo pinta la DLL)
+Texture2D<float4> PESFlatMap : register(t9);   // PES21 pasto v5: pasto aplastado por jugadores y pelota (pes_flat, DLL, x136)
+
+Texture1D<float4> IniParams : register(t120);
+StructuredBuffer<float4> PESGrassInst : register(t121);   // PES21: parcelas del pasto extra (x, z, escala, giro)
+// PES21 (20/10): m_materials del PS de la base de la cancha (5e92 / c956), copiado por la DLL (regla copy_cb 4 TurfMatCB)
+// y enlazado aca en b6: con eso las hojas calculan el MISMO color que el suelo de la vista de juego (x148)
+cbuffer PESTurfMatC : register(b6) { float4 pTM[8]; }
+#include "pes_grass.hlsli"   // PES21 pasto v3 (19/10): tipo, alto, patrones de corte, desgaste, zonas
+
+void main(
+  float4 v0_in : POSITION0,
+  float2 v1 : TEXCOORD0,
+  uint iid : SV_InstanceID,
+  out float4 o0 : SV_Position0,
+  out float4 o1 : TEXCOORD0,
+  out float4 o2 : TEXCOORD1,
+  out float4 o3 : TEXCOORD2,
+  out float4 o4 : TEXCOORD3,
+  out float4 o5 : TEXCOORD4,
+  out float4 o6 : TEXCOORD5,
+  out float2 o7 : TEXCOORD6,
+  out float4 o8 : TEXCOORD7)   // PES21 pasto v3: x seco (0..1), y pelado, z alto relativo, w = 1 + banda del atlas (0 = sin v3)
+{
+  float4 r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11;
+  // === PES21 pasto extendido: parcela emitida por el mod (cb5[8].y = 1): x escala horizontal (1 parcela = 0.5 m x escala),
+  // z alto de las hojas, w ensanche de la hoja hacia la camara en metros. El juego no usa cb5[8] en este VS.
+  float4 pesExt = cb5[8];
+  bool pesIsExt = abs(pesExt.y - 1234.5) < 0.01;   // marca del mod (el juego usa cb5[8] con otros valores)
+  float4 v0 = v0_in;
+  bool pesKill = false;
+  float3 pesExtW = 0; float2 pesExtRoot = 0; float pesExtScale = 1; float2 pesExtOrg = 0;
+  float4 P58 = IniParams.Load(int2(58, 0));
+  if (pesIsExt) {
+    // v2 instanciado: la parcela sale del buffer de instancias; fundido por altura en los bordes de la banda y
+    // descarte exacto con la camara de este cuadro
+    float4 ins = PESGrassInst[(uint)cb5[9].y + iid];
+    pesExtOrg = ins.xy;
+    pesExtScale = max(ins.z, 1.0);
+    int rot = (int)(ins.w + 0.5);
+    float cs = rot == 0 ? 1.0 : (rot == 2 ? -1.0 : 0.0), sn = rot == 1 ? 1.0 : (rot == 3 ? -1.0 : 0.0);
+    float2 lp = v0_in.xz * pesExtScale;
+    float2 rp = float2(cs * lp.x + sn * lp.y, -sn * lp.x + cs * lp.y);
+    pesExtRoot = ins.xy + rp;
+    float d = length(ins.xy - cb2[20].xz);
+    float k = smoothstep(cb5[9].z, cb5[9].w, d) * (1.0 - smoothstep(cb5[10].x, cb5[10].y, d));
+    v0.y = v0_in.y * max(pesExt.z, 0.1) * k;
+    pesExtW = float3(pesExtRoot.x, v0.y, pesExtRoot.y);
+    // descarte por pantalla: centro de la parcela con margen del tamano de la parcela
+    float4 cv = float4(dot(float4(ins.x, 0, ins.y, 1), cb2[8]), dot(float4(ins.x, 0, ins.y, 1), cb2[9]), dot(float4(ins.x, 0, ins.y, 1), cb2[10]), dot(float4(ins.x, 0, ins.y, 1), cb2[11]));
+    float4 cc = float4(dot(cv, cb2[4]), dot(cv, cb2[5]), dot(cv, cb2[6]), dot(cv, cb2[7]));
+    float rad = 0.5 * pesExtScale + 0.15;
+    float px = abs(cb2[4].x) * rad + abs(cb2[4].z) * rad, py = abs(cb2[5].y) * rad + abs(cb2[5].z) * rad;
+    if (cc.w < -rad || cc.x < -cc.w - px || cc.x > cc.w + px || cc.y < -cc.w - py || cc.y > cc.w + py || k < 0.01) pesKill = true;
+  } else if (P58.w > 0.5) {
+    // pasto extra prendido: el pasto del juego se apaga (achicandose) entre "desde" y "desde" + 6 m
+    float2 wr = float2(dot(v0_in, cb5[4]), dot(v0_in, cb5[6]));
+    float from = P58.y > 1.0 ? P58.y : 14.0;
+    float ko = 1.0 - smoothstep(from, from + 6.0, length(wr - cb2[20].xz));
+    v0.y *= ko;
+    if (ko < 0.01) pesKill = true;
+  }
+  // === PES21 parcelas lejanas del juego (18/10): mas alla de ~30 m el juego pone su variante minima en una grilla de
+  // 3 m sin escalarla (un matorral de 0.5 m cada 3 m: el pasto "desaparece"). La DLL marca esos dibujos con w60 = 1 y
+  // aca se escalan para cubrir la celda, con transicion por distancia para no tocar la zona densa.
+  // x60 escala (6 = celda de 3 m), y60 desde (m), z60 largo de la transicion (m); x59 alto, y59 ancho
+  float4 FAR = IniParams.Load(int2(60, 0));
+  float4 FA2 = IniParams.Load(int2(59, 0));
+  float pesFarK = 0.0;
+  // solo los dibujos marcados por la DLL (w63 = 1 existe solo en su textura de parametros) y con el pasto extra apagado
+  if (FAR.w > 0.5 && IniParams.Load(int2(63, 0)).w > 0.5 && !pesIsExt && P58.w < 0.5) {
+    float3 pw0 = float3(dot(v0_in, cb5[4]), 0.0, dot(v0_in, cb5[6]));
+    float dEye = length(pw0.xz - cb2[20].xz);
+    float d0 = FAR.y > 1.0 ? FAR.y : 20.0, dl = max(FAR.z, 1.0);
+    pesFarK = smoothstep(d0, d0 + dl, dEye);
+    float sc = lerp(1.0, max(FAR.x, 1.0), pesFarK);
+    v0.xz *= sc;
+    v0.y *= lerp(1.0, max(FA2.x, 0.1), pesFarK);
+  }
+
+  // === PES21 pasto v3 (19/10): tipo de pasto (corto / medio / largo), alto, variacion de alto por zonas y desgaste
+  // (profesional -> potrero: hojas mas cortas donde esta seco y sin hojas donde esta pelado). Todo en funcion de la
+  // raiz en el mundo para que coincida con la base de la cancha (misma funcion, pes_grass.hlsli).
+  float4 Q4 = IniParams.Load(int2(104, 0));
+  float pesH = 1.0; float2 pesWear = float2(0.0, 0.0); float3 pesZone = float3(1.0, 1.0, 1.0); float2 pesPm = float2(0.0, 0.0); float pesBand = 1.0;
+  float2 pesLean = float2(0.0, 0.0);   // corrimiento horizontal de la punta (inclinacion por el corte + viento), por metro de alto
+  bool pesV3 = Q4.x > 0.5;
+  float4 Q39 = IniParams.Load(int2(139, 0));   // (20/10) pasto v5: x on | y viento extra en la luz (olas de brillo) | z aplastado en las hojas
+  bool pesV5 = pesV3 && Q39.x > 0.5;
+  float pesGust = 0.0;
+  float2 pesRoot = pesIsExt ? pesExtRoot : float2(dot(v0_in, cb5[4]), dot(v0_in, cb5[6]));
+  if (pesV3) {
+    float4 Q6 = IniParams.Load(int2(106, 0)), Q7 = IniParams.Load(int2(107, 0));
+    float2 puv = pesRoot * cb4[1].xy + cb4[1].zw;
+    pesPm = PESPitchMeters(puv);
+    float pesLive = PESWearMap.SampleLevel(g_samplerLinear_Clamp_s, puv, 0).x;   // desgaste en vivo (mapa de la DLL, t8)
+    pesWear = PESWear(pesPm, pesRoot, Q4.w, Q7.x, Q7.z, pesLive);
+    pesZone = PESGrassZones(pesRoot, Q6.x);
+    int tipo = (int)(Q4.y + 0.5);
+    // banda del atlas por parcela: corto = manojo 0 (y 1 en una de cada 4), medio = 1 / 3, largo = 2 (y 1 en una de cada 4)
+    float2 porg = pesIsExt ? pesExtOrg : float2(cb5[4].w, cb5[6].w);
+    float ph = PESGh21(porg * 0.37 + 0.11);
+    pesBand = tipo == 0 ? (ph < 0.75 ? 0.0 : 1.0) : (tipo == 2 ? (ph < 0.75 ? 2.0 : 1.0) : (ph < 0.5 ? 1.0 : 3.0));
+    float hT = tipo == 0 ? 0.9 : (tipo == 2 ? 1.45 : 1.0);   // (el manojo corto ya ocupa menos tarjeta)
+    float hv = tipo == 0 ? 0.10 : (tipo == 2 ? 0.35 : 0.20);
+    float n = PESGnoise(pesRoot * 1.7 + 0.37);
+    pesH = hT * clamp(Q4.z, 0.3, 3.0) * (1.0 + (n - 0.5) * 2.0 * hv) * (1.0 - pesWear.x * 0.35) * (1.0 - pesWear.y) * PESWearLiveHeight(pesLive);
+    v0.y *= pesH;
+    pesExtW.y = v0.y;   // las parcelas extra toman la misma altura
+    // (20/10) inclinacion real de la hoja segun el grano del corte (las franjas se ven en 3D de cerca) y viento:
+    // onda que recorre la cancha con rafagas, en la direccion del viento de las nubes (z84). z108 corte, y108 viento
+    float4 Q8 = IniParams.Load(int2(108, 0));
+    if (Q8.z > 0.001 || Q8.y > 0.001) {
+      float4 Q5e = IniParams.Load(int2(105, 0));
+      float4 gt = g_tex_grain.SampleLevel(g_samplerLinear_Clamp_s, puv, 0);
+      float3 gr = normalize(gt.xzy * 2.0 - 1.0);
+      if (Q5e.x > 0.5) gr = PESMowGrain(pesPm, gr, Q5e.x, Q5e.y, 0.55 * clamp(Q5e.z, 0.2, 3.0));
+      pesLean += gr.xz * 0.7 * saturate(Q8.z);
+      float tw = IniParams.Load(int2(23, 0)).z;
+      float ang = radians(IniParams.Load(int2(84, 0)).z);
+      float2 wd = float2(cos(ang), sin(ang));
+      if (pesV5) {
+        // (20/10) pasto v5: viento fisico. Rafagas = campo de ruido que VIAJA con el viento (3 m/s): frentes irregulares que
+        // recorren la cancha (no una onda senoidal pareja); cada hoja suma su propio aleteo de alta frecuencia con fase al
+        // azar (las hojas no se mueven todas juntas) y un balanceo lento. Solo mueve las hojas: el grano de la base no se toca.
+        float2 wc = float2(-wd.y, wd.x);
+        float2 q = pesRoot - wd * tw * 3.0;
+        float g = PESGnoise(q * 0.08) * 0.6 + PESGnoise(float2(dot(q, wd) * 0.30, dot(q, wc) * 0.07) + 5.1) * 0.4;
+        float gust = smoothstep(0.30, 0.85, g);
+        float hb = PESGh21(floor(pesRoot * 40.0) * 0.173 + 0.31);          // fase por manojo
+        float fl = sin(tw * (7.0 + 5.0 * hb) + hb * 6.2832);
+        float sw = sin(tw * (1.6 + 0.8 * hb) + hb * 3.1 + dot(pesRoot, wd) * 0.9);
+        float W = saturate(Q8.y);
+        pesLean += wd * ((0.12 + 0.88 * gust) * 0.55 + sw * 0.07) * W;
+        pesLean += wc * fl * (0.05 + 0.10 * gust) * W;
+        pesGust = gust * W;
+      } else {
+      float phw = dot(pesRoot, wd) * 0.6 - tw * 2.2;
+      float gust = sin(phw) * 0.6 + sin(phw * 2.7 + tw * 0.9) * 0.25 + sin(tw * 0.7 + pesRoot.x * 0.13) * 0.15;
+      pesLean += wd * (0.25 + 0.75 * saturate(gust * 0.5 + 0.5)) * 0.45 * saturate(Q8.y);
+      }
+    }
+  }
+  if (pesV5 && Q39.z > 0.001) {
+    // (20/10) pasto v5: pisadas y rastro de la pelota (mapa pes_flat de la DLL) solo doblan las hojas hacia afuera del
+    // rastro y las agachan; la base de la cancha no cambia de color (eso daba manchones)
+    float2 puvF = pesRoot * cb4[1].xy + cb4[1].zw;
+    float fl0 = PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF, 0).x;
+    if (fl0 > 0.003) {
+      const float2 tx = float2(2.0 / 1024.0, 2.0 / 512.0);
+      float2 gF = float2(PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF + float2(tx.x, 0), 0).x - PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF - float2(tx.x, 0), 0).x,
+                         PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF + float2(0, tx.y), 0).x - PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF - float2(0, tx.y), 0).x);
+      float kF = saturate(fl0) * clamp(Q39.z, 0.0, 2.0);
+      float lg = length(gF);
+      pesLean += (lg > 1e-4 ? -gF / lg : float2(0.0, 0.0)) * 1.2 * kF;   // se abren hacia afuera del rastro
+    }
+  }
+  // --- posicion en el mundo y doblado por jugador / pelota ---
+  r0.x = v0.y + 10.0;
+  r0.yzw = cb4[3].xyz - cb4[4].xyz;
+  r0.y = dot(r0.yzw, r0.yzw);
+  r0.y = r0.y * 0.3 + 0.012544;
+  r1.y = dot(v0, cb5[5]);
+  r1.x = dot(v0, cb5[4]);
+  r1.z = dot(v0, cb5[6]);
+  if (pesIsExt) r1.xyz = pesExtW;
+  float pesHref = 0.06 * max(pesH, 0.2);
+  if (pesV5) {
+    // (20/10) pasto v5: la hoja se dobla en curva (la raiz queda firme, la punta se dobla mas: desplazamiento ~ t^2) en vez
+    // de inclinarse recta como una tarjeta; la punta llega al mismo lugar que antes
+    float tB = saturate(v0.y / pesHref);
+    r1.xz += pesLean * pesHref * tB * tB;
+  } else
+  r1.xz += pesLean * v0.y * saturate(v0.y * 25.0);   // PES21 pasto v3: la hoja se curva (mas en la punta) por el corte y el viento
+  r2.xyz = r1.xyz - cb4[3].xyz;
+  r0.z = dot(r2.xyz, r2.xyz);
+  r2.xyz = r1.xyz - cb4[4].xyz;
+  r0.w = dot(r2.xyz, r2.xyz);
+  r0.z = r0.w + r0.z;
+  r0.y = -r0.z * 0.5 + r0.y;
+  r0.y = max(r0.y, 0.0);
+  r0.x = r0.y * r0.x;
+  r0.x = r0.x * 16.0;
+  r0.yz = cb4[3].xz + cb4[4].xz;
+  r0.yz = -r0.yz * 0.5 + r1.xz;
+  r0.xz = r0.yz * r0.xx;
+  r2.xy = r1.xz * cb4[1].xy + cb4[1].zw;
+  float2 pesUV = r2.xy;   // PES21: uv de la cancha en este vertice (la misma v1.xy de la base)
+  r3 = g_tex_diffuse.SampleLevel(g_samplerLinear_Clamp_s, r2.xy, 0);
+  float4 pesDif = r3;
+  r0.w = 1.0 - r3.z;
+  r4 = g_tex_mask.SampleLevel(g_samplerLinear_Clamp_s, r2.xy, 0);
+  float4 pesMsk = r4;
+  r5 = r4.zzwz * float4(0.5, 1.0, 0.01, 0.5);
+  r1.w = max(r3.y, r4.y);
+  r2.z = max(r5.z, r1.w);
+  r0.w = max(r0.w, r2.z);
+  r2.z = max(r0.w, r5.w);
+  r2.z = r2.z * 0.06;
+  r2.z = max(r2.z, 0.0);
+  r0.y = -r2.z;
+  r6.xyz = r0.xyz + r1.xyz;
+  r7 = -r1.yxyz + cb2[20].yxyz;
+  r8 = r1.zxzx - cb4[2].xyxy;
+  r8 = r8 * 0.083333;
+  r0.x = dot(r8, r8);
+  r0.x = min(r0.x, 1.0);
+  r0.y = -r4.w + 0.99;
+  r0.y = r0.y * 0.06 * pesH;   // PES21 pasto v3: el tope de 6 cm del juego escala con el alto
+  r0.y = min(r0.y, r6.y);
+  r0.y = saturate(r0.y + 0.06);
+  r6.y = r0.y - 0.06;
+  if (pesIsExt) {
+    // parcelas extendidas: sin mascara de desgaste ni hundimiento (lejos no se ven); altura = la de la hoja, tope 6 cm x alto
+    r6.y = min(v0.y, 0.06 * max(pesExt.z, 0.1));
+  } else if (pesFarK > 0.0) {
+    r6.y = lerp(r6.y, min(v0.y, 0.06 * max(FA2.x, 0.1)), pesFarK);
+  }
+  float2 pesBend = float2(0.0, 0.0);
+  if (pesV5) {
+    // (20/10) pasto v5: largo constante. Toda la deformacion (corte, viento, pisadas, jugador / pelota del juego) corre la
+    // hoja de costado; una hoja real no se estira: la altura baja para que el largo raiz -> vertice se mantenga
+    pesBend = r6.xz - (pesIsExt ? pesExtRoot : pesRoot);
+    float yy = max(r6.y, 0.0);
+    float bb = min(dot(pesBend, pesBend), yy * yy * 0.9375);
+    r6.y = sqrt(max(yy * yy - bb, 0.0));
+  }
+  r6.w = pesIsExt ? 1.0 : dot(v0, cb5[7]);
+  if (pesIsExt || pesFarK > 0.0) {
+    // ensanche hacia la camara: la hoja se corre a lo largo del eje derecha de la camara segun su u (0..1)
+    float3 camRight = normalize(cb2[8].xyz);
+    float wid = pesIsExt ? pesExt.w * max(cb5[10].z, 0.0) * pesExtScale : 0.012 * max(FAR.x, 1.0) * max(FA2.y, 0.0) * pesFarK;
+    r6.xyz += camRight * ((v1.x - 0.5) * wid);
+  }
+  // --- proyeccion ---
+  r8.x = dot(r6, cb2[8]);
+  r8.y = dot(r6, cb2[9]);
+  r8.z = dot(r6, cb2[10]);
+  r8.w = dot(r6, cb2[11]);
+  r9.x = dot(r8, cb2[4]);
+  r9.y = dot(r8, cb2[5]);
+  r9.w = dot(r8, cb2[7]);
+  o0.z = dot(r8, cb2[6]);
+  o0.x = r9.x; o0.y = r9.y; o0.w = r9.w;
+  o6.xy = r9.xy;
+  // --- sombra plana proyectada desde la raiz de la hoja ---
+  r1.xy = v0.xz;
+  r1.z = 1.0;
+  r8.x = dot(r1.xyz, cb5[0].xzw);
+  r8.y = dot(r1.xyz, cb5[1].xzw);
+  r8.z = dot(r1.xyz, cb5[2].xzw);
+  r8.w = dot(r1.xyz, cb5[3].xzw);
+  if (pesIsExt) {   // sombra plana (jugadores y pelota) tambien sobre el pasto extra: raiz en espacio de vista con la camara real
+    float4 Pr = float4(pesExtRoot.x, 0.0, pesExtRoot.y, 1.0);
+    r8 = float4(dot(Pr, cb2[8]), dot(Pr, cb2[9]), dot(Pr, cb2[10]), dot(Pr, cb2[11]));
+  }
+  r0.y = dot(r8, cb2[4]);
+  r0.z = dot(r8, cb2[7]);
+  r1.x = dot(r8, cb2[5]);
+  r1.y = r0.z - r1.x;
+  r1.x = r0.y + r0.z;
+  r1.xy = r1.xy * cb4[2].zw;
+  r2.zw = cb0[1].xy * cb0[2].zw;
+  r1.xy = r1.xy * r2.zw;
+  r0.yz = r1.xy / r0.zz;
+  r8 = g_tex_planarShadow.SampleLevel(g_samplerLinear_Clamp_s, r0.yz, 0);
+  r0.y = dot(r8, float4(1, 1, 1, 1));
+  o1.z = saturate(1.0 - r0.y);
+  o1.xy = v1.xy;
+  r0.yz = r2.xy * float2(32.0, 24.0);
+  r2 = g_tex_grain.SampleLevel(g_samplerLinear_Clamp_s, r2.xy, 0);
+  float pesGrW = r2.w;
+  // --- nivel de mip segun distancia/altura de la camara ---
+  r1.xz = r6.xz;
+  r1.y = 0.0;
+  r1.xyz = r1.xyz - cb2[20].xyz;
+  r1.x = dot(r1.xyz, r1.xyz);
+  r1.x = rsqrt(r1.x);
+  r1.x = r1.x * r1.y;
+  r1.y = -r1.x * cb2[5].y;
+  r1.y = r1.y * 12.0;
+  r1.z = max(r9.w, 0.0625);
+  o7.x = r9.w;
+  r1.y = r1.y / r1.z;
+  r1.y = log2(r1.y);
+  r1.x = r1.x * -1.7 - r1.y;
+  float pesMip = r1.x;
+  r8 = g_tex_base.SampleLevel(g_samplerLinear_Wrap_s, r0.yz, r1.x);
+  r9.xyz = g_tex_detailNormal.SampleLevel(g_samplerLinear_Wrap_s, r0.yz, r1.x).xyw;
+  { // PES21 pasto v3 (20/10): relieve propio del cesped tambien en la normal base de las hojas (t7 del VS = pes_turf_n.dds)
+    float4 Q10 = IniParams.Load(int2(110, 0));
+    if (Q10.x > 0.001) { float4 tn = PESTurfN.SampleLevel(g_samplerLinear_Wrap_s, r0.yz * max(Q10.y, 0.25), r1.x);
+      float2 ng = float2(r9.x * r9.z, r9.y) * 2.0 - 1.0; float2 nn = tn.xy * 2.0 - 1.0;
+      float2 nb = lerp(ng, nn, saturate(Q10.x)); r9.xy = nb * 0.5 + 0.5; r9.z = 1.0; }
+  }
+  // --- color base ---
+  r0.y = log2(r8.w);
+  r0.y = r0.y * 0.454545;
+  r0.y = exp2(r0.y);
+  r10.xyz = r0.yyy * float3(1.0, 0.239, 0.196078) + float3(0.0, 0.761, 0.196);
+  r10.xyz = min(r10.xyz, float3(1, 1, 1));
+  r5.xy = saturate(r5.xy);
+  r1.yz = 1.0 - r5.xy;
+  o1.w = r1.y * r10.z;
+  o2.xyz = r6.xyz;
+  r0.z = r3.w * 1.5;
+  r1.y = r3.x * r0.y;
+  r1.y = log2(r1.y);
+  r3.xyz = r1.yyy * float3(0.1, 1.5, 17.094);
+  r3.xyz = exp2(r3.xyz);
+  r0.z = max(r4.x, r0.z);
+  r0.z = r1.w * -r0.z + r0.z;
+  o2.w = r0.z;
+  r1.y = -r1.w + 0.04;
+  r1.y = r1.y * 25.0;
+  r4.xy = r1.ww + float2(-0.04, -0.21);
+  r4.xy = r4.yx * float2(2.702703, 10.0);
+  r1.y = max(r1.y, r4.y);
+  r4.x = saturate(r4.x);
+  r1.y = saturate(1.0 - r1.y);
+  r5.xyz = -r8.xyz + float3(0.145098, 0.321569, 0.035294);
+  r5.xyz = r1.yyy * r5.xyz + r8.xyz;
+  r11.xyz = -r5.xyz + float3(0.270588, 0.301961, 0.227451);
+  r4.xyw = r4.xxx * r11.xyz + r5.xyz;
+  r5.xyz = -r4.xyw + r8.xyz;
+  r1.y = saturate(r7.x * 0.8 - 0.5);
+  r0.w = 2.0 * r1.y * r0.w;
+  r0.w = max(r0.w, r5.w);
+  r0.x = saturate(r0.w + r0.x);
+  r0.z = saturate(r0.z + r0.z);
+  r4.xyw = r0.xxx * r5.xyz + r4.xyw;
+  r5.xyz = -r4.xyw + float3(0.312435, 0.401709, 0.0);
+  r4.xyw = r2.www * r5.xyz + r4.xyw;
+  r2.xyz = r2.xzy * 2.0 - 1.0;
+  r5.xyz = saturate(r8.xyz * float3(0.78, 0.78, 0.961) + float3(0.098, 0.071, 0.039));
+  r8.xyz = 1.0 - r8.xyz;
+  r5.xyz = -r4.xyw + r5.xyz;
+  r4.xyw = r1.www * r5.xyz + r4.xyw;
+  o4.w = r4.z + r1.w;
+  // --- grano, vista y tabla de pendiente (franjas) ---
+  r0.w = dot(r2.xyz, r2.xyz);
+  r0.w = rsqrt(r0.w);
+  r2.xyz = r0.www * r2.xyz;
+  float3 pesGrain = r2.xyz;
+  if (pesV3) {   // PES21 pasto v3: patron de corte sintetizado (misma funcion que en la base de la cancha)
+    float4 Q5 = IniParams.Load(int2(105, 0));
+    if (Q5.x > 0.5) { r2.xyz = PESMowGrain(pesPm, r2.xyz, Q5.x, Q5.y, 0.55 * clamp(Q5.z, 0.2, 3.0)); pesGrain = r2.xyz; }
+  }
+  r5.xyz = r2.xyz * float3(0, 0, 1);
+  r5.xyz = r2.zxy * float3(0, 1, 0) - r5.xyz;
+  r11.xyz = r2.zxy * r5.xyz;
+  r5.xyz = r2.yzx * r5.yzx - r11.xyz;
+  r0.w = dot(r5.xyz, r5.xyz);
+  r0.w = rsqrt(r0.w);
+  r5.xyz = r0.www * r5.xyz;
+  r0.w = dot(r7.yzw, r7.yzw);
+  r0.w = rsqrt(r0.w);
+  r7.xyz = r0.www * r7.yzw;
+  r5.y = dot(r7.xyz, r5.xyz);
+  r5.x = dot(r7.xyz, r2.xyz);
+  r1.yw = r5.xy * 0.5 + 0.5;
+  r2.xyz = g_tex_turfSlopeTable.SampleLevel(g_samplerLinear_Clamp_s, r1.yw, r1.x).xyz;
+  // PES21: franjas de corte tambien en las hojas (misma cuenta que en la base de la cancha)
+  {
+    float4 ST = IniParams.Load(int2(57, 0));
+    if (ST.w > 0.5 && ST.x > 0) {
+      float3 gm = float3(-pesGrain.x, pesGrain.y, -pesGrain.z);
+      float3 tm = float3(gm.x * gm.y, -(gm.z * gm.z + gm.x * gm.x), gm.z * gm.y);
+      tm *= rsqrt(max(dot(tm, tm), 1e-8));
+      float2 uvm = float2(dot(r7.xyz, gm), dot(r7.xyz, tm)) * 0.5 + 0.5;
+      float stm = g_tex_turfSlopeTable.SampleLevel(g_samplerLinear_Clamp_s, uvm, r1.x).y;
+      r2.y = saturate(r2.y + (r2.y - stm) * 0.5 * ST.x);
+    }
+  }
+  r5.y = max(r1.x, 0.0);
+  r1.xy = -r3.xx + r3.yz;
+  r0.w = r7.y * r1.x + r3.x;
+  r1.x = log2(r7.y);
+  r1.x = r1.x * 0.05;
+  r1.x = exp2(r1.x);
+  r3.z = r1.x * r1.y + r3.x;
+  r0.w = 1.0 - r0.w;
+  r3.xy = -r0.ww * float2(0.85, 0.85) + 1.0;
+  r0.w = -r2.y * r3.y + 1.0;
+  r1.xy = r2.xz * r3.xz;
+  r2.xyz = -r8.xyz * r0.www + 1.0;
+  r0.w = r0.x * 0.2 + 0.6;
+  o3.w = r0.x;
+  r3.xyz = -r4.xyw * r2.xyz + r0.www;
+  r2.xyz = r2.xyz * r4.xyw;
+  o3.xyz = saturate(r0.zzz * r3.xyz + r2.xyz);
+  // === PES21 pasto 3D con el color del suelo (20/10): x148 cuanto, y148 brillo, z148 franjas, w148 on/off ===
+  // El color de la hoja del juego sale de otra cuenta (colores fijos + la textura base en mosaico) y no coincide con el
+  // suelo que se ve en la vista de juego: de cerca el pasto 3D tenia otro verde. Aca se calcula, en la raiz de la hoja,
+  // la MISMA cuenta de albedo que el PS de la base de la cancha (textura base con su escala, tinte por el grano, color
+  // del material, lineas pintadas, franjas de la tabla de pendiente con la vista, variacion macro y saturacion), con los
+  // m_materials reales del estadio que copia la DLL. Lo que se agrega despues (zonas, x29, suelo humedo) es igual en los dos.
+  bool pesMatch = false;
+  {
+    float4 GM = IniParams.Load(int2(148, 0));
+    // b6 sin la copia de la DLL (o con otro buffer del juego): la escala de la base tiene que ser la de la cancha (32 x 24 tipico)
+    bool tmOk = pTM[2].x >= 1.0 && pTM[2].x <= 2048.0 && pTM[2].y >= 1.0 && pTM[2].y <= 2048.0 && abs(pTM[4].w) <= 1.0001 && abs(pTM[1].w) <= 4.0;
+    if (GM.w > 0.5 && GM.x > 0.001 && tmOk) {
+      pesMatch = true;
+      float3 g = pesGrain;
+      float3 tg = float3(g.x * g.y, -(g.z * g.z + g.x * g.x), g.z * g.y); tg *= rsqrt(max(dot(tg, tg), 1e-8));
+      float3 Vg = normalize(cb2[20].xyz - r6.xyz);
+      float3 fw = normalize(cb2[10].xyz);
+      float3 r4g = normalize(lerp(Vg, -fw, pTM[4].w));
+      float st = g_tex_turfSlopeTable.SampleLevel(g_samplerLinear_Clamp_s, float2(dot(r4g, g), dot(r4g, tg)) * 0.5 + 0.5, 0).y;
+      float4 ST = IniParams.Load(int2(57, 0));
+      if (ST.w > 0.5 && ST.x > 0) {
+        float3 gmr = float3(-g.x, g.y, -g.z);
+        float3 tmr = float3(gmr.x * gmr.y, -(gmr.z * gmr.z + gmr.x * gmr.x), gmr.z * gmr.y); tmr *= rsqrt(max(dot(tmr, tmr), 1e-8));
+        float stm = g_tex_turfSlopeTable.SampleLevel(g_samplerLinear_Clamp_s, float2(dot(r4g, gmr), dot(r4g, tmr)) * 0.5 + 0.5, 0).y;
+        st = saturate(st + (st - stm) * 0.5 * ST.x);
+      }
+      st = lerp(0.5, st, saturate(GM.z));   // z148: 0 = sin franjas en las hojas, 1 = como el suelo
+      float vy = max(Vg.y, 1e-4);
+      float4 bs = g_tex_base.SampleLevel(g_samplerLinear_Wrap_s, pesUV * pTM[2].xy, max(pesMip, 0.0));
+      float bw = pow(saturate(bs.w), 0.454545);
+      float q = max(bw * pesDif.x, 1e-6);
+      float qa = pow(q, pTM[1].y), qb = pow(q, pTM[1].z);
+      float lr = 1.0 - (pow(vy, pTM[1].x) * (qb - qa) + qa);
+      float kS = 1.0 - st * (1.0 - lr * pTM[1].w);
+      float3 c1 = 1.0 - (1.0 - bs.xyz) * kS;
+      float3 c7 = lerp(bs.xyz, pTM[4].xyz, pesGrW);
+      float3 c8 = saturate(float3(bs.x * pTM[5].x + pTM[5].w, bs.y * pTM[5].y + pTM[6].x, bs.z * pTM[5].z + pTM[6].y));
+      float mx = max(pesMsk.x, pesDif.w), my = max(pesMsk.y, pesDif.y);
+      float3 col = lerp(c7, c8, my) * c1 * (1.0 - saturate(0.1 * pesMsk.z));
+      col = saturate(lerp(col, float3(0.8, 0.8, 0.8), mx));          // lineas pintadas
+      float4 G10 = IniParams.Load(int2(10, 0));
+      if (G10.y > 0) {   // variacion macro, manchas secas y saturacion de la base (y10 / z10), sin las matas finas (las hojas ya son eso)
+        float2 wp = pesRoot;
+        float m1 = PESGnoise(wp * 0.045), m2 = PESGnoise(wp * 0.16 + 5.3), m3 = PESGnoise(wp * 0.85 + 1.7);
+        const float3 LW = float3(0.2126, 0.7152, 0.0722);
+        col *= 1 + ((m1 * 0.55 + m2 * 0.3 + m3 * 0.15) - 0.5) * 0.20 * G10.z;
+        float dry = saturate((m2 * 0.7 + m1 * 0.3) * 2.2 - 1.25) * 0.16 * G10.z;
+        col = lerp(col, dot(col, LW) * float3(1.12, 1.04, 0.72), dry);
+        col = lerp(dot(col, LW).xxx, col, 1.12) * 0.95;
+      }
+      o3.xyz = lerp(o3.xyz, saturate(col * (GM.y > 0 ? GM.y : 1.0)), saturate(GM.x));
+    }
+  }
+  if (pesV3) {   // PES21 pasto v3: zonas de color y pasto seco (la base de la cancha hace lo mismo)
+    float4 Q7b = IniParams.Load(int2(107, 0));
+    // con el color del suelo (x148) el seco lo pone solo el PS de la hoja (antes se aplicaba dos veces: VS + PS)
+    o3.xyz = saturate(PESDryTint(o3.xyz * pesZone, pesMatch ? 0.0 : pesWear.x * saturate(Q7b.y) * 0.85));
+    o1.w = saturate(o1.w * (1.0 - pesWear.x * 0.5) * ((int)(Q4.y + 0.5) == 2 ? 1.3 : 1.0));
+  }
+  // --- normal de la hoja (detalle) ---
+  r9.x = r9.z * r9.x;
+  r2.xy = r9.xy * 2.0 - 1.0;
+  r0.x = -r2.x * r2.x + 1.0;
+  r0.x = -r2.y * r2.y + r0.x;
+  r0.x = max(r0.x, 0.0);
+  r0.x = r0.x + 0.0001;
+  r0.z = rsqrt(r0.x);
+  r2.z = r0.z * r0.x;
+  r0.x = 0.0; r0.z = 0.0; r0.w = r2.z * 4.0;
+  r0.x = r0.x / 2.0; r0.z = r0.z / 2.0; r0.w = r0.w / 2.0;
+  r2.x = r2.x + r0.x;
+  r2.y = r2.y + r0.z;
+  r2.z = -r2.z + r0.w;
+  r2.w = max(r2.z, 0.0);
+  r0.x = dot(r2.xyw, r2.xyw);
+  r0.x = rsqrt(r0.x);
+  r3.xyz = r0.xxx * r2.xwy;
+  r0.xzw = -r2.xwy * r0.xxx + float3(0.0, 1.0, 0.0);
+  r0.xzw = r4.zzz * r0.xzw + r3.xyz;
+  r1.w = dot(r0.xzw, r0.xzw);
+  r1.w = rsqrt(r1.w);
+  r0.xzw = r0.xzw * r1.www;
+  if (pesV5) {
+    // (20/10) pasto v5: la normal se inclina con la curva de la hoja (pendiente = 2 desplazamiento / alto): las rafagas
+    // se ven como olas de brillo que recorren las hojas (las que se doblan hacia el sol se aclaran), igual que en un cesped real
+    float2 sl = 2.0 * pesBend / max(r6.y + 0.004, 0.006);
+    float ls = length(sl); if (ls > 1.5) sl *= 1.5 / ls;
+    float kN = 0.55 + clamp(Q39.y, 0.0, 2.0) * 0.5 * pesGust;
+    r0.xzw = normalize(r0.xzw + float3(sl.x, 0.0, sl.y) * kN);
+  }
+  o4.x = dot(r0.xzw, cb2[8].xyz);
+  o4.y = dot(r0.xzw, cb2[9].xyz);
+  o4.z = dot(r0.xzw, cb2[10].xyz);
+  // --- parametros de material ---
+  r5.z = r5.y * r5.y;
+  r5.w = r5.y * r5.z;
+  r5.x = 0.392868;
+  r0.x = dot(r5, float4(1.0, 0.016671, 0.001178, -0.000208));
+  r0.x = saturate(r0.x + 0.5);
+  r2.y = r10.y + r0.x;
+  r5.x = -0.069282;
+  r0.x = dot(r5, float4(1.0, 0.048773, -0.004529, 0.000109));
+  r0.x = saturate(r0.x + 0.5);
+  r2.x = r10.x + r0.x;
+  r0.x = r2.x - 0.5;
+  r0.z = r2.y - 0.5;
+  r0.x = r1.x * r0.x;
+  o5.y = r0.z;
+  o5.x = r0.x * r1.z;
+  o5.z = r0.y * r1.y;
+  o5.w = (pesIsExt && cb5[9].x > 0.5) ? 1.0 : 0.0;   // PES21: depuracion, el PS pinta magenta
+  o6.z = dot(r6, cb2[16]);
+  o6.w = dot(r6, cb2[17]);
+  o7.y = dot(r6, cb2[19]);
+  o8 = float4(pesWear.x, pesWear.y, pesH, pesV3 ? 1.0 + pesBand : 0.0);   // w = 1 + banda del atlas (0 = sin v3)
+  if (pesKill) o0 = float4(0.0, 0.0, -2.0, 1.0);   // todos los vertices iguales: triangulos nulos, no se rasteriza
+}
