@@ -299,6 +299,22 @@ static void SunPassPresent() {
         if (nextSum > 0 && frames > 0 && framesNone < frames && sums++ < 120)
             Log("luz del sol (10 s): %d cuadros, %d con alguna variante sin reemplazo, %d sin pasada de sol, %d cambios de variante, LightCB desde la copia alternativa %d",
                 frames, framesOrig, framesNone, switches, g_lightAltFrames.exchange(0));
+        // direccion del sol que usa la luz (m_lightDir0, espacio de vista) contra la direccion con la que se arma el shadow map
+        // (la recta en la que las coordenadas x / y de m_shadowProjection no cambian). Si no coinciden, el lado iluminado y la
+        // sombra proyectada no concuerdan. Tambien las dos en espacio mundo (deberian quedar quietas al mover la camara).
+        { std::vector<float> L, S;
+          if (sums <= 120 && NamedCBRead("LightCB", L) && L.size() >= 4 && NamedCBRead("SceneCB", S) && S.size() >= 64) {
+              auto nrm = [](float* v) { float n = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); if (n > 1e-8f) { v[0] /= n; v[1] /= n; v[2] /= n; } return n; };
+              float l[3] = { L[0], L[1], L[2] }; float a[3] = { S[48], S[49], S[50] }, b[3] = { S[52], S[53], S[54] };
+              float d[3] = { a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0] };
+              if (nrm(l) > 1e-8f && nrm(d) > 1e-8f) {
+                  float c = fabsf(l[0] * d[0] + l[1] * d[1] + l[2] * d[2]); float ang = acosf((std::min)(c, 1.0f)) * 57.2958f;
+                  const float* M = &S[32];
+                  auto toW = [&](const float* v, float* w) { for (int i = 0; i < 3; i++) w[i] = v[0] * M[i] + v[1] * M[4 + i] + v[2] * M[8 + i]; if (w[1] < 0) { w[0] = -w[0]; w[1] = -w[1]; w[2] = -w[2]; } };
+                  float lw[3], dw[3]; toW(l, lw); toW(d, dw);
+                  Log("luz del sol: direccion de la luz (vista %.3f %.3f %.3f | mundo %.3f %.3f %.3f) y del shadow map (mundo %.3f %.3f %.3f): %.1f grados entre las dos",
+                      l[0], l[1], l[2], lw[0], lw[1], lw[2], dw[0], dw[1], dw[2], ang);
+              } } }
         nextSum = t + 10.0; frames = framesOrig = framesNone = switches = 0;
     }
 }
