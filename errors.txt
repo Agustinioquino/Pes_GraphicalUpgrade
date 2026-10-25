@@ -1,0 +1,1 @@
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\cuerpo.cpp(374,27): error C2373: 'dst': redefinition; different type modifiers [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]

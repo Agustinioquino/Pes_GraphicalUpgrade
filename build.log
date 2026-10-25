@@ -1,0 +1,57 @@
+MSBuild version 18.11.1-1.26513.3+940033be3 for .NET Framework
+
+  1>Checking Build System
+  Building Custom Rule D:/a/Pes_GraphicalUpgrade/Pes_GraphicalUpgrade/CMakeLists.txt
+  buffer.c
+  hook.c
+  trampoline.c
+  hde64.c
+  Generating Code...
+  minhook.vcxproj -> D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\Release\minhook.lib
+  Building Custom Rule D:/a/Pes_GraphicalUpgrade/Pes_GraphicalUpgrade/CMakeLists.txt
+  Assembling D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\d3d11_exports.asm...
+  main.cpp
+  d3d11_proxy.cpp
+  config.cpp
+  hooks.cpp
+  overlay.cpp
+  presets.cpp
+  catalog.cpp
+  grass.cpp
+  menutest.cpp
+  facegen.cpp
+  inspect.cpp
+  ssss.cpp
+  pitchwear.cpp
+  lod.cpp
+  lightmeter.cpp
+  gtao.cpp
+  ssgi.cpp
+  exedump.cpp
+  asyncshot.cpp
+  exepatch.cpp
+  Generating Code...
+  Compiling...
+  camhook.cpp
+  musculo.cpp
+  personajes.cpp
+  fisico.cpp
+  codewatch.cpp
+  skintone.cpp
+  glass.cpp
+  ring.cpp
+  cuerpo.cpp
+  imgui.cpp
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\cuerpo.cpp(374,27): error C2373: 'dst': redefinition; different type modifiers [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+      D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\cuerpo.cpp(368,20):
+      see declaration of 'dst'
+  
+  imgui_draw.cpp
+  imgui_tables.cpp
+  imgui_widgets.cpp
+  imgui_impl_dx11.cpp
+  imgui_impl_win32.cpp
+  DDSTextureLoader.cpp
+  ScreenGrab.cpp
+  WICTextureLoader.cpp
+  Generating Code...
