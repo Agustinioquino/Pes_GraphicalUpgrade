@@ -265,6 +265,61 @@ const Rule* RuleForHash(uint64_t h) { auto it = g_cfg.rules.find(h); return it =
 std::atomic<int> g_drawOrder{0};
 std::atomic<int> g_lightAltFrames{0};   // (20/10) cuadros en que el sol llego por una variante no reemplazada de la luz
 std::atomic<int> g_aliasDraws{0};   // dibujos redirigidos por alias en el cuadro (diagnostico)   // numero de orden del dibujo dentro del cuadro (se reinicia en Present)
+// (25/10) luz diferida: cuales de las 21 variantes de la pasada corren en cada cuadro. 0..6 = sol con reemplazo de siempre
+// (filtro de sombras, color del sol, piel); 7 = sol sin sombra (d0e9) y 8 = sol con mascara de pantalla (7dbbc), con
+// reemplazo desde el 25/10; 9..20 = luces de foco / punto (torres, sin reemplazo). Si al mover la camara el juego pasa de
+// unas a otras, el log lo deja escrito ("luz del sol: variantes ...").
+static const uint64_t kSunPass[21] = {
+    0xa748f426e9b978ccULL, 0xb8a29991599380d3ULL, 0xd51409f5f8d54cbdULL, 0xde643fcb8d6a6beaULL, 0xe9c13241d7bc9625ULL,
+    0x1f623dbab7ee8019ULL, 0x230d92c927f58da3ULL,
+    0xd0e9d81c09b3da66ULL, 0x7dbbc922c9ae74c5ULL,
+    0x03b955fa0df6521bULL, 0x142c18270479a113ULL, 0x16c135a014d253b2ULL, 0x2a809f328b164023ULL, 0x5ae81b14fd75960eULL,
+    0x68d58aa84c0256f5ULL, 0x7bd80690738f243fULL, 0x9ce9d8463800b399ULL, 0xc33576f12dd818bfULL, 0xca8a31c98b1584acULL,
+    0xd5037e255559ea13ULL, 0xf9f5dc3e044ba823ULL };
+static std::atomic<int> s_sunDraws[21];
+static inline void SunPassNote(uint64_t h) {
+    for (int i = 0; i < 21; i++) if (kSunPass[i] == h) { s_sunDraws[i].fetch_add(1, std::memory_order_relaxed); return; }
+}
+static std::string SunPassList(uint32_t mask, const int* n) {
+    std::string r; char b[48];
+    for (int i = 0; i < 21; i++) if (mask & (1u << i)) { snprintf(b, sizeof(b), "%s%08llx%s x%d", r.empty() ? "" : ", ", (unsigned long long)(kSunPass[i] >> 32), i == 7 ? " (sol sin sombra)" : i == 8 ? " (sol con mascara)" : i > 8 ? " (foco)" : "", n ? n[i] : 0); r += b; }
+    return r.empty() ? "ninguna" : r;
+}
+static void SunPassPresent() {
+    static uint32_t lastMask = 0xffffffffu; static int lines = 0; static double nextSum = 0;
+    static int frames = 0, framesOrig = 0, framesNone = 0, switches = 0, sums = 0;
+    int n[21]; uint32_t mask = 0;
+    for (int i = 0; i < 21; i++) { n[i] = s_sunDraws[i].exchange(0, std::memory_order_relaxed); if (n[i]) mask |= 1u << i; }
+    frames++; if (!(mask & 0x1ffu)) framesNone++; else if (!(mask & 0x7fu)) framesOrig++;
+    if ((mask & 0x1ffu) != lastMask) {   // solo cambian las del sol (los focos de noche entran y salen todo el tiempo)
+        if (lastMask != 0xffffffffu) switches++;
+        if (lines < 200) { lines++; Log("luz del sol: variantes en el cuadro %d: %s", s_presentNo.load(), SunPassList(mask, n).c_str()); }
+        lastMask = mask & 0x1ffu;
+    }
+    double t = Now();
+    if (t > nextSum) {
+        if (nextSum > 0 && frames > 0 && framesNone < frames && sums++ < 120)
+            Log("luz del sol (10 s): %d cuadros, %d solo con el sol sin sombra / con mascara (d0e9 / 7dbbc), %d sin pasada de sol, %d cambios de variante, LightCB desde la copia alternativa %d",
+                frames, framesOrig, framesNone, switches, g_lightAltFrames.exchange(0));
+        // direccion del sol que usa la luz (m_lightDir0, espacio de vista) contra la direccion con la que se arma el shadow map
+        // (la recta en la que las coordenadas x / y de m_shadowProjection no cambian). Si no coinciden, el lado iluminado y la
+        // sombra proyectada no concuerdan. Tambien las dos en espacio mundo (deberian quedar quietas al mover la camara).
+        { std::vector<float> L, S;
+          if (sums <= 120 && NamedCBRead("LightCB", L) && L.size() >= 4 && NamedCBRead("SceneCB", S) && S.size() >= 64) {
+              auto nrm = [](float* v) { float n = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); if (n > 1e-8f) { v[0] /= n; v[1] /= n; v[2] /= n; } return n; };
+              float l[3] = { L[0], L[1], L[2] }; float a[3] = { S[48], S[49], S[50] }, b[3] = { S[52], S[53], S[54] };
+              float d[3] = { a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0] };
+              if (nrm(l) > 1e-8f && nrm(d) > 1e-8f) {
+                  float c = fabsf(l[0] * d[0] + l[1] * d[1] + l[2] * d[2]); float ang = acosf((std::min)(c, 1.0f)) * 57.2958f;
+                  const float* M = &S[32];
+                  auto toW = [&](const float* v, float* w) { for (int i = 0; i < 3; i++) w[i] = v[0] * M[i] + v[1] * M[4 + i] + v[2] * M[8 + i]; if (w[1] < 0) { w[0] = -w[0]; w[1] = -w[1]; w[2] = -w[2]; } };
+                  float lw[3], dw[3]; toW(l, lw); toW(d, dw);
+                  Log("luz del sol: direccion de la luz (vista %.3f %.3f %.3f | mundo %.3f %.3f %.3f) y del shadow map (mundo %.3f %.3f %.3f): %.1f grados entre las dos",
+                      l[0], l[1], l[2], lw[0], lw[1], lw[2], dw[0], dw[1], dw[2], ang);
+              } } }
+        nextSum = t + 10.0; frames = framesOrig = framesNone = switches = 0;
+    }
+}
 std::string NamedOrigin(ID3D11ShaderResourceView* v) {
     std::lock_guard<std::mutex> lk(s_namedMutex);
     for (auto& kv : s_named) if (kv.second.srv == v) return kv.first.rfind("file:", 0) == 0 ? "archivo del mod: " + kv.first.substr(5) : "recurso del mod: " + kv.first;
@@ -722,6 +777,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         g_stFaceDraws++; if (ps->rule) g_stFaceRule++;
         if (c->GetType() == D3D11_DEVICE_CONTEXT_DEFERRED) g_stFaceCtxDef++;
     }
+    if (ps) SunPassNote(ps->hash);   // (25/10) variantes de la luz del sol por cuadro (log)
     if (!g_cfg.optRules) { RingFaceBind(c, d.ring); return false; }
     if ((ps && ps->rule) || (vs && vs->rule)) {
         if (!s_firstRule.exchange(true)) Log("primer dibujo con regla");
@@ -1131,6 +1187,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
             if (g_dev.imm) { g_dev.imm->UpdateSubresource(r.buf, 0, nullptr, zeros.data(), 0, 0); r.cleared = true; }
         }
     }
+    SunPassPresent();   // (25/10) variantes de la luz del sol: log de cambios
     UpdateTimeParams();
     SSGIPresent(s_presentNo.load());
     LightMeterPresent();
