@@ -114,6 +114,10 @@ void main(float4 v0 : SV_Position0, out float4 o0 : SV_Target0, out float4 o1 : 
   float3 irr = max(float3(PESEvalChannel(R, Nw), PESEvalChannel(G, Nw), PESEvalChannel(B, Nw)), 0.0);
   float ao = inAmbientOcclusionTexture.Sample(g_samplerLinear_Clamp_s, v0.xy * g_psSystem.m_renderBuffer.zw).x;
   { float4 GT = IniParams.Load(int2(132,0)); if (GT.x > 0.5) { float g = PESGtao.SampleLevel(g_samplerLinear_Clamp_s, v0.xy * g_psSystem.m_renderBuffer.zw, 0).x; ao = lerp(ao, min(ao * 0.35 + 0.65, g), saturate(GT.y)); } }   // PES21 GTAO (20/10)
+  { // (26/10 d) PES21 pasto: entre hojas finas la oclusion de pantalla es fuerte y cambia con la vista, y se aplicaba dos veces (aca
+    // sobre el ambiente y otra vez en la composicion): en el cesped (tipo 3) se alivia con x108, el mismo alivio que usa la composicion
+    uint tyV = ((uint)(nb.z * 1023.0 + 0.5)) & 15u;
+    if (tyV == 3u && IniParams.Load(int2(104,0)).x > 0.5) ao = lerp(1.0, ao, saturate(1.0 - IniParams.Load(int2(108,0)).x)); }
   // === PES21 FX: controles de la luz global ===
   float4 GL = IniParams.Load(int2(56, 0));
   float aoW = sqrt(ao);

@@ -280,6 +280,23 @@ static std::atomic<int> s_sunDraws[21];
 static inline void SunPassNote(uint64_t h) {
     for (int i = 0; i < 21; i++) if (kSunPass[i] == h) { s_sunDraws[i].fetch_add(1, std::memory_order_relaxed); return; }
 }
+static inline int SunPassIndex(uint64_t h) { for (int i = 0; i < 9; i++) if (kSunPass[i] == h) return i; return -1; }   // solo las del sol
+// (26/10) ancho de la vista mas grande en la que corrio una pasada del sol (cuadro anterior y este)
+static std::atomic<UINT> s_sunVpMaxPrev{0}, s_sunVpMaxCur{0}; static std::atomic<int> s_sunSmallSkips{0};
+static bool SunPassSmallView(ID3D11DeviceContext* c, uint64_t h) {
+    D3D11_VIEWPORT vp[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]; UINT n = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+    c->RSGetViewports(&n, vp);
+    if (!n) return false;
+    UINT w = (UINT)vp[0].Width, hgt = (UINT)vp[0].Height;
+    UINT cur = s_sunVpMaxCur.load(); while (w > cur && !s_sunVpMaxCur.compare_exchange_weak(cur, w)) {}
+    UINT ref = (std::max)(s_sunVpMaxPrev.load(), s_sunVpMaxCur.load());
+    bool tooSmall = ref > 0 && w * 4 < ref * 3;
+    { static std::mutex mx; static std::set<uint64_t> seen; uint64_t key = h ^ ((uint64_t)w << 1) ^ ((uint64_t)hgt << 20); bool first;
+      { std::lock_guard<std::mutex> lk(mx); first = seen.size() < 40 && seen.insert(key).second; }
+      if (first) Log("luz del sol: %08llx en una vista de %ux%u (la mas grande vista: %u)%s", (unsigned long long)(h >> 32), w, hgt, ref, tooSmall ? " -> vista chica: no se copia el sol" : ""); }
+    if (tooSmall) s_sunSmallSkips++;
+    return tooSmall;
+}
 static std::string SunPassList(uint32_t mask, const int* n) {
     std::string r; char b[48];
     for (int i = 0; i < 21; i++) if (mask & (1u << i)) { snprintf(b, sizeof(b), "%s%08llx%s x%d", r.empty() ? "" : ", ", (unsigned long long)(kSunPass[i] >> 32), i == 7 ? " (sol sin sombra)" : i == 8 ? " (sol con mascara)" : i > 8 ? " (foco)" : "", n ? n[i] : 0); r += b; }
@@ -290,8 +307,11 @@ static void SunPassPresent() {
     static int frames = 0, framesOrig = 0, framesNone = 0, switches = 0, sums = 0;
     int n[21]; uint32_t mask = 0;
     for (int i = 0; i < 21; i++) { n[i] = s_sunDraws[i].exchange(0, std::memory_order_relaxed); if (n[i]) mask |= 1u << i; }
+    s_sunVpMaxPrev = s_sunVpMaxCur.exchange(0);
     frames++; if (!(mask & 0x1ffu)) framesNone++; else if (!(mask & 0x7fu)) framesOrig++;
-    if ((mask & 0x1ffu) != lastMask) {   // solo cambian las del sol (los focos de noche entran y salen todo el tiempo)
+    // solo cambian las del sol (los focos de noche entran y salen todo el tiempo); los cuadros sin ninguna pasada del sol
+    // (uno suelto cada tanto) van solo al resumen de 10 s, si no llenaban el tope de lineas en un minuto
+    if ((mask & 0x1ffu) && (mask & 0x1ffu) != lastMask) {
         if (lastMask != 0xffffffffu) switches++;
         if (lines < 200) { lines++; Log("luz del sol: variantes en el cuadro %d: %s", s_presentNo.load(), SunPassList(mask, n).c_str()); }
         lastMask = mask & 0x1ffu;
@@ -299,8 +319,8 @@ static void SunPassPresent() {
     double t = Now();
     if (t > nextSum) {
         if (nextSum > 0 && frames > 0 && framesNone < frames && sums++ < 120)
-            Log("luz del sol (10 s): %d cuadros, %d solo con el sol sin sombra / con mascara (d0e9 / 7dbbc), %d sin pasada de sol, %d cambios de variante, LightCB desde la copia alternativa %d",
-                frames, framesOrig, framesNone, switches, g_lightAltFrames.exchange(0));
+            Log("luz del sol (10 s): %d cuadros, %d solo con el sol sin sombra / con mascara (d0e9 / 7dbbc), %d sin pasada de sol, %d cambios de variante, LightCB desde la copia alternativa %d, pasadas del sol en vista chica (sin copiar) %d",
+                frames, framesOrig, framesNone, switches, g_lightAltFrames.exchange(0), s_sunSmallSkips.exchange(0));
         // direccion del sol que usa la luz (m_lightDir0, espacio de vista) contra la direccion con la que se arma el shadow map
         // (la recta en la que las coordenadas x / y de m_shadowProjection no cambian). Si no coinciden, el lado iluminado y la
         // sombra proyectada no concuerdan. Tambien las dos en espacio mundo (deberian quedar quietas al mover la camara).
@@ -431,11 +451,13 @@ template<int V> static void STDMETHODCALLTYPE hk_Dispatch(ID3D11DeviceContext* c
 }
 template<int V> static void STDMETHODCALLTYPE hk_ExecCL(ID3D11DeviceContext* c, ID3D11CommandList* l, BOOL r) {
     BodyOnExecute(c, l);
+    GrassOnExecuteCL(c, l);   // (26/10 d) pasto: demora grabacion -> ejecucion, listas anidadas
     o_ExecCL[V](c, l, r);
 }
 template<int V> static HRESULT STDMETHODCALLTYPE hk_FinishCL(ID3D11DeviceContext* c, BOOL r, ID3D11CommandList** l) {
     HRESULT hr = o_FinishCL[V](c, r, l);
     if (SUCCEEDED(hr) && l && *l) BodyOnFinish(c, *l);
+    GrassOnFinishCL(c, (SUCCEEDED(hr) && l) ? *l : nullptr);   // (26/10 d) pasto: la grabacion termino (siempre, aunque falle)
     return hr;
 }
 // cejas (18/10): para dibujar las hebras hace falta saber si el juego usa profundidad invertida (limpia a 0) o normal (limpia a 1)
@@ -644,7 +666,14 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
 static void RunRule(ID3D11DeviceContext* c, const ShaderEntry* e, DrawScope& d) { RunRuleActions(c, e->rule, e->type == 'p', e->hash, d); }
 static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, uint64_t hash, DrawScope& d) {
     if (!rule) return;   // (25/10 d) una recarga pudo dejar la regla en null entre la comprobacion y esta llamada
+    // (26/10) la pasada del sol tambien corre para una vista chica (otra camara del juego, mas chica que la principal): su
+    // m_lightDir0 esta en el espacio de ESA camara y, copiada a LightCB, el sol de la composicion / el cielo / el pasto / la
+    // fila 111 quedaba fijo respecto de la otra camara y giraba con la principal (log: 50-75 grados contra el shadow map).
+    // Solo se copian el sol y su shadow map desde la vista mas grande de las pasadas del sol.
+    bool sunSmall = false;
+    if (ps && SunPassIndex(hash) >= 0) sunSmall = SunPassSmallView(c, hash);
     for (auto& a : rule->actions) {
+        if (sunSmall && (a.kind == RuleAction::CopyCB || a.kind == RuleAction::RefSRV) && (a.name == "LightCB" || a.name == "LightCBAlt" || a.name == "ShadowMap")) continue;
         switch (a.kind) {
         case RuleAction::CopyCB: {
             // (20/10) con ID3D11DeviceContext1 el juego puede enlazar una ventana (first/num constantes) de un buffer grande:
@@ -1200,6 +1229,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     GlassPresent();        // (24/10) vidrio de los menus: lectura de lo anotado por el PS y plan de copias del fondo
     MuscleHookPresent();   // (23/10) musculatura: ganchos a los huesos de musculo del motor (primer Present)
     BodyPresent();         // (25/10) la ropa contra el cuerpo real: mallas de piel nuevas, cuadro nuevo
+    GrassFrameBoundary(flags);   // (26/10 d) pasto: limite del cuadro (reclamo en la GPU, x63) ANTES de subir t120
     UploadParams();
     WatchShaderFolder();
     PollMatch();

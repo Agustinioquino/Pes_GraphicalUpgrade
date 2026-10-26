@@ -54,6 +54,9 @@ void main(
   float4 v0 = v0_in;
   bool pesKill = false;
   float3 pesExtW = 0; float2 pesExtRoot = 0; float pesExtScale = 1; float2 pesExtOrg = 0; float pesPx = 0.0;
+  // (26/10 d) indice de la tarjeta (hoja) y giro de la celda: fase del viento y banda del atlas POR HOJA (antes por vertice: 70-80% de las
+  // hojas se retorcian en vez de mecerse); alto efectivo de la hoja (x59 lejos, alto cercano cb5[10].y cerca); fundido por ventana
+  int pesCard = -1; int pesRot = 0; float pesTallE = 1.0; float pesWinK = 1.0;
   float4 P58 = IniParams.Load(int2(58, 0));
   if (pesIsExt) {
     // v2 instanciado: la parcela sale del buffer de instancias; fundido por altura en los bordes de la banda y
@@ -62,11 +65,10 @@ void main(
     pesExtOrg = ins.xy;
     pesExtScale = max(floor(ins.z + 0.01), 1.0);
     float pesLastK = saturate((ins.z - floor(ins.z + 0.01)) * 2.0);   // altura de la ultima tarjeta (parte fraccionaria de la cuenta)
-    bool pesIsLast = false;
     // (25/10 c) w = tope de tarjetas * 4 + giro: la celda lleva solo las tarjetas que cubren su tamano en pantalla (densidad
     // constante en pantalla, la cuenta el compute); las de mas se anulan aca, antes de cualquier cuenta cara
     int insW = (int)(ins.w + 0.5);
-    int rot = insW & 3;
+    int rot = insW & 3; pesRot = rot;
     int lim = insW >> 2;
     if (lim > 0 && cb5[8].x > 0.5) {
       int card = (int)(vid / (uint)(cb5[8].x + 0.5));
@@ -74,7 +76,11 @@ void main(
         o0 = float4(0.0, 0.0, -2.0, 1.0); o1 = 0; o2 = 0; o3 = 0; o4 = 0; o5 = 0; o6 = 0; o7 = 0; o8 = 0;
         return;
       }
-      pesIsLast = card == lim - 1;
+      pesCard = card;
+      // (26/10 d) fundido por ventana: las ultimas 20% de las tarjetas bajan de altura de forma escalonada (antes solo la ultima
+      // era fraccionaria: al mover la camara aparecian y desaparecian hojas enteras de golpe, todas las celdas a la vez)
+      float Nc = (float)(lim - 1) + pesLastK; float Fw = max(1.0, 0.2 * Nc);
+      pesWinK = saturate((Nc - (float)card) / Fw);
     }
     float cs = rot == 0 ? 1.0 : (rot == 2 ? -1.0 : 0.0), sn = rot == 1 ? 1.0 : (rot == 3 ? -1.0 : 0.0);
     // (25/10 c) cb5[9].z = 1: la malla ya trae las raices repartidas en la celda y los desplazamientos de la hoja en metros (no se escalan)
@@ -96,8 +102,11 @@ void main(
       float d = length(ins.xy - cb2[20].xz);
       k = smoothstep(cb5[9].z, cb5[9].w, d) * (1.0 - smoothstep(cb5[10].x, cb5[10].y, d));
     }
-    if (pesIsLast) k *= pesLastK;
-    v0.y = v0_in.y * max(pesExt.z, 0.1) * k;
+    k *= pesWinK;
+    // (26/10 d) alto: x59 (pesExt.z) lejos, alto cercano (cb5[10].y, 1.0) de 110 a 250 px/m; con 1.3 en todo, cerca las hojas eran
+    // 1.3x mas altas que las del juego y la copa quedaba rigida (el doblado del viento satura a 6 cm)
+    pesTallE = lerp(max(pesExt.z, 0.1), cb5[10].y > 0.05 ? cb5[10].y : max(pesExt.z, 0.1), smoothstep(110.0, 250.0, pesPx));
+    v0.y = v0_in.y * pesTallE * k;
     pesExtW = float3(pesExtRoot.x, v0.y, pesExtRoot.y);
     // descarte por pantalla: centro de la parcela con margen del tamano de la parcela
     float rad = 0.5 * pesExtScale + 0.15;
@@ -109,7 +118,10 @@ void main(
   // cancha quedaba pelada, peor que sin mod
   float4 P63 = IniParams.Load(int2(63, 0));
   bool pesExtMissing = P63.x > 0.5;
-  if (!pesIsExt && P58.w > 0.5 && !pesExtMissing) {
+  // (26/10 d) en una pasada ortografica (mapa de sombras del sol) el corte no depende de x63: con el mod prendido el pasto del
+  // juego nunca proyecta sombra (las hojas del mod tampoco), asi los oclusores no cambian cuando x63 cambia
+  bool pesOrtho = abs(cb2[7].w - 1.0) < 1e-4 && (abs(cb2[7].x) + abs(cb2[7].y) + abs(cb2[7].z)) < 1e-6;
+  if (!pesIsExt && P58.w > 0.5 && (!pesExtMissing || (pesOrtho && P63.y > 0.0))) {
     float2 wr = float2(dot(v0_in, cb5[4]), dot(v0_in, cb5[6]));
     float ko;
     if (P63.y > 0.0) {
@@ -171,7 +183,7 @@ void main(
     int tipo = (int)(Q4.y + 0.5);
     // banda del atlas por parcela: corto = manojo 0 (y 1 en una de cada 4), medio = 1 / 3, largo = 2 (y 1 en una de cada 4)
     float2 porg = pesIsExt ? pesExtOrg : float2(cb5[4].w, cb5[6].w);
-    float ph = PESGh21(porg * 0.37 + 0.11);
+    float ph = PESGh21(porg * 0.37 + 0.11 + ((pesIsExt && pesCard >= 0) ? float2((float)pesCard * 0.0618, 0.0) : float2(0.0, 0.0)));   // (26/10 d) banda por hoja en las celdas del mod (antes una por celda: damero de 0.5 / 1 / 2 m)
     pesBand = tipo == 0 ? (ph < 0.75 ? 0.0 : 1.0) : (tipo == 2 ? (ph < 0.75 ? 2.0 : 1.0) : (ph < 0.5 ? 1.0 : 3.0));
     float hT = tipo == 0 ? 0.9 : (tipo == 2 ? 1.45 : 1.0);   // (el manojo corto ya ocupa menos tarjeta)
     float hv = tipo == 0 ? 0.10 : (tipo == 2 ? 0.35 : 0.20);
@@ -199,7 +211,10 @@ void main(
         float2 q = pesRoot - wd * tw * 3.0;
         float g = PESGnoise(q * 0.08) * 0.6 + PESGnoise(float2(dot(q, wd) * 0.30, dot(q, wc) * 0.07) + 5.1) * 0.4;
         float gust = smoothstep(0.30, 0.85, g);
-        float hb = PESGh21(floor(pesRoot * 40.0) * 0.173 + 0.31);          // fase por manojo
+        // fase por manojo. (26/10 d) en las hojas del mod, por TARJETA (todos sus vertices con la misma fase: antes la celda de 2.5 cm
+        // partia el 80% de las hojas y la punta, el medio y los bordes aleteaban cada uno por su lado); en las del juego, celdas de 10 cm
+        float hb = (pesIsExt && pesCard >= 0) ? PESGh21(float2((float)pesCard * 0.0137 + pesExtOrg.x * 0.71, pesExtOrg.y * 0.53 + (float)pesCard * 0.0071 + (float)pesRot * 0.37) + 0.31)
+                                              : PESGh21(floor(pesRoot * 10.0) * 0.173 + 0.31);
         float fl = sin(tw * (7.0 + 5.0 * hb) + hb * 6.2832);
         float sw = sin(tw * (1.6 + 0.8 * hb) + hb * 3.1 + dot(pesRoot, wd) * 0.9);
         float W = saturate(Q8.y);
@@ -236,7 +251,7 @@ void main(
   r1.x = dot(v0, cb5[4]);
   r1.z = dot(v0, cb5[6]);
   if (pesIsExt) r1.xyz = pesExtW;
-  float pesHref = 0.06 * max(pesH, 0.2);
+  float pesHref = 0.06 * max(pesH, 0.2) * (pesIsExt ? pesTallE : 1.0);   // (26/10 d) la curva llega hasta la punta de la hoja alta (antes el tramo de arriba solo se trasladaba)
   if (pesV5) {
     // (20/10) pasto v5: la hoja se dobla en curva (la raiz queda firme, la punta se dobla mas: desplazamiento ~ t^2) en vez
     // de inclinarse recta como una tarjeta; la punta llega al mismo lugar que antes
@@ -284,7 +299,7 @@ void main(
   r6.y = r0.y - 0.06;
   if (pesIsExt) {
     // parcelas extendidas: sin mascara de desgaste ni hundimiento (lejos no se ven); altura = la de la hoja, tope 6 cm x alto
-    r6.y = min(v0.y, 0.06 * max(pesExt.z, 0.1));
+    r6.y = min(v0.y, 0.06 * pesTallE);
   } else if (pesFarK > 0.0) {
     r6.y = lerp(r6.y, min(v0.y, 0.06 * max(FA2.x, 0.1)), pesFarK);
   }
@@ -304,7 +319,8 @@ void main(
     float wid = pesIsExt ? pesExt.w * max(cb5[10].z, 0.0) * pesExtScale : 0.012 * max(FAR.x, 1.0) * max(FA2.y, 0.0) * pesFarK;
     // (25/10 c) ancho minimo en pixeles (cb5[10].x): una hoja de menos de ~1.4 px titila al mover la camara
     if (pesIsExt && cb5[10].x > 0.0 && pesPx > 1.0) wid = max(wid, cb5[10].x / pesPx);
-    r6.xyz += camRight * ((v1.x - 0.5) * wid);
+    // (26/10 d) el ensanche se afina hacia la punta como la malla (antes era constante y anulaba el afinado: cintas)
+    r6.xyz += camRight * ((v1.x - 0.5) * wid * (pesIsExt ? (1.0 - 0.3 * saturate((0.995 - v1.y) / 0.985)) : 1.0));
   }
   // --- proyeccion ---
   r8.x = dot(r6, cb2[8]);
@@ -340,6 +356,7 @@ void main(
   r8 = g_tex_planarShadow.SampleLevel(g_samplerLinear_Clamp_s, r0.yz, 0);
   r0.y = dot(r8, float4(1, 1, 1, 1));
   o1.z = saturate(1.0 - r0.y);
+  if (pesIsExt && cb5[9].w < 0.5) o1.z = 1.0;   // (26/10 d) estado guardado viejo (camara sin pasto del juego): la sombra plana seria de otro momento
   o1.xy = v1.xy;
   r0.yz = r2.xy * float2(32.0, 24.0);
   r2 = g_tex_grain.SampleLevel(g_samplerLinear_Clamp_s, r2.xy, 0);
@@ -411,6 +428,9 @@ void main(
   r5.xyz = -r4.xyw + r5.xyz;
   r4.xyw = r1.www * r5.xyz + r4.xyw;
   o4.w = r4.z + r1.w;
+  // (26/10 d) pixeles por metro de este vertice (+ hojas del mod, - las del juego): el PS funde la oclusion del atlas con esto en vez
+  // de las derivadas del uv (saltaban en los limites de nivel: bandas de brillo que se movian con la camara). El PS no leia o4.w.
+  o4.w = (pesIsExt ? 1.0 : -1.0) * abs(cb2[5].y) * P63.z / max(r9.w, 0.05);
   // --- grano, vista y tabla de pendiente (franjas) ---
   r0.w = dot(r2.xyz, r2.xyz);
   r0.w = rsqrt(r0.w);
@@ -550,7 +570,8 @@ void main(
     // se ven como olas de brillo que recorren las hojas (las que se doblan hacia el sol se aclaran), igual que en un cesped real
     float2 sl = 2.0 * pesBend / max(r6.y + 0.004, 0.006);
     float ls = length(sl); if (ls > 1.5) sl *= 1.5 / ls;
-    float kN = 0.55 + clamp(Q39.y, 0.0, 2.0) * 0.5 * pesGust;
+    // (26/10 d) lejos (niveles 1 / 2 del mod, < 110 px/m) el viento no se ve como movimiento (< 1 px): se refuerza la ola de brillo
+    float kN = (0.55 + clamp(Q39.y, 0.0, 2.0) * 0.5 * pesGust) * (pesIsExt ? lerp(1.8, 1.0, saturate(pesPx / 110.0)) : 1.0);
     r0.xzw = normalize(r0.xzw + float3(sl.x, 0.0, sl.y) * kN);
   }
   o4.x = dot(r0.xzw, cb2[8].xyz);

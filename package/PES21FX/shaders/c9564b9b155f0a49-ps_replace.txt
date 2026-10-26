@@ -74,6 +74,14 @@ Texture2D<float4> StereoParams : register(t125);
 
 
 float bh21(float2 p) { p = frac(p * float2(123.34, 456.21)); p += dot(p, p + 45.32); return frac(p.x * p.y); }
+// PES21 (26/10 d, como en 5e92): valor "y" de la tabla de pendiente del juego para un grano g (vector de la hoja peinada) y la
+// direccion de vista mezclada r4: es lo que hace que una franja se vea clara o oscura segun desde donde la miras.
+float PESStripeST(float3 g, float3 r4) {
+  float3 t = float3(g.x * g.y, -(g.z * g.z + g.x * g.x), g.z * g.y);
+  t *= rsqrt(max(dot(t, t), 1e-8));
+  float2 uv = float2(dot(r4, g), dot(r4, t)) * 0.5 + 0.5;
+  return g_tex_turfSlopTable.SampleLevel(g_samplerLinear_Clamp_s, uv, 0).y;
+}
 float bnoise(float2 p) { float2 i = floor(p), f = frac(p); f = f * f * (3 - 2 * f);
   return lerp(lerp(bh21(i), bh21(i + float2(1,0)), f.x), lerp(bh21(i + float2(0,1)), bh21(i + 1), f.x), f.y); }
 void main(
@@ -112,11 +120,12 @@ void main(
   r1.x = dot(r0.xyz, r0.xyz);
   r1.x = rsqrt(r1.x);
   r0.xyz = r1.xxx * r0.xyz;
+  float3 pesGrain = r0.xyz;   // PES21: grano (direccion en que esta peinado el pasto, cambia por franja)
   float2 pesWearB = float2(0.0, 0.0);   // PES21 pasto v3: (seco, pelado) de este pixel, se calcula una vez
   { // PES21 pasto v3: patron de corte sintetizado (franjas, damero, diagonal, rombos, circulos) en vez del grano del juego
     float4 Q4g = IniParams.Load(int2(104,0)), Q5g = IniParams.Load(int2(105,0));
     if (Q4g.x > 0.5) { float4 Q7g = IniParams.Load(int2(107,0)); float lv = PESWearMap.Sample(g_samplerLinear_Clamp_s, v1.xy).x; pesWearB = PESWear(PESPitchMeters(v1.xy), v8.xz, Q4g.w, Q7g.x, Q7g.z, lv); }
-    if (Q4g.x > 0.5 && Q5g.x > 0.5) r0.xyz = PESMowGrain(PESPitchMeters(v1.xy), r0.xyz, Q5g.x, Q5g.y, 0.55 * clamp(Q5g.z, 0.2, 3.0));
+    if (Q4g.x > 0.5 && Q5g.x > 0.5) { r0.xyz = PESMowGrain(PESPitchMeters(v1.xy), r0.xyz, Q5g.x, Q5g.y, 0.55 * clamp(Q5g.z, 0.2, 3.0)); pesGrain = r0.xyz; }
   }
   r1.xyz = float3(0,0,1) * r0.xyz;
   r1.xyz = r0.zxy * float3(0,1,0) + -r1.xyz;
@@ -145,6 +154,15 @@ void main(
   r0.yz = g_tex_turfSlopTable.Sample(g_samplerLinear_Clamp_s, r0.yz).xz;
   r1.xy = r5.xy * float2(0.5,0.5) + float2(0.5,0.5);
   r1.x = g_tex_turfSlopTable.Sample(g_samplerLinear_Clamp_s, r1.xy).y;
+  // === PES21 franjas de corte (26/10 d, como en 5e92): se amplifica la diferencia entre esta franja y la vecina (grano opuesto).
+  // Esta variante de la base no lo tenia y las hojas si: el contraste de las franjas cambiaba entre hojas y suelo. x57 fuerza, w57 on/off
+  {
+    float4 ST = IniParams.Load(int2(57,0));
+    if (ST.w > 0.5 && ST.x > 0) {
+      float stMirror = PESStripeST(float3(-pesGrain.x, pesGrain.y, -pesGrain.z), r4.xyz);
+      r1.x = saturate(r1.x + (r1.x - stMirror) * 0.5 * ST.x);
+    }
+  }
   r1.y = g_psMaterial.m_materials[1].x * r0.x;
   r0.x = g_psMaterial.m_materials[0].y * r0.x;
   r0.x = exp2(r0.x);

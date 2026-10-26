@@ -15,11 +15,16 @@ cbuffer PESGrassCull : register(b0) {
   float4 gP2;       // x celdas a lo ancho | y margen del fundido (fraccion) | z semi largo de la grilla (m) | w semi ancho (m)
   float4 gP3;       // x ancho de la hoja (m) | y ancho minimo (px) | z C base | w indices por tarjeta
   float4 gP4;       // x tarjetas de la malla | y subniveles | z alto de la hoja (m) | w tope de capas de hojas por pixel
-  float4 gPad[5];
+  float4 gPad[5];   // [0]: x piso de capas por pixel de suelo (nivel 0) | y, z rampa en px/m | w alto cerca / alto
+                    // [1]: x margen del fundido en pHi | y, z, w indices por tarjeta de los niveles 0 / 1 / 2
 }
 RWStructuredBuffer<float4> Inst : register(u0);
-RWByteAddressBuffer Count : register(u1);   // 18 contadores (uint), uno por ranura
+RWByteAddressBuffer Count : register(u1);   // 18 contadores (uint), uno por ranura; [18] = 1 si esta emision se quedo con el cuadro
 RWByteAddressBuffer Args : register(u2);    // 18 x 5 uints: indices, instancias, primer indice, vertice base, primera instancia
+// (26/10 d) reclamo del cuadro: [0] emisiones ejecutadas desde el ultimo Present (la DLL lo pone en cero en el contexto inmediato en
+// cada Present), [1..18] instancias por ranura de la emision que dibujo, [19] _m11 de su camara, [20..22] ojo. Solo la PRIMERA emision
+// que la GPU ejecuta en el cuadro dibuja; las demas (grabadas en otra lista para el mismo cuadro) salen con 0 instancias.
+RWByteAddressBuffer Claim : register(u3);
 
 [numthreads(8, 8, 1)]
 void main(uint3 id : SV_DispatchThreadID)
@@ -27,21 +32,35 @@ void main(uint3 id : SV_DispatchThreadID)
   int lvl = (int)(gP0.x + 0.5);
   uint nb = (uint)(gP4.y + 0.5);
   uint cardsMax = (uint)(gP4.x + 0.5);
+  if (lvl == 4) {
+    // pasada 0 (una hebra): reclamar el cuadro
+    if (id.x == 0 && id.y == 0) { uint prev; Claim.InterlockedAdd(0, 1u, prev); Count.Store(72, prev == 0u ? 1u : 0u); }
+    return;
+  }
+  bool active = Count.Load(72) != 0u;
   if (lvl >= 3) {
     // argumentos del dibujo indirecto: una hebra por ranura, instancias = min(contador, tope), indices = tarjetas del subnivel
     uint s = id.x + id.y * 8;
     if (s < 3 * nb) {
       uint b = s % nb;
-      uint n = min(Count.Load(s * 4), (uint)(gP1.y + 0.5));
+      uint lv = s / nb;
+      float ipc = lv == 0u ? gPad[1].y : (lv == 1u ? gPad[1].z : gPad[1].w);
+      if (ipc < 1.0) ipc = gP3.w;
+      uint n = active ? min(Count.Load(s * 4), (uint)(gP1.y + 0.5)) : 0u;
       uint o = s * 20;
-      Args.Store(o, (cardsMax >> b) * (uint)(gP3.w + 0.5));
+      Args.Store(o, (cardsMax >> b) * (uint)(ipc + 0.5));
       Args.Store(o + 4, n);
       Args.Store(o + 8, 0u);
       Args.Store(o + 12, 0u);
       Args.Store(o + 16, 0u);
+      if (active) {
+        Claim.Store(4 + s * 4, n);
+        if (s == 0u) { Claim.Store(76, asuint(cb2[5].y)); Claim.Store(80, asuint(cb2[20].x)); Claim.Store(84, asuint(cb2[20].y)); Claim.Store(88, asuint(cb2[20].z)); }
+      }
     }
     return;
   }
+  if (!active) return;
   if (id.x >= (uint)(gP1.w + 0.5) || id.y >= (uint)(gP2.x + 0.5)) return;
   float cell = gP0.y;
   float x = -gP2.z + ((float)id.x + 0.5) * cell, z = -gP2.w + ((float)id.y + 0.5) * cell;
@@ -53,11 +72,11 @@ void main(uint3 id : SV_DispatchThreadID)
   float w = max(cc.w, 0.05);
   // tamano en pantalla: pixeles por metro en el centro de la celda (el VS funde con el mismo criterio)
   float p = abs(cb2[5].y) * gP1.x / w;
-  float m = gP2.y;
+  float m = gP2.y, mH = gPad[1].x > 0.0 ? gPad[1].x : m;   // (26/10 d) margen propio en pHi (nivel 0: 0.12 contra el pasto del juego)
   if (p < gP0.z * (1.0 - m)) return;
-  if (gP0.w > 0.0 && p >= gP0.w * (1.0 + m)) return;
+  if (gP0.w > 0.0 && p >= gP0.w * (1.0 + mH)) return;
   // fundido entre niveles por cantidad: el nivel saliente queda con lim * k y el entrante con lim * (1 - k) (suman 1)
-  float kf = (gP0.z > 0.0 ? smoothstep(gP0.z * (1.0 - m), gP0.z * (1.0 + m), p) : 1.0) * (gP0.w > 0.0 ? 1.0 - smoothstep(gP0.w * (1.0 - m), gP0.w * (1.0 + m), p) : 1.0);
+  float kf = (gP0.z > 0.0 ? smoothstep(gP0.z * (1.0 - m), gP0.z * (1.0 + m), p) : 1.0) * (gP0.w > 0.0 ? 1.0 - smoothstep(gP0.w * (1.0 - mH), gP0.w * (1.0 + mH), p) : 1.0);
   if (kf < 0.002) return;
   // descarte por pantalla con margen del tamano de la celda (como el VS)
   float px = (abs(cb2[4].x) + abs(cb2[4].z)) * rad, py = (abs(cb2[5].y) + abs(cb2[5].z)) * rad;
@@ -73,14 +92,25 @@ void main(uint3 id : SV_DispatchThreadID)
     float3 eye = cb2[20].xyz;
     float dist = max(length(float3(x, 0.0, z) - eye), 0.5);
     float sinE = clamp(abs(eye.y) / dist, 0.03, 1.0);
-    float hpx = max(gP4.z * pc, 1.0);
+    // (26/10 d) alto de la hoja cerca de la camara (el VS funde de x59 al alto cercano entre 110 y 250 px/m, igual que aca)
+    float hM = gP4.z * (gPad[0].w > 0.0 ? lerp(1.0, gPad[0].w, smoothstep(110.0, 250.0, pc)) : 1.0);
+    float hpx = max(hM * pc, 1.0);
     float band = (cell * pc) * (cell * pc * sinE + hpx);
-    cards = min(cards, gP4.w * band / (wpx * hpx));
+    float capB = gP4.w * band;
+    // (26/10 d) piso de capas por pixel de SUELO (nivel 0, rampa de gPad[0].y a .z px/m): el tope por banda solo dejaba 6 capas
+    // sobre la banda, 3-15x menos hojas por m2 que el pasto denso del juego que habia antes en esa zona
+    float Dn = gPad[0].x * smoothstep(gPad[0].y, gPad[0].z, pc);
+    float capF = Dn * (cell * pc) * (cell * pc) * sinE;
+    cards = min(cards, max(capB, capF) / (wpx * hpx));
   }
   cards = clamp(cards * kf, 0.0, (float)cardsMax);
   if (cards < 0.5) return;
-  uint lim = (uint)ceil(cards - 0.0001);           // la ultima tarjeta sale a la altura de la parte fraccionaria (sin saltos al mover la camara)
-  float fr = saturate(cards - (float)(lim - 1u));
+  // (26/10 d) fundido por ventana en el VS (las ultimas 20% de las tarjetas bajan de altura de forma escalonada): la cuenta
+  // visible media queda igual a 'cards' (antes solo la ultima tarjeta era fraccionaria: al mover la camara aparecian y
+  // desaparecian hojas enteras)
+  float Nv = min((cards * 0.2 >= 1.0) ? cards / 0.9 : cards + 0.5, (float)cardsMax);
+  uint lim = (uint)ceil(Nv - 0.0001);
+  float fr = saturate(Nv - (float)(lim - 1u));
   uint b = (uint)clamp((int)floor(log2((float)cardsMax / (float)lim)), 0, (int)nb - 1);   // la ranura mas chica con >= tarjetas
   uint slot = (uint)(gP1.z + 0.5) + b;
   uint idx;
