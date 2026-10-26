@@ -11,8 +11,9 @@
 //   fila 3 / 4: contacto entre dedos: desplazamiento / normal, con el cierre minimo de z y w
 //   fila 5: venas del dorso: xyz cambio de normal, w relieve (m), con el cierre medio de los 4 dedos
 //   fila 6, columnas 0..4: por dedo: indices de paleta (metacarpo, falange proximal, falange media) y suma de angulos del puno
-// Parametros: x200 prendido | y200 cuaterniones duales (0..1) | z200 nudillos del puno | w200 dedos que se apoyan
-//             x201 venas al cerrar | y201 ver: 0 normal, 1 color por cierre (diagnostico, solo pasada principal)
+// Parametros: x300 prendido | y300 cuaterniones duales (0..1) | z300 nudillos del puno | w300 dedos que se apoyan
+//             x301 venas al cerrar | y301 ver: 0 normal, 1 color por cierre (diagnostico, solo pasada principal)
+//             (26/10: eran las filas 200 / 201, que la tabla de tonos de piel por jugador pisa en cada cuadro)
 
 Texture2D<float4> g_handData : register(t126);
 
@@ -70,13 +71,13 @@ void PesSkinBoth(bool cur, float3 p, float3 n, float3 t, uint4 bi, float4 bw, fl
 // true = era un vertice de la mano y ya quedo deformado (posicion / normal / tangente actuales y posicion del cuadro anterior)
 bool PesHandSkin(uint vid, float3 p, float3 n, float3 t, uint4 bi, float4 bw, out float3 op, out float3 on, out float3 ot, out float3 opp, out float dbg) {
     op = p; on = n; ot = t; opp = p; dbg = 0;
-    float4 P0 = IniParams.Load(int2(200, 0));
+    float4 P0 = IniParams.Load(int2(300, 0));
     if (P0.x < 0.5) return false;
     uint w, h; g_handData.GetDimensions(w, h);
     if (h < 8 || vid >= w) return false;
     float4 h0 = g_handData.Load(int3(vid, 0, 0));
     if (h0.x < 0.5) return false;
-    float4 P1 = IniParams.Load(int2(201, 0));
+    float4 P1 = IniParams.Load(int2(301, 0));
     int fa = (int)round(h0.z), fb = (int)round(h0.w);
     float ca = PesFingerCurl(fa), cb = PesFingerCurl(fb);
     float cv = 0;
