@@ -24,6 +24,8 @@ extern void* g_overlayOldProc;
 
 // ---------------------------------------------------------------- parametros (lo que en 3DMigoto era IniParams)
 constexpr int kParamCount = 320;           // float4 x 320 -> t120 en los shaders (IniParams.Load(int2(i,0))). (20/10: era 128 y los parametros 128+ se perdian; 25/10: 256 -> 320, la ropa contra el cuerpo usa 256 / 257)
+// (26/10) filas de t120 ocupadas por tablas que escribe la DLL en cada cuadro (no usarlas para el ini): 194..254 tonos de piel por
+// jugador (skintone.cpp), 257 cuadro de la ropa contra el cuerpo (cuerpo.cpp). 300..302 son de las manos (manos.cpp + pes_hands.hlsli).
 
 struct Assign { int idx; int comp; std::vector<float> values; std::string var; };
 struct KeyBind {
