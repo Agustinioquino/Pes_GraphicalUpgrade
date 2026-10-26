@@ -62,6 +62,7 @@ Texture2D<float4> pesVarAtl    : register(t17);   //         normal delta del at
 Texture2D<float4> pesVarStr    : register(t18);   //         estrias del robusto (mascara de color, BC4)
 Texture2D<float4> pesSpine     : register(t19);
 Texture2D<float4> pesBaseFix   : register(t20);   // (26/10 b) base esculpida: correccion del normal map del torso (BC5 SNORM, v 0..0.5)
+Texture2D<float4> pesPelvisAlb : register(t23);   // (26/10 c) pelvis sin short: albedo propio (x 2 v; la DLL la enlaza solo en ese dibujo)
 Texture2D<float4> pesSkinA     : register(t21);   // (26/10 b) piel del torso por zona: brillo, rugosidad (BC5, v 0..0.5)
 Texture2D<float4> pesSkinB     : register(t24);   //           translucidez, rubor   // (26/10) columna marcada de todos los torsos de TorsoBody (normal delta BC5 SNORM, v 0..0.5)
 
@@ -167,6 +168,11 @@ void main(
   // (base, definicion, mapas de las variantes y venas estan todos en la convencion de la textura)
   uint tbW = 0, tbH = 0; g_tex_normal.GetDimensions(tbW, tbH);
   bool tbFlip = vrBody && tbW >= 4096 && IniParams.Load(int2(286,0)).x > 0.5;
+  // (26/10 c) pelvis "sin short" (SinCamiseta, tecla 4): la DLL enlaza t23 solo en ese dibujo; sus texturas (t20, t21, t23, t24)
+  // cubren el cuadrante libre de abajo a la derecha de la textura del torso (u, v 0.5..1), reescalado a 0..1
+  uint paW = 0, paH = 0; pesPelvisAlb.GetDimensions(paW, paH);
+  bool pel = vrBody && paW > 0;
+  float2 pelUV = saturate((v2.xy - 0.5) * 2.0);
   float4 P293 = IniParams.Load(int2(293,0));
   if (vrBody && tbW >= 4096 && vrTm < 0.5 && P293.w > 0.5) {
     // (26/10 b) union del brazo con el torso (w293): el normal map del torso es casi liso en los 2 cm de la costura y el del
@@ -179,8 +185,8 @@ void main(
       // suave (las lineas duras al 30 %). La DLL la enlaza solo en los torsos
     uint bfW = 0, bfH = 0; pesBaseFix.GetDimensions(bfW, bfH);
     bool bfArm = bfW > 0 && bfH == bfW;   // la del brazo cubre todo su atlas; la del torso, v 0..0.5 (2:1)
-    if (vrBody && bfW > 0 && (bfArm || v2.y < 0.5) && IniParams.Load(int2(289,0)).x > 0.5) {
-      r2.xy += pesBaseFix.SampleBias(g_samplerLinear_Clamp_s, bfArm ? v2.xy : float2(v2.x, v2.y * 2.0), bBN).xy;
+    if (vrBody && bfW > 0 && (pel || ((bfArm || v2.y < 0.5) && IniParams.Load(int2(289,0)).x > 0.5))) {
+      r2.xy += pesBaseFix.SampleBias(g_samplerLinear_Clamp_s, pel ? pelUV : (bfArm ? v2.xy : float2(v2.x, v2.y * 2.0)), bBN).xy;
       float l2 = dot(r2.xy, r2.xy); if (l2 > 0.94) r2.xy *= rsqrt(l2 / 0.94);
     }
   }
@@ -292,8 +298,8 @@ void main(
     float4 skA = float4(0.85, 0.45, 0.30, 0.5);   // brillo, rugosidad, translucidez, rubor (= torso_skin.DEF)
     uint saW = 0, saH = 0; pesSkinA.GetDimensions(saW, saH);
     bool saArm = saW > 0 && saH == saW;   // (26/10 c) la de los brazos cubre todo su atlas; la del torso, v 0..0.5 (2:1)
-    if (saW > 0 && (saArm || v2.y < 0.5)) {
-      float2 suv = saArm ? v2.xy : float2(v2.x, v2.y * 2.0);
+    if (saW > 0 && (pel || saArm || v2.y < 0.5)) {
+      float2 suv = pel ? pelUV : (saArm ? v2.xy : float2(v2.x, v2.y * 2.0));
       skA.xy = pesSkinA.SampleBias(g_samplerLinear_Clamp_s, suv, bBD).xy;
       skA.zw = pesSkinB.SampleBias(g_samplerLinear_Clamp_s, suv, bBD).xy;
     }
@@ -320,6 +326,7 @@ void main(
   r1.w = min(0.930000007, r1.w);
   r2.yzw = g_tex_diffuse.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBD).xyz;
   if (abs(skRed) > 0.001) r2.yzw *= 1.0 + skRed * float3(0.10, -0.03, -0.05);   // (26/10 b) rubor de la piel real
+  if (pel) r2.yzw *= pesPelvisAlb.SampleBias(g_samplerLinear_Clamp_s, pelUV, bBD).x * 2.0;   // (26/10 c) tono y manchas de la pelvis
   {   // (26/10, v12.6) unas de los jugadores con textura de brazo propia (caras reales: arm_bsm.ftex de la cara, el atlas de
       // Konami a 2048 con las unas pintadas para la mano de Konami). Solo en la mano de TorsoBody (VS 1c02a92a: v3.w en [2, 3];
       // posicion de reposo en w2.zw, las manos estan a mas de 55 cm del centro; uv de las manos) y solo si la textura no es la de

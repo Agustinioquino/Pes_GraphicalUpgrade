@@ -889,6 +889,8 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
             ID3D11ShaderResourceView* sk[2] = {};
             if (SkinTexturesFor(vs->hash, t_drawVerts, sk)) { Remember(c, d, true, true, 21); Remember(c, d, true, true, 24); c->PSSetShaderResources(21, 1, &sk[0]); c->PSSetShaderResources(24, 1, &sk[1]); }
         }
+        // (26/10 c) pelvis sin short (SinCamiseta, tecla 4): albedo propio en t23 (su presencia le dice al PS que es la pelvis)
+        if (ID3D11ShaderResourceView* pa = PelvisAlbedoFor(vs->hash, t_drawVerts)) { Remember(c, d, true, true, 23); c->PSSetShaderResources(23, 1, &pa); }
     }
     // 19/10: la boca (63fab7) hereda el b11 (tipo de pelo + semilla de la cara) de la ultima cara dibujada en este contexto:
     // variacion de dientes/encias por jugador

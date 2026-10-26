@@ -329,3 +329,25 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
   normal / tangente aparte. Cache _v19 (las caras ya cortadas con 1.8 se vuelven a cortar). Prueba sin el juego:
   tools/torsobody (fengari en node: OJO enteros de 32 bits en fengari, u32 tiene que ir en flotante; math.atan2 / frexp /
   collectgarbage de Lua 5.1 hay que ponerlos).
+- (26/10 c) SIN SHORT (SinCamiseta 1.1, tecla 4; tools/sincamiseta/): sirve copias de pants_out_sub / pants_in_sub /
+  pants_out_inner_sub / pants_out_sub_tight.fmdl desde Dream Patch Sider\content\sin-camiseta\sin_short\ (el juego guarda
+  los modelos: salir y volver a entrar al jugador). Las arma tools/fox/pelvis/make_pelvis.py con los archivos de TorsoBody (NO
+  van al repo: tienen el torso de TorsoBody). En cada copia la malla 0 (el short, material uni_pants) pasa a ser la PELVIS:
+  - Topologia propia (pelvis_mesh.py): 7 filas del cuerpo (92 = el borde de abajo del torso EXACTO, 82, 74, 68, 64, 62, 60 a
+    y 0.876), la ultima partida en dos mitades (F adelante y B atras en x = 0) + un puente de 4 vertices por debajo de la
+    entrepierna (y 0.797) = el primer anillo de cada pierna; 2 anillos mas por pierna (por largo de arco) y el borde de arriba
+    del muslo (thigh_short, 29 + 29, EXACTO). 692 vertices, 1236 triangulos (entran 790 / 1244; pants_in 804 / 1258): lo que
+    sobra son vertices copia y triangulos vacios. Giro como TorsoBody: cross(P1 - P0, P2 - P0) hacia adentro.
+  - Forma: radio por angulo alrededor de (x 0, z 0.058): superelipse (n 2.6) que se abre hacia la cadera (0.150 -> 0.184),
+    frente liso tipo Ken (sin nada), gluteos (2 masas de 3 cm a th +-150, y 0.902) con la raya del medio, trocanter, ingle
+    apenas. Arriba sigue la pendiente del torso (se mezcla en 3/4 del alto). Normales de los bordes = las de los anillos.
+  - Pesos: el borde de arriba copia los del torso, el de abajo los del muslo (sk_thigh 65 %, dsk_thighmain 30 %, dsk_hip,
+    dsk_thigh); en el medio se mezclan por altura. Los huesos del muslo no estaban en el archivo: los 6 que usaba solo el short
+    se renombran en el lugar (pelvis_fmdl.RENAMES: dsk_hem_ba -> sk_thigh, dsk_hem_o_fake -> dsk_thighmain, dsk_hem_i ->
+    dsk_thigh; la cadena se reescribe mas corta, la entrada copia padre / posiciones de thigh_short y su caja = los vertices).
+  - Material = torso_mat (el tono de piel del jugador viene solo), alfa 0. UV en el cuadrante libre de abajo a la derecha de la
+    textura del torso (u, v 0.5..1: piel pareja en torso_N_bsm, normal / srm / trm planos). Texturas propias (PS de la piel,
+    reescaladas desde ese cuadrante): pes_var_pelvis_n (t20, poros), pes_var_pelvis_skin_a/b (t21 / t24, zonas) y
+    pes_var_pelvis_alb (t23: tono +3.6 % como el borde del torso, manchas suaves, pliegues mas oscuros). manos.cpp PelvisDraw:
+    VS de la piel + 3732 o 3774 indices (el short usa otro shader); la presencia de t23 le dice al PS que es la pelvis.
+  - Vista previa: tools/fox/pelvis/pelvis_preview.py (arcilla con PNM_CLAY=1, o leyendo el .fmdl escrito).

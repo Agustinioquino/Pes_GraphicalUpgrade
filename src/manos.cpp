@@ -115,7 +115,22 @@ ID3D11ShaderResourceView* VariantDataFor(uint64_t vsHash, UINT indexCount, bool*
 }
 // (26/10 b) base esculpida (x289): la textura que corrige el normal map de TorsoBody (espalda suave; el volumen que ya muestra la
 // malla sale de la textura) en t20 del PS de la piel, en todos los torsos
+// (26/10 c) pelvis "sin short" (SinCamiseta, tecla 4): la malla 0 de pants_*_sub.fmdl pasa a ser piel (material del torso) con
+// 3732 indices (pants_out_sub / inner / tight) o 3774 (pants_in_sub). Con el VS de la piel solo puede ser la pelvis (el short usa
+// otro shader). Sus texturas propias cubren el cuadrante libre de abajo a la derecha de la del torso (el PS lo reescala a 0..1):
+// detalle del normal map (t20), piel por zona (t21 / t24) y albedo (t23: su presencia le dice al PS que es la pelvis).
+static bool PelvisDraw(uint64_t vsHash, UINT indexCount) {
+    return vsHash == 0x1c02a92ab4ae3362ULL && (indexCount == 3732 || indexCount == 3774);
+}
+ID3D11ShaderResourceView* PelvisAlbedoFor(uint64_t vsHash, UINT indexCount) {
+    if (!PelvisDraw(vsHash, indexCount)) return nullptr;
+    ID3D11ShaderResourceView* v = FileTextureAny("file:textures\\pes_var_pelvis_alb.dds");
+    static std::atomic<bool> s_noted{false};
+    if (!s_noted.exchange(true)) Log("pelvis sin short: dibujo de la pelvis (%u indices), texturas %s", indexCount, v ? "cargadas (t20 / t21 / t23 / t24)" : "NO CARGADAS (faltan las pes_var_pelvis_*.dds)");
+    return v;
+}
 ID3D11ShaderResourceView* BaseTextureFor(uint64_t vsHash, UINT indexCount) {
+    if (PelvisDraw(vsHash, indexCount)) return FileTextureAny("file:textures\\pes_var_pelvis_n.dds");
     if (vsHash != 0x1c02a92ab4ae3362ULL || g_cfg.live[289][0] <= 0.5f) return nullptr;
     const VarEntry* e = nullptr;
     for (const VarEntry& k : kVars) if (k.idx == indexCount) { e = &k; break; }
@@ -132,6 +147,11 @@ ID3D11ShaderResourceView* BaseTextureFor(uint64_t vsHash, UINT indexCount) {
 bool SkinTexturesFor(uint64_t vsHash, UINT indexCount, ID3D11ShaderResourceView* out[2]) {
     out[0] = out[1] = nullptr;
     if (vsHash != 0x1c02a92ab4ae3362ULL || g_cfg.live[293][0] <= 0.5f) return false;
+    if (PelvisDraw(vsHash, indexCount)) {   // (26/10 c) la pelvis sin short
+        out[0] = FileTextureAny("file:textures\\pes_var_pelvis_skin_a.dds");
+        out[1] = FileTextureAny("file:textures\\pes_var_pelvis_skin_b.dds");
+        return out[0] && out[1];
+    }
     const VarEntry* e = nullptr;
     for (const VarEntry& k : kVars) if (k.idx == indexCount) { e = &k; break; }
     if (!e) return false;
