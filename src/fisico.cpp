@@ -95,36 +95,54 @@ typedef void (__fastcall* UiSetColorFn)(void* comp, const unsigned char rgba[4])
 static bool s_ok = false, s_tried = false;
 static std::atomic<int> s_sliderMode{-1};   // -1 sin probar, 1 barras, 0 selectores (la fila no tiene barra)
 
-// ---------------------------------------------------------------- filas de musculatura (pagina 1 y 2)
+// ---------------------------------------------------------------- filas de musculatura (26/10: paginas 1..4 por zona del cuerpo)
+// idx = -1: "Tipo de cuerpo" (selector: pone todos los sliders del jugador de un tipo; ver MusclePresetApply)
 struct MRow { const char* label; int idx, comp; };
-static const MRow kPage1[] = {   // torso y brazos (16 + salto a la pagina 2)
-    { "General", 167, 0 }, { "Hombros", 164, 1 }, { "Ancho de hombros", 171, 3 }, { "B\xC3\xAD" "ceps", 164, 2 },
-    { "Tr\xC3\xAD" "ceps", 164, 3 }, { "Antebrazos", 165, 0 }, { "Pecho", 165, 1 }, { "Pecho alto", 170, 1 },
-    { "Espalda (toda)", 165, 2 }, { "Trapecio", 167, 1 }, { "Om\xC3\xB3" "platos", 167, 2 }, { "Dorsales", 167, 3 },
-    { "Espalda baja", 168, 0 }, { "Cuello", 170, 0 }, { "Abdominales", 168, 1 }, { "Oblicuos", 168, 2 },
+static const MRow kPgArms[] = {   // hombros y brazos
+    { "Tipo de cuerpo", -1, 0 }, { "General", 167, 0 }, { "Hombros", 164, 1 }, { "Ancho de hombros", 171, 3 },
+    { "Deltoides frontal", 260, 0 }, { "Deltoides posterior", 260, 1 }, { "B\xC3\xAD" "ceps", 164, 2 }, { "Tr\xC3\xAD" "ceps", 164, 3 },
+    { "Antebrazos", 165, 0 }, { "Antebrazo alto", 260, 2 }, { "Antebrazo bajo", 260, 3 }, { "Codos", 166, 3 },
+    { "Mu\xC3\xB1" "ecas", 170, 3 }, { "Axilas", 162, 0 },
 };
-static const MRow kPage2[] = {   // cintura y piernas
-    { "Cintura", 171, 1 }, { "Panza", 168, 3 }, { "Gl\xC3\xBA" "teos", 169, 0 }, { "Caderas", 171, 2 },
-    { "Muslos (todo)", 165, 3 }, { "Cu\xC3\xA1" "driceps", 169, 1 }, { "Isquiotibiales", 169, 2 }, { "Aductores", 169, 3 },
-    { "Pantorrillas", 166, 0 }, { "Rodillas", 171, 0 },
+static const MRow kPgTorso[] = {   // pecho, espalda y cuello
+    { "Pecho", 165, 1 }, { "Pecho alto", 170, 1 }, { "Pecho bajo", 261, 0 }, { "Espalda (toda)", 165, 2 },
+    { "Trapecio", 167, 1 }, { "Trapecio alto", 261, 2 }, { "Om\xC3\xB3" "platos", 167, 2 }, { "Dorsales", 167, 3 },
+    { "Dorsales: ancho (V)", 261, 1 }, { "Costados (serratos)", 162, 1 }, { "Espalda baja", 168, 0 }, { "Lumbares", 162, 2 },
+    { "Cuello", 170, 0 }, { "Nuca", 166, 2 }, { "Base del cuello", 162, 3 },
 };
-static const MRow kPage3[] = {   // (24/10 g) detalles: cada musculo chico por separado
-    { "Axilas", 162, 0 }, { "Costados (serratos)", 162, 1 }, { "Lumbares", 162, 2 }, { "Base del cuello", 162, 3 },
-    { "Nuca", 166, 2 }, { "Codos", 166, 3 }, { "Mu\xC3\xB1" "ecas", 170, 3 },
+static const MRow kPgCore[] = {   // abdomen y cadera
+    { "Abdominales", 168, 1 }, { "Oblicuos", 168, 2 }, { "Cintura", 171, 1 }, { "Panza", 168, 3 },
+    { "Gl\xC3\xBA" "teos", 169, 0 }, { "Gl\xC3\xBA" "teo levantado", 261, 3 }, { "Caderas", 171, 2 },
 };
-static const int kN1 = (int)(sizeof kPage1 / sizeof kPage1[0]), kN2 = (int)(sizeof kPage2 / sizeof kPage2[0]), kN3 = (int)(sizeof kPage3 / sizeof kPage3[0]);
-static const int kJump0 = 13, kJump1 = kN1, kJump2 = kN2, kJump3 = kN3;   // fila del salto en la pagina 0 (Fisico), en la 1, 2 y 3
-static const int kSkinPage = 4;   // (24/10 g) la piel paso a la pagina 4 (la 3 son los detalles de la musculatura)
-static const int kLastPage = 4;   // (24/10) pagina de piel: tono (1..30, 0 = el del juego) y matiz
-static const int kSteps = 25; static const float kStep = 0.02f;   // -25..+25 -> x0.50..x1.50
+static const MRow kPgLegs[] = {   // piernas
+    { "Muslos (todo)", 165, 3 }, { "Cu\xC3\xA1" "driceps", 169, 1 }, { "Muslo exterior", 262, 0 }, { "Isquiotibiales", 169, 2 },
+    { "Aductores", 169, 3 }, { "Rodillas", 171, 0 }, { "Pantorrillas", 166, 0 }, { "Gemelos", 262, 1 },
+};
+struct MPage { const char* title; const MRow* rows; int n; const char* next; };
+#define PG(t, r, nx) { t, r, (int)(sizeof r / sizeof r[0]), nx }
+static const MPage kMP[] = {
+    PG("Musculatura: hombros y brazos", kPgArms, "Pecho, espalda y cuello  >"),
+    PG("Musculatura: pecho, espalda y cuello", kPgTorso, "Abdomen y cadera  >"),
+    PG("Musculatura: abdomen y cadera", kPgCore, "Piernas  >"),
+    PG("Musculatura: piernas", kPgLegs, "Piel  >"),
+};
+#undef PG
+static const int kNMP = (int)(sizeof kMP / sizeof kMP[0]);   // paginas de musculatura: 1..kNMP
+static_assert(sizeof kPgTorso / sizeof kPgTorso[0] <= 16 && sizeof kPgArms / sizeof kPgArms[0] <= 16, "17 filas como maximo (16 + salto)");
+static const int kJump0 = 13;   // fila del salto en la pagina 0 (Fisico)
+static const int kSkinPage = kNMP + 1;   // la piel va despues de las paginas de musculatura
+static const int kLastPage = kSkinPage;
+static const int kSteps = 25;                                 // piel: -25..+25 (los perfiles de piel guardan pasos)
+static const int kMSteps = 50; static const float kMStep = 0.01f;   // (26/10) musculatura: -50..+50 -> x0.50..x1.50 de a 0.01
+static bool IsMusPage(int page) { return page >= 1 && page <= kNMP; }
+static const MPage* PageOf(int page) { return IsMusPage(page) ? &kMP[page - 1] : nullptr; }
 static const MRow* RowOf(int page, int row) {
-    if (page == 1 && row >= 0 && row < kN1) return &kPage1[row];
-    if (page == 2 && row >= 0 && row < kN2) return &kPage2[row];
-    if (page == 3 && row >= 0 && row < kN3) return &kPage3[row];
-    return nullptr;
+    const MPage* p = PageOf(page);
+    return p && row >= 0 && row < p->n ? &p->rows[row] : nullptr;
 }
+static int JumpRow(int page) { const MPage* p = PageOf(page); return page == 0 ? kJump0 : p ? p->n : -1; }
 static const int kSkinRows = 7;   // (24/10 e) pagina de piel: color, tono conocido, luz, saturacion, matiz, cuerpo como la cara; (24/10 g) a que se aplica
-static int CountOf(int page) { return page == 1 ? kN1 + 1 : page == 2 ? kN2 + 1 : page == 3 ? kN3 + 1 : page == kSkinPage ? kSkinRows : kJump0 + 1; }
+static int CountOf(int page) { return IsMusPage(page) ? kMP[page - 1].n + 1 : page == kSkinPage ? kSkinRows : kJump0 + 1; }
 
 // estado de la pagina (el menu es uno solo a la vez; se reinicia cada vez que el juego arma las filas)
 static void* s_menu = nullptr; static int s_page = 0;
@@ -173,13 +191,13 @@ static bool G_SetRow(void* menu, unsigned state, unsigned row) {
 static void G_SetEnable(void* w) { if (!w) return; __try { ((SetEnableFn)kSetEnable)(w, 1, 1, 2); } __except (EXCEPTION_EXECUTE_HANDLER) {} }
 static void G_SetNumRows(void* menu, int n) { __try { ((SetNumRowsFn)kSetNumRows)(menu, n); } __except (EXCEPTION_EXECUTE_HANDLER) {} }
 static void G_SetCursor(void* menu, int row) { __try { ((SetCursorFn)kSetCursor)(menu, 0, row); } __except (EXCEPTION_EXECUTE_HANDLER) {} }
-static int G_SliderRange(void* sl, int v) { __try { return ((SliderRangeFn)kSliderRange)(sl, kSteps, -kSteps, v); } __except (EXCEPTION_EXECUTE_HANDLER) { return -1; } }
+static int G_SliderRange(void* sl, int v, int steps = kSteps) { __try { return ((SliderRangeFn)kSliderRange)(sl, steps, -steps, v); } __except (EXCEPTION_EXECUTE_HANDLER) { return -1; } }
 static int G_SliderGet(void* sl) { __try { return ((SliderGetFn)kSliderGet)(sl); } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; } }
-static bool G_SelFill(void* sel, int idx) {
+static bool G_SelFill(void* sel, int idx, int steps = kSteps) {
     __try {
         ((SelClearFn)kSelClear)(sel);
         char b[16];
-        for (int k = -kSteps; k <= kSteps; k++) { snprintf(b, sizeof b, "%+d", k); ((SelAddFn)kSelAdd)(sel, b); }
+        for (int k = -steps; k <= steps; k++) { snprintf(b, sizeof b, "%+d", k); ((SelAddFn)kSelAdd)(sel, b); }
         ((SelSetFn)kSelSet)(sel, (unsigned)idx);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
@@ -219,17 +237,16 @@ static void PageHints(void* menu, int page) {
 }
 // titulo con contador de paginas
 static const char* PageTitle(int page) {
-    switch (page) {
-    case 0: return "F\xC3\xADsico  (1/5)";
-    case 1: return "Musculatura: torso y brazos  (2/5)";
-    case 2: return "Musculatura: cintura y piernas  (3/5)";
-    case 3: return "Musculatura: detalles  (4/5)";
-    default: return "Piel: tono propio  (5/5)";
-    }
+    static char b[96];
+    const int tot = kLastPage + 1;
+    if (page == 0) snprintf(b, sizeof b, "F\xC3\xADsico  (1/%d)", tot);
+    else if (IsMusPage(page)) snprintf(b, sizeof b, "%s  (%d/%d)", kMP[page - 1].title, page + 1, tot);
+    else snprintf(b, sizeof b, "Piel: tono propio  (%d/%d)", tot, tot);
+    return b;
 }
 
-static int ToSteps(float f) { return std::clamp((int)lroundf((f - 1.0f) / kStep), -kSteps, kSteps); }
-static float FromSteps(int n) { return 1.0f + kStep * (float)std::clamp(n, -kSteps, kSteps); }
+static int ToSteps(float f) { return std::clamp((int)lroundf((f - 1.0f) / kMStep), -kMSteps, kMSteps); }
+static float FromSteps(int n) { return 1.0f + kMStep * (float)std::clamp(n, -kMSteps, kMSteps); }
 
 // jugador que se esta editando: EditWork (global 0x1438040a8) + 0xe0 = clave (id en los 32 bits altos)
 static void ReadEditPlayer() {
@@ -248,12 +265,27 @@ static void AddJump(void* menu, int row, const char* label) {
     G_SetEnable(w);
     SetLabel(w, label);
 }
-static void FillMusclePage(void* menu, int page) {
+static bool s_filling = false;   // (24/10 f) rellenando filas: el juego avisa "cambio de valor" al rellenar un selector y hay que ignorarlo
+static bool G_SelFillList(void* sel, const char* const* items, int n, int idx);
+// (26/10) fila "Tipo de cuerpo": "A mano" + los tipos (el que coincide con los valores del jugador queda elegido)
+static void FillPresetRow(void* menu, void* list, int row) {
+    void* w = Child(list, (unsigned)row);
+    if (!w) return;
+    static const char* items[16]; const int np = std::min(MusclePresetCount(), 15);
+    items[0] = "A mano"; for (int k = 0; k < np; k++) items[k + 1] = MusclePresetName(k);
+    G_SetRow(menu, 1, (unsigned)row); G_SetEnable(w); SetLabel(w, "Tipo de cuerpo");
+    void* sel = FindComp(w, "selector");
+    if (sel) G_SelFillList(sel, items, np + 1, MusclePresetMatch(s_editId) + 1);
+}
+static void FillMusclePage(void* menu, int page, int skipRow = -1) {
     void* list = List(menu);
-    if (!list) return;
-    const int n = page == 1 ? kN1 : page == 2 ? kN2 : kN3;
-    for (int i = 0; i < n; i++) {
-        const MRow& r = page == 1 ? kPage1[i] : page == 2 ? kPage2[i] : kPage3[i];
+    const MPage* pg = PageOf(page);
+    if (!list || !pg) return;
+    struct Guard { Guard() { s_filling = true; } ~Guard() { s_filling = false; } } guard;
+    for (int i = 0; i < pg->n; i++) {
+        if (i == skipRow) continue;
+        const MRow& r = pg->rows[i];
+        if (r.idx < 0) { FillPresetRow(menu, list, i); continue; }
         void* w = Child(list, (unsigned)i);
         if (!w) continue;
         const int v = ToSteps(MuscleProfileGet(s_editId, r.idx, r.comp));
@@ -264,24 +296,22 @@ static void FillMusclePage(void* menu, int page) {
                 G_SetRow(menu, 2, (unsigned)i);
                 G_SetEnable(w);
                 SetLabel(w, r.label);
-                done = G_SliderRange(sl, v) == 0;
+                done = G_SliderRange(sl, v, kMSteps) == 0;
             }
             if (s_sliderMode.load() < 0) {
                 s_sliderMode = done ? 1 : 0;
                 Log("fisico: las filas de musculatura usan %s", done ? "barras (c_slider)" : "selectores con numeros (la fila no tiene barra)");
             }
         }
-        if (!done) {   // selector con numeros -25..+25
+        if (!done) {   // selector con numeros -50..+50
             G_SetRow(menu, 1, (unsigned)i);
             G_SetEnable(w);
             SetLabel(w, r.label);
             void* sel = FindComp(w, "selector");
-            if (sel) G_SelFill(sel, v + kSteps);
+            if (sel) G_SelFill(sel, v + kMSteps, kMSteps);
         }
     }
-    if (page == 1) AddJump(menu, kJump1, "Cintura y piernas  >");
-    if (page == 2) AddJump(menu, kJump2, "Detalles  >");
-    if (page == 3) AddJump(menu, kJump3, "Piel  >");
+    if (skipRow < 0) AddJump(menu, pg->n, pg->next);
 }
 // ---------------------------------------------------------------- pagina 3: piel (24/10)
 // fila 0 = tono (selector: "Del juego" + 1..30; los 6 colores del juego son 3, 8, 13, 18, 23 y 28), fila 1 = matiz -10..+10
@@ -297,7 +327,6 @@ static bool G_SelFillList(void* sel, const char* const* items, int n, int idx) {
 // juego con los 30 tonos (y "crear color" para uno propio). Si la fila no tiene componente de color queda el selector de antes.
 static uint32_t s_toneRgba[kSkinTones]; static bool s_toneRgbaInit = false;   // bytes r, g, b, a (como los lee Ui_SetColor)
 static void* s_colorComp = nullptr; static uint32_t s_colorShown = 0; static bool s_colorRow = false;
-static bool s_filling = false;   // (24/10 f) rellenando filas: el juego avisa "cambio de valor" al rellenar un selector y hay que ignorarlo
 static uint32_t Rgba(unsigned char r, unsigned char g, unsigned char b) { return (uint32_t)r | ((uint32_t)g << 8) | ((uint32_t)b << 16) | 0xff000000u; }
 static uint32_t ToneRgba(int t) { unsigned char c[3]; SkinToneSwatch(t, c); return Rgba(c[0], c[1], c[2]); }
 static uint32_t ProfileRgba(int tono, uint32_t rgb) {
@@ -521,17 +550,25 @@ static void ApplyValue(int row, int steps) {
     const MRow* r = RowOf(s_page, row);
     if (!r || !s_editId) return;
     float cur = MuscleProfileGet(s_editId, r->idx, r->comp);
-    if (ToSteps(cur) == std::clamp(steps, -kSteps, kSteps)) return;   // sin cambio (p. ej. al pasar el cursor)
+    if (ToSteps(cur) == std::clamp(steps, -kMSteps, kMSteps)) return;   // sin cambio (p. ej. al pasar el cursor)
     MuscleProfileSet(s_editId, s_editName, r->idx, r->comp, FromSteps(steps));
     s_hlChanged = true;
 }
-static int ReadRowSteps(void* menu, int row) {
+static int ReadRowSteps(void* menu, int row, int steps = kSteps) {
     void* w = Child(List(menu), (unsigned)row);
     if (!w) return 0;
     if (s_sliderMode.load() == 1) { void* sl = CompOfType(w, 0x11); if (sl) return G_SliderGet(sl); }
     void* sel = FindComp(w, "selector");
-    return sel ? G_SelGet(sel) - kSteps : 0;
+    return sel ? G_SelGet(sel) - steps : 0;
 }
+// (26/10) fila "Tipo de cuerpo": indice del selector (0 = a mano, k + 1 = tipo k)
+static void ApplyPreset(void* menu, int row, int sel) {
+    if (!s_editId || sel < 1 || sel > MusclePresetCount()) return;
+    MusclePresetApply(s_editId, s_editName, sel - 1);
+    FillMusclePage(menu, s_page, row);   // las demas filas muestran los valores nuevos (la del selector queda como esta)
+    s_hlChanged = true;
+}
+static bool IsPresetRow(int row) { const MRow* r = RowOf(s_page, row); return r && r->idx < 0; }
 
 // ---------------------------------------------------------------- ganchos de la vtable de MenuEditPlBodySetting
 static bool Mine(void* menu) { return menu && menu == s_menu; }
@@ -554,16 +591,14 @@ static void* __fastcall hk_decide(void* menu, void* a2, void* a3, void* a4) {
     if (Mine(menu)) {
         int row = CursorRow(menu);
         if (s_page == 0 && row == kJump0) { GoPage(menu, 1, 0); return nullptr; }
-        if (s_page == 1 && row == kJump1) { GoPage(menu, 2, 0); return nullptr; }
-        if (s_page == 2 && row == kJump2) { GoPage(menu, 3, 0); return nullptr; }
-        if (s_page == 3 && row == kJump3) { GoPage(menu, kSkinPage, 0); return nullptr; }
+        if (IsMusPage(s_page) && row == JumpRow(s_page)) { GoPage(menu, s_page + 1, 0); return nullptr; }
         if (s_page == kSkinPage && row == 0 && s_colorRow) return o_decide(menu, a2, a3, a4);   // la paleta del juego la abre el menu base
         if (s_page > 0) return nullptr;   // decidir sobre una barra: nada
     }
     return o_decide(menu, a2, a3, a4);
 }
 static void* __fastcall hk_back(void* menu, void* a2, void* a3, void* a4) {
-    if (Mine(menu) && s_page > 0) { int p = s_page; GoPage(menu, p - 1, p == 1 ? kJump0 : p == 2 ? kJump1 : p == 3 ? kJump2 : kJump3); return nullptr; }
+    if (Mine(menu) && s_page > 0) { int p = s_page; GoPage(menu, p - 1, JumpRow(p - 1)); return nullptr; }
     return o_back(menu, a2, a3, a4);
 }
 static void* __fastcall hk_l1(void* menu, void* a2, void* a3, void* a4) {   // pagina anterior (arriba de todo)
@@ -583,8 +618,8 @@ static void* __fastcall hk_reset(void* menu, void* a2, void* a3, void* a4) {
         return nullptr;
     }
     if (Mine(menu) && s_page > 0) {   // Restablecer en una pagina de musculatura: esa pagina vuelve a +0 (como el juego)
-        const int n = s_page == 1 ? kN1 : s_page == 2 ? kN2 : kN3;
-        for (int i = 0; i < n; i++) { const MRow* r = RowOf(s_page, i); if (r && s_editId) MuscleProfileSet(s_editId, s_editName, r->idx, r->comp, 1.0f); }
+        const int n = CountOf(s_page) - 1;
+        for (int i = 0; i < n; i++) { const MRow* r = RowOf(s_page, i); if (r && r->idx >= 0 && s_editId) MuscleProfileSet(s_editId, s_editName, r->idx, r->comp, 1.0f); }
         int cur = CursorRow(menu);
         FillMusclePage(menu, s_page);
         G_SetCursor(menu, cur < 0 ? 0 : cur);
@@ -601,7 +636,12 @@ static void* __fastcall hk_val(void* menu, void* a2, void* a3, void* a4) {   // 
         else if (list == 0) { void* sel = FindComp(Child(List(menu), (unsigned)row), "selector"); if (sel) ApplySkin(row, G_SelGet(sel)); }
         return nullptr;
     }
-    if (Mine(menu) && s_page > 0) { if (list == 0) ApplyValue(row, ReadRowSteps(menu, row)); return nullptr; }
+    if (Mine(menu) && s_page > 0) {
+        if (s_filling || list != 0) return nullptr;
+        if (IsPresetRow(row)) { void* sel = FindComp(Child(List(menu), (unsigned)row), "selector"); if (sel) ApplyPreset(menu, row, G_SelGet(sel)); }
+        else ApplyValue(row, ReadRowSteps(menu, row, kMSteps));
+        return nullptr;
+    }
     if (Mine(menu) && row >= kJump0) return nullptr;
     return o_val(menu, a2, a3, a4);
 }
@@ -614,7 +654,9 @@ static void* __fastcall hk_valset(void* menu, void* a2, void* a3, void* a4) {   
         return nullptr;
     }
     if (Mine(menu) && s_page > 0) {
-        if (list == 0) ApplyValue(row, s_sliderMode.load() == 1 ? v : v - kSteps);
+        if (s_filling || list != 0) return nullptr;
+        if (IsPresetRow(row)) ApplyPreset(menu, row, v);
+        else ApplyValue(row, s_sliderMode.load() == 1 ? v : v - kMSteps);
         return nullptr;
     }
     if (Mine(menu) && row >= kJump0) return nullptr;
@@ -673,9 +715,30 @@ static HlSet HlFor(int idx, int comp) {
     case 166 * 4 + 2: mark(0.000f, 1.590f, -0.030f, 0.035f); break;                    // nuca
     case 166 * 4 + 3: mark(0.400f, 1.255f, -0.010f, 0.030f); break;                    // codos
     case 170 * 4 + 3: mark(0.585f, 1.095f, 0.080f, 0.025f); break;                     // munecas
+    // (26/10) v7
+    case 260 * 4 + 0: mark(0.215f, 1.440f, 0.085f, 0.035f); break;                     // deltoides frontal
+    case 260 * 4 + 1: mark(0.215f, 1.445f, -0.035f, 0.035f); break;                    // deltoides posterior
+    case 260 * 4 + 2: mark(0.450f, 1.215f, 0.070f, 0.030f); break;                     // antebrazo alto
+    case 260 * 4 + 3: mark(0.540f, 1.130f, 0.075f, 0.025f); break;                     // antebrazo bajo
+    case 261 * 4 + 0: mark(0.100f, 1.330f, 0.170f, 0.040f); break;                     // pecho bajo
+    case 261 * 4 + 1: mark(0.175f, 1.330f, -0.040f, 0.045f); break;                    // dorsales: ancho
+    case 261 * 4 + 2: mark(0.080f, 1.570f, -0.020f, 0.030f); break;                    // trapecio alto
+    case 261 * 4 + 3: mark(0.085f, 0.990f, -0.120f, 0.045f); break;                    // gluteo levantado
+    case 262 * 4 + 0: mark(0.190f, 0.760f, 0.060f, 0.045f); break;                     // muslo exterior
+    case 262 * 4 + 1: mark(0.160f, 0.430f, -0.060f, 0.035f); break;                    // gemelos
     }
     switch (idx * 4 + comp) {
     case 167 * 4 + 0: h.all = true; break;                                                          // general
+    case 260 * 4 + 0: one({ 0.200f, 1.460f, 0.070f, 0.215f, 1.420f, 0.075f, 0.045f }); break;        // deltoides frontal
+    case 260 * 4 + 1: one({ 0.200f, 1.460f, -0.020f, 0.215f, 1.420f, -0.025f, 0.045f }); break;      // deltoides posterior
+    case 260 * 4 + 2: one({ 0.420f, 1.240f, 0.045f, 0.490f, 1.180f, 0.055f, 0.050f }); break;        // antebrazo alto
+    case 260 * 4 + 3: one({ 0.500f, 1.160f, 0.055f, 0.575f, 1.095f, 0.060f, 0.040f }); break;        // antebrazo bajo
+    case 261 * 4 + 0: one({ 0.040f, 1.340f, 0.165f, 0.140f, 1.345f, 0.135f, 0.050f }); break;        // pecho bajo
+    case 261 * 4 + 1: one({ 0.165f, 1.400f, -0.040f, 0.150f, 1.220f, -0.030f, 0.055f }); break;      // dorsales: ancho
+    case 261 * 4 + 2: one({ 0.040f, 1.590f, -0.020f, 0.120f, 1.540f, -0.015f, 0.040f }); break;      // trapecio alto
+    case 261 * 4 + 3: one({ 0.085f, 1.010f, -0.070f, 0.085f, 0.980f, -0.070f, 0.065f }); break;      // gluteo levantado
+    case 262 * 4 + 0: one({ 0.170f, 0.900f, 0.050f, 0.180f, 0.620f, 0.060f, 0.055f }); break;        // muslo exterior
+    case 262 * 4 + 1: one({ 0.160f, 0.500f, -0.010f, 0.165f, 0.330f, -0.010f, 0.050f }); break;      // gemelos
     case 164 * 4 + 1: one(kDelt); break;                                                             // hombros
     case 171 * 4 + 3: one(kDelt); one(kTrap); break;                                                 // ancho de hombros
     case 164 * 4 + 2: one({ 0.235f, 1.425f, 0.065f, 0.365f, 1.295f, 0.070f, 0.048f }); break;        // biceps (frente del brazo)
@@ -721,6 +784,8 @@ void FisicoHighlightPresent() {
     PalApply(skinPage && s_colorRow && s_toneRgbaInit);
     const bool want = s_ok && g_cfg.live[183][0] > 0.5f && menu && s_page > 0 && MusclePhysiqueActive();
     const MRow* r = want ? RowOf(s_page, CursorRow(menu)) : nullptr;
+    static const MRow kAll = { "", 167, 0 };   // (26/10) la fila Tipo de cuerpo resalta todo el cuerpo, como General
+    if (r && r->idx < 0) r = &kAll;
     if (!r) { if (s_hlOn) { HlClear(); s_hlOn = false; s_hlRow = -1; } return; }
     const double t = Now();
     const int row = CursorRow(menu);
@@ -773,7 +838,7 @@ void FisicoInstall() {
     for (int k = 0; k < (int)(sizeof hooks / sizeof hooks[0]); k++) { *origs[k] = vt[kVt[k].i]; InterlockedExchangePointer(&vt[kVt[k].i], hooks[k]); }
     VirtualProtect(&vt[V_DECIDE], (V_COUNT - V_DECIDE + 1) * sizeof(void*), old, &old);
     s_ok = true;
-    Log("fisico: menu Fisico del juego enganchado: fila 'Musculatura' (paginas: %d + %d valores, -%d..+%d, y piel; L1 / R1 cambian de pagina)", kN1, kN2, kSteps, kSteps);
+    Log("fisico: menu Fisico del juego enganchado: fila 'Musculatura' (%d paginas: %d + %d + %d + %d filas, -%d..+%d, y piel; L1 / R1 cambian de pagina)", kNMP, kMP[0].n, kMP[1].n, kMP[2].n, kMP[3].n, kMSteps, kMSteps);
 }
 bool FisicoEditing(uint32_t* id) { if (id) *id = s_editId; return s_ok && s_menu && s_editId; }
 
