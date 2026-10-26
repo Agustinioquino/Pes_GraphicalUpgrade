@@ -853,6 +853,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         if (c->GetType() == D3D11_DEVICE_CONTEXT_DEFERRED) g_stFaceCtxDef++;
     }
     if (ps) SunPassNote(ps->hash);   // (25/10) variantes de la luz del sol por cuadro (log)
+    if (ps) GrassDiagState(c, ps->hash);   // (26/10 f) stencil de las pasadas del sol y de la base (log, 3 veces cada una)
     if (!g_cfg.optRules) { RingFaceBind(c, d.ring); return false; }
     if ((ps && ps->rule) || (vs && vs->rule)) {
         if (!s_firstRule.exchange(true)) Log("primer dibujo con regla");
