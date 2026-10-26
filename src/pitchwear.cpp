@@ -69,7 +69,7 @@ static void ClipSimAndUpload(float dt) {
 // desde GrassOnDraw (estado del pasto puesto: G-buffer, profundidad, mezcla): un dibujo instanciado con nuestro VS y el PS de las hojas
 void PitchClipsDraw(ID3D11DeviceContext* c, int frame) {
     int n = s_clipCount.load(); if (n <= 0 || !s_clipVS || !s_clipSRV || g_cfg.live[116][3] < 0.5f) return;
-    if (s_clipFrame.load() == frame) return; s_clipFrame = frame;
+    s_clipFrame = frame;   // (26/10 d) "una vez por grabacion" lo decide GrassOnDraw (el cuadro de grabacion no identifica el de la GPU)
     ID3D11VertexShader* oVS = nullptr; c->VSGetShader(&oVS, nullptr, nullptr);
     ID3D11InputLayout* oIL = nullptr; c->IAGetInputLayout(&oIL);
     ID3D11ShaderResourceView* oT[2] = {}; c->VSGetShaderResources(120, 1, &oT[0]); c->VSGetShaderResources(122, 1, &oT[1]);
@@ -149,7 +149,7 @@ static void EnsureFlat() {
 // desde GrassOnDraw (una vez por cuadro): la capsula de la pelota (cb4[3], cb4[4] del VS de las hojas) al staging
 void PitchBallNote(ID3D11DeviceContext* c, int frame) {
     if (!g_dev.dev || (g_cfg.live[136][0] < 0.5f && !(g_cfg.live[139][0] > 0.5f && g_cfg.live[139][2] > 0.001f))) return;
-    int prev = s_ballNoted.load(); if (prev == frame || !s_ballNoted.compare_exchange_strong(prev, frame)) return;
+    s_ballNoted = frame;   // (26/10 d) una vez por grabacion (lo decide GrassOnDraw)
     int w = s_ballW.load(); if (!s_ballStage[w]) return;
     ID3D11Buffer* cb = nullptr; UINT first = 0, num = 0; ID3D11DeviceContext1* c1 = nullptr;
     if (SUCCEEDED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) && c1) { c1->VSGetConstantBuffers1(4, 1, &cb, &first, &num); c1->Release(); }

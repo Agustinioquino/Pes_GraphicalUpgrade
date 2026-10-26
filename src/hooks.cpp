@@ -451,11 +451,13 @@ template<int V> static void STDMETHODCALLTYPE hk_Dispatch(ID3D11DeviceContext* c
 }
 template<int V> static void STDMETHODCALLTYPE hk_ExecCL(ID3D11DeviceContext* c, ID3D11CommandList* l, BOOL r) {
     BodyOnExecute(c, l);
+    GrassOnExecuteCL(c, l);   // (26/10 d) pasto: demora grabacion -> ejecucion, listas anidadas
     o_ExecCL[V](c, l, r);
 }
 template<int V> static HRESULT STDMETHODCALLTYPE hk_FinishCL(ID3D11DeviceContext* c, BOOL r, ID3D11CommandList** l) {
     HRESULT hr = o_FinishCL[V](c, r, l);
     if (SUCCEEDED(hr) && l && *l) BodyOnFinish(c, *l);
+    GrassOnFinishCL(c, (SUCCEEDED(hr) && l) ? *l : nullptr);   // (26/10 d) pasto: la grabacion termino (siempre, aunque falle)
     return hr;
 }
 // cejas (18/10): para dibujar las hebras hace falta saber si el juego usa profundidad invertida (limpia a 0) o normal (limpia a 1)
@@ -1227,6 +1229,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     GlassPresent();        // (24/10) vidrio de los menus: lectura de lo anotado por el PS y plan de copias del fondo
     MuscleHookPresent();   // (23/10) musculatura: ganchos a los huesos de musculo del motor (primer Present)
     BodyPresent();         // (25/10) la ropa contra el cuerpo real: mallas de piel nuevas, cuadro nuevo
+    GrassFrameBoundary(flags);   // (26/10 d) pasto: limite del cuadro (reclamo en la GPU, x63) ANTES de subir t120
     UploadParams();
     WatchShaderFolder();
     PollMatch();

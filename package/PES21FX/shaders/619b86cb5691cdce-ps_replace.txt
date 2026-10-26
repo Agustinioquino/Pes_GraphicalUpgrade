@@ -467,8 +467,10 @@ void main(
       float shG = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
       float3 sunC = max(pLc_color.xyz, 0.0) * g_psScene.m_exposure.zzz;
       // pasto v3: las hojas finas (puntas) dejan pasar mas luz que la base; la translucidez viene del G-buffer
-      float trK = IniParams.Load(int2(104,0)).x > 0.5 ? lerp(0.85, 1.6, saturate(trC)) : 1.0;
-      r2.xyz += sunC * tr * (0.35 + 0.65 * low) * shG * STg.y * 0.35 * trK * float3(1.0, 1.05, 0.55);
+      // (26/10 d) hojas y base con casi el mismo peso (antes 0.85 vs 1.6: brillaban distinto mirando al sol) y tinte menos amarillo
+      // (el azul en 0.55 ponia lima toda la cancha hacia el sol, y x29 no llega a la luz)
+      float trK = IniParams.Load(int2(104,0)).x > 0.5 ? lerp(0.9, 1.3, saturate(trC)) : 1.0;
+      r2.xyz += sunC * tr * (0.35 + 0.65 * low) * shG * STg.y * 0.35 * trK * float3(1.0, 1.03, 0.80);
     }
   }
   // === PES21 (25/10 b) brillo del cesped al sol (x134 brillo, y134 apertura): cuticula cerosa de las hojas. Mirando hacia el

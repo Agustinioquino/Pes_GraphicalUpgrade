@@ -99,6 +99,12 @@ void main(
   }
   r0.w = cmp(r0.y < 1);
   if (r0.w != 0) {
+    float pesPxV = abs(v4.w);   // (26/10 d) pixeles por metro del vertice (lo manda el VS; 0 con un VS viejo)
+    if (pesPxV >= 1.0) {
+      // (26/10 d) fundido de la oclusion por tamano en pantalla de una hoja nominal de 1.2 cm, continuo con la distancia: con las
+      // derivadas del uv saltaba en los limites de nivel (tarjetas de 1.5 px contra 4 px) y oscurecia de mas cerca de la camara
+      r0.w = saturate(1.55 - 0.22 * log2(128.0 / max(0.012 * pesPxV, 0.05)));
+    } else {
     r1.xy = float2(atlasPx, atlasPx) * v1.xy;
     r1.zw = ddx_coarse(r1.xy);
     r1.xy = ddy_coarse(r1.xy);
@@ -107,6 +113,7 @@ void main(
     r0.w = max(r1.x, r0.w);
     r0.w = log2(r0.w);
     r0.w = saturate(-r0.w * 0.11 + 1.55);   // PES21: pasto 3D visible hasta mucho mas lejos
+    }
     r1.x = saturate(-v2.w * 0.600000024 + 1);
     r0.w = r1.x * r0.w;
     r1.x = -1 + r0.y;
@@ -114,11 +121,19 @@ void main(
     { float gsK = IniParams.Load(int2(10,0)).y; r0.y = max(0.0, 1.0 - (1.0 - r0.y) * (1.0 + 0.45 * saturate(gsK))); }   // PES21 v2: sombreado entre hojas mas marcado (y10)
   }
   r1.xyz = v3.xyz * r0.yyy;
+  if (pesV3 && v4.w > 0.0) {
+    // (26/10 d) hojas del mod: sombra raiz -> punta por la altura en la hoja (estable con la distancia; la del atlas se funde con el
+    // mip y de 1.5 a 6 px de ancho quedaba en 14-58%): "sombra entre las hojas" que no depende del filtro de sombras ni del SSAO
+    float relH = saturate((0.995 - v1.y) / 0.985);
+    float sunUpC = saturate(PESSunWorld().y);
+    float aoC = lerp(1.0 - 0.4 * saturate(Q6.y) * (1.15 - 0.45 * sunUpC), 1.0, smoothstep(0.0, 0.85, relH));
+    r1.xyz *= aoC;
+  }
   o0.xyz = v1.zzz * r1.xyz;
   if (pesV3) {
     // claridad por hoja (nervio, bordes, vetas) y puntas mas palidas; pasto seco donde hay desgaste (v8.x)
     float3 c = o0.xyz * (0.55 + 0.9 * pesLight);
-    float tipK = smoothstep(0.55, 1.0, pesN.z) * (0.18 + 0.6 * v8.x);
+    float tipK = smoothstep(0.55, 1.0, pesN.z) * (0.08 + 0.6 * v8.x);   // (26/10 d) 0.18 -> 0.08: las puntas tenian un 18% de paja aun sin desgaste (r/g 0.45 -> 0.57, lima a media distancia)
     c = PESDryTint(c, tipK + v8.x * saturate(Q7.y) * 0.85);
     { // misma correccion de color que la base de la cancha ("Pasto v2", x29): antes las hojas quedaban mas amarillas/grises que el suelo
       float4 GV = IniParams.Load(int2(29,0));
@@ -138,10 +153,18 @@ void main(
   }
   { float3 cg = o0.xyz; PESGrassColorGrade(cg); o0.xyz = saturate(cg); }   // (25/10 b) color del pasto (112), igual que la base
   if (v5.w > 0.5) o0.xyz = float3(1.0, 0.0, 1.0);   // PES21 depuracion: parcelas extendidas en magenta (z59)
+  if (pesV3) {
+    // (26/10 d) el R del atlas propio es "claridad" (media 0.52), no la mascara de brillo del atlas del juego: la formula del juego
+    // (lerp(v5.x + R, v5.x, v3.w)) sumaba +0.52 de brillo donde v3.w < 1 (segun la altura de la camara y un disco del juego),
+    // 3-6x mas brillo y 40% menos rugosidad: la cancha se lavaba de lima / blanco al mirar hacia el sol con la camara baja
+    o2.y = v5.x + (pesLight - 0.5) * 0.2;
+    o2.x = v5.y * lerp(1.0, 0.6 + 0.8 * pesGloss, 0.5);
+  } else {
   r0.y = v5.x + r0.x;
   r0.x = v5.y * r0.z;
   r0.zw = v5.yx + -r0.xy;
   o2.xy = v3.ww * r0.zw + r0.xy;
+  }
   if (pesV3) {
     // brillo: la hoja es mas lustrosa en el centro (B del atlas) y se regula con z106; seca = mate
     float gl = clamp(Q6.z, 0.0, 2.0);

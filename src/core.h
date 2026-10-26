@@ -178,7 +178,10 @@ void CatalogRecord(bool on);                     // "Grabar partido": volcados p
 // pasto extendido (grass.cpp)
 void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, const ShaderEntry* ps, UINT count, UINT start, INT base);
 void GrassOnBaseDraw(ID3D11DeviceContext* c);    // (25/10) v3: al terminar la base de la cancha (PS 5e92 / c956)
-void GrassPresent();
+void GrassPresent();                             // log (despues de UploadParams)
+void GrassFrameBoundary(UINT presentFlags);      // (26/10 d) en hk_Present ANTES de UploadParams: reclamo del cuadro en la GPU, x63
+void GrassOnFinishCL(ID3D11DeviceContext* c, ID3D11CommandList* l);    // (26/10 d) una emision por grabacion: el contexto arranca de cero
+void GrassOnExecuteCL(ID3D11DeviceContext* c, ID3D11CommandList* l);   // (26/10 d) demora grabacion -> ejecucion (log); listas anidadas
 // (25/10) shaders de un dibujo tal como los ve la DLL: entradas (para BeforeDraw) + objetos puestos (hooks.cpp)
 struct ShaderBind { const ShaderEntry* vs = nullptr; ID3D11VertexShader* vsObj = nullptr; const ShaderEntry* ps = nullptr; ID3D11PixelShader* psObj = nullptr; };
 ShaderBind BindShadersRaw(ID3D11DeviceContext* c, const ShaderBind& b);
