@@ -130,9 +130,10 @@ void main(
     if (SF.x > 0.5) { pesFreeSun = true;
       float az = radians(SF.y), el = radians(SF.z);
       float3 w = normalize(float3(cos(el) * sin(az), sin(el), cos(el) * cos(az)));   // mundo: Y arriba
-      float3 v = float3(dot(float3(g_psScene.m_view._m00, g_psScene.m_view._m01, g_psScene.m_view._m02), w),
-                        dot(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12), w),
-                        dot(float3(g_psScene.m_view._m20, g_psScene.m_view._m21, g_psScene.m_view._m22), w));
+      // (26/10) mundo -> vista: con las columnas (las filas _m0x.._m2x pasan de vista a mundo; antes estaba al reves)
+      float3 v = float3(dot(float3(g_psScene.m_view._m00, g_psScene.m_view._m10, g_psScene.m_view._m20), w),
+                        dot(float3(g_psScene.m_view._m01, g_psScene.m_view._m11, g_psScene.m_view._m21), w),
+                        dot(float3(g_psScene.m_view._m02, g_psScene.m_view._m12, g_psScene.m_view._m22), w));
       // el juego guarda la direccion HACIA el sol o desde el sol? se respeta el signo original (mismo sentido que m_lightDir0.y)
       float sgn = (g_psLight.m_lightDir0.y < 0) ? -1.0 : 1.0;
       pesLDir.xyz = normalize(v) * sgn;

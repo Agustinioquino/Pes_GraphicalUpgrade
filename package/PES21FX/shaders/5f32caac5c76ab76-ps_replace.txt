@@ -74,6 +74,21 @@ cbuffer PESLightCopy : register(b13)
   float4 pL_color;
 }
 
+// (26/10) sol del cielo en espacio de vista: el estable (312, no gira con la luz de cada toma de la repeticion) pasado a vista
+// con la camara de este cuadro, con el mismo sentido que pL_dir. Sin dato: pL_dir
+float3 PESSkyLView() {
+  float3 L = pL_dir.xyz; float4 S = IniParams.Load(int2(312, 0));
+  if (S.w > 0.5 && S.y > 0.0 && dot(L, L) > 1e-6) {
+    float3 vX = float3(pS_mat[2]._m00, pS_mat[2]._m01, pS_mat[2]._m02);
+    float3 vY = float3(pS_mat[2]._m10, pS_mat[2]._m11, pS_mat[2]._m12);
+    float3 vZ = float3(pS_mat[2]._m20, pS_mat[2]._m21, pS_mat[2]._m22);
+    float sg = dot(L, vY) >= 0.0 ? 1.0 : -1.0;
+    float3 Ls = S.x * vX + S.y * vY + S.z * vZ;
+    if (dot(Ls, Ls) > 1e-6) L = sg * normalize(Ls) * length(L);
+  }
+  return L;
+}
+
 void main(
   float2 v0 : TEXCOORD0,
   float4 v1 : SV_Position0,
@@ -152,7 +167,7 @@ void main(
       float3 vXp = float3(pS_mat[2]._m00, pS_mat[2]._m01, pS_mat[2]._m02);
       float3 vYp = float3(pS_mat[2]._m10, pS_mat[2]._m11, pS_mat[2]._m12);
       float3 vZp = float3(pS_mat[2]._m20, pS_mat[2]._m21, pS_mat[2]._m22);
-      float3 Lnp = normalize(pL_dir.xyz);
+      float3 Lnp = normalize(PESSkyLView());   // (26/10) sol estable
       float3 sunWp = normalize(float3(dot(Lnp, vXp), dot(Lnp, vYp), dot(Lnp, vZp)));
       float kEl = smoothstep(0.02, 0.10, sunWp.y);
       if (kEl > 0.001) {
@@ -193,7 +208,7 @@ void main(
     r0.xyz = lerp(r0.xyz, cS, max(skyM, skyRaw * physW));
     // --- sol visible: x37 tamano, y37 intensidad, z37 = 1 invierte el eje vertical, w37 on/off [Alt+Shift+4] ---
     float4 SN = IniParams.Load(int2(37,0));
-    float3 Ls = pL_dir.xyz;
+    float3 Ls = PESSkyLView();   // (26/10) sol estable: el disco no salta en los cortes de la repeticion
     float3 pesCloudCol = 0.0; float pesCloudT = 1.0;   // se aplican despues del sol (las nubes lo tapan)
     // (21/10) con x159 el sol y las nubes volumetricas los dibuja el cielo del juego (9adf9d46, con la camara y la luz de su
     // propio dibujo): aca solo si ese cielo no se dibujo (w159 lo escribe la DLL)
@@ -336,7 +351,7 @@ void main(
   // pantalla, de noche (sin sol real, 114.w) y detras de las nubes volumetricas (misma capa que dibuja el cielo).
   // 119: x on | y intensidad | z largo (fraccion del camino al sol que se recorre) | w extension alrededor del sol
   { float4 GR = IniParams.Load(int2(119,0)); float4 SNg = IniParams.Load(int2(37,0));
-    float3 Lg = pL_dir.xyz; bool sunnyG = IniParams.Load(int2(114,0)).w > 0.5;
+    float3 Lg = PESSkyLView(); bool sunnyG = IniParams.Load(int2(114,0)).w > 0.5;
     if (GR.x > 0.5 && sunnyG && dot(Lg, Lg) > 1e-6 && abs(pS_projParam.x) > 1e-6 && abs(pS_projParam.y) > 1e-6) {
       Lg = normalize(Lg);
       if (Lg.z > 0.05) {

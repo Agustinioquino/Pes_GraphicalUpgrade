@@ -573,7 +573,8 @@ static void BuildSkyEnv(const V3& s, float turb, float skyRatio) {
 // p150: x y z = color del cielo relativo al sol (luminancia 1), w = cielo horizontal / sol normal. 0 = sin dato
 static void UpdatePhysSky(float (*p)[4]) {
     static float last[5] = { -9, -9, -9, -9, -9 }; static float res[4] = {};
-    bool sunny = p[114][3] > 0.5f; float sx = p[111][0], sy = p[111][1], sz = p[111][2];
+    bool sunny = p[114][3] > 0.5f; const float* SW = p[312][3] > 0.5f ? p[312] : p[111];   // (26/10) sol estable (no gira en las repeticiones)
+    float sx = SW[0], sy = SW[1], sz = SW[2];
     if (!sunny || sy < 0.017f) { for (int k = 0; k < 4; k++) p[150][k] = 0.0f; return; }
     float turb = p[121][1] > 0.5f ? p[121][1] : 2.5f;
     float atmo = p[121][0] > 0.5f ? std::clamp(p[121][2] > 0.0f ? p[121][2] : 1.0f, 0.0f, 1.0f) : 0.0f;   // con el color fisico del sol (x121) prendido
@@ -689,7 +690,27 @@ void UpdateTimeParams() {
               float wx = lx * M[0] + ly * M[4] + lz * M[8], wy = lx * M[1] + ly * M[5] + lz * M[9], wz = lx * M[2] + ly * M[6] + lz * M[10];
               float wn = sqrtf(wx * wx + wy * wy + wz * wz); if (wn > 1e-6f) { wx /= wn; wy /= wn; wz /= wn; }
               if (wy < 0) { wx = -wx; wy = -wy; wz = -wz; }   // siempre "hacia el sol"
-              p[111][0] = wx; p[111][1] = wy; p[111][2] = wz; p[111][3] = asinf(std::clamp(wy, -1.f, 1.f)) * 57.2958f; }
+              p[111][0] = wx; p[111][1] = wy; p[111][2] = wz; p[111][3] = asinf(std::clamp(wy, -1.f, 1.f)) * 57.2958f;
+              // (26/10) sol estable (312) para el cielo, el disco del sol, los rayos y las sombras de nubes: en la previa y en las
+              // repeticiones el motor gira la luz de toma en toma (log de 7894072) y con la luz de cada toma el sol del cielo
+              // saltaba de lugar y el dibujo de las nubes sobre la cancha cambiaba entero en cada corte. Se toma la ultima
+              // direccion que se mantuvo quieta 15 s (el juego normal; las tomas de repeticion duran menos); hasta tenerla, la
+              // del archivo del cielo; si cambia el cielo (otro estadio u hora) se vuelve a medir. w: 1 = juego normal, 2 = cielo
+              { static float cand[3] = {}, st[3] = {}, skyLast[3] = {}; static double candT = -1.0; static bool haveSt = false;
+                if (wx * cand[0] + wy * cand[1] + wz * cand[2] < 0.99985f) { cand[0] = wx; cand[1] = wy; cand[2] = wz; candT = t; }   // > 1 grado
+                else if (candT >= 0.0 && t - candT > 15.0) { st[0] = cand[0]; st[1] = cand[1]; st[2] = cand[2]; haveSt = true; }
+                float k[3] = {}; bool sky = false; std::vector<float> K; int age = NamedAge("SkyMatCB");
+                if (age >= 0 && age <= 30 && NamedCBRead("SkyMatCB", K) && K.size() >= 16) {
+                    float kn = sqrtf(K[12] * K[12] + K[13] * K[13] + K[14] * K[14]);
+                    if (kn > 0.5f && kn < 2.0f && K[13] / kn > 0.03f) { sky = true; for (int i = 0; i < 3; i++) k[i] = K[12 + i] / kn; }
+                }
+                if (sky && k[0] * skyLast[0] + k[1] * skyLast[1] + k[2] * skyLast[2] < 0.99985f) {
+                    if (skyLast[0] != 0.0f || skyLast[1] != 0.0f || skyLast[2] != 0.0f) haveSt = false;
+                    skyLast[0] = k[0]; skyLast[1] = k[1]; skyLast[2] = k[2];
+                }
+                if (haveSt) { p[312][0] = st[0]; p[312][1] = st[1]; p[312][2] = st[2]; p[312][3] = 1.0f; }
+                else if (sky) { p[312][0] = k[0]; p[312][1] = k[1]; p[312][2] = k[2]; p[312][3] = 2.0f; }
+                else { p[312][0] = wx; p[312][1] = wy; p[312][2] = wz; p[312][3] = 0.0f; } } }
           float cr = L[4], cg = L[5], cb = L[6]; float mx = std::max(cr, std::max(cg, cb));
           if (mx > 1e-4f) { p[112][0] = cr / mx; p[112][1] = cg / mx; p[112][2] = cb / mx; }
           p[112][3] = 0.2126f * cr + 0.7152f * cg + 0.0722f * cb;

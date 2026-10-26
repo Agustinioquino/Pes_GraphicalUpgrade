@@ -223,6 +223,10 @@ float PESCloudDensity(float3 pW, PESCloudParams c, int oct)
   if (d > 0.001 && oct >= 4) { float det = PESFbm3(q * 6.3 + 3.1, 2); d = saturate(d - (1.0 - d) * det * 0.35); }
   return d * c.dens;
 }
+// (26/10) sol estable en el mundo (hacia el sol) para el cielo, el disco del sol, los rayos y las sombras de nubes. La DLL lo
+// publica en 312 (w > 0.5): en la previa y en las repeticiones el motor gira la luz de toma en toma y este no gira (es el del
+// juego normal o, hasta tenerlo, el del archivo del cielo). Sin dato: sunLight (el sol de la luz de este cuadro).
+float3 PESSunStable(float3 sunLight) { float4 S = IniParams.Load(int2(312, 0)); return (S.w > 0.5 && S.y > 0.0) ? normalize(S.xyz) : sunLight; }
 // sombra de nubes sobre un punto del mundo: transmitancia 0..1 a lo largo de la direccion del sol (2 muestras en la capa)
 float PESCloudShadow(float3 pW, float3 sunW, PESCloudParams c)
 {
