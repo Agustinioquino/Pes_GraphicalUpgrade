@@ -21,6 +21,10 @@ void Log(const char* fmt, ...) {
     fputc('\n', g_log); fflush(g_log);
 }
 
+// (26/10) para escribir bloques largos de una vez (memwatch.cpp): LogLock devuelve el archivo con el log tomado
+FILE* LogLock() { g_logMutex.lock(); return g_log; }
+void LogUnlock() { g_logMutex.unlock(); }
+
 double Now() {
     static LARGE_INTEGER f = [] { LARGE_INTEGER x; QueryPerformanceFrequency(&x); return x; }();
     LARGE_INTEGER c; QueryPerformanceCounter(&c);
@@ -90,6 +94,7 @@ static void LogCrash(EXCEPTION_POINTERS* ep, const char* kind) {
             }
         }
     }
+    MemCrashInfo(g_log, ep);   // (26/10) mapa de memoria, quien la toco, dlmalloc y el final de sider.log (memwatch.cpp)
     fflush(g_log);
     if (locked) g_logMutex.unlock();
 }
@@ -302,6 +307,7 @@ static int InitMod() {
     if (!fx::g_cfg.optHooks) { fx::Log("hooks = 0: el mod queda cargado pero sin ganchos (prueba)"); return 2; }
     if (!fx::InstallHooks()) { fx::Log("ERROR: no se pudieron instalar los ganchos de D3D11"); return 0; }
     fx::Log("ganchos instalados");
+    fx::MemWatchStart();   // (26/10) liberador de memoria del juego + VirtualProtect/VirtualFree (memwatch.cpp)
     if (fx::DiagOn(2)) fx::CodeWatchStart();
     else fx::Log("codigo: vigilancia del codigo del juego apagada (z173 = 0)");
     return 2;

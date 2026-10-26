@@ -6,6 +6,7 @@
 #include <atomic>
 #include <memory>
 #include <cstdint>
+#include <cstdio>
 #include <map>
 #include <mutex>
 #include <shared_mutex>
@@ -110,6 +111,7 @@ struct Config {
     bool autoCap = false; float autoCapSec = 20.0f; int autoCapMax = 150; bool autoCapAB = false; bool exeDump = true; bool motorPatch = true; int motorShadowRes = 0; float motorCascadeScale = 0.0f;   // [Motor]: parches en memoria (exepatch.cpp)   // exe_dump: volcado del exe desempaquetado (una vez por version)   // auto_captura_ab: pares A (todo) / B (un grupo del menu apagado 3 cuadros)
     int aniso = 16; float mipBias = 0.0f;   // 20/10: filtrado anisotropico forzado (1 = el del juego) y sesgo de mip global ([PES21FX] aniso, mip_bias)   // 19/10: captura automatica en partido ([PES21FX] auto_captura, auto_captura_seg, auto_captura_max)
     bool optReplace = true, optRules = true, optOverlay = true, optPin = false, optHooks = true, optDxgi = true, optPresent = true, optCtx = true, optExports = true, optOrphan = true, optDump = false;
+    bool memFix = true, memWatch = true;      // (26/10) [PES21FX] memoria_arreglo / memoria_vigilar (memwatch.cpp)
 };
 extern Config g_cfg;
 extern std::mutex g_cfgMutex;
@@ -310,6 +312,10 @@ int SkinToneGame(uint32_t id);                    // color de piel del juego gua
 int FisicoSkinIndex();                            // color de piel del juego (1..6) del jugador del menu Fisico (0 = no se sabe)
 void CodeWatchStart();                            // (24/10) vigila la seccion .text del exe: anota en el log lo que cambie (codewatch.cpp)
 bool CodeWatchOrig(uintptr_t a, unsigned char* out, size_t n);   // bytes de la copia (registro de cierres)
+void MemWatchStart();                             // (26/10) vigila el liberador de memoria del juego y VirtualProtect/VirtualFree (memwatch.cpp)
+void MemCrashInfo(FILE* f, EXCEPTION_POINTERS* ep);   // (26/10) informe de memoria en un cierre (con el log tomado)
+FILE* LogLock();                                  // (26/10) el archivo del log con el mutex tomado (soltar con LogUnlock)
+void LogUnlock();
 // (24/10) ganchos que se pueden apagar para buscar un cierre (x173 personajes, y173 menu Fisico, z173 vigilancia del codigo,
 // w173 huesos de musculatura); se leen al arrancar
 inline bool DiagOn(int comp) { return g_cfg.live[173][comp] > 0.5f; }
