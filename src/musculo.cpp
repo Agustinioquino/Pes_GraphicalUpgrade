@@ -44,6 +44,7 @@
 #include <map>
 #include <vector>
 #include <imgui.h>
+#include "musculo_ui.h"
 
 namespace fx {
 
@@ -115,6 +116,9 @@ static bool s_tried = false; static int s_ok = 0;
 struct Fac { float e, t[3]; };
 static Fac s_fac[M_COUNT] = {};
 static bool s_on = false;
+static std::atomic<bool> s_compare{false};   // (26/10 c) "Ver: como el juego" en el menu Fisico
+void MuscleCompare(bool on) { if (s_compare.exchange(on) != on) Log("musculatura: ver %s", on ? "como el juego (sin musculatura)" : "con la musculatura"); }
+bool MuscleCompareOn() { return s_compare.load(); }
 
 // ---------------------------------------------------------------- musculos vivos (26/10 b): contraccion y respiracion
 // 263: x contraccion con el movimiento (0 = apagado, 1 = normal, hasta 2), y respiracion (idem), z cuanto se agita al correr.
@@ -280,7 +284,7 @@ static void LoadProfiles() {
         const char* comps = "xyzw"; const char* pc = k.empty() ? nullptr : strchr(comps, tolower((unsigned char)k[0]));
         if (!pc || k.size() < 2) continue;
         int idx = atoi(k.c_str() + 1), comp = (int)(pc - comps);
-        if (PRow(idx) >= 0 && IsPlayerParam(idx, comp)) cur->v[PRow(idx)][comp] = std::clamp((float)atof(val.c_str()), 0.3f, 3.0f);
+        if (PRow(idx) >= 0 && IsPlayerParam(idx, comp)) cur->v[PRow(idx)][comp] = std::clamp((float)atof(val.c_str()), idx == 172 ? 0.0f : 0.3f, 3.0f);
     }
     Log("musculatura por jugador: %d jugadores con valores propios en musculatura_jugadores.ini", (int)s_prof.size());
 }
@@ -319,7 +323,7 @@ void MuscleProfileSet(uint32_t id, const char* name, int idx, int comp, float v)
     auto it = s_prof.find(id);
     if (it == s_prof.end()) { Profile p; ProfFromGeneral(p); if (name) p.name = name; it = s_prof.emplace(id, p).first; }
     else if (name && *name && it->second.name != name) it->second.name = name;
-    it->second.v[PRow(idx)][comp] = std::clamp(v, 0.3f, 3.0f);
+    it->second.v[PRow(idx)][comp] = std::clamp(v, idx == 172 ? 0.0f : 0.3f, 3.0f);   // la definicion puede ir a 0 (piel lisa)
     ProfDirty();
 }
 
@@ -506,7 +510,7 @@ static void UpdateDynamics() {
 }
 static void UpdateFactors() {
     float L[kPRows][4]; GeneralRows(L);   // 164..171, 162 y (26/10) 260..262
-    const bool on = L[0][0] > 0.5f, ropa = g_cfg.live[166][1] > 0.5f, trans = g_cfg.live[170][2] > 0.5f, vec = g_cfg.live[255][0] > 0.5f;
+    const bool on = L[0][0] > 0.5f && !s_compare.load(), ropa = g_cfg.live[166][1] > 0.5f, trans = g_cfg.live[170][2] > 0.5f, vec = g_cfg.live[255][0] > 0.5f;
     Fac f[M_COUNT];
     ComputeFactors(L, on, ropa, trans, vec, f);
     s_on = on;
@@ -1041,6 +1045,108 @@ std::string MuscleLatestPlayerName() {
     if (best->name[0]) return best->name;
     return "id " + std::to_string(best->id);
 }
+// ---------------------------------------------------------------- ventana del menu Fisico con el diseno nuevo (26/10 c, musculo_ui.cpp)
+// Los metodos se llaman con s_profMx y g_cfgMutex tomados (no usar MuscleProfileGet / MusclePresetMatch: toman s_profMx).
+class FisicoModel : public MusUiModel {
+public:
+    std::vector<MusUiPlayer> rows; int sel = 0;
+    Profile* Own() { if (rows.empty()) return nullptr; auto it = s_prof.find(rows[sel].id); return it == s_prof.end() ? nullptr : &it->second; }
+    Profile& Make() {
+        Profile* p = Own(); if (p) return *p;
+        Profile np; ProfFromGeneral(np); np.name = rows[sel].name; Profile& r = s_prof[rows[sel].id] = np; ProfDirty();
+        rows[sel].own = true; return r;
+    }
+    int PlayerCount() override { return (int)rows.size(); }
+    const MusUiPlayer& Player(int i) override { return rows[i]; }
+    int Selected() override { return sel; }
+    void Select(int i) override { if (i >= 0 && i < (int)rows.size()) { sel = i; s_selId = rows[i].id; s_selManual = true; } }
+    bool HasOwn() override { return Own() != nullptr; }
+    void MakeOwn() override { Make(); s_profStatus = "Valores propios para " + rows[sel].name + ": arrancan iguales a los generales"; }
+    void ClearOwn() override { if (!rows.empty()) { s_prof.erase(rows[sel].id); rows[sel].own = false; ProfDirty(); s_profStatus = "Quitados los valores propios de " + rows[sel].name; } }
+    void CopyGeneral() override { Profile& p = Make(); const std::string nm = p.name; ProfFromGeneral(p); p.name = nm; ProfDirty(); }
+    float Get(int idx, int comp) override { Profile* p = Own(); return p && PRow(idx) >= 0 ? p->v[PRow(idx)][comp] : g_cfg.live[idx][comp]; }
+    float General(int idx, int comp) override { return g_cfg.live[idx][comp]; }
+    void Set(int idx, int comp, float v) override { if (PRow(idx) < 0 || rows.empty()) return; Make().v[PRow(idx)][comp] = std::clamp(v, idx == 172 ? 0.0f : 0.3f, 3.0f); ProfDirty(); }
+    bool MuscleOn() override { return g_cfg.live[164][0] > 0.5f; }
+    void SetMuscleOn(bool on) override { const float b = g_cfg.base[164][0]; g_cfg.live[164][0] = on ? (b > 0.5f ? b : 1.0f) : 0.0f; FisicoCfgDirty(); }
+    float Global(int idx, int comp) override { return g_cfg.live[idx][comp]; }
+    void SetGlobal(int idx, int comp, float v) override { g_cfg.live[idx][comp] = v; FisicoCfgDirty(); }
+    int TypeCount() override { return MusclePresetCount(); }
+    int BuiltinTypes() override { return kNB; }
+    const char* TypeName(int k) override { return MusclePresetName(k); }
+    const char* TypeDesc(int k) override { return MusclePresetDesc(k); }
+    int TypeMatch() override {
+        if (Profile* p = Own()) return PresetOfProfile(*p);
+        for (int k = 0; k < MusclePresetCount(); k++) {
+            bool ok = true;
+            for (auto& pp : kPlayerParams) if (fabsf(g_cfg.live[pp.idx][pp.comp] - PresetValue(k, pp.idx, pp.comp)) > 0.004f) { ok = false; break; }
+            if (ok) return k;
+        }
+        return -1;
+    }
+    void ApplyType(int k) override { if (rows.empty()) return; PresetToProfile(Make(), k); s_profStatus = std::string("Tipo de cuerpo ") + MusclePresetName(k) + " para " + rows[sel].name; }
+    std::string SaveAsType(const char* name) override {
+        if (Profile* p = Own()) return SaveAsPreset(p->v, name);
+        float L[kPRows][4]; GeneralRows(L); return SaveAsPreset(L, name);
+    }
+    void DeleteUserType(int k) override { if (k >= kNB) { s_profStatus = std::string("Borrado el tipo de cuerpo \"") + MusclePresetName(k) + "\""; DeleteUserPreset(k - kNB); } }
+    std::vector<uint32_t> others; std::vector<std::string> otherNames;
+    void BuildOthers() {
+        others.clear(); otherNames.clear();
+        for (auto& kv : s_prof) {
+            if (!rows.empty() && kv.first == rows[sel].id) continue;
+            others.push_back(kv.first);
+            char lb[96]; snprintf(lb, sizeof lb, "%s  (id %u)", kv.second.name.empty() ? "(sin nombre)" : kv.second.name.c_str(), kv.first);
+            otherNames.push_back(U8(lb));
+        }
+    }
+    int OtherCount() override { return (int)others.size(); }
+    const char* OtherName(int i) override { return otherNames[i].c_str(); }
+    void CopyFromOther(int i) override {
+        auto it = s_prof.find(others[i]); if (it == s_prof.end()) return;
+        Profile& p = Make(); const std::string nm = p.name; memcpy(p.v, it->second.v, sizeof p.v); p.name = nm; ProfDirty();
+        s_profStatus = "Copiados los valores de " + (it->second.name.empty() ? std::to_string(it->first) : it->second.name);
+    }
+    void Highlight(int idx, int comp) override { FisicoHighlightRequest(idx, comp); }
+    void Compare(bool hold) override { static bool prev = false; if (hold != prev) { prev = hold; MuscleCompare(hold); } }
+    std::string& Status() override { return s_profStatus; }
+};
+void MuscleDrawFisicoWindow(ImFont* bold, ImFont* big) {
+    std::lock_guard<std::mutex> lk(s_profMx);
+    if (!s_profLoaded) LoadProfiles();
+    if (!CharTrackOk()) { ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.35f, 1), "No se pudo seguir a los jugadores del motor (ver 'personajes' en PES21FX.log)."); return; }
+    static FisicoModel m;
+    m.rows.clear();
+    // jugadores en pantalla: uno por id (el armado mas reciente); con nombre primero
+    struct R { uint32_t id; std::string name; unsigned seq; };
+    std::vector<R> rs; bool anyNamed = false;
+    for (int i = 0; i < kCharSlots; i++) {
+        if (!s_slotAlive[i] || !s_slotInfo[i].known || !s_slotInfo[i].id) continue;
+        const CharInfo& c = s_slotInfo[i]; bool found = false;
+        for (auto& r : rs) if (r.id == c.id) { found = true; if (c.seq > r.seq) r.seq = c.seq; if (r.name.empty() && c.name[0]) r.name = c.name; }
+        if (!found) rs.push_back({ c.id, c.name, c.seq });
+        anyNamed |= c.name[0] != 0;
+    }
+    uint32_t editId = 0;
+    if (FisicoEditing(&editId) && editId) {   // en el menu Fisico: el jugador que se edita, aunque su modelo no haya pasado por HumanList
+        bool found = false; for (auto& r : rs) if (r.id == editId) found = true;
+        if (!found) rs.push_back({ editId, std::string(FisicoEditName()), 0xffffffffu });
+    }
+    if (anyNamed) rs.erase(std::remove_if(rs.begin(), rs.end(), [](const R& r) { return r.name.empty(); }), rs.end());
+    std::sort(rs.begin(), rs.end(), [](const R& a, const R& b) { return a.name != b.name ? a.name < b.name : a.id < b.id; });
+    const R* latest = nullptr; for (auto& r : rs) if (!latest || r.seq > latest->seq) latest = &r;
+    if (latest && latest->seq != s_selSeq) { s_selSeq = latest->seq; if (!s_selManual) s_selId = latest->id; }
+    if (editId) { s_selId = editId; s_selManual = false; }
+    m.sel = 0;
+    for (auto& r : rs) {
+        MusUiPlayer p; p.id = r.id; p.name = U8(r.name.empty() ? std::to_string(r.id) : r.name); p.own = s_prof.count(r.id) != 0;
+        if (r.id == s_selId) m.sel = (int)m.rows.size();
+        m.rows.push_back(p);
+    }
+    m.BuildOthers();
+    MuscleUiDraw(m, bold, big);
+}
+
 void MuscleDrawPlayerPanel() {
     std::lock_guard<std::mutex> lk(s_profMx);
     if (!s_profLoaded) LoadProfiles();

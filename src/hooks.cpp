@@ -1215,6 +1215,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     AsyncShotPresent();
     RingPresent(sc);       // (24/10 e) aro del musculo sobre la imagen final (antes de las capturas y del menu)
     AutoCapturePresent(s_frameTex);
+    FisicoCapturePresent(s_frameTex);   // (26/10 c) paginas del menu Fisico
     MenuTestPresent(sc);
     OverlayPresent(sc);
     return o_Present(sc, sync, flags);

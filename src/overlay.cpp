@@ -620,13 +620,13 @@ static void DrawMenu() {
 // jugador (la tarjeta "Musculatura por jugador"); "Menu completo" pasa al menu de siempre. Al entrar, un aviso abajo.
 static bool s_fullMenu = false;
 static void DrawPhysiqueWindow() {
-    ImGui::SetNextWindowSize(ImVec2(560, 680), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowPos(ImVec2(40, 60), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(560, 960), ImGuiCond_FirstUseEver);   // (26/10 c) diseno nuevo: mapa del cuerpo arriba, filas abajo
+    ImGui::SetNextWindowPos(ImVec2(24, 50), ImGuiCond_FirstUseEver);
     bool open = true;
     ImGui::Begin("Musculatura del jugador##fisico", &open, ImGuiWindowFlags_NoCollapse);
     if (!open) g_menuOpen = false;
     if (s_fontBold) ImGui::PushFont(s_fontBold);
-    ImGui::TextColored(ImVec4(0.85f, 0.68f, 0.28f, 1), "PES21 FX  -  musculatura en Fisico");
+    ImGui::TextColored(ImVec4(0.85f, 0.68f, 0.28f, 1), "PES21 FX  -  musculatura");
     if (s_fontBold) ImGui::PopFont();
     ImGui::SameLine(ImGui::GetWindowWidth() - 150);
     if (ImGui::Button("Menu completo", ImVec2(130, 0))) s_fullMenu = true;
@@ -634,11 +634,8 @@ static void DrawPhysiqueWindow() {
     ImGui::Separator();
     {
         std::lock_guard<std::mutex> lk(g_cfgMutex);
-        bool on = g_cfg.live[164][0] > 0.5f;
-        if (ImGui::Checkbox("Musculatura prendida", &on)) { float b = g_cfg.base[164][0]; g_cfg.live[164][0] = on ? (b > 0.5f ? b : 1.0f) : 0.0f; }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("El interruptor de \"Musculatura (prueba)\" (vale para todos; se guarda con Guardar en el menu completo).");
         ImGui::BeginChild("fisico_panel", ImVec2(0, 0), ImGuiChildFlags_None);
-        MuscleDrawPlayerPanel();
+        MuscleDrawFisicoWindow(s_fontBold, s_fontBig);   // (26/10 c) mapa del cuerpo, pestanas por zona, barras con la marca del juego
         ImGui::EndChild();
     }
     ImGui::End();

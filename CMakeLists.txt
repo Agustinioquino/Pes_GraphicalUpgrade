@@ -48,7 +48,7 @@ add_library(PES21FX SHARED
   src/grass.cpp
   src/menutest.cpp
   src/facegen.cpp
-  src/inspect.cpp src/ssss.cpp src/pitchwear.cpp src/lod.cpp src/lightmeter.cpp src/gtao.cpp src/ssgi.cpp src/exedump.cpp src/asyncshot.cpp src/exepatch.cpp src/camhook.cpp src/musculo.cpp src/personajes.cpp src/fisico.cpp src/codewatch.cpp src/memwatch.cpp src/skintone.cpp src/glass.cpp src/ring.cpp src/cuerpo.cpp src/manos.cpp
+  src/inspect.cpp src/ssss.cpp src/pitchwear.cpp src/lod.cpp src/lightmeter.cpp src/gtao.cpp src/ssgi.cpp src/exedump.cpp src/asyncshot.cpp src/exepatch.cpp src/camhook.cpp src/musculo.cpp src/musculo_ui.cpp src/personajes.cpp src/fisico.cpp src/codewatch.cpp src/memwatch.cpp src/skintone.cpp src/glass.cpp src/ring.cpp src/cuerpo.cpp src/manos.cpp
   ${imgui_SOURCE_DIR}/imgui.cpp
   ${imgui_SOURCE_DIR}/imgui_draw.cpp
   ${imgui_SOURCE_DIR}/imgui_tables.cpp

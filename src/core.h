@@ -14,6 +14,8 @@
 #include <unordered_map>
 #include <vector>
 
+struct ImFont;   // (26/10 c) imgui.h
+
 namespace fx {
 
 // ---------------------------------------------------------------- log
@@ -295,6 +297,12 @@ int MusclePresetCount(); const char* MusclePresetName(int k); const char* Muscle
 void MusclePresetApply(uint32_t id, const char* name, int k);   // id 0 = generales (con g_cfgMutex tomado)
 int MusclePresetMatch(uint32_t id);                             // -1 = valores a mano
 float MuscleDefinitionFor(uint32_t id);                         // (26/10 b) definicion propia del jugador (0 = la general)
+void MuscleCompare(bool on); bool MuscleCompareOn();              // (26/10 c) "Ver: como el juego" (sin la musculatura mientras se edita)
+void FisicoCapturePresent(ID3D11Texture2D* frame);              // (26/10 c) captura de las paginas del menu Fisico (fisico.cpp)
+void FisicoHighlightRequest(int idx, int comp);                 // (26/10 c) la ventana del mod pide que lata un musculo en el modelo
+void FisicoCfgDirty();                                          // (26/10 c) guardar PES21FX.ini en un rato (opciones cambiadas desde el Fisico)
+const char* FisicoEditName();                                   // (26/10 c) nombre del jugador que se edita en el Fisico
+void MuscleDrawFisicoWindow(::ImFont* bold, ::ImFont* big);     // (26/10 c) ventana del mod en el menu Fisico (musculo_ui.cpp; con g_cfgMutex tomado)
 void FisicoInstall();                             // (24/10) filas de musculatura dentro del menu Fisico del juego (fisico.cpp)
 bool FisicoEditing(uint32_t* id);                 // el menu Fisico del juego esta armado para un jugador (su id)
 void FisicoHighlightPresent();                    // (24/10) resaltado del musculo de la fila elegida (x174..182 para los shaders)
