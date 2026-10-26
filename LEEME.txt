@@ -1,0 +1,114 @@
+PES21 FX 0.2 - mod grafico para PES 2021 (sin 3DMigoto)
+=========================================================
+
+Que es
+------
+Un d3d11.dll propio para la carpeta del juego (el mismo lugar que usaba 3DMigoto). Reenvia todo al
+d3d11.dll de Windows y, de paso, hace lo que hacia 3DMigoto con nuestros shaders: reemplaza los shaders
+del juego por los mejorados (piel, pelo, kits, luz, sombras, post), pasa los parametros (t120) y aplica
+las reglas por shader. Mas un menu en pantalla (Insert).
+
+Por que d3d11.dll y no un modulo de Sider: el "DreamPatch Switcher" del Dream Patch revisa cada 5 s las
+DLL que aparecen en el juego despues de arrancar; una DLL sin firma cargada desde Sider la toma como
+"inyectada", bloquea el patch y se descarga de una forma que cierra el juego. Un d3d11.dll en la carpeta
+del juego se carga con el propio juego, antes de ese control, igual que lo hacia 3DMigoto.
+
+Instalacion
+-----------
+1. Si tenes 3DMigoto: renombrar su d3d11.dll (en la carpeta del juego) a d3d11.dll.3dmigoto-off.
+2. Copiar a la carpeta del juego (donde esta PES2021.exe):
+      d3d11.dll
+      PES21FX\   (PES21FX.ini, PES21FX_rules.ini, shaders\, textures\)
+3. Si antes usaste la version 0.1 (modulo de Sider): borrar la linea  lua.module = "PES21FX.lua"
+   de Dream Patch Sider\sider.ini y la carpeta modules\PES21FX.
+4. Abrir el juego. Se crea PES21FX\PES21FX.log con lo que paso:
+   "shader propio activo: ..." por cada shader cargado, y errores de compilacion si los hay.
+   La primera vez tarda unos segundos mas (compila los shaders; despues usa shaders\cache).
+
+Uso
+---
+- Insert: abre/cierra el menu (efectos on/off, parametros, guardar, recargar).
+- "Ver original": compara con el juego sin el mod.
+- Las mismas teclas de antes siguen funcionando (estan en PES21FX.ini).
+- Para editar un shader: PES21FX\shaders\<hash>-ps_replace.txt y "Recargar shaders" en el menu.
+
+Presets por estadio
+-------------------
+- Pestana "Presets" del menu: guarda todos los valores del menu para el estadio actual (nombre y autor
+  opcionales) en PES21FX\presets\stadium_<id>.ini (o _day / _night si es solo para esa hora).
+  Al entrar a ese estadio el mod los aplica solo; en un estadio sin preset vuelve a tus valores.
+- Para que el mod sepa el estadio hace falta el modulo de Sider  sider\PES21FX_match.lua :
+  copiarlo a la carpeta modules de Sider y agregar en sider.ini:   lua.module = "PES21FX_match.lua"
+  (escribe PES21FX_match.ini en la carpeta de Sider; el mod la encuentra solo)
+- Compartir un preset = pasar ese archivo .ini; el otro lo copia en su PES21FX\presets y listo.
+
+Capturas automaticas (para calibrar sin sacar capturas a mano)
+--------------------------------------------------------------
+- [PES21FX] auto_captura = 1: en partido guarda un jpg cada auto_captura_seg segundos (tope auto_captura_max)
+  en PES21FX\capturas\HHMMSS_solEE.jpg (EE = altura del sol) y anota en capturas\luz.txt el sol (altura,
+  azimut, color), la exposicion, la niebla y los parametros del mod. tools\read_luz.py lo resume.
+- [PES21FX] auto_captura_ab = 1: ademas, un ciclo si y uno no, guarda un par en capturas\ab\: HHMMSS_<grupo>_A.jpg (todo
+  como esta) y _B.jpg (3 cuadros despues con ese grupo del menu apagado), ciclando por todos los grupos activos: el
+  efecto real de cada funcion en la misma escena, sin tocar el menu.
+- [inspector] por clase, "volcar = 1": sus texturas se guardan solas en inspector\texturas\<clase> la primera
+  vez que se ven (sin abrir el inspector).
+
+Pasto v3 (Cancha y cielo)
+-------------------------
+- Atlas propio de hojas (textures\pes_grass_blades*.dds, 4 manojos: corto / medio / largo / variante), normal
+  por hoja, tipo de pasto, patron de corte (franjas, damero, diagonal, rombos, circulos) coherente entre la
+  base y las hojas, desgaste profesional -> potrero, inclinacion real por el corte y viento.
+- tools\make_grass_atlas.py regenera el atlas; tools\merge_ini.py fusiona el ini del PC con la plantilla.
+
+Luz moderna (20/10)
+-------------------
+- Rayos de sol (Iluminacion -> "Rayos de sol", 119): dispersion en pantalla hacia el sol leyendo la profundidad; solo el
+  cielo aporta luz, asi los rayos entran por los huecos del techo y los cortan tribunas y jugadores. Se apaga de noche,
+  con el sol fuera de pantalla y detras de las nubes volumetricas.
+- Reflejos en la cancha mojada (Cancha y cielo -> "Reflejos en la cancha mojada", 120): con suelo humedo, SSR solo
+  sobre el plano de la cancha (posicion por profundidad, rayo reflejado por el buffer de profundidad, Fresnel rasante).
+  w120 = 1 pinta de verde los pixeles tomados como cancha (para comprobar el plano).
+- Atmosfera fisica (Iluminacion -> "Atmosfera fisica", 121): el color del sol sale de la transmitancia Rayleigh + Mie
+  (masa de aire), normalizada al cenit; reemplaza el tinte calido a mano de la curva del dia.
+
+Presets de color/luz (menu -> pestana Presets -> Aplicar)
+---------------------------------------------------------
+- presets\look_pes_real.ini (base), look_pes_vivo.ini (vivo como el juego), look_tv.ini (transmision), look_cine.ini
+  (AgX con punch, tono partido, vineta). "Aplicar" prueba uno en cualquier estadio, "Quitar" vuelve a tus valores.
+  Para hacer el tuyo: ajusta y "Guardar preset" (o copia uno de estos y cambia los valores).
+
+Pasto v4: manojos curvos (Cancha y cielo -> "Pasto v4", 123)
+------------------------------------------------------------
+- El juego dibuja cada parcela de 0.5 m con tarjetas planas (manojo de ~1.2 x 5.8 cm; 27744 / ~9000 / ~6000 indices
+  segun la distancia). La DLL cambia el dibujo por una malla propia con el mismo formato de vertices (POSITION float3
+  en el slot 0, TEXCOORD0 half2 en el slot 3): tarjetas de 3 tramos (2 a media distancia) que salen verticales y se
+  doblan, con giro, ancho, alto y curva al azar y raices Halton. Mismo VS/PS: alto, corte, viento, pisadas y atlas
+  siguen funcionando. y123 densidad (x las del juego), z123 curvatura, w123 solo el nivel cercano.
+
+Luz ambiente rebalanceada (20/10)
+--------------------------------
+- Antes: volumen de irradiancia del motor al 33 % (x56) y encima rellenos sumados (luz de cielo 1.0 = 12 % del sol
+  en lo que mira arriba, SSGI 0.8, rebote del pasto 0.6) + sol apilado 1.58x: jugadores claros y chatos. Ahora el
+  volumen del motor vuelve al 80 %, luz de cielo 0.4, SSGI 0.5, rebote 0.45, sol ~1.2x. presets\luz_anterior.ini
+  aplica la cadena vieja para comparar.
+
+Rasgos de la cara (Cara -> "Rasgos de la cara", x124)
+-----------------------------------------------------
+- Frente al juego original la cara salia mas clara y lavada: el sol se apilaba (curva del dia x sol realista x
+  contraste de dia = 1.58x; ahora w4 1.0 y x109 0.25) y el multirebote del GTAO + el SSGI rellenaban las cuencas.
+  x124: oclusion de la piel mas honda y sin multirebote, mitad de SSGI sobre la piel.
+
+LOD de caras (Cara -> "LOD de caras")
+-------------------------------------
+- El motor elige en la CPU que malla dibuja de cada jugador (LOD) y a cuales les calcula la animacion facial; los
+  "mods de LOD" que parchean bytes del exe no cambian eso.
+- Diagnostico (x118): anota en el log cada 20 s, por cara, con cuantos indices se dibuja, con que VS/PS, los
+  cbuffers del VS (paleta de huesos) y a que distancia pasa de una malla a otra. Leerlo primero.
+- LOD0 forzado (y118): la DLL se aprende, por cara, los buffers de la malla de mas detalle que vio y cuando esa cara
+  vuelve con la reducida dibuja la de mas detalle (solo con el mismo VS y cbuffers; "permisiva" acepta el mismo
+  layout). Las expresiones de los jugadores lejanos no existen en la GPU: no se pueden forzar.
+
+Notas
+-----
+- La fisica de ropa (cloth-mod, dsound.dll) sigue igual, es independiente.
+- Los shaders son decompilados del juego y modificados: el repositorio conviene que sea privado.
