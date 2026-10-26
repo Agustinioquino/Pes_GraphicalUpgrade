@@ -290,12 +290,12 @@ static bool SunPassSmallView(ID3D11DeviceContext* c, uint64_t h) {
     UINT w = (UINT)vp[0].Width, hgt = (UINT)vp[0].Height;
     UINT cur = s_sunVpMaxCur.load(); while (w > cur && !s_sunVpMaxCur.compare_exchange_weak(cur, w)) {}
     UINT ref = (std::max)(s_sunVpMaxPrev.load(), s_sunVpMaxCur.load());
-    bool small = ref > 0 && w * 4 < ref * 3;
+    bool tooSmall = ref > 0 && w * 4 < ref * 3;
     { static std::mutex mx; static std::set<uint64_t> seen; uint64_t key = h ^ ((uint64_t)w << 1) ^ ((uint64_t)hgt << 20); bool first;
       { std::lock_guard<std::mutex> lk(mx); first = seen.size() < 40 && seen.insert(key).second; }
-      if (first) Log("luz del sol: %08llx en una vista de %ux%u (la mas grande vista: %u)%s", (unsigned long long)(h >> 32), w, hgt, ref, small ? " -> vista chica: no se copia el sol" : ""); }
-    if (small) s_sunSmallSkips++;
-    return small;
+      if (first) Log("luz del sol: %08llx en una vista de %ux%u (la mas grande vista: %u)%s", (unsigned long long)(h >> 32), w, hgt, ref, tooSmall ? " -> vista chica: no se copia el sol" : ""); }
+    if (tooSmall) s_sunSmallSkips++;
+    return tooSmall;
 }
 static std::string SunPassList(uint32_t mask, const int* n) {
     std::string r; char b[48];
