@@ -328,8 +328,42 @@ static void SunPassPresent() {
         if (lines < 200) { lines++; Log("luz del sol: variantes en el cuadro %d: %s", s_presentNo.load(), SunPassList(mask, n).c_str()); }
         lastMask = mask & 0x1ffu;
     }
+    // (26/10) sol en mundo cuadro a cuadro contra el sol del archivo del cielo y contra la camara: en las repeticiones el sol de
+    // la luz se aleja del cielo (log de 7894072). Si la direccion de la luz respecto de la camara queda fija mientras la camara
+    // gira, el motor arma la luz por camara (iluminacion de repeticion); si salta solo en los cortes, es un preset por toma.
+    static int dFrames = 0, dOff = 0, dJumps = 0, dLines = 0, dLastF = -1; static bool dWasOff = false;
+    static float dMax = 0, azMin = 1e9f, azMax = -1e9f, camMin = 1e9f, camMax = -1e9f, relMin = 1e9f, relMax = -1e9f, dPrev[3] = {};
+    { std::vector<float> L, S, K; int lf = -1, sf = -2;
+      if (NamedCBRead("LightCB", L, &lf) && L.size() >= 4 && NamedCBRead("SceneCB", S, &sf) && S.size() >= 64 && lf == sf && lf != dLastF
+          && NamedAge("SkyMatCB") >= 0 && NamedAge("SkyMatCB") <= 30 && NamedCBRead("SkyMatCB", K) && K.size() >= 16) {
+          dLastF = lf;
+          const float* M = &S[32]; float w[3], k[3] = { K[12], K[13], K[14] };
+          for (int i = 0; i < 3; i++) w[i] = L[0] * M[i] + L[1] * M[4 + i] + L[2] * M[8 + i];
+          float wn = sqrtf(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]), kn = sqrtf(k[0] * k[0] + k[1] * k[1] + k[2] * k[2]);
+          if (wn > 1e-6f && kn > 1e-6f) {
+              for (int i = 0; i < 3; i++) { w[i] /= wn; k[i] /= kn; }
+              if (w[1] < 0) { w[0] = -w[0]; w[1] = -w[1]; w[2] = -w[2]; }
+              float dev = acosf(std::clamp(w[0] * k[0] + w[1] * k[1] + w[2] * k[2], -1.0f, 1.0f)) * 57.2958f;
+              float az = atan2f(w[2], w[0]) * 57.2958f, cam = atan2f(M[10], M[8]) * 57.2958f;   // fila 2 de m_view = eje z de la camara
+              float rel = fmodf(az - cam + 540.0f, 360.0f) - 180.0f;
+              if (dFrames > 0 && acosf(std::clamp(w[0] * dPrev[0] + w[1] * dPrev[1] + w[2] * dPrev[2], -1.0f, 1.0f)) * 57.2958f > 3.0f) dJumps++;
+              for (int i = 0; i < 3; i++) dPrev[i] = w[i];
+              SunWatchFrame(w, dev, lf);   // (26/10) quien escribe el sol de las repeticiones (sunwatch.cpp)
+              dFrames++; dMax = (std::max)(dMax, dev); if (dev > 5.0f) dOff++;
+              azMin = (std::min)(azMin, az); azMax = (std::max)(azMax, az); camMin = (std::min)(camMin, cam); camMax = (std::max)(camMax, cam);
+              relMin = (std::min)(relMin, rel); relMax = (std::max)(relMax, rel);
+              bool off = dev > 5.0f;
+              if (off != dWasOff && dLines < 300) { dLines++;
+                  Log("luz del sol: cuadro %d, el sol de la luz %s del sol del cielo (%.1f grados; luz en mundo %.3f %.3f %.3f, rumbo %.0f, camara %.0f, luz respecto de la camara %.0f)",
+                      lf, off ? "se separa" : "vuelve al", dev, w[0], w[1], w[2], az, cam, rel); }
+              dWasOff = off;
+          } } }
     double t = Now();
     if (t > nextSum) {
+        if (nextSum > 0 && dFrames > 0 && sums <= 120)
+            Log("luz del sol (10 s): %d cuadros medidos, %d con la luz a mas de 5 grados del cielo (maximo %.1f), %d saltos de mas de 3 grados entre cuadros; rumbo de la luz %.0f..%.0f, de la camara %.0f..%.0f, luz respecto de la camara %.0f..%.0f",
+                dFrames, dOff, dMax, dJumps, azMin, azMax, camMin, camMax, relMin, relMax);
+        dFrames = dOff = dJumps = 0; dMax = 0; azMin = camMin = relMin = 1e9f; azMax = camMax = relMax = -1e9f;
         if (nextSum > 0 && frames > 0 && framesNone < frames && sums++ < 120)
             Log("luz del sol (10 s): %d cuadros, %d solo con el sol sin sombra / con mascara (d0e9 / 7dbbc), %d sin pasada de sol, %d cambios de variante, LightCB desde la copia alternativa %d, pasadas del sol en vista chica (sin copiar) %d",
                 frames, framesOrig, framesNone, switches, g_lightAltFrames.exchange(0), s_sunSmallSkips.exchange(0));
