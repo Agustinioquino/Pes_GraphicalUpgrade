@@ -4,6 +4,8 @@
 // cada capsula sirve para los dos lados). Las capsulas las arma la DLL (fisico.cpp) en x174..182; el PS lee el peso en
 // o3.w (+2, para distinguirlo de los VS que no lo escriben: o3.w queda en [2, 3]).
 // (25/10) manos: si el dibujo es una mano de TorsoBody, el skinning lo hace pes_hands.hlsli (t126 enlazado por manos.cpp).
+// (26/10, v12.7) musculos con textura (pes_limbs.hlsli): brazos, piernas y manos de TorsoBody mandan en o1.xyz = (definicion,
+// venas, 7) cuanto marcar el relieve muscular y las venas segun la pose (codo, rodilla, brazo levantado, puno apretado).
 // (24/10 c) o4.w / o5.w = cercania a las marcas 0 / 1 del musculo (187 / 188; signo = lado: + izquierdo, - derecho): con eso el
 // PS de la piel (variante pes_skin_hl_ps.hlsl, solo en el menu Fisico) junta en u5 donde quedo cada marca en la pantalla y la
 // DLL dibuja encima el aro y el punto blanco, como una capa de interfaz. o6.w = jugador de la tabla de tonos de piel
@@ -69,6 +71,7 @@ Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 #include "pes_skintone.hlsli"
 #include "pes_hands.hlsli"   // (25/10) manos: cuaterniones duales + correctivas por pose (solo en los dibujos de la mano)
+#include "pes_limbs.hlsli"   // (26/10, v12.7) musculos con textura: definicion y venas segun la pose (o1.xyz)
 
 
 void main(
@@ -191,6 +194,11 @@ void main(
   o0.xyw = r3.xyw;
   o1.xyz = v2.xyz;
   o1.w = g_vsObject.m_useWeightCount.w;
+  {   // (26/10, v12.7) musculos con textura (pes_limbs.hlsli): en los brazos, piernas y manos de TorsoBody el PS de la piel recibe
+      // en o1.xyz cuanto marcar el relieve muscular y las venas (z = 7: marca; ese PS no usa el color del vertice)
+    float lbD = 0.0, lbV = 0.0;
+    if (PesLimbOut(handDone, vid, v0.xyz, lbD, lbV)) o1.xyz = float3(lbD, lbV, 7.0);
+  }
   o7.xy = r3.xy;
   o2.xy = v6.xy;
   p2.x = r3.w;

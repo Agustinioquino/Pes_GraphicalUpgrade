@@ -1,5 +1,7 @@
 // PES 2021 - piel del cuerpo (brazos, piernas, cuello) [hash aa7d1833f6a11481] - piel v2 (w43)
 // PES21 (24/10): con el VS 1c02a92a (reemplazo propio) aclara y hace latir el musculo elegido en el menu Fisico (x174).
+// PES21 (26/10, v12.7): musculos con textura (x305): el VS manda en v1.xyz cuanto marcar el musculo que trabaja (mas relieve
+// grande del normal map) y las venas (textura pesVeins en t29, solo brazos y manos; un poco mas oscuras y frias).
 // PES21 (24/10 c): tono de piel por jugador en Oklab (pes_skintone.hlsli; el VS dice el jugador en o6.w). El aro y el punto
 // blanco del musculo ya no se pintan en la piel: la variante pes_skin_hl_ps.hlsl (PES_HL_ACC, solo en el menu Fisico) junta en
 // u5 donde quedo cada marca y la DLL los dibuja encima como capa de interfaz.
@@ -46,6 +48,7 @@ Texture2D<float4> pesSSSMap    : register(t22);   // (20/10) solo enlazados en l
 Texture2D<float4> pesZones     : register(t25);
 Texture2D<float4> pesSkinMicro : register(t27);
 Texture2D<float4> pesFacePores : register(t28);
+Texture2D<float4> pesVeins     : register(t29);   // (26/10, v12.7) venas de brazos y manos (la DLL la enlaza solo en esos dibujos)
 
 
 // 3Dmigoto declarations
@@ -127,6 +130,11 @@ void main(
   r2.xyz = g_tex_normal.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN).xyw;
   r2.x = r2.x * r2.z;
   r2.xy = r2.xy * float2(2,2) + float2(-1,-1);
+  // (26/10, v12.7) musculos con textura: el VS 1c02a92a (pes_limbs.hlsli) manda en v1.xyz = (definicion, venas, 7) cuanto marcar
+  // el musculo que trabaja y las venas (brazos, piernas y manos de TorsoBody); en el resto del cuerpo v1.z no es 7 y no cambia nada
+  float4 P305 = IniParams.Load(int2(305,0));
+  bool lbOn = P305.x > 0.5 && v1.z > 6.5 && v1.z < 7.5;
+  float lbDef = lbOn ? clamp(v1.x, 0.0, 2.0) : 0.0, lbVein = lbOn ? clamp(v1.y, 0.0, 2.0) : 0.0, lbVM = 0.0;
   {   // (24/10) definicion muscular (x172, menu Musculatura): agranda o achica solo el relieve grande del normal map
       // (los musculos: el mismo mapa visto 11 veces mas chico), no los poros ni las lineas finas de la piel
     float defM = IniParams.Load(int2(172,0)).x; defM = defM > 0.01 ? clamp(defM, 0.0, 3.0) : 1.0;
@@ -134,11 +142,21 @@ void main(
       float4 stH = IniParams.Load(int2(194,0)); int stI = (int)round(v6.w) - 1000;
       if (stH.y > 0.5 && stI >= 0 && stI < min((int)(stH.x + 0.5), 20)) { float dP = IniParams.Load(int2(195 + 3 * stI, 0)).w; if (dP > 0.01) defM = clamp(dP, 0.0, 3.0); }
     }
+    defM += lbDef;   // (26/10, v12.7) el musculo que trabaja: mas relieve solo ahi
     if (abs(defM - 1.0) > 0.01) {
       float3 nM = g_tex_normal.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN + 3.5).xyw;
       float2 mM = float2(nM.x * nM.z, nM.y) * 2.0 - 1.0;
       r2.xy += (defM - 1.0) * mM;
       float l2 = dot(r2.xy, r2.xy); if (l2 > 0.94) r2.xy *= rsqrt(l2 / 0.94);
+    }
+  }
+  if (lbVein > 0.002) {   // (26/10, v12.7) venas: relieve de la textura de venas (mismo espacio tangente que arm_nrm) + mascara para el tono
+    uint lvW = 0, lvH = 0; pesVeins.GetDimensions(lvW, lvH);
+    if (lvW > 0) {
+      float4 lv = pesVeins.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN);
+      r2.xy += lbVein * (lv.xy * 2.0 - 1.0);
+      float l2 = dot(r2.xy, r2.xy); if (l2 > 0.94) r2.xy *= rsqrt(l2 / 0.94);
+      lbVM = saturate(lbVein * lv.z);
     }
   }
   if (hpK > 0.001 && P94h.w > 0.5) {   // (20/10) micro normal de poros, misma escala y mismo plano UV que la cara: sigue sin costura
@@ -215,6 +233,7 @@ void main(
       r2.yzw = PesNailFix(g_tex_diffuse, g_samplerLinear_Clamp_s, v2.xy, nfDx * nfB, nfDy * nfB, r2.yzw, saturate(P304.y));
     }
   }
+  if (lbVM > 0.001) r2.yzw *= lerp(float3(1.0, 1.0, 1.0), float3(0.86, 0.91, 0.99), lbVM * 0.6);   // (26/10, v12.7) la vena: un poco mas oscura y fria
   r3.xyz = r2.yzw * r1.www + -r2.yzw;
   r2.yzw = r1.zzz * r3.xyz + r2.yzw;
   // (20/10) cabeza de las genericas: el mismo color y la misma translucidez que el shader de cara (5ce3 / ce188)
