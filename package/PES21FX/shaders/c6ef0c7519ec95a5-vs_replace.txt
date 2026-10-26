@@ -1,6 +1,7 @@
 // PES 2021 - vertex shader de SOMBRAS / profundidad de las mallas animadas por huesos (jugadores, arbitros, publico; PS 918e2dec)
 // PES21 FX (25/10): igual al del juego (escrito a mano desde el volcado del catalogo) mas el skinning de las manos de TorsoBody
 // (pes_hands.hlsli): asi la sombra de la mano coincide con la mano deformada de la pasada principal (1c02a92a).
+// (26/10) y las variantes robusto / atletico del torso y los brazos (pes_variants.hlsli, t127): la misma forma en la sombra.
 
 cbuffer cVSScene : register(b2)
 {
@@ -47,6 +48,9 @@ cbuffer VSBones : register(b6)
 }
 
 Texture1D<float4> IniParams : register(t120);
+#include "pes_skintone.hlsli"
+#define PES_VARIANT_VS
+#include "pes_variants.hlsli"
 #include "pes_hands.hlsli"
 
 void main(
@@ -59,10 +63,18 @@ void main(
   uint vid : SV_VertexID,
   out float4 o0 : SV_Position0)
 {
-  float4 p = float4(v0.xyz, v0.w);
+  // (26/10) variante del jugador (mismo calculo que el VS de la piel): solo cambia algo si t127 tiene los datos de esta malla
+  bool skW = g_vsObject.m_useWeightCount.x != 0;
+  float3 sb0 = float3(g_vsBone.m_boneMatrices[0]._m30, g_vsBone.m_boneMatrices[0]._m31, g_vsBone.m_boneMatrices[0]._m32);
+  float3 sb0b = float3(g_vsPrevBone.m_boneMatrices[0]._m30, g_vsPrevBone.m_boneMatrices[0]._m31, g_vsPrevBone.m_boneMatrices[0]._m32);
+  float3 mP = v0.xyz, mN = v1.xyz, mT = v3.xyz;
+  uint vdW = 0, vdH = 0; g_varData.GetDimensions(vdW, vdH);
+  if (vdW > 0) PesVariantMorph(vid, PesVariantT(PesSkinNearest(PesSkinPoint(g_vsObject.m_world, g_vsObject.m_viewWorld, g_vsScene.m_view, sb0, sb0b, skW))), mP, mN, mT);
+  float4 v0m = float4(mP, v0.w);
+  float4 p = v0m;
   if (g_vsObject.m_useWeightCount.x != 0) {
     float3 hP, hN, hT, hPP; float hDbg;
-    if (PesHandSkin(vid, v0.xyz, v1.xyz, v3.xyz, v4, v5, hP, hN, hT, hPP, hDbg)) {
+    if (PesHandSkin(vid, mP, mN, mT, v4, v5, hP, hN, hT, hPP, hDbg)) {
       p.xyz = hP;
     } else {
       float4 r1 = g_vsBone.m_boneMatrices[v4.y]._m00_m10_m20_m30 * v5.y;
@@ -77,7 +89,7 @@ void main(
       r1 += g_vsBone.m_boneMatrices[v4.w]._m00_m10_m20_m30 * v5.w;
       r2 += g_vsBone.m_boneMatrices[v4.w]._m01_m11_m21_m31 * v5.w;
       r3 += g_vsBone.m_boneMatrices[v4.w]._m02_m12_m22_m32 * v5.w;
-      p.x = dot(v0, r1); p.y = dot(v0, r2); p.z = dot(v0, r3);
+      p.x = dot(v0m, r1); p.y = dot(v0m, r2); p.z = dot(v0m, r3);
     }
   }
   p.w = v0.w;

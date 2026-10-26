@@ -6,8 +6,9 @@
 // liberado lo anterior, y dlmalloc vuelve a anotar el bloque como libre escribiendo en la memoria que ya no existe -> crash.
 // Aca:
 //  1) se engancha ese win32munmap: antes de liberar nada se recorre el segmento y, si lo de Windows no es lo que el juego
-//     espera, se anota en el log el mapa de regiones y quien toco esas paginas, y se libera bien (cada reserva una vez) o
-//     no se libera nada (el juego sigue con el bloque como libre, sin cierre). [PES21FX] memoria_arreglo = 0 lo apaga.
+//     espera, se anota en el log el mapa de regiones y quien toco esas paginas, y no se libera nada: el juego sigue con el
+//     bloque como libre y lo vuelve a usar, sin cierre (26/10 12:50: retener es lo de siempre; antes se liberaba cada reserva
+//     entera, [PES21FX] memoria_arreglo = 2, y tras un cierre de otro tipo se prefiere no soltar nada que el juego no solto).
 //  2) se enganchan VirtualProtect y VirtualFree (KernelBase) y se guarda en un anillo quien los llama (modulo + offset,
 //     hilo, direccion, tamano, proteccion): asi se ve si Sider / un modulo Lua / otra DLL toco la memoria del juego.
 //     Cada 30 s queda un resumen por modulo. [PES21FX] memoria_vigilar = 0 lo apaga.
@@ -175,7 +176,7 @@ typedef int (__fastcall *PFN_Munmap)(void* ptr, size_t size);
 static PFN_Munmap o_munmap = nullptr;
 static std::atomic<unsigned> s_mCalls{0}, s_mHarmless{0}, s_mOdd{0}, s_mFixed{0}, s_mKept{0}, s_mOrigFail{0};
 static std::atomic<unsigned long long> s_mBytes{0};
-static bool s_fix = true;
+static bool s_fix = false;   // true = liberar cada reserva entera (memoria_arreglo = 2); false = retener
 static std::mutex s_logOdd;
 
 // lo mismo que revisa el juego, sin liberar nada: 1 = su win32munmap terminaria bien, 0 = fallaria en la primera
@@ -252,8 +253,7 @@ static int __fastcall hk_Munmap(void* ptr, size_t size) {
     Push(EV_MUNMAP, p, size, (uint32_t)r, 1, ra, r == 0);
     if (verbose) {
         if (canFix) Log("memoria:   -> %s (%zu reservas liberadas enteras; sin esto el juego se cerraba en PES2021.exe+0x3fe31d)", r == 0 ? "arreglado" : "VirtualFree fallo", plan.size());
-        else if (s_fix) Log("memoria:   -> no se libera nada: el juego sigue con ese bloque como libre (sin cierre)");
-        else Log("memoria:   -> memoria_arreglo = 0: no se libera nada para no cerrar el juego");
+        else Log("memoria:   -> retenido: no se libera nada, el juego sigue con ese bloque como libre (sin cierre en PES2021.exe+0x3fe31d)");
     }
     return r;
 }
@@ -295,7 +295,7 @@ static DWORD WINAPI SummaryThread(void*) {
 }
 
 void MemWatchStart() {
-    s_fix = g_cfg.memFix;
+    s_fix = g_cfg.memFix >= 2;
     HMODULE mod = GetModuleHandleW(nullptr);
     auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
     bool exeOk = (uintptr_t)mod == 0x140000000ull && nt->FileHeader.TimeDateStamp == kStamp;
@@ -303,7 +303,7 @@ void MemWatchStart() {
     else if (memcmp((const void*)kMunmap, kMunmapSig, sizeof kMunmapSig) != 0) Log("memoria: el liberador del juego (PES2021.exe+0x3fc0d0) no tiene la firma esperada: sin gancho");
     else if (MH_CreateHook((void*)kMunmap, (void*)&hk_Munmap, (void**)&o_munmap) != MH_OK || MH_EnableHook((void*)kMunmap) != MH_OK)
         Log("memoria: no se pudo enganchar el liberador del juego");
-    else Log("memoria: liberador del juego vigilado (PES2021.exe+0x3fc0d0, arreglo %s)", s_fix ? "prendido" : "apagado: solo se anota");
+    else Log("memoria: liberador del juego vigilado (PES2021.exe+0x3fc0d0, segmentos peligrosos: %s)", s_fix ? "se liberan enteros (memoria_arreglo = 2)" : "se retienen");
     if (g_cfg.memWatch) {
         HMODULE kb = GetModuleHandleW(L"kernelbase.dll");
         void* vp = kb ? (void*)GetProcAddress(kb, "VirtualProtect") : nullptr;

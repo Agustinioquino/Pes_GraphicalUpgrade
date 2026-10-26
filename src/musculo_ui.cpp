@@ -23,7 +23,11 @@ struct UiRow { const char* label; int idx, comp; float lo, hi; int region; int v
 static const UiRow kRows[] = {
     { "General",              167, 0, 0.7f, 1.5f, -1, 0, 0, 0, 0, 0, 0, "Agranda o achica todos los m\xC3\xBAsculos a la vez (no la panza, codos ni mu\xC3\xB1" "ecas). Se multiplica con cada uno." },
     { "Definici\xC3\xB3n muscular",  172, 0, 0.0f, 2.0f, -1, 0, 0, 0, 0, 0, 0, "Qu\xC3\xA9 tan marcados se ven los m\xC3\xBAsculos en la piel. 0 = piel lisa; 1 = como el juego." },
+    { "Torso y brazos",       262, 2, 0.5f, 1.5f, -1, 0, 0, 0, 0, 0, 0, "Variantes de TorsoBody: hacia la izquierda ROBUSTO (panza, rollos, pecho ca\xC3\xAD" "do, abdominales borrados, estr\xC3\xAD" "as, brazos m\xC3\xA1s gruesos y lisos), hacia la derecha ATL\xC3\x89TICO (cintura fina, espalda en V, trapecio, abdominales y serratos marcados, venas en los brazos). Cambia el modelo, las normales y las texturas. 1 = TorsoBody." },
     // hombros y brazos
+    { "Inclinaci\xC3\xB3n de hombros", 287, 0, 0.7f, 1.3f, 0, 0, 0, 0, 0, 0, 0, "Hombros ca\xC3\xAD" "dos (la tapa del hombro baja y el trapecio junto al cuello sube) o rectos (la l\xC3\xAD" "nea del cuello al hombro m\xC3\xA1s horizontal). 1 = normales." },
+    { "Tipo de hombros",      287, 1, 1.0f, 4.0f, 0, 0, 0, 0, 0, 0, 0, "Estrechos, normales, anchos o redondos (deltoides grandes adelante y atr\xC3\xA1s). Se suma a los dem\xC3\xA1s valores del hombro." },
+    { "Tama\xC3\xB1o de hombros",    287, 2, 0.7f, 1.3f, 0, 0, 0, 0, 0, 0, 0, "Todo el hombro m\xC3\xA1s grande o m\xC3\xA1s chico: deltoides, ancho, trapecio y clav\xC3\xAD" "cula juntos." },
     { "Hombros",              164, 1, 0.7f, 1.5f, 0, 3, 0.210f, 1.452f, 0.214f, 1.444f, 0.056f, "Deltoides: la tapa del hombro crece alrededor de la articulaci\xC3\xB3n." },
     { "Ancho de hombros",     171, 3, 0.7f, 1.5f, 0, 0, 0, 0, 0, 0, 0, "Corre los hombros hacia afuera, sin alargar los brazos." },
     { "Deltoides frontal",    260, 0, 0.7f, 1.5f, 0, 1, 0.206f, 1.456f, 0.224f, 1.420f, 0.034f, "La parte de adelante del hombro." },
@@ -286,10 +290,28 @@ static void Row(MusUiModel& m, int i, float labelW) {
         if (ImGui::IsItemClicked()) s_sel = i;
     }
     ImGui::TableSetColumnIndex(1);
+    static const char* const kShType[5] = { "Normales", "Normales", "Estrechos", "Anchos", "Redondos" };   // (26/10) 287.y: 1..4
+    const bool shType = r.idx == 287 && r.comp == 1;
+    if (shType) {   // tipo de hombros: lista (no es un multiplicador)
+        const int cur = std::clamp((int)lroundf(v < 0.5f ? 1.0f : v), 1, 4);
+        static const int kOrder[4] = { 2, 1, 3, 4 };   // como el menu Fisico: estrechos, normales, anchos, redondos
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+        if (ImGui::BeginCombo("##ty", kShType[cur])) {
+            for (int o : kOrder) if (ImGui::Selectable(kShType[o], o == cur)) { m.Set(r.idx, r.comp, (float)o); s_sel = i; }
+            ImGui::EndCombo();
+        }
+    } else
     if (ValueBar("##v", &v, r.lo, r.hi, ImGui::GetContentRegionAvail().x, sel)) { m.Set(r.idx, r.comp, v); s_sel = i; }
     if (ImGui::IsItemHovered() || ImGui::IsItemActive()) s_hoverRow = i;
     ImGui::TableSetColumnIndex(2);
     ImGui::AlignTextToFramePadding();
+    if (r.idx == 262 && r.comp == 2)   // (26/10) variante: robusto / atletico en vez de un multiplicador
+        ImGui::TextColored(changed ? Mix(c, ImVec4(1, 1, 1, 1), 0.25f) : ImVec4(0.62f, 0.65f, 0.71f, 1), "%s", !changed ? "TorsoBody" : v < 1.0f ? "robusto" : "atl\xC3\xA9tico");
+    else if (r.idx == 287 && r.comp == 0)   // (26/10) inclinacion de los hombros
+        ImGui::TextColored(changed ? Mix(c, ImVec4(1, 1, 1, 1), 0.25f) : ImVec4(0.62f, 0.65f, 0.71f, 1), "%s", !changed ? "normales" : v < 1.0f ? "ca\xC3\xAD" "dos" : "rectos");
+    else if (shType)
+        ImGui::TextColored(changed ? Mix(c, ImVec4(1, 1, 1, 1), 0.25f) : ImVec4(0.62f, 0.65f, 0.71f, 1), "%s", changed ? "propio" : "-");
+    else
     ImGui::TextColored(changed ? Mix(c, ImVec4(1, 1, 1, 1), 0.25f) : ImVec4(0.62f, 0.65f, 0.71f, 1), "x%.2f", v);
     if (m.HasOwn()) {
         const float g = m.General(r.idx, r.comp);
@@ -297,9 +319,10 @@ static void Row(MusUiModel& m, int i, float labelW) {
     }
     ImGui::TableSetColumnIndex(3);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(7, ImGui::GetStyle().FramePadding.y));
-    if (ImGui::Button("-")) { m.Set(r.idx, r.comp, std::clamp(roundf((v - (ImGui::GetIO().KeyShift ? 0.05f : 0.01f)) * 100.0f) / 100.0f, r.lo, r.hi)); s_sel = i; }
+    const float stp = shType ? 1.0f : ImGui::GetIO().KeyShift ? 0.05f : 0.01f;
+    if (ImGui::Button("-")) { m.Set(r.idx, r.comp, std::clamp(roundf((v - stp) * 100.0f) / 100.0f, r.lo, r.hi)); s_sel = i; }
     ImGui::SameLine(0, 4);
-    if (ImGui::Button("+")) { m.Set(r.idx, r.comp, std::clamp(roundf((v + (ImGui::GetIO().KeyShift ? 0.05f : 0.01f)) * 100.0f) / 100.0f, r.lo, r.hi)); s_sel = i; }
+    if (ImGui::Button("+")) { m.Set(r.idx, r.comp, std::clamp(roundf((v + stp) * 100.0f) / 100.0f, r.lo, r.hi)); s_sel = i; }
     ImGui::SameLine(0, 4);
     ImGui::BeginDisabled(!changed);
     if (ImGui::Button("1")) { m.Set(r.idx, r.comp, 1.0f); s_sel = i; }

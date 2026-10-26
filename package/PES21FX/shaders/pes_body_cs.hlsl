@@ -6,6 +6,8 @@
 //     movio desde el cuadro anterior (3 x half);
 //   - en la tabla de su personaje (la eligio pes_body_assign_cs.hlsl): tabla hash de celdas de 2.5 cm con listas de vertices
 //     (u1 = siguiente), para que el simulador de la ropa encuentre la piel cercana a cada punto de tela.
+// (26/10) variantes robusto / atletico de TorsoBody: la forma grande del torso del jugador (pes_variants.hlsli, t120 enlazado por
+// cuerpo.cpp) se suma antes del skinning, asi la tela choca con la panza / el pecho / la espalda que se ven.
 // Las constantes tienen que coincidir con cuerpo.cpp, pes_body_assign_cs.hlsl y cloth_sim.hlsl.
 #define BODY_CELLS  8192
 #define BODY_CELL   0.025
@@ -28,6 +30,9 @@ RWStructuredBuffer<uint4> g_ov   : register(u0);
 RWStructuredBuffer<uint>  g_on   : register(u1);
 RWBuffer<uint>          g_tab    : register(u2);
 RWBuffer<uint>          g_recTab : register(u3);
+Texture1D<float4>       IniParams : register(t120);   // (26/10) parametros del mod (tabla de jugadores y variantes)
+#include "pes_skintone.hlsli"
+#include "pes_variants.hlsli"
 
 uint BodyHash(int3 c) { return ((uint)c.x * 73856093u ^ (uint)c.y * 19349663u ^ (uint)c.z * 83492791u) & (BODY_CELLS - 1); }
 float2 OctEncode(float3 n)
@@ -51,6 +56,11 @@ void main(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
     uint rb = d0.x * REC_F4;
     uint4 a = g_sv[2 * (d0.y + v)], b = g_sv[2 * (d0.y + v) + 1];
     float3 p = asfloat(a.xyz), n = asfloat(b.xyz);
+    {   // (26/10) variante del torso del personaje de esta tabla (su origen en el mundo -> entrada de la tabla de jugadores)
+        uint hb = t * BODY_STRIDE;
+        float3 org = float3(asfloat(g_tab[hb + 4]), asfloat(g_tab[hb + 5]), asfloat(g_tab[hb + 6]));
+        p += PesTorsoField(p, PesVariantT(PesSkinNearest(org)));
+    }
     uint4 bi = min(uint4(a.w & 255, (a.w >> 8) & 255, (a.w >> 16) & 255, a.w >> 24), 31u) * 3 + rb + 16;
     float4 bw = float4(b.w & 255, (b.w >> 8) & 255, (b.w >> 16) & 255, b.w >> 24) / 255.0;
     float3 y = p, yp = p, nn = n;

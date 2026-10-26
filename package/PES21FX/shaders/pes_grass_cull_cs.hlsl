@@ -17,6 +17,7 @@ cbuffer PESGrassCull : register(b0) {
   float4 gP4;       // x tarjetas de la malla | y subniveles | z alto de la hoja (m) | w tope de capas de hojas por pixel
   float4 gPad[5];   // [0]: x piso de capas por pixel de suelo (nivel 0) | y, z rampa en px/m | w alto cerca / alto
                     // [1]: x margen del fundido en pHi | y, z, w indices por tarjeta de los niveles 0 / 1 / 2
+                    // [2]: (nivel 0) x ancho de la hoja en camaras de juego (m) | y ancho con la camara al ras (m) | z, w rampa en px/m
 }
 RWStructuredBuffer<float4> Inst : register(u0);
 RWByteAddressBuffer Count : register(u1);   // 18 contadores (uint), uno por ranura; [18] = 1 si esta emision se quedo con el cuadro
@@ -83,7 +84,9 @@ void main(uint3 id : SV_DispatchThreadID)
   if (cc.x < -w - px || cc.x > w + px || cc.y < -w - py || cc.y > w + py) return;
   // tarjetas que cubren la celda en pantalla
   float pc = clamp(p, 4.0, 2000.0);
-  float wpx = max(gP3.x * pc, gP3.y);
+  // (26/10 e) nivel 0: el ancho que se cuenta sigue la misma rampa que el VS (ancho de juego -> ancho al ras entre gPad[2].z y .w px/m)
+  float wM = (lvl == 0 && gPad[2].x > 0.0 && gPad[2].z > 1.0) ? lerp(gPad[2].x, gPad[2].y, smoothstep(gPad[2].z, max(gPad[2].w, gPad[2].z + 1.0), pc)) : gP3.x;
+  float wpx = max(wM * pc, gP3.y);
   float C = clamp(gP3.z * sqrt(pc / 35.0), 0.05, 2.0);
   float cards = C * (cell * pc) * (cell * pc) / wpx;
   // con la camara baja la celda no se ve de frente: ocupa una banda de (celda * p) x (celda * p * sen(elevacion) + alto de la hoja);
@@ -93,7 +96,8 @@ void main(uint3 id : SV_DispatchThreadID)
     float dist = max(length(float3(x, 0.0, z) - eye), 0.5);
     float sinE = clamp(abs(eye.y) / dist, 0.03, 1.0);
     // (26/10 d) alto de la hoja cerca de la camara (el VS funde de x59 al alto cercano entre 110 y 250 px/m, igual que aca)
-    float hM = gP4.z * (gPad[0].w > 0.0 ? lerp(1.0, gPad[0].w, smoothstep(110.0, 250.0, pc)) : 1.0);
+    float hP0 = gPad[2].z > 1.0 ? gPad[2].z : 110.0, hP1 = gPad[2].w > hP0 ? gPad[2].w : 250.0;   // (26/10 e) misma rampa que el VS
+    float hM = gP4.z * (gPad[0].w > 0.0 ? lerp(1.0, gPad[0].w, smoothstep(hP0, hP1, pc)) : 1.0);
     float hpx = max(hM * pc, 1.0);
     float band = (cell * pc) * (cell * pc * sinE + hpx);
     float capB = gP4.w * band;

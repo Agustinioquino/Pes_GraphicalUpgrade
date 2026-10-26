@@ -853,6 +853,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         if (c->GetType() == D3D11_DEVICE_CONTEXT_DEFERRED) g_stFaceCtxDef++;
     }
     if (ps) SunPassNote(ps->hash);   // (25/10) variantes de la luz del sol por cuadro (log)
+    if (ps) GrassDiagState(c, ps->hash);   // (26/10 f) stencil de las pasadas del sol y de la base (log, 3 veces cada una)
     if (!g_cfg.optRules) { RingFaceBind(c, d.ring); return false; }
     if ((ps && ps->rule) || (vs && vs->rule)) {
         if (!s_firstRule.exchange(true)) Log("primer dibujo con regla");
@@ -862,7 +863,27 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     // (20/10) reglas por pareja PS + VS: p.ej. la piel del cuerpo (aa7d1833) cuando dibuja la cabeza de una cara generica (VS faab87ee)
     if (ps && vs) if (const std::vector<const Rule*>* prs = ps->pairRules) for (const Rule* pr : *prs) if (pr->vsCond == vs->hash) RunRuleActions(c, pr, true, ps->hash, d);
     // (25/10) manos de TorsoBody (manos.cpp): datos por vertice de la mano en t126 del VS (cuaterniones duales + correctivas)
-    if (vs && vs->repl) if (ID3D11ShaderResourceView* hv = HandDataFor(vs->hash, t_drawVerts, t_drawStart, t_drawBase)) { Remember(c, d, false, true, 126); c->VSSetShaderResources(126, 1, &hv); }
+    if (vs && vs->repl) {
+        bool arm = false, hand = false;
+        ID3D11ShaderResourceView* hv = HandDataFor(vs->hash, t_drawVerts, t_drawStart, t_drawBase); hand = hv != nullptr;
+        if (!hv) hv = LimbDataFor(vs->hash, t_drawVerts, t_drawStart, t_drawBase, &arm);   // (26/10, v12.7) brazos y piernas
+        if (hv) { Remember(c, d, false, true, 126); c->VSSetShaderResources(126, 1, &hv); }
+        // (26/10, v12.7) venas: textura en t29 del PS de la piel para los brazos y las manos (no en la sombra)
+        if ((hand || arm) && vs->hash == 0x1c02a92ab4ae3362ULL) if (ID3D11ShaderResourceView* vt = VeinTexture()) { Remember(c, d, true, true, 29); c->PSSetShaderResources(29, 1, &vt); }
+        // (26/10) variantes robusto / atletico de TorsoBody (manos.cpp + pes_variants.hlsli): datos por vertice del torso y de los
+        // brazos en t127 del VS (piel y sombras); en el torso, los mapas del PS de la piel en t16 / t17 / t18
+        bool vTorso = false;
+        if (ID3D11ShaderResourceView* vd = VariantDataFor(vs->hash, t_drawVerts, &vTorso)) {
+            Remember(c, d, false, true, 127); c->VSSetShaderResources(127, 1, &vd);
+            ID3D11ShaderResourceView* vm[3] = {};
+            if (vTorso && vs->hash == 0x1c02a92ab4ae3362ULL && VariantTextures(vm)) {
+                Remember(c, d, true, true, 16); Remember(c, d, true, true, 17); Remember(c, d, true, true, 18);
+                c->PSSetShaderResources(16, 3, vm);
+            }
+        }
+        // (26/10) columna marcada: en todos los torsos (aunque no haya variantes en uso)
+        if (ID3D11ShaderResourceView* sp = SpineTextureFor(vs->hash, t_drawVerts)) { Remember(c, d, true, true, 19); c->PSSetShaderResources(19, 1, &sp); }
+    }
     // 19/10: la boca (63fab7) hereda el b11 (tipo de pelo + semilla de la cara) de la ultima cara dibujada en este contexto:
     // variacion de dientes/encias por jugador
     if (ps && ps->hash == 0x63fab7735eee149cULL && ps->repl && s.lastHairCB) { Remember(c, d, true, false, 11); c->PSSetConstantBuffers(11, 1, &s.lastHairCB); }
@@ -1284,6 +1305,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     LodPresent();
     ExeDumpPresent();
     ExePatchPresent();
+    GrassDistPresent();
     PitchWearPresent();
     GrassPresent();
     FaceGenPresent();

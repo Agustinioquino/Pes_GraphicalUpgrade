@@ -4,6 +4,11 @@
 // cada capsula sirve para los dos lados). Las capsulas las arma la DLL (fisico.cpp) en x174..182; el PS lee el peso en
 // o3.w (+2, para distinguirlo de los VS que no lo escriben: o3.w queda en [2, 3]).
 // (25/10) manos: si el dibujo es una mano de TorsoBody, el skinning lo hace pes_hands.hlsli (t126 enlazado por manos.cpp).
+// (26/10, v12.7) musculos con textura (pes_limbs.hlsli): brazos, piernas y manos de TorsoBody mandan en o1.xyz = (definicion,
+// venas, 7) cuanto marcar el relieve muscular y las venas segun la pose (codo, rodilla, brazo levantado, puno apretado).
+// (26/10) variantes robusto / atletico de TorsoBody (pes_variants.hlsli): en las mallas del torso y de los brazos (t127 enlazado
+// por manos.cpp) la posicion, la normal y la tangente de reposo se mezclan con la variante del jugador ANTES del skinning (y del
+// cuadro anterior, para los vectores de movimiento). o6.w lleva siempre cuanto de torso es el vertice (tambien sin entrada).
 // (24/10 c) o4.w / o5.w = cercania a las marcas 0 / 1 del musculo (187 / 188; signo = lado: + izquierdo, - derecho): con eso el
 // PS de la piel (variante pes_skin_hl_ps.hlsl, solo en el menu Fisico) junta en u5 donde quedo cada marca en la pantalla y la
 // DLL dibuja encima el aro y el punto blanco, como una capa de interfaz. o6.w = jugador de la tabla de tonos de piel
@@ -68,7 +73,10 @@ cbuffer VSBones : register(b6)
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 #include "pes_skintone.hlsli"
+#define PES_VARIANT_VS
+#include "pes_variants.hlsli"   // (26/10) variantes robusto / atletico del torso y los brazos (t127)
 #include "pes_hands.hlsli"   // (25/10) manos: cuaterniones duales + correctivas por pose (solo en los dibujos de la mano)
+#include "pes_limbs.hlsli"   // (26/10, v12.7) musculos con textura: definicion y venas segun la pose (o1.xyz)
 
 
 void main(
@@ -98,8 +106,16 @@ void main(
   float4 fDest;
 
   r0.x = cmp(g_vsObject.m_useWeightCount.x != 0.000000);
+  // (26/10) jugador de la tabla (el mismo calculo que el tono de piel, abajo) y su variante del torso / brazos
+  bool skW = g_vsObject.m_useWeightCount.x != 0;
+  float3 sb0 = float3(g_vsBone.m_boneMatrices[0]._m30, g_vsBone.m_boneMatrices[0]._m31, g_vsBone.m_boneMatrices[0]._m32);
+  float3 sb0b = float3(g_vsPrevBone.m_boneMatrices[0]._m30, g_vsPrevBone.m_boneMatrices[0]._m31, g_vsPrevBone.m_boneMatrices[0]._m32);
+  int se = PesSkinNearest(PesSkinPoint(g_vsObject.m_world, g_vsObject.m_viewWorld, g_vsScene.m_view, sb0, sb0b, skW));
+  float3 mP = v0.xyz, mN = v1.xyz, mT = v3.xyz;
+  PesVariantMorph(vid, PesVariantT(se), mP, mN, mT);
+  float4 mP4 = float4(mP, v0.w);
   float3 hP, hN, hT, hPP; float hDbg;
-  bool handDone = (r0.x != 0) && PesHandSkin(vid, v0.xyz, v1.xyz, v3.xyz, v4, v5, hP, hN, hT, hPP, hDbg);
+  bool handDone = (r0.x != 0) && PesHandSkin(vid, mP, mN, mT, v4, v5, hP, hN, hT, hPP, hDbg);
   if (handDone) {
     r4.xyz = hP; r5.xyz = hN; r1.xyz = hT; r2.xyz = hPP;
   } else if (r0.x != 0) {
@@ -116,15 +132,15 @@ void main(
     r1.xyzw = g_vsBone.m_boneMatrices[v4.w]._m00_m10_m20_m30 * v5.wwww + r1.xyzw;
     r2.xyzw = g_vsBone.m_boneMatrices[v4.w]._m01_m11_m21_m31 * v5.wwww + r2.xyzw;
     r3.xyzw = g_vsBone.m_boneMatrices[v4.w]._m02_m12_m22_m32 * v5.wwww + r3.xyzw;
-    r4.x = dot(v0.xyzw, r1.xyzw);
-    r4.y = dot(v0.xyzw, r2.xyzw);
-    r4.z = dot(v0.xyzw, r3.xyzw);
-    r5.x = dot(v1.xyz, r1.xyz);
-    r5.y = dot(v1.xyz, r2.xyz);
-    r5.z = dot(v1.xyz, r3.xyz);
-    r1.x = dot(v3.xyz, r1.xyz);
-    r1.y = dot(v3.xyz, r2.xyz);
-    r1.z = dot(v3.xyz, r3.xyz);
+    r4.x = dot(mP4, r1.xyzw);
+    r4.y = dot(mP4, r2.xyzw);
+    r4.z = dot(mP4, r3.xyzw);
+    r5.x = dot(mN, r1.xyz);
+    r5.y = dot(mN, r2.xyz);
+    r5.z = dot(mN, r3.xyz);
+    r1.x = dot(mT, r1.xyz);
+    r1.y = dot(mT, r2.xyz);
+    r1.z = dot(mT, r3.xyz);
     r2.xyzw = g_vsPrevBone.m_boneMatrices[v4.y]._m00_m10_m20_m30 * v5.yyyy;
     r3.xyzw = g_vsPrevBone.m_boneMatrices[v4.y]._m01_m11_m21_m31 * v5.yyyy;
     r6.xyzw = g_vsPrevBone.m_boneMatrices[v4.y]._m02_m12_m22_m32 * v5.yyyy;
@@ -137,14 +153,14 @@ void main(
     r2.xyzw = g_vsPrevBone.m_boneMatrices[v4.w]._m00_m10_m20_m30 * v5.wwww + r2.xyzw;
     r3.xyzw = g_vsPrevBone.m_boneMatrices[v4.w]._m01_m11_m21_m31 * v5.wwww + r3.xyzw;
     r0.xyzw = g_vsPrevBone.m_boneMatrices[v4.w]._m02_m12_m22_m32 * v5.wwww + r6.xyzw;
-    r2.x = dot(v0.xyzw, r2.xyzw);
-    r2.y = dot(v0.xyzw, r3.xyzw);
-    r2.z = dot(v0.xyzw, r0.xyzw);
+    r2.x = dot(mP4, r2.xyzw);
+    r2.y = dot(mP4, r3.xyzw);
+    r2.z = dot(mP4, r0.xyzw);
   } else {
-    r5.xyz = v1.xyz;
-    r1.xyz = v3.xyz;
-    r4.xyz = v0.xyz;
-    r2.xyz = v0.xyz;
+    r5.xyz = mN;
+    r1.xyz = mT;
+    r4.xyz = mP;
+    r2.xyz = mP;
   }
   r4.w = v0.w;
   r0.x = dot(r4.xyzw, g_vsObject.m_viewWorld._m00_m10_m20_m30);
@@ -191,6 +207,11 @@ void main(
   o0.xyw = r3.xyw;
   o1.xyz = v2.xyz;
   o1.w = g_vsObject.m_useWeightCount.w;
+  {   // (26/10, v12.7) musculos con textura (pes_limbs.hlsli): en los brazos, piernas y manos de TorsoBody el PS de la piel recibe
+      // en o1.xyz cuanto marcar el relieve muscular y las venas (z = 7: marca; ese PS no usa el color del vertice)
+    float lbD = 0.0, lbV = 0.0;
+    if (PesLimbOut(handDone, vid, v0.xyz, lbD, lbV)) o1.xyz = float3(lbD, lbV, 7.0);
+  }
   o7.xy = r3.xy;
   o2.xy = v6.xy;
   p2.x = r3.w;
@@ -228,13 +249,9 @@ void main(
     }
     o4.w = pm0; o5.w = pm1;
   }
-  {   // (24/10 c) tono de piel por jugador: un punto del dibujo en el mundo (pes_skintone.hlsli) -> entrada mas cercana
-    bool sk = g_vsObject.m_useWeightCount.x != 0;
-    float3 b0 = float3(g_vsBone.m_boneMatrices[0]._m30, g_vsBone.m_boneMatrices[0]._m31, g_vsBone.m_boneMatrices[0]._m32);
-    float3 b0b = float3(g_vsPrevBone.m_boneMatrices[0]._m30, g_vsPrevBone.m_boneMatrices[0]._m31, g_vsPrevBone.m_boneMatrices[0]._m32);
-    float3 sw = PesSkinPoint(g_vsObject.m_world, g_vsObject.m_viewWorld, g_vsScene.m_view, b0, b0b, sk);
-    int se = PesSkinNearest(sw);
-    o6.w = se >= 0 ? 1000.0 + se + 0.4 * PesTorsoMask(v0.xyz) : 999.0;   // (24/10 g) + cuanto de torso (solo el torso)
+  {   // (24/10 c) tono de piel por jugador: un punto del dibujo en el mundo (pes_skintone.hlsli) -> entrada mas cercana (se, arriba)
+      // (24/10 g) + cuanto de torso; (26/10) tambien sin entrada (999 + ...): el PS lo usa para las variantes del torso
+    o6.w = (se >= 0 ? 1000.0 + se : 999.0) + 0.4 * PesTorsoMask(v0.xyz);
   }
   return;
 }

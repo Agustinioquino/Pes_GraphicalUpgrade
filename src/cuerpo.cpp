@@ -564,11 +564,14 @@ static bool RunBatch(ID3D11DeviceContext* imm, std::vector<Rec>& recs, int frame
     { ID3D11UnorderedAccessView* u[5] = { nullptr, nullptr, s_tabUAV, s_recTabUAV, s_diagUAV }; imm->CSSetUnorderedAccessViews(0, 5, u, nullptr); }
     imm->CSSetShader(s_csAssign, nullptr, 0);
     imm->Dispatch(1, 1, 1);
-    // piel
+    // piel ((26/10) con t120: la forma grande de la variante del torso de cada personaje, pes_variants.hlsli)
     { ID3D11UnorderedAccessView* u[5] = { s_ringVUAV, s_ringNUAV, s_tabUAV, s_recTabUAV, nullptr }; imm->CSSetUnorderedAccessViews(0, 5, u, nullptr); }
     { ID3D11ShaderResourceView* v[4] = { s_staticSRV, s_descSRV, s_recSRV, s_grpSRV }; imm->CSSetShaderResources(0, 4, v); }
+    ID3D11ShaderResourceView* pprm = nullptr; imm->CSGetShaderResources(120, 1, &pprm);
+    { ID3D11ShaderResourceView* prm = g_dev.paramSRV; imm->CSSetShaderResources(120, 1, &prm); }
     imm->CSSetShader(s_csSkin, nullptr, 0);
     imm->Dispatch(ng, 1, 1);
+    imm->CSSetShaderResources(120, 1, &pprm); if (pprm) pprm->Release();
     imm->CSSetUnorderedAccessViews(0, 5, puav, nullptr);
     imm->CSSetShaderResources(0, 4, psrv);
     imm->CSSetConstantBuffers(0, 1, &pcb);

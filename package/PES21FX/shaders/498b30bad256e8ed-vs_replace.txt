@@ -8,7 +8,7 @@
 cbuffer cVSSystem : register(b0) { float4 cb0[3]; }
 cbuffer cVSScene : register(b2) { float4 cb2[21]; }
 cbuffer cVSMaterial : register(b4) { float4 cb4[5]; }
-cbuffer cVSObject : register(b5) { float4 cb5[12]; }
+cbuffer cVSObject : register(b5) { float4 cb5[13]; }   // cb5[12] solo en parcelas del mod (rampa cerca: ancho de primer plano, p0, p1 px/m)
 
 SamplerState g_samplerLinear_Wrap_s : register(s10);
 SamplerState g_samplerLinear_Clamp_s : register(s11);
@@ -105,7 +105,10 @@ void main(
     k *= pesWinK;
     // (26/10 d) alto: x59 (pesExt.z) lejos, alto cercano (cb5[10].y, 1.0) de 110 a 250 px/m; con 1.3 en todo, cerca las hojas eran
     // 1.3x mas altas que las del juego y la copa quedaba rigida (el doblado del viento satura a 6 cm)
-    pesTallE = lerp(max(pesExt.z, 0.1), cb5[10].y > 0.05 ? cb5[10].y : max(pesExt.z, 0.1), smoothstep(110.0, 250.0, pesPx));
+    // (26/10 e) la rampa cerca (cb5[12].y / .z px/m) arranca mas lejos que 110-250: en las camaras de juego (110-300 px/m) las hojas
+    // quedaban cortas y finas (alfombra borrosa); el alto / ancho de primer plano vale solo con la camara pegada al suelo
+    float pesP0 = cb5[12].y > 1.0 ? cb5[12].y : 110.0, pesP1 = cb5[12].z > pesP0 ? cb5[12].z : 250.0;
+    pesTallE = lerp(max(pesExt.z, 0.1), cb5[10].y > 0.05 ? cb5[10].y : max(pesExt.z, 0.1), smoothstep(pesP0, pesP1, pesPx));
     v0.y = v0_in.y * pesTallE * k;
     pesExtW = float3(pesExtRoot.x, v0.y, pesExtRoot.y);
     // descarte por pantalla: centro de la parcela con margen del tamano de la parcela
@@ -191,6 +194,19 @@ void main(
     pesH = hT * clamp(Q4.z, 0.3, 3.0) * (1.0 + (n - 0.5) * 2.0 * hv) * (1.0 - pesWear.x * 0.35) * (1.0 - pesWear.y) * PESWearLiveHeight(pesLive);
     v0.y *= pesH;
     pesExtW.y = v0.y;   // las parcelas extra toman la misma altura
+    // (26/10 f) z292: el desgaste ralea las hojas del mod: se apagan tarjetas enteras al azar segun lo pelado y el desgaste en vivo en el
+    // centro de la celda (la misma decision en todos los vertices de la tarjeta). Antes el desgaste solo acortaba y tenia las hojas, y
+    // las capas de hojas tapaban el suelo gastado; lejos (< 20 px/m) el suelo ya se ve por el color mezclado (y291)
+    float4 P292w = IniParams.Load(int2(292, 0));
+    if (pesIsExt && pesCard >= 0 && P292w.z > 0.5 && pesPx > 20.0) {
+      float2 puvC = pesExtOrg * cb4[1].xy + cb4[1].zw;
+      float lvC = PESWearMap.SampleLevel(g_samplerLinear_Clamp_s, puvC, 0).x;
+      float2 wC = PESWear(PESPitchMeters(puvC), pesExtOrg, Q4.w, Q7.x, Q7.z, lvC);
+      float4 LWv = IniParams.Load(int2(115, 0));
+      float thin = saturate(wC.y + (LWv.w > 0.5 ? 0.7 * smoothstep(0.15, 0.9, PESWearLiveCurve(lvC)) : 0.0));
+      float hc = PESGh21(float2((float)pesCard * 0.0413 + pesExtOrg.x * 0.37, pesExtOrg.y * 0.61 + (float)pesRot * 0.29) + 0.73);
+      if (hc < thin) pesKill = true;
+    }
     // (20/10) inclinacion real de la hoja segun el grano del corte (las franjas se ven en 3D de cerca) y viento:
     // onda que recorre la cancha con rafagas, en la direccion del viento de las nubes (z84). z108 corte, y108 viento
     float4 Q8 = IniParams.Load(int2(108, 0));
@@ -285,6 +301,7 @@ void main(
   r2.z = max(r0.w, r5.w);
   r2.z = r2.z * 0.06;
   r2.z = max(r2.z, 0.0);
+  float pesSinkG = r2.z;   // (26/10 f) hundimiento del juego en este vertice (lineas, areas gastadas, sin pasto): hasta 6 cm
   r0.y = -r2.z;
   r6.xyz = r0.xyz + r1.xyz;
   r7 = -r1.yxyz + cb2[20].yxyz;
@@ -297,9 +314,20 @@ void main(
   r0.y = min(r0.y, r6.y);
   r0.y = saturate(r0.y + 0.06);
   r6.y = r0.y - 0.06;
+  float pesSinkE = 0.0;
   if (pesIsExt) {
-    // parcelas extendidas: sin mascara de desgaste ni hundimiento (lejos no se ven); altura = la de la hoja, tope 6 cm x alto
+    // parcelas extendidas: altura = la de la hoja, tope 6 cm x alto
     r6.y = min(v0.y, 0.06 * pesTallE);
+    // (26/10 f) x292: el hundimiento del juego tambien en las hojas del mod (las del juego se entierran donde la textura del estadio marca
+    // lineas, areas gastadas o sin pasto; las del mod tapaban todo eso) y su tope de alto (mask.w); y292 entierra ademas las hojas sobre
+    // la pintura de las lineas. Se resta despues del largo constante (v5) para que queden bajo el suelo y no como astillas encima
+    float4 P292 = IniParams.Load(int2(292, 0));
+    if (P292.x > 0.5) {
+      float capE = saturate(0.99 - pesMsk.w) * 0.06 * max(pesH, 0.2) * pesTallE;
+      r6.y = min(r6.y, capE);
+      float fr = max(saturate(pesSinkG / 0.06), saturate(max(pesMsk.x, pesDif.w) * 1.5) * saturate(P292.y));
+      pesSinkE = fr * 0.063 * pesTallE + (capE < 0.004 ? 0.004 : 0.0);
+    }
   } else if (pesFarK > 0.0) {
     r6.y = lerp(r6.y, min(v0.y, 0.06 * max(FA2.x, 0.1)), pesFarK);
   }
@@ -312,11 +340,15 @@ void main(
     float bb = min(dot(pesBend, pesBend), yy * yy * 0.9375);
     r6.y = sqrt(max(yy * yy - bb, 0.0));
   }
+  r6.y -= pesSinkE;   // (26/10 f) hojas del mod hundidas (x292)
   r6.w = pesIsExt ? 1.0 : dot(v0, cb5[7]);
   if (pesIsExt || pesFarK > 0.0) {
     // ensanche hacia la camara: la hoja se corre a lo largo del eje derecha de la camara segun su u (0..1)
     float3 camRight = normalize(cb2[8].xyz);
-    float wid = pesIsExt ? pesExt.w * max(cb5[10].z, 0.0) * pesExtScale : 0.012 * max(FAR.x, 1.0) * max(FA2.y, 0.0) * pesFarK;
+    // (26/10 e) ancho base del mod: cb5[8].w en las camaras de juego, cb5[12].x (mas fino) con la camara pegada al suelo (rampa cb5[12].y / .z)
+    float pesWidB = pesExt.w;
+    if (pesIsExt && cb5[12].x > 0.0 && cb5[12].y > 1.0) pesWidB = lerp(pesExt.w, cb5[12].x, smoothstep(cb5[12].y, max(cb5[12].z, cb5[12].y + 1.0), pesPx));
+    float wid = pesIsExt ? pesWidB * max(cb5[10].z, 0.0) * pesExtScale : 0.012 * max(FAR.x, 1.0) * max(FA2.y, 0.0) * pesFarK;
     // (25/10 c) ancho minimo en pixeles (cb5[10].x): una hoja de menos de ~1.4 px titila al mover la camara
     if (pesIsExt && cb5[10].x > 0.0 && pesPx > 1.0) wid = max(wid, cb5[10].x / pesPx);
     // (26/10 d) el ensanche se afina hacia la punta como la malla (antes era constante y anulaba el afinado: cintas)
@@ -333,6 +365,11 @@ void main(
   o0.z = dot(r8, cb2[6]);
   o0.x = r9.x; o0.y = r9.y; o0.w = r9.w;
   o6.xy = r9.xy;
+  // (26/10 f) pasto tanda 6: lejos -> cerca de las hojas del mod por los px/m de este vertice (los mismos de o4.w; y291 / z291): 0 = la hoja
+  // deja su normal y su inclinacion propias y el PS mezcla su color con el del suelo ya dibujado (18af); 1 = como antes. Las del juego, 1
+  float4 P291 = IniParams.Load(int2(291, 0));
+  float pesC = 1.0;
+  if (pesIsExt && P291.x > 0.5) { float c0 = max(P291.y, 1.0), c1 = max(P291.z, c0 + 1.0); pesC = smoothstep(c0, c1, abs(cb2[5].y) * P63.z / max(r9.w, 0.05)); }
   // --- sombra plana proyectada desde la raiz de la hoja ---
   r1.xy = v0.xz;
   r1.z = 1.0;
@@ -357,6 +394,11 @@ void main(
   r0.y = dot(r8, float4(1, 1, 1, 1));
   o1.z = saturate(1.0 - r0.y);
   if (pesIsExt && cb5[9].w < 0.5) o1.z = 1.0;   // (26/10 d) estado guardado viejo (camara sin pasto del juego): la sombra plana seria de otro momento
+  // (26/10 f) cb5[12].w (la DLL, solo hojas del mod): + 1 = dibujadas con el stencil de la base de la cancha: la pasada del sol con mapa de
+  // sombras (e9c13241) las ilumina como al suelo (sombra del estadio y de los jugadores en todas las camaras); la sombra plana se apaga para
+  // no oscurecer dos veces. + 2 = su color se mezcla con el del suelo (alfa de o0 en el PS)
+  int pesFl = pesIsExt ? (int)(cb5[12].w + 0.5) : 0;
+  if ((pesFl & 1) != 0) o1.z = 1.0;
   o1.xy = v1.xy;
   r0.yz = r2.xy * float2(32.0, 24.0);
   r2 = g_tex_grain.SampleLevel(g_samplerLinear_Clamp_s, r2.xy, 0);
@@ -384,6 +426,9 @@ void main(
       float2 ng = float2(r9.x * r9.z, r9.y) * 2.0 - 1.0; float2 nn = tn.xy * 2.0 - 1.0;
       float2 nb = lerp(ng, nn, saturate(Q10.x)); r9.xy = nb * 0.5 + 0.5; r9.z = 1.0; }
   }
+  // (26/10 f) w291: lejos la normal de detalle va a plana: se muestrea por vertice, 1-2 mips mas fina que el pixel del suelo, y cada hoja de
+  // 2-6 px llevaba una inclinacion al azar (granulado que cambiaba con la camara)
+  if (pesIsExt && P291.w > 0.5 && pesC < 1.0) { float2 nf = float2(r9.x * r9.z, r9.y); r9.xy = lerp(float2(0.5, 0.5), nf, pesC); r9.z = 1.0; }
   // --- color base ---
   r0.y = log2(r8.w);
   r0.y = r0.y * 0.454545;
@@ -571,7 +616,9 @@ void main(
     float2 sl = 2.0 * pesBend / max(r6.y + 0.004, 0.006);
     float ls = length(sl); if (ls > 1.5) sl *= 1.5 / ls;
     // (26/10 d) lejos (niveles 1 / 2 del mod, < 110 px/m) el viento no se ve como movimiento (< 1 px): se refuerza la ola de brillo
-    float kN = (0.55 + clamp(Q39.y, 0.0, 2.0) * 0.5 * pesGust) * (pesIsExt ? lerp(1.8, 1.0, saturate(pesPx / 110.0)) : 1.0);
+    // (26/10 f) con x291 ya no: el refuerzo lejos (1.8x) dejaba las franjas oscuras un 32% mas oscuras lejos que cerca y cambiaba con el
+    // zoom; ahora la inclinacion de la luz se apaga lejos (pesC) y las franjas salen solo del color del suelo
+    float kN = (0.55 + clamp(Q39.y, 0.0, 2.0) * 0.5 * pesGust) * (pesIsExt ? (P291.x > 0.5 ? pesC : lerp(1.8, 1.0, saturate(pesPx / 110.0))) : 1.0);
     r0.xzw = normalize(r0.xzw + float3(sl.x, 0.0, sl.y) * kN);
   }
   o4.x = dot(r0.xzw, cb2[8].xyz);
@@ -598,6 +645,6 @@ void main(
   o6.z = dot(r6, cb2[16]);
   o6.w = dot(r6, cb2[17]);
   o7.y = dot(r6, cb2[19]);
-  o8 = float4(pesWear.x, pesWear.y, pesH, pesV3 ? 1.0 + pesBand : 0.0);   // w = 1 + banda del atlas (0 = sin v3)
+  o8 = float4(pesWear.x, pesWear.y, pesH, pesV3 ? 1.0 + pesBand + ((pesFl & 2) != 0 ? 8.0 : 0.0) : 0.0);   // w = 1 + banda del atlas (0 = sin v3) + 8 si se mezcla con el suelo (igual en todo el dibujo)
   if (pesKill) o0 = float4(0.0, 0.0, -2.0, 1.0);   // todos los vertices iguales: triangulos nulos, no se rasteriza
 }

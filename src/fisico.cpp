@@ -105,26 +105,30 @@ static std::atomic<int> s_sliderMode{-1};   // -1 sin probar, 1 barras, 0 select
 //   K_GLOBAL  opcion de todos los jugadores (PES21FX.ini): barra 0..100 = 0..2 de a 0.02
 //   K_SWITCH  interruptor de todos (selector No / Si)
 //   K_COMPARE "Ver": con la musculatura o como el juego (mientras se edita, para comparar)
-enum { K_MUS = 0, K_DEF, K_HEAD, K_PRESET, K_GLOBAL, K_SWITCH, K_COMPARE };
+//   K_VARIANT (26/10) selector de forma con pasos con nombre (kLSel): "Torso y brazos" Robusto 100 % .. Normal (TorsoBody) ..
+//             Atletico 100 % de a 20 % (z262 del jugador: 0.5 .. 1 .. 1.5; variantes de TorsoBody, pes_variants.hlsli) y los de los
+//             hombros (fila 287 del jugador: inclinacion caidos .. rectos, tipo y tamano; musculo.cpp ComputeFactors)
+enum { K_MUS = 0, K_DEF, K_HEAD, K_PRESET, K_GLOBAL, K_SWITCH, K_COMPARE, K_VARIANT };
 struct MRow { const char* label; int idx, comp, kind; };
 #define MU(l, i, c) { l, i, c, K_MUS }
 #define HD(l) { l, 0, 0, K_HEAD }
 static const MRow kPgBody[] = {   // todo el cuerpo, hombros y cuello
-    HD("Todo el cuerpo"), { "Tipo de cuerpo", 0, 0, K_PRESET }, MU("General", 167, 0), { "Definici\xC3\xB3n muscular", 172, 0, K_DEF },
-    { "Ver", 0, 0, K_COMPARE },
-    HD("Hombros y trapecio"), MU("Hombros", 164, 1), MU("Ancho de hombros", 171, 3), MU("Deltoides frontal", 260, 0), MU("Deltoides posterior", 260, 1),
+    HD("Todo el cuerpo"), { "Tipo de cuerpo", 0, 0, K_PRESET }, { "Torso y brazos", 262, 2, K_VARIANT }, MU("General", 167, 0),
+    { "Definici\xC3\xB3n muscular", 172, 0, K_DEF }, { "Ver", 0, 0, K_COMPARE },
+    HD("Hombros y trapecio"), { "Inclinaci\xC3\xB3n de hombros", 287, 0, K_VARIANT }, { "Tipo de hombros", 287, 1, K_VARIANT },
+    { "Tama\xC3\xB1o de hombros", 287, 2, K_VARIANT }, MU("Hombros", 164, 1), MU("Ancho de hombros", 171, 3), MU("Deltoides frontal", 260, 0), MU("Deltoides posterior", 260, 1),
     MU("Trapecio", 167, 1), MU("Trapecio alto", 261, 2),
-    HD("Cuello"), MU("Cuello", 170, 0), MU("Nuca", 166, 2), MU("Base del cuello", 162, 3),
 };
 static const MRow kPgArms[] = {   // brazos
     HD("Brazo"), MU("B\xC3\xAD" "ceps", 164, 2), MU("Tr\xC3\xAD" "ceps", 164, 3), MU("Axilas", 162, 0),
     HD("Antebrazo"), MU("Antebrazos", 165, 0), MU("Antebrazo alto", 260, 2), MU("Antebrazo bajo", 260, 3),
     HD("Articulaciones"), MU("Codos", 166, 3), MU("Mu\xC3\xB1" "ecas", 170, 3),
 };
-static const MRow kPgTorso[] = {   // pecho y espalda
+static const MRow kPgTorso[] = {   // pecho, espalda y (26/10) cuello (la pagina 1 lleva ahora el selector de la variante)
     HD("Pecho"), MU("Pecho", 165, 1), MU("Pecho alto", 170, 1), MU("Pecho bajo", 261, 0), MU("Costados (serratos)", 162, 1),
     HD("Espalda"), MU("Espalda (toda)", 165, 2), MU("Om\xC3\xB3" "platos", 167, 2), MU("Dorsales", 167, 3), MU("Dorsales: ancho (V)", 261, 1),
     MU("Espalda baja", 168, 0), MU("Lumbares", 162, 2),
+    HD("Cuello"), MU("Cuello", 170, 0), MU("Nuca", 166, 2), MU("Base del cuello", 162, 3),
 };
 static const MRow kPgCore[] = {   // abdomen y cadera
     HD("Abdomen"), MU("Abdominales", 168, 1), MU("Oblicuos", 168, 2), MU("Cintura", 171, 1), MU("Panza", 168, 3),
@@ -145,9 +149,9 @@ static const MRow kPgAlive[] = {   // musculos vivos y opciones (para todos los 
 struct MPage { const char* title; const MRow* rows; int n; const char* next; };
 #define PG(t, r, nx) { t, r, (int)(sizeof r / sizeof r[0]), nx }
 static const MPage kMP[] = {
-    PG("Musculatura: cuerpo, hombros y cuello", kPgBody, "Brazos  >"),
-    PG("Musculatura: brazos", kPgArms, "Pecho y espalda  >"),
-    PG("Musculatura: pecho y espalda", kPgTorso, "Abdomen y cadera  >"),
+    PG("Musculatura: cuerpo y hombros", kPgBody, "Brazos  >"),
+    PG("Musculatura: brazos", kPgArms, "Pecho, espalda y cuello  >"),
+    PG("Musculatura: pecho, espalda y cuello", kPgTorso, "Abdomen y cadera  >"),
     PG("Musculatura: abdomen y cadera", kPgCore, "Piernas  >"),
     PG("Musculatura: piernas", kPgLegs, "M\xC3\xBAsculos vivos  >"),
     PG("M\xC3\xBAsculos vivos (para todos)", kPgAlive, "Piel  >"),
@@ -155,6 +159,36 @@ static const MPage kMP[] = {
 #undef PG
 static const int kNMP = (int)(sizeof kMP / sizeof kMP[0]);   // paginas de musculatura: 1..kNMP
 static_assert(sizeof kPgBody / sizeof kPgBody[0] <= 16 && sizeof kPgTorso / sizeof kPgTorso[0] <= 16, "17 filas como maximo (16 + salto)");
+// (26/10) selectores de forma: pasos con nombre y el valor del jugador de cada uno (se elige el paso mas cercano al valor)
+static const char* const kVarItems[] = {
+    "Robusto 100 %", "Robusto 80 %", "Robusto 60 %", "Robusto 40 %", "Robusto 20 %", "Normal (TorsoBody)",
+    "Atl\xC3\xA9tico 20 %", "Atl\xC3\xA9tico 40 %", "Atl\xC3\xA9tico 60 %", "Atl\xC3\xA9tico 80 %", "Atl\xC3\xA9tico 100 %" };
+static const float kVarVals[] = { 0.5f, 0.6f, 0.7f, 0.8f, 0.9f, 1.0f, 1.1f, 1.2f, 1.3f, 1.4f, 1.5f };
+static const char* const kSlopeItems[] = { "Muy ca\xC3\xAD" "dos", "Ca\xC3\xAD" "dos", "Un poco ca\xC3\xAD" "dos", "Normales", "Un poco rectos", "Rectos", "Muy rectos" };
+static const char* const kSSizeItems[] = { "Muy chicos", "Chicos", "Un poco chicos", "Normales", "Un poco grandes", "Grandes", "Muy grandes" };
+static const float kSevenVals[] = { 0.7f, 0.8f, 0.9f, 1.0f, 1.1f, 1.2f, 1.3f };
+static const char* const kSTypeItems[] = { "Estrechos", "Normales", "Anchos", "Redondos" };
+static const float kSTypeVals[] = { 2.0f, 1.0f, 3.0f, 4.0f };   // 1 = normales (lo que falta en los archivos vale 1)
+struct LSel { int idx, comp; const char* const* items; const float* vals; int n; };
+#define LS(i, c, it, va) { i, c, it, va, (int)(sizeof it / sizeof it[0]) }
+static const LSel kLSel[] = {
+    LS(262, 2, kVarItems, kVarVals),       // torso y brazos: robusto .. atletico
+    LS(287, 0, kSlopeItems, kSevenVals),   // hombros: inclinacion
+    LS(287, 1, kSTypeItems, kSTypeVals),   //          tipo
+    LS(287, 2, kSSizeItems, kSevenVals),   //          tamano
+};
+#undef LS
+static_assert(sizeof kVarItems / sizeof kVarItems[0] == sizeof kVarVals / sizeof kVarVals[0] &&
+              sizeof kSlopeItems / sizeof kSlopeItems[0] == sizeof kSevenVals / sizeof kSevenVals[0] &&
+              sizeof kSSizeItems / sizeof kSSizeItems[0] == sizeof kSevenVals / sizeof kSevenVals[0] &&
+              sizeof kSTypeItems / sizeof kSTypeItems[0] == sizeof kSTypeVals / sizeof kSTypeVals[0], "pasos y valores de los selectores");
+static const LSel* LSelOf(int idx, int comp) { for (const LSel& l : kLSel) if (l.idx == idx && l.comp == comp) return &l; return nullptr; }
+static int LSelIndex(const LSel& l, float v) {
+    if (v < 0.05f) v = 1.0f;   // sin valor = 1
+    int best = 0; float bd = 1e9f;
+    for (int i = 0; i < l.n; i++) { const float d = fabsf(l.vals[i] - v); if (d < bd) { bd = d; best = i; } }
+    return best;
+}
 static const int kJump0 = 13;   // fila del salto en la pagina 0 (Fisico)
 static const int kSkinPage = kNMP + 1;   // la piel va despues de las paginas de musculatura
 static const int kLastPage = kSkinPage;
@@ -329,7 +363,7 @@ static void FillPresetRow(void* menu, void* list, int row) {
 // valor de una fila: musculo / definicion del jugador (o el general), opcion de todos
 static float RowValue(const MRow& r) {
     switch (r.kind) {
-    case K_MUS: case K_DEF: return MuscleProfileGet(s_editId, r.idx, r.comp);
+    case K_MUS: case K_DEF: case K_VARIANT: return MuscleProfileGet(s_editId, r.idx, r.comp);
     case K_GLOBAL: case K_SWITCH: return g_cfg.live[r.idx][r.comp];
     default: return 0.0f;
     }
@@ -346,6 +380,11 @@ static float FromUnits(const MRow& r, int u) {
 static const char* RowLabel(const MRow& r, float v) {
     static char b[96];
     if (r.kind == K_GLOBAL && v < 0.005f) { snprintf(b, sizeof b, "%s  (apagado)", r.label); return b; }
+    if (r.idx == 262 && r.comp == 2) {   // (26/10) variante del torso: 0.5 robusto .. 1 TorsoBody .. 1.5 atletico
+        if (fabsf(v - 1.0f) < 0.005f) snprintf(b, sizeof b, "Torso y brazos  (TorsoBody)");
+        else snprintf(b, sizeof b, "Torso y brazos  %s %d%%", v < 1.0f ? "robusto" : "atl\xC3\xA9tico", (int)lroundf(fabsf(v - 1.0f) * 200.0f));
+        return b;
+    }
     if (!IsBar(r.kind) || fabsf(v - 1.0f) < 0.005f) return r.label;
     snprintf(b, sizeof b, "%s  x%.2f", r.label, v);
     return b;
@@ -366,6 +405,12 @@ static void FillRow(void* menu, void* list, int i, const MRow& r) {
         return;
     }
     case K_PRESET: FillPresetRow(menu, list, i); return;
+    case K_VARIANT: {   // (26/10) selector de forma: Robusto .. Normal .. Atletico, hombros caidos .. rectos, tipo, tamano
+        G_SetRow(menu, 1, (unsigned)i); G_SetEnable(w); SetLabel(w, r.label);
+        void* sel = FindComp(w, "selector"); const LSel* l = LSelOf(r.idx, r.comp);
+        if (sel && l) G_SelFillList(sel, l->items, l->n, LSelIndex(*l, RowValue(r)));
+        return;
+    }
     case K_COMPARE: case K_SWITCH: {
         G_SetRow(menu, 1, (unsigned)i); G_SetEnable(w); SetLabel(w, r.label);
         void* sel = FindComp(w, "selector");
@@ -694,6 +739,13 @@ static void ApplySelector(void* menu, int row, int idx) {
     switch (r->kind) {
     case K_PRESET: ApplyPreset(menu, row, idx); break;
     case K_COMPARE: MuscleCompare(idx == 1); break;
+    case K_VARIANT: {   // (26/10) solo si cambio (el juego avisa tambien al pasar el cursor)
+        const LSel* l = LSelOf(r->idx, r->comp);
+        if (!s_editId || !l || LSelIndex(*l, RowValue(*r)) == std::clamp(idx, 0, l->n - 1)) break;
+        MuscleProfileSet(s_editId, s_editName, r->idx, r->comp, l->vals[std::clamp(idx, 0, l->n - 1)]);
+        s_hlChanged = true;
+        RefreshPresetRow(menu);
+        break; }
     case K_SWITCH: {
         const bool now = g_cfg.live[r->idx][r->comp] > 0.5f, want = idx != 0;
         if (now == want) break;   // el juego avisa tambien al pasar el cursor: solo si cambio
@@ -742,7 +794,9 @@ static void* __fastcall hk_decide(void* menu, void* a2, void* a3, void* a4) {
     return o_decide(menu, a2, a3, a4);
 }
 static void* __fastcall hk_back(void* menu, void* a2, void* a3, void* a4) {
-    if (Mine(menu) && s_page > 0) { int p = s_page; GoPage(menu, p - 1, JumpRow(p - 1)); return nullptr; }
+    // (26/10) circulo / Volver desde cualquier pagina del mod: a la primera pestana de Fisico (la del juego), con el cursor en
+    // "Musculatura  >" (L1 / R1 siguen pasando de a una pagina)
+    if (Mine(menu) && s_page > 0) { GoPage(menu, 0, kJump0); return nullptr; }
     return o_back(menu, a2, a3, a4);
 }
 static void* __fastcall hk_l1(void* menu, void* a2, void* a3, void* a4) {   // pagina anterior (arriba de todo)
@@ -765,7 +819,7 @@ static void* __fastcall hk_reset(void* menu, void* a2, void* a3, void* a4) {
         const int n = CountOf(s_page) - 1;
         for (int i = 0; i < n; i++) {
             const MRow* r = RowOf(s_page, i); if (!r) continue;
-            if ((r->kind == K_MUS || r->kind == K_DEF) && s_editId) MuscleProfileSet(s_editId, s_editName, r->idx, r->comp, 1.0f);
+            if ((r->kind == K_MUS || r->kind == K_DEF || r->kind == K_VARIANT) && s_editId) MuscleProfileSet(s_editId, s_editName, r->idx, r->comp, 1.0f);
             else if (r->kind == K_GLOBAL) { g_cfg.live[r->idx][r->comp] = 1.0f; CfgDirty(); }
         }
         int cur = CursorRow(menu);
@@ -939,6 +993,8 @@ void FisicoHighlightPresent() {
     static const MRow kAll = { "", 167, 0, K_MUS };   // (26/10) Tipo de cuerpo y Ver resaltan todo el cuerpo, como General
     if (r && (r->kind == K_PRESET || r->kind == K_COMPARE)) r = &kAll;
     else if (r && (r->kind == K_HEAD || r->kind == K_GLOBAL || r->kind == K_SWITCH)) r = nullptr;   // subtitulos y opciones de todos: nada
+    // (26/10) los selectores de forma (robusto / atletico, hombros) no resaltan nada: el brillo tapaba justo lo que se quiere ver
+    if (r && (r->kind == K_VARIANT || LSelOf(r->idx, r->comp))) r = nullptr;
     if (!r) { if (s_hlOn) { HlClear(); s_hlOn = false; s_hlRow = -1; } return; }
     const double t = Now();
     const int row = reqOn ? 1000 + req : CursorRow(menu);

@@ -218,3 +218,65 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
 | Prueba pendiente | sider.ini con TorsoBody comentado (cpk.root y TorsoBody_cuello.lua); si sigue, reaplicar la opcion en el Switcher |
 | Estado en el PC | d3d11.dll = 94cb6b25 (antes de las 5), PES21FX.ini y shaders de pasto/cuerpo de las 05:59; lo nuevo en PES21FX\backup_20261025_0645_antes_de_restaurar. La DLL nueva (lote del cuerpo, 6518e810) esta en build-integracion-ropa-pasto |
 | Coordinacion | tres sesiones instalaban en el PC a la vez (pasto, manos, ropa): no instalar en vivo sin avisar |
+
+## Variantes robusto / atletico de TorsoBody (26/10)
+- Un valor por jugador: z262 (0.5 robusto .. 1 TorsoBody .. 1.5 atletico; t = 2 (v - 1)). Va en los perfiles de
+  musculatura_jugadores.ini, en los tipos de cuerpo (Delgado 1.10, Atletico 1.35, Fuerte 0.90, Corpulento 0.55, Culturista 1.50)
+  y en el menu Fisico del juego (primera pagina de Musculatura: selector "Torso y brazos" Robusto 100 % .. Normal (TorsoBody) ..
+  Atletico 100 % de a 20 % = z262 de a 0.1; el cuello paso a la pagina "Pecho, espalda y cuello"), en la ventana del mod y en la tarjeta
+  "Musculatura: torso y brazos (robusto / atletico)" (x285 prendido, y285 texturas, z285 definicion).
+- Modelo: datos por vertice (tools/fox/torso/make_variants.py -> textures\pes_var_<malla>.dds, R32G32B32A32_FLOAT, 7 filas
+  por version: reposo, robusto (desplazamiento, normal, tangente), atletico). Mallas reconocidas por cantidad de indices
+  (manos.cpp VariantDataFor): torso 26634 / 27201 / 34683 (pants_*_sub 1..3; la 3 tiene 3 versiones: out = inner, in, tight),
+  brazos 37458 / 37461 / 34272 / 34278 y las capas de suciedad 36366 / 34275 / 32898. t127 del VS 1c02a92a y c6ef0c75; el
+  shader elige la version por la posicion de reposo (< 1 mm) y si no coincide no deforma nada.
+  - Forma grande del torso = field() de torso_variants.py (= PesTorsoField en pes_variants.hlsli y pesTorsoField en
+    cloth_sim.hlsl): robusto panza 2.8 cm (llena abajo del ombligo, sobre el short), rollos de costados 1.6 cm, espalda baja,
+    cintura, pecho caido (la masa baja 1 cm); atletico V de dorsales 1 cm, cintura y panza baja -0.9 cm, pecho lleno, trapecio
+    alto 1.2 cm (arriba y atras) y medio 0.6 cm. Marcas medidas en la malla: ombligo (0, 1.061, 0.175), pezones (+-0.059,
+    1.303, 0.158), linea de los hombros 1.552 (x 0.04) .. 1.494 (x 0.22), cintura del short 1.00 .. 1.08.
+  - Relieve esculpido: promedio gaussiano 3D (sigma 2.5 cm torso / 1.5 cm brazos; el promedio por aristas dejaba rayas en las
+    mallas refinadas de la v12.6) y el relieve de banda D - G(D); robusto quita 95 % de los picos y 70 % de los valles, atletico
+    suma 25 % / 65 % (brazos 90/60 y 45/90). OJO: las normales calculadas de la malla de TorsoBody salen hacia ADENTRO (orden de
+    los triangulos): se orientan con las del fmdl.
+  - Costuras (brazos, cuello, short): quietas (desvanecido por distancia geodesica 1.2..4.5 cm desde el borde).
+  - Normales / tangentes: las de TorsoBody giradas con el cambio de la normal de la malla soldada.
+- Texturas (PS aa7d1833, la DLL las enlaza solo en el torso): t16 robusto / t17 atletico = normal delta (BC5_SNORM 2048x1024,
+  el torso esta en v 0..0.5 del atlas -> el PS lee (u, 2v)); t18 = estrias del robusto (BC4, un poco mas claras). Convencion
+  de torsob_nrm: rojo = +T, verde = +cross(N, T) * w (medido contra el relieve de la malla: correlacion del verde +0.39).
+  Robusto: pliegues de la panza (irregulares), ombligo horizontal, rollos, pliegues de la espalda baja, pliegue del pecho caido,
+  ~70 estrias (costados, espalda baja, bajo vientre, axila). Atletico: Adonis (distancia CON SIGNO: un "si/no" en la altura daba
+  bordes filosos), serratos suaves, semilunares, linea alba, borde del pectoral, trapecio (fosa supraclavicular, masa, borde de
+  atras), erectores. Definicion del normal map: torso x(1 + 0.15 atl - 0.75 rob) y todo el relieve x(1 - 0.3 rob); brazos
+  x(1 + 0.20 atl - 0.50 rob); venas (musculos con textura): atletico 0.25 de base, el robusto las tapa 70 %.
+- (26/10) RELIEVE AL REVES EN EL JUEGO: el VS 1c02a92a arma B = cross(N, T) * w en la vista (m_viewWorld), que es de mano
+  izquierda (det -1) -> en el modelo el juego usa B = -cross(N, T) * w, y los normal maps de TorsoBody (torsob_nrm, arm_nrm,
+  thigh_nrm, 4096) traen verde = +cross(N, T) * w: el relieve se veia iluminado desde abajo (biceps y espalda "hacia
+  adentro"); con la definicion del atletico se notaba mucho (manchas oscuras). x286 = 1 (opcion "Relieve de TorsoBody" de la
+  tarjeta de las variantes): el PS invierte el verde al final (r2.y antes de armar la normal), solo en el cuerpo con normal map
+  de 4096 o mas; base, definicion, mapas delta y venas estan todos en la convencion de la textura, asi que se corrigen juntos.
+  Las vistas previas (preview_nm.py) usan la convencion de la textura = lo que muestra el juego con x286 = 1.
+- Menu Fisico: el selector "Torso y brazos" no resalta nada (el brillo tapaba la variante); circulo / Volver desde cualquier
+  pagina del mod vuelve a la primera pestana de Fisico (cursor en "Musculatura  >"); L1 / R1 siguen de a una pagina.
+- (26/10) COLUMNA MARCADA (x288, todos los torsos, con o sin variante): torso_maps.height_spine -> textures\
+  pes_var_torso_spine_n.dds (BC5_SNORM 2048x1024, make_variants.py --spine-only), t19 del PS de la piel (manos.cpp
+  SpineTextureFor: solo en los dibujos del torso, no depende de x285). Surco del sacro a C7 (espalda baja: 4.5 mm de hondo,
+  sigma 1 cm; alta: 2.2 mm, 0.65 cm), erectores como dos columnas (4 mm a 3.6 cm de la linea media abajo, 1.4 mm arriba), su
+  borde de afuera, apofisis apenas y C7. Linea media de la malla: z -0.036 (lordosis, y 1.07..1.16) .. -0.064 (y 1.43). El PS
+  la multiplica por (1 - 0.5 robusto) (1 + 0.25 atletico). Vista previa: PNM_BACK=1 PNM_SPINE=k PNM_LIGHT=x,y,z preview_nm.py.
+- (26/10) SELECTORES DE HOMBROS (menu Fisico, pagina 1, y ventana del mod; por jugador): fila 287 = x inclinacion (0.7 muy
+  caidos .. 1.3 muy rectos), y tipo (1 normales, 2 estrechos, 3 anchos, 4 redondos), z tamano (0.7 .. 1.3). Van por los
+  huesos (ComputeFactors): inclinacion = la tapa del deltoides sube / baja 4 cm por unidad (y se abre 1 cm) y el trapecio
+  junto al cuello, la base del cuello al reves; la clavicula y el omoplato acompanan. Tipo: ancho -0.45 / +0.50 (como el
+  slider "Ancho de hombros") y deltoides -0.08 / +0.04; redondos = deltoides +0.18 y frontal / posterior +0.45. Tamano:
+  deltoides y ancho x0.8 de la variacion, trapecio, clavicula y omoplato acompanan. La ropa los sigue (zonas de la tela).
+  En el menu Fisico K_VARIANT es ahora "selector de forma" con tabla de pasos (kLSel); ninguno resalta el cuerpo.
+  Simulacion sin el juego: tools/fox/sim/hombros.py (copia de las cuentas; CASES=caidos,normal,rectos,...).
+- Brazos: grosor por los huesos (ComputeFactors: biceps +0.05 rob / +0.04 atl, triceps +0.09 / +0.04, antebrazo +0.04 / +0.02,
+  deltoides +0.03 / +0.04; la manga acompana con dsk_sleeve).
+- Ropa: el reposo de la tela suma pesTorsoField con la t del juego de zonas de la prenda (z de su cabecera en t121; la DLL la
+  pone por jugador) y el cuerpo con el que choca (pes_body_cs.hlsl, t120 enlazado por cuerpo.cpp) suma PesTorsoField.
+- Filas de t120: 264 = (t general, tabla valida, prendido), 265 + i = t de la entrada i de la tabla de jugadores (skintone.cpp:
+  un jugador entra tambien si su variante es distinta de la general); o6.w del VS lleva siempre 0.4 * torso (tambien 999 + ...).
+- Vistas previas sin el juego: tools/fox/torso/preview.py (forma, rasterizador gris) y preview_nm.py (con normal map, albedo y
+  los mapas delta; PNM_CLOSE=1 = primeros planos de trapecio, costado y pecho).
