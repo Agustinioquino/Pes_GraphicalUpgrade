@@ -222,7 +222,8 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
 ## Variantes robusto / atletico de TorsoBody (26/10)
 - Un valor por jugador: z262 (0.5 robusto .. 1 TorsoBody .. 1.5 atletico; t = 2 (v - 1)). Va en los perfiles de
   musculatura_jugadores.ini, en los tipos de cuerpo (Delgado 1.10, Atletico 1.35, Fuerte 0.90, Corpulento 0.55, Culturista 1.50)
-  y en el menu Fisico del juego (pagina "Pecho y espalda", fila "Torso y brazos ..."), en la ventana del mod y en la tarjeta
+  y en el menu Fisico del juego (primera pagina de Musculatura: selector "Torso y brazos" Robusto 100 % .. Normal (TorsoBody) ..
+  Atletico 100 % de a 20 % = z262 de a 0.1; el cuello paso a la pagina "Pecho, espalda y cuello"), en la ventana del mod y en la tarjeta
   "Musculatura: torso y brazos (robusto / atletico)" (x285 prendido, y285 texturas, z285 definicion).
 - Modelo: datos por vertice (tools/fox/torso/make_variants.py -> textures\pes_var_<malla>.dds, R32G32B32A32_FLOAT, 7 filas
   por version: reposo, robusto (desplazamiento, normal, tangente), atletico). Mallas reconocidas por cantidad de indices
