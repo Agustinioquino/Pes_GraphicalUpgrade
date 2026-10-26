@@ -156,7 +156,7 @@ static bool LoadConfigLocked() {
             else if (kl == "export_hooks") c.optExports = atoi(v.c_str()) != 0;
             else if (kl == "orphan_fix") c.optOrphan = atoi(v.c_str()) != 0;
             else if (kl == "dump_switcher") c.optDump = atoi(v.c_str()) != 0;
-            else if (kl == "memoria_arreglo") c.memFix = atoi(v.c_str()) != 0;
+            else if (kl == "memoria_arreglo") c.memFix = atoi(v.c_str());
             else if (kl == "memoria_vigilar") c.memWatch = atoi(v.c_str()) != 0;
             else if (kl == "sol_vigilar") c.sunWatch = atoi(v.c_str()) != 0;
             continue;
@@ -233,6 +233,12 @@ static bool LoadConfigLocked() {
             }
         }
     }
+    // (26/10 f) pasto tanda 6: filas nuevas con su valor por defecto si el ini no las trae (el ini de la PC solo se toca agregando lineas)
+    // 290 x stencil de la base en las hojas (sombra del sol) | y sin escribir RT4 (luz horneada) | z oclusion del atlas fija
+    // 291 x color con el suelo lejos | y / z px/m lejos / cerca | w normal lisa lejos   292 x hundimiento del juego | y lineas | z ralear con el desgaste | w desgaste en vivo mas visible
+    { static const struct { int i, k; float v; } kDef[] = { {290, 0, 1.f}, {290, 1, 1.f}, {290, 2, 0.45f}, {291, 0, 1.f}, {291, 1, 40.f}, {291, 2, 140.f}, {291, 3, 1.f},
+                                                         {292, 0, 1.f}, {292, 1, 1.f}, {292, 2, 1.f}, {292, 3, 1.f} };
+      for (auto& d : kDef) if (!c.info[d.i][d.k].defined) c.base[d.i][d.k] = d.v; }
     memcpy(c.live, c.base, sizeof(c.base));
     LoadCloth();
     for (auto& kb : c.keys) if (kb.label.empty()) kb.label = kb.name;
