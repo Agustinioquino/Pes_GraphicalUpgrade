@@ -348,6 +348,7 @@ static void SunPassPresent() {
               float rel = fmodf(az - cam + 540.0f, 360.0f) - 180.0f;
               if (dFrames > 0 && acosf(std::clamp(w[0] * dPrev[0] + w[1] * dPrev[1] + w[2] * dPrev[2], -1.0f, 1.0f)) * 57.2958f > 3.0f) dJumps++;
               for (int i = 0; i < 3; i++) dPrev[i] = w[i];
+              SunWatchFrame(w, dev, lf);   // (26/10) quien escribe el sol de las repeticiones (sunwatch.cpp)
               dFrames++; dMax = (std::max)(dMax, dev); if (dev > 5.0f) dOff++;
               azMin = (std::min)(azMin, az); azMax = (std::max)(azMax, az); camMin = (std::min)(camMin, cam); camMax = (std::max)(camMax, cam);
               relMin = (std::min)(relMin, rel); relMax = (std::max)(relMax, rel);
