@@ -22,6 +22,7 @@ SamplerState g_samplerLinear_Wrap_s : register(s10);
 Texture2D<float4> g_tex_grassDiffuse : register(t7);
 Texture2D<float4> PESGrassAtlas : register(t8);    // PES21: textures\pes_grass_blades.dds, 4 manojos de 512 en tira (R claridad, G oclusion, B brillo, A alfa)
 Texture2D<float4> PESGrassAtlasN : register(t9);   // PES21: textures\pes_grass_blades_n.dds (RG normal, B altura raiz->punta, A grosor)
+Texture2D<float4> PESBaseRT0 : register(t10);       // PES21 (26/10 g): copia del suelo ya dibujado (RT0), solo en las hojas lejanas del mod (x291)
 
 
 // 3Dmigoto declarations
@@ -222,7 +223,7 @@ void main(
   bitmask.x = ((~(-1 << 28)) << 4) & 0xffffffff;  r0.x = (((uint)r0.w << 4) & bitmask.x) | ((uint)3 & ~bitmask.x);
   r0.x = (uint)r0.x;
   o1.z = 0.000977517106 * r0.x;
-  o0.w = pesFB ? pesCf : 1.0;   // (26/10 f) con la mezcla de la DLL: lejos queda el color del suelo (el alfa de RT0 sigue siendo el de la base)
+  o0.w = 1.0;   // (26/10 g) el alfa de RT0 no se escribe con la mezcla lejana (queda el de la base); la mezcla va al final con la copia del suelo
   o2.z = 0;
   o2.w = v5.z;
   o3.zw = float2(0,0);
@@ -237,6 +238,9 @@ void main(
       o0.xyz = c;
     }
   }
+  // (26/10 g) lejos: el color del suelo ya dibujado (copia de RT0 que hace la DLL en t10), lerp por pesCf sin mezcla por alfa: con varias
+  // capas de hojas gana la de adelante (antes cada capa volvia a mezclar sobre la anterior y el resultado dependia del orden). z59 sin mezclar
+  if (pesFB && v5.w < 0.5) o0.xyz = lerp(PESBaseRT0.Load(int3(v0.xy, 0)).xyz, o0.xyz, pesCf);
   if (pesV3) {   // depuracion w107: 1 = uv del atlas (rojo u, verde v), 2 = desgaste (rojo seco, verde pelado), 3 = normal
     int dbg = (int)(Q7.w + 0.5);
     if (dbg == 1) o0.xyz = float3(v1.x, v1.y, 0.0);

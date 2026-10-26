@@ -194,6 +194,10 @@ void GrassDiagState(ID3D11DeviceContext* c, uint64_t psHash);   // (26/10 f) log
 struct GrassStScope { bool on = false, b12 = false; ID3D11DepthStencilState* dss = nullptr; UINT ref = 0; ID3D11BlendState* bs = nullptr; float bf[4] = {}; UINT bm = 0xffffffff; ID3D11Buffer* vsB12 = nullptr; };
 void GrassGameStates(ID3D11DeviceContext* c, GrassStScope& s);
 void GrassGameStatesRestore(ID3D11DeviceContext* c, GrassStScope& s);
+// (26/10 g) emision del pasto del mod despues del ULTIMO dibujo de la base de la cancha (w293): pendiente por contexto hasta el siguiente
+// dibujo que no sea de la base, un cambio de targets, limpieza de la profundidad, ClearState o el fin / la ejecucion de la lista
+extern std::atomic<int> g_grassPendN;
+void GrassBaseFlush(ID3D11DeviceContext* c, int why, uint64_t psHash, UINT nRtv = 0, ID3D11RenderTargetView* const* rtv = nullptr, ID3D11DepthStencilView* dsv = nullptr);
 void GrassPresent();                             // log (despues de UploadParams)
 void GrassFrameBoundary(UINT presentFlags);      // (26/10 d) en hk_Present ANTES de UploadParams: reclamo del cuadro en la GPU, x63
 void GrassOnFinishCL(ID3D11DeviceContext* c, ID3D11CommandList* l);    // (26/10 d) una emision por grabacion: el contexto arranca de cero
