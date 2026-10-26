@@ -247,8 +247,17 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
   Robusto: pliegues de la panza (irregulares), ombligo horizontal, rollos, pliegues de la espalda baja, pliegue del pecho caido,
   ~70 estrias (costados, espalda baja, bajo vientre, axila). Atletico: Adonis (distancia CON SIGNO: un "si/no" en la altura daba
   bordes filosos), serratos suaves, semilunares, linea alba, borde del pectoral, trapecio (fosa supraclavicular, masa, borde de
-  atras), erectores. Definicion del normal map: torso x(1 + 0.30 atl - 0.75 rob) y todo el relieve x(1 - 0.3 rob); brazos
-  x(1 + 0.35 atl - 0.50 rob); venas (musculos con textura): atletico 0.35 de base, el robusto las tapa 70 %.
+  atras), erectores. Definicion del normal map: torso x(1 + 0.15 atl - 0.75 rob) y todo el relieve x(1 - 0.3 rob); brazos
+  x(1 + 0.20 atl - 0.50 rob); venas (musculos con textura): atletico 0.25 de base, el robusto las tapa 70 %.
+- (26/10) RELIEVE AL REVES EN EL JUEGO: el VS 1c02a92a arma B = cross(N, T) * w en la vista (m_viewWorld), que es de mano
+  izquierda (det -1) -> en el modelo el juego usa B = -cross(N, T) * w, y los normal maps de TorsoBody (torsob_nrm, arm_nrm,
+  thigh_nrm, 4096) traen verde = +cross(N, T) * w: el relieve se veia iluminado desde abajo (biceps y espalda "hacia
+  adentro"); con la definicion del atletico se notaba mucho (manchas oscuras). x286 = 1 (opcion "Relieve de TorsoBody" de la
+  tarjeta de las variantes): el PS invierte el verde al final (r2.y antes de armar la normal), solo en el cuerpo con normal map
+  de 4096 o mas; base, definicion, mapas delta y venas estan todos en la convencion de la textura, asi que se corrigen juntos.
+  Las vistas previas (preview_nm.py) usan la convencion de la textura = lo que muestra el juego con x286 = 1.
+- Menu Fisico: el selector "Torso y brazos" no resalta nada (el brillo tapaba la variante); circulo / Volver desde cualquier
+  pagina del mod vuelve a la primera pestana de Fisico (cursor en "Musculatura  >"); L1 / R1 siguen de a una pagina.
 - Brazos: grosor por los huesos (ComputeFactors: biceps +0.05 rob / +0.04 atl, triceps +0.09 / +0.04, antebrazo +0.04 / +0.02,
   deltoides +0.03 / +0.04; la manga acompana con dsk_sleeve).
 - Ropa: el reposo de la tela suma pesTorsoField con la t del juego de zonas de la prenda (z de su cabecera en t121; la DLL la

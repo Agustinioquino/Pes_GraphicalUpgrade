@@ -2,6 +2,7 @@
 // PES21 (24/10): con el VS 1c02a92a (reemplazo propio) aclara y hace latir el musculo elegido en el menu Fisico (x174).
 // PES21 (26/10, v12.7): musculos con textura (x305): el VS manda en v1.xyz cuanto marcar el musculo que trabaja (mas relieve
 // grande del normal map) y las venas (textura pesVeins en t29, solo brazos y manos; un poco mas oscuras y frias).
+// PES21 (26/10): relieve de TorsoBody al derecho (x286: el verde de sus normal maps estaba invertido para el juego).
 // PES21 (26/10): variantes robusto / atletico de TorsoBody (pes_variants.hlsli): en el torso, mapas normales delta (t16 robusto,
 // t17 atletico) y estrias del robusto un poco mas claras (t18); definicion del normal map: menos en el robusto, mas en el atletico
 // (torso y brazos); en los brazos el atletico muestra un poco las venas y el robusto las tapa. Las texturas las enlaza la DLL solo
@@ -152,6 +153,12 @@ void main(
   float vrTm = vrBody ? PesSkinTorso(v6.w) : 0.0;
   float vrArm = vrBody ? saturate((abs(w2.w) - 0.20) / 0.05) * step(1.0, w2.z) * (1.0 - vrTm) : 0.0;
   float vrDefK = P285.z > 0.0 ? P285.z : 1.0, vrTexK = P285.y > 0.0 ? P285.y : 1.0;
+  // (26/10) los normal maps propios de TorsoBody (4096: torsob_nrm, arm_nrm, thigh_nrm) tienen el verde al reves para el juego:
+  // la vista del juego es de mano izquierda y B = cross(N, T) * w queda invertida respecto de la textura (el relieve se veia
+  // iluminado desde abajo: biceps y espalda "hacia adentro", sobre todo con la definicion alta). x286 = 1 lo corrige al final
+  // (base, definicion, mapas de las variantes y venas estan todos en la convencion de la textura)
+  uint tbW = 0, tbH = 0; g_tex_normal.GetDimensions(tbW, tbH);
+  bool tbFlip = vrBody && tbW >= 4096 && IniParams.Load(int2(286,0)).x > 0.5;
   {   // (24/10) definicion muscular (x172, menu Musculatura): agranda o achica solo el relieve grande del normal map
       // (los musculos: el mismo mapa visto 11 veces mas chico), no los poros ni las lineas finas de la piel
     float defM = IniParams.Load(int2(172,0)).x; defM = defM > 0.01 ? clamp(defM, 0.0, 3.0) : 1.0;
@@ -160,8 +167,9 @@ void main(
       if (stH.y > 0.5 && stI >= 0 && stI < min((int)(stH.x + 0.5), 20)) { float dP = IniParams.Load(int2(195 + 3 * stI, 0)).w; if (dP > 0.01) defM = clamp(dP, 0.0, 3.0); }
     }
     defM += lbDef;   // (26/10, v12.7) el musculo que trabaja: mas relieve solo ahi
-    // (26/10) variantes: torso 1 + 0.30 atletico - 0.75 robusto; brazos 1 + 0.35 atletico - 0.50 robusto
-    defM *= 1.0 + vrDefK * (vrTm * (0.30 * vrWa - 0.75 * vrWr) + vrArm * (0.35 * vrWa - 0.50 * vrWr));
+    // (26/10) variantes: torso 1 + 0.15 atletico - 0.75 robusto; brazos 1 + 0.20 atletico - 0.50 robusto (el atletico ya marca
+    // con la malla y los mapas delta; con mas definicion las sombras del normal map se veian manchadas)
+    defM *= 1.0 + vrDefK * (vrTm * (0.15 * vrWa - 0.75 * vrWr) + vrArm * (0.20 * vrWa - 0.50 * vrWr));
     if (abs(defM - 1.0) > 0.01) {
       float3 nM = g_tex_normal.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN + 3.5).xyw;
       float2 mM = float2(nM.x * nM.z, nM.y) * 2.0 - 1.0;
@@ -179,7 +187,7 @@ void main(
       r2.xy += vd * abs(vrT) * vrTm * vrTexK;
       float l2 = dot(r2.xy, r2.xy); if (l2 > 0.94) r2.xy *= rsqrt(l2 / 0.94);
     }
-    if (vrArm > 0.001 && P305.x > 0.5) lbVein = max(lbVein * (1.0 - 0.7 * vrWr * vrArm), 0.35 * vrWa * vrArm * max(P305.z, 0.0));
+    if (vrArm > 0.001 && P305.x > 0.5) lbVein = max(lbVein * (1.0 - 0.7 * vrWr * vrArm), 0.25 * vrWa * vrArm * max(P305.z, 0.0));
   }
   if (lbVein > 0.002) {   // (26/10, v12.7) venas: relieve de la textura de venas (mismo espacio tangente que arm_nrm) + mascara para el tono
     uint lvW = 0, lvH = 0; pesVeins.GetDimensions(lvW, lvH);
@@ -213,6 +221,7 @@ void main(
     float bnz = sqrt(saturate(1.0 - dot(r2.xy, r2.xy)));
     bCav = 1.0 - saturate(P35b.x) * smoothstep(0.02, 0.35, 1.0 - bnz) * 0.55;
   }
+  if (tbFlip) r2.y = -r2.y;   // (26/10) TorsoBody: verde a la convencion del juego (x286)
   r1.xyz = r2.yyy * r1.xyz;
   r0.xyz = r0.xyz * r2.xxx + r1.xyz;
   r0.w = dot(v6.xyz, v6.xyz);
