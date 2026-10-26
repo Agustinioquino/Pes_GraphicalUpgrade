@@ -511,20 +511,43 @@ float MuscleDefinitionFor(uint32_t id) {
     return fabsf(v - gen) > 0.005f ? std::clamp(v, 0.05f, 3.0f) : 0.0f;
 }
 
+// (26/10 e) el valor que va a los shaders sigue al elegido en ~0.15 s: un cambio de complexion, "Ver como el juego" o un salto de la
+// barra "Tipo de cuerpo" se ve como un cambio suave del cuerpo y no como un salto. Por jugador (id; 0 = el general); una entrada
+// que no se uso en 0.5 s arranca en el valor (un jugador que entra a la cancha no "crece")
+struct TvEase { uint32_t id; float v; double t; };
+static TvEase s_tvEase[64]; static std::mutex s_tvMx;
+static float EaseTv(uint32_t id, float target) {
+    const double now = Now();
+    std::lock_guard<std::mutex> lk(s_tvMx);
+    TvEase* e = nullptr; TvEase* old = &s_tvEase[0];
+    for (TvEase& x : s_tvEase) {
+        if (x.t > 0.0 && x.id == id) { e = &x; break; }
+        if (x.t < old->t) old = &x;
+    }
+    if (!e || now - e->t > 0.5) { if (!e) e = old; e->id = id; e->v = target; e->t = now; return target; }
+    const float dt = (float)(now - e->t); e->t = now;
+    e->v += (target - e->v) * (1.0f - expf(-dt / 0.12f));
+    if (fabsf(target - e->v) < 0.002f) e->v = target;
+    return e->v;
+}
 // (26/10) variante robusto / atletico de un jugador para los shaders (skintone.cpp la pone en la tabla de jugadores: filas 264..284):
 // t = -1 robusto .. 1 atletico, el propio o el general; own = distinto del general. 0 con la musculatura apagada o "Ver como el juego".
 float MuscleVariantT(uint32_t id, bool* own) {
     if (own) *own = false;
-    if (g_cfg.live[164][0] < 0.5f || s_compare.load()) return 0.0f;
-    const float gen = TvOf(g_cfg.live[262][2]);
-    if (!id) return gen;
-    std::lock_guard<std::mutex> lk(s_profMx);
-    if (!s_profLoaded) LoadProfiles();
-    auto it = s_prof.find(id);
-    if (it == s_prof.end()) return gen;
-    const float t = TvOf(it->second.v[11][2]);
+    const bool on = g_cfg.live[164][0] >= 0.5f && !s_compare.load();
+    const float gen = on ? TvOf(g_cfg.live[262][2]) : 0.0f;
+    if (!id) return EaseTv(0, gen);
+    float t = gen;
+    if (on) {
+        std::lock_guard<std::mutex> lk(s_profMx);
+        if (!s_profLoaded) LoadProfiles();
+        auto it = s_prof.find(id);
+        if (it != s_prof.end()) t = TvOf(it->second.v[11][2]);
+    }
     if (own) *own = fabsf(t - gen) > 0.004f;
-    return t;
+    const float te = EaseTv(id, t);
+    if (own && fabsf(te - gen) > 0.004f) *own = true;   // mientras vuelve al general sigue en la tabla
+    return te;
 }
 
 struct MzOwn { float pos[3]; const Fac* fac; float tv; };   // (26/10) personaje con valores propios (fac, tv = variante) o tapon (nullptr = general)
