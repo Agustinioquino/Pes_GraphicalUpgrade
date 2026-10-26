@@ -126,6 +126,7 @@ void main(
         const float3 LWg = float3(0.2126, 0.7152, 0.0722);
         float lg = dot(c, LWg);
         float yel = saturate((c.r / max(c.g, 1e-3) - 0.55) * 2.5);
+        yel *= saturate(((max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b))) / max(max(c.r, max(c.g, c.b)), 1e-3) - 0.12) * 5.0);   // (26/10) no sobre las lineas pintadas (sin color)
         float3 natural = c * float3(0.80, 1.0, 0.95);
         natural *= lg / max(dot(natural, LWg), 1e-4);
         c = lerp(c, natural, saturate(GV.x) * yel);

@@ -188,6 +188,7 @@ void main(
   r3.xyz = r8.xyz + -r7.xyz;
   r8.xyz = g_tex_mask.Sample(g_sampler_mask_s, v1.xy).xyz;
   r2.xy = max(r8.xy, r2.wy);
+  float pesLine = saturate(r2.x);   // (26/10) cobertura de las lineas pintadas (mascara + alfa de la difusa): el cesped lejano no las pisa
   r2.yzw = r2.yyy * r3.xyz + r7.xyz;
   r1.xyw = r2.yzw * r1.xyw;
   r2.yzw = saturate(float3(0.100000001,0.5,1) * r8.zzz);
@@ -306,6 +307,8 @@ void main(
       const float3 LWg = float3(0.2126, 0.7152, 0.0722);
       float lg = dot(cg, LWg);
       float yel = saturate((cg.r / max(cg.g, 1e-3) - 0.55) * 2.5);
+      // (26/10) solo donde hay color: las lineas pintadas (blancas / grises) tienen r/g = 1 y la correccion las ponia verde palido
+      yel *= saturate(((max(cg.r, max(cg.g, cg.b)) - min(cg.r, min(cg.g, cg.b))) / max(max(cg.r, max(cg.g, cg.b)), 1e-3) - 0.12) * 5.0);
       float3 natural = cg * float3(0.80, 1.0, 0.95);
       natural *= lg / max(dot(natural, LWg), 1e-4);
       cg = lerp(cg, natural, saturate(GV.x) * yel);
@@ -340,7 +343,7 @@ void main(
       // (25/10 c) umbrales fijos, los mismos que la DLL (Thresholds): la densidad ya no los corre
       float T2 = 45.0, T3 = 15.0;
       float kFar = 1.0 - smoothstep(T3 * 0.75, T2 * 1.25, pxm);
-      if (kFar > 0.001) { float3 cg = o0.xyz; float sp = o2.y; PESFarTurf(cg, sp, pesV, v8.xz, pxm, kFar * saturate(Q61.y), Q61.z, Q61.w); o0.xyz = cg; o2.y = sp; }
+      if (kFar > 0.001) { float3 cg = o0.xyz; float sp = o2.y; PESFarTurf(cg, sp, pesV, v8.xz, pxm, kFar * saturate(Q61.y) * (1.0 - pesLine), Q61.z, Q61.w); o0.xyz = cg; o2.y = sp; }
     }
   }
   return;

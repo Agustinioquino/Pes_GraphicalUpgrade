@@ -309,8 +309,10 @@ struct Level { float cell; UINT cap; UINT target; float widthMul; };
 // 1.5x mas lejos. T0: hasta aca el pasto del juego (una hoja de 1.2 cm mide >= 2 px); T1 / T2: limites de los niveles.
 static void Thresholds(float* T) {
     // (25/10 c) fijos: la densidad (x58) ya no corre los niveles, cambia cuantas tarjetas lleva cada parcela (densidad
-    // constante en pantalla, ver GrassEmit). El pasto del juego queda solo muy cerca (>= 240 px/m: primeros planos)
-    T[0] = 240.0f; T[1] = 110.0f; T[2] = 45.0f;
+    // constante en pantalla, ver GrassEmit). El pasto del juego queda solo pegado a la camara (>= 2000 px/m)
+    // (26/10) T0 = 2000: el pasto del juego solo a menos de ~1 m de la camara. Con 240 la zona cercana (pasto denso del
+    // juego, ~19 capas, muy oscura) chocaba con la del mod (6 capas): borde visible, pasto irregular y 13 FPS en primeros planos
+    T[0] = 2000.0f; T[1] = 110.0f; T[2] = 45.0f;
     T[3] = 15.0f;   // (25/10) limite inferior del nivel lejano cuando el cesped lejano de la base (y61) esta prendido
 }
 
@@ -571,7 +573,10 @@ void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, const ShaderEntr
     if (extraOn) { int e = s_capFrame.load(); if (e != f && s_capFrame.compare_exchange_strong(e, f)) CaptureState(c, vs, ps); }
     PitchBallNote(c, f);    // (20/10) posicion de la pelota para el pasto aplastado
     PitchClipsDraw(c, f);   // recortes de pasto volando (una vez por cuadro; el estado del pasto ya esta puesto)
-    if (!t_grassSub.count) DensePick(count, &t_grassSub);   // (20/10) pasto v4: tarjetas curvas propias en vez de las del juego (cerca)
+    // (20/10) pasto v4: tarjetas curvas propias en vez de las del juego (cerca). (26/10) Con el pasto del mod emitiendo y T0 >= 1000
+    // el VS anula casi todas las parcelas del juego: no vale la pena cambiarles la malla (1.4x mas vertices que se anulan igual)
+    { float T[4]; Thresholds(T); bool denseSkip = extraOn && T[0] >= 1000.0f && g_cfg.live[63][0] < 0.5f;
+      if (!t_grassSub.count && !denseSkip) DensePick(count, &t_grassSub); }
     if (!extraOn) { Why("apagado (w58)"); return; }
     int exp = s_emittedFrame.load();
     if (exp == f) return;
