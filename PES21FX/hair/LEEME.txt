@@ -1,0 +1,25 @@
+PES21 FX - pelo en hebras: mapas de pelo por cara
+=================================================
+
+Como funciona (sin hacer nada): el mod genera solo, para cada cara, un MAPA DE PELO a partir de su textura
+(hoy: las cejas). Con ese mapa dibuja hebras reales en primeros planos. El tipo de pelo (largo, rizo, grosor,
+densidad, brillo, color) sale de PES21FX_hair.ini, seccion [auto] default = ...
+
+Para personalizar una cara (3 pasos):
+ 1) Juga un partido con esa cara en pantalla, abri el menu (Insert) > Cara > Tipos de pelo > "Volcar mapas de pelo".
+    Se escriben PES21FX\hair\auto\<id>.png (un png por cara) y lista.txt (id, tamano, tipo asignado).
+    El id tambien aparece en el log: "pelo: cara 1a2b3c4d5e6f (2048x2048) -> tipo 'corto'".
+ 2) Copia el png a PES21FX\hair\<id>.png y pintalo con cualquier editor (Paint.NET, GIMP, Photoshop).
+    Esta en el mismo plano UV que la textura de la cara (face_bsm), asi que podes usarla de guia debajo.
+      ROJO  = densidad de pelo   (0 nada, 255 maximo)
+      VERDE = largo              (0..255 = 0..100 % del largo del tipo)
+      AZUL  = direccion del peinado: angulo. 0 = hacia la derecha de la textura (+U), 64 = hacia abajo (+V),
+              128 = hacia la izquierda, 192 = hacia arriba. (Las cejas salen de la nariz hacia afuera: ~128 en
+              la ceja izquierda de la textura, ~0 en la derecha, con un poco hacia arriba: 150 / 235.)
+      ALFA  = dejalo opaco.
+    Cualquier tamano sirve (256x256 alcanza; se lee por celdas de 1/256).
+ 3) En PES21FX_hair.ini, seccion [caras]:  <id> = rizado   (o el tipo que quieras; podes crear los tuyos en [tipos]).
+    "Recargar tipos de pelo" aplica el ini en vivo; el png nuevo se toma al recargar shaders o en el proximo partido.
+
+Diagnostico: Cejas con hebras > Diagnostico > "Semillas sobre la cara" pinta de magenta las celdas con semilla
+y de azul la zona de ceja sin pelo; sirve para ver si tu mapa esta donde queres.
