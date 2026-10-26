@@ -116,6 +116,29 @@ struct Fac { float e, t[3]; };
 static Fac s_fac[M_COUNT] = {};
 static bool s_on = false;
 
+// ---------------------------------------------------------------- musculos vivos (26/10 b): contraccion y respiracion
+// 263: x contraccion con el movimiento (0 = apagado, 1 = normal, hasta 2), y respiracion (idem), z cuanto se agita al correr.
+// Contraccion: el biceps se abulta con el codo doblado (y el antebrazo un poco), el deltoides y el trapecio con el brazo
+// levantado, los isquiotibiales y la pantorrilla con la rodilla doblada. Se mide con los huesos del esqueleto del juego (los
+// destinos de las restricciones: brazo, antebrazo, muslo, pierna y pecho), ahora contra el reposo.
+// Respiracion: pecho, costillas, espalda y panza suben y bajan; mas rapido y mas hondo despues de correr (la velocidad del
+// personaje sale de su nodo, la misma posicion que usa el tono de piel por jugador).
+struct DynState {
+    float upX[2][3], upR[2][3], foX[2][3], foR[2][3];   // eje X del brazo y del antebrazo: ahora y en reposo (0 = izq, 1 = der)
+    float thX[2][3], thR[2][3], shX[2][3], shR[2][3];   // muslo y pierna
+    float chQ[4], chR[4];                                // pecho: cuaternion ahora y en reposo
+    volatile unsigned char upOk[2], foOk[2], thOk[2], shOk[2], chOk;
+    float breath, ex, phase, pos[3]; bool posOk;         // respiracion (m, con signo), agitacion 0..1, fase, ultima posicion
+};
+static const int kDynFb = 64;   // esqueletos que no se sabe de que personaje son (por puntero)
+static DynState s_dyn[kCharSlots + kDynFb];
+static float s_dynK[3] = { 0, 0, 0 }; static bool s_dynOn = false, s_ropaOn = false; static float s_sleeveK = 0.6f, s_dynT = 0.0f;
+static int DynIndex(int slot, const void* skel) {
+    if (slot >= 0 && slot < kCharSlots) return slot;
+    const uint32_t h = (uint32_t)((uintptr_t)skel >> 6) * 2654435761u;
+    return kCharSlots + (int)(h >> 26);
+}
+
 static float Gv(float v) { return v < 0.05f ? 1.0f : std::clamp(v, 0.5f, 2.0f); }   // 0 = sin valor en el ini
 // suma al corrimiento: direccion (x, y, z) normalizada * metros por unidad de slider * variacion
 static void Push(Fac& f, float x, float y, float z, float metros, float e) {
@@ -198,10 +221,10 @@ static void ComputeFactors(const float (*P)[4], bool on, bool ropa, bool trans, 
 // interruptores (x164 prendido, y166 la ropa acompana, z170 codos y rodillas) y la definicion (x172, shader) son de todos.
 // Cada esqueleto se busca por la restriccion (+ 0x10) en la tabla de personajes.cpp (handle -> id del jugador).
 // Archivo: PES21FX\musculatura_jugadores.ini ([id] + claves del menu; lo que falta = 1, como el juego).
-static const int kPRows = 12;
-struct Profile { std::string name; float v[kPRows][4]; };   // 164..171, (24/10 g) 162 en v[8] y (26/10) 260..262 en v[9..11]
-static int PRow(int idx) { return idx >= 164 && idx <= 171 ? idx - 164 : idx == 162 ? 8 : idx >= 260 && idx <= 262 ? 9 + (idx - 260) : -1; }
-static int PIdx(int row) { return row < 8 ? 164 + row : row == 8 ? 162 : 260 + (row - 9); }
+static const int kPRows = 13;
+struct Profile { std::string name; float v[kPRows][4]; };   // 164..171, (24/10 g) 162 en v[8], (26/10) 260..262 en v[9..11] y 172 (definicion) en v[12]
+static int PRow(int idx) { return idx >= 164 && idx <= 171 ? idx - 164 : idx == 162 ? 8 : idx >= 260 && idx <= 262 ? 9 + (idx - 260) : idx == 172 ? 12 : -1; }
+static int PIdx(int row) { return row < 8 ? 164 + row : row == 8 ? 162 : row < 12 ? 260 + (row - 9) : 172; }
 static std::map<uint32_t, Profile> s_prof;
 static std::mutex s_profMx;   // s_prof lo tocan Present (factores, tarjeta, archivo) y el menu Fisico del juego (fisico.cpp)
 static bool s_profLoaded = false, s_profDirty = false; static double s_profDirtyT = 0;
@@ -218,6 +241,7 @@ static const struct { int idx, comp; } kPlayerParams[] = {
     {168, 0}, {168, 1}, {168, 2}, {168, 3}, {169, 0}, {169, 1}, {169, 2}, {169, 3}, {170, 0}, {170, 1}, {171, 0}, {171, 1}, {171, 2}, {171, 3},
     {162, 0}, {162, 1}, {162, 2}, {162, 3}, {166, 2}, {166, 3}, {170, 3},   // (24/10 g) detalles
     {260, 0}, {260, 1}, {260, 2}, {260, 3}, {261, 0}, {261, 1}, {261, 2}, {261, 3}, {262, 0}, {262, 1},   // (26/10) v7
+    {172, 0},   // (26/10 b) definicion muscular por jugador (el shader la toma de la tabla de jugadores de skintone.cpp)
 };
 static bool IsPlayerParam(int idx, int comp) { for (auto& k : kPlayerParams) if (k.idx == idx && k.comp == comp) return true; return false; }
 static std::wstring ProfPath() { return g_cfg.baseDir + L"musculatura_jugadores.ini"; }
@@ -229,8 +253,10 @@ static std::string TrimS(const std::string& x) {
     size_t a = x.find_first_not_of(" \t\r\n"), b = x.find_last_not_of(" \t\r\n");
     return a == std::string::npos ? std::string() : x.substr(a, b - a + 1);
 }
+static void LoadUserPresets();   // (26/10 b) tipos de cuerpo propios (mas abajo)
 static void LoadProfiles() {
     s_prof.clear(); s_profLoaded = true;
+    LoadUserPresets();
     std::ifstream f(ProfPath(), std::ios::binary);
     if (!f) return;
     std::string l; Profile* cur = nullptr;
@@ -264,7 +290,7 @@ static bool SaveProfiles() {
     f << "; PES21 FX - musculatura por jugador. Lo escribe el menu (Cuerpo > Musculatura por jugador).\r\n"
          "; [id] = id del jugador en el juego (en los que tienen cara real es el de la carpeta face\\real\\<id>).\r\n"
          "; Las claves son las de las tarjetas de musculatura (y164 = hombros, z164 = biceps, ...): 1 = como el juego; lo que\r\n"
-         "; falta tambien vale 1. Los interruptores (x164, y166, z170) y la definicion (x172) son los de PES21FX.ini, de todos.\r\n";
+         "; falta tambien vale 1 (x172 = definicion muscular propia). Los interruptores (x164, y166, z170) son los de PES21FX.ini.\r\n";
     for (auto& kv : s_prof) {
         f << "\r\n[" << kv.first << "]\r\n";
         if (!kv.second.name.empty()) f << "nombre = " << kv.second.name << "\r\n";
@@ -300,27 +326,73 @@ void MuscleProfileSet(uint32_t id, const char* name, int idx, int comp, float v)
 // ---------------------------------------------------------------- tipos de cuerpo (26/10)
 // Un tipo de cuerpo pone todos los sliders de musculatura de un jugador (o los generales) en 1 = como el juego y despues
 // los que nombra. "General" multiplica a los musculos, asi que los tipos casi solo usan "General" y algunos de forma.
+// (26/10 b) tambien la definicion (x172) y los tipos propios: "Guardar como tipo de cuerpo" (tarjeta por jugador) los
+// escribe en PES21FX\musculatura_tipos.ini y aparecen despues de los del mod en todas las listas (tambien en el juego).
 struct PresetVal { int idx, comp; float v; };
 struct MusPreset { const char* name; const char* desc; PresetVal v[16]; };
 static const MusPreset kPresets[] = {
     { "Como el juego", "Todo en 1: el cuerpo que hizo Konami.", {} },
     { "Delgado", "Menos musculo y menos cintura.",
       { {167, 0, 0.90f}, {168, 3, 0.95f}, {171, 1, 0.96f}, {170, 0, 0.95f}, {171, 3, 0.97f} } },
-    { "Atl\xC3\xA9tico", "Un poco mas de musculo, abdomen marcado y cintura fina.",
-      { {167, 0, 1.06f}, {164, 1, 1.04f}, {165, 1, 1.04f}, {168, 1, 1.06f}, {171, 1, 0.97f}, {168, 3, 0.92f}, {261, 1, 1.04f}, {262, 1, 1.03f} } },
+    { "Atl\xC3\xA9tico", "Un poco mas de musculo, abdomen marcado, cintura fina y musculos definidos.",
+      { {167, 0, 1.06f}, {164, 1, 1.04f}, {165, 1, 1.04f}, {168, 1, 1.06f}, {171, 1, 0.97f}, {168, 3, 0.92f}, {261, 1, 1.04f}, {262, 1, 1.03f}, {172, 0, 1.25f} } },
     { "Fuerte", "Mas musculo en todo el cuerpo, cuello y trapecio de luchador.",
-      { {167, 0, 1.12f}, {167, 1, 1.06f}, {170, 0, 1.06f}, {171, 1, 1.03f}, {165, 3, 1.04f}, {171, 3, 1.03f} } },
+      { {167, 0, 1.12f}, {167, 1, 1.06f}, {170, 0, 1.06f}, {171, 1, 1.03f}, {165, 3, 1.04f}, {171, 3, 1.03f}, {172, 0, 1.10f} } },
     { "Corpulento", "Pesado: tronco y cintura anchos, poca definicion.",
-      { {167, 0, 1.10f}, {168, 3, 1.15f}, {171, 1, 1.08f}, {171, 2, 1.06f}, {170, 0, 1.08f}, {168, 1, 0.97f} } },
-    { "Culturista", "Mucho musculo: hombros redondos, espalda en V, trapecio alto y cintura fina.",
+      { {167, 0, 1.10f}, {168, 3, 1.15f}, {171, 1, 1.08f}, {171, 2, 1.06f}, {170, 0, 1.08f}, {168, 1, 0.97f}, {172, 0, 0.75f} } },
+    { "Culturista", "Mucho musculo: hombros redondos, espalda en V, trapecio alto, cintura fina y muy definido.",
       { {167, 0, 1.22f}, {164, 1, 1.06f}, {260, 0, 1.06f}, {260, 1, 1.06f}, {167, 1, 1.12f}, {261, 2, 1.08f}, {261, 1, 1.12f}, {261, 0, 1.06f},
-        {171, 1, 0.97f}, {168, 3, 0.90f}, {262, 1, 1.06f}, {262, 0, 1.06f}, {171, 3, 1.05f} } },
+        {171, 1, 0.97f}, {168, 3, 0.90f}, {262, 1, 1.06f}, {262, 0, 1.06f}, {171, 3, 1.05f}, {172, 0, 1.50f} } },
 };
-static const int kNPresets = (int)(sizeof kPresets / sizeof kPresets[0]);
-int MusclePresetCount() { return kNPresets; }
-const char* MusclePresetName(int k) { return k >= 0 && k < kNPresets ? kPresets[k].name : ""; }
-const char* MusclePresetDesc(int k) { return k >= 0 && k < kNPresets ? kPresets[k].desc : ""; }
+static const int kNB = (int)(sizeof kPresets / sizeof kPresets[0]);   // tipos del mod
+static const int kUserMax = 16;
+struct UserPreset { char name[48]; float v[kPRows][4]; };
+static UserPreset s_user[kUserMax]; static std::atomic<int> s_nUser{0}; static bool s_userLoaded = false;
+static std::wstring UserPath() { return g_cfg.baseDir + L"musculatura_tipos.ini"; }
+static void LoadUserPresets() {   // con s_profMx tomado
+    s_userLoaded = true; int n = 0;
+    std::ifstream f(UserPath(), std::ios::binary);
+    if (f) {
+        std::string l; UserPreset* cur = nullptr;
+        while (std::getline(f, l)) {
+            l = TrimS(l);
+            if (l.empty() || l[0] == ';') continue;
+            if (l[0] == '[') {
+                size_t e = l.find(']'); std::string nm = TrimS(l.substr(1, e == std::string::npos ? std::string::npos : e - 1));
+                cur = nullptr;
+                if (!nm.empty() && n < kUserMax) {
+                    cur = &s_user[n++]; snprintf(cur->name, sizeof cur->name, "%s", nm.c_str());
+                    for (auto& row : cur->v) for (auto& x : row) x = 1.0f;
+                }
+                continue;
+            }
+            if (!cur) continue;
+            size_t eq = l.find('='); if (eq == std::string::npos) continue;
+            std::string k = TrimS(l.substr(0, eq)), val = TrimS(l.substr(eq + 1));
+            const char* comps = "xyzw"; const char* pc = k.empty() ? nullptr : strchr(comps, tolower((unsigned char)k[0]));
+            if (!pc || k.size() < 2) continue;
+            int idx = atoi(k.c_str() + 1), comp = (int)(pc - comps);
+            if (PRow(idx) >= 0 && IsPlayerParam(idx, comp)) cur->v[PRow(idx)][comp] = std::clamp((float)atof(val.c_str()), 0.3f, 3.0f);
+        }
+    }
+    s_nUser = n;
+}
+static bool SaveUserPresets() {   // con s_profMx tomado
+    std::ofstream f(UserPath(), std::ios::binary | std::ios::trunc);
+    if (!f) return false;
+    f << "; PES21 FX - tipos de cuerpo propios (los escribe el menu: Musculatura por jugador > Guardar como tipo de cuerpo).\r\n"
+         "; [nombre] + las claves de la musculatura (como en musculatura_jugadores.ini): 1 = como el juego.\r\n";
+    for (int i = 0; i < s_nUser.load(); i++) {
+        f << "\r\n[" << s_user[i].name << "]\r\n";
+        for (auto& k : kPlayerParams) { char b[48]; snprintf(b, sizeof b, "%c%d = %g\r\n", "xyzw"[k.comp], k.idx, s_user[i].v[PRow(k.idx)][k.comp]); f << b; }
+    }
+    return true;
+}
+int MusclePresetCount() { return kNB + s_nUser.load(); }
+const char* MusclePresetName(int k) { return k >= 0 && k < kNB ? kPresets[k].name : k >= kNB && k < kNB + s_nUser.load() ? s_user[k - kNB].name : ""; }
+const char* MusclePresetDesc(int k) { return k >= 0 && k < kNB ? kPresets[k].desc : "Tipo de cuerpo propio (PES21FX\\musculatura_tipos.ini)."; }
 static float PresetValue(int k, int idx, int comp) {
+    if (k >= kNB) { const int u = k - kNB; return u < s_nUser.load() && PRow(idx) >= 0 ? s_user[u].v[PRow(idx)][comp] : 1.0f; }
     for (const PresetVal& pv : kPresets[k].v) if (pv.idx == idx && pv.comp == comp && pv.v > 0.0f) return pv.v;
     return 1.0f;
 }
@@ -329,7 +401,7 @@ static void PresetToProfile(Profile& p, int k) {   // con s_profMx tomado
     ProfDirty();
 }
 static int PresetOfProfile(const Profile& p) {   // con s_profMx tomado
-    for (int k = 0; k < kNPresets; k++) {
+    for (int k = 0; k < MusclePresetCount(); k++) {
         bool ok = true;
         for (auto& pp : kPlayerParams) if (fabsf(p.v[PRow(pp.idx)][pp.comp] - PresetValue(k, pp.idx, pp.comp)) > 0.004f) { ok = false; break; }
         if (ok) return k;
@@ -339,10 +411,11 @@ static int PresetOfProfile(const Profile& p) {   // con s_profMx tomado
 // combo "Tipo de cuerpo" del menu (ImGui): devuelve el elegido o -1
 static int PresetCombo(const char* label, int cur) {
     int pick = -1;
-    if (ImGui::BeginCombo(label, cur >= 0 ? kPresets[cur].name : cur == -1 ? "A mano" : "Elegir...")) {
-        for (int k = 0; k < kNPresets; k++) {
-            if (ImGui::Selectable(kPresets[k].name, k == cur)) pick = k;
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", kPresets[k].desc);
+    if (ImGui::BeginCombo(label, cur >= 0 ? MusclePresetName(cur) : cur == -1 ? "A mano" : "Elegir...")) {
+        for (int k = 0; k < MusclePresetCount(); k++) {
+            if (k == kNB) ImGui::Separator();
+            if (ImGui::Selectable(MusclePresetName(k), k == cur)) pick = k;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", MusclePresetDesc(k));
         }
         ImGui::EndCombo();
     }
@@ -350,28 +423,87 @@ static int PresetCombo(const char* label, int cur) {
 }
 // id 0 = los generales (el que llama tiene g_cfgMutex); si no, el perfil del jugador (se crea si hace falta)
 void MusclePresetApply(uint32_t id, const char* name, int k) {
-    if (k < 0 || k >= kNPresets) return;
+    if (k < 0 || k >= MusclePresetCount()) return;
     if (!id) { for (auto& pp : kPlayerParams) g_cfg.live[pp.idx][pp.comp] = PresetValue(k, pp.idx, pp.comp); return; }
     std::lock_guard<std::mutex> lk(s_profMx);
     if (!s_profLoaded) LoadProfiles();
     Profile& p = s_prof[id];
     if (name && *name) p.name = name;
     PresetToProfile(p, k);
-    Log("musculatura: tipo de cuerpo \"%s\" para %s", kPresets[k].name, id ? (name && *name ? name : "jugador") : "los generales");
+    Log("musculatura: tipo de cuerpo \"%s\" para %s", MusclePresetName(k), name && *name ? name : "jugador");
 }
 // que tipo de cuerpo coincide con los valores actuales (-1 = ninguno: valores a mano)
 int MusclePresetMatch(uint32_t id) {
-    for (int k = 0; k < kNPresets; k++) {
+    for (int k = 0; k < MusclePresetCount(); k++) {
         bool ok = true;
         for (auto& pp : kPlayerParams) if (fabsf(MuscleProfileGet(id, pp.idx, pp.comp) - PresetValue(k, pp.idx, pp.comp)) > 0.004f) { ok = false; break; }
         if (ok) return k;
     }
     return -1;
 }
+// (26/10 b) guarda los valores de un perfil como tipo de cuerpo propio (mismo nombre = se reemplaza); con s_profMx tomado
+static std::string SaveAsPreset(const float (*v)[4], const char* nameIn) {
+    std::string nm = TrimS(nameIn ? nameIn : "");
+    for (auto& ch : nm) if (ch == '[' || ch == ']' || ch == '\r' || ch == '\n') ch = ' ';
+    if (nm.empty()) return "Ponele un nombre al tipo de cuerpo";
+    for (int k = 0; k < kNB; k++) if (nm == kPresets[k].name) return "Ese nombre es de un tipo del mod: elegi otro";
+    int u = -1;
+    for (int i = 0; i < s_nUser.load(); i++) if (nm == s_user[i].name) u = i;
+    if (u < 0) { if (s_nUser.load() >= kUserMax) return "Ya hay 16 tipos propios: borra alguno"; u = s_nUser.load(); }
+    snprintf(s_user[u].name, sizeof s_user[u].name, "%s", nm.c_str());
+    memcpy(s_user[u].v, v, sizeof s_user[u].v);
+    if (u == s_nUser.load()) s_nUser = u + 1;
+    return SaveUserPresets() ? "Tipo de cuerpo \"" + nm + "\" guardado en musculatura_tipos.ini" : "No se pudo escribir musculatura_tipos.ini";
+}
+static void DeleteUserPreset(int u) {   // con s_profMx tomado
+    const int n = s_nUser.load();
+    if (u < 0 || u >= n) return;
+    for (int i = u; i + 1 < n; i++) s_user[i] = s_user[i + 1];
+    s_nUser = n - 1;
+    SaveUserPresets();
+}
+// (26/10 b) definicion muscular propia de un jugador (0 = usa la general); la usa skintone.cpp para la tabla del shader
+float MuscleDefinitionFor(uint32_t id) {
+    if (!id) return 0.0f;
+    std::lock_guard<std::mutex> lk(s_profMx);
+    if (!s_profLoaded) LoadProfiles();
+    auto it = s_prof.find(id);
+    if (it == s_prof.end()) return 0.0f;
+    const float v = it->second.v[12][0], gen = g_cfg.live[172][0] > 0.01f ? g_cfg.live[172][0] : 1.0f;
+    return fabsf(v - gen) > 0.005f ? std::clamp(v, 0.05f, 3.0f) : 0.0f;
+}
 
 struct MzOwn { float pos[3]; const Fac* fac; };   // (26/10) personaje con valores propios (fac) o tapon (nullptr = general)
 static const int kMzEnt = 32, kMzSets = 9;   // tienen que coincidir con pesMusPick (cloth_sim.hlsl)
 static void MuscleClothPresent(const Fac* fac, bool on, const MzOwn* own, int nOwn);   // (25/10) tabla para la fisica de la ropa (mas abajo)
+// (26/10 b) respiracion por personaje (en Present): agitacion por la velocidad del nodo, fase y amplitud
+static void UpdateDynamics() {
+    const double t = Now();
+    static double tPrev = 0; const float dt = tPrev > 0 ? (float)std::clamp(t - tPrev, 0.0, 0.1) : 0.0f; tPrev = t;
+    s_dynT = (float)fmod(t, 3600.0);
+    const float kb = s_dynK[1], kag = std::clamp(g_cfg.live[263][2], 0.0f, 2.0f);
+    for (int i = 0; i < kCharSlots; i++) {
+        DynState& d = s_dyn[i];
+        float pos[3];
+        const bool ok = s_slotAlive[i] && s_slotInfo[i].node && CharNodeWorldPos(s_slotInfo[i].node, pos);
+        float target = 0.0f;
+        if (ok && d.posOk && dt > 0.0f) {
+            const float dx = pos[0] - d.pos[0], dz = pos[2] - d.pos[2], v = sqrtf(dx * dx + dz * dz) / dt;
+            if (v < 15.0f) target = std::clamp(kag * (v - 1.5f) / 6.0f, 0.0f, 1.0f);   // mas de 15 m/s: corte o teletransporte
+        }
+        d.posOk = ok; if (ok) memcpy(d.pos, pos, sizeof pos);
+        if (!ok) target = 0.0f;
+        const float tau = target > d.ex ? 3.0f : 14.0f;   // se agita rapido y se calma despacio
+        if (dt > 0.0f) d.ex += (target - d.ex) * (1.0f - expf(-dt / tau));
+        if (d.phase == 0.0f) d.phase = 1.3f * (float)i;
+        d.phase = fmodf(d.phase + 6.2831853f * (0.22f + 0.50f * d.ex) * dt, 6.2831853f);   // 13 a 43 respiraciones por minuto
+        d.breath = kb * (0.0025f + 0.0045f * d.ex) * sinf(d.phase);
+    }
+    for (int i = 0; i < kDynFb; i++) {   // sin personaje conocido: respiracion tranquila
+        DynState& d = s_dyn[kCharSlots + i];
+        d.ex = 0.0f; d.breath = kb * 0.0025f * sinf(6.2831853f * 0.22f * s_dynT + 1.7f * (float)i);
+    }
+}
 static void UpdateFactors() {
     float L[kPRows][4]; GeneralRows(L);   // 164..171, 162 y (26/10) 260..262
     const bool on = L[0][0] > 0.5f, ropa = g_cfg.live[166][1] > 0.5f, trans = g_cfg.live[170][2] > 0.5f, vec = g_cfg.live[255][0] > 0.5f;
@@ -379,11 +511,15 @@ static void UpdateFactors() {
     ComputeFactors(L, on, ropa, trans, vec, f);
     s_on = on;
     for (int i = 0; i < M_COUNT; i++) s_fac[i] = f[i];
+    s_dynK[0] = std::clamp(g_cfg.live[263][0], 0.0f, 2.0f); s_dynK[1] = std::clamp(g_cfg.live[263][1], 0.0f, 2.0f);
+    s_ropaOn = ropa; s_sleeveK = std::clamp(g_cfg.live[255][1], 0.0f, 1.5f);
+    s_dynOn = on && (s_dynK[0] > 0.0f || s_dynK[1] > 0.0f);
     // por jugador: un juego de factores por cada personaje en pantalla que tenga valores propios
     std::lock_guard<std::mutex> lk(s_profMx);
     if (!s_profLoaded) LoadProfiles();
     unsigned g = CharTableGen();
     if (g != s_slotGen) { s_slotGen = g; CharSnapshot(s_slotInfo, s_slotAlive); }
+    if (s_dynOn) UpdateDynamics();
     // en el menu Fisico del juego, un personaje que no paso por HumanList (si el modelo de Editar se arma por otro lado)
     // usa los valores del jugador que se esta editando
     uint32_t editId = 0;
@@ -646,6 +782,79 @@ static void Apply(int i, void* self, const float* a2, float* out, const Fac fc, 
     out[8] += r[0]; out[9] += r[1]; out[10] += r[2];
 }
 
+// ---------------------------------------------------------------- musculos vivos en el Eval (26/10 b)
+static bool CurXf(void* bone, Xf& x) { void* p = nullptr; return ReadPtr((const char*)bone + 0x18, p) && ReadXf(p, x); }   // + 0x18 = transformacion actual
+static void XAxis(const float* q, float* o) { static const float v[3] = { 1.0f, 0.0f, 0.0f }; QRot(q, v, o); }
+static float AngleOf(const float* a, const float* b) { return acosf(std::clamp(a[0] * b[0] + a[1] * b[1] + a[2] * b[2], -1.0f, 1.0f)); }
+// 0 = como en reposo (o mas estirado), 1 = doblado del todo
+static float ElbowFlex(const DynState& d, int sd) {
+    if (!d.upOk[sd] || !d.foOk[sd]) return 0.0f;
+    const float now = AngleOf(d.upX[sd], d.foX[sd]), rest = AngleOf(d.upR[sd], d.foR[sd]);
+    return std::clamp((now - rest) / (std::max)(1.75f - rest, 0.4f), 0.0f, 1.0f);   // ~100 grados mas que el reposo = del todo
+}
+static float KneeFlex(const DynState& d, int sd) {
+    if (!d.thOk[sd] || !d.shOk[sd]) return 0.0f;
+    const float now = AngleOf(d.thX[sd], d.shX[sd]), rest = AngleOf(d.thR[sd], d.shR[sd]);
+    return std::clamp((now - rest) / 1.7f, 0.0f, 1.0f);
+}
+static float ArmRaise(const DynState& d, int sd) {   // el brazo se aleja del costado (hacia adelante, atras o arriba), en el espacio del pecho
+    if (!d.upOk[sd] || !d.chOk) return 0.0f;
+    static const float down[3] = { 0.0f, -1.0f, 0.0f };
+    float ln[3], lr[3], dn[3];
+    QRotInv(d.chQ, d.upX[sd], ln); QRotInv(d.chR, d.upR[sd], lr); QRotInv(d.chR, down, dn);
+    return std::clamp((AngleOf(ln, dn) - AngleOf(lr, dn)) / 1.4f, 0.0f, 1.0f);
+}
+static int s_iArm = -2, s_iFore = -1, s_iThigh = -1, s_iKnee = -1, s_iPect = -1;
+static void DynFindClasses() {
+    if (s_iArm != -2) return;
+    auto find = [](const char* n) { for (int i = 0; i < kN; i++) if (!strcmp(s_cls[i].name, n)) return i; return -1; };
+    s_iFore = find("antebrazo"); s_iThigh = find("muslo"); s_iKnee = find("rodilla"); s_iPect = find("pectoral"); s_iArm = find("brazo");
+}
+static std::atomic<unsigned> s_dynMeas{0}, s_dynMeasFail{0};
+static void DynAdd(int i, void* self, const float* a2, const void* skel, int slot, Fac& fc) {
+    DynFindClasses();
+    const MusCls& C = s_cls[i];
+    DynState& d = s_dyn[DynIndex(slot, skel)];
+    Xf rb{}, rt{}; void* bone = nullptr; void* targ = nullptr;
+    const bool okB = ReadPtr((const char*)self + 0x58, bone) && ReadXf((const char*)bone + 0x40, rb);
+    const bool okT = ReadPtr((const char*)self + 0x60, targ) && ReadXf((const char*)targ + 0x40, rt);
+    int src = 0;
+    const float side = SideFor(C, self, okB ? &rb : nullptr, okT ? &rt : nullptr, a2, &src);
+    const int sd = side > 0.0f ? 0 : 1;
+    // medicion: el destino de estas restricciones es el hueso principal del miembro (o el pecho)
+    if (okT && (i == s_iArm || i == s_iFore || i == s_iThigh || i == s_iKnee || i == s_iPect)) {
+        Xf cur{};
+        if (CurXf(targ, cur)) {
+            s_dynMeas.fetch_add(1, std::memory_order_relaxed);
+            if (i == s_iPect) { memcpy(d.chQ, cur.q, sizeof d.chQ); memcpy(d.chR, rt.q, sizeof d.chR); d.chOk = 1; }
+            else {
+                float (*X)[3] = i == s_iArm ? d.upX : i == s_iFore ? d.foX : i == s_iThigh ? d.thX : d.shX;
+                float (*R)[3] = i == s_iArm ? d.upR : i == s_iFore ? d.foR : i == s_iThigh ? d.thR : d.shR;
+                volatile unsigned char* ok = i == s_iArm ? d.upOk : i == s_iFore ? d.foOk : i == s_iThigh ? d.thOk : d.shOk;
+                XAxis(cur.q, X[sd]); XAxis(rt.q, R[sd]); ok[sd] = 1;
+            }
+        } else s_dynMeasFail.fetch_add(1, std::memory_order_relaxed);
+    }
+    const float kc = s_dynK[0], b = d.breath, ex = d.ex;
+    switch (C.mus) {
+    case M_ARM: if (kc > 0.0f) { const float g = kc * 0.08f * ElbowFlex(d, sd); fc.e += g; fc.t[2] += kArmR * 0.5f * g; } break;   // biceps adelante
+    case M_SLEEVE: if (kc > 0.0f && s_ropaOn) { const float g = s_sleeveK * kc * 0.08f * ElbowFlex(d, sd); fc.e += g; fc.t[2] += kArmR * 0.5f * g; } break;
+    case M_FORE: if (kc > 0.0f) fc.e += kc * 0.04f * ElbowFlex(d, sd); break;
+    case M_DELT: if (kc > 0.0f) fc.e += kc * 0.07f * ArmRaise(d, sd); break;
+    case M_TRAP: if (kc > 0.0f) Push(fc, 0.0f, 1.0f, 0.0f, 0.006f * kc, ArmRaise(d, sd)); Push(fc, 0.0f, 1.0f, 0.0f, 0.5f * b * ex, 1.0f); break;
+    case M_THIGH: if (kc > 0.0f) { const float k = KneeFlex(d, sd); fc.e += kc * 0.035f * k; fc.t[2] -= kThighR * 0.5f * kc * 0.07f * k; } break;   // isquios atras
+    case M_HEM: if (kc > 0.0f && s_ropaOn) { const float k = KneeFlex(d, sd); fc.e += 0.7f * kc * 0.035f * k; fc.t[2] -= 0.8f * kThighR * 0.5f * kc * 0.07f * k; } break;
+    case M_CALF: if (kc > 0.0f) fc.e += kc * 0.03f * KneeFlex(d, sd); break;
+    case M_PECT: Push(fc, 0.10f, 0.35f, 1.0f, b, 1.0f); break;            // respiracion: el pecho sube y sale
+    case M_CLAV: Push(fc, 0.0f, 1.0f, 0.6f, 0.8f * b, 1.0f); break;
+    case M_RIB: Push(fc, 1.0f, 0.0f, 0.2f, 0.5f * b, 1.0f); break;       // las costillas se abren
+    case M_LAT: Push(fc, 1.0f, 0.0f, -0.3f, 0.35f * b, 1.0f); break;
+    case M_SCAP: Push(fc, 0.0f, 0.3f, -1.0f, 0.3f * b, 1.0f); break;
+    case M_ABS: Push(fc, 0.0f, 0.0f, 1.0f, 0.45f * b, 1.0f); break;      // la panza acompana (diafragma)
+    case M_BELLY: Push(fc, 0.0f, -0.10f, 1.0f, 0.55f * b, 1.0f); break;
+    default: break;
+    }
+}
 template<int I> static void __fastcall hk_Eval(void* self, void* a2, float* out) {
     s_orig[I](self, a2, out);
     const unsigned nc = s_calls[I].fetch_add(1, std::memory_order_relaxed);
@@ -653,13 +862,15 @@ template<int I> static void __fastcall hk_Eval(void* self, void* a2, float* out)
     const int mus = s_cls[I].mus;
     Fac fc = s_fac[mus];
     // por jugador: el esqueleto de la restriccion (+ 0x10) -> personaje -> sus factores (si tiene valores propios)
-    const bool own = s_anyOwn.load(std::memory_order_relaxed);
-    if (own || (nc & 255) == 0) {
-        void* skel = *(void* const volatile*)((const char*)self + 0x10);
-        int slot = CharSlotForSkel(skel);
+    const bool own = s_anyOwn.load(std::memory_order_relaxed), dyn = s_dynOn;
+    void* skel = nullptr; int slot = -1;
+    if (own || dyn || (nc & 255) == 0) {
+        skel = *(void* const volatile*)((const char*)self + 0x10);
+        slot = CharSlotForSkel(skel);
         if ((nc & 255) == 0) (slot >= 0 ? s_skHit : s_skMiss).fetch_add(1, std::memory_order_relaxed);
         if (own && slot >= 0 && s_slotUse[slot].load(std::memory_order_acquire)) fc = s_slotFac[slot][mus];
     }
+    if (dyn) DynAdd(I, self, (const float*)a2, skel, slot, fc);   // (26/10 b) contraccion y respiracion
     bool diag = s_diagCnt[I].load(std::memory_order_relaxed) < (s_cls[I].side == 0 ? 1 : 2);
     if (!diag && (!s_on || Idle(fc))) return;
     Apply(I, self, (const float*)a2, out, fc, diag);
@@ -782,6 +993,17 @@ void MuscleHookPresent() {
             s_on ? "prendida" : "apagada", active, kN, total / (t - s_t), D[0], A[1], Z[3], A[2], A[3], B[0], B[1], N[1], B[2], D[1], D[2], D[3], E[0], N[0], E[1], E[2], Z[1], E[3],
             H[0], Z[2], B[3], H[1], H[2], H[3], Z[0], C[0], C[1] > 0.5f ? "si" : "no", N[2] > 0.5f ? "si" : "no",
             quiet.empty() ? "" : " | sin llamadas:", quiet.c_str(), prob.empty() ? "" : " | problemas:", prob.c_str());
+    if (s_dynOn) {   // (26/10 b) musculos vivos: un personaje de muestra
+        unsigned ms = s_dynMeas.exchange(0), mf = s_dynMeasFail.exchange(0);
+        int k = -1; float best = -1.0f;
+        for (int i = 0; i < kCharSlots; i++) if (s_slotAlive[i] && s_dyn[i].upOk[0] && s_dyn[i].ex > best) { best = s_dyn[i].ex; k = i; }
+        if (k >= 0) {
+            const DynState& d = s_dyn[k];
+            Log("musculatura viva (contraccion %.2f, respiracion %.2f): %u huesos medidos, %u sin transformacion actual | %s: codo %.0f/%.0f %%, rodilla %.0f/%.0f %%, brazo afuera %.0f/%.0f %% (izq/der), agitacion %.0f %%, respiracion %.1f mm",
+                s_dynK[0], s_dynK[1], ms, mf, s_slotInfo[k].name[0] ? s_slotInfo[k].name : "personaje", 100.0f * ElbowFlex(d, 0), 100.0f * ElbowFlex(d, 1),
+                100.0f * KneeFlex(d, 0), 100.0f * KneeFlex(d, 1), 100.0f * ArmRaise(d, 0), 100.0f * ArmRaise(d, 1), 100.0f * d.ex, 1000.0f * d.breath);
+        } else Log("musculatura viva (contraccion %.2f, respiracion %.2f): %u huesos medidos, %u sin transformacion actual, ningun personaje conocido medido", s_dynK[0], s_dynK[1], ms, mf);
+    }
     {
         unsigned hit = s_skHit.exchange(0), miss = s_skMiss.exchange(0);
         if (hit || miss || !s_prof.empty())
@@ -895,6 +1117,34 @@ void MuscleDrawPlayerPanel() {
                 const int pk = PresetCombo("Tipo de cuerpo", PresetOfProfile(p));
                 if (pk >= 0) PresetToProfile(p, pk);
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Pone todos sus sliders de un tipo de cuerpo (despues se afinan a mano). 'Como el juego' = todo en 1.");
+                // (26/10 b) copiar de otro jugador con valores propios / guardar este cuerpo como tipo propio
+                if (s_prof.size() > 1) {
+                    ImGui::SameLine(); ImGui::SetNextItemWidth(190);
+                    if (ImGui::BeginCombo("##copiar", "Copiar de otro jugador...")) {
+                        for (auto& kv : s_prof) {
+                            if (kv.first == sel->id) continue;
+                            char lb[96]; snprintf(lb, sizeof lb, "%s  (id %u)", kv.second.name.empty() ? "(sin nombre)" : kv.second.name.c_str(), kv.first);
+                            if (ImGui::Selectable(U8(lb).c_str())) { const std::string nm = p.name; memcpy(p.v, kv.second.v, sizeof p.v); p.name = nm; ProfDirty();
+                                s_profStatus = "Copiados los valores de " + (kv.second.name.empty() ? std::to_string(kv.first) : kv.second.name); }
+                        }
+                        ImGui::EndCombo();
+                    }
+                }
+                static char s_tipoNom[48] = "";
+                ImGui::SetNextItemWidth(170);
+                ImGui::InputTextWithHint("##tipo", "nombre del tipo", s_tipoNom, sizeof s_tipoNom);
+                ImGui::SameLine();
+                if (ImGui::Button("Guardar como tipo de cuerpo")) s_profStatus = SaveAsPreset(p.v, s_tipoNom);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Guarda todos los valores de este jugador como un tipo de cuerpo propio (musculatura_tipos.ini): aparece en las listas de tipos, tambien en el menu Fisico del juego.");
+                if (s_nUser.load() > 0) {
+                    ImGui::SameLine(); ImGui::SetNextItemWidth(150);
+                    if (ImGui::BeginCombo("##borrartipo", "Borrar un tipo propio...")) {
+                        int del = -1;
+                        for (int u = 0; u < s_nUser.load(); u++) if (ImGui::Selectable(s_user[u].name)) del = u;
+                        ImGui::EndCombo();
+                        if (del >= 0) { s_profStatus = std::string("Borrado el tipo de cuerpo \"") + s_user[del].name + "\""; DeleteUserPreset(del); }
+                    }
+                }
                 const float w = ImGui::GetContentRegionAvail().x;
                 for (auto& g : g_cfg.groups) {
                     if (!g.special.empty() || g.title.rfind("Musculatura", 0) != 0) continue;

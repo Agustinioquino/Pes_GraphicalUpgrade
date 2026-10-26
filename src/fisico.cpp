@@ -99,7 +99,7 @@ static std::atomic<int> s_sliderMode{-1};   // -1 sin probar, 1 barras, 0 select
 // idx = -1: "Tipo de cuerpo" (selector: pone todos los sliders del jugador de un tipo; ver MusclePresetApply)
 struct MRow { const char* label; int idx, comp; };
 static const MRow kPgArms[] = {   // hombros y brazos
-    { "Tipo de cuerpo", -1, 0 }, { "General", 167, 0 }, { "Hombros", 164, 1 }, { "Ancho de hombros", 171, 3 },
+    { "Tipo de cuerpo", -1, 0 }, { "General", 167, 0 }, { "Definici\xC3\xB3n muscular", 172, 0 }, { "Hombros", 164, 1 }, { "Ancho de hombros", 171, 3 },
     { "Deltoides frontal", 260, 0 }, { "Deltoides posterior", 260, 1 }, { "B\xC3\xAD" "ceps", 164, 2 }, { "Tr\xC3\xAD" "ceps", 164, 3 },
     { "Antebrazos", 165, 0 }, { "Antebrazo alto", 260, 2 }, { "Antebrazo bajo", 260, 3 }, { "Codos", 166, 3 },
     { "Mu\xC3\xB1" "ecas", 170, 3 }, { "Axilas", 162, 0 },
@@ -202,6 +202,7 @@ static bool G_SelFill(void* sel, int idx, int steps = kSteps) {
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
+static void G_SelSetIdx(void* sel, unsigned i) { __try { ((SelSetFn)kSelSet)(sel, i); } __except (EXCEPTION_EXECUTE_HANDLER) {} }
 static int G_SelGet(void* sel) { __try { return (int)((SelGetFn)kSelGet)(sel); } __except (EXCEPTION_EXECUTE_HANDLER) { return kSteps; } }
 static void SetTitle(void* menu, const char* s, int id) {   // "headline" del objeto lista del menu (controlador + 0x90)
     void* ctl = Ctl(menu); void* lst = nullptr;
@@ -277,6 +278,13 @@ static void FillPresetRow(void* menu, void* list, int row) {
     void* sel = FindComp(w, "selector");
     if (sel) G_SelFillList(sel, items, np + 1, MusclePresetMatch(s_editId) + 1);
 }
+// (26/10 b) rotulo de una fila con su valor si no es el del juego ("Biceps  x1.12")
+static const char* RowLabel(const MRow& r, float v) {
+    static char b[96];
+    if (fabsf(v - 1.0f) < 0.005f) return r.label;
+    snprintf(b, sizeof b, "%s  x%.2f", r.label, v);
+    return b;
+}
 static void FillMusclePage(void* menu, int page, int skipRow = -1) {
     void* list = List(menu);
     const MPage* pg = PageOf(page);
@@ -288,14 +296,15 @@ static void FillMusclePage(void* menu, int page, int skipRow = -1) {
         if (r.idx < 0) { FillPresetRow(menu, list, i); continue; }
         void* w = Child(list, (unsigned)i);
         if (!w) continue;
-        const int v = ToSteps(MuscleProfileGet(s_editId, r.idx, r.comp));
+        const float fv = MuscleProfileGet(s_editId, r.idx, r.comp);
+        const int v = ToSteps(fv);
         bool done = false;
         if (s_sliderMode.load() != 0) {   // barra ("c_slider"): componente de tipo 0x11 de la fila
             void* sl = CompOfType(w, 0x11);
             if (sl) {
                 G_SetRow(menu, 2, (unsigned)i);
                 G_SetEnable(w);
-                SetLabel(w, r.label);
+                SetLabel(w, RowLabel(r, fv));
                 done = G_SliderRange(sl, v, kMSteps) == 0;
             }
             if (s_sliderMode.load() < 0) {
@@ -306,7 +315,7 @@ static void FillMusclePage(void* menu, int page, int skipRow = -1) {
         if (!done) {   // selector con numeros -50..+50
             G_SetRow(menu, 1, (unsigned)i);
             G_SetEnable(w);
-            SetLabel(w, r.label);
+            SetLabel(w, RowLabel(r, fv));
             void* sel = FindComp(w, "selector");
             if (sel) G_SelFill(sel, v + kMSteps, kMSteps);
         }
@@ -546,13 +555,16 @@ static void GoPage(void* menu, int page, int cursor) {
     Log("fisico: pagina %d (%s, id %u)", page, s_editName[0] ? s_editName : "jugador", s_editId);
 }
 static std::atomic<bool> s_hlChanged{false};   // un valor cambio: el resaltado vuelve a empezar
-static void ApplyValue(int row, int steps) {
+static void ApplyValue(void* menu, int row, int steps) {
     const MRow* r = RowOf(s_page, row);
-    if (!r || !s_editId) return;
+    if (!r || r->idx < 0 || !s_editId) return;
     float cur = MuscleProfileGet(s_editId, r->idx, r->comp);
     if (ToSteps(cur) == std::clamp(steps, -kMSteps, kMSteps)) return;   // sin cambio (p. ej. al pasar el cursor)
     MuscleProfileSet(s_editId, s_editName, r->idx, r->comp, FromSteps(steps));
     s_hlChanged = true;
+    if (void* w = Child(List(menu), (unsigned)row)) SetLabel(w, RowLabel(*r, FromSteps(steps)));   // (26/10 b) el rotulo muestra el valor
+    if (void* w0 = Child(List(menu), 0u)) { const MRow* r0 = RowOf(s_page, 0); if (r0 && r0->idx < 0) {   // el tipo de cuerpo pasa a "A mano" (o al que coincida)
+        void* sel = FindComp(w0, "selector"); if (sel) { s_filling = true; G_SelSetIdx(sel, (unsigned)(MusclePresetMatch(s_editId) + 1)); s_filling = false; } } }
 }
 static int ReadRowSteps(void* menu, int row, int steps = kSteps) {
     void* w = Child(List(menu), (unsigned)row);
@@ -639,7 +651,7 @@ static void* __fastcall hk_val(void* menu, void* a2, void* a3, void* a4) {   // 
     if (Mine(menu) && s_page > 0) {
         if (s_filling || list != 0) return nullptr;
         if (IsPresetRow(row)) { void* sel = FindComp(Child(List(menu), (unsigned)row), "selector"); if (sel) ApplyPreset(menu, row, G_SelGet(sel)); }
-        else ApplyValue(row, ReadRowSteps(menu, row, kMSteps));
+        else ApplyValue(menu, row, ReadRowSteps(menu, row, kMSteps));
         return nullptr;
     }
     if (Mine(menu) && row >= kJump0) return nullptr;
@@ -656,7 +668,7 @@ static void* __fastcall hk_valset(void* menu, void* a2, void* a3, void* a4) {   
     if (Mine(menu) && s_page > 0) {
         if (s_filling || list != 0) return nullptr;
         if (IsPresetRow(row)) ApplyPreset(menu, row, v);
-        else ApplyValue(row, s_sliderMode.load() == 1 ? v : v - kMSteps);
+        else ApplyValue(menu, row, s_sliderMode.load() == 1 ? v : v - kMSteps);
         return nullptr;
     }
     if (Mine(menu) && row >= kJump0) return nullptr;
@@ -728,7 +740,7 @@ static HlSet HlFor(int idx, int comp) {
     case 262 * 4 + 1: mark(0.160f, 0.430f, -0.060f, 0.035f); break;                    // gemelos
     }
     switch (idx * 4 + comp) {
-    case 167 * 4 + 0: h.all = true; break;                                                          // general
+    case 167 * 4 + 0: case 172 * 4 + 0: h.all = true; break;                                        // general / definicion
     case 260 * 4 + 0: one({ 0.200f, 1.460f, 0.070f, 0.215f, 1.420f, 0.075f, 0.045f }); break;        // deltoides frontal
     case 260 * 4 + 1: one({ 0.200f, 1.460f, -0.020f, 0.215f, 1.420f, -0.025f, 0.045f }); break;      // deltoides posterior
     case 260 * 4 + 2: one({ 0.420f, 1.240f, 0.045f, 0.490f, 1.180f, 0.055f, 0.050f }); break;        // antebrazo alto

@@ -293,6 +293,7 @@ void MuscleProfileSet(uint32_t id, const char* name, int idx, int comp, float v)
 int MusclePresetCount(); const char* MusclePresetName(int k); const char* MusclePresetDesc(int k);   // (26/10) tipos de cuerpo
 void MusclePresetApply(uint32_t id, const char* name, int k);   // id 0 = generales (con g_cfgMutex tomado)
 int MusclePresetMatch(uint32_t id);                             // -1 = valores a mano
+float MuscleDefinitionFor(uint32_t id);                         // (26/10 b) definicion propia del jugador (0 = la general)
 void FisicoInstall();                             // (24/10) filas de musculatura dentro del menu Fisico del juego (fisico.cpp)
 bool FisicoEditing(uint32_t* id);                 // el menu Fisico del juego esta armado para un jugador (su id)
 void FisicoHighlightPresent();                    // (24/10) resaltado del musculo de la fila elegida (x174..182 para los shaders)
