@@ -428,17 +428,37 @@ float pesLimbW(uint p, float3 r0f)
 // piel en cada una; aca el reposo de la tela se corre lo mismo, mezclado como los pesos de la piel (dos zonas que se pisan
 // no se suman). pb = posicion de reposo (modelo), sw = peso de manga (en la manga actua menos, V.w = cuanto).
 //   g_pesMus[0] = (zonas, fuerza, -, -); por zona 3 float4: (A, radio), (B, tipo: 0 corre V / 1 crece V.x alrededor), (V, manga)
+// (26/10) una tabla por jugador con valores propios: la DLL agrega despues de la general (filas 0..72, como antes) una lista de
+// personajes [73] = (cuantos, -, distancia maxima, -), [74 + i] = (posicion en el mundo, juego de zonas) y los juegos propios
+// desde la fila 106 (73 filas cada uno: [0] = (zonas, ...), zonas en 1 + 3k). La prenda usa el juego del personaje mas cercano a su
+// origen en el mundo; si no hay ninguno cerca, el general (los que no tienen valores propios: como el juego si son 1).
+static uint s_musBase = 0;
+void pesMusPick(float3 wo)
+{
+    s_musBase = 0;
+#if PES_MUS_FOLLOW
+    float4 X = g_pesMus[73];
+    uint ne = min((uint)max(X.x, 0.0), 32u);
+    float best = X.z > 0.0 ? X.z : 1.0;
+    [loop] for (uint i = 0; i < ne; ++i) {
+        float4 E = g_pesMus[74 + i];
+        float d = distance(E.xyz, wo);
+        if (all(isfinite(E.xyz)) && d < best) { best = d; uint st = (uint)max(E.w + 0.5, 0.0); s_musBase = st == 0 ? 0u : 106u + (min(st, 8u) - 1u) * 73u; }
+    }
+#endif
+}
 float3 pesMusField(float3 pb, float sw)
 {
 #if PES_MUS_FOLLOW
     float4 H = g_pesMus[0];
-    uint n = min((uint)max(H.x, 0.0), 24u);
+    uint n = min((uint)max(g_pesMus[s_musBase].x, 0.0), 24u);
     if (n == 0 || !(H.y > 0.0)) return float3(0, 0, 0);
     float sx = pb.x < 0.0 ? -1.0 : 1.0;
     float3 q = float3(abs(pb.x), pb.y, pb.z);
     float3 acc = 0; float wsum = 0;
     [loop] for (uint k = 0; k < n; ++k) {
-        float4 A = g_pesMus[1 + 3 * k], B = g_pesMus[2 + 3 * k], V = g_pesMus[3 + 3 * k];
+        uint zb = s_musBase + 1 + 3 * k;
+        float4 A = g_pesMus[zb], B = g_pesMus[zb + 1], V = g_pesMus[zb + 2];
         float3 ab = B.xyz - A.xyz;
         float tt = saturate(dot(q - A.xyz, ab) / max(dot(ab, ab), 1e-8));
         float3 dq = q - (A.xyz + ab * tt);
@@ -1162,6 +1182,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
     s_outBase0 = me.outBase0; s_outBase1 = me.outBase1; s_pnrmBase = me.pnrmBase; s_otherCacheBase = me.otherCacheBase;
     s_W[0] = me.world[0]; s_W[1] = me.world[1]; s_W[2] = me.world[2];
     s_Wp[0] = me.worldPrev[0]; s_Wp[1] = me.worldPrev[1]; s_Wp[2] = me.worldPrev[2];
+    pesMusPick(float3(me.world[0].w, me.world[1].w, me.world[2].w));   // (26/10) zonas de la musculatura de ESTE jugador
     s_kick = me.kick.xyz;
     // PES21 FX (25/10): escena de menu (editor, presentacion de equipos). El juego la arma a ~10 km del origen y el modelo
     // gira en la plataforma: los empujes por movimiento del cuerpo (arranque, giro, salto) solo meten ruido. La DLL marca

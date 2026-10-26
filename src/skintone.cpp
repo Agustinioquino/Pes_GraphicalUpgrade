@@ -275,6 +275,7 @@ static bool NodePosL(const float m[16], int layout, float out[3]) {
 static bool NodePos(void* node, float out[3]) {
     float m[16]; return NodeMat(node, m) && NodePosL(m, s_nodeLayout.load(), out);
 }
+bool CharNodeWorldPos(void* node, float out[3]) { return NodePos(node, out); }   // (26/10) la usa musculo.cpp (ropa por jugador)
 static void ToneCheckPresent(const CharInfo* ci, const bool* alive);   // abajo
 static double s_tabLog = 0;
 // (24/10 e) medicion "cuerpo como la cara": ring.cpp acumula en el menu Fisico el color de la base del cuello del cuerpo

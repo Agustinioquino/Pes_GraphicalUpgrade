@@ -274,7 +274,9 @@ void MuscleProfileSet(uint32_t id, const char* name, int idx, int comp, float v)
     ProfDirty();
 }
 
-static void MuscleClothPresent(const Fac* fac, bool on);   // (25/10) tabla para la fisica de la ropa (mas abajo)
+struct MzOwn { float pos[3]; const Fac* fac; };   // (26/10) personaje con valores propios (fac) o tapon (nullptr = general)
+static const int kMzEnt = 32, kMzSets = 9;   // tienen que coincidir con pesMusPick (cloth_sim.hlsl)
+static void MuscleClothPresent(const Fac* fac, bool on, const MzOwn* own, int nOwn);   // (25/10) tabla para la fisica de la ropa (mas abajo)
 static void UpdateFactors() {
     float L[9][4]; memcpy(L, &g_cfg.live[164], sizeof(float) * 32); memcpy(L[8], g_cfg.live[162], sizeof(float) * 4);   // (24/10 g) + 162
     const bool on = L[0][0] > 0.5f, ropa = g_cfg.live[166][1] > 0.5f, trans = g_cfg.live[170][2] > 0.5f, vec = g_cfg.live[255][0] > 0.5f;
@@ -313,7 +315,29 @@ static void UpdateFactors() {
         Fac fe[M_COUNT]; const Fac* use = s_fac;
         if (editId) { auto it = s_prof.find(editId); if (it != s_prof.end()) { ComputeFactors(it->second.v, on, ropa, trans, vec, fe); use = fe; } }
         else if (newest >= 0 && g_cfg.live[255][3] > 0.5f && s_slotUse[newest].load(std::memory_order_relaxed)) use = s_slotFac[newest];
-        MuscleClothPresent(use, on);
+        // (26/10) en el partido, cada jugador con valores propios lleva su juego de zonas con su posicion (el simulador elige el del
+        // personaje mas cercano a la prenda); los demas personajes cerca de alguno de ellos van como "tapones" con el general
+        static MzOwn own[kMzEnt]; int nOwn = 0;
+        if (use == s_fac && on) {
+            static float pos[kCharSlots][3]; static bool hasPos[kCharSlots];
+            for (int i = 0; i < kCharSlots; i++) hasPos[i] = s_slotAlive[i] && s_slotInfo[i].node && CharNodeWorldPos(s_slotInfo[i].node, pos[i]);
+            int nSet = 0;
+            for (int i = 0; i < kCharSlots && nOwn < kMzEnt && nSet < kMzSets - 1; i++)
+                if (hasPos[i] && s_slotUse[i].load(std::memory_order_acquire)) {
+                    MzOwn& o = own[nOwn++]; memcpy(o.pos, pos[i], sizeof o.pos); o.fac = s_slotFac[i]; nSet++;
+                }
+            const int nReal = nOwn;
+            for (int i = 0; i < kCharSlots && nOwn < kMzEnt && nReal > 0; i++) {
+                if (!hasPos[i] || s_slotUse[i].load(std::memory_order_relaxed)) continue;
+                bool nearOwn = false;
+                for (int j = 0; j < nReal && !nearOwn; j++) {
+                    const float dx = pos[i][0] - own[j].pos[0], dy = pos[i][1] - own[j].pos[1], dz = pos[i][2] - own[j].pos[2];
+                    nearOwn = dx * dx + dy * dy + dz * dz < 4.0f;
+                }
+                if (nearOwn) { MzOwn& o = own[nOwn++]; memcpy(o.pos, pos[i], sizeof o.pos); o.fac = nullptr; }
+            }
+        }
+        MuscleClothPresent(use, on, own, nOwn);
     }
 }
 
@@ -346,31 +370,19 @@ static const MusZone kZones[] = {
 };
 static const int kMzMax = 24;
 static_assert(sizeof(kZones) / sizeof(kZones[0]) <= kMzMax, "zonas de mas para la tabla de la ropa");
+// (26/10) filas: 0..72 general (como antes: [0] = (zonas, fuerza), zonas en 1 + 3k); [73] = (personajes, juegos, distancia
+// maxima); [74 + i] = (posicion del personaje en el mundo, juego: 0 general / 1..8 propio); juego s desde 106 + (s - 1) * 73
+static const int kMzSetRows = 1 + 3 * kMzMax, kMzRows = kMzSetRows + 1 + kMzEnt + (kMzSets - 1) * kMzSetRows;
+static_assert(kMzSetRows == 73 && kMzSetRows + 1 + kMzEnt == 106, "la tabla de la ropa no coincide con cloth_sim.hlsl");
 static std::atomic<ID3D11ShaderResourceView*> s_mzSRV{nullptr};
 static ID3D11Buffer* s_mzBuf = nullptr; static ID3D11Device* s_mzDev = nullptr;
-static float s_mzData[1 + 3 * kMzMax][4] = {}; static bool s_mzSent = false;
-static int s_mzZones = 0; static float s_mzMax = 0.0f;
+static float s_mzData[kMzRows][4] = {}; static bool s_mzSent = false;
+static int s_mzZones = 0, s_mzOwnLog = -1; static float s_mzMax = 0.0f;
 ID3D11ShaderResourceView* MuscleClothSRV() { return s_mzSRV.load(std::memory_order_acquire); }
-static void MuscleClothPresent(const Fac* fac, bool on) {
-    ID3D11Device* dev = g_dev.dev; ID3D11DeviceContext* imm = g_dev.imm;
-    if (!dev || !imm) return;
-    if (s_mzDev != dev) {   // (re)crear en el dispositivo del juego; lo viejo se deja vivo (otro hilo podria tenerlo enlazado)
-        s_mzDev = dev; s_mzBuf = nullptr; s_mzSent = false;
-        D3D11_BUFFER_DESC bd{}; bd.ByteWidth = sizeof(s_mzData); bd.Usage = D3D11_USAGE_DYNAMIC; bd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-        bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE; bd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED; bd.StructureByteStride = 16;
-        ID3D11Buffer* b = nullptr;
-        if (FAILED(dev->CreateBuffer(&bd, nullptr, &b)) || !b) { Log("ropa: no se pudo crear la tabla de la musculatura"); return; }
-        D3D11_SHADER_RESOURCE_VIEW_DESC sd{}; sd.Format = DXGI_FORMAT_UNKNOWN; sd.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
-        sd.Buffer.FirstElement = 0; sd.Buffer.NumElements = 1 + 3 * kMzMax;
-        ID3D11ShaderResourceView* v = nullptr;
-        if (FAILED(dev->CreateShaderResourceView(b, &sd, &v)) || !v) { b->Release(); Log("ropa: no se pudo crear la vista de la tabla de la musculatura"); return; }
-        s_mzBuf = b; s_mzSRV.store(v, std::memory_order_release);
-    }
-    if (!s_mzBuf) return;
-    float d[1 + 3 * kMzMax][4] = {};
-    int n = 0; float mx = 0.0f;
-    const float str = std::clamp(g_cfg.live[255][2], 0.0f, 2.0f);
-    if (on && str > 0.0f) for (const MusZone& z : kZones) {
+// las zonas de un juego de factores desde la fila "base" (cabecera) de la tabla; devuelve cuantas
+static int FillZones(const Fac* fac, float (*d)[4], float& mx) {
+    int n = 0;
+    for (const MusZone& z : kZones) {
         const Fac& f = fac[z.mus];
         float v[3] = { 0, 0, 0 };
         if (z.kind == 0) { v[0] = f.t[0]; v[1] = f.t[1]; v[2] = f.t[2]; }
@@ -384,15 +396,48 @@ static void MuscleClothPresent(const Fac* fac, bool on) {
         V[0] = v[0]; V[1] = v[1]; V[2] = v[2]; V[3] = z.sleeve;
         n++;
     }
-    d[0][0] = (float)n; d[0][1] = str;
+    d[0][0] = (float)n;
+    return n;
+}
+static void MuscleClothPresent(const Fac* fac, bool on, const MzOwn* own, int nOwn) {
+    ID3D11Device* dev = g_dev.dev; ID3D11DeviceContext* imm = g_dev.imm;
+    if (!dev || !imm) return;
+    if (s_mzDev != dev) {   // (re)crear en el dispositivo del juego; lo viejo se deja vivo (otro hilo podria tenerlo enlazado)
+        s_mzDev = dev; s_mzBuf = nullptr; s_mzSent = false;
+        D3D11_BUFFER_DESC bd{}; bd.ByteWidth = sizeof(s_mzData); bd.Usage = D3D11_USAGE_DYNAMIC; bd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE; bd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED; bd.StructureByteStride = 16;
+        ID3D11Buffer* b = nullptr;
+        if (FAILED(dev->CreateBuffer(&bd, nullptr, &b)) || !b) { Log("ropa: no se pudo crear la tabla de la musculatura"); return; }
+        D3D11_SHADER_RESOURCE_VIEW_DESC sd{}; sd.Format = DXGI_FORMAT_UNKNOWN; sd.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+        sd.Buffer.FirstElement = 0; sd.Buffer.NumElements = kMzRows;
+        ID3D11ShaderResourceView* v = nullptr;
+        if (FAILED(dev->CreateShaderResourceView(b, &sd, &v)) || !v) { b->Release(); Log("ropa: no se pudo crear la vista de la tabla de la musculatura"); return; }
+        s_mzBuf = b; s_mzSRV.store(v, std::memory_order_release);
+    }
+    if (!s_mzBuf) return;
+    static float d[kMzRows][4]; memset(d, 0, sizeof d);
+    int n = 0, sets = 0; float mx = 0.0f;
+    const float str = std::clamp(g_cfg.live[255][2], 0.0f, 2.0f);
+    if (on && str > 0.0f) {
+        n = FillZones(fac, d, mx);
+        float (*ent)[4] = d + kMzSetRows + 1;
+        for (int i = 0; i < nOwn && i < kMzEnt; i++) {
+            int st = 0;
+            if (own[i].fac && sets < kMzSets - 1) { st = ++sets; FillZones(own[i].fac, d + kMzSetRows + 1 + kMzEnt + (st - 1) * kMzSetRows, mx); }
+            ent[i][0] = own[i].pos[0]; ent[i][1] = own[i].pos[1]; ent[i][2] = own[i].pos[2]; ent[i][3] = (float)st;
+        }
+        d[kMzSetRows][0] = (float)(std::min)(nOwn, kMzEnt); d[kMzSetRows][1] = (float)sets; d[kMzSetRows][2] = 1.0f;
+    }
+    d[0][1] = str;
     if (s_mzSent && !memcmp(d, s_mzData, sizeof d)) return;
     D3D11_MAPPED_SUBRESOURCE m{};
     if (FAILED(imm->Map(s_mzBuf, 0, D3D11_MAP_WRITE_DISCARD, 0, &m))) return;
     memcpy(m.pData, d, sizeof d); imm->Unmap(s_mzBuf, 0);
     memcpy(s_mzData, d, sizeof d); s_mzSent = true;
-    if (n != s_mzZones || fabsf(mx - s_mzMax) > 0.002f)
-        Log("ropa: la tela sigue a la musculatura en %d zonas (empuje mayor %.1f mm, fuerza %.2f)", n, mx * 1000.0f, str);
-    s_mzZones = n; s_mzMax = mx;
+    if (n != s_mzZones || fabsf(mx - s_mzMax) > 0.002f || sets != s_mzOwnLog)
+        Log("ropa: la tela sigue a la musculatura en %d zonas (empuje mayor %.1f mm, fuerza %.2f; %d jugadores con valores propios en la cancha, %d personajes en la lista)",
+            n, mx * 1000.0f, str, sets, (std::min)(nOwn, kMzEnt));
+    s_mzZones = n; s_mzMax = mx; s_mzOwnLog = sets;
 }
 
 static bool SafeCopy(void* dst, const void* src, size_t n) {
