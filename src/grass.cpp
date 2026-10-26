@@ -233,6 +233,7 @@ static std::atomic<int> s_capPres{-1};                      // Present en el que
 static std::atomic<int> s_t5Same{0}, s_t5Diff{0};           // (26/10 d) la textura de sombra plana (t5) del dibujo vivo vs la guardada
 // copias propias de los cbuffers del juego (ventanas): cb0 del VS (3 float4), cb4 del VS (5 float4), cb0 del PS (5 float4)
 static ID3D11Buffer* s_cpVs0 = nullptr; static ID3D11Buffer* s_cpVs4 = nullptr; static ID3D11Buffer* s_cpPs0 = nullptr;
+static ID3D11Buffer* s_cpVs2 = nullptr;   // copia de la escena del VS (b2) del dibujo de la base, para emitir despues con la misma camara
 // compute: lista de parcelas en la GPU
 static ID3D11ComputeShader* s_cs = nullptr; static bool s_csTried = false;
 static ID3D11Buffer* s_cullCb = nullptr;
@@ -329,7 +330,6 @@ struct BasePend {
 };
 static std::mutex s_pendMx; static std::unordered_map<ID3D11DeviceContext*, BasePend> s_pend;
 std::atomic<int> g_grassPendN{0};
-static ID3D11Buffer* s_cpVs2 = nullptr;   // copia de la escena del VS (b2) del dibujo de la base, para emitir despues con la misma camara
 static std::atomic<int> s_flushWhy[6]; static std::atomic<int> s_flushOther{0}, s_pendLost{0}, s_turfAfter{0}, s_turfMaxRec{0};   // log (estaticos: arrancan en 0)
 static thread_local bool t_inEmit = false;   // dentro de GrassEmit: sus propios dibujos no disparan la emision pendiente
 static void HyDropLocked() {
