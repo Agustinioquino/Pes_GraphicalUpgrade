@@ -30,7 +30,8 @@ constexpr int kParamCount = 320;           // float4 x 320 -> t120 en los shader
 // jugador (skintone.cpp), 257 cuadro de la ropa contra el cuerpo (cuerpo.cpp). 300..304 son de las manos (manos.cpp + pes_hands.hlsli; 303 = manos relajadas, 304 = unas de los jugadores con textura propia, pes_nailfix.hlsli en el PS aa7d1833; v12.6).
 // 260..263 son de la musculatura (musculo.cpp: grupos de la v7 y musculos vivos).
 // 264..284 variantes robusto / atletico de TorsoBody (skintone.cpp las escribe en cada cuadro: 264 = (t general, tabla, prendido),
-// 265 + i = t de la entrada i de la tabla de jugadores); 285 = (prendido, texturas, definicion) del ini (pes_variants.hlsli).
+// 265 + i = t de la entrada i de la tabla de jugadores); 285 = (prendido, texturas, definicion) del ini (pes_variants.hlsli);
+// 286.x = relieve de TorsoBody al derecho (el PS de la piel invierte el verde de sus normal maps de 4096).
 // 305 musculos con textura (manos.cpp + pes_limbs.hlsli en el VS 1c02a92a + PS aa7d1833; x prendido, y definicion, z venas de los
 // brazos, w venas de las manos con el puno apretado; v12.7).
 

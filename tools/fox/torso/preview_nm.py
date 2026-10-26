@@ -57,8 +57,9 @@ def render(meshes_, yaw, W, H, ppm, cx, cy, t, tmp, light=(-0.35, 0.55, 0.76)):
         nm, nmLow, alb = m.tex
         xy = bilinear(nm, uv[:, 0], uv[:, 1]) * 2 - 1
         low = bilinear(nmLow, uv[:, 0], uv[:, 1]) * 2 - 1
-        # definicion por variante (como el PS): torso 1 + 0.30 atl - 0.75 rob; brazos 1 + 0.35 atl - 0.50 rob
-        defM = 1 + (0.30 * wa - 0.75 * wr if m.region == "torso" else 0.35 * wa - 0.50 * wr)
+        # definicion por variante (como el PS): torso 1 + 0.15 atl - 0.75 rob; brazos 1 + 0.20 atl - 0.50 rob
+        # (la vista previa usa B = cross(N, T) * w, la convencion de las texturas: es lo que muestra el juego con x286 = 1)
+        defM = 1 + (0.15 * wa - 0.75 * wr if m.region == "torso" else 0.20 * wa - 0.50 * wr)
         xy = xy + (defM - 1) * low
         if m.region == "torso": xy = xy * (1 - 0.3 * wr)   # robusto: todo el relieve del normal map un poco mas liso
         if m.delta is not None and t != 0:

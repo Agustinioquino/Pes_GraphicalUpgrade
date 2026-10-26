@@ -768,7 +768,9 @@ static void* __fastcall hk_decide(void* menu, void* a2, void* a3, void* a4) {
     return o_decide(menu, a2, a3, a4);
 }
 static void* __fastcall hk_back(void* menu, void* a2, void* a3, void* a4) {
-    if (Mine(menu) && s_page > 0) { int p = s_page; GoPage(menu, p - 1, JumpRow(p - 1)); return nullptr; }
+    // (26/10) circulo / Volver desde cualquier pagina del mod: a la primera pestana de Fisico (la del juego), con el cursor en
+    // "Musculatura  >" (L1 / R1 siguen pasando de a una pagina)
+    if (Mine(menu) && s_page > 0) { GoPage(menu, 0, kJump0); return nullptr; }
     return o_back(menu, a2, a3, a4);
 }
 static void* __fastcall hk_l1(void* menu, void* a2, void* a3, void* a4) {   // pagina anterior (arriba de todo)
@@ -901,8 +903,6 @@ static HlSet HlFor(int idx, int comp) {
     }
     switch (idx * 4 + comp) {
     case 167 * 4 + 0: case 172 * 4 + 0: h.all = true; break;                                        // general / definicion
-    case 262 * 4 + 2: one({ 0.000f, 1.400f, 0.060f, 0.000f, 1.080f, 0.065f, 0.175f });               // (26/10) variante: torso
-                      one({ 0.270f, 1.365f, 0.030f, 0.585f, 1.090f, 0.060f, 0.060f }); break;        //          y brazos
     case 260 * 4 + 0: one({ 0.200f, 1.460f, 0.070f, 0.215f, 1.420f, 0.075f, 0.045f }); break;        // deltoides frontal
     case 260 * 4 + 1: one({ 0.200f, 1.460f, -0.020f, 0.215f, 1.420f, -0.025f, 0.045f }); break;      // deltoides posterior
     case 260 * 4 + 2: one({ 0.420f, 1.240f, 0.045f, 0.490f, 1.180f, 0.055f, 0.050f }); break;        // antebrazo alto
@@ -967,6 +967,8 @@ void FisicoHighlightPresent() {
     static const MRow kAll = { "", 167, 0, K_MUS };   // (26/10) Tipo de cuerpo y Ver resaltan todo el cuerpo, como General
     if (r && (r->kind == K_PRESET || r->kind == K_COMPARE)) r = &kAll;
     else if (r && (r->kind == K_HEAD || r->kind == K_GLOBAL || r->kind == K_SWITCH)) r = nullptr;   // subtitulos y opciones de todos: nada
+    // (26/10) el selector de la variante (robusto / atletico) no resalta nada: el brillo tapaba justo lo que se quiere ver
+    if (r && (r->kind == K_VARIANT || (r->idx == 262 && r->comp == 2))) r = nullptr;
     if (!r) { if (s_hlOn) { HlClear(); s_hlOn = false; s_hlRow = -1; } return; }
     const double t = Now();
     const int row = reqOn ? 1000 + req : CursorRow(menu);
