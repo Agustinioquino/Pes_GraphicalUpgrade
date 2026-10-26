@@ -823,6 +823,17 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         if (hv) { Remember(c, d, false, true, 126); c->VSSetShaderResources(126, 1, &hv); }
         // (26/10, v12.7) venas: textura en t29 del PS de la piel para los brazos y las manos (no en la sombra)
         if ((hand || arm) && vs->hash == 0x1c02a92ab4ae3362ULL) if (ID3D11ShaderResourceView* vt = VeinTexture()) { Remember(c, d, true, true, 29); c->PSSetShaderResources(29, 1, &vt); }
+        // (26/10) variantes robusto / atletico de TorsoBody (manos.cpp + pes_variants.hlsli): datos por vertice del torso y de los
+        // brazos en t127 del VS (piel y sombras); en el torso, los mapas del PS de la piel en t16 / t17 / t18
+        bool vTorso = false;
+        if (ID3D11ShaderResourceView* vd = VariantDataFor(vs->hash, t_drawVerts, &vTorso)) {
+            Remember(c, d, false, true, 127); c->VSSetShaderResources(127, 1, &vd);
+            ID3D11ShaderResourceView* vm[3] = {};
+            if (vTorso && vs->hash == 0x1c02a92ab4ae3362ULL && VariantTextures(vm)) {
+                Remember(c, d, true, true, 16); Remember(c, d, true, true, 17); Remember(c, d, true, true, 18);
+                c->PSSetShaderResources(16, 3, vm);
+            }
+        }
     }
     // 19/10: la boca (63fab7) hereda el b11 (tipo de pelo + semilla de la cara) de la ultima cara dibujada en este contexto:
     // variacion de dientes/encias por jugador

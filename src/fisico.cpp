@@ -121,7 +121,8 @@ static const MRow kPgArms[] = {   // brazos
     HD("Antebrazo"), MU("Antebrazos", 165, 0), MU("Antebrazo alto", 260, 2), MU("Antebrazo bajo", 260, 3),
     HD("Articulaciones"), MU("Codos", 166, 3), MU("Mu\xC3\xB1" "ecas", 170, 3),
 };
-static const MRow kPgTorso[] = {   // pecho y espalda
+static const MRow kPgTorso[] = {   // pecho y espalda; (26/10) arriba la variante robusto / atletico de TorsoBody (torso y brazos)
+    HD("Torso y brazos (TorsoBody)"), MU("Robusto / atl\xC3\xA9tico", 262, 2),
     HD("Pecho"), MU("Pecho", 165, 1), MU("Pecho alto", 170, 1), MU("Pecho bajo", 261, 0), MU("Costados (serratos)", 162, 1),
     HD("Espalda"), MU("Espalda (toda)", 165, 2), MU("Om\xC3\xB3" "platos", 167, 2), MU("Dorsales", 167, 3), MU("Dorsales: ancho (V)", 261, 1),
     MU("Espalda baja", 168, 0), MU("Lumbares", 162, 2),
@@ -346,6 +347,11 @@ static float FromUnits(const MRow& r, int u) {
 static const char* RowLabel(const MRow& r, float v) {
     static char b[96];
     if (r.kind == K_GLOBAL && v < 0.005f) { snprintf(b, sizeof b, "%s  (apagado)", r.label); return b; }
+    if (r.idx == 262 && r.comp == 2) {   // (26/10) variante del torso: 0.5 robusto .. 1 TorsoBody .. 1.5 atletico
+        if (fabsf(v - 1.0f) < 0.005f) snprintf(b, sizeof b, "Torso y brazos  (TorsoBody)");
+        else snprintf(b, sizeof b, "Torso y brazos  %s %d%%", v < 1.0f ? "robusto" : "atl\xC3\xA9tico", (int)lroundf(fabsf(v - 1.0f) * 200.0f));
+        return b;
+    }
     if (!IsBar(r.kind) || fabsf(v - 1.0f) < 0.005f) return r.label;
     snprintf(b, sizeof b, "%s  x%.2f", r.label, v);
     return b;
@@ -875,6 +881,8 @@ static HlSet HlFor(int idx, int comp) {
     }
     switch (idx * 4 + comp) {
     case 167 * 4 + 0: case 172 * 4 + 0: h.all = true; break;                                        // general / definicion
+    case 262 * 4 + 2: one({ 0.000f, 1.400f, 0.060f, 0.000f, 1.080f, 0.065f, 0.175f });               // (26/10) variante: torso
+                      one({ 0.270f, 1.365f, 0.030f, 0.585f, 1.090f, 0.060f, 0.060f }); break;        //          y brazos
     case 260 * 4 + 0: one({ 0.200f, 1.460f, 0.070f, 0.215f, 1.420f, 0.075f, 0.045f }); break;        // deltoides frontal
     case 260 * 4 + 1: one({ 0.200f, 1.460f, -0.020f, 0.215f, 1.420f, -0.025f, 0.045f }); break;      // deltoides posterior
     case 260 * 4 + 2: one({ 0.420f, 1.240f, 0.045f, 0.490f, 1.180f, 0.055f, 0.050f }); break;        // antebrazo alto
