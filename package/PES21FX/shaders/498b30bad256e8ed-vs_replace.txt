@@ -34,6 +34,7 @@ void main(
   float4 v0_in : POSITION0,
   float2 v1 : TEXCOORD0,
   uint iid : SV_InstanceID,
+  uint vid : SV_VertexID,   // (25/10 c) tope exacto de tarjetas por parcela (malla propia de la DLL)
   out float4 o0 : SV_Position0,
   out float4 o1 : TEXCOORD0,
   out float4 o2 : TEXCOORD1,
@@ -45,42 +46,90 @@ void main(
   out float4 o8 : TEXCOORD7)   // PES21 pasto v3: x seco (0..1), y pelado, z alto relativo, w = 1 + banda del atlas (0 = sin v3)
 {
   float4 r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11;
-  // === PES21 pasto extendido: parcela emitida por el mod (cb5[8].y = 1): x escala horizontal (1 parcela = 0.5 m x escala),
-  // z alto de las hojas, w ensanche de la hoja hacia la camara en metros. El juego no usa cb5[8] en este VS.
+  // === PES21 pasto extendido: parcela emitida por el mod (cb5[8].y = 1234.5): x vertices por tarjeta de la malla propia
+  // (25/10 c, 6; 0 = sin tope por SV_VertexID), z alto de las hojas, w ensanche de la hoja hacia la camara en metros.
+  // El juego no usa cb5[8] en este VS.
   float4 pesExt = cb5[8];
   bool pesIsExt = abs(pesExt.y - 1234.5) < 0.01;   // marca del mod (el juego usa cb5[8] con otros valores)
   float4 v0 = v0_in;
   bool pesKill = false;
-  float3 pesExtW = 0; float2 pesExtRoot = 0; float pesExtScale = 1; float2 pesExtOrg = 0;
+  float3 pesExtW = 0; float2 pesExtRoot = 0; float pesExtScale = 1; float2 pesExtOrg = 0; float pesPx = 0.0;
   float4 P58 = IniParams.Load(int2(58, 0));
   if (pesIsExt) {
     // v2 instanciado: la parcela sale del buffer de instancias; fundido por altura en los bordes de la banda y
     // descarte exacto con la camara de este cuadro
     float4 ins = PESGrassInst[(uint)cb5[9].y + iid];
     pesExtOrg = ins.xy;
-    pesExtScale = max(ins.z, 1.0);
-    int rot = (int)(ins.w + 0.5);
+    pesExtScale = max(floor(ins.z + 0.01), 1.0);
+    float pesLastK = saturate((ins.z - floor(ins.z + 0.01)) * 2.0);   // altura de la ultima tarjeta (parte fraccionaria de la cuenta)
+    bool pesIsLast = false;
+    // (25/10 c) w = tope de tarjetas * 4 + giro: la celda lleva solo las tarjetas que cubren su tamano en pantalla (densidad
+    // constante en pantalla, la cuenta el compute); las de mas se anulan aca, antes de cualquier cuenta cara
+    int insW = (int)(ins.w + 0.5);
+    int rot = insW & 3;
+    int lim = insW >> 2;
+    if (lim > 0 && cb5[8].x > 0.5) {
+      int card = (int)(vid / (uint)(cb5[8].x + 0.5));
+      if (card >= lim) {
+        o0 = float4(0.0, 0.0, -2.0, 1.0); o1 = 0; o2 = 0; o3 = 0; o4 = 0; o5 = 0; o6 = 0; o7 = 0; o8 = 0;
+        return;
+      }
+      pesIsLast = card == lim - 1;
+    }
     float cs = rot == 0 ? 1.0 : (rot == 2 ? -1.0 : 0.0), sn = rot == 1 ? 1.0 : (rot == 3 ? -1.0 : 0.0);
-    float2 lp = v0_in.xz * pesExtScale;
+    // (25/10 c) cb5[9].z = 1: la malla ya trae las raices repartidas en la celda y los desplazamientos de la hoja en metros (no se escalan)
+    float2 lp = (cb5[11].z > 0.5 && cb5[9].z > 0.5) ? v0_in.xz : v0_in.xz * pesExtScale;
     float2 rp = float2(cs * lp.x + sn * lp.y, -sn * lp.x + cs * lp.y);
     pesExtRoot = ins.xy + rp;
-    float d = length(ins.xy - cb2[20].xz);
-    float k = smoothstep(cb5[9].z, cb5[9].w, d) * (1.0 - smoothstep(cb5[10].x, cb5[10].y, d));
+    float4 cv = float4(dot(float4(ins.x, 0, ins.y, 1), cb2[8]), dot(float4(ins.x, 0, ins.y, 1), cb2[9]), dot(float4(ins.x, 0, ins.y, 1), cb2[10]), dot(float4(ins.x, 0, ins.y, 1), cb2[11]));
+    float4 cc = float4(dot(cv, cb2[4]), dot(cv, cb2[5]), dot(cv, cb2[6]), dot(cv, cb2[7]));
+    float k;
+    if (cb5[11].z > 0.5) {
+      // (25/10) v3: fundido por TAMANO EN PANTALLA (pixeles por metro en el centro de la parcela), el mismo criterio con el
+      // que el compute shader eligio el nivel: cb5[11].x = limite inferior (0 = sin limite: el nivel lejano cubre toda la
+      // cancha), .y = limite superior (donde entra el nivel mas fino o el pasto del juego), .w = margen del fundido
+      float p = abs(cb2[5].y) * cb5[10].w / max(cc.w, 0.05);
+      pesPx = p;
+      float m = cb5[11].w, lo = cb5[11].x, hi = cb5[11].y;
+      k = (lo > 0.0 ? smoothstep(lo * (1.0 - m), lo * (1.0 + m), p) : 1.0) * (hi > 0.0 ? 1.0 - smoothstep(hi * (1.0 - m), hi * (1.0 + m), p) : 1.0);
+    } else {
+      float d = length(ins.xy - cb2[20].xz);
+      k = smoothstep(cb5[9].z, cb5[9].w, d) * (1.0 - smoothstep(cb5[10].x, cb5[10].y, d));
+    }
+    if (pesIsLast) k *= pesLastK;
     v0.y = v0_in.y * max(pesExt.z, 0.1) * k;
     pesExtW = float3(pesExtRoot.x, v0.y, pesExtRoot.y);
     // descarte por pantalla: centro de la parcela con margen del tamano de la parcela
-    float4 cv = float4(dot(float4(ins.x, 0, ins.y, 1), cb2[8]), dot(float4(ins.x, 0, ins.y, 1), cb2[9]), dot(float4(ins.x, 0, ins.y, 1), cb2[10]), dot(float4(ins.x, 0, ins.y, 1), cb2[11]));
-    float4 cc = float4(dot(cv, cb2[4]), dot(cv, cb2[5]), dot(cv, cb2[6]), dot(cv, cb2[7]));
     float rad = 0.5 * pesExtScale + 0.15;
     float px = abs(cb2[4].x) * rad + abs(cb2[4].z) * rad, py = abs(cb2[5].y) * rad + abs(cb2[5].z) * rad;
     if (cc.w < -rad || cc.x < -cc.w - px || cc.x > cc.w + px || cc.y < -cc.w - py || cc.y > cc.w + py || k < 0.01) pesKill = true;
-  } else if (P58.w > 0.5) {
-    // pasto extra prendido: el pasto del juego se apaga (achicandose) entre "desde" y "desde" + 6 m
+  }
+  // (25/10) x63 lo escribe la DLL: 1 = en el cuadro anterior el mod NO emitio pasto (camara sin pasto del juego, pasada
+  // secundaria, camara todavia sin leer...). Entonces el pasto del juego se queda como esta: antes se apagaba igual y la
+  // cancha quedaba pelada, peor que sin mod
+  float4 P63 = IniParams.Load(int2(63, 0));
+  bool pesExtMissing = P63.x > 0.5;
+  if (!pesIsExt && P58.w > 0.5 && !pesExtMissing) {
     float2 wr = float2(dot(v0_in, cb5[4]), dot(v0_in, cb5[6]));
-    float from = P58.y > 1.0 ? P58.y : 14.0;
-    float ko = 1.0 - smoothstep(from, from + 6.0, length(wr - cb2[20].xz));
+    float ko;
+    if (P63.y > 0.0) {
+      // (25/10) v3: el pasto del juego se queda donde una hoja todavia mide en pantalla (pixeles por metro >= y63, lo
+      // publica la DLL; z63 = mitad del alto de pantalla) y se achica donde el mod lo reemplaza: mismo criterio que el
+      // compute shader y el fundido de las parcelas del mod, en cualquier camara
+      float4 Pw = float4(wr.x, 0.0, wr.y, 1.0);
+      float wv = dot(float4(dot(Pw, cb2[8]), dot(Pw, cb2[9]), dot(Pw, cb2[10]), dot(Pw, cb2[11])), cb2[7]);
+      float p = abs(cb2[5].y) * P63.z / max(wv, 0.05);
+      ko = smoothstep(P63.y * 0.88, P63.y * 1.12, p);
+    } else {
+      // modo viejo: el pasto del juego se apaga (achicandose) entre "desde" y "desde" + 6 m
+      float from = P58.y > 1.0 ? P58.y : 14.0;
+      ko = 1.0 - smoothstep(from, from + 6.0, length(wr - cb2[20].xz));
+    }
     v0.y *= ko;
-    if (ko < 0.01) pesKill = true;
+    if (ko < 0.01) {   // (25/10 c) salida temprana: antes la parcela corria todo el VS (17 muestras) y se anulaba al final
+      o0 = float4(0.0, 0.0, -2.0, 1.0); o1 = 0; o2 = 0; o3 = 0; o4 = 0; o5 = 0; o6 = 0; o7 = 0; o8 = 0;
+      return;
+    }
   }
   // === PES21 parcelas lejanas del juego (18/10): mas alla de ~30 m el juego pone su variante minima en una grilla de
   // 3 m sin escalarla (un matorral de 0.5 m cada 3 m: el pasto "desaparece"). La DLL marca esos dibujos con w60 = 1 y
@@ -90,7 +139,8 @@ void main(
   float4 FA2 = IniParams.Load(int2(59, 0));
   float pesFarK = 0.0;
   // solo los dibujos marcados por la DLL (w63 = 1 existe solo en su textura de parametros) y con el pasto extra apagado
-  if (FAR.w > 0.5 && IniParams.Load(int2(63, 0)).w > 0.5 && !pesIsExt && P58.w < 0.5) {
+  // (o prendido pero sin emitir en este cuadro, 25/10: la alternativa liviana cubre el hueco)
+  if (FAR.w > 0.5 && IniParams.Load(int2(63, 0)).w > 0.5 && !pesIsExt && (P58.w < 0.5 || pesExtMissing)) {
     float3 pw0 = float3(dot(v0_in, cb5[4]), 0.0, dot(v0_in, cb5[6]));
     float dEye = length(pw0.xz - cb2[20].xz);
     float d0 = FAR.y > 1.0 ? FAR.y : 20.0, dl = max(FAR.z, 1.0);
@@ -252,6 +302,8 @@ void main(
     // ensanche hacia la camara: la hoja se corre a lo largo del eje derecha de la camara segun su u (0..1)
     float3 camRight = normalize(cb2[8].xyz);
     float wid = pesIsExt ? pesExt.w * max(cb5[10].z, 0.0) * pesExtScale : 0.012 * max(FAR.x, 1.0) * max(FA2.y, 0.0) * pesFarK;
+    // (25/10 c) ancho minimo en pixeles (cb5[10].x): una hoja de menos de ~1.4 px titila al mover la camara
+    if (pesIsExt && cb5[10].x > 0.0 && pesPx > 1.0) wid = max(wid, cb5[10].x / pesPx);
     r6.xyz += camRight * ((v1.x - 0.5) * wid);
   }
   // --- proyeccion ---

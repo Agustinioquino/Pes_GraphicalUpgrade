@@ -188,6 +188,7 @@ void main(
   r3.xyz = r8.xyz + -r7.xyz;
   r8.xyz = g_tex_mask.Sample(g_sampler_mask_s, v1.xy).xyz;
   r2.xy = max(r8.xy, r2.wy);
+  float pesLine = saturate(r2.x);   // (26/10) cobertura de las lineas pintadas (mascara + alfa de la difusa): el cesped lejano no las pisa
   r2.yzw = r2.yyy * r3.xyz + r7.xyz;
   r1.xyw = r2.yzw * r1.xyw;
   r2.yzw = saturate(float3(0.100000001,0.5,1) * r8.zzz);
@@ -299,6 +300,24 @@ void main(
       
     }
   }
+  { // === PES21 pasto v2: color natural (29) y (25/10 b) color del pasto (112), como en la variante de dia (5e92)
+    float4 GV = IniParams.Load(int2(29,0));
+    if (GV.w > 0.5) {
+      float3 cg = o0.xyz;
+      const float3 LWg = float3(0.2126, 0.7152, 0.0722);
+      float lg = dot(cg, LWg);
+      float yel = saturate((cg.r / max(cg.g, 1e-3) - 0.55) * 2.5);
+      // (26/10) solo donde hay color: las lineas pintadas (blancas / grises) tienen r/g = 1 y la correccion las ponia verde palido
+      yel *= saturate(((max(cg.r, max(cg.g, cg.b)) - min(cg.r, min(cg.g, cg.b))) / max(max(cg.r, max(cg.g, cg.b)), 1e-3) - 0.12) * 5.0);
+      float3 natural = cg * float3(0.80, 1.0, 0.95);
+      natural *= lg / max(dot(natural, LWg), 1e-4);
+      cg = lerp(cg, natural, saturate(GV.x) * yel);
+      cg = lerp(dot(cg, LWg).xxx, cg, GV.z > 0 ? GV.z : 1.0);
+      cg *= GV.y > 0 ? GV.y : 1.0;
+      o0.xyz = saturate(cg);
+    }
+    { float3 cg = o0.xyz; PESGrassColorGrade(cg); o0.xyz = saturate(cg); }
+  }
   { // === PES21 pasto v3 (19/10): desgaste (seco / tierra) y zonas de color, con las mismas funciones que las hojas
     float4 Q4 = IniParams.Load(int2(104,0));
     if (Q4.x > 0.5) {
@@ -313,6 +332,18 @@ void main(
       o2.y = saturate(o2.y * (1.0 - wr.y * 0.6 - wr.x * 0.25));   // tierra y pasto seco: mate
       { float3 cg = o0.xyz; float sp = o2.y, rg = o2.x; PESGroundLook(cg, sp, rg, PESGround()); o0.xyz = cg; o2.y = sp; o2.x = rg; }   // suelo humedo / seco
       if (Q7.w > 1.5 && Q7.w < 2.5) o0.xyz = float3(wr.x, wr.y, 0.0);   // depuracion: desgaste
+    }
+  }
+  { // === PES21 pasto v3 (25/10): cesped lejano en la base (PESFarTurf, pes_grass.hlsli). Entra donde se va el nivel medio
+    // del pasto 3D (tamano en pantalla < 35 px/m / densidad) y es pleno donde ya no hay hojas. y61 fuerza, z61 matas, w61 cobertura
+    float4 Q61 = IniParams.Load(int2(61,0)), P58f = IniParams.Load(int2(58,0)), P63f = IniParams.Load(int2(63,0));
+    if (Q61.y > 0.001 && P58f.w > 0.5 && P63f.y > 0.0) {
+      float3 pesE = g_psScene.m_eyepos.xyz - v8.xyz; float pesD = max(length(pesE), 0.05); float3 pesV = pesE / pesD;
+      float pxm = abs(g_psScene.m_projection._m11) * P63f.z / pesD;
+      // (25/10 c) umbrales fijos, los mismos que la DLL (Thresholds): la densidad ya no los corre
+      float T2 = 45.0, T3 = 15.0;
+      float kFar = 1.0 - smoothstep(T3 * 0.75, T2 * 1.25, pxm);
+      if (kFar > 0.001) { float3 cg = o0.xyz; float sp = o2.y; PESFarTurf(cg, sp, pesV, v8.xz, pxm, kFar * saturate(Q61.y) * (1.0 - pesLine), Q61.z, Q61.w); o0.xyz = cg; o2.y = sp; }
     }
   }
   return;

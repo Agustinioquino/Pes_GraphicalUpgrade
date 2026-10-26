@@ -6,6 +6,7 @@
 #include <atomic>
 #include <memory>
 #include <cstdint>
+#include <cstdio>
 #include <map>
 #include <mutex>
 #include <shared_mutex>
@@ -23,6 +24,9 @@ extern void* g_overlayOldProc;
 
 // ---------------------------------------------------------------- parametros (lo que en 3DMigoto era IniParams)
 constexpr int kParamCount = 320;           // float4 x 320 -> t120 en los shaders (IniParams.Load(int2(i,0))). (20/10: era 128 y los parametros 128+ se perdian; 25/10: 256 -> 320, la ropa contra el cuerpo usa 256 / 257)
+// (26/10) filas de t120 ocupadas por tablas que escribe la DLL en cada cuadro (no usarlas para el ini): 194..254 tonos de piel por
+// jugador (skintone.cpp), 257 cuadro de la ropa contra el cuerpo (cuerpo.cpp). 300..303 son de las manos (manos.cpp + pes_hands.hlsli; 303 = manos relajadas, v12.6).
+// 260..263 son de la musculatura (musculo.cpp: grupos de la v7 y musculos vivos).
 
 struct Assign { int idx; int comp; std::vector<float> values; std::string var; };
 struct KeyBind {
@@ -110,6 +114,7 @@ struct Config {
     bool autoCap = false; float autoCapSec = 20.0f; int autoCapMax = 150; bool autoCapAB = false; bool exeDump = true; bool motorPatch = true; int motorShadowRes = 0; float motorCascadeScale = 0.0f;   // [Motor]: parches en memoria (exepatch.cpp)   // exe_dump: volcado del exe desempaquetado (una vez por version)   // auto_captura_ab: pares A (todo) / B (un grupo del menu apagado 3 cuadros)
     int aniso = 16; float mipBias = 0.0f;   // 20/10: filtrado anisotropico forzado (1 = el del juego) y sesgo de mip global ([PES21FX] aniso, mip_bias)   // 19/10: captura automatica en partido ([PES21FX] auto_captura, auto_captura_seg, auto_captura_max)
     bool optReplace = true, optRules = true, optOverlay = true, optPin = false, optHooks = true, optDxgi = true, optPresent = true, optCtx = true, optExports = true, optOrphan = true, optDump = false;
+    bool memFix = true, memWatch = true;      // (26/10) [PES21FX] memoria_arreglo / memoria_vigilar (memwatch.cpp)
 };
 extern Config g_cfg;
 extern std::mutex g_cfgMutex;
@@ -171,8 +176,12 @@ void CatalogProbeGrass();
 extern std::atomic<bool> g_recordOn;
 void CatalogRecord(bool on);                     // "Grabar partido": volcados periodicos numerados en catalog\rec                        // "Volcar pasto": mide las parcelas de pasto de un cuadro
 // pasto extendido (grass.cpp)
-void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT start, INT base);
+void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, const ShaderEntry* ps, UINT count, UINT start, INT base);
+void GrassOnBaseDraw(ID3D11DeviceContext* c);    // (25/10) v3: al terminar la base de la cancha (PS 5e92 / c956)
 void GrassPresent();
+// (25/10) shaders de un dibujo tal como los ve la DLL: entradas (para BeforeDraw) + objetos puestos (hooks.cpp)
+struct ShaderBind { const ShaderEntry* vs = nullptr; ID3D11VertexShader* vsObj = nullptr; const ShaderEntry* ps = nullptr; ID3D11PixelShader* psObj = nullptr; };
+ShaderBind BindShadersRaw(ID3D11DeviceContext* c, const ShaderBind& b);
 extern thread_local bool t_sparseGrass;
 extern int g_grassPatchesLastFrame;
 struct GrassDbg { int calls = 0, emits = 0, patches = 0, sparse = 0, sparseLast = 0; int ring[3] = {0, 0, 0}; UINT lod = 0, rtW = 0, cb2off = 0; bool cam = false; float ex = 0, ez = 0; const char* why = nullptr; };
@@ -282,6 +291,10 @@ double MusclePhysiqueSince();                     // segundos desde que se entro
 std::string MuscleLatestPlayerName();             // nombre del ultimo jugador armado ("" si no hay)
 float MuscleProfileGet(uint32_t id, int idx, int comp);                          // (24/10) valor propio del jugador o el general
 void MuscleProfileSet(uint32_t id, const char* name, int idx, int comp, float v); // crea el perfil si hace falta; se guarda solo
+int MusclePresetCount(); const char* MusclePresetName(int k); const char* MusclePresetDesc(int k);   // (26/10) tipos de cuerpo
+void MusclePresetApply(uint32_t id, const char* name, int k);   // id 0 = generales (con g_cfgMutex tomado)
+int MusclePresetMatch(uint32_t id);                             // -1 = valores a mano
+float MuscleDefinitionFor(uint32_t id);                         // (26/10 b) definicion propia del jugador (0 = la general)
 void FisicoInstall();                             // (24/10) filas de musculatura dentro del menu Fisico del juego (fisico.cpp)
 bool FisicoEditing(uint32_t* id);                 // el menu Fisico del juego esta armado para un jugador (su id)
 void FisicoHighlightPresent();                    // (24/10) resaltado del musculo de la fila elegida (x174..182 para los shaders)
@@ -307,6 +320,10 @@ int SkinToneGame(uint32_t id);                    // color de piel del juego gua
 int FisicoSkinIndex();                            // color de piel del juego (1..6) del jugador del menu Fisico (0 = no se sabe)
 void CodeWatchStart();                            // (24/10) vigila la seccion .text del exe: anota en el log lo que cambie (codewatch.cpp)
 bool CodeWatchOrig(uintptr_t a, unsigned char* out, size_t n);   // bytes de la copia (registro de cierres)
+void MemWatchStart();                             // (26/10) vigila el liberador de memoria del juego y VirtualProtect/VirtualFree (memwatch.cpp)
+void MemCrashInfo(FILE* f, EXCEPTION_POINTERS* ep);   // (26/10) informe de memoria en un cierre (con el log tomado)
+FILE* LogLock();                                  // (26/10) el archivo del log con el mutex tomado (soltar con LogUnlock)
+void LogUnlock();
 // (24/10) ganchos que se pueden apagar para buscar un cierre (x173 personajes, y173 menu Fisico, z173 vigilancia del codigo,
 // w173 huesos de musculatura); se leen al arrancar
 inline bool DiagOn(int comp) { return g_cfg.live[173][comp] > 0.5f; }
@@ -362,6 +379,7 @@ void RingOverlayBegin(ID3D11DeviceContext* c, RingScope& r);
 void RingOverlayEnd(ID3D11DeviceContext* c, RingScope& r);
 void RingReloadShaders();
 void RingPresent(IDXGISwapChain* sc);               // (24/10 e) el aro sobre la imagen final, con las marcas de este cuadro
+ID3D11ShaderResourceView* HandDataFor(uint64_t vsHash, UINT indexCount, UINT start, INT base);   // (25/10) manos.cpp: datos por vertice de la mano (t126 del VS)
 extern std::atomic<bool> g_menuOpen;
 extern std::atomic<int> g_replacedCount, g_failedCount;
 extern std::vector<std::string> g_compileErrors;

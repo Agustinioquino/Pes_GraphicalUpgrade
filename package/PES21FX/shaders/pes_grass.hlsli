@@ -109,4 +109,52 @@ void PESGroundLook(inout float3 c, inout float spec, inout float rough, float2 g
 }
 // sol en espacio mundo (lo publica la DLL en 111: xyz hacia el sol, w altura en grados); (0,1,0) si todavia no hay dato
 float3 PESSunWorld() { float4 L = IniParams.Load(int2(111, 0)); return dot(L.xyz, L.xyz) > 0.5 ? L.xyz : float3(0.0, 1.0, 0.0); }
+// (25/10) cesped lejano en la base de la cancha: donde una hoja ya no mide en pantalla (mas alla del nivel medio del pasto
+// 3D), la base toma el aspecto del cesped visto de lejos en vez de una textura plana: matas claras / oscuras de 8 y 22 cm
+// (atenuadas con el tamano del pixel para que no titilen), cobertura segun el angulo de vista (rasante = se ven las puntas,
+// mas claras y amarillas; desde arriba = raices en sombra) y un poco mas de saturacion y brillo rasante.
+//   c albedo, spec = o2.y, V = hacia el ojo (mundo), wxz = posicion en el mundo, pxm = pixeles por metro,
+//   k fuerza (0..1, ya con el fundido por distancia), clump = matas (z61), cover = cobertura (w61)
+void PESFarTurf(inout float3 c, inout float spec, float3 V, float2 wxz, float pxm, float k, float clump, float cover)
+{
+  if (k <= 0.001) return;
+  float px = 1.0 / max(pxm, 1.0);                       // metros por pixel
+  float f1 = saturate(1.0 - px / 0.10), f2 = saturate(1.0 - px / 0.30);
+  float n1 = PESGnoise(wxz * 12.0 + 7.3) - 0.5, n2 = PESGnoise(wxz * 4.5 + 2.9) - 0.5;
+  float n3 = PESGnoise(wxz * 1.6 + 11.0) - 0.5;         // manchas de 60 cm: siempre visibles
+  float mat = (n1 * 0.45 * f1 + n2 * 0.35 * f2 + n3 * 0.2) * clamp(clump, 0.0, 2.0);
+  float graz = 1.0 - saturate(V.y);                     // 0 desde arriba, 1 rasante
+  float cov = saturate(0.30 + 0.70 * pow(graz, 0.7)) * clamp(cover, 0.0, 1.5);
+  const float3 LW = float3(0.2126, 0.7152, 0.0722);
+  float l = dot(c, LW);
+  float3 tips = c * float3(1.08, 1.10, 0.90) * 1.08;    // puntas al aire: mas claras y un poco mas amarillas
+  float3 roots = c * 0.74;                              // raices en sombra entre hojas
+  float3 g = lerp(roots, tips, cov);
+  g *= 1.0 + mat * 0.9;
+  g = lerp(dot(g, LW).xxx, g, 1.10);                    // algo mas saturado que la textura plana
+  c = lerp(c, saturate(g), k);
+  spec = lerp(spec, saturate(spec * (1.0 + 0.5 * graz) + 0.03 * graz), k);
+}
+
+// (25/10 b) color del pasto, el mismo para la base y las hojas (fila 112): x matiz (giro del tono en grados, -60..60),
+// y verde (acerca el tono a un verde de cesped sano con la misma claridad; negativo = lo aleja), z contraste (alrededor
+// del gris medio del cesped). Se aplica despues de la correccion del amarillo (29) y antes del desgaste / cesped lejano.
+void PESGrassColorGrade(inout float3 c)
+{
+  float4 C = IniParams.Load(int2(112, 0));
+  if (abs(C.x) < 0.01 && abs(C.y) < 0.001 && abs(C.z) < 0.001) return;
+  const float3 LW = float3(0.2126, 0.7152, 0.0722);
+  float l = dot(c, LW);
+  if (abs(C.x) > 0.01) {
+    float3 yiq = float3(l, dot(c, float3(0.596, -0.274, -0.322)), dot(c, float3(0.211, -0.523, 0.312)));
+    float a = radians(clamp(C.x, -60.0, 60.0)); float ca = cos(a), sa = sin(a);
+    float2 iq = float2(yiq.y * ca - yiq.z * sa, yiq.y * sa + yiq.z * ca);
+    c = max(float3(yiq.x + 0.956 * iq.x + 0.621 * iq.y, yiq.x - 0.272 * iq.x - 0.647 * iq.y, yiq.x - 1.106 * iq.x + 1.703 * iq.y), 0.0);
+  }
+  if (abs(C.y) > 0.001) {
+    float3 g = float3(0.19, 0.42, 0.10); g *= l / dot(g, LW);
+    c = max(lerp(c, g, clamp(C.y, -1.0, 1.0) * 0.6), 0.0);
+  }
+  if (abs(C.z) > 0.001) { float k = 1.0 + clamp(C.z, -0.8, 1.0); c = max((c - 0.18) * k + 0.18, 0.0); }
+}
 #endif

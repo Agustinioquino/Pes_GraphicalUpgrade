@@ -265,6 +265,61 @@ const Rule* RuleForHash(uint64_t h) { auto it = g_cfg.rules.find(h); return it =
 std::atomic<int> g_drawOrder{0};
 std::atomic<int> g_lightAltFrames{0};   // (20/10) cuadros en que el sol llego por una variante no reemplazada de la luz
 std::atomic<int> g_aliasDraws{0};   // dibujos redirigidos por alias en el cuadro (diagnostico)   // numero de orden del dibujo dentro del cuadro (se reinicia en Present)
+// (25/10) luz diferida: cuales de las 21 variantes de la pasada corren en cada cuadro. 0..6 = sol con reemplazo de siempre
+// (filtro de sombras, color del sol, piel); 7 = sol sin sombra (d0e9) y 8 = sol con mascara de pantalla (7dbbc), con
+// reemplazo desde el 25/10; 9..20 = luces de foco / punto (torres, sin reemplazo). Si al mover la camara el juego pasa de
+// unas a otras, el log lo deja escrito ("luz del sol: variantes ...").
+static const uint64_t kSunPass[21] = {
+    0xa748f426e9b978ccULL, 0xb8a29991599380d3ULL, 0xd51409f5f8d54cbdULL, 0xde643fcb8d6a6beaULL, 0xe9c13241d7bc9625ULL,
+    0x1f623dbab7ee8019ULL, 0x230d92c927f58da3ULL,
+    0xd0e9d81c09b3da66ULL, 0x7dbbc922c9ae74c5ULL,
+    0x03b955fa0df6521bULL, 0x142c18270479a113ULL, 0x16c135a014d253b2ULL, 0x2a809f328b164023ULL, 0x5ae81b14fd75960eULL,
+    0x68d58aa84c0256f5ULL, 0x7bd80690738f243fULL, 0x9ce9d8463800b399ULL, 0xc33576f12dd818bfULL, 0xca8a31c98b1584acULL,
+    0xd5037e255559ea13ULL, 0xf9f5dc3e044ba823ULL };
+static std::atomic<int> s_sunDraws[21];
+static inline void SunPassNote(uint64_t h) {
+    for (int i = 0; i < 21; i++) if (kSunPass[i] == h) { s_sunDraws[i].fetch_add(1, std::memory_order_relaxed); return; }
+}
+static std::string SunPassList(uint32_t mask, const int* n) {
+    std::string r; char b[48];
+    for (int i = 0; i < 21; i++) if (mask & (1u << i)) { snprintf(b, sizeof(b), "%s%08llx%s x%d", r.empty() ? "" : ", ", (unsigned long long)(kSunPass[i] >> 32), i == 7 ? " (sol sin sombra)" : i == 8 ? " (sol con mascara)" : i > 8 ? " (foco)" : "", n ? n[i] : 0); r += b; }
+    return r.empty() ? "ninguna" : r;
+}
+static void SunPassPresent() {
+    static uint32_t lastMask = 0xffffffffu; static int lines = 0; static double nextSum = 0;
+    static int frames = 0, framesOrig = 0, framesNone = 0, switches = 0, sums = 0;
+    int n[21]; uint32_t mask = 0;
+    for (int i = 0; i < 21; i++) { n[i] = s_sunDraws[i].exchange(0, std::memory_order_relaxed); if (n[i]) mask |= 1u << i; }
+    frames++; if (!(mask & 0x1ffu)) framesNone++; else if (!(mask & 0x7fu)) framesOrig++;
+    if ((mask & 0x1ffu) != lastMask) {   // solo cambian las del sol (los focos de noche entran y salen todo el tiempo)
+        if (lastMask != 0xffffffffu) switches++;
+        if (lines < 200) { lines++; Log("luz del sol: variantes en el cuadro %d: %s", s_presentNo.load(), SunPassList(mask, n).c_str()); }
+        lastMask = mask & 0x1ffu;
+    }
+    double t = Now();
+    if (t > nextSum) {
+        if (nextSum > 0 && frames > 0 && framesNone < frames && sums++ < 120)
+            Log("luz del sol (10 s): %d cuadros, %d solo con el sol sin sombra / con mascara (d0e9 / 7dbbc), %d sin pasada de sol, %d cambios de variante, LightCB desde la copia alternativa %d",
+                frames, framesOrig, framesNone, switches, g_lightAltFrames.exchange(0));
+        // direccion del sol que usa la luz (m_lightDir0, espacio de vista) contra la direccion con la que se arma el shadow map
+        // (la recta en la que las coordenadas x / y de m_shadowProjection no cambian). Si no coinciden, el lado iluminado y la
+        // sombra proyectada no concuerdan. Tambien las dos en espacio mundo (deberian quedar quietas al mover la camara).
+        { std::vector<float> L, S;
+          if (sums <= 120 && NamedCBRead("LightCB", L) && L.size() >= 4 && NamedCBRead("SceneCB", S) && S.size() >= 64) {
+              auto nrm = [](float* v) { float n = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); if (n > 1e-8f) { v[0] /= n; v[1] /= n; v[2] /= n; } return n; };
+              float l[3] = { L[0], L[1], L[2] }; float a[3] = { S[48], S[49], S[50] }, b[3] = { S[52], S[53], S[54] };
+              float d[3] = { a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0] };
+              if (nrm(l) > 1e-8f && nrm(d) > 1e-8f) {
+                  float c = fabsf(l[0] * d[0] + l[1] * d[1] + l[2] * d[2]); float ang = acosf((std::min)(c, 1.0f)) * 57.2958f;
+                  const float* M = &S[32];
+                  auto toW = [&](const float* v, float* w) { for (int i = 0; i < 3; i++) w[i] = v[0] * M[i] + v[1] * M[4 + i] + v[2] * M[8 + i]; if (w[1] < 0) { w[0] = -w[0]; w[1] = -w[1]; w[2] = -w[2]; } };
+                  float lw[3], dw[3]; toW(l, lw); toW(d, dw);
+                  Log("luz del sol: direccion de la luz (vista %.3f %.3f %.3f | mundo %.3f %.3f %.3f) y del shadow map (mundo %.3f %.3f %.3f): %.1f grados entre las dos",
+                      l[0], l[1], l[2], lw[0], lw[1], lw[2], dw[0], dw[1], dw[2], ang);
+              } } }
+        nextSum = t + 10.0; frames = framesOrig = framesNone = switches = 0;
+    }
+}
 std::string NamedOrigin(ID3D11ShaderResourceView* v) {
     std::lock_guard<std::mutex> lk(s_namedMutex);
     for (auto& kv : s_named) if (kv.second.srv == v) return kv.first.rfind("file:", 0) == 0 ? "archivo del mod: " + kv.first.substr(5) : "recurso del mod: " + kv.first;
@@ -357,6 +412,8 @@ using PFN_D3D11CreateDeviceAndSwapChain = HRESULT(WINAPI*)(IDXGIAdapter*, D3D_DR
 static PFN_CreateVS o_CreateVS; static PFN_CreatePS o_CreatePS; static PFN_CreateCS o_CreateCS; static PFN_CreateDC o_CreateDC;
 static PFN_SetPS o_SetPS[2]; static PFN_SetVS o_SetVS[2]; static PFN_SetCS o_SetCS[2];
 static PFN_DrawIdx o_DrawIdx[2]; static PFN_Draw o_Draw[2]; static PFN_DrawIdxInst o_DrawIdxInst[2]; static PFN_DrawInst o_DrawInst[2];
+using PFN_DrawIdxInstInd = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Buffer*, UINT);
+static PFN_DrawIdxInstInd o_DrawIdxInstInd[2];   // (25/10) DrawIndexedInstancedIndirect: lo usa el pasto v3 (lista de parcelas en la GPU)
 static PFN_Present o_Present; static PFN_Resize o_Resize;
 using PFN_ClearDSV = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11DepthStencilView*, UINT, FLOAT, UINT8);
 static PFN_ClearDSV o_ClearDSV[2];
@@ -524,6 +581,21 @@ template<int V> static void STDMETHODCALLTYPE hk_SetVS(ID3D11DeviceContext* c, I
     Ctx(c).vs = e;
     if (e && e->repl && !g_cfg.bypass) { o_SetVS[V](c, (ID3D11VertexShader*)e->repl, ci, n); return; }
     o_SetVS[V](c, s, ci, n);
+}
+// (25/10) pasto v3: la DLL enlaza los shaders de un dibujo del juego (entradas + objetos tal como estaban puestos) desde otro
+// dibujo, de modo que BeforeDraw los vea como ese dibujo (reglas, t120). Devuelve lo que habia (con referencias a los
+// objetos) para volver a ponerlo con la misma funcion; quien llama libera vsObj / psObj devueltos.
+ShaderBind BindShadersRaw(ID3D11DeviceContext* c, const ShaderBind& b) {
+    int V = c->GetType() == D3D11_DEVICE_CONTEXT_DEFERRED ? 1 : 0;
+    PFN_SetVS fv = o_SetVS[V] ? o_SetVS[V] : (o_SetVS[0] ? o_SetVS[0] : o_SetVS[1]);
+    PFN_SetPS fp = o_SetPS[V] ? o_SetPS[V] : (o_SetPS[0] ? o_SetPS[0] : o_SetPS[1]);
+    CtxState& s = Ctx(c);
+    ShaderBind old; old.vs = s.vs; old.ps = s.ps; old.vsObj = nullptr; old.psObj = nullptr;
+    c->VSGetShader(&old.vsObj, nullptr, nullptr); c->PSGetShader(&old.psObj, nullptr, nullptr);
+    s.vs = b.vs; s.ps = b.ps;
+    if (fv) fv(c, b.vsObj, nullptr, 0); else c->VSSetShader(b.vsObj, nullptr, 0);
+    if (fp) fp(c, b.psObj, nullptr, 0); else c->PSSetShader(b.psObj, nullptr, 0);
+    return old;
 }
 template<int V> static void STDMETHODCALLTYPE hk_SetCS(ID3D11DeviceContext* c, ID3D11ComputeShader* s, ID3D11ClassInstance* const* ci, UINT n) {
     const ShaderEntry* e = FindShader(s);
@@ -705,6 +777,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         g_stFaceDraws++; if (ps->rule) g_stFaceRule++;
         if (c->GetType() == D3D11_DEVICE_CONTEXT_DEFERRED) g_stFaceCtxDef++;
     }
+    if (ps) SunPassNote(ps->hash);   // (25/10) variantes de la luz del sol por cuadro (log)
     if (!g_cfg.optRules) { RingFaceBind(c, d.ring); return false; }
     if ((ps && ps->rule) || (vs && vs->rule)) {
         if (!s_firstRule.exchange(true)) Log("primer dibujo con regla");
@@ -713,6 +786,8 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (vs && vs->rule) RunRule(c, vs, d);
     // (20/10) reglas por pareja PS + VS: p.ej. la piel del cuerpo (aa7d1833) cuando dibuja la cabeza de una cara generica (VS faab87ee)
     if (ps && vs) if (const std::vector<const Rule*>* prs = ps->pairRules) for (const Rule* pr : *prs) if (pr->vsCond == vs->hash) RunRuleActions(c, pr, true, ps->hash, d);
+    // (25/10) manos de TorsoBody (manos.cpp): datos por vertice de la mano en t126 del VS (cuaterniones duales + correctivas)
+    if (vs && vs->repl) if (ID3D11ShaderResourceView* hv = HandDataFor(vs->hash, t_drawVerts, t_drawStart, t_drawBase)) { Remember(c, d, false, true, 126); c->VSSetShaderResources(126, 1, &hv); }
     // 19/10: la boca (63fab7) hereda el b11 (tipo de pelo + semilla de la cara) de la ultima cara dibujada en este contexto:
     // variacion de dientes/encias por jugador
     if (ps && ps->hash == 0x63fab7735eee149cULL && ps->repl && s.lastHairCB) { Remember(c, d, true, false, 11); c->PSSetConstantBuffers(11, 1, &s.lastHairCB); }
@@ -780,12 +855,16 @@ template<int V> static void LodDrawSub(ID3D11DeviceContext* c, DrawScope& ds) { 
 template<int V> static void STDMETHODCALLTYPE hk_DrawIdx(ID3D11DeviceContext* c, UINT a, UINT b, INT d) {
     { CtxState& cg = Ctx(c); const ShaderEntry* gvs = cg.vs;
       if (g_grassProbeOn) CatalogGrassDraw(c, gvs, a, b, d);
-      if (gvs && gvs->hash == 0x498b30bad256e8edULL) GrassOnDraw(c, gvs, a, b, d);
+      if (gvs && gvs->hash == 0x498b30bad256e8edULL) GrassOnDraw(c, gvs, cg.ps, a, b, d);
       if (gvs && gvs->hash == 0x1c02a92ab4ae3362ULL) BodyOnDraw(c, a, b, d);   // (25/10) piel del cuerpo -> la ropa choca con ella (es fisica: no depende de "Ver original")
       if (g_autoDumpAny) InspectAutoDump(c, cg.ps); }
     t_drawStart = b; t_drawBase = d;
-    FX_DRAW(a, 1, 1, (ds.lod.count ? LodDrawSub<V>(c, ds) : o_DrawIdx[V](c, a, b, d))) }
+    FX_DRAW(a, 1, 1, (ds.lod.count ? LodDrawSub<V>(c, ds) : o_DrawIdx[V](c, a, b, d)))
+    // (25/10) pasto v3: al terminar la base de la cancha (PS 5e92 / c956, existe en todas las camaras) se emite el pasto del mod
+    { CtxState& cb_ = Ctx(c); if (cb_.ps && (cb_.ps->hash == 0x5e92f2343848915aULL || cb_.ps->hash == 0xc9564b9b155f0a49ULL)) GrassOnBaseDraw(c); } }
 template<int V> static void STDMETHODCALLTYPE hk_Draw(ID3D11DeviceContext* c, UINT a, UINT b) { FX_DRAW(a, 0, 1, o_Draw[V](c, a, b)) }
+// (25/10) dibujo indirecto (pasto v3): pasa por BeforeDraw como cualquier dibujo (reglas, t120); vertices e instancias desconocidos
+template<int V> static void STDMETHODCALLTYPE hk_DrawIdxInstInd(ID3D11DeviceContext* c, ID3D11Buffer* a, UINT b) { FX_DRAW(0, 3, 0, o_DrawIdxInstInd[V](c, a, b)) }
 template<int V> static void STDMETHODCALLTYPE hk_DrawIdxInst(ID3D11DeviceContext* c, UINT a, UINT b, UINT d, INT e, UINT f) { FX_DRAW(a, 3, b, o_DrawIdxInst[V](c, a, b, d, e, f)) }
 template<int V> static void STDMETHODCALLTYPE hk_DrawInst(ID3D11DeviceContext* c, UINT a, UINT b, UINT d, UINT e) { FX_DRAW(a, 2, b, o_DrawInst[V](c, a, b, d, e)) }
 
@@ -817,6 +896,7 @@ template<int V> static void HookContextV(ID3D11DeviceContext* c) {
     n += Hook(vt[13], (void*)&hk_Draw<V>, (void**)&o_Draw[V], "Draw");
     n += Hook(vt[20], (void*)&hk_DrawIdxInst<V>, (void**)&o_DrawIdxInst[V], "DrawIndexedInstanced");
     n += Hook(vt[21], (void*)&hk_DrawInst<V>, (void**)&o_DrawInst[V], "DrawInstanced");
+    n += Hook(vt[39], (void*)&hk_DrawIdxInstInd<V>, (void**)&o_DrawIdxInstInd[V], "DrawIndexedInstancedIndirect");
     n += Hook(vt[69], (void*)&hk_SetCS<V>, (void**)&o_SetCS[V], "CSSetShader");
     n += Hook(vt[53], (void*)&hk_ClearDSV<V>, (void**)&o_ClearDSV[V], "ClearDepthStencilView");
     n += Hook(vt[41], (void*)&hk_Dispatch<V>, (void**)&o_Dispatch[V], "Dispatch");
@@ -1109,6 +1189,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
             if (g_dev.imm) { g_dev.imm->UpdateSubresource(r.buf, 0, nullptr, zeros.data(), 0, 0); r.cleared = true; }
         }
     }
+    SunPassPresent();   // (25/10) variantes de la luz del sol: log de cambios
     UpdateTimeParams();
     SSGIPresent(s_presentNo.load());
     LightMeterPresent();

@@ -128,6 +128,10 @@ void main(
   {   // (24/10) definicion muscular (x172, menu Musculatura): agranda o achica solo el relieve grande del normal map
       // (los musculos: el mismo mapa visto 11 veces mas chico), no los poros ni las lineas finas de la piel
     float defM = IniParams.Load(int2(172,0)).x; defM = defM > 0.01 ? clamp(defM, 0.0, 3.0) : 1.0;
+    {   // (26/10 b) definicion propia del jugador: w de la fila de su posicion en la tabla de jugadores (skintone.cpp; 0 = la general)
+      float4 stH = IniParams.Load(int2(194,0)); int stI = (int)round(v6.w) - 1000;
+      if (stH.y > 0.5 && stI >= 0 && stI < min((int)(stH.x + 0.5), 20)) { float dP = IniParams.Load(int2(195 + 3 * stI, 0)).w; if (dP > 0.01) defM = clamp(dP, 0.0, 3.0); }
+    }
     if (abs(defM - 1.0) > 0.01) {
       float3 nM = g_tex_normal.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN + 3.5).xyw;
       float2 mM = float2(nM.x * nM.z, nM.y) * 2.0 - 1.0;

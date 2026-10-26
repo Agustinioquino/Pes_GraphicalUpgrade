@@ -153,8 +153,12 @@ void main(
 
   float4 P3 = IniParams.Load(int2(3,0));
   float4 P5 = IniParams.Load(int2(5,0));
-  bool  sssOn    = P3.z > 0.5;
-  float sssWidth = P3.x > 0 ? P3.x : 1.0;
+  // PES21 (25/10) SSS unificada (w95): un solo interruptor para toda la luz de piel. La difusion la hace la SSSS; aca quedan la
+  // parte chica (pre-integrada, ancho fijo), la transmision a contraluz y el brillo de piel, sin depender de z3 ni de x3 (x3 / y3
+  // eran tambien el ancho y la fuerza del SSS nativo, que con w95 queda apagado)
+  bool  pesUni   = IniParams.Load(int2(95,0)).w > 0.5;
+  bool  sssOn    = P3.z > 0.5 || pesUni;
+  float sssWidth = pesUni ? 1.5 : (P3.x > 0 ? P3.x : 1.0);
   float sssBleed = P3.y;
   float skinSpec = P3.w > 0 ? P3.w : 1.0;
   float rawNdotL = 0, trans = 0, transFloor = 0, skinTag = 0, shadowScalar = 1;
@@ -379,7 +383,7 @@ void main(
       float zS0 = abs(g_psScene.m_projectionParam.z / (dS0 - g_psScene.m_projectionParam.w));
       float mppS = max(zS0 * abs(g_psScene.m_projectionParam.x) * 2.0 / max(g_psScene.m_viewportSize.x, 1.0), 1e-6);
       float rPx = 0.006 * max(IniParams.Load(int2(95,0)).x, 0.3) / mppS;
-      pesSsssK = saturate((rPx - 1.0) / 5.0) * (IniParams.Load(int2(146,0)).x > 0.5 ? 1.0 : 0.0);
+      pesSsssK = saturate((rPx - 1.0) / 5.0) * ((pesUni || IniParams.Load(int2(146,0)).x > 0.5) ? 1.0 : 0.0);
       w *= 1.0 - 0.85 * pesSsssK;
     }
     if (!sssOn) w = 0.03;                 // 18/10: ancho del borde acotado (antes envolvia la cara y corria la luz)

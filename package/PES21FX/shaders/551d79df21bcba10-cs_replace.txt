@@ -85,6 +85,8 @@ void main(uint3 vThreadID : SV_DispatchThreadID, uint3 vThreadGroupID : SV_Group
   r2.xy = vThreadID.yx;
   r2.zw = float2(0,0);
   r1.yzw = lightBufferOriginal.Load(r2.xyw).xyz;
+  // PES21 (25/10) SSS unificada (w95): sin la difusion nativa, la luz original tal cual (como con cFade = 0)
+  if (IniParams.Load(int2(95,0)).w > 0.5) { resultBuffer[vThreadID.yx] = float4(r1.yzw, 1); return; }
   x2[0].x = 0;
   x2[1].x = 0.166700006;
   x2[2].x = 0.333299994;
