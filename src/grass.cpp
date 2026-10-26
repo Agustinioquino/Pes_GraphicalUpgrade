@@ -455,7 +455,9 @@ static void Thresholds(float* T) {
     // constante en pantalla, ver GrassEmit). El pasto del juego queda solo pegado a la camara (>= 2000 px/m)
     // (26/10) T0 = 2000: el pasto del juego solo a menos de ~1 m de la camara. Con 240 la zona cercana (pasto denso del
     // juego, ~19 capas, muy oscura) chocaba con la del mod (6 capas): borde visible, pasto irregular y 13 FPS en primeros planos
-    T[0] = 2000.0f; T[1] = 110.0f; T[2] = 45.0f;
+    // (26/10 f) x293: T0 regulable desde el menu (Agustin: "el cambio al pasto de cerca solo pasa muy cerca"); 2000 si el ini no lo trae
+    const float t0 = g_cfg.live[293][0];
+    T[0] = t0 >= 200.0f ? (std::min)(t0, 6000.0f) : 2000.0f; T[1] = 110.0f; T[2] = 45.0f;
     T[3] = 8.0f;    // (25/10) limite inferior del nivel lejano cuando el cesped lejano de la base (y61) esta prendido. (26/10 d) 15 -> 8:
                     // con 15 las camaras abiertas quedaban sin hojas 3D en el tercio lejano (anillo fijo a 60-75 m); a 8-15 px/m
                     // son 50-90 tarjetas por celda de 2 m, barato
@@ -598,7 +600,11 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound) {
     // borrosa, "feo") y el nivel 0 costaba 33 FPS con la camara baja (7 capas de hojas por pixel de pantalla). Ahora el nivel 0 tiene
     // dos extremos por px/m: camaras de juego (hoja de 12 mm de ensanche, alto x59, tope de 4 capas sobre la banda) y camara al ras
     // (>= 700 px/m: 4 mm, alto 1.0, piso de 6 capas por pixel de suelo); entre 300 y 700 px/m se funde (VS cb5[12], CS gPad[2])
-    const float wGame = 0.012f * wide, wClose = 0.004f * wide, pRamp0 = 300.0f, pRamp1 = 700.0f;
+    // (26/10 f) y293 / z293: rampa de las hojas finas de cerca regulable (antes fija 300 / 700 px/m: el cambio a las hojas finas, altas y
+    // tupidas de cerca recien se veia con la camara casi pegada al suelo); por defecto 200 / 450
+    const float pR0 = g_cfg.live[293][1] >= 50.0f ? (std::min)(g_cfg.live[293][1], 3000.0f) : 300.0f;
+    const float pR1 = g_cfg.live[293][2] >= pR0 + 20.0f ? (std::min)(g_cfg.live[293][2], 6000.0f) : (std::max)(pR0 * 2.3f, pR0 + 100.0f);
+    const float wGame = 0.012f * wide, wClose = 0.004f * wide, pRamp0 = pR0, pRamp1 = pR1;
     const float wEff0 = wGame, tallNear = 1.0f, Dfloor = 6.0f * cMul[q] * dens;
     const float halfL = 52.5f + 3.0f, halfW = 34.0f + 3.0f, halfH = 0.5f * (float)(g_bbH ? g_bbH : 1080);
     ID3D11DeviceContext1* c1 = nullptr; c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1);
