@@ -53,6 +53,7 @@ Texture2D<float4> pesFacePores : register(t28);
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 #include "pes_skintone.hlsli"
+#include "pes_nailfix.hlsli"   // (26/10, v12.6) unas de los jugadores con textura de brazo propia (x304)
 #ifdef PES_HL_ACC
 RWByteAddressBuffer gHlAcc : register(u5);   // por marca y lado: suma x, suma y, pixeles (4 x 16 bytes)
 #endif
@@ -105,6 +106,7 @@ void main(
   float2 hpMdx = ddx(hpMuv), hpMdy = ddy(hpMuv);
   float hpFpx = max(fwidth(v2.x), fwidth(v2.y)) * 2048.0;
   float hpPoreA = 0.0, hpMicroVar = 0.0, hpPoreOcc = 1.0, hpTZone = 0.0;
+  float2 nfDx = ddx(v2.xy), nfDy = ddy(v2.xy);   // (26/10) unas de los jugadores: derivadas fuera de las ramas
 
   r0.xy = float2(-0.5,-0.5) + v0.xy;
   r0.xy = float2(0.125,0.125) * r0.xy;
@@ -200,6 +202,19 @@ void main(
   r1.w = max(0.730000019, r1.w);
   r1.w = min(0.930000007, r1.w);
   r2.yzw = g_tex_diffuse.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBD).xyz;
+  {   // (26/10, v12.6) unas de los jugadores con textura de brazo propia (caras reales: arm_bsm.ftex de la cara, el atlas de
+      // Konami a 2048 con las unas pintadas para la mano de Konami). Solo en la mano de TorsoBody (VS 1c02a92a: v3.w en [2, 3];
+      // posicion de reposo en w2.zw, las manos estan a mas de 55 cm del centro; uv de las manos) y solo si la textura no es la de
+      // TorsoBody (4096): la una pintada se borra y la placa 3D toma el color de esa una (pes_nailfix.hlsli). x304 prendido,
+      // y304 cuanto
+    float4 P304 = IniParams.Load(int2(304,0));
+    uint nfW = 0, nfH = 0; g_tex_diffuse.GetDimensions(nfW, nfH);
+    bool nfHand = v3.w > 1.999 && v3.w < 3.001 && abs(w2.w) > 0.55 && w2.z < 1.15 && v2.y > 0.64;
+    if (P304.x > 0.5 && P304.y > 0.001 && nfHand && nfW > 0 && nfW < 4096) {
+      float nfB = exp2(bBD);
+      r2.yzw = PesNailFix(g_tex_diffuse, g_samplerLinear_Clamp_s, v2.xy, nfDx * nfB, nfDy * nfB, r2.yzw, saturate(P304.y));
+    }
+  }
   r3.xyz = r2.yzw * r1.www + -r2.yzw;
   r2.yzw = r1.zzz * r3.xyz + r2.yzw;
   // (20/10) cabeza de las genericas: el mismo color y la misma translucidez que el shader de cara (5ce3 / ce188)
