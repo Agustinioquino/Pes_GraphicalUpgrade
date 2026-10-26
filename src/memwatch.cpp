@@ -173,20 +173,23 @@ static void LogProcessMem(FILE* f) {
 // ---------------------------------------------------------------- win32munmap del juego
 typedef int (__fastcall *PFN_Munmap)(void* ptr, size_t size);
 static PFN_Munmap o_munmap = nullptr;
-static std::atomic<unsigned> s_mCalls{0}, s_mOdd{0}, s_mFixed{0}, s_mKept{0}, s_mOrigFail{0};
+static std::atomic<unsigned> s_mCalls{0}, s_mHarmless{0}, s_mOdd{0}, s_mFixed{0}, s_mKept{0}, s_mOrigFail{0};
 static std::atomic<unsigned long long> s_mBytes{0};
 static bool s_fix = true;
 static std::mutex s_logOdd;
 
-// lo mismo que revisa el juego, sin liberar nada: true si su win32munmap terminaria bien
-static bool GameWouldSucceed(uintptr_t p, size_t size) {
+// lo mismo que revisa el juego, sin liberar nada: 1 = su win32munmap terminaria bien, 0 = fallaria en la primera
+// reserva sin haber liberado nada (inofensivo: el juego se queda con el bloque), -1 = fallaria DESPUES de liberar algo
+// (el cierre de 0x3fe31d)
+static int GameOutcome(uintptr_t p, size_t size) {
+    bool freed = false;
     while (size) {
         MEMORY_BASIC_INFORMATION mi{};
-        if (!VirtualQuery((void*)p, &mi, sizeof mi)) return false;
-        if ((uintptr_t)mi.BaseAddress != p || (uintptr_t)mi.AllocationBase != p || mi.State != MEM_COMMIT || mi.RegionSize > size) return false;
-        p += mi.RegionSize; size -= mi.RegionSize;
+        if (!VirtualQuery((void*)p, &mi, sizeof mi)) return freed ? -1 : 0;
+        if ((uintptr_t)mi.BaseAddress != p || (uintptr_t)mi.AllocationBase != p || mi.State != MEM_COMMIT || mi.RegionSize > size) return freed ? -1 : 0;
+        p += mi.RegionSize; size -= mi.RegionSize; freed = true;
     }
-    return true;
+    return 1;
 }
 // reservas que empiezan dentro de [p, p+size) y no se salen; todo comprometido. Si se puede, las lista en out.
 static bool PlanRelease(uintptr_t p, size_t size, std::vector<uintptr_t>& out) {
@@ -209,7 +212,9 @@ static int __fastcall hk_Munmap(void* ptr, size_t size) {
     void* ra = _ReturnAddress();
     s_mCalls.fetch_add(1);
     const uintptr_t p = (uintptr_t)ptr;
-    if (!size || GameWouldSucceed(p, size)) {
+    const int outcome = size ? GameOutcome(p, size) : 1;
+    if (outcome >= 0) {   // bien, o falla sin liberar nada: igual que siempre
+        if (outcome == 0) s_mHarmless.fetch_add(1);
         int r = o_munmap(ptr, size);
         if (r == 0) s_mBytes.fetch_add(size); else s_mOrigFail.fetch_add(1);
         Push(EV_MUNMAP, p, size, (uint32_t)r, 0, ra, r == 0);
@@ -220,19 +225,10 @@ static int __fastcall hk_Munmap(void* ptr, size_t size) {
     s_mOdd.fetch_add(1);
     std::vector<uintptr_t> plan;
     const bool canFix = s_fix && PlanRelease(p, size, plan);
-    int r = -1;
-    if (canFix) {
-        t_in++;
-        bool ok = true;
-        for (uintptr_t ab : plan) ok &= VirtualFree((void*)ab, 0, MEM_RELEASE) != 0;
-        t_in--;
-        r = ok ? 0 : -1;
-        if (ok) { s_mFixed.fetch_add(1); s_mBytes.fetch_add(size); }
-    } else s_mKept.fetch_add(1);
-    Push(EV_MUNMAP, p, size, (uint32_t)r, 1, ra, r == 0);
-    if (s_mOdd.load() <= 40) {
+    const bool verbose = s_mOdd.load() <= 40;
+    if (verbose) {   // el mapa ANTES de tocar nada
         std::lock_guard<std::mutex> lk(s_logOdd);
-        Log("memoria: el juego quiso devolverle a Windows %llu KB en %p (llamado desde %s) y la memoria NO esta como la dejo:",
+        Log("memoria: el juego quiso devolverle a Windows %llu KB en %p (llamado desde %s) y la memoria NO esta como la dejo (su liberador soltaria una parte y el juego escribiria en lo soltado):",
             (unsigned long long)(size >> 10), ptr, Who(ra).c_str());
         if (FILE* f = LogLock()) {
             LogRegions(f, p, p + size, 24);
@@ -243,6 +239,18 @@ static int __fastcall hk_Munmap(void* ptr, size_t size) {
             fflush(f);
         }
         LogUnlock();
+    }
+    int r = -1;
+    if (canFix) {
+        t_in++;
+        bool ok = true;
+        for (uintptr_t ab : plan) ok &= VirtualFree((void*)ab, 0, MEM_RELEASE) != 0;
+        t_in--;
+        r = ok ? 0 : -1;
+        if (ok) { s_mFixed.fetch_add(1); s_mBytes.fetch_add(size); }
+    } else s_mKept.fetch_add(1);
+    Push(EV_MUNMAP, p, size, (uint32_t)r, 1, ra, r == 0);
+    if (verbose) {
         if (canFix) Log("memoria:   -> %s (%zu reservas liberadas enteras; sin esto el juego se cerraba en PES2021.exe+0x3fe31d)", r == 0 ? "arreglado" : "VirtualFree fallo", plan.size());
         else if (s_fix) Log("memoria:   -> no se libera nada: el juego sigue con ese bloque como libre (sin cierre)");
         else Log("memoria:   -> memoria_arreglo = 0: no se libera nada para no cerrar el juego");
@@ -281,8 +289,8 @@ static DWORD WINAPI SummaryThread(void*) {
                                   s.empty() ? "" : " | ", x.mod.c_str(), x.prot, x.privProt, x.free, x.partial);
             s += b; if (s.size() > 1200) { s += " ..."; break; }
         }
-        Log("memoria (30 s): segmentos devueltos %u (%llu MB), raros %u (arreglados %u, retenidos %u), fallos propios del juego %u | %s",
-            s_mCalls.load(), s_mBytes.load() >> 20, s_mOdd.load(), s_mFixed.load(), s_mKept.load(), s_mOrigFail.load(), s.empty() ? "nadie llamo VirtualProtect/VirtualFree" : s.c_str());
+        Log("memoria (30 s): segmentos devueltos %u (%llu MB), que el juego se queda sin problema %u, PELIGROSOS %u (arreglados %u, retenidos %u), fallos propios del juego %u | %s",
+            s_mCalls.load(), s_mBytes.load() >> 20, s_mHarmless.load(), s_mOdd.load(), s_mFixed.load(), s_mKept.load(), s_mOrigFail.load(), s.empty() ? "nadie llamo VirtualProtect/VirtualFree" : s.c_str());
     }
 }
 
@@ -333,7 +341,7 @@ void MemCrashInfo(FILE* f, EXCEPTION_POINTERS* ep) {
             fprintf(f, "    quien toco esa zona:\n");
             LogTouches(f, (a & ~(uintptr_t)0xFFF) - 0x10000, (a & ~(uintptr_t)0xFFF) + 0x10000, 12);
         }
-        fprintf(f, "    liberador del juego: %u segmentos devueltos, %u raros (arreglados %u, retenidos %u)\n", s_mCalls.load(), s_mOdd.load(), s_mFixed.load(), s_mKept.load());
+        fprintf(f, "    liberador del juego: %u segmentos devueltos, %u peligrosos (arreglados %u, retenidos %u)\n", s_mCalls.load(), s_mOdd.load(), s_mFixed.load(), s_mKept.load());
         LogProcessMem(f);
     } __except (EXCEPTION_EXECUTE_HANDLER) { fprintf(f, "    (fallo al armar el informe de memoria)\n"); }
     LogSiderTail(f, 15);
