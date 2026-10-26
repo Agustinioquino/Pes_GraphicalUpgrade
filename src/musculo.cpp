@@ -30,6 +30,8 @@
 //   261: x pecho bajo | y dorsales: ancho (V) | z trapecio alto | w gluteo levantado
 //   262: x muslo exterior | y gemelos | z (26/10) torso y brazos: 0.5 robusto .. 1 TorsoBody .. 1.5 atletico (variantes de TorsoBody:
 //        modelo y texturas en los shaders, pes_variants.hlsli; aca solo el grosor de los brazos, ArmVariant)
+//   287 (26/10, selectores de hombros del menu Fisico): x inclinacion (0.7 muy caidos .. 1 .. 1.3 muy rectos) | y tipo (1 normales,
+//        2 estrechos, 3 anchos, 4 redondos) | z tamano (0.7 .. 1.3: deltoides, ancho, trapecio y clavicula juntos)
 // v6: por jugador. personajes.cpp sabe que jugador es cada esqueleto (restriccion + 0x10); un jugador con valores propios
 // (PES21FX\musculatura_jugadores.ini, tarjeta "Musculatura por jugador") usa su juego de factores, el resto los del menu.
 #include "core.h"
@@ -163,6 +165,7 @@ static void ComputeFactors(const float (*P)[4], bool on, bool ropa, bool trans, 
     const float* A = P[0]; const float* B = P[1]; const float* C = P[2]; const float* D = P[3];
     const float* E = P[4]; const float* H = P[5]; const float* N = P[6]; const float* Z = P[7]; const float* X = P[8];
     const float* Q = P[9]; const float* R = P[10]; const float* S = P[11];   // (26/10) v7
+    const float* T = P[13];   // (26/10) hombros: inclinacion, tipo, tamano (fila 287)
     const float G = Gv(D[0]);
     auto m = [G](float g) { return std::clamp(g * G, 0.4f, 2.5f) - 1.0f; };
     const float esp = Gv(B[2]), mus = Gv(B[3]);
@@ -175,10 +178,26 @@ static void ComputeFactors(const float (*P)[4], bool on, bool ropa, bool trans, 
     const float quad = m(mus * Gv(H[1])), ham = m(mus * Gv(H[2])), thigh = 0.5f * (quad + ham), thighB = kThighR * 0.5f * (quad - ham);
     const float calf = m(Gv(C[0])), trap = m(esp * Gv(D[1])), neck = m(Gv(N[0]));
     const float pec = m(Gv(B[1])), clav = m(Gv(B[1]) * Gv(N[1])), dor = m(esp * Gv(D[3])), omo = m(esp * Gv(D[2])), baja = m(esp * Gv(E[0]));
-    const float rod = Gv(Z[0]) - 1.0f, cint = Gv(Z[1]) - 1.0f, cad = Gv(Z[2]) - 1.0f, anch = Gv(Z[3]) - 1.0f;
-    f[M_DELT].e = m(Gv(A[1])) + AV(0.03f, 0.04f);      Push(f[M_DELT], 1.0f, 0.12f, 0.0f, 0.030f, anch);
+    // (26/10) hombros (fila 287): tipo y tamano se suman al ancho y al deltoides; la inclinacion sube / baja la tapa del hombro
+    // y baja / sube el trapecio junto al cuello (caidos: la linea cuello - hombro mas empinada; rectos: mas horizontal)
+    const float shSl = std::clamp(Gv(T[0]), 0.7f, 1.3f) - 1.0f, shSz = std::clamp(Gv(T[2]), 0.7f, 1.3f) - 1.0f;
+    const int shTy = std::clamp((int)lroundf(T[1] < 0.5f ? 1.0f : T[1]), 1, 4);
+    const float tyAnch = shTy == 2 ? -0.45f : shTy == 3 ? 0.50f : 0.0f;
+    const float tyE = shTy == 2 ? -0.08f : shTy == 3 ? 0.04f : shTy == 4 ? 0.18f : 0.0f, tyRound = shTy == 4 ? 0.45f : 0.0f;
+    const float rod = Gv(Z[0]) - 1.0f, cint = Gv(Z[1]) - 1.0f, cad = Gv(Z[2]) - 1.0f, anch = Gv(Z[3]) - 1.0f + tyAnch + 0.8f * shSz;
+    f[M_DELT].e = m(Gv(A[1])) + AV(0.03f, 0.04f) + tyE + 0.8f * shSz;      Push(f[M_DELT], 1.0f, 0.12f, 0.0f, 0.030f, anch);
+    if (shSl != 0.0f) {
+        Push(f[M_DELT], 0.15f, 1.0f, 0.0f, 0.040f, shSl); Push(f[M_DELT], 1.0f, 0.0f, 0.0f, 0.010f, shSl);   // la tapa sube (rectos) y se abre
+        Push(f[M_TRAP], -0.20f, 1.0f, 0.0f, 0.020f, -shSl);   // el trapecio junto al cuello baja (rectos) o sube (caidos)
+        Push(f[M_COLLAR], 0.0f, 1.0f, 0.0f, 0.010f, -shSl);
+        Push(f[M_CLAV], 0.5f, 1.0f, 0.0f, 0.015f, shSl); Push(f[M_SCAP], 0.0f, 1.0f, 0.0f, 0.012f, shSl);
+    }
+    if (shSz != 0.0f) {   // tamano: el trapecio y la clavicula acompanan al hombro
+        Push(f[M_TRAP], 0.25f, 1.0f, -0.35f, 0.030f, 0.5f * shSz); Push(f[M_CLAV], 0.10f, 0.30f, 1.0f, 0.025f, 0.4f * shSz);
+        Push(f[M_SCAP], 0.20f, 0.10f, -1.0f, 0.030f, 0.3f * shSz);
+    }
     {   // (26/10) deltoides frontal / posterior: la tapa del hombro crece un poco y se corre hacia adelante / atras
-        const float df = Gv(Q[0]) - 1.0f, dr = Gv(Q[1]) - 1.0f;
+        const float df = Gv(Q[0]) - 1.0f + tyRound, dr = Gv(Q[1]) - 1.0f + tyRound;   // (redondos: las dos partes)
         f[M_DELT].e += 0.35f * (df + dr);
         Push(f[M_DELT], 0.15f, 0.0f, 1.0f, 0.015f, df); Push(f[M_DELT], 0.15f, 0.0f, -1.0f, 0.015f, dr);
     }
@@ -232,10 +251,10 @@ static void ComputeFactors(const float (*P)[4], bool on, bool ropa, bool trans, 
 // interruptores (x164 prendido, y166 la ropa acompana, z170 codos y rodillas) y la definicion (x172, shader) son de todos.
 // Cada esqueleto se busca por la restriccion (+ 0x10) en la tabla de personajes.cpp (handle -> id del jugador).
 // Archivo: PES21FX\musculatura_jugadores.ini ([id] + claves del menu; lo que falta = 1, como el juego).
-static const int kPRows = 13;
-struct Profile { std::string name; float v[kPRows][4]; };   // 164..171, (24/10 g) 162 en v[8], (26/10) 260..262 en v[9..11] y 172 (definicion) en v[12]
-static int PRow(int idx) { return idx >= 164 && idx <= 171 ? idx - 164 : idx == 162 ? 8 : idx >= 260 && idx <= 262 ? 9 + (idx - 260) : idx == 172 ? 12 : -1; }
-static int PIdx(int row) { return row < 8 ? 164 + row : row == 8 ? 162 : row < 12 ? 260 + (row - 9) : 172; }
+static const int kPRows = 14;
+struct Profile { std::string name; float v[kPRows][4]; };   // 164..171, (24/10 g) 162 en v[8], (26/10) 260..262 en v[9..11], 172 (definicion) en v[12] y 287 (hombros) en v[13]
+static int PRow(int idx) { return idx >= 164 && idx <= 171 ? idx - 164 : idx == 162 ? 8 : idx >= 260 && idx <= 262 ? 9 + (idx - 260) : idx == 172 ? 12 : idx == 287 ? 13 : -1; }
+static int PIdx(int row) { return row < 8 ? 164 + row : row == 8 ? 162 : row < 12 ? 260 + (row - 9) : row == 12 ? 172 : 287; }
 static std::map<uint32_t, Profile> s_prof;
 static std::mutex s_profMx;   // s_prof lo tocan Present (factores, tarjeta, archivo) y el menu Fisico del juego (fisico.cpp)
 static bool s_profLoaded = false, s_profDirty = false; static double s_profDirtyT = 0;
@@ -254,11 +273,13 @@ static const struct { int idx, comp; } kPlayerParams[] = {
     {260, 0}, {260, 1}, {260, 2}, {260, 3}, {261, 0}, {261, 1}, {261, 2}, {261, 3}, {262, 0}, {262, 1},   // (26/10) v7
     {172, 0},   // (26/10 b) definicion muscular por jugador (el shader la toma de la tabla de jugadores de skintone.cpp)
     {262, 2},   // (26/10) variante del torso y los brazos (robusto / atletico)
+    {287, 0}, {287, 1}, {287, 2},   // (26/10) hombros: inclinacion, tipo, tamano
 };
 static bool IsPlayerParam(int idx, int comp) { for (auto& k : kPlayerParams) if (k.idx == idx && k.comp == comp) return true; return false; }
 // rango de cada valor por jugador: la definicion puede ir a 0 (piel lisa); la variante del torso de 0.5 (robusto) a 1.5 (atletico)
 static float ClampParam(int idx, int comp, float v) {
     if (idx == 262 && comp == 2) return std::clamp(v, 0.5f, 1.5f);
+    if (idx == 287) return comp == 1 ? std::clamp(roundf(v), 1.0f, 4.0f) : std::clamp(v, 0.7f, 1.3f);   // (26/10) hombros
     return std::clamp(v, idx == 172 ? 0.0f : 0.3f, 3.0f);
 }
 static std::wstring ProfPath() { return g_cfg.baseDir + L"musculatura_jugadores.ini"; }

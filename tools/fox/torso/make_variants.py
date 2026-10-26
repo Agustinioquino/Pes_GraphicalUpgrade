@@ -3,7 +3,8 @@
 #                                   7 filas por version del modelo: 0 posicion de reposo (para reconocerla), 1..3 robusto
 #                                   (desplazamiento, normal, tangente), 4..6 atletico (igual))
 #   textures\pes_var_torso_rob_n.dds / pes_var_torso_atl_n.dds   mapas normales delta del torso (BC5_SNORM, 2048 x 1024 = v 0..0.5)
-# Uso: python3 make_variants.py <carpeta common de TorsoBody> <carpeta de salida> [--maps-only|--data-only]
+#   textures\pes_var_torso_spine_n.dds   (26/10) la columna marcada, para todos los torsos (mismo formato; PS t19, x288)
+# Uso: python3 make_variants.py <carpeta common de TorsoBody> <carpeta de salida> [--maps-only|--data-only|--spine-only]
 import sys, os, json
 import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -55,7 +56,7 @@ def main():
     mode = sys.argv[3] if len(sys.argv) > 3 else ""
     os.makedirs(outdir, exist_ok=True)
     table = []   # (cantidad de indices, archivo, versiones)
-    if mode != "--maps-only":
+    if mode in ("", "--data-only"):
         # ---- torso: las mallas 1 y 2 son iguales en las cuatro versiones; la 3 (abajo) cambia en pants_in_sub y pants_out_sub_tight
         per_mesh = {0: [], 1: [], 2: []}
         bases = {0: [], 1: [], 2: []}
@@ -96,17 +97,26 @@ def main():
                 table.append((dn, dname, 1))
                 print("  %s: %d vertices, %d indices (suciedad; distancia maxima al brazo %.2f mm)" % (dname, drows.shape[1], dn, dmax * 1e3))
         with open(os.path.join(outdir, "pes_var_tabla.json"), "w") as f: json.dump(table, f, indent=1)
-    if mode != "--data-only":
-        # ---- mapas normales delta del torso
-        from torso_maps import build_maps
+    def mipchain(a):
+        mips = [a.astype(np.float32)]
+        while min(mips[-1].shape[:2]) > 1:
+            c = mips[-1]; mips.append(0.25 * (c[0::2, 0::2] + c[1::2, 0::2] + c[0::2, 1::2] + c[1::2, 1::2]))
+        return mips
+    tmpd = os.environ.get("SIM_TMP", outdir)
+    if mode in ("", "--maps-only", "--spine-only"):
+        # ---- (26/10) columna marcada (todos los torsos)
+        from torso_maps import build_spine_map
         T = build(folder, "out")
         G = bake(T, per_vertex(T, T["fade"][:, None]), W=2048, H=1024, vmax=0.5)
+        dS = build_spine_map(G)
+        full, _ = dilate(dS, G["mask"], iters=48)
+        write_dds_bc5_snorm(os.path.join(outdir, "pes_var_torso_spine_n.dds"), mipchain(full))
+        np.save(os.path.join(tmpd, "maps_dS.npy"), dS.astype(np.float32))
+        print("  pes_var_torso_spine_n.dds: %dx%d, max %.2f" % (dS.shape[1], dS.shape[0], np.abs(dS).max()))
+    if mode in ("", "--maps-only"):
+        # ---- mapas normales delta del torso
+        from torso_maps import build_maps
         dR, dA, ms = build_maps(G, G["extra"][..., 0])
-        def mipchain(a):
-            mips = [a.astype(np.float32)]
-            while min(mips[-1].shape[:2]) > 1:
-                c = mips[-1]; mips.append(0.25 * (c[0::2, 0::2] + c[1::2, 0::2] + c[0::2, 1::2] + c[1::2, 1::2]))
-            return mips
         for nm, d in (("pes_var_torso_rob_n.dds", dR), ("pes_var_torso_atl_n.dds", dA)):
             full, _ = dilate(d, G["mask"], iters=48)
             mips = mipchain(full)
@@ -115,7 +125,6 @@ def main():
         fullm, _ = dilate(ms[..., None], G["mask"], iters=48)
         write_dds_bc4_unorm(os.path.join(outdir, "pes_var_torso_rob_m.dds"), mipchain(fullm[..., 0]))
         print("  pes_var_torso_rob_m.dds: estrias (mascara de color), cobertura %.2f %%" % (100.0 * (ms > 0.2).mean()))
-        tmpd = os.environ.get("SIM_TMP", outdir)
         np.save(os.path.join(tmpd, "maps_dR.npy"), dR.astype(np.float32)); np.save(os.path.join(tmpd, "maps_dA.npy"), dA.astype(np.float32))
         np.save(os.path.join(tmpd, "maps_mR.npy"), ms.astype(np.float32))
 

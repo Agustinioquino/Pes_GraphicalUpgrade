@@ -111,6 +111,18 @@ ID3D11ShaderResourceView* VariantDataFor(uint64_t vsHash, UINT indexCount, bool*
     }
     return v;
 }
+// (26/10) columna marcada (x288): el mapa normal delta de la columna en t19 del PS de la piel, en todos los torsos de TorsoBody
+// (con o sin variante; no depende de x285)
+ID3D11ShaderResourceView* SpineTextureFor(uint64_t vsHash, UINT indexCount) {
+    if (vsHash != 0x1c02a92ab4ae3362ULL || g_cfg.live[288][0] <= 0.001f) return nullptr;
+    bool torso = false;
+    for (const VarEntry& k : kVars) if (k.idx == indexCount) { torso = k.torso; break; }
+    if (!torso) return nullptr;
+    ID3D11ShaderResourceView* v = FileTextureAny("file:textures\\pes_var_torso_spine_n.dds");
+    static std::atomic<bool> s_noted{false};
+    if (!s_noted.exchange(true)) Log("columna marcada: mapa %s", v ? "cargado (t19 del PS de la piel)" : "NO CARGADO (falta textures\\pes_var_torso_spine_n.dds)");
+    return v;
+}
 bool VariantTextures(ID3D11ShaderResourceView* out[3]) {
     out[0] = FileTextureAny("file:textures\\pes_var_torso_rob_n.dds");
     out[1] = FileTextureAny("file:textures\\pes_var_torso_atl_n.dds");

@@ -454,7 +454,7 @@ void main(
       float3 vZc = float3(g_psScene.m_view._m20, g_psScene.m_view._m21, g_psScene.m_view._m22);
       float3 pWc = g_psScene.m_eyepos.xyz + float3(dot(PvC, vXc), dot(PvC, vYc), dot(PvC, vZc));
       float3 Lc0 = normalize(pesLDir.xyz);
-      float3 sunWc = normalize(float3(dot(Lc0, vXc), dot(Lc0, vYc), dot(Lc0, vZc)));
+      float3 sunWc = PESSunStable(normalize(float3(dot(Lc0, vXc), dot(Lc0, vYc), dot(Lc0, vZc))));   // (26/10) sol estable: el dibujo de las nubes no cambia en cada corte de la repeticion
       float cT = PESCloudShadow(pWc, sunWc, CPs);
       r0.x *= lerp(1.0, cT, cK);
     } }

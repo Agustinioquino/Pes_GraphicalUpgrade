@@ -881,6 +881,8 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
                 c->PSSetShaderResources(16, 3, vm);
             }
         }
+        // (26/10) columna marcada: en todos los torsos (aunque no haya variantes en uso)
+        if (ID3D11ShaderResourceView* sp = SpineTextureFor(vs->hash, t_drawVerts)) { Remember(c, d, true, true, 19); c->PSSetShaderResources(19, 1, &sp); }
     }
     // 19/10: la boca (63fab7) hereda el b11 (tipo de pelo + semilla de la cara) de la ultima cara dibujada en este contexto:
     // variacion de dientes/encias por jugador
@@ -1147,15 +1149,16 @@ static void FrameCopyPresent(IDXGISwapChain* sc) {
 // capturas\luz.txt con la luz de la escena (sol, color, exposicion, niebla) y los parametros del mod. Sirve para calibrar
 // la luz sin que el usuario tenga que sacar capturas. [PES21FX] auto_captura = 1, auto_captura_seg, auto_captura_max
 static float ReadElev(const std::vector<float>& L, const std::vector<float>& S, float* azOut) {
-    // m_lightDir0 (b3) esta en espacio de vista; el "arriba" del mundo en vista es la fila 1 de m_view (b2: offset 32 floats)
+    // m_lightDir0 (b3) esta en espacio de vista; se pasa a mundo con m_view (b2: offset 32 floats; fila j = eje j de la camara
+    // en el mundo), como la fila 111. (26/10) antes se hacia el producto con la fila 1 (eje de la camara en mundo) contra la
+    // luz en vista: mezclaba espacios y la altura cambiaba con la inclinacion de la camara
     if (L.size() < 4 || S.size() < 48) { if (azOut) *azOut = 0; return 0; }
     float lx = L[0], ly = L[1], lz = L[2]; float n = sqrtf(lx * lx + ly * ly + lz * lz); if (n < 1e-6f) return 0; lx /= n; ly /= n; lz /= n;
-    float ux = S[32 + 4], uy = S[32 + 5], uz = S[32 + 6];   // m_view fila 1 (_m10,_m11,_m12)
-    float fx = S[32 + 8], fy = S[32 + 9], fz = S[32 + 10];  // fila 2 (adelante)
-    float rx = S[32 + 0], ry = S[32 + 1], rz = S[32 + 2];   // fila 0 (derecha)
-    float up = lx * ux + ly * uy + lz * uz;
-    float e = asinf(std::clamp(up, -1.f, 1.f)) * 57.2958f; if (e < 0) e = -e;
-    if (azOut) { float x = lx * rx + ly * ry + lz * rz, z = lx * fx + ly * fy + lz * fz; *azOut = atan2f(x, z) * 57.2958f; if (*azOut < 0) *azOut += 360.f; }
+    const float* M = &S[32];
+    float wx = lx * M[0] + ly * M[4] + lz * M[8], wy = lx * M[1] + ly * M[5] + lz * M[9], wz = lx * M[2] + ly * M[6] + lz * M[10];
+    if (wy < 0) { wx = -wx; wy = -wy; wz = -wz; }
+    float e = asinf(std::clamp(wy, -1.f, 1.f)) * 57.2958f;
+    if (azOut) { *azOut = atan2f(wx, wz) * 57.2958f; if (*azOut < 0) *azOut += 360.f; }
     return e;
 }
 // (20/10) capturas A/B: con auto_captura_ab = 1, en cada captura se guarda ademas un par: A = todo como esta, B = el mismo

@@ -66,6 +66,10 @@ def render(meshes_, yaw, W, H, ppm, cx, cy, t, tmp, light=(-0.35, 0.55, 0.76)):
             dR, dA = m.delta[0], m.delta[1]
             vv = np.clip(uv[:, 1] * 2, 0, 1)
             xy = xy + wr * bilinear(dR, uv[:, 0], vv) + wa * bilinear(dA, uv[:, 0], vv)
+        if m.delta is not None and len(m.delta) > 3 and m.delta[3] is not None:   # (26/10) columna marcada (como el PS, x288)
+            vv = np.clip(uv[:, 1] * 2, 0, 1)
+            ks = float(os.environ.get("PNM_SPINE", "1")) * (1 - 0.5 * wr) * (1 + 0.25 * wa)
+            xy = xy + ks * bilinear(m.delta[3], uv[:, 0], vv)
         l2 = np.sum(xy * xy, 1, keepdims=True); xy = np.where(l2 > 0.94, xy * np.sqrt(0.94 / np.maximum(l2, 1e-9)), xy)
         z = np.sqrt(np.clip(1 - np.sum(xy * xy, 1, keepdims=True), 0, 1))
         n = Tg * xy[:, :1] + B * xy[:, 1:2] + N * z; n /= np.linalg.norm(n, axis=1, keepdims=True)
@@ -90,6 +94,7 @@ def load_scene(common, texdir, vardir, t):
     texT = (nm, blur(nm, 11), alb); texA = (nmA, blur(nmA, 11), albA)
     dR = np.load(os.path.join(vardir, "maps_dR.npy")); dA = np.load(os.path.join(vardir, "maps_dA.npy"))
     mR = np.load(os.path.join(vardir, "maps_mR.npy")) if os.path.exists(os.path.join(vardir, "maps_mR.npy")) else np.zeros(dR.shape[:2])
+    dS = np.load(os.path.join(vardir, "maps_dS.npy")) if os.path.exists(os.path.join(vardir, "maps_dS.npy")) else None
     out = []
     wr, wa = max(-t, 0.0), max(t, 0.0)
     def apply(m, data):
@@ -107,7 +112,7 @@ def load_scene(common, texdir, vardir, t):
     for k in (1, 2, 3):
         data = read_dds_float4(os.path.join(vardir, "pes_var_torso_%d.dds" % k))
         p, n, tg = apply(M[k], data)
-        out.append(Mesh(p, n, tg, M[k]["uv"].astype(np.float64), M[k]["faces"], texT, (dR, dA, mR), "torso"))
+        out.append(Mesh(p, n, tg, M[k]["uv"].astype(np.float64), M[k]["faces"], texT, (dR, dA, mR, dS), "torso"))
     MA = meshes(Fmdl(os.path.join(common, "arm.fmdl")))
     data = read_dds_float4(os.path.join(vardir, "pes_var_arm.dds"))
     p, n, tg = apply(MA[0], data)
@@ -133,6 +138,8 @@ def main():
     tmp = os.path.join(os.environ.get("SIM_TMP", "/tmp"), "_pnm%d" % os.getpid())
     views = [(0, 0.06, 1.24, 760, 600, 820, "frente"), (35, 0.10, 1.22, 760, 600, 820, "3/4"), (180, -0.06, 1.24, 760, 600, 820, "espalda"),
              (0, 0.40, 1.24, 760, 420, 1000, "brazo")]
+    if os.environ.get("PNM_BACK"):   # (26/10) la espalda de cerca (columna)
+        views = [(180, -0.0, 1.27, 600, 760, 1500, "espalda"), (205, 0.0, 1.27, 600, 760, 1500, "espalda 3/4")]
     if os.environ.get("PNM_CLOSE"):
         views = [(180, -0.05, 1.45, 760, 420, 1400, "trapecio (atras)"), (25, 0.12, 1.47, 760, 420, 1400, "trapecio (adelante)"),
                  (75, 0.03, 1.12, 760, 420, 1500, "costado (estrias)"), (0, 0.03, 1.30, 760, 420, 1400, "pecho")]
@@ -142,7 +149,8 @@ def main():
         for t in (-1.0, 0.0, 1.0):
             sc = load_scene(common, texdir, vardir, t)
             arm_bones_offset(sc, t, log)
-            ims.append(render(sc, yaw, W, H, ppm, cx, cy, t, tmp))
+            lt = tuple(float(v) for v in os.environ["PNM_LIGHT"].split(",")) if os.environ.get("PNM_LIGHT") else (-0.35, 0.55, 0.76)
+            ims.append(render(sc, yaw, W, H, ppm, cx, cy, t, tmp, light=lt))
         rows.append(ims)
     Wt = sum(im.width for im in rows[0]); Ht = sum(r[0].height + 28 for r in rows)
     sheet = Image.new("RGB", (Wt, Ht), (24, 24, 24))

@@ -185,6 +185,43 @@ def height_athletic(P):
     h += (0.0008 * g((x - 0.032) / 0.012) - 0.0008 * g(x / 0.004)) * lb
     return h
 
+# ---------------------------------------------------------------- columna (26/10, todos los torsos, con o sin variante)
+# Surco de la columna del sacro a C7: hondo y angosto en la espalda baja (entre los erectores, que se marcan como dos columnas),
+# mas fino en la espalda alta; las apofisis apenas se notan dentro del surco y C7 sobresale un poco. Medido en la malla: la
+# espalda en la linea media va de z -0.036 (lordosis, y 1.07 .. 1.16) a z -0.064 (y 1.43); el torso termina en la nuca ~1.57.
+def height_spine(P):
+    x, y, z, rz, front, back, side = _frame(P)
+    ax = np.abs(P[..., 0] + wobble(P * 1.3, 0.0006))       # la linea media ondula apenas
+    L = ss(1.00, 1.05, y) * (1 - ss(1.47, 1.52, y)) * back
+    lum = ss(1.02, 1.07, y) * (1 - ss(1.22, 1.34, y))       # espalda baja (erectores gruesos)
+    tho = ss(1.20, 1.30, y) * (1 - ss(1.44, 1.50, y))       # espalda alta
+    tot = np.maximum(lum + tho, 1e-3)
+    # surco: ancho y hondo abajo (el valle entre los erectores), mas fino arriba
+    dep = (0.0045 * lum + 0.0022 * tho) * var(P * 1.5, 0.8, 1.15)
+    wid = np.maximum((0.0100 * lum + 0.0065 * tho) / tot, 0.003)
+    h = -dep * g(ax / wid)
+    # erectores: dos columnas anchas a los lados, fuertes abajo y que se afinan hacia arriba
+    xe = (0.036 * lum + 0.027 * tho) / tot; ew = np.maximum((0.018 * lum + 0.012 * tho) / tot, 0.006)
+    h += (0.0040 * lum + 0.0014 * tho) * var(P * 1.1, 0.85, 1.15) * g((ax - xe) / ew)
+    h -= 0.0009 * lum * g((ax - (xe + 1.7 * ew)) / 0.010)                                  # su borde de afuera
+    h += 0.00025 * (0.5 + 0.5 * np.cos(2 * np.pi * (y - 1.02) / 0.026)) ** 2 * g(ax / 0.0035) * (tho + 0.4 * lum)   # apofisis
+    h = h * L
+    h += 0.0007 * g(ax / 0.010) * g((y - 1.505) / 0.010) * back                           # C7
+    return h
+
+def build_spine_map(G, chunk=262144):
+    """mapa normal delta de la columna (H, W, 2) en el espacio UV del torso (sin el desvanecido de las costuras: es solo textura
+    y la columna no llega a ninguna; torso_mask corta en el cuello)"""
+    P, Tg, Bn, M = G["P"], G["Tg"], G["Bn"], G["mask"]
+    H, W = M.shape
+    k = torso_mask(P.reshape(-1, 3)).reshape(H, W) * M
+    dS = np.zeros((H, W, 2))
+    ii = np.where(M)
+    for a in range(0, len(ii[0]), chunk):
+        sl = (ii[0][a:a + chunk], ii[1][a:a + chunk])
+        dS[sl] = slopes(height_spine, P[sl], Tg[sl], Bn[sl])
+    return np.clip(dS * k[..., None], -0.9, 0.9)
+
 def slopes(hfun, P, Tg, Bn, eps=0.0004):
     """(-dh/dT, -dh/dB) por diferencias centradas en 3D"""
     sT = (hfun(P + eps * Tg) - hfun(P - eps * Tg)) / (2 * eps)
