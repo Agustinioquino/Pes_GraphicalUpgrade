@@ -317,7 +317,7 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
   (26/10 c) Brazos: pes_var_arm_skin_a/b.dds (todo el atlas del brazo, 2048 x 2048: el PS elige las uv porque son cuadradas;
   manos.cpp SkinTexturesFor las da para las entradas de brazo de kVars): codo atras mas aspero, opaco y rojo, adentro del brazo
   y la muneca mas finos (translucidos, palidos), antebrazo de afuera algo mas aspero, hombro graso. Cerca de las costuras todo
-  vuelve a DEF (0.85 / 0.45 / 0.30 / 0.5), el valor del PS sin textura (piernas, manos).
+  vuelve a DEF (0.85 / 0.45 / 0.30 / 0.5; (26/10 d) ahora 0.80 / 0.66 / 0.30 / 0.5), el valor del PS sin textura (piernas, manos).
 - (26/10 b) UNION DEL BRAZO (w293 = 1): junto a la costura del hombro (plano centro (0.263, 1.370, 0.020), normal (0.761,
   -0.643, -0.084)) el normal map del brazo baja al 55 % en los primeros 3 cm (el del torso es casi liso ahi).
 - (26/10 c) CUELLO SIN CAMISETA (TorsoBody_cuello.lua 1.9, copia en tools/torsobody/): FUNDIR otra vez prendido (los cierres al
@@ -351,3 +351,36 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
     pes_var_pelvis_alb (t23: tono +3.6 % como el borde del torso, manchas suaves, pliegues mas oscuros). manos.cpp PelvisDraw:
     VS de la piel + 3732 o 3774 indices (el short usa otro shader); la presencia de t23 le dice al PS que es la pelvis.
   - Vista previa: tools/fox/pelvis/pelvis_preview.py (arcilla con PNM_CLAY=1, o leyendo el .fmdl escrito).
+- (26/10 d) LO QUE SE VEIA MAL EN EL JUEGO (capturas del menu Fisico, Cristiano atletico 100 %, definicion x1.25):
+  - "Todo brilloso": la piel real habia bajado la rugosidad a 0.45 (TorsoBody: 0.70). OJO, la rugosidad NO queda en 0.5608: el
+    PS hace r = max(min(0.5608, r1.y), r1.y con suciedad) = r1.y sin suciedad (0.5608 es el piso cuando el jugador se ensucia);
+    despues o2.x = polinomio(r) (0.70 -> 0.56, 0.45 -> 0.35). Con 0.35 el sol y los reflejos del cielo (x151) daban piel mojada
+    / lechosa. Ahora DEF = (brillo 0.80, rugosidad 0.66) con zonas +-0.06, poros +0.10 y x306 (Mate, -0.3..0.3) que se suma.
+  - Manchas negras en el esternon, el borde del pectoral, la linea alba y el pliegue del codo: tools/fox/torso/ps_replica.py
+    (replica del PS con las texturas tal cual las instala el paquete + la malla de la variante; mide la inclinacion TOTAL de la
+    normal respecto de la superficie original de TorsoBody, malla + textura). Normal (t = 0) = TorsoBody (media 11.7 vs 12.0
+    grados): la compensacion de la base anda. Atletico 100 % con definicion 1.25: media 22, p95 55, 8.7 % de los pixeles pasaba
+    de 45 grados y el esternon llegaba a 80 (se apilaban hp x2 en la malla, relieve de banda x1, inflado, esculpido, el surco del
+    pectoral tambien en field(), la textura x1.35 y la definicion x1.15 x 1.25). Arreglo: REGION atletico (1.00, 1.25, 1.25),
+    banda (0.30, 0.45), inflado 0.5, sin surco propio del esternon, surco del pectoral -1.2 mm (field ya trae -3.5 mm), lineas
+    finas de height_athletic al ~60 %, PS: definicion del torso atletico +0 (antes +0.15), brazo +0.10 (antes +0.20), columna
+    x(1 - 0.5 atletico) (la malla del atletico ya la esculpe). Brazos: k_g atletico 1.15 (antes 1.4), banda 0.35, anatomia 1.6x.
+  - TOPE DEL RELIEVE (x307, y307 grados = 49): torso_tilt.py hornea la inclinacion de la malla de cada version respecto de la
+    superficie original (m = -(N0 . T, N0 . B) en el marco de esa version, convencion de la textura) -> pes_var_torso_tilt_b/a/r
+    (1024 x 512) y pes_var_arm_tilt_b/a/r (1024 x 1024), t31..t33 del PS (slots que el juego no usa; en t5..t7 quedan texturas de
+    otros dibujos). El PS suma m (base -> variante con |t|, como el VS) al normal map, limita el total con una curva suave desde
+    0.6 sin(tope) hasta sin(tope) y le vuelve a restar m. Sin mapas (piernas, manos, pelvis) limita solo la textura. Resultado
+    (replica): atletico def 1.25 media 15.9, p95 38, 0.1 % > 45; normal sin cambios. DrawScope de hooks.cpp: 12 -> 24 enlaces
+    devueltos por dibujo (el torso ya usa 11).
+- (26/10 d) SIN SHORT DE VERDAD: las piezas del cuerpo NO se piden sueltas. Vienen en Asset\model\character\#Win\
+  common_package.fpk (el del livecpk "Global Model Efootball 5.0" = TorsoBody_v11\common_package.fpk, el mismo md5) que el juego
+  carga UNA vez al abrirse (junto con los efectos); el short visible del uniforme es otro modelo, uniform\nocloth\#Win\
+  pants_007.fmdl (+ la tela uniform\cloth\#Win\fcl_pants_sim.fclo / pants_cloth.skl). FPK: "foxfpk" + "win ", tamano en 10,
+  [32] = (2, archivos, referencias), entradas de 48 B desde 48 (dato u32 @0, tamano @8, nombre @16 / largo @24, md5 DEL NOMBRE
+  @32). El thigh_short del fpk es el de la v12.6 (765863 B = TorsoBody_v11\common): la carpeta extraida common_package_fpk del
+  Global Model esta vieja (216487 B), no se usa. tools/sincamiseta/make_fpk_sin_short.py cambia en el lugar las 4 entradas
+  pants_*_sub por las pelvis (mismo tamano). SinCamiseta 1.2 lee x308 de PES21FX.ini al abrir (Sider no puede escribir archivos
+  desde Lua: el cache del cuello tampoco pudo) y si esta en 1 sirve content\sin-camiseta\sin_short\common_package.fpk y oculta
+  pants_XXX.fmdl (tecla 4 lo muestra / oculta en vivo). Con la pelvis cargada falta la cintura del short (era la malla 0).
+  Detalle de piel de la pelvis: skin_detail.py (parches de la piel del torso, 22.5 cm, mezcla que conserva la varianza) ->
+  pes_var_pelvis_detail_n / _a, t34 / t35 del PS (dos capas, la segunda girada 37 grados, a 0.40 uv por metro).

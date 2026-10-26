@@ -160,7 +160,8 @@ def height_athletic(P):
     t = ((xw - ax_) * ux + (y - ay_) * uy) / (Lu * Lu)
     ds = ((xw - ax_) * uy - (y - ay_) * ux) / Lu            # > 0 del lado de arriba / afuera
     dc = ds - 0.004 * np.sin(np.pi * np.clip(t, 0, 1))
-    h += (-0.0018 * (1.15 - 0.45 * np.clip(t, 0, 1)) * var(P, 0.8, 1.15) * g(dc / 0.0040) + 0.0007 * g((dc - 0.008) / 0.007)) \
+    # (26/10 d) las lineas finas del atletico (Adonis, semilunares, linea alba, borde del pectoral) a ~60 %: la malla ya los esculpe
+    h += (-0.0011 * (1.15 - 0.45 * np.clip(t, 0, 1)) * var(P, 0.8, 1.15) * g(dc / 0.0040) + 0.0005 * g((dc - 0.008) / 0.007)) \
          * (front + 0.4 * side) * ss(-0.05, 0.20, t) * (1 - ss(0.85, 1.05, t))
     # 2. serratos: dedos en el costado bajo la axila, bandas que bajan hacia adelante; bultos suaves y distintos entre si
     s = (y - 1.20) + 0.45 * (z - 0.08) + wobble(P * 2.0, 0.0015)
@@ -169,12 +170,12 @@ def height_athletic(P):
     # 3. lineas semilunares (borde de afuera del recto) y linea alba, suaves e irregulares
     xs = 0.076 + 0.012 * ((y - 1.16) / 0.10) ** 2 + wobble(P * 1.4, 0.0015)
     rect = ss(1.065, 1.090, y) * (1 - ss(1.250, 1.275, y)) * front
-    h += -0.0008 * var(P * 1.2, 0.5, 1.2) * g((x - xs) / 0.0035) * rect
-    h += -0.0006 * var(P * 2.0, 0.6, 1.2) * g((x + wobble(P * 2.3, 0.0008)) / 0.0028) * rect
+    h += -0.0005 * var(P * 1.2, 0.5, 1.2) * g((x - xs) / 0.0035) * rect
+    h += -0.0004 * var(P * 2.0, 0.6, 1.2) * g((x + wobble(P * 2.3, 0.0008)) / 0.0028) * rect
     # 4. borde de abajo del pectoral (surco y el pecho arriba)
     yp = 1.282 + 0.010 * ((x - 0.075) / 0.050) ** 2 + wobble(P * 1.5, 0.001)
     dyp = y - yp
-    h += (-0.0014 * var(P, 0.8, 1.15) * g(dyp / 0.0035) + 0.0005 * g((dyp - 0.010) / 0.008)) * g((x - 0.075) / 0.048) * front
+    h += (-0.0008 * var(P, 0.8, 1.15) * g(dyp / 0.0035) + 0.0004 * g((dyp - 0.010) / 0.008)) * g((x - 0.075) / 0.048) * front
     # 5. trapecio: el borde con el cuello (adelante del trapecio, la "fosa" sobre la clavicula) y la cresta del cuello al hombro
     xt = np.clip(x, 0.05, 0.22)
     ytop = 1.552 - 0.40 * (xt - 0.05) ** 1.0 * 0.95       # linea de arriba del hombro (medida: 1.552 en x 0.04, 1.494 en x 0.22)

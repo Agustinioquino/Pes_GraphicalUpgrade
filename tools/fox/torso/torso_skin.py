@@ -1,8 +1,9 @@
 # PES21 FX (26/10 b) - zonas de la piel del torso de TorsoBody para el PS de la piel (que no parezca arcilla):
 #   pes_var_torso_skin_a.dds  BC5 (en 0..1): x = brillo (intensidad especular), y = rugosidad (la r del shader, antes del polinomio)
 #   pes_var_torso_skin_b.dds  BC5: x = translucidez (la del g-buffer, como trm.y), y = rubor (0.5 = nada; mas = algo mas rojo)
-# torsob_srm / torsob_trm de TorsoBody son parejos (0.896 / 0.698 / 0.143 en todo el torso: piel de arcilla, y la rugosidad
-# queda clavada en el tope 0.5608 del shader). Aca: piel mas satinada con zonas grasas (esternon, entre los omoplatos, arriba
+# torsob_srm / torsob_trm de TorsoBody son parejos (0.896 / 0.698 / 0.143 en todo el torso: piel de arcilla). (26/10 d) La
+# rugosidad NO queda en 0.5608: el shader hace max(min(0.5608, r), r con suciedad) = r sin suciedad; 0.5608 es el piso cuando el
+# jugador se ensucia. Aca: piel satinada con zonas grasas (esternon, entre los omoplatos, arriba
 # de los hombros, espalda baja) mas brillantes y lisas, costados y abdomen algo mas mates; translucidez mayor donde hay carne
 # (costados, rollos, pezones) y menor sobre hueso (esternon, claviculas, columna, espina del omoplato, cresta iliaca). Cerca
 # de las costuras (brazos, cuello, short) los valores vuelven a los del resto del cuerpo (DEF), que el PS usa tambien en los
@@ -14,7 +15,10 @@ sys.path.insert(0, HERE)
 from torso_variants import ss, g, NIPPLE, NAVEL
 from torso_maps import _frame, Noise
 
-DEF = dict(spec=0.85, rough=0.45, trans=0.30, red=0.5)   # = valores por defecto del PS (aa7d1833), tambien en brazos y piernas
+# = valores por defecto del PS (aa7d1833), tambien en brazos y piernas. (26/10 d) rugosidad 0.45 -> 0.66 (TorsoBody: 0.70) y brillo
+# 0.85 -> 0.80: con 0.45 el sol y los reflejos del cielo daban piel mojada en todo el cuerpo. Lo que saca lo "arcilla" son las zonas,
+# los poros (el PS les suma rugosidad) y la translucidez, no una piel lisa
+DEF = dict(spec=0.80, rough=0.66, trans=0.30, red=0.5)
 _N = Noise(71, freqs=(6.0, 13.0), n=6)
 
 def zones(P):
@@ -34,8 +38,8 @@ def zones(P):
     bone = np.maximum(bone, 0.7 * g((y - (1.445 + 0.27 * (x - 0.075))) / 0.010) * ss(0.07, 0.09, x) * (1 - ss(0.17, 0.19, x)) * back)   # espina del omoplato
     flesh = side * ss(1.00, 1.04, y) * (1 - ss(1.24, 1.30, y)) + nip
     nz = _N(P)
-    spec = DEF["spec"] * (1 + 0.15 * oily - 0.10 * matte - 0.20 * nip - 0.10 * nav) * (1 + 0.05 * nz)
-    rough = DEF["rough"] - 0.09 * oily + 0.05 * matte + 0.06 * nip + 0.04 * nav + 0.025 * nz
+    spec = DEF["spec"] * (1 + 0.12 * oily - 0.10 * matte - 0.20 * nip - 0.10 * nav) * (1 + 0.05 * nz)
+    rough = DEF["rough"] - 0.06 * oily + 0.04 * matte + 0.04 * nip + 0.03 * nav + 0.02 * nz
     trans = DEF["trans"] + 0.08 * flesh + 0.10 * nip - 0.09 * bone + 0.02 * nz
     # rubor suave: pecho alto y centro (vasos cerca de la piel), arriba de los hombros (sol), espalda alta; algo de variacion
     flush = np.maximum(g(x / 0.06) * ss(1.32, 1.38, y) * (1 - ss(1.48, 1.53, y)) * front, 0.8 * ss(1.46, 1.51, y) * g((x - 0.12) / 0.07))
@@ -74,7 +78,7 @@ def arm_zones(P):
     oily = (1 - ss(0.04, 0.08, t)) * ang(170, 40)
     nz = _NA(P)
     spec = DEF["spec"] * (1 - 0.20 * elbow + 0.05 * inner - 0.05 * outer + 0.08 * oily) * (1 + 0.05 * nz)
-    rough = DEF["rough"] + 0.07 * elbow + 0.03 * crease - 0.04 * inner - 0.03 * wrist + 0.03 * outer - 0.04 * oily + 0.02 * nz
+    rough = DEF["rough"] + 0.05 * elbow + 0.03 * crease - 0.03 * inner - 0.02 * wrist + 0.03 * outer - 0.03 * oily + 0.02 * nz
     trans = DEF["trans"] - 0.08 * elbow + 0.04 * crease + 0.08 * inner + 0.08 * wrist + 0.02 * nz
     red = DEF["red"] + 0.18 * elbow + 0.05 * crease - 0.05 * inner + 0.04 * outer + 0.05 * _NA(P * 1.7)
     return np.stack([spec, rough, trans, red], -1)

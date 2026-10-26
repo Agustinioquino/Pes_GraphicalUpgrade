@@ -158,6 +158,15 @@ def build_mesh(T, masks_fn, field_fn=None, sigma=0.025, kR=(0.85, 0.40), kA=(0.2
     T.update(S=S, D=D, n=n, dn=dn, fade=fade, mR=mR, mA=mA, detR=detR, detA=detA, bigR=bigR, bigA=bigA, dR=dR, dA=dA, dB=dB)
     return T
 
+# (26/10 d) cuanto suma el atletico en la malla del torso: relieve de banda propio de la malla (picos, valles) e inflado de las
+# panzas. Antes (0.55, 1.00) y 0.8: sumado al relieve del normal map x 2 y a las texturas, la normal llegaba a 80 grados en el
+# esternon (manchas negras en el juego); ahora el atletico queda ~1.3 veces el relieve de TorsoBody (ps_replica.py lo mide)
+TORSO_KA = (0.30, 0.45)
+TORSO_INFLATE = 0.5
+# esculpido del atletico adelante (m): borde del pectoral (surco, masa arriba), cinturon de Adonis (surco, oblicuo), relleno del
+# surco del medio (linea alba abajo, esternon arriba)
+SCULPT_A = dict(pec=(-0.0012, 0.0022), adonis=(-0.0024, 0.0028), alba=(0.0018, 0.0010))   # pec: field() ya trae un surco de 3.5 mm
+
 def build(folder, version="out", texdir=None):
     """torso (mallas 1..3 de pants_<version>_sub). (26/10 b) con texdir: el relieve del normal map de TorsoBody va a la malla
     (base para todos, mas hondo en el atletico, casi nada en el robusto: torso_relief.REGION)"""
@@ -169,7 +178,7 @@ def build(folder, version="out", texdir=None):
         hp = tr.relief_hp(T, texdir)
         bm = back_mask(T["Pw"])
         kg = tuple(tr.region_factors(nm, bm, T["Pw"])[2] for nm in ("normal", "robusto", "atletico"))
-    return build_mesh(T, detail_masks, field, kR=(0.95, 0.70), kA=(0.55, 1.00), sculpt_fn=sculpt_torso, inflate=0.8, hp=hp, kg=kg)
+    return build_mesh(T, detail_masks, field, kR=(0.95, 0.70), kA=TORSO_KA, sculpt_fn=sculpt_torso, inflate=TORSO_INFLATE, hp=hp, kg=kg)
 
 # ---------------------------------------------------------------- (26/10 b) esculpido del torso por variante (m, a lo largo de
 # la normal). Atletico: volumen real de los musculos (borde y masa del pectoral, esternon, cinturon de Adonis con los oblicuos
@@ -182,16 +191,20 @@ def sculpt_torso(P):
     hA = np.zeros(len(P)); hR = np.zeros(len(P))
     # ---- atletico, adelante
     yp = 1.284 + 0.010 * ((x - 0.075) / 0.050) ** 2
-    hA += (-0.0035 * g((y - yp) / 0.0075) + 0.0030 * g((y - yp - 0.030) / 0.022)) * g((x - 0.075) / 0.050) * front
-    hA += -0.0020 * g(x / 0.009) * ss(1.27, 1.30, y) * (1 - ss(1.43, 1.46, y)) * front
+    kp, kb = SCULPT_A["pec"]
+    hA += (kp * g((y - yp) / 0.0075) + kb * g((y - yp - 0.030) / 0.022)) * g((x - 0.075) / 0.050) * front
+    # (26/10 d) sin el surco propio del esternon: el del normal map (llevado a la malla y en la textura) ya alcanza
     ax_, ay_, bx_, by_ = 0.126, 1.088, 0.046, 1.000
     ux, uy = bx_ - ax_, by_ - ay_; Lu = np.hypot(ux, uy)
     t = ((x - ax_) * ux + (y - ay_) * uy) / (Lu * Lu); ds = ((x - ax_) * uy - (y - ay_) * ux) / Lu
     on = ss(-0.05, 0.20, t) * (1 - ss(0.85, 1.05, t)) * (front + 0.5 * side)
-    hA += (-0.0030 * g(ds / 0.0075) + 0.0035 * g((ds - 0.016) / 0.012)) * on
+    ka_, kb_ = SCULPT_A["adonis"]
+    hA += (ka_ * g(ds / 0.0075) + kb_ * g((ds - 0.016) / 0.012)) * on
     # (26/10 c) linea alba y esternon: el surco del medio quedaba de 7..9 mm (el del normal map llevado a la malla x 2 mas el de la
     # malla): se rellena el fondo para que quede de ~5 mm, redondeado (dos panzas de musculo, no una zanja)
-    hA += (0.0040 * (1 - ss(1.25, 1.30, y)) + 0.0025 * ss(1.25, 1.30, y)) * g(x / 0.010) * ss(1.07, 1.10, y) * (1 - ss(1.44, 1.47, y)) * front
+    # (26/10 d) con el normal map x 1.25 (antes x 2) el surco es menos hondo: menos relleno
+    la, ls = SCULPT_A["alba"]
+    hA += (la * (1 - ss(1.25, 1.30, y)) + ls * ss(1.25, 1.30, y)) * g(x / 0.010) * ss(1.07, 1.10, y) * (1 - ss(1.44, 1.47, y)) * front
     # ---- atletico, atras: volumenes anchos (la malla tiene aristas de 6.5 mm: nada de surcos finos, esos van en la textura):
     #      dorsales abajo y a los costados (V), redondo mayor e infraespinoso, el rombo del trapecio medio / inferior, el borde del
     #      omoplato, erectores con el surco de la columna, y el valle suave entre dorsales y erectores
@@ -234,9 +247,12 @@ def arm_bone_factors(t):
     return {"M_DELT": (k["delt"], np.zeros(3)), "M_ARM": (arm, np.array([0.0, 0.0, armB])),
             "M_FORE": (k["fore"], np.zeros(3)), "M_FORE2": (k["fore"], np.zeros(3))}
 
-ARM_KG = (0.8, 0.3, 1.4)   # (26/10 b/c) relieve del normal map en la malla del brazo: (base, robusto, atletico). (26/10 c) menos que
-                           # antes (1.0 / 2.0) y recortado a +-3 mm: el mapa del brazo tiene marcas que integradas dan pozos (el codo atras,
-                           # una banda arriba entre el deltoides y el biceps); el volumen de los musculos lo pone sculpt_arm
+# (26/10 b/c) relieve del normal map en la malla del brazo: (base, robusto, atletico), recortado a +-3 mm (el mapa del brazo tiene
+# marcas que integradas dan pozos: el codo atras, una banda arriba entre el deltoides y el biceps); el volumen de los musculos lo
+# pone sculpt_arm. (26/10 d) atletico 1.4 -> 1.15: sumado a sculpt_arm y a la definicion quedaba 1.5 veces TorsoBody
+ARM_KG = (0.8, 0.3, 1.15)
+ARM_KA = (0.35, 0.35)       # (26/10 d) relieve de banda propio de la malla del brazo en el atletico (antes 0.45)
+ARM_HA = 1.6                # (26/10 d) la anatomia de la base en el atletico (antes 1.9 veces)
 
 # ---------------------------------------------------------------- (26/10 c) brazo esculpido: anatomia en un marco propio del brazo
 # t = distancia a lo largo del brazo desde la costura del hombro (m: deltoides 0..0.09, codo ~0.18, muneca ~0.43); th = angulo
@@ -290,7 +306,7 @@ def sculpt_arm(P):
     hB = np.zeros(len(P))
     for h, t0, th0, st, sth in ARM_ANAT: hB += 1e-3 * h * _bump(t, th, t0, th0, st, sth)
     hB -= 0.0008 * ss(0.33, 0.40, t)                         # muneca mas fina (tendones)
-    hA = 1.9 * hB
+    hA = ARM_HA * hB
     hA += 0.0010 * _bump(t, th, 0.095, -88, 0.022, 30)        # pico del biceps
     hA += -0.0006 * _bump(t, th, 0.145, 95, 0.014, 26)        # herradura del triceps mas marcada
     hA += 0.0008 * _bump(t, th, 0.230, -120, 0.030, 50)       # antebrazo mas grueso cerca del codo
@@ -310,7 +326,7 @@ def build_arm(folder, fn="arm", mesh=0, texdir=None):
         hp = 0.003 * np.tanh(hp / 0.003)          # (26/10 c) sin pozos: +-3 mm como mucho
         one = np.ones(len(T["Pw"]))
         kg = tuple(k * one for k in ARM_KG)
-    return build_mesh(T, arm_masks, None, sigma=0.015, kR=(0.90, 0.60), kA=(0.45, 0.45), hp=hp, kg=kg, sculpt_fn=sculpt_arm,
+    return build_mesh(T, arm_masks, None, sigma=0.015, kR=(0.90, 0.60), kA=ARM_KA, hp=hp, kg=kg, sculpt_fn=sculpt_arm,
                       fill_fn=arm_fill)
 
 def arm_fill(P, dn):

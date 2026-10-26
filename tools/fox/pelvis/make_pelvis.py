@@ -122,12 +122,18 @@ def main():
         if ver == "pants_out_sub":
             if len(sys.argv) > 3: np.savez(sys.argv[3], P=slots["pos"], F=Fs, N=slots["nrm"], T=slots["tan"], UV=slots["uv"])
             info = gen_textures(slots, Fs, outdir)
-            print("  texturas de la pelvis: cobertura %.1f %%, poros std %.3f, albedo x2 %.3f..%.3f" % (100 * info["cover"], info["dstd"], info["alb"][0], info["alb"][1]))
+            print("  texturas de la pelvis: cobertura %.1f %%, ondulacion std %.3f, albedo x2 %.3f..%.3f" % (100 * info["cover"], info["dstd"], info["alb"][0], info["alb"][1]))
+            # (26/10 d) detalle de piel real (poros y lineas finas del torso) para la pelvis
+            import skin_detail
+            texdir = os.environ.get("TB_TEX", os.path.join(common, "..", "tex"))
+            r = skin_detail.build(common, texdir, outdir)
+            print("  detalle de piel: normal std %s (torso %s), albedo x std %.4f" % (np.round(r["nstd"], 4), np.round(r["src_nstd"], 4), r["astd"]))
 
 
 # ---------------------------------------------------------------- texturas propias de la pelvis (el PS las lee en el cuadrante
 # u 0.5..1, v 0.5..1 de la textura del torso, reescalado a 0..1: 2048 x 2048 = ~1600 texeles por metro):
-#   pes_var_pelvis_n.dds     BC5 SNORM: poros y lineas finas de la piel (delta del normal map; el normal map del torso ahi es plano)
+#   pes_var_pelvis_n.dds     BC5 SNORM: ondulacion suave (delta del normal map; el normal map del torso ahi es plano). (26/10 d) Los poros
+#                            y las lineas finas van en pes_var_pelvis_detail_n/_a.dds (skin_detail.py, piel real del torso)
 #   pes_var_pelvis_alb.dds   BC4 UNORM: albedo x (2 v): el tono del torso junto al borde (+3.6 %) y manchitas suaves; pliegues
 #   pes_var_pelvis_skin_a/b  BC5: brillo / rugosidad, translucidez / rubor (como pes_var_torso_skin_*)
 def gen_textures(slots, Fs, outdir, size=2048):
@@ -140,11 +146,12 @@ def gen_textures(slots, Fs, outdir, size=2048):
     G = bake(T, None, W=size, H=size, vmax=1.0)
     mask = G["mask"]; ii = np.where(mask); Pt = G["P"][ii]
     rng = np.random.default_rng(1234)
-    # ---- poros: ruido fino (sigma 0.7 px) y algo de ondulacion (3 px); pendiente en el espacio uv -> delta (rojo = T, verde = B)
-    h = gaussian_filter(rng.normal(size=(size, size)), 0.7) * 1.0 + gaussian_filter(rng.normal(size=(size, size)), 3.0) * 2.2
+    # ---- (26/10 d) solo una ondulacion suave (6 px = ~4 mm): los poros y las lineas finas ahora son los de la piel del torso
+    #      (pes_var_pelvis_detail_*, skin_detail.py, que el PS lee a la escala del torso); antes era ruido al azar
+    h = gaussian_filter(rng.normal(size=(size, size)), 6.0)
     gy, gx = np.gradient(h)
     d = np.stack([-gx, -gy], -1)
-    d *= 0.065 / max(d[mask].std(), 1e-9)
+    d *= 0.03 / max(d[mask].std(), 1e-9)
     # zonas (posicion de reposo): raya entre los gluteos, pliegue de abajo del gluteo, ingle
     x, y, z = Pt[:, 0], Pt[:, 1], Pt[:, 2]
     th = np.degrees(np.arctan2(x, z - pm.ZC))

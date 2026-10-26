@@ -61,7 +61,8 @@ def texture_height(T, G, base_xy, sigma=0.005):
 # veria dos veces). Normal: adelante todo el volumen pasa a la malla; espalda suave. Atletico: la malla 2.2 veces mas honda.
 # Robusto: casi lisa (la grasa).
 REGION = {"normal": ((1.00, 1.00, 1.00), (0.30, 1.10, 0.60)),
-          "atletico": ((1.35, 1.60, 2.00), (0.60, 1.35, 0.60)),
+          "atletico": ((1.00, 1.25, 1.25), (0.50, 1.25, 0.60)),   # (26/10 d) antes (1.35, 1.60, 2.00): manchas negras
+          # en el esternon y la linea alba (la normal llegaba a 80 grados con la malla, la textura y la definicion juntas)
           "robusto": ((0.50, 0.45, 0.15), (0.08, 0.70, 0.15))}
 
 def region_factors(name, bm, P=None):

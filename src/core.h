@@ -413,6 +413,8 @@ ID3D11ShaderResourceView* SpineTextureFor(uint64_t vsHash, UINT indexCount);   /
 ID3D11ShaderResourceView* BaseTextureFor(uint64_t vsHash, UINT indexCount);    // (26/10 b) manos.cpp: base esculpida (t20 del PS de la piel, x289)
 bool SkinTexturesFor(uint64_t vsHash, UINT indexCount, ID3D11ShaderResourceView* out[2]);   // (26/10 b) manos.cpp: piel real (t21 / t24, x293)
 ID3D11ShaderResourceView* PelvisAlbedoFor(uint64_t vsHash, UINT indexCount);   // (26/10 c) manos.cpp: pelvis sin short (t23 del PS de la piel)
+bool PelvisDetailFor(uint64_t vsHash, UINT indexCount, ID3D11ShaderResourceView* out[2]);   // (26/10 d) manos.cpp: detalle de piel de la pelvis (t34 / t35)
+bool TiltTexturesFor(uint64_t vsHash, UINT indexCount, ID3D11ShaderResourceView* out[3]);   // (26/10 d) manos.cpp: tope del relieve (t31..t33, x307)
 float MuscleVariantT(uint32_t id, bool* own);   // (26/10) musculo.cpp: variante del jugador (-1 robusto .. 1 atletico; propia o la general)
 extern std::atomic<bool> g_menuOpen;
 extern std::atomic<int> g_replacedCount, g_failedCount;

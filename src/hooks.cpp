@@ -689,10 +689,10 @@ template<int V> static void STDMETHODCALLTYPE hk_SetCS(ID3D11DeviceContext* c, I
 // ---------------------------------------------------------------- reglas antes de cada dibujo
 // lo que una regla enlaza se devuelve a como estaba despues del dibujo (como "post ps-t20 = ..." en 3DMigoto)
 struct Saved { bool ps; bool srv; int slot; IUnknown* prev; };
-struct DrawScope { Saved s[12]; int n = 0; FaceGenExtra brow; bool skip = false; ID3D11PixelShader* restorePS = nullptr; LodIA lod; GlassScope glass; RingScope ring; };   // glass: vidrio de los menus (glass.cpp)   // lod.count > 0: dibujar con la geometria de LOD0 (lod.cpp)
+struct DrawScope { Saved s[24]; int n = 0; FaceGenExtra brow; bool skip = false; ID3D11PixelShader* restorePS = nullptr; LodIA lod; GlassScope glass; RingScope ring; };   // glass: vidrio de los menus (glass.cpp)   // lod.count > 0: dibujar con la geometria de LOD0 (lod.cpp)
 
 static void Remember(ID3D11DeviceContext* c, DrawScope& d, bool ps, bool srv, int slot) {
-    if (d.n >= 12) return;
+    if (d.n >= 24) return;   // (26/10 d) 12 -> 24: el torso ya enlaza 11 (t127, t16..t21, t24, t31..t33); lo que no entra no se devolveria
     Saved& s = d.s[d.n++]; s.ps = ps; s.srv = srv; s.slot = slot; s.prev = nullptr;
     if (srv) { ID3D11ShaderResourceView* v = nullptr; if (ps) c->PSGetShaderResources(slot, 1, &v); else c->VSGetShaderResources(slot, 1, &v); s.prev = v; }
     else { ID3D11Buffer* b = nullptr; if (ps) c->PSGetConstantBuffers(slot, 1, &b); else c->VSGetConstantBuffers(slot, 1, &b); s.prev = b; }
@@ -890,7 +890,15 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
             if (SkinTexturesFor(vs->hash, t_drawVerts, sk)) { Remember(c, d, true, true, 21); Remember(c, d, true, true, 24); c->PSSetShaderResources(21, 1, &sk[0]); c->PSSetShaderResources(24, 1, &sk[1]); }
         }
         // (26/10 c) pelvis sin short (SinCamiseta, tecla 4): albedo propio en t23 (su presencia le dice al PS que es la pelvis)
-        if (ID3D11ShaderResourceView* pa = PelvisAlbedoFor(vs->hash, t_drawVerts)) { Remember(c, d, true, true, 23); c->PSSetShaderResources(23, 1, &pa); }
+        if (ID3D11ShaderResourceView* pa = PelvisAlbedoFor(vs->hash, t_drawVerts)) {
+            Remember(c, d, true, true, 23); c->PSSetShaderResources(23, 1, &pa);
+            ID3D11ShaderResourceView* pd[2] = {};   // (26/10 d) y su detalle de piel real (t34 normal, t35 albedo)
+            if (PelvisDetailFor(vs->hash, t_drawVerts, pd)) { Remember(c, d, true, true, 34); Remember(c, d, true, true, 35); c->PSSetShaderResources(34, 2, pd); }
+        }
+        {   // (26/10 d) tope del relieve: inclinacion de la malla de cada version (t31 base, t32 atletico, t33 robusto)
+            ID3D11ShaderResourceView* tl[3] = {};
+            if (TiltTexturesFor(vs->hash, t_drawVerts, tl)) { Remember(c, d, true, true, 31); Remember(c, d, true, true, 32); Remember(c, d, true, true, 33); c->PSSetShaderResources(31, 3, tl); }
+        }
     }
     // 19/10: la boca (63fab7) hereda el b11 (tipo de pelo + semilla de la cara) de la ultima cara dibujada en este contexto:
     // variacion de dientes/encias por jugador
