@@ -2,6 +2,7 @@
 // PES21 (24/10): con el VS 1c02a92a (reemplazo propio) aclara y hace latir el musculo elegido en el menu Fisico (x174).
 // PES21 (26/10, v12.7): musculos con textura (x305): el VS manda en v1.xyz cuanto marcar el musculo que trabaja (mas relieve
 // grande del normal map) y las venas (textura pesVeins en t29, solo brazos y manos; un poco mas oscuras y frias).
+// PES21 (26/10): columna marcada en todos los torsos (t19, x288).
 // PES21 (26/10): relieve de TorsoBody al derecho (x286: el verde de sus normal maps estaba invertido para el juego).
 // PES21 (26/10): variantes robusto / atletico de TorsoBody (pes_variants.hlsli): en el torso, mapas normales delta (t16 robusto,
 // t17 atletico) y estrias del robusto un poco mas claras (t18); definicion del normal map: menos en el robusto, mas en el atletico
@@ -57,6 +58,7 @@ Texture2D<float4> pesVeins     : register(t29);   // (26/10, v12.7) venas de bra
 Texture2D<float4> pesVarRob    : register(t16);   // (26/10) variantes del torso: normal delta del robusto (BC5 SNORM, v 0..0.5 del torso)
 Texture2D<float4> pesVarAtl    : register(t17);   //         normal delta del atletico
 Texture2D<float4> pesVarStr    : register(t18);   //         estrias del robusto (mascara de color, BC4)
+Texture2D<float4> pesSpine     : register(t19);   // (26/10) columna marcada de todos los torsos de TorsoBody (normal delta BC5 SNORM, v 0..0.5)
 
 
 // 3Dmigoto declarations
@@ -188,6 +190,16 @@ void main(
       float l2 = dot(r2.xy, r2.xy); if (l2 > 0.94) r2.xy *= rsqrt(l2 / 0.94);
     }
     if (vrArm > 0.001 && P305.x > 0.5) lbVein = max(lbVein * (1.0 - 0.7 * vrWr * vrArm), 0.25 * vrWa * vrArm * max(P305.z, 0.0));
+  }
+  {   // (26/10) columna marcada (todos los torsos de TorsoBody, con o sin variante): surco de la columna y erectores (x288 = fuerza;
+      // la DLL enlaza t19 solo en los dibujos del torso). El robusto la tapa un poco y el atletico la marca un poco mas
+    uint spW = 0, spH = 0; pesSpine.GetDimensions(spW, spH);
+    float spK = IniParams.Load(int2(288,0)).x;
+    if (vrBody && spW > 0 && spK > 0.001 && v2.y < 0.5) {
+      float2 sd = pesSpine.SampleBias(g_samplerLinear_Clamp_s, float2(v2.x, v2.y * 2.0), bBN).xy;
+      r2.xy += sd * min(spK, 3.0) * (1.0 - 0.5 * vrWr) * (1.0 + 0.25 * vrWa);
+      float l2 = dot(r2.xy, r2.xy); if (l2 > 0.94) r2.xy *= rsqrt(l2 / 0.94);
+    }
   }
   if (lbVein > 0.002) {   // (26/10, v12.7) venas: relieve de la textura de venas (mismo espacio tangente que arm_nrm) + mascara para el tono
     uint lvW = 0, lvH = 0; pesVeins.GetDimensions(lvW, lvH);

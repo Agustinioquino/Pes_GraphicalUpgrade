@@ -258,6 +258,20 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
   Las vistas previas (preview_nm.py) usan la convencion de la textura = lo que muestra el juego con x286 = 1.
 - Menu Fisico: el selector "Torso y brazos" no resalta nada (el brillo tapaba la variante); circulo / Volver desde cualquier
   pagina del mod vuelve a la primera pestana de Fisico (cursor en "Musculatura  >"); L1 / R1 siguen de a una pagina.
+- (26/10) COLUMNA MARCADA (x288, todos los torsos, con o sin variante): torso_maps.height_spine -> textures\
+  pes_var_torso_spine_n.dds (BC5_SNORM 2048x1024, make_variants.py --spine-only), t19 del PS de la piel (manos.cpp
+  SpineTextureFor: solo en los dibujos del torso, no depende de x285). Surco del sacro a C7 (espalda baja: 4.5 mm de hondo,
+  sigma 1 cm; alta: 2.2 mm, 0.65 cm), erectores como dos columnas (4 mm a 3.6 cm de la linea media abajo, 1.4 mm arriba), su
+  borde de afuera, apofisis apenas y C7. Linea media de la malla: z -0.036 (lordosis, y 1.07..1.16) .. -0.064 (y 1.43). El PS
+  la multiplica por (1 - 0.5 robusto) (1 + 0.25 atletico). Vista previa: PNM_BACK=1 PNM_SPINE=k PNM_LIGHT=x,y,z preview_nm.py.
+- (26/10) SELECTORES DE HOMBROS (menu Fisico, pagina 1, y ventana del mod; por jugador): fila 287 = x inclinacion (0.7 muy
+  caidos .. 1.3 muy rectos), y tipo (1 normales, 2 estrechos, 3 anchos, 4 redondos), z tamano (0.7 .. 1.3). Van por los
+  huesos (ComputeFactors): inclinacion = la tapa del deltoides sube / baja 4 cm por unidad (y se abre 1 cm) y el trapecio
+  junto al cuello, la base del cuello al reves; la clavicula y el omoplato acompanan. Tipo: ancho -0.45 / +0.50 (como el
+  slider "Ancho de hombros") y deltoides -0.08 / +0.04; redondos = deltoides +0.18 y frontal / posterior +0.45. Tamano:
+  deltoides y ancho x0.8 de la variacion, trapecio, clavicula y omoplato acompanan. La ropa los sigue (zonas de la tela).
+  En el menu Fisico K_VARIANT es ahora "selector de forma" con tabla de pasos (kLSel); ninguno resalta el cuerpo.
+  Simulacion sin el juego: tools/fox/sim/hombros.py (copia de las cuentas; CASES=caidos,normal,rectos,...).
 - Brazos: grosor por los huesos (ComputeFactors: biceps +0.05 rob / +0.04 atl, triceps +0.09 / +0.04, antebrazo +0.04 / +0.02,
   deltoides +0.03 / +0.04; la manga acompana con dsk_sleeve).
 - Ropa: el reposo de la tela suma pesTorsoField con la t del juego de zonas de la prenda (z de su cabecera en t121; la DLL la

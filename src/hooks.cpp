@@ -880,6 +880,8 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
                 c->PSSetShaderResources(16, 3, vm);
             }
         }
+        // (26/10) columna marcada: en todos los torsos (aunque no haya variantes en uso)
+        if (ID3D11ShaderResourceView* sp = SpineTextureFor(vs->hash, t_drawVerts)) { Remember(c, d, true, true, 19); c->PSSetShaderResources(19, 1, &sp); }
     }
     // 19/10: la boca (63fab7) hereda el b11 (tipo de pelo + semilla de la cara) de la ultima cara dibujada en este contexto:
     // variacion de dientes/encias por jugador
