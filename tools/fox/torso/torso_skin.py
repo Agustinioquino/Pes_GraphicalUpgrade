@@ -45,7 +45,12 @@ def zones(P):
     flush = np.maximum(g(x / 0.06) * ss(1.32, 1.38, y) * (1 - ss(1.48, 1.53, y)) * front, 0.8 * ss(1.46, 1.51, y) * g((x - 0.12) / 0.07))
     flush = np.maximum(flush, 0.5 * g(x / 0.08) * ss(1.36, 1.42, y) * back)
     red = DEF["red"] + 0.20 * flush + 0.06 * _N(P * 1.7)
-    return np.stack([spec, rough, trans, red], -1)
+    out = np.stack([spec, rough, trans, red], -1)
+    # (26/10 e) el pezon y la areola: los valores de base (sin menos brillo ni mas translucidez: se veia de otro color)
+    from torso_variants import nipple_mask
+    nm = nipple_mask(P)[:, None]
+    base = np.array([DEF["spec"], DEF["rough"], DEF["trans"], DEF["red"]])
+    return base + (out - base) * (1.0 - nm)
 
 def build_skin(G):
     """G = uvbake (2048 x 1024, v 0..0.5) con extra[..., 0] = desvanecido de las costuras. Devuelve (H, W, 3) en DEF afuera"""

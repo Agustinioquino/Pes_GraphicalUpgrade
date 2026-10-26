@@ -182,11 +182,20 @@ void main(
   bool pel = vrBody && paW > 0;
   float2 pelUV = saturate((v2.xy - 0.5) * 2.0);
   float4 P293 = IniParams.Load(int2(293,0));
+  // (26/10 e) los pezones en la textura del torso de TorsoBody (u 0.2944 / 0.2056, v 0.233; ~1.5 cm = 0.011 en u): ahi la
+  // definicion y los poros extra no entran (el pezon queda como lo dibujo TorsoBody; tools/fox/torso: nipple_mask)
+  float nipM = 0.0;
+  if (vrTm > 0.5 && !pel) {
+    float2 q1 = (v2.xy - float2(0.2944, 0.2329)) / float2(0.0075, 0.0068), q2 = (v2.xy - float2(0.2056, 0.2319)) / float2(0.0075, 0.0068);
+    nipM = max(exp(-0.5 * dot(q1, q1)), exp(-0.5 * dot(q2, q2)));
+  }
+  float armBand = 0.0;
   if (vrBody && tbW >= 4096 && vrTm < 0.5 && P293.w > 0.5) {
-    // (26/10 b) union del brazo con el torso (w293): el normal map del torso es casi liso en los 2 cm de la costura y el del
-    // brazo no (relieve del doble): cerca del anillo del hombro (del lado del brazo) el relieve del brazo baja al del torso
+    // (26/10 b) union del brazo con el torso (w293). (26/10 e) El relieve ya va cosido en las texturas (torso_seam.py: el mismo
+    // micro relieve 3D a los dos lados del hombro, en pes_var_*_base_n). Lo que queda aca: el albedo de arm_bsm es un 4 % mas
+    // claro en los 1 .. 6 cm junto a la costura (una franja clara en el hombro): se baja al tono del torso
     float sA = dot(float3(abs(w2.w), w2.z, 0.02) - float3(0.2631, 1.3704, 0.0195), float3(0.7611, -0.6432, -0.0839));
-    if (abs(w2.w) > 0.20 && w2.z > 1.15) r2.xy *= lerp(0.55, 1.0, smoothstep(0.0, 0.03, sA));
+    if (abs(w2.w) > 0.20 && w2.z > 1.15) armBand = smoothstep(0.003, 0.012, sA) * (1.0 - smoothstep(0.045, 0.075, sA));
   }
   {   // (26/10 b) base esculpida (x289): el relieve que dibuja el normal map de TorsoBody ahora esta en la malla (filas 7..9 de los
       // datos del VS): esta textura le saca a la textura lo que la malla ya muestra (si no, se veria dos veces) y deja la espalda
@@ -229,7 +238,7 @@ void main(
     if (abs(defM - 1.0) > 0.01) {
       float3 nM = g_tex_normal.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN + 3.5).xyw;
       float2 mM = float2(nM.x * nM.z, nM.y) * 2.0 - 1.0;
-      r2.xy += (defM - 1.0) * mM;
+      r2.xy += (defM - 1.0) * mM * (1.0 - nipM);   // (26/10 e) el pezon no se agranda (quedaba como una rosca)
       float l2 = dot(r2.xy, r2.xy); if (l2 > 0.94) r2.xy *= rsqrt(l2 / 0.94);
     }
   }
@@ -355,7 +364,7 @@ void main(
       skA.zw = pesSkinB.SampleBias(g_samplerLinear_Clamp_s, suv, bBD).xy;
     }
     float3 nbS = g_tex_normal.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN + 2.5).xyw;
-    float hf = saturate(length(nBase0 - (float2(nbS.x * nbS.z, nbS.y) * 2.0 - 1.0)) / 0.12);   // poros y lineas finas
+    float hf = saturate(length(nBase0 - (float2(nbS.x * nbS.z, nbS.y) * 2.0 - 1.0)) / 0.12) * (1.0 - nipM);   // poros y lineas finas (26/10 e: no en el pezon)
     r1.x = saturate(skA.x * (1.0 - 0.35 * hf) * (P293.y > 0.0 ? P293.y : 1.0));
     r1.y = saturate(skA.y + 0.10 * hf + clamp(IniParams.Load(int2(306,0)).x, -0.3, 0.3));   // (26/10 d) x306: mas mate (+) / satinada (-)
     float trT = g_tex_translucent.Sample(g_samplerLinear_Clamp_s, v2.xy).y;   // relativo al 0.143 de TorsoBody (dedos, etc.)
@@ -377,6 +386,7 @@ void main(
   r1.w = min(0.930000007, r1.w);
   r2.yzw = g_tex_diffuse.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBD).xyz;
   if (abs(skRed) > 0.001) r2.yzw *= 1.0 + skRed * float3(0.10, -0.03, -0.05);   // (26/10 b) rubor de la piel real
+  if (armBand > 0.001) r2.yzw *= 1.0 - 0.035 * armBand;   // (26/10 e) la franja clara del brazo junto al hombro, al tono del torso
   if (pel) r2.yzw *= pesPelvisAlb.SampleBias(g_samplerLinear_Clamp_s, pelUV, bBD).x * 2.0 * pdAlb;   // (26/10 c) tono y manchas de la pelvis (d: y el detalle)
   {   // (26/10, v12.6) unas de los jugadores con textura de brazo propia (caras reales: arm_bsm.ftex de la cara, el atlas de
       // Konami a 2048 con las unas pintadas para la mano de Konami). Solo en la mano de TorsoBody (VS 1c02a92a: v3.w en [2, 3];

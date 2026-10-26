@@ -91,6 +91,12 @@ def field(p, t):
 # ---------------------------------------------------------------- 2. relieve del modelo (por vertice)
 NIPPLE = np.array([0.0594, 1.3027, 0.1579])
 NAVEL = np.array([0.0, 1.0608, 0.1750])
+# (26/10 e) el pezon y la areola quedan como en TorsoBody: sin relieve a la malla, sin correccion de la base, sin mapas delta,
+# sin zonas de piel (y en el PS sin definicion ni poros extra): con todo eso sumado se veia como una rosca. 1 en el pezon,
+# 0 a ~2.5 cm (los dos lados; en 3D, asi la espalda no entra)
+def nipple_mask(P, r=0.013):
+    q = np.stack([np.abs(P[:, 0]), P[:, 1], P[:, 2]], 1)
+    return g(np.linalg.norm(q - NIPPLE, axis=1) / r)
 
 def lap_smooth(W, X, fixed, iters, lam=0.5):
     X = X.copy(); free = np.ones(len(X), bool); free[fixed] = False

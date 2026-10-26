@@ -1,7 +1,10 @@
 # PES21 FX (26/10 c) - genera las pelvis "sin short" (SinCamiseta, tecla 4): copias de pants_out_sub / pants_in_sub /
-# pants_out_inner_sub / pants_out_sub_tight con la malla 0 (el short) cambiada por la pelvis de piel (pelvis_mesh.py), pesos
-# soldados al torso y a los muslos, normales de los bordes iguales a las de los anillos, uv en el cuadrante libre de abajo a la
-# derecha de la textura del torso (u 0.5..1, v 0.5..1: piel pareja en torso_N_bsm, normal map plano) y tangentes de esas uv.
+# pants_out_inner_sub / pants_out_sub_tight con la malla 0 (el short) cambiada por la pelvis de piel, pesos soldados al torso y
+# a los muslos, normales de los bordes iguales a las de los anillos, uv en el cuadrante libre de abajo a la derecha de la textura
+# del torso (u 0.5..1, v 0.5..1: piel pareja en torso_N_bsm, normal map plano) y tangentes de esas uv.
+# (26/10 e) La forma es anatomica (pelvis_surface.py: MakeHuman CC0 deformado sobre TorsoBody) y la parte de abajo del torso
+# (malla 3, por debajo de y 1.105) toma esa misma forma (sin el escalon de la pretina): tambien se escribe en la copia. Las
+# variantes robusto / atletico de esos torsos las genera make_variants.py con TB_SINSHORT=<carpeta de salida>.
 # Uso: python3 make_pelvis.py <carpeta common de TorsoBody> <carpeta de salida> [npz de la vista previa]
 import sys, os
 import numpy as np
@@ -35,8 +38,18 @@ def smooth_normals(N, F, fixed, iters=2):
     return N
 
 def build(common, ver):
-    top, legL, legR, fp, mp = pm.load_rings(common, ver)
-    M = pm.build_pelvis(top, legL, legR, torso_mesh=mp[3])
+    import pelvis_surface as psf
+    top0, legL, legR, fp, mp = pm.load_rings(common, ver)
+    from fmdl import Fmdl, meshes
+    th = meshes(Fmdl(os.path.join(common, "thigh_short.fmdl")))[0]
+    S, Ts = psf.warp_to_torsobody(mp, th, {1: legL["P"], -1: legR["P"]})
+    pos3, nrm3, tan3, R = psf.reshape_torso(S, Ts, mp[3])
+    m3n = dict(mp[3]); m3n["pos"] = pos3.astype(np.float32); m3n["nrm"] = nrm3.astype(np.float32); m3n["tan"] = tan3.astype(np.float32)
+    pn = [b["name"] for b in fp.bones]
+    top = pm.ring_data(m3n, pn, lambda P: P[:, 1] < 1.03, 1)[0]
+    assert len(top["P"]) == len(top0["P"]), "el borde del torso cambio de cantidad de vertices"
+    M = psf.build_on_surface(top, legL, legR, S, Ts)
+    M["torso3"] = (pos3, nrm3, tan3, R)
     P = M["P"]
     F = pm.orient_faces(P, M["F"], pm.outward_dir)
     N = pm.finalize_normals(M, top, legL, legR, F)
@@ -115,10 +128,12 @@ def main():
     os.makedirs(outdir, exist_ok=True)
     for ver in VERSIONS:
         M, P, F, N, slots, Fs = build(common, ver)
-        info = pf.write_pelvis(os.path.join(common, ver + ".fmdl"), os.path.join(outdir, ver + ".fmdl"), slots, Fs,
-                               thigh_fmdl=os.path.join(common, "thigh_short.fmdl"))
-        print("%s: %d vertices soldados, %d slots (entran %d), %d triangulos (entran %d), material %s, renombres %s" % (
-            ver, len(P), info["verts"][0], info["verts"][1], info["tris"][0], info["tris"][1], info["mat"], ", ".join(info["renames"])))
+        dst = os.path.join(outdir, ver + ".fmdl")
+        info = pf.write_pelvis(os.path.join(common, ver + ".fmdl"), dst, slots, Fs, thigh_fmdl=os.path.join(common, "thigh_short.fmdl"))
+        pos3, nrm3, tan3, R = M["torso3"]
+        pf.write_mesh_geom(dst, dst, 3, pos3, nrm3, tan3)
+        print("%s: %d vertices soldados, %d slots (entran %d), %d triangulos (entran %d), material %s, renombres %s; torso abajo con la forma de la pelvis (hasta %.1f mm)" % (
+            ver, len(P), info["verts"][0], info["verts"][1], info["tris"][0], info["tris"][1], info["mat"], ", ".join(info["renames"]), 1e3 * R["moved"]))
         if ver == "pants_out_sub":
             if len(sys.argv) > 3: np.savez(sys.argv[3], P=slots["pos"], F=Fs, N=slots["nrm"], T=slots["tan"], UV=slots["uv"])
             info = gen_textures(slots, Fs, outdir)
@@ -156,7 +171,7 @@ def gen_textures(slots, Fs, outdir, size=2048):
     x, y, z = Pt[:, 0], Pt[:, 1], Pt[:, 2]
     th = np.degrees(np.arctan2(x, z - pm.ZC))
     cleft = pm.g(pm.angdiff(th, 180) / 9) * pm.ss(0.97, 0.92, y)
-    fold = pm.g((y - 0.848) / 0.010) * (pm.g(pm.angdiff(th, 150) / 30) + pm.g(pm.angdiff(th, -150) / 30)) * (z < 0.02)
+    fold = pm.g((y - 0.838) / 0.010) * (pm.g(pm.angdiff(th, 150) / 30) + pm.g(pm.angdiff(th, -150) / 30)) * (z < 0.02)
     ingle = pm.ss(0.95, 0.88, y) * (pm.g(pm.angdiff(th, 25) / 10) + pm.g(pm.angdiff(th, -25) / 10)) * (z > 0.08)
     # ---- desvanecido hacia los bordes (cintura y muslos): ahi queda como el torso / el muslo
     fade = pm.ss(0.995, 0.975, y) * pm.ss(0.808, 0.828, y + 0.02 * (np.abs(x) > 0.06))

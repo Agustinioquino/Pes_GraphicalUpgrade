@@ -84,10 +84,14 @@ def main():
         nidx = {}
         texdir = os.environ.get("TB_TEX", os.path.join(folder, "..", "tex"))
         import torso_tilt
-        for ver in TORSO_VERSIONS:
-            T = build(folder, ver, texdir)
+        # (26/10 e) TB_SINSHORT = carpeta con los pants_*_sub.fmdl "sin short" (make_pelvis.py): la parte de abajo del torso tiene
+        # otra forma (la de la pelvis), asi que son versiones mas del modelo (el VS elige por vertice la version que coincide)
+        sinshort = os.environ.get("TB_SINSHORT")
+        srcs = [(folder, ver) for ver in TORSO_VERSIONS] + ([(sinshort, ver) for ver in TORSO_VERSIONS] if sinshort else [])
+        for src_folder, ver in srcs:
+            T = build(src_folder, ver, texdir)
             rows = variant_rows(T)
-            if ver == "out":   # (26/10 d) inclinacion de la malla de cada version para el tope del relieve del PS (x307)
+            if ver == "out" and src_folder == folder:   # (26/10 d) inclinacion de la malla de cada version para el tope del relieve del PS (x307)
                 tm, tmask = torso_tilt.tilt_maps(T, rows, 1024, 512, 0.5)
                 print("  pes_var_torso_tilt_b/a/r.dds: " + torso_tilt.write_tilt(outdir, "pes_var_torso", tm, tmask, write_dds_bc5_snorm, mipchain))
             for k in range(3):
@@ -98,7 +102,7 @@ def main():
                     same = np.abs(pos - bases[k][0]).max(1) < 1e-6
                     r = r.copy(); r[1:, same] = per_mesh[k][0][1:, same]
                 bases[k].append(pos); per_mesh[k].append(r); nidx[k] = T["parts"][k]["nidx"]
-            print("torso %s: listo" % ver)
+            print("torso %s%s: listo" % (ver, " (sin short)" if src_folder != folder else ""))
         for k in range(3):
             arr = np.concatenate(per_mesh[k], 0)   # (ROWS * versiones, n, 4)
             name = "pes_var_torso_%d.dds" % (k + 1)
@@ -146,7 +150,23 @@ def main():
         texdir = os.environ.get("TB_TEX", os.path.join(folder, "..", "tex"))
         Bd = torso_base.bands(G, texdir)
         dB, dRb, dAb = torso_base.region_deltas(Bd, G["P"], G["mask"], G["extra"][..., 0])
-        dR = np.clip(dR + dRb, -0.9, 0.9); dA = np.clip(dA + dAb, -0.9, 0.9)
+        # (26/10 e) costuras: el mismo micro relieve (3D) a los dos lados del hombro, y mas suave junto al cuello (torso_seam.py)
+        import torso_seam, skin_detail
+        from torso_variants import build_arm as _ba, ARM_KG
+        from scipy.ndimage import gaussian_filter
+        Aa = _ba(folder, "arm")
+        Ga = bake(Aa, per_vertex(Aa, Aa["fade"][:, None]), W=2048, H=2048, vmax=1.0)
+        Ba = torso_base.bands(Ga, texdir, fname="arm_nrm.ftex")
+        dArm = -ARM_KG[0] * Ga["extra"][..., 0:1] * Ba["vol"] * Ga["mask"][..., None]
+        tile = skin_detail.build(folder, texdir, outdir)["d_n"]
+        tile = np.stack([gaussian_filter(tile[..., c], 0.7, mode="wrap") for c in range(2)], -1)
+        ring = [torso_seam.shoulder_ring(T, Aa)]
+        amp = 0.5 * (torso_seam.band_amp(G, Bd, dB, ring) + torso_seam.band_amp(Ga, Ba, dArm, ring))
+        print("  costura del hombro: micro a 4..7 cm, torso %s, brazo %s -> franja %s" % (np.round(torso_seam.band_amp(G, Bd, dB, ring), 3), np.round(torso_seam.band_amp(Ga, Ba, dArm, ring), 3), np.round(amp, 3)))
+        dB, wSeam = torso_seam.stitch(G, Bd, dB, ring, tile, amp=amp, neck=torso_seam.neck_ring(T))
+        dArm, wSeamA = torso_seam.stitch(Ga, Ba, dArm, ring, tile, amp=amp)
+        dRb *= (1.0 - wSeam)[..., None]; dAb *= (1.0 - wSeam)[..., None]
+        dR = np.clip(dR * (1.0 - wSeam)[..., None] + dRb, -0.9, 0.9); dA = np.clip(dA * (1.0 - wSeam)[..., None] + dAb, -0.9, 0.9)
         fullB, _ = dilate(np.clip(dB, -0.9, 0.9), G["mask"], iters=48)
         write_dds_bc5_snorm(os.path.join(outdir, "pes_var_torso_base_n.dds"), mipchain(fullB))
         np.save(os.path.join(tmpd, "maps_dB.npy"), dB.astype(np.float32))
@@ -164,12 +184,8 @@ def main():
             write_dds_bc5_snorm(os.path.join(outdir, nm), mipchain(fullk))
         np.save(os.path.join(tmpd, "maps_skin.npy"), sk.astype(np.float32))
         print("  pes_var_torso_skin_a/b.dds: brillo %.2f..%.2f, rugosidad %.2f..%.2f, translucidez %.2f..%.2f" % (sk[..., 0].min(), sk[..., 0].max(), sk[..., 1].min(), sk[..., 1].max(), sk[..., 2].min(), sk[..., 2].max()))
-        # (26/10 b) brazos: el volumen que la malla ya muestra sale de arm_nrm (pes_var_arm_base_n.dds, todo el atlas del brazo)
-        from torso_variants import build_arm as _ba, ARM_KG
-        Aa = _ba(folder, "arm")
-        Ga = bake(Aa, per_vertex(Aa, Aa["fade"][:, None]), W=2048, H=2048, vmax=1.0)
-        Ba = torso_base.bands(Ga, texdir, fname="arm_nrm.ftex")
-        dArm = -ARM_KG[0] * Ga["extra"][..., 0:1] * Ba["vol"] * Ga["mask"][..., None]
+        # (26/10 b) brazos: el volumen que la malla ya muestra sale de arm_nrm (pes_var_arm_base_n.dds, todo el atlas del brazo);
+        # (26/10 e) con la costura del hombro cosida (arriba)
         fullA, _ = dilate(np.clip(dArm, -0.9, 0.9), Ga["mask"], iters=32)
         write_dds_bc5_snorm(os.path.join(outdir, "pes_var_arm_base_n.dds"), mipchain(fullA))
         print("  pes_var_arm_base_n.dds: correccion del brazo (max %.2f)" % np.abs(dArm).max())
@@ -186,5 +202,5 @@ def main():
         np.save(os.path.join(tmpd, "maps_mR.npy"), ms.astype(np.float32))
 
 if __name__ == "__main__":
-    sys.path.insert(0, os.path.join(HERE, '..'))
+    sys.path.insert(0, os.path.join(HERE, '..')); sys.path.insert(0, os.path.join(HERE, '..', 'pelvis'))
     main()

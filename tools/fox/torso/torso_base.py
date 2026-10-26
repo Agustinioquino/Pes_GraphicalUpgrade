@@ -101,6 +101,8 @@ def region_deltas(Bd, P, mask, fade):
     ii = np.where(mask)
     bm = np.zeros(mask.shape); bm[ii] = back_mask(P[ii])
     tm = np.zeros(mask.shape); tm[ii] = torso_mask(P[ii])
+    from torso_variants import nipple_mask
+    tm[ii] *= 1.0 - nipple_mask(P[ii])   # (26/10 e) el pezon queda como en TorsoBody
     out = {}
     for nm in ("normal", "robusto", "atletico"):
         a, b, kg = np.zeros(mask.shape), np.zeros(mask.shape), np.zeros(mask.shape)

@@ -46,7 +46,7 @@ bool PesVariantMorph(uint vid, float tv, inout float3 p, inout float3 n, inout f
   if (h < R) return false;
   bool baseOn = R == 10u && IniParams.Load(int2(289, 0)).x > 0.5;
   if (abs(tv) < 0.001 && !baseOn) return false;
-  uint nv = min(h / R, 4u);
+  uint nv = min(h / R, 8u);   // (26/10 e) hasta 8 versiones: las 3 del modelo y las "sin short" (torso abajo con la forma de la pelvis)
   uint best = 0; float bd = 1e9;
   [loop] for (uint k = 0; k < nv; k++) {
     float3 b = g_varData.Load(int3(vid, R * k, 0)).xyz - p;

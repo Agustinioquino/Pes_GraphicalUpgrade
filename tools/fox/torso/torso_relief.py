@@ -92,4 +92,8 @@ def relief_hp(T, texdir, hp_sigma=0.04, fname="torsob_nrm.ftex", W=2048, H=1024,
     base = nm[:H, :W, :2].astype(np.float64) * 2 - 1
     h = texture_height(T, G, base)
     hs = gauss_matrix(T["Pw"], T["Fw"], sm) @ h             # sin los bultitos de la piel (celdas de menos de ~1.2 cm; brazos 1.6 cm)
-    return hs - gauss_matrix(T["Pw"], T["Fw"], hp_sigma) @ h
+    hp = hs - gauss_matrix(T["Pw"], T["Fw"], hp_sigma) @ h
+    if fname.startswith("torso"):   # (26/10 e) el pezon no va a la malla (queda en la textura, como en TorsoBody)
+        from torso_variants import nipple_mask
+        hp = hp * (1.0 - nipple_mask(T["Pw"]))
+    return hp

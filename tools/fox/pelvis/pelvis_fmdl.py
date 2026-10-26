@@ -123,3 +123,39 @@ def write_pelvis(src, dst, slots, faces, thigh_fmdl=None, log=print):
         struct.pack_into("<8f", d, o13 + 32 * bbox_i, mx[0], mx[1], mx[2], 1.0, mn[0], mn[1], mn[2], 1.0)
     open(dst, "wb").write(bytes(d))
     return dict(alpha=(alpha, d[e0]), mat=(matinst, mat_torso), verts=(n, nvert), tris=(m, fcount // 3), renames=done)
+
+# (26/10 e) escribe posicion / normal / tangente nuevas de la malla k (misma cantidad de vertices) en una copia del fmdl:
+# la parte de abajo del torso (malla 3) con la forma anatomica de la pelvis (pelvis_surface.reshape_torso)
+def write_mesh_geom(src, dst, k, pos, nrm, tan):
+    import sys, os
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+    from fmdl import Fmdl
+    F = Fmdl(src); d = bytearray(F.d)
+    mc, mo = F.b0[3]
+    e0 = mo + 0x30 * k
+    matinst, bgroup, fmt_idx, nvert = struct.unpack_from("<HHHH", d, e0 + 4)
+    assert len(pos) == nvert, "la malla %d tiene %d vertices, vienen %d" % (k, nvert, len(pos))
+    mfa_c, mfa_o = F.b0[9]; mf_c, mf_o = F.b0[10]; vf_c, vf_o = F.b0[11]; bo_c, bo_o = F.b0[14]
+    buf_base, _ = F.b1[2]
+    bufs = [struct.unpack_from("<IIII", d, bo_o + 16 * i) for i in range(bo_c)]
+    nmf, nvf, _, _, fmf, fvf = struct.unpack_from("<BBBBHH", d, mfa_o + 8 * fmt_idx)
+    vfs = [struct.unpack_from("<BBH", d, vf_o + 4 * (fvf + i)) for i in range(nvf)]
+    pos = np.asarray(pos, np.float32); nrm = np.asarray(nrm, np.float32); tan = np.asarray(tan, np.float32)
+    if nrm.shape[1] == 3: nrm = np.concatenate([nrm, np.zeros((nvert, 1), np.float32)], 1)
+    vi = 0; done = set()
+    for kk in range(nmf):
+        bidx, nf, stride, typ, moff = struct.unpack_from("<BBBBI", d, mf_o + 8 * (fmf + kk))
+        base = buf_base + bufs[bidx][2] + moff
+        for usage, fmt, voff in vfs[vi: vi + nf]:
+            if usage == 0 and fmt == 1:
+                for v in range(nvert): o = base + stride * v + voff; d[o:o + 12] = pos[v].tobytes()
+                done.add("pos")
+            elif usage == 2 and fmt == 6:
+                for v in range(nvert): o = base + stride * v + voff; d[o:o + 8] = f2h(nrm[v])
+                done.add("nrm")
+            elif usage == 14 and fmt == 6:
+                for v in range(nvert): o = base + stride * v + voff; d[o:o + 8] = f2h(tan[v])
+                done.add("tan")
+        vi += nf
+    assert done == {"pos", "nrm", "tan"}, "faltan elementos: %s" % done
+    open(dst, "wb").write(bytes(d))

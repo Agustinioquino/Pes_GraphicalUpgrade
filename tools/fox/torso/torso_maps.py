@@ -282,7 +282,8 @@ def build_maps(G, fade_tex, chunk=262144):
     mascara de estrias (H, W))"""
     P, Tg, Bn, M = G["P"], G["Tg"], G["Bn"], G["mask"]
     H, W = M.shape
-    k = (torso_mask(P.reshape(-1, 3)).reshape(H, W) * fade_tex * M)
+    from torso_variants import nipple_mask
+    k = (torso_mask(P.reshape(-1, 3)) * (1.0 - nipple_mask(P.reshape(-1, 3)))).reshape(H, W) * fade_tex * M   # (26/10 e) sin el pezon
     dR = np.zeros((H, W, 2)); dA = np.zeros((H, W, 2)); ms = np.zeros((H, W))
     ii = np.where(M)
     for a in range(0, len(ii[0]), chunk):

@@ -384,3 +384,33 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
   pants_XXX.fmdl (tecla 4 lo muestra / oculta en vivo). Con la pelvis cargada falta la cintura del short (era la malla 0).
   Detalle de piel de la pelvis: skin_detail.py (parches de la piel del torso, 22.5 cm, mezcla que conserva la varianza) ->
   pes_var_pelvis_detail_n / _a, t34 / t35 del PS (dos capas, la segunda girada 37 grados, a 0.40 uv por metro).
+- (26/10 e) PELVIS ANATOMICA (tools/fox/pelvis/pelvis_surface.py): la superficie parametrica (superelipse, gluteos tipo panal,
+  escalon en la cintura, muesca en la entrepierna) se reemplaza por un cuerpo real: la malla base de MakeHuman (CC0 1.0, hombre
+  joven = base + promedio de los targets caucasian/african/asian-male-young; mh_fetch.py la baja y guarda solo la zona de la
+  pelvis en mh_pelvis_cc0.npz, 2149 vertices) deformada con thin plate spline (scipy RBFInterpolator) para coincidir con
+  TorsoBody: rayos horizontales desde el eje del cuerpo en la banda baja del torso (y 1.10 .. 1.175, 4 alturas x 60 angulos),
+  desde el centro de cada muslo en y 0.66 .. 0.78 y en el borde EXACTO del muslo (29 + 29) mas su continuacion vertical 2 y
+  4.5 cm arriba (afuera, 15 .. 150 grados: los muslos de TorsoBody son mas gruesos que la cadera de MakeHuman y quedaba un
+  escalon). Escala global medida antes: x 1.05, y - 0.014, z (z - 0.036) 1.03 + 0.066. Sobre esa superficie S:
+  - reshape_torso: la malla 3 del torso por debajo de y 1.105 (del todo bajo 1.06) toma la forma de S (rayo desde el eje, el
+    mas lejano) + el detalle fino de TorsoBody (< 8 mm, ombligo; las arrugas de la pretina al 30 %), hasta 37 .. 41 mm (adelante:
+    el torso de TorsoBody abajo esta hecho para la pretina del short). Normales / tangentes giradas con la malla soldada.
+    Va en el fmdl del fpk sin short (pelvis_fmdl.write_mesh_geom) Y como versiones nuevas de pes_var_torso_3.dds (6 versiones:
+    las 3 del modelo + las 3 sin short; TB_SINSHORT=<carpeta> en make_variants.py; el VS acepta hasta 8).
+  - build_on_surface: la topologia de pelvis_mesh (92 / 82 / 74 / 68 / 64 / 62 / 60 + puente 4 + piernas 33 / 31 + bordes)
+    proyectada sobre S: filas del cuerpo por rayo desde el eje (la ultima a 6 mm por arriba del borde inclinado del muslo, que va
+    de 0.804 adentro a 0.848 afuera; sobre la entrepierna a yc + 4 mm, yc = 0.818), puente sobre el arco de S en x = 0, anillos
+    de las piernas interpolados y proyectados (rayo desde el centro de la pierna, peso sin(pi t)). Frente liso tipo Ken: -18 mm
+    gaussiano (25 grados, y yc + 3.5 cm, sigma 3 cm). 692 vertices / 773 slots / 1236 triangulos (entran 790 / 1244).
+  - Pezon: queda como en TorsoBody (nipple_mask, 1.3 cm 3D): sin relieve a la malla (relief_hp), sin correccion de la base ni
+    mapas delta (region_deltas, build_maps), sin zonas de piel (torso_skin) y en el PS sin definicion ni poros extra (nipM por
+    uv: 0.2944 / 0.2056, v 0.233). Con todo eso sumado se veia como una rosca de otro color.
+  - COSTURAS (torso_seam.py): en 4.5 cm a cada lado del anillo del hombro el detalle de las dos texturas pasa a ser el mismo
+    micro relieve 3D (la textura de skin_detail, triplanar sobre la posicion de reposo, amplitud = promedio de los dos lados a
+    4 .. 7 cm) encima del volumen suave (vol) de cada mapa, escrito en pes_var_torso_base_n / pes_var_arm_base_n (t20; con
+    x289); las deltas de las variantes se anulan en la franja. Junto al cuello el detalle del torso baja a la mitad (2.5 cm).
+    Medido en TorsoBody: albedo igual en el anillo pero arm_bsm un 4 % mas claro a 1 .. 6 cm (franja clara): el PS (w293) lo
+    baja 3.5 % por la posicion de reposo (sA). Normales de malla en el anillo: 1.6 grados de diferencia (no era eso).
+  - Menu Fisico: "Tipo de cuerpo" (z262) es una barra K_MUS de a 0.01 (2 % por paso; antes selector de a 20 %), los tipos del
+    mod son "Complexion"; el valor para los shaders sigue al elegido en ~0.15 s (musculo.cpp EaseTv); Complexion, Tipo de
+    cuerpo, General, Definicion y Ver no resaltan nada (el cuerpo quedaba blanco).
