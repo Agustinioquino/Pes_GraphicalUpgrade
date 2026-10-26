@@ -503,7 +503,12 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound) {
     // (26/10 d) nivel 0 mas fino: hoja de 3 mm de ensanche (la malla ya trae 1.2 cm de ancho propio; antes 1.2 + 1.2 cm sin
     // afinar = cintas), alto 1.0 cerca de la camara (x59 queda para lo lejano) y un piso de capas de hojas por pixel de
     // suelo (D) que crece de 150 a 400 px/m: el tope por banda (K = 6) dejaba 3-15x menos hojas por m2 que el pasto del juego
-    const float wEff0 = 0.008f * wide, tallNear = 1.0f, Dfloor = 10.0f * cMul[q] * dens;
+    // (26/10 e) reporte de 4ae2c94: en las camaras de juego (110-300 px/m) las hojas de 3 mm quedaban por debajo del pixel (alfombra
+    // borrosa, "feo") y el nivel 0 costaba 33 FPS con la camara baja (7 capas de hojas por pixel de pantalla). Ahora el nivel 0 tiene
+    // dos extremos por px/m: camaras de juego (hoja de 12 mm de ensanche, alto x59, tope de 4 capas sobre la banda) y camara al ras
+    // (>= 700 px/m: 4 mm, alto 1.0, piso de 6 capas por pixel de suelo); entre 300 y 700 px/m se funde (VS cb5[12], CS gPad[2])
+    const float wGame = 0.012f * wide, wClose = 0.004f * wide, pRamp0 = 300.0f, pRamp1 = 700.0f;
+    const float wEff0 = wGame, tallNear = 1.0f, Dfloor = 6.0f * cMul[q] * dens;
     const float halfL = 52.5f + 3.0f, halfW = 34.0f + 3.0f, halfH = 0.5f * (float)(g_bbH ? g_bbH : 1080);
     ID3D11DeviceContext1* c1 = nullptr; c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1);
     // estado del contexto que se toca (se devuelve al final)
@@ -548,9 +553,10 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound) {
         cull[13] = minPx; cull[14] = cBase; cull[15] = (float)mIpc[0]; cull[16] = (float)mCards; cull[17] = (float)kBins;
         // gP4.z alto de la hoja (m), gP4.w tope de capas de hojas por pixel: con la camara baja la celda se ve como una banda angosta y la
         // cuenta de frente ((celda * p)^2) sobraba 14-46x; el tope sigue a Calidad / Densidad
-        cull[18] = 0.058f * tall; cull[19] = 6.0f * cMul[q] * dens;
-        cull[21] = 150.0f; cull[22] = 400.0f; cull[23] = tallNear / tall;
+        cull[18] = 0.058f * tall; cull[19] = 4.0f * cMul[q] * dens;   // (26/10 e) tope de capas 6 -> 4 (camara baja: menos solapamiento)
+        cull[21] = pRamp0; cull[22] = pRamp1; cull[23] = tallNear / tall;
         cull[25] = (float)mIpc[0]; cull[26] = (float)mIpc[1]; cull[27] = (float)mIpc[2];
+        cull[28] = wGame; cull[29] = wClose; cull[30] = pRamp0; cull[31] = pRamp1;   // gPad[2]: rampa del ancho del nivel 0 (como el VS)
         // (26/10 d) reclamo del cuadro: la primera emision que la GPU ejecuta despues del Present se queda con el cuadro (Count[18] = 1);
         // las demas pasan por las celdas sin anotar nada y dibujan 0 instancias
         cull[0] = 4.0f; c->UpdateSubresource(s_cullCb, 0, nullptr, cull, 0, 0); c->Dispatch(1, 1, 1);
@@ -587,11 +593,13 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound) {
             // cb5[9].w: 1 = el estado guardado (sombra plana t5) es reciente; emitiendo desde la base con un estado de hace mas de 30
             // Presents (camaras sin pasto del juego) la sombra plana no se aplica a las hojas del mod (seria de otro momento)
             // cb5[10].y: alto de las hojas cerca de la camara (el VS funde de x59 a este entre 110 y 250 px/m)
-            cbq[32] = (float)mVpc[i]; cbq[33] = 1234.5f; cbq[34] = tall; cbq[35] = (i == 0 ? 0.003f : 0.012f) * wide;
+            cbq[32] = (float)mVpc[i]; cbq[33] = 1234.5f; cbq[34] = tall; cbq[35] = i == 0 ? wGame : 0.012f * wide;
             cbq[36] = p59[2] > 0.5f ? 1.f : 0.f; cbq[37] = (float)(sl * kSlotCap); cbq[38] = 1.0f;
             cbq[39] = (bound || (s_capPres.load() >= 0 && s_frame.load() - s_capPres.load() <= 30)) ? 1.0f : 0.0f;
             cbq[40] = minPx; cbq[41] = tallNear; cbq[42] = L[i].widthMul; cbq[43] = halfH;
             cbq[44] = 0.0f; cbq[45] = 0.0f; cbq[46] = 1.0f; cbq[47] = fadeM;
+            // cb5[12] (26/10 e, solo nivel 0): ancho con la camara al ras, rampa p0 / p1 en px/m (alto y ancho se funden con ella)
+            cbq[48] = i == 0 ? wClose : 0.0f; cbq[49] = i == 0 ? pRamp0 : 0.0f; cbq[50] = i == 0 ? pRamp1 : 0.0f; cbq[51] = 0.0f;
             c->UpdateSubresource(s_cb, 0, nullptr, cbq, 0, 0);
             c->VSSetConstantBuffers(5, 1, &s_cb);
             c->DrawIndexedInstancedIndirect(s_args, (UINT)sl * 20);

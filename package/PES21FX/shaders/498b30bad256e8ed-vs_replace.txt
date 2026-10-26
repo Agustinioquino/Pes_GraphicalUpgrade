@@ -8,7 +8,7 @@
 cbuffer cVSSystem : register(b0) { float4 cb0[3]; }
 cbuffer cVSScene : register(b2) { float4 cb2[21]; }
 cbuffer cVSMaterial : register(b4) { float4 cb4[5]; }
-cbuffer cVSObject : register(b5) { float4 cb5[12]; }
+cbuffer cVSObject : register(b5) { float4 cb5[13]; }   // cb5[12] solo en parcelas del mod (rampa cerca: ancho de primer plano, p0, p1 px/m)
 
 SamplerState g_samplerLinear_Wrap_s : register(s10);
 SamplerState g_samplerLinear_Clamp_s : register(s11);
@@ -105,7 +105,10 @@ void main(
     k *= pesWinK;
     // (26/10 d) alto: x59 (pesExt.z) lejos, alto cercano (cb5[10].y, 1.0) de 110 a 250 px/m; con 1.3 en todo, cerca las hojas eran
     // 1.3x mas altas que las del juego y la copa quedaba rigida (el doblado del viento satura a 6 cm)
-    pesTallE = lerp(max(pesExt.z, 0.1), cb5[10].y > 0.05 ? cb5[10].y : max(pesExt.z, 0.1), smoothstep(110.0, 250.0, pesPx));
+    // (26/10 e) la rampa cerca (cb5[12].y / .z px/m) arranca mas lejos que 110-250: en las camaras de juego (110-300 px/m) las hojas
+    // quedaban cortas y finas (alfombra borrosa); el alto / ancho de primer plano vale solo con la camara pegada al suelo
+    float pesP0 = cb5[12].y > 1.0 ? cb5[12].y : 110.0, pesP1 = cb5[12].z > pesP0 ? cb5[12].z : 250.0;
+    pesTallE = lerp(max(pesExt.z, 0.1), cb5[10].y > 0.05 ? cb5[10].y : max(pesExt.z, 0.1), smoothstep(pesP0, pesP1, pesPx));
     v0.y = v0_in.y * pesTallE * k;
     pesExtW = float3(pesExtRoot.x, v0.y, pesExtRoot.y);
     // descarte por pantalla: centro de la parcela con margen del tamano de la parcela
@@ -316,7 +319,10 @@ void main(
   if (pesIsExt || pesFarK > 0.0) {
     // ensanche hacia la camara: la hoja se corre a lo largo del eje derecha de la camara segun su u (0..1)
     float3 camRight = normalize(cb2[8].xyz);
-    float wid = pesIsExt ? pesExt.w * max(cb5[10].z, 0.0) * pesExtScale : 0.012 * max(FAR.x, 1.0) * max(FA2.y, 0.0) * pesFarK;
+    // (26/10 e) ancho base del mod: cb5[8].w en las camaras de juego, cb5[12].x (mas fino) con la camara pegada al suelo (rampa cb5[12].y / .z)
+    float pesWidB = pesExt.w;
+    if (pesIsExt && cb5[12].x > 0.0 && cb5[12].y > 1.0) pesWidB = lerp(pesExt.w, cb5[12].x, smoothstep(cb5[12].y, max(cb5[12].z, cb5[12].y + 1.0), pesPx));
+    float wid = pesIsExt ? pesWidB * max(cb5[10].z, 0.0) * pesExtScale : 0.012 * max(FAR.x, 1.0) * max(FA2.y, 0.0) * pesFarK;
     // (25/10 c) ancho minimo en pixeles (cb5[10].x): una hoja de menos de ~1.4 px titila al mover la camara
     if (pesIsExt && cb5[10].x > 0.0 && pesPx > 1.0) wid = max(wid, cb5[10].x / pesPx);
     // (26/10 d) el ensanche se afina hacia la punta como la malla (antes era constante y anulaba el afinado: cintas)

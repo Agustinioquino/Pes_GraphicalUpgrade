@@ -126,7 +126,7 @@ void main(
     // mip y de 1.5 a 6 px de ancho quedaba en 14-58%): "sombra entre las hojas" que no depende del filtro de sombras ni del SSAO
     float relH = saturate((0.995 - v1.y) / 0.985);
     float sunUpC = saturate(PESSunWorld().y);
-    float aoC = lerp(1.0 - 0.4 * saturate(Q6.y) * (1.15 - 0.45 * sunUpC), 1.0, smoothstep(0.0, 0.85, relH));
+    float aoC = lerp(1.0 - 0.25 * saturate(Q6.y) * (1.15 - 0.45 * sunUpC), 1.0, smoothstep(0.0, 0.85, relH));   // (26/10 e) 0.4 -> 0.25: la raiz quedaba negra cerca
     r1.xyz *= aoC;
   }
   o0.xyz = v1.zzz * r1.xyz;
