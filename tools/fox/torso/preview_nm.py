@@ -30,12 +30,16 @@ class Mesh:
     def __init__(self, pos, nrm, tan, uv, faces, tex, delta=None, region="torso"):
         self.pos, self.nrm, self.tan, self.uv, self.faces, self.tex, self.delta, self.region = pos, nrm, tan, uv, faces, tex, delta, region
 
-def render(meshes_, yaw, W, H, ppm, cx, cy, t, tmp, light=(-0.35, 0.55, 0.76)):
+def render(meshes_, yaw, W, H, ppm, cx, cy, t, tmp, light=(-0.35, 0.55, 0.76), pitch=0.0):
     th = math.radians(yaw)
     R = np.array([[math.cos(th), 0, math.sin(th)], [0, 1, 0], [-math.sin(th), 0, math.cos(th)]])
+    if pitch:   # (26/10 c) inclinacion de la camara (+ = desde arriba)
+        ph = math.radians(pitch)
+        R = np.array([[1, 0, 0], [0, math.cos(ph), -math.sin(ph)], [0, math.sin(ph), math.cos(ph)]]) @ R
     tris, own = [], []
+    pv = np.array([0.0, cy, 0.03]) if pitch else np.zeros(3)   # (26/10 c) con inclinacion se gira alrededor de la altura de la vista
     for mi, m in enumerate(meshes_):
-        p = m.pos @ R.T
+        p = (m.pos - pv) @ R.T + pv
         xy = np.stack([W / 2 + (p[:, 0] - cx) * ppm, H / 2 - (p[:, 1] - cy) * ppm, p[:, 2]], 1)
         tris.append(xy[m.faces]); own.append(np.stack([np.full(len(m.faces), mi), np.arange(len(m.faces))], 1))
     tris = np.concatenate(tris); own = np.concatenate(own)
@@ -159,17 +163,21 @@ def main():
                  (150, 0.22, 1.37, 560, 520, 2400, "hombro atras"), (90, 0.20, 1.30, 560, 520, 2400, "axila (costado)")]
     if os.environ.get("PNM_BACK"):   # (26/10) la espalda de cerca (columna)
         views = [(180, -0.0, 1.27, 600, 760, 1500, "espalda"), (205, 0.0, 1.27, 600, 760, 1500, "espalda 3/4")]
+    if os.environ.get("PNM_ARM"):   # (26/10 c) el brazo izquierdo de cerca: adelante, atras, desde arriba y desde abajo
+        views = [(0, 0.42, 1.24, 620, 440, 1150, "brazo adelante"), (180, -0.42, 1.24, 620, 440, 1150, "brazo atras"),
+                 (0, 0.42, 1.24, 620, 440, 1150, "brazo desde arriba", 60), (0, 0.42, 1.24, 620, 440, 1150, "brazo desde abajo", -60)]
     if os.environ.get("PNM_CLOSE"):
         views = [(180, -0.05, 1.45, 760, 420, 1400, "trapecio (atras)"), (25, 0.12, 1.47, 760, 420, 1400, "trapecio (adelante)"),
                  (75, 0.03, 1.12, 760, 420, 1500, "costado (estrias)"), (0, 0.03, 1.30, 760, 420, 1400, "pecho")]
     rows = []
-    for (yaw, cx, cy, W, H, ppm, nmv) in views:
+    for v in views:
+        yaw, cx, cy, W, H, ppm, nmv = v[:7]; pitch = v[7] if len(v) > 7 else 0.0
         ims = []
         for t in ((0.0,) if os.environ.get("PNM_T0") else (-1.0, 0.0, 1.0)):
             sc = load_scene(common, texdir, vardir, t)
             arm_bones_offset(sc, t, log)
             lt = tuple(float(v) for v in os.environ["PNM_LIGHT"].split(",")) if os.environ.get("PNM_LIGHT") else (-0.35, 0.55, 0.76)
-            ims.append(render(sc, yaw, W, H, ppm, cx, cy, t, tmp, light=lt))
+            ims.append(render(sc, yaw, W, H, ppm, cx, cy, t, tmp, light=lt, pitch=pitch))
         rows.append(ims)
     Wt = sum(im.width for im in rows[0]); Ht = sum(r[0].height + 28 for r in rows)
     sheet = Image.new("RGB", (Wt, Ht), (24, 24, 24))

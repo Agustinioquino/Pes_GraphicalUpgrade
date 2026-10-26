@@ -127,17 +127,19 @@ ID3D11ShaderResourceView* BaseTextureFor(uint64_t vsHash, UINT indexCount) {
     if (!(s_noted.fetch_or(bit) & bit)) Log("base esculpida: textura del %s %s", e->torso ? "torso" : "brazo", v ? "cargada (t20 del PS de la piel)" : "NO CARGADA");
     return v;
 }
-// (26/10 b) piel real (x293): brillo / rugosidad (t21) y translucidez / rubor (t24) por zona del torso
+// (26/10 b) piel real (x293): brillo / rugosidad (t21) y translucidez / rubor (t24) por zona del torso. (26/10 c) y de los brazos
+// (pes_var_arm_skin_*: todo el atlas del brazo, cuadradas; el PS elige las uv por el tamano)
 bool SkinTexturesFor(uint64_t vsHash, UINT indexCount, ID3D11ShaderResourceView* out[2]) {
     out[0] = out[1] = nullptr;
     if (vsHash != 0x1c02a92ab4ae3362ULL || g_cfg.live[293][0] <= 0.5f) return false;
-    bool torso = false;
-    for (const VarEntry& k : kVars) if (k.idx == indexCount) { torso = k.torso; break; }
-    if (!torso) return false;
-    out[0] = FileTextureAny("file:textures\\pes_var_torso_skin_a.dds");
-    out[1] = FileTextureAny("file:textures\\pes_var_torso_skin_b.dds");
-    static std::atomic<bool> s_noted{false};
-    if (!s_noted.exchange(true)) Log("piel real: zonas del torso %s / %s", out[0] ? "ok" : "FALTA pes_var_torso_skin_a.dds", out[1] ? "ok" : "FALTA pes_var_torso_skin_b.dds");
+    const VarEntry* e = nullptr;
+    for (const VarEntry& k : kVars) if (k.idx == indexCount) { e = &k; break; }
+    if (!e) return false;
+    out[0] = FileTextureAny(e->torso ? "file:textures\\pes_var_torso_skin_a.dds" : "file:textures\\pes_var_arm_skin_a.dds");
+    out[1] = FileTextureAny(e->torso ? "file:textures\\pes_var_torso_skin_b.dds" : "file:textures\\pes_var_arm_skin_b.dds");
+    static std::atomic<int> s_noted{0};
+    const int bit = e->torso ? 1 : 2;
+    if (!(s_noted.fetch_or(bit) & bit)) Log("piel real: zonas del %s %s", e->torso ? "torso" : "brazo", (out[0] && out[1]) ? "cargadas (t21 / t24)" : "NO CARGADAS (faltan las pes_var_*_skin_a/b.dds)");
     return out[0] && out[1];
 }
 // (26/10) columna marcada (x288): el mapa normal delta de la columna en t19 del PS de la piel, en todos los torsos de TorsoBody

@@ -80,7 +80,7 @@ def region_factors(name, bm, P=None):
         k = k0 + (k - k0) * keep
     return a, b, k
 
-def relief_hp(T, texdir, hp_sigma=0.04, fname="torsob_nrm.ftex", W=2048, H=1024, vmax=0.5):
+def relief_hp(T, texdir, hp_sigma=0.04, fname="torsob_nrm.ftex", W=2048, H=1024, vmax=0.5, sm=0.006):
     """altura del normal map de TorsoBody por vertice soldado de T (sin lo de mas de ~4 cm), m. Torso: torsob_nrm, v 0..0.5;
     brazos: arm_nrm entero (W = H = 2048, vmax = 1)"""
     from uvbake import bake
@@ -90,5 +90,5 @@ def relief_hp(T, texdir, hp_sigma=0.04, fname="torsob_nrm.ftex", W=2048, H=1024,
     nm = load_ftex(os.path.join(texdir, fname), mip=1)
     base = nm[:H, :W, :2].astype(np.float64) * 2 - 1
     h = texture_height(T, G, base)
-    hs = gauss_matrix(T["Pw"], T["Fw"], 0.006) @ h          # sin los bultitos de la piel (celdas de menos de ~1.2 cm)
+    hs = gauss_matrix(T["Pw"], T["Fw"], sm) @ h             # sin los bultitos de la piel (celdas de menos de ~1.2 cm; brazos 1.6 cm)
     return hs - gauss_matrix(T["Pw"], T["Fw"], hp_sigma) @ h

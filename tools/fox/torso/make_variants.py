@@ -6,6 +6,7 @@
 #   textures\pes_var_torso_spine_n.dds   (26/10) la columna marcada, para todos los torsos (mismo formato; PS t19, x288)
 #   textures\pes_var_torso_base_n.dds    (26/10 b) la espalda suave de todos los torsos (torso_base.py; PS t20, x289)
 #   textures\pes_var_torso_skin_a/b.dds  (26/10 b) piel del torso por zona (torso_skin.py; PS t21 / t24, x293)
+#   textures\pes_var_arm_skin_a/b.dds    (26/10 c) lo mismo en los brazos (todo el atlas del brazo, 2048 x 2048)
 # Uso: python3 make_variants.py <carpeta common de TorsoBody> <carpeta de salida> [--maps-only|--data-only|--spine-only]
 import sys, os, json
 import numpy as np
@@ -94,7 +95,7 @@ def main():
             print("  %s: %d vertices, %d versiones, %d indices" % (name, arr.shape[1], len(per_mesh[k]), nidx[k]))
         # ---- brazos (y su capa de suciedad, si la tienen)
         for fn in ARMS:
-            A = build_arm(folder, fn, texdir)
+            A = build_arm(folder, fn, texdir=texdir)
             rows = variant_rows(A)[0]
             name = "pes_var_%s.dds" % fn
             write_dds_float4(os.path.join(outdir, name), rows)
@@ -162,6 +163,12 @@ def main():
         fullA, _ = dilate(np.clip(dArm, -0.9, 0.9), Ga["mask"], iters=32)
         write_dds_bc5_snorm(os.path.join(outdir, "pes_var_arm_base_n.dds"), mipchain(fullA))
         print("  pes_var_arm_base_n.dds: correccion del brazo (max %.2f)" % np.abs(dArm).max())
+        # (26/10 c) piel real de los brazos (codo, adentro del brazo, muneca, antebrazo de afuera, hombro)
+        ska = torso_skin.build_arm_skin(Ga)
+        for nm, ch in (("pes_var_arm_skin_a.dds", (0, 1)), ("pes_var_arm_skin_b.dds", (2, 3))):
+            fullk, _ = dilate(ska[..., list(ch)], Ga["mask"], iters=32)
+            write_dds_bc5_snorm(os.path.join(outdir, nm), mipchain(fullk))
+        print("  pes_var_arm_skin_a/b.dds: brillo %.2f..%.2f, rugosidad %.2f..%.2f, translucidez %.2f..%.2f" % (ska[..., 0].min(), ska[..., 0].max(), ska[..., 1].min(), ska[..., 1].max(), ska[..., 2].min(), ska[..., 2].max()))
         fullm, _ = dilate(ms[..., None], G["mask"], iters=48)
         write_dds_bc4_unorm(os.path.join(outdir, "pes_var_torso_rob_m.dds"), mipchain(fullm[..., 0]))
         print("  pes_var_torso_rob_m.dds: estrias (mascara de color), cobertura %.2f %%" % (100.0 * (ms > 0.2).mean()))

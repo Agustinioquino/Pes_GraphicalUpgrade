@@ -285,13 +285,15 @@ void main(
   // srm / trm de TorsoBody son parejos (brillo 0.9 y rugosidad en el tope en todos lados, translucidez 0.14: piel de arcilla).
   // Ahora: piel satinada con los poros y las lineas finas del normal map cortando el brillo (mas rugosos, menos brillo) y, en el
   // torso, zonas (pes_var_torso_skin_a/b: esternon, entre los omoplatos, hombros y espalda baja mas grasos; costados mas mates;
-  // translucidez mayor en la carne y menor sobre hueso; un poco de rubor). Afuera del torso: los valores del borde del torso
+  // translucidez mayor en la carne y menor sobre hueso; un poco de rubor). (26/10 c) Brazos: pes_var_arm_skin_a/b (codo, adentro
+  // del brazo, muneca, antebrazo de afuera, hombro). Afuera del torso y los brazos: los valores del borde del torso
   float skTrans = -1.0, skRed = 0.0;
   if (vrBody && tbW >= 4096 && P293.x > 0.5) {
     float4 skA = float4(0.85, 0.45, 0.30, 0.5);   // brillo, rugosidad, translucidez, rubor (= torso_skin.DEF)
     uint saW = 0, saH = 0; pesSkinA.GetDimensions(saW, saH);
-    if (saW > 0 && v2.y < 0.5) {
-      float2 suv = float2(v2.x, v2.y * 2.0);
+    bool saArm = saW > 0 && saH == saW;   // (26/10 c) la de los brazos cubre todo su atlas; la del torso, v 0..0.5 (2:1)
+    if (saW > 0 && (saArm || v2.y < 0.5)) {
+      float2 suv = saArm ? v2.xy : float2(v2.x, v2.y * 2.0);
       skA.xy = pesSkinA.SampleBias(g_samplerLinear_Clamp_s, suv, bBD).xy;
       skA.zw = pesSkinB.SampleBias(g_samplerLinear_Clamp_s, suv, bBD).xy;
     }

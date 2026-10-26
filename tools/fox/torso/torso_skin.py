@@ -53,3 +53,39 @@ def build_skin(G):
     f = G["extra"][ii][:, 0:1] if "extra" in G else G["fade"][ii][:, None]
     out[ii] = base + (z - base) * f
     return np.clip(out, 0.0, 1.0)
+
+
+# ---------------------------------------------------------------- (26/10 c) brazos: pes_var_arm_skin_a/b.dds (todo el atlas del brazo,
+# 2048 x 2048; el PS los reconoce por ser cuadrados). arm_srm de TorsoBody tiene solo una mancha en el codo; con la piel real el PS
+# usaba DEF en todo el brazo. Codo (atras) mas aspero, opaco y algo mas rojo; adentro del brazo y la muneca mas fina (mas translucida,
+# mas palida y lisa); el antebrazo de afuera (el que da al sol) un poco mas aspero; arriba del hombro algo mas graso.
+_NA = Noise(83, freqs=(7.0, 15.0), n=6)
+
+def arm_zones(P):
+    from torso_variants import arm_frame
+    t, th, r = arm_frame(P)
+    def win(a, b, c, d, x): return ss(a, b, x) * (1 - ss(c, d, x))
+    def ang(th0, w): return g(((th - th0 + 180.0) % 360.0 - 180.0) / w)
+    elbow = g((t - 0.185) / 0.016) * ang(95, 38)
+    crease = g((t - 0.170) / 0.010) * ang(-90, 35)
+    inner = win(0.02, 0.05, 0.15, 0.18, t) * ang(0, 35)
+    wrist = win(0.33, 0.36, 0.41, 0.43, t) * ang(-45, 40)
+    outer = win(0.19, 0.23, 0.38, 0.41, t) * ang(160, 45)
+    oily = (1 - ss(0.04, 0.08, t)) * ang(170, 40)
+    nz = _NA(P)
+    spec = DEF["spec"] * (1 - 0.20 * elbow + 0.05 * inner - 0.05 * outer + 0.08 * oily) * (1 + 0.05 * nz)
+    rough = DEF["rough"] + 0.07 * elbow + 0.03 * crease - 0.04 * inner - 0.03 * wrist + 0.03 * outer - 0.04 * oily + 0.02 * nz
+    trans = DEF["trans"] - 0.08 * elbow + 0.04 * crease + 0.08 * inner + 0.08 * wrist + 0.02 * nz
+    red = DEF["red"] + 0.18 * elbow + 0.05 * crease - 0.05 * inner + 0.04 * outer + 0.05 * _NA(P * 1.7)
+    return np.stack([spec, rough, trans, red], -1)
+
+def build_arm_skin(G):
+    """G = uvbake del brazo (2048 x 2048, todo el atlas) con extra[..., 0] = desvanecido de las costuras (hombro, muneca)"""
+    H, W = G["mask"].shape
+    base = np.array([DEF["spec"], DEF["rough"], DEF["trans"], DEF["red"]])
+    out = np.zeros((H, W, 4)); out[...] = base
+    ii = np.where(G["mask"])
+    z = arm_zones(G["P"][ii])
+    f = G["extra"][ii][:, 0:1] if "extra" in G else G["fade"][ii][:, None]
+    out[ii] = base + (z - base) * f
+    return np.clip(out, 0.0, 1.0)

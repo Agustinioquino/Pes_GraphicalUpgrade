@@ -280,3 +280,52 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
   un jugador entra tambien si su variante es distinta de la general); o6.w del VS lleva siempre 0.4 * torso (tambien 999 + ...).
 - Vistas previas sin el juego: tools/fox/torso/preview.py (forma, rasterizador gris) y preview_nm.py (con normal map, albedo y
   los mapas delta; PNM_CLOSE=1 = primeros planos de trapecio, costado y pecho).
+- (26/10 b/c) ESCULPIDO EN LA MALLA (x289 = 1, "Torso y brazos esculpidos"): textures\pes_var_<malla>.dds tiene 10 filas por
+  version (0 reposo, 1..3 robusto, 4..6 atletico, 7..9 BASE: desplazamiento, normal, tangente absolutos). El VS mezcla base ->
+  variante con |t| (PesVariantMorph en pes_variants.hlsli; con 7 filas, como antes, no hay base). Con x289 = 0 la base no se usa.
+  - Relieve del normal map llevado a la malla (torso_relief.py): la pendiente del mapa en 3D (s3 = nx T + ny B, B = +cross(N, T)
+    w) desenfocada 5 mm se integra en la malla soldada por minimos cuadrados (h_j - h_i = -s . (P_j - P_i)), se suaviza 6 mm
+    (brazos 8 mm) y se le saca lo de mas de 4 cm: hp, std 2.3 mm, +-7 mm. Integrabilidad (residuo): torso 4.7 % con la
+    convencion de arriba (63 % con un canal invertido); brazo 20 % (mismo signo; mas detalle pintado). Por zona (REGION):
+    k_g = cuanto de hp va a la malla (normal adelante 1.0 / espalda 0.6; atletico 2.0 / 0.6; robusto 0.15); el mapa de cada
+    variante queda micro + a lineas + (b - k_g costura) volumen (torso_base.region_deltas) para no ver el volumen dos veces:
+    pes_var_torso_base_n.dds (t20 del PS, v 0..0.5) corrige la base de todos.
+  - Esculpido a mano (torso_variants.sculpt_torso): atletico = borde y masa del pectoral, esternon, cinturon de Adonis con los
+    oblicuos, dorsales abajo en V, redondo mayor, infraespinoso, rombo del trapecio, borde del omoplato, erectores (dos
+    gaussianas espejadas: sin quiebre en la linea media) y el surco de la columna (sigma 1.1 cm). (26/10 c) la linea alba / el
+    esternon del atletico quedaban de 7..9 mm de hondo (hp x2 + el relieve de la malla): se rellena el fondo (+4 mm abajo, +2.5
+    mm entre los pectorales, sigma 1 cm) y quedan ~5 mm redondeados. Robusto = pliegue de la panza (-7.5 mm), rollos de los
+    costados, espalda baja, el de abajo del omoplato y el pecho caido.
+  - BRAZOS (26/10 c): marco propio (torso_variants.arm_frame): t a lo largo desde la costura del hombro (codo ~0.18, muneca
+    ~0.43; el centro de cada seccion sigue el codo doblado, tabla _ARM_O1/_ARM_O2 medida en arm.fmdl) y angulo th (0 =
+    adentro / hacia el torso, -90 = adelante = biceps, 90 = atras = triceps / olecranon, 180 = afuera). El codo esta 5 mm
+    corrido hacia atras del eje recto hombro -> muneca: el olecranon mira atras. ARM_ANAT: biceps +3.2 mm, triceps (lateral y
+    largo) +2.6, tendon del triceps -1.4, deltoides +1.6 y sus surcos, braquial, surcos de adentro / afuera, olecranon,
+    epicondilos, pliegue del codo, braquiorradial +2.5, flexores +2.0, extensores +1.6, borde del cubito; base = ARM_ANAT,
+    atletico 1.9 x (+ pico del biceps, herradura, antebrazo), robusto 0.3 x + grasa atras del brazo. hp del brazo con k_g
+    (0.8, 0.3, 1.4) y recortado a +-3 mm (tanh): integrado traia pozos (atras del codo, banda arriba entre deltoides y biceps).
+    arm_fill rellena lo que la malla de TorsoBody tiene por debajo de la superficie promedio (relieve de banda de 1.5 cm) entre
+    t 0.09 y 0.26 (el pozo de atras del codo es de la malla original, no del mapa). El atletico solo amplifica 0.45 x los
+    picos y valles de la malla (antes 0.90 los valles: hundia el pozo).
+  - Vistas previas: preview_nm.py PNM_FB=1 (frente / espalda / 3/4), PNM_CLAY=1 (solo la malla), PNM_ARM=1 (brazo adelante /
+    atras / desde arriba / desde abajo; las vistas aceptan inclinacion), PNM_NOBASE=1 (sin la base = TorsoBody original).
+- (26/10 b/c) PIEL REAL (x293; y293 brillo, z293 translucidez): srm / trm de TorsoBody son parejos (brillo 0.9, rugosidad en el
+  tope 0.5608 del PS, translucidez 0.143: piel de arcilla). El PS de la piel reemplaza r1.x (brillo) y r1.y (rugosidad) por
+  zonas (t21 / t24) cortadas por los poros (hf = diferencia entre el normal map y su mip +2.5: menos brillo, mas aspero) y la
+  translucidez del g-buffer por la de la zona; rubor suave en el albedo. Torso: pes_var_torso_skin_a/b.dds (2048 x 1024, v
+  0..0.5; esternon, entre omoplatos, hombros y espalda baja mas grasos, costados mates, carne mas translucida, hueso menos).
+  (26/10 c) Brazos: pes_var_arm_skin_a/b.dds (todo el atlas del brazo, 2048 x 2048: el PS elige las uv porque son cuadradas;
+  manos.cpp SkinTexturesFor las da para las entradas de brazo de kVars): codo atras mas aspero, opaco y rojo, adentro del brazo
+  y la muneca mas finos (translucidos, palidos), antebrazo de afuera algo mas aspero, hombro graso. Cerca de las costuras todo
+  vuelve a DEF (0.85 / 0.45 / 0.30 / 0.5), el valor del PS sin textura (piernas, manos).
+- (26/10 b) UNION DEL BRAZO (w293 = 1): junto a la costura del hombro (plano centro (0.263, 1.370, 0.020), normal (0.761,
+  -0.643, -0.084)) el normal map del brazo baja al 55 % en los primeros 3 cm (el del torso es casi liso ahi).
+- (26/10 c) CUELLO SIN CAMISETA (TorsoBody_cuello.lua 1.9, copia en tools/torsobody/): FUNDIR otra vez prendido (los cierres al
+  salir no eran de ahi: con 1.8d apagado seguian; ahora la memoria del juego se retiene). Nuevo NORMALES_TORSO: el borde del
+  cuello de la cara toma la normal del borde del torso (RING_N, 48 = las del cuello generico neck.fmdl en los puntos de LOOP:
+  son identicas a las del torso, por eso el generico empalma perfecto) y en los 2 cm de arriba pasa de a poco a las suyas
+  (smoothstep; la tangente se endereza). Se calcula ANTES de apply_plan: los parches no se pueden pisar (apply_patches falla
+  entero si dos se solapan), asi que a los vertices nuevos se les cambian los valores del plan y a los demas se les escribe
+  normal / tangente aparte. Cache _v19 (las caras ya cortadas con 1.8 se vuelven a cortar). Prueba sin el juego:
+  tools/torsobody (fengari en node: OJO enteros de 32 bits en fengari, u32 tiene que ir en flotante; math.atan2 / frexp /
+  collectgarbage de Lua 5.1 hay que ponerlos).
