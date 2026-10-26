@@ -1,0 +1,149 @@
+// ---- Created with 3Dmigoto v1.3.16 on Thu Oct 08 21:08:32 2026
+
+cbuffer cPSMaterial : register(b4)
+{
+
+  struct
+  {
+    float4 m_materials[8];
+  } g_psMaterial : packoffset(c0);
+
+}
+
+cbuffer cPSSystem : register(b0)
+{
+
+  struct
+  {
+    float4 m_param;
+    float4 m_renderInfo;
+    float4 m_renderBuffer;
+    float4 m_dominantLightDir;
+    float4 m_timeParam;
+  } g_psSystem : packoffset(c0);
+
+}
+
+SamplerState g_samplerPoint_Wrap_s : register(s8);
+SamplerState g_samplerLinear_Wrap_s : register(s10);
+Texture2D<float4> g_tex_grassDiffuse : register(t7);
+Texture2D<float4> g_tex_mesh : register(t15);
+
+
+// 3Dmigoto declarations
+#define cmp -
+Texture1D<float4> IniParams : register(t120);
+Texture2D<float4> StereoParams : register(t125);
+
+
+float bh21(float2 p) { p = frac(p * float2(123.34, 456.21)); p += dot(p, p + 45.32); return frac(p.x * p.y); }
+void main(
+  float4 v0 : SV_Position0,
+  float4 v1 : TEXCOORD0,
+  float4 v2 : TEXCOORD1,
+  float4 v3 : TEXCOORD2,
+  float4 v4 : TEXCOORD3,
+  float4 v5 : TEXCOORD4,
+  float4 v6 : TEXCOORD5,
+  float2 v7 : TEXCOORD6,
+  out float4 o0 : SV_Target0,
+  out float4 o1 : SV_Target1,
+  out float4 o2 : SV_Target2,
+  out float4 o3 : SV_Target3,
+  out float4 o4 : SV_Target4)
+{
+  float4 r0,r1,r2;
+  uint4 bitmask, uiDest;
+  float4 fDest;
+
+  r0.xyzw = v6.xyzw / v7.xxyy;
+  r0.xyzw = r0.xyzw * float4(0.5,0.5,0.5,0.5) + float4(0.5,0.5,0.5,0.5);
+  r0.xyzw = r0.zwxy * float4(1,-1,1,-1) + float4(0,1,0,1);
+  r0.xy = r0.zw + -r0.xy;
+  o3.xy = g_psSystem.m_renderBuffer.xy * r0.xy;
+  r0.x = cmp(v2.y < 0);
+  if (r0.x != 0) discard;
+  r0.xyzw = g_tex_grassDiffuse.Sample(g_samplerLinear_Wrap_s, v1.xy).xyzw;
+  r1.x = g_psMaterial.m_materials[5].z + r0.w;
+  r1.x = -g_psMaterial.m_materials[5].w + r1.x;
+  r1.x = cmp(r1.x < 0);
+  if (r1.x != 0) discard;
+  r1.x = g_psMaterial.m_materials[5].w * g_psMaterial.m_materials[5].z;
+  r1.yz = float2(0.125,0.125) * v0.xy;
+  r1.y = g_tex_mesh.Sample(g_samplerPoint_Wrap_s, r1.yz).w;
+  r0.w = -r1.y * r1.x + r0.w;
+  r0.w = cmp(r0.w < 0);
+  if (r0.w != 0) discard;
+  r0.w = r0.y + r0.y;
+  r0.y = -r0.y * 2 + 1;
+  r0.y = v3.w * r0.y + r0.w;
+  r0.w = cmp(r0.y < 1);
+  if (r0.w != 0) {
+    r1.xy = float2(128,128) * v1.xy;
+    r1.zw = ddx_coarse(r1.xy);
+    r1.xy = ddy_coarse(r1.xy);
+    r0.w = dot(r1.zw, r1.zw);
+    r1.x = dot(r1.xy, r1.xy);
+    r0.w = max(r1.x, r0.w);
+    r0.w = log2(r0.w);
+    r0.w = saturate(-r0.w * 0.11 + 1.55);   // PES21: pasto 3D visible hasta mucho mas lejos
+    r1.x = saturate(-v2.w * 0.600000024 + 1);
+    r0.w = r1.x * r0.w;
+    r1.x = -1 + r0.y;
+    r0.y = r0.w * r1.x + 1;
+    { float gsK = IniParams.Load(int2(10,0)).y; r0.y = max(0.0, 1.0 - (1.0 - r0.y) * (1.0 + 0.45 * saturate(gsK))); }   // PES21 v2: sombreado entre hojas mas marcado (y10)
+  }
+  r1.xyz = v3.xyz * r0.yyy;
+  o0.xyz = v1.zzz * r1.xyz;
+  r0.x = v5.x + r0.x;
+  r0.y = v5.y * r0.z;
+  r0.zw = v5.xy + -r0.xy;
+  r0.xy = v3.ww * r0.zw + r0.xy;
+  r0.z = dot(v4.xyz, v4.xyz);
+  r0.z = rsqrt(r0.z);
+  r1.xyz = v4.xyz * r0.zzz;
+  r0.z = r0.y * 0.0361702144 + 0.0904255286;
+  r0.z = r0.z * r0.y + 0.180851057;
+  r0.z = r0.z * r0.y + 0.271276593;
+  r0.z = r0.z * r0.y + 0.271276593;
+  o2.x = r0.z * r0.y + 0.150000006;
+  r0.y = v1.w * 63 + 0.5;
+  r0.z = abs(r1.x) + abs(r1.y);
+  r0.z = r0.z + abs(r1.z);
+  r0.zw = r1.xy / r0.zz;
+  r1.x = cmp(0 < -r1.z);
+  r1.yz = float2(1,1) + -abs(r0.wz);
+  r2.xy = cmp(r0.zw >= float2(0,0));
+  r2.xy = r2.xy ? float2(1,1) : float2(-1,-1);
+  r1.yz = r2.xy * r1.yz;
+  r0.zw = r1.xx ? r0.zw : r1.yz;
+  r0.zw = r0.zw * float2(0.5,0.5) + float2(0.5,0.5);
+  r0.zw = float2(2047,2047) * r0.zw;
+  r0.yzw = (uint3)r0.yzw;
+  r1.xy = (uint2)r0.zw >> int2(1,1);
+  bitmask.y = ((~(-1 << 28)) << 4) & 0xffffffff;  r0.y = (((uint)r0.y << 4) & bitmask.y) | ((uint)2 & ~bitmask.y);
+  bitmask.z = ((~(-1 << 1)) << 1) & 0xffffffff;  r0.z = (((uint)r0.z << 1) & bitmask.z) | ((uint)0 & ~bitmask.z);
+  bitmask.z = ((~(-1 << 1)) << 0) & 0xffffffff;  r0.z = (((uint)r0.w << 0) & bitmask.z) | ((uint)r0.z & ~bitmask.z);
+  r1.xy = (uint2)r1.xy;
+  r1.w = (uint)r0.z;
+  o1.xyw = float3(0.000977517106,0.000977517106,0.333333343) * r1.xyw;
+  r0.y = (uint)r0.y;
+  o1.z = 0.000977517106 * r0.y;
+  o0.w = 1;
+  o2.y = r0.x;
+  o2.z = 1;
+  o2.w = g_psMaterial.m_materials[0].x;
+  o3.zw = float2(0,0);
+  o4.xyzw = float4(0,0,0,1);
+    {
+    // === PES21 mod: hojas de pasto 3D con variacion por hoja ===
+    float4 G = IniParams.Load(int2(10,0));
+    if (G.y > 0) {
+      float n = bh21(floor(v1.xy * 96.0));
+      float3 c = o0.xyz * (0.90 + 0.18 * n * G.z);
+      c = lerp(c, dot(c, float3(0.2126,0.7152,0.0722)) * float3(1.12, 1.04, 0.74), saturate(n * 3.0 - 2.2) * 0.18 * G.z);
+      o0.xyz = c;
+    }
+  }
+  return;
+}
