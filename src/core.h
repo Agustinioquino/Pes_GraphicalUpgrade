@@ -308,6 +308,7 @@ bool SkinToneGet(uint32_t id, int* tono, int* matiz, uint32_t* rgb = nullptr);  
 void SkinToneSet(uint32_t id, const char* name, int tono, int matiz, uint32_t rgb = 0);
 extern std::atomic<bool> g_skinMeasure;             // (24/10 e) medir el color del cuello del cuerpo y de la cara (menu Fisico)
 void SkinMeasureReport(const uint32_t* body, const uint32_t* face, uint32_t yMinInv, uint32_t yMax, uint32_t faceN);
+bool CharNodeWorldPos(void* node, float out[3]);   // (26/10) posicion en el mundo de un SceneCharacterNode (skintone.cpp)
 void SkinTonePresent();                           // guardado diferido + tabla de jugadores con tono propio (194..254)
 bool SkinToneParams(int gameIdx, const SkinToneProf& q, float k, float out[3], float outBody[3]);   // (24/10 c) (kL, m0, m1) en Oklab para pes_skintone.hlsli
 int SkinToneGame(uint32_t id);                    // color de piel del juego guardado para ese jugador (0 = no se sabe)

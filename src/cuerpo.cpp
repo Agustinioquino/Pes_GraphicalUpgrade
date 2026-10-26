@@ -410,6 +410,24 @@ static void Reject(BodyMesh* m, const char* why) {
     m->state = 4; m->why = why; ReleaseMesh(m);
     static int n = 0; if (n++ < 40) Log("cuerpo: malla %d descartada (%u indices desde %u, base %d): %s", m->id, m->count, m->start, m->base, why);
 }
+// (26/10) bytes de un elemento de vertice: el ultimo vertice solo necesita llegar al final de sus elementos, no al paso entero
+// (la parte de abajo de TorsoBody termina 8 bytes antes del final de su paso de 28 y se descartaba por "fuera del buffer")
+static UINT FmtBytes(DXGI_FORMAT f, UINT fallback) {
+    switch (f) {
+    case DXGI_FORMAT_R32G32B32A32_FLOAT: case DXGI_FORMAT_R32G32B32A32_UINT: case DXGI_FORMAT_R32G32B32A32_SINT: return 16;
+    case DXGI_FORMAT_R32G32B32_FLOAT: case DXGI_FORMAT_R32G32B32_UINT: case DXGI_FORMAT_R32G32B32_SINT: return 12;
+    case DXGI_FORMAT_R32G32_FLOAT: case DXGI_FORMAT_R32G32_UINT: case DXGI_FORMAT_R32G32_SINT:
+    case DXGI_FORMAT_R16G16B16A16_FLOAT: case DXGI_FORMAT_R16G16B16A16_UNORM: case DXGI_FORMAT_R16G16B16A16_SNORM:
+    case DXGI_FORMAT_R16G16B16A16_UINT: case DXGI_FORMAT_R16G16B16A16_SINT: return 8;
+    case DXGI_FORMAT_R32_FLOAT: case DXGI_FORMAT_R32_UINT: case DXGI_FORMAT_R32_SINT:
+    case DXGI_FORMAT_R16G16_FLOAT: case DXGI_FORMAT_R16G16_UNORM: case DXGI_FORMAT_R16G16_SNORM: case DXGI_FORMAT_R16G16_UINT: case DXGI_FORMAT_R16G16_SINT:
+    case DXGI_FORMAT_R8G8B8A8_UNORM: case DXGI_FORMAT_R8G8B8A8_SNORM: case DXGI_FORMAT_R8G8B8A8_UINT: case DXGI_FORMAT_R8G8B8A8_SINT:
+    case DXGI_FORMAT_B8G8R8A8_UNORM: case DXGI_FORMAT_R10G10B10A2_UNORM: case DXGI_FORMAT_R10G10B10A2_UINT: case DXGI_FORMAT_R11G11B10_FLOAT: return 4;
+    case DXGI_FORMAT_R16_FLOAT: case DXGI_FORMAT_R16_UNORM: case DXGI_FORMAT_R16_UINT: case DXGI_FORMAT_R16_SINT: case DXGI_FORMAT_R8G8_UNORM: case DXGI_FORMAT_R8G8_UINT: return 2;
+    case DXGI_FORMAT_R8_UNORM: case DXGI_FORMAT_R8_UINT: return 1;
+    default: return fallback;
+    }
+}
 static void StepMesh(ID3D11DeviceContext* imm, BodyMesh* m) {
     const UINT isz = m->ibFmt == DXGI_FORMAT_R16_UINT ? 2 : 4;
     if (m->state == 0) {
@@ -434,7 +452,13 @@ static void StepMesh(ID3D11DeviceContext* imm, BodyMesh* m) {
         for (int s : slots) {
             if (s < 0 || m->stVB[s]) continue;
             D3D11_BUFFER_DESC d; m->vb[s]->GetDesc(&d);
-            const UINT64 a = (UINT64)m->off[s] + (UINT64)((INT64)m->base + lo) * m->stride[s], b = a + (UINT64)m->nv * m->stride[s];
+            UINT used = 0;   // (26/10) hasta donde llegan los elementos que se leen de esta ranura dentro del paso
+            if (m->pos.slot == s) used = (std::max)(used, m->pos.off + FmtBytes(m->pos.fmt, m->stride[s]));
+            if (m->nrm.slot == s) used = (std::max)(used, m->nrm.off + FmtBytes(m->nrm.fmt, m->stride[s]));
+            if (m->idx.slot == s) used = (std::max)(used, m->idx.off + FmtBytes(m->idx.fmt, m->stride[s]));
+            if (m->wgt.slot == s) used = (std::max)(used, m->wgt.off + FmtBytes(m->wgt.fmt, m->stride[s]));
+            used = (std::min)((std::max)(used, 1u), m->stride[s] ? m->stride[s] : 1u);
+            const UINT64 a = (UINT64)m->off[s] + (UINT64)((INT64)m->base + lo) * m->stride[s], b = a + (UINT64)(m->nv - 1) * m->stride[s] + used;
             if (!m->stride[s] || b > d.ByteWidth) {
                 char w[240]; snprintf(w, sizeof w, "vertices fuera del buffer (ranura %d: paso %u, desplazamiento %u, vertices %u..%u, el buffer tiene %u bytes = %u vertices; elementos pos %d normal %d huesos %d pesos %d)",
                                       s, m->stride[s], m->off[s], lo, hi, d.ByteWidth, m->stride[s] ? (d.ByteWidth - (std::min)(d.ByteWidth, m->off[s])) / m->stride[s] : 0,

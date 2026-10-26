@@ -686,6 +686,18 @@ void OverlayPresent(IDXGISwapChain* sc) {
         std::string a = s_btnPending; s_btnPending.clear();
         if (a == "hair_export") { std::string st; FaceGenExportHair(st); s_status = st; }
         else if (a == "hair_reload") { LoadHairConfig(); s_status = "PES21FX_hair.ini recargado (" + std::to_string(g_cfg.hair.types.size()) + " tipos, " + std::to_string(g_cfg.hair.faces.size()) + " caras asignadas)"; }
+        else if (a == "muscle_reset") {
+            // (26/10) las tarjetas generales de musculatura vuelven a como el juego (1 = sin cambio); los interruptores y los
+            // valores propios de cada jugador (musculatura_jugadores.ini) no se tocan
+            static const char* kKeys[] = { "y164", "z164", "w164", "x165", "y165", "z165", "w165", "x166", "z166", "w166",
+                                           "x167", "y167", "z167", "w167", "x168", "y168", "z168", "w168", "x169", "y169", "z169", "w169",
+                                           "x170", "y170", "w170", "x171", "y171", "z171", "w171", "x162", "y162", "z162", "w162", "x172" };
+            { std::lock_guard<std::mutex> lk(g_cfgMutex);
+              for (const char* k : kKeys) { const int idx = atoi(k + 1), comp = k[0] == 'x' ? 0 : k[0] == 'y' ? 1 : k[0] == 'z' ? 2 : 3; g_cfg.live[idx][comp] = 1.0f; } }
+            s_status = SaveConfigValues() ? "Musculatura general como el juego (guardado). Los jugadores con valores propios siguen igual."
+                                          : "Musculatura general como el juego (no se pudo guardar: usa Guardar)";
+            Log("musculatura: tarjetas generales como el juego (boton del menu)");
+        }
         else s_status = "Accion desconocida: " + a;
     }
     if (s_presetPending) {
