@@ -189,6 +189,10 @@ void CatalogRecord(bool on);                     // "Grabar partido": volcados p
 void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, const ShaderEntry* ps, UINT count, UINT start, INT base);
 void GrassOnBaseDraw(ID3D11DeviceContext* c);    // (25/10) v3: al terminar la base de la cancha (PS 5e92 / c956)
 void GrassDiagState(ID3D11DeviceContext* c, uint64_t psHash);   // (26/10 f) log del stencil de las pasadas del sol y de la base de la cancha
+// (26/10 g) pasto del juego en el G-buffer con los estados de las hojas del mod (w290): se ponen antes del dibujo y se devuelven despues
+struct GrassStScope { bool on = false, b12 = false; ID3D11DepthStencilState* dss = nullptr; UINT ref = 0; ID3D11BlendState* bs = nullptr; float bf[4] = {}; UINT bm = 0xffffffff; ID3D11Buffer* vsB12 = nullptr; };
+void GrassGameStates(ID3D11DeviceContext* c, GrassStScope& s);
+void GrassGameStatesRestore(ID3D11DeviceContext* c, GrassStScope& s);
 void GrassPresent();                             // log (despues de UploadParams)
 void GrassFrameBoundary(UINT presentFlags);      // (26/10 d) en hk_Present ANTES de UploadParams: reclamo del cuadro en la GPU, x63
 void GrassOnFinishCL(ID3D11DeviceContext* c, ID3D11CommandList* l);    // (26/10 d) una emision por grabacion: el contexto arranca de cero

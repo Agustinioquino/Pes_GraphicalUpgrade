@@ -8,7 +8,8 @@
 cbuffer cVSSystem : register(b0) { float4 cb0[3]; }
 cbuffer cVSScene : register(b2) { float4 cb2[21]; }
 cbuffer cVSMaterial : register(b4) { float4 cb4[5]; }
-cbuffer cVSObject : register(b5) { float4 cb5[13]; }   // cb5[12] solo en parcelas del mod (rampa cerca: ancho de primer plano, p0, p1 px/m)
+cbuffer cVSObject : register(b5) { float4 cb5[14]; }   // cb5[12] / cb5[13] solo en parcelas del mod (rampa cerca: ancho de primer plano, p0, p1 px/m, marcas; lado de la celda)
+cbuffer PESGameGrassC : register(b12) { float4 pGG; }   // (26/10 g) la DLL, solo en el pasto del juego: x = 1 con el stencil de la base (sin enlazar = 0)
 
 SamplerState g_samplerLinear_Wrap_s : register(s10);
 SamplerState g_samplerLinear_Clamp_s : register(s11);
@@ -198,12 +199,16 @@ void main(
     // centro de la celda (la misma decision en todos los vertices de la tarjeta). Antes el desgaste solo acortaba y tenia las hojas, y
     // las capas de hojas tapaban el suelo gastado; lejos (< 20 px/m) el suelo ya se ve por el color mezclado (y291)
     float4 P292w = IniParams.Load(int2(292, 0));
-    if (pesIsExt && pesCard >= 0 && P292w.z > 0.5 && pesPx > 20.0) {
-      float2 puvC = pesExtOrg * cb4[1].xy + cb4[1].zw;
+    if (pesIsExt && pesCard >= 0 && P292w.z > 0.5 && pesPx > 14.0) {
+      // (26/10 g) punto al azar dentro de la celda (por tarjeta): con la esquina, el raleo cambiaba en cuadrados de 0.5-2 m
+      float2 jC = float2(PESGh21(float2((float)pesCard * 0.0731 + 0.17, (float)pesRot * 0.23) + pesExtOrg * 0.41),
+                         PESGh21(float2((float)pesCard * 0.0389 + 0.53, (float)pesRot * 0.31) + pesExtOrg * 0.67)) - 0.5;
+      float2 pC = pesExtOrg + jC * max(cb5[13].x, 0.0);
+      float2 puvC = pC * cb4[1].xy + cb4[1].zw;
       float lvC = PESWearMap.SampleLevel(g_samplerLinear_Clamp_s, puvC, 0).x;
-      float2 wC = PESWear(PESPitchMeters(puvC), pesExtOrg, Q4.w, Q7.x, Q7.z, lvC);
+      float2 wC = PESWear(PESPitchMeters(puvC), pC, Q4.w, Q7.x, Q7.z, lvC);
       float4 LWv = IniParams.Load(int2(115, 0));
-      float thin = saturate(wC.y + (LWv.w > 0.5 ? 0.7 * smoothstep(0.15, 0.9, PESWearLiveCurve(lvC)) : 0.0));
+      float thin = saturate(wC.y + (LWv.w > 0.5 ? 0.7 * smoothstep(0.15, 0.9, PESWearLiveCurve(lvC)) : 0.0)) * smoothstep(14.0, 28.0, pesPx);   // sin saltos al cruzar el limite
       float hc = PESGh21(float2((float)pesCard * 0.0413 + pesExtOrg.x * 0.37, pesExtOrg.y * 0.61 + (float)pesRot * 0.29) + 0.73);
       if (hc < thin) pesKill = true;
     }
@@ -399,6 +404,8 @@ void main(
   // no oscurecer dos veces. + 2 = su color se mezcla con el del suelo (alfa de o0 en el PS)
   int pesFl = pesIsExt ? (int)(cb5[12].w + 0.5) : 0;
   if ((pesFl & 1) != 0) o1.z = 1.0;
+  // (26/10 g) el pasto del juego (cerca de la camara, hasta T0) dibujado con el stencil de la base (w290, la DLL lo marca en b12): sin sombra plana
+  if (!pesIsExt && pGG.x > 0.5) o1.z = 1.0;
   o1.xy = v1.xy;
   r0.yz = r2.xy * float2(32.0, 24.0);
   r2 = g_tex_grain.SampleLevel(g_samplerLinear_Clamp_s, r2.xy, 0);
@@ -613,12 +620,12 @@ void main(
   if (pesV5) {
     // (20/10) pasto v5: la normal se inclina con la curva de la hoja (pendiente = 2 desplazamiento / alto): las rafagas
     // se ven como olas de brillo que recorren las hojas (las que se doblan hacia el sol se aclaran), igual que en un cesped real
-    float2 sl = 2.0 * pesBend / max(r6.y + 0.004, 0.006);
+    float2 sl = 2.0 * pesBend / max(r6.y + pesSinkE + 0.004, 0.006);   // (26/10 g) alto sobre la raiz antes de hundir (x292): la hoja hundida no se inclina mas
     float ls = length(sl); if (ls > 1.5) sl *= 1.5 / ls;
     // (26/10 d) lejos (niveles 1 / 2 del mod, < 110 px/m) el viento no se ve como movimiento (< 1 px): se refuerza la ola de brillo
     // (26/10 f) con x291 ya no: el refuerzo lejos (1.8x) dejaba las franjas oscuras un 32% mas oscuras lejos que cerca y cambiaba con el
     // zoom; ahora la inclinacion de la luz se apaga lejos (pesC) y las franjas salen solo del color del suelo
-    float kN = (0.55 + clamp(Q39.y, 0.0, 2.0) * 0.5 * pesGust) * (pesIsExt ? (P291.x > 0.5 ? pesC : lerp(1.8, 1.0, saturate(pesPx / 110.0))) : 1.0);
+    float kN = (0.55 + clamp(Q39.y, 0.0, 2.0) * 0.5 * pesGust) * (pesIsExt ? ((P291.x > 0.5 && P291.w > 0.5) ? pesC : lerp(1.8, 1.0, saturate(pesPx / 110.0))) : 1.0);
     r0.xzw = normalize(r0.xzw + float3(sl.x, 0.0, sl.y) * kN);
   }
   o4.x = dot(r0.xzw, cb2[8].xyz);
