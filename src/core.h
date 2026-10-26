@@ -232,7 +232,7 @@ ID3D11PixelShader* InspectHighlightPS(uint64_t ps);   // PS magenta si la capa e
 extern std::atomic<int> g_layerSkips;   // true si hay capas definidas para ese shader (copia)
 ID3D11ShaderResourceView* FileTextureAny(const std::string& rel);   // hooks.cpp: "file:..." dds o png (cache)
 void EnsureComInit();
-bool NamedCBRead(const std::string& name, std::vector<float>& out);   // hooks.cpp (Present)
+bool NamedCBRead(const std::string& name, std::vector<float>& out, int* frameOut = nullptr);   // frameOut: cuadro de la copia leida   // hooks.cpp (Present)
 int NamedAge(const std::string& name);                                // hooks.cpp: cuadros desde la ultima copia (-1 = nunca)
 const Rule* RuleForHash(uint64_t h);
 extern std::atomic<int> g_drawOrder; extern std::atomic<int> g_aliasDraws;

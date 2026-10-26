@@ -234,24 +234,36 @@ static ID3D11ShaderResourceView* FileTexture(const std::string& rel) {
 ID3D11ShaderResourceView* FileTextureAny(const std::string& rel) { return FileTexture(rel); }
 // 19/10 inspector: lee un cbuffer copiado por regla (copy_cb) -> floats. Se llama en Present (contexto inmediato):
 // copia a staging y lee la copia del cuadro anterior (sin esperar a la GPU).
-bool NamedCBRead(const std::string& name, std::vector<float>& out) {
-    // 19/10 c: anillo de 3 staging por nombre: se copia al de hoy y se lee el de hace 2 cuadros (DO_NOT_WAIT ya no falla
-    // cuando la GPU va 1-2 cuadros atras); si aun asi no esta listo se devuelve la ultima lectura buena
-    struct Ring { ID3D11Buffer* st[3] = {}; int i = 0; UINT bytes = 0; std::vector<float> last; };
+bool NamedCBRead(const std::string& name, std::vector<float>& out, int* frameOut) {
+    // 19/10 c: anillo de staging por nombre, lectura sin esperar (DO_NOT_WAIT) de una copia de hace 1-3 cuadros.
+    // (26/10) Antes se copiaba y se leia "la de hace 2 llamadas" en CADA llamada: con 2-3 lecturas por cuadro (pupila, sol en
+    // mundo, log) esa copia era del mismo cuadro, casi nunca estaba lista y se devolvia la ultima lectura buena, que podia
+    // quedar vieja un minuto entero (log: direccion del sol fija en vista mientras la camara se movia; la fila 111 y el pasto
+    // con el sol girando). Ahora se copia una vez por cuadro, cada copia lleva su numero de cuadro, se devuelve la mas nueva
+    // que ya este lista y frameOut dice de que cuadro es (para no mezclar el sol de un cuadro con la camara de otro).
+    struct Ring { ID3D11Buffer* st[4] = {}; int frame[4] = { -1, -1, -1, -1 }; int i = 0; UINT bytes = 0; std::vector<float> last; int lastFrame = -1; };
     static std::map<std::string, Ring> rings;
     ID3D11Buffer* src = nullptr; UINT bytes = 0;
     { std::lock_guard<std::mutex> lk(s_namedMutex); auto it = s_named.find(name); if (it == s_named.end() || !it->second.buf) return false; src = it->second.buf; D3D11_BUFFER_DESC d; src->GetDesc(&d); bytes = d.ByteWidth; src->AddRef(); }
     Ring& r = rings[name];
-    if (r.bytes != bytes) { for (auto*& b : r.st) { if (b) b->Release(); b = nullptr; } r.bytes = bytes; r.last.clear(); }
+    if (r.bytes != bytes) { for (auto*& b : r.st) { if (b) b->Release(); b = nullptr; } for (int& f : r.frame) f = -1; r.bytes = bytes; r.last.clear(); r.lastFrame = -1; }
     for (auto*& b : r.st) if (!b) { D3D11_BUFFER_DESC d{}; d.ByteWidth = bytes; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; g_dev.dev->CreateBuffer(&d, nullptr, &b); }
     bool ok = false;
-    if (g_dev.imm && r.st[0] && r.st[1] && r.st[2]) {
-        ID3D11Buffer* rd = r.st[(r.i + 1) % 3];   // el mas viejo (copiado hace 2 llamadas)
-        D3D11_MAPPED_SUBRESOURCE m{};
-        if (SUCCEEDED(g_dev.imm->Map(rd, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) { out.assign((const float*)m.pData, (const float*)m.pData + bytes / 4); g_dev.imm->Unmap(rd, 0); r.last = out; ok = true; }
-        else if (!r.last.empty()) { out = r.last; ok = true; }
-        g_dev.imm->CopyResource(r.st[r.i], src); r.i = (r.i + 1) % 3;
+    if (g_dev.imm && r.st[0] && r.st[1] && r.st[2] && r.st[3]) {
+        const int now = s_presentNo.load();
+        // la mas nueva que ya este lista (sin la de este cuadro, que recien se copia abajo)
+        for (int k = 1; k <= 4; k++) {
+            int j = (r.i - k + 4) % 4;
+            if (r.frame[j] < 0 || r.frame[j] <= r.lastFrame) break;   // de aca para atras todo es igual o mas viejo que lo leido
+            D3D11_MAPPED_SUBRESOURCE m{};
+            if (SUCCEEDED(g_dev.imm->Map(r.st[j], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) {
+                r.last.assign((const float*)m.pData, (const float*)m.pData + bytes / 4); g_dev.imm->Unmap(r.st[j], 0); r.lastFrame = r.frame[j]; break; }
+        }
+        if (!r.last.empty()) { out = r.last; ok = true; }
+        int prev = (r.i + 3) % 4;
+        if (r.frame[prev] != now) { g_dev.imm->CopyResource(r.st[r.i], src); r.frame[r.i] = now; r.i = (r.i + 1) % 4; }   // una copia por cuadro
     }
+    if (frameOut) *frameOut = r.lastFrame;
     src->Release();
     return ok;
 }
@@ -324,8 +336,8 @@ static void SunPassPresent() {
         // direccion del sol que usa la luz (m_lightDir0, espacio de vista) contra la direccion con la que se arma el shadow map
         // (la recta en la que las coordenadas x / y de m_shadowProjection no cambian). Si no coinciden, el lado iluminado y la
         // sombra proyectada no concuerdan. Tambien las dos en espacio mundo (deberian quedar quietas al mover la camara).
-        { std::vector<float> L, S;
-          if (sums <= 120 && NamedCBRead("LightCB", L) && L.size() >= 4 && NamedCBRead("SceneCB", S) && S.size() >= 64) {
+        { std::vector<float> L, S; int lf = -1, sf = -2;
+          if (sums <= 120 && NamedCBRead("LightCB", L, &lf) && L.size() >= 4 && NamedCBRead("SceneCB", S, &sf) && S.size() >= 64 && lf == sf) {
               auto nrm = [](float* v) { float n = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); if (n > 1e-8f) { v[0] /= n; v[1] /= n; v[2] /= n; } return n; };
               float l[3] = { L[0], L[1], L[2] }; float a[3] = { S[48], S[49], S[50] }, b[3] = { S[52], S[53], S[54] };
               float d[3] = { a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0] };

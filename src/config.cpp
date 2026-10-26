@@ -676,11 +676,14 @@ void UpdateTimeParams() {
     // en grados), su color normalizado (112: rgb con el canal mayor = 1, w = luminancia cruda), la niebla/horizonte del motor y
     // la exposicion (113), y el estado de la escena (114: x suelo automatico 0 normal / 1 humedo (lluvia) / 2 seco, y altura
     // de la camara, z estacion, w 1 = de dia con sol real). Antes cada shader lo derivaba a mano de m_view.
-    { std::vector<float> L, S;
-      bool lok = NamedCBRead("LightCB", L) && L.size() >= 8, sok = NamedCBRead("SceneCB", S) && S.size() >= 120;
+    { std::vector<float> L, S; int lf = -1, sf = -2;
+      bool lok = NamedCBRead("LightCB", L, &lf) && L.size() >= 8, sok = NamedCBRead("SceneCB", S, &sf) && S.size() >= 120;
       if (lok && sok) {
           float lx = L[0], ly = L[1], lz = L[2]; float n = sqrtf(lx * lx + ly * ly + lz * lz);
-          if (n > 1e-6f) { lx /= n; ly /= n; lz /= n;
+          // (26/10) el sol (espacio de vista) y la camara tienen que ser del mismo cuadro: si no, el sol en mundo sale girado
+          // tanto como se movio la camara entre los dos (se queda el del ultimo cuadro en que coincidieron)
+          static int mism = 0; mism = (lf == sf) ? 0 : mism + 1;   // por las dudas: si nunca coinciden (30 cuadros), como antes
+          if (n > 1e-6f && (lf == sf || mism > 30)) { lx /= n; ly /= n; lz /= n;
               const float* M = &S[32];   // m_view (filas = ejes de la camara en el mundo)
               float wx = lx * M[0] + ly * M[4] + lz * M[8], wy = lx * M[1] + ly * M[5] + lz * M[9], wz = lx * M[2] + ly * M[6] + lz * M[10];
               float wn = sqrtf(wx * wx + wy * wy + wz * wz); if (wn > 1e-6f) { wx /= wn; wy /= wn; wz /= wn; }
