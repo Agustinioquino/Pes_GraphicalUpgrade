@@ -182,10 +182,10 @@ static void ComputeFactors(const float (*P)[4], bool on, bool ropa, bool trans, 
     // y baja / sube el trapecio junto al cuello (caidos: la linea cuello - hombro mas empinada; rectos: mas horizontal)
     const float shSl = std::clamp(Gv(T[0]), 0.7f, 1.3f) - 1.0f, shSz = std::clamp(Gv(T[2]), 0.7f, 1.3f) - 1.0f;
     const int shTy = std::clamp((int)lroundf(T[1] < 0.5f ? 1.0f : T[1]), 1, 4);
-    const float tyAnch = shTy == 2 ? -0.45f : shTy == 3 ? 0.50f : 0.0f;
-    const float tyE = shTy == 2 ? -0.08f : shTy == 3 ? 0.04f : shTy == 4 ? 0.18f : 0.0f, tyRound = shTy == 4 ? 0.45f : 0.0f;
-    const float rod = Gv(Z[0]) - 1.0f, cint = Gv(Z[1]) - 1.0f, cad = Gv(Z[2]) - 1.0f, anch = Gv(Z[3]) - 1.0f + tyAnch + 0.8f * shSz;
-    f[M_DELT].e = m(Gv(A[1])) + AV(0.03f, 0.04f) + tyE + 0.8f * shSz;      Push(f[M_DELT], 1.0f, 0.12f, 0.0f, 0.030f, anch);
+    const float tyAnch = shTy == 2 ? -0.30f : shTy == 3 ? 0.30f : 0.0f;
+    const float tyE = shTy == 2 ? -0.08f : shTy == 3 ? 0.04f : shTy == 4 ? 0.05f : 0.0f, tyRound = shTy == 4 ? 0.20f : 0.0f;
+    const float rod = Gv(Z[0]) - 1.0f, cint = Gv(Z[1]) - 1.0f, cad = Gv(Z[2]) - 1.0f, anch = Gv(Z[3]) - 1.0f + tyAnch + 0.5f * shSz;
+    f[M_DELT].e = m(Gv(A[1])) + AV(0.03f, 0.04f) + tyE + 0.8f * shSz;      Push(f[M_DELT], 1.0f, 0.12f, 0.0f, 0.060f, anch);   // (26/10 b) 3 -> 6 cm por unidad: casi no se notaba
     if (shSl != 0.0f) {
         Push(f[M_DELT], 0.15f, 1.0f, 0.0f, 0.040f, shSl); Push(f[M_DELT], 1.0f, 0.0f, 0.0f, 0.010f, shSl);   // la tapa sube (rectos) y se abre
         Push(f[M_TRAP], -0.20f, 1.0f, 0.0f, 0.020f, -shSl);   // el trapecio junto al cuello baja (rectos) o sube (caidos)
@@ -198,8 +198,8 @@ static void ComputeFactors(const float (*P)[4], bool on, bool ropa, bool trans, 
     }
     {   // (26/10) deltoides frontal / posterior: la tapa del hombro crece un poco y se corre hacia adelante / atras
         const float df = Gv(Q[0]) - 1.0f + tyRound, dr = Gv(Q[1]) - 1.0f + tyRound;   // (redondos: las dos partes)
-        f[M_DELT].e += 0.35f * (df + dr);
-        Push(f[M_DELT], 0.15f, 0.0f, 1.0f, 0.015f, df); Push(f[M_DELT], 0.15f, 0.0f, -1.0f, 0.015f, dr);
+        f[M_DELT].e += 0.70f * (df + dr);   // (26/10 b) el doble (casi no se notaban)
+        Push(f[M_DELT], 0.15f, 0.0f, 1.0f, 0.035f, df); Push(f[M_DELT], 0.15f, 0.0f, -1.0f, 0.035f, dr);
     }
     const float delt = f[M_DELT].e;   // con "unir vecinos": el trapecio, el pecho alto y el omoplato acompanan un poco al hombro
     if (vec) { Push(f[M_TRAP], 0.6f, 0.8f, 0.0f, 0.012f, delt); Push(f[M_CLAV], 0.7f, 0.5f, 0.3f, 0.010f, delt); Push(f[M_SCAP], 0.5f, 0.3f, -0.6f, 0.008f, delt); }
@@ -214,13 +214,13 @@ static void ComputeFactors(const float (*P)[4], bool on, bool ropa, bool trans, 
     if (ropa && arm > 0.0f) { f[M_SLEEVE].e = sleeveK * arm; f[M_SLEEVE].t[2] = sleeveK * armB; }
     Push(f[M_PECT], 0.25f, 0.10f, 1.0f, 0.035f, pec);
     Push(f[M_PECT], 0.10f, -0.50f, 1.0f, 0.022f, Gv(R[0]) - 1.0f);   // (26/10) pecho bajo: la masa abajo y adelante
-    Push(f[M_CLAV], 0.10f, 0.30f, 1.0f, 0.025f, clav);  Push(f[M_CLAV], 1.0f, 0.0f, 0.0f, 0.012f, anch);
+    Push(f[M_CLAV], 0.10f, 0.30f, 1.0f, 0.025f, clav);  Push(f[M_CLAV], 1.0f, 0.0f, 0.0f, 0.025f, anch);
     Push(f[M_UNDERARM], 0.20f, 0.0f, 1.0f, 0.020f, (vec ? 0.6f * pec : 0.0f) + m(Gv(X[0])));          // axilas
     Push(f[M_RIB], 1.0f, 0.0f, 0.10f, 0.025f, (vec ? 0.6f * dor : 0.0f) + 0.3f * cint + m(Gv(X[1])));  // costados (serratos)
     Push(f[M_LAT], 1.0f, -0.10f, -0.40f, 0.035f, dor);
     Push(f[M_LAT], 1.0f, 0.0f, 0.0f, 0.030f, Gv(R[1]) - 1.0f);        // (26/10) dorsales: ancho (la V, hacia los costados)
     Push(f[M_SCAP], 0.20f, 0.10f, -1.0f, 0.030f, omo);
-    Push(f[M_TRAP], 0.25f, 1.0f, -0.35f, 0.030f, trap); Push(f[M_TRAP], 1.0f, 0.0f, 0.0f, 0.012f, anch);
+    Push(f[M_TRAP], 0.25f, 1.0f, -0.35f, 0.030f, trap); Push(f[M_TRAP], 1.0f, 0.0f, 0.0f, 0.025f, anch);
     Push(f[M_TRAP], 0.10f, 1.0f, 0.0f, 0.020f, Gv(R[2]) - 1.0f);      // (26/10) trapecio alto (hacia arriba)
     Push(f[M_COLLAR], 0.30f, 1.0f, 0.0f, 0.015f, (vec ? 0.5f * neck + 0.3f * trap : 0.0f) + m(Gv(X[3])));   // base del cuello
     Push(f[M_BACK], 0.0f, 0.0f, -1.0f, 0.025f, baja);

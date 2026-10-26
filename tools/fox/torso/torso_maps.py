@@ -127,7 +127,14 @@ def height_robust(P, with_mask=False):
     h += -0.0015 * g((y - NAVEL[1]) / 0.0025) * g(x / 0.017) * front
     # 3. rollo de los costados (arriba de la cadera): pliegue irregular + bulto
     yl = 1.050 + 0.012 * back + wobble(P * 1.3, 0.003)
-    h += (-0.0018 * var(P * 0.8) * g((y - yl) / 0.0055) + 0.0007 * g((y - yl - 0.015) / 0.010)) * ss(0.10, 0.135, x) * (side + 0.5 * back)
+    h += (-0.0018 * var(P * 0.8) * g((y - yl) / 0.0055) + 0.0007 * g((y - yl - 0.015) / 0.010)) * ss(0.10, 0.135, x) * (side + 0.8 * back)
+    # 3b. (26/10 b) espalda del gordito: pliegue de grasa debajo del omoplato hacia el costado (sube hacia la axila) con el rollo
+    #     debajo, y un pliegue suave a media espalda en los costados
+    yf = 1.268 + 0.45 * (x - 0.09) + wobble(P * 1.2, 0.002)
+    h += (-0.0013 * var(P * 0.9, 0.6, 1.2) * g((y - yf) / 0.0050) + 0.0008 * g((y - yf + 0.014) / 0.010)) \
+         * ss(0.07, 0.10, x) * (1 - ss(0.17, 0.19, x)) * back
+    yf2 = 1.200 + 0.10 * (x - 0.10) + wobble(P * 1.6, 0.002)
+    h += -0.0007 * var(P * 1.4, 0.3, 1.2) * g((y - yf2) / 0.0045) * ss(0.06, 0.09, x) * (1 - ss(0.14, 0.16, x)) * back
     # 4. pliegues suaves de la espalda baja (no en la columna), cortados e irregulares
     for yb, sd in ((1.105, 3), (1.160, 5)):
         yy = yb + wobble(P * (1.0 + 0.3 * sd), 0.0025)
@@ -177,13 +184,54 @@ def height_athletic(P):
     #    masa del trapecio (sube y se redondea) y el surco con el deltoides/hombro
     h += 0.0014 * g((z + 0.005) / 0.020) * g((y - ytop) / 0.020) * g((x - 0.12) / 0.045)
     h += -0.0008 * g((x - 0.195) / 0.008) * g((y - 1.50) / 0.025) * (1 - front)
-    #    trapecio medio e inferior en la espalda: su borde (diagonal hacia la columna) marcado
-    d2, t2 = seg_dist(x, y, 0.13, 1.47, 0.02, 1.30)
-    h += -0.0010 * var(P * 1.1, 0.6, 1.2) * g(d2 / 0.0050) * back * ss(0.05, 0.25, t2) * (1 - ss(0.85, 1.0, t2))
-    # 6. espalda baja: erectores a los lados de la columna y el surco de la columna
-    lb = ss(1.03, 1.06, y) * (1 - ss(1.22, 1.26, y)) * back
-    h += (0.0008 * g((x - 0.032) / 0.012) - 0.0008 * g(x / 0.004)) * lb
+    # 6. (26/10 b) la espalda con los musculos bien ubicados (la base ya queda suave para todos: torso_base.py)
+    h += height_back_athletic(P)
     return h
+
+# ---------------------------------------------------------------- espalda del atletico (26/10 b)
+# Marcas (reposo, m; lado izquierdo, x = |x|): omoplato con el borde de adentro de (0.075, 1.455) a la punta de abajo
+# (0.095, 1.315) y la espina de (0.075, 1.445) al acromion (0.185, 1.475); infraespinoso debajo de la espina; redondo mayor de
+# la punta del omoplato a la axila de atras (0.175, 1.36); dorsales ABAJO y a los costados (la V: masa en y 1.16 .. 1.32,
+# x 0.10 .. 0.16, separada de los erectores por un surco suave); trapecio inferior en V hasta la columna en y 1.215; romboides
+# entre el omoplato y la columna; erectores en la espalda baja.
+def _ell(x, y, cx, cy, rx, ry, ang=0.0):
+    c, s_ = np.cos(ang), np.sin(ang)
+    u = ((x - cx) * c + (y - cy) * s_) / rx; v = (-(x - cx) * s_ + (y - cy) * c) / ry
+    return np.exp(-0.5 * (u * u + v * v) ** 1.3)       # bulto de borde algo mas definido que una gaussiana
+def _side(x, y, ax, ay, bx, by, w=0.004):
+    """0..1 suave segun el lado de la recta A-B (1 = a la izquierda yendo de A a B); w = ancho de la transicion (m)"""
+    ux, uy = bx - ax, by - ay; L = np.hypot(ux, uy)
+    sd = ((x - ax) * uy - (y - ay) * ux) / L
+    return ss(-w, w, -sd)
+def height_back_athletic(P):
+    x, y, z, rz, front, back, side = _frame(P)
+    bk = back * ss(1.00, 1.04, y)
+    h = np.zeros(x.shape)
+    vv = lambda k, lo=0.75, hi=1.15: var(P * k, lo, hi)
+    # omoplato: borde de adentro (cresta + surco del lado de la columna) y espina (cresta + surco abajo)
+    d, t = seg_dist(x + wobble(P * 1.2, 0.001), y, 0.075, 1.455, 0.095, 1.315)
+    on = ss(-0.05, 0.10, t) * (1 - ss(0.90, 1.05, t))
+    h += (0.0010 * g(d / 0.005) - 0.0007 * g((d - 0.009) / 0.005) * _side(x, y, 0.095, 1.315, 0.075, 1.455)) * on * vv(1.1)
+    d, t = seg_dist(x, y + wobble(P * 1.3, 0.001), 0.075, 1.445, 0.185, 1.475)
+    on = ss(-0.05, 0.10, t) * (1 - ss(0.92, 1.05, t))
+    h += (0.0009 * g(d / 0.005)) * on * vv(1.2)
+    # infraespinoso (debajo de la espina) y redondo mayor (de la punta del omoplato a la axila)
+    h += 0.0020 * _ell(x, y, 0.130, 1.395, 0.034, 0.026, 0.25) * vv(0.9)
+    d, t = seg_dist(x, y, 0.100, 1.318, 0.178, 1.362)
+    h += (0.0016 * g(d / 0.011) * (1 - ss(0.9, 1.05, t)) - 0.0009 * g((d - 0.016) / 0.005) * _side(x, y, 0.178, 1.362, 0.100, 1.318)) * vv(1.0)
+    # dorsales: la masa abajo y a los costados (V), surco suave que los separa de los erectores
+    h += 0.0026 * _ell(x, y, 0.132, 1.235, 0.034, 0.085, -0.18) * vv(0.8)
+    d, t = seg_dist(x + wobble(P, 0.0015), y, 0.092, 1.300, 0.072, 1.120)
+    h += -0.0010 * g(d / 0.006) * (1 - ss(0.85, 1.0, t)) * vv(1.1, 0.6, 1.2)
+    # trapecio inferior: la V hasta la columna (el trapecio un poco arriba, surco en su borde)
+    d, t = seg_dist(x + wobble(P * 1.4, 0.001), y, 0.078, 1.440, 0.012, 1.215)
+    up = _side(x, y, 0.012, 1.215, 0.078, 1.440)   # lado de arriba / adentro de la linea (el trapecio)
+    h += (-0.0008 * g(d / 0.006) + 0.0005 * g((d - 0.012) / 0.010) * up) * ss(0.0, 0.12, t) * (1 - ss(0.9, 1.0, t)) * vv(1.0)
+    # romboides (entre el omoplato y la columna) y erectores (espalda baja)
+    h += 0.0008 * _ell(x, y, 0.045, 1.390, 0.022, 0.050) * vv(1.3)
+    lb = ss(1.04, 1.08, y) * (1 - ss(1.26, 1.32, y))
+    h += 0.0014 * g((x - 0.034) / 0.013) * lb * vv(1.1)
+    return h * bk
 
 # ---------------------------------------------------------------- columna (26/10, todos los torsos, con o sin variante)
 # Surco de la columna del sacro a C7: hondo y angosto en la espalda baja (entre los erectores, que se marcan como dos columnas),

@@ -110,7 +110,8 @@ def detail_masks(Pw):
     mA = band * (1 - ss(1.42, 1.48, y)) * (0.40 + 0.60 * front) * keep
     return mR, mA
 
-def build_mesh(T, masks_fn, field_fn=None, sigma=0.025, kR=(0.85, 0.40), kA=(0.20, 0.60), fade_w=(0.012, 0.045)):
+def build_mesh(T, masks_fn, field_fn=None, sigma=0.025, kR=(0.85, 0.40), kA=(0.20, 0.60), fade_w=(0.012, 0.045), sculpt_fn=None,
+               inflate=0.0, hp=None, kg=None):
     """desplazamientos por variante (robusto, atletico) por vertice soldado de la malla T (torso_mesh.load_parts).
     sigma = escala del relieve (m); kR = (picos, valles) del relieve que se quitan en el robusto; kA = (picos, valles) que se
     agregan en el atletico."""
@@ -133,14 +134,79 @@ def build_mesh(T, masks_fn, field_fn=None, sigma=0.025, kR=(0.85, 0.40), kA=(0.2
     detA = (ka * dn * mA)[:, None] * n
     bigR = field_fn(Pw, -1.0) if field_fn else np.zeros_like(Pw)
     bigA = field_fn(Pw, 1.0) if field_fn else np.zeros_like(Pw)
+    if inflate > 0.0:   # (26/10 b) atletico: las panzas de los musculos del modelo mas redondas (relieve positivo desenfocado)
+        G2 = gauss_matrix(Pw, Fw, 0.014)
+        detA = detA + (inflate * (G2 @ np.maximum(dn, 0.0)) * mA)[:, None] * n
+    if sculpt_fn is not None:   # (26/10 b) musculos (atletico) y pliegues (robusto) esculpidos en la malla, a lo largo de la normal
+        hR, hA = sculpt_fn(Pw)
+        detR = detR + hR[:, None] * n; detA = detA + hA[:, None] * n
+    dB = np.zeros_like(Pw)
+    if hp is not None:   # (26/10 b) la altura que dibuja el normal map, llevada a la malla (kg = (base, robusto, atletico) por vertice)
+        kB, kRr, kAa = kg
+        dB = (kB * hp)[:, None] * n
+        detR = detR + (kRr * hp)[:, None] * n; detA = detA + (kAa * hp)[:, None] * n
     dR = (bigR + detR) * fade[:, None]
     dA = (bigA + detA) * fade[:, None]
-    T.update(S=S, D=D, n=n, dn=dn, fade=fade, mR=mR, mA=mA, detR=detR, detA=detA, bigR=bigR, bigA=bigA, dR=dR, dA=dA)
+    dB = dB * fade[:, None]
+    T.update(S=S, D=D, n=n, dn=dn, fade=fade, mR=mR, mA=mA, detR=detR, detA=detA, bigR=bigR, bigA=bigA, dR=dR, dA=dA, dB=dB)
     return T
 
-def build(folder, version="out"):
-    """torso (mallas 1..3 de pants_<version>_sub)"""
-    return build_mesh(load_torso(folder, version), detail_masks, field, kR=(0.95, 0.70), kA=(0.25, 0.65))
+def build(folder, version="out", texdir=None):
+    """torso (mallas 1..3 de pants_<version>_sub). (26/10 b) con texdir: el relieve del normal map de TorsoBody va a la malla
+    (base para todos, mas hondo en el atletico, casi nada en el robusto: torso_relief.REGION)"""
+    T = load_torso(folder, version)
+    hp = kg = None
+    if texdir:
+        import torso_relief as tr
+        from torso_base import back_mask
+        hp = tr.relief_hp(T, texdir)
+        bm = back_mask(T["Pw"])
+        kg = tuple(tr.region_factors(nm, bm, T["Pw"])[2] for nm in ("normal", "robusto", "atletico"))
+    return build_mesh(T, detail_masks, field, kR=(0.95, 0.70), kA=(0.55, 1.00), sculpt_fn=sculpt_torso, inflate=0.8, hp=hp, kg=kg)
+
+# ---------------------------------------------------------------- (26/10 b) esculpido del torso por variante (m, a lo largo de
+# la normal). Atletico: volumen real de los musculos (borde y masa del pectoral, esternon, cinturon de Adonis con los oblicuos
+# encima, linea alba, y la espalda: dorsales abajo en V, infraespinoso, redondo mayor, omoplato, erectores; la misma anatomia que
+# la textura, torso_maps.height_back_athletic, mas grande y mas suave). Robusto: pliegues de grasa reales (la panza sobre el
+# short, los rollos de los costados y de la espalda baja, el de debajo del omoplato y el del pecho caido).
+def sculpt_torso(P):
+    import torso_maps as tm
+    x, y, z, rz, front, back, side = tm._frame(P)
+    hA = np.zeros(len(P)); hR = np.zeros(len(P))
+    # ---- atletico, adelante
+    yp = 1.284 + 0.010 * ((x - 0.075) / 0.050) ** 2
+    hA += (-0.0035 * g((y - yp) / 0.0075) + 0.0030 * g((y - yp - 0.030) / 0.022)) * g((x - 0.075) / 0.050) * front
+    hA += -0.0020 * g(x / 0.009) * ss(1.27, 1.30, y) * (1 - ss(1.43, 1.46, y)) * front
+    ax_, ay_, bx_, by_ = 0.126, 1.088, 0.046, 1.000
+    ux, uy = bx_ - ax_, by_ - ay_; Lu = np.hypot(ux, uy)
+    t = ((x - ax_) * ux + (y - ay_) * uy) / (Lu * Lu); ds = ((x - ax_) * uy - (y - ay_) * ux) / Lu
+    on = ss(-0.05, 0.20, t) * (1 - ss(0.85, 1.05, t)) * (front + 0.5 * side)
+    hA += (-0.0030 * g(ds / 0.0075) + 0.0035 * g((ds - 0.016) / 0.012)) * on
+    hA += -0.0015 * g(x / 0.0065) * ss(1.065, 1.09, y) * (1 - ss(1.25, 1.275, y)) * front
+    # ---- atletico, atras: volumenes anchos (la malla tiene aristas de 6.5 mm: nada de surcos finos, esos van en la textura):
+    #      dorsales abajo y a los costados (V), redondo mayor e infraespinoso, el rombo del trapecio medio / inferior, el borde del
+    #      omoplato, erectores con el surco de la columna, y el valle suave entre dorsales y erectores
+    bk = back * ss(1.00, 1.04, y)
+    hA += bk * (0.0060 * tm._ell(x, y, 0.130, 1.235, 0.040, 0.090, -0.18)
+                + 0.0035 * tm._ell(x, y, 0.140, 1.345, 0.040, 0.016, 0.50)
+                + 0.0030 * tm._ell(x, y, 0.128, 1.395, 0.036, 0.028, 0.25)
+                + 0.0030 * g(x / 0.045) * ss(1.24, 1.30, y) * (1 - ss(1.47, 1.53, y))
+                + 0.0020 * g(tm.seg_dist(x, y, 0.078, 1.452, 0.097, 1.318)[0] / 0.008)
+                + 0.0050 * g((x - 0.034) / 0.014) * ss(1.04, 1.08, y) * (1 - ss(1.26, 1.34, y))
+                - 0.0030 * g(x / 0.008) * ss(1.04, 1.08, y) * (1 - ss(1.30, 1.40, y))
+                - 0.0025 * g(tm.seg_dist(x, y, 0.094, 1.300, 0.076, 1.120)[0] / 0.010))
+    # ---- robusto
+    yc = 1.040 + 0.022 * (x / 0.15) ** 2
+    hR += (-0.0075 * g((y - yc) / 0.0080) + 0.0035 * g((y - yc - 0.020) / 0.014)) * (front + 0.6 * side) * (1 - ss(0.14, 0.17, x))
+    yl = 1.050 + 0.012 * back
+    hR += (-0.0060 * g((y - yl) / 0.0080) + 0.0030 * g((y - yl - 0.020) / 0.014)) * ss(0.10, 0.135, x) * (side + 0.8 * back)
+    for yb in (1.105, 1.160):
+        hR += (-0.0030 * g((y - yb) / 0.0070) + 0.0015 * g((y - yb + 0.016) / 0.012)) * back * ss(0.025, 0.05, x) * (1 - ss(0.11, 0.15, x))
+    yf = 1.268 + 0.45 * (x - 0.09)
+    hR += (-0.0040 * g((y - yf) / 0.0095) + 0.0025 * g((y - yf + 0.020) / 0.015)) * ss(0.07, 0.10, x) * (1 - ss(0.17, 0.19, x)) * back
+    ypc = 1.252 + 0.018 * ((x - 0.070) / 0.060) ** 2
+    hR += -0.0045 * g((y - ypc) / 0.0080) * g((x - 0.070) / 0.052) * front
+    return hR, hA
 
 def arm_masks(Pw):
     """brazos: todo el relieve (deltoides, biceps, triceps, antebrazo); la mano no esta en esta malla"""
@@ -159,10 +225,18 @@ def arm_bone_factors(t):
     return {"M_DELT": (k["delt"], np.zeros(3)), "M_ARM": (arm, np.array([0.0, 0.0, armB])),
             "M_FORE": (k["fore"], np.zeros(3)), "M_FORE2": (k["fore"], np.zeros(3))}
 
-def build_arm(folder, fn="arm", mesh=0):
+ARM_KG = (1.0, 0.3, 2.0)   # (26/10 b) relieve del normal map en la malla del brazo: (base, robusto, atletico)
+
+def build_arm(folder, fn="arm", mesh=0, texdir=None):
     T = load_parts(folder, [(fn, mesh)])
     T["version"] = fn
-    return build_mesh(T, arm_masks, None, sigma=0.015, kR=(0.90, 0.60), kA=(0.45, 0.90))
+    hp = kg = None
+    if texdir:   # (26/10 b) el relieve que dibuja arm_nrm (biceps, triceps, antebrazo) va a la malla, como en el torso
+        import torso_relief as tr
+        hp = tr.relief_hp(T, texdir, fname="arm_nrm.ftex", W=2048, H=2048, vmax=1.0)
+        one = np.ones(len(T["Pw"]))
+        kg = tuple(k * one for k in ARM_KG)
+    return build_mesh(T, arm_masks, None, sigma=0.015, kR=(0.90, 0.60), kA=(0.45, 0.90), hp=hp, kg=kg)
 
 def per_vertex(T, dW):
     """desplazamiento por vertice soldado -> por vertice de cada malla (lista, en el orden de T['parts'])"""

@@ -102,7 +102,9 @@ ID3D11ShaderResourceView* VariantDataFor(uint64_t vsHash, UINT indexCount, bool*
     if (vsHash != 0x1c02a92ab4ae3362ULL && vsHash != 0xc6ef0c7519ec95a5ULL) return nullptr;
     const VarEntry* e = nullptr;
     for (const VarEntry& k : kVars) if (k.idx == indexCount) { e = &k; break; }
-    if (!e || !VariantsInUse()) return nullptr;
+    if (!e) return nullptr;
+    const bool baseOn = g_cfg.live[289][0] > 0.5f;   // (26/10 b) base esculpida: los datos van siempre (no solo con variantes)
+    if (!baseOn && !VariantsInUse()) return nullptr;
     ID3D11ShaderResourceView* v = FileTextureAny(e->file);
     if (torso) *torso = e->torso;
     if (s_varLogs.load(std::memory_order_relaxed) < 16) {
@@ -110,6 +112,33 @@ ID3D11ShaderResourceView* VariantDataFor(uint64_t vsHash, UINT indexCount, bool*
         Log("variantes del torso: dibujo %s (VS %016llx, %u indices): datos %s", e->file + 14, (unsigned long long)vsHash, indexCount, v ? "enlazados en t127" : "NO CARGADOS");
     }
     return v;
+}
+// (26/10 b) base esculpida (x289): la textura que corrige el normal map de TorsoBody (espalda suave; el volumen que ya muestra la
+// malla sale de la textura) en t20 del PS de la piel, en todos los torsos
+ID3D11ShaderResourceView* BaseTextureFor(uint64_t vsHash, UINT indexCount) {
+    if (vsHash != 0x1c02a92ab4ae3362ULL || g_cfg.live[289][0] <= 0.5f) return nullptr;
+    const VarEntry* e = nullptr;
+    for (const VarEntry& k : kVars) if (k.idx == indexCount) { e = &k; break; }
+    if (!e) return nullptr;
+    // torso: la del torso (v 0..0.5); brazos (y sus capas): la del brazo (todo su atlas)
+    ID3D11ShaderResourceView* v = FileTextureAny(e->torso ? "file:textures\\pes_var_torso_base_n.dds" : "file:textures\\pes_var_arm_base_n.dds");
+    static std::atomic<int> s_noted{0};
+    const int bit = e->torso ? 1 : 2;
+    if (!(s_noted.fetch_or(bit) & bit)) Log("base esculpida: textura del %s %s", e->torso ? "torso" : "brazo", v ? "cargada (t20 del PS de la piel)" : "NO CARGADA");
+    return v;
+}
+// (26/10 b) piel real (x293): brillo / rugosidad (t21) y translucidez / rubor (t24) por zona del torso
+bool SkinTexturesFor(uint64_t vsHash, UINT indexCount, ID3D11ShaderResourceView* out[2]) {
+    out[0] = out[1] = nullptr;
+    if (vsHash != 0x1c02a92ab4ae3362ULL || g_cfg.live[293][0] <= 0.5f) return false;
+    bool torso = false;
+    for (const VarEntry& k : kVars) if (k.idx == indexCount) { torso = k.torso; break; }
+    if (!torso) return false;
+    out[0] = FileTextureAny("file:textures\\pes_var_torso_skin_a.dds");
+    out[1] = FileTextureAny("file:textures\\pes_var_torso_skin_b.dds");
+    static std::atomic<bool> s_noted{false};
+    if (!s_noted.exchange(true)) Log("piel real: zonas del torso %s / %s", out[0] ? "ok" : "FALTA pes_var_torso_skin_a.dds", out[1] ? "ok" : "FALTA pes_var_torso_skin_b.dds");
+    return out[0] && out[1];
 }
 // (26/10) columna marcada (x288): el mapa normal delta de la columna en t19 del PS de la piel, en todos los torsos de TorsoBody
 // (con o sin variante; no depende de x285)

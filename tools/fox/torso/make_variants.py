@@ -4,6 +4,8 @@
 #                                   (desplazamiento, normal, tangente), 4..6 atletico (igual))
 #   textures\pes_var_torso_rob_n.dds / pes_var_torso_atl_n.dds   mapas normales delta del torso (BC5_SNORM, 2048 x 1024 = v 0..0.5)
 #   textures\pes_var_torso_spine_n.dds   (26/10) la columna marcada, para todos los torsos (mismo formato; PS t19, x288)
+#   textures\pes_var_torso_base_n.dds    (26/10 b) la espalda suave de todos los torsos (torso_base.py; PS t20, x289)
+#   textures\pes_var_torso_skin_a/b.dds  (26/10 b) piel del torso por zona (torso_skin.py; PS t21 / t24, x293)
 # Uso: python3 make_variants.py <carpeta common de TorsoBody> <carpeta de salida> [--maps-only|--data-only|--spine-only]
 import sys, os, json
 import numpy as np
@@ -17,19 +19,27 @@ from uvbake import bake, dilate
 TORSO_VERSIONS = ("out", "in", "tight", "inner")
 ARMS = ("arm", "arm_cap", "arm_glove", "arm_glove_cap")
 
-def version_rows(part, dR, nR, tR, dA, nA, tA):
+ROWS = 10   # (26/10 b) por version: 0 reposo, 1..3 robusto, 4..6 atletico, 7..9 base (desplazamiento, normal, tangente;
+            # absolutos: el VS mezcla base -> variante con |t|)
+
+def version_rows(part, dR, nR, tR, dA, nA, tA, dB=None, nB=None, tB=None):
     n = part["nvert"]
-    rows = np.zeros((7, n, 4), np.float32)
+    rows = np.zeros((ROWS, n, 4), np.float32)
     rows[0, :, :3] = part["pos"]; rows[0, :, 3] = 1.0
     rows[1, :, :3] = dR; rows[2, :, :3] = nR; rows[3, :, :3] = tR
     rows[4, :, :3] = dA; rows[5, :, :3] = nA; rows[6, :, :3] = tA
+    if dB is None: dB, nB, tB = np.zeros((n, 3)), part["nrm"], part["tan"][:, :3]
+    rows[7, :, :3] = dB; rows[8, :, :3] = nB; rows[9, :, :3] = tB
     return rows
 
 def variant_rows(T):
-    """filas (7, n, 4) por malla de T para su version"""
+    """filas (ROWS, n, 4) por malla de T para su version"""
     dRp = per_vertex(T, T["dR"]); dAp = per_vertex(T, T["dA"])
     nR = morph_normals(T, T["dR"]); nA = morph_normals(T, T["dA"])
-    return [version_rows(p, dRp[i], nR[i][0], nR[i][1], dAp[i], nA[i][0], nA[i][1]) for i, p in enumerate(T["parts"])]
+    dB = T.get("dB")
+    if dB is None: dB = np.zeros_like(T["dR"])
+    dBp = per_vertex(T, dB); nB = morph_normals(T, dB)
+    return [version_rows(p, dRp[i], nR[i][0], nR[i][1], dAp[i], nA[i][0], nA[i][1], dBp[i], nB[i][0], nB[i][1]) for i, p in enumerate(T["parts"])]
 
 def dirt_rows(A, folder, fn, mi):
     """capa de suciedad del brazo (otra malla, mismas posiciones): toma el desplazamiento del vertice del brazo mas cercano y
@@ -42,14 +52,16 @@ def dirt_rows(A, folder, fn, mi):
     iw = A["inv"][arm["off"] + j]
     n0 = vertex_normals(A["Pw"], A["Fw"])
     out = []
-    for key in ("dR", "dA"):
-        dW = A[key]; n1 = vertex_normals(A["Pw"] + dW, A["Fw"])
+    for key in ("dR", "dA", "dB"):
+        dW = A.get(key)
+        if dW is None: dW = np.zeros_like(A["Pw"])
+        n1 = vertex_normals(A["Pw"] + dW, A["Fw"])
         d = dW[iw] * (dist < 0.001)[:, None]
         nn = rotate_min(n0[iw], n1[iw], p["nrm"]); nn /= np.maximum(np.linalg.norm(nn, axis=1, keepdims=True), 1e-9)
         tt = rotate_min(n0[iw], n1[iw], p["tan"][:, :3]); tt -= nn * np.sum(tt * nn, 1, keepdims=True)
         tt /= np.maximum(np.linalg.norm(tt, axis=1, keepdims=True), 1e-9)
         out.append((d, nn, tt))
-    return version_rows(p, out[0][0], out[0][1], out[0][2], out[1][0], out[1][1], out[1][2]), p["nidx"], float(dist.max())
+    return version_rows(p, out[0][0], out[0][1], out[0][2], out[1][0], out[1][1], out[1][2], out[2][0], out[2][1], out[2][2]), p["nidx"], float(dist.max())
 
 def main():
     folder, outdir = sys.argv[1], sys.argv[2]
@@ -61,8 +73,9 @@ def main():
         per_mesh = {0: [], 1: [], 2: []}
         bases = {0: [], 1: [], 2: []}
         nidx = {}
+        texdir = os.environ.get("TB_TEX", os.path.join(folder, "..", "tex"))
         for ver in TORSO_VERSIONS:
-            T = build(folder, ver)
+            T = build(folder, ver, texdir)
             rows = variant_rows(T)
             for k in range(3):
                 pos = T["parts"][k]["pos"]
@@ -74,14 +87,14 @@ def main():
                 bases[k].append(pos); per_mesh[k].append(r); nidx[k] = T["parts"][k]["nidx"]
             print("torso %s: listo" % ver)
         for k in range(3):
-            arr = np.concatenate(per_mesh[k], 0)   # (7 * versiones, n, 4)
+            arr = np.concatenate(per_mesh[k], 0)   # (ROWS * versiones, n, 4)
             name = "pes_var_torso_%d.dds" % (k + 1)
             write_dds_float4(os.path.join(outdir, name), arr)
             table.append((nidx[k], name, len(per_mesh[k])))
             print("  %s: %d vertices, %d versiones, %d indices" % (name, arr.shape[1], len(per_mesh[k]), nidx[k]))
         # ---- brazos (y su capa de suciedad, si la tienen)
         for fn in ARMS:
-            A = build_arm(folder, fn)
+            A = build_arm(folder, fn, texdir)
             rows = variant_rows(A)[0]
             name = "pes_var_%s.dds" % fn
             write_dds_float4(os.path.join(outdir, name), rows)
@@ -116,12 +129,39 @@ def main():
     if mode in ("", "--maps-only"):
         # ---- mapas normales delta del torso
         from torso_maps import build_maps
+        import torso_base
         dR, dA, ms = build_maps(G, G["extra"][..., 0])
+        # (26/10 b) espalda: la base suave para todos (pes_var_torso_base_n.dds, PS t20) y lo de cada variante encima
+        texdir = os.environ.get("TB_TEX", os.path.join(folder, "..", "tex"))
+        Bd = torso_base.bands(G, texdir)
+        dB, dRb, dAb = torso_base.region_deltas(Bd, G["P"], G["mask"], G["extra"][..., 0])
+        dR = np.clip(dR + dRb, -0.9, 0.9); dA = np.clip(dA + dAb, -0.9, 0.9)
+        fullB, _ = dilate(np.clip(dB, -0.9, 0.9), G["mask"], iters=48)
+        write_dds_bc5_snorm(os.path.join(outdir, "pes_var_torso_base_n.dds"), mipchain(fullB))
+        np.save(os.path.join(tmpd, "maps_dB.npy"), dB.astype(np.float32))
+        print("  pes_var_torso_base_n.dds: correccion de la base (espalda suave, volumen en la malla) (max %.2f)" % np.abs(dB).max())
         for nm, d in (("pes_var_torso_rob_n.dds", dR), ("pes_var_torso_atl_n.dds", dA)):
             full, _ = dilate(d, G["mask"], iters=48)
             mips = mipchain(full)
             write_dds_bc5_snorm(os.path.join(outdir, nm), mips)
             print("  %s: %dx%d, %d mips, max %.2f" % (nm, d.shape[1], d.shape[0], len(mips), np.abs(d).max()))
+        # (26/10 b) piel del torso (que no parezca arcilla): brillo / rugosidad y translucidez / rubor por zona (torso_skin.py)
+        import torso_skin
+        sk = torso_skin.build_skin(G)
+        for nm, ch in (("pes_var_torso_skin_a.dds", (0, 1)), ("pes_var_torso_skin_b.dds", (2, 3))):
+            fullk, _ = dilate(sk[..., list(ch)], G["mask"], iters=48)
+            write_dds_bc5_snorm(os.path.join(outdir, nm), mipchain(fullk))
+        np.save(os.path.join(tmpd, "maps_skin.npy"), sk.astype(np.float32))
+        print("  pes_var_torso_skin_a/b.dds: brillo %.2f..%.2f, rugosidad %.2f..%.2f, translucidez %.2f..%.2f" % (sk[..., 0].min(), sk[..., 0].max(), sk[..., 1].min(), sk[..., 1].max(), sk[..., 2].min(), sk[..., 2].max()))
+        # (26/10 b) brazos: el volumen que la malla ya muestra sale de arm_nrm (pes_var_arm_base_n.dds, todo el atlas del brazo)
+        from torso_variants import build_arm as _ba, ARM_KG
+        Aa = _ba(folder, "arm")
+        Ga = bake(Aa, per_vertex(Aa, Aa["fade"][:, None]), W=2048, H=2048, vmax=1.0)
+        Ba = torso_base.bands(Ga, texdir, fname="arm_nrm.ftex")
+        dArm = -ARM_KG[0] * Ga["extra"][..., 0:1] * Ba["vol"] * Ga["mask"][..., None]
+        fullA, _ = dilate(np.clip(dArm, -0.9, 0.9), Ga["mask"], iters=32)
+        write_dds_bc5_snorm(os.path.join(outdir, "pes_var_arm_base_n.dds"), mipchain(fullA))
+        print("  pes_var_arm_base_n.dds: correccion del brazo (max %.2f)" % np.abs(dArm).max())
         fullm, _ = dilate(ms[..., None], G["mask"], iters=48)
         write_dds_bc4_unorm(os.path.join(outdir, "pes_var_torso_rob_m.dds"), mipchain(fullm[..., 0]))
         print("  pes_var_torso_rob_m.dds: estrias (mascara de color), cobertura %.2f %%" % (100.0 * (ms > 0.2).mean()))

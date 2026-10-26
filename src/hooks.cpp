@@ -883,6 +883,12 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         }
         // (26/10) columna marcada: en todos los torsos (aunque no haya variantes en uso)
         if (ID3D11ShaderResourceView* sp = SpineTextureFor(vs->hash, t_drawVerts)) { Remember(c, d, true, true, 19); c->PSSetShaderResources(19, 1, &sp); }
+        // (26/10 b) base esculpida: la correccion del normal map del torso (t20)
+        if (ID3D11ShaderResourceView* bt = BaseTextureFor(vs->hash, t_drawVerts)) { Remember(c, d, true, true, 20); c->PSSetShaderResources(20, 1, &bt); }
+        {   // (26/10 b) piel real: zonas del torso (t21 brillo / rugosidad, t24 translucidez / rubor)
+            ID3D11ShaderResourceView* sk[2] = {};
+            if (SkinTexturesFor(vs->hash, t_drawVerts, sk)) { Remember(c, d, true, true, 21); Remember(c, d, true, true, 24); c->PSSetShaderResources(21, 1, &sk[0]); c->PSSetShaderResources(24, 1, &sk[1]); }
+        }
     }
     // 19/10: la boca (63fab7) hereda el b11 (tipo de pelo + semilla de la cara) de la ultima cara dibujada en este contexto:
     // variacion de dientes/encias por jugador

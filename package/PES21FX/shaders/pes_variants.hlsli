@@ -13,7 +13,7 @@
 //     cloth_sim.hlsl) en el cuerpo con el que choca la tela (pes_body_cs.hlsl).
 // Filas de t120 (las escribe la DLL en cada cuadro, skintone.cpp): 264 = (t general, 1 = hay tabla de jugadores, 1 = prendido, -);
 // 265 + i = (t de la entrada i de la tabla de tonos de piel por jugador (194..254), -, -, -); 285 = (prendido, texturas,
-// definicion, -) del ini.
+// definicion, -) del ini. (26/10 b) 289.x = base esculpida (relieve del normal map en la malla + su textura de correccion, t20 del PS).
 #ifndef PES_VARIANTS_HLSLI
 #define PES_VARIANTS_HLSLI
 
@@ -35,27 +35,39 @@ float PesVariantTCode(float code) {
 #ifdef PES_VARIANT_VS
 Texture2D<float4> g_varData : register(t127);
 // mezcla la variante tv sobre la posicion / normal / tangente de reposo del vertice vid (solo si t127 tiene los datos de esta
-// malla y la posicion de reposo coincide con alguna version: si no, no toca nada)
+// malla y la posicion de reposo coincide con alguna version: si no, no toca nada).
+// (26/10 b) datos de 10 filas por version: 0 reposo, 1..3 robusto, 4..6 atletico, 7..9 BASE (el relieve del normal map de
+// TorsoBody llevado a la malla, para todos: x289). Las filas de las variantes son absolutas (incluyen la base): se mezcla
+// base -> variante con |t|. Con x289 apagado (o datos viejos de 7 filas) se mezcla desde el reposo, como antes.
 bool PesVariantMorph(uint vid, float tv, inout float3 p, inout float3 n, inout float3 tg) {
-  if (abs(tv) < 0.001) return false;
   uint w = 0, h = 0; g_varData.GetDimensions(w, h);
-  if (w == 0 || h < 7 || vid >= w) return false;
-  uint nv = min(h / 7, 4u);
+  if (w == 0 || vid >= w) return false;
+  uint R = (h % 10u == 0u) ? 10u : 7u;
+  if (h < R) return false;
+  bool baseOn = R == 10u && IniParams.Load(int2(289, 0)).x > 0.5;
+  if (abs(tv) < 0.001 && !baseOn) return false;
+  uint nv = min(h / R, 4u);
   uint best = 0; float bd = 1e9;
   [loop] for (uint k = 0; k < nv; k++) {
-    float3 b = g_varData.Load(int3(vid, 7 * k, 0)).xyz - p;
+    float3 b = g_varData.Load(int3(vid, R * k, 0)).xyz - p;
     float d = dot(b, b);
     if (d < bd) { bd = d; best = k; }
   }
   if (bd > 1e-6) return false;   // mas de 1 mm: no es esta malla
-  int r = 7 * best + (tv < 0.0 ? 1 : 4);
+  float3 d0 = float3(0, 0, 0), n0 = n, t0 = tg;
+  if (baseOn) {
+    int rb = (int)(R * best) + 7;
+    d0 = g_varData.Load(int3(vid, rb, 0)).xyz; n0 = g_varData.Load(int3(vid, rb + 1, 0)).xyz; t0 = g_varData.Load(int3(vid, rb + 2, 0)).xyz;
+  }
   float a = saturate(abs(tv));
-  float3 d = g_varData.Load(int3(vid, r, 0)).xyz;
-  float3 nn = g_varData.Load(int3(vid, r + 1, 0)).xyz;
-  float3 tt = g_varData.Load(int3(vid, r + 2, 0)).xyz;
-  p += a * d;
-  n = normalize(lerp(n, nn, a));
-  tg = lerp(tg, tt, a); tg = tg - n * dot(tg, n);
+  float3 d1 = d0, n1 = n0, t1 = t0;
+  if (a > 0.001) {
+    int r = (int)(R * best) + (tv < 0.0 ? 1 : 4);
+    d1 = g_varData.Load(int3(vid, r, 0)).xyz; n1 = g_varData.Load(int3(vid, r + 1, 0)).xyz; t1 = g_varData.Load(int3(vid, r + 2, 0)).xyz;
+  }
+  p += lerp(d0, d1, a);
+  n = normalize(lerp(n0, n1, a));
+  tg = lerp(t0, t1, a); tg = tg - n * dot(tg, n);
   float tl = dot(tg, tg); tg = tl > 1e-10 ? tg * rsqrt(tl) : tg;
   return true;
 }
