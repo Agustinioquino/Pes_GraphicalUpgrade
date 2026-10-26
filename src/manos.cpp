@@ -34,4 +34,43 @@ ID3D11ShaderResourceView* HandDataFor(uint64_t vsHash, UINT indexCount, UINT sta
     return v;
 }
 
+// (26/10, v12.7) musculos con textura: los brazos y piernas de TorsoBody v12.6 (cada malla de piel con su cantidad de indices)
+// reciben en t126 del VS 1c02a92a sus datos (textures\pes_limb_*.dds: huesos del codo / la rodilla, ejes de reposo y por vertice
+// cuanto es biceps, antebrazo, deltoides, isquios, pantorrilla, cuadriceps y venas). El VS mide la pose como musculo.cpp
+// (codo y rodilla doblados, brazo levantado) y le pasa al PS de la piel cuanto marcar el relieve muscular y las venas; los
+// brazos y las manos reciben ademas la textura de venas (textures\pes_veins_arm.dds) en t29 del PS. x305 = 0 apaga todo.
+struct LimbEntry { UINT idx; const char* file; bool arm; };
+static const LimbEntry kLimbs[] = {
+    { 37458, "file:textures\\pes_limb_arm.dds", true },            { 37461, "file:textures\\pes_limb_arm_cap.dds", true },
+    { 34272, "file:textures\\pes_limb_arm_glove.dds", true },      { 34278, "file:textures\\pes_limb_arm_glove_cap.dds", true },
+    { 50340, "file:textures\\pes_limb_thigh_short.dds", false },   { 33102, "file:textures\\pes_limb_thigh_middle.dds", false },
+    { 21690, "file:textures\\pes_limb_thigh_long.dds", false },    { 51876, "file:textures\\pes_limb_thigh_short_classic.dds", false },
+    { 24525, "file:textures\\pes_limb_thigh_middle_classic.dds", false }, { 15996, "file:textures\\pes_limb_thigh_long_classic.dds", false },
+};
+static std::atomic<int> s_limbLogs{0};
+
+ID3D11ShaderResourceView* LimbDataFor(uint64_t vsHash, UINT indexCount, UINT start, INT base, bool* isArm) {
+    if (isArm) *isArm = false;
+    if (vsHash != 0x1c02a92ab4ae3362ULL || g_cfg.live[305][0] < 0.5f) return nullptr;
+    for (const LimbEntry& e : kLimbs) {
+        if (e.idx != indexCount) continue;
+        ID3D11ShaderResourceView* v = FileTextureAny(e.file);
+        if (isArm) *isArm = e.arm;
+        if (s_limbLogs.load(std::memory_order_relaxed) < 16) {
+            s_limbLogs++;
+            Log("musculos con textura: dibujo %s (%u indices, inicio %u, base %d): datos %s", e.file + 14, indexCount, start, base, v ? "enlazados en t126" : "NO CARGADOS");
+        }
+        return v;
+    }
+    return nullptr;
+}
+
+ID3D11ShaderResourceView* VeinTexture() {
+    if (g_cfg.live[305][0] < 0.5f) return nullptr;
+    static std::atomic<bool> s_noted{false};
+    ID3D11ShaderResourceView* v = FileTextureAny("file:textures\\pes_veins_arm.dds");
+    if (!s_noted.exchange(true)) Log("musculos con textura: textura de venas %s", v ? "cargada (t29 del PS)" : "NO CARGADA (falta textures\\pes_veins_arm.dds)");
+    return v;
+}
+
 } // namespace fx
