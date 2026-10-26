@@ -27,7 +27,7 @@ extern void* g_overlayOldProc;
 // ---------------------------------------------------------------- parametros (lo que en 3DMigoto era IniParams)
 constexpr int kParamCount = 320;           // float4 x 320 -> t120 en los shaders (IniParams.Load(int2(i,0))). (20/10: era 128 y los parametros 128+ se perdian; 25/10: 256 -> 320, la ropa contra el cuerpo usa 256 / 257)
 // (26/10) filas de t120 ocupadas por tablas que escribe la DLL en cada cuadro (no usarlas para el ini): 194..254 tonos de piel por
-// jugador (skintone.cpp), 257 cuadro de la ropa contra el cuerpo (cuerpo.cpp). 300..303 son de las manos (manos.cpp + pes_hands.hlsli; 303 = manos relajadas, v12.6).
+// jugador (skintone.cpp), 257 cuadro de la ropa contra el cuerpo (cuerpo.cpp). 300..304 son de las manos (manos.cpp + pes_hands.hlsli; 303 = manos relajadas, 304 = unas de los jugadores con textura propia, pes_nailfix.hlsli en el PS aa7d1833; v12.6).
 // 260..263 son de la musculatura (musculo.cpp: grupos de la v7 y musculos vivos).
 
 struct Assign { int idx; int comp; std::vector<float> values; std::string var; };
@@ -232,7 +232,7 @@ ID3D11PixelShader* InspectHighlightPS(uint64_t ps);   // PS magenta si la capa e
 extern std::atomic<int> g_layerSkips;   // true si hay capas definidas para ese shader (copia)
 ID3D11ShaderResourceView* FileTextureAny(const std::string& rel);   // hooks.cpp: "file:..." dds o png (cache)
 void EnsureComInit();
-bool NamedCBRead(const std::string& name, std::vector<float>& out);   // hooks.cpp (Present)
+bool NamedCBRead(const std::string& name, std::vector<float>& out, int* frameOut = nullptr);   // frameOut: cuadro de la copia leida   // hooks.cpp (Present)
 int NamedAge(const std::string& name);                                // hooks.cpp: cuadros desde la ultima copia (-1 = nunca)
 const Rule* RuleForHash(uint64_t h);
 extern std::atomic<int> g_drawOrder; extern std::atomic<int> g_aliasDraws;
