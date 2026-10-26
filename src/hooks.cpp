@@ -1290,6 +1290,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     LodPresent();
     ExeDumpPresent();
     ExePatchPresent();
+    GrassDistPresent();
     PitchWearPresent();
     GrassPresent();
     FaceGenPresent();

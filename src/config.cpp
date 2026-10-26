@@ -127,6 +127,9 @@ static bool LoadConfigLocked() {
             if (kl == "motor") c.motorPatch = atoi(v.c_str()) != 0;
             else if (kl == "sombra_resolucion") c.motorShadowRes = std::clamp(atoi(v.c_str()), 0, 8192);
             else if (kl == "sombra_cascadas") c.motorCascadeScale = std::clamp((float)atof(v.c_str()), 0.0f, 4.0f);
+            else if (kl == "pasto_buscar") c.grassScan = atoi(v.c_str()) != 0;
+            else if (kl == "pasto_sin_recorte") c.grassNoCull = atoi(v.c_str()) != 0;
+            else if (kl == "volcar_debugp") c.grassDumpDebugP = atoi(v.c_str()) != 0;
             continue;
         }
         if (Lower(section) == "pes21fx") {
