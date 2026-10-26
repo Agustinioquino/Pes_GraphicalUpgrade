@@ -2,6 +2,10 @@
 // PES21 (24/10): con el VS 1c02a92a (reemplazo propio) aclara y hace latir el musculo elegido en el menu Fisico (x174).
 // PES21 (26/10, v12.7): musculos con textura (x305): el VS manda en v1.xyz cuanto marcar el musculo que trabaja (mas relieve
 // grande del normal map) y las venas (textura pesVeins en t29, solo brazos y manos; un poco mas oscuras y frias).
+// PES21 (26/10): variantes robusto / atletico de TorsoBody (pes_variants.hlsli): en el torso, mapas normales delta (t16 robusto,
+// t17 atletico) y estrias del robusto un poco mas claras (t18); definicion del normal map: menos en el robusto, mas en el atletico
+// (torso y brazos); en los brazos el atletico muestra un poco las venas y el robusto las tapa. Las texturas las enlaza la DLL solo
+// en los dibujos del torso (manos.cpp); el jugador y cuanto de torso salen de o6.w (VS 1c02a92a).
 // PES21 (24/10 c): tono de piel por jugador en Oklab (pes_skintone.hlsli; el VS dice el jugador en o6.w). El aro y el punto
 // blanco del musculo ya no se pintan en la piel: la variante pes_skin_hl_ps.hlsl (PES_HL_ACC, solo en el menu Fisico) junta en
 // u5 donde quedo cada marca y la DLL los dibuja encima como capa de interfaz.
@@ -49,6 +53,9 @@ Texture2D<float4> pesZones     : register(t25);
 Texture2D<float4> pesSkinMicro : register(t27);
 Texture2D<float4> pesFacePores : register(t28);
 Texture2D<float4> pesVeins     : register(t29);   // (26/10, v12.7) venas de brazos y manos (la DLL la enlaza solo en esos dibujos)
+Texture2D<float4> pesVarRob    : register(t16);   // (26/10) variantes del torso: normal delta del robusto (BC5 SNORM, v 0..0.5 del torso)
+Texture2D<float4> pesVarAtl    : register(t17);   //         normal delta del atletico
+Texture2D<float4> pesVarStr    : register(t18);   //         estrias del robusto (mascara de color, BC4)
 
 
 // 3Dmigoto declarations
@@ -56,6 +63,7 @@ Texture2D<float4> pesVeins     : register(t29);   // (26/10, v12.7) venas de bra
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 #include "pes_skintone.hlsli"
+#include "pes_variants.hlsli"   // (26/10) variantes robusto / atletico (valor del jugador)
 #include "pes_nailfix.hlsli"   // (26/10, v12.6) unas de los jugadores con textura de brazo propia (x304)
 #ifdef PES_HL_ACC
 RWByteAddressBuffer gHlAcc : register(u5);   // por marca y lado: suma x, suma y, pixeles (4 x 16 bytes)
@@ -135,6 +143,15 @@ void main(
   float4 P305 = IniParams.Load(int2(305,0));
   bool lbOn = P305.x > 0.5 && v1.z > 6.5 && v1.z < 7.5;
   float lbDef = lbOn ? clamp(v1.x, 0.0, 2.0) : 0.0, lbVein = lbOn ? clamp(v1.y, 0.0, 2.0) : 0.0, lbVM = 0.0;
+  // (26/10) variante robusto / atletico del jugador: vrT (-1..1), cuanto de torso (VS) y de brazo (posicion de reposo en w2.zw:
+  // a mas de 20 cm del centro y arriba de la cadera; manos incluidas); x285 = (prendido, texturas, definicion)
+  bool vrBody = v3.w > 1.999 && v3.w < 3.001;
+  float4 P285 = IniParams.Load(int2(285,0));
+  float vrT = (vrBody && P285.x > 0.5) ? PesVariantTCode(v6.w) : 0.0;
+  float vrWa = max(vrT, 0.0), vrWr = max(-vrT, 0.0);
+  float vrTm = vrBody ? PesSkinTorso(v6.w) : 0.0;
+  float vrArm = vrBody ? saturate((abs(w2.w) - 0.20) / 0.05) * step(1.0, w2.z) * (1.0 - vrTm) : 0.0;
+  float vrDefK = P285.z > 0.0 ? P285.z : 1.0, vrTexK = P285.y > 0.0 ? P285.y : 1.0;
   {   // (24/10) definicion muscular (x172, menu Musculatura): agranda o achica solo el relieve grande del normal map
       // (los musculos: el mismo mapa visto 11 veces mas chico), no los poros ni las lineas finas de la piel
     float defM = IniParams.Load(int2(172,0)).x; defM = defM > 0.01 ? clamp(defM, 0.0, 3.0) : 1.0;
@@ -143,12 +160,26 @@ void main(
       if (stH.y > 0.5 && stI >= 0 && stI < min((int)(stH.x + 0.5), 20)) { float dP = IniParams.Load(int2(195 + 3 * stI, 0)).w; if (dP > 0.01) defM = clamp(dP, 0.0, 3.0); }
     }
     defM += lbDef;   // (26/10, v12.7) el musculo que trabaja: mas relieve solo ahi
+    // (26/10) variantes: torso 1 + 0.30 atletico - 0.75 robusto; brazos 1 + 0.35 atletico - 0.50 robusto
+    defM *= 1.0 + vrDefK * (vrTm * (0.30 * vrWa - 0.75 * vrWr) + vrArm * (0.35 * vrWa - 0.50 * vrWr));
     if (abs(defM - 1.0) > 0.01) {
       float3 nM = g_tex_normal.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN + 3.5).xyw;
       float2 mM = float2(nM.x * nM.z, nM.y) * 2.0 - 1.0;
       r2.xy += (defM - 1.0) * mM;
       float l2 = dot(r2.xy, r2.xy); if (l2 > 0.94) r2.xy *= rsqrt(l2 / 0.94);
     }
+  }
+  if (abs(vrT) > 0.001) {   // (26/10) variantes del torso: el robusto un poco mas liso; mapas delta (pliegues, estrias / Adonis,
+                            // serratos, trapecio...) en el espacio UV del torso (v 0..0.5 -> 0..1); venas de los brazos
+    r2.xy *= 1.0 - 0.3 * vrWr * vrTm * vrDefK;
+    uint vdW = 0, vdH = 0; pesVarRob.GetDimensions(vdW, vdH);
+    if (vrTm > 0.001 && vdW > 0 && v2.y < 0.5) {
+      float2 vuv = float2(v2.x, v2.y * 2.0);
+      float2 vd = vrT < 0.0 ? pesVarRob.SampleBias(g_samplerLinear_Clamp_s, vuv, bBN).xy : pesVarAtl.SampleBias(g_samplerLinear_Clamp_s, vuv, bBN).xy;
+      r2.xy += vd * abs(vrT) * vrTm * vrTexK;
+      float l2 = dot(r2.xy, r2.xy); if (l2 > 0.94) r2.xy *= rsqrt(l2 / 0.94);
+    }
+    if (vrArm > 0.001 && P305.x > 0.5) lbVein = max(lbVein * (1.0 - 0.7 * vrWr * vrArm), 0.35 * vrWa * vrArm * max(P305.z, 0.0));
   }
   if (lbVein > 0.002) {   // (26/10, v12.7) venas: relieve de la textura de venas (mismo espacio tangente que arm_nrm) + mascara para el tono
     uint lvW = 0, lvH = 0; pesVeins.GetDimensions(lvW, lvH);
@@ -234,6 +265,13 @@ void main(
     }
   }
   if (lbVM > 0.001) r2.yzw *= lerp(float3(1.0, 1.0, 1.0), float3(0.86, 0.91, 0.99), lbVM * 0.6);   // (26/10, v12.7) la vena: un poco mas oscura y fria
+  if (vrWr > 0.001 && vrTm > 0.001 && v2.y < 0.5) {   // (26/10) estrias del robusto: un poco mas claras (blanquecinas)
+    uint vsW = 0, vsH = 0; pesVarStr.GetDimensions(vsW, vsH);
+    if (vsW > 0) {
+      float vs = pesVarStr.SampleBias(g_samplerLinear_Clamp_s, float2(v2.x, v2.y * 2.0), bBD).x;
+      r2.yzw = lerp(r2.yzw, r2.yzw * float3(1.07, 1.02, 1.03) + 0.008, saturate(vs * 0.6 * vrWr * vrTm * vrTexK));
+    }
+  }
   r3.xyz = r2.yzw * r1.www + -r2.yzw;
   r2.yzw = r1.zzz * r3.xyz + r2.yzw;
   // (20/10) cabeza de las genericas: el mismo color y la misma translucidez que el shader de cara (5ce3 / ce188)

@@ -478,11 +478,80 @@ float3 pesMusField(float3 pb, float sw)
     return float3(0, 0, 0);
 #endif
 }
+// (26/10) variantes robusto / atletico del torso de TorsoBody: la tela se corre con la misma forma grande que la piel (copia de
+// PesTorsoField de PES21FX\shaders\pes_variants.hlsli = field() de tools/fox/torso/torso_variants.py). t del juego de zonas de
+// la prenda: z de su cabecera (la general en g_pesMus[0].z; la DLL la pone en cada juego propio).
+float pesVG(float u) { return exp(-0.5 * u * u); }
+float pesVSS(float a, float b, float x) { float t = saturate((x - a) / (b - a)); return t * t * (3.0 - 2.0 * t); }
+float pesVarTorsoMask(float3 v)
+{
+    float3 p = float3(abs(v.x), v.y, v.z);
+    const float3 cA = float3(0.2631, 1.3704, 0.0195), nA = float3(0.7611, -0.6432, -0.0839);
+    float3 qa = p - cA; float sA = dot(qa, nA); float rA = length(qa - sA * nA);
+    float arm = pesVSS(-0.004, 0.004, sA) * (1.0 - pesVSS(0.11, 0.13, rA));
+    const float3 cN = float3(0.0, 1.5223, 0.0552), nN = float3(0.0, 0.8564, 0.5163), e2 = float3(0.0, 0.5163, -0.8564);
+    float3 qn = p - cN; float sN = dot(qn, nN); float3 wn = qn - sN * nN;
+    float lw = max(length(wn), 1e-5); float ct = dot(wn, e2) / lw;
+    float hN = 0.00037 - 0.00183 * ct - 0.01279 * (2.0 * ct * ct - 1.0);
+    float neck = pesVSS(-0.004, 0.004, sN - hN) * (1.0 - pesVSS(0.10, 0.12, p.x));
+    return (1.0 - arm) * (1.0 - neck) * pesVSS(0.86, 0.90, p.y) * (1.0 - pesVSS(1.561, 1.569, p.y));
+}
+float3 pesTorsoField(float3 p, float t)
+{
+    if (abs(t) < 0.001) return float3(0, 0, 0);
+    const float ZC = 0.058, AX = 0.155, BZ = 0.110;
+    float x = abs(p.x), sx = p.x < 0.0 ? -1.0 : 1.0, y = p.y, z = p.z;
+    float dx = x / (AX * AX), dz = (z - ZC) / (BZ * BZ);
+    float L = sqrt(dx * dx + dz * dz) + 1e-6;
+    float rx = dx / L, rz = dz / L;
+    float front = pesVSS(-0.2, 0.6, rz), back = pesVSS(-0.2, 0.6, -rz), side = 1.0 - abs(rz);
+    float m = pesVarTorsoMask(p) * pesVSS(0.995, 1.035, y);
+    if (m <= 0.0) return float3(0, 0, 0);
+    float wa = max(t, 0.0), wr = max(-t, 0.0);
+    float rad = 0.0, latx = 0.0, dy = 0.0, tr = 0.0;
+    if (wr > 0.0) {
+        float uy = y > 1.10 ? (y - 1.10) / 0.085 : (y - 1.10) / 0.050;
+        rad += wr * 0.028 * pesVG(uy) * pesVG(x / 0.11) * pow(front, 1.3);
+        rad += wr * 0.016 * pesVG((y - 1.08) / 0.045) * side * (0.6 + 0.4 * back) * pesVSS(0.06, 0.13, x);
+        rad += wr * 0.008 * pesVG((y - 1.09) / 0.050) * back;
+        rad += wr * 0.010 * pesVG((y - 1.17) / 0.070) * side;
+        rad += wr * 0.005 * pesVSS(1.04, 1.10, y) * (1.0 - pesVSS(1.38, 1.46, y));
+        rad += wr * 0.009 * pesVG((x - 0.068) / 0.055) * pesVG((y - 1.282) / 0.034) * front;
+        rad -= wr * 0.002 * pesVG((x - 0.070) / 0.060) * pesVG((y - 1.385) / 0.030) * front;
+        dy  -= wr * 0.010 * pesVG((x - 0.068) / 0.055) * pesVG((y - 1.300) / 0.036) * front;
+        rad += wr * 0.004 * pesVG((x - 0.15) / 0.03) * pesVG((y - 1.30) / 0.04) * (1.0 - back);
+        rad += wr * 0.005 * pesVG((y - 1.44) / 0.040) * back;
+    }
+    if (wa > 0.0) {
+        latx += wa * 0.010 * pesVG((y - 1.30) / 0.060) * pesVSS(0.10, 0.15, x) * pesVSS(-0.6, 0.2, -rz);
+        rad -= wa * 0.009 * pesVG((y - 1.14) / 0.060) * side;
+        rad -= wa * 0.008 * pesVG((y - 1.08) / 0.050) * front * pesVG(x / 0.09);
+        rad += wa * 0.007 * pesVG((x - 0.070) / 0.050) * pesVG((y - 1.335) / 0.040) * front;
+        rad -= wa * 0.0035 * pesVG((x - 0.075) / 0.045) * pesVG((y - 1.285) / 0.012) * front;
+        rad += wa * 0.0060 * pesVG((x - 0.055) / 0.045) * pesVG((y - 1.445) / 0.040) * back;
+        tr = wa * 0.0120 * pesVG((x - 0.115) / 0.042) * pesVG((y - 1.522) / 0.026) * (1.0 - 0.8 * front);
+    }
+    float3 td = normalize(float3(0.25, 0.90, -0.35));
+    return float3((rad * rx + latx + tr * td.x) * sx, dy + tr * td.y, rad * rz + tr * td.z) * m;
+}
+// reposo de la tela con la musculatura y la variante del torso (sw = peso de manga: la variante no va en las mangas)
+float3 pesRestFollow(float3 pb, float sw)
+{
+    float3 v = pesMusField(pb, sw);
+#if PES_MUS_FOLLOW
+    float4 H = g_pesMus[0];
+    if (H.y > 0.0) {
+        float3 tv = pesTorsoField(pb, clamp(g_pesMus[s_musBase].z, -1.0, 1.0)) * min(H.y, 2.0) * (1.0 - saturate(sw));
+        if (all(isfinite(tv))) v += tv;
+    }
+#endif
+    return v;
+}
 // (25/10 b) las costuras (escote, punos, cintura: el mod las sujeta con pin alto) no se corren: el cuello y los punos son mallas
 // aparte que siguen al esqueleto sin la musculatura, y si la tela de la costura se corria quedaba separada del cuello
 float pesPinRest(ParticleRest r) { return (s_flags & 256) ? float((r.skin.w >> 2) & 63) / 63.0 : r.posPin.w; }
 float pesSeamFade(float pin) { return 1.0 - smoothstep(0.25, 0.85, pin); }
-float3 pesMusOf(ParticleRest r) { return pesMusField(r.posPin.xyz, g_legCount > 0 ? 0.0 : float((r.skin.w >> 8) & 255) / 255.0) * pesSeamFade(pesPinRest(r)); }
+float3 pesMusOf(ParticleRest r) { return pesRestFollow(r.posPin.xyz, g_legCount > 0 ? 0.0 : float((r.skin.w >> 8) & 255) / 255.0) * pesSeamFade(pesPinRest(r)); }
 void restAt(uint p, float t, out float3 pos, out float3 nrm)
 {
     ParticleRest r = g_rest[p];
@@ -1614,7 +1683,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                 float w0 = float(rm.w & 0xffff) / 65535.0, w1 = float(rm.w >> 16) / 65535.0, w2 = max(1.0 - w0 - w1, 0.0);
                 uint3 pp = min(rm.xyz, MAXP - 1);
                 // PES21 FX (25/10): el vertice mapeado tambien sigue a la musculatura (gx ya es el desplazamiento sobre el reposo corrido)
-                x = mul(A, v + pesMusField(v, g_legCount > 0 ? 0.0 : float((g_rest[pp.x].skin.w >> 8) & 255) / 255.0) * pesSeamFade(pinOf(pp.x))) + tr + gx[pp.x] * w0 + gx[pp.y] * w1 + gx[pp.z] * w2;
+                x = mul(A, v + pesRestFollow(v, g_legCount > 0 ? 0.0 : float((g_rest[pp.x].skin.w >> 8) & 255) / 255.0) * pesSeamFade(pinOf(pp.x))) + tr + gx[pp.x] * w0 + gx[pp.y] * w1 + gx[pp.z] * w2;
                 float3 rp, r0, r1, r2;
                 restAtC(pp.x, rp, r0);
                 restAtC(pp.y, rp, r1);

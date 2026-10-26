@@ -23,6 +23,7 @@ struct UiRow { const char* label; int idx, comp; float lo, hi; int region; int v
 static const UiRow kRows[] = {
     { "General",              167, 0, 0.7f, 1.5f, -1, 0, 0, 0, 0, 0, 0, "Agranda o achica todos los m\xC3\xBAsculos a la vez (no la panza, codos ni mu\xC3\xB1" "ecas). Se multiplica con cada uno." },
     { "Definici\xC3\xB3n muscular",  172, 0, 0.0f, 2.0f, -1, 0, 0, 0, 0, 0, 0, "Qu\xC3\xA9 tan marcados se ven los m\xC3\xBAsculos en la piel. 0 = piel lisa; 1 = como el juego." },
+    { "Torso y brazos",       262, 2, 0.5f, 1.5f, -1, 0, 0, 0, 0, 0, 0, "Variantes de TorsoBody: hacia la izquierda ROBUSTO (panza, rollos, pecho ca\xC3\xAD" "do, abdominales borrados, estr\xC3\xAD" "as, brazos m\xC3\xA1s gruesos y lisos), hacia la derecha ATL\xC3\x89TICO (cintura fina, espalda en V, trapecio, abdominales y serratos marcados, venas en los brazos). Cambia el modelo, las normales y las texturas. 1 = TorsoBody." },
     // hombros y brazos
     { "Hombros",              164, 1, 0.7f, 1.5f, 0, 3, 0.210f, 1.452f, 0.214f, 1.444f, 0.056f, "Deltoides: la tapa del hombro crece alrededor de la articulaci\xC3\xB3n." },
     { "Ancho de hombros",     171, 3, 0.7f, 1.5f, 0, 0, 0, 0, 0, 0, 0, "Corre los hombros hacia afuera, sin alargar los brazos." },
@@ -290,6 +291,9 @@ static void Row(MusUiModel& m, int i, float labelW) {
     if (ImGui::IsItemHovered() || ImGui::IsItemActive()) s_hoverRow = i;
     ImGui::TableSetColumnIndex(2);
     ImGui::AlignTextToFramePadding();
+    if (r.idx == 262 && r.comp == 2)   // (26/10) variante: robusto / atletico en vez de un multiplicador
+        ImGui::TextColored(changed ? Mix(c, ImVec4(1, 1, 1, 1), 0.25f) : ImVec4(0.62f, 0.65f, 0.71f, 1), "%s", !changed ? "TorsoBody" : v < 1.0f ? "robusto" : "atl\xC3\xA9tico");
+    else
     ImGui::TextColored(changed ? Mix(c, ImVec4(1, 1, 1, 1), 0.25f) : ImVec4(0.62f, 0.65f, 0.71f, 1), "x%.2f", v);
     if (m.HasOwn()) {
         const float g = m.General(r.idx, r.comp);
