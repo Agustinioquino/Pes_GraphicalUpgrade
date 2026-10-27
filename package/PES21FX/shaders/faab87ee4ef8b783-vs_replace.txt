@@ -62,6 +62,7 @@ cbuffer VSBones : register(b6)
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 #include "pes_skintone.hlsli"
+#include "pes_collar.hlsli"   // (27/10 d) PesCollarSink
 
 
 void main(
@@ -87,6 +88,9 @@ void main(
   float4 r0,r1,r2,r3,r4,r5,r6;
   uint4 bitmask, uiDest;
   float4 fDest;
+
+  float3 v0r = v0.xyz;   // (27/10 d) reposo (los poros y el collar del PS lo siguen usando)
+  v0.xyz += PesCollarSink(v0r, v1.xyz);   // (27/10 d) base del cuello hundida bajo el torso (y323)
 
   r0.x = cmp(g_vsObject.m_useWeightCount.x != 0.000000);
   if (r0.x != 0) {
@@ -174,8 +178,8 @@ void main(
   o3.xyz = -r0.xyz;
   // (27/10 c) posicion de REPOSO del vertice (v0, espacio del modelo, metros) para los poros triplanares (pes_pores.hlsli):
   // z en o3.w + 10 (asi no cae en el [2, 3] del peso del musculo del cuerpo en aa7d), (y, x) en TEXCOORD9.zw como el VS del cuerpo
-  o3.w = 10.0 + v0.z;
-  p2.z = v0.y; p2.w = v0.x;
+  o3.w = 10.0 + v0r.z;
+  p2.z = v0r.y; p2.w = v0r.x;
   o4.xyz = r1.xyz;
   o5.xyz = r4.xyz;
   o6.xyz = r2.xyz;

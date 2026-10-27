@@ -40,7 +40,7 @@ constexpr int kParamCount = 336;           // float4 x 336 -> t120 en los shader
 // 320 = torso bajo la camiseta ajustada (27/10, pes_skintone.hlsli PesTorsoInset: x mm, w on).
 // 321 = brazos, manos y muslos de TorsoBody para las caras reales (27/10, brazos.cpp: x prendido, y muslos, z tono forzado, w log).
 // 322 = cuello de las caras reales fundido con el torso (27/10, pes_collar.hlsli en 5ce3 / ce188: x prendido, y alto mm, z cuanto, w diagnostico).
-// 323 = ocultar la camiseta interior (inner*, highneck de common_package.fpk) al mirar el cuerpo sin camiseta (27/10, hooks.cpp: x prendido, w log).
+// 323 = ocultar la camiseta interior (inner*, highneck de common_package.fpk) al mirar el cuerpo sin camiseta (27/10, hooks.cpp: x prendido, w log); (27/10 d) y hundir la base del cuello de la cara bajo el torso en mm (VS faab87ee / 455eb97b, pes_collar.hlsli), z alto del fundido mm.
 // 312 = sol estable (la DLL lo escribe cada cuadro: config.cpp, PESSunStable). NO usarla para otra cosa.
 // 326 = costura del hombro de la musculatura (27/10, aa7d1833: x prendido, y ancho m, z fuerza; antes 312, chocaba con el sol).
 // 325 = nitidez de las hojas del mod (27/10, grass.cpp: x ancho minimo de la hoja en px, 0 = el de la calidad x61).

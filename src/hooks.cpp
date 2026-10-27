@@ -1642,8 +1642,11 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     BodyPresent();         // (25/10) la ropa contra el cuerpo real: mallas de piel nuevas, cuadro nuevo
     ArmsPresent();         // (27/10) brazos de TorsoBody para las caras reales: huellas de los torsos del juego, claves del cuadro
     { static unsigned s_noShirt = 1000; s_noShirt = g_shirtSeen.exchange(false) ? 0 : (std::min)(s_noShirt + 1, 1000u);   // (27/10 c) fila 320.z: camisetas en los ultimos 30 Present
-      const float on = s_noShirt < 30 ? 1.0f : 0.0f;
-      if (on != g_cfg.live[320][2]) Log("torso bajo la camiseta: %s", on > 0.5f ? "hay camisetas en escena (el torso se mete x320 mm)" : "sin camisetas en escena (torso entero)");
+      // (27/10 d) en el menu Fisico el jugador se ve sin camiseta: aunque haya camisetas de otros modelos, el torso va entero
+      // (si no, el pecho se hunde x320 mm debajo del cuello y de los hombros, que no se mueven, y queda un escalon)
+      const bool fis = MusclePhysiqueActive();
+      const float on = (s_noShirt < 30 && !fis) ? 1.0f : 0.0f;
+      if (on != g_cfg.live[320][2]) Log("torso bajo la camiseta: %s", on > 0.5f ? "hay camisetas en escena (el torso se mete x320 mm)" : fis ? "menu Fisico (torso entero)" : "sin camisetas en escena (torso entero)");
       g_cfg.live[320][2] = on; }
     GrassFrameBoundary(flags);   // (26/10 d) pasto: limite del cuadro (reclamo en la GPU, x63) ANTES de subir t120
     HeadShadowPresent();   // (27/10 c) sombra de la cabeza: cabezas elegidas, cajas y filas 310 / 316..319 ANTES de subir t120
