@@ -656,7 +656,9 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
     // ancho minimo de la hoja en pixeles (hojas de menos de ~1.4 px titilan). Densidad (x58) multiplica C.
     static const float cMul[4] = { 0.6f, 1.0f, 1.4f, 1.8f }, minPxQ[4] = { 1.8f, 1.5f, 1.3f, 1.2f };
     float dens = g_cfg.live[58][0] > 0.05f ? std::clamp(g_cfg.live[58][0], 0.3f, 2.0f) : 1.0f;
-    const float cBase = 0.30f * cMul[q] * dens, minPx = minPxQ[q];
+    // (27/10 9c) x325: ancho minimo en px a mano (0 = el de la calidad). Con la camara quieta el TAA del juego promedia las hojas de
+    // ~1.2 px con el suelo y el pasto se vuelve liso; moviendo, la historia se descarta y vuelven nitidas: hojas de 2 px no se pierden
+    const float cBase = 0.30f * cMul[q] * dens, minPx = g_cfg.live[325][0] > 0.5f ? std::clamp(g_cfg.live[325][0], 1.f, 4.f) : minPxQ[q];
     Level L[3] = { { 0.5f, kSlotCap, 0, 1.0f }, { 1.0f, kSlotCap, 0, 1.6f }, { 2.0f, kSlotCap, 0, 2.0f } };
     // (25/10) con el cesped lejano de la base prendido (y61) el nivel 3D lejano se apaga por debajo de T3 px/m y la base lo sigue
     // (25/10 c) el fundido entre niveles es por CANTIDAD de tarjetas en el compute (nivel saliente lim*k, entrante lim*(1-k), mismo
