@@ -500,3 +500,12 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
   atletico; 0.5 = nada, factor 1 + (v - 0.5) 0.8). Alfa de torso_N_bsm (6 tonos): lo mismo a escala fina (< 8 mm), 0.93 .. 1.08;
   el juego no lee el alfa del bsm del cuerpo, el PS de PES21FX si (x311 prendido, y311 por tipo de cuerpo, z311 el alfa). El alfa
   del torso_1_bsm.dds del usuario (DXT3) estaba roto (fila 0 de cada bloque 255, el resto 0): no tenia detalle.
+- 27/10: atletico con relieve de espalda, serratos, flanco y trapecio alto en 3D (atl_anatomy.py) sobre el mapa propio reforzado;
+  "Cuerpo del color de la cara" (igualar) prendido por defecto (hay que abrir el Fisico de cada jugador una vez para medir).
+- 27/10 b: union del brazo. make_variants.join_shoulder solo movia UNO de los vertices duplicados del brazo en el hombro (los
+  cortes de UV del brazo repiten la posicion): ahora query_ball_point(1e-4) y se mueven todos (el triangulo que se abria).
+  pad_tex.py: fuera de las islas de UV cada textura (bsm 6 tonos, nrm, srm, trm de torso y brazos) toma el texel de adentro mas
+  cercano y se rehacen los mips (los mips bajos mezclaban el fondo en el borde: la linea). PS x312 (y312 ancho, z312 fuerza):
+  junto a la costura del hombro, a los dos lados, se va el relieve propio del normal map y el color fino (queda el mip 6 del
+  bsm), con la misma funcion de la posicion de reposo en torso y brazo. Brillo blanco del pecho bajo el cuello: las normales
+  de la malla de Konami se mezclaban de 4 a 10 cm; ahora solo a 1.5 cm del anillo (neck_konami.py).

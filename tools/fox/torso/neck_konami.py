@@ -156,7 +156,7 @@ def build(common, konami_path, log=print):
     bc = bary(q[ok], QK[t3[:, 0]], QK[t3[:, 1]], QK[t3[:, 2]])
     nk = np.einsum("ij,ijk->ik", np.clip(bc, 0, 1), NK[t3]); nk /= np.maximum(np.linalg.norm(nk, axis=1, keepdims=True), 1e-12)
     NKv = np.zeros((n, 3)); WKv = np.zeros(n)
-    NKv[sel[ok]] = nk; WKv[sel[ok]] = wk[sel[ok]]
+    NKv[sel[ok]] = nk; WKv[sel[ok]] = (1 - ss(0.0, 0.015, g[sel[ok]]))   # (27/10) la normal de Konami solo en 1.5 cm junto al cuello (mas abajo el pecho quedaba blanco: sus normales van con su normal map, no con el de TorsoBody)
     # el anillo: la normal del borde de Konami en ese angulo
     kbn_all = np.concatenate([QK[BK], NK[BK]], 1)[QK[BK, 1] > 1.44]
     phk = phi_of(kbn_all[:, :3]); o_ = np.argsort(phk); phk = phk[o_]; nkb = kbn_all[o_, 3:]; m_ = len(phk)
