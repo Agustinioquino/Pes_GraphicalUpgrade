@@ -448,3 +448,10 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
   (alto pasaje del normal map suavizado, +-6 %). El muslo no tiene trm en TorsoBody (usa el thigh_trm del juego). El cuadrante de
   abajo a la izquierda de torsob_* es un sobrante del cuerpo de Konami: ninguna malla de TorsoBody lo usa.
 - (26/10 g) TorsoBody_cuello 1.11: la 1.10 llamaba a pcall (Sider no lo da) y fallaba en cada cara: no corto ningun cuello.
+- (26/10 g) PERFILES DEL CUELLO (19 caras reales, neck_profiles.py): la mediana de las caras es IGUAL al cuello generico de
+  TorsoBody (en el borde = LOOP al 0.1 mm, a +1 / +2 / +3 cm lo mismo, a -1 cm sigue en la superficie del torso): el torso ya
+  tiene la forma del cuello de Konami. 11 de 19 caras coinciden al 0.5 mm; las otras 8 tienen el cuello hasta 6 .. 8 mm mas
+  fino (o grueso) en algun angulo (frente o costados). No se cambia el torso: TorsoBody_cuello 1.12 SUELDA cada cara: radio
+  justo arriba del borde (rayos a 3 y 8 mm, extrapolado) contra el borde, 24 angulos, los vertices de los 2.5 cm de abajo se
+  mueven en horizontal esa diferencia (entera en el borde, smoothstep a 0 arriba; tope 12 mm; < 1 mm no se toca). Las otras
+  mallas de la cara (barba...) usan la diferencia de la piel.

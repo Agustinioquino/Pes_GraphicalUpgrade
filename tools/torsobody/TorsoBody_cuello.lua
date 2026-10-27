@@ -44,7 +44,7 @@ local PERFIL = true
 -- las funciones definidas adentro)
 local NOJIT = false
 local function modulo_cuello()
-local m = { version = "1.11" }
+local m = { version = "1.12" }
 
 local AXZ = 0.045          -- eje del cuello (z)
 -- borde del cuello del torso TorsoBody v11.3c (x, y, z), ordenado por angulo alrededor del cuello
@@ -142,6 +142,28 @@ local function ring_n(phi)                 -- (1.9) normal del borde del torso e
     local x, y, z = na[1] + (nb[1] - na[1]) * t, na[2] + (nb[2] - na[2]) * t, na[3] + (nb[3] - na[3]) * t
     local l = sqrt(x * x + y * y + z * z); if l < 1e-9 then return na end
     return { x / l, y / l, z / l }
+end
+
+local function ring_r(phi)                 -- (1.12) distancia horizontal del eje al borde del torso en el angulo phi
+    local y = loop_y(phi)
+    local i
+    if phi < LPH[1] or phi >= LPH[NL] then i = NL
+    else
+        local lo, hi = 1, NL
+        while hi - lo > 1 do
+            local mid = floor((lo + hi) / 2)
+            if LPH[mid] <= phi then lo = mid else hi = mid end
+        end
+        i = lo
+    end
+    local a, b = LOOP[i], LOOP[i % NL + 1]
+    local r = rad(phi); local c, s = cos(r), sin(r)
+    local sa = a[1] * c - (a[3] - AXZ) * s
+    local sb = b[1] * c - (b[3] - AXZ) * s
+    local t = 0
+    if abs(sa - sb) > 1e-15 then t = sa / (sa - sb) end
+    local x, z = a[1] + (b[1] - a[1]) * t, a[3] + (b[3] - a[3]) * t
+    return sqrt(x * x + (z - AXZ) ^ 2), y
 end
 
 -- ---------- lectura / escritura binaria ----------
@@ -1839,6 +1861,115 @@ local function neck_profile(M)
     return table.concat(out, " ")
 end
 
+-- (1.12) SOLDADURA POR CARA: el cuello de 11 de 19 caras reales medidas es el de Konami de siempre (en el borde del torso el
+-- radio es el del borde al 0.5 mm: el torso de TorsoBody ya tiene esa forma), pero otras tienen el cuello hasta 8 mm mas
+-- fino o mas grueso en algun angulo: quedaba un escalon (se veia el labio del torso o el cuello salido). Aca, por cara: el
+-- radio del cuello justo arriba del borde (rayos desde el eje a 3 y 8 mm, extrapolado al borde) contra el del borde del
+-- torso, en 24 angulos; los vertices de los SOLDAR m de abajo se mueven en horizontal (desde el eje) esa diferencia, entera
+-- en el borde y nada a SOLDAR m (smoothstep): arriba queda la forma de Konami. Las caras que ya coinciden (< 1 mm) no se tocan.
+local SOLDAR = 0.025
+local SOLDAR_MAX = 0.012
+local CUR_DELTA = nil              -- diferencias de la malla de piel de la cara actual (las otras mallas usan las mismas)
+local function band_tris(M)
+    local P, sel = M.P, {}
+    for _, T in ipairs(M.tris) do
+        for _, t in ipairs(T) do
+            local ok = false
+            for k = 1, 3 do
+                local q = P[t[k]]; local dq = depth(q)
+                if dq > -0.045 and dq < 0.06 and sqrt(q[1] ^ 2 + (q[3] - AXZ) ^ 2) < 0.14 then ok = true; break end
+            end
+            if ok then sel[#sel + 1] = t end
+        end
+    end
+    return sel
+end
+local function ray_r(P, sel, phi, oy)
+    local r = rad(phi); local dx, dz = sin(r), cos(r)
+    local best = nil
+    for _, t in ipairs(sel) do
+        local a, b, c = P[t[1]], P[t[2]], P[t[3]]
+        local e1x, e1y, e1z = b[1] - a[1], b[2] - a[2], b[3] - a[3]
+        local e2x, e2y, e2z = c[1] - a[1], c[2] - a[2], c[3] - a[3]
+        local px_, py_, pz_ = -e2y * dz, dz * e2x - dx * e2z, dx * e2y
+        local det = e1x * px_ + e1y * py_ + e1z * pz_
+        if abs(det) > 1e-14 then
+            local inv = 1 / det
+            local tx, ty, tz = -a[1], oy - a[2], AXZ - a[3]
+            local u = (tx * px_ + ty * py_ + tz * pz_) * inv
+            if u >= 0 and u <= 1 then
+                local qx, qy, qz = ty * e1z - tz * e1y, tz * e1x - tx * e1z, tx * e1y - ty * e1x
+                local v = (dx * qx + dz * qz) * inv
+                if v >= 0 and u + v <= 1 then
+                    local s_ = (e2x * qx + e2y * qy + e2z * qz) * inv
+                    if s_ > 0.005 and (not best or s_ < best) then best = s_ end
+                end
+            end
+        end
+    end
+    return best
+end
+local function weld_deltas(M)
+    local sel = band_tris(M)
+    local D, n, mx = {}, 0, 0
+    for ia = 0, 23 do
+        local phi = -180 + ia * 15
+        local rr, y0 = ring_r(phi)
+        local r3, r8 = ray_r(M.P, sel, phi, y0 + 0.003), ray_r(M.P, sel, phi, y0 + 0.008)
+        if r3 and r8 then
+            local d = rr - (r3 + (r3 - r8) * 0.6)
+            if d > SOLDAR_MAX then d = SOLDAR_MAX elseif d < -SOLDAR_MAX then d = -SOLDAR_MAX end
+            D[ia] = d; n = n + 1; if abs(d) > mx then mx = abs(d) end
+        end
+    end
+    if n < 12 then return nil, "sin medida" end
+    for ia = 0, 23 do                                   -- los angulos sin medida: de los vecinos
+        if not D[ia] then
+            local l, r_ = nil, nil
+            for k = 1, 12 do
+                if not l and D[(ia - k) % 24] then l = { D[(ia - k) % 24], k } end
+                if not r_ and D[(ia + k) % 24] then r_ = { D[(ia + k) % 24], k } end
+            end
+            D[ia] = (l[1] * r_[2] + r_[1] * l[2]) / (l[2] + r_[2])
+        end
+    end
+    if mx < 0.001 then return nil, string.format("cuello de Konami (%.1f mm)", mx * 1000) end
+    return D, string.format("soldado al borde (hasta %.1f mm)", mx * 1000)
+end
+local function weld_move(D, p, d)
+    local w
+    if d >= 0 then w = 1 else
+        local x = -d / SOLDAR; if x >= 1 then return nil end
+        x = 1 - x; w = x * x * (3 - 2 * x)
+    end
+    local ox, oz = p[1], p[3] - AXZ
+    local l = sqrt(ox * ox + oz * oz); if l < 0.01 then return nil end
+    local f = (deg(atan2(ox, oz)) + 180) / 15
+    local i0 = floor(f); local t = f - i0
+    local dd = (D[i0 % 24] * (1 - t) + D[(i0 + 1) % 24] * t) * w
+    return { p[1] + ox / l * dd, p[2], p[3] + oz / l * dd }
+end
+local function apply_weld(M, plan, D)
+    local Pa
+    for _, a in ipairs(M.attrs) do if a.type == 0 and a.fmt == 1 then Pa = a end end
+    if not Pa then return 0 end
+    local n, newset = 0, {}
+    for _, nvd in ipairs(plan.newv) do
+        newset[nvd.v] = true
+        local p = nvd.vals[Pa]
+        if p then local q = weld_move(D, p, 0); if q then nvd.vals[Pa] = { q[1], q[2], q[3], p[4] }; n = n + 1 end end
+    end
+    plan.moves = plan.moves or {}
+    for i = 0, M.nv - 1 do
+        if not newset[i] then
+            local mv = plan.moves[i]
+            local q = weld_move(D, mv or M.P[i], mv and 0 or M.d[i])
+            if q then plan.moves[i] = q; n = n + 1 end
+        end
+    end
+    return n
+end
+
 local function cut_mesh(F, mi, name, shader)
     local M, err = read_mesh(F, mi)
     if not M then return err end
@@ -1866,6 +1997,18 @@ local function cut_mesh(F, mi, name, shader)
             if NORMALES_TORSO and name:find("skin", 1, true) and (shader == "" or shader:find("skin", 1, true)) then
                 local nn = blend_normals(M, plan)
                 if nn > 0 then note = note .. string.format(" [%d normales de la union]", nn) end
+            end
+            if SOLDAR > 0 then                              -- (1.12) soldadura del cuello de esta cara al borde del torso
+                local D, wmsg = CUR_DELTA, nil
+                if name == "fox_skin_mat" then             -- las otras mallas (barba, etc.) solo con lo de la piel
+                    if PC then local okw, a1, a2 = PC(weld_deltas, M); if okw then D, wmsg = a1, a2 else D, wmsg = nil, "error " .. tostring(a1) end
+                    else D, wmsg = weld_deltas(M) end
+                    CUR_DELTA = D or false
+                end
+                if D then
+                    local nw = apply_weld(M, plan, D)
+                    note = note .. string.format(" [%s, %d vertices]", wmsg or "soldado como la piel", nw)
+                elseif wmsg then note = note .. " [" .. wmsg .. "]" end
             end
             apply_plan(M, plan)
             if bad_vals > 0 then note = note .. string.format(" [%d valores no validos corregidos]", bad_vals) end
@@ -2169,7 +2312,7 @@ local function data_ready(ctx, filename, data, size, total_size, offset)
         end
     end
     local patches, grids = PATCH, CUR_GRIDS
-    BUF, PATCH, CUR_GRIDS, CUR_FACE_KEY = nil, nil, nil, nil
+    BUF, PATCH, CUR_GRIDS, CUR_FACE_KEY, CUR_DELTA = nil, nil, nil, nil, nil
     if #patches > 0 then
         local newbuf = apply_patches(buf, patches)
         if not newbuf or #newbuf ~= size then
