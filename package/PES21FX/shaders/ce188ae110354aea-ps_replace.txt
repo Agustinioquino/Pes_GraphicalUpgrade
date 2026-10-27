@@ -411,6 +411,13 @@ void main(
   // no toda la cara suda a la vez: la frente, las sienes y la nariz arrancan antes; mandibula y mejillas despues
   float sweatProgZ = zonesOn ? saturate(sweatProg * lerp(1.0, 0.35 + 1.1 * saturate(FZ.r * 1.25), saturate(P73.z))) : sweatProg;
   float filmWet = zonesOn ? saturate(sweatProgZ * zoneSw) * saturate(P72.x) : 0.0;
+  // (25/10) lluvia en la piel (z12): con lluvia en el partido (114.x = 1, lo publica la DLL) la cara se moja entera, no por
+  // zonas: pelicula de agua (menos rugosidad, mas brillo, albedo apenas mas oscuro) y gotas aunque todavia no haya sudor
+  float4 P12 = IniParams.Load(int2(12,0));
+  float pesRainV = IniParams.Load(int2(114,0)).x;
+  float rainK = (enhance && pesRainV > 0.5 && pesRainV < 1.5) ? saturate(P12.z) : 0.0;
+  filmWet = max(filmWet, rainK * 0.85);
+  sweatProgZ = max(sweatProgZ, rainK * 0.6);
   if (enhance && P9.z > 0) {
     // vello facial pintado (barba, cejas, bigote): mascara por color oscuro y poco saturado
     float3 albE = g_tex_diffuse.Sample(g_samplerAnisotropic_Clamp_s, uvD).xyz;
@@ -442,7 +449,7 @@ void main(
     r1.xyz = normalize(r1.xyz);
   }
   float pesSwFp = max(length(ddx(v2.xy)), length(ddy(v2.xy)));   // PES21 (20/10): tamano del pixel en uv (fuera de la rama)
-  if (enhance && P8.w > 0.5 && sweatProg > 0.001) {
+  if (enhance && P8.w > 0.5 && (sweatProg > 0.001 || rainK > 0.001)) {
     float t = g_psSystem.m_timeParam.z * max(P8.z, 0.01);
     float4 sA = SweatLayer(v2.xy, 70.0, P8.x * sweatProgZ, max(P8.y, 0.1), t, true, pesSwFp * 70.0);          // PES21 zonas: gotas donde se suda
     float4 sB = SweatLayer(v2.xy + 0.37, 150.0, P8.x * 1.3 * sweatProgZ, max(P8.y, 0.1) * 0.8, t, false, pesSwFp * 150.0);
@@ -557,7 +564,19 @@ void main(
     }
     r2.xyz = saturate(r2.xyz);
     // rubor progresivo por el esfuerzo (sube con el reloj del partido)
-    float flushF = sweatProg * IniParams.Load(int2(12,0)).x;
+    float flushF = sweatProg * P12.x;
+    // (25/10) sangre por zona (y12): la sangre sube donde la piel esta mas irrigada (mejillas, nariz, orejas: canal de sangre
+    // del mapa de SSS y lo fino), no pareja en toda la cara; y con mas melanina se ve mucho menos (piel oscura: casi nada).
+    // 0 = rubor parejo como antes
+    float flushZ = 1.0;
+    if (P12.y > 0.001) {
+      float bl = sssMap.w > 0.01 ? sssMap.z * sssMap.w : 0.5;               // sin mapa de SSS: zona media
+      float zoneB = saturate(0.30 + 1.10 * bl + 0.45 * saturate(thin));
+      float lA = dot(r2.xyz, float3(0.2126, 0.7152, 0.0722));
+      float melA = saturate(log2(0.47 / max(lA, 1e-3)) / 2.85);             // indice de melanina (PESMelanin)
+      flushZ = lerp(1.0, 1.6 * zoneB * (1.0 - 0.7 * melA), saturate(P12.y));
+    }
+    flushF *= flushZ;
     r2.xyz *= float3(1.0 + flushF, 1.0 - flushF * 0.35, 1.0 - flushF * 0.45);
   }
   // cavidades (x35): menos luz difusa y menos brillo dentro de los huecos; la translucidez se mantiene (las orejas siguen rojas a contraluz)

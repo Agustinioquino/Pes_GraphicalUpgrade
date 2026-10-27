@@ -436,7 +436,16 @@ void main(
     r2.yzw = saturate(r2.yzw);
     float4 P9h = IniParams.Load(int2(9,0));
     float swP = saturate((IniParams.Load(int2(10,0)).x - P9h.x) / max(P9h.y - P9h.x, 0.1));
-    float flushF = swP * IniParams.Load(int2(12,0)).x;
+    float4 P12h = IniParams.Load(int2(12,0));
+    float flushF = swP * P12h.x;
+    if (P12h.y > 0.001) {   // (25/10) sangre por zona (y12), igual que la cara: mejillas, nariz y orejas; menos con mas melanina
+      float4 smF = pesSSSMap.Sample(g_samplerLinear_Clamp_s, v2.xy);
+      float bl = smF.w > 0.01 ? smF.z * smF.w : 0.5;
+      float zoneB = saturate(0.30 + 1.10 * bl + 0.45 * saturate(hpThin));
+      float lA = dot(r2.yzw, float3(0.2126, 0.7152, 0.0722));
+      float melA = saturate(log2(0.47 / max(lA, 1e-3)) / 2.85);
+      flushF *= lerp(1.0, 1.6 * zoneB * (1.0 - 0.7 * melA), saturate(P12h.y));
+    }
     r2.yzw *= float3(1.0 + flushF, 1.0 - flushF * 0.35, 1.0 - flushF * 0.45);
     float4 P72h = IniParams.Load(int2(72,0)), P73h = IniParams.Load(int2(73,0));
     if (P72h.w > 0.5) {   // pelicula de sudor por zonas (mismo mapa que la cara)
@@ -537,6 +546,12 @@ void main(
     o2.y *= (1.0 - 0.45 * hpPoreA) * lerp(0.95, 1.12, hpTZone * saturate(P94h.x));
     r0.x = lerp(hpR0, r0.x, hpK); o2.y = lerp(hpS0, o2.y, hpK);
   }
+  // (25/10) lluvia en la piel (z12): con lluvia en el partido (114.x = 1) brazos, piernas, cuello y cabeza de las genericas
+  // quedan mojados: menos rugosidad y mas brillo, como la pelicula de sudor de la cara
+  { float rv = IniParams.Load(int2(114,0)).x;
+    float rK = (rv > 0.5 && rv < 1.5 && (bodyOn || headPiece)) ? saturate(IniParams.Load(int2(12,0)).z) * 0.85 : 0.0;
+    r0.x = lerp(r0.x, r0.x * 0.45, rK);
+    o2.y = lerp(o2.y, max(o2.y, 0.5), rK * 0.8); }
   r0.y = r0.x * 0.0361702144 + 0.0904255286;
   r0.y = r0.y * r0.x + 0.180851057;
   r0.y = r0.y * r0.x + 0.271276593;
