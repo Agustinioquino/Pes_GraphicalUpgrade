@@ -725,8 +725,10 @@ void UpdateTimeParams() {
                     if (skyLast[0] != 0.0f || skyLast[1] != 0.0f || skyLast[2] != 0.0f) haveSt = false;
                     skyLast[0] = k[0]; skyLast[1] = k[1]; skyLast[2] = k[2];
                 }
-                if (haveSt) { p[312][0] = st[0]; p[312][1] = st[1]; p[312][2] = st[2]; p[312][3] = 1.0f; }
-                else if (sky) { p[312][0] = k[0]; p[312][1] = k[1]; p[312][2] = k[2]; p[312][3] = 2.0f; }
+                // (27/10) primero el cielo: en el log del 26/10 22:04 una toma de repeticion quieta mas de 15 s (59 grados girada)
+                // se volvia el sol "estable". El sol del cielo no se mueve nunca; lo quieto de la luz queda para cuando no hay cielo
+                if (sky) { p[312][0] = k[0]; p[312][1] = k[1]; p[312][2] = k[2]; p[312][3] = 2.0f; }
+                else if (haveSt) { p[312][0] = st[0]; p[312][1] = st[1]; p[312][2] = st[2]; p[312][3] = 1.0f; }
                 else { p[312][0] = wx; p[312][1] = wy; p[312][2] = wz; p[312][3] = 0.0f; } } }
           float cr = L[4], cg = L[5], cb = L[6]; float mx = std::max(cr, std::max(cg, cb));
           if (mx > 1e-4f) { p[112][0] = cr / mx; p[112][1] = cg / mx; p[112][2] = cb / mx; }

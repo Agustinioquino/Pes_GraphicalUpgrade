@@ -333,6 +333,7 @@ static void SunPassPresent() {
     // gira, el motor arma la luz por camara (iluminacion de repeticion); si salta solo en los cortes, es un preset por toma.
     static int dFrames = 0, dOff = 0, dJumps = 0, dLines = 0, dLastF = -1; static bool dWasOff = false;
     static float dMax = 0, azMin = 1e9f, azMax = -1e9f, camMin = 1e9f, camMax = -1e9f, relMin = 1e9f, relMax = -1e9f, dPrev[3] = {};
+    static float resMin = 1e9f, resMax = -1e9f, upMin = 1e9f, upMax = -1e9f;   // (27/10) modelo: rumbo de la luz = rumbo del cielo + 2 x (camara + 90)
     { std::vector<float> L, S, K; int lf = -1, sf = -2;
       if (NamedCBRead("LightCB", L, &lf) && L.size() >= 4 && NamedCBRead("SceneCB", S, &sf) && S.size() >= 64 && lf == sf && lf != dLastF
           && NamedAge("SkyMatCB") >= 0 && NamedAge("SkyMatCB") <= 30 && NamedCBRead("SkyMatCB", K) && K.size() >= 16) {
@@ -346,6 +347,9 @@ static void SunPassPresent() {
               float dev = acosf(std::clamp(w[0] * k[0] + w[1] * k[1] + w[2] * k[2], -1.0f, 1.0f)) * 57.2958f;
               float az = atan2f(w[2], w[0]) * 57.2958f, cam = atan2f(M[10], M[8]) * 57.2958f;   // fila 2 de m_view = eje z de la camara
               float rel = fmodf(az - cam + 540.0f, 360.0f) - 180.0f;
+              // (27/10) log del 26/10 22:01: la luz del motor se separa del cielo 2 x (rumbo de la camara + 90) y la altura no cambia
+              float res = fmodf(az - (atan2f(k[2], k[0]) * 57.2958f + 2.0f * (cam + 90.0f)) + 1080.0f, 360.0f) - 180.0f;
+              resMin = (std::min)(resMin, res); resMax = (std::max)(resMax, res); upMin = (std::min)(upMin, w[1] - k[1]); upMax = (std::max)(upMax, w[1] - k[1]);
               if (dFrames > 0 && acosf(std::clamp(w[0] * dPrev[0] + w[1] * dPrev[1] + w[2] * dPrev[2], -1.0f, 1.0f)) * 57.2958f > 3.0f) dJumps++;
               for (int i = 0; i < 3; i++) dPrev[i] = w[i];
               SunWatchFrame(w, dev, lf);   // (26/10) quien escribe el sol de las repeticiones (sunwatch.cpp)
@@ -363,6 +367,10 @@ static void SunPassPresent() {
         if (nextSum > 0 && dFrames > 0 && sums <= 120)
             Log("luz del sol (10 s): %d cuadros medidos, %d con la luz a mas de 5 grados del cielo (maximo %.1f), %d saltos de mas de 3 grados entre cuadros; rumbo de la luz %.0f..%.0f, de la camara %.0f..%.0f, luz respecto de la camara %.0f..%.0f",
                 dFrames, dOff, dMax, dJumps, azMin, azMax, camMin, camMax, relMin, relMax);
+        if (nextSum > 0 && dFrames > 0 && sums <= 120 && dMax > 5.0f)
+            Log("luz del sol (10 s): rumbo de la luz menos (rumbo del cielo + 2 x (camara + 90)) %.1f..%.1f grados; altura de la luz menos la del cielo %.3f..%.3f",
+                resMin, resMax, upMin, upMax);
+        resMin = upMin = 1e9f; resMax = upMax = -1e9f;
         dFrames = dOff = dJumps = 0; dMax = 0; azMin = camMin = relMin = 1e9f; azMax = camMax = relMax = -1e9f;
         if (nextSum > 0 && frames > 0 && framesNone < frames && sums++ < 120)
             Log("luz del sol (10 s): %d cuadros, %d solo con el sol sin sombra / con mascara (d0e9 / 7dbbc), %d sin pasada de sol, %d cambios de variante, LightCB desde la copia alternativa %d, pasadas del sol en vista chica (sin copiar) %d",
