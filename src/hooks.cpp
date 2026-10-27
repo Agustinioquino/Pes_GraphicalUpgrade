@@ -997,7 +997,7 @@ static std::atomic<bool> s_firstRule{false};
 thread_local bool t_sparseGrass = false;
 thread_local UINT t_drawVerts = 0; thread_local UINT t_drawStart = 0; thread_local INT t_drawBase = 0; thread_local bool t_lodNoted = false; thread_local LodIA t_grassSub;   // (20/10) DrawIndexed en curso (LOD de caras)   // vertices del dibujo en curso (para "solo esta capa" del inspector)   // el dibujo en curso es una parcela lejana del pasto (lo marca GrassOnDraw)
 static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
-    if (g_cfg.bypass || !g_dev.dev) return false;
+    if (!g_dev.dev) return false;
     CtxState& s = Ctx(c);
     if (!s.devKnown) {   // nuestros recursos (t120, copias) son del dispositivo del juego: nunca mezclar con otro
         ID3D11Device* cd = nullptr; c->GetDevice(&cd);
@@ -1006,6 +1006,10 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     }
     if (s.dev != g_dev.dev) return false;
     const ShaderEntry *ps = s.ps, *vs = s.vs;
+    // (27/10 b) brazos, manos, muslos y torso de TorsoBody del tono de la cara (brazos.cpp, filas 321 / 327): son las texturas
+    // del cuerpo, no un shader, asi que valen tambien con "Ver original" (el shader original lee el mismo t0)
+    if (vs) if (ID3D11ShaderResourceView* at = ArmsTextureFor(c, vs->hash, t_drawVerts)) { Remember(c, d, true, true, 0); c->PSSetShaderResources(0, 1, &at); }
+    if (g_cfg.bypass) return d.n > 0;
     if (g_skinDiagArmed.load(std::memory_order_relaxed)) SkinDiagDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0, t_drawVerts);   // (24/10) skintone.cpp
     if (g_toneChkArmed.load(std::memory_order_relaxed)) SkinToneCheckDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0);   // (24/10 c) punto de los dibujos de piel
     GlassBeforeDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0, t_drawVerts, d.glass);   // (24/10) vidrio de los menus: GS + PS propios (se devuelven en FX_DRAW)
@@ -1057,9 +1061,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         if (hv) { Remember(c, d, false, true, 126); c->VSSetShaderResources(126, 1, &hv); }
         // (26/10, v12.7) venas: textura en t29 del PS de la piel para los brazos y las manos (no en la sombra)
         if ((hand || arm) && vs->hash == 0x1c02a92ab4ae3362ULL) if (ID3D11ShaderResourceView* vt = VeinTexture()) { Remember(c, d, true, true, 29); c->PSSetShaderResources(29, 1, &vt); }
-        // (27/10) brazos, manos y muslos de TorsoBody para las caras reales (brazos.cpp): la textura de la cara (2048) en t0 se
-        // cambia por arm_N / thigh_N de TorsoBody del tono del jugador; los dibujos del torso solo anotan su tono
-        if (ID3D11ShaderResourceView* at = ArmsTextureFor(c, vs->hash, t_drawVerts)) { Remember(c, d, true, true, 0); c->PSSetShaderResources(0, 1, &at); }
+        // (27/10) brazos, manos y muslos de TorsoBody para las caras reales: ArmsTextureFor al principio de BeforeDraw
         // (26/10) variantes robusto / atletico de TorsoBody (manos.cpp + pes_variants.hlsli): datos por vertice del torso y de los
         // brazos en t127 del VS (piel y sombras); en el torso, los mapas del PS de la piel en t16 / t17 / t18
         bool vTorso = false;

@@ -131,6 +131,18 @@ static std::vector<KeyN> s_keys;                  // bloque de huesos -> tono, d
 static thread_local int t_lastTone = 0;           // ultimo torso dibujado en este contexto
 static std::atomic<int> s_logs{0};
 static std::atomic<unsigned> s_swaps{0}, s_unknown{0};
+// (27/10 b) fila 327: tono de la cara. La textura de brazo de cada cara real se mide una vez en la GPU (pes_tono_brazo_cs.hlsl:
+// su mip de 64 px contra el de arm_1..6 de TorsoBody) y el tono queda guardado EN la textura (SetPrivateData: muere con ella,
+// sin referencias ni direcciones reusadas). El torso del mismo personaje (misma clave b6 en el cuadro anterior) pasa a
+// torso_M de ese tono; brazos, manos y muslos a arm_M / thigh_M: todo el cuerpo del mismo juego de texturas y del tono de la cara.
+static const GUID kToneGuid = { 0x6d1f3a52, 0x8b47, 0x4c1e, { 0x9a, 0x21, 0x5e, 0x77, 0x0c, 0x3d, 0xb4, 0x27 } };
+struct FPend { ID3D11Resource* res; ID3D11ShaderResourceView* srv; ID3D11Buffer* st; UINT mip; int tries; };
+static std::vector<FPend> s_fpend;
+static std::vector<KeyN> s_faceKeys, s_faceKeysPrev;   // clave b6 -> tono de la cara (cuadro actual / anterior)
+static ID3D11ComputeShader* s_toneCS = nullptr; static bool s_toneTried = false;
+static ID3D11Buffer* s_toneBuf = nullptr; static ID3D11UnorderedAccessView* s_toneUAV = nullptr; static ID3D11Buffer* s_toneCB = nullptr;
+static ID3D11ShaderResourceView* s_armRef[kTones] = {};   // mip de 64 px de arm_1..6 (referencia del shader)
+static std::atomic<unsigned> s_torsoSwaps{0}, s_torsoMiss{0};
 
 static std::wstring Widen(const std::string& a) {
     int n = MultiByteToWideChar(CP_UTF8, 0, a.c_str(), -1, nullptr, 0);
@@ -212,6 +224,103 @@ static ID3D11ShaderResourceView* Tone(int n, Kind kind) {
     else Log("brazos de TorsoBody: %ls cargada (%ux%u, %d mips, formato %u%s)", name, f.w, f.h, f.mips, f.fmt, s_srgb ? ", sRGB" : "");
     return *slot;
 }
+// (27/10 b) tono de la cara guardado en la textura: -2 = sin medir, -1 = en la GPU, 0 = no se pudo, 1..6
+static int FaceToneGet(ID3D11Resource* r) { int v = 0; UINT sz = sizeof v; if (FAILED(r->GetPrivateData(kToneGuid, &sz, &v)) || sz != sizeof v) return -2; return v; }
+static void FaceToneSet(ID3D11Resource* r, int v) { r->SetPrivateData(kToneGuid, sizeof v, &v); }
+static bool ToneInit() {
+    if (s_toneTried) return s_toneCS && s_toneUAV && s_toneCB;
+    if (!s_srgbKnown) return false;   // las referencias van con la misma vista (sRGB o no) que las texturas del juego
+    s_toneTried = true;
+    if (ID3DBlob* b = CompileNamedShader(L"pes_tono_brazo_cs.hlsl", "cs_5_0")) { if (FAILED(g_dev.dev->CreateComputeShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_toneCS))) s_toneCS = nullptr; b->Release(); }
+    D3D11_BUFFER_DESC bd{}; bd.ByteWidth = 64; bd.Usage = D3D11_USAGE_DEFAULT; bd.BindFlags = D3D11_BIND_UNORDERED_ACCESS; bd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+    if (SUCCEEDED(g_dev.dev->CreateBuffer(&bd, nullptr, &s_toneBuf))) {
+        D3D11_UNORDERED_ACCESS_VIEW_DESC u{}; u.Format = DXGI_FORMAT_R32_TYPELESS; u.ViewDimension = D3D11_UAV_DIMENSION_BUFFER; u.Buffer.NumElements = 16; u.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+        if (FAILED(g_dev.dev->CreateUnorderedAccessView(s_toneBuf, &u, &s_toneUAV))) s_toneUAV = nullptr;
+    }
+    D3D11_BUFFER_DESC cd{}; cd.ByteWidth = 16; cd.Usage = D3D11_USAGE_DEFAULT; cd.BindFlags = D3D11_BIND_CONSTANT_BUFFER; g_dev.dev->CreateBuffer(&cd, nullptr, &s_toneCB);
+    int got = 0;
+    for (int n = 1; n <= kTones; n++) {
+        wchar_t name[48]; swprintf(name, 48, L"arm_%d_bsm.ftex", n);
+        std::vector<uint8_t> d; FtexInfo f;
+        if (!ReadAll(s_dir + name, d) || !ReadFtex(d, f, 0, 0)) { Log("brazos de TorsoBody: tono de la cara: falta o no se lee %ls", name); continue; }
+        int mip = 0; while ((f.w >> mip) > 64 && mip + 1 < f.mips) mip++;
+        if ((f.w >> mip) != 64 || (f.h >> mip) != 64 || !ReadFtex(d, f, mip, mip + 1)) { Log("brazos de TorsoBody: tono de la cara: %ls no tiene un mip de 64 px", name); continue; }
+        FtexInfo g; g.fmt = f.fmt; g.w = 64; g.h = 64; g.mips = 1; g.data.push_back(std::move(f.data[mip]));
+        char what[48]; snprintf(what, sizeof what, "%ls (64 px)", name);
+        if ((s_armRef[n - 1] = MakeTexture(g, s_srgb, what)) != nullptr) got++;
+    }
+    const bool ok = s_toneCS && s_toneUAV && s_toneCB && got == kTones;
+    Log("brazos de TorsoBody: tono de la cara %s (shader %s, %d de %d referencias)", ok ? "listo" : "APAGADO", s_toneCS ? "si" : "no se pudo compilar shaders\\pes_tono_brazo_cs.hlsl", got, kTones);
+    if (!ok && s_toneCS) { s_toneCS->Release(); s_toneCS = nullptr; }
+    return ok;
+}
+// textura de brazo de una cara real (t0 del dibujo): su tono si ya se midio; si no, se anota para medirla en el proximo Present
+static int FaceToneOf(ID3D11DeviceContext* c, ID3D11Resource* r, const D3D11_TEXTURE2D_DESC& td) {
+    int ft = FaceToneGet(r);
+    if (ft != -2) return ft;
+    UINT mip = 0; while ((td.Width >> mip) > 64 && mip + 1 < td.MipLevels) mip++;
+    ID3D11ShaderResourceView* v = nullptr;
+    if ((td.Width >> mip) != 64 || td.Width != td.Height || s_fpend.size() >= 64) { if (td.Width != td.Height || (td.Width >> mip) != 64) FaceToneSet(r, 0); return 0; }
+    c->PSGetShaderResources(0, 1, &v);
+    if (!v) return 0;
+    FaceToneSet(r, -1);
+    r->AddRef();
+    s_fpend.push_back({ r, v, nullptr, mip, 0 });
+    return -1;
+}
+// Present (contexto inmediato, con s_mx): medir hasta 4 texturas por cuadro y leer las que la GPU ya termino
+static void FaceTonePresent() {
+    if (s_fpend.empty()) return;
+    ID3D11DeviceContext* c = g_dev.imm;
+    int sent = 0;
+    for (size_t i = 0; i < s_fpend.size();) {
+        FPend& p = s_fpend[i];
+        bool done = false; int tone = 0;
+        if (!p.st) {
+            if (!ToneInit()) { if (s_toneTried) done = true; else { i++; continue; } }
+            else if (sent < 4) {
+                D3D11_BUFFER_DESC sd{}; sd.ByteWidth = 64; sd.Usage = D3D11_USAGE_STAGING; sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+                if (FAILED(g_dev.dev->CreateBuffer(&sd, nullptr, &p.st)) || !p.st) { p.st = nullptr; done = true; }
+                else {
+                    ID3D11ComputeShader* pcs = nullptr; c->CSGetShader(&pcs, nullptr, nullptr);
+                    ID3D11ShaderResourceView* psrv[7] = {}; c->CSGetShaderResources(0, 7, psrv);
+                    ID3D11UnorderedAccessView* puav = nullptr; c->CSGetUnorderedAccessViews(0, 1, &puav);
+                    ID3D11Buffer* pcb = nullptr; c->CSGetConstantBuffers(0, 1, &pcb);
+                    const UINT cbv[4] = { p.mip, (UINT)(std::clamp(g_cfg.live[327][1] > 0.0f ? g_cfg.live[327][1] : 0.12f, 0.01f, 1.0f) * 1000.0f), 0, 0 };
+                    c->UpdateSubresource(s_toneCB, 0, nullptr, cbv, 0, 0);
+                    ID3D11ShaderResourceView* srv[7] = { p.srv, s_armRef[0], s_armRef[1], s_armRef[2], s_armRef[3], s_armRef[4], s_armRef[5] };
+                    c->CSSetShader(s_toneCS, nullptr, 0); c->CSSetShaderResources(0, 7, srv);
+                    c->CSSetUnorderedAccessViews(0, 1, &s_toneUAV, nullptr); c->CSSetConstantBuffers(0, 1, &s_toneCB);
+                    c->Dispatch(1, 1, 1);
+                    ID3D11ShaderResourceView* nul[7] = {}; c->CSSetShaderResources(0, 7, nul);
+                    c->CSSetShader(pcs, nullptr, 0); c->CSSetShaderResources(0, 7, psrv); c->CSSetUnorderedAccessViews(0, 1, &puav, nullptr); c->CSSetConstantBuffers(0, 1, &pcb);
+                    if (pcs) pcs->Release(); for (auto* v : psrv) if (v) v->Release(); if (puav) puav->Release(); if (pcb) pcb->Release();
+                    c->CopyResource(p.st, s_toneBuf);
+                    sent++;
+                }
+            }
+        } else {
+            D3D11_MAPPED_SUBRESOURCE m{};
+            if (SUCCEEDED(c->Map(p.st, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) {
+                uint32_t u[10]; memcpy(u, m.pData, sizeof u); c->Unmap(p.st, 0);
+                const unsigned cnt = u[0];
+                double dist[kTones]; int best = 0;
+                for (int k = 0; k < kTones; k++) { dist[k] = cnt ? u[1 + k] / 1000.0 / cnt : 9.0; if (!best || dist[k] < dist[best - 1]) best = k + 1; }
+                tone = cnt >= 48 ? best : 0;
+                static int nlog = 0;
+                if (nlog++ < 80) Log("brazos de TorsoBody: textura de brazo de la cara %p: %u de 4096 texeles de piel, color %u %u %u, distancia a arm_1..6 %.3f %.3f %.3f %.3f %.3f %.3f -> %s",
+                    (void*)p.res, cnt, cnt ? u[7] / cnt : 0, cnt ? u[8] / cnt : 0, cnt ? u[9] / cnt : 0, dist[0], dist[1], dist[2], dist[3], dist[4], dist[5],
+                    tone ? ("tono " + std::to_string(tone)).c_str() : "sin tono (pocos texeles de piel)");
+                done = true;
+            } else if (++p.tries > 120) done = true;
+        }
+        if (done) {
+            FaceToneSet(p.res, tone);
+            if (p.st) p.st->Release(); p.srv->Release(); p.res->Release();
+            s_fpend.erase(s_fpend.begin() + i);
+        } else i++;
+    }
+}
 static bool In(const UINT* v, size_t n, UINT x) { for (size_t i = 0; i < n; i++) if (v[i] == x) return true; return false; }
 static ID3D11Resource* Tex0(ID3D11DeviceContext* c, D3D11_TEXTURE2D_DESC* desc) {   // con AddRef
     ID3D11ShaderResourceView* v = nullptr; c->PSGetShaderResources(0, 1, &v);
@@ -256,27 +365,46 @@ ID3D11ShaderResourceView* ArmsTextureFor(ID3D11DeviceContext* c, uint64_t vsHash
             else tone = it->second;
             if (!s_srgbKnown) { s_srgb = IsSrgb(td.Format); s_srgbKnown = true; }
         }
-        if (tone > 0) {
-            t_lastTone = tone;
-            ID3D11Buffer* b; UINT f;
-            if (KeyOf(c, &b, &f)) {
-                bool had = false; for (KeyN& k : s_keys) if (k.b == b && k.f == f) { k.n = tone; had = true; break; }
-                if (!had && s_keys.size() < 256) s_keys.push_back({ b, f, tone });
-            }
-        }
         r->Release();
-        return nullptr;
+        if (tone <= 0) return nullptr;
+        ID3D11Buffer* b = nullptr; UINT f = 0;
+        const bool key = KeyOf(c, &b, &f);
+        int use = tone;
+        if (g_cfg.live[327][0] > 0.5f) {   // (27/10 b) tono de la cara del mismo personaje (sus brazos del cuadro anterior)
+            int m = 0;
+            if (key) for (const KeyN& k : s_faceKeysPrev) if (k.b == b && k.f == f) { m = k.n; break; }
+            if (key && !m) for (const KeyN& k : s_faceKeys) if (k.b == b && k.f == f) { m = k.n; break; }
+            if (m > 0) use = m; else s_torsoMiss++;
+        }
+        t_lastTone = use;
+        if (key) {
+            bool had = false; for (KeyN& k : s_keys) if (k.b == b && k.f == f) { k.n = use; had = true; break; }
+            if (!had && s_keys.size() < 256) s_keys.push_back({ b, f, use });
+        }
+        if (use == tone) return nullptr;
+        ID3D11ShaderResourceView* tv = Tone(use, K_TORSO);
+        if (tv) { s_torsoSwaps++; if (verbose) { s_logs++; Log("brazos de TorsoBody: torso_%d_bsm -> torso_%d_bsm (tono de la cara)", tone, use); } }
+        return tv;
     }
     // brazo, mano o muslo: solo si la textura no es la de TorsoBody (la de una cara real: el atlas de Konami a 2048 / 1024)
-    r->Release();
-    if (td.Width >= 4096 || td.Width < 1024 || td.Width != td.Height) return nullptr;
+    if (td.Width >= 4096 || td.Width < 1024 || td.Width != td.Height) { r->Release(); return nullptr; }
     int tone = (int)(g_cfg.live[321][2] + 0.5f);
     if (tone < 1 || tone > kTones) {
         tone = 0;
-        ID3D11Buffer* b; UINT f;
-        if (KeyOf(c, &b, &f)) for (const KeyN& k : s_keys) if (k.b == b && k.f == f) { tone = k.n; break; }
+        ID3D11Buffer* b = nullptr; UINT f = 0;
+        const bool key = KeyOf(c, &b, &f);
+        // (27/10 b) fila 327: el brazo (no el muslo: thigh_bsm tiene otro mapa) se mide y manda el tono de todo el cuerpo
+        if (!thigh && g_cfg.live[327][0] > 0.5f) {
+            const int ft = FaceToneOf(c, r, td);
+            if (ft > 0) {
+                tone = ft;
+                if (key) { bool had = false; for (KeyN& k : s_faceKeys) if (k.b == b && k.f == f) { k.n = ft; had = true; break; } if (!had && s_faceKeys.size() < 256) s_faceKeys.push_back({ b, f, ft }); }
+            }
+        }
+        if (!tone && key) for (const KeyN& k : s_keys) if (k.b == b && k.f == f) { tone = k.n; break; }
         if (!tone) tone = t_lastTone;
     }
+    r->Release();
     if (!tone) { s_unknown++; if (verbose) { s_logs++; Log("brazos de TorsoBody: %s de %ux%u sin torso conocido todavia (%u indices)", thigh ? "muslo" : "brazo / mano", td.Width, td.Height, indexCount); } return nullptr; }
     if (!s_srgbKnown) { s_srgb = IsSrgb(td.Format); s_srgbKnown = true; }
     ID3D11ShaderResourceView* v = Tone(tone, thigh ? K_THIGH : K_ARM);
@@ -301,7 +429,16 @@ ID3D11ShaderResourceView* ArmsTorsoTextureForFace() {
 void ArmsPresent() {
     std::lock_guard<std::mutex> lk(s_mx);
     s_keys.clear();
-    if (s_pend.empty() || !g_dev.imm || !g_dev.dev) return;
+    s_faceKeysPrev.swap(s_faceKeys); s_faceKeys.clear();
+    if (!g_dev.imm || !g_dev.dev) return;
+    static double s_statT = 0;
+    if (g_cfg.live[327][0] > 0.5f && Now() - s_statT > 20.0) {
+        s_statT = Now();
+        const unsigned a = s_torsoSwaps.exchange(0), b = s_torsoMiss.exchange(0);
+        if (a || b) Log("brazos de TorsoBody: tono de la cara en 20 s: %u torsos cambiados de tono, %u dibujos de torso sin el tono de su cara (clave b6 sin brazo medido)", a, b);
+    }
+    FaceTonePresent();
+    if (s_pend.empty()) return;
     for (size_t i = 0; i < s_pend.size();) {
         Pend& p = s_pend[i];
         bool done = false;
