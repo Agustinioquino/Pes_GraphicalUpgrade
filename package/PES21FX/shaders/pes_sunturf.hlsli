@@ -5,7 +5,7 @@
 //      escriben el shadow map, asi que sin esto la sombra de una hoja sobre la de atras no existe. Se apaga solo cuando una
 //      hoja de ~1 cm ocupa menos de ~1.5 px (lejos: ahi lo hace la oclusion del atlas del pasto)
 // y313 la luz que pasa a traves de la hoja (la parte de la translucidez) se tine amarillo verdosa (clorofila)
-// z313 sol bajo mas dorado sobre el pasto (de ~10 a ~37 grados de altura)
+// z313 sol bajo mas dorado sobre el pasto (de ~10 a ~25 grados de altura)
 // w313 on/off
 // Se incluye despues de declarar IniParams (lee la fila 111 para la altura del sol).
 
@@ -15,10 +15,10 @@ float3 PESTurfDiffuse(float3 sunC, float rawNdotL, float wrapD, float4 PG, float
 {
   float dirD = saturate(rawNdotL);
   float through = max(saturate(wrapD) - dirD, 0.0);
-  float3 leaf = lerp(float3(1.0, 1.0, 1.0), float3(1.0, 0.93, 0.45), saturate(PG.y) * saturate((trans - 0.15) / 0.25));
+  float3 leaf = lerp(float3(1.0, 1.0, 1.0), float3(1.0, 0.96, 0.72), saturate(PG.y) * saturate((trans - 0.15) / 0.25));   // (27/10) la mitad: el pasto al sol salia lima
   float4 SW = IniParams.Load(int2(111, 0));
   float sunUp = dot(SW.xyz, SW.xyz) > 0.5 ? SW.y : 1.0;
-  float low = 1.0 - smoothstep(0.17, 0.60, sunUp);
+  float low = 1.0 - smoothstep(0.17, 0.42, sunUp);   // (27/10) solo con el sol bajo de verdad: de ~10 a ~25 grados
   float3 warm = lerp(float3(1.0, 1.0, 1.0), float3(1.07, 1.0, 0.84), saturate(PG.z) * low);
   return (dirD + through * leaf) * sunC * warm;
 }

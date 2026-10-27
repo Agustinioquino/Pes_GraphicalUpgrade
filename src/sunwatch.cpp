@@ -54,6 +54,7 @@ static LONG CALLBACK SwVectored(EXCEPTION_POINTERS* ep) {
         __try { for (int j = 0; j < 96 && k < 4; j++) { uintptr_t v = sp[j]; if (v > s_exeLo && v < s_exeHi) h.ret[k++] = v; } } __except (EXCEPTION_EXECUTE_HANDLER) {}
         __try { memcpy(h.v, (const void*)s_watch[slot], sizeof h.v); } __except (EXCEPTION_EXECUTE_HANDLER) { h.v[0] = h.v[1] = h.v[2] = NAN; }
     }
+    if (i > 2048) cx->Dr7 &= ~(DWORD64)0xFF;   // (27/10) un origen que se reescribe sin parar: este hilo deja de vigilar (no frena el juego)
     cx->Dr6 = 0;
     return EXCEPTION_CONTINUE_EXECUTION;
 }
@@ -136,6 +137,13 @@ static std::string SwWhere(uintptr_t a) {
 }
 static float SwAng(const float* a, const float* b) { float d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; d = d > 1 ? 1 : d < -1 ? -1 : d; return acosf(d) * 57.2958f; }
 
+// (27/10) la busqueda en memoria (pasos 1 y 2) no sirvio: el unico candidato lo escribe la GPU. Ahora el rastreo de la luz
+// (hooks.cpp) sabe de donde copia el juego el cbuffer de la luz (el origen del memcpy de su subida) y pide vigilar ESA
+// direccion: la escritura de m_lightDir0 en espacio de vista sale con su RIP y sus retornos ("sol: escribe ...").
+static const bool kScan = false;
+static std::atomic<uintptr_t> s_reqArm{0};
+void SunWatchRequestArm(uintptr_t a) { if (a && !(a & 3)) s_reqArm.store(a, std::memory_order_relaxed); }
+
 static DWORD WINAPI SwThread(void*) {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
     HMODULE exe = GetModuleHandleW(nullptr);
@@ -151,8 +159,15 @@ static DWORD WINAPI SwThread(void*) {
         Sleep(200);
         float w[3]; float dev; int fr;
         { std::lock_guard<std::mutex> lk(s_swMutex); memcpy(w, s_swW, sizeof w); dev = s_swDev; fr = s_swFrame; }
-        if (fr < 0) continue;
         double t = Now();
+        // pedido del rastreo de la luz: m_lightDir0 (x, y, z) en el origen de la copia, 10 s, hasta 4 veces
+        { uintptr_t ra = s_reqArm.exchange(0);
+          if (ra && !s_armed.load() && arms < 4 && (lastArm < 0 || t - lastArm > 20.0)) {
+              memset(s_watch, 0, sizeof s_watch); s_watch[0] = ra; s_watch[1] = ra + 4; s_watch[2] = ra + 8;
+              s_hitN = 0; s_armed = true; int th = SwSetDebugRegs(s_watch, 3); armedAt = lastArm = t - 50.0; arms++; logged = 0;
+              Log("sol: vigilando escrituras en el origen del cbuffer de la luz %s (%d hilos) por 10 s", SwWhere(ra).c_str(), th);
+          } }
+        if (fr >= 0 && kScan) {   // pasos 1 y 2 (busqueda en memoria), apagados
         // 1) base: la direccion quieta 3 s (y pegada al cielo) o 10 s quieta aunque no coincida con el cielo
         if (SwAng(w, last) > 0.2f) stableSince = t;
         memcpy(last, w, sizeof w);
@@ -187,6 +202,7 @@ static DWORD WINAPI SwThread(void*) {
                 if (n) { s_hitN = 0; s_armed = true; int th = SwSetDebugRegs(s_watch, n); armedAt = lastArm = t; arms++; logged = 0;
                          Log("sol: vigilando escrituras en %d direcciones (%d hilos) por 60 s", n, th); }
             }
+        }
         }
         // escrituras: se anotan las nuevas (RIP distinto) y a los 60 s se sacan los puntos de parada
         if (s_armed.load()) {
