@@ -113,6 +113,7 @@ void main(
   int se = PesSkinNearest(PesSkinPoint(g_vsObject.m_world, g_vsObject.m_viewWorld, g_vsScene.m_view, sb0, sb0b, skW));
   float3 mP = v0.xyz, mN = v1.xyz, mT = v3.xyz;
   PesVariantMorph(vid, PesVariantT(se), mP, mN, mT);
+  PesTorsoInset(mP, mN, v0.xyz);   // (27/10) torso bajo la camiseta ajustada (x320)
   float4 mP4 = float4(mP, v0.w);
   float3 hP, hN, hT, hPP; float hDbg;
   bool handDone = (r0.x != 0) && PesHandSkin(vid, mP, mN, mT, v4, v5, hP, hN, hT, hPP, hDbg);
