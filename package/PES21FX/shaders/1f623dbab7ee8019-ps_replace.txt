@@ -386,7 +386,7 @@ void main(
       float mppS = max(zS0 * abs(g_psScene.m_projectionParam.x) * 2.0 / max(g_psScene.m_viewportSize.x, 1.0), 1e-6);
       float rPx = 0.006 * max(IniParams.Load(int2(95,0)).x, 0.3) / mppS;
       pesSsssK = saturate((rPx - 1.0) / 5.0) * ((pesUni || IniParams.Load(int2(146,0)).x > 0.5) ? 1.0 : 0.0);
-      w *= 1.0 - 0.85 * pesSsssK;
+      w *= 1.0 - 0.45 * pesSsssK;   // (27/10 f) antes 0.85: el terminador quedaba duro con la SSSS
     }
     if (!sssOn) w = 0.03;                 // 18/10: ancho del borde acotado (antes envolvia la cara y corria la luz)
     float3 d = saturate(PESSoftTerm(rawNdotL, w));
@@ -495,11 +495,11 @@ void main(
     float sh = saturate(r6.x);
     // sombra mas suave sobre la piel (la luz se difunde dentro del tejido)
     bool pesSSSS = IniParams.Load(int2(95,0)).w > 0.5;   // dispersion unificada prendida -> sin suavizado viejo
-    sh = lerp(sh, smoothstep(0.0, 1.0, sh), saturate(P5.z) * (pesSSSS ? 0.0 : 1.0));   // SSS v3: solo suaviza el borde (apagado con SSSS)
+    sh = lerp(sh, smoothstep(0.0, 1.0, sh), saturate(P5.z) * (pesSSSS ? 0.7 : 1.0));   // SSS v3: solo suaviza el borde. (27/10 f) con la SSSS se deja casi entero: su disco en milimetros no alcanza a suavizar el borde del shadow map (Agustin: borde duro con la dispersion prendida)
     // 18/10 v2: rojo solo en la PENUMBRA (borde de la sombra), la sombra plena queda neutra.
     // Antes pow(sh,0.55) en el rojo dejaba toda la sombra de la cara naranja.
     float pen = sh * (1.0 - sh) * 4.0;   // 1 en el medio del borde, 0 en luz plena y en sombra plena
-    float3 shC = saturate(sh.xxx + pen * float3(0.10, -0.02, -0.04) * (1.0 - pesSsssK));
+    float3 shC = saturate(sh.xxx + pen * float3(0.10, -0.02, -0.04) * (1.0 - 0.4 * pesSsssK));   // (27/10 f) el rojo de la penumbra se queda con la SSSS (antes se iba y la sombra quedaba gris)
     shadowRGB = lerp(sh.xxx, shC, saturate(saturate(trans * 2.0) * sssBleed));
   }
   o0.xyz = r3.xyz * shadowRGB;
