@@ -437,3 +437,6 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
     TEX.TORSO[1] = color del torso_1_bsm propio en el anillo del cuello (165.6 / 125.5 / 105.8). PERFIL = true: anota una vez por
     cara en sider.log el radio del cuello de Konami (24 angulos x +3 / +2 / +1 / 0 / -1 cm del borde, en mm) y lo mas bajo del
     corte -> para rehacer el cuello de los 3 torsos (mallas 1 y 2) con la forma promedio de las caras reales.
+    tools/torsobody/neck_profiles.py lee esas lineas y compara la mediana de las caras con el borde del torso (LOOP), la
+    superficie del torso 1 .. 4 cm abajo y el cuello generico de TorsoBody (neck.fmdl). Instalado 27/10 00:35 (backup
+    PES21FX\backup_20261027_0040_71f80c7: Lua 1.9, torsob_nrm / srm de la primera version y los pes_var_* que cambiaron).
