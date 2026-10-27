@@ -539,6 +539,7 @@ static std::atomic<bool> s_ltDone{false};   // tras 20 resumenes (10 min) se dej
 struct LtRec { uintptr_t fr[10]; int n = 0, count = 0, kind = 0; float l[3] = {}; bool haveL = false; };
 static std::mutex s_ltMx; static std::vector<LtRec> s_ltRecs; static int s_ltMaps = 0, s_ltSkipped = 0;
 static thread_local const void* t_ltMapped = nullptr; static thread_local int t_ltRec = -1;
+static uintptr_t s_ltExeLo = 0, s_ltExeHi = 0;
 static thread_local uintptr_t t_ltSrc = 0;
 // la subida del juego (0x1417ae7ea): Map(buffer, 0, WRITE_DISCARD) en 0x1417ae856 y despues memcpy(mapeado, [rsp+48], n);
 // desde el Map se lee ese origen en el marco del llamador (solo si el retorno tiene los bytes de 1.07.02)
@@ -548,7 +549,6 @@ static uintptr_t LightTraceSrc(const uintptr_t* ra) {
     if (!s_ltExeLo || r < s_ltExeLo || r + 9 > s_ltExeHi || memcmp((const void*)r, kSig, 9) != 0) return 0;
     return *(const uintptr_t*)((const char*)ra + 8 + 0x48);
 }
-static uintptr_t s_ltExeLo = 0, s_ltExeHi = 0;
 static int LightTraceNote(int kind) {   // kind 0 = Map, 1 = UpdateSubresource; devuelve el indice de la pila
     if (!s_ltExeLo) { HMODULE m = GetModuleHandleW(nullptr); auto* dh = (IMAGE_DOS_HEADER*)m; auto* nh = (IMAGE_NT_HEADERS*)((char*)m + dh->e_lfanew);
         s_ltExeLo = (uintptr_t)m; s_ltExeHi = s_ltExeLo + nh->OptionalHeader.SizeOfImage; }

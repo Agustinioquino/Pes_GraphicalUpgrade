@@ -798,11 +798,15 @@ void main(
       env = lerp(env, lerp(gnd, eB, saturate(roughE * 1.2)), saturate(-Rw.y * 10.0));
       // BRDF de entorno (aprox. analitica de Karis): especular del G-buffer 0.5 = F0 0.04
       float NdVe = saturate(dot(Nsk, -Vsk));
-      float F0 = skinC ? 0.028 : 0.08 * saturate(gmC.y);
+      // (27/10) arquero de Agustin: la tela oscura salia gris lavada (como mojada) con el reflejo del cielo entero encima. La
+      // tela de punto no refleja como una superficie lisa (las fibras desparraman y tapan el brillo): en los kits va a 1/4.
+      // La piel un poco mas (le gusta el brillo del original en la cara)
+      bool kitE = (tyC == 0) && (abs(gmC.z - 0.9607843) < 0.002);
+      float F0 = skinC ? 0.034 : 0.08 * saturate(gmC.y);
       float4 rr = roughE * float4(-1.0, -0.0275, -0.572, 0.022) + float4(1.0, 0.0425, 1.04, -0.04);
       float a004 = min(rr.x * rr.x, exp2(-9.28 * NdVe)) * rr.x + rr.y;
       float2 AB = float2(-1.04, 1.04) * a004 + rr.zw;
-      float specE = (F0 * AB.x + AB.y) * saturate(gmC.y * 10.0);
+      float specE = (F0 * AB.x + AB.y) * saturate(gmC.y * 10.0) * (kitE ? 0.25 : 1.0);
       // oclusion especular: Lagarde (cuenca segun rugosidad y angulo) y visibilidad del cielo
       float aoE = saturate(aoRaw);
       float soL = saturate(pow(max(NdVe + aoE, 1e-4), exp2(-16.0 * roughE - 1.0)) - 1.0 + aoE);
