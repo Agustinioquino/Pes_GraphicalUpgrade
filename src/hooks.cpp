@@ -234,24 +234,36 @@ static ID3D11ShaderResourceView* FileTexture(const std::string& rel) {
 ID3D11ShaderResourceView* FileTextureAny(const std::string& rel) { return FileTexture(rel); }
 // 19/10 inspector: lee un cbuffer copiado por regla (copy_cb) -> floats. Se llama en Present (contexto inmediato):
 // copia a staging y lee la copia del cuadro anterior (sin esperar a la GPU).
-bool NamedCBRead(const std::string& name, std::vector<float>& out) {
-    // 19/10 c: anillo de 3 staging por nombre: se copia al de hoy y se lee el de hace 2 cuadros (DO_NOT_WAIT ya no falla
-    // cuando la GPU va 1-2 cuadros atras); si aun asi no esta listo se devuelve la ultima lectura buena
-    struct Ring { ID3D11Buffer* st[3] = {}; int i = 0; UINT bytes = 0; std::vector<float> last; };
+bool NamedCBRead(const std::string& name, std::vector<float>& out, int* frameOut) {
+    // 19/10 c: anillo de staging por nombre, lectura sin esperar (DO_NOT_WAIT) de una copia de hace 1-3 cuadros.
+    // (26/10) Antes se copiaba y se leia "la de hace 2 llamadas" en CADA llamada: con 2-3 lecturas por cuadro (pupila, sol en
+    // mundo, log) esa copia era del mismo cuadro, casi nunca estaba lista y se devolvia la ultima lectura buena, que podia
+    // quedar vieja un minuto entero (log: direccion del sol fija en vista mientras la camara se movia; la fila 111 y el pasto
+    // con el sol girando). Ahora se copia una vez por cuadro, cada copia lleva su numero de cuadro, se devuelve la mas nueva
+    // que ya este lista y frameOut dice de que cuadro es (para no mezclar el sol de un cuadro con la camara de otro).
+    struct Ring { ID3D11Buffer* st[4] = {}; int frame[4] = { -1, -1, -1, -1 }; int i = 0; UINT bytes = 0; std::vector<float> last; int lastFrame = -1; };
     static std::map<std::string, Ring> rings;
     ID3D11Buffer* src = nullptr; UINT bytes = 0;
     { std::lock_guard<std::mutex> lk(s_namedMutex); auto it = s_named.find(name); if (it == s_named.end() || !it->second.buf) return false; src = it->second.buf; D3D11_BUFFER_DESC d; src->GetDesc(&d); bytes = d.ByteWidth; src->AddRef(); }
     Ring& r = rings[name];
-    if (r.bytes != bytes) { for (auto*& b : r.st) { if (b) b->Release(); b = nullptr; } r.bytes = bytes; r.last.clear(); }
+    if (r.bytes != bytes) { for (auto*& b : r.st) { if (b) b->Release(); b = nullptr; } for (int& f : r.frame) f = -1; r.bytes = bytes; r.last.clear(); r.lastFrame = -1; }
     for (auto*& b : r.st) if (!b) { D3D11_BUFFER_DESC d{}; d.ByteWidth = bytes; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; g_dev.dev->CreateBuffer(&d, nullptr, &b); }
     bool ok = false;
-    if (g_dev.imm && r.st[0] && r.st[1] && r.st[2]) {
-        ID3D11Buffer* rd = r.st[(r.i + 1) % 3];   // el mas viejo (copiado hace 2 llamadas)
-        D3D11_MAPPED_SUBRESOURCE m{};
-        if (SUCCEEDED(g_dev.imm->Map(rd, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) { out.assign((const float*)m.pData, (const float*)m.pData + bytes / 4); g_dev.imm->Unmap(rd, 0); r.last = out; ok = true; }
-        else if (!r.last.empty()) { out = r.last; ok = true; }
-        g_dev.imm->CopyResource(r.st[r.i], src); r.i = (r.i + 1) % 3;
+    if (g_dev.imm && r.st[0] && r.st[1] && r.st[2] && r.st[3]) {
+        const int now = s_presentNo.load();
+        // la mas nueva que ya este lista (sin la de este cuadro, que recien se copia abajo)
+        for (int k = 1; k <= 4; k++) {
+            int j = (r.i - k + 4) % 4;
+            if (r.frame[j] < 0 || r.frame[j] <= r.lastFrame) break;   // de aca para atras todo es igual o mas viejo que lo leido
+            D3D11_MAPPED_SUBRESOURCE m{};
+            if (SUCCEEDED(g_dev.imm->Map(r.st[j], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) {
+                r.last.assign((const float*)m.pData, (const float*)m.pData + bytes / 4); g_dev.imm->Unmap(r.st[j], 0); r.lastFrame = r.frame[j]; break; }
+        }
+        if (!r.last.empty()) { out = r.last; ok = true; }
+        int prev = (r.i + 3) % 4;
+        if (r.frame[prev] != now) { g_dev.imm->CopyResource(r.st[r.i], src); r.frame[r.i] = now; r.i = (r.i + 1) % 4; }   // una copia por cuadro
     }
+    if (frameOut) *frameOut = r.lastFrame;
     src->Release();
     return ok;
 }
@@ -265,6 +277,115 @@ const Rule* RuleForHash(uint64_t h) { auto it = g_cfg.rules.find(h); return it =
 std::atomic<int> g_drawOrder{0};
 std::atomic<int> g_lightAltFrames{0};   // (20/10) cuadros en que el sol llego por una variante no reemplazada de la luz
 std::atomic<int> g_aliasDraws{0};   // dibujos redirigidos por alias en el cuadro (diagnostico)   // numero de orden del dibujo dentro del cuadro (se reinicia en Present)
+// (25/10) luz diferida: cuales de las 21 variantes de la pasada corren en cada cuadro. 0..6 = sol con reemplazo de siempre
+// (filtro de sombras, color del sol, piel); 7 = sol sin sombra (d0e9) y 8 = sol con mascara de pantalla (7dbbc), con
+// reemplazo desde el 25/10; 9..20 = luces de foco / punto (torres, sin reemplazo). Si al mover la camara el juego pasa de
+// unas a otras, el log lo deja escrito ("luz del sol: variantes ...").
+static const uint64_t kSunPass[21] = {
+    0xa748f426e9b978ccULL, 0xb8a29991599380d3ULL, 0xd51409f5f8d54cbdULL, 0xde643fcb8d6a6beaULL, 0xe9c13241d7bc9625ULL,
+    0x1f623dbab7ee8019ULL, 0x230d92c927f58da3ULL,
+    0xd0e9d81c09b3da66ULL, 0x7dbbc922c9ae74c5ULL,
+    0x03b955fa0df6521bULL, 0x142c18270479a113ULL, 0x16c135a014d253b2ULL, 0x2a809f328b164023ULL, 0x5ae81b14fd75960eULL,
+    0x68d58aa84c0256f5ULL, 0x7bd80690738f243fULL, 0x9ce9d8463800b399ULL, 0xc33576f12dd818bfULL, 0xca8a31c98b1584acULL,
+    0xd5037e255559ea13ULL, 0xf9f5dc3e044ba823ULL };
+static std::atomic<int> s_sunDraws[21];
+static inline void SunPassNote(uint64_t h) {
+    for (int i = 0; i < 21; i++) if (kSunPass[i] == h) { s_sunDraws[i].fetch_add(1, std::memory_order_relaxed); return; }
+}
+static inline int SunPassIndex(uint64_t h) { for (int i = 0; i < 9; i++) if (kSunPass[i] == h) return i; return -1; }   // solo las del sol
+// (26/10) ancho de la vista mas grande en la que corrio una pasada del sol (cuadro anterior y este)
+static std::atomic<UINT> s_sunVpMaxPrev{0}, s_sunVpMaxCur{0}; static std::atomic<int> s_sunSmallSkips{0};
+static bool SunPassSmallView(ID3D11DeviceContext* c, uint64_t h) {
+    D3D11_VIEWPORT vp[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]; UINT n = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+    c->RSGetViewports(&n, vp);
+    if (!n) return false;
+    UINT w = (UINT)vp[0].Width, hgt = (UINT)vp[0].Height;
+    UINT cur = s_sunVpMaxCur.load(); while (w > cur && !s_sunVpMaxCur.compare_exchange_weak(cur, w)) {}
+    UINT ref = (std::max)(s_sunVpMaxPrev.load(), s_sunVpMaxCur.load());
+    bool tooSmall = ref > 0 && w * 4 < ref * 3;
+    { static std::mutex mx; static std::set<uint64_t> seen; uint64_t key = h ^ ((uint64_t)w << 1) ^ ((uint64_t)hgt << 20); bool first;
+      { std::lock_guard<std::mutex> lk(mx); first = seen.size() < 40 && seen.insert(key).second; }
+      if (first) Log("luz del sol: %08llx en una vista de %ux%u (la mas grande vista: %u)%s", (unsigned long long)(h >> 32), w, hgt, ref, tooSmall ? " -> vista chica: no se copia el sol" : ""); }
+    if (tooSmall) s_sunSmallSkips++;
+    return tooSmall;
+}
+static std::string SunPassList(uint32_t mask, const int* n) {
+    std::string r; char b[48];
+    for (int i = 0; i < 21; i++) if (mask & (1u << i)) { snprintf(b, sizeof(b), "%s%08llx%s x%d", r.empty() ? "" : ", ", (unsigned long long)(kSunPass[i] >> 32), i == 7 ? " (sol sin sombra)" : i == 8 ? " (sol con mascara)" : i > 8 ? " (foco)" : "", n ? n[i] : 0); r += b; }
+    return r.empty() ? "ninguna" : r;
+}
+static void SunPassPresent() {
+    static uint32_t lastMask = 0xffffffffu; static int lines = 0; static double nextSum = 0;
+    static int frames = 0, framesOrig = 0, framesNone = 0, switches = 0, sums = 0;
+    int n[21]; uint32_t mask = 0;
+    for (int i = 0; i < 21; i++) { n[i] = s_sunDraws[i].exchange(0, std::memory_order_relaxed); if (n[i]) mask |= 1u << i; }
+    s_sunVpMaxPrev = s_sunVpMaxCur.exchange(0);
+    frames++; if (!(mask & 0x1ffu)) framesNone++; else if (!(mask & 0x7fu)) framesOrig++;
+    // solo cambian las del sol (los focos de noche entran y salen todo el tiempo); los cuadros sin ninguna pasada del sol
+    // (uno suelto cada tanto) van solo al resumen de 10 s, si no llenaban el tope de lineas en un minuto
+    if ((mask & 0x1ffu) && (mask & 0x1ffu) != lastMask) {
+        if (lastMask != 0xffffffffu) switches++;
+        if (lines < 200) { lines++; Log("luz del sol: variantes en el cuadro %d: %s", s_presentNo.load(), SunPassList(mask, n).c_str()); }
+        lastMask = mask & 0x1ffu;
+    }
+    // (26/10) sol en mundo cuadro a cuadro contra el sol del archivo del cielo y contra la camara: en las repeticiones el sol de
+    // la luz se aleja del cielo (log de 7894072). Si la direccion de la luz respecto de la camara queda fija mientras la camara
+    // gira, el motor arma la luz por camara (iluminacion de repeticion); si salta solo en los cortes, es un preset por toma.
+    static int dFrames = 0, dOff = 0, dJumps = 0, dLines = 0, dLastF = -1; static bool dWasOff = false;
+    static float dMax = 0, azMin = 1e9f, azMax = -1e9f, camMin = 1e9f, camMax = -1e9f, relMin = 1e9f, relMax = -1e9f, dPrev[3] = {};
+    { std::vector<float> L, S, K; int lf = -1, sf = -2;
+      if (NamedCBRead("LightCB", L, &lf) && L.size() >= 4 && NamedCBRead("SceneCB", S, &sf) && S.size() >= 64 && lf == sf && lf != dLastF
+          && NamedAge("SkyMatCB") >= 0 && NamedAge("SkyMatCB") <= 30 && NamedCBRead("SkyMatCB", K) && K.size() >= 16) {
+          dLastF = lf;
+          const float* M = &S[32]; float w[3], k[3] = { K[12], K[13], K[14] };
+          for (int i = 0; i < 3; i++) w[i] = L[0] * M[i] + L[1] * M[4 + i] + L[2] * M[8 + i];
+          float wn = sqrtf(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]), kn = sqrtf(k[0] * k[0] + k[1] * k[1] + k[2] * k[2]);
+          if (wn > 1e-6f && kn > 1e-6f) {
+              for (int i = 0; i < 3; i++) { w[i] /= wn; k[i] /= kn; }
+              if (w[1] < 0) { w[0] = -w[0]; w[1] = -w[1]; w[2] = -w[2]; }
+              float dev = acosf(std::clamp(w[0] * k[0] + w[1] * k[1] + w[2] * k[2], -1.0f, 1.0f)) * 57.2958f;
+              float az = atan2f(w[2], w[0]) * 57.2958f, cam = atan2f(M[10], M[8]) * 57.2958f;   // fila 2 de m_view = eje z de la camara
+              float rel = fmodf(az - cam + 540.0f, 360.0f) - 180.0f;
+              if (dFrames > 0 && acosf(std::clamp(w[0] * dPrev[0] + w[1] * dPrev[1] + w[2] * dPrev[2], -1.0f, 1.0f)) * 57.2958f > 3.0f) dJumps++;
+              for (int i = 0; i < 3; i++) dPrev[i] = w[i];
+              SunWatchFrame(w, dev, lf);   // (26/10) quien escribe el sol de las repeticiones (sunwatch.cpp)
+              dFrames++; dMax = (std::max)(dMax, dev); if (dev > 5.0f) dOff++;
+              azMin = (std::min)(azMin, az); azMax = (std::max)(azMax, az); camMin = (std::min)(camMin, cam); camMax = (std::max)(camMax, cam);
+              relMin = (std::min)(relMin, rel); relMax = (std::max)(relMax, rel);
+              bool off = dev > 5.0f;
+              if (off != dWasOff && dLines < 300) { dLines++;
+                  Log("luz del sol: cuadro %d, el sol de la luz %s del sol del cielo (%.1f grados; luz en mundo %.3f %.3f %.3f, rumbo %.0f, camara %.0f, luz respecto de la camara %.0f)",
+                      lf, off ? "se separa" : "vuelve al", dev, w[0], w[1], w[2], az, cam, rel); }
+              dWasOff = off;
+          } } }
+    double t = Now();
+    if (t > nextSum) {
+        if (nextSum > 0 && dFrames > 0 && sums <= 120)
+            Log("luz del sol (10 s): %d cuadros medidos, %d con la luz a mas de 5 grados del cielo (maximo %.1f), %d saltos de mas de 3 grados entre cuadros; rumbo de la luz %.0f..%.0f, de la camara %.0f..%.0f, luz respecto de la camara %.0f..%.0f",
+                dFrames, dOff, dMax, dJumps, azMin, azMax, camMin, camMax, relMin, relMax);
+        dFrames = dOff = dJumps = 0; dMax = 0; azMin = camMin = relMin = 1e9f; azMax = camMax = relMax = -1e9f;
+        if (nextSum > 0 && frames > 0 && framesNone < frames && sums++ < 120)
+            Log("luz del sol (10 s): %d cuadros, %d solo con el sol sin sombra / con mascara (d0e9 / 7dbbc), %d sin pasada de sol, %d cambios de variante, LightCB desde la copia alternativa %d, pasadas del sol en vista chica (sin copiar) %d",
+                frames, framesOrig, framesNone, switches, g_lightAltFrames.exchange(0), s_sunSmallSkips.exchange(0));
+        // direccion del sol que usa la luz (m_lightDir0, espacio de vista) contra la direccion con la que se arma el shadow map
+        // (la recta en la que las coordenadas x / y de m_shadowProjection no cambian). Si no coinciden, el lado iluminado y la
+        // sombra proyectada no concuerdan. Tambien las dos en espacio mundo (deberian quedar quietas al mover la camara).
+        { std::vector<float> L, S; int lf = -1, sf = -2;
+          if (sums <= 120 && NamedCBRead("LightCB", L, &lf) && L.size() >= 4 && NamedCBRead("SceneCB", S, &sf) && S.size() >= 64 && lf == sf) {
+              auto nrm = [](float* v) { float n = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); if (n > 1e-8f) { v[0] /= n; v[1] /= n; v[2] /= n; } return n; };
+              float l[3] = { L[0], L[1], L[2] }; float a[3] = { S[48], S[49], S[50] }, b[3] = { S[52], S[53], S[54] };
+              float d[3] = { a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0] };
+              if (nrm(l) > 1e-8f && nrm(d) > 1e-8f) {
+                  float c = fabsf(l[0] * d[0] + l[1] * d[1] + l[2] * d[2]); float ang = acosf((std::min)(c, 1.0f)) * 57.2958f;
+                  const float* M = &S[32];
+                  auto toW = [&](const float* v, float* w) { for (int i = 0; i < 3; i++) w[i] = v[0] * M[i] + v[1] * M[4 + i] + v[2] * M[8 + i]; if (w[1] < 0) { w[0] = -w[0]; w[1] = -w[1]; w[2] = -w[2]; } };
+                  float lw[3], dw[3]; toW(l, lw); toW(d, dw);
+                  Log("luz del sol: direccion de la luz (vista %.3f %.3f %.3f | mundo %.3f %.3f %.3f) y del shadow map (mundo %.3f %.3f %.3f): %.1f grados entre las dos",
+                      l[0], l[1], l[2], lw[0], lw[1], lw[2], dw[0], dw[1], dw[2], ang);
+              } } }
+        nextSum = t + 10.0; frames = framesOrig = framesNone = switches = 0;
+    }
+}
 std::string NamedOrigin(ID3D11ShaderResourceView* v) {
     std::lock_guard<std::mutex> lk(s_namedMutex);
     for (auto& kv : s_named) if (kv.second.srv == v) return kv.first.rfind("file:", 0) == 0 ? "archivo del mod: " + kv.first.substr(5) : "recurso del mod: " + kv.first;
@@ -314,7 +435,9 @@ static void UploadParams() {
     if (g_dev.grassTex) { memcpy(q, p, sizeof(q)); q[63][3] = 1.0f;
         if (SUCCEEDED(g_dev.imm->Map(g_dev.grassTex, 0, D3D11_MAP_WRITE_DISCARD, 0, &m))) { memcpy(m.pData, q, sizeof(q)); g_dev.imm->Unmap(g_dev.grassTex, 0); } }
     int maxSet = -1; for (auto& o : ovs) maxSet = (std::max)(maxSet, o.set);
-    for (int s = 0; s <= maxSet; s++) {
+    // (25/10 d) los hilos de dibujo leen altSRV sin lock (ParamSRVFor): con lugar reservado, agregar texturas no mueve el arreglo
+    if (g_dev.altSRV.capacity() < 64) { g_dev.altSRV.reserve(64); g_dev.altTex.reserve(64); }
+    for (int s = 0; s <= maxSet && s < 64; s++) {
         while ((int)g_dev.altTex.size() <= s) {
             ID3D11Texture1D* t = nullptr; ID3D11ShaderResourceView* v = nullptr;
             if (!CreateParamTex(&t, &v)) return;
@@ -327,7 +450,7 @@ static void UploadParams() {
 }
 
 // ---------------------------------------------------------------- estado por contexto
-struct CtxState { const ShaderEntry* ps = nullptr; const ShaderEntry* vs = nullptr; ID3D11Device* dev = nullptr; bool devKnown = false; ID3D11Buffer* lastHairCB = nullptr; };   // lastHairCB: b11 de la ultima cara dibujada en este contexto (la boca la hereda)
+struct CtxState { const ShaderEntry* ps = nullptr; const ShaderEntry* vs = nullptr; ID3D11Device* dev = nullptr; bool devKnown = false; ID3D11Buffer* lastHairCB = nullptr; bool clothCS = false; };   // clothCS: el CS puesto es el simulador del mod de ropa (diagnostico en Dispatch)   // lastHairCB: b11 de la ultima cara dibujada en este contexto (la boca la hereda)
 static std::unordered_map<ID3D11DeviceContext*, CtxState> s_ctx;
 static std::shared_mutex s_ctxMutex;
 static CtxState& Ctx(ID3D11DeviceContext* c) {
@@ -355,9 +478,34 @@ using PFN_D3D11CreateDeviceAndSwapChain = HRESULT(WINAPI*)(IDXGIAdapter*, D3D_DR
 static PFN_CreateVS o_CreateVS; static PFN_CreatePS o_CreatePS; static PFN_CreateCS o_CreateCS; static PFN_CreateDC o_CreateDC;
 static PFN_SetPS o_SetPS[2]; static PFN_SetVS o_SetVS[2]; static PFN_SetCS o_SetCS[2];
 static PFN_DrawIdx o_DrawIdx[2]; static PFN_Draw o_Draw[2]; static PFN_DrawIdxInst o_DrawIdxInst[2]; static PFN_DrawInst o_DrawInst[2];
+using PFN_DrawIdxInstInd = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Buffer*, UINT);
+static PFN_DrawIdxInstInd o_DrawIdxInstInd[2];   // (25/10) DrawIndexedInstancedIndirect: lo usa el pasto v3 (lista de parcelas en la GPU)
 static PFN_Present o_Present; static PFN_Resize o_Resize;
 using PFN_ClearDSV = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11DepthStencilView*, UINT, FLOAT, UINT8);
 static PFN_ClearDSV o_ClearDSV[2];
+// (25/10 e) listas de comandos: los dibujos de la piel grabados en un contexto diferido cuentan cuando su lista se ejecuta
+using PFN_ExecCL = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11CommandList*, BOOL);
+using PFN_FinishCL = HRESULT(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, BOOL, ID3D11CommandList**);
+static PFN_ExecCL o_ExecCL[2]; static PFN_FinishCL o_FinishCL[2];
+// (25/10 e) diagnostico de la ropa contra el cuerpo: en el despacho del simulador del mod de ropa se copia su lista de
+// instancias (t18: matriz de mundo de cada prenda) para comparar con los personajes del lote (cada 20 s, ver cuerpo.cpp)
+using PFN_Dispatch = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, UINT);
+static PFN_Dispatch o_Dispatch[2];
+template<int V> static void STDMETHODCALLTYPE hk_Dispatch(ID3D11DeviceContext* c, UINT x, UINT y, UINT z) {
+    if (g_bodyDiagArmed.load(std::memory_order_relaxed) && Ctx(c).clothCS) BodyNoteClothDispatch(c, x);
+    o_Dispatch[V](c, x, y, z);
+}
+template<int V> static void STDMETHODCALLTYPE hk_ExecCL(ID3D11DeviceContext* c, ID3D11CommandList* l, BOOL r) {
+    BodyOnExecute(c, l);
+    GrassOnExecuteCL(c, l);   // (26/10 d) pasto: demora grabacion -> ejecucion, listas anidadas
+    o_ExecCL[V](c, l, r);
+}
+template<int V> static HRESULT STDMETHODCALLTYPE hk_FinishCL(ID3D11DeviceContext* c, BOOL r, ID3D11CommandList** l) {
+    HRESULT hr = o_FinishCL[V](c, r, l);
+    if (SUCCEEDED(hr) && l && *l) BodyOnFinish(c, *l);
+    GrassOnFinishCL(c, (SUCCEEDED(hr) && l) ? *l : nullptr);   // (26/10 d) pasto: la grabacion termino (siempre, aunque falle)
+    return hr;
+}
 // cejas (18/10): para dibujar las hebras hace falta saber si el juego usa profundidad invertida (limpia a 0) o normal (limpia a 1)
 std::atomic<int> g_depthClearZero{0}, g_depthClearOne{0};
 template<int V> static void STDMETHODCALLTYPE hk_ClearDSV(ID3D11DeviceContext* c, ID3D11DepthStencilView* v, UINT f, FLOAT d, UINT8 st) {
@@ -371,11 +519,13 @@ static const Rule* RuleFor(uint64_t h) {
     auto it = g_cfg.rules.find(h);
     return it == g_cfg.rules.end() ? nullptr : &it->second;
 }
-static std::vector<const Rule*> PairRulesFor(uint64_t h) {   // (20/10) [rule <ps> vs <vs>]
+static const std::vector<const Rule*>* PairRulesFor(uint64_t h) {   // (20/10) [rule <ps> vs <vs>]
+    // (25/10 d) la lista no se modifica nunca despues de crearla y no se libera (son pocas y solo cambian al recargar): los hilos
+    // de dibujo la recorren sin lock, y reasignar un std::vector mientras otro hilo lo recorre podia leer memoria liberada
     std::vector<const Rule*> out;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     for (auto& kv : g_cfg.pairRules) if (kv.first.first == h) out.push_back(&kv.second);
-    return out;
+    return out.empty() ? nullptr : new std::vector<const Rule*>(std::move(out));
 }
 
 static ID3D11DeviceChild* BuildReplacement(ID3D11Device* dev, uint64_t h, char type) {
@@ -444,6 +594,11 @@ static HRESULT STDMETHODCALLTYPE hk_CreateIL(ID3D11Device* d, const D3D11_INPUT_
     }
     return hr;
 }
+bool InputLayoutInfo(ID3D11InputLayout* il, std::vector<InputElemInfo>& out) {   // (25/10) cuerpo.cpp: formato de la malla de la piel
+    std::lock_guard<std::mutex> lk(s_layoutMutex); auto it = s_layouts.find(il); if (it == s_layouts.end()) return false;
+    out.clear(); for (auto& e : it->second) if (!e.cls) out.push_back({ e.sem, e.idx, e.fmt, e.slot, e.off });
+    return true;
+}
 std::string DescribeInputLayout(ID3D11InputLayout* il) {
     std::lock_guard<std::mutex> lk(s_layoutMutex); auto it = s_layouts.find(il); if (it == s_layouts.end()) return "(layout no anotado)";
     std::string r; for (auto& e : it->second) { char b[128]; snprintf(b, sizeof(b), "%s%u fmt %u slot %u off %u%s; ", e.sem.c_str(), e.idx, e.fmt, e.slot, e.off, e.cls ? " (instancia)" : ""); r += b; }
@@ -474,7 +629,10 @@ static HRESULT STDMETHODCALLTYPE hk_CreateDC(ID3D11Device* d, UINT f, ID3D11Devi
 
 // ---------------------------------------------------------------- bind de shaders
 static inline ID3D11ShaderResourceView* ParamSRVFor(const ShaderEntry* e) {
-    if (e && e->rule && e->rule->paramSet >= 0 && e->rule->paramSet < (int)g_dev.altSRV.size()) return g_dev.altSRV[e->rule->paramSet];
+    // (25/10 d) el puntero a la regla se lee una sola vez: al recargar la configuracion ReloadShaders lo cambia (o lo deja en null)
+    // mientras los hilos de dibujo lo usan
+    const Rule* r = e ? e->rule : nullptr;
+    if (r && r->paramSet >= 0 && r->paramSet < (int)g_dev.altSRV.size()) return g_dev.altSRV[r->paramSet];
     return g_dev.paramSRV;
 }
 
@@ -492,9 +650,25 @@ template<int V> static void STDMETHODCALLTYPE hk_SetVS(ID3D11DeviceContext* c, I
     if (e && e->repl && !g_cfg.bypass) { o_SetVS[V](c, (ID3D11VertexShader*)e->repl, ci, n); return; }
     o_SetVS[V](c, s, ci, n);
 }
+// (25/10) pasto v3: la DLL enlaza los shaders de un dibujo del juego (entradas + objetos tal como estaban puestos) desde otro
+// dibujo, de modo que BeforeDraw los vea como ese dibujo (reglas, t120). Devuelve lo que habia (con referencias a los
+// objetos) para volver a ponerlo con la misma funcion; quien llama libera vsObj / psObj devueltos.
+ShaderBind BindShadersRaw(ID3D11DeviceContext* c, const ShaderBind& b) {
+    int V = c->GetType() == D3D11_DEVICE_CONTEXT_DEFERRED ? 1 : 0;
+    PFN_SetVS fv = o_SetVS[V] ? o_SetVS[V] : (o_SetVS[0] ? o_SetVS[0] : o_SetVS[1]);
+    PFN_SetPS fp = o_SetPS[V] ? o_SetPS[V] : (o_SetPS[0] ? o_SetPS[0] : o_SetPS[1]);
+    CtxState& s = Ctx(c);
+    ShaderBind old; old.vs = s.vs; old.ps = s.ps; old.vsObj = nullptr; old.psObj = nullptr;
+    c->VSGetShader(&old.vsObj, nullptr, nullptr); c->PSGetShader(&old.psObj, nullptr, nullptr);
+    s.vs = b.vs; s.ps = b.ps;
+    if (fv) fv(c, b.vsObj, nullptr, 0); else c->VSSetShader(b.vsObj, nullptr, 0);
+    if (fp) fp(c, b.psObj, nullptr, 0); else c->PSSetShader(b.psObj, nullptr, 0);
+    return old;
+}
 template<int V> static void STDMETHODCALLTYPE hk_SetCS(ID3D11DeviceContext* c, ID3D11ComputeShader* s, ID3D11ClassInstance* const* ci, UINT n) {
     const ShaderEntry* e = FindShader(s);
     CatalogCS(e);
+    Ctx(c).clothCS = e && e->clothSim;
     if (e && e->repl && !g_cfg.bypass) {
         o_SetCS[V](c, (ID3D11ComputeShader*)e->repl, ci, n);
         if (e->dev == g_dev.dev && g_dev.paramSRV) { ID3D11ShaderResourceView* v = g_dev.paramSRV; c->CSSetShaderResources(120, 1, &v); }
@@ -504,18 +678,21 @@ template<int V> static void STDMETHODCALLTYPE hk_SetCS(ID3D11DeviceContext* c, I
     // (25/10) simulador del mod de ropa: parametros (t120: escena de menu, fuerza) y zonas de la musculatura (t121). Es fisica,
     // no un shader reemplazado: no depende de "Ver original". Sin esto el simulador lee ceros y esas mejoras quedan apagadas.
     if (e && e->clothSim && e->dev == g_dev.dev && g_dev.paramSRV) {
-        ID3D11ShaderResourceView* v[2] = { g_dev.paramSRV, MuscleClothSRV() };
-        c->CSSetShaderResources(120, 2, v);
+        // (25/10) t122..t124: el cuerpo real de cada personaje (cuerpo.cpp) para que la tela choque con la piel
+        ID3D11ShaderResourceView* v[5] = { g_dev.paramSRV, MuscleClothSRV(), nullptr, nullptr, nullptr };
+        BodyClothSRVs(v + 2);
+        c->CSSetShaderResources(120, 5, v);
+        BodySimSeen();
     }
 }
 
 // ---------------------------------------------------------------- reglas antes de cada dibujo
 // lo que una regla enlaza se devuelve a como estaba despues del dibujo (como "post ps-t20 = ..." en 3DMigoto)
 struct Saved { bool ps; bool srv; int slot; IUnknown* prev; };
-struct DrawScope { Saved s[12]; int n = 0; FaceGenExtra brow; bool skip = false; ID3D11PixelShader* restorePS = nullptr; LodIA lod; GlassScope glass; RingScope ring; };   // glass: vidrio de los menus (glass.cpp)   // lod.count > 0: dibujar con la geometria de LOD0 (lod.cpp)
+struct DrawScope { Saved s[24]; int n = 0; FaceGenExtra brow; bool skip = false; ID3D11PixelShader* restorePS = nullptr; LodIA lod; GlassScope glass; RingScope ring; };   // glass: vidrio de los menus (glass.cpp)   // lod.count > 0: dibujar con la geometria de LOD0 (lod.cpp)
 
 static void Remember(ID3D11DeviceContext* c, DrawScope& d, bool ps, bool srv, int slot) {
-    if (d.n >= 12) return;
+    if (d.n >= 24) return;   // (26/10 d) 12 -> 24: el torso ya enlaza 11 (t127, t16..t21, t24, t31..t33); lo que no entra no se devolveria
     Saved& s = d.s[d.n++]; s.ps = ps; s.srv = srv; s.slot = slot; s.prev = nullptr;
     if (srv) { ID3D11ShaderResourceView* v = nullptr; if (ps) c->PSGetShaderResources(slot, 1, &v); else c->VSGetShaderResources(slot, 1, &v); s.prev = v; }
     else { ID3D11Buffer* b = nullptr; if (ps) c->PSGetConstantBuffers(slot, 1, &b); else c->VSGetConstantBuffers(slot, 1, &b); s.prev = b; }
@@ -534,7 +711,15 @@ extern thread_local UINT t_drawVerts; extern thread_local UINT t_drawStart; exte
 static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, uint64_t hash, DrawScope& d);
 static void RunRule(ID3D11DeviceContext* c, const ShaderEntry* e, DrawScope& d) { RunRuleActions(c, e->rule, e->type == 'p', e->hash, d); }
 static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, uint64_t hash, DrawScope& d) {
+    if (!rule) return;   // (25/10 d) una recarga pudo dejar la regla en null entre la comprobacion y esta llamada
+    // (26/10) la pasada del sol tambien corre para una vista chica (otra camara del juego, mas chica que la principal): su
+    // m_lightDir0 esta en el espacio de ESA camara y, copiada a LightCB, el sol de la composicion / el cielo / el pasto / la
+    // fila 111 quedaba fijo respecto de la otra camara y giraba con la principal (log: 50-75 grados contra el shadow map).
+    // Solo se copian el sol y su shadow map desde la vista mas grande de las pasadas del sol.
+    bool sunSmall = false;
+    if (ps && SunPassIndex(hash) >= 0) sunSmall = SunPassSmallView(c, hash);
     for (auto& a : rule->actions) {
+        if (sunSmall && (a.kind == RuleAction::CopyCB || a.kind == RuleAction::RefSRV) && (a.name == "LightCB" || a.name == "LightCBAlt" || a.name == "ShadowMap")) continue;
         switch (a.kind) {
         case RuleAction::CopyCB: {
             // (20/10) con ID3D11DeviceContext1 el juego puede enlazar una ventana (first/num constantes) de un buffer grande:
@@ -655,7 +840,8 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     bool pr = ps && ps->repl, vr = vs && vs->repl;
     if (pr || vr) {
         // si el PS tiene parametros propios (p.ej. w5 = $pes_push) los ven el PS y el VS de ese dibujo
-        ID3D11ShaderResourceView* v = (ps && ps->rule && ps->rule->paramSet >= 0) ? ParamSRVFor(ps) : ParamSRVFor(vs);
+        const Rule* psr = ps ? ps->rule : nullptr;
+        ID3D11ShaderResourceView* v = (psr && psr->paramSet >= 0) ? ParamSRVFor(ps) : ParamSRVFor(vs);
         if (v) {
             if (pr) c->PSSetShaderResources(120, 1, &v);
             if (vr) { ID3D11ShaderResourceView* vv = (t_sparseGrass && g_dev.grassSRV) ? g_dev.grassSRV : v; c->VSSetShaderResources(120, 1, &vv); }
@@ -666,6 +852,8 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         g_stFaceDraws++; if (ps->rule) g_stFaceRule++;
         if (c->GetType() == D3D11_DEVICE_CONTEXT_DEFERRED) g_stFaceCtxDef++;
     }
+    if (ps) SunPassNote(ps->hash);   // (25/10) variantes de la luz del sol por cuadro (log)
+    if (ps) GrassDiagState(c, ps->hash);   // (26/10 f) stencil de las pasadas del sol y de la base (log, 3 veces cada una)
     if (!g_cfg.optRules) { RingFaceBind(c, d.ring); return false; }
     if ((ps && ps->rule) || (vs && vs->rule)) {
         if (!s_firstRule.exchange(true)) Log("primer dibujo con regla");
@@ -673,7 +861,45 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (ps && ps->rule) RunRule(c, ps, d);
     if (vs && vs->rule) RunRule(c, vs, d);
     // (20/10) reglas por pareja PS + VS: p.ej. la piel del cuerpo (aa7d1833) cuando dibuja la cabeza de una cara generica (VS faab87ee)
-    if (ps && vs && !ps->pairRules.empty()) for (const Rule* pr : ps->pairRules) if (pr->vsCond == vs->hash) RunRuleActions(c, pr, true, ps->hash, d);
+    if (ps && vs) if (const std::vector<const Rule*>* prs = ps->pairRules) for (const Rule* pr : *prs) if (pr->vsCond == vs->hash) RunRuleActions(c, pr, true, ps->hash, d);
+    // (25/10) manos de TorsoBody (manos.cpp): datos por vertice de la mano en t126 del VS (cuaterniones duales + correctivas)
+    if (vs && vs->repl) {
+        bool arm = false, hand = false;
+        ID3D11ShaderResourceView* hv = HandDataFor(vs->hash, t_drawVerts, t_drawStart, t_drawBase); hand = hv != nullptr;
+        if (!hv) hv = LimbDataFor(vs->hash, t_drawVerts, t_drawStart, t_drawBase, &arm);   // (26/10, v12.7) brazos y piernas
+        if (hv) { Remember(c, d, false, true, 126); c->VSSetShaderResources(126, 1, &hv); }
+        // (26/10, v12.7) venas: textura en t29 del PS de la piel para los brazos y las manos (no en la sombra)
+        if ((hand || arm) && vs->hash == 0x1c02a92ab4ae3362ULL) if (ID3D11ShaderResourceView* vt = VeinTexture()) { Remember(c, d, true, true, 29); c->PSSetShaderResources(29, 1, &vt); }
+        // (26/10) variantes robusto / atletico de TorsoBody (manos.cpp + pes_variants.hlsli): datos por vertice del torso y de los
+        // brazos en t127 del VS (piel y sombras); en el torso, los mapas del PS de la piel en t16 / t17 / t18
+        bool vTorso = false;
+        if (ID3D11ShaderResourceView* vd = VariantDataFor(vs->hash, t_drawVerts, &vTorso)) {
+            Remember(c, d, false, true, 127); c->VSSetShaderResources(127, 1, &vd);
+            ID3D11ShaderResourceView* vm[3] = {};
+            if (vTorso && vs->hash == 0x1c02a92ab4ae3362ULL && VariantTextures(vm)) {
+                Remember(c, d, true, true, 16); Remember(c, d, true, true, 17); Remember(c, d, true, true, 18);
+                c->PSSetShaderResources(16, 3, vm);
+            }
+        }
+        // (26/10) columna marcada: en todos los torsos (aunque no haya variantes en uso)
+        if (ID3D11ShaderResourceView* sp = SpineTextureFor(vs->hash, t_drawVerts)) { Remember(c, d, true, true, 19); c->PSSetShaderResources(19, 1, &sp); }
+        // (26/10 b) base esculpida: la correccion del normal map del torso (t20)
+        if (ID3D11ShaderResourceView* bt = BaseTextureFor(vs->hash, t_drawVerts)) { Remember(c, d, true, true, 20); c->PSSetShaderResources(20, 1, &bt); }
+        {   // (26/10 b) piel real: zonas del torso (t21 brillo / rugosidad, t24 translucidez / rubor)
+            ID3D11ShaderResourceView* sk[2] = {};
+            if (SkinTexturesFor(vs->hash, t_drawVerts, sk)) { Remember(c, d, true, true, 21); Remember(c, d, true, true, 24); c->PSSetShaderResources(21, 1, &sk[0]); c->PSSetShaderResources(24, 1, &sk[1]); }
+        }
+        // (26/10 c) pelvis sin short (SinCamiseta, tecla 4): albedo propio en t23 (su presencia le dice al PS que es la pelvis)
+        if (ID3D11ShaderResourceView* pa = PelvisAlbedoFor(vs->hash, t_drawVerts)) {
+            Remember(c, d, true, true, 23); c->PSSetShaderResources(23, 1, &pa);
+            ID3D11ShaderResourceView* pd[2] = {};   // (26/10 d) y su detalle de piel real (t34 normal, t35 albedo)
+            if (PelvisDetailFor(vs->hash, t_drawVerts, pd)) { Remember(c, d, true, true, 34); Remember(c, d, true, true, 35); c->PSSetShaderResources(34, 2, pd); }
+        }
+        {   // (26/10 d) tope del relieve: inclinacion de la malla de cada version (t31 base, t32 atletico, t33 robusto)
+            ID3D11ShaderResourceView* tl[3] = {};
+            if (TiltTexturesFor(vs->hash, t_drawVerts, tl)) { Remember(c, d, true, true, 31); Remember(c, d, true, true, 32); Remember(c, d, true, true, 33); c->PSSetShaderResources(31, 3, tl); }
+        }
+    }
     // 19/10: la boca (63fab7) hereda el b11 (tipo de pelo + semilla de la cara) de la ultima cara dibujada en este contexto:
     // variacion de dientes/encias por jugador
     if (ps && ps->hash == 0x63fab7735eee149cULL && ps->repl && s.lastHairCB) { Remember(c, d, true, false, 11); c->PSSetConstantBuffers(11, 1, &s.lastHairCB); }
@@ -741,11 +967,16 @@ template<int V> static void LodDrawSub(ID3D11DeviceContext* c, DrawScope& ds) { 
 template<int V> static void STDMETHODCALLTYPE hk_DrawIdx(ID3D11DeviceContext* c, UINT a, UINT b, INT d) {
     { CtxState& cg = Ctx(c); const ShaderEntry* gvs = cg.vs;
       if (g_grassProbeOn) CatalogGrassDraw(c, gvs, a, b, d);
-      if (gvs && gvs->hash == 0x498b30bad256e8edULL) GrassOnDraw(c, gvs, a, b, d);
+      if (gvs && gvs->hash == 0x498b30bad256e8edULL) GrassOnDraw(c, gvs, cg.ps, a, b, d);
+      if (gvs && gvs->hash == 0x1c02a92ab4ae3362ULL) BodyOnDraw(c, a, b, d);   // (25/10) piel del cuerpo -> la ropa choca con ella (es fisica: no depende de "Ver original")
       if (g_autoDumpAny) InspectAutoDump(c, cg.ps); }
     t_drawStart = b; t_drawBase = d;
-    FX_DRAW(a, 1, 1, (ds.lod.count ? LodDrawSub<V>(c, ds) : o_DrawIdx[V](c, a, b, d))) }
+    FX_DRAW(a, 1, 1, (ds.lod.count ? LodDrawSub<V>(c, ds) : o_DrawIdx[V](c, a, b, d)))
+    // (25/10) pasto v3: al terminar la base de la cancha (PS 5e92 / c956, existe en todas las camaras) se emite el pasto del mod
+    { CtxState& cb_ = Ctx(c); if (cb_.ps && (cb_.ps->hash == 0x5e92f2343848915aULL || cb_.ps->hash == 0xc9564b9b155f0a49ULL)) GrassOnBaseDraw(c); } }
 template<int V> static void STDMETHODCALLTYPE hk_Draw(ID3D11DeviceContext* c, UINT a, UINT b) { FX_DRAW(a, 0, 1, o_Draw[V](c, a, b)) }
+// (25/10) dibujo indirecto (pasto v3): pasa por BeforeDraw como cualquier dibujo (reglas, t120); vertices e instancias desconocidos
+template<int V> static void STDMETHODCALLTYPE hk_DrawIdxInstInd(ID3D11DeviceContext* c, ID3D11Buffer* a, UINT b) { FX_DRAW(0, 3, 0, o_DrawIdxInstInd[V](c, a, b)) }
 template<int V> static void STDMETHODCALLTYPE hk_DrawIdxInst(ID3D11DeviceContext* c, UINT a, UINT b, UINT d, INT e, UINT f) { FX_DRAW(a, 3, b, o_DrawIdxInst[V](c, a, b, d, e, f)) }
 template<int V> static void STDMETHODCALLTYPE hk_DrawInst(ID3D11DeviceContext* c, UINT a, UINT b, UINT d, UINT e) { FX_DRAW(a, 2, b, o_DrawInst[V](c, a, b, d, e)) }
 
@@ -777,8 +1008,12 @@ template<int V> static void HookContextV(ID3D11DeviceContext* c) {
     n += Hook(vt[13], (void*)&hk_Draw<V>, (void**)&o_Draw[V], "Draw");
     n += Hook(vt[20], (void*)&hk_DrawIdxInst<V>, (void**)&o_DrawIdxInst[V], "DrawIndexedInstanced");
     n += Hook(vt[21], (void*)&hk_DrawInst<V>, (void**)&o_DrawInst[V], "DrawInstanced");
+    n += Hook(vt[39], (void*)&hk_DrawIdxInstInd<V>, (void**)&o_DrawIdxInstInd[V], "DrawIndexedInstancedIndirect");
     n += Hook(vt[69], (void*)&hk_SetCS<V>, (void**)&o_SetCS[V], "CSSetShader");
     n += Hook(vt[53], (void*)&hk_ClearDSV<V>, (void**)&o_ClearDSV[V], "ClearDepthStencilView");
+    n += Hook(vt[41], (void*)&hk_Dispatch<V>, (void**)&o_Dispatch[V], "Dispatch");
+    n += Hook(vt[58], (void*)&hk_ExecCL<V>, (void**)&o_ExecCL[V], "ExecuteCommandList");
+    n += Hook(vt[114], (void*)&hk_FinishCL<V>, (void**)&o_FinishCL[V], "FinishCommandList");
     if (n) Log("contexto enganchado (variante %d, %d funciones)", V, n);
 }
 static void HookContext(ID3D11DeviceContext* c, int v) {
@@ -1066,6 +1301,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
             if (g_dev.imm) { g_dev.imm->UpdateSubresource(r.buf, 0, nullptr, zeros.data(), 0, 0); r.cleared = true; }
         }
     }
+    SunPassPresent();   // (25/10) variantes de la luz del sol: log de cambios
     UpdateTimeParams();
     SSGIPresent(s_presentNo.load());
     LightMeterPresent();
@@ -1075,6 +1311,8 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     SkinTonePresent();     // (24/10) tono de piel por jugador: guardado y vista previa en el menu Fisico
     GlassPresent();        // (24/10) vidrio de los menus: lectura de lo anotado por el PS y plan de copias del fondo
     MuscleHookPresent();   // (23/10) musculatura: ganchos a los huesos de musculo del motor (primer Present)
+    BodyPresent();         // (25/10) la ropa contra el cuerpo real: mallas de piel nuevas, cuadro nuevo
+    GrassFrameBoundary(flags);   // (26/10 d) pasto: limite del cuadro (reclamo en la GPU, x63) ANTES de subir t120
     UploadParams();
     WatchShaderFolder();
     PollMatch();
@@ -1082,6 +1320,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     LodPresent();
     ExeDumpPresent();
     ExePatchPresent();
+    GrassDistPresent();
     PitchWearPresent();
     GrassPresent();
     FaceGenPresent();
@@ -1090,6 +1329,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     AsyncShotPresent();
     RingPresent(sc);       // (24/10 e) aro del musculo sobre la imagen final (antes de las capturas y del menu)
     AutoCapturePresent(s_frameTex);
+    FisicoCapturePresent(s_frameTex);   // (26/10 c) paginas del menu Fisico
     MenuTestPresent(sc);
     OverlayPresent(sc);
     return o_Present(sc, sync, flags);
@@ -1152,6 +1392,7 @@ void ReloadShaders() {
     GlassReloadShaders();
     RingReloadShaders();
     SSGIReloadShaders();
+    BodyReloadShaders();
     std::unique_lock<std::shared_mutex> lk(s_shMutex);
     int n = 0;
     { std::lock_guard<std::mutex> lk2(g_errMutex); g_compileErrors.clear(); }
@@ -1162,7 +1403,7 @@ void ReloadShaders() {
         if (e.repl) { std::lock_guard<std::mutex> lk3(s_releaseMutex); s_deferredRelease.push_back(e.repl); s_replToObj.erase(e.repl); }
         e.repl = nr; if (nr) { n++; s_replToObj[nr] = kv.first; }
         e.rule = RuleFor(e.hash);
-        e.pairRules = (e.type == 'p') ? PairRulesFor(e.hash) : std::vector<const Rule*>();
+        e.pairRules = (e.type == 'p') ? PairRulesFor(e.hash) : nullptr;
     }
     Log("recarga: %d shaders propios", n);
 }

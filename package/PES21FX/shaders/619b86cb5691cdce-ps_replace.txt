@@ -345,7 +345,9 @@ void main(
     float4 BG = IniParams.Load(int2(42,0));
     float zb = PESLinZ(uvC);
     float3 Ld = pLc_dir.xyz;
-    if (cmpOn && BG.w > 0.5 && zb > 0.1 && zb < 120.0 && dot(Ld, Ld) > 1e-6) {
+    // (25/10 c) nunca sobre el cesped (tyC == 3: base y hojas del pasto): el rebote es del suelo hacia los jugadores; sobre las
+    // hojas salia como puntitos sueltos (12 lecturas del shadow map por pixel en toda la cancha, caras de cada hoja)
+    if (cmpOn && BG.w > 0.5 && zb > 0.1 && zb < 120.0 && dot(Ld, Ld) > 1e-6 && tyC != 3) {
       Ld = normalize(Ld);
       float3 upV = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
       if (dot(Ld, upV) < 0) upV = -upV;                          // el sol (o las torres) siempre estan arriba
@@ -465,8 +467,66 @@ void main(
       float shG = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
       float3 sunC = max(pLc_color.xyz, 0.0) * g_psScene.m_exposure.zzz;
       // pasto v3: las hojas finas (puntas) dejan pasar mas luz que la base; la translucidez viene del G-buffer
-      float trK = IniParams.Load(int2(104,0)).x > 0.5 ? lerp(0.85, 1.6, saturate(trC)) : 1.0;
-      r2.xyz += sunC * tr * (0.35 + 0.65 * low) * shG * STg.y * 0.35 * trK * float3(1.0, 1.05, 0.55);
+      // (26/10 d) hojas y base con casi el mismo peso (antes 0.85 vs 1.6: brillaban distinto mirando al sol) y tinte menos amarillo
+      // (el azul en 0.55 ponia lima toda la cancha hacia el sol, y x29 no llega a la luz)
+      float trK = IniParams.Load(int2(104,0)).x > 0.5 ? lerp(0.9, 1.3, saturate(trC)) : 1.0;
+      r2.xyz += sunC * tr * (0.35 + 0.65 * low) * shG * STg.y * 0.35 * trK * float3(1.0, 1.03, 0.80);
+    }
+  }
+  // === PES21 (25/10 b) brillo del cesped al sol (x134 brillo, y134 apertura): cuticula cerosa de las hojas. Mirando hacia el
+  // sol en angulo rasante la cancha se aclara y blanquea (TV por la tarde). Normal del G-buffer (hojas y base), Fresnel
+  // rasante, sin brillo en la sombra. Solo con sol (luz calida), no con torres.
+  {
+    float4 SH = IniParams.Load(int2(134,0));
+    if (geoOk && SH.x > 0.001 && tyC == 3 && zsk < 300.0 && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {
+      float3 sc = max(pLc_color.xyz, 0.0);
+      float day = saturate((sc.r / max(sc.b, 1e-4) - 0.85) * 4.0);
+      if (day > 0.01) {
+        float3 Ld = normalize(pLc_dir.xyz);
+        float3 H = normalize(Ld - Vsk);
+        float nh = saturate(dot(Nsk, H));
+        float graz = 1.0 - saturate(dot(Nsk, -Vsk));
+        float open = lerp(48.0, 10.0, saturate(SH.y));
+        float fres = 0.04 + 0.96 * pow(graz, 4.0);
+        float shG = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
+        float3 sunC = sc * g_psScene.m_exposure.zzz;
+        r1.xyz += sunC * pow(nh, open) * fres * shG * saturate(dot(Nsk, Ld) * 3.0) * max(SH.x, 0.0) * 0.6 * day;
+      }
+    }
+  }
+  // === PES21 (25/10 b) reflectores de noche en el cesped (x113 brillo, y113 luz envolvente): de noche el juego ilumina la
+  // cancha con una sola luz; un estadio tiene 4 torres. Cuatro luces virtuales giradas alrededor de la vertical respecto
+  // de la dominante dan brillos rasantes multiples y un poco de luz desde los cuatro lados, solo sobre el cesped y con
+  // luz fria (las torres de los jugadores son aparte, x55).
+  {
+    float4 FL = IniParams.Load(int2(113,0));
+    float3 Lf = pLc_dir.xyz;
+    if (geoOk && (FL.x > 0.001 || FL.y > 0.001) && tyC == 3 && zsk < 200.0 && dot(Lf, Lf) > 1e-6) {
+      float3 sc = max(pLc_color.xyz, 0.0);
+      float kNight = 1.0 - saturate((sc.r / max(sc.b, 1e-4) - 0.85) * 4.0);
+      if (kNight > 0.01) {
+        Lf = normalize(Lf);
+        float3 upV = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
+        if (dot(Lf, upV) < 0) upV = -upV;
+        float3 lightC = sc * g_psScene.m_exposure.zzz;
+        float graz = 1.0 - saturate(dot(Nsk, -Vsk));
+        // (25/10 c) con la sombra del juego: antes las torres virtuales rellenaban las sombras de los jugadores sobre el cesped
+        float shF = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
+        lightC *= 0.25 + 0.75 * shF;
+        float specAcc = 0.0, diffAcc = 0.0;
+        [unroll] for (int ti = 0; ti < 4; ti++) {
+          float ang = 1.5707963 * ti + 0.7853982;
+          float ca = cos(ang), sa = sin(ang);
+          float3 Lt = Lf * ca + cross(upV, Lf) * sa + upV * dot(upV, Lf) * (1.0 - ca);
+          float nl = saturate(dot(Nsk, Lt));
+          float3 H = normalize(Lt - Vsk);
+          float nh = saturate(dot(Nsk, H));
+          specAcc += pow(nh, 24.0) * (0.3 + 0.7 * graz) * nl;
+          diffAcc += nl;
+        }
+        r1.xyz += lightC * specAcc * 0.07 * max(FL.x, 0.0) * kNight * shF;
+        r2.xyz += lightC * diffAcc * 0.025 * max(FL.y, 0.0) * kNight;
+      }
     }
   }
   // === PES21 luz de borde (17/10): con el sol detras del jugador, el contorno (hombros, pelo, brazos) se enciende.

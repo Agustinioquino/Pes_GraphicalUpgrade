@@ -196,11 +196,11 @@ static void SaveSkin() {
          "; [id] = id del jugador; tono = 1..30 (0 = el color del juego; los 6 colores del juego son 3, 8, 13, 18, 23 y 28),\r\n"
          "; matiz = -25 (oliva) .. +25 (rosado), luz y sat = -25..+25 (ajuste fino); juego = color de piel del juego del jugador\r\n"
          "; (1..6, lo anota el menu Fisico); rgb = RRGGBB (hex): color propio elegido en la paleta del juego (manda sobre el tono);\r\n"
-         "; igualar = 1: el cuerpo toma el color de la cara (cuerpo y cara = colores medidos en la base del cuello, hex sRGB);\r\n"
+         "; igualar = 1 (por defecto; 0 = no): el cuerpo toma el color de la cara (cuerpo y cara = colores medidos en la base del cuello, hex sRGB);\r\n"
          "; zona = a que se aplica el tono: 0 cara y cuerpo, 1 solo el cuerpo, 2 solo el torso (brazos, cuello y piernas como el juego).\r\n";
     for (auto& kv : s_skin) {
         const SkinProf& q = kv.second;
-        if (q.tono <= 0 && q.matiz == 0 && q.luz == 0 && q.sat == 0 && !q.rgb && !q.igualar && !q.zona) continue;
+        if (q.tono <= 0 && q.matiz == 0 && q.luz == 0 && q.sat == 0 && !q.rgb && q.igualar && !q.cuerpo && !q.zona) continue;   // (27/10) igualar = 1 es el defecto
         f << "\r\n[" << kv.first << "]\r\n";
         if (!q.name.empty()) f << "nombre = " << q.name << "\r\n";
         f << "tono = " << q.tono << "\r\nmatiz = " << q.matiz << "\r\n";
@@ -208,7 +208,7 @@ static void SaveSkin() {
         if (q.sat) f << "sat = " << q.sat << "\r\n";
         char h[16];
         if (q.rgb) { snprintf(h, sizeof h, "%06X", q.rgb & 0xffffffu); f << "rgb = " << h << "\r\n"; }
-        if (q.igualar) f << "igualar = 1\r\n";
+        f << "igualar = " << (q.igualar ? 1 : 0) << "\r\n";   // (27/10) se guarda siempre (el defecto es 1)
         if (q.zona) f << "zona = " << q.zona << "\r\n";
         if (q.cuerpo) { snprintf(h, sizeof h, "%06X", q.cuerpo & 0xffffffu); f << "cuerpo = " << h << "\r\n"; }
         if (q.cara) { snprintf(h, sizeof h, "%06X", q.cara & 0xffffffu); f << "cara = " << h << "\r\n"; }
@@ -275,6 +275,7 @@ static bool NodePosL(const float m[16], int layout, float out[3]) {
 static bool NodePos(void* node, float out[3]) {
     float m[16]; return NodeMat(node, m) && NodePosL(m, s_nodeLayout.load(), out);
 }
+bool CharNodeWorldPos(void* node, float out[3]) { return NodePos(node, out); }   // (26/10) la usa musculo.cpp (ropa por jugador)
 static void ToneCheckPresent(const CharInfo* ci, const bool* alive);   // abajo
 static double s_tabLog = 0;
 // (24/10 e) medicion "cuerpo como la cara": ring.cpp acumula en el menu Fisico el color de la base del cuello del cuerpo
@@ -300,7 +301,9 @@ void SkinMeasureReport(const uint32_t* body, const uint32_t* face, uint32_t yMin
     uint32_t eid = 0; if (!FisicoEditing(&eid) || !eid) return;
     std::lock_guard<std::mutex> lk(s_skinMx);
     if (!s_skinLoaded) LoadSkin();
-    auto it = s_skin.find(eid); if (it == s_skin.end() || !it->second.igualar) return;
+    auto it = s_skin.find(eid);
+    if (it == s_skin.end()) it = s_skin.emplace(eid, SkinProf()).first;   // (27/10) cuerpo del color de la cara por defecto: se mide al abrir su Fisico
+    if (!it->second.igualar) return;
     auto diff = [](uint32_t a, uint32_t b) { int d = 0; for (int k = 0; k < 3; k++) d = (std::max)(d, abs((int)((a >> (8 * k)) & 255) - (int)((b >> (8 * k)) & 255))); return d; };
     if (diff(cb, it->second.cuerpo) <= 1 && diff(cf, it->second.cara) <= 1) return;
     it->second.cuerpo = cb; it->second.cara = cf; s_skinDirty = true; s_skinDirtyT = t;
@@ -313,7 +316,16 @@ static const int kTabMax = 20;   // filas 195..254 (3 por entrada: posicion, car
 void SkinTonePresent() {
     { std::lock_guard<std::mutex> lk(s_skinMx); if (s_skinDirty && Now() - s_skinDirtyT > 0.6) { s_skinDirty = false; SaveSkin(); } }
     for (int r = 194; r < 195 + 3 * kTabMax; r++) for (int c = 0; c < 4; c++) g_cfg.live[r][c] = 0.0f;
-    if (g_cfg.live[184][0] < 0.5f) return;
+    // (26/10) variantes robusto / atletico de TorsoBody (pes_variants.hlsli): 264 = (t general, 1 = la tabla vale, prendido, -) y
+    // 265 + i = t de la entrada i (los tapones llevan el general). x285 = 0 apaga las variantes.
+    for (int r = 264; r < 265 + kTabMax; r++) for (int c = 0; c < 4; c++) g_cfg.live[r][c] = 0.0f;
+    const bool varOn = g_cfg.live[285][0] > 0.5f;
+    const float varGen = varOn ? MuscleVariantT(0, nullptr) : 0.0f;
+    g_cfg.live[264][0] = varGen; g_cfg.live[264][2] = varOn ? 1.0f : 0.0f;
+    // (26/10 b) la tabla tambien lleva la definicion muscular propia de cada jugador (w de la fila de la posicion; 0 = la general):
+    // un jugador entra si tiene tono propio (x184 prendido), definicion propia o (26/10) variante propia
+    const bool toneOn = g_cfg.live[184][0] > 0.5f, defOn = g_cfg.live[164][0] > 0.5f;
+    if (!toneOn && !defOn) return;
     static CharInfo ci[kCharSlots]; static bool alive[kCharSlots];
     CharSnapshot(ci, alive);
     uint32_t eid = 0; const bool fis = FisicoEditing(&eid) && MusclePhysiqueActive();
@@ -322,14 +334,19 @@ void SkinTonePresent() {
     const float k = g_cfg.live[184][1] > 0.0f ? g_cfg.live[184][1] : 1.0f;
     // en el menu Fisico hay un solo personaje: cualquier distancia sirve (asi la vista previa no depende de la comprobacion)
     const float maxD = fis ? 10000.0f : 1.4f;
-    struct Ent { float pos[3], P[3], PB[3]; bool own; float d2; uint32_t id; int gi, tono, matiz, zona; };
+    struct Ent { float pos[3], P[3], PB[3]; bool own; float d2; uint32_t id; int gi, tono, matiz, zona; float def; bool need; float tv; };
     static Ent e[kCharSlots]; int ne = 0, nOwn = 0;
     for (int sl = 0; sl < kCharSlots; sl++) {
         if (!alive[sl] || !ci[sl].node) continue;
         Ent& x = e[ne];
         if (!NodePos(ci[sl].node, x.pos)) continue;
         x.P[0] = 1.0f; x.P[1] = 1.0f; x.P[2] = 0.0f; x.PB[0] = 1.0f; x.PB[1] = 1.0f; x.PB[2] = 0.0f; x.own = false; x.d2 = 1e30f; x.id = ci[sl].known ? ci[sl].id : 0; x.gi = x.tono = x.matiz = x.zona = 0;
-        if (x.id) {
+        x.def = 0.0f; x.need = false; x.tv = varGen;
+        if (!x.id && fis) x.id = eid;   // (26/10 b) el modelo del menu Fisico sin HumanList: el jugador que se edita
+        if (x.id && defOn) x.def = MuscleDefinitionFor(x.id);
+        bool tvOwn = false;
+        if (x.id && varOn) x.tv = MuscleVariantT(x.id, &tvOwn);   // (26/10) variante propia del torso / brazos
+        if (x.id && toneOn) {
             if (fis && x.id == eid && fgi >= 1) SkinToneSetGame(x.id, fgi);   // recordar el color del juego de este jugador
             SkinToneProf q; const bool has = SkinToneGetProf(x.id, q);
             if (fis && x.id == eid) s_measureWanted = q.igualar != 0;
@@ -341,39 +358,42 @@ void SkinTonePresent() {
                 if (x.own && x.zona >= 1) { x.P[0] = 1.0f; x.P[1] = 1.0f; x.P[2] = 0.0f; }   // (24/10 g) solo el cuerpo / el torso: la cara como el juego
             }
         }
-        if (x.own) nOwn++;
+        x.need = x.own || x.def > 0.0f || tvOwn;
+        if (x.need) nOwn++;
         ne++;
     }
     int n = 0, nBlk = 0; char line[1024]; int ln = 0; line[0] = 0;
     auto put = [&](const Ent& x) {
         float* A = g_cfg.live[195 + 3 * n]; float* B = g_cfg.live[196 + 3 * n]; float* C = g_cfg.live[197 + 3 * n];
-        A[0] = x.pos[0]; A[1] = x.pos[1]; A[2] = x.pos[2]; A[3] = 0.0f;
+        A[0] = x.pos[0]; A[1] = x.pos[1]; A[2] = x.pos[2]; A[3] = x.def;   // (26/10 b) definicion propia (0 = la general)
         B[0] = x.P[0]; B[1] = x.P[1]; B[2] = x.P[2]; B[3] = x.own ? 1.0f : 0.0f;
         C[0] = x.PB[0]; C[1] = x.PB[1]; C[2] = x.PB[2]; C[3] = (x.own && x.zona == 2) ? 2.0f : B[3];   // (24/10 g) 2 = solo el torso
+        g_cfg.live[265 + n][0] = x.need ? x.tv : varGen;   // (26/10) variante (los tapones, la general)
         n++;
     };
     if (nOwn > 0) {
-        for (int i = 0; i < ne && n < kTabMax; i++) if (e[i].own) {
+        for (int i = 0; i < ne && n < kTabMax; i++) if (e[i].need) {
             put(e[i]);
-            if (ln < 900) ln += snprintf(line + ln, sizeof line - ln, " | %u (color %d, tono %d, matiz %d) en (%.1f, %.1f, %.1f) kL %.2f m %.2f %.2f", e[i].id, e[i].gi, e[i].tono, e[i].matiz, e[i].pos[0], e[i].pos[1], e[i].pos[2], e[i].P[0], e[i].P[1], e[i].P[2]);
+            if (ln < 900) ln += snprintf(line + ln, sizeof line - ln, " | %u (color %d, tono %d, matiz %d, definicion %.2f, variante %+.2f) en (%.1f, %.1f, %.1f) kL %.2f m %.2f %.2f", e[i].id, e[i].gi, e[i].tono, e[i].matiz, e[i].def, e[i].tv, e[i].pos[0], e[i].pos[1], e[i].pos[2], e[i].P[0], e[i].P[1], e[i].P[2]);
         }
         // tapones: los demas, por cercania al jugador con tono propio mas proximo (solo los que pueden confundirse)
         const float lim = (2.0f * maxD) * (2.0f * maxD);
         for (int i = 0; i < ne; i++) {
-            if (e[i].own) continue;
-            for (int j = 0; j < ne; j++) if (e[j].own) {
+            if (e[i].need) continue;
+            for (int j = 0; j < ne; j++) if (e[j].need) {
                 const float dx = e[i].pos[0] - e[j].pos[0], dz = e[i].pos[2] - e[j].pos[2];
                 e[i].d2 = (std::min)(e[i].d2, dx * dx + dz * dz);
             }
         }
         while (n < kTabMax) {
             int b = -1;
-            for (int i = 0; i < ne; i++) if (!e[i].own && e[i].d2 < lim && (b < 0 || e[i].d2 < e[b].d2)) b = i;
+            for (int i = 0; i < ne; i++) if (!e[i].need && e[i].d2 < lim && (b < 0 || e[i].d2 < e[b].d2)) b = i;
             if (b < 0) break;
             put(e[b]); e[b].d2 = 1e30f; nBlk++;
         }
     }
     g_cfg.live[194][0] = (float)n; g_cfg.live[194][1] = n > 0 ? 1.0f : 0.0f; g_cfg.live[194][2] = maxD; g_cfg.live[194][3] = (float)s_posMode.load();
+    g_cfg.live[264][1] = n > 0 ? 1.0f : 0.0f;
     g_skinMeasure = fis && s_measureWanted;
     g_cfg.live[192][2] = s_faceY[0]; g_cfg.live[192][3] = s_faceY[1];
     const double t = Now();

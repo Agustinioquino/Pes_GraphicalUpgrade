@@ -75,7 +75,7 @@ def meshes(f):
         matinst, bgroup, index, nvert = struct.unpack_from("<HHHH", e, 4)
         nmf, nvf, _, _, fmf, fvf = struct.unpack_from("<BBBBHH", d, mfa_off + 8 * index)
         vfs = [struct.unpack_from("<BBH", d, vf_off + 4 * (fvf + i)) for i in range(nvf)]
-        pos = w = ix = None
+        pos = w = ix = nrm = tan = uv = None
         vi = 0
         for k in range(nmf):
             bidx, nf, stride, typ, moff = struct.unpack_from("<BBBBI", d, mf_off + 8 * (fmf + k))
@@ -86,6 +86,10 @@ def meshes(f):
                 if usage == 0 and fmt == 1: pos = np.ascontiguousarray(a[:, :12]).view(np.float32).reshape(nvert, 3)
                 elif usage == 1 and fmt == 8: w = a[:, :4].astype(np.float32) / 255.0
                 elif usage == 7 and fmt == 9: ix = a[:, :4].astype(np.int32)
+                # (26/10) normal / tangente (half4; w de la tangente = signo de la binormal) y uv (half2), para las variantes del torso
+                elif usage == 2 and fmt == 6: nrm = np.ascontiguousarray(a[:, :8]).view(np.float16).astype(np.float32).reshape(nvert, 4)
+                elif usage == 14 and fmt == 6: tan = np.ascontiguousarray(a[:, :8]).view(np.float16).astype(np.float32).reshape(nvert, 4)
+                elif usage == 8 and fmt == 7 and uv is None: uv = np.ascontiguousarray(a[:, :4]).view(np.float16).astype(np.float32).reshape(nvert, 2)
             vi += nf
         grp = f.groups[bgroup] if bgroup < len(f.groups) else []
         if ix is not None and grp:
@@ -97,7 +101,8 @@ def meshes(f):
         ib = [b for b in bufs if b[0] == 1]
         if ib and fc:
             faces = np.frombuffer(d, dtype="<u2", count=fc, offset=buf_base + ib[0][2] + 2 * ff).astype(np.int32).reshape(-1, 3)
-        out.append({"pos": pos, "w": w, "idx": ix, "group": bgroup, "nvert": nvert, "mat": matinst, "faces": faces})
+        out.append({"pos": pos, "w": w, "idx": ix, "group": bgroup, "nvert": nvert, "mat": matinst, "faces": faces,
+                    "nrm": nrm, "tan": tan, "uv": uv})
     return out
 
 def bone_weights(f, m, name):

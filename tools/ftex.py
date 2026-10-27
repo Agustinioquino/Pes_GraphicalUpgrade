@@ -34,19 +34,25 @@ class Ftex:
     def mip_size(self, i):
         return max(1, self.w >> i), max(1, self.h >> i)
 
-    def to_bytes(self, chunk=16384, level=9):
+    def to_bytes(self, chunk=16384, level=9, small_first=False):
+        """(26/10 e) chunk=65536 y small_first=True = como las ftex del juego / de GzsTool: trozos de 64 KB (el tamano sin
+        comprimir 65536 va como 0 en el u16) y las mips chicas primero en el archivo (la tabla sigue en orden 0..n)"""
         out = bytearray(self.header)
         struct.pack_into('<HHHH', out, 8, self.fmt, self.w, self.h, self.d)
         out[16] = len(self.mips)
         table = bytearray(16 * len(self.mips))
         body = bytearray()
         base = 64 + len(table)
-        for i, m in enumerate(self.mips):
+        order = list(range(len(self.mips)))
+        if small_first: order = order[::-1]
+        for i in order:
+            m = self.mips[i]
             parts = [m[p:p + chunk] for p in range(0, len(m), chunk)] or [b'']
             comp = [zlib.compress(p, level) for p in parts]
             hdr = bytearray(); o = 8 * len(parts)
             for p, c in zip(parts, comp):
-                hdr += struct.pack('<HHI', len(c), len(p), o); o += len(c)
+                if len(c) > 0xFFFF: raise ValueError('trozo comprimido de mas de 64 KB')
+                hdr += struct.pack('<HHI', len(c), len(p) & 0xFFFF, o); o += len(c)
             blob = bytes(hdr) + b''.join(comp)
             struct.pack_into('<IIIHH', table, 16 * i, base + len(body), len(m), len(blob), i, len(parts))
             body += blob

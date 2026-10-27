@@ -620,13 +620,13 @@ static void DrawMenu() {
 // jugador (la tarjeta "Musculatura por jugador"); "Menu completo" pasa al menu de siempre. Al entrar, un aviso abajo.
 static bool s_fullMenu = false;
 static void DrawPhysiqueWindow() {
-    ImGui::SetNextWindowSize(ImVec2(560, 680), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowPos(ImVec2(40, 60), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(560, 960), ImGuiCond_FirstUseEver);   // (26/10 c) diseno nuevo: mapa del cuerpo arriba, filas abajo
+    ImGui::SetNextWindowPos(ImVec2(24, 50), ImGuiCond_FirstUseEver);
     bool open = true;
     ImGui::Begin("Musculatura del jugador##fisico", &open, ImGuiWindowFlags_NoCollapse);
     if (!open) g_menuOpen = false;
     if (s_fontBold) ImGui::PushFont(s_fontBold);
-    ImGui::TextColored(ImVec4(0.85f, 0.68f, 0.28f, 1), "PES21 FX  -  musculatura en Fisico");
+    ImGui::TextColored(ImVec4(0.85f, 0.68f, 0.28f, 1), "PES21 FX  -  musculatura");
     if (s_fontBold) ImGui::PopFont();
     ImGui::SameLine(ImGui::GetWindowWidth() - 150);
     if (ImGui::Button("Menu completo", ImVec2(130, 0))) s_fullMenu = true;
@@ -634,11 +634,8 @@ static void DrawPhysiqueWindow() {
     ImGui::Separator();
     {
         std::lock_guard<std::mutex> lk(g_cfgMutex);
-        bool on = g_cfg.live[164][0] > 0.5f;
-        if (ImGui::Checkbox("Musculatura prendida", &on)) { float b = g_cfg.base[164][0]; g_cfg.live[164][0] = on ? (b > 0.5f ? b : 1.0f) : 0.0f; }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("El interruptor de \"Musculatura (prueba)\" (vale para todos; se guarda con Guardar en el menu completo).");
         ImGui::BeginChild("fisico_panel", ImVec2(0, 0), ImGuiChildFlags_None);
-        MuscleDrawPlayerPanel();
+        MuscleDrawFisicoWindow(s_fontBold, s_fontBig);   // (26/10 c) mapa del cuerpo, pestanas por zona, barras con la marca del juego
         ImGui::EndChild();
     }
     ImGui::End();
@@ -686,6 +683,18 @@ void OverlayPresent(IDXGISwapChain* sc) {
         std::string a = s_btnPending; s_btnPending.clear();
         if (a == "hair_export") { std::string st; FaceGenExportHair(st); s_status = st; }
         else if (a == "hair_reload") { LoadHairConfig(); s_status = "PES21FX_hair.ini recargado (" + std::to_string(g_cfg.hair.types.size()) + " tipos, " + std::to_string(g_cfg.hair.faces.size()) + " caras asignadas)"; }
+        else if (a == "muscle_reset" || a.rfind("muscle_preset_", 0) == 0) {
+            // (26/10) tipos de cuerpo para las tarjetas generales (muscle_reset = "Como el juego": todo en 1 y la definicion en 1).
+            // Los interruptores y los valores propios de cada jugador (musculatura_jugadores.ini) no se tocan
+            const int k = a == "muscle_reset" ? 0 : atoi(a.c_str() + 14);
+            if (k >= 0 && k < MusclePresetCount()) {
+                { std::lock_guard<std::mutex> lk(g_cfgMutex); MusclePresetApply(0, nullptr, k); if (k == 0) g_cfg.live[172][0] = 1.0f; }
+                const std::string nm = MusclePresetName(k);
+                s_status = SaveConfigValues() ? "Musculatura general: " + nm + " (guardado). Los jugadores con valores propios siguen igual."
+                                              : "Musculatura general: " + nm + " (no se pudo guardar: usa Guardar)";
+                Log("musculatura: tarjetas generales -> %s (boton del menu)", nm.c_str());
+            } else s_status = "Tipo de cuerpo desconocido: " + a;
+        }
         else s_status = "Accion desconocida: " + a;
     }
     if (s_presetPending) {

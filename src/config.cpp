@@ -81,6 +81,12 @@ static bool LoadConfigLocked() {
     Config& c = g_cfg;
     memset(c.base, 0, sizeof(c.base));
     for (auto& a : c.info) for (auto& b : a) b = ParamInfo();
+    // (25/10 d) las reglas viejas NO se destruyen: los shaders del juego las apuntan (ShaderEntry::rule / pairRules) y los
+    // hilos de dibujo las recorren mientras se relee el ini; hasta que ReloadShaders apunta a las nuevas, un dibujo podia leer
+    // una regla liberada (cierre en RunRuleActions al recargar la configuracion con el juego abierto). Mover el mapa conserva
+    // los nodos; quedan en un cementerio (pocos KB por recarga).
+    { static std::vector<std::map<uint64_t, Rule>> oldRules; static std::vector<std::map<std::pair<uint64_t, uint64_t>, Rule>> oldPair;
+      oldRules.push_back(std::move(c.rules)); oldPair.push_back(std::move(c.pairRules)); }
     c.keys.clear(); c.rules.clear(); c.pairRules.clear(); c.vars.clear(); c.groups.clear();
     c.vars["pes_push"] = 0.003f;
 
@@ -121,6 +127,9 @@ static bool LoadConfigLocked() {
             if (kl == "motor") c.motorPatch = atoi(v.c_str()) != 0;
             else if (kl == "sombra_resolucion") c.motorShadowRes = std::clamp(atoi(v.c_str()), 0, 8192);
             else if (kl == "sombra_cascadas") c.motorCascadeScale = std::clamp((float)atof(v.c_str()), 0.0f, 4.0f);
+            else if (kl == "pasto_buscar") c.grassScan = atoi(v.c_str()) != 0;
+            else if (kl == "pasto_sin_recorte") c.grassNoCull = atoi(v.c_str()) != 0;
+            else if (kl == "volcar_debugp") c.grassDumpDebugP = atoi(v.c_str()) != 0;
             continue;
         }
         if (Lower(section) == "pes21fx") {
@@ -147,6 +156,9 @@ static bool LoadConfigLocked() {
             else if (kl == "export_hooks") c.optExports = atoi(v.c_str()) != 0;
             else if (kl == "orphan_fix") c.optOrphan = atoi(v.c_str()) != 0;
             else if (kl == "dump_switcher") c.optDump = atoi(v.c_str()) != 0;
+            else if (kl == "memoria_arreglo") c.memFix = atoi(v.c_str());
+            else if (kl == "memoria_vigilar") c.memWatch = atoi(v.c_str()) != 0;
+            else if (kl == "sol_vigilar") c.sunWatch = atoi(v.c_str()) != 0;
             continue;
         }
         if (grp) {
@@ -221,6 +233,12 @@ static bool LoadConfigLocked() {
             }
         }
     }
+    // (26/10 f) pasto tanda 6: filas nuevas con su valor por defecto si el ini no las trae (el ini de la PC solo se toca agregando lineas)
+    // 290 x stencil de la base en las hojas (sombra del sol) | y sin escribir RT4 (luz horneada) | z oclusion del atlas fija
+    // 291 x color con el suelo lejos | y / z px/m lejos / cerca | w normal lisa lejos   292 x hundimiento del juego | y lineas | z ralear con el desgaste | w desgaste en vivo mas visible
+    { static const struct { int i, k; float v; } kDef[] = { {290, 0, 1.f}, {290, 1, 1.f}, {290, 2, 0.45f}, {291, 0, 1.f}, {291, 1, 40.f}, {291, 2, 140.f}, {291, 3, 1.f},
+                                                         {292, 0, 1.f}, {292, 1, 1.f}, {292, 2, 1.f}, {292, 3, 1.f} };
+      for (auto& d : kDef) if (!c.info[d.i][d.k].defined) c.base[d.i][d.k] = d.v; }
     memcpy(c.live, c.base, sizeof(c.base));
     LoadCloth();
     for (auto& kb : c.keys) if (kb.label.empty()) kb.label = kb.name;
@@ -610,6 +628,7 @@ void UpdateTimeParams() {
     p[24][1] = (t - s_lastTurf) < 2.0 ? 1.0f : 0.0f; // en partido
     p[93][3] = (t - s_lastTurf) < 15.0 ? 1.0f : 0.0f; // 19/10: en partido (tolerante): primeros planos sin cancha a la vista siguen contando
     p[255][3] = (t - s_lastTurf) < 15.0 ? 0.0f : 1.0f; // (25/10) escena de menu (editor, presentacion): la fisica de la ropa no recibe empujes por movimiento
+    p[257][0] = (float)PresentNo();                     // (25/10) numero de cuadro: el cuerpo real (cuerpo.cpp) y la fisica de la ropa lo comparan
     // (21/10) reloj de las nubes (157): las nubes y sus sombras avanzan con el reloj del JUEGO, no con el reloj real: la
     // pausa las congela y la camara lenta de las repeticiones las frena (como la ropa y el pelo). El reloj sale de
     // cPSSystem.m_timeParam.x de la composicion (regla copy_cb = 0 SysCB en PES21FX_rules.ini). Se acumulan solo los
@@ -667,11 +686,14 @@ void UpdateTimeParams() {
     // en grados), su color normalizado (112: rgb con el canal mayor = 1, w = luminancia cruda), la niebla/horizonte del motor y
     // la exposicion (113), y el estado de la escena (114: x suelo automatico 0 normal / 1 humedo (lluvia) / 2 seco, y altura
     // de la camara, z estacion, w 1 = de dia con sol real). Antes cada shader lo derivaba a mano de m_view.
-    { std::vector<float> L, S;
-      bool lok = NamedCBRead("LightCB", L) && L.size() >= 8, sok = NamedCBRead("SceneCB", S) && S.size() >= 120;
+    { std::vector<float> L, S; int lf = -1, sf = -2;
+      bool lok = NamedCBRead("LightCB", L, &lf) && L.size() >= 8, sok = NamedCBRead("SceneCB", S, &sf) && S.size() >= 120;
       if (lok && sok) {
           float lx = L[0], ly = L[1], lz = L[2]; float n = sqrtf(lx * lx + ly * ly + lz * lz);
-          if (n > 1e-6f) { lx /= n; ly /= n; lz /= n;
+          // (26/10) el sol (espacio de vista) y la camara tienen que ser del mismo cuadro: si no, el sol en mundo sale girado
+          // tanto como se movio la camara entre los dos (se queda el del ultimo cuadro en que coincidieron)
+          static int mism = 0; mism = (lf == sf) ? 0 : mism + 1;   // por las dudas: si nunca coinciden (30 cuadros), como antes
+          if (n > 1e-6f && (lf == sf || mism > 30)) { lx /= n; ly /= n; lz /= n;
               const float* M = &S[32];   // m_view (filas = ejes de la camara en el mundo)
               float wx = lx * M[0] + ly * M[4] + lz * M[8], wy = lx * M[1] + ly * M[5] + lz * M[9], wz = lx * M[2] + ly * M[6] + lz * M[10];
               float wn = sqrtf(wx * wx + wy * wy + wz * wz); if (wn > 1e-6f) { wx /= wn; wy /= wn; wz /= wn; }
