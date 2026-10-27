@@ -542,12 +542,24 @@ static thread_local const void* t_ltMapped = nullptr; static thread_local int t_
 static uintptr_t s_ltExeLo = 0, s_ltExeHi = 0;
 static thread_local uintptr_t t_ltSrc = 0;
 // la subida del juego (0x1417ae7ea): Map(buffer, 0, WRITE_DISCARD) en 0x1417ae856 y despues memcpy(mapeado, [rsp+48], n);
-// desde el Map se lee ese origen en el marco del llamador (solo si el retorno tiene los bytes de 1.07.02)
-static uintptr_t LightTraceSrc(const uintptr_t* ra) {
+// desde el Map se lee ese origen en el marco del llamador (solo si el retorno tiene los bytes de 1.07.02). (27/10) en la PC
+// el retorno inmediato del gancho no era el exe (hay otra capa entre el juego y Map): se desenrolla la pila con la tabla de
+// excepciones hasta el marco cuyo retorno es 0x1417ae85a; ahi Rsp es el del llamador
+static std::atomic<int> s_ltSrcOk{0}, s_ltSrcMiss{0}, s_ltArmReq{0};
+static uintptr_t LightTraceSrc() {
     static const unsigned char kSig[9] = { 0x85, 0xc0, 0x78, 0x34, 0x45, 0x8b, 0x44, 0x34, 0x18 };
-    uintptr_t r = *ra;
-    if (!s_ltExeLo || r < s_ltExeLo || r + 9 > s_ltExeHi || memcmp((const void*)r, kSig, 9) != 0) return 0;
-    return *(const uintptr_t*)((const char*)ra + 8 + 0x48);
+    if (!s_ltExeLo) return 0;
+    const DWORD64 target = s_ltExeLo + (0x1417ae85aull - 0x140000000ull);
+    if (target + 9 > s_ltExeHi || memcmp((const void*)target, kSig, 9) != 0) return 0;
+    CONTEXT c; RtlCaptureContext(&c);
+    for (int i = 0; i < 16 && c.Rip; i++) {
+        DWORD64 img = 0; PRUNTIME_FUNCTION fe = RtlLookupFunctionEntry(c.Rip, &img, nullptr);
+        if (!fe) { c.Rip = *(const DWORD64*)c.Rsp; c.Rsp += 8; }
+        else { void* hd = nullptr; DWORD64 ef = 0; RtlVirtualUnwind(UNW_FLAG_NHANDLER, img, c.Rip, fe, &c, &hd, &ef, nullptr); }
+        if (c.Rip == target) { s_ltSrcOk++; return *(const uintptr_t*)(c.Rsp + 0x48); }
+    }
+    s_ltSrcMiss++;
+    return 0;
 }
 static int LightTraceNote(int kind) {   // kind 0 = Map, 1 = UpdateSubresource; devuelve el indice de la pila
     if (!s_ltExeLo) { HMODULE m = GetModuleHandleW(nullptr); auto* dh = (IMAGE_DOS_HEADER*)m; auto* nh = (IMAGE_NT_HEADERS*)((char*)m + dh->e_lfanew);
@@ -591,12 +603,13 @@ static void LightTraceSummary() {   // en Present
         if (e.haveL) Log("  llena el cbuffer (%s, %d veces, m_lightDir0 %.3f %.3f %.3f): %s", e.kind ? "UpdateSubresource" : "Map", e.count, e.l[0], e.l[1], e.l[2], st.c_str());
         else Log("  llena el cbuffer (%s, %d veces): %s", e.kind ? "UpdateSubresource" : "Map", e.count, st.c_str());
     }
+    Log("luz: origen de la copia encontrado %d veces, no encontrado %d; pedidos de vigilancia %d", s_ltSrcOk.exchange(0), s_ltSrcMiss.exchange(0), s_ltArmReq.exchange(0));
     s_ltRecs.clear(); s_ltMaps = s_ltSkipped = 0;
 }
 template<int V> static HRESULT STDMETHODCALLTYPE hk_Map(ID3D11DeviceContext* c, ID3D11Resource* r, UINT sub, D3D11_MAP t, UINT f, D3D11_MAPPED_SUBRESOURCE* m) {
     HRESULT hr = o_Map[V](c, r, sub, t, f, m);
     if (r && r == s_ltBuf.load(std::memory_order_relaxed) && g_cfg.lightTrace && SUCCEEDED(hr) && m) {
-        t_ltRec = LightTraceNote(0); t_ltMapped = m->pData; t_ltSrc = LightTraceSrc((const uintptr_t*)_AddressOfReturnAddress()); }
+        t_ltRec = LightTraceNote(0); t_ltMapped = m->pData; t_ltSrc = t_ltRec >= 0 ? LightTraceSrc() : 0; }   // con el mismo tope por cuadro que las pilas
     return hr;
 }
 template<int V> static void STDMETHODCALLTYPE hk_Unmap(ID3D11DeviceContext* c, ID3D11Resource* r, UINT sub) {
@@ -607,7 +620,7 @@ template<int V> static void STDMETHODCALLTYPE hk_Unmap(ID3D11DeviceContext* c, I
         float l[3]; const float* S = g_cfg.live[312];
         if (t_ltSrc && LightTraceRead(t_ltMapped, 0, l)) {
             float n = sqrtf(l[0] * l[0] + l[1] * l[1] + l[2] * l[2]), d = fabsf(l[0] * S[0] + l[1] * S[1] + l[2] * S[2]);
-            if (n > 0.98f && n < 1.02f && S[3] > 0.5f && d < 0.999f * n) SunWatchRequestArm(t_ltSrc);
+            if (n > 0.98f && n < 1.02f && S[3] > 0.5f && d < 0.999f * n) { s_ltArmReq++; SunWatchRequestArm(t_ltSrc); }
         }
         t_ltMapped = nullptr; t_ltRec = -1; t_ltSrc = 0; }
     o_Unmap[V](c, r, sub);
