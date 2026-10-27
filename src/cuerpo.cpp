@@ -38,6 +38,8 @@ static const UINT kCells = 8192, kTabStride = 16 + kCells, kTables = 128;
 static const UINT kRing = 1u << 20;      // vertices deformados por cuadro (maximo)
 static const UINT kStatic = 1u << 18;    // vertices de las mallas registradas
 static const UINT kMeshMax = 12288;      // vertices por malla
+static const UINT kShirtMax = 24576;     // (27/10 d) camisetas (medicion, fila 327.w)
+static const UINT kMeas = 64;            // medicion: 8 zonas x 8
 static const UINT kSlots = 1024;         // lugares para las constantes de los dibujos (anillo: varios cuadros)
 static const UINT kRecF4 = 208;          // float4 por lugar: [0..3] m_view (b2 filas 8..11), [4..12] b5 (filas 0..8), [16..207] b6
 static const UINT kMaxRec = 512;         // dibujos por cuadro (tienen que coincidir con pes_body_assign_cs.hlsl)
@@ -52,12 +54,12 @@ struct BodyMesh {
     Elem pos, nrm, idx, wgt;
     int state = 0;                        // 0 nueva, 1 copiando indices, 2 copiando vertices, 3 lista, 4 descartada
     ID3D11Buffer* stIB = nullptr; ID3D11Buffer* stVB[4] = {};
-    int tries = 0, id = 0, lastFrame = 0;
+    int tries = 0, id = 0, lastFrame = 0, kind = 0;   // kind: 0 piel, 1 camiseta (solo para medir, no entra en la tabla)
     UINT vmin = 0, vmax = 0, nv = 0, sBase = 0;
     float bmin[3] = { 0, 0, 0 }, bmax[3] = { 0, 0, 0 };
     std::string why;
 };
-struct Rec { UINT slot, sBase, nv, mesh; };   // un dibujo de la piel: lugar de sus constantes y su malla
+struct Rec { UINT slot, sBase, nv, mesh, kind; };   // un dibujo de la piel (o de la camiseta): lugar de sus constantes y su malla
 
 static std::mutex s_mx;
 static std::unordered_map<uint64_t, BodyMesh*> s_meshes;
@@ -74,13 +76,19 @@ static int s_logRecs = 0, s_logFrames = 0, s_logVerts = 0, s_logBatches = 0, s_d
 
 // recursos (dispositivo del juego)
 static ID3D11Device* s_dev = nullptr;
-static ID3D11ComputeShader *s_csSkin = nullptr, *s_csAssign = nullptr;
+static ID3D11ComputeShader *s_csSkin = nullptr, *s_csAssign = nullptr, *s_csMeas = nullptr;
 static ID3D11Buffer *s_static = nullptr, *s_ringV = nullptr, *s_ringN = nullptr, *s_tab = nullptr, *s_cb = nullptr;
 static ID3D11Buffer *s_recData = nullptr, *s_desc = nullptr, *s_grp = nullptr, *s_recTab = nullptr, *s_diag = nullptr, *s_diagStage = nullptr;
 static ID3D11ShaderResourceView *s_staticSRV = nullptr, *s_ringVSRV = nullptr, *s_ringNSRV = nullptr, *s_tabSRV = nullptr;
 static ID3D11ShaderResourceView *s_recSRV = nullptr, *s_descSRV = nullptr, *s_grpSRV = nullptr;
 static ID3D11UnorderedAccessView *s_ringVUAV = nullptr, *s_ringNUAV = nullptr, *s_tabUAV = nullptr, *s_recTabUAV = nullptr, *s_diagUAV = nullptr;
 static int s_diagState = 0, s_diagFrame = 0;
+// (27/10 d) medicion camiseta contra torso (pes_body_measure_cs.hlsl, fila 327.w): cada 20 s, lectura 2 cuadros despues
+static ID3D11Buffer *s_meas = nullptr, *s_measStage = nullptr;
+static ID3D11UnorderedAccessView* s_measUAV = nullptr;
+static int s_measState = 0, s_measFrame = 0;
+static std::atomic<bool> s_measWant{false};   // las camisetas entran al lote solo en el cuadro que se mide
+static bool Measuring() { return g_cfg.live[327][3] > 0.5f; }
 static std::atomic<bool> s_ready{false};
 static bool s_failed = false;
 
@@ -148,6 +156,7 @@ static void CompileCS() {
     // los anteriores se dejan vivos (el lote del Present podria estar usandolos en otro hilo: no, pero no cuesta nada)
     if (ID3D11ComputeShader* a = CompileOne(L"pes_body_assign_cs.hlsl")) s_csAssign = a;
     if (ID3D11ComputeShader* b = CompileOne(L"pes_body_cs.hlsl")) s_csSkin = b;
+    if (ID3D11ComputeShader* m = CompileOne(L"pes_body_measure_cs.hlsl")) s_csMeas = m;
 }
 void BodyReloadShaders() { std::lock_guard<std::mutex> lk(s_mx); if (s_dev) CompileCS(); }
 
@@ -191,6 +200,10 @@ static bool CreateResources() {
              TypedSRV(s_grp, DXGI_FORMAT_R32G32_UINT, kMaxGroups, &s_grpSRV) &&
              TypedUAV(s_recTab, DXGI_FORMAT_R32_UINT, kMaxRec, &s_recTabUAV) &&
              TypedUAV(s_diag, DXGI_FORMAT_R32_UINT, kDiag, &s_diagUAV);
+    }
+    if (ok && MakeBuf(kMeas * 4, 0, D3D11_BIND_UNORDERED_ACCESS, 0, &s_meas) && TypedUAV(s_meas, DXGI_FORMAT_R32_UINT, kMeas, &s_measUAV)) {
+        D3D11_BUFFER_DESC sd{}; sd.ByteWidth = kMeas * 4; sd.Usage = D3D11_USAGE_STAGING; sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        if (FAILED(s_dev->CreateBuffer(&sd, nullptr, &s_measStage))) s_measStage = nullptr;
     }
     if (ok) {
         D3D11_BUFFER_DESC sd{}; sd.ByteWidth = kDiag * 4; sd.Usage = D3D11_USAGE_STAGING; sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
@@ -304,11 +317,13 @@ static void CopyPart(ID3D11DeviceContext* c, ID3D11Buffer* src, UINT srcOff, UIN
     c->CopySubresourceRegion(s_recData, 0, dstOff, 0, 0, src, 0, &bx);
 }
 
-void BodyOnDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base) {
+void BodyOnDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, int kind) {
     if (!s_ready.load(std::memory_order_acquire) || count < 3) return;
-    if (g_cfg.live[256][0] < 0.5f) return;
+    const bool meas = Measuring();   // (27/10 d) la medicion corre tambien sin el mod de ropa
+    if (kind == 1 && !meas) return;
+    if (g_cfg.live[256][0] < 0.5f && !meas) return;
     const int frame = PresentNo();
-    if (frame - s_simSeen.load(std::memory_order_relaxed) > 300) return;   // el mod de ropa no esta simulando (F5, menus sin ropa)
+    if (!meas && frame - s_simSeen.load(std::memory_order_relaxed) > 300) return;   // el mod de ropa no esta simulando (F5, menus sin ropa)
     ID3D11Device* cd = nullptr; c->GetDevice(&cd); if (cd) cd->Release();
     if (cd != s_dev) return;
     ID3D11Buffer* ib = nullptr; DXGI_FORMAT ibFmt = DXGI_FORMAT_UNKNOWN; UINT ibOff = 0; c->IAGetIndexBuffer(&ib, &ibFmt, &ibOff);
@@ -318,14 +333,14 @@ void BodyOnDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base) {
     if (!ib || !il || (ibFmt != DXGI_FORMAT_R16_UINT && ibFmt != DXGI_FORMAT_R32_UINT)) { releaseIA(); return; }
     uint64_t key = 0xcbf29ce484222325ULL;
     key = Fnv(key, (uint64_t)ib); key = Fnv(key, ibOff); key = Fnv(key, start); key = Fnv(key, count); key = Fnv(key, (uint64_t)(int64_t)base);
-    key = Fnv(key, (uint64_t)il); for (int i = 0; i < 4; i++) { key = Fnv(key, (uint64_t)vb[i]); key = Fnv(key, off[i]); key = Fnv(key, stride[i]); }
+    key = Fnv(key, (uint64_t)il); key = Fnv(key, (uint64_t)kind); for (int i = 0; i < 4; i++) { key = Fnv(key, (uint64_t)vb[i]); key = Fnv(key, off[i]); key = Fnv(key, stride[i]); }
     BodyMesh* m = nullptr;
     {
         std::lock_guard<std::mutex> lk(s_mx);
         auto it = s_meshes.find(key);
         if (it == s_meshes.end()) {
             if (s_meshes.size() >= 512) { releaseIA(); return; }
-            m = new BodyMesh(); m->id = s_nextId++; m->lastFrame = frame;
+            m = new BodyMesh(); m->id = s_nextId++; m->lastFrame = frame; m->kind = kind;
             m->ib = ib; m->ibFmt = ibFmt; m->ibOff = ibOff; m->start = start; m->count = count; m->base = base;
             for (int i = 0; i < 4; i++) { m->vb[i] = vb[i]; m->stride[i] = stride[i]; m->off[i] = off[i]; }
             ib = nullptr; for (auto*& b : vb) b = nullptr;   // las referencias pasan a la malla
@@ -359,6 +374,7 @@ void BodyOnDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base) {
     }
     releaseIA();
     if (m->state != 3) return;
+    if (kind == 1 && !s_measWant.load(std::memory_order_relaxed)) return;
     // constantes del dibujo: m_view (b2 filas 8..11), bloque por objeto (b5 filas 0..8) y huesos (b6: actuales + anteriores)
     ID3D11DeviceContext1* c1 = nullptr;
     if (FAILED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) || !c1) return;
@@ -373,7 +389,7 @@ void BodyOnDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base) {
         CopyPart(c, g2.b, o2 + 128, 64, dst);
         CopyPart(c, g5.b, o5, 144, dst + 64);
         CopyPart(c, g6.b, o6, 3072, dst + 256);
-        const Rec r{ slot, m->sBase, m->nv, (UINT)m->id };
+        const Rec r{ slot, m->sBase, m->nv, (UINT)m->id, (UINT)m->kind };
         std::lock_guard<std::mutex> lk(s_mx);
         std::vector<Rec>& list = (c->GetType() == D3D11_DEVICE_CONTEXT_DEFERRED) ? s_pendCtx[c] : s_execRecs;
         if (list.size() < 4096) list.push_back(r); else s_dropRec++;
@@ -447,7 +463,7 @@ static void StepMesh(ID3D11DeviceContext* imm, BodyMesh* m) {
         imm->Unmap(m->stIB, 0); m->stIB->Release(); m->stIB = nullptr;
         if (hi < lo) { Reject(m, "sin indices"); return; }
         m->vmin = lo; m->vmax = hi; m->nv = hi - lo + 1;
-        if (m->nv > kMeshMax) { Reject(m, "demasiados vertices (manos o piernas)"); return; }
+        if (m->nv > (m->kind ? kShirtMax : kMeshMax)) { Reject(m, m->kind ? "camiseta con demasiados vertices" : "demasiados vertices (manos o piernas)"); return; }
         const int slots[4] = { m->pos.slot, m->nrm.slot, m->idx.slot, m->wgt.slot };
         for (int s : slots) {
             if (s < 0 || m->stVB[s]) continue;
@@ -522,8 +538,8 @@ static void StepMesh(ID3D11DeviceContext* imm, BodyMesh* m) {
         m->state = 3;
         // las referencias al buffer de indices y de vertices quedan: mientras la malla viva, ningun buffer nuevo reusa su direccion
         static int n = 0;
-        if (n++ < 60) Log("cuerpo: malla %d lista: %u vertices (%u indices desde %u), reposo x %.2f..%.2f y %.2f..%.2f z %.2f..%.2f, %d con pesos, formatos pos %d normal %d huesos %d pesos %d",
-                          m->id, m->nv, m->count, m->start, bmin[0], bmax[0], bmin[1], bmax[1], bmin[2], bmax[2], weighted, (int)m->pos.fmt, (int)m->nrm.fmt, (int)m->idx.fmt, (int)m->wgt.fmt);
+        if (n++ < 60) Log("cuerpo: %s %d lista: %u vertices (%u indices desde %u), reposo x %.2f..%.2f y %.2f..%.2f z %.2f..%.2f, %d con pesos, formatos pos %d normal %d huesos %d pesos %d",
+                          m->kind ? "camiseta" : "malla", m->id, m->nv, m->count, m->start, bmin[0], bmax[0], bmin[1], bmax[1], bmin[2], bmax[2], weighted, (int)m->pos.fmt, (int)m->nrm.fmt, (int)m->idx.fmt, (int)m->wgt.fmt);
     }
 }
 
@@ -535,11 +551,12 @@ static bool RunBatch(ID3D11DeviceContext* imm, std::vector<Rec>& recs, int frame
     uint32_t* d = (uint32_t*)mp.pData;
     static std::vector<uint32_t> grp; grp.clear();
     UINT n = 0, ring = 0;
+    std::stable_partition(recs.begin(), recs.end(), [](const Rec& r) { return r.kind == 0; });   // (27/10 d) la piel primero: si no entra todo, sobran camisetas
     for (const Rec& r : recs) {
         if (n >= kMaxRec) { s_dropRec++; continue; }
         if (ring + r.nv > kRing) { s_dropRing++; continue; }
         uint32_t* e = d + 8 * n;
-        e[0] = r.slot; e[1] = r.sBase; e[2] = r.nv; e[3] = ring; e[4] = r.mesh; e[5] = e[6] = e[7] = 0;
+        e[0] = r.slot; e[1] = r.sBase; e[2] = r.nv; e[3] = ring; e[4] = r.mesh; e[5] = r.kind; e[6] = e[7] = 0;
         for (UINT v0 = 0; v0 < r.nv; v0 += 64) { grp.push_back(n); grp.push_back(v0); }
         ring += r.nv; n++;
     }
@@ -554,7 +571,7 @@ static bool RunBatch(ID3D11DeviceContext* imm, std::vector<Rec>& recs, int frame
     // estado del CS del contexto inmediato (se devuelve igual)
     ID3D11ComputeShader* pcs = nullptr; imm->CSGetShader(&pcs, nullptr, nullptr);
     ID3D11Buffer* pcb = nullptr; imm->CSGetConstantBuffers(0, 1, &pcb);
-    ID3D11ShaderResourceView* psrv[4] = {}; imm->CSGetShaderResources(0, 4, psrv);
+    ID3D11ShaderResourceView* psrv[8] = {}; imm->CSGetShaderResources(0, 8, psrv);
     ID3D11UnorderedAccessView* puav[5] = {}; imm->CSGetUnorderedAccessViews(0, 5, puav);
     const UINT z[4] = { 0, 0, 0, 0 };
     imm->ClearUnorderedAccessViewUint(s_tabUAV, z);
@@ -571,15 +588,48 @@ static bool RunBatch(ID3D11DeviceContext* imm, std::vector<Rec>& recs, int frame
     { ID3D11ShaderResourceView* prm = g_dev.paramSRV; imm->CSSetShaderResources(120, 1, &prm); }
     imm->CSSetShader(s_csSkin, nullptr, 0);
     imm->Dispatch(ng, 1, 1);
+    // (27/10 d) medicion: cada vertice de las camisetas contra la piel de su personaje (resumen por zona; se lee 2 cuadros despues)
+    if (s_measWant && s_csMeas && s_measUAV && s_measStage && s_measState == 0 && recs.back().kind == 1) {
+        s_measWant = false;
+        { ID3D11UnorderedAccessView* u[5] = { s_measUAV, s_recTabUAV, nullptr, nullptr, nullptr }; imm->CSSetUnorderedAccessViews(0, 5, u, nullptr); }
+        imm->ClearUnorderedAccessViewUint(s_measUAV, z);
+        { ID3D11ShaderResourceView* v[7] = { s_staticSRV, s_descSRV, nullptr, s_grpSRV, s_ringVSRV, s_tabSRV, s_ringNSRV }; imm->CSSetShaderResources(0, 7, v); }
+        imm->CSSetShader(s_csMeas, nullptr, 0);
+        imm->Dispatch(ng, 1, 1);
+        imm->CopyResource(s_measStage, s_meas);
+        s_measState = 1; s_measFrame = frame;
+    }
     imm->CSSetShaderResources(120, 1, &pprm); if (pprm) pprm->Release();
     imm->CSSetUnorderedAccessViews(0, 5, puav, nullptr);
-    imm->CSSetShaderResources(0, 4, psrv);
+    imm->CSSetShaderResources(0, 8, psrv);
     imm->CSSetConstantBuffers(0, 1, &pcb);
     imm->CSSetShader(pcs, nullptr, 0);
     if (pcs) pcs->Release(); if (pcb) pcb->Release();
     for (auto* v : psrv) if (v) v->Release(); for (auto* u : puav) if (u) u->Release();
     s_logRecs += (int)n; s_logVerts += (int)ring; s_logBatches++;
     return true;
+}
+
+// (27/10 d) resumen de la medicion (pes_body_measure_cs.hlsl): por zona de la camiseta, cuanto asoma la piel por fuera de la tela
+static void ReadMeasure(ID3D11DeviceContext* imm) {
+    D3D11_MAPPED_SUBRESOURCE mp;
+    HRESULT hr = imm->Map(s_measStage, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mp);
+    if (hr == DXGI_ERROR_WAS_STILL_DRAWING) return;
+    s_measState = 0;
+    if (FAILED(hr)) return;
+    uint32_t q[kMeas]; memcpy(q, mp.pData, sizeof(q)); imm->Unmap(s_measStage, 0);
+    static const char* zn[6] = { "escote", "hombros", "mangas", "axilas", "pecho/espalda", "costados/abajo" };
+    char l[1400]; int k = snprintf(l, sizeof l, "ropa vs torso (camiseta de fabrica, piel sin x320 %.0f mm):", g_cfg.live[320][0]);
+    UINT total = 0;
+    for (int z = 0; z < 6 && k < (int)sizeof l - 200; z++) {
+        const uint32_t* e = q + 8 * z; total += e[0];
+        if (!e[0]) { k += snprintf(l + k, sizeof l - k, " | %s sin piel cerca", zn[z]); continue; }
+        const float pts = (float)e[0], in = (float)(e[0] - e[1]);
+        k += snprintf(l + k, sizeof l - k, " | %s %u puntos: asoma %.1f%% (mas de 3 mm %.1f%%, mas que x320 %.1f%%), maximo %.1f mm, medio %.2f mm; holgura media %.1f mm",
+                      zn[z], e[0], 100.0f * e[1] / pts, 100.0f * e[2] / pts, 100.0f * e[3] / pts, e[4] / 100.0f, e[1] ? e[5] / 100.0f / e[1] : 0.0f, in > 0 ? e[6] / 100.0f / in : 0.0f);
+    }
+    if (!total) Log("ropa vs torso: ninguna camiseta con piel cerca (camisetas sin huesos o sin personaje)");
+    else Log("%s", l);
 }
 
 void BodyPresent() {
@@ -615,7 +665,8 @@ void BodyPresent() {
     for (auto* m : dead) delete m;
     s_logFrames++;
     bool ran = false;
-    if (!recs.empty() && s_csSkin && s_csAssign && g_cfg.live[256][0] > 0.5f) ran = RunBatch(g_dev.imm, recs, frame);
+    if (!recs.empty() && s_csSkin && s_csAssign && (g_cfg.live[256][0] > 0.5f || Measuring())) ran = RunBatch(g_dev.imm, recs, frame);
+    if (s_measState == 1 && frame >= s_measFrame + 2) ReadMeasure(g_dev.imm);
     // resumen del lote (personajes encontrados y donde estan): copia cada 20 s, lectura 2 cuadros despues
     if (s_diagState == 1 && s_diagStage && frame >= s_diagFrame + 2) {
         D3D11_MAPPED_SUBRESOURCE mp;
@@ -639,10 +690,12 @@ void BodyPresent() {
     static double nextLog = 0; const double t = Now();
     if (t > nextLog && (ran || s_logBatches > 0 || frame - s_simSeen.load() < 300)) {
         nextLog = t + 20.0;
+        if (Measuring()) s_measWant = true;
         if (s_instState == 0 && frame - s_simSeen.load() < 300) { s_instN = 0; s_instFrame = frame; s_instState = 1; g_bodyDiagArmed = true; }
         if (ran && s_diagStage && s_diagState == 0) { g_dev.imm->CopyResource(s_diagStage, s_diag); s_diagState = 1; s_diagFrame = frame; }
-        int ready = 0, rej = 0, pend = 0;
-        { std::lock_guard<std::mutex> lk(s_mx); for (auto& kv : s_meshes) { if (kv.second->state == 3) ready++; else if (kv.second->state == 4) rej++; else pend++; } }
+        int ready = 0, rej = 0, pend = 0, shirts = 0;
+        { std::lock_guard<std::mutex> lk(s_mx); for (auto& kv : s_meshes) { if (kv.second->state == 3) { ready++; shirts += kv.second->kind; } else if (kv.second->state == 4) rej++; else pend++; } }
+        if (Measuring()) Log("cuerpo: %d camisetas listas para medir", shirts);
         Log("cuerpo: %d mallas de piel listas (%d descartadas, %d en camino); por cuadro %.1f dibujos de piel, %.0f vertices (%d lotes en %d cuadros)%s%s%s%s",
             ready, rej, pend, s_logBatches ? s_logRecs / (float)s_logBatches : 0.0f, s_logBatches ? s_logVerts / (float)s_logBatches : 0.0f, s_logBatches, s_logFrames,
             s_dropRec ? " (mas de 512 dibujos: se saltearon)" : "", s_dropRing ? " (mas de 1 M de vertices: se saltearon)" : "",
