@@ -48,7 +48,7 @@ constexpr int kParamCount = 336;           // float4 x 336 -> t120 en los shader
 // 330 = nitidez extra con la camara quieta (27/10 n, 0f5c CAS: x fuerza que se suma a x39 segun 160.z cuadros desde el reinicio del TAA).
 // 331 = piel (x giro del disco SSSS, hilo de piel e376066).
 // 332 = antialiasing temporal del juego (27/10 n, PS 1a7534929602c747 reemplazado: x alfa minimo hacia el cuadro actual, y ancho de la caja, z alfa extra por contraste, w on/off; con w = 0 identico al juego).
-// 333 = densidad adaptativa del pasto por FPS (27/10 o, grass.cpp GrassPresent: x FPS objetivo (0 = apagado), y densidad minima 0.2..1; multiplica Densidad x58 en la emision).
+// 333 = densidad adaptativa del pasto por FPS (27/10 o, grass.cpp GrassPresent: x FPS objetivo (0 = apagado; Calidad x61 = 4 Ultra la ignora), y densidad minima 0.2..1; multiplica Densidad x58 en la emision).
 // 334 = pasto de la camara mas cercana, tanda 12 (27/10 p, >= 250-600 px/m, hojas del mod y parcelas del juego pegadas a la camara: x rocio fino (18af), y cal mas densa / borde irregular (498b), z sombra por hoja (18af)).
 // 328 = matas y variedad de las hojas del mod (27/10 m, tanda 10: VS 498b / PS 18af: x matas, y variedad por hoja, z oclusion entre matas; grass.cpp: w capas por pixel cerca, 0 = 6).
 // 324 = tono de piel del cuerpo por jugador (27/10, personajes.cpp: PES21FX\tonos_piel.txt; x prendido, y desplazamiento en HumanData, z bit, w volcado al log).
