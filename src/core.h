@@ -167,7 +167,7 @@ bool SaveOption(const std::string& key, const std::string& value);   // escribe/
 // (27/10) idioma del menu (lang.cpp): TRS devuelve la traduccion de un texto fijo del codigo (UTF-8) si el menu esta en ingles
 // y existe; si no, el mismo puntero. LS elige entre el texto del ini y su version en ingles.
 const char* TRS(const char* es);
-inline const std::string& LS(const std::string& es, const std::string& en) { return (g_cfg.lang == 1 && !en.empty()) ? en : es; }
+inline const std::string& LS(const std::string& es, const std::string& en) { return (g_cfg.lang != 0 && !en.empty()) ? en : es; }
 void LoadMenuLang();   // lee PES21FX_menu_en.ini sobre g_cfg.groups / g_cfg.keys (con g_cfgMutex tomado)
 bool LoadCloth();
 bool SaveCloth();                        // escribe los valores live en PES21FX.ini

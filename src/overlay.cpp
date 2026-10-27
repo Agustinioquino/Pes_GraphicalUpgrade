@@ -186,7 +186,7 @@ static void DrawGroup(MenuGroup& g, int gid) {
             }
             ImGui::SetNextItemWidth(w - 70);
             if (!sl.options.empty()) {
-                const auto& opts = (g_cfg.lang == 1 && sl.optionsEn.size() == sl.options.size()) ? sl.optionsEn : sl.options;
+                const auto& opts = (g_cfg.lang != 0 && sl.optionsEn.size() == sl.options.size()) ? sl.optionsEn : sl.options;
                 int cur = (int)(val + 0.5f); if (cur < 0) cur = 0; if (cur >= (int)sl.options.size()) cur = (int)sl.options.size() - 1;
                 if (!sl.optVals.empty()) { cur = 0; for (int oi = 1; oi < (int)sl.optVals.size(); oi++) if (fabsf(sl.optVals[oi] - val) < fabsf(sl.optVals[cur] - val)) cur = oi; }
                 std::string prev = Utf8(opts[cur]);
@@ -232,8 +232,10 @@ static void DrawGroup(MenuGroup& g, int gid) {
 // --- tutoriales: una tarjeta al principio de cada pestana (se apagan con "No mostrar mas" -> [PES21FX] tutorials = 0) ---
 static std::set<std::string> s_tutDone;   // pestanas con "Entendido" en esta sesion
 const char* TutorialForEn(const std::string& sec);   // lang.cpp
+const char* TutorialForPt(const std::string& sec);   // lang.cpp
 static const char* TutorialFor(const std::string& sec) {
     if (g_cfg.lang == 1) return TutorialForEn(sec);
+    if (g_cfg.lang == 2) return TutorialForPt(sec);
     if (sec.rfind("Ilumina", 0) == 0) return
         "Como funciona: cada tarjeta es una mejora de luz con su interruptor (arriba a la derecha) y sus sliders. El (?) al lado de cada slider explica que hace. Ctrl+clic sobre un slider para escribir un numero.\n"
         "Por donde empezar: 1) 'Luz de borde en jugadores' y 'Luz de cielo' son las que mas se notan. 2) 'Atmosfera con sol dinamico' arregla el azul del fondo y el sol apagado en partidos de tarde. 3) 'Rebote de luz' (SSGI) es el mas caro en FPS: si el juego se traba, apagalo.\n"
@@ -437,11 +439,12 @@ static void DrawMenu() {
     if (ImGui::Checkbox(TRS("Tutoriales"), &g_cfg.tutorials)) { SaveOption("tutorials", g_cfg.tutorials ? "1" : "0"); if (g_cfg.tutorials) s_tutDone.clear(); }
     ImGui::SameLine();
     {   // (27/10) selector de idioma del menu: se guarda en [PES21FX] language
-        static const char* const kLangs[2] = { "Espa\xC3\xB1ol", "English" };
-        int lg = g_cfg.lang == 1 ? 1 : 0;
+        static const char* const kLangs[3] = { "Espa\xC3\xB1ol", "English", "Portugu\xC3\xAAs" };
+        static const char* const kLangKey[3] = { "es", "en", "pt" };
+        int lg = (g_cfg.lang >= 0 && g_cfg.lang <= 2) ? g_cfg.lang : 0;
         ImGui::SetNextItemWidth(110);
-        if (ImGui::Combo("##idioma", &lg, kLangs, 2)) { g_cfg.lang = lg; SaveOption("language", lg ? "en" : "es"); }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Idioma del menu / Menu language");
+        if (ImGui::Combo("##idioma", &lg, kLangs, 3)) { g_cfg.lang = lg; SaveOption("language", kLangKey[lg]); LoadMenuLang(); }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Idioma del menu / Menu language / Idioma do menu");
     }
     if (!s_status.empty()) ImGui::TextDisabled("%s", s_status.c_str());
     // --- catalogo de shaders: capturar lo que se dibuja y escribir las fichas ---

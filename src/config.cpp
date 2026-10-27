@@ -140,7 +140,7 @@ static bool LoadConfigLocked() {
             else if (kl == "favoritos") c.favorites = v;
             else if (kl == "ui_scale") c.uiScale = std::clamp((float)atof(v.c_str()), 0.7f, 2.0f);
             else if (kl == "compacto") c.compact = atoi(v.c_str()) != 0;
-            else if (kl == "language" || kl == "idioma") c.lang = (Lower(v) == "en" || Lower(v) == "english" || v == "1") ? 1 : 0;
+            else if (kl == "language" || kl == "idioma") { const std::string lv = Lower(v); c.lang = (lv == "en" || lv == "english" || v == "1") ? 1 : (lv == "pt" || lv == "portugues" || lv == "portuguese" || v == "2") ? 2 : 0; }
             else if (kl == "auto_captura") c.autoCap = atoi(v.c_str()) != 0;
             else if (kl == "auto_captura_seg") c.autoCapSec = std::clamp((float)atof(v.c_str()), 3.0f, 600.0f);
             else if (kl == "auto_captura_max") c.autoCapMax = std::clamp(atoi(v.c_str()), 1, 2000);
@@ -311,10 +311,11 @@ static bool LoadConfigLocked() {
     return true;
 }
 
-// ---------------------------------------------------------------- (27/10) menu en ingles: PES21FX_menu_en.ini
+// ---------------------------------------------------------------- (27/10) menu en ingles / portugues: PES21FX_menu_en.ini / _pt.ini
 // Mismas secciones [MenuX] / [KeyX] que PES21FX.ini, solo con los textos: section, title, desc, label (teclas) y las lineas
 // slider / choice / toggle / cslider / cchoice / button con la etiqueta, la ayuda y las opciones traducidas. Los numeros (rango,
-// formato, valores de fabrica) siempre salen de PES21FX.ini. Se carga siempre: el selector de idioma cambia sin releer nada.
+// formato, valores de fabrica) siempre salen de PES21FX.ini. Los campos *En guardan el idioma elegido (en o pt): el selector
+// vuelve a llamar a LoadMenuLang al cambiar.
 static std::vector<std::string> SplitBar(const std::string& v, char sep) {
     std::vector<std::string> parts; std::string cur;
     for (char ch : v) { if (ch == sep) { parts.push_back(Trim(cur)); cur.clear(); } else cur += ch; }
@@ -323,8 +324,16 @@ static std::vector<std::string> SplitBar(const std::string& v, char sep) {
 }
 void LoadMenuLang() {
     Config& c = g_cfg;
+    for (auto& g : c.groups) {
+        g.titleEn.clear(); g.descEn.clear(); g.sectionEn.clear();
+        for (auto& sl : g.sliders) { sl.labelEn.clear(); sl.helpEn.clear(); sl.optionsEn.clear(); }
+        for (auto& b : g.buttons) { b.labelEn.clear(); b.helpEn.clear(); }
+    }
+    for (auto& k : c.keys) k.labelEn.clear();
+    if (c.lang == 0) return;
+    const wchar_t* file = c.lang == 2 ? L"PES21FX_menu_pt.ini" : L"PES21FX_menu_en.ini";
     std::vector<std::string> lines;
-    if (!ReadLines(c.baseDir + L"PES21FX_menu_en.ini", lines)) { Log("menu: sin PES21FX_menu_en.ini (solo espanol)"); return; }
+    if (!ReadLines(c.baseDir + file, lines)) { Log("menu: sin %ls (queda en espanol)", file); return; }
     std::map<std::string, MenuGroup*> byId; for (auto& g : c.groups) byId[Lower(g.id)] = &g;
     std::map<std::string, KeyBind*> keyById; for (auto& k : c.keys) keyById[Lower(k.name)] = &k;
     MenuGroup* grp = nullptr; KeyBind* key = nullptr; int nTxt = 0;
@@ -371,7 +380,7 @@ void LoadMenuLang() {
         } else continue;
         nTxt++;
     }
-    Log("menu: PES21FX_menu_en.ini, %d textos en ingles", nTxt);
+    Log("menu: %ls, %d textos traducidos", file, nTxt);
 }
 
 // ---------------------------------------------------------------- cloth-mod\cloth.ini
