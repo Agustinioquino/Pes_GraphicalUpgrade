@@ -12,6 +12,7 @@
 #include <WICTextureLoader.h>
 #include <algorithm>
 #include <set>
+#include <intrin.h>
 #include <cwctype>
 
 namespace fx {
@@ -538,6 +539,15 @@ static std::atomic<bool> s_ltDone{false};   // tras 20 resumenes (10 min) se dej
 struct LtRec { uintptr_t fr[10]; int n = 0, count = 0, kind = 0; float l[3] = {}; bool haveL = false; };
 static std::mutex s_ltMx; static std::vector<LtRec> s_ltRecs; static int s_ltMaps = 0, s_ltSkipped = 0;
 static thread_local const void* t_ltMapped = nullptr; static thread_local int t_ltRec = -1;
+static thread_local uintptr_t t_ltSrc = 0;
+// la subida del juego (0x1417ae7ea): Map(buffer, 0, WRITE_DISCARD) en 0x1417ae856 y despues memcpy(mapeado, [rsp+48], n);
+// desde el Map se lee ese origen en el marco del llamador (solo si el retorno tiene los bytes de 1.07.02)
+static uintptr_t LightTraceSrc(const uintptr_t* ra) {
+    static const unsigned char kSig[9] = { 0x85, 0xc0, 0x78, 0x34, 0x45, 0x8b, 0x44, 0x34, 0x18 };
+    uintptr_t r = *ra;
+    if (!s_ltExeLo || r < s_ltExeLo || r + 9 > s_ltExeHi || memcmp((const void*)r, kSig, 9) != 0) return 0;
+    return *(const uintptr_t*)((const char*)ra + 8 + 0x48);
+}
 static uintptr_t s_ltExeLo = 0, s_ltExeHi = 0;
 static int LightTraceNote(int kind) {   // kind 0 = Map, 1 = UpdateSubresource; devuelve el indice de la pila
     if (!s_ltExeLo) { HMODULE m = GetModuleHandleW(nullptr); auto* dh = (IMAGE_DOS_HEADER*)m; auto* nh = (IMAGE_NT_HEADERS*)((char*)m + dh->e_lfanew);
@@ -585,11 +595,21 @@ static void LightTraceSummary() {   // en Present
 }
 template<int V> static HRESULT STDMETHODCALLTYPE hk_Map(ID3D11DeviceContext* c, ID3D11Resource* r, UINT sub, D3D11_MAP t, UINT f, D3D11_MAPPED_SUBRESOURCE* m) {
     HRESULT hr = o_Map[V](c, r, sub, t, f, m);
-    if (r && r == s_ltBuf.load(std::memory_order_relaxed) && g_cfg.lightTrace && SUCCEEDED(hr) && m) { t_ltRec = LightTraceNote(0); t_ltMapped = m->pData; }
+    if (r && r == s_ltBuf.load(std::memory_order_relaxed) && g_cfg.lightTrace && SUCCEEDED(hr) && m) {
+        t_ltRec = LightTraceNote(0); t_ltMapped = m->pData; t_ltSrc = LightTraceSrc((const uintptr_t*)_AddressOfReturnAddress()); }
     return hr;
 }
 template<int V> static void STDMETHODCALLTYPE hk_Unmap(ID3D11DeviceContext* c, ID3D11Resource* r, UINT sub) {
-    if (t_ltMapped && r == s_ltBuf.load(std::memory_order_relaxed)) { LightTraceValue(t_ltRec, t_ltMapped); t_ltMapped = nullptr; t_ltRec = -1; }
+    if (t_ltMapped && r == s_ltBuf.load(std::memory_order_relaxed)) {
+        LightTraceValue(t_ltRec, t_ltMapped);
+        // (27/10) si lo copiado es la luz en espacio de vista (no el sol del cielo en mundo, que tambien pasa por este buffer),
+        // se vigila quien escribe su origen: ahi se arma la luz que gira con la camara
+        float l[3]; const float* S = g_cfg.live[312];
+        if (t_ltSrc && LightTraceRead(t_ltMapped, 0, l)) {
+            float n = sqrtf(l[0] * l[0] + l[1] * l[1] + l[2] * l[2]), d = fabsf(l[0] * S[0] + l[1] * S[1] + l[2] * S[2]);
+            if (n > 0.98f && n < 1.02f && S[3] > 0.5f && d < 0.999f * n) SunWatchRequestArm(t_ltSrc);
+        }
+        t_ltMapped = nullptr; t_ltRec = -1; t_ltSrc = 0; }
     o_Unmap[V](c, r, sub);
 }
 template<int V> static void STDMETHODCALLTYPE hk_UpdSub(ID3D11DeviceContext* c, ID3D11Resource* r, UINT sub, const D3D11_BOX* box, const void* d, UINT rp, UINT dp) {

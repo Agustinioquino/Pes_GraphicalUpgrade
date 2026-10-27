@@ -351,7 +351,8 @@ void SkinTonePresent();                           // guardado diferido + tabla d
 bool SkinToneParams(int gameIdx, const SkinToneProf& q, float k, float out[3], float outBody[3]);   // (24/10 c) (kL, m0, m1) en Oklab para pes_skintone.hlsli
 int SkinToneGame(uint32_t id);                    // color de piel del juego guardado para ese jugador (0 = no se sabe)
 int FisicoSkinIndex();                            // color de piel del juego (1..6) del jugador del menu Fisico (0 = no se sabe)
-void SunWatchFrame(const float* w, float devSky, int frame);   // (26/10) sol de la luz en mundo por cuadro (sunwatch.cpp)
+void SunWatchFrame(const float* w, float devSky, int frame);
+void SunWatchRequestArm(uintptr_t a);   // (27/10) vigilar escrituras en el origen del cbuffer de la luz (sunwatch.cpp)   // (26/10) sol de la luz en mundo por cuadro (sunwatch.cpp)
 void CodeWatchStart();                            // (24/10) vigila la seccion .text del exe: anota en el log lo que cambie (codewatch.cpp)
 bool CodeWatchOrig(uintptr_t a, unsigned char* out, size_t n);   // bytes de la copia (registro de cierres)
 void MemWatchStart();                             // (26/10) vigila el liberador de memoria del juego y VirtualProtect/VirtualFree (memwatch.cpp)
