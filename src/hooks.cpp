@@ -1112,6 +1112,14 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (ps && ps->hash == 0x619b86cb5691cdceULL && ps->repl) {
         if (ID3D11ShaderResourceView* v = SSGIBeforeComposition(c, s_presentNo.load())) { Remember(c, d, true, true, 26); c->PSSetShaderResources(26, 1, &v); }
     }
+    // (27/10) 323: ocultar la camiseta interior (inner / inner_cap / inner_glove de common_package.fpk: 9990 / 9714 / 8640 indices,
+    // y el cuello alto highneck: 960). El modulo SinCamiseta no las puede tapar (vienen dentro del fpk que el juego carga una vez)
+    // y asoman en blanco en la linea de la manga y en la base del cuello al mirar el cuerpo sin camiseta. Solo mallas que no son piel.
+    if (g_cfg.live[323][0] > 0.5f && vs && vs->hash != 0x1c02a92ab4ae3362ULL && !d.skip &&
+        (t_drawVerts == 9990 || t_drawVerts == 9714 || t_drawVerts == 8640 || t_drawVerts == 960)) {
+        d.skip = true;
+        if (g_cfg.live[323][3] > 0.5f) { static std::atomic<int> n{0}; if (n.fetch_add(1) < 40) Log("camiseta interior oculta: %u indices, vs %016llx ps %016llx", t_drawVerts, (unsigned long long)vs->hash, (unsigned long long)(ps ? ps->hash : 0)); }
+    }
     // 19/10: capas editadas desde el inspector (PES21FX_capas.ini): textura por slot u "ocultar" el dibujo
     g_drawOrder++;
     if (ps && g_layersAny.load()) { LayerOv ov;
