@@ -1008,6 +1008,9 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         if (hv) { Remember(c, d, false, true, 126); c->VSSetShaderResources(126, 1, &hv); }
         // (26/10, v12.7) venas: textura en t29 del PS de la piel para los brazos y las manos (no en la sombra)
         if ((hand || arm) && vs->hash == 0x1c02a92ab4ae3362ULL) if (ID3D11ShaderResourceView* vt = VeinTexture()) { Remember(c, d, true, true, 29); c->PSSetShaderResources(29, 1, &vt); }
+        // (27/10) brazos, manos y muslos de TorsoBody para las caras reales (brazos.cpp): la textura de la cara (2048) en t0 se
+        // cambia por arm_N / thigh_N de TorsoBody del tono del jugador; los dibujos del torso solo anotan su tono
+        if (ID3D11ShaderResourceView* at = ArmsTextureFor(c, vs->hash, t_drawVerts)) { Remember(c, d, true, true, 0); c->PSSetShaderResources(0, 1, &at); }
         // (26/10) variantes robusto / atletico de TorsoBody (manos.cpp + pes_variants.hlsli): datos por vertice del torso y de los
         // brazos en t127 del VS (piel y sombras); en el torso, los mapas del PS de la piel en t16 / t17 / t18
         bool vTorso = false;
@@ -1466,6 +1469,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     GlassPresent();        // (24/10) vidrio de los menus: lectura de lo anotado por el PS y plan de copias del fondo
     MuscleHookPresent();   // (23/10) musculatura: ganchos a los huesos de musculo del motor (primer Present)
     BodyPresent();         // (25/10) la ropa contra el cuerpo real: mallas de piel nuevas, cuadro nuevo
+    ArmsPresent();         // (27/10) brazos de TorsoBody para las caras reales: huellas de los torsos del juego, claves del cuadro
     GrassFrameBoundary(flags);   // (26/10 d) pasto: limite del cuadro (reclamo en la GPU, x63) ANTES de subir t120
     UploadParams();
     WatchShaderFolder();
