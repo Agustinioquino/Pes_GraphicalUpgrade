@@ -40,7 +40,7 @@ constexpr int kParamCount = 336;           // float4 x 336 -> t120 en los shader
 // 320 = torso bajo la camiseta ajustada (27/10, pes_skintone.hlsli PesTorsoInset: x mm, w on).
 // 321 = brazos, manos y muslos de TorsoBody para las caras reales (27/10, brazos.cpp: x prendido, y muslos, z tono forzado, w log).
 // 322 = cuello de las caras reales fundido con el torso (27/10, pes_collar.hlsli en 5ce3 / ce188: x prendido, y alto mm, z cuanto, w diagnostico).
-// 323 = ocultar la camiseta interior (inner*, highneck de common_package.fpk) al mirar el cuerpo sin camiseta (27/10, hooks.cpp: x prendido, w log).
+// 323 = ocultar la camiseta interior (inner*, highneck de common_package.fpk) al mirar el cuerpo sin camiseta (27/10, hooks.cpp: x prendido, w log); (27/10 d) y hundir la base del cuello de la cara bajo el torso en mm (VS faab87ee / 455eb97b, pes_collar.hlsli), z alto del fundido mm.
 // 312 = sol estable (la DLL lo escribe cada cuadro: config.cpp, PESSunStable). NO usarla para otra cosa.
 // 326 = costura del hombro de la musculatura (27/10, aa7d1833: x prendido, y ancho m, z fuerza; antes 312, chocaba con el sol).
 // 325 = nitidez de las hojas del mod (27/10, grass.cpp: x ancho minimo de la hoja en px, 0 = el de la calidad x61).
@@ -64,6 +64,7 @@ constexpr int kParamCount = 336;           // float4 x 336 -> t120 en los shader
 struct Assign { int idx; int comp; std::vector<float> values; std::string var; };
 struct KeyBind {
     std::string name, label;
+    std::string labelEn;                   // (27/10) rotulo en ingles (PES21FX_menu_en.ini)
     int vk = 0;
     int ctrl = -1, alt = -1, shift = -1;   // -1 = no importa, 0 = no apretada, 1 = apretada
     enum Type { Activate, Toggle, Cycle, Hold } type = Activate;
@@ -83,11 +84,15 @@ struct MenuSlider {
     std::vector<std::string> options;      // si no esta vacio: selector (valor = indice de la opcion)
     std::vector<float> optVals;            // si no esta vacio: valor de cada opcion ("Etiqueta=valor")
     std::string ext;                       // "seccion.clave" de cloth-mod\cloth.ini (si no esta vacio no usa idx/comp)
+    std::string labelEn, helpEn;           // (27/10) textos en ingles (PES21FX_menu_en.ini); vacios = se usa el espanol
+    std::vector<std::string> optionsEn;
     float def = 0;                         // valor de fabrica si la clave no esta en cloth.ini
 };
-struct MenuButton { std::string action, label, help; };   // button = accion | etiqueta | ayuda  (acciones: hair_export, hair_reload)
+struct MenuButton { std::string action, label, help, labelEn, helpEn; };   // button = accion | etiqueta | ayuda  (acciones: hair_export, hair_reload)
 struct MenuGroup {
     std::string title, desc, section;
+    std::string id;                      // (27/10) nombre de la seccion del ini sin "Menu" (clave de PES21FX_menu_en.ini)
+    std::string titleEn, descEn, sectionEn;   // (27/10) textos en ingles; vacios = se usa el espanol
     int tIdx = -1, tComp = 0;            // parametro del interruptor (w46, etc.); -1 = sin interruptor
     std::vector<MenuSlider> sliders;
     std::vector<MenuButton> buttons;
@@ -144,6 +149,7 @@ struct Config {
     std::string favorites;                     // 19/10: titulos de grupos favoritos separados por '|' ([PES21FX] favoritos)
     float uiScale = 1.0f;                      // 19/10: tamano del menu ([PES21FX] ui_scale)
     bool compact = false;                      // 19/10: grupos contraidos por defecto ([PES21FX] compacto)
+    int lang = 0;                              // (27/10) idioma del menu: 0 espanol, 1 ingles ([PES21FX] language = es / en)
     bool autoCap = false; float autoCapSec = 20.0f; int autoCapMax = 150; bool autoCapAB = false; bool exeDump = true; bool motorPatch = true; bool motorSunFix = true; int motorShadowFix = 1; int motorShadowRes = 0; float motorCascadeScale = 0.0f;   // [Motor]: parches en memoria (exepatch.cpp)   // exe_dump: volcado del exe desempaquetado (una vez por version)   // auto_captura_ab: pares A (todo) / B (un grupo del menu apagado 3 cuadros)
     int aniso = 16; float mipBias = 0.0f;   // 20/10: filtrado anisotropico forzado (1 = el del juego) y sesgo de mip global ([PES21FX] aniso, mip_bias)   // 19/10: captura automatica en partido ([PES21FX] auto_captura, auto_captura_seg, auto_captura_max)
     bool optReplace = true, optRules = true, optOverlay = true, optPin = false, optHooks = true, optDxgi = true, optPresent = true, optCtx = true, optExports = true, optOrphan = true, optDump = false;
@@ -158,6 +164,11 @@ extern std::mutex g_cfgMutex;
 bool LoadConfig();                              // PES21FX.ini + PES21FX_rules.ini
 bool SaveConfigValues();
 bool SaveOption(const std::string& key, const std::string& value);   // escribe/agrega clave en [PES21FX]
+// (27/10) idioma del menu (lang.cpp): TRS devuelve la traduccion de un texto fijo del codigo (UTF-8) si el menu esta en ingles
+// y existe; si no, el mismo puntero. LS elige entre el texto del ini y su version en ingles.
+const char* TRS(const char* es);
+inline const std::string& LS(const std::string& es, const std::string& en) { return (g_cfg.lang != 0 && !en.empty()) ? en : es; }
+void LoadMenuLang();   // lee PES21FX_menu_en.ini sobre g_cfg.groups / g_cfg.keys (con g_cfgMutex tomado)
 bool LoadCloth();
 bool SaveCloth();                        // escribe los valores live en PES21FX.ini
 void PollKeys(bool focused);

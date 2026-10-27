@@ -43,6 +43,7 @@ add_library(PES21FX SHARED
   src/config.cpp
   src/hooks.cpp
   src/overlay.cpp
+  src/lang.cpp
   src/presets.cpp
   src/catalog.cpp
   src/grass.cpp

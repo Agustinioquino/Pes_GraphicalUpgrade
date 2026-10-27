@@ -103,7 +103,7 @@ static bool LoadConfigLocked() {
             section = l.substr(1, l.find(']') - 1);
             cur = nullptr; grp = nullptr;
             if (Lower(section).rfind("key", 0) == 0) { c.keys.emplace_back(); cur = &c.keys.back(); cur->name = section; }
-            else if (Lower(section).rfind("menu", 0) == 0) { c.groups.emplace_back(); grp = &c.groups.back(); grp->title = section.substr(4); }
+            else if (Lower(section).rfind("menu", 0) == 0) { c.groups.emplace_back(); grp = &c.groups.back(); grp->title = section.substr(4); grp->id = section.substr(4); }
             continue;
         }
         size_t eq = l.find('=');
@@ -140,6 +140,7 @@ static bool LoadConfigLocked() {
             else if (kl == "favoritos") c.favorites = v;
             else if (kl == "ui_scale") c.uiScale = std::clamp((float)atof(v.c_str()), 0.7f, 2.0f);
             else if (kl == "compacto") c.compact = atoi(v.c_str()) != 0;
+            else if (kl == "language" || kl == "idioma") { const std::string lv = Lower(v); c.lang = (lv == "en" || lv == "english" || v == "1") ? 1 : (lv == "pt" || lv == "portugues" || lv == "portuguese" || v == "2") ? 2 : 0; }
             else if (kl == "auto_captura") c.autoCap = atoi(v.c_str()) != 0;
             else if (kl == "auto_captura_seg") c.autoCapSec = std::clamp((float)atof(v.c_str()), 3.0f, 600.0f);
             else if (kl == "auto_captura_max") c.autoCapMax = std::clamp(atoi(v.c_str()), 1, 2000);
@@ -306,7 +307,80 @@ static bool LoadConfigLocked() {
     for (auto& kv : c.pairRules) nr += (int)kv.second.actions.size();
     Log("config: %d teclas, %d reglas (%d acciones); shaders=%d reglas=%d menu=%d", (int)c.keys.size(), (int)c.rules.size(), nr,
         (int)c.optReplace, (int)c.optRules, (int)c.optOverlay);
+    LoadMenuLang();
     return true;
+}
+
+// ---------------------------------------------------------------- (27/10) menu en ingles / portugues: PES21FX_menu_en.ini / _pt.ini
+// Mismas secciones [MenuX] / [KeyX] que PES21FX.ini, solo con los textos: section, title, desc, label (teclas) y las lineas
+// slider / choice / toggle / cslider / cchoice / button con la etiqueta, la ayuda y las opciones traducidas. Los numeros (rango,
+// formato, valores de fabrica) siempre salen de PES21FX.ini. Los campos *En guardan el idioma elegido (en o pt): el selector
+// vuelve a llamar a LoadMenuLang al cambiar.
+static std::vector<std::string> SplitBar(const std::string& v, char sep) {
+    std::vector<std::string> parts; std::string cur;
+    for (char ch : v) { if (ch == sep) { parts.push_back(Trim(cur)); cur.clear(); } else cur += ch; }
+    parts.push_back(Trim(cur));
+    return parts;
+}
+void LoadMenuLang() {
+    Config& c = g_cfg;
+    for (auto& g : c.groups) {
+        g.titleEn.clear(); g.descEn.clear(); g.sectionEn.clear();
+        for (auto& sl : g.sliders) { sl.labelEn.clear(); sl.helpEn.clear(); sl.optionsEn.clear(); }
+        for (auto& b : g.buttons) { b.labelEn.clear(); b.helpEn.clear(); }
+    }
+    for (auto& k : c.keys) k.labelEn.clear();
+    if (c.lang == 0) return;
+    const wchar_t* file = c.lang == 2 ? L"PES21FX_menu_pt.ini" : L"PES21FX_menu_en.ini";
+    std::vector<std::string> lines;
+    if (!ReadLines(c.baseDir + file, lines)) { Log("menu: sin %ls (queda en espanol)", file); return; }
+    std::map<std::string, MenuGroup*> byId; for (auto& g : c.groups) byId[Lower(g.id)] = &g;
+    std::map<std::string, KeyBind*> keyById; for (auto& k : c.keys) keyById[Lower(k.name)] = &k;
+    MenuGroup* grp = nullptr; KeyBind* key = nullptr; int nTxt = 0;
+    for (auto& raw : lines) {
+        std::string l = Trim(raw);
+        if (l.empty() || l[0] == ';') continue;
+        if (l[0] == '[') {
+            std::string sec = Lower(l.substr(1, l.find(']') - 1));
+            grp = nullptr; key = nullptr;
+            if (sec.rfind("menu", 0) == 0) { auto it = byId.find(sec.substr(4)); if (it != byId.end()) grp = it->second; }
+            else if (sec.rfind("key", 0) == 0) { auto it = keyById.find(sec); if (it != keyById.end()) key = it->second; }
+            continue;
+        }
+        size_t eq = l.find('=');
+        if (eq == std::string::npos) continue;
+        std::string kl = Lower(Trim(l.substr(0, eq))), v = Trim(l.substr(eq + 1));
+        if (key) { if (kl == "label") { key->labelEn = v; nTxt++; } continue; }
+        if (!grp) continue;
+        if (kl == "title") grp->titleEn = v;
+        else if (kl == "desc") grp->descEn = v;
+        else if (kl == "section") grp->sectionEn = v;
+        else if (kl == "button") {
+            auto parts = SplitBar(v, '|');
+            for (auto& b : grp->buttons) if (parts.size() >= 2 && b.action == Lower(parts[0])) { b.labelEn = parts[1]; if (parts.size() >= 3) b.helpEn = parts[2]; }
+        } else if (kl == "slider" || kl == "choice" || kl == "cslider" || kl == "cchoice") {
+            auto parts = SplitBar(v, '|');
+            if (parts.size() < 2) continue;
+            const bool ext = kl[0] == 'c';
+            int i2 = -1, c2 = 0; if (!ext && !ParseParamName(parts[0], i2, c2)) continue;
+            for (auto& sl : grp->sliders) {
+                if (ext ? (sl.ext != Lower(parts[0])) : (!sl.ext.empty() || sl.idx != i2 || sl.comp != c2)) continue;
+                sl.labelEn = parts[1];
+                // ayuda: slider 5.a, choice 4.a, cslider 6.a, cchoice 5.a
+                const size_t hi = kl == "slider" ? 4 : kl == "choice" ? 3 : kl == "cslider" ? 5 : 4;
+                if (parts.size() > hi) sl.helpEn = parts[hi];
+                if ((kl == "choice" || kl == "cchoice") && parts.size() >= 3) {
+                    auto opts = SplitBar(parts[2], ';');
+                    for (auto& o : opts) { size_t e = o.rfind('='); if (e != std::string::npos && kl == "choice") o = Trim(o.substr(0, e)); }
+                    if (!opts.empty() && opts.back().empty()) opts.pop_back();
+                    if (opts.size() == sl.options.size()) sl.optionsEn = opts;
+                }
+                break;
+            }
+        } else continue;
+        nTxt++;
+    }
+    Log("menu: %ls, %d textos traducidos", file, nTxt);
 }
 
 // ---------------------------------------------------------------- cloth-mod\cloth.ini

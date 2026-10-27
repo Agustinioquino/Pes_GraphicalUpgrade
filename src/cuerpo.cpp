@@ -36,7 +36,7 @@ namespace fx {
 
 static const UINT kCells = 8192, kTabStride = 16 + kCells, kTables = 128;
 static const UINT kRing = 1u << 20;      // vertices deformados por cuadro (maximo)
-static const UINT kStatic = 1u << 18;    // vertices de las mallas registradas
+static const UINT kStatic = 1u << 20;    // vertices de las mallas registradas ((27/10 d) 256 K se llenaba con 20 jugadores: torsos sin registrar = la ropa no choca)
 static const UINT kMeshMax = 12288;      // vertices por malla
 static const UINT kShirtMax = 24576;     // (27/10 d) camisetas (medicion, fila 327.w)
 static const UINT kMeas = 64;            // medicion: 8 zonas x 8
@@ -424,7 +424,7 @@ static ID3D11Buffer* Staging(UINT bytes) {
 }
 static void Reject(BodyMesh* m, const char* why) {
     m->state = 4; m->why = why; ReleaseMesh(m);
-    static int n = 0; if (n++ < 40) Log("cuerpo: malla %d descartada (%u indices desde %u, base %d): %s", m->id, m->count, m->start, m->base, why);
+    static int n = 0; if (n++ < 60) Log("cuerpo: %s %d descartada (%u indices desde %u, base %d): %s", m->kind ? "camiseta" : "malla", m->id, m->count, m->start, m->base, why);
 }
 // (26/10) bytes de un elemento de vertice: el ultimo vertice solo necesita llegar al final de sus elementos, no al paso entero
 // (la parte de abajo de TorsoBody termina 8 bytes antes del final de su paso de 28 y se descartaba por "fuera del buffer")
