@@ -424,7 +424,7 @@ static ID3D11Buffer* Staging(UINT bytes) {
 }
 static void Reject(BodyMesh* m, const char* why) {
     m->state = 4; m->why = why; ReleaseMesh(m);
-    static int n = 0; if (n++ < 40) Log("cuerpo: malla %d descartada (%u indices desde %u, base %d): %s", m->id, m->count, m->start, m->base, why);
+    static int n = 0; if (n++ < 60) Log("cuerpo: %s %d descartada (%u indices desde %u, base %d): %s", m->kind ? "camiseta" : "malla", m->id, m->count, m->start, m->base, why);
 }
 // (26/10) bytes de un elemento de vertice: el ultimo vertice solo necesita llegar al final de sus elementos, no al paso entero
 // (la parte de abajo de TorsoBody termina 8 bytes antes del final de su paso de 28 y se descartaba por "fuera del buffer")
