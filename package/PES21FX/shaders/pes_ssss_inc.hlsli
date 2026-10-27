@@ -206,8 +206,8 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   float2 slope = float2(abs(zxp) < abs(zxn) ? zxp : zxn, abs(zyp) < abs(zyn) ? zyp : zyn);
   float tolK = P.z > 0.0 ? P.z : 1.0;
   // rotacion por pixel y por cuadro (ruido de gradiente intercalado, Jimenez 2014)
-  // (27/10 g) 24 muestras (antes 16) y el giro por cuadro solo si x315 > 0.5 (sin TAA el giro por cuadro era grano que titila)
-  float rot = 6.2831853 * frac(52.9829189 * frac(dot(pos.xy, float2(0.06711056, 0.00583715))) + (IniParams.Load(int2(315, 0)).x > 0.5 ? frac(m_timeParam.z * 7.31) : 0.0));
+  // (27/10 g) 24 muestras (antes 16) y el giro por cuadro solo si x331 > 0.5 (sin TAA el giro por cuadro era grano que titila)
+  float rot = 6.2831853 * frac(52.9829189 * frac(dot(pos.xy, float2(0.06711056, 0.00583715))) + (IniParams.Load(int2(331, 0)).x > 0.5 ? frac(m_timeParam.z * 7.31) : 0.0));
   float3 acc = 0, wsum = 0;
   [unroll] for (int i = 0; i < 24; i++) {
     bool redSet = (i % 3) != 2;   // dos de cada tres muestras con el radio del rojo (el que mas lejos llega)

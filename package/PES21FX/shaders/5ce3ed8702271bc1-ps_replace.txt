@@ -77,6 +77,7 @@ Texture2D<float4> pesFaceB    : register(t24);   //   R poros, G zona de brillo,
 struct PesSeed { float4 posV; float4 nrmV; float4 dirV; float4 col; };
 Texture2D<float4> pesSeedMap  : register(t26);
 Texture2D<float4> pesSkinMicro : register(t27);
+Texture2D<float4> pesTorsoTex  : register(t29);   // PES21 (27/10) torso_N_bsm de TorsoBody del tono del jugador (brazos.cpp; pes_collar.hlsli)
 Texture2D<float4> pesFacePores : register(t28);   // PES21 (19/10 b) guia de poros por zona (textures\pes_face_pores.dds): R densidad, G tamano, B zona T (brillo), A oclusion   // PES21 (19/10) micro normal de poros en mosaico (textures\pes_skin_micro_n.dds), A = poro   // PES21 (18/10) semillas de cejas por celda (salida C del generador)
 RWStructuredBuffer<PesSeed> pesSeeds : register(u5);   // PES21 (18/10) semillas animadas de este dibujo (las lee pes_brow_vs)
 RWByteAddressBuffer pesSeedArgs : register(u6);          // PES21 (18/10 b) {verts por instancia, instancias, 0, 0}: cuenta de semillas para DrawInstancedIndirect
@@ -98,6 +99,7 @@ Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 #include "pes_skintone.hlsli"
 #include "pes_pores.hlsli"   // (27/10 c) poros triplanares sobre la posicion de reposo
+#include "pes_collar.hlsli"   // (27/10) cuello de las caras reales fundido con el torso (fila 322)
 #ifdef PES_HL_ACC
 RWByteAddressBuffer gHlAcc : register(u7);   // (24/10 e) medicion del color de la cara (ring.cpp / skintone.cpp; u5 / u6 son las semillas de las cejas)
 #endif
@@ -647,6 +649,17 @@ void main(
   r0.y = exp2(r0.y);
   r0.x = r0.x * r0.y;
   float3 stVeil = g_psMaterial.m_materials[2].xyz;
+  float pesCol = 0.0;   // (27/10) cuello de las caras reales: franja sobre la union con el torso (pes_collar.hlsli, fila 322)
+  float4 PC322 = IniParams.Load(int2(322,0));
+  { uint ctW = 0, ctH = 0; pesTorsoTex.GetDimensions(ctW, ctH);
+    if (PC322.x > 0.5 && ctW > 0) {
+      float3 pesRest = float3(w2.w, w2.z, v3.w - 10.0);   // posicion de reposo del VS de la cabeza (TEXCOORD9.zw = (y, x), TEXCOORD4.w = 10 + z)
+      pesCol = PesCollarW(pesRest, PC322.y * 0.001) * saturate(PC322.z);
+      if (pesCol > 0.001) {
+        float3 ctT = PesCollarTorso(pesTorsoTex, g_samplerLinear_Clamp_s, pesRest);
+        r2.xyz = lerp(r2.xyz, r2.xyz * PesCollarRatio(g_tex_diffuse, g_samplerAnisotropic_Clamp_s, v2.xy, ctT), pesCol);
+      }
+    } }
   {   // (24/10 c) tono de piel propio del jugador (skintone.cpp + pes_skintone.hlsli): Oklab, tambien el velo de borde; el
       // VS faab87ee (reemplazo propio) dice el jugador en o6.w
 #ifdef PES_HL_ACC
@@ -659,10 +672,16 @@ void main(
     }
 #endif
     int stE = PesSkinEntry(v6.w);
-    if (stE >= 0) { float3 stP = PesSkinParams(stE); r2.xyz = PesSkinApply(r2.xyz, stP); stVeil = PesSkinApply(stVeil, stP); }
+    if (stE >= 0) {
+      float3 stP = PesSkinParams(stE);
+      float3 stA = PesSkinApply(r2.xyz, stP);
+      if (pesCol > 0.001) stA = lerp(stA, PesSkinApply(r2.xyz, PesSkinParamsBody(stE)), pesCol);   // (27/10) la franja del cuello lleva el tono del cuerpo
+      r2.xyz = stA; stVeil = PesSkinApply(stVeil, stP);
+    }
   }
   r3.xyz = stVeil + -r2.xyz;
   o0.xyz = r0.xxx * r3.xyz + r2.xyz;
+  if (PC322.w > 0.5) o0.xyz = lerp(o0.xyz, float3(1.0, 0.0, 0.0), pesCol);   // (27/10) diagnostico w322: rojo = franja del cuello
   if (P147.y > 0.5) o0.xyz = lerp(o0.xyz, float3(1.0, 0.0, 0.0), pesEdge);   // (20/10) diagnostico y147: rojo = franja del borde de la mascara generica
 
   // ---- rugosidad codificada ----

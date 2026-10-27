@@ -684,6 +684,11 @@ static void GoPage(void* menu, int page, int cursor) {
     G_SetCursor(menu, cursor);
     PageHints(menu, page);
     Log("fisico: pagina %d (%s, id %u)", page, s_editName[0] ? s_editName : "jugador", s_editId);
+    if (g_cfg.live[324][3] > 0.5f) {   // (27/10) fila 324: la copia de la apariencia del menu, para ubicar el color de piel en los datos
+        unsigned char b[0x100]; static const char* d = "0123456789abcdef"; char h[129];
+        if (SafeCopy(b, (char*)menu + 0xf8, sizeof b))
+            for (int o = 0; o < 0x100; o += 64) { for (int i = 0; i < 64; i++) { h[i * 2] = d[b[o + i] >> 4]; h[i * 2 + 1] = d[b[o + i] & 15]; } h[128] = 0; Log("volcado apariencia id %u tono %d +%03x %s", s_editId, FisicoSkinIndex(), o, h); }
+    }
 }
 static std::atomic<bool> s_hlChanged{false};   // un valor cambio: el resaltado vuelve a empezar
 static double s_cfgDirtyT = 0;   // (26/10 c) opciones de todos cambiadas en el menu del juego: se guardan en PES21FX.ini

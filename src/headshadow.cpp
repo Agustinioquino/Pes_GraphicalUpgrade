@@ -139,7 +139,16 @@ void HeadShadowPresent() {
     const float half = s_half;
     int n = (int)std::min<size_t>(cand.size(), kHsSlots);
     for (int i = 0; i < n; i++) {
-        const Cand& c = cand[i];
+        Cand c = cand[i];
+        // (27/10 d) centro de la caja pegado a la grilla de texels del atlas (en el plano perpendicular al sol): la caja seguia
+        // al jugador de a fracciones de texel y los bordes de la sombra (cuello de la camiseta sobre el cuello, menton) titilaban
+        {
+            const float tx = 2.0f * half / kHsSlotPx;
+            float cr = Dot(c.cw, Rw), cu = Dot(c.cw, Uw), cl = Dot(c.cw, Lw);
+            cr = floorf(cr / tx + 0.5f) * tx; cu = floorf(cu / tx + 0.5f) * tx;
+            for (int k = 0; k < 3; k++) c.cw[k] = cr * Rw[k] + cu * Uw[k] + cl * Lw[k];
+            toV(c.cw, c.cv, true);   // (merge 27/10) la vista sale de PV (piel 1702504), no de m_view
+        }
         // m_projectionView propio: columna 0 = x, 1 = y, 2 = z, 3 = w (cada columna son 4 floats seguidos en memoria)
         float cb[128] = {};
         float kz = s_reversed ? 1.0f : -1.0f;   // z lineal: 0 = lo mas cerca del sol (dot(p - c, -L) / 2h + 0.5); invertida: 1 - eso

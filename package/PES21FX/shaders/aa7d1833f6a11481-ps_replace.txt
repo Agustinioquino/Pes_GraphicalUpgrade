@@ -194,9 +194,9 @@ void main(
     float2 q1 = (v2.xy - float2(0.2944, 0.2329)) / float2(0.0075, 0.0068), q2 = (v2.xy - float2(0.2056, 0.2319)) / float2(0.0075, 0.0068);
     nipM = max(exp(-0.5 * dot(q1, q1)), exp(-0.5 * dot(q2, q2)));
   }
-  float shW = 0.0;   // (27/10) costura del hombro (x312): a los dos lados (torso y brazo) la misma funcion de la posicion de reposo
+  float shW = 0.0;   // (27/10) costura del hombro (x326; era 312, que el sol estable escribe cada cuadro): a los dos lados (torso y brazo) la misma funcion de la posicion de reposo
   {                  // -> el detalle propio de cada textura se va junto a la costura (normal y color fino): solo queda la malla
-    float4 P312 = IniParams.Load(int2(312,0));
+    float4 P312 = IniParams.Load(int2(326,0));
     if (P312.x > 0.5 && vrBody && tbW >= 4096 && !pel && abs(w2.w) > 0.18 && w2.z > 1.15) {
       float sS = dot(float3(abs(w2.w), w2.z, 0.02) - float3(0.2631, 1.3704, 0.0195), float3(0.7611, -0.6432, -0.0839));
       shW = (1.0 - smoothstep(0.002, P312.y > 0.001 ? P312.y : 0.03, abs(sS))) * (P312.z > 0.001 ? saturate(P312.z) : 0.85);

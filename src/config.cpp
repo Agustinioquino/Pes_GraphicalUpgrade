@@ -125,6 +125,8 @@ static bool LoadConfigLocked() {
         }
         if (Lower(section) == "motor") {   // (20/10) parches en memoria del motor (exepatch.cpp)
             if (kl == "motor") c.motorPatch = atoi(v.c_str()) != 0;
+            else if (kl == "sol_parche") c.motorSunFix = atoi(v.c_str()) != 0;   // (27/10) el sol en vista con la matriz al reves (exepatch.cpp)
+            else if (kl == "sombra_parche") c.motorShadowFix = std::clamp(atoi(v.c_str()), 0, 3);   // (27/10) la matriz del shadow map con la vista al reves
             else if (kl == "sombra_resolucion") c.motorShadowRes = std::clamp(atoi(v.c_str()), 0, 8192);
             else if (kl == "sombra_cascadas") c.motorCascadeScale = std::clamp((float)atof(v.c_str()), 0.0f, 4.0f);
             else if (kl == "pasto_buscar") c.grassScan = atoi(v.c_str()) != 0;
@@ -243,8 +245,8 @@ static bool LoadConfigLocked() {
     { static const struct { int i, k; float v; } kDef[] = { {290, 0, 1.f}, {290, 1, 1.f}, {290, 2, 0.45f}, {290, 3, 1.f}, {291, 0, 1.f}, {291, 1, 30.f}, {291, 2, 100.f}, {291, 3, 1.f},
                                                          {292, 0, 1.f}, {292, 1, 1.f}, {292, 2, 1.f}, {292, 3, 1.f}, {294, 0, 1000.f}, {294, 1, 200.f}, {294, 2, 450.f}, {294, 3, 1.f},
                                                          {295, 0, 1.f}, {295, 1, 1.f}, {295, 2, 1.f}, {295, 3, 0.72f}, {296, 0, 1.f}, {296, 1, 1.f}, {296, 2, 1.f},   // (27/10) z296 1: la sombra del pasto ya no se hunde (la luz de cielo 314 la arma)
-                                                         {299, 0, 1.f}, {299, 1, 1.f}, {299, 2, 1.f},
-                                                         {320, 0, 6.f}, {320, 3, 1.f} };   // (27/10) 320: x mm que el torso se mete bajo la camiseta ajustada | w on   // (27/10 l, tanda 9a) 299: x hojas del pasto del juego solo con la base debajo | y oclusion promediada a media distancia | z lineas nitidas a media distancia
+                                                         {299, 0, 1.f}, {299, 1, 1.f}, {299, 2, 1.f}, {299, 3, 1.f}, {325, 0, 0.f}, {328, 0, 1.f}, {328, 1, 1.f}, {328, 2, 1.f}, {328, 3, 0.f}, {329, 0, 1.f}, {329, 1, 1.f}, {329, 2, 30.f}, {329, 3, 1.f}, {112, 3, 0.5f}, {330, 0, 0.4f},
+                                                         {320, 0, 6.f}, {320, 3, 1.f} };   // (27/10) 320: x mm que el torso se mete bajo la camiseta ajustada | w on   // (27/10 l, tanda 9a) 299: x hojas del pasto del juego solo con la base debajo | y oclusion promediada a media distancia | z lineas nitidas a media distancia | w las hojas no hacen sombra de contacto sobre la cancha
       for (auto& d : kDef) if (!c.info[d.i][d.k].defined) c.base[d.i][d.k] = d.v; }
     // 313 (27/10) el sol sobre el pasto (pes_sunturf.hlsli): x sombras entre hojas | y luz a traves de las hojas | z sol bajo dorado | w on
     { static const struct { int i, k; float v; } kDef313[] = { {313, 0, 0.6f}, {313, 1, 0.7f}, {313, 2, 0.6f}, {313, 3, 1.f},

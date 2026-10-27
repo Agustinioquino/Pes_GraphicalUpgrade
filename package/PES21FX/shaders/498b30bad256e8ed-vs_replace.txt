@@ -182,6 +182,41 @@ void main(
   bool pesV5 = pesV3 && Q39.x > 0.5;
   float pesGust = 0.0;
   float2 pesRoot = pesIsExt ? pesExtRoot : float2(dot(v0_in, cb5[4]), dot(v0_in, cb5[6]));
+  // (27/10 h) valor al azar por hoja (el PS lo usa para variar claridad y tono entre hojas, y295). (27/10 m) se calcula aca porque la tanda 10
+  // lo usa tambien para el alto, el ancho y la curva de cada hoja
+  float pesHv = (pesIsExt && pesCard >= 0) ? PESGh21(float2((float)pesCard * 0.0291 + pesExtOrg.x * 0.59, pesExtOrg.y * 0.43 + (float)pesRot * 0.17) + 0.23)
+                                           : PESGh21(floor(pesRoot * 20.0) * 0.137 + 0.59);
+  // (27/10 m) tanda 10, fila 328: matas y variedad en las hojas del mod. Hasta ahora todas las hojas de una celda median lo mismo (el alto
+  // variaba solo en manchas de 60 cm) y salian repartidas parejo: "un tapiz de rayitas iguales". x328 matas: la cancha se divide en matas
+  // de ~12 cm; cada mata tiene su alto (0.72..1.28) y sus hojas se abren hacia afuera desde el centro, las del borde mas cortas: montoncitos
+  // con volumen. y328 por hoja: alto +-25 %, ancho +-20 % y curva propia. z328 (PS): oclusion entre matas (hojas cortas y bordes mas oscuros
+  // en la raiz, las altas al sol). Las hojas del juego (cerca de la camara) no cambian: la geometria la decide su malla
+  float4 P328 = IniParams.Load(int2(328, 0));
+  float pesClumpAO = 1.0; float2 pesClumpLean = float2(0.0, 0.0); float pesHmul = 1.0, pesWmul = 1.0;
+  if (pesV3 && pesIsExt && pesCard >= 0) {
+    float kM = clamp(P328.x, 0.0, 2.0), kV = clamp(P328.y, 0.0, 2.0);
+    if (kM > 0.001) {
+      const float cl = 0.12;
+      float2 cid = floor(pesRoot / cl);
+      float2 jit = float2(PESGh21(cid * 0.173 + 0.29), PESGh21(cid * 0.311 + 0.71)) - 0.5;
+      float2 ctr = (cid + 0.5 + jit * 0.5) * cl;
+      float hc = PESGh21(cid * 0.137 + 0.43);                       // alto de la mata
+      float2 dv = pesRoot - ctr; float dl = length(dv);
+      float edge = saturate(dl / (0.7 * cl));                       // 0 centro de la mata, 1 borde
+      float hf = lerp(1.0, (0.72 + 0.56 * hc) * (1.0 - 0.30 * edge), saturate(kM));
+      pesHmul *= hf;
+      pesClumpLean += (dl > 1e-4 ? dv / dl : float2(0.0, 0.0)) * 0.45 * edge * kM;
+      pesClumpAO = lerp(1.0, 0.62 + 0.38 * hc, 0.6) * lerp(1.0, 0.80, edge);   // 0.62..1: las matas bajas y los bordes reciben menos luz
+    }
+    if (kV > 0.001) {
+      float h1 = frac(pesHv * 3.71 + 0.13), h2 = frac(pesHv * 9.13 + 0.57), h3 = frac(pesHv * 13.7 + 0.91);
+      pesHmul *= lerp(1.0, 0.75 + 0.5 * h1, kV);
+      pesWmul = lerp(1.0, 0.80 + 0.4 * h2, kV);
+      float ca = h3 * 6.2832;
+      pesClumpLean += float2(cos(ca), sin(ca)) * 0.25 * frac(pesHv * 5.3 + 0.37) * kV;
+      pesClumpAO *= lerp(1.0, 0.85 + 0.3 * h1, 0.5 * saturate(kV));   // la hoja alta asoma: mas luz
+    }
+  }
   if (pesV3) {
     float4 Q6 = IniParams.Load(int2(106, 0)), Q7 = IniParams.Load(int2(107, 0));
     float2 puv = pesRoot * cb4[1].xy + cb4[1].zw;
@@ -198,6 +233,8 @@ void main(
     float hv = tipo == 0 ? 0.10 : (tipo == 2 ? 0.35 : 0.20);
     float n = PESGnoise(pesRoot * 1.7 + 0.37);
     pesH = hT * clamp(Q4.z, 0.3, 3.0) * (1.0 + (n - 0.5) * 2.0 * hv) * (1.0 - pesWear.x * 0.35) * (1.0 - pesWear.y) * PESWearLiveHeight(pesLive);
+    pesH *= pesHmul;             // (27/10 m) tanda 10: alto de la mata y de la hoja
+    pesLean += pesClumpLean;     // (27/10 m) tanda 10: la hoja se abre hacia afuera de la mata y cada una con su curva
     v0.y *= pesH;
     pesExtW.y = v0.y;   // las parcelas extra toman la misma altura
     // (26/10 f) z292: el desgaste ralea las hojas del mod: se apagan tarjetas enteras al azar segun lo pelado y el desgaste en vivo en el
@@ -258,11 +295,14 @@ void main(
     // (20/10) pasto v5: pisadas y rastro de la pelota (mapa pes_flat de la DLL) solo doblan las hojas hacia afuera del
     // rastro y las agachan; la base de la cancha no cambia de color (eso daba manchones)
     float2 puvF = pesRoot * cb4[1].xy + cb4[1].zw;
-    float fl0 = PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF, 0).x;
+    // (27/10 n) R = pisadas (se levantan en segundos), G = rastro de la pelota (dura z329 s): las hojas se agachan con el mayor de los dos
+    float2 fl2 = PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF, 0).xy;
+    float fl0 = max(fl2.x, fl2.y);
     if (fl0 > 0.003) {
       const float2 tx = float2(2.0 / 1024.0, 2.0 / 512.0);
-      float2 gF = float2(PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF + float2(tx.x, 0), 0).x - PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF - float2(tx.x, 0), 0).x,
-                         PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF + float2(0, tx.y), 0).x - PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF - float2(0, tx.y), 0).x);
+      #define PESFL(o) (max(PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF + (o), 0).x, PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF + (o), 0).y))
+      float2 gF = float2(PESFL(float2(tx.x, 0)) - PESFL(float2(-tx.x, 0)), PESFL(float2(0, tx.y)) - PESFL(float2(0, -tx.y)));
+      #undef PESFL
       float kF = saturate(fl0) * clamp(Q39.z, 0.0, 2.0);
       float lg = length(gF);
       pesLean += (lg > 1e-4 ? -gF / lg : float2(0.0, 0.0)) * 1.2 * kF;   // se abren hacia afuera del rastro
@@ -307,9 +347,7 @@ void main(
   // (27/10 h) pasto tanda 7, x295: la pintura de las lineas tine las hojas ENTERAS. Se decide por hoja en la raiz (cobertura de la linea en la
   // raiz contra un umbral al azar de la hoja): el borde de la linea queda irregular en vez de un corte recto, y algunas hojas verdes asoman
   // entre las blancas (hP > 0.93). Las pintadas no se entierran (y292 / hundimiento) y quedan paradas; su albedo va a blanco crema (w295) en vez
-  // del gris 0.8 que la base usa para las lineas. pesHv = valor al azar por hoja (el PS lo usa para variar claridad y tono entre hojas, y295)
-  float pesHv = (pesIsExt && pesCard >= 0) ? PESGh21(float2((float)pesCard * 0.0291 + pesExtOrg.x * 0.59, pesExtOrg.y * 0.43 + (float)pesRot * 0.17) + 0.23)
-                                           : PESGh21(floor(pesRoot * 20.0) * 0.137 + 0.59);
+  // del gris 0.8 que la base usa para las lineas. pesHv = valor al azar por hoja (definido mas arriba, 27/10 m)
   float pesPaint = 0.0;
   float4 P295 = IniParams.Load(int2(295, 0));
   if (pesV3 && P295.x > 0.5) {
@@ -378,7 +416,7 @@ void main(
     // (26/10 e) ancho base del mod: cb5[8].w en las camaras de juego, cb5[12].x (mas fino) con la camara pegada al suelo (rampa cb5[12].y / .z)
     float pesWidB = pesExt.w;
     if (pesIsExt && cb5[12].x > 0.0 && cb5[12].y > 1.0) pesWidB = lerp(pesExt.w, cb5[12].x, smoothstep(cb5[12].y, max(cb5[12].z, cb5[12].y + 1.0), pesPx));
-    float wid = pesIsExt ? pesWidB * max(cb5[10].z, 0.0) * pesExtScale : 0.012 * max(FAR.x, 1.0) * max(FA2.y, 0.0) * pesFarK;
+    float wid = pesIsExt ? pesWidB * max(cb5[10].z, 0.0) * pesExtScale * pesWmul : 0.012 * max(FAR.x, 1.0) * max(FA2.y, 0.0) * pesFarK;   // (27/10 m) ancho por hoja (y328)
     // (25/10 c) ancho minimo en pixeles (cb5[10].x): una hoja de menos de ~1.4 px titila al mover la camara
     if (pesIsExt && cb5[10].x > 0.0 && pesPx > 1.0) wid = max(wid, cb5[10].x / pesPx);
     // (26/10 d) el ensanche se afina hacia la punta como la malla (antes era constante y anulaba el afinado: cintas)
@@ -617,6 +655,12 @@ void main(
     float4 Q7b = IniParams.Load(int2(107, 0));
     // con el color del suelo (x148) el seco lo pone solo el PS de la hoja (antes se aplicaba dos veces: VS + PS)
     o3.xyz = saturate(PESDryTint(o3.xyz * pesZone, pesMatch ? 0.0 : pesWear.x * saturate(Q7b.y) * 0.85));
+    // (27/10 n) tanda 11, w329: el rastro de la pelota (pes_flat.y) se ve en el color de la hoja: tumbada muestra el enves y la punta, mas
+    // clara y un poco mas palida (como la franja de corte a favor). Las pisadas (x) la mitad
+    { float4 P329v = IniParams.Load(int2(329, 0));
+      if (P329v.w > 0.001) { float2 f2 = PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, pesRoot * cb4[1].xy + cb4[1].zw, 0).xy;
+        float tr = saturate(max(f2.y, 0.5 * f2.x) * 1.5) * clamp(P329v.w, 0.0, 2.0);
+        o3.xyz = saturate(o3.xyz * lerp(float3(1.0, 1.0, 1.0), float3(1.12, 1.08, 0.94), tr)); } }
     o1.w = saturate(o1.w * (1.0 - pesWear.x * 0.5) * ((int)(Q4.y + 0.5) == 2 ? 1.3 : 1.0));
   }
   if (pesPaint > 0.001) {   // (27/10 h) hoja pintada por la linea: blanco crema de la pintura (w295), por encima de zonas, seco y color del suelo
@@ -681,6 +725,7 @@ void main(
   o6.z = dot(r6, cb2[16]);
   o6.w = dot(r6, cb2[17]);
   o7.y = dot(r6, cb2[19]);
-  o8 = float4(pesWear.x, pesWear.y, pesHv, pesV3 ? 1.0 + pesBand + ((pesFl & 2) != 0 ? 8.0 : 0.0) : 0.0);   // z (27/10 h) valor al azar por hoja (antes pesH, el PS no lo leia); w = 1 + banda del atlas (0 = sin v3) + 8 si se mezcla con el suelo (igual en todo el dibujo)
+  // (27/10 m) y = oclusion de la mata (tanda 10, 0.5..1; antes el pelado, que el PS solo usaba en la depuracion w107 = 2)
+  o8 = float4(pesWear.x, pesIsExt ? pesClumpAO : 1.0, pesHv, pesV3 ? 1.0 + pesBand + ((pesFl & 2) != 0 ? 8.0 : 0.0) : 0.0);   // z (27/10 h) valor al azar por hoja (antes pesH, el PS no lo leia); w = 1 + banda del atlas (0 = sin v3) + 8 si se mezcla con el suelo (igual en todo el dibujo)
   if (pesKill) o0 = float4(0.0, 0.0, -2.0, 1.0);   // todos los vertices iguales: triangulos nulos, no se rasteriza
 }
