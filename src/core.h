@@ -40,7 +40,7 @@ constexpr int kParamCount = 336;           // float4 x 336 -> t120 en los shader
 // 320 = torso bajo la camiseta ajustada (27/10, pes_skintone.hlsli PesTorsoInset: x mm, w on).
 // 321 = brazos, manos y muslos de TorsoBody para las caras reales (27/10, brazos.cpp: x prendido, y muslos, z tono forzado, w log).
 // 322 = cuello de las caras reales fundido con el torso (27/10, pes_collar.hlsli en 5ce3 / ce188: x prendido, y alto mm, z cuanto, w diagnostico).
-// 323 = ocultar la camiseta interior (inner*, highneck de common_package.fpk) al mirar el cuerpo sin camiseta (27/10, hooks.cpp: x prendido, w log).
+// 323 = ocultar la camiseta interior (inner*, highneck de common_package.fpk) al mirar el cuerpo sin camiseta (27/10, hooks.cpp: x prendido, w log); (27/10 d) y hundir la base del cuello de la cara bajo el torso en mm (VS faab87ee / 455eb97b, pes_collar.hlsli), z alto del fundido mm.
 // 324 = tono de piel del cuerpo por jugador (27/10, personajes.cpp: PES21FX\tonos_piel.txt; x prendido, y desplazamiento en HumanData, z bit, w volcado al log).
 // 327 = cuerpo del tono de la cara (27/10 b, brazos.cpp + pes_tono_brazo_cs.hlsl: con x321, la textura de brazo de la cara real se mide contra arm_1..6 y torso / brazos / muslos van con torso_M / arm_M / thigh_M de ese tono; x prendido, y umbral de piel 0..1 (0 = 0.12); w (27/10 d) medicion camiseta contra torso al log cada 20 s, cuerpo.cpp + pes_body_measure_cs.hlsl).
 // 297 / 298 = luz de prueba del editor (27/10 b, pes_ssss_inc.hlsli: sol de dia / tarde / noche donde no corre el sol del partido).
