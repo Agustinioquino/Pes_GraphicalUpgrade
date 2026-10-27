@@ -221,7 +221,7 @@ void main(
   float pesTr = v1.w;
   if (pesV3) pesTr = lerp(v1.w, saturate(v1.w * (1.35 - 0.8 * pesN.w)), pesCf);   // puntas finas mas translucidas (A = grosor); lejos sin variar
   // (27/10 h) z295: la punta deja pasar mas luz a contraluz (y57 lee esto del G-buffer); la pintura tapa
-  if (pesV3) pesTr = saturate(pesTr * (1.0 + 0.35 * smoothstep(0.45, 1.0, relH) * kT * pesCf) * (1.0 - 0.5 * pesPaintF));
+  if (pesV3) pesTr = saturate(pesTr * (1.0 + 0.35 * smoothstep(0.45, 1.0, relH) * kT * pesCf) * (1.0 - 0.85 * pesPaintF));   // (27/10 i) pintura: casi opaca (salia lima a contraluz)
   r0.w = pesTr * 63 + 0.5;
   r1.x = abs(r0.x) + abs(r0.y);
   r1.x = r1.x + abs(r0.z);
