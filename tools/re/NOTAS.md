@@ -466,3 +466,16 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
   adelante a y 1.478, 75 mm contra 66 de TorsoBody): Konami no corta nada, la cara se mete en el cuerpo y la union es el borde
   del cuerpo, con las normales iguales. TorsoBody baja el escote 3 cm y afina el pecho alto: el cuello de la cara queda afuera y
   hay que cortarlo mas abajo de donde la textura de la cara deja de estar pensada para verse.
+- (26/10 h) TORSO CON EL CUELLO DE KONAMI (tools/fox/torso/neck_konami.py; el fmdl de Konami es del usuario, no va al repo): las
+  mallas 1 y 2 del torso (iguales en los 4 pants_*_sub): el anillo del cuello (48 vertices) va al borde de shirtless_body en el
+  mismo angulo (dy -10 .. +31 mm, hasta 16 mm en horizontal), desplazamiento armonico (Laplace, pesos uniformes) hasta 11 cm de
+  geodesica (la costura del hombro fija), superficie de Konami (punto mas cercano) entera hasta 4 cm y mezclada hasta 10 cm, y
+  ahi las NORMALES del archivo de Konami (las que coinciden con el cuello de las caras; en el anillo, la del borde de Konami en
+  ese angulo). 15 triangulos por lado giran 30 .. 35 grados (costados del anillo, la pendiente de Konami). neck.fmdl (cuello
+  generico): los 6 cm de abajo siguen al anillo nuevo y en los 2 cm de abajo la normal del borde. TorsoBody_cuello 1.14: LOOP /
+  RING_N nuevos. tools/sincamiseta/patch_fpk.py cambia las entradas (mismo tamano) en el common_package.fpk del Global Model y
+  en el sin short (las pelvis con las mallas 1 / 2 nuevas). Variantes de PES21FX regeneradas con esa carpeta common.
+- (26/10 h) COSTURA DEL HOMBRO EN EL COLOR (tools/torsobody/seam_color.py): torso_N_bsm era 1.5 .. 6.5 % mas oscuro que arm_N_bsm
+  junto a la costura (todos los tonos); por tramos de 10 grados alrededor de cada anillo del hombro, el cociente brazo / torso
+  (1.5 cm de cada lado, luz lineal, suavizado) se aplica al torso entero en la costura y nada a 5 cm. Despues: 1.00 de media,
+  peor tramo 2 .. 3.5 %.
