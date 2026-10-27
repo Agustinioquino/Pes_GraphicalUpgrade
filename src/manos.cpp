@@ -102,7 +102,9 @@ ID3D11ShaderResourceView* VariantDataFor(uint64_t vsHash, UINT indexCount, bool*
     if (vsHash != 0x1c02a92ab4ae3362ULL && vsHash != 0xc6ef0c7519ec95a5ULL) return nullptr;
     const VarEntry* e = nullptr;
     for (const VarEntry& k : kVars) if (k.idx == indexCount) { e = &k; break; }
-    if (!e || !VariantsInUse()) return nullptr;
+    if (!e) return nullptr;
+    const bool baseOn = g_cfg.live[289][0] > 0.5f;   // (26/10 b) base esculpida: los datos van siempre (no solo con variantes)
+    if (!baseOn && !VariantsInUse()) return nullptr;
     ID3D11ShaderResourceView* v = FileTextureAny(e->file);
     if (torso) *torso = e->torso;
     if (s_varLogs.load(std::memory_order_relaxed) < 16) {
@@ -110,6 +112,67 @@ ID3D11ShaderResourceView* VariantDataFor(uint64_t vsHash, UINT indexCount, bool*
         Log("variantes del torso: dibujo %s (VS %016llx, %u indices): datos %s", e->file + 14, (unsigned long long)vsHash, indexCount, v ? "enlazados en t127" : "NO CARGADOS");
     }
     return v;
+}
+// (26/10 b) base esculpida (x289): la textura que corrige el normal map de TorsoBody (espalda suave; el volumen que ya muestra la
+// malla sale de la textura) en t20 del PS de la piel, en todos los torsos
+// (26/10 c) pelvis "sin short" (SinCamiseta, tecla 4): la malla 0 de pants_*_sub.fmdl pasa a ser piel (material del torso) con
+// 3732 indices (pants_out_sub / inner / tight) o 3774 (pants_in_sub). Con el VS de la piel solo puede ser la pelvis (el short usa
+// otro shader). Sus texturas propias cubren el cuadrante libre de abajo a la derecha de la del torso (el PS lo reescala a 0..1):
+// detalle del normal map (t20), piel por zona (t21 / t24) y albedo (t23: su presencia le dice al PS que es la pelvis).
+static bool PelvisDraw(uint64_t vsHash, UINT indexCount) {
+    return vsHash == 0x1c02a92ab4ae3362ULL && (indexCount == 3732 || indexCount == 3774);
+}
+ID3D11ShaderResourceView* PelvisAlbedoFor(uint64_t vsHash, UINT indexCount) {
+    if (!PelvisDraw(vsHash, indexCount)) return nullptr;
+    ID3D11ShaderResourceView* v = FileTextureAny("file:textures\\pes_var_pelvis_alb.dds");
+    static std::atomic<bool> s_noted{false};
+    if (!s_noted.exchange(true)) Log("pelvis sin short: dibujo de la pelvis (%u indices), texturas %s", indexCount, v ? "cargadas (t20 / t21 / t23 / t24)" : "NO CARGADAS (faltan las pes_var_pelvis_*.dds)");
+    return v;
+}
+// (26/10 d) detalle de piel real de la pelvis (poros y lineas finas del torso, mosaico de 22.5 cm; tools/fox/pelvis/skin_detail.py):
+// t34 normal (BC5 SNORM) y t35 albedo (BC4) del PS de la piel, solo en el dibujo de la pelvis
+bool PelvisDetailFor(uint64_t vsHash, UINT indexCount, ID3D11ShaderResourceView* out[2]) {
+    out[0] = out[1] = nullptr;
+    if (!PelvisDraw(vsHash, indexCount)) return false;
+    out[0] = FileTextureAny("file:textures\\pes_var_pelvis_detail_n.dds");
+    out[1] = FileTextureAny("file:textures\\pes_var_pelvis_detail_a.dds");
+    static std::atomic<bool> s_noted{false};
+    if (!s_noted.exchange(true)) Log("pelvis sin short: detalle de piel %s", (out[0] && out[1]) ? "cargado (t34 / t35)" : "NO CARGADO (faltan pes_var_pelvis_detail_n/_a.dds)");
+    if (!(out[0] && out[1])) { out[0] = out[1] = nullptr; return false; }
+    return true;
+}
+ID3D11ShaderResourceView* BaseTextureFor(uint64_t vsHash, UINT indexCount) {
+    if (PelvisDraw(vsHash, indexCount)) return FileTextureAny("file:textures\\pes_var_pelvis_n.dds");
+    if (vsHash != 0x1c02a92ab4ae3362ULL || g_cfg.live[289][0] <= 0.5f) return nullptr;
+    const VarEntry* e = nullptr;
+    for (const VarEntry& k : kVars) if (k.idx == indexCount) { e = &k; break; }
+    if (!e) return nullptr;
+    // torso: la del torso (v 0..0.5); brazos (y sus capas): la del brazo (todo su atlas)
+    ID3D11ShaderResourceView* v = FileTextureAny(e->torso ? "file:textures\\pes_var_torso_base_n.dds" : "file:textures\\pes_var_arm_base_n.dds");
+    static std::atomic<int> s_noted{0};
+    const int bit = e->torso ? 1 : 2;
+    if (!(s_noted.fetch_or(bit) & bit)) Log("base esculpida: textura del %s %s", e->torso ? "torso" : "brazo", v ? "cargada (t20 del PS de la piel)" : "NO CARGADA");
+    return v;
+}
+// (26/10 b) piel real (x293): brillo / rugosidad (t21) y translucidez / rubor (t24) por zona del torso. (26/10 c) y de los brazos
+// (pes_var_arm_skin_*: todo el atlas del brazo, cuadradas; el PS elige las uv por el tamano)
+bool SkinTexturesFor(uint64_t vsHash, UINT indexCount, ID3D11ShaderResourceView* out[2]) {
+    out[0] = out[1] = nullptr;
+    if (vsHash != 0x1c02a92ab4ae3362ULL || g_cfg.live[293][0] <= 0.5f) return false;
+    if (PelvisDraw(vsHash, indexCount)) {   // (26/10 c) la pelvis sin short
+        out[0] = FileTextureAny("file:textures\\pes_var_pelvis_skin_a.dds");
+        out[1] = FileTextureAny("file:textures\\pes_var_pelvis_skin_b.dds");
+        return out[0] && out[1];
+    }
+    const VarEntry* e = nullptr;
+    for (const VarEntry& k : kVars) if (k.idx == indexCount) { e = &k; break; }
+    if (!e) return false;
+    out[0] = FileTextureAny(e->torso ? "file:textures\\pes_var_torso_skin_a.dds" : "file:textures\\pes_var_arm_skin_a.dds");
+    out[1] = FileTextureAny(e->torso ? "file:textures\\pes_var_torso_skin_b.dds" : "file:textures\\pes_var_arm_skin_b.dds");
+    static std::atomic<int> s_noted{0};
+    const int bit = e->torso ? 1 : 2;
+    if (!(s_noted.fetch_or(bit) & bit)) Log("piel real: zonas del %s %s", e->torso ? "torso" : "brazo", (out[0] && out[1]) ? "cargadas (t21 / t24)" : "NO CARGADAS (faltan las pes_var_*_skin_a/b.dds)");
+    return out[0] && out[1];
 }
 // (26/10) columna marcada (x288): el mapa normal delta de la columna en t19 del PS de la piel, en todos los torsos de TorsoBody
 // (con o sin variante; no depende de x285)
@@ -122,6 +185,32 @@ ID3D11ShaderResourceView* SpineTextureFor(uint64_t vsHash, UINT indexCount) {
     static std::atomic<bool> s_noted{false};
     if (!s_noted.exchange(true)) Log("columna marcada: mapa %s", v ? "cargado (t19 del PS de la piel)" : "NO CARGADO (falta textures\\pes_var_torso_spine_n.dds)");
     return v;
+}
+// (26/10 d) tope del relieve (x307): inclinacion de la malla de cada version (base esculpida, atletico, robusto) respecto de la
+// superficie original de TorsoBody en t31 / t32 / t33 del PS de la piel (torso: v 0..0.5; brazos y sus capas: todo el atlas del brazo;
+// slots que ningun shader del juego usa: en t5..t7 quedarian texturas de otros dibujos).
+// El PS la suma al normal map, limita el total y se la vuelve a restar (tools/fox/torso/torso_tilt.py)
+bool TiltTexturesFor(uint64_t vsHash, UINT indexCount, ID3D11ShaderResourceView* out[3]) {
+    out[0] = out[1] = out[2] = nullptr;
+    if (vsHash != 0x1c02a92ab4ae3362ULL || g_cfg.live[307][0] <= 0.5f) return false;
+    const VarEntry* e = nullptr;
+    for (const VarEntry& k : kVars) if (k.idx == indexCount) { e = &k; break; }
+    if (!e) return false;
+    if (e->torso) {
+        out[0] = FileTextureAny("file:textures\\pes_var_torso_tilt_b.dds");
+        out[1] = FileTextureAny("file:textures\\pes_var_torso_tilt_a.dds");
+        out[2] = FileTextureAny("file:textures\\pes_var_torso_tilt_r.dds");
+    } else {
+        out[0] = FileTextureAny("file:textures\\pes_var_arm_tilt_b.dds");
+        out[1] = FileTextureAny("file:textures\\pes_var_arm_tilt_a.dds");
+        out[2] = FileTextureAny("file:textures\\pes_var_arm_tilt_r.dds");
+    }
+    const bool ok = out[0] && out[1] && out[2];
+    static std::atomic<int> s_noted{0};
+    const int bit = e->torso ? 1 : 2;
+    if (!(s_noted.fetch_or(bit) & bit)) Log("tope del relieve: inclinacion de la malla del %s %s", e->torso ? "torso" : "brazo", ok ? "cargada (t31 / t32 / t33 del PS de la piel)" : "NO CARGADA (faltan las pes_var_*_tilt_b/a/r.dds)");
+    if (!ok) out[0] = out[1] = out[2] = nullptr;
+    return ok;
 }
 bool VariantTextures(ID3D11ShaderResourceView* out[3]) {
     out[0] = FileTextureAny("file:textures\\pes_var_torso_rob_n.dds");

@@ -182,10 +182,10 @@ static void ComputeFactors(const float (*P)[4], bool on, bool ropa, bool trans, 
     // y baja / sube el trapecio junto al cuello (caidos: la linea cuello - hombro mas empinada; rectos: mas horizontal)
     const float shSl = std::clamp(Gv(T[0]), 0.7f, 1.3f) - 1.0f, shSz = std::clamp(Gv(T[2]), 0.7f, 1.3f) - 1.0f;
     const int shTy = std::clamp((int)lroundf(T[1] < 0.5f ? 1.0f : T[1]), 1, 4);
-    const float tyAnch = shTy == 2 ? -0.45f : shTy == 3 ? 0.50f : 0.0f;
-    const float tyE = shTy == 2 ? -0.08f : shTy == 3 ? 0.04f : shTy == 4 ? 0.18f : 0.0f, tyRound = shTy == 4 ? 0.45f : 0.0f;
-    const float rod = Gv(Z[0]) - 1.0f, cint = Gv(Z[1]) - 1.0f, cad = Gv(Z[2]) - 1.0f, anch = Gv(Z[3]) - 1.0f + tyAnch + 0.8f * shSz;
-    f[M_DELT].e = m(Gv(A[1])) + AV(0.03f, 0.04f) + tyE + 0.8f * shSz;      Push(f[M_DELT], 1.0f, 0.12f, 0.0f, 0.030f, anch);
+    const float tyAnch = shTy == 2 ? -0.30f : shTy == 3 ? 0.30f : 0.0f;
+    const float tyE = shTy == 2 ? -0.08f : shTy == 3 ? 0.04f : shTy == 4 ? 0.05f : 0.0f, tyRound = shTy == 4 ? 0.20f : 0.0f;
+    const float rod = Gv(Z[0]) - 1.0f, cint = Gv(Z[1]) - 1.0f, cad = Gv(Z[2]) - 1.0f, anch = Gv(Z[3]) - 1.0f + tyAnch + 0.5f * shSz;
+    f[M_DELT].e = m(Gv(A[1])) + AV(0.03f, 0.04f) + tyE + 0.8f * shSz;      Push(f[M_DELT], 1.0f, 0.12f, 0.0f, 0.060f, anch);   // (26/10 b) 3 -> 6 cm por unidad: casi no se notaba
     if (shSl != 0.0f) {
         Push(f[M_DELT], 0.15f, 1.0f, 0.0f, 0.040f, shSl); Push(f[M_DELT], 1.0f, 0.0f, 0.0f, 0.010f, shSl);   // la tapa sube (rectos) y se abre
         Push(f[M_TRAP], -0.20f, 1.0f, 0.0f, 0.020f, -shSl);   // el trapecio junto al cuello baja (rectos) o sube (caidos)
@@ -198,8 +198,8 @@ static void ComputeFactors(const float (*P)[4], bool on, bool ropa, bool trans, 
     }
     {   // (26/10) deltoides frontal / posterior: la tapa del hombro crece un poco y se corre hacia adelante / atras
         const float df = Gv(Q[0]) - 1.0f + tyRound, dr = Gv(Q[1]) - 1.0f + tyRound;   // (redondos: las dos partes)
-        f[M_DELT].e += 0.35f * (df + dr);
-        Push(f[M_DELT], 0.15f, 0.0f, 1.0f, 0.015f, df); Push(f[M_DELT], 0.15f, 0.0f, -1.0f, 0.015f, dr);
+        f[M_DELT].e += 0.70f * (df + dr);   // (26/10 b) el doble (casi no se notaban)
+        Push(f[M_DELT], 0.15f, 0.0f, 1.0f, 0.035f, df); Push(f[M_DELT], 0.15f, 0.0f, -1.0f, 0.035f, dr);
     }
     const float delt = f[M_DELT].e;   // con "unir vecinos": el trapecio, el pecho alto y el omoplato acompanan un poco al hombro
     if (vec) { Push(f[M_TRAP], 0.6f, 0.8f, 0.0f, 0.012f, delt); Push(f[M_CLAV], 0.7f, 0.5f, 0.3f, 0.010f, delt); Push(f[M_SCAP], 0.5f, 0.3f, -0.6f, 0.008f, delt); }
@@ -214,13 +214,13 @@ static void ComputeFactors(const float (*P)[4], bool on, bool ropa, bool trans, 
     if (ropa && arm > 0.0f) { f[M_SLEEVE].e = sleeveK * arm; f[M_SLEEVE].t[2] = sleeveK * armB; }
     Push(f[M_PECT], 0.25f, 0.10f, 1.0f, 0.035f, pec);
     Push(f[M_PECT], 0.10f, -0.50f, 1.0f, 0.022f, Gv(R[0]) - 1.0f);   // (26/10) pecho bajo: la masa abajo y adelante
-    Push(f[M_CLAV], 0.10f, 0.30f, 1.0f, 0.025f, clav);  Push(f[M_CLAV], 1.0f, 0.0f, 0.0f, 0.012f, anch);
+    Push(f[M_CLAV], 0.10f, 0.30f, 1.0f, 0.025f, clav);  Push(f[M_CLAV], 1.0f, 0.0f, 0.0f, 0.025f, anch);
     Push(f[M_UNDERARM], 0.20f, 0.0f, 1.0f, 0.020f, (vec ? 0.6f * pec : 0.0f) + m(Gv(X[0])));          // axilas
     Push(f[M_RIB], 1.0f, 0.0f, 0.10f, 0.025f, (vec ? 0.6f * dor : 0.0f) + 0.3f * cint + m(Gv(X[1])));  // costados (serratos)
     Push(f[M_LAT], 1.0f, -0.10f, -0.40f, 0.035f, dor);
     Push(f[M_LAT], 1.0f, 0.0f, 0.0f, 0.030f, Gv(R[1]) - 1.0f);        // (26/10) dorsales: ancho (la V, hacia los costados)
     Push(f[M_SCAP], 0.20f, 0.10f, -1.0f, 0.030f, omo);
-    Push(f[M_TRAP], 0.25f, 1.0f, -0.35f, 0.030f, trap); Push(f[M_TRAP], 1.0f, 0.0f, 0.0f, 0.012f, anch);
+    Push(f[M_TRAP], 0.25f, 1.0f, -0.35f, 0.030f, trap); Push(f[M_TRAP], 1.0f, 0.0f, 0.0f, 0.025f, anch);
     Push(f[M_TRAP], 0.10f, 1.0f, 0.0f, 0.020f, Gv(R[2]) - 1.0f);      // (26/10) trapecio alto (hacia arriba)
     Push(f[M_COLLAR], 0.30f, 1.0f, 0.0f, 0.015f, (vec ? 0.5f * neck + 0.3f * trap : 0.0f) + m(Gv(X[3])));   // base del cuello
     Push(f[M_BACK], 0.0f, 0.0f, -1.0f, 0.025f, baja);
@@ -511,20 +511,43 @@ float MuscleDefinitionFor(uint32_t id) {
     return fabsf(v - gen) > 0.005f ? std::clamp(v, 0.05f, 3.0f) : 0.0f;
 }
 
+// (26/10 e) el valor que va a los shaders sigue al elegido en ~0.15 s: un cambio de complexion, "Ver como el juego" o un salto de la
+// barra "Tipo de cuerpo" se ve como un cambio suave del cuerpo y no como un salto. Por jugador (id; 0 = el general); una entrada
+// que no se uso en 0.5 s arranca en el valor (un jugador que entra a la cancha no "crece")
+struct TvEase { uint32_t id; float v; double t; };
+static TvEase s_tvEase[64]; static std::mutex s_tvMx;
+static float EaseTv(uint32_t id, float target) {
+    const double now = Now();
+    std::lock_guard<std::mutex> lk(s_tvMx);
+    TvEase* e = nullptr; TvEase* old = &s_tvEase[0];
+    for (TvEase& x : s_tvEase) {
+        if (x.t > 0.0 && x.id == id) { e = &x; break; }
+        if (x.t < old->t) old = &x;
+    }
+    if (!e || now - e->t > 0.5) { if (!e) e = old; e->id = id; e->v = target; e->t = now; return target; }
+    const float dt = (float)(now - e->t); e->t = now;
+    e->v += (target - e->v) * (1.0f - expf(-dt / 0.12f));
+    if (fabsf(target - e->v) < 0.002f) e->v = target;
+    return e->v;
+}
 // (26/10) variante robusto / atletico de un jugador para los shaders (skintone.cpp la pone en la tabla de jugadores: filas 264..284):
 // t = -1 robusto .. 1 atletico, el propio o el general; own = distinto del general. 0 con la musculatura apagada o "Ver como el juego".
 float MuscleVariantT(uint32_t id, bool* own) {
     if (own) *own = false;
-    if (g_cfg.live[164][0] < 0.5f || s_compare.load()) return 0.0f;
-    const float gen = TvOf(g_cfg.live[262][2]);
-    if (!id) return gen;
-    std::lock_guard<std::mutex> lk(s_profMx);
-    if (!s_profLoaded) LoadProfiles();
-    auto it = s_prof.find(id);
-    if (it == s_prof.end()) return gen;
-    const float t = TvOf(it->second.v[11][2]);
+    const bool on = g_cfg.live[164][0] >= 0.5f && !s_compare.load();
+    const float gen = on ? TvOf(g_cfg.live[262][2]) : 0.0f;
+    if (!id) return EaseTv(0, gen);
+    float t = gen;
+    if (on) {
+        std::lock_guard<std::mutex> lk(s_profMx);
+        if (!s_profLoaded) LoadProfiles();
+        auto it = s_prof.find(id);
+        if (it != s_prof.end()) t = TvOf(it->second.v[11][2]);
+    }
     if (own) *own = fabsf(t - gen) > 0.004f;
-    return t;
+    const float te = EaseTv(id, t);
+    if (own && fabsf(te - gen) > 0.004f) *own = true;   // mientras vuelve al general sigue en la tabla
+    return te;
 }
 
 struct MzOwn { float pos[3]; const Fac* fac; float tv; };   // (26/10) personaje con valores propios (fac, tv = variante) o tapon (nullptr = general)
