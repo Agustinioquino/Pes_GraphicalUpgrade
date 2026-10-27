@@ -1,0 +1,106 @@
+// PES 2021 - vertex shader de SOMBRAS / profundidad de las mallas animadas por huesos (jugadores, arbitros, publico; PS 918e2dec)
+// PES21 FX (25/10): igual al del juego (escrito a mano desde el volcado del catalogo) mas el skinning de las manos de TorsoBody
+// (pes_hands.hlsli): asi la sombra de la mano coincide con la mano deformada de la pasada principal (1c02a92a).
+// (26/10) y las variantes robusto / atletico del torso y los brazos (pes_variants.hlsli, t127): la misma forma en la sombra.
+
+cbuffer cVSScene : register(b2)
+{
+  struct
+  {
+    float4x4 m_projectionView;
+    float4x4 m_projection;
+    float4x4 m_view;
+    float4x4 m_shadowProjection;
+    float4x4 m_shadowProjection2;
+    float4 m_eyepos;
+    float4 m_projectionParam;
+    float4 m_viewportSize;
+    float4 m_exposure;
+    float4 m_fogParam[3];
+    float4 m_fogColor;
+    float4 m_cameraCenterOffset;
+    float4 m_shadowMapResolutions;
+  } g_vsScene : packoffset(c0);
+}
+
+cbuffer cVSObject : register(b5)
+{
+  struct
+  {
+    float4x4 m_viewWorld;
+    float4x4 m_world;
+    float4 m_useWeightCount;
+    float4 m_localParam[9];
+  } g_vsObject : packoffset(c0);
+}
+
+cbuffer VSBones : register(b6)
+{
+  struct
+  {
+    float4x3 m_boneMatrices[32];
+  } g_vsBone : packoffset(c0);
+
+  struct
+  {
+    float4x3 m_boneMatrices[32];
+  } g_vsPrevBone : packoffset(c96);
+}
+
+Texture1D<float4> IniParams : register(t120);
+#include "pes_skintone.hlsli"
+#define PES_VARIANT_VS
+#include "pes_variants.hlsli"
+#include "pes_hands.hlsli"
+
+void main(
+  float4 v0 : POSITION0,
+  float4 v1 : NORMAL0,
+  float4 v2 : COLOR0,
+  float4 v3 : TANGENT0,
+  uint4 v4 : BLENDINDICES0,
+  float4 v5 : BLENDWEIGHT0,
+  uint vid : SV_VertexID,
+  out float4 o0 : SV_Position0)
+{
+  // (26/10) variante del jugador (mismo calculo que el VS de la piel): solo cambia algo si t127 tiene los datos de esta malla
+  bool skW = g_vsObject.m_useWeightCount.x != 0;
+  float3 sb0 = float3(g_vsBone.m_boneMatrices[0]._m30, g_vsBone.m_boneMatrices[0]._m31, g_vsBone.m_boneMatrices[0]._m32);
+  float3 sb0b = float3(g_vsPrevBone.m_boneMatrices[0]._m30, g_vsPrevBone.m_boneMatrices[0]._m31, g_vsPrevBone.m_boneMatrices[0]._m32);
+  float3 mP = v0.xyz, mN = v1.xyz, mT = v3.xyz;
+  uint vdW = 0, vdH = 0; g_varData.GetDimensions(vdW, vdH);
+  if (vdW > 0) PesVariantMorph(vid, PesVariantT(PesSkinNearest(PesSkinPoint(g_vsObject.m_world, g_vsObject.m_viewWorld, g_vsScene.m_view, sb0, sb0b, skW))), mP, mN, mT);
+  PesTorsoInset(mP, mN, v0.xyz);   // (27/10) igual que el VS de la piel (sombra)
+  float4 v0m = float4(mP, v0.w);
+  float4 p = v0m;
+  if (g_vsObject.m_useWeightCount.x != 0) {
+    float3 hP, hN, hT, hPP; float hDbg;
+    if (PesHandSkin(vid, mP, mN, mT, v4, v5, hP, hN, hT, hPP, hDbg)) {
+      p.xyz = hP;
+    } else {
+      float4 r1 = g_vsBone.m_boneMatrices[v4.y]._m00_m10_m20_m30 * v5.y;
+      float4 r2 = g_vsBone.m_boneMatrices[v4.y]._m01_m11_m21_m31 * v5.y;
+      float4 r3 = g_vsBone.m_boneMatrices[v4.y]._m02_m12_m22_m32 * v5.y;
+      r1 += g_vsBone.m_boneMatrices[v4.x]._m00_m10_m20_m30 * v5.x;
+      r2 += g_vsBone.m_boneMatrices[v4.x]._m01_m11_m21_m31 * v5.x;
+      r3 += g_vsBone.m_boneMatrices[v4.x]._m02_m12_m22_m32 * v5.x;
+      r1 += g_vsBone.m_boneMatrices[v4.z]._m00_m10_m20_m30 * v5.z;
+      r2 += g_vsBone.m_boneMatrices[v4.z]._m01_m11_m21_m31 * v5.z;
+      r3 += g_vsBone.m_boneMatrices[v4.z]._m02_m12_m22_m32 * v5.z;
+      r1 += g_vsBone.m_boneMatrices[v4.w]._m00_m10_m20_m30 * v5.w;
+      r2 += g_vsBone.m_boneMatrices[v4.w]._m01_m11_m21_m31 * v5.w;
+      r3 += g_vsBone.m_boneMatrices[v4.w]._m02_m12_m22_m32 * v5.w;
+      p.x = dot(v0m, r1); p.y = dot(v0m, r2); p.z = dot(v0m, r3);
+    }
+  }
+  p.w = v0.w;
+  float4 r0;
+  r0.x = dot(p, g_vsObject.m_viewWorld._m00_m10_m20_m30);
+  r0.y = dot(p, g_vsObject.m_viewWorld._m01_m11_m21_m31);
+  r0.z = dot(p, g_vsObject.m_viewWorld._m02_m12_m22_m32);
+  r0.w = dot(p, g_vsObject.m_viewWorld._m03_m13_m23_m33);
+  o0.x = dot(r0, g_vsScene.m_projection._m00_m10_m20_m30);
+  o0.y = dot(r0, g_vsScene.m_projection._m01_m11_m21_m31);
+  o0.z = dot(r0, g_vsScene.m_projection._m02_m12_m22_m32);
+  o0.w = dot(r0, g_vsScene.m_projection._m03_m13_m23_m33);
+}
