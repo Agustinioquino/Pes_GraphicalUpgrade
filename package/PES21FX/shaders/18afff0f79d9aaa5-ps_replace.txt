@@ -217,6 +217,15 @@ void main(
     float gl = clamp(Q6.z, 0.0, 2.0);
     o2.y = saturate(o2.y * gl * (0.5 + pesGlossF) * (1.0 - v8.x * 0.5) * (1.0 - 0.5 * pesPaintF));   // (27/10 h) la pintura es mate
     { float3 cg = o0.xyz; float sp = o2.y, rg = o2.x; PESGroundLook(cg, sp, rg, PESGround()); o0.xyz = cg; o2.y = sp; o2.x = rg; }   // suelo humedo / seco
+    // (27/10 n) tanda 11, x329 "transpiracion": en la foto de Agustin algunas hojas sueltas tienen un brillo humedo puntual (rocio / riego) en la
+    // punta, chispas con el sol de frente. Una de cada ~8 hojas del mod (al azar por hoja, v8.z) lleva en la punta mas brillo y menos rugosidad;
+    // solo cerca (pesCf) y no en las pintadas
+    float4 P329 = IniParams.Load(int2(329,0));
+    if (v4.w > 0.0 && P329.x > 0.001) {
+      float dew = step(0.88, frac(v8.z * 11.7 + 0.29)) * smoothstep(0.45, 1.0, relH) * clamp(P329.x, 0.0, 2.0) * pesCf * (1.0 - pesPaintF);
+      o2.y = saturate(o2.y + 0.45 * dew);
+      o2.x = lerp(o2.x, 0.12, saturate(dew));
+    }
   }
   r0.x = dot(v4.xyz, v4.xyz);
   r0.x = rsqrt(r0.x);
@@ -236,6 +245,8 @@ void main(
   if (pesV3) pesTr = lerp(v1.w, saturate(v1.w * (1.35 - 0.8 * pesN.w)), pesCf);   // puntas finas mas translucidas (A = grosor); lejos sin variar
   // (27/10 h) z295: la punta deja pasar mas luz a contraluz (y57 lee esto del G-buffer); la pintura tapa
   if (pesV3) pesTr = saturate(pesTr * (1.0 + 0.35 * smoothstep(0.45, 1.0, relH) * kT * pesCfN) * (1.0 - 0.85 * pesPaintF));   // (27/10 i) pintura: casi opaca (salia lima a contraluz)
+  // (27/10 n) tanda 11, x329: la punta deja pasar mas luz (translucidez al G-buffer, la lee la pasada del sol): hojas encendidas a contraluz
+  if (pesV3 && v4.w > 0.0) { float4 P329t = IniParams.Load(int2(329,0)); pesTr = saturate(pesTr * (1.0 + 0.6 * clamp(P329t.x, 0.0, 2.0) * smoothstep(0.3, 1.0, relH) * pesCfN * (1.0 - pesPaintF))); }
   r0.w = pesTr * 63 + 0.5;
   r1.x = abs(r0.x) + abs(r0.y);
   r1.x = r1.x + abs(r0.z);
