@@ -147,7 +147,7 @@ void HeadShadowPresent() {
             float cr = Dot(c.cw, Rw), cu = Dot(c.cw, Uw), cl = Dot(c.cw, Lw);
             cr = floorf(cr / tx + 0.5f) * tx; cu = floorf(cu / tx + 0.5f) * tx;
             for (int k = 0; k < 3; k++) c.cw[k] = cr * Rw[k] + cu * Uw[k] + cl * Lw[k];
-            ToView(M, c.cw, c.cv, true);
+            toV(c.cw, c.cv, true);   // (merge 27/10) la vista sale de PV (piel 1702504), no de m_view
         }
         // m_projectionView propio: columna 0 = x, 1 = y, 2 = z, 3 = w (cada columna son 4 floats seguidos en memoria)
         float cb[128] = {};
