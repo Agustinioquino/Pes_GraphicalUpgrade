@@ -44,7 +44,7 @@ local PERFIL = true
 -- las funciones definidas adentro)
 local NOJIT = false
 local function modulo_cuello()
-local m = { version = "1.12" }
+local m = { version = "1.13" }
 
 local AXZ = 0.045          -- eje del cuello (z)
 -- borde del cuello del torso TorsoBody v11.3c (x, y, z), ordenado por angulo alrededor del cuello
@@ -861,8 +861,9 @@ local TEX = {
     MINW = 32,                    -- mips mas chicos que esto no se tocan
     -- color del torso TorsoBody justo debajo de la union (albedo sRGB) por tono 1..6
     -- (1.10) tono 1 = torso_1_bsm propio del usuario (el de TorsoBody: 155.3, 115.2, 95.2)
-    TORSO = { { 165.6, 125.5, 105.8 }, { 160.2, 119.6, 92.2 }, { 150.9, 107.6, 84.0 },
-              { 133.7, 96.7, 77.0 }, { 109.9, 77.9, 64.8 }, { 93.7, 68.0, 59.5 } },
+    -- (1.13) tonos 2..6 = el torso_1 propio llevado a cada tono (make_tones.py): su color en el borde del cuello
+    TORSO = { { 165.6, 125.5, 105.8 }, { 169.8, 129.5, 101.8 }, { 159.9, 116.4, 92.9 },
+              { 141.6, 104.6, 85.1 }, { 116.5, 84.3, 71.4 }, { 99.2, 73.5, 65.6 } },
     -- color del cuello de las caras genericas de Konami por tono (head_color_w y o r d b), 25-50 mm sobre la union
     REF = { { 176.3, 136.9, 118.1 }, { 177.8, 134.2, 103.6 }, { 159.2, 118.1, 91.1 },
             { 126.9, 90.1, 67.4 }, { 102.7, 75.5, 62.0 }, { 89.0, 67.8, 58.6 } },
@@ -2181,7 +2182,7 @@ local SEEN_TEX, n_seen = {}, 0      -- texturas de caras que llegaron sin grilla
 local CACHE_DIR = nil                -- se fija en init (ctx.sider_dir .. content\TorsoBody_cuello_cache\)
 local CACHE_OK = true                -- false si no se pudo escribir (carpeta inexistente): se sigue sin cache
 local FROM_CACHE = {}                -- archivos (en minusculas) que Sider esta sirviendo desde la cache
-local CACHE_TAG = "_v20"   -- (1.10) color del tono 1 nuevo
+local CACHE_TAG = "_v21"   -- (1.10) color del tono 1 nuevo
 local function cache_paths(fn)
     if not CACHE_DIR then return nil end
     local id = fn:match("face[\\/]+real[\\/]+([^\\/]+)[\\/]")

@@ -455,3 +455,14 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
   justo arriba del borde (rayos a 3 y 8 mm, extrapolado) contra el borde, 24 angulos, los vertices de los 2.5 cm de abajo se
   mueven en horizontal esa diferencia (entera en el borde, smoothstep a 0 arriba; tope 12 mm; < 1 mm no se toca). Las otras
   mallas de la cara (barba...) usan la diferencia de la piel.
+- (26/10 g) srm / trm sin ruido: el detalle sale de la CURVATURA del normal map (divergencia de xy: poros / pliegues concavos
+  mas mates y mas translucidos), desvanecida 10 px en el borde de las islas; brazo y muslo tambien. Tonos 2..6 del torso
+  (make_tones.py): el torso_1 propio escalado por canal en luz lineal al tono de TorsoBody medido junto al hombro (igual que
+  arm_N_bsm ahi); TorsoBody_cuello 1.13 con el color nuevo del borde del cuello de cada tono.
+- (26/10 g) CUERPO ORIGINAL DE KONAMI (shirtless_body.fmdl, del usuario, solo para medir): su borde del cuello es otra linea:
+  22 vertices, y 1.508 .. 1.558 (TorsoBody 1.478 .. 1.558): adelante 3 cm MAS ARRIBA y 15 mm mas angosto (sube por el cuello),
+  atras 9 mm mas abajo. El cuello de las caras reales llega EXACTO a ese borde (a +3 cm del de TorsoBody adelante: 50.4 mm =
+  50.3 del borde de Konami) y por debajo queda ADENTRO del cuerpo (el pecho alto de Konami es ~9 mm mas lleno junto al cuello:
+  adelante a y 1.478, 75 mm contra 66 de TorsoBody): Konami no corta nada, la cara se mete en el cuerpo y la union es el borde
+  del cuerpo, con las normales iguales. TorsoBody baja el escote 3 cm y afina el pecho alto: el cuello de la cara queda afuera y
+  hay que cortarlo mas abajo de donde la textura de la cara deja de estar pensada para verse.
