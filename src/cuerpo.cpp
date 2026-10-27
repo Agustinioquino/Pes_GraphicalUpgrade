@@ -36,7 +36,7 @@ namespace fx {
 
 static const UINT kCells = 8192, kTabStride = 16 + kCells, kTables = 128;
 static const UINT kRing = 1u << 20;      // vertices deformados por cuadro (maximo)
-static const UINT kStatic = 1u << 18;    // vertices de las mallas registradas
+static const UINT kStatic = 1u << 20;    // vertices de las mallas registradas ((27/10 d) 256 K se llenaba con 20 jugadores: torsos sin registrar = la ropa no choca)
 static const UINT kMeshMax = 12288;      // vertices por malla
 static const UINT kShirtMax = 24576;     // (27/10 d) camisetas (medicion, fila 327.w)
 static const UINT kMeas = 64;            // medicion: 8 zonas x 8
