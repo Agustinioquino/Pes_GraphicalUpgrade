@@ -491,3 +491,12 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
 - (26/10 i) TorsoBody_cuello 1.15: el corte va 8 mm por debajo del borde (CORTE_BAJO; la cara se mete en el torso como en Konami)
   -> sin la rendija en la V de la nuca (el borde del torso tiene vertices entre dos puntos de corte); donde la cara no llega a
   esa altura sus vertices de abajo bajan (hasta 15 mm, smoothstep en los 3 cm de abajo).
+- (26/10 j) DEFINICION EN EL COLOR POR TIPO DE CUERPO (tools/fox/torso/variant_albedo.py; correr DESPUES de make_variants, que
+  escribe rob_m como BC4): medido en el torso_1 propio, su "definicion" es LUZ DE ARRIBA horneada: log L ~ c * (componente y de
+  la normal en espacio objeto menos la de la malla), correlacion 0.60 en 2 mm .. 7 cm (c 0.88; la curvatura sola no explica nada,
+  r -0.06). Se aplica (c = 0.6) al cambio de normal de cada variante (mapa delta + inclinacion de su malla tilt_a/r - tilt_b; el
+  gordo con la base 30 % mas lisa como en el PS): atletico 0.88 .. 1.09 (sombra bajo el pectoral, abdominales, Adonis, espalda),
+  gordo 0.74 .. 1.26 (pliegues de la panza, pecho mas liso). pes_var_torso_rob_m.dds pasa a RGBA8 (R estrias, G gordo, B
+  atletico; 0.5 = nada, factor 1 + (v - 0.5) 0.8). Alfa de torso_N_bsm (6 tonos): lo mismo a escala fina (< 8 mm), 0.93 .. 1.08;
+  el juego no lee el alfa del bsm del cuerpo, el PS de PES21FX si (x311 prendido, y311 por tipo de cuerpo, z311 el alfa). El alfa
+  del torso_1_bsm.dds del usuario (DXT3) estaba roto (fila 0 de cada bloque 255, el resto 0): no tenia detalle.
