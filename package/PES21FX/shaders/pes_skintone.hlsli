@@ -100,10 +100,11 @@ float PesTorsoMask(float3 v) {
 // (27/10) torso bajo la camiseta (fila 320): el torso de TorsoBody (y mas con la musculatura / esculpido) es mas grueso que el cuerpo para
 // el que el juego hizo las camisetas ajustadas: en el menu del jugador y en partido asomaba por la tela en el escote, el costado y la axila
 // (parches de piel sin sombrear). x320 mm que se mete el torso hacia adentro por su normal (fuera del cuello y los brazos, con la misma
-// mascara del torso), w320 on. Con "sin camiseta" (tecla 4 de Sider) bajarlo a 0
+// mascara del torso), w320 on. (27/10 c) z320 lo pone la DLL: 1 = hay camisetas en escena; sin camiseta (menu Apariencia / Fisico,
+// tecla 4 de Sider) el torso queda entero y no hay escalon en la costura con el brazo y el cuello
 void PesTorsoInset(inout float3 mP, float3 mN, float3 rest) {
   float4 T = IniParams.Load(int2(320, 0));
-  if (T.w < 0.5 || T.x <= 0.0) return;
+  if (T.w < 0.5 || T.x <= 0.0 || T.z < 0.5) return;
   float k = PesTorsoMask(rest);
   if (k <= 0.0) return;
   float3 n = mN * rsqrt(max(dot(mN, mN), 1e-8));
