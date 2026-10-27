@@ -479,3 +479,15 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
   junto a la costura (todos los tonos); por tramos de 10 grados alrededor de cada anillo del hombro, el cociente brazo / torso
   (1.5 cm de cada lado, luz lineal, suavizado) se aplica al torso entero en la costura y nada a 5 cm. Despues: 1.00 de media,
   peor tramo 2 .. 3.5 %.
+- (26/10 i) CORTES DE UV Y HOMBRO EN LAS DOS VISTAS (tools/torsobody/seam_tex.py): la linea del hombro era el NORMAL MAP (en la
+  costura el normal map del torso y el del brazo daban 10 grados de diferencia: TorsoBody 8, con el mapa propio 10.4; las
+  normales de malla 2). La baja frecuencia (> 1.2 cm) de color (luz lineal) y del normal map (vector en espacio objeto con el
+  marco del juego, B = cross(N, T) * w) se reparte en una grilla 3D de 6 mm con las texturas del torso y del brazo juntas, se
+  suaviza y en la franja de cada corte (cortes de uv del torso y del brazo + hombro; entero en el corte, nada a 6 cm) reemplaza
+  la de cada texel; a menos de 1 cm el detalle propio de cada lado se va. Junto al borde del cuello (1.2 cm) el normal map del
+  torso se aplana (manda la normal de la malla = la de Konami = la que el modulo pone en la cara). Resultado: 10.4 -> 2.4 grados
+  (malla 2.0). Cambian torso_N_bsm, arm_N_bsm (6 tonos), torsob_nrm, arm_nrm; las variantes de PES21FX regeneradas con eso.
+  PS de la piel: sin el oscurecimiento de la franja del brazo (w293 armBand; ahora el torso quedaba mas claro).
+- (26/10 i) TorsoBody_cuello 1.15: el corte va 8 mm por debajo del borde (CORTE_BAJO; la cara se mete en el torso como en Konami)
+  -> sin la rendija en la V de la nuca (el borde del torso tiene vertices entre dos puntos de corte); donde la cara no llega a
+  esa altura sus vertices de abajo bajan (hasta 15 mm, smoothstep en los 3 cm de abajo).

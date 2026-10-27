@@ -386,7 +386,9 @@ void main(
   r1.w = min(0.930000007, r1.w);
   r2.yzw = g_tex_diffuse.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBD).xyz;
   if (abs(skRed) > 0.001) r2.yzw *= 1.0 + skRed * float3(0.10, -0.03, -0.05);   // (26/10 b) rubor de la piel real
-  if (armBand > 0.001) r2.yzw *= 1.0 - 0.035 * armBand;   // (26/10 e) la franja clara del brazo junto al hombro, al tono del torso
+  // (26/10 i) sin la correccion de la franja clara del brazo: las texturas del torso y del brazo ya son continuas en 3D en el
+  // hombro (tools/torsobody/seam_tex.py); oscurecer el brazo aca dejaba ahora el torso mas claro (la linea del hombro)
+  // if (armBand > 0.001) r2.yzw *= 1.0 - 0.035 * armBand;
   if (pel) r2.yzw *= pesPelvisAlb.SampleBias(g_samplerLinear_Clamp_s, pelUV, bBD).x * 2.0 * pdAlb;   // (26/10 c) tono y manchas de la pelvis (d: y el detalle)
   {   // (26/10, v12.6) unas de los jugadores con textura de brazo propia (caras reales: arm_bsm.ftex de la cara, el atlas de
       // Konami a 2048 con las unas pintadas para la mano de Konami). Solo en la mano de TorsoBody (VS 1c02a92a: v3.w en [2, 3];

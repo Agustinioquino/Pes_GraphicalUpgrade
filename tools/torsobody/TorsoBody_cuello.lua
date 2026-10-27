@@ -44,7 +44,7 @@ local PERFIL = true
 -- las funciones definidas adentro)
 local NOJIT = false
 local function modulo_cuello()
-local m = { version = "1.14" }
+local m = { version = "1.15" }
 
 local AXZ = 0.045          -- eje del cuello (z)
 -- (1.14) borde del cuello del torso con la forma del cuerpo de Konami (tools/fox/torso/neck_konami.py: el anillo de
@@ -1871,6 +1871,11 @@ end
 -- en el borde y nada a SOLDAR m (smoothstep): arriba queda la forma de Konami. Las caras que ya coinciden (< 1 mm) no se tocan.
 local SOLDAR = 0.025
 local SOLDAR_MAX = 0.012
+-- (1.15) con el torso de Konami el cuello de la cara queda ADENTRO del torso por debajo del borde: se corta CORTE_BAJO m mas
+-- abajo del borde (como Konami, la cara se mete un poco en el cuerpo) y asi no queda una rendija donde el borde del torso tiene
+-- vertices entre dos puntos de corte (la V de la nuca). Donde la cara no llega hasta ahi, sus vertices de abajo bajan (hasta
+-- 15 mm, de a poco en los 3 cm de abajo de la cara)
+local CORTE_BAJO = 0.008
 local CUR_DELTA = nil              -- diferencias de la malla de piel de la cara actual (las otras mallas usan las mismas)
 local function band_tris(M)
     local P, sel = M.P, {}
@@ -1935,21 +1940,53 @@ local function weld_deltas(M)
             D[ia] = (l[1] * r_[2] + r_[1] * l[2]) / (l[2] + r_[2])
         end
     end
-    if mx < 0.001 then return nil, string.format("cuello de Konami (%.1f mm)", mx * 1000) end
-    return D, string.format("soldado al borde (hasta %.1f mm)", mx * 1000)
+    -- (1.15) lo mas bajo de la cara en cada angulo (+-10 grados): si no llega a CORTE_BAJO, lo que falta (DY) y donde termina (LOWD)
+    local low = {}
+    for i = 0, M.nv - 1 do
+        local q = M.P[i]
+        if sqrt(q[1] ^ 2 + (q[3] - AXZ) ^ 2) < 0.14 then
+            local f = (deg(atan2(q[1], q[3] - AXZ)) + 180) / 15
+            local dq = M.d[i]
+            for k = floor(f - 0.67), floor(f + 0.67) + 1 do
+                local ia = k % 24
+                if abs(((f - k) + 12) % 24 - 12) <= 0.67 and (not low[ia] or dq > low[ia]) then low[ia] = dq end
+            end
+        end
+    end
+    local DY, LOWD, my = {}, {}, 0
+    for ia = 0, 23 do
+        local lw = low[ia]
+        if lw and lw > -0.02 and lw < CORTE_BAJO then DY[ia] = math.min(CORTE_BAJO - lw, 0.015); LOWD[ia] = lw else DY[ia] = 0; LOWD[ia] = lw or 0 end
+        if DY[ia] > my then my = DY[ia] end
+    end
+    D.DY, D.LOWD = DY, LOWD
+    if mx < 0.001 and my < 0.0005 then return nil, string.format("cuello de Konami (%.1f mm)", mx * 1000) end
+    return D, string.format("soldado al borde (hasta %.1f mm%s)", mx * 1000, my > 0.0005 and string.format(", baja hasta %.1f mm", my * 1000) or "")
 end
 local function weld_move(D, p, d)
-    local w
-    if d >= 0 then w = 1 else
-        local x = -d / SOLDAR; if x >= 1 then return nil end
-        x = 1 - x; w = x * x * (3 - 2 * x)
-    end
     local ox, oz = p[1], p[3] - AXZ
     local l = sqrt(ox * ox + oz * oz); if l < 0.01 then return nil end
     local f = (deg(atan2(ox, oz)) + 180) / 15
     local i0 = floor(f); local t = f - i0
-    local dd = (D[i0 % 24] * (1 - t) + D[(i0 + 1) % 24] * t) * w
-    return { p[1] + ox / l * dd, p[2], p[3] + oz / l * dd }
+    local a, b = i0 % 24, (i0 + 1) % 24
+    local w
+    if d >= 0 then w = 1 else
+        local x = -d / SOLDAR
+        if x >= 1 then w = 0 else x = 1 - x; w = x * x * (3 - 2 * x) end
+    end
+    local dd = (D[a] * (1 - t) + D[b] * t) * w
+    local dy = 0
+    if D.DY then                                   -- (1.15) bajar lo de abajo de la cara donde no llega al corte
+        local gy = D.DY[a] * (1 - t) + D.DY[b] * t
+        if gy > 0 then
+            local lw = D.LOWD[a] * (1 - t) + D.LOWD[b] * t
+            local h = lw - d                          -- altura sobre lo mas bajo de la cara (m)
+            local x = h / 0.03
+            if x < 1 then if x < 0 then x = 0 end; x = 1 - x; dy = gy * x * x * (3 - 2 * x) end
+        end
+    end
+    if dd == 0 and dy == 0 then return nil end
+    return { p[1] + ox / l * dd, p[2] - dy, p[3] + oz / l * dd }
 end
 local function apply_weld(M, plan, D)
     local Pa
@@ -1991,7 +2028,7 @@ local function cut_mesh(F, mi, name, shader)
     if maxd > GAP_OK then note = string.format(" [cuello hasta %.1f mm adentro del torso: ahi se corta mas abajo]", maxd * 1000) end
     local last
     for ti, tr in ipairs(TRIES) do
-        local plan, why = make_plan(M, tr[1], tr[2], tr[3], false, tr[4])
+        local plan, why = make_plan(M, tr[1] + CORTE_BAJO, tr[2] + CORTE_BAJO, tr[3], false, tr[4])
         if DEBUG_CUELLO then log(string.format("  %s intento %d: %s", name, ti, plan and (plan == "nada" and "nada" or plan.msg) or tostring(why))) end
         if plan == "nada" then return nil end
         if plan then
@@ -2020,7 +2057,7 @@ local function cut_mesh(F, mi, name, shader)
         last = why
     end
     -- ultimo recurso: se sacan solo los triangulos que quedan enteros debajo del borde (la V del pecho)
-    local plan = make_plan(M, 0.00005, -0.00005, 0, true)
+    local plan = make_plan(M, 0.00005 + CORTE_BAJO, -0.00005 + CORTE_BAJO, 0, true)
     if plan and plan ~= "nada" then
         apply_plan(M, plan)
         return "corte parcial (" .. tostring(last) .. "): " .. plan.msg .. note
