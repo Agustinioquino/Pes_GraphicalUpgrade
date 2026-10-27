@@ -174,8 +174,8 @@ static void SunFixPresent() {
 // igual) y vuelve. En TV (rotacion simetrica) da exactamente lo mismo que el juego. Emulado con unicorn sobre los bytes del
 // juego con las matrices reales del log: reproduce lo medido sin parche (74.1 / 0.0 / 3.1 grados) y da 0.0 con el parche.
 // (La primera version, 7a8f7d8, trasponia la matriz entera en 0x14171e34a sola: no tocaba la sombra del sol.)
-// sombra_parche: 0 = como el juego, 1 = las dos, 2 = solo la del sol (escena), 3 = solo registro (sin corregir: anota las
-// matrices de la camara y de la luz que lee 0x1416de354, para ver en cual vive el giro).
+// sombra_parche: 0 = como el juego, 1 = corrige m_shadowProjection en el cbuffer de escena (hooks.cpp), 2 = igual que 1,
+// 3 = solo registro (sin corregir: anota las matrices de la camara, la del cuadro anterior y las del shader).
 static const uintptr_t kShadowFixAt = 0x14171e34aull, kShadowFixBack = 0x14171e37aull;
 static const unsigned char kShadowFixOld[48] = {
     0x0f,0x28,0xb2,0x00,0x02,0x00,0x00, 0x44,0x0f,0x28,0xa2,0x20,0x02,0x00,0x00, 0x44,0x0f,0x28,0xd6,
@@ -236,7 +236,10 @@ static int WriteGameCode(uintptr_t at, const void* bytes, size_t n) {   // 1 esc
 }
 
 static void ShadowFixPresent() {
-    if ((s_shadowFixDone && s_sceneFixDone) || g_cfg.motorShadowFix <= 0) return;
+    // (27/10) los modos 1 y 2 ya no tocan el exe: la matriz se corrige en el cbuffer de escena (hooks.cpp, SceneShadowFix).
+    // El sitio 0x1416de354 resulto ser la reproyeccion de la camara (vista del cuadro anterior x inversa de la actual): trasponerla
+    // rompia el TAA ("se ve peor"). Solo el modo 3 engancha ahi, sin cambiar nada, para anotar las matrices.
+    if ((s_shadowFixDone && s_sceneFixDone) || g_cfg.motorShadowFix != 3) return;
     if (!s_cave) {
         s_cave = (unsigned char*)VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
         if (!s_cave) { s_shadowFixDone = s_sceneFixDone = true; Log("motor: sombra_parche: no se pudo reservar memoria para el codigo"); return; }
@@ -257,7 +260,7 @@ static void ShadowFixPresent() {
         int32_t disp2 = (int32_t)((intptr_t)(s_cave + 0x208) - (intptr_t)(q + 7));
         q[0] = 0x48; q[1] = 0x89; q[2] = 0x1d; memcpy(q + 3, &disp2, 4); q += 7;
         memcpy(q, kSceneFixOld, sizeof kSceneFixOld); q += sizeof kSceneFixOld;
-        if (g_cfg.motorShadowFix != 3) { memcpy(q, kSceneCaveT, sizeof kSceneCaveT); q += sizeof kSceneCaveT; }
+        (void)kSceneCaveT;   // la 3x3 traspuesta ya no se usa (ver arriba)
         static const unsigned char kJmp[] = { 0xff,0x25,0x00,0x00,0x00,0x00 };
         memcpy(q, kJmp, sizeof kJmp); q += sizeof kJmp;
         uint64_t back2 = kSceneFixBack; memcpy(q, &back2, 8);
@@ -278,7 +281,7 @@ static void ShadowFixPresent() {
         }
     }
     if (!s_shadowFixDone) {
-        if (g_cfg.motorShadowFix != 1) s_shadowFixDone = true;   // modos 2 y 3: la luz direccional queda como el juego
+        if (g_cfg.motorShadowFix != 0) s_shadowFixDone = true;   // 0x14171e34a ya no se parchea (la sombra del estadio queda como el juego)
         else if (!SigOk(kShadowFixAt, kShadowFixOld, sizeof kShadowFixOld)) {
             if (++s_shadowFixTries == 30) { s_shadowFixDone = true; Log("motor: sombra_parche: los bytes de 0x14171e34a no coinciden con los esperados: la sombra del estadio no se parchea"); }
         } else {
