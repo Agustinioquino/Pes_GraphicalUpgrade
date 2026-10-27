@@ -385,8 +385,27 @@ void main(
   r1.w = max(0.730000019, r1.w);
   r1.w = min(0.930000007, r1.w);
   r2.yzw = g_tex_diffuse.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBD).xyz;
+  {   // (26/10 j) definicion en el color (x311): y311 = la de cada tipo de cuerpo (pes_var_torso_rob_m.dds G = gordo, B = atletico:
+      // la luz de arriba horneada como en el torso_1 propio, sobre el cambio de relieve de la variante; 0.5 = nada); z311 = el alfa
+      // del bsm del torso (detalle fino del relieve; 0.5 = nada; se puede retocar a mano). factor = 1 + (v - 0.5) * 0.8
+    float4 P311 = IniParams.Load(int2(311,0));
+    if (P311.x > 0.5 && vrTm > 0.5 && !pel && v2.y < 0.5 && tbW >= 4096) {
+      if (P311.z > 0.001) {
+        float da = g_tex_diffuse.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBD).w;
+        r2.yzw *= max(1.0 + (da - 0.5) * 0.8 * P311.z, 0.0);
+      }
+      uint dvW = 0, dvH = 0; pesVarStr.GetDimensions(dvW, dvH);
+      if (P311.y > 0.001 && abs(vrT) > 0.001 && dvW > 0) {
+        float3 dvm = pesVarStr.SampleBias(g_samplerLinear_Clamp_s, float2(v2.x, v2.y * 2.0), bBD).xyz;
+        float dv = vrT < 0.0 ? dvm.y : dvm.z;
+        r2.yzw *= max(1.0 + (dv - 0.5) * 0.8 * abs(vrT) * vrTm * P311.y, 0.0);
+      }
+    }
+  }
   if (abs(skRed) > 0.001) r2.yzw *= 1.0 + skRed * float3(0.10, -0.03, -0.05);   // (26/10 b) rubor de la piel real
-  if (armBand > 0.001) r2.yzw *= 1.0 - 0.035 * armBand;   // (26/10 e) la franja clara del brazo junto al hombro, al tono del torso
+  // (26/10 i) sin la correccion de la franja clara del brazo: las texturas del torso y del brazo ya son continuas en 3D en el
+  // hombro (tools/torsobody/seam_tex.py); oscurecer el brazo aca dejaba ahora el torso mas claro (la linea del hombro)
+  // if (armBand > 0.001) r2.yzw *= 1.0 - 0.035 * armBand;
   if (pel) r2.yzw *= pesPelvisAlb.SampleBias(g_samplerLinear_Clamp_s, pelUV, bBD).x * 2.0 * pdAlb;   // (26/10 c) tono y manchas de la pelvis (d: y el detalle)
   {   // (26/10, v12.6) unas de los jugadores con textura de brazo propia (caras reales: arm_bsm.ftex de la cara, el atlas de
       // Konami a 2048 con las unas pintadas para la mano de Konami). Solo en la mano de TorsoBody (VS 1c02a92a: v3.w en [2, 3];

@@ -440,3 +440,63 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
     tools/torsobody/neck_profiles.py lee esas lineas y compara la mediana de las caras con el borde del torso (LOOP), la
     superficie del torso 1 .. 4 cm abajo y el cuello generico de TorsoBody (neck.fmdl). Instalado 27/10 00:35 (backup
     PES21FX\backup_20261027_0040_71f80c7: Lua 1.9, torsob_nrm / srm de la primera version y los pes_var_* que cambiaron).
+- (26/10 g) VISTA ORIGINAL AL NIVEL DE KONAMI (make_srm.py): el srm del cuerpo de un jugador real (Neymar, del usuario) tiene
+  brillo 0.56 de media en la piel y rugosidad 0.68; TorsoBody 0.89 (torso / brazo) y 0.84 (muslo): brillaba mucho mas que la
+  cara. --konami lleva torsob_srm a 0.56 (al del brazo escalado junto al hombro), --escalar arm_srm x 0.626 y thigh_srm x 0.667
+  (la rugosidad igual). trm (translucidez; TorsoBody: gris parejo 0.144, el de Konami trae la piel en grises): --trm torso / arm =
+  zonas de torso_skin (hueso del esternon / columna / clavicula menos, carne mas) a una media de 0.18 x la textura de la piel
+  (alto pasaje del normal map suavizado, +-6 %). El muslo no tiene trm en TorsoBody (usa el thigh_trm del juego). El cuadrante de
+  abajo a la izquierda de torsob_* es un sobrante del cuerpo de Konami: ninguna malla de TorsoBody lo usa.
+- (26/10 g) TorsoBody_cuello 1.11: la 1.10 llamaba a pcall (Sider no lo da) y fallaba en cada cara: no corto ningun cuello.
+- (26/10 g) PERFILES DEL CUELLO (19 caras reales, neck_profiles.py): la mediana de las caras es IGUAL al cuello generico de
+  TorsoBody (en el borde = LOOP al 0.1 mm, a +1 / +2 / +3 cm lo mismo, a -1 cm sigue en la superficie del torso): el torso ya
+  tiene la forma del cuello de Konami. 11 de 19 caras coinciden al 0.5 mm; las otras 8 tienen el cuello hasta 6 .. 8 mm mas
+  fino (o grueso) en algun angulo (frente o costados). No se cambia el torso: TorsoBody_cuello 1.12 SUELDA cada cara: radio
+  justo arriba del borde (rayos a 3 y 8 mm, extrapolado) contra el borde, 24 angulos, los vertices de los 2.5 cm de abajo se
+  mueven en horizontal esa diferencia (entera en el borde, smoothstep a 0 arriba; tope 12 mm; < 1 mm no se toca). Las otras
+  mallas de la cara (barba...) usan la diferencia de la piel.
+- (26/10 g) srm / trm sin ruido: el detalle sale de la CURVATURA del normal map (divergencia de xy: poros / pliegues concavos
+  mas mates y mas translucidos), desvanecida 10 px en el borde de las islas; brazo y muslo tambien. Tonos 2..6 del torso
+  (make_tones.py): el torso_1 propio escalado por canal en luz lineal al tono de TorsoBody medido junto al hombro (igual que
+  arm_N_bsm ahi); TorsoBody_cuello 1.13 con el color nuevo del borde del cuello de cada tono.
+- (26/10 g) CUERPO ORIGINAL DE KONAMI (shirtless_body.fmdl, del usuario, solo para medir): su borde del cuello es otra linea:
+  22 vertices, y 1.508 .. 1.558 (TorsoBody 1.478 .. 1.558): adelante 3 cm MAS ARRIBA y 15 mm mas angosto (sube por el cuello),
+  atras 9 mm mas abajo. El cuello de las caras reales llega EXACTO a ese borde (a +3 cm del de TorsoBody adelante: 50.4 mm =
+  50.3 del borde de Konami) y por debajo queda ADENTRO del cuerpo (el pecho alto de Konami es ~9 mm mas lleno junto al cuello:
+  adelante a y 1.478, 75 mm contra 66 de TorsoBody): Konami no corta nada, la cara se mete en el cuerpo y la union es el borde
+  del cuerpo, con las normales iguales. TorsoBody baja el escote 3 cm y afina el pecho alto: el cuello de la cara queda afuera y
+  hay que cortarlo mas abajo de donde la textura de la cara deja de estar pensada para verse.
+- (26/10 h) TORSO CON EL CUELLO DE KONAMI (tools/fox/torso/neck_konami.py; el fmdl de Konami es del usuario, no va al repo): las
+  mallas 1 y 2 del torso (iguales en los 4 pants_*_sub): el anillo del cuello (48 vertices) va al borde de shirtless_body en el
+  mismo angulo (dy -10 .. +31 mm, hasta 16 mm en horizontal), desplazamiento armonico (Laplace, pesos uniformes) hasta 11 cm de
+  geodesica (la costura del hombro fija), superficie de Konami (punto mas cercano) entera hasta 4 cm y mezclada hasta 10 cm, y
+  ahi las NORMALES del archivo de Konami (las que coinciden con el cuello de las caras; en el anillo, la del borde de Konami en
+  ese angulo). 15 triangulos por lado giran 30 .. 35 grados (costados del anillo, la pendiente de Konami). neck.fmdl (cuello
+  generico): los 6 cm de abajo siguen al anillo nuevo y en los 2 cm de abajo la normal del borde. TorsoBody_cuello 1.14: LOOP /
+  RING_N nuevos. tools/sincamiseta/patch_fpk.py cambia las entradas (mismo tamano) en el common_package.fpk del Global Model y
+  en el sin short (las pelvis con las mallas 1 / 2 nuevas). Variantes de PES21FX regeneradas con esa carpeta common.
+- (26/10 h) COSTURA DEL HOMBRO EN EL COLOR (tools/torsobody/seam_color.py): torso_N_bsm era 1.5 .. 6.5 % mas oscuro que arm_N_bsm
+  junto a la costura (todos los tonos); por tramos de 10 grados alrededor de cada anillo del hombro, el cociente brazo / torso
+  (1.5 cm de cada lado, luz lineal, suavizado) se aplica al torso entero en la costura y nada a 5 cm. Despues: 1.00 de media,
+  peor tramo 2 .. 3.5 %.
+- (26/10 i) CORTES DE UV Y HOMBRO EN LAS DOS VISTAS (tools/torsobody/seam_tex.py): la linea del hombro era el NORMAL MAP (en la
+  costura el normal map del torso y el del brazo daban 10 grados de diferencia: TorsoBody 8, con el mapa propio 10.4; las
+  normales de malla 2). La baja frecuencia (> 1.2 cm) de color (luz lineal) y del normal map (vector en espacio objeto con el
+  marco del juego, B = cross(N, T) * w) se reparte en una grilla 3D de 6 mm con las texturas del torso y del brazo juntas, se
+  suaviza y en la franja de cada corte (cortes de uv del torso y del brazo + hombro; entero en el corte, nada a 6 cm) reemplaza
+  la de cada texel; a menos de 1 cm el detalle propio de cada lado se va. Junto al borde del cuello (1.2 cm) el normal map del
+  torso se aplana (manda la normal de la malla = la de Konami = la que el modulo pone en la cara). Resultado: 10.4 -> 2.4 grados
+  (malla 2.0). Cambian torso_N_bsm, arm_N_bsm (6 tonos), torsob_nrm, arm_nrm; las variantes de PES21FX regeneradas con eso.
+  PS de la piel: sin el oscurecimiento de la franja del brazo (w293 armBand; ahora el torso quedaba mas claro).
+- (26/10 i) TorsoBody_cuello 1.15: el corte va 8 mm por debajo del borde (CORTE_BAJO; la cara se mete en el torso como en Konami)
+  -> sin la rendija en la V de la nuca (el borde del torso tiene vertices entre dos puntos de corte); donde la cara no llega a
+  esa altura sus vertices de abajo bajan (hasta 15 mm, smoothstep en los 3 cm de abajo).
+- (26/10 j) DEFINICION EN EL COLOR POR TIPO DE CUERPO (tools/fox/torso/variant_albedo.py; correr DESPUES de make_variants, que
+  escribe rob_m como BC4): medido en el torso_1 propio, su "definicion" es LUZ DE ARRIBA horneada: log L ~ c * (componente y de
+  la normal en espacio objeto menos la de la malla), correlacion 0.60 en 2 mm .. 7 cm (c 0.88; la curvatura sola no explica nada,
+  r -0.06). Se aplica (c = 0.6) al cambio de normal de cada variante (mapa delta + inclinacion de su malla tilt_a/r - tilt_b; el
+  gordo con la base 30 % mas lisa como en el PS): atletico 0.88 .. 1.09 (sombra bajo el pectoral, abdominales, Adonis, espalda),
+  gordo 0.74 .. 1.26 (pliegues de la panza, pecho mas liso). pes_var_torso_rob_m.dds pasa a RGBA8 (R estrias, G gordo, B
+  atletico; 0.5 = nada, factor 1 + (v - 0.5) 0.8). Alfa de torso_N_bsm (6 tonos): lo mismo a escala fina (< 8 mm), 0.93 .. 1.08;
+  el juego no lee el alfa del bsm del cuerpo, el PS de PES21FX si (x311 prendido, y311 por tipo de cuerpo, z311 el alfa). El alfa
+  del torso_1_bsm.dds del usuario (DXT3) estaba roto (fila 0 de cada bloque 255, el resto 0): no tenia detalle.

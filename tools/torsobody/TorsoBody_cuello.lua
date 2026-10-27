@@ -44,38 +44,39 @@ local PERFIL = true
 -- las funciones definidas adentro)
 local NOJIT = false
 local function modulo_cuello()
-local m = { version = "1.11" }
+local m = { version = "1.15" }
 
 local AXZ = 0.045          -- eje del cuello (z)
--- borde del cuello del torso TorsoBody v11.3c (x, y, z), ordenado por angulo alrededor del cuello
+-- (1.14) borde del cuello del torso con la forma del cuerpo de Konami (tools/fox/torso/neck_konami.py: el anillo de
+-- TorsoBody llevado al borde del cuello de shirtless_body.fmdl, adelante 3 cm mas arriba), ordenado por angulo
 local LOOP = {
-    {-0.02091796, 1.54977679, -0.02082366}, {-0.02596982, 1.55022728, -0.02014828}, {-0.03238868, 1.55158091, -0.01776943}, {-0.05597220, 1.55507994, -0.01210320},
-    {-0.06619130, 1.55667996, -0.00152161}, {-0.07641040, 1.55827999, 0.00905999}, {-0.07733240, 1.55562174, 0.02799818}, {-0.07160983, 1.54583168, 0.04567898},
-    {-0.06993975, 1.54327011, 0.05087034}, {-0.06722610, 1.52743995, 0.06561520}, {-0.06395049, 1.51579320, 0.07701001}, {-0.06309394, 1.51259041, 0.08065862},
-    {-0.05803733, 1.50282192, 0.09062101}, {-0.05049378, 1.49520111, 0.10048424}, {-0.04963913, 1.49439657, 0.10127188}, {-0.04786197, 1.49330199, 0.10226797},
-    {-0.03630891, 1.48727536, 0.10632483}, {-0.03150925, 1.48517525, 0.10845437}, {-0.02275776, 1.48195851, 0.10950296}, {-0.01660986, 1.48024583, 0.11014716},
-    {-0.01220494, 1.47923958, 0.11016960}, {-0.00903625, 1.47869587, 0.11039033}, {-0.00428022, 1.47827744, 0.11066870}, {0.00000008, 1.47800004, 0.11053656},
-    {0.00428052, 1.47827756, 0.11066917}, {0.00903657, 1.47869599, 0.11039079}, {0.01220420, 1.47923934, 0.11017062}, {0.01660888, 1.48024547, 0.11014830},
-    {0.02275626, 1.48195779, 0.10950498}, {0.03150724, 1.48517430, 0.10845628}, {0.03630902, 1.48727548, 0.10632481}, {0.04785028, 1.49329388, 0.10227673},
-    {0.04963555, 1.49439347, 0.10127607}, {0.05049255, 1.49519944, 0.10048728}, {0.05803050, 1.50281358, 0.09062916}, {0.06309199, 1.51258850, 0.08066031},
-    {0.06395046, 1.51579320, 0.07700997}, {0.06722600, 1.52743995, 0.06561510}, {0.06994201, 1.54327142, 0.05086858}, {0.07160910, 1.54582822, 0.04568661},
-    {0.07733440, 1.55562007, 0.02800415}, {0.07641040, 1.55827999, 0.00906000}, {0.06619130, 1.55667996, -0.00152160}, {0.05597220, 1.55507994, -0.01210320},
-    {0.03238868, 1.55158091, -0.01776942}, {0.02596982, 1.55022728, -0.02014828}, {0.02091796, 1.54977679, -0.02082366}, {0.00000261, 1.54799998, -0.02344613},
+    {-0.02168995, 1.54382393, -0.02325291}, {-0.02684778, 1.54487099, -0.02235075}, {-0.03357967, 1.54715112, -0.02007757}, {-0.05597220, 1.55507994, -0.01210320},
+    {-0.06619130, 1.55667996, -0.00152160}, {-0.07641040, 1.55827999, 0.00905999}, {-0.08228222, 1.55020052, 0.02690994}, {-0.08062254, 1.53655194, 0.04576444},
+    {-0.07821916, 1.53319285, 0.05156526}, {-0.06722610, 1.52743995, 0.06561520}, {-0.05769876, 1.52271084, 0.07388075}, {-0.05518635, 1.52139666, 0.07618951},
+    {-0.04809312, 1.51763626, 0.08280423}, {-0.04004638, 1.51616926, 0.08900429}, {-0.03931334, 1.51604151, 0.08956636}, {-0.03805373, 1.51582198, 0.09053219},
+    {-0.02931114, 1.51404835, 0.09450576}, {-0.02497201, 1.51305922, 0.09528945}, {-0.01817604, 1.51151005, 0.09651687}, {-0.01328364, 1.51045208, 0.09710108},
+    {-0.00966491, 1.50984673, 0.09660686}, {-0.00708279, 1.50941479, 0.09625421}, {-0.00330709, 1.50878319, 0.09573856}, {0.00000006, 1.50822998, 0.09528691},
+    {0.00330730, 1.50878322, 0.09573858}, {0.00708299, 1.50941482, 0.09625424}, {0.00966415, 1.50984660, 0.09660675}, {0.01328259, 1.51045190, 0.09710093},
+    {0.01817438, 1.51150967, 0.09651717}, {0.02496985, 1.51305873, 0.09528984}, {0.02931122, 1.51404837, 0.09450574}, {0.03804452, 1.51582038, 0.09053925},
+    {0.03930990, 1.51604091, 0.08956900}, {0.04004451, 1.51616893, 0.08900572}, {0.04808660, 1.51763281, 0.08281031}, {0.05518472, 1.52139580, 0.07619103},
+    {0.05769877, 1.52271085, 0.07388073}, {0.06722600, 1.52743995, 0.06561510}, {0.07823394, 1.53318770, 0.05156433}, {0.08064724, 1.53653514, 0.04577327},
+    {0.08229043, 1.55019306, 0.02691496}, {0.07641040, 1.55827999, 0.00906000}, {0.06619130, 1.55667996, -0.00152160}, {0.05597220, 1.55507994, -0.01210320},
+    {0.03357967, 1.54715112, -0.02007757}, {0.02684779, 1.54487095, -0.02235078}, {0.02169003, 1.54382361, -0.02325319}, {0.00000275, 1.53942025, -0.02704719},
 }
--- (1.9) normal del borde del torso en cada punto de LOOP (= la del cuello generico de TorsoBody en el mismo punto)
+-- (1.14) normal del torso nuevo en cada punto de LOOP
 local RING_N = {
-    {-0.0794, 0.4877, -0.8694}, {-0.1166, 0.4939, -0.8617}, {-0.1772, 0.5227, -0.8339}, {-0.3052, 0.6295, -0.7145},
-    {-0.4518, 0.7380, -0.5011}, {-0.5627, 0.7884, -0.2486}, {-0.6951, 0.6712, 0.2577}, {-0.7397, 0.4998, 0.4507},
-    {-0.7405, 0.4550, 0.4946}, {-0.4822, 0.5432, 0.6873}, {-0.2911, 0.6378, 0.7130}, {-0.2826, 0.6237, 0.7288},
-    {-0.2816, 0.5818, 0.7630}, {-0.2001, 0.5524, 0.8092}, {-0.1976, 0.5407, 0.8177}, {-0.1960, 0.5353, 0.8216},
-    {-0.0816, 0.4849, 0.8707}, {-0.0528, 0.4730, 0.8795}, {-0.0199, 0.4458, 0.8949}, {0.0252, 0.4543, 0.8905},
-    {0.0501, 0.4367, 0.8982}, {0.0484, 0.4436, 0.8949}, {0.0188, 0.4530, 0.8913}, {-0.0000, 0.4550, 0.8905},
-    {-0.0188, 0.4530, 0.8913}, {-0.0484, 0.4436, 0.8949}, {-0.0501, 0.4367, 0.8982}, {-0.0252, 0.4545, 0.8904},
-    {0.0199, 0.4458, 0.8949}, {0.0528, 0.4730, 0.8795}, {0.0816, 0.4849, 0.8707}, {0.1960, 0.5353, 0.8216},
-    {0.1976, 0.5407, 0.8177}, {0.2001, 0.5524, 0.8092}, {0.2816, 0.5818, 0.7630}, {0.2826, 0.6237, 0.7288},
-    {0.2911, 0.6378, 0.7130}, {0.4822, 0.5432, 0.6873}, {0.7404, 0.4552, 0.4945}, {0.7396, 0.5000, 0.4506},
-    {0.6951, 0.6712, 0.2577}, {0.5627, 0.7884, -0.2486}, {0.4518, 0.7380, -0.5011}, {0.3052, 0.6295, -0.7145},
-    {0.1772, 0.5227, -0.8339}, {0.1166, 0.4939, -0.8617}, {0.0794, 0.4877, -0.8694}, {0.0000, 0.4566, -0.8897},
+    {-0.0825, 0.5166, -0.8522}, {-0.1016, 0.5207, -0.8477}, {-0.1506, 0.5491, -0.8220}, {-0.3052, 0.6295, -0.7145},
+    {-0.4554, 0.7402, -0.4946}, {-0.5627, 0.7884, -0.2486}, {-0.5788, 0.7455, 0.3305}, {-0.4740, 0.6861, 0.5518},
+    {-0.4582, 0.6547, 0.6012}, {-0.4822, 0.5432, 0.6873}, {-0.4406, 0.4424, 0.7811}, {-0.4485, 0.4296, 0.7838},
+    {-0.4879, 0.4044, 0.7735}, {-0.4159, 0.3628, 0.8339}, {-0.4086, 0.3587, 0.8393}, {-0.3961, 0.3515, 0.8483},
+    {-0.2909, 0.3198, 0.9017}, {-0.2259, 0.3106, 0.9233}, {-0.1162, 0.2922, 0.9493}, {-0.0473, 0.2800, 0.9588},
+    {-0.0351, 0.2824, 0.9587}, {-0.0260, 0.2841, 0.9584}, {-0.0123, 0.2867, 0.9580}, {0.0000, 0.2889, 0.9574},
+    {0.0123, 0.2867, 0.9580}, {0.0260, 0.2841, 0.9584}, {0.0351, 0.2824, 0.9587}, {0.0473, 0.2800, 0.9588},
+    {0.1162, 0.2922, 0.9493}, {0.2259, 0.3106, 0.9233}, {0.2909, 0.3198, 0.9017}, {0.3960, 0.3514, 0.8484},
+    {0.4086, 0.3587, 0.8393}, {0.4159, 0.3628, 0.8339}, {0.4880, 0.4044, 0.7735}, {0.4485, 0.4296, 0.7838},
+    {0.4406, 0.4424, 0.7811}, {0.4822, 0.5432, 0.6873}, {0.4582, 0.6547, 0.6013}, {0.4739, 0.6860, 0.5521},
+    {0.5785, 0.7457, 0.3305}, {0.5627, 0.7884, -0.2486}, {0.4554, 0.7402, -0.4946}, {0.3052, 0.6295, -0.7145},
+    {0.1506, 0.5491, -0.8220}, {0.1016, 0.5207, -0.8477}, {0.0825, 0.5166, -0.8522}, {-0.0000, 0.4967, -0.8679},
 }
 -- intentos: {corte (m por debajo del borde), vertices hasta esta altura sobre el borde cuentan como borde,
 --            puntos de corte casi iguales que se juntan (m), [vertices de abajo que se pueden dejar (m)]}
@@ -142,6 +143,28 @@ local function ring_n(phi)                 -- (1.9) normal del borde del torso e
     local x, y, z = na[1] + (nb[1] - na[1]) * t, na[2] + (nb[2] - na[2]) * t, na[3] + (nb[3] - na[3]) * t
     local l = sqrt(x * x + y * y + z * z); if l < 1e-9 then return na end
     return { x / l, y / l, z / l }
+end
+
+local function ring_r(phi)                 -- (1.12) distancia horizontal del eje al borde del torso en el angulo phi
+    local y = loop_y(phi)
+    local i
+    if phi < LPH[1] or phi >= LPH[NL] then i = NL
+    else
+        local lo, hi = 1, NL
+        while hi - lo > 1 do
+            local mid = floor((lo + hi) / 2)
+            if LPH[mid] <= phi then lo = mid else hi = mid end
+        end
+        i = lo
+    end
+    local a, b = LOOP[i], LOOP[i % NL + 1]
+    local r = rad(phi); local c, s = cos(r), sin(r)
+    local sa = a[1] * c - (a[3] - AXZ) * s
+    local sb = b[1] * c - (b[3] - AXZ) * s
+    local t = 0
+    if abs(sa - sb) > 1e-15 then t = sa / (sa - sb) end
+    local x, z = a[1] + (b[1] - a[1]) * t, a[3] + (b[3] - a[3]) * t
+    return sqrt(x * x + (z - AXZ) ^ 2), y
 end
 
 -- ---------- lectura / escritura binaria ----------
@@ -839,8 +862,9 @@ local TEX = {
     MINW = 32,                    -- mips mas chicos que esto no se tocan
     -- color del torso TorsoBody justo debajo de la union (albedo sRGB) por tono 1..6
     -- (1.10) tono 1 = torso_1_bsm propio del usuario (el de TorsoBody: 155.3, 115.2, 95.2)
-    TORSO = { { 165.6, 125.5, 105.8 }, { 160.2, 119.6, 92.2 }, { 150.9, 107.6, 84.0 },
-              { 133.7, 96.7, 77.0 }, { 109.9, 77.9, 64.8 }, { 93.7, 68.0, 59.5 } },
+    -- (1.13) tonos 2..6 = el torso_1 propio llevado a cada tono (make_tones.py): su color en el borde del cuello
+    TORSO = { { 165.6, 125.5, 105.8 }, { 169.8, 129.5, 101.8 }, { 159.9, 116.4, 92.9 },
+              { 141.6, 104.6, 85.1 }, { 116.5, 84.3, 71.4 }, { 99.2, 73.5, 65.6 } },
     -- color del cuello de las caras genericas de Konami por tono (head_color_w y o r d b), 25-50 mm sobre la union
     REF = { { 176.3, 136.9, 118.1 }, { 177.8, 134.2, 103.6 }, { 159.2, 118.1, 91.1 },
             { 126.9, 90.1, 67.4 }, { 102.7, 75.5, 62.0 }, { 89.0, 67.8, 58.6 } },
@@ -1839,6 +1863,152 @@ local function neck_profile(M)
     return table.concat(out, " ")
 end
 
+-- (1.12) SOLDADURA POR CARA: el cuello de 11 de 19 caras reales medidas es el de Konami de siempre (en el borde del torso el
+-- radio es el del borde al 0.5 mm: el torso de TorsoBody ya tiene esa forma), pero otras tienen el cuello hasta 8 mm mas
+-- fino o mas grueso en algun angulo: quedaba un escalon (se veia el labio del torso o el cuello salido). Aca, por cara: el
+-- radio del cuello justo arriba del borde (rayos desde el eje a 3 y 8 mm, extrapolado al borde) contra el del borde del
+-- torso, en 24 angulos; los vertices de los SOLDAR m de abajo se mueven en horizontal (desde el eje) esa diferencia, entera
+-- en el borde y nada a SOLDAR m (smoothstep): arriba queda la forma de Konami. Las caras que ya coinciden (< 1 mm) no se tocan.
+local SOLDAR = 0.025
+local SOLDAR_MAX = 0.012
+-- (1.15) con el torso de Konami el cuello de la cara queda ADENTRO del torso por debajo del borde: se corta CORTE_BAJO m mas
+-- abajo del borde (como Konami, la cara se mete un poco en el cuerpo) y asi no queda una rendija donde el borde del torso tiene
+-- vertices entre dos puntos de corte (la V de la nuca). Donde la cara no llega hasta ahi, sus vertices de abajo bajan (hasta
+-- 15 mm, de a poco en los 3 cm de abajo de la cara)
+local CORTE_BAJO = 0.008
+local CUR_DELTA = nil              -- diferencias de la malla de piel de la cara actual (las otras mallas usan las mismas)
+local function band_tris(M)
+    local P, sel = M.P, {}
+    for _, T in ipairs(M.tris) do
+        for _, t in ipairs(T) do
+            local ok = false
+            for k = 1, 3 do
+                local q = P[t[k]]; local dq = depth(q)
+                if dq > -0.045 and dq < 0.06 and sqrt(q[1] ^ 2 + (q[3] - AXZ) ^ 2) < 0.14 then ok = true; break end
+            end
+            if ok then sel[#sel + 1] = t end
+        end
+    end
+    return sel
+end
+local function ray_r(P, sel, phi, oy)
+    local r = rad(phi); local dx, dz = sin(r), cos(r)
+    local best = nil
+    for _, t in ipairs(sel) do
+        local a, b, c = P[t[1]], P[t[2]], P[t[3]]
+        local e1x, e1y, e1z = b[1] - a[1], b[2] - a[2], b[3] - a[3]
+        local e2x, e2y, e2z = c[1] - a[1], c[2] - a[2], c[3] - a[3]
+        local px_, py_, pz_ = -e2y * dz, dz * e2x - dx * e2z, dx * e2y
+        local det = e1x * px_ + e1y * py_ + e1z * pz_
+        if abs(det) > 1e-14 then
+            local inv = 1 / det
+            local tx, ty, tz = -a[1], oy - a[2], AXZ - a[3]
+            local u = (tx * px_ + ty * py_ + tz * pz_) * inv
+            if u >= 0 and u <= 1 then
+                local qx, qy, qz = ty * e1z - tz * e1y, tz * e1x - tx * e1z, tx * e1y - ty * e1x
+                local v = (dx * qx + dz * qz) * inv
+                if v >= 0 and u + v <= 1 then
+                    local s_ = (e2x * qx + e2y * qy + e2z * qz) * inv
+                    if s_ > 0.005 and (not best or s_ < best) then best = s_ end
+                end
+            end
+        end
+    end
+    return best
+end
+local function weld_deltas(M)
+    local sel = band_tris(M)
+    local D, n, mx = {}, 0, 0
+    for ia = 0, 23 do
+        local phi = -180 + ia * 15
+        local rr, y0 = ring_r(phi)
+        local r3, r8 = ray_r(M.P, sel, phi, y0 + 0.003), ray_r(M.P, sel, phi, y0 + 0.008)
+        if r3 and r8 then
+            local d = rr - (r3 + (r3 - r8) * 0.6)
+            if d > SOLDAR_MAX then d = SOLDAR_MAX elseif d < -SOLDAR_MAX then d = -SOLDAR_MAX end
+            D[ia] = d; n = n + 1; if abs(d) > mx then mx = abs(d) end
+        end
+    end
+    if n < 12 then return nil, "sin medida" end
+    for ia = 0, 23 do                                   -- los angulos sin medida: de los vecinos
+        if not D[ia] then
+            local l, r_ = nil, nil
+            for k = 1, 12 do
+                if not l and D[(ia - k) % 24] then l = { D[(ia - k) % 24], k } end
+                if not r_ and D[(ia + k) % 24] then r_ = { D[(ia + k) % 24], k } end
+            end
+            D[ia] = (l[1] * r_[2] + r_[1] * l[2]) / (l[2] + r_[2])
+        end
+    end
+    -- (1.15) lo mas bajo de la cara en cada angulo (+-10 grados): si no llega a CORTE_BAJO, lo que falta (DY) y donde termina (LOWD)
+    local low = {}
+    for i = 0, M.nv - 1 do
+        local q = M.P[i]
+        if sqrt(q[1] ^ 2 + (q[3] - AXZ) ^ 2) < 0.14 then
+            local f = (deg(atan2(q[1], q[3] - AXZ)) + 180) / 15
+            local dq = M.d[i]
+            for k = floor(f - 0.67), floor(f + 0.67) + 1 do
+                local ia = k % 24
+                if abs(((f - k) + 12) % 24 - 12) <= 0.67 and (not low[ia] or dq > low[ia]) then low[ia] = dq end
+            end
+        end
+    end
+    local DY, LOWD, my = {}, {}, 0
+    for ia = 0, 23 do
+        local lw = low[ia]
+        if lw and lw > -0.02 and lw < CORTE_BAJO then DY[ia] = math.min(CORTE_BAJO - lw, 0.015); LOWD[ia] = lw else DY[ia] = 0; LOWD[ia] = lw or 0 end
+        if DY[ia] > my then my = DY[ia] end
+    end
+    D.DY, D.LOWD = DY, LOWD
+    if mx < 0.001 and my < 0.0005 then return nil, string.format("cuello de Konami (%.1f mm)", mx * 1000) end
+    return D, string.format("soldado al borde (hasta %.1f mm%s)", mx * 1000, my > 0.0005 and string.format(", baja hasta %.1f mm", my * 1000) or "")
+end
+local function weld_move(D, p, d)
+    local ox, oz = p[1], p[3] - AXZ
+    local l = sqrt(ox * ox + oz * oz); if l < 0.01 then return nil end
+    local f = (deg(atan2(ox, oz)) + 180) / 15
+    local i0 = floor(f); local t = f - i0
+    local a, b = i0 % 24, (i0 + 1) % 24
+    local w
+    if d >= 0 then w = 1 else
+        local x = -d / SOLDAR
+        if x >= 1 then w = 0 else x = 1 - x; w = x * x * (3 - 2 * x) end
+    end
+    local dd = (D[a] * (1 - t) + D[b] * t) * w
+    local dy = 0
+    if D.DY then                                   -- (1.15) bajar lo de abajo de la cara donde no llega al corte
+        local gy = D.DY[a] * (1 - t) + D.DY[b] * t
+        if gy > 0 then
+            local lw = D.LOWD[a] * (1 - t) + D.LOWD[b] * t
+            local h = lw - d                          -- altura sobre lo mas bajo de la cara (m)
+            local x = h / 0.03
+            if x < 1 then if x < 0 then x = 0 end; x = 1 - x; dy = gy * x * x * (3 - 2 * x) end
+        end
+    end
+    if dd == 0 and dy == 0 then return nil end
+    return { p[1] + ox / l * dd, p[2] - dy, p[3] + oz / l * dd }
+end
+local function apply_weld(M, plan, D)
+    local Pa
+    for _, a in ipairs(M.attrs) do if a.type == 0 and a.fmt == 1 then Pa = a end end
+    if not Pa then return 0 end
+    local n, newset = 0, {}
+    for _, nvd in ipairs(plan.newv) do
+        newset[nvd.v] = true
+        local p = nvd.vals[Pa]
+        if p then local q = weld_move(D, p, 0); if q then nvd.vals[Pa] = { q[1], q[2], q[3], p[4] }; n = n + 1 end end
+    end
+    plan.moves = plan.moves or {}
+    for i = 0, M.nv - 1 do
+        if not newset[i] then
+            local mv = plan.moves[i]
+            local q = weld_move(D, mv or M.P[i], mv and 0 or M.d[i])
+            if q then plan.moves[i] = q; n = n + 1 end
+        end
+    end
+    return n
+end
+
 local function cut_mesh(F, mi, name, shader)
     local M, err = read_mesh(F, mi)
     if not M then return err end
@@ -1858,7 +2028,7 @@ local function cut_mesh(F, mi, name, shader)
     if maxd > GAP_OK then note = string.format(" [cuello hasta %.1f mm adentro del torso: ahi se corta mas abajo]", maxd * 1000) end
     local last
     for ti, tr in ipairs(TRIES) do
-        local plan, why = make_plan(M, tr[1], tr[2], tr[3], false, tr[4])
+        local plan, why = make_plan(M, tr[1] + CORTE_BAJO, tr[2] + CORTE_BAJO, tr[3], false, tr[4])
         if DEBUG_CUELLO then log(string.format("  %s intento %d: %s", name, ti, plan and (plan == "nada" and "nada" or plan.msg) or tostring(why))) end
         if plan == "nada" then return nil end
         if plan then
@@ -1866,6 +2036,18 @@ local function cut_mesh(F, mi, name, shader)
             if NORMALES_TORSO and name:find("skin", 1, true) and (shader == "" or shader:find("skin", 1, true)) then
                 local nn = blend_normals(M, plan)
                 if nn > 0 then note = note .. string.format(" [%d normales de la union]", nn) end
+            end
+            if SOLDAR > 0 then                              -- (1.12) soldadura del cuello de esta cara al borde del torso
+                local D, wmsg = CUR_DELTA, nil
+                if name == "fox_skin_mat" then             -- las otras mallas (barba, etc.) solo con lo de la piel
+                    if PC then local okw, a1, a2 = PC(weld_deltas, M); if okw then D, wmsg = a1, a2 else D, wmsg = nil, "error " .. tostring(a1) end
+                    else D, wmsg = weld_deltas(M) end
+                    CUR_DELTA = D or false
+                end
+                if D then
+                    local nw = apply_weld(M, plan, D)
+                    note = note .. string.format(" [%s, %d vertices]", wmsg or "soldado como la piel", nw)
+                elseif wmsg then note = note .. " [" .. wmsg .. "]" end
             end
             apply_plan(M, plan)
             if bad_vals > 0 then note = note .. string.format(" [%d valores no validos corregidos]", bad_vals) end
@@ -1875,7 +2057,7 @@ local function cut_mesh(F, mi, name, shader)
         last = why
     end
     -- ultimo recurso: se sacan solo los triangulos que quedan enteros debajo del borde (la V del pecho)
-    local plan = make_plan(M, 0.00005, -0.00005, 0, true)
+    local plan = make_plan(M, 0.00005 + CORTE_BAJO, -0.00005 + CORTE_BAJO, 0, true)
     if plan and plan ~= "nada" then
         apply_plan(M, plan)
         return "corte parcial (" .. tostring(last) .. "): " .. plan.msg .. note
@@ -2038,7 +2220,7 @@ local SEEN_TEX, n_seen = {}, 0      -- texturas de caras que llegaron sin grilla
 local CACHE_DIR = nil                -- se fija en init (ctx.sider_dir .. content\TorsoBody_cuello_cache\)
 local CACHE_OK = true                -- false si no se pudo escribir (carpeta inexistente): se sigue sin cache
 local FROM_CACHE = {}                -- archivos (en minusculas) que Sider esta sirviendo desde la cache
-local CACHE_TAG = "_v20"   -- (1.10) color del tono 1 nuevo
+local CACHE_TAG = "_v22"   -- (1.10) color del tono 1 nuevo
 local function cache_paths(fn)
     if not CACHE_DIR then return nil end
     local id = fn:match("face[\\/]+real[\\/]+([^\\/]+)[\\/]")
@@ -2169,7 +2351,7 @@ local function data_ready(ctx, filename, data, size, total_size, offset)
         end
     end
     local patches, grids = PATCH, CUR_GRIDS
-    BUF, PATCH, CUR_GRIDS, CUR_FACE_KEY = nil, nil, nil, nil
+    BUF, PATCH, CUR_GRIDS, CUR_FACE_KEY, CUR_DELTA = nil, nil, nil, nil, nil
     if #patches > 0 then
         local newbuf = apply_patches(buf, patches)
         if not newbuf or #newbuf ~= size then
