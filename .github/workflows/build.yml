@@ -37,10 +37,11 @@ jobs:
           git init -q
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
-          git checkout -q -b buildlog
+          $dest = if ($env:GITHUB_REF_NAME -eq 'main') { 'buildlog' } else { 'buildlog-' + $env:GITHUB_REF_NAME }
+          git checkout -q -b $dest
           git add -A
           git commit -q -m "fallo $env:GITHUB_SHA"
-          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" buildlog
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" $dest
           exit 1
 
       # compila cada shader con fxc (el mismo compilador que usa el juego) y publica los errores en shadercheck.txt
@@ -74,10 +75,11 @@ jobs:
           git init -q
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
-          git checkout -q -b buildlog
+          $dest = if ($env:GITHUB_REF_NAME -eq 'main') { 'buildlog' } else { 'buildlog-' + $env:GITHUB_REF_NAME }
+          git checkout -q -b $dest
           git add -A
           git commit -q -m "shaders $env:GITHUB_SHA"
-          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" buildlog
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" $dest
           exit 1
 
       - name: Armar el paquete
@@ -105,7 +107,9 @@ jobs:
           git init -q
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
-          git checkout -q -b build
+          # main -> rama "build"; otra rama (prueba / integracion) -> "build-<rama>", para no pisar el paquete estable ni a otra sesion
+          $dest = if ($env:GITHUB_REF_NAME -eq 'main') { 'build' } else { 'build-' + $env:GITHUB_REF_NAME }
+          git checkout -q -b $dest
           git add -A
           git commit -q -m "build $env:GITHUB_SHA"
-          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" build
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" $dest
