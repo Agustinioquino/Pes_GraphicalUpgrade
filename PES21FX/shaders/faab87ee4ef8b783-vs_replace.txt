@@ -1,0 +1,197 @@
+// PES 2021 - vertex shader de la cabeza / cara (malla animada por huesos; PS de cara 5ce3ed87 / ce188ae1, boca, ojos y la
+// cabeza de las caras genericas con el PS de la piel aa7d1833)
+// PES21 FX (24/10 c): igual al del juego (volcado por 3Dmigoto) mas el jugador de la tabla de tonos de piel en o6.w
+// (pes_skintone.hlsli: 1000 + entrada, 999 = ninguno; el juego no escribe o3.w..o6.w en este VS)
+// ---- Created with 3Dmigoto v1.3.16 on Thu Oct 08 21:08:19 2026
+
+cbuffer cVSScene : register(b2)
+{
+
+  struct
+  {
+    float4x4 m_projectionView;
+    float4x4 m_projection;
+    float4x4 m_view;
+    float4x4 m_shadowProjection;
+    float4x4 m_shadowProjection2;
+    float4 m_eyepos;
+    float4 m_projectionParam;
+    float4 m_viewportSize;
+    float4 m_exposure;
+    float4 m_fogParam[3];
+    float4 m_fogColor;
+    float4 m_cameraCenterOffset;
+    float4 m_shadowMapResolutions;
+  } g_vsScene : packoffset(c0);
+
+}
+
+cbuffer cVSObject : register(b5)
+{
+
+  struct
+  {
+    float4x4 m_viewWorld;
+    float4x4 m_world;
+    float4 m_useWeightCount;
+    float4 m_localParam[9];
+  } g_vsObject : packoffset(c0);
+
+}
+
+cbuffer VSBones : register(b6)
+{
+
+  struct
+  {
+    float4x3 m_boneMatrices[32];
+  } g_vsBone : packoffset(c0);
+
+
+  struct
+  {
+    float4x3 m_boneMatrices[32];
+  } g_vsPrevBone : packoffset(c96);
+
+}
+
+
+
+// 3Dmigoto declarations
+#define cmp -
+Texture1D<float4> IniParams : register(t120);
+Texture2D<float4> StereoParams : register(t125);
+#include "pes_skintone.hlsli"
+
+
+void main(
+  float4 v0 : POSITION0,
+  float4 v1 : NORMAL0,
+  float4 v2 : TANGENT0,
+  uint4 v3 : BLENDINDICES0,
+  float4 v4 : BLENDWEIGHT0,
+  float4 v5 : TEXCOORD0,
+  float4 v6 : TEXCOORD1,
+  float4 v7 : TEXCOORD2,
+  float2 v8 : TEXCOORD3,
+  out float4 o0 : SV_Position0,
+  out float4 o1 : COLOR0,
+  out float2 o2 : TEXCOORD0,
+  out float4 p2 : TEXCOORD9,   // (27/10 c) zw = posicion de reposo (y, x)
+  out float4 o3 : TEXCOORD4,
+  out float4 o4 : TEXCOORD5,
+  out float4 o5 : TEXCOORD6,
+  out float4 o6 : TEXCOORD7,
+  out float4 o7 : TEXCOORD8)
+{
+  float4 r0,r1,r2,r3,r4,r5,r6;
+  uint4 bitmask, uiDest;
+  float4 fDest;
+
+  r0.x = cmp(g_vsObject.m_useWeightCount.x != 0.000000);
+  if (r0.x != 0) {
+    r0.xyzw = (int4)v3.xyzw * int4(3,3,3,3);
+    r1.xyzw = g_vsBone.m_boneMatrices[v3.y]._m00_m10_m20_m30 * v4.yyyy;
+    r2.xyzw = g_vsBone.m_boneMatrices[v3.y]._m01_m11_m21_m31 * v4.yyyy;
+    r3.xyzw = g_vsBone.m_boneMatrices[v3.y]._m02_m12_m22_m32 * v4.yyyy;
+    r1.xyzw = g_vsBone.m_boneMatrices[v3.x]._m00_m10_m20_m30 * v4.xxxx + r1.xyzw;
+    r2.xyzw = g_vsBone.m_boneMatrices[v3.x]._m01_m11_m21_m31 * v4.xxxx + r2.xyzw;
+    r3.xyzw = g_vsBone.m_boneMatrices[v3.x]._m02_m12_m22_m32 * v4.xxxx + r3.xyzw;
+    r1.xyzw = g_vsBone.m_boneMatrices[v3.z]._m00_m10_m20_m30 * v4.zzzz + r1.xyzw;
+    r2.xyzw = g_vsBone.m_boneMatrices[v3.z]._m01_m11_m21_m31 * v4.zzzz + r2.xyzw;
+    r3.xyzw = g_vsBone.m_boneMatrices[v3.z]._m02_m12_m22_m32 * v4.zzzz + r3.xyzw;
+    r1.xyzw = g_vsBone.m_boneMatrices[v3.w]._m00_m10_m20_m30 * v4.wwww + r1.xyzw;
+    r2.xyzw = g_vsBone.m_boneMatrices[v3.w]._m01_m11_m21_m31 * v4.wwww + r2.xyzw;
+    r3.xyzw = g_vsBone.m_boneMatrices[v3.w]._m02_m12_m22_m32 * v4.wwww + r3.xyzw;
+    r4.x = dot(v0.xyzw, r1.xyzw);
+    r4.y = dot(v0.xyzw, r2.xyzw);
+    r4.z = dot(v0.xyzw, r3.xyzw);
+    r5.x = dot(v1.xyz, r1.xyz);
+    r5.y = dot(v1.xyz, r2.xyz);
+    r5.z = dot(v1.xyz, r3.xyz);
+    r1.x = dot(v2.xyz, r1.xyz);
+    r1.y = dot(v2.xyz, r2.xyz);
+    r1.z = dot(v2.xyz, r3.xyz);
+    r2.xyzw = g_vsPrevBone.m_boneMatrices[v3.y]._m00_m10_m20_m30 * v4.yyyy;
+    r3.xyzw = g_vsPrevBone.m_boneMatrices[v3.y]._m01_m11_m21_m31 * v4.yyyy;
+    r6.xyzw = g_vsPrevBone.m_boneMatrices[v3.y]._m02_m12_m22_m32 * v4.yyyy;
+    r2.xyzw = g_vsPrevBone.m_boneMatrices[v3.x]._m00_m10_m20_m30 * v4.xxxx + r2.xyzw;
+    r3.xyzw = g_vsPrevBone.m_boneMatrices[v3.x]._m01_m11_m21_m31 * v4.xxxx + r3.xyzw;
+    r6.xyzw = g_vsPrevBone.m_boneMatrices[v3.x]._m02_m12_m22_m32 * v4.xxxx + r6.xyzw;
+    r2.xyzw = g_vsPrevBone.m_boneMatrices[v3.z]._m00_m10_m20_m30 * v4.zzzz + r2.xyzw;
+    r3.xyzw = g_vsPrevBone.m_boneMatrices[v3.z]._m01_m11_m21_m31 * v4.zzzz + r3.xyzw;
+    r6.xyzw = g_vsPrevBone.m_boneMatrices[v3.z]._m02_m12_m22_m32 * v4.zzzz + r6.xyzw;
+    r2.xyzw = g_vsPrevBone.m_boneMatrices[v3.w]._m00_m10_m20_m30 * v4.wwww + r2.xyzw;
+    r3.xyzw = g_vsPrevBone.m_boneMatrices[v3.w]._m01_m11_m21_m31 * v4.wwww + r3.xyzw;
+    r0.xyzw = g_vsPrevBone.m_boneMatrices[v3.w]._m02_m12_m22_m32 * v4.wwww + r6.xyzw;
+    r2.x = dot(v0.xyzw, r2.xyzw);
+    r2.y = dot(v0.xyzw, r3.xyzw);
+    r2.z = dot(v0.xyzw, r0.xyzw);
+  } else {
+    r5.xyz = v1.xyz;
+    r1.xyz = v2.xyz;
+    r4.xyz = v0.xyz;
+    r2.xyz = v0.xyz;
+  }
+  r4.w = v0.w;
+  r0.x = dot(r4.xyzw, g_vsObject.m_viewWorld._m00_m10_m20_m30);
+  r0.y = dot(r4.xyzw, g_vsObject.m_viewWorld._m01_m11_m21_m31);
+  r0.z = dot(r4.xyzw, g_vsObject.m_viewWorld._m02_m12_m22_m32);
+  r0.w = dot(r4.xyzw, g_vsObject.m_viewWorld._m03_m13_m23_m33);
+  r3.x = dot(r0.xyzw, g_vsScene.m_projection._m00_m10_m20_m30);
+  r3.y = dot(r0.xyzw, g_vsScene.m_projection._m01_m11_m21_m31);
+  o0.z = dot(r0.xyzw, g_vsScene.m_projection._m02_m12_m22_m32);
+  r3.w = dot(r0.xyzw, g_vsScene.m_projection._m03_m13_m23_m33);
+  r2.w = v0.w;
+  r4.x = dot(r2.xyzw, g_vsScene.m_shadowProjection._m00_m10_m20_m30);
+  r4.y = dot(r2.xyzw, g_vsScene.m_shadowProjection._m01_m11_m21_m31);
+  r4.z = dot(r2.xyzw, g_vsScene.m_shadowProjection._m02_m12_m22_m32);
+  r4.w = dot(r2.xyzw, g_vsScene.m_shadowProjection._m03_m13_m23_m33);
+  o7.z = dot(r4.xyzw, g_vsScene.m_shadowProjection2._m00_m10_m20_m30);
+  o7.w = dot(r4.xyzw, g_vsScene.m_shadowProjection2._m01_m11_m21_m31);
+  p2.y = dot(r4.xyzw, g_vsScene.m_shadowProjection2._m03_m13_m23_m33);
+  r0.w = dot(r0.xyz, r0.xyz);
+  r0.w = rsqrt(r0.w);
+  r0.xyz = r0.xyz * r0.www;
+  r2.x = dot(r5.xyz, g_vsObject.m_viewWorld._m00_m10_m20);
+  r2.y = dot(r5.xyz, g_vsObject.m_viewWorld._m01_m11_m21);
+  r2.z = dot(r5.xyz, g_vsObject.m_viewWorld._m02_m12_m22);
+  r0.w = dot(r2.xyz, r2.xyz);
+  r0.w = rsqrt(r0.w);
+  r2.xyz = r2.xyz * r0.www;
+  r4.x = dot(r1.xyz, g_vsObject.m_viewWorld._m00_m10_m20);
+  r4.y = dot(r1.xyz, g_vsObject.m_viewWorld._m01_m11_m21);
+  r4.z = dot(r1.xyz, g_vsObject.m_viewWorld._m02_m12_m22);
+  r0.w = dot(r4.xyz, r4.xyz);
+  r0.w = rsqrt(r0.w);
+  r1.xyz = r4.xyz * r0.www;
+  r4.xyz = r2.zxy * r1.yzx;
+  r4.xyz = r2.yzx * r1.zxy + -r4.xyz;
+  r0.w = dot(r4.xyz, r4.xyz);
+  r0.w = rsqrt(r0.w);
+  r4.xyz = r4.xyz * r0.www;
+  r4.xyz = v2.www * r4.xyz;
+  o3.xyz = -r0.xyz;
+  // (27/10 c) posicion de REPOSO del vertice (v0, espacio del modelo, metros) para los poros triplanares (pes_pores.hlsli):
+  // z en o3.w + 10 (asi no cae en el [2, 3] del peso del musculo del cuerpo en aa7d), (y, x) en TEXCOORD9.zw como el VS del cuerpo
+  o3.w = 10.0 + v0.z;
+  p2.z = v0.y; p2.w = v0.x;
+  o4.xyz = r1.xyz;
+  o5.xyz = r4.xyz;
+  o6.xyz = r2.xyz;
+  o0.xyw = r3.xyw;
+  o1.xyz = float3(1,1,1);
+  o1.w = g_vsObject.m_useWeightCount.w;
+  o7.xy = r3.xy;
+  o2.xy = v5.xy;
+  p2.x = r3.w;
+  {   // (24/10 c) tono de piel por jugador: un punto del dibujo en el mundo (pes_skintone.hlsli) -> entrada mas cercana
+    bool sk = g_vsObject.m_useWeightCount.x != 0;
+    float3 b0 = float3(g_vsBone.m_boneMatrices[0]._m30, g_vsBone.m_boneMatrices[0]._m31, g_vsBone.m_boneMatrices[0]._m32);
+    float3 b0b = float3(g_vsPrevBone.m_boneMatrices[0]._m30, g_vsPrevBone.m_boneMatrices[0]._m31, g_vsPrevBone.m_boneMatrices[0]._m32);
+    float3 sw = PesSkinPoint(g_vsObject.m_world, g_vsObject.m_viewWorld, g_vsScene.m_view, b0, b0b, sk);
+    int se = PesSkinNearest(sw);
+    o6.w = se >= 0 ? 1000.0 + se : 999.0;
+  }
+  return;
+}

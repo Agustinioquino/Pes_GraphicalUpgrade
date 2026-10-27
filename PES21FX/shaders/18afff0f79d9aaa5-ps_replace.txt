@@ -1,0 +1,303 @@
+// ---- Created with 3Dmigoto v1.3.16 on Thu Oct 08 21:08:33 2026
+// PES 2021 - Pasto 3D: pixel shader de las hojas  [hash 18afff0f79d9aaa5]
+// PES21 pasto v3 (19/10): atlas propio de hojas (t8 color/oclusion/brillo/alfa, t9 normal/altura/grosor) en vez del
+// manojo de 128x128 del juego, normal por hoja (cada hoja se ve cilindrica), sombra entre hojas que crece con el sol
+// bajo, puntas mas palidas, pasto seco por desgaste, brillo y translucidez por grosor. x104 on/off.
+
+cbuffer cPSSystem : register(b0)
+{
+
+  struct
+  {
+    float4 m_param;
+    float4 m_renderInfo;
+    float4 m_renderBuffer;
+    float4 m_dominantLightDir;
+    float4 m_timeParam;
+  } g_psSystem : packoffset(c0);
+
+}
+
+SamplerState g_samplerLinear_Wrap_s : register(s10);
+Texture2D<float4> g_tex_grassDiffuse : register(t7);
+Texture2D<float4> PESGrassAtlas : register(t8);    // PES21: textures\pes_grass_blades.dds, 4 manojos de 512 en tira (R claridad, G oclusion, B brillo, A alfa)
+Texture2D<float4> PESGrassAtlasN : register(t9);   // PES21: textures\pes_grass_blades_n.dds (RG normal, B altura raiz->punta, A grosor)
+Texture2D<float4> PESBaseRT0 : register(t10);       // PES21 (26/10 g): copia del suelo ya dibujado (RT0), solo en las hojas lejanas del mod (x291)
+
+
+// 3Dmigoto declarations
+#define cmp -
+Texture1D<float4> IniParams : register(t120);
+Texture2D<float4> StereoParams : register(t125);
+#include "pes_grass.hlsli"
+
+
+float bh21(float2 p) { p = frac(p * float2(123.34, 456.21)); p += dot(p, p + 45.32); return frac(p.x * p.y); }
+void main(
+  float4 v0 : SV_Position0,
+  float4 v1 : TEXCOORD0,
+  float4 v2 : TEXCOORD1,
+  float4 v3 : TEXCOORD2,
+  float4 v4 : TEXCOORD3,
+  float4 v5 : TEXCOORD4,
+  float4 v6 : TEXCOORD5,
+  float2 v7 : TEXCOORD6,
+  float4 v8 : TEXCOORD7,
+  out float4 o0 : SV_Target0,
+  out float4 o1 : SV_Target1,
+  out float4 o2 : SV_Target2,
+  out float4 o3 : SV_Target3,
+  out float4 o4 : SV_Target4)
+{
+  float4 r0,r1;
+  uint4 bitmask, uiDest;
+  float4 fDest;
+
+  r0.xyzw = v6.xyzw / v7.xxyy;
+  r0.xyzw = r0.xyzw * float4(0.5,0.5,0.5,0.5) + float4(0.5,0.5,0.5,0.5);
+  r0.xyzw = r0.zwxy * float4(1,-1,1,-1) + float4(0,1,0,1);
+  r0.xy = r0.zw + -r0.xy;
+  o3.xy = g_psSystem.m_renderBuffer.xy * r0.xy;
+  r0.x = cmp(v2.y < 0);
+  if (r0.x != 0) discard;
+  // === PES21 pasto v3: atlas propio
+  float4 Q4 = IniParams.Load(int2(104,0));
+  bool pesV3 = Q4.x > 0.5 && v8.w > 0.5;   // v8.w = 1 + banda del atlas (0 = VS sin v3)
+  // (26/10 f) pasto tanda 6: v8.w + 8 = la DLL dibuja estas hojas del mod mezclando el color con el suelo ya dibujado (alfa de o0)
+  bool pesFB = pesV3 && v8.w > 8.5;
+  // lejos -> cerca de las hojas del mod (px/m del vertice, y291 / z291): lejos la hoja toma el color, las lineas, el desgaste y la luz
+  // horneada de la base y deja sus terminos por hoja (oclusion de la raiz, claridad, puntas, brillo, normal y translucidez del atlas):
+  // eran el granulado de lejos (cada hoja de 2-6 px con otra receta que el suelo de al lado). Cerca (>= 140 px/m) queda como antes
+  float4 P291 = IniParams.Load(int2(291,0));
+  float pesCf = 1.0;
+  if (pesV3 && v4.w > 0.0 && P291.x > 0.5) { float c0 = max(P291.y, 1.0), c1 = max(P291.z, c0 + 1.0); pesCf = smoothstep(c0, c1, v4.w); }
+  float4 Q5 = IniParams.Load(int2(105,0)), Q6 = IniParams.Load(int2(106,0)), Q7 = IniParams.Load(int2(107,0));
+  // (27/10 h) pasto tanda 7 (la foto): x295 hojas pintadas por la linea (lo decide el VS por hoja: v5.w negativo), y295 contraste y definicion
+  // por hoja (0 = como la tanda 6, 1 = natural, 2 = exagerado), z295 puntas al sol (mas claras y amarillo verdosas), v8.z = valor al azar por hoja
+  float4 P295 = IniParams.Load(int2(295,0));
+  float pesPaintF = pesV3 ? saturate(-v5.w) : 0.0;
+  float kC = pesV3 ? clamp(P295.y, 0.0, 2.0) : 0.0;
+  float kT = pesV3 ? clamp(P295.z, 0.0, 2.0) : 0.0;
+  float sC = 0.9 + 0.3 * kC;   // pendiente de la claridad del atlas (R): 0.9 = como antes
+  // (27/10 j) puntas al sol y variacion por hoja solo donde la hoja ya mide en pantalla: rampa por encima del limite del color propio (z291)
+  // hasta 2.2x. Antes entraban de golpe en z291 y en el limite de nivel (100-110 px/m) se veia una fila de puntitos encendidos
+  float pesCfN = 1.0;
+  if (pesV3 && v4.w > 0.0) { float c1 = max(P291.x > 0.5 ? P291.z : 100.0, 20.0); pesCfN = smoothstep(c1, c1 * 2.2, v4.w); }
+  float relH = saturate((0.995 - v1.y) / 0.985);   // 0 raiz -> 1 punta (v1.y = 1 en la raiz)
+  float2 uvA = v1.xy;
+  if (pesV3) {
+    if (Q5.w > 0.5) uvA.y = 1.0 - uvA.y;   // raiz del atlas arriba
+    float band = clamp(floor(v8.w - (pesFB ? 8.0 : 0.0) - 0.5), 0.0, 3.0);   // banda del manojo (la elige el VS: tipo de pasto + parcela)
+    uvA.x = (saturate(v1.x) + band) * 0.25;
+  }
+  float atlasPx = 128.0;   // el fundido de la oclusion por distancia se mide como el juego (tamano en pantalla, no del atlas)
+  float4 pesN = float4(0.5, 0.5, 0.0, 1.0);
+  // derivadas fuera de la rama (muestreo con gradiente explicito adentro)
+  float2 dUx = ddx(uvA), dUy = ddy(uvA);
+  if (pesV3) {
+    // (27/10 j) pegado a la camara (>= 600 px/m) el atlas se muestrea mas nitido (gradientes a la mitad = un mip mas fino): las hojas de
+    // muy cerca se veian blandas, "con poco detalle"
+    float shp = lerp(1.0, 0.5, smoothstep(600.0, 1500.0, abs(v4.w)));
+    r0.xyzw = PESGrassAtlas.SampleGrad(g_samplerLinear_Wrap_s, uvA, dUx * shp, dUy * shp).xyzw;
+    pesN = PESGrassAtlasN.SampleGrad(g_samplerLinear_Wrap_s, uvA, dUx * shp, dUy * shp).xyzw;
+    // de lejos el filtrado adelgaza el alfa: se compensa un poco con el nivel de mip
+    float2 dd = max(abs(dUx), abs(dUy)) * float2(2048.0, 512.0);
+    float lod = log2(max(max(dd.x, dd.y), 1.0));
+    r0.w = saturate(r0.w * (1.0 + 0.12 * lod));
+  } else {
+    r0.xyzw = g_tex_grassDiffuse.SampleGrad(g_samplerLinear_Wrap_s, v1.xy, dUx, dUy).xyzw;
+  }
+  r0.w = -0.300000012 + r0.w;
+  r0.w = cmp(r0.w < 0);
+  if (r0.w != 0) discard;
+  float pesLight = r0.x;                     // claridad (0.5 neutro) del atlas propio
+  float pesGloss = r0.z;
+  // (27/10 l) tanda 9a, y299: a media distancia (30-100 px/m, camara de TV) una hoja mide 1-2 px y lo que pasa el recorte del alfa es su
+  // raiz, que lleva la oclusion del atlas (G ~ 0.2): cada hoja era un punto al 50-75 % de brillo sobre el suelo ("manchas negras", lineas
+  // sucias). Mientras la hoja toma el color del suelo (pesCf < 1) la oclusion se lee de un mip grueso del atlas (el promedio del manojo)
+  float4 P299 = IniParams.Load(int2(299,0));
+  if (pesV3 && v4.w > 0.0 && pesCf < 0.999 && P299.y > 0.5) r0.y = lerp(PESGrassAtlas.SampleLevel(g_samplerLinear_Wrap_s, uvA, 5.0).y, r0.y, pesCf);
+  r0.w = r0.y + r0.y;
+  r0.y = -r0.y * 2 + 1;
+  r0.y = v3.w * r0.y + r0.w;
+  if (pesV3) {
+    // sombra entre hojas: oclusion del atlas (2*G), mas fuerte con el sol bajo (las raices quedan en sombra)
+    float sunUp = saturate(PESSunWorld().y);   // (20/10) sol en mundo publicado por la DLL
+    float aoK = clamp(Q6.y, 0.0, 2.0) * (1.15 - 0.45 * sunUp);
+    r0.y = 1.0 - (1.0 - r0.w) * aoK;
+  }
+  r0.w = cmp(r0.y < 1);
+  if (r0.w != 0) {
+    float pesPxV = abs(v4.w);   // (26/10 d) pixeles por metro del vertice (lo manda el VS; 0 con un VS viejo)
+    if (pesPxV >= 1.0) {
+      // (26/10 d) fundido de la oclusion por tamano en pantalla de una hoja nominal de 1.2 cm, continuo con la distancia: con las
+      // derivadas del uv saltaba en los limites de nivel (tarjetas de 1.5 px contra 4 px) y oscurecia de mas cerca de la camara
+      r0.w = saturate(1.55 - 0.22 * log2(128.0 / max(0.012 * pesPxV, 0.05)));
+      // (26/10 f) hojas del mod: fundido fijo (z290, 0.45). La oclusion del atlas no depende de la distancia (el mip ya la promedia); con el
+      // fundido por px/m la cancha se oscurecia al acercar la camara (1% a 110 px/m, 6% a 300, 9% a 700)
+      float zA = IniParams.Load(int2(290,0)).z;
+      if (v4.w > 0.0 && zA > 0.001) r0.w = saturate(zA);
+    } else {
+    r1.xy = float2(atlasPx, atlasPx) * v1.xy;
+    r1.zw = ddx_coarse(r1.xy);
+    r1.xy = ddy_coarse(r1.xy);
+    r0.w = dot(r1.zw, r1.zw);
+    r1.x = dot(r1.xy, r1.xy);
+    r0.w = max(r1.x, r0.w);
+    r0.w = log2(r0.w);
+    r0.w = saturate(-r0.w * 0.11 + 1.55);   // PES21: pasto 3D visible hasta mucho mas lejos
+    }
+    r1.x = saturate(-v2.w * 0.600000024 + 1);
+    r0.w = r1.x * r0.w;
+    r1.x = -1 + r0.y;
+    r0.y = r0.w * r1.x + 1;
+    { float gsK = IniParams.Load(int2(10,0)).y; r0.y = max(0.0, 1.0 - (1.0 - r0.y) * (1.0 + 0.45 * saturate(gsK))); }   // PES21 v2: sombreado entre hojas mas marcado (y10)
+  }
+  r1.xyz = v3.xyz * r0.yyy;
+  if (pesV3 && v4.w > 0.0) {
+    // (26/10 d) hojas del mod: sombra raiz -> punta por la altura en la hoja (estable con la distancia; la del atlas se funde con el
+    // mip y de 1.5 a 6 px de ancho quedaba en 14-58%): "sombra entre las hojas" que no depende del filtro de sombras ni del SSAO
+    float sunUpC = saturate(PESSunWorld().y);
+    // (26/10 e) 0.4 -> 0.25: la raiz quedaba negra cerca. (27/10 h) y295: + 0.10 por punto de contraste (0.35 natural): bases mas oscuras, como en la foto
+    float aoC = lerp(1.0 - (0.25 + 0.10 * kC) * saturate(Q6.y) * (1.15 - 0.45 * sunUpC), 1.0, smoothstep(0.0, 0.85, relH));
+    r1.xyz *= lerp(1.0, aoC, pesCf);   // (26/10 f) lejos sin la sombra raiz -> punta (de lejos solo pasan el alfa los texeles de la raiz)
+  }
+  o0.xyz = v1.zzz * r1.xyz;
+  float clar = 1.0;   // (27/10 j) claridad del atlas, la usa tambien la hoja pintada despues del grade
+  if (pesV3) {
+    // claridad por hoja (nervio, bordes, vetas) y puntas mas palidas; pasto seco donde hay desgaste (v8.x)
+    clar = lerp(1.0225, (1.0 - 0.5 * sC) + sC * pesLight, pesCf);   // (26/10 f) lejos la claridad media del atlas (R 0.525); (27/10 h) pendiente con y295
+    float3 c = o0.xyz * clar;
+    float tipK = smoothstep(0.55, 1.0, pesN.z) * (0.08 + 0.6 * v8.x) * pesCf;   // (26/10 d) 0.18 -> 0.08: las puntas tenian un 18% de paja aun sin desgaste (r/g 0.45 -> 0.57, lima a media distancia)
+    c = PESDryTint(c, tipK + v8.x * saturate(Q7.y) * 0.85);
+    { // misma correccion de color que la base de la cancha ("Pasto v2", x29): antes las hojas quedaban mas amarillas/grises que el suelo
+      float4 GV = IniParams.Load(int2(29,0));
+      if (GV.w > 0.5) {
+        const float3 LWg = float3(0.2126, 0.7152, 0.0722);
+        float lg = dot(c, LWg);
+        float yel = saturate((c.r / max(c.g, 1e-3) - 0.55) * 2.5);
+        yel *= saturate(((max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b))) / max(max(c.r, max(c.g, c.b)), 1e-3) - 0.12) * 5.0);   // (26/10) no sobre las lineas pintadas (sin color)
+        float3 natural = c * float3(0.80, 1.0, 0.95);
+        natural *= lg / max(dot(natural, LWg), 1e-4);
+        c = lerp(c, natural, saturate(GV.x) * yel);
+        c = lerp(dot(c, LWg).xxx, c, GV.z > 0 ? GV.z : 1.0);
+        c *= GV.y > 0 ? GV.y : 1.0;
+      }
+    }
+    if (kT > 0.001) {
+      // (27/10 h) z295: la punta es mas fina y deja pasar / dispersa mas luz: mas clara y amarillo verdosa (la foto con el sol bajo). Va en el
+      // albedo: el sol la enciende donde da y en la sombra queda apagada (el contraste sol / sombra lo pone la pasada del sol). Despues de x29
+      // para que la correccion del amarillo no la deshaga. Las hojas pintadas no
+      float tz = smoothstep(0.45, 1.0, relH) * kT * pesCfN * (1.0 - pesPaintF);
+      c *= lerp(float3(1.0, 1.0, 1.0), float3(1.16, 1.15, 0.98), tz);   // (27/10 k) 1.26/1.22/0.92 -> menos lima: con el sol dorado (z313) salia fluorescente
+    }
+    o0.xyz = saturate(c);
+  }
+  { float3 cg = o0.xyz; PESGrassColorGrade(cg); o0.xyz = saturate(cg); }   // (25/10 b) color del pasto (112), igual que la base
+  if (pesV3 && pesPaintF > 0.001) {   // (27/10 h) hoja pintada: conserva el sombreado (raiz, claridad, sombra plana) pero no el seco, el amarillo,
+    // el tinte ni el color del pasto (112: "Verde" la ponia lima). (27/10 j) despues del grade
+    o0.xyz = lerp(o0.xyz, saturate(v1.zzz * r1.xyz * clar), pesPaintF);
+  }
+  if (v5.w > 0.5) o0.xyz = float3(1.0, 0.0, 1.0);   // PES21 depuracion: parcelas extendidas en magenta (z59)
+  float pesGlossF = lerp(0.6, pesGloss, pesCf);   // (26/10 f) lejos el brillo medio
+  if (pesV3) {
+    // (26/10 d) el R del atlas propio es "claridad" (media 0.52), no la mascara de brillo del atlas del juego: la formula del juego
+    // (lerp(v5.x + R, v5.x, v3.w)) sumaba +0.52 de brillo donde v3.w < 1 (segun la altura de la camara y un disco del juego),
+    // 3-6x mas brillo y 40% menos rugosidad: la cancha se lavaba de lima / blanco al mirar hacia el sol con la camara baja
+    o2.y = v5.x + (pesLight - 0.5) * 0.2 * pesCf;
+    o2.x = v5.y * lerp(1.0, 0.6 + 0.8 * pesGlossF, 0.5);
+  } else {
+  r0.y = v5.x + r0.x;
+  r0.x = v5.y * r0.z;
+  r0.zw = v5.yx + -r0.xy;
+  o2.xy = v3.ww * r0.zw + r0.xy;
+  }
+  if (pesV3) {
+    // brillo: la hoja es mas lustrosa en el centro (B del atlas) y se regula con z106; seca = mate
+    float gl = clamp(Q6.z, 0.0, 2.0);
+    o2.y = saturate(o2.y * gl * (0.5 + pesGlossF) * (1.0 - v8.x * 0.5) * (1.0 - 0.5 * pesPaintF));   // (27/10 h) la pintura es mate
+    { float3 cg = o0.xyz; float sp = o2.y, rg = o2.x; PESGroundLook(cg, sp, rg, PESGround()); o0.xyz = cg; o2.y = sp; o2.x = rg; }   // suelo humedo / seco
+  }
+  r0.x = dot(v4.xyz, v4.xyz);
+  r0.x = rsqrt(r0.x);
+  r0.xyz = v4.xyz * r0.xxx;
+  if (pesV3 && Q6.w > 0.001) {
+    // normal por hoja: la normal del juego es la de la cancha (hacia arriba): todas las hojas se iluminan igual.
+    // Se le suma la normal del atlas en un marco con "a lo ancho" = la derecha de la camara proyectada, asi cada hoja
+    // se ve cilindrica (clara de un lado, oscura del otro) y el sol da brillos por hoja.
+    float3 N = r0.xyz;
+    float3 T = float3(1.0, 0.0, 0.0) - N * N.x; T = normalize(T + float3(0.0, 0.0, 1e-4));
+    float3 B = cross(N, T);
+    float2 nm = (pesN.xy * 2.0 - 1.0) * clamp(Q6.w, 0.0, 1.5) * pesCf;   // (26/10 f) lejos la normal del suelo
+    float nz = sqrt(saturate(1.0 - dot(nm, nm)));
+    r0.xyz = normalize(T * nm.x + B * nm.y + N * nz);
+  }
+  float pesTr = v1.w;
+  if (pesV3) pesTr = lerp(v1.w, saturate(v1.w * (1.35 - 0.8 * pesN.w)), pesCf);   // puntas finas mas translucidas (A = grosor); lejos sin variar
+  // (27/10 h) z295: la punta deja pasar mas luz a contraluz (y57 lee esto del G-buffer); la pintura tapa
+  if (pesV3) pesTr = saturate(pesTr * (1.0 + 0.35 * smoothstep(0.45, 1.0, relH) * kT * pesCfN) * (1.0 - 0.85 * pesPaintF));   // (27/10 i) pintura: casi opaca (salia lima a contraluz)
+  r0.w = pesTr * 63 + 0.5;
+  r1.x = abs(r0.x) + abs(r0.y);
+  r1.x = r1.x + abs(r0.z);
+  r0.xy = r0.xy / r1.xx;
+  r0.z = cmp(0 < -r0.z);
+  r1.xy = float2(1,1) + -abs(r0.yx);
+  r1.zw = cmp(r0.xy >= float2(0,0));
+  r1.zw = r1.zw ? float2(1,1) : float2(-1,-1);
+  r1.xy = r1.xy * r1.zw;
+  r0.xy = r0.zz ? r0.xy : r1.xy;
+  r0.xy = r0.xy * float2(0.5,0.5) + float2(0.5,0.5);
+  r0.xy = float2(2047,2047) * r0.xy;
+  r0.xyw = (uint3)r0.xyw;
+  r1.xy = (uint2)r0.xy >> int2(1,1);
+  bitmask.x = ((~(-1 << 1)) << 1) & 0xffffffff;  r0.x = (((uint)r0.x << 1) & bitmask.x) | ((uint)0 & ~bitmask.x);
+  bitmask.x = ((~(-1 << 1)) << 0) & 0xffffffff;  r0.x = (((uint)r0.y << 0) & bitmask.x) | ((uint)r0.x & ~bitmask.x);
+  r1.xy = (uint2)r1.xy;
+  r1.w = (uint)r0.x;
+  o1.xyw = float3(0.000977517106,0.000977517106,0.333333343) * r1.xyw;
+  bitmask.x = ((~(-1 << 28)) << 4) & 0xffffffff;  r0.x = (((uint)r0.w << 4) & bitmask.x) | ((uint)3 & ~bitmask.x);
+  r0.x = (uint)r0.x;
+  o1.z = 0.000977517106 * r0.x;
+  o0.w = 1.0;   // (26/10 g) el alfa de RT0 no se escribe con la mezcla lejana (queda el de la base); la mezcla va al final con la copia del suelo
+  o2.z = 0;
+  o2.w = v5.z;
+  o3.zw = float2(0,0);
+  o4.xyzw = float4(0,0,0,1);
+    {
+    // === PES21 mod: hojas de pasto 3D con variacion por hoja ===
+    float4 G = IniParams.Load(int2(10,0));
+    if (G.y > 0) {
+      float n = lerp(0.5, bh21(floor(v1.xy * 96.0)), pesCf);   // (26/10 f) lejos sin el valor al azar por tarjeta
+      float3 c = o0.xyz * (0.90 + 0.18 * n * G.z);
+      c = lerp(c, dot(c, float3(0.2126,0.7152,0.0722)) * float3(1.12, 1.04, 0.74), saturate(n * 3.0 - 2.2) * 0.18 * G.z * (1.0 - pesPaintF));
+      o0.xyz = c;
+    }
+    // (27/10 h) y295: variacion POR HOJA (v8.z, el VS la manda por tarjeta; el n de arriba se repite igual en todas las tarjetas): cada hoja con
+    // su claridad (+-14%) y su tono (unas mas amarillas, otras mas azuladas). Asi de cerca y a media distancia se distingue una hoja de la de al
+    // lado en vez de un verde parejo. Lejos (pesCfN) y en las hojas pintadas no. (27/10 j) fuera del "if (G.y > 0)": con y10 = 0 (el ini de
+    // Agustin) no corria y todas las hojas salian iguales; solo con v3
+    if (pesV3 && kC > 0.001) {
+      float kV = 0.5 * kC * pesCfN * (1.0 - pesPaintF);
+      float hv = v8.z;
+      float3 c = o0.xyz * lerp(1.0, 0.86 + 0.28 * hv, kV);
+      float3 tn = lerp(float3(0.94, 1.0, 1.08), float3(1.08, 1.0, 0.90), frac(hv * 5.17 + 0.31));
+      c *= lerp(float3(1.0, 1.0, 1.0), tn, kV);
+      o0.xyz = saturate(c);
+    }
+  }
+  // (26/10 g) lejos: el color del suelo ya dibujado (copia de RT0 que hace la DLL en t10), lerp por pesCf sin mezcla por alfa: con varias
+  // capas de hojas gana la de adelante (antes cada capa volvia a mezclar sobre la anterior y el resultado dependia del orden). z59 sin mezclar
+  // (27/10 l) tanda 9a, z299: las hojas pintadas por la linea toman el color del suelo (la linea de la base, nitida) hasta que la hoja mide en
+  // pantalla (rampa pesCfN, desde z291): a media distancia la linea se veia punteada por las hojas blancas sombreadas
+  float pesCfB = (pesPaintF > 0.001 && P299.z > 0.5) ? lerp(pesCf, pesCf * pesCfN, pesPaintF) : pesCf;
+  if (pesFB && v5.w < 0.5) o0.xyz = lerp(PESBaseRT0.Load(int3(v0.xy, 0)).xyz, o0.xyz, pesCfB);
+  if (pesV3) {   // depuracion w107: 1 = uv del atlas (rojo u, verde v), 2 = desgaste (rojo seco, verde pelado), 3 = normal
+    int dbg = (int)(Q7.w + 0.5);
+    if (dbg == 1) o0.xyz = float3(v1.x, v1.y, 0.0);
+    else if (dbg == 2) o0.xyz = float3(v8.x, v8.y, 0.0);
+    else if (dbg == 3) o0.xyz = pesN.xyz;
+    else if (dbg == 4) o0.xyz = float3(1.0 - pesCf, pesCf, pesFB ? 1.0 : 0.0);   // (26/10 f) rojo = lejos (color del suelo), verde = cerca; azul = mezcla activa
+    if (dbg >= 1 && dbg <= 4) o0.w = 1.0;
+  }
+  return;
+}
