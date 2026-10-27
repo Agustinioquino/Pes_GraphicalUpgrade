@@ -1,0 +1,359 @@
+// PES 2021 - SSAO del motor [hash 059d4a9a2f03a349] con intensidad ajustable
+// x4 = intensidad de la oclusion (1.0 = original, 1.6 = mas profunda), y4 = 1 activa
+// Base decompilada con 3Dmigoto v1.3.16 on Thu Oct 08 21:08:16 2026
+
+cbuffer cPSScene : register(b2)
+{
+
+  struct
+  {
+    float4x4 m_projectionView;
+    float4x4 m_projection;
+    float4x4 m_view;
+    float4x4 m_shadowProjection;
+    float4x4 m_shadowProjection2;
+    float4 m_eyepos;
+    float4 m_projectionParam;
+    float4 m_viewportSize;
+    float4 m_exposure;
+    float4 m_fogParam[3];
+    float4 m_fogColor;
+    float4 m_cameraCenterOffset;
+    float4 m_shadowMapResolutions;
+  } g_psScene : packoffset(c0);
+
+}
+
+cbuffer cPSObject : register(b5)
+{
+
+  struct
+  {
+    float4x4 m_viewWorld;
+    float4x4 m_world;
+    float4 m_useWeightCount;
+    float4 m_localParam[9];
+  } g_psObject : packoffset(c0);
+
+}
+
+cbuffer cPSSystem : register(b0)
+{
+
+  struct
+  {
+    float4 m_param;
+    float4 m_renderInfo;
+    float4 m_renderBuffer;
+    float4 m_dominantLightDir;
+    float4 m_timeParam;
+  } g_psSystem : packoffset(c0);
+
+}
+
+Texture2D<float4> inDepthBuffer : register(t0);
+Texture2D<float4> inNormalBuffer : register(t1);
+
+
+// 3Dmigoto declarations
+#define cmp -
+Texture1D<float4> IniParams : register(t120);
+Texture2D<float4> StereoParams : register(t125);
+
+
+void main(
+  float4 v0 : SV_Position0,
+  out float2 o0 : SV_Target0)
+{
+  float4 r0,r1,r2,r3,r4,r5,r6,r7,r8,r9,r10,r11;
+  uint4 bitmask, uiDest;
+  float4 fDest;
+  float4 P4 = IniParams.Load(int2(4,0));
+  float aoPow = (P4.y > 0.5 && P4.x > 0) ? min(P4.x, 1.2) : 1.0;
+
+  r0.zw = float2(0,0);
+  r0.xy = (int2)v0.xy;
+  r1.xyz = inNormalBuffer.Load(r0.xyz).xyw;
+  r0.w = inDepthBuffer.Load(r0.xyw).x;
+  bitmask.x = ((~(-1 << 1)) << 1) & 0xffffffff;  r0.x = (((uint)r0.x << 1) & bitmask.x) | ((uint)0 & ~bitmask.x);
+  bitmask.y = ((~(-1 << 1)) << 1) & 0xffffffff;  r0.y = (((uint)r0.y << 1) & bitmask.y) | ((uint)0 & ~bitmask.y);
+  r0.xy = (int2)r0.xy + int2(-1,-1);
+  r0.xy = (int2)r0.xy;
+  r1.xyz = float3(1023,1023,3) * r1.xyz;
+  r1.xyz = (uint3)r1.xyz;
+  r1.x = (uint)r1.x << 1;
+  r1.w = (uint)r1.z >> 1;
+  bitmask.y = ((~(-1 << 31)) << 1) & 0xffffffff;  r1.y = (((uint)r1.y << 1) & bitmask.y) | ((uint)r1.z & ~bitmask.y);
+  r1.x = (int)r1.w | (int)r1.x;
+  r2.xy = (uint2)r1.xy;
+  r1.xy = r2.xy * float2(0.00097703957,0.00097703957) + float2(-1,-1);
+  r1.zw = cmp(r1.xy >= float2(0,0));
+  r1.zw = r1.zw ? float2(1,1) : float2(-1,-1);
+  r2.xyz = float3(1,1,1) + -abs(r1.xyx);
+  r1.zw = r2.yz * r1.zw;
+  r2.z = r2.x + -abs(r1.y);
+  r2.w = cmp(r2.z >= 0);
+  r2.xy = r2.ww ? r1.xy : r1.zw;
+  r1.x = dot(r2.xyz, r2.xyz);
+  r1.x = rsqrt(r1.x);
+  r1.xyz = r2.xyz * r1.xxx;
+  r1.w = -r1.z;
+  r2.zw = float2(0,0);
+  r3.xy = float2(2,-2) / g_psSystem.m_renderInfo.xy;
+  r3.zw = r3.xy * v0.xy + float2(-1,1);
+  r1.z = dot(r3.zw, float2(17,0.100000001));
+  r1.z = g_psSystem.m_timeParam.z + r1.z;
+  r1.z = sin(r1.z);
+  r1.z = 10000 * r1.z;
+  r4.x = r3.w * 13 + r3.z;
+  r3.zw = g_psScene.m_projectionParam.xy * r3.zw;
+  r4.x = g_psSystem.m_timeParam.z + r4.x;
+  r4.x = sin(r4.x);
+  r4.x = 0.100000001 + abs(r4.x);
+  r1.z = r4.x * r1.z;
+  r1.z = frac(r1.z);
+  r4.xyz = r1.zzz * float3(2,2,2) + float3(2.92499995,10.7749996,18.625);
+  sincos(r4.y, r5.x, r6.x);
+  r6.y = r5.x;
+  r1.z = -g_psScene.m_projectionParam.w + r0.w;
+  r5.w = g_psScene.m_projectionParam.z / r1.z;
+  r1.z = -35 + r5.w;
+  r1.z = saturate(0.00999999978 * r1.z);
+  r4.yw = g_psObject.m_localParam[0].xy * r1.zz;
+  r4.yw = r4.yw * float2(14,3) + g_psObject.m_localParam[0].xy;
+  r1.z = 0.5 * r4.y;
+  r6.z = g_psObject.m_localParam[1].x * r1.z;
+  r1.z = r1.z * r1.z;
+  r1.z = 1 / r1.z;
+  r6.z = r6.z / r5.w;
+  r6.z = max(8, r6.z);
+  r7.xyz = r6.zzz * float3(0.166666672,0.5,0.833333373) + float3(0.707106769,0.707106769,0.707106769);
+  r6.zw = r7.yy * r6.xy;
+  r6.zw = round(r6.zw);
+  r6.zw = v0.xy + r6.zw;
+  r6.zw = max(float2(0,0), r6.zw);
+  r6.zw = min(g_psObject.m_localParam[2].zw, r6.zw);
+  r2.xy = (int2)r6.zw;
+  r6.zw = r3.xy * r6.zw + float2(-1,1);
+  r6.zw = g_psScene.m_projectionParam.xy * r6.zw;
+  r2.x = inDepthBuffer.Load(r2.xyz).x;
+  r2.x = -g_psScene.m_projectionParam.w + r2.x;
+  r2.z = g_psScene.m_projectionParam.z / r2.x;
+  r2.xy = r6.zw * r2.zz;
+  r5.yz = r5.ww * r3.zw;
+  r2.xyz = r2.xyz + -r5.yzw;
+  r2.w = dot(r2.xyz, r1.xyw);
+  r2.x = dot(r2.xyz, r2.xyz);
+  r2.y = rsqrt(r2.x);
+  r2.x = r2.x * -r1.z + 1;
+  r2.x = max(0, r2.x);
+  r2.y = saturate(r2.w * r2.y + -r4.w);
+  r2.x = r2.y * r2.x;
+  sincos(r4.x, r4.x, r8.x);
+  sincos(r4.z, r9.x, r10.x);
+  r8.y = r4.x;
+  r2.yz = r8.xy * r7.xx;
+  r2.yz = round(r2.yz);
+  r2.yz = v0.xy + r2.yz;
+  r2.yz = max(float2(0,0), r2.yz);
+  r2.yz = min(g_psObject.m_localParam[2].zw, r2.yz);
+  r3.zw = r3.xy * r2.yz + float2(-1,1);
+  r11.xy = (int2)r2.yz;
+  r2.yz = g_psScene.m_projectionParam.xy * r3.zw;
+  r11.zw = float2(0,0);
+  r2.w = inDepthBuffer.Load(r11.xyz).x;
+  r2.w = -g_psScene.m_projectionParam.w + r2.w;
+  r11.z = g_psScene.m_projectionParam.z / r2.w;
+  r11.xy = r11.zz * r2.yz;
+  r2.yzw = r11.xyz + -r5.yzw;
+  r3.z = dot(r2.yzw, r1.xyw);
+  r2.y = dot(r2.yzw, r2.yzw);
+  r2.z = rsqrt(r2.y);
+  r2.y = r2.y * -r1.z + 1;
+  r2.y = max(0, r2.y);
+  r2.z = saturate(r3.z * r2.z + -r4.w);
+  r2.x = r2.z * r2.y + r2.x;
+  r10.y = r9.x;
+  r2.yz = r10.xy * r7.zz;
+  r2.yz = round(r2.yz);
+  r2.yz = v0.xy + r2.yz;
+  r2.yz = max(float2(0,0), r2.yz);
+  r2.yz = min(g_psObject.m_localParam[2].zw, r2.yz);
+  r3.zw = r3.xy * r2.yz + float2(-1,1);
+  r7.xy = (int2)r2.yz;
+  r2.yz = g_psScene.m_projectionParam.xy * r3.zw;
+  r7.zw = float2(0,0);
+  r2.w = inDepthBuffer.Load(r7.xyz).x;
+  r2.w = -g_psScene.m_projectionParam.w + r2.w;
+  r7.z = g_psScene.m_projectionParam.z / r2.w;
+  r7.xy = r7.zz * r2.yz;
+  r2.yzw = r7.xyz + -r5.yzw;
+  r3.z = dot(r2.yzw, r1.xyw);
+  r2.y = dot(r2.yzw, r2.yzw);
+  r2.z = rsqrt(r2.y);
+  r1.z = r2.y * -r1.z + 1;
+  r1.z = max(0, r1.z);
+  r2.y = saturate(r3.z * r2.z + -r4.w);
+  r1.z = r2.y * r1.z + r2.x;
+  r2.x = g_psObject.m_localParam[1].x * r4.y;
+  r2.x = r2.x / r5.w;
+  r2.x = max(8, r2.x);
+  r2.xyz = r2.xxx * float3(0.166666672,0.5,0.833333373) + float3(0.707106769,0.707106769,0.707106769);
+  r2.xw = r2.xx * r8.xy;
+  r2.xw = round(r2.xw);
+  r2.xw = v0.xy + r2.xw;
+  r2.xw = max(float2(0,0), r2.xw);
+  r2.xw = min(g_psObject.m_localParam[2].zw, r2.xw);
+  r3.zw = r3.xy * r2.xw + float2(-1,1);
+  r7.xy = (int2)r2.xw;
+  r2.xw = g_psScene.m_projectionParam.xy * r3.zw;
+  r7.zw = float2(0,0);
+  r3.z = inDepthBuffer.Load(r7.xyz).x;
+  r3.z = -g_psScene.m_projectionParam.w + r3.z;
+  r7.z = g_psScene.m_projectionParam.z / r3.z;
+  r7.xy = r7.zz * r2.xw;
+  r7.xyz = r7.xyz + -r5.yzw;
+  r2.x = dot(r7.xyz, r1.xyw);
+  r2.w = dot(r7.xyz, r7.xyz);
+  r3.z = rsqrt(r2.w);
+  r2.x = saturate(r2.x * r3.z + -r4.w);
+  r3.z = r4.y * r4.y;
+  r3.z = 1 / r3.z;
+  r2.w = r2.w * -r3.z + 1;
+  r2.w = max(0, r2.w);
+  r1.z = r2.x * r2.w + r1.z;
+  r2.xy = r2.yy * r6.xy;
+  r2.zw = r2.zz * r10.xy;
+  r2.xyzw = round(r2.xyzw);
+  r2.xyzw = v0.xyxy + r2.xyzw;
+  r2.xyzw = max(float4(0,0,0,0), r2.xyzw);
+  r2.xyzw = min(g_psObject.m_localParam[2].zwzw, r2.xyzw);
+  r4.xz = r3.xy * r2.xy + float2(-1,1);
+  r7.xy = (int2)r2.xy;
+  r2.xy = g_psScene.m_projectionParam.xy * r4.xz;
+  r7.zw = float2(0,0);
+  r3.w = inDepthBuffer.Load(r7.xyz).x;
+  r3.w = -g_psScene.m_projectionParam.w + r3.w;
+  r7.z = g_psScene.m_projectionParam.z / r3.w;
+  r7.xy = r7.zz * r2.xy;
+  r7.xyz = r7.xyz + -r5.yzw;
+  r2.x = dot(r7.xyz, r1.xyw);
+  r2.y = dot(r7.xyz, r7.xyz);
+  r3.w = rsqrt(r2.y);
+  r2.y = r2.y * -r3.z + 1;
+  r2.y = max(0, r2.y);
+  r2.x = saturate(r2.x * r3.w + -r4.w);
+  r1.z = r2.x * r2.y + r1.z;
+  r2.xy = r3.xy * r2.zw + float2(-1,1);
+  r7.xy = (int2)r2.zw;
+  r2.xy = g_psScene.m_projectionParam.xy * r2.xy;
+  r7.zw = float2(0,0);
+  r2.z = inDepthBuffer.Load(r7.xyz).x;
+  r2.z = -g_psScene.m_projectionParam.w + r2.z;
+  r7.z = g_psScene.m_projectionParam.z / r2.z;
+  r7.xy = r7.zz * r2.xy;
+  r2.xyz = r7.xyz + -r5.yzw;
+  r2.w = dot(r2.xyz, r1.xyw);
+  r2.x = dot(r2.xyz, r2.xyz);
+  r2.y = rsqrt(r2.x);
+  r2.x = r2.x * -r3.z + 1;
+  r2.x = max(0, r2.x);
+  r2.y = saturate(r2.w * r2.y + -r4.w);
+  r1.z = r2.y * r2.x + r1.z;
+  r2.x = r4.y + r4.y;
+  r2.y = g_psObject.m_localParam[1].x * r2.x;
+  r2.x = r2.x * r2.x;
+  r2.x = 1 / r2.x;
+  r2.y = r2.y / r5.w;
+  r2.y = max(8, r2.y);
+  r2.yzw = r2.yyy * float3(0.166666672,0.5,0.833333373) + float3(0.707106769,0.707106769,0.707106769);
+  r3.zw = r2.yy * r8.xy;
+  r3.zw = round(r3.zw);
+  r3.zw = v0.xy + r3.zw;
+  r3.zw = max(float2(0,0), r3.zw);
+  r3.zw = min(g_psObject.m_localParam[2].zw, r3.zw);
+  r4.xy = r3.xy * r3.zw + float2(-1,1);
+  r7.xy = (int2)r3.zw;
+  r3.zw = g_psScene.m_projectionParam.xy * r4.xy;
+  r7.zw = float2(0,0);
+  r2.y = inDepthBuffer.Load(r7.xyz).x;
+  r2.y = -g_psScene.m_projectionParam.w + r2.y;
+  r4.z = g_psScene.m_projectionParam.z / r2.y;
+  r4.xy = r4.zz * r3.zw;
+  r4.xyz = r4.xyz + -r5.yzw;
+  r2.y = dot(r4.xyz, r1.xyw);
+  r3.z = dot(r4.xyz, r4.xyz);
+  r3.w = rsqrt(r3.z);
+  r3.z = r3.z * -r2.x + 1;
+  r3.z = max(0, r3.z);
+  r2.y = saturate(r2.y * r3.w + -r4.w);
+  r1.z = r2.y * r3.z + r1.z;
+  r2.yz = r2.zz * r6.xy;
+  r3.zw = r2.ww * r10.xy;
+  r3.zw = round(r3.zw);
+  r3.zw = v0.xy + r3.zw;
+  r3.zw = max(float2(0,0), r3.zw);
+  r3.zw = min(g_psObject.m_localParam[2].zw, r3.zw);
+  r2.yz = round(r2.yz);
+  r2.yz = v0.xy + r2.yz;
+  r2.yz = max(float2(0,0), r2.yz);
+  r2.yz = min(g_psObject.m_localParam[2].zw, r2.yz);
+  r4.xy = r3.xy * r2.yz + float2(-1,1);
+  r6.xy = (int2)r2.yz;
+  r2.yz = r3.xy * r3.zw + float2(-1,1);
+  r3.xy = (int2)r3.zw;
+  r2.yz = g_psScene.m_projectionParam.xy * r2.yz;
+  r4.xy = g_psScene.m_projectionParam.xy * r4.xy;
+  r6.zw = float2(0,0);
+  r2.w = inDepthBuffer.Load(r6.xyz).x;
+  r2.w = -g_psScene.m_projectionParam.w + r2.w;
+  r6.z = g_psScene.m_projectionParam.z / r2.w;
+  r6.xy = r6.zz * r4.xy;
+  r4.xyz = r6.xyz + -r5.yzw;
+  r2.w = dot(r4.xyz, r1.xyw);
+  r4.x = dot(r4.xyz, r4.xyz);
+  r4.y = rsqrt(r4.x);
+  r4.x = r4.x * -r2.x + 1;
+  r4.x = max(0, r4.x);
+  r2.w = saturate(r2.w * r4.y + -r4.w);
+  r1.z = r2.w * r4.x + r1.z;
+  r3.zw = float2(0,0);
+  r2.w = inDepthBuffer.Load(r3.xyz).x;
+  r2.w = -g_psScene.m_projectionParam.w + r2.w;
+  r3.z = g_psScene.m_projectionParam.z / r2.w;
+  r3.xy = r3.zz * r2.yz;
+  r2.yzw = r3.xyz + -r5.yzw;
+  r1.x = dot(r2.yzw, r1.xyw);
+  r1.y = dot(r2.yzw, r2.yzw);
+  r1.w = rsqrt(r1.y);
+  r1.y = r1.y * -r2.x + 1;
+  r1.y = max(0, r1.y);
+  r1.x = saturate(r1.x * r1.w + -r4.w);
+  r1.x = r1.x * r1.y + r1.z;
+  r1.x = g_psObject.m_localParam[0].z * r1.x;
+  r1.x = saturate(-r1.x * 0.333333343 + 1);
+  r1.x = log2(r1.x);
+  r1.x = (g_psObject.m_localParam[0].w * aoPow) * r1.x;
+  r0.z = exp2(r1.x);
+  r1.xy = ddy_fine(r0.zw);
+  r1.xy = -r1.xy * r0.yy + r0.zw;
+  r0.y = 1 / r0.w;
+  r1.y = -r1.y * r0.y + 1;
+  r1.y = min(1, abs(r1.y));
+  r1.y = 1 + -r1.y;
+  r2.xy = ddx_fine(r0.zw);
+  r0.xw = -r2.xy * r0.xx + r0.zw;
+  r0.y = -r0.w * r0.y + 1;
+  r0.y = min(1, abs(r0.y));
+  r0.w = r1.y + -r0.y;
+  r0.y = 1 + -r0.y;
+  r0.w = 2 + r0.w;
+  r0.w = 1 / r0.w;
+  r0.y = r0.y * r0.w;
+  r0.x = r0.y * r0.x;
+  r0.x = r0.w * r0.z + r0.x;
+  r0.y = r1.y * r0.w;
+  r5.x = r0.y * r1.x + r0.x;
+  o0.xy = r5.xw;
+  return;
+}

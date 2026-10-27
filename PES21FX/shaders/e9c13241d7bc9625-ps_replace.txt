@@ -1,0 +1,922 @@
+// PES 2021 - Luz diferida (direccional) con piel mejorada  [hash e9c13241d7bc9625]  -- v3
+// Piel detectada por marca en el G-buffer (o2.z = 250/255, la escribe el shader de piel).
+//  - wrap lighting por canal (SSS: el rojo se dispersa mas lejos)
+//  - penumbra calida en sombras proyectadas
+//  - (direccional) transmision a contraluz: orejas/nariz/bordes rojizos con luz de atras
+//  - (direccional) especular de doble lobulo: brillo fino de grasa/sudor sobre el lobulo ancho
+// Parametros: x3 ancho SSS, y3 sangrado en sombras, z3 on/off, w3 especular base piel,
+//             x5 transmision, y5 lobulo fino, z5 suavizado de sombra en piel
+// Base decompilada con 3Dmigoto v1.3.16 on Thu Oct 08 21:08:18 2026
+
+cbuffer cPSScene : register(b2)
+{
+
+  struct
+  {
+    float4x4 m_projectionView;
+    float4x4 m_projection;
+    float4x4 m_view;
+    float4x4 m_shadowProjection;
+    float4x4 m_shadowProjection2;
+    float4 m_eyepos;
+    float4 m_projectionParam;
+    float4 m_viewportSize;
+    float4 m_exposure;
+    float4 m_fogParam[3];
+    float4 m_fogColor;
+    float4 m_cameraCenterOffset;
+    float4 m_shadowMapResolutions;
+  } g_psScene : packoffset(c0);
+
+}
+
+cbuffer cPSObject : register(b5)
+{
+
+  struct
+  {
+    float4x4 m_viewWorld;
+    float4x4 m_world;
+    float4 m_useWeightCount;
+    float4 m_localParam[9];
+  } g_psObject : packoffset(c0);
+
+}
+
+cbuffer cPSLight : register(b3)
+{
+
+  struct
+  {
+    float4 m_lightDir0;
+    float4 m_lightColor0;
+    float4 m_lightColor1;
+    float4 m_lightSourcePos;
+    float4 m_lightSourceColor;
+    float4 m_lightSourceDir;
+    float4 m_lightSourceParam1;
+    float4 m_lightSourceParam2;
+    float4 m_lightSourceParam3;
+    float4 m_lightPos0;
+    float4 m_lightParam2;
+  } g_psLight : packoffset(c0);
+
+}
+
+cbuffer cPSSystem : register(b0)
+{
+
+  struct
+  {
+    float4 m_param;
+    float4 m_renderInfo;
+    float4 m_renderBuffer;
+    float4 m_dominantLightDir;
+    float4 m_timeParam;
+  } g_psSystem : packoffset(c0);
+
+}
+
+SamplerState g_samplerPoint_Wrap_s : register(s8);
+SamplerState g_samplerPoint_Clamp_s : register(s9);
+SamplerState g_samplerLinear_Clamp_s : register(s11);
+SamplerComparisonState g_samplerComparisonLess_Linear_Clmap_s : register(s15);
+Texture2D<float4> g_NormalTexture : register(t0);
+Texture2D<float4> g_SpecularTexture : register(t1);
+Texture2D<float4> g_DepthTexture : register(t2);
+Texture2D<float4> g_ShadowTexture : register(t3);
+Texture2D<float4> g_CloudTexture : register(t4);
+Texture2D<float4> g_ShadowAlphaMask : register(t5);
+Texture2D<float4> g_lut1 : register(t9);
+Texture2D<float4> g_MaterialTexture : register(t10);
+Texture2D<float4> g_WorldShadowMask : register(t13);
+
+
+// 3Dmigoto declarations
+#define cmp -
+Texture1D<float4> IniParams : register(t120);
+Texture2D<float4> StereoParams : register(t125);
+#include "pes_common.hlsli"   // PES21 (18/10): curva del dia, transmision de piel, tamano del sol
+#include "pes_sunturf.hlsli"   // (27/10) el sol sobre el pasto (313)
+#include "pes_headshadow.hlsli"   // (27/10 c) sombra propia de la cabeza (t30)
+
+
+// === PES21 SOL: color del sol segun su altura (calido al atardecer, blanco calido al mediodia) ===
+float3 PESSunColor() {
+  float3 c = g_psLight.m_lightColor0.xyz;
+  float4 S = IniParams.Load(int2(4,0));      // z4 = realismo del sol (0 = original), w4 = intensidad
+  bool sunReal = S.z > 0;
+  float3 L = normalize(g_psLight.m_lightDir0.xyz);
+  float elev = saturate(abs(dot(L, float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12))));
+  float low = 1 - smoothstep(0.10, 0.60, elev);
+  float3 tint = lerp(float3(1.0, 0.962, 0.905), float3(1.0, 0.80, 0.60), low);
+  const float3 LW = float3(0.2126, 0.7152, 0.0722);
+  float lum = dot(c, LW);
+  float warmO = c.r / max(c.b, 1e-4);
+  float k = (sunReal ? saturate(S.z) : 0.0) * saturate((warmO - 0.85) * 4.0);   // de noche (luz fria de estadio) casi no toca
+  float3 res = lerp(c, lum * tint / dot(tint, LW), k);
+  res *= (S.w > 0 ? lerp(1.0, S.w, k) : 1.0);
+  // PES21 curva del dia (18/10): intensidad y calidez del sol segun su altura (solo sol real, no torres)
+  { PESDay dy = PESDayCurve(elev, saturate((warmO - 0.85) * 4.0)); res *= dy.sun; res = PESSunTintFinal(res, dy.warm, elev, saturate((warmO - 0.85) * 4.0)); }   // (20/10) atmosfera fisica x121
+  res *= PESDaySunMul(saturate((warmO - 0.85) * 4.0));   // PES21 contraste de dia (x109)
+  // PES21 atmosfera (17/10): con el sol bajo el archivo de luz deja el sol muy apagado; y54 lo compensa (solo sol real,
+  // no luz de torres), proporcional a lo bajo que esta.
+  float4 ATM = IniParams.Load(int2(54,0));
+  if (ATM.w > 0.5) { float lowS = 1.0 - smoothstep(0.05, 0.40, elev); float kSun = saturate((warmO - 0.85) * 4.0);
+    res *= 1.0 + max(ATM.y, 0.0) * lowS * kSun; }
+  return res;
+}
+// === FIN SOL ===
+// === PES21 SOMBRAS v2 (Claude, 15/10): filtro estable de 16 muestras + sombras de contacto (PCSS) ===
+// y20: 0 = filtro original del juego, 1 = estable 16 muestras, 2 = PCSS (nitida al pie, mas suave lejos)
+// z20 radio en texeles | x21 escala PCSS, y21 radio maximo, z21 radio de busqueda | w21 = 1 rotar por frame (DLSS/TAA)
+static float g_pesDynMinR = 0.0;   // PES21 sol dinamico: radio minimo del filtro (lo fija main)
+float PESShadowFilter(float2 uv, float ref, float cas, float2 pix, float orig, float rscale, float2 dzduv)
+{
+  float4 SH = IniParams.Load(int2(20,0));
+  float4 SQ = IniParams.Load(int2(21,0));
+  float res = g_psScene.m_shadowMapResolutions.x;
+  if (SH.y < 0.5 || cas < -0.5 || res < 1.0) return orig;
+  float2 tx = float2(1.0 / res, 1.0 / (3.0 * res));           // atlas de 3 cascadas apiladas en vertical
+  float2 lo = float2(tx.x, cas / 3.0 + tx.y);                   // no salir de la cascada actual
+  float2 hi = float2(1.0 - tx.x, (cas + 1.0) / 3.0 - tx.y);
+  float2 p = pix;
+  if (SQ.w > 0.5) p += frac(g_psSystem.m_timeParam.z * 61.8034) * 97.0;
+  float rot = 6.2831853 * frac(52.9829189 * frac(dot(p, float2(0.06711056, 0.00583715))));
+  float radius = max(max(SH.z, g_pesDynMinR), 0.5) * rscale;
+  // PES21 sombras fisicas (18/10): x87 sesgo por plano receptor | z87 penumbra fisica por tamano del sol | w87 tope del ajuste (x0.001 por texel)
+  float4 PH = IniParams.Load(int2(87,0));
+  float limT = (PH.w > 0.0 ? PH.w : 10.0) * 0.001;
+  bool rpb = PH.x > 0.5;
+  float casS = cas < 0.5 ? 1.0 : (cas < 1.5 ? g_psScene.m_shadowProjection2._m03 : g_psScene.m_shadowProjection2._m13);
+  if (SH.y > 1.5) {
+    float searchR = max(SQ.z, 1.0);
+    float bsum = 0, bcnt = 0;
+    [unroll] for (int j = 0; j < 8; j++) {
+      float rj = sqrt((j + 0.5) / 8.0);
+      float aj = j * 2.39996323 + rot;
+      float2 offj = float2(cos(aj), sin(aj)) * (rj * searchR) * tx;
+      float2 suj = clamp(uv + offj, lo, hi);
+      float refj = ref + (rpb ? clamp(dot(offj, dzduv), -limT * rj * searchR, limT * rj * searchR) : 0.0);
+      float d = g_ShadowTexture.SampleLevel(g_samplerPoint_Clamp_s, suj, 0).x;
+      if (d > refj) { bsum += d - refj; bcnt += 1; }
+    }
+    if (bcnt < 0.5) return 1.0;
+    float avgB = bsum / bcnt;
+    float4 P64s = IniParams.Load(int2(64,0));
+    if (PH.z > 0.5 && P64s.x > 0.5 && P64s.y > 0.0) {
+      // penumbra fisica: ancho = distancia receptor-oclusor x tan(diametro angular del sol), pasado a texeles de esta cascada
+      // (27/10) con y64 hasta 1 grado (0.9 por defecto, pensado para los brillos) la sombra usa el sol real de 0.53: mas dura junto al
+      // oclusor, que es donde Agustin la quiere mas oscura; con sol de bruma (> 1) se sigue usando y64
+      float refPerM = max(length(g_psScene.m_shadowProjection._m02_m12_m22) * abs(g_psScene.m_shadowProjection2._m30) * abs(casS), 1e-6);
+      float texPerM = length(g_psScene.m_shadowProjection._m00_m10_m20) * abs(casS) * res * 0.5;
+      float distM = avgB / refPerM;
+      float penTex = distM * tan(radians(P64s.y > 1.0 ? P64s.y : 0.53)) * texPerM * (SQ.x > 0 ? SQ.x / 200.0 : 1.0);   // x21 = 200 -> 1:1 fisico
+      radius = clamp(penTex, max(0.5, g_pesDynMinR), max(SQ.y, 1.0));
+    } else radius = clamp(avgB * SQ.x, max(0.5, g_pesDynMinR), max(SQ.y, 1.0));
+  }
+  float sum = 0;
+  [unroll] for (int i = 0; i < 16; i++) {
+    float ri = sqrt((i + 0.5) / 16.0);
+    float ai = i * 2.39996323 + rot;
+    float2 offi = float2(cos(ai), sin(ai)) * (ri * radius) * tx;
+    float2 sui = clamp(uv + offi, lo, hi);
+    // plano receptor: cada muestra se compara con la profundidad que el plano de la superficie tiene en ESE texel
+    float refi = ref + (rpb ? clamp(dot(offi, dzduv), -limT * ri * radius, limT * ri * radius) : 0.0);
+    sum += g_ShadowTexture.SampleCmpLevelZero(g_samplerComparisonLess_Linear_Clmap_s, sui, refi).x;
+  }
+  return 1.0 - sum / 16.0;
+}
+// === FIN SOMBRAS v2 ===
+// PES21 (18/10): terminador suave SIN correr la luz. Igual a max(NdotL,0) cuando NdotL >= w (lado iluminado intacto,
+// misma direccion que el sol); entre -w y w una curva suave (C1) que solo entra un poco en la sombra.
+float3 PESSoftTerm(float nl, float3 w) {
+  w = max(w, 1e-3);
+  float3 x = nl.xxx;
+  float3 s = (x + w) * (x + w) / (4.0 * w);
+  return x >= w ? x : (x > -w ? s : 0.0);
+}
+void main(
+  float4 v0 : TEXCOORD0,
+  float4 v1 : TEXCOORD1,
+  float4 v2 : SV_Position0,
+  out float4 o0 : SV_Target0,
+  out float4 o1 : SV_Target1,
+  out float4 o2 : SV_Target2)
+{
+  // === PES21 (19/10) SOL LIBRE (experimentar): x101 on, y101 azimut (grados), z101 elevacion (grados), w101 intensidad,
+  // x102 calidez (0 = color del juego, 1 = naranja atardecer). Mueve la direccion y el color del sol que ve ESTA pasada de luz;
+  // las sombras siguen siendo las del sol real del juego (el shadow map lo arma el motor).
+  float4 pesLDir = g_psLight.m_lightDir0; float4 pesLCol = g_psLight.m_lightColor0; bool pesFreeSun = false;
+  { float4 SF = IniParams.Load(int2(101,0));
+    if (SF.x > 0.5) { pesFreeSun = true;
+      float az = radians(SF.y), el = radians(SF.z);
+      float3 w = normalize(float3(cos(el) * sin(az), sin(el), cos(el) * cos(az)));   // mundo: Y arriba
+      // (26/10) mundo -> vista: con las columnas (las filas _m0x.._m2x pasan de vista a mundo; antes estaba al reves)
+      float3 v = float3(dot(float3(g_psScene.m_view._m00, g_psScene.m_view._m10, g_psScene.m_view._m20), w),
+                        dot(float3(g_psScene.m_view._m01, g_psScene.m_view._m11, g_psScene.m_view._m21), w),
+                        dot(float3(g_psScene.m_view._m02, g_psScene.m_view._m12, g_psScene.m_view._m22), w));
+      // el juego guarda la direccion HACIA el sol o desde el sol? se respeta el signo original (mismo sentido que m_lightDir0.y)
+      float sgn = (g_psLight.m_lightDir0.y < 0) ? -1.0 : 1.0;
+      pesLDir.xyz = normalize(v) * sgn;
+      float warm = saturate(IniParams.Load(int2(102,0)).x);
+      float3 tint = lerp(float3(1, 1, 1), float3(1.0, 0.62, 0.32), warm);
+      pesLCol.xyz = g_psLight.m_lightColor0.xyz * max(SF.w, 0.0) * tint;
+    } }
+  float4 r0,r1,r2,r3,r4,r5,r6,r7,r8,r9,r10,r11,r12,r13;
+  uint4 bitmask, uiDest;
+  float4 fDest;
+
+  float4 P3 = IniParams.Load(int2(3,0));
+  float4 P5 = IniParams.Load(int2(5,0));
+  float4 P76 = IniParams.Load(int2(76,0));   // PES21 SSS v2 (18/10): x76 intensidad general | y76 zonas que transmiten (0 solo finas .. 1 toda la piel) | z76 rojo de la penumbra
+  float sssV2 = P76.x > 0.0 ? P76.x : 1.0;
+  // PES21 (25/10) SSS unificada (w95): un solo interruptor para toda la luz de piel. La difusion la hace la SSSS; aca quedan la
+  // parte chica (pre-integrada, ancho fijo), la transmision a contraluz y el brillo de piel, sin depender de z3 ni de x3 (x3 / y3
+  // eran tambien el ancho y la fuerza del SSS nativo, que con w95 queda apagado)
+  bool  pesUni   = IniParams.Load(int2(95,0)).w > 0.5;
+  bool  sssOn    = P3.z > 0.5 || pesUni;
+  float sssWidth = pesUni ? 1.5 : (P3.x > 0 ? P3.x : 1.0);
+  float sssBleed = P3.y;
+  float skinSpec = P3.w > 0 ? P3.w : 1.0;
+  float rawNdotL = 0, trans = 0, transFloor = 0, skinTag = 0, shadowScalar = 1;
+  float pesSunE = 1.0;   // PES21 sol de calidad (18/10): normalizacion de energia por el tamano del disco solar
+  float dbgW12 = IniParams.Load(int2(12,0)).w;
+  bool dbgT = dbgW12 > 2.5 && dbgW12 < 3.5; bool tookSM = false;   // diagnostico de transmision
+  bool dbgC = dbgW12 > 3.5 && dbgW12 < 4.5;   // diagnostico 4: sombras de contacto en rojo
+  float4 P64 = IniParams.Load(int2(64,0));   // x64 on | y64 diametro del sol (grados) | z64 transmision por shadow map | w64 densidad de la piel
+
+  r0.xy = float2(-0.5,-0.5) + v2.yx;
+  r0.zw = v1.xy / v1.ww;
+  r1.xyzw = g_NormalTexture.Sample(g_samplerPoint_Wrap_s, r0.zw).xyzw;
+  r2.xyzw = g_SpecularTexture.Sample(g_samplerPoint_Wrap_s, r0.zw).zxyw;
+  skinTag = r2.x;  float specInt = r2.z;  float2 uvG = r0.zw;
+  r1.xyw = float3(1023,1023,3) * r1.xyw;
+  r1.xyw = (uint3)r1.xyw;
+  r1.x = (uint)r1.x << 1;
+  r3.x = (uint)r1.w >> 1;
+  r1.x = (int)r1.x | (int)r3.x;
+  bitmask.y = ((~(-1 << 31)) << 1) & 0xffffffff;  r1.y = (((uint)r1.y << 1) & bitmask.y) | ((uint)r1.w & ~bitmask.y);
+  r3.xy = (uint2)r1.xy;
+  r1.xy = r3.xy * float2(0.00097703957,0.00097703957) + float2(-1,-1);
+  r3.xyz = float3(1,1,1) + -abs(r1.xyx);
+  r4.z = r3.x + -abs(r1.y);
+  r1.w = cmp(r4.z >= 0);
+  r3.xw = cmp(r1.xy >= float2(0,0));
+  r3.xw = r3.xw ? float2(1,1) : float2(-1,-1);
+  r3.xy = r3.yz * r3.xw;
+  r4.xy = r1.ww ? r1.xy : r3.xy;
+  r1.x = dot(r4.xyz, r4.xyz);
+  r1.x = rsqrt(r1.x);
+  r3.xyz = r4.xyz * r1.xxx;
+  r1.x = r1.z * 1023 + 0.5;
+  r1.x = (uint)r1.x;
+  r1.y = (int)r1.x & 15;
+  int matType = (int)r1.y;
+  r1.z = cmp((int)r1.y == 1);
+  if (r1.z != 0) {
+    r4.x = 0;
+    r5.y = 0;
+  } else {
+    r1.x = (uint)r1.x >> 4;
+    r1.w = cmp((int)r1.y == 3);
+    if (r1.w != 0) {
+      r1.w = (uint)r1.x;
+      r5.y = 0.0158730168 * r1.w;
+      r4.x = 0;
+    } else {
+      r1.x = (uint)r1.x;
+      r5.y = 0.0158730168 * r1.x;
+      r2.x = 0;
+      r4.x = r2.w;
+    }
+  }
+  r1.x = g_DepthTexture.Sample(g_samplerPoint_Wrap_s, r0.zw).x;
+  r5.zw = v0.xy / v0.ww;
+  r5.zw = -g_psScene.m_cameraCenterOffset.xy + r5.zw;
+  r5.zw = g_psScene.m_projectionParam.xy * r5.zw;
+  r1.x = -g_psScene.m_projectionParam.w + r1.x;
+  r6.z = g_psScene.m_projectionParam.z / r1.x;
+  r6.xy = r6.zz * r5.zw;
+  r7.xz = float2(0.5,0.5) / g_psScene.m_shadowMapResolutions.xx;
+  r1.x = 3 * g_psScene.m_shadowMapResolutions.x;
+  r7.yw = float2(0.5,0.5) / r1.xx;
+  r3.w = -r3.z;
+  r1.w = dot(pesLDir.xyz, r3.xyw);
+  r2.w = saturate(1 + -r1.w);
+  r2.w = r2.w * r2.w;
+  r2.w = -g_psScene.m_shadowProjection2._m33 * r2.w;
+  r8.xyz = r3.xyw * r2.www + r6.xyz;
+  r8.z = g_psScene.m_shadowProjection2._m33 + r8.z;
+  r2.w = dot(r0.yx, float2(17,0.100000001));
+  r2.w = g_psSystem.m_timeParam.z + r2.w;
+  r2.w = sin(r2.w);
+  r2.w = 10000 * r2.w;
+  r5.zw = r0.xy * float2(13,13) + r0.yx;
+  r5.zw = g_psSystem.m_timeParam.zz + r5.zw;
+  r5.zw = sin(r5.zw);
+  r5.zw = float2(0.100000001,0.100000001) + abs(r5.zw);
+  r2.w = r5.z * r2.w;
+  r9.xz = frac(r2.ww);
+  r0.x = dot(r0.xy, float2(17,0.100000001));
+  r0.x = g_psSystem.m_timeParam.z + r0.x;
+  r0.x = sin(r0.x);
+  r0.x = 10000 * r0.x;
+  r0.x = r0.x * r5.w;
+  r9.yw = frac(r0.xx);
+  r8.w = 1;
+  r10.x = dot(r8.xyzw, g_psScene.m_shadowProjection._m00_m10_m20_m30);
+  r10.y = dot(r8.xyzw, g_psScene.m_shadowProjection._m01_m11_m21_m31);
+  r0.x = dot(r8.xyzw, g_psScene.m_shadowProjection._m02_m12_m22_m32);
+  r0.y = 1 / g_psScene.m_shadowMapResolutions.x;
+  r0.y = -r0.y * 6 + 1;
+  r2.w = r9.z / g_psScene.m_shadowMapResolutions.x;
+  r0.y = -r2.w * 6 + r0.y;
+  r0.y = r0.y * r0.y;
+  r11.x = r10.x * g_psScene.m_shadowProjection2._m03 + g_psScene.m_shadowProjection2._m00;
+  r11.y = r10.y * g_psScene.m_shadowProjection2._m03 + g_psScene.m_shadowProjection2._m01;
+  r2.w = r0.x * g_psScene.m_shadowProjection2._m03 + g_psScene.m_shadowProjection2._m02;
+  r12.x = r10.x * g_psScene.m_shadowProjection2._m13 + g_psScene.m_shadowProjection2._m10;
+  r12.y = r10.y * g_psScene.m_shadowProjection2._m13 + g_psScene.m_shadowProjection2._m11;
+  r3.z = r0.x * g_psScene.m_shadowProjection2._m13 + g_psScene.m_shadowProjection2._m12;
+  r0.x = 1 + r0.x;
+  r10.z = g_psScene.m_shadowProjection2._m30 * r0.x;
+  r0.x = 1 + r2.w;
+  r11.z = g_psScene.m_shadowProjection2._m30 * r0.x;
+  r0.x = 1 + r3.z;
+  r12.z = g_psScene.m_shadowProjection2._m30 * r0.x;
+  // PES21 sombras fisicas (18/10): candidatas de las 3 cascadas (xy en [-1,1] de cada cascada, z = profundidad de referencia)
+  float3 pesCas[3] = { float3(r10.xy, r10.z), float3(r11.xy, r11.z), float3(r12.xy, r12.z) };
+  float pesBound = sqrt(max(r0.y, 0.0));
+  r5.zw = r10.xy * r10.xy;
+  r13.xy = r11.xy * r11.xy;
+  r13.zw = r12.xy * r12.xy;
+  r5.zw = cmp(r0.yy >= r5.zw);
+  r5.zw = r5.zw ? float2(1,1) : 0;
+  r0.x = cmp(r10.z >= 0);
+  r13.xyzw = cmp(r0.yyyy >= r13.xyzw);
+  r2.w = cmp(r11.z >= 0);
+  r2.w = r2.w ? 1.000000 : 0;
+  r13.xyzw = r13.xyzw ? float4(1,1,1,1) : 0;
+  r0.y = cmp(r12.z >= 0);
+  r0.xy = r0.xy ? float2(1,1) : 0;
+  r3.z = r5.z * r5.w;
+  r4.w = r3.z * r0.x;
+  r5.z = r13.x * r13.y;
+  r2.w = r5.z * r2.w;
+  r5.z = r13.z * r13.w;
+  r0.y = r5.z * r0.y;
+  r5.z = -r3.z * r0.x + 1;
+  r5.w = r5.z * r2.w;
+  r2.w = -r2.w * r5.z + 1;
+  r2.w = r5.z * r2.w;
+  r5.z = r2.w * r0.y;
+  r10.w = 0;
+  r11.w = 1;
+  r11.xyzw = r11.xyzw * r5.wwww;
+  r10.xyzw = r10.xyzw * r4.wwww + r11.xyzw;
+  r12.w = 2;
+  r10.xyzw = r12.wxyz * r5.zzzz + r10.wxyz;
+  r4.w = max(9.99999997e-007, r10.w);
+  r0.x = r3.z * r0.x + r5.w;
+  r0.x = r0.y * r2.w + r0.x;
+  r0.x = cmp(r0.x == 0.000000);
+  if (r0.x != 0) {
+    r10.x = -1;
+  }
+  r11.xy = r10.yz * float2(0.5,0.5) + float2(0.5,0.5);
+  r11.z = 1 + -r11.y;
+  r0.xy = float2(1,0.333333343) * r11.xz;
+  r5.zw = -r7.zw * float2(2,2) + float2(1,1);
+  r11.xy = min(r5.zw, r0.xy);
+  r11.z = r10.x * 0.333333343 + r11.y;
+  float2 pesHalfTx = r7.zw;   // PES21: medio texel del atlas (x, y/3)
+  r7.xyzw = r11.xzxz + r7.xyzw;
+  float2 pesShUV = r7.zw; float pesShCas = r10.x; float pesShRef = r4.w;   // PES21 sombras v2
+  float pesShRefBase = pesShRef;
+  // PES21 sombras fisicas (18/10): gradiente de la profundidad de sombra respecto de las UV del shadow map (plano receptor, Isidoro 2006)
+  float2 pesDzduv = 0.0;
+  { float2 duvdx = ddx(pesShUV), duvdy = ddy(pesShUV); float dzdx = ddx(pesShRef), dzdy = ddy(pesShRef);
+    float detR = duvdx.x * duvdy.y - duvdx.y * duvdy.x;
+    if (abs(detR) > 1e-14) pesDzduv = float2(duvdy.y * dzdx - duvdx.y * dzdy, -duvdy.x * dzdx + duvdx.x * dzdy) / detR; }
+  // === PES21 sol dinamico (17/10): el Daylight Engine mueve el sol cada cuadro y lo deja bajo. Con el sol rasante
+  // el shadow map hace acne (rayas en pasto y cara) y el borde repta al moverse. x53 sesgo de plano receptor (crece
+  // solo donde la superficie es rasante a la luz, y mas con el sol bajo), y53 radio minimo del filtro en texeles
+  // (estabiliza el borde en movimiento), z53 tope del sesgo (x 0.001), w53 on/off
+  { float4 DS = IniParams.Load(int2(53,0));
+    if (DS.w > 0.5) {
+      float slope = abs(ddx(pesShRef)) + abs(ddy(pesShRef));
+      float3 upW = float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12);
+      float sunUp = saturate(abs(dot(normalize(pesLDir.xyz), normalize(upW))));
+      float lowSun = 1.0 - smoothstep(0.08, 0.45, sunUp);
+      float b = slope * max(DS.x, 0.0) * (1.0 + 2.0 * lowSun);
+      pesShRef += min(b, max(DS.z, 0.0) * 0.001);
+      g_pesDynMinR = max(DS.y, 0.0) * (0.5 + 0.5 * lowSun);
+    } }
+  // PES21 kits: la sombra del sol se calcula con la ropa SIN simular (el mod de ropa solo mueve la que se ve),
+  // y donde la tela simulada se mete adentro de la original aparecen franjas de sombra. Sesgo extra solo en kits:
+  // x30 = sesgo (0 = nada), w30 on/off [Alt+Shift+F9 cicla]
+  { float4 KB = IniParams.Load(int2(30,0));
+    if (KB.w > 0.5 && matType == 0 && abs(skinTag - 0.9607843) < 0.002) pesShRef += KB.x; }
+  r9.xyzw = r9.xyzw * float4(0.5,0.5,0.5,0.5) + float4(0.25,0.25,-0.75,-0.75);
+  r11.xz = float2(1,1) / g_psScene.m_shadowMapResolutions.xx;
+  r11.yw = float2(1,1) / r1.xx;
+  r12.xyzw = r11.xyzw * r9.xyzw;
+  r13.xyzw = r9.xyzy * r11.xyzy + r7.zwzw;
+  r0.x = g_ShadowTexture.SampleCmp(g_samplerComparisonLess_Linear_Clmap_s, r13.xy, r4.w).x;
+  r0.y = g_ShadowTexture.SampleCmp(g_samplerComparisonLess_Linear_Clmap_s, r13.zw, r4.w).x;
+  r0.x = r0.x + r0.y;
+  r9.xyzw = r9.xwzw * r11.xwzw + r7.zwzw;
+  r0.y = g_ShadowTexture.SampleCmp(g_samplerComparisonLess_Linear_Clmap_s, r9.xy, r4.w).x;
+  r0.x = r0.x + r0.y;
+  r0.y = g_ShadowTexture.SampleCmp(g_samplerComparisonLess_Linear_Clmap_s, r9.zw, r4.w).x;
+  r0.x = r0.x + r0.y;
+  r9.xyzw = r12.xyzy * float4(2,2,2,2) + r7.zwzw;
+  r0.y = g_ShadowTexture.SampleCmp(g_samplerComparisonLess_Linear_Clmap_s, r9.xy, r4.w).x;
+  r0.x = r0.x + r0.y;
+  r0.y = g_ShadowTexture.SampleCmp(g_samplerComparisonLess_Linear_Clmap_s, r9.zw, r4.w).x;
+  r0.x = r0.x + r0.y;
+  r7.xyzw = r12.xwzw * float4(2,2,2,2) + r7.xyzw;
+  r0.y = g_ShadowTexture.SampleCmp(g_samplerComparisonLess_Linear_Clmap_s, r7.xy, r4.w).x;
+  r0.x = r0.x + r0.y;
+  r0.y = g_ShadowTexture.SampleCmp(g_samplerComparisonLess_Linear_Clmap_s, r7.zw, r4.w).x;
+  r0.x = r0.x + r0.y;
+  r0.x = -r0.x * 0.125 + 1;
+  // PES21 piel (16/10): sobre la cara el borde de la sombra del sol se filtra mas ancho (x34) -> sin escalones
+  float4 P34 = IniParams.Load(int2(34,0));
+  bool pesSSSS = IniParams.Load(int2(95,0)).w > 0.5;   // 19/10: dispersion unificada (SSSS) prendida -> las difusiones viejas de la piel se apagan solas
+  float pesShScale = (P34.w > 0.5 && !pesSSSS && matType == 0 && abs(skinTag - 0.98039) < 0.003) ? max(P34.x, 1.0) : 1.0;
+  r0.x = PESShadowFilter(pesShUV, pesShRef, pesShCas, v2.xy, r0.x, pesShScale, pesDzduv);   // PES21 sombras v2 + plano receptor
+  // PES21 fusion de cascadas (18/10): en la franja del borde de la cascada se mezcla con la siguiente (sin salto de nitidez). y87 = ancho
+  { float4 PHb = IniParams.Load(int2(87,0)); float4 SHb = IniParams.Load(int2(20,0));
+    if (PHb.y > 0.001 && SHb.y > 0.5 && pesShCas > -0.5 && pesShCas < 1.5) {
+      int ci = (int)(pesShCas + 0.5); float3 curC = pesCas[ci]; float3 nxC = pesCas[ci + 1];
+      float eC = max(abs(curC.x), abs(curC.y));
+      float wB = smoothstep(pesBound - PHb.y, pesBound, eC);
+      if (wB > 0.001 && nxC.z >= 0.0 && max(abs(nxC.x), abs(nxC.y)) < pesBound) {
+        float casN = ci + 1.0;
+        float sc0 = ci == 0 ? 1.0 : g_psScene.m_shadowProjection2._m03;
+        float sc1 = ci == 0 ? g_psScene.m_shadowProjection2._m03 : g_psScene.m_shadowProjection2._m13;
+        float2 uvN = float2(min(1.0 - 2.0 * pesHalfTx.x, nxC.x * 0.5 + 0.5) + pesHalfTx.x, casN / 3.0 + min(1.0 - 2.0 * pesHalfTx.y, (1.0 - (nxC.y * 0.5 + 0.5)) / 3.0) + pesHalfTx.y);
+        float refN = max(9.99999997e-007, nxC.z) + (pesShRef - pesShRefBase) * (sc1 / max(sc0, 1e-6));
+        float sN = PESShadowFilter(uvN, refN, casN, v2.xy, 1.0, pesShScale, pesDzduv);
+        r0.x = lerp(r0.x, sN, wB);
+      } } }
+  { float4 SH = IniParams.Load(int2(20,0));   // PES21 (Claude): definicion de sombras, x20 fuerza, w20 on/off
+    if (SH.w > 0.5 && pesShScale < 1.01) { float sd = saturate(SH.x) * 1.0; float lo = 0.3 * sd;
+      r0.x = lerp(r0.x, smoothstep(lo, 1.0 - lo, r0.x), sd); } }   // solo la penumbra (0 y 1 no cambian)
+  // === PES21 sombra de nubes (18/10): la misma capa de nubes del cielo tapa el sol en la cancha (z85 = fuerza) ===
+  { PESCloudParams CPs = PESCloudLoad(g_psSystem.m_timeParam.z); float cK = saturate(CPs.shK);   // (21/10) z85 con nubes volumetricas, z152 con solo sombras
+    if (CPs.sh > 0.5 && cK > 0.001) {
+      float dC0 = g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, uvG, 0).x;
+      float zC0 = g_psScene.m_projectionParam.z / (dC0 - g_psScene.m_projectionParam.w);
+      float3 PvC = float3((v0.xy / v0.ww - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zC0, zC0);
+      float3 vXc = float3(g_psScene.m_view._m00, g_psScene.m_view._m01, g_psScene.m_view._m02);
+      float3 vYc = float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12);
+      float3 vZc = float3(g_psScene.m_view._m20, g_psScene.m_view._m21, g_psScene.m_view._m22);
+      float3 pWc = g_psScene.m_eyepos.xyz + float3(dot(PvC, vXc), dot(PvC, vYc), dot(PvC, vZc));
+      float3 Lc0 = normalize(pesLDir.xyz);
+      float3 sunWc = PESSunStable(normalize(float3(dot(Lc0, vXc), dot(Lc0, vYc), dot(Lc0, vZc))));   // (26/10) sol estable: el dibujo de las nubes no cambia en cada corte de la repeticion
+      float cT = PESCloudShadow(pWc, sunWc, CPs);
+      r0.x *= lerp(1.0, cT, cK);
+    } }
+  r0.y = r0.x * r0.x;
+  r7.xy = float2(-0,-0);
+  r7.zw = -g_psLight.m_lightSourceParam3.xy;
+  r7.xyz = r8.xyz + r7.xyz;
+  r1.x = dot(r7.xyz, r7.xyz);
+  r1.x = sqrt(r1.x);
+  r1.x = r1.x + r7.w;
+  r1.x = max(0, r1.x);
+  r1.x = saturate(g_psLight.m_lightSourceParam1.x * r1.x);
+  r2.w = cmp(r7.z >= 0);
+  r2.w = r2.w ? 1.000000 : 0;
+  r1.x = r2.w * r1.x;
+  r0.x = -r0.x * r0.x + 1;
+  r0.x = r1.x * r0.x + r0.y;
+  r0.x = saturate(-g_psLight.m_lightSourceParam1.w + r0.x);
+  r0.y = cmp(r10.x == -1.000000);
+  r0.x = r0.y ? 1 : r0.x;
+  r7.xyzw = g_psObject.m_localParam[1].xyzw * r6.yyyy;
+  r7.xyzw = r6.xxxx * g_psObject.m_localParam[0].xyzw + r7.xyzw;
+  r7.xyzw = r6.zzzz * g_psObject.m_localParam[2].xyzw + r7.xyzw;
+  r7.xyzw = g_psObject.m_localParam[3].xyzw + r7.xyzw;
+  r7.xyz = r7.xyz / r7.www;
+  r8.xy = float2(0.5,0.5) * r7.xy;
+  r8.zw = r8.xy * float2(1,-1) + float2(0.5,0.5);
+  r5.zw = g_CloudTexture.Sample(g_samplerLinear_Clamp_s, r8.zw).xy;
+  r0.y = g_psObject.m_localParam[4].z + r7.z;
+  r0.y = 1 + -r0.y;
+  r0.y = 28.8539009 * r0.y;
+  r0.y = exp2(r0.y);
+  r1.x = cmp(r5.z < r0.y);
+  if (r1.x != 0) {
+    r1.x = -r5.z * r5.z + r5.w;
+    r0.y = r0.y + -r5.z;
+    r0.y = r0.y * r0.y + r1.x;
+    r0.y = r1.x / r0.y;
+    r0.y = -0.00100000005 + r0.y;
+    r0.y = -g_psObject.m_localParam[4].w + r0.y;
+    r1.x = 1 + -g_psObject.m_localParam[4].w;
+    r0.y = saturate(r0.y / r1.x);
+  } else {
+    r0.y = 1;
+  }
+  r5.zw = float2(0.5,0) + r8.xw;
+  r1.x = g_ShadowAlphaMask.Sample(g_samplerLinear_Clamp_s, r5.zw).x;
+  r0.y = r1.x * r0.y;
+  r1.x = 1 + -g_psObject.m_localParam[4].x;
+  r0.y = r0.y * r1.x + g_psObject.m_localParam[4].x;
+  r0.x = min(r0.x, r0.y);
+  r0.y = g_WorldShadowMask.Sample(g_samplerPoint_Clamp_s, r0.zw).x;
+  r0.xyzw = min(r0.xxxx, r0.yyyy);
+  r1.x = cmp(r0.w < 0.00999999978);
+  if (r1.x != 0) {
+    if (-1 != 0) discard;
+  }
+  r1.x = dot(r6.xyz, r6.xyz);
+  r1.x = rsqrt(r1.x);
+  r6.xyz = r6.xyz * r1.xxx;
+  r7.xyz = PESSunColor() * g_psScene.m_exposure.zzz;
+  r1.x = max(g_psLight.m_lightSourceParam2.x, r0.w);
+  if (r1.z != 0) {
+    r8.y = r2.x * 0.959999979 + 0.0399999991;
+    r9.xyz = float3(1,1,1);
+    r5.xy = float2(0,0);
+  } else {
+    r1.y = cmp((int)r1.y == 3);
+    if (r1.y != 0) {
+      r8.y = r2.x * 0.959999979 + 0.0399999991;
+      r9.xyz = float3(0.899999976,1,0.800000012);
+      r5.x = 1;
+    } else {
+      r4.yz = float2(0.75,0.25);
+      r8.y = g_MaterialTexture.SampleLevel(g_samplerPoint_Clamp_s, r4.xy, 0).x;
+      r9.xyzw = g_MaterialTexture.SampleLevel(g_samplerPoint_Clamp_s, r4.xz, 0).xyzw;
+      r5.x = r9.w;
+    }
+  }
+  r1.y = dot(-r6.xyz, r3.xyw);
+  r1.z = r1.y + r1.y;
+  r4.xyz = r3.xyw * -r1.zzz + -r6.xyz;
+  r4.xyz = -pesLDir.xyz + -r4.xyz;
+  r1.z = dot(r4.xyz, r4.xyz);
+  r1.z = sqrt(r1.z);
+  r1.z = saturate(pesLCol.w / r1.z);
+  r4.xyz = r1.zzz * r4.xyz + pesLDir.xyz;
+  r1.z = dot(r4.xyz, r4.xyz);
+  r1.z = rsqrt(r1.z);
+  r4.xyz = r4.xyz * r1.zzz + -r6.xyz;
+  r1.z = dot(r4.xyz, r4.xyz);
+  r1.z = rsqrt(r1.z);
+  r4.xyz = r4.xyz * r1.zzz;
+  r1.z = saturate(dot(r4.xyz, r3.xyw));
+  r2.x = -r1.w * r1.w + 1;
+  r2.x = r2.x * r5.y + r1.w;
+  rawNdotL = r1.w; trans = r5.y;
+  r2.w = r5.y * r5.x;
+  transFloor = r2.w;
+  r2.x = saturate(max(r2.x, r2.w));
+  r1.w = saturate(r1.w);
+  r3.xyz = r2.xxx * r7.xyz;
+  // (27/10) el sol sobre el pasto (313, pes_sunturf.hlsli): solo cancha y hojas (tipo 3)
+  float4 pesPG = IniParams.Load(int2(313,0)); bool pesTurf = matType == 3 && pesPG.w > 0.5;
+  if (pesTurf) r3.xyz = PESTurfDiffuse(r7.xyz, rawNdotL, r2.x, pesPG, trans);
+  // PES21 (18/10): curvatura en pantalla (cuanto gira la normal por metro); fuera de los if para poder usar derivadas
+  float pesCurv = 0.0;
+  { float3 nC = normalize(r3.xyw);
+    float dzC = g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, uvG, 0).x;
+    float zLC = abs(g_psScene.m_projectionParam.z / (dzC - g_psScene.m_projectionParam.w));
+    float mpp = max(zLC * abs(g_psScene.m_projectionParam.x) * 2.0 / max(g_psSystem.m_renderBuffer.x, 1.0), 1e-6);   // (20/10) abs: el parametro es negativo (antes la curvatura daba siempre 1)
+    pesCurv = saturate(length(fwidth(nC)) / mpp * 0.02); }   // radio de 2 cm = 1, frente (radio 10 cm) = 0.2
+  float pesSsssK = 0.0;   // (20/10) cuanto de la difusion de la piel ya resuelve la SSSS en pantalla (0 = nada, 1 = todo)
+  bool isSkinGeo = (matType == 0) && (trans > 0.004) && (abs(skinTag - 0.98039) < 0.003);
+  bool isSkin = sssOn && isSkinGeo;
+  // SSS v3 (18/10): la piel SIEMPRE usa el terminador suave, con el SSS apagado queda casi duro. Antes, con el SSS
+  // apagado, la formula del motor envolvia la cara con la translucidez (que el mapa de SSS sube) y la luz no seguia al sol.
+  if (isSkinGeo) {
+    float3 w = saturate(trans) * sssWidth * float3(1.0, 0.6, 0.45);   // 16/10 (era 1/0.42/0.28): difusion mas pareja, menos tinte rojo
+    // PES21 piel pre-integrada (18/10): la dispersion depende de la curvatura real de la superficie (Penner 2011)
+    { float4 Q62 = IniParams.Load(int2(62,0)); if (Q62.x > 0.5 && Q62.w > 0.0) w *= lerp(1.0, 0.45 + 1.4 * pesCurv, saturate(Q62.w)); }
+    w = min(w * 0.12, float3(0.22, 0.11, 0.07));   // SSS v3: borde angosto (antes 0.35 / tope 0.40: la luz entraba 24 grados en la sombra)
+    // (20/10) sin doble SSS: con la dispersion separable (w95) prendida, de cerca la difusion la hace esa pasada en milimetros reales
+    // sobre la luz real; aca solo queda la parte mas chica que un pixel (piel pre-integrada para lo que no se resuelve en pantalla).
+    // Antes las dos se sumaban de cerca: borde de sombra doble de ancho y doble de rojo (piel encerada).
+    if (IniParams.Load(int2(95,0)).w > 0.5) {
+      float dS0 = g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, uvG, 0).x;
+      float zS0 = abs(g_psScene.m_projectionParam.z / (dS0 - g_psScene.m_projectionParam.w));
+      float mppS = max(zS0 * abs(g_psScene.m_projectionParam.x) * 2.0 / max(g_psScene.m_viewportSize.x, 1.0), 1e-6);
+      float rPx = 0.006 * max(IniParams.Load(int2(95,0)).x, 0.3) / mppS;   // radio de la SSSS en pixeles (6 mm x ancho)
+      pesSsssK = saturate((rPx - 1.0) / 5.0) * ((pesUni || IniParams.Load(int2(146,0)).x > 0.5) ? 1.0 : 0.0);
+      w *= 1.0 - 0.45 * pesSsssK;   // (27/10 f) antes 0.85: el terminador quedaba duro con la SSSS
+    }
+    if (!sssOn) w = 0.03;                 // 18/10: ancho del borde acotado (antes envolvia la cara y corria la luz)
+    float3 d = saturate(PESSoftTerm(rawNdotL, w));
+    d = max(d, min(transFloor, 0.03).xxx);   // SSS v3: piso casi nulo (el lado de atras queda en sombra)                     // piso de translucidez del motor, acotado (no ilumina el lado de atras)
+    r3.xyz = d * r7.xyz;
+  }
+  r2.xzw = r9.xyz * r2.zzz;
+  r8.x = dot(r4.xyz, pesLDir.xyz);
+  r3.w = g_lut1.Sample(g_samplerLinear_Clamp_s, r8.xy).x;
+  r1.y = saturate(r1.y);
+  r2.y = max(0.0199999996, r2.y);
+  r2.y = r2.y * r2.y;
+  if (P64.x > 0.5 && P64.y > 0.0) { float eS; r2.y = PESSunWidenAlpha(r2.y, P64.y, eS); pesSunE = eS; }   // PES21: el sol no es un punto
+  r4.x = 0.5 * r2.y;
+  r4.y = r2.y * r2.y;
+  r1.z = r1.z * r1.z;
+  r4.z = r2.y * r2.y + -1;
+  r1.z = r1.z * r4.z + 1;
+  r1.z = r1.z * r1.z;
+  r1.z = r4.y / r1.z;
+  r2.y = -r2.y * 0.5 + 1;
+  r4.y = r1.w * r2.y + r4.x;
+  r1.y = r1.y * r2.y + r4.x;
+  r1.y = r4.y * r1.y;
+  r1.y = 1 / r1.y;
+  r1.z = r3.w * r1.z;
+  r1.y = r1.z * r1.y;
+  r1.y = r1.y * r1.w;
+  r1.y = 0.25 * r1.y;
+  r1.y *= pesSunE;   // PES21 sol de calidad
+  r1.yzw = r1.yyy * r7.xyz;
+  r1.yzw = r1.yzw * r2.xzw;
+  float csDbg = 1.0;
+  // === PES21 sombras de contacto v2 (17/10): trazado en pantalla hacia el sol ===
+  // Lo que el shadow map no resuelve: el cuello bajo el menton, el brazo sobre el torso, el pelo sobre la frente,
+  // el botin contra el pasto. x52 fuerza, y52 largo en metros, z52 suavidad (penumbra que crece con la distancia
+  // al oclusor), w52 on/off. El patron rota cada cuadro: el TAA del juego lo promedia (sin ruido fijo).
+  {
+    float2 sC = v0.xy / v0.ww;
+    float2 uvC = v1.xy / v1.ww;
+    float2 dS = float2(ddx(sC.x), ddy(sC.y));
+    float2 dU = float2(ddx(uvC.x), ddy(uvC.y));
+    dS = (abs(dS) < 1e-9) ? 1e-9 : dS;
+    float2 Am = dU / dS;
+    float2 Bm = uvC - Am * sC;
+    float4 CS = IniParams.Load(int2(52,0));
+    float csK = max(CS.x, 0.0);
+    float csLen = clamp(CS.y > 0 ? CS.y : 0.35, 0.05, 1.5);
+    float csSoft = saturate(CS.z);
+    // (20/10) sin sombras fantasma: el trazado en pantalla tomaba como oclusor cualquier cosa que estuviera DELANTE del pixel
+    // (entre la camara y el) si el rayo pasaba por detras dentro del grosor aceptado (22 a 45 cm): en el pasto detras de un
+    // jugador y en la ropa (manos y brazos delante del short, pliegues) aparecia otra sombra con la silueta. Grosor mas real
+    // y, en la tela, solo el contacto de verdad (cuello, dobladillo, brazo pegado): rayo de 10 cm y grosor de 5 cm
+    bool csCloth = (matType == 0) && (abs(skinTag - 0.9607843) < 0.002);
+    float csThk = csCloth ? 0.05 : 0.10;
+    if (csCloth) csLen = min(csLen, 0.10);
+    float dC = g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, uvC, 0).x;
+    float zC = g_psScene.m_projectionParam.z / (dC - g_psScene.m_projectionParam.w);
+    // solo donde hay sol que quitar: pixel de frente a la luz y fuera de la sombra plena del shadow map
+    // 18/10 c: el espacio de vista del motor tiene z NEGATIVA hacia adelante: con "zC > 0.1" el trazado no corria nunca
+    // (por eso el interruptor "no hacia nada"). Ahora todo va con el signo de zC.
+    float zSgn = zC < 0.0 ? -1.0 : 1.0, zA = abs(zC);
+    if (CS.w > 0.5 && csK > 0 && zA > 0.1 && zA < 60.0 && rawNdotL > 0.02 && r0.x > 0.03) {
+      float3 Pv = float3((sC - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zC, zC);
+      float3 Lc = normalize(pesLDir.xyz);
+      float ign = frac(52.9829189 * frac(dot(v2.xy, float2(0.06711056, 0.00583715))) + frac(g_psSystem.m_timeParam.z * 7.31));
+      // arranque separado de la superficie: mas en angulo rasante (evita el acne) y con la distancia
+      float bias = (0.008 + 0.0018 * zA) * (0.6 + 0.4 / max(rawNdotL, 0.12));
+      float3 Q = Pv + Lc * bias;
+      float occ = 0;
+      bool csTurfSkip = matType == 3 && IniParams.Load(int2(299,0)).w > 0.5;
+      [loop] for (int ci = 0; ci < 12; ci++) {
+        float f = (ci + ign) / 12.0;
+        float t = f * f * csLen;                                   // muestras densas junto al pixel (detalle fino)
+        float3 R = Q + Lc * t;
+        float RzA = R.z * zSgn;
+        if (RzA < 0.1) break;
+        float2 s = R.xy / (R.z * g_psScene.m_projectionParam.xy) + g_psScene.m_cameraCenterOffset.xy;
+        float2 uv = Am * s + Bm;
+        if (any(uv < 0.0) || any(uv > 1.0)) break;
+        float dS2 = g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, uv, 0).x;
+        float zS = g_psScene.m_projectionParam.z / (dS2 - g_psScene.m_projectionParam.w);
+        float dz = (R.z - zS) * zSgn;                              // > 0: el rayo quedo detras de lo que ve la camara
+        float thick = csThk + 0.25 * t + 0.0015 * RzA;   // (20/10) antes 0.22 + 0.40 t + 0.003 z: sombras fantasma de lo que estaba delante.   // 18/10 d: grosor aceptado del oclusor. Con 4 cm NUNCA habia impacto: una cabeza o un brazo miden 10-25 cm y el rayo pasa por detras de su cara visible (verificado con una simulacion numerica)               // grosor aceptado: crece con el largo del rayo
+        // (27/10) w299: en la cancha las hojas no hacen sombra de contacto sobre la cancha (el rayo siempre chocaba con alguna
+        // hoja y todo el pasto cercano quedaba sin sol); la sombra entre hojas la pone x313. La pelota y los botines si.
+        bool csTurfHit = false;
+        if (csTurfSkip && dz > 0.003 + 0.0008 * RzA && dz < thick) {
+          uint mtS = (uint)(g_NormalTexture.SampleLevel(g_samplerPoint_Wrap_s, uv, 0).z * 1023 + 0.5) & 15;
+          csTurfHit = mtS == 3;
+        }
+        if (!csTurfHit && dz > 0.003 + 0.0008 * RzA && dz < thick && (zC - zS) * zSgn > 0.03 + 0.002 * zA) {
+          // oclusor cerca = sombra plena; lejos = penumbra (segun suavidad). Primer impacto = el mas cercano.
+          occ = (1.0 - csSoft * f) * saturate(dz / (0.35 * thick));
+          break;
+        }
+      }
+      float fade = saturate((60.0 - zA) / 20.0);
+      float2 eM = saturate(min(uvC, 1.0 - uvC) * 10.0);           // sin cortes en los bordes de pantalla
+      float cs = 1.0 - saturate(occ * fade * csK * eM.x * eM.y);
+      csDbg = cs;
+      if (isSkin) cs = lerp(1.0, cs, 0.85);                        // en la piel la luz se difunde: sombra mas suave
+      r0.xyz *= cs;
+    }
+  }
+  // (27/10) sombras entre hojas (x313): la sombra de cada hoja sobre las de atras, hacia el sol
+  { float2 sT = v0.xy / v0.ww, uT = v1.xy / v1.ww;
+    float2 dST = float2(ddx(sT.x), ddy(sT.y)), dUT = float2(ddx(uT.x), ddy(uT.y));
+    dST = (abs(dST) < 1e-9) ? 1e-9 : dST;
+    float2 AmT = dUT / dST, BmT = uT - AmT * sT;
+    if (pesTurf && pesPG.x > 0.0 && r0.x > 0.02)
+      r0.xyz *= PESTurfMicroShadow(g_DepthTexture, g_samplerPoint_Wrap_s, sT, uT, AmT, BmT, v2.xy, normalize(pesLDir.xyz), g_psScene.m_projectionParam,
+                                   g_psScene.m_cameraCenterOffset.xy, g_psSystem.m_renderBuffer.x, g_psSystem.m_timeParam.z, pesPG.x); }
+  // (27/10 c) sombra propia de la cabeza: el atlas de alta resolucion de las cabezas cercanas (t30) multiplica la sombra del sol
+  { float2 hsS = v0.xy / v0.ww, hsU = v1.xy / v1.ww;
+    float hsD = g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, hsU, 0).x;
+    float hsZ = g_psScene.m_projectionParam.z / (hsD - g_psScene.m_projectionParam.w);
+    float3 hsP = float3((hsS - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * hsZ, hsZ);
+    float hsZs = hsZ < 0.0 ? -1.0 : 1.0;   // (27/10 d) a la vista de la proyeccion (z positiva hacia adelante), como la DLL
+    hsP *= float3((g_psScene.m_projectionParam.x < 0.0 ? -1.0 : 1.0) * hsZs, (g_psScene.m_projectionParam.y < 0.0 ? -1.0 : 1.0) * hsZs, hsZs);
+    r0.xyz *= PESHeadShadowAt(hsP, rawNdotL, g_samplerLinear_Clamp_s); }
+  float3 shadowRGB = r0.xyz;
+  shadowScalar = saturate(r0.x);
+  if (isSkin) {
+    float sh = saturate(r0.x);
+    // sombra mas suave sobre la piel (la luz se difunde dentro del tejido)
+    sh = lerp(sh, smoothstep(0.0, 1.0, sh), saturate(P5.z) * (pesSSSS ? 0.7 : 1.0));   // SSS v3: solo suaviza el borde. (27/10 f) con la SSSS se deja casi entero: su disco en milimetros no alcanza a suavizar el borde del shadow map (Agustin: borde duro con la dispersion prendida)
+    // 18/10 v2: rojo solo en la PENUMBRA (borde de la sombra), la sombra plena queda neutra.
+    // Antes pow(sh,0.55) en el rojo dejaba toda la sombra de la cara naranja.
+    float pen = sh * (1.0 - sh) * 4.0;   // 1 en el medio del borde, 0 en luz plena y en sombra plena
+    float3 shC = saturate(sh.xxx + pen * float3(0.10, -0.02, -0.04) * (1.0 - pesSsssK) * sssV2 * (P76.z > 0.0 ? P76.z : 1.0));
+    shadowRGB = lerp(sh.xxx, shC, saturate(saturate(trans * 2.0) * sssBleed));
+  }
+  o0.xyz = r3.xyz * shadowRGB;
+  // === PES21 tela v2 (Claude, 16/10): iluminacion de tela para los kits ===
+  // Los kits se reconocen por su id de material en el G-buffer (96 -> indice 6; lo escriben solo los 4 shaders de kits
+  // y el de arbitros). x26 brillo de tela (sheen), y26 luz envolvente, z26 rugosidad del sheen, w26 on/off [Ctrl+Alt+Shift+F11... ver pes_mod.ini]
+  // v3: los kits se marcan en el G-buffer con o2.z = 245/255 (lo escriben los shaders de kits; el material 6 tambien
+  // lo usaba la piel del arbitro y no lo usaban todas las camisetas)
+  bool isKit = !isSkin && (matType == 0) && (abs(skinTag - 0.9607843) < 0.002);
+  if (isKit) {
+    float4 KC = IniParams.Load(int2(26,0));
+    if (KC.w > 0.5) {
+      float3 nK = normalize(r3.xyw);
+      float2 ppK = (v0.xy / v0.ww - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy;
+      float3 VK = -normalize(float3(ppK, 1));
+      float3 LK = normalize(pesLDir.xyz);
+      float3 lightK = PESSunColor() * g_psScene.m_exposure.zzz;
+      float nlK = rawNdotL;
+      float nvK = max(dot(nK, VK), 0.05);
+      // 1) la luz envuelve un poco los pliegues (tela: dispersion entre las fibras)
+      float wK = saturate(KC.y);
+      float dK = saturate((nlK + wK) / (1.0 + wK));
+      dK = max(dK, transFloor);
+      o0.xyz = dK * lightK * shadowRGB;
+      // 2) sheen tipo "Charlie" (Estevez-Kulla): brillo suave en los bordes, pico en incidencia rasante
+      float3 HK = normalize(LK + VK);
+      float nhK = saturate(dot(nK, HK));
+      float aK = clamp(KC.z, 0.2, 1.0);
+      float invA = 1.0 / aK;
+      float sin2 = max(1.0 - nhK * nhK, 1e-4);
+      float Dch = (2.0 + invA) * pow(sin2, 0.5 * invA) / 6.2831853;
+      float nlS = saturate(nlK);
+      float Vch = 1.0 / (4.0 * max(nlS + nvK - nlS * nvK, 0.1));
+      float sheenK = Dch * Vch * nlS * saturate(nlS * 4.0) * saturate(KC.x) * shadowScalar;
+      sheenK = min(sheenK, 0.6);
+      // 70 % va al canal difuso (toma el color del kit en la composicion), 30 % al especular (blanco)
+      o0.xyz += sheenK * 0.7 * lightK;
+      r1.yzw += sheenK * 0.3 * lightK;
+      // 3) la tela no tiene el brillo plastico del GGX: lo baja a la mitad
+      r1.yzw *= 0.5;
+      // === PES21 kits v4 (18/10): brillo anisotropico de la trama + translucidez de la tela a contraluz ===
+      // x71 brillo anisotropico (banda a lo largo del tejido, vertical en la camiseta), y71 translucidez,
+      // z71 cuanto se estira la banda, w71 on/off
+      { float4 KA = IniParams.Load(int2(71,0));
+        if (KA.w > 0.5) {
+          float3 upK = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
+          float3 TK = upK - nK * dot(upK, nK);
+          float tl = length(TK);
+          if (tl > 1e-3) {
+            TK /= tl;
+            // Kajiya-Kay: el brillo se estira perpendicular a la trama (a lo largo de la fibra horizontal del punto)
+            float3 HK2 = normalize(LK + VK);
+            float th = dot(TK, HK2);
+            float sinTH = sqrt(saturate(1.0 - th * th));
+            float expo = lerp(14.0, 60.0, saturate(KA.z));
+            float an = pow(sinTH, expo) * saturate(nlK) * saturate(nlK * 4.0);
+            float3 anC = an * KA.x * 0.18 * lightK * shadowScalar;
+            o0.xyz += anC * 0.6; r1.yzw += anC * 0.4;
+          }
+          // translucidez: con el sol detras de la camiseta (y de frente a la camara), la tela se "enciende"
+          float backK = saturate(dot(-nK, LK));
+          float fwdK = pow(saturate(dot(VK, -LK)), 2.0);
+          float thinK = 0.5;   // tela fina de futbol
+          o0.xyz += lightK * backK * (0.5 + 0.5 * fwdK) * thinK * KA.y * 0.35;
+        } }
+      // diagnostico: w26 = 2 pinta de magenta todo lo que se detecta como kit
+      if (KC.w > 1.5) { o0.xyz = float3(1.0, 0.0, 1.0) * dot(lightK, float3(0.3, 0.3, 0.3)); r1.yzw = 0; }
+    }
+  }
+  if (isSkin) {
+    // --- reconstruccion de normal, vista y luz ---
+    float4 nb = g_NormalTexture.Sample(g_samplerPoint_Wrap_s, uvG);
+    uint3 q = (uint3)(float3(1023,1023,3) * nb.xyw);
+    uint ex = (q.x << 1) | (q.z >> 1);
+    uint ey = (q.y << 1) | (q.z & 1);
+    float2 e = float2(ex, ey) * 0.00097703957 - 1;
+    float3 n = float3(e.xy, 1 - abs(e.x) - abs(e.y));
+    if (n.z < 0) n.xy = (1 - abs(e.yx)) * (e.xy >= 0 ? 1 : -1);
+    n = normalize(n); n.z = -n.z;
+    float2 pp = (v0.xy / v0.ww - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy;
+    float3 V = -normalize(float3(pp, 1));
+    float3 L = normalize(pesLDir.xyz);
+    float3 lightC = PESSunColor() * g_psScene.m_exposure.zzz;
+    // --- transmision a contraluz ---
+    // 16/10: transmision fisica (Beer-Lambert): la luz que atraviesa el tejido pierde primero el azul y el verde,
+    // el rojo llega mas lejos. y34 = densidad del tejido (1 = piel real), P5.x = intensidad general.
+    float3 Lt = normalize(L + n * 0.3);
+    float fwd = pow(saturate(dot(V, -Lt)), 4.0);
+    float back = saturate(dot(-n, L));
+    float thin = saturate(trans * 1.6);
+    float3 sigT = float3(1.0, 3.6, 6.5) * (P34.y > 0 ? P34.y : 1.0);
+    float3 Tr = exp(-(1.15 - thin) * sigT) * thin;
+    float visT = pesFreeSun ? 1.0 : lerp(0.25, 1.0, saturate(r0.x));   // la luz entra por el lado de atras aunque el frente este en sombra (sol libre: sin la sombra real)
+    // 18/10 v2: solo donde la piel es fina de verdad (orejas, aletas, labios) y el sol esta detras; sin el
+    // termino 'de atras' amplio que encendia de naranja todo el lado en sombra de la cara
+    float thinGate = lerp(smoothstep(0.45, 0.85, thin), 1.0, saturate(P76.y));   // y76: 0 = solo orejas/nariz/labios, 1 = toda la piel (como antes)
+    float3 transm = Tr * fwd * (0.6 + 0.4 * back) * thinGate * P5.x * 1.6 * sssV2;
+    transm = PESTransColor(transm, IniParams.Load(int2(34,0)).z);   // (25/10) z34 color de la contraluz
+    // PES21 transmision por shadow map (18/10, Jimenez 2010): el grosor real que atraviesa la luz = distancia entre lo
+    // que ve el sol (shadow map) y este pixel. Orejas y nariz se encienden solo cuando el sol esta realmente detras.
+    if (P64.x > 0.5 && P64.z > 0.0 && pesShCas > -0.5 && g_psScene.m_shadowMapResolutions.x > 1.0 && !pesFreeSun) {   // sol libre: el shadow map es del sol real, no sirve para medir grosor
+      tookSM = true;
+      float casS = pesShCas < 0.5 ? 1.0 : (pesShCas < 1.5 ? g_psScene.m_shadowProjection2._m03 : g_psScene.m_shadowProjection2._m13);
+      float refPerM = max(length(g_psScene.m_shadowProjection._m02_m12_m22) * abs(g_psScene.m_shadowProjection2._m30) * abs(casS), 1e-5);
+      float resS = g_psScene.m_shadowMapResolutions.x;
+      float2 txS = float2(1.0 / resS, 1.0 / (3.0 * resS));
+      float dS = g_ShadowTexture.SampleLevel(g_samplerPoint_Clamp_s, pesShUV, 0).x;
+      dS += g_ShadowTexture.SampleLevel(g_samplerPoint_Clamp_s, pesShUV + float2( txS.x, 0), 0).x;
+      dS += g_ShadowTexture.SampleLevel(g_samplerPoint_Clamp_s, pesShUV + float2(-txS.x, 0), 0).x;
+      dS += g_ShadowTexture.SampleLevel(g_samplerPoint_Clamp_s, pesShUV + float2(0,  txS.y), 0).x;
+      dS += g_ShadowTexture.SampleLevel(g_samplerPoint_Clamp_s, pesShUV + float2(0, -txS.y), 0).x;
+      dS *= 0.2;
+      float thickM = max(abs(dS - pesShRef) - 0.5 / refPerM * 0.004, 0.0) / refPerM;   // 18/10: distancia sin asumir el sentido del eje Z del shadow map
+      float dens = (P64.w > 0 ? P64.w : 30.0) * (1.25 - thin);   // el mapa de SSS afina: orejas/nariz dejan pasar mas luz
+      float3 Tt = PESSkinTransmittance(thickM * dens);
+      Tt = PESTransColor(Tt, IniParams.Load(int2(34,0)).z);
+      float backL = saturate(0.3 + dot(L, -n)) * (1.0 - saturate(rawNdotL * 3.0));
+      float3 transSM = Tt * backL * P64.z * 0.8;
+      o0.xyz += max(transSM, transm * visT * 0.5) * lightC;   // sin perder el contraluz direccional cuando el shadow map no alcanza
+      // diagnostico w12 = 3: rojo = grosor medido (10 cm = 1), verde = de espaldas al sol, azul = en sombra segun el shadow map
+      if (dbgT) o0.xyz = float3(saturate(thickM / 0.10), saturate(dot(L, -n)), r0.x < 0.5 ? 0.6 : 0.0) * 4.0;
+    } else if (P34.w > 0.5) o0.xyz += transm * lightC * visT;
+    else {
+      float3 transmO = thin * smoothstep(0.45, 0.85, thin) * pow(saturate(dot(V, -Lt)), 3.0) * float3(1.0, 0.24, 0.10) * P5.x;
+      transmO = PESTransColor(transmO, IniParams.Load(int2(34,0)).z);   // (25/10) z34 color de la contraluz
+      o0.xyz += transmO * lightC * sqrt(saturate(r0.x));
+    }
+  }
+  r1.xyz = r1.yzw * r1.xxx;
+  if (isSkin) {
+    r1.xyz *= skinSpec;
+    float4 nb2 = g_NormalTexture.Sample(g_samplerPoint_Wrap_s, uvG);
+    uint3 q2 = (uint3)(float3(1023,1023,3) * nb2.xyw);
+    float2 e2 = float2((q2.x << 1) | (q2.z >> 1), (q2.y << 1) | (q2.z & 1)) * 0.00097703957 - 1;
+    float3 n2 = float3(e2.xy, 1 - abs(e2.x) - abs(e2.y));
+    if (n2.z < 0) n2.xy = (1 - abs(e2.yx)) * (e2.xy >= 0 ? 1 : -1);
+    n2 = normalize(n2); n2.z = -n2.z;
+    float2 pp2 = (v0.xy / v0.ww - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy;
+    float3 V2 = -normalize(float3(pp2, 1));
+    float3 L2 = normalize(pesLDir.xyz);
+    float3 H2 = normalize(L2 + V2);
+    float nl2 = saturate(dot(n2, L2));
+    // === PES21 (19/10) brillo de piel fisico: x103 el brillo toma el color del sol (no el tinte del material -> menos cera
+    // amarilla), y103 Fresnel de piel (F0 0.028: debil de frente, crece en la silueta), z103 fuerza total, w103 on/off
+    { float4 Q103 = IniParams.Load(int2(103,0));
+      if (Q103.w > 0.5) {
+        float nv2 = saturate(dot(n2, V2));
+        float rim = pow(1.0 - nv2, 4.0);
+        float3 sunN = PESSunColor(); float sl = max(dot(sunN, float3(0.3, 0.59, 0.11)), 1e-4); sunN /= sl;
+        float lumS = dot(r1.xyz, float3(0.3, 0.59, 0.11));
+        r1.xyz = lerp(r1.xyz, lumS * sunN, saturate(Q103.x));
+        r1.xyz *= lerp(1.0, lerp(0.55, 1.7, rim), saturate(Q103.y)) * (Q103.z > 0 ? Q103.z : 1.0);
+      } }
+    // lobulo fino (pelicula de grasa/sudor): GGX, rugosidad del pixel por zona (w5, 0 = 0.18 fija)
+    float w5k = IniParams.Load(int2(5,0)).w; float rS = PESSkinSharpRough(g_SpecularTexture.Sample(g_samplerPoint_Wrap_s, uvG).x, w5k); float a2 = rS * rS; float eF = 1.0;
+    if (P64.x > 0.5 && P64.y > 0.0) a2 = PESSunWidenAlpha(a2, P64.y, eF);   // PES21 sol de calidad
+    float a4 = a2 * a2;
+    float nh = saturate(dot(n2, H2));
+    float dd = nh * nh * (a4 - 1) + 1;
+    float D2 = a4 / (3.14159 * dd * dd);
+    float F2 = 0.028 + 0.972 * pow(1 - saturate(dot(V2, H2)), 5);
+    float sharp = D2 * F2 * nl2 * 0.25 * P5.y * eF;
+    r1.xyz += sharp * PESSunColor() * g_psScene.m_exposure.zzz * shadowScalar * PESSkinSharpOcc(specInt, w5k);
+  }
+  // diagnostico w12 = 3 sobre piel: magenta = es piel pero no se midio el grosor (sin cascada / transmision apagada);
+  // cian = marcada como piel pero el SSS esta apagado o sin translucidez (isSkin falso)
+  if (dbgT && abs(skinTag - 0.98039) < 0.003 && !tookSM) { o0.xyz = isSkin ? float3(4.0, 0.0, 4.0) : float3(0.0, 4.0, 4.0); r1.xyz = 0; }
+  // diagnostico w12 = 4: la escena en gris y las sombras de contacto en rojo (mas rojo = mas oscura)
+  if (dbgC) { o0.xyz = lerp(o0.xyz, float3(10.0, 0.0, 0.0), saturate((1.0 - csDbg) * 3.0)); r1.xyz = 0; }   // 18/10 d: rojo donde hay sombra de contacto (el gris no se veia: esta salida es irradiancia, el color lo pone el albedo despues)
+  o1.xyz = min(float3(10000,10000,10000), r1.xyz);
+  o0.w = 1;
+  o1.w = 1;
+  // PES21 inspector (19/10): LUZ PLANA (x89 = 1): irradiancia constante (y89) sin direccion, sombras ni brillos, para ver
+  // texturas y materiales sin la iluminacion. z89 = 1 deja el brillo especular.
+  { float4 P89 = IniParams.Load(int2(89,0));
+    if (P89.x > 0.5) { float fl = P89.y > 0.0 ? P89.y : 1.0; float3 c89 = pesLCol.xyz; float m89 = max(max(c89.x, c89.y), c89.z); if (m89 < 1e-3) m89 = 1.0;
+      o0.xyz = (c89 / m89) * fl * 0.6; if (P89.z < 0.5) o1.xyz = 0; } }
+  o2.xyzw = r0.xyzw;
+  return;
+}
