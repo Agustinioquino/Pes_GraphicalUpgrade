@@ -1113,12 +1113,18 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         if (ID3D11ShaderResourceView* v = SSGIBeforeComposition(c, s_presentNo.load())) { Remember(c, d, true, true, 26); c->PSSetShaderResources(26, 1, &v); }
     }
     // (27/10) 323: ocultar la camiseta interior (inner / inner_cap / inner_glove de common_package.fpk: 9990 / 9714 / 8640 indices,
-    // y el cuello alto highneck: 960). El modulo SinCamiseta no las puede tapar (vienen dentro del fpk que el juego carga una vez)
-    // y asoman en blanco en la linea de la manga y en la base del cuello al mirar el cuerpo sin camiseta. Solo mallas que no son piel.
-    if (g_cfg.live[323][0] > 0.5f && vs && vs->hash != 0x1c02a92ab4ae3362ULL && !d.skip &&
-        (t_drawVerts == 9990 || t_drawVerts == 9714 || t_drawVerts == 8640 || t_drawVerts == 960)) {
-        d.skip = true;
-        if (g_cfg.live[323][3] > 0.5f) { static std::atomic<int> n{0}; if (n.fetch_add(1) < 40) Log("camiseta interior oculta: %u indices, vs %016llx ps %016llx", t_drawVerts, (unsigned long long)vs->hash, (unsigned long long)(ps ? ps->hash : 0)); }
+    // y el cuello alto highneck: 960). El modulo SinCamiseta no las puede tapar (vienen dentro del fpk que el juego carga una vez):
+    // pegadas a la piel, asoman con el color de la camiseta interior del equipo (blanco en el editor, rosa en un partido) en la linea
+    // de la manga, en la curva del hombro y en la base del cuello, con o sin shaders. 9990 / 9714 / 8640 no los usa ninguna malla
+    // de la piel; 960 es comun (utileria), asi que solo se oculta con el mismo VS que ya dibujo una de las otras tres.
+    if (g_cfg.live[323][0] > 0.5f && vs && !d.skip) {
+        static std::atomic<uint64_t> s_innerVS{0};
+        const bool big = t_drawVerts == 9990 || t_drawVerts == 9714 || t_drawVerts == 8640;
+        if (big) s_innerVS.store(vs->hash, std::memory_order_relaxed);
+        if (big || (t_drawVerts == 960 && vs->hash == s_innerVS.load(std::memory_order_relaxed))) {
+            d.skip = true;
+            if (g_cfg.live[323][3] > 0.5f) { static std::atomic<int> n{0}; if (n.fetch_add(1) < 40) Log("camiseta interior oculta: %u indices, vs %016llx ps %016llx", t_drawVerts, (unsigned long long)vs->hash, (unsigned long long)(ps ? ps->hash : 0)); }
+        }
     }
     // 19/10: capas editadas desde el inspector (PES21FX_capas.ini): textura por slot u "ocultar" el dibujo
     g_drawOrder++;
