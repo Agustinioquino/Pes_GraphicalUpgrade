@@ -10,11 +10,12 @@
 // Se incluye despues de declarar IniParams (lee la fila 111 para la altura del sol).
 
 // difusa del sol sobre el pasto: wrapD es la del motor (directa + envoltura por translucidez)
-float3 PESTurfDiffuse(float3 sunC, float rawNdotL, float wrapD, float4 PG)
+// trans: translucidez del G-buffer (27/10: las hojas pintadas de cal llevan ~0.1 y no se tinen; las verdes 0.4-1.0)
+float3 PESTurfDiffuse(float3 sunC, float rawNdotL, float wrapD, float4 PG, float trans)
 {
   float dirD = saturate(rawNdotL);
   float through = max(saturate(wrapD) - dirD, 0.0);
-  float3 leaf = lerp(float3(1.0, 1.0, 1.0), float3(1.0, 0.93, 0.45), saturate(PG.y));
+  float3 leaf = lerp(float3(1.0, 1.0, 1.0), float3(1.0, 0.93, 0.45), saturate(PG.y) * saturate((trans - 0.15) / 0.25));
   float4 SW = IniParams.Load(int2(111, 0));
   float sunUp = dot(SW.xyz, SW.xyz) > 0.5 ? SW.y : 1.0;
   float low = 1.0 - smoothstep(0.17, 0.60, sunUp);

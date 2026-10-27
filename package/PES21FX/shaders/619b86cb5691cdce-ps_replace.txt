@@ -455,7 +455,7 @@ void main(
   }
   // === PES21 (27/10) luz de cielo sobre el cesped (314): la luz de cielo de arriba (x47) no corre en el cesped (tipo 3) y en la
   // sombra el pasto quedaba solo con el ambiente del motor (casi negro de cerca, video de Agustin 26/10 22:02). Una pared de cielo
-  // entero sobre el suelo: celeste del cielo fisico (150) o de la niebla, ocluida con el AO. x314 fuerza (1 = sombra a ~1/4 del sol
+  // entero sobre el suelo: celeste del cielo fisico (150) o de la niebla, ocluida con el AO. x314 fuerza (1 = sombra a ~1/3 del sol
   // con el sol a ~30 grados, como una foto), y314 cuanto llega tambien a lo que esta al sol (el motor ya trae algo de ambiente ahi),
   // w314 on/off. Solo de dia con sol.
   {
@@ -476,8 +476,10 @@ void main(
           else { float3 hor = max(g_psScene.m_fogColor.xyz, 0.0); float lh = dot(hor, float3(0.3, 0.5, 0.2));
                  if (lh > 1e-4) skyT = normalize(hor / lh * float3(0.75, 0.9, 1.25)) * 1.7; } }
         float shT = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
-        float aoT = lerp(1.0, saturate(inOcclusion.SampleLevel(g_samplerLinear_Clamp_s, uvC, 0).x), 0.6);
-        float kT = max(TS.x, 0.0) * 0.14 * lerp(saturate(TS.y), 1.0, 1.0 - shT);
+        // (27/10) capturas de 69df3d5: la sombra de cerca quedaba casi negra y mas oscura que la del medio (26 contra 51 de verde
+        // en sRGB): el AO de pantalla sobre las hojas 3D densas de cerca la apagaba. El AO pesa poco aca y la luz sube (0.14 -> 0.2)
+        float aoT = lerp(1.0, saturate(inOcclusion.SampleLevel(g_samplerLinear_Clamp_s, uvC, 0).x), 0.25);
+        float kT = max(TS.x, 0.0) * 0.2 * lerp(saturate(TS.y), 1.0, 1.0 - shT);
         r2.xyz += lumT * skyT * kT * dayT * aoT * saturate((400.0 - zsk) / 120.0) * PESAmbGain();
       }
     }
