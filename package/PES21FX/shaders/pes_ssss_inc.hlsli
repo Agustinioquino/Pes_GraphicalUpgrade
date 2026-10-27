@@ -101,7 +101,14 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
       float depthW = exp(-dzmm * dzmm * P.z * 0.25);           // mas de ~2 mm de salto en profundidad: casi no mezcla
       float nd = saturate(dot(n0, DecN(uvS))); nd *= nd;
       w *= (sk ? 1.0 : 0.0) * depthW * nd;
-      if (redW > 1.01) { bool skR = IsSkin(uvR); float dzR = abs(LinZ(uvR) - z0) * 1000.0; w.r *= (skR ? 1.0 : 0.0) * exp(-dzR * dzR * P.z * 0.25) / max((sk ? 1.0 : 0.0) * depthW, 1e-3); }
+      // (27/10) el rojo (muestra mas ancha) se pesa por SU propia muestra: antes se dividia por el peso de la muestra verde/azul
+      // con un piso de 0.001, y en un salto de profundidad (borde de la oreja, labio contra la boca) el rojo quedaba con peso
+      // mientras verde y azul se apagaban: lineas naranjas en los bordes
+      if (redW > 1.01) {
+        bool skR = IsSkin(uvR); float dzR = abs(LinZ(uvR) - z0) * 1000.0;
+        float ndR = saturate(dot(n0, DecN(uvR))); ndR *= ndR;
+        w.r = k.x * (skR ? 1.0 : 0.0) * exp(-dzR * dzR * P.z * 0.25) * ndR;
+      }
     }
     float3 cS = inLight.SampleLevel(sLinear, uvS, 0).xyz;
     if (redW > 1.01) cS.r = inLight.SampleLevel(sLinear, uvR, 0).r;
