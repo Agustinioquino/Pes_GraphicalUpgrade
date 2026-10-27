@@ -103,17 +103,19 @@ void main(
   float4 P94h = IniParams.Load(int2(94,0));
   // (27/10) poros a tamano real, la misma cuenta que la cara (5ce3): el mosaico se repite segun cuanta piel cubre la UV
   float3 hpVd = normalize(v3.xyz);
-  float3 hpPV = -hpVd * ((1.0 / max(v0.w, 1e-6)) / max(abs(hpVd.z), 0.05));
+  bool hpHasD = v3.w < -1e-3;   // (27/10 b) distancia del VS de la cabeza (faab87ee) en v3.w, negativa
+  float3 hpPV = -hpVd * (hpHasD ? -v3.w : 1.0);
   float3 hpDPx = ddx(hpPV), hpDPy = ddy(hpPV);
   float2 hpDUx = ddx(v2.xy), hpDUy = ddy(v2.xy);
   float hpMPerUv = sqrt(length(cross(hpDPx, hpDPy)) / max(abs(hpDUx.x * hpDUy.y - hpDUx.y * hpDUy.x), 1e-14));
+  hpMPerUv = hpHasD ? clamp(hpMPerUv, 0.05, 2.0) : 0.3;
   float hpTileM = 0.022 * 7.0 / max(P94h.y, 1.0);
   float hpLr = log2(clamp(hpMPerUv / hpTileM, 1.0, 4096.0));
   float hpK0 = floor(hpLr), hpKf = hpLr - hpK0;
   float hpSc = exp2(hpK0);
   float2 hpMuv = v2.xy * hpSc;
   float2 hpMdx = hpDUx * hpSc, hpMdy = hpDUy * hpSc;
-  float hpNear = saturate((2.5 - sqrt(length(hpDPx) * length(hpDPy)) / (hpTileM / 22.0)) / 1.5);
+  float hpNear = hpHasD ? saturate((2.5 - sqrt(length(hpDPx) * length(hpDPy)) / (hpTileM / 22.0)) / 1.5) : 0.0;
   float hpPoreA = 0.0, hpMicroVar = 0.0, hpPoreOcc = 1.0, hpTZone = 0.0;
 
   r0.xy = float2(-0.5,-0.5) + v0.xy;

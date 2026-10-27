@@ -335,10 +335,14 @@ void main(
       // eso: un mosaico = 22 mm de piel con y94 = 7 (mas = poros mas chicos). La escala se redondea a potencias de 2 y se
       // funden las dos vecinas, asi el dibujo no se deforma donde la escala cambia.
       float3 vdir = normalize(v3.xyz);
-      float3 pV = -vdir * ((1.0 / max(v0.w, 1e-6)) / max(abs(vdir.z), 0.05));   // posicion en vista (metros)
+      // (27/10 b) la distancia viene del VS en v3.w (negativa); la cuenta vieja con 1 / SV_Position.w daba la piel unas 20 veces
+      // mas chica y el mosaico salia gigante (grietas de barro en la cara). Sin el VS propio: escala fija de una cara (0.3 m por UV)
+      bool hasD = v3.w < -1e-3;
+      float3 pV = -vdir * (hasD ? -v3.w : 1.0);   // posicion en vista (metros)
       float3 dPx = ddx(pV), dPy = ddy(pV);
       float2 dUx = ddx(v2.xy), dUy = ddy(v2.xy);
       float mPerUv = sqrt(length(cross(dPx, dPy)) / max(abs(dUx.x * dUy.y - dUx.y * dUy.x), 1e-14));
+      mPerUv = hasD ? clamp(mPerUv, 0.05, 2.0) : 0.3;
       float tileM = 0.022 * 7.0 / max(P94.y, 1.0);
       float lr = log2(clamp(mPerUv / tileM, 1.0, 4096.0));
       float k0 = floor(lr), kf = lr - k0;
@@ -346,7 +350,7 @@ void main(
       float2 muv = v2.xy * sc;
       float2 mdx = dUx * sc, mdy = dUy * sc;
       // fundido por tamano en pantalla: con el pixel mas grande que ~2 celdas de la piel (22 por mosaico) el relieve ya no se ve
-      float pxM = sqrt(length(dPx) * length(dPy));
+      float pxM = hasD ? sqrt(length(dPx) * length(dPy)) : 1.0;   // sin distancia: sin poros
       float near = saturate((2.5 - pxM / (tileM / 22.0)) / 1.5);
       if (near > 0.001) {
         float4 guide = pesFacePores.Sample(g_samplerLinear_Clamp_s, v2.xy);   // por zona: densidad, tamano, zona T, oclusion
