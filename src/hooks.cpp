@@ -1045,7 +1045,8 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (ps && ps->hash == 0x55297925e0c66085ULL) PitchWearNotePlayer(c);
     // 19/10: SSS separable en pantalla antes de la composicion: la irradiancia (t9) llega ya difundida sobre la piel
     if (ps && (ps->hash == 0x619b86cb5691cdceULL || ps->hash == 0xf807e74d5b900a15ULL) && ps->repl) {
-        if (ID3D11ShaderResourceView* v = SSSSBeforeComposition(c)) { Remember(c, d, true, true, 9); c->PSSetShaderResources(9, 1, &v); }
+        if (ID3D11ShaderResourceView* v = SSSSBeforeComposition(c)) { Remember(c, d, true, true, 9); c->PSSetShaderResources(9, 1, &v);
+            if (ID3D11ShaderResourceView* sp = SSSSSpecSRV()) { Remember(c, d, true, true, 10); c->PSSetShaderResources(10, 1, &sp); } }   // (27/10 b) brillo con la luz de prueba del editor
     }
     // 20/10: GTAO (HBAO actual) para la luz global y la composicion: t27 (se calcula una vez por cuadro)
     if (ps && (ps->hash == 0x619b86cb5691cdceULL || ps->hash == 0xfda6da09737592b1ULL) && ps->repl) {

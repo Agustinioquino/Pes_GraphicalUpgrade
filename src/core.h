@@ -36,6 +36,7 @@ constexpr int kParamCount = 320;           // float4 x 320 -> t120 en los shader
 // Fisico (x inclinacion, y tipo, z tamano; por jugador, musculo.cpp); 288.x = columna marcada (t19 del PS de la piel); 289.x = base
 // esculpida (el relieve del normal map de TorsoBody en la malla: filas 7..9 de los datos de t127 + correccion de la textura en t20);
 // 293 = piel real (x prendido, y brillo, z translucidez; zonas del torso en t21 / t24; w = union suave del brazo con el torso).
+// 297 / 298 = luz de prueba del editor (27/10 b, pes_ssss_inc.hlsli: sol de dia / tarde / noche donde no corre el sol del partido).
 // 305 musculos con textura (manos.cpp + pes_limbs.hlsli en el VS 1c02a92a + PS aa7d1833; x prendido, y definicion, z venas de los
 // brazos, w venas de las manos con el puno apretado; v12.7).
 
@@ -339,7 +340,7 @@ void SkinToneCheckDraw(ID3D11DeviceContext* c, uint64_t ps, uint64_t vs);
 constexpr int kSkinTones = 30;                    // (24/10) tonos de piel propios (skintone.cpp); los 6 del juego son 3, 8, ..., 28
 bool SkinToneGain(int gameIdx, int tono, int matiz, float out[3]);   // ganancia lineal (tono elegido / color del juego)
 void SkinToneSwatch(int tono, unsigned char rgb[3]);
-struct SkinToneProf { int tono = 0, matiz = 0, luz = 0, sat = 0, juego = 0, igualar = 0, zona = 0; uint32_t rgb = 0, cuerpo = 0, cara = 0; };   // (24/10 e) perfil de piel de un jugador; (24/10 g) zona: 0 cara y cuerpo, 1 solo el cuerpo, 2 solo el torso
+struct SkinToneProf { int tono = 0, matiz = 0, luz = 0, sat = 0, juego = 0, igualar = 1, zona = 0; uint32_t rgb = 0, cuerpo = 0, cara = 0; };   // (24/10 e) perfil de piel de un jugador; (24/10 g) zona: 0 cara y cuerpo, 1 solo el cuerpo, 2 solo el torso
 bool SkinToneGetProf(uint32_t id, SkinToneProf& out);   // true si tiene algo propio
 void SkinToneSetProf(uint32_t id, const char* name, const SkinToneProf& q);
 bool SkinToneGet(uint32_t id, int* tono, int* matiz, uint32_t* rgb = nullptr);   // rgb: color propio 0xRRGGBB (0 = ninguno)
@@ -388,7 +389,7 @@ ID3D11ShaderResourceView* GTAOBeforeComposition(ID3D11DeviceContext* c, int fram
 ID3D11ShaderResourceView* SSGIBeforeComposition(ID3D11DeviceContext* c, int frame); void SSGIReloadShaders(); void SSGIPresent(int presentNo);   // (21/10) SSGI temporal (ssgi.cpp) -> t26
 void LightMeterAfterComposition(ID3D11DeviceContext* c); void LightMeterPresent(); void LightMeterReloadShaders(); std::string LightMeterSummary();   // posicion de la camara (m_eyepos del SceneCB, config.cpp, 2 cuadros de atraso)
 void AutoCapturePresent(ID3D11Texture2D* frame);   // hooks.cpp
-ID3D11ShaderResourceView* SSSSBeforeComposition(ID3D11DeviceContext* c); void SSSSReloadShaders(); extern std::atomic<int> g_ssssDraws;   // ssss.cpp
+ID3D11ShaderResourceView* SSSSBeforeComposition(ID3D11DeviceContext* c); ID3D11ShaderResourceView* SSSSSpecSRV(); void SSSSReloadShaders(); extern std::atomic<int> g_ssssDraws;   // ssss.cpp
 // prueba automatica del menu (menutest.cpp)
 void MenuTestPresent(IDXGISwapChain* sc);
 void MenuTestStart(); void MenuTestStop(); bool MenuTestActive();

@@ -196,11 +196,11 @@ static void SaveSkin() {
          "; [id] = id del jugador; tono = 1..30 (0 = el color del juego; los 6 colores del juego son 3, 8, 13, 18, 23 y 28),\r\n"
          "; matiz = -25 (oliva) .. +25 (rosado), luz y sat = -25..+25 (ajuste fino); juego = color de piel del juego del jugador\r\n"
          "; (1..6, lo anota el menu Fisico); rgb = RRGGBB (hex): color propio elegido en la paleta del juego (manda sobre el tono);\r\n"
-         "; igualar = 1: el cuerpo toma el color de la cara (cuerpo y cara = colores medidos en la base del cuello, hex sRGB);\r\n"
+         "; igualar = 1 (por defecto; 0 = no): el cuerpo toma el color de la cara (cuerpo y cara = colores medidos en la base del cuello, hex sRGB);\r\n"
          "; zona = a que se aplica el tono: 0 cara y cuerpo, 1 solo el cuerpo, 2 solo el torso (brazos, cuello y piernas como el juego).\r\n";
     for (auto& kv : s_skin) {
         const SkinProf& q = kv.second;
-        if (q.tono <= 0 && q.matiz == 0 && q.luz == 0 && q.sat == 0 && !q.rgb && !q.igualar && !q.zona) continue;
+        if (q.tono <= 0 && q.matiz == 0 && q.luz == 0 && q.sat == 0 && !q.rgb && q.igualar && !q.cuerpo && !q.zona) continue;   // (27/10) igualar = 1 es el defecto
         f << "\r\n[" << kv.first << "]\r\n";
         if (!q.name.empty()) f << "nombre = " << q.name << "\r\n";
         f << "tono = " << q.tono << "\r\nmatiz = " << q.matiz << "\r\n";
@@ -208,7 +208,7 @@ static void SaveSkin() {
         if (q.sat) f << "sat = " << q.sat << "\r\n";
         char h[16];
         if (q.rgb) { snprintf(h, sizeof h, "%06X", q.rgb & 0xffffffu); f << "rgb = " << h << "\r\n"; }
-        if (q.igualar) f << "igualar = 1\r\n";
+        f << "igualar = " << (q.igualar ? 1 : 0) << "\r\n";   // (27/10) se guarda siempre (el defecto es 1)
         if (q.zona) f << "zona = " << q.zona << "\r\n";
         if (q.cuerpo) { snprintf(h, sizeof h, "%06X", q.cuerpo & 0xffffffu); f << "cuerpo = " << h << "\r\n"; }
         if (q.cara) { snprintf(h, sizeof h, "%06X", q.cara & 0xffffffu); f << "cara = " << h << "\r\n"; }
@@ -301,7 +301,9 @@ void SkinMeasureReport(const uint32_t* body, const uint32_t* face, uint32_t yMin
     uint32_t eid = 0; if (!FisicoEditing(&eid) || !eid) return;
     std::lock_guard<std::mutex> lk(s_skinMx);
     if (!s_skinLoaded) LoadSkin();
-    auto it = s_skin.find(eid); if (it == s_skin.end() || !it->second.igualar) return;
+    auto it = s_skin.find(eid);
+    if (it == s_skin.end()) it = s_skin.emplace(eid, SkinProf()).first;   // (27/10) cuerpo del color de la cara por defecto: se mide al abrir su Fisico
+    if (!it->second.igualar) return;
     auto diff = [](uint32_t a, uint32_t b) { int d = 0; for (int k = 0; k < 3; k++) d = (std::max)(d, abs((int)((a >> (8 * k)) & 255) - (int)((b >> (8 * k)) & 255))); return d; };
     if (diff(cb, it->second.cuerpo) <= 1 && diff(cf, it->second.cara) <= 1) return;
     it->second.cuerpo = cb; it->second.cara = cf; s_skinDirty = true; s_skinDirtyT = t;
