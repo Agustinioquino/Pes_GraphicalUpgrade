@@ -440,3 +440,11 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
     tools/torsobody/neck_profiles.py lee esas lineas y compara la mediana de las caras con el borde del torso (LOOP), la
     superficie del torso 1 .. 4 cm abajo y el cuello generico de TorsoBody (neck.fmdl). Instalado 27/10 00:35 (backup
     PES21FX\backup_20261027_0040_71f80c7: Lua 1.9, torsob_nrm / srm de la primera version y los pes_var_* que cambiaron).
+- (26/10 g) VISTA ORIGINAL AL NIVEL DE KONAMI (make_srm.py): el srm del cuerpo de un jugador real (Neymar, del usuario) tiene
+  brillo 0.56 de media en la piel y rugosidad 0.68; TorsoBody 0.89 (torso / brazo) y 0.84 (muslo): brillaba mucho mas que la
+  cara. --konami lleva torsob_srm a 0.56 (al del brazo escalado junto al hombro), --escalar arm_srm x 0.626 y thigh_srm x 0.667
+  (la rugosidad igual). trm (translucidez; TorsoBody: gris parejo 0.144, el de Konami trae la piel en grises): --trm torso / arm =
+  zonas de torso_skin (hueso del esternon / columna / clavicula menos, carne mas) a una media de 0.18 x la textura de la piel
+  (alto pasaje del normal map suavizado, +-6 %). El muslo no tiene trm en TorsoBody (usa el thigh_trm del juego). El cuadrante de
+  abajo a la izquierda de torsob_* es un sobrante del cuerpo de Konami: ninguna malla de TorsoBody lo usa.
+- (26/10 g) TorsoBody_cuello 1.11: la 1.10 llamaba a pcall (Sider no lo da) y fallaba en cada cara: no corto ningun cuello.

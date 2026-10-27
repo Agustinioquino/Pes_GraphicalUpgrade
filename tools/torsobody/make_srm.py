@@ -23,6 +23,10 @@ from ftex import Ftex
 from make_texture_pack import decode, encode_chain, upsample, pore_factor, DEF_SPEC, DEF_ROUGH
 
 TB_SPEC, TB_ROUGH, ARM_SPEC, ARM_ROUGH = 0.906, 0.698, 0.819, 0.698   # srm de TorsoBody (torso / brazo)
+# (26/10 g) nivel de Konami (torso de un jugador real, p. ej. Neymar: brillo 0.56 de media en las islas, rugosidad 0.68):
+# TorsoBody brillaba mucho mas (torso 0.89, brazo 0.89, muslo 0.84) que la cara del juego -> la linea del cuello en la vista original
+KON_SPEC = 0.56
+ARM_MEAN, THIGH_MEAN = 0.894, 0.839       # brillo medio de arm_srm / thigh_srm de TorsoBody adentro de las islas
 
 def island_mask(common, H, W, erode=6):
     """texeles adentro de las islas del torso (v 0..0.5 de la textura), sin el borde"""
@@ -105,16 +109,17 @@ def build(texdir, common, nrm_path, bsm_path, out, preview=None, level="juego"):
     spec[:H // 2] = za[..., 0]; rough[:H // 2] = za[..., 1]
     s0 = decode(Fs)
     spec[H // 2:] = s0[H // 2:, :, 0] * (DEF_SPEC / 0.906); rough[H // 2:] = s0[H // 2:, :, 1] + (DEF_ROUGH - 0.698)
-    kh = 0.12 if level == "juego" else 0.35                 # (vista original: el mapa a 4096 tiene poros fuertes, hf ~0.4 de media)
+    kh = 0.12 if level in ("juego", "konami") else 0.35                 # (vista original: el mapa a 4096 tiene poros fuertes, hf ~0.4 de media)
     spec = spec * (1 - kh * hf) * (1 - 0.30 * dark) * (1 + 0.04 * light)
     rough = rough + (kh / 3.5) * hf + 0.12 * dark - 0.02 * light
-    if level == "juego":   # (26/10 e) al nivel de TorsoBody (vista original) y al del brazo junto al hombro
+    if level in ("juego", "konami"):   # (26/10 e) al nivel de TorsoBody (vista original) y al del brazo junto al hombro
         from torso_variants import ss
         # el promedio del torso queda en el de TorsoBody (los poros del mapa a 4096 cortan mucho: hf medio ~0.4)
+        ts, asp = (TB_SPEC, ARM_SPEC) if level == "juego" else (KON_SPEC, ARM_SPEC * KON_SPEC / ARM_MEAN)   # (26/10 g) brazo escalado igual
         ins = island_mask(common, H, W)
-        spec = spec * (TB_SPEC / max(float(spec[ins].mean()), 1e-3)); rough = rough + (TB_ROUGH - float(rough[ins].mean()))
+        spec = spec * (ts / max(float(spec[ins].mean()), 1e-3)); rough = rough + (TB_ROUGH - float(rough[ins].mean()))
         w = 1.0 - ss(0.004, 0.035, shoulder_dist(common, H, W))
-        spec = spec + (ARM_SPEC - spec) * w; rough = rough + (ARM_ROUGH - rough) * w
+        spec = spec + (asp - spec) * w; rough = rough + (ARM_ROUGH - rough) * w
     rgba = np.zeros((H, W, 4), np.float32); rgba[..., 0] = np.clip(spec, 0, 1); rgba[..., 1] = np.clip(rough, 0, 1); rgba[..., 3] = 1
     Fs.mips = encode_chain(Fs, rgba)
     open(out, "wb").write(Fs.to_bytes(chunk=65536, small_first=True))
@@ -125,7 +130,74 @@ def build(texdir, common, nrm_path, bsm_path, out, preview=None, level="juego"):
     return dict(spec=(float(np.percentile(spec[:H // 2], 1)), float(np.percentile(spec[:H // 2], 99))),
                 rough=(float(np.percentile(rough[:H // 2], 1)), float(np.percentile(rough[:H // 2], 99))), hf=float(hf[:H // 2].mean()), dark=float((dark[:H // 2] > 0.5).mean()))
 
+def scale_srm(src, out, k):
+    """(26/10 g) arm_srm / thigh_srm: el brillo (R) por k (la rugosidad igual)"""
+    F = Ftex(open(src, "rb").read()); d = decode(F)
+    d[..., 0] = np.clip(d[..., 0] * k, 0, 1); d[..., 2] = 0; d[..., 3] = 1
+    F.mips = encode_chain(F, d)
+    open(out, "wb").write(F.to_bytes(chunk=65536, small_first=True))
+
+TRM_MEAN = 0.18   # (26/10 g) translucidez media (trm) como la del torso de Konami en la piel (0.16 .. 0.19); TorsoBody: 0.144 pareja
+
+def build_trm(texdir, common, nrm_path, out, part="torso", preview=None):
+    """(26/10 g) torsob_trm / arm_trm (vista original: con PES21 FX el PS pone la translucidez por zonas, x293): la de TorsoBody era
+    un gris parejo (0.144). Aca: las zonas de piel de torso_skin (carne mas translucida, hueso / codo menos; en las costuras DEF)
+    llevadas a TRM_MEAN, por el detalle fino de la piel del normal map (poros, lineas: como el trm de Konami, que trae la textura de
+    la piel en grises). Escala de grises (R = G = B)."""
+    from scipy.ndimage import gaussian_filter
+    from uvbake import bake
+    import torso_skin
+    from torso_variants import ss, per_vertex
+    Ft = Ftex(open(os.path.join(texdir, "torsob_trm.ftex" if part == "torso" else "arm_trm.ftex"), "rb").read())
+    t0 = decode(Ft); H, W = t0.shape[:2]
+    nm = decode(Ftex(open(nrm_path, "rb").read()))
+    if nm.shape[0] != H:   # el normal map a la resolucion del trm
+        f = nm.shape[0] // H; nm = nm[:H * f, :W * f].reshape(H, f, W, f, -1).mean((1, 3))
+    xy = nm[..., :2] * 2 - 1
+    sg = 3.0 * H / 4096.0 + 0.8
+    d = np.sqrt(np.sum((xy - np.stack([gaussian_filter(xy[..., c], sg) for c in range(2)], -1)) ** 2, -1))
+    if part == "torso":
+        from torso_mesh import load_torso, geodesic_from
+        T = load_torso(common, "out")
+        fade = ss(0.012, 0.045, geodesic_from(T["Pw"], T["edges"], T["boundary"]))
+        G = bake(T, per_vertex(T, fade[:, None]), W=2048, H=1024, vmax=0.5)
+        sk = torso_skin.build_skin(G); rows = H // 2
+        tr = upsample(sk[..., 2:3], rows, W)[..., 0]
+        ins = np.zeros((H, W), bool); ins[:rows] = upsample(G["mask"].astype(np.float32)[..., None], rows, W)[..., 0] > 0.5
+    else:
+        from torso_variants import build_arm
+        A = build_arm(common, "arm")
+        G = bake(A, per_vertex(A, A["fade"][:, None]), W=2048, H=2048, vmax=1.0)
+        sk = torso_skin.build_arm_skin(G); rows = H
+        tr = upsample(sk[..., 2:3], rows, W)[..., 0]
+        ins = upsample(G["mask"].astype(np.float32)[..., None], H, W)[..., 0] > 0.5
+    from scipy.ndimage import binary_erosion
+    core = binary_erosion(ins, iterations=max(2, H // 1024 * 3))
+    dn = np.clip(d / max(float(d[core].mean()), 1e-6), 0, 3)
+    dn = np.where(core, dn, 1.0)
+    dn = gaussian_filter(dn, 1.5 * H / 4096.0 + 0.5)                         # textura de piel, no ruido de pixel
+    dn = 1 + (dn - 1) / max(float(dn[core].std()) / 0.35, 1e-6)              # desvio 0.35 -> +-6 % con el peso de abajo
+    trm = t0[..., 0] * (TRM_MEAN / float(t0[..., 0][ins].mean()))              # fuera de las islas / abajo: el original escalado
+    zone = TRM_MEAN * (tr / torso_skin.DEF["trans"])
+    trm[:rows] = np.where(ins[:rows], zone, trm[:rows])
+    trm = trm * np.where(ins, 1 + 0.18 * (dn - 1), 1.0)
+    rgba = np.ones((H, W, 4), np.float32); rgba[..., :3] = np.clip(trm, 0, 1)[..., None]
+    Ft.mips = encode_chain(Ft, rgba)
+    open(out, "wb").write(Ft.to_bytes(chunk=65536, small_first=True))
+    if preview:
+        from PIL import Image
+        Image.fromarray((np.clip(trm[::4, ::4] * 3, 0, 1) * 255).astype(np.uint8)).save(preview)
+    v = trm[ins]
+    return float(v.mean()), float(np.percentile(v, 5)), float(np.percentile(v, 95))
+
 if __name__ == "__main__":
+    if sys.argv[1] == "--trm":     # --trm torso|arm <tex de TorsoBody> <common> <normal map> <salida> [vista previa]
+        print("trm %s: media %.3f, p5 %.3f, p95 %.3f" % ((sys.argv[2],) + build_trm(*sys.argv[3:7], part=sys.argv[2], preview=sys.argv[7] if len(sys.argv) > 7 else None))); sys.exit()
+    if sys.argv[1] == "--escalar":  # --escalar <srm> <salida> <k>
+        scale_srm(sys.argv[2], sys.argv[3], float(sys.argv[4])); sys.exit()
+    if sys.argv[1] == "--konami":   # --konami <tex de TorsoBody> <common> <nrm> <bsm> <salida> [vista previa]
+        r = build(*sys.argv[2:7], preview=sys.argv[7] if len(sys.argv) > 7 else None, level="konami")
+        print("srm (Konami): brillo %.2f..%.2f, rugosidad %.2f..%.2f" % (r["spec"] + r["rough"])); sys.exit()
     if sys.argv[1] == "--poros":
         a, b, c = add_pores(*sys.argv[2:6])
         print("poros: micro relieve propio %.4f -> %.4f (TorsoBody %.4f)" % (a, b, c)); sys.exit()
