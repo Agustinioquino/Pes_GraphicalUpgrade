@@ -91,11 +91,14 @@ def join_shoulder(torso_rows, arm_rows_all, log=print):
                 nn = R[nr, it, :3] + ref[nr, ja, :3]; nn /= np.maximum(np.linalg.norm(nn, axis=1, keepdims=True), 1e-9)
                 R[dr, it, :3] = disp; R[nr, it, :3] = nn
                 t = R[tr, it, :3]; t = t - nn * np.sum(t * nn, 1, keepdims=True); R[tr, it, :3] = t / np.maximum(np.linalg.norm(t, axis=1, keepdims=True), 1e-9)
-                for A in arm_rows_all:
-                    da, ka = cKDTree(A[0, :, :3]).query(R[0, it, :3]); ok = da < 1e-4
-                    A[dr, ka[ok], :3] = disp[ok]; A[nr, ka[ok], :3] = nn[ok]
-                    ta = A[tr, ka[ok], :3]; ta = ta - nn[ok] * np.sum(ta * nn[ok], 1, keepdims=True)
-                    A[tr, ka[ok], :3] = ta / np.maximum(np.linalg.norm(ta, axis=1, keepdims=True), 1e-9)
+                for A in arm_rows_all:   # (27/10) TODOS los vertices del brazo en ese punto (los cortes de uv del brazo lo repiten)
+                    ta_tree = cKDTree(A[0, :, :3])
+                    for q, lst in enumerate(ta_tree.query_ball_point(R[0, it, :3], 1e-4)):
+                        if not lst: continue
+                        ka = np.array(lst)
+                        A[dr, ka, :3] = disp[q]; A[nr, ka, :3] = nn[q]
+                        ta = A[tr, ka, :3]; ta = ta - nn[q] * np.sum(ta * nn[q], 1, keepdims=True)
+                        A[tr, ka, :3] = ta / np.maximum(np.linalg.norm(ta, axis=1, keepdims=True), 1e-9)
             nj += len(it)
     log("  hombro: %d vertices del torso con la misma normal que el brazo (base, atletico, gordo)" % nj)
 
