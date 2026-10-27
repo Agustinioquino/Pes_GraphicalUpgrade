@@ -315,7 +315,35 @@ static std::string SunPassList(uint32_t mask, const int* n) {
     for (int i = 0; i < 21; i++) if (mask & (1u << i)) { snprintf(b, sizeof(b), "%s%08llx%s x%d", r.empty() ? "" : ", ", (unsigned long long)(kSunPass[i] >> 32), i == 7 ? " (sol sin sombra)" : i == 8 ? " (sol con mascara)" : i > 8 ? " (foco)" : "", n ? n[i] : 0); r += b; }
     return r.empty() ? "ninguna" : r;
 }
+// (27/10) registro del sol: ajustes. Al empezar, los del sol / luz / sombras; despues cada valor que cambia (menu, teclas, recarga del ini)
+static void SunSettingsPresent() {
+    static double next = 0; double t = Now(); if (t < next) return; next = t + 1.0;
+    static float prev[kParamCount][4]; static bool first = true;
+    static const int kSunRows[] = { 4, 20, 21, 30, 34, 44, 47, 53, 54, 64, 83, 85, 87, 101, 102, 109, 111, 121, 134, 150, 151, 152, 296, 312, 313, 314 };
+    const char* cn = "xyzw";
+    if (first) {
+        first = false; memcpy(prev, g_cfg.live, sizeof(prev));
+        for (int r : kSunRows) SunLog("ajuste al empezar: fila %d = x %.3f  y %.3f  z %.3f  w %.3f", r, g_cfg.live[r][0], g_cfg.live[r][1], g_cfg.live[r][2], g_cfg.live[r][3]);
+        return;
+    }
+    // filas que escribe la DLL sola (tiempos, sol medido, tabla de tonos de piel, vista, cuadro): no son ajustes
+    auto autoRow = [](int r) { return r == 10 || r == 23 || r == 24 || r == 44 || r == 63 || r == 93 || (r >= 111 && r <= 114) || r == 157 || r == 159
+                                      || (r >= 192 && r <= 254) || r == 255 || r == 257 || (r >= 264 && r <= 284) || r == 312; };
+    // y por si falta alguna: un valor que cambia 5 segundos seguidos se toma como automatico y no se anota mas
+    static unsigned char streak[kParamCount][4]; static bool muted[kParamCount][4];
+    int lines = 0;
+    for (int r = 0; r < kParamCount; r++) for (int c = 0; c < 4; c++) {
+        float v = g_cfg.live[r][c];
+        if (v == prev[r][c]) { streak[r][c] = 0; continue; }
+        float was = prev[r][c]; prev[r][c] = v;
+        if (autoRow(r) || muted[r][c]) continue;
+        if (++streak[r][c] >= 5) { muted[r][c] = true; SunLog("ajuste: %c%d cambia solo (lo mueve la DLL): no se anota mas", cn[c], r); continue; }
+        if (lines++ < 40) SunLog("ajuste: %c%d %.3f -> %.3f", cn[c], r, was, v);
+    }
+    if (lines > 40) SunLog("ajuste: %d cambios mas en este segundo (no anotados)", lines - 40);
+}
 static void SunPassPresent() {
+    SunSettingsPresent();
     static uint32_t lastMask = 0xffffffffu; static int lines = 0; static double nextSum = 0;
     static int frames = 0, framesOrig = 0, framesNone = 0, switches = 0, sums = 0;
     int n[21]; uint32_t mask = 0;
@@ -353,7 +381,17 @@ static void SunPassPresent() {
               resMin = (std::min)(resMin, res); resMax = (std::max)(resMax, res); upMin = (std::min)(upMin, w[1] - k[1]); upMax = (std::max)(upMax, w[1] - k[1]);
               if (dFrames > 0 && acosf(std::clamp(w[0] * dPrev[0] + w[1] * dPrev[1] + w[2] * dPrev[2], -1.0f, 1.0f)) * 57.2958f > 3.0f) dJumps++;
               for (int i = 0; i < 3; i++) dPrev[i] = w[i];
-              SunWatchFrame(w, dev, lf);   // (26/10) quien escribe el sol de las repeticiones (sunwatch.cpp)
+              SunWatchFrame(w, dev, lf);
+              // (27/10) registro del sol: estado una vez por segundo (pedido de Agustin: todo lo del sol y la luz en un txt)
+              { static double nextSt = 0; double tn = Now();
+                if (tn >= nextSt) { nextSt = tn + 1.0;
+                    float ex[4] = {}; if (S.size() >= 80) for (int i = 0; i < 4; i++) ex[i] = S[76 + i];
+                    float c0[4] = {}, c1[4] = {}; for (int i = 0; i < 4; i++) { if (L.size() >= 8) c0[i] = L[4 + i]; if (L.size() >= 12) c1[i] = L[8 + i]; }
+                    float skyAz = atan2f(k[2], k[0]) * 57.2958f;
+                    SunLog("estado: cuadro %d | luz del juego en mundo (%.3f, %.3f, %.3f) altura %.1f rumbo %.0f | sol del cielo (%.3f, %.3f, %.3f) altura %.1f rumbo %.0f | diferencia %.1f grados (resto del modelo 2x %.0f) | camara rumbo %.0f, luz respecto de la camara %.0f | luz en vista (%.3f, %.3f, %.3f) | color del sol (%.3f, %.3f, %.3f | %.3f) color 1 (%.3f, %.3f, %.3f | %.3f) | exposicion (%.3f, %.3f, %.3f, %.3f) | pasadas: %s",
+                        lf, w[0], w[1], w[2], asinf(std::clamp(w[1], -1.0f, 1.0f)) * 57.2958f, az, k[0], k[1], k[2], asinf(std::clamp(k[1], -1.0f, 1.0f)) * 57.2958f, skyAz,
+                        dev, res, cam, rel, L[0], L[1], L[2], c0[0], c0[1], c0[2], c0[3], c1[0], c1[1], c1[2], c1[3], ex[0], ex[1], ex[2], ex[3], SunPassList(mask & 0x1ffu, n).c_str());
+                } }   // (26/10) quien escribe el sol de las repeticiones (sunwatch.cpp)
               dFrames++; dMax = (std::max)(dMax, dev); if (dev > 5.0f) dOff++;
               azMin = (std::min)(azMin, az); azMax = (std::max)(azMax, az); camMin = (std::min)(camMin, cam); camMax = (std::max)(camMax, cam);
               relMin = (std::min)(relMin, rel); relMax = (std::max)(relMax, rel);

@@ -20,6 +20,7 @@ namespace fx {
 
 // ---------------------------------------------------------------- log
 void Log(const char* fmt, ...);
+void SunLog(const char* fmt, ...);   // (27/10) solo al registro del sol (PES21FX\registro_sol)
 std::string ModOff(void* p);   // "modulo.dll+0x1234" (diagnostico)
 void ScanRefsInto(uintptr_t base, uintptr_t end, const char* dllName);   // quien apunta todavia a una DLL que se descarga
 extern void* g_overlayOldProc;
