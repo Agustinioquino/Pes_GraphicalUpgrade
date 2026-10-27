@@ -394,6 +394,8 @@ void main(
   r1.w = max(0.730000019, r1.w);
   r1.w = min(0.930000007, r1.w);
   r2.yzw = g_tex_diffuse.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBD).xyz;
+  const float3 tAlb0 = r2.yzw;   // (27/10 d) color del torso tal cual la textura (como el juego: pedido de Agustin)
+  const bool tOrig = vrTm > 0.5 && !pel;   // torso de TorsoBody: sin retoques de color del mod (definicion, costura, rubor, tono propio)
   if (shW > 0.001) r2.yzw = lerp(r2.yzw, g_tex_diffuse.SampleLevel(g_samplerLinear_Clamp_s, v2.xy, 6.0).xyz, shW);   // (27/10) solo el color medio
   {   // (26/10 j) definicion en el color (x311): y311 = la de cada tipo de cuerpo (pes_var_torso_rob_m.dds G = gordo, B = atletico:
       // la luz de arriba horneada como en el torso_1 propio, sobre el cambio de relieve de la variante; 0.5 = nada); z311 = el alfa
@@ -438,6 +440,7 @@ void main(
       r2.yzw = lerp(r2.yzw, r2.yzw * float3(1.07, 1.02, 1.03) + 0.008, saturate(vs * 0.6 * vrWr * vrTm * vrTexK));
     }
   }
+  if (tOrig) r2.yzw = tAlb0;
   r3.xyz = r2.yzw * r1.www + -r2.yzw;
   r2.yzw = r1.zzz * r3.xyz + r2.yzw;
   // (20/10) cabeza de las genericas: el mismo color y la misma translucidez que el shader de cara (5ce3 / ce188)
@@ -506,6 +509,7 @@ void main(
       // "solo el torso" la fila del cuerpo va solo al torso (brazos, cuello y piernas quedan como el juego)
     if (stE >= 0) {
       float3 stP = stBody ? (stTorso ? lerp(float3(1, 1, 0), stPB.xyz, stTm) : stPB.xyz) : PesSkinParams(stE);
+      if (stBody && stTm > 0.5) stP = float3(1, 1, 0);   // (27/10 d) el torso con el color original (sin tono propio)
       r2.yzw = PesSkinApply(r2.yzw, stP); stVeil = PesSkinApply(stVeil, stP);
     }
   }
