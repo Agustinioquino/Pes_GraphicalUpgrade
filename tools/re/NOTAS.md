@@ -423,3 +423,20 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
   la piel de TorsoBody: el mapa nuevo casi no tiene poros). Instalados en la PC (livecpk TorsoBody + PES21FX\textures); los
   pes_var_* de TorsoBody quedaron en backup_20261026_2030_ddb7363\texturas_torsobody_originales. El shader de piel del cuerpo
   lee solo RGB del bsm y RG del srm / nrm (nrm: x = R * A): el alfa de bsm / srm no se usa.
+- (26/10 f) COSTURAS CON LAS TEXTURAS PROPIAS + CUELLO:
+  - Vista original: el torsob_srm generado al nivel de la piel real (brillo 0.8, rugosidad 0.55) hacia que el torso brillara
+    distinto del brazo (arm_srm de TorsoBody 0.82 / 0.698) y la costura del hombro se veia. Ahora make_srm (level "juego") lleva
+    el promedio del torso al de TorsoBody (0.906 / 0.698), baja el peso de los poros (0.12) y en 0.4 .. 3.5 cm del anillo del
+    hombro pasa al del brazo. El normal map propio casi no tiene micro relieve (8 veces menos que el del brazo): make_srm
+    --poros le suma el de TorsoBody (< 1 mm, adentro de las islas, sin el borde) -> la piel no es de plastico junto al hombro.
+  - Con PES21 FX se veia "raro": el relieve a la malla y base_n salian del mapa propio, que es pintado (no integrable: 49 % de
+    residuo) -> bultos y manchas. TB_NO_RELIEF=1 en make_variants: la malla queda la de TorsoBody (sin relieve del mapa) y el
+    mapa como lo pinto el autor (region_factors sin correccion).
+  - Cuello (TorsoBody_cuello.lua 1.10): las caras sin mips de 128 o menos (p. ej. 114910) nunca se fundian con el torso (el
+    fundido usa el mip chico para el color de la cara): ahora arma un mip chico sintetico del mip de arriba (promedio de bloques).
+    TEX.TORSO[1] = color del torso_1_bsm propio en el anillo del cuello (165.6 / 125.5 / 105.8). PERFIL = true: anota una vez por
+    cara en sider.log el radio del cuello de Konami (24 angulos x +3 / +2 / +1 / 0 / -1 cm del borde, en mm) y lo mas bajo del
+    corte -> para rehacer el cuello de los 3 torsos (mallas 1 y 2) con la forma promedio de las caras reales.
+    tools/torsobody/neck_profiles.py lee esas lineas y compara la mediana de las caras con el borde del torso (LOOP), la
+    superficie del torso 1 .. 4 cm abajo y el cuello generico de TorsoBody (neck.fmdl). Instalado 27/10 00:35 (backup
+    PES21FX\backup_20261027_0040_71f80c7: Lua 1.9, torsob_nrm / srm de la primera version y los pes_var_* que cambiaron).

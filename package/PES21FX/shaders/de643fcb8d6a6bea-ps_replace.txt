@@ -83,6 +83,7 @@ Texture2D<float4> g_WorldShadowMask : register(t13);
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 #include "pes_common.hlsli"   // PES21 (18/10): curva del dia, transmision de piel, tamano del sol
+#include "pes_sunturf.hlsli"   // (27/10) el sol sobre el pasto (313)
 
 
 // === PES21 SOL: color del sol segun su altura (calido al atardecer, blanco calido al mediodia) ===
@@ -523,6 +524,9 @@ void main(
   transFloor = r2.w;
   r2.x = saturate(max(r2.x, r2.w));
   r3.xyz = r2.xxx * r8.xyz;
+  // (27/10) el sol sobre el pasto (313, pes_sunturf.hlsli): solo cancha y hojas (tipo 3)
+  float4 pesPG = IniParams.Load(int2(313,0)); bool pesTurf = matType == 3 && pesPG.w > 0.5;
+  if (pesTurf) r3.xyz = PESTurfDiffuse(r8.xyz, rawNdotL, r2.x, pesPG);
   // PES21 (18/10): curvatura en pantalla (cuanto gira la normal por metro); fuera de los if para poder usar derivadas
   float pesCurv = 0.0;
   { float3 nC = normalize(r3.xyw);
@@ -647,6 +651,14 @@ void main(
       r0.xyz *= cs;
     }
   }
+  // (27/10) sombras entre hojas (x313): la sombra de cada hoja sobre las de atras, hacia el sol
+  { float2 sT = v0.xy / v0.ww, uT = v1.xy / v1.ww;
+    float2 dST = float2(ddx(sT.x), ddy(sT.y)), dUT = float2(ddx(uT.x), ddy(uT.y));
+    dST = (abs(dST) < 1e-9) ? 1e-9 : dST;
+    float2 AmT = dUT / dST, BmT = uT - AmT * sT;
+    if (pesTurf && pesPG.x > 0.0 && r0.x > 0.02)
+      r0.xyz *= PESTurfMicroShadow(g_DepthTexture, g_samplerPoint_Wrap_s, sT, uT, AmT, BmT, v2.xy, normalize(pesLDir.xyz), g_psScene.m_projectionParam,
+                                   g_psScene.m_cameraCenterOffset.xy, g_psSystem.m_renderBuffer.x, g_psSystem.m_timeParam.z, pesPG.x); }
   float3 shadowRGB = r0.xyz;
   shadowScalar = saturate(r0.x);
   if (isSkin) {
