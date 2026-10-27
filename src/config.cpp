@@ -239,6 +239,9 @@ static bool LoadConfigLocked() {
     { static const struct { int i, k; float v; } kDef[] = { {290, 0, 1.f}, {290, 1, 1.f}, {290, 2, 0.45f}, {291, 0, 1.f}, {291, 1, 40.f}, {291, 2, 140.f}, {291, 3, 1.f},
                                                          {292, 0, 1.f}, {292, 1, 1.f}, {292, 2, 1.f}, {292, 3, 1.f} };
       for (auto& d : kDef) if (!c.info[d.i][d.k].defined) c.base[d.i][d.k] = d.v; }
+    // 313 (27/10) el sol sobre el pasto (pes_sunturf.hlsli): x sombras entre hojas | y luz a traves de las hojas | z sol bajo dorado | w on
+    { static const struct { int i, k; float v; } kDef313[] = { {313, 0, 0.6f}, {313, 1, 0.7f}, {313, 2, 0.6f}, {313, 3, 1.f} };
+      for (auto& d : kDef313) if (!c.info[d.i][d.k].defined) c.base[d.i][d.k] = d.v; }
     memcpy(c.live, c.base, sizeof(c.base));
     LoadCloth();
     for (auto& kb : c.keys) if (kb.label.empty()) kb.label = kb.name;
