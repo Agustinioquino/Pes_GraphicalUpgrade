@@ -315,6 +315,15 @@ static void ShadowFixCamLog() {
     if (ReadProcessMemory(GetCurrentProcess(), (const void*)(obj + 0x4a0), &sub, 8, &got) && got == 8 && sub && rd(sub + 0x30, l, 12))
         Log("sol: rotacion de la luz ([+0x4a0] + 0x30, filas) %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f",
             l[0], l[1], l[2], l[3], l[4], l[5], l[6], l[7], l[8], l[9], l[10], l[11]);
+    if (sub && rd(sub + 0x70, l, 4)) Log("sol: direccion de la luz en mundo ([+0x4a0] + 0x70) %.4f %.4f %.4f %.4f", l[0], l[1], l[2], l[3]);
+    // lo que recibe el shader en el mismo momento: m_view (c8) y m_shadowProjection (c12) del cbuffer de escena
+    std::vector<float> S;
+    if (NamedCBRead("SceneCB", S) && S.size() >= 64) {
+        Log("sol: m_view del shader (c8..c11) %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f",
+            S[32], S[33], S[34], S[35], S[36], S[37], S[38], S[39], S[40], S[41], S[42], S[43], S[44], S[45], S[46], S[47]);
+        Log("sol: m_shadowProjection del shader (c12..c15) %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.3f %.3f %.3f %.3f",
+            S[48], S[49], S[50], S[51], S[52], S[53], S[54], S[55], S[56], S[57], S[58], S[59], S[60], S[61], S[62], S[63]);
+    }
 }
 
 static int s_lodBase = -1, s_lodLast = -1; static bool s_lodChecked = false, s_lodOk = false; static double s_lodT = 0;
