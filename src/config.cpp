@@ -697,7 +697,7 @@ void UpdateTimeParams() {
       }
       p[93][0] = adapt; }
     // (20/10) inyeccion de luz: la DLL publica cada cuadro, para todos los shaders, el sol en espacio MUNDO (111: xyz + altura
-    // en grados), su color normalizado (112: rgb con el canal mayor = 1, w = luminancia cruda), la niebla/horizonte del motor y
+    // en grados), la niebla/horizonte del motor y
     // la exposicion (113), y el estado de la escena (114: x suelo automatico 0 normal / 1 humedo (lluvia) / 2 seco, y altura
     // de la camara, z estacion, w 1 = de dia con sol real). Antes cada shader lo derivaba a mano de m_view.
     { std::vector<float> L, S; int lf = -1, sf = -2;
@@ -735,13 +735,15 @@ void UpdateTimeParams() {
                 if (sky) { p[312][0] = k[0]; p[312][1] = k[1]; p[312][2] = k[2]; p[312][3] = 2.0f; }
                 else if (haveSt) { p[312][0] = st[0]; p[312][1] = st[1]; p[312][2] = st[2]; p[312][3] = 1.0f; }
                 else { p[312][0] = wx; p[312][1] = wy; p[312][2] = wz; p[312][3] = 0.0f; } } }
-          float cr = L[4], cg = L[5], cb = L[6]; float mx = std::max(cr, std::max(cg, cb));
-          if (mx > 1e-4f) { p[112][0] = cr / mx; p[112][1] = cg / mx; p[112][2] = cb / mx; }
-          p[112][3] = 0.2126f * cr + 0.7152f * cg + 0.0722f * cb;
+          // (27/10 n) el color del sol ya NO se publica en la fila 112: ningun shader lo leia y desde el 25/10 esa fila es el
+          // color del pasto del menu (x matiz, y verde, z contraste, w verde natural); escribirla cada cuadro pisaba los sliders
+          // y el menu guardaba basura (w112 = 3826). La luminancia queda local para decidir "sunny".
+          float cr = L[4], cg = L[5], cb = L[6];
+          float lum112 = 0.2126f * cr + 0.7152f * cg + 0.0722f * cb;
           p[113][0] = S[108]; p[113][1] = S[109]; p[113][2] = S[110]; p[113][3] = S[94];   // niebla rgb, exposicion z
           p[114][1] = S[81];                                                             // altura de la camara (m_eyepos.y)
           g_eyePos[0] = S[80]; g_eyePos[1] = S[81]; g_eyePos[2] = S[82]; g_eyePos[3] = 1; g_eyeValid = true;   // (20/10) para el LOD de caras
-          bool sunny = (cr / std::max(cb, 1e-4f)) > 1.06f && p[112][3] > 600.0f;         // luz calida y fuerte = sol (de noche: torres frias)
+          bool sunny = (cr / std::max(cb, 1e-4f)) > 1.06f && lum112 > 600.0f;         // luz calida y fuerte = sol (de noche: torres frias)
           p[114][3] = sunny ? 1.0f : 0.0f;
       }
       int ground = 0; if (g_cfg.match.known && g_cfg.match.weather == 1) ground = 1;
