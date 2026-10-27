@@ -158,7 +158,8 @@ def main():
         Ga = bake(Aa, per_vertex(Aa, Aa["fade"][:, None]), W=2048, H=2048, vmax=1.0)
         Ba = torso_base.bands(Ga, texdir, fname="arm_nrm.ftex")
         dArm = -ARM_KG[0] * Ga["extra"][..., 0:1] * Ba["vol"] * Ga["mask"][..., None]
-        tile = skin_detail.build(folder, texdir, outdir)["d_n"]
+        # (la textura de detalle sale de la piel de TorsoBody; con un normal map propio sin poros, TB_TEX_DETAIL = carpeta con el original)
+        tile = skin_detail.build(folder, os.environ.get("TB_TEX_DETAIL", texdir), outdir)["d_n"]
         tile = np.stack([gaussian_filter(tile[..., c], 0.7, mode="wrap") for c in range(2)], -1)
         ring = [torso_seam.shoulder_ring(T, Aa)]
         amp = 0.5 * (torso_seam.band_amp(G, Bd, dB, ring) + torso_seam.band_amp(Ga, Ba, dArm, ring))

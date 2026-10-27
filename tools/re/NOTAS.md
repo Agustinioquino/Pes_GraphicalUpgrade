@@ -414,3 +414,12 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
   - Menu Fisico: "Tipo de cuerpo" (z262) es una barra K_MUS de a 0.01 (2 % por paso; antes selector de a 20 %), los tipos del
     mod son "Complexion"; el valor para los shaders sigue al elegido en ~0.15 s (musculo.cpp EaseTv); Complexion, Tipo de
     cuerpo, General, Definicion y Ver no resaltan nada (el cuerpo quedaba blanco).
+- (26/10 e) TEXTURAS PROPIAS DEL TORSO (del usuario: torsob_nrm + torso_1_bsm nuevos, DXT5 4096 de 1 mip): se pasan al formato
+  del juego (BC5 / BC7 con mips, tools/torsobody/make_texture_pack.encode_chain) y se les genera torsob_srm (make_srm.py: zonas
+  de torso_skin + poros del normal map nuevo + lunares mas mates; BC1 con mips). La convencion del verde del mapa nuevo es la
+  de TorsoBody (G+: el ombligo como hueco, el borde del pectoral con sombra abajo; la integrabilidad no decide: 49 / 39 %, el
+  mapa es pintado). Los mapas de PES21FX dependen del normal map (relieve a la malla, base_n, tilt, deltas): se regeneran con
+  TB_TEX=<carpeta con las texturas nuevas> y TB_TEX_DETAIL=<tex de TorsoBody> (la textura de detalle de las costuras sale de
+  la piel de TorsoBody: el mapa nuevo casi no tiene poros). Instalados en la PC (livecpk TorsoBody + PES21FX\textures); los
+  pes_var_* de TorsoBody quedaron en backup_20261026_2030_ddb7363\texturas_torsobody_originales. El shader de piel del cuerpo
+  lee solo RGB del bsm y RG del srm / nrm (nrm: x = R * A): el alfa de bsm / srm no se usa.
