@@ -54,6 +54,7 @@ constexpr int kParamCount = 336;           // float4 x 336 -> t120 en los shader
 // 297 / 298 = luz de prueba del editor (27/10 b, pes_ssss_inc.hlsli: sol de dia / tarde / noche donde no corre el sol del partido).
 // 299 = pasto tanda 9a (hilo del pasto, rama kd63zh).
 // 315 = rebote de luz acumulado v2 (27/10, pes_ssgi_ps.hlsl: x estimador fisico, y alcance lejano x R, z fuerza lejana).
+// 331.x (ini) = giro del disco de la SSSS por cuadro (27/10 g, pes_ssss_inc.hlsli).
 // 309 (ini) + 310, 316..319 (DLL) = sombra propia de la cabeza (27/10 c, headshadow.cpp + pes_headshadow.hlsli en los 7 shaders del sol).
 // 305 musculos con textura (manos.cpp + pes_limbs.hlsli en el VS 1c02a92a + PS aa7d1833; x prendido, y definicion, z venas de los
 // brazos, w venas de las manos con el puno apretado; v12.7).
