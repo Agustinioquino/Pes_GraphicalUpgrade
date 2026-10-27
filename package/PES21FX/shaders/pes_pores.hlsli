@@ -6,7 +6,7 @@
 // costuras entre la cara (5ce3 / ce188) y la cabeza generica (aa7d). Las tres proyecciones se funden con la normal de la
 // malla en reposo (pesos a la cuarta); la perturbacion queda en el espacio del modelo y se lleva al espacio de vista con el
 // marco tangente (T = dp/du, B = dp/dv) que sale de las derivadas de la posicion y la UV: queda como un valor mas del normal map.
-// El VS de la cabeza (faab87ee / 455eb97b) deja la posicion de reposo en TEXCOORD6.w (x), TEXCOORD5.w (y) y TEXCOORD4.w = 10 + z (27/10 i).
+// El VS de la cabeza (faab87ee / 455eb97b) deja la posicion de reposo en TEXCOORD10.xyz (w = 11) (27/10 j); el VS del cuerpo 1c02a92a tambien (w = 1).
 #ifndef PES_PORES_HLSLI
 #define PES_PORES_HLSLI
 
