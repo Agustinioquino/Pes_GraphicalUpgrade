@@ -224,7 +224,7 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
     float pdf = 0.667 * BurleyF(rmm / dmm.r) / dmm.r + 0.333 * BurleyF(rmm / dmm.g) / dmm.g;
     float3 w = float3(BurleyF(rmm / dmm.r) / dmm.r, BurleyF(rmm / dmm.g) / dmm.g, BurleyF(rmm / dmm.b) / dmm.b) / max(pdf, 1e-6);
     w *= depthW;
-    acc += w * inLight.SampleLevel(sLinear, uvS, 0).xyz;
+    acc += w * inLight.SampleLevel(sPoint, uvS, 0).xyz;   // (27/10 i) muestra puntual: con la bilineal, en el borde de la cara entraba el fondo claro de al lado (contorno de pixeles brillantes)
     wsum += w;
   }
   // el pixel central entra con el peso de una muestra media: sin vecinos validos (borde) queda como estaba
