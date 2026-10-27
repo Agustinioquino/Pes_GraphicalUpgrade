@@ -37,7 +37,7 @@ constexpr int kParamCount = 336;           // float4 x 336 -> t120 en los shader
 // Fisico (x inclinacion, y tipo, z tamano; por jugador, musculo.cpp); 288.x = columna marcada (t19 del PS de la piel); 289.x = base
 // esculpida (el relieve del normal map de TorsoBody en la malla: filas 7..9 de los datos de t127 + correccion de la textura en t20);
 // 293 = piel real (x prendido, y brillo, z translucidez; zonas del torso en t21 / t24; w = union suave del brazo con el torso).
-// 320 = torso bajo la camiseta ajustada (27/10, pes_skintone.hlsli PesTorsoInset: x mm, w on).
+// 320 = torso bajo la camiseta ajustada (27/10, pes_skintone.hlsli PesTorsoInset: x mm, w on; y 0 = toda la piel bajo la camiseta con fundido, 1 = solo el torso).
 // 321 = brazos, manos y muslos de TorsoBody para las caras reales (27/10, brazos.cpp: x prendido, y muslos, z tono forzado, w log).
 // 322 = cuello de las caras reales fundido con el torso (27/10, pes_collar.hlsli en 5ce3 / ce188: x prendido, y alto mm, z cuanto, w diagnostico).
 // 323 = ocultar la camiseta interior (inner*, highneck de common_package.fpk) al mirar el cuerpo sin camiseta (27/10, hooks.cpp: x prendido, w log); (27/10 d) y hundir la base del cuello de la cara bajo el torso en mm (VS faab87ee / 455eb97b, pes_collar.hlsli), z alto del fundido mm.

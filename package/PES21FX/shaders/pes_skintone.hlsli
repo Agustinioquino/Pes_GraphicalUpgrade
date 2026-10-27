@@ -102,10 +102,22 @@ float PesTorsoMask(float3 v) {
 // (parches de piel sin sombrear). x320 mm que se mete el torso hacia adentro por su normal (fuera del cuello y los brazos, con la misma
 // mascara del torso), w320 on. (27/10 c) z320 lo pone la DLL: 1 = hay camisetas en escena; sin camiseta (menu Apariencia / Fisico,
 // tecla 4 de Sider) el torso queda entero y no hay escalon en la costura con el brazo y el cuello
+// (27/10 e) y320 = 0 (lo normal): se mete TODA la piel bajo la camiseta (torso, hombros, brazo hasta el codo, cuello hasta el escote) con la misma
+// cantidad a los dos lados de las costuras: ya no hay escalon con el cuello ni con el brazo (lo que no gusto con 8 mm). Se apaga de a
+// poco y sin costura visible: en el cuello de 1.42 a 1.50 m (la union con la cara queda igual), en el brazo de 20 a 30 cm desde el
+// hombro (manga corta; manos enteras) y debajo de la cintura (0.90 a 0.80 m, tapado por el short). y320 = 1: solo el torso (como antes)
+float PesTorsoInsetSmooth(float3 rest) {
+  float3 q = float3(abs(rest.x), rest.y, rest.z);
+  float sA = dot(q - float3(0.263, 1.370, 0.020), float3(0.761, -0.643, -0.084));   // a lo largo del brazo desde la costura del hombro
+  float arm = 1.0 - smoothstep(0.20, 0.30, sA) * smoothstep(0.17, 0.22, q.x);   // solo del costado para afuera (la cintura no)
+  float neck = 1.0 - smoothstep(1.42, 1.50, q.y);
+  float hip = smoothstep(0.80, 0.90, q.y);
+  return arm * neck * hip;
+}
 void PesTorsoInset(inout float3 mP, float3 mN, float3 rest) {
   float4 T = IniParams.Load(int2(320, 0));
   if (T.w < 0.5 || T.x <= 0.0 || T.z < 0.5) return;
-  float k = PesTorsoMask(rest);
+  float k = T.y > 0.5 ? PesTorsoMask(rest) : PesTorsoInsetSmooth(rest);
   if (k <= 0.0) return;
   float3 n = mN * rsqrt(max(dot(mN, mN), 1e-8));
   mP -= n * (min(T.x, 25.0) * 0.001 * k);
