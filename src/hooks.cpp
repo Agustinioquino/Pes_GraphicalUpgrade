@@ -350,7 +350,7 @@ static void SunSettingsPresent() {
     }
     if (lines > 40) SunLog("ajuste: %d cambios mas en este segundo (no anotados)", lines - 40);
 }
-int SceneShadowFixStats(int* skipped);   // (mas abajo, junto a los ganchos de Map / Unmap)
+int SceneShadowFixStats(int* skipped); void SceneShadowFixRejects(int* r3);   // (mas abajo, junto a los ganchos de Map / Unmap)
 static void SunPassPresent() {
     SunSettingsPresent();
     static uint32_t lastMask = 0xffffffffu; static int lines = 0; static double nextSum = 0;
@@ -439,7 +439,7 @@ static void SunPassPresent() {
                   Log("luz del sol: direccion de la luz (vista %.3f %.3f %.3f | mundo %.3f %.3f %.3f) y del shadow map (mundo %.3f %.3f %.3f): %.1f grados entre las dos",
                       l[0], l[1], l[2], lw[0], lw[1], lw[2], dw[0], dw[1], dw[2], ang);
               } } }
-        if (sums <= 120 && g_cfg.motorPatch && (g_cfg.motorShadowFix == 1 || g_cfg.motorShadowFix == 2)) { int sk = 0, fx = SceneShadowFixStats(&sk); Log("sombra_parche (10 s): m_shadowProjection corregida en %d subidas del cbuffer de escena, %d sin tocar (sin sombra o sin rotacion; de esas, no era la escena %d, sombra no ortogonal %d; buffers con ventana descartados %d)", fx, sk, s_scRejEye.exchange(0), s_scRejOrtho.exchange(0), s_scRejWin.exchange(0)); }
+        if (sums <= 120 && g_cfg.motorPatch && (g_cfg.motorShadowFix == 1 || g_cfg.motorShadowFix == 2)) { int sk = 0, fx = SceneShadowFixStats(&sk); int rj[3]; SceneShadowFixRejects(rj); Log("sombra_parche (10 s): m_shadowProjection corregida en %d subidas del cbuffer de escena, %d sin tocar (sin sombra o sin rotacion; de esas, no era la escena %d, sombra no ortogonal %d; buffers con ventana descartados %d)", fx, sk, rj[0], rj[1], rj[2]); }
         nextSum = t + 10.0; frames = framesOrig = framesNone = switches = 0;
     }
 }
@@ -717,6 +717,7 @@ static bool SceneShadowFix(float* p) {   // p = c0 del cbuffer de escena; sin ob
 }
 static bool SceneFixOn() { return g_cfg.motorPatch && (g_cfg.motorShadowFix == 1 || g_cfg.motorShadowFix == 2); }
 int SceneShadowFixStats(int* skipped) { if (skipped) *skipped = s_scSkipped.exchange(0); return s_scFixed.exchange(0); }
+void SceneShadowFixRejects(int* r3) { r3[0] = s_scRejEye.exchange(0); r3[1] = s_scRejOrtho.exchange(0); r3[2] = s_scRejWin.exchange(0); }
 
 template<int V> static HRESULT STDMETHODCALLTYPE hk_Map(ID3D11DeviceContext* c, ID3D11Resource* r, UINT sub, D3D11_MAP t, UINT f, D3D11_MAPPED_SUBRESOURCE* m) {
     HRESULT hr = o_Map[V](c, r, sub, t, f, m);
