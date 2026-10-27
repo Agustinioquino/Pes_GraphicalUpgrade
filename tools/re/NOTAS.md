@@ -280,3 +280,146 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
   un jugador entra tambien si su variante es distinta de la general); o6.w del VS lleva siempre 0.4 * torso (tambien 999 + ...).
 - Vistas previas sin el juego: tools/fox/torso/preview.py (forma, rasterizador gris) y preview_nm.py (con normal map, albedo y
   los mapas delta; PNM_CLOSE=1 = primeros planos de trapecio, costado y pecho).
+- (26/10 b/c) ESCULPIDO EN LA MALLA (x289 = 1, "Torso y brazos esculpidos"): textures\pes_var_<malla>.dds tiene 10 filas por
+  version (0 reposo, 1..3 robusto, 4..6 atletico, 7..9 BASE: desplazamiento, normal, tangente absolutos). El VS mezcla base ->
+  variante con |t| (PesVariantMorph en pes_variants.hlsli; con 7 filas, como antes, no hay base). Con x289 = 0 la base no se usa.
+  - Relieve del normal map llevado a la malla (torso_relief.py): la pendiente del mapa en 3D (s3 = nx T + ny B, B = +cross(N, T)
+    w) desenfocada 5 mm se integra en la malla soldada por minimos cuadrados (h_j - h_i = -s . (P_j - P_i)), se suaviza 6 mm
+    (brazos 8 mm) y se le saca lo de mas de 4 cm: hp, std 2.3 mm, +-7 mm. Integrabilidad (residuo): torso 4.7 % con la
+    convencion de arriba (63 % con un canal invertido); brazo 20 % (mismo signo; mas detalle pintado). Por zona (REGION):
+    k_g = cuanto de hp va a la malla (normal adelante 1.0 / espalda 0.6; atletico 2.0 / 0.6; robusto 0.15); el mapa de cada
+    variante queda micro + a lineas + (b - k_g costura) volumen (torso_base.region_deltas) para no ver el volumen dos veces:
+    pes_var_torso_base_n.dds (t20 del PS, v 0..0.5) corrige la base de todos.
+  - Esculpido a mano (torso_variants.sculpt_torso): atletico = borde y masa del pectoral, esternon, cinturon de Adonis con los
+    oblicuos, dorsales abajo en V, redondo mayor, infraespinoso, rombo del trapecio, borde del omoplato, erectores (dos
+    gaussianas espejadas: sin quiebre en la linea media) y el surco de la columna (sigma 1.1 cm). (26/10 c) la linea alba / el
+    esternon del atletico quedaban de 7..9 mm de hondo (hp x2 + el relieve de la malla): se rellena el fondo (+4 mm abajo, +2.5
+    mm entre los pectorales, sigma 1 cm) y quedan ~5 mm redondeados. Robusto = pliegue de la panza (-7.5 mm), rollos de los
+    costados, espalda baja, el de abajo del omoplato y el pecho caido.
+  - BRAZOS (26/10 c): marco propio (torso_variants.arm_frame): t a lo largo desde la costura del hombro (codo ~0.18, muneca
+    ~0.43; el centro de cada seccion sigue el codo doblado, tabla _ARM_O1/_ARM_O2 medida en arm.fmdl) y angulo th (0 =
+    adentro / hacia el torso, -90 = adelante = biceps, 90 = atras = triceps / olecranon, 180 = afuera). El codo esta 5 mm
+    corrido hacia atras del eje recto hombro -> muneca: el olecranon mira atras. ARM_ANAT: biceps +3.2 mm, triceps (lateral y
+    largo) +2.6, tendon del triceps -1.4, deltoides +1.6 y sus surcos, braquial, surcos de adentro / afuera, olecranon,
+    epicondilos, pliegue del codo, braquiorradial +2.5, flexores +2.0, extensores +1.6, borde del cubito; base = ARM_ANAT,
+    atletico 1.9 x (+ pico del biceps, herradura, antebrazo), robusto 0.3 x + grasa atras del brazo. hp del brazo con k_g
+    (0.8, 0.3, 1.4) y recortado a +-3 mm (tanh): integrado traia pozos (atras del codo, banda arriba entre deltoides y biceps).
+    arm_fill rellena lo que la malla de TorsoBody tiene por debajo de la superficie promedio (relieve de banda de 1.5 cm) entre
+    t 0.09 y 0.26 (el pozo de atras del codo es de la malla original, no del mapa). El atletico solo amplifica 0.45 x los
+    picos y valles de la malla (antes 0.90 los valles: hundia el pozo).
+  - Vistas previas: preview_nm.py PNM_FB=1 (frente / espalda / 3/4), PNM_CLAY=1 (solo la malla), PNM_ARM=1 (brazo adelante /
+    atras / desde arriba / desde abajo; las vistas aceptan inclinacion), PNM_NOBASE=1 (sin la base = TorsoBody original).
+- (26/10 b/c) PIEL REAL (x293; y293 brillo, z293 translucidez): srm / trm de TorsoBody son parejos (brillo 0.9, rugosidad en el
+  tope 0.5608 del PS, translucidez 0.143: piel de arcilla). El PS de la piel reemplaza r1.x (brillo) y r1.y (rugosidad) por
+  zonas (t21 / t24) cortadas por los poros (hf = diferencia entre el normal map y su mip +2.5: menos brillo, mas aspero) y la
+  translucidez del g-buffer por la de la zona; rubor suave en el albedo. Torso: pes_var_torso_skin_a/b.dds (2048 x 1024, v
+  0..0.5; esternon, entre omoplatos, hombros y espalda baja mas grasos, costados mates, carne mas translucida, hueso menos).
+  (26/10 c) Brazos: pes_var_arm_skin_a/b.dds (todo el atlas del brazo, 2048 x 2048: el PS elige las uv porque son cuadradas;
+  manos.cpp SkinTexturesFor las da para las entradas de brazo de kVars): codo atras mas aspero, opaco y rojo, adentro del brazo
+  y la muneca mas finos (translucidos, palidos), antebrazo de afuera algo mas aspero, hombro graso. Cerca de las costuras todo
+  vuelve a DEF (0.85 / 0.45 / 0.30 / 0.5; (26/10 d) ahora 0.80 / 0.66 / 0.30 / 0.5), el valor del PS sin textura (piernas, manos).
+- (26/10 b) UNION DEL BRAZO (w293 = 1): junto a la costura del hombro (plano centro (0.263, 1.370, 0.020), normal (0.761,
+  -0.643, -0.084)) el normal map del brazo baja al 55 % en los primeros 3 cm (el del torso es casi liso ahi).
+- (26/10 c) CUELLO SIN CAMISETA (TorsoBody_cuello.lua 1.9, copia en tools/torsobody/): FUNDIR otra vez prendido (los cierres al
+  salir no eran de ahi: con 1.8d apagado seguian; ahora la memoria del juego se retiene). Nuevo NORMALES_TORSO: el borde del
+  cuello de la cara toma la normal del borde del torso (RING_N, 48 = las del cuello generico neck.fmdl en los puntos de LOOP:
+  son identicas a las del torso, por eso el generico empalma perfecto) y en los 2 cm de arriba pasa de a poco a las suyas
+  (smoothstep; la tangente se endereza). Se calcula ANTES de apply_plan: los parches no se pueden pisar (apply_patches falla
+  entero si dos se solapan), asi que a los vertices nuevos se les cambian los valores del plan y a los demas se les escribe
+  normal / tangente aparte. Cache _v19 (las caras ya cortadas con 1.8 se vuelven a cortar). Prueba sin el juego:
+  tools/torsobody (fengari en node: OJO enteros de 32 bits en fengari, u32 tiene que ir en flotante; math.atan2 / frexp /
+  collectgarbage de Lua 5.1 hay que ponerlos).
+- (26/10 c) SIN SHORT (SinCamiseta 1.1, tecla 4; tools/sincamiseta/): sirve copias de pants_out_sub / pants_in_sub /
+  pants_out_inner_sub / pants_out_sub_tight.fmdl desde Dream Patch Sider\content\sin-camiseta\sin_short\ (el juego guarda
+  los modelos: salir y volver a entrar al jugador). Las arma tools/fox/pelvis/make_pelvis.py con los archivos de TorsoBody (NO
+  van al repo: tienen el torso de TorsoBody). En cada copia la malla 0 (el short, material uni_pants) pasa a ser la PELVIS:
+  - Topologia propia (pelvis_mesh.py): 7 filas del cuerpo (92 = el borde de abajo del torso EXACTO, 82, 74, 68, 64, 62, 60 a
+    y 0.876), la ultima partida en dos mitades (F adelante y B atras en x = 0) + un puente de 4 vertices por debajo de la
+    entrepierna (y 0.797) = el primer anillo de cada pierna; 2 anillos mas por pierna (por largo de arco) y el borde de arriba
+    del muslo (thigh_short, 29 + 29, EXACTO). 692 vertices, 1236 triangulos (entran 790 / 1244; pants_in 804 / 1258): lo que
+    sobra son vertices copia y triangulos vacios. Giro como TorsoBody: cross(P1 - P0, P2 - P0) hacia adentro.
+  - Forma: radio por angulo alrededor de (x 0, z 0.058): superelipse (n 2.6) que se abre hacia la cadera (0.150 -> 0.184),
+    frente liso tipo Ken (sin nada), gluteos (2 masas de 3 cm a th +-150, y 0.902) con la raya del medio, trocanter, ingle
+    apenas. Arriba sigue la pendiente del torso (se mezcla en 3/4 del alto). Normales de los bordes = las de los anillos.
+  - Pesos: el borde de arriba copia los del torso, el de abajo los del muslo (sk_thigh 65 %, dsk_thighmain 30 %, dsk_hip,
+    dsk_thigh); en el medio se mezclan por altura. Los huesos del muslo no estaban en el archivo: los 6 que usaba solo el short
+    se renombran en el lugar (pelvis_fmdl.RENAMES: dsk_hem_ba -> sk_thigh, dsk_hem_o_fake -> dsk_thighmain, dsk_hem_i ->
+    dsk_thigh; la cadena se reescribe mas corta, la entrada copia padre / posiciones de thigh_short y su caja = los vertices).
+  - Material = torso_mat (el tono de piel del jugador viene solo), alfa 0. UV en el cuadrante libre de abajo a la derecha de la
+    textura del torso (u, v 0.5..1: piel pareja en torso_N_bsm, normal / srm / trm planos). Texturas propias (PS de la piel,
+    reescaladas desde ese cuadrante): pes_var_pelvis_n (t20, poros), pes_var_pelvis_skin_a/b (t21 / t24, zonas) y
+    pes_var_pelvis_alb (t23: tono +3.6 % como el borde del torso, manchas suaves, pliegues mas oscuros). manos.cpp PelvisDraw:
+    VS de la piel + 3732 o 3774 indices (el short usa otro shader); la presencia de t23 le dice al PS que es la pelvis.
+  - Vista previa: tools/fox/pelvis/pelvis_preview.py (arcilla con PNM_CLAY=1, o leyendo el .fmdl escrito).
+- (26/10 d) LO QUE SE VEIA MAL EN EL JUEGO (capturas del menu Fisico, Cristiano atletico 100 %, definicion x1.25):
+  - "Todo brilloso": la piel real habia bajado la rugosidad a 0.45 (TorsoBody: 0.70). OJO, la rugosidad NO queda en 0.5608: el
+    PS hace r = max(min(0.5608, r1.y), r1.y con suciedad) = r1.y sin suciedad (0.5608 es el piso cuando el jugador se ensucia);
+    despues o2.x = polinomio(r) (0.70 -> 0.56, 0.45 -> 0.35). Con 0.35 el sol y los reflejos del cielo (x151) daban piel mojada
+    / lechosa. Ahora DEF = (brillo 0.80, rugosidad 0.66) con zonas +-0.06, poros +0.10 y x306 (Mate, -0.3..0.3) que se suma.
+  - Manchas negras en el esternon, el borde del pectoral, la linea alba y el pliegue del codo: tools/fox/torso/ps_replica.py
+    (replica del PS con las texturas tal cual las instala el paquete + la malla de la variante; mide la inclinacion TOTAL de la
+    normal respecto de la superficie original de TorsoBody, malla + textura). Normal (t = 0) = TorsoBody (media 11.7 vs 12.0
+    grados): la compensacion de la base anda. Atletico 100 % con definicion 1.25: media 22, p95 55, 8.7 % de los pixeles pasaba
+    de 45 grados y el esternon llegaba a 80 (se apilaban hp x2 en la malla, relieve de banda x1, inflado, esculpido, el surco del
+    pectoral tambien en field(), la textura x1.35 y la definicion x1.15 x 1.25). Arreglo: REGION atletico (1.00, 1.25, 1.25),
+    banda (0.30, 0.45), inflado 0.5, sin surco propio del esternon, surco del pectoral -1.2 mm (field ya trae -3.5 mm), lineas
+    finas de height_athletic al ~60 %, PS: definicion del torso atletico +0 (antes +0.15), brazo +0.10 (antes +0.20), columna
+    x(1 - 0.5 atletico) (la malla del atletico ya la esculpe). Brazos: k_g atletico 1.15 (antes 1.4), banda 0.35, anatomia 1.6x.
+  - TOPE DEL RELIEVE (x307, y307 grados = 49): torso_tilt.py hornea la inclinacion de la malla de cada version respecto de la
+    superficie original (m = -(N0 . T, N0 . B) en el marco de esa version, convencion de la textura) -> pes_var_torso_tilt_b/a/r
+    (1024 x 512) y pes_var_arm_tilt_b/a/r (1024 x 1024), t31..t33 del PS (slots que el juego no usa; en t5..t7 quedan texturas de
+    otros dibujos). El PS suma m (base -> variante con |t|, como el VS) al normal map, limita el total con una curva suave desde
+    0.6 sin(tope) hasta sin(tope) y le vuelve a restar m. Sin mapas (piernas, manos, pelvis) limita solo la textura. Resultado
+    (replica): atletico def 1.25 media 15.9, p95 38, 0.1 % > 45; normal sin cambios. DrawScope de hooks.cpp: 12 -> 24 enlaces
+    devueltos por dibujo (el torso ya usa 11).
+- (26/10 d) SIN SHORT DE VERDAD: las piezas del cuerpo NO se piden sueltas. Vienen en Asset\model\character\#Win\
+  common_package.fpk (el del livecpk "Global Model Efootball 5.0" = TorsoBody_v11\common_package.fpk, el mismo md5) que el juego
+  carga UNA vez al abrirse (junto con los efectos); el short visible del uniforme es otro modelo, uniform\nocloth\#Win\
+  pants_007.fmdl (+ la tela uniform\cloth\#Win\fcl_pants_sim.fclo / pants_cloth.skl). FPK: "foxfpk" + "win ", tamano en 10,
+  [32] = (2, archivos, referencias), entradas de 48 B desde 48 (dato u32 @0, tamano @8, nombre @16 / largo @24, md5 DEL NOMBRE
+  @32). El thigh_short del fpk es el de la v12.6 (765863 B = TorsoBody_v11\common): la carpeta extraida common_package_fpk del
+  Global Model esta vieja (216487 B), no se usa. tools/sincamiseta/make_fpk_sin_short.py cambia en el lugar las 4 entradas
+  pants_*_sub por las pelvis (mismo tamano). SinCamiseta 1.2 lee x308 de PES21FX.ini al abrir (Sider no puede escribir archivos
+  desde Lua: el cache del cuello tampoco pudo) y si esta en 1 sirve content\sin-camiseta\sin_short\common_package.fpk y oculta
+  pants_XXX.fmdl (tecla 4 lo muestra / oculta en vivo). Con la pelvis cargada falta la cintura del short (era la malla 0).
+  Detalle de piel de la pelvis: skin_detail.py (parches de la piel del torso, 22.5 cm, mezcla que conserva la varianza) ->
+  pes_var_pelvis_detail_n / _a, t34 / t35 del PS (dos capas, la segunda girada 37 grados, a 0.40 uv por metro).
+- (26/10 e) PELVIS ANATOMICA (tools/fox/pelvis/pelvis_surface.py): la superficie parametrica (superelipse, gluteos tipo panal,
+  escalon en la cintura, muesca en la entrepierna) se reemplaza por un cuerpo real: la malla base de MakeHuman (CC0 1.0, hombre
+  joven = base + promedio de los targets caucasian/african/asian-male-young; mh_fetch.py la baja y guarda solo la zona de la
+  pelvis en mh_pelvis_cc0.npz, 2149 vertices) deformada con thin plate spline (scipy RBFInterpolator) para coincidir con
+  TorsoBody: rayos horizontales desde el eje del cuerpo en la banda baja del torso (y 1.10 .. 1.175, 4 alturas x 60 angulos),
+  desde el centro de cada muslo en y 0.66 .. 0.78 y en el borde EXACTO del muslo (29 + 29) mas su continuacion vertical 2 y
+  4.5 cm arriba (afuera, 15 .. 150 grados: los muslos de TorsoBody son mas gruesos que la cadera de MakeHuman y quedaba un
+  escalon). Escala global medida antes: x 1.05, y - 0.014, z (z - 0.036) 1.03 + 0.066. Sobre esa superficie S:
+  - reshape_torso: la malla 3 del torso por debajo de y 1.105 (del todo bajo 1.06) toma la forma de S (rayo desde el eje, el
+    mas lejano) + el detalle fino de TorsoBody (< 8 mm, ombligo; las arrugas de la pretina al 30 %), hasta 37 .. 41 mm (adelante:
+    el torso de TorsoBody abajo esta hecho para la pretina del short). Normales / tangentes giradas con la malla soldada.
+    Va en el fmdl del fpk sin short (pelvis_fmdl.write_mesh_geom) Y como versiones nuevas de pes_var_torso_3.dds (6 versiones:
+    las 3 del modelo + las 3 sin short; TB_SINSHORT=<carpeta> en make_variants.py; el VS acepta hasta 8).
+  - build_on_surface: la topologia de pelvis_mesh (92 / 82 / 74 / 68 / 64 / 62 / 60 + puente 4 + piernas 33 / 31 + bordes)
+    proyectada sobre S: filas del cuerpo por rayo desde el eje (la ultima a 6 mm por arriba del borde inclinado del muslo, que va
+    de 0.804 adentro a 0.848 afuera; sobre la entrepierna a yc + 4 mm, yc = 0.818), puente sobre el arco de S en x = 0, anillos
+    de las piernas interpolados y proyectados (rayo desde el centro de la pierna, peso sin(pi t)). Frente liso tipo Ken: -18 mm
+    gaussiano (25 grados, y yc + 3.5 cm, sigma 3 cm). 692 vertices / 773 slots / 1236 triangulos (entran 790 / 1244).
+  - Pezon: queda como en TorsoBody (nipple_mask, 1.3 cm 3D): sin relieve a la malla (relief_hp), sin correccion de la base ni
+    mapas delta (region_deltas, build_maps), sin zonas de piel (torso_skin) y en el PS sin definicion ni poros extra (nipM por
+    uv: 0.2944 / 0.2056, v 0.233). Con todo eso sumado se veia como una rosca de otro color.
+  - COSTURAS (torso_seam.py): en 4.5 cm a cada lado del anillo del hombro el detalle de las dos texturas pasa a ser el mismo
+    micro relieve 3D (la textura de skin_detail, triplanar sobre la posicion de reposo, amplitud = promedio de los dos lados a
+    4 .. 7 cm) encima del volumen suave (vol) de cada mapa, escrito en pes_var_torso_base_n / pes_var_arm_base_n (t20; con
+    x289); las deltas de las variantes se anulan en la franja. Junto al cuello el detalle del torso baja a la mitad (2.5 cm).
+    Medido en TorsoBody: albedo igual en el anillo pero arm_bsm un 4 % mas claro a 1 .. 6 cm (franja clara): el PS (w293) lo
+    baja 3.5 % por la posicion de reposo (sA). Normales de malla en el anillo: 1.6 grados de diferencia (no era eso).
+  - Menu Fisico: "Tipo de cuerpo" (z262) es una barra K_MUS de a 0.01 (2 % por paso; antes selector de a 20 %), los tipos del
+    mod son "Complexion"; el valor para los shaders sigue al elegido en ~0.15 s (musculo.cpp EaseTv); Complexion, Tipo de
+    cuerpo, General, Definicion y Ver no resaltan nada (el cuerpo quedaba blanco).
+- (26/10 e) TEXTURAS PROPIAS DEL TORSO (del usuario: torsob_nrm + torso_1_bsm nuevos, DXT5 4096 de 1 mip): se pasan al formato
+  del juego (BC5 / BC7 con mips, tools/torsobody/make_texture_pack.encode_chain) y se les genera torsob_srm (make_srm.py: zonas
+  de torso_skin + poros del normal map nuevo + lunares mas mates; BC1 con mips). La convencion del verde del mapa nuevo es la
+  de TorsoBody (G+: el ombligo como hueco, el borde del pectoral con sombra abajo; la integrabilidad no decide: 49 / 39 %, el
+  mapa es pintado). Los mapas de PES21FX dependen del normal map (relieve a la malla, base_n, tilt, deltas): se regeneran con
+  TB_TEX=<carpeta con las texturas nuevas> y TB_TEX_DETAIL=<tex de TorsoBody> (la textura de detalle de las costuras sale de
+  la piel de TorsoBody: el mapa nuevo casi no tiene poros). Instalados en la PC (livecpk TorsoBody + PES21FX\textures); los
+  pes_var_* de TorsoBody quedaron en backup_20261026_2030_ddb7363\texturas_torsobody_originales. El shader de piel del cuerpo
+  lee solo RGB del bsm y RG del srm / nrm (nrm: x = R * A): el alfa de bsm / srm no se usa.

@@ -2,8 +2,11 @@
 // PES21 (24/10): con el VS 1c02a92a (reemplazo propio) aclara y hace latir el musculo elegido en el menu Fisico (x174).
 // PES21 (26/10, v12.7): musculos con textura (x305): el VS manda en v1.xyz cuanto marcar el musculo que trabaja (mas relieve
 // grande del normal map) y las venas (textura pesVeins en t29, solo brazos y manos; un poco mas oscuras y frias).
+// PES21 (26/10 b): piel real (x293: brillo / rugosidad / translucidez por zona y poros; t21 / t24) y union del brazo (w293).
+// PES21 (26/10 b): base esculpida (t20, x289: el relieve del normal map en la malla y la textura corregida).
 // PES21 (26/10): columna marcada en todos los torsos (t19, x288).
 // PES21 (26/10): relieve de TorsoBody al derecho (x286: el verde de sus normal maps estaba invertido para el juego).
+// PES21 (26/10 d): tope del relieve (x307; inclinacion de la malla en t31..t33) y piel menos brillante (rugosidad 0.66, x306 mate).
 // PES21 (26/10): variantes robusto / atletico de TorsoBody (pes_variants.hlsli): en el torso, mapas normales delta (t16 robusto,
 // t17 atletico) y estrias del robusto un poco mas claras (t18); definicion del normal map: menos en el robusto, mas en el atletico
 // (torso y brazos); en los brazos el atletico muestra un poco las venas y el robusto las tapa. Las texturas las enlaza la DLL solo
@@ -58,7 +61,16 @@ Texture2D<float4> pesVeins     : register(t29);   // (26/10, v12.7) venas de bra
 Texture2D<float4> pesVarRob    : register(t16);   // (26/10) variantes del torso: normal delta del robusto (BC5 SNORM, v 0..0.5 del torso)
 Texture2D<float4> pesVarAtl    : register(t17);   //         normal delta del atletico
 Texture2D<float4> pesVarStr    : register(t18);   //         estrias del robusto (mascara de color, BC4)
-Texture2D<float4> pesSpine     : register(t19);   // (26/10) columna marcada de todos los torsos de TorsoBody (normal delta BC5 SNORM, v 0..0.5)
+Texture2D<float4> pesSpine     : register(t19);
+Texture2D<float4> pesBaseFix   : register(t20);   // (26/10 b) base esculpida: correccion del normal map del torso (BC5 SNORM, v 0..0.5)
+Texture2D<float4> pesTiltB     : register(t31);   // (26/10 d) inclinacion de la malla de la base esculpida respecto de la superficie original
+Texture2D<float4> pesTiltA     : register(t32);   //           la del atletico, t33 la del robusto (BC5 SNORM; torso v 0..0.5, brazo todo el
+Texture2D<float4> pesTiltR     : register(t33);   //           atlas; torso_tilt.py): para el tope del relieve (x307). Slots que el juego no usa
+Texture2D<float4> pesPelDetN   : register(t34);   // (26/10 d) pelvis: detalle de piel real (poros y lineas finas del torso, BC5 SNORM,
+Texture2D<float4> pesPelDetA   : register(t35);   //           mosaico de 22.5 cm) y su albedo (BC4: x 2); la DLL los enlaza solo en la pelvis
+Texture2D<float4> pesPelvisAlb : register(t23);   // (26/10 c) pelvis sin short: albedo propio (x 2 v; la DLL la enlaza solo en ese dibujo)
+Texture2D<float4> pesSkinA     : register(t21);   // (26/10 b) piel del torso por zona: brillo, rugosidad (BC5, v 0..0.5)
+Texture2D<float4> pesSkinB     : register(t24);   //           translucidez, rubor   // (26/10) columna marcada de todos los torsos de TorsoBody (normal delta BC5 SNORM, v 0..0.5)
 
 
 // 3Dmigoto declarations
@@ -121,6 +133,8 @@ void main(
   float hpFpx = max(fwidth(v2.x), fwidth(v2.y)) * 2048.0;
   float hpPoreA = 0.0, hpMicroVar = 0.0, hpPoreOcc = 1.0, hpTZone = 0.0;
   float2 nfDx = ddx(v2.xy), nfDy = ddy(v2.xy);   // (26/10) unas de los jugadores: derivadas fuera de las ramas
+  float2 pdQ = (v2.xy - 0.5) * 11.1;              // (26/10 d) pelvis: mosaico del detalle de piel (0.40 uv por metro, 22.5 cm)
+  float2 pdDx = ddx(pdQ), pdDy = ddy(pdQ);
 
   r0.xy = float2(-0.5,-0.5) + v0.xy;
   r0.xy = float2(0.125,0.125) * r0.xy;
@@ -141,6 +155,7 @@ void main(
   r2.xyz = g_tex_normal.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN).xyw;
   r2.x = r2.x * r2.z;
   r2.xy = r2.xy * float2(2,2) + float2(-1,-1);
+  float2 nBase0 = r2.xy;   // (26/10 b) el normal map tal cual (poros para la piel real, union del brazo)
   // (26/10, v12.7) musculos con textura: el VS 1c02a92a (pes_limbs.hlsli) manda en v1.xyz = (definicion, venas, 7) cuanto marcar
   // el musculo que trabaja y las venas (brazos, piernas y manos de TorsoBody); en el resto del cuerpo v1.z no es 7 y no cambia nada
   float4 P305 = IniParams.Load(int2(305,0));
@@ -161,6 +176,53 @@ void main(
   // (base, definicion, mapas de las variantes y venas estan todos en la convencion de la textura)
   uint tbW = 0, tbH = 0; g_tex_normal.GetDimensions(tbW, tbH);
   bool tbFlip = vrBody && tbW >= 4096 && IniParams.Load(int2(286,0)).x > 0.5;
+  // (26/10 c) pelvis "sin short" (SinCamiseta, tecla 4): la DLL enlaza t23 solo en ese dibujo; sus texturas (t20, t21, t23, t24)
+  // cubren el cuadrante libre de abajo a la derecha de la textura del torso (u, v 0.5..1), reescalado a 0..1
+  uint paW = 0, paH = 0; pesPelvisAlb.GetDimensions(paW, paH);
+  bool pel = vrBody && paW > 0;
+  float2 pelUV = saturate((v2.xy - 0.5) * 2.0);
+  float4 P293 = IniParams.Load(int2(293,0));
+  // (26/10 e) los pezones en la textura del torso de TorsoBody (u 0.2944 / 0.2056, v 0.233; ~1.5 cm = 0.011 en u): ahi la
+  // definicion y los poros extra no entran (el pezon queda como lo dibujo TorsoBody; tools/fox/torso: nipple_mask)
+  float nipM = 0.0;
+  if (vrTm > 0.5 && !pel) {
+    float2 q1 = (v2.xy - float2(0.2944, 0.2329)) / float2(0.0075, 0.0068), q2 = (v2.xy - float2(0.2056, 0.2319)) / float2(0.0075, 0.0068);
+    nipM = max(exp(-0.5 * dot(q1, q1)), exp(-0.5 * dot(q2, q2)));
+  }
+  float armBand = 0.0;
+  if (vrBody && tbW >= 4096 && vrTm < 0.5 && P293.w > 0.5) {
+    // (26/10 b) union del brazo con el torso (w293). (26/10 e) El relieve ya va cosido en las texturas (torso_seam.py: el mismo
+    // micro relieve 3D a los dos lados del hombro, en pes_var_*_base_n). Lo que queda aca: el albedo de arm_bsm es un 4 % mas
+    // claro en los 1 .. 6 cm junto a la costura (una franja clara en el hombro): se baja al tono del torso
+    float sA = dot(float3(abs(w2.w), w2.z, 0.02) - float3(0.2631, 1.3704, 0.0195), float3(0.7611, -0.6432, -0.0839));
+    if (abs(w2.w) > 0.20 && w2.z > 1.15) armBand = smoothstep(0.003, 0.012, sA) * (1.0 - smoothstep(0.045, 0.075, sA));
+  }
+  {   // (26/10 b) base esculpida (x289): el relieve que dibuja el normal map de TorsoBody ahora esta en la malla (filas 7..9 de los
+      // datos del VS): esta textura le saca a la textura lo que la malla ya muestra (si no, se veria dos veces) y deja la espalda
+      // suave (las lineas duras al 30 %). La DLL la enlaza solo en los torsos
+    uint bfW = 0, bfH = 0; pesBaseFix.GetDimensions(bfW, bfH);
+    bool bfArm = bfW > 0 && bfH == bfW;   // la del brazo cubre todo su atlas; la del torso, v 0..0.5 (2:1)
+    if (vrBody && bfW > 0 && (pel || ((bfArm || v2.y < 0.5) && IniParams.Load(int2(289,0)).x > 0.5))) {
+      r2.xy += pesBaseFix.SampleBias(g_samplerLinear_Clamp_s, pel ? pelUV : (bfArm ? v2.xy : float2(v2.x, v2.y * 2.0)), bBN).xy;
+      float l2 = dot(r2.xy, r2.xy); if (l2 > 0.94) r2.xy *= rsqrt(l2 / 0.94);
+    }
+  }
+  float pdAlb = 1.0;
+  if (pel) {   // (26/10 d) pelvis: poros, lineas finas y manchitas de la piel del torso de TorsoBody (tools/fox/pelvis/skin_detail.py)
+               // a la misma escala que en el torso; dos capas (la segunda girada 37 grados, su pendiente vuelta al marco de la uv),
+               // mezcladas conservando la varianza: sin repeticion visible
+    uint pdW = 0, pdH = 0; pesPelDetN.GetDimensions(pdW, pdH);
+    if (pdW > 0) {
+      const float2x2 pdR = float2x2(0.8, -0.6, 0.6, 0.8);
+      float2 q2 = mul(pdR, pdQ) * 0.93 + float2(0.37, 0.61), d2x = mul(pdR, pdDx) * 0.93, d2y = mul(pdR, pdDy) * 0.93;
+      float2 nA = pesPelDetN.SampleGrad(g_samplerLinear_Clamp_s, frac(pdQ), pdDx, pdDy).xy;
+      float2 nB = mul(pesPelDetN.SampleGrad(g_samplerLinear_Clamp_s, frac(q2), d2x, d2y).xy, pdR);
+      r2.xy += (nA + nB) * 0.7071;
+      float aA = pesPelDetA.SampleGrad(g_samplerLinear_Clamp_s, frac(pdQ), pdDx, pdDy).x;
+      float aB = pesPelDetA.SampleGrad(g_samplerLinear_Clamp_s, frac(q2), d2x, d2y).x;
+      pdAlb = max(1.0 + ((2.0 * aA - 1.0) + (2.0 * aB - 1.0)) * 0.7071, 0.5);
+    }
+  }
   {   // (24/10) definicion muscular (x172, menu Musculatura): agranda o achica solo el relieve grande del normal map
       // (los musculos: el mismo mapa visto 11 veces mas chico), no los poros ni las lineas finas de la piel
     float defM = IniParams.Load(int2(172,0)).x; defM = defM > 0.01 ? clamp(defM, 0.0, 3.0) : 1.0;
@@ -169,13 +231,14 @@ void main(
       if (stH.y > 0.5 && stI >= 0 && stI < min((int)(stH.x + 0.5), 20)) { float dP = IniParams.Load(int2(195 + 3 * stI, 0)).w; if (dP > 0.01) defM = clamp(dP, 0.0, 3.0); }
     }
     defM += lbDef;   // (26/10, v12.7) el musculo que trabaja: mas relieve solo ahi
-    // (26/10) variantes: torso 1 + 0.15 atletico - 0.75 robusto; brazos 1 + 0.20 atletico - 0.50 robusto (el atletico ya marca
-    // con la malla y los mapas delta; con mas definicion las sombras del normal map se veian manchadas)
-    defM *= 1.0 + vrDefK * (vrTm * (0.15 * vrWa - 0.75 * vrWr) + vrArm * (0.20 * vrWa - 0.50 * vrWr));
+    // (26/10) variantes: torso 1 - 0.75 robusto; brazos 1 + 0.10 atletico - 0.50 robusto (el atletico ya marca con la malla y los
+    // mapas delta; con mas definicion las sombras del normal map se veian manchadas). (26/10 d) torso atletico +0.15 -> 0 y brazo
+    // +0.20 -> +0.10: sumado a la malla y a la definicion del jugador llegaba a 80 grados en el esternon (manchas negras)
+    defM *= 1.0 + vrDefK * (vrTm * (0.0 * vrWa - 0.75 * vrWr) + vrArm * (0.10 * vrWa - 0.50 * vrWr));
     if (abs(defM - 1.0) > 0.01) {
       float3 nM = g_tex_normal.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN + 3.5).xyw;
       float2 mM = float2(nM.x * nM.z, nM.y) * 2.0 - 1.0;
-      r2.xy += (defM - 1.0) * mM;
+      r2.xy += (defM - 1.0) * mM * (1.0 - nipM);   // (26/10 e) el pezon no se agranda (quedaba como una rosca)
       float l2 = dot(r2.xy, r2.xy); if (l2 > 0.94) r2.xy *= rsqrt(l2 / 0.94);
     }
   }
@@ -197,7 +260,7 @@ void main(
     float spK = IniParams.Load(int2(288,0)).x;
     if (vrBody && spW > 0 && spK > 0.001 && v2.y < 0.5) {
       float2 sd = pesSpine.SampleBias(g_samplerLinear_Clamp_s, float2(v2.x, v2.y * 2.0), bBN).xy;
-      r2.xy += sd * min(spK, 3.0) * (1.0 - 0.5 * vrWr) * (1.0 + 0.25 * vrWa);
+      r2.xy += sd * min(spK, 3.0) * (1.0 - 0.5 * vrWr) * (1.0 - 0.5 * vrWa);   // (26/10 d) el atletico ya la esculpe en la malla
       float l2 = dot(r2.xy, r2.xy); if (l2 > 0.94) r2.xy *= rsqrt(l2 / 0.94);
     }
   }
@@ -229,6 +292,30 @@ void main(
       hpMicroVar = saturate((1.0 - length(ma.xyz * 2.0 - 1.0)) * 8.0) * saturate(P94h.x * 0.7) * skinM;
     }
   }
+  {   // (26/10 d) tope del relieve (x307 prendido, y307 inclinacion maxima en grados) en el cuerpo de TorsoBody: malla esculpida +
+      // normal map + definicion se sumaban (atletico con definicion alta: hasta 80 grados en el esternon, el borde del pectoral, la
+      // linea alba y el pliegue del codo, que en el juego se veian como manchas negras). Se suma la inclinacion de la malla
+      // (t31 base, t32 atletico, t33 robusto, mezcladas como el VS: base -> variante con |t|) al normal map, el total se limita con
+      // una curva suave desde el 60 % del tope y se le vuelve a restar la de la malla. Sin esos mapas (piernas, manos, pelvis)
+      // se limita solo la textura
+    float4 P307 = IniParams.Load(int2(307,0));
+    if (vrBody && tbW >= 4096 && P307.x > 0.5) {
+      float Ls = sin(radians(clamp(P307.y > 1.0 ? P307.y : 49.0, 20.0, 85.0))), Ks = 0.6 * Ls;
+      float2 mt = float2(0.0, 0.0);
+      uint tlW = 0, tlH = 0; pesTiltB.GetDimensions(tlW, tlH);
+      bool tlArm = tlW > 0 && tlW == tlH;
+      if (tlW > 0 && (tlArm || v2.y < 0.5)) {
+        float2 tuv = tlArm ? v2.xy : float2(v2.x, v2.y * 2.0);
+        float2 mb = IniParams.Load(int2(289,0)).x > 0.5 ? pesTiltB.SampleLevel(g_samplerLinear_Clamp_s, tuv, 0).xy : float2(0.0, 0.0);
+        float2 mv = mb;
+        if (vrT > 0.001) mv = pesTiltA.SampleLevel(g_samplerLinear_Clamp_s, tuv, 0).xy;
+        else if (vrT < -0.001) mv = pesTiltR.SampleLevel(g_samplerLinear_Clamp_s, tuv, 0).xy;
+        mt = lerp(mb, mv, abs(vrT));
+      }
+      float2 tot = r2.xy + mt; float tl = length(tot);
+      if (tl > Ks) { float f = Ks + (Ls - Ks) * tanh((tl - Ks) / (Ls - Ks)); r2.xy = tot * (f / tl) - mt; }
+    }
+  }
   if ((bodyOn || headPiece) && P35b.w > 0.5) {   // cavidades desde el normal map (codo, rodilla, nudillos, tendones)
     float bnz = sqrt(saturate(1.0 - dot(r2.xy, r2.xy)));
     bCav = 1.0 - saturate(P35b.x) * smoothstep(0.02, 0.35, 1.0 - bnz) * 0.55;
@@ -258,6 +345,32 @@ void main(
   r0.w = g_psMaterial.m_materials[1].x * r0.w;
   r0.w = exp2(r0.w);
   r1.xy = g_tex_srm.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBD).xy;
+  // (26/10 b) piel real (x293 prendido, y293 brillo, z293 translucidez) en el cuerpo de TorsoBody (torso, brazos, piernas):
+  // srm / trm de TorsoBody son parejos (brillo 0.9 y rugosidad en el tope en todos lados, translucidez 0.14: piel de arcilla).
+  // Ahora: piel satinada con los poros y las lineas finas del normal map cortando el brillo (mas rugosos, menos brillo) y, en el
+  // torso, zonas (pes_var_torso_skin_a/b: esternon, entre los omoplatos, hombros y espalda baja mas grasos; costados mas mates;
+  // translucidez mayor en la carne y menor sobre hueso; un poco de rubor). (26/10 c) Brazos: pes_var_arm_skin_a/b (codo, adentro
+  // del brazo, muneca, antebrazo de afuera, hombro). Afuera del torso y los brazos: los valores del borde del torso
+  float skTrans = -1.0, skRed = 0.0;
+  if (vrBody && tbW >= 4096 && P293.x > 0.5) {
+    float4 skA = float4(0.80, 0.66, 0.30, 0.5);   // brillo, rugosidad, translucidez, rubor (= torso_skin.DEF). (26/10 d) rugosidad
+                                                  // 0.45 -> 0.66 (la de TorsoBody es 0.70): con 0.45 el sol y los reflejos del
+                                                  // cielo daban piel mojada en todo el cuerpo
+    uint saW = 0, saH = 0; pesSkinA.GetDimensions(saW, saH);
+    bool saArm = saW > 0 && saH == saW;   // (26/10 c) la de los brazos cubre todo su atlas; la del torso, v 0..0.5 (2:1)
+    if (saW > 0 && (pel || saArm || v2.y < 0.5)) {
+      float2 suv = pel ? pelUV : (saArm ? v2.xy : float2(v2.x, v2.y * 2.0));
+      skA.xy = pesSkinA.SampleBias(g_samplerLinear_Clamp_s, suv, bBD).xy;
+      skA.zw = pesSkinB.SampleBias(g_samplerLinear_Clamp_s, suv, bBD).xy;
+    }
+    float3 nbS = g_tex_normal.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN + 2.5).xyw;
+    float hf = saturate(length(nBase0 - (float2(nbS.x * nbS.z, nbS.y) * 2.0 - 1.0)) / 0.12) * (1.0 - nipM);   // poros y lineas finas (26/10 e: no en el pezon)
+    r1.x = saturate(skA.x * (1.0 - 0.35 * hf) * (P293.y > 0.0 ? P293.y : 1.0));
+    r1.y = saturate(skA.y + 0.10 * hf + clamp(IniParams.Load(int2(306,0)).x, -0.3, 0.3));   // (26/10 d) x306: mas mate (+) / satinada (-)
+    float trT = g_tex_translucent.Sample(g_samplerLinear_Clamp_s, v2.xy).y;   // relativo al 0.143 de TorsoBody (dedos, etc.)
+    skTrans = saturate(skA.z * (trT / 0.143) * (P293.z > 0.0 ? P293.z : 1.0));
+    skRed = skA.w - 0.5;
+  }
   r1.z = g_psMaterial.m_materials[2].w * r1.x;
   r0.w = r1.z * r0.w;
   r2.xyz = g_tex_Dirty.Sample(g_sampler_Dirty_s, v2.xy).xyz;
@@ -272,6 +385,9 @@ void main(
   r1.w = max(0.730000019, r1.w);
   r1.w = min(0.930000007, r1.w);
   r2.yzw = g_tex_diffuse.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBD).xyz;
+  if (abs(skRed) > 0.001) r2.yzw *= 1.0 + skRed * float3(0.10, -0.03, -0.05);   // (26/10 b) rubor de la piel real
+  if (armBand > 0.001) r2.yzw *= 1.0 - 0.035 * armBand;   // (26/10 e) la franja clara del brazo junto al hombro, al tono del torso
+  if (pel) r2.yzw *= pesPelvisAlb.SampleBias(g_samplerLinear_Clamp_s, pelUV, bBD).x * 2.0 * pdAlb;   // (26/10 c) tono y manchas de la pelvis (d: y el detalle)
   {   // (26/10, v12.6) unas de los jugadores con textura de brazo propia (caras reales: arm_bsm.ftex de la cara, el atlas de
       // Konami a 2048 con las unas pintadas para la mano de Konami). Solo en la mano de TorsoBody (VS 1c02a92a: v3.w en [2, 3];
       // posicion de reposo en w2.zw, las manos estan a mas de 55 cm del centro; uv de las manos) y solo si la textura no es la de
@@ -297,6 +413,7 @@ void main(
   r2.yzw = r1.zzz * r3.xyz + r2.yzw;
   // (20/10) cabeza de las genericas: el mismo color y la misma translucidez que el shader de cara (5ce3 / ce188)
   float hpTrans = g_tex_translucent.Sample(g_samplerLinear_Clamp_s, v2.xy).y;
+  if (skTrans >= 0.0) hpTrans = skTrans;   // (26/10 b) piel real
   float hpFilm = 0.0;
   if (hpK > 0.001) {
     float3 hpAlb0 = r2.yzw; float hpTr0 = hpTrans;

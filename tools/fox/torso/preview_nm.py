@@ -30,12 +30,16 @@ class Mesh:
     def __init__(self, pos, nrm, tan, uv, faces, tex, delta=None, region="torso"):
         self.pos, self.nrm, self.tan, self.uv, self.faces, self.tex, self.delta, self.region = pos, nrm, tan, uv, faces, tex, delta, region
 
-def render(meshes_, yaw, W, H, ppm, cx, cy, t, tmp, light=(-0.35, 0.55, 0.76)):
+def render(meshes_, yaw, W, H, ppm, cx, cy, t, tmp, light=(-0.35, 0.55, 0.76), pitch=0.0):
     th = math.radians(yaw)
     R = np.array([[math.cos(th), 0, math.sin(th)], [0, 1, 0], [-math.sin(th), 0, math.cos(th)]])
+    if pitch:   # (26/10 c) inclinacion de la camara (+ = desde arriba)
+        ph = math.radians(pitch)
+        R = np.array([[1, 0, 0], [0, math.cos(ph), -math.sin(ph)], [0, math.sin(ph), math.cos(ph)]]) @ R
     tris, own = [], []
+    pv = np.array([0.0, cy, 0.03]) if pitch else np.zeros(3)   # (26/10 c) con inclinacion se gira alrededor de la altura de la vista
     for mi, m in enumerate(meshes_):
-        p = m.pos @ R.T
+        p = (m.pos - pv) @ R.T + pv
         xy = np.stack([W / 2 + (p[:, 0] - cx) * ppm, H / 2 - (p[:, 1] - cy) * ppm, p[:, 2]], 1)
         tris.append(xy[m.faces]); own.append(np.stack([np.full(len(m.faces), mi), np.arange(len(m.faces))], 1))
     tris = np.concatenate(tris); own = np.concatenate(own)
@@ -66,15 +70,20 @@ def render(meshes_, yaw, W, H, ppm, cx, cy, t, tmp, light=(-0.35, 0.55, 0.76)):
             dR, dA = m.delta[0], m.delta[1]
             vv = np.clip(uv[:, 1] * 2, 0, 1)
             xy = xy + wr * bilinear(dR, uv[:, 0], vv) + wa * bilinear(dA, uv[:, 0], vv)
+        if m.delta is not None and len(m.delta) > 4 and m.delta[4] is not None:   # (26/10) correccion de la espalda (todos)
+            vv = np.clip(uv[:, 1] * 2, 0, 1)
+            xy = xy + float(os.environ.get("PNM_BASE", "1")) * bilinear(m.delta[4], uv[:, 0], vv)
         if m.delta is not None and len(m.delta) > 3 and m.delta[3] is not None:   # (26/10) columna marcada (como el PS, x288)
             vv = np.clip(uv[:, 1] * 2, 0, 1)
             ks = float(os.environ.get("PNM_SPINE", "1")) * (1 - 0.5 * wr) * (1 + 0.25 * wa)
             xy = xy + ks * bilinear(m.delta[3], uv[:, 0], vv)
+        if os.environ.get("PNM_CLAY"): xy = xy * 0.0   # (26/10 b) solo la malla (sin normal map ni color)
         l2 = np.sum(xy * xy, 1, keepdims=True); xy = np.where(l2 > 0.94, xy * np.sqrt(0.94 / np.maximum(l2, 1e-9)), xy)
         z = np.sqrt(np.clip(1 - np.sum(xy * xy, 1, keepdims=True), 0, 1))
         n = Tg * xy[:, :1] + B * xy[:, 1:2] + N * z; n /= np.linalg.norm(n, axis=1, keepdims=True)
         a = bilinear(alb, uv[:, 0], uv[:, 1])[:, :3]
         a = a ** 2.2
+        if os.environ.get("PNM_CLAY"): a = np.full_like(a, 0.42)
         if m.delta is not None and len(m.delta) > 2 and wr > 0:   # estrias: un poco mas claras (como el PS)
             ms = bilinear(m.delta[2][..., None], uv[:, 0], np.clip(uv[:, 1] * 2, 0, 1))
             a = a + (a * np.array([1.07, 1.02, 1.03]) + 0.008 - a) * np.clip(ms * 0.6 * wr, 0, 1)
@@ -95,24 +104,33 @@ def load_scene(common, texdir, vardir, t):
     dR = np.load(os.path.join(vardir, "maps_dR.npy")); dA = np.load(os.path.join(vardir, "maps_dA.npy"))
     mR = np.load(os.path.join(vardir, "maps_mR.npy")) if os.path.exists(os.path.join(vardir, "maps_mR.npy")) else np.zeros(dR.shape[:2])
     dS = np.load(os.path.join(vardir, "maps_dS.npy")) if os.path.exists(os.path.join(vardir, "maps_dS.npy")) else None
+    dB = np.load(os.path.join(vardir, "maps_dB.npy")) if os.path.exists(os.path.join(vardir, "maps_dB.npy")) else None
     out = []
     wr, wa = max(-t, 0.0), max(t, 0.0)
     def apply(m, data):
         pos = m["pos"].astype(np.float64); nrm = m["nrm"][:, :3].astype(np.float64); tan = m["tan"].astype(np.float64)
-        if data is not None and t != 0:
-            nv = data.shape[0] // 7
-            k = int(np.argmin([np.abs(data[7 * v, :, :3] - pos).max() for v in range(nv)]))
-            r = 7 * k + (1 if t < 0 else 4); a = abs(t)
-            pos = pos + a * data[r, :, :3]
-            nrm = nrm * (1 - a) + a * data[r + 1, :, :3]; nrm /= np.linalg.norm(nrm, axis=1, keepdims=True)
-            tt = tan[:, :3] * (1 - a) + a * data[r + 2, :, :3]
+        if data is not None:
+            R = 10 if data.shape[0] % 10 == 0 else 7          # (26/10 b) 10 filas: con la base (7..9)
+            nv = data.shape[0] // R
+            k = int(np.argmin([np.abs(data[R * v, :, :3] - pos).max() for v in range(nv)]))
+            d0, n0, t0 = np.zeros_like(pos), nrm, tan[:, :3]
+            if R == 10 and os.environ.get("PNM_NOBASE") is None:
+                d0, n0, t0 = data[R * k + 7, :, :3], data[R * k + 8, :, :3], data[R * k + 9, :, :3]
+            if t != 0:
+                r = R * k + (1 if t < 0 else 4); a = abs(t)
+                d1, n1, t1 = data[r, :, :3], data[r + 1, :, :3], data[r + 2, :, :3]
+            else:
+                a = 0.0; d1, n1, t1 = d0, n0, t0
+            pos = pos + d0 * (1 - a) + a * d1
+            nrm = n0 * (1 - a) + a * n1; nrm /= np.linalg.norm(nrm, axis=1, keepdims=True)
+            tt = t0 * (1 - a) + a * t1
             tan = np.concatenate([tt, tan[:, 3:4]], 1)
         return pos, nrm, tan
     M = meshes(Fmdl(os.path.join(common, "pants_out_sub.fmdl")))
     for k in (1, 2, 3):
         data = read_dds_float4(os.path.join(vardir, "pes_var_torso_%d.dds" % k))
         p, n, tg = apply(M[k], data)
-        out.append(Mesh(p, n, tg, M[k]["uv"].astype(np.float64), M[k]["faces"], texT, (dR, dA, mR, dS), "torso"))
+        out.append(Mesh(p, n, tg, M[k]["uv"].astype(np.float64), M[k]["faces"], texT, (dR, dA, mR, dS, dB), "torso"))
     MA = meshes(Fmdl(os.path.join(common, "arm.fmdl")))
     data = read_dds_float4(os.path.join(vardir, "pes_var_arm.dds"))
     p, n, tg = apply(MA[0], data)
@@ -138,19 +156,28 @@ def main():
     tmp = os.path.join(os.environ.get("SIM_TMP", "/tmp"), "_pnm%d" % os.getpid())
     views = [(0, 0.06, 1.24, 760, 600, 820, "frente"), (35, 0.10, 1.22, 760, 600, 820, "3/4"), (180, -0.06, 1.24, 760, 600, 820, "espalda"),
              (0, 0.40, 1.24, 760, 420, 1000, "brazo")]
+    if os.environ.get("PNM_FB"):   # (26/10 b) frente y espalda enteros
+        views = [(0, 0.0, 1.25, 560, 700, 1050, "frente"), (180, 0.0, 1.25, 560, 700, 1050, "espalda"), (40, 0.05, 1.25, 560, 700, 1050, "3/4")]
+    if os.environ.get("PNM_SEAM"):   # (26/10) la union del brazo con el torso (hombro, axila, espalda)
+        views = [(0, 0.24, 1.37, 560, 520, 2400, "hombro adelante"), (60, 0.20, 1.36, 560, 520, 2400, "hombro costado"),
+                 (150, 0.22, 1.37, 560, 520, 2400, "hombro atras"), (90, 0.20, 1.30, 560, 520, 2400, "axila (costado)")]
     if os.environ.get("PNM_BACK"):   # (26/10) la espalda de cerca (columna)
         views = [(180, -0.0, 1.27, 600, 760, 1500, "espalda"), (205, 0.0, 1.27, 600, 760, 1500, "espalda 3/4")]
+    if os.environ.get("PNM_ARM"):   # (26/10 c) el brazo izquierdo de cerca: adelante, atras, desde arriba y desde abajo
+        views = [(0, 0.42, 1.24, 620, 440, 1150, "brazo adelante"), (180, -0.42, 1.24, 620, 440, 1150, "brazo atras"),
+                 (0, 0.42, 1.24, 620, 440, 1150, "brazo desde arriba", 60), (0, 0.42, 1.24, 620, 440, 1150, "brazo desde abajo", -60)]
     if os.environ.get("PNM_CLOSE"):
         views = [(180, -0.05, 1.45, 760, 420, 1400, "trapecio (atras)"), (25, 0.12, 1.47, 760, 420, 1400, "trapecio (adelante)"),
                  (75, 0.03, 1.12, 760, 420, 1500, "costado (estrias)"), (0, 0.03, 1.30, 760, 420, 1400, "pecho")]
     rows = []
-    for (yaw, cx, cy, W, H, ppm, nmv) in views:
+    for v in views:
+        yaw, cx, cy, W, H, ppm, nmv = v[:7]; pitch = v[7] if len(v) > 7 else 0.0
         ims = []
-        for t in (-1.0, 0.0, 1.0):
+        for t in ((0.0,) if os.environ.get("PNM_T0") else (-1.0, 0.0, 1.0)):
             sc = load_scene(common, texdir, vardir, t)
             arm_bones_offset(sc, t, log)
             lt = tuple(float(v) for v in os.environ["PNM_LIGHT"].split(",")) if os.environ.get("PNM_LIGHT") else (-0.35, 0.55, 0.76)
-            ims.append(render(sc, yaw, W, H, ppm, cx, cy, t, tmp, light=lt))
+            ims.append(render(sc, yaw, W, H, ppm, cx, cy, t, tmp, light=lt, pitch=pitch))
         rows.append(ims)
     Wt = sum(im.width for im in rows[0]); Ht = sum(r[0].height + 28 for r in rows)
     sheet = Image.new("RGB", (Wt, Ht), (24, 24, 24))
@@ -158,7 +185,7 @@ def main():
     d = ImageDraw.Draw(sheet); y = 0
     for r, v in zip(rows, views):
         x = 0
-        for im, nm in zip(r, ("ROBUSTO", "TORSOBODY", "ATLETICO")):
+        for im, nm in zip(r, (("TORSOBODY",) if os.environ.get("PNM_T0") else ("ROBUSTO", "TORSOBODY", "ATLETICO"))):
             d.text((x + 10, y + 8), "%s  -  %s" % (nm, v[6]), fill=(230, 230, 230)); sheet.paste(im, (x, y + 28)); x += im.width
         y += r[0].height + 28
     sheet.save(outp)
