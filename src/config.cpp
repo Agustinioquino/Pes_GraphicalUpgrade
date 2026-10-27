@@ -236,9 +236,9 @@ static bool LoadConfigLocked() {
     // (26/10 f) pasto tanda 6: filas nuevas con su valor por defecto si el ini no las trae (el ini de la PC solo se toca agregando lineas)
     // 290 x stencil de la base en las hojas (sombra del sol) | y sin escribir RT4 (luz horneada) | z oclusion del atlas fija | w lo mismo en el pasto del juego (26/10 g)
     // 291 x color con el suelo lejos | y / z px/m lejos / cerca | w normal lisa lejos   292 x hundimiento del juego | y lineas | z ralear con el desgaste | w desgaste en vivo mas visible
-    // 293 x px/m desde donde se dibuja el pasto del juego (T0) | y / z rampa de las hojas finas de cerca (px/m) | w hojas despues de toda la base (26/10 g)
+    // 294 x px/m desde donde se dibuja el pasto del juego (T0) | y / z rampa de las hojas finas de cerca (px/m) | w hojas despues de toda la base (26/10 g)
     { static const struct { int i, k; float v; } kDef[] = { {290, 0, 1.f}, {290, 1, 1.f}, {290, 2, 0.45f}, {290, 3, 1.f}, {291, 0, 1.f}, {291, 1, 40.f}, {291, 2, 140.f}, {291, 3, 1.f},
-                                                         {292, 0, 1.f}, {292, 1, 1.f}, {292, 2, 1.f}, {292, 3, 1.f}, {293, 0, 1000.f}, {293, 1, 200.f}, {293, 2, 450.f}, {293, 3, 1.f} };
+                                                         {292, 0, 1.f}, {292, 1, 1.f}, {292, 2, 1.f}, {292, 3, 1.f}, {294, 0, 1000.f}, {294, 1, 200.f}, {294, 2, 450.f}, {294, 3, 1.f} };
       for (auto& d : kDef) if (!c.info[d.i][d.k].defined) c.base[d.i][d.k] = d.v; }
     memcpy(c.live, c.base, sizeof(c.base));
     LoadCloth();
