@@ -697,8 +697,7 @@ void UpdateTimeParams() {
       }
       p[93][0] = adapt; }
     // (20/10) inyeccion de luz: la DLL publica cada cuadro, para todos los shaders, el sol en espacio MUNDO (111: xyz + altura
-    // en grados), la niebla/horizonte del motor y
-    // la exposicion (113), y el estado de la escena (114: x suelo automatico 0 normal / 1 humedo (lluvia) / 2 seco, y altura
+    // en grados) y el estado de la escena (114: x suelo automatico 0 normal / 1 humedo (lluvia) / 2 seco, y altura
     // de la camara, z estacion, w 1 = de dia con sol real). Antes cada shader lo derivaba a mano de m_view.
     { std::vector<float> L, S; int lf = -1, sf = -2;
       bool lok = NamedCBRead("LightCB", L, &lf) && L.size() >= 8, sok = NamedCBRead("SceneCB", S, &sf) && S.size() >= 120;
@@ -740,7 +739,8 @@ void UpdateTimeParams() {
           // y el menu guardaba basura (w112 = 3826). La luminancia queda local para decidir "sunny".
           float cr = L[4], cg = L[5], cb = L[6];
           float lum112 = 0.2126f * cr + 0.7152f * cg + 0.0722f * cb;
-          p[113][0] = S[108]; p[113][1] = S[109]; p[113][2] = S[110]; p[113][3] = S[94];   // niebla rgb, exposicion z
+          // (27/10 o) la niebla / exposicion ya NO se publican en la fila 113: ningun shader las leia y la 113 es el slider de reflectores
+          // de noche en el cesped (619b, x113 / y113): escribirla cada cuadro los pisaba y el menu guardaba w113 = 0.0001
           p[114][1] = S[81];                                                             // altura de la camara (m_eyepos.y)
           g_eyePos[0] = S[80]; g_eyePos[1] = S[81]; g_eyePos[2] = S[82]; g_eyePos[3] = 1; g_eyeValid = true;   // (20/10) para el LOD de caras
           bool sunny = (cr / std::max(cb, 1e-4f)) > 1.06f && lum112 > 600.0f;         // luz calida y fuerte = sol (de noche: torres frias)
