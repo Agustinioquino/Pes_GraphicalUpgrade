@@ -800,9 +800,9 @@ void main(
       float NdVe = saturate(dot(Nsk, -Vsk));
       // (27/10) arquero de Agustin: la tela oscura salia gris lavada (como mojada) con el reflejo del cielo entero encima. La
       // tela de punto no refleja como una superficie lisa (las fibras desparraman y tapan el brillo): en los kits va a 1/4.
-      // La piel un poco mas (le gusta el brillo del original en la cara)
+      // La piel queda fija como la dejo Agustin (y151 = 0.1, 27/10: "me gusta como esta ahora en la piel"), sin depender del slider
       bool kitE = (tyC == 0) && (abs(gmC.z - 0.9607843) < 0.002);
-      float F0 = skinC ? 0.034 : 0.08 * saturate(gmC.y);
+      float F0 = skinC ? 0.028 : 0.08 * saturate(gmC.y);
       float4 rr = roughE * float4(-1.0, -0.0275, -0.572, 0.022) + float4(1.0, 0.0425, 1.04, -0.04);
       float a004 = min(rr.x * rr.x, exp2(-9.28 * NdVe)) * rr.x + rr.y;
       float2 AB = float2(-1.04, 1.04) * a004 + rr.zw;
@@ -826,7 +826,7 @@ void main(
         } }
       float soK = lerp(1.0, soL * lerp(1.0, aoE, 0.5) * hzK, RS.z > 0 ? saturate(RS.z) : 1.0);
       float sunLe = max(dot(max(pLc_color.xyz, 0.0), float3(0.2126, 0.7152, 0.0722)), 0.0) * g_psScene.m_exposure.z;
-      r0.xyw += env * sunLe * specE * soK * max(RS.y, 0.0);
+      r0.xyw += env * sunLe * specE * soK * (skinC ? 0.1 : max(RS.y, 0.0));
     }
   }
   { // PES21 carteles LED (20/10, 141): los shaders de los carteles marcan el pixel (rugosidad 253/255, especular 1/255, metal 0).
