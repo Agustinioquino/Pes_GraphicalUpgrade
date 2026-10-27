@@ -44,7 +44,7 @@ local PERFIL = true
 -- las funciones definidas adentro)
 local NOJIT = false
 local function modulo_cuello()
-local m = { version = "1.15" }
+local m = { version = "1.16" }
 
 local AXZ = 0.045          -- eje del cuello (z)
 -- (1.14) borde del cuello del torso con la forma del cuerpo de Konami (tools/fox/torso/neck_konami.py: el anillo de
@@ -2220,7 +2220,7 @@ local SEEN_TEX, n_seen = {}, 0      -- texturas de caras que llegaron sin grilla
 local CACHE_DIR = nil                -- se fija en init (ctx.sider_dir .. content\TorsoBody_cuello_cache\)
 local CACHE_OK = true                -- false si no se pudo escribir (carpeta inexistente): se sigue sin cache
 local FROM_CACHE = {}                -- archivos (en minusculas) que Sider esta sirviendo desde la cache
-local CACHE_TAG = "_v22"   -- (1.10) color del tono 1 nuevo
+local CACHE_TAG = "_v23"   -- (1.10) color del tono 1 nuevo
 local function cache_paths(fn)
     if not CACHE_DIR then return nil end
     local id = fn:match("face[\\/]+real[\\/]+([^\\/]+)[\\/]")
@@ -2300,7 +2300,7 @@ local function texture_ready(filename, fn, data, size, total_size, offset)
     local g = grid_unpack(gs)
     local id = fn:match("face[\\/]+real[\\/]+([^\\/]+)[\\/]")
     log("fundiendo " .. tostring(id) .. " (" .. size .. " bytes)...")
-    local forced = id and TONO_FORZADO[id]
+    local forced = id and (TONO_FORZADO[id] or TONO_MAPA[tonumber(id) or -1])
     local t0 = os and os.clock and os.clock() or 0
     local ok, out, msg
     if PC then ok, out, msg = PC(tex_process, buf, g, forced) else ok = true; out, msg = tex_process(buf, g, forced) end
@@ -2381,12 +2381,50 @@ local function data_ready(ctx, filename, data, size, total_size, offset)
     end
 end
 
+-- (1.16) tono del torso por jugador: el mismo que usa la DLL (PES21FX\tonos_piel.txt manda; base shirtless_skin_map.bin,
+-- en PES21FX\ o en modules\ de Sider). Con el mapa, el fundido del cuello usa el tono con el que el juego dibuja el torso
+-- en vez de adivinarlo por el color del cuello. TONO_FORZADO (arriba) manda sobre todo.
+local TONO_MAPA = {}
+local function u32(s, i) local a, b, c, d = byte(s, i, i + 3); return a + b * 256 + c * 65536 + d * 16777216 end
+local function cargar_mapa_tonos(dir)
+    local n = 0
+    for _, f in ipairs({ dir .. "..\\PES21FX\\shirtless_skin_map.bin", dir .. "modules\\shirtless_skin_map.bin" }) do
+        local h = io.open(f, "rb")
+        if h then
+            local raw = h:read("*a"); h:close()
+            if raw and raw:sub(1, 4) == "SSK1" and #raw >= 8 then
+                local cnt = u32(raw, 5)
+                for i = 0, cnt - 1 do
+                    local o = 9 + i * 8
+                    if o + 7 > #raw then break end
+                    local id, t = u32(raw, o), u32(raw, o + 4)
+                    if t >= 1 and t <= 6 and not TONO_MAPA[id] then TONO_MAPA[id] = t; n = n + 1 end
+                end
+                break
+            end
+        end
+    end
+    local h = io.open(dir .. "..\\PES21FX\\tonos_piel.txt", "r")
+    if h then
+        for ln in h:lines() do
+            local id, t = ln:match("^%s*(%d+)%s*=%s*(%d)")
+            if id then id = tonumber(id); t = tonumber(t); if t >= 1 and t <= 6 then if not TONO_MAPA[id] then n = n + 1 end; TONO_MAPA[id] = t end end
+        end
+        h:close()
+    end
+    return n
+end
+
 function m.init(ctx)
     if ctx.torsobody_cuello then          -- la linea esta dos veces en sider.ini: con una copia alcanza
         log("TorsoBody cuello: ya estaba cargado (lua.module repetido en sider.ini), esta copia no hace nada")
         return
     end
     ctx.torsobody_cuello = m.version
+    if type(ctx.sider_dir) == "string" then
+        local okm, n = pcall(cargar_mapa_tonos, ctx.sider_dir)
+        log("TorsoBody cuello: mapa de tonos " .. (okm and (tostring(n) .. " jugadores") or ("error: " .. tostring(n))))
+    end
     if FUNDIR then                       -- la textura se arma con el zlib de Sider: se prueba una vez
         local ok = false
         if zlib and zlib.compress and zlib.uncompress then
