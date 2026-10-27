@@ -31,6 +31,12 @@ static std::atomic<ID3D11DepthStencilView*> s_cascadeDSV{nullptr};   // DSV de l
 static float s_half = 0.9f;
 std::atomic<int> g_headShadowReplays{0};
 static int s_replayLast = 0; static double s_logT = 0;
+// (27/10 d) diagnostico: la primera version no replico ningun dibujo (log de Agustin: "0 dibujos replicados") y casi nunca
+// encontro cabezas. Se cuenta cada paso para ver donde se corta
+static std::atomic<int> s_dBindAny{0}, s_dBindRT{0}, s_dBindOk{0}, s_dDraws[4], s_dVpOff{0}, s_dOtherDsv{0};
+static std::atomic<int> s_dVpX{-1}, s_dVpY{-1}, s_dVpW{0}, s_dVpH{0}, s_dRtN{-1};
+static int s_cAlive = 0, s_cNoPos = 0, s_cBehind = 0, s_cOff = 0, s_cFar = 0, s_cOk = 0;
+static float s_cNear[4] = {0, 0, 0, 0}, s_cEye[3] = {0, 0, 0};
 
 static bool Ensure() {
     if (s_tex || !g_dev.dev) return s_tex != nullptr;
@@ -78,19 +84,24 @@ void HeadShadowPresent() {
     struct Cand { float cw[3], cv[3], d; };
     std::vector<Cand> cand;
     const float* P = &S[16];   // m_projection
+    int cAlive = 0, cNoPos = 0, cBehind = 0, cOff = 0, cFar = 0; float bestD = 1e9f;
     for (int sl = 0; sl < kCharSlots; sl++) {
         if (!alive[sl] || !ci[sl].node) continue;
-        float pos[3]; if (!CharNodeWorldPos(ci[sl].node, pos)) continue;
+        cAlive++;
+        float pos[3]; if (!CharNodeWorldPos(ci[sl].node, pos)) { cNoPos++; continue; }
         Cand c; c.cw[0] = pos[0]; c.cw[1] = pos[1] + 1.45f; c.cw[2] = pos[2];   // centro de la caja: cabeza y hombros de un jugador parado
         ToView(M, c.cw, c.cv, true);
         float clip[4]; for (int j = 0; j < 4; j++) clip[j] = P[4 * j] * c.cv[0] + P[4 * j + 1] * c.cv[1] + P[4 * j + 2] * c.cv[2] + P[4 * j + 3];
-        if (clip[3] <= 0.05f) continue;
-        float nx = clip[0] / clip[3], ny = clip[1] / clip[3];
-        if (fabsf(nx) > 1.4f || fabsf(ny) > 1.4f) continue;
         c.d = sqrtf(Dot(c.cv, c.cv));
-        if (c.d > 40.0f) continue;
+        if (c.d < bestD) { bestD = c.d; s_cNear[0] = c.cv[0]; s_cNear[1] = c.cv[1]; s_cNear[2] = c.cv[2]; s_cNear[3] = clip[3]; }
+        if (clip[3] <= 0.05f) { cBehind++; continue; }
+        float nx = clip[0] / clip[3], ny = clip[1] / clip[3];
+        if (fabsf(nx) > 1.4f || fabsf(ny) > 1.4f) { cOff++; continue; }
+        if (c.d > 60.0f) { cFar++; continue; }
         cand.push_back(c);
     }
+    s_cAlive = cAlive; s_cNoPos = cNoPos; s_cBehind = cBehind; s_cOff = cOff; s_cFar = cFar; s_cOk = (int)cand.size();
+    if (S.size() >= 84) { s_cEye[0] = S[80]; s_cEye[1] = S[81]; s_cEye[2] = S[82]; }
     std::sort(cand.begin(), cand.end(), [](const Cand& a, const Cand& b) { return a.d < b.d; });
     const float half = s_half;
     int n = (int)std::min<size_t>(cand.size(), kHsSlots);
@@ -113,7 +124,13 @@ void HeadShadowPresent() {
     float* A = g_cfg.live[kHsRowAxis]; A[0] = Rv[0]; A[1] = Rv[1]; A[2] = Rv[2]; A[3] = half;
     s_count = n;
     double t = Now();
-    if (t - s_logT > 10.0) { s_logT = t; int r = g_headShadowReplays.exchange(0); Log("sombra cabeza: %d cabezas, %d dibujos replicados en 10 s (z %s)", n, r, s_reversed ? "invertida" : "normal"); }
+    if (t - s_logT > 10.0) { s_logT = t; int r = g_headShadowReplays.exchange(0);
+        Log("sombra cabeza: %d cabezas, %d dibujos replicados en 10 s (z %s)", n, r, s_reversed ? "invertida" : "normal");
+        Log("sombra cabeza (diag): personajes %d (sin posicion %d, detras %d, fuera de pantalla %d, lejos %d, validos %d); el mas cercano en vista (%.2f %.2f %.2f) w %.2f; ojo %.2f %.2f %.2f",
+            s_cAlive, s_cNoPos, s_cBehind, s_cOff, s_cFar, s_cOk, s_cNear[0], s_cNear[1], s_cNear[2], s_cNear[3], s_cEye[0], s_cEye[1], s_cEye[2]);
+        Log("sombra cabeza (diag): DSV del shadow map puesto %d veces (%d con targets de color, %d aceptadas); dibujos ahi: indexados %d, simples %d, instanciados %d, indexados instanciados %d; descartados por vista corrida %d, por otro DSV %d; vista vista (%d %d %dx%d), targets %d",
+            s_dBindAny.exchange(0), s_dBindRT.exchange(0), s_dBindOk.exchange(0), s_dDraws[1].exchange(0), s_dDraws[0].exchange(0), s_dDraws[2].exchange(0), s_dDraws[3].exchange(0),
+            s_dVpOff.exchange(0), s_dOtherDsv.exchange(0), s_dVpX.load(), s_dVpY.load(), s_dVpW.load(), s_dVpH.load(), s_dRtN.load()); }
 }
 
 int HeadShadowSlots() { return s_count; }
@@ -123,8 +140,8 @@ ID3D11Buffer* HeadShadowCB(int i) { return (i >= 0 && i < kHsSlots) ? s_cb[i] : 
 void HeadShadowViewport(int i, D3D11_VIEWPORT& vp) { vp.TopLeftX = (float)((i % 2) * kHsSlotPx); vp.TopLeftY = (float)((i / 2) * kHsSlotPx); vp.Width = vp.Height = (float)kHsSlotPx; vp.MinDepth = 0; vp.MaxDepth = 1; }
 
 // el DSV es el shadow map del sol del juego? (se compara el recurso con el SRV que las reglas guardan como "ShadowMap")
-bool HeadShadowIsGameShadow(ID3D11DepthStencilView* v) {
-    if (!v || s_count <= 0) return false;
+static bool IsGameShadowRes(ID3D11DepthStencilView* v) {
+    if (!v) return false;
     int f = PresentNo();
     if (s_shadowResFrame != f) { s_shadowResFrame = f; s_shadowRes = NamedSRVResource("ShadowMap"); }
     if (!s_shadowRes) return false;
@@ -132,9 +149,22 @@ bool HeadShadowIsGameShadow(ID3D11DepthStencilView* v) {
     bool same = (r == s_shadowRes); r->Release();
     return same;
 }
+bool HeadShadowIsGameShadow(ID3D11DepthStencilView* v) { return s_count > 0 && IsGameShadowRes(v); }
+// OMSetRenderTargets: el DSV es el shadow map del sol? se acepta aunque vengan targets de color (nulos o no: algunos motores
+// ponen un target "tonto" en la pasada de sombras)
+ID3D11DepthStencilView* HeadShadowBind(UINT n, ID3D11RenderTargetView* const* rt, ID3D11DepthStencilView* dsv) {
+    if (!dsv || !IsGameShadowRes(dsv)) return nullptr;
+    s_dBindAny.fetch_add(1, std::memory_order_relaxed);
+    int nr = 0; if (rt) for (UINT i = 0; i < n && i < 8; i++) if (rt[i]) nr++;
+    if (nr) s_dBindRT.fetch_add(1, std::memory_order_relaxed);
+    s_dRtN.store(nr);
+    if (s_count <= 0) return nullptr;
+    s_dBindOk.fetch_add(1, std::memory_order_relaxed);
+    return dsv;
+}
 // el juego limpia su shadow map: se limpia el atlas con el mismo valor (y se aprende si la profundidad es invertida)
 void HeadShadowOnClear(ID3D11DeviceContext* c, ID3D11DepthStencilView* v, float depth) {
-    if (!HeadShadowIsGameShadow(v) || !s_dsv) return;
+    if (!IsGameShadowRes(v) || !s_dsv) return;
     bool rev = depth < 0.5f;
     if (rev != s_reversed) { s_reversed = rev; Log("sombra cabeza: el juego limpia el shadow map a %.0f (profundidad %s)", depth, rev ? "invertida" : "normal"); }
     int f = PresentNo();
@@ -145,12 +175,15 @@ void HeadShadowOnClear(ID3D11DeviceContext* c, ID3D11DepthStencilView* v, float 
 }
 // el dibujo es de la cascada mas cercana? (vista en el origen del shadow map y el primer DSV que se dibuja despues de la limpieza:
 // si cada cascada tiene su propia vista del recurso, se replica solo la primera; si comparten DSV con vistas corridas, solo la de (0, 0))
-bool HeadShadowIsNearCascade(ID3D11DeviceContext* c, ID3D11DepthStencilView* dsv) {
+bool HeadShadowIsNearCascade(ID3D11DeviceContext* c, ID3D11DepthStencilView* dsv, int kind) {
+    if (kind >= 0 && kind < 4) s_dDraws[kind].fetch_add(1, std::memory_order_relaxed);
     D3D11_VIEWPORT vp; UINT n = 1; c->RSGetViewports(&n, &vp);
-    if (n < 1 || vp.TopLeftX > 0.5f || vp.TopLeftY > 0.5f) return false;
+    if (n >= 1) { s_dVpX.store((int)vp.TopLeftX); s_dVpY.store((int)vp.TopLeftY); s_dVpW.store((int)vp.Width); s_dVpH.store((int)vp.Height); }
+    if (n < 1 || vp.TopLeftX > 0.5f || vp.TopLeftY > 0.5f) { s_dVpOff.fetch_add(1, std::memory_order_relaxed); return false; }
     ID3D11DepthStencilView* exp = nullptr;
     if (s_cascadeDSV.compare_exchange_strong(exp, dsv)) return true;
-    return exp == dsv;
+    if (exp != dsv) { s_dOtherDsv.fetch_add(1, std::memory_order_relaxed); return false; }
+    return true;
 }
 void HeadShadowRelease() {
     for (int i = 0; i < kHsSlots; i++) { if (s_cb[i]) s_cb[i]->Release(); s_cb[i] = nullptr; }
