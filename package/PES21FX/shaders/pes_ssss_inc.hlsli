@@ -130,6 +130,14 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   float wrap = skin ? 0.03 : 0.0;
   float nl = saturate((rawNL + wrap) / (1.0 + wrap));
   float3 dif = sunC * nl * sh;
+  // (27/10 e) videos del editor de Agustin: el lado al sol se veia gris y el paso a la sombra sin el borde calido de la piel.
+  // Borde de la sombra rojizo (la luz que entra en la piel sale un poco mas alla del terminador, mas el rojo que el verde y el
+  // azul: envoltura por canal), solo en la franja del terminador, con la misma sombra trazada suavizada
+  if (skin) {
+    float3 wr = float3(0.30, 0.10, 0.05);
+    float3 nl3 = saturate((rawNL + wr) / (1.0 + wr));
+    dif += sunC * max(nl3 - nl, 0.0) * 0.8 * lerp(1.0, sh, 0.6);
+  }
   if (skin) {   // contraluz: orejas y aletas de la nariz dejan pasar luz (translucidez del G-buffer), como en la pasada de luz
     uint tq = (uint)(inNrm.SampleLevel(sPoint, uv, 0).z * 1023.0 + 0.5);
     float trans = (float)(tq >> 4) / 63.0;
@@ -137,7 +145,7 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
     float tv = pow(saturate(dot(V, -Lt)), 3.0);
     float thick = saturate(trans * 1.6);
     float x5 = IniParams.Load(int2(5, 0)).x;
-    dif += sunC * thick * smoothstep(0.45, 0.85, thick) * tv * float3(1.0, 0.24, 0.10) * (x5 > 0 ? x5 : 1.0) * sqrt(sh);
+    dif += sunC * thick * smoothstep(0.2, 0.7, thick) * tv * float3(1.0, 0.24, 0.10) * (x5 > 0 ? x5 : 1.0) * sqrt(sh);
   }
   // --- brillo: GGX con la rugosidad del G-buffer y, en la piel, el lobulo fino (grasa / sudor) ---
   float3 H = normalize(L + V);
