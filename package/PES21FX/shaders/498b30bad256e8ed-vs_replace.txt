@@ -135,7 +135,12 @@ void main(
       float4 Pw = float4(wr.x, 0.0, wr.y, 1.0);
       float wv = dot(float4(dot(Pw, cb2[8]), dot(Pw, cb2[9]), dot(Pw, cb2[10]), dot(Pw, cb2[11])), cb2[7]);
       float p = abs(cb2[5].y) * P63.z / max(wv, 0.05);
-      ko = smoothstep(P63.y * 0.88, P63.y * 1.12, p);
+      // (27/10 k) tanda 8a: el pasto del juego ya no se achica parejo en toda la franja (entre los dos pastos quedaba una tira de
+      // pasto cortito, el "cambio de cerca"): cada manojo (celda de 25 cm de su raiz) se apaga en su propio turno y a altura
+      // completa, dentro de la misma ventana que el nivel 0 del mod (T0 +- 12 %): mezcla manojo a manojo, no una linea
+      float ku = smoothstep(P63.y * 0.88, P63.y * 1.12, p);
+      float hT = PESGh21(floor(wr * 4.0) * 0.173 + 0.41);
+      ko = saturate((ku - 0.9 * hT) / 0.1);
     } else {
       // modo viejo: el pasto del juego se apaga (achicandose) entre "desde" y "desde" + 6 m
       float from = P58.y > 1.0 ? P58.y : 14.0;
