@@ -72,6 +72,33 @@ def dirt_rows(A, folder, fn, mi):
         out.append((d, nn, tt))
     return version_rows(p, out[0][0], out[0][1], out[0][2], out[1][0], out[1][1], out[1][2], out[2][0], out[2][1], out[2][2]), p["nidx"], float(dist.max())
 
+def join_shoulder(torso_rows, arm_rows_all, log=print):
+    """(26/10 k) costura del hombro en las tres formas (base, atletico, gordo): en los vertices que el torso comparte con el brazo,
+    el mismo desplazamiento y la MISMA normal de los dos lados (el promedio); cada lado endereza su tangente contra esa normal.
+    torso_rows: lista de arreglos (ROWS * versiones, n, 4) de las mallas del torso; arm_rows_all: lista de (ROWS, n, 4) de cada brazo"""
+    from scipy.spatial import cKDTree
+    ref = arm_rows_all[0]
+    tree = cKDTree(ref[0, :, :3])
+    nj = 0
+    for arr in torso_rows:
+        nver = arr.shape[0] // ROWS
+        for v in range(nver):
+            R = arr[v * ROWS:(v + 1) * ROWS]
+            d, j = tree.query(R[0, :, :3]); it = np.where(d < 1e-4)[0]; ja = j[it]
+            if not len(it): continue
+            for dr, nr, tr in ((1, 2, 3), (4, 5, 6), (7, 8, 9)):
+                disp = 0.5 * (R[dr, it, :3] + ref[dr, ja, :3])
+                nn = R[nr, it, :3] + ref[nr, ja, :3]; nn /= np.maximum(np.linalg.norm(nn, axis=1, keepdims=True), 1e-9)
+                R[dr, it, :3] = disp; R[nr, it, :3] = nn
+                t = R[tr, it, :3]; t = t - nn * np.sum(t * nn, 1, keepdims=True); R[tr, it, :3] = t / np.maximum(np.linalg.norm(t, axis=1, keepdims=True), 1e-9)
+                for A in arm_rows_all:
+                    da, ka = cKDTree(A[0, :, :3]).query(R[0, it, :3]); ok = da < 1e-4
+                    A[dr, ka[ok], :3] = disp[ok]; A[nr, ka[ok], :3] = nn[ok]
+                    ta = A[tr, ka[ok], :3]; ta = ta - nn[ok] * np.sum(ta * nn[ok], 1, keepdims=True)
+                    A[tr, ka[ok], :3] = ta / np.maximum(np.linalg.norm(ta, axis=1, keepdims=True), 1e-9)
+            nj += len(it)
+    log("  hombro: %d vertices del torso con la misma normal que el brazo (base, atletico, gordo)" % nj)
+
 def main():
     folder, outdir = sys.argv[1], sys.argv[2]
     mode = sys.argv[3] if len(sys.argv) > 3 else ""
@@ -105,16 +132,18 @@ def main():
                     r = r.copy(); r[1:, same] = per_mesh[k][0][1:, same]
                 bases[k].append(pos); per_mesh[k].append(r); nidx[k] = T["parts"][k]["nidx"]
             print("torso %s%s: listo" % (ver, " (sin short)" if src_folder != folder else ""))
+        torso_arrs = [np.concatenate(per_mesh[k], 0) for k in range(3)]   # (ROWS * versiones, n, 4)
+        # ---- brazos (y su capa de suciedad, si la tienen)
+        arm_built = [(fn, build_arm(folder, fn, texdir=texdir)) for fn in ARMS]
+        arm_rows = [variant_rows(A)[0] for _, A in arm_built]
+        join_shoulder(torso_arrs[:2], arm_rows)
         for k in range(3):
-            arr = np.concatenate(per_mesh[k], 0)   # (ROWS * versiones, n, 4)
+            arr = torso_arrs[k]
             name = "pes_var_torso_%d.dds" % (k + 1)
             write_dds_float4(os.path.join(outdir, name), arr)
             table.append((nidx[k], name, len(per_mesh[k])))
             print("  %s: %d vertices, %d versiones, %d indices" % (name, arr.shape[1], len(per_mesh[k]), nidx[k]))
-        # ---- brazos (y su capa de suciedad, si la tienen)
-        for fn in ARMS:
-            A = build_arm(folder, fn, texdir=texdir)
-            rows = variant_rows(A)[0]
+        for (fn, A), rows in zip(arm_built, arm_rows):
             if fn == "arm":    # (26/10 d) la del brazo (las otras mallas del brazo usan el mismo atlas)
                 tm, tmask = torso_tilt.tilt_maps(A, [rows], 1024, 1024, 1.0)
                 print("  pes_var_arm_tilt_b/a/r.dds: " + torso_tilt.write_tilt(outdir, "pes_var_arm", tm, tmask, write_dds_bc5_snorm, mipchain))

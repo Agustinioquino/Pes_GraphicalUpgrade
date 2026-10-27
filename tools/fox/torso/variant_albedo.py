@@ -76,11 +76,36 @@ def main(common, texdir, vardir, outdir):
     tB = read_bc5_snorm(os.path.join(vardir, "pes_var_torso_tilt_b.dds"))
     fit = lambda t: t if t.shape[0] == 1024 else (down(t, 1024, 2048) if t.shape[0] > 1024 else upsample(t.astype(np.float32), 1024, 2048))
     tA, tR, tB = fit(tA), fit(tR), fit(tB)
+    # (26/10 k) lejos de las costuras: cortes de uv, hombro, cuello, cintura (ahi el brazo / la cara no tienen esto: quedaba la linea)
+    import seam_tex
+    from scipy.spatial import cKDTree
+    def ss(a, b, x): t = np.clip((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t)
+    seams = np.concatenate([seam_tex.uv_seams(T), T["Pw"][T["boundary"]]])
+    ii = np.where(m); dsm = np.full(m.shape, 9.0); dsm[ii] = cKDTree(seams).query(G["P"][ii])[0]
+    wsafe = np.where(m, ss(0.012, 0.06, dsm), 0.0)
+    # (26/10 k) normal map del atletico con mas marcas: su delta x 1.25 + el relieve de los musculos del mapa base (banda 4 mm .. 4 cm)
+    # al 60 % (borde del pectoral, abdominales, serratos, deltoides); con el peso del atletico en el PS (progresivo)
+    xb = np.stack([band(xy[..., k], 6, 60) for k in range(2)], -1)
+    # (27/10) + la musculatura de la espalda, serratos, flanco y trapecio alto (atl_anatomy, en 3D: continuo en los cortes de uv;
+    # baja a 0 solo junto al hombro, el cuello y la cintura)
+    import atl_anatomy
+    rings = T["Pw"][T["boundary"]]
+    drg = np.full(m.shape, 9.0); drg[ii] = cKDTree(rings).query(G["P"][ii])[0]
+    wring = np.where(m, ss(0.012, 0.05, drg), 0.0)
+    anat, hgt = atl_anatomy.tangent_offsets(G, fade=wring)
+    dA = np.clip(dA * 1.2 + 0.8 * xb * wsafe[..., None] + anat, -0.9, 0.9)
+    from texio import write_dds_bc5_snorm
+    fullA, _ = dilate(dA, m, iters=48)
+    write_dds_bc5_snorm(os.path.join(outdir, "pes_var_torso_atl_n.dds"), mipchain(fullA))
     def clamp(v):
         l2 = np.sum(v * v, -1, keepdims=True); return np.where(l2 > 0.94, v * np.sqrt(0.94 / np.maximum(l2, 1e-9)), v)
     na = objn(clamp(xy + dA + (tA - tB))); nr = objn(clamp(xy * 0.7 + dR + (tR - tB)))   # el PS: el gordo un 30 % mas liso
-    YA = band(na[..., 1] - nb[..., 1], 3, 100); YR = band(nr[..., 1] - nb[..., 1], 3, 100)
-    fA = np.exp(np.clip(c * YA, -0.3, 0.3)); fR = np.exp(np.clip(c * YR, -0.3, 0.3))
+    # (26/10 k) mas suave: sin lo fino (manchas), 60 % de la luz del torso_1, tope +-15 %, nada junto a las costuras
+    YA = band(na[..., 1] - nb[..., 1], 6, 100); YR = band(nr[..., 1] - nb[..., 1], 6, 100)
+    cd = 0.6 * c
+    # atletico: + sombra en los surcos de la musculatura (cavidad de la altura de atl_anatomy: 2.4 % por 2 mm)
+    cav = band(hgt, 1.5, 40)
+    fA = np.exp(np.clip(0.7 * cd * YA * wsafe + 12.0 * cav, -0.12, 0.12)); fR = np.exp(np.clip(cd * YR, -0.15, 0.15) * wsafe)
     fA = np.where(m, fA, 1.0); fR = np.where(m, fR, 1.0)
     print("atletico: factor del color p1 %.3f p99 %.3f; gordo: p1 %.3f p99 %.3f" % (np.percentile(fA[m], 1), np.percentile(fA[m], 99), np.percentile(fR[m], 1), np.percentile(fR[m], 99)))
     ms = np.load(os.path.join(vardir, "maps_mR.npy"))
@@ -92,8 +117,8 @@ def main(common, texdir, vardir, outdir):
     write_rgba8_dds(os.path.join(outdir, "pes_var_torso_rob_m.dds"), mipchain(np.clip(rgba, 0, 1)))
     # alfa del bsm: curvatura fina (< 1 cm) con la misma k, en todos los tonos
     # alfa del bsm: lo mismo a escala fina (poros, pliegues: < 8 mm), luz de arriba sobre el relieve fino del normal map
-    Yf = band(nb[..., 1] - G["N"][..., 1], 0.0001, 12)
-    fa = np.exp(np.clip(c * Yf, -0.25, 0.25)); fa = np.where(core, fa, 1.0)
+    Yf = band(nb[..., 1] - G["N"][..., 1], 2, 12)
+    fa = np.exp(np.clip(0.5 * c * Yf, -0.1, 0.1) * wsafe); fa = np.where(m, fa, 1.0)
     print("alfa del bsm: factor p1 %.3f p99 %.3f" % (np.percentile(fa[m], 1), np.percentile(fa[m], 99)))
     a2 = 0.5 + (fa - 1) / RANGE
     for kk in range(1, 7):
