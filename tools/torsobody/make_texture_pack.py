@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(HERE, '..')); sys.path.insert(0, os.path.join(HE
 from ftex import Ftex
 from texio import dds_dx10_header
 
-DXGI = {2: 71, 9: 83, 11: 98}            # formato FTEX -> DXGI: BC1, BC5, BC7 (UNORM)
+DXGI = {2: 71, 3: 74, 4: 77, 9: 83, 11: 98}            # formato FTEX -> DXGI: BC1, BC5, BC7 (UNORM)
 BLOCK = {2: 8, 9: 16, 11: 16}
 NAMES = (["torso_%d_bsm" % i for i in range(1, 7)] + ["torsob_nrm", "torsob_srm", "torsob_trm"] +
          ["arm_%d_bsm" % i for i in range(1, 7)] + ["arm_nrm", "arm_srm", "arm_trm"] +
