@@ -407,7 +407,10 @@ void main(
           shadeB = lerp(1.0, 0.2 + 0.8 * litF, saturate(BG.z));
         }
       }
-      r2.xyz += sunC * sunUp * turf * shadeB * fGround * max(BG.x, 0.0) * saturate((120.0 - zb) / 40.0) * PESAmbGain();
+      // (27/10) cara del arquero de Agustin contra el original: el mod la dejaba verdosa y sin el celeste del cielo (en lineal
+      // la frente 0.41 / 0.33 / 0.27 contra 0.39 / 0.32 / 0.29). En la piel el rebote verde del pasto va a la mitad y la luz de
+      // cielo (abajo) sube
+      r2.xyz += sunC * sunUp * turf * shadeB * fGround * max(BG.x, 0.0) * saturate((120.0 - zb) / 40.0) * PESAmbGain() * (skinC ? 0.5 : 1.0);
     }
   }
   // === PES21 luz de cielo (17/10): ambiente hemisferico. Lo que mira hacia arriba recibe un poco de azul del cielo,
@@ -449,7 +452,7 @@ void main(
             tint = lerp(float3(1, 1, 1), tk, saturate(SKY.y > 0 ? SKY.y : 1.0));
           } }
         float aoSky = lerp(1.0, saturate(inOcclusion.SampleLevel(g_samplerLinear_Clamp_s, uvC, 0).x), 0.7 * saturate(SKY.z));
-        r2.xyz += lum * tint * fSky * fSky * max(SKY.x, 0.0) * 0.12 * day * aoSky * saturate((400.0 - zsk) / 120.0) * PESAmbGain();
+        r2.xyz += lum * tint * fSky * fSky * max(SKY.x, 0.0) * 0.12 * day * aoSky * saturate((400.0 - zsk) / 120.0) * PESAmbGain() * (skinC ? 1.6 : 1.0);
       }
     }
   }
