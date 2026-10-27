@@ -287,6 +287,8 @@ void main(
     float giK = P9g.w < 0 ? 0.0 : (P9g.w > 0 ? P9g.w : 1.0);
     float zg = PESLinZ(uvC);
     float4 SGt = IniParams.Load(int2(155,0));   // (21/10) x = 1: la DLL ya calculo el SSGI acumulado en el tiempo (t26)
+    // (27/10) el acumulado tiene su fuerza propia (w153; 0 = la de w9): con el estimador fisico (x315) 1 = el rebote real
+    { float wAcc = IniParams.Load(int2(153,0)).w; if (SGt.x > 0.5 && wAcc > 0.0) giK = wAcc; }
     if (cmpOn && giK > 0 && zg > 0.1 && zg < 90.0 && SGt.x > 0.5) {
       // subir de media resolucion respetando bordes: los 4 texeles vecinos, pesados por cercania y por profundidad parecida
       float Wg, Hg; PESSsgi.GetDimensions(Wg, Hg);
@@ -453,6 +455,37 @@ void main(
       }
     }
   }
+  // === PES21 (27/10) luz de cielo sobre el cesped (314): la luz de cielo de arriba (x47) no corre en el cesped (tipo 3) y en la
+  // sombra el pasto quedaba solo con el ambiente del motor (casi negro de cerca, video de Agustin 26/10 22:02). Una pared de cielo
+  // entero sobre el suelo: celeste del cielo fisico (150) o de la niebla, ocluida con el AO. x314 fuerza (1 = sombra a ~1/3 del sol
+  // con el sol a ~30 grados, como una foto), y314 cuanto llega tambien a lo que esta al sol (el motor ya trae algo de ambiente ahi),
+  // w314 on/off. Solo de dia con sol.
+  {
+    float4 TS = IniParams.Load(int2(314,0));
+    if (geoOk && TS.w > 0.5 && TS.x > 0.0 && tyC == 3 && zsk < 400.0 && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {
+      float3 sc = max(pLc_color.xyz, 0.0);
+      float warmD = saturate((sc.r / max(sc.b, 1e-4) - 0.85) * 4.0);   // de dia con sol (de noche las torres son frias)
+      float3 LdT = normalize(pLc_dir.xyz);
+      float3 upT = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
+      if (dot(LdT, upT) < 0) upT = -upT;
+      float dayT = smoothstep(0.0, 0.25, saturate(dot(LdT, upT))) * warmD;
+      if (dayT > 0.01) {
+        float3 sunT = sc * g_psScene.m_exposure.zzz;
+        float lumT = dot(sunT, float3(0.3, 0.5, 0.2));
+        float3 skyT = float3(0.80, 0.93, 1.18);
+        { float4 SKt = IniParams.Load(int2(150,0));
+          if (SKt.y > 0.01) { float3 t = (sunT / max(lumT, 1e-4)) * SKt.xyz; skyT = t / max(dot(t, float3(0.3, 0.5, 0.2)), 1e-4); }
+          else { float3 hor = max(g_psScene.m_fogColor.xyz, 0.0); float lh = dot(hor, float3(0.3, 0.5, 0.2));
+                 if (lh > 1e-4) skyT = normalize(hor / lh * float3(0.75, 0.9, 1.25)) * 1.7; } }
+        float shT = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
+        // (27/10) capturas de 69df3d5: la sombra de cerca quedaba casi negra y mas oscura que la del medio (26 contra 51 de verde
+        // en sRGB): el AO de pantalla sobre las hojas 3D densas de cerca la apagaba. El AO pesa poco aca y la luz sube (0.14 -> 0.2)
+        float aoT = lerp(1.0, saturate(inOcclusion.SampleLevel(g_samplerLinear_Clamp_s, uvC, 0).x), 0.25);
+        float kT = max(TS.x, 0.0) * 0.2 * lerp(saturate(TS.y), 1.0, 1.0 - shT);
+        r2.xyz += lumT * skyT * kT * dayT * aoT * saturate((400.0 - zsk) / 120.0) * PESAmbGain();
+      }
+    }
+  }
   // === PES21 pasto a contraluz (18/10): con el sol de frente a la camara las hojas dejan pasar la luz y se encienden
   // amarillo-verdosas (como en TV al atardecer). Pasto 3D y base de la cancha (tipo 3). y57 fuerza, w57 on/off
   {
@@ -471,6 +504,23 @@ void main(
       // (el azul en 0.55 ponia lima toda la cancha hacia el sol, y x29 no llega a la luz)
       float trK = IniParams.Load(int2(104,0)).x > 0.5 ? lerp(0.9, 1.3, saturate(trC)) : 1.0;
       r2.xyz += sunC * tr * (0.35 + 0.65 * low) * shG * STg.y * 0.35 * trK * float3(1.0, 1.03, 0.80);
+    }
+  }
+  // === PES21 (27/10 h) sombra del cesped como la foto (296): en la sombra el pasto queda mas frio / azulado (la luz que le llega es la del
+  // cielo, no la del sol) y algo mas hondo, nunca negro: mas contraste entre lo que esta al sol y lo que esta en sombra. Solo tipo 3 (base
+  // y hojas), solo con sol (luz calida; de noche con torres no). La luz calida del sol bajo la pone la pasada del sol (hilo del sol, 313-315)
+  {
+    float4 GS = IniParams.Load(int2(296,0));
+    if (geoOk && GS.x > 0.5 && tyC == 3 && zsk < 400.0) {
+      float3 sc = max(pLc_color.xyz, 0.0);
+      float day = saturate((sc.r / max(sc.b, 1e-4) - 0.85) * 4.0);
+      if (day > 0.01) {
+        float shS = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
+        float inSh = (1.0 - shS) * day;
+        float3 cool = lerp(float3(1.0, 1.0, 1.0), float3(0.90, 0.97, 1.10), saturate(GS.y));
+        float deep = GS.z > 0.0 ? clamp(GS.z, 0.5, 1.0) : 0.85;
+        r2.xyz *= lerp(float3(1.0, 1.0, 1.0), cool * deep, inSh);
+      }
     }
   }
   // === PES21 (25/10 b) brillo del cesped al sol (x134 brillo, y134 apertura): cuticula cerosa de las hojas. Mirando hacia el
@@ -750,11 +800,15 @@ void main(
       env = lerp(env, lerp(gnd, eB, saturate(roughE * 1.2)), saturate(-Rw.y * 10.0));
       // BRDF de entorno (aprox. analitica de Karis): especular del G-buffer 0.5 = F0 0.04
       float NdVe = saturate(dot(Nsk, -Vsk));
+      // (27/10) arquero de Agustin: la tela oscura salia gris lavada (como mojada) con el reflejo del cielo entero encima. La
+      // tela de punto no refleja como una superficie lisa (las fibras desparraman y tapan el brillo): en los kits va a 1/4.
+      // La piel queda fija como la dejo Agustin (y151 = 0.1, 27/10: "me gusta como esta ahora en la piel"), sin depender del slider
+      bool kitE = (tyC == 0) && (abs(gmC.z - 0.9607843) < 0.002);
       float F0 = skinC ? 0.028 : 0.08 * saturate(gmC.y);
       float4 rr = roughE * float4(-1.0, -0.0275, -0.572, 0.022) + float4(1.0, 0.0425, 1.04, -0.04);
       float a004 = min(rr.x * rr.x, exp2(-9.28 * NdVe)) * rr.x + rr.y;
       float2 AB = float2(-1.04, 1.04) * a004 + rr.zw;
-      float specE = (F0 * AB.x + AB.y) * saturate(gmC.y * 10.0);
+      float specE = (F0 * AB.x + AB.y) * saturate(gmC.y * 10.0) * (kitE ? 0.25 : 1.0);
       // oclusion especular: Lagarde (cuenca segun rugosidad y angulo) y visibilidad del cielo
       float aoE = saturate(aoRaw);
       float soL = saturate(pow(max(NdVe + aoE, 1e-4), exp2(-16.0 * roughE - 1.0)) - 1.0 + aoE);
@@ -774,7 +828,7 @@ void main(
         } }
       float soK = lerp(1.0, soL * lerp(1.0, aoE, 0.5) * hzK, RS.z > 0 ? saturate(RS.z) : 1.0);
       float sunLe = max(dot(max(pLc_color.xyz, 0.0), float3(0.2126, 0.7152, 0.0722)), 0.0) * g_psScene.m_exposure.z;
-      r0.xyw += env * sunLe * specE * soK * max(RS.y, 0.0);
+      r0.xyw += env * sunLe * specE * soK * (skinC ? 0.1 : max(RS.y, 0.0));
     }
   }
   { // PES21 carteles LED (20/10, 141): los shaders de los carteles marcan el pixel (rugosidad 253/255, especular 1/255, metal 0).

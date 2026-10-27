@@ -23,7 +23,7 @@ cbuffer BodyCB : register(b0)
     uint g_ngroups;
 };
 StructuredBuffer<uint4> g_sv     : register(t0);   // mallas registradas: 2 x uint4 por vertice (posicion + huesos, normal + pesos)
-Buffer<uint4>           g_desc   : register(t1);   // 2 por registro: (lugar, primer vertice propio, vertices, primer vertice del anillo), (malla, ...)
+Buffer<uint4>           g_desc   : register(t1);   // 2 por registro: (lugar, primer vertice propio, vertices, primer vertice del anillo), (malla, tipo: 1 camiseta, ...)
 Buffer<float4>          g_rec    : register(t2);   // por lugar: [4..12] b5, [16..207] b6 (hueso i: filas 3i..3i+2 actuales, 96 + 3i.. anteriores)
 Buffer<uint2>           g_grp    : register(t3);   // por grupo: registro, primer vertice
 RWStructuredBuffer<uint4> g_ov   : register(u0);
@@ -50,13 +50,14 @@ void main(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
     uint2 gr = g_grp[gid.x];
     uint t = g_recTab[gr.x];
     if (t == NONE) return;
-    uint4 d0 = g_desc[2 * gr.x];
+    uint4 d0 = g_desc[2 * gr.x], d1 = g_desc[2 * gr.x + 1];
+    const bool shirt = d1.y == 1u;   // (27/10 d) camiseta (solo para la medicion de cuerpo.cpp): se deforma pero no entra en la tabla
     uint v = gr.y + gi;
     if (v >= d0.z) return;
     uint rb = d0.x * REC_F4;
     uint4 a = g_sv[2 * (d0.y + v)], b = g_sv[2 * (d0.y + v) + 1];
     float3 p = asfloat(a.xyz), n = asfloat(b.xyz);
-    {   // (26/10) variante del torso del personaje de esta tabla (su origen en el mundo -> entrada de la tabla de jugadores)
+    if (!shirt) {   // (26/10) variante del torso del personaje de esta tabla (su origen en el mundo -> entrada de la tabla de jugadores)
         uint hb = t * BODY_STRIDE;
         float3 org = float3(asfloat(g_tab[hb + 4]), asfloat(g_tab[hb + 5]), asfloat(g_tab[hb + 6]));
         p += PesTorsoField(p, PesVariantT(PesSkinNearest(org)));
@@ -89,6 +90,6 @@ void main(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
     uint ov = d0.w + v;
     g_ov[ov] = uint4(q.x | (q.y << 16), q.z | (o.x << 16), o.y | (h.x << 16), h.y | (h.z << 16));
     uint prev = 0;
-    if (inside) InterlockedExchange(g_tab[t * BODY_STRIDE + 16 + BodyHash((int3)floor(y / BODY_CELL))], ov + 1, prev);   // 0 = fin de la lista
+    if (inside && !shirt) InterlockedExchange(g_tab[t * BODY_STRIDE + 16 + BodyHash((int3)floor(y / BODY_CELL))], ov + 1, prev);   // 0 = fin de la lista
     g_on[ov] = prev;
 }

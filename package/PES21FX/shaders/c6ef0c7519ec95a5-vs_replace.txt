@@ -70,6 +70,7 @@ void main(
   float3 mP = v0.xyz, mN = v1.xyz, mT = v3.xyz;
   uint vdW = 0, vdH = 0; g_varData.GetDimensions(vdW, vdH);
   if (vdW > 0) PesVariantMorph(vid, PesVariantT(PesSkinNearest(PesSkinPoint(g_vsObject.m_world, g_vsObject.m_viewWorld, g_vsScene.m_view, sb0, sb0b, skW))), mP, mN, mT);
+  PesTorsoInset(mP, mN, v0.xyz);   // (27/10) igual que el VS de la piel (sombra)
   float4 v0m = float4(mP, v0.w);
   float4 p = v0m;
   if (g_vsObject.m_useWeightCount.x != 0) {

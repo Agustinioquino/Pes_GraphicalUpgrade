@@ -64,6 +64,7 @@ void main(uint3 tid : SV_DispatchThreadID, uint gi : SV_GroupIndex)
           if (side == 0 || (turfS && sh > 0.02)) {
             PESCloudParams CPm = PESCloudLoad(m_timeParam.z);
             float4 SWm = IniParams.Load(int2(111, 0));
+            { float4 SSm = IniParams.Load(int2(312, 0)); if (SSm.w > 0.5 && SSm.y > 0.0) SWm.xyz = SSm.xyz; }   // (26/10) sol estable (nubes)
             if (CPm.sh > 0.5 && CPm.shK > 0.001 && SWm.y > 0.03) {
               float2 uvm = (float2(p) + 0.5) / float2(gSize);
               float2 sCm = uvm * float2(2, -2) + float2(-1, 1);

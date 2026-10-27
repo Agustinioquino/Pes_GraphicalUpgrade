@@ -33,6 +33,18 @@ float PesVariantTCode(float code) {
 }
 
 #ifdef PES_VARIANT_VS
+// (27/10 d) cerca del anillo del cuello la variante se apaga: el atletico subia el trapecio y el pecho alto contra la base del cuello
+// de la cara (que no se mueve) y el cuello quedaba hundido. Borde del torso por angulo = el mismo de pes_collar.hlsli (TorsoBody_cuello
+// 1.14); 1 lejos, 0 en el anillo, fundido en 6 cm hacia abajo y hacia afuera.
+float PesVarNeckKeep(float3 rest) {
+  float3 q = float3(abs(rest.x), rest.y, rest.z);
+  if (q.y < 1.36) return 1.0;
+  float2 w = float2(q.x, q.z - 0.045); float r = max(length(w), 1e-4);
+  float c1 = w.y / r, c2 = 2.0 * c1 * c1 - 1.0, c3 = (4.0 * c1 * c1 - 3.0) * c1, c4 = 2.0 * c2 * c2 - 1.0;
+  float yb = 1.53392 - 0.02134 * c1 - 0.0075 * c2 + 0.00721 * c3 - 0.0029 * c4;
+  float dy = max(yb - q.y, 0.0), dr = max(r - 0.075, 0.0);   // abajo del borde y afuera del cuello (radio ~7.5 cm)
+  return smoothstep(0.0, 0.06, sqrt(dy * dy + dr * dr));
+}
 Texture2D<float4> g_varData : register(t127);
 // mezcla la variante tv sobre la posicion / normal / tangente de reposo del vertice vid (solo si t127 tiene los datos de esta
 // malla y la posicion de reposo coincide con alguna version: si no, no toca nada).
@@ -59,7 +71,7 @@ bool PesVariantMorph(uint vid, float tv, inout float3 p, inout float3 n, inout f
     int rb = (int)(R * best) + 7;
     d0 = g_varData.Load(int3(vid, rb, 0)).xyz; n0 = g_varData.Load(int3(vid, rb + 1, 0)).xyz; t0 = g_varData.Load(int3(vid, rb + 2, 0)).xyz;
   }
-  float a = saturate(abs(tv));
+  float a = saturate(abs(tv)) * PesVarNeckKeep(p);   // (27/10 d) sin variante junto al cuello
   float3 d1 = d0, n1 = n0, t1 = t0;
   if (a > 0.001) {
     int r = (int)(R * best) + (tv < 0.0 ? 1 : 4);

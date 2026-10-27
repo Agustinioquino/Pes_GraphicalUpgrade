@@ -139,10 +139,13 @@ void main(
     // clasificacion (calibrada sobre oral_bsm/oral_trm del juego):
     //   dientes = claros, poco saturados, no rosados (+ ayuda del mapa de translucidez)
     //   encia/lengua = rosado (R bastante mayor que G) con algo de brillo
-    float trmY = g_tex_translucent.Sample(g_sampler_translucent_s, v2.xy).y;
-    float cMx = max(r3.x, max(r3.y, r3.z)), cMn = min(r3.x, min(r3.y, r3.z));
+    // (27/10 h) la clasificacion se hace con un mip bajo (nivel 2 = 4x4 texels) de las texturas: con el mip fino cada pixel
+    // cambiaba de clase (diente / encia / translucido) de un cuadro al otro al moverse la camara y los dientes "vibraban"
+    float  trmY = g_tex_translucent.SampleBias(g_sampler_translucent_s, v2.xy, 2.0).y;
+    float3 cLo  = g_tex_diffuse.SampleBias(g_sampler_diffuse_s, v2.xy, 2.0).xyz;
+    float cMx = max(cLo.x, max(cLo.y, cLo.z)), cMn = min(cLo.x, min(cLo.y, cLo.z));
     float cSat = (cMx - cMn) / max(cMx, 1e-3);
-    float cRG  = r3.x - r3.y;
+    float cRG  = cLo.x - cLo.y;
     mTeeth  = saturate(smoothstep(0.30, 0.45, cMx) * smoothstep(0.38, 0.26, cSat)
                      + 0.5 * smoothstep(0.35, 0.60, trmY) * smoothstep(0.25, 0.40, cMx)) * smoothstep(0.16, 0.11, cRG);
     // (v3) en las filas de dientes el mapa de translucidez es la verdad: claro = diente, oscuro = encia
@@ -228,11 +231,11 @@ void main(
     float occ = 1.0 - mCavity * (0.25 * mTeeth + 0.45 * mTissue + 0.75 * mDeep);
     r0.xyz *= occ;
     if (m2On) {
-      float trmT = g_tex_translucent.Sample(g_sampler_translucent_s, v2.xy).y;   // grosor del esmalte (claro = fino)
+      float trmT = g_tex_translucent.SampleBias(g_sampler_translucent_s, v2.xy, 2.0).y;   // grosor del esmalte (claro = fino; mip bajo: sin bandas que titilan)
       // ESMALTE: translucido y azulado-gris en el borde incisal, calido (dentina) hacia la encia
       mEnamelT = mTeeth * saturate(Q96.x) * smoothstep(0.45, 0.95, mIncisal) * saturate(trmT * 1.5);
       float3 dentin = float3(1.0, 0.93, 0.80);                                  // dentina calida
-      float3 edge   = float3(0.86, 0.92, 1.0);                                   // borde translucido (deja ver la boca oscura)
+      float3 edge   = float3(0.92, 0.95, 1.0);                                   // borde translucido (deja ver la boca oscura; menos azul que antes)
       float3 tooth  = lerp(dentin, float3(1, 1, 1), mIncisal * 0.6);
       tooth = lerp(tooth, edge * 0.75, mEnamelT * 0.7);
       // variacion por jugador (semilla de la cara): tono marfil +-, encias mas o menos rosadas, esmalte mas o menos translucido
@@ -258,7 +261,7 @@ void main(
       r0.xyz *= 1.0 - mLipShadow;
       // --- v3 ---
       // sombra entre dientes (espacio interproximal): donde la normal del mapa se inclina de costado dentro de las filas
-      { float3 nm = g_tex_normal.Sample(g_sampler_normal_s, v2.xy).xyw; float nx = abs(nm.x * nm.z * 2.0 - 1.0);
+      { float3 nm = g_tex_normal.SampleBias(g_sampler_normal_s, v2.xy, 1.0).xyw; float nx = abs(nm.x * nm.z * 2.0 - 1.0);
         float gap = smoothstep(0.25, 0.6, nx) * mRows * mTeeth;
         r0.xyz *= 1.0 - 0.45 * gap * saturate(Q98.y); }
       // oscurecimiento hacia la garganta: cuanto mas atras en la boca, menos luz (y la lengua, mas atras tambien)
@@ -334,6 +337,7 @@ void main(
   r0.xy = r0.xy * r0.xy;
   r0.xy = r0.xy + r0.xy;
   r0.x = max(r0.x, r0.y);
+  float mGeoVar = r0.x;   // (27/10 h) varianza geometrica de la normal (anti-aliasing especular del juego): se conserva en dientes/encias
   r0.x = r4.x * r4.x + r0.x;
   r0.x = sqrt(r0.x);
   if (mOn) r0.x = saturate(r0.x * (1.0 - mWet * (0.30 * mTeeth + 0.50 * mTissue)));   // saliva / esmalte pulido
@@ -357,17 +361,20 @@ void main(
       // esmalte: brillo alto y nitido (como vidrio mojado); encias humedas con brillo mas ancho
       float en = mTeeth * saturate(Q96.y);
       o2.y = saturate(o2.y + 0.10 * en + 0.05 * mTissue * saturate(Q96.z));
-      o2.x = lerp(o2.x, max(0.13, min(o2.x, 0.16)), en);
-      o2.x = lerp(o2.x, max(0.13, min(o2.x, 0.22)), mTissue * saturate(Q96.z) * 0.8);
+      // (27/10 h) la rugosidad minima sube con la varianza geometrica de la normal (bordes y dientes chicos): sin esto el brillo
+      // fino del esmalte caia en 1-2 pixeles que titilaban al mover la camara (aliasing especular)
+      float rAA = saturate(sqrt(mGeoVar) * 1.5);
+      o2.x = lerp(o2.x, max(0.13 + rAA, min(o2.x, 0.16 + rAA)), en);
+      o2.x = lerp(o2.x, max(0.13 + rAA, min(o2.x, 0.22 + rAA)), mTissue * saturate(Q96.z) * 0.8);
       o2.x = max(0.13, o2.x);
       // translucidez del esmalte al G-buffer (la luz de piel la usa): borde incisal translucido
       o1.z = max(o1.z, 0.000977517106 * ((uint)(saturate(mEnamelT) * 63 + 0.5) << 4));
       // v3: lengua mojada (brillo ancho) y saliva: pelicula brillante en la linea de encia y entre dientes
       { float tz = mTongueZ * mTissue * saturate(Q98.x);
-        o2.x = lerp(o2.x, max(0.13, min(o2.x, 0.19)), tz);
+        o2.x = lerp(o2.x, max(0.13 + rAA, min(o2.x, 0.19 + rAA)), tz);
         o2.y = saturate(o2.y + 0.08 * tz);
         float sal = saturate(Q98.w) * (mGumLine + 0.5 * mRows * mTissue);
-        o2.x = lerp(o2.x, max(0.13, min(o2.x, 0.15)), sal);
+        o2.x = lerp(o2.x, max(0.13 + rAA, min(o2.x, 0.15 + rAA)), sal);
         o2.y = saturate(o2.y + 0.10 * sal); }
     }
     if (Q18.z > 0.5) o0.xyz = float3(mTissue, mDeep, mTeeth);   // diagnostico

@@ -94,12 +94,13 @@ void main(
   out float4 o0 : SV_Position0,
   out float4 o1 : COLOR0,
   out float2 o2 : TEXCOORD0,
-  out float4 p2 : TEXCOORD9,
+  out float2 p2 : TEXCOORD9,
   out float4 o3 : TEXCOORD4,
   out float4 o4 : TEXCOORD5,
   out float4 o5 : TEXCOORD6,
   out float4 o6 : TEXCOORD7,
-  out float4 o7 : TEXCOORD8)
+  out float4 o7 : TEXCOORD8,
+  out float4 pR : TEXCOORD10)   // (27/10 j) posicion de reposo (x, y, z), w = 1 (cuerpo)
 {
   float4 r0,r1,r2,r3,r4,r5,r6;
   uint4 bitmask, uiDest;
@@ -113,6 +114,7 @@ void main(
   int se = PesSkinNearest(PesSkinPoint(g_vsObject.m_world, g_vsObject.m_viewWorld, g_vsScene.m_view, sb0, sb0b, skW));
   float3 mP = v0.xyz, mN = v1.xyz, mT = v3.xyz;
   PesVariantMorph(vid, PesVariantT(se), mP, mN, mT);
+  PesTorsoInset(mP, mN, v0.xyz);   // (27/10) torso bajo la camiseta ajustada (x320)
   float4 mP4 = float4(mP, v0.w);
   float3 hP, hN, hT, hPP; float hDbg;
   bool handDone = (r0.x != 0) && PesHandSkin(vid, mP, mN, mT, v4, v5, hP, hN, hT, hPP, hDbg);
@@ -215,7 +217,7 @@ void main(
   o7.xy = r3.xy;
   o2.xy = v6.xy;
   p2.x = r3.w;
-  p2.zw = v0.yx;   // (24/10 e) posicion de reposo (y, x) del vertice: el PS mide el color del cuello con esto
+  pR = float4(v0.xyz, 1.0);   // (27/10 j) posicion de reposo del vertice en TEXCOORD10 (antes en p2.zw: TEXCOORD9 float4 corria los PS originales de kits)
   {   // ---- PES21 (24/10): resaltado del musculo elegido (x174 pulso, y174 capsulas, z174 todo el cuerpo; 175 + 2k = A y radio,
       // 176 + 2k = B): 1 adentro de la capsula, baja suave hasta 0 en el borde
     float4 HL = IniParams.Load(int2(174,0));

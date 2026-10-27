@@ -165,7 +165,12 @@ void main(
   { float4 PP = IniParams.Load(int2(39,0));
     if (PP.w > 0.5) {
       float2 uvP = v0.xy * g_psSystem.m_renderBuffer.zw;
-      float3 base = PESCas(uvP, g_psSystem.m_renderBuffer.zw, PP.x);
+      // (27/10 n) x330: nitidez extra con la camara quieta. El TAA del juego acumula historia cuando la camara no se mueve y promedia lo fino
+      // (hojas de 1 px, costuras de la pelota): se suma nitidez segun los cuadros desde el ultimo reinicio del TAA (160.z, lo escribe la DLL
+      // con el gancho del motor x161; sin gancho 160.w = 0 y no hace nada). Rampa de 8 a 45 cuadros
+      float4 Q330 = IniParams.Load(int2(330,0)); float4 T160 = IniParams.Load(int2(160,0));
+      float still = T160.w > 0.5 ? smoothstep(8.0, 45.0, T160.z) : 0.0;
+      float3 base = PESCas(uvP, g_psSystem.m_renderBuffer.zw, saturate(PP.x + clamp(Q330.x, 0.0, 1.0) * still));
       float lumB = dot(base, float3(0.2126, 0.7152, 0.0722));
       float gw = exp2(log2(max(1.0 - lumB, 1e-4)) * g_psObject.m_localParam[5].y);
       o0.xyz = base + base * pesNoise * gw * g_psObject.m_localParam[5].x * max(PP.y, 0.0);

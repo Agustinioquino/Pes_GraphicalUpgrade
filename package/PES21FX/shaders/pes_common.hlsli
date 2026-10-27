@@ -148,6 +148,33 @@ float3 PESSkinTransmittance(float d)
        + float3(0.078, 0.000, 0.000) * exp(dd / 7.41);
 }
 
+// (25/10) color de la contraluz: la transmitancia fisica (perfil de Jimenez) es casi rojo puro y despues la composicion la
+// multiplica por el albedo de la piel, que ya es rojizo: orejas y nariz quedaban naranja saturado. Como en los perfiles de
+// subsuperficie de los motores nuevos (tinte de transmision + albedo), k lleva el color hacia un rosado calido con el mismo
+// brillo, y el albedo pone el resto. k = 0: rojo fisico puro.
+float3 PESTransColor(float3 T, float k)
+{
+  const float3 lw = float3(0.2126, 0.7152, 0.0722);
+  const float3 tint = float3(1.0, 0.56, 0.40);
+  float3 warm = dot(T, lw) / dot(tint, lw) * tint;
+  return lerp(T, warm, saturate(k));
+}
+
+// (25/10) brillo fino de la piel por zona (doble lobulo como Unreal / MetaHuman): la rugosidad del lobulo fino sale de la del
+// pixel (G-buffer de la cara, que ya trae zona T, poros, sudor y Toksvig) en vez de 0.18 fijo: nariz y frente brillan mas
+// fino, mejillas mas mate, y de lejos los poros no titilan. k = w5 (0 = como antes). Devuelve la rugosidad perceptual.
+float PESSkinSharpRough(float roughG, float k)
+{
+  float r = clamp(roughG * 0.45, 0.12, 0.32);
+  return lerp(0.18, r, saturate(k));
+}
+// oclusion del lobulo fino: el piso de 0.3 hacia brillar el fondo de pliegues y comisuras aunque la cara bajara ahi la
+// intensidad especular (cavidades x35 / t23). Con k = 1 el piso se apaga solo donde la intensidad cae casi a cero.
+float PESSkinSharpOcc(float specInt, float k)
+{
+  return saturate(specInt * 2 + 0.3 * lerp(1.0, saturate(specInt * 6.0), saturate(k)));
+}
+
 // ---------------------------------------------------------------- sol con tamano angular (Karis 2013)
 // La rugosidad efectiva crece con el disco del sol; se devuelve la rugosidad nueva y la normalizacion de energia.
 float PESSunWidenAlpha(float alpha, float sunDeg, out float energy)
@@ -223,6 +250,10 @@ float PESCloudDensity(float3 pW, PESCloudParams c, int oct)
   if (d > 0.001 && oct >= 4) { float det = PESFbm3(q * 6.3 + 3.1, 2); d = saturate(d - (1.0 - d) * det * 0.35); }
   return d * c.dens;
 }
+// (26/10) sol estable en el mundo (hacia el sol) para el cielo, el disco del sol, los rayos y las sombras de nubes. La DLL lo
+// publica en 312 (w > 0.5): en la previa y en las repeticiones el motor gira la luz de toma en toma y este no gira (es el del
+// juego normal o, hasta tenerlo, el del archivo del cielo). Sin dato: sunLight (el sol de la luz de este cuadro).
+float3 PESSunStable(float3 sunLight) { float4 S = IniParams.Load(int2(312, 0)); return (S.w > 0.5 && S.y > 0.0) ? normalize(S.xyz) : sunLight; }
 // sombra de nubes sobre un punto del mundo: transmitancia 0..1 a lo largo de la direccion del sol (2 muestras en la capa)
 float PESCloudShadow(float3 pW, float3 sunW, PESCloudParams c)
 {
@@ -257,6 +288,9 @@ float3 PESSkinLocus(float3 alb, float k) {
   float3 tgt = m < 0.5 ? lerp(cL, cM, m * 2.0) : lerp(cM, cD, m * 2.0 - 1.0);
   float3 c = alb / sum;
   float w = saturate(k) * saturate(1.0 - length(c - tgt) / 0.15);
+  // (27/10) los labios no son piel para esto: su rosado (azul tan alto como el verde, en la piel el azul queda ~20 % abajo)
+  // caia dentro de la franja y se corria hacia el tono de la cara: labios marrones
+  w *= 1.0 - smoothstep(0.88, 0.98, c.b / max(c.g, 1e-4));
   float3 o = lerp(c, tgt, w) * sum;
   return o * (L / max(dot(o, float3(0.2126, 0.7152, 0.0722)), 1e-4));
 }
