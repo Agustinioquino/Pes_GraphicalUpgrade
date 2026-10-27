@@ -291,7 +291,17 @@ void main(
   // pantalla (rampa pesCfN, desde z291): a media distancia la linea se veia punteada por las hojas blancas sombreadas
   float pesCfB = (pesPaintF > 0.001 && P299.z > 0.5) ? lerp(pesCf, pesCf * pesCfN, pesPaintF) : pesCf;
   if (pesFB && v5.w < 0.5) o0.xyz = lerp(PESBaseRT0.Load(int3(v0.xy, 0)).xyz, o0.xyz, pesCfB);
-  if (pesV3) {   // depuracion w107: 1 = uv del atlas (rojo u, verde v), 2 = desgaste (rojo seco, verde pelado), 3 = normal
+  // (27/10 m) tanda 10, z328: oclusion entre matas. v8.y la manda el VS por hoja (0.5..1): las matas bajas, los bordes de cada mata y las hojas
+  // cortas reciben menos luz que las altas que asoman; mas en la raiz que en la punta. Va DESPUES de la mezcla con el suelo para que a media
+  // distancia (30-110 px/m), donde la hoja ya toma el color del suelo, el pasto siga leyendose como matas de 12 cm (claras / oscuras,
+  // coherentes) y no como un verde liso con ruido por pixel. Se apaga por debajo de 15-40 px/m (ahi titilaria)
+  float4 P328 = IniParams.Load(int2(328,0));
+  if (pesV3 && v4.w > 0.0 && P328.z > 0.001 && v8.y < 0.999) {
+    float kA = clamp(P328.z, 0.0, 2.0) * smoothstep(15.0, 40.0, v4.w) * (1.0 - 0.5 * pesPaintF);
+    float ao = lerp(1.0, v8.y, saturate(kA * lerp(1.0, 0.45, relH)));
+    o0.xyz = saturate(o0.xyz * ao);
+  }
+  if (pesV3) {   // depuracion w107: 1 = uv del atlas (rojo u, verde v), 2 = desgaste (rojo seco, verde oclusion de la mata), 3 = normal
     int dbg = (int)(Q7.w + 0.5);
     if (dbg == 1) o0.xyz = float3(v1.x, v1.y, 0.0);
     else if (dbg == 2) o0.xyz = float3(v8.x, v8.y, 0.0);

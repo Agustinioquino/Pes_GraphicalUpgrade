@@ -690,7 +690,10 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
     const float pR0 = g_cfg.live[294][1] >= 50.0f ? (std::min)(g_cfg.live[294][1], 3000.0f) : 300.0f;
     const float pR1 = g_cfg.live[294][2] >= pR0 + 20.0f ? (std::min)(g_cfg.live[294][2], 6000.0f) : (std::max)(pR0 * 2.3f, pR0 + 100.0f);
     const float wGame = 0.012f * wide, wClose = 0.004f * wide, pRamp0 = pR0, pRamp1 = pR1;
-    const float wEff0 = wGame, tallNear = 1.0f, Dfloor = 6.0f * cMul[q] * dens;
+    // (27/10 m) tanda 10, w328: capas de hojas por pixel de suelo en el primer plano (0 = 6). Es el costo del plano cercano (25-30 FPS con la
+    // camara al ras): 4 recorta un tercio de las hojas de muy cerca sin tocar las camaras de juego
+    const float dNear = g_cfg.live[328][3] >= 1.0f ? std::clamp(g_cfg.live[328][3], 2.0f, 10.0f) : 6.0f;
+    const float wEff0 = wGame, tallNear = 1.0f, Dfloor = dNear * cMul[q] * dens;
     const float halfL = 52.5f + 3.0f, halfW = 34.0f + 3.0f, halfH = 0.5f * (float)(g_bbH ? g_bbH : 1080);
     ID3D11DeviceContext1* c1 = nullptr; c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1);
     // estado del contexto que se toca (se devuelve al final)
