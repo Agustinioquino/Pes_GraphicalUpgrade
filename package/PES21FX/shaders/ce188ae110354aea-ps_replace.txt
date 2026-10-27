@@ -329,20 +329,33 @@ void main(
   float4 P94 = IniParams.Load(int2(94,0));   // (declarado aca: lo usa tambien el bloque del especular mas abajo)
   float3 pesMicroDbg = float3(-1, 0, 0);     // dbg: intensidad = 2.00 pinta el mosaico;  pesMicroVar: varianza de la micro normal (Toksvig) -> rugosidad extra
   { if (enhance && P94.w > 0.5) {
-      float sc = max(P94.y, 1.0);
+      // (27/10) poros a tamano real: antes el mosaico se repetia y94 veces sobre la textura de la cara, y donde la UV esta
+      // estirada (nariz, orejas, mandibula, cuello) el poro salia estirado o gigante. Ahora se mide cuanta piel cubre la UV en
+      // este punto (area de la superficie / area de UV, con las derivadas de la posicion en vista) y el mosaico se repite segun
+      // eso: un mosaico = 22 mm de piel con y94 = 7 (mas = poros mas chicos). La escala se redondea a potencias de 2 y se
+      // funden las dos vecinas, asi el dibujo no se deforma donde la escala cambia.
+      float3 vdir = normalize(v3.xyz);
+      float3 pV = -vdir * ((1.0 / max(v0.w, 1e-6)) / max(abs(vdir.z), 0.05));   // posicion en vista (metros)
+      float3 dPx = ddx(pV), dPy = ddy(pV);
+      float2 dUx = ddx(v2.xy), dUy = ddy(v2.xy);
+      float mPerUv = sqrt(length(cross(dPx, dPy)) / max(abs(dUx.x * dUy.y - dUx.y * dUy.x), 1e-14));
+      float tileM = 0.022 * 7.0 / max(P94.y, 1.0);
+      float lr = log2(clamp(mPerUv / tileM, 1.0, 4096.0));
+      float k0 = floor(lr), kf = lr - k0;
+      float sc = exp2(k0);
       float2 muv = v2.xy * sc;
-      float2 mdx = ddx(muv), mdy = ddy(muv);
-      // 19/10 b: el fundido va por la densidad de la TEXTURA DE CARA en pantalla (texeles de 2048 por pixel): en primer plano
-      // ~1-2, a media distancia 6+. (Antes se media en texeles del mosaico y se apagaba siempre: no se veia ningun cambio.)
-      float fpx = max(fwidth(v2.x), fwidth(v2.y)) * 2048.0;
-      float near = saturate((5.0 - fpx) / 3.5);
+      float2 mdx = dUx * sc, mdy = dUy * sc;
+      // fundido por tamano en pantalla: con el pixel mas grande que ~2 celdas de la piel (22 por mosaico) el relieve ya no se ve
+      float pxM = sqrt(length(dPx) * length(dPy));
+      float near = saturate((2.5 - pxM / (tileM / 22.0)) / 1.5);
       if (near > 0.001) {
         float4 guide = pesFacePores.Sample(g_samplerLinear_Clamp_s, v2.xy);   // por zona: densidad, tamano, zona T, oclusion
         pesTZone = guide.b;
-        float4 mn = pesSkinMicro.SampleGrad(g_samplerAnisotropic_Clamp_s, frac(muv), mdx, mdy);   // frac + grad: sin costura de mip
+        float4 mnA = pesSkinMicro.SampleGrad(g_samplerAnisotropic_Clamp_s, frac(muv), mdx, mdy);   // frac + grad: sin costura de mip
+        float4 mnB = pesSkinMicro.SampleGrad(g_samplerAnisotropic_Clamp_s, frac(muv * 2.0 + 0.53), mdx * 2.0, mdy * 2.0);
+        float4 mn = lerp(mnA, mnB, kf);
         // poros grandes (nariz, barbilla): el mismo mosaico a la mitad de escala, mezclado segun el tamano de la zona
-        float2 muv2 = muv * 0.5 + 0.37; float2 mdx2 = mdx * 0.5, mdy2 = mdy * 0.5;
-        float4 mn2 = pesSkinMicro.SampleGrad(g_samplerAnisotropic_Clamp_s, frac(muv2), mdx2, mdy2);
+        float4 mn2 = pesSkinMicro.SampleGrad(g_samplerAnisotropic_Clamp_s, frac(muv * 0.5 + 0.37), mdx * 0.5, mdy * 0.5);
         float big = guide.g;
         mn = lerp(mn, mn2, big * 0.7);
         float3 tn = mn.xyz * 2.0 - 1.0;
