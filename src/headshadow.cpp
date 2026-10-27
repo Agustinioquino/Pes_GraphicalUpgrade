@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <vector>
 #include <atomic>
+#include <map>
 
 namespace fx {
 
@@ -36,7 +37,7 @@ static int s_replayLast = 0; static double s_logT = 0;
 static std::atomic<int> s_dBindAny{0}, s_dBindRT{0}, s_dBindOk{0}, s_dDraws[4], s_dVpOff{0}, s_dOtherDsv{0};
 static std::atomic<int> s_dVpX{-1}, s_dVpY{-1}, s_dVpW{0}, s_dVpH{0}, s_dRtN{-1};
 static int s_cAlive = 0, s_cNoPos = 0, s_cBehind = 0, s_cOff = 0, s_cFar = 0, s_cOk = 0;
-static float s_vLen[3] = {};
+static float s_vLen[3] = {}; static float s_vDet = 1.0f;
 static float s_cNear[4] = {0, 0, 0, 0}, s_cEye[3] = {0, 0, 0}, s_cClip[4] = {}, s_cClip2[4] = {}, s_cPP[4] = {}, s_cSgn[3] = {};
 
 static bool Ensure() {
@@ -96,6 +97,11 @@ void HeadShadowPresent() {
     s_vLen[0] = sqrtf(VV[0][0] * VV[0][0] + VV[0][1] * VV[0][1] + VV[0][2] * VV[0][2]);
     s_vLen[1] = sqrtf(VV[1][0] * VV[1][0] + VV[1][1] * VV[1][1] + VV[1][2] * VV[1][2]);
     s_vLen[2] = sqrtf(VV[2][0] * VV[2][0] + VV[2][1] * VV[2][1] + VV[2][2] * VV[2][2]);
+    // (27/10 f) la vista sacada de PV puede ser un REFLEJO (determinante -1: P0 < 0 con x espejada): un producto cruz hecho en esa
+    // vista sale con el signo cambiado respecto del mismo producto hecho en el mundo. El shader arma Up = cross(L, R) en vista:
+    // se le avisa con el bit 8 de 317.w para que lo invierta (las manchas negras del partido de las 10:07 PC)
+    const float det = VV[0][0] * (VV[1][1] * VV[2][2] - VV[1][2] * VV[2][1]) - VV[0][1] * (VV[1][0] * VV[2][2] - VV[1][2] * VV[2][0]) + VV[0][2] * (VV[1][0] * VV[2][1] - VV[1][1] * VV[2][0]);
+    s_vDet = det;
     auto toV = [&](const float w[3], float v[3], bool point) { for (int j = 0; j < 3; j++) v[j] = VV[j][0] * w[0] + VV[j][1] * w[1] + VV[j][2] * w[2] + (point ? VV[j][3] : 0.0f); };
     // direccion hacia el sol en el mundo: la traspuesta de la rotacion de la vista
     float Lw[3]; for (int i = 0; i < 3; i++) Lw[i] = Lv[0] * VV[0][i] + Lv[1] * VV[1][i] + Lv[2] * VV[2][i];
@@ -144,7 +150,7 @@ void HeadShadowPresent() {
         for (int k = 0; k < 16; k++) { cb[16 + k] = cb[k]; }   // m_projection igual (por si un VS proyecta en dos pasos con vista identidad)
         cb[32] = cb[37] = cb[42] = cb[47] = 1.0f;              // m_view = identidad
         g_dev.imm->UpdateSubresource(s_cb[i], 0, nullptr, cb, 0, 0);
-        float* C = g_cfg.live[kHsRowCenter + i]; C[0] = c.cv[0]; C[1] = c.cv[1]; C[2] = c.cv[2]; C[3] = (s_reversed ? 1.0f : 0.0f) + (S[16] < 0 ? 2.0f : 0.0f) + (S[21] < 0 ? 4.0f : 0.0f);   // bit 0 z invertida, 1 / 2 signo de P0 / P5
+        float* C = g_cfg.live[kHsRowCenter + i]; C[0] = c.cv[0]; C[1] = c.cv[1]; C[2] = c.cv[2]; C[3] = (s_reversed ? 1.0f : 0.0f) + (S[16] < 0 ? 2.0f : 0.0f) + (S[21] < 0 ? 4.0f : 0.0f) + (s_vDet < 0 ? 8.0f : 0.0f);   // bit 0 z invertida, 1 / 2 signo de P0 / P5, 3 vista reflejada
     }
     float Rv[3]; toV(Rw, Rv, false);
     I[0] = (float)n; I[1] = Lv[0]; I[2] = Lv[1]; I[3] = Lv[2];
@@ -158,13 +164,27 @@ void HeadShadowPresent() {
         Log("sombra cabeza (diag): el mas cercano en recorte: con m_projectionView (%.2f %.2f %.2f %.2f), con m_projection x vista (%.2f %.2f %.2f %.2f); projParam (%.4f %.4f %.4f %.4f) -> signos de la vista del sol x %.0f y %.0f z %.0f; sol en vista %.3f %.3f %.3f",
             s_cClip[0], s_cClip[1], s_cClip[2], s_cClip[3], s_cClip2[0], s_cClip2[1], s_cClip2[2], s_cClip2[3], s_cPP[0], s_cPP[1], s_cPP[2], s_cPP[3], s_cSgn[0], s_cSgn[1], s_cSgn[2],
             g_cfg.live[kHsRowInfo][1], g_cfg.live[kHsRowInfo][2], g_cfg.live[kHsRowInfo][3]);
-        Log("sombra cabeza (diag): largo de los ejes de la vista sacada de PV (deberian ser 1): %.3f %.3f %.3f", s_vLen[0], s_vLen[1], s_vLen[2]);
+        Log("sombra cabeza (diag): largo de los ejes de la vista sacada de PV (deberian ser 1): %.3f %.3f %.3f; determinante %.2f", s_vLen[0], s_vLen[1], s_vLen[2], s_vDet);
         Log("sombra cabeza (diag): DSV del shadow map puesto %d veces (%d con targets de color, %d aceptadas); dibujos ahi: indexados %d, simples %d, instanciados %d, indexados instanciados %d; descartados por vista corrida %d, por otro DSV %d; vista vista (%d %d %dx%d), targets %d",
             s_dBindAny.exchange(0), s_dBindRT.exchange(0), s_dBindOk.exchange(0), s_dDraws[1].exchange(0), s_dDraws[0].exchange(0), s_dDraws[2].exchange(0), s_dDraws[3].exchange(0),
             s_dVpOff.exchange(0), s_dOtherDsv.exchange(0), s_dVpX.load(), s_dVpY.load(), s_dVpW.load(), s_dVpH.load(), s_dRtN.load()); }
 }
 
 int HeadShadowSlots() { return s_count; }
+// (27/10 f) estado de rasterizado para la repeticion: el del juego pero SIN descarte de caras. La caja propia puede tener la
+// orientacion opuesta a la matriz de sombras del juego y entonces el descarte dejaba solo las caras de atras (sombra de la cara
+// opuesta: manchas). Con las dos caras se queda la mas cercana al sol, como corresponde. Cache por estado original.
+static std::map<ID3D11RasterizerState*, ID3D11RasterizerState*> s_rsNoCull;
+ID3D11RasterizerState* HeadShadowNoCullRS(ID3D11RasterizerState* orig) {
+    auto it = s_rsNoCull.find(orig); if (it != s_rsNoCull.end()) return it->second;
+    if (!g_dev.dev) return nullptr;
+    D3D11_RASTERIZER_DESC rd{};
+    if (orig) orig->GetDesc(&rd); else { rd.FillMode = D3D11_FILL_SOLID; rd.CullMode = D3D11_CULL_BACK; rd.DepthClipEnable = TRUE; }
+    rd.CullMode = D3D11_CULL_NONE;
+    ID3D11RasterizerState* rs = nullptr; g_dev.dev->CreateRasterizerState(&rd, &rs);
+    if (orig) orig->AddRef();   // la clave se retiene para que el puntero no se reutilice con otro estado
+    s_rsNoCull[orig] = rs; return rs;
+}
 ID3D11ShaderResourceView* HeadShadowSRV() { return s_count > 0 ? s_srv : nullptr; }
 ID3D11DepthStencilView* HeadShadowDSV() { return s_dsv; }
 ID3D11Buffer* HeadShadowCB(int i) { return (i >= 0 && i < kHsSlots) ? s_cb[i] : nullptr; }

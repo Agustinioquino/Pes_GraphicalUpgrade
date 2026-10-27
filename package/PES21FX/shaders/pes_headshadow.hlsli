@@ -4,7 +4,7 @@
 // espacio de vista y se devuelve la visibilidad (1 = al sol, 0 = en sombra), que multiplica la sombra del shadow map del juego.
 //   309 (ini): x prendido, y fuerza, z suavidad (texels del atlas), w sesgo (texels de profundidad)
 //   310 (DLL): x cantidad de cabezas, yzw direccion hacia el sol en vista | 316: xyz eje derecha de la caja en vista, w medio lado
-//   317..319 (DLL): centro de cada caja en vista (la de m_projection: V = P^-1 PV); 317.w bits: 1 z invertida, 2 / 4 signo de P0 / P5
+//   317..319 (DLL): centro de cada caja en vista (la de m_projection: V = P^-1 PV); 317.w bits: 1 z invertida, 2 / 4 signo de P0 / P5, 8 vista reflejada
 #ifndef PES_HEADSHADOW_HLSLI
 #define PES_HEADSHADOW_HLSLI
 Texture2D<float> PESHeadShadow : register(t30);
@@ -18,7 +18,7 @@ float PESHeadShadowAt(float3 Pv, float nDotL, SamplerState smp) {
   int hsFl = (int)(IniParams.Load(int2(317, 0)).w + 0.5);   // bit 0 z invertida, bits 1 / 2: signo de P0 / P5 de m_projection
   Pv.x *= (hsFl & 2) ? -1.0 : 1.0; Pv.y *= (hsFl & 4) ? -1.0 : 1.0;
   float3 L = normalize(I.yzw), R = normalize(A.xyz); float hf = max(A.w, 0.1);
-  float3 Up = cross(L, R);
+  float3 Up = cross(L, R) * ((hsFl & 8) ? -1.0 : 1.0);   // (27/10 f) bit 8: la vista es un reflejo, el producto cruz sale al reves
   float rad = max(U.z, 0.0) / 2048.0;                                   // suavidad en texels del atlas
   float bias = max(U.w, 0.0) / 1024.0 * (0.5 + 1.5 * (1.0 - saturate(nDotL)));   // sesgo: mas en angulo rasante
   float vis = 1.0;
