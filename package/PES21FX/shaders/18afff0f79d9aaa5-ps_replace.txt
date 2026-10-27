@@ -184,7 +184,7 @@ void main(
       // albedo: el sol la enciende donde da y en la sombra queda apagada (el contraste sol / sombra lo pone la pasada del sol). Despues de x29
       // para que la correccion del amarillo no la deshaga. Las hojas pintadas no
       float tz = smoothstep(0.45, 1.0, relH) * kT * pesCfN * (1.0 - pesPaintF);
-      c *= lerp(float3(1.0, 1.0, 1.0), float3(1.26, 1.22, 0.92), tz);
+      c *= lerp(float3(1.0, 1.0, 1.0), float3(1.16, 1.15, 0.98), tz);   // (27/10 k) 1.26/1.22/0.92 -> menos lima: con el sol dorado (z313) salia fluorescente
     }
     o0.xyz = saturate(c);
   }
