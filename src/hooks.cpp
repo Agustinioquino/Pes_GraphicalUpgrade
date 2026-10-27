@@ -350,6 +350,7 @@ static void SunSettingsPresent() {
     }
     if (lines > 40) SunLog("ajuste: %d cambios mas en este segundo (no anotados)", lines - 40);
 }
+int SceneShadowFixStats(int* skipped);   // (mas abajo, junto a los ganchos de Map / Unmap)
 static void SunPassPresent() {
     SunSettingsPresent();
     static uint32_t lastMask = 0xffffffffu; static int lines = 0; static double nextSum = 0;
@@ -438,7 +439,7 @@ static void SunPassPresent() {
                   Log("luz del sol: direccion de la luz (vista %.3f %.3f %.3f | mundo %.3f %.3f %.3f) y del shadow map (mundo %.3f %.3f %.3f): %.1f grados entre las dos",
                       l[0], l[1], l[2], lw[0], lw[1], lw[2], dw[0], dw[1], dw[2], ang);
               } } }
-        if (sums <= 120 && SceneFixOn()) { int sk = 0, fx = SceneShadowFixStats(&sk); Log("sombra_parche (10 s): m_shadowProjection corregida en %d subidas del cbuffer de escena, %d sin tocar (sin sombra o sin rotacion)", fx, sk); }
+        if (sums <= 120 && g_cfg.motorPatch && (g_cfg.motorShadowFix == 1 || g_cfg.motorShadowFix == 2)) { int sk = 0, fx = SceneShadowFixStats(&sk); Log("sombra_parche (10 s): m_shadowProjection corregida en %d subidas del cbuffer de escena, %d sin tocar (sin sombra o sin rotacion)", fx, sk); }
         nextSum = t + 10.0; frames = framesOrig = framesNone = switches = 0;
     }
 }
