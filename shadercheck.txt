@@ -1,0 +1,7 @@
+
+==== faab87ee4ef8b783-vs_replace.txt
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\faab87ee4ef8b783-vs_replace.txt(178,3-6): error X3018: invalid subscript 'z'
+
+compilation failed; no code produced
+
+shaders: 108, con errores: 1 (fxc: C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\fxc.exe)
