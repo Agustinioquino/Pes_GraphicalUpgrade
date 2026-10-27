@@ -520,6 +520,82 @@ template<int V> static void STDMETHODCALLTYPE hk_ClearState(ID3D11DeviceContext*
     GrassBaseFlush(c, 5, 0);
     o_ClearState[V](c);
 }
+// (27/10) quien llena el cbuffer de la luz del sol. El log del 26/10 22:01 muestra que el motor arma m_lightDir0 con el rumbo
+// del sol del cielo + 2 x (rumbo de la camara + 90): con la camara de TV casi no se nota y con otras camaras el sol (y su
+// shadow map) pega de otro lado. La busqueda en memoria del sol en mundo (sunwatch.cpp) no encontro donde lo guarda el
+// motor, asi que se va por el otro lado: el b3 de las pasadas del sol es LightCB; cada Map / UpdateSubresource de ese
+// buffer anota la pila de llamadas del exe (hasta 10 marcos) y, al Unmap, lo que se escribio en m_lightDir0. Cada 30 s el
+// log resume las pilas distintas ("luz: llena el cbuffer ...") para buscar la funcion en el volcado del exe (tools/re).
+// [PES21FX] luz_rastrear = 0 lo apaga. Hasta 64 pilas por segundo (por si el buffer es un anillo compartido).
+using PFN_Map = HRESULT(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, UINT, D3D11_MAP, UINT, D3D11_MAPPED_SUBRESOURCE*);
+using PFN_Unmap = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, UINT);
+using PFN_UpdSub = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, UINT, const D3D11_BOX*, const void*, UINT, UINT);
+static PFN_Map o_Map[2]; static PFN_Unmap o_Unmap[2]; static PFN_UpdSub o_UpdSub[2];
+static std::atomic<ID3D11Resource*> s_ltBuf{nullptr};
+static std::atomic<UINT> s_ltLen{0}, s_ltOff{0};
+static std::atomic<int> s_ltBudget{64};
+static std::atomic<bool> s_ltDone{false};   // tras 20 resumenes (10 min) se deja de rastrear
+struct LtRec { uintptr_t fr[10]; int n = 0, count = 0, kind = 0; float l[3] = {}; bool haveL = false; };
+static std::mutex s_ltMx; static std::vector<LtRec> s_ltRecs; static int s_ltMaps = 0, s_ltSkipped = 0;
+static thread_local const void* t_ltMapped = nullptr; static thread_local int t_ltRec = -1;
+static uintptr_t s_ltExeLo = 0, s_ltExeHi = 0;
+static int LightTraceNote(int kind) {   // kind 0 = Map, 1 = UpdateSubresource; devuelve el indice de la pila
+    if (!s_ltExeLo) { HMODULE m = GetModuleHandleW(nullptr); auto* dh = (IMAGE_DOS_HEADER*)m; auto* nh = (IMAGE_NT_HEADERS*)((char*)m + dh->e_lfanew);
+        s_ltExeLo = (uintptr_t)m; s_ltExeHi = s_ltExeLo + nh->OptionalHeader.SizeOfImage; }
+    LtRec r; r.kind = kind;
+    { std::lock_guard<std::mutex> lk(s_ltMx); s_ltMaps++; }
+    if (s_ltBudget.fetch_sub(1, std::memory_order_relaxed) <= 0) { std::lock_guard<std::mutex> lk(s_ltMx); s_ltSkipped++; return -1; }
+    void* bt[48]; USHORT n = RtlCaptureStackBackTrace(2, 48, bt, nullptr);
+    for (USHORT i = 0; i < n && r.n < 10; i++) { uintptr_t a = (uintptr_t)bt[i]; if (a >= s_ltExeLo && a < s_ltExeHi) r.fr[r.n++] = a; }
+    std::lock_guard<std::mutex> lk(s_ltMx);
+    for (size_t i = 0; i < s_ltRecs.size(); i++) {
+        auto& e = s_ltRecs[i];
+        if (e.n == r.n && e.kind == kind && !memcmp(e.fr, r.fr, sizeof(uintptr_t) * r.n)) { e.count++; return (int)i; }
+    }
+    if (s_ltRecs.size() >= 24) return -1;
+    r.count = 1; s_ltRecs.push_back(r); return (int)s_ltRecs.size() - 1;
+}
+static bool LightTraceRead(const void* data, UINT off, float* l) {   // sin objetos con destructor: __try
+    __try { memcpy(l, (const char*)data + off, 3 * sizeof(float)); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+static void LightTraceValue(int rec, const void* data) {   // los primeros 3 floats de la ventana de LightCB (m_lightDir0)
+    if (rec < 0 || !data) return;
+    float l[3]; if (!LightTraceRead(data, s_ltOff.load(std::memory_order_relaxed), l)) return;
+    std::lock_guard<std::mutex> lk(s_ltMx);
+    if (rec < (int)s_ltRecs.size()) { memcpy(s_ltRecs[rec].l, l, sizeof l); s_ltRecs[rec].haveL = true; }
+}
+static void LightTraceSummary() {   // en Present
+    static double next = 0; double t = Now();
+    s_ltBudget.store(64, std::memory_order_relaxed);   // por cuadro
+    if (!g_cfg.lightTrace || t < next) return;
+    bool first = next == 0; next = t + 30.0; if (first) return;
+    static int sums = 0; if (sums >= 20) { s_ltDone.store(true); s_ltBuf.store(nullptr); return; }
+    std::lock_guard<std::mutex> lk(s_ltMx);
+    if (s_ltRecs.empty()) { if (sums++ < 3) Log("luz: en 30 s nadie lleno el cbuffer de la luz con Map / UpdateSubresource (buffer %p, %u bytes desde %u)", (void*)s_ltBuf.load(), s_ltLen.load(), s_ltOff.load()); return; }
+    sums++;
+    Log("luz: el cbuffer de la luz (buffer %p, ventana %u bytes desde %u) se lleno %d veces en 30 s (%d sin pila por el tope); pilas distintas %zu",
+        (void*)s_ltBuf.load(), s_ltLen.load(), s_ltOff.load(), s_ltMaps, s_ltSkipped, s_ltRecs.size());
+    for (auto& e : s_ltRecs) {
+        std::string st; char b[24];
+        for (int i = 0; i < e.n; i++) { snprintf(b, sizeof b, "%s+0x%llx", i ? " <- " : "", (unsigned long long)(e.fr[i] - s_ltExeLo + 0x140000000ull)); st += b; }
+        if (e.haveL) Log("  llena el cbuffer (%s, %d veces, m_lightDir0 %.3f %.3f %.3f): %s", e.kind ? "UpdateSubresource" : "Map", e.count, e.l[0], e.l[1], e.l[2], st.c_str());
+        else Log("  llena el cbuffer (%s, %d veces): %s", e.kind ? "UpdateSubresource" : "Map", e.count, st.c_str());
+    }
+    s_ltRecs.clear(); s_ltMaps = s_ltSkipped = 0;
+}
+template<int V> static HRESULT STDMETHODCALLTYPE hk_Map(ID3D11DeviceContext* c, ID3D11Resource* r, UINT sub, D3D11_MAP t, UINT f, D3D11_MAPPED_SUBRESOURCE* m) {
+    HRESULT hr = o_Map[V](c, r, sub, t, f, m);
+    if (r && r == s_ltBuf.load(std::memory_order_relaxed) && g_cfg.lightTrace && SUCCEEDED(hr) && m) { t_ltRec = LightTraceNote(0); t_ltMapped = m->pData; }
+    return hr;
+}
+template<int V> static void STDMETHODCALLTYPE hk_Unmap(ID3D11DeviceContext* c, ID3D11Resource* r, UINT sub) {
+    if (t_ltMapped && r == s_ltBuf.load(std::memory_order_relaxed)) { LightTraceValue(t_ltRec, t_ltMapped); t_ltMapped = nullptr; t_ltRec = -1; }
+    o_Unmap[V](c, r, sub);
+}
+template<int V> static void STDMETHODCALLTYPE hk_UpdSub(ID3D11DeviceContext* c, ID3D11Resource* r, UINT sub, const D3D11_BOX* box, const void* d, UINT rp, UINT dp) {
+    if (r && r == s_ltBuf.load(std::memory_order_relaxed) && g_cfg.lightTrace) { int i = LightTraceNote(1); if (!box) LightTraceValue(i, d); }
+    o_UpdSub[V](c, r, sub, box, d, rp, dp);
+}
 template<int V> static void STDMETHODCALLTYPE hk_ExecCL(ID3D11DeviceContext* c, ID3D11CommandList* l, BOOL r) {
     GrassBaseFlush(c, 4, 0);   // (26/10 g) lo pendiente de este contexto va antes que la lista
     BodyOnExecute(c, l);
@@ -764,6 +840,7 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
             bool window = num && (off > 0 || num * 16 < sd.ByteWidth);
             if (window) len = off < sd.ByteWidth ? (std::min)(num * 16, sd.ByteWidth - off) & ~15u : 0;
             if (!len) { src->Release(); break; }
+            if (a.name == "LightCB" && !s_ltDone.load(std::memory_order_relaxed)) { s_ltBuf.store(src, std::memory_order_relaxed); s_ltOff.store(window ? off : 0); s_ltLen.store(len); }   // (27/10) rastreo de quien la llena
             std::lock_guard<std::mutex> lk(s_namedMutex);
             auto& r = s_named[a.name];
             if (r.buf) { D3D11_BUFFER_DESC dd; r.buf->GetDesc(&dd); if (dd.ByteWidth != len) { r.buf->Release(); r.buf = nullptr; } }
@@ -1050,6 +1127,11 @@ template<int V> static void HookContextV(ID3D11DeviceContext* c) {
     n += Hook(vt[33], (void*)&hk_OMSetRT<V>, (void**)&o_OMSetRT[V], "OMSetRenderTargets");   // (26/10 g) pasto: emision pendiente
     n += Hook(vt[34], (void*)&hk_OMSetRTU<V>, (void**)&o_OMSetRTU[V], "OMSetRenderTargetsAndUnorderedAccessViews");
     n += Hook(vt[110], (void*)&hk_ClearState<V>, (void**)&o_ClearState[V], "ClearState");
+    if (g_cfg.lightTrace) {   // (27/10) quien llena el cbuffer de la luz
+        n += Hook(vt[14], (void*)&hk_Map<V>, (void**)&o_Map[V], "Map");
+        n += Hook(vt[15], (void*)&hk_Unmap<V>, (void**)&o_Unmap[V], "Unmap");
+        n += Hook(vt[48], (void*)&hk_UpdSub<V>, (void**)&o_UpdSub[V], "UpdateSubresource");
+    }
     if (n) Log("contexto enganchado (variante %d, %d funciones)", V, n);
 }
 static void HookContext(ID3D11DeviceContext* c, int v) {
@@ -1339,6 +1421,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
         }
     }
     SunPassPresent();   // (25/10) variantes de la luz del sol: log de cambios
+    LightTraceSummary();   // (27/10) quien llena el cbuffer de la luz
     UpdateTimeParams();
     SSGIPresent(s_presentNo.load());
     LightMeterPresent();
