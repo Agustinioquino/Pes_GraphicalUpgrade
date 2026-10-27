@@ -37,6 +37,7 @@ constexpr int kParamCount = 320;           // float4 x 320 -> t120 en los shader
 // esculpida (el relieve del normal map de TorsoBody en la malla: filas 7..9 de los datos de t127 + correccion de la textura en t20);
 // 293 = piel real (x prendido, y brillo, z translucidez; zonas del torso en t21 / t24; w = union suave del brazo con el torso).
 // 297 / 298 = luz de prueba del editor (27/10 b, pes_ssss_inc.hlsli: sol de dia / tarde / noche donde no corre el sol del partido).
+// 299 = pasto tanda 9a (hilo del pasto, rama kd63zh).
 // 305 musculos con textura (manos.cpp + pes_limbs.hlsli en el VS 1c02a92a + PS aa7d1833; x prendido, y definicion, z venas de los
 // brazos, w venas de las manos con el puno apretado; v12.7).
 
