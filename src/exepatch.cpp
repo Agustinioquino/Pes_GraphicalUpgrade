@@ -174,7 +174,8 @@ static void SunFixPresent() {
 // igual) y vuelve. En TV (rotacion simetrica) da exactamente lo mismo que el juego. Emulado con unicorn sobre los bytes del
 // juego con las matrices reales del log: reproduce lo medido sin parche (74.1 / 0.0 / 3.1 grados) y da 0.0 con el parche.
 // (La primera version, 7a8f7d8, trasponia la matriz entera en 0x14171e34a sola: no tocaba la sombra del sol.)
-// sombra_parche: 0 = como el juego, 1 = las dos, 2 = solo la del sol (escena).
+// sombra_parche: 0 = como el juego, 1 = las dos, 2 = solo la del sol (escena), 3 = solo registro (sin corregir: anota las
+// matrices de la camara y de la luz que lee 0x1416de354, para ver en cual vive el giro).
 static const uintptr_t kShadowFixAt = 0x14171e34aull, kShadowFixBack = 0x14171e37aull;
 static const unsigned char kShadowFixOld[48] = {
     0x0f,0x28,0xb2,0x00,0x02,0x00,0x00, 0x44,0x0f,0x28,0xa2,0x20,0x02,0x00,0x00, 0x44,0x0f,0x28,0xd6,
@@ -196,16 +197,13 @@ static const uintptr_t kSceneFixAt = 0x1416de354ull, kSceneFixBack = 0x1416de373
 static const unsigned char kSceneFixOld[31] = {
     0x44,0x0f,0x28,0x93,0xf0,0x01,0x00,0x00, 0x44,0x0f,0x28,0x8b,0x00,0x02,0x00,0x00, 0x0f,0x28,0x83,0x10,0x02,0x00,0x00,
     0x44,0x0f,0x28,0xa3,0x20,0x02,0x00,0x00 };
-static const unsigned char kSceneCave[] = {
-    0x44,0x0f,0x28,0x93,0xf0,0x01,0x00,0x00, 0x44,0x0f,0x28,0x8b,0x00,0x02,0x00,0x00, 0x0f,0x28,0x83,0x10,0x02,0x00,0x00,
-    0x44,0x0f,0x28,0xa3,0x20,0x02,0x00,0x00,
+static const unsigned char kSceneCaveT[] = {          // traspone la 3x3 de xmm10/xmm9/xmm0 (ya cargadas), w = 0
     0x41,0x0f,0x28,0xca, 0x41,0x0f,0x14,0xc9, 0x41,0x0f,0x28,0xd2, 0x41,0x0f,0x15,0xd1, 0x0f,0x57,0xe4, 0x0f,0x28,0xd8,
     0x0f,0x14,0xdc, 0x0f,0x28,0xe8, 0x0f,0x15,0xec, 0x44,0x0f,0x28,0xd1, 0x44,0x0f,0x16,0xd3, 0x44,0x0f,0x28,0xcb,
-    0x44,0x0f,0x12,0xc9, 0x0f,0x28,0xc2, 0x0f,0x16,0xc5,
-    0xff,0x25,0x00,0x00,0x00,0x00 };
+    0x44,0x0f,0x12,0xc9, 0x0f,0x28,0xc2, 0x0f,0x16,0xc5 };
 static bool s_shadowFixDone = false, s_sceneFixDone = false; static int s_shadowFixTries = 0, s_sceneFixTries = 0;
 static unsigned char* s_cave = nullptr;
-static volatile uintptr_t* s_caveCam = nullptr; static double s_camLogT = 0; static int s_camLogs = 0;
+static volatile uintptr_t* s_caveCam = nullptr; static volatile uintptr_t* s_caveObj = nullptr; static double s_camLogT = 0; static int s_camLogs = 0;
 
 // Escribe codigo del juego con los demas hilos suspendidos; si alguno esta cerca de esos bytes no se escribe (se reintenta).
 static int WriteGameCode(uintptr_t at, const void* bytes, size_t n) {   // 1 escrito, 0 ocupado, -1 error
@@ -252,9 +250,16 @@ static void ShadowFixPresent() {
         s_caveCam = (volatile uintptr_t*)(s_cave + 0x200); *s_caveCam = 0;
         int32_t disp = (int32_t)((intptr_t)(s_cave + 0x200) - (intptr_t)(movAt + 7));
         movAt[0] = 0x48; movAt[1] = 0x89; movAt[2] = 0x15; memcpy(movAt + 3, &disp, 4);
-        // 0x100: escena (0x1416de354)
+        // 0x100: escena (0x1416de354). mov [rip + d], rbx guarda el objeto (camara + matrices de la luz) en la palabra de 0x208;
+        // despues las 4 cargas originales y, si no es solo registro (modo 3), la 3x3 traspuesta
         unsigned char* q = s_cave + 0x100;
-        memcpy(q, kSceneCave, sizeof kSceneCave); q += sizeof kSceneCave;
+        s_caveObj = (volatile uintptr_t*)(s_cave + 0x208); *s_caveObj = 0;
+        int32_t disp2 = (int32_t)((intptr_t)(s_cave + 0x208) - (intptr_t)(q + 7));
+        q[0] = 0x48; q[1] = 0x89; q[2] = 0x1d; memcpy(q + 3, &disp2, 4); q += 7;
+        memcpy(q, kSceneFixOld, sizeof kSceneFixOld); q += sizeof kSceneFixOld;
+        if (g_cfg.motorShadowFix != 3) { memcpy(q, kSceneCaveT, sizeof kSceneCaveT); q += sizeof kSceneCaveT; }
+        static const unsigned char kJmp[] = { 0xff,0x25,0x00,0x00,0x00,0x00 };
+        memcpy(q, kJmp, sizeof kJmp); q += sizeof kJmp;
         uint64_t back2 = kSceneFixBack; memcpy(q, &back2, 8);
         FlushInstructionCache(GetCurrentProcess(), s_cave, 4096);
     }
@@ -267,12 +272,13 @@ static void ShadowFixPresent() {
         } else {
             unsigned char j[31]; jmpTo(j, sizeof j, s_cave + 0x100);
             int r = WriteGameCode(kSceneFixAt, j, sizeof j);
-            if (r == 1) { s_sceneFixDone = true; Log("motor: sombra_parche puesto en 0x1416de354: m_shadowProjection (sombra del sol) se arma con la rotacion de la camara traspuesta (sombra fija al cielo)"); }
+            if (r == 1) { s_sceneFixDone = true; Log(g_cfg.motorShadowFix == 3 ? "motor: sombra_parche 3 puesto en 0x1416de354: solo registro (las matrices de la camara y de la luz del shadow map van al log, sin corregir nada)"
+                                                   : "motor: sombra_parche puesto en 0x1416de354: m_shadowProjection (sombra del sol) se arma con la rotacion de la camara traspuesta (sombra fija al cielo)"); }
             else if (r < 0) { s_sceneFixDone = true; Log("motor: sombra_parche: no se pudo escribir 0x1416de354 (VirtualProtect)"); }
         }
     }
     if (!s_shadowFixDone) {
-        if (g_cfg.motorShadowFix != 1) s_shadowFixDone = true;
+        if (g_cfg.motorShadowFix != 1) s_shadowFixDone = true;   // modos 2 y 3: la luz direccional queda como el juego
         else if (!SigOk(kShadowFixAt, kShadowFixOld, sizeof kShadowFixOld)) {
             if (++s_shadowFixTries == 30) { s_shadowFixDone = true; Log("motor: sombra_parche: los bytes de 0x14171e34a no coinciden con los esperados: la sombra del estadio no se parchea"); }
         } else {
@@ -284,17 +290,31 @@ static void ShadowFixPresent() {
     }
 }
 
-// cada 20 s (8 veces) anota la matriz de vista del motor que lee la cuenta del shadow map: dice si la traslacion esta en la
-// columna 3 (modo 1 correcto) o en la fila 3 (modo 2)
+// cada 15 s (12 veces) anota, desde el objeto que lee la cuenta del shadow map (0x1416de354): la matriz de vista del motor
+// (+0x1f0), las dos matrices de la luz (+0x2f0 y +0x330) y la rotacion de la luz ([+0x4a0] + 0x30): con eso se ve en cual
+// de las dos vive el giro con la camara. Si solo corrio el parche de la luz direccional (0x14171e34a), la camara sola.
 static void ShadowFixCamLog() {
-    if (!s_caveCam || s_camLogs >= 8) return;
-    double t = Now(); if (t < s_camLogT) return; s_camLogT = t + 20.0;
-    uintptr_t cam = *s_caveCam; if (!cam) return;
-    float m[16]; SIZE_T got = 0;
-    if (!ReadProcessMemory(GetCurrentProcess(), (const void*)(cam + 0x1f0), m, sizeof m, &got) || got != sizeof m) return;
+    if (s_camLogs >= 12) return;
+    double t = Now(); if (t < s_camLogT) return; s_camLogT = t + 15.0;
+    uintptr_t obj = s_caveObj ? *s_caveObj : 0, cam = s_caveCam ? *s_caveCam : 0;
+    if (!obj && !cam) return;
+    uintptr_t base = obj ? obj : cam;
+    auto rd = [](uintptr_t at, float* m, size_t n) { SIZE_T got = 0; return ReadProcessMemory(GetCurrentProcess(), (const void*)at, m, n * 4, &got) && got == n * 4; };
+    float m[16]; if (!rd(base + 0x1f0, m, 16)) return;
     s_camLogs++;
-    Log("sol: matriz de vista del motor (camara %p, filas) %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f",
-        (void*)cam, m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]);
+    Log("sol: matriz de vista del motor (objeto %p, filas) %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f",
+        (void*)base, m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]);
+    if (!obj) return;
+    float l[16], l2[16]; uintptr_t sub = 0; SIZE_T got = 0;
+    if (rd(obj + 0x2f0, l, 16))
+        Log("sol: matriz de la luz del shadow map (+0x2f0, filas) %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.3f %.3f %.3f %.3f",
+            l[0], l[1], l[2], l[3], l[4], l[5], l[6], l[7], l[8], l[9], l[10], l[11], l[12], l[13], l[14], l[15]);
+    if (rd(obj + 0x330, l2, 16))
+        Log("sol: segunda matriz de la luz (+0x330, filas) %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.3f %.3f %.3f %.3f",
+            l2[0], l2[1], l2[2], l2[3], l2[4], l2[5], l2[6], l2[7], l2[8], l2[9], l2[10], l2[11], l2[12], l2[13], l2[14], l2[15]);
+    if (ReadProcessMemory(GetCurrentProcess(), (const void*)(obj + 0x4a0), &sub, 8, &got) && got == 8 && sub && rd(sub + 0x30, l, 12))
+        Log("sol: rotacion de la luz ([+0x4a0] + 0x30, filas) %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f",
+            l[0], l[1], l[2], l[3], l[4], l[5], l[6], l[7], l[8], l[9], l[10], l[11]);
 }
 
 static int s_lodBase = -1, s_lodLast = -1; static bool s_lodChecked = false, s_lodOk = false; static double s_lodT = 0;
