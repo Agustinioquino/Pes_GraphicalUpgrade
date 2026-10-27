@@ -7,6 +7,8 @@
 // coinciden no se engancha nada.
 #include "core.h"
 #include <MinHook.h>
+#include <tlhelp32.h>
+#include <vector>
 #include <cstring>
 #include <algorithm>
 
@@ -96,10 +98,75 @@ void ExePatchInstall() {
 // Funcion del motor en 0x141686380: factor = resolucion x LodScale x ModelLodScale / ... -> mas resolucion = cada modelo se
 // considera mas grande en pantalla = conserva la malla detallada hasta mas lejos. La DLL la multiplica por x142 (1 = juego).
 // Si el juego la cambia (menu de opciones) se toma el valor nuevo como base.
+// ---------------------------------------------------------------- el sol que gira con la camara (27/10, sol_parche)
+// Registro de la partida 27fdac4 (27/10): la luz del sol en espacio de vista que el motor sube al cbuffer de la luz es
+// luz_vista = A x sol_cielo con A = vista -> mundo (la traspuesta de la que corresponde): la luz gira el doble de lo que gira
+// la camara y solo coincide con el cielo en la camara de TV. El shadow map se arma con esa misma luz, por eso sol y sombra
+// pegan de otro lado al cambiar de camara. La cuenta esta en 0x14171e220 (rcx = render, rdx = camara, r8 = luz; la llama el
+// bucle de luces de 0x1416ee820): en 0x14171e2a7 hace v = d.x * fila0 + d.y * fila1 + d.z * fila2 con las filas de la matriz de
+// vista en rdx + 0x1f0 (la misma disposicion que m_view del cbuffer, donde el shader proyecta con las columnas). El parche
+// reescribe esos 57 bytes para que haga v = (fila0 . d, fila1 . d, fila2 . d), con el mismo largo y los mismos registros
+// (xmm0 queda con la constante x [r8+0x40] como antes; xmm1 y xmm3 ya eran descartables). Usa insertps (SSE4.1) y haddps (SSE3).
+static const uintptr_t kSunFixAt = 0x14171e2a7ull;
+static const unsigned char kSunFixOld[57] = {
+    0x0f,0x28,0xd1, 0x0f,0x28,0xc1, 0x0f,0xc6,0xd1,0x55, 0x0f,0x59,0x92,0x00,0x02,0x00,0x00, 0x0f,0xc6,0xc1,0x00,
+    0x0f,0x59,0x82,0xf0,0x01,0x00,0x00, 0x0f,0xc6,0xc9,0xaa, 0x0f,0x59,0x8a,0x10,0x02,0x00,0x00, 0x0f,0x58,0xd0,
+    0x0f,0x28,0x05,0xb8,0xcd,0x2e,0x01, 0x41,0x0f,0x59,0x40,0x40, 0x0f,0x58,0xd1 };
+static const unsigned char kSunFixNew[57] = {
+    0x66,0x0f,0x3a,0x21,0xc9,0x08,            // insertps xmm1,xmm1,8   (w = 0: la fila 3 no entra)
+    0x0f,0x28,0x92,0xf0,0x01,0x00,0x00,       // movaps xmm2,[rdx+1f0]
+    0x0f,0x59,0xd1,                           // mulps  xmm2,xmm1
+    0x0f,0x28,0x82,0x00,0x02,0x00,0x00,       // movaps xmm0,[rdx+200]
+    0x0f,0x59,0xc1,                           // mulps  xmm0,xmm1
+    0x0f,0x59,0x8a,0x10,0x02,0x00,0x00,       // mulps  xmm1,[rdx+210]
+    0xf2,0x0f,0x7c,0xd0,                      // haddps xmm2,xmm0      -> (f0.d parcial, f1.d parcial)
+    0xf2,0x0f,0x7c,0xc9,                      // haddps xmm1,xmm1
+    0xf2,0x0f,0x7c,0xd1,                      // haddps xmm2,xmm1      -> (f0.d, f1.d, f2.d, f2.d)
+    0x0f,0x28,0x05,0xb5,0xcd,0x2e,0x01,       // movaps xmm0,[rip+...] = 0x142a0b090 (la misma constante, 3 bytes antes)
+    0x41,0x0f,0x59,0x40,0x40 };               // mulps  xmm0,[r8+40]
+static bool s_sunFixDone = false; static int s_sunFixTries = 0;
+static void SunFixPresent() {
+    if (s_sunFixDone || !g_cfg.motorSunFix) return;
+    if (!SigOk(kSunFixAt, kSunFixOld, sizeof kSunFixOld)) {
+        if (SigOk(kSunFixAt, kSunFixNew, sizeof kSunFixNew)) { s_sunFixDone = true; Log("motor: sol_parche ya estaba puesto"); return; }
+        if (++s_sunFixTries == 30) Log("motor: sol_parche: los bytes de 0x14171e2a7 no coinciden con los esperados (exe distinto?): no se parchea");
+        return;
+    }
+    // ningun otro hilo puede estar ejecutando esos bytes mientras se reescriben: se suspenden todos y se mira su RIP
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE) return;
+    std::vector<HANDLE> held; bool busy = false;
+    THREADENTRY32 te{}; te.dwSize = sizeof te; DWORD me = GetCurrentThreadId(), pid = GetCurrentProcessId();
+    for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
+        if (te.th32OwnerProcessID != pid || te.th32ThreadID == me) continue;
+        HANDLE th = OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, te.th32ThreadID);
+        if (!th) continue;
+        if (SuspendThread(th) == (DWORD)-1) { CloseHandle(th); continue; }
+        held.push_back(th);
+        CONTEXT c{}; c.ContextFlags = CONTEXT_CONTROL;
+        if (GetThreadContext(th, &c) && c.Rip >= kSunFixAt - 0x100 && c.Rip < kSunFixAt + sizeof kSunFixOld + 0x100) busy = true;
+    }
+    CloseHandle(snap);
+    bool written = false;
+    if (!busy) {
+        DWORD old = 0;
+        if (VirtualProtect((void*)kSunFixAt, sizeof kSunFixNew, PAGE_EXECUTE_READWRITE, &old)) {
+            memcpy((void*)kSunFixAt, kSunFixNew, sizeof kSunFixNew);
+            DWORD tmp = 0; VirtualProtect((void*)kSunFixAt, sizeof kSunFixNew, old, &tmp);
+            FlushInstructionCache(GetCurrentProcess(), (void*)kSunFixAt, sizeof kSunFixNew);
+            written = true;
+        }
+    }
+    for (HANDLE th : held) { ResumeThread(th); CloseHandle(th); }
+    if (written) { s_sunFixDone = true; Log("motor: sol_parche puesto en 0x14171e2a7: el sol en vista se calcula con las columnas de la matriz de vista (luz y sombra fijas al cielo)"); }
+    else if (!busy) { s_sunFixDone = true; Log("motor: sol_parche: no se pudo escribir el codigo (VirtualProtect)"); }
+}
+
 static int s_lodBase = -1, s_lodLast = -1; static bool s_lodChecked = false, s_lodOk = false; static double s_lodT = 0;
 void ExePatchPresent() {
     if (!g_cfg.motorPatch) return;
     double t = Now(); if (t - s_lodT < 1.0) return; s_lodT = t;
+    SunFixPresent();   // (27/10) el sol que gira con la camara
     volatile int* g = (volatile int*)0x14374cd94ull;
     if (!s_lodChecked) {
         s_lodChecked = true;
