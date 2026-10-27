@@ -71,10 +71,10 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   if (zA < 0.1 || zA > 60.0) return o;   // fondo del editor, sin geometria
   // --- preset o manual ---
   int preset = (int)(E.y + 0.5);
-  float az = E.z, el = E.w, inten = E2.x > 0 ? E2.x : 2.5, warm = E2.y, keep = E2.z, shK = E2.w;
-  if (preset == 1) { az = 50; el = 45; inten = 2.5; warm = 0.62; keep = 0.40; }        // dia: sol alto, calido
-  else if (preset == 2) { az = 70; el = 12; inten = 2.2; warm = 0.95; keep = 0.30; }   // tarde: sol bajo, naranja
-  else if (preset == 3) { az = -40; el = 60; inten = 1.8; warm = 0.15; keep = 0.25; }  // noche: torre alta, blanca azulada
+  float az = E.z, el = E.w, inten = E2.x > 0 ? E2.x : 1.1, warm = E2.y, keep = E2.z, shK = E2.w;
+  if (preset == 1) { az = 50; el = 45; inten = 1.1; warm = 0.62; keep = 0.55; }   // (27/10 c) 2.5 quemaba la cara: el tonemap del editor expone para la luz de estudio        // dia: sol alto, calido
+  else if (preset == 2) { az = 70; el = 12; inten = 0.9; warm = 0.95; keep = 0.45; }   // tarde: sol bajo, naranja
+  else if (preset == 3) { az = -40; el = 60; inten = 0.8; warm = 0.15; keep = 0.35; }  // noche: torre alta, blanca azulada
   float3 tint = lerp(float3(0.80, 0.88, 1.00), float3(1.00, 0.62, 0.32), saturate(warm));   // azul frio .. naranja
   tint /= max(Lum(tint), 1e-4);
   // --- referencia de intensidad: la irradiancia de estudio mas alta sobre la piel (rejilla fija de 6x6 puntos) ---
