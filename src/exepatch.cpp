@@ -162,11 +162,113 @@ static void SunFixPresent() {
     else if (!busy) { s_sunFixDone = true; Log("motor: sol_parche: no se pudo escribir el codigo (VirtualProtect)"); }
 }
 
+// ---------------------------------------------------------------- la sombra que gira con la camara (27/10, sombra_parche)
+// Partida a2417f4 (27/10 07:39): con sol_parche la luz queda fija al cielo, pero la direccion del shadow map sigue en
+// cielo + 2 x (camara + 90) (69 grados con la camara a -137, 0 solo en TV). La matriz vista -> luz (ids 0x95 / 0xa5 / 0xc5)
+// se arma en la misma 0x14171e220: invierte la vista (rdx + 0x1f0 .. 0x220, cargada en 0x14171e34a..0x14171e37a) y la
+// multiplica por la matriz de la luz ([r8 + 0x90 ..]) con la convencion de vector fila; la vista esta en convencion de
+// columna, asi que hay que invertir su traspuesta. Emulado con unicorn sobre los bytes del juego: con la vista traspuesta un
+// punto del mundo cae en el mismo lugar del shadow map con cualquier camara (y la luz de sol_parche no cambia).
+// El parche cambia esas 48 bytes por un salto a un trozo de codigo propio que carga las cuatro filas, las traspone (modo 1) o
+// traspone solo la rotacion 3x3 (modo 2), repite las tres instrucciones que estaban mezcladas (xmm3, xmm10, xmm4) y vuelve a
+// 0x14171e37a. Guarda rdx (la camara) para poder anotar la matriz de vista del motor en el registro del sol.
+static const uintptr_t kShadowFixAt = 0x14171e34aull, kShadowFixBack = 0x14171e37aull;
+static const unsigned char kShadowFixOld[48] = {
+    0x0f,0x28,0xb2,0x00,0x02,0x00,0x00, 0x44,0x0f,0x28,0xa2,0x20,0x02,0x00,0x00, 0x44,0x0f,0x28,0xd6,
+    0xf3,0x41,0x0f,0x10,0x98,0xdc,0x00,0x00,0x00, 0x41,0x0f,0x28,0xe4, 0x44,0x0f,0x28,0xba,0x10,0x02,0x00,0x00,
+    0x44,0x0f,0x28,0x8a,0xf0,0x01,0x00,0x00 };
+static const unsigned char kCaveLoadT[] = {          // carga las 4 filas y las traspone (xmm9, xmm6, xmm15, xmm12)
+    0x44,0x0f,0x28,0x8a,0xf0,0x01,0x00,0x00, 0x0f,0x28,0xb2,0x00,0x02,0x00,0x00, 0x44,0x0f,0x28,0xba,0x10,0x02,0x00,0x00,
+    0x44,0x0f,0x28,0xa2,0x20,0x02,0x00,0x00,
+    0x45,0x0f,0x28,0xd1, 0x44,0x0f,0x14,0xd6, 0x41,0x0f,0x28,0xe1, 0x0f,0x15,0xe6, 0x41,0x0f,0x28,0xef, 0x41,0x0f,0x14,0xec,
+    0x45,0x0f,0x28,0xdf, 0x45,0x0f,0x15,0xdc, 0x45,0x0f,0x28,0xca, 0x44,0x0f,0x16,0xcd, 0x0f,0x28,0xf5, 0x41,0x0f,0x12,0xf2,
+    0x44,0x0f,0x28,0xfc, 0x45,0x0f,0x16,0xfb, 0x45,0x0f,0x28,0xe3, 0x44,0x0f,0x12,0xe4 };
+static const unsigned char kCaveKeepT[] = {          // modo 2: la columna 3 y la fila 3 como estaban
+    0x66,0x44,0x0f,0x3a,0x21,0x8a,0xfc,0x01,0x00,0x00,0x30, 0x66,0x0f,0x3a,0x21,0xb2,0x0c,0x02,0x00,0x00,0x30,
+    0x66,0x44,0x0f,0x3a,0x21,0xba,0x1c,0x02,0x00,0x00,0x30, 0x44,0x0f,0x28,0xa2,0x20,0x02,0x00,0x00 };
+static const unsigned char kCaveTail[] = {           // movss xmm3,[r8+dc]; movaps xmm10,xmm6; movaps xmm4,xmm12; jmp [rip+0]
+    0xf3,0x41,0x0f,0x10,0x98,0xdc,0x00,0x00,0x00, 0x44,0x0f,0x28,0xd6, 0x41,0x0f,0x28,0xe4, 0xff,0x25,0x00,0x00,0x00,0x00 };
+static bool s_shadowFixDone = false; static int s_shadowFixTries = 0; static unsigned char* s_cave = nullptr;
+static volatile uintptr_t* s_caveCam = nullptr; static double s_camLogT = 0; static int s_camLogs = 0;
+
+// Escribe codigo del juego con los demas hilos suspendidos; si alguno esta cerca de esos bytes no se escribe (se reintenta).
+static int WriteGameCode(uintptr_t at, const void* bytes, size_t n) {   // 1 escrito, 0 ocupado, -1 error
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE) return 0;
+    std::vector<HANDLE> held; bool busy = false;
+    THREADENTRY32 te{}; te.dwSize = sizeof te; DWORD me = GetCurrentThreadId(), pid = GetCurrentProcessId();
+    for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
+        if (te.th32OwnerProcessID != pid || te.th32ThreadID == me) continue;
+        HANDLE th = OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, te.th32ThreadID);
+        if (!th) continue;
+        if (SuspendThread(th) == (DWORD)-1) { CloseHandle(th); continue; }
+        held.push_back(th);
+        CONTEXT c{}; c.ContextFlags = CONTEXT_CONTROL;
+        if (GetThreadContext(th, &c) && c.Rip >= at - 0x100 && c.Rip < at + n + 0x100) busy = true;
+    }
+    CloseHandle(snap);
+    int r = 0;
+    if (!busy) {
+        DWORD old = 0; r = -1;
+        if (VirtualProtect((void*)at, n, PAGE_EXECUTE_READWRITE, &old)) {
+            memcpy((void*)at, bytes, n);
+            DWORD tmp = 0; VirtualProtect((void*)at, n, old, &tmp);
+            FlushInstructionCache(GetCurrentProcess(), (void*)at, n);
+            r = 1;
+        }
+    }
+    for (HANDLE th : held) { ResumeThread(th); CloseHandle(th); }
+    return r;
+}
+
+static void ShadowFixPresent() {
+    if (s_shadowFixDone || g_cfg.motorShadowFix <= 0) return;
+    if (!SigOk(kShadowFixAt, kShadowFixOld, sizeof kShadowFixOld)) {
+        if (++s_shadowFixTries == 30) Log("motor: sombra_parche: los bytes de 0x14171e34a no coinciden con los esperados (exe distinto o ya parcheado?): no se parchea");
+        return;
+    }
+    if (!s_cave) {
+        s_cave = (unsigned char*)VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+        if (!s_cave) { s_shadowFixDone = true; Log("motor: sombra_parche: no se pudo reservar memoria para el codigo"); return; }
+        unsigned char* p = s_cave;
+        // mov [rip + d], rdx  (guarda la camara en la palabra que va despues del salto)
+        unsigned char* movAt = p; p += 7;
+        memcpy(p, kCaveLoadT, sizeof kCaveLoadT); p += sizeof kCaveLoadT;
+        if (g_cfg.motorShadowFix == 2) { memcpy(p, kCaveKeepT, sizeof kCaveKeepT); p += sizeof kCaveKeepT; }
+        memcpy(p, kCaveTail, sizeof kCaveTail); p += sizeof kCaveTail;
+        uint64_t back = kShadowFixBack; memcpy(p, &back, 8); p += 8;
+        p = (unsigned char*)(((uintptr_t)p + 15) & ~(uintptr_t)15);
+        s_caveCam = (volatile uintptr_t*)p; *s_caveCam = 0;
+        int32_t disp = (int32_t)((intptr_t)p - (intptr_t)(movAt + 7));
+        movAt[0] = 0x48; movAt[1] = 0x89; movAt[2] = 0x15; memcpy(movAt + 3, &disp, 4);
+        FlushInstructionCache(GetCurrentProcess(), s_cave, 4096);
+    }
+    unsigned char jmp[48]; memset(jmp, 0x90, sizeof jmp);
+    jmp[0] = 0xff; jmp[1] = 0x25; memset(jmp + 2, 0, 4); uint64_t to = (uint64_t)(uintptr_t)s_cave; memcpy(jmp + 6, &to, 8);
+    int r = WriteGameCode(kShadowFixAt, jmp, sizeof jmp);
+    if (r == 1) { s_shadowFixDone = true; Log("motor: sombra_parche %d puesto en 0x14171e34a: la matriz del shadow map se arma con la vista traspuesta (sombra fija al cielo)", g_cfg.motorShadowFix); }
+    else if (r < 0) { s_shadowFixDone = true; Log("motor: sombra_parche: no se pudo escribir el codigo (VirtualProtect)"); }
+}
+
+// cada 20 s (8 veces) anota la matriz de vista del motor que lee la cuenta del shadow map: dice si la traslacion esta en la
+// columna 3 (modo 1 correcto) o en la fila 3 (modo 2)
+static void ShadowFixCamLog() {
+    if (!s_caveCam || s_camLogs >= 8) return;
+    double t = Now(); if (t < s_camLogT) return; s_camLogT = t + 20.0;
+    uintptr_t cam = *s_caveCam; if (!cam) return;
+    float m[16]; SIZE_T got = 0;
+    if (!ReadProcessMemory(GetCurrentProcess(), (const void*)(cam + 0x1f0), m, sizeof m, &got) || got != sizeof m) return;
+    s_camLogs++;
+    Log("sol: matriz de vista del motor (camara %p, filas) %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f",
+        (void*)cam, m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]);
+}
+
 static int s_lodBase = -1, s_lodLast = -1; static bool s_lodChecked = false, s_lodOk = false; static double s_lodT = 0;
 void ExePatchPresent() {
     if (!g_cfg.motorPatch) return;
     double t = Now(); if (t - s_lodT < 1.0) return; s_lodT = t;
     SunFixPresent();   // (27/10) el sol que gira con la camara
+    ShadowFixPresent(); ShadowFixCamLog();   // (27/10) la sombra que gira con la camara
     volatile int* g = (volatile int*)0x14374cd94ull;
     if (!s_lodChecked) {
         s_lodChecked = true;
