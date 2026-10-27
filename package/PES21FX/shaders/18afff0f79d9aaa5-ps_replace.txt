@@ -112,11 +112,11 @@ void main(
   if (r0.w != 0) discard;
   float pesLight = r0.x;                     // claridad (0.5 neutro) del atlas propio
   float pesGloss = r0.z;
-  // (27/10 l) tanda 9a, y297: a media distancia (30-100 px/m, camara de TV) una hoja mide 1-2 px y lo que pasa el recorte del alfa es su
+  // (27/10 l) tanda 9a, y299: a media distancia (30-100 px/m, camara de TV) una hoja mide 1-2 px y lo que pasa el recorte del alfa es su
   // raiz, que lleva la oclusion del atlas (G ~ 0.2): cada hoja era un punto al 50-75 % de brillo sobre el suelo ("manchas negras", lineas
   // sucias). Mientras la hoja toma el color del suelo (pesCf < 1) la oclusion se lee de un mip grueso del atlas (el promedio del manojo)
-  float4 P297 = IniParams.Load(int2(297,0));
-  if (pesV3 && v4.w > 0.0 && pesCf < 0.999 && P297.y > 0.5) r0.y = lerp(PESGrassAtlas.SampleLevel(g_samplerLinear_Wrap_s, uvA, 5.0).y, r0.y, pesCf);
+  float4 P299 = IniParams.Load(int2(299,0));
+  if (pesV3 && v4.w > 0.0 && pesCf < 0.999 && P299.y > 0.5) r0.y = lerp(PESGrassAtlas.SampleLevel(g_samplerLinear_Wrap_s, uvA, 5.0).y, r0.y, pesCf);
   r0.w = r0.y + r0.y;
   r0.y = -r0.y * 2 + 1;
   r0.y = v3.w * r0.y + r0.w;
@@ -287,9 +287,9 @@ void main(
   }
   // (26/10 g) lejos: el color del suelo ya dibujado (copia de RT0 que hace la DLL en t10), lerp por pesCf sin mezcla por alfa: con varias
   // capas de hojas gana la de adelante (antes cada capa volvia a mezclar sobre la anterior y el resultado dependia del orden). z59 sin mezclar
-  // (27/10 l) tanda 9a, z297: las hojas pintadas por la linea toman el color del suelo (la linea de la base, nitida) hasta que la hoja mide en
+  // (27/10 l) tanda 9a, z299: las hojas pintadas por la linea toman el color del suelo (la linea de la base, nitida) hasta que la hoja mide en
   // pantalla (rampa pesCfN, desde z291): a media distancia la linea se veia punteada por las hojas blancas sombreadas
-  float pesCfB = (pesPaintF > 0.001 && P297.z > 0.5) ? lerp(pesCf, pesCf * pesCfN, pesPaintF) : pesCf;
+  float pesCfB = (pesPaintF > 0.001 && P299.z > 0.5) ? lerp(pesCf, pesCf * pesCfN, pesPaintF) : pesCf;
   if (pesFB && v5.w < 0.5) o0.xyz = lerp(PESBaseRT0.Load(int3(v0.xy, 0)).xyz, o0.xyz, pesCfB);
   if (pesV3) {   // depuracion w107: 1 = uv del atlas (rojo u, verde v), 2 = desgaste (rojo seco, verde pelado), 3 = normal
     int dbg = (int)(Q7.w + 0.5);
