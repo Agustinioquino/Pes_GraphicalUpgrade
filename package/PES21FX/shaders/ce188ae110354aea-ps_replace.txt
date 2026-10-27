@@ -510,6 +510,16 @@ void main(
   r1.w = g_tex_diffuse.CalculateLevelOfDetail(g_samplerAnisotropic_Clamp_s, uvD);
   r1.w = clamp(r1.w + faceBD, 0, 5);
   r2.xyz = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, uvD, r1.w).xyz;
+  // (27/10) marcas de la piel (y124): lunares, pecas, manchas y venitas que ya estan pintadas en la textura de la cara se
+  // pierden (la textura es chica y se ve lavada). Se realza el detalle fino del albedo: la luminancia de este punto contra el
+  // promedio de su zona (2.5 niveles de mip mas arriba), solo en la piel (no en barba ni pelo pintados) y solo de cerca.
+  // No inventa marcas: solo marca mas las que la cara ya tiene. 0 = como el juego
+  { float mk = saturate(IniParams.Load(int2(124,0)).y) * (1.0 - fhMask) * saturate(3.5 - r1.w);
+    if (enhance && mk > 0.001) {
+      float3 aB = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, uvD, r1.w + 2.5).xyz;
+      float rat = (dot(r2.xyz, float3(0.2126, 0.7152, 0.0722)) + 0.01) / (dot(aB, float3(0.2126, 0.7152, 0.0722)) + 0.01);
+      r2.xyz *= pow(clamp(rat, 0.25, 4.0), 0.9 * mk);
+    } }
   r3.xyz = g_tex_Dirty.Sample(g_sampler_Dirty_s, v2.xy).xyz;
   r1.w = saturate(dot(g_psMaterial.m_materials[1].yzw, r3.xyz));
   r3.xy = r0.ww * float2(255,255) + float2(-205,-170);

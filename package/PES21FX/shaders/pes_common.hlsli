@@ -284,6 +284,9 @@ float3 PESSkinLocus(float3 alb, float k) {
   float3 tgt = m < 0.5 ? lerp(cL, cM, m * 2.0) : lerp(cM, cD, m * 2.0 - 1.0);
   float3 c = alb / sum;
   float w = saturate(k) * saturate(1.0 - length(c - tgt) / 0.15);
+  // (27/10) los labios no son piel para esto: su rosado (azul tan alto como el verde, en la piel el azul queda ~20 % abajo)
+  // caia dentro de la franja y se corria hacia el tono de la cara: labios marrones
+  w *= 1.0 - smoothstep(0.88, 0.98, c.b / max(c.g, 1e-4));
   float3 o = lerp(c, tgt, w) * sum;
   return o * (L / max(dot(o, float3(0.2126, 0.7152, 0.0722)), 1e-4));
 }
