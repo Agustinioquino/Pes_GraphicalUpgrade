@@ -439,7 +439,7 @@ static void SunPassPresent() {
                   Log("luz del sol: direccion de la luz (vista %.3f %.3f %.3f | mundo %.3f %.3f %.3f) y del shadow map (mundo %.3f %.3f %.3f): %.1f grados entre las dos",
                       l[0], l[1], l[2], lw[0], lw[1], lw[2], dw[0], dw[1], dw[2], ang);
               } } }
-        if (sums <= 120 && g_cfg.motorPatch && (g_cfg.motorShadowFix == 1 || g_cfg.motorShadowFix == 2)) { int sk = 0, fx = SceneShadowFixStats(&sk); Log("sombra_parche (10 s): m_shadowProjection corregida en %d subidas del cbuffer de escena, %d sin tocar (sin sombra o sin rotacion)", fx, sk); }
+        if (sums <= 120 && g_cfg.motorPatch && (g_cfg.motorShadowFix == 1 || g_cfg.motorShadowFix == 2)) { int sk = 0, fx = SceneShadowFixStats(&sk); Log("sombra_parche (10 s): m_shadowProjection corregida en %d subidas del cbuffer de escena, %d sin tocar (sin sombra o sin rotacion; de esas, no era la escena %d, sombra no ortogonal %d; buffers con ventana descartados %d)", fx, sk, s_scRejEye.exchange(0), s_scRejOrtho.exchange(0), s_scRejWin.exchange(0)); }
         nextSum = t + 10.0; frames = framesOrig = framesNone = switches = 0;
     }
 }
@@ -669,9 +669,14 @@ static void LightTraceSummary() {   // en Present
 static std::atomic<ID3D11Resource*> s_scBuf[8]; static std::atomic<UINT> s_scOff[8];
 static std::atomic<int> s_scFixed{0}, s_scSkipped{0};
 static thread_local void* t_scMapped = nullptr; static thread_local ID3D11Resource* t_scRes = nullptr; static thread_local UINT t_scOffMap = 0;
-static void SceneCBLearn(ID3D11Resource* b, UINT off) {
-    for (int i = 0; i < 8; i++) { ID3D11Resource* e = s_scBuf[i].load(std::memory_order_relaxed); if (e == b) { s_scOff[i].store(off); return; } }
-    for (int i = 0; i < 8; i++) { ID3D11Resource* exp = nullptr; if (s_scBuf[i].compare_exchange_strong(exp, b)) { s_scOff[i].store(off); return; } }
+// (27/10 b) primera prueba en partido: sombras corridas "a cualquier lado". Solo se aprenden buffers enteros (sin ventana: un
+// anillo compartido tendria otros cbuffers en ese desplazamiento) y del tamano de cPSScene; y antes de tocar se verifica que
+// sea de verdad la escena (m_eyepos = posicion de la camara sacada de m_view) y que S sea una proyeccion ortogonal de luz.
+static std::atomic<int> s_scRejWin{0}, s_scRejEye{0}, s_scRejOrtho{0};
+static void SceneCBLearn(ID3D11Resource* b, UINT off, UINT len) {
+    if (off != 0 || len < 352 || len > 4096) { s_scRejWin++; return; }
+    for (int i = 0; i < 8; i++) { ID3D11Resource* e = s_scBuf[i].load(std::memory_order_relaxed); if (e == b) return; }
+    for (int i = 0; i < 8; i++) { ID3D11Resource* exp = nullptr; if (s_scBuf[i].compare_exchange_strong(exp, b)) { s_scOff[i].store(0); Log("sombra_parche: cbuffer de escena %d = %p (%u bytes)", i, (void*)b, len); return; } }
 }
 static int SceneCBIndex(ID3D11Resource* b) {
     if (!b) return -1;
@@ -689,6 +694,17 @@ static bool SceneShadowFix(float* p) {   // p = c0 del cbuffer de escena; sin ob
             for (int j = 0; j < 3; j++) { same += fabsf(S[i][j] - V[i][j]); mag += fabsf(S[i][j]); }
         }
         if (mag < 1e-6f || same < 1e-3f) return false;   // sin sombra en esta pasada (cero o la vista copiada)
+        // es la escena? la posicion de la camara sacada de m_view (-R^T t) tiene que ser m_eyepos (c20)
+        float t[3] = { p[35], p[39], p[43] }, eye[3] = { p[80], p[81], p[82] }, de = 0;
+        for (int j = 0; j < 3; j++) { float c = -(V[0][j] * t[0] + V[1][j] * t[1] + V[2][j] * t[2]); de += (c - eye[j]) * (c - eye[j]); }
+        if (!(de < 0.25f)) { s_scRejEye++; return false; }
+        // S: proyeccion ortogonal de la luz (filas x / y del mismo largo y perpendiculares)
+        float n0 = sqrtf(S[0][0] * S[0][0] + S[0][1] * S[0][1] + S[0][2] * S[0][2]), n1 = sqrtf(S[1][0] * S[1][0] + S[1][1] * S[1][1] + S[1][2] * S[1][2]);
+        float d01 = S[0][0] * S[1][0] + S[0][1] * S[1][1] + S[0][2] * S[1][2];
+        // y nada de rotaciones / vistas sueltas (largo ~1) ni matrices con perspectiva (fila 3 distinta de 0 0 0 1): en algunas
+        // pasadas c12 no es la sombra del sol y corregirla corria cosas del estadio
+        bool affine = fabsf(p[60]) < 1e-4f && fabsf(p[61]) < 1e-4f && fabsf(p[62]) < 1e-4f && fabsf(p[63] - 1.0f) < 1e-3f;
+        if (!(affine && n0 > 1e-4f && n0 < 0.6f && n1 > 1e-4f && fabsf(n0 - n1) < 0.15f * n0 && fabsf(d01) < 0.1f * n0 * n1)) { s_scRejOrtho++; return false; }
         float C[3][3];   // C = R^T R^T: C[i][j] = sum_k R[k][i] R[j][k]
         for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) C[i][j] = V[0][i] * V[j][0] + V[1][i] * V[j][1] + V[2][i] * V[j][2];
         for (int r = 0; r < 3; r++) {
@@ -985,7 +1001,7 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
             bool window = num && (off > 0 || num * 16 < sd.ByteWidth);
             if (window) len = off < sd.ByteWidth ? (std::min)(num * 16, sd.ByteWidth - off) & ~15u : 0;
             if (!len) { src->Release(); break; }
-            if (a.name == "SceneCB") SceneCBLearn(src, window ? off : 0);   // (27/10) sombra_parche 1: el buffer que se corrige al subirlo
+            if (a.name == "SceneCB") SceneCBLearn(src, window ? off : 0, sd.ByteWidth);   // (27/10) sombra_parche 1: el buffer que se corrige al subirlo
             if (a.name == "LightCB" && !s_ltDone.load(std::memory_order_relaxed)) { s_ltBuf.store(src, std::memory_order_relaxed); s_ltOff.store(window ? off : 0); s_ltLen.store(len); }   // (27/10) rastreo de quien la llena
             std::lock_guard<std::mutex> lk(s_namedMutex);
             auto& r = s_named[a.name];
