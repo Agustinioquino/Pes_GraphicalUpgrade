@@ -438,6 +438,7 @@ static void SunPassPresent() {
                   Log("luz del sol: direccion de la luz (vista %.3f %.3f %.3f | mundo %.3f %.3f %.3f) y del shadow map (mundo %.3f %.3f %.3f): %.1f grados entre las dos",
                       l[0], l[1], l[2], lw[0], lw[1], lw[2], dw[0], dw[1], dw[2], ang);
               } } }
+        if (sums <= 120 && SceneFixOn()) { int sk = 0, fx = SceneShadowFixStats(&sk); Log("sombra_parche (10 s): m_shadowProjection corregida en %d subidas del cbuffer de escena, %d sin tocar (sin sombra o sin rotacion)", fx, sk); }
         nextSum = t + 10.0; frames = framesOrig = framesNone = switches = 0;
     }
 }
@@ -655,13 +656,62 @@ static void LightTraceSummary() {   // en Present
     Log("luz: origen de la copia encontrado %d veces, no encontrado %d; pedidos de vigilancia %d", s_ltSrcOk.exchange(0), s_ltSrcMiss.exchange(0), s_ltArmReq.exchange(0));
     s_ltRecs.clear(); s_ltMaps = s_ltSkipped = 0;
 }
+// ---------------------------------------------------------------- la sombra que gira con la camara (27/10, sombra_parche 1)
+// Registro de e85da3e (sombra_parche 3): m_shadowProjection (b2 c12..c15) toma la posicion en VISTA y el motor la arma con la
+// vista -> mundo equivocada: usa A = [R | c] (las filas de la rotacion de la camara como columnas, c = posicion de la camara)
+// en vez de la inversa real B = [R^T | c]. Con A el shadow map da exactamente el sol del cielo (0.0-0.6 grados en las 4 tomas);
+// la cuenta del shader le pasa la posicion en vista y la luz queda en R^T R^T sol (hasta 89 grados; 0 solo si R es
+// simetrica: camara de TV). Arreglo: S' = S A^-1 B = S C con C = R^T R^T (solo rotacion, la traslacion se cancela), con R la
+// 3x3 de m_view (c8..c10) del mismo buffer. Se corrige el cbuffer de escena al subirlo (Unmap / UpdateSubresource); el buffer
+// se aprende de la regla copy_cb = 2 SceneCB. Si m_shadowProjection esta en cero o es la misma vista (pasadas sin sombra) no
+// se toca.
+static std::atomic<ID3D11Resource*> s_scBuf[8]; static std::atomic<UINT> s_scOff[8];
+static std::atomic<int> s_scFixed{0}, s_scSkipped{0};
+static thread_local void* t_scMapped = nullptr; static thread_local ID3D11Resource* t_scRes = nullptr; static thread_local UINT t_scOffMap = 0;
+static void SceneCBLearn(ID3D11Resource* b, UINT off) {
+    for (int i = 0; i < 8; i++) { ID3D11Resource* e = s_scBuf[i].load(std::memory_order_relaxed); if (e == b) { s_scOff[i].store(off); return; } }
+    for (int i = 0; i < 8; i++) { ID3D11Resource* exp = nullptr; if (s_scBuf[i].compare_exchange_strong(exp, b)) { s_scOff[i].store(off); return; } }
+}
+static int SceneCBIndex(ID3D11Resource* b) {
+    if (!b) return -1;
+    for (int i = 0; i < 8; i++) if (s_scBuf[i].load(std::memory_order_relaxed) == b) return i;
+    return -1;
+}
+static bool SceneShadowFix(float* p) {   // p = c0 del cbuffer de escena; sin objetos con destructor: __try
+    __try {
+        float V[3][3], S[3][3];
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) { V[i][j] = p[32 + i * 4 + j]; S[i][j] = p[48 + i * 4 + j]; }
+        float same = 0, mag = 0;
+        for (int i = 0; i < 3; i++) {
+            float n = V[i][0] * V[i][0] + V[i][1] * V[i][1] + V[i][2] * V[i][2];
+            if (n < 0.96f || n > 1.04f) return false;   // m_view no es una rotacion
+            for (int j = 0; j < 3; j++) { same += fabsf(S[i][j] - V[i][j]); mag += fabsf(S[i][j]); }
+        }
+        if (mag < 1e-6f || same < 1e-3f) return false;   // sin sombra en esta pasada (cero o la vista copiada)
+        float C[3][3];   // C = R^T R^T: C[i][j] = sum_k R[k][i] R[j][k]
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) C[i][j] = V[0][i] * V[j][0] + V[1][i] * V[j][1] + V[2][i] * V[j][2];
+        for (int r = 0; r < 3; r++) {
+            float o[3];
+            for (int j = 0; j < 3; j++) o[j] = S[r][0] * C[0][j] + S[r][1] * C[1][j] + S[r][2] * C[2][j];
+            for (int j = 0; j < 3; j++) p[48 + r * 4 + j] = o[j];
+        }
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+static bool SceneFixOn() { return g_cfg.motorPatch && (g_cfg.motorShadowFix == 1 || g_cfg.motorShadowFix == 2); }
+int SceneShadowFixStats(int* skipped) { if (skipped) *skipped = s_scSkipped.exchange(0); return s_scFixed.exchange(0); }
+
 template<int V> static HRESULT STDMETHODCALLTYPE hk_Map(ID3D11DeviceContext* c, ID3D11Resource* r, UINT sub, D3D11_MAP t, UINT f, D3D11_MAPPED_SUBRESOURCE* m) {
     HRESULT hr = o_Map[V](c, r, sub, t, f, m);
+    if (SUCCEEDED(hr) && m && m->pData && t != D3D11_MAP_READ && SceneFixOn()) { int i = SceneCBIndex(r); if (i >= 0) { t_scMapped = m->pData; t_scRes = r; t_scOffMap = s_scOff[i].load(); } }
     if (r && r == s_ltBuf.load(std::memory_order_relaxed) && g_cfg.lightTrace && SUCCEEDED(hr) && m) {
         t_ltRec = LightTraceNote(0); t_ltMapped = m->pData; t_ltSrc = t_ltRec >= 0 ? LightTraceSrc() : 0; }   // con el mismo tope por cuadro que las pilas
     return hr;
 }
 template<int V> static void STDMETHODCALLTYPE hk_Unmap(ID3D11DeviceContext* c, ID3D11Resource* r, UINT sub) {
+    if (t_scMapped && r == t_scRes) {
+        if (SceneShadowFix((float*)((char*)t_scMapped + t_scOffMap))) s_scFixed++; else s_scSkipped++;
+        t_scMapped = nullptr; t_scRes = nullptr; }
     if (t_ltMapped && r == s_ltBuf.load(std::memory_order_relaxed)) {
         LightTraceValue(t_ltRec, t_ltMapped);
         // (27/10) si lo copiado es la luz en espacio de vista (no el sol del cielo en mundo, que tambien pasa por este buffer),
@@ -675,6 +725,18 @@ template<int V> static void STDMETHODCALLTYPE hk_Unmap(ID3D11DeviceContext* c, I
     o_Unmap[V](c, r, sub);
 }
 template<int V> static void STDMETHODCALLTYPE hk_UpdSub(ID3D11DeviceContext* c, ID3D11Resource* r, UINT sub, const D3D11_BOX* box, const void* d, UINT rp, UINT dp) {
+    if (d && SceneFixOn()) {
+        int i = SceneCBIndex(r);
+        if (i >= 0) {
+            D3D11_BUFFER_DESC bd; ((ID3D11Buffer*)r)->GetDesc(&bd);
+            UINT lo = box ? box->left : 0, hi = box ? box->right : bd.ByteWidth, off = s_scOff[i].load();
+            if (off >= lo && off + 256 <= hi && hi - lo <= 65536) {
+                static thread_local std::vector<char> tmp; tmp.assign((const char*)d, (const char*)d + (hi - lo));
+                if (SceneShadowFix((float*)(tmp.data() + (off - lo)))) { s_scFixed++; o_UpdSub[V](c, r, sub, box, tmp.data(), rp, dp); return; }
+                s_scSkipped++;
+            }
+        }
+    }
     if (r && r == s_ltBuf.load(std::memory_order_relaxed) && g_cfg.lightTrace) { int i = LightTraceNote(1); if (!box) LightTraceValue(i, d); }
     o_UpdSub[V](c, r, sub, box, d, rp, dp);
 }
@@ -922,6 +984,7 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
             bool window = num && (off > 0 || num * 16 < sd.ByteWidth);
             if (window) len = off < sd.ByteWidth ? (std::min)(num * 16, sd.ByteWidth - off) & ~15u : 0;
             if (!len) { src->Release(); break; }
+            if (a.name == "SceneCB") SceneCBLearn(src, window ? off : 0);   // (27/10) sombra_parche 1: el buffer que se corrige al subirlo
             if (a.name == "LightCB" && !s_ltDone.load(std::memory_order_relaxed)) { s_ltBuf.store(src, std::memory_order_relaxed); s_ltOff.store(window ? off : 0); s_ltLen.store(len); }   // (27/10) rastreo de quien la llena
             std::lock_guard<std::mutex> lk(s_namedMutex);
             auto& r = s_named[a.name];
