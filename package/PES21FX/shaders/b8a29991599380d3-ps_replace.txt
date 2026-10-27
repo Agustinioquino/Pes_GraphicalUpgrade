@@ -561,7 +561,7 @@ void main(
   r3.xyz = r2.xxx * r7.xyz;
   // (27/10) el sol sobre el pasto (313, pes_sunturf.hlsli): solo cancha y hojas (tipo 3)
   float4 pesPG = IniParams.Load(int2(313,0)); bool pesTurf = matType == 3 && pesPG.w > 0.5;
-  if (pesTurf) r3.xyz = PESTurfDiffuse(r7.xyz, rawNdotL, r2.x, pesPG);
+  if (pesTurf) r3.xyz = PESTurfDiffuse(r7.xyz, rawNdotL, r2.x, pesPG, trans);
   // PES21 (18/10): curvatura en pantalla (cuanto gira la normal por metro); fuera de los if para poder usar derivadas
   float pesCurv = 0.0;
   { float3 nC = normalize(r3.xyw);
