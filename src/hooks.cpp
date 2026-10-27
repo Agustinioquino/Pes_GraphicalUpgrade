@@ -1123,6 +1123,9 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
                 if (kv.second == "none" || v) { Remember(c, d, true, true, kv.first); c->PSSetShaderResources(kv.first, 1, &v); }
             }
         } }
+    // (27/10) cuello de las caras reales (brazos.cpp + pes_collar.hlsli): torso_N de TorsoBody en t29 de los PS de la cara
+    if (ps && (ps->hash == 0x5ce3ed8702271bc1ULL || ps->hash == 0xce188ae110354aeaULL))
+        if (ID3D11ShaderResourceView* tt = ArmsTorsoTextureForFace()) { Remember(c, d, true, true, 29); c->PSSetShaderResources(29, 1, &tt); }
     if (ps && ps->hash == 0x5ce3ed8702271bc1ULL) {
         ID3D11ShaderResourceView* chk[4] = {}; c->PSGetShaderResources(23, 4, chk);
         if (chk[0]) g_stFaceT23++; if (chk[3]) g_stFaceT26++;

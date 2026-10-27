@@ -39,6 +39,7 @@ constexpr int kParamCount = 336;           // float4 x 336 -> t120 en los shader
 // 293 = piel real (x prendido, y brillo, z translucidez; zonas del torso en t21 / t24; w = union suave del brazo con el torso).
 // 320 = torso bajo la camiseta ajustada (27/10, pes_skintone.hlsli PesTorsoInset: x mm, w on).
 // 321 = brazos, manos y muslos de TorsoBody para las caras reales (27/10, brazos.cpp: x prendido, y muslos, z tono forzado, w log).
+// 322 = cuello de las caras reales fundido con el torso (27/10, pes_collar.hlsli en 5ce3 / ce188: x prendido, y alto mm, z cuanto, w diagnostico).
 // 297 / 298 = luz de prueba del editor (27/10 b, pes_ssss_inc.hlsli: sol de dia / tarde / noche donde no corre el sol del partido).
 // 299 = pasto tanda 9a (hilo del pasto, rama kd63zh).
 // 309 (ini) + 310, 316..319 (DLL) = sombra propia de la cabeza (27/10 c, headshadow.cpp + pes_headshadow.hlsli en los 7 shaders del sol).
@@ -433,6 +434,7 @@ ID3D11ShaderResourceView* VeinTexture();   // (26/10, v12.7) manos.cpp: venas de
 // textura de TorsoBody del tono del jugador para t0 del PS en ese dibujo (nullptr = dejar la del juego); Present lee las huellas
 ID3D11ShaderResourceView* ArmsTextureFor(ID3D11DeviceContext* c, uint64_t vsHash, UINT indexCount);
 void ArmsPresent();
+ID3D11ShaderResourceView* ArmsTorsoTextureForFace();   // (27/10) torso_N para t29 de los PS de la cara (cuello, pes_collar.hlsli, fila 322)
 void ArmsStats(unsigned* swaps, unsigned* unknown);
 ID3D11ShaderResourceView* VariantDataFor(uint64_t vsHash, UINT indexCount, bool* torso);   // (26/10) manos.cpp: variantes del torso / brazos (t127 del VS)
 bool VariantTextures(ID3D11ShaderResourceView* out[3]);   // (26/10) manos.cpp: mapas del torso (t16 robusto, t17 atletico, t18 estrias del PS)
