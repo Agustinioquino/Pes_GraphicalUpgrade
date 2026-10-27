@@ -79,6 +79,10 @@ void main(
   float kC = pesV3 ? clamp(P295.y, 0.0, 2.0) : 0.0;
   float kT = pesV3 ? clamp(P295.z, 0.0, 2.0) : 0.0;
   float sC = 0.9 + 0.3 * kC;   // pendiente de la claridad del atlas (R): 0.9 = como antes
+  // (27/10 j) puntas al sol y variacion por hoja solo donde la hoja ya mide en pantalla: rampa por encima del limite del color propio (z291)
+  // hasta 2.2x. Antes entraban de golpe en z291 y en el limite de nivel (100-110 px/m) se veia una fila de puntitos encendidos
+  float pesCfN = 1.0;
+  if (pesV3 && v4.w > 0.0) { float c1 = max(P291.x > 0.5 ? P291.z : 100.0, 20.0); pesCfN = smoothstep(c1, c1 * 2.2, v4.w); }
   float relH = saturate((0.995 - v1.y) / 0.985);   // 0 raiz -> 1 punta (v1.y = 1 en la raiz)
   float2 uvA = v1.xy;
   if (pesV3) {
@@ -91,8 +95,11 @@ void main(
   // derivadas fuera de la rama (muestreo con gradiente explicito adentro)
   float2 dUx = ddx(uvA), dUy = ddy(uvA);
   if (pesV3) {
-    r0.xyzw = PESGrassAtlas.SampleGrad(g_samplerLinear_Wrap_s, uvA, dUx, dUy).xyzw;
-    pesN = PESGrassAtlasN.SampleGrad(g_samplerLinear_Wrap_s, uvA, dUx, dUy).xyzw;
+    // (27/10 j) pegado a la camara (>= 600 px/m) el atlas se muestrea mas nitido (gradientes a la mitad = un mip mas fino): las hojas de
+    // muy cerca se veian blandas, "con poco detalle"
+    float shp = lerp(1.0, 0.5, smoothstep(600.0, 1500.0, abs(v4.w)));
+    r0.xyzw = PESGrassAtlas.SampleGrad(g_samplerLinear_Wrap_s, uvA, dUx * shp, dUy * shp).xyzw;
+    pesN = PESGrassAtlasN.SampleGrad(g_samplerLinear_Wrap_s, uvA, dUx * shp, dUy * shp).xyzw;
     // de lejos el filtrado adelgaza el alfa: se compensa un poco con el nivel de mip
     float2 dd = max(abs(dUx), abs(dUy)) * float2(2048.0, 512.0);
     float lod = log2(max(max(dd.x, dd.y), 1.0));
@@ -151,9 +158,10 @@ void main(
     r1.xyz *= lerp(1.0, aoC, pesCf);   // (26/10 f) lejos sin la sombra raiz -> punta (de lejos solo pasan el alfa los texeles de la raiz)
   }
   o0.xyz = v1.zzz * r1.xyz;
+  float clar = 1.0;   // (27/10 j) claridad del atlas, la usa tambien la hoja pintada despues del grade
   if (pesV3) {
     // claridad por hoja (nervio, bordes, vetas) y puntas mas palidas; pasto seco donde hay desgaste (v8.x)
-    float clar = lerp(1.0225, (1.0 - 0.5 * sC) + sC * pesLight, pesCf);   // (26/10 f) lejos la claridad media del atlas (R 0.525); (27/10 h) pendiente con y295
+    clar = lerp(1.0225, (1.0 - 0.5 * sC) + sC * pesLight, pesCf);   // (26/10 f) lejos la claridad media del atlas (R 0.525); (27/10 h) pendiente con y295
     float3 c = o0.xyz * clar;
     float tipK = smoothstep(0.55, 1.0, pesN.z) * (0.08 + 0.6 * v8.x) * pesCf;   // (26/10 d) 0.18 -> 0.08: las puntas tenian un 18% de paja aun sin desgaste (r/g 0.45 -> 0.57, lima a media distancia)
     c = PESDryTint(c, tipK + v8.x * saturate(Q7.y) * 0.85);
@@ -175,15 +183,16 @@ void main(
       // (27/10 h) z295: la punta es mas fina y deja pasar / dispersa mas luz: mas clara y amarillo verdosa (la foto con el sol bajo). Va en el
       // albedo: el sol la enciende donde da y en la sombra queda apagada (el contraste sol / sombra lo pone la pasada del sol). Despues de x29
       // para que la correccion del amarillo no la deshaga. Las hojas pintadas no
-      float tz = smoothstep(0.45, 1.0, relH) * kT * pesCf * (1.0 - pesPaintF);
+      float tz = smoothstep(0.45, 1.0, relH) * kT * pesCfN * (1.0 - pesPaintF);
       c *= lerp(float3(1.0, 1.0, 1.0), float3(1.26, 1.22, 0.92), tz);
     }
     o0.xyz = saturate(c);
-    if (pesPaintF > 0.001) {   // (27/10 h) hoja pintada: conserva el sombreado (raiz, claridad, sombra plana) pero no el seco, el amarillo ni el tinte
-      o0.xyz = lerp(o0.xyz, saturate(v1.zzz * r1.xyz * clar), pesPaintF);
-    }
   }
   { float3 cg = o0.xyz; PESGrassColorGrade(cg); o0.xyz = saturate(cg); }   // (25/10 b) color del pasto (112), igual que la base
+  if (pesV3 && pesPaintF > 0.001) {   // (27/10 h) hoja pintada: conserva el sombreado (raiz, claridad, sombra plana) pero no el seco, el amarillo,
+    // el tinte ni el color del pasto (112: "Verde" la ponia lima). (27/10 j) despues del grade
+    o0.xyz = lerp(o0.xyz, saturate(v1.zzz * r1.xyz * clar), pesPaintF);
+  }
   if (v5.w > 0.5) o0.xyz = float3(1.0, 0.0, 1.0);   // PES21 depuracion: parcelas extendidas en magenta (z59)
   float pesGlossF = lerp(0.6, pesGloss, pesCf);   // (26/10 f) lejos el brillo medio
   if (pesV3) {
@@ -221,7 +230,7 @@ void main(
   float pesTr = v1.w;
   if (pesV3) pesTr = lerp(v1.w, saturate(v1.w * (1.35 - 0.8 * pesN.w)), pesCf);   // puntas finas mas translucidas (A = grosor); lejos sin variar
   // (27/10 h) z295: la punta deja pasar mas luz a contraluz (y57 lee esto del G-buffer); la pintura tapa
-  if (pesV3) pesTr = saturate(pesTr * (1.0 + 0.35 * smoothstep(0.45, 1.0, relH) * kT * pesCf) * (1.0 - 0.85 * pesPaintF));   // (27/10 i) pintura: casi opaca (salia lima a contraluz)
+  if (pesV3) pesTr = saturate(pesTr * (1.0 + 0.35 * smoothstep(0.45, 1.0, relH) * kT * pesCfN) * (1.0 - 0.85 * pesPaintF));   // (27/10 i) pintura: casi opaca (salia lima a contraluz)
   r0.w = pesTr * 63 + 0.5;
   r1.x = abs(r0.x) + abs(r0.y);
   r1.x = r1.x + abs(r0.z);
@@ -255,16 +264,20 @@ void main(
     if (G.y > 0) {
       float n = lerp(0.5, bh21(floor(v1.xy * 96.0)), pesCf);   // (26/10 f) lejos sin el valor al azar por tarjeta
       float3 c = o0.xyz * (0.90 + 0.18 * n * G.z);
-      // (27/10 h) y295: variacion POR HOJA (v8.z, el VS la manda por tarjeta; n de arriba se repite igual en todas las tarjetas): cada hoja con su
-      // claridad (+-14%) y su tono (unas mas amarillas, otras mas azuladas). Asi de cerca y a media distancia se distingue una hoja de la de al
-      // lado en vez de un verde parejo. Lejos (pesCf = 0) y en las hojas pintadas no
-      float kV = 0.5 * kC * saturate(G.z) * pesCf * (1.0 - pesPaintF);
-      float hv = v8.z;
-      c *= lerp(1.0, 0.86 + 0.28 * hv, kV);
-      float3 tn = lerp(float3(0.94, 1.0, 1.08), float3(1.08, 1.0, 0.90), frac(hv * 5.17 + 0.31));
-      c *= lerp(float3(1.0, 1.0, 1.0), tn, kV);
       c = lerp(c, dot(c, float3(0.2126,0.7152,0.0722)) * float3(1.12, 1.04, 0.74), saturate(n * 3.0 - 2.2) * 0.18 * G.z * (1.0 - pesPaintF));
       o0.xyz = c;
+    }
+    // (27/10 h) y295: variacion POR HOJA (v8.z, el VS la manda por tarjeta; el n de arriba se repite igual en todas las tarjetas): cada hoja con
+    // su claridad (+-14%) y su tono (unas mas amarillas, otras mas azuladas). Asi de cerca y a media distancia se distingue una hoja de la de al
+    // lado en vez de un verde parejo. Lejos (pesCfN) y en las hojas pintadas no. (27/10 j) fuera del "if (G.y > 0)": con y10 = 0 (el ini de
+    // Agustin) no corria y todas las hojas salian iguales; solo con v3
+    if (pesV3 && kC > 0.001) {
+      float kV = 0.5 * kC * pesCfN * (1.0 - pesPaintF);
+      float hv = v8.z;
+      float3 c = o0.xyz * lerp(1.0, 0.86 + 0.28 * hv, kV);
+      float3 tn = lerp(float3(0.94, 1.0, 1.08), float3(1.08, 1.0, 0.90), frac(hv * 5.17 + 0.31));
+      c *= lerp(float3(1.0, 1.0, 1.0), tn, kV);
+      o0.xyz = saturate(c);
     }
   }
   // (26/10 g) lejos: el color del suelo ya dibujado (copia de RT0 que hace la DLL en t10), lerp por pesCf sin mezcla por alfa: con varias

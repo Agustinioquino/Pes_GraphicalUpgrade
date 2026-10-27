@@ -313,6 +313,9 @@ void main(
     float hP = frac(pesHv * 7.31 + 0.17);
     float thr = 0.2 + 0.6 * hP;
     pesPaint = saturate((covR - thr) * 8.0 + 0.5) * (hP > 0.93 ? 0.2 : 1.0);
+    // (27/10 j) solo de cerca / media distancia (>= 60-90 px/m): lejos las hojas pintadas, paradas y sueltas sobre la linea, la dejaban punteada;
+    // ahi vuelven a hundirse (y292) y la linea la pinta el suelo
+    if (pesIsExt) pesPaint *= smoothstep(55.0, 90.0, pesPx);
   }
   r5 = r4.zzwz * float4(0.5, 1.0, 0.01, 0.5);
   r1.w = max(r3.y, r4.y);
