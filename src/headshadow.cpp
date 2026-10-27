@@ -36,6 +36,7 @@ static int s_replayLast = 0; static double s_logT = 0;
 static std::atomic<int> s_dBindAny{0}, s_dBindRT{0}, s_dBindOk{0}, s_dDraws[4], s_dVpOff{0}, s_dOtherDsv{0};
 static std::atomic<int> s_dVpX{-1}, s_dVpY{-1}, s_dVpW{0}, s_dVpH{0}, s_dRtN{-1};
 static int s_cAlive = 0, s_cNoPos = 0, s_cBehind = 0, s_cOff = 0, s_cFar = 0, s_cOk = 0;
+static float s_vLen[3] = {};
 static float s_cNear[4] = {0, 0, 0, 0}, s_cEye[3] = {0, 0, 0}, s_cClip[4] = {}, s_cClip2[4] = {}, s_cPP[4] = {}, s_cSgn[3] = {};
 
 static bool Ensure() {
@@ -56,10 +57,6 @@ static bool Ensure() {
 // traslacion de la vista: con "R w + M[.3]" la vista de un punto quedaba al lado del ojo y todos los jugadores salian "fuera de
 // pantalla" o "detras". Ahora: v = R (w - ojo), con R las filas de m_view (ejes de la camara en el mundo, como en hooks.cpp) y el
 // ojo de m_eyepos. Es la vista "de la proyeccion" (m_projection: w = z, z positiva hacia adelante).
-static void ToView(const float* M, const float* eye, const float w[3], float v[3], bool point) {
-    float d[3] = { w[0] - (point ? eye[0] : 0.0f), w[1] - (point ? eye[1] : 0.0f), w[2] - (point ? eye[2] : 0.0f) };
-    for (int j = 0; j < 3; j++) v[j] = M[4 * j] * d[0] + M[4 * j + 1] * d[1] + M[4 * j + 2] * d[2];
-}
 static float Sgn(float x) { return x < 0.0f ? -1.0f : 1.0f; }
 static void Cross(const float a[3], const float b[3], float o[3]) { o[0] = a[1] * b[2] - a[2] * b[1]; o[1] = a[2] * b[0] - a[0] * b[2]; o[2] = a[0] * b[1] - a[1] * b[0]; }
 static float Dot(const float a[3], const float b[3]) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
@@ -76,7 +73,6 @@ void HeadShadowPresent() {
     if (!NamedCBRead("LightCB", L, &lf) || L.size() < 4 || !NamedCBRead("SceneCB", S, &sf) || S.size() < 88) return;
     if (NamedAge("LightCB") > 3) return;   // sin pasada del sol hace poco (menus, editor, noche)
     float Lv[3] = { L[0], L[1], L[2] }; if (!Norm(Lv)) return;
-    const float* M = &S[32];   // m_view
     const float* PV = &S[0];   // m_projectionView (mundo -> recorte)
     const float* eye = &S[80];  // m_eyepos
     const float* pp = &S[84];   // m_projectionParam
@@ -84,10 +80,25 @@ void HeadShadowPresent() {
     // adelante (comentario 18/10 c de a748) y x / y con otro signo que la de la proyeccion: el signo de cada eje sale de projParam
     // (x_shader = ndc * pp.x * zC; x_proyeccion = ndc * |zC| / P00, P00 > 0). zC = pp.z / (prof - pp.w) con prof a mitad de rango
     const float zs = Sgn(pp[2] / ((fabsf(pp[3] - 0.5f) > 1e-4f) ? (0.5f - pp[3]) : 1e-4f));
-    const float sx = Sgn(pp[0]) * zs, sy = Sgn(pp[1]) * zs;
+    const float sx = Sgn(pp[0]) * zs * Sgn(S[16]), sy = Sgn(pp[1]) * zs * Sgn(S[21]);   // S[16] = P0, S[21] = P5
     Lv[0] *= sx; Lv[1] *= sy; Lv[2] *= zs;   // sol en la vista de la proyeccion
-    // direccion hacia el sol en el mundo: w_i = sum_j M[4j+i] v_j (inversa de la rotacion de la vista; igual que en hooks.cpp)
-    float Lw[3]; for (int i = 0; i < 3; i++) Lw[i] = Lv[0] * M[i] + Lv[1] * M[4 + i] + Lv[2] * M[8 + i];
+    // (27/10 e) la vista sale de m_projectionView y m_projection (V = P^-1 PV), no de m_view: el log de bc42ca3 mostro que R (w - ojo)
+    // tampoco coincidia con lo que proyecta el juego (w del recorte 43 contra z de la vista -28). Con P de la forma
+    // x' = P0 x + P2 z + P3, y' = P5 y + P6 z + P7, w' = z (verificado en el log: w = z exacto) cada fila de la vista es una
+    // combinacion de filas de PV. VV[j][0..3]: fila j de la vista (mundo -> vista de la proyeccion)
+    const float* P = &S[16];   // m_projection
+    float VV[3][4];
+    for (int i = 0; i < 4; i++) {
+        VV[2][i] = PV[12 + i];
+        VV[0][i] = (PV[i] - P[2] * PV[12 + i] - (i == 3 ? P[3] : 0.0f)) / (fabsf(P[0]) > 1e-6f ? P[0] : 1e-6f);
+        VV[1][i] = (PV[4 + i] - P[6] * PV[12 + i] - (i == 3 ? P[7] : 0.0f)) / (fabsf(P[5]) > 1e-6f ? P[5] : 1e-6f);
+    }
+    s_vLen[0] = sqrtf(VV[0][0] * VV[0][0] + VV[0][1] * VV[0][1] + VV[0][2] * VV[0][2]);
+    s_vLen[1] = sqrtf(VV[1][0] * VV[1][0] + VV[1][1] * VV[1][1] + VV[1][2] * VV[1][2]);
+    s_vLen[2] = sqrtf(VV[2][0] * VV[2][0] + VV[2][1] * VV[2][1] + VV[2][2] * VV[2][2]);
+    auto toV = [&](const float w[3], float v[3], bool point) { for (int j = 0; j < 3; j++) v[j] = VV[j][0] * w[0] + VV[j][1] * w[1] + VV[j][2] * w[2] + (point ? VV[j][3] : 0.0f); };
+    // direccion hacia el sol en el mundo: la traspuesta de la rotacion de la vista
+    float Lw[3]; for (int i = 0; i < 3; i++) Lw[i] = Lv[0] * VV[0][i] + Lv[1] * VV[1][i] + Lv[2] * VV[2][i];
     if (!Norm(Lw)) return;
     float up[3] = { 0, 1, 0 }; if (fabsf(Lw[1]) > 0.98f) { up[0] = 1; up[1] = 0; }
     float Rw[3]; Cross(up, Lw, Rw); if (!Norm(Rw)) return;
@@ -97,14 +108,13 @@ void HeadShadowPresent() {
     CharSnapshot(ci, alive);
     struct Cand { float cw[3], cv[3], d; };
     std::vector<Cand> cand;
-    const float* P = &S[16];   // m_projection
     int cAlive = 0, cNoPos = 0, cBehind = 0, cOff = 0, cFar = 0; float bestD = 1e9f;
     for (int sl = 0; sl < kCharSlots; sl++) {
         if (!alive[sl] || !ci[sl].node) continue;
         cAlive++;
         float pos[3]; if (!CharNodeWorldPos(ci[sl].node, pos)) { cNoPos++; continue; }
         Cand c; c.cw[0] = pos[0]; c.cw[1] = pos[1] + 1.45f; c.cw[2] = pos[2];   // centro de la caja: cabeza y hombros de un jugador parado
-        ToView(M, eye, c.cw, c.cv, true);
+        toV(c.cw, c.cv, true);
         // en pantalla: con m_projectionView sobre la posicion en el mundo (no depende de como este armada m_view)
         float clip[4]; for (int j = 0; j < 4; j++) clip[j] = PV[4 * j] * c.cw[0] + PV[4 * j + 1] * c.cw[1] + PV[4 * j + 2] * c.cw[2] + PV[4 * j + 3];
         float clip2[4]; for (int j = 0; j < 4; j++) clip2[j] = P[4 * j] * c.cv[0] + P[4 * j + 1] * c.cv[1] + P[4 * j + 2] * c.cv[2] + P[4 * j + 3];
@@ -134,9 +144,9 @@ void HeadShadowPresent() {
         for (int k = 0; k < 16; k++) { cb[16 + k] = cb[k]; }   // m_projection igual (por si un VS proyecta en dos pasos con vista identidad)
         cb[32] = cb[37] = cb[42] = cb[47] = 1.0f;              // m_view = identidad
         g_dev.imm->UpdateSubresource(s_cb[i], 0, nullptr, cb, 0, 0);
-        float* C = g_cfg.live[kHsRowCenter + i]; C[0] = c.cv[0]; C[1] = c.cv[1]; C[2] = c.cv[2]; C[3] = s_reversed ? 1.0f : 0.0f;
+        float* C = g_cfg.live[kHsRowCenter + i]; C[0] = c.cv[0]; C[1] = c.cv[1]; C[2] = c.cv[2]; C[3] = (s_reversed ? 1.0f : 0.0f) + (S[16] < 0 ? 2.0f : 0.0f) + (S[21] < 0 ? 4.0f : 0.0f);   // bit 0 z invertida, 1 / 2 signo de P0 / P5
     }
-    float Rv[3]; ToView(M, eye, Rw, Rv, false);
+    float Rv[3]; toV(Rw, Rv, false);
     I[0] = (float)n; I[1] = Lv[0]; I[2] = Lv[1]; I[3] = Lv[2];
     float* A = g_cfg.live[kHsRowAxis]; A[0] = Rv[0]; A[1] = Rv[1]; A[2] = Rv[2]; A[3] = half;
     s_count = n;
@@ -148,6 +158,7 @@ void HeadShadowPresent() {
         Log("sombra cabeza (diag): el mas cercano en recorte: con m_projectionView (%.2f %.2f %.2f %.2f), con m_projection x vista (%.2f %.2f %.2f %.2f); projParam (%.4f %.4f %.4f %.4f) -> signos de la vista del sol x %.0f y %.0f z %.0f; sol en vista %.3f %.3f %.3f",
             s_cClip[0], s_cClip[1], s_cClip[2], s_cClip[3], s_cClip2[0], s_cClip2[1], s_cClip2[2], s_cClip2[3], s_cPP[0], s_cPP[1], s_cPP[2], s_cPP[3], s_cSgn[0], s_cSgn[1], s_cSgn[2],
             g_cfg.live[kHsRowInfo][1], g_cfg.live[kHsRowInfo][2], g_cfg.live[kHsRowInfo][3]);
+        Log("sombra cabeza (diag): largo de los ejes de la vista sacada de PV (deberian ser 1): %.3f %.3f %.3f", s_vLen[0], s_vLen[1], s_vLen[2]);
         Log("sombra cabeza (diag): DSV del shadow map puesto %d veces (%d con targets de color, %d aceptadas); dibujos ahi: indexados %d, simples %d, instanciados %d, indexados instanciados %d; descartados por vista corrida %d, por otro DSV %d; vista vista (%d %d %dx%d), targets %d",
             s_dBindAny.exchange(0), s_dBindRT.exchange(0), s_dBindOk.exchange(0), s_dDraws[1].exchange(0), s_dDraws[0].exchange(0), s_dDraws[2].exchange(0), s_dDraws[3].exchange(0),
             s_dVpOff.exchange(0), s_dOtherDsv.exchange(0), s_dVpX.load(), s_dVpY.load(), s_dVpW.load(), s_dVpH.load(), s_dRtN.load()); }
