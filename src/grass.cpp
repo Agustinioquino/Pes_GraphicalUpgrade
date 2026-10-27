@@ -686,7 +686,8 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
     // todas las hojas quedaban a media altura a una distancia fija de la camara
     // (26/10 d) margen del fundido entre niveles 0.12 -> 0.25 en T1 / T2 (la pendiente de tarjetas por cuadro al mover la camara baja a la
     // mitad); el empalme con el pasto del juego en T0 sigue en 0.12 (el VS del juego corta con 0.88 / 1.12 fijos)
-    const bool farBase = g_cfg.live[61][1] > 0.001f && !ultra;   // (27/10 q) Ultra: hojas 3D en toda la cancha const float loFar = farBase ? T[3] : 0.0f; const float fadeM = 0.25f, fadeT0 = 0.12f;
+    const bool farBase = g_cfg.live[61][1] > 0.001f && !ultra;   // (27/10 q) Ultra: hojas 3D en toda la cancha
+    const float loFar = farBase ? T[3] : 0.0f; const float fadeM = 0.25f, fadeT0 = 0.12f;
     // malla propia (manojos curvos: nivel 0 de 2 tramos, niveles 1 / 2 de 1 tramo)
     float curv = g_cfg.live[123][0] > 0.5f ? std::clamp(g_cfg.live[123][2], 0.0f, 1.5f) : 0.6f;
     ID3D11Buffer* mPos[3] = {}; ID3D11Buffer* mUv[3] = {}; ID3D11Buffer* mIb[3] = {}; UINT mCards = 0, mIpc[3] = { 12, 6, 6 }, mVpc[3] = { 6, 4, 4 };
