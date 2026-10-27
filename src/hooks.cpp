@@ -559,12 +559,12 @@ template<int V> static void STDMETHODCALLTYPE hk_Dispatch(ID3D11DeviceContext* c
 template<int V> static void STDMETHODCALLTYPE hk_OMSetRT(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* v, ID3D11DepthStencilView* d) {
     GrassBaseFlush(c, 1, 0, v ? n : 0, v, d);
     o_OMSetRT[V](c, n, v, d);
-    Ctx(c).shadowDSV = (n == 0 && HeadShadowIsGameShadow(d)) ? d : nullptr;
+    Ctx(c).shadowDSV = HeadShadowBind(n, v, d);
 }
 template<int V> static void STDMETHODCALLTYPE hk_OMSetRTU(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* v, ID3D11DepthStencilView* d, UINT us, UINT un, ID3D11UnorderedAccessView* const* u, const UINT* ic) {
     if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) GrassBaseFlush(c, 1, 0, v ? n : 0, v, d);   // solo UAVs: los targets no cambian
     o_OMSetRTU[V](c, n, v, d, us, un, u, ic);
-    if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) Ctx(c).shadowDSV = (n == 0 && HeadShadowIsGameShadow(d)) ? d : nullptr;
+    if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) Ctx(c).shadowDSV = HeadShadowBind(n, v, d);
 }
 template<int V> static void STDMETHODCALLTYPE hk_ClearState(ID3D11DeviceContext* c) {
     GrassBaseFlush(c, 5, 0);
@@ -1159,9 +1159,10 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
 #define GRASS_FLUSH(c) if (g_grassPendN.load(std::memory_order_relaxed) > 0) { CtxState& cf_ = Ctx(c); GrassBaseFlush(c, 0, cf_.ps ? cf_.ps->hash : 0); }
 // (27/10 c) sombra de la cabeza: el mismo dibujo de la pasada de sombras del juego (cascada mas cercana) se repite en el atlas
 // propio, una vez por cabeza, con un b2 (g_vsScene) cuya m_projectionView es la caja ortografica de esa cabeza (headshadow.cpp)
-template<int V> static void HeadShadowReplay(ID3D11DeviceContext* c, ID3D11DepthStencilView* gameDSV, UINT a, UINT b, INT d) {
+// (27/10 d) cualquier tipo de dibujo (el juego puede mandar la sombra con DrawIndexedInstanced); kind para el diagnostico
+template<int V, class F> static void HeadShadowReplay(ID3D11DeviceContext* c, ID3D11DepthStencilView* gameDSV, int kind, F draw) {
     int n = HeadShadowSlots(); ID3D11DepthStencilView* dsv = HeadShadowDSV();
-    if (n <= 0 || !dsv || !HeadShadowIsNearCascade(c, gameDSV)) return;
+    if (n <= 0 || !dsv || !HeadShadowIsNearCascade(c, gameDSV, kind)) return;
     ID3D11RenderTargetView* rt[8] = {}; ID3D11DepthStencilView* oldDsv = nullptr; c->OMGetRenderTargets(8, rt, &oldDsv);
     ID3D11Buffer* oldB2 = nullptr; c->VSGetConstantBuffers(2, 1, &oldB2);
     D3D11_VIEWPORT vps[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]; UINT nvp = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE; c->RSGetViewports(&nvp, vps);
@@ -1173,7 +1174,7 @@ template<int V> static void HeadShadowReplay(ID3D11DeviceContext* c, ID3D11Depth
         D3D11_RECT rc{ (LONG)vp.TopLeftX, (LONG)vp.TopLeftY, (LONG)(vp.TopLeftX + vp.Width), (LONG)(vp.TopLeftY + vp.Height) };
         c->RSSetViewports(1, &vp); c->RSSetScissorRects(1, &rc);
         c->VSSetConstantBuffers(2, 1, &cb);
-        o_DrawIdx[V](c, a, b, d);
+        draw();
     }
     g_headShadowReplays.fetch_add(n, std::memory_order_relaxed);
     o_OMSetRT[V](c, 8, rt, oldDsv);
@@ -1194,14 +1195,17 @@ template<int V> static void STDMETHODCALLTYPE hk_DrawIdx(ID3D11DeviceContext* c,
     GrassStScope gst; GrassGameStates(c, gst);   // (26/10 g) solo el pasto del juego del G-buffer (lo marca GrassOnDraw)
     FX_DRAW(a, 1, 1, (ds.lod.count ? LodDrawSub<V>(c, ds) : o_DrawIdx[V](c, a, b, d)))
     GrassGameStatesRestore(c, gst);
-    { CtxState& ch_ = Ctx(c); if (ch_.shadowDSV && !ds.skip) HeadShadowReplay<V>(c, ch_.shadowDSV, a, b, d); }   // (27/10 c) sombra de la cabeza
+    { CtxState& ch_ = Ctx(c); if (ch_.shadowDSV && !ds.skip) HeadShadowReplay<V>(c, ch_.shadowDSV, 1, [&] { o_DrawIdx[V](c, a, b, d); }); }   // (27/10 c) sombra de la cabeza
     // (25/10) pasto v3: al terminar la base de la cancha (PS 5e92 / c956, existe en todas las camaras) se emite el pasto del mod
     { CtxState& cb_ = Ctx(c); if (cb_.ps && (cb_.ps->hash == 0x5e92f2343848915aULL || cb_.ps->hash == 0xc9564b9b155f0a49ULL)) GrassOnBaseDraw(c); } }
-template<int V> static void STDMETHODCALLTYPE hk_Draw(ID3D11DeviceContext* c, UINT a, UINT b) { GRASS_FLUSH(c) FX_DRAW(a, 0, 1, o_Draw[V](c, a, b)) }
+template<int V> static void STDMETHODCALLTYPE hk_Draw(ID3D11DeviceContext* c, UINT a, UINT b) { GRASS_FLUSH(c) FX_DRAW(a, 0, 1, o_Draw[V](c, a, b))
+    { CtxState& ch_ = Ctx(c); if (ch_.shadowDSV && !ds.skip) HeadShadowReplay<V>(c, ch_.shadowDSV, 0, [&] { o_Draw[V](c, a, b); }); } }
 // (25/10) dibujo indirecto (pasto v3): pasa por BeforeDraw como cualquier dibujo (reglas, t120); vertices e instancias desconocidos
 template<int V> static void STDMETHODCALLTYPE hk_DrawIdxInstInd(ID3D11DeviceContext* c, ID3D11Buffer* a, UINT b) { GRASS_FLUSH(c) FX_DRAW(0, 3, 0, o_DrawIdxInstInd[V](c, a, b)) }
-template<int V> static void STDMETHODCALLTYPE hk_DrawIdxInst(ID3D11DeviceContext* c, UINT a, UINT b, UINT d, INT e, UINT f) { GRASS_FLUSH(c) FX_DRAW(a, 3, b, o_DrawIdxInst[V](c, a, b, d, e, f)) }
-template<int V> static void STDMETHODCALLTYPE hk_DrawInst(ID3D11DeviceContext* c, UINT a, UINT b, UINT d, UINT e) { GRASS_FLUSH(c) FX_DRAW(a, 2, b, o_DrawInst[V](c, a, b, d, e)) }
+template<int V> static void STDMETHODCALLTYPE hk_DrawIdxInst(ID3D11DeviceContext* c, UINT a, UINT b, UINT d, INT e, UINT f) { GRASS_FLUSH(c) FX_DRAW(a, 3, b, o_DrawIdxInst[V](c, a, b, d, e, f))
+    { CtxState& ch_ = Ctx(c); if (ch_.shadowDSV && !ds.skip) HeadShadowReplay<V>(c, ch_.shadowDSV, 3, [&] { o_DrawIdxInst[V](c, a, b, d, e, f); }); } }
+template<int V> static void STDMETHODCALLTYPE hk_DrawInst(ID3D11DeviceContext* c, UINT a, UINT b, UINT d, UINT e) { GRASS_FLUSH(c) FX_DRAW(a, 2, b, o_DrawInst[V](c, a, b, d, e))
+    { CtxState& ch_ = Ctx(c); if (ch_.shadowDSV && !ds.skip) HeadShadowReplay<V>(c, ch_.shadowDSV, 2, [&] { o_DrawInst[V](c, a, b, d, e); }); } }
 
 // ---------------------------------------------------------------- instalacion sobre vtables
 static std::set<void*> s_hookedFns;

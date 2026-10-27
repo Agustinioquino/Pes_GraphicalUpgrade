@@ -397,7 +397,7 @@ void AutoCapturePresent(ID3D11Texture2D* frame);   // hooks.cpp
 // (27/10 c) sombra propia de la cabeza (headshadow.cpp): atlas de sombras de alta resolucion de las cabezas mas cercanas
 void HeadShadowPresent(); int HeadShadowSlots(); ID3D11ShaderResourceView* HeadShadowSRV(); ID3D11DepthStencilView* HeadShadowDSV();
 ID3D11Buffer* HeadShadowCB(int i); void HeadShadowViewport(int i, D3D11_VIEWPORT& vp); bool HeadShadowIsGameShadow(ID3D11DepthStencilView* v);
-bool HeadShadowIsNearCascade(ID3D11DeviceContext* c, ID3D11DepthStencilView* gameDSV); void HeadShadowOnClear(ID3D11DeviceContext* c, ID3D11DepthStencilView* v, float depth);
+bool HeadShadowIsNearCascade(ID3D11DeviceContext* c, ID3D11DepthStencilView* gameDSV, int kind); ID3D11DepthStencilView* HeadShadowBind(UINT n, ID3D11RenderTargetView* const* rt, ID3D11DepthStencilView* dsv); void HeadShadowOnClear(ID3D11DeviceContext* c, ID3D11DepthStencilView* v, float depth);
 void HeadShadowRelease(); extern std::atomic<int> g_headShadowReplays;
 ID3D11Resource* NamedSRVResource(const std::string& name);   // hooks.cpp: recurso detras de un SRV guardado por regla (sin referencia)
 ID3D11ShaderResourceView* SSSSBeforeComposition(ID3D11DeviceContext* c); ID3D11ShaderResourceView* SSSSSpecSRV(); void SSSSReloadShaders(); extern std::atomic<int> g_ssssDraws;   // ssss.cpp
