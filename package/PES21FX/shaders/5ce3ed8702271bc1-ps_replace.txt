@@ -97,6 +97,7 @@ Texture2D<float4> pesZones    : register(t25);   // PES21 (18/10) zonas de la ca
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 #include "pes_skintone.hlsli"
+#include "pes_pores.hlsli"   // (27/10 c) poros triplanares sobre la posicion de reposo
 #ifdef PES_HL_ACC
 RWByteAddressBuffer gHlAcc : register(u7);   // (24/10 e) medicion del color de la cara (ring.cpp / skintone.cpp; u5 / u6 son las semillas de las cejas)
 #endif
@@ -161,7 +162,7 @@ void main(
   float4 v0 : SV_Position0,
   float4 v1 : COLOR0,
   float2 v2 : TEXCOORD0,
-  float2 w2 : TEXCOORD9,
+  float4 w2 : TEXCOORD9,
   float4 v3 : TEXCOORD4,
   float4 v4 : TEXCOORD5,
   float4 v5 : TEXCOORD6,
@@ -323,41 +324,19 @@ void main(
   float pesPoreA = 0.0, pesMicroVar = 0.0, pesPoreOcc = 1.0, pesTZone = 0.0;
   float4 P94 = IniParams.Load(int2(94,0));   // (declarado aca: lo usa tambien el bloque del especular mas abajo)
   float3 pesMicroDbg = float3(-1, 0, 0);     // dbg: intensidad = 2.00 pinta el mosaico;  pesMicroVar: varianza de la micro normal (Toksvig) -> rugosidad extra
+  // (27/10 c) poros triplanares sobre la posicion de reposo de la malla (pes_pores.hlsli): el VS de la cabeza deja la posicion
+  // de reposo en TEXCOORD9.zw (y, x) y TEXCOORD4.w = 10 + z. Derivadas fuera de la rama (fxc).
+  bool pesHasR = v3.w > 9.0;
+  float3 pesPM = float3(w2.w, w2.z, v3.w - 10.0);
+  float3 pesDPx = ddx(pesPM), pesDPy = ddy(pesPM);
+  float2 pesDUx = ddx(v2.xy), pesDUy = ddy(v2.xy);
   { if (enhance && P94.w > 0.5) {
-      // (27/10) poros a tamano real: antes el mosaico se repetia y94 veces sobre la textura de la cara, y donde la UV esta
-      // estirada (nariz, orejas, mandibula, cuello) el poro salia estirado o gigante. Ahora se mide cuanta piel cubre la UV en
-      // este punto (area de la superficie / area de UV, con las derivadas de la posicion en vista) y el mosaico se repite segun
-      // eso: un mosaico = 22 mm de piel con y94 = 7 (mas = poros mas chicos). La escala se redondea a potencias de 2 y se
-      // funden las dos vecinas, asi el dibujo no se deforma donde la escala cambia.
-      float3 vdir = normalize(v3.xyz);
-      // (27/10 b) la distancia viene del VS en v3.w (negativa); la cuenta vieja con 1 / SV_Position.w daba la piel unas 20 veces
-      // mas chica y el mosaico salia gigante (grietas de barro en la cara). Sin el VS propio: escala fija de una cara (0.3 m por UV)
-      bool hasD = v3.w < -1e-3;
-      float3 pV = -vdir * (hasD ? -v3.w : 1.0);   // posicion en vista (metros)
-      float3 dPx = ddx(pV), dPy = ddy(pV);
-      float2 dUx = ddx(v2.xy), dUy = ddy(v2.xy);
-      float mPerUv = sqrt(length(cross(dPx, dPy)) / max(abs(dUx.x * dUy.y - dUx.y * dUy.x), 1e-14));
-      mPerUv = hasD ? clamp(mPerUv, 0.05, 2.0) : 0.3;
-      float tileM = 0.022 * 7.0 / max(P94.y, 1.0);
-      float lr = log2(clamp(mPerUv / tileM, 1.0, 4096.0));
-      float k0 = floor(lr), kf = lr - k0;
-      float sc = exp2(k0);
-      float2 muv = v2.xy * sc;
-      float2 mdx = dUx * sc, mdy = dUy * sc;
-      // fundido por tamano en pantalla: con el pixel mas grande que ~2 celdas de la piel (22 por mosaico) el relieve ya no se ve
-      float pxM = hasD ? sqrt(length(dPx) * length(dPy)) : 1.0;   // sin distancia: sin poros
-      float near = saturate((2.5 - pxM / (tileM / 22.0)) / 1.5);
+      float tileM = 0.022 * 7.0 / max(P94.y, 1.0);   // un mosaico = 22 mm de piel con y94 = 7 (mas = poros mas chicos)
+      float4 guide = pesFacePores.Sample(g_samplerLinear_Clamp_s, v2.xy);   // por zona: densidad, tamano, zona T, oclusion
+      PesPores pp = PesTriPores(pesSkinMicro, g_samplerAnisotropic_Clamp_s, pesPM, pesDPx, pesDPy, pesDUx, pesDUy, tileM, guide.g, pesHasR);
+      float near = pp.near;
       if (near > 0.001) {
-        float4 guide = pesFacePores.Sample(g_samplerLinear_Clamp_s, v2.xy);   // por zona: densidad, tamano, zona T, oclusion
         pesTZone = guide.b;
-        float4 mnA = pesSkinMicro.SampleGrad(g_samplerAnisotropic_Clamp_s, frac(muv), mdx, mdy);   // frac + grad: sin costura de mip
-        float4 mnB = pesSkinMicro.SampleGrad(g_samplerAnisotropic_Clamp_s, frac(muv * 2.0 + 0.53), mdx * 2.0, mdy * 2.0);
-        float4 mn = lerp(mnA, mnB, kf);
-        // poros grandes (nariz, barbilla): el mismo mosaico a la mitad de escala, mezclado segun el tamano de la zona
-        float4 mn2 = pesSkinMicro.SampleGrad(g_samplerAnisotropic_Clamp_s, frac(muv * 0.5 + 0.37), mdx * 0.5, mdy * 0.5);
-        float big = guide.g;
-        mn = lerp(mn, mn2, big * 0.7);
-        float3 tn = mn.xyz * 2.0 - 1.0;
         // solo piel: se atenua donde la quinta textura marca pelo/barba (A) y donde el mapa de zonas no es piel (A)
         float skinM = 1.0;
         { float4 P68e = IniParams.Load(int2(68,0));
@@ -365,18 +344,13 @@ void main(
           if (P68e.x > 0.5 && FBe.a > 0.5) { float4 FAe = pesFaceA.Sample(g_samplerLinear_Clamp_s, v2.xy); skinM *= 1.0 - saturate(FAe.a * 1.5); }
           skinM *= lerp(0.5, 1.0, pesZones.Sample(g_samplerLinear_Clamp_s, v2.xy).a); }
         float str = clamp(P94.x, 0.0, 2.0) * near * 1.1 * skinM * (0.25 + 1.0 * guide.r);   // 19/10 d: densidad por zona (guia)
-        r1.xy += tn.xy * str;
+        r1.xy += pp.dT * str;   // en el espacio tangente del normal map (se pasa a vista mas abajo)
         r1.xyz = normalize(r1.xyz);
-        pesPoreA = mn.a * near * (0.3 + guide.r);
+        pesPoreA = pp.a * near * (0.3 + guide.r);
         // oclusion de poro: el fondo del poro recibe menos luz (ambiente y directa). Mas donde la guia marca oclusion.
         pesPoreOcc = 1.0 - pesPoreA * guide.a * 0.55 * saturate(P94.x);
-        if (P94.x >= 1.995) pesMicroDbg = float3(mn.xy, near);   // diagnostico: con Intensidad al tope se ve el mosaico en crudo (rojo/verde) y el fundido en azul
-        // Toksvig (GPU Gems 3 / dqlin): la micro normal promediada en un area mas grande pierde largo; ese acortamiento
-        // es la varianza de la micro-geometria y se convierte en rugosidad para el brillo (y de lejos, donde el mosaico ya no se ve,
-        // la rugosidad se mantiene y el brillo no destella)
-        { float4 ma = pesSkinMicro.SampleGrad(g_samplerAnisotropic_Clamp_s, frac(muv), mdx * 6.0, mdy * 6.0);
-          float ln = length(ma.xyz * 2.0 - 1.0);
-          pesMicroVar = saturate((1.0 - ln) * 8.0) * saturate(P94.x * 0.7) * skinM; } 
+        if (P94.x >= 1.995) pesMicroDbg = float3(pp.dbg, near);   // diagnostico: con Intensidad al tope se ve el mosaico en crudo (rojo/verde) y el fundido en azul
+        pesMicroVar = pp.var * saturate(P94.x * 0.7) * skinM;
       } } }
   // 16/10: oclusion de cavidades a partir del normal map (pliegues de la oreja, arco de la ceja, aletas de la nariz):
   // donde la normal se inclina mucho la superficie esta dentro de un hueco y le llega menos luz. x35 fuerza, w35 on/off

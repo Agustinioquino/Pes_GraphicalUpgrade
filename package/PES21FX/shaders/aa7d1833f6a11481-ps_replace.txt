@@ -78,6 +78,7 @@ Texture2D<float4> pesSkinB     : register(t24);   //           translucidez, rub
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 #include "pes_skintone.hlsli"
+#include "pes_pores.hlsli"   // (27/10 c) poros triplanares sobre la posicion de reposo
 #include "pes_variants.hlsli"   // (26/10) variantes robusto / atletico (valor del jugador)
 #include "pes_nailfix.hlsli"   // (26/10, v12.6) unas de los jugadores con textura de brazo propia (x304)
 #ifdef PES_HL_ACC
@@ -128,21 +129,13 @@ void main(
   float bCav = 1.0;
   // poros de la cara (x94), igual que el shader de cara: derivadas fuera de las ramas
   float4 P94h = IniParams.Load(int2(94,0));
-  // (27/10) poros a tamano real, la misma cuenta que la cara (5ce3): el mosaico se repite segun cuanta piel cubre la UV
-  float3 hpVd = normalize(v3.xyz);
-  bool hpHasD = v3.w < -1e-3;   // (27/10 b) distancia del VS de la cabeza (faab87ee) en v3.w, negativa
-  float3 hpPV = -hpVd * (hpHasD ? -v3.w : 1.0);
-  float3 hpDPx = ddx(hpPV), hpDPy = ddy(hpPV);
+  // (27/10 c) poros triplanares sobre la posicion de reposo, la misma cuenta que la cara (pes_pores.hlsli): el VS de la cabeza
+  // (faab87ee) deja la posicion de reposo en w2.zw (y, x) y v3.w = 10 + z. Derivadas fuera de las ramas.
+  bool hpHasR = v3.w > 9.0;
+  float3 hpPM = float3(w2.w, w2.z, v3.w - 10.0);
+  float3 hpDPx = ddx(hpPM), hpDPy = ddy(hpPM);
   float2 hpDUx = ddx(v2.xy), hpDUy = ddy(v2.xy);
-  float hpMPerUv = sqrt(length(cross(hpDPx, hpDPy)) / max(abs(hpDUx.x * hpDUy.y - hpDUx.y * hpDUy.x), 1e-14));
-  hpMPerUv = hpHasD ? clamp(hpMPerUv, 0.05, 2.0) : 0.3;
   float hpTileM = 0.022 * 7.0 / max(P94h.y, 1.0);
-  float hpLr = log2(clamp(hpMPerUv / hpTileM, 1.0, 4096.0));
-  float hpK0 = floor(hpLr), hpKf = hpLr - hpK0;
-  float hpSc = exp2(hpK0);
-  float2 hpMuv = v2.xy * hpSc;
-  float2 hpMdx = hpDUx * hpSc, hpMdy = hpDUy * hpSc;
-  float hpNear = hpHasD ? saturate((2.5 - sqrt(length(hpDPx) * length(hpDPy)) / (hpTileM / 22.0)) / 1.5) : 0.0;
   float hpPoreA = 0.0, hpMicroVar = 0.0, hpPoreOcc = 1.0, hpTZone = 0.0;
   float2 nfDx = ddx(v2.xy), nfDy = ddy(v2.xy);   // (26/10) unas de los jugadores: derivadas fuera de las ramas
   float2 pdQ = (v2.xy - 0.5) * 11.1;              // (26/10 d) pelvis: mosaico del detalle de piel (0.40 uv por metro, 22.5 cm)
@@ -285,24 +278,18 @@ void main(
       lbVM = saturate(lbVein * lv.z);
     }
   }
-  if (hpK > 0.001 && P94h.w > 0.5) {   // (20/10) micro normal de poros, misma escala y mismo plano UV que la cara: sigue sin costura
-    float near = hpNear;
+  if (hpK > 0.001 && P94h.w > 0.5) {   // (20/10) micro normal de poros, mismo mosaico en reposo que la cara: sigue sin costura
+    float4 guide = pesFacePores.Sample(g_samplerLinear_Clamp_s, v2.xy);
+    PesPores pp = PesTriPores(pesSkinMicro, g_samplerLinear_Clamp_s, hpPM, hpDPx, hpDPy, hpDUx, hpDUy, hpTileM, guide.g, hpHasR);
+    float near = pp.near;
     if (near > 0.001) {
-      float4 guide = pesFacePores.Sample(g_samplerLinear_Clamp_s, v2.xy);
       hpTZone = guide.b;
-      float4 mn = lerp(pesSkinMicro.SampleGrad(g_samplerLinear_Clamp_s, frac(hpMuv), hpMdx, hpMdy),
-                       pesSkinMicro.SampleGrad(g_samplerLinear_Clamp_s, frac(hpMuv * 2.0 + 0.53), hpMdx * 2.0, hpMdy * 2.0), hpKf);
-      float2 muv2 = hpMuv * 0.5 + 0.37;
-      float4 mn2 = pesSkinMicro.SampleGrad(g_samplerLinear_Clamp_s, frac(muv2), hpMdx * 0.5, hpMdy * 0.5);
-      mn = lerp(mn, mn2, guide.g * 0.7);
-      float3 tn = mn.xyz * 2.0 - 1.0;
       float skinM = lerp(0.5, 1.0, pesZones.Sample(g_samplerLinear_Clamp_s, v2.xy).a);
       float str = clamp(P94h.x, 0.0, 2.0) * near * 1.1 * skinM * (0.25 + 1.0 * guide.r) * hpK;
-      r2.xy += tn.xy * str;
-      hpPoreA = mn.a * near * (0.3 + guide.r);
+      r2.xy += pp.dT * str;
+      hpPoreA = pp.a * near * (0.3 + guide.r);
       hpPoreOcc = 1.0 - hpPoreA * guide.a * 0.55 * saturate(P94h.x);
-      float4 ma = pesSkinMicro.SampleGrad(g_samplerLinear_Clamp_s, frac(hpMuv), hpMdx * 6.0, hpMdy * 6.0);
-      hpMicroVar = saturate((1.0 - length(ma.xyz * 2.0 - 1.0)) * 8.0) * saturate(P94h.x * 0.7) * skinM;
+      hpMicroVar = pp.var * saturate(P94h.x * 0.7) * skinM;
     }
   }
   {   // (26/10 d) tope del relieve (x307 prendido, y307 inclinacion maxima en grados) en el cuerpo de TorsoBody: malla esculpida +

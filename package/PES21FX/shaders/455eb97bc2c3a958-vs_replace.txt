@@ -83,7 +83,7 @@ void main(
   out float4 o5 : TEXCOORD6,
   out float4 o6 : TEXCOORD7,
   out float4 o7 : TEXCOORD8,
-  out float2 o8 : TEXCOORD9)
+  out float4 o8 : TEXCOORD9)
 {
   float4 r0,r1,r2,r3,r4,r5,r6;
   uint4 bitmask, uiDest;
@@ -155,7 +155,6 @@ void main(
   o8.y = dot(r4.xyzw, g_vsScene.m_shadowProjection2._m03_m13_m23_m33);
   r0.w = dot(r0.xyz, r0.xyz);
   r0.w = rsqrt(r0.w);
-  float pesViewD = 1.0 / max(r0.w, 1e-12);   // (27/10 b) distancia a la camara en metros, antes de normalizar
   r0.xyz = r0.xyz * r0.www;
   r2.x = dot(r5.xyz, g_vsObject.m_viewWorld._m00_m10_m20);
   r2.y = dot(r5.xyz, g_vsObject.m_viewWorld._m01_m11_m21);
@@ -176,9 +175,10 @@ void main(
   r4.xyz = r4.xyz * r0.www;
   r4.xyz = v2.www * r4.xyz;
   o3.xyz = -r0.xyz;
-  // (27/10 b) o3.w = -distancia a la camara (siempre negativa: aa7d lee [2, 3] como el peso del musculo del cuerpo):
-  // con esto los poros miden la piel en metros sin depender de SV_Position.w
-  o3.w = -pesViewD;
+  // (27/10 c) posicion de REPOSO del vertice (v0, espacio del modelo, metros) para los poros triplanares (pes_pores.hlsli):
+  // z en o3.w + 10 (asi no cae en el [2, 3] del peso del musculo del cuerpo en aa7d), (y, x) en TEXCOORD9.zw como el VS del cuerpo
+  o3.w = 10.0 + v0.z;
+  o8.z = v0.y; o8.w = v0.x;
   o4.xyz = r1.xyz;
   o5.xyz = r4.xyz;
   o6.xyz = r2.xyz;
