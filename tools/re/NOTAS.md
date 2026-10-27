@@ -509,3 +509,8 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
   junto a la costura del hombro, a los dos lados, se va el relieve propio del normal map y el color fino (queda el mip 6 del
   bsm), con la misma funcion de la posicion de reposo en torso y brazo. Brillo blanco del pecho bajo el cuello: las normales
   de la malla de Konami se mezclaban de 4 a 10 cm; ahora solo a 1.5 cm del anillo (neck_konami.py).
+- 27/10 c: MAL. pad_tex.py piso zonas de arm_N_bsm / arm_nrm que usan las manos (otra malla, no esta en la mascara) y la franja
+  clara del brazo era x312 (aplana 3 cm): se volvieron las 18 texturas a las de antes y x312 = 0 por defecto. No usar pad_tex
+  sin la mascara de TODAS las mallas que leen la textura. Medido en las mallas sin shaders: la costura del hombro esta cerrada
+  (52 vertices a 0 mm, mismos pesos de huesos, normales de malla a 1..4 grados) y el color de torso_N_bsm / arm_N_bsm coincide
+  en la costura (mediana 0.98..1.02, p90 1.05..1.12), normal maps a 2..5 grados: lo que se ve viene de PES21FX.
