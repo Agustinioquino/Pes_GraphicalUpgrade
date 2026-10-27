@@ -238,9 +238,10 @@ static bool LoadConfigLocked() {
     // 291 x color con el suelo lejos | y / z px/m lejos / cerca | w normal lisa lejos   292 x hundimiento del juego | y lineas | z ralear con el desgaste | w desgaste en vivo mas visible
     // 294 x px/m desde donde se dibuja el pasto del juego (T0) | y / z rampa de las hojas finas de cerca (px/m) | w hojas despues de toda la base (26/10 g)
     // 295 (27/10 h, tanda 7) x lineas pintadas en las hojas | y contraste / definicion por hoja | z puntas al sol | w claridad de la pintura
+    // 296 (27/10 h) sombra del cesped en 619b: x prendido | y frialdad (azulada) | z profundidad (0.85; 1 = solo el tinte)
     { static const struct { int i, k; float v; } kDef[] = { {290, 0, 1.f}, {290, 1, 1.f}, {290, 2, 0.45f}, {290, 3, 1.f}, {291, 0, 1.f}, {291, 1, 40.f}, {291, 2, 140.f}, {291, 3, 1.f},
                                                          {292, 0, 1.f}, {292, 1, 1.f}, {292, 2, 1.f}, {292, 3, 1.f}, {294, 0, 1000.f}, {294, 1, 200.f}, {294, 2, 450.f}, {294, 3, 1.f},
-                                                         {295, 0, 1.f}, {295, 1, 1.f}, {295, 2, 1.f}, {295, 3, 0.85f} };
+                                                         {295, 0, 1.f}, {295, 1, 1.f}, {295, 2, 1.f}, {295, 3, 0.85f}, {296, 0, 1.f}, {296, 1, 1.f}, {296, 2, 0.85f} };
       for (auto& d : kDef) if (!c.info[d.i][d.k].defined) c.base[d.i][d.k] = d.v; }
     memcpy(c.live, c.base, sizeof(c.base));
     LoadCloth();

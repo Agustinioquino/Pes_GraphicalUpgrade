@@ -473,6 +473,23 @@ void main(
       r2.xyz += sunC * tr * (0.35 + 0.65 * low) * shG * STg.y * 0.35 * trK * float3(1.0, 1.03, 0.80);
     }
   }
+  // === PES21 (27/10 h) sombra del cesped como la foto (296): en la sombra el pasto queda mas frio / azulado (la luz que le llega es la del
+  // cielo, no la del sol) y algo mas hondo, nunca negro: mas contraste entre lo que esta al sol y lo que esta en sombra. Solo tipo 3 (base
+  // y hojas), solo con sol (luz calida; de noche con torres no). La luz calida del sol bajo la pone la pasada del sol (hilo del sol, 313-315)
+  {
+    float4 GS = IniParams.Load(int2(296,0));
+    if (geoOk && GS.x > 0.5 && tyC == 3 && zsk < 400.0) {
+      float3 sc = max(pLc_color.xyz, 0.0);
+      float day = saturate((sc.r / max(sc.b, 1e-4) - 0.85) * 4.0);
+      if (day > 0.01) {
+        float shS = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
+        float inSh = (1.0 - shS) * day;
+        float3 cool = lerp(float3(1.0, 1.0, 1.0), float3(0.90, 0.97, 1.10), saturate(GS.y));
+        float deep = GS.z > 0.0 ? clamp(GS.z, 0.5, 1.0) : 0.85;
+        r2.xyz *= lerp(float3(1.0, 1.0, 1.0), cool * deep, inSh);
+      }
+    }
+  }
   // === PES21 (25/10 b) brillo del cesped al sol (x134 brillo, y134 apertura): cuticula cerosa de las hojas. Mirando hacia el
   // sol en angulo rasante la cancha se aclara y blanquea (TV por la tarde). Normal del G-buffer (hojas y base), Fresnel
   // rasante, sin brillo en la sombra. Solo con sol (luz calida), no con torres.
