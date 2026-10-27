@@ -127,6 +127,7 @@ static inline uint16_t F16(float v) {   // float -> half (sin NaN/inf)
     if (e >= 31) return (uint16_t)(sgn | 0x7bff);
     return (uint16_t)(sgn | (e << 10) | (m >> 13));
 }
+static std::atomic<float> s_adapt{1.0f};   // (27/10 o) densidad adaptativa por FPS (fila 333)
 static float Halton(int i, int b) { float f = 1.0f, r = 0.0f; while (i > 0) { f /= b; r += f * (i % b); i /= b; } return r; }
 static void DenseRelease() { auto rel = [](DenseLevel& L) { if (L.pos) L.pos->Release(); if (L.uv) L.uv->Release(); if (L.ib) L.ib->Release(); L = DenseLevel(); }; for (auto& L : s_dense) rel(L); for (auto& L : s_denseExt) rel(L); s_denseBuilt = false; }
 static void BuildDense(float curv) {
@@ -191,7 +192,7 @@ static bool DensePick(UINT count, LodIA* out) {
     int lvl; if (count >= 20000) lvl = 0; else if (count >= 8000 && P[3] < 0.5f) lvl = 1; else return false;
     UINT gameCards = count / 6; float dens = P[1] > 0.05f ? std::clamp(P[1], 0.25f, 2.0f) : 1.0f;
     {   // (25/10 c) con el pasto del mod prendido, el lado del juego sigue a Calidad (x61) y Densidad (x58) como el del mod (empalme parejo en 240 px/m)
-        if (g_cfg.live[58][3] > 0.5f) { static const float cMulQ[4] = { 0.6f, 1.0f, 1.4f, 1.8f }; int q = std::clamp((int)(g_cfg.live[61][0] + 0.5f), 0, 3);
+        if (g_cfg.live[58][3] > 0.5f) { static const float cMulQ[5] = { 0.6f, 1.0f, 1.4f, 1.8f, 2.4f }; int q = std::clamp((int)(g_cfg.live[61][0] + 0.5f), 0, 4);
             float d58 = g_cfg.live[58][0] > 0.05f ? std::clamp(g_cfg.live[58][0], 0.3f, 2.0f) : 1.0f; dens = std::clamp(dens * cMulQ[q] * d58, 0.25f, 2.0f); }
     }
     UINT cards = (std::min)((UINT)(gameCards * dens + 0.5f), s_dense[lvl].cards); if (cards < 16) return false;
@@ -590,6 +591,21 @@ void GrassFrameBoundary(UINT flags) {
 
 void GrassPresent() {
     float T[4]; Thresholds(T);
+    // (27/10 o) densidad adaptativa (fila 333): la DLL mide el tiempo entre Presents y, si los FPS quedan por debajo del objetivo x333,
+    // baja la densidad del pasto del mod (C base y piso de capas) hasta el minimo y333; cuando sobran FPS la vuelve a subir despacio.
+    // Es la unica "cache" que paga: el costo del pasto es dibujar millones de triangulos chicos cada cuadro (camara, jugadores y luz
+    // cambian), no calcular la lista de parcelas (el compute cuesta decimas de ms). 0 = apagado.
+    { static double lastT = -1.0; static float ema = 0.0f; static double nextAdj = 0.0, nextLogA = 0.0; double tn = Now();
+      if (lastT >= 0.0) { float dt = (float)std::clamp(tn - lastT, 0.0005, 0.5); ema = ema <= 0.0f ? dt : ema + (dt - ema) * 0.1f; }
+      lastT = tn;
+      float target = g_cfg.live[333][0], floorA = g_cfg.live[333][1] > 0.05f ? std::clamp(g_cfg.live[333][1], 0.2f, 1.0f) : 0.4f;
+      if (target < 20.0f || (int)(g_cfg.live[61][0] + 0.5f) >= 4) { s_adapt = 1.0f; nextAdj = 0.0; }   // (27/10 q) apagada o Calidad Ultra
+      else if (tn >= nextAdj && ema > 0.0f) { nextAdj = tn + 0.5;
+          float fps = 1.0f / ema; float a = s_adapt.load();
+          if (fps < target * 0.97f) a = (std::max)(floorA, a * 0.93f);
+          else if (fps > target * 1.10f) a = (std::min)(1.0f, a * 1.06f);   // (27/10 q) 1.03 -> 1.06: volvia al 100 % en 15 s, ahora en 8
+          s_adapt = a;
+          if (tn >= nextLogA && g_cfg.live[58][3] > 0.5f) { nextLogA = tn + 10.0; Log("pasto adaptativo: FPS %.0f (objetivo %.0f) -> densidad x%.2f (minimo %.2f)", fps, target, a, floorA); } } }
     if (s_vbState.load() == 1 && s_vbStage && g_dev.imm) {
         D3D11_MAPPED_SUBRESOURCE m;
         if (SUCCEEDED(g_dev.imm->Map(s_vbStage, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) {
@@ -648,15 +664,21 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
     float T[4]; Thresholds(T);
     float tall = p59[0] > 0.05f ? p59[0] : 1.3f;
     float wide = p59[1] >= 0.0f ? p59[1] : 1.0f;
-    int q = (int)(g_cfg.live[61][0] + 0.5f); q = (std::max)(0, (std::min)(q, 3));
+    int q = (int)(g_cfg.live[61][0] + 0.5f); q = (std::max)(0, (std::min)(q, 4));
+    // (27/10 q) Calidad 4 = Ultra (pedido de Agustin: "cargar todas las parcelas como antes y el pasto al maximo"): cobertura 2.4x, hoja
+    // minima de 1 px, todas las capas de muy cerca, hojas 3D hasta el fondo de la cancha (sin el limite del cesped lejano) y sin densidad adaptativa
+    const bool ultra = q == 4;
     // (25/10 c) densidad constante en pantalla: cada parcela lleva las tarjetas que hacen falta para cubrir su tamano en
     // pantalla (tarjetas = C(p) * (celda * p)^2 / ancho_px, con p = pixeles por metro; C sube suave hacia la camara), con
     // la malla propia de manojos curvos (orden de Halton: las primeras N tarjetas estan bien repartidas) en 6 subniveles
     // (9248 >> b tarjetas) y un tope exacto por parcela que el VS aplica por SV_VertexID. Calidad (x61): cuanto cubre y el
     // ancho minimo de la hoja en pixeles (hojas de menos de ~1.4 px titilan). Densidad (x58) multiplica C.
-    static const float cMul[4] = { 0.6f, 1.0f, 1.4f, 1.8f }, minPxQ[4] = { 1.8f, 1.5f, 1.3f, 1.2f };
+    static const float cMul[5] = { 0.6f, 1.0f, 1.4f, 1.8f, 2.4f }, minPxQ[5] = { 1.8f, 1.5f, 1.3f, 1.2f, 1.0f };
     float dens = g_cfg.live[58][0] > 0.05f ? std::clamp(g_cfg.live[58][0], 0.3f, 2.0f) : 1.0f;
-    const float cBase = 0.30f * cMul[q] * dens, minPx = minPxQ[q];
+    if (!ultra) dens *= s_adapt.load();   // (27/10 o) densidad adaptativa por FPS (fila 333, GrassPresent); Ultra la ignora
+    // (27/10 9c) x325: ancho minimo en px a mano (0 = el de la calidad). Con la camara quieta el TAA del juego promedia las hojas de
+    // ~1.2 px con el suelo y el pasto se vuelve liso; moviendo, la historia se descarta y vuelven nitidas: hojas de 2 px no se pierden
+    const float cBase = 0.30f * cMul[q] * dens, minPx = g_cfg.live[325][0] > 0.5f ? std::clamp(g_cfg.live[325][0], 1.f, 4.f) : minPxQ[q];
     Level L[3] = { { 0.5f, kSlotCap, 0, 1.0f }, { 1.0f, kSlotCap, 0, 1.6f }, { 2.0f, kSlotCap, 0, 2.0f } };
     // (25/10) con el cesped lejano de la base prendido (y61) el nivel 3D lejano se apaga por debajo de T3 px/m y la base lo sigue
     // (25/10 c) el fundido entre niveles es por CANTIDAD de tarjetas en el compute (nivel saliente lim*k, entrante lim*(1-k), mismo
@@ -664,7 +686,8 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
     // todas las hojas quedaban a media altura a una distancia fija de la camara
     // (26/10 d) margen del fundido entre niveles 0.12 -> 0.25 en T1 / T2 (la pendiente de tarjetas por cuadro al mover la camara baja a la
     // mitad); el empalme con el pasto del juego en T0 sigue en 0.12 (el VS del juego corta con 0.88 / 1.12 fijos)
-    const bool farBase = g_cfg.live[61][1] > 0.001f; const float loFar = farBase ? T[3] : 0.0f; const float fadeM = 0.25f, fadeT0 = 0.12f;
+    const bool farBase = g_cfg.live[61][1] > 0.001f && !ultra;   // (27/10 q) Ultra: hojas 3D en toda la cancha
+    const float loFar = farBase ? T[3] : 0.0f; const float fadeM = 0.25f, fadeT0 = 0.12f;
     // malla propia (manojos curvos: nivel 0 de 2 tramos, niveles 1 / 2 de 1 tramo)
     float curv = g_cfg.live[123][0] > 0.5f ? std::clamp(g_cfg.live[123][2], 0.0f, 1.5f) : 0.6f;
     ID3D11Buffer* mPos[3] = {}; ID3D11Buffer* mUv[3] = {}; ID3D11Buffer* mIb[3] = {}; UINT mCards = 0, mIpc[3] = { 12, 6, 6 }, mVpc[3] = { 6, 4, 4 };
@@ -688,7 +711,10 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
     const float pR0 = g_cfg.live[294][1] >= 50.0f ? (std::min)(g_cfg.live[294][1], 3000.0f) : 300.0f;
     const float pR1 = g_cfg.live[294][2] >= pR0 + 20.0f ? (std::min)(g_cfg.live[294][2], 6000.0f) : (std::max)(pR0 * 2.3f, pR0 + 100.0f);
     const float wGame = 0.012f * wide, wClose = 0.004f * wide, pRamp0 = pR0, pRamp1 = pR1;
-    const float wEff0 = wGame, tallNear = 1.0f, Dfloor = 6.0f * cMul[q] * dens;
+    // (27/10 m) tanda 10, w328: capas de hojas por pixel de suelo en el primer plano (0 = 6). Es el costo del plano cercano (25-30 FPS con la
+    // camara al ras): 4 recorta un tercio de las hojas de muy cerca sin tocar las camaras de juego
+    const float dNear = ultra ? 10.0f : (g_cfg.live[328][3] >= 1.0f ? std::clamp(g_cfg.live[328][3], 2.0f, 10.0f) : 6.0f);   // (27/10 q) Ultra: todas las capas
+    const float wEff0 = wGame, tallNear = 1.0f, Dfloor = dNear * cMul[q] * dens;
     const float halfL = 52.5f + 3.0f, halfW = 34.0f + 3.0f, halfH = 0.5f * (float)(g_bbH ? g_bbH : 1080);
     ID3D11DeviceContext1* c1 = nullptr; c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1);
     // estado del contexto que se toca (se devuelve al final)

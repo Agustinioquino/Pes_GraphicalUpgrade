@@ -63,11 +63,15 @@ float2 PESWear(float2 pm, float2 wxz, float wear, float areas, float bald, float
     bare = smoothstep(thr - 0.12, thr + 0.02, n + use * 0.25) * (bald > 0.001 ? 1.0 : 0.0);
   }
   float4 LW = IniParams.Load(int2(115, 0));
+  // (27/10 n) tanda 11, y329: desgaste mas visible. El del partido (w115) sube muy lento y el fijo (w104) suele estar en 0: Agustin no lo notaba.
+  // Multiplica el seco y el pelado de los dos (base y hojas a la vez, misma funcion)
+  float wearK = 1.0 + clamp(IniParams.Load(int2(329, 0)).y, 0.0, 3.0);
+  col = saturate(col * wearK); bare = saturate(bare * wearK);
   if (LW.w > 0.5 && live > 0.001) {
     float n4 = PESGnoise(wxz * 2.1 + 4.4);                       // el pisoteo no es parejo
     float lv = saturate(PESWearLiveCurve(live) * (0.8 + 0.4 * n4));
-    col = saturate(col + lv * 0.9);
-    bare = max(bare, smoothstep(0.55, 1.0, lv) * saturate(LW.z));
+    col = saturate(col + lv * 0.9 * wearK);
+    bare = max(bare, smoothstep(0.55 / wearK, 1.0, lv) * saturate(LW.z));
   }
   return float2(col, bare);
 }
@@ -145,7 +149,7 @@ void PESFarTurf(inout float3 c, inout float spec, float3 V, float2 wxz, float px
 void PESGrassColorGrade(inout float3 c)
 {
   float4 C = IniParams.Load(int2(112, 0));
-  if (abs(C.x) < 0.01 && abs(C.y) < 0.001 && abs(C.z) < 0.001) return;
+  if (abs(C.x) < 0.01 && abs(C.y) < 0.001 && abs(C.z) < 0.001 && C.w < 0.001) return;
   const float3 LW = float3(0.2126, 0.7152, 0.0722);
   float l = dot(c, LW);
   if (abs(C.x) > 0.01) {
@@ -159,5 +163,9 @@ void PESGrassColorGrade(inout float3 c)
     c = max(lerp(c, g, clamp(C.y, -1.0, 1.0) * 0.6), 0.0);
   }
   if (abs(C.z) > 0.001) { float k = 1.0 + clamp(C.z, -0.8, 1.0); c = max((c - 0.18) * k + 0.18, 0.0); }
+  // (27/10 n) tanda 11, w112 "verde natural": el cesped real al sol con cielo despejado (foto de Agustin, pelota sobre la linea) tiene
+  // r/g 0.75-0.80 y b/g 0.3-0.5; el del mod daba r/g 0.40 y b/g 0.25 (verde saturado y frio, "no humano"). El "Verde" (y112) acerca a
+  // (0.19, 0.42, 0.10) = r/g 0.45, aun mas saturado. Esto acerca la cromatica a (0.78, 1, 0.42) conservando la luminancia; 1 = casi todo
+  if (C.w > 0.001) { float3 t = float3(0.78, 1.0, 0.42); t *= l / dot(t, LW); c = max(lerp(c, t, clamp(C.w, 0.0, 1.0) * 0.85), 0.0); }
 }
 #endif

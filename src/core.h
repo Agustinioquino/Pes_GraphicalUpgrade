@@ -41,10 +41,22 @@ constexpr int kParamCount = 336;           // float4 x 336 -> t120 en los shader
 // 321 = brazos, manos y muslos de TorsoBody para las caras reales (27/10, brazos.cpp: x prendido, y muslos, z tono forzado, w log).
 // 322 = cuello de las caras reales fundido con el torso (27/10, pes_collar.hlsli en 5ce3 / ce188: x prendido, y alto mm, z cuanto, w diagnostico).
 // 323 = ocultar la camiseta interior (inner*, highneck de common_package.fpk) al mirar el cuerpo sin camiseta (27/10, hooks.cpp: x prendido, w log); (27/10 d) y hundir la base del cuello de la cara bajo el torso en mm (VS faab87ee / 455eb97b, pes_collar.hlsli), z alto del fundido mm.
+// 312 = sol estable (la DLL lo escribe cada cuadro: config.cpp, PESSunStable). NO usarla para otra cosa.
+// 326 = costura del hombro de la musculatura (27/10, aa7d1833: x prendido, y ancho m, z fuerza; antes 312, chocaba con el sol).
+// 325 = nitidez de las hojas del mod (27/10, grass.cpp: x ancho minimo de la hoja en px, 0 = el de la calidad x61).
+// 329 = cesped al sol, tanda 11 (27/10 n: x transpiracion = translucidez de la punta + rocio en 1 de 8 hojas (18af), y desgaste mas visible (PESWear), z duracion del rastro de la pelota en s (pitchwear.cpp, pes_flat.G; 0 = 30), w rastro visible en el color (VS 498b, 5e92, c956); w112 = verde natural, cromatica r/g 0.78 b/g 0.42).
+// 330 = nitidez extra con la camara quieta (27/10 n, 0f5c CAS: x fuerza que se suma a x39 segun 160.z cuadros desde el reinicio del TAA).
+// 331 = piel (x giro del disco SSSS, hilo de piel e376066).
+// 332 = antialiasing temporal del juego (27/10 n, PS 1a7534929602c747 reemplazado: x alfa minimo hacia el cuadro actual, y ancho de la caja, z alfa extra por contraste, w on/off; con w = 0 identico al juego).
+// 333 = densidad adaptativa del pasto por FPS (27/10 o, grass.cpp GrassPresent: x FPS objetivo (0 = apagado; Calidad x61 = 4 Ultra la ignora), y densidad minima 0.2..1; multiplica Densidad x58 en la emision).
+// 334 = pasto de la camara mas cercana, tanda 12 (27/10 p, >= 250-600 px/m, hojas del mod y parcelas del juego pegadas a la camara: x rocio fino (18af), y cal mas densa / borde irregular (498b), z sombra por hoja (18af)).
+// 328 = matas y variedad de las hojas del mod (27/10 m, tanda 10: VS 498b / PS 18af: x matas, y variedad por hoja, z oclusion entre matas; grass.cpp: w capas por pixel cerca, 0 = 6).
 // 324 = tono de piel del cuerpo por jugador (27/10, personajes.cpp: PES21FX\tonos_piel.txt; x prendido, y desplazamiento en HumanData, z bit, w volcado al log).
 // 327 = cuerpo del tono de la cara (27/10 b, brazos.cpp + pes_tono_brazo_cs.hlsl: con x321, la textura de brazo de la cara real se mide contra arm_1..6 y torso / brazos / muslos van con torso_M / arm_M / thigh_M de ese tono; x prendido, y umbral de piel 0..1 (0 = 0.12); w (27/10 d) medicion camiseta contra torso al log cada 20 s, cuerpo.cpp + pes_body_measure_cs.hlsl).
 // 297 / 298 = luz de prueba del editor (27/10 b, pes_ssss_inc.hlsli: sol de dia / tarde / noche donde no corre el sol del partido).
 // 299 = pasto tanda 9a (hilo del pasto, rama kd63zh).
+// 315 = rebote de luz acumulado v2 (27/10, pes_ssgi_ps.hlsl: x estimador fisico, y alcance lejano x R, z fuerza lejana).
+// 331.x (ini) = giro del disco de la SSSS por cuadro (27/10 g, pes_ssss_inc.hlsli).
 // 309 (ini) + 310, 316..319 (DLL) = sombra propia de la cabeza (27/10 c, headshadow.cpp + pes_headshadow.hlsli en los 7 shaders del sol).
 // 305 musculos con textura (manos.cpp + pes_limbs.hlsli en el VS 1c02a92a + PS aa7d1833; x prendido, y definicion, z venas de los
 // brazos, w venas de las manos con el puno apretado; v12.7).
@@ -52,6 +64,7 @@ constexpr int kParamCount = 336;           // float4 x 336 -> t120 en los shader
 struct Assign { int idx; int comp; std::vector<float> values; std::string var; };
 struct KeyBind {
     std::string name, label;
+    std::string labelEn;                   // (27/10) rotulo en ingles (PES21FX_menu_en.ini)
     int vk = 0;
     int ctrl = -1, alt = -1, shift = -1;   // -1 = no importa, 0 = no apretada, 1 = apretada
     enum Type { Activate, Toggle, Cycle, Hold } type = Activate;
@@ -71,11 +84,15 @@ struct MenuSlider {
     std::vector<std::string> options;      // si no esta vacio: selector (valor = indice de la opcion)
     std::vector<float> optVals;            // si no esta vacio: valor de cada opcion ("Etiqueta=valor")
     std::string ext;                       // "seccion.clave" de cloth-mod\cloth.ini (si no esta vacio no usa idx/comp)
+    std::string labelEn, helpEn;           // (27/10) textos en ingles (PES21FX_menu_en.ini); vacios = se usa el espanol
+    std::vector<std::string> optionsEn;
     float def = 0;                         // valor de fabrica si la clave no esta en cloth.ini
 };
-struct MenuButton { std::string action, label, help; };   // button = accion | etiqueta | ayuda  (acciones: hair_export, hair_reload)
+struct MenuButton { std::string action, label, help, labelEn, helpEn; };   // button = accion | etiqueta | ayuda  (acciones: hair_export, hair_reload)
 struct MenuGroup {
     std::string title, desc, section;
+    std::string id;                      // (27/10) nombre de la seccion del ini sin "Menu" (clave de PES21FX_menu_en.ini)
+    std::string titleEn, descEn, sectionEn;   // (27/10) textos en ingles; vacios = se usa el espanol
     int tIdx = -1, tComp = 0;            // parametro del interruptor (w46, etc.); -1 = sin interruptor
     std::vector<MenuSlider> sliders;
     std::vector<MenuButton> buttons;
@@ -132,7 +149,8 @@ struct Config {
     std::string favorites;                     // 19/10: titulos de grupos favoritos separados por '|' ([PES21FX] favoritos)
     float uiScale = 1.0f;                      // 19/10: tamano del menu ([PES21FX] ui_scale)
     bool compact = false;                      // 19/10: grupos contraidos por defecto ([PES21FX] compacto)
-    bool autoCap = false; float autoCapSec = 20.0f; int autoCapMax = 150; bool autoCapAB = false; bool exeDump = true; bool motorPatch = true; bool motorSunFix = true; int motorShadowRes = 0; float motorCascadeScale = 0.0f;   // [Motor]: parches en memoria (exepatch.cpp)   // exe_dump: volcado del exe desempaquetado (una vez por version)   // auto_captura_ab: pares A (todo) / B (un grupo del menu apagado 3 cuadros)
+    int lang = 0;                              // (27/10) idioma del menu: 0 espanol, 1 ingles ([PES21FX] language = es / en)
+    bool autoCap = false; float autoCapSec = 20.0f; int autoCapMax = 150; bool autoCapAB = false; bool exeDump = true; bool motorPatch = true; bool motorSunFix = true; int motorShadowFix = 1; int motorShadowRes = 0; float motorCascadeScale = 0.0f;   // [Motor]: parches en memoria (exepatch.cpp)   // exe_dump: volcado del exe desempaquetado (una vez por version)   // auto_captura_ab: pares A (todo) / B (un grupo del menu apagado 3 cuadros)
     int aniso = 16; float mipBias = 0.0f;   // 20/10: filtrado anisotropico forzado (1 = el del juego) y sesgo de mip global ([PES21FX] aniso, mip_bias)   // 19/10: captura automatica en partido ([PES21FX] auto_captura, auto_captura_seg, auto_captura_max)
     bool optReplace = true, optRules = true, optOverlay = true, optPin = false, optHooks = true, optDxgi = true, optPresent = true, optCtx = true, optExports = true, optOrphan = true, optDump = false;
     int memFix = 1; bool memWatch = true;     // (26/10) [PES21FX] memoria_arreglo (0/1 = retener, 2 = liberar entero) / memoria_vigilar (memwatch.cpp)
@@ -146,6 +164,11 @@ extern std::mutex g_cfgMutex;
 bool LoadConfig();                              // PES21FX.ini + PES21FX_rules.ini
 bool SaveConfigValues();
 bool SaveOption(const std::string& key, const std::string& value);   // escribe/agrega clave en [PES21FX]
+// (27/10) idioma del menu (lang.cpp): TRS devuelve la traduccion de un texto fijo del codigo (UTF-8) si el menu esta en ingles
+// y existe; si no, el mismo puntero. LS elige entre el texto del ini y su version en ingles.
+const char* TRS(const char* es);
+inline const std::string& LS(const std::string& es, const std::string& en) { return (g_cfg.lang != 0 && !en.empty()) ? en : es; }
+void LoadMenuLang();   // lee PES21FX_menu_en.ini sobre g_cfg.groups / g_cfg.keys (con g_cfgMutex tomado)
 bool LoadCloth();
 bool SaveCloth();                        // escribe los valores live en PES21FX.ini
 void PollKeys(bool focused);
@@ -401,8 +424,8 @@ void AutoCapturePresent(ID3D11Texture2D* frame);   // hooks.cpp
 // (27/10 c) sombra propia de la cabeza (headshadow.cpp): atlas de sombras de alta resolucion de las cabezas mas cercanas
 void HeadShadowPresent(); int HeadShadowSlots(); ID3D11ShaderResourceView* HeadShadowSRV(); ID3D11DepthStencilView* HeadShadowDSV();
 ID3D11Buffer* HeadShadowCB(int i); void HeadShadowViewport(int i, D3D11_VIEWPORT& vp); bool HeadShadowIsGameShadow(ID3D11DepthStencilView* v);
-bool HeadShadowIsNearCascade(ID3D11DeviceContext* c, ID3D11DepthStencilView* gameDSV); void HeadShadowOnClear(ID3D11DeviceContext* c, ID3D11DepthStencilView* v, float depth);
-void HeadShadowRelease(); extern std::atomic<int> g_headShadowReplays;
+bool HeadShadowIsNearCascade(ID3D11DeviceContext* c, ID3D11DepthStencilView* gameDSV, int kind); ID3D11DepthStencilView* HeadShadowBind(UINT n, ID3D11RenderTargetView* const* rt, ID3D11DepthStencilView* dsv); void HeadShadowOnClear(ID3D11DeviceContext* c, ID3D11DepthStencilView* v, float depth);
+void HeadShadowRelease(); extern std::atomic<int> g_headShadowReplays; ID3D11RasterizerState* HeadShadowNoCullRS(ID3D11RasterizerState* orig);
 ID3D11Resource* NamedSRVResource(const std::string& name);   // hooks.cpp: recurso detras de un SRV guardado por regla (sin referencia)
 ID3D11ShaderResourceView* SSSSBeforeComposition(ID3D11DeviceContext* c); ID3D11ShaderResourceView* SSSSSpecSRV(); void SSSSReloadShaders(); extern std::atomic<int> g_ssssDraws;   // ssss.cpp
 // prueba automatica del menu (menutest.cpp)

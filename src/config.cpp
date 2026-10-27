@@ -103,7 +103,7 @@ static bool LoadConfigLocked() {
             section = l.substr(1, l.find(']') - 1);
             cur = nullptr; grp = nullptr;
             if (Lower(section).rfind("key", 0) == 0) { c.keys.emplace_back(); cur = &c.keys.back(); cur->name = section; }
-            else if (Lower(section).rfind("menu", 0) == 0) { c.groups.emplace_back(); grp = &c.groups.back(); grp->title = section.substr(4); }
+            else if (Lower(section).rfind("menu", 0) == 0) { c.groups.emplace_back(); grp = &c.groups.back(); grp->title = section.substr(4); grp->id = section.substr(4); }
             continue;
         }
         size_t eq = l.find('=');
@@ -126,6 +126,7 @@ static bool LoadConfigLocked() {
         if (Lower(section) == "motor") {   // (20/10) parches en memoria del motor (exepatch.cpp)
             if (kl == "motor") c.motorPatch = atoi(v.c_str()) != 0;
             else if (kl == "sol_parche") c.motorSunFix = atoi(v.c_str()) != 0;   // (27/10) el sol en vista con la matriz al reves (exepatch.cpp)
+            else if (kl == "sombra_parche") c.motorShadowFix = std::clamp(atoi(v.c_str()), 0, 3);   // (27/10) la matriz del shadow map con la vista al reves
             else if (kl == "sombra_resolucion") c.motorShadowRes = std::clamp(atoi(v.c_str()), 0, 8192);
             else if (kl == "sombra_cascadas") c.motorCascadeScale = std::clamp((float)atof(v.c_str()), 0.0f, 4.0f);
             else if (kl == "pasto_buscar") c.grassScan = atoi(v.c_str()) != 0;
@@ -139,6 +140,7 @@ static bool LoadConfigLocked() {
             else if (kl == "favoritos") c.favorites = v;
             else if (kl == "ui_scale") c.uiScale = std::clamp((float)atof(v.c_str()), 0.7f, 2.0f);
             else if (kl == "compacto") c.compact = atoi(v.c_str()) != 0;
+            else if (kl == "language" || kl == "idioma") { const std::string lv = Lower(v); c.lang = (lv == "en" || lv == "english" || v == "1") ? 1 : (lv == "pt" || lv == "portugues" || lv == "portuguese" || v == "2") ? 2 : 0; }
             else if (kl == "auto_captura") c.autoCap = atoi(v.c_str()) != 0;
             else if (kl == "auto_captura_seg") c.autoCapSec = std::clamp((float)atof(v.c_str()), 3.0f, 600.0f);
             else if (kl == "auto_captura_max") c.autoCapMax = std::clamp(atoi(v.c_str()), 1, 2000);
@@ -244,8 +246,8 @@ static bool LoadConfigLocked() {
     { static const struct { int i, k; float v; } kDef[] = { {290, 0, 1.f}, {290, 1, 1.f}, {290, 2, 0.45f}, {290, 3, 1.f}, {291, 0, 1.f}, {291, 1, 30.f}, {291, 2, 100.f}, {291, 3, 1.f},
                                                          {292, 0, 1.f}, {292, 1, 1.f}, {292, 2, 1.f}, {292, 3, 1.f}, {294, 0, 1000.f}, {294, 1, 200.f}, {294, 2, 450.f}, {294, 3, 1.f},
                                                          {295, 0, 1.f}, {295, 1, 1.f}, {295, 2, 1.f}, {295, 3, 0.72f}, {296, 0, 1.f}, {296, 1, 1.f}, {296, 2, 1.f},   // (27/10) z296 1: la sombra del pasto ya no se hunde (la luz de cielo 314 la arma)
-                                                         {299, 0, 1.f}, {299, 1, 1.f}, {299, 2, 1.f},
-                                                         {320, 0, 6.f}, {320, 3, 1.f} };   // (27/10) 320: x mm que el torso se mete bajo la camiseta ajustada | w on   // (27/10 l, tanda 9a) 299: x hojas del pasto del juego solo con la base debajo | y oclusion promediada a media distancia | z lineas nitidas a media distancia
+                                                         {299, 0, 1.f}, {299, 1, 1.f}, {299, 2, 1.f}, {299, 3, 1.f}, {325, 0, 0.f}, {328, 0, 1.f}, {328, 1, 1.f}, {328, 2, 1.f}, {328, 3, 0.f}, {329, 0, 1.f}, {329, 1, 1.f}, {329, 2, 30.f}, {329, 3, 1.f}, {112, 3, 0.5f}, {330, 0, 0.4f}, {332, 0, 0.1f}, {332, 1, 0.75f}, {332, 2, 0.15f}, {332, 3, 1.f}, {333, 0, 50.f}, {333, 1, 0.4f}, {334, 0, 1.f}, {334, 1, 1.f}, {334, 2, 1.f},
+                                                         {320, 0, 6.f}, {320, 3, 1.f} };   // (27/10) 320: x mm que el torso se mete bajo la camiseta ajustada | w on   // (27/10 l, tanda 9a) 299: x hojas del pasto del juego solo con la base debajo | y oclusion promediada a media distancia | z lineas nitidas a media distancia | w las hojas no hacen sombra de contacto sobre la cancha
       for (auto& d : kDef) if (!c.info[d.i][d.k].defined) c.base[d.i][d.k] = d.v; }
     // 313 (27/10) el sol sobre el pasto (pes_sunturf.hlsli): x sombras entre hojas | y luz a traves de las hojas | z sol bajo dorado | w on
     { static const struct { int i, k; float v; } kDef313[] = { {313, 0, 0.6f}, {313, 1, 0.7f}, {313, 2, 0.6f}, {313, 3, 1.f},
@@ -305,7 +307,80 @@ static bool LoadConfigLocked() {
     for (auto& kv : c.pairRules) nr += (int)kv.second.actions.size();
     Log("config: %d teclas, %d reglas (%d acciones); shaders=%d reglas=%d menu=%d", (int)c.keys.size(), (int)c.rules.size(), nr,
         (int)c.optReplace, (int)c.optRules, (int)c.optOverlay);
+    LoadMenuLang();
     return true;
+}
+
+// ---------------------------------------------------------------- (27/10) menu en ingles / portugues: PES21FX_menu_en.ini / _pt.ini
+// Mismas secciones [MenuX] / [KeyX] que PES21FX.ini, solo con los textos: section, title, desc, label (teclas) y las lineas
+// slider / choice / toggle / cslider / cchoice / button con la etiqueta, la ayuda y las opciones traducidas. Los numeros (rango,
+// formato, valores de fabrica) siempre salen de PES21FX.ini. Los campos *En guardan el idioma elegido (en o pt): el selector
+// vuelve a llamar a LoadMenuLang al cambiar.
+static std::vector<std::string> SplitBar(const std::string& v, char sep) {
+    std::vector<std::string> parts; std::string cur;
+    for (char ch : v) { if (ch == sep) { parts.push_back(Trim(cur)); cur.clear(); } else cur += ch; }
+    parts.push_back(Trim(cur));
+    return parts;
+}
+void LoadMenuLang() {
+    Config& c = g_cfg;
+    for (auto& g : c.groups) {
+        g.titleEn.clear(); g.descEn.clear(); g.sectionEn.clear();
+        for (auto& sl : g.sliders) { sl.labelEn.clear(); sl.helpEn.clear(); sl.optionsEn.clear(); }
+        for (auto& b : g.buttons) { b.labelEn.clear(); b.helpEn.clear(); }
+    }
+    for (auto& k : c.keys) k.labelEn.clear();
+    if (c.lang == 0) return;
+    const wchar_t* file = c.lang == 2 ? L"PES21FX_menu_pt.ini" : L"PES21FX_menu_en.ini";
+    std::vector<std::string> lines;
+    if (!ReadLines(c.baseDir + file, lines)) { Log("menu: sin %ls (queda en espanol)", file); return; }
+    std::map<std::string, MenuGroup*> byId; for (auto& g : c.groups) byId[Lower(g.id)] = &g;
+    std::map<std::string, KeyBind*> keyById; for (auto& k : c.keys) keyById[Lower(k.name)] = &k;
+    MenuGroup* grp = nullptr; KeyBind* key = nullptr; int nTxt = 0;
+    for (auto& raw : lines) {
+        std::string l = Trim(raw);
+        if (l.empty() || l[0] == ';') continue;
+        if (l[0] == '[') {
+            std::string sec = Lower(l.substr(1, l.find(']') - 1));
+            grp = nullptr; key = nullptr;
+            if (sec.rfind("menu", 0) == 0) { auto it = byId.find(sec.substr(4)); if (it != byId.end()) grp = it->second; }
+            else if (sec.rfind("key", 0) == 0) { auto it = keyById.find(sec); if (it != keyById.end()) key = it->second; }
+            continue;
+        }
+        size_t eq = l.find('=');
+        if (eq == std::string::npos) continue;
+        std::string kl = Lower(Trim(l.substr(0, eq))), v = Trim(l.substr(eq + 1));
+        if (key) { if (kl == "label") { key->labelEn = v; nTxt++; } continue; }
+        if (!grp) continue;
+        if (kl == "title") grp->titleEn = v;
+        else if (kl == "desc") grp->descEn = v;
+        else if (kl == "section") grp->sectionEn = v;
+        else if (kl == "button") {
+            auto parts = SplitBar(v, '|');
+            for (auto& b : grp->buttons) if (parts.size() >= 2 && b.action == Lower(parts[0])) { b.labelEn = parts[1]; if (parts.size() >= 3) b.helpEn = parts[2]; }
+        } else if (kl == "slider" || kl == "choice" || kl == "cslider" || kl == "cchoice") {
+            auto parts = SplitBar(v, '|');
+            if (parts.size() < 2) continue;
+            const bool ext = kl[0] == 'c';
+            int i2 = -1, c2 = 0; if (!ext && !ParseParamName(parts[0], i2, c2)) continue;
+            for (auto& sl : grp->sliders) {
+                if (ext ? (sl.ext != Lower(parts[0])) : (!sl.ext.empty() || sl.idx != i2 || sl.comp != c2)) continue;
+                sl.labelEn = parts[1];
+                // ayuda: slider 5.a, choice 4.a, cslider 6.a, cchoice 5.a
+                const size_t hi = kl == "slider" ? 4 : kl == "choice" ? 3 : kl == "cslider" ? 5 : 4;
+                if (parts.size() > hi) sl.helpEn = parts[hi];
+                if ((kl == "choice" || kl == "cchoice") && parts.size() >= 3) {
+                    auto opts = SplitBar(parts[2], ';');
+                    for (auto& o : opts) { size_t e = o.rfind('='); if (e != std::string::npos && kl == "choice") o = Trim(o.substr(0, e)); }
+                    if (!opts.empty() && opts.back().empty()) opts.pop_back();
+                    if (opts.size() == sl.options.size()) sl.optionsEn = opts;
+                }
+                break;
+            }
+        } else continue;
+        nTxt++;
+    }
+    Log("menu: %ls, %d textos traducidos", file, nTxt);
 }
 
 // ---------------------------------------------------------------- cloth-mod\cloth.ini
@@ -696,8 +771,7 @@ void UpdateTimeParams() {
       }
       p[93][0] = adapt; }
     // (20/10) inyeccion de luz: la DLL publica cada cuadro, para todos los shaders, el sol en espacio MUNDO (111: xyz + altura
-    // en grados), su color normalizado (112: rgb con el canal mayor = 1, w = luminancia cruda), la niebla/horizonte del motor y
-    // la exposicion (113), y el estado de la escena (114: x suelo automatico 0 normal / 1 humedo (lluvia) / 2 seco, y altura
+    // en grados) y el estado de la escena (114: x suelo automatico 0 normal / 1 humedo (lluvia) / 2 seco, y altura
     // de la camara, z estacion, w 1 = de dia con sol real). Antes cada shader lo derivaba a mano de m_view.
     { std::vector<float> L, S; int lf = -1, sf = -2;
       bool lok = NamedCBRead("LightCB", L, &lf) && L.size() >= 8, sok = NamedCBRead("SceneCB", S, &sf) && S.size() >= 120;
@@ -734,13 +808,16 @@ void UpdateTimeParams() {
                 if (sky) { p[312][0] = k[0]; p[312][1] = k[1]; p[312][2] = k[2]; p[312][3] = 2.0f; }
                 else if (haveSt) { p[312][0] = st[0]; p[312][1] = st[1]; p[312][2] = st[2]; p[312][3] = 1.0f; }
                 else { p[312][0] = wx; p[312][1] = wy; p[312][2] = wz; p[312][3] = 0.0f; } } }
-          float cr = L[4], cg = L[5], cb = L[6]; float mx = std::max(cr, std::max(cg, cb));
-          if (mx > 1e-4f) { p[112][0] = cr / mx; p[112][1] = cg / mx; p[112][2] = cb / mx; }
-          p[112][3] = 0.2126f * cr + 0.7152f * cg + 0.0722f * cb;
-          p[113][0] = S[108]; p[113][1] = S[109]; p[113][2] = S[110]; p[113][3] = S[94];   // niebla rgb, exposicion z
+          // (27/10 n) el color del sol ya NO se publica en la fila 112: ningun shader lo leia y desde el 25/10 esa fila es el
+          // color del pasto del menu (x matiz, y verde, z contraste, w verde natural); escribirla cada cuadro pisaba los sliders
+          // y el menu guardaba basura (w112 = 3826). La luminancia queda local para decidir "sunny".
+          float cr = L[4], cg = L[5], cb = L[6];
+          float lum112 = 0.2126f * cr + 0.7152f * cg + 0.0722f * cb;
+          // (27/10 o) la niebla / exposicion ya NO se publican en la fila 113: ningun shader las leia y la 113 es el slider de reflectores
+          // de noche en el cesped (619b, x113 / y113): escribirla cada cuadro los pisaba y el menu guardaba w113 = 0.0001
           p[114][1] = S[81];                                                             // altura de la camara (m_eyepos.y)
           g_eyePos[0] = S[80]; g_eyePos[1] = S[81]; g_eyePos[2] = S[82]; g_eyePos[3] = 1; g_eyeValid = true;   // (20/10) para el LOD de caras
-          bool sunny = (cr / std::max(cb, 1e-4f)) > 1.06f && p[112][3] > 600.0f;         // luz calida y fuerte = sol (de noche: torres frias)
+          bool sunny = (cr / std::max(cb, 1e-4f)) > 1.06f && lum112 > 600.0f;         // luz calida y fuerte = sol (de noche: torres frias)
           p[114][3] = sunny ? 1.0f : 0.0f;
       }
       int ground = 0; if (g_cfg.match.known && g_cfg.match.weather == 1) ground = 1;

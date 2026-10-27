@@ -608,7 +608,7 @@ void main(
       float mppS = max(zS0 * abs(g_psScene.m_projectionParam.x) * 2.0 / max(g_psScene.m_viewportSize.x, 1.0), 1e-6);
       float rPx = 0.006 * max(IniParams.Load(int2(95,0)).x, 0.3) / mppS;   // radio de la SSSS en pixeles (6 mm x ancho)
       pesSsssK = saturate((rPx - 1.0) / 5.0) * ((pesUni || IniParams.Load(int2(146,0)).x > 0.5) ? 1.0 : 0.0);
-      w *= 1.0 - 0.85 * pesSsssK;
+      w *= 1.0 - 0.45 * pesSsssK;   // (27/10 f) antes 0.85: el terminador quedaba duro con la SSSS
     }
     if (!sssOn) w = 0.03;                 // 18/10: ancho del borde acotado (antes envolvia la cara y corria la luz)
     float3 d = saturate(PESSoftTerm(rawNdotL, w));
@@ -679,6 +679,7 @@ void main(
       float bias = (0.008 + 0.0018 * zA) * (0.6 + 0.4 / max(rawNdotL, 0.12));
       float3 Q = Pv + Lc * bias;
       float occ = 0;
+      bool csTurfSkip = matType == 3 && IniParams.Load(int2(299,0)).w > 0.5;
       [loop] for (int ci = 0; ci < 12; ci++) {
         float f = (ci + ign) / 12.0;
         float t = f * f * csLen;                                   // muestras densas junto al pixel (detalle fino)
@@ -692,7 +693,14 @@ void main(
         float zS = g_psScene.m_projectionParam.z / (dS2 - g_psScene.m_projectionParam.w);
         float dz = (R.z - zS) * zSgn;                              // > 0: el rayo quedo detras de lo que ve la camara
         float thick = csThk + 0.25 * t + 0.0015 * RzA;   // (20/10) antes 0.22 + 0.40 t + 0.003 z: sombras fantasma de lo que estaba delante.   // 18/10 d: grosor aceptado del oclusor. Con 4 cm NUNCA habia impacto: una cabeza o un brazo miden 10-25 cm y el rayo pasa por detras de su cara visible (verificado con una simulacion numerica)               // grosor aceptado: crece con el largo del rayo
-        if (dz > 0.003 + 0.0008 * RzA && dz < thick && (zC - zS) * zSgn > 0.03 + 0.002 * zA) {
+        // (27/10) w299: en la cancha las hojas no hacen sombra de contacto sobre la cancha (el rayo siempre chocaba con alguna
+        // hoja y todo el pasto cercano quedaba sin sol); la sombra entre hojas la pone x313. La pelota y los botines si.
+        bool csTurfHit = false;
+        if (csTurfSkip && dz > 0.003 + 0.0008 * RzA && dz < thick) {
+          uint mtS = (uint)(g_NormalTexture.SampleLevel(g_samplerPoint_Wrap_s, uv, 0).z * 1023 + 0.5) & 15;
+          csTurfHit = mtS == 3;
+        }
+        if (!csTurfHit && dz > 0.003 + 0.0008 * RzA && dz < thick && (zC - zS) * zSgn > 0.03 + 0.002 * zA) {
           // oclusor cerca = sombra plena; lejos = penumbra (segun suavidad). Primer impacto = el mas cercano.
           occ = (1.0 - csSoft * f) * saturate(dz / (0.35 * thick));
           break;
@@ -719,13 +727,15 @@ void main(
     float hsD = g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, hsU, 0).x;
     float hsZ = g_psScene.m_projectionParam.z / (hsD - g_psScene.m_projectionParam.w);
     float3 hsP = float3((hsS - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * hsZ, hsZ);
+    float hsZs = hsZ < 0.0 ? -1.0 : 1.0;   // (27/10 d) a la vista de la proyeccion (z positiva hacia adelante), como la DLL
+    hsP *= float3((g_psScene.m_projectionParam.x < 0.0 ? -1.0 : 1.0) * hsZs, (g_psScene.m_projectionParam.y < 0.0 ? -1.0 : 1.0) * hsZs, hsZs);
     r0.xyz *= PESHeadShadowAt(hsP, rawNdotL, g_samplerLinear_Clamp_s); }
   float3 shadowRGB = r0.xyz;
   shadowScalar = saturate(r0.x);
   if (isSkin) {
     float sh = saturate(r0.x);
     // sombra mas suave sobre la piel (la luz se difunde dentro del tejido)
-    sh = lerp(sh, smoothstep(0.0, 1.0, sh), saturate(P5.z) * (pesSSSS ? 0.0 : 1.0));   // SSS v3: solo suaviza el borde (apagado con SSSS)
+    sh = lerp(sh, smoothstep(0.0, 1.0, sh), saturate(P5.z) * (pesSSSS ? 0.7 : 1.0));   // SSS v3: solo suaviza el borde. (27/10 f) con la SSSS se deja casi entero: su disco en milimetros no alcanza a suavizar el borde del shadow map (Agustin: borde duro con la dispersion prendida)
     // 18/10 v2: rojo solo en la PENUMBRA (borde de la sombra), la sombra plena queda neutra.
     // Antes pow(sh,0.55) en el rojo dejaba toda la sombra de la cara naranja.
     float pen = sh * (1.0 - sh) * 4.0;   // 1 en el medio del borde, 0 en luz plena y en sombra plena

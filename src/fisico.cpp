@@ -242,6 +242,7 @@ static bool CallSetText(void* comp, const GameStr* s) {
     __try { ((SetTextFn)kSetText)(comp, s, 0, 0); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 static void SetLabel(void* w, const char* utf8) {
+    utf8 = TRS(utf8);   // (27/10) menu en ingles
     void* c = FindComp(w, "setName");
     if (!c) return;
     static char big[128];
@@ -313,16 +314,16 @@ static void PageHints(void* menu, int page) {
         ((SetHintStrFn)kSetHintStr)(menu, H_ARROWS, "");   // versiones anteriores lo ponian en 12 (flechas) y 14 (palanca)
         ((SetHintStrFn)kSetHintStr)(menu, H_STICK, "");
         ((SetHintStrFn)kSetHintStr)(menu, H_DPAD, "");
-        ((SetHintStrFn)kSetHintStr)(menu, H_L1R1, "Cambiar p\xC3\xA1gina");
+        ((SetHintStrFn)kSetHintStr)(menu, H_L1R1, TRS("Cambiar p\xC3\xA1gina"));
     } __except (EXCEPTION_EXECUTE_HANDLER) {}
 }
 // titulo con contador de paginas
 static const char* PageTitle(int page) {
     static char b[96];
     const int tot = kLastPage + 1;
-    if (page == 0) snprintf(b, sizeof b, "F\xC3\xADsico  (1/%d)", tot);
-    else if (IsMusPage(page)) snprintf(b, sizeof b, "%s  (%d/%d)", kMP[page - 1].title, page + 1, tot);
-    else snprintf(b, sizeof b, "Piel: tono propio  (%d/%d)", tot, tot);
+    if (page == 0) snprintf(b, sizeof b, TRS("F\xC3\xADsico  (1/%d)"), tot);
+    else if (IsMusPage(page)) snprintf(b, sizeof b, "%s  (%d/%d)", TRS(kMP[page - 1].title), page + 1, tot);
+    else snprintf(b, sizeof b, TRS("Piel: tono propio  (%d/%d)"), tot, tot);
     return b;
 }
 
@@ -375,14 +376,14 @@ static float FromUnits(const MRow& r, int u) {
 // (26/10 b) rotulo de una fila con su valor si no es el del juego ("Biceps  x1.12"); (26/10 c) las opciones en 0: "(apagado)"
 static const char* RowLabel(const MRow& r, float v) {
     static char b[96];
-    if (r.kind == K_GLOBAL && v < 0.005f) { snprintf(b, sizeof b, "%s  (apagado)", r.label); return b; }
+    if (r.kind == K_GLOBAL && v < 0.005f) { snprintf(b, sizeof b, TRS("%s  (apagado)"), TRS(r.label)); return b; }
     if (r.idx == 262 && r.comp == 2) {   // (26/10) tipo de cuerpo: 0.5 robusto .. 1 TorsoBody .. 1.5 atletico (0 = sin valor = normal)
-        if (v < 0.05f || fabsf(v - 1.0f) < 0.005f) snprintf(b, sizeof b, "%s  (normal)", r.label);
-        else snprintf(b, sizeof b, "%s  %s %d %%", r.label, v < 1.0f ? "robusto" : "atl\xC3\xA9tico", (int)lroundf(fabsf(v - 1.0f) * 200.0f));
+        if (v < 0.05f || fabsf(v - 1.0f) < 0.005f) snprintf(b, sizeof b, "%s  (normal)", TRS(r.label));
+        else snprintf(b, sizeof b, "%s  %s %d %%", TRS(r.label), TRS(v < 1.0f ? "robusto" : "atl\xC3\xA9tico"), (int)lroundf(fabsf(v - 1.0f) * 200.0f));
         return b;
     }
     if (!IsBar(r.kind) || fabsf(v - 1.0f) < 0.005f) return r.label;
-    snprintf(b, sizeof b, "%s  x%.2f", r.label, v);
+    snprintf(b, sizeof b, "%s  x%.2f", TRS(r.label), v);
     return b;
 }
 static const char* const kSiNoRow[2] = { "No", "S\xC3\xAD" };
@@ -455,7 +456,7 @@ static void FillMusclePage(void* menu, int page, int skipRow = -1) {
 static bool G_SelFillList(void* sel, const char* const* items, int n, int idx) {
     __try {
         ((SelClearFn)kSelClear)(sel);
-        for (int i = 0; i < n; i++) ((SelAddFn)kSelAdd)(sel, items[i]);
+        for (int i = 0; i < n; i++) ((SelAddFn)kSelAdd)(sel, TRS(items[i]));
         ((SelSetFn)kSelSet)(sel, (unsigned)std::clamp(idx, 0, n - 1));
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
@@ -477,10 +478,10 @@ static void G_UiSetColor(void* comp, uint32_t rgba) {
     __try { ((UiSetColorFn)kUiSetColor)(comp, b); } __except (EXCEPTION_EXECUTE_HANDLER) {}
 }
 static void ToneLabel(char* out, size_t n, int tono, uint32_t rgb) {
-    if (rgb) snprintf(out, n, "Tono de piel (FX): propio");
-    else if (tono > 0 && (tono - 3) % 5 == 0 && tono >= 3 && tono <= 28) snprintf(out, n, "Tono de piel (FX): %d (color %d)", tono, (tono - 3) / 5 + 1);
-    else if (tono > 0) snprintf(out, n, "Tono de piel (FX): %d", tono);
-    else snprintf(out, n, "Tono de piel (FX): del juego");
+    if (rgb) snprintf(out, n, "%s", TRS("Tono de piel (FX): propio"));
+    else if (tono > 0 && (tono - 3) % 5 == 0 && tono >= 3 && tono <= 28) snprintf(out, n, TRS("Tono de piel (FX): %d (color %d)"), tono, (tono - 3) / 5 + 1);
+    else if (tono > 0) snprintf(out, n, TRS("Tono de piel (FX): %d"), tono);
+    else snprintf(out, n, "%s", TRS("Tono de piel (FX): del juego"));
 }
 // (24/10 e) tonos conocidos: escala Monk (1 muy claro .. 10 muy oscuro) llevada a la escala de 30 tonos
 static const int kMonk[10] = { 1, 2, 3, 6, 9, 15, 21, 27, 29, 30 };
@@ -507,7 +508,7 @@ static void FillSkinPage(void* menu) {
     static char tones[kSkinTones + 1][24]; static const char* toneP[kSkinTones + 1];
     static bool init = false;
     if (!init) {
-        snprintf(tones[0], sizeof tones[0], "Del juego"); toneP[0] = tones[0];
+        snprintf(tones[0], sizeof tones[0], "%s", TRS("Del juego")); toneP[0] = tones[0];
         for (int t = 1; t <= kSkinTones; t++) {
             if ((t - 3) % 5 == 0 && t >= 3 && t <= 28) snprintf(tones[t], sizeof tones[t], "%d (color %d)", t, (t - 3) / 5 + 1);
             else snprintf(tones[t], sizeof tones[t], "%d", t);

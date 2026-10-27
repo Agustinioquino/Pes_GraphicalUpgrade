@@ -130,6 +130,14 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   float wrap = skin ? 0.03 : 0.0;
   float nl = saturate((rawNL + wrap) / (1.0 + wrap));
   float3 dif = sunC * nl * sh;
+  // (27/10 e) videos del editor de Agustin: el lado al sol se veia gris y el paso a la sombra sin el borde calido de la piel.
+  // Borde de la sombra rojizo (la luz que entra en la piel sale un poco mas alla del terminador, mas el rojo que el verde y el
+  // azul: envoltura por canal), solo en la franja del terminador, con la misma sombra trazada suavizada
+  if (skin) {
+    float3 wr = float3(0.30, 0.10, 0.05);
+    float3 nl3 = saturate((rawNL + wr) / (1.0 + wr));
+    dif += sunC * max(nl3 - nl, 0.0) * 0.8 * lerp(1.0, sh, 0.6);
+  }
   if (skin) {   // contraluz: orejas y aletas de la nariz dejan pasar luz (translucidez del G-buffer), como en la pasada de luz
     uint tq = (uint)(inNrm.SampleLevel(sPoint, uv, 0).z * 1023.0 + 0.5);
     float trans = (float)(tq >> 4) / 63.0;
@@ -137,7 +145,7 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
     float tv = pow(saturate(dot(V, -Lt)), 3.0);
     float thick = saturate(trans * 1.6);
     float x5 = IniParams.Load(int2(5, 0)).x;
-    dif += sunC * thick * smoothstep(0.45, 0.85, thick) * tv * float3(1.0, 0.24, 0.10) * (x5 > 0 ? x5 : 1.0) * sqrt(sh);
+    dif += sunC * thick * smoothstep(0.2, 0.7, thick) * tv * float3(1.0, 0.24, 0.10) * (x5 > 0 ? x5 : 1.0) * sqrt(sh);
   }
   // --- brillo: GGX con la rugosidad del G-buffer y, en la piel, el lobulo fino (grasa / sudor) ---
   float3 H = normalize(L + V);
@@ -157,6 +165,12 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
     float y5 = IniParams.Load(int2(5, 0)).y;
     spec += sunC * Ds * F * nl * 0.25 * (y5 > 0 ? y5 : 1.0) * sh;
   }
+  // (27/10 g) relleno de cielo: el lado en sombra no queda gris plano; luz difusa del cielo (azulada, de arriba) y un poco de
+  // rebote del suelo (calido, de abajo), proporcional al sol. El cielo es mas azul cuanto mas calido (bajo) esta el sol.
+  float3 skyC = lerp(float3(0.55, 0.70, 1.00), float3(0.35, 0.50, 1.00), saturate(warm)) * (S * inten) * 0.16;
+  float3 gndC = float3(1.00, 0.72, 0.50) * (S * inten) * 0.05;
+  float up = n.y * 0.5 + 0.5;   // normal en vista: y arriba
+  dif += skyC * up + gndC * (1.0 - up);
   o.c = float4(c0 * saturate(keep) + dif, 1);
   o.s = float4(s0 * saturate(keep) + spec, 1);
   return o;
@@ -192,11 +206,12 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   float2 slope = float2(abs(zxp) < abs(zxn) ? zxp : zxn, abs(zyp) < abs(zyn) ? zyp : zyn);
   float tolK = P.z > 0.0 ? P.z : 1.0;
   // rotacion por pixel y por cuadro (ruido de gradiente intercalado, Jimenez 2014)
-  float rot = 6.2831853 * frac(52.9829189 * frac(dot(pos.xy, float2(0.06711056, 0.00583715))) + frac(m_timeParam.z * 7.31));
+  // (27/10 g) 24 muestras (antes 16) y el giro por cuadro solo si x331 > 0.5 (sin TAA el giro por cuadro era grano que titila)
+  float rot = 6.2831853 * frac(52.9829189 * frac(dot(pos.xy, float2(0.06711056, 0.00583715))) + (IniParams.Load(int2(331, 0)).x > 0.5 ? frac(m_timeParam.z * 7.31) : 0.0));
   float3 acc = 0, wsum = 0;
-  [unroll] for (int i = 0; i < 16; i++) {
-    bool redSet = (i & 1) == 0;
-    float rmm = kBurleyX[i >> 1] * (redSet ? dmm.r : dmm.g);
+  [unroll] for (int i = 0; i < 24; i++) {
+    bool redSet = (i % 3) != 2;   // dos de cada tres muestras con el radio del rojo (el que mas lejos llega)
+    float rmm = kBurleyX[i / 3] * (redSet ? dmm.r : dmm.g);
     float a = rot + i * 2.3999632;                       // angulo aureo: las 16 muestras no se alinean
     float2 off = float2(cos(a), sin(a)) * (rmm * mmToPx);   // en pixeles
     float2 uvS = uv + off * rb;
@@ -206,7 +221,7 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
     float tol = max(1.0, 0.5 * rmm) / tolK;               // la superficie puede curvarse mas lejos del centro
     float depthW = exp(-(dzmm * dzmm) / (tol * tol));
     // peso de cada canal = perfil / pdf de la mezcla (rojo + verde, mitad y mitad): el 1/r de los dos se cancela
-    float pdf = 0.5 * BurleyF(rmm / dmm.r) / dmm.r + 0.5 * BurleyF(rmm / dmm.g) / dmm.g;
+    float pdf = 0.667 * BurleyF(rmm / dmm.r) / dmm.r + 0.333 * BurleyF(rmm / dmm.g) / dmm.g;
     float3 w = float3(BurleyF(rmm / dmm.r) / dmm.r, BurleyF(rmm / dmm.g) / dmm.g, BurleyF(rmm / dmm.b) / dmm.b) / max(pdf, 1e-6);
     w *= depthW;
     acc += w * inLight.SampleLevel(sLinear, uvS, 0).xyz;
