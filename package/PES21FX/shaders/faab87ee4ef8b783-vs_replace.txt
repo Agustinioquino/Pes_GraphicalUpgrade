@@ -78,7 +78,7 @@ void main(
   out float4 o0 : SV_Position0,
   out float4 o1 : COLOR0,
   out float2 o2 : TEXCOORD0,
-  out float4 p2 : TEXCOORD9,   // (27/10 c) zw = posicion de reposo (y, x)
+  out float2 p2 : TEXCOORD9,
   out float4 o3 : TEXCOORD4,
   out float4 o4 : TEXCOORD5,
   out float4 o5 : TEXCOORD6,
@@ -176,10 +176,13 @@ void main(
   r4.xyz = r4.xyz * r0.www;
   r4.xyz = v2.www * r4.xyz;
   o3.xyz = -r0.xyz;
-  // (27/10 c) posicion de REPOSO del vertice (v0, espacio del modelo, metros) para los poros triplanares (pes_pores.hlsli):
-  // z en o3.w + 10 (asi no cae en el [2, 3] del peso del musculo del cuerpo en aa7d), (y, x) en TEXCOORD9.zw como el VS del cuerpo
+  // (27/10 i) posicion de REPOSO del vertice (v0r, espacio del modelo, metros) para los poros triplanares (pes_pores.hlsli):
+  // z en o3.w + 10 (asi no cae en el [2, 3] del peso del musculo del cuerpo en aa7d), y en TEXCOORD5.w, x en TEXCOORD6.w.
+  // Van en los .w libres de registros que YA existen: la firma de salida queda IGUAL a la del juego (TEXCOORD9 float2 empaquetado
+  // con TEXCOORD0). Con TEXCOORD9 float4, los PS que lo declaran float2 (boca 63fab773, pestanas, los originales del juego)
+  // leian los vectores de movimiento corridos y los dientes vibraban en todas las caras.
   o3.w = 10.0 + v0r.z;
-  p2.z = v0r.y; p2.w = v0r.x;
+  o4.w = v0r.y; o5.w = v0r.x;
   o4.xyz = r1.xyz;
   o5.xyz = r4.xyz;
   o6.xyz = r2.xyz;

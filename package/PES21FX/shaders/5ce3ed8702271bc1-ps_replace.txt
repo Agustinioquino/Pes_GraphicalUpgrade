@@ -164,7 +164,7 @@ void main(
   float4 v0 : SV_Position0,
   float4 v1 : COLOR0,
   float2 v2 : TEXCOORD0,
-  float4 w2 : TEXCOORD9,
+  float2 w2 : TEXCOORD9,
   float4 v3 : TEXCOORD4,
   float4 v4 : TEXCOORD5,
   float4 v5 : TEXCOORD6,
@@ -327,9 +327,9 @@ void main(
   float4 P94 = IniParams.Load(int2(94,0));   // (declarado aca: lo usa tambien el bloque del especular mas abajo)
   float3 pesMicroDbg = float3(-1, 0, 0);     // dbg: intensidad = 2.00 pinta el mosaico;  pesMicroVar: varianza de la micro normal (Toksvig) -> rugosidad extra
   // (27/10 c) poros triplanares sobre la posicion de reposo de la malla (pes_pores.hlsli): el VS de la cabeza deja la posicion
-  // de reposo en TEXCOORD9.zw (y, x) y TEXCOORD4.w = 10 + z. Derivadas fuera de la rama (fxc).
+  // de reposo en TEXCOORD6.w (x), TEXCOORD5.w (y) y TEXCOORD4.w = 10 + z (27/10 i: ya no en TEXCOORD9.zw; firma del VS igual a la del juego). Derivadas fuera de la rama (fxc).
   bool pesHasR = v3.w > 9.0;
-  float3 pesPM = float3(w2.w, w2.z, v3.w - 10.0);
+  float3 pesPM = float3(v5.w, v4.w, v3.w - 10.0);
   float3 pesDPx = ddx(pesPM), pesDPy = ddy(pesPM);
   float2 pesDUx = ddx(v2.xy), pesDUy = ddy(v2.xy);
   { if (enhance && P94.w > 0.5) {
@@ -653,7 +653,7 @@ void main(
   float4 PC322 = IniParams.Load(int2(322,0));
   { uint ctW = 0, ctH = 0; pesTorsoTex.GetDimensions(ctW, ctH);
     if (PC322.x > 0.5 && ctW > 0) {
-      float3 pesRest = float3(w2.w, w2.z, v3.w - 10.0);   // posicion de reposo del VS de la cabeza (TEXCOORD9.zw = (y, x), TEXCOORD4.w = 10 + z)
+      float3 pesRest = float3(v5.w, v4.w, v3.w - 10.0);   // posicion de reposo del VS de la cabeza (TEXCOORD6.w = x, TEXCOORD5.w = y, TEXCOORD4.w = 10 + z)
       pesCol = PesCollarW(pesRest, PC322.y * 0.001) * saturate(PC322.z);
       if (pesCol > 0.001) {
         float3 ctT = PesCollarTorso(pesTorsoTex, g_samplerLinear_Clamp_s, pesRest);
