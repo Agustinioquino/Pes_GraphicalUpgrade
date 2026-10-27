@@ -84,6 +84,7 @@ Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 #include "pes_common.hlsli"   // PES21 (18/10): curva del dia, transmision de piel, tamano del sol
 #include "pes_sunturf.hlsli"   // (27/10) el sol sobre el pasto (313)
+#include "pes_headshadow.hlsli"   // (27/10 c) sombra propia de la cabeza (t30)
 
 
 // === PES21 SOL: color del sol segun su altura (calido al atardecer, blanco calido al mediodia) ===
@@ -661,6 +662,12 @@ void main(
     if (pesTurf && pesPG.x > 0.0 && r0.x > 0.02)
       r0.xyz *= PESTurfMicroShadow(g_DepthTexture, g_samplerPoint_Wrap_s, sT, uT, AmT, BmT, v2.xy, normalize(pesLDir.xyz), g_psScene.m_projectionParam,
                                    g_psScene.m_cameraCenterOffset.xy, g_psSystem.m_renderBuffer.x, g_psSystem.m_timeParam.z, pesPG.x); }
+  // (27/10 c) sombra propia de la cabeza: el atlas de alta resolucion de las cabezas cercanas (t30) multiplica la sombra del sol
+  { float2 hsS = v0.xy / v0.ww, hsU = v1.xy / v1.ww;
+    float hsD = g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, hsU, 0).x;
+    float hsZ = g_psScene.m_projectionParam.z / (hsD - g_psScene.m_projectionParam.w);
+    float3 hsP = float3((hsS - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * hsZ, hsZ);
+    r0.xyz *= PESHeadShadowAt(hsP, rawNdotL, g_samplerLinear_Clamp_s); }
   float3 shadowRGB = r0.xyz;
   shadowScalar = saturate(r0.x);
   if (isSkin) {

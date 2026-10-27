@@ -40,6 +40,7 @@ constexpr int kParamCount = 320;           // float4 x 320 -> t120 en los shader
 // 320 = torso bajo la camiseta ajustada (27/10, pes_skintone.hlsli PesTorsoInset: x mm, w on).
 // 297 / 298 = luz de prueba del editor (27/10 b, pes_ssss_inc.hlsli: sol de dia / tarde / noche donde no corre el sol del partido).
 // 299 = pasto tanda 9a (hilo del pasto, rama kd63zh).
+// 309 (ini) + 310, 316..319 (DLL) = sombra propia de la cabeza (27/10 c, headshadow.cpp + pes_headshadow.hlsli en los 7 shaders del sol).
 // 305 musculos con textura (manos.cpp + pes_limbs.hlsli en el VS 1c02a92a + PS aa7d1833; x prendido, y definicion, z venas de los
 // brazos, w venas de las manos con el puno apretado; v12.7).
 
@@ -392,6 +393,12 @@ ID3D11ShaderResourceView* GTAOBeforeComposition(ID3D11DeviceContext* c, int fram
 ID3D11ShaderResourceView* SSGIBeforeComposition(ID3D11DeviceContext* c, int frame); void SSGIReloadShaders(); void SSGIPresent(int presentNo);   // (21/10) SSGI temporal (ssgi.cpp) -> t26
 void LightMeterAfterComposition(ID3D11DeviceContext* c); void LightMeterPresent(); void LightMeterReloadShaders(); std::string LightMeterSummary();   // posicion de la camara (m_eyepos del SceneCB, config.cpp, 2 cuadros de atraso)
 void AutoCapturePresent(ID3D11Texture2D* frame);   // hooks.cpp
+// (27/10 c) sombra propia de la cabeza (headshadow.cpp): atlas de sombras de alta resolucion de las cabezas mas cercanas
+void HeadShadowPresent(); int HeadShadowSlots(); ID3D11ShaderResourceView* HeadShadowSRV(); ID3D11DepthStencilView* HeadShadowDSV();
+ID3D11Buffer* HeadShadowCB(int i); void HeadShadowViewport(int i, D3D11_VIEWPORT& vp); bool HeadShadowIsGameShadow(ID3D11DepthStencilView* v);
+bool HeadShadowIsNearCascade(ID3D11DeviceContext* c, ID3D11DepthStencilView* gameDSV); void HeadShadowOnClear(ID3D11DeviceContext* c, ID3D11DepthStencilView* v, float depth);
+void HeadShadowRelease(); extern std::atomic<int> g_headShadowReplays;
+ID3D11Resource* NamedSRVResource(const std::string& name);   // hooks.cpp: recurso detras de un SRV guardado por regla (sin referencia)
 ID3D11ShaderResourceView* SSSSBeforeComposition(ID3D11DeviceContext* c); ID3D11ShaderResourceView* SSSSSpecSRV(); void SSSSReloadShaders(); extern std::atomic<int> g_ssssDraws;   // ssss.cpp
 // prueba automatica del menu (menutest.cpp)
 void MenuTestPresent(IDXGISwapChain* sc);

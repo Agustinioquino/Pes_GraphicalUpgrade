@@ -206,6 +206,14 @@ void NamedSetSRV(const std::string& name, ID3D11ShaderResourceView* v) {
     std::lock_guard<std::mutex> lk(s_namedMutex); auto& r = s_named[name];
     if (r.srv == v) return; if (v) v->AddRef(); if (r.srv) r.srv->Release(); r.srv = v; r.failed = false;
 }
+// (27/10 c) recurso detras de un SRV guardado por regla (ref_srv): la sombra de la cabeza compara el DSV de la pasada de sombras con "ShadowMap"
+ID3D11Resource* NamedSRVResource(const std::string& name) {
+    ID3D11ShaderResourceView* v = nullptr;
+    { std::lock_guard<std::mutex> lk(s_namedMutex); auto it = s_named.find(name); if (it == s_named.end() || !it->second.srv) return nullptr; v = it->second.srv; v->AddRef(); }
+    ID3D11Resource* r = nullptr; v->GetResource(&r); v->Release();
+    if (r) r->Release();   // sin referencia propia: solo se compara el puntero
+    return r;
+}
 static ID3D11ShaderResourceView* FileTexture(const std::string& rel) {
     // rel = "file:textures\\algo.dds" -> se carga una sola vez;  "gen:gris|blanco|negro|normal" -> textura neutra 4x4
     std::lock_guard<std::mutex> lk(s_namedMutex);
@@ -497,7 +505,7 @@ static void UploadParams() {
 }
 
 // ---------------------------------------------------------------- estado por contexto
-struct CtxState { const ShaderEntry* ps = nullptr; const ShaderEntry* vs = nullptr; ID3D11Device* dev = nullptr; bool devKnown = false; ID3D11Buffer* lastHairCB = nullptr; bool clothCS = false; };   // clothCS: el CS puesto es el simulador del mod de ropa (diagnostico en Dispatch)   // lastHairCB: b11 de la ultima cara dibujada en este contexto (la boca la hereda)
+struct CtxState { const ShaderEntry* ps = nullptr; const ShaderEntry* vs = nullptr; ID3D11Device* dev = nullptr; bool devKnown = false; ID3D11Buffer* lastHairCB = nullptr; bool clothCS = false; ID3D11DepthStencilView* shadowDSV = nullptr; };   // shadowDSV: (27/10 c) el DSV puesto es el shadow map del sol del juego (sombra de la cabeza)   // clothCS: el CS puesto es el simulador del mod de ropa (diagnostico en Dispatch)   // lastHairCB: b11 de la ultima cara dibujada en este contexto (la boca la hereda)
 static std::unordered_map<ID3D11DeviceContext*, CtxState> s_ctx;
 static std::shared_mutex s_ctxMutex;
 static CtxState& Ctx(ID3D11DeviceContext* c) {
@@ -534,7 +542,8 @@ static PFN_ClearDSV o_ClearDSV[2];
 using PFN_ExecCL = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11CommandList*, BOOL);
 using PFN_FinishCL = HRESULT(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, BOOL, ID3D11CommandList**);
 static PFN_ExecCL o_ExecCL[2]; static PFN_FinishCL o_FinishCL[2];
-// (26/10 g) cambios de targets y ClearState: la emision pendiente del pasto (despues de la base de la cancha) sale antes
+// (26/10 g) cambios de targets y ClearState: la emision pendiente del pasto (despues de la base de la cancha) sale antes.
+// (27/10 c) OMSetRenderTargets tambien dice si el DSV puesto es el shadow map del sol (sombra de la cabeza)
 using PFN_OMSetRT = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, ID3D11RenderTargetView* const*, ID3D11DepthStencilView*);
 using PFN_OMSetRTU = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, ID3D11RenderTargetView* const*, ID3D11DepthStencilView*, UINT, UINT, ID3D11UnorderedAccessView* const*, const UINT*);
 using PFN_ClearState = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*);
@@ -550,10 +559,12 @@ template<int V> static void STDMETHODCALLTYPE hk_Dispatch(ID3D11DeviceContext* c
 template<int V> static void STDMETHODCALLTYPE hk_OMSetRT(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* v, ID3D11DepthStencilView* d) {
     GrassBaseFlush(c, 1, 0, v ? n : 0, v, d);
     o_OMSetRT[V](c, n, v, d);
+    Ctx(c).shadowDSV = (n == 0 && HeadShadowIsGameShadow(d)) ? d : nullptr;
 }
 template<int V> static void STDMETHODCALLTYPE hk_OMSetRTU(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* v, ID3D11DepthStencilView* d, UINT us, UINT un, ID3D11UnorderedAccessView* const* u, const UINT* ic) {
     if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) GrassBaseFlush(c, 1, 0, v ? n : 0, v, d);   // solo UAVs: los targets no cambian
     o_OMSetRTU[V](c, n, v, d, us, un, u, ic);
+    if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) Ctx(c).shadowDSV = (n == 0 && HeadShadowIsGameShadow(d)) ? d : nullptr;
 }
 template<int V> static void STDMETHODCALLTYPE hk_ClearState(ID3D11DeviceContext* c) {
     GrassBaseFlush(c, 5, 0);
@@ -683,7 +694,7 @@ template<int V> static HRESULT STDMETHODCALLTYPE hk_FinishCL(ID3D11DeviceContext
 // cejas (18/10): para dibujar las hebras hace falta saber si el juego usa profundidad invertida (limpia a 0) o normal (limpia a 1)
 std::atomic<int> g_depthClearZero{0}, g_depthClearOne{0};
 template<int V> static void STDMETHODCALLTYPE hk_ClearDSV(ID3D11DeviceContext* c, ID3D11DepthStencilView* v, UINT f, FLOAT d, UINT8 st) {
-    if (f & D3D11_CLEAR_DEPTH) { if (d < 0.5f) g_depthClearZero++; else g_depthClearOne++; }
+    if (f & D3D11_CLEAR_DEPTH) { if (d < 0.5f) g_depthClearZero++; else g_depthClearOne++; HeadShadowOnClear(c, v, d); }   // (27/10 c) el atlas de la cabeza se limpia con el shadow map del juego
     GrassBaseFlush(c, 2, 0);   // (26/10 g) antes de borrar la profundidad de la pasada
     o_ClearDSV[V](c, v, f, d, st);
 }
@@ -1079,6 +1090,8 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     // 19/10: la boca (63fab7) hereda el b11 (tipo de pelo + semilla de la cara) de la ultima cara dibujada en este contexto:
     // variacion de dientes/encias por jugador
     if (ps && ps->hash == 0x63fab7735eee149cULL && ps->repl && s.lastHairCB) { Remember(c, d, true, false, 11); c->PSSetConstantBuffers(11, 1, &s.lastHairCB); }
+    // (27/10 c) sombra de la cabeza: el atlas propio (t30) a los 7 shaders del sol reemplazados
+    if (ps && ps->repl) { int si = SunPassIndex(ps->hash); if (si >= 0 && si < 7) if (ID3D11ShaderResourceView* hs = HeadShadowSRV()) { Remember(c, d, true, true, 30); c->PSSetShaderResources(30, 1, &hs); } }
     // 20/10: desgaste de la cancha en vivo: la posicion de cada jugador sale del dibujo de su short / medias (b5 del VS)
     if (ps && ps->hash == 0x55297925e0c66085ULL) PitchWearNotePlayer(c);
     // 19/10: SSS separable en pantalla antes de la composicion: la irradiancia (t9) llega ya difundida sobre la piel
@@ -1141,6 +1154,30 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (r) Restore(c, ds); if (ds.brow.seedsUAV) BrowDrawAfterFace(c, &ds.brow); if (ds.lod.count) ds.lod.Release();
 // (26/10 g) antes de cada dibujo que no sea de la base de la cancha: la emision pendiente del pasto del mod (ver GrassBaseFlush)
 #define GRASS_FLUSH(c) if (g_grassPendN.load(std::memory_order_relaxed) > 0) { CtxState& cf_ = Ctx(c); GrassBaseFlush(c, 0, cf_.ps ? cf_.ps->hash : 0); }
+// (27/10 c) sombra de la cabeza: el mismo dibujo de la pasada de sombras del juego (cascada mas cercana) se repite en el atlas
+// propio, una vez por cabeza, con un b2 (g_vsScene) cuya m_projectionView es la caja ortografica de esa cabeza (headshadow.cpp)
+template<int V> static void HeadShadowReplay(ID3D11DeviceContext* c, ID3D11DepthStencilView* gameDSV, UINT a, UINT b, INT d) {
+    int n = HeadShadowSlots(); ID3D11DepthStencilView* dsv = HeadShadowDSV();
+    if (n <= 0 || !dsv || !HeadShadowIsNearCascade(c, gameDSV)) return;
+    ID3D11RenderTargetView* rt[8] = {}; ID3D11DepthStencilView* oldDsv = nullptr; c->OMGetRenderTargets(8, rt, &oldDsv);
+    ID3D11Buffer* oldB2 = nullptr; c->VSGetConstantBuffers(2, 1, &oldB2);
+    D3D11_VIEWPORT vps[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]; UINT nvp = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE; c->RSGetViewports(&nvp, vps);
+    D3D11_RECT scs[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]; UINT nsc = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE; c->RSGetScissorRects(&nsc, scs);
+    o_OMSetRT[V](c, 0, nullptr, dsv);
+    for (int i = 0; i < n; i++) {
+        ID3D11Buffer* cb = HeadShadowCB(i); if (!cb) continue;
+        D3D11_VIEWPORT vp; HeadShadowViewport(i, vp);
+        D3D11_RECT rc{ (LONG)vp.TopLeftX, (LONG)vp.TopLeftY, (LONG)(vp.TopLeftX + vp.Width), (LONG)(vp.TopLeftY + vp.Height) };
+        c->RSSetViewports(1, &vp); c->RSSetScissorRects(1, &rc);
+        c->VSSetConstantBuffers(2, 1, &cb);
+        o_DrawIdx[V](c, a, b, d);
+    }
+    g_headShadowReplays.fetch_add(n, std::memory_order_relaxed);
+    o_OMSetRT[V](c, 8, rt, oldDsv);
+    c->VSSetConstantBuffers(2, 1, &oldB2);
+    if (nvp) c->RSSetViewports(nvp, vps); if (nsc) c->RSSetScissorRects(nsc, scs);
+    for (auto* r : rt) if (r) r->Release(); if (oldDsv) oldDsv->Release(); if (oldB2) oldB2->Release();
+}
 // (20/10) LOD0 forzado: el dibujo sale con los buffers/cuentas de la malla de mas detalle y se devuelve el estado del juego
 template<int V> static void LodDrawSub(ID3D11DeviceContext* c, DrawScope& ds) { LodIA sv; LodBind(c, ds.lod, sv); o_DrawIdx[V](c, ds.lod.count, ds.lod.start, ds.lod.base); LodRestore(c, sv, ds.lod); }
 template<int V> static void STDMETHODCALLTYPE hk_DrawIdx(ID3D11DeviceContext* c, UINT a, UINT b, INT d) {
@@ -1154,6 +1191,7 @@ template<int V> static void STDMETHODCALLTYPE hk_DrawIdx(ID3D11DeviceContext* c,
     GrassStScope gst; GrassGameStates(c, gst);   // (26/10 g) solo el pasto del juego del G-buffer (lo marca GrassOnDraw)
     FX_DRAW(a, 1, 1, (ds.lod.count ? LodDrawSub<V>(c, ds) : o_DrawIdx[V](c, a, b, d)))
     GrassGameStatesRestore(c, gst);
+    { CtxState& ch_ = Ctx(c); if (ch_.shadowDSV && !ds.skip) HeadShadowReplay<V>(c, ch_.shadowDSV, a, b, d); }   // (27/10 c) sombra de la cabeza
     // (25/10) pasto v3: al terminar la base de la cancha (PS 5e92 / c956, existe en todas las camaras) se emite el pasto del mod
     { CtxState& cb_ = Ctx(c); if (cb_.ps && (cb_.ps->hash == 0x5e92f2343848915aULL || cb_.ps->hash == 0xc9564b9b155f0a49ULL)) GrassOnBaseDraw(c); } }
 template<int V> static void STDMETHODCALLTYPE hk_Draw(ID3D11DeviceContext* c, UINT a, UINT b) { GRASS_FLUSH(c) FX_DRAW(a, 0, 1, o_Draw[V](c, a, b)) }
@@ -1505,6 +1543,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     MuscleHookPresent();   // (23/10) musculatura: ganchos a los huesos de musculo del motor (primer Present)
     BodyPresent();         // (25/10) la ropa contra el cuerpo real: mallas de piel nuevas, cuadro nuevo
     GrassFrameBoundary(flags);   // (26/10 d) pasto: limite del cuadro (reclamo en la GPU, x63) ANTES de subir t120
+    HeadShadowPresent();   // (27/10 c) sombra de la cabeza: cabezas elegidas, cajas y filas 310 / 316..319 ANTES de subir t120
     UploadParams();
     WatchShaderFolder();
     PollMatch();
