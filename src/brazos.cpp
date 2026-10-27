@@ -118,8 +118,10 @@ static bool s_init = false, s_ok = false;
 static std::wstring s_dir;                        // carpeta #windx11 de TorsoBody (con barra final)
 static int s_cmpMip = -1; static UINT s_cmpW = 0; // mip de comparacion (64 px) y su ancho
 static std::vector<uint8_t> s_torsoFp[kTones + 1];   // mip de comparacion de torso_N_bsm (1..6)
-static ID3D11ShaderResourceView* s_arm[kTones + 1] = {}, *s_thigh[kTones + 1] = {};
-static bool s_armFail[kTones + 1] = {}, s_thighFail[kTones + 1] = {};
+enum Kind { K_ARM = 0, K_THIGH = 1, K_TORSO = 2 };   // (torso: para el cuello de las caras reales, pes_collar.hlsli en t29 de los PS de la cara)
+static const wchar_t* const kKindFile[3] = { L"arm_%d_bsm.ftex", L"thigh_%d_bsm.ftex", L"torso_%d_bsm.ftex" };
+static ID3D11ShaderResourceView* s_tex[3][kTones + 1] = {};
+static bool s_texFail[3][kTones + 1] = {};
 static bool s_srgb = true, s_srgbKnown = false;
 static std::unordered_map<ID3D11Resource*, int> s_texTone;   // textura del juego -> tono (1..6; 0 = no es un torso de TorsoBody; -1 = pendiente)
 struct Pend { ID3D11Resource* res; ID3D11Texture2D* st; int tries; };
@@ -198,11 +200,11 @@ static void Init() {
     s_ok = got > 0;
     Log("brazos de TorsoBody: carpeta %ls, huellas de %d torsos (mip %d, %u px)%s", s_dir.c_str(), got, s_cmpMip, s_cmpW, s_ok ? "" : ": apagado");
 }
-static ID3D11ShaderResourceView* Tone(int n, bool thigh) {
+static ID3D11ShaderResourceView* Tone(int n, Kind kind) {
     if (n < 1 || n > kTones) return nullptr;
-    ID3D11ShaderResourceView** slot = thigh ? &s_thigh[n] : &s_arm[n]; bool* fail = thigh ? &s_thighFail[n] : &s_armFail[n];
+    ID3D11ShaderResourceView** slot = &s_tex[kind][n]; bool* fail = &s_texFail[kind][n];
     if (*slot || *fail) return *slot;
-    wchar_t name[48]; swprintf(name, 48, thigh ? L"thigh_%d_bsm.ftex" : L"arm_%d_bsm.ftex", n);
+    wchar_t name[48]; swprintf(name, 48, kKindFile[kind], n);
     std::vector<uint8_t> d; FtexInfo f; char what[48]; snprintf(what, sizeof what, "%ls", name);
     if (!ReadAll(s_dir + name, d) || !ReadFtex(d, f, 0, 99)) { Log("brazos de TorsoBody: falta o no se lee %ls", name); *fail = true; return nullptr; }
     *slot = MakeTexture(f, s_srgb, what);
@@ -277,9 +279,22 @@ ID3D11ShaderResourceView* ArmsTextureFor(ID3D11DeviceContext* c, uint64_t vsHash
     }
     if (!tone) { s_unknown++; if (verbose) { s_logs++; Log("brazos de TorsoBody: %s de %ux%u sin torso conocido todavia (%u indices)", thigh ? "muslo" : "brazo / mano", td.Width, td.Height, indexCount); } return nullptr; }
     if (!s_srgbKnown) { s_srgb = IsSrgb(td.Format); s_srgbKnown = true; }
-    ID3D11ShaderResourceView* v = Tone(tone, thigh);
+    ID3D11ShaderResourceView* v = Tone(tone, thigh ? K_THIGH : K_ARM);
     if (v) { s_swaps++; if (verbose) { s_logs++; Log("brazos de TorsoBody: %s de %ux%u (%u indices) -> %s_%d_bsm de TorsoBody", thigh ? "muslo" : "brazo / mano", td.Width, td.Height, indexCount, thigh ? "thigh" : "arm", tone); } }
     return v;
+}
+
+// dibujo de la cara (PS 5ce3 / ce188): torso_N_bsm de TorsoBody del tono del jugador para t29 (pes_collar.hlsli: el cuello de la
+// cara real toma el color del torso en la union). El tono: el forzado (z321) o el del ultimo torso dibujado en este contexto.
+ID3D11ShaderResourceView* ArmsTorsoTextureForFace() {
+    if (g_cfg.live[322][0] < 0.5f || g_cfg.live[321][0] < 0.5f || !g_dev.dev) return nullptr;
+    int tone = (int)(g_cfg.live[321][2] + 0.5f);
+    if (tone < 1 || tone > kTones) tone = t_lastTone;
+    if (!tone) return nullptr;
+    std::lock_guard<std::mutex> lk(s_mx);
+    Init();
+    if (!s_ok) return nullptr;
+    return Tone(tone, K_TORSO);
 }
 
 // Present (contexto inmediato): leer las huellas pendientes de los torsos del juego y olvidar las claves del cuadro
