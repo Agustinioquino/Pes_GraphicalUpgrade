@@ -6,6 +6,8 @@
 struct ImFont;
 
 namespace fx {
+const char* TRS(const char* es);   // (27/10) lang.cpp: texto en el idioma del menu
+
 
 struct MusUiPlayer { uint32_t id = 0; std::string name; bool own = false; };
 

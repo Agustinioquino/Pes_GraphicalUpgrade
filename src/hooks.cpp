@@ -350,6 +350,7 @@ static void SunSettingsPresent() {
     }
     if (lines > 40) SunLog("ajuste: %d cambios mas en este segundo (no anotados)", lines - 40);
 }
+int SceneShadowFixStats(int* skipped); void SceneShadowFixRejects(int* r3);   // (mas abajo, junto a los ganchos de Map / Unmap)
 static void SunPassPresent() {
     SunSettingsPresent();
     static uint32_t lastMask = 0xffffffffu; static int lines = 0; static double nextSum = 0;
@@ -438,6 +439,7 @@ static void SunPassPresent() {
                   Log("luz del sol: direccion de la luz (vista %.3f %.3f %.3f | mundo %.3f %.3f %.3f) y del shadow map (mundo %.3f %.3f %.3f): %.1f grados entre las dos",
                       l[0], l[1], l[2], lw[0], lw[1], lw[2], dw[0], dw[1], dw[2], ang);
               } } }
+        if (sums <= 120 && g_cfg.motorPatch && (g_cfg.motorShadowFix == 1 || g_cfg.motorShadowFix == 2)) { int sk = 0, fx = SceneShadowFixStats(&sk); int rj[3]; SceneShadowFixRejects(rj); Log("sombra_parche (10 s): m_shadowProjection corregida en %d subidas del cbuffer de escena, %d sin tocar (sin sombra o sin rotacion; de esas, no era la escena %d, sombra no ortogonal %d; buffers con ventana descartados %d)", fx, sk, rj[0], rj[1], rj[2]); }
         nextSum = t + 10.0; frames = framesOrig = framesNone = switches = 0;
     }
 }
@@ -655,13 +657,79 @@ static void LightTraceSummary() {   // en Present
     Log("luz: origen de la copia encontrado %d veces, no encontrado %d; pedidos de vigilancia %d", s_ltSrcOk.exchange(0), s_ltSrcMiss.exchange(0), s_ltArmReq.exchange(0));
     s_ltRecs.clear(); s_ltMaps = s_ltSkipped = 0;
 }
+// ---------------------------------------------------------------- la sombra que gira con la camara (27/10, sombra_parche 1)
+// Registro de e85da3e (sombra_parche 3): m_shadowProjection (b2 c12..c15) toma la posicion en VISTA y el motor la arma con la
+// vista -> mundo equivocada: usa A = [R | c] (las filas de la rotacion de la camara como columnas, c = posicion de la camara)
+// en vez de la inversa real B = [R^T | c]. Con A el shadow map da exactamente el sol del cielo (0.0-0.6 grados en las 4 tomas);
+// la cuenta del shader le pasa la posicion en vista y la luz queda en R^T R^T sol (hasta 89 grados; 0 solo si R es
+// simetrica: camara de TV). Arreglo: S' = S A^-1 B = S C con C = R^T R^T (solo rotacion, la traslacion se cancela), con R la
+// 3x3 de m_view (c8..c10) del mismo buffer. Se corrige el cbuffer de escena al subirlo (Unmap / UpdateSubresource); el buffer
+// se aprende de la regla copy_cb = 2 SceneCB. Si m_shadowProjection esta en cero o es la misma vista (pasadas sin sombra) no
+// se toca.
+static std::atomic<ID3D11Resource*> s_scBuf[8]; static std::atomic<UINT> s_scOff[8];
+static std::atomic<int> s_scFixed{0}, s_scSkipped{0};
+static thread_local void* t_scMapped = nullptr; static thread_local ID3D11Resource* t_scRes = nullptr; static thread_local UINT t_scOffMap = 0;
+// (27/10 b) primera prueba en partido: sombras corridas "a cualquier lado". Solo se aprenden buffers enteros (sin ventana: un
+// anillo compartido tendria otros cbuffers en ese desplazamiento) y del tamano de cPSScene; y antes de tocar se verifica que
+// sea de verdad la escena (m_eyepos = posicion de la camara sacada de m_view) y que S sea una proyeccion ortogonal de luz.
+static std::atomic<int> s_scRejWin{0}, s_scRejEye{0}, s_scRejOrtho{0};
+static void SceneCBLearn(ID3D11Resource* b, UINT off, UINT len) {
+    if (off != 0 || len < 352 || len > 4096) { s_scRejWin++; return; }
+    for (int i = 0; i < 8; i++) { ID3D11Resource* e = s_scBuf[i].load(std::memory_order_relaxed); if (e == b) return; }
+    for (int i = 0; i < 8; i++) { ID3D11Resource* exp = nullptr; if (s_scBuf[i].compare_exchange_strong(exp, b)) { s_scOff[i].store(0); Log("sombra_parche: cbuffer de escena %d = %p (%u bytes)", i, (void*)b, len); return; } }
+}
+static int SceneCBIndex(ID3D11Resource* b) {
+    if (!b) return -1;
+    for (int i = 0; i < 8; i++) if (s_scBuf[i].load(std::memory_order_relaxed) == b) return i;
+    return -1;
+}
+static bool SceneShadowFix(float* p) {   // p = c0 del cbuffer de escena; sin objetos con destructor: __try
+    __try {
+        float V[3][3], S[3][3];
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) { V[i][j] = p[32 + i * 4 + j]; S[i][j] = p[48 + i * 4 + j]; }
+        float same = 0, mag = 0;
+        for (int i = 0; i < 3; i++) {
+            float n = V[i][0] * V[i][0] + V[i][1] * V[i][1] + V[i][2] * V[i][2];
+            if (n < 0.96f || n > 1.04f) return false;   // m_view no es una rotacion
+            for (int j = 0; j < 3; j++) { same += fabsf(S[i][j] - V[i][j]); mag += fabsf(S[i][j]); }
+        }
+        if (mag < 1e-6f || same < 1e-3f) return false;   // sin sombra en esta pasada (cero o la vista copiada)
+        // es la escena? la posicion de la camara sacada de m_view (-R^T t) tiene que ser m_eyepos (c20)
+        float t[3] = { p[35], p[39], p[43] }, eye[3] = { p[80], p[81], p[82] }, de = 0;
+        for (int j = 0; j < 3; j++) { float c = -(V[0][j] * t[0] + V[1][j] * t[1] + V[2][j] * t[2]); de += (c - eye[j]) * (c - eye[j]); }
+        if (!(de < 0.25f)) { s_scRejEye++; return false; }
+        // S: proyeccion ortogonal de la luz (filas x / y del mismo largo y perpendiculares)
+        float n0 = sqrtf(S[0][0] * S[0][0] + S[0][1] * S[0][1] + S[0][2] * S[0][2]), n1 = sqrtf(S[1][0] * S[1][0] + S[1][1] * S[1][1] + S[1][2] * S[1][2]);
+        float d01 = S[0][0] * S[1][0] + S[0][1] * S[1][1] + S[0][2] * S[1][2];
+        // y nada de rotaciones / vistas sueltas (largo ~1) ni matrices con perspectiva (fila 3 distinta de 0 0 0 1): en algunas
+        // pasadas c12 no es la sombra del sol y corregirla corria cosas del estadio
+        bool affine = fabsf(p[60]) < 1e-4f && fabsf(p[61]) < 1e-4f && fabsf(p[62]) < 1e-4f && fabsf(p[63] - 1.0f) < 1e-3f;
+        if (!(affine && n0 > 1e-4f && n0 < 0.6f && n1 > 1e-4f && fabsf(n0 - n1) < 0.15f * n0 && fabsf(d01) < 0.1f * n0 * n1)) { s_scRejOrtho++; return false; }
+        float C[3][3];   // C = R^T R^T: C[i][j] = sum_k R[k][i] R[j][k]
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) C[i][j] = V[0][i] * V[j][0] + V[1][i] * V[j][1] + V[2][i] * V[j][2];
+        for (int r = 0; r < 3; r++) {
+            float o[3];
+            for (int j = 0; j < 3; j++) o[j] = S[r][0] * C[0][j] + S[r][1] * C[1][j] + S[r][2] * C[2][j];
+            for (int j = 0; j < 3; j++) p[48 + r * 4 + j] = o[j];
+        }
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+static bool SceneFixOn() { return g_cfg.motorPatch && (g_cfg.motorShadowFix == 1 || g_cfg.motorShadowFix == 2); }
+int SceneShadowFixStats(int* skipped) { if (skipped) *skipped = s_scSkipped.exchange(0); return s_scFixed.exchange(0); }
+void SceneShadowFixRejects(int* r3) { r3[0] = s_scRejEye.exchange(0); r3[1] = s_scRejOrtho.exchange(0); r3[2] = s_scRejWin.exchange(0); }
+
 template<int V> static HRESULT STDMETHODCALLTYPE hk_Map(ID3D11DeviceContext* c, ID3D11Resource* r, UINT sub, D3D11_MAP t, UINT f, D3D11_MAPPED_SUBRESOURCE* m) {
     HRESULT hr = o_Map[V](c, r, sub, t, f, m);
+    if (SUCCEEDED(hr) && m && m->pData && t != D3D11_MAP_READ && SceneFixOn()) { int i = SceneCBIndex(r); if (i >= 0) { t_scMapped = m->pData; t_scRes = r; t_scOffMap = s_scOff[i].load(); } }
     if (r && r == s_ltBuf.load(std::memory_order_relaxed) && g_cfg.lightTrace && SUCCEEDED(hr) && m) {
         t_ltRec = LightTraceNote(0); t_ltMapped = m->pData; t_ltSrc = t_ltRec >= 0 ? LightTraceSrc() : 0; }   // con el mismo tope por cuadro que las pilas
     return hr;
 }
 template<int V> static void STDMETHODCALLTYPE hk_Unmap(ID3D11DeviceContext* c, ID3D11Resource* r, UINT sub) {
+    if (t_scMapped && r == t_scRes) {
+        if (SceneShadowFix((float*)((char*)t_scMapped + t_scOffMap))) s_scFixed++; else s_scSkipped++;
+        t_scMapped = nullptr; t_scRes = nullptr; }
     if (t_ltMapped && r == s_ltBuf.load(std::memory_order_relaxed)) {
         LightTraceValue(t_ltRec, t_ltMapped);
         // (27/10) si lo copiado es la luz en espacio de vista (no el sol del cielo en mundo, que tambien pasa por este buffer),
@@ -675,6 +743,18 @@ template<int V> static void STDMETHODCALLTYPE hk_Unmap(ID3D11DeviceContext* c, I
     o_Unmap[V](c, r, sub);
 }
 template<int V> static void STDMETHODCALLTYPE hk_UpdSub(ID3D11DeviceContext* c, ID3D11Resource* r, UINT sub, const D3D11_BOX* box, const void* d, UINT rp, UINT dp) {
+    if (d && SceneFixOn()) {
+        int i = SceneCBIndex(r);
+        if (i >= 0) {
+            D3D11_BUFFER_DESC bd; ((ID3D11Buffer*)r)->GetDesc(&bd);
+            UINT lo = box ? box->left : 0, hi = box ? box->right : bd.ByteWidth, off = s_scOff[i].load();
+            if (off >= lo && off + 256 <= hi && hi - lo <= 65536) {
+                static thread_local std::vector<char> tmp; tmp.assign((const char*)d, (const char*)d + (hi - lo));
+                if (SceneShadowFix((float*)(tmp.data() + (off - lo)))) { s_scFixed++; o_UpdSub[V](c, r, sub, box, tmp.data(), rp, dp); return; }
+                s_scSkipped++;
+            }
+        }
+    }
     if (r && r == s_ltBuf.load(std::memory_order_relaxed) && g_cfg.lightTrace) { int i = LightTraceNote(1); if (!box) LightTraceValue(i, d); }
     o_UpdSub[V](c, r, sub, box, d, rp, dp);
 }
@@ -922,6 +1002,7 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
             bool window = num && (off > 0 || num * 16 < sd.ByteWidth);
             if (window) len = off < sd.ByteWidth ? (std::min)(num * 16, sd.ByteWidth - off) & ~15u : 0;
             if (!len) { src->Release(); break; }
+            if (a.name == "SceneCB") SceneCBLearn(src, window ? off : 0, sd.ByteWidth);   // (27/10) sombra_parche 1: el buffer que se corrige al subirlo
             if (a.name == "LightCB" && !s_ltDone.load(std::memory_order_relaxed)) { s_ltBuf.store(src, std::memory_order_relaxed); s_ltOff.store(window ? off : 0); s_ltLen.store(len); }   // (27/10) rastreo de quien la llena
             std::lock_guard<std::mutex> lk(s_namedMutex);
             auto& r = s_named[a.name];
@@ -1216,6 +1297,7 @@ template<int V> static void STDMETHODCALLTYPE hk_DrawIdx(ID3D11DeviceContext* c,
       if (g_grassProbeOn) CatalogGrassDraw(c, gvs, a, b, d);
       if (gvs && gvs->hash == 0x498b30bad256e8edULL) GrassOnDraw(c, gvs, cg.ps, a, b, d);
       if (gvs && gvs->hash == 0x1c02a92ab4ae3362ULL) BodyOnDraw(c, a, b, d);   // (25/10) piel del cuerpo -> la ropa choca con ella (es fisica: no depende de "Ver original")
+      else if (cg.ps && (cg.ps->hash == 0x7e647d9c43b453f9ULL || cg.ps->hash == 0xa41e7343f874154fULL || cg.ps->hash == 0xc7ae89b63e889007ULL) && g_cfg.live[327][3] > 0.5f) BodyOnDraw(c, a, b, d, 1);   // (27/10 d) camiseta: medicion contra el torso
       if (g_autoDumpAny) InspectAutoDump(c, cg.ps); }
     t_drawStart = b; t_drawBase = d;
     GrassStScope gst; GrassGameStates(c, gst);   // (26/10 g) solo el pasto del juego del G-buffer (lo marca GrassOnDraw)
@@ -1577,8 +1659,11 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     BodyPresent();         // (25/10) la ropa contra el cuerpo real: mallas de piel nuevas, cuadro nuevo
     ArmsPresent();         // (27/10) brazos de TorsoBody para las caras reales: huellas de los torsos del juego, claves del cuadro
     { static unsigned s_noShirt = 1000; s_noShirt = g_shirtSeen.exchange(false) ? 0 : (std::min)(s_noShirt + 1, 1000u);   // (27/10 c) fila 320.z: camisetas en los ultimos 30 Present
-      const float on = s_noShirt < 30 ? 1.0f : 0.0f;
-      if (on != g_cfg.live[320][2]) Log("torso bajo la camiseta: %s", on > 0.5f ? "hay camisetas en escena (el torso se mete x320 mm)" : "sin camisetas en escena (torso entero)");
+      // (27/10 d) en el menu Fisico el jugador se ve sin camiseta: aunque haya camisetas de otros modelos, el torso va entero
+      // (si no, el pecho se hunde x320 mm debajo del cuello y de los hombros, que no se mueven, y queda un escalon)
+      const bool fis = MusclePhysiqueActive();
+      const float on = (s_noShirt < 30 && !fis) ? 1.0f : 0.0f;
+      if (on != g_cfg.live[320][2]) Log("torso bajo la camiseta: %s", on > 0.5f ? "hay camisetas en escena (el torso se mete x320 mm)" : fis ? "menu Fisico (torso entero)" : "sin camisetas en escena (torso entero)");
       g_cfg.live[320][2] = on; }
     GrassFrameBoundary(flags);   // (26/10 d) pasto: limite del cuadro (reclamo en la GPU, x63) ANTES de subir t120
     HeadShadowPresent();   // (27/10 c) sombra de la cabeza: cabezas elegidas, cajas y filas 310 / 316..319 ANTES de subir t120

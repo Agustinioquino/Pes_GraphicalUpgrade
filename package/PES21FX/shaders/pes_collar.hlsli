@@ -36,3 +36,14 @@ float3 PesCollarRatio(Texture2D<float4> face, SamplerState s, float2 uv, float3 
   float3 mean = face.SampleLevel(s, uv, mip).xyz;
   return clamp(target / max(mean, 0.002), 0.25, 4.0);
 }
+// (27/10 d) VS de la cabeza (faab87ee / 455eb97b): la base del cuello de la cara se hunde por debajo de la piel del torso.
+// El corte del modulo de Sider (48 puntos, hasta 3 mm de error) dejaba un borde serruchado de cuello apoyado sobre el pecho y
+// el trapecio. Hundido y323 mm hacia adentro (por su normal) abajo de la union y fundido hasta z323 mm arriba, el torso tapa ese
+// borde y la union visible pasa a ser el borde liso del torso. Solo la cara del partido (no la sombra). y323 = 0 apagado.
+float3 PesCollarSink(float3 rest, float3 n) {
+  float4 C = IniParams.Load(int2(322, 0)), S = IniParams.Load(int2(323, 0));
+  if (C.x < 0.5 || S.y <= 0.0) return float3(0, 0, 0);
+  float w = PesCollarW(rest, (S.z > 0.0 ? S.z : 12.0) * 0.001);
+  if (w <= 0.0) return float3(0, 0, 0);
+  return -n * rsqrt(max(dot(n, n), 1e-8)) * (min(S.y, 15.0) * 0.001 * w);
+}
