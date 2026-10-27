@@ -1,0 +1,179 @@
+// PES 2021 - pasada final (nitidez + grano) [hash 0f5c2b9995c3a601] - post v2 (x39..w39)
+// ---- Created with 3Dmigoto v1.3.16 on Thu Oct 08 21:08:17 2026
+
+cbuffer cPSObject : register(b5)
+{
+
+  struct
+  {
+    float4x4 m_viewWorld;
+    float4x4 m_world;
+    float4 m_useWeightCount;
+    float4 m_localParam[9];
+  } g_psObject : packoffset(c0);
+
+}
+
+cbuffer cPSSystem : register(b0)
+{
+
+  struct
+  {
+    float4 m_param;
+    float4 m_renderInfo;
+    float4 m_renderBuffer;
+    float4 m_dominantLightDir;
+    float4 m_timeParam;
+  } g_psSystem : packoffset(c0);
+
+}
+
+SamplerState g_samplerPoint_Clamp_s : register(s9);
+SamplerState g_samplerLinear_Clamp_s : register(s11);
+Texture2D<float4> inColorTexture : register(t0);
+Texture2D<float4> inAlphaTexture : register(t2);
+
+
+// 3Dmigoto declarations
+#define cmp -
+Texture1D<float4> IniParams : register(t120);
+Texture2D<float4> StereoParams : register(t125);
+
+
+// === PES21 post v2 (Claude, 16/10): nitidez adaptativa (tipo AMD CAS) en vez del enfoque del juego ===
+// x39 fuerza de la nitidez (0..1), y39 grano de pelicula (1 = el del juego, 0 = nada), w39 on/off [Alt+Shift+6]
+float3 PESTap(float2 uv) { return inColorTexture.SampleLevel(g_samplerPoint_Clamp_s, uv, 0).xyz; }
+float3 PESCas(float2 uv, float2 px, float sharp)
+{
+  float3 a = PESTap(uv + float2(-px.x, -px.y)), b = PESTap(uv + float2(0, -px.y)), c = PESTap(uv + float2(px.x, -px.y));
+  float3 d = PESTap(uv + float2(-px.x, 0)),     e = PESTap(uv),                    f = PESTap(uv + float2(px.x, 0));
+  float3 g = PESTap(uv + float2(-px.x, px.y)),  h = PESTap(uv + float2(0, px.y)),  i = PESTap(uv + float2(px.x, px.y));
+  float3 mn = min(min(min(d, e), min(f, b)), h);
+  float3 mn2 = min(mn, min(min(a, c), min(g, i)));
+  mn += mn2;
+  float3 mx = max(max(max(d, e), max(f, b)), h);
+  float3 mx2 = max(mx, max(max(a, c), max(g, i)));
+  mx += mx2;
+  float3 amp = saturate(min(mn, 2.0 - mx) / max(mx, 1e-4));
+  amp = sqrt(amp);
+  float peak = -1.0 / lerp(8.0, 5.0, saturate(sharp));
+  float3 w = amp * peak;
+  float3 rw = 1.0 / (1.0 + 4.0 * w);
+  return saturate((b * w + d * w + f * w + h * w + e) * rw);
+}
+// === FIN post v2 ===
+
+void main(
+  float4 v0 : SV_Position0,
+  out float4 o0 : SV_Target0)
+{
+  float4 r0,r1,r2,r3,r4,r5;
+  uint4 bitmask, uiDest;
+  float4 fDest;
+
+  r0.xy = (int2)g_psObject.m_localParam[5].zw;
+  r0.y = (int)r0.y + 1;
+  r0.zw = (int2)v0.xy;
+  r0.xz = (uint2)r0.zw >> (int2)r0.xx;
+  r0.xyz = (int3)r0.xyz;
+  r0.w = dot(r0.xz, float2(17,0.100000001));
+  r1.x = r0.w + r0.y;
+  r1.x = sin(r1.x);
+  r1.x = 10000 * r1.x;
+  r1.y = r0.z * 13 + r0.x;
+  r0.x = r0.x * r0.z;
+  r0.x = 3846.15405 * r0.x;
+  r0.y = r1.y + r0.y;
+  r0.y = sin(r0.y);
+  r0.y = 0.100000001 + abs(r0.y);
+  r0.y = r1.x * r0.y;
+  r0.y = frac(r0.y);
+  r0.z = cmp(r0.x >= -r0.x);
+  r0.x = frac(abs(r0.x));
+  r0.x = r0.z ? r0.x : -r0.x;
+  r0.x = 13 * r0.x;
+  r0.x = r0.x * r0.x;
+  r0.y = r0.x * r0.y + r0.y;
+  r0.y = 100 * r0.y;
+  r0.y = frac(r0.y);
+  r0.y = r0.y * 1 + 0.100000001;
+  r0.z = trunc(g_psObject.m_localParam[5].w);
+  r0.w = r0.w + r0.z;
+  r0.z = r1.y + r0.z;
+  r0.zw = sin(r0.zw);
+  r0.z = 0.100000001 + abs(r0.z);
+  r0.w = 10000 * r0.w;
+  r0.z = r0.w * r0.z;
+  r0.z = frac(r0.z);
+  r0.x = r0.x * r0.z + r0.z;
+  r0.x = 100 * r0.x;
+  r0.x = frac(r0.x);
+  r0.x = r0.x * 1 + 0.100000001;
+  r0.xy = min(float2(1,1), r0.xy);
+  r0.y = r0.y + -r0.x;
+  r0.z = frac(g_psObject.m_localParam[5].w);
+  r0.x = r0.z * r0.y + r0.x;
+  r0.x = r0.x * 2 + -1;
+  float pesNoise = r0.x;
+  r1.xyzw = float4(1.20000005,0.400000006,0.400000006,-1.20000005) * g_psObject.m_localParam[0].zwzw;
+  r0.yz = v0.xy * g_psSystem.m_renderBuffer.zw + r1.xy;
+  r0.w = inAlphaTexture.Sample(g_samplerLinear_Clamp_s, r0.yz).x;
+  r2.xyz = inColorTexture.Sample(g_samplerLinear_Clamp_s, r0.yz).xyz;
+  r3.xyzw = v0.xyxy * g_psSystem.m_renderBuffer.zwzw + -r1.xyzw;
+  r0.yz = v0.xy * g_psSystem.m_renderBuffer.zw + r1.zw;
+  r1.x = inAlphaTexture.Sample(g_samplerLinear_Clamp_s, r3.xy).x;
+  r0.w = r1.x + -r0.w;
+  r1.x = inAlphaTexture.Sample(g_samplerLinear_Clamp_s, r0.yz).x;
+  r1.yzw = inColorTexture.Sample(g_samplerLinear_Clamp_s, r0.yz).xyz;
+  r0.y = inAlphaTexture.Sample(g_samplerLinear_Clamp_s, r3.zw).x;
+  r0.y = r1.x + -r0.y;
+  r0.y = abs(r0.y) + abs(r0.w);
+  r0.zw = g_psSystem.m_renderBuffer.zw * v0.xy;
+  r1.x = inAlphaTexture.Sample(g_samplerPoint_Clamp_s, r0.zw).x;
+  r4.xyz = inColorTexture.Sample(g_samplerPoint_Clamp_s, r0.zw).xyz;
+  r0.z = saturate(1.04999995 + -r1.x);
+  r0.w = r1.x * 0.25 + -0.25;
+  r0.y = r0.y * r0.z;
+  r0.y = -r0.y * 128 + 1;
+  r0.y = max(r0.y, r0.w);
+  r0.y = g_psObject.m_localParam[4].x * r0.y;
+  r0.yzw = float3(0.108425997,0.364751995,0.0368219987) * r0.yyy;
+  r1.x = 0.5 / g_psObject.m_localParam[4].y;
+  r5.xyz = r1.xxx * r0.yzw;
+  r0.yzw = inColorTexture.Sample(g_samplerLinear_Clamp_s, r3.xy).xyz;
+  r3.xyz = inColorTexture.Sample(g_samplerLinear_Clamp_s, r3.zw).xyz;
+  r0.yzw = r1.yzw + r0.yzw;
+  r0.yzw = r0.yzw + r3.xyz;
+  r0.yzw = r0.yzw + r2.xyz;
+  r1.xyz = -r0.yzw * float3(0.25,0.25,0.25) + r4.xyz;
+  r1.w = 1;
+  r5.w = 0.5;
+  r0.y = saturate(dot(r1.xyzw, r5.xyzw));
+  r0.y = dot(g_psObject.m_localParam[4].yy, r0.yy);
+  r0.y = -g_psObject.m_localParam[4].y + r0.y;
+  r0.yzw = r4.xyz + r0.yyy;
+  r1.xyz = r0.yzw * r0.xxx;
+  r0.x = dot(float3(0.212599993,0.715200007,0.0722000003), r0.yzw);
+  r0.x = 1 + -r0.x;
+  r0.x = max(9.99999975e-005, r0.x);
+  r0.x = log2(r0.x);
+  r0.x = g_psObject.m_localParam[5].y * r0.x;
+  r0.x = exp2(r0.x);
+  r1.xyz = r1.xyz * r0.xxx;
+  o0.xyz = r1.xyz * g_psObject.m_localParam[5].xxx + r0.yzw;
+  o0.w = 1;
+  { float4 PP = IniParams.Load(int2(39,0));
+    if (PP.w > 0.5) {
+      float2 uvP = v0.xy * g_psSystem.m_renderBuffer.zw;
+      // (27/10 n) x330: nitidez extra con la camara quieta. El TAA del juego acumula historia cuando la camara no se mueve y promedia lo fino
+      // (hojas de 1 px, costuras de la pelota): se suma nitidez segun los cuadros desde el ultimo reinicio del TAA (160.z, lo escribe la DLL
+      // con el gancho del motor x161; sin gancho 160.w = 0 y no hace nada). Rampa de 8 a 45 cuadros
+      float4 Q330 = IniParams.Load(int2(330,0)); float4 T160 = IniParams.Load(int2(160,0));
+      float still = T160.w > 0.5 ? smoothstep(8.0, 45.0, T160.z) : 0.0;
+      float3 base = PESCas(uvP, g_psSystem.m_renderBuffer.zw, saturate(PP.x + clamp(Q330.x, 0.0, 1.0) * still));
+      float lumB = dot(base, float3(0.2126, 0.7152, 0.0722));
+      float gw = exp2(log2(max(1.0 - lumB, 1e-4)) * g_psObject.m_localParam[5].y);
+      o0.xyz = base + base * pesNoise * gw * g_psObject.m_localParam[5].x * max(PP.y, 0.0);
+    } }
+  return;
+}
