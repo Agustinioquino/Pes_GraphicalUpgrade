@@ -44,7 +44,7 @@ local PERFIL = true
 -- las funciones definidas adentro)
 local NOJIT = false
 local function modulo_cuello()
-local m = { version = "1.10" }
+local m = { version = "1.11" }
 
 local AXZ = 0.045          -- eje del cuello (z)
 -- borde del cuello del torso TorsoBody v11.3c (x, y, z), ordenado por angulo alrededor del cuello
@@ -1844,7 +1844,8 @@ local function cut_mesh(F, mi, name, shader)
     if not M then return err end
     if PERFIL and name == "fox_skin_mat" and CUR_FACE_KEY and not PERFIL_HECHO[CUR_FACE_KEY] then
         PERFIL_HECHO[CUR_FACE_KEY] = true
-        local okp, prof = pcall(neck_profile, M)
+        local okp, prof
+        if PC then okp, prof = PC(neck_profile, M) else okp, prof = true, neck_profile(M) end   -- (1.11) Sider no tiene pcall
         log("TorsoBody cuello: perfil " .. tostring(CUR_FACE_KEY) .. " (radio mm a +3/+2/+1/0/-1 cm del borde / baja mm): " .. (okp and prof or ("error " .. tostring(prof))))
     end
     if FUNDIR and name == "fox_skin_mat" and (shader == "" or shader:find("skin", 1, true)) then
