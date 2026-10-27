@@ -1164,6 +1164,8 @@ template<int V, class F> static void HeadShadowReplay(ID3D11DeviceContext* c, ID
     ID3D11Buffer* oldB2 = nullptr; c->VSGetConstantBuffers(2, 1, &oldB2);
     D3D11_VIEWPORT vps[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]; UINT nvp = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE; c->RSGetViewports(&nvp, vps);
     D3D11_RECT scs[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]; UINT nsc = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE; c->RSGetScissorRects(&nsc, scs);
+    ID3D11RasterizerState* oldRS = nullptr; c->RSGetState(&oldRS);
+    if (ID3D11RasterizerState* nc = HeadShadowNoCullRS(oldRS)) c->RSSetState(nc);   // (27/10 f) sin descarte de caras
     o_OMSetRT[V](c, 0, nullptr, dsv);
     for (int i = 0; i < n; i++) {
         ID3D11Buffer* cb = HeadShadowCB(i); if (!cb) continue;
@@ -1177,6 +1179,7 @@ template<int V, class F> static void HeadShadowReplay(ID3D11DeviceContext* c, ID
     o_OMSetRT[V](c, 8, rt, oldDsv);
     c->VSSetConstantBuffers(2, 1, &oldB2);
     if (nvp) c->RSSetViewports(nvp, vps); if (nsc) c->RSSetScissorRects(nsc, scs);
+    c->RSSetState(oldRS); if (oldRS) oldRS->Release();
     for (auto* r : rt) if (r) r->Release(); if (oldDsv) oldDsv->Release(); if (oldB2) oldB2->Release();
 }
 // (20/10) LOD0 forzado: el dibujo sale con los buffers/cuentas de la malla de mas detalle y se devuelve el estado del juego
