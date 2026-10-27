@@ -248,6 +248,9 @@ static const int kClaimStages = 6;
 static ID3D11Buffer* s_claim = nullptr; static ID3D11UnorderedAccessView* s_claimUAV = nullptr;
 static ID3D11Buffer* s_claimStage[kClaimStages] = {}; static int s_claimTag[kClaimStages] = { -1, -1, -1, -1, -1, -1 };
 static std::atomic<int> s_emitBase{0}, s_emitGame{0};   // emisiones por origen (para el log)
+// (27/10 l) tanda 9a: con que estados salieron las hojas (log cada 3 s): stencil de la base, RT4 sin escribir, color del suelo (copia de RT0),
+// sin ninguno (RT4 = 0: la hoja pierde la luz difusa del estadio); y dibujos del pasto del juego que no emitieron por no tener la base debajo (x297)
+static std::atomic<int> s_emitSt{0}, s_emitRt4{0}, s_emitSnap{0}, s_emitBare{0}, s_skipNoBase{0};
 // (25/10 b) copia propia de la escena (cb2 del VS, 21 float4) para el compute: se copia en la GPU desde la ventana que el juego
 // tiene puesta (offset en constantes) en vez de enlazar el buffer del juego con offset al CS.
 static ID3D11Buffer* s_sceneCb = nullptr;
@@ -612,14 +615,15 @@ void GrassPresent() {
         int eh[3], lh[3]; { std::lock_guard<std::mutex> lk(s_recMx); for (int k = 0; k < 3; k++) { eh[k] = s_execHist[k]; lh[k] = s_lagHist[k]; s_execHist[k] = 0; s_lagHist[k] = 0; } }
         int fr = s_framesRead; s_framesRead = 0; int fng = s_framesNoGrass; s_framesNoGrass = 0;
         int age = s_capPres.load() >= 0 ? pres - s_capPres.load() : -1;
-        Log("pasto v3: llamadas %d, emisiones grabadas %d (desde la base %d, desde el pasto del juego %d; en contextos diferidos %d, inmediato %d) | GPU: %d Presents, %d cuadros leidos, emisiones ejecutadas por cuadro 0:%d 1:%d 2+:%d (cuadros sin pasto del mod %d), grabacion->ejecucion 0:%d 1:%d 2+:%d Presents, x63 %s | parcelas %d (niveles %d/%d/%d), malla cercana %u idx, estado: %s | v4: %d dibujos con manojos curvos | camara del compute: m11 %.2f ojo (%.1f %.1f %.1f) cb2 off %u n %u de %u B, umbrales %.0f/%.0f/%.0f px/m, dibujos del pasto sin PS de hojas %d, en pasadas de otro tamano %d (DSV %ux%u, RTVs %u) | estado guardado hace %d Presents, t5 igual %d / distinta %d | base: hasta %d dibujos por grabacion, %d despues de las hojas; emision diferida por dibujo %d / targets %d / limpieza %d / fin %d / ejecucion %d / ClearState %d, con otros targets %d, perdidas %d",
+        Log("pasto v3: llamadas %d, emisiones grabadas %d (desde la base %d, desde el pasto del juego %d; en contextos diferidos %d, inmediato %d) | GPU: %d Presents, %d cuadros leidos, emisiones ejecutadas por cuadro 0:%d 1:%d 2+:%d (cuadros sin pasto del mod %d), grabacion->ejecucion 0:%d 1:%d 2+:%d Presents, x63 %s | parcelas %d (niveles %d/%d/%d), malla cercana %u idx, estado: %s | v4: %d dibujos con manojos curvos | camara del compute: m11 %.2f ojo (%.1f %.1f %.1f) cb2 off %u n %u de %u B, umbrales %.0f/%.0f/%.0f px/m, dibujos del pasto sin PS de hojas %d, en pasadas de otro tamano %d (DSV %ux%u, RTVs %u) | estado guardado hace %d Presents, t5 igual %d / distinta %d | base: hasta %d dibujos por grabacion, %d despues de las hojas; emision diferida por dibujo %d / targets %d / limpieza %d / fin %d / ejecucion %d / ClearState %d, con otros targets %d, perdidas %d | estados de las hojas: stencil base %d, sin RT4 %d, color suelo %d, sin nada %d; pasto del juego sin base debajo (x297) %d",
             g_grassDbg.calls, g_grassDbg.emits, s_emitBase.exchange(0), s_emitGame.exchange(0), s_recDeferred.exchange(0), s_recImmediate.exchange(0),
             dp, fr, eh[0], eh[1], eh[2], fng, lh[0], lh[1], lh[2], s_missing.load() ? "1 (mod sin dibujar: pasto del juego entero)" : "0",
             g_grassDbg.patches, g_grassDbg.ring[0], g_grassDbg.ring[1], g_grassDbg.ring[2], g_grassDbg.lod,
             g_grassDbg.why ? g_grassDbg.why : "-", g_denseDraws.exchange(0), s_camM11, s_camEye[0], s_camEye[1], s_camEye[2], s_cb2Off, s_cb2N, s_cb2Bytes, T[0], T[1], T[2], s_skipNoPs.exchange(0),
             s_offPass.exchange(0), s_offW, s_offH, s_offRtv, age, s_t5Same.exchange(0), s_t5Diff.exchange(0),
             s_turfMaxRec.exchange(0), s_turfAfter.exchange(0), s_flushWhy[0].exchange(0), s_flushWhy[1].exchange(0), s_flushWhy[2].exchange(0), s_flushWhy[3].exchange(0),
-            s_flushWhy[4].exchange(0), s_flushWhy[5].exchange(0), s_flushOther.exchange(0), s_pendLost.exchange(0));
+            s_flushWhy[4].exchange(0), s_flushWhy[5].exchange(0), s_flushOther.exchange(0), s_pendLost.exchange(0),
+            s_emitSt.exchange(0), s_emitRt4.exchange(0), s_emitSnap.exchange(0), s_emitBare.exchange(0), s_skipNoBase.exchange(0));
         g_grassDbg.calls = 0; g_grassDbg.emits = 0; g_grassDbg.sparseLast = g_grassDbg.sparse; g_grassDbg.sparse = 0; }
 }
 
@@ -774,7 +778,9 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
           if (g_cfg.live[291][0] > 0.5f && baseUnder && (snap = SnapshotRT0(c)) != nullptr) bm |= 2;   // (26/10 g) sin la copia del suelo no hay mezcla
           if (bm) if (ID3D11BlendState* nb = BladeBlend(svBs, bm)) { c->OMSetBlendState(nb, svBf, svBm); nb->Release(); farBl = (bm & 2) != 0; bmSet = bm; }
           if (farBl) { c->PSGetShaderResources(10, 1, &oldT10); c->PSSetShaderResources(10, 1, &snap); t10Set = true; } }
-        { static std::atomic<int> nLog{0}; if (nLog.fetch_add(1) < 3) {
+        if (stRoute) s_emitSt++; if (bmSet & 1) s_emitRt4++; if (bmSet & 2) s_emitSnap++; if (!stRoute && !bmSet) s_emitBare++;
+        { static std::atomic<int> nLog[3]; const int route = bound ? 0 : (pend ? 2 : 1);   // (27/10 l) dos lineas por camino (antes las 3 se iban en el primero)
+          if (nLog[route].fetch_add(1) < 2) {
             char b[400] = "-"; if (stRoute) { ID3D11DepthStencilState* d = nullptr; UINT r = 0; c->OMGetDepthStencilState(&d, &r); DescDSS(b, sizeof(b), d, r); if (d) d->Release(); }
             Log("pasto tanda 6: hojas del mod (%s): stencil de la base %s, mezcla %d (1 = sin RT4, 2 = color con el suelo): %s", bound ? "desde el pasto del juego" : (pend ? "desde la base, diferida" : "desde la base"), stRoute ? "si" : "no", bmSet, b); } }
         float cbq[72];
@@ -911,6 +917,10 @@ void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, const ShaderEntr
     { float T[4]; Thresholds(T); bool denseSkip = extraOn && T[0] >= 1000.0f && !s_missing.load();
       if (!t_grassSub.count && !denseSkip) DensePick(count, &t_grassSub); }
     if (!extraOn) { Why("apagado (w58)"); return; }
+    // (27/10 l) tanda 9a, x297: si en esta grabacion la base de la cancha todavia no se dibujo, no se emite desde el pasto del juego: esas hojas
+    // salian sin RT4 protegido (escribian 0 = sin la luz difusa / horneada del estadio) y sin el color del suelo (no hay copia de RT0), y si la GPU
+    // las ejecutaba primero se quedaban con el cuadro. La emision desde la base (w294, despues del ultimo dibujo de la base) las dibuja bien
+    if (g_cfg.live[297][0] > 0.5f && g_cfg.live[290][1] > 0.5f && !RecHas(c, &GRec::base)) { s_skipNoBase++; Why("pasto del juego sin la base debajo: emite la base (x297)"); return; }
     if (!RecClaim(c, &GRec::emitted)) return;
     if (!GrassEmit(c, true)) { RecUnclaim(c, &GRec::emitted); return; }
     if (c == g_dev.imm) s_recImmediate++; else s_recDeferred++;

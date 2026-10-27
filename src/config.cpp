@@ -242,7 +242,8 @@ static bool LoadConfigLocked() {
     // 296 (27/10 h) sombra del cesped en 619b: x prendido | y frialdad (azulada) | z profundidad (1 = solo el tinte; desde el 27/10 la luz de la sombra la pone 314)
     { static const struct { int i, k; float v; } kDef[] = { {290, 0, 1.f}, {290, 1, 1.f}, {290, 2, 0.45f}, {290, 3, 1.f}, {291, 0, 1.f}, {291, 1, 30.f}, {291, 2, 100.f}, {291, 3, 1.f},
                                                          {292, 0, 1.f}, {292, 1, 1.f}, {292, 2, 1.f}, {292, 3, 1.f}, {294, 0, 1000.f}, {294, 1, 200.f}, {294, 2, 450.f}, {294, 3, 1.f},
-                                                         {295, 0, 1.f}, {295, 1, 1.f}, {295, 2, 1.f}, {295, 3, 0.72f}, {296, 0, 1.f}, {296, 1, 1.f}, {296, 2, 1.f} };   // (27/10) z296 1: la sombra del pasto ya no se hunde (la luz de cielo 314 la arma)
+                                                         {295, 0, 1.f}, {295, 1, 1.f}, {295, 2, 1.f}, {295, 3, 0.72f}, {296, 0, 1.f}, {296, 1, 1.f}, {296, 2, 1.f},   // (27/10) z296 1: la sombra del pasto ya no se hunde (la luz de cielo 314 la arma)
+                                                         {297, 0, 1.f}, {297, 1, 1.f}, {297, 2, 1.f} };   // (27/10 l, tanda 9a) 297: x hojas del pasto del juego solo con la base debajo | y oclusion promediada a media distancia | z lineas nitidas a media distancia
       for (auto& d : kDef) if (!c.info[d.i][d.k].defined) c.base[d.i][d.k] = d.v; }
     // 313 (27/10) el sol sobre el pasto (pes_sunturf.hlsli): x sombras entre hojas | y luz a traves de las hojas | z sol bajo dorado | w on
     { static const struct { int i, k; float v; } kDef313[] = { {313, 0, 0.6f}, {313, 1, 0.7f}, {313, 2, 0.6f}, {313, 3, 1.f},
