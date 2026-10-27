@@ -71,6 +71,9 @@ def region_factors(name, bm, P=None):
     ombligo (si no, un agujero)"""
     (af, bf, kf), (ab, bb, kb) = REGION[name]
     a, b, k = af + (ab - af) * bm, bf + (bb - bf) * bm, kf + (kb - kf) * bm
+    if os.environ.get("TB_NO_RELIEF"):   # (26/10 e) texturas propias: el mapa del torso tal cual (nada a la malla ni se le saca)
+        if name == "normal": return np.ones_like(bm), np.ones_like(bm), np.zeros_like(bm)
+        return a, b, np.zeros_like(bm)
     if P is not None and name == "atletico":
         from torso_maps import _frame
         from torso_variants import ss, g, NAVEL

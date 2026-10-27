@@ -89,7 +89,9 @@ def main():
         sinshort = os.environ.get("TB_SINSHORT")
         srcs = [(folder, ver) for ver in TORSO_VERSIONS] + ([(sinshort, ver) for ver in TORSO_VERSIONS] if sinshort else [])
         for src_folder, ver in srcs:
-            T = build(src_folder, ver, texdir)
+            # (26/10 e) TB_NO_RELIEF=1: el relieve del normal map NO pasa a la malla del torso (texturas propias pintadas: no son
+            # integrables y la malla quedaba con bultos); la malla queda la de TorsoBody (+ lo esculpido a mano de las variantes)
+            T = build(src_folder, ver, None if os.environ.get("TB_NO_RELIEF") else texdir)
             rows = variant_rows(T)
             if ver == "out" and src_folder == folder:   # (26/10 d) inclinacion de la malla de cada version para el tope del relieve del PS (x307)
                 tm, tmask = torso_tilt.tilt_maps(T, rows, 1024, 512, 0.5)

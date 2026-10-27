@@ -1,4 +1,9 @@
--- TorsoBody_cuello.lua  (TorsoBody v11.3g)
+-- TorsoBody_cuello.lua  (TorsoBody v11.3g; 1.10 de PES21 FX)
+-- (1.10) Las caras cuya textura viene sin mips chicos (solo la grande) no se fundian ("sin mip chico" en sider.log: el cuello
+-- quedaba de otro color y el corte se veia): el promedio ahora se arma de la textura grande. El color del torso del tono 1
+-- es el de las texturas propias del usuario (torso_1_bsm retocado; el de TorsoBody era 155 / 115 / 95). Y PERFIL = true
+-- anota en sider.log la forma del cuello de cada cara (ancho por angulo y altura cerca del borde del torso: solo medidas),
+-- para darle al torso de TorsoBody la forma del cuello de Konami.
 -- Las caras reales (escaneadas o hechas en Blender) traen un pedazo de cuello que baja en V sobre el pecho. Con el
 -- torso de TorsoBody ese pedazo queda pegado a la piel del torso y las dos superficies se pisan (parpadeos, manchas).
 -- Cuando el juego carga una cara real (face.fpk), este modulo le corta en memoria ese pedazo justo en el borde del
@@ -33,11 +38,13 @@ local SIN_JIT = true
 -- Dream Patch Sider\content\TorsoBody_cuello_cache\ y las proximas veces Sider los sirve desde ahi sin procesar nada
 -- (sin tirones en los menus). Si cambias el modelo o la textura de una cara, borra sus archivos de esa carpeta.
 local USAR_CACHE = true
+-- (1.10) anota en sider.log la forma del cuello de cada cara real (una vez por cara y por sesion)
+local PERFIL = true
 -- todo el modulo va adentro de una funcion para poder apagarle el JIT solo a el (jit.off(f, true) alcanza a todas
 -- las funciones definidas adentro)
 local NOJIT = false
 local function modulo_cuello()
-local m = { version = "1.9" }
+local m = { version = "1.10" }
 
 local AXZ = 0.045          -- eje del cuello (z)
 -- borde del cuello del torso TorsoBody v11.3c (x, y, z), ordenado por angulo alrededor del cuello
@@ -831,7 +838,8 @@ local TEX = {
     GU = 256, GV = 256,           -- grilla de profundidad en UV: u y v 0..1 en 256 x 256 celdas
     MINW = 32,                    -- mips mas chicos que esto no se tocan
     -- color del torso TorsoBody justo debajo de la union (albedo sRGB) por tono 1..6
-    TORSO = { { 155.3, 115.2, 95.2 }, { 160.2, 119.6, 92.2 }, { 150.9, 107.6, 84.0 },
+    -- (1.10) tono 1 = torso_1_bsm propio del usuario (el de TorsoBody: 155.3, 115.2, 95.2)
+    TORSO = { { 165.6, 125.5, 105.8 }, { 160.2, 119.6, 92.2 }, { 150.9, 107.6, 84.0 },
               { 133.7, 96.7, 77.0 }, { 109.9, 77.9, 64.8 }, { 93.7, 68.0, 59.5 } },
     -- color del cuello de las caras genericas de Konami por tono (head_color_w y o r d b), 25-50 mm sobre la union
     REF = { { 176.3, 136.9, 118.1 }, { 177.8, 134.2, 103.6 }, { 159.2, 118.1, 91.1 },
@@ -1425,9 +1433,15 @@ end
 -- color promedio de la franja: el mip de ~128 (cada texel ya es el promedio de 8x8 texels de 1024) suavizado dos
 -- veces con 3x3 (solo con texels del cuello) ~ desenfoque de 8-10 texels en 1024. Tambien elige el tono de piel.
 local function low_pass(buf, T, g)
-    local mp
+    local mp, src, f = nil, nil, 1
     for _, m_ in ipairs(T.mips) do if m_.w <= 128 and m_.w >= 32 and (not mp or m_.w > mp.w) then mp = m_ end end
-    if not mp then return nil, "sin mip chico" end
+    if not mp then
+        -- (1.10) sin mips chicos (solo la textura grande): el "mip de ~128" se arma promediando f x f texels de la grande
+        for _, m_ in ipairs(T.mips) do if m_.w > 128 and (not src or m_.w < src.w) then src = m_ end end
+        if not src then return nil, "sin mip chico" end
+        f = floor(src.w / 128); if f < 2 then f = 2 end
+        mp = { w = floor(src.w / f), h = floor(src.h / f) }
+    end
     local w, h = mp.w, mp.h
     local vmin = 1                                   -- filas: desde 60 mm arriba de la union
     for j = g.j0, g.j1 do
@@ -1441,7 +1455,41 @@ local function low_pass(buf, T, g)
     local nh = h - y0
     local R, G, B, Vd, Dp = {}, {}, {}, {}, {}
     local px = {}
-    for by = by0, floor((h + 3) / 4) - 1 do
+    if src then
+        local SN = {}
+        for k = 0, nh * w - 1 do R[k], G[k], B[k], SN[k] = 0, 0, 0, 0 end
+        local sw, sh = src.w, src.h
+        for tby = floor(y0 * f / 4), floor((sh + 3) / 4) - 1 do
+            for tbx = 0, src.bw - 1 do
+                local b = block_bytes(buf, T, src, tbx, tby)
+                decode_block(T, b, px)
+                for ty = 0, 3 do
+                    local Y = tby * 4 + ty
+                    local y = floor(Y / f)
+                    if Y < sh and y >= y0 and y < h then
+                        for tx = 0, 3 do
+                            local X = tbx * 4 + tx
+                            local x = floor(X / f)
+                            if X < sw and x < w then
+                                local k = (y - y0) * w + x; local q = (ty * 4 + tx) * 4
+                                R[k] = R[k] + px[q + 1]; G[k] = G[k] + px[q + 2]; B[k] = B[k] + px[q + 3]; SN[k] = SN[k] + 1
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        for y = y0, h - 1 do
+            for x = 0, w - 1 do
+                local k = (y - y0) * w + x
+                local n = SN[k]
+                if n > 0 then R[k], G[k], B[k] = R[k] / n, G[k] / n, B[k] / n else R[k], G[k], B[k] = nil, nil, nil end
+                local d = grid_depth(g, (x + 0.5) / w, (y + 0.5) / h)
+                Vd[k] = d and 1 or 0; Dp[k] = d or false
+            end
+        end
+    end
+    for by = by0, (src and -1 or floor((h + 3) / 4) - 1) do
         for bx = 0, mp.bw - 1 do
             local b = block_bytes(buf, T, mp, bx, by)
             decode_block(T, b, px)
@@ -1729,9 +1777,76 @@ local function base_tex_key(F, mi, strict)
     return alt or fallback
 end
 
+-- (1.10) forma del cuello de la cara cerca del borde del torso: por cada uno de 24 angulos alrededor del eje del cuello, el
+-- radio de la piel (rayo horizontal desde el eje) a 3, 2, 1 y 0 cm arriba del borde y 1 cm abajo, y cuanto baja la malla en ese
+-- angulo. Solo medidas (mm), en sider.log; con eso se le da al torso la forma del cuello de Konami
+local PERFIL_HECHO = {}
+local function neck_profile(M)
+    local P, tris = M.P, M.tris[1]
+    local sel = {}
+    for _, t in ipairs(tris) do                          -- solo los triangulos de la franja del cuello
+        local a, b, c = P[t[1]], P[t[2]], P[t[3]]
+        local ok = false
+        for _, q in ipairs({ a, b, c }) do
+            local dq = depth(q)
+            if dq > -0.045 and dq < 0.06 and sqrt(q[1] ^ 2 + (q[3] - AXZ) ^ 2) < 0.14 then ok = true end
+        end
+        if ok then sel[#sel + 1] = t end
+    end
+    local H = { 0.03, 0.02, 0.01, 0.0, -0.01 }
+    local out = {}
+    for ia = 0, 23 do
+        local phi = -180 + ia * 15
+        local r = rad(phi); local dx, dz = sin(r), cos(r)
+        local yl = loop_y(phi)
+        local vals = {}
+        for _, hh in ipairs(H) do
+            local oy = yl + hh
+            local best = nil
+            for _, t in ipairs(sel) do                     -- rayo (0, oy, AXZ) + s (dx, 0, dz): corte con el triangulo
+                local a, b, c = P[t[1]], P[t[2]], P[t[3]]
+                local e1x, e1y, e1z = b[1] - a[1], b[2] - a[2], b[3] - a[3]
+                local e2x, e2y, e2z = c[1] - a[1], c[2] - a[2], c[3] - a[3]
+                local px_, py_, pz_ = -e2y * dz, dz * e2x - dx * e2z, dx * e2y   -- d x e2, d = (dx, 0, dz)
+                local det = e1x * px_ + e1y * py_ + e1z * pz_
+                if abs(det) > 1e-14 then
+                    local inv = 1 / det
+                    local tx, ty, tz = -a[1], oy - a[2], AXZ - a[3]
+                    local u = (tx * px_ + ty * py_ + tz * pz_) * inv
+                    if u >= 0 and u <= 1 then
+                        local qx, qy, qz = ty * e1z - tz * e1y, tz * e1x - tx * e1z, tx * e1y - ty * e1x
+                        local v = (dx * qx + dz * qz) * inv
+                        if v >= 0 and u + v <= 1 then
+                            local s_ = (e2x * qx + e2y * qy + e2z * qz) * inv
+                            if s_ > 0.005 and (not best or s_ < best) then best = s_ end
+                        end
+                    end
+                end
+            end
+            vals[#vals + 1] = best and string.format("%.1f", best * 1000) or "-"
+        end
+        local low = nil                                    -- lo mas bajo de la malla en ese angulo (+-8 grados), mm bajo el borde
+        for _, t in ipairs(sel) do
+            for k = 1, 3 do
+                local q = P[t[k]]
+                local a = deg(atan2(q[1], q[3] - AXZ))
+                local da = (a - phi + 540) % 360 - 180
+                if abs(da) < 8 then local dq = depth(q); if not low or dq > low then low = dq end end
+            end
+        end
+        out[#out + 1] = string.format("%d:%s/%s", phi, table.concat(vals, ","), low and string.format("%.1f", low * 1000) or "-")
+    end
+    return table.concat(out, " ")
+end
+
 local function cut_mesh(F, mi, name, shader)
     local M, err = read_mesh(F, mi)
     if not M then return err end
+    if PERFIL and name == "fox_skin_mat" and CUR_FACE_KEY and not PERFIL_HECHO[CUR_FACE_KEY] then
+        PERFIL_HECHO[CUR_FACE_KEY] = true
+        local okp, prof = pcall(neck_profile, M)
+        log("TorsoBody cuello: perfil " .. tostring(CUR_FACE_KEY) .. " (radio mm a +3/+2/+1/0/-1 cm del borde / baja mm): " .. (okp and prof or ("error " .. tostring(prof))))
+    end
     if FUNDIR and name == "fox_skin_mat" and (shader == "" or shader:find("skin", 1, true)) then
         local key = base_tex_key(F, mi)
         if key then CUR_GRIDS[key] = make_grid(M, CUR_GRIDS[key]) end
@@ -1922,7 +2037,7 @@ local SEEN_TEX, n_seen = {}, 0      -- texturas de caras que llegaron sin grilla
 local CACHE_DIR = nil                -- se fija en init (ctx.sider_dir .. content\TorsoBody_cuello_cache\)
 local CACHE_OK = true                -- false si no se pudo escribir (carpeta inexistente): se sigue sin cache
 local FROM_CACHE = {}                -- archivos (en minusculas) que Sider esta sirviendo desde la cache
-local CACHE_TAG = "_v19"
+local CACHE_TAG = "_v20"   -- (1.10) color del tono 1 nuevo
 local function cache_paths(fn)
     if not CACHE_DIR then return nil end
     local id = fn:match("face[\\/]+real[\\/]+([^\\/]+)[\\/]")
