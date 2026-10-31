@@ -1265,6 +1265,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
 // propio, una vez por cabeza, con un b2 (g_vsScene) cuya m_projectionView es la caja ortografica de esa cabeza (headshadow.cpp)
 // (27/10 d) cualquier tipo de dibujo (el juego puede mandar la sombra con DrawIndexedInstanced); kind para el diagnostico
 template<int V, class F> static void HeadShadowReplay(ID3D11DeviceContext* c, ID3D11DepthStencilView* gameDSV, int kind, F draw) {
+    if (g_cfg.live[309][0] < 0.5f) return;   // (31/10) x309 = 0: la DLL tampoco repite dibujos (antes solo el shader dejaba de leer el atlas)
     int n = HeadShadowSlots(); ID3D11DepthStencilView* dsv = HeadShadowDSV();
     if (n <= 0 || !dsv || !HeadShadowIsNearCascade(c, gameDSV, kind)) return;
     ID3D11RenderTargetView* rt[8] = {}; ID3D11DepthStencilView* oldDsv = nullptr; c->OMGetRenderTargets(8, rt, &oldDsv);
