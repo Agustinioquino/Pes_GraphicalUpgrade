@@ -71,7 +71,11 @@ bool PesVariantMorph(uint vid, float tv, inout float3 p, inout float3 n, inout f
     int rb = (int)(R * best) + 7;
     d0 = g_varData.Load(int3(vid, rb, 0)).xyz; n0 = g_varData.Load(int3(vid, rb + 1, 0)).xyz; t0 = g_varData.Load(int3(vid, rb + 2, 0)).xyz;
   }
-  float a = saturate(abs(tv)) * PesVarNeckKeep(p);   // (27/10 d) sin variante junto al cuello
+  const float nk = PesVarNeckKeep(p);
+  float a = saturate(abs(tv)) * nk;   // (27/10 d) sin variante junto al cuello
+  if (baseOn && nk < 1.0) {   // (31/10) la base esculpida tambien: movia el anillo del cuello y el cuello de la cara (que no se mueve) quedaba chupado
+    d0 *= nk; n0 = normalize(lerp(n, n0, nk)); t0 = lerp(tg, t0, nk);
+  }
   float3 d1 = d0, n1 = n0, t1 = t0;
   if (a > 0.001) {
     int r = (int)(R * best) + (tv < 0.0 ? 1 : 4);
