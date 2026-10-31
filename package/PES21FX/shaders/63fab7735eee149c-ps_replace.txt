@@ -227,8 +227,16 @@ void main(
     r3.xyz *= mRefl * lerp(1.0, 0.35, mDeep) * (1.0 - 0.6 * mCavity * (1.0 - mTeeth));
     // dientes: menos blanco fosforescente y tono marfil natural
     r0.xyz = lerp(r0.xyz, r0.xyz * mWhite * float3(1.0, 0.975, 0.93), mTeeth);
+    // (31/10) la oscuridad de la boca es OCLUSION DEL AMBIENTE: al multiplicar el color (albedo) tambien se apagaba la luz directa
+    // del sol, y con el sol de frente los dientes quedaban casi negros (Agustin: "la oclusion de los dientes no respeta la luz del
+    // sol"; con Ver original se ven bien). Donde la luz dominante entra en la boca (normal de la boca hacia la luz) los
+    // oscurecimientos fijos (cavidad, labio, linea de encia, entre dientes, garganta) se aflojan; a contraluz quedan como antes.
+    float3 mLw = g_psSystem.m_dominantLightDir.xyz;
+    float3 mLv = normalize(float3(dot(mLw, g_psScene.m_view._m00_m10_m20), dot(mLw, g_psScene.m_view._m01_m11_m21), dot(mLw, g_psScene.m_view._m02_m12_m22)) + float3(1e-5, 2e-5, 1e-5));
+    float mSunIn = smoothstep(0.0, 0.6, dot(r2.xyz, mLv)) * (1.0 - 0.6 * mDeep);
+    float mSunK = 1.0 - 0.7 * mSunIn;   // multiplica cada oscurecimiento fijo
     // oclusion de la cavidad: la luz casi no entra al fondo de la boca
-    float occ = 1.0 - mCavity * (0.25 * mTeeth + 0.45 * mTissue + 0.75 * mDeep);
+    float occ = 1.0 - mCavity * (0.25 * mTeeth + 0.45 * mTissue + 0.75 * mDeep) * mSunK;
     r0.xyz *= occ;
     if (m2On) {
       float trmT = g_tex_translucent.SampleBias(g_sampler_translucent_s, v2.xy, 2.0).y;   // grosor del esmalte (claro = fino; mip bajo: sin bandas que titilan)
@@ -246,7 +254,7 @@ void main(
       r0.xyz = lerp(r0.xyz, r0.xyz * tooth, mTeeth);
       // linea de encia: oclusion fina donde el diente nace de la encia
       mGumLine = saturate(Q97.y) * (mUpper * smoothstep(0.16, 0.09, v2.y) + mLower * smoothstep(0.54, 0.61, v2.y)) * (mTeeth + mTissue * 0.6);
-      r0.xyz *= 1.0 - 0.35 * mGumLine;
+      r0.xyz *= 1.0 - 0.35 * mGumLine * mSunK;
       // ENCIAS: rosado sano, menos "carne cruda": subir un poco la saturacion y llevar el tono a rosa-coral
       float gum = mTissue * saturate(Q96.z) * (0.75 + 0.5 * vr2 * saturate(Q97.w) + 0.25 * (1 - saturate(Q97.w)));
       mEnamelT *= (0.8 + 0.4 * vr3 * saturate(Q97.w) + 0.2 * (1 - saturate(Q97.w)));
@@ -257,17 +265,17 @@ void main(
       // la de abajo la del propio labio inferior pero mucho menos
       mLipShadow = saturate(Q96.w) * (mUpper * (1.0 - 0.75 * mIncisal) * 0.45 + mLower * 0.12);
       // con el sol alto la sombra del labio de arriba es mas marcada (m_dominantLightDir: y hacia arriba)
-      mLipShadow *= 0.7 + 0.6 * saturate(g_psSystem.m_dominantLightDir.y);
+      mLipShadow *= (0.7 + 0.6 * saturate(g_psSystem.m_dominantLightDir.y)) * lerp(1.0, mSunK, 0.7);   // (31/10) de frente el labio tapa menos
       r0.xyz *= 1.0 - mLipShadow;
       // --- v3 ---
       // sombra entre dientes (espacio interproximal): donde la normal del mapa se inclina de costado dentro de las filas
       { float3 nm = g_tex_normal.SampleBias(g_sampler_normal_s, v2.xy, 1.0).xyw; float nx = abs(nm.x * nm.z * 2.0 - 1.0);
         float gap = smoothstep(0.25, 0.6, nx) * mRows * mTeeth;
-        r0.xyz *= 1.0 - 0.45 * gap * saturate(Q98.y); }
+        r0.xyz *= 1.0 - 0.45 * gap * saturate(Q98.y) * mSunK; }
       // oscurecimiento hacia la garganta: cuanto mas atras en la boca, menos luz (y la lengua, mas atras tambien)
       { float back = saturate((v2.y - 0.66) / 0.30);
         float deepG = (mThroatZ * (0.35 + 0.65 * back) + mTongueZ * 0.35 * back) * saturate(Q98.z);
-        r0.xyz *= 1.0 - 0.6 * deepG; }
+        r0.xyz *= 1.0 - 0.6 * deepG * lerp(1.0, mSunK, 0.5); }
       // lengua: rosa-rojo humedo con mas saturacion, papilas (ruido fino) y sin el gris del original
       { float tz = mTongueZ * mTissue * saturate(Q98.x);
         float lumT = dot(r0.xyz, float3(0.3, 0.59, 0.11));
