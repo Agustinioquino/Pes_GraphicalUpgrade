@@ -431,7 +431,10 @@ void main(
       r1.xyz = normalize(r1.xyz);
     }
   }
-  if (fgOk) fhMask = max(fhMask, FA.a * saturate(P68.w));   // PES21 quinta textura: vello y nacimiento del pelo exactos
+  // (31/10) vello / nacimiento del pelo de la quinta textura con el borde FUNDIDO: el canal A es un umbral por texel y su borde
+  // dentado se veia como una escalera palida en la patilla y la sien de las genericas (donde fhMask = 1 la piel queda mate, sin
+  // brillo ni translucidez). Mip 3 (8x8 texeles, ~8 mm) = transicion suave; el resto de la quinta textura sigue fino.
+  if (fgOk) fhMask = max(fhMask, saturate(pesFaceA.SampleBias(g_samplerLinear_Clamp_s, v2.xy, 3.0).a * 1.15) * saturate(P68.w));
   fhMask *= 1.0 - lipM;   // PES21 zonas: los labios no son barba
   float poreAmt = 0;
   if (enhance) {
