@@ -1956,7 +1956,7 @@ local function weld_deltas(M)
     local DY, LOWD, my = {}, {}, 0
     for ia = 0, 23 do
         local lw = low[ia]
-        if lw and lw > -0.02 and lw < CORTE_BAJO then DY[ia] = math.min(CORTE_BAJO - lw, 0.015); LOWD[ia] = lw else DY[ia] = 0; LOWD[ia] = lw or 0 end
+        if lw and lw > -0.045 and lw < CORTE_BAJO then DY[ia] = math.min(CORTE_BAJO - lw, 0.045); LOWD[ia] = lw else DY[ia] = 0; LOWD[ia] = lw or 0 end   -- (1.15c) hasta 4.5 cm (la nuca de algunas caras terminaba > 2 cm arriba: rendija)
         if DY[ia] > my then my = DY[ia] end
     end
     D.DY, D.LOWD = DY, LOWD
@@ -1981,7 +1981,7 @@ local function weld_move(D, p, d)
         if gy > 0 then
             local lw = D.LOWD[a] * (1 - t) + D.LOWD[b] * t
             local h = lw - d                          -- altura sobre lo mas bajo de la cara (m)
-            local x = h / 0.03
+            local x = h / math.max(0.03, 2.0 * gy)      -- (1.15c) si baja mucho, de a poco en el doble de lo que baja
             if x < 1 then if x < 0 then x = 0 end; x = 1 - x; dy = gy * x * x * (3 - 2 * x) end
         end
     end
