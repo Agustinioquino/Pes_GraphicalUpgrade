@@ -37,7 +37,7 @@ constexpr int kParamCount = 340;           // float4 x 336 -> t120 en los shader
 // Fisico (x inclinacion, y tipo, z tamano; por jugador, musculo.cpp); 288.x = columna marcada (t19 del PS de la piel); 289.x = base
 // esculpida (el relieve del normal map de TorsoBody en la malla: filas 7..9 de los datos de t127 + correccion de la textura en t20);
 // 293 = piel real (x prendido, y brillo, z translucidez; zonas del torso en t21 / t24; w = union suave del brazo con el torso).
-// 320 = torso bajo la camiseta ajustada (27/10, pes_skintone.hlsli PesTorsoInset: x mm, w on; y 0 = toda la piel bajo la camiseta con fundido, 1 = solo el torso).
+// 320 = torso bajo la camiseta ajustada (27/10, pes_skintone.hlsli PesTorsoInset: x mm, w on; y 0 = toda la piel bajo la camiseta con fundido, 1 = solo el torso, 2 = preciso: lo que mide 327.w en t124, x = si no hay mapa).
 // 321 = brazos, manos y muslos de TorsoBody para las caras reales (27/10, brazos.cpp: x prendido, y muslos, z tono forzado, w log).
 // 322 = cuello de las caras reales fundido con el torso (27/10, pes_collar.hlsli en 5ce3 / ce188: x prendido, y alto mm, z cuanto, w diagnostico).
 // 323 = ocultar la camiseta interior (inner*, highneck de common_package.fpk) al mirar el cuerpo sin camiseta (27/10, hooks.cpp: x prendido, w log); (27/10 d) y hundir la base del cuello de la cara bajo el torso en mm (VS faab87ee / 455eb97b, pes_collar.hlsli), z alto del fundido mm.
@@ -339,6 +339,7 @@ bool EngineCamera(float pos[3], float tgt[3], int* frame);   // ultima camara ap
 ID3D11ShaderResourceView* MuscleClothSRV();     // (25/10) zonas de la musculatura para la fisica de la ropa (t121 del simulador)
 // (25/10) la ropa choca con el cuerpo real (cuerpo.cpp): piel del cuerpo deformada por personaje para el simulador (t122..t124)
 void BodyOnDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, int kind = 0);   // en cada dibujo de la piel del cuerpo (VS 1c02a92a); kind 1 = camiseta (medicion, 327.w)
+ID3D11ShaderResourceView* TorsoNeedSRV();   // (31/10) mapa "torso bajo la camiseta" preciso (t124 del VS de la piel y de su sombra)
 void BodyPresent();                                // registro de mallas nuevas, lote del cuadro (personajes + piel), log
 void BodyClothSRVs(ID3D11ShaderResourceView* out[3]);   // tablas, vertices, listas (null si no esta listo)
 void BodyOnFinish(ID3D11DeviceContext* c, ID3D11CommandList* l);    // (25/10 e) FinishCommandList: los dibujos del contexto pasan a la lista

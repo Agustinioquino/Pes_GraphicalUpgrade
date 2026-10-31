@@ -40,6 +40,7 @@ static const UINT kStatic = 1u << 20;    // vertices de las mallas registradas (
 static const UINT kMeshMax = 12288;      // vertices por malla
 static const UINT kShirtMax = 24576;     // (27/10 d) camisetas (medicion, fila 327.w)
 static const UINT kMeas = 64;            // medicion: 8 zonas x 8
+static const UINT kNeed = 32 * 64 * 32;  // (31/10) mapa "torso bajo la camiseta" en el reposo (pes_body_measure_cs.hlsl / pes_skintone.hlsli)
 static const UINT kSlots = 1024;         // lugares para las constantes de los dibujos (anillo: varios cuadros)
 static const UINT kRecF4 = 208;          // float4 por lugar: [0..3] m_view (b2 filas 8..11), [4..12] b5 (filas 0..8), [16..207] b6
 static const UINT kMaxRec = 512;         // dibujos por cuadro (tienen que coincidir con pes_body_assign_cs.hlsl)
@@ -88,6 +89,15 @@ static ID3D11Buffer *s_meas = nullptr, *s_measStage = nullptr;
 static ID3D11UnorderedAccessView* s_measUAV = nullptr;
 static int s_measState = 0, s_measFrame = 0;
 static std::atomic<bool> s_measWant{false};   // las camisetas entran al lote solo en el cuadro que se mide
+// (31/10) mapa de cuanto asoma la piel por la camiseta, en el reposo del cuerpo: el CS de la medicion lo llena (u2), se lee con la
+// medicion y se junta con lo anterior (lo viejo se apaga x0.7 por medicion); el VS de la piel lo lee en t124 (y320 = 2). Se guarda
+// en PES21FX\torso_camiseta.bin para el menu (ahi no hay camisetas medibles). Ultimo elemento = celdas con algo (0 = sin mapa).
+static ID3D11Buffer *s_need = nullptr, *s_needStage = nullptr, *s_map = nullptr;
+static ID3D11UnorderedAccessView* s_needUAV = nullptr;
+static ID3D11ShaderResourceView* s_mapSRV = nullptr;
+static std::vector<float> s_mapCpu;
+static bool s_mapDirty = false;
+static std::wstring MapPath() { return g_cfg.baseDir + L"torso_camiseta.bin"; }
 static bool Measuring() { return g_cfg.live[327][3] > 0.5f; }
 static std::atomic<bool> s_ready{false};
 static bool s_failed = false;
@@ -204,6 +214,19 @@ static bool CreateResources() {
     if (ok && MakeBuf(kMeas * 4, 0, D3D11_BIND_UNORDERED_ACCESS, 0, &s_meas) && TypedUAV(s_meas, DXGI_FORMAT_R32_UINT, kMeas, &s_measUAV)) {
         D3D11_BUFFER_DESC sd{}; sd.ByteWidth = kMeas * 4; sd.Usage = D3D11_USAGE_STAGING; sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
         if (FAILED(s_dev->CreateBuffer(&sd, nullptr, &s_measStage))) s_measStage = nullptr;
+    }
+    if (ok && MakeBuf(kNeed * 4, 0, D3D11_BIND_UNORDERED_ACCESS, 0, &s_need) && TypedUAV(s_need, DXGI_FORMAT_R32_UINT, kNeed, &s_needUAV) &&
+        MakeBuf((kNeed + 1) * 4, 0, D3D11_BIND_SHADER_RESOURCE, 0, &s_map) && TypedSRV(s_map, DXGI_FORMAT_R32_FLOAT, kNeed + 1, &s_mapSRV)) {
+        D3D11_BUFFER_DESC sd{}; sd.ByteWidth = kNeed * 4; sd.Usage = D3D11_USAGE_STAGING; sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        if (FAILED(s_dev->CreateBuffer(&sd, nullptr, &s_needStage))) s_needStage = nullptr;
+        s_mapCpu.assign(kNeed + 1, 0.0f);
+        if (FILE* f = _wfopen(MapPath().c_str(), L"rb")) {
+            if (fread(s_mapCpu.data(), 4, kNeed + 1, f) != kNeed + 1) std::fill(s_mapCpu.begin(), s_mapCpu.end(), 0.0f);
+            fclose(f);
+        }
+        for (float& v : s_mapCpu) if (!(v >= 0.0f && v < 100.0f)) v = 0.0f;   // archivo roto: nada
+        g_dev.imm->UpdateSubresource(s_map, 0, nullptr, s_mapCpu.data(), 0, 0);
+        if (s_mapCpu[kNeed] > 0) Log("torso bajo la camiseta: mapa guardado cargado (%.0f celdas)", s_mapCpu[kNeed]);
     }
     if (ok) {
         D3D11_BUFFER_DESC sd{}; sd.ByteWidth = kDiag * 4; sd.Usage = D3D11_USAGE_STAGING; sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
@@ -591,12 +614,14 @@ static bool RunBatch(ID3D11DeviceContext* imm, std::vector<Rec>& recs, int frame
     // (27/10 d) medicion: cada vertice de las camisetas contra la piel de su personaje (resumen por zona; se lee 2 cuadros despues)
     if (s_measWant && s_csMeas && s_measUAV && s_measStage && s_measState == 0 && recs.back().kind == 1) {
         s_measWant = false;
-        { ID3D11UnorderedAccessView* u[5] = { s_measUAV, s_recTabUAV, nullptr, nullptr, nullptr }; imm->CSSetUnorderedAccessViews(0, 5, u, nullptr); }
+        { ID3D11UnorderedAccessView* u[5] = { s_measUAV, s_recTabUAV, s_needUAV, nullptr, nullptr }; imm->CSSetUnorderedAccessViews(0, 5, u, nullptr); }
         imm->ClearUnorderedAccessViewUint(s_measUAV, z);
+        if (s_needUAV) imm->ClearUnorderedAccessViewUint(s_needUAV, z);
         { ID3D11ShaderResourceView* v[7] = { s_staticSRV, s_descSRV, nullptr, s_grpSRV, s_ringVSRV, s_tabSRV, s_ringNSRV }; imm->CSSetShaderResources(0, 7, v); }
         imm->CSSetShader(s_csMeas, nullptr, 0);
         imm->Dispatch(ng, 1, 1);
         imm->CopyResource(s_measStage, s_meas);
+        if (s_needStage) imm->CopyResource(s_needStage, s_need);
         s_measState = 1; s_measFrame = frame;
     }
     imm->CSSetShaderResources(120, 1, &pprm); if (pprm) pprm->Release();
@@ -618,6 +643,28 @@ static void ReadMeasure(ID3D11DeviceContext* imm) {
     s_measState = 0;
     if (FAILED(hr)) return;
     uint32_t q[kMeas]; memcpy(q, mp.pData, sizeof(q)); imm->Unmap(s_measStage, 0);
+    // (31/10) mapa: lo nuevo (x100 mm) contra lo anterior apagado x0.7; solo si esta medicion vio camisetas con piel
+    UINT seen = 0; for (int z = 0; z < 6; z++) seen += q[8 * z];
+    if (seen && s_needStage && s_mapCpu.size() == kNeed + 1 && SUCCEEDED(imm->Map(s_needStage, 0, D3D11_MAP_READ, 0, &mp))) {
+        const uint32_t* n = (const uint32_t*)mp.pData; UINT cells = 0; float mx = 0;
+        for (UINT i = 0; i < kNeed; i++) {
+            float v = (std::max)(s_mapCpu[i] * 0.7f, (std::min)(n[i] / 100.0f, 15.0f));
+            if (v < 0.2f) v = 0.0f;
+            s_mapCpu[i] = v; if (v > 0) { cells++; mx = (std::max)(mx, v); }
+        }
+        imm->Unmap(s_needStage, 0);
+        s_mapCpu[kNeed] = (float)cells;
+        imm->UpdateSubresource(s_map, 0, nullptr, s_mapCpu.data(), 0, 0);
+        s_mapDirty = true;
+        Log("torso bajo la camiseta: mapa preciso %u celdas, maximo %.1f mm", cells, mx);
+    }
+    if (s_mapDirty) {
+        static double nextSave = 0; const double t = Now();
+        if (t > nextSave) {
+            nextSave = t + 60.0; s_mapDirty = false;
+            if (FILE* f = _wfopen(MapPath().c_str(), L"wb")) { fwrite(s_mapCpu.data(), 4, kNeed + 1, f); fclose(f); }
+        }
+    }
     static const char* zn[6] = { "escote", "hombros", "mangas", "axilas", "pecho/espalda", "costados/abajo" };
     char l[1400]; int k = snprintf(l, sizeof l, "ropa vs torso (camiseta de fabrica, piel sin x320 %.0f mm):", g_cfg.live[320][0]);
     UINT total = 0;
@@ -631,6 +678,8 @@ static void ReadMeasure(ID3D11DeviceContext* imm) {
     if (!total) Log("ropa vs torso: ninguna camiseta con piel cerca (camisetas sin huesos o sin personaje)");
     else Log("%s", l);
 }
+
+ID3D11ShaderResourceView* TorsoNeedSRV() { return s_ready.load(std::memory_order_acquire) ? s_mapSRV : nullptr; }
 
 void BodyPresent() {
     if (!g_dev.dev || !g_dev.imm || s_failed) return;

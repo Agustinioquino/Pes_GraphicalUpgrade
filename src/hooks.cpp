@@ -1141,6 +1141,8 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         ID3D11ShaderResourceView* hv = HandDataFor(vs->hash, t_drawVerts, t_drawStart, t_drawBase); hand = hv != nullptr;
         if (!hv) hv = LimbDataFor(vs->hash, t_drawVerts, t_drawStart, t_drawBase, &arm);   // (26/10, v12.7) brazos y piernas
         if (hv) { Remember(c, d, false, true, 126); c->VSSetShaderResources(126, 1, &hv); }
+        // (31/10) torso bajo la camiseta preciso: mapa de lo que asoma (cuerpo.cpp) en t124 del VS de la piel y de su sombra
+        if (vs->hash == 0x1c02a92ab4ae3362ULL || vs->hash == 0xc6ef0c7519ec95a5ULL) if (ID3D11ShaderResourceView* nv = TorsoNeedSRV()) { Remember(c, d, false, true, 124); c->VSSetShaderResources(124, 1, &nv); }
         // (26/10, v12.7) venas: textura en t29 del PS de la piel para los brazos y las manos (no en la sombra)
         if ((hand || arm) && vs->hash == 0x1c02a92ab4ae3362ULL) if (ID3D11ShaderResourceView* vt = VeinTexture()) { Remember(c, d, true, true, 29); c->PSSetShaderResources(29, 1, &vt); }
         // (27/10) brazos, manos y muslos de TorsoBody para las caras reales: ArmsTextureFor al principio de BeforeDraw
