@@ -910,6 +910,70 @@ void main(
   // niebla/bruma del estadio: es lo que "lava" la imagen; x11 = cuanto se aplica (1 = original)
   float fogK = cmpOn ? saturate(P11.x) : 1.0;
   r0.xyz = r0.xyw * lerp(1.0, r1.w, fogK) + r1.xyz * fogK;
+  // === PES21 (31/10) luz volumetrica (335): rayos de sol en el aire del estadio. Se marcha por el rayo de vista desde la
+  // camara hasta el pixel (o hasta y335 m) en 16 pasos con ruido que cambia por cuadro (lo limpia el TAA del juego); cada paso
+  // prueba el SHADOW MAP DEL SOL igual que los shaders de luz (misma matriz y cascadas), asi la luz entra por los huecos del
+  // techo y los jugadores la cortan. Fase Henyey-Greenstein (z335: mas = mas brillo mirando hacia el sol), aire mas denso
+  // abajo (w335 m de altura de escala sobre la cancha). x335 = densidad (0 = apagado). w12 = 4 muestra solo esta luz.
+  float3 vlDbg = 0;
+  {
+    float4 VL = IniParams.Load(int2(335,0));
+    float3 Ld = pLc_dir.xyz;
+    if (cmpOn && VL.x > 0.0 && dot(Ld, Ld) > 1e-6) {
+      Ld = normalize(Ld);
+      float maxD = VL.y > 1.0 ? VL.y : 150.0;
+      float zP = min(PESLinZ(uvC), maxD * 8.0);
+      float2 sCv = uvC * float2(2, -2) + float2(-1, 1);
+      float3 Pv = float3((sCv - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zP, zP);
+      float dP = length(Pv);
+      if (dP > 0.05) {
+        float3 Vd = Pv / dP;
+        float dE = min(dP, maxD);
+        float3 upV = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
+        if (dot(Ld, upV) < 0) upV = -upV;                                  // como el rebote del pasto: el sol siempre arriba
+        float cosT = dot(Vd, Ld);
+        float g = clamp(VL.z, -0.9, 0.95);
+        float hg = (1.0 - g * g) / pow(max(1.0 + g * g - 2.0 * g * cosT, 1e-4), 1.5);   // HG x 4 pi (isotropo = 1)
+        float ph = lerp(1.0, hg, 0.8);
+        float Hs = VL.w > 1.0 ? VL.w : 40.0;
+        float resS = g_psScene.m_shadowMapResolutions.x;
+        float smW = 0, smH = 0; PESShadowMap.GetDimensions(smW, smH);
+        bool smOk = resS > 1.0 && smW > 1.0 && smH > 2.5 * smW;
+        float bnd = 1.0 - 8.0 / max(resS, 16.0);
+        float jit = frac(52.9829189 * frac(dot(v0.xy, float2(0.06711056, 0.00583715))) + IniParams.Load(int2(155,0)).y * 0.6180339);
+        const int VN = 16;
+        float dt = dE / VN, acc = 0.0;
+        [loop] for (int vi = 0; vi < VN; vi++) {
+          float t = (vi + jit) * dt;
+          float3 Q = Vd * t;
+          float hQ = g_psScene.m_eyepos.y + dot(Q, upV);
+          float dens = exp(-max(hQ, 0.0) / Hs);
+          float lit = 1.0;                                                  // fuera de las 3 cascadas: al sol
+          if (smOk) {
+            float4 hq = float4(Q.x, Q.y, Q.z + g_psScene.m_shadowProjection2._m33, 1.0);
+            float3 s0 = float3(dot(hq, g_psScene.m_shadowProjection._m00_m10_m20_m30), dot(hq, g_psScene.m_shadowProjection._m01_m11_m21_m31), dot(hq, g_psScene.m_shadowProjection._m02_m12_m22_m32));
+            bool done = false;
+            [unroll] for (int cI = 0; cI < 3; cI++) {
+              float scl = cI == 0 ? 1.0 : (cI == 1 ? g_psScene.m_shadowProjection2._m03 : g_psScene.m_shadowProjection2._m13);
+              float3 ofs = cI == 0 ? float3(0, 0, 0) : (cI == 1 ? g_psScene.m_shadowProjection2._m00_m01_m02 : g_psScene.m_shadowProjection2._m10_m11_m12);
+              float3 sp = s0 * scl + ofs;
+              float zr = g_psScene.m_shadowProjection2._m30 * (1.0 + sp.z);
+              if (!done && abs(sp.x) <= bnd && abs(sp.y) <= bnd && zr >= 0.0) {
+                float2 uvM = float2(sp.x * 0.5 + 0.5, (cI + 0.5 - sp.y * 0.5) / 3.0);
+                float dS = PESShadowMap.Load(int3(min(uvM * float2(smW, smH), float2(smW, smH) - 1.0), 0)).x;
+                lit = dS > zr ? 0.0 : 1.0;
+                done = true;
+              }
+            }
+          }
+          acc += lit * dens;
+        }
+        float3 sunV = max(pLc_color.xyz, 0.0) * g_psScene.m_exposure.zzz;
+        vlDbg = sunV * (ph * VL.x * 1e-3 * acc * dt);
+        r0.xyz += vlDbg;
+      }
+    }
+  }
   r0.xyz = min(float3(0,0,0), -r0.xyz);
   o0.xyz = -r0.xyz;
   o0.w = 1;
@@ -927,6 +991,7 @@ void main(
     } }
   { float dbg = IniParams.Load(int2(12,0)).w;
     if (dbg > 1.5 && dbg < 2.5) o0.xyz = giDbg * 3.0;   // w12 = 2: ver solo el rebote de luz
+    if (dbg > 3.5 && dbg < 4.5) o0.xyz = vlDbg * 4.0;   // w12 = 4: ver solo la luz volumetrica (335)
     // w12 = 3 (Ctrl+Alt+F11): brujula del sol arriba al centro. Linea = hacia donde esta el sol en pantalla;
     // punto AMARILLO = el sol esta adelante de la camara (contraluz), CELESTE = detras de la camara (luz frontal);
     // barra inferior = altura del sol sobre el horizonte (llena = cenit). Si no hay sol (noche) no se dibuja.
