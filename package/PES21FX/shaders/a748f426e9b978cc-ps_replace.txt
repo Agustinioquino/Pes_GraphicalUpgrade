@@ -317,6 +317,7 @@ void main(
   r0.x = 10000 * r0.x;
   r0.x = r0.x * r1.w;
   r10.xyzw = frac(r0.wxwx);
+  r6.xyz = PESShadowAlign(r6.xyz, g_psScene.m_view, IniParams.Load(int2(337,0)).w);   // PES21 (31/10) sombra alineada por shader (w337)
   r6.w = 1;
   r11.x = dot(r6.xyzw, g_psScene.m_shadowProjection._m00_m10_m20_m30);
   r11.y = dot(r6.xyzw, g_psScene.m_shadowProjection._m01_m11_m21_m31);

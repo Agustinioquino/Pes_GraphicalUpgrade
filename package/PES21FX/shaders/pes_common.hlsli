@@ -295,3 +295,18 @@ float3 PESSkinLocus(float3 alb, float k) {
   return o * (L / max(dot(o, float3(0.2126, 0.7152, 0.0722)), 1e-4));
 }
 #endif
+
+// (31/10) sombra alineada por shader (w337): el motor arma m_shadowProjection con la vista -> mundo al reves ([R | c] en vez
+// de [R^T | c]), por eso la sombra del sol gira con la camara (en TV R es simetrica y no se nota). En vez de corregir el
+// cbuffer desde la DLL (sombra_parche 1, que tocaba subidas que no eran la escena), se corrige el punto antes de proyectarlo:
+// p' = R^T R^T p, con R = 3x3 de m_view (filas de memoria = columnas en HLSL). Se aplica al mismo p (en vista, ya con el
+// desplazamiento z de m_shadowProjection2._m33) que el juego multiplica por m_shadowProjection.
+float3 PESShadowAlign(float3 p, float4x4 mv, float on) {
+  if (on < 0.5) return p;
+  float3 V0 = float3(mv._m00, mv._m10, mv._m20), V1 = float3(mv._m01, mv._m11, mv._m21), V2 = float3(mv._m02, mv._m12, mv._m22);   // filas de R
+  float3 q;
+  q.x = (V0.x * V0.x + V1.x * V0.y + V2.x * V0.z) * p.x + (V0.x * V1.x + V1.x * V1.y + V2.x * V1.z) * p.y + (V0.x * V2.x + V1.x * V2.y + V2.x * V2.z) * p.z;
+  q.y = (V0.y * V0.x + V1.y * V0.y + V2.y * V0.z) * p.x + (V0.y * V1.x + V1.y * V1.y + V2.y * V1.z) * p.y + (V0.y * V2.x + V1.y * V2.y + V2.y * V2.z) * p.z;
+  q.z = (V0.z * V0.x + V1.z * V0.y + V2.z * V0.z) * p.x + (V0.z * V1.x + V1.z * V1.y + V2.z * V1.z) * p.y + (V0.z * V2.x + V1.z * V2.y + V2.z * V2.z) * p.z;
+  return q;
+}

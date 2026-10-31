@@ -52,7 +52,7 @@ constexpr int kParamCount = 340;           // float4 x 336 -> t120 en los shader
 // 334 = pasto de la camara mas cercana, tanda 12 (27/10 p, >= 250-600 px/m, hojas del mod y parcelas del juego pegadas a la camara: x rocio fino (18af), y cal mas densa / borde irregular (498b), z sombra por hoja (18af)).
 // 335 = luz volumetrica (31/10, composicion 619b: x densidad del aire 0 = apagado, y distancia maxima m, z fase HG hacia el sol, w altura de la bruma m; w12 = 4 la muestra sola).
 // 336 = SSGI calidad (31/10: x muestras cercanas 8..16, y limpieza 0..2 = filtro espacial que respeta bordes al subir de resolucion, z nitidez por normales 0..4, w saturacion del rebote 0..2).
-// 337 = SSGI (31/10: x cuanto recibe la piel 0..2, y distancia maxima m (0 = 90), z resolucion completa (ssgi.cpp), w -).
+// 337 = SSGI (31/10: x cuanto recibe la piel 0..2, y distancia maxima m (0 = 90), z resolucion completa (ssgi.cpp), w sombra del sol alineada por shader (PESShadowAlign en pes_common.hlsli: p' = R^T R^T p antes de m_shadowProjection; prueba sin DLL de sombra_parche 1)).
 // 338 = traspaso de luz en los kits con el grosor real del shadow map (31/10, 5 PS del sol: x densidad 1/m, y grosor maximo cm, z resto del modo viejo, w on).
 // 339 = pelo a contraluz (31/10, 5 PS del sol; los PS del pelo 02f1d510 / c75f6047 marcan g_SpecularTexture.z = 252/255: x fuerza, y densidad 1/m, z grosor maximo cm, w on).
 // 328 = matas y variedad de las hojas del mod (27/10 m, tanda 10: VS 498b / PS 18af: x matas, y variedad por hoja, z oclusion entre matas; grass.cpp: w capas por pixel cerca, 0 = 6).

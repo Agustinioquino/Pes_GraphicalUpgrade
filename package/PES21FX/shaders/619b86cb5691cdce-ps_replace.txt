@@ -405,7 +405,7 @@ void main(
             [unroll] for (int aI = 0; aI < 4; aI++) {
               float ang = aI * 1.5707963 + rI * 0.7853982;                    // patron fijo: no gira por pixel ni por cuadro
               float3 Q = Fb + (t1 * cos(ang) + t2 * sin(ang)) * rr + upV * 0.12;
-              float4 hq = float4(Q.x, Q.y, Q.z + g_psScene.m_shadowProjection2._m33, 1.0);
+              float4 hq = float4(PESShadowAlign(float3(Q.x, Q.y, Q.z + g_psScene.m_shadowProjection2._m33), g_psScene.m_view, IniParams.Load(int2(337,0)).w), 1.0);   // (31/10) w337
               float3 s0 = float3(dot(hq, g_psScene.m_shadowProjection._m00_m10_m20_m30), dot(hq, g_psScene.m_shadowProjection._m01_m11_m21_m31), dot(hq, g_psScene.m_shadowProjection._m02_m12_m22_m32));
               float litQ = 1.0; bool done = false;                              // fuera de las 3 cascadas: al sol
               [unroll] for (int cI = 0; cI < 3; cI++) {
@@ -968,7 +968,7 @@ void main(
           float dens = exp(-max(hQ, 0.0) / Hs);
           float lit = 1.0;                                                  // fuera de las 3 cascadas: al sol
           if (smOk) {
-            float4 hq = float4(Q.x, Q.y, Q.z + g_psScene.m_shadowProjection2._m33, 1.0);
+            float4 hq = float4(PESShadowAlign(float3(Q.x, Q.y, Q.z + g_psScene.m_shadowProjection2._m33), g_psScene.m_view, IniParams.Load(int2(337,0)).w), 1.0);   // (31/10) w337
             float3 s0 = float3(dot(hq, g_psScene.m_shadowProjection._m00_m10_m20_m30), dot(hq, g_psScene.m_shadowProjection._m01_m11_m21_m31), dot(hq, g_psScene.m_shadowProjection._m02_m12_m22_m32));
             bool done = false;
             [unroll] for (int cI = 0; cI < 3; cI++) {
