@@ -419,12 +419,14 @@ void main(
   { float4 KB = IniParams.Load(int2(30,0));
     // (31/10) solo tela de verdad: el pelo se mezcla sobre la marca de la piel (250/255) y en el borde pelo / cara / cuello
     // la mezcla cae justo en la marca de los kits (245/255): el sesgo dibujaba una linea punteada clara siguiendo ese borde.
-    // Ahora los 4 vecinos a 2 px tambien tienen que ser kit.
+    // Ahora los 4 vecinos a 2 px y las 4 diagonales a 6 px tambien tienen que ser kit (pelo fino / patillas: mancha palida en la sien).
     if (KB.w > 0.5 && matType == 0 && abs(skinTag - 0.9607843) < 0.002) {
       float kw, kh; g_SpecularTexture.GetDimensions(kw, kh); float2 kt = 2.0 / float2(kw, kh);
       float4 kn = float4(g_SpecularTexture.SampleLevel(g_samplerPoint_Wrap_s, uvG + float2(kt.x, 0), 0).z, g_SpecularTexture.SampleLevel(g_samplerPoint_Wrap_s, uvG - float2(kt.x, 0), 0).z,
                          g_SpecularTexture.SampleLevel(g_samplerPoint_Wrap_s, uvG + float2(0, kt.y), 0).z, g_SpecularTexture.SampleLevel(g_samplerPoint_Wrap_s, uvG - float2(0, kt.y), 0).z);
-      if (all(abs(kn - 0.9607843) < 0.002)) pesShRef += KB.x; } }
+      float4 kf = float4(g_SpecularTexture.SampleLevel(g_samplerPoint_Wrap_s, uvG + float2(kt.x, kt.y) * 3, 0).z, g_SpecularTexture.SampleLevel(g_samplerPoint_Wrap_s, uvG - float2(kt.x, kt.y) * 3, 0).z,
+                         g_SpecularTexture.SampleLevel(g_samplerPoint_Wrap_s, uvG + float2(kt.x, -kt.y) * 3, 0).z, g_SpecularTexture.SampleLevel(g_samplerPoint_Wrap_s, uvG - float2(kt.x, -kt.y) * 3, 0).z);
+      if (all(abs(kn - 0.9607843) < 0.002) && all(abs(kf - 0.9607843) < 0.002)) pesShRef += KB.x; } }
   r9.xyzw = r9.xyzw * float4(0.5,0.5,0.5,0.5) + float4(0.25,0.25,-0.75,-0.75);
   r11.xz = float2(1,1) / g_psScene.m_shadowMapResolutions.xx;
   r11.yw = float2(1,1) / r1.xx;
