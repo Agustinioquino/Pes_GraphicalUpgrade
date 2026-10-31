@@ -205,7 +205,11 @@ static void DrawGroup(MenuGroup& g, int gid) {
                     ImGui::EndCombo();
                 }
             } else {
-                ImGui::SliderFloat("##s", &val, sl.lo, sl.hi, sl.fmt.c_str());
+                // (31/10) AlwaysClamp: el valor escrito con Ctrl+clic tambien queda dentro del rango del slider
+                // (x318 "Claridad del ojo" se guardaba en -1.17 / 2.61 con rango 0..1); ademas se recorta lo que
+                // venga de afuera (teclas, Avanzado) para que el ini nunca guarde un valor fuera del rango
+                if (!isExt && (val < sl.lo || val > sl.hi)) { float cl = val < sl.lo ? sl.lo : sl.hi; Log("menu: %c%d = %g fuera del rango %g..%g del slider '%s': recortado a %g", "xyzw"[sl.comp], sl.idx, val, sl.lo, sl.hi, sl.label.c_str(), cl); val = cl; }
+                ImGui::SliderFloat("##s", &val, sl.lo, sl.hi, sl.fmt.c_str(), ImGuiSliderFlags_AlwaysClamp);
                 if (ImGui::IsItemHovered() && !ImGui::IsItemActive()) ImGui::SetTooltip("%s", TRS("Ctrl+clic para escribir un valor exacto"));
             }
             ImGui::SameLine();
