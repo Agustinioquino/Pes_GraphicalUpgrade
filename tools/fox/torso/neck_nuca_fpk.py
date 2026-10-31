@@ -12,8 +12,8 @@ def take(fpk, name, out):
     d = open(fpk, "rb").read()
     e = [x for x in entries(d) if os.path.basename(x["name"]) == name]
     if len(e) != 1: raise SystemExit("%s: %d entradas %s" % (fpk, len(e), name))
-    open(out, "wb").write(d[e[0]["off"]:e[0]["off"] + e[0]["size"]])
-    return hashlib.sha256(d).hexdigest()[:8].upper()
+    b = d[e[0]["off"]:e[0]["off"] + e[0]["size"]]; open(out, "wb").write(b)
+    return "%s (neck.fmdl %s)" % (hashlib.sha256(d).hexdigest()[:8].upper(), hashlib.sha256(b).hexdigest()[:8].upper())
 
 def main(src, konami, dst, tmp):
     os.makedirs(os.path.join(tmp, "konami"), exist_ok=True); os.makedirs(os.path.join(tmp, "out"), exist_ok=True)
