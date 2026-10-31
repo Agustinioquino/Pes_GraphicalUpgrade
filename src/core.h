@@ -54,6 +54,7 @@ constexpr int kParamCount = 340;           // float4 x 336 -> t120 en los shader
 // 336 = SSGI calidad (31/10: x muestras cercanas 8..16, y limpieza 0..2 = filtro espacial que respeta bordes al subir de resolucion, z nitidez por normales 0..4, w saturacion del rebote 0..2).
 // 337 = SSGI (31/10: x cuanto recibe la piel 0..2, y distancia maxima m (0 = 90), z resolucion completa (ssgi.cpp), w -).
 // 338 = traspaso de luz en los kits con el grosor real del shadow map (31/10, 5 PS del sol: x densidad 1/m, y grosor maximo cm, z resto del modo viejo, w on).
+// 339 = pelo a contraluz (31/10, 5 PS del sol; los PS del pelo 02f1d510 / c75f6047 marcan g_SpecularTexture.z = 252/255: x fuerza, y densidad 1/m, z grosor maximo cm, w on).
 // 328 = matas y variedad de las hojas del mod (27/10 m, tanda 10: VS 498b / PS 18af: x matas, y variedad por hoja, z oclusion entre matas; grass.cpp: w capas por pixel cerca, 0 = 6).
 // 324 = tono de piel del cuerpo por jugador (27/10, personajes.cpp: PES21FX\tonos_piel.txt; x prendido, y desplazamiento en HumanData, z bit, w volcado al log).
 // 327 = cuerpo del tono de la cara (27/10 b, brazos.cpp + pes_tono_brazo_cs.hlsl: con x321, la textura de brazo de la cara real se mide contra arm_1..6 y torso / brazos / muslos van con torso_M / arm_M / thigh_M de ese tono; x prendido, y umbral de piel 0..1 (0 = 0.12); w (27/10 d) medicion camiseta contra torso al log cada 20 s, cuerpo.cpp + pes_body_measure_cs.hlsl).
