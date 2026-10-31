@@ -9,8 +9,11 @@
 // El VS de la cabeza (faab87ee / 455eb97b) deja la posicion de reposo en TEXCOORD10.xyz (w = 11) (27/10 j); el VS del cuerpo 1c02a92a tambien (w = 1).
 #ifndef PES_PORES_HLSLI
 #define PES_PORES_HLSLI
+// (31/10) mosaico fotografico (tools/make_pores_photo.py, TextureCan Skin 0001 CC0 + pozos de poro): 50 mm de piel por mosaico
+// con y94 = 7 (antes 22 mm con el mosaico procedural). Los fundidos por distancia se miden en mm de piel por pixel.
+#define PES_PORE_TILE_MM 50.0
 
-struct PesPores { float2 dT; float a; float var; float2 dbg; float near; };   // dT = perturbacion en el espacio tangente (x = T, y = B)
+struct PesPores { float2 dT; float a; float var; float2 dbg; float near; float close; };   // dT = perturbacion en el espacio tangente (x = T, y = B); close = primer plano real
 
 float4 PesPoreTap(Texture2D<float4> micro, SamplerState smp, float2 c, float2 gx, float2 gy, float big) {
   float4 m = micro.SampleGrad(smp, frac(c), gx, gy);
@@ -28,11 +31,16 @@ float PesPoreVar(Texture2D<float4> micro, SamplerState smp, float2 c, float2 gx,
 // (x a lo largo de dp/du = T, y a lo largo de dp/dv = B), como el valor del normal map antes de pasarlo a vista.
 PesPores PesTriPores(Texture2D<float4> micro, SamplerState smp, float3 pM, float3 dPx, float3 dPy, float2 dUx, float2 dUy,
                      float tileM, float big, bool hasR) {
-  PesPores o; o.dT = 0; o.a = 0; o.var = 0; o.dbg = 0; o.near = 0;
+  PesPores o; o.dT = 0; o.a = 0; o.var = 0; o.dbg = 0; o.near = 0; o.close = 0;
   if (!hasR) return o;
-  // fundido por tamano en pantalla: con el pixel mas grande que ~2 celdas de la piel (22 por mosaico) el relieve ya no se ve
+  // fundido por tamano en pantalla: con el pixel mas grande que ~2.5 mm de piel el relieve ya no se ve
   float pxM = sqrt(length(dPx) * length(dPy));
-  o.near = saturate((2.5 - pxM / (tileM / 22.0)) / 1.5);
+  float mmPx = pxM / (tileM / PES_PORE_TILE_MM);   // mm de piel por pixel
+  o.near = saturate((2.5 - mmPx) / 1.5);
+  // (31/10) primer plano real: el poro (0.1..0.3 mm) solo se ve como hueco oscuro cuando ocupa varios pixeles (pixel <= 0.15 mm);
+  // a media distancia el mip promedia los poros y quedaban como puntitos grises sueltos (sal y pimienta): ahi la micro normal
+  // solo rompe el brillo (rugosidad), como en UE5, y no oscurece la piel
+  o.close = saturate((0.5 - mmPx) / 0.35);
   if (o.near <= 0.001) return o;
   // marco de la superficie en reposo: dp/du y dp/dv desde las derivadas, normal geometrica = su producto cruz
   float det = dUx.x * dUy.y - dUx.y * dUy.x; det = abs(det) < 1e-12 ? 1e-12 : det;
