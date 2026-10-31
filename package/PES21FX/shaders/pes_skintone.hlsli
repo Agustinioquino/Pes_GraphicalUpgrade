@@ -134,7 +134,7 @@ float PesTorsoNeed(float3 rest) {
   return lerp(a, b, f.z);
 }
 // (31/10 b) camiseta por jugador: detras del mapa (t124) la DLL deja la lista de los personajes que tienen camiseta, armada con
-// los dibujos de la camiseta (PS 7e64 / a41e / c7ae) de hace 2-3 cuadros: [N+1] cantidad, [N+2] 1 = vale, [N+4+4i] origen del
+// los dibujos de la camiseta (PS 7e64 / a41e / c7ae) de hace 2-3 cuadros: [N+1] cantidad, [N+2] 1 = vale, [N+5+4i] origen del
 // modelo en el mundo (inversa(m_view) x m_viewWorld, igual que pes_body_assign_cs.hlsl) y tipo. Un personaje sin camiseta en
 // la lista (festejo sin camiseta, modelo del menu sin ropa) queda con el torso entero aunque otros tengan camiseta.
 #define PES_SHIRT_BASE (PES_NEED_NX * PES_NEED_NY * PES_NEED_NZ + 1)
