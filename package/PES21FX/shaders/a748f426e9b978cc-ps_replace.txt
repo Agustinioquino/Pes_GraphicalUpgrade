@@ -772,7 +772,34 @@ void main(
           float backK = saturate(dot(-nK, LK));
           float fwdK = pow(saturate(dot(VK, -LK)), 2.0);
           float thinK = 0.5;   // tela fina de futbol
-          o0.xyz += lightK * backK * (0.5 + 0.5 * fwdK) * thinK * KA.y * 0.35;
+          // (31/10, fila 338) traspaso de luz con el GROSOR REAL (como las orejas): la luz que pasa por la tela se mide con el
+          // shadow map (lo que ve el sol contra lo que ve la camara). Delante del torso hay 25 cm de cuerpo y no pasa nada; en
+          // el borde de la camiseta, las mangas sueltas, el dobladillo y el short entre las piernas quedan unos cm de tela y
+          // aire y la tela se enciende como en TV (un filo de luz a contraluz). x338 densidad de la tela (1/m), y338 grosor
+          // maximo en cm, z338 cuanto queda del termino viejo (toda la cara de frente), w338 on (0 = como antes).
+          float4 KT = IniParams.Load(int2(338,0));
+          float transK = backK * (0.5 + 0.5 * fwdK) * thinK;
+          if (KT.w > 0.5 && pesShCas > -0.5 && g_psScene.m_shadowMapResolutions.x > 1.0 && !pesFreeSun) {
+            float casK = pesShCas < 0.5 ? 1.0 : (pesShCas < 1.5 ? g_psScene.m_shadowProjection2._m03 : g_psScene.m_shadowProjection2._m13);
+            float rpmK = max(length(g_psScene.m_shadowProjection._m02_m12_m22) * abs(g_psScene.m_shadowProjection2._m30) * abs(casK), 1e-5);
+            float resK = g_psScene.m_shadowMapResolutions.x;
+            float2 txK = float2(1.0 / resK, 1.0 / (3.0 * resK));
+            float dK5 = g_ShadowTexture.SampleLevel(g_samplerPoint_Clamp_s, pesShUV, 0).x;
+            dK5 += g_ShadowTexture.SampleLevel(g_samplerPoint_Clamp_s, pesShUV + float2( txK.x, 0), 0).x;
+            dK5 += g_ShadowTexture.SampleLevel(g_samplerPoint_Clamp_s, pesShUV + float2(-txK.x, 0), 0).x;
+            dK5 += g_ShadowTexture.SampleLevel(g_samplerPoint_Clamp_s, pesShUV + float2(0,  txK.y), 0).x;
+            dK5 += g_ShadowTexture.SampleLevel(g_samplerPoint_Clamp_s, pesShUV + float2(0, -txK.y), 0).x;
+            dK5 *= 0.2;
+            float thickK = max(abs(dK5 - pesShRef) - 0.5 / rpmK * 0.004, 0.0) / rpmK;   // metros entre lo que ve el sol y este pixel
+            float densK = KT.x > 0.5 ? KT.x : 40.0;
+            float maxK = (KT.y > 0.1 ? KT.y : 8.0) * 0.01;
+            float Tk = exp(-thickK * densK) * (1.0 - smoothstep(maxK * 0.6, maxK, thickK));
+            float backSM = saturate(0.3 + dot(-nK, LK)) * (1.0 - saturate(nlK * 3.0));
+            float3 Tc = float3(1.0, 0.92, 0.85);                                    // la tela de punto deja pasar un poco mas el rojo
+            transK = max(Tk * backSM * 1.4, transK * saturate(KT.z)) ;
+            o0.xyz += lightK * transK * KA.y * 0.35 * Tc;
+          } else
+          o0.xyz += lightK * transK * KA.y * 0.35;
         } }
       // diagnostico: w26 = 2 pinta de magenta todo lo que se detecta como kit
       if (KC.w > 1.5) { o0.xyz = float3(1.0, 0.0, 1.0) * dot(lightK, float3(0.3, 0.3, 0.3)); r1.yzw = 0; }
