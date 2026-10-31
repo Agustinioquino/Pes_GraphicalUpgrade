@@ -105,7 +105,7 @@ float PesTorsoMask(float3 v) {
 // (27/10 e) y320 = 0 (lo normal): se mete TODA la piel bajo la camiseta (torso, hombros, brazo hasta el codo, cuello hasta el escote) con la misma
 // cantidad a los dos lados de las costuras: ya no hay escalon con el cuello ni con el brazo (lo que no gusto con 8 mm). Se apaga de a
 // poco y sin costura visible: en el cuello de 1.42 a 1.50 m (la union con la cara queda igual), en el brazo de 20 a 30 cm desde el
-// hombro (manga corta; manos enteras) y debajo de la cintura (0.90 a 0.80 m, tapado por el short). y320 = 1: solo el torso (como antes)
+// hombro (manga corta; manos enteras) y debajo de la cintura (0.90 a 0.80 m, tapado por el short). y320 = 1: solo el torso (como antes), 2: preciso (abajo)
 float PesTorsoInsetSmooth(float3 rest) {
   float3 q = float3(abs(rest.x), rest.y, rest.z);
   float sA = dot(q - float3(0.263, 1.370, 0.020), float3(0.761, -0.643, -0.084));   // a lo largo del brazo desde la costura del hombro
@@ -114,13 +114,40 @@ float PesTorsoInsetSmooth(float3 rest) {
   float hip = smoothstep(0.80, 0.90, q.y);
   return arm * neck * hip;
 }
+// (31/10) y320 = 2, PRECISO: lo que asoma la piel por la camiseta medido en partido (cuerpo.cpp + pes_body_measure_cs.hlsl, w327),
+// en una grilla en el reposo del cuerpo (t124, el ultimo elemento = celdas con algo). Solo se hunde donde asoma y lo que asoma (+1.5 mm);
+// el resto queda entero. Sin mapa todavia (nunca se midio un partido): como y320 = 0 con x320 mm
+Buffer<float> g_torsoNeed : register(t124);
+#define PES_NEED_NX 32
+#define PES_NEED_NY 64
+#define PES_NEED_NZ 32
+float PesTorsoNeedAt(int3 c) {
+  c = clamp(c, int3(0, 0, 0), int3(PES_NEED_NX - 1, PES_NEED_NY - 1, PES_NEED_NZ - 1));
+  return g_torsoNeed.Load((c.z * PES_NEED_NY + c.y) * PES_NEED_NX + c.x);
+}
+float PesTorsoNeed(float3 rest) {
+  float3 g = (float3(abs(rest.x), rest.y, rest.z) - float3(0.0, 0.84, -0.20)) / float3(0.015, 0.0125, 0.0125) - 0.5;
+  if (any(g < -1.0) || g.x > PES_NEED_NX || g.y > PES_NEED_NY || g.z > PES_NEED_NZ) return 0.0;
+  int3 c = (int3)floor(g); float3 f = g - c;
+  float a = lerp(lerp(PesTorsoNeedAt(c), PesTorsoNeedAt(c + int3(1, 0, 0)), f.x), lerp(PesTorsoNeedAt(c + int3(0, 1, 0)), PesTorsoNeedAt(c + int3(1, 1, 0)), f.x), f.y);
+  float b = lerp(lerp(PesTorsoNeedAt(c + int3(0, 0, 1)), PesTorsoNeedAt(c + int3(1, 0, 1)), f.x), lerp(PesTorsoNeedAt(c + int3(0, 1, 1)), PesTorsoNeedAt(c + int3(1, 1, 1)), f.x), f.y);
+  return lerp(a, b, f.z);
+}
 void PesTorsoInset(inout float3 mP, float3 mN, float3 rest) {
   float4 T = IniParams.Load(int2(320, 0));
-  if (T.w < 0.5 || T.x <= 0.0 || T.z < 0.5) return;
-  float k = T.y > 0.5 ? PesTorsoMask(rest) : PesTorsoInsetSmooth(rest);
-  if (k <= 0.0) return;
+  if (T.w < 0.5 || T.z < 0.5) return;
+  float mm;
+  if (T.y > 1.5 && g_torsoNeed.Load(PES_NEED_NX * PES_NEED_NY * PES_NEED_NZ) > 0.5) {
+    float need = PesTorsoNeed(rest);
+    mm = (need + 1.5 * saturate(need)) * (1.0 - smoothstep(1.42, 1.50, rest.y));   // el anillo del cuello sigue soldado a la cara
+  } else {
+    if (T.x <= 0.0) return;
+    float k = (T.y > 0.5 && T.y < 1.5) ? PesTorsoMask(rest) : PesTorsoInsetSmooth(rest);
+    mm = T.x * k;
+  }
+  if (mm <= 0.0) return;
   float3 n = mN * rsqrt(max(dot(mN, mN), 1e-8));
-  mP -= n * (min(T.x, 25.0) * 0.001 * k);
+  mP -= n * (min(mm, 25.0) * 0.001);
 }
 // el VS del cuerpo la manda en la parte fraccionaria del codigo del jugador (o6.w = 1000 + i + 0.4 * torso)
 float PesSkinTorso(float code) { return saturate((code - round(code)) / 0.4); }

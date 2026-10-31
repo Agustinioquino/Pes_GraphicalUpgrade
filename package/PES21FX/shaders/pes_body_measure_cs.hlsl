@@ -30,6 +30,27 @@ StructuredBuffer<uint>   g_on     : register(t6);   // siguiente en la celda
 Texture1D<float4>        IniParams : register(t120);
 RWBuffer<uint>           g_recTab : register(u1);   // por registro: tabla del personaje
 RWBuffer<uint>           g_meas   : register(u0);
+RWBuffer<uint>           g_need   : register(u2);   // (31/10) mapa en el reposo del cuerpo: cuanto hay que hundir la piel (x100 mm, maximo)
+
+// (31/10) torso bajo la camiseta "preciso" (fila 320, y320 = 2): grilla en el reposo de TorsoBody (|x| 0..0.48, y 0.84..1.64,
+// z -0.20..0.20; celdas de 1.5 / 1.25 / 1.25 cm). Tiene que coincidir con cuerpo.cpp y pes_skintone.hlsli (PesTorsoNeed)
+#define NEED_NX 32
+#define NEED_NY 64
+#define NEED_NZ 32
+int3 NeedCell(float3 r) { return (int3)floor((float3(abs(r.x), r.y, r.z) - float3(0.0, 0.84, -0.20)) / float3(0.015, 0.0125, 0.0125)); }
+void NeedPut(int3 c, uint v)
+{
+    if (any(c < 0) || c.x >= NEED_NX || c.y >= NEED_NY || c.z >= NEED_NZ || v == 0) return;
+    uint o; InterlockedMax(g_need[(c.z * NEED_NY + c.y) * NEED_NX + c.x], v, o);
+}
+// registro (y su vertice) de un vertice del anillo: los registros estan en orden de anillo (d0.w creciente)
+float3 RingRest(uint ri)
+{
+    uint lo = 0, hi = g_nrec;
+    [loop] for (uint k = 0; k < 10 && hi - lo > 1; ++k) { uint mid = (lo + hi) >> 1; if (g_desc[2 * mid].w <= ri) lo = mid; else hi = mid; }
+    uint4 d = g_desc[2 * lo];
+    return asfloat(g_sv[2 * (d.y + (ri - d.w))].xyz);
+}
 
 uint BodyHash(int3 c) { return ((uint)c.x * 73856093u ^ (uint)c.y * 19349663u ^ (uint)c.z * 83492791u) & (BODY_CELLS - 1); }
 float3 OctDecode(float2 o)
@@ -73,6 +94,7 @@ void main(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
     int3 c0 = (int3)floor(ys / BODY_CELL) - 1;
     float best = REACH * REACH, dist = 0.0;
     bool found = false;
+    uint eBest = 0;
     [loop] for (uint ci = 0; ci < 27; ++ci) {
         int3 c = c0 + int3(ci % 3, (ci / 3) % 3, ci / 9);
         uint e = g_tab[tb + BodyHash(c)];
@@ -81,7 +103,7 @@ void main(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
             RingVertex(e - 1, y, n);
             float3 dv = ys - y;
             float d2 = dot(dv, dv);
-            if (d2 < best) { best = d2; dist = dot(dv, n); found = true; }
+            if (d2 < best) { best = d2; dist = dot(dv, n); found = true; eBest = e - 1; }
             e = g_on[e - 1];
         }
     }
@@ -96,5 +118,12 @@ void main(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
         if (dist < -inset) InterlockedAdd(g_meas[z + 3], 1u, o);
         InterlockedMax(g_meas[z + 4], pen, o);
         InterlockedAdd(g_meas[z + 5], pen, o);
+        // (31/10) al mapa: en la celda del reposo de esa piel lo que asoma, y en las vecinas un poco menos (sin huecos entre puntos)
+        int3 c = NeedCell(RingRest(eBest));
+        [loop] for (uint ni = 0; ni < 27; ++ni) {
+            int3 dc = int3(ni % 3, (ni / 3) % 3, ni / 9) - 1;
+            uint m = (uint)(abs(dc.x) + abs(dc.y) + abs(dc.z));
+            NeedPut(c + dc, m == 0 ? pen : (uint)(pen * (m == 1 ? 0.85 : (m == 2 ? 0.7 : 0.55))));
+        }
     } else InterlockedAdd(g_meas[z + 6], (uint)min(dist * 100000.0, 1.0e6), o);
 }
