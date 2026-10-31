@@ -148,7 +148,7 @@ float PesCharHasShirt(float3 org) {
   int n = min((int)(g_torsoNeed.Load(PES_SHIRT_BASE) + 0.5), 32);
   if (n <= 0) return 1.0;
   [loop] for (int i = 0; i < n; i++) {
-    int b = PES_SHIRT_BASE + 3 + 4 * i;
+    int b = PES_SHIRT_BASE + 4 + 4 * i;
     float3 p = float3(g_torsoNeed.Load(b), g_torsoNeed.Load(b + 1), g_torsoNeed.Load(b + 2));
     float2 dd = org.xz - p.xz;
     if (dot(dd, dd) < 0.36 && abs(org.y - p.y) < 1.0) return 1.0;   // 60 cm: la lista llega 2-3 cuadros tarde (un pique)
