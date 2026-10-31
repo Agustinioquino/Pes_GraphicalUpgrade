@@ -1185,7 +1185,10 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (ps && ps->hash == 0x55297925e0c66085ULL) PitchWearNotePlayer(c);
     // (27/10 c) hay camisetas en escena (PS de la camiseta 7e64 / a41e / c7ae): el torso se mete bajo la tela (fila 320, z la pone
     // la DLL en Present); sin camiseta (menu Apariencia / Fisico, tecla 4 de Sider) el torso queda entero, sin escalon en la costura
-    if (ps && (ps->hash == 0x7e647d9c43b453f9ULL || ps->hash == 0xa41e7343f874154fULL || ps->hash == 0xc7ae89b63e889007ULL)) g_shirtSeen.store(true, std::memory_order_relaxed);
+    if (ps && (ps->hash == 0x7e647d9c43b453f9ULL || ps->hash == 0xa41e7343f874154fULL || ps->hash == 0xc7ae89b63e889007ULL)) {
+        g_shirtSeen.store(true, std::memory_order_relaxed);
+        TorsoShirtNote(c, ps->hash == 0x7e647d9c43b453f9ULL ? 0 : ps->hash == 0xa41e7343f874154fULL ? 1 : 2);   // (31/10 b) camiseta por jugador
+    }
     // 19/10: SSS separable en pantalla antes de la composicion: la irradiancia (t9) llega ya difundida sobre la piel
     if (ps && (ps->hash == 0x619b86cb5691cdceULL || ps->hash == 0xf807e74d5b900a15ULL) && ps->repl) {
         if (ID3D11ShaderResourceView* v = SSSSBeforeComposition(c)) { Remember(c, d, true, true, 9); c->PSSetShaderResources(9, 1, &v);

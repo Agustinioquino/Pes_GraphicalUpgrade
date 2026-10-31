@@ -133,18 +133,43 @@ float PesTorsoNeed(float3 rest) {
   float b = lerp(lerp(PesTorsoNeedAt(c + int3(0, 0, 1)), PesTorsoNeedAt(c + int3(1, 0, 1)), f.x), lerp(PesTorsoNeedAt(c + int3(0, 1, 1)), PesTorsoNeedAt(c + int3(1, 1, 1)), f.x), f.y);
   return lerp(a, b, f.z);
 }
-void PesTorsoInset(inout float3 mP, float3 mN, float3 rest) {
+// (31/10 b) camiseta por jugador: detras del mapa (t124) la DLL deja la lista de los personajes que tienen camiseta, armada con
+// los dibujos de la camiseta (PS 7e64 / a41e / c7ae) de hace 2-3 cuadros: [N+1] cantidad, [N+2] 1 = vale, [N+4+4i] origen del
+// modelo en el mundo (inversa(m_view) x m_viewWorld, igual que pes_body_assign_cs.hlsl) y tipo. Un personaje sin camiseta en
+// la lista (festejo sin camiseta, modelo del menu sin ropa) queda con el torso entero aunque otros tengan camiseta.
+#define PES_SHIRT_BASE (PES_NEED_NX * PES_NEED_NY * PES_NEED_NZ + 1)
+float3 PesCharOrigin(float4x4 VW, float4x4 V) {
+  float3 d = float3(VW._m30, VW._m31, VW._m32) - float3(V._m30, V._m31, V._m32);
+  return float3(dot(d, float3(V._m00, V._m01, V._m02)), dot(d, float3(V._m10, V._m11, V._m12)), dot(d, float3(V._m20, V._m21, V._m22)));
+}
+// 1 = lleva camiseta (o no hay lista: vale la fila 320.z), 0 = este personaje no
+float PesCharHasShirt(float3 org) {
+  if (g_torsoNeed.Load(PES_SHIRT_BASE + 1) < 0.5) return 1.0;
+  int n = min((int)(g_torsoNeed.Load(PES_SHIRT_BASE) + 0.5), 32);
+  if (n <= 0) return 1.0;
+  [loop] for (int i = 0; i < n; i++) {
+    int b = PES_SHIRT_BASE + 3 + 4 * i;
+    float3 p = float3(g_torsoNeed.Load(b), g_torsoNeed.Load(b + 1), g_torsoNeed.Load(b + 2));
+    float2 dd = org.xz - p.xz;
+    if (dot(dd, dd) < 0.36 && abs(org.y - p.y) < 1.0) return 1.0;   // 60 cm: la lista llega 2-3 cuadros tarde (un pique)
+  }
+  return 0.0;
+}
+void PesTorsoInset(inout float3 mP, float3 mN, float3 rest, float3 org) {
   float4 T = IniParams.Load(int2(320, 0));
   if (T.w < 0.5 || T.z < 0.5) return;
+  if (PesCharHasShirt(org) < 0.5) return;
   float mm;
+  // (31/10 b) piso: x320 con el fundido de siempre (lo que Agustin confirmo que tapa), tambien en modo preciso: el mapa solo
+  // suma donde lo medido pide mas (el menu Apariencia pone otra camiseta y otra pose que el partido medido)
+  float base = 0.0;
+  if (T.x > 0.0) base = T.x * ((T.y > 0.5 && T.y < 1.5) ? PesTorsoMask(rest) : PesTorsoInsetSmooth(rest));
+  mm = base;
   if (T.y > 1.5 && g_torsoNeed.Load(PES_NEED_NX * PES_NEED_NY * PES_NEED_NZ) > 0.5) {
     float need = PesTorsoNeed(rest);
-    mm = (need + 1.5 * saturate(need)) * (1.0 - smoothstep(1.42, 1.50, rest.y));   // el anillo del cuello sigue soldado a la cara
-    if (T.x > 0.0) mm = min(mm, T.x + 4.0);   // la medicion exagera en algunos puntos (piel equivocada mas cercana): tope = x320 + 4 mm
-  } else {
-    if (T.x <= 0.0) return;
-    float k = (T.y > 0.5 && T.y < 1.5) ? PesTorsoMask(rest) : PesTorsoInsetSmooth(rest);
-    mm = T.x * k;
+    float m2 = (need + 1.5 * saturate(need)) * (1.0 - smoothstep(1.42, 1.50, rest.y));   // el anillo del cuello sigue soldado a la cara
+    if (T.x > 0.0) m2 = min(m2, T.x + 4.0);   // la medicion exagera en algunos puntos (piel equivocada mas cercana): tope = x320 + 4 mm
+    mm = max(mm, m2);
   }
   if (mm <= 0.0) return;
   float3 n = mN * rsqrt(max(dot(mN, mN), 1e-8));
