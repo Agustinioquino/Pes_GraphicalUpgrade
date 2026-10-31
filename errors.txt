@@ -1,0 +1,2 @@
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\overlay.cpp(457,23): error C2039: 'clamp': is not a member of 'std' [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\overlay.cpp(457,23): error C3861: 'clamp': identifier not found [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
