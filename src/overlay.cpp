@@ -34,6 +34,11 @@ static LRESULT CALLBACK MenuProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         bool mouse = m >= WM_MOUSEFIRST && m <= WM_MOUSELAST;
         bool key = (m >= WM_KEYFIRST && m <= WM_KEYLAST) || m == WM_CHAR;
         if ((mouse && io.WantCaptureMouse) || (key && io.WantCaptureKeyboard)) return 0;
+        if (g_blockGameKeys && (key || m == WM_INPUT)) {   // (31/10) tampoco teclas por mensajes ni raw input del teclado
+            if (m != WM_INPUT) return 0;
+            RAWINPUTHEADER rh{}; UINT sz = sizeof(rh);
+            if (GetRawInputData((HRAWINPUT)l, RID_HEADER, &rh, &sz, sizeof(RAWINPUTHEADER)) != (UINT)-1 && rh.dwType == RIM_TYPEKEYBOARD) return DefWindowProcW(h, m, w, l);
+        }
     }
     return CallWindowProcW(s_oldProc, h, m, w, l);
 }
@@ -446,6 +451,14 @@ static void DrawMenu() {
         if (ImGui::Combo("##idioma", &lg, kLangs, 3)) { g_cfg.lang = lg; SaveOption("language", kLangKey[lg]); LoadMenuLang(); }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Idioma del menu / Menu language / Idioma do menu");
     }
+    ImGui::SameLine();
+    {   // (31/10) que el juego no reciba las teclas mientras se escribe en el menu: [PES21FX] bloquear_teclado
+        const char* kBlk[3] = { TRS("Teclas del juego: siempre"), TRS("Teclas del juego: no al escribir"), TRS("Teclas del juego: no con el menu") };
+        int bk = std::clamp(g_cfg.blockKeys, 0, 2);
+        ImGui::SetNextItemWidth(250);
+        if (ImGui::Combo("##bloqteclas", &bk, kBlk, 3)) { g_cfg.blockKeys = bk; SaveOption("bloquear_teclado", std::to_string(bk)); }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Que el juego no reciba las teclas mientras escribis en el menu (buscador, nombres). 'No al escribir' = solo con un campo de texto activo; 'No con el menu' = mientras el menu esta abierto."));
+    }
     if (!s_status.empty()) ImGui::TextDisabled("%s", s_status.c_str());
     // --- catalogo de shaders: capturar lo que se dibuja y escribir las fichas ---
     if (!g_catalogActive) {
@@ -680,6 +693,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
     // (24/10 b) el aviso de abajo ya no hace falta (la musculatura tiene sus paginas y L1 / R1 en el menu del juego) y tapaba
     // la barra de botones
     const bool hint = false;
+    if (!g_menuOpen) g_blockGameKeys = false;
     if (!g_menuOpen && !g_inspectOn && !hint) return;
     if (!s_rtv) {
         ID3D11Texture2D* bb = nullptr;
@@ -695,6 +709,8 @@ void OverlayPresent(IDXGISwapChain* sc) {
     if (g_menuOpen) { if (fis && !s_fullMenu) DrawPhysiqueWindow(); else DrawMenu(); }
     else if (hint) DrawPhysiqueHint();
     InspectDrawOverlay();
+    // (31/10) teclas del juego: con 1 se bloquean solo mientras hay un campo de texto activo (buscador, nombres de presets)
+    g_blockGameKeys = g_menuOpen && (g_cfg.blockKeys == 2 || (g_cfg.blockKeys == 1 && ImGui::GetIO().WantTextInput));
     if (!s_btnPending.empty()) {
         std::string a = s_btnPending; s_btnPending.clear();
         if (a == "hair_export") { std::string st; FaceGenExportHair(st); s_status = st; }

@@ -154,6 +154,7 @@ struct Config {
     std::string favorites;                     // 19/10: titulos de grupos favoritos separados por '|' ([PES21FX] favoritos)
     float uiScale = 1.0f;                      // 19/10: tamano del menu ([PES21FX] ui_scale)
     bool compact = false;                      // 19/10: grupos contraidos por defecto ([PES21FX] compacto)
+    int blockKeys = 1;                         // (31/10) teclas del juego con el menu: 0 nunca se bloquean, 1 al escribir en un campo, 2 con el menu abierto ([PES21FX] bloquear_teclado)
     int lang = 0;                              // (27/10) idioma del menu: 0 espanol, 1 ingles ([PES21FX] language = es / en)
     bool autoCap = false; float autoCapSec = 20.0f; int autoCapMax = 150; bool autoCapAB = false; bool exeDump = true; bool motorPatch = true; bool motorSunFix = true; int motorShadowFix = 1; int motorShadowRes = 0; float motorCascadeScale = 0.0f;   // [Motor]: parches en memoria (exepatch.cpp)   // exe_dump: volcado del exe desempaquetado (una vez por version)   // auto_captura_ab: pares A (todo) / B (un grupo del menu apagado 3 cuadros)
     int aniso = 16; float mipBias = 0.0f;   // 20/10: filtrado anisotropico forzado (1 = el del juego) y sesgo de mip global ([PES21FX] aniso, mip_bias)   // 19/10: captura automatica en partido ([PES21FX] auto_captura, auto_captura_seg, auto_captura_max)
@@ -478,6 +479,8 @@ bool PelvisDetailFor(uint64_t vsHash, UINT indexCount, ID3D11ShaderResourceView*
 bool TiltTexturesFor(uint64_t vsHash, UINT indexCount, ID3D11ShaderResourceView* out[3]);   // (26/10 d) manos.cpp: tope del relieve (t31..t33, x307)
 float MuscleVariantT(uint32_t id, bool* own);   // (26/10) musculo.cpp: variante del jugador (-1 robusto .. 1 atletico; propia o la general)
 extern std::atomic<bool> g_menuOpen;
+extern std::atomic<bool> g_blockGameKeys;   // (31/10) keyblock.cpp: el juego no ve el teclado mientras esta prendido
+void KeyBlockInstall();
 extern std::atomic<int> g_replacedCount, g_failedCount;
 extern std::vector<std::string> g_compileErrors;
 extern std::mutex g_errMutex;
