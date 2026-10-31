@@ -137,7 +137,7 @@ void main(
   float3 hpDPx = ddx(hpPM), hpDPy = ddy(hpPM);
   float2 hpDUx = ddx(v2.xy), hpDUy = ddy(v2.xy);
   float hpTileM = 0.022 * 7.0 / max(P94h.y, 1.0);
-  float hpPoreA = 0.0, hpMicroVar = 0.0, hpPoreOcc = 1.0, hpTZone = 0.0;
+  float hpPoreA = 0.0, hpPoreC = 0.0, hpMicroVar = 0.0, hpPoreOcc = 1.0, hpTZone = 0.0;
   float2 nfDx = ddx(v2.xy), nfDy = ddy(v2.xy);   // (26/10) unas de los jugadores: derivadas fuera de las ramas
   float2 pdQ = (v2.xy - 0.5) * 11.1;              // (26/10 d) pelvis: mosaico del detalle de piel (0.40 uv por metro, 22.5 cm)
   float2 pdDx = ddx(pdQ), pdDy = ddy(pdQ);
@@ -297,7 +297,8 @@ void main(
       float str = clamp(P94h.x, 0.0, 2.0) * near * 1.1 * skinM * (0.25 + 1.0 * guide.r) * hpK;
       r2.xy += pp.dT * str;
       hpPoreA = pp.a * near * (0.3 + guide.r);
-      hpPoreOcc = 1.0 - hpPoreA * guide.a * 0.55 * saturate(P94h.x);
+      hpPoreC = hpPoreA * pp.close;   // (31/10) hueco oscuro del poro solo en primer plano real (ver pes_pores.hlsli)
+      hpPoreOcc = 1.0 - hpPoreC * guide.a * 0.55 * saturate(P94h.x);
       hpMicroVar = pp.var * saturate(P94h.x * 0.7) * skinM;
     }
   }
@@ -577,7 +578,7 @@ void main(
     r0.x = saturate(r0.x + hpMicroVar * 0.30 + hpPoreA * 0.20);
     r0.x = saturate(r0.x * lerp(1.06, 0.86, hpTZone * saturate(P94h.x)));
     o2.y = lerp(o2.y, max(o2.y, 0.5), hpFilm * 0.8);
-    o2.y *= (1.0 - 0.45 * hpPoreA) * lerp(0.95, 1.12, hpTZone * saturate(P94h.x));
+    o2.y *= (1.0 - 0.45 * hpPoreC) * lerp(0.95, 1.12, hpTZone * saturate(P94h.x));   // (31/10) brillo del poro solo en primer plano
     r0.x = lerp(hpR0, r0.x, hpK); o2.y = lerp(hpS0, o2.y, hpK);
   }
   // (25/10) lluvia en la piel (z12): con lluvia en el partido (114.x = 1) brazos, piernas, cuello y cabeza de las genericas

@@ -329,7 +329,7 @@ void main(
   r1.xyz = r1.xyz * r0.zzz;
   // === PES21 (19/10) micro normal de poros: mosaico fino sobre la normal del juego, solo de cerca.
   // x94 intensidad, y94 escala (repeticiones sobre la cara), w94 on/off
-  float pesPoreA = 0.0, pesMicroVar = 0.0, pesPoreOcc = 1.0, pesTZone = 0.0;
+  float pesPoreA = 0.0, pesPoreC = 0.0, pesMicroVar = 0.0, pesPoreOcc = 1.0, pesTZone = 0.0;
   float4 P94 = IniParams.Load(int2(94,0));   // (declarado aca: lo usa tambien el bloque del especular mas abajo)
   float3 pesMicroDbg = float3(-1, 0, 0);     // dbg: intensidad = 2.00 pinta el mosaico;  pesMicroVar: varianza de la micro normal (Toksvig) -> rugosidad extra
   // (27/10 c) poros triplanares sobre la posicion de reposo de la malla (pes_pores.hlsli): el VS de la cabeza deja la posicion
@@ -355,8 +355,9 @@ void main(
         r1.xy += pp.dT * str;   // en el espacio tangente del normal map (se pasa a vista mas abajo)
         r1.xyz = normalize(r1.xyz);
         pesPoreA = pp.a * near * (0.3 + guide.r);
+        pesPoreC = pesPoreA * pp.close;   // (31/10) hueco oscuro del poro solo en primer plano real (ver pes_pores.hlsli)
         // oclusion de poro: el fondo del poro recibe menos luz (ambiente y directa). Mas donde la guia marca oclusion.
-        pesPoreOcc = 1.0 - pesPoreA * guide.a * 0.55 * saturate(P94.x);
+        pesPoreOcc = 1.0 - pesPoreC * guide.a * 0.55 * saturate(P94.x);
         if (P94.x >= 1.995) pesMicroDbg = float3(pp.dbg, near);   // diagnostico: con Intensidad al tope se ve el mosaico en crudo (rojo/verde) y el fundido en azul
         pesMicroVar = pp.var * saturate(P94.x * 0.7) * skinM;
       } } }
@@ -626,7 +627,7 @@ void main(
   r0.w = saturate(r0.w + pesMicroVar * 0.30 + pesPoreA * 0.20);
   // zona T mas brillante (grasa natural), mejillas mas mate; y el albedo se oscurece en el fondo de los poros
   r0.w = saturate(r0.w * lerp(1.06, 0.86, pesTZone * saturate(P94.x)));
-  r0.z *= (1.0 - 0.45 * pesPoreA) * lerp(0.95, 1.12, pesTZone * saturate(P94.x));
+  r0.z *= (1.0 - 0.45 * pesPoreC) * lerp(0.95, 1.12, pesTZone * saturate(P94.x));   // (31/10) brillo del poro solo en primer plano
   r2.xyz *= pesPoreOcc;
   r0.z *= (1.0 - 0.6 * fhMask);
   r0.z = lerp(r0.z, max(r0.z, 0.75), sweatWet);
