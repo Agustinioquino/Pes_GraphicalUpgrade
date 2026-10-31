@@ -136,7 +136,7 @@ void main(
   float3 hpPM = pR.xyz;
   float3 hpDPx = ddx(hpPM), hpDPy = ddy(hpPM);
   float2 hpDUx = ddx(v2.xy), hpDUy = ddy(v2.xy);
-  float hpTileM = 0.022 * 7.0 / max(P94h.y, 1.0);
+  float hpTileM = PES_PORE_TILE_MM * 0.001 * 7.0 / max(P94h.y, 1.0);   // (31/10) 50 mm por mosaico (pes_pores.hlsli)
   float hpPoreA = 0.0, hpPoreC = 0.0, hpMicroVar = 0.0, hpPoreOcc = 1.0, hpTZone = 0.0;
   float2 nfDx = ddx(v2.xy), nfDy = ddy(v2.xy);   // (26/10) unas de los jugadores: derivadas fuera de las ramas
   float2 pdQ = (v2.xy - 0.5) * 11.1;              // (26/10 d) pelvis: mosaico del detalle de piel (0.40 uv por metro, 22.5 cm)
