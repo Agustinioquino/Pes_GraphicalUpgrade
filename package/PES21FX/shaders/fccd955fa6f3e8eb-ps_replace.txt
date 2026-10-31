@@ -285,6 +285,28 @@ void main(
           float3 ssr = sc * fres * saturate(P90.y) * 0.3;
           refl = lerp(refl, ssr, edge * saturate(P92.x) * ssrM);
         } } }
+    // === (31/10) claridad del ojo (x318): el ojo real es un lente. La cornea enfoca la luz sobre el iris, que es concavo: el lado
+    // del iris OPUESTO a la luz queda mas claro (caustica, como el "iris caustic" de los ojos de UE5), y el borde pegado a la
+    // pupila recibe mas luz que el limbo. La esclerotica no es gris: es blanca y translucida, apenas rosada hacia los lagrimales.
+    // Sin esto el ojo del juego queda opaco (iris chato y oscuro, blanco grisaceo) aunque la luz le pegue.
+    { float eyeClr = saturate(IniParams.Load(int2(318,0)).x);
+      if (eyeClr > 0.001) {
+        float3 Lw = g_psSystem.m_dominantLightDir.xyz;   // luz dominante (mundo) -> vista, como PESLightV del pelo
+        float3 Lv = normalize(float3(dot(Lw, g_psScene.m_view._m00_m10_m20), dot(Lw, g_psScene.m_view._m01_m11_m21), dot(Lw, g_psScene.m_view._m02_m12_m22)) + float3(1e-5, 2e-5, 1e-5));
+        float2 lt = float2(dot(Lv, r3.xyz), dot(Lv, r2.xyz));   // parte tangente de la luz en el marco (T = u, B = v) del ojo
+        float ltl = length(lt); float2 ltd = ltl > 1e-4 ? lt / ltl : float2(0, 1);
+        float2 rad = normalize(irisD + 1e-5);
+        float caus = saturate(dot(rad, -ltd)) * saturate(ltl * 2.0);          // lado opuesto a la luz
+        float lit = saturate(dot(Lv, eyeNc)) * 0.5 + 0.5;                    // de espaldas a la luz apenas
+        float irisW = irisOn * (1.0 - 0.5 * irisVt);                          // mas cerca de la pupila
+        base *= 1.0 + eyeClr * lit * (0.35 * caus + 0.12) * irisW;
+        // esclerotica: mas blanca y limpia, rosada suave lejos del iris (vasos del lagrimal)
+        float scleraM = saturate(1.0 - irisIn) * smoothstep(1.0, 1.25, irisR);
+        float lum = dot(base, float3(0.2126, 0.7152, 0.0722));
+        float3 white = lerp(base, max(base, lum.xxx * float3(1.02, 1.0, 0.98)), 0.6);
+        white = lerp(white, white * float3(1.0, 0.94, 0.92), smoothstep(1.8, 3.0, irisR) * 0.6);
+        base = lerp(base, white * 1.12, eyeClr * scleraM);
+      } }
     o0.xyz = base + refl;
     // brillo del sol/focos sobre la cornea: rugosidad baja donde hay cornea (lo resuelve la luz diferida del juego).
     // o2.x es la rugosidad CODIFICADA del juego (minimo valido ~0.13: por debajo la pasada de luz devuelve negro;
