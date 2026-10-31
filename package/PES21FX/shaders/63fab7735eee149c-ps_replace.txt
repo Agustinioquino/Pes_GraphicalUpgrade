@@ -376,11 +376,15 @@ void main(
     if (m2On) {
       // esmalte: brillo alto y nitido (como vidrio mojado); encias humedas con brillo mas ancho
       float en = mTeeth * saturate(Q96.y);
-      o2.y = saturate(o2.y + 0.10 * en + 0.05 * mTissue * saturate(Q96.z));
+      // (31/10) dientes "metalicos" (Agustin): o2.y es la metalicidad del G-buffer (ver el PS del ojo fccd955f) y aca se le SUMABA
+      // en el esmalte, con rugosidad casi de espejo (0.16 codificado ~ 0.04): el sol se reflejaba con el color del diente, como
+      // metal pulido. El esmalte es dielectrico (F0 ~0.04, brillo blanco) y algo satinado: metalicidad baja y rugosidad ~0.3.
+      o2.y = saturate(o2.y + 0.05 * mTissue * saturate(Q96.z));
+      o2.y = lerp(o2.y, min(o2.y, 0.04), mTeeth);
       // (27/10 h) la rugosidad minima sube con la varianza geometrica de la normal (bordes y dientes chicos): sin esto el brillo
       // fino del esmalte caia en 1-2 pixeles que titilaban al mover la camara (aliasing especular)
       float rAA = saturate(sqrt(mGeoVar) * 1.5);
-      o2.x = lerp(o2.x, max(0.13 + rAA, min(o2.x, 0.16 + rAA)), en);
+      o2.x = lerp(o2.x, max(0.25 + rAA, min(max(o2.x, 0.25), 0.30 + rAA)), en);   // (31/10) 0.25..0.30 codificado = rugosidad 0.28..0.4: esmalte satinado
       o2.x = lerp(o2.x, max(0.13 + rAA, min(o2.x, 0.22 + rAA)), mTissue * saturate(Q96.z) * 0.8);
       o2.x = max(0.13, o2.x);
       // translucidez del esmalte al G-buffer (la luz de piel la usa): borde incisal translucido
