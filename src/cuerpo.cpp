@@ -96,6 +96,15 @@ static ID3D11Buffer *s_need = nullptr, *s_needStage = nullptr, *s_map = nullptr;
 static ID3D11UnorderedAccessView* s_needUAV = nullptr;
 static ID3D11ShaderResourceView* s_mapSRV = nullptr;
 static std::vector<float> s_mapCpu;
+// (31/10 b) camiseta por jugador: en cada dibujo de la camiseta se copian m_view (b2 filas 8..11) y m_viewWorld (b5 filas 0..2) a un
+// staging (anillo de 3, como el desgaste de la cancha); 2 cuadros despues la DLL saca el origen de cada personaje con camiseta y
+// lo deja detras del mapa (t124): pes_skintone.hlsli PesCharHasShirt
+static const UINT kShMax = 32, kShTail = 4 + 4 * kShMax, kShSlot = 128, kShDraws = 128, kShStages = 3;
+static ID3D11Buffer* s_shStage[kShStages] = {};
+static std::atomic<int> s_shW{0}, s_shCount{0};
+static int s_shN[kShStages] = { -1, -1, -1 };
+static uint8_t s_shKind[kShStages][kShDraws];
+static float s_shList[kShTail]; static int s_shAge = 1000; static double s_shLog = 0;
 static bool s_mapDirty = false;
 static std::wstring MapPath() { return g_cfg.baseDir + L"torso_camiseta.bin"; }
 static bool Measuring() { return g_cfg.live[327][3] > 0.5f; }
@@ -216,7 +225,7 @@ static bool CreateResources() {
         if (FAILED(s_dev->CreateBuffer(&sd, nullptr, &s_measStage))) s_measStage = nullptr;
     }
     if (ok && MakeBuf(kNeed * 4, 0, D3D11_BIND_UNORDERED_ACCESS, 0, &s_need) && TypedUAV(s_need, DXGI_FORMAT_R32_UINT, kNeed, &s_needUAV) &&
-        MakeBuf((kNeed + 1) * 4, 0, D3D11_BIND_SHADER_RESOURCE, 0, &s_map) && TypedSRV(s_map, DXGI_FORMAT_R32_FLOAT, kNeed + 1, &s_mapSRV)) {
+        MakeBuf((kNeed + 1 + kShTail) * 4, 0, D3D11_BIND_SHADER_RESOURCE, 0, &s_map) && TypedSRV(s_map, DXGI_FORMAT_R32_FLOAT, kNeed + 1 + kShTail, &s_mapSRV)) {
         D3D11_BUFFER_DESC sd{}; sd.ByteWidth = kNeed * 4; sd.Usage = D3D11_USAGE_STAGING; sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
         if (FAILED(s_dev->CreateBuffer(&sd, nullptr, &s_needStage))) s_needStage = nullptr;
         s_mapCpu.assign(kNeed + 1, 0.0f);
@@ -225,7 +234,9 @@ static bool CreateResources() {
             fclose(f);
         }
         for (float& v : s_mapCpu) if (!(v >= 0.0f && v < 100.0f)) v = 0.0f;   // archivo roto: nada
-        g_dev.imm->UpdateSubresource(s_map, 0, nullptr, s_mapCpu.data(), 0, 0);
+        { D3D11_BOX bx = { 0, 0, 0, (kNeed + 1) * 4, 1, 1 }; g_dev.imm->UpdateSubresource(s_map, 0, &bx, s_mapCpu.data(), 0, 0); }
+        { std::vector<float> z(kShTail, 0.0f); D3D11_BOX bx = { (kNeed + 1) * 4, 0, 0, (kNeed + 1 + kShTail) * 4, 1, 1 }; g_dev.imm->UpdateSubresource(s_map, 0, &bx, z.data(), 0, 0); }
+        for (auto*& st : s_shStage) { D3D11_BUFFER_DESC qd{}; qd.ByteWidth = kShDraws * kShSlot; qd.Usage = D3D11_USAGE_STAGING; qd.CPUAccessFlags = D3D11_CPU_ACCESS_READ; if (FAILED(s_dev->CreateBuffer(&qd, nullptr, &st))) st = nullptr; }
         if (s_mapCpu[kNeed] > 0) Log("torso bajo la camiseta: mapa guardado cargado (%.0f celdas)", s_mapCpu[kNeed]);
     }
     if (ok) {
@@ -654,7 +665,7 @@ static void ReadMeasure(ID3D11DeviceContext* imm) {
         }
         imm->Unmap(s_needStage, 0);
         s_mapCpu[kNeed] = (float)cells;
-        imm->UpdateSubresource(s_map, 0, nullptr, s_mapCpu.data(), 0, 0);
+        { D3D11_BOX bx = { 0, 0, 0, (kNeed + 1) * 4, 1, 1 }; imm->UpdateSubresource(s_map, 0, &bx, s_mapCpu.data(), 0, 0); }
         s_mapDirty = true;
         Log("torso bajo la camiseta: mapa preciso %u celdas, maximo %.1f mm", cells, mx);
     }
@@ -680,6 +691,69 @@ static void ReadMeasure(ID3D11DeviceContext* imm) {
 }
 
 ID3D11ShaderResourceView* TorsoNeedSRV() { return s_ready.load(std::memory_order_acquire) ? s_mapSRV : nullptr; }
+// (31/10 b) en el dibujo de la camiseta (hooks.cpp): sus m_view y m_viewWorld al staging del cuadro; tipo = 0 / 1 / 2 (PS 7e64 / a41e / c7ae)
+void TorsoShirtNote(ID3D11DeviceContext* c, int kind) {
+    if (!s_ready.load(std::memory_order_acquire) || g_cfg.live[320][3] < 0.5f) return;
+    const int w = s_shW.load(std::memory_order_relaxed); ID3D11Buffer* st = s_shStage[w]; if (!st) return;
+    ID3D11DeviceContext1* c1 = nullptr;
+    if (FAILED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) || !c1) return;
+    CBSlot g2, g5;
+    c1->VSGetConstantBuffers1(2, 1, &g2.b, &g2.f, &g2.n); c1->VSGetConstantBuffers1(5, 1, &g5.b, &g5.f, &g5.n);
+    c1->Release();
+    UINT o2 = 0, o5 = 0;
+    if (CBWindow(g2, 192, &o2) && CBWindow(g5, 48, &o5)) {
+        const int i = s_shCount.fetch_add(1);
+        if (i < (int)kShDraws) {
+            s_shKind[w][i] = (uint8_t)kind;
+            D3D11_BOX b2 = { o2 + 128, 0, 0, o2 + 192, 1, 1 }, b5 = { o5, 0, 0, o5 + 48, 1, 1 };
+            c->CopySubresourceRegion(st, 0, (UINT)i * kShSlot, 0, 0, g2.b, 0, &b2);
+            c->CopySubresourceRegion(st, 0, (UINT)i * kShSlot + 64, 0, 0, g5.b, 0, &b5);
+        }
+    }
+    for (CBSlot* q : { &g2, &g5 }) if (q->b) q->b->Release();
+}
+// (31/10 b) en Present: cierra el cuadro de las camisetas y lee el de hace 2 (sin esperar a la GPU)
+static void TorsoShirtPresent() {
+    if (!s_map || !s_shStage[0]) return;
+    const int w = s_shW.load();
+    s_shN[w] = (std::min)(s_shCount.exchange(0), (int)kShDraws);
+    const int rd = (w + 1) % kShStages;
+    const int pn = s_shN[rd];
+    bool changed = false;
+    if (g_cfg.live[320][3] < 0.5f) { if (s_shList[1] != 0.0f) { s_shList[0] = s_shList[1] = 0.0f; changed = true; } s_shAge = 1000; }
+    else if (pn >= 0) {
+        D3D11_MAPPED_SUBRESOURCE m;
+        HRESULT hr = g_dev.imm->Map(s_shStage[rd], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m);
+        if (SUCCEEDED(hr)) {
+            float L[kShMax][4]; int n = 0;
+            for (int i = 0; i < pn; i++) {
+                const float* q = (const float*)((const uint8_t*)m.pData + i * kShSlot);
+                const float d[3] = { q[19] - q[3], q[23] - q[7], q[27] - q[11] };   // traslacion de m_viewWorld - traslacion de m_view (vista)
+                const float o[3] = { q[0] * d[0] + q[4] * d[1] + q[8] * d[2], q[1] * d[0] + q[5] * d[1] + q[9] * d[2], q[2] * d[0] + q[6] * d[1] + q[10] * d[2] };
+                if (!(fabsf(o[0]) < 200.0f && fabsf(o[1]) < 20.0f && fabsf(o[2]) < 200.0f)) continue;   // NaN o basura
+                const float r0 = q[0] * q[0] + q[1] * q[1] + q[2] * q[2];
+                if (!(r0 > 0.5f && r0 < 2.0f)) continue;   // sin rotacion de vista valida
+                bool dup = false;
+                for (int k = 0; k < n; k++) if (fabsf(L[k][0] - o[0]) < 0.05f && fabsf(L[k][1] - o[1]) < 0.05f && fabsf(L[k][2] - o[2]) < 0.05f) { dup = true; break; }
+                if (dup || n >= (int)kShMax) continue;
+                L[n][0] = o[0]; L[n][1] = o[1]; L[n][2] = o[2]; L[n][3] = (float)s_shKind[rd][i]; n++;
+            }
+            g_dev.imm->Unmap(s_shStage[rd], 0);
+            s_shN[rd] = -1;
+            if (n > 0) {
+                s_shList[0] = (float)n; s_shList[1] = 1.0f; memcpy(s_shList + 4, L, n * 16); s_shAge = 0; changed = true;
+                const double t = Now();
+                if (t > s_shLog) {
+                    s_shLog = t + 30.0; char line[900]; int ln = 0; line[0] = 0;
+                    for (int k = 0; k < n && ln < 820; k++) ln += snprintf(line + ln, sizeof line - ln, " (%.1f, %.2f, %.1f)%s", L[k][0], L[k][1], L[k][2], L[k][3] > 1.5f ? " c7ae" : L[k][3] > 0.5f ? " a41e" : "");
+                    Log("torso bajo la camiseta: %d personajes con camiseta (de %d dibujos):%s", n, pn, line);
+                }
+            } else if (++s_shAge == 30) { s_shList[0] = 0.0f; s_shList[1] = 0.0f; changed = true; }   // 30 cuadros sin camisetas: vale la fila 320.z
+        } else s_shN[rd] = -1;   // la GPU todavia no termino (o fallo): se pierde ese cuadro, la lista anterior sigue
+    }
+    s_shW.store(rd);
+    if (changed) { D3D11_BOX bx = { (kNeed + 1) * 4, 0, 0, (kNeed + 1 + kShTail) * 4, 1, 1 }; g_dev.imm->UpdateSubresource(s_map, 0, &bx, s_shList, 0, 0); }
+}
 
 void BodyPresent() {
     if (!g_dev.dev || !g_dev.imm || s_failed) return;
@@ -690,6 +764,7 @@ void BodyPresent() {
         s_ready.store(true, std::memory_order_release);
     }
     if (g_dev.dev != s_dev) return;
+    TorsoShirtPresent();   // (31/10 b) camiseta por jugador
     const int frame = PresentNo();   // el numero que la DLL sube en este Present (fila 257): el que vera el simulador
     std::vector<BodyMesh*> dead;
     std::vector<Rec> recs;
