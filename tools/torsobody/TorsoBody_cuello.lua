@@ -44,7 +44,7 @@ local PERFIL = true
 -- las funciones definidas adentro)
 local NOJIT = false
 local function modulo_cuello()
-local m = { version = "1.16" }
+local m = { version = "1.17" }
 
 local AXZ = 0.045          -- eje del cuello (z)
 -- (1.14) borde del cuello del torso con la forma del cuerpo de Konami (tools/fox/torso/neck_konami.py: el anillo de
@@ -2442,8 +2442,9 @@ function m.init(ctx)
         for _, rel in ipairs(cands) do
             local dir = ctx.sider_dir .. rel
             if type(fs) == "table" and type(fs.make_dirs) == "function" then fs.make_dirs(dir) end
-            local f = io.open(dir .. "prueba_escritura.tmp", "wb")
+            local f, err = io.open(dir .. "prueba_escritura.tmp", "wb")
             if f then f:write("ok"); f:close(); found = dir; break end
+            log("TorsoBody cuello: cache en " .. dir .. " no se puede escribir: " .. tostring(err) .. " (fs.make_dirs " .. ((type(fs) == "table" and type(fs.make_dirs) == "function") and "si" or "no") .. ")")
         end
         if found then CACHE_DIR = found; nojit = nojit .. " (cache en " .. found:sub(#ctx.sider_dir + 1) .. ")"
         else CACHE_OK = false; log("TorsoBody cuello: no se pudo escribir en ninguna carpeta de cache (content\\TorsoBody_cuello_cache); se sigue sin cache") end
