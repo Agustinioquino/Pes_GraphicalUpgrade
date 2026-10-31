@@ -648,7 +648,7 @@ static void ReadMeasure(ID3D11DeviceContext* imm) {
     if (seen && s_needStage && s_mapCpu.size() == kNeed + 1 && SUCCEEDED(imm->Map(s_needStage, 0, D3D11_MAP_READ, 0, &mp))) {
         const uint32_t* n = (const uint32_t*)mp.pData; UINT cells = 0; float mx = 0;
         for (UINT i = 0; i < kNeed; i++) {
-            float v = (std::max)(s_mapCpu[i] * 0.7f, (std::min)(n[i] / 100.0f, 30.0f));
+            float v = (std::max)(s_mapCpu[i] * 0.7f, (std::min)(n[i] / 100.0f, 15.0f));
             if (v < 0.2f) v = 0.0f;
             s_mapCpu[i] = v; if (v > 0) { cells++; mx = (std::max)(mx, v); }
         }

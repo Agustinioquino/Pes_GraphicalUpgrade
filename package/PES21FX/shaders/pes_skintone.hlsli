@@ -140,6 +140,7 @@ void PesTorsoInset(inout float3 mP, float3 mN, float3 rest) {
   if (T.y > 1.5 && g_torsoNeed.Load(PES_NEED_NX * PES_NEED_NY * PES_NEED_NZ) > 0.5) {
     float need = PesTorsoNeed(rest);
     mm = (need + 1.5 * saturate(need)) * (1.0 - smoothstep(1.42, 1.50, rest.y));   // el anillo del cuello sigue soldado a la cara
+    if (T.x > 0.0) mm = min(mm, T.x + 4.0);   // la medicion exagera en algunos puntos (piel equivocada mas cercana): tope = x320 + 4 mm
   } else {
     if (T.x <= 0.0) return;
     float k = (T.y > 0.5 && T.y < 1.5) ? PesTorsoMask(rest) : PesTorsoInsetSmooth(rest);
