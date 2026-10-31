@@ -82,6 +82,8 @@ def main(src_dir, out_dir, mm=6.0, mmx=12.0, mma=4.0, mmb=3.0):
         D = -Ns * amt[:, None]
         if seam is None: seam = (Pw[sa].copy(), D[sa].copy())
         write_file(f, os.path.join(out_dir, fn + ".fmdl"), T, Pw + D, N, fn, amt)
+    if seam is None:
+        print("sin torso en %s: los brazos quedan igual (el anillo del hombro tiene que moverse junto con el torso)" % src_dir); return
     tree = cKDTree(seam[0])
     for fn in ARMS:
         f = os.path.join(src_dir, fn + ".fmdl")
