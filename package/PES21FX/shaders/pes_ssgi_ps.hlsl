@@ -88,9 +88,12 @@ float4 mainV2(float4 pos, float2 uv, float z0, float Rg, float fr0, float rot, f
   float rPx = min(Rg * pxm, 320.0);
   float3 acc = 0;
   if (rPx >= 3.0) {
-    float aNear = 3.14159265 * rPx * rPx / 8.0;
-    [unroll] for (int i = 0; i < 8; i++) {
-      float fr = sqrt(frac((i + 0.5) / 8.0 + fr0 * 0.37));
+    // (31/10) x336 = muestras cercanas por cuadro (8 = como antes, hasta 16: menos ruido y mas definido)
+    float x336 = IniParams.Load(int2(336, 0)).x;
+    int nN = (int)clamp(x336 > 0.5 ? x336 : 8.0, 4.0, 16.0);
+    float aNear = 3.14159265 * rPx * rPx / nN;
+    [loop] for (int i = 0; i < nN; i++) {
+      float fr = sqrt(frac((i + 0.5) / nN + fr0 * 0.37));
       float ang = i * 2.39996323 + rot;
       acc += SampleV2(uv, uv + float2(cos(ang), sin(ang)) * fr * rPx * m_renderBuffer.zw, Pc, Nc, aNear, skipTurf);
     }
@@ -117,7 +120,8 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   float d0 = inDepth.SampleLevel(sPoint, uv, 0).x;
   if (d0 < 1e-6) return 0.0;                                    // cielo
   float z0 = LinZ(uv);
-  if (z0 < 0.1 || z0 > 90.0) return float4(0, 0, 0, max(z0, 0.0));
+  float zMax = IniParams.Load(int2(337, 0)).y; zMax = zMax > 1.0 ? zMax : 90.0;   // (31/10) y337 distancia maxima
+  if (z0 < 0.1 || z0 > zMax) return float4(0, 0, 0, max(z0, 0.0));
   float4 P10 = IniParams.Load(int2(10, 0)), P153 = IniParams.Load(int2(153, 0)), P155 = IniParams.Load(int2(155, 0));
   float Rg = (P10.w > 0 ? P10.w : 1.6) * (P153.y > 0 ? P153.y : 1.5);
   float3 Pc = PosV(uv, z0);

@@ -289,22 +289,40 @@ void main(
     float4 SGt = IniParams.Load(int2(155,0));   // (21/10) x = 1: la DLL ya calculo el SSGI acumulado en el tiempo (t26)
     // (27/10) el acumulado tiene su fuerza propia (w153; 0 = la de w9): con el estimador fisico (x315) 1 = el rebote real
     { float wAcc = IniParams.Load(int2(153,0)).w; if (SGt.x > 0.5 && wAcc > 0.0) giK = wAcc; }
-    if (cmpOn && giK > 0 && zg > 0.1 && zg < 90.0 && SGt.x > 0.5) {
-      // subir de media resolucion respetando bordes: los 4 texeles vecinos, pesados por cercania y por profundidad parecida
+    if (cmpOn && giK > 0 && zg > 0.1 && zg < 400.0 && SGt.x > 0.5) {
+      // (31/10) subir de resolucion con filtro bilateral: texeles vecinos pesados por cercania, profundidad parecida y NORMAL
+      // parecida (antes solo profundidad: el rebote se corria entre pecho y brazo o menton y cuello, que estan a la misma
+      // distancia). y336 limpieza: 0 = 2x2 (como antes + normales), 1 = 4x4, 2 = 6x6 texeles (mas limpio, algo mas blando).
+      // z336 nitidez por normales (0 = ignora la orientacion, 1 = normal, 4 = muy estricto). w336 saturacion, x337 piel, y337 distancia
+      float4 Q336 = IniParams.Load(int2(336,0)), Q337 = IniParams.Load(int2(337,0));
+      float zMaxG = Q337.y > 1.0 ? Q337.y : 90.0;
+      if (zg < zMaxG) {
       float Wg, Hg; PESSsgi.GetDimensions(Wg, Hg);
-      float2 tcg = uvC * float2(Wg, Hg) - 0.5; float2 fg = frac(tcg); float2 b0g = (floor(tcg) + 0.5) / float2(Wg, Hg);
+      float2 txg = 1.0 / float2(Wg, Hg);
+      float3 Ncg = PESDecN(uvC);
+      float nPow = (Q336.z >= 0.0 ? Q336.z : 1.0) * 8.0;
+      int kR = (int)clamp(Q336.y, 0.0, 2.0);
+      float2 tcg = uvC * float2(Wg, Hg) - 0.5; float2 fg = frac(tcg); float2 b0g = (floor(tcg) + 0.5) * txg;
       float3 accU = 0; float wU = 0; float3 nearU = 0; float bestU = 1e9;
-      [unroll] for (int gy = 0; gy < 2; gy++) [unroll] for (int gx = 0; gx < 2; gx++) {
-        float4 sg = PESSsgi.SampleLevel(g_samplerPoint_Clamp_s, b0g + float2(gx, gy) / float2(Wg, Hg), 0);
+      float sig = 0.6 + 0.7 * kR;
+      [loop] for (int gy = -kR; gy <= kR + 1; gy++) [loop] for (int gx = -kR; gx <= kR + 1; gx++) {
+        float2 uvT = b0g + float2(gx, gy) * txg;
+        float4 sg = PESSsgi.SampleLevel(g_samplerPoint_Clamp_s, uvT, 0);
         float dzg = abs(sg.w - zg);
-        float wb = (gx ? fg.x : 1.0 - fg.x) * (gy ? fg.y : 1.0 - fg.y) * exp(-dzg / (0.03 * zg + 0.02));
+        float2 dd = float2(gx, gy) - fg;
+        float ws = kR == 0 ? (gx ? fg.x : 1.0 - fg.x) * (gy ? fg.y : 1.0 - fg.y) : exp(-dot(dd, dd) / (2.0 * sig * sig));
+        float wn = nPow > 0.0 ? pow(saturate(dot(PESDecN(uvT), Ncg)), nPow) : 1.0;
+        float wb = ws * wn * exp(-dzg / (0.03 * zg + 0.02));
         accU += sg.rgb * wb; wU += wb;
         if (dzg < bestU) { bestU = dzg; nearU = sg.rgb; }
       }
-      float3 ind = (wU > 1e-4 ? accU / wU : nearU) * giK * saturate((90.0 - zg) / 30.0);
+      float3 ind = (wU > 1e-4 ? accU / wU : nearU) * giK * saturate((zMaxG - zg) / (zMaxG / 3.0));
+      { float sat = Q336.w > 0.0 ? Q336.w : 1.0; float lg = dot(ind, float3(0.2126, 0.7152, 0.0722)); ind = max(lerp(lg.xxx, ind, sat), 0.0); }
       if (skinC) ind *= 1.0 - 0.5 * saturate(IniParams.Load(int2(124,0)).x);
+      if (skinC) ind *= Q337.x > 0.0 ? Q337.x : 1.0;
       r2.xyz += ind * PESAmbGain();
       giDbg = ind;
+      }
     } else
     if (cmpOn && giK > 0 && zg > 0.1 && zg < 90.0) {
       float2 sC = uvC * float2(2, -2) + float2(-1, 1);
