@@ -180,7 +180,8 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=22, nb=13, ext=0.0):
     cen = P.mean(0)
     s = np.sign(((P[F].mean(1) - cen) * n).sum(1)).sum()
     if s < 0: F = F[:, ::-1]
-    return P, UV, F
+    # (01/11) Fox / Konami usa el orden contrario (horario visto desde afuera): sin esto el juego descarta la cara de adelante
+    return P, UV, F[:, ::-1]
 
 def build(src_fmdl, texdir, log=print):
     f = fmdl.Fmdl(src_fmdl); m = fmdl.meshes(f)[0]
@@ -263,8 +264,10 @@ def build(src_fmdl, texdir, log=print):
     for Pp, UVp, Fp, Wp, t in parts:
         Pa.append(Pp); UVa.append(UVp); Fa.append(Fp + base); Wa.append(Wp); tag += [t] * len(Pp); base += len(Pp)
     Pa = np.vstack(Pa).astype(np.float32); UVa = np.vstack(UVa).astype(np.float32); Fa = np.vstack(Fa); Wa = np.vstack(Wa)
-    Na = vnormals(Pa, Fa)
-    Ta, tw = tangents(Pa, Na, UVa, Fa)
+    # (01/11) caras en el orden de Konami (horario desde afuera): la normal es la opuesta del producto cruz, y el signo de la
+    # binormal que guarda Konami es el opuesto del que da tangents() (medido sobre la boca de Konami: N 0.95, T 0.98, w -1 -> +1)
+    Na = -vnormals(Pa, Fa)
+    Ta, tw = tangents(Pa, Na, UVa, Fa); tw = -tw
     # 4 huesos por vertice
     order = np.argsort(-Wa, 1)[:, :4]
     w4 = np.take_along_axis(Wa, order, 1); w4 /= np.maximum(w4.sum(1, keepdims=True), 1e-9)
