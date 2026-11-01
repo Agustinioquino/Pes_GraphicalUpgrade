@@ -13,11 +13,11 @@
 //    mitad las comisuras y las mejillas bajas) se giran alrededor de la mandibula actual, sobre el eje X de la cabeza
 //    actual, el angulo del slider (0.40 rad x 347.x, igual que hacia el shader). Como se escribe la transformacion del
 //    hueso, TODAS las mallas que pesan en el (cara, barba, boca 3D, dientes, lengua, caras en piezas) se mueven juntas y
-//    parejo, y el shader ya no gira nada (349.y = 1 le avisa: PesJawApply salta el giro).
+//    parejo, y el shader ya no gira nada (350.y = 1 le avisa: PesJawApply salta el giro).
 //  * Diagnostico: cuanto gira la mandibula respecto de la cabeza en el Eval del cuello (min / max en 10 s): si se mueve
 //    mientras el jugador habla, la animacion facial del juego ya paso antes de este punto y lo que se escribe aca queda.
 //
-//   349 (ini): x boca por huesos (1 = si; 0 = por shader como antes), y = lo escribe la DLL (1 = activo: esqueletos con la
+//   350 (ini): x boca por huesos (1 = si; 0 = por shader como antes), y = lo escribe la DLL (1 = activo: esqueletos con la
 //   mandibula encontrada en el ultimo segundo), z / w libres (proximo: pose facial propia: labios, cejas, parpados).
 #include "core.h"
 #include <atomic>
@@ -175,7 +175,7 @@ void ExprBonesFrame(const void* skel) {
     if (!skel) return;
     s_calls.fetch_add(1, std::memory_order_relaxed);
     const unsigned fr = s_frame.load(std::memory_order_relaxed);
-    const bool on = g_cfg.live[349][0] > 0.5f && g_cfg.live[340][0] > 0.5f;
+    const bool on = g_cfg.live[350][0] > 0.5f && g_cfg.live[340][0] > 0.5f;
     const float o = std::clamp(g_cfg.live[347][0], -0.25f, 1.0f);
     std::lock_guard<std::mutex> lk(s_mx);
     Skel* S = Get(skel);
@@ -209,11 +209,11 @@ void ExprBonesFrame(const void* skel) {
     }
 }
 
-// Present (hilo de render): estado para el shader (349.y) y resumen al log
+// Present (hilo de render): estado para el shader (350.y) y resumen al log
 void ExprBonesPresent() {
     const unsigned fr = s_frame.fetch_add(1) + 1;
     const bool active = fr - s_lastActive.load(std::memory_order_relaxed) < 120;
-    g_cfg.live[349][1] = active ? 1.0f : 0.0f;
+    g_cfg.live[350][1] = active ? 1.0f : 0.0f;
     static unsigned lastLog = 0;
     if (fr - lastLog < 600) return;   // cada ~10 s
     lastLog = fr;
