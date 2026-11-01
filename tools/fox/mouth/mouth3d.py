@@ -20,7 +20,9 @@ import fmdl, mouth_fmdl, make_oral
 MM = 0.001
 # (01/11) mordida: con la boca en reposo la tira de arriba termina en y 1.631 y la de abajo en 1.6285 (2.5 mm de luz); los dientes
 # se alargan para que cierren: los de arriba bajan 2.4 mm por delante de los de abajo, que suben 0.8 mm (se solapan ~0.7 mm)
-EXT_UP, EXT_LO = 2.4 * 0.001, 0.8 * 0.001
+EXT_UP, EXT_LO = 2.0 * 0.001, 0.7 * 0.001   # (01/11 b) 2.4 / 0.8 -> 2.0 / 0.7: dientes un poco menos largos (Agustin)
+# (01/11 b) mas encia (Agustin): la linea de la encia baja GUM del alto del diente pintado; esa franja de la tira muestra encia
+GUM = 0.18   # = make_oral.GUM
 
 def comps(m):
     F = m['faces']; n = len(m['pos'])
@@ -130,7 +132,7 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=22, nb=13, ext=0.0):
     uc = 0.5 * (uL2 + uR2)
     b = np.linspace(-0.22, 1.0, nb)
     th = np.linspace(0, 2 * np.pi, na + 1)[:-1]   # 0 = adelante
-    pw = 2.8 if kind != 'P' else 2.3
+    pw = {'IC': 4.2, 'I': 2.8, 'C': 2.8, 'P': 2.3}[kind]   # (01/11 b) centrales mas cuadrados
     cx = np.sign(np.sin(th)) * np.abs(np.sin(th)) ** (2 / pw)   # a lo ancho (-1..1)
     cy = np.sign(np.cos(th)) * np.abs(np.cos(th)) ** (2 / pw)   # adelante (+1) / atras (-1)
     Ps = []; UVs = []
@@ -139,17 +141,17 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=22, nb=13, ext=0.0):
     dI = (Pi - Pg)[0]; dI /= max(np.linalg.norm(dI), 1e-9)
     for bi in b:
         # el borde incisal: canino en punta, incisivos con esquinas apenas redondeadas
-        bmax = 1 - (0.30 * np.abs(cx) ** 1.3 if kind == 'C' else 0.10 * np.abs(cx) ** 4)
+        bmax = 1 - (0.30 * np.abs(cx) ** 1.3 if kind == 'C' else (0.03 * np.abs(cx) ** 6 if kind == 'IC' else 0.10 * np.abs(cx) ** 4))
         bb = bi * bmax if bi > 0 else bi * np.ones_like(cx)
         v = vG + (vI - vG) * bb
         uu = uc + 0.5 * (uR2 - uL2) * cx
         # cuello mas angosto
-        narrow = 0.80 + 0.20 * sst(-0.1, 0.45, bb)
+        narrow = (0.88 + 0.12 * sst(-0.1, 0.45, bb)) if kind == 'IC' else (0.80 + 0.20 * sst(-0.1, 0.45, bb))
         uu = uc + (uu - uc) * narrow
         Pf, Nf = M(np.stack([uu, v], 1))
         Pf = Pf + dI[None, :] * (ext * sst(0.35, 1.0, bb))[:, None]
         # espesor (m): grueso en el cuello, fino en el borde
-        T0 = {'I': 6.5, 'C': 7.5, 'P': 8.5}[kind] * MM; T1 = {'I': 0.9, 'C': 1.6, 'P': 5.0}[kind] * MM
+        T0 = {'IC': 6.5, 'I': 6.5, 'C': 7.5, 'P': 8.5}[kind] * MM; T1 = {'IC': 1.0, 'I': 0.9, 'C': 1.6, 'P': 5.0}[kind] * MM
         T = T0 + (T1 - T0) * sst(0.0, 1.0, bb) ** 0.8
         # adelante: sobre la tira + abultado del esmalte; el cuello se hunde detras de la encia
         bulge = 0.45 * MM * (1 - cx ** 2) * sst(0.0, 0.25, bb) * (1 - 0.6 * sst(0.75, 1.0, bb)) - 0.7 * MM * sst(0.08, -0.18, bb)
@@ -180,7 +182,8 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=22, nb=13, ext=0.0):
     cen = P.mean(0)
     s = np.sign(((P[F].mean(1) - cen) * n).sum(1)).sum()
     if s < 0: F = F[:, ::-1]
-    return P, UV, F
+    # (01/11) Fox / Konami usa el orden contrario (horario visto desde afuera): sin esto el juego descarta la cara de adelante
+    return P, UV, F[:, ::-1]
 
 def build(src_fmdl, texdir, log=print):
     f = fmdl.Fmdl(src_fmdl); m = fmdl.meshes(f)[0]
@@ -214,13 +217,20 @@ def build(src_fmdl, texdir, log=print):
     # ---- tiras (encia), detras de los dientes nuevos
     strip_maps = {}
     for c, r, up in ((c_up, rows[0], True), (c_lo, rows[1], False)):
-        Pc, UVc, Fc, Wc = sub(c, 1)
+        Pc, UVc, Fc, Wc = sub(c, 2)
         Nc = vnormals(Pc, Fc)
         # orientar: la tira mira hacia adelante (+z) en la zona de los dientes
         if Nc[:, 2].mean() < 0: Nc = -Nc
         strip_maps[c] = UVMap(Pc.copy(), Nc.copy(), UVc, Fc)
         px = np.clip((UVc * 512).astype(int), 0, 511)
         tm = teeth_mask[px[:, 1], px[:, 0]]
+        # (01/11 b) mas encia: la textura (make_oral.gum_warp) ya baja la encia GUM del alto del diente; la tira solo se corre
+        # hacia atras donde queda diente pintado (s > GUM), no en la franja nueva de encia
+        xs = UVc[:, 0] * 512; vv = UVc[:, 1] * 512
+        g = np.interp(xs, np.arange(512), r['g']); inc = np.interp(xs, np.arange(512), r['inc'])
+        sv = (vv - g) / np.where(np.abs(inc - g) < 1e-6, 1e-6, inc - g)
+        inx = (xs >= r['x0'] - 1) & (xs <= r['x1'] + 1)
+        tm = tm * np.where(inx, make_oral.sst(GUM, GUM + 0.12, sv), 1.0)
         Pc = Pc - Nc * (0.9 * MM * make_oral.sst(0.3, 0.7, tm))[:, None]
         parts.append((Pc, UVc, Fc, Wc, 'tira'))
     # ---- dientes
@@ -236,8 +246,8 @@ def build(src_fmdl, texdir, log=print):
             gi = np.interp(xc, np.arange(512), r['g']); ii = np.interp(xc, np.arange(512), r['inc'])
             # posicion desde el centro: 0,1 incisivos, 2 canino, el resto premolares/molares
             rank = int(abs((i + 0.5) - mid))
-            kind = 'I' if rank < 2 else ('C' if rank == 2 else 'P')
-            vG, vI = gi / 512.0, ii / 512.0
+            kind = 'IC' if (rank == 0 and up) else ('I' if rank < 2 else ('C' if rank == 2 else 'P'))
+            vG, vI = (gi + GUM * (ii - gi)) / 512.0, ii / 512.0
             if up: vI = min(vI, 0.302)         # el frente de la tira de arriba termina en v 0.30 (despues dobla hacia atras)
             else: vI = max(vI, 0.505)
             Pt, UVt, Ft = tooth(M, xl / 512.0, xr / 512.0, vG, vI, kind, up, ext=(EXT_UP if up else EXT_LO))
@@ -263,8 +273,10 @@ def build(src_fmdl, texdir, log=print):
     for Pp, UVp, Fp, Wp, t in parts:
         Pa.append(Pp); UVa.append(UVp); Fa.append(Fp + base); Wa.append(Wp); tag += [t] * len(Pp); base += len(Pp)
     Pa = np.vstack(Pa).astype(np.float32); UVa = np.vstack(UVa).astype(np.float32); Fa = np.vstack(Fa); Wa = np.vstack(Wa)
-    Na = vnormals(Pa, Fa)
-    Ta, tw = tangents(Pa, Na, UVa, Fa)
+    # (01/11) caras en el orden de Konami (horario desde afuera): la normal es la opuesta del producto cruz, y el signo de la
+    # binormal que guarda Konami es el opuesto del que da tangents() (medido sobre la boca de Konami: N 0.95, T 0.98, w -1 -> +1)
+    Na = -vnormals(Pa, Fa)
+    Ta, tw = tangents(Pa, Na, UVa, Fa); tw = -tw
     # 4 huesos por vertice
     order = np.argsort(-Wa, 1)[:, :4]
     w4 = np.take_along_axis(Wa, order, 1); w4 /= np.maximum(w4.sum(1, keepdims=True), 1e-9)

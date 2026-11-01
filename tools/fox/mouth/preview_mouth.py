@@ -5,6 +5,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [HERE, os.path.join(HERE, '..'), os.path.join(HERE, '..', '..')]
 import fmdl
+CULL = float(os.environ.get('CULL', '0'))
 
 def load_tex(path):
     from PIL import Image
@@ -36,6 +37,7 @@ def render(P, F, UV, N, tex, yaw, pitch, W=900, H=600, center=(0, 1.632, 0.14), 
         gx, gy = np.meshgrid(np.arange(x0, x1 + 1) + 0.5, np.arange(y0, y1 + 1) + 0.5)
         d = (xs[1] - xs[0]) * (ys[2] - ys[0]) - (xs[2] - xs[0]) * (ys[1] - ys[0])
         if abs(d) < 1e-9: continue
+        if CULL and d * CULL < 0: continue   # descarte de caras de atras (orden de Fox)
         l1 = ((gx - xs[0]) * (ys[2] - ys[0]) - (xs[2] - xs[0]) * (gy - ys[0])) / d
         l2 = ((xs[1] - xs[0]) * (gy - ys[0]) - (gx - xs[0]) * (ys[1] - ys[0])) / d
         l0 = 1 - l1 - l2
