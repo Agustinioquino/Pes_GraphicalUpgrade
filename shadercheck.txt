@@ -1,0 +1,21 @@
+
+==== cloth_sim.hlsl
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(749,22-25): error X3000: syntax error: unexpected token 'pass'
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(749,32-35): error X3000: syntax error: unexpected token 'pass'
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(749,55-58): error X3000: syntax error: unexpected token 'pass'
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(751,25-28): error X3000: syntax error: unexpected token 'pass'
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(751,16-77): error X3013: 'mul': no matching 2 parameter intrinsic function
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(751,16-77): error X3013: Possible intrinsic functions are:
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(751,16-77): error X3013:     mul(float|half|double|min10float|min16float|int|uint|min12int|min16int|min16uint, float|half|double|min10float|min16float|int|uint|min12int|min16int|min16uint)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(751,16-77): error X3013:     mul(float|half|double|min10float|min16float|int|uint|min12int|min16int|min16uint, floatK|halfK|doubleK|min10floatK|min16floatK|intK|uintK|min12intK|min16intK|min16uintK)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(751,16-77): error X3013:     mul(float|half|double|min10float|min16float|int|uint|min12int|min16int|min16uint, floatLxK|halfLxK|doubleLxK|min10floatLxK|min16floatLxK|intLxK|uintLxK|min12intLxK|min16intLxK|min16uintLxK)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(751,16-77): error X3013:     mul(floatM|halfM|doubleM|min10floatM|min16floatM|intM|uintM|min12intM|min16intM|min16uintM, float|half|double|min10float|min16float|int|uint|min12int|min16int|min16uint)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(751,16-77): error X3013:     mul(floatM|halfM|doubleM|min10floatM|min16floatM|intM|uintM|min12intM|min16intM|min16uintM, floatM|halfM|doubleM|min10floatM|min16floatM|intM|uintM|min12intM|min16intM|min16uintM)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(751,16-77): error X3013:     mul(floatM|halfM|doubleM|min10floatM|min16floatM|intM|uintM|min12intM|min16intM|min16uintM, floatMxK|halfMxK|doubleMxK|min10floatMxK|min16floatMxK|intMxK|uintMxK|min12intMxK|min16intMxK|min16uintMxK)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(751,16-77): error X3013:     mul(floatNxM|halfNxM|doubleNxM|min10floatNxM|min16floatNxM|intNxM|uintNxM|min12intNxM|min16intNxM|min16uintNxM, float|half|double|min10float|min16float|int|uint|min12int|min16int|min16uint)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(751,16-77): error X3013:     mul(floatNxM|halfNxM|doubleNxM|min10floatNxM|min16floatNxM|intNxM|uintNxM|min12intNxM|min16intNxM|min16uintNxM, floatM|halfM|doubleM|min10floatM|min16floatM|intM|uintM|min12intM|min16intM|min16uintM)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(751,16-77): error X3013:     mul(floatNxM|halfNxM|doubleNxM|min10floatNxM|min16floatNxM|intNxM|uintNxM|min12intNxM|min16intNxM|min16uintNxM, floatMxK|halfMxK|doubleMxK|min10floatMxK|min16floatMxK|intMxK|uintMxK|min12intMxK|min16intMxK|min16uintMxK)
+
+compilation failed; no code produced
+
+shaders: 111, con errores: 1 (fxc: C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\fxc.exe)
