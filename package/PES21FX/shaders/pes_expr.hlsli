@@ -47,8 +47,9 @@ void PesExprApply(float4 p, float3 rest, uint4 I, float4 W, float3 n, float3 t,
   uint head = g_pesExprMesh.x;
   if (head > 31) return;
   float4 Z = IniParams.Load(int2(341, 0));
-  // mascara: frente de la cabeza (no nuca, no cuello)
-  float face = smoothstep(1.580, 1.610, rest.y) * smoothstep(0.060, 0.095, rest.z);
+  // mascara: de la base del menton para arriba y no la nuca (01/11: antes cortaba en z 0.06..0.095 y dejaba fuera el fondo
+  // de la boca / dientes de la boca 3D: labios agrandados y dientes no -> union rara)
+  float face = smoothstep(1.580, 1.610, rest.y) * smoothstep(0.000, 0.035, rest.z);
   float extra = (E.y - 1.0) * PesExprZoneShare(rest, Z) * face;
   if (abs(extra) < 0.001) return;
   float bigW = saturate(E.w);
