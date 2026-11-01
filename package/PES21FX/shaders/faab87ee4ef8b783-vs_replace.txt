@@ -138,6 +138,7 @@ void main(
     PesExprApply(v0, v0r, v3, v4, v1.xyz, v2.xyz, r4.xyz, r2.xyz, r5.xyz, r1.xyz);
     PesBlinkApply(v0, v0r, v3, v4, v1.xyz, r4.xyz, r2.xyz, r5.xyz);   // (01/11) parpadeo del mod (fila 342.w)
     PesJawApply(v0, v3, v4, v1.xyz, r4.xyz, r2.xyz, r5.xyz);   // (01/11) abrir la boca (fila 347.x)
+    PesMuscleApply(v0, v0r, v3, v4, v1.xyz, r4.xyz, r2.xyz, r5.xyz);   // (01/11 i) musculos virtuales (fila 348)
   } else {
     r5.xyz = v1.xyz;
     r1.xyz = v2.xyz;

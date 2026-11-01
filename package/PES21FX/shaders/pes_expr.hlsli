@@ -22,6 +22,7 @@ cbuffer PESExprMesh : register(b12)
   uint4 g_pesExprJaw;    // (01/11) abrir la boca: x mascara de huesos de abajo (mandibula, labio de abajo, papada), y comisuras (la mitad), z labio de arriba del medio (99 = no hay), w mascara del labio de arriba
   // (01/11 h) ojos (VS 69758ab9): centro (xyz) y radio del globo izquierdo (+x, hueso 0 del eye.fmdl) y derecho (hueso 1); radio 0 = no hay
   float4 g_pesExprEye[2];
+  uint4 g_pesExprMus;    // (01/11 i) musculos virtuales: x comisura izq (+x), y comisura der, z ceja interna izq, w ceja interna der (99 = no hay)
 }
 
 float PesExprZoneShare(float3 r, float4 Z)
@@ -324,5 +325,86 @@ void PesJawApply(float4 p, uint4 I, float4 W, float3 n,
     prev += w * mul(d, (float3x3)g_vsPrevBone.m_boneMatrices[j]);
     nrm  += w * mul(dn, (float3x3)g_vsBone.m_boneMatrices[j]);
   }
+}
+// (01/11 i, Agustin: "inyectar mas huesos ... la malla se deforma con mas realismo y la luz se proyecta") MUSCULOS VIRTUALES,
+// fila 348. El juego no anima huesos nuevos, asi que se calculan en el VS a partir de lo que ya mueve: cuanto subio / salio
+// la comisura (skf_lip_s) y cuanto bajo / entro la ceja interna (skf_brow_i), y con eso se levanta o hunde la piel de reposo
+// a lo largo de la normal, con el gradiente del bulto sumado a la normal para que la luz lo marque:
+//  - x mejilla: con la sonrisa el pomulo se infla (bulto de 3 mm centrado en (+-4.0, 166.0) cm) y sube un poco;
+//  - y surco nasolabial: la piel se hunde 1.5 mm a lo largo de la linea ala de la nariz -> comisura y hace cresta 0.9 mm
+//    por fuera (el pliegue real de la sonrisa);
+//  - z ceno: al fruncir, dos crestas verticales a +-6.5 mm del medio (1.2 mm) y un surco en el medio (0.6 mm) entre las cejas.
+float PesMusGesture(uint j, uint hh, float4 P, bool prev)
+{
+  if (j > 31) return 0.0;
+  float3 d = prev ? mul(P, g_vsPrevBone.m_boneMatrices[j]) - mul(P, g_vsPrevBone.m_boneMatrices[hh])
+                  : mul(P, g_vsBone.m_boneMatrices[j]) - mul(P, g_vsBone.m_boneMatrices[hh]);
+  // en espacio del objeto; +y arriba, x hacia afuera segun el lado del pivote
+  float outw = P.x >= 0.0 ? d.x : -d.x;
+  return d.y + 0.5 * outw;
+}
+void PesMuscleApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
+                    inout float3 pos, inout float3 prev, inout float3 nrm)
+{
+  float4 Mu = IniParams.Load(int2(348, 0));
+  if (Mu.x <= 0.0 && Mu.y <= 0.0 && Mu.z <= 0.0) return;
+  uint hh = g_pesExprMesh.x;
+  if (hh > 31) return;
+  float face = smoothstep(0.115, 0.145, rest.z);
+  if (face <= 0.0) return;
+  int sd = rest.x >= 0.0 ? 0 : 1;
+  float sx = rest.x >= 0.0 ? 1.0 : -1.0;
+  float x = abs(rest.x), y = rest.y;
+  uint corner = sd == 0 ? g_pesExprMus.x : g_pesExprMus.y;
+  uint brow = sd == 0 ? g_pesExprMus.z : g_pesExprMus.w;
+  float4 Pc = float4(sx * 0.0236, 1.6297, 0.1615, 1.0), Pb = float4(sx * 0.0157, 1.7129, 0.1718, 1.0);
+  // sonrisa: la comisura sube / sale (6 mm = entera); ceno: la ceja interna baja / entra (4 mm = entero)
+  float smile = saturate(PesMusGesture(corner, hh, Pc, false) / 0.006), smileP = saturate(PesMusGesture(corner, hh, Pc, true) / 0.006);
+  float frown = saturate(-PesMusGesture(brow, hh, Pb, false) / 0.004), frownP = saturate(-PesMusGesture(brow, hh, Pb, true) / 0.004);
+  if (smile <= 0.001 && smileP <= 0.001 && frown <= 0.001 && frownP <= 0.001) return;
+  float h = 0, hp = 0;           // altura a lo largo de la normal (m), este cuadro / anterior
+  float2 gr = 0;                 // gradiente de h en (x hacia afuera, y) para inclinar la normal
+  float up = 0, upP = 0;         // subida de la mejilla
+  // ---- mejilla
+  if (Mu.x > 0.0) {
+    float ex = (x - 0.040) / 0.016, ey = (y - 1.660) / 0.014;
+    float g = exp(-(ex * ex + ey * ey));
+    float a = Mu.x * 0.0030;
+    h += a * smile * g; hp += a * smileP * g;
+    gr += a * smile * g * float2(-2.0 * ex / 0.016, -2.0 * ey / 0.014);
+    up += 0.4 * a * smile * g; upP += 0.4 * a * smileP * g;
+  }
+  // ---- surco nasolabial: linea del ala de la nariz (1.53, 166.03) a la comisura (2.36, 162.97), prolongada 3 mm
+  if (Mu.y > 0.0) {
+    float2 A = float2(0.0153, 1.6603), B = float2(0.0236, 1.6297);
+    float2 u = normalize(B - A); float L = length(B - A);
+    float2 lat = float2(u.y, -u.x);                 // hacia afuera (+x)
+    float2 q = float2(x, y) - A;
+    float s = dot(q, u) / L, l = dot(q, lat);
+    float along = smoothstep(-0.15, 0.1, s) * (1.0 - smoothstep(0.95, 1.2, s));
+    float eg = l / 0.003, er = (l - 0.006) / 0.004;
+    float groove = exp(-eg * eg), ridge = exp(-er * er);
+    float prof = (-0.0015 * groove + 0.0009 * ridge) * Mu.y * along;
+    float dprof = (-0.0015 * groove * (-2.0 * eg / 0.003) + 0.0009 * ridge * (-2.0 * er / 0.004)) * Mu.y * along;
+    h += prof * smile; hp += prof * smileP;
+    gr += dprof * smile * lat;
+  }
+  // ---- ceno
+  if (Mu.z > 0.0) {
+    float ey = (y - 1.708) / 0.011, ex1 = (x - 0.0065) / 0.0035, ex0 = x / 0.0025;
+    float gy = exp(-ey * ey), ridge = exp(-ex1 * ex1) * gy, groove = exp(-ex0 * ex0) * gy;
+    float a = Mu.z * (0.0012 * ridge - 0.0006 * groove);
+    float dax = Mu.z * (0.0012 * ridge * (-2.0 * ex1 / 0.0035) - 0.0006 * groove * (-2.0 * ex0 / 0.0025));
+    float day = Mu.z * (0.0012 * ridge - 0.0006 * groove) * (-2.0 * ey / 0.011);
+    h += a * frown; hp += a * frownP;
+    gr += float2(dax, day) * frown;
+  }
+  h *= face; hp *= face; gr *= face; up *= face; upP *= face;
+  float3 off = n * h + float3(0.0, up, 0.0), offP = n * hp + float3(0.0, upP, 0.0);
+  pos  += mul(off, (float3x3)g_vsBone.m_boneMatrices[hh]);
+  prev += mul(offP, (float3x3)g_vsPrevBone.m_boneMatrices[hh]);
+  // la normal se inclina en contra del gradiente (campo de altura sobre la piel, que mira casi a +z)
+  float3 dn = -float3(sx * gr.x, gr.y, 0.0);
+  nrm += mul(dn, (float3x3)g_vsBone.m_boneMatrices[hh]);
 }
 #endif

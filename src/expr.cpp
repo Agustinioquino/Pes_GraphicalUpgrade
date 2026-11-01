@@ -89,13 +89,15 @@ bool ReadW(const uint8_t* p, DXGI_FORMAT f, float o[4]) {
     default: return false;
     }
 }
-ID3D11Buffer* MakeCB(UINT head, UINT maxIdx, UINT id, UINT mouth = 0, const int* lids = nullptr, UINT jawFull = 0, UINT jawHalf = 0, UINT lipTop = 99, UINT lipUp = 0, const float* eyes = nullptr) {
+ID3D11Buffer* MakeCB(UINT head, UINT maxIdx, UINT id, UINT mouth = 0, const int* lids = nullptr, UINT jawFull = 0, UINT jawHalf = 0, UINT lipTop = 99, UINT lipUp = 0, const float* eyes = nullptr, const int* mus = nullptr) {
     if (!g_dev.dev) return nullptr;
     // 48 bytes de uint4 + 2 float4: centros de los ojos (x y z radio) izquierdo (+x, hueso 0) y derecho (hueso 1), para la mirada
-    UINT v[20] = { head, maxIdx, id, mouth, 99, 99, 99, 99, jawFull, jawHalf, lipTop, lipUp, 0, 0, 0, 0, 0, 0, 0, 0 };
+    // + uint4 musculos virtuales (01/11 i): comisura izq / der, ceja interna izq / der (99 = no hay)
+    UINT v[24] = { head, maxIdx, id, mouth, 99, 99, 99, 99, jawFull, jawHalf, lipTop, lipUp, 0, 0, 0, 0, 0, 0, 0, 0, 99, 99, 99, 99 };
     if (lids) for (int i = 0; i < 4; i++) v[4 + i] = lids[i] >= 0 ? (UINT)lids[i] : 99u;
     if (eyes) memcpy(v + 12, eyes, 32);
-    D3D11_BUFFER_DESC d{}; d.ByteWidth = 80; d.Usage = D3D11_USAGE_IMMUTABLE; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    if (mus) for (int i = 0; i < 4; i++) v[20 + i] = mus[i] >= 0 ? (UINT)mus[i] : 99u;
+    D3D11_BUFFER_DESC d{}; d.ByteWidth = 96; d.Usage = D3D11_USAGE_IMMUTABLE; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     D3D11_SUBRESOURCE_DATA s{}; s.pSysMem = v;
     ID3D11Buffer* b = nullptr; return SUCCEEDED(g_dev.dev->CreateBuffer(&d, &s, &b)) ? b : nullptr;
 }
@@ -257,6 +259,9 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
         // (01/11) labio de arriba (fila 347.z, Agustin: "los labios superiores no tienen mucho movimiento"): skf_lip_t_* y
         // skf_lip_volume (centro y 1.6325..1.645, |x| < 0.03, z > 0.14)
         UINT jawFull = 0, jawHalf = 0, lipTop = 99, lipUp = 0;
+        // (01/11 i) musculos virtuales (pes_expr.hlsli PesMuscleApply, fila 348): comisuras (skf_lip_s_*, las de "mitad") y cejas
+        // internas (skf_brow_i_*: centro y > 1.706, |x| 0.5..2.8 cm, z > 0.14, peso >= 0.6; la mas cercana al medio por lado)
+        int mus[4] = { -1, -1, -1, -1 };
         if (hd <= 31 && !thin) {
             int jb = -1;
             for (int b = 0; b <= mx; b++) {
@@ -268,9 +273,16 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
                 if (!mouth && fabsf(x) < 0.03f && y >= 1.6325f && y < 1.645f && z > 0.14f && wmax[b] >= 0.4f) lipUp |= 1u << b;
                 if (z < 0.07f || fabsf(x) > 0.05f) continue;
                 if (y >= 1.560f && y < 1.6275f) jawFull |= 1u << b;
-                else if (y >= 1.6275f && y < 1.6325f && fabsf(x) > 0.015f) jawHalf |= 1u << b;
+                else if (y >= 1.6275f && y < 1.6325f && fabsf(x) > 0.015f) { jawHalf |= 1u << b; const int sd = x > 0 ? 0 : 1; if (mus[sd] < 0 || all[b] > all[mus[sd]]) mus[sd] = b; }
             }
             if (jb >= 0) { jawFull |= 1u << jb; jawHalf &= ~(1u << jb); }
+            if (!mouth) for (int b = 0; b <= mx; b++) {
+                if (b == hd || all[b] <= 0.5f || wmax[b] < 0.6f) continue;
+                const float x = cx[b] / all[b], y = cy[b] / all[b], z = cz[b] / all[b];
+                if (y <= 1.706f || fabsf(x) < 0.005f || fabsf(x) > 0.028f || z < 0.14f) continue;
+                const int sd = 2 + (x > 0 ? 0 : 1);
+                if (mus[sd] < 0 || fabsf(x) < fabsf(cx[mus[sd]] / all[mus[sd]])) mus[sd] = b;
+            }
             // (01/11 g) el medio de los labios: el arranque de 6637155 dejo skf_lip_b_c (paleta 28 de 7073 v) fuera de la mascara
             // (su centro cae a la altura de la comisura, no debajo). Entre los huesos del medio (|x| < 8 mm, z > 0.14, y 1.615..1.645,
             // peso >= 0.5) el mas bajo es el labio de abajo (mandibula) y el mas alto el de arriba.
@@ -302,14 +314,14 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
                 if (n >= 20) { for (int k = 0; k < 3; k++) m->hc[k] = (float)(c[k] / n); m->hcOk = true; break; }
             }
         }
-        m->cb = MakeCB((UINT)m->head, (UINT)mx, (UINT)m->id, eye ? 2u : (mouth ? 1u : 0u), lids, jawFull, jawHalf, lipTop, lipUp, eye ? eyes : nullptr);
+        m->cb = MakeCB((UINT)m->head, (UINT)mx, (UINT)m->id, eye ? 2u : (mouth ? 1u : 0u), lids, jawFull, jawHalf, lipTop, lipUp, eye ? eyes : nullptr, mus);
         ReleaseIA(m);
         if (!m->cb) { m->state = 4; m->why = "sin cbuffer"; s_hist[3]++; return; }
         m->state = 3; s_hist[m->head <= 1 ? m->head : m->head > 31 ? 3 : 2]++;
         static int n = 0;
         if (n++ < 80) {   // uso de cada hueso de la paleta (peso total / peso en la parte alta) para comparar con face_rig.py
-            char l[1400]; int k = snprintf(l, sizeof l, "expresiones: malla de cara %d (%u indices, %u vertices, alto %.3f..%.3f m): hueso maximo %d -> cabeza en la paleta %d%s, parpados %d %d / %d %d, boca abajo %08X mitad %08X labio %u arriba %08X%s |",
-                                           m->id, m->count, m->nv, ylo, yhi, mx, m->head, m->head > 31 ? " (no es cara)" : thin ? " (fina: por vertices)" : mouth ? " (boca: lengua)" : "", lids[0], lids[1], lids[2], lids[3], jawFull, jawHalf, lipTop, lipUp, eye ? " (OJO)" : "");
+            char l[1400]; int k = snprintf(l, sizeof l, "expresiones: malla de cara %d (%u indices, %u vertices, alto %.3f..%.3f m): hueso maximo %d -> cabeza en la paleta %d%s, parpados %d %d / %d %d, boca abajo %08X mitad %08X labio %u arriba %08X comisuras %d %d cejas %d %d%s |",
+                                           m->id, m->count, m->nv, ylo, yhi, mx, m->head, m->head > 31 ? " (no es cara)" : thin ? " (fina: por vertices)" : mouth ? " (boca: lengua)" : "", lids[0], lids[1], lids[2], lids[3], jawFull, jawHalf, lipTop, lipUp, mus[0], mus[1], mus[2], mus[3], eye ? " (OJO)" : "");
             if (eye) k += snprintf(l + k, sizeof l - k, " ojos: izq (%.4f %.4f %.4f) r %.4f, der (%.4f %.4f %.4f) r %.4f", eyes[0], eyes[1], eyes[2], eyes[3], eyes[4], eyes[5], eyes[6], eyes[7]);
             for (int b = 0; b <= mx && k < (int)sizeof l - 24; b++) if (all[b] > 0) k += snprintf(l + k, sizeof l - k, " %d:%.0f/%.0f", b, all[b], top[b]);
             Log("%s", l);
