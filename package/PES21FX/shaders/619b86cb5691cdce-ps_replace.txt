@@ -812,8 +812,10 @@ void main(
         }
         float micro = saturate(abs(ndlM) + aper - 1.0);
         float litSide = saturate(ndlM * 4.0);                         // solo donde pega el sol
-        float msK = lerp(1.0, micro, saturate(MS.x) * litSide);
-        diffC *= msK; specC *= lerp(1.0, msK, 0.5);
+        // (01/11) piso 0.4: un pliegue nunca queda negro, y en la piel el brillo baja igual que la difusa (antes quedaba el reflejo
+        // azulado del cielo sobre poca difusa rojiza: nudillos y dedos violetas)
+        float msK = lerp(1.0, max(micro, 0.4), saturate(MS.x) * litSide);
+        diffC *= msK; specC *= skinC ? msK : lerp(1.0, msK, 0.5);
       } }
     r0.xyw = diffC * aoD + specC * aoS;
   } else {
