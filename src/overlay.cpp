@@ -13,6 +13,7 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg
 namespace fx {
 
 std::atomic<bool> g_menuOpen{false};
+std::atomic<bool> g_menuTyping{false};   // (31/10) campo de texto del menu activo (freecam.cpp)
 static bool s_init = false;
 static HWND s_hwnd = nullptr;
 static WNDPROC s_oldProc = nullptr;
@@ -698,7 +699,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
     // (24/10 b) el aviso de abajo ya no hace falta (la musculatura tiene sus paginas y L1 / R1 en el menu del juego) y tapaba
     // la barra de botones
     const bool hint = false;
-    if (!g_menuOpen) g_blockGameKeys = false;
+    if (!g_menuOpen) { g_blockGameKeys = FreeCamBlocksKeys(); g_menuTyping = false; }   // (31/10) con la camara libre el juego tampoco ve el teclado
     if (!g_menuOpen && !g_inspectOn && !hint) return;
     if (!s_rtv) {
         ID3D11Texture2D* bb = nullptr;
@@ -715,7 +716,8 @@ void OverlayPresent(IDXGISwapChain* sc) {
     else if (hint) DrawPhysiqueHint();
     InspectDrawOverlay();
     // (31/10) teclas del juego: con 1 se bloquean solo mientras hay un campo de texto activo (buscador, nombres de presets)
-    g_blockGameKeys = g_menuOpen && (g_cfg.blockKeys == 2 || (g_cfg.blockKeys == 1 && ImGui::GetIO().WantTextInput));
+    g_menuTyping = g_menuOpen && ImGui::GetIO().WantTextInput;
+    g_blockGameKeys = (g_menuOpen && (g_cfg.blockKeys == 2 || (g_cfg.blockKeys == 1 && ImGui::GetIO().WantTextInput))) || FreeCamBlocksKeys();
     if (!s_btnPending.empty()) {
         std::string a = s_btnPending; s_btnPending.clear();
         if (a == "hair_export") { std::string st; FaceGenExportHair(st); s_status = st; }
