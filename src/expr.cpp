@@ -169,28 +169,34 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
             for (int k = 0; k < 4; k++) if (W[k] > 0.004f && (int)I[k] > mx) mx = (int)I[k];
         }
         // sk_head: el hueso con mas peso en el 25 % mas alto de la malla; uso total por hueso para el log
-        float top[32] = {}, all[32] = {};
+        float top[32] = {}, all[32] = {}; int cnt[32] = {};
         if (ok && mx >= 0 && mx <= 31) {
             const float cut = yhi - 0.25f * (yhi - ylo);
             for (UINT v = 0; v < m->nv; v++) for (int k = 0; k < 4; k++) {
                 const uint32_t b = iv[(size_t)v * 4 + k]; const float w = wv[(size_t)v * 4 + k];
                 if (b > 31 || w <= 0.004f) continue;
-                all[b] += w; if (ys[v] >= cut) top[b] += w;
+                all[b] += w; cnt[b]++; if (ys[v] >= cut) top[b] += w;
             }
         }
         for (int s = 0; s < 4; s++) if (mapped[s]) imm->Unmap(m->stVB[s], 0);
         if (!ok) { Reject(m, "formato de posicion, huesos o pesos desconocido"); return; }
         if (mx < 0 || mx > 31) { Reject(m, "indices de hueso fuera de la paleta de 32"); return; }
-        int hd = 0; for (int b = 1; b <= mx; b++) if (top[b] > top[hd]) hd = b;
+        // (01/11) pestanas / parpados (mallas de 1-2 cm de alto): arriba gana el parpado superior (peso 1); ahi sk_head es el
+        // hueso que esta en MAS vertices (face_rig: 191 / 125 / 114 / 91 contra 139 / 61 / 57 / 79 del parpado)
+        const bool thin = (yhi - ylo) < 0.03f;
+        int hd = 0;
+        for (int b = 1; b <= mx; b++) if (thin ? cnt[b] > cnt[hd] : top[b] > top[hd]) hd = b;
+        // (01/11) una pierna (1440 v, 0.05..0.54 m) tambien se dibuja con faab87ee: lo que no llega a la altura de la cara no es cara
+        if (yhi < 1.40f) hd = 99;
         m->maxIdx = mx; m->head = hd;
         m->cb = MakeCB((UINT)m->head, (UINT)mx, (UINT)m->id);
         ReleaseIA(m);
         if (!m->cb) { m->state = 4; m->why = "sin cbuffer"; s_hist[3]++; return; }
-        m->state = 3; s_hist[m->head <= 1 ? m->head : 2]++;
+        m->state = 3; s_hist[m->head <= 1 ? m->head : m->head > 31 ? 3 : 2]++;
         static int n = 0;
         if (n++ < 80) {   // uso de cada hueso de la paleta (peso total / peso en la parte alta) para comparar con face_rig.py
-            char l[1400]; int k = snprintf(l, sizeof l, "expresiones: malla de cara %d (%u indices, %u vertices, alto %.3f..%.3f m): hueso maximo %d -> cabeza en la paleta %d |",
-                                           m->id, m->count, m->nv, ylo, yhi, mx, m->head);
+            char l[1400]; int k = snprintf(l, sizeof l, "expresiones: malla de cara %d (%u indices, %u vertices, alto %.3f..%.3f m): hueso maximo %d -> cabeza en la paleta %d%s |",
+                                           m->id, m->count, m->nv, ylo, yhi, mx, m->head, m->head > 31 ? " (no es cara)" : thin ? " (fina: por vertices)" : "");
             for (int b = 0; b <= mx && k < (int)sizeof l - 24; b++) if (all[b] > 0) k += snprintf(l + k, sizeof l - k, " %d:%.0f/%.0f", b, all[b], top[b]);
             Log("%s", l);
         }
@@ -262,7 +268,7 @@ void ExprPresent() {
         frames = 0;
         const int b = s_binds.exchange(0), bn = s_bindsNone.exchange(0);
         if (b || bn) { std::lock_guard<std::mutex> lk(s_mx);
-            Log("expresiones: %d mallas de cara (cabeza en 0: %d, en 1: %d, en otro: %d, descartadas %d); dibujos con dato %d, sin dato %d; ganancia %.2f",
+            Log("expresiones: %d mallas de cara (cabeza en 0: %d, en 1: %d, en otro: %d, descartadas o no cara %d); dibujos con dato %d, sin dato %d; ganancia %.2f",
                 (int)s_meshes.size(), s_hist[0], s_hist[1], s_hist[2], s_hist[3], b, bn, g_cfg.live[340][1]); }
     }
 }
