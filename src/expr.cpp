@@ -44,6 +44,7 @@ std::vector<FaceMesh*> s_pending;
 ID3D11Buffer* s_none = nullptr;   // cabeza 99: el VS no toca la malla (sin dato o descartada)
 int s_nextId = 1;
 std::atomic<int> s_binds{0}, s_bindsNone{0};
+std::atomic<int> s_bindsWait{0}, s_bindsDisc{0}, s_bindsNew{0};   // (01/11) de los 'sin dato': malla en lectura / descartada o no cara / recien vista
 int s_hist[4] = {};   // mallas listas con cabeza 0 / 1 / 2..31 / descartadas
 
 uint64_t Fnv(uint64_t h, uint64_t v) { for (int i = 0; i < 8; i++) { h ^= (v >> (8 * i)) & 255; h *= 0x100000001b3ULL; } return h; }
@@ -358,6 +359,7 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
     if (it != s_meshes.end()) {
         rel(); FaceMesh* m = it->second;
         if (m->state == 3 && m->cb) { s_binds++; if (headCentroid && m->hcOk && m->nv >= 300) { *headCentroid = m->hc; if (headIdx) *headIdx = m->head; } return m->cb; }
+        if (m->state == 4) s_bindsDisc++; else s_bindsWait++;
         s_bindsNone++; return s_none;
     }
     if (s_meshes.size() >= 2048) {   // partido largo / muchas caras: se empieza de nuevo (las cuentas y buffers cambian entre partidos)
@@ -388,7 +390,7 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
     rel();
     s_meshes[key] = m;
     if (m->state == 0) s_pending.push_back(m); else { ReleaseIA(m); s_hist[3]++; }
-    s_bindsNone++; return s_none;
+    s_bindsNew++; s_bindsNone++; return s_none;
 }
 
 // ---- (1/11) posicion de la cabeza en el mundo para "seguir la cara" (freecam.cpp) ----
@@ -456,9 +458,10 @@ void ExprPresent() {
     if (++frames >= 3600) {
         frames = 0;
         const int b = s_binds.exchange(0), bn = s_bindsNone.exchange(0);
+        const int bw = s_bindsWait.exchange(0), bd = s_bindsDisc.exchange(0), bnew = s_bindsNew.exchange(0);
         if (b || bn) { std::lock_guard<std::mutex> lk(s_mx);
-            Log("expresiones: %d mallas de cara (cabeza en 0: %d, en 1: %d, en otro: %d, descartadas o no cara %d); dibujos con dato %d, sin dato %d; ganancia %.2f",
-                (int)s_meshes.size(), s_hist[0], s_hist[1], s_hist[2], s_hist[3], b, bn, g_cfg.live[340][1]); }
+            Log("expresiones: %d mallas de cara (cabeza en 0: %d, en 1: %d, en otro: %d, descartadas o no cara %d); dibujos con dato %d, sin dato %d (en lectura %d, descartadas o no cara %d, nuevas %d, apagado %d); ganancia %.2f",
+                (int)s_meshes.size(), s_hist[0], s_hist[1], s_hist[2], s_hist[3], b, bn, bw, bd, bnew, bn - bw - bd - bnew, g_cfg.live[340][1]); }
     }
 }
 
