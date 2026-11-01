@@ -688,6 +688,36 @@ static void DrawPhysiqueHint() {
     ImGui::End();
 }
 
+// (1/11) aviso en pantalla de la camara libre / camara lenta (pedido de Agustin: saber cuando estan activas y ver las teclas).
+// Abajo a la derecha, al lado del icono del analogico del editor; no recibe entrada.
+static void DrawCamaraHud(bool freeCam, float slow) {
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x - 28, vp->Pos.y + vp->Size.y - 28), ImGuiCond_Always, ImVec2(1, 1));
+    ImGui::SetNextWindowBgAlpha(0.72f);
+    ImGui::Begin("##camara_aviso", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_AlwaysAutoResize |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
+    const ImVec4 gold(0.85f, 0.68f, 0.28f, 1);
+    if (freeCam) {
+        if (s_fontBold) ImGui::PushFont(s_fontBold);
+        ImGui::TextColored(gold, "%s", TRS("CAMARA LIBRE"));
+        if (s_fontBold) ImGui::PopFont();
+        ImGui::SameLine(); ImGui::TextDisabled("  zoom x%.2f   %.1f m/s", g_cfg.live[344][2], g_cfg.live[344][1]);
+        ImGui::TextUnformatted(TRS("W / S adelante y atras   A / D izquierda y derecha   Q / E bajar y subir"));
+        ImGui::TextUnformatted(TRS("Flechas o mouse (boton derecho): girar   Re Pag / Av Pag: zoom   Shift: rapido   Ctrl: lento"));
+        ImGui::TextUnformatted(TRS("Inicio: volver a la camara del juego   Alt+Shift+V: apagar"));
+    }
+    if (slow != 1.0f) {
+        if (freeCam) ImGui::Separator();
+        if (s_fontBold) ImGui::PushFont(s_fontBold);
+        ImGui::TextColored(gold, "%s", TRS("CAMARA LENTA"));
+        if (s_fontBold) ImGui::PopFont();
+        ImGui::SameLine(); ImGui::TextDisabled("  x%.2f", slow);
+        ImGui::TextUnformatted(TRS("Alt+Shift+L: 1/2, 1/4, 1/10, normal   (Insert > Camara)"));
+        if (g_cfg.live[343][3] <= 0.0f && g_cfg.live[343][2] <= 0.5f) ImGui::TextDisabled("%s", TRS("(el visor no esta corriendo: entra al modo editar)"));
+    }
+    ImGui::End();
+}
+
 void OverlayPresent(IDXGISwapChain* sc) {
     if (!g_dev.dev || !g_cfg.optOverlay) return;
     if (!s_init) Init(sc);
@@ -700,7 +730,9 @@ void OverlayPresent(IDXGISwapChain* sc) {
     // la barra de botones
     const bool hint = false;
     if (!g_menuOpen) { g_blockGameKeys = FreeCamBlocksKeys(); g_menuTyping = false; }   // (31/10) con la camara libre el juego tampoco ve el teclado
-    if (!g_menuOpen && !g_inspectOn && !hint) return;
+    const bool camFree = FreeCamActive(); const float camSlow = TiempoFactor();   // (1/11) aviso en pantalla
+    const bool camHud = !g_menuOpen && (camFree || camSlow != 1.0f);
+    if (!g_menuOpen && !g_inspectOn && !hint && !camHud) return;
     if (!s_rtv) {
         ID3D11Texture2D* bb = nullptr;
         if (FAILED(sc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb)) || !bb) return;
@@ -714,6 +746,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
     ImGui::GetIO().MouseDrawCursor = g_menuOpen.load();
     if (g_menuOpen) { if (fis && !s_fullMenu) DrawPhysiqueWindow(); else DrawMenu(); }
     else if (hint) DrawPhysiqueHint();
+    if (camHud) DrawCamaraHud(camFree, camSlow);
     InspectDrawOverlay();
     // (31/10) teclas del juego: con 1 se bloquean solo mientras hay un campo de texto activo (buscador, nombres de presets)
     g_menuTyping = g_menuOpen && ImGui::GetIO().WantTextInput;

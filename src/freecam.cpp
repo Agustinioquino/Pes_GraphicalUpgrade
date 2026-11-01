@@ -98,7 +98,8 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     s_pitch = std::clamp(s_pitch, -1.55f, 1.55f);
     const float cp = cosf(s_pitch), sp = sinf(s_pitch);
     float f[3] = { cp * sinf(s_yaw), sp, cp * cosf(s_yaw) };
-    float r[3] = { f[2], 0.0f, -f[0] }; float rl = Len3(r); if (rl > 1e-5f) { r[0] /= rl; r[2] /= rl; } else { r[0] = 1; r[2] = 0; }
+    // derecha: el mundo del juego es diestro (mirando a -z la derecha es +x); Agustin 1/11: con la version anterior A / D iban al reves
+    float r[3] = { -f[2], 0.0f, f[0] }; float rl = Len3(r); if (rl > 1e-5f) { r[0] /= rl; r[2] /= rl; } else { r[0] = 1; r[2] = 0; }
     if (front && !typing) {
         float mv[3] = {};
         if (Key('W')) { mv[0] += f[0]; mv[1] += f[1]; mv[2] += f[2]; }
@@ -147,9 +148,18 @@ typedef void (*SetCamFn)(void* rt, unsigned char* cam);
 static SetCamFn o_setCam = nullptr;
 static bool s_tried = false, s_okEditor = false;
 
+// (1/11) al apagar la camara libre el visor no recompone su camara (solo la reescribe cuando hay entrada del pad), asi que se
+// guarda el CameraImpl tal como estaba al prender y se restaura una vez al apagar (pedido de Agustin: volver a la posicion original)
+static unsigned char s_orig[0x50]; static bool s_haveOrig = false, s_restore = false;
+
 static void hk_SetCam(void* rt, unsigned char* cam) {
     s_editorCalls++;
+    if (cam && !FreeCamActive() && s_restore) {
+        if (s_haveOrig) { memcpy(cam + 0x10, s_orig, sizeof s_orig); Log("camara libre: camara del visor restaurada a la original"); }
+        s_restore = false; s_haveOrig = false;
+    }
     if (cam && FreeCamActive()) {
+        if (!s_on) { memcpy(s_orig, cam + 0x10, sizeof s_orig); s_haveOrig = true; s_restore = true; }
         float* pos = (float*)(cam + 0x10); float* tgt = (float*)(cam + 0x1c); float* up = (float*)(cam + 0x28); float* fov = (float*)(cam + 0x40);
         int proj; memcpy(&proj, cam + 0x3c, 4);
         float extra[3]; memcpy(&extra[0], cam + 0x34, 4); memcpy(&extra[1], cam + 0x38, 4); memcpy(&extra[2], cam + 0x44, 4);
