@@ -237,6 +237,24 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
                 else if (y >= 1.6275f && y < 1.6325f && fabsf(x) > 0.015f) jawHalf |= 1u << b;
             }
             if (jb >= 0) { jawFull |= 1u << jb; jawHalf &= ~(1u << jb); }
+            // (01/11 g) el medio de los labios: el arranque de 6637155 dejo skf_lip_b_c (paleta 28 de 7073 v) fuera de la mascara
+            // (su centro cae a la altura de la comisura, no debajo). Entre los huesos del medio (|x| < 8 mm, z > 0.14, y 1.615..1.645,
+            // peso >= 0.5) el mas bajo es el labio de abajo (mandibula) y el mas alto el de arriba.
+            if (!mouth) {
+                int lo = -1, hi = -1;
+                for (int b = 0; b <= mx; b++) {
+                    if (b == hd || all[b] <= 0.5f || wmax[b] < 0.5f) continue;
+                    const float x = cx[b] / all[b], y = cy[b] / all[b], z = cz[b] / all[b];
+                    if (fabsf(x) >= 0.008f || z <= 0.14f || y < 1.615f || y >= 1.645f) continue;
+                    if (lo < 0 || y < cy[lo] / all[lo]) lo = b;
+                    if (hi < 0 || y > cy[hi] / all[hi]) hi = b;
+                }
+                if (lo >= 0 && hi >= 0 && lo != hi && cy[hi] / all[hi] - cy[lo] / all[lo] > 0.002f) {
+                    jawFull |= 1u << lo; jawHalf &= ~(1u << lo); lipUp &= ~(1u << lo);
+                    if (lipTop == (UINT)lo || lipTop > 31) lipTop = (UINT)hi;
+                    lipUp |= 1u << hi; jawFull &= ~(1u << hi); jawHalf &= ~(1u << hi);
+                }
+            }
         }
         m->maxIdx = mx; m->head = hd;
         {   // (1/11) centro de la cara: promedio de los vertices que pesan >= 0.9 en sk_head (si no hay, >= 0.5; si no, el 25 % de arriba)
