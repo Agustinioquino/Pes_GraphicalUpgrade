@@ -217,6 +217,17 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
   if (L.x > 31 && L.y > 31) return;
   if (rest.y < 1.670 || rest.y > 1.725 || rest.z < 0.110 || abs(rest.x) > 0.060) return;
   uint head = g_pesExprMesh.x;
+  // (01/11 l, Agustin: "el parpadeo en una animacion facial no deberia ocurrir") si el juego esta animando la cara (la comisura
+  // o la ceja interna se movieron mas de 1.5 mm respecto de la cabeza) el parpadeo del mod se apaga (la animacion trae el suyo)
+  float anim = 0.0;
+  if (head <= 31) {
+    float4 Pc = float4(0.0236, 1.6297, 0.1615, 1.0), Pb = float4(0.0157, 1.7129, 0.1718, 1.0);
+    uint cj = g_pesExprMus.x, bj = g_pesExprMus.z;
+    if (cj <= 31) anim = max(anim, length(mul(Pc, g_vsBone.m_boneMatrices[cj]) - mul(Pc, g_vsBone.m_boneMatrices[head])));
+    if (bj <= 31) anim = max(anim, length(mul(Pb, g_vsBone.m_boneMatrices[bj]) - mul(Pb, g_vsBone.m_boneMatrices[head])));
+    amt *= 1.0 - smoothstep(0.0008, 0.0015, anim);
+    if (amt <= 0.0) return;
+  }
   // semilla por jugador (la misma cuenta que el tono de piel al final del VS)
   bool sk = g_vsObject.m_useWeightCount.x != 0;
   float3 b0 = float3(g_vsBone.m_boneMatrices[0]._m30, g_vsBone.m_boneMatrices[0]._m31, g_vsBone.m_boneMatrices[0]._m32);

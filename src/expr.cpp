@@ -165,7 +165,7 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
         }
         int mx = -1; bool ok = true;
         std::vector<float> ys(m->nv), xs(m->nv), zs(m->nv), ps((size_t)m->nv * 3); std::vector<uint32_t> iv((size_t)m->nv * 4); std::vector<float> wv((size_t)m->nv * 4);
-        float ylo = 1e9f, yhi = -1e9f;
+        float ylo = 1e9f, yhi = -1e9f, xlo = 1e9f, xhi = -1e9f;
         for (UINT v = 0; v < m->nv && ok; v++) {
             float P[3]; uint32_t* I = &iv[(size_t)v * 4]; float* W = &wv[(size_t)v * 4];
             const uint8_t* pp = (const uint8_t*)mp[m->pos.slot].pData + (size_t)v * m->stride[m->pos.slot] + m->pos.off;
@@ -173,7 +173,7 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
             const uint8_t* pw = (const uint8_t*)mp[m->wgt.slot].pData + (size_t)v * m->stride[m->wgt.slot] + m->wgt.off;
             ok = ReadPos(pp, m->pos.fmt, P) && ReadIdx(pi, m->idx.fmt, I) && ReadW(pw, m->wgt.fmt, W);
             if (!ok) break;
-            xs[v] = P[0]; ys[v] = P[1]; zs[v] = P[2]; ylo = (std::min)(ylo, P[1]); yhi = (std::max)(yhi, P[1]); memcpy(&ps[(size_t)v * 3], P, 12);
+            xs[v] = P[0]; ys[v] = P[1]; zs[v] = P[2]; ylo = (std::min)(ylo, P[1]); yhi = (std::max)(yhi, P[1]); xlo = (std::min)(xlo, P[0]); xhi = (std::max)(xhi, P[0]); memcpy(&ps[(size_t)v * 3], P, 12);
             for (int k = 0; k < 4; k++) if (W[k] > 0.004f && (int)I[k] > mx) mx = (int)I[k];
         }
         // sk_head: el hueso con mas peso en el 25 % mas alto de la malla; uso total por hueso para el log
@@ -305,6 +305,12 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
                 }
             }
         }
+        // (01/11 l, Agustin: "algunas caras se cortan en la nariz y cerca de la barbilla, en caras convertidas") los efectos que
+        // mueven la piel por zona (abrir la boca, labio de arriba, nariz, musculos) solo valen en una malla que es la cara ENTERA
+        // (alto >= 15 cm, ancho >= 12 cm, >= 1500 vertices): en una cara partida en piezas (nariz o menton aparte) cada pieza
+        // tendria otros huesos marcados y se abre un corte entre ellas. La boca 3D (lengua) y el parpadeo no entran aqui.
+        const bool whole = !mouth && !eye && (yhi - ylo) >= 0.15f && (xhi - xlo) >= 0.12f && m->nv >= 1500;
+        if (!whole) { jawFull = 0; jawHalf = 0; lipTop = 99; lipUp = 0; for (int i = 0; i < 4; i++) mus[i] = -1; }
         m->maxIdx = mx; m->head = hd;
         {   // (1/11) centro de la cara: promedio de los vertices que pesan >= 0.9 en sk_head (si no hay, >= 0.5; si no, el 25 % de arriba)
             for (float cut : { 0.9f, 0.5f, -1.0f }) {
@@ -323,8 +329,8 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
         m->state = 3; s_hist[m->head <= 1 ? m->head : m->head > 31 ? 3 : 2]++;
         static int n = 0;
         if (n++ < 80) {   // uso de cada hueso de la paleta (peso total / peso en la parte alta) para comparar con face_rig.py
-            char l[1400]; int k = snprintf(l, sizeof l, "expresiones: malla de cara %d (%u indices, %u vertices, alto %.3f..%.3f m): hueso maximo %d -> cabeza en la paleta %d%s, parpados %d %d / %d %d, boca abajo %08X mitad %08X labio %u arriba %08X comisuras %d %d cejas %d %d%s |",
-                                           m->id, m->count, m->nv, ylo, yhi, mx, m->head, m->head > 31 ? " (no es cara)" : thin ? " (fina: por vertices)" : mouth ? " (boca: lengua)" : "", lids[0], lids[1], lids[2], lids[3], jawFull, jawHalf, lipTop, lipUp, mus[0], mus[1], mus[2], mus[3], eye ? " (OJO)" : "");
+            char l[1400]; int k = snprintf(l, sizeof l, "expresiones: malla de cara %d (%u indices, %u vertices, alto %.3f..%.3f m): hueso maximo %d -> cabeza en la paleta %d%s, parpados %d %d / %d %d, boca abajo %08X mitad %08X labio %u arriba %08X comisuras %d %d cejas %d %d%s%s |",
+                                           m->id, m->count, m->nv, ylo, yhi, mx, m->head, m->head > 31 ? " (no es cara)" : thin ? " (fina: por vertices)" : mouth ? " (boca: lengua)" : "", lids[0], lids[1], lids[2], lids[3], jawFull, jawHalf, lipTop, lipUp, mus[0], mus[1], mus[2], mus[3], eye ? " (OJO)" : "", (!whole && !mouth && !eye && hd <= 31) ? " (pieza: sin boca/nariz/musculos)" : "");
             if (eye) k += snprintf(l + k, sizeof l - k, " ojos: izq (%.4f %.4f %.4f) r %.4f, der (%.4f %.4f %.4f) r %.4f", eyes[0], eyes[1], eyes[2], eyes[3], eyes[4], eyes[5], eyes[6], eyes[7]);
             for (int b = 0; b <= mx && k < (int)sizeof l - 24; b++) if (all[b] > 0) k += snprintf(l + k, sizeof l - k, " %d:%.0f/%.0f", b, all[b], top[b]);
             Log("%s", l);
