@@ -83,7 +83,7 @@ def rows_layout(teeth512):
                      'x0': xs[ok][0], 'x1': xs[ok][-1], 'down': down})
     return rows
 
-def tooth_fields(rows, N):
+def tooth_fields(rows, N, vmin=-0.15):
     """campos por diente a resolucion N: u (0..1 a lo ancho del diente), v (0 encia .. 1 incisal), id de diente, ancho"""
     s = N / 512.0
     U = np.full((N, N), -1.0, np.float32); V = np.full((N, N), -1.0, np.float32); W = np.zeros((N, N), np.float32)
@@ -95,7 +95,7 @@ def tooth_fields(rows, N):
         i = np.clip(np.searchsorted(pk, xs) - 1, 0, len(pk) - 2)
         u = (xs - pk[i]) / (pk[i + 1] - pk[i]); w = (pk[i + 1] - pk[i]) * s
         v = (yy - g[None, :]) / (inc - g)[None, :]
-        inside = (v >= -0.15) & (v <= 1.1) & (xs >= r['x0'] - 2)[None, :] & (xs <= r['x1'] + 2)[None, :]
+        inside = (v >= vmin) & (v <= 1.1) & (xs >= r['x0'] - 2)[None, :] & (xs <= r['x1'] + 2)[None, :]
         U = np.where(inside, np.broadcast_to(u[None, :], (N, N)), U)
         V = np.where(inside, v, V)
         W = np.where(inside, np.broadcast_to(w[None, :], (N, N)), W)
@@ -124,6 +124,45 @@ def gum_warp(img, rows, gum=GUM):
     xx = np.repeat(np.arange(n, dtype=np.float64)[None], n, 0)
     out = np.stack([ndi.map_coordinates(img[..., c], [src, xx], order=1, mode='nearest') for c in range(img.shape[2])], -1)
     return out.astype(img.dtype)
+
+def clean_gum(bsm, nrm, rows, tissue0, gum=GUM):
+    """(01/11 d) margen de la encia limpio: gum_warp estira la encia pintada al doble (vetas verticales, 'pelo') y el borde
+    pintado de Konami es dentado (bloques del DXT de 512). En la franja [-1.6 gum, gum + papila] el color pasa a ser la encia
+    promediada (sin vetas) + punteado fino, y el borde encia/diente es una curva suave por diente: festoneado con la papila
+    bajando entre dientes, con el margen apenas mas oscuro. El diente pintado de abajo queda (la boca de Konami lo sigue usando);
+    la boca 3D usa solo el centro del diente pintado."""
+    N = bsm.shape[0]
+    U, V, W = tooth_fields(rows, N, vmin=-1.0)
+    ins = U >= 0
+    u = np.clip(U, 0, 1)
+    du = np.minimum(u, 1 - u)
+    pap = 0.30 * np.exp(-(du / 0.14) ** 2)                        # papila: baja entre dientes hacia el borde incisal
+    edge = gum + pap
+    # encia promediada con convolucion normalizada sobre los pixeles de encia (no mezcla color de diente)
+    rgb = bsm[..., :3]
+    wg = (ins & (V < gum - 0.02) & (V > -0.9)).astype(np.float32)
+    def blur(a, sg): return ndi.gaussian_filter(a, sg, mode='wrap')
+    num = np.stack([blur(rgb[..., c] * wg, (5, 14)) for c in range(3)], -1); den = blur(wg, (5, 14))[..., None]
+    base = num / np.maximum(den, 1e-4)
+    base = np.where(den > 0.02, base, rgb)
+    st = noise(N, 1.1, 21) * 0.022 + noise(N, 4.0, 22) * 0.02
+    gumc = base * (1 + st)[..., None]
+    # margen: 0..1 a lo largo de la franja, mas oscuro y un poco mas rojo pegado al diente
+    dm = np.clip((edge - V) / 0.10, 0, 1)
+    gumc = gumc * (1 - 0.10 * np.exp(-(dm / 0.35) ** 2))[..., None] * (1 + np.array([0.02, -0.03, -0.03], np.float32) * np.exp(-(dm / 0.35) ** 2)[..., None])
+    a_gum = sst(edge + 0.012, edge - 0.012, V) * sst(-1.6 * gum - 0.1, -1.6 * gum, V) * ins
+    a_gum = ndi.gaussian_filter(a_gum.astype(np.float32), 0.8)
+    out = bsm.copy()
+    out[..., :3] = rgb * (1 - a_gum[..., None]) + gumc * a_gum[..., None]
+    # normal: en la franja nueva, plana + el rodete del margen (la de Konami estirada tenia las mismas vetas)
+    nx = nrm[..., 3] * 2 - 1; ny = nrm[..., 1] * 2 - 1
+    h = 0.6 * np.exp(-(dm / 0.25) ** 2) + 0.05 * noise(N, 1.3, 23)
+    gy, gx = np.gradient(ndi.gaussian_filter(h, 1.0))
+    sc = 6.0
+    nx2 = nx * (1 - a_gum) + (-gx * sc) * a_gum; ny2 = ny * (1 - a_gum) + (-gy * sc) * a_gum
+    nz = np.sqrt(np.clip(1 - nx2 * nx2 - ny2 * ny2, 0.04, 1)); ln = np.sqrt(nx2 * nx2 + ny2 * ny2 + nz * nz)
+    nrm = nrm.copy(); nrm[..., 3] = (nx2 / ln) * 0.5 + 0.5; nrm[..., 1] = (ny2 / ln) * 0.5 + 0.5
+    return out, nrm
 
 def build(src, N=2048, NS=1024, log=print):
     bsm = load(os.path.join(src, 'oral_bsm.ftex')); nrm = load(os.path.join(src, 'oral_nrm.ftex'))
@@ -231,6 +270,7 @@ def build(src, N=2048, NS=1024, log=print):
              'color_konami': rgb[on > 0.5].mean(0).round(3).tolist(), 'brillo_dientes': round(float(S[..., 0][onS > 0.5].mean()), 3)}
     log('  ' + str(stats))
     bsm_o, nrm_o, S, Tr = (gum_warp(x, rows) for x in (bsm_o, nrm_o, S, Tr))
+    bsm_o, nrm_o = clean_gum(bsm_o, nrm_o, rows, tissue0)
     return {'bsm': bsm_o, 'nrm': nrm_o, 'srm': S, 'trm': Tr}, (B, on, line, crown, corner, cerv)
 
 def main():
