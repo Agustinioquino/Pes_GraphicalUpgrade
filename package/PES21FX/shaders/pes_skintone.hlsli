@@ -175,6 +175,43 @@ void PesTorsoInset(inout float3 mP, float3 mN, float3 rest, float3 org) {
   float3 n = mN * rsqrt(max(dot(mN, mN), 1e-8));
   mP -= n * (min(mm, 25.0) * 0.001);
 }
+// (01/11) fila 349: cuanto se achico la malla de TorsoBody en ese punto (build_torso_fpk.py 9 14 2 5: pecho 9, axila 14, brazo 2,
+// espalda 5 mm; panza debajo de 1.18 m intacta; cuello: z349 cm intactos desde el anillo y 3 cm de fundido, 0 = el fpk viejo de
+// 2.5 cm). rest / n = reposo y normal de la malla achicada. Ajustado contra el modelo: error medio 0.5 mm, maximo 3.4 mm.
+// Sirve para devolverle el tamano original al torso de los jugadores sin camiseta (x349) y para que la ropa choque con el torso
+// original aunque se dibuje el achicado (y349, pes_body_cs.hlsl).
+float PesShrinkSS(float x) { x = saturate(x); return x * x * (3.0 - 2.0 * x); }
+float PesTorsoShrinkMM(float3 rest, float3 n) {
+  float4 R = IniParams.Load(int2(349, 0));
+  float3 p = float3(abs(rest.x), rest.y, rest.z);
+  if (p.y < 1.18 || p.y > 1.75) return 0.0;
+  n *= rsqrt(max(dot(n, n), 1e-8));
+  float front = PesShrinkSS((n.z + 0.3) / 0.6);
+  float base = 5.0 + 4.0 * front;
+  float3 da = p - float3(0.2329, 1.3372, 0.0181);
+  float wx = exp(-0.5 * dot(da, da) / (0.025 * 0.025));
+  float belly = PesShrinkSS((p.y - 1.18) / 0.10);
+  // distancia al anillo del cuello del torso (radio y alto por angulo alrededor del cuello, ajustados a sus 48 vertices: 2.5 / 3.6 mm)
+  float2 w = float2(p.x, p.z - 0.035); float rho = max(length(w), 1e-5); float c1 = w.y / rho;
+  float c2 = 2.0 * c1 * c1 - 1.0, c3 = (4.0 * c1 * c1 - 3.0) * c1, c4 = 2.0 * c2 * c2 - 1.0;
+  float rr = 0.07043 - 0.00015 * c1 - 0.01002 * c2 + 0.00154 * c3 + 0.00102 * c4;
+  float yy = 1.53524 - 0.01994 * c1 - 0.01021 * c2 + 0.00642 * c3 - 0.00158 * c4;
+  float dn = length(float2(max(rho - rr, 0.0), min(p.y - yy, 0.0)));
+  float n0 = R.z > 0.5 ? R.z * 0.01 : 0.0, n1 = R.z > 0.5 ? n0 + 0.03 : 0.025;
+  float t = (base + (14.0 - base) * wx) * belly * PesShrinkSS((dn - n0) / (n1 - n0));
+  float sA = dot(p - float3(0.2631, 1.3704, 0.0195), float3(0.7611, -0.6432, -0.0839));   // a lo largo del brazo desde el hombro
+  if (sA > 0.0) { float own = 2.0 * (1.0 - PesShrinkSS((sA - 0.15) / 0.07)); t = lerp(t, own, PesShrinkSS(sA / 0.025)); }
+  return t;
+}
+// VS de la piel: jugador SIN camiseta (lista por jugador de la fila 320, cuerpo.cpp) -> el torso y el brazo alto vuelven al tamano original
+void PesTorsoRegrow(inout float3 mP, float3 mN, float3 rest, float3 org) {
+  float4 R = IniParams.Load(int2(349, 0));
+  if (R.w < 0.5 || R.x <= 0.0) return;
+  if (PesCharHasShirt(org) > 0.5) return;   // con camiseta, o sin lista: queda el achicado
+  float mm = PesTorsoShrinkMM(rest, mN) * saturate(R.x);
+  if (mm <= 0.0) return;
+  mP += mN * rsqrt(max(dot(mN, mN), 1e-8)) * (mm * 0.001);
+}
 // el VS del cuerpo la manda en la parte fraccionaria del codigo del jugador (o6.w = 1000 + i + 0.4 * torso)
 float PesSkinTorso(float code) { return saturate((code - round(code)) / 0.4); }
 // (24/10 e) medicion del color de la piel (variantes con PES_HL_ACC, solo en el menu Fisico): suma de albedo en punto fijo

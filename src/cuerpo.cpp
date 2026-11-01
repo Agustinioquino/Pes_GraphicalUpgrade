@@ -692,8 +692,10 @@ static void ReadMeasure(ID3D11DeviceContext* imm) {
 
 ID3D11ShaderResourceView* TorsoNeedSRV() { return s_ready.load(std::memory_order_acquire) ? s_mapSRV : nullptr; }
 // (31/10 b) en el dibujo de la camiseta (hooks.cpp): sus m_view y m_viewWorld al staging del cuadro; tipo = 0 / 1 / 2 (PS 7e64 / a41e / c7ae)
+// (01/11) la lista hace falta con el torso bajo la camiseta (w320) o con el torso original sin camiseta (fila 349)
+static bool ShirtListOn() { return g_cfg.live[320][3] > 0.5f || (g_cfg.live[349][3] > 0.5f && g_cfg.live[349][0] > 0.0f); }
 void TorsoShirtNote(ID3D11DeviceContext* c, int kind) {
-    if (!s_ready.load(std::memory_order_acquire) || g_cfg.live[320][3] < 0.5f) return;
+    if (!s_ready.load(std::memory_order_acquire) || !ShirtListOn()) return;
     const int w = s_shW.load(std::memory_order_relaxed); ID3D11Buffer* st = s_shStage[w]; if (!st) return;
     ID3D11DeviceContext1* c1 = nullptr;
     if (FAILED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) || !c1) return;
@@ -720,7 +722,7 @@ static void TorsoShirtPresent() {
     const int rd = (w + 1) % kShStages;
     const int pn = s_shN[rd];
     bool changed = false;
-    if (g_cfg.live[320][3] < 0.5f) { if (s_shList[1] != 0.0f) { s_shList[0] = s_shList[1] = 0.0f; changed = true; } s_shAge = 1000; }
+    if (!ShirtListOn()) { if (s_shList[1] != 0.0f) { s_shList[0] = s_shList[1] = 0.0f; changed = true; } s_shAge = 1000; }
     else if (pn >= 0) {
         D3D11_MAPPED_SUBRESOURCE m;
         HRESULT hr = g_dev.imm->Map(s_shStage[rd], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m);
