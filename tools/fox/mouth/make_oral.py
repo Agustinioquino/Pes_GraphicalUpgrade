@@ -147,23 +147,45 @@ def build(src, N=2048, NS=1024, log=print):
     marg = np.exp(-ndi.distance_transform_edt(teeth0 < 0.5).astype(np.float32) / 5.0) * (teeth0 < 0.5)
     out = out * (1 + tis * (0.025 * noise(N, 1.0, 4) - 0.07 * marg))[..., None]
     bsm_o = np.concatenate([np.clip(out, 0, 1), np.ones_like(out[..., :1])], -1)
-    # --- normal: la de Konami + corona redondeada + surcos + lobulos + periquimatias (DXT5nm: X en A, Y en G, R = 1)
+    # --- zonas fuera de las tiras (uv del atlas de Konami): lengua y paladar
+    gyy, gxx = (np.mgrid[0:N, 0:N] + 0.5) / N
+    tongue = sst(0.27, 0.31, gxx) * sst(0.74, 0.70, gxx) * sst(0.65, 0.69, gyy)
+    palate = sst(0.75, 0.78, gxx) * sst(0.97, 0.94, gxx) * sst(0.72, 0.75, gyy) * sst(0.97, 0.94, gyy)
+    # --- normal (01/11 v2): la de Konami suavizada (sin los bloques del DXT de 512) + relieve propio por zona
+    #     (DXT5nm: X en A, Y en G, R = 1). Con la boca 3D la forma del diente la da la malla: el mapa lleva el detalle.
     nx = Nn[..., 3] * 2 - 1; ny = Nn[..., 1] * 2 - 1
-    h = on * (2.0 * crown + 0.25 * lobes + 0.04 * perik - 1.5 * line - 1.0 * corner) + tis * 0.06 * noise(N, 1.0, 4)
-    h = ndi.gaussian_filter(h, 0.8)
+    nx = ndi.gaussian_filter(nx, 2.5); ny = ndi.gaussian_filter(ny, 2.5)
+    groove = (np.exp(-((u - 1 / 3) / 0.04) ** 2) + np.exp(-((u - 2 / 3) / 0.04) ** 2)) * sst(0.35, 0.8, v) * sst(30, 60, W)
+    stipple = noise(N, 1.3, 11); papil = noise(N, 0.7, 12); fung = sst(2.2, 3.0, noise(N, 2.0, 13))
+    margin_roll = np.exp(-(ndi.distance_transform_edt(teeth0 < 0.5).astype(np.float32) / 7.0) ** 2) * (teeth0 < 0.5) * (tis > 0.3)
+    rugae = np.sin(gyy * 2 * np.pi * 26 + 3.0 * noise(N, 18, 14)) * sst(0.80, 0.86, gyy)
+    tcen = np.exp(-((gxx - 0.505) / 0.012) ** 2)
+    h = on * (0.9 * crown + 0.35 * lobes + 0.022 * perik + 0.04 * fine - 0.18 * groove - 0.7 * line - 0.6 * corner)
+    h += tis * (1 - tongue) * (0.07 * stipple + 0.35 * margin_roll)
+    h += tongue * (0.10 * papil + 0.12 * fung - 0.45 * tcen)
+    h += palate * 0.18 * rugae
+    h = ndi.gaussian_filter(h, 0.7)
     gy, gx = np.gradient(h)
-    sc = 1.0 / max(np.percentile(np.abs(gx[on > 0.5]), 95), 1e-4) * 0.45
+    sc = 0.35 / max(np.percentile(np.abs(gx[on > 0.5]), 95), 1e-4)
     sx = np.sign(np.sum(nx * -gx * on) + 1e-9); sy = np.sign(np.sum(ny * -gy * on) + 1e-9)
     log('  signo de la normal: x %+d  y %+d' % (sx, sy))
     nx2 = nx + sx * -gx * sc; ny2 = ny + sy * -gy * sc
     nz = np.sqrt(np.clip(1 - nx * nx - ny * ny, 0.04, 1))
     ln = np.sqrt(nx2 * nx2 + ny2 * ny2 + nz * nz); nx2 /= ln; ny2 /= ln
     nrm_o = np.stack([np.ones_like(nx2), ny2 * 0.5 + 0.5, np.zeros_like(nx2), nx2 * 0.5 + 0.5], -1)
-    # --- brillo y translucidez a 1024: menos brillo en surcos y cuello, el lomo del esmalte un poco mas
+    # --- srm (01/11 v2) a 1024. Canales (shader 63fab773): x = especular del juego, que el G-buffer guarda como METALICIDAD
+    #     (o2.y) -> bajo en todo (el esmalte y la mucosa son dielectricos); y = rugosidad base (o2.x sale de y y de la varianza
+    #     de la normal); z = nitidez del reflejo del ambiente (Konami 0, queda).
     S = up(srm, NS); Tr = up(trm, NS)
     def down(a): return ndi.zoom(a, NS / N, order=1)
     onS = down(on); lineS = down(np.maximum(line, corner)); cervS = down(cerv); crownS = down(crown)
-    S[..., 0] *= 1 + onS * (-0.6 * lineS - 0.3 * cervS + 0.12 * (crownS - 0.6))
+    tisS = down(tis * (1 - tongue)); tgS = down(tongue); paS = down(palate)
+    rest = np.clip(1 - onS - tisS - tgS - paS, 0, 1)
+    stS = down(stipple); paS_n = down(papil); perS = down(perik)
+    spec = 0.08 * onS * (1 - 0.6 * lineS) + 0.06 * tisS + 0.05 * tgS + 0.05 * paS + S[..., 0] * 0.5 * rest
+    rough = (onS * (0.34 + 0.06 * cervS + 0.25 * lineS - 0.03 * (crownS - 0.6) + 0.015 * perS)
+             + tisS * (0.26 + 0.03 * stS) + tgS * (0.50 + 0.08 * paS_n) + paS * 0.36 + rest * S[..., 1])
+    S[..., 0] = np.clip(spec, 0, 1); S[..., 1] = np.clip(rough, 0, 1)
     Tr[..., :3] *= (1 - 0.5 * onS * lineS)[..., None]
     stats = {'dientes': float((on > 0.5).mean()), 'color_dientes': out[on > 0.5].mean(0).round(3).tolist(),
              'color_konami': rgb[on > 0.5].mean(0).round(3).tolist(), 'brillo_dientes': round(float(S[..., 0][onS > 0.5].mean()), 3)}

@@ -18,6 +18,9 @@ sys.path[:0] = [HERE, os.path.join(HERE, '..'), os.path.join(HERE, '..', '..')]
 import fmdl, mouth_fmdl, make_oral
 
 MM = 0.001
+# (01/11) mordida: con la boca en reposo la tira de arriba termina en y 1.631 y la de abajo en 1.6285 (2.5 mm de luz); los dientes
+# se alargan para que cierren: los de arriba bajan 2.4 mm por delante de los de abajo, que suben 0.8 mm (se solapan ~0.7 mm)
+EXT_UP, EXT_LO = 2.4 * 0.001, 0.8 * 0.001
 
 def comps(m):
     F = m['faces']; n = len(m['pos'])
@@ -119,7 +122,7 @@ def sst(e0, e1, x):
     t = np.clip((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t)
 
 # ---------------------------------------------------------------- un diente
-def tooth(M, uL, uR, vG, vI, kind, upper, na=22, nb=13):
+def tooth(M, uL, uR, vG, vI, kind, upper, na=22, nb=13, ext=0.0):
     """M: UVMap de la tira. uL/uR: limites en u; vG: v del cuello (encia); vI: v del borde incisal. kind: 'I' incisivo,
     'C' canino, 'P' premolar/molar. Devuelve P, UV, F"""
     gap = 0.035 * (uR - uL)
@@ -131,6 +134,9 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=22, nb=13):
     cx = np.sign(np.sin(th)) * np.abs(np.sin(th)) ** (2 / pw)   # a lo ancho (-1..1)
     cy = np.sign(np.cos(th)) * np.abs(np.cos(th)) ** (2 / pw)   # adelante (+1) / atras (-1)
     Ps = []; UVs = []
+    # (01/11) mordida (Agustin): el diente se alarga 'ext' metros mas alla del borde de la tira, en la direccion cuello -> borde
+    Pg, _ = M(np.array([[uc, vG]])); Pi, _ = M(np.array([[uc, vI]]))
+    dI = (Pi - Pg)[0]; dI /= max(np.linalg.norm(dI), 1e-9)
     for bi in b:
         # el borde incisal: canino en punta, incisivos con esquinas apenas redondeadas
         bmax = 1 - (0.30 * np.abs(cx) ** 1.3 if kind == 'C' else 0.10 * np.abs(cx) ** 4)
@@ -141,6 +147,7 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=22, nb=13):
         narrow = 0.80 + 0.20 * sst(-0.1, 0.45, bb)
         uu = uc + (uu - uc) * narrow
         Pf, Nf = M(np.stack([uu, v], 1))
+        Pf = Pf + dI[None, :] * (ext * sst(0.35, 1.0, bb))[:, None]
         # espesor (m): grueso en el cuello, fino en el borde
         T0 = {'I': 6.5, 'C': 7.5, 'P': 8.5}[kind] * MM; T1 = {'I': 0.9, 'C': 1.6, 'P': 5.0}[kind] * MM
         T = T0 + (T1 - T0) * sst(0.0, 1.0, bb) ** 0.8
@@ -233,7 +240,7 @@ def build(src_fmdl, texdir, log=print):
             vG, vI = gi / 512.0, ii / 512.0
             if up: vI = min(vI, 0.302)         # el frente de la tira de arriba termina en v 0.30 (despues dobla hacia atras)
             else: vI = max(vI, 0.505)
-            Pt, UVt, Ft = tooth(M, xl / 512.0, xr / 512.0, vG, vI, kind, up)
+            Pt, UVt, Ft = tooth(M, xl / 512.0, xr / 512.0, vG, vI, kind, up, ext=(EXT_UP if up else EXT_LO))
             wt = np.zeros((len(Pt), len(names))); wt[:, names.index('sk_head' if up else 'skf_jaw')] = 1
             parts.append((Pt, UVt, Ft, wt, 'diente')); nteeth += 1
     # ---- lengua: dos subdivisiones, surco central
