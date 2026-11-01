@@ -50,6 +50,10 @@ static bool EnsureTargets(UINT w, UINT h, DXGI_FORMAT fmt, DXGI_FORMAT fmtS) {
 
 // Devuelve el SRV difundido para t9 (o null si no se pudo). Se llama en BeforeDraw del shader de composicion.
 ID3D11ShaderResourceView* SSSSSpecSRV() { return s_specOut; }
+// (01/11) iconos de las luces del editor (overlay.cpp): cuando corrio la luz de prueba por ultima vez y el tamano del cuadro
+static std::atomic<double> s_edLightT{ -1.0 };
+double SSSSEditorLightAge() { double t = s_edLightT.load(); return t < 0 ? 1e9 : Now() - t; }
+void SSSSRenderSize(unsigned& w, unsigned& h) { w = s_w; h = s_h; }
 ID3D11ShaderResourceView* SSSSBeforeComposition(ID3D11DeviceContext* c) {
     s_specOut = nullptr;
     if (!g_dev.dev || g_cfg.live[95][3] < 0.5f) return nullptr;
@@ -96,7 +100,7 @@ ID3D11ShaderResourceView* SSSSBeforeComposition(ID3D11DeviceContext* c) {
     ID3D11ShaderResourceView* sv1[6] = { s_srv[0], depth, mat, nrm, in[8], nullptr }; c->PSSetShaderResources(0, 6, sv1);
     c->PSSetShader(s_psV, nullptr, 0); c->Draw(3, 0);
     c->PSSetShaderResources(0, 6, nulls);
-    if (editorLight) s_specOut = s_srv[2];
+    if (editorLight) { s_specOut = s_srv[2]; s_edLightT.store(Now()); }
     // restaurar
     c->OMSetRenderTargets(8, oRT, oDS); for (auto* r : oRT) if (r) r->Release(); if (oDS) oDS->Release();
     c->RSSetViewports(nvp, ovp);

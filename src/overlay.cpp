@@ -728,6 +728,71 @@ static void DrawCamaraHud(bool freeCam, float slow) {
     ImGui::End();
 }
 
+// (1/11) iconos de la luz de prueba del editor (filas 297 / 298 / 319, pes_ssss_inc.hlsli): pedido de Agustin, ver donde esta
+// la luz. La luz es direccional y la camara del visor es casi ortografica (tele): visto desde el jugador, la direccion de la luz
+// en vista (x a la derecha, y arriba) se dibuja como un punto alrededor de la cara; delante del jugador = icono lleno y grande,
+// detras = chico, transparente y con la linea cortada. Mismos presets que el shader.
+static void LightDir(float az, float el, float& x, float& y, float& front) {
+    const float d = 3.14159265f / 180.0f;
+    x = std::cos(el * d) * std::sin(az * d); y = std::sin(el * d); front = std::cos(el * d) * std::cos(az * d);
+}
+static ImU32 LightCol(float warm, float a) {
+    warm = std::clamp(warm, 0.0f, 1.0f);
+    float r = 0.80f + 0.20f * warm, g = 0.88f - 0.26f * warm, b = 1.00f - 0.68f * warm;
+    float m = std::max(r, std::max(g, b));
+    return ImGui::ColorConvertFloat4ToU32(ImVec4(r / m, g / m, b / m, a));
+}
+static void DrawOneLightIcon(ImDrawList* dl, ImVec2 c, float R, float az, float el, float warm, const char* name) {
+    float x, y, f; LightDir(az, el, x, y, f);
+    const bool back = f < 0.0f;
+    const float a = back ? 0.45f : 1.0f, rad = back ? 9.0f : 14.0f;
+    ImVec2 p(c.x + x * R, c.y - y * R);
+    const ImU32 col = LightCol(warm, a), dark = IM_COL32(0, 0, 0, (int)(170 * a));
+    // linea desde la cara (cortada si la luz esta detras)
+    const int seg = 14;
+    for (int i = 0; i < seg; i++) {
+        if (back && (i & 1)) continue;
+        float t0 = (float)i / seg, t1 = (float)(i + 1) / seg;
+        ImVec2 a0(c.x + (p.x - c.x) * t0, c.y + (p.y - c.y) * t0), a1(c.x + (p.x - c.x) * t1, c.y + (p.y - c.y) * t1);
+        dl->AddLine(a0, a1, LightCol(warm, a * 0.55f), 1.5f);
+    }
+    // sol: disco con rayos
+    for (int k = 0; k < 8; k++) {
+        float an = k * 0.785398f;
+        ImVec2 d(std::cos(an), std::sin(an));
+        dl->AddLine(ImVec2(p.x + d.x * (rad + 3), p.y + d.y * (rad + 3)), ImVec2(p.x + d.x * (rad + 9), p.y + d.y * (rad + 9)), col, 2.0f);
+    }
+    dl->AddCircleFilled(p, rad + 1.5f, dark, 24);
+    dl->AddCircleFilled(p, rad, col, 24);
+    char buf[96]; snprintf(buf, sizeof buf, "%s%s  %.0f / %.0f", TRS(name), back ? TRS(" (detras)") : "", az, el);
+    ImVec2 tp(p.x + rad + 12, p.y - 8);
+    dl->AddText(ImVec2(tp.x + 1, tp.y + 1), dark, buf);
+    dl->AddText(tp, col, buf);
+}
+static void DrawEditorLightIcons() {
+    float E[4], E2[4], E3[4];
+    for (int i = 0; i < 4; i++) { E[i] = g_cfg.live[297][i]; E2[i] = g_cfg.live[298][i]; E3[i] = g_cfg.live[319][i]; }
+    const int preset = (int)(E[1] + 0.5f);
+    float az = E[2], el = E[3], warm = E2[1];
+    if (preset == 1) { az = 50; el = 45; warm = 0.62f; }
+    else if (preset == 2) { az = 70; el = 12; warm = 0.95f; }
+    else if (preset == 3) { az = -40; el = 60; warm = 0.15f; }
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    // centro: la cara (alto medido en skintone.cpp, fila 192 z/w en pixeles del cuadro) o el centro de la pantalla
+    ImVec2 c(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.42f);
+    unsigned rw = 0, rh = 0; SSSSRenderSize(rw, rh);
+    const float y0 = g_cfg.live[192][2], y1 = g_cfg.live[192][3];
+    if (rh > 0 && y1 > y0 + 8.0f && y1 <= (float)rh) c.y = vp->Pos.y + (0.5f * (y0 + y1) / (float)rh) * vp->Size.y;
+    const float R = vp->Size.y * 0.30f;
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    dl->AddCircle(c, 5.0f, IM_COL32(255, 255, 255, 120), 16, 1.5f);
+    if (preset == 4) {
+        if (E3[1] > 0.001f) DrawOneLightIcon(dl, c, R, (az >= 0 ? -1.0f : 1.0f) * std::clamp(90.0f - std::fabs(az) * 0.5f, 25.0f, 70.0f), 8.0f, std::max(warm - 0.2f, 0.0f), "Relleno");
+        if (E3[2] > 0.001f) DrawOneLightIcon(dl, c, R, (az >= 0 ? 1.0f : -1.0f) * 150.0f, 35.0f, 0.45f, "Recorte");
+        DrawOneLightIcon(dl, c, R, az, el, warm, "Principal");
+    } else DrawOneLightIcon(dl, c, R, az, el, warm, "Sol de prueba");
+}
+
 void OverlayPresent(IDXGISwapChain* sc) {
     if (!g_dev.dev || !g_cfg.optOverlay) return;
     if (!s_init) Init(sc);
@@ -742,7 +807,8 @@ void OverlayPresent(IDXGISwapChain* sc) {
     if (!g_menuOpen) { g_blockGameKeys = FreeCamBlocksKeys(); g_menuTyping = false; }   // (31/10) con la camara libre el juego tampoco ve el teclado
     const bool camFree = FreeCamActive(); const float camSlow = TiempoFactor();   // (1/11) aviso en pantalla
     const bool camHud = !g_menuOpen && (camFree || camSlow != 1.0f);
-    if (!g_menuOpen && !g_inspectOn && !hint && !camHud) return;
+    const bool lightIcons = g_cfg.live[319][0] > 0.5f && g_cfg.live[297][0] > 0.5f && SSSSEditorLightAge() < 0.5;   // (1/11) iconos de la luz del editor
+    if (!g_menuOpen && !g_inspectOn && !hint && !camHud && !lightIcons) return;
     if (!s_rtv) {
         ID3D11Texture2D* bb = nullptr;
         if (FAILED(sc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb)) || !bb) return;
@@ -757,6 +823,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
     if (g_menuOpen) { if (fis && !s_fullMenu) DrawPhysiqueWindow(); else DrawMenu(); }
     else if (hint) DrawPhysiqueHint();
     if (camHud) DrawCamaraHud(camFree, camSlow);
+    if (lightIcons) DrawEditorLightIcons();
     InspectDrawOverlay();
     // (31/10) teclas del juego: con 1 se bloquean solo mientras hay un campo de texto activo (buscador, nombres de presets)
     g_menuTyping = g_menuOpen && ImGui::GetIO().WantTextInput;
