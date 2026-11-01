@@ -396,20 +396,22 @@ void PesMuscleApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
     float2 q = float2(x, y) - A;
     float s = dot(q, u) / L, l = dot(q, lat);
     float along = smoothstep(-0.15, 0.1, s) * (1.0 - smoothstep(0.95, 1.2, s));
-    float eg = l / 0.003, er = (l - 0.006) / 0.004;
+    // (01/11 l, capturas de Agustin: el surco salia como una raya fina y oscura) surco ancho (7 mm) y de 0.7 mm, cresta 8 mm
+    // y 0.4 mm, y la inclinacion de la normal a la mitad
+    float eg = l / 0.0035, er = (l - 0.0075) / 0.004;
     float groove = exp(-eg * eg), ridge = exp(-er * er);
-    float prof = (-0.0015 * groove + 0.0009 * ridge) * Mu.y * along;
-    float dprof = (-0.0015 * groove * (-2.0 * eg / 0.003) + 0.0009 * ridge * (-2.0 * er / 0.004)) * Mu.y * along;
+    float prof = (-0.0007 * groove + 0.0004 * ridge) * Mu.y * along;
+    float dprof = (-0.0007 * groove * (-2.0 * eg / 0.0035) + 0.0004 * ridge * (-2.0 * er / 0.004)) * Mu.y * along * 0.5;
     h += prof * smile; hp += prof * smileP;
     gr += dprof * smile * lat;
   }
   // ---- ceno
   if (Mu.z > 0.0) {
-    float ey = (y - 1.708) / 0.011, ex1 = (x - 0.0065) / 0.0035, ex0 = x / 0.0025;
+    float ey = (y - 1.708) / 0.011, ex1 = (x - 0.0065) / 0.0045, ex0 = x / 0.0035;
     float gy = exp(-ey * ey), ridge = exp(-ex1 * ex1) * gy, groove = exp(-ex0 * ex0) * gy;
-    float a = Mu.z * (0.0012 * ridge - 0.0006 * groove);
-    float dax = Mu.z * (0.0012 * ridge * (-2.0 * ex1 / 0.0035) - 0.0006 * groove * (-2.0 * ex0 / 0.0025));
-    float day = Mu.z * (0.0012 * ridge - 0.0006 * groove) * (-2.0 * ey / 0.011);
+    float a = Mu.z * (0.0009 * ridge - 0.0004 * groove);
+    float dax = Mu.z * (0.0009 * ridge * (-2.0 * ex1 / 0.0045) - 0.0004 * groove * (-2.0 * ex0 / 0.0035)) * 0.5;
+    float day = Mu.z * (0.0009 * ridge - 0.0004 * groove) * (-2.0 * ey / 0.011) * 0.5;
     h += a * frown; hp += a * frownP;
     gr += float2(dax, day) * frown;
   }
