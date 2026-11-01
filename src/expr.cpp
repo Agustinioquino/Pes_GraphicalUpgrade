@@ -271,7 +271,10 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
                 if (mouth && wmax[b] >= 0.9f && (jb < 0 || all[b] > all[jb])) jb = b;
                 if (!mouth && fabsf(x) < 0.008f && y >= 1.630f && y < 1.642f && z > 0.15f && wmax[b] >= 0.5f && (lipTop > 31 || all[b] > all[lipTop])) lipTop = (UINT)b;
                 if (!mouth && fabsf(x) < 0.03f && y >= 1.6325f && y < 1.645f && z > 0.14f && wmax[b] >= 0.4f) lipUp |= 1u << b;
-                if (z < 0.07f || fabsf(x) > 0.05f) continue;
+                if (z < 0.07f || fabsf(x) > 0.055f) continue;
+                // (01/11 l) los huesos laterales (skf_cheek_s_*, |x| > 3.5 cm) van a la mitad en los dos lados: antes uno entraba
+                // entero y el otro no por 1 mm de centro (1E018004: bit 15 si, 16 no) y la mandibula abria torcida (corte en el menton)
+                if (fabsf(x) > 0.035f) { if (y >= 1.560f && y < 1.645f) jawHalf |= 1u << b; continue; }
                 if (y >= 1.560f && y < 1.6275f) jawFull |= 1u << b;
                 else if (y >= 1.6275f && y < 1.6325f && fabsf(x) > 0.015f) { jawHalf |= 1u << b; const int sd = x > 0 ? 0 : 1; if (mus[sd] < 0 || all[b] > all[mus[sd]]) mus[sd] = b; }
             }
