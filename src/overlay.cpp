@@ -715,6 +715,10 @@ static void DrawCamaraHud(bool freeCam, float slow) {
         ImGui::TextUnformatted(TRS("W / S adelante y atras   A / D izquierda y derecha   Q / E bajar y subir"));
         ImGui::TextUnformatted(TRS("Flechas o mouse (boton derecho): girar   Rueda o Re Pag / Av Pag: zoom   Shift: rapido   Ctrl: lento"));
         ImGui::TextUnformatted(TRS("Inicio: volver a la camara del juego   Alt+Shift+V: apagar"));
+        if (g_cfg.live[346][0] > 0.5f) {
+            if (g_cfg.live[346][2] > 0.5f) ImGui::TextColored(gold, "%s", TRS("Siguiendo la cara: W / S acercan, A / D giran alrededor, Q / E suben y bajan   Alt+Shift+F: soltar"));
+            else ImGui::TextDisabled("%s", TRS("Seguir la cara: esperando ver la cara en el visor del editor   Alt+Shift+F: soltar"));
+        } else ImGui::TextDisabled("%s", TRS("Alt+Shift+F: seguir la cara"));
     }
     if (slow != 1.0f) {
         if (freeCam) ImGui::Separator();

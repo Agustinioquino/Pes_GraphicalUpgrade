@@ -1072,7 +1072,9 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
         case RuleAction::Expr: {   // (31/10) expresiones faciales: donde esta sk_head en la paleta de esta malla (expr.cpp)
             if (ps) break;
             // solo DrawIndexed (con otro tipo de dibujo count 0 -> cbuffer "sin dato")
-            if (ID3D11Buffer* b = ExprBufferForDraw(c, t_drawKind == 1 ? t_drawVerts : 0, t_drawStart, t_drawBase)) { Remember(c, d, false, false, a.slot); c->VSSetConstantBuffers(a.slot, 1, &b); }
+            const float* hc = nullptr; int hd = -1;
+            if (ID3D11Buffer* b = ExprBufferForDraw(c, t_drawKind == 1 ? t_drawVerts : 0, t_drawStart, t_drawBase, &hc, &hd)) { Remember(c, d, false, false, a.slot); c->VSSetConstantBuffers(a.slot, 1, &b); }
+            if (hc && FreeCamWantsHead()) ExprCaptureHead(c, hc, hd);   // (1/11) camara libre "seguir la cara": matriz de sk_head de este dibujo
             break; }
         case RuleAction::SetParam: break;   // ya resuelto con la textura de parametros alternativa
         }

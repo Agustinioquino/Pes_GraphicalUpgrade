@@ -32,6 +32,12 @@ namespace fx {
 static bool s_on = false;
 static float s_zoomTarget = 1.0f; static std::atomic<int> s_wheel{0};
 static float s_fovBase = 0.0f, s_fovWritten = -1.0f;   // fov del juego sin zoom / ultimo fov escrito
+// (1/11) "seguir la cara" (x346): la camara orbita alrededor de la cabeza (expr.cpp la saca de la matriz de sk_head del dibujo de la cara)
+static bool s_follow = false, s_headSeen = false;
+static float s_head[3] = {}, s_dist = 2.0f, s_oYaw = 0, s_oPitch = 0;   // cabeza suavizada; orbita: distancia, giro alrededor, altura
+static std::atomic<int> s_headFrames{0};
+
+bool FreeCamWantsHead() { return FreeCamActive() && g_cfg.live[346][0] > 0.5f; }
 static float s_pos[3] = {}, s_yaw = 0, s_pitch = 0;
 static double s_t = 0;
 static POINT s_mouse{}; static bool s_mouseWas = false;
@@ -63,7 +69,7 @@ static void TakeFromGame(const float* pos, const float* tgt) {
 // Devuelve false si la camara libre esta apagada (no toca nada).
 static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, const char* origen, const float* extra) {
     if (!FreeCamActive()) {
-        if (s_on) { s_on = false; Log("camara libre: apagada"); }
+        if (s_on) { s_on = false; s_follow = false; s_headSeen = false; Log("camara libre: apagada"); }
         return false;
     }
     if (!s_on) {
@@ -87,8 +93,10 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     const float sens = std::clamp(g_cfg.live[344][3], 0.05f, 10.0f);
     if (front && !typing) {
         const float rot = 1.2f * dt;   // flechas: ~70 grados por segundo
-        if (Key(VK_LEFT)) s_yaw += rot; if (Key(VK_RIGHT)) s_yaw -= rot;
-        if (Key(VK_UP)) s_pitch += rot; if (Key(VK_DOWN)) s_pitch -= rot;
+        if (!s_follow) {
+            if (Key(VK_LEFT)) s_yaw += rot; if (Key(VK_RIGHT)) s_yaw -= rot;
+            if (Key(VK_UP)) s_pitch += rot; if (Key(VK_DOWN)) s_pitch -= rot;
+        }
         // zoom suave (Agustin 1/11): las teclas y la rueda mueven un objetivo y el zoom real lo sigue con un retardo corto
         if (Key(VK_PRIOR) || Key(VK_OEM_PLUS) || Key(VK_ADD)) s_zoomTarget *= 1.0f - 0.45f * dt;
         if (Key(VK_NEXT) || Key(VK_OEM_MINUS) || Key(VK_SUBTRACT)) s_zoomTarget *= 1.0f + 0.45f * dt;
@@ -107,14 +115,48 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     // mouse: gira con el boton derecho apretado (no mientras el menu del mod esta abierto: ahi el mouse es del menu)
     POINT m; GetCursorPos(&m);
     const bool look = front && !g_menuOpen.load() && Key(VK_RBUTTON);
-    if (look && s_mouseWas) { s_yaw -= (m.x - s_mouse.x) * 0.0025f * sens; s_pitch -= (m.y - s_mouse.y) * 0.0025f * sens; }
-    s_mouse = m; s_mouseWas = look;
+    if (look && s_mouseWas && !s_follow) { s_yaw -= (m.x - s_mouse.x) * 0.0025f * sens; s_pitch -= (m.y - s_mouse.y) * 0.0025f * sens; }
     s_pitch = std::clamp(s_pitch, -1.55f, 1.55f);
     const float cp = cosf(s_pitch), sp = sinf(s_pitch);
     float f[3] = { cp * sinf(s_yaw), sp, cp * cosf(s_yaw) };
     // derecha: el mundo del juego es diestro (mirando a -z la derecha es +x); Agustin 1/11: con la version anterior A / D iban al reves
     float r[3] = { -f[2], 0.0f, f[0] }; float rl = Len3(r); if (rl > 1e-5f) { r[0] /= rl; r[2] /= rl; } else { r[0] = 1; r[2] = 0; }
-    if (front && !typing) {
+    // --- seguir la cara: la cabeza es el objetivo y la camara orbita a su alrededor ---
+    float head[3]; double age = 1e9; const bool wantFollow = g_cfg.live[346][0] > 0.5f;
+    const bool haveHead = wantFollow && ExprHeadWorld(head, &age) && age < 1.0;
+    if (haveHead) {
+        const float tau = std::clamp(g_cfg.live[346][1], 0.0f, 2.0f);   // suavizado de la cabeza (s)
+        const float k = tau > 1e-3f ? 1.0f - expf(-dt / tau) : 1.0f;
+        if (!s_headSeen) memcpy(s_head, head, 12); else for (int i = 0; i < 3; i++) s_head[i] += (head[i] - s_head[i]) * k;
+        s_headSeen = true; s_headFrames++;
+    }
+    const bool follow = haveHead || (wantFollow && s_headSeen && age < 3.0);
+    if (follow && !s_follow) {   // entrar a la orbita desde donde esta la camara
+        float d[3] = { s_pos[0] - s_head[0], s_pos[1] - s_head[1], s_pos[2] - s_head[2] };
+        s_dist = std::clamp(Len3(d), 0.15f, 50.0f);
+        s_oYaw = atan2f(d[0], d[2]); s_oPitch = asinf(std::clamp(d[1] / (s_dist > 1e-5f ? s_dist : 1.0f), -1.0f, 1.0f));
+        s_follow = true;
+        Log("camara libre: siguiendo la cara en (%.2f, %.2f, %.2f), distancia %.2f m", s_head[0], s_head[1], s_head[2], s_dist);
+    } else if (!follow && s_follow) {
+        s_follow = false; Log("camara libre: deja de seguir la cara%s", wantFollow ? " (sin dato de la cabeza: hay que estar en el visor del editor con la cara a la vista)" : "");
+    }
+    if (s_follow) {
+        // en la orbita: W / S acercan y alejan, A / D y flechas izquierda / derecha giran alrededor, Q / E y flechas arriba / abajo
+        // suben y bajan, el mouse con el boton derecho tambien orbita
+        if (front && !typing) {
+            const float rot = 1.2f * dt;
+            if (Key('W')) s_dist *= 1.0f - 0.6f * dt * (speed / std::clamp(g_cfg.live[344][1], 0.05f, 50.0f));
+            if (Key('S')) s_dist *= 1.0f + 0.6f * dt * (speed / std::clamp(g_cfg.live[344][1], 0.05f, 50.0f));
+            if (Key('D') || Key(VK_RIGHT)) s_oYaw -= rot; if (Key('A') || Key(VK_LEFT)) s_oYaw += rot;
+            if (Key('E') || Key(VK_UP)) s_oPitch += rot; if (Key('Q') || Key(VK_DOWN)) s_oPitch -= rot;
+        }
+        if (look && s_mouseWas) { s_oYaw -= (m.x - s_mouse.x) * 0.0025f * sens; s_oPitch += (m.y - s_mouse.y) * 0.0025f * sens; }
+        s_dist = std::clamp(s_dist, 0.15f, 50.0f); s_oPitch = std::clamp(s_oPitch, -1.4f, 1.4f);
+        const float ocp = cosf(s_oPitch), osp = sinf(s_oPitch);
+        s_pos[0] = s_head[0] + s_dist * ocp * sinf(s_oYaw); s_pos[1] = s_head[1] + s_dist * osp; s_pos[2] = s_head[2] + s_dist * ocp * cosf(s_oYaw);
+        float d[3] = { s_head[0] - s_pos[0], s_head[1] - s_pos[1], s_head[2] - s_pos[2] }; float l = Len3(d);
+        if (l > 1e-5f) { f[0] = d[0] / l; f[1] = d[1] / l; f[2] = d[2] / l; s_yaw = atan2f(f[0], f[2]); s_pitch = asinf(std::clamp(f[1], -1.0f, 1.0f)); }
+    } else if (front && !typing) {
         float mv[3] = {};
         if (Key('W')) { mv[0] += f[0]; mv[1] += f[1]; mv[2] += f[2]; }
         if (Key('S')) { mv[0] -= f[0]; mv[1] -= f[1]; mv[2] -= f[2]; }
@@ -124,9 +166,12 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
         if (Key('Q')) mv[1] -= 1.0f;
         for (int i = 0; i < 3; i++) s_pos[i] += mv[i] * speed * dt;
     }
+    s_mouse = m; s_mouseWas = look;
+    g_cfg.live[346][2] = s_follow ? 1.0f : 0.0f; g_cfg.live[346][3] = haveHead ? (float)age : -1.0f;
     // --- escribir la camara ---
     pos[0] = s_pos[0]; pos[1] = s_pos[1]; pos[2] = s_pos[2];
-    tgt[0] = s_pos[0] + f[0]; tgt[1] = s_pos[1] + f[1]; tgt[2] = s_pos[2] + f[2];
+    if (s_follow) { tgt[0] = s_head[0]; tgt[1] = s_head[1]; tgt[2] = s_head[2]; }
+    else { tgt[0] = s_pos[0] + f[0]; tgt[1] = s_pos[1] + f[1]; tgt[2] = s_pos[2] + f[2]; }
     up[0] = 0.0f; up[1] = 1.0f; up[2] = 0.0f;
     float fovApplied = -1.0f;
     if (proj == 0) {
@@ -141,8 +186,9 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     }
     float* q = g_cfg.live[345]; q[0] = s_pos[0]; q[1] = s_pos[1]; q[2] = s_pos[2]; q[3] = fovApplied;
     if (++s_applies % 600 == 0 && s_logged < 20) {   // cada ~10 s de uso
-        Log("camara libre (%s): (%.2f, %.2f, %.2f) giro %.0f / %.0f, zoom x%.2f (campo de vision %.4f), %s", origen, s_pos[0], s_pos[1], s_pos[2],
-            s_yaw * 57.2958f, s_pitch * 57.2958f, g_cfg.live[344][2], fovApplied, front ? "ventana al frente" : "ventana atras: sin teclas");
+        Log("camara libre (%s): (%.2f, %.2f, %.2f) giro %.0f / %.0f, zoom x%.2f (campo de vision %.4f), %s%s", origen, s_pos[0], s_pos[1], s_pos[2],
+            s_yaw * 57.2958f, s_pitch * 57.2958f, g_cfg.live[344][2], fovApplied, front ? "ventana al frente" : "ventana atras: sin teclas",
+            s_follow ? " - siguiendo la cara" : wantFollow ? " - seguir la cara pedido pero sin dato de la cabeza" : "");
         s_logged++;
     }
     return true;

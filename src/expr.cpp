@@ -36,6 +36,7 @@ struct FaceMesh {
     int maxIdx = -1, head = 99;
     ID3D11Buffer* cb = nullptr;   // x cabeza, y indice maximo, z id
     const char* why = "";
+    float hc[3] = {}; bool hcOk = false;   // (1/11) centro de la cara en espacio del modelo (vertices que pesan en sk_head): para "seguir la cara"
 };
 std::mutex s_mx;
 std::unordered_map<uint64_t, FaceMesh*> s_meshes;
@@ -159,7 +160,7 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
             mapped[s] = true;
         }
         int mx = -1; bool ok = true;
-        std::vector<float> ys(m->nv), xs(m->nv), zs(m->nv); std::vector<uint32_t> iv((size_t)m->nv * 4); std::vector<float> wv((size_t)m->nv * 4);
+        std::vector<float> ys(m->nv), xs(m->nv), zs(m->nv), ps((size_t)m->nv * 3); std::vector<uint32_t> iv((size_t)m->nv * 4); std::vector<float> wv((size_t)m->nv * 4);
         float ylo = 1e9f, yhi = -1e9f;
         for (UINT v = 0; v < m->nv && ok; v++) {
             float P[3]; uint32_t* I = &iv[(size_t)v * 4]; float* W = &wv[(size_t)v * 4];
@@ -168,7 +169,7 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
             const uint8_t* pw = (const uint8_t*)mp[m->wgt.slot].pData + (size_t)v * m->stride[m->wgt.slot] + m->wgt.off;
             ok = ReadPos(pp, m->pos.fmt, P) && ReadIdx(pi, m->idx.fmt, I) && ReadW(pw, m->wgt.fmt, W);
             if (!ok) break;
-            xs[v] = P[0]; ys[v] = P[1]; zs[v] = P[2]; ylo = (std::min)(ylo, P[1]); yhi = (std::max)(yhi, P[1]);
+            xs[v] = P[0]; ys[v] = P[1]; zs[v] = P[2]; ylo = (std::min)(ylo, P[1]); yhi = (std::max)(yhi, P[1]); memcpy(&ps[(size_t)v * 3], P, 12);
             for (int k = 0; k < 4; k++) if (W[k] > 0.004f && (int)I[k] > mx) mx = (int)I[k];
         }
         // sk_head: el hueso con mas peso en el 25 % mas alto de la malla; uso total por hueso para el log
@@ -215,6 +216,17 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
         }
         const bool mouth = hd <= 31 && !thin && ylo > 1.58f && yhi < 1.68f && (yhi - ylo) < 0.06f;
         m->maxIdx = mx; m->head = hd;
+        {   // (1/11) centro de la cara: promedio de los vertices que pesan >= 0.9 en sk_head (si no hay, >= 0.5; si no, el 25 % de arriba)
+            for (float cut : { 0.9f, 0.5f, -1.0f }) {
+                double c[3] = {}; int n = 0;
+                for (UINT v = 0; v < m->nv; v++) {
+                    float w = 0; for (int k = 0; k < 4; k++) if ((int)iv[(size_t)v * 4 + k] == hd) w += wv[(size_t)v * 4 + k];
+                    const bool in = cut > 0 ? w >= cut : ys[v] >= yhi - 0.25f * (yhi - ylo);
+                    if (in) { for (int k = 0; k < 3; k++) c[k] += ps[(size_t)v * 3 + k]; n++; }
+                }
+                if (n >= 20) { for (int k = 0; k < 3; k++) m->hc[k] = (float)(c[k] / n); m->hcOk = true; break; }
+            }
+        }
         m->cb = MakeCB((UINT)m->head, (UINT)mx, (UINT)m->id, mouth ? 1u : 0u, lids);
         ReleaseIA(m);
         if (!m->cb) { m->state = 4; m->why = "sin cbuffer"; s_hist[3]++; return; }
@@ -231,7 +243,8 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
 }   // namespace
 
 // en cada dibujo con la regla "expr = <slot>" (VS de la cabeza / cara): cbuffer de la malla para el VS (null = no enlazar)
-ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base) {
+ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, const float** headCentroid, int* headIdx) {
+    if (headCentroid) *headCentroid = nullptr;
     if (!g_dev.dev) return nullptr;
     if (!s_none) { std::lock_guard<std::mutex> lk(s_mx); if (!s_none) s_none = MakeCB(99, 0, 0); }
     if (g_cfg.live[340][0] < 0.5f || count < 3) { s_bindsNone++; return s_none; }
@@ -247,7 +260,7 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
     auto it = s_meshes.find(key);
     if (it != s_meshes.end()) {
         rel(); FaceMesh* m = it->second;
-        if (m->state == 3 && m->cb) { s_binds++; return m->cb; }
+        if (m->state == 3 && m->cb) { s_binds++; if (headCentroid && m->hcOk && m->nv >= 300) { *headCentroid = m->hc; if (headIdx) *headIdx = m->head; } return m->cb; }
         s_bindsNone++; return s_none;
     }
     if (s_meshes.size() >= 2048) {   // partido largo / muchas caras: se empieza de nuevo (las cuentas y buffers cambian entre partidos)
@@ -281,9 +294,62 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
     s_bindsNone++; return s_none;
 }
 
+// ---- (1/11) posicion de la cabeza en el mundo para "seguir la cara" (freecam.cpp) ----
+// En el dibujo de la cara (VS faab87ee) la paleta de huesos va en b6 (VSBones: float4x3 m_boneMatrices[32], con desplazamiento de
+// constantes). Se copia la matriz de sk_head (48 bytes) a un buffer de lectura y en el Present siguiente se transforma el centro de
+// la cara (espacio del modelo): mundo[k] = registro k . (hc, 1). Una captura por cuadro.
+namespace {
+struct HeadCap { ID3D11Buffer* st = nullptr; float hc[3] = {}; int tries = 0; };
+std::mutex s_hmx; std::vector<HeadCap> s_hcaps; std::atomic<bool> s_hcapThisFrame{false};
+float s_headPos[3] = {}; double s_headT = 0; std::atomic<int> s_headOk{0}, s_headFail{0};
+}
+void ExprCaptureHead(ID3D11DeviceContext* c, const float* hc, int head) {
+    if (!g_dev.dev || !hc || head < 0 || head > 31 || s_hcapThisFrame.exchange(true)) return;
+    ID3D11DeviceContext1* c1 = nullptr;
+    if (FAILED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) || !c1) return;
+    ID3D11Buffer* b = nullptr; UINT first = 0, num = 0;
+    c1->VSGetConstantBuffers1(6, 1, &b, &first, &num); c1->Release();
+    if (!b) { s_headFail++; return; }
+    D3D11_BUFFER_DESC d; b->GetDesc(&d);
+    const UINT a = first * 16 + (UINT)head * 48;
+    if (a + 48 > d.ByteWidth) { b->Release(); s_headFail++; return; }
+    ID3D11Buffer* st = Staging(48);
+    if (st) {
+        D3D11_BOX bx = { a, 0, 0, a + 48, 1, 1 }; c->CopySubresourceRegion(st, 0, 0, 0, 0, b, 0, &bx);
+        std::lock_guard<std::mutex> lk(s_hmx);
+        HeadCap h; h.st = st; memcpy(h.hc, hc, 12); s_hcaps.push_back(h);
+    }
+    b->Release();
+}
+bool ExprHeadWorld(float out[3], double* age) {
+    std::lock_guard<std::mutex> lk(s_hmx);
+    if (s_headT == 0) return false;
+    memcpy(out, s_headPos, 12); if (age) *age = Now() - s_headT; return true;
+}
+static void HeadPresent(ID3D11DeviceContext* imm) {
+    s_hcapThisFrame = false;
+    std::lock_guard<std::mutex> lk(s_hmx);
+    for (size_t i = 0; i < s_hcaps.size();) {
+        HeadCap& h = s_hcaps[i];
+        D3D11_MAPPED_SUBRESOURCE mp; HRESULT hr = imm->Map(h.st, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mp);
+        if (hr == DXGI_ERROR_WAS_STILL_DRAWING && ++h.tries < 60) { i++; continue; }
+        if (SUCCEEDED(hr)) {
+            const float* r = (const float*)mp.pData; float w[3];
+            for (int k = 0; k < 3; k++) w[k] = r[k * 4 + 0] * h.hc[0] + r[k * 4 + 1] * h.hc[1] + r[k * 4 + 2] * h.hc[2] + r[k * 4 + 3];
+            imm->Unmap(h.st, 0);
+            if (w[0] == w[0] && w[1] == w[1] && w[2] == w[2] && fabsf(w[0]) < 1000 && fabsf(w[1]) < 1000 && fabsf(w[2]) < 1000) {
+                memcpy(s_headPos, w, 12); s_headT = Now();
+                if (s_headOk++ == 0) Log("expresiones: cabeza en el mundo (%.2f, %.2f, %.2f) desde el centro de la cara (%.3f, %.3f, %.3f)", w[0], w[1], w[2], h.hc[0], h.hc[1], h.hc[2]);
+            } else s_headFail++;
+        } else s_headFail++;
+        h.st->Release(); s_hcaps.erase(s_hcaps.begin() + i);
+    }
+}
+
 // Present (contexto inmediato): avanza la lectura de hasta 8 mallas nuevas; resumen al log cada ~60 s
 void ExprPresent() {
     ID3D11DeviceContext* imm = g_dev.imm; if (!imm) return;
+    HeadPresent(imm);
     {   // con el candado tomado: los dibujos (otros hilos) leen state / cb y pueden vaciar la tabla. Los Map son DO_NOT_WAIT.
         std::lock_guard<std::mutex> lk(s_mx);
         for (size_t i = 0; i < s_pending.size() && i < 8; i++) Step(imm, s_pending[i]);
