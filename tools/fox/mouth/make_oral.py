@@ -187,6 +187,55 @@ def clean_gum(bsm, nrm, rows, tissue0, gum=GUM):
     nrm = nrm.copy(); nrm[..., 3] = (nx2 / ln) * 0.5 + 0.5; nrm[..., 1] = (ny2 / ln) * 0.5 + 0.5
     return out, nrm
 
+def gum_detail(bsm, nrm, rows):
+    """(01/11 g) mas definicion en la encia (Agustin): la de Konami viene de 512 y queda lisa/borrosa a 2048. Sobre todo el
+    tejido de las tiras (no lengua ni paladar): punteado de 'cascara de naranja' de la encia adherida (fino, cerca del
+    diente), capilares finos rojizos en la mucosa (lejos del diente, mas roja y lisa), linea mucogingival suave, y el relieve
+    del punteado y de los capilares en el normal map."""
+    N = bsm.shape[0]
+    rgb = bsm[..., :3]
+    mx = rgb.max(-1); rg = rgb[..., 0] - rgb[..., 1]
+    gy, gx = (np.mgrid[0:N, 0:N] + 0.5) / N
+    strips = sst(0.665, 0.64, gy)                                   # filas de dientes/encia (arriba de la lengua)
+    tis = sst(0.04, 0.10, rg) * sst(0.05, 0.12, mx) * strips
+    U, V, W = tooth_fields(rows, N, vmin=-1.6)
+    ins = U >= 0
+    # distancia al margen (en alto de diente): 0 en el margen, crece hacia la raiz
+    dm = np.where(ins, np.clip(GUM - V, 0, 2), 1.0)
+    attached = sst(0.75, 0.45, dm)                                   # encia adherida (con punteado) cerca del diente
+    mucosa = 1 - attached
+    # punteado: hoyuelos finos, mas marcados en la adherida
+    st1 = noise(N, 0.8, 41); st2 = noise(N, 1.6, 42)
+    pits = np.clip(-st1 - 0.35, 0, None)                            # hoyuelos (solo el lado negativo)
+    stipple = 0.6 * pits + 0.25 * st2
+    # capilares: lineas finas (ridged noise), anisotropas, en la mucosa y apenas en la adherida
+    r1 = 1 - np.abs(noise(N, 3.0, 43, aniso=(1.0, 2.2)))
+    r2 = 1 - np.abs(noise(N, 2.0, 44, aniso=(2.0, 1.0)))
+    vess = np.clip((np.maximum(r1, 0.8 * r2) - 0.89) / 0.11, 0, 1) ** 1.3
+    vess *= sst(-0.3, 0.6, noise(N, 18, 45))                        # por zonas, no en todos lados
+    w_v = vess * (0.35 * attached + 1.0 * mucosa)
+    # color: adherida coral mas clara y mate, mucosa algo mas roja y oscura; capilares rojo oscuro
+    # nitidez: la base de 512 agrandada queda blanda -> mascara de enfoque + micro variacion
+    col = np.clip(rgb + 0.7 * (rgb - np.stack([ndi.gaussian_filter(rgb[..., c], 2.5) for c in range(3)], -1)), 0, 1)
+    col = col * (1 + 0.03 * noise(N, 0.6, 46))[..., None]
+    lum_mod = 1 - 0.12 * stipple * (0.4 + 0.6 * attached)
+    col = col * lum_mod[..., None]
+    col = col * (1 + mucosa[..., None] * np.array([0.02, -0.07, -0.05], np.float32))
+    col = col * (1 + attached[..., None] * np.array([0.03, 0.02, 0.02], np.float32))
+    vcol = rgb * np.array([0.78, 0.42, 0.45], np.float32)
+    col = col * (1 - 0.7 * w_v[..., None]) + vcol * (0.7 * w_v[..., None])
+    a = np.clip(tis, 0, 1)[..., None]
+    out = bsm.copy(); out[..., :3] = np.clip(rgb * (1 - a) + col * a, 0, 1)
+    # normal: hoyuelos del punteado y capilares apenas en relieve
+    h = (-0.9 * pits * (0.35 + 0.65 * attached) + 0.25 * vess * mucosa) * tis
+    hy, hx = np.gradient(ndi.gaussian_filter(h, 0.6))
+    nx = nrm[..., 3] * 2 - 1; ny = nrm[..., 1] * 2 - 1
+    sc = 1.6
+    nx2 = nx - hx * sc; ny2 = ny - hy * sc
+    nz = np.sqrt(np.clip(1 - nx2 * nx2 - ny2 * ny2, 0.04, 1)); ln = np.sqrt(nx2 * nx2 + ny2 * ny2 + nz * nz)
+    nrm = nrm.copy(); nrm[..., 3] = (nx2 / ln) * 0.5 + 0.5; nrm[..., 1] = (ny2 / ln) * 0.5 + 0.5
+    return out, nrm
+
 def build(src, N=2048, NS=1024, log=print):
     bsm = load(os.path.join(src, 'oral_bsm.ftex')); nrm = load(os.path.join(src, 'oral_nrm.ftex'))
     srm = load(os.path.join(src, 'oral_srm.ftex')); trm = load(os.path.join(src, 'oral_trm.ftex'))
@@ -313,6 +362,7 @@ def build(src, N=2048, NS=1024, log=print):
     log('  ' + str(stats))
     bsm_o, nrm_o, S, Tr = (gum_warp(x, rows) for x in (bsm_o, nrm_o, S, Tr))
     bsm_o, nrm_o = clean_gum(bsm_o, nrm_o, rows, tissue0)
+    bsm_o, nrm_o = gum_detail(bsm_o, nrm_o, rows)
     return {'bsm': bsm_o, 'nrm': nrm_o, 'srm': S, 'trm': Tr}, (B, on, line, crown, corner, cerv)
 
 def main():
