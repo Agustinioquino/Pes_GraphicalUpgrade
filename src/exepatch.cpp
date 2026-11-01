@@ -280,6 +280,12 @@ static void CasterFixPresent() {
     static bool caveReady = false;
     if (!caveReady) {
         unsigned char* q = s_cave + 0x300;
+        // (01/11) registro: mov [rip+d], r13 (la camara) en 0x3e0 y mov [rip+d], r12d (mascara de la traslacion) en 0x3e8
+        int32_t d1 = (int32_t)((intptr_t)(s_cave + 0x3e0) - (intptr_t)(q + 7));
+        q[0] = 0x4c; q[1] = 0x89; q[2] = 0x2d; memcpy(q + 3, &d1, 4); q += 7;
+        int32_t d2 = (int32_t)((intptr_t)(s_cave + 0x3e8) - (intptr_t)(q + 7));
+        q[0] = 0x44; q[1] = 0x89; q[2] = 0x25; memcpy(q + 3, &d2, 4); q += 7;
+        memset(s_cave + 0x3e0, 0, 16);
         memcpy(q, kCasterCave, sizeof kCasterCave); q += sizeof kCasterCave;
         uint64_t back = kCasterFixBack; memcpy(q, &back, 8);
         FlushInstructionCache(GetCurrentProcess(), s_cave + 0x300, 0x100);
@@ -396,12 +402,39 @@ static void ShadowFixCamLog() {
     }
 }
 
+// (01/11) "segun el estadio las sombras se desfasan" con sombra_parche 1 (55 y 47 si, 34 y 29 no) aunque la direccion coincide:
+// cada 15 s (12 veces) anota la camara que recibe el parche (+0x1f0..+0x220), la mascara de la traslacion (r12d), lo que
+// sale en camara + 0x40 (vista -> luz) y m_view / m_shadowProjection del shader, para comparar un estadio bueno con uno malo.
+static double s_casterLogT = 0; static int s_casterLogs = 0;
+static void CasterFixLog() {
+    if (!s_casterOn || !s_cave || s_casterLogs >= 12) return;
+    double t = Now(); if (t < s_casterLogT) return; s_casterLogT = t + 15.0;
+    uintptr_t cam = *(volatile uintptr_t*)(s_cave + 0x3e0); unsigned r12 = *(volatile unsigned*)(s_cave + 0x3e8);
+    if (!cam) return;
+    auto rd = [](uintptr_t at, float* m, size_t n) { SIZE_T got = 0; return ReadProcessMemory(GetCurrentProcess(), (const void*)at, m, n * 4, &got) && got == n * 4; };
+    float m[20], o[16];
+    if (!rd(cam + 0x1f0, m, 20)) return;
+    s_casterLogs++;
+    Log("sombra_parche 1: camara %p r12d %08X | +0x1f0 %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | +0x220 %.3f %.3f %.3f %.3f | +0x230 %.3f %.3f %.3f %.3f",
+        (void*)cam, r12, m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15], m[16], m[17], m[18], m[19]);
+    if (rd(cam + 0x40, o, 16))
+        Log("sombra_parche 1: camara + 0x40 (vista -> luz) %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.3f %.3f %.3f %.3f",
+            o[0], o[1], o[2], o[3], o[4], o[5], o[6], o[7], o[8], o[9], o[10], o[11], o[12], o[13], o[14], o[15]);
+    std::vector<float> S;
+    if (NamedCBRead("SceneCB", S) && S.size() >= 64) {
+        Log("sombra_parche 1: m_view (c8..c11) %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f",
+            S[32], S[33], S[34], S[35], S[36], S[37], S[38], S[39], S[40], S[41], S[42], S[43], S[44], S[45], S[46], S[47]);
+        Log("sombra_parche 1: m_shadowProjection (c12..c15) %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.3f %.3f %.3f %.3f",
+            S[48], S[49], S[50], S[51], S[52], S[53], S[54], S[55], S[56], S[57], S[58], S[59], S[60], S[61], S[62], S[63]);
+    }
+}
+
 static int s_lodBase = -1, s_lodLast = -1; static bool s_lodChecked = false, s_lodOk = false; static double s_lodT = 0;
 void ExePatchPresent() {
     if (!g_cfg.motorPatch) return;
     double t = Now(); if (t - s_lodT < 1.0) return; s_lodT = t;
     SunFixPresent();   // (27/10) el sol que gira con la camara
-    ShadowFixPresent(); ShadowFixCamLog();   // (27/10) la sombra que gira con la camara
+    ShadowFixPresent(); ShadowFixCamLog(); CasterFixLog();   // (27/10) la sombra que gira con la camara
     volatile int* g = (volatile int*)0x14374cd94ull;
     if (!s_lodChecked) {
         s_lodChecked = true;
