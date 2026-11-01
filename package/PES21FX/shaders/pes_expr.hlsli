@@ -104,16 +104,19 @@ float3 PesTongue(float3 rest, float2 uv, uint jaw)
   float3 o = 0;
   // forma con la boca abierta: lomo abajo (mas en el medio del largo), punta adelante y abajo
   // (01/11 b, Agustin: "que se mueva mas, como la mandibula") todo x2..3
-  o.y -= J * 0.0065 * sin(3.14159 * saturate(s * 0.9 + 0.05));
-  o.y -= J * 0.0025 * s * s;
-  o.z += J * 0.0040 * s * s;
+  // (01/11 c) con 6.5 mm la lengua atravesaba el piso de la boca y se despegaba de la garganta: la raiz queda fija (pegada a
+  // la garganta / piso, que no se mueven con esto) y el lomo baja hasta 3.5 mm; la punta no pasa los dientes de abajo
+  float raiz = smoothstep(0.0, 0.30, s);
+  o.y -= J * 0.0035 * sin(3.14159 * saturate(s * 0.9 + 0.05)) * raiz;
+  o.y -= J * 0.0012 * s * s;
+  o.z += J * 0.0012 * s * s;
   // vivo: onda de la raiz a la punta y vaiven de lado, solo con la boca abierta
   float t = IniParams.Load(int2(157, 0)).x * max(T.z, 0.1);
   float vivo = J * saturate(T.y * 0.5) * 2.0;
-  o.y += vivo * 0.0026 * s * sin(6.2832 * 1.6 * t - 3.0 * s);
-  o.z += vivo * 0.0012 * s * s * sin(6.2832 * 1.1 * t + 0.7);   // la punta va y viene
-  o.x += vivo * 0.0018 * s * s * sin(6.2832 * 0.7 * t + 1.3);
-  o.y += vivo * 0.0008 * lado * s * sin(6.2832 * 0.7 * t + 1.3);   // se inclina un poco hacia el lado al que va la punta
+  o.y += vivo * 0.0020 * s * raiz * sin(6.2832 * 1.6 * t - 3.0 * s);
+  o.z += vivo * 0.0006 * s * s * sin(6.2832 * 1.1 * t + 0.7);   // la punta va y viene
+  o.x += vivo * 0.0014 * s * s * sin(6.2832 * 0.7 * t + 1.3);
+  o.y += vivo * 0.0006 * lado * s * raiz * sin(6.2832 * 0.7 * t + 1.3);   // se inclina un poco hacia el lado al que va la punta
   return o * T.x;
 }
 
