@@ -345,8 +345,12 @@ static bool KeyOf(ID3D11DeviceContext* c, ID3D11Buffer** b, UINT* f) {
 // dibujo del VS de la piel: si es un brazo / mano / muslo con una textura que no es la de TorsoBody, la textura de TorsoBody
 // del tono del jugador para enlazar en t0 (el que llama la devuelve despues del dibujo); nullptr = no cambiar nada
 ID3D11ShaderResourceView* ArmsTextureFor(ID3D11DeviceContext* c, uint64_t vsHash, UINT indexCount) {
-    if (vsHash != kSkinVS || g_cfg.live[321][0] < 0.5f || !g_dev.dev) return nullptr;
+    // (01/11) con la tarjeta de brazos apagada (x321 0) pero el cuello de las caras reales prendido (x322) igual se reconoce el
+    // tono del torso dibujado (solo para t29 de la cara, ArmsTorsoTextureForFace): no se cambia ninguna textura del cuerpo
+    const bool arms = g_cfg.live[321][0] > 0.5f, collar = g_cfg.live[322][0] > 0.5f;
+    if (vsHash != kSkinVS || (!arms && !collar) || !g_dev.dev) return nullptr;
     const bool torso = In(kTorsoIdx, 3, indexCount);
+    if (!arms && !torso) return nullptr;
     const bool arm = In(kArmIdx, 4, indexCount) || (indexCount && (indexCount == (UINT)(g_cfg.live[302][0] + 0.5f) || indexCount == (UINT)(g_cfg.live[302][1] + 0.5f)));
     const bool thigh = !arm && g_cfg.live[321][1] > 0.5f && In(kThighIdx, 6, indexCount);
     if (!torso && !arm && !thigh) return nullptr;
@@ -367,6 +371,7 @@ ID3D11ShaderResourceView* ArmsTextureFor(ID3D11DeviceContext* c, uint64_t vsHash
         }
         r->Release();
         if (tone <= 0) return nullptr;
+        if (!arms) { t_lastTone = tone; return nullptr; }   // solo el tono para el cuello (el torso queda con su textura)
         ID3D11Buffer* b = nullptr; UINT f = 0;
         const bool key = KeyOf(c, &b, &f);
         int use = tone;
@@ -415,8 +420,8 @@ ID3D11ShaderResourceView* ArmsTextureFor(ID3D11DeviceContext* c, uint64_t vsHash
 // dibujo de la cara (PS 5ce3 / ce188): torso_N_bsm de TorsoBody del tono del jugador para t29 (pes_collar.hlsli: el cuello de la
 // cara real toma el color del torso en la union). El tono: el forzado (z321) o el del ultimo torso dibujado en este contexto.
 ID3D11ShaderResourceView* ArmsTorsoTextureForFace() {
-    if (g_cfg.live[322][0] < 0.5f || g_cfg.live[321][0] < 0.5f || !g_dev.dev) return nullptr;
-    int tone = (int)(g_cfg.live[321][2] + 0.5f);
+    if (g_cfg.live[322][0] < 0.5f || !g_dev.dev) return nullptr;   // (01/11) ya no hace falta x321 (Agustin lo tiene apagado)
+    int tone = g_cfg.live[321][0] > 0.5f ? (int)(g_cfg.live[321][2] + 0.5f) : 0;
     if (tone < 1 || tone > kTones) tone = t_lastTone;
     if (!tone) return nullptr;
     std::lock_guard<std::mutex> lk(s_mx);
