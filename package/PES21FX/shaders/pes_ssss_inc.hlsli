@@ -22,6 +22,7 @@ Texture2D<float4> inMat   : register(t2);
 Texture2D<float4> inNrm   : register(t3);
 Texture2D<float4> inAlb   : register(t4);   // (20/10) albedo del G-buffer: tono de la piel (melanina)
 Texture2D<float4> inSpec  : register(t5);   // (27/10 b) luz especular del juego (t10): la luz de prueba le suma su brillo
+Texture2D<float4> inRef   : register(t6);   // (01/11) referencia de intensidad de la luz de prueba (1x1, suavizada)
 Texture1D<float4> IniParams : register(t120);
 SamplerState sPoint : register(s0);
 SamplerState sLinear : register(s1);
@@ -35,7 +36,23 @@ static const float kBurleyX[8] = { 0.1305, 0.4299, 0.7976, 1.2651, 1.8883, 2.779
 
 float BurleyF(float x) { return exp(-x) + exp(-x / 3.0); }
 
-#ifdef SSSS_PRE
+#ifdef SSSS_REF
+// ===================================================================================================================
+// (01/11) Pasada 0 de la luz de prueba del editor: referencia de intensidad (la irradiancia de estudio mas alta sobre la piel,
+// rejilla de 8x8) en una textura de 1x1 que la DLL mezcla con la del cuadro anterior (blend factor ~0.1). Antes se media en
+// cada pixel cada cuadro con 6x6 puntos fijos de la pantalla: al mover la camara los puntos caian o no sobre la piel y toda la
+// luz de prueba saltaba de intensidad (Agustin: "parpadea mucho al mover la camara").
+float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
+  float S = 0, Sall = 0;
+  [unroll] for (int gj = 0; gj < 8; gj++) [unroll] for (int gi = 0; gi < 8; gi++) {
+    float2 ug = float2((gi + 0.5) / 8.0, (gj + 0.5) / 8.0);
+    float l = Lum(inLight.SampleLevel(sPoint, ug, 0).xyz);
+    Sall = max(Sall, l); if (IsSkin(ug)) S = max(S, l);
+  }
+  if (S <= 1e-6) S = Sall;
+  return float4(S, Sall, 0, 1);
+}
+#elif defined(SSSS_PRE)
 // ===================================================================================================================
 // Pasada 1: copia + luz de prueba del editor (27/10 b)
 // En el editor y los menus 3D el juego no corre la pasada del sol: ilumina con un mapa esferico de estudio, plano y de
@@ -158,14 +175,8 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   else if (preset == 2) { az = 70; el = 12; inten = 0.9; warm = 0.95; keep = 0.45; }   // tarde: sol bajo, naranja
   else if (preset == 3) { az = -40; el = 60; inten = 0.8; warm = 0.15; keep = 0.35; }  // noche: torre alta, blanca azulada
   bool studio = preset == 4;
-  // --- referencia de intensidad: la irradiancia de estudio mas alta sobre la piel (rejilla fija de 6x6 puntos) ---
-  float S = 0, Sall = 0;
-  [unroll] for (int gj = 0; gj < 6; gj++) [unroll] for (int gi = 0; gi < 6; gi++) {
-    float2 ug = float2((gi + 0.5) / 6.0, (gj + 0.5) / 6.0);
-    float l = Lum(inLight.SampleLevel(sPoint, ug, 0).xyz);
-    Sall = max(Sall, l); if (IsSkin(ug)) S = max(S, l);
-  }
-  if (S <= 1e-6) S = Sall;
+  // --- referencia de intensidad: la irradiancia de estudio mas alta sobre la piel, suavizada en el tiempo (pasada 0, t6) ---
+  float S = inRef.Load(int3(0, 0, 0)).x;
   if (S <= 1e-6) return o;
   float3 sunC = PesTint(warm) * (S * inten);
   // --- geometria en vista, como la pasada de luz 1f623 (posicion desde la profundidad, normal del G-buffer) ---
