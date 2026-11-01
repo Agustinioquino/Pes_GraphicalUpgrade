@@ -182,13 +182,15 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
         }
         // sk_head: el hueso con mas peso en el 25 % mas alto de la malla; uso total por hueso para el log
         float top[32] = {}, all[32] = {}, cx[32] = {}, cy[32] = {}, cz[32] = {}, wmax[32] = {}; int cnt[32] = {};
+        float px[32] = {}, py[32] = {}, pz[32] = {};   // (01/11) vertice de mas peso de cada hueso (pico: cerca del hueso, no depende de que parte de la cara trae la malla)
         if (ok && mx >= 0 && mx <= 31) {
             const float cut = yhi - 0.25f * (yhi - ylo);
             for (UINT v = 0; v < m->nv; v++) for (int k = 0; k < 4; k++) {
                 const uint32_t b = iv[(size_t)v * 4 + k]; const float w = wv[(size_t)v * 4 + k];
                 if (b > 31 || w <= 0.004f) continue;
                 all[b] += w; cnt[b]++; if (ys[v] >= cut) top[b] += w;
-                cx[b] += w * xs[v]; cy[b] += w * ys[v]; cz[b] += w * zs[v]; wmax[b] = (std::max)(wmax[b], w);
+                cx[b] += w * xs[v]; cy[b] += w * ys[v]; cz[b] += w * zs[v];
+                if (w > wmax[b]) { wmax[b] = w; px[b] = xs[v]; py[b] = ys[v]; pz[b] = zs[v]; }
             }
         }
         for (int s = 0; s < 4; s++) if (mapped[s]) imm->Unmap(m->stVB[s], 0);
@@ -338,6 +340,12 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
             if (eye) k += snprintf(l + k, sizeof l - k, " ojos: izq (%.4f %.4f %.4f) r %.4f, der (%.4f %.4f %.4f) r %.4f", eyes[0], eyes[1], eyes[2], eyes[3], eyes[4], eyes[5], eyes[6], eyes[7]);
             for (int b = 0; b <= mx && k < (int)sizeof l - 24; b++) if (all[b] > 0) k += snprintf(l + k, sizeof l - k, " %d:%.0f/%.0f", b, all[b], top[b]);
             Log("%s", l);
+            if (!thin && !mouth && !eye && hd <= 31 && m->nv >= 1000) {   // (01/11) picos por hueso, para reconocer cada hueso por su posicion estandar (face_rig)
+                k = snprintf(l, sizeof l, "expresiones: malla %d picos (hueso: x y z peso | centro x y z):", m->id);
+                for (int b = 0; b <= mx && k < (int)sizeof l - 80; b++) if (all[b] > 0)
+                    k += snprintf(l + k, sizeof l - k, " %d:(%.3f %.3f %.3f %.2f|%.3f %.3f %.3f)", b, px[b], py[b], pz[b], wmax[b], cx[b] / all[b], cy[b] / all[b], cz[b] / all[b]);
+                Log("%s", l);
+            }
         }
     }
 }
