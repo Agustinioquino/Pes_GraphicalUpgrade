@@ -188,7 +188,7 @@ static int BodyMap(MusUiModel& m, float W, float H) {
     const ImVec2 mouse = ImGui::GetIO().MousePos;
     int hit = -1; float hitR = 1e9f; int hitView = -1;
     for (int view = 0; view < 2; view++) {
-        const char* lab = view == 0 ? "FRENTE" : "ESPALDA";
+        const char* lab = TRS(view == 0 ? "FRENTE" : "ESPALDA");
         const ImVec2 ts = ImGui::CalcTextSize(lab);
         dl->AddText(ImVec2(cx[view] - ts.x * 0.5f, o.y + 6.0f), U32(ImVec4(0.55f, 0.58f, 0.64f, 1)), lab);
         // silueta (las dos mitades)
@@ -238,7 +238,7 @@ static int BodyMap(MusUiModel& m, float W, float H) {
             dl->AddRectFilledMultiColor(ImVec2(lx + lw * a, ly - 3), ImVec2(lx + lw * b, ly + 3), U32(Heat(va)), U32(Heat(vb)), U32(Heat(vb)), U32(Heat(va)));
         }
         const ImU32 tc = U32(ImVec4(0.55f, 0.58f, 0.64f, 1));
-        const char* l0 = "m\xC3\xA1s chico"; const char* l1 = "m\xC3\xA1s grande";
+        const char* l0 = TRS("m\xC3\xA1s chico"); const char* l1 = TRS("m\xC3\xA1s grande");
         dl->AddText(ImVec2(lx - ImGui::CalcTextSize(l0).x - 8.0f, ly - ImGui::GetTextLineHeight() * 0.5f), tc, l0);
         dl->AddText(ImVec2(lx + lw + 8.0f, ly - ImGui::GetTextLineHeight() * 0.5f), tc, l1);
         dl->AddLine(ImVec2(lx + lw * 0.375f, ly - 6), ImVec2(lx + lw * 0.375f, ly + 6), U32(ImVec4(0.85f, 0.88f, 0.92f, 0.9f)), 2.0f);   // 1.0
@@ -253,11 +253,11 @@ static int BodyMap(MusUiModel& m, float W, float H) {
             m.Set(r.idx, r.comp, v);
         }
         ImGui::BeginTooltip();
-        ImGui::TextColored(Heat(v, r.lo, r.hi), "%s  x%.2f", r.label, v);
+        ImGui::TextColored(Heat(v, r.lo, r.hi), "%s  x%.2f", TRS(r.label), v);
         const float g = m.General(r.idx, r.comp);
-        if (m.HasOwn() && fabsf(g - v) > 0.004f) { ImGui::SameLine(); ImGui::TextDisabled("(general x%.2f)", g); }
-        ImGui::PushTextWrapPos(320.0f); ImGui::TextDisabled("%s", r.help); ImGui::PopTextWrapPos();
-        ImGui::TextDisabled("Clic: elegir   Rueda: cambiar (Shift: de a 0.05)");
+        if (m.HasOwn() && fabsf(g - v) > 0.004f) { ImGui::SameLine(); ImGui::TextDisabled(TRS("(general x%.2f)"), g); }
+        ImGui::PushTextWrapPos(320.0f); ImGui::TextDisabled("%s", TRS(r.help)); ImGui::PopTextWrapPos();
+        ImGui::TextDisabled("%s", TRS("Clic: elegir   Rueda: cambiar (Shift: de a 0.05)"));
         ImGui::EndTooltip();
         if (mapClick) clicked = hit;
         (void)hitView;
@@ -284,9 +284,9 @@ static void Row(MusUiModel& m, int i, float labelW) {
         ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(p.x + 6.0f, p.y + ImGui::GetStyle().FramePadding.y + lh * 0.5f), 5.0f, U32(c));
         ImGui::SetCursorScreenPos(ImVec2(p.x + 18.0f, p.y));
         if (changed) ImGui::PushStyleColor(ImGuiCol_Text, Mix(c, ImVec4(1, 1, 1, 1), 0.35f));
-        ImGui::TextUnformatted(r.label);
+        ImGui::TextUnformatted(TRS(r.label));
         if (changed) ImGui::PopStyleColor();
-        if (ImGui::IsItemHovered()) { s_hoverRow = i; ImGui::BeginTooltip(); ImGui::PushTextWrapPos(320.0f); ImGui::TextUnformatted(r.help); ImGui::PopTextWrapPos(); ImGui::EndTooltip(); }
+        if (ImGui::IsItemHovered()) { s_hoverRow = i; ImGui::BeginTooltip(); ImGui::PushTextWrapPos(320.0f); ImGui::TextUnformatted(TRS(r.help)); ImGui::PopTextWrapPos(); ImGui::EndTooltip(); }
         if (ImGui::IsItemClicked()) s_sel = i;
     }
     ImGui::TableSetColumnIndex(1);
@@ -296,8 +296,8 @@ static void Row(MusUiModel& m, int i, float labelW) {
         const int cur = std::clamp((int)lroundf(v < 0.5f ? 1.0f : v), 1, 4);
         static const int kOrder[4] = { 2, 1, 3, 4 };   // como el menu Fisico: estrechos, normales, anchos, redondos
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        if (ImGui::BeginCombo("##ty", kShType[cur])) {
-            for (int o : kOrder) if (ImGui::Selectable(kShType[o], o == cur)) { m.Set(r.idx, r.comp, (float)o); s_sel = i; }
+        if (ImGui::BeginCombo("##ty", TRS(kShType[cur]))) {
+            for (int o : kOrder) if (ImGui::Selectable(TRS(kShType[o]), o == cur)) { m.Set(r.idx, r.comp, (float)o); s_sel = i; }
             ImGui::EndCombo();
         }
     } else
@@ -306,16 +306,16 @@ static void Row(MusUiModel& m, int i, float labelW) {
     ImGui::TableSetColumnIndex(2);
     ImGui::AlignTextToFramePadding();
     if (r.idx == 262 && r.comp == 2)   // (26/10) variante: robusto / atletico en vez de un multiplicador
-        ImGui::TextColored(changed ? Mix(c, ImVec4(1, 1, 1, 1), 0.25f) : ImVec4(0.62f, 0.65f, 0.71f, 1), "%s", !changed ? "TorsoBody" : v < 1.0f ? "robusto" : "atl\xC3\xA9tico");
+        ImGui::TextColored(changed ? Mix(c, ImVec4(1, 1, 1, 1), 0.25f) : ImVec4(0.62f, 0.65f, 0.71f, 1), "%s", TRS(!changed ? "TorsoBody" : v < 1.0f ? "robusto" : "atl\xC3\xA9tico"));
     else if (r.idx == 287 && r.comp == 0)   // (26/10) inclinacion de los hombros
-        ImGui::TextColored(changed ? Mix(c, ImVec4(1, 1, 1, 1), 0.25f) : ImVec4(0.62f, 0.65f, 0.71f, 1), "%s", !changed ? "normales" : v < 1.0f ? "ca\xC3\xAD" "dos" : "rectos");
+        ImGui::TextColored(changed ? Mix(c, ImVec4(1, 1, 1, 1), 0.25f) : ImVec4(0.62f, 0.65f, 0.71f, 1), "%s", TRS(!changed ? "normales" : v < 1.0f ? "ca\xC3\xAD" "dos" : "rectos"));
     else if (shType)
-        ImGui::TextColored(changed ? Mix(c, ImVec4(1, 1, 1, 1), 0.25f) : ImVec4(0.62f, 0.65f, 0.71f, 1), "%s", changed ? "propio" : "-");
+        ImGui::TextColored(changed ? Mix(c, ImVec4(1, 1, 1, 1), 0.25f) : ImVec4(0.62f, 0.65f, 0.71f, 1), "%s", TRS(changed ? "propio" : "-"));
     else
     ImGui::TextColored(changed ? Mix(c, ImVec4(1, 1, 1, 1), 0.25f) : ImVec4(0.62f, 0.65f, 0.71f, 1), "x%.2f", v);
     if (m.HasOwn()) {
         const float g = m.General(r.idx, r.comp);
-        if (ImGui::IsItemHovered() && fabsf(g - v) > 0.004f) ImGui::SetTooltip("General: x%.2f", g);
+        if (ImGui::IsItemHovered() && fabsf(g - v) > 0.004f) ImGui::SetTooltip("%s: x%.2f", TRS("General"), g);
     }
     ImGui::TableSetColumnIndex(3);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(7, ImGui::GetStyle().FramePadding.y));
@@ -327,7 +327,7 @@ static void Row(MusUiModel& m, int i, float labelW) {
     ImGui::BeginDisabled(!changed);
     if (ImGui::Button("1")) { m.Set(r.idx, r.comp, 1.0f); s_sel = i; }
     ImGui::EndDisabled();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Como el juego (x1.00)");
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", TRS("Como el juego (x1.00)"));
     ImGui::PopStyleVar();
     (void)labelW;
     ImGui::PopID();
@@ -357,11 +357,11 @@ static int TypeCombo(MusUiModel& m, const char* id, float w) {
     const int cur = m.TypeMatch();
     int pick = -1;
     ImGui::SetNextItemWidth(w);
-    if (ImGui::BeginCombo(id, cur >= 0 ? m.TypeName(cur) : "A mano")) {
+    if (ImGui::BeginCombo(id, TRS(cur >= 0 ? m.TypeName(cur) : "A mano"))) {
         for (int k = 0; k < m.TypeCount(); k++) {
-            if (k == m.BuiltinTypes()) ImGui::SeparatorText("Tipos propios");
-            if (ImGui::Selectable(m.TypeName(k), k == cur)) pick = k;
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", m.TypeDesc(k));
+            if (k == m.BuiltinTypes()) ImGui::SeparatorText(TRS("Tipos propios"));
+            if (ImGui::Selectable(TRS(m.TypeName(k)), k == cur)) pick = k;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS(m.TypeDesc(k)));
         }
         ImGui::EndCombo();
     }
@@ -374,7 +374,7 @@ void MuscleUiDraw(MusUiModel& m, ImFont* bold, ImFont* big) {
     const float W = ImGui::GetContentRegionAvail().x;
     // --- cabecera: jugador
     if (m.PlayerCount() == 0) {
-        ImGui::TextWrapped("No hay jugadores en pantalla. Entr\xC3\xA1 a Editar > Jugadores > F\xC3\xADsico, o abr\xC3\xAD este men\xC3\xBA en un partido o una repetici\xC3\xB3n para elegir a cualquiera de la cancha.");
+        ImGui::TextWrapped("%s", TRS("No hay jugadores en pantalla. Entr\xC3\xA1 a Editar > Jugadores > F\xC3\xADsico, o abr\xC3\xAD este men\xC3\xBA en un partido o una repetici\xC3\xB3n para elegir a cualquiera de la cancha."));
         return;
     }
     const int sp = std::clamp(m.Selected(), 0, m.PlayerCount() - 1);
@@ -383,38 +383,38 @@ void MuscleUiDraw(MusUiModel& m, ImFont* bold, ImFont* big) {
         if (big) ImGui::PushFont(big);
         if (m.PlayerCount() > 1) {
             ImGui::SetNextItemWidth(std::min(W - 200.0f, 300.0f));
-            if (ImGui::BeginCombo("##jug", pl.name.empty() ? "(sin nombre)" : pl.name.c_str())) {
+            if (ImGui::BeginCombo("##jug", pl.name.empty() ? TRS("(sin nombre)") : pl.name.c_str())) {
                 for (int i = 0; i < m.PlayerCount(); i++) {
                     const MusUiPlayer& q = m.Player(i);
-                    char b[128]; snprintf(b, sizeof b, "%s%s##%u", q.name.empty() ? "(sin nombre)" : q.name.c_str(), q.own ? "  *" : "", q.id);
+                    char b[128]; snprintf(b, sizeof b, "%s%s##%u", q.name.empty() ? TRS("(sin nombre)") : q.name.c_str(), q.own ? "  *" : "", q.id);
                     if (ImGui::Selectable(b, i == sp)) m.Select(i);
                 }
                 ImGui::EndCombo();
             }
-        } else ImGui::TextUnformatted(pl.name.empty() ? "(sin nombre)" : pl.name.c_str());
+        } else ImGui::TextUnformatted(pl.name.empty() ? TRS("(sin nombre)") : pl.name.c_str());
         if (big) ImGui::PopFont();
         ImGui::SameLine(); ImGui::AlignTextToFramePadding(); ImGui::TextDisabled("id %u", pl.id);
         ImGui::SameLine();
-        Pill(m.HasOwn() ? "VALORES PROPIOS" : "USA LOS GENERALES", m.HasOwn() ? kAccent : ImVec4(0.62f, 0.65f, 0.71f, 1));
-        const float cw = ImGui::CalcTextSize("Prendida").x + ImGui::GetFrameHeight() + st.ItemInnerSpacing.x;
+        Pill(TRS(m.HasOwn() ? "VALORES PROPIOS" : "USA LOS GENERALES"), m.HasOwn() ? kAccent : ImVec4(0.62f, 0.65f, 0.71f, 1));
+        const float cw = ImGui::CalcTextSize(TRS("Prendida")).x + ImGui::GetFrameHeight() + st.ItemInnerSpacing.x;
         ImGui::SameLine(std::max(ImGui::GetCursorPosX(), W - cw));
         bool on = m.MuscleOn();
-        if (ImGui::Checkbox("Prendida", &on)) m.SetMuscleOn(on);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("La musculatura de todos los jugadores (Musculatura (prueba)).");
+        if (ImGui::Checkbox(TRS("Prendida"), &on)) m.SetMuscleOn(on);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("La musculatura de todos los jugadores (Musculatura (prueba))."));
     }
     {   // --- tipo de cuerpo, comparar, interruptor
-        ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Tipo de cuerpo"); ImGui::SameLine();
+        ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted(TRS("Tipo de cuerpo")); ImGui::SameLine();
         const int pk = TypeCombo(m, "##tipo", 170.0f);
         if (pk >= 0) m.ApplyType(pk);
         ImGui::SameLine();
-        ImGui::Button("Comparar con el juego");
+        ImGui::Button(TRS("Comparar con el juego"));
         const bool cmp = ImGui::IsItemActive();
         m.Compare(cmp);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Manten\xC3\xA9 apretado: el cuerpo se ve como lo hizo Konami (sin la musculatura). Solt\xC3\xA1 para volver.");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Manten\xC3\xA9 apretado: el cuerpo se ve como lo hizo Konami (sin la musculatura). Solt\xC3\xA1 para volver."));
     }
     if (!m.HasOwn()) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.62f, 0.65f, 0.71f, 1));
-        ImGui::TextWrapped("Usa los valores generales. Al mover cualquier valor pasa a tener valores propios (solo \xC3\xA9l).");
+        ImGui::TextWrapped("%s", TRS("Usa los valores generales. Al mover cualquier valor pasa a tener valores propios (solo \xC3\xA9l)."));
         ImGui::PopStyleColor();
     }
     ImGui::Spacing();
@@ -434,7 +434,7 @@ void MuscleUiDraw(MusUiModel& m, ImFont* bold, ImFont* big) {
             ImGuiTabItemFlags tf = s_tabWant == z ? ImGuiTabItemFlags_SetSelected : 0;
             char tl[64]; int nch = 0;   // la pestana dice cuantos valores cambio
             for (int i = 0; i < kNRows; i++) if (kRows[i].region == z && fabsf(m.Get(kRows[i].idx, kRows[i].comp) - 1.0f) > 0.004f) nch++;
-            if (nch) snprintf(tl, sizeof tl, "%s  %d###z%d", kRegion[z], nch, z); else snprintf(tl, sizeof tl, "%s###z%d", kRegion[z], z);
+            if (nch) snprintf(tl, sizeof tl, "%s  %d###z%d", TRS(kRegion[z]), nch, z); else snprintf(tl, sizeof tl, "%s###z%d", TRS(kRegion[z]), z);
             if (ImGui::BeginTabItem(tl, nullptr, tf)) {
                 const float reserve = (m.HasOwn() ? 3.0f : 1.0f) * (ImGui::GetFrameHeight() + st.ItemSpacing.y) + 24.0f;   // lugar para los botones de abajo
                 ImGui::BeginChild("##filas", ImVec2(0, std::max(ImGui::GetContentRegionAvail().y - reserve, 240.0f)), ImGuiChildFlags_None);
@@ -444,22 +444,22 @@ void MuscleUiDraw(MusUiModel& m, ImFont* bold, ImFont* big) {
             }
         }
         ImGuiTabItemFlags tf = 0;
-        if (ImGui::BeginTabItem("Vivos", nullptr, tf)) {
+        if (ImGui::BeginTabItem((std::string(TRS("Vivos")) + "###vivos").c_str(), nullptr, tf)) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.62f, 0.65f, 0.71f, 1));
-            ImGui::TextWrapped("Para todos los jugadores: los m\xC3\xBAsculos se mueven con el cuerpo y respiran.");
+            ImGui::TextWrapped("%s", TRS("Para todos los jugadores: los m\xC3\xBAsculos se mueven con el cuerpo y respiran."));
             ImGui::PopStyleColor();
             if (BeginRows("##vivos")) {
                 for (const UiGlobalRow& g : kAlive) {
                     ImGui::PushID(g.idx * 4 + g.comp);
                     ImGui::TableNextRow(0, ImGui::GetFrameHeight() + 6.0f);
                     float v = m.Global(g.idx, g.comp);
-                    ImGui::TableSetColumnIndex(0); ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted(g.label);
-                    if (ImGui::IsItemHovered()) { ImGui::BeginTooltip(); ImGui::PushTextWrapPos(320.0f); ImGui::TextUnformatted(g.help); ImGui::PopTextWrapPos(); ImGui::EndTooltip(); }
+                    ImGui::TableSetColumnIndex(0); ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted(TRS(g.label));
+                    if (ImGui::IsItemHovered()) { ImGui::BeginTooltip(); ImGui::PushTextWrapPos(320.0f); ImGui::TextUnformatted(TRS(g.help)); ImGui::PopTextWrapPos(); ImGui::EndTooltip(); }
                     ImGui::TableSetColumnIndex(1);
                     if (ValueBar("##g", &v, g.lo, g.hi, ImGui::GetContentRegionAvail().x, false)) m.SetGlobal(g.idx, g.comp, v);
-                    ImGui::TableSetColumnIndex(2); ImGui::AlignTextToFramePadding(); ImGui::Text(v < 0.005f ? "apag." : "x%.2f", v);
+                    ImGui::TableSetColumnIndex(2); ImGui::AlignTextToFramePadding(); ImGui::Text(v < 0.005f ? TRS("apag.") : "x%.2f", v);
                     ImGui::TableSetColumnIndex(3);
-                    if (ImGui::Button("Normal")) m.SetGlobal(g.idx, g.comp, 1.0f);
+                    if (ImGui::Button(TRS("Normal"))) m.SetGlobal(g.idx, g.comp, 1.0f);
                     ImGui::PopID();
                 }
                 ImGui::EndTable();
@@ -473,39 +473,39 @@ void MuscleUiDraw(MusUiModel& m, ImFont* bold, ImFont* big) {
     ImGui::Separator();
     if (m.HasOwn()) {
         auto bw = [&](const char* t) { return ImGui::CalcTextSize(t).x + 2.0f * st.FramePadding.x; };
-        const float row1 = (m.OtherCount() > 0 ? 200.0f + st.ItemSpacing.x : 0.0f) + bw("Copiar los generales") + st.ItemSpacing.x + bw("Quitar sus valores");
+        const float row1 = (m.OtherCount() > 0 ? 200.0f + st.ItemSpacing.x : 0.0f) + bw(TRS("Copiar los generales")) + st.ItemSpacing.x + bw(TRS("Quitar sus valores"));
         if (m.OtherCount() > 0) {
             ImGui::SetNextItemWidth(200.0f);
-            if (ImGui::BeginCombo("##copiar", "Copiar de otro jugador...")) {
+            if (ImGui::BeginCombo("##copiar", TRS("Copiar de otro jugador..."))) {
                 for (int i = 0; i < m.OtherCount(); i++) if (ImGui::Selectable(m.OtherName(i))) m.CopyFromOther(i);
                 ImGui::EndCombo();
             }
             ImGui::SameLine();
         }
-        if (ImGui::Button("Copiar los generales")) m.CopyGeneral();
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Le pone los valores de las tarjetas generales (sigue con valores propios).");
+        if (ImGui::Button(TRS("Copiar los generales"))) m.CopyGeneral();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Le pone los valores de las tarjetas generales (sigue con valores propios)."));
         if (row1 <= ImGui::GetContentRegionAvail().x) ImGui::SameLine();   // si no entra, a la linea de abajo
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.45f, 0.17f, 0.15f, 1)); ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.60f, 0.22f, 0.18f, 1));
-        if (ImGui::Button("Quitar sus valores")) m.ClearOwn();
+        if (ImGui::Button(TRS("Quitar sus valores"))) m.ClearOwn();
         ImGui::PopStyleColor(2);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Vuelve a usar los valores generales (borra los suyos del archivo).");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Vuelve a usar los valores generales (borra los suyos del archivo)."));
         ImGui::SetNextItemWidth(170.0f);
-        ImGui::InputTextWithHint("##nomtipo", "nombre del tipo", s_typeName, sizeof s_typeName);
+        ImGui::InputTextWithHint("##nomtipo", TRS("nombre del tipo"), s_typeName, sizeof s_typeName);
         ImGui::SameLine();
-        if (ImGui::Button("Guardar como tipo de cuerpo")) m.Status() = m.SaveAsType(s_typeName);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Guarda este cuerpo como un tipo propio: aparece en las listas de tipos (tambi\xC3\xA9n en el men\xC3\xBA F\xC3\xADsico del juego).");
+        if (ImGui::Button(TRS("Guardar como tipo de cuerpo"))) m.Status() = m.SaveAsType(s_typeName);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Guarda este cuerpo como un tipo propio: aparece en las listas de tipos (tambi\xC3\xA9n en el men\xC3\xBA F\xC3\xADsico del juego)."));
         if (m.TypeCount() > m.BuiltinTypes()) {
             ImGui::SameLine(); ImGui::SetNextItemWidth(130.0f);
-            if (ImGui::BeginCombo("##borrar", "Borrar tipo...")) {
+            if (ImGui::BeginCombo("##borrar", TRS("Borrar tipo..."))) {
                 for (int k = m.BuiltinTypes(); k < m.TypeCount(); k++) if (ImGui::Selectable(m.TypeName(k))) m.DeleteUserType(k);
                 ImGui::EndCombo();
             }
         }
     } else {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.45f, 0.30f, 1)); ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.56f, 0.37f, 1));
-        if (ImGui::Button("Darle valores propios")) m.MakeOwn();
+        if (ImGui::Button(TRS("Darle valores propios"))) m.MakeOwn();
         ImGui::PopStyleColor(2);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copia los valores generales a este jugador; despu\xC3\xA9s se cambian sin tocar al resto.");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Copia los valores generales a este jugador; despu\xC3\xA9s se cambian sin tocar al resto."));
     }
     if (!m.Status().empty()) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.58f, 0.64f, 1)); ImGui::TextWrapped("%s", m.Status().c_str()); ImGui::PopStyleColor(); }
     // el musculo bajo el mouse (o el elegido) late en el modelo del juego

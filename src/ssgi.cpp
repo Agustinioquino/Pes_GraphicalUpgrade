@@ -74,7 +74,9 @@ ID3D11ShaderResourceView* SSGIBeforeComposition(ID3D11DeviceContext* c, int fram
     ID3D11Resource* res = nullptr; depth->GetResource(&res); if (!res) { rel(); return nullptr; }
     D3D11_TEXTURE2D_DESC td; ((ID3D11Texture2D*)res)->GetDesc(&td); res->Release();
     if (td.Width < 640 || (g_bbW && (td.Width < g_bbW * 3 / 4 || td.Width > g_bbW * 3))) { rel(); return nullptr; }
-    UINT hw = (td.Width + 1) / 2, hh = (td.Height + 1) / 2;
+    // (31/10) z337 = 1: a resolucion completa (mas definido, ~4x el costo)
+    UINT dv = g_cfg.live[337][2] > 0.5f ? 1u : 2u;
+    UINT hw = (td.Width + dv - 1) / dv, hh = (td.Height + dv - 1) / dv;
     if (td.SampleDesc.Count != 1 || !EnsureTargets(hw, hh)) { rel(); return nullptr; }
     ID3D11Buffer* scb = nullptr; c->PSGetConstantBuffers(2, 1, &scb);
     ID3D11Buffer* sys = nullptr; c->PSGetConstantBuffers(0, 1, &sys);

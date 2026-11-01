@@ -97,6 +97,84 @@ float PesTorsoMask(float3 v) {
   float neck = PesSS(-0.004, 0.004, sN - hN) * (1.0 - PesSS(0.10, 0.12, p.x));
   return (1.0 - arm) * (1.0 - neck) * PesSS(0.86, 0.90, p.y) * (1.0 - PesSS(1.561, 1.569, p.y));
 }
+// (27/10) torso bajo la camiseta (fila 320): el torso de TorsoBody (y mas con la musculatura / esculpido) es mas grueso que el cuerpo para
+// el que el juego hizo las camisetas ajustadas: en el menu del jugador y en partido asomaba por la tela en el escote, el costado y la axila
+// (parches de piel sin sombrear). x320 mm que se mete el torso hacia adentro por su normal (fuera del cuello y los brazos, con la misma
+// mascara del torso), w320 on. (27/10 c) z320 lo pone la DLL: 1 = hay camisetas en escena; sin camiseta (menu Apariencia / Fisico,
+// tecla 4 de Sider) el torso queda entero y no hay escalon en la costura con el brazo y el cuello
+// (27/10 e) y320 = 0 (lo normal): se mete TODA la piel bajo la camiseta (torso, hombros, brazo hasta el codo, cuello hasta el escote) con la misma
+// cantidad a los dos lados de las costuras: ya no hay escalon con el cuello ni con el brazo (lo que no gusto con 8 mm). Se apaga de a
+// poco y sin costura visible: en el cuello de 1.42 a 1.50 m (la union con la cara queda igual), en el brazo de 20 a 30 cm desde el
+// hombro (manga corta; manos enteras) y debajo de la cintura (0.90 a 0.80 m, tapado por el short). y320 = 1: solo el torso (como antes), 2: preciso (abajo)
+float PesTorsoInsetSmooth(float3 rest) {
+  float3 q = float3(abs(rest.x), rest.y, rest.z);
+  float sA = dot(q - float3(0.263, 1.370, 0.020), float3(0.761, -0.643, -0.084));   // a lo largo del brazo desde la costura del hombro
+  float arm = 1.0 - smoothstep(0.20, 0.30, sA) * smoothstep(0.17, 0.22, q.x);   // solo del costado para afuera (la cintura no)
+  float neck = 1.0 - smoothstep(1.42, 1.50, q.y);
+  float hip = smoothstep(0.80, 0.90, q.y);
+  return arm * neck * hip;
+}
+// (31/10) y320 = 2, PRECISO: lo que asoma la piel por la camiseta medido en partido (cuerpo.cpp + pes_body_measure_cs.hlsl, w327),
+// en una grilla en el reposo del cuerpo (t124, el ultimo elemento = celdas con algo). Solo se hunde donde asoma y lo que asoma (+1.5 mm);
+// el resto queda entero. Sin mapa todavia (nunca se midio un partido): como y320 = 0 con x320 mm
+Buffer<float> g_torsoNeed : register(t124);
+#define PES_NEED_NX 32
+#define PES_NEED_NY 64
+#define PES_NEED_NZ 32
+float PesTorsoNeedAt(int3 c) {
+  c = clamp(c, int3(0, 0, 0), int3(PES_NEED_NX - 1, PES_NEED_NY - 1, PES_NEED_NZ - 1));
+  return g_torsoNeed.Load((c.z * PES_NEED_NY + c.y) * PES_NEED_NX + c.x);
+}
+float PesTorsoNeed(float3 rest) {
+  float3 g = (float3(abs(rest.x), rest.y, rest.z) - float3(0.0, 0.84, -0.20)) / float3(0.015, 0.0125, 0.0125) - 0.5;
+  if (any(g < -1.0) || g.x > PES_NEED_NX || g.y > PES_NEED_NY || g.z > PES_NEED_NZ) return 0.0;
+  int3 c = (int3)floor(g); float3 f = g - c;
+  float a = lerp(lerp(PesTorsoNeedAt(c), PesTorsoNeedAt(c + int3(1, 0, 0)), f.x), lerp(PesTorsoNeedAt(c + int3(0, 1, 0)), PesTorsoNeedAt(c + int3(1, 1, 0)), f.x), f.y);
+  float b = lerp(lerp(PesTorsoNeedAt(c + int3(0, 0, 1)), PesTorsoNeedAt(c + int3(1, 0, 1)), f.x), lerp(PesTorsoNeedAt(c + int3(0, 1, 1)), PesTorsoNeedAt(c + int3(1, 1, 1)), f.x), f.y);
+  return lerp(a, b, f.z);
+}
+// (31/10 b) camiseta por jugador: detras del mapa (t124) la DLL deja la lista de los personajes que tienen camiseta, armada con
+// los dibujos de la camiseta (PS 7e64 / a41e / c7ae) de hace 2-3 cuadros: [N+1] cantidad, [N+2] 1 = vale, [N+5+4i] origen del
+// modelo en el mundo (inversa(m_view) x m_viewWorld, igual que pes_body_assign_cs.hlsl) y tipo. Un personaje sin camiseta en
+// la lista (festejo sin camiseta, modelo del menu sin ropa) queda con el torso entero aunque otros tengan camiseta.
+#define PES_SHIRT_BASE (PES_NEED_NX * PES_NEED_NY * PES_NEED_NZ + 1)
+float3 PesCharOrigin(float4x4 VW, float4x4 V) {
+  float3 d = float3(VW._m30, VW._m31, VW._m32) - float3(V._m30, V._m31, V._m32);
+  return float3(dot(d, float3(V._m00, V._m01, V._m02)), dot(d, float3(V._m10, V._m11, V._m12)), dot(d, float3(V._m20, V._m21, V._m22)));
+}
+// 1 = lleva camiseta (o no hay lista: vale la fila 320.z), 0 = este personaje no
+float PesCharHasShirt(float3 org) {
+  if (g_torsoNeed.Load(PES_SHIRT_BASE + 1) < 0.5) return 1.0;
+  int n = min((int)(g_torsoNeed.Load(PES_SHIRT_BASE) + 0.5), 32);
+  if (n <= 0) return 1.0;
+  [loop] for (int i = 0; i < n; i++) {
+    int b = PES_SHIRT_BASE + 4 + 4 * i;
+    float3 p = float3(g_torsoNeed.Load(b), g_torsoNeed.Load(b + 1), g_torsoNeed.Load(b + 2));
+    float2 dd = org.xz - p.xz;
+    if (dot(dd, dd) < 0.36 && abs(org.y - p.y) < 1.0) return 1.0;   // 60 cm: la lista llega 2-3 cuadros tarde (un pique)
+  }
+  return 0.0;
+}
+void PesTorsoInset(inout float3 mP, float3 mN, float3 rest, float3 org) {
+  float4 T = IniParams.Load(int2(320, 0));
+  if (T.w < 0.5 || T.z < 0.5) return;
+  if (PesCharHasShirt(org) < 0.5) return;
+  float mm;
+  // (31/10 b) piso: x320 con el fundido de siempre (lo que Agustin confirmo que tapa), tambien en modo preciso: el mapa solo
+  // suma donde lo medido pide mas (el menu Apariencia pone otra camiseta y otra pose que el partido medido)
+  float base = 0.0;
+  if (T.x > 0.0) base = T.x * ((T.y > 0.5 && T.y < 1.5) ? PesTorsoMask(rest) : PesTorsoInsetSmooth(rest));
+  mm = base;
+  if (T.y > 1.5 && g_torsoNeed.Load(PES_NEED_NX * PES_NEED_NY * PES_NEED_NZ) > 0.5) {
+    float need = PesTorsoNeed(rest);
+    float m2 = (need + 1.5 * saturate(need)) * (1.0 - smoothstep(1.42, 1.50, rest.y));   // el anillo del cuello sigue soldado a la cara
+    m2 = min(m2, max(T.x, 0.0) + 4.0);   // la medicion exagera en algunos puntos (piel equivocada mas cercana): tope = x320 + 4 mm (con la malla achicada, x320 0: 4 mm)
+    mm = max(mm, m2);
+  }
+  if (mm <= 0.0) return;
+  float3 n = mN * rsqrt(max(dot(mN, mN), 1e-8));
+  mP -= n * (min(mm, 25.0) * 0.001);
+}
 // el VS del cuerpo la manda en la parte fraccionaria del codigo del jugador (o6.w = 1000 + i + 0.4 * torso)
 float PesSkinTorso(float code) { return saturate((code - round(code)) / 0.4); }
 // (24/10 e) medicion del color de la piel (variantes con PES_HL_ACC, solo en el menu Fisico): suma de albedo en punto fijo

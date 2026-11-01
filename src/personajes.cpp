@@ -12,6 +12,7 @@
 //    lugar, u32 id en +0x30); PlayerRec_GetName 0x1414c5d70 (nombre UTF-8 en registro+0x38).
 // Solo cambia entradas de vtables (sin tocar codigo) si coinciden el sello del exe, el COL y la funcion original.
 #include "core.h"
+#include <algorithm>
 #include <atomic>
 #include <cstdarg>
 #include <cstring>
@@ -130,12 +131,84 @@ static std::mutex s_logMx; static std::vector<std::string> s_logQ;
 static void Note(const char* fmt, ...) {
     char b[320]; va_list ap; va_start(ap, fmt); vsnprintf(b, sizeof b, fmt, ap); va_end(ap);
     std::lock_guard<std::mutex> lk(s_logMx);
-    if (s_logQ.size() < 256) s_logQ.push_back(b);
+    if (s_logQ.size() < 1024) s_logQ.push_back(b);
+}
+
+// ---------------------------------------------------------------- (27/10) tono de piel del cuerpo por jugador (fila 324)
+// En las caras reales brazos y piernas salen del arm_bsm / thigh_bsm de la cara (tono de la cara) y el torso de torso_N con
+// N = color de piel de la base de datos, que Konami no cuidaba (iba bajo la camiseta): torso blanco en un jugador oscuro.
+// PES21FX\tonos_piel.txt (lineas "id = tono", 1..6) dice el tono correcto; antes de crear el personaje se escribe en los
+// datos del personaje (HumanData + y324, bits z324..z324+2). w324 = 1 vuelca HumanData y el registro del jugador al log
+// (para encontrar el campo). x324 prendido.
+static std::unordered_map<uint32_t, int> s_toneMap; static bool s_toneMapRead = false; static std::mutex s_toneMx;
+static void ReadToneMap() {
+    s_toneMapRead = true;
+    FILE* f = _wfopen((g_cfg.baseDir + L"tonos_piel.txt").c_str(), L"r");
+    if (!f) { Note("tonos de piel: no hay PES21FX\\tonos_piel.txt"); return; }
+    char ln[128]; int n = 0;
+    while (fgets(ln, sizeof ln, f)) {
+        unsigned id = 0; int t = 0;
+        if (ln[0] == '#' || ln[0] == ';') continue;
+        if (sscanf(ln, " %u = %d", &id, &t) == 2 && t >= 1 && t <= 6) { s_toneMap[id] = t; n++; }
+    }
+    fclose(f);
+    Note("tonos de piel: %d jugadores en tonos_piel.txt", n);
+}
+// base: PES21FX\shirtless_skin_map.bin (formato SSK1 del mod Shirtless Celebration: "SSK1", u32 n, n x (u32 id, u32 tono));
+// tonos_piel.txt manda sobre ella
+static void ReadSkinMapBin() {
+    FILE* f = _wfopen((g_cfg.baseDir + L"shirtless_skin_map.bin").c_str(), L"rb");
+    if (!f) return;
+    char mg[4] = {}; uint32_t n = 0, rec[2]; int k = 0;
+    if (fread(mg, 1, 4, f) == 4 && memcmp(mg, "SSK1", 4) == 0 && fread(&n, 4, 1, f) == 1 && n < 200000)
+        for (uint32_t i = 0; i < n && fread(rec, 4, 2, f) == 2; i++) if (rec[1] >= 1 && rec[1] <= 6 && !s_toneMap.count(rec[0])) { s_toneMap[rec[0]] = (int)rec[1]; k++; }
+    fclose(f);
+    Note("tonos de piel: %d jugadores de shirtless_skin_map.bin", k);
+}
+int CharSkinToneFor(uint32_t id) {
+    std::lock_guard<std::mutex> lk(s_toneMx);
+    if (!s_toneMapRead) { ReadToneMap(); ReadSkinMapBin(); }
+    auto it = s_toneMap.find(id & 0x800bffffu); return it == s_toneMap.end() ? 0 : it->second;
+}
+static void* PlayerRec(uint64_t key) {
+    if (!s_nameOk) return nullptr;
+    __try {
+        void* admin = *(void* volatile*)kPlayerDbGlobal; void* db = admin ? *(void* volatile*)((char*)admin + 0x48) : nullptr;
+        return db ? ((DbFindFn)kDbFind)(db, key) : nullptr;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+static void Hex(const unsigned char* b, int n, char* out) { static const char* d = "0123456789abcdef"; for (int i = 0; i < n; i++) { out[i * 2] = d[b[i] >> 4]; out[i * 2 + 1] = d[b[i] & 15]; } out[n * 2] = 0; }
+static void DumpBlock(const char* what, uint32_t id, const void* p, int n) {
+    unsigned char b[0x200]; if (n > (int)sizeof b || !SafeCopy(b, p, n)) return;
+    char h[2 * 64 + 1];
+    for (int o = 0; o < n; o += 64) { Hex(b + o, std::min(64, n - o), h); Note("volcado %s id %u +%03x %s", what, id, o, h); }
+}
+static void SkinBeforeCreate(void* e) {
+    uint64_t key = 0; if (!SafeCopy(&key, (char*)e + 8, 8)) return;
+    const uint32_t id = (uint32_t)(key >> 32) & 0x800bffffu;
+    if (g_cfg.live[324][3] > 0.5f) {
+        static std::atomic<int> nd{0};
+        if (nd.fetch_add(1) < 12) {
+            char nm[64]; PlayerName(key, nm, sizeof nm);
+            Note("volcado personaje id %u \"%s\" (tono en tonos_piel.txt %d)", id, nm, CharSkinToneFor(id));
+            DumpBlock("HumanData", id, e, 0x200);
+            if (void* rec = PlayerRec(key)) DumpBlock("registro", id, rec, 0x17c);
+        }
+    }
+    const int off = (int)(g_cfg.live[324][1] + 0.5f), sh = (int)(g_cfg.live[324][2] + 0.5f);
+    if (g_cfg.live[324][0] < 0.5f || off <= 0 || off > 0x1fc || sh < 0 || sh > 29) return;
+    const int t = CharSkinToneFor(id); if (!t) return;
+    uint32_t v = 0; if (!SafeCopy(&v, (char*)e + off, 4)) return;
+    const uint32_t old = (v >> sh) & 7u; if (old == (uint32_t)t) return;
+    v = (v & ~(7u << sh)) | ((uint32_t)t << sh);
+    SafeCopy((char*)e + off, &v, 4);
+    static std::atomic<int> nl{0}; if (nl.fetch_add(1) < 60) Note("tonos de piel: id %u tono %u -> %d", id, old, t);
 }
 
 static void NoteCreate(void* e, void* before);
 static void* __fastcall hk_Create(void* self, void* e, void* a3, void* a4) {
     void* before = nullptr;
+    if (e) SkinBeforeCreate(e);
     if (e) SafeCopy(&before, (char*)e + 0xa8, sizeof before);
     void* r = o_create(self, e, a3, a4);
     s_nCreate.fetch_add(1, std::memory_order_relaxed);

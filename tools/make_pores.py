@@ -1,6 +1,8 @@
-# PES21 FX - textures\pes_skin_micro_n.dds: micro-relieve de piel en mosaico (1024, periodico), como la piel real de cerca:
-# islas poligonales algo abombadas separadas por surcos (red de la piel), sub-islas mas finas adentro, arrugas finas, y poros
-# escasos en los cruces de los surcos. RGB normal tangente, A = surcos + poros (oclusion/brillo).
+# PES21 FX - textures\pes_skin_micro_n.dds: micro-relieve de piel en mosaico (1024 px = 22 mm de piel, periodico), como la piel
+# real de cerca: red primaria de surcos finos (~1 mm entre surcos, islas casi planas), red secundaria mas fina adentro, arrugas
+# finas, y poros escasos y de tamano variado (0.1..0.3 mm) en los cruces. RGB normal tangente, A = poros (fuerte) + surcos (suave).
+# (31/10) v2: surcos angostos (0.1 mm), islas planas (antes abombadas = 'empedrado / grietas de barro'), 350 poros por mosaico
+# (antes 900, demasiado densos) con radio variado. Los poros grandes de la nariz salen del mismo mosaico a media escala (shader).
 import numpy as np, struct, sys, os
 from scipy.spatial import cKDTree
 from scipy.ndimage import gaussian_filter
@@ -19,18 +21,18 @@ def voronoi(count, seed, k=3):
     d, _ = cKDTree(tiled).query(q, k=k)
     return [d[:, i].reshape(N, N) for i in range(k)]
 # --- islas primarias (red de la piel): bordes = surcos, interior abombado
-d1, d2, d3 = voronoi(520, 1)
+d1, d2, d3 = voronoi(1100, 1)                   # ~0.65 mm entre surcos (mejilla real 0.4..0.8 mm)
 edge = d2 - d1                                   # 0 en el surco
-plateau = np.clip(edge / 11.0, 0, 1); plateau = plateau * plateau * (3 - 2 * plateau)   # subida suave desde el surco (surco ancho)
-dome = 1.0 - 0.55 * np.clip(d1 / 30.0, 0, 1) ** 1.5   # islas bien abombadas (empedrado)
+plateau = np.clip(edge / 6.0, 0, 1); plateau = plateau * plateau * (3 - 2 * plateau)   # surco angosto y de perfil suave (sin bisel)
+dome = 1.0 - 0.12 * np.clip(d1 / 20.0, 0, 1) ** 1.5   # islas casi planas (apenas abombadas)
 h = plateau * dome
-h = gaussian_filter(h, 2.5, mode='wrap')
+h = gaussian_filter(h, 1.6, mode='wrap')
 # bultos grandes de baja frecuencia (la piel no es plana)
-h += 0.25 * pnoise(32, 31, 6)
+h += 0.18 * pnoise(32, 31, 6)
 # --- sub-islas (mas finas) solo dentro de las islas
-s1, s2, _ = voronoi(3000, 2)
-sub = np.clip((s2 - s1) / 3.0, 0, 1); sub = sub * sub * (3 - 2 * sub)
-h = h + 0.22 * plateau * gaussian_filter(sub, 1.0, mode='wrap')
+s1, s2, _ = voronoi(5000, 2)
+sub = np.clip((s2 - s1) / 2.0, 0, 1); sub = sub * sub * (3 - 2 * sub)
+h = h + 0.10 * plateau * gaussian_filter(sub, 1.0, mode='wrap')
 # --- arrugas finas: lineas direccionales (dos direcciones) de muy baja amplitud
 def lines(angle, freq, seed):
     r = np.random.default_rng(seed)
@@ -44,20 +46,26 @@ def lines(angle, freq, seed):
 h += 0.035 * lines(0.6, 1, 3) + 0.03 * lines(-0.9, 1, 4)
 # --- poros: pocos, en cruces de surcos (d3 - d1 chico) elegidos al azar
 junction = (d3 - d1) < 4.0
-cand = np.argwhere(junction); sel = cand[rng.choice(len(cand), size=min(900, len(cand)), replace=False)]
+cand = np.argwhere(junction); cand = cand[rng.permutation(len(cand))]
+sel = []                                          # separacion minima entre poros (sin cadenas a lo largo del surco)
+for c in cand:
+    if all(((abs(c[0] - s[0]) + N // 2) % N - N // 2) ** 2 + ((abs(c[1] - s[1]) + N // 2) % N - N // 2) ** 2 > 22 * 22 for s in sel):
+        sel.append(c)
+        if len(sel) >= 320: break
 pore = np.zeros((N, N), np.float32)
 for (py, px) in sel:
-    R = 7; rad = rng.uniform(2.2, 4.2)
+    R = 12; rad = rng.uniform(2.0, 4.0) * (1.0 + 1.2 * rng.random() ** 3)   # 0.1..0.3 mm, pocos grandes
     ys = np.arange(py - R, py + R + 1) % N; xs = np.arange(px - R, px + R + 1) % N
     dy = (np.arange(-R, R + 1))[:, None]; dx = (np.arange(-R, R + 1))[None, :]
-    pore[np.ix_(ys, xs)] = np.maximum(pore[np.ix_(ys, xs)], np.exp(-(dx * dx + dy * dy) / (2 * rad * rad)))
-h -= 0.9 * pore
+    g = np.exp(-(dx * dx + dy * dy) / (2 * rad * rad)); g = g * g * (3 - 2 * g)   # pozo con fondo y borde definido
+    pore[np.ix_(ys, xs)] = np.maximum(pore[np.ix_(ys, xs)], g)
+h -= 1.1 * pore
 h = gaussian_filter(h, 0.7, mode='wrap')
 # --- normal (la altura de surco a isla ~ 1 unidad; la escala la pone el shader)
 s = 2.2
 dx = (np.roll(h, -1, 1) - np.roll(h, 1, 1)) * 0.5 * s; dy = (np.roll(h, -1, 0) - np.roll(h, 1, 0)) * 0.5 * s
 n = np.stack([-dx, -dy, np.ones_like(h)], -1); n /= np.linalg.norm(n, axis=-1, keepdims=True)
-occ = np.clip((1.0 - plateau) * 0.6 + pore, 0, 1)     # surcos + poros (para oclusion y menos brillo)
+occ = np.clip((1.0 - plateau) * 0.3 + pore, 0, 1)     # poros (fuerte) + surcos (suave): oclusion y menos brillo
 img = np.stack([n[..., 0] * 0.5 + 0.5, n[..., 1] * 0.5 + 0.5, n[..., 2] * 0.5 + 0.5, occ], -1)
 def write_dds(path, img):
     mips = []; cur = img.astype(np.float32)

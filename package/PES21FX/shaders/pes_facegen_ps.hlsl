@@ -79,7 +79,10 @@ void main(float4 pos : SV_Position, float2 uv : TEXCOORD0, out float4 o0 : SV_Ta
   float dark = smoothstep(0.62, 0.38, ratio) * smoothstep(0.15, 0.06, lum0) * smoothstep(0.45, 0.20, sat);   // mismo criterio que el shader de cara
   float hf = abs(lum0 - lum3);
   float hairHF = saturate((hf - 0.035) * 10.0) * smoothstep(0.35, 0.12, lum3);
-  float hairA = 1.0 - saturate((dif0.a - 0.90) * 10.0);   // el alpha del color marca las capas de pelo
+  // (31/10) el alpha del color marca las capas de pelo, pero es un recorte duro por texel (bloques en la sien / patilla de las
+  // genericas): se toma del mip 4 (promedio de 16x16 texeles) con una pendiente suave -> el nacimiento del pelo se funde en ~2 cm
+  float a4 = tDiffuse.SampleLevel(sLin, uv, 4.0).a;
+  float hairA = saturate((0.90 - a4) * 8.0);
   float hair = saturate(max(max(dark, hairHF), hairA * 0.8));
   // dentro de la cara (zona central) el alpha no cuenta: solo barba/cejas por color
   float faceZone = Ell(uv, float2(0.5, 0.5), float2(0.33, 0.30), 0.5);

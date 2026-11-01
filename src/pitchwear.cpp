@@ -119,13 +119,15 @@ static void EnsureRes() {
 //   136: x on | y fuerza | z recuperacion (s) | w fuerza de la pelota
 static ID3D11Texture2D* s_flatTex = nullptr; static ID3D11RenderTargetView* s_flatRTV = nullptr; static ID3D11ShaderResourceView* s_flatSRV = nullptr;
 static ID3D11VertexShader* s_fsVS = nullptr; static ID3D11PixelShader* s_zeroPS = nullptr; static bool s_flatTried = false;
-static ID3D11BlendState* s_bsDecay = nullptr; static ID3D11Buffer* s_flatCB = nullptr;
+static ID3D11BlendState* s_bsDecay = nullptr; static ID3D11Buffer* s_flatCB = nullptr; static ID3D11BlendState* s_bsAddR = nullptr; static ID3D11BlendState* s_bsAddG = nullptr;   // (27/10 n) pinceles al canal R (jugadores) o G (rastro de la pelota)
 static ID3D11Buffer* s_ballStage[kStages] = {}; static int s_ballStageFrame[kStages] = { -1, -1, -1 }; static std::atomic<int> s_ballW{0}; static std::atomic<int> s_ballNoted{-1};
 static float s_ball[3] = {}, s_ballPrev[3] = {}; static bool s_ballOk = false; static int s_flatFrame = 0; static double s_flatT = 0; static int s_flatMatch = -1;
 static void EnsureFlat() {
     if (!g_dev.dev) return;
     if (!s_flatTex) {
-        D3D11_TEXTURE2D_DESC td{}; td.Width = 1024; td.Height = 512; td.MipLevels = 1; td.ArraySize = 1; td.Format = DXGI_FORMAT_R16_UNORM; td.SampleDesc.Count = 1;
+        // (27/10 n) tanda 11: R = pisadas de los jugadores (se levanta en z136 s), G = rastro de la pelota (dura z329 s, 30 por defecto):
+        // Agustin queria ver por donde fue la pelota; con 2 s de recuperacion no quedaba rastro
+        D3D11_TEXTURE2D_DESC td{}; td.Width = 1024; td.Height = 512; td.MipLevels = 1; td.ArraySize = 1; td.Format = DXGI_FORMAT_R16G16_UNORM; td.SampleDesc.Count = 1;
         td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
         if (SUCCEEDED(g_dev.dev->CreateTexture2D(&td, nullptr, &s_flatTex))) {
             g_dev.dev->CreateRenderTargetView(s_flatTex, nullptr, &s_flatRTV); g_dev.dev->CreateShaderResourceView(s_flatTex, nullptr, &s_flatSRV);
@@ -135,6 +137,10 @@ static void EnsureFlat() {
         D3D11_BLEND_DESC bd{}; auto& rt = bd.RenderTarget[0]; rt.BlendEnable = TRUE; rt.SrcBlend = D3D11_BLEND_ZERO; rt.DestBlend = D3D11_BLEND_BLEND_FACTOR; rt.BlendOp = D3D11_BLEND_OP_ADD;
         rt.SrcBlendAlpha = D3D11_BLEND_ZERO; rt.DestBlendAlpha = D3D11_BLEND_BLEND_FACTOR; rt.BlendOpAlpha = D3D11_BLEND_OP_ADD; rt.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
         g_dev.dev->CreateBlendState(&bd, &s_bsDecay);
+        { D3D11_BLEND_DESC ba{}; auto& r2 = ba.RenderTarget[0]; r2.BlendEnable = TRUE; r2.SrcBlend = D3D11_BLEND_ONE; r2.DestBlend = D3D11_BLEND_ONE; r2.BlendOp = D3D11_BLEND_OP_ADD;
+          r2.SrcBlendAlpha = D3D11_BLEND_ONE; r2.DestBlendAlpha = D3D11_BLEND_ONE; r2.BlendOpAlpha = D3D11_BLEND_OP_ADD;
+          r2.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_RED; g_dev.dev->CreateBlendState(&ba, &s_bsAddR);
+          r2.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_GREEN; g_dev.dev->CreateBlendState(&ba, &s_bsAddG); }
         D3D11_BUFFER_DESC d = {}; d.ByteWidth = kMaxPlayers * 16 + 16; d.Usage = D3D11_USAGE_DYNAMIC; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER; d.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
         g_dev.dev->CreateBuffer(&d, nullptr, &s_flatCB);
     }
@@ -163,7 +169,7 @@ static void PitchFlatPresent() {
     const float* F = g_cfg.live[136];
     bool v5 = g_cfg.live[139][0] > 0.5f && g_cfg.live[139][2] > 0.001f;   // (20/10) pasto v5: las hojas se doblan con el mapa
     if ((F[0] < 0.5f && !v5) || !g_dev.imm) return;
-    EnsureFlat(); if (!s_flatRTV || !s_fsVS || !s_zeroPS || !s_vs || !s_ps || !s_flatCB) return;
+    EnsureFlat(); if (!s_flatRTV || !s_fsVS || !s_zeroPS || !s_vs || !s_ps || !s_flatCB || !s_bsAddR || !s_bsAddG) return;
     double t = Now(); float dt = (float)std::clamp(t - s_flatT, 0.001, 0.1); s_flatT = t; s_flatFrame++;
     if (g_matchGen.load() != s_flatMatch) { s_flatMatch = g_matchGen.load(); float z[4] = {}; g_dev.imm->ClearRenderTargetView(s_flatRTV, z); s_ballOk = false; }
     // pelota: el staging mas viejo ya listo (anillo de 3)
@@ -179,15 +185,20 @@ static void PitchFlatPresent() {
           }
           s_ballStageFrame[rd] = -1;
       } }
-    float brush[kMaxPlayers][4]; int nb = 0;
+    float brush[kMaxPlayers][4]; int nb = 0; int nbP = 0;   // (27/10 n) los primeros nbP pinceles son de jugadores (canal R), el resto de la pelota (G)
     float k = std::clamp(F[1] > 0.f ? F[1] : 1.0f, 0.f, 2.f);
     // jugadores (ultimas posiciones conocidas del desgaste en vivo): pisada suave
     for (size_t i = 0; i + 1 < s_prev.size() && nb < kMaxPlayers - 16; i += 2) {
         brush[nb][0] = s_prev[i] / 140.f + 0.5f; brush[nb][1] = s_prev[i + 1] / 79.f + 0.5f; brush[nb][2] = 2.5f * dt * k; brush[nb][3] = 0.45f; nb++;
     }
+    nbP = nb;
     // pelota en el piso: rastro entre la posicion anterior y la actual
     if (s_ballOk) {
         float onGround = std::clamp(1.0f - (s_ball[1] - 0.12f) / 0.25f, 0.0f, 1.0f);
+        // (27/10 n) pique: la pelota venia del aire (> 40 cm) y toca el piso: marca redonda mas fuerte
+        if (onGround > 0.5f && s_ballPrev[1] > 0.4f && nb < kMaxPlayers) {
+            brush[nb][0] = s_ball[0] / 140.f + 0.5f; brush[nb][1] = s_ball[2] / 79.f + 0.5f; brush[nb][2] = 0.6f * k * (F[3] > 0.f ? F[3] : 1.0f); brush[nb][3] = 0.26f; nb++;
+        }
         float dx = s_ball[0] - s_ballPrev[0], dz = s_ball[2] - s_ballPrev[2]; float dist = sqrtf(dx * dx + dz * dz);
         if (dist > 4.0f) dist = 0.0f;   // salto de camara / saque
         int steps = std::clamp((int)(dist / 0.08f) + 1, 1, 15);
@@ -218,7 +229,9 @@ static void PitchFlatPresent() {
     c->GSSetShader(nullptr, nullptr, 0); c->IASetInputLayout(nullptr);
     c->RSSetState(s_rs); c->OMSetDepthStencilState(s_dss, 0);
     // 1) se apaga de a poco: dest *= exp(-dt / tau)
-    float tau = std::clamp(F[2] > 0.1f ? F[2] : 2.0f, 0.3f, 10.0f); float f = expf(-dt / tau); float bfD[4] = { f, f, f, f };
+    float tau = std::clamp(F[2] > 0.1f ? F[2] : 2.0f, 0.3f, 10.0f); float f = expf(-dt / tau);
+    // (27/10 n) el rastro de la pelota (canal G) se desvanece en z329 s (0 = 30)
+    float tauB = std::clamp(g_cfg.live[329][2] > 0.5f ? g_cfg.live[329][2] : 30.0f, 1.0f, 300.0f); float fB = expf(-dt / tauB); float bfD[4] = { f, fB, fB, fB };
     c->VSSetShader(s_fsVS, nullptr, 0); c->PSSetShader(s_zeroPS, nullptr, 0); c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     c->OMSetBlendState(s_bsDecay, bfD, 0xffffffff); c->Draw(3, 0);
     // 2) pinceles nuevos (suma)
@@ -226,9 +239,18 @@ static void PitchFlatPresent() {
         D3D11_MAPPED_SUBRESOURCE mc;
         if (SUCCEEDED(c->Map(s_flatCB, 0, D3D11_MAP_WRITE_DISCARD, 0, &mc))) {
             float* cbp = (float*)mc.pData; cbp[0] = (float)nb; cbp[1] = 140.f; cbp[2] = 79.f; cbp[3] = 0.f; memcpy(cbp + 4, brush, nb * 16); c->Unmap(s_flatCB, 0);
-            float bf[4] = {}; c->OMSetBlendState(s_bsAdd, bf, 0xffffffff);
+            float bf[4] = {};
             c->VSSetShader(s_vs, nullptr, 0); c->PSSetShader(s_ps, nullptr, 0); c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-            c->VSSetConstantBuffers(0, 1, &s_flatCB); c->DrawInstanced(4, (UINT)nb, 0, 0);
+            c->VSSetConstantBuffers(0, 1, &s_flatCB);
+            // (27/10 n) jugadores al canal R, pelota al canal G (el pincel escribe los 4 canales; la mascara elige)
+            // (SV_InstanceID arranca en 0 en cada dibujo: el primer pincel de la pelota va en hdr.w y el VS lo suma)
+            if (nbP > 0) { c->OMSetBlendState(s_bsAddR, bf, 0xffffffff); c->DrawInstanced(4, (UINT)nbP, 0, 0); }
+            if (nb > nbP) {
+                if (SUCCEEDED(c->Map(s_flatCB, 0, D3D11_MAP_WRITE_DISCARD, 0, &mc))) {
+                    float* cb2 = (float*)mc.pData; cb2[0] = (float)nb; cb2[1] = 140.f; cb2[2] = 79.f; cb2[3] = (float)nbP; memcpy(cb2 + 4, brush, nb * 16); c->Unmap(s_flatCB, 0);
+                    c->OMSetBlendState(s_bsAddG, bf, 0xffffffff); c->DrawInstanced(4, (UINT)(nb - nbP), 0, 0);
+                }
+            }
         }
     }
     c->OMSetRenderTargets(8, oRT, oDS); for (auto* v : oRT) if (v) v->Release(); if (oDS) oDS->Release();

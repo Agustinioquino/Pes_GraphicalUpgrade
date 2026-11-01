@@ -1351,7 +1351,7 @@ void MuscleDrawPlayerPanel() {
                             if (ImGui::IsItemHovered()) { ImGui::BeginTooltip(); ImGui::PushTextWrapPos(380); ImGui::TextUnformatted(U8(sl.help).c_str()); ImGui::PopTextWrapPos(); ImGui::EndTooltip(); }
                         }
                         ImGui::SetNextItemWidth(w - 70);
-                        if (ImGui::SliderFloat("##p", &val, sl.lo, sl.hi, sl.fmt.c_str())) ProfDirty();
+                        if (ImGui::SliderFloat("##p", &val, sl.lo, sl.hi, sl.fmt.c_str(), ImGuiSliderFlags_AlwaysClamp)) ProfDirty();
                         ImGui::SameLine();
                         if (ImGui::SmallButton("<")) { val = gen; ProfDirty(); }
                         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Volver al valor general (%.2f)", gen);

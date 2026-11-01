@@ -100,6 +100,9 @@
 #define PES_BODY_RADIUS    0.025  // (m) piel a buscar alrededor de cada punto de tela
 #define PES_BODY_LATERAL   0.03   // (m) el plano tangente de un vertice de la piel vale hasta esta distancia al costado
 #define PES_BODY_WALK      40     // vertices por celda como maximo
+#define PES_BODY_SMOOTH    1      // (27/10) normal de la piel promediada con la vecina (planos que no saltan entre cuadros)
+#define PES_BODY_LIFT      1      // (27/10) el reposo de la tela se corre afuera de la piel (anclaje y piel ya no se pelean)
+#define PES_BODY_LIFT_MAX  0.025  // (m) cuanto se puede correr el reposo como maximo
 #define PES_BODY_DIAG      0      // contadores para el log de la DLL en u8. (25/10 d) APAGADO: con un UAV en u8 el mod de ropa
                                   // compilaba el simulador pero no lo despachaba nunca (la ropa quedaba sin fisica)
 #if !PES_CLOTH_FX
@@ -761,6 +764,29 @@ void pesBodyQuery(uint p, uint k, float3 x)
         }
     }
     if (vA == 0) return;
+#if PES_BODY_SMOOTH
+    // (27/10) normal y movimiento promediados con la piel vecina del mismo lado (peso (1 - d2/R2)^2): el vertice mas cercano
+    // cambia de un cuadro al otro y con el su normal, y el plano saltaba (mangas que vibraban). El punto sigue siendo el del
+    // vertice mas cercano (el promedio de posiciones queda adentro de una superficie curva).
+    float3 sNA = 0, sUA = 0, sNB = 0, sUB = 0; float wA = 0, wB = 0;
+    [loop] for (uint cj = 0; cj < 27; ++cj) {
+        int3 c = c0 + int3(cj % 3, (cj / 3) % 3, cj / 9);
+        uint e = g_bodyTab[tb + pesBodyHash(c)];
+        [loop] for (uint it = 0; it < PES_BODY_WALK && e != 0; ++it) {
+            uint v = e - 1;
+            float3 y, n, u;
+            pesBodyVertex(v, y, n, u);
+            float3 dv = xm - y;
+            float d2 = dot(dv, dv);
+            if (d2 < R2) {
+                float w = 1.0 - d2 / R2; w *= w;
+                if (dot(nA, n) >= 0.7) { sNA += n * w; sUA += u * w; wA += w; }
+                else if (vB != 0 && dot(nB, n) >= 0.7) { sNB += n * w; sUB += u * w; wB += w; }
+            }
+            e = g_bodyNext[v];
+        }
+    }
+#endif
     float det0;
     float3x3 B0i = inverse3((float3x3)B0, det0);
     if (!(abs(det0) > 1e-9)) return;
@@ -770,6 +796,10 @@ void pesBodyQuery(uint p, uint k, float3 x)
         if (e == 0) continue;
         float3 y, n, u;
         pesBodyVertex(e - 1, y, n, u);
+#if PES_BODY_SMOOTH
+        if (j == 0 && wA > 1e-6 && dot(sNA, sNA) > 1e-10) { n = normalize(sNA); u = sUA / wA; }
+        if (j == 1 && wB > 1e-6 && dot(sNB, sNB) > 1e-10) { n = normalize(sNB); u = sUB / wB; }
+#endif
         float3 qb = mul(B0i, y - float3(B0[0].w, B0[1].w, B0[2].w));          // en el reposo de la prenda
         float3 nb = normalize(mul(transpose((float3x3)B0), n) + 1e-12);
         float3 rv = u - (xform(B1, qb) - xform(Bp, qb));                        // la piel respecto de la prenda, por cuadro
@@ -782,6 +812,35 @@ void pesBodyQuery(uint p, uint k, float3 x)
         s_bq[k][j] = float4(qb, asfloat(o.x | (o.y << 16)));
         s_bv[k][j] = uint2(hv.x | (hv.y << 16), hv.z | 0x10000u);
     }
+}
+// (27/10) el punto de reposo de la tela (adonde la tira el anclaje) afuera de la piel: la camiseta del juego esta hecha para
+// el cuerpo de Konami y en TorsoBody (mas grueso, y con la musculatura) su reposo queda adentro del torso / del brazo. El
+// anclaje tiraba la tela hacia adentro y la piel la empujaba hacia afuera en cada sub-paso: la manga vibraba y, donde el
+// anclaje es fuerte (escote, punos, costuras cosidas), el cuerpo atravesaba la tela. Se corre el reposo por los mismos
+// planos de la piel (sin limite por sub-paso: no es un empuje, es el lugar adonde va la tela).
+float3 pesBodyLift(uint p, uint k, float t, float3 y0)
+{
+    if (((s_bv[k][0].y | s_bv[k][1].y) & 0x10000u) == 0) return y0;
+    ParticleRest r = g_rest[p];
+    float3x4 A = skinC(r.skin.z, r.skin.x, r.skin.y);
+    float3 T = float3(A[0].w, A[1].w, A[2].w);
+    float3 c0 = cross(A[1].xyz, A[2].xyz), c1 = cross(A[2].xyz, A[0].xyz), c2 = cross(A[0].xyz, A[1].xyz);
+    float sg = dot(A[0].xyz, c0) < 0.0 ? -1.0 : 1.0;
+    float m = clamp(s_bodyPrm.y * 0.001, 0.0, 0.03);
+    float3 y = y0;
+    [unroll] for (uint j = 0; j < 2; ++j) {
+        if ((s_bv[k][j].y & 0x10000u) == 0) continue;
+        uint on = asuint(s_bq[k][j].w);
+        float3 nb = pesOctDec(float2(on & 0xffff, on >> 16) / 65535.0 * 2.0 - 1.0);
+        float3 rv = f16tof32(uint3(s_bv[k][j].x & 0xffff, s_bv[k][j].x >> 16, s_bv[k][j].y & 0xffff));
+        float3 q = mul((float3x3)A, s_bq[k][j].xyz) + T + rv * (t - s_bodyTc);
+        float3 n = normalize(float3(dot(c0, nb), dot(c1, nb), dot(c2, nb)) * sg + 1e-12);
+        float3 dq = y - q;
+        float d = dot(dq, n);
+        float3 lat = dq - n * d;
+        if (dot(lat, lat) < PES_BODY_LATERAL * PES_BODY_LATERAL && d < m) y += n * min(m - d, PES_BODY_LIFT_MAX);
+    }
+    return y;
 }
 // en cada sub-paso: la tela no queda mas cerca de la piel que la separacion (empuje acotado, sin velocidad nueva)
 void pesBodyCollide(uint p, uint k, float t, inout float3 x, inout float3 xPrev, inout float contactD)
@@ -882,6 +941,12 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
         // delgado: el punto de reposo baja con la gravedad -> la remera cuelga mas larga (solo tela libre)
         float3 restT = rest1;
         if (pesFit > 0.0) { float gl = length(s_grav); if (gl > 1e-4) restT += (s_grav / gl) * pesFit * PES_FIT_HANG * fitFree; }
+#if PES_BODY && PES_BODY_LIFT
+        float3 restB = rest1;   // (27/10) reposo afuera de la piel real (tambien para las costuras cosidas, mas abajo)
+        if (pesBodyHas) { restB = pesBodyLift(p, k, t, rest1); restT += restB - rest1; }
+#else
+        float3 restB = rest1;
+#endif
         x += (restT - x) * (1.0 / (1.0 + alpha / hh));
         float3 off = x - restT;
         float maxD0 = g_tetherRadius * (1.0 - pin);
@@ -1166,7 +1231,7 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
             }
             seamK = saturate(seamK * PES_SEAM_LOCK);
             if (seamK > 0.001) {
-                float3 dS = (rest1 - x) * seamK;
+                float3 dS = (restB - x) * seamK;   // (27/10) el reposo corrido afuera de la piel: la costura no mete la tela en el cuerpo
                 x += dS; xPrev += dS;
             }
         }
