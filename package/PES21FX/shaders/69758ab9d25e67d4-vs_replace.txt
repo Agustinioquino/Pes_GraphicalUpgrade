@@ -188,16 +188,17 @@ void main(
   o8.z = dot(r4.xyzw, g_vsScene.m_shadowProjection2._m00_m10_m20_m30);
   o8.w = dot(r4.xyzw, g_vsScene.m_shadowProjection2._m01_m11_m21_m31);
   p2.y = dot(r4.xyzw, g_vsScene.m_shadowProjection2._m03_m13_m23_m33);
-  // normal y tangente en vista (base del espacio tangente para el vector a la camara)
-  r2.x = dot(r5.xyz, g_vsObject.m_viewWorld._m00_m10_m20);
-  r2.y = dot(r5.xyz, g_vsObject.m_viewWorld._m01_m11_m21);
-  r2.z = dot(r5.xyz, g_vsObject.m_viewWorld._m02_m12_m22);
+  // normal y tangente en el MUNDO (cb5[4..6] = m_world; base del espacio tangente para el vector a la camara, que es en el mundo)
+  // (01/11 i) la primera version las llevaba a vista y los ojos salian negros
+  r2.x = dot(r5.xyz, g_vsObject.m_world._m00_m10_m20);
+  r2.y = dot(r5.xyz, g_vsObject.m_world._m01_m11_m21);
+  r2.z = dot(r5.xyz, g_vsObject.m_world._m02_m12_m22);
   r0.w = dot(r2.xyz, r2.xyz);
   r0.w = rsqrt(r0.w);
   r2.xyz = r2.xyz * r0.www;
-  r4.z = dot(r1.xyz, g_vsObject.m_viewWorld._m00_m10_m20);
-  r4.x = dot(r1.xyz, g_vsObject.m_viewWorld._m01_m11_m21);
-  r4.y = dot(r1.xyz, g_vsObject.m_viewWorld._m02_m12_m22);
+  r4.z = dot(r1.xyz, g_vsObject.m_world._m00_m10_m20);
+  r4.x = dot(r1.xyz, g_vsObject.m_world._m01_m11_m21);
+  r4.y = dot(r1.xyz, g_vsObject.m_world._m02_m12_m22);
   r0.w = dot(r4.xyz, r4.xyz);
   r0.w = rsqrt(r0.w);
   r4.xyz = r4.xyz * r0.www;
@@ -207,16 +208,16 @@ void main(
   r0.w = rsqrt(r0.w);
   r4.xyz = r4.xyz * r0.www;
   r4.xyz = r4.xyz * v2.www;
-  // normal, tangente y binormal en el mundo (TEXCOORD5 / 6 / 7)
-  r6.x = dot(r5.xyz, g_vsObject.m_world._m00_m10_m20);
-  r6.y = dot(r5.xyz, g_vsObject.m_world._m01_m11_m21);
-  r6.z = dot(r5.xyz, g_vsObject.m_world._m02_m12_m22);
+  // normal, tangente y binormal en VISTA (cb5[0..2] = m_viewWorld; TEXCOORD5 / 6 / 7)
+  r6.x = dot(r5.xyz, g_vsObject.m_viewWorld._m00_m10_m20);
+  r6.y = dot(r5.xyz, g_vsObject.m_viewWorld._m01_m11_m21);
+  r6.z = dot(r5.xyz, g_vsObject.m_viewWorld._m02_m12_m22);
   r0.w = dot(r6.xyz, r6.xyz);
   r0.w = rsqrt(r0.w);
   r5.xyz = r6.xyz * r0.www;
-  r6.x = dot(r1.xyz, g_vsObject.m_world._m00_m10_m20);
-  r6.y = dot(r1.xyz, g_vsObject.m_world._m01_m11_m21);
-  r6.z = dot(r1.xyz, g_vsObject.m_world._m02_m12_m22);
+  r6.x = dot(r1.xyz, g_vsObject.m_viewWorld._m00_m10_m20);
+  r6.y = dot(r1.xyz, g_vsObject.m_viewWorld._m01_m11_m21);
+  r6.z = dot(r1.xyz, g_vsObject.m_viewWorld._m02_m12_m22);
   r0.w = dot(r6.xyz, r6.xyz);
   r0.w = rsqrt(r0.w);
   r1.xyz = r6.xyz * r0.www;
