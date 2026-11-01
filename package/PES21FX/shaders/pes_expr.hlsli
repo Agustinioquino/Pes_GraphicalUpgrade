@@ -376,7 +376,14 @@ void PesMuscleApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
   float smile = saturate(PesMusGesture(corner, hh, Pc, false) / 0.006), smileP = saturate(PesMusGesture(corner, hh, Pc, true) / 0.006);
   float frown = saturate(-PesMusGesture(brow, hh, Pb, false) / 0.004), frownP = saturate(-PesMusGesture(brow, hh, Pb, true) / 0.004);
   if (smile <= 0.001 && smileP <= 0.001 && frown <= 0.001 && frownP <= 0.001) return;
-  float h = 0, hp = 0;           // altura a lo largo de la normal (m), este cuadro / anterior
+  // (01/11 k, captura de Agustin: "corte" azul en la union del ala de la nariz y rayas en la mandibula) la altura NO va
+  // por la normal del vertice: en las aristas duras (ala de la nariz, menton) el modelo trae el mismo punto dos veces con
+  // normales distintas y cada copia se iba para otro lado (se abria la malla y se veia el fondo). Va por una direccion
+  // fija de la cabeza, "hacia afuera" de la mejilla / de la frente, igual para todas las copias del punto.
+  float3 nd = normalize(float3(sx * 0.55, -0.12, 0.83));   // mejilla y surco: afuera y adelante
+  float3 nf = normalize(float3(sx * 0.10, 0.12, 0.99));    // ceno: casi adelante
+  float h = 0, hp = 0;           // altura a lo largo de nd (m), este cuadro / anterior
+  float hf = 0, hfp = 0;         // idem a lo largo de nf (ceno)
   float2 gr = 0;                 // gradiente de h en (x hacia afuera, y) para inclinar la normal
   float up = 0, upP = 0;         // subida de la mejilla
   // ---- mejilla
@@ -412,11 +419,11 @@ void PesMuscleApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
     float a = Mu.z * (0.0009 * ridge - 0.0004 * groove);
     float dax = Mu.z * (0.0009 * ridge * (-2.0 * ex1 / 0.0045) - 0.0004 * groove * (-2.0 * ex0 / 0.0035)) * 0.5;
     float day = Mu.z * (0.0009 * ridge - 0.0004 * groove) * (-2.0 * ey / 0.011) * 0.5;
-    h += a * frown; hp += a * frownP;
+    hf += a * frown; hfp += a * frownP;
     gr += float2(dax, day) * frown;
   }
-  h *= face; hp *= face; gr *= face; up *= face; upP *= face;
-  float3 off = n * h + float3(0.0, up, 0.0), offP = n * hp + float3(0.0, upP, 0.0);
+  h *= face; hp *= face; hf *= face; hfp *= face; gr *= face; up *= face; upP *= face;
+  float3 off = nd * h + nf * hf + float3(0.0, up, 0.0), offP = nd * hp + nf * hfp + float3(0.0, upP, 0.0);
   pos  += mul(off, (float3x3)g_vsBone.m_boneMatrices[hh]);
   prev += mul(offP, (float3x3)g_vsPrevBone.m_boneMatrices[hh]);
   // la normal se inclina en contra del gradiente (campo de altura sobre la piel, que mira casi a +z)
