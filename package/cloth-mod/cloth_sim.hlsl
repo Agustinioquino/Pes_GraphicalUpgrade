@@ -746,9 +746,9 @@ void pesBodyQuery(uint p, uint k, float3 x, float3 xr)
     const float R2 = PES_BODY_RADIUS * PES_BODY_RADIUS;
     float dA = R2, dB = R2; uint vA = 0, vB = 0; float3 nA = 0, nB = 0;
     float3 xm = 0; int3 c0 = 0;
-    [loop] for (uint pass = 0; pass < 2 && vA == 0; ++pass) {
-    if (pass == 1 && !(all(isfinite(xr)) && dot(xr, xr) > 1e-8)) break;   // reposo no calculado: nada
-    float3 b = mul(Ai, (pass == 0 ? x : xr) - float3(A[0].w, A[1].w, A[2].w));
+    [loop] for (uint qp = 0; qp < 2 && vA == 0; ++qp) {
+    if (qp == 1 && !(all(isfinite(xr)) && dot(xr, xr) > 1e-8)) break;   // reposo no calculado: nada
+    float3 b = mul(Ai, (qp == 0 ? x : xr) - float3(A[0].w, A[1].w, A[2].w));
     xm = xform(B0, b);
     if (!all(isfinite(xm))) return;
     c0 = (int3)floor(xm / PES_BODY_CELL) - 1;
@@ -769,7 +769,7 @@ void pesBodyQuery(uint p, uint k, float3 x, float3 xr)
             e = g_bodyNext[v];
         }
     }
-    }   // pass
+    }   // qp (primero x, despues el reposo)
     if (vA == 0) return;
 #if PES_BODY_SMOOTH
     // (27/10) normal y movimiento promediados con la piel vecina del mismo lado (peso (1 - d2/R2)^2): el vertice mas cercano
