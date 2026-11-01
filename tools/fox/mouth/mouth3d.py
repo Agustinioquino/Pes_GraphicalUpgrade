@@ -266,6 +266,10 @@ def build(src_fmdl, texdir, log=print):
     for c in np.unique(lab):
         if c in (c_up, c_lo, c_tg): continue
         Pc, UVc, Fc, Wc = sub(c, 1)
+        # (01/11 c) la lengua se reconoce por uv en el VS (hilo de expresiones): u 0.295..0.715, v 0.668..0.99 tiene que ser
+        # SOLO lengua. El piso y las mejillas de Konami rozan esa caja (u 0.28..0.314): se corren a u <= 0.279 (zona oscura)
+        hit = (UVc[:, 0] > 0.279) & (UVc[:, 0] < 0.5) & (UVc[:, 1] >= 0.66) & (UVc[:, 1] <= 1.0)
+        UVc = UVc.copy(); UVc[hit, 0] = 0.279
         parts.append((Pc, UVc, Fc, Wc, 'resto'))
     # ---- juntar
     Pa, UVa, Fa, Wa, tag = [], [], [], [], []
