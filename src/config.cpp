@@ -126,7 +126,7 @@ static bool LoadConfigLocked() {
         if (Lower(section) == "motor") {   // (20/10) parches en memoria del motor (exepatch.cpp)
             if (kl == "motor") c.motorPatch = atoi(v.c_str()) != 0;
             else if (kl == "sol_parche") c.motorSunFix = atoi(v.c_str()) != 0;   // (27/10) el sol en vista con la matriz al reves (exepatch.cpp)
-            else if (kl == "sombra_parche") c.motorShadowFix = std::clamp(atoi(v.c_str()), 0, 3);   // (27/10) la matriz del shadow map con la vista al reves
+            else if (kl == "sombra_parche") c.motorShadowFix = std::clamp(atoi(v.c_str()), 0, 4);   // (27/10) la matriz del shadow map con la vista al reves
             else if (kl == "sombra_resolucion") c.motorShadowRes = std::clamp(atoi(v.c_str()), 0, 8192);
             else if (kl == "sombra_cascadas") c.motorCascadeScale = std::clamp((float)atof(v.c_str()), 0.0f, 4.0f);
             else if (kl == "pasto_buscar") c.grassScan = atoi(v.c_str()) != 0;
@@ -297,6 +297,7 @@ static bool LoadConfigLocked() {
                 r->hasParamOverride = true;
             }
             else if (k == "event" && Lower(v) == "turf") a.kind = RuleAction::EventTurf;
+            else if (k == "expr") { a.kind = RuleAction::Expr; ss >> a.slot; }   // (31/10) expresiones: cbuffer de la malla de cara en el VS (expr.cpp)
             else if (k == "facegen") { a.kind = RuleAction::FaceGen; ss >> a.slot >> a.idx; if (a.idx <= 0) a.idx = a.slot + 1; }
             else continue;
             r->actions.push_back(a);
@@ -492,6 +493,12 @@ bool SaveConfigValues() {
         // (20/10) una clave que no estaba cuando se leyo el ini (se agrego con el juego abierto, sin "Recargar config")
         // conserva el valor del archivo: antes se guardaba el valor vivo (0) y se perdian opciones nuevas
         if (!g_cfg.info[idx][comp].defined) continue;
+        // (31/10) nunca guardar fuera del rango del slider de la tarjeta (x318 se guardaba en -1.17 / 2.61 con rango 0..1)
+        for (auto& g : g_cfg.groups) for (auto& sl : g.sliders) {
+            if (!sl.ext.empty() || sl.idx != idx || sl.comp != comp || !sl.optVals.empty()) continue;
+            float& v = g_cfg.live[idx][comp];
+            if (v < sl.lo || v > sl.hi) { float cl = v < sl.lo ? sl.lo : sl.hi; Log("guardar: %s = %g fuera del rango %g..%g del slider '%s': guardado %g", k.c_str(), v, sl.lo, sl.hi, sl.label.c_str(), cl); v = cl; }
+        }
         char buf[64]; snprintf(buf, sizeof(buf), "%g", g_cfg.live[idx][comp]);
         raw = k + " = " + buf;
         g_cfg.base[idx][comp] = g_cfg.live[idx][comp];
@@ -559,6 +566,7 @@ void PollKeys(bool focused) {
         bool press = down && !k.wasDown, release = !down && k.wasDown;
         k.wasDown = down;
         if (press) {
+            Log("tecla: %s", k.name.c_str());   // (1/11) para ver en el log que la combinacion disparo
             if (!k.run.empty()) {
                 if (Lower(k.run).find("resetsweat") != std::string::npos) s_matchStart = Now();
             }

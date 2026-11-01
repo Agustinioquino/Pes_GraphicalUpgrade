@@ -13,6 +13,7 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg
 namespace fx {
 
 std::atomic<bool> g_menuOpen{false};
+std::atomic<bool> g_menuTyping{false};   // (31/10) campo de texto del menu activo (freecam.cpp)
 static bool s_init = false;
 static HWND s_hwnd = nullptr;
 static WNDPROC s_oldProc = nullptr;
@@ -29,6 +30,15 @@ static ID3D11ShaderResourceView* s_logo = nullptr; static float s_logoAspect = 1
 void OverlayResize() { if (s_rtv) { s_rtv->Release(); s_rtv = nullptr; } }
 
 static LRESULT CALLBACK MenuProc(HWND h, UINT m, WPARAM w, LPARAM l) {
+    // (1/11) rueda del mouse para el zoom de la camara libre (mensaje normal o raw input, por si el juego pide NOLEGACY)
+    if (!g_menuOpen && FreeCamActive()) {
+        if (m == WM_MOUSEWHEEL) FreeCamWheel((int)GET_WHEEL_DELTA_WPARAM(w));
+        else if (m == WM_INPUT) {
+            RAWINPUT ri{}; UINT sz = sizeof(ri);
+            if (GetRawInputData((HRAWINPUT)l, RID_INPUT, &ri, &sz, sizeof(RAWINPUTHEADER)) != (UINT)-1 && ri.header.dwType == RIM_TYPEMOUSE &&
+                (ri.data.mouse.usButtonFlags & RI_MOUSE_WHEEL)) FreeCamWheel((int)(short)ri.data.mouse.usButtonData);
+        }
+    }
     if ((g_menuOpen || g_inspectOn) && s_init) {
         ImGui_ImplWin32_WndProcHandler(h, m, w, l);
         ImGuiIO& io = ImGui::GetIO();
@@ -205,7 +215,11 @@ static void DrawGroup(MenuGroup& g, int gid) {
                     ImGui::EndCombo();
                 }
             } else {
-                ImGui::SliderFloat("##s", &val, sl.lo, sl.hi, sl.fmt.c_str());
+                // (31/10) AlwaysClamp: el valor escrito con Ctrl+clic tambien queda dentro del rango del slider
+                // (x318 "Claridad del ojo" se guardaba en -1.17 / 2.61 con rango 0..1); ademas se recorta lo que
+                // venga de afuera (teclas, Avanzado) para que el ini nunca guarde un valor fuera del rango
+                if (!isExt && (val < sl.lo || val > sl.hi)) { float cl = val < sl.lo ? sl.lo : sl.hi; Log("menu: %c%d = %g fuera del rango %g..%g del slider '%s': recortado a %g", "xyzw"[sl.comp], sl.idx, val, sl.lo, sl.hi, sl.label.c_str(), cl); val = cl; }
+                ImGui::SliderFloat("##s", &val, sl.lo, sl.hi, sl.fmt.c_str(), ImGuiSliderFlags_AlwaysClamp);
                 if (ImGui::IsItemHovered() && !ImGui::IsItemActive()) ImGui::SetTooltip("%s", TRS("Ctrl+clic para escribir un valor exacto"));
             }
             ImGui::SameLine();
@@ -683,6 +697,106 @@ static void DrawPhysiqueHint() {
     ImGui::End();
 }
 
+// (1/11) aviso en pantalla de la camara libre / camara lenta (pedido de Agustin: saber cuando estan activas y ver las teclas).
+// A la izquierda, arriba de los iconos de controles del editor; no recibe entrada.
+static void DrawCamaraHud(bool freeCam, float slow) {
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    // a la izquierda, arriba de los iconos de controles del editor (Agustin 1/11)
+    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + 28, vp->Pos.y + vp->Size.y * 0.84f), ImGuiCond_Always, ImVec2(0, 1));
+    ImGui::SetNextWindowBgAlpha(0.72f);
+    ImGui::Begin("##camara_aviso", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_AlwaysAutoResize |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
+    const ImVec4 gold(0.85f, 0.68f, 0.28f, 1);
+    if (freeCam) {
+        if (s_fontBold) ImGui::PushFont(s_fontBold);
+        ImGui::TextColored(gold, "%s", TRS("CAMARA LIBRE"));
+        if (s_fontBold) ImGui::PopFont();
+        ImGui::SameLine(); ImGui::TextDisabled("  zoom x%.2f   %.1f m/s", g_cfg.live[344][2], g_cfg.live[344][1]);
+        ImGui::TextUnformatted(TRS("W / S adelante y atras   A / D izquierda y derecha   Q / E bajar y subir"));
+        ImGui::TextUnformatted(TRS("Flechas o mouse (boton derecho): girar   Rueda o Re Pag / Av Pag: zoom   Shift: rapido   Ctrl: lento"));
+        ImGui::TextUnformatted(TRS("Inicio: volver a la camara del juego   Alt+Shift+V: apagar"));
+        if (g_cfg.live[346][0] > 0.5f) {
+            if (g_cfg.live[346][2] > 0.5f) ImGui::TextColored(gold, "%s", TRS("Siguiendo la cara: W / S acercan, A / D giran alrededor, Q / E suben y bajan   Alt+Shift+F: soltar"));
+            else ImGui::TextDisabled("%s", TRS("Seguir la cara: esperando ver la cara en el visor del editor   Alt+Shift+F: soltar"));
+        } else ImGui::TextDisabled("%s", TRS("Alt+Shift+F: seguir la cara"));
+    }
+    if (slow != 1.0f) {
+        if (freeCam) ImGui::Separator();
+        if (s_fontBold) ImGui::PushFont(s_fontBold);
+        ImGui::TextColored(gold, "%s", TRS("CAMARA LENTA"));
+        if (s_fontBold) ImGui::PopFont();
+        ImGui::SameLine(); ImGui::TextDisabled("  x%.2f", slow);
+        ImGui::TextUnformatted(TRS("Alt+Shift+L: 1/2, 1/4, 1/10, normal   (Insert > Camara)"));
+        if (g_cfg.live[343][3] <= 0.0f && g_cfg.live[343][2] <= 0.5f) ImGui::TextDisabled("%s", TRS("(el visor no esta corriendo: entra al modo editar)"));
+    }
+    ImGui::End();
+}
+
+// (1/11) iconos de la luz de prueba del editor (filas 297 / 298 / 319, pes_ssss_inc.hlsli): pedido de Agustin, ver donde esta
+// la luz. La luz es direccional y la camara del visor es casi ortografica (tele): visto desde el jugador, la direccion de la luz
+// en vista (x a la derecha, y arriba) se dibuja como un punto alrededor de la cara; delante del jugador = icono lleno y grande,
+// detras = chico, transparente y con la linea cortada. Mismos presets que el shader.
+static void LightDir(float az, float el, float& x, float& y, float& front) {
+    const float d = 3.14159265f / 180.0f;
+    x = std::cos(el * d) * std::sin(az * d); y = std::sin(el * d); front = std::cos(el * d) * std::cos(az * d);
+}
+static ImU32 LightCol(float warm, float a) {
+    warm = std::clamp(warm, 0.0f, 1.0f);
+    float r = 0.80f + 0.20f * warm, g = 0.88f - 0.26f * warm, b = 1.00f - 0.68f * warm;
+    float m = std::max(r, std::max(g, b));
+    return ImGui::ColorConvertFloat4ToU32(ImVec4(r / m, g / m, b / m, a));
+}
+static void DrawOneLightIcon(ImDrawList* dl, ImVec2 c, float R, float az, float el, float warm, const char* name) {
+    float x, y, f; LightDir(az, el, x, y, f);
+    const bool back = f < 0.0f;
+    const float a = back ? 0.45f : 1.0f, rad = back ? 9.0f : 14.0f;
+    ImVec2 p(c.x + x * R, c.y - y * R);
+    const ImU32 col = LightCol(warm, a), dark = IM_COL32(0, 0, 0, (int)(170 * a));
+    // linea desde la cara (cortada si la luz esta detras)
+    const int seg = 14;
+    for (int i = 0; i < seg; i++) {
+        if (back && (i & 1)) continue;
+        float t0 = (float)i / seg, t1 = (float)(i + 1) / seg;
+        ImVec2 a0(c.x + (p.x - c.x) * t0, c.y + (p.y - c.y) * t0), a1(c.x + (p.x - c.x) * t1, c.y + (p.y - c.y) * t1);
+        dl->AddLine(a0, a1, LightCol(warm, a * 0.55f), 1.5f);
+    }
+    // sol: disco con rayos
+    for (int k = 0; k < 8; k++) {
+        float an = k * 0.785398f;
+        ImVec2 d(std::cos(an), std::sin(an));
+        dl->AddLine(ImVec2(p.x + d.x * (rad + 3), p.y + d.y * (rad + 3)), ImVec2(p.x + d.x * (rad + 9), p.y + d.y * (rad + 9)), col, 2.0f);
+    }
+    dl->AddCircleFilled(p, rad + 1.5f, dark, 24);
+    dl->AddCircleFilled(p, rad, col, 24);
+    char buf[96]; snprintf(buf, sizeof buf, "%s%s  %.0f / %.0f", TRS(name), back ? TRS(" (detras)") : "", az, el);
+    ImVec2 tp(p.x + rad + 12, p.y - 8);
+    dl->AddText(ImVec2(tp.x + 1, tp.y + 1), dark, buf);
+    dl->AddText(tp, col, buf);
+}
+static void DrawEditorLightIcons() {
+    float E[4], E2[4], E3[4];
+    for (int i = 0; i < 4; i++) { E[i] = g_cfg.live[297][i]; E2[i] = g_cfg.live[298][i]; E3[i] = g_cfg.live[319][i]; }
+    const int preset = (int)(E[1] + 0.5f);
+    float az = E[2], el = E[3], warm = E2[1];
+    if (preset == 1) { az = 50; el = 45; warm = 0.62f; }
+    else if (preset == 2) { az = 70; el = 12; warm = 0.95f; }
+    else if (preset == 3) { az = -40; el = 60; warm = 0.15f; }
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    // centro: la cara (alto medido en skintone.cpp, fila 192 z/w en pixeles del cuadro) o el centro de la pantalla
+    ImVec2 c(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.42f);
+    unsigned rw = 0, rh = 0; SSSSRenderSize(rw, rh);
+    const float y0 = g_cfg.live[192][2], y1 = g_cfg.live[192][3];
+    if (rh > 0 && y1 > y0 + 8.0f && y1 <= (float)rh) c.y = vp->Pos.y + (0.5f * (y0 + y1) / (float)rh) * vp->Size.y;
+    const float R = vp->Size.y * 0.30f;
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    dl->AddCircle(c, 5.0f, IM_COL32(255, 255, 255, 120), 16, 1.5f);
+    if (preset == 4) {
+        if (E3[1] > 0.001f) DrawOneLightIcon(dl, c, R, (az >= 0 ? -1.0f : 1.0f) * std::clamp(90.0f - std::fabs(az) * 0.5f, 25.0f, 70.0f), 8.0f, std::max(warm - 0.2f, 0.0f), "Relleno");
+        if (E3[2] > 0.001f) DrawOneLightIcon(dl, c, R, (az >= 0 ? 1.0f : -1.0f) * 150.0f, 35.0f, 0.45f, "Recorte");
+        DrawOneLightIcon(dl, c, R, az, el, warm, "Principal");
+    } else DrawOneLightIcon(dl, c, R, az, el, warm, "Sol de prueba");
+}
+
 void OverlayPresent(IDXGISwapChain* sc) {
     if (!g_dev.dev || !g_cfg.optOverlay) return;
     if (!s_init) Init(sc);
@@ -694,8 +808,11 @@ void OverlayPresent(IDXGISwapChain* sc) {
     // (24/10 b) el aviso de abajo ya no hace falta (la musculatura tiene sus paginas y L1 / R1 en el menu del juego) y tapaba
     // la barra de botones
     const bool hint = false;
-    if (!g_menuOpen) g_blockGameKeys = false;
-    if (!g_menuOpen && !g_inspectOn && !hint) return;
+    if (!g_menuOpen) { g_blockGameKeys = FreeCamBlocksKeys(); g_menuTyping = false; }   // (31/10) con la camara libre el juego tampoco ve el teclado
+    const bool camFree = FreeCamActive(); const float camSlow = TiempoFactor();   // (1/11) aviso en pantalla
+    const bool camHud = !g_menuOpen && (camFree || camSlow != 1.0f);
+    const bool lightIcons = g_cfg.live[319][0] > 0.5f && g_cfg.live[297][0] > 0.5f && SSSSEditorLightAge() < 0.5;   // (1/11) iconos de la luz del editor
+    if (!g_menuOpen && !g_inspectOn && !hint && !camHud && !lightIcons) return;
     if (!s_rtv) {
         ID3D11Texture2D* bb = nullptr;
         if (FAILED(sc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb)) || !bb) return;
@@ -709,9 +826,12 @@ void OverlayPresent(IDXGISwapChain* sc) {
     ImGui::GetIO().MouseDrawCursor = g_menuOpen.load();
     if (g_menuOpen) { if (fis && !s_fullMenu) DrawPhysiqueWindow(); else DrawMenu(); }
     else if (hint) DrawPhysiqueHint();
+    if (camHud) DrawCamaraHud(camFree, camSlow);
+    if (lightIcons) DrawEditorLightIcons();
     InspectDrawOverlay();
     // (31/10) teclas del juego: con 1 se bloquean solo mientras hay un campo de texto activo (buscador, nombres de presets)
-    g_blockGameKeys = g_menuOpen && (g_cfg.blockKeys == 2 || (g_cfg.blockKeys == 1 && ImGui::GetIO().WantTextInput));
+    g_menuTyping = g_menuOpen && ImGui::GetIO().WantTextInput;
+    g_blockGameKeys = (g_menuOpen && (g_cfg.blockKeys == 2 || (g_cfg.blockKeys == 1 && ImGui::GetIO().WantTextInput))) || FreeCamBlocksKeys();
     if (!s_btnPending.empty()) {
         std::string a = s_btnPending; s_btnPending.clear();
         if (a == "hair_export") { std::string st; FaceGenExportHair(st); s_status = st; }

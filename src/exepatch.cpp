@@ -174,8 +174,8 @@ static void SunFixPresent() {
 // igual) y vuelve. En TV (rotacion simetrica) da exactamente lo mismo que el juego. Emulado con unicorn sobre los bytes del
 // juego con las matrices reales del log: reproduce lo medido sin parche (74.1 / 0.0 / 3.1 grados) y da 0.0 con el parche.
 // (La primera version, 7a8f7d8, trasponia la matriz entera en 0x14171e34a sola: no tocaba la sombra del sol.)
-// sombra_parche: 0 = como el juego, 1 = corrige m_shadowProjection en el cbuffer de escena (hooks.cpp), 2 = igual que 1,
-// 3 = solo registro (sin corregir: anota las matrices de la camara, la del cuadro anterior y las del shader).
+// sombra_parche: 0 = como el juego, 1 = (31/10) corrige la camara de sombras en el exe (0x1416c61e9, abajo), 2 = la
+// correccion vieja de m_shadowProjection en el cbuffer de escena (hooks.cpp; no sirve sola), 3 = solo registro (sin corregir: anota las matrices de la camara, la del cuadro anterior y las del shader).
 static const uintptr_t kShadowFixAt = 0x14171e34aull, kShadowFixBack = 0x14171e37aull;
 static const unsigned char kShadowFixOld[48] = {
     0x0f,0x28,0xb2,0x00,0x02,0x00,0x00, 0x44,0x0f,0x28,0xa2,0x20,0x02,0x00,0x00, 0x44,0x0f,0x28,0xd6,
@@ -201,6 +201,39 @@ static const unsigned char kSceneCaveT[] = {          // traspone la 3x3 de xmm1
     0x41,0x0f,0x28,0xca, 0x41,0x0f,0x14,0xc9, 0x41,0x0f,0x28,0xd2, 0x41,0x0f,0x15,0xd1, 0x0f,0x57,0xe4, 0x0f,0x28,0xd8,
     0x0f,0x14,0xdc, 0x0f,0x28,0xe8, 0x0f,0x15,0xec, 0x44,0x0f,0x28,0xd1, 0x44,0x0f,0x16,0xd3, 0x44,0x0f,0x28,0xcb,
     0x44,0x0f,0x12,0xc9, 0x0f,0x28,0xc2, 0x0f,0x16,0xc5 };
+// ---------------------------------------------------------------- la camara de sombras del sol (31/10, sombra_parche 1)
+// Prueba del 31/10: corregir solo la lectura (sombra_parche 2 en el cbuffer, o w337 en el shader) deja las sombras "en cualquier
+// lado": el mapa de sombras se DIBUJA con la misma matriz torcida. La arma 0x1416c2ad0 (rcx = sombra, rdx = ?, r8 = camara):
+// base de la luz desde su direccion en mundo (0x1416c0000), caja ortogonal por cascada (0x1416c0320) y, al final (0x1416c61e9),
+// carga las 4 filas de la matriz de la camara (+0x1f0: rotacion vista -> mundo, fila 3 = traslacion mundo -> vista), la
+// "invierte" (3x3 traspuesta, -t x 3x3 traspuesta) y la multiplica por mundo -> luz. Como la 3x3 ya es vista -> mundo, esa
+// inversa queda girada el doble de la camara (igual que el sol sin sol_parche). El resultado va a camara + 0x40 y sombra + 0x70:
+// de ahi salen el cbuffer de escena (m_shadowProjection) y la pasada de profundidad, por eso hay que corregirlo en la fuente.
+// El parche salta a un codigo propio que carga esas 3 filas TRASPUESTAS (w = 0) y vuelve: la inversa del juego da entonces
+// [3x3 ; -t x 3x3] = vista -> mundo de verdad, y la sombra queda fija al cielo con cualquier camara. Se quita en vivo (0).
+static const uintptr_t kCasterFixAt = 0x1416c61e9ull, kCasterFixBack = 0x1416c6216ull;
+static const unsigned char kCasterFixOld[45] = {
+    0x41,0x0f,0x28,0xa5,0xf0,0x01,0x00,0x00, 0x0f,0x29,0xa5,0x90,0x05,0x00,0x00,     // movaps xmm4,[r13+1f0]; movaps [rbp+590],xmm4
+    0x41,0x0f,0x28,0xad,0x00,0x02,0x00,0x00, 0x0f,0x29,0xad,0xa0,0x05,0x00,0x00,     // movaps xmm5,[r13+200]; movaps [rbp+5a0],xmm5
+    0x41,0x0f,0x28,0x9d,0x10,0x02,0x00,0x00, 0x0f,0x29,0x9d,0xb0,0x05,0x00,0x00 };   // movaps xmm3,[r13+210]; movaps [rbp+5b0],xmm3
+static const unsigned char kCasterCave[] = {
+    0x41,0x0f,0x28,0xa5,0xf0,0x01,0x00,0x00,  // movaps xmm4,[r13+1f0]   fila 0 (A)
+    0x41,0x0f,0x28,0xad,0x00,0x02,0x00,0x00,  // movaps xmm5,[r13+200]   fila 1 (B)
+    0x41,0x0f,0x28,0x9d,0x10,0x02,0x00,0x00,  // movaps xmm3,[r13+210]   fila 2 (C)
+    0x0f,0x57,0xd2,                           // xorps xmm2,xmm2
+    0x0f,0x28,0xc4, 0x0f,0x14,0xc5,           // movaps xmm0,xmm4; unpcklps xmm0,xmm5  -> (A0 B0 A1 B1)
+    0x0f,0x28,0xcb, 0x0f,0x14,0xca,           // movaps xmm1,xmm3; unpcklps xmm1,xmm2  -> (C0 0 C1 0)
+    0x0f,0x15,0xe5,                           // unpckhps xmm4,xmm5                    -> (A2 B2 A3 B3)
+    0x0f,0x15,0xda,                           // unpckhps xmm3,xmm2                    -> (C2 0 C3 0)
+    0x0f,0x28,0xe9, 0x0f,0x12,0xe8,           // movaps xmm5,xmm1; movhlps xmm5,xmm0   -> (A1 B1 C1 0) = fila 1 traspuesta
+    0x0f,0x16,0xc1,                           // movlhps xmm0,xmm1                     -> (A0 B0 C0 0) = fila 0 traspuesta
+    0x0f,0x16,0xe3,                           // movlhps xmm4,xmm3                     -> (A2 B2 C2 0) = fila 2 traspuesta
+    0x0f,0x28,0xdc, 0x0f,0x28,0xe0,           // movaps xmm3,xmm4; movaps xmm4,xmm0
+    0x0f,0x29,0xa5,0x90,0x05,0x00,0x00,       // movaps [rbp+590],xmm4
+    0x0f,0x29,0xad,0xa0,0x05,0x00,0x00,       // movaps [rbp+5a0],xmm5
+    0x0f,0x29,0x9d,0xb0,0x05,0x00,0x00,       // movaps [rbp+5b0],xmm3
+    0xff,0x25,0x00,0x00,0x00,0x00 };          // jmp [rip+0] -> kCasterFixBack
+static bool s_casterOn = false; static int s_casterTries = 0;
 static bool s_shadowFixDone = false, s_sceneFixDone = false; static int s_shadowFixTries = 0, s_sceneFixTries = 0;
 static unsigned char* s_cave = nullptr;
 static volatile uintptr_t* s_caveCam = nullptr; static volatile uintptr_t* s_caveObj = nullptr; static double s_camLogT = 0; static int s_camLogs = 0;
@@ -235,10 +268,50 @@ static int WriteGameCode(uintptr_t at, const void* bytes, size_t n) {   // 1 esc
     return r;
 }
 
+
+// (31/10) sombra_parche 1: pone (o quita, si vuelve a 0 en vivo) el salto de 0x1416c61e9 al codigo propio de 0x300 de la cueva.
+static void CasterFixPresent() {
+    bool want = g_cfg.motorShadowFix == 1 || g_cfg.motorShadowFix == 4;   // 4 = exe + cbuffer (por si el cbuffer no sale de camara + 0x40)
+    if (want == s_casterOn || s_casterTries >= 30) return;
+    if (!s_cave) {
+        s_cave = (unsigned char*)VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+        if (!s_cave) { s_casterTries = 30; Log("motor: sombra_parche: no se pudo reservar memoria para el codigo"); return; }
+    }
+    static bool caveReady = false;
+    if (!caveReady) {
+        unsigned char* q = s_cave + 0x300;
+        // (01/11) registro: mov [rip+d], r13 (la camara) en 0x3e0 y mov [rip+d], r12d (mascara de la traslacion) en 0x3e8
+        int32_t d1 = (int32_t)((intptr_t)(s_cave + 0x3e0) - (intptr_t)(q + 7));
+        q[0] = 0x4c; q[1] = 0x89; q[2] = 0x2d; memcpy(q + 3, &d1, 4); q += 7;
+        int32_t d2 = (int32_t)((intptr_t)(s_cave + 0x3e8) - (intptr_t)(q + 7));
+        q[0] = 0x44; q[1] = 0x89; q[2] = 0x25; memcpy(q + 3, &d2, 4); q += 7;
+        memset(s_cave + 0x3e0, 0, 16);
+        memcpy(q, kCasterCave, sizeof kCasterCave); q += sizeof kCasterCave;
+        uint64_t back = kCasterFixBack; memcpy(q, &back, 8);
+        FlushInstructionCache(GetCurrentProcess(), s_cave + 0x300, 0x100);
+        caveReady = true;
+    }
+    if (want) {
+        if (!SigOk(kCasterFixAt, kCasterFixOld, sizeof kCasterFixOld)) {
+            if (++s_casterTries == 30) Log("motor: sombra_parche: los bytes de 0x1416c61e9 no coinciden con los esperados (exe distinto u otro mod): la camara de sombras no se parchea");
+            return;
+        }
+        unsigned char j[45]; memset(j, 0x90, sizeof j); j[0] = 0xff; j[1] = 0x25; memset(j + 2, 0, 4); uint64_t t = (uint64_t)(uintptr_t)(s_cave + 0x300); memcpy(j + 6, &t, 8);
+        int r = WriteGameCode(kCasterFixAt, j, sizeof j);
+        if (r == 1) { s_casterOn = true; s_casterTries = 0; Log("motor: sombra_parche 1 puesto en 0x1416c61e9: la camara de sombras del sol se arma con la rotacion de la camara traspuesta (mapa de sombras y m_shadowProjection fijos al cielo)"); }
+        else if (r < 0) { s_casterTries = 30; Log("motor: sombra_parche: no se pudo escribir 0x1416c61e9 (VirtualProtect)"); }
+    } else {
+        int r = WriteGameCode(kCasterFixAt, kCasterFixOld, sizeof kCasterFixOld);
+        if (r == 1) { s_casterOn = false; Log("motor: sombra_parche 1 quitado de 0x1416c61e9 (camara de sombras como el juego)"); }
+        else if (r < 0) { s_casterTries = 30; Log("motor: sombra_parche: no se pudo restaurar 0x1416c61e9"); }
+    }
+}
+
 static void ShadowFixPresent() {
     // (27/10) los modos 1 y 2 ya no tocan el exe: la matriz se corrige en el cbuffer de escena (hooks.cpp, SceneShadowFix).
     // El sitio 0x1416de354 resulto ser la reproyeccion de la camara (vista del cuadro anterior x inversa de la actual): trasponerla
     // rompia el TAA ("se ve peor"). Solo el modo 3 engancha ahi, sin cambiar nada, para anotar las matrices.
+    CasterFixPresent();   // (31/10) sombra_parche 1: la camara de sombras en el exe
     if ((s_shadowFixDone && s_sceneFixDone) || g_cfg.motorShadowFix != 3) return;
     if (!s_cave) {
         s_cave = (unsigned char*)VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
@@ -329,12 +402,39 @@ static void ShadowFixCamLog() {
     }
 }
 
+// (01/11) "segun el estadio las sombras se desfasan" con sombra_parche 1 (55 y 47 si, 34 y 29 no) aunque la direccion coincide:
+// cada 15 s (12 veces) anota la camara que recibe el parche (+0x1f0..+0x220), la mascara de la traslacion (r12d), lo que
+// sale en camara + 0x40 (vista -> luz) y m_view / m_shadowProjection del shader, para comparar un estadio bueno con uno malo.
+static double s_casterLogT = 0; static int s_casterLogs = 0;
+static void CasterFixLog() {
+    if (!s_casterOn || !s_cave || s_casterLogs >= 12) return;
+    double t = Now(); if (t < s_casterLogT) return; s_casterLogT = t + 15.0;
+    uintptr_t cam = *(volatile uintptr_t*)(s_cave + 0x3e0); unsigned r12 = *(volatile unsigned*)(s_cave + 0x3e8);
+    if (!cam) return;
+    auto rd = [](uintptr_t at, float* m, size_t n) { SIZE_T got = 0; return ReadProcessMemory(GetCurrentProcess(), (const void*)at, m, n * 4, &got) && got == n * 4; };
+    float m[20], o[16];
+    if (!rd(cam + 0x1f0, m, 20)) return;
+    s_casterLogs++;
+    Log("sombra_parche 1: camara %p r12d %08X | +0x1f0 %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | +0x220 %.3f %.3f %.3f %.3f | +0x230 %.3f %.3f %.3f %.3f",
+        (void*)cam, r12, m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15], m[16], m[17], m[18], m[19]);
+    if (rd(cam + 0x40, o, 16))
+        Log("sombra_parche 1: camara + 0x40 (vista -> luz) %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.3f %.3f %.3f %.3f",
+            o[0], o[1], o[2], o[3], o[4], o[5], o[6], o[7], o[8], o[9], o[10], o[11], o[12], o[13], o[14], o[15]);
+    std::vector<float> S;
+    if (NamedCBRead("SceneCB", S) && S.size() >= 64) {
+        Log("sombra_parche 1: m_view (c8..c11) %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f",
+            S[32], S[33], S[34], S[35], S[36], S[37], S[38], S[39], S[40], S[41], S[42], S[43], S[44], S[45], S[46], S[47]);
+        Log("sombra_parche 1: m_shadowProjection (c12..c15) %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.3f %.3f %.3f %.3f",
+            S[48], S[49], S[50], S[51], S[52], S[53], S[54], S[55], S[56], S[57], S[58], S[59], S[60], S[61], S[62], S[63]);
+    }
+}
+
 static int s_lodBase = -1, s_lodLast = -1; static bool s_lodChecked = false, s_lodOk = false; static double s_lodT = 0;
 void ExePatchPresent() {
     if (!g_cfg.motorPatch) return;
     double t = Now(); if (t - s_lodT < 1.0) return; s_lodT = t;
     SunFixPresent();   // (27/10) el sol que gira con la camara
-    ShadowFixPresent(); ShadowFixCamLog();   // (27/10) la sombra que gira con la camara
+    ShadowFixPresent(); ShadowFixCamLog(); CasterFixLog();   // (27/10) la sombra que gira con la camara
     volatile int* g = (volatile int*)0x14374cd94ull;
     if (!s_lodChecked) {
         s_lodChecked = true;

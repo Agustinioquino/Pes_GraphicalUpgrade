@@ -262,6 +262,38 @@ static float s_camM11 = 0, s_camEye[3] = { 0, 0, 0 }; static UINT s_cb2Off = 0, 
 // de grabacion y oscilaba (cuadros sueltos con el pasto denso del juego sin cortar + DensePick); ahora sale de lo ejecutado en la GPU
 // con histeresis: 6 cuadros leidos sin emision -> 1, 4 cuadros con emision -> 0
 static std::atomic<bool> s_missing{true}; static int s_zeroRun = 0, s_okRun = 0, s_framesNoGrass = 0;
+// (1/11) medidor de GPU del pasto del mod: por emision, marcas de tiempo antes del compute, despues, y al cerrar cada nivel (ranuras 0-5 /
+// 6-11 / 12-17). Las consultas se graban en el contexto que emite (diferido o no) y se leen en el inmediato 3 Presents despues, sin esperar.
+// Da los ms reales de GPU de cada nivel: con eso se ve cuanto gana cada paso de la optimizacion (shader liviano de lejos, prepasada, Hi-Z).
+static const int kTimers = 8;
+struct GpuTimer { ID3D11Query* dis = nullptr; ID3D11Query* ts[5] = {}; std::atomic<int> tag{-1}; };   // tag: -1 libre, >= 0 cuadro en que se grabo
+static GpuTimer s_tm[kTimers];
+static double s_tmSum[4] = {}, s_tmMax[4] = {}; static int s_tmN = 0, s_tmDisjoint = 0, s_tmLost = 0;   // compute, nivel 0, 1, 2 (ms)
+static bool TimersReady() {
+    static bool tried = false; if (tried) return s_tm[0].dis != nullptr; tried = true;
+    D3D11_QUERY_DESC qd = {}; bool ok = true;
+    for (auto& t : s_tm) {
+        qd.Query = D3D11_QUERY_TIMESTAMP_DISJOINT; if (FAILED(g_dev.dev->CreateQuery(&qd, &t.dis))) { t.dis = nullptr; ok = false; }
+        qd.Query = D3D11_QUERY_TIMESTAMP; for (auto& q : t.ts) if (FAILED(g_dev.dev->CreateQuery(&qd, &q))) { q = nullptr; ok = false; }
+    }
+    if (!ok) { for (auto& t : s_tm) { if (t.dis) t.dis->Release(); t.dis = nullptr; for (auto& q : t.ts) { if (q) q->Release(); q = nullptr; } } Log("pasto GPU: no se pudieron crear las consultas de tiempo (sin medidor)"); }
+    return ok;
+}
+static GpuTimer* TimerClaim(int frame) { for (auto& t : s_tm) { int e = -1; if (t.tag.compare_exchange_strong(e, frame)) return &t; } return nullptr; }
+static void TimersRead(int f) {   // contexto inmediato
+    for (auto& t : s_tm) { int tg = t.tag.load(); if (tg < 0 || tg > f - 3) continue;
+        if (f - tg > 90) { t.tag = -1; s_tmLost++; continue; }   // lista diferida que nunca se ejecuto
+        D3D11_QUERY_DATA_TIMESTAMP_DISJOINT d = {}; HRESULT hr = g_dev.imm->GetData(t.dis, &d, sizeof d, D3D11_ASYNC_GETDATA_DONOTFLUSH);
+        if (hr != S_OK) continue;
+        UINT64 v[5] = {}; bool all = true;
+        for (int i = 0; i < 5 && all; i++) if (g_dev.imm->GetData(t.ts[i], &v[i], 8, D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK) all = false;
+        if (!all) continue;
+        t.tag = -1;
+        if (d.Disjoint || d.Frequency == 0) { s_tmDisjoint++; continue; }
+        for (int i = 0; i < 4; i++) { double ms = v[i + 1] >= v[i] ? (double)(v[i + 1] - v[i]) * 1000.0 / (double)d.Frequency : 0.0; s_tmSum[i] += ms; if (ms > s_tmMax[i]) s_tmMax[i] = ms; }
+        s_tmN++;
+    }
+}
 
 static bool EnsureGPU() {
     if (!g_dev.dev) return false;
@@ -544,6 +576,7 @@ void GrassFrameBoundary(UINT flags) {
     if (flags & DXGI_PRESENT_TEST) return;
     int f = s_frame.fetch_add(1) + 1;
     const bool on = g_cfg.live[58][3] > 0.5f;
+    if (g_dev.imm && s_tm[0].dis) TimersRead(f);
     if (g_dev.imm && s_claim && s_claimUAV) {
         for (int i = 0; i < kClaimStages; i++) if (s_claimStage[i] && s_claimTag[i] >= 0 && s_claimTag[i] <= f - 3) {
             D3D11_MAPPED_SUBRESOURCE m;
@@ -631,6 +664,11 @@ void GrassPresent() {
         int eh[3], lh[3]; { std::lock_guard<std::mutex> lk(s_recMx); for (int k = 0; k < 3; k++) { eh[k] = s_execHist[k]; lh[k] = s_lagHist[k]; s_execHist[k] = 0; s_lagHist[k] = 0; } }
         int fr = s_framesRead; s_framesRead = 0; int fng = s_framesNoGrass; s_framesNoGrass = 0;
         int age = s_capPres.load() >= 0 ? pres - s_capPres.load() : -1;
+        if (s_tmN > 0 || s_tmDisjoint > 0 || s_tmLost > 0) {   // (1/11) ms de GPU por nivel (promedio y maximo de las emisiones medidas en estos 3 s)
+            double n = (std::max)(1, s_tmN);
+            Log("pasto GPU (3 s): %d emisiones medidas | compute %.2f ms (max %.2f) | nivel 0 cerca %.2f (max %.2f) | nivel 1 medio %.2f (max %.2f) | nivel 2 lejos %.2f (max %.2f) | total %.2f ms por cuadro | descartadas: reloj %d, listas sin ejecutar %d",
+                s_tmN, s_tmSum[0] / n, s_tmMax[0], s_tmSum[1] / n, s_tmMax[1], s_tmSum[2] / n, s_tmMax[2], s_tmSum[3] / n, s_tmMax[3], (s_tmSum[0] + s_tmSum[1] + s_tmSum[2] + s_tmSum[3]) / n, s_tmDisjoint, s_tmLost);
+            for (int k = 0; k < 4; k++) { s_tmSum[k] = 0; s_tmMax[k] = 0; } s_tmN = 0; s_tmDisjoint = 0; s_tmLost = 0; }
         Log("pasto v3: llamadas %d, emisiones grabadas %d (desde la base %d, desde el pasto del juego %d; en contextos diferidos %d, inmediato %d) | GPU: %d Presents, %d cuadros leidos, emisiones ejecutadas por cuadro 0:%d 1:%d 2+:%d (cuadros sin pasto del mod %d), grabacion->ejecucion 0:%d 1:%d 2+:%d Presents, x63 %s | parcelas %d (niveles %d/%d/%d), malla cercana %u idx, estado: %s | v4: %d dibujos con manojos curvos | camara del compute: m11 %.2f ojo (%.1f %.1f %.1f) cb2 off %u n %u de %u B, umbrales %.0f/%.0f/%.0f px/m, dibujos del pasto sin PS de hojas %d, en pasadas de otro tamano %d (DSV %ux%u, RTVs %u) | estado guardado hace %d Presents, t5 igual %d / distinta %d | base: hasta %d dibujos por grabacion, %d despues de las hojas; emision diferida por dibujo %d / targets %d / limpieza %d / fin %d / ejecucion %d / ClearState %d, con otros targets %d, perdidas %d | estados de las hojas: stencil base %d, sin RT4 %d, color suelo %d, sin nada %d; pasto del juego sin base debajo (x299) %d",
             g_grassDbg.calls, g_grassDbg.emits, s_emitBase.exchange(0), s_emitGame.exchange(0), s_recDeferred.exchange(0), s_recImmediate.exchange(0),
             dp, fr, eh[0], eh[1], eh[2], fng, lh[0], lh[1], lh[2], s_missing.load() ? "1 (mod sin dibujar: pasto del juego entero)" : "0",
@@ -673,7 +711,7 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
     // la malla propia de manojos curvos (orden de Halton: las primeras N tarjetas estan bien repartidas) en 6 subniveles
     // (9248 >> b tarjetas) y un tope exacto por parcela que el VS aplica por SV_VertexID. Calidad (x61): cuanto cubre y el
     // ancho minimo de la hoja en pixeles (hojas de menos de ~1.4 px titilan). Densidad (x58) multiplica C.
-    static const float cMul[5] = { 0.6f, 1.0f, 1.4f, 1.8f, 2.4f }, minPxQ[5] = { 1.8f, 1.5f, 1.3f, 1.2f, 1.0f };
+    static const float cMul[5] = { 0.6f, 1.0f, 1.4f, 1.8f, 2.4f }, minPxQ[5] = { 1.8f, 1.5f, 1.3f, 1.2f, 1.4f };   // (1/11) Ultra 1.0 -> 1.4: las hojas de 1 px titilaban de lejos (Agustin)
     float dens = g_cfg.live[58][0] > 0.05f ? std::clamp(g_cfg.live[58][0], 0.3f, 2.0f) : 1.0f;
     if (!ultra) dens *= s_adapt.load();   // (27/10 o) densidad adaptativa por FPS (fila 333, GrassPresent); Ultra la ignora
     // (27/10 9c) x325: ancho minimo en px a mano (0 = el de la calidad). Con la camara quieta el TAA del juego promedia las hojas de
@@ -765,6 +803,8 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         cull[28] = wGame; cull[29] = wClose; cull[30] = pRamp0; cull[31] = pRamp1;   // gPad[2]: rampa del ancho del nivel 0 (como el VS)
         // (26/10 d) reclamo del cuadro: la primera emision que la GPU ejecuta despues del Present se queda con el cuadro (Count[18] = 1);
         // las demas pasan por las celdas sin anotar nada y dibujan 0 instancias
+        GpuTimer* tm = (p58[3] > 0.5f && TimersReady()) ? TimerClaim(s_frame.load()) : nullptr;   // (1/11) medidor de GPU (solo con el registro prendido)
+        if (tm) { c->Begin(tm->dis); c->End(tm->ts[0]); }
         cull[0] = 4.0f; c->UpdateSubresource(s_cullCb, 0, nullptr, cull, 0, 0); c->Dispatch(1, 1, 1);
         for (int i = 0; i < 3; i++) {
             UINT gw = (UINT)ceilf(2.0f * halfL / L[i].cell), gh = (UINT)ceilf(2.0f * halfW / L[i].cell);
@@ -777,6 +817,7 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
             c->Dispatch((gw + 7) / 8, (gh + 7) / 8, 1);
         }
         cull[0] = 3.0f; c->UpdateSubresource(s_cullCb, 0, nullptr, cull, 0, 0); c->Dispatch(1, 1, 1);
+        if (tm) c->End(tm->ts[1]);
         ID3D11UnorderedAccessView* nul[4] = {}; c->CSSetUnorderedAccessViews(0, 4, nul, nullptr);
         c->CSSetShader(oldCS, nullptr, 0); c->CSSetConstantBuffers(0, 3, oldCB); c->CSSetUnorderedAccessViews(0, 4, oldUAV, nullptr);
         if (oldCS) oldCS->Release(); for (auto* b : oldCB) if (b) b->Release(); for (auto* u : oldUAV) if (u) u->Release();
@@ -834,7 +875,9 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
             c->UpdateSubresource(s_cb, 0, nullptr, cbq, 0, 0);
             c->VSSetConstantBuffers(5, 1, &s_cb);
             c->DrawIndexedInstancedIndirect(s_args, (UINT)sl * 20);
+            if (tm && sl % kBins == kBins - 1) c->End(tm->ts[2 + i]);   // fin del nivel i
         }
+        if (tm) c->End(tm->dis);
         c->IASetVertexBuffers(0, 4, svVb, svSt, svOf); c->IASetIndexBuffer(svIb, svFmt, svIo);
         for (auto* b : svVb) if (b) b->Release(); if (svIb) svIb->Release();
         c->OMSetDepthStencilState(svDss, svSref); c->OMSetBlendState(svBs, svBf, svBm);

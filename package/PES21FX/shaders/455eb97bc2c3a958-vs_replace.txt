@@ -63,6 +63,7 @@ Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 #include "pes_skintone.hlsli"
 #include "pes_collar.hlsli"   // (27/10 d) PesCollarSink
+#include "pes_expr.hlsli"     // (31/10) expresiones faciales
 #include "pes_cloth.hlsli"
 
 
@@ -85,7 +86,8 @@ void main(
   out float4 o6 : TEXCOORD7,
   out float4 o7 : TEXCOORD8,
   out float2 o8 : TEXCOORD9,
-  out float4 pR : TEXCOORD10)   // (27/10 j) posicion de reposo (x, y, z), w = 11
+  out float4 pR : TEXCOORD10,   // (27/10 j) posicion de reposo (x, y, z), w = 11
+  out float4 pD : TEXCOORD11)   // (01/11 j) gesto respecto de la cabeza rigida, en el marco de la cabeza (xyz), w = 12 (arrugas por compresion en el PS)
 {
   float4 r0,r1,r2,r3,r4,r5,r6;
   uint4 bitmask, uiDest;
@@ -94,6 +96,7 @@ void main(
   float3 v0r = v0.xyz;   // (27/10 d) reposo (los poros y el collar del PS lo siguen usando)
   v0.xyz += PesCollarSink(v0r, v1.xyz);   // (27/10 d) base del cuello hundida bajo el torso (y323)
 
+  float3 pesBlinkD = 0;
   r0.x = cmp(g_vsObject.m_useWeightCount.x != 0.000000);
   if (r0.x != 0) {
     r0.xyzw = (int4)v3.xyzw * int4(3,3,3,3);
@@ -135,6 +138,13 @@ void main(
     r2.x = dot(v0.xyzw, r2.xyzw);
     r2.y = dot(v0.xyzw, r3.xyzw);
     r2.z = dot(v0.xyzw, r0.xyzw);
+    // (31/10) expresiones faciales mas marcadas (pes_expr.hlsli, filas 340 / 341; cabeza de la paleta por malla: expr.cpp, b12)
+    PesExprApply(v0, v0r, v3, v4, v1.xyz, v2.xyz, r4.xyz, r2.xyz, r5.xyz, r1.xyz);
+    float3 pesPreBlink = r4.xyz;
+    PesBlinkApply(v0, v0r, v3, v4, v1.xyz, r4.xyz, r2.xyz, r5.xyz);   // (01/11) parpadeo del mod (fila 342.w)
+    pesBlinkD = r4.xyz - pesPreBlink;   // (01/11 k) el parpadeo no cuenta como gesto para las arrugas por compresion
+    PesJawApply(v0, v3, v4, v1.xyz, r4.xyz, r2.xyz, r5.xyz);   // (01/11) abrir la boca (fila 347.x)
+    PesMuscleApply(v0, v0r, v3, v4, v1.xyz, r4.xyz, r2.xyz, r5.xyz);   // (01/11 i) musculos virtuales (fila 348)
   } else {
     r5.xyz = v1.xyz;
     r1.xyz = v2.xyz;
@@ -142,6 +152,16 @@ void main(
     r2.xyz = v0.xyz;
   }
   r4.w = v0.w;
+  // (01/11 j) arrugas por compresion real (PS 5ce3ed87 / ce188ae1, fila 348.w): desplazamiento del vertice respecto de la cabeza
+  // rigida (todo el gesto: huesos del juego + amplificador + musculos virtuales), llevado al marco de reposo de la cabeza
+  pD = float4(0.0, 0.0, 0.0, 0.0);
+  {
+    uint pdh = g_pesExprMesh.x;
+    if (pdh <= 31 && g_vsObject.m_useWeightCount.x != 0) {
+      float3 rig = mul(float4(v0r, 1.0), g_vsBone.m_boneMatrices[pdh]);
+      pD = float4(mul((float3x3)g_vsBone.m_boneMatrices[pdh], r4.xyz - pesBlinkD - rig), 12.0);
+    }
+  }
   r0.x = dot(r4.xyzw, g_vsObject.m_viewWorld._m00_m10_m20_m30);
   r0.y = dot(r4.xyzw, g_vsObject.m_viewWorld._m01_m11_m21_m31);
   r0.z = dot(r4.xyzw, g_vsObject.m_viewWorld._m02_m12_m22_m32);

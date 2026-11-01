@@ -434,6 +434,14 @@ void main(
   // lo que mira al costado la mitad; cambia con la altura del sol (mas azul de dia, violaceo al atardecer, nada de noche).
   // x47 fuerza, y47 cuanto azul (0 = gris), w47 on/off [Alt+Shift+C]
   float3 Nsk = 0; float3 Vsk = 0; float zsk = PESLinZ(uvC); bool geoOk = false;
+  // (31/10) normal geometrica desde la profundidad (fuera de todo if: las derivadas de pantalla necesitan el cuadrado entero):
+  // relieve de las micro-sombras (z88) sin depender de la oclusion de pantalla, que cambia con la camara
+  float3 Pgeo = float3(((uvC * float2(2, -2) + float2(-1, 1)) - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zsk, zsk);
+  float3 Ngeo = cross(ddy(Pgeo), ddx(Pgeo));
+  float geoEdge = abs(ddx(zsk)) + abs(ddy(zsk));
+  bool geoFlat = dot(Ngeo, Ngeo) > 1e-12 && geoEdge < 0.04 * zsk;
+  Ngeo = geoFlat ? normalize(Ngeo) : float3(0, 0, -1);
+  if (dot(Ngeo, Pgeo) > 0.0) Ngeo = -Ngeo;                                     // mirando a la camara, como Nsk
   {
     float4 SKY = IniParams.Load(int2(47,0));
     float3 Ld = pLc_dir.xyz;
@@ -778,15 +786,36 @@ void main(
     }
     // PES21 micro-sombras (18/10, Naughty Dog "micro-shadowing"): los poros, pliegues y la trama de la tela se hacen
     // sombra a si mismos con la luz rasante del sol. La apertura la da la oclusion ambiental; solo del lado iluminado.
-    // x88 fuerza, y88 on/off
+    // x88 fuerza, y88 on/off, z88 apertura: 0 = oclusion de pantalla (cambia con la camara), 1 = relieve (31/10): el angulo
+    // entre la normal de detalle (poros, pliegues, trama) y la geometrica de la profundidad; no depende de la camara
     { float4 MS = IniParams.Load(int2(88,0));
       if (MS.y > 0.5 && MS.x > 0.0 && geoOk && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {
         float ndlM = dot(Nsk, normalize(pLc_dir.xyz));
         float aper = 2.0 * aoRaw * aoRaw;
+        if (MS.z > 0.5) {
+          // (01/11) relieve v2: la normal de detalle contra el PROMEDIO de las normales del G-buffer en un anillo de ~1.2 cm del
+          // mundo (no contra la normal de la profundidad). La de la profundidad salia a facetas (cuadrados de 2x2 y triangulos de
+          // mallas con pocos poligonos, como la mano) y cada faceta se leia como un pliegue hondo. El promedio de un anillo
+          // simetrico quita poros, trama y pliegues finos y deja la curvatura suave; sigue sin depender de la camara.
+          float3 Nc0 = PESDecN(uvC);
+          float pxmM = 1.0 / max(2.0 * abs(g_psScene.m_projectionParam.x) * zsk * g_psSystem.m_renderBuffer.z, 1e-5);
+          float rM = clamp(0.012 * pxmM, 1.5, 16.0);
+          float3 nAcc = 0; float nW = 0;
+          [unroll] for (int mi = 0; mi < 8; mi++) {
+            float angM = mi * 0.78539816 + 0.3927;
+            float2 uvM = uvC + float2(cos(angM), sin(angM)) * rM * g_psSystem.m_renderBuffer.zw;
+            float wM = abs(PESLinZ(uvM) - zsk) < 0.03 * zsk + 0.02 ? 1.0 : 0.0;
+            nAcc += PESDecN(uvM) * wM; nW += wM;
+          }
+          float sB = nW > 2.5 ? pow(saturate(dot(Nc0, normalize(nAcc + 1e-6))), 6.0) : 1.0;
+          aper = 2.0 * sB * sB;
+        }
         float micro = saturate(abs(ndlM) + aper - 1.0);
         float litSide = saturate(ndlM * 4.0);                         // solo donde pega el sol
-        float msK = lerp(1.0, micro, saturate(MS.x) * litSide);
-        diffC *= msK; specC *= lerp(1.0, msK, 0.5);
+        // (01/11) piso 0.4: un pliegue nunca queda negro, y en la piel el brillo baja igual que la difusa (antes quedaba el reflejo
+        // azulado del cielo sobre poca difusa rojiza: nudillos y dedos violetas)
+        float msK = lerp(1.0, max(micro, 0.4), saturate(MS.x) * litSide);
+        diffC *= msK; specC *= skinC ? msK : lerp(1.0, msK, 0.5);
       } }
     r0.xyw = diffC * aoD + specC * aoS;
   } else {
@@ -939,6 +968,7 @@ void main(
     float3 Ld = pLc_dir.xyz;
     if (cmpOn && VL.x > 0.0 && dot(Ld, Ld) > 1e-6) {
       Ld = normalize(Ld);
+      // (31/10) la fase apunta al sol de la LUZ (Agustin: 'prefiero que los rayos sean del sol de la luz'), el mismo de las sombras
       float maxD = VL.y > 1.0 ? VL.y : 150.0;
       float zP = min(PESLinZ(uvC), maxD * 8.0);
       float2 sCv = uvC * float2(2, -2) + float2(-1, 1);
