@@ -30,6 +30,7 @@
 namespace fx {
 
 static bool s_on = false;
+static float s_zoomTarget = 1.0f; static std::atomic<int> s_wheel{0};
 static float s_pos[3] = {}, s_yaw = 0, s_pitch = 0;
 static double s_t = 0;
 static POINT s_mouse{}; static bool s_mouseWas = false;
@@ -66,7 +67,7 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     }
     if (!s_on) {
         TakeFromGame(pos, tgt);
-        s_on = true;
+        s_on = true; s_zoomTarget = std::clamp(g_cfg.live[344][2], 0.05f, 3.0f); s_wheel = 0;
         Log("camara libre: prendida (%s) en (%.2f, %.2f, %.2f) giro %.0f / %.0f grados; objetivo (%.2f, %.2f, %.2f), arriba (%.2f, %.2f, %.2f), proyeccion %d, campo de vision %.4f, cerca / lejos / aspecto %.3f / %.1f / %.3f",
             origen, pos[0], pos[1], pos[2], s_yaw * 57.2958f, s_pitch * 57.2958f, tgt[0], tgt[1], tgt[2], up[0], up[1], up[2], proj, *fov, extra[0], extra[1], extra[2]);
         s_logged = 0;
@@ -85,9 +86,19 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
         const float rot = 1.2f * dt;   // flechas: ~70 grados por segundo
         if (Key(VK_LEFT)) s_yaw += rot; if (Key(VK_RIGHT)) s_yaw -= rot;
         if (Key(VK_UP)) s_pitch += rot; if (Key(VK_DOWN)) s_pitch -= rot;
+        // zoom suave (Agustin 1/11): las teclas y la rueda mueven un objetivo y el zoom real lo sigue con un retardo corto
+        if (Key(VK_PRIOR) || Key(VK_OEM_PLUS) || Key(VK_ADD)) s_zoomTarget *= 1.0f - 0.45f * dt;
+        if (Key(VK_NEXT) || Key(VK_OEM_MINUS) || Key(VK_SUBTRACT)) s_zoomTarget *= 1.0f + 0.45f * dt;
+    }
+    {
+        const int wheel = s_wheel.exchange(0);
+        if (wheel != 0 && front) s_zoomTarget *= powf(0.92f, (float)wheel / 120.0f);   // cada muesca: 8 % mas cerca (o mas lejos)
+        s_zoomTarget = std::clamp(s_zoomTarget, 0.05f, 3.0f);
         float z = g_cfg.live[344][2];
-        if (Key(VK_PRIOR) || Key(VK_OEM_PLUS) || Key(VK_ADD)) z *= 1.0f - 0.8f * dt;
-        if (Key(VK_NEXT) || Key(VK_OEM_MINUS) || Key(VK_SUBTRACT)) z *= 1.0f + 0.8f * dt;
+        if (fabsf(z - s_zoomTarget) > 1e-4f) z += (s_zoomTarget - z) * std::clamp(6.0f * dt, 0.0f, 1.0f);   // ~1/6 s para llegar
+        else { z = s_zoomTarget; }
+        // si el usuario movio el slider del menu, el objetivo lo sigue
+        if (g_menuOpen.load()) s_zoomTarget = z = std::clamp(g_cfg.live[344][2], 0.05f, 3.0f);
         g_cfg.live[344][2] = std::clamp(z, 0.05f, 3.0f);
     }
     // mouse: gira con el boton derecho apretado (no mientras el menu del mod esta abierto: ahi el mouse es del menu)
@@ -128,6 +139,8 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     }
     return true;
 }
+
+void FreeCamWheel(int delta) { s_wheel += delta; }
 
 // partido / repeticion: parametro del CameraSystem (camhook.cpp)
 void FreeCamApply(unsigned char* b) {
