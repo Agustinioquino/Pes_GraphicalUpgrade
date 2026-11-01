@@ -112,11 +112,12 @@ float3 PesTongue(float3 rest, float2 uv, uint jaw)
   o.z += J * 0.0012 * s * s;
   // vivo: onda de la raiz a la punta y vaiven de lado, solo con la boca abierta
   float t = IniParams.Load(int2(157, 0)).x * max(T.z, 0.1);
-  float vivo = J * saturate(T.y * 0.5) * 2.0;
-  o.y += vivo * 0.0020 * s * raiz * sin(6.2832 * 1.6 * t - 3.0 * s);
-  o.z += vivo * 0.0006 * s * s * sin(6.2832 * 1.1 * t + 0.7);   // la punta va y viene
-  o.x += vivo * 0.0014 * s * s * sin(6.2832 * 0.7 * t + 1.3);
-  o.y += vivo * 0.0006 * lado * s * raiz * sin(6.2832 * 0.7 * t + 1.3);   // se inclina un poco hacia el lado al que va la punta
+  // (01/11 d, Agustin: "la lengua baila mucho dentro de la boca") onda a ~40 % y mas lenta; solo con la boca bien abierta (J^2)
+  float vivo = J * J * saturate(T.y * 0.5) * 2.0;
+  o.y += vivo * 0.0008 * s * raiz * sin(6.2832 * 0.8 * t - 2.0 * s);
+  o.z += vivo * 0.0003 * s * s * sin(6.2832 * 0.5 * t + 0.7);   // la punta va y viene
+  o.x += vivo * 0.0005 * s * s * sin(6.2832 * 0.35 * t + 1.3);
+  o.y += vivo * 0.0002 * lado * s * raiz * sin(6.2832 * 0.35 * t + 1.3);   // se inclina un poco hacia el lado al que va la punta
   return o * T.x;
 }
 
@@ -128,7 +129,7 @@ float3 PesTongue(float3 rest, float2 uv, uint jaw)
 // 342.w = cierre (0 = sin parpadeo del mod, 1 = cierra entero).
 float PesBlinkCurve(float t, float seed)
 {
-  const float per = 4.0;
+  const float per = 5.5;   // (01/11 d) antes 4: un parpadeo cada 5.5 s en promedio
   float tt = t + seed * 37.3;
   float n = floor(tt / per);
   float h = frac(sin((n + seed * 13.1) * 12.9898) * 43758.5453);
@@ -168,7 +169,7 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
     float4x3 M = g_vsBone.m_boneMatrices[j];
     float g = 0.0;   // el juego ya cierra este parpado: punto de la orilla con el hueso contra con la cabeza
     if (head <= 31) { float4 Q = float4(C + float3(0.0, up ? 0.008 : -0.006, 0.008), 1.0); g = saturate(length(mul(Q, M) - mul(Q, g_vsBone.m_boneMatrices[head])) / 0.006); }
-    float A = (up ? 0.68 : -0.14) * (1.0 - g);   // orilla de arriba ~ +27 grados abierta -> ~ -12; la de abajo -22 -> ~ -14
+    float A = (up ? 0.50 : -0.10) * (1.0 - g);   // (01/11 d, Agustin: "los ojos se cierran mucho") antes 0.68 / -0.14   // orilla de arriba ~ +27 grados abierta -> ~ -12; la de abajo -22 -> ~ -14
     float c1 = cos(A * b), s1 = sin(A * b), c0 = cos(A * bp), s0 = sin(A * bp);
     float3 d1 = PesRotX(q, c1, s1) - q, d0 = PesRotX(q, c0, s0) - q;
     pos  += w * mul(d1, (float3x3)M);
