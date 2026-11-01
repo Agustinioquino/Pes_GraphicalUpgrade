@@ -107,6 +107,7 @@ static void Install() {
 }
 
 bool TiempoHooked() { return s_okEditor || s_okMatch; }
+float TiempoFactor() { return Factor(); }
 
 void TiempoPresent() {
     if (!s_tried) Install();

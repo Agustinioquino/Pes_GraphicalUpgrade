@@ -343,6 +343,7 @@ bool FreeCamBlocksKeys();                         // x344 = 1: el juego no ve el
 // (31/10) camara lenta (tiempo.cpp): gancho al reloj de juego del motor (0x14035dcb0), 343 (ini: x velocidad, y prendida; DLL: z, w)
 void TiempoPresent();
 bool TiempoHooked();
+float TiempoFactor();   // (1/11) velocidad pedida por el menu (1 = apagada) para el aviso en pantalla
 bool CamCutSince(int& seen);                      // true una vez por cada corte nuevo (cada consumidor guarda su 'seen'); x161 = 1
 int CamLastCutFrame();
 bool EngineCamera(float pos[3], float tgt[3], int* frame);   // ultima camara aplicada por el motor (sin atraso)

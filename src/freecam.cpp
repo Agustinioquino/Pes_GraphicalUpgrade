@@ -98,7 +98,8 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     s_pitch = std::clamp(s_pitch, -1.55f, 1.55f);
     const float cp = cosf(s_pitch), sp = sinf(s_pitch);
     float f[3] = { cp * sinf(s_yaw), sp, cp * cosf(s_yaw) };
-    float r[3] = { f[2], 0.0f, -f[0] }; float rl = Len3(r); if (rl > 1e-5f) { r[0] /= rl; r[2] /= rl; } else { r[0] = 1; r[2] = 0; }
+    // derecha: el mundo del juego es diestro (mirando a -z la derecha es +x); Agustin 1/11: con la version anterior A / D iban al reves
+    float r[3] = { -f[2], 0.0f, f[0] }; float rl = Len3(r); if (rl > 1e-5f) { r[0] /= rl; r[2] /= rl; } else { r[0] = 1; r[2] = 0; }
     if (front && !typing) {
         float mv[3] = {};
         if (Key('W')) { mv[0] += f[0]; mv[1] += f[1]; mv[2] += f[2]; }
