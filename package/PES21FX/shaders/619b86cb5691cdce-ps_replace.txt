@@ -949,15 +949,7 @@ void main(
     float3 Ld = pLc_dir.xyz;
     if (cmpOn && VL.x > 0.0 && dot(Ld, Ld) > 1e-6) {
       Ld = normalize(Ld);
-      // (31/10) la fase (el brillo mirando hacia el sol) apunta al sol que DIBUJA el cielo (312 con w = 2: el del archivo del cielo),
-      // pasado a vista; si no hay cielo, la luz. Asi los rayos convergen en el disco que se ve y no en otro punto.
-      { float4 SS = IniParams.Load(int2(312,0));
-        if (SS.w > 1.5 && dot(SS.xyz, SS.xyz) > 0.5) {
-          float3 Lw = normalize(SS.xyz);
-          // mundo -> vista = traspuesta de vista -> mundo (que en este shader usa las filas _m0k, ver los reflejos del cielo)
-          Ld = normalize(float3(dot(float3(g_psScene.m_view._m00, g_psScene.m_view._m10, g_psScene.m_view._m20), Lw),
-                                dot(float3(g_psScene.m_view._m01, g_psScene.m_view._m11, g_psScene.m_view._m21), Lw),
-                                dot(float3(g_psScene.m_view._m02, g_psScene.m_view._m12, g_psScene.m_view._m22), Lw))); } }
+      // (31/10) la fase apunta al sol de la LUZ (Agustin: 'prefiero que los rayos sean del sol de la luz'), el mismo de las sombras
       float maxD = VL.y > 1.0 ? VL.y : 150.0;
       float zP = min(PESLinZ(uvC), maxD * 8.0);
       float2 sCv = uvC * float2(2, -2) + float2(-1, 1);
