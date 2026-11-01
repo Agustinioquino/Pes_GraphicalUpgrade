@@ -101,6 +101,29 @@ def tooth_fields(rows, N, vmin=-0.15):
         W = np.where(inside, np.broadcast_to(w[None, :], (N, N)), W)
     return U, V, W
 
+def tooth_ids(rows, N):
+    """(01/11 e) id de diente por pixel (-1 fuera) y tipo de cada id ('IC','I','C','P'), con el mismo criterio que mouth3d"""
+    s = N / 512.0
+    tid = np.full((N, N), -1, np.int32); kinds = []
+    xs = (np.arange(N) + 0.5) / s - 0.5
+    U, V, W = tooth_fields(rows, N)
+    base = 0
+    for ri, r in enumerate(rows):
+        pk = np.concatenate([[r['x0']], r['pk'], [r['x1']]]).astype(float)
+        ntt = len(pk) - 1; mid = ntt / 2.0
+        col = np.clip(np.searchsorted(pk, xs) - 1, 0, ntt - 1)
+        g = np.interp(xs, np.arange(512), r['g']) * s; inc = np.interp(xs, np.arange(512), r['inc']) * s
+        yy = np.arange(N)[:, None]
+        lo, hi = np.minimum(g, inc), np.maximum(g, inc)
+        span = hi - lo
+        inrow = (yy >= (lo - 0.3 * span)[None]) & (yy <= (hi + 0.15 * span)[None]) & ((xs >= r['x0'] - 2) & (xs <= r['x1'] + 2))[None]
+        tid = np.where(inrow, base + col[None, :], tid)
+        for i in range(ntt):
+            rank = int(abs((i + 0.5) - mid)); up = ri == 0
+            kinds.append('IC' if (rank == 0 and up) else ('I' if rank < 2 else ('C' if rank == 2 else 'P')))
+        base += ntt
+    return tid, kinds
+
 GUM = 0.18   # (01/11 b) mas encia (Agustin): la linea de la encia baja 18 % del alto del diente; mouth3d.py usa el mismo valor
 
 def gum_warp(img, rows, gum=GUM):
@@ -219,8 +242,27 @@ def build(src, N=2048, NS=1024, log=print):
     ivory = np.array([1.0, 0.955, 0.86], np.float32); ivory /= (ivory * lumw).sum()
     coral = np.array([1.0, 0.50, 0.50], np.float32); coral /= (coral * lumw).sum()
     tongc = np.array([1.0, 0.56, 0.56], np.float32); tongc /= (tongc * lumw).sum()
-    wT = (on * 0.75)[..., None]
+    # (01/11 e) mas natural (Agustin 'poco naturales'): el marfil parejo al 75 % los dejaba de plastico. Ahora 65 % y encima
+    # variacion real: cuello mas calido/amarillo (dentina), borde incisal translucido gris azulado con los mamelones,
+    # caninos con mas croma, laterales apenas mas claros, y un tono chico distinto por diente (semilla fija)
+    tid, tkind = tooth_ids(rows, N)
+    wT = (on * 0.65)[..., None]
     out = out * (1 - wT) + (Lp * 1.10 * ivory) * wT
+    rng = np.random.default_rng(31)
+    tint = np.ones((N, N, 3), np.float32)
+    for k in np.unique(tid[tid >= 0]):
+        kk = tkind[k]
+        t = np.array({'IC': [1.0, 1.0, 1.0], 'I': [1.02, 1.02, 1.01], 'C': [1.0, 0.982, 0.945], 'P': [0.995, 0.985, 0.955]}[kk], np.float32)
+        t = t * (1 + rng.uniform(-0.025, 0.025)) * np.array([1, 1 + rng.uniform(-0.008, 0.008), 1 + rng.uniform(-0.02, 0.015)], np.float32)
+        tint[tid == k] = t
+    vv = np.clip(V, 0, 1)
+    cerv_c = 1 + sst(0.45, 0.0, vv)[..., None] * np.array([0.0, -0.02, -0.07], np.float32)
+    mam = 0.5 + 0.5 * np.cos(6 * np.pi * u)                      # 3 lobulos: la translucidez entra entre ellos
+    edge = sst(0.62, 0.92, vv) * (0.5 + 0.5 * (1 - mam) * sst(0.6, 0.85, vv))
+    transl = np.array([0.90, 0.93, 0.98], np.float32)
+    grade = cerv_c * tint
+    grade = grade * (1 - edge[..., None]) + (grade * transl * 0.93) * edge[..., None]
+    out = out * (1 + (grade - 1) * on[..., None])
     wG = (tis * 0.55)[..., None] * (1 - tongue_c)
     out = out * (1 - wG) + (Lp * 1.08 * coral) * wG
     wL = (tis * 0.5)[..., None] * tongue_c
