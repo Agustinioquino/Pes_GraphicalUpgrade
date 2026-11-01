@@ -472,6 +472,7 @@ static void HeadPresent(ID3D11DeviceContext* imm) {
 void ExprPresent() {
     ID3D11DeviceContext* imm = g_dev.imm; if (!imm) return;
     HeadPresent(imm);
+    ExprBonesPresent();   // (01/11) boca por huesos: estado para el shader y resumen
     {   // con el candado tomado: los dibujos (otros hilos) leen state / cb y pueden vaciar la tabla. Los Map son DO_NOT_WAIT.
         std::lock_guard<std::mutex> lk(s_mx);
         s_frame++;
