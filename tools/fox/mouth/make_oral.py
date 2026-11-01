@@ -101,6 +101,30 @@ def tooth_fields(rows, N):
         W = np.where(inside, np.broadcast_to(w[None, :], (N, N)), W)
     return U, V, W
 
+GUM = 0.18   # (01/11 b) mas encia (Agustin): la linea de la encia baja 18 % del alto del diente; mouth3d.py usa el mismo valor
+
+def gum_warp(img, rows, gum=GUM):
+    """corre la linea de la encia de las dos tiras: en cada columna, con s = 0 en la encia pintada y 1 en el borde incisal,
+    la encia [-gum, 0] se estira a [-gum, gum] y el diente [0, 1] se comprime a [gum, 1] (mapa continuo: el festoneado se
+    conserva y el diente pintado queda entero, mas corto)"""
+    if gum <= 0: return img
+    n = img.shape[0]; sc = n / 512.0
+    yy = (np.arange(n) + 0.5) / sc - 0.5
+    src = np.repeat(yy[:, None], n, 1)
+    xs = (np.arange(n) + 0.5) / sc - 0.5
+    for r in rows:
+        g = np.interp(xs, np.arange(512), r['g']); inc = np.interp(xs, np.arange(512), r['inc'])
+        ins = (xs >= r['x0'] - 2) & (xs <= r['x1'] + 2)
+        sv = (yy[:, None] - g[None]) / (inc - g)[None]
+        m = ins[None] & (sv >= -gum) & (sv <= 1.0)
+        # tramo de la encia: s en [-gum, gum] -> fuente [-gum, 0];  tramo del diente: [gum, 1] -> [0, 1]
+        ssrc = np.where(sv < gum, -gum + (sv + gum) * 0.5, (sv - gum) / (1 - gum))
+        src = np.where(m, (g[None] + ssrc * (inc - g)[None]), src)
+    src = (src + 0.5) * sc - 0.5
+    xx = np.repeat(np.arange(n, dtype=np.float64)[None], n, 0)
+    out = np.stack([ndi.map_coordinates(img[..., c], [src, xx], order=1, mode='nearest') for c in range(img.shape[2])], -1)
+    return out.astype(img.dtype)
+
 def build(src, N=2048, NS=1024, log=print):
     bsm = load(os.path.join(src, 'oral_bsm.ftex')); nrm = load(os.path.join(src, 'oral_nrm.ftex'))
     srm = load(os.path.join(src, 'oral_srm.ftex')); trm = load(os.path.join(src, 'oral_trm.ftex'))
@@ -120,7 +144,7 @@ def build(src, N=2048, NS=1024, log=print):
     open_ = 0.6 + 1.6 * sst(0.35, 0.0, v) + 1.8 * sst(0.75, 1.0, v)
     line = np.exp(-(du / (2.2 * open_)) ** 2) * sst(0.0, 0.08, V + 0.05) * sst(1.1, 0.95, V)
     # esquinas incisales redondeadas: la tronera incisal deja ver el fondo de la boca
-    cr = 0.22
+    cr = 0.14   # (01/11 b) 0.22 -> 0.14: esquinas incisales mas cuadradas (Agustin)
     cx = np.clip(cr - np.minimum(u, 1 - u), 0, None) / cr; cy = np.clip(v - (1 - cr), 0, None) / cr
     corner = sst(1.02, 1.3, np.sqrt(cx * cx + cy * cy)) * sst(1.06, 0.98, V)
     # corona: lomo central mas claro / convexo, tres lobulos (mamelones) apenas marcados cerca del borde
@@ -135,7 +159,7 @@ def build(src, N=2048, NS=1024, log=print):
     D *= (1 + 0.015 * lobes + 0.008 * perik + 0.012 * fine)[..., None]
     D *= 1 + cerv[..., None] * np.array([0.015, -0.02, -0.08], np.float32)          # dentina calida en el cuello
     D *= 1 + incis[..., None] * np.array([-0.04, -0.02, 0.03], np.float32)          # borde incisal: esmalte fino, gris azulado
-    D *= (1 - 0.32 * line - 0.45 * corner)[..., None]
+    D *= (1 - 0.32 * line - 0.30 * corner)[..., None]
     rgb = B[..., :3]
     # los bloques de 4x4 del DXT1 de 512 se ven a 2048: dentro de los dientes el color base sale suavizado (el detalle lo pone D)
     soft = np.stack([ndi.gaussian_filter(rgb[..., c], 3.0) for c in range(3)], -1)
@@ -190,6 +214,7 @@ def build(src, N=2048, NS=1024, log=print):
     stats = {'dientes': float((on > 0.5).mean()), 'color_dientes': out[on > 0.5].mean(0).round(3).tolist(),
              'color_konami': rgb[on > 0.5].mean(0).round(3).tolist(), 'brillo_dientes': round(float(S[..., 0][onS > 0.5].mean()), 3)}
     log('  ' + str(stats))
+    bsm_o, nrm_o, S, Tr = (gum_warp(x, rows) for x in (bsm_o, nrm_o, S, Tr))
     return {'bsm': bsm_o, 'nrm': nrm_o, 'srm': S, 'trm': Tr}, (B, on, line, crown, corner, cerv)
 
 def main():
