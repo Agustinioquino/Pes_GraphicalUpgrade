@@ -170,6 +170,22 @@ def build(src, N=2048, NS=1024, log=print):
     tis = np.clip(tissue0 * (1 - teeth), 0, 1)
     marg = np.exp(-ndi.distance_transform_edt(teeth0 < 0.5).astype(np.float32) / 5.0) * (teeth0 < 0.5)
     out = out * (1 + tis * (0.025 * noise(N, 1.0, 4) - 0.07 * marg))[..., None]
+    # --- (01/11 c) color mas natural (Agustin): el de Konami es marron apagado. Dientes: marfil claro poco saturado (A2),
+    # encia y lengua: rosado coral en vez de marron. Se conserva la luminancia de cada pixel (sombreado y detalle) y se cuida la
+    # clasificacion del shader 63fab773 (dientes: max > 0.45, saturacion < 0.26, R-G < 0.11; tejido: R-G > 0.13).
+    lumw = np.array([0.30, 0.55, 0.15], np.float32)
+    Lp = (out * lumw).sum(-1, keepdims=True)
+    gy0, gx0 = (np.mgrid[0:N, 0:N] + 0.5) / N
+    tongue_c = (sst(0.27, 0.31, gx0) * sst(0.74, 0.70, gx0) * sst(0.65, 0.69, gy0))[..., None]
+    ivory = np.array([1.0, 0.955, 0.86], np.float32); ivory /= (ivory * lumw).sum()
+    coral = np.array([1.0, 0.50, 0.50], np.float32); coral /= (coral * lumw).sum()
+    tongc = np.array([1.0, 0.56, 0.56], np.float32); tongc /= (tongc * lumw).sum()
+    wT = (on * 0.75)[..., None]
+    out = out * (1 - wT) + (Lp * 1.10 * ivory) * wT
+    wG = (tis * 0.55)[..., None] * (1 - tongue_c)
+    out = out * (1 - wG) + (Lp * 1.08 * coral) * wG
+    wL = (tis * 0.5)[..., None] * tongue_c
+    out = out * (1 - wL) + (Lp * 1.05 * tongc) * wL
     bsm_o = np.concatenate([np.clip(out, 0, 1), np.ones_like(out[..., :1])], -1)
     # --- zonas fuera de las tiras (uv del atlas de Konami): lengua y paladar
     gyy, gxx = (np.mgrid[0:N, 0:N] + 0.5) / N
