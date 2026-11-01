@@ -20,10 +20,11 @@ import fmdl, mouth_fmdl, make_oral
 MM = 0.001
 # (01/11) mordida: con la boca en reposo la tira de arriba termina en y 1.631 y la de abajo en 1.6285 (2.5 mm de luz); los dientes
 # se alargan para que cierren: los de arriba bajan 2.4 mm por delante de los de abajo, que suben 0.8 mm (se solapan ~0.7 mm)
-EXT_UP, EXT_LO = 2.0 * 0.001, 0.7 * 0.001   # (01/11 b) 2.4 / 0.8 -> 2.0 / 0.7: dientes un poco menos largos (Agustin)
+EXT_UP, EXT_LO = float(os.environ.get('EXT_UP', '1.5')) * 0.001, 0.7 * 0.001   # (01/11 f) 2.0 -> 1.5 mm: menos sobremordida (Agustin)   # (01/11 b) 2.4 / 0.8 -> 2.0 / 0.7: dientes un poco menos largos (Agustin)
 # (01/11 b) mas encia (Agustin): la linea de la encia baja GUM del alto del diente pintado; esa franja de la tira muestra encia
 GUM = 0.18   # = make_oral.GUM
 OVERJET_LO = 0.9 * MM   # (01/11 e) los incisivos de abajo se meten 0.9 mm detras de los de arriba
+PDEG = int(os.environ.get('PDEG', '2'))   # (01/11 f) parche por diente: grado 2 a lo ancho (sigue el arco), recto a lo alto
 SINK = 1.5 * MM   # (01/11 d) 0.7 -> 1.5 mm: el cuello se mete bien detras de la encia (no asoma por arriba)
 PATCH = int(os.environ.get('PATCH', '1'))
 UV_W, UV_V0, UV_V1 = 0.55, 0.15, 0.90   # (01/11 e) el borde translucido de la textura (0.62-0.92) cae adentro   # (01/11 d) parte del diente pintado que usa el diente 3D
@@ -167,7 +168,7 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=28, nb=18, ext=0.0, mes=1.0, seed=0
     jit_len, jit_dep, jit_rot = rng.uniform(-0.18, 0.18) * MM, rng.uniform(-0.12, 0.12) * MM, rng.uniform(-1.0, 1.0)
     if PATCH:
         h = vI - vG
-        M = local_patch(M, uL - 0.1 * (uR - uL), uR + 0.1 * (uR - uL), vG - 0.3 * h, vI, degv=(1 if kind in ('IC', 'I') else 2))   # (01/11 e) incisivos rectos a lo alto
+        M = local_patch(M, uL - 0.1 * (uR - uL), uR + 0.1 * (uR - uL), vG - 0.3 * h, vI, deg=PDEG, degv=1)   # (01/11 f) todos rectos a lo alto; a lo ancho PDEG
     gap = (0.012 if kind == 'IC' else 0.035) * (uR - uL)   # (01/11 d) los centrales se tocan
     uL2, uR2 = uL + gap, uR - gap
     uc = 0.5 * (uL2 + uR2)
