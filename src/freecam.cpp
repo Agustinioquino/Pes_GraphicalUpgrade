@@ -30,6 +30,8 @@
 namespace fx {
 
 static bool s_on = false;
+static float s_zoomTarget = 1.0f; static std::atomic<int> s_wheel{0};
+static float s_fovBase = 0.0f, s_fovWritten = -1.0f;   // fov del juego sin zoom / ultimo fov escrito
 static float s_pos[3] = {}, s_yaw = 0, s_pitch = 0;
 static double s_t = 0;
 static POINT s_mouse{}; static bool s_mouseWas = false;
@@ -66,7 +68,7 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     }
     if (!s_on) {
         TakeFromGame(pos, tgt);
-        s_on = true;
+        s_on = true; s_zoomTarget = std::clamp(g_cfg.live[344][2], 0.05f, 3.0f); s_wheel = 0; s_fovWritten = -1.0f;
         Log("camara libre: prendida (%s) en (%.2f, %.2f, %.2f) giro %.0f / %.0f grados; objetivo (%.2f, %.2f, %.2f), arriba (%.2f, %.2f, %.2f), proyeccion %d, campo de vision %.4f, cerca / lejos / aspecto %.3f / %.1f / %.3f",
             origen, pos[0], pos[1], pos[2], s_yaw * 57.2958f, s_pitch * 57.2958f, tgt[0], tgt[1], tgt[2], up[0], up[1], up[2], proj, *fov, extra[0], extra[1], extra[2]);
         s_logged = 0;
@@ -76,7 +78,9 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     double t = Now(); float dt = (float)std::clamp(t - s_t, 0.0, 0.1); s_t = t;
     const bool front = GameInFront();
     const bool typing = g_menuTyping.load();
-    if (front && Key(VK_HOME)) { TakeFromGame(pos, tgt); Log("camara libre: Inicio, se vuelve a la camara del juego"); }
+    { static bool s_homeWas = false; const bool home = front && Key(VK_HOME);
+      if (home && !s_homeWas) { TakeFromGame(pos, tgt); Log("camara libre: Inicio, se vuelve a la camara del juego"); }
+      s_homeWas = home; }
     float speed = std::clamp(g_cfg.live[344][1], 0.05f, 50.0f);
     if (Key(VK_SHIFT)) speed *= 4.0f;
     if (Key(VK_CONTROL)) speed *= 0.25f;
@@ -85,9 +89,19 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
         const float rot = 1.2f * dt;   // flechas: ~70 grados por segundo
         if (Key(VK_LEFT)) s_yaw += rot; if (Key(VK_RIGHT)) s_yaw -= rot;
         if (Key(VK_UP)) s_pitch += rot; if (Key(VK_DOWN)) s_pitch -= rot;
+        // zoom suave (Agustin 1/11): las teclas y la rueda mueven un objetivo y el zoom real lo sigue con un retardo corto
+        if (Key(VK_PRIOR) || Key(VK_OEM_PLUS) || Key(VK_ADD)) s_zoomTarget *= 1.0f - 0.45f * dt;
+        if (Key(VK_NEXT) || Key(VK_OEM_MINUS) || Key(VK_SUBTRACT)) s_zoomTarget *= 1.0f + 0.45f * dt;
+    }
+    {
+        const int wheel = s_wheel.exchange(0);
+        if (wheel != 0 && front) s_zoomTarget *= powf(0.92f, (float)wheel / 120.0f);   // cada muesca: 8 % mas cerca (o mas lejos)
+        s_zoomTarget = std::clamp(s_zoomTarget, 0.05f, 3.0f);
         float z = g_cfg.live[344][2];
-        if (Key(VK_PRIOR) || Key(VK_OEM_PLUS) || Key(VK_ADD)) z *= 1.0f - 0.8f * dt;
-        if (Key(VK_NEXT) || Key(VK_OEM_MINUS) || Key(VK_SUBTRACT)) z *= 1.0f + 0.8f * dt;
+        if (fabsf(z - s_zoomTarget) > 1e-4f) z += (s_zoomTarget - z) * std::clamp(6.0f * dt, 0.0f, 1.0f);   // ~1/6 s para llegar
+        else { z = s_zoomTarget; }
+        // si el usuario movio el slider del menu, el objetivo lo sigue
+        if (g_menuOpen.load()) s_zoomTarget = z = std::clamp(g_cfg.live[344][2], 0.05f, 3.0f);
         g_cfg.live[344][2] = std::clamp(z, 0.05f, 3.0f);
     }
     // mouse: gira con el boton derecho apretado (no mientras el menu del mod esta abierto: ahi el mouse es del menu)
@@ -117,8 +131,13 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     float fovApplied = -1.0f;
     if (proj == 0) {
         const float z = std::clamp(g_cfg.live[344][2], 0.05f, 3.0f);
-        // radianes (partido, < 10) o grados (si el visor los guarda asi): el zoom multiplica y vale igual en los dos casos
-        if (*fov == *fov && *fov > 0.0f && *fov < 180.0f) { *fov *= z; fovApplied = *fov; }
+        // El visor del editor NO reescribe su CameraImpl cada cuadro (solo con entrada del pad): multiplicar en el lugar
+        // acumulaba el zoom cuadro a cuadro (fov 0.364 -> 0.092 en el log de Agustin). Se guarda el fov base del juego y
+        // se escribe base x zoom; si el valor que llega no es el que escribimos, es que el juego lo cambio: nuevo base.
+        if (*fov == *fov && *fov > 0.0f && *fov < 180.0f) {
+            if (*fov != s_fovWritten) s_fovBase = *fov;
+            *fov = s_fovBase * z; s_fovWritten = *fov; fovApplied = *fov;
+        }
     }
     float* q = g_cfg.live[345]; q[0] = s_pos[0]; q[1] = s_pos[1]; q[2] = s_pos[2]; q[3] = fovApplied;
     if (++s_applies % 600 == 0 && s_logged < 20) {   // cada ~10 s de uso
@@ -128,6 +147,8 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     }
     return true;
 }
+
+void FreeCamWheel(int delta) { s_wheel += delta; }
 
 // partido / repeticion: parametro del CameraSystem (camhook.cpp)
 void FreeCamApply(unsigned char* b) {

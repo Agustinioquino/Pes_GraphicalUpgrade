@@ -30,6 +30,15 @@ static ID3D11ShaderResourceView* s_logo = nullptr; static float s_logoAspect = 1
 void OverlayResize() { if (s_rtv) { s_rtv->Release(); s_rtv = nullptr; } }
 
 static LRESULT CALLBACK MenuProc(HWND h, UINT m, WPARAM w, LPARAM l) {
+    // (1/11) rueda del mouse para el zoom de la camara libre (mensaje normal o raw input, por si el juego pide NOLEGACY)
+    if (!g_menuOpen && FreeCamActive()) {
+        if (m == WM_MOUSEWHEEL) FreeCamWheel((int)GET_WHEEL_DELTA_WPARAM(w));
+        else if (m == WM_INPUT) {
+            RAWINPUT ri{}; UINT sz = sizeof(ri);
+            if (GetRawInputData((HRAWINPUT)l, RID_INPUT, &ri, &sz, sizeof(RAWINPUTHEADER)) != (UINT)-1 && ri.header.dwType == RIM_TYPEMOUSE &&
+                (ri.data.mouse.usButtonFlags & RI_MOUSE_WHEEL)) FreeCamWheel((int)(short)ri.data.mouse.usButtonData);
+        }
+    }
     if ((g_menuOpen || g_inspectOn) && s_init) {
         ImGui_ImplWin32_WndProcHandler(h, m, w, l);
         ImGuiIO& io = ImGui::GetIO();
@@ -689,10 +698,11 @@ static void DrawPhysiqueHint() {
 }
 
 // (1/11) aviso en pantalla de la camara libre / camara lenta (pedido de Agustin: saber cuando estan activas y ver las teclas).
-// Abajo a la derecha, al lado del icono del analogico del editor; no recibe entrada.
+// A la izquierda, arriba de los iconos de controles del editor; no recibe entrada.
 static void DrawCamaraHud(bool freeCam, float slow) {
     const ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x - 28, vp->Pos.y + vp->Size.y - 28), ImGuiCond_Always, ImVec2(1, 1));
+    // a la izquierda, arriba de los iconos de controles del editor (Agustin 1/11)
+    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + 28, vp->Pos.y + vp->Size.y * 0.84f), ImGuiCond_Always, ImVec2(0, 1));
     ImGui::SetNextWindowBgAlpha(0.72f);
     ImGui::Begin("##camara_aviso", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_AlwaysAutoResize |
         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
@@ -703,7 +713,7 @@ static void DrawCamaraHud(bool freeCam, float slow) {
         if (s_fontBold) ImGui::PopFont();
         ImGui::SameLine(); ImGui::TextDisabled("  zoom x%.2f   %.1f m/s", g_cfg.live[344][2], g_cfg.live[344][1]);
         ImGui::TextUnformatted(TRS("W / S adelante y atras   A / D izquierda y derecha   Q / E bajar y subir"));
-        ImGui::TextUnformatted(TRS("Flechas o mouse (boton derecho): girar   Re Pag / Av Pag: zoom   Shift: rapido   Ctrl: lento"));
+        ImGui::TextUnformatted(TRS("Flechas o mouse (boton derecho): girar   Rueda o Re Pag / Av Pag: zoom   Shift: rapido   Ctrl: lento"));
         ImGui::TextUnformatted(TRS("Inicio: volver a la camara del juego   Alt+Shift+V: apagar"));
     }
     if (slow != 1.0f) {
