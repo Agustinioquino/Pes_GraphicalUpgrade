@@ -100,7 +100,7 @@ float3 PesTongue(float3 rest, float2 uv, uint jaw)
   // apertura: la punta de la lengua llevada por la mandibula contra llevada por la cabeza
   float4 tip = float4(0.0, 1.6274, 0.1596, 1.0);
   float J = saturate(length(mul(tip, g_vsBone.m_boneMatrices[jaw]) - mul(tip, g_vsBone.m_boneMatrices[head])) / 0.012);   // (01/11 b) se mueve ya con la boca a medio abrir
-  J = saturate(J + max(IniParams.Load(int2(346, 0)).x, 0.0));   // (01/11 e) la boca abierta del slider tambien cuenta
+  J = saturate(J + max(IniParams.Load(int2(347, 0)).x, 0.0));   // (01/11 e) la boca abierta del slider tambien cuenta
   float s = saturate((uv.y - 0.678) / (0.920 - 0.678));          // 0 raiz .. 1 punta (y la cara de abajo de la punta)
   float lado = (uv.x - 0.503) / 0.205;                            // -1 .. 1 de lado a lado
   float3 o = 0;
@@ -180,7 +180,7 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
   }
 }
 
-// (01/11 e, Agustin: "un slider para que el personaje abra la boca por completo") fila 346.x: gira en el reposo, antes del
+// (01/11 e, Agustin: "un slider para que el personaje abra la boca por completo") fila 347.x: gira en el reposo, antes del
 // skinning, los vertices de los huesos de abajo (mandibula, labio de abajo, papada; la DLL los marca por malla en g_pesExprJaw)
 // alrededor de la bisagra de skf_jaw (face_rig 111320: 0, 1.6369, 0.0795; eje x). Se suma a lo que ya haga el juego.
 // 1 = ~23 grados (boca abierta del todo), negativo = cierra un poco. Las comisuras van a la mitad; el resto del peso (labio de
@@ -188,10 +188,10 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
 void PesJawApply(float4 p, uint4 I, float4 W, float3 n,
                  inout float3 pos, inout float3 prev, inout float3 nrm)
 {
-  // (01/11 e, Agustin: "que la nariz se mueva un poquito mas con la boca ... las fosas nasales") 346.y: las alas y las fosas
+  // (01/11 e, Agustin: "que la nariz se mueva un poquito mas con la boca ... las fosas nasales") 347.y: las alas y las fosas
   // nasales (x 0.6..2.8 cm del medio, y ~1.655) siguen la mitad del gesto del labio de arriba del medio (skf_lip_t_c: sonrisa,
   // mueca, labio que sube) y se abren hacia afuera con ese gesto y con la boca abierta (como al respirar fuerte o gritar).
-  float4 Rj = IniParams.Load(int2(346, 0));
+  float4 Rj = IniParams.Load(int2(347, 0));
   float o = clamp(Rj.x, -0.25, 1.0);
   uint lt = g_pesExprJaw.z, hh = g_pesExprMesh.x;
   if (Rj.y > 0.0 && lt <= 31 && hh <= 31) {

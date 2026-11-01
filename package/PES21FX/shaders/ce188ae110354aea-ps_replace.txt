@@ -263,14 +263,14 @@ void main(
     wTop *= float4(wrZone.x, wrZone.x, wrZone.y, wrZone.z * (1.0 + wrSmile * smile));
     wBot.x *= wrZone.w;
     // (01/11, hilo expresiones; Agustin: "la malla se deforma con mas realismo y la luz se proyecta en las arrugas") las arrugas
-    // siguen al gesto agrandado por el VS (pes_expr.hlsli: ganancia y340 por zona x341..w341) y a la boca abierta del slider (x346)
+    // siguen al gesto agrandado por el VS (pes_expr.hlsli: ganancia y340 por zona x341..w341) y a la boca abierta del slider (x347)
     float4 pesXE = IniParams.Load(int2(340, 0)), pesXZ = IniParams.Load(int2(341, 0));
     if (pesXE.x > 0.5) {
       float pesXg = max(pesXE.y, 0.0);
       wTop *= float4(pesXg * pesXZ.x, pesXg * pesXZ.x, pesXg * pesXZ.x, 1.0 + (pesXg - 1.0) * (pesXZ.y + pesXZ.z) * 0.5);
       wBot.x *= 1.0 + (pesXg - 1.0) * pesXZ.w;
     }
-    float pesXO = saturate(IniParams.Load(int2(346, 0)).x);
+    float pesXO = saturate(IniParams.Load(int2(347, 0)).x);
     wBot += pesXO * float4(0.35, 0.60, 0.60, 0.30);   // boca abierta: comisuras, mandibula der/izq y cuello
   }
   r0.z = dot(wTop, r2.xyzw);
