@@ -212,18 +212,23 @@ void PesJawApply(float4 p, uint4 I, float4 W, float3 n,
     pos += du; prev += dv;
   }
   if (Rj.y > 0.0 && lt <= 31 && hh <= 31) {
-    float ex = (abs(p.x) - 0.016) / 0.013, ey = (p.y - 1.655) / 0.013;
-    float nm = (1.0 - smoothstep(0.5, 1.0, sqrt(ex * ex + ey * ey))) * smoothstep(0.12, 0.15, p.z) * saturate(Rj.y);
+    // (01/11 g, Agustin: "mas suave y tomando mas las fosas nasales hasta arriba") zona: alas y costados de la nariz desde la
+    // fosa (y ~1.650) hasta arriba del ala (y ~1.690), x 0.4..3.2 cm del medio; bordes anchos (sin escalon) y el peso baja
+    // de a poco hacia arriba. Seguimiento 0.35 del labio (antes 0.5) con rodilla suave, apertura de las alas mas chica.
+    float ax = abs(p.x);
+    float zx = smoothstep(0.002, 0.009, ax) * (1.0 - smoothstep(0.022, 0.034, ax));
+    float zy = smoothstep(1.645, 1.656, p.y) * (1.0 - smoothstep(1.668, 1.694, p.y));
+    float nm = zx * zy * smoothstep(0.11, 0.15, p.z) * saturate(Rj.y);
     if (nm > 0.0) {
       float4x3 Mh = g_vsBone.m_boneMatrices[hh], Ph = g_vsPrevBone.m_boneMatrices[hh];
       float3 dl = mul(p, g_vsBone.m_boneMatrices[lt]) - mul(p, Mh);
       float3 dq = mul(p, g_vsPrevBone.m_boneMatrices[lt]) - mul(p, Ph);
       float L = length(dl), Lq = length(dq);
-      if (L > 0.008) dl *= 0.008 / L; if (Lq > 0.008) dq *= 0.008 / Lq;   // tope 8 mm (el labio de reposo no vuela)
+      dl *= 1.0 / (1.0 + L / 0.006); dq *= 1.0 / (1.0 + Lq / 0.006);   // rodilla suave: gestos chicos casi enteros, grandes acotados
       float sx = p.x >= 0.0 ? 1.0 : -1.0;
-      float fl = 0.35 * min(L, 0.008) + 0.0015 * max(o, 0.0), flq = 0.35 * min(Lq, 0.008) + 0.0015 * max(o, 0.0);   // apertura de las alas
-      pos  += nm * (0.5 * dl + mul(float3(sx * fl, 0.0, 0.0), (float3x3)Mh));
-      prev += nm * (0.5 * dq + mul(float3(sx * flq, 0.0, 0.0), (float3x3)Ph));
+      float fl = 0.20 * length(dl) + 0.0010 * max(o, 0.0), flq = 0.20 * length(dq) + 0.0010 * max(o, 0.0);   // apertura de las alas
+      pos  += nm * (0.35 * dl + mul(float3(sx * fl, 0.0, 0.0), (float3x3)Mh));
+      prev += nm * (0.35 * dq + mul(float3(sx * flq, 0.0, 0.0), (float3x3)Ph));
     }
   }
   if (abs(o) < 0.001) return;
