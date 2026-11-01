@@ -37,12 +37,15 @@ struct FaceMesh {
     ID3D11Buffer* cb = nullptr;   // x cabeza, y indice maximo, z id
     const char* why = "";
     float hc[3] = {}; bool hcOk = false;   // (1/11) centro de la cara en espacio del modelo (vertices que pesan en sk_head): para "seguir la cara"
+    UINT lastFrame = 0;   // (01/11) ultimo cuadro en que se dibujo (para echar las mallas viejas sin vaciar toda la tabla)
 };
 std::mutex s_mx;
 std::unordered_map<uint64_t, FaceMesh*> s_meshes;
 std::vector<FaceMesh*> s_pending;
 ID3D11Buffer* s_none = nullptr;   // cabeza 99: el VS no toca la malla (sin dato o descartada)
 int s_nextId = 1;
+UINT s_frame = 0;   // cuadros (Present) desde el arranque
+int s_evicted = 0;   // mallas echadas por viejas (resumen)
 std::atomic<int> s_binds{0}, s_bindsNone{0};
 std::atomic<int> s_bindsWait{0}, s_bindsDisc{0}, s_bindsNew{0};   // (01/11) de los 'sin dato': malla en lectura / descartada o no cara / recien vista
 int s_hist[4] = {};   // mallas listas con cabeza 0 / 1 / 2..31 / descartadas
@@ -357,16 +360,28 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
     std::lock_guard<std::mutex> lk(s_mx);
     auto it = s_meshes.find(key);
     if (it != s_meshes.end()) {
-        rel(); FaceMesh* m = it->second;
+        rel(); FaceMesh* m = it->second; m->lastFrame = s_frame;
         if (m->state == 3 && m->cb) { s_binds++; if (headCentroid && m->hcOk && m->nv >= 300) { *headCentroid = m->hc; if (headIdx) *headIdx = m->head; } return m->cb; }
         if (m->state == 4) s_bindsDisc++; else s_bindsWait++;
         s_bindsNone++; return s_none;
     }
-    if (s_meshes.size() >= 2048) {   // partido largo / muchas caras: se empieza de nuevo (las cuentas y buffers cambian entre partidos)
-        for (auto& kv : s_meshes) { ReleaseIA(kv.second); if (kv.second->cb) kv.second->cb->Release(); delete kv.second; }
-        s_meshes.clear(); s_pending.clear();
+    if (s_meshes.size() >= 2048) {
+        // (01/11) en partido aparecen mallas pasajeras (buffers que el juego rearma: ~50 por segundo) y la tabla se llenaba cada
+        // ~40 s; vaciarla entera obligaba a releer las 22 caras cada vez (73 % de los dibujos 'en lectura'). Primero se echan
+        // las que no se dibujaron en los ultimos 5 s; solo si no alcanza se empieza de nuevo.
+        for (auto it2 = s_meshes.begin(); it2 != s_meshes.end();) {
+            FaceMesh* o = it2->second;
+            if (s_frame - o->lastFrame > 300) {
+                s_pending.erase(std::remove(s_pending.begin(), s_pending.end(), o), s_pending.end());
+                ReleaseIA(o); if (o->cb) o->cb->Release(); delete o; it2 = s_meshes.erase(it2); s_evicted++;
+            } else ++it2;
+        }
+        if (s_meshes.size() >= 2048) {   // partido largo / muchas caras: se empieza de nuevo (las cuentas y buffers cambian entre partidos)
+            for (auto& kv : s_meshes) { ReleaseIA(kv.second); if (kv.second->cb) kv.second->cb->Release(); delete kv.second; }
+            s_meshes.clear(); s_pending.clear();
+        }
     }
-    FaceMesh* m = new FaceMesh(); m->id = s_nextId++;
+    FaceMesh* m = new FaceMesh(); m->id = s_nextId++; m->lastFrame = s_frame;
     m->ib = ib; m->ibFmt = ibFmt; m->ibOff = ibOff; m->start = start; m->count = count; m->base = base;
     for (int i = 0; i < 4; i++) { m->vb[i] = vb[i]; m->stride[i] = stride[i]; m->off[i] = off[i]; vb[i] = nullptr; }
     ib = nullptr;
@@ -451,7 +466,10 @@ void ExprPresent() {
     HeadPresent(imm);
     {   // con el candado tomado: los dibujos (otros hilos) leen state / cb y pueden vaciar la tabla. Los Map son DO_NOT_WAIT.
         std::lock_guard<std::mutex> lk(s_mx);
-        for (size_t i = 0; i < s_pending.size() && i < 8; i++) Step(imm, s_pending[i]);
+        s_frame++;
+        // (01/11) primero las mallas que se estan dibujando ahora (las pasajeras que ya no se dibujan van al final), 12 por cuadro
+        std::stable_sort(s_pending.begin(), s_pending.end(), [](FaceMesh* a, FaceMesh* b) { return a->lastFrame > b->lastFrame; });
+        for (size_t i = 0; i < s_pending.size() && i < 12; i++) Step(imm, s_pending[i]);
         s_pending.erase(std::remove_if(s_pending.begin(), s_pending.end(), [](FaceMesh* m) { return m->state >= 3; }), s_pending.end());
     }
     static int frames = 0;
@@ -460,8 +478,8 @@ void ExprPresent() {
         const int b = s_binds.exchange(0), bn = s_bindsNone.exchange(0);
         const int bw = s_bindsWait.exchange(0), bd = s_bindsDisc.exchange(0), bnew = s_bindsNew.exchange(0);
         if (b || bn) { std::lock_guard<std::mutex> lk(s_mx);
-            Log("expresiones: %d mallas de cara (cabeza en 0: %d, en 1: %d, en otro: %d, descartadas o no cara %d); dibujos con dato %d, sin dato %d (en lectura %d, descartadas o no cara %d, nuevas %d, apagado %d); ganancia %.2f",
-                (int)s_meshes.size(), s_hist[0], s_hist[1], s_hist[2], s_hist[3], b, bn, bw, bd, bnew, bn - bw - bd - bnew, g_cfg.live[340][1]); }
+            Log("expresiones: %d mallas de cara (cabeza en 0: %d, en 1: %d, en otro: %d, descartadas o no cara %d); dibujos con dato %d, sin dato %d (en lectura %d, descartadas o no cara %d, nuevas %d, apagado %d); echadas por viejas %d; ganancia %.2f",
+                (int)s_meshes.size(), s_hist[0], s_hist[1], s_hist[2], s_hist[3], b, bn, bw, bd, bnew, bn - bw - bd - bnew, s_evicted, g_cfg.live[340][1]); }
     }
 }
 
