@@ -19,7 +19,7 @@ cbuffer PESExprMesh : register(b12)
 {
   uint4 g_pesExprMesh;   // x cabeza en la paleta (99 = nada), y hueso maximo usado, z id de la malla
   uint4 g_pesExprLids;   // (01/11) parpados en la paleta: x arriba izq (+x), y arriba der, z abajo izq, w abajo der (99 = no hay)
-  uint4 g_pesExprJaw;    // (01/11) abrir la boca: x mascara de huesos de abajo (mandibula, labio de abajo, papada), y comisuras (la mitad)
+  uint4 g_pesExprJaw;    // (01/11) abrir la boca: x mascara de huesos de abajo (mandibula, labio de abajo, papada), y comisuras (la mitad), z labio de arriba del medio (99 = no hay)
 }
 
 float PesExprZoneShare(float3 r, float4 Z)
@@ -188,7 +188,27 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
 void PesJawApply(float4 p, uint4 I, float4 W, float3 n,
                  inout float3 pos, inout float3 prev, inout float3 nrm)
 {
-  float o = clamp(IniParams.Load(int2(346, 0)).x, -0.25, 1.0);
+  // (01/11 e, Agustin: "que la nariz se mueva un poquito mas con la boca ... las fosas nasales") 346.y: las alas y las fosas
+  // nasales (x 0.6..2.8 cm del medio, y ~1.655) siguen la mitad del gesto del labio de arriba del medio (skf_lip_t_c: sonrisa,
+  // mueca, labio que sube) y se abren hacia afuera con ese gesto y con la boca abierta (como al respirar fuerte o gritar).
+  float4 Rj = IniParams.Load(int2(346, 0));
+  float o = clamp(Rj.x, -0.25, 1.0);
+  uint lt = g_pesExprJaw.z, hh = g_pesExprMesh.x;
+  if (Rj.y > 0.0 && lt <= 31 && hh <= 31) {
+    float ex = (abs(p.x) - 0.016) / 0.013, ey = (p.y - 1.655) / 0.013;
+    float nm = (1.0 - smoothstep(0.5, 1.0, sqrt(ex * ex + ey * ey))) * smoothstep(0.12, 0.15, p.z) * saturate(Rj.y);
+    if (nm > 0.0) {
+      float4x3 Mh = g_vsBone.m_boneMatrices[hh], Ph = g_vsPrevBone.m_boneMatrices[hh];
+      float3 dl = mul(p, g_vsBone.m_boneMatrices[lt]) - mul(p, Mh);
+      float3 dq = mul(p, g_vsPrevBone.m_boneMatrices[lt]) - mul(p, Ph);
+      float L = length(dl), Lq = length(dq);
+      if (L > 0.008) dl *= 0.008 / L; if (Lq > 0.008) dq *= 0.008 / Lq;   // tope 8 mm (el labio de reposo no vuela)
+      float sx = p.x >= 0.0 ? 1.0 : -1.0;
+      float fl = 0.35 * min(L, 0.008) + 0.0015 * max(o, 0.0), flq = 0.35 * min(Lq, 0.008) + 0.0015 * max(o, 0.0);   // apertura de las alas
+      pos  += nm * (0.5 * dl + mul(float3(sx * fl, 0.0, 0.0), (float3x3)Mh));
+      prev += nm * (0.5 * dq + mul(float3(sx * flq, 0.0, 0.0), (float3x3)Ph));
+    }
+  }
   if (abs(o) < 0.001) return;
   uint full = g_pesExprJaw.x, half_ = g_pesExprJaw.y;
   if ((full | half_) == 0u) return;
