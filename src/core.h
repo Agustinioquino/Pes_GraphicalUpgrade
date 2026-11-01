@@ -26,7 +26,7 @@ void ScanRefsInto(uintptr_t base, uintptr_t end, const char* dllName);   // quie
 extern void* g_overlayOldProc;
 
 // ---------------------------------------------------------------- parametros (lo que en 3DMigoto era IniParams)
-constexpr int kParamCount = 346;           // float4 x 346 -> t120 en los shaders (IniParams.Load(int2(i,0))). (20/10: era 128 y los parametros 128+ se perdian; 25/10: 256 -> 320, la ropa contra el cuerpo usa 256 / 257; 27/10: 320 -> 336: la fila 320 (torso bajo la camiseta) quedaba fuera y el ini la descartaba; 31/10: 340 -> 344 (expresiones 340 / 341); 01/11: 344 -> 346: 343 camara lenta, 344 / 345 camara libre)
+constexpr int kParamCount = 347;           // float4 x 346 -> t120 en los shaders (IniParams.Load(int2(i,0))). (20/10: era 128 y los parametros 128+ se perdian; 25/10: 256 -> 320, la ropa contra el cuerpo usa 256 / 257; 27/10: 320 -> 336: la fila 320 (torso bajo la camiseta) quedaba fuera y el ini la descartaba; 31/10: 340 -> 344 (expresiones 340 / 341); 01/11: 344 -> 346: 343 camara lenta, 344 / 345 camara libre; 01/11 b: 346 -> 347: 346 seguir la cara)
 // (26/10) filas de t120 ocupadas por tablas que escribe la DLL en cada cuadro (no usarlas para el ini): 194..254 tonos de piel por
 // jugador (skintone.cpp), 257 cuadro de la ropa contra el cuerpo (cuerpo.cpp). 300..304 son de las manos (manos.cpp + pes_hands.hlsli; 303 = manos relajadas, 304 = unas de los jugadores con textura propia, pes_nailfix.hlsli en el PS aa7d1833; v12.6).
 // 260..263 son de la musculatura (musculo.cpp: grupos de la v7 y musculos vivos).
@@ -338,7 +338,8 @@ void CamHookPresent();                            // ganchos (primer Present), 1
 // (31/10) camara libre (freecam.cpp): pisa el parametro de la camara del motor desde el gancho de camhook.cpp; 344 (ini) / 345 (DLL)
 void FreeCamApply(unsigned char* param);
 void FreeCamPresent();
-void FreeCamWheel(int delta);   // (1/11) rueda del mouse (WM_MOUSEWHEEL / raw input) -> zoom   // (1/11) gancho a la camara del visor del editor (primer Present) + log
+void FreeCamWheel(int delta);
+bool FreeCamWantsHead();   // (1/11) camara libre prendida con "seguir la cara": hace falta la cabeza (expr.cpp)   // (1/11) rueda del mouse (WM_MOUSEWHEEL / raw input) -> zoom   // (1/11) gancho a la camara del visor del editor (primer Present) + log
 bool FreeCamActive();
 bool FreeCamBlocksKeys();                         // x344 = 1: el juego no ve el teclado mientras la camara libre esta prendida
 // (31/10) camara lenta (tiempo.cpp): gancho al reloj de juego del motor (0x14035dcb0), 343 (ini: x velocidad, y prendida; DLL: z, w)
@@ -363,7 +364,9 @@ void BodySimSeen();                                // el simulador del mod de ro
 void BodyReloadShaders();
 struct InputElemInfo { std::string sem; UINT idx, fmt, slot, off; };
 bool InputLayoutInfo(ID3D11InputLayout* il, std::vector<InputElemInfo>& out);
-ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base);   // (31/10) expresiones: cbuffer de la malla de cara (cabeza en la paleta) para el VS
+ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, const float** headCentroid = nullptr, int* headIdx = nullptr);
+void ExprCaptureHead(ID3D11DeviceContext* c, const float* hc, int head);   // (1/11) copia la matriz de sk_head del dibujo en curso (b6)
+bool ExprHeadWorld(float out[3], double* age);                            // (1/11) ultima posicion de la cabeza en el mundo   // (31/10) expresiones: cbuffer de la malla de cara (cabeza en la paleta) para el VS
 void ExprPresent();                                // (31/10) expresiones: lectura de las mallas de cara nuevas, log   // hooks.cpp: elementos anotados al crearse el layout
 void MuscleHookPresent();                         // (23/10) musculatura (musculo.cpp): huesos de musculo del juego x 164..171 (v5: 32 clases)
 void MuscleDrawPlayerPanel();                     // (24/10) tarjeta "Musculatura por jugador" (ImGui; la llama DrawGroup con g_cfgMutex tomado)
