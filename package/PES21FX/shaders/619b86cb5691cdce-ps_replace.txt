@@ -792,7 +792,24 @@ void main(
       if (MS.y > 0.5 && MS.x > 0.0 && geoOk && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {
         float ndlM = dot(Nsk, normalize(pLc_dir.xyz));
         float aper = 2.0 * aoRaw * aoRaw;
-        if (MS.z > 0.5) { float sB = geoFlat ? pow(saturate(dot(Nsk, Ngeo)), 6.0) : 1.0; aper = 2.0 * sB * sB; }
+        if (MS.z > 0.5) {
+          // (01/11) relieve v2: la normal de detalle contra el PROMEDIO de las normales del G-buffer en un anillo de ~1.2 cm del
+          // mundo (no contra la normal de la profundidad). La de la profundidad salia a facetas (cuadrados de 2x2 y triangulos de
+          // mallas con pocos poligonos, como la mano) y cada faceta se leia como un pliegue hondo. El promedio de un anillo
+          // simetrico quita poros, trama y pliegues finos y deja la curvatura suave; sigue sin depender de la camara.
+          float3 Nc0 = PESDecN(uvC);
+          float pxmM = 1.0 / max(2.0 * abs(g_psScene.m_projectionParam.x) * zsk * g_psSystem.m_renderBuffer.z, 1e-5);
+          float rM = clamp(0.012 * pxmM, 1.5, 16.0);
+          float3 nAcc = 0; float nW = 0;
+          [unroll] for (int mi = 0; mi < 8; mi++) {
+            float angM = mi * 0.78539816 + 0.3927;
+            float2 uvM = uvC + float2(cos(angM), sin(angM)) * rM * g_psSystem.m_renderBuffer.zw;
+            float wM = abs(PESLinZ(uvM) - zsk) < 0.03 * zsk + 0.02 ? 1.0 : 0.0;
+            nAcc += PESDecN(uvM) * wM; nW += wM;
+          }
+          float sB = nW > 2.5 ? pow(saturate(dot(Nc0, normalize(nAcc + 1e-6))), 6.0) : 1.0;
+          aper = 2.0 * sB * sB;
+        }
         float micro = saturate(abs(ndlM) + aper - 1.0);
         float litSide = saturate(ndlM * 4.0);                         // solo donde pega el sol
         float msK = lerp(1.0, micro, saturate(MS.x) * litSide);
