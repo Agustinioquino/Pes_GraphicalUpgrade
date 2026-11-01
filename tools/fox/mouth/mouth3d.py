@@ -25,6 +25,7 @@ EXT_UP, EXT_LO = float(os.environ.get('EXT_UP', '1.7')) * 0.001, 0.7 * 0.001   #
 GUM = 0.08   # = make_oral.GUM (01/11 h: 0.18 -> 0.08, dientes mas largos)
 OVERJET_LO = 0.9 * MM   # (01/11 e) los incisivos de abajo se meten 0.9 mm detras de los de arriba
 PDEG = int(os.environ.get('PDEG', '2'))   # (01/11 f) parche por diente: grado 2 a lo ancho (sigue el arco), recto a lo alto
+CUT_STRIP = float(os.environ.get('CUT_STRIP', '0.42'))   # (01/11 i) la tira se corta a s > GUM + esto (0 = no cortar)
 SINK = 1.5 * MM   # (01/11 d) 0.7 -> 1.5 mm: el cuello se mete bien detras de la encia (no asoma por arriba)
 PATCH = int(os.environ.get('PATCH', '1'))
 UV_W, UV_V0, UV_V1 = 0.55, 0.15, 0.90   # (01/11 e) el borde translucido de la textura (0.62-0.92) cae adentro   # (01/11 d) parte del diente pintado que usa el diente 3D
@@ -305,6 +306,19 @@ def build(src_fmdl, texdir, log=print):
         inx = (xs >= r['x0'] - 1) & (xs <= r['x1'] + 1)
         tm = tm * np.where(inx, make_oral.sst(GUM, GUM + 0.12, sv), 1.0)
         Pc = Pc - Nc * (0.9 * MM * make_oral.sst(0.3, 0.7, tm))[:, None]
+        # (01/11 i) Agustin: 'borrar la otra boca asi no se sobreponen'. Los dientes PINTADOS de Konami de la tira quedaban
+        # detras de los 3D y asomaban (gris entre los bordes, de costado). Se sacan las caras de la tira debajo de la encia
+        # (s > GUM + papila + margen) en la zona de los dientes: queda solo la encia con sus papilas; el fondo es la boca
+        if CUT_STRIP:
+            # solo la zona del diente pintado; el doblez de la tira pasando el borde incisal (conecta con el piso / paladar)
+            # queda para no abrir agujeros, pero con la uv de un punto de mucosa oscura del atlas (no muestra bordes pintados)
+            dead = inx & (sv > GUM + CUT_STRIP) & (sv <= 1.0)
+            fold = inx & (sv > 1.0)
+            UVc = UVc.copy(); UVc[fold] = (0.20, 0.75)
+            keep = ~dead[Fc].all(1)
+            Fc = Fc[keep]
+            used = np.unique(Fc); remap = -np.ones(len(Pc), np.int64); remap[used] = np.arange(len(used))
+            Pc, UVc, Wc, Fc = Pc[used], UVc[used], Wc[used], remap[Fc]
         parts.append((Pc, UVc, Fc, Wc, 'tira'))
     # ---- dientes
     nteeth = 0
