@@ -20,9 +20,9 @@ import fmdl, mouth_fmdl, make_oral
 MM = 0.001
 # (01/11) mordida: con la boca en reposo la tira de arriba termina en y 1.631 y la de abajo en 1.6285 (2.5 mm de luz); los dientes
 # se alargan para que cierren: los de arriba bajan 2.4 mm por delante de los de abajo, que suben 0.8 mm (se solapan ~0.7 mm)
-EXT_UP, EXT_LO = float(os.environ.get('EXT_UP', '1.5')) * 0.001, 0.7 * 0.001   # (01/11 f) 2.0 -> 1.5 mm: menos sobremordida (Agustin)   # (01/11 b) 2.4 / 0.8 -> 2.0 / 0.7: dientes un poco menos largos (Agustin)
+EXT_UP, EXT_LO = float(os.environ.get('EXT_UP', '1.7')) * 0.001, 0.7 * 0.001   # (01/11 f) 2.0 -> 1.5 mm: menos sobremordida (Agustin)   # (01/11 b) 2.4 / 0.8 -> 2.0 / 0.7: dientes un poco menos largos (Agustin)
 # (01/11 b) mas encia (Agustin): la linea de la encia baja GUM del alto del diente pintado; esa franja de la tira muestra encia
-GUM = 0.18   # = make_oral.GUM
+GUM = 0.08   # = make_oral.GUM (01/11 h: 0.18 -> 0.08, dientes mas largos)
 OVERJET_LO = 0.9 * MM   # (01/11 e) los incisivos de abajo se meten 0.9 mm detras de los de arriba
 PDEG = int(os.environ.get('PDEG', '2'))   # (01/11 f) parche por diente: grado 2 a lo ancho (sigue el arco), recto a lo alto
 SINK = 1.5 * MM   # (01/11 d) 0.7 -> 1.5 mm: el cuello se mete bien detras de la encia (no asoma por arriba)
@@ -157,7 +157,7 @@ def local_patch(M, u0, u1, v0, v1, n=9, deg=2, degv=None):
     return f
 
 # ---------------------------------------------------------------- un diente
-def tooth(M, uL, uR, vG, vI, kind, upper, na=28, nb=18, ext=0.0, mes=1.0, seed=0):
+def tooth(M, uL, uR, vG, vI, kind, upper, na=22, nb=15, ext=0.0, mes=1.0, seed=0):
     """M: UVMap de la tira. uL/uR: limites en u; vG: v del cuello (encia); vI: v del borde incisal. kind: 'I' incisivo,
     'C' canino, 'P' premolar/molar. mes: lado de cx (+1/-1) que mira al centro de la boca (mesial). Devuelve P, UV, F
     (01/11 e) mas natural (Agustin 'poco naturales'): perfil recto (el parche sigue la tira a lo ancho pero es recto a lo alto:
@@ -325,7 +325,7 @@ def build(src_fmdl, texdir, log=print):
             else: vI = max(vI, 0.505)
             # (01/11 e) curva de la sonrisa: centrales un poco mas largos, laterales mas cortos, caninos con la punta, muelas
             # mas cortas; mesial = hacia el centro de la fila
-            dext = ({'IC': -0.1, 'I': -0.8, 'C': -0.2, 'P': -0.8} if up else {'I': 0.0, 'C': 0.25, 'P': -0.3})[kind] * MM
+            dext = ({'IC': -0.1, 'I': -0.5, 'C': -0.2, 'P': -0.6} if up else {'I': 0.0, 'C': 0.25, 'P': -0.3})[kind] * MM
             mes = 1.0 if (i + 0.5) < mid else -1.0
             Pt, UVt, Ft = tooth(M, xl / 512.0, xr / 512.0, vG, vI, kind, up, ext=(EXT_UP if up else EXT_LO) + dext, mes=mes,
                                 seed=nteeth)
@@ -364,6 +364,9 @@ def build(src_fmdl, texdir, log=print):
     w4 = np.take_along_axis(Wa, order, 1); w4 /= np.maximum(w4.sum(1, keepdims=True), 1e-9)
     bidx = np.array([[grp.index(b) for b in row] for row in order])
     log('  dientes 3D: %d; vertices %d, triangulos %d' % (nteeth, len(Pa), len(Fa)))
+    # (01/11 h) el juego dibuja la boca con a lo sumo 65535 indices: con la v8/v9 (29176 tri = 87528 indices) no se dibujaba
+    # lo que quedaba al final del buffer (lengua, paladar, garganta). Tope: 21845 triangulos
+    assert len(Fa) * 3 <= 65535, 'demasiados triangulos para la boca: %d (max 21845)' % len(Fa)
     return dict(pos=Pa, nrm=np.hstack([Na, np.zeros((len(Pa), 1))]), tan=np.hstack([Ta, tw[:, None]]), w=w4, bidx=bidx,
                 uv=UVa, faces=Fa, tag=np.array(tag))
 
