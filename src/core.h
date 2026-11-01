@@ -56,7 +56,7 @@ constexpr int kParamCount = 348;           // float4 x 348 -> t120 en los shader
 // 338 = traspaso de luz en los kits con el grosor real del shadow map (31/10, 5 PS del sol: x densidad 1/m, y grosor maximo cm, z resto del modo viejo, w on).
 // 340 = expresiones faciales (31/10, expr.cpp + pes_expr.hlsli en los VS faab87ee / 455eb97b: x prendido, y ganancia general (1 = juego), z tope del agregado en cm, w cuanto se suma de los gestos grandes (mandibula abierta) 0..1).
 // 342 = lengua de la boca 3D (01/11, pes_expr.hlsli PesTongue en faab87ee; expr.cpp marca la malla de la boca: x fuerza, y movimiento vivo, z velocidad; w parpadeo del mod 0..1, PesBlink con los parpados que expr.cpp encuentra por malla).
-// 347 = abrir la boca (01/11, pes_expr.hlsli PesJawApply en faab87ee / 455eb97b): x apertura extra -0.25..1 (1 = boca abierta del todo, negativo = cierra un poco); y nariz con la boca 0..1
+// 347 = abrir la boca (01/11, pes_expr.hlsli PesJawApply en faab87ee / 455eb97b): x apertura extra -0.25..1 (1 = boca abierta del todo, negativo = cierra un poco); y nariz con la boca 0..1; z labio de arriba (gesto extra 0..1.5)
 //       expr.cpp marca por malla los huesos de abajo (mandibula, labio de abajo, papada) y las comisuras (la mitad).
 // 341 = expresiones por zona (31/10: x frente y cejas, y ojos y parpados, z mejillas y nariz, w boca y labios; 1 = la ganancia general sola).
 // 339 = pelo a contraluz (31/10, 5 PS del sol; los PS del pelo 02f1d510 / c75f6047 marcan g_SpecularTexture.z = 252/255: x fuerza, y densidad 1/m, z grosor maximo cm, w on).

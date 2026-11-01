@@ -19,7 +19,7 @@ cbuffer PESExprMesh : register(b12)
 {
   uint4 g_pesExprMesh;   // x cabeza en la paleta (99 = nada), y hueso maximo usado, z id de la malla
   uint4 g_pesExprLids;   // (01/11) parpados en la paleta: x arriba izq (+x), y arriba der, z abajo izq, w abajo der (99 = no hay)
-  uint4 g_pesExprJaw;    // (01/11) abrir la boca: x mascara de huesos de abajo (mandibula, labio de abajo, papada), y comisuras (la mitad), z labio de arriba del medio (99 = no hay)
+  uint4 g_pesExprJaw;    // (01/11) abrir la boca: x mascara de huesos de abajo (mandibula, labio de abajo, papada), y comisuras (la mitad), z labio de arriba del medio (99 = no hay), w mascara del labio de arriba
 }
 
 float PesExprZoneShare(float3 r, float4 Z)
@@ -194,6 +194,23 @@ void PesJawApply(float4 p, uint4 I, float4 W, float3 n,
   float4 Rj = IniParams.Load(int2(347, 0));
   float o = clamp(Rj.x, -0.25, 1.0);
   uint lt = g_pesExprJaw.z, hh = g_pesExprMesh.x;
+  // (01/11 f, Agustin: "los labios superiores no tienen mucho movimiento") 347.z: el labio de arriba (skf_lip_t_*, lip_volume;
+  // la DLL los marca en g_pesExprJaw.w) suma este tanto mas de su propio gesto contra la cabeza (sube / baja / se cierra
+  // sobre el de abajo). Tope 6 mm.
+  if (Rj.z > 0.0 && hh <= 31 && g_pesExprJaw.w != 0u) {
+    float4x3 Mh0 = g_vsBone.m_boneMatrices[hh], Ph0 = g_vsPrevBone.m_boneMatrices[hh];
+    float3 ph0 = mul(p, Mh0), pq0 = mul(p, Ph0), du = 0, dv = 0;
+    [unroll] for (int k = 0; k < 4; k++) {
+      uint j = I[k]; float w = W[k];
+      if (w <= 0.0 || j > 31 || (g_pesExprJaw.w & (1u << j)) == 0u) continue;
+      du += w * (mul(p, g_vsBone.m_boneMatrices[j]) - ph0);
+      dv += w * (mul(p, g_vsPrevBone.m_boneMatrices[j]) - pq0);
+    }
+    du *= Rj.z; dv *= Rj.z;
+    float lu = length(du), lv = length(dv);
+    if (lu > 0.006) du *= 0.006 / lu; if (lv > 0.006) dv *= 0.006 / lv;
+    pos += du; prev += dv;
+  }
   if (Rj.y > 0.0 && lt <= 31 && hh <= 31) {
     float ex = (abs(p.x) - 0.016) / 0.013, ey = (p.y - 1.655) / 0.013;
     float nm = (1.0 - smoothstep(0.5, 1.0, sqrt(ex * ex + ey * ey))) * smoothstep(0.12, 0.15, p.z) * saturate(Rj.y);
