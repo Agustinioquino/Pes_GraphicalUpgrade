@@ -112,6 +112,13 @@ void main(
       if (E.w > 0.0) {
         float t = IniParams.Load(int2(157, 0)).x;
         float seed = PesExprSeed();
+        // (01/11 k, Agustin: "bien cuando no hay animacion, despues queda raro") si el juego esta moviendo los ojos (el hueso del
+        // ojo giro entre un cuadro y el otro mas de ~0.15 grados), la mirada del mod se aparta: 0 con 0.6 grados por cuadro
+        uint eb = v3.x;
+        float3 fwd1 = mul(float3(0.0, 0.0, 1.0), (float3x3)g_vsBone.m_boneMatrices[eb]);
+        float3 fwd0 = mul(float3(0.0, 0.0, 1.0), (float3x3)g_vsPrevBone.m_boneMatrices[eb]);
+        float rate = length(fwd1 - fwd0);
+        gAmp *= 1.0 - smoothstep(0.0026, 0.0105, rate);
         float2 g = PesGaze(t, seed, gAmp), gp = PesGaze(t - 1.0 / 60.0, seed, gAmp);
         v0g.xyz = E.xyz + PesGazeRot(v0.xyz - E.xyz, g);
         v0p.xyz = E.xyz + PesGazeRot(v0.xyz - E.xyz, gp);

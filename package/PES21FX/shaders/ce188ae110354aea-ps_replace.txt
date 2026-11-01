@@ -266,6 +266,9 @@ void main(
       float m = 0.5 * (exx + eyy), rr = sqrt(max(0.25 * (exx - eyy) * (exx - eyy) + exy * exy, 0.0));
       float lmin = m - rr;
       pesCmp = saturate(-lmin / 0.12 * pesCmpW);
+      // (01/11 k, Agustin: "las arrugas debajo del ojo estan muy fuertes") bajo el ojo (y 167.0..169.6, |x| 1.2..4.8 cm) a un cuarto
+      float ueY = smoothstep(1.664, 1.672, pR.y) * (1.0 - smoothstep(1.694, 1.700, pR.y)), ueX = smoothstep(0.009, 0.014, abs(pR.x)) * (1.0 - smoothstep(0.046, 0.052, abs(pR.x)));
+      pesCmp *= 1.0 - 0.75 * ueY * ueX;
     }
   }
   // ---- arrugas animadas ----
