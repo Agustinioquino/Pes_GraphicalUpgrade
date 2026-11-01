@@ -124,7 +124,7 @@ def tooth_ids(rows, N):
         base += ntt
     return tid, kinds
 
-GUM = 0.18   # (01/11 b) mas encia (Agustin): la linea de la encia baja 18 % del alto del diente; mouth3d.py usa el mismo valor
+GUM = 0.08   # (01/11 h) 0.18 -> 0.08: dientes mas largos del lado de la encia (Agustin "muy cortos"); mouth3d.py usa el mismo valor
 
 def gum_warp(img, rows, gum=GUM):
     """corre la linea de la encia de las dos tiras: en cada columna, con s = 0 en la encia pintada y 1 en el borde incisal,
