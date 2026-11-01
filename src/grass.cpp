@@ -269,14 +269,19 @@ static const int kTimers = 8;
 struct GpuTimer { ID3D11Query* dis = nullptr; ID3D11Query* ts[5] = {}; std::atomic<int> tag{-1}; };   // tag: -1 libre, >= 0 cuadro en que se grabo
 static GpuTimer s_tm[kTimers];
 static double s_tmSum[4] = {}, s_tmMax[4] = {}; static int s_tmN = 0, s_tmDisjoint = 0, s_tmLost = 0;   // compute, nivel 0, 1, 2 (ms)
-static bool TimersReady() {
-    static bool tried = false; if (tried) return s_tm[0].dis != nullptr; tried = true;
-    D3D11_QUERY_DESC qd = {}; bool ok = true;
-    for (auto& t : s_tm) {
+static std::atomic<int> s_tmState{0};   // 0 sin crear, 1 listas, 2 fallaron (sin medidor)
+static std::mutex s_tmMx;
+static bool TimersReady() {   // (1/11 b) bajo llave y todo-o-nada: GrassEmit corre desde varios hilos; antes otro hilo podia tomar un juego a medio crear (End sobre null)
+    int st = s_tmState.load(); if (st) return st == 1;
+    std::lock_guard<std::mutex> lk(s_tmMx);
+    if (s_tmState.load()) return s_tmState.load() == 1;
+    D3D11_QUERY_DESC qd = {}; bool ok = g_dev.dev != nullptr;
+    for (auto& t : s_tm) { if (!ok) break;
         qd.Query = D3D11_QUERY_TIMESTAMP_DISJOINT; if (FAILED(g_dev.dev->CreateQuery(&qd, &t.dis))) { t.dis = nullptr; ok = false; }
-        qd.Query = D3D11_QUERY_TIMESTAMP; for (auto& q : t.ts) if (FAILED(g_dev.dev->CreateQuery(&qd, &q))) { q = nullptr; ok = false; }
+        qd.Query = D3D11_QUERY_TIMESTAMP; for (auto& q : t.ts) if (ok && FAILED(g_dev.dev->CreateQuery(&qd, &q))) { q = nullptr; ok = false; }
     }
     if (!ok) { for (auto& t : s_tm) { if (t.dis) t.dis->Release(); t.dis = nullptr; for (auto& q : t.ts) { if (q) q->Release(); q = nullptr; } } Log("pasto GPU: no se pudieron crear las consultas de tiempo (sin medidor)"); }
+    s_tmState.store(ok ? 1 : 2);
     return ok;
 }
 static GpuTimer* TimerClaim(int frame) { for (auto& t : s_tm) { int e = -1; if (t.tag.compare_exchange_strong(e, frame)) return &t; } return nullptr; }
@@ -576,7 +581,7 @@ void GrassFrameBoundary(UINT flags) {
     if (flags & DXGI_PRESENT_TEST) return;
     int f = s_frame.fetch_add(1) + 1;
     const bool on = g_cfg.live[58][3] > 0.5f;
-    if (g_dev.imm && s_tm[0].dis) TimersRead(f);
+    if (g_dev.imm && s_tmState.load() == 1) TimersRead(f);
     if (g_dev.imm && s_claim && s_claimUAV) {
         for (int i = 0; i < kClaimStages; i++) if (s_claimStage[i] && s_claimTag[i] >= 0 && s_claimTag[i] <= f - 3) {
             D3D11_MAPPED_SUBRESOURCE m;
