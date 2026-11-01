@@ -77,4 +77,40 @@ void PesExprApply(float4 p, float3 rest, uint4 I, float4 W, float3 n, float3 t,
   pos += a; prev += b;
   nrm += extra * dN; tng += extra * dT;   // el VS normaliza despues
 }
+
+// (01/11) lengua de la boca 3D (hilo de la boca, mouth.fmdl 7AA745CB: 677 vertices 100 % skf_jaw; reposo x -0.018..0.018,
+// y 1.625..1.646, z 0.116..0.160; uv u 0.298..0.708 de lado a lado, v 0.671 raiz -> 0.92 punta, > 0.92 la cara de abajo de la
+// punta). La DLL marca la malla de la boca (b12 w = 1). Se corre la posicion de REPOSO antes del skinning (sigue a la mandibula):
+//  - con la boca abierta (J = cuanto se separa skf_jaw de la cabeza en la punta, 0..1) el lomo baja y se aplana y la punta va
+//    un poco adelante y abajo, detras de los dientes de abajo (como al gritar);
+//  - con la boca abierta, ademas, una onda chica de la raiz a la punta y un vaiven de lado (reloj del juego, fila 157: la pausa
+//    la congela y la camara lenta la frena).
+// Fila 342: x fuerza (0 = quieta, como el juego), y movimiento vivo (0..2), z velocidad (0.5..2).
+float3 PesTongue(float3 rest, float2 uv, uint jaw)
+{
+  if (g_pesExprMesh.w != 1u) return 0;
+  uint head = g_pesExprMesh.x;
+  if (head > 31 || jaw > 31 || jaw == head) return 0;
+  if (uv.x < 0.295 || uv.x > 0.715 || uv.y < 0.668 || uv.y > 0.99) return 0;
+  if (abs(rest.x) > 0.022 || rest.y < 1.615 || rest.y > 1.652 || rest.z < 0.110 || rest.z > 0.165) return 0;
+  float4 T = IniParams.Load(int2(342, 0));
+  if (T.x <= 0.0) return 0;
+  // apertura: la punta de la lengua llevada por la mandibula contra llevada por la cabeza
+  float4 tip = float4(0.0, 1.6274, 0.1596, 1.0);
+  float J = saturate(length(mul(tip, g_vsBone.m_boneMatrices[jaw]) - mul(tip, g_vsBone.m_boneMatrices[head])) / 0.018);
+  float s = saturate((uv.y - 0.678) / (0.920 - 0.678));          // 0 raiz .. 1 punta (y la cara de abajo de la punta)
+  float lado = (uv.x - 0.503) / 0.205;                            // -1 .. 1 de lado a lado
+  float3 o = 0;
+  // forma con la boca abierta: lomo abajo (mas en el medio del largo), punta adelante y abajo
+  o.y -= J * 0.0030 * sin(3.14159 * saturate(s * 0.9 + 0.05));
+  o.y -= J * 0.0010 * s * s;
+  o.z += J * 0.0015 * s * s;
+  // vivo: onda de la raiz a la punta y vaiven de lado, solo con la boca abierta
+  float t = IniParams.Load(int2(157, 0)).x * max(T.z, 0.1);
+  float vivo = J * saturate(T.y * 0.5) * 2.0;
+  o.y += vivo * 0.0009 * s * sin(6.2832 * 1.6 * t - 3.0 * s);
+  o.x += vivo * 0.0006 * s * s * sin(6.2832 * 0.7 * t + 1.3);
+  o.y += vivo * 0.0003 * lado * s * sin(6.2832 * 0.7 * t + 1.3);   // se inclina un poco hacia el lado al que va la punta
+  return o * T.x;
+}
 #endif

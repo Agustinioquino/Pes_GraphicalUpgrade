@@ -55,6 +55,7 @@ constexpr int kParamCount = 344;           // float4 x 336 -> t120 en los shader
 // 337 = SSGI (31/10: x cuanto recibe la piel 0..2, y distancia maxima m (0 = 90), z resolucion completa (ssgi.cpp), w sombra del sol alineada por shader (PESShadowAlign en pes_common.hlsli: p' = R^T R^T p antes de m_shadowProjection; prueba sin DLL de sombra_parche 1)).
 // 338 = traspaso de luz en los kits con el grosor real del shadow map (31/10, 5 PS del sol: x densidad 1/m, y grosor maximo cm, z resto del modo viejo, w on).
 // 340 = expresiones faciales (31/10, expr.cpp + pes_expr.hlsli en los VS faab87ee / 455eb97b: x prendido, y ganancia general (1 = juego), z tope del agregado en cm, w cuanto se suma de los gestos grandes (mandibula abierta) 0..1).
+// 342 = lengua de la boca 3D (01/11, pes_expr.hlsli PesTongue en faab87ee; expr.cpp marca la malla de la boca: x fuerza, y movimiento vivo, z velocidad).
 // 341 = expresiones por zona (31/10: x frente y cejas, y ojos y parpados, z mejillas y nariz, w boca y labios; 1 = la ganancia general sola).
 // 339 = pelo a contraluz (31/10, 5 PS del sol; los PS del pelo 02f1d510 / c75f6047 marcan g_SpecularTexture.z = 252/255: x fuerza, y densidad 1/m, z grosor maximo cm, w on).
 // 328 = matas y variedad de las hojas del mod (27/10 m, tanda 10: VS 498b / PS 18af: x matas, y variedad por hoja, z oclusion entre matas; grass.cpp: w capas por pixel cerca, 0 = 6).

@@ -10,7 +10,8 @@
 // En las pestanas gana el parpado superior: no importa, alrededor de los ojos la ganancia por defecto es 1 (ver pes_expr.hlsli).
 // La DLL lee una vez por malla (indices del dibujo -> rango de vertices -> POSITION / BLENDINDICES / BLENDWEIGHT, en el
 // Present, con copias a staging como cuerpo.cpp) y, en cada dibujo de esos VS (regla "expr = <slot>"), enlaza en el VS un
-// cbuffer de 16 bytes: x = indice de la cabeza (99 = sin dato todavia: el VS no toca nada), y = indice maximo usado, z = id.
+// cbuffer de 16 bytes: x = indice de la cabeza (99 = sin dato todavia: el VS no toca nada), y = indice maximo usado, z = id,
+// w = 1 si es la boca (01/11: el VS mueve la lengua).
 #include "core.h"
 #include <d3d11_1.h>
 #include <unordered_map>
@@ -86,9 +87,9 @@ bool ReadW(const uint8_t* p, DXGI_FORMAT f, float o[4]) {
     default: return false;
     }
 }
-ID3D11Buffer* MakeCB(UINT head, UINT maxIdx, UINT id) {
+ID3D11Buffer* MakeCB(UINT head, UINT maxIdx, UINT id, UINT mouth = 0) {
     if (!g_dev.dev) return nullptr;
-    UINT v[4] = { head, maxIdx, id, 0 };
+    UINT v[4] = { head, maxIdx, id, mouth };
     D3D11_BUFFER_DESC d{}; d.ByteWidth = 16; d.Usage = D3D11_USAGE_IMMUTABLE; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     D3D11_SUBRESOURCE_DATA s{}; s.pSysMem = v;
     ID3D11Buffer* b = nullptr; return SUCCEEDED(g_dev.dev->CreateBuffer(&d, &s, &b)) ? b : nullptr;
@@ -188,15 +189,17 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
         for (int b = 1; b <= mx; b++) if (thin ? cnt[b] > cnt[hd] : top[b] > top[hd]) hd = b;
         // (01/11) una pierna (1440 v, 0.05..0.54 m) tambien se dibuja con faab87ee: lo que no llega a la altura de la cara no es cara
         if (yhi < 1.40f) hd = 99;
+        // (01/11) la boca (mouth.fmdl comun, boca 3D: alto 1.613..1.650 m): el VS mueve la lengua (pes_expr.hlsli PesTongue)
+        const bool mouth = hd <= 31 && !thin && ylo > 1.58f && yhi < 1.68f && (yhi - ylo) < 0.06f;
         m->maxIdx = mx; m->head = hd;
-        m->cb = MakeCB((UINT)m->head, (UINT)mx, (UINT)m->id);
+        m->cb = MakeCB((UINT)m->head, (UINT)mx, (UINT)m->id, mouth ? 1u : 0u);
         ReleaseIA(m);
         if (!m->cb) { m->state = 4; m->why = "sin cbuffer"; s_hist[3]++; return; }
         m->state = 3; s_hist[m->head <= 1 ? m->head : m->head > 31 ? 3 : 2]++;
         static int n = 0;
         if (n++ < 80) {   // uso de cada hueso de la paleta (peso total / peso en la parte alta) para comparar con face_rig.py
             char l[1400]; int k = snprintf(l, sizeof l, "expresiones: malla de cara %d (%u indices, %u vertices, alto %.3f..%.3f m): hueso maximo %d -> cabeza en la paleta %d%s |",
-                                           m->id, m->count, m->nv, ylo, yhi, mx, m->head, m->head > 31 ? " (no es cara)" : thin ? " (fina: por vertices)" : "");
+                                           m->id, m->count, m->nv, ylo, yhi, mx, m->head, m->head > 31 ? " (no es cara)" : thin ? " (fina: por vertices)" : mouth ? " (boca: lengua)" : "");
             for (int b = 0; b <= mx && k < (int)sizeof l - 24; b++) if (all[b] > 0) k += snprintf(l + k, sizeof l - k, " %d:%.0f/%.0f", b, all[b], top[b]);
             Log("%s", l);
         }
