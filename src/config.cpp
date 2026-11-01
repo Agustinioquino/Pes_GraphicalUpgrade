@@ -493,6 +493,12 @@ bool SaveConfigValues() {
         // (20/10) una clave que no estaba cuando se leyo el ini (se agrego con el juego abierto, sin "Recargar config")
         // conserva el valor del archivo: antes se guardaba el valor vivo (0) y se perdian opciones nuevas
         if (!g_cfg.info[idx][comp].defined) continue;
+        // (31/10) nunca guardar fuera del rango del slider de la tarjeta (x318 se guardaba en -1.17 / 2.61 con rango 0..1)
+        for (auto& g : g_cfg.groups) for (auto& sl : g.sliders) {
+            if (!sl.ext.empty() || sl.idx != idx || sl.comp != comp || !sl.optVals.empty()) continue;
+            float& v = g_cfg.live[idx][comp];
+            if (v < sl.lo || v > sl.hi) { float cl = v < sl.lo ? sl.lo : sl.hi; Log("guardar: %s = %g fuera del rango %g..%g del slider '%s': guardado %g", k.c_str(), v, sl.lo, sl.hi, sl.label.c_str(), cl); v = cl; }
+        }
         char buf[64]; snprintf(buf, sizeof(buf), "%g", g_cfg.live[idx][comp]);
         raw = k + " = " + buf;
         g_cfg.base[idx][comp] = g_cfg.live[idx][comp];
@@ -560,6 +566,7 @@ void PollKeys(bool focused) {
         bool press = down && !k.wasDown, release = !down && k.wasDown;
         k.wasDown = down;
         if (press) {
+            Log("tecla: %s", k.name.c_str());   // (1/11) para ver en el log que la combinacion disparo
             if (!k.run.empty()) {
                 if (Lower(k.run).find("resetsweat") != std::string::npos) s_matchStart = Now();
             }

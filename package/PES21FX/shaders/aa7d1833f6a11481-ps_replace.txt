@@ -449,6 +449,20 @@ void main(
   float hpTrans = g_tex_translucent.Sample(g_samplerLinear_Clamp_s, v2.xy).y;
   if (skTrans >= 0.0) hpTrans = skTrans;   // (26/10 b) piel real
   float hpFilm = 0.0;
+  // (01/11) color base de la cara en TODA la cabeza generica (cuello, orejas, nuca, cuero cabelludo y patillas), con
+  // "Mejoras de piel (cara)" prendida, aunque x147 este apagado: la cara (5ce3 / ce188) satura el albedo (y), calienta lo
+  // fino (x2) y escala la translucidez (x); la cabeza quedaba con el color y la translucidez del juego y se veia el salto de
+  // color en el borde de la mascara (zona del pelo). Lo propio de la cara (sudor, poros, sangre, zona T) sigue solo en hpK.
+  bool hpBaseOn = (P0b.w > 0.5) && hpHasR;
+  float3 hpBA0 = r2.yzw; float hpBT0 = hpTrans;
+  float3 hpBA = hpBA0; float hpBT = hpBT0;
+  if (hpBaseOn) {
+    float bSat = P0b.y > 0 ? P0b.y : 1.0;
+    float bLum = dot(hpBA0, float3(0.2126, 0.7152, 0.0722));
+    hpBA = max(0, lerp(bLum.xxx, hpBA0, bSat));
+    hpBA = saturate(hpBA * lerp(float3(1,1,1), float3(1.04, 0.98, 0.96), saturate(hpBT0 * IniParams.Load(int2(2,0)).x)));
+    hpBT = saturate(hpBT0 * (P0b.x > 0 ? P0b.x : 1.0));
+  }
   if (hpK > 0.001) {
     float3 hpAlb0 = r2.yzw; float hpTr0 = hpTrans;
     float4 P2h = IniParams.Load(int2(2,0));
@@ -493,6 +507,10 @@ void main(
     hpTrans = saturate(hpTrans * sssB);
     r2.yzw = lerp(hpAlb0, r2.yzw, hpK);
     hpTrans = lerp(hpTr0, hpTrans, hpK);
+  }
+  if (hpBaseOn) {   // fuera de hpK: solo el color base (con hpK = 1 queda todo lo de la cara)
+    r2.yzw += (hpBA - hpBA0) * (1.0 - hpK);
+    hpTrans += (hpBT - hpBT0) * (1.0 - hpK);
   }
   float3 stVeil = g_psMaterial.m_materials[2].xyz;
   bool stBody = v3.w > 1.999 && v3.w < 3.001;   // (24/10 e) VS 1c02a92a = cuerpo (la cabeza generica viene con faab87ee)
