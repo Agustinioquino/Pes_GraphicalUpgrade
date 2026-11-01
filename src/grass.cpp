@@ -284,7 +284,12 @@ static bool TimersReady() {   // (1/11 b) bajo llave y todo-o-nada: GrassEmit co
     s_tmState.store(ok ? 1 : 2);
     return ok;
 }
-static GpuTimer* TimerClaim(int frame) { for (auto& t : s_tm) { int e = -1; if (t.tag.compare_exchange_strong(e, frame)) return &t; } return nullptr; }
+static GpuTimer* TimerClaim(int frame) {
+    for (auto& t : s_tm) { int e = -1; if (t.tag.compare_exchange_strong(e, frame)) {
+        if (!t.dis || !t.ts[0] || !t.ts[1] || !t.ts[2] || !t.ts[3] || !t.ts[4]) { t.tag = -1; return nullptr; }   // (1/11 b) nunca End/Begin sobre una consulta nula (cierre 19:27 PC: d3d11 del sistema con rdx = 0)
+        return &t; } }
+    return nullptr;
+}
 static void TimersRead(int f) {   // contexto inmediato
     for (auto& t : s_tm) { int tg = t.tag.load(); if (tg < 0 || tg > f - 3) continue;
         if (f - tg > 90) { t.tag = -1; s_tmLost++; continue; }   // lista diferida que nunca se ejecuto
