@@ -1,0 +1,221 @@
+// PES 2021 - Luz diferida (direccional, SIN sombra proyectada)  [hash d0e9d81c09b3da66]
+// (25/10) Una de las 21 variantes de la pasada del sol que no tenia reemplazo: el juego la usa en algunas camaras / zonas.
+// Sin reemplazo el sol salia con el color crudo del archivo de luz (sin la curva del dia, la atmosfera ni el contraste del mod)
+// y el color de la escena saltaba al pasar de una variante a otra. Ahora el sol tiene el mismo color que en las 7 reemplazadas
+// (PESSunColor, igual a la de a748f426). El resto es el original decompilado.
+// Base decompilada con 3Dmigoto v1.3.16 on Thu Oct 08 21:08:18 2026
+
+cbuffer cPSScene : register(b2)
+{
+  struct
+  {
+    float4x4 m_projectionView;
+    float4x4 m_projection;
+    float4x4 m_view;
+    float4x4 m_shadowProjection;
+    float4x4 m_shadowProjection2;
+    float4 m_eyepos;
+    float4 m_projectionParam;
+    float4 m_viewportSize;
+    float4 m_exposure;
+    float4 m_fogParam[3];
+    float4 m_fogColor;
+    float4 m_cameraCenterOffset;
+    float4 m_shadowMapResolutions;
+  } g_psScene : packoffset(c0);
+}
+
+cbuffer cPSLight : register(b3)
+{
+  struct
+  {
+    float4 m_lightDir0;
+    float4 m_lightColor0;
+    float4 m_lightColor1;
+    float4 m_lightSourcePos;
+    float4 m_lightSourceColor;
+    float4 m_lightSourceDir;
+    float4 m_lightSourceParam1;
+    float4 m_lightSourceParam2;
+    float4 m_lightSourceParam3;
+    float4 m_lightPos0;
+    float4 m_lightParam2;
+  } g_psLight : packoffset(c0);
+}
+
+SamplerState g_samplerPoint_Wrap_s : register(s8);
+SamplerState g_samplerPoint_Clamp_s : register(s9);
+SamplerState g_samplerLinear_Clamp_s : register(s11);
+Texture2D<float4> g_NormalTexture : register(t0);
+Texture2D<float4> g_SpecularTexture : register(t1);
+Texture2D<float4> g_DepthTexture : register(t2);
+Texture2D<float4> g_lut1 : register(t9);
+Texture2D<float4> g_MaterialTexture : register(t10);
+
+// 3Dmigoto declarations
+#define cmp -
+Texture1D<float4> IniParams : register(t120);
+Texture2D<float4> StereoParams : register(t125);
+#include "pes_common.hlsli"   // curva del dia, atmosfera
+
+// === PES21 SOL (25/10): el mismo color del sol que las variantes reemplazadas ===
+float3 PESSunColor() {
+  float3 c = g_psLight.m_lightColor0.xyz;
+  float4 S = IniParams.Load(int2(4,0));      // z4 = realismo del sol (0 = original), w4 = intensidad
+  bool sunReal = S.z > 0;
+  float3 L = normalize(g_psLight.m_lightDir0.xyz);
+  float elev = saturate(abs(dot(L, float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12))));
+  float low = 1 - smoothstep(0.10, 0.60, elev);
+  float3 tint = lerp(float3(1.0, 0.962, 0.905), float3(1.0, 0.80, 0.60), low);
+  const float3 LW = float3(0.2126, 0.7152, 0.0722);
+  float lum = dot(c, LW);
+  float warmO = c.r / max(c.b, 1e-4);
+  float k = (sunReal ? saturate(S.z) : 0.0) * saturate((warmO - 0.85) * 4.0);   // de noche (luz fria de estadio) casi no toca
+  float3 res = lerp(c, lum * tint / dot(tint, LW), k);
+  res *= (S.w > 0 ? lerp(1.0, S.w, k) : 1.0);
+  // PES21 curva del dia (18/10): intensidad y calidez del sol segun su altura (solo sol real, no torres)
+  { PESDay dy = PESDayCurve(elev, saturate((warmO - 0.85) * 4.0)); res *= dy.sun; res = PESSunTintFinal(res, dy.warm, elev, saturate((warmO - 0.85) * 4.0)); }   // (20/10) atmosfera fisica x121
+  res *= PESDaySunMul(saturate((warmO - 0.85) * 4.0));   // PES21 contraste de dia (x109)
+  // PES21 atmosfera (17/10): con el sol bajo el archivo de luz deja el sol muy apagado; y54 lo compensa (solo sol real,
+  // no luz de torres), proporcional a lo bajo que esta.
+  float4 ATM = IniParams.Load(int2(54,0));
+  if (ATM.w > 0.5) { float lowS = 1.0 - smoothstep(0.05, 0.40, elev); float kSun = saturate((warmO - 0.85) * 4.0);
+    res *= 1.0 + max(ATM.y, 0.0) * lowS * kSun; }
+  return res;
+}
+// === FIN SOL ===
+void main(
+  float4 v0 : TEXCOORD0,
+  float4 v1 : TEXCOORD1,
+  float4 v2 : SV_Position0,
+  out float4 o0 : SV_Target0,
+  out float4 o1 : SV_Target1,
+  out float4 o2 : SV_Target2)
+{
+  float4 r0,r1,r2,r3,r4,r5,r6,r7;
+  uint4 bitmask, uiDest;
+  float4 fDest;
+
+  r0.xy = v1.xy / v1.ww;
+  r1.xyzw = g_NormalTexture.Sample(g_samplerPoint_Wrap_s, r0.xy).xyzw;
+  r2.xyzw = g_SpecularTexture.Sample(g_samplerPoint_Wrap_s, r0.xy).zxyw;
+  r1.xyw = float3(1023,1023,3) * r1.xyw;
+  r1.xyw = (uint3)r1.xyw;
+  r0.z = (uint)r1.x << 1;
+  r0.w = (uint)r1.w >> 1;
+  r0.z = (int)r0.w | (int)r0.z;
+  bitmask.w = ((~(-1 << 31)) << 1) & 0xffffffff;  r0.w = (((uint)r1.y << 1) & bitmask.w) | ((uint)r1.w & ~bitmask.w);
+  r1.xy = (uint2)r0.zw;
+  r0.zw = r1.xy * float2(0.00097703957,0.00097703957) + float2(-1,-1);
+  r1.xyw = float3(1,1,1) + -abs(r0.zwz);
+  r3.z = r1.x + -abs(r0.w);
+  r1.x = cmp(r3.z >= 0);
+  r4.xy = cmp(r0.zw >= float2(0,0));
+  r4.xy = r4.xy ? float2(1,1) : float2(-1,-1);
+  r1.yw = r4.xy * r1.yw;
+  r3.xy = r1.xx ? r0.zw : r1.yw;
+  r0.z = dot(r3.xyz, r3.xyz);
+  r0.z = rsqrt(r0.z);
+  r3.xyz = r3.xyz * r0.zzz;
+  r0.z = r1.z * 1023 + 0.5;
+  r0.z = (uint)r0.z;
+  r0.w = (int)r0.z & 15;
+  r1.x = cmp((int)r0.w == 1);
+  if (r1.x != 0) {
+    r4.x = 0;
+    r5.y = 0;
+  } else {
+    r0.z = (uint)r0.z >> 4;
+    r1.y = cmp((int)r0.w == 3);
+    if (r1.y != 0) {
+      r1.y = (uint)r0.z;
+      r5.y = 0.0158730168 * r1.y;
+      r4.x = 0;
+    } else {
+      r0.z = (uint)r0.z;
+      r5.y = 0.0158730168 * r0.z;
+      r2.x = 0;
+      r4.x = r2.w;
+    }
+  }
+  r0.x = g_DepthTexture.Sample(g_samplerPoint_Wrap_s, r0.xy).x;
+  r0.yz = v0.xy / v0.ww;
+  r0.yz = -g_psScene.m_cameraCenterOffset.xy + r0.yz;
+  r0.yz = g_psScene.m_projectionParam.xy * r0.yz;
+  r0.x = -g_psScene.m_projectionParam.w + r0.x;
+  r6.z = g_psScene.m_projectionParam.z / r0.x;
+  r6.xy = r6.zz * r0.yz;
+  r0.x = dot(r6.xyz, r6.xyz);
+  r0.x = rsqrt(r0.x);
+  r0.xyz = r6.xyz * r0.xxx;
+  r1.yzw = PESSunColor() * g_psScene.m_exposure.zzz;   // PES21 (25/10): antes g_psLight.m_lightColor0.xyz
+  if (r1.x != 0) {
+    r6.y = r2.x * 0.959999979 + 0.0399999991;
+    r7.xyz = float3(1,1,1);
+    r5.xy = float2(0,0);
+  } else {
+    r0.w = cmp((int)r0.w == 3);
+    if (r0.w != 0) {
+      r6.y = r2.x * 0.959999979 + 0.0399999991;
+      r7.xyz = float3(0.899999976,1,0.800000012);
+      r5.x = 1;
+    } else {
+      r4.yz = float2(0.75,0.25);
+      r6.y = g_MaterialTexture.SampleLevel(g_samplerPoint_Clamp_s, r4.xy, 0).x;
+      r7.xyzw = g_MaterialTexture.SampleLevel(g_samplerPoint_Clamp_s, r4.xz, 0).xyzw;
+      r5.x = r7.w;
+    }
+  }
+  r3.w = -r3.z;
+  r0.w = dot(g_psLight.m_lightDir0.xyz, r3.xyw);
+  r1.x = dot(-r0.xyz, r3.xyw);
+  r2.x = r1.x + r1.x;
+  r4.xyz = r3.xyw * -r2.xxx + -r0.xyz;
+  r4.xyz = -g_psLight.m_lightDir0.xyz + -r4.xyz;
+  r2.x = dot(r4.xyz, r4.xyz);
+  r2.x = sqrt(r2.x);
+  r2.x = saturate(g_psLight.m_lightColor0.w / r2.x);
+  r4.xyz = r2.xxx * r4.xyz + g_psLight.m_lightDir0.xyz;
+  r2.x = dot(r4.xyz, r4.xyz);
+  r2.x = rsqrt(r2.x);
+  r0.xyz = r4.xyz * r2.xxx + -r0.xyz;
+  r2.x = dot(r0.xyz, r0.xyz);
+  r2.x = rsqrt(r2.x);
+  r0.xyz = r2.xxx * r0.xyz;
+  r2.x = saturate(dot(r0.xyz, r3.xyw));
+  r2.w = -r0.w * r0.w + 1;
+  r2.w = r2.w * r5.y + r0.w;
+  r3.x = r5.y * r5.x;
+  r2.w = saturate(max(r3.x, r2.w));
+  r0.w = saturate(r0.w);
+  o0.xyz = r2.www * r1.yzw;
+  r3.xyz = r7.xyz * r2.zzz;
+  r6.x = dot(r0.xyz, g_psLight.m_lightDir0.xyz);
+  r0.x = g_lut1.Sample(g_samplerLinear_Clamp_s, r6.xy).x;
+  r1.x = saturate(r1.x);
+  r0.y = max(0.0199999996, r2.y);
+  r0.y = r0.y * r0.y;
+  r0.z = 0.5 * r0.y;
+  r2.y = r0.y * r0.y;
+  r2.x = r2.x * r2.x;
+  r2.z = r0.y * r0.y + -1;
+  r2.x = r2.x * r2.z + 1;
+  r2.x = r2.x * r2.x;
+  r2.x = r2.y / r2.x;
+  r0.y = -r0.y * 0.5 + 1;
+  r2.y = r0.w * r0.y + r0.z;
+  r0.y = r1.x * r0.y + r0.z;
+  r0.y = r2.y * r0.y;
+  r0.y = 1 / r0.y;
+  r0.x = r2.x * r0.x;
+  r0.x = r0.x * r0.y;
+  r0.x = r0.x * r0.w;
+  r0.x = 0.25 * r0.x;
+  r0.xyz = r0.xxx * r1.yzw;
+  r0.xyz = r0.xyz * r3.xyz;
+  o1.xyz = min(float3(10000,10000,10000), r0.xyz);
+  o0.w = 1;
+  o1.w = 1;
+  o2.xyzw = float4(1,1,1,1);
+  return;
+}

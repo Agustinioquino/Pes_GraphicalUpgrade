@@ -1,0 +1,120 @@
+// PES 2021 - Botines y pelota (material PBR con manchas de barro)  [hash aadffecf2090e4f1]  - PES21 (20/10, 143)
+// Traducido a HLSL desde el ensamblador (catalogo PES21 FX), instruccion por instruccion. G-buffer diferido: o0 albedo,
+// o1 normal octaedrica (+tipo), o2 rugosidad / especular / metal, o3 velocidad, o4 (0,0,0,1). t4 = mancha (barro) que el
+// juego mezcla segun cb4[1].x. Lo que agrega PES21 FX (143, x on):
+//  - antialiasing especular (Kaplanyan / Tokuyoshi): la rugosidad crece con la variacion de la normal en el pixel; los
+//    botines brillantes y la pelota dejan de titilar a distancia y en movimiento (y143 fuerza)
+//  - cancha mojada: el cuero sintetico y la pelota se ven mojados (menos rugosos, apenas mas oscuros) (z143)
+//  - barro que se acumula con los minutos de partido (mas con lluvia), sobre la misma mancha del juego (w143)
+cbuffer cPSMaterial : register(b4) { float4 m_materials[8]; }
+cbuffer cPSSystem : register(b0) { float4 m_param; float4 m_renderInfo; float4 m_renderBuffer; float4 m_dominantLightDir; float4 m_timeParam; }
+
+SamplerState g_sampler_diffuse_s : register(s0);
+SamplerState g_sampler_normal_s : register(s1);
+SamplerState g_sampler_srm_s : register(s2);
+SamplerState g_sampler_metalnessmap_s : register(s3);
+SamplerState g_sampler_stain_s : register(s4);
+SamplerState g_samplerPoint_Wrap_s : register(s8);
+Texture2D<float4> g_tex_diffuse : register(t0);
+Texture2D<float4> g_tex_normal : register(t1);
+Texture2D<float4> g_tex_srm : register(t2);
+Texture2D<float4> g_tex_metalnessmap : register(t3);
+Texture2D<float4> g_tex_stain : register(t4);
+Texture2D<float4> g_tex_mesh : register(t15);
+Texture1D<float4> IniParams : register(t120);
+
+float PESEqWet() {   // misma regla que el pasto (110 / 114): automatico = lluvia del partido
+  float4 Q = IniParams.Load(int2(110, 0)); float4 L = IniParams.Load(int2(114, 0));
+  int m = (int)(Q.z + 0.5); float wet = 0.0;
+  if (m == 0) wet = ((int)(L.x + 0.5) == 1) ? 1.0 : 0.0; else if (m == 2) wet = 1.0;
+  return wet * (Q.w > 0.001 ? saturate(Q.w) : 1.0);
+}
+
+void main(
+  float4 v0 : SV_Position0,
+  float4 v1 : COLOR0,
+  float2 v2 : TEXCOORD0,
+  float2 w2 : TEXCOORD9,
+  float3 v3 : TEXCOORD5,
+  float3 v4 : TEXCOORD6,
+  float3 v5 : TEXCOORD7,
+  float4 v6 : TEXCOORD8,
+  out float4 o0 : SV_Target0,
+  out float4 o1 : SV_Target1,
+  out float4 o2 : SV_Target2,
+  out float4 o3 : SV_Target3,
+  out float4 o4 : SV_Target4)
+{
+  float4 r0, r1, r2;
+  float4 EQ = IniParams.Load(int2(143, 0));
+  bool pesOn = EQ.x > 0.5;
+  float pesWet = pesOn ? PESEqWet() * saturate(EQ.z) : 0.0;
+  // --- fundido con tramado (aparicion / LOD) ---
+  r0.xy = (v0.xy - 0.5) * 0.125;
+  float4 tm = g_tex_mesh.Sample(g_samplerPoint_Wrap_s, r0.xy);
+  r2 = g_tex_diffuse.Sample(g_sampler_diffuse_s, v2.xy);
+  float2 cut = float2(r2.w - tm.w * m_param.w, v1.w - tm.x * m_param.w);
+  if (cut.x < 0.0 || cut.y < 0.0) discard;
+  // --- mancha de barro del juego (cb4[1].x = cuanto) ---
+  r0 = g_tex_stain.Sample(g_sampler_stain_s, v2.xy);
+  float stainAmt = m_materials[1].x;
+  if (pesOn && EQ.w > 0.001) {
+    float mins = IniParams.Load(int2(10, 0)).x;                       // minutos reales de partido (la DLL)
+    stainAmt = saturate(stainAmt + saturate(EQ.w) * 0.45 * saturate(mins / 12.0) * (0.35 + 0.65 * PESEqWet()));
+  }
+  r1.x = 1.0 - saturate((1.0 - (r0.w - 0.25) - stainAmt) * 4.0);
+  r1.y = r0.w * r1.x;
+  r0.w = 1.0 - r1.x * r0.w;
+  r0.xyz = r0.xyz * r2.xyz * r1.y;
+  o0.xyz = r2.xyz * r0.w + r0.xyz;
+  o0.w = 1.0;
+  // --- normal ---
+  float3 n0 = normalize(v3), n1 = normalize(v4), n2 = normalize(v5);
+  float4 tn = g_tex_normal.Sample(g_sampler_normal_s, v2.xy);
+  float2 nm = float2(tn.w * tn.x, tn.y) * 2.0 - 1.0;
+  float nz = max(1.0 - nm.x * nm.x - nm.y * nm.y, 0.0) + 0.0001;
+  nz = nz * rsqrt(nz);
+  float3 N = normalize(n0 * nm.x + n1 * nm.y + n2 * nz);
+  // codificacion octaedrica del juego (10 bits + 2 bits bajos en w)
+  {
+    float s = abs(N.y) + abs(N.x) + abs(N.z);
+    float2 p = N.xy / s;
+    float2 sg = float2(p.x >= 0.0 ? 1.0 : -1.0, p.y >= 0.0 ? 1.0 : -1.0);
+    float2 wr = sg * (1.0 - abs(p.yx));
+    p = (0.0 < -N.z) ? p : wr;
+    uint2 q = (uint2)((p * 0.5 + 0.5) * 2047.0);
+    uint lo = ((q.x & 1u) << 1) | (q.y & 1u);
+    q >>= 1;
+    o1.xy = (float2)q * 0.000977517106;
+    o1.w = (float)lo * 0.333333343;
+    o1.z = 0.000977517106;
+  }
+  // --- material ---
+  float metal = g_tex_metalnessmap.Sample(g_sampler_metalnessmap_s, v2.xy).x;
+  float2 srm = g_tex_srm.Sample(g_sampler_srm_s, v2.xy).xy;
+  o2.z = r0.w * metal;
+  o2.y = r0.w * srm.x;
+  float rough = max(srm.y, 0.004);
+  float3 dNx = ddx_fine(N), dNy = ddy_fine(N);   // fuera de cualquier rama
+  if (pesOn) {
+    if (EQ.y > 0.001) {   // antialiasing especular: varianza de la normal en el pixel -> rugosidad extra
+      float var = 0.25 * (dot(dNx, dNx) + dot(dNy, dNy));
+      float kr2 = min(2.0 * var, 0.18) * saturate(EQ.y);
+      rough = sqrt(rough * rough + kr2);
+    }
+    if (pesWet > 0.001) {   // mojado: agua sobre el cuero / la pelota
+      rough = lerp(rough, max(rough * 0.45, 0.06), pesWet);
+      o2.y = lerp(o2.y, saturate(o2.y * 1.6 + 0.1), pesWet * (1.0 - o2.z));
+      o0.xyz *= lerp(1.0, 0.88, pesWet * (1.0 - o2.z));
+    }
+  }
+  o2.x = rough;
+  o2.w = 0.0;
+  // --- velocidad en pantalla ---
+  r0 = v6 / float4(w2.x, w2.x, w2.y, w2.y);
+  r0 = r0 * 0.5 + 0.5;
+  r0 = r0.zwxy * float4(1.0, -1.0, 1.0, -1.0) + float4(0.0, 1.0, 0.0, 1.0);
+  o3.xy = (r0.zw - r0.xy) * m_renderBuffer.xy;
+  o3.zw = 0.0;
+  o4 = float4(0.0, 0.0, 0.0, 1.0);
+}
