@@ -17,6 +17,9 @@ static ID3D11SamplerState* s_sampP = nullptr; static ID3D11SamplerState* s_sampL
 static ID3D11RasterizerState* s_rs = nullptr; static ID3D11DepthStencilState* s_dss = nullptr; static ID3D11BlendState* s_bs = nullptr;
 static std::atomic<int> s_lastFrame{-1}; static ID3D11ShaderResourceView* s_last = nullptr;
 static int s_ping = 0; static std::atomic<int> s_ranFrame{-100}; static int s_counter = 0;
+// (01/11) Agustin: 'el SSGI no hace ningun cambio'. Registro cada 30 s: cuantas veces corrio y por que no (motivo de cada salida)
+static std::atomic<int> s_nRan{0}, s_nCalls{0}, s_why[8] = {};   // 0 sin shaders, 1 faltan texturas, 2 tamano, 3 msaa/targets, 4 sin cbuffer, 5 cbuffer chico, 6 prev
+static double s_logT = 0; static int s_logs = 0;
 
 static void EnsureShaders() {
     if (s_tried || !g_dev.dev) return; s_tried = true;
@@ -60,32 +63,39 @@ void SSGIPresent(int presentNo) {
     int ran = s_ranFrame.load();
     p[0] = (g_cfg.live[153][0] > 0.5f && ran >= 0 && presentNo - ran <= 2) ? 1.0f : 0.0f;
     p[1] = (float)s_counter;
+    double t = Now();
+    if (s_logs < 40 && t - s_logT >= 30.0) { s_logT = t; s_logs++;
+        Log("SSGI (30 s): prendido %d, corrio %d de %d llamadas de la composicion%s | no corrio: sin shaders %d, faltan texturas %d, tamano %d, msaa/targets %d, sin cbuffer %d, cbuffer chico %d, prev %d | fuerza w153 %.2f, z337 %.0f (%ux%u)",
+            g_cfg.live[153][0] > 0.5f ? 1 : 0, s_nRan.exchange(0), s_nCalls.exchange(0), (s_vs && s_ps && s_tp) ? "" : " (SHADERS SIN COMPILAR: ver errores de pes_ssgi)",
+            s_why[0].exchange(0), s_why[1].exchange(0), s_why[2].exchange(0), s_why[3].exchange(0), s_why[4].exchange(0), s_why[5].exchange(0), s_why[6].exchange(0),
+            g_cfg.live[153][3], g_cfg.live[337][2], s_w, s_h); }
 }
 
 // En BeforeDraw de la composicion (619b): calcula y devuelve el SSGI acumulado para t26 (null si esta apagado o fallo)
 ID3D11ShaderResourceView* SSGIBeforeComposition(ID3D11DeviceContext* c, int frame) {
     if (!g_dev.dev || g_cfg.live[153][0] < 0.5f) return nullptr;
     if (s_lastFrame.load() == frame && s_last) return s_last;
-    EnsureShaders(); if (!s_vs || !s_ps || !s_tp) return nullptr;
+    s_nCalls++;
+    EnsureShaders(); if (!s_vs || !s_ps || !s_tp) { s_why[0]++; return nullptr; }
     ID3D11ShaderResourceView* in[12] = {}; c->PSGetShaderResources(0, 12, in);
     auto rel = [&]() { for (auto* v : in) if (v) v->Release(); };
     ID3D11ShaderResourceView *depth = in[11], *nrm = in[0], *alb = in[8], *dif = in[9];
-    if (!depth || !nrm || !alb || !dif) { rel(); return nullptr; }
+    if (!depth || !nrm || !alb || !dif) { s_why[1]++; rel(); return nullptr; }
     ID3D11Resource* res = nullptr; depth->GetResource(&res); if (!res) { rel(); return nullptr; }
     D3D11_TEXTURE2D_DESC td; ((ID3D11Texture2D*)res)->GetDesc(&td); res->Release();
-    if (td.Width < 640 || (g_bbW && (td.Width < g_bbW * 3 / 4 || td.Width > g_bbW * 3))) { rel(); return nullptr; }
+    if (td.Width < 640 || (g_bbW && (td.Width < g_bbW * 3 / 4 || td.Width > g_bbW * 3))) { s_why[2]++; rel(); return nullptr; }
     // (31/10) z337 = 1: a resolucion completa (mas definido, ~4x el costo)
     UINT dv = g_cfg.live[337][2] > 0.5f ? 1u : 2u;
     UINT hw = (td.Width + dv - 1) / dv, hh = (td.Height + dv - 1) / dv;
-    if (td.SampleDesc.Count != 1 || !EnsureTargets(hw, hh)) { rel(); return nullptr; }
+    if (td.SampleDesc.Count != 1 || !EnsureTargets(hw, hh)) { s_why[3]++; rel(); return nullptr; }
     ID3D11Buffer* scb = nullptr; c->PSGetConstantBuffers(2, 1, &scb);
     ID3D11Buffer* sys = nullptr; c->PSGetConstantBuffers(0, 1, &sys);
-    if (!scb) { rel(); if (sys) sys->Release(); return nullptr; }
+    if (!scb) { s_why[4]++; rel(); if (sys) sys->Release(); return nullptr; }
     D3D11_BUFFER_DESC bd; scb->GetDesc(&bd);
-    if (bd.ByteWidth < 480) { rel(); scb->Release(); if (sys) sys->Release(); return nullptr; }
+    if (bd.ByteWidth < 480) { s_why[5]++; rel(); scb->Release(); if (sys) sys->Release(); return nullptr; }
     if (s_prev) { D3D11_BUFFER_DESC pd; s_prev->GetDesc(&pd); if (pd.ByteWidth != bd.ByteWidth) { s_prev->Release(); s_prev = nullptr; } }
     if (!s_prev) { D3D11_BUFFER_DESC pd = bd; pd.Usage = D3D11_USAGE_DEFAULT; pd.CPUAccessFlags = 0; pd.MiscFlags = 0; pd.BindFlags = D3D11_BIND_CONSTANT_BUFFER; pd.StructureByteStride = 0; g_dev.dev->CreateBuffer(&pd, nullptr, &s_prev); s_prevOk = false; }
-    if (!s_prev) { rel(); scb->Release(); if (sys) sys->Release(); return nullptr; }
+    if (!s_prev) { s_why[6]++; rel(); scb->Release(); if (sys) sys->Release(); return nullptr; }
     if (!s_prevOk) { c->CopyResource(s_prev, scb); s_prevOk = true; }
     // (23/10) corte de camara del motor (camhook.cpp): en este cuadro no hay historia (el paso 2 ve q[21].z = 0 y arranca
     // del promedio de los vecinos) en vez de reproyectar con la camara de la toma anterior
@@ -138,7 +148,7 @@ ID3D11ShaderResourceView* SSGIBeforeComposition(ID3D11DeviceContext* c, int fram
     c->PSSetConstantBuffers(3, 1, &o3); if (o3) o3->Release();
     c->PSSetConstantBuffers(2, 1, &scb); scb->Release(); if (sys) { c->PSSetConstantBuffers(0, 1, &sys); sys->Release(); }
     rel();
-    s_lastFrame = frame; s_last = s_srv[hNew]; s_ranFrame = frame;
+    s_lastFrame = frame; s_last = s_srv[hNew]; s_ranFrame = frame; s_nRan++;
     return s_srv[hNew];
 }
 
