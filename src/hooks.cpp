@@ -1662,6 +1662,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     SSGIPresent(s_presentNo.load());
     LightMeterPresent();
     CamHookPresent();   // (23/10) camara del motor: ganchos (primer Present), cortes de camara -> 160, log
+    TiempoPresent();    // (31/10) camara lenta: gancho al reloj de juego (primer Present), 343.zw, log
     CharTrackPresent();    // (24/10) personajes: que jugador es cada esqueleto (ganchos en el primer Present, log)
     SkinDiagPresent();     // (24/10) tono de piel: diagnostico de los dibujos de personajes (w184)
     SkinTonePresent();     // (24/10) tono de piel por jugador: guardado y vista previa en el menu Fisico
