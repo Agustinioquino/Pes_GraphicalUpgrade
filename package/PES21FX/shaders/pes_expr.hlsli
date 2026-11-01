@@ -20,6 +20,8 @@ cbuffer PESExprMesh : register(b12)
   uint4 g_pesExprMesh;   // x cabeza en la paleta (99 = nada), y hueso maximo usado, z id de la malla
   uint4 g_pesExprLids;   // (01/11) parpados en la paleta: x arriba izq (+x), y arriba der, z abajo izq, w abajo der (99 = no hay)
   uint4 g_pesExprJaw;    // (01/11) abrir la boca: x mascara de huesos de abajo (mandibula, labio de abajo, papada), y comisuras (la mitad), z labio de arriba del medio (99 = no hay), w mascara del labio de arriba
+  // (01/11 h) ojos (VS 69758ab9): centro (xyz) y radio del globo izquierdo (+x, hueso 0 del eye.fmdl) y derecho (hueso 1); radio 0 = no hay
+  float4 g_pesExprEye[2];
 }
 
 float PesExprZoneShare(float3 r, float4 Z)
@@ -123,6 +125,70 @@ float3 PesTongue(float3 rest, float2 uv, uint jaw)
   return o * T.x;
 }
 
+// (01/11 h, Agustin: "a los ojos les falta vida") MIRADA VIVA, fila 347.w (0 = como el juego, 1 = normal, 2 = inquieto).
+// Un ojo real nunca esta quieto: fija la mirada 0.4..2 s y salta (sacada, ~40 ms) a otro punto, con una deriva lenta en el
+// medio y microsacadas de ~0.2 grados. Devuelve (giro horizontal, giro vertical) en radianes, para el mismo reloj y la misma
+// semilla (por jugador) en el VS del globo del ojo (girar la esfera) y en el de la cara (el parpado de arriba acompana
+// la mirada vertical: baja ~ 2/3 del angulo al mirar abajo, sube 1/3 al mirar arriba).
+float2 PesGazeHash2(float n, float seed)
+{
+  float a = frac(sin((n + seed * 17.3) * 12.9898) * 43758.5453);
+  float b = frac(sin((n + seed * 29.7) * 78.233) * 43758.5453);
+  return float2(a, b);
+}
+float2 PesGazeTarget(float n, float seed)
+{
+  float2 h = PesGazeHash2(n, seed);
+  // horizontal +-4.5 grados, vertical -3.5..+2.5 (se mira mas hacia abajo que hacia arriba); 1 de cada 4 fijaciones vuelve al centro
+  float2 g = float2((h.x - 0.5) * 2.0 * 0.078, (h.y - 0.58) * 2.0 * 0.052);
+  float back = step(0.75, frac(h.x * 7.1 + h.y * 3.3));
+  return lerp(g, g * 0.25, back);
+}
+float2 PesGaze(float t, float seed, float amp)
+{
+  if (amp <= 0.0) return 0;
+  // fijaciones de largo variable: la cuenta avanza con una tabla de largos 0.45..1.9 s (suma 1.2 s de media)
+  float tt = t + seed * 23.1;
+  float per = 1.2;
+  float n = floor(tt / per);
+  float h = PesGazeHash2(n, seed + 0.5).x;
+  float start = n * per + h * 0.6;              // cuando salta dentro de esta ventana
+  float x = tt - start;                         // tiempo desde la sacada (negativo = todavia la fijacion anterior)
+  float2 g0 = PesGazeTarget(n - 1.0, seed), g1 = PesGazeTarget(n, seed);
+  float k = smoothstep(0.0, 0.045, x);          // sacada ~45 ms (con sobrepaso chico)
+  k = k * (1.0 + 0.12 * sin(3.14159 * saturate(x / 0.09)));
+  float2 g = lerp(g0, g1, saturate(k) + (k - saturate(k)));
+  // deriva lenta + microsacadas
+  g += float2(sin(tt * 1.7 + seed) * 0.0030 + sin(tt * 23.0 + seed * 3.0) * 0.0012,
+              sin(tt * 1.3 + seed * 2.0) * 0.0022 + sin(tt * 19.0 + seed) * 0.0010);
+  return g * amp;
+}
+// semilla por jugador: la misma cuenta que el parpadeo (tabla de tonos de piel por la posicion del hueso 0 en el mundo)
+float PesExprSeed()
+{
+  bool sk = g_vsObject.m_useWeightCount.x != 0;
+  float3 b0 = float3(g_vsBone.m_boneMatrices[0]._m30, g_vsBone.m_boneMatrices[0]._m31, g_vsBone.m_boneMatrices[0]._m32);
+  float3 b0b = float3(g_vsPrevBone.m_boneMatrices[0]._m30, g_vsPrevBone.m_boneMatrices[0]._m31, g_vsPrevBone.m_boneMatrices[0]._m32);
+  int se = PesSkinNearest(PesSkinPoint(g_vsObject.m_world, g_vsObject.m_viewWorld, g_vsScene.m_view, b0, b0b, sk));
+  return se >= 0 ? (float)se * 0.6180339 : 0.37;
+}
+// giro de la mirada aplicado a un punto respecto del centro del ojo: g.x gira alrededor del eje y (mirar a los lados; +x = a la
+// izquierda del jugador = a su derecha en pantalla), g.y alrededor del eje x (+ = arriba)
+float3 PesGazeRot(float3 q, float2 g)
+{
+  float cy = cos(g.x), sy = sin(g.x), cx = cos(g.y), sx = sin(g.y);
+  float3 r = float3(q.x * cy + q.z * sy, q.y, -q.x * sy + q.z * cy);
+  return float3(r.x, r.y * cx - r.z * sx, r.y * sx + r.z * cx);
+}
+// GLOBO DEL OJO (VS 69758ab9): gira los vertices del ojo alrededor de su centro (reposo, antes del skinning). Centro por ojo:
+// el de la DLL si lo tiene (g_pesExprEye), si no (+-0.0295, 1.6968, 0.138) como el parpadeo.
+float3 PesGazeEye(float3 rest, float3 center, float t, float seed)
+{
+  float amp = IniParams.Load(int2(347, 0)).w;
+  if (amp <= 0.0) return rest;
+  float2 g = PesGaze(t, seed, amp);
+  return center + PesGazeRot(rest - center, g);
+}
 // (01/11) parpadeo del mod. El juego casi no parpadea fuera de las escenas: cada jugador parpadea cada 2..6 s (al azar por
 // ciclo, semilla = su entrada de la tabla de tonos de piel, igual para la piel, las pestanas y los parpados de la misma cara),
 // 0.3 s: cierra en 0.08, queda 0.04, abre en 0.18. Los parpados (la DLL los encuentra por malla, g_pesExprLids) giran en el
@@ -159,7 +225,11 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
   float t = IniParams.Load(int2(157, 0)).x;
   float b = PesBlinkCurve(t, seed) * saturate(amt);
   float bp = PesBlinkCurve(t - 1.0 / 60.0, seed) * saturate(amt);   // cuadro anterior (vectores de movimiento)
-  if (b <= 0.0 && bp <= 0.0) return;
+  // (01/11 h) el parpado acompana la mirada vertical (347.w): abajo baja 0.65 del angulo, arriba sube 0.35 (solo el de arriba)
+  float gz = IniParams.Load(int2(347, 0)).w;
+  float gy = 0.0, gyp = 0.0;
+  if (gz > 0.0) { gy = PesGaze(t, seed, gz).y; gyp = PesGaze(t - 1.0 / 60.0, seed, gz).y; }
+  if (b <= 0.0 && bp <= 0.0 && abs(gy) < 0.0005 && abs(gyp) < 0.0005) return;
   float3 C = float3(rest.x >= 0.0 ? 0.028 : -0.028, 1.6968, 0.138);
   float3 q = p.xyz - C;
   [unroll] for (int k = 0; k < 4; k++) {
@@ -172,7 +242,11 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
     float g = 0.0;   // el juego ya cierra este parpado: punto de la orilla con el hueso contra con la cabeza
     if (head <= 31) { float4 Q = float4(C + float3(0.0, up ? 0.008 : -0.006, 0.008), 1.0); g = saturate(length(mul(Q, M) - mul(Q, g_vsBone.m_boneMatrices[head])) / 0.006); }
     float A = (up ? 0.50 : -0.10) * (1.0 - g);   // (01/11 d, Agustin: "los ojos se cierran mucho") antes 0.68 / -0.14   // orilla de arriba ~ +27 grados abierta -> ~ -12; la de abajo -22 -> ~ -14
-    float c1 = cos(A * b), s1 = sin(A * b), c0 = cos(A * bp), s0 = sin(A * bp);
+    // angulo total del parpado: parpadeo + seguimiento de la mirada (el de arriba: -gy * 0.65 si mira abajo, -gy * 0.35 arriba;
+    // el de abajo sube un poco al mirar abajo). El sentido: A > 0 cierra el de arriba (baja), A < 0 el de abajo (sube).
+    float fu = up ? (gy < 0.0 ? 0.65 : 0.35) : 0.15, fup = up ? (gyp < 0.0 ? 0.65 : 0.35) : 0.15;
+    float a1 = A * b + (up ? -gy * fu : gy * fu) * (1.0 - g), a0 = A * bp + (up ? -gyp * fup : gyp * fup) * (1.0 - g);
+    float c1 = cos(a1), s1 = sin(a1), c0 = cos(a0), s0 = sin(a0);
     float3 d1 = PesRotX(q, c1, s1) - q, d0 = PesRotX(q, c0, s0) - q;
     pos  += w * mul(d1, (float3x3)M);
     prev += w * mul(d0, (float3x3)g_vsPrevBone.m_boneMatrices[j]);
