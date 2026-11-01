@@ -63,6 +63,7 @@ Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 #include "pes_skintone.hlsli"
 #include "pes_collar.hlsli"   // (27/10 d) PesCollarSink
+#include "pes_expr.hlsli"     // (31/10) expresiones faciales
 #include "pes_cloth.hlsli"
 
 
@@ -135,6 +136,8 @@ void main(
     r2.x = dot(v0.xyzw, r2.xyzw);
     r2.y = dot(v0.xyzw, r3.xyzw);
     r2.z = dot(v0.xyzw, r0.xyzw);
+    // (31/10) expresiones faciales mas marcadas (pes_expr.hlsli, filas 340 / 341; cabeza de la paleta por malla: expr.cpp, b12)
+    PesExprApply(v0, v0r, v3, v4, v1.xyz, v2.xyz, r4.xyz, r2.xyz, r5.xyz, r1.xyz);
   } else {
     r5.xyz = v1.xyz;
     r1.xyz = v2.xyz;

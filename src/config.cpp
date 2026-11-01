@@ -297,6 +297,7 @@ static bool LoadConfigLocked() {
                 r->hasParamOverride = true;
             }
             else if (k == "event" && Lower(v) == "turf") a.kind = RuleAction::EventTurf;
+            else if (k == "expr") { a.kind = RuleAction::Expr; ss >> a.slot; }   // (31/10) expresiones: cbuffer de la malla de cara en el VS (expr.cpp)
             else if (k == "facegen") { a.kind = RuleAction::FaceGen; ss >> a.slot >> a.idx; if (a.idx <= 0) a.idx = a.slot + 1; }
             else continue;
             r->actions.push_back(a);
