@@ -20,6 +20,7 @@
 #include <atomic>
 #include <cstring>
 #include <algorithm>
+#include <cmath>
 
 namespace fx {
 
@@ -87,10 +88,11 @@ bool ReadW(const uint8_t* p, DXGI_FORMAT f, float o[4]) {
     default: return false;
     }
 }
-ID3D11Buffer* MakeCB(UINT head, UINT maxIdx, UINT id, UINT mouth = 0) {
+ID3D11Buffer* MakeCB(UINT head, UINT maxIdx, UINT id, UINT mouth = 0, const int* lids = nullptr) {
     if (!g_dev.dev) return nullptr;
-    UINT v[4] = { head, maxIdx, id, mouth };
-    D3D11_BUFFER_DESC d{}; d.ByteWidth = 16; d.Usage = D3D11_USAGE_IMMUTABLE; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    UINT v[8] = { head, maxIdx, id, mouth, 99, 99, 99, 99 };
+    if (lids) for (int i = 0; i < 4; i++) v[4 + i] = lids[i] >= 0 ? (UINT)lids[i] : 99u;
+    D3D11_BUFFER_DESC d{}; d.ByteWidth = 32; d.Usage = D3D11_USAGE_IMMUTABLE; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     D3D11_SUBRESOURCE_DATA s{}; s.pSysMem = v;
     ID3D11Buffer* b = nullptr; return SUCCEEDED(g_dev.dev->CreateBuffer(&d, &s, &b)) ? b : nullptr;
 }
@@ -157,7 +159,7 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
             mapped[s] = true;
         }
         int mx = -1; bool ok = true;
-        std::vector<float> ys(m->nv); std::vector<uint32_t> iv((size_t)m->nv * 4); std::vector<float> wv((size_t)m->nv * 4);
+        std::vector<float> ys(m->nv), xs(m->nv), zs(m->nv); std::vector<uint32_t> iv((size_t)m->nv * 4); std::vector<float> wv((size_t)m->nv * 4);
         float ylo = 1e9f, yhi = -1e9f;
         for (UINT v = 0; v < m->nv && ok; v++) {
             float P[3]; uint32_t* I = &iv[(size_t)v * 4]; float* W = &wv[(size_t)v * 4];
@@ -166,17 +168,18 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
             const uint8_t* pw = (const uint8_t*)mp[m->wgt.slot].pData + (size_t)v * m->stride[m->wgt.slot] + m->wgt.off;
             ok = ReadPos(pp, m->pos.fmt, P) && ReadIdx(pi, m->idx.fmt, I) && ReadW(pw, m->wgt.fmt, W);
             if (!ok) break;
-            ys[v] = P[1]; ylo = (std::min)(ylo, P[1]); yhi = (std::max)(yhi, P[1]);
+            xs[v] = P[0]; ys[v] = P[1]; zs[v] = P[2]; ylo = (std::min)(ylo, P[1]); yhi = (std::max)(yhi, P[1]);
             for (int k = 0; k < 4; k++) if (W[k] > 0.004f && (int)I[k] > mx) mx = (int)I[k];
         }
         // sk_head: el hueso con mas peso en el 25 % mas alto de la malla; uso total por hueso para el log
-        float top[32] = {}, all[32] = {}; int cnt[32] = {};
+        float top[32] = {}, all[32] = {}, cx[32] = {}, cy[32] = {}, cz[32] = {}, wmax[32] = {}; int cnt[32] = {};
         if (ok && mx >= 0 && mx <= 31) {
             const float cut = yhi - 0.25f * (yhi - ylo);
             for (UINT v = 0; v < m->nv; v++) for (int k = 0; k < 4; k++) {
                 const uint32_t b = iv[(size_t)v * 4 + k]; const float w = wv[(size_t)v * 4 + k];
                 if (b > 31 || w <= 0.004f) continue;
                 all[b] += w; cnt[b]++; if (ys[v] >= cut) top[b] += w;
+                cx[b] += w * xs[v]; cy[b] += w * ys[v]; cz[b] += w * zs[v]; wmax[b] = (std::max)(wmax[b], w);
             }
         }
         for (int s = 0; s < 4; s++) if (mapped[s]) imm->Unmap(m->stVB[s], 0);
@@ -190,16 +193,36 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
         // (01/11) una pierna (1440 v, 0.05..0.54 m) tambien se dibuja con faab87ee: lo que no llega a la altura de la cara no es cara
         if (yhi < 1.40f) hd = 99;
         // (01/11) la boca (mouth.fmdl comun, boca 3D: alto 1.613..1.650 m): el VS mueve la lengua (pes_expr.hlsli PesTongue)
+        // (01/11) parpados (parpadeo del mod, pes_expr.hlsli PesBlink): huesos con peso fuerte (>= 0.7) cuyo centro de vertices cae
+        // en la zona del ojo (x 1.2..4.5 cm del medio, y 1.686..1.709, z > 0.125). Por lado: el mas alto = parpado de arriba,
+        // el mas bajo = el de abajo (face_rig: skf_eyelid_t peso 1.0, skf_eyelid_b 0.74..0.85; orbicular 0.2..0.5 y cejas
+        // quedan fuera por peso o altura). lids = { arriba izq, arriba der, abajo izq, abajo der } (izq = +x)
+        int lids[4] = { -1, -1, -1, -1 };
+        if (hd <= 31) {
+            int cand[2][8]; int nc[2] = {};
+            for (int b = 0; b <= mx; b++) {
+                if (b == hd || all[b] <= 0.5f || wmax[b] < 0.7f) continue;
+                const float x = cx[b] / all[b], y = cy[b] / all[b], z = cz[b] / all[b];
+                if (fabsf(x) < 0.012f || fabsf(x) > 0.045f || y < 1.686f || y > 1.709f || z < 0.125f) continue;
+                const int sd = x > 0 ? 0 : 1; if (nc[sd] < 8) cand[sd][nc[sd]++] = b;
+            }
+            for (int sd = 0; sd < 2; sd++) {
+                if (!nc[sd]) continue;
+                int hi = cand[sd][0], lo = cand[sd][0];
+                for (int i = 1; i < nc[sd]; i++) { const int b = cand[sd][i]; if (cy[b] / all[b] > cy[hi] / all[hi]) hi = b; if (cy[b] / all[b] < cy[lo] / all[lo]) lo = b; }
+                lids[sd] = hi; if (lo != hi) lids[2 + sd] = lo;
+            }
+        }
         const bool mouth = hd <= 31 && !thin && ylo > 1.58f && yhi < 1.68f && (yhi - ylo) < 0.06f;
         m->maxIdx = mx; m->head = hd;
-        m->cb = MakeCB((UINT)m->head, (UINT)mx, (UINT)m->id, mouth ? 1u : 0u);
+        m->cb = MakeCB((UINT)m->head, (UINT)mx, (UINT)m->id, mouth ? 1u : 0u, lids);
         ReleaseIA(m);
         if (!m->cb) { m->state = 4; m->why = "sin cbuffer"; s_hist[3]++; return; }
         m->state = 3; s_hist[m->head <= 1 ? m->head : m->head > 31 ? 3 : 2]++;
         static int n = 0;
         if (n++ < 80) {   // uso de cada hueso de la paleta (peso total / peso en la parte alta) para comparar con face_rig.py
-            char l[1400]; int k = snprintf(l, sizeof l, "expresiones: malla de cara %d (%u indices, %u vertices, alto %.3f..%.3f m): hueso maximo %d -> cabeza en la paleta %d%s |",
-                                           m->id, m->count, m->nv, ylo, yhi, mx, m->head, m->head > 31 ? " (no es cara)" : thin ? " (fina: por vertices)" : mouth ? " (boca: lengua)" : "");
+            char l[1400]; int k = snprintf(l, sizeof l, "expresiones: malla de cara %d (%u indices, %u vertices, alto %.3f..%.3f m): hueso maximo %d -> cabeza en la paleta %d%s, parpados %d %d / %d %d |",
+                                           m->id, m->count, m->nv, ylo, yhi, mx, m->head, m->head > 31 ? " (no es cara)" : thin ? " (fina: por vertices)" : mouth ? " (boca: lengua)" : "", lids[0], lids[1], lids[2], lids[3]);
             for (int b = 0; b <= mx && k < (int)sizeof l - 24; b++) if (all[b] > 0) k += snprintf(l + k, sizeof l - k, " %d:%.0f/%.0f", b, all[b], top[b]);
             Log("%s", l);
         }
