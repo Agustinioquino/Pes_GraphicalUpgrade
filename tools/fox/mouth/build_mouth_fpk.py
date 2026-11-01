@@ -1,7 +1,8 @@
 # PES21 FX (31/10) - arma en la PC el common_package.fpk con la boca 3D (mouth3d.py) a partir del fpk instalado (TorsoBody):
 # saca mouth.fmdl (tiene que ser el de Konami, SHA256 B7B6754B...), arma la boca nueva y la vuelve a poner (el fpk cambia de
 # tamano: las entradas siguientes se corren; el resto queda byte a byte igual). Los modelos de Konami / TorsoBody no van al repo.
-# Uso: python build_mouth_fpk.py <common_package.fpk instalado> <carpeta con oral_bsm.ftex y oral_trm.ftex> <salida.fpk>
+# Uso: python build_mouth_fpk.py <common_package.fpk instalado> <carpeta con oral_bsm.ftex y oral_trm.ftex> <salida.fpk> [mouth.fmdl de Konami]
+# (01/11) si el fpk ya tiene una boca 3D, la de Konami se toma del 4o argumento (p. ej. la extraida en D:\copias pes; tiene que dar B7B6754B)
 import sys, os, hashlib
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [HERE, os.path.join(HERE, '..'), os.path.join(HERE, '..', '..'), os.path.join(HERE, '..', '..', 'sincamiseta')]
@@ -10,7 +11,7 @@ import mouth3d, mouth_fmdl
 
 KONAMI = 'B7B6754B'
 
-def main(src, texdir, dst):
+def main(src, texdir, dst, konami=None):
     d = open(src, 'rb').read()
     print('fuente %s SHA256 %s' % (src, hashlib.sha256(d).hexdigest()[:8].upper()))
     e = [x for x in entries(d) if x['name'].endswith('/common/mouth.fmdl')]
@@ -18,7 +19,11 @@ def main(src, texdir, dst):
     blob = d[e[0]['off']:e[0]['off'] + e[0]['size']]
     sha = hashlib.sha256(blob).hexdigest()[:8].upper()
     print('mouth.fmdl de la fuente: %d bytes SHA256 %s' % (len(blob), sha))
-    if sha != KONAMI: raise SystemExit('mouth.fmdl no es el de Konami (%s): no sigo' % KONAMI)
+    if sha != KONAMI:
+        if not konami: raise SystemExit('mouth.fmdl no es el de Konami (%s): pasar el de Konami como 4o argumento' % KONAMI)
+        blob = open(konami, 'rb').read(); sha = hashlib.sha256(blob).hexdigest()[:8].upper()
+        print('mouth.fmdl de Konami desde %s: SHA256 %s' % (konami, sha))
+        if sha != KONAMI: raise SystemExit('ese tampoco es el de Konami: no sigo')
     tmp = dst + '.mouth_konami.fmdl'; open(tmp, 'wb').write(blob)
     r = mouth3d.build(tmp, texdir)
     new = mouth_fmdl.write(tmp, dst + '.mouth3d.fmdl', r['pos'], r['nrm'], r['tan'], r['w'], r['bidx'], r['uv'], r['faces'])
@@ -31,4 +36,4 @@ def main(src, texdir, dst):
     os.remove(tmp)
 
 if __name__ == '__main__':
-    main(*sys.argv[1:4])
+    main(*sys.argv[1:5])
