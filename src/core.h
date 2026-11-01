@@ -338,6 +338,7 @@ int PresentNo();                                  // numero de cuadro (sube en c
 void CamHookPresent();                            // ganchos (primer Present), 160 = cuadros desde el corte / cortes / TAA / ok
 // (31/10) camara libre (freecam.cpp): pisa el parametro de la camara del motor desde el gancho de camhook.cpp; 344 (ini) / 345 (DLL)
 void FreeCamApply(unsigned char* param);
+void FreeCamPresent();   // (1/11) gancho a la camara del visor del editor (primer Present) + log
 bool FreeCamActive();
 bool FreeCamBlocksKeys();                         // x344 = 1: el juego no ve el teclado mientras la camara libre esta prendida
 // (31/10) camara lenta (tiempo.cpp): gancho al reloj de juego del motor (0x14035dcb0), 343 (ini: x velocidad, y prendida; DLL: z, w)

@@ -566,6 +566,7 @@ void PollKeys(bool focused) {
         bool press = down && !k.wasDown, release = !down && k.wasDown;
         k.wasDown = down;
         if (press) {
+            Log("tecla: %s", k.name.c_str());   // (1/11) para ver en el log que la combinacion disparo
             if (!k.run.empty()) {
                 if (Lower(k.run).find("resetsweat") != std::string::npos) s_matchStart = Now();
             }
