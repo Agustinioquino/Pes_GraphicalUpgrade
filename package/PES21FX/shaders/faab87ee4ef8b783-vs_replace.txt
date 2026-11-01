@@ -137,6 +137,7 @@ void main(
     // (31/10) expresiones faciales mas marcadas (pes_expr.hlsli, filas 340 / 341; cabeza de la paleta por malla: expr.cpp, b12)
     PesExprApply(v0, v0r, v3, v4, v1.xyz, v2.xyz, r4.xyz, r2.xyz, r5.xyz, r1.xyz);
     PesBlinkApply(v0, v0r, v3, v4, v1.xyz, r4.xyz, r2.xyz, r5.xyz);   // (01/11) parpadeo del mod (fila 342.w)
+    PesJawApply(v0, v3, v4, v1.xyz, r4.xyz, r2.xyz, r5.xyz);   // (01/11) abrir la boca (fila 346.x)
   } else {
     r5.xyz = v1.xyz;
     r1.xyz = v2.xyz;

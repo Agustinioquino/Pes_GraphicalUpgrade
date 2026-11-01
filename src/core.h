@@ -26,7 +26,7 @@ void ScanRefsInto(uintptr_t base, uintptr_t end, const char* dllName);   // quie
 extern void* g_overlayOldProc;
 
 // ---------------------------------------------------------------- parametros (lo que en 3DMigoto era IniParams)
-constexpr int kParamCount = 346;           // float4 x 346 -> t120 en los shaders (IniParams.Load(int2(i,0))). (20/10: era 128 y los parametros 128+ se perdian; 25/10: 256 -> 320, la ropa contra el cuerpo usa 256 / 257; 27/10: 320 -> 336: la fila 320 (torso bajo la camiseta) quedaba fuera y el ini la descartaba; 31/10: 340 -> 344 (expresiones 340 / 341); 01/11: 344 -> 346: 343 camara lenta, 344 / 345 camara libre)
+constexpr int kParamCount = 347;           // float4 x 347 -> t120 en los shaders (IniParams.Load(int2(i,0))). (20/10: era 128 y los parametros 128+ se perdian; 25/10: 256 -> 320, la ropa contra el cuerpo usa 256 / 257; 27/10: 320 -> 336: la fila 320 (torso bajo la camiseta) quedaba fuera y el ini la descartaba; 31/10: 340 -> 344 (expresiones 340 / 341); 01/11: 344 -> 346: 343 camara lenta, 344 / 345 camara libre; 346 -> 347: 346 abrir la boca)
 // (26/10) filas de t120 ocupadas por tablas que escribe la DLL en cada cuadro (no usarlas para el ini): 194..254 tonos de piel por
 // jugador (skintone.cpp), 257 cuadro de la ropa contra el cuerpo (cuerpo.cpp). 300..304 son de las manos (manos.cpp + pes_hands.hlsli; 303 = manos relajadas, 304 = unas de los jugadores con textura propia, pes_nailfix.hlsli en el PS aa7d1833; v12.6).
 // 260..263 son de la musculatura (musculo.cpp: grupos de la v7 y musculos vivos).
@@ -56,6 +56,8 @@ constexpr int kParamCount = 346;           // float4 x 346 -> t120 en los shader
 // 338 = traspaso de luz en los kits con el grosor real del shadow map (31/10, 5 PS del sol: x densidad 1/m, y grosor maximo cm, z resto del modo viejo, w on).
 // 340 = expresiones faciales (31/10, expr.cpp + pes_expr.hlsli en los VS faab87ee / 455eb97b: x prendido, y ganancia general (1 = juego), z tope del agregado en cm, w cuanto se suma de los gestos grandes (mandibula abierta) 0..1).
 // 342 = lengua de la boca 3D (01/11, pes_expr.hlsli PesTongue en faab87ee; expr.cpp marca la malla de la boca: x fuerza, y movimiento vivo, z velocidad; w parpadeo del mod 0..1, PesBlink con los parpados que expr.cpp encuentra por malla).
+// 346 = abrir la boca (01/11, pes_expr.hlsli PesJawApply en faab87ee / 455eb97b): x apertura extra -0.25..1 (1 = boca abierta del todo, negativo = cierra un poco);
+//       expr.cpp marca por malla los huesos de abajo (mandibula, labio de abajo, papada) y las comisuras (la mitad).
 // 341 = expresiones por zona (31/10: x frente y cejas, y ojos y parpados, z mejillas y nariz, w boca y labios; 1 = la ganancia general sola).
 // 339 = pelo a contraluz (31/10, 5 PS del sol; los PS del pelo 02f1d510 / c75f6047 marcan g_SpecularTexture.z = 252/255: x fuerza, y densidad 1/m, z grosor maximo cm, w on).
 // 328 = matas y variedad de las hojas del mod (27/10 m, tanda 10: VS 498b / PS 18af: x matas, y variedad por hoja, z oclusion entre matas; grass.cpp: w capas por pixel cerca, 0 = 6).

@@ -19,6 +19,7 @@ cbuffer PESExprMesh : register(b12)
 {
   uint4 g_pesExprMesh;   // x cabeza en la paleta (99 = nada), y hueso maximo usado, z id de la malla
   uint4 g_pesExprLids;   // (01/11) parpados en la paleta: x arriba izq (+x), y arriba der, z abajo izq, w abajo der (99 = no hay)
+  uint4 g_pesExprJaw;    // (01/11) abrir la boca: x mascara de huesos de abajo (mandibula, labio de abajo, papada), y comisuras (la mitad)
 }
 
 float PesExprZoneShare(float3 r, float4 Z)
@@ -99,6 +100,7 @@ float3 PesTongue(float3 rest, float2 uv, uint jaw)
   // apertura: la punta de la lengua llevada por la mandibula contra llevada por la cabeza
   float4 tip = float4(0.0, 1.6274, 0.1596, 1.0);
   float J = saturate(length(mul(tip, g_vsBone.m_boneMatrices[jaw]) - mul(tip, g_vsBone.m_boneMatrices[head])) / 0.012);   // (01/11 b) se mueve ya con la boca a medio abrir
+  J = saturate(J + max(IniParams.Load(int2(346, 0)).x, 0.0));   // (01/11 e) la boca abierta del slider tambien cuenta
   float s = saturate((uv.y - 0.678) / (0.920 - 0.678));          // 0 raiz .. 1 punta (y la cara de abajo de la punta)
   float lado = (uv.x - 0.503) / 0.205;                            // -1 .. 1 de lado a lado
   float3 o = 0;
@@ -175,6 +177,36 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
     pos  += w * mul(d1, (float3x3)M);
     prev += w * mul(d0, (float3x3)g_vsPrevBone.m_boneMatrices[j]);
     nrm  += w * mul(PesRotX(n, c1, s1) - n, (float3x3)M);
+  }
+}
+
+// (01/11 e, Agustin: "un slider para que el personaje abra la boca por completo") fila 346.x: gira en el reposo, antes del
+// skinning, los vertices de los huesos de abajo (mandibula, labio de abajo, papada; la DLL los marca por malla en g_pesExprJaw)
+// alrededor de la bisagra de skf_jaw (face_rig 111320: 0, 1.6369, 0.0795; eje x). Se suma a lo que ya haga el juego.
+// 1 = ~23 grados (boca abierta del todo), negativo = cierra un poco. Las comisuras van a la mitad; el resto del peso (labio de
+// arriba, mejillas) no se mueve, asi que la piel entre los dos se estira como en la boca abierta del juego.
+void PesJawApply(float4 p, uint4 I, float4 W, float3 n,
+                 inout float3 pos, inout float3 prev, inout float3 nrm)
+{
+  float o = clamp(IniParams.Load(int2(346, 0)).x, -0.25, 1.0);
+  if (abs(o) < 0.001) return;
+  uint full = g_pesExprJaw.x, half_ = g_pesExprJaw.y;
+  if ((full | half_) == 0u) return;
+  float A = 0.40 * o;
+  float c = cos(A), s = sin(A);
+  float3 C = float3(0.0, 1.6369, 0.0795);
+  float3 q = p.xyz - C;
+  float3 d = PesRotX(q, c, s) - q, dn = PesRotX(n, c, s) - n;
+  [unroll] for (int k = 0; k < 4; k++) {
+    uint j = I[k]; float w = W[k];
+    if (w <= 0.0 || j > 31) continue;
+    uint bit = 1u << j;
+    float f = (full & bit) != 0u ? 1.0 : ((half_ & bit) != 0u ? 0.5 : 0.0);
+    if (f <= 0.0) continue;
+    if (f < 1.0) { float c2 = cos(A * f), s2 = sin(A * f); float3 dh = PesRotX(q, c2, s2) - q; pos += w * mul(dh, (float3x3)g_vsBone.m_boneMatrices[j]); prev += w * mul(dh, (float3x3)g_vsPrevBone.m_boneMatrices[j]); nrm += w * mul(PesRotX(n, c2, s2) - n, (float3x3)g_vsBone.m_boneMatrices[j]); continue; }
+    pos  += w * mul(d, (float3x3)g_vsBone.m_boneMatrices[j]);
+    prev += w * mul(d, (float3x3)g_vsPrevBone.m_boneMatrices[j]);
+    nrm  += w * mul(dn, (float3x3)g_vsBone.m_boneMatrices[j]);
   }
 }
 #endif
