@@ -32,7 +32,17 @@ namespace fx {
 
 namespace {
 struct Xf { float s[4], q[4], t[4]; };
+// (02/11) antes de leer se consulta la pagina (VirtualQuery): el volcado prueba valores que no son punteros y cada lectura
+// mala, aunque la atrape el SEH, queda anotada como excepcion en el registro de cierres (6 en el primer partido)
+static bool Readable(const void* p, size_t n) {
+    if (!p || (uintptr_t)p < 0x10000 || (uintptr_t)p > 0x00007fffffffffffull) return false;
+    MEMORY_BASIC_INFORMATION mi{};
+    if (!VirtualQuery(p, &mi, sizeof mi) || mi.State != MEM_COMMIT || (mi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) return false;
+    if (!(mi.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_WRITECOPY))) return false;
+    return (uintptr_t)p + n <= (uintptr_t)mi.BaseAddress + mi.RegionSize;
+}
 static bool SafeCopy(void* dst, const void* src, size_t n) {
+    if (!Readable(src, n)) return false;
     __try { memcpy(dst, src, n); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 static bool ReadXf(const void* p, Xf& x) {
@@ -99,7 +109,8 @@ static const int kND = (int)(sizeof(kDef) / sizeof(kDef[0]));
 enum { D_JAW = 0, D_HEAD = kND - 2 };
 
 struct Skel {
-    const void* skel = nullptr; const char* bones = nullptr; int n = 0;
+    const void* skel = nullptr; const char* bones = nullptr; int n = 0;   // esqueleto del cuerpo (clave) y su arreglo
+    const void* face = nullptr; const char* fbones = nullptr; int fn = 0;  // (02/11) esqueleto de la CARA: nodo + 0xA0 (49 huesos)
     void* cur[kND] = {};      // puntero a la transformacion actual de cada hueso reconocido (null = no esta)
     int idx[kND] = {};        // indice del hueso en el arreglo del esqueleto
     Xf rest[kND] = {};
@@ -118,32 +129,61 @@ static int s_logs = 0;
 
 static float Dist2(const float* a, const BoneDef& d) { float x = a[0] - d.x, y = a[1] - d.y, z = a[2] - d.z; return x * x + y * y + z * z; }
 
-// arma la tabla de huesos reconocidos de un esqueleto (una vez, o si cambio el arreglo)
-static bool Build(Skel& S, const void* skel) {
-    S = Skel(); S.skel = skel;
-    void* arr = nullptr; int n = 0;
-    if (!ReadPtr((const char*)skel + 0x28, arr) || !SafeCopy(&n, (const char*)skel + 0x30, 4) || n <= 2 || n > 1024) return false;
-    S.bones = (const char*)arr; S.n = n;
-    // todos los pares (hueso, definicion) a menos de 4 mm, del mas cerca al mas lejos; cada uno se asigna una sola vez
+// (02/11, volcado en la PC) hueso del motor (0xc0 bytes): + 0x00 indice, + 0x08 puntero al NOMBRE ("sk_head"), + 0x10 hash,
+// + 0x18 transformacion actual, + 0x20 padre, + 0x40 reposo. El SceneCharacterNode tiene + 0x88 esqueleto del cuerpo (175),
+// + 0x90 / + 0x98 manos (24), + 0xA0 esqueleto de la CARA (49 huesos, h0 = sk_chest 0, 1.263, 0.014): ahi estan los skf_*.
+static bool BoneName(const char* bone, char* out, int n) {
+    void* p = nullptr; if (!ReadPtr(bone + 0x08, p)) return false;
+    char b[64] = {}; if (!SafeCopy(b, p, 48)) return false;
+    int k = 0; while (k < 48 && b[k] >= 0x21 && b[k] < 0x7f) k++;
+    if (k < 3 || k >= 48) return false;
+    snprintf(out, n, "%.*s", k, b); return true;
+}
+static bool LooksSkel(const void* q, const char** arr, int* n) {
+    void* a = nullptr; int cnt = 0;
+    if (!ReadPtr((const char*)q + 0x28, a) || !SafeCopy(&cnt, (const char*)q + 0x30, 4) || cnt < 2 || cnt > 1024) return false;
+    Xf r0; if (!ReadXf((const char*)a + 0x40, r0)) return false;
+    *arr = (const char*)a; *n = cnt; return true;
+}
+// reconoce los huesos de un arreglo: por NOMBRE (+ 0x08) y, si no hay nombre, por el reposo (a menos de 4 mm)
+static void Match(Skel& S, const char* bones, int n) {
     struct Pair { float d2; int b, d; };
     std::vector<Pair> ps;
     std::vector<Xf> rests((size_t)n);
-    std::vector<char> okRest((size_t)n, 0);
     for (int b = 0; b < n; b++) {
-        if (!ReadXf(S.bones + (size_t)b * 0xc0 + 0x40, rests[b])) continue;
-        okRest[b] = 1;
+        const char* bone = bones + (size_t)b * 0xc0;
+        if (!ReadXf(bone + 0x40, rests[b])) continue;
+        char nm[64];
+        if (BoneName(bone, nm, sizeof nm)) {
+            for (int d = 0; d < kND; d++) if (!strcmp(nm, kDef[d].name)) { ps.push_back({ -1.0f, b, d }); break; }
+            continue;
+        }
         for (int d = 0; d < kND; d++) { float d2 = Dist2(rests[b].t, kDef[d]); if (d2 < 0.004f * 0.004f) ps.push_back({ d2, b, d }); }
     }
     std::sort(ps.begin(), ps.end(), [](const Pair& a, const Pair& b) { return a.d2 < b.d2; });
-    std::vector<char> usedB((size_t)n, 0); bool usedD[kND] = {};
+    std::vector<char> usedB((size_t)n, 0);
     for (const Pair& p : ps) {
-        if (usedB[p.b] || usedD[p.d]) continue;
+        if (usedB[p.b] || S.cur[p.d]) continue;
         void* cur = nullptr;
-        if (!ReadPtr(S.bones + (size_t)p.b * 0xc0 + 0x18, cur)) continue;
+        if (!ReadPtr(bones + (size_t)p.b * 0xc0 + 0x18, cur)) continue;
         Xf c; if (!ReadXf(cur, c)) continue;
-        usedB[p.b] = 1; usedD[p.d] = true;
+        usedB[p.b] = 1;
         S.cur[p.d] = cur; S.rest[p.d] = rests[p.b]; S.idx[p.d] = p.b; S.found++;
     }
+}
+// arma la tabla de huesos reconocidos de un personaje (una vez, o si cambio el arreglo): primero el esqueleto de la cara
+// (nodo + 0xA0, si personajes.cpp ya conoce el nodo de este esqueleto), despues el del cuerpo (sk_head / sk_neck)
+static bool Build(Skel& S, const void* skel) {
+    S = Skel(); S.skel = skel;
+    if (!LooksSkel(skel, &S.bones, &S.n)) return false;
+    CharInfo ci[kCharSlots]; bool alive[kCharSlots] = {};
+    CharSnapshot(ci, alive);
+    void* node = nullptr;
+    for (int i = 0; i < kCharSlots; i++) if (alive[i] && ci[i].skel == skel) { node = ci[i].node; break; }
+    void* face = nullptr;
+    if (node && ReadPtr((const char*)node + 0xA0, face) && face != skel && LooksSkel(face, &S.fbones, &S.fn)) { S.face = face; Match(S, S.fbones, S.fn); }
+    else { S.face = nullptr; S.fbones = nullptr; S.fn = 0; }
+    Match(S, S.bones, S.n);
     S.jawFound = S.cur[D_JAW] && S.cur[D_HEAD] ? 1 : 0;
     return true;
 }
@@ -182,7 +222,7 @@ void ExprBonesFrame(const void* skel) {
     S->lastFrame = fr;
     if (!S->jawFound) {
         // el arreglo pudo cambiar (otro modelo en el mismo esqueleto): se vuelve a armar cada ~2 s
-        if (S->rebuilds < 30 && (fr % 120) == 0) { Build(*S, skel); S->rebuilds++; }
+        if (S->rebuilds < 60 && (fr % 60) == 0) { Build(*S, skel); S->rebuilds++; }
         if (!S->jawFound) { s_noJaw.fetch_add(1, std::memory_order_relaxed); return; }
     }
     Xf jc; if (!ReadXf(S->cur[D_JAW], jc)) { Build(*S, skel); S->rebuilds++; return; }
@@ -297,20 +337,25 @@ void ExprBonesPresent() {
     const int calls = s_calls.exchange(0), ap = s_applied.exchange(0), nj = s_noJaw.exchange(0), bw = s_badWrite.exchange(0);
     if (!calls) return;
     static int dumped = 0;
-    if (dumped < 2) for (int i = 0; i < s_nSk && dumped < 2; i++) if (s_sk[i].n > 0 && fr - s_sk[i].lastFrame < 600) { Dump(s_sk[i]); dumped++; }
+    if (dumped < 0) for (int i = 0; i < s_nSk && dumped < 2; i++) if (s_sk[i].n > 0 && fr - s_sk[i].lastFrame < 600) { Dump(s_sk[i]); dumped++; }
     if (s_logs < 40) {
         char l[1200]; int k = snprintf(l, sizeof l, "boca por huesos: %d pasos por el cuello, %d giros escritos, %d sin mandibula, %d escrituras fallidas; esqueletos:", calls, ap, nj, bw);
         for (int i = 0; i < s_nSk && k < (int)sizeof l - 120; i++) {
             Skel& S = s_sk[i];
             if (fr - S.lastFrame > 600) continue;
-            if (S.angN) k += snprintf(l + k, sizeof l - k, " %p (%d huesos de cara de %d, mandibula %s, gira %.1f..%.1f grados)", S.skel, S.found, S.n, S.jawFound ? "si" : "NO", S.angMin, S.angMax);
-            else k += snprintf(l + k, sizeof l - k, " %p (%d huesos de cara de %d, mandibula %s)", S.skel, S.found, S.n, S.jawFound ? "si" : "NO");
+            if (S.angN) k += snprintf(l + k, sizeof l - k, " %p (cara %p %d huesos, %d reconocidos, mandibula %s, gira %.1f..%.1f grados)", S.skel, S.face, S.fn, S.found, S.jawFound ? "si" : "NO", S.angMin, S.angMax);
+            else k += snprintf(l + k, sizeof l - k, " %p (cara %p %d huesos, %d reconocidos, mandibula %s)", S.skel, S.face, S.fn, S.found, S.jawFound ? "si" : "NO");
             S.angMin = 1e9f; S.angMax = -1e9f; S.angN = 0;
             if (!S.logged && S.found) {   // una vez por esqueleto: que hueso se reconocio (indice en el arreglo)
                 S.logged = true;
-                char m[900]; int j = snprintf(m, sizeof m, "boca por huesos: esqueleto %p huesos reconocidos:", S.skel);
+                char m[1500]; int j = snprintf(m, sizeof m, "boca por huesos: esqueleto %p huesos reconocidos:", S.skel);
                 for (int d = 0; d < kND && j < (int)sizeof m - 40; d++) if (S.cur[d]) j += snprintf(m + j, sizeof m - j, " %s=%d", kDef[d].name, S.idx[d]);
                 Log("%s", m);
+                if (S.face) {   // todos los nombres del esqueleto de la cara (una vez): para la pose facial propia
+                    j = snprintf(m, sizeof m, "boca por huesos: esqueleto de la cara %p (%d huesos):", S.face, S.fn);
+                    for (int b = 0; b < S.fn && j < (int)sizeof m - 70; b++) { char nm[64]; Xf r; const char* bone = S.fbones + (size_t)b * 0xc0; if (!BoneName(bone, nm, sizeof nm)) snprintf(nm, sizeof nm, "?"); if (ReadXf(bone + 0x40, r)) j += snprintf(m + j, sizeof m - j, " %d:%s(%.3f %.3f %.3f)", b, nm, r.t[0], r.t[1], r.t[2]); else j += snprintf(m + j, sizeof m - j, " %d:%s", b, nm); }
+                    Log("%s", m);
+                }
             }
         }
         Log("%s", l); s_logs++;
