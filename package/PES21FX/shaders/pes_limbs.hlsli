@@ -80,7 +80,7 @@ float PesArmTwistPush(uint vid, uint4 bi, float4 bw, bool cur) {
 // se levanta en un bulto localizado (no todo el brazo): biceps con el codo doblado (pico), braquiorradial arriba del antebrazo
 // con el codo doblado, flexores del antebrazo con el esfuerzo, triceps con el brazo estirado y esfuerzo, deltoides con el brazo
 // levantado. Centros medidos en arm.fmdl de TorsoBody en reposo (brazo izquierdo; el derecho se espeja en x), campana alargada
-// a lo largo del brazo. Empuja por la normal ya deformada (no toca el skinning). Tope 7 mm. x263 contraccion (0 = apagado).
+// a lo largo del brazo. Empuja por la normal ya deformada (no toca el skinning). Tope 7 mm por unidad de x263 contraccion (0 = apagado).
 float PesBulge(float3 r, float3 c, float3 ax, float sa, float sp) {
     float3 d = r - c; float al = dot(d, ax); float3 pp = d - al * ax;
     return exp(-(al * al) / (sa * sa) - dot(pp, pp) / (sp * sp));
@@ -115,7 +115,7 @@ float PesArmBulge(uint vid, float3 rest) {
     b += 0.0030 * max(eff, fury) * saturate(2.0 * Wv.y) * PesBulge(rp, float3(0.4194, 1.2052, 0.0586), ax, 0.040, 0.022);             // flexores (apretar)
     b += 0.0028 * max((1.0 - fl) * eff, 0.6 * fury) * PesBulge(rp, float3(0.3295, 1.3274, -0.0145), ax, 0.038, 0.024);                // triceps
     b += 0.0030 * max(up, fury) * PesBulge(rp, float3(0.3168, 1.3769, 0.0157), ax, 0.032, 0.032);                                     // deltoides (brazo arriba o furia)
-    return min(b * kc, 0.007);
+    return min(b, 0.007) * kc;   // tope 7 mm con x263 = 1 (el doble con 2)
 }
 
 // (02/11) actCode: lo que hace el brazo para los grupos musculares del PS (doblez del codo, brazo arriba, esfuerzo; 0..7 cada uno),
