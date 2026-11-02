@@ -290,6 +290,34 @@ void main(
       lbVM = saturate(lbVein * lv.z);
     }
   }
+  float jsCav = 0.0, jsLift = 0.0;
+  {   // (02/11 g) piel de las articulaciones segun la pose (Agustin: "el codo no se ve igual al doblarse que al estar estirado" y
+      // "lo mismo con las manos"). tools/fox/torso/joint_skin.py deja en w de pesVeins (t29) la profundidad de los pliegues en
+      // texeles: w > 0.5 atras / dorso (piel floja: se ven con la articulacion estirada y se van al doblar), w < 0.5 adelante / palma
+      // (se hunden al doblar). La pendiente sale de 4 lecturas a un texel. El VS manda el doblez: codo en v1.z = 7 + acciones / 1200
+      // (0..511, 0..7 el codo) y la mano 7 + (520 + cierre 0..7) / 1200. El codo sigue al slider "Codos" (w166).
+    uint jvW = 0, jvH = 0; pesVeins.GetDimensions(jvW, jvH);
+    if (lbOn && jvW > 0) {
+      float jQ = round((v1.z - 7.0) * 1200.0);
+      bool jHand = jQ > 515.5;
+      float jB = jHand ? saturate((jQ - 520.0) / 7.0) : fmod(jQ, 8.0) / 7.0;
+      float jK = jHand ? 1.0 : clamp(IniParams.Load(int2(166,0)).w, 0.7, 1.5);
+      float kb = (1.0 - 0.85 * jB) * jK, kf = (0.35 + 0.65 * jB) * jK;
+      float2 jd = float2(1.0 / jvW, 1.0 / jvH);
+      float4 jw = float4(pesVeins.SampleBias(g_samplerLinear_Clamp_s, v2.xy + float2(jd.x, 0.0), bBN).w,
+                         pesVeins.SampleBias(g_samplerLinear_Clamp_s, v2.xy - float2(jd.x, 0.0), bBN).w,
+                         pesVeins.SampleBias(g_samplerLinear_Clamp_s, v2.xy + float2(0.0, jd.y), bBN).w,
+                         pesVeins.SampleBias(g_samplerLinear_Clamp_s, v2.xy - float2(0.0, jd.y), bBN).w) - 0.5;
+      float4 jh = (kb * max(jw, 0.0) + kf * max(-jw, 0.0)) * (2.0 * 2.0);   // profundidad (texeles, KQ = 2 en joint_skin.py) con la pose;
+      // la pendiente del marco tangente: +x con +u, +y con -v (medido en el horneado)
+      float2 js = float2((jh.x - jh.y), -(jh.z - jh.w)) * (0.5 * 1.8);
+      r2.xy += clamp(js, -0.45, 0.45);
+      float l2 = dot(r2.xy, r2.xy); if (l2 > 0.94) r2.xy *= rsqrt(l2 / 0.94);
+      jsCav = saturate(0.25 * dot(jh, float4(1, 1, 1, 1)) / (2.0 * 2.0) * 2.2);   // fondo del pliegue: mas oscuro
+      float jl = pesVeins.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN + 5.0).w - 0.5;
+      jsLift = saturate(jl * 14.0) * jB * jK;   // doblado: la piel estirada sobre el hueso (punta del codo, nudillos) mas clara
+    }
+  }
   float anatCav = 0.0;
   {   // (02/11) grupos musculares del brazo (Agustin: "mejor definicion del grupo de musculos"): las separaciones entre cabezas y
       // grupos (deltoides, biceps, herradura del triceps, braquiorradial, flexores / extensores, tendones de la muneca) que la malla
@@ -466,6 +494,8 @@ void main(
     }
   }
   if (lbVM > 0.001) r2.yzw *= lerp(float3(1.0, 1.0, 1.0), float3(0.86, 0.91, 0.99), lbVM * 0.6);
+  if (jsCav > 0.001) r2.yzw *= lerp(float3(1.0, 1.0, 1.0), float3(0.84, 0.80, 0.80), jsCav * 0.6);   // (02/11 g) pliegue de la articulacion
+  if (jsLift > 0.001) r2.yzw = lerp(r2.yzw, r2.yzw * float3(1.06, 1.04, 1.05), saturate(jsLift));    // (02/11 g) piel estirada sobre el hueso
   if (anatCav > 0.001) r2.yzw *= lerp(float3(1.0, 1.0, 1.0), float3(0.90, 0.86, 0.85), anatCav * 0.7);   // (02/11) surco entre musculos: un poco mas oscuro y calido   // (26/10, v12.7) la vena: un poco mas oscura y fria
   if (vrWr > 0.001 && vrTm > 0.001 && v2.y < 0.5) {   // (26/10) estrias del robusto: un poco mas claras (blanquecinas)
     uint vsW = 0, vsH = 0; pesVarStr.GetDimensions(vsW, vsH);

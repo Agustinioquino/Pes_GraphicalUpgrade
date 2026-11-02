@@ -88,11 +88,18 @@ float PesBulge(float3 r, float3 c, float3 ax, float sa, float sp) {
 float PesArmBulge(uint vid, float3 rest) {
     float4 L5 = IniParams.Load(int2(305, 0)), M3 = IniParams.Load(int2(263, 0));
     float kc = clamp(M3.x, 0.0, 2.0);
-    if (L5.x < 0.5 || kc <= 0.0) return 0.0;
+    if (L5.x < 0.5) return 0.0;
     uint w = 0, h = 0; g_handData.GetDimensions(w, h);
     if (h != 2 || vid >= w) return 0.0;
     float4 H0 = g_handData.Load(int3(0, 0, 0));
     if ((int)round(H0.x) != 1) return 0.0;
+    // (02/11 g) Agustin: "el slider de codo modifica mucha area y no la punta del codo exactamente". El slider "Codos" (w166) ya no
+    // escala el hueso dsk_elbow (musculo.cpp, con x305): aca agranda (o achica) solo la punta, el olecranon, siempre (sin x263)
+    float kE = clamp(IniParams.Load(int2(166, 0)).w, 0.7, 1.5);
+    float3 rpE = float3(abs(rest.x), rest.y, rest.z);
+    const float3 axE = float3(0.7772, -0.6253, 0.0699);
+    float bS = 0.0100 * (kE - 1.0) * PesBulge(rpE, float3(0.3982, 1.2654, -0.0085), axE, 0.017, 0.014);
+    if (kc <= 0.0) return bS;
     bool left = rest.x > 0.0;
     float4 S = g_handData.Load(int3(left ? 1 : 2, 0, 0));
     float3 Xu = g_handData.Load(int3(left ? 3 : 5, 0, 0)).xyz, Xl = g_handData.Load(int3(left ? 4 : 6, 0, 0)).xyz;
@@ -117,10 +124,10 @@ float PesArmBulge(uint vid, float3 rest) {
     b += 0.0030 * max(up, fury) * PesBulge(rp, float3(0.3168, 1.3769, 0.0157), ax, 0.032, 0.032);                                     // deltoides (brazo arriba o furia)
     // (02/11 f, Agustin: "al doblarse el antebrazo hacia el biceps el codo deberia notarse mas") el olecranon (la punta del codo)
     // sobresale con la flexion (la piel se estira sobre el hueso) y el pliegue de adentro del codo se hunde un poco
-    float kE = clamp(IniParams.Load(int2(166, 0)).w, 0.7, 1.5);   // slider "Codos" (w166): tambien cuanto crece al doblar
-    b += 0.0060 * fl * kE * kE * PesBulge(rp, float3(0.3982, 1.2654, -0.0085), ax, 0.020, 0.016);   // punta del codo: crece hacia atras
+    // slider "Codos" (kE, arriba): tambien cuanto crece al doblar
+    b += 0.0084 * fl * kE * kE * PesBulge(rp, float3(0.3982, 1.2654, -0.0085), ax, 0.020, 0.016);   // punta del codo: crece hacia atras (02/11 g: x1.4, Agustin)
     b -= 0.0015 * fl * PesBulge(rp, float3(0.3857, 1.2718, 0.0567), ax, 0.014, 0.012);    // pliegue del codo
-    return min(b, 0.007) * kc;   // tope 7 mm con x263 = 1 (el doble con 2)
+    return min(b, 0.0095) * kc + bS;   // tope 9.5 mm con x263 = 1 (el doble con 2; era 7, sino el codo x1.4 no entraba)
 }
 
 // (02/11 e) Agustin: "que la deformacion tenga un poco de inercia". La carne del brazo (vientres del biceps, triceps y antebrazo)
@@ -161,6 +168,7 @@ bool PesLimbOut(bool handDone, uint vid, float3 rest, out float defB, out float 
     if (handDone) {   // puno apretado: las venas del dorso
         float cv = 0.25 * (PesFingerCurl(1) + PesFingerCurl(2) + PesFingerCurl(3) + PesFingerCurl(4));
         veinB = smoothstep(0.55, 0.95, cv) * max(L5.w, 0.0);
+        actCode = 520.0 + round(saturate(cv) * 7.0);   // (02/11 g) mano: 520 + cierre medio de los 4 dedos (0..7); el brazo usa 0..511
         return true;
     }
     if (h != 2 || vid >= w) return false;
