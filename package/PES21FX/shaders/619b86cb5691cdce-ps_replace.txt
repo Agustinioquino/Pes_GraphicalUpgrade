@@ -781,6 +781,10 @@ void main(
   if (cmpOn && AOP.w > 0.5) {
     float3 diffC = r7.xyz * r2.xyz;
     float3 specC = r1.xyz;
+    // (02/11) pasto a la sombra del estadio: el reflejo del cielo en las gotas y puntas (rocio x334 / x329 bajan la rugosidad en el
+    // G-buffer) no se atenuaba y quedaban puntos blancos dentro de la sombra (captura de Agustin 10:25 PC). Bajo el techo o la tribuna
+    // se ve mucho menos cielo: el reflejo baja al 40 % donde no da el sol
+    if (tyC == 3) specC *= lerp(0.4, 1.0, saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x));
     float aoK = lerp(1.0, aoRaw, saturate(AOP.z));
     float3 alb = saturate(r7.xyz);
     float3 ma = 2.0404 * alb - 0.3324, mb = -4.7951 * alb + 0.6417, mc = 2.7552 * alb + 0.6903;
