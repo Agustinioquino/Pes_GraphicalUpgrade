@@ -117,7 +117,8 @@ float PesArmBulge(uint vid, float3 rest) {
     b += 0.0030 * max(up, fury) * PesBulge(rp, float3(0.3168, 1.3769, 0.0157), ax, 0.032, 0.032);                                     // deltoides (brazo arriba o furia)
     // (02/11 f, Agustin: "al doblarse el antebrazo hacia el biceps el codo deberia notarse mas") el olecranon (la punta del codo)
     // sobresale con la flexion (la piel se estira sobre el hueso) y el pliegue de adentro del codo se hunde un poco
-    b += 0.0060 * fl * PesBulge(rp, float3(0.3982, 1.2654, -0.0085), ax, 0.020, 0.016);   // punta del codo: crece hacia atras
+    float kE = clamp(IniParams.Load(int2(166, 0)).w, 0.7, 1.5);   // slider "Codos" (w166): tambien cuanto crece al doblar
+    b += 0.0060 * fl * kE * kE * PesBulge(rp, float3(0.3982, 1.2654, -0.0085), ax, 0.020, 0.016);   // punta del codo: crece hacia atras
     b -= 0.0015 * fl * PesBulge(rp, float3(0.3857, 1.2718, 0.0567), ax, 0.014, 0.012);    // pliegue del codo
     return min(b, 0.007) * kc;   // tope 7 mm con x263 = 1 (el doble con 2)
 }
