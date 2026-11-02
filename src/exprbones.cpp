@@ -347,10 +347,17 @@ static float BlinkCurve(float t, float seed) {
 static bool ReadBase(Skel& S, int d, Xf& x) {
     if (!ReadXf(S.cur[d], x)) return false;
     if (S.wHave[d]) {
+        // (02/11 c) el cuaternion y la traslacion se comparan POR SEPARADO: el juego puede reescribir solo el giro de un hueso y
+        // dejar la traslacion que escribimos (o al reves); antes se tomaba esa traslacion como base y se volvia a correr cada
+        // cuadro hasta que el juego la reponia: vaiven = la barba y los parpados vibraban (log d116b77: ~6 de 15 huesos por
+        // paso se leian con lo del mod todavia puesto)
         const float* w = S.wq[d]; const float* u = S.wt[d];
-        const float dd = fabsf(x.q[0] - w[0]) + fabsf(x.q[1] - w[1]) + fabsf(x.q[2] - w[2]) + fabsf(x.q[3] - w[3])
-                       + fabsf(x.t[0] - u[0]) + fabsf(x.t[1] - u[1]) + fabsf(x.t[2] - u[2]);
-        if (dd < 2e-6f) { memcpy(x.q, S.bq[d], sizeof S.bq[d]); memcpy(x.t, S.bt[d], sizeof S.bt[d]); S.reused++; }
+        const float dq = fabsf(x.q[0] - w[0]) + fabsf(x.q[1] - w[1]) + fabsf(x.q[2] - w[2]) + fabsf(x.q[3] - w[3]);
+        const float dt = fabsf(x.t[0] - u[0]) + fabsf(x.t[1] - u[1]) + fabsf(x.t[2] - u[2]);
+        bool hit = false;
+        if (dq < 2e-6f) { memcpy(x.q, S.bq[d], sizeof S.bq[d]); hit = true; }
+        if (dt < 1e-7f + 1e-6f * (fabsf(u[0]) + fabsf(u[1]) + fabsf(u[2]))) { memcpy(x.t, S.bt[d], sizeof S.bt[d]); hit = true; }
+        if (hit) S.reused++;
     }
     return true;
 }
@@ -371,9 +378,9 @@ static bool RotInPlace(Skel& S, int d, const float* r) {
 }
 static void AxisAngle(const float* ax, float a, float* q) { const float s = sinf(0.5f * a); q[0] = ax[0] * s; q[1] = ax[1] * s; q[2] = ax[2] * s; q[3] = cosf(0.5f * a); }
 // posicion de un hueso en los ejes de la cabeza, actual menos reposo (metros): cuanto lo movio la animacion facial
-static float HeadSpaceMove(const Skel& S, int d, const Xf& hc, const float* hrInv) {
+static float HeadSpaceMove(Skel& S, int d, const Xf& hc, const float* hrInv) {
     if (!S.cur[d]) return 0.0f;
-    Xf x; if (!ReadXf(S.cur[d], x)) return 0.0f;
+    Xf x; if (!ReadBase(S, d, x)) return 0.0f;   // sin lo que haya dejado puesto el mod
     const float v[3] = { x.t[0] - hc.t[0], x.t[1] - hc.t[1], x.t[2] - hc.t[2] }; float r[3]; QRot(hrInv, v, r);
     const Xf& R = S.rest[d]; const Xf& H = S.rest[D_HEAD];
     const float dx = r[0] - (R.t[0] - H.t[0]), dy = r[1] - (R.t[1] - H.t[1]), dz = r[2] - (R.t[2] - H.t[2]);
