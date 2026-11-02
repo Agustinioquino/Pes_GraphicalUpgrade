@@ -175,6 +175,9 @@ struct Skel {
     float wq[kND][4] = {}, wt[kND][3] = {}, bq[kND][4] = {}, bt[kND][3] = {}; bool wHave[kND] = {};
     int reused = 0;
     float seed = 0.37f; bool seedHave = false;   // (02/11 c) semilla de la mirada, la misma que el VS del globo (PesExprSeed)
+    // (02/11 e) sk_head del esqueleto del CUERPO (175 huesos) para la camara: el sk_head del esqueleto de la cara tiene la
+    // transformacion actual en (0, 0, 0) (no es espacio del modelo: log 12:46 PC), el del cuerpo si lo es
+    void* bHead = nullptr; int bHeadIdx = -1; Xf bHeadRest = {};
 };
 static const int kMaxSkel = 48;
 static std::mutex s_mx;
@@ -250,6 +253,14 @@ static bool Build(Skel& S, const void* skel) {
     if (node && ReadPtr((const char*)node + 0xA0, face) && face != skel && LooksSkel(face, &S.fbones, &S.fn)) { S.face = face; Match(S, S.fbones, S.fn); }
     else { S.face = nullptr; S.fbones = nullptr; S.fn = 0; }
     Match(S, S.bones, S.n);
+    for (int b = 0; b < S.n && !S.bHead; b++) {   // sk_head del cuerpo (hash FF3D8D77 o nombre)
+        const char* bone = S.bones + (size_t)b * 0xc0;
+        uint32_t hs = 0; char nm[64];
+        const bool isHead = (SafeCopy(&hs, bone + 0x10, 4) && hs == 0xFF3D8D77u) || (BoneName(bone, nm, sizeof nm) && !strcmp(nm, "sk_head"));
+        if (!isHead) continue;
+        void* cur = nullptr; Xf r;
+        if (ReadXf(bone + 0x40, r) && ReadPtr(bone + 0x18, cur)) { S.bHead = cur; S.bHeadIdx = b; S.bHeadRest = r; }
+    }
     S.jawFound = S.cur[D_JAW] && S.cur[D_HEAD] ? 1 : 0;
     return true;
 }
@@ -279,6 +290,10 @@ static bool StillValid(const Skel& S) {
     void* arr = nullptr; int n = 0;
     if (!ReadPtr((const char*)S.face + 0x28, arr) || (const char*)arr != S.fbones || !SafeCopy(&n, (const char*)S.face + 0x30, 4) || n != S.fn) return false;
     if (!ReadPtr((const char*)S.skel + 0x28, arr) || (const char*)arr != S.bones || !SafeCopy(&n, (const char*)S.skel + 0x30, 4) || n != S.n) return false;
+    if (S.bHead) {
+        void* cur = nullptr; int ix = -1; const char* bone = S.bones + (size_t)S.bHeadIdx * 0xc0;
+        if (!ReadPtr(bone + 0x18, cur) || cur != S.bHead || !SafeCopy(&ix, bone, 4) || ix != S.bHeadIdx) return false;
+    }
     for (int d = 0; d < kND; d++) {
         if (!S.cur[d]) continue;
         const char* bone = S.src[d] + (size_t)S.idx[d] * 0xc0;
@@ -498,9 +513,14 @@ std::atomic<int> s_hpOk{0}, s_hpFail{0};
 }
 static bool Norm3(float* v) { const float l = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); if (!(l > 1e-4f)) return false; v[0] /= l; v[1] /= l; v[2] /= l; return true; }
 static void PublishHead(const Skel& S) {
-    if (!S.node || !S.cur[D_HEAD]) return;
-    Xf hc; if (!ReadXf(S.cur[D_HEAD], hc)) { s_hpFail.fetch_add(1, std::memory_order_relaxed); return; }
-    float c4[4], hr[4]; QConj(S.rest[D_HEAD].q, c4); QMul(hc.q, c4, hr);   // giro de la cabeza respecto del reposo (el reposo mira a +z)
+    if (!S.node || !S.bHead) { s_hpFail.fetch_add(1, std::memory_order_relaxed); return; }
+    Xf hc; if (!ReadXf(S.bHead, hc)) { s_hpFail.fetch_add(1, std::memory_order_relaxed); return; }
+    // la cabeza de un personaje (de pie, sentado o tirado) nunca esta en el origen del modelo; si lo esta, no es espacio del modelo
+    if (fabsf(hc.t[0]) + fabsf(hc.t[1]) + fabsf(hc.t[2]) < 0.05f) {
+        if (s_hpFail.fetch_add(1, std::memory_order_relaxed) == 0) Log("camara libre: sk_head del cuerpo en el origen del modelo: sin dato de la cara");
+        return;
+    }
+    float c4[4], hr[4]; QConj(S.bHeadRest.q, c4); QMul(hc.q, c4, hr);   // giro de la cabeza respecto del reposo (el reposo mira a +z)
     // centro de la cara respecto de sk_head en el reposo (face_rig: sk_head 0 / 1.640 / 0.054, ojos 1.697 / 0.138, labios ~1.63)
     static const float kOff[3] = { 0.0f, 0.030f, 0.080f }, Z[3] = { 0.0f, 0.0f, 1.0f }, Y[3] = { 0.0f, 1.0f, 0.0f };
     float o[3], fm[3], um[3]; QRot(hr, kOff, o); QRot(hr, Z, fm); QRot(hr, Y, um);
@@ -518,6 +538,13 @@ static void PublishHead(const Skel& S) {
     if (s_hpOk.fetch_add(1, std::memory_order_relaxed) == 0)
         Log("camara libre: cara en el mundo desde el esqueleto (%.2f, %.2f, %.2f), frente (%.2f, %.2f, %.2f), arriba (%.2f, %.2f, %.2f); sk_head en el modelo (%.3f, %.3f, %.3f)",
             h.c[0], h.c[1], h.c[2], h.fw[0], h.fw[1], h.fw[2], h.up[0], h.up[1], h.up[2], hc.t[0], hc.t[1], hc.t[2]);
+    {   // (02/11 e) cada ~10 s mientras se sigue: para ver si la cabeza se mueve con la animacion
+        static double s_lt = 0; static int s_ln = 0; const double now = h.t;
+        if (now - s_lt > 10.0 && s_ln < 30) { s_lt = now; s_ln++;
+            Log("camara libre: cara (%.3f, %.3f, %.3f) frente (%.2f, %.2f, %.2f) arriba (%.2f, %.2f, %.2f); sk_head cuerpo #%d modelo (%.3f, %.3f, %.3f) q (%.3f, %.3f, %.3f, %.3f), reposo (%.3f, %.3f, %.3f)",
+                h.c[0], h.c[1], h.c[2], h.fw[0], h.fw[1], h.fw[2], h.up[0], h.up[1], h.up[2], S.bHeadIdx, hc.t[0], hc.t[1], hc.t[2], hc.q[0], hc.q[1], hc.q[2], hc.q[3],
+                S.bHeadRest.t[0], S.bHeadRest.t[1], S.bHeadRest.t[2]); }
+    }
 }
 // la cara a seguir: la del personaje fijado (*lock) si sigue al dia; si no, la que esta mas al centro de la vista de la camara
 bool ExprFaceFrame(const float* camPos, const float* camFwd, const void** lock, float c[3], float fw[3], float up[3], double* age) {
