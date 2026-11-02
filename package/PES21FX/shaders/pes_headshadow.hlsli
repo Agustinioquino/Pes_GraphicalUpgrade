@@ -9,7 +9,11 @@
 #define PES_HEADSHADOW_HLSLI
 Texture2D<float> PESHeadShadow : register(t30);
 
-float PESHeadShadowAt(float3 Pv, float nDotL, SamplerState smp) {
+// (02/11) vis = visibilidad del atlas; inBox = 1 dentro de la caja de alguna cabeza (con el fundido del borde). Dentro de la caja la
+// sombra del mapa del estadio se REEMPLAZA por la del atlas (PESHeadShadowMix): el mapa tiene 2 cm por texel y con sombra_parche 0
+// gira con la camara, y en los primeros planos dejaba bloques oscuros corridos en el menton y el cuello (capturas de Agustin 02/11)
+float PESHeadShadowAt2(float3 Pv, float nDotL, SamplerState smp, out float inBox) {
+  inBox = 0.0;
   float4 U = IniParams.Load(int2(309, 0));
   float4 I = IniParams.Load(int2(310, 0));
   int n = (int)(I.x + 0.5);
@@ -40,7 +44,15 @@ float PESHeadShadowAt(float3 Pv, float nDotL, SamplerState smp) {
     lit /= 16.0;
     float edge = 1.0 - saturate((max(abs(x), abs(y)) - 0.85) / 0.15);   // fundido en el borde de la caja
     vis = min(vis, lerp(1.0, lit, edge));
+    inBox = max(inBox, edge);
   }
   return lerp(1.0, vis, saturate(U.y));
+}
+float PESHeadShadowAt(float3 Pv, float nDotL, SamplerState smp) { float ib; return PESHeadShadowAt2(Pv, nDotL, smp, ib); }
+// sombra final del sol (rgb) a partir de la del mapa del estadio: fuera de la caja mapa x atlas, dentro solo el atlas
+float3 PESHeadShadowMix(float3 mapShadow, float3 Pv, float nDotL, SamplerState smp) {
+  float ib; float v = PESHeadShadowAt2(Pv, nDotL, smp, ib);
+  float k = ib * saturate(IniParams.Load(int2(309, 0)).y);
+  return lerp(mapShadow * v, v.xxx, k);
 }
 #endif

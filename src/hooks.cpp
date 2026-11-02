@@ -1292,7 +1292,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
 static ID3D11Buffer* s_casterStage = nullptr; static UINT s_casterStageSize = 0; static std::atomic<int> s_casterWant{0};
 static int s_casterLogN = 0; static double s_casterNext = 0; static uint64_t s_casterVS = 0; static float s_casterVp[2] = {};
 static void ShadowCasterProbe(ID3D11DeviceContext* c) {
-    if (s_casterWant.load(std::memory_order_relaxed) != 1 || c != g_dev.imm) return;
+    if (s_casterWant.load(std::memory_order_relaxed) != 1 || !g_dev.dev) return;   // (02/11 b) tambien en contextos diferidos: la pasada de sombras no va por el inmediato
     D3D11_VIEWPORT vp; UINT n = 1; c->RSGetViewports(&n, &vp);
     if (n < 1 || vp.TopLeftX > 0.5f || vp.TopLeftY > 0.5f) return;
     ID3D11Buffer* b = nullptr; c->VSGetConstantBuffers(2, 1, &b); if (!b) return;
@@ -1303,6 +1303,7 @@ static void ShadowCasterProbe(ID3D11DeviceContext* c) {
         if (FAILED(g_dev.dev->CreateBuffer(&sd, nullptr, &s_casterStage))) { b->Release(); s_casterWant = 0; return; }
         s_casterStageSize = bd.ByteWidth;
     }
+    if (s_casterWant.exchange(3) != 1) { b->Release(); return; }   // un solo contexto toma la copia
     c->CopyResource(s_casterStage, b); b->Release();
     CtxState& cs = Ctx(c); s_casterVS = cs.vs ? cs.vs->hash : 0; s_casterVp[0] = vp.Width; s_casterVp[1] = vp.Height;
     s_casterWant = 2;
@@ -1313,7 +1314,7 @@ void ShadowCasterLogPresent() {
     if (w == 0) { double t = Now(); if (t >= s_casterNext) { s_casterNext = t + 15.0; s_casterWant = 1; } return; }
     if (w != 2 || !s_casterStage) return;
     D3D11_MAPPED_SUBRESOURCE m;
-    if (FAILED(g_dev.imm->Map(s_casterStage, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) return;
+    if (FAILED(g_dev.imm->Map(s_casterStage, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) return;   // todavia no ejecuto: se reintenta el proximo segundo
     float f[48] = {}; memcpy(f, m.pData, (std::min)((size_t)s_casterStageSize, sizeof f)); g_dev.imm->Unmap(s_casterStage, 0);
     s_casterWant = 0; s_casterLogN++;
     Log("sombra jugadores: VS %016llX cascada %.0fx%.0f, b2 %u bytes | c0..c3 %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f",
