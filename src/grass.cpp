@@ -378,7 +378,10 @@ static bool EnsureGPU() {
 static std::mutex s_bsMx;
 static thread_local bool t_gameGB = false;   // (26/10 g) GrassOnDraw: el dibujo en curso es el pasto del juego en el G-buffer
 static thread_local bool t_skipGame = false; // (2/11) x178: el dibujo del pasto propio del juego se omite (el mod cubre hasta la camara)
-bool GrassSkipGameDraw() { return t_skipGame; }
+// (2/11 b) la bandera se consume al leerla: GrassOnDraw solo corre en los dibujos con el VS del pasto, asi que si quedaba puesta
+// se omitian TODOS los dibujos siguientes del cuadro (cancha y jugadores desaparecian, imagen blanca/gris con siluetas).
+bool GrassSkipGameDraw() { const bool s = t_skipGame; t_skipGame = false; return s; }
+void GrassClearSkip() { t_skipGame = false; }
 static ID3D11DepthStencilState* s_baseDss = nullptr; static UINT s_baseSref = 0; static bool s_baseDssOk = false;   // ultimo dibujo de la base
 static ID3D11Device* s_hyDev = nullptr;
 // caches chicos (4 entradas cada uno): la emision del mod y el pasto del juego piden combinaciones distintas en el mismo cuadro
