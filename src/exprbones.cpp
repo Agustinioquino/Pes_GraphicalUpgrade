@@ -394,7 +394,7 @@ static float HeadSpaceMove(Skel& S, int d, const Xf& hc, const float* hrInv) {
     const float dx = r[0] - (R.t[0] - H.t[0]), dy = r[1] - (R.t[1] - H.t[1]), dz = r[2] - (R.t[2] - H.t[2]);
     return sqrtf(dx * dx + dy * dy + dz * dz);
 }
-static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
+[[maybe_unused]] static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
     const float amp = std::clamp(g_cfg.live[347][3], 0.0f, 2.0f), blinkAmt = std::clamp(g_cfg.live[342][3], 0.0f, 1.0f);
     // (02/11 c, Agustin con video: "por shader los ojos vivos funcionan bien, con los huesos no se mueven y vibran") el globo NO
     // se escribe: el juego vuelve a poner el hueso del ojo despues del Eval del cuello (control propio de la mirada), asi que lo
@@ -537,7 +537,11 @@ void ExprBonesFrame(const void* skel) {
     float hrInv[4]; QConj(hr, hrInv);
     const float sm = Smile(*S, hc, hrInv);
     const float openAll = std::clamp((std::max)(o, 0.0f) + SStep(4.0f, 20.0f, deg), 0.0f, 1.0f);   // boca abierta del mod o del juego (grados)
-    EyesFrame(*S, hc, hr, sm);   // antes de la boca: lee la comisura sin el giro de la mandibula del mod
+    // (02/11 f, Agustin con video 13:06: "los parpados" siguen vibrando con 6969fd2) los parpados por huesos se pelean con el
+    // control de la mirada del juego (que tambien reescribe los parpados despues del Eval, como hacia con skf_eye): vuelven al
+    // shader (PesBlinkApply, que ya sigue la mirada vertical), que andaba sin vibrar. EyesFrame queda para cuando se sepa
+    // escribir despues del juego
+    for (int d = D_LID_TL; d <= D_LID_BR; d++) Release(*S, d);
     Secondary(*S, hr, sm, openAll);
     if (fabsf(o) < 0.001f && teeth < 0.001f) { for (int d = 0; d < 18; d++) if (S->wHave[d]) Release(*S, d); return; }   // slider en 0: la boca vuelve a la del juego
     static const float X[3] = { 1.0f, 0.0f, 0.0f }; float ax[3]; QRot(hr, X, ax);
