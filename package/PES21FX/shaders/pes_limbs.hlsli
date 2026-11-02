@@ -118,6 +118,33 @@ float PesArmBulge(uint vid, float3 rest) {
     return min(b, 0.007) * kc;   // tope 7 mm con x263 = 1 (el doble con 2)
 }
 
+// (02/11 e) Agustin: "que la deformacion tenga un poco de inercia". La carne del brazo (vientres del biceps, triceps y antebrazo)
+// se queda un poco atras cuando el brazo se mueve rapido: corrimiento contra el movimiento del vertice en este cuadro (posicion
+// actual - la del cuadro anterior, menos lo que se movio el hombro: solo el brazo, no el jugador que corre o gira),
+// tope 3 mm, mas en el centro del musculo y nada en codo / hombro / muneca. El rebote despues de frenar necesitaria estado entre
+// cuadros (DLL); esto es solo el arrastre. x263 contraccion (0 = apagado), y la misma cantidad.
+float3 PesArmInertia(uint vid, float3 rest, float3 dpos) {
+    float4 L5 = IniParams.Load(int2(305, 0)), M3 = IniParams.Load(int2(263, 0));
+    float kc = clamp(M3.x, 0.0, 2.0);
+    if (L5.x < 0.5 || kc <= 0.0) return 0.0;
+    uint w = 0, h = 0; g_handData.GetDimensions(w, h);
+    if (h != 2 || vid >= w) return 0.0;
+    if ((int)round(g_handData.Load(int3(0, 0, 0)).x) != 1) return 0.0;
+    float4 Wv = g_handData.Load(int3(vid, 1, 0));
+    float3 rp = float3(abs(rest.x), rest.y, rest.z);
+    const float3 ax = float3(0.7772, -0.6253, 0.0699);
+    float m = saturate(2.0 * Wv.x) * PesBulge(rp, float3(0.3305, 1.3058, 0.0668), ax, 0.045, 0.040)
+            + 0.8 * PesBulge(rp, float3(0.3295, 1.3274, -0.0145), ax, 0.045, 0.035)
+            + 0.6 * saturate(2.0 * Wv.y) * PesBulge(rp, float3(0.4300, 1.2350, 0.0600), ax, 0.050, 0.040);
+    m = saturate(m);
+    // sin el movimiento del hombro (el jugador que corre / gira): solo el brazo respecto del hombro
+    int ib = rest.x > 0.0 ? 0 : 3;   // sk_upperarm_l / _r en la paleta del brazo de TorsoBody
+    dpos -= PesBoneT(PesBone(true, ib)) - PesBoneT(PesBone(false, ib));
+    float dl = length(dpos);
+    if (dl < 1e-5 || m < 0.01) return 0.0;
+    return -(dpos / dl) * min(0.06 * dl, 0.003) * m * kc;
+}
+
 // (02/11) actCode: lo que hace el brazo para los grupos musculares del PS (doblez del codo, brazo arriba, esfuerzo; 0..7 cada uno),
 // empaquetado en un entero 0..511 (igual en todos los vertices de ese brazo: el interpolado no lo cambia)
 bool PesLimbOut(bool handDone, uint vid, float3 rest, out float defB, out float veinB, out float actCode) {
