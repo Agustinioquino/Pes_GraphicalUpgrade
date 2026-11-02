@@ -88,11 +88,16 @@ float PesSS(float a, float b, float x) { float t = saturate((x - a) / (b - a)); 
 // (02/11) a0 / a1: donde empieza y termina el fundido a lo largo del brazo desde la costura del hombro (m). Solo el torso = -4..4 mm
 // (la costura); y320 = 3 "torso, espalda y hombros" = 8..14 cm: el hombro (que en TorsoBody es parte de arm.fmdl) se mete con el
 // torso y el fundido queda tapado por la manga; el cuello igual que "solo el torso"
-float PesTorsoMaskA(float3 v, float a0, float a1) {
+// cuanto de brazo es un punto (1 en el brazo pasado a0..a1 desde la costura del hombro, 0 en el torso)
+float PesArmPart(float3 v, float a0, float a1) {
   float3 p = float3(abs(v.x), v.y, v.z);
   const float3 cA = float3(0.2631, 1.3704, 0.0195), nA = float3(0.7611, -0.6432, -0.0839);
   float3 qa = p - cA; float sA = dot(qa, nA); float rA = length(qa - sA * nA);
-  float arm = PesSS(a0, a1, sA) * (1.0 - PesSS(0.11, 0.13, rA));
+  return PesSS(a0, a1, sA) * (1.0 - PesSS(0.11, 0.13, rA));
+}
+float PesTorsoMaskA(float3 v, float a0, float a1) {
+  float3 p = float3(abs(v.x), v.y, v.z);
+  float arm = PesArmPart(v, a0, a1);
   const float3 cN = float3(0.0, 1.5223, 0.0552), nN = float3(0.0, 0.8564, 0.5163), e2 = float3(0.0, 0.5163, -0.8564);
   float3 qn = p - cN; float sN = dot(qn, nN); float3 wn = qn - sN * nN;
   float lw = max(length(wn), 1e-5); float ct = dot(wn, e2) / lw;          // coseno del angulo alrededor del cuello
@@ -175,13 +180,24 @@ float PesCharShirtType(float3 org) {
 // de las filas 320 / 351 el brazo que se ve debajo de la manga queda angosto. Desde z351 cm del hombro (fundido de 6 cm antes) el
 // brazo no se mete y recupera lo que le saco el fpk; el hombro y la parte alta bajo la manga siguen como estaban (la ropa simulada
 // igual choca con el brazo original, y349). y351 = cuanto (0..1), z351 = desde donde (cm a lo largo del brazo; 0 = 12 cm).
+// (02/11 b) Agustin: con "solo el torso" los brazos igual se achicaban (achicado del fpk 2 mm + fila 351 hasta z351 cm del hombro).
+// Con y320 = 1 el brazo desde 3-8 cm del hombro y con y320 = 3 desde 8-14 cm queda con su tamano original: no se mete y recupera
+// lo del fpk, con o sin camiseta ajustada
+float PesArmKeep(float3 rest) {
+  float4 T = IniParams.Load(int2(320, 0));
+  if (T.w < 0.5) return 0.0;
+  if (T.y > 0.5 && T.y < 1.5) return PesArmPart(rest, 0.03, 0.08);   // junto a la costura el torso esta achicado (axila 14 mm): sin escalon
+  if (T.y > 2.5) return PesArmPart(rest, 0.08, 0.14);
+  return 0.0;
+}
 float PesArmRestore(float3 rest) {
   float4 K = IniParams.Load(int2(351, 0));
-  if (K.y <= 0.0) return 0.0;
+  float keep = PesArmKeep(rest);
+  if (K.y <= 0.0) return keep;
   float3 q = float3(abs(rest.x), rest.y, rest.z);
   float sA = dot(q - float3(0.2631, 1.3704, 0.0195), float3(0.7611, -0.6432, -0.0839));
   float s1 = (K.z > 0.5 ? clamp(K.z, 4.0, 30.0) : 12.0) * 0.01;
-  return saturate(K.y) * smoothstep(s1 - 0.06, s1, sA) * smoothstep(0.17, 0.22, q.x);
+  return max(keep, saturate(K.y) * smoothstep(s1 - 0.06, s1, sA) * smoothstep(0.17, 0.22, q.x));
 }
 // (01/11) fila 351: la camiseta ajustada no la simula el mod de ropa (queda pegada a la animacion, la piel no la puede empujar):
 // en los jugadores con camiseta ajustada el torso, los hombros y el brazo bajo la manga se meten x351 mm mas (mismo fundido que
