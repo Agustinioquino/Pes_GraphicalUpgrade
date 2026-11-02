@@ -559,15 +559,21 @@ static float Smile(Skel& S, const Xf& hc, const float* hrInv) {
         Xf x; if (!ReadBase(S, d, x)) continue;
         const float v[3] = { x.t[0] - hc.t[0], x.t[1] - hc.t[1], x.t[2] - hc.t[2] }; float r[3]; QRot(hrInv, v, r);
         const Xf& R = S.rest[d]; const Xf& H = S.rest[D_HEAD];
-        const float dy = r[1] - (R.t[1] - H.t[1]), dx = (r[0] - (R.t[0] - H.t[0])) * (e == 0 ? 1.0f : -1.0f);
+        // (02/11 p) contra la cara NEUTRA de este jugador (la forma del editor de caras corre la comisura respecto del reposo)
+        const bool nn = S.nN[d] >= 8;
+        const float rx = nn ? S.nT[d][0] : R.t[0] - H.t[0], ry = nn ? S.nT[d][1] : R.t[1] - H.t[1];
+        const float dy = r[1] - ry, dx = (r[0] - rx) * (e == 0 ? 1.0f : -1.0f);
         best = (std::max)(best, std::clamp((dy + 0.5f * dx - 0.0012f) / 0.0045f, 0.0f, 1.0f));   // zona muerta 1.2 mm: la cara quieta del juego no es exacto el reposo
     }
     return best * best * (3.0f - 2.0f * best);
 }
 static void Secondary(Skel& S, const float* hr, float sm, float open) {
-    struct Off { int d; float x, y, z; float k; };   // k: 0 = sonrisa, 1 = boca abierta
+    struct Off { int d; float x, y, z; float k; };   // k: 0 = sonrisa (mejilla), 1 = boca abierta, 2 = sonrisa (surco)
     static const Off kOff[] = {
         { 18,  0.0006f, 0.0018f, 0.0010f, 0 }, { 19, -0.0006f, 0.0018f, 0.0010f, 0 },   // cheek_l / r: pomulo arriba y afuera
+        // (02/11 p, Agustin: "los sliders de musculos que no sean de hueso real no afectan") 348.y surco nasolabial POR HUESOS: con la
+        // sonrisa el hueso del surco sube, va un poco afuera y atras = el pliegue entre la nariz y la comisura se marca
+        { 16,  0.0004f, 0.0012f, -0.0008f, 2 }, { 17, -0.0004f, 0.0012f, -0.0008f, 2 },
         // (02/11 g, Agustin: "parpadean mucho abajo de los ojos") el bajo-ojo (orbicularisoculi_b) ya no sube con la sonrisa: la
         // sonrisa medida en la comisura cambia de un cuadro a otro al hablar / abrir la boca y el bajo-ojo titilaba
         // (02/11 g, Agustin: "los parpados ya no vibran solos pero si cuando la boca se abre") las cejas y el entrecejo que subian
@@ -575,9 +581,10 @@ static void Secondary(Skel& S, const float* hr, float sm, float open) {
         // ceja para saber si la cara esta animada -> con 1.4 mm de mas el parpadeo se prendia y apagaba = parpados vibrando
     };
     const float ks = std::clamp(g_cfg.live[348][0], 0.0f, 2.0f) * sm, ko = std::clamp(g_cfg.live[348][2], 0.0f, 2.0f) * open;
+    const float kn = std::clamp(g_cfg.live[348][1], 0.0f, 2.0f) * sm;
     for (const Off& f : kOff) {
         if (!S.cur[f.d]) continue;
-        const float a = f.k == 0 ? ks : ko;
+        const float a = f.k == 0 ? ks : f.k == 2 ? kn : ko;
         if (a <= 0.001f) { Release(S, f.d); continue; }
         Xf x; if (!Base(S, f.d, x)) continue;
         float nt[3] = { x.t[0], x.t[1], x.t[2] };
@@ -627,11 +634,12 @@ void ExprBonesFrame(const void* skel) {
             const float z = d <= 12 ? Z[3] : d <= 19 ? Z[2] : d <= 25 ? Z[1] : d <= 30 ? Z[0] : 0.0f;
             S->aGain[d] = 1.0f + (E[1] - 1.0f) * std::clamp(z, 0.0f, 3.0f);
         }
-        if (S->ampOn) for (int d = 0; d < D_EYE_L; d++) {
+        for (int d = 0; d < D_EYE_L; d++) {
             if (!S->cur[d]) continue;
             Xf g; if (!ReadBase(*S, d, g)) continue;
             if (S->fresh[d] || !S->bHave[d]) { memcpy(S->bHc[d], hc.t, sizeof S->bHc[d]); memcpy(S->bHr[d], hr, sizeof S->bHr[d]); S->bHave[d] = true; }
-            if (S->fresh[d]) Neutral(*S, d, g);
+            if (S->fresh[d]) Neutral(*S, d, g);   // (02/11 p) la cara neutra se aprende siempre (la usa tambien la sonrisa)
+            if (!S->ampOn) continue;
             Xf x = g; Amp(*S, d, x);
             const float dt = fabsf(x.t[0] - g.t[0]) + fabsf(x.t[1] - g.t[1]) + fabsf(x.t[2] - g.t[2]);
             const float dq = fabsf(x.q[0] - g.q[0]) + fabsf(x.q[1] - g.q[1]) + fabsf(x.q[2] - g.q[2]) + fabsf(x.q[3] - g.q[3]);
