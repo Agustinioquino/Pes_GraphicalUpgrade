@@ -61,7 +61,10 @@ void PesExprApply(float4 p, float3 rest, uint4 I, float4 W, float3 n, float3 t,
   // prendido la zona de la boca no se amplifica (lo del mod ya es el tamano pedido)
   float4 Rb350a = IniParams.Load(int2(350, 0));
   float modOpen = (Rb350a.x > 0.5 && Rb350a.y > 0.5) ? saturate(4.0 * max(max(IniParams.Load(int2(347, 0)).x, 0.45 * Rb350a.z), Rb350a.w)) : 0.0;
-  float4 Zm = float4(Z.xyz, Z.w * (1.0 - modOpen));
+  // (02/11 h) con los parpados por HUESOS (350.y = 2) la zona de los ojos tampoco se amplifica: cada malla lo agrandaba con su
+  // propia paleta y el borde del parpado / las pestanas no quedaban con la piel (mismo problema que el menton)
+  float lidBones = (Rb350a.x > 0.5 && Rb350a.y > 1.5) ? 1.0 : 0.0;
+  float4 Zm = float4(Z.x, Z.y * (1.0 - lidBones), Z.z, Z.w * (1.0 - modOpen));
   float extra = (E.y - 1.0) * PesExprZoneShare(rest, Zm) * face;
   if (abs(extra) < 0.001) return;
   float bigW = saturate(E.w);
