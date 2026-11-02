@@ -259,17 +259,24 @@ static void PitchFlatPresent() {
         float kb = (F[3] > 0.f ? F[3] : 1.0f) * k * onGround;
         { const float kv = std::clamp(g_cfg.live[177][2], 0.f, 2.f); float spd = std::min(dist / dt / 12.f, 1.5f);   // (2/11) rapida: aplasta mas; lenta: menos
           kb *= std::max(0.25f, 1.f + kv * (spd - 0.5f)); }
-        // (2/11) manchas de la pelota (fila 177 x): rodando junta verde del pasto, tierra donde el desgaste ya la peló y cal al cruzar las lineas
+        // (2/11) manchas de la pelota (fila 177 x). Agustin: PROGRESIVAS y MUY SUTILES, con los minutos de partido y segun la humedad de la
+        // cancha; nada por contacto. La pelota solo "recuerda" por donde rueda (promedios lentos de tierra bajo ella y de cruces de cal) y
+        // la mancha crece con el reloj: verde ~ 25 min, tierra ~ 30 min (x2 con cancha humeda), cal ~ 20 min (menos con humedad)
         { const float kS = std::clamp(g_cfg.live[177][0], 0.f, 2.f);
           if (kS > 0.001f) {
-              float roll = (dist > 0.005f && dist < 4.f) ? std::min(dist, 1.5f) * onGround : 0.f;
-              float wearAt = std::clamp(WearCpuAt(s_ball[0], s_ball[2]), 0.f, 1.f), onLine = LineDist(s_ball[0], s_ball[2]) < 0.12f ? 1.f : 0.f;
-              float wet = g_cfg.live[114][0] > 0.5f && g_cfg.live[114][0] < 1.5f ? 1.f : 0.f;
-              s_stain[0] += roll * 0.05f * (1.f - onLine) * (1.f - wearAt) * (1.f + wet);
-              s_stain[1] += roll * 0.09f * wearAt * (1.f + 2.f * wet);
-              s_stain[2] += roll * 0.60f * onLine * (1.f - 0.6f * wet);
-              if (s_ballPrev[1] > 0.4f && onGround > 0.5f) { s_stain[2] *= 0.8f; s_stain[0] *= 0.95f; }   // el pique sacude el polvo
-              s_stain[0] *= expf(-dt / 120.f); s_stain[1] *= expf(-dt / 150.f); s_stain[2] *= expf(-dt / 40.f);
+              static float wearEma = 0.f, lineEma = 0.f;
+              float roll = (dist > 0.005f && dist < 4.f) ? onGround : 0.f;
+              if (roll > 0.f) { float a = std::min(1.f, dt / 20.f);   // promedios de ~20 s de rodado
+                  wearEma += (std::clamp(WearCpuAt(s_ball[0], s_ball[2]), 0.f, 1.f) - wearEma) * a;
+                  lineEma += ((LineDist(s_ball[0], s_ball[2]) < 0.12f ? 1.f : 0.f) - lineEma) * a; }
+              float mins = std::max(g_cfg.live[10][0], 0.f);                   // minutos reales de partido (0 fuera del partido)
+              float wet = g_cfg.live[114][0] > 0.5f && g_cfg.live[114][0] < 1.5f ? 1.f : 0.f, dry = g_cfg.live[114][0] > 1.5f ? 1.f : 0.f;
+              float tg = 0.30f * (1.f - expf(-mins / 25.f)) * (1.f + 0.6f * wet);
+              float td = 0.35f * (1.f - expf(-mins / 30.f)) * (0.3f + 0.7f * wearEma) * (1.f + 1.5f * wet + 0.3f * dry);
+              float tc = 0.20f * (1.f - expf(-mins / 20.f)) * (0.2f + 0.8f * std::min(lineEma * 6.f, 1.f)) * (1.f - 0.7f * wet);
+              float a2 = std::min(1.f, dt / 8.f);                                // se acerca al objetivo en ~8 s: sin saltos
+              s_stain[0] += (tg - s_stain[0]) * a2; s_stain[1] += (td - s_stain[1]) * a2; s_stain[2] += (tc - s_stain[2]) * a2;
+              if (mins < 0.01f) { wearEma *= 0.99f; lineEma *= 0.99f; }
               for (float& v : s_stain) v = std::clamp(v, 0.f, 1.f);
           } else s_stain[0] = s_stain[1] = s_stain[2] = 0.f; }
         for (int sIdx = 0; sIdx < steps && nb < kMaxPlayers; sIdx++) {
