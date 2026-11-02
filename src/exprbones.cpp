@@ -178,6 +178,10 @@ struct Skel {
     // ultima escritura y la cabeza del cuadro para medir el gesto (actual - cabeza rigida)
     float gq[kND][4] = {}, gt[kND][3] = {}; unsigned wFrame[kND] = {};
     bool ampOn = false; float ahc[3] = {}, ahr[4] = { 0, 0, 0, 1 }, aGain[kND] = {}, aCap = 0.012f;
+    // (02/11 l, Agustin: "vibra un poco al abrirse ... la camara lenta") cabeza del cuadro en que el JUEGO escribio cada hueso: en
+    // camara lenta el juego no reescribe los huesos de la cara en todos los cuadros (16 mil lecturas con lo del mod puesto) pero la
+    // cabeza si se mueve; medir el gesto contra la cabeza de ahora metia ese movimiento en el gesto y lo agrandaba a saltos
+    float bHc[kND][3] = {}, bHr[kND][4] = {}; bool bHave[kND] = {}, fresh[kND] = {};
     float seed = 0.37f; bool seedHave = false; float seedCand = -1.0f; int seedCandN = 0;   // (02/11 c) semilla de la mirada, la misma que el VS del globo (PesExprSeed)
 };
 static const int kMaxSkel = 48;
@@ -359,11 +363,12 @@ static bool ReadBase(Skel& S, int d, Xf& x) {
         const float* w = S.wq[d]; const float* u = S.wt[d];
         const float dq = fabsf(x.q[0] - w[0]) + fabsf(x.q[1] - w[1]) + fabsf(x.q[2] - w[2]) + fabsf(x.q[3] - w[3]);
         const float dt = fabsf(x.t[0] - u[0]) + fabsf(x.t[1] - u[1]) + fabsf(x.t[2] - u[2]);
-        bool hit = false;
-        if (dq < 2e-6f) { memcpy(x.q, S.bq[d], sizeof S.bq[d]); hit = true; }
-        if (dt < 1e-7f + 1e-6f * (fabsf(u[0]) + fabsf(u[1]) + fabsf(u[2]))) { memcpy(x.t, S.bt[d], sizeof S.bt[d]); hit = true; }
+        bool hit = false, hq = false, ht = false;
+        if (dq < 2e-6f) { memcpy(x.q, S.bq[d], sizeof S.bq[d]); hit = hq = true; }
+        if (dt < 1e-7f + 1e-6f * (fabsf(u[0]) + fabsf(u[1]) + fabsf(u[2]))) { memcpy(x.t, S.bt[d], sizeof S.bt[d]); hit = ht = true; }
         if (hit) S.reused++;
-    }
+        S.fresh[d] = !(hq && ht);   // el juego escribio algo nuevo en este hueso
+    } else S.fresh[d] = true;
     memcpy(S.gq[d], x.q, sizeof S.gq[d]); memcpy(S.gt[d], x.t, sizeof S.gt[d]);
     return true;
 }
@@ -395,12 +400,13 @@ static void Amp(const Skel& S, int d, Xf& x) {
     if (!S.ampOn || d >= kND - 2) return;
     const float g = S.aGain[d]; if (fabsf(g - 1.0f) < 0.005f) return;
     const Xf& R = S.rest[d]; const Xf& H = S.rest[D_HEAD];
-    const float rv[3] = { R.t[0] - H.t[0], R.t[1] - H.t[1], R.t[2] - H.t[2] }; float rr[3]; QRot(S.ahr, rv, rr);
-    float e[3] = { (x.t[0] - (S.ahc[0] + rr[0])) * (g - 1.0f), (x.t[1] - (S.ahc[1] + rr[1])) * (g - 1.0f), (x.t[2] - (S.ahc[2] + rr[2])) * (g - 1.0f) };
+    const float* hcU = S.bHave[d] ? S.bHc[d] : S.ahc; const float* hrU = S.bHave[d] ? S.bHr[d] : S.ahr;   // (02/11 l) cabeza de cuando el juego escribio el hueso
+    const float rv[3] = { R.t[0] - H.t[0], R.t[1] - H.t[1], R.t[2] - H.t[2] }; float rr[3]; QRot(hrU, rv, rr);
+    float e[3] = { (x.t[0] - (hcU[0] + rr[0])) * (g - 1.0f), (x.t[1] - (hcU[1] + rr[1])) * (g - 1.0f), (x.t[2] - (hcU[2] + rr[2])) * (g - 1.0f) };
     const float el = sqrtf(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]);
     if (el > S.aCap) for (float& v : e) v *= S.aCap / el;
     for (int k = 0; k < 3; k++) x.t[k] += e[k];
-    float rq[4], c[4], dq[4]; QMul(S.ahr, R.q, rq); QConj(rq, c); QMul(x.q, c, dq);
+    float rq[4], c[4], dq[4]; QMul(hrU, R.q, rq); QConj(rq, c); QMul(x.q, c, dq);
     if (dq[3] < 0) for (float& v : dq) v = -v;
     const float sn = sqrtf(dq[0] * dq[0] + dq[1] * dq[1] + dq[2] * dq[2]);
     if (sn > 1e-6f) {
@@ -581,6 +587,7 @@ void ExprBonesFrame(const void* skel) {
         if (S->ampOn) for (int d = 0; d < D_EYE_L; d++) {
             if (!S->cur[d]) continue;
             Xf g; if (!ReadBase(*S, d, g)) continue;
+            if (S->fresh[d] || !S->bHave[d]) { memcpy(S->bHc[d], hc.t, sizeof S->bHc[d]); memcpy(S->bHr[d], hr, sizeof S->bHr[d]); S->bHave[d] = true; }
             Xf x = g; Amp(*S, d, x);
             const float dt = fabsf(x.t[0] - g.t[0]) + fabsf(x.t[1] - g.t[1]) + fabsf(x.t[2] - g.t[2]);
             const float dq = fabsf(x.q[0] - g.q[0]) + fabsf(x.q[1] - g.q[1]) + fabsf(x.q[2] - g.q[2]) + fabsf(x.q[3] - g.q[3]);
