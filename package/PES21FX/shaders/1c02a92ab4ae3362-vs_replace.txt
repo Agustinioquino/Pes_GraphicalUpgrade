@@ -117,6 +117,7 @@ void main(
   PesTorsoInset(mP, mN, v0.xyz, PesCharOrigin(g_vsObject.m_viewWorld, g_vsScene.m_view));   // (27/10) torso bajo la camiseta ajustada (x320)
   PesTorsoRegrow(mP, mN, v0.xyz, PesCharOrigin(g_vsObject.m_viewWorld, g_vsScene.m_view));   // (01/11) sin camiseta: torso de tamano original (fila 349)
   PesTorsoTight(mP, mN, v0.xyz, PesCharOrigin(g_vsObject.m_viewWorld, g_vsScene.m_view));   // (01/11) camiseta ajustada: el torso se mete x351 mm (fila 351)
+  PesNeckSink(mP, mN, v0.xyz, PesCharOrigin(g_vsObject.m_viewWorld, g_vsScene.m_view));   // (02/11) cuello completo de la cara: el torso se hunde debajo (z352)
   float4 mP4 = float4(mP, v0.w);
   float3 hP, hN, hT, hPP; float hDbg;
   bool handDone = (r0.x != 0) && PesHandSkin(vid, mP, mN, mT, v4, v5, hP, hN, hT, hPP, hDbg);
