@@ -186,6 +186,7 @@ struct Skel {
     // pero la forma de cada cara (editor de caras del juego) tambien esta en los huesos: se agrandaba la forma de la cara entera.
     // Ahora el gesto se mide contra la cara NEUTRA de este jugador: promedio lento (~10 s) de cada hueso en los ejes de la cabeza
     float nT[kND][3] = {}, nQ[kND][4] = {}; int nN[kND] = {};
+    float eyeP = 0.0f; bool eyePHave = false;   // (02/11 o) mirada vertical del JUEGO (hueso del ojo), suavizada
     float seed = 0.37f; bool seedHave = false; float seedCand = -1.0f; int seedCandN = 0;   // (02/11 c) semilla de la mirada, la misma que el VS del globo (PesExprSeed)
 };
 static const int kMaxSkel = 48;
@@ -510,11 +511,28 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
         }
     }
     if (lids) {
-        // de arriba: el parpadeo lo baja 0.50 rad (~29 grados; el shader usaba lo mismo) y acompana la mirada vertical
+        // (02/11 o, Agustin: "los ojos al moverse no mueven del todo realista el contorno de los parpados") los parpados seguian
+        // solo la mirada del mod (PesGaze), no la del JUEGO (el hueso del ojo que mira la pelota / al companero): se suma el giro
+        // vertical del globo del juego respecto de la cabeza (frente del ojo en los ejes de la cabeza; + = mira arriba)
+        float gp = 0.0f; int ne = 0;
+        for (int e = 0; e < 2; e++) {
+            const int d = D_EYE_L + e; if (!S.cur[d]) continue;
+            Xf ex; if (!ReadXf(S.cur[d], ex)) continue;
+            float rq[4], c[4], rel[4]; QMul(hr, S.rest[d].q, rq); QConj(rq, c); QMul(ex.q, c, rel);   // giro del ojo sobre el reposo llevado por la cabeza
+            static const float Z[3] = { 0.0f, 0.0f, 1.0f }; float fz[3], fw[3], fl[3]; QRot(hr, Z, fz); QRot(rel, fz, fw); QRot(hrInv, fw, fl);
+            if (fl[2] > 0.2f) { gp += atan2f(fl[1], fl[2]); ne++; }
+        }
+        if (ne) {
+            gp = std::clamp(gp / (float)ne, -0.45f, 0.45f);
+            S.eyeP = S.eyePHave ? S.eyeP + (gp - S.eyeP) * 0.5f : gp; S.eyePHave = true;   // medio cuadro de suavizado: sin temblor
+        }
+        const float gy = g[1] + (S.eyePHave ? S.eyeP : 0.0f);
+        // de arriba: el parpadeo lo baja 0.64 rad (igual que el shader) y acompana la mirada vertical casi entera (como en una cara
+        // real: mirar abajo baja el parpado con el ojo, mirar arriba lo sube)
         // (02/11 d) con la sonrisa (sm) el ojo se achina: el de arriba baja un poco y el de abajo sube (sonrisa "de verdad")
-        const float up = 0.50f * b - g[1] * (g[1] < 0.0f ? 0.65f : 0.35f) + 0.06f * sm;
-        // de abajo: sube un poco al parpadear y baja un poco al mirar abajo
-        const float lo = -0.10f * b - (g[1] < 0.0f ? g[1] * 0.20f : 0.0f) - 0.16f * sm;
+        const float up = 0.64f * b - gy * (gy < 0.0f ? 0.80f : 0.55f) + 0.06f * sm;
+        // de abajo: sube un poco al parpadear, baja con la mirada abajo y sube apenas con la mirada arriba
+        const float lo = -0.12f * b - gy * (gy < 0.0f ? 0.35f : 0.15f) - 0.16f * sm;
         float qu[4], ql[4]; AxisAngle(ax, up, qu); AxisAngle(ax, lo, ql);
         const int ds[4] = { D_LID_TL, D_LID_TR, D_LID_BL, D_LID_BR };
         for (int i = 0; i < 4; i++) {
@@ -761,6 +779,7 @@ void ExprBonesPresent() {
             if (fr - S.lastFrame > 600) continue;
             if (S.angN) k += snprintf(l + k, sizeof l - k, " %p (cara %p %d huesos, %d reconocidos, mandibula %s, gira %.1f..%.1f grados)", S.skel, S.face, S.fn, S.found, S.jawFound ? "si" : "NO", S.angMin, S.angMax);
             else k += snprintf(l + k, sizeof l - k, " %p (cara %p %d huesos, %d reconocidos, mandibula %s)", S.skel, S.face, S.fn, S.found, S.jawFound ? "si" : "NO");
+            if (S.eyePHave) k += snprintf(l + k, sizeof l - k, " [mirada del juego %.1f grados]", S.eyeP * 57.2958f);
             S.angMin = 1e9f; S.angMax = -1e9f; S.angN = 0;
             if (!S.logged && S.found) {   // una vez por esqueleto: que hueso se reconocio (indice en el arreglo)
                 S.logged = true;
