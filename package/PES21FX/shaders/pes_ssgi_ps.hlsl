@@ -124,7 +124,23 @@ float4 mainV2(float4 pos, float2 uv, float z0, float Rg, float fr0, float rot, f
   return float4(acc.rgb, z0);
 }
 
-float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
+// (02/11) "Completa" sin pagar 4 veces (Agustin: la caida de FPS es el rebote; "que mantenga la calidad pero se renderice de una
+// forma mejor, para ahorrar rendimiento y evitar el ruido"). Con z337 = 1 y una DLL que lo soporta (155.z = 1 + fase) este paso
+// corre a media resolucion (costo de "Media") pero cada pixel calcula un pixel EXACTO de la resolucion completa, uno distinto de
+// cada bloque de 2x2 en cada cuadro (fase 0..3). El paso 2 (pes_ssgi_tp_ps) lo reconstruye a resolucion completa con la
+// profundidad de cada pixel y lo acumula en el tiempo: a los 4 cuadros cada pixel tiene su propio valor (definicion de Completa).
+static const int2 kSSGIPhase[4] = { int2(0, 0), int2(1, 1), int2(1, 0), int2(0, 1) };
+
+float4 main(float4 pos : SV_Position, float2 uvIn : TEXCOORD0) : SV_Target0 {
+  float2 uv = uvIn;
+  float ph155 = IniParams.Load(int2(155, 0)).z;
+  if (ph155 > 0.5) {
+    float FW, FH; inDepth.GetDimensions(FW, FH);
+    float2 pf = floor(pos.xy) * 2.0 + kSSGIPhase[((int)(ph155 + 0.5) - 1) & 3] + 0.5;
+    pf = min(pf, float2(FW, FH) - 0.5);
+    uv = pf / float2(FW, FH);
+    pos.xy = pf;                                                // el patron de giro de las muestras, por pixel de la resolucion completa
+  }
   float d0 = inDepth.SampleLevel(sPoint, uv, 0).x;
   if (d0 < 1e-6) return 0.0;                                    // cielo
   float z0 = LinZ(uv);

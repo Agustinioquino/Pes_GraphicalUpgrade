@@ -11,7 +11,7 @@ namespace fx {
 
 static ID3D11VertexShader* s_vs = nullptr; static ID3D11PixelShader* s_ps = nullptr; static ID3D11PixelShader* s_tp = nullptr; static bool s_tried = false;
 static ID3D11Texture2D* s_tex[3] = {}; static ID3D11RenderTargetView* s_rtv[3] = {}; static ID3D11ShaderResourceView* s_srv[3] = {};   // 0 = este cuadro, 1/2 = historia
-static UINT s_w = 0, s_h = 0;
+static UINT s_w = 0, s_h = 0, s_hw = 0, s_hh = 0;   // (02/11) s_w/s_h = historia; s_hw/s_hh = este cuadro (media en reconstruccion)
 static ID3D11Buffer* s_prev = nullptr; static bool s_prevOk = false;
 static ID3D11SamplerState* s_sampP = nullptr; static ID3D11SamplerState* s_sampL = nullptr;
 static ID3D11RasterizerState* s_rs = nullptr; static ID3D11DepthStencilState* s_dss = nullptr; static ID3D11BlendState* s_bs = nullptr;
@@ -42,17 +42,18 @@ void SSGIReloadShaders() {
     if (s_vs) { s_vs->Release(); s_vs = nullptr; } if (s_ps) { s_ps->Release(); s_ps = nullptr; } if (s_tp) { s_tp->Release(); s_tp = nullptr; }
     s_tried = false;
 }
-static bool EnsureTargets(UINT w, UINT h) {
-    if (s_tex[0] && s_w == w && s_h == h) return true;
+static bool EnsureTargets(UINT w, UINT h, UINT cw, UINT ch) {
+    if (s_tex[0] && s_w == w && s_h == h && s_hw == cw && s_hh == ch) return true;
     for (int i = 0; i < 3; i++) { if (s_srv[i]) s_srv[i]->Release(); if (s_rtv[i]) s_rtv[i]->Release(); if (s_tex[i]) s_tex[i]->Release(); s_srv[i] = nullptr; s_rtv[i] = nullptr; s_tex[i] = nullptr; }
     D3D11_TEXTURE2D_DESC td{}; td.Width = w; td.Height = h; td.MipLevels = 1; td.ArraySize = 1; td.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
     for (int i = 0; i < 3; i++) {
+        td.Width = i == 0 ? cw : w; td.Height = i == 0 ? ch : h;
         if (FAILED(g_dev.dev->CreateTexture2D(&td, nullptr, &s_tex[i]))) return false;
         if (FAILED(g_dev.dev->CreateRenderTargetView(s_tex[i], nullptr, &s_rtv[i]))) return false;
         if (FAILED(g_dev.dev->CreateShaderResourceView(s_tex[i], nullptr, &s_srv[i]))) return false;
     }
-    s_w = w; s_h = h; s_prevOk = false;
-    Log("ssgi temporal: targets %ux%u RGBA16F", w, h);
+    s_w = w; s_h = h; s_hw = cw; s_hh = ch; s_prevOk = false;
+    Log("ssgi temporal: targets %ux%u RGBA16F (este cuadro %ux%u%s)", w, h, cw, ch, (cw != w) ? ", reconstruccion" : "");
     return true;
 }
 
@@ -63,6 +64,9 @@ void SSGIPresent(int presentNo) {
     int ran = s_ranFrame.load();
     p[0] = (g_cfg.live[153][0] > 0.5f && ran >= 0 && presentNo - ran <= 2) ? 1.0f : 0.0f;
     p[1] = (float)s_counter;
+    // (02/11) z337 = 1 ("Completa"): se calcula a media resolucion un pixel exacto de cada 2x2 (fase que rota) y se reconstruye
+    // a resolucion completa en el paso 2: definicion de Completa con el costo de Media. 155.z = 1 + fase (0 = modo viejo)
+    p[2] = (g_cfg.live[337][2] > 0.5f) ? (float)(1 + (s_counter & 3)) : 0.0f;
     double t = Now();
     if (s_logs < 40 && t - s_logT >= 30.0) { s_logT = t; s_logs++;
         Log("SSGI (30 s): prendido %d, corrio %d de %d llamadas de la composicion%s | no corrio: sin shaders %d, faltan texturas %d, tamano %d, msaa/targets %d, sin cbuffer %d, cbuffer chico %d, prev %d | fuerza w153 %.2f, z337 %.0f (%ux%u)",
@@ -85,9 +89,12 @@ ID3D11ShaderResourceView* SSGIBeforeComposition(ID3D11DeviceContext* c, int fram
     D3D11_TEXTURE2D_DESC td; ((ID3D11Texture2D*)res)->GetDesc(&td); res->Release();
     if (td.Width < 640 || (g_bbW && (td.Width < g_bbW * 3 / 4 || td.Width > g_bbW * 3))) { s_why[2]++; rel(); return nullptr; }
     // (31/10) z337 = 1: a resolucion completa (mas definido, ~4x el costo)
+    // (02/11) con 155.z > 0 (reconstruccion) el paso 1 va a media y la historia a completa
+    bool recon = g_cfg.live[155][2] > 0.5f;
     UINT dv = g_cfg.live[337][2] > 0.5f ? 1u : 2u;
-    UINT hw = (td.Width + dv - 1) / dv, hh = (td.Height + dv - 1) / dv;
-    if (td.SampleDesc.Count != 1 || !EnsureTargets(hw, hh)) { s_why[3]++; rel(); return nullptr; }
+    UINT fw = (td.Width + dv - 1) / dv, fh = (td.Height + dv - 1) / dv;
+    UINT hw = recon ? (td.Width + 1) / 2 : fw, hh = recon ? (td.Height + 1) / 2 : fh;
+    if (td.SampleDesc.Count != 1 || !EnsureTargets(fw, fh, hw, hh)) { s_why[3]++; rel(); return nullptr; }
     ID3D11Buffer* scb = nullptr; c->PSGetConstantBuffers(2, 1, &scb);
     ID3D11Buffer* sys = nullptr; c->PSGetConstantBuffers(0, 1, &sys);
     if (!scb) { s_why[4]++; rel(); if (sys) sys->Release(); return nullptr; }
@@ -127,7 +134,8 @@ ID3D11ShaderResourceView* SSGIBeforeComposition(ID3D11DeviceContext* c, int fram
     // 2) acumulacion: tex0 + historia anterior -> historia nueva
     int hNew = 1 + s_ping, hOld = 1 + (1 - s_ping); s_ping = 1 - s_ping;
     c->PSSetShaderResources(0, 4, nulls); c->OMSetRenderTargets(1, &s_rtv[hNew], nullptr);
-    ID3D11ShaderResourceView* sv1[2] = { s_srv[0], s_srv[hOld] }; c->PSSetShaderResources(0, 2, sv1);
+    D3D11_VIEWPORT vpF{ 0, 0, (float)fw, (float)fh, 0, 1 }; c->RSSetViewports(1, &vpF);
+    ID3D11ShaderResourceView* sv1[3] = { s_srv[0], s_srv[hOld], depth }; c->PSSetShaderResources(0, 3, sv1);
     c->PSSetConstantBuffers(3, 1, &s_prev);
     c->PSSetShader(s_tp, nullptr, 0); c->Draw(3, 0);
     c->PSSetShaderResources(0, 4, nulls);
