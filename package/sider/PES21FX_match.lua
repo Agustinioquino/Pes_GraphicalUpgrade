@@ -9,6 +9,38 @@
 local m = {}
 local last = ""
 
+-- (02/11) en este Sider io.open devuelve nil sin error en los eventos del partido (tambien a otros modulos):
+-- si falla se escribe con las funciones de Windows por medio de ffi (necesita luajit.ext.enabled = 1)
+local K -- kernel32, se prepara la primera vez
+local function ffi_setup()
+    if K ~= nil then return K end
+    K = false
+    if type(ffi) ~= "table" or type(ffi.cdef) ~= "function" then return K end
+    local ok = pcall(ffi.cdef, [[
+        int fxm_MultiByteToWideChar(unsigned int cp, unsigned long flags, const char *s, int n, uint16_t *w, int wn) __asm__("MultiByteToWideChar");
+        void *fxm_CreateFileW(const uint16_t *name, unsigned long access, unsigned long share, void *sec, unsigned long disp, unsigned long flags, void *tmpl) __asm__("CreateFileW");
+        int fxm_WriteFile(void *h, const char *buf, unsigned long n, unsigned long *written, void *ov) __asm__("WriteFile");
+        int fxm_CloseHandle(void *h) __asm__("CloseHandle");
+        unsigned long fxm_GetLastError(void) __asm__("GetLastError");
+    ]])
+    if ok then K = ffi.C end
+    return K
+end
+
+local function ffi_write(path, text)
+    if not ffi_setup() then return false, "sin ffi" end
+    local n = K.fxm_MultiByteToWideChar(65001, 0, path, -1, nil, 0)
+    local wbuf = ffi.new("uint16_t[?]", n + 1)
+    K.fxm_MultiByteToWideChar(65001, 0, path, -1, wbuf, n)
+    local h = K.fxm_CreateFileW(wbuf, 0x40000000, 1, nil, 2, 0x80, nil)   -- GENERIC_WRITE, CREATE_ALWAYS
+    if ffi.cast("intptr_t", h) == -1 then return false, "CreateFileW error " .. tostring(K.fxm_GetLastError()) end
+    local wr = ffi.new("unsigned long[1]")
+    local ok = K.fxm_WriteFile(h, text, #text, wr, nil)
+    K.fxm_CloseHandle(h)
+    if ok == 0 then return false, "WriteFile fallo" end
+    return true
+end
+
 local function num(v, def)
     local n = tonumber(v)
     if n == nil then return def end
@@ -45,6 +77,15 @@ local function write_match(ctx, o)
             return
         end
         table.insert(errs, tostring(p) .. " (" .. tostring(err) .. ")")
+    end
+    for _, p in ipairs(paths) do
+        local ok, err = ffi_write(p, text)
+        if ok then
+            last = text
+            log(string.format("PES21FX_match: estadio %d, dia/noche %d, clima %d, estacion %d -> %s (ffi)", stadium, tod, weather, season, p))
+            return
+        end
+        table.insert(errs, tostring(p) .. " (ffi: " .. tostring(err) .. ")")
     end
     log("PES21FX_match: no pude escribir match.ini. sider_dir=" .. tostring(ctx.sider_dir) .. " intentos: " .. table.concat(errs, " | "))
 end
