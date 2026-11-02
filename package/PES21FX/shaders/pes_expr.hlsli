@@ -55,7 +55,14 @@ void PesExprApply(float4 p, float3 rest, uint4 I, float4 W, float3 n, float3 t,
   // mascara: de la base del menton para arriba y no la nuca (01/11: antes cortaba en z 0.06..0.095 y dejaba fuera el fondo
   // de la boca / dientes de la boca 3D: labios agrandados y dientes no -> union rara)
   float face = smoothstep(1.580, 1.610, rest.y) * smoothstep(0.000, 0.035, rest.z);
-  float extra = (E.y - 1.0) * PesExprZoneShare(rest, Z) * face;
+  // (02/11, Agustin: captura con la lengua afuera, cortes finos en el menton) con la boca por HUESOS abierta por el mod (abrir la
+  // boca / sacar la lengua / mostrar los dientes) el amplificador agrandaba tambien ese giro (gesto de varios cm), y cada malla
+  // (cara, cara generica, barba) lo calcula con su propia paleta: en el menton no daba igual y se abrian ranuras. Con eso
+  // prendido la zona de la boca no se amplifica (lo del mod ya es el tamano pedido)
+  float4 Rb350a = IniParams.Load(int2(350, 0));
+  float modOpen = (Rb350a.x > 0.5 && Rb350a.y > 0.5) ? saturate(4.0 * max(max(IniParams.Load(int2(347, 0)).x, 0.45 * Rb350a.z), Rb350a.w)) : 0.0;
+  float4 Zm = float4(Z.xyz, Z.w * (1.0 - modOpen));
+  float extra = (E.y - 1.0) * PesExprZoneShare(rest, Zm) * face;
   if (abs(extra) < 0.001) return;
   float bigW = saturate(E.w);
   float cap = max(E.z, 0.0) * 0.01;
