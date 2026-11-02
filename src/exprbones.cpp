@@ -370,6 +370,14 @@ static bool WriteBone(Skel& S, int d, const Xf& base, const float* nq, const flo
     memcpy(S.bq[d], base.q, sizeof S.bq[d]); memcpy(S.bt[d], base.t, sizeof S.bt[d]); S.wHave[d] = true;
     return true;
 }
+// (02/11 d) devuelve el hueso a su base y deja de seguirlo: si el mod no lo mueve este cuadro NO se escribe nada (antes los
+// gestos secundarios reescribian cada cuadro pomulos, cejas y bajo-ojo aunque el corrimiento fuera 0; con 1cbce0f la boca 3D
+// se rompia con la boca por huesos y volvia con "Por shader", con 0 giros de mandibula escritos)
+static void Release(Skel& S, int d) {
+    if (!S.wHave[d] || !S.cur[d]) { S.wHave[d] = false; return; }
+    Xf x; if (ReadBase(S, d, x)) { float out[7] = { x.q[0], x.q[1], x.q[2], x.q[3], x.t[0], x.t[1], x.t[2] }; SafeCopy((char*)S.cur[d] + 16, out, 28); }
+    S.wHave[d] = false;
+}
 // gira la transformacion de un hueso alrededor de su propia posicion: q nuevo = r * q base (r en el espacio del modelo)
 static bool RotInPlace(Skel& S, int d, const float* r) {
     Xf x; if (!ReadBase(S, d, x)) return false;
@@ -487,9 +495,10 @@ static void Secondary(Skel& S, const float* hr, float sm, float open) {
     for (const Off& f : kOff) {
         if (!S.cur[f.d]) continue;
         const float a = f.k == 0 ? ks : ko;
+        if (a <= 0.001f) { Release(S, f.d); continue; }
         Xf x; if (!ReadBase(S, f.d, x)) continue;
         float nt[3] = { x.t[0], x.t[1], x.t[2] };
-        if (a > 0.001f) { const float hv[3] = { f.x * a, f.y * a, f.z * a }; float mv[3]; QRot(hr, hv, mv); for (int k = 0; k < 3; k++) nt[k] += mv[k]; }
+        { const float hv[3] = { f.x * a, f.y * a, f.z * a }; float mv[3]; QRot(hr, hv, mv); for (int k = 0; k < 3; k++) nt[k] += mv[k]; }
         if (!WriteBone(S, f.d, x, x.q, nt)) s_badWrite.fetch_add(1, std::memory_order_relaxed);
     }
 }
@@ -530,7 +539,7 @@ void ExprBonesFrame(const void* skel) {
     const float openAll = std::clamp((std::max)(o, 0.0f) + SStep(4.0f, 20.0f, deg), 0.0f, 1.0f);   // boca abierta del mod o del juego (grados)
     EyesFrame(*S, hc, hr, sm);   // antes de la boca: lee la comisura sin el giro de la mandibula del mod
     Secondary(*S, hr, sm, openAll);
-    if (fabsf(o) < 0.001f && teeth < 0.001f) return;
+    if (fabsf(o) < 0.001f && teeth < 0.001f) { for (int d = 0; d < 18; d++) if (S->wHave[d]) Release(*S, d); return; }   // slider en 0: la boca vuelve a la del juego
     static const float X[3] = { 1.0f, 0.0f, 0.0f }; float ax[3]; QRot(hr, X, ax);
     float ln = sqrtf(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]); if (ln < 0.5f) return; for (float& v : ax) v /= ln;
     const float P[3] = { jc.t[0], jc.t[1], jc.t[2] };
@@ -541,7 +550,7 @@ void ExprBonesFrame(const void* skel) {
         const float op = (std::max)(o, 0.0f);
         const float mvv0[3] = { tv[0] * teeth + ov[0] * op, tv[1] * teeth + ov[1] * op, tv[2] * teeth + ov[2] * op };
         const bool rot = kDef[d].jaw > 0.0f && fabsf(A) > 1e-5f, mv = fabsf(mvv0[0]) + fabsf(mvv0[1]) + fabsf(mvv0[2]) > 1e-6f;
-        if (!rot && !mv) continue;
+        if (!rot && !mv) { if (d < 18 && S->wHave[d]) Release(*S, d); continue; }   // 18.. = gestos secundarios / parpados (otro dueno)
         Xf x; if (!ReadBase(*S, d, x)) continue;
         float nq[4] = { x.q[0], x.q[1], x.q[2], x.q[3] }, nt[3] = { x.t[0], x.t[1], x.t[2] };
         if (rot) {
