@@ -321,6 +321,10 @@ void PesJawApply(float4 p, uint4 I, float4 W, float3 n,
     }
   }
   if (abs(o) < 0.001) return;
+  // (01/11 l) boca por HUESOS: la DLL gira skf_jaw y lo que cuelga de el en el esqueleto (exprbones.cpp; 350.x pedido, 350.y
+  // = la DLL confirma que lo esta haciendo): entonces el giro ya viene en el skinning y aca no se gira nada mas
+  float4 Rb = IniParams.Load(int2(350, 0));
+  if (Rb.x > 0.5 && Rb.y > 0.5) return;
   uint full = g_pesExprJaw.x, half_ = g_pesExprJaw.y;
   if ((full | half_) == 0u) return;
   float A = 0.40 * o;

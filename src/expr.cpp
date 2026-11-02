@@ -373,18 +373,23 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
         if (m->state == 4) s_bindsDisc++; else s_bindsWait++;
         s_bindsNone++; return s_none;
     }
-    if (s_meshes.size() >= 2048) {
+    if (s_meshes.size() >= 4096) {
         // (01/11) en partido aparecen mallas pasajeras (buffers que el juego rearma: ~50 por segundo) y la tabla se llenaba cada
         // ~40 s; vaciarla entera obligaba a releer las 22 caras cada vez (73 % de los dibujos 'en lectura'). Primero se echan
         // las que no se dibujaron en los ultimos 5 s; solo si no alcanza se empieza de nuevo.
-        for (auto it2 = s_meshes.begin(); it2 != s_meshes.end();) {
+        // (02/11) primero las de mas de 30 s sin dibujarse; si no alcanza, las de mas de 5 s (los LOD de las caras vuelven a aparecer
+        // y releerlos costaba 'en lectura' 7.6 % en el partido de Villarreal)
+        for (UINT age : { 1800u, 300u }) {
+          if (s_meshes.size() < 3072) break;
+          for (auto it2 = s_meshes.begin(); it2 != s_meshes.end();) {
             FaceMesh* o = it2->second;
-            if (s_frame - o->lastFrame > 300) {
+            if (s_frame - o->lastFrame > age) {
                 s_pending.erase(std::remove(s_pending.begin(), s_pending.end(), o), s_pending.end());
                 ReleaseIA(o); if (o->cb) o->cb->Release(); delete o; it2 = s_meshes.erase(it2); s_evicted++;
             } else ++it2;
+          }
         }
-        if (s_meshes.size() >= 2048) {   // partido largo / muchas caras: se empieza de nuevo (las cuentas y buffers cambian entre partidos)
+        if (s_meshes.size() >= 4096) {   // partido largo / muchas caras: se empieza de nuevo (las cuentas y buffers cambian entre partidos)
             for (auto& kv : s_meshes) { ReleaseIA(kv.second); if (kv.second->cb) kv.second->cb->Release(); delete kv.second; }
             s_meshes.clear(); s_pending.clear();
         }
@@ -472,12 +477,13 @@ static void HeadPresent(ID3D11DeviceContext* imm) {
 void ExprPresent() {
     ID3D11DeviceContext* imm = g_dev.imm; if (!imm) return;
     HeadPresent(imm);
+    ExprBonesPresent();   // (01/11) boca por huesos: estado para el shader y resumen
     {   // con el candado tomado: los dibujos (otros hilos) leen state / cb y pueden vaciar la tabla. Los Map son DO_NOT_WAIT.
         std::lock_guard<std::mutex> lk(s_mx);
         s_frame++;
-        // (01/11) primero las mallas que se estan dibujando ahora (las pasajeras que ya no se dibujan van al final), 12 por cuadro
+        // (01/11) primero las mallas que se estan dibujando ahora (las pasajeras que ya no se dibujan van al final), 16 por cuadro
         std::stable_sort(s_pending.begin(), s_pending.end(), [](FaceMesh* a, FaceMesh* b) { return a->lastFrame > b->lastFrame; });
-        for (size_t i = 0; i < s_pending.size() && i < 12; i++) Step(imm, s_pending[i]);
+        for (size_t i = 0; i < s_pending.size() && i < 16; i++) Step(imm, s_pending[i]);
         s_pending.erase(std::remove_if(s_pending.begin(), s_pending.end(), [](FaceMesh* m) { return m->state >= 3; }), s_pending.end());
     }
     static int frames = 0;
