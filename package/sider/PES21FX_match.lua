@@ -16,14 +16,15 @@ local function ffi_setup()
     if K ~= nil then return K end
     K = false
     if type(ffi) ~= "table" or type(ffi.cdef) ~= "function" then return K end
-    local ok = pcall(ffi.cdef, [[
+    -- sin pcall: el entorno de los modulos de Sider no lo tiene (igual que edit21_db)
+    ffi.cdef[[
         int fxm_MultiByteToWideChar(unsigned int cp, unsigned long flags, const char *s, int n, uint16_t *w, int wn) __asm__("MultiByteToWideChar");
         void *fxm_CreateFileW(const uint16_t *name, unsigned long access, unsigned long share, void *sec, unsigned long disp, unsigned long flags, void *tmpl) __asm__("CreateFileW");
         int fxm_WriteFile(void *h, const char *buf, unsigned long n, unsigned long *written, void *ov) __asm__("WriteFile");
         int fxm_CloseHandle(void *h) __asm__("CloseHandle");
         unsigned long fxm_GetLastError(void) __asm__("GetLastError");
-    ]])
-    if ok then K = ffi.C end
+    ]]
+    K = ffi.C
     return K
 end
 
