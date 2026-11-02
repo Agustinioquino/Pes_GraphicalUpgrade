@@ -266,7 +266,7 @@ void main(
       r2.xy += vd * abs(vrT) * vrTm * vrTexK;
       float l2 = dot(r2.xy, r2.xy); if (l2 > 0.94) r2.xy *= rsqrt(l2 / 0.94);
     }
-    if (vrArm > 0.001 && P305.x > 0.5) lbVein = max(lbVein * (1.0 - 0.7 * vrWr * vrArm), 0.25 * vrWa * vrArm * max(P305.z, 0.0));
+    if (vrArm > 0.001 && P305.x > 0.5) lbVein = max(lbVein * (1.0 - 0.7 * vrWr * vrArm), 0.12 * vrWa * vrArm * max(P305.z, 0.0));   // (02/11) base del atletico a la mitad (se veia todo el partido)
   }
   {   // (26/10) columna marcada (todos los torsos de TorsoBody, con o sin variante): surco de la columna y erectores (x288 = fuerza;
       // la DLL enlaza t19 solo en los dibujos del torso). El robusto la tapa un poco y el atletico la marca un poco mas
@@ -561,6 +561,8 @@ void main(
     }
 #endif
   }
+  // (02/11) AA especular (Kaplanyan / Tokuyoshi): varianza de la normal final en pantalla -> rugosidad extra (abajo, al codificarla)
+  float aaVb; { float3 aaN = normalize(r0.xyz); float3 aaX = ddx(aaN), aaY = ddy(aaN); aaVb = min(0.5 * (dot(aaX, aaX) + dot(aaY, aaY)), 0.18); }
   o0.w = 1;
   r0.w = abs(r0.x) + abs(r0.y);
   r0.w = r0.w + abs(r0.z);
@@ -605,6 +607,7 @@ void main(
     float rK = (rv > 0.5 && rv < 1.5 && (bodyOn || headPiece)) ? saturate(IniParams.Load(int2(12,0)).z) * 0.85 : 0.0;
     r0.x = lerp(r0.x, r0.x * 0.45, rK);
     o2.y = lerp(o2.y, max(o2.y, 0.5), rK * 0.8); }
+  { float aaA = r0.x * r0.x; aaA = aaA * aaA; r0.x = sqrt(sqrt(saturate(aaA + aaVb))); }   // AA especular (02/11)
   r0.y = r0.x * 0.0361702144 + 0.0904255286;
   r0.y = r0.y * r0.x + 0.180851057;
   r0.y = r0.y * r0.x + 0.271276593;

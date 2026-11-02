@@ -356,6 +356,7 @@ bool CamCutSince(int& seen);                      // true una vez por cada corte
 int CamLastCutFrame();
 bool EngineCamera(float pos[3], float tgt[3], int* frame);   // ultima camara aplicada por el motor (sin atraso)
 ID3D11ShaderResourceView* MuscleClothSRV();     // (25/10) zonas de la musculatura para la fisica de la ropa (t121 del simulador)
+ID3D11ShaderResourceView* MuscleEffortSRV();    // (02/11) esfuerzo por jugador para las venas (t123 del VS de la piel)
 // (25/10) la ropa choca con el cuerpo real (cuerpo.cpp): piel del cuerpo deformada por personaje para el simulador (t122..t124)
 void BodyOnDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, int kind = 0);   // en cada dibujo de la piel del cuerpo (VS 1c02a92a); kind 1 = camiseta (medicion, 327.w)
 ID3D11ShaderResourceView* TorsoNeedSRV();   // (31/10) mapa "torso bajo la camiseta" preciso (t124 del VS de la piel y de su sombra)

@@ -736,6 +736,14 @@ void main(
   if (PC322.w > 0.5) o0.xyz = lerp(o0.xyz, float3(1.0, 0.0, 0.0), pesCol);   // (27/10) diagnostico w322: rojo = franja del cuello
   if (P147.y > 0.5) o0.xyz = lerp(o0.xyz, float3(1.0, 0.0, 0.0), pesEdge);   // (20/10) diagnostico y147: rojo = franja del borde de la mascara generica
 
+  // (02/11) AA especular (Kaplanyan 2016 / Tokuyoshi 2019): donde la normal final cambia mas rapido que un pixel (poros, pliegues
+  // finos, la piel que se aleja) el brillo del sol titila y sale pixelado. La varianza de la normal en pantalla se suma a la
+  // rugosidad (en alfa^2, con tope 0.18): el brillo se ensancha justo lo que el pixel no puede mostrar. Sin cambio de cerca.
+  { float3 aaN = normalize(r1.xyz);
+    float3 aaX = ddx(aaN), aaY = ddy(aaN);
+    float aaV = min(0.5 * (dot(aaX, aaX) + dot(aaY, aaY)), 0.18);
+    float aaA = r0.w * r0.w; aaA = aaA * aaA;
+    r0.w = sqrt(sqrt(saturate(aaA + aaV))); }
   // ---- rugosidad codificada ----
   r0.x = r0.w * 0.0361702144 + 0.0904255286;
   r0.x = r0.x * r0.w + 0.180851057;
