@@ -644,9 +644,14 @@ void main(
     bool kitC = cmpOn && (tyC == 0) && (abs(gmC.z - 0.9607843) < 0.002);
     if (geoOk && RIM.w > 0.5 && (skinC || kitC) && zsk < 80.0) {
       float3 Ld = normalize(pLc_dir.xyz);
-      float ndv = saturate(dot(Nsk, -Vsk));
+      // (02/11) borde pixelado (oreja, mandibula y nuca a contraluz, captura de Agustin): el filo salia de la normal de detalle en el
+      // ultimo pixel de la silueta (casi rasante = F ~ 1 en un solo pixel, dentado, el TAA no lo arregla). Ahora la normal del filo
+      // es la mitad la de la profundidad (suave, sin poros): en el pixel de la silueta la profundidad salta, Ngeo mira a la camara
+      // y el filo se apaga; adentro queda una banda de unos mm que sigue la forma.
+      float3 Nrim = normalize(lerp(Nsk, Ngeo, geoFlat ? 0.5 : 0.85));
+      float ndv = saturate(dot(Nrim, -Vsk));
       float back = saturate(dot(Ld, Vsk));                             // sol detras del jugador (visto desde la camara)
-      float side = saturate(dot(Nsk, Ld) * 0.5 + 0.5);                 // el borde que mira al sol
+      float side = saturate(dot(Nrim, Ld) * 0.5 + 0.5);                // el borde que mira al sol
       float F = pow(1.0 - ndv, clamp(RIM.y, 1.5, 6.0));
       float shR = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
       float3 sunC = max(pLc_color.xyz, 0.0) * g_psScene.m_exposure.zzz;
