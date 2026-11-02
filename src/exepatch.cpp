@@ -412,7 +412,7 @@ static void CasterFixLog() {
     uintptr_t cam = (s_casterOn && s_cave) ? *(volatile uintptr_t*)(s_cave + 0x3e0) : 0; unsigned r12 = (s_casterOn && s_cave) ? *(volatile unsigned*)(s_cave + 0x3e8) : 0;
     if (!cam) {   // (02/11) sin el parche: igual se anotan m_view y m_shadowProjection para comparar con la pasada de sombras
         std::vector<float> S0;
-        if (NamedCBRead("SceneCB", S0) && S0.size() >= 64) { s_casterLogs++;
+        if (NamedCBRead("SceneCB", S0) && S0.size() >= 64 && (S0[48] != 0.0f || S0[49] != 0.0f || S0[50] != 0.0f)) { s_casterLogs++;   // (sin la previa: matriz en 0)
             Log("sombra_parche %d: m_view (c8..c11) %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f", g_cfg.motorShadowFix,
                 S0[32], S0[33], S0[34], S0[35], S0[36], S0[37], S0[38], S0[39], S0[40], S0[41], S0[42], S0[43], S0[44], S0[45], S0[46], S0[47]);
             Log("sombra_parche %d: m_shadowProjection (c12..c15) %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.3f %.3f %.3f %.3f", g_cfg.motorShadowFix,
