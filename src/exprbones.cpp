@@ -174,7 +174,7 @@ struct Skel {
     // cuello paso dos veces en el mismo cuadro) se parte de la base guardada y no se gira dos veces
     float wq[kND][4] = {}, wt[kND][3] = {}, bq[kND][4] = {}, bt[kND][3] = {}; bool wHave[kND] = {};
     int reused = 0;
-    float seed = 0.37f; bool seedHave = false;   // (02/11 c) semilla de la mirada, la misma que el VS del globo (PesExprSeed)
+    float seed = 0.37f; bool seedHave = false; float seedCand = -1.0f; int seedCandN = 0;   // (02/11 c) semilla de la mirada, la misma que el VS del globo (PesExprSeed)
 };
 static const int kMaxSkel = 48;
 static std::mutex s_mx;
@@ -410,7 +410,15 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
             int best = -1; float bd = H[2] * H[2];
             const int n = (std::min)((int)(H[0] + 0.5f), 20);
             for (int i = 0; i < n; i++) { const float* q = g_cfg.live[195 + 3 * i]; const float dx = wp[0] - q[0], dz = wp[2] - q[2], d2 = dx * dx + dz * dz; if (d2 < bd) { bd = d2; best = i; } }
-            S.seed = best >= 0 ? (float)best * 0.6180339f : 0.37f; S.seedHave = true;
+            // (02/11 e, Agustin: "los parpados vibran a lo lejos y de cerca") la tabla la rehace el Present en otro hilo: leida a
+            // mitad de camino daba otra entrada un cuadro si y otro no -> la mirada de los parpados saltaba entre dos semillas.
+            // La semilla cambia solo si la misma entrada nueva se ve 30 cuadros seguidos
+            const float cand = best >= 0 ? (float)best * 0.6180339f : 0.37f;
+            if (!S.seedHave) { S.seed = cand; S.seedHave = true; S.seedCandN = 0; }
+            else if (cand != S.seed) {
+                if (cand == S.seedCand) { if (++S.seedCandN >= 30) { S.seed = cand; S.seedCandN = 0; } }
+                else { S.seedCand = cand; S.seedCandN = 1; }
+            } else S.seedCandN = 0;
         } else if (!S.seedHave && H[1] <= 0.5f && H[0] <= 0.5f) { S.seed = 0.37f; }
     }
     const float seed = S.seed;
