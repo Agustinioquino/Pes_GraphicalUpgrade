@@ -33,6 +33,8 @@ FOLD_S = float(os.environ.get('FOLD_S', '0.35'))   # (02/11 c) mm detras de la e
 THROAT = int(os.environ.get('THROAT', '1'))   # (02/11) fondo de la garganta nuevo (throat.py) en lugar de la pared plana de Konami
 SINK = 1.5 * MM   # (01/11 d) 0.7 -> 1.5 mm: el cuello se mete bien detras de la encia (no asoma por arriba)
 PATCH = int(os.environ.get('PATCH', '1'))
+MOLARS = int(os.environ.get('MOLARS', '2'))   # (02/11) muelas 3D por lado y por arcada, detras del ultimo premolar (Agustin: 'que las muelas sean 3d')
+MOLAR_L = [float(x) for x in os.environ.get('MOLAR_L', '10.0,9.0').split(',')]   # largo mesio-distal (mm) de cada muela
 UV_W, UV_V0, UV_V1 = 0.55, 0.15, 0.90   # (01/11 e) el borde translucido de la textura (0.62-0.92) cae adentro   # (01/11 d) parte del diente pintado que usa el diente 3D
 
 def comps(m):
@@ -163,7 +165,7 @@ def local_patch(M, u0, u1, v0, v1, n=9, deg=2, degv=None):
     return f
 
 # ---------------------------------------------------------------- un diente
-def tooth(M, uL, uR, vG, vI, kind, upper, na=22, nb=14, ext=0.0, mes=1.0, seed=0, uvbox=None):   # (02/11) nb 15 -> 14: lugar para la garganta (tope 21845 tri)
+def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0, uvbox=None):   # (02/11) nb 15 -> 14: lugar para la garganta; (02/11 d) na 22 -> 20, nb 14 -> 13: lugar para las 8 muelas 3D (tope 21845 tri)
     """M: UVMap de la tira. uL/uR: limites en u; vG: v del cuello (encia); vI: v del borde incisal. kind: 'I' incisivo,
     'C' canino, 'P' premolar/molar. mes: lado de cx (+1/-1) que mira al centro de la boca (mesial). Devuelve P, UV, F
     (01/11 e) mas natural (Agustin 'poco naturales'): perfil recto (el parche sigue la tira a lo ancho pero es recto a lo alto:
@@ -302,6 +304,57 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=22, nb=14, ext=0.0, mes=1.0, seed=0
     # (01/11) Fox / Konami usa el orden contrario (horario visto desde afuera): sin esto el juego descarta la cara de adelante
     return P, UV, F[:, ::-1]
 
+def molar(c, t, bdir, up, L, Wb, Hc, sink, uvbox, seed=0, na=16, nb=6):
+    """(02/11) muela 3D (Agustin: 'que las muelas sean 3d'). Las muelas del fondo de Konami no estan pintadas en la tira (la tira
+    de atras es solo encia), asi que no salen del parche de la tira como los otros dientes: se arman aparte. c: centro del
+    cuello (m); t: direccion mesio-distal (horizontal); bdir: hacia el carrillo (horizontal); up: True = arcada de arriba
+    (la corona apunta hacia abajo). L / Wb: largo y ancho (m); Hc: alto de la corona sobre el cuello; sink: cuanto se mete
+    en la encia. Seccion de caja redondeada (mas angosta en el cuello, maxima en el tercio del cuello), y una cara oclusal
+    con 4 cuspides, surco central y fosa. uvbox: la caja uv del premolar mejor pintado de la fila."""
+    rng = np.random.default_rng(2000 + seed)
+    ax = np.array([0.0, -1.0 if up else 1.0, 0.0])
+    t = t / np.linalg.norm(t); bdir = bdir / np.linalg.norm(bdir)
+    th = np.linspace(0, 2 * np.pi, na + 1)[:-1] + np.pi / na   # 0 = hacia el carrillo
+    pw = 2.7
+    cb = np.sign(np.cos(th)) * np.abs(np.cos(th)) ** (2 / pw)   # carrillo (+1) / lengua (-1)
+    ct = np.sign(np.sin(th)) * np.abs(np.sin(th)) ** (2 / pw)   # mesio-distal
+    cusp = np.abs(np.sin(2 * th)) ** 1.5                        # 4 cuspides, en las esquinas
+    jit = 1 + rng.uniform(-0.04, 0.04)
+    b = np.linspace(0, 1, nb) ** 0.8                            # 0 = cuello (hundido), 1 = mesa oclusal
+    hh = -sink + (Hc + sink) * b
+    wprof = 0.80 + 0.20 * sst(0.0, 0.35, b) - 0.10 * sst(0.55, 1.0, b)   # angosto en el cuello, mesa oclusal un poco mas chica
+    P = []; vb = []; rr = []
+    for k in range(nb):
+        r = (wprof[k] * np.stack([ct * L / 2 * jit, cb * Wb / 2], 1))
+        h = hh[k] + (0.35 * MM * cusp if k == nb - 1 else 0)
+        P.append(c[None] + r[:, :1] * t[None] + r[:, 1:] * bdir[None] + np.reshape(h, (-1, 1)) * ax[None]); vb.append(np.full(na, b[k])); rr.append(np.ones(na))
+    # mesa oclusal: dos anillos hacia adentro (cuspides y vertientes) y la fosa central
+    for f, dh in ((0.62, 0.55 * MM), (0.30, -0.55 * MM)):
+        r = (wprof[-1] * f * np.stack([ct * L / 2 * jit, cb * Wb / 2], 1))
+        h = Hc + (dh * cusp if dh > 0 else dh) - 0.45 * MM * np.exp(-(cb / 0.35) ** 2) * (f < 0.5)   # surco central a lo largo
+        P.append(c[None] + r[:, :1] * t[None] + r[:, 1:] * bdir[None] + np.reshape(h, (-1, 1)) * ax[None]); vb.append(np.ones(na)); rr.append(np.full(na, f))
+    nr = len(P)
+    P = np.vstack(P + [(c + (Hc - 0.9 * MM) * ax)[None]]); vb = np.concatenate(vb + [[1.0]]); rr = np.concatenate(rr + [[0.0]])
+    tL, tR, tG, tI = uvbox
+    tc = 0.5 * (tL + tR)
+    ct_all = np.concatenate([np.tile(ct, nr), [0.0]])
+    ut = tc + 0.5 * (tR - tL) * UV_W * ct_all * rr
+    vt = tG + (tI - tG) * (UV_V0 + (UV_V1 - UV_V0) * vb)
+    UV = np.stack([ut, vt], 1)
+    idx = np.arange(nr * na).reshape(nr, na)
+    F = []
+    for i in range(nr - 1):
+        for j in range(na):
+            a, b_, cc, d = idx[i, j], idx[i, (j + 1) % na], idx[i + 1, (j + 1) % na], idx[i + 1, j]
+            F += [[a, b_, cc], [a, cc, d]]
+    ci = nr * na
+    for j in range(na): F.append([idx[-1, j], idx[-1, (j + 1) % na], ci])
+    F = np.array(F)
+    n = np.cross(P[F[:, 1]] - P[F[:, 0]], P[F[:, 2]] - P[F[:, 0]])
+    cen = c + 0.5 * Hc * ax
+    if (np.sign(((P[F].mean(1) - cen) * n).sum(1))).sum() < 0: F = F[:, ::-1]
+    return P, UV, F[:, ::-1]   # orden de Fox (horario desde afuera)
+
 def build(src_fmdl, texdir, log=print):
     f = fmdl.Fmdl(src_fmdl); m = fmdl.meshes(f)[0]
     grp = f.groups[0]; names = [b['name'] for b in f.bones]
@@ -393,7 +446,7 @@ def build(src_fmdl, texdir, log=print):
             Pc, UVc, Wc, Fc = Pc[used], UVc[used], Wc[used], remap[Fc]
         parts.append((Pc, UVc, Fc, Wc, 'tira'))
     # ---- dientes
-    nteeth = 0
+    nteeth = 0; tooth_up = []; best_by_row = [None, None]
     for c, r, up in ((c_up, rows[0], True), (c_lo, rows[1], False)):
         M = strip_maps[c]
         pk = np.concatenate([[r['x0']], r['pk'], [r['x1']]]).astype(float)
@@ -427,7 +480,76 @@ def build(src_fmdl, texdir, log=print):
             Pt, UVt, Ft = tooth(M, xl / 512.0, xr / 512.0, vG, vI, kind, up, ext=(EXT_UP if up else EXT_LO) + dext, mes=mes,
                                 seed=nteeth, uvbox=uvbox)
             wt = np.zeros((len(Pt), len(names))); wt[:, names.index('sk_head' if up else 'skf_jaw')] = 1
-            parts.append((Pt, UVt, Ft, wt, 'diente')); nteeth += 1
+            parts.append((Pt, UVt, Ft, wt, 'diente')); nteeth += 1; tooth_up.append(up)
+        best_by_row[0 if up else 1] = best[1]
+    # ---- (02/11) muelas 3D del fondo (Agustin: 'que las muelas sean 3d'): detras del ultimo premolar de cada lado la tira
+    # de Konami es solo encia (no hay diente pintado). Se arman MOLARS muelas por lado y por arcada siguiendo la linea de la
+    # encia de la tira de abajo (la de arriba ahi dobla hacia el paladar): abajo sobre la encia, arriba a la altura de los
+    # premolares de arriba y un poco hacia el carrillo (la arcada de arriba es mas ancha)
+    nmol = 0; foot = []
+    if MOLARS:
+        Rl = rows[1]; Ml = strip_maps[c_lo]
+        Pstrip_lo = [q[0] for q in parts if q[4] == 'tira'][1]   # la tira de abajo (las tiras van arriba, abajo)
+        xs = np.arange(2, 510, 1.0)
+        gl = np.interp(xs, np.arange(512), Rl['g']) / 512.0
+        line, _ = Ml(np.stack([xs / 512.0, gl], 1))
+        teeth_parts = [(p[0], up) for p, up in zip([q for q in parts if q[4] == 'diente'], tooth_up)]
+        for up in (False, True):
+            uvb = best_by_row[0 if up else 1]
+            for side in (-1, 1):
+                # el diente de esta arcada mas atras de este lado
+                cand = [p for p, u in teeth_parts if u == up and np.sign(p[:, 0].mean()) == side]
+                last = min(cand, key=lambda p: p[:, 2].min())
+                ztail = last[:, 2].min(); ybot = last[:, 1].min(); ytop = last[:, 1].max()
+                sel = (np.sign(line[:, 0]) == side)
+                ln = line[sel]; ln = ln[np.argsort(-ln[:, 2])]   # de adelante hacia atras
+                ln = ln[ln[:, 2] < ztail + 0.3 * MM]
+                seg = np.r_[0, np.cumsum(np.linalg.norm(np.diff(ln[:, [0, 2]], axis=0), axis=1))]
+                s0 = 0.4 * MM
+                for k in range(min(MOLARS, len(MOLAR_L))):
+                    Lk = MOLAR_L[k] * MM
+                    if s0 + Lk > seg[-1]: break
+                    pa = np.array([np.interp(s0, seg, ln[:, i]) for i in range(3)]); pb = np.array([np.interp(s0 + Lk, seg, ln[:, i]) for i in range(3)])
+                    t = pb - pa; t[1] = 0; t /= np.linalg.norm(t)
+                    bd = np.array([-t[2], 0.0, t[0]])
+                    if bd[0] * side < 0: bd = -bd     # hacia el carrillo
+                    Wb = (10.0 if up else 9.0) * MM
+                    mid = 0.5 * (pa + pb)
+                    # hacia el carrillo lo justo: la lengua (de costado llega a |x| 17.5 mm) no tiene que atravesarlas
+                    if up:
+                        # la corona baja hasta la altura de las cuspides del ultimo premolar de arriba (como en los premolares
+                        # de Konami, con la boca cerrada se cruzan con las de abajo, que quedan del lado de la lengua)
+                        Hc = 5.5 * MM
+                        cc = mid - bd * (0.5 * Wb - 2.5 * MM); cc[1] = ybot + 0.4 * MM + Hc
+                    else:
+                        Hc = 3.8 * MM   # la encia de atras sube: la mesa oclusal queda poco por encima de los premolares (curva de Spee)
+                        cc = mid - bd * (0.5 * Wb - 1.0 * MM)
+                        # el cuello a la altura de la cresta de la encia bajo la muela (la linea de la encia de la tira, pasando
+                        # los dientes pintados, baja hacia el piso y dejaba la segunda muela hundida 5 mm)
+                        dd = Pstrip_lo - cc[None]
+                        foot_m = (np.abs(dd @ t) < 0.5 * Lk) & (np.abs(dd @ bd) < 0.5 * Wb)
+                        cc[1] = (np.percentile(Pstrip_lo[foot_m, 1], 85) if foot_m.sum() >= 4 else mid[1]) - 1.0 * MM
+                    Pm, UVm, Fm = molar(cc, t, bd, up, 0.94 * Lk, Wb, Hc, 1.5 * MM, uvb, seed=nmol)
+                    wm = np.zeros((len(Pm), len(names))); wm[:, names.index('sk_head' if up else 'skf_jaw')] = 1
+                    parts.append((Pm, UVm, Fm, wm, 'diente')); nmol += 1
+                    foot.append((cc, t, bd, 0.94 * Lk, Wb, up, Hc))
+                    s0 += Lk + 0.3 * MM
+        # la tira de Konami detras del ultimo premolar sube como una pared (la encia de atras) y pasaba por adentro de la segunda
+        # muela (se veia una franja oscura cruzando la corona): lo que de la tira queda adentro de la huella de una muela, a la
+        # altura de la corona, baja (arriba: sube) hasta el cuello de la muela
+        moved = 0
+        for Pp, _, _, Wp, tg in parts:
+            if tg != 'tira': continue
+            sup = Wp[:, names.index('sk_head')].mean() > 0.5   # tira de arriba
+            for cc, t, bd, Lk, Wb, up, Hc in foot:
+                if up != sup: continue
+                d = Pp - cc[None]
+                db = d @ bd   # del lado de la lengua el margen es mas ancho (la tira sube por ahi)
+                inside = (np.abs(d @ t) < 0.5 * Lk + 1.2 * MM) & (db < 0.5 * Wb + 0.8 * MM) & (db > -(0.5 * Wb + 3.0 * MM))
+                h = -d[:, 1] if up else d[:, 1]   # altura hacia la corona
+                hit = inside & (h > -0.3 * MM) & (h < Hc + 2.0 * MM)
+                Pp[hit, 1] = cc[1] + (0.3 * MM if up else -0.3 * MM); moved += int(hit.sum())
+        log('  muelas 3D: %d (vertices de la tira bajados al cuello: %d)' % (nmol, moved))
     # ---- lengua: dos subdivisiones, surco central
     Pc, UVc, Fc, Wc = sub(c_tg, 2)
     Nc = vnormals(Pc, Fc)
