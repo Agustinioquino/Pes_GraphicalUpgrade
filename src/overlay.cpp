@@ -797,6 +797,34 @@ static void DrawEditorLightIcons() {
     } else DrawOneLightIcon(dl, c, R, az, el, warm, "Sol de prueba");
 }
 
+// (2/11) brujula del sol (x175, pedido de Agustin: "no me queda claro de donde viene el sol" en las capturas). Toma el sol en el
+// mundo que publica la DLL (fila 111, siempre hacia el sol, ya con sol_parche) y la m_view de la escena, y lo dibuja alrededor del
+// centro de la pantalla como el icono de la luz del editor: lleno = delante de la camara, chico y cortado = detras. Abajo, texto con la
+// elevacion y hacia donde caen las sombras en la imagen (opuesto al sol, en el plano del piso).
+static void DrawSunCompass() {
+    std::vector<float> S; if (!NamedCBRead("SceneCB", S) || S.size() < 48) return;
+    const float* w = g_cfg.live[111]; const float* M = &S[32];   // filas = ejes de la camara en el mundo
+    float lx = w[0] * M[0] + w[1] * M[1] + w[2] * M[2], ly = w[0] * M[4] + w[1] * M[5] + w[2] * M[6], lz = w[0] * M[8] + w[1] * M[9] + w[2] * M[10];
+    float n = std::sqrt(lx * lx + ly * ly + lz * lz); if (n < 1e-5f) return; lx /= n; ly /= n; lz /= n;
+    const float el = std::asin(std::clamp(ly, -1.0f, 1.0f)) * 57.2958f, az = std::atan2(lx, lz) * 57.2958f;   // +z = delante de la camara
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImVec2 c(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.5f);
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    dl->AddCircle(c, 5.0f, IM_COL32(255, 255, 255, 120), 16, 1.5f);
+    const bool sunny = g_cfg.live[114][3] > 0.5f;
+    DrawOneLightIcon(dl, c, vp->Size.y * 0.30f, az, el, sunny ? 0.75f : 0.2f, sunny ? "Sol" : "Luz principal");
+    // sombras en el piso: opuestas al sol; en pantalla, hacia la derecha si el sol esta a la izquierda y hacia la camara si esta al fondo
+    const float sx = -lx, sz = -lz; const float ah = std::sqrt(sx * sx + sz * sz);
+    char buf[200];
+    if (ah > 0.05f) snprintf(buf, sizeof buf, TRS("Sombras hacia %s%s%s  |  sol: altura %.0f, %.0f grados %s de la camara"),
+        std::fabs(sx) > 0.3f * ah ? TRS(sx > 0 ? "la derecha" : "la izquierda") : "", (std::fabs(sx) > 0.3f * ah && std::fabs(sz) > 0.3f * ah) ? TRS(" y ") : "",
+        std::fabs(sz) > 0.3f * ah ? TRS(sz > 0 ? "el fondo" : "la camara") : "", el, std::fabs(az), TRS(az < 0 ? "a la izquierda" : "a la derecha"));
+    else snprintf(buf, sizeof buf, TRS("Sol casi vertical: sombras bajo los pies  |  altura %.0f grados"), el);
+    ImVec2 ts = ImGui::CalcTextSize(buf); ImVec2 tp(c.x - ts.x * 0.5f, vp->Pos.y + vp->Size.y * 0.86f);
+    dl->AddRectFilled(ImVec2(tp.x - 8, tp.y - 4), ImVec2(tp.x + ts.x + 8, tp.y + ts.y + 4), IM_COL32(0, 0, 0, 150), 4.0f);
+    dl->AddText(tp, IM_COL32(255, 240, 200, 255), buf);
+}
+
 void OverlayPresent(IDXGISwapChain* sc) {
     if (!g_dev.dev || !g_cfg.optOverlay) return;
     if (!s_init) Init(sc);
@@ -812,7 +840,8 @@ void OverlayPresent(IDXGISwapChain* sc) {
     const bool camFree = FreeCamActive(); const float camSlow = TiempoFactor();   // (1/11) aviso en pantalla
     const bool camHud = !g_menuOpen && (camFree || camSlow != 1.0f);
     const bool lightIcons = g_cfg.live[319][0] > 0.5f && g_cfg.live[297][0] > 0.5f && SSSSEditorLightAge() < 0.5;   // (1/11) iconos de la luz del editor
-    if (!g_menuOpen && !g_inspectOn && !hint && !camHud && !lightIcons) return;
+    const bool sunCompass = g_cfg.live[175][0] > 0.5f && g_cfg.live[93][3] > 0.5f;   // (2/11) brujula del sol, solo en partido
+    if (!g_menuOpen && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass) return;
     if (!s_rtv) {
         ID3D11Texture2D* bb = nullptr;
         if (FAILED(sc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb)) || !bb) return;
@@ -828,6 +857,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
     else if (hint) DrawPhysiqueHint();
     if (camHud) DrawCamaraHud(camFree, camSlow);
     if (lightIcons) DrawEditorLightIcons();
+    if (sunCompass && !g_menuOpen) DrawSunCompass();
     InspectDrawOverlay();
     // (31/10) teclas del juego: con 1 se bloquean solo mientras hay un campo de texto activo (buscador, nombres de presets)
     g_menuTyping = g_menuOpen && ImGui::GetIO().WantTextInput;

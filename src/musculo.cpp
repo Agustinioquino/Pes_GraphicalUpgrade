@@ -942,6 +942,7 @@ template<int I> static void __fastcall hk_Eval(void* self, void* a2, float* out)
     if (!self || !out) return;
     const int mus = s_cls[I].mus;
     Fac fc = s_fac[mus];
+    if (mus == M_NECK) ExprBonesFrame(*(void* const volatile*)((const char*)self + 0x10));   // (01/11) expresiones por huesos: una vez por personaje y cuadro
     // por jugador: el esqueleto de la restriccion (+ 0x10) -> personaje -> sus factores (si tiene valores propios)
     const bool own = s_anyOwn.load(std::memory_order_relaxed), dyn = s_dynOn;
     void* skel = nullptr; int slot = -1;

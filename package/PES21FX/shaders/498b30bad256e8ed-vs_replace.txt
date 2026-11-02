@@ -31,6 +31,24 @@ StructuredBuffer<float4> PESGrassInst : register(t121);   // PES21: parcelas del
 cbuffer PESTurfMatC : register(b6) { float4 pTM[8]; }
 #include "pes_grass.hlsli"   // PES21 pasto v3 (19/10): tipo, alto, patrones de corte, desgaste, zonas
 
+// (2/11) viento de las hojas en funcion del tiempo, para calcularlo dos veces: ahora (z23) y en el cuadro anterior (w23). Con la
+// camara quieta el TAA del juego solo ve el movimiento que le dice el vector de velocidad (o6.zw / o7.y): antes se calculaba con la
+// MISMA posicion (solo camara), asi que las hojas se movian con el viento pero el TAA las creia quietas y las promediaba (borroso).
+float2 PESGrassWindV5(float2 pesRoot, float2 wd, float2 wc, float hb, float tw, float W, out float gustOut) {
+  float2 q = pesRoot - wd * tw * 3.0;
+  float g = PESGnoise(q * 0.08) * 0.6 + PESGnoise(float2(dot(q, wd) * 0.30, dot(q, wc) * 0.07) + 5.1) * 0.4;
+  float gust = smoothstep(0.30, 0.85, g);
+  float fl = sin(tw * (7.0 + 5.0 * hb) + hb * 6.2832);
+  float sw = sin(tw * (1.6 + 0.8 * hb) + hb * 3.1 + dot(pesRoot, wd) * 0.9);
+  gustOut = gust * W;
+  return wd * ((0.12 + 0.88 * gust) * 0.55 + sw * 0.07) * W + wc * fl * (0.05 + 0.10 * gust) * W;
+}
+float2 PESGrassWindV3(float2 pesRoot, float2 wd, float tw, float W) {
+  float phw = dot(pesRoot, wd) * 0.6 - tw * 2.2;
+  float gust = sin(phw) * 0.6 + sin(phw * 2.7 + tw * 0.9) * 0.25 + sin(tw * 0.7 + pesRoot.x * 0.13) * 0.15;
+  return wd * (0.25 + 0.75 * saturate(gust * 0.5 + 0.5)) * 0.45 * W;
+}
+
 void main(
   float4 v0_in : POSITION0,
   float2 v1 : TEXCOORD0,
@@ -181,6 +199,7 @@ void main(
   float4 Q39 = IniParams.Load(int2(139, 0));   // (20/10) pasto v5: x on | y viento extra en la luz (olas de brillo) | z aplastado en las hojas
   bool pesV5 = pesV3 && Q39.x > 0.5;
   float pesGust = 0.0;
+  float2 pesWindD = float2(0.0, 0.0);   // (2/11) viento del cuadro anterior - viento de ahora (para el vector de velocidad del TAA, w139)
   float2 pesRoot = pesIsExt ? pesExtRoot : float2(dot(v0_in, cb5[4]), dot(v0_in, cb5[6]));
   // (27/10 h) valor al azar por hoja (el PS lo usa para variar claridad y tono entre hojas, y295). (27/10 m) se calcula aca porque la tanda 10
   // lo usa tambien para el alto, el ancho y la curva de cada hoja
@@ -266,28 +285,24 @@ void main(
       float tw = IniParams.Load(int2(23, 0)).z;
       float ang = radians(IniParams.Load(int2(84, 0)).z);
       float2 wd = float2(cos(ang), sin(ang));
+      float twp = IniParams.Load(int2(23, 0)).w;   // (2/11) tiempo del cuadro anterior (lo escribe la DLL)
       if (pesV5) {
         // (20/10) pasto v5: viento fisico. Rafagas = campo de ruido que VIAJA con el viento (3 m/s): frentes irregulares que
         // recorren la cancha (no una onda senoidal pareja); cada hoja suma su propio aleteo de alta frecuencia con fase al
         // azar (las hojas no se mueven todas juntas) y un balanceo lento. Solo mueve las hojas: el grano de la base no se toca.
         float2 wc = float2(-wd.y, wd.x);
-        float2 q = pesRoot - wd * tw * 3.0;
-        float g = PESGnoise(q * 0.08) * 0.6 + PESGnoise(float2(dot(q, wd) * 0.30, dot(q, wc) * 0.07) + 5.1) * 0.4;
-        float gust = smoothstep(0.30, 0.85, g);
         // fase por manojo. (26/10 d) en las hojas del mod, por TARJETA (todos sus vertices con la misma fase: antes la celda de 2.5 cm
         // partia el 80% de las hojas y la punta, el medio y los bordes aleteaban cada uno por su lado); en las del juego, celdas de 10 cm
         float hb = (pesIsExt && pesCard >= 0) ? PESGh21(float2((float)pesCard * 0.0137 + pesExtOrg.x * 0.71, pesExtOrg.y * 0.53 + (float)pesCard * 0.0071 + (float)pesRot * 0.37) + 0.31)
                                               : PESGh21(floor(pesRoot * 10.0) * 0.173 + 0.31);
-        float fl = sin(tw * (7.0 + 5.0 * hb) + hb * 6.2832);
-        float sw = sin(tw * (1.6 + 0.8 * hb) + hb * 3.1 + dot(pesRoot, wd) * 0.9);
         float W = saturate(Q8.y);
-        pesLean += wd * ((0.12 + 0.88 * gust) * 0.55 + sw * 0.07) * W;
-        pesLean += wc * fl * (0.05 + 0.10 * gust) * W;
-        pesGust = gust * W;
+        float2 wNow = PESGrassWindV5(pesRoot, wd, wc, hb, tw, W, pesGust);
+        pesLean += wNow;
+        if (Q39.w > 0.5) { float gp; pesWindD = PESGrassWindV5(pesRoot, wd, wc, hb, twp, W, gp) - wNow; }
       } else {
-      float phw = dot(pesRoot, wd) * 0.6 - tw * 2.2;
-      float gust = sin(phw) * 0.6 + sin(phw * 2.7 + tw * 0.9) * 0.25 + sin(tw * 0.7 + pesRoot.x * 0.13) * 0.15;
-      pesLean += wd * (0.25 + 0.75 * saturate(gust * 0.5 + 0.5)) * 0.45 * saturate(Q8.y);
+        float2 wNow = PESGrassWindV3(pesRoot, wd, tw, saturate(Q8.y));
+        pesLean += wNow;
+        if (Q39.w > 0.5) pesWindD = PESGrassWindV3(pesRoot, wd, twp, saturate(Q8.y)) - wNow;
       }
     }
   }
@@ -318,11 +333,11 @@ void main(
   r1.z = dot(v0, cb5[6]);
   if (pesIsExt) r1.xyz = pesExtW;
   float pesHref = 0.06 * max(pesH, 0.2) * (pesIsExt ? pesTallE : 1.0);   // (26/10 d) la curva llega hasta la punta de la hoja alta (antes el tramo de arriba solo se trasladaba)
+  float pesTB = saturate(v0.y / pesHref);
   if (pesV5) {
     // (20/10) pasto v5: la hoja se dobla en curva (la raiz queda firme, la punta se dobla mas: desplazamiento ~ t^2) en vez
     // de inclinarse recta como una tarjeta; la punta llega al mismo lugar que antes
-    float tB = saturate(v0.y / pesHref);
-    r1.xz += pesLean * pesHref * tB * tB;
+    r1.xz += pesLean * pesHref * pesTB * pesTB;
   } else
   r1.xz += pesLean * v0.y * saturate(v0.y * 25.0);   // PES21 pasto v3: la hoja se curva (mas en la punta) por el corte y el viento
   r2.xyz = r1.xyz - cb4[3].xyz;
@@ -413,6 +428,7 @@ void main(
     r6.y = lerp(r6.y, min(v0.y, 0.06 * max(FA2.x, 0.1)), pesFarK);
   }
   float2 pesBend = float2(0.0, 0.0);
+  float pesYY = 0.0, pesBentY = 0.0;   // (2/11) alto antes y despues del largo constante (para la posicion del cuadro anterior)
   if (pesV5) {
     // (20/10) pasto v5: largo constante. Toda la deformacion (corte, viento, pisadas, jugador / pelota del juego) corre la
     // hoja de costado; una hoja real no se estira: la altura baja para que el largo raiz -> vertice se mantenga
@@ -420,6 +436,7 @@ void main(
     float yy = max(r6.y, 0.0);
     float bb = min(dot(pesBend, pesBend), yy * yy * 0.9375);
     r6.y = sqrt(max(yy * yy - bb, 0.0));
+    pesYY = yy; pesBentY = r6.y;
   }
   r6.y -= pesSinkE;   // (26/10 f) hojas del mod hundidas (x292)
   r6.w = pesIsExt ? 1.0 : dot(v0, cb5[7]);
@@ -735,9 +752,17 @@ void main(
   o5.x = r0.x * r1.z;
   o5.z = r0.y * r1.y;
   o5.w = (pesIsExt && cb5[9].x > 0.5) ? 1.0 : -pesPaint;   // PES21: depuracion, el PS pinta magenta (1); (27/10 h) negativo = hoja pintada por la linea
-  o6.z = dot(r6, cb2[16]);
-  o6.w = dot(r6, cb2[17]);
-  o7.y = dot(r6, cb2[19]);
+  // (2/11) w139: posicion de este vertice en el CUADRO ANTERIOR con el viento de entonces (misma hoja, misma curva): el TAA recibe el
+  // movimiento real de la hoja y deja de promediarla con la camara quieta (nitidez). Sin viento o con w139 = 0, la misma posicion de antes
+  float4 r6p = r6;
+  if (abs(pesWindD.x) + abs(pesWindD.y) > 1e-7) {
+    float2 dxz = pesWindD * (pesV5 ? pesHref * pesTB * pesTB : v0.y * saturate(v0.y * 25.0));
+    r6p.xz += dxz;
+    if (pesV5) { float2 bp = pesBend + dxz; float bb2 = min(dot(bp, bp), pesYY * pesYY * 0.9375); r6p.y += sqrt(max(pesYY * pesYY - bb2, 0.0)) - pesBentY; }
+  }
+  o6.z = dot(r6p, cb2[16]);
+  o6.w = dot(r6p, cb2[17]);
+  o7.y = dot(r6p, cb2[19]);
   // (27/10 m) y = oclusion de la mata (tanda 10, 0.5..1; antes el pelado, que el PS solo usaba en la depuracion w107 = 2)
   o8 = float4(pesWear.x, pesIsExt ? pesClumpAO : 1.0, pesHv, pesV3 ? 1.0 + pesBand + ((pesFl & 2) != 0 ? 8.0 : 0.0) : 0.0);   // z (27/10 h) valor al azar por hoja (antes pesH, el PS no lo leia); w = 1 + banda del atlas (0 = sin v3) + 8 si se mezcla con el suelo (igual en todo el dibujo)
   if (pesKill) o0 = float4(0.0, 0.0, -2.0, 1.0);   // todos los vertices iguales: triangulos nulos, no se rasteriza

@@ -13,6 +13,7 @@
 #include <vector>
 #include <algorithm>
 #include <cstring>
+#include <mutex>
 
 namespace fx {
 
@@ -24,6 +25,53 @@ static ID3D11Texture2D* s_tex = nullptr; static ID3D11RenderTargetView* s_rtv = 
 static ID3D11VertexShader* s_vs = nullptr; static ID3D11PixelShader* s_ps = nullptr; static bool s_tried = false;
 static ID3D11Buffer* s_cb = nullptr; static ID3D11BlendState* s_bsAdd = nullptr; static ID3D11RasterizerState* s_rs = nullptr; static ID3D11DepthStencilState* s_dss = nullptr;
 static std::vector<float> s_prev;           // posiciones del cuadro anterior (x, z)
+// (2/11) tanda 14 "reacciones" (pedido de Agustin: mas rastro, mas desgaste por los jugadores, pelota manchada). Fila 177:
+//   x manchas de la pelota (verde / tierra / cal; 0 = no, 1 = natural), y frenadas y arranques marcan mas (0..2), z rastro de la
+//   pelota segun su velocidad (0..2). El desgaste se duplica en la CPU (s_wearCpu, 256 x 128 celdas de 55 x 62 cm) para saber cuanta
+//   tierra hay bajo la pelota sin leer la GPU; la pelota se reconoce entre los dibujos del PS de botines/pelota (aadffecf) porque la
+//   traslacion de su m_world coincide con la capsula de la pelota del pasto (s_ball): el indice de ese dibujo queda como "la pelota"
+//   y en sus dibujos se enlaza b12 (PESBallC: x 1, y verde, z tierra, w cal).
+struct PlayerPrev { float x, z, vx, vz, skid; };
+static std::vector<PlayerPrev> s_pl;        // jugadores del cuadro anterior con su velocidad (m/s) y cuanto frenaban (0..1)
+static float s_wearCpu[128][256] = {};
+static float s_stain[3] = {};               // verde, tierra, cal (0..1)
+static ID3D11Buffer* s_ballCb = nullptr;    // b12 del PS de la pelota
+static const int kBallSlots = 64;
+static ID3D11Buffer* s_bdStage[kStages] = {}; static int s_bdFrame[kStages] = { -1, -1, -1 }; static std::atomic<int> s_bdW{0}; static std::atomic<int> s_bdCount{0};
+static UINT s_bdIdx[kStages][kBallSlots] = {};   // indice (vertices) de cada dibujo anotado, por anillo
+static std::atomic<UINT> s_ballIdx{0};      // indice de vertices del dibujo de la pelota (0 = aun no)
+static int s_ballIdxVotes = 0; static int s_ballLogged = 0;
+static void WearCpuAdd(float u, float v, float k, float radM) {
+    // mismo pincel que pes_wear_ps.hlsl: k * exp(-r2 * 2.2), r en radios, hasta 1.5 radios
+    float cu = u * 256.f, cv = v * 128.f, ru = radM / 140.f * 256.f, rv = radM / 79.f * 128.f;
+    int u0 = std::max(0, (int)(cu - 1.5f * ru)), u1 = std::min(255, (int)(cu + 1.5f * ru) + 1), v0 = std::max(0, (int)(cv - 1.5f * rv)), v1 = std::min(127, (int)(cv + 1.5f * rv) + 1);
+    for (int j = v0; j <= v1; j++) for (int i = u0; i <= u1; i++) {
+        float dx = (i + 0.5f - cu) / std::max(ru, 0.01f), dy = (j + 0.5f - cv) / std::max(rv, 0.01f); float r2 = dx * dx + dy * dy;
+        if (r2 < 2.25f) s_wearCpu[j][i] += k * expf(-r2 * 2.2f);
+    }
+}
+static float WearCpuAt(float x, float z) {
+    int i = std::clamp((int)((x / 140.f + 0.5f) * 256.f), 0, 255), j = std::clamp((int)((z / 79.f + 0.5f) * 128.f), 0, 127);
+    return s_wearCpu[j][i];
+}
+// distancia (m) a la linea de cal mas cercana de una cancha de 105 x 68 centrada (x a lo largo, z a lo ancho)
+static float SegDist(float px, float pz, float ax, float az, float bx, float bz) {
+    float dx = bx - ax, dz = bz - az, l2 = dx * dx + dz * dz; float t = l2 > 1e-6f ? std::clamp(((px - ax) * dx + (pz - az) * dz) / l2, 0.f, 1.f) : 0.f;
+    float qx = ax + dx * t - px, qz = az + dz * t - pz; return sqrtf(qx * qx + qz * qz);
+}
+static float LineDist(float x, float z) {
+    const float L = 52.5f, W = 34.f; float d = 1e9f;
+    auto seg = [&](float ax, float az, float bx, float bz) { d = std::min(d, SegDist(x, z, ax, az, bx, bz)); };
+    seg(-L, -W, L, -W); seg(-L, W, L, W); seg(-L, -W, -L, W); seg(L, -W, L, W); seg(0, -W, 0, W);
+    d = std::min(d, fabsf(sqrtf(x * x + z * z) - 9.15f));
+    for (int sgn = -1; sgn <= 1; sgn += 2) {
+        float gx = sgn * L, bx = sgn * (L - 16.5f), ax = sgn * (L - 5.5f), px = sgn * (L - 11.f);
+        seg(gx, -20.16f, bx, -20.16f); seg(gx, 20.16f, bx, 20.16f); seg(bx, -20.16f, bx, 20.16f);
+        seg(gx, -9.16f, ax, -9.16f); seg(gx, 9.16f, ax, 9.16f); seg(ax, -9.16f, ax, 9.16f);
+        if (sgn * (x - bx) < 0.f) d = std::min(d, fabsf(sqrtf((x - px) * (x - px) + z * z) - 9.15f));   // semicirculo del area, fuera del area
+    }
+    return d;
+}
 static int s_matchGenSeen = -1; static bool s_cleared = false;
 static double s_lastT = 0; static int s_logged = 0;
 // ---- recortes de pasto (particulas en CPU, dibujadas con el PS de las hojas en la pasada del pasto)
@@ -188,8 +236,14 @@ static void PitchFlatPresent() {
     float brush[kMaxPlayers][4]; int nb = 0; int nbP = 0;   // (27/10 n) los primeros nbP pinceles son de jugadores (canal R), el resto de la pelota (G)
     float k = std::clamp(F[1] > 0.f ? F[1] : 1.0f, 0.f, 2.f);
     // jugadores (ultimas posiciones conocidas del desgaste en vivo): pisada suave
-    for (size_t i = 0; i + 1 < s_prev.size() && nb < kMaxPlayers - 16; i += 2) {
-        brush[nb][0] = s_prev[i] / 140.f + 0.5f; brush[nb][1] = s_prev[i + 1] / 79.f + 0.5f; brush[nb][2] = 2.5f * dt * k; brush[nb][3] = 0.45f; nb++;
+    const float kAct = std::clamp(g_cfg.live[177][1], 0.f, 2.f);   // (2/11) frenadas: pisada mas fuerte y alargada hacia atras
+    for (size_t i = 0; i < s_pl.size() && nb < kMaxPlayers - 16; i++) {
+        const PlayerPrev& p = s_pl[i]; float sp = sqrtf(p.vx * p.vx + p.vz * p.vz);
+        brush[nb][0] = p.x / 140.f + 0.5f; brush[nb][1] = p.z / 79.f + 0.5f; brush[nb][2] = 2.5f * dt * k * (1.f + 2.5f * p.skid * kAct); brush[nb][3] = 0.45f; nb++;
+        if (p.skid > 0.2f && kAct > 0.01f && sp > 1.f && nb < kMaxPlayers - 16) {   // marca de frenada: 2 pinceles detras, en la direccion de la que venia
+            for (int e = 1; e <= 2 && nb < kMaxPlayers - 16; e++) { float bx = p.x - p.vx / sp * 0.35f * e, bz = p.z - p.vz / sp * 0.35f * e;
+                brush[nb][0] = bx / 140.f + 0.5f; brush[nb][1] = bz / 79.f + 0.5f; brush[nb][2] = 2.0f * dt * k * p.skid * kAct; brush[nb][3] = 0.35f; nb++; }
+        }
     }
     nbP = nb;
     // pelota en el piso: rastro entre la posicion anterior y la actual
@@ -203,6 +257,21 @@ static void PitchFlatPresent() {
         if (dist > 4.0f) dist = 0.0f;   // salto de camara / saque
         int steps = std::clamp((int)(dist / 0.08f) + 1, 1, 15);
         float kb = (F[3] > 0.f ? F[3] : 1.0f) * k * onGround;
+        { const float kv = std::clamp(g_cfg.live[177][2], 0.f, 2.f); float spd = std::min(dist / dt / 12.f, 1.5f);   // (2/11) rapida: aplasta mas; lenta: menos
+          kb *= std::max(0.25f, 1.f + kv * (spd - 0.5f)); }
+        // (2/11) manchas de la pelota (fila 177 x): rodando junta verde del pasto, tierra donde el desgaste ya la peló y cal al cruzar las lineas
+        { const float kS = std::clamp(g_cfg.live[177][0], 0.f, 2.f);
+          if (kS > 0.001f) {
+              float roll = (dist > 0.005f && dist < 4.f) ? std::min(dist, 1.5f) * onGround : 0.f;
+              float wearAt = std::clamp(WearCpuAt(s_ball[0], s_ball[2]), 0.f, 1.f), onLine = LineDist(s_ball[0], s_ball[2]) < 0.12f ? 1.f : 0.f;
+              float wet = g_cfg.live[114][0] > 0.5f && g_cfg.live[114][0] < 1.5f ? 1.f : 0.f;
+              s_stain[0] += roll * 0.05f * (1.f - onLine) * (1.f - wearAt) * (1.f + wet);
+              s_stain[1] += roll * 0.09f * wearAt * (1.f + 2.f * wet);
+              s_stain[2] += roll * 0.60f * onLine * (1.f - 0.6f * wet);
+              if (s_ballPrev[1] > 0.4f && onGround > 0.5f) { s_stain[2] *= 0.8f; s_stain[0] *= 0.95f; }   // el pique sacude el polvo
+              s_stain[0] *= expf(-dt / 120.f); s_stain[1] *= expf(-dt / 150.f); s_stain[2] *= expf(-dt / 40.f);
+              for (float& v : s_stain) v = std::clamp(v, 0.f, 1.f);
+          } else s_stain[0] = s_stain[1] = s_stain[2] = 0.f; }
         for (int sIdx = 0; sIdx < steps && nb < kMaxPlayers; sIdx++) {
             float a = steps > 1 ? (float)sIdx / (steps - 1) : 1.0f;
             float bx = s_ballPrev[0] + dx * a, bz = s_ballPrev[2] + dz * a;
@@ -280,15 +349,50 @@ void PitchWearNotePlayer(ID3D11DeviceContext* c) {
     cb->Release();
 }
 
+// (2/11) desde BeforeDraw, en cada dibujo del PS de botines / pelota (aadffecf): anota la traslacion de su m_world (b5 fila 3) con el
+// indice del dibujo para reconocer la pelota en Present; devuelve el b12 a enlazar si este dibujo ya es "la pelota" (con manchas) o nullptr
+ID3D11Buffer* PitchBallDrawNote(ID3D11DeviceContext* c, UINT verts) {
+    if (!g_dev.dev || g_cfg.live[177][0] < 0.001f || verts == 0) return nullptr;
+    UINT bi = s_ballIdx.load(std::memory_order_relaxed);
+    if (bi == 0 || s_ballIdxVotes < 3) {   // todavia buscando: anotar
+        int w = s_bdW.load(); if (s_bdStage[w]) { int i = s_bdCount.fetch_add(1);
+            if (i < kBallSlots) { ID3D11Buffer* cb = nullptr; UINT first = 0, num = 0; ID3D11DeviceContext1* c1 = nullptr;
+                if (SUCCEEDED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) && c1) { c1->VSGetConstantBuffers1(5, 1, &cb, &first, &num); c1->Release(); } else c->VSGetConstantBuffers(5, 1, &cb);
+                if (cb) { D3D11_BUFFER_DESC d; cb->GetDesc(&d); UINT off = first * 16 + 112;
+                    if (d.ByteWidth >= off + 16) { D3D11_BOX bx = { off, 0, 0, off + 16, 1, 1 }; c->CopySubresourceRegion(s_bdStage[w], 0, (UINT)i * 16, 0, 0, cb, 0, &bx); s_bdIdx[w][i] = verts; }
+                    cb->Release(); } } }
+    }
+    return (bi != 0 && verts == bi) ? s_ballCb : nullptr;
+}
+static void BallDrawPresent() {
+    if (!g_dev.dev || !g_dev.imm) return;
+    for (int i = 0; i < kStages; i++) if (!s_bdStage[i]) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 16 * kBallSlots; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; g_dev.dev->CreateBuffer(&d, nullptr, &s_bdStage[i]); }
+    if (!s_ballCb) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 16; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER; g_dev.dev->CreateBuffer(&d, nullptr, &s_ballCb); }
+    // publicar las manchas (b12: x 1 pelota, y verde, z tierra, w cal), escaladas por x177
+    if (s_ballCb) { const float kS = std::clamp(g_cfg.live[177][0], 0.f, 2.f); float v[4] = { 1.f, std::min(1.f, s_stain[0] * kS), std::min(1.f, s_stain[1] * kS), std::min(1.f, s_stain[2] * kS) }; g_dev.imm->UpdateSubresource(s_ballCb, 0, nullptr, v, 0, 0); }
+    // anillo de 3 como el desgaste: leer el de hace 2 cuadros y comparar con la pelota del pasto
+    int w = s_bdW.load(); int n = std::min(s_bdCount.exchange(0), kBallSlots); s_bdFrame[w] = n > 0 ? 1 : -1;
+    int rd = (w + 1) % kStages; int pending = s_bdFrame[rd]; s_bdFrame[rd] = -1; s_bdW = rd;
+    if (pending < 0 || !s_bdStage[rd] || !s_ballOk) return;
+    D3D11_MAPPED_SUBRESOURCE m; if (FAILED(g_dev.imm->Map(s_bdStage[rd], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) return;
+    const float* q = (const float*)m.pData; UINT found = 0; int nf = 0;
+    for (int i = 0; i < kBallSlots; i++) { if (!s_bdIdx[rd][i]) continue; float dx = q[i * 4] - s_ball[0], dy = q[i * 4 + 1] - s_ball[1], dz = q[i * 4 + 2] - s_ball[2];
+        if (dx * dx + dy * dy + dz * dz < 0.3f * 0.3f) { found = s_bdIdx[rd][i]; nf++; } }
+    g_dev.imm->Unmap(s_bdStage[rd], 0); memset(s_bdIdx[rd], 0, sizeof s_bdIdx[rd]);
+    if (found) { UINT cur = s_ballIdx.load(); if (cur == found) s_ballIdxVotes = std::min(s_ballIdxVotes + 1, 10); else { s_ballIdx = found; s_ballIdxVotes = 1; }
+        if (s_ballLogged < 2 && s_ballIdxVotes == 3) { s_ballLogged++; Log("pelota: dibujo reconocido (indice %u, %d dibujos cerca de la capsula); manchas verde %.2f tierra %.2f cal %.2f", found, nf, s_stain[0], s_stain[1], s_stain[2]); } }
+}
 void PitchWearPresent() {
     if (!g_dev.dev || !g_dev.imm) return;
     EnsureRes();
     PitchFlatPresent();   // (20/10) pasto aplastado temporal (jugadores + pelota)
+    BallDrawPresent();    // (2/11) reconocer el dibujo de la pelota y publicar sus manchas
     const float* P = g_cfg.live[115];
     if (P[3] < 0.5f) { s_count = 0; return; }
     EnsureRes(); if (!s_tex || !s_cb) return;
     // partido nuevo: borrar
-    if (g_matchGen.load() != s_matchGenSeen || !s_cleared) { s_matchGenSeen = g_matchGen.load(); float z[4] = {}; g_dev.imm->ClearRenderTargetView(s_rtv, z); s_cleared = true; s_prev.clear(); }
+    if (g_matchGen.load() != s_matchGenSeen || !s_cleared) { s_matchGenSeen = g_matchGen.load(); float z[4] = {}; g_dev.imm->ClearRenderTargetView(s_rtv, z); s_cleared = true; s_prev.clear(); s_pl.clear();
+        memset(s_wearCpu, 0, sizeof s_wearCpu); s_stain[0] = s_stain[1] = s_stain[2] = 0.f; }
     // anillo de 3: este cuadro escribio en w; el siguiente escribe en (w+1); se lee el de hace 2 cuadros = (w+1) (la GPU ya lo termino)
     int w = s_stageW.load(); int n = std::min(s_count.exchange(0), kMaxPlayers);
     s_stageFrame[w] = n > 0 ? s_frame : -1; s_frame++;
@@ -312,12 +416,27 @@ void PitchWearPresent() {
     // velocidad: el mas cercano del cuadro anterior
     float brush[kMaxPlayers][4]; int nb = 0;
     float rate = P[0] > 0.f ? P[0] : 1.0f, rad = std::clamp(P[1], 0.3f, 2.0f);
+    std::vector<PlayerPrev> plNow; plNow.reserve(cnt);
+    const float kAct = std::clamp(g_cfg.live[177][1], 0.f, 2.f);   // (2/11) frenadas y arranques desgastan mas (y arrastran la marca)
     for (int i = 0; i < cnt; i++) {
-        float best = 1e9f; for (size_t k = 0; k + 1 < s_prev.size(); k += 2) { float dx = s_prev[k] - pos[i][0], dz = s_prev[k + 1] - pos[i][1]; float d2 = dx * dx + dz * dz; if (d2 < best) best = d2; }
+        float best = 1e9f; int bi = -1; for (size_t k = 0; k < s_pl.size(); k++) { float dx = s_pl[k].x - pos[i][0], dz = s_pl[k].z - pos[i][1]; float d2 = dx * dx + dz * dz; if (d2 < best) { best = d2; bi = (int)k; } }
         float speed = best < 1e8f ? sqrtf(best) / dt : 0.f;            // m/s
-        if (speed > 15.f) speed = 0.f;                                     // salto de camara / teletransporte
-        float k = (0.25f + 0.75f * std::min(speed / 7.f, 1.f)) * rate * dt * 0.08f;   // parado: poco; corriendo: mas
+        if (speed > 15.f) { speed = 0.f; bi = -1; }                       // salto de camara / teletransporte
+        PlayerPrev pn{ pos[i][0], pos[i][1], 0.f, 0.f, 0.f };
+        if (bi >= 0 && speed > 0.f) { pn.vx = (pos[i][0] - s_pl[bi].x) / dt; pn.vz = (pos[i][1] - s_pl[bi].z) / dt;
+            float spPrev = sqrtf(s_pl[bi].vx * s_pl[bi].vx + s_pl[bi].vz * s_pl[bi].vz);
+            float acc = (speed - spPrev) / dt;                              // m/s2 (negativo = frena)
+            float skid = std::clamp((-acc - 5.f) / 12.f, 0.f, 1.f) * std::min(spPrev / 5.f, 1.f) + std::clamp((acc - 8.f) / 12.f, 0.f, 0.6f);
+            pn.skid = std::max(skid, s_pl[bi].skid * 0.85f); }            // la marca dura unos cuadros
+        float k = (0.25f + 0.75f * std::min(speed / 7.f, 1.f)) * rate * dt * 0.08f * (1.f + 3.f * pn.skid * kAct);   // parado: poco; corriendo: mas; frenando: mucho
         brush[nb][0] = pos[i][0] / 140.f + 0.5f; brush[nb][1] = pos[i][1] / 79.f + 0.5f; brush[nb][2] = k; brush[nb][3] = rad; nb++;
+        WearCpuAdd(brush[nb - 1][0], brush[nb - 1][1], k, rad);
+        if (pn.skid > 0.2f && kAct > 0.01f && speed > 1.f && nb < kMaxPlayers) {   // arrastre detras del jugador que frena
+            float ux = pn.vx / speed, uz = pn.vz / speed, bx = pos[i][0] - ux * 0.4f, bz = pos[i][1] - uz * 0.4f;
+            brush[nb][0] = bx / 140.f + 0.5f; brush[nb][1] = bz / 79.f + 0.5f; brush[nb][2] = k * 0.7f; brush[nb][3] = rad * 0.8f; nb++;
+            WearCpuAdd(brush[nb - 1][0], brush[nb - 1][1], k * 0.7f, rad * 0.8f);
+        }
+        plNow.push_back(pn);
     }
     // recortes de pasto que vuelan (20/10): se emiten detras de los jugadores que corren (x116 cantidad, y116 tamano cm, w116 on)
     { const float* C = g_cfg.live[116];
@@ -337,7 +456,7 @@ void PitchWearPresent() {
             }
         }
       } else s_clips.clear(); }
-    s_prev.assign(&pos[0][0], &pos[0][0] + cnt * 2);
+    s_prev.assign(&pos[0][0], &pos[0][0] + cnt * 2); s_pl.swap(plNow);
     if (!s_vs || !s_ps) return;
     // subir pinceles y dibujar
     D3D11_MAPPED_SUBRESOURCE mc; if (FAILED(g_dev.imm->Map(s_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mc))) return;

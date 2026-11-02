@@ -167,11 +167,11 @@ float PesCharShirtType(float3 org) {
   }
   return -1.0;
 }
-// (01/11) fila 350: la camiseta ajustada no la simula el mod de ropa (queda pegada a la animacion, la piel no la puede empujar):
-// en los jugadores con camiseta ajustada el torso, los hombros y el brazo bajo la manga se meten x350 mm mas (mismo fundido que
-// y320 = 0: sin escalon en las costuras; cuello y cintura intactos). w350 on.
+// (01/11) fila 351: la camiseta ajustada no la simula el mod de ropa (queda pegada a la animacion, la piel no la puede empujar):
+// en los jugadores con camiseta ajustada el torso, los hombros y el brazo bajo la manga se meten x351 mm mas (mismo fundido que
+// y320 = 0: sin escalon en las costuras; cuello y cintura intactos). w351 on.
 void PesTorsoTight(inout float3 mP, float3 mN, float3 rest, float3 org) {
-  float4 K = IniParams.Load(int2(350, 0));
+  float4 K = IniParams.Load(int2(351, 0));
   if (K.w < 0.5 || K.x <= 0.0) return;
   if (PesCharShirtType(org) < 3.5) return;
   float mm = min(K.x, 15.0) * PesTorsoInsetSmooth(rest);

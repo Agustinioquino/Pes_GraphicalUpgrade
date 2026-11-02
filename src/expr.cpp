@@ -182,13 +182,15 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
         }
         // sk_head: el hueso con mas peso en el 25 % mas alto de la malla; uso total por hueso para el log
         float top[32] = {}, all[32] = {}, cx[32] = {}, cy[32] = {}, cz[32] = {}, wmax[32] = {}; int cnt[32] = {};
+        float px[32] = {}, py[32] = {}, pz[32] = {};   // (01/11) vertice de mas peso de cada hueso (pico: cerca del hueso, no depende de que parte de la cara trae la malla)
         if (ok && mx >= 0 && mx <= 31) {
             const float cut = yhi - 0.25f * (yhi - ylo);
             for (UINT v = 0; v < m->nv; v++) for (int k = 0; k < 4; k++) {
                 const uint32_t b = iv[(size_t)v * 4 + k]; const float w = wv[(size_t)v * 4 + k];
                 if (b > 31 || w <= 0.004f) continue;
                 all[b] += w; cnt[b]++; if (ys[v] >= cut) top[b] += w;
-                cx[b] += w * xs[v]; cy[b] += w * ys[v]; cz[b] += w * zs[v]; wmax[b] = (std::max)(wmax[b], w);
+                cx[b] += w * xs[v]; cy[b] += w * ys[v]; cz[b] += w * zs[v];
+                if (w > wmax[b]) { wmax[b] = w; px[b] = xs[v]; py[b] = ys[v]; pz[b] = zs[v]; }
             }
         }
         for (int s = 0; s < 4; s++) if (mapped[s]) imm->Unmap(m->stVB[s], 0);
@@ -338,6 +340,12 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
             if (eye) k += snprintf(l + k, sizeof l - k, " ojos: izq (%.4f %.4f %.4f) r %.4f, der (%.4f %.4f %.4f) r %.4f", eyes[0], eyes[1], eyes[2], eyes[3], eyes[4], eyes[5], eyes[6], eyes[7]);
             for (int b = 0; b <= mx && k < (int)sizeof l - 24; b++) if (all[b] > 0) k += snprintf(l + k, sizeof l - k, " %d:%.0f/%.0f", b, all[b], top[b]);
             Log("%s", l);
+            if (!thin && !mouth && !eye && hd <= 31 && m->nv >= 1000) {   // (01/11) picos por hueso, para reconocer cada hueso por su posicion estandar (face_rig)
+                k = snprintf(l, sizeof l, "expresiones: malla %d picos (hueso: x y z peso | centro x y z):", m->id);
+                for (int b = 0; b <= mx && k < (int)sizeof l - 80; b++) if (all[b] > 0)
+                    k += snprintf(l + k, sizeof l - k, " %d:(%.3f %.3f %.3f %.2f|%.3f %.3f %.3f)", b, px[b], py[b], pz[b], wmax[b], cx[b] / all[b], cy[b] / all[b], cz[b] / all[b]);
+                Log("%s", l);
+            }
         }
     }
 }
@@ -365,18 +373,23 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
         if (m->state == 4) s_bindsDisc++; else s_bindsWait++;
         s_bindsNone++; return s_none;
     }
-    if (s_meshes.size() >= 2048) {
+    if (s_meshes.size() >= 4096) {
         // (01/11) en partido aparecen mallas pasajeras (buffers que el juego rearma: ~50 por segundo) y la tabla se llenaba cada
         // ~40 s; vaciarla entera obligaba a releer las 22 caras cada vez (73 % de los dibujos 'en lectura'). Primero se echan
         // las que no se dibujaron en los ultimos 5 s; solo si no alcanza se empieza de nuevo.
-        for (auto it2 = s_meshes.begin(); it2 != s_meshes.end();) {
+        // (02/11) primero las de mas de 30 s sin dibujarse; si no alcanza, las de mas de 5 s (los LOD de las caras vuelven a aparecer
+        // y releerlos costaba 'en lectura' 7.6 % en el partido de Villarreal)
+        for (UINT age : { 1800u, 300u }) {
+          if (s_meshes.size() < 3072) break;
+          for (auto it2 = s_meshes.begin(); it2 != s_meshes.end();) {
             FaceMesh* o = it2->second;
-            if (s_frame - o->lastFrame > 300) {
+            if (s_frame - o->lastFrame > age) {
                 s_pending.erase(std::remove(s_pending.begin(), s_pending.end(), o), s_pending.end());
                 ReleaseIA(o); if (o->cb) o->cb->Release(); delete o; it2 = s_meshes.erase(it2); s_evicted++;
             } else ++it2;
+          }
         }
-        if (s_meshes.size() >= 2048) {   // partido largo / muchas caras: se empieza de nuevo (las cuentas y buffers cambian entre partidos)
+        if (s_meshes.size() >= 4096) {   // partido largo / muchas caras: se empieza de nuevo (las cuentas y buffers cambian entre partidos)
             for (auto& kv : s_meshes) { ReleaseIA(kv.second); if (kv.second->cb) kv.second->cb->Release(); delete kv.second; }
             s_meshes.clear(); s_pending.clear();
         }
@@ -464,12 +477,13 @@ static void HeadPresent(ID3D11DeviceContext* imm) {
 void ExprPresent() {
     ID3D11DeviceContext* imm = g_dev.imm; if (!imm) return;
     HeadPresent(imm);
+    ExprBonesPresent();   // (01/11) boca por huesos: estado para el shader y resumen
     {   // con el candado tomado: los dibujos (otros hilos) leen state / cb y pueden vaciar la tabla. Los Map son DO_NOT_WAIT.
         std::lock_guard<std::mutex> lk(s_mx);
         s_frame++;
-        // (01/11) primero las mallas que se estan dibujando ahora (las pasajeras que ya no se dibujan van al final), 12 por cuadro
+        // (01/11) primero las mallas que se estan dibujando ahora (las pasajeras que ya no se dibujan van al final), 16 por cuadro
         std::stable_sort(s_pending.begin(), s_pending.end(), [](FaceMesh* a, FaceMesh* b) { return a->lastFrame > b->lastFrame; });
-        for (size_t i = 0; i < s_pending.size() && i < 12; i++) Step(imm, s_pending[i]);
+        for (size_t i = 0; i < s_pending.size() && i < 16; i++) Step(imm, s_pending[i]);
         s_pending.erase(std::remove_if(s_pending.begin(), s_pending.end(), [](FaceMesh* m) { return m->state >= 3; }), s_pending.end());
     }
     static int frames = 0;

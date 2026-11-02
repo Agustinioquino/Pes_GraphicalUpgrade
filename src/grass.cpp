@@ -237,6 +237,24 @@ static ID3D11Buffer* s_cpVs0 = nullptr; static ID3D11Buffer* s_cpVs4 = nullptr; 
 static ID3D11Buffer* s_cpVs2 = nullptr;   // copia de la escena del VS (b2) del dibujo de la base, para emitir despues con la misma camara
 // compute: lista de parcelas en la GPU
 static ID3D11ComputeShader* s_cs = nullptr; static bool s_csTried = false;
+// (2/11) w325 prepasada de profundidad: PS solo-profundidad (shaders\pes_grass_depth_ps.hlsl, mismo recorte por alfa que 18afff) y
+// variante del estado de profundidad con LESS_EQUAL para la segunda pasada (la hoja ya escrita pasa con igual profundidad)
+static ID3D11PixelShader* s_depthPS = nullptr; static bool s_depthTried = false;
+struct PreDss { ID3D11DepthStencilState *src = nullptr, *out = nullptr; }; static PreDss s_preD[4]; static int s_preNext = 0; static std::mutex s_preMx;
+static ID3D11DepthStencilState* PrepassDSS2(ID3D11DepthStencilState* cur) {   // devuelve con referencia (o nullptr = usar el mismo)
+    if (!g_dev.dev) return nullptr;
+    std::lock_guard<std::mutex> lk(s_preMx);
+    for (auto& e : s_preD) if (e.out && e.src == cur) { e.out->AddRef(); return e.out; }
+    D3D11_DEPTH_STENCIL_DESC d = {};
+    if (cur) cur->GetDesc(&d); else { d.DepthEnable = TRUE; d.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL; d.DepthFunc = D3D11_COMPARISON_LESS; d.StencilReadMask = d.StencilWriteMask = 0xff; }
+    if (d.DepthFunc == D3D11_COMPARISON_LESS) d.DepthFunc = D3D11_COMPARISON_LESS_EQUAL; else if (d.DepthFunc == D3D11_COMPARISON_GREATER) d.DepthFunc = D3D11_COMPARISON_GREATER_EQUAL; else return nullptr;
+    ID3D11DepthStencilState* n = nullptr;
+    if (FAILED(g_dev.dev->CreateDepthStencilState(&d, &n)) || !n) return nullptr;
+    PreDss& e = s_preD[s_preNext]; s_preNext = (s_preNext + 1) & 3;
+    if (e.out) e.out->Release(); if (e.src) e.src->Release();
+    e.out = n; e.src = cur; if (cur) cur->AddRef();
+    n->AddRef(); return n;
+}
 static ID3D11Buffer* s_cullCb = nullptr;
 static ID3D11Buffer* s_instG = nullptr; static ID3D11ShaderResourceView* s_instGSRV = nullptr; static ID3D11UnorderedAccessView* s_instGUAV = nullptr;
 static ID3D11Buffer* s_count = nullptr; static ID3D11UnorderedAccessView* s_countUAV = nullptr;
@@ -269,17 +287,27 @@ static const int kTimers = 8;
 struct GpuTimer { ID3D11Query* dis = nullptr; ID3D11Query* ts[5] = {}; std::atomic<int> tag{-1}; };   // tag: -1 libre, >= 0 cuadro en que se grabo
 static GpuTimer s_tm[kTimers];
 static double s_tmSum[4] = {}, s_tmMax[4] = {}; static int s_tmN = 0, s_tmDisjoint = 0, s_tmLost = 0;   // compute, nivel 0, 1, 2 (ms)
-static bool TimersReady() {
-    static bool tried = false; if (tried) return s_tm[0].dis != nullptr; tried = true;
-    D3D11_QUERY_DESC qd = {}; bool ok = true;
-    for (auto& t : s_tm) {
+static std::atomic<int> s_tmState{0};   // 0 sin crear, 1 listas, 2 fallaron (sin medidor)
+static std::mutex s_tmMx;
+static bool TimersReady() {   // (1/11 b) bajo llave y todo-o-nada: GrassEmit corre desde varios hilos; antes otro hilo podia tomar un juego a medio crear (End sobre null)
+    int st = s_tmState.load(); if (st) return st == 1;
+    std::lock_guard<std::mutex> lk(s_tmMx);
+    if (s_tmState.load()) return s_tmState.load() == 1;
+    D3D11_QUERY_DESC qd = {}; bool ok = g_dev.dev != nullptr;
+    for (auto& t : s_tm) { if (!ok) break;
         qd.Query = D3D11_QUERY_TIMESTAMP_DISJOINT; if (FAILED(g_dev.dev->CreateQuery(&qd, &t.dis))) { t.dis = nullptr; ok = false; }
-        qd.Query = D3D11_QUERY_TIMESTAMP; for (auto& q : t.ts) if (FAILED(g_dev.dev->CreateQuery(&qd, &q))) { q = nullptr; ok = false; }
+        qd.Query = D3D11_QUERY_TIMESTAMP; for (auto& q : t.ts) if (ok && FAILED(g_dev.dev->CreateQuery(&qd, &q))) { q = nullptr; ok = false; }
     }
     if (!ok) { for (auto& t : s_tm) { if (t.dis) t.dis->Release(); t.dis = nullptr; for (auto& q : t.ts) { if (q) q->Release(); q = nullptr; } } Log("pasto GPU: no se pudieron crear las consultas de tiempo (sin medidor)"); }
+    s_tmState.store(ok ? 1 : 2);
     return ok;
 }
-static GpuTimer* TimerClaim(int frame) { for (auto& t : s_tm) { int e = -1; if (t.tag.compare_exchange_strong(e, frame)) return &t; } return nullptr; }
+static GpuTimer* TimerClaim(int frame) {
+    for (auto& t : s_tm) { int e = -1; if (t.tag.compare_exchange_strong(e, frame)) {
+        if (!t.dis || !t.ts[0] || !t.ts[1] || !t.ts[2] || !t.ts[3] || !t.ts[4]) { t.tag = -1; return nullptr; }   // (1/11 b) nunca End/Begin sobre una consulta nula (cierre 19:27 PC: d3d11 del sistema con rdx = 0)
+        return &t; } }
+    return nullptr;
+}
 static void TimersRead(int f) {   // contexto inmediato
     for (auto& t : s_tm) { int tg = t.tag.load(); if (tg < 0 || tg > f - 3) continue;
         if (f - tg > 90) { t.tag = -1; s_tmLost++; continue; }   // lista diferida que nunca se ejecuto
@@ -306,6 +334,14 @@ static bool EnsureGPU() {
         Log("pasto v3: %s", s_cs ? "compute de parcelas listo" : "no se pudo compilar shaders\\pes_grass_cull_cs.hlsl (ver Errores)");
     }
     if (!s_cs) return false;
+    if (!s_depthTried) {
+        s_depthTried = true;
+        if (ID3DBlob* b = CompileNamedShader(L"pes_grass_depth_ps.hlsl", "ps_5_0")) {
+            if (FAILED(g_dev.dev->CreatePixelShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_depthPS))) s_depthPS = nullptr;
+            b->Release();
+        }
+        Log("pasto v3: %s", s_depthPS ? "PS de la prepasada de profundidad listo (w325)" : "sin PS de prepasada (shaders\\pes_grass_depth_ps.hlsl no compilo: ver Errores); w325 sin efecto");
+    }
     auto cb = [](UINT bytes, ID3D11Buffer** out) { if (*out) return; D3D11_BUFFER_DESC d = {}; d.ByteWidth = bytes; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER; g_dev.dev->CreateBuffer(&d, nullptr, out); };
     cb(160, &s_cullCb); cb(64, &s_cpVs0); cb(80, &s_cpVs4); cb(80, &s_cpPs0); cb(352, &s_sceneCb); cb(512, &s_cpVs2);
     if (!s_instG) {
@@ -576,7 +612,7 @@ void GrassFrameBoundary(UINT flags) {
     if (flags & DXGI_PRESENT_TEST) return;
     int f = s_frame.fetch_add(1) + 1;
     const bool on = g_cfg.live[58][3] > 0.5f;
-    if (g_dev.imm && s_tm[0].dis) TimersRead(f);
+    if (g_dev.imm && s_tmState.load() == 1) TimersRead(f);
     if (g_dev.imm && s_claim && s_claimUAV) {
         for (int i = 0; i < kClaimStages; i++) if (s_claimStage[i] && s_claimTag[i] >= 0 && s_claimTag[i] <= f - 3) {
             D3D11_MAPPED_SUBRESOURCE m;
@@ -851,8 +887,34 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
             char b[400] = "-"; if (stRoute) { ID3D11DepthStencilState* d = nullptr; UINT r = 0; c->OMGetDepthStencilState(&d, &r); DescDSS(b, sizeof(b), d, r); if (d) d->Release(); }
             Log("pasto tanda 6: hojas del mod (%s): stencil de la base %s, mezcla %d (1 = sin RT4, 2 = color con el suelo): %s", bound ? "desde el pasto del juego" : (pend ? "desde la base, diferida" : "desde la base"), stRoute ? "si" : "no", bmSet, b); } }
         float cbq[72];
+        // (2/11) w325 prepasada de profundidad: 1 = nivel cercano (ranuras 0-5), 2 = todos. Primero solo profundidad con el PS liviano
+        // (mismo recorte por alfa), despues el PS completo con LESS_EQUAL: cada pixel se sombrea una vez (la hoja de adelante) en vez de
+        // hasta 6-10 capas. Con la camara pegada el nivel 0 costaba 11-23 ms. Solo si el estado de profundidad escribe profundidad.
+        int preLevels = 0;
+        { int w = (int)(g_cfg.live[325][3] + 0.5f); if (s_depthPS && w > 0) preLevels = w >= 2 ? 3 : 1; }
+        ID3D11DepthStencilState* preCur = nullptr; UINT preRef = 0; ID3D11DepthStencilState* preDss2 = nullptr;
+        if (preLevels) {
+            c->OMGetDepthStencilState(&preCur, &preRef);
+            D3D11_DEPTH_STENCIL_DESC dd = DssDesc(preCur);
+            if (!dd.DepthEnable || dd.DepthWriteMask == D3D11_DEPTH_WRITE_MASK_ZERO) preLevels = 0;
+            else { preDss2 = PrepassDSS2(preCur);
+                   // sin la variante LESS_EQUAL la segunda pasada fallaria la profundidad contra la propia hoja: no hacer prepasada
+                   if (!preDss2 && (dd.DepthFunc == D3D11_COMPARISON_LESS || dd.DepthFunc == D3D11_COMPARISON_GREATER)) preLevels = 0; }
+            if (!preLevels && preCur) { preCur->Release(); preCur = nullptr; }
+        }
+        ShaderBind preSaved = {}; bool preBound = false;
+        for (int pass = preLevels ? 0 : 1; pass < 2; pass++) {
+          if (pass == 0) {   // PS de profundidad con el mismo VS (las entradas del dibujo siguen siendo las de 18afff: reglas y t120 iguales)
+            preSaved = BindShadersRaw(c, ShaderBind{}); ShaderBind pre = preSaved; pre.psObj = s_depthPS; ShaderBind tmp = BindShadersRaw(c, pre);
+            if (tmp.vsObj) tmp.vsObj->Release(); if (tmp.psObj) tmp.psObj->Release(); preBound = true;
+          } else if (preBound) {
+            ShaderBind tmp = BindShadersRaw(c, preSaved); if (tmp.vsObj) tmp.vsObj->Release(); if (tmp.psObj) tmp.psObj->Release();
+            if (preSaved.vsObj) preSaved.vsObj->Release(); if (preSaved.psObj) preSaved.psObj->Release(); preSaved = {}; preBound = false;
+            if (preDss2) c->OMSetDepthStencilState(preDss2, preRef);
+          }
         for (int sl = 0; sl < kSlots; sl++) {
             int i = sl / kBins;
+            if (pass == 0 && i >= preLevels) break;
             if (boundMesh != i) { ID3D11Buffer* vbs[4] = { mPos[i], svVb[1], svVb[2], mUv[i] }; UINT sts[4] = { 12, svSt[1], svSt[2], 4 }, ofs2[4] = { 0, svOf[1], svOf[2], 0 };
                 c->IASetVertexBuffers(0, 4, vbs, sts, ofs2); c->IASetIndexBuffer(mIb[i], DXGI_FORMAT_R32_UINT, 0); boundMesh = i; }
             for (int k = 0; k < 72; k++) cbq[k] = 0.f;
@@ -875,8 +937,11 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
             c->UpdateSubresource(s_cb, 0, nullptr, cbq, 0, 0);
             c->VSSetConstantBuffers(5, 1, &s_cb);
             c->DrawIndexedInstancedIndirect(s_args, (UINT)sl * 20);
-            if (tm && sl % kBins == kBins - 1) c->End(tm->ts[2 + i]);   // fin del nivel i
+            if (pass == 1 && tm && sl % kBins == kBins - 1) c->End(tm->ts[2 + i]);   // fin del nivel i (la prepasada cuenta dentro del nivel)
         }
+        }
+        if (preDss2) { c->OMSetDepthStencilState(preCur, preRef); preDss2->Release(); }
+        if (preCur) preCur->Release();
         if (tm) c->End(tm->dis);
         c->IASetVertexBuffers(0, 4, svVb, svSt, svOf); c->IASetIndexBuffer(svIb, svFmt, svIo);
         for (auto* b : svVb) if (b) b->Release(); if (svIb) svIb->Release();
