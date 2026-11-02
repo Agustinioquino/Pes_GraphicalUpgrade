@@ -369,34 +369,46 @@ def build(src, N=2048, NS=1024, log=print):
 def paint_throat(bsm, nrm, srm, trm, gum_mask, log=print):
     """(02/11) fondo de la garganta (throat.py): pinta el rectangulo libre del atlas throat.UV_BOX (velo, pilares, pared de la
     faringe, con la oscuridad de lo hondo) y la uvula en throat.UVULA_BOX. Color a partir del promedio de la encia (combina con
-    el resto); normal con los foliculos y capilares; brillo de mucosa humeda; translucidez la de la encia."""
+    el resto); normal con el pliegue del arco, foliculos y capilares; brillo de mucosa humeda; translucidez la de la encia.
+    (02/11 b) los 4 mapas se pintan con un borde de PAD px extra alrededor (el rectangulo tiene 18 px libres): en los mips
+    chicos el texel del borde no mezcla con el marron de alrededor."""
     import throat
-    N = bsm.shape[0]; NS = srm.shape[0]
+    N = bsm.shape[0]; NS = srm.shape[0]; PAD = 14
     gum_rgb = bsm[..., :3][gum_mask > 0.5].mean(0)
     log('  garganta: color de encia base %s' % gum_rgb.round(3).tolist())
     def box(b, n):
         u0, u1, v0, v1 = b
         return int(round(u0 * n)), int(round(u1 * n)), int(round(v0 * n)), int(round(v1 * n))
+    def put(dst, y0, y1, x0, x1, a, pad):
+        """escribe a (recorte y0:y1, x0:x1) con 'pad' px de borde repetido alrededor, sin salirse de la imagen"""
+        ap_ = np.pad(a, ((pad, pad), (pad, pad)) + ((0, 0),) * (a.ndim - 2), mode='edge')
+        Y0, Y1, X0, X1 = max(y0 - pad, 0), min(y1 + pad, dst.shape[0]), max(x0 - pad, 0), min(x1 + pad, dst.shape[1])
+        dst[Y0:Y1, X0:X1] = ap_[Y0 - (y0 - pad):Y1 - (y0 - pad), X0 - (x0 - pad):X1 - (x0 - pad)]
     bsm = bsm.copy(); nrm = nrm.copy(); srm = srm.copy(); trm = trm.copy()
     tr_gum = trm[..., :3][ndi.zoom(gum_mask, NS / N, order=1) > 0.5].mean(0)
     for b, fn in ((throat.UV_BOX, throat.paint), (throat.UVULA_BOX, throat.paint_uvula)):
         x0, x1, y0, y1 = box(b, N)
-        res = fn(gum_rgb, x1 - x0, y1 - y0)
-        col, h = res[0], res[1]
-        bsm[y0:y1, x0:x1, :3] = col; bsm[y0:y1, x0:x1, 3] = 1
-        hy, hx = np.gradient(ndi.gaussian_filter(h, 0.8))
-        sc = 4.0
+        if fn is throat.paint:
+            ring = np.concatenate([bsm[y0 - 8:y0, x0:x1, :3].reshape(-1, 3), bsm[y1:y1 + 8, x0:x1, :3].reshape(-1, 3),
+                                   bsm[y0:y1, x0 - 8:x0, :3].reshape(-1, 3), bsm[y0:y1, x1:x1 + 8, :3].reshape(-1, 3)])
+            col, h, ap, depth, rvar = fn(gum_rgb, x1 - x0, y1 - y0, edge_rgb=ring.mean(0))
+        else:
+            col, h, ap, depth, rvar = fn(gum_rgb, x1 - x0, y1 - y0)
+        put(bsm[..., :3], y0, y1, x0, x1, col, PAD); bsm[max(y0 - PAD, 0):y1 + PAD, max(x0 - PAD, 0):x1 + PAD, 3] = 1
+        rg = col[..., 0] - col[..., 1]
+        log('  garganta: tejido para el shader %.0f%%, banda ambigua (R-G 0.11..0.13) %.2f%%' % (100 * (rg > 0.13).mean(), 100 * ((rg > 0.11) & (rg < 0.13)).mean()))
+        hy, hx = np.gradient(ndi.gaussian_filter(h, (1.6, 0.6)))
+        sc = 5.0
         nx, ny = -hx * sc, -hy * sc
         nz = np.sqrt(np.clip(1 - nx * nx - ny * ny, 0.04, 1)); ln = np.sqrt(nx * nx + ny * ny + nz * nz)
-        nrm[y0:y1, x0:x1, 3] = (nx / ln) * 0.5 + 0.5; nrm[y0:y1, x0:x1, 1] = (ny / ln) * 0.5 + 0.5
-        nrm[y0:y1, x0:x1, 0] = 1; nrm[y0:y1, x0:x1, 2] = 0
+        nm = np.stack([np.ones_like(nx), (ny / ln) * 0.5 + 0.5, np.zeros_like(nx), (nx / ln) * 0.5 + 0.5], -1)
+        put(nrm, y0, y1, x0, x1, nm, PAD)
         xs0, xs1, ys0, ys1 = box(b, NS)
-        ap = ndi.zoom(res[2], NS / N, order=1) if len(res) > 2 else np.zeros((ys1 - ys0, xs1 - xs0))
-        ap = ap[:ys1 - ys0, :xs1 - xs0]
-        srm[ys0:ys1, xs0:xs1, 0] = 0.06
-        srm[ys0:ys1, xs0:xs1, 1] = 0.30 + 0.12 * ap          # mucosa humeda: mas brillo que la encia, la pared un poco menos
-        srm[ys0:ys1, xs0:xs1, 2] = 0.0
-        trm[ys0:ys1, xs0:xs1, :3] = tr_gum
+        z = lambda a: ndi.zoom(a, (float(ys1 - ys0) / a.shape[0], float(xs1 - xs0) / a.shape[1]), order=1) if np.ndim(a) == 2 else np.zeros((ys1 - ys0, xs1 - xs0)) + a
+        apS, rvS = z(ap), z(rvar)
+        sm = np.stack([0.06 + 0.02 * apS, np.clip(0.22 + 0.10 * apS + rvS, 0, 1), np.zeros_like(apS)], -1)   # mucosa humeda: brilla mas que la encia
+        put(srm[..., :3], ys0, ys1, xs0, xs1, sm, PAD // 2)
+        put(trm[..., :3], ys0, ys1, xs0, xs1, np.zeros((ys1 - ys0, xs1 - xs0, 3)) + tr_gum, PAD // 2)
     return bsm, nrm, srm, trm
 
 def main():
