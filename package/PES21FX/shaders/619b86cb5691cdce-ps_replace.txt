@@ -383,7 +383,7 @@ void main(
       // la cascada que lo contiene; pesos de un disco horizontal visto desde la altura del pixel (lo de abajo pesa mas). El
       // jugador parado en su propia sombra o en la del estadio recibe menos rebote. El verde lo mide la DLL una vez por
       // partido (158.xyz, casi fijo).
-      float shadeB = 1.0;
+      float shadeB = 1.0; float3 skyTint = float3(1, 1, 1);
       float4 TB = IniParams.Load(int2(158,0));
       if (BG.z > 0.0 && fGround > 0.02) {
         if (TB.y > 0.01) turf = lerp(turf, TB.xyz * 1.35, saturate(BG.z));
@@ -425,9 +425,19 @@ void main(
           }
           float litF = swt > 0.0 ? slt / swt : 1.0;
           shadeB = lerp(1.0, 0.2 + 0.8 * litF, saturate(BG.z));
+          // (02/11) el suelo a la sombra no devuelve "sol al 20 %": devuelve la luz del CIELO, mas azul (150 = color del cielo
+          // relativo al sol segun la atmosfera; sin dato, un celeste fijo). Pedido de Agustin: el rebote sigue al sol, calido y
+          // desaturado al sol, azulado en sombra, nunca verde puro: sol x albedo medido del cesped (158) o cielo x albedo.
+          float shF = saturate(BG.z) * (1.0 - litF);
+          if (shF > 0.001) {
+            float3 skyB = float3(0.80, 0.93, 1.18);
+            { float4 SKb = IniParams.Load(int2(150,0)); float lumB = dot(sunC, float3(0.3, 0.5, 0.2));
+              if (SKb.y > 0.01 && lumB > 1e-4) { float3 t = (sunC / lumB) * SKb.xyz; skyB = t / max(dot(t, float3(0.3, 0.5, 0.2)), 1e-4); } }
+            skyTint = lerp(float3(1, 1, 1), skyB, shF * 0.2 / max(shadeB, 1e-3));
+          }
         }
       }
-      r2.xyz += sunC * sunUp * turf * shadeB * fGround * max(BG.x, 0.0) * saturate((120.0 - zb) / 40.0) * PESAmbGain();
+      r2.xyz += sunC * sunUp * turf * shadeB * skyTint * fGround * max(BG.x, 0.0) * saturate((120.0 - zb) / 40.0) * PESAmbGain();
     }
   }
   // === PES21 luz de cielo (17/10): ambiente hemisferico. Lo que mira hacia arriba recibe un poco de azul del cielo,
