@@ -209,6 +209,7 @@ static bool IsGameShadowRes(ID3D11DepthStencilView* v) {
     bool same = (r == s_shadowRes); r->Release();
     return same;
 }
+bool HeadShadowIsGameRes(ID3D11DepthStencilView* v) { return IsGameShadowRes(v); }   // (02/11) sin exigir cabezas (registro de sombras)
 bool HeadShadowIsGameShadow(ID3D11DepthStencilView* v) { return s_count > 0 && IsGameShadowRes(v); }
 // OMSetRenderTargets: el DSV es el shadow map del sol? se acepta aunque vengan targets de color (nulos o no: algunos motores
 // ponen un target "tonto" en la pasada de sombras)
