@@ -527,9 +527,12 @@ void main(
   r0.y = cmp(r10.x == -1.000000);
   r0.x = r0.y ? 1 : r0.x;
   // (02/11) sombra del techo (t4) tambien al pie de la hoja (pesFootP = r6 fuera del pasto)
-  r7.xyzw = g_psObject.m_localParam[1].xyzw * pesFootP.yyyy;
-  r7.xyzw = pesFootP.xxxx * g_psObject.m_localParam[0].xyzw + r7.xyzw;
-  r7.xyzw = pesFootP.zzzz * g_psObject.m_localParam[2].xyzw + r7.xyzw;
+  // (02/11 d) w337 "Sombra alineada": la proyeccion del techo (b5 m_localParam) sale de la misma camara torcida que el shadow map,
+  // asi que se corrige igual (videos de Agustin 13:17 PC: la sombra del techo se corria con la camara aunque w337 = 1)
+  float3 pesRoofP = PESShadowAlign(pesFootP, g_psScene.m_view, IniParams.Load(int2(337,0)).w);
+  r7.xyzw = g_psObject.m_localParam[1].xyzw * pesRoofP.yyyy;
+  r7.xyzw = pesRoofP.xxxx * g_psObject.m_localParam[0].xyzw + r7.xyzw;
+  r7.xyzw = pesRoofP.zzzz * g_psObject.m_localParam[2].xyzw + r7.xyzw;
   r7.xyzw = g_psObject.m_localParam[3].xyzw + r7.xyzw;
   r7.xyz = r7.xyz / r7.www;
   r8.xy = float2(0.5,0.5) * r7.xy;
