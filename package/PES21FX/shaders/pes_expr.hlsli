@@ -135,8 +135,15 @@ float3 PesTongue(float3 rest, float2 uv, uint jaw)
     q.z += L * 0.030 * sx;                                      // hasta 3 cm afuera en la punta
     q.y += L * 0.0018 * sin(3.14159 * s) * raiz;                // el medio se levanta para pasar sobre los dientes de abajo
     q.y -= L * 0.0060 * s * s;                                  // la punta cae sobre el labio de abajo
-    q.x -= rest.x * 0.30 * L * s;                               // se afina hacia la punta
-    q.y -= (rest.y - 1.636) * 0.25 * L * s;                     // y se aplana (menos alto)
+    // (02/11, Agustin: "estirada bastante mas ancha") afuera la lengua se relaja y se ensancha (hasta +35 % hacia la punta)
+    q.x += rest.x * 0.35 * L * smoothstep(0.15, 0.8, s);
+    // (02/11, Agustin: "que el inicio de la lengua se estire un poco para ocultar el agujero de la garganta") la raiz se
+    // estira hacia atras y arriba y se ensancha, tapando la garganta que queda a la vista con la lengua afuera
+    float r0 = 1.0 - smoothstep(0.0, 0.30, s);
+    q.z -= L * 0.0050 * r0;
+    q.y += L * 0.0020 * r0;
+    q.x += rest.x * 0.25 * L * r0;
+    q.y -= (rest.y - 1.636) * 0.15 * L * s;                     // y se aplana un poco (menos alto)
     q.x += L * 0.0012 * s * s * sin(6.2832 * 0.4 * t + 0.5) * saturate(T.y);   // la punta se mueve apenas de lado (movimiento vivo)
     o += q;
   }
