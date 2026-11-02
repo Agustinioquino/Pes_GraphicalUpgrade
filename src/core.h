@@ -334,6 +334,7 @@ extern thread_local LodIA t_grassSub;   // (20/10) pasto v4: malla propia para e
 void GrassDenseReset();
 void ExeDumpPresent();
 void ExePatchInstall();
+void ShadowCasterLogPresent();   // (02/11) hooks.cpp: b2 de la pasada de sombras (cascada cercana) al log
 void ExePatchPresent();   // (20/10) LOD de modelos (x142) cada segundo
 void GrassDistPresent();  // (26/10) busca el recorte de distancia del pasto 3D del juego ya descifrado (grassdist.cpp)
 // (23/10) camara del motor (camhook.cpp): cortes de camara del juego (CameraSystem 0x14198d3b0) y reinicios del TAA del juego

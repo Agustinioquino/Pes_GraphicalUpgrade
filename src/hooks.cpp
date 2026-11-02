@@ -1279,7 +1279,45 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
 // (27/10 c) sombra de la cabeza: el mismo dibujo de la pasada de sombras del juego (cascada mas cercana) se repite en el atlas
 // propio, una vez por cabeza, con un b2 (g_vsScene) cuya m_projectionView es la caja ortografica de esa cabeza (headshadow.cpp)
 // (27/10 d) cualquier tipo de dibujo (el juego puede mandar la sombra con DrawIndexedInstanced); kind para el diagnostico
+// (02/11) sombras de jugadores despegadas con sombra_parche 1 en algunos estadios: los que proyectan sombra se dibujan con
+// g_vsScene.m_projectionView (b2 del VS, mundo -> cascada) y los que la reciben con m_shadowProjection (vista -> luz). Cada 15 s
+// (12 veces) se copia el b2 del primer dibujo de la cascada cercana (viewport arriba a la izquierda) y se anota en el log junto
+// a las lineas 'sombra_parche 1:' para comparar las dos matrices en un estadio bueno y uno malo.
+static ID3D11Buffer* s_casterStage = nullptr; static UINT s_casterStageSize = 0; static std::atomic<int> s_casterWant{0};
+static int s_casterLogN = 0; static double s_casterNext = 0; static uint64_t s_casterVS = 0; static float s_casterVp[2] = {};
+static void ShadowCasterProbe(ID3D11DeviceContext* c) {
+    if (s_casterWant.load(std::memory_order_relaxed) != 1 || c != g_dev.imm) return;
+    D3D11_VIEWPORT vp; UINT n = 1; c->RSGetViewports(&n, &vp);
+    if (n < 1 || vp.TopLeftX > 0.5f || vp.TopLeftY > 0.5f) return;
+    ID3D11Buffer* b = nullptr; c->VSGetConstantBuffers(2, 1, &b); if (!b) return;
+    D3D11_BUFFER_DESC bd; b->GetDesc(&bd);
+    if (!s_casterStage || s_casterStageSize != bd.ByteWidth) {
+        if (s_casterStage) s_casterStage->Release(); s_casterStage = nullptr;
+        D3D11_BUFFER_DESC sd{}; sd.ByteWidth = bd.ByteWidth; sd.Usage = D3D11_USAGE_STAGING; sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        if (FAILED(g_dev.dev->CreateBuffer(&sd, nullptr, &s_casterStage))) { b->Release(); s_casterWant = 0; return; }
+        s_casterStageSize = bd.ByteWidth;
+    }
+    c->CopyResource(s_casterStage, b); b->Release();
+    CtxState& cs = Ctx(c); s_casterVS = cs.vs ? cs.vs->hash : 0; s_casterVp[0] = vp.Width; s_casterVp[1] = vp.Height;
+    s_casterWant = 2;
+}
+void ShadowCasterLogPresent() {
+    if (s_casterLogN >= 12 || !g_dev.imm) return;
+    int w = s_casterWant.load();
+    if (w == 0) { double t = Now(); if (t >= s_casterNext) { s_casterNext = t + 15.0; s_casterWant = 1; } return; }
+    if (w != 2 || !s_casterStage) return;
+    D3D11_MAPPED_SUBRESOURCE m;
+    if (FAILED(g_dev.imm->Map(s_casterStage, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) return;
+    float f[48] = {}; memcpy(f, m.pData, (std::min)((size_t)s_casterStageSize, sizeof f)); g_dev.imm->Unmap(s_casterStage, 0);
+    s_casterWant = 0; s_casterLogN++;
+    Log("sombra jugadores: VS %016llX cascada %.0fx%.0f, b2 %u bytes | c0..c3 %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f",
+        (unsigned long long)s_casterVS, s_casterVp[0], s_casterVp[1], s_casterStageSize, f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13], f[14], f[15]);
+    Log("sombra jugadores: b2 c4..c11 %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f",
+        f[16], f[17], f[18], f[19], f[20], f[21], f[22], f[23], f[24], f[25], f[26], f[27], f[28], f[29], f[30], f[31],
+        f[32], f[33], f[34], f[35], f[36], f[37], f[38], f[39], f[40], f[41], f[42], f[43], f[44], f[45], f[46], f[47]);
+}
 template<int V, class F> static void HeadShadowReplay(ID3D11DeviceContext* c, ID3D11DepthStencilView* gameDSV, int kind, F draw) {
+    ShadowCasterProbe(c);   // (02/11) registro de la matriz de los que proyectan sombra
     if (g_cfg.live[309][0] < 0.5f) return;   // (31/10) x309 = 0: la DLL tampoco repite dibujos (antes solo el shader dejaba de leer el atlas)
     int n = HeadShadowSlots(); ID3D11DepthStencilView* dsv = HeadShadowDSV();
     if (n <= 0 || !dsv || !HeadShadowIsNearCascade(c, gameDSV, kind)) return;
