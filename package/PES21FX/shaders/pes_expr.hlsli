@@ -135,8 +135,9 @@ float3 PesTongue(float3 rest, float2 uv, uint jaw)
     q.z += L * 0.030 * sx;                                      // hasta 3 cm afuera en la punta
     q.y += L * 0.0018 * sin(3.14159 * s) * raiz;                // el medio se levanta para pasar sobre los dientes de abajo
     q.y -= L * 0.0060 * s * s;                                  // la punta cae sobre el labio de abajo
-    q.x -= rest.x * 0.30 * L * s;                               // se afina hacia la punta
-    q.y -= (rest.y - 1.636) * 0.25 * L * s;                     // y se aplana (menos alto)
+    // (02/11, Agustin: "deberia respetarse un poco mas su ancho") antes se afinaba 30 % en la punta: ahora apenas 8 %
+    q.x -= rest.x * 0.08 * L * s * s;                           // se afina apenas en la punta
+    q.y -= (rest.y - 1.636) * 0.15 * L * s;                     // y se aplana un poco (menos alto)
     q.x += L * 0.0012 * s * s * sin(6.2832 * 0.4 * t + 0.5) * saturate(T.y);   // la punta se mueve apenas de lado (movimiento vivo)
     o += q;
   }
