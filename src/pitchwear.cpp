@@ -378,15 +378,17 @@ ID3D11Buffer* PitchBallDrawNote(ID3D11DeviceContext* c, UINT verts) {
         int w = s_bdW.load(); if (s_bdStage[w]) { int i = s_bdCount.fetch_add(1);
             if (i < kBallSlots) { ID3D11Buffer* cb = nullptr; UINT first = 0, num = 0; ID3D11DeviceContext1* c1 = nullptr;
                 if (SUCCEEDED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) && c1) { c1->VSGetConstantBuffers1(5, 1, &cb, &first, &num); c1->Release(); } else c->VSGetConstantBuffers(5, 1, &cb);
-                if (cb) { D3D11_BUFFER_DESC d; cb->GetDesc(&d); UINT off = first * 16 + 112;
-                    if (d.ByteWidth >= off + 16) { D3D11_BOX bx = { off, 0, 0, off + 16, 1, 1 }; c->CopySubresourceRegion(s_bdStage[w], 0, (UINT)i * 16, 0, 0, cb, 0, &bx); s_bdIdx[w][i] = verts; }
+                // (2/11 e) se copian las 8 primeras filas de b5 (128 B): la traslacion puede estar en la fila 3, en la 7 o en la columna w de las
+                // filas 4..6 (matriz traspuesta, como la del pasto); antes solo la fila 7 y la pelota nunca se reconocio
+                if (cb) { D3D11_BUFFER_DESC d; cb->GetDesc(&d); UINT off = first * 16;
+                    if (d.ByteWidth >= off + 128) { D3D11_BOX bx = { off, 0, 0, off + 128, 1, 1 }; c->CopySubresourceRegion(s_bdStage[w], 0, (UINT)i * 128, 0, 0, cb, 0, &bx); s_bdIdx[w][i] = verts; }
                     cb->Release(); } } }
     }
     return (bi != 0 && verts == bi) ? s_ballCb : nullptr;
 }
 static void BallDrawPresent() {
     if (!g_dev.dev || !g_dev.imm) return;
-    for (int i = 0; i < kStages; i++) if (!s_bdStage[i]) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 16 * kBallSlots; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; g_dev.dev->CreateBuffer(&d, nullptr, &s_bdStage[i]); }
+    for (int i = 0; i < kStages; i++) if (!s_bdStage[i]) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 128 * kBallSlots; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; g_dev.dev->CreateBuffer(&d, nullptr, &s_bdStage[i]); }
     if (!s_ballCb) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 16; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER; g_dev.dev->CreateBuffer(&d, nullptr, &s_ballCb); }
     // publicar las manchas (b12: x 1 pelota, y verde, z tierra, w cal), escaladas por x177
     if (s_ballCb) { const float kS = std::clamp(g_cfg.live[177][0], 0.f, 2.f); float v[4] = { 1.f, std::min(1.f, s_stain[0] * kS), std::min(1.f, s_stain[1] * kS), std::min(1.f, s_stain[2] * kS) }; g_dev.imm->UpdateSubresource(s_ballCb, 0, nullptr, v, 0, 0); }
@@ -395,9 +397,17 @@ static void BallDrawPresent() {
     int rd = (w + 1) % kStages; int pending = s_bdFrame[rd]; s_bdFrame[rd] = -1; s_bdW = rd;
     if (pending < 0 || !s_bdStage[rd] || !s_ballOk) return;
     D3D11_MAPPED_SUBRESOURCE m; if (FAILED(g_dev.imm->Map(s_bdStage[rd], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) return;
-    const float* q = (const float*)m.pData; UINT found = 0; int nf = 0;
-    for (int i = 0; i < kBallSlots; i++) { if (!s_bdIdx[rd][i]) continue; float dx = q[i * 4] - s_ball[0], dy = q[i * 4 + 1] - s_ball[1], dz = q[i * 4 + 2] - s_ball[2];
-        if (dx * dx + dy * dy + dz * dz < 0.3f * 0.3f) { found = s_bdIdx[rd][i]; nf++; } }
+    const float* q = (const float*)m.pData; UINT found = 0; int nf = 0; static int s_noMatch = 0; int nCand = 0;
+    for (int i = 0; i < kBallSlots; i++) { if (!s_bdIdx[rd][i]) continue; nCand++; const float* r = q + i * 32;
+        // candidatos a traslacion: fila 3 (m_world por filas), fila 7 (matriz en 4..7), columna w de 0..2 y de 4..6 (matriz traspuesta)
+        const float cand[4][3] = { { r[12], r[13], r[14] }, { r[28], r[29], r[30] }, { r[3], r[7], r[11] }, { r[19], r[23], r[27] } };
+        for (int k = 0; k < 4; k++) { float dx = cand[k][0] - s_ball[0], dy = cand[k][1] - s_ball[1], dz = cand[k][2] - s_ball[2];
+            if (dx * dx + dy * dy + dz * dz < 0.3f * 0.3f) { found = s_bdIdx[rd][i]; nf++; break; } } }
+    if (!found && nCand > 0 && s_ballIdx.load() == 0) { if (++s_noMatch == 600) {   // ~10 s sin reconocerla: volcar que se leyo (una vez)
+            Log("pelota: sin dibujo reconocido tras 600 cuadros (%d dibujos de botines/pelota por cuadro); capsula del pasto (%.2f, %.2f, %.2f)", nCand, s_ball[0], s_ball[1], s_ball[2]);
+            for (int i = 0, n = 0; i < kBallSlots && n < 3; i++) { if (!s_bdIdx[rd][i]) continue; n++; const float* r = q + i * 32;
+                Log("pelota: candidato %u indices b5 f0 (%.2f %.2f %.2f %.2f) f3 (%.2f %.2f %.2f %.2f) f4 (%.2f %.2f %.2f %.2f) f7 (%.2f %.2f %.2f %.2f)", s_bdIdx[rd][i],
+                    r[0], r[1], r[2], r[3], r[12], r[13], r[14], r[15], r[16], r[17], r[18], r[19], r[28], r[29], r[30], r[31]); } } }
     g_dev.imm->Unmap(s_bdStage[rd], 0); memset(s_bdIdx[rd], 0, sizeof s_bdIdx[rd]);
     if (found) { UINT cur = s_ballIdx.load(); if (cur == found) s_ballIdxVotes = std::min(s_ballIdxVotes + 1, 10); else { s_ballIdx = found; s_ballIdxVotes = 1; }
         if (s_ballLogged < 2 && s_ballIdxVotes == 3) { s_ballLogged++; Log("pelota: dibujo reconocido (indice %u, %d dibujos cerca de la capsula); manchas verde %.2f tierra %.2f cal %.2f", found, nf, s_stain[0], s_stain[1], s_stain[2]); } }
