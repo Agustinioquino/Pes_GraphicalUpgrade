@@ -74,6 +74,16 @@ ID3D11ShaderResourceView* VeinTexture() {
     return v;
 }
 
+// (02/11) grupos musculares del brazo (tools/fox/torso/arm_anatomy.py): pendientes en t26 y cavidad en t30 del PS de la piel, solo
+// en los dibujos del brazo (arm, arm_cap, arm_glove, arm_glove_cap: el mismo atlas)
+ID3D11ShaderResourceView* ArmAnatTexture(int which) {
+    if (g_cfg.live[305][0] < 0.5f) return nullptr;
+    static std::atomic<bool> s_noted{false};
+    ID3D11ShaderResourceView* v = FileTextureAny(which == 0 ? "file:textures\\pes_arm_anat_n.dds" : "file:textures\\pes_arm_anat_c.dds");
+    if (which == 0 && !s_noted.exchange(true)) Log("musculos del brazo: separaciones de los grupos %s", v ? "cargadas (t26 / t30 del PS)" : "NO CARGADAS (falta textures\\pes_arm_anat_n.dds)");
+    return v;
+}
+
 // (26/10) variantes robusto / atletico de TorsoBody (pes_variants.hlsli): las mallas del torso (pants_*_sub 1..3) y de los brazos
 // (arm, arm_cap, arm_glove, arm_glove_cap y sus capas de suciedad) se reconocen por su cantidad de indices y reciben en t127 del VS
 // de la piel (1c02a92a) y de las sombras (c6ef0c75) sus datos por vertice (textures\pes_var_<malla>.dds, tools/fox/torso/

@@ -57,6 +57,8 @@ Texture2D<float4> pesSSSMap    : register(t22);   // (20/10) solo enlazados en l
 Texture2D<float4> pesZones     : register(t25);
 Texture2D<float4> pesSkinMicro : register(t27);
 Texture2D<float4> pesFacePores : register(t28);
+Texture2D<float4> pesArmAnatN  : register(t26);   // (02/11) separaciones de los grupos musculares del brazo (tools/fox/torso/arm_anatomy.py; la DLL la enlaza solo en los brazos)
+Texture2D<float4> pesArmAnatC  : register(t30);   // (02/11) cavidad de esos surcos (1 = nada)
 Texture2D<float4> pesVeins     : register(t29);   // (26/10, v12.7) venas de brazos y manos (la DLL la enlaza solo en esos dibujos)
 Texture2D<float4> pesVarRob    : register(t16);   // (26/10) variantes del torso: normal delta del robusto (BC5 SNORM, v 0..0.5 del torso)
 Texture2D<float4> pesVarAtl    : register(t17);   //         normal delta del atletico
@@ -287,6 +289,20 @@ void main(
       lbVM = saturate(lbVein * lv.z);
     }
   }
+  float anatCav = 0.0;
+  {   // (02/11) grupos musculares del brazo (Agustin: "mejor definicion del grupo de musculos"): las separaciones entre cabezas y
+      // grupos (deltoides, biceps, herradura del triceps, braquiorradial, flexores / extensores, tendones de la muneca) que la malla
+      // no tiene. Con la definicion general (x172) y la del jugador, mas en el musculo que trabaja (lbDef); el atletico mas, el
+      // robusto menos. w305 >= 0 (la fila de las venas de las manos) no lo apaga: lo apaga x305 = 0 con todo lo demas.
+    uint aaW = 0, aaH = 0; pesArmAnatN.GetDimensions(aaW, aaH);
+    if (lbOn && aaW > 0) {
+      float dG = IniParams.Load(int2(172,0)).x; dG = dG > 0.01 ? clamp(dG, 0.0, 3.0) : 1.0;
+      float aK = saturate(0.55 * dG) * (1.0 + 1.2 * saturate(lbDef)) * (1.0 + 0.5 * vrWa - 0.6 * vrWr);
+      r2.xy += aK * pesArmAnatN.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN).xy;
+      float l2 = dot(r2.xy, r2.xy); if (l2 > 0.94) r2.xy *= rsqrt(l2 / 0.94);
+      anatCav = saturate(aK) * (1.0 - pesArmAnatC.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN).x);
+    }
+  }
   if (hpK > 0.001 && P94h.w > 0.5) {   // (20/10) micro normal de poros, mismo mosaico en reposo que la cara: sigue sin costura
     float4 guide = pesFacePores.Sample(g_samplerLinear_Clamp_s, v2.xy);
     PesPores pp = PesTriPores(pesSkinMicro, g_samplerLinear_Clamp_s, hpPM, hpDPx, hpDPy, hpDUx, hpDUy, hpTileM, guide.g, hpHasR);
@@ -434,7 +450,8 @@ void main(
       r2.yzw = PesNailFix(g_tex_diffuse, g_samplerLinear_Clamp_s, v2.xy, nfDx * nfB, nfDy * nfB, r2.yzw, saturate(P304.y));
     }
   }
-  if (lbVM > 0.001) r2.yzw *= lerp(float3(1.0, 1.0, 1.0), float3(0.86, 0.91, 0.99), lbVM * 0.6);   // (26/10, v12.7) la vena: un poco mas oscura y fria
+  if (lbVM > 0.001) r2.yzw *= lerp(float3(1.0, 1.0, 1.0), float3(0.86, 0.91, 0.99), lbVM * 0.6);
+  if (anatCav > 0.001) r2.yzw *= lerp(float3(1.0, 1.0, 1.0), float3(0.90, 0.86, 0.85), anatCav * 0.7);   // (02/11) surco entre musculos: un poco mas oscuro y calido   // (26/10, v12.7) la vena: un poco mas oscura y fria
   if (vrWr > 0.001 && vrTm > 0.001 && v2.y < 0.5) {   // (26/10) estrias del robusto: un poco mas claras (blanquecinas)
     uint vsW = 0, vsH = 0; pesVarStr.GetDimensions(vsW, vsH);
     if (vsW > 0) {
