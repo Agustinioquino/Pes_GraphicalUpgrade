@@ -214,8 +214,8 @@ void main(
   o1.w = g_vsObject.m_useWeightCount.w;
   {   // (26/10, v12.7) musculos con textura (pes_limbs.hlsli): en los brazos, piernas y manos de TorsoBody el PS de la piel recibe
       // en o1.xyz cuanto marcar el relieve muscular y las venas (z = 7: marca; ese PS no usa el color del vertice)
-    float lbD = 0.0, lbV = 0.0;
-    if (PesLimbOut(handDone, vid, v0.xyz, lbD, lbV)) o1.xyz = float3(lbD, lbV, 7.0);
+    float lbD = 0.0, lbV = 0.0, lbA = 0.0;
+    if (PesLimbOut(handDone, vid, v0.xyz, lbD, lbV, lbA)) o1.xyz = float3(lbD, lbV, 7.0 + lbA / 1200.0);   // (02/11) z = 7 + acciones / 1200
   }
   o7.xy = r3.xy;
   o2.xy = v6.xy;

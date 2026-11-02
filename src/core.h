@@ -492,6 +492,7 @@ void RingPresent(IDXGISwapChain* sc);               // (24/10 e) el aro sobre la
 ID3D11ShaderResourceView* HandDataFor(uint64_t vsHash, UINT indexCount, UINT start, INT base);   // (25/10) manos.cpp: datos por vertice de la mano (t126 del VS)
 ID3D11ShaderResourceView* LimbDataFor(uint64_t vsHash, UINT indexCount, UINT start, INT base, bool* isArm);   // (26/10, v12.7) manos.cpp: brazos y piernas (t126 del VS)
 ID3D11ShaderResourceView* VeinTexture();   // (26/10, v12.7) manos.cpp: venas de brazos y manos (t29 del PS)
+ID3D11ShaderResourceView* ArmAnatTexture(int which);   // (02/11) grupos musculares del brazo: 0 = pendientes (t26), 1 = cavidad (t30), 2 = grupo por texel (t36)
 // (27/10) brazos.cpp: brazos, manos y muslos de TorsoBody para las caras reales (la cara trae arm_bsm / thigh_bsm de 2048):
 // textura de TorsoBody del tono del jugador para t0 del PS en ese dibujo (nullptr = dejar la del juego); Present lee las huellas
 ID3D11ShaderResourceView* ArmsTextureFor(ID3D11DeviceContext* c, uint64_t vsHash, UINT indexCount);

@@ -1156,6 +1156,11 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         if (hv) { Remember(c, d, false, true, 126); c->VSSetShaderResources(126, 1, &hv); }
         // (31/10) torso bajo la camiseta preciso: mapa de lo que asoma (cuerpo.cpp) en t124 del VS de la piel y de su sombra
         if (vs->hash == 0x1c02a92ab4ae3362ULL || vs->hash == 0xc6ef0c7519ec95a5ULL) if (ID3D11ShaderResourceView* nv = TorsoNeedSRV()) { Remember(c, d, false, true, 124); c->VSSetShaderResources(124, 1, &nv); }
+        if (arm && vs->hash == 0x1c02a92ab4ae3362ULL) {   // (02/11) grupos musculares del brazo
+            if (ID3D11ShaderResourceView* an = ArmAnatTexture(0)) { Remember(c, d, true, true, 26); c->PSSetShaderResources(26, 1, &an); }
+            if (ID3D11ShaderResourceView* ac = ArmAnatTexture(1)) { Remember(c, d, true, true, 30); c->PSSetShaderResources(30, 1, &ac); }
+            if (ID3D11ShaderResourceView* ag = ArmAnatTexture(2)) { Remember(c, d, true, true, 36); c->PSSetShaderResources(36, 1, &ag); }   // (02/11 b) grupos
+        }
         if (arm && vs->hash == 0x1c02a92ab4ae3362ULL) if (ID3D11ShaderResourceView* ev = MuscleEffortSRV()) { Remember(c, d, false, true, 123); c->VSSetShaderResources(123, 1, &ev); }   // (02/11) venas por esfuerzo
         // (26/10, v12.7) venas: textura en t29 del PS de la piel para los brazos y las manos (no en la sombra)
         if ((hand || arm) && vs->hash == 0x1c02a92ab4ae3362ULL) if (ID3D11ShaderResourceView* vt = VeinTexture()) { Remember(c, d, true, true, 29); c->PSSetShaderResources(29, 1, &vt); }
