@@ -1295,7 +1295,10 @@ void ShadowCasterLogPresent() {
     if (s_casterLogN >= 12 || !g_dev.imm) return;
     int w = s_casterWant.load();
     { double t = Now();   // (02/11 c) diagnostico cada 30 s (10 veces): en que paso se queda la muestra
-      if (s_cpDiagN < 10 && t >= s_cpDiagT) { s_cpDiagT = t + 30.0; if (s_cpDiagN++ > 0 || s_cpCalls.load() > 0)
+      // (02/11 d) el tope de 10 se gastaba en el menu (0 dibujos): ahora solo cuentan las lineas con dibujos o con Map fallido,
+      // y sin dibujos sale una linea cada 5 minutos (para saber que el registro sigue vivo)
+      bool any = s_cpCalls.load() > 0 || s_cpMapFail.load() > 0; static double s_cpIdleT = 0;
+      if (s_cpDiagN < 10 && t >= s_cpDiagT && (any || t >= s_cpIdleT)) { s_cpDiagT = t + 30.0; s_cpIdleT = t + 300.0; if (any) s_cpDiagN++;
           Log("sombra jugadores (30 s): estado %d, dibujos en la pasada de sombras %d (sin pedido %d, vista corrida %d, sin b2 %d, no se pudo crear la copia %d, otro contexto %d, copiados %d), Map fallido %d (hr %08lX), muestras %d / 12",
               w, s_cpCalls.exchange(0), s_cpIdle.exchange(0), s_cpVp.exchange(0), s_cpNoCb.exchange(0), s_cpCreateFail.exchange(0), s_cpRace.exchange(0), s_cpCopied.exchange(0), s_cpMapFail.exchange(0), (unsigned long)s_cpMapHr.load(), s_casterLogN); } }
     if (w == 0) { double t = Now(); if (t >= s_casterNext) { s_casterNext = t + 15.0; s_casterWant = 1; } return; }
