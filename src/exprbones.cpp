@@ -486,6 +486,62 @@ static void Secondary(Skel& S, const float* hr, float sm, float open) {
     }
 }
 
+// ---- (02/11) la CARA EN EL MUNDO para la camara libre "seguir la cara" (freecam.cpp, fila 346) ----
+// Agustin: "una camara cercana a la cara que la siga en las animaciones, fija y centrada en el rostro". Antes la cabeza salia de
+// la matriz de sk_head copiada de b6 en el dibujo de la cara (expr.cpp) y llegaba casi en cero e intermitente. Ahora sale del
+// esqueleto (el mismo que mueve la boca por huesos, revalidado cada cuadro): sk_head actual (espacio del modelo) -> centro de la
+// cara (entre los ojos y la boca, un poco adelante) y los ejes frente / arriba de la cabeza -> mundo con la matriz del nodo.
+namespace {
+struct HeadPub { const void* node = nullptr; float c[3] = {}, fw[3] = {}, up[3] = {}; double t = 0; };
+std::mutex s_hpMx; HeadPub s_hp[8];
+std::atomic<int> s_hpOk{0}, s_hpFail{0};
+}
+static bool Norm3(float* v) { const float l = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); if (!(l > 1e-4f)) return false; v[0] /= l; v[1] /= l; v[2] /= l; return true; }
+static void PublishHead(const Skel& S) {
+    if (!S.node || !S.cur[D_HEAD]) return;
+    Xf hc; if (!ReadXf(S.cur[D_HEAD], hc)) { s_hpFail.fetch_add(1, std::memory_order_relaxed); return; }
+    float c4[4], hr[4]; QConj(S.rest[D_HEAD].q, c4); QMul(hc.q, c4, hr);   // giro de la cabeza respecto del reposo (el reposo mira a +z)
+    // centro de la cara respecto de sk_head en el reposo (face_rig: sk_head 0 / 1.640 / 0.054, ojos 1.697 / 0.138, labios ~1.63)
+    static const float kOff[3] = { 0.0f, 0.030f, 0.080f }, Z[3] = { 0.0f, 0.0f, 1.0f }, Y[3] = { 0.0f, 1.0f, 0.0f };
+    float o[3], fm[3], um[3]; QRot(hr, kOff, o); QRot(hr, Z, fm); QRot(hr, Y, um);
+    const float pm[3] = { hc.t[0] + o[0], hc.t[1] + o[1], hc.t[2] + o[2] };
+    HeadPub h; h.node = S.node;
+    void* nd = const_cast<void*>(S.node);
+    if (!CharNodeToWorld(nd, pm, h.c, true) || !CharNodeToWorld(nd, fm, h.fw, false) || !CharNodeToWorld(nd, um, h.up, false) || !Norm3(h.fw) || !Norm3(h.up)) {
+        s_hpFail.fetch_add(1, std::memory_order_relaxed); return;
+    }
+    h.t = Now();
+    std::lock_guard<std::mutex> lk(s_hpMx);
+    int at = 0; double oldest = 1e300;
+    for (int i = 0; i < 8; i++) { if (s_hp[i].node == S.node) { at = i; break; } if (s_hp[i].t < oldest) { oldest = s_hp[i].t; at = i; } }
+    s_hp[at] = h;
+    if (s_hpOk.fetch_add(1, std::memory_order_relaxed) == 0)
+        Log("camara libre: cara en el mundo desde el esqueleto (%.2f, %.2f, %.2f), frente (%.2f, %.2f, %.2f), arriba (%.2f, %.2f, %.2f); sk_head en el modelo (%.3f, %.3f, %.3f)",
+            h.c[0], h.c[1], h.c[2], h.fw[0], h.fw[1], h.fw[2], h.up[0], h.up[1], h.up[2], hc.t[0], hc.t[1], hc.t[2]);
+}
+// la cara a seguir: la del personaje fijado (*lock) si sigue al dia; si no, la que esta mas al centro de la vista de la camara
+bool ExprFaceFrame(const float* camPos, const float* camFwd, const void** lock, float c[3], float fw[3], float up[3], double* age) {
+    std::lock_guard<std::mutex> lk(s_hpMx);
+    const double now = Now();
+    int best = -1;
+    if (lock && *lock) for (int i = 0; i < 8; i++) if (s_hp[i].node == *lock && now - s_hp[i].t < 0.5) { best = i; break; }
+    if (best < 0) {
+        float bs = -1e9f;
+        for (int i = 0; i < 8; i++) {
+            if (!s_hp[i].node || now - s_hp[i].t >= 0.5) continue;
+            float d[3] = { s_hp[i].c[0] - camPos[0], s_hp[i].c[1] - camPos[1], s_hp[i].c[2] - camPos[2] };
+            const float l = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+            const float sc = (l > 1e-3f ? (d[0] * camFwd[0] + d[1] * camFwd[1] + d[2] * camFwd[2]) / l : 1.0f) - 0.002f * l;   // al centro y, a igualdad, cerca
+            if (sc > bs) { bs = sc; best = i; }
+        }
+        if (best < 0) return false;
+        if (lock) *lock = s_hp[best].node;
+    }
+    memcpy(c, s_hp[best].c, 12); memcpy(fw, s_hp[best].fw, 12); memcpy(up, s_hp[best].up, 12);
+    if (age) *age = now - s_hp[best].t;
+    return true;
+}
+
 // en el Eval de la restriccion del cuello (musculo.cpp hk_Eval, clase "cuello"): una vez por personaje y cuadro
 void ExprBonesFrame(const void* skel) {
     if (!skel) return;
@@ -512,6 +568,7 @@ void ExprBonesFrame(const void* skel) {
     }
     Xf jc; if (!ReadBase(*S, D_JAW, jc)) { Build(*S, skel); S->rebuilds++; return; }
     s_lastActive.store(fr, std::memory_order_relaxed);
+    if (FreeCamActive() && g_cfg.live[346][0] > 0.5f) PublishHead(*S);   // (02/11) camara libre "seguir la cara"
     float deg = 0.0f; if (JawAngle(*S, jc, &deg)) { S->angMin = (std::min)(S->angMin, deg); S->angMax = (std::max)(S->angMax, deg); S->angN++; }
     if (!on) return;
     // eje X de la cabeza actual (el reposo del skl mira a +z, x a la izquierda) y pivote = mandibula actual
