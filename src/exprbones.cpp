@@ -174,7 +174,7 @@ struct Skel {
     // cuello paso dos veces en el mismo cuadro) se parte de la base guardada y no se gira dos veces
     float wq[kND][4] = {}, wt[kND][3] = {}, bq[kND][4] = {}, bt[kND][3] = {}; bool wHave[kND] = {};
     int reused = 0;
-    float seed = 0.37f; bool seedHave = false;   // (02/11 c) semilla de la mirada, la misma que el VS del globo (PesExprSeed)
+    float seed = 0.37f; bool seedHave = false; float seedCand = -1.0f; int seedCandN = 0;   // (02/11 c) semilla de la mirada, la misma que el VS del globo (PesExprSeed)
     // (02/11 e) sk_head del esqueleto del CUERPO (175 huesos) para la camara: el sk_head del esqueleto de la cara tiene la
     // transformacion actual en (0, 0, 0) (no es espacio del modelo: log 12:46 PC), el del cuerpo si lo es
     void* bHead = nullptr; int bHeadIdx = -1; Xf bHeadRest = {};
@@ -385,6 +385,14 @@ static bool WriteBone(Skel& S, int d, const Xf& base, const float* nq, const flo
     memcpy(S.bq[d], base.q, sizeof S.bq[d]); memcpy(S.bt[d], base.t, sizeof S.bt[d]); S.wHave[d] = true;
     return true;
 }
+// (02/11 d) devuelve el hueso a su base y deja de seguirlo: si el mod no lo mueve este cuadro NO se escribe nada (antes los
+// gestos secundarios reescribian cada cuadro pomulos, cejas y bajo-ojo aunque el corrimiento fuera 0; con 1cbce0f la boca 3D
+// se rompia con la boca por huesos y volvia con "Por shader", con 0 giros de mandibula escritos)
+static void Release(Skel& S, int d) {
+    if (!S.wHave[d] || !S.cur[d]) { S.wHave[d] = false; return; }
+    Xf x; if (ReadBase(S, d, x)) { float out[7] = { x.q[0], x.q[1], x.q[2], x.q[3], x.t[0], x.t[1], x.t[2] }; SafeCopy((char*)S.cur[d] + 16, out, 28); }
+    S.wHave[d] = false;
+}
 // gira la transformacion de un hueso alrededor de su propia posicion: q nuevo = r * q base (r en el espacio del modelo)
 static bool RotInPlace(Skel& S, int d, const float* r) {
     Xf x; if (!ReadBase(S, d, x)) return false;
@@ -425,7 +433,15 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
             int best = -1; float bd = H[2] * H[2];
             const int n = (std::min)((int)(H[0] + 0.5f), 20);
             for (int i = 0; i < n; i++) { const float* q = g_cfg.live[195 + 3 * i]; const float dx = wp[0] - q[0], dz = wp[2] - q[2], d2 = dx * dx + dz * dz; if (d2 < bd) { bd = d2; best = i; } }
-            S.seed = best >= 0 ? (float)best * 0.6180339f : 0.37f; S.seedHave = true;
+            // (02/11 e, Agustin: "los parpados vibran a lo lejos y de cerca") la tabla la rehace el Present en otro hilo: leida a
+            // mitad de camino daba otra entrada un cuadro si y otro no -> la mirada de los parpados saltaba entre dos semillas.
+            // La semilla cambia solo si la misma entrada nueva se ve 30 cuadros seguidos
+            const float cand = best >= 0 ? (float)best * 0.6180339f : 0.37f;
+            if (!S.seedHave) { S.seed = cand; S.seedHave = true; S.seedCandN = 0; }
+            else if (cand != S.seed) {
+                if (cand == S.seedCand) { if (++S.seedCandN >= 30) { S.seed = cand; S.seedCandN = 0; } }
+                else { S.seedCand = cand; S.seedCandN = 1; }
+            } else S.seedCandN = 0;
         } else if (!S.seedHave && H[1] <= 0.5f && H[0] <= 0.5f) { S.seed = 0.37f; }
     }
     const float seed = S.seed;
@@ -494,9 +510,10 @@ static void Secondary(Skel& S, const float* hr, float sm, float open) {
     for (const Off& f : kOff) {
         if (!S.cur[f.d]) continue;
         const float a = f.k == 0 ? ks : ko;
+        if (a <= 0.001f) { Release(S, f.d); continue; }
         Xf x; if (!ReadBase(S, f.d, x)) continue;
         float nt[3] = { x.t[0], x.t[1], x.t[2] };
-        if (a > 0.001f) { const float hv[3] = { f.x * a, f.y * a, f.z * a }; float mv[3]; QRot(hr, hv, mv); for (int k = 0; k < 3; k++) nt[k] += mv[k]; }
+        { const float hv[3] = { f.x * a, f.y * a, f.z * a }; float mv[3]; QRot(hr, hv, mv); for (int k = 0; k < 3; k++) nt[k] += mv[k]; }
         if (!WriteBone(S, f.d, x, x.q, nt)) s_badWrite.fetch_add(1, std::memory_order_relaxed);
     }
 }
@@ -606,7 +623,7 @@ void ExprBonesFrame(const void* skel) {
     const float openAll = std::clamp((std::max)(o, 0.0f) + SStep(4.0f, 20.0f, deg), 0.0f, 1.0f);   // boca abierta del mod o del juego (grados)
     EyesFrame(*S, hc, hr, sm);   // antes de la boca: lee la comisura sin el giro de la mandibula del mod
     Secondary(*S, hr, sm, openAll);
-    if (fabsf(o) < 0.001f && teeth < 0.001f) return;
+    if (fabsf(o) < 0.001f && teeth < 0.001f) { for (int d = 0; d < 18; d++) if (S->wHave[d]) Release(*S, d); return; }   // slider en 0: la boca vuelve a la del juego
     static const float X[3] = { 1.0f, 0.0f, 0.0f }; float ax[3]; QRot(hr, X, ax);
     float ln = sqrtf(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]); if (ln < 0.5f) return; for (float& v : ax) v /= ln;
     const float P[3] = { jc.t[0], jc.t[1], jc.t[2] };
@@ -617,7 +634,7 @@ void ExprBonesFrame(const void* skel) {
         const float op = (std::max)(o, 0.0f);
         const float mvv0[3] = { tv[0] * teeth + ov[0] * op, tv[1] * teeth + ov[1] * op, tv[2] * teeth + ov[2] * op };
         const bool rot = kDef[d].jaw > 0.0f && fabsf(A) > 1e-5f, mv = fabsf(mvv0[0]) + fabsf(mvv0[1]) + fabsf(mvv0[2]) > 1e-6f;
-        if (!rot && !mv) continue;
+        if (!rot && !mv) { if (d < 18 && S->wHave[d]) Release(*S, d); continue; }   // 18.. = gestos secundarios / parpados (otro dueno)
         Xf x; if (!ReadBase(*S, d, x)) continue;
         float nq[4] = { x.q[0], x.q[1], x.q[2], x.q[3] }, nt[3] = { x.t[0], x.t[1], x.t[2] };
         if (rot) {
