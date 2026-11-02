@@ -948,9 +948,34 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
         // delgado: el punto de reposo baja con la gravedad -> la remera cuelga mas larga (solo tela libre)
         float3 restT = rest1;
         if (pesFit > 0.0) { float gl = length(s_grav); if (gl > 1e-4) restT += (s_grav / gl) * pesFit * PES_FIT_HANG * fitFree; }
+        // (02/11) fila 352 (Agustin: en la vida real las mangas van mas pegadas al brazo): el REPOSO de la manga se cierra hacia
+        // el eje de su tramo (centro de la tela de ese tramo, como el brazo como volumen): x352 = cuanto del exceso sobre el radio
+        // minimo del tramo se saca, y352 = maximo en cm. Solo cambia adonde la tira el anclaje: la manga sigue igual de libre
+        // (mismo pin, misma correa) y la piel real la frena (el levantado de abajo corre el reposo afuera de la piel). Se apaga
+        // junto al hombro y junto al puno (el puno es otra malla que sigue al esqueleto: sin escalon).
+        float3 restS = rest1;
+        { float4 SL = IniParams.Load(int2(352, 0));
+          if (SL.w > 0.5 && SL.x > 0.0 && g_legCount == 0 && s_tOk) {
+            float3 r0s = rest1 - rnrm1 * g_rest[p].nrm.w;
+            float sws = pesLimbW(p, r0s);
+            if (sws > 0.2) {
+                uint sdS = dot(r0s - s_tC, s_tSide) < 0.0 ? 0u : 1u;
+                if (s_armOk[sdS]) {
+                    uint bS = (uint)clamp((sws - 0.2) / 0.8 * PES_ARM_BANDS, 0.0, PES_ARM_BANDS - 1.0);
+                    uint bS2 = bS + 1 < PES_ARM_BANDS ? bS + 1 : bS - 1;
+                    float3 axS = normalize(s_armC[sdS][bS2] - s_armC[sdS][bS] + 1e-6);
+                    float3 dvS = rest1 - s_armC[sdS][bS]; float3 radV = dvS - axS * dot(dvS, axS);
+                    float radS = length(radV);
+                    float wS = smoothstep(0.2, 0.35, sws) * (1.0 - smoothstep(0.8, 0.95, sws));
+                    float inS = min(saturate(SL.x) * max(radS - s_armR[sdS][bS], 0.0), clamp(SL.y, 0.0, 5.0) * 0.01) * wS;
+                    if (radS > 1e-4 && inS > 0.0 && all(isfinite(radV))) restS = rest1 - radV / radS * inS;
+                }
+            }
+          } }
+        restT += restS - rest1;
 #if PES_BODY && PES_BODY_LIFT
-        float3 restB = rest1;   // (27/10) reposo afuera de la piel real (tambien para las costuras cosidas, mas abajo)
-        if (pesBodyHas) { restB = pesBodyLift(p, k, t, rest1); restT += restB - rest1; }
+        float3 restB = restS;   // (27/10) reposo afuera de la piel real (tambien para las costuras cosidas, mas abajo)
+        if (pesBodyHas) { restB = pesBodyLift(p, k, t, restS); restT += restB - restS; }
 #else
         float3 restB = rest1;
 #endif
