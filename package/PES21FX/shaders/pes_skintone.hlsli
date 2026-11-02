@@ -85,11 +85,14 @@ int PesSkinNearest(float3 wp) {
 // esta inclinado (adelante mas bajo: 1.478, atras 1.55) y se sigue con su altura segun el angulo alrededor del cuello. Con
 // esto el 99 % del torso da 1 y el 99 % de brazos y cuello da 0; en la costura queda una franja de ~1 cm de transicion.
 float PesSS(float a, float b, float x) { float t = saturate((x - a) / (b - a)); return t * t * (3.0 - 2.0 * t); }
-float PesTorsoMask(float3 v) {
+// (02/11) a0 / a1: donde empieza y termina el fundido a lo largo del brazo desde la costura del hombro (m). Solo el torso = -4..4 mm
+// (la costura); y320 = 3 "torso, espalda y hombros" = 8..14 cm: el hombro (que en TorsoBody es parte de arm.fmdl) se mete con el
+// torso y el fundido queda tapado por la manga; el cuello igual que "solo el torso"
+float PesTorsoMaskA(float3 v, float a0, float a1) {
   float3 p = float3(abs(v.x), v.y, v.z);
   const float3 cA = float3(0.2631, 1.3704, 0.0195), nA = float3(0.7611, -0.6432, -0.0839);
   float3 qa = p - cA; float sA = dot(qa, nA); float rA = length(qa - sA * nA);
-  float arm = PesSS(-0.004, 0.004, sA) * (1.0 - PesSS(0.11, 0.13, rA));
+  float arm = PesSS(a0, a1, sA) * (1.0 - PesSS(0.11, 0.13, rA));
   const float3 cN = float3(0.0, 1.5223, 0.0552), nN = float3(0.0, 0.8564, 0.5163), e2 = float3(0.0, 0.5163, -0.8564);
   float3 qn = p - cN; float sN = dot(qn, nN); float3 wn = qn - sN * nN;
   float lw = max(length(wn), 1e-5); float ct = dot(wn, e2) / lw;          // coseno del angulo alrededor del cuello
@@ -97,6 +100,7 @@ float PesTorsoMask(float3 v) {
   float neck = PesSS(-0.004, 0.004, sN - hN) * (1.0 - PesSS(0.10, 0.12, p.x));
   return (1.0 - arm) * (1.0 - neck) * PesSS(0.86, 0.90, p.y) * (1.0 - PesSS(1.561, 1.569, p.y));
 }
+float PesTorsoMask(float3 v) { return PesTorsoMaskA(v, -0.004, 0.004); }
 // (27/10) torso bajo la camiseta (fila 320): el torso de TorsoBody (y mas con la musculatura / esculpido) es mas grueso que el cuerpo para
 // el que el juego hizo las camisetas ajustadas: en el menu del jugador y en partido asomaba por la tela en el escote, el costado y la axila
 // (parches de piel sin sombrear). x320 mm que se mete el torso hacia adentro por su normal (fuera del cuello y los brazos, con la misma
@@ -198,9 +202,10 @@ void PesTorsoInset(inout float3 mP, float3 mN, float3 rest, float3 org) {
   // (31/10 b) piso: x320 con el fundido de siempre (lo que Agustin confirmo que tapa), tambien en modo preciso: el mapa solo
   // suma donde lo medido pide mas (el menu Apariencia pone otra camiseta y otra pose que el partido medido)
   float base = 0.0;
-  if (T.x > 0.0) base = T.x * ((T.y > 0.5 && T.y < 1.5) ? PesTorsoMask(rest) : PesTorsoInsetSmooth(rest));
+  // (02/11) y320 = 3: torso, espalda y hombros (Agustin: con "solo el torso" el hombro asomaba por la remera)
+  if (T.x > 0.0) base = T.x * ((T.y > 0.5 && T.y < 1.5) ? PesTorsoMask(rest) : (T.y > 2.5 ? PesTorsoMaskA(rest, 0.08, 0.14) : PesTorsoInsetSmooth(rest)));
   mm = base;
-  if (T.y > 1.5 && g_torsoNeed.Load(PES_NEED_NX * PES_NEED_NY * PES_NEED_NZ) > 0.5) {
+  if (T.y > 1.5 && T.y < 2.5 && g_torsoNeed.Load(PES_NEED_NX * PES_NEED_NY * PES_NEED_NZ) > 0.5) {
     float need = PesTorsoNeed(rest);
     float m2 = (need + 1.5 * saturate(need)) * (1.0 - smoothstep(1.42, 1.50, rest.y));   // el anillo del cuello sigue soldado a la cara
     m2 = min(m2, max(T.x, 0.0) + 4.0);   // la medicion exagera en algunos puntos (piel equivocada mas cercana): tope = x320 + 4 mm (con la malla achicada, x320 0: 4 mm)
