@@ -99,6 +99,15 @@ void main(
   float nearF = (pesV3 && pxA > 0.0) ? smoothstep(250.0, 600.0, pxA) : 0.0;
   float kS = clamp(P334.z, 0.0, 2.0);
   float pesDrop = 0.0;
+  // (2/11) tanda 13 "cesped de cerca", fila 325: y325 variacion de tono por hoja (verde / amarillo / seco; 0 = 1 = natural), z325 raiz de cerca
+  // (sombra en la raiz y la cal que se va hacia la raiz; 0 = 1). Destellos (rocio x329 / gotas x334) solo cuando la hoja mide >= 2-5 px de
+  // ancho en pantalla: en las hojas de 1-2 px quedaban como pixeles blancos sueltos (captura de Agustin, Villarreal)
+  float4 P325 = IniParams.Load(int2(325,0));
+  float kVar = P325.y > 0.001 ? clamp(P325.y, 0.0, 2.0) : 1.0;
+  float kRoot = P325.z > 0.001 ? clamp(P325.z, 0.0, 2.0) : 1.0;
+  float sparkK = smoothstep(2.0, 5.0, pxA * 0.012);
+  // la cal pintada cubre la parte alta de la hoja: hacia la raiz queda verde (solo de cerca, donde la hoja mide)
+  if (pesV3 && pesPaintF > 0.001) pesPaintF *= lerp(1.0, lerp(0.45, 1.0, smoothstep(0.0, 0.5, relH)), saturate(kRoot) * nearF);
   float2 uvA = v1.xy;
   if (pesV3) {
     if (Q5.w > 0.5) uvA.y = 1.0 - uvA.y;   // raiz del atlas arriba
@@ -174,7 +183,7 @@ void main(
     // mip y de 1.5 a 6 px de ancho quedaba en 14-58%): "sombra entre las hojas" que no depende del filtro de sombras ni del SSAO
     float sunUpC = saturate(PESSunWorld().y);
     // (26/10 e) 0.4 -> 0.25: la raiz quedaba negra cerca. (27/10 h) y295: + 0.10 por punto de contraste (0.35 natural): bases mas oscuras, como en la foto
-    float aoC = lerp(1.0 - (0.25 + 0.10 * kC + 0.15 * kS * nearF) * saturate(Q6.y) * (1.15 - 0.45 * sunUpC), 1.0, smoothstep(0.0, 0.85, relH));   // (27/10 p) z334: raiz mas oscura de cerca
+    float aoC = lerp(1.0 - saturate((0.25 + 0.10 * kC + 0.15 * kS * nearF) * kRoot) * saturate(Q6.y) * (1.15 - 0.45 * sunUpC), 1.0, smoothstep(0.0, 0.85, relH));   // (2/11) z325   // (27/10 p) z334: raiz mas oscura de cerca
     r1.xyz *= lerp(1.0, aoC, pesCf);   // (26/10 f) lejos sin la sombra raiz -> punta (de lejos solo pasan el alfa los texeles de la raiz)
   }
   o0.xyz = v1.zzz * r1.xyz;
@@ -237,7 +246,7 @@ void main(
     // solo cerca (pesCf) y no en las pintadas
     float4 P329 = IniParams.Load(int2(329,0));
     if (pxA > 0.0 && P329.x > 0.001 && !pesFar) {   // (27/10 p) tambien en las parcelas del juego de muy cerca
-      float dew = step(0.88, frac(v8.z * 11.7 + 0.29)) * smoothstep(0.45, 1.0, relH) * clamp(P329.x, 0.0, 2.0) * pesCf * (1.0 - pesPaintF);
+      float dew = step(0.88, frac(v8.z * 11.7 + 0.29)) * smoothstep(0.45, 1.0, relH) * clamp(P329.x, 0.0, 2.0) * pesCf * (1.0 - pesPaintF) * sparkK;   // (2/11) solo hojas que miden
       o2.y = saturate(o2.y + 0.45 * dew);
       o2.x = lerp(o2.x, 0.12, saturate(dew));
     }
@@ -252,7 +261,7 @@ void main(
         float2 ctr = float2(0.25 + 0.5 * frac(hS * 7.7), (seg + 0.25 + 0.5 * frac(hS * 3.3)) / 5.0);
         float2 d = (float2(saturate(v1.x), relH) - ctr) * float2(1.0, 2.2);  // gota algo alargada a lo largo de la hoja
         float r = 0.11 * (0.7 + 0.6 * frac(hS * 13.1));
-        float drop = (hS < 0.55 ? smoothstep(r, r * 0.55, length(d)) : 0.0) * nearF * (1.0 - pesPaintF);
+        float drop = (hS < 0.55 ? smoothstep(r, r * 0.55, length(d)) : 0.0) * nearF * (1.0 - pesPaintF) * sparkK;   // (2/11) solo hojas que miden
         o2.y = saturate(o2.y + 0.6 * drop);
         o2.x = lerp(o2.x, 0.06, drop);
         o0.xyz = saturate(o0.xyz * (1.0 + 0.10 * drop));
@@ -322,11 +331,14 @@ void main(
     // lado en vez de un verde parejo. Lejos (pesCfN) y en las hojas pintadas no. (27/10 j) fuera del "if (G.y > 0)": con y10 = 0 (el ini de
     // Agustin) no corria y todas las hojas salian iguales; solo con v3
     if (pesV3 && kC > 0.001 && !pesFar) {
-      float kV = 0.5 * kC * pesCfN * (1.0 - pesPaintF);
+      float kV = 0.5 * kC * kVar * pesCfN * (1.0 - pesPaintF);   // (2/11) y325 escala la variacion
       float hv = v8.z;
       float3 c = o0.xyz * lerp(1.0, 0.86 + 0.28 * hv, kV);
       float3 tn = lerp(float3(0.94, 1.0, 1.08), float3(1.08, 1.0, 0.90), frac(hv * 5.17 + 0.31));
       c *= lerp(float3(1.0, 1.0, 1.0), tn, kV);
+      // (2/11) y325 > 0.5: una de cada ~6 hojas tira a seca (paja) de cerca: verde, amarillo y seco mezclados como en el pasto real
+      float dryB = step(0.84, frac(hv * 3.77 + 0.17)) * saturate(kVar - 0.5) * pesCfN * (1.0 - pesPaintF);
+      c = PESDryTint(c, 0.35 * dryB);
       o0.xyz = saturate(c);
     }
   }
