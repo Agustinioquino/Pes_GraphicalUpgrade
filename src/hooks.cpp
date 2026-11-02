@@ -1270,19 +1270,23 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
 // a las lineas 'sombra_parche 1:' para comparar las dos matrices en un estadio bueno y uno malo.
 static ID3D11Buffer* s_casterStage = nullptr; static UINT s_casterStageSize = 0; static std::atomic<int> s_casterWant{0};
 static int s_casterLogN = 0; static double s_casterNext = 0; static uint64_t s_casterVS = 0; static float s_casterVp[2] = {};
+// (02/11 c) diagnostico: por que no sale la muestra (f61bed9 en Mestalla: 0 lineas con el shadow map reconocido y la cabeza replicada)
+static std::atomic<int> s_cpCalls{0}, s_cpIdle{0}, s_cpVp{0}, s_cpNoCb{0}, s_cpCreateFail{0}, s_cpRace{0}, s_cpCopied{0}; static std::atomic<long> s_cpMapHr{0}; static std::atomic<int> s_cpMapFail{0}; static int s_cpDiagN = 0; static double s_cpDiagT = 0;
 static void ShadowCasterProbe(ID3D11DeviceContext* c) {
-    if (s_casterWant.load(std::memory_order_relaxed) != 1 || !g_dev.dev) return;   // (02/11 b) tambien en contextos diferidos: la pasada de sombras no va por el inmediato
+    s_cpCalls.fetch_add(1, std::memory_order_relaxed);
+    if (s_casterWant.load(std::memory_order_relaxed) != 1 || !g_dev.dev) { s_cpIdle.fetch_add(1, std::memory_order_relaxed); return; }   // (02/11 b) tambien en contextos diferidos: la pasada de sombras no va por el inmediato
     D3D11_VIEWPORT vp; UINT n = 1; c->RSGetViewports(&n, &vp);
-    if (n < 1 || vp.TopLeftX > 0.5f || vp.TopLeftY > 0.5f) return;
-    ID3D11Buffer* b = nullptr; c->VSGetConstantBuffers(2, 1, &b); if (!b) return;
+    if (n < 1 || vp.TopLeftX > 0.5f || vp.TopLeftY > 0.5f) { s_cpVp.fetch_add(1, std::memory_order_relaxed); return; }
+    ID3D11Buffer* b = nullptr; c->VSGetConstantBuffers(2, 1, &b); if (!b) { s_cpNoCb.fetch_add(1, std::memory_order_relaxed); return; }
     D3D11_BUFFER_DESC bd; b->GetDesc(&bd);
     if (!s_casterStage || s_casterStageSize != bd.ByteWidth) {
         if (s_casterStage) s_casterStage->Release(); s_casterStage = nullptr;
         D3D11_BUFFER_DESC sd{}; sd.ByteWidth = bd.ByteWidth; sd.Usage = D3D11_USAGE_STAGING; sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-        if (FAILED(g_dev.dev->CreateBuffer(&sd, nullptr, &s_casterStage))) { b->Release(); s_casterWant = 0; return; }
+        if (FAILED(g_dev.dev->CreateBuffer(&sd, nullptr, &s_casterStage))) { b->Release(); s_casterWant = 0; s_cpCreateFail.fetch_add(1, std::memory_order_relaxed); return; }
         s_casterStageSize = bd.ByteWidth;
     }
-    if (s_casterWant.exchange(3) != 1) { b->Release(); return; }   // un solo contexto toma la copia
+    if (s_casterWant.exchange(3) != 1) { b->Release(); s_cpRace.fetch_add(1, std::memory_order_relaxed); return; }   // un solo contexto toma la copia
+    s_cpCopied.fetch_add(1, std::memory_order_relaxed);
     c->CopyResource(s_casterStage, b); b->Release();
     CtxState& cs = Ctx(c); s_casterVS = cs.vs ? cs.vs->hash : 0; s_casterVp[0] = vp.Width; s_casterVp[1] = vp.Height;
     s_casterWant = 2;
@@ -1290,10 +1294,15 @@ static void ShadowCasterProbe(ID3D11DeviceContext* c) {
 void ShadowCasterLogPresent() {
     if (s_casterLogN >= 12 || !g_dev.imm) return;
     int w = s_casterWant.load();
+    { double t = Now();   // (02/11 c) diagnostico cada 30 s (10 veces): en que paso se queda la muestra
+      if (s_cpDiagN < 10 && t >= s_cpDiagT) { s_cpDiagT = t + 30.0; if (s_cpDiagN++ > 0 || s_cpCalls.load() > 0)
+          Log("sombra jugadores (30 s): estado %d, dibujos en la pasada de sombras %d (sin pedido %d, vista corrida %d, sin b2 %d, no se pudo crear la copia %d, otro contexto %d, copiados %d), Map fallido %d (hr %08lX), muestras %d / 12",
+              w, s_cpCalls.exchange(0), s_cpIdle.exchange(0), s_cpVp.exchange(0), s_cpNoCb.exchange(0), s_cpCreateFail.exchange(0), s_cpRace.exchange(0), s_cpCopied.exchange(0), s_cpMapFail.exchange(0), (unsigned long)s_cpMapHr.load(), s_casterLogN); } }
     if (w == 0) { double t = Now(); if (t >= s_casterNext) { s_casterNext = t + 15.0; s_casterWant = 1; } return; }
     if (w != 2 || !s_casterStage) return;
     D3D11_MAPPED_SUBRESOURCE m;
-    if (FAILED(g_dev.imm->Map(s_casterStage, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) return;   // todavia no ejecuto: se reintenta el proximo segundo
+    { HRESULT hr = g_dev.imm->Map(s_casterStage, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m);
+      if (FAILED(hr)) { s_cpMapFail.fetch_add(1, std::memory_order_relaxed); s_cpMapHr.store((long)hr); return; } }   // todavia no ejecuto: se reintenta el proximo segundo
     float f[48] = {}; memcpy(f, m.pData, (std::min)((size_t)s_casterStageSize, sizeof f)); g_dev.imm->Unmap(s_casterStage, 0);
     s_casterWant = 0; s_casterLogN++;
     Log("sombra jugadores: VS %016llX cascada %.0fx%.0f, b2 %u bytes | c0..c3 %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f",
