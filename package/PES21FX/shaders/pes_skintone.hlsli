@@ -167,6 +167,18 @@ float PesCharShirtType(float3 org) {
   }
   return -1.0;
 }
+// (02/11) y351 / z351: brazos de tamano original. Agustin: con el achicado del fpk (2 mm + el corrimiento del hombro) y los insets
+// de las filas 320 / 351 el brazo que se ve debajo de la manga queda angosto. Desde z351 cm del hombro (fundido de 6 cm antes) el
+// brazo no se mete y recupera lo que le saco el fpk; el hombro y la parte alta bajo la manga siguen como estaban (la ropa simulada
+// igual choca con el brazo original, y349). y351 = cuanto (0..1), z351 = desde donde (cm a lo largo del brazo; 0 = 12 cm).
+float PesArmRestore(float3 rest) {
+  float4 K = IniParams.Load(int2(351, 0));
+  if (K.y <= 0.0) return 0.0;
+  float3 q = float3(abs(rest.x), rest.y, rest.z);
+  float sA = dot(q - float3(0.2631, 1.3704, 0.0195), float3(0.7611, -0.6432, -0.0839));
+  float s1 = (K.z > 0.5 ? clamp(K.z, 4.0, 30.0) : 12.0) * 0.01;
+  return saturate(K.y) * smoothstep(s1 - 0.06, s1, sA) * smoothstep(0.17, 0.22, q.x);
+}
 // (01/11) fila 351: la camiseta ajustada no la simula el mod de ropa (queda pegada a la animacion, la piel no la puede empujar):
 // en los jugadores con camiseta ajustada el torso, los hombros y el brazo bajo la manga se meten x351 mm mas (mismo fundido que
 // y320 = 0: sin escalon en las costuras; cuello y cintura intactos). w351 on.
@@ -174,7 +186,7 @@ void PesTorsoTight(inout float3 mP, float3 mN, float3 rest, float3 org) {
   float4 K = IniParams.Load(int2(351, 0));
   if (K.w < 0.5 || K.x <= 0.0) return;
   if (PesCharShirtType(org) < 3.5) return;
-  float mm = min(K.x, 15.0) * PesTorsoInsetSmooth(rest);
+  float mm = min(K.x, 15.0) * PesTorsoInsetSmooth(rest) * (1.0 - PesArmRestore(rest));
   if (mm <= 0.0) return;
   mP -= mN * rsqrt(max(dot(mN, mN), 1e-8)) * (mm * 0.001);
 }
@@ -194,6 +206,7 @@ void PesTorsoInset(inout float3 mP, float3 mN, float3 rest, float3 org) {
     m2 = min(m2, max(T.x, 0.0) + 4.0);   // la medicion exagera en algunos puntos (piel equivocada mas cercana): tope = x320 + 4 mm (con la malla achicada, x320 0: 4 mm)
     mm = max(mm, m2);
   }
+  mm *= 1.0 - PesArmRestore(rest);
   if (mm <= 0.0) return;
   float3 n = mN * rsqrt(max(dot(mN, mN), 1e-8));
   mP -= n * (min(mm, 25.0) * 0.001);
@@ -229,9 +242,10 @@ float PesTorsoShrinkMM(float3 rest, float3 n) {
 // VS de la piel: jugador SIN camiseta (lista por jugador de la fila 320, cuerpo.cpp) -> el torso y el brazo alto vuelven al tamano original
 void PesTorsoRegrow(inout float3 mP, float3 mN, float3 rest, float3 org) {
   float4 R = IniParams.Load(int2(349, 0));
-  if (R.w < 0.5 || R.x <= 0.0) return;
-  if (PesCharHasShirt(org) > 0.5) return;   // con camiseta, o sin lista: queda el achicado
-  float mm = PesTorsoShrinkMM(rest, mN) * saturate(R.x);
+  if (R.w < 0.5) return;
+  // con camiseta (o sin lista): solo el brazo debajo de la manga (y351 / z351); sin camiseta: todo x349
+  float k = PesCharHasShirt(org) > 0.5 ? PesArmRestore(rest) : max(saturate(R.x), PesArmRestore(rest));
+  float mm = PesTorsoShrinkMM(rest, mN) * k;
   if (mm <= 0.0) return;
   mP += mN * rsqrt(max(dot(mN, mN), 1e-8)) * (mm * 0.001);
 }
