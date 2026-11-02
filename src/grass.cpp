@@ -98,12 +98,15 @@ GrassDbg g_grassDbg;
 static void Why(const char* w) { g_grassDbg.why = w; }
 UINT g_bbW = 0, g_bbH = 0;
 
+static std::mutex s_cbMx;
 static void EnsureBuffers() {
-    if (!g_dev.dev) return;
-    if (!s_cb) {
-        D3D11_BUFFER_DESC d = {}; d.ByteWidth = 288; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-        if (FAILED(g_dev.dev->CreateBuffer(&d, nullptr, &s_cb))) { Log("pasto extra: no se pudo crear el cbuffer"); s_cb = nullptr; }
-    }
+    if (!g_dev.dev || s_cb) return;
+    std::lock_guard<std::mutex> lk(s_cbMx);   // (2/11) varios hilos de grabacion entran a la vez: un solo cbuffer
+    if (s_cb) return;
+    D3D11_BUFFER_DESC d = {}; d.ByteWidth = 288; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    ID3D11Buffer* nb = nullptr;
+    if (FAILED(g_dev.dev->CreateBuffer(&d, nullptr, &nb)) || !nb) { static bool once = false; if (!once) { once = true; Log("pasto extra: no se pudo crear el cbuffer"); } return; }
+    s_cb = nb;
 }
 
 // ---------------------------------------------------------------- pasto v4 (20/10): malla propia de manojos curvos
@@ -323,8 +326,19 @@ static void TimersRead(int f) {   // contexto inmediato
     }
 }
 
+// (2/11) la creacion perezosa corria SIN llave desde varios hilos de grabacion a la vez (GrassOnBaseDraw por dibujo de la base, CaptureState,
+// GrassEmit): dos hilos podian crear el mismo buffer dos veces y publicar la vista de uno con el buffer del otro (la CPU ponia en cero /
+// copiaba un buffer y el CS escribia otro): contadores que nunca vuelven a cero (ranuras llenas en 8192 exactos, parcelas crecientes, 2 FPS)
+// o reclamo del cuadro siempre 0 (parcelas 0, x63 1) durante toda la sesion. Ahora: una sola llave, cada par buffer + vista se arma en
+// locales y se publica junto, y al final se comprueba que cada vista apunte a su buffer.
+static std::mutex s_gpuMx; static std::atomic<bool> s_gpuReady{false};
+static bool UavOf(ID3D11UnorderedAccessView* u, ID3D11Buffer* b) { if (!u || !b) return false; ID3D11Resource* r = nullptr; u->GetResource(&r); bool ok = r == b; if (r) r->Release(); return ok; }
+static bool SrvOf(ID3D11ShaderResourceView* v, ID3D11Buffer* b) { if (!v || !b) return false; ID3D11Resource* r = nullptr; v->GetResource(&r); bool ok = r == b; if (r) r->Release(); return ok; }
 static bool EnsureGPU() {
+    if (s_gpuReady.load(std::memory_order_acquire)) return true;
     if (!g_dev.dev) return false;
+    std::lock_guard<std::mutex> lk(s_gpuMx);
+    if (s_gpuReady.load(std::memory_order_relaxed)) return true;
     if (!s_csTried) {
         s_csTried = true;
         if (ID3DBlob* b = CompileNamedShader(L"pes_grass_cull_cs.hlsl", "cs_5_0")) {
@@ -342,30 +356,41 @@ static bool EnsureGPU() {
         }
         Log("pasto v3: %s", s_depthPS ? "PS de la prepasada de profundidad listo (w325)" : "sin PS de prepasada (shaders\\pes_grass_depth_ps.hlsl no compilo: ver Errores); w325 sin efecto");
     }
-    auto cb = [](UINT bytes, ID3D11Buffer** out) { if (*out) return; D3D11_BUFFER_DESC d = {}; d.ByteWidth = bytes; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER; g_dev.dev->CreateBuffer(&d, nullptr, out); };
+    auto cb = [](UINT bytes, ID3D11Buffer** out) { if (*out) return; D3D11_BUFFER_DESC d = {}; d.ByteWidth = bytes; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER; ID3D11Buffer* nb = nullptr; if (SUCCEEDED(g_dev.dev->CreateBuffer(&d, nullptr, &nb)) && nb) *out = nb; };
     cb(160, &s_cullCb); cb(64, &s_cpVs0); cb(80, &s_cpVs4); cb(80, &s_cpPs0); cb(352, &s_sceneCb); cb(512, &s_cpVs2);
-    if (!s_instG) {
+    if (!s_instG || !s_instGSRV || !s_instGUAV) {
+        if (s_instGSRV) { s_instGSRV->Release(); s_instGSRV = nullptr; } if (s_instGUAV) { s_instGUAV->Release(); s_instGUAV = nullptr; } if (s_instG) { s_instG->Release(); s_instG = nullptr; }
         D3D11_BUFFER_DESC d = {}; d.ByteWidth = kMaxInst * 16; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
         d.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED; d.StructureByteStride = 16;
-        if (SUCCEEDED(g_dev.dev->CreateBuffer(&d, nullptr, &s_instG))) {
+        ID3D11Buffer* nb = nullptr; ID3D11ShaderResourceView* ns = nullptr; ID3D11UnorderedAccessView* nu = nullptr;
+        if (SUCCEEDED(g_dev.dev->CreateBuffer(&d, nullptr, &nb)) && nb) {
             D3D11_SHADER_RESOURCE_VIEW_DESC v = {}; v.Format = DXGI_FORMAT_UNKNOWN; v.ViewDimension = D3D11_SRV_DIMENSION_BUFFER; v.Buffer.FirstElement = 0; v.Buffer.NumElements = kMaxInst;
-            if (FAILED(g_dev.dev->CreateShaderResourceView(s_instG, &v, &s_instGSRV))) s_instGSRV = nullptr;
             D3D11_UNORDERED_ACCESS_VIEW_DESC u = {}; u.Format = DXGI_FORMAT_UNKNOWN; u.ViewDimension = D3D11_UAV_DIMENSION_BUFFER; u.Buffer.FirstElement = 0; u.Buffer.NumElements = kMaxInst;
-            if (FAILED(g_dev.dev->CreateUnorderedAccessView(s_instG, &u, &s_instGUAV))) s_instGUAV = nullptr;
-        } else s_instG = nullptr;
+            if (SUCCEEDED(g_dev.dev->CreateShaderResourceView(nb, &v, &ns)) && ns && SUCCEEDED(g_dev.dev->CreateUnorderedAccessView(nb, &u, &nu)) && nu) { s_instG = nb; s_instGSRV = ns; s_instGUAV = nu; }
+            else { if (ns) ns->Release(); if (nu) nu->Release(); nb->Release(); }
+        }
     }
+    // par buffer + vista armado en locales y publicado junto (nunca se relee la variable estatica entre crear el buffer y su vista)
     auto raw = [](UINT bytes, UINT misc, ID3D11Buffer** b, ID3D11UnorderedAccessView** u) {
-        if (*b) return;
+        if (*b && *u && UavOf(*u, *b)) return;
+        if (*u) { (*u)->Release(); *u = nullptr; } if (*b) { (*b)->Release(); *b = nullptr; }
         D3D11_BUFFER_DESC d = {}; d.ByteWidth = bytes; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_UNORDERED_ACCESS; d.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS | misc;
-        if (FAILED(g_dev.dev->CreateBuffer(&d, nullptr, b))) { *b = nullptr; return; }
+        ID3D11Buffer* nb = nullptr; ID3D11UnorderedAccessView* nu = nullptr;
+        if (FAILED(g_dev.dev->CreateBuffer(&d, nullptr, &nb)) || !nb) return;
         D3D11_UNORDERED_ACCESS_VIEW_DESC ud = {}; ud.Format = DXGI_FORMAT_R32_TYPELESS; ud.ViewDimension = D3D11_UAV_DIMENSION_BUFFER; ud.Buffer.NumElements = bytes / 4; ud.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
-        if (FAILED(g_dev.dev->CreateUnorderedAccessView(*b, &ud, u))) *u = nullptr;
+        if (FAILED(g_dev.dev->CreateUnorderedAccessView(nb, &ud, &nu)) || !nu) { nb->Release(); return; }
+        *b = nb; *u = nu;
     };
     raw(80, 0, &s_count, &s_countUAV);
     raw(kSlots * 20, D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS, &s_args, &s_argsUAV);
     raw(96, 0, &s_claim, &s_claimUAV);
-    for (auto& st : s_claimStage) if (!st) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 96; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; g_dev.dev->CreateBuffer(&d, nullptr, &st); }
-    return s_cullCb && s_sceneCb && s_cpVs0 && s_cpVs4 && s_cpPs0 && s_instG && s_instGSRV && s_instGUAV && s_count && s_countUAV && s_args && s_argsUAV && s_claim && s_claimUAV;
+    for (auto& st : s_claimStage) if (!st) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 96; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; ID3D11Buffer* nb = nullptr; if (SUCCEEDED(g_dev.dev->CreateBuffer(&d, nullptr, &nb)) && nb) st = nb; }
+    const bool ok = s_cullCb && s_sceneCb && s_cpVs0 && s_cpVs4 && s_cpPs0 && s_instG && s_instGSRV && s_instGUAV && s_count && s_countUAV && s_args && s_argsUAV && s_claim && s_claimUAV;
+    const bool pairs = ok && UavOf(s_countUAV, s_count) && UavOf(s_argsUAV, s_args) && UavOf(s_claimUAV, s_claim) && UavOf(s_instGUAV, s_instG) && SrvOf(s_instGSRV, s_instG);
+    static bool logged = false;
+    if (ok && !logged) { logged = true; Log("pasto v3: recursos de GPU listos; pares buffer/vista %s (contadores %p/%p, reclamo %p/%p)", pairs ? "verificados" : "DESPAREJADOS (se recrean)", (void*)s_count, (void*)s_countUAV, (void*)s_claim, (void*)s_claimUAV); }
+    if (ok && pairs) s_gpuReady.store(true, std::memory_order_release);
+    return ok && pairs;
 }
 
 // (26/10 f) pasto tanda 6: estados propios de las hojas del mod.
@@ -627,6 +652,16 @@ void GrassFrameBoundary(UINT flags) {
             if (SUCCEEDED(g_dev.imm->Map(s_claimStage[i], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) {
                 const UINT* q = (const UINT*)m.pData; int e = (int)q[0];
                 s_execHist[e <= 0 ? 0 : (e == 1 ? 1 : 2)]++; s_framesRead++;
+                // (2/11) vigilancia: emisiones grabadas y ejecutadas pero el reclamo leido siempre 0, o conteos imposibles (mas celdas que
+                // la grilla) -> el buffer que toca el CS no es el que lee / limpia la CPU. Se anota cada 30 s con los punteros para el diagnostico.
+                { static int zeroExec = 0, bigCnt = 0; static double nextLog = 0; const int exec = s_recImmediate + s_recDeferred;
+                  if (e <= 0 && exec > 0) zeroExec++; else if (e >= 1) zeroExec = 0;
+                  int tot = 0; if (e >= 1) for (int k = 1; k <= 3 * kBins; k++) tot += (int)q[k];
+                  if (tot > 12000) bigCnt++; else if (e >= 1) bigCnt = 0;
+                  if ((zeroExec >= 120 || bigCnt >= 60) && Now() >= nextLog) { nextLog = Now() + 30.0;
+                      Log("pasto v3: RECLAMO INCONSISTENTE: %s (reclamo %d, parcelas leidas %d, emisiones grabadas %d; contadores %p/%p reclamo %p/%p, pares %s)",
+                          zeroExec >= 120 ? "emisiones ejecutadas pero reclamo en 0" : "mas parcelas que celdas: contadores sin reiniciar", e, tot, exec, (void*)s_count, (void*)s_countUAV, (void*)s_claim, (void*)s_claimUAV,
+                          (UavOf(s_countUAV, s_count) && UavOf(s_claimUAV, s_claim)) ? "ok" : "DESPAREJADOS"); } }
                 if (e >= 1) {
                     for (int k = 0; k < 3; k++) { int n = 0; for (int b = 0; b < kBins; b++) n += (int)q[1 + k * kBins + b]; g_grassDbg.ring[k] = n; }
                     s_lastCount = g_grassDbg.ring[0] + g_grassDbg.ring[1] + g_grassDbg.ring[2]; g_grassDbg.patches = s_lastCount;
