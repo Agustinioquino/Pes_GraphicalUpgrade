@@ -19,6 +19,39 @@ float PesLimbFlex(float4 S, float3 Xu, float3 Xl) {
     return saturate((acos(clamp(dot(xu, xl), -1.0, 1.0)) - S.w) * S.z);
 }
 
+// (02/11 b) muneca fina con la palma hacia adelante (Agustin, captura muneca_fina_20261102_1433). La v1 (cuaterniones duales en
+// los huesos de giro) rompio los brazos: dsk_forearm* / dsk_wrist tienen ESCALA. Esta v2 deja el skinning del juego tal cual y
+// solo empuja la piel hacia afuera lo que el lineal pierde al mezclar rotaciones distintas: con los cuaterniones de esos huesos
+// (sin escala: columnas normalizadas) mezclados con los mismos pesos, |suma| / suma de pesos = cuanto se achica el radio
+// (1 sin giro: no cambia nada). Empuje = radio del antebrazo (~3 cm) * (1 / s - 1), con tope de 6 mm. Solo dibujos del brazo
+// (datos de pes_limb, tipo 1) y solo los pesos de la mano (paleta 2 / 5) y del giro del antebrazo y la muneca (10..15).
+// Devuelve el empuje en metros (a lo largo de la normal ya deformada). x305 musculos con textura, y300 cantidad (0 = apagado).
+float PesArmTwistPush(uint vid, uint4 bi, float4 bw, bool cur) {
+    float4 L5 = IniParams.Load(int2(305, 0)), P0 = IniParams.Load(int2(300, 0));
+    if (L5.x < 0.5 || P0.y <= 0.0) return 0.0;
+    uint w = 0, h = 0; g_handData.GetDimensions(w, h);
+    if (h != 2 || vid >= w) return 0.0;
+    if ((int)round(g_handData.Load(int3(0, 0, 0)).x) != 1) return 0.0;
+    float4 Q = 0, q0 = 0; float ws = 0.0; int nb = 0;
+    [unroll] for (int k = 0; k < 4; k++) {
+        uint b = bi[k]; float wk = bw[k];
+        if (wk <= 0.001 || !((b >= 10 && b <= 15) || b == 2 || b == 5)) continue;
+        // rotacion sin escala: filas de la matriz del hueso (ejes del hueso, escalados) ortonormalizadas; la norma de la mezcla
+        // es la misma con la rotacion o con su transpuesta, asi que da igual la convencion
+        float4x3 M = PesBone(cur, b);
+        float3 ax = normalize(float3(M._m00, M._m01, M._m02)), ay = float3(M._m10, M._m11, M._m12);
+        ay = normalize(ay - dot(ay, ax) * ax);
+        float3 az = cross(ax, ay);
+        float4 q = PesQuatFromR(float3x3(ax, ay, az)); q /= max(length(q), 1e-6);
+        if (nb == 0) q0 = q;
+        if (dot(q, q0) < 0) q = -q;
+        Q += wk * q; ws += wk; nb++;
+    }
+    if (nb < 2 || ws < 0.05) return 0.0;
+    float sh = clamp(length(Q) / ws, 0.5, 1.0);
+    return min(0.03 * (1.0 / sh - 1.0) * saturate(P0.y), 0.006);
+}
+
 // handDone: el dibujo es una mano de TorsoBody (pes_hands); vid / rest: vertice y su posicion de reposo
 // (02/11) esfuerzo de ESTE jugador (agitacion de la DLL, musculo.cpp): tabla en t123 con la posicion de cada personaje; se toma
 // el mas cercano en el piso (a menos de 1.4 m). -1 = sin tabla (DLL vieja o musculatura viva apagada).
