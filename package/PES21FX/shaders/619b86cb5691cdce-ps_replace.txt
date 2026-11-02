@@ -903,10 +903,17 @@ void main(
           float pxmM = 1.0 / max(2.0 * abs(g_psScene.m_projectionParam.x) * zsk * g_psSystem.m_renderBuffer.z, 1e-5);
           float rM = clamp(0.012 * pxmM, 1.5, 16.0);
           float3 nAcc = 0; float nW = 0;
+          // (02/11) solo vecinos sobre el plano tangente del pixel (tolerancia 35 % del radio del anillo, ~4 mm): antes el corte era
+          // 3 % de la profundidad + 2 cm (~6 cm en un primer plano) y en el cuello entraban normales del menton y de la malla del
+          // torso -> linea dura de sombra bajando del menton y franja de borde recto en la union (Agustin: "es por las micro sombras")
+          float3 NvC = float3(Nc0.xy, -Nc0.z);
+          float tolM = 0.35 * rM / pxmM + 0.001;
           [unroll] for (int mi = 0; mi < 8; mi++) {
             float angM = mi * 0.78539816 + 0.3927;
             float2 uvM = uvC + float2(cos(angM), sin(angM)) * rM * g_psSystem.m_renderBuffer.zw;
-            float wM = abs(PESLinZ(uvM) - zsk) < 0.03 * zsk + 0.02 ? 1.0 : 0.0;
+            float zM = PESLinZ(uvM);
+            float3 Pm = float3(((uvM * float2(2, -2) + float2(-1, 1)) - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zM, zM);
+            float wM = abs(dot(Pm - Pgeo, NvC)) < tolM ? 1.0 : 0.0;
             nAcc += PESDecN(uvM) * wM; nW += wM;
           }
           float sB = nW > 2.5 ? pow(saturate(dot(Nc0, normalize(nAcc + 1e-6))), 6.0) : 1.0;
