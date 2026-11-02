@@ -46,6 +46,10 @@ static float s_dist = 2.0f, s_oYaw = 0, s_oPitch = 0;                           
 // (02/11 e) en el modo fijo la distancia sale del campo de vision: el visor del editor usa un campo de vision MUY cerrado (0.09 rad,
 // camara a 6.5 m) y a 0.6 m fijos se veia solo la nariz. s_fixHalf = media altura visible a la distancia de la cara (m)
 static float s_fixHalf = 0.20f;
+// (02/11 f, Agustin: "la camara esta muy bien, lo que le falta es la opcion de subir y bajar") Q / E suben y bajan la camara Y el
+// punto al que mira (encuadre mas arriba: pelo / mas abajo: menton, cuello, hombros) sin cambiar el angulo; s_lift en metros, a lo
+// largo del arriba de la cara (modo fijo) o del mundo (orbitar). Las flechas arriba / abajo siguen girando por arriba / por abajo.
+static float s_lift = 0.0f, s_center[3] = {};
 static float s_upOut[3] = { 0, 1, 0 };
 static const void* s_lockNode = nullptr; static double s_headT = 0;                                          // personaje seguido
 static std::atomic<int> s_headFrames{0};
@@ -162,11 +166,12 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     if (follow && (!s_follow || mode != s_followMode)) {   // entrar (o cambiar de modo)
         if (s_follow && s_followMode == 1) s_fixHalf = std::clamp(s_dist * tanHalf, 0.05f, 2.0f);
         if (mode == 1) {   // de frente a la cara, encuadrada como la ultima vez (cabeza y cuello al principio)
-            s_dist = std::clamp(s_fixHalf / tanHalf, 0.15f, 50.0f); s_oYaw = 0.0f; s_oPitch = 0.0f;
+            s_dist = std::clamp(s_fixHalf / tanHalf, 0.15f, 50.0f); s_oYaw = 0.0f; s_oPitch = 0.0f; s_lift = 0.0f;
         } else {           // desde donde esta la camara
             float d[3] = { s_pos[0] - s_head[0], s_pos[1] - s_head[1], s_pos[2] - s_head[2] };
             s_dist = std::clamp(Len3(d), 0.15f, 50.0f);
             s_oYaw = atan2f(d[0], d[2]); s_oPitch = asinf(std::clamp(d[1] / (s_dist > 1e-5f ? s_dist : 1.0f), -1.0f, 1.0f));
+            s_lift = 0.0f;
         }
         s_follow = true; s_followMode = mode;
         Log("camara libre: siguiendo la cara (%s) en (%.2f, %.2f, %.2f), frente (%.2f, %.2f, %.2f), distancia %.2f m",
@@ -178,14 +183,23 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     }
     s_upOut[0] = 0.0f; s_upOut[1] = 1.0f; s_upOut[2] = 0.0f;
     if (s_follow) {
-        // W / S acercan y alejan, A / D y flechas izquierda / derecha giran alrededor, Q / E y flechas arriba / abajo suben y bajan,
-        // el mouse con el boton derecho tambien (en el modo fijo el angulo es respecto de la cara y se mantiene)
+        // W / S acercan y alejan, A / D y flechas izquierda / derecha giran alrededor, flechas arriba / abajo giran por arriba / abajo,
+        // Q / E bajan y suben la camara (y lo que mira), el mouse con el boton derecho tambien gira (en el modo fijo el angulo es
+        // respecto de la cara y se mantiene)
         if (front && !typing) {
             const float rot = 1.2f * dt, base = std::clamp(g_cfg.live[344][1], 0.05f, 50.0f);
             if (Key('W')) s_dist *= 1.0f - 0.6f * dt * (speed / base);
             if (Key('S')) s_dist *= 1.0f + 0.6f * dt * (speed / base);
             if (Key('D') || Key(VK_RIGHT)) s_oYaw -= rot; if (Key('A') || Key(VK_LEFT)) s_oYaw += rot;
-            if (Key('E') || Key(VK_UP)) s_oPitch += rot; if (Key('Q') || Key(VK_DOWN)) s_oPitch -= rot;
+            if (Key(VK_UP)) s_oPitch += rot; if (Key(VK_DOWN)) s_oPitch -= rot;
+            // subir / bajar: ~1/4 de lo que se ve por segundo (Shift mas rapido, Ctrl mas lento)
+            const float lv = 0.5f * std::clamp(s_dist * tanHalf, 0.05f, 2.0f) * dt * (speed / base);
+            if (Key('E')) s_lift += lv; if (Key('Q')) s_lift -= lv;
+        }
+        s_lift = std::clamp(s_lift, -1.2f, 0.8f);
+        {   // centro del encuadre = cara + subir / bajar
+            const float* L = s_followMode == 1 ? U : nullptr;
+            for (int i = 0; i < 3; i++) s_center[i] = s_head[i] + s_lift * (L ? L[i] : (i == 1 ? 1.0f : 0.0f));
         }
         if (look && s_mouseWas) { s_oYaw -= (m.x - s_mouse.x) * 0.0025f * sens; s_oPitch += (m.y - s_mouse.y) * 0.0025f * sens; }
         s_dist = std::clamp(s_dist, 0.15f, 50.0f); s_oPitch = std::clamp(s_oPitch, -1.4f, 1.4f);
@@ -193,13 +207,13 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
         if (s_followMode == 1) {
             // direccion de la cara a la camara en los ejes de la cara: 0 / 0 = de frente
             const float cy = cosf(s_oYaw), sy = sinf(s_oYaw);
-            for (int i = 0; i < 3; i++) s_pos[i] = s_head[i] + s_dist * (ocp * (cy * F[i] - sy * R[i]) + osp * U[i]);
+            for (int i = 0; i < 3; i++) s_pos[i] = s_center[i] + s_dist * (ocp * (cy * F[i] - sy * R[i]) + osp * U[i]);
             memcpy(s_upOut, U, 12);   // la cara queda derecha en la pantalla aunque el jugador incline la cabeza
             if (s_upOut[1] < 0.2f) { s_upOut[0] = 0.0f; s_upOut[1] = 1.0f; s_upOut[2] = 0.0f; }   // cabeza dada vuelta (chilena, caida): sin dar vuelta la imagen
         } else {
-            s_pos[0] = s_head[0] + s_dist * ocp * sinf(s_oYaw); s_pos[1] = s_head[1] + s_dist * osp; s_pos[2] = s_head[2] + s_dist * ocp * cosf(s_oYaw);
+            s_pos[0] = s_center[0] + s_dist * ocp * sinf(s_oYaw); s_pos[1] = s_center[1] + s_dist * osp; s_pos[2] = s_center[2] + s_dist * ocp * cosf(s_oYaw);
         }
-        float d[3] = { s_head[0] - s_pos[0], s_head[1] - s_pos[1], s_head[2] - s_pos[2] }; float l = Len3(d);
+        float d[3] = { s_center[0] - s_pos[0], s_center[1] - s_pos[1], s_center[2] - s_pos[2] }; float l = Len3(d);
         if (l > 1e-5f) { f[0] = d[0] / l; f[1] = d[1] / l; f[2] = d[2] / l; s_yaw = atan2f(f[0], f[2]); s_pitch = asinf(std::clamp(f[1], -1.0f, 1.0f)); }
     } else if (front && !typing) {
         float mv[3] = {};
@@ -215,7 +229,7 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     g_cfg.live[346][2] = s_follow ? 1.0f : 0.0f; g_cfg.live[346][3] = haveHead ? (float)age : -1.0f;
     // --- escribir la camara ---
     pos[0] = s_pos[0]; pos[1] = s_pos[1]; pos[2] = s_pos[2];
-    if (s_follow) { tgt[0] = s_head[0]; tgt[1] = s_head[1]; tgt[2] = s_head[2]; }
+    if (s_follow) { tgt[0] = s_center[0]; tgt[1] = s_center[1]; tgt[2] = s_center[2]; }
     else { tgt[0] = s_pos[0] + f[0]; tgt[1] = s_pos[1] + f[1]; tgt[2] = s_pos[2] + f[2]; }
     up[0] = s_upOut[0]; up[1] = s_upOut[1]; up[2] = s_upOut[2];
     float fovApplied = -1.0f;
