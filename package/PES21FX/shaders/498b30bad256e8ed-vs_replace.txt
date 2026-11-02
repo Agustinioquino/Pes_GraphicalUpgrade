@@ -450,7 +450,8 @@ void main(
     // (26/10 e) ancho base del mod: cb5[8].w en las camaras de juego, cb5[12].x (mas fino) con la camara pegada al suelo (rampa cb5[12].y / .z)
     float pesWidB = pesExt.w;
     if (pesIsExt && cb5[12].x > 0.0 && cb5[12].y > 1.0) pesWidB = lerp(pesExt.w, cb5[12].x, smoothstep(cb5[12].y, max(cb5[12].z, cb5[12].y + 1.0), pesPx));
-    float wid = pesIsExt ? pesWidB * max(cb5[10].z, 0.0) * pesExtScale * pesWmul : 0.012 * max(FAR.x, 1.0) * max(FA2.y, 0.0) * pesFarK;   // (27/10 m) ancho por hoja (y328)
+    // (02/11 paso 4) ancho continuo: sin el multiplicador por nivel (cb5[10].z 1/1.6/2 x pesExtScale 1/2/4 = cintas de 3.8-9.6 cm a media distancia)
+    float wid = pesIsExt ? pesWidB * pesWmul : 0.012 * max(FAR.x, 1.0) * max(FA2.y, 0.0) * pesFarK;   // (27/10 m) ancho por hoja (y328)
     // (25/10 c) ancho minimo en pixeles (cb5[10].x): una hoja de menos de ~1.4 px titila al mover la camara
     if (pesIsExt && cb5[10].x > 0.0 && pesPx > 1.0) wid = max(wid, cb5[10].x / pesPx);
     // (26/10 d) el ensanche se afina hacia la punta como la malla (antes era constante y anulaba el afinado: cintas)

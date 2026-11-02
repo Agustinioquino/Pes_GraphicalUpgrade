@@ -229,7 +229,7 @@ void main(
     // (lerp(v5.x + R, v5.x, v3.w)) sumaba +0.52 de brillo donde v3.w < 1 (segun la altura de la camara y un disco del juego),
     // 3-6x mas brillo y 40% menos rugosidad: la cancha se lavaba de lima / blanco al mirar hacia el sol con la camara baja
     o2.y = v5.x + (pesLight - 0.5) * 0.2 * pesCf;
-    o2.x = v5.y * lerp(1.0, 0.6 + 0.8 * pesGlossF, 0.5);
+    o2.x = v5.y * lerp(1.0, 0.6 + 0.8 * pesGlossF, 0.5 * pesCf);   // (02/11 paso 4) rugosidad propia solo de cerca
   } else {
   r0.y = v5.x + r0.x;
   r0.x = v5.y * r0.z;
@@ -290,6 +290,7 @@ void main(
   // (27/10 n) tanda 11, x329: la punta deja pasar mas luz (translucidez al G-buffer, la lee la pasada del sol): hojas encendidas a contraluz
   if (pesV3 && v4.w > 0.0) { float4 P329t = IniParams.Load(int2(329,0)); pesTr = saturate(pesTr * (1.0 + 0.6 * clamp(P329t.x, 0.0, 2.0) * smoothstep(0.3, 1.0, relH) * pesCfN * (1.0 - pesPaintF))); }
   if (pesDrop > 0.001) pesTr = saturate(pesTr + 0.25 * pesDrop);   // (27/10 p) la gota se enciende a contraluz
+  if (pesV3 && v4.w > 0.0) pesTr *= lerp(0.45, 1.0, pesCf);   // (02/11 paso 4) lejos: menos translucidez (la pasada del sol encendia las hojas lejanas a contraluz)
   r0.w = pesTr * 63 + 0.5;
   r1.x = abs(r0.x) + abs(r0.y);
   r1.x = r1.x + abs(r0.z);
@@ -354,7 +355,7 @@ void main(
   // coherentes) y no como un verde liso con ruido por pixel. Se apaga por debajo de 15-40 px/m (ahi titilaria)
   float4 P328 = IniParams.Load(int2(328,0));
   if (pesV3 && v4.w > 0.0 && P328.z > 0.001 && v8.y < 0.999) {
-    float kA = clamp(P328.z, 0.0, 2.0) * smoothstep(15.0, 40.0, v4.w) * (1.0 - 0.5 * pesPaintF);
+    float kA = clamp(P328.z, 0.0, 2.0) * smoothstep(15.0, 40.0, v4.w) * (1.0 - 0.5 * pesPaintF) * lerp(0.35, 1.0, pesCf);   // (02/11 paso 4) lejos se funde con el suelo
     float ao = lerp(1.0, v8.y, saturate(kA * lerp(1.0, 0.45, relH)));
     o0.xyz = saturate(o0.xyz * ao);
   }
