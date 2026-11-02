@@ -8,6 +8,7 @@
 
 local m = {}
 local last = ""
+local keep = { stadium = -1, tod = -1, weather = -1, season = -1 }
 
 -- (02/11) en este Sider io.open devuelve nil sin error en los eventos del partido (tambien a otros modulos):
 -- si falla se escribe con las funciones de Windows por medio de ffi (necesita luajit.ext.enabled = 1)
@@ -50,10 +51,16 @@ end
 
 local function write_match(ctx, o)
     o = o or {}
-    local stadium  = num(o.stadium,   num(ctx.stadium, -1))
-    local tod      = num(o.timeofday, -1)   -- 0 = dia, 1 = noche
-    local weather  = num(o.weather,   -1)   -- 0 = despejado, 1 = lluvia
-    local season   = num(o.season,    -1)   -- 0 = verano, 1 = invierno
+    local stadium  = num(o.stadium,   num(ctx.stadium, keep.stadium))
+    -- (02/11) after_set_conditions llega sin opciones: se toman de ctx y, si no estan, se conservan las del evento anterior
+    -- (antes la segunda escritura pisaba hora / clima / estacion con -1)
+    local tod      = num(o.timeofday, num(ctx.timeofday, keep.tod))       -- 0 = dia, 1 = noche
+    local weather  = num(o.weather,   num(ctx.weather,   keep.weather))   -- 0 = despejado, 1 = lluvia
+    local season   = num(o.season,    num(ctx.season,    keep.season))    -- 0 = verano, 1 = invierno
+    if stadium >= 0 then keep.stadium = stadium end
+    if tod >= 0 then keep.tod = tod end
+    if weather >= 0 then keep.weather = weather end
+    if season >= 0 then keep.season = season end
     local tid      = num(ctx.tournament_id, -1)
     local text = string.format(
         "[Match]\r\nstadium = %d\r\ntimeofday = %d\r\nweather = %d\r\nseason = %d\r\ntournament = %d\r\nhome = %d\r\naway = %d\r\n",
