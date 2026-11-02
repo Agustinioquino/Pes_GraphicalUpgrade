@@ -15,7 +15,7 @@ from scipy import ndimage as ndi
 import scipy.sparse as sp, scipy.sparse.csgraph as cg
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [HERE, os.path.join(HERE, '..'), os.path.join(HERE, '..', '..')]
-import fmdl, mouth_fmdl, make_oral, throat
+import fmdl, mouth_fmdl, make_oral, throat, molar
 
 MM = 0.001
 # (01/11) mordida: con la boca en reposo la tira de arriba termina en y 1.631 y la de abajo en 1.6285 (2.5 mm de luz); los dientes
@@ -23,6 +23,8 @@ MM = 0.001
 EXT_UP, EXT_LO = float(os.environ.get('EXT_UP', '1.7')) * 0.001, 0.7 * 0.001   # (01/11 f) 2.0 -> 1.5 mm: menos sobremordida (Agustin)   # (01/11 b) 2.4 / 0.8 -> 2.0 / 0.7: dientes un poco menos largos (Agustin)
 # (01/11 b) mas encia (Agustin): la linea de la encia baja GUM del alto del diente pintado; esa franja de la tira muestra encia
 GUM = 0.08   # = make_oral.GUM (01/11 h: 0.18 -> 0.08, dientes mas largos)
+KONAMI_BITE = int(os.environ.get('KONAMI_BITE', '1'))   # (02/11 g) Agustin: 'que la mordida sea la misma que la de Konami': el borde de cada diente 3D queda
+# justo en el borde del diente pintado de Konami (sin alargar, sin resalte); los premolares chicos crecen hacia la encia, no hacia el borde
 OVERJET_LO = 0.7 * MM   # (02/11) 0.9 -> 0.7, parejo   # (01/11 e) los incisivos de abajo se meten 0.9 mm detras de los de arriba
 PDEG = int(os.environ.get('PDEG', '2'))   # (01/11 f) parche por diente: grado 2 a lo ancho (sigue el arco), recto a lo alto
 CUT_STRIP = float(os.environ.get('CUT_STRIP', '0'))   # (01/11 i) la tira se corta a s > GUM + esto (0 = no cortar; 02/11: apagado, ver STRIP_GUM)
@@ -211,12 +213,16 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0
     h3d = float(np.linalg.norm(Pi - Pg)); Ht = h3d
     wsc = 1.0
     if kind == 'P':
-        Ht = max(h3d, 5.5 * MM)
+        Ht = max(h3d, (5.5 if (upper or not KONAMI_BITE) else 4.5) * MM)   # (02/11 g) abajo 4.5: con la mordida de Konami no se cruzan con los de arriba
         PL, _ = M(np.array([[uL2, vG]])); PR, _ = M(np.array([[uR2, vG]]))
         w3d = float(np.linalg.norm(PR - PL)); wsc = max(1.0, 4.8 * MM / max(w3d, 1e-6))
     # uv de la textura: la propia, o la de un diente bien pintado de la misma fila (uvbox = (uL2, uR2, vG, vI)) cuando la
     # propia es una franja de pocos pixeles
     tL, tR, tG, tI = uvbox if uvbox is not None else (uL2, uR2, vG, vI)
+    # (02/11 g) con la mordida de Konami el premolar crece hacia la encia: bpos = donde cae cada fila respecto de la linea de la
+    # encia pintada (< 0 = debajo de la encia); el hundimiento detras de la encia se calcula con bpos (si no, la parte nueva
+    # quedaba por delante de la encia y la tira la cortaba en franjas oscuras)
+    off = ((Ht - h3d) / max(Ht, 1e-9)) if (KONAMI_BITE and kind == 'P' and upper) else 0.0
     for bi in b:
         # el borde incisal: canino en punta, incisivos con esquinas apenas redondeadas
         if kind == 'C':
@@ -233,7 +239,7 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0
         uu = uc + (uu - uc) * narrow
         if kind == 'P':
             Pf, Nf = M(np.stack([uu, vG * np.ones_like(uu)], 1))
-            Pf = Pf + dI[None, :] * (bb * Ht)[:, None]
+            Pf = Pf + dI[None, :] * ((bb * Ht - (Ht - h3d)) if (KONAMI_BITE and upper) else bb * Ht)[:, None]   # abajo: desde la encia
         else:
             Pf, Nf = M(np.stack([uu, v], 1))
         Pf = Pf + dI[None, :] * ((ext + jit_len) * sst(0.35, 1.0, bb))[:, None]
@@ -242,6 +248,10 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0
         # (02/11) el resalte era una inclinacion (crecia del cuello al borde) y los de abajo quedaban volcados hacia adentro:
         # ahora es un corrimiento casi parejo de todo el diente (el cuello ya esta hundido en la encia)
         shift = (0.3 * MM * sst(0.0, 0.4, bb)) if upper else (-OVERJET_LO * sst(0.0, 0.4, bb))
+        if KONAMI_BITE:
+            # adelante sin resalte (como Konami); premolares: los de arriba un poco hacia afuera y los de abajo hacia la lengua, para
+            # que la cuspide de afuera de arriba quede por fuera de la de abajo al cerrar (sin cruzarse)
+            shift = ((0.5 if upper else -1.0) * MM * sst(0.0, 0.4, bb)) if kind == 'P' else 0.0 * bb
         Pf = Pf + Nf * np.reshape(shift, (-1, 1))
         # espesor (m): grueso en el cuello, fino en el borde
         T0 = {'IC': 6.5, 'I': 6.0, 'C': 7.5, 'P': 7.0}[kind] * MM; T1 = {'IC': 1.1, 'I': 1.0, 'C': 2.0, 'P': 4.5}[kind] * MM   # (02/11) P 8/5.5 -> 7/4.5
@@ -256,7 +266,8 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0
         # adelante sale siempre 0.3 mm por delante de la tira (antes en las esquinas quedaba al ras y la tira la 'mordia')
         duT = 0.5 * (1 - np.abs(cx)) * (1 - 2 * gap / (uR - uL))
         bs = 0.12 + (0.30 / (1 - GUM)) * np.exp(-(duT / 0.14) ** 2)
-        lift = 0.3 * MM * sst(bs - 0.05, bs + 0.10, bb)
+        bpos = bb - off
+        lift = 0.3 * MM * sst(bs - 0.05, bs + 0.10, bpos)
         # (01/11 e) convexidad: maximo en el tercio del cuello (altura de contorno) y se aplana hacia el borde; surcos de
         # desarrollo en los incisivos (entre los 3 lobulos) en la mitad incisal; giro chico del diente (jit_rot) = un lado
         # mas adelante que el otro; profundidad chica por diente (jit_dep)
@@ -264,7 +275,7 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0
         convex = 0.62 * MM * np.clip(1 - cx ** 2, 0, 1) ** 0.8 * prof
         dev = (0.08 * MM * np.exp(-((np.abs(cx) - 0.38) / 0.12) ** 2) * sst(0.35, 0.85, bb)) if kind in ('IC', 'I') else 0 * cx
         rot = 0.25 * MM * jit_rot * cx * sst(0.0, 0.3, bb)
-        bulge = convex - dev + rot + jit_dep * sst(0.0, 0.3, bb) + lift - SINK * sst(bs, bs - 0.27, bb)
+        bulge = convex - dev + rot + jit_dep * sst(0.0, 0.3, bb) + lift - SINK * sst(bs, bs - 0.27, bpos)
         Pf = Pf + anchor[None, :]
         front = Pf + Nf * bulge[:, None]
         # (01/11 d) la cara de atras sale con la normal PROMEDIO del diente, horizontal: con la normal de cada punto, en las muelas (donde la
@@ -304,56 +315,6 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0
     # (01/11) Fox / Konami usa el orden contrario (horario visto desde afuera): sin esto el juego descarta la cara de adelante
     return P, UV, F[:, ::-1]
 
-def molar(c, t, bdir, up, L, Wb, Hc, sink, uvbox, seed=0, na=16, nb=6):
-    """(02/11) muela 3D (Agustin: 'que las muelas sean 3d'). Las muelas del fondo de Konami no estan pintadas en la tira (la tira
-    de atras es solo encia), asi que no salen del parche de la tira como los otros dientes: se arman aparte. c: centro del
-    cuello (m); t: direccion mesio-distal (horizontal); bdir: hacia el carrillo (horizontal); up: True = arcada de arriba
-    (la corona apunta hacia abajo). L / Wb: largo y ancho (m); Hc: alto de la corona sobre el cuello; sink: cuanto se mete
-    en la encia. Seccion de caja redondeada (mas angosta en el cuello, maxima en el tercio del cuello), y una cara oclusal
-    con 4 cuspides, surco central y fosa. uvbox: la caja uv del premolar mejor pintado de la fila."""
-    rng = np.random.default_rng(2000 + seed)
-    ax = np.array([0.0, -1.0 if up else 1.0, 0.0])
-    t = t / np.linalg.norm(t); bdir = bdir / np.linalg.norm(bdir)
-    th = np.linspace(0, 2 * np.pi, na + 1)[:-1] + np.pi / na   # 0 = hacia el carrillo
-    pw = 2.7
-    cb = np.sign(np.cos(th)) * np.abs(np.cos(th)) ** (2 / pw)   # carrillo (+1) / lengua (-1)
-    ct = np.sign(np.sin(th)) * np.abs(np.sin(th)) ** (2 / pw)   # mesio-distal
-    cusp = np.abs(np.sin(2 * th)) ** 1.5                        # 4 cuspides, en las esquinas
-    jit = 1 + rng.uniform(-0.04, 0.04)
-    b = np.linspace(0, 1, nb) ** 0.8                            # 0 = cuello (hundido), 1 = mesa oclusal
-    hh = -sink + (Hc + sink) * b
-    wprof = 0.80 + 0.20 * sst(0.0, 0.35, b) - 0.10 * sst(0.55, 1.0, b)   # angosto en el cuello, mesa oclusal un poco mas chica
-    P = []; vb = []; rr = []
-    for k in range(nb):
-        r = (wprof[k] * np.stack([ct * L / 2 * jit, cb * Wb / 2], 1))
-        h = hh[k] + (0.35 * MM * cusp if k == nb - 1 else 0)
-        P.append(c[None] + r[:, :1] * t[None] + r[:, 1:] * bdir[None] + np.reshape(h, (-1, 1)) * ax[None]); vb.append(np.full(na, b[k])); rr.append(np.ones(na))
-    # mesa oclusal: dos anillos hacia adentro (cuspides y vertientes) y la fosa central
-    for f, dh in ((0.62, 0.55 * MM), (0.30, -0.55 * MM)):
-        r = (wprof[-1] * f * np.stack([ct * L / 2 * jit, cb * Wb / 2], 1))
-        h = Hc + (dh * cusp if dh > 0 else dh) - 0.45 * MM * np.exp(-(cb / 0.35) ** 2) * (f < 0.5)   # surco central a lo largo
-        P.append(c[None] + r[:, :1] * t[None] + r[:, 1:] * bdir[None] + np.reshape(h, (-1, 1)) * ax[None]); vb.append(np.ones(na)); rr.append(np.full(na, f))
-    nr = len(P)
-    P = np.vstack(P + [(c + (Hc - 0.9 * MM) * ax)[None]]); vb = np.concatenate(vb + [[1.0]]); rr = np.concatenate(rr + [[0.0]])
-    tL, tR, tG, tI = uvbox
-    tc = 0.5 * (tL + tR)
-    ct_all = np.concatenate([np.tile(ct, nr), [0.0]])
-    ut = tc + 0.5 * (tR - tL) * UV_W * ct_all * rr
-    vt = tG + (tI - tG) * (UV_V0 + (UV_V1 - UV_V0) * vb)
-    UV = np.stack([ut, vt], 1)
-    idx = np.arange(nr * na).reshape(nr, na)
-    F = []
-    for i in range(nr - 1):
-        for j in range(na):
-            a, b_, cc, d = idx[i, j], idx[i, (j + 1) % na], idx[i + 1, (j + 1) % na], idx[i + 1, j]
-            F += [[a, b_, cc], [a, cc, d]]
-    ci = nr * na
-    for j in range(na): F.append([idx[-1, j], idx[-1, (j + 1) % na], ci])
-    F = np.array(F)
-    n = np.cross(P[F[:, 1]] - P[F[:, 0]], P[F[:, 2]] - P[F[:, 0]])
-    cen = c + 0.5 * Hc * ax
-    if (np.sign(((P[F].mean(1) - cen) * n).sum(1))).sum() < 0: F = F[:, ::-1]
-    return P, UV, F[:, ::-1]   # orden de Fox (horario desde afuera)
 
 def build(src_fmdl, texdir, log=print):
     f = fmdl.Fmdl(src_fmdl); m = fmdl.meshes(f)[0]
@@ -477,7 +438,7 @@ def build(src_fmdl, texdir, log=print):
             dext = ({'IC': -0.1, 'I': -0.5, 'C': -0.2, 'P': -0.6} if up else {'I': 0.0, 'C': 0.25, 'P': -0.3})[kind] * MM
             mes = 1.0 if (i + 0.5) < mid else -1.0
             uvbox = best[1] if (abs(ii - gi) < 22 and best is not None) else None
-            Pt, UVt, Ft = tooth(M, xl / 512.0, xr / 512.0, vG, vI, kind, up, ext=(EXT_UP if up else EXT_LO) + dext, mes=mes,
+            Pt, UVt, Ft = tooth(M, xl / 512.0, xr / 512.0, vG, vI, kind, up, ext=((0.0 if kind == 'P' else (-0.2 if up else 1.0)) * MM if KONAMI_BITE else (EXT_UP if up else EXT_LO) + dext), mes=mes,
                                 seed=nteeth, uvbox=uvbox)
             wt = np.zeros((len(Pt), len(names))); wt[:, names.index('sk_head' if up else 'skf_jaw')] = 1
             parts.append((Pt, UVt, Ft, wt, 'diente')); nteeth += 1; tooth_up.append(up)
@@ -486,7 +447,7 @@ def build(src_fmdl, texdir, log=print):
     # de Konami es solo encia (no hay diente pintado). Se arman MOLARS muelas por lado y por arcada siguiendo la linea de la
     # encia de la tira de abajo (la de arriba ahi dobla hacia el paladar): abajo sobre la encia, arriba a la altura de los
     # premolares de arriba y un poco hacia el carrillo (la arcada de arriba es mas ancha)
-    nmol = 0; foot = []
+    nmol = 0; foot = []; lo_tips = {}; mol_parts = []
     if MOLARS:
         Rl = rows[1]; Ml = strip_maps[c_lo]
         Pstrip_lo = [q[0] for q in parts if q[4] == 'tira'][1]   # la tira de abajo (las tiras van arriba, abajo)
@@ -513,26 +474,31 @@ def build(src_fmdl, texdir, log=print):
                     t = pb - pa; t[1] = 0; t /= np.linalg.norm(t)
                     bd = np.array([-t[2], 0.0, t[0]])
                     if bd[0] * side < 0: bd = -bd     # hacia el carrillo
-                    Wb = (10.0 if up else 9.0) * MM
+                    Wb = (10.0 if up else 9.5) * MM
                     mid = 0.5 * (pa + pb)
+                    kind = ('up' if up else 'lo') + str(k + 1)
+                    tipz = float(molar.fields(kind, np.array([c_[0] for c_ in molar.CUSPS[kind]]), np.array([c_[1] for c_ in molar.CUSPS[kind]]))[0].max())
                     # hacia el carrillo lo justo: la lengua (de costado llega a |x| 17.5 mm) no tiene que atravesarlas
-                    if up:
-                        # la corona baja hasta la altura de las cuspides del ultimo premolar de arriba (como en los premolares
-                        # de Konami, con la boca cerrada se cruzan con las de abajo, que quedan del lado de la lengua)
-                        Hc = 5.5 * MM
-                        cc = mid - bd * (0.5 * Wb - 2.5 * MM); cc[1] = ybot + 0.4 * MM + Hc
-                    else:
-                        Hc = 3.8 * MM   # la encia de atras sube: la mesa oclusal queda poco por encima de los premolares (curva de Spee)
+                    if not up:
+                        # (02/11 g) el cuello a la altura de la cresta de la encia bajo la muela (mediana de la tira de abajo en la
+                        # huella). La encia de atras de Konami sube 1-3 mm sobre los premolares: las muelas siguen esa curva (Spee)
+                        Hc = 3.6 * MM
                         cc = mid - bd * (0.5 * Wb - 1.0 * MM)
-                        # el cuello a la altura de la cresta de la encia bajo la muela (la linea de la encia de la tira, pasando
-                        # los dientes pintados, baja hacia el piso y dejaba la segunda muela hundida 5 mm)
                         dd = Pstrip_lo - cc[None]
                         foot_m = (np.abs(dd @ t) < 0.5 * Lk) & (np.abs(dd @ bd) < 0.5 * Wb)
-                        cc[1] = (np.percentile(Pstrip_lo[foot_m, 1], 85) if foot_m.sum() >= 4 else mid[1]) - 1.0 * MM
-                    Pm, UVm, Fm = molar(cc, t, bd, up, 0.94 * Lk, Wb, Hc, 1.5 * MM, uvb, seed=nmol)
+                        cc[1] = (np.percentile(Pstrip_lo[foot_m, 1], 50) if foot_m.sum() >= 4 else mid[1]) - 0.4 * MM
+                        lo_tips[(side, k)] = cc[1] + Hc + tipz
+                    else:
+                        # (02/11 g) 'la mordida como la de Konami': arriba y abajo NO se cruzan al cerrar; las cuspides de arriba
+                        # quedan 0.2 mm sobre las de abajo de la misma muela, un poco hacia el carrillo
+                        Hc = 5.0 * MM
+                        cc = mid - bd * (0.5 * Wb - 2.5 * MM)
+                        ytip = lo_tips.get((side, k), ybot + 0.4 * MM) + 0.2 * MM
+                        cc[1] = ytip + tipz + Hc
+                    Pm, UVm, Fm = molar.geometry(cc, t, bd, up, 0.94 * Lk, Wb, Hc, 1.5 * MM, kind, seed=nmol)
                     wm = np.zeros((len(Pm), len(names))); wm[:, names.index('sk_head' if up else 'skf_jaw')] = 1
-                    parts.append((Pm, UVm, Fm, wm, 'diente')); nmol += 1
-                    foot.append((cc, t, bd, 0.94 * Lk, Wb, up, Hc))
+                    parts.append((Pm, UVm, Fm, wm, 'diente')); nmol += 1; mol_parts.append(Pm)
+                    foot.append((cc, t, bd, 0.94 * Lk, Wb, up, Hc + tipz))
                     s0 += Lk + 0.3 * MM
         # la tira de Konami detras del ultimo premolar sube como una pared (la encia de atras) y pasaba por adentro de la segunda
         # muela (se veia una franja oscura cruzando la corona): lo que de la tira queda adentro de la huella de una muela, a la
@@ -580,12 +546,21 @@ def build(src_fmdl, texdir, log=print):
     # ---- juntar
     Pa, UVa, Fa, Wa, tag = [], [], [], [], []
     base = 0
+    mol_ranges = []
     for Pp, UVp, Fp, Wp, t in parts:
+        if any(Pp is q for q in mol_parts): mol_ranges.append((base, base + len(Pp)))
         Pa.append(Pp); UVa.append(UVp); Fa.append(Fp + base); Wa.append(Wp); tag += [t] * len(Pp); base += len(Pp)
     Pa = np.vstack(Pa).astype(np.float32); UVa = np.vstack(UVa).astype(np.float32); Fa = np.vstack(Fa); Wa = np.vstack(Wa)
     # (01/11) caras en el orden de Konami (horario desde afuera): la normal es la opuesta del producto cruz, y el signo de la
     # binormal que guarda Konami es el opuesto del que da tangents() (medido sobre la boca de Konami: N 0.95, T 0.98, w -1 -> +1)
     Na = -vnormals(Pa, Fa)
+    # (02/11 g) muelas: los vertices repetidos (costura de la uv del lado de la lengua, borde pared / mesa oclusal) comparten la normal
+    for a0, a1 in mol_ranges:
+        key = np.round(Pa[a0:a1].astype(np.float64) / 1e-7).astype(np.int64)
+        _, inv = np.unique(key, axis=0, return_inverse=True); inv = inv.ravel()
+        acc = np.zeros((inv.max() + 1, 3)); np.add.at(acc, inv, Na[a0:a1])
+        acc /= np.maximum(np.linalg.norm(acc, axis=1, keepdims=True), 1e-9)
+        Na[a0:a1] = acc[inv]
     # (02/11 b) el marco de la garganta no comparte vertices con las mejillas / paladar de Konami: en su borde la normal se
     # promedia con la del vertice vecino de Konami mas cercano (< 5 mm) para que no haya escalon de sombreado en la union
     tagA = np.array(tag)

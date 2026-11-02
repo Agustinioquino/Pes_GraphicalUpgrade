@@ -364,6 +364,7 @@ def build(src, N=2048, NS=1024, log=print):
     bsm_o, nrm_o = clean_gum(bsm_o, nrm_o, rows, tissue0)
     bsm_o, nrm_o = gum_detail(bsm_o, nrm_o, rows)
     bsm_o, nrm_o, S, Tr = paint_throat(bsm_o, nrm_o, S, Tr, tis * (gyy < 0.64), log)
+    bsm_o, nrm_o, S, Tr = paint_molars(bsm_o, nrm_o, S, Tr, on * (V > 0.35) * (V < 0.8), log)
     return {'bsm': bsm_o, 'nrm': nrm_o, 'srm': S, 'trm': Tr}, (B, on, line, crown, corner, cerv)
 
 def paint_throat(bsm, nrm, srm, trm, gum_mask, log=print):
@@ -409,6 +410,42 @@ def paint_throat(bsm, nrm, srm, trm, gum_mask, log=print):
         sm = np.stack([0.06 + 0.02 * apS, np.clip(0.22 + 0.10 * apS + rvS, 0, 1), np.zeros_like(apS)], -1)   # mucosa humeda: brilla mas que la encia
         put(srm[..., :3], ys0, ys1, xs0, xs1, sm, PAD // 2)
         put(trm[..., :3], ys0, ys1, xs0, xs1, np.zeros((ys1 - ys0, xs1 - xs0, 3)) + tr_gum, PAD // 2)
+    return bsm, nrm, srm, trm
+
+def paint_molars(bsm, nrm, srm, trm, enamel_mask, log=print):
+    """(02/11 g) textura propia de las muelas 3D (molar.py) en el cuadrado libre molar.MOLAR_BOX: paredes con esmalte (cuello mas
+    amarillo, vetas, periquimatias en la normal) y cara oclusal con surcos y fosas manchados (marron) y puntas de las cuspides
+    claras. Color base = promedio del esmalte de los dientes pintados (combina con los otros dientes 3D). Brillo / translucidez:
+    los de los dientes; los surcos mas asperos."""
+    import molar
+    N = bsm.shape[0]; NS = srm.shape[0]; PAD = 10
+    m = enamel_mask > 0.5
+    en = bsm[..., :3][m].mean(0) if m.any() else np.array([0.80, 0.77, 0.70])
+    log('  muelas: esmalte base %s' % np.round(en, 3).tolist())
+    u0, u1, v0, v1 = molar.MOLAR_BOX
+    x0, x1, y0, y1 = int(round(u0 * N)), int(round(u1 * N)), int(round(v0 * N)), int(round(v1 * N))
+    col, h, groove, cerv = molar.paint(x1 - x0, y1 - y0, en)
+    def put(dst, y0, y1, x0, x1, a, pad):
+        ap_ = np.pad(a, ((pad, pad), (pad, pad)) + ((0, 0),) * (a.ndim - 2), mode='edge')
+        Y0, Y1, X0, X1 = max(y0 - pad, 0), min(y1 + pad, dst.shape[0]), max(x0 - pad, 0), min(x1 + pad, dst.shape[1])
+        dst[Y0:Y1, X0:X1] = ap_[Y0 - (y0 - pad):Y1 - (y0 - pad), X0 - (x0 - pad):X1 - (x0 - pad)]
+    bsm = bsm.copy(); nrm = nrm.copy(); srm = srm.copy(); trm = trm.copy()
+    put(bsm[..., :3], y0, y1, x0, x1, col, PAD); bsm[max(y0 - PAD, 0):y1 + PAD, max(x0 - PAD, 0):x1 + PAD, 3] = 1
+    rg = col[..., 0] - col[..., 1]; mx = col.max(-1); sat = (mx - col.min(-1)) / np.maximum(mx, 1e-6)
+    log('  muelas: diente para el shader %.0f%% (max > 0.45, sat < 0.26, R-G < 0.11), tejido %.1f%%' % (
+        100 * ((mx > 0.45) & (sat < 0.26) & (rg < 0.11)).mean(), 100 * (rg > 0.13).mean()))
+    hy, hx = np.gradient(ndi.gaussian_filter(h, 0.8))
+    sc = 0.6
+    nx, ny = -hx * sc, -hy * sc
+    nz = np.sqrt(np.clip(1 - nx * nx - ny * ny, 0.04, 1)); ln = np.sqrt(nx * nx + ny * ny + nz * nz)
+    put(nrm, y0, y1, x0, x1, np.stack([np.ones_like(nx), (ny / ln) * 0.5 + 0.5, np.zeros_like(nx), (nx / ln) * 0.5 + 0.5], -1), PAD)
+    xs0, xs1, ys0, ys1 = int(round(u0 * NS)), int(round(u1 * NS)), int(round(v0 * NS)), int(round(v1 * NS))
+    z = lambda a: ndi.zoom(a, (float(ys1 - ys0) / a.shape[0], float(xs1 - xs0) / a.shape[1]), order=1)
+    gS, cS = z(groove), z(cerv)
+    put(srm[..., :3], ys0, ys1, xs0, xs1, np.stack([0.08 * (1 - 0.6 * gS), np.clip(0.34 + 0.06 * cS + 0.25 * gS, 0, 1), np.zeros_like(gS)], -1), PAD // 2)
+    em = ndi.zoom(enamel_mask, NS / N, order=1) > 0.5
+    tr = trm[..., :3][em].mean(0) if em.any() else trm[..., :3].mean((0, 1))
+    put(trm[..., :3], ys0, ys1, xs0, xs1, np.zeros((ys1 - ys0, xs1 - xs0, 3)) + tr * (1 - 0.5 * gS)[..., None], PAD // 2)
     return bsm, nrm, srm, trm
 
 def main():
