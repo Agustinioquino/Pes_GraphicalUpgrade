@@ -363,7 +363,41 @@ def build(src, N=2048, NS=1024, log=print):
     bsm_o, nrm_o, S, Tr = (gum_warp(x, rows) for x in (bsm_o, nrm_o, S, Tr))
     bsm_o, nrm_o = clean_gum(bsm_o, nrm_o, rows, tissue0)
     bsm_o, nrm_o = gum_detail(bsm_o, nrm_o, rows)
+    bsm_o, nrm_o, S, Tr = paint_throat(bsm_o, nrm_o, S, Tr, tis * (gyy < 0.64), log)
     return {'bsm': bsm_o, 'nrm': nrm_o, 'srm': S, 'trm': Tr}, (B, on, line, crown, corner, cerv)
+
+def paint_throat(bsm, nrm, srm, trm, gum_mask, log=print):
+    """(02/11) fondo de la garganta (throat.py): pinta el rectangulo libre del atlas throat.UV_BOX (velo, pilares, pared de la
+    faringe, con la oscuridad de lo hondo) y la uvula en throat.UVULA_BOX. Color a partir del promedio de la encia (combina con
+    el resto); normal con los foliculos y capilares; brillo de mucosa humeda; translucidez la de la encia."""
+    import throat
+    N = bsm.shape[0]; NS = srm.shape[0]
+    gum_rgb = bsm[..., :3][gum_mask > 0.5].mean(0)
+    log('  garganta: color de encia base %s' % gum_rgb.round(3).tolist())
+    def box(b, n):
+        u0, u1, v0, v1 = b
+        return int(round(u0 * n)), int(round(u1 * n)), int(round(v0 * n)), int(round(v1 * n))
+    bsm = bsm.copy(); nrm = nrm.copy(); srm = srm.copy(); trm = trm.copy()
+    tr_gum = trm[..., :3][ndi.zoom(gum_mask, NS / N, order=1) > 0.5].mean(0)
+    for b, fn in ((throat.UV_BOX, throat.paint), (throat.UVULA_BOX, throat.paint_uvula)):
+        x0, x1, y0, y1 = box(b, N)
+        res = fn(gum_rgb, x1 - x0, y1 - y0)
+        col, h = res[0], res[1]
+        bsm[y0:y1, x0:x1, :3] = col; bsm[y0:y1, x0:x1, 3] = 1
+        hy, hx = np.gradient(ndi.gaussian_filter(h, 0.8))
+        sc = 4.0
+        nx, ny = -hx * sc, -hy * sc
+        nz = np.sqrt(np.clip(1 - nx * nx - ny * ny, 0.04, 1)); ln = np.sqrt(nx * nx + ny * ny + nz * nz)
+        nrm[y0:y1, x0:x1, 3] = (nx / ln) * 0.5 + 0.5; nrm[y0:y1, x0:x1, 1] = (ny / ln) * 0.5 + 0.5
+        nrm[y0:y1, x0:x1, 0] = 1; nrm[y0:y1, x0:x1, 2] = 0
+        xs0, xs1, ys0, ys1 = box(b, NS)
+        ap = ndi.zoom(res[2], NS / N, order=1) if len(res) > 2 else np.zeros((ys1 - ys0, xs1 - xs0))
+        ap = ap[:ys1 - ys0, :xs1 - xs0]
+        srm[ys0:ys1, xs0:xs1, 0] = 0.06
+        srm[ys0:ys1, xs0:xs1, 1] = 0.30 + 0.12 * ap          # mucosa humeda: mas brillo que la encia, la pared un poco menos
+        srm[ys0:ys1, xs0:xs1, 2] = 0.0
+        trm[ys0:ys1, xs0:xs1, :3] = tr_gum
+    return bsm, nrm, srm, trm
 
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument('src'); ap.add_argument('dst'); ap.add_argument('--preview')
