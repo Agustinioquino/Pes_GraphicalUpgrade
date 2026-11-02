@@ -20,6 +20,9 @@ from torso_mesh import load_parts, geodesic_from, vertex_normals, rotate_min, ga
 from pelvis_fmdl import write_mesh_geom
 
 FADE = 0.025
+NECK = (0.04, 0.07)    # (01/11) junto al cuello el torso queda de su tamano hasta 4 cm del anillo y llega al achicado a 7 cm: el cuello
+                       # de las caras reales baja por debajo del anillo y el torso achicado lo dejaba a la vista (corte, una malla
+                       # atravesando la otra, tambien con Ver original)
 LARGO = 0.15
 PANZA = (1.18, 1.28)   # debajo de 1.18 m el torso no se toca (panza / cintura); arriba de 1.28 todo
 TORSO = ("pants_out_sub", "pants_in_sub", "pants_out_inner_sub", "pants_out_sub_tight")
@@ -67,6 +70,9 @@ def main(src_dir, out_dir, mm=6.0, mmx=12.0, mma=4.0, mmb=3.0):
         sa = arm_seam(Pw, b)
         fixed = np.setdiff1d(b, sa)                 # cuello y short quietos; el anillo del brazo se mueve con el brazo
         d = geodesic_from(Pw, T["edges"], fixed)
+        neck = fixed[Pw[fixed, 1] > 1.40]
+        dn = geodesic_from(Pw, T["edges"], neck) if len(neck) else np.full(len(Pw), 1e9)
+        wn = ss((dn - NECK[0]) / (NECK[1] - NECK[0]))
         # axila: el punto mas bajo del anillo del brazo de cada lado
         ax = []
         for sgn in (-1, 1):
@@ -78,7 +84,7 @@ def main(src_dir, out_dir, mm=6.0, mmx=12.0, mma=4.0, mmb=3.0):
         N, Ns = smooth_normals(T)
         front = ss((Ns[:, 2] + 0.3) / 0.6)                          # (31/10 b, Agustin) la espalda no tanto: mmb atras, mm adelante
         base = mmb + (mm - mmb) * front
-        amt = (base + (mmx - base) * wx) * 0.001 * ss(d / FADE) * belly
+        amt = (base + (mmx - base) * wx) * 0.001 * ss(d / FADE) * belly * wn
         D = -Ns * amt[:, None]
         if seam is None: seam = (Pw[sa].copy(), D[sa].copy())
         write_file(f, os.path.join(out_dir, fn + ".fmdl"), T, Pw + D, N, fn, amt)

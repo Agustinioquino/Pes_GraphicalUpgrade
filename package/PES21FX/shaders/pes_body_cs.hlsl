@@ -61,6 +61,9 @@ void main(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
         uint hb = t * BODY_STRIDE;
         float3 org = float3(asfloat(g_tab[hb + 4]), asfloat(g_tab[hb + 5]), asfloat(g_tab[hb + 6]));
         p += PesTorsoField(p, PesVariantT(PesSkinNearest(org)));
+        // (01/11) y349: la ropa choca con el torso ORIGINAL de TorsoBody aunque se dibuje el achicado (la tela queda esos mm afuera)
+        float4 R349 = IniParams.Load(int2(349, 0));
+        if (R349.w > 0.5 && R349.y > 0.0) p += n * rsqrt(max(dot(n, n), 1e-8)) * (PesTorsoShrinkMM(p, n) * saturate(R349.y) * 0.001);
     }
     uint4 bi = min(uint4(a.w & 255, (a.w >> 8) & 255, (a.w >> 16) & 255, a.w >> 24), 31u) * 3 + rb + 16;
     float4 bw = float4(b.w & 255, (b.w >> 8) & 255, (b.w >> 16) & 255, b.w >> 24) / 255.0;
