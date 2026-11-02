@@ -1228,11 +1228,11 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
             if (g_cfg.live[323][3] > 0.5f) { static std::atomic<int> n{0}; if (n.fetch_add(1) < 40) Log("camiseta interior oculta: %u indices, vs %016llx ps %016llx", t_drawVerts, (unsigned long long)vs->hash, (unsigned long long)(ps ? ps->hash : 0)); }
         }
     }
+    if (GrassSkipGameDraw()) d.skip = true;   // (2/11) x178: pasto propio del juego apagado con el mod emitiendo
     // 19/10: capas editadas desde el inspector (PES21FX_capas.ini): textura por slot u "ocultar" el dibujo
     g_drawOrder++;
     if (ps && g_layersAny.load()) { LayerOv ov;
         if (InspectShouldSkip(ps->hash, t_drawVerts)) { d.skip = true; g_layerSkips++; }
-    if (GrassSkipGameDraw()) d.skip = true;   // (2/11) x178: pasto propio del juego apagado con el mod emitiendo
         if (ID3D11PixelShader* hp = InspectHighlightPS(ps->hash)) { if (!d.restorePS) c->PSGetShader(&d.restorePS, nullptr, nullptr); c->PSSetShader(hp, nullptr, 0); g_layerSkips++; }
         if (InspectLayerFor(ps->hash, ov)) {
             for (auto& kv : ov.slot) {
