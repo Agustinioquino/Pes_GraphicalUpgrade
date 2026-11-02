@@ -128,7 +128,7 @@ def paint(nx_, ny_, enamel, seed=5):
     vet = nz(1.2) * 0.5 + nz(0.6) * 0.5
     streak = ndi.gaussian_filter(rng.standard_normal((1, nx_)).astype(np.float32), (0, 2.0), mode='wrap')
     streak = np.repeat(streak / (streak.std() + 1e-6), ny_, 0)
-    c_w = c_w * (1 + 0.018 * vet + 0.02 * streak)[..., None]
+    c_w = c_w * (1 + 0.010 * vet + 0.005 * streak)[..., None]   # (02/11 v18) sin vetas verticales marcadas (parecia madera)
     perik = np.sin(bw * 2 * np.pi * 22 + 0.6 * nz(4.0)) * sst(0.15, 0.6, bw)
     h_w = 0.25 * perik + 0.15 * vet
     # cara oclusal
@@ -143,11 +143,13 @@ def paint(nx_, ny_, enamel, seed=5):
     for gx in (-0.05,):
         side = np.maximum(side, np.exp(-((X - gx - 0.04 * Y) / 0.05) ** 2) * sst(0.08, 0.3, np.abs(Y)) * sst(0.8, 0.55, np.abs(Y)))
     gr = np.maximum(np.maximum(central, fossa), 0.6 * side) * sst(1.1, 0.9, np.sqrt(X * X + Y * Y))
+    # (02/11 v18) color: surcos mas suaves y cortados (no un dibujo); el surco de costado solo en el relieve
+    grc = ndi.gaussian_filter(np.maximum(central, fossa) * sst(1.1, 0.9, np.sqrt(X * X + Y * Y)), 1.5) * sst(-1.4, 0.2, nz(6.0))
     tip = sst(0.35, 0.75, np.sqrt(X * X + Y * Y)) * sst(1.0, 0.8, np.sqrt(X * X + Y * Y))
-    stain = 0.6 * sst(0.15, 0.95, gr)
-    c_o = en[None, None] * 0.95 * (1 + 0.025 * nz(1.5))[..., None]
+    stain = 0.50 * sst(0.10, 0.95, grc)
+    c_o = en[None, None] * 0.96 * (1 + 0.012 * nz(2.0))[..., None]
     c_o = c_o * (1 - stain[..., None]) + (en * np.array([0.66, 0.60, 0.50]))[None, None] * stain[..., None]
     c_o = c_o * (1 + 0.04 * tip)[..., None]
-    h_o = -1.5 * gr + 0.15 * nz(1.0)
+    h_o = -1.5 * ndi.gaussian_filter(gr, 1.0) + 0.10 * nz(1.2)
     col = np.where(occ[..., None], c_o, c_w); h = np.where(occ, h_o, h_w); groove = np.where(occ, stain, 0.0)
     return np.clip(col, 0, 1), h.astype(np.float32), groove.astype(np.float32), (cervical * wall).astype(np.float32)
