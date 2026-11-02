@@ -40,6 +40,7 @@ static const int kBallSlots = 64;
 static ID3D11Buffer* s_bdStage[kStages] = {}; static int s_bdFrame[kStages] = { -1, -1, -1 }; static std::atomic<int> s_bdW{0}; static std::atomic<int> s_bdCount{0};
 static UINT s_bdIdx[kStages][kBallSlots] = {};   // indice (vertices) de cada dibujo anotado, por anillo
 static std::atomic<UINT> s_ballIdx{0};      // indice de vertices del dibujo de la pelota (0 = aun no)
+static std::atomic<int> s_bdCalls{0}, s_bdOffX177{0}, s_bdNoStage{0}, s_bdNoCb{0}, s_bdNoted{0};   // (2/11 b) diagnostico: por que no se anota
 static int s_ballIdxVotes = 0; static int s_ballLogged = 0;
 static void WearCpuAdd(float u, float v, float k, float radM) {
     // mismo pincel que pes_wear_ps.hlsl: k * exp(-r2 * 2.2), r en radios, hasta 1.5 radios
@@ -372,16 +373,18 @@ void PitchWearNotePlayer(ID3D11DeviceContext* c) {
 // (2/11) desde BeforeDraw, en cada dibujo del PS de botines / pelota (aadffecf): anota la traslacion de su m_world (b5 fila 3) con el
 // indice del dibujo para reconocer la pelota en Present; devuelve el b12 a enlazar si este dibujo ya es "la pelota" (con manchas) o nullptr
 ID3D11Buffer* PitchBallDrawNote(ID3D11DeviceContext* c, UINT verts) {
-    if (!g_dev.dev || g_cfg.live[177][0] < 0.001f || verts == 0) return nullptr;
+    if (!g_dev.dev || verts == 0) return nullptr;
+    s_bdCalls++; if (g_cfg.live[177][0] < 0.001f) { s_bdOffX177++; return nullptr; }
     UINT bi = s_ballIdx.load(std::memory_order_relaxed);
     if (bi == 0 || s_ballIdxVotes < 3) {   // todavia buscando: anotar
-        int w = s_bdW.load(); if (s_bdStage[w]) { int i = s_bdCount.fetch_add(1);
+        int w = s_bdW.load(); if (!s_bdStage[w]) s_bdNoStage++; else { int i = s_bdCount.fetch_add(1);
             if (i < kBallSlots) { ID3D11Buffer* cb = nullptr; UINT first = 0, num = 0; ID3D11DeviceContext1* c1 = nullptr;
                 if (SUCCEEDED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) && c1) { c1->VSGetConstantBuffers1(5, 1, &cb, &first, &num); c1->Release(); } else c->VSGetConstantBuffers(5, 1, &cb);
                 // (2/11 e) se copian las 8 primeras filas de b5 (128 B): la traslacion puede estar en la fila 3, en la 7 o en la columna w de las
                 // filas 4..6 (matriz traspuesta, como la del pasto); antes solo la fila 7 y la pelota nunca se reconocio
-                if (cb) { D3D11_BUFFER_DESC d; cb->GetDesc(&d); UINT off = first * 16;
-                    if (d.ByteWidth >= off + 128) { D3D11_BOX bx = { off, 0, 0, off + 128, 1, 1 }; c->CopySubresourceRegion(s_bdStage[w], 0, (UINT)i * 128, 0, 0, cb, 0, &bx); s_bdIdx[w][i] = verts; }
+                if (!cb) s_bdNoCb++; else { D3D11_BUFFER_DESC d; cb->GetDesc(&d); UINT off = first * 16;
+                    if (d.ByteWidth >= off + 128) { D3D11_BOX bx = { off, 0, 0, off + 128, 1, 1 }; c->CopySubresourceRegion(s_bdStage[w], 0, (UINT)i * 128, 0, 0, cb, 0, &bx); s_bdIdx[w][i] = verts; s_bdNoted++; }
+                    else s_bdNoCb++;
                     cb->Release(); } } }
     }
     return (bi != 0 && verts == bi) ? s_ballCb : nullptr;
@@ -395,8 +398,15 @@ static void BallDrawPresent() {
     // anillo de 3 como el desgaste: leer el de hace 2 cuadros y comparar con la pelota del pasto
     int w = s_bdW.load(); int n = std::min(s_bdCount.exchange(0), kBallSlots); s_bdFrame[w] = n > 0 ? 1 : -1;
     int rd = (w + 1) % kStages; int pending = s_bdFrame[rd]; s_bdFrame[rd] = -1; s_bdW = rd;
-    if (pending < 0 || !s_bdStage[rd] || !s_ballOk) return;
-    D3D11_MAPPED_SUBRESOURCE m; if (FAILED(g_dev.imm->Map(s_bdStage[rd], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) return;
+    // (2/11 b) diagnostico mientras no se reconoce: cada 30 s, hasta 4 veces por partido, por que no se anota o no se lee
+    { static int presents = 0, noPending = 0, noBall = 0, mapFail = 0, logs = 0, gen = -1;
+      if (g_matchGen.load() != gen) { gen = g_matchGen.load(); presents = noPending = noBall = mapFail = logs = 0; }
+      presents++; if (pending < 0) noPending++; if (!s_ballOk) noBall++;
+      if (s_ballIdx.load() == 0 && presents % 1800 == 0 && logs < 4) { logs++;
+          Log("pelota: diagnostico (%d cuadros): dibujos aadffecf %d, saltados por x177 %d, sin staging %d, sin b5 %d, anotados %d; cuadros sin anotaciones %d, sin pelota del pasto %d, lecturas que fallaron %d; x177 %.2f capsula %s (%.1f, %.2f, %.1f)",
+              presents, s_bdCalls.load(), s_bdOffX177.load(), s_bdNoStage.load(), s_bdNoCb.load(), s_bdNoted.load(), noPending, noBall, mapFail, g_cfg.live[177][0], s_ballOk ? "si" : "no", s_ball[0], s_ball[1], s_ball[2]); }
+      if (pending < 0 || !s_bdStage[rd] || !s_ballOk) return;
+      D3D11_MAPPED_SUBRESOURCE m; if (FAILED(g_dev.imm->Map(s_bdStage[rd], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) { mapFail++; return; }
     const float* q = (const float*)m.pData; UINT found = 0; int nf = 0; static int s_noMatch = 0; int nCand = 0;
     for (int i = 0; i < kBallSlots; i++) { if (!s_bdIdx[rd][i]) continue; nCand++; const float* r = q + i * 32;
         // candidatos a traslacion: fila 3 (m_world por filas), fila 7 (matriz en 4..7), columna w de 0..2 y de 4..6 (matriz traspuesta)
@@ -411,6 +421,7 @@ static void BallDrawPresent() {
     g_dev.imm->Unmap(s_bdStage[rd], 0); memset(s_bdIdx[rd], 0, sizeof s_bdIdx[rd]);
     if (found) { UINT cur = s_ballIdx.load(); if (cur == found) s_ballIdxVotes = std::min(s_ballIdxVotes + 1, 10); else { s_ballIdx = found; s_ballIdxVotes = 1; }
         if (s_ballLogged < 2 && s_ballIdxVotes == 3) { s_ballLogged++; Log("pelota: dibujo reconocido (indice %u, %d dibujos cerca de la capsula); manchas verde %.2f tierra %.2f cal %.2f", found, nf, s_stain[0], s_stain[1], s_stain[2]); } }
+    }
 }
 void PitchWearPresent() {
     if (!g_dev.dev || !g_dev.imm) return;

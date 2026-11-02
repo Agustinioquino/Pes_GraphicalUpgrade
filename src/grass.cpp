@@ -655,12 +655,14 @@ void GrassFrameBoundary(UINT flags) {
                 // (2/11) vigilancia: emisiones grabadas y ejecutadas pero el reclamo leido siempre 0, o conteos imposibles (mas celdas que
                 // la grilla) -> el buffer que toca el CS no es el que lee / limpia la CPU. Se anota cada 30 s con los punteros para el diagnostico.
                 { static int zeroExec = 0, bigCnt = 0; static double nextLog = 0; const int exec = s_recImmediate + s_recDeferred;
-                  if (e <= 0 && exec > 0) zeroExec++; else if (e >= 1) zeroExec = 0;
+                  // (2/11 b) umbrales de 10 s / 5 s seguidos: en cortes y repeticiones se graban emisiones que no llegan a ejecutarse (x63 1,
+                  // reclamo 0 unos cuadros) y con 120 cuadros saltaba una falsa alarma con los pares bien (sesion 1ced45b 08:38:17)
+                  if (e <= 0 && exec > 0) zeroExec++; else zeroExec = 0;
                   int tot = 0; if (e >= 1) for (int k = 1; k <= 3 * kBins; k++) tot += (int)q[k];
                   if (tot > 12000) bigCnt++; else if (e >= 1) bigCnt = 0;
-                  if ((zeroExec >= 120 || bigCnt >= 60) && Now() >= nextLog) { nextLog = Now() + 30.0;
+                  if ((zeroExec >= 600 || bigCnt >= 300) && Now() >= nextLog) { nextLog = Now() + 30.0;
                       Log("pasto v3: RECLAMO INCONSISTENTE: %s (reclamo %d, parcelas leidas %d, emisiones grabadas %d; contadores %p/%p reclamo %p/%p, pares %s)",
-                          zeroExec >= 120 ? "emisiones ejecutadas pero reclamo en 0" : "mas parcelas que celdas: contadores sin reiniciar", e, tot, exec, (void*)s_count, (void*)s_countUAV, (void*)s_claim, (void*)s_claimUAV,
+                          zeroExec >= 600 ? "emisiones ejecutadas pero reclamo en 0 durante 10 s" : "mas parcelas que celdas durante 5 s: contadores sin reiniciar", e, tot, exec, (void*)s_count, (void*)s_countUAV, (void*)s_claim, (void*)s_claimUAV,
                           (UavOf(s_countUAV, s_count) && UavOf(s_claimUAV, s_claim)) ? "ok" : "DESPAREJADOS"); } }
                 if (e >= 1) {
                     for (int k = 0; k < 3; k++) { int n = 0; for (int b = 0; b < kBins; b++) n += (int)q[1 + k * kBins + b]; g_grassDbg.ring[k] = n; }
