@@ -235,7 +235,7 @@ void ExprBonesFrame(const void* skel) {
     static const float X[3] = { 1.0f, 0.0f, 0.0f }; float ax[3]; QRot(hr, X, ax);
     float ln = sqrtf(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]); if (ln < 0.5f) return; for (float& v : ax) v /= ln;
     const float P[3] = { jc.t[0], jc.t[1], jc.t[2] };
-    const float A = -0.40f * o;   // mismo sentido que PesRotX del shader: el menton baja con o > 0
+    const float A = 0.40f * o;    // (02/11, Agustin: "esta al reves") con el signo negativo la boca se cerraba al subir el slider: en el cuaternion del motor el menton baja con el angulo positivo
     for (int d = 0; d < kND; d++) {
         if (kDef[d].jaw <= 0.0f || !S->cur[d]) continue;
         Xf x; if (!ReadXf(S->cur[d], x)) continue;
