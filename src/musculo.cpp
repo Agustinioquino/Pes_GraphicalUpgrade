@@ -552,7 +552,8 @@ float MuscleVariantT(uint32_t id, bool* own) {
 
 struct MzOwn { float pos[3]; const Fac* fac; float tv; };   // (26/10) personaje con valores propios (fac, tv = variante) o tapon (nullptr = general)
 static const int kMzEnt = 32, kMzSets = 9;   // tienen que coincidir con pesMusPick (cloth_sim.hlsl)
-static void MuscleClothPresent(const Fac* fac, bool on, const MzOwn* own, int nOwn, float useTv);   // (25/10) tabla para la fisica de la ropa (mas abajo)
+static void MuscleClothPresent(const Fac* fac, bool on, const MzOwn* own, int nOwn, float useTv);
+static void EffortPresent();   // (02/11) venas por esfuerzo (mas abajo)   // (25/10) tabla para la fisica de la ropa (mas abajo)
 static float s_slotTv[kCharSlots] = {};   // (26/10) variante de los personajes con valores propios (para la ropa)
 // (26/10 b) respiracion por personaje (en Present): agitacion por la velocidad del nodo, fase y amplitud
 static void UpdateDynamics() {
@@ -598,6 +599,7 @@ static void UpdateFactors() {
     unsigned g = CharTableGen();
     if (g != s_slotGen) { s_slotGen = g; CharSnapshot(s_slotInfo, s_slotAlive); }
     if (s_dynOn) UpdateDynamics();
+    EffortPresent();   // (02/11) venas por esfuerzo (t123)
     // en el menu Fisico del juego, un personaje que no paso por HumanList (si el modelo de Editar se arma por otro lado)
     // usa los valores del jugador que se esta editando
     uint32_t editId = 0;
@@ -690,6 +692,48 @@ static ID3D11Buffer* s_mzBuf = nullptr; static ID3D11Device* s_mzDev = nullptr;
 static float s_mzData[kMzRows][4] = {}; static bool s_mzSent = false;
 static int s_mzZones = 0, s_mzOwnLog = -1; static float s_mzMax = 0.0f;
 ID3D11ShaderResourceView* MuscleClothSRV() { return s_mzSRV.load(std::memory_order_acquire); }
+// (02/11) esfuerzo por jugador para las venas (t123 del VS de la piel 1c02a92a, pes_limbs.hlsli): [0] = (personajes, on, 0, 0);
+// [1 + i] = (posicion del personaje, la misma que la tabla de tonos (NodePos) / agitacion 0..1). El VS elige el mas cercano en el piso.
+static const int kEffRows = 1 + kCharSlots;
+static std::atomic<ID3D11ShaderResourceView*> s_effSRV{nullptr};
+static ID3D11Buffer* s_effBuf = nullptr; static ID3D11Device* s_effDev = nullptr;
+static float s_effData[kEffRows][4] = {}; static bool s_effSent = false; static double s_effLog = 0;
+ID3D11ShaderResourceView* MuscleEffortSRV() { return s_effSRV.load(std::memory_order_acquire); }
+static void EffortPresent() {
+    ID3D11Device* dev = g_dev.dev; ID3D11DeviceContext* imm = g_dev.imm;
+    if (!dev || !imm) return;
+    if (s_effDev != dev) {
+        s_effDev = dev; s_effBuf = nullptr; s_effSent = false;
+        D3D11_BUFFER_DESC bd{}; bd.ByteWidth = sizeof(s_effData); bd.Usage = D3D11_USAGE_DYNAMIC; bd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE; bd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED; bd.StructureByteStride = 16;
+        ID3D11Buffer* b = nullptr;
+        if (FAILED(dev->CreateBuffer(&bd, nullptr, &b)) || !b) { Log("venas: no se pudo crear la tabla de esfuerzo"); return; }
+        D3D11_SHADER_RESOURCE_VIEW_DESC sd{}; sd.Format = DXGI_FORMAT_UNKNOWN; sd.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+        sd.Buffer.FirstElement = 0; sd.Buffer.NumElements = kEffRows;
+        ID3D11ShaderResourceView* v = nullptr;
+        if (FAILED(dev->CreateShaderResourceView(b, &sd, &v)) || !v) { b->Release(); Log("venas: no se pudo crear la vista de la tabla de esfuerzo"); return; }
+        s_effBuf = b; s_effSRV.store(v, std::memory_order_release);
+    }
+    if (!s_effBuf) return;
+    static float d[kEffRows][4]; memset(d, 0, sizeof d);
+    int n = 0; float mx = 0.0f, sum = 0.0f;
+    if (s_dynOn) {
+        for (int i = 0; i < kCharSlots && n < kCharSlots; i++) {
+            const DynState& ds = s_dyn[i];
+            if (!s_slotAlive[i] || !ds.posOk) continue;
+            float* e = d[1 + n++]; e[0] = ds.pos[0]; e[1] = ds.pos[1]; e[2] = ds.pos[2]; e[3] = std::clamp(ds.ex, 0.0f, 1.0f);
+            mx = (std::max)(mx, e[3]); sum += e[3];
+        }
+    }
+    d[0][0] = (float)n; d[0][1] = n > 0 ? 1.0f : 0.0f;
+    if (s_effSent && !memcmp(d, s_effData, sizeof d)) return;
+    D3D11_MAPPED_SUBRESOURCE m{};
+    if (FAILED(imm->Map(s_effBuf, 0, D3D11_MAP_WRITE_DISCARD, 0, &m))) return;
+    memcpy(m.pData, d, sizeof d); imm->Unmap(s_effBuf, 0);
+    memcpy(s_effData, d, sizeof d); s_effSent = true;
+    const double t = Now();
+    if (n > 0 && t > s_effLog) { s_effLog = t + 30.0; Log("venas por esfuerzo (30 s): %d personajes, agitacion media %.0f %%, maxima %.0f %%", n, 100.0f * sum / n, 100.0f * mx); }
+}
 // las zonas de un juego de factores desde la fila "base" (cabecera) de la tabla; devuelve cuantas. (26/10) z de la cabecera = variante
 // del torso de ese juego (cloth_sim: pesTorsoField, la tela con la misma forma grande que la piel)
 static int FillZones(const Fac* fac, float (*d)[4], float& mx, float tv) {

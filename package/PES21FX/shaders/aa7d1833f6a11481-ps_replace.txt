@@ -266,7 +266,7 @@ void main(
       r2.xy += vd * abs(vrT) * vrTm * vrTexK;
       float l2 = dot(r2.xy, r2.xy); if (l2 > 0.94) r2.xy *= rsqrt(l2 / 0.94);
     }
-    if (vrArm > 0.001 && P305.x > 0.5) lbVein = max(lbVein * (1.0 - 0.7 * vrWr * vrArm), 0.25 * vrWa * vrArm * max(P305.z, 0.0));
+    if (vrArm > 0.001 && P305.x > 0.5) lbVein = max(lbVein * (1.0 - 0.7 * vrWr * vrArm), 0.12 * vrWa * vrArm * max(P305.z, 0.0));   // (02/11) base del atletico a la mitad (se veia todo el partido)
   }
   {   // (26/10) columna marcada (todos los torsos de TorsoBody, con o sin variante): surco de la columna y erectores (x288 = fuerza;
       // la DLL enlaza t19 solo en los dibujos del torso). El robusto la tapa un poco y el atletico la marca un poco mas

@@ -20,6 +20,28 @@ float PesLimbFlex(float4 S, float3 Xu, float3 Xl) {
 }
 
 // handDone: el dibujo es una mano de TorsoBody (pes_hands); vid / rest: vertice y su posicion de reposo
+// (02/11) esfuerzo de ESTE jugador (agitacion de la DLL, musculo.cpp): tabla en t123 con la posicion de cada personaje; se toma
+// el mas cercano en el piso (a menos de 1.4 m). -1 = sin tabla (DLL vieja o musculatura viva apagada).
+StructuredBuffer<float4> g_effort : register(t123);
+float PesLimbEffort() {
+    uint ne = 0, st = 0; g_effort.GetDimensions(ne, st);
+    if (ne < 2) return -1.0;
+    float4 H = g_effort[0];
+    if (H.y < 0.5) return -1.0;
+    bool skE = g_vsObject.m_useWeightCount.x != 0;
+    float3 b0 = float3(g_vsBone.m_boneMatrices[0]._m30, g_vsBone.m_boneMatrices[0]._m31, g_vsBone.m_boneMatrices[0]._m32);
+    float3 b0b = float3(g_vsPrevBone.m_boneMatrices[0]._m30, g_vsPrevBone.m_boneMatrices[0]._m31, g_vsPrevBone.m_boneMatrices[0]._m32);
+    float3 wp = PesSkinPoint(g_vsObject.m_world, g_vsObject.m_viewWorld, g_vsScene.m_view, b0, b0b, skE);
+    int n = min((int)(H.x + 0.5), (int)ne - 1);
+    float bd = 1.96, ex = -1.0;
+    [loop] for (int i = 0; i < n; i++) {
+        float4 E = g_effort[1 + i];
+        float2 dd = wp.xz - E.xz;
+        float d2 = dot(dd, dd);
+        if (d2 < bd) { bd = d2; ex = E.w; }
+    }
+    return ex;
+}
 bool PesLimbOut(bool handDone, uint vid, float3 rest, out float defB, out float veinB) {
     defB = 0.0; veinB = 0.0;
     float4 L5 = IniParams.Load(int2(305, 0));
@@ -45,7 +67,12 @@ bool PesLimbOut(bool handDone, uint vid, float3 rest, out float defB, out float 
         float4 H7 = g_handData.Load(int3(7, 0, 0));
         float up = saturate((acos(clamp(-xu.y, -1.0, 1.0)) - (left ? H7.x : H7.y)) / 1.4);
         defB = saturate(Wv.x * flex + Wv.y * flex * 0.7 + Wv.z * up);
-        veinB = Wv.w * saturate(max(flex, 0.6 * up));
+        // (02/11) la vena sigue el ESFUERZO, no el angulo: al correr el codo va a ~90 grados todo el partido y la vena quedaba
+        // siempre marcada. Ahora: agitacion del jugador (velocidad sostenida, se calma en ~14 s) y la pose solo la refuerza.
+        // Sin la tabla (DLL vieja), como antes pero a la mitad.
+        float pose = saturate(max(flex, 0.6 * up));
+        float eff = PesLimbEffort();
+        veinB = Wv.w * (eff < 0.0 ? 0.5 * pose : smoothstep(0.2, 0.85, eff) * (0.55 + 0.45 * pose));
     } else {          // pierna: isquios, pantorrilla y (menos) cuadriceps con la rodilla
         defB = saturate(Wv.x * flex + Wv.y * flex + Wv.z * 0.6 * flex);
     }
