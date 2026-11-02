@@ -113,6 +113,8 @@ struct Skel {
     const void* face = nullptr; const char* fbones = nullptr; int fn = 0;  // (02/11) esqueleto de la CARA: nodo + 0xA0 (49 huesos)
     void* cur[kND] = {};      // puntero a la transformacion actual de cada hueso reconocido (null = no esta)
     int idx[kND] = {};        // indice del hueso en el arreglo del esqueleto
+    const char* src[kND] = {};   // (02/11) arreglo de donde salio (cara o cuerpo): para revalidar cada cuadro
+    const void* node = nullptr;  // (02/11) SceneCharacterNode con el que se armo
     Xf rest[kND] = {};
     int found = 0, jawFound = 0;
     unsigned lastFrame = 0; int rebuilds = 0; bool logged = false;
@@ -123,7 +125,7 @@ static const int kMaxSkel = 48;
 static std::mutex s_mx;
 static Skel s_sk[kMaxSkel]; static int s_nSk = 0;
 static std::atomic<unsigned> s_frame{0};
-static std::atomic<int> s_applied{0}, s_noJaw{0}, s_badWrite{0}, s_calls{0};
+static std::atomic<int> s_applied{0}, s_noJaw{0}, s_badWrite{0}, s_calls{0}, s_stale{0};
 static std::atomic<unsigned> s_lastActive{0};   // cuadro del ultimo giro aplicado o esqueleto con mandibula visto
 static int s_logs = 0;
 
@@ -168,7 +170,7 @@ static void Match(Skel& S, const char* bones, int n) {
         if (!ReadPtr(bones + (size_t)p.b * 0xc0 + 0x18, cur)) continue;
         Xf c; if (!ReadXf(cur, c)) continue;
         usedB[p.b] = 1;
-        S.cur[p.d] = cur; S.rest[p.d] = rests[p.b]; S.idx[p.d] = p.b; S.found++;
+        S.cur[p.d] = cur; S.rest[p.d] = rests[p.b]; S.idx[p.d] = p.b; S.src[p.d] = bones; S.found++;
     }
 }
 // arma la tabla de huesos reconocidos de un personaje (una vez, o si cambio el arreglo): primero el esqueleto de la cara
@@ -180,6 +182,7 @@ static bool Build(Skel& S, const void* skel) {
     CharSnapshot(ci, alive);
     void* node = nullptr;
     for (int i = 0; i < kCharSlots; i++) if (alive[i] && ci[i].skel == skel) { node = ci[i].node; break; }
+    S.node = node;
     void* face = nullptr;
     if (node && ReadPtr((const char*)node + 0xA0, face) && face != skel && LooksSkel(face, &S.fbones, &S.fn)) { S.face = face; Match(S, S.fbones, S.fn); }
     else { S.face = nullptr; S.fbones = nullptr; S.fn = 0; }
@@ -196,6 +199,30 @@ static Skel* Get(const void* skel) {   // con s_mx tomado
     }
     Build(s_sk[at], skel); s_sk[at].rebuilds = 1;
     return &s_sk[at];
+}
+// (02/11) ANTES DE ESCRIBIR, cada cuadro: el personaje sigue vivo con el mismo nodo (personajes.cpp), el nodo sigue apuntando
+// al mismo esqueleto de la cara, el esqueleto conserva el mismo arreglo y cantidad, y cada hueso usado sigue en su lugar con
+// el mismo puntero a la transformacion. Sin esto, al cambiar de jugador o de cara el motor libera el esqueleto de la cara y
+// la tabla seguia escribiendo 28 bytes en memoria ya liberada: cierre en el administrador de memoria del juego
+// (PES2021.exe+0x3fd6db, dlmalloc, sesion b66dfd3).
+static bool StillValid(const Skel& S) {
+    if (!S.face || !S.node) return false;
+    CharInfo ci[kCharSlots]; bool alive[kCharSlots] = {};
+    CharSnapshot(ci, alive);
+    bool ok = false;
+    for (int i = 0; i < kCharSlots; i++) if (alive[i] && ci[i].skel == S.skel && ci[i].node == S.node) { ok = true; break; }
+    if (!ok) return false;
+    void* face = nullptr; if (!ReadPtr((const char*)S.node + 0xA0, face) || face != S.face) return false;
+    void* arr = nullptr; int n = 0;
+    if (!ReadPtr((const char*)S.face + 0x28, arr) || (const char*)arr != S.fbones || !SafeCopy(&n, (const char*)S.face + 0x30, 4) || n != S.fn) return false;
+    if (!ReadPtr((const char*)S.skel + 0x28, arr) || (const char*)arr != S.bones || !SafeCopy(&n, (const char*)S.skel + 0x30, 4) || n != S.n) return false;
+    for (int d = 0; d < kND; d++) {
+        if (!S.cur[d]) continue;
+        const char* bone = S.src[d] + (size_t)S.idx[d] * 0xc0;
+        void* cur = nullptr; int ix = -1;
+        if (!ReadPtr(bone + 0x18, cur) || cur != S.cur[d] || !SafeCopy(&ix, bone, 4) || ix != S.idx[d]) return false;
+    }
+    return true;
 }
 // giro de la mandibula respecto de la cabeza, en grados (actual contra reposo)
 static bool JawAngle(const Skel& S, const Xf& jc, float* deg) {
@@ -224,6 +251,11 @@ void ExprBonesFrame(const void* skel) {
         // el arreglo pudo cambiar (otro modelo en el mismo esqueleto): se vuelve a armar cada ~2 s
         if (S->rebuilds < 60 && (fr % 60) == 0) { Build(*S, skel); S->rebuilds++; }
         if (!S->jawFound) { s_noJaw.fetch_add(1, std::memory_order_relaxed); return; }
+    }
+    if (!StillValid(*S)) {   // cambio de jugador / de cara: no se toca nada este cuadro, se rearma
+        s_stale.fetch_add(1, std::memory_order_relaxed);
+        Build(*S, skel); S->rebuilds++;
+        return;
     }
     Xf jc; if (!ReadXf(S->cur[D_JAW], jc)) { Build(*S, skel); S->rebuilds++; return; }
     s_lastActive.store(fr, std::memory_order_relaxed);
@@ -334,12 +366,12 @@ void ExprBonesPresent() {
     if (fr - lastLog < 600) return;   // cada ~10 s
     lastLog = fr;
     std::lock_guard<std::mutex> lk(s_mx);
-    const int calls = s_calls.exchange(0), ap = s_applied.exchange(0), nj = s_noJaw.exchange(0), bw = s_badWrite.exchange(0);
+    const int calls = s_calls.exchange(0), ap = s_applied.exchange(0), nj = s_noJaw.exchange(0), bw = s_badWrite.exchange(0), st = s_stale.exchange(0);
     if (!calls) return;
     static int dumped = 0;
     if (dumped < 0) for (int i = 0; i < s_nSk && dumped < 2; i++) if (s_sk[i].n > 0 && fr - s_sk[i].lastFrame < 600) { Dump(s_sk[i]); dumped++; }
     if (s_logs < 40) {
-        char l[1200]; int k = snprintf(l, sizeof l, "boca por huesos: %d pasos por el cuello, %d giros escritos, %d sin mandibula, %d escrituras fallidas; esqueletos:", calls, ap, nj, bw);
+        char l[1200]; int k = snprintf(l, sizeof l, "boca por huesos: %d pasos por el cuello, %d giros escritos, %d sin mandibula, %d escrituras fallidas, %d rearmados por cambio de cara; esqueletos:", calls, ap, nj, bw, st);
         for (int i = 0; i < s_nSk && k < (int)sizeof l - 120; i++) {
             Skel& S = s_sk[i];
             if (fr - S.lastFrame > 600) continue;
