@@ -155,6 +155,7 @@ struct Skel {
     // cuello paso dos veces en el mismo cuadro) se parte de la base guardada y no se gira dos veces
     float wq[kND][4] = {}, wt[kND][3] = {}, bq[kND][4] = {}, bt[kND][3] = {}; bool wHave[kND] = {};
     int reused = 0;
+    float seed = 0.37f; bool seedHave = false;   // (02/11 c) semilla de la mirada, la misma que el VS del globo (PesExprSeed)
 };
 static const int kMaxSkel = 48;
 static std::mutex s_mx;
@@ -360,8 +361,13 @@ static float HeadSpaceMove(const Skel& S, int d, const Xf& hc, const float* hrIn
 }
 static void EyesFrame(Skel& S, const Xf& hc, const float* hr) {
     const float amp = std::clamp(g_cfg.live[347][3], 0.0f, 2.0f), blinkAmt = std::clamp(g_cfg.live[342][3], 0.0f, 1.0f);
-    const bool eyes = S.cur[D_EYE_L] && S.cur[D_EYE_R], lids = S.cur[D_LID_TL] && S.cur[D_LID_TR];
-    if (!eyes && !lids) return;
+    // (02/11 c, Agustin con video: "por shader los ojos vivos funcionan bien, con los huesos no se mueven y vibran") el globo NO
+    // se escribe: el juego vuelve a poner el hueso del ojo despues del Eval del cuello (control propio de la mirada), asi que lo
+    // escrito aca no se veia y alternaba con lo del juego. El globo lo vuelve a girar el VS 69758ab9 (PesGaze) y aca solo se
+    // mueven los PARPADOS, con la MISMA mirada que el VS: misma cuenta, mismo reloj (157.x) y misma semilla (la entrada de la
+    // tabla de tonos de piel mas cercana al personaje, filas 194..254, como PesExprSeed; 0.37 si no tiene entrada)
+    const bool eyes = false, lids = S.cur[D_LID_TL] && S.cur[D_LID_TR];
+    if (!lids) return;
     float hrInv[4]; QConj(hr, hrInv);
     // (02/11, Agustin: "veo que los ojos vibran"; con la mirada viva en 0 no vibran) el giro relativo sobre lo que deja el juego
     // vibraba: el juego corrige el ojo desde donde quedo el hueso (control propio de la mirada) y los dos se peleaban cuadro a
@@ -370,8 +376,17 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr) {
     // la animacion facial del juego (habla, festeja): sin parpadeo del mod (la animacion trae el suyo)
     const float anim = (std::max)(HeadSpaceMove(S, D_LIPS_L, hc, hrInv), HeadSpaceMove(S, D_BROW_IL, hc, hrInv));
     const float t = g_cfg.live[157][0];
-    const uint64_t hv = (uint64_t)(uintptr_t)S.node * 0x9E3779B97F4A7C15ull;
-    const float seed = (float)((hv >> 40) & 0xffffff) / 16777216.0f * 9.7f;
+    {
+        const float* H = g_cfg.live[194];
+        float wp[3];
+        if (H[1] > 0.5f && CharNodeWorldPos(const_cast<void*>(S.node), wp)) {   // la tabla esta escrita (la rehace el Present)
+            int best = -1; float bd = H[2] * H[2];
+            const int n = (std::min)((int)(H[0] + 0.5f), 20);
+            for (int i = 0; i < n; i++) { const float* q = g_cfg.live[195 + 3 * i]; const float dx = wp[0] - q[0], dz = wp[2] - q[2], d2 = dx * dx + dz * dz; if (d2 < bd) { bd = d2; best = i; } }
+            S.seed = best >= 0 ? (float)best * 0.6180339f : 0.37f; S.seedHave = true;
+        } else if (!S.seedHave && H[1] <= 0.5f && H[0] <= 0.5f) { S.seed = 0.37f; }
+    }
+    const float seed = S.seed;
     float g[2]; Gaze(t, seed, amp, g);
     const float b = BlinkCurve(t, seed) * blinkAmt * (1.0f - SStep(0.0008f, 0.0015f, anim));
     static const float X[3] = { 1.0f, 0.0f, 0.0f }, Y[3] = { 0.0f, 1.0f, 0.0f };
