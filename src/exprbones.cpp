@@ -177,7 +177,7 @@ struct Skel {
     // (02/11 i) amplificador POR HUESOS: base del juego leida este cuadro (lo que se guarda como base al escribir), cuadro de la
     // ultima escritura y la cabeza del cuadro para medir el gesto (actual - cabeza rigida)
     float gq[kND][4] = {}, gt[kND][3] = {}; unsigned wFrame[kND] = {};
-    bool ampOn = false; float ahc[3] = {}, ahr[4] = { 0, 0, 0, 1 }, aGain[kND] = {}, aCap = 0.012f;
+    bool ampOn = false; float ahc[3] = {}, ahr[4] = { 0, 0, 0, 1 }, aGain[kND] = {}, aCap = 0.012f, aBig = 0.35f;
     // (02/11 l, Agustin: "vibra un poco al abrirse ... la camara lenta") cabeza del cuadro en que el JUEGO escribio cada hueso: en
     // camara lenta el juego no reescribe los huesos de la cara en todos los cuadros (16 mil lecturas con lo del mod puesto) pero la
     // cabeza si se mueve; medir el gesto contra la cabeza de ahora metia ese movimiento en el gesto y lo agrandaba a saltos
@@ -403,6 +403,11 @@ static void Amp(const Skel& S, int d, Xf& x) {
     const float* hcU = S.bHave[d] ? S.bHc[d] : S.ahc; const float* hrU = S.bHave[d] ? S.bHr[d] : S.ahr;   // (02/11 l) cabeza de cuando el juego escribio el hueso
     const float rv[3] = { R.t[0] - H.t[0], R.t[1] - H.t[1], R.t[2] - H.t[2] }; float rr[3]; QRot(hrU, rv, rr);
     float e[3] = { (x.t[0] - (hcU[0] + rr[0])) * (g - 1.0f), (x.t[1] - (hcU[1] + rr[1])) * (g - 1.0f), (x.t[2] - (hcU[2] + rr[2])) * (g - 1.0f) };
+    {   // (02/11 m, Agustin: "las opciones de slider no cambian nada") 340.w gestos grandes: lo que el gesto pasa de 1 cm se agranda
+        // solo esa fraccion (como hacia el shader), asi la boca muy abierta no se dispara
+        const float gl = sqrtf(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]) / (fabsf(g - 1.0f) > 1e-4f ? fabsf(g - 1.0f) : 1.0f);
+        if (gl > 0.01f) { const float k = (0.01f + S.aBig * (gl - 0.01f)) / gl; for (float& v : e) v *= k; }
+    }
     const float el = sqrtf(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]);
     if (el > S.aCap) for (float& v : e) v *= S.aCap / el;
     for (int k = 0; k < 3; k++) x.t[k] += e[k];
@@ -579,7 +584,7 @@ void ExprBonesFrame(const void* skel) {
         const float* E = g_cfg.live[340]; const float* Z = g_cfg.live[341];
         S->ampOn = E[1] > 1.005f || E[1] < 0.995f;
         memcpy(S->ahc, hc.t, sizeof S->ahc); memcpy(S->ahr, hr, sizeof S->ahr);
-        S->aCap = std::clamp(E[2], 0.1f, 3.0f) * 0.01f;
+        S->aCap = std::clamp(E[2], 0.1f, 3.0f) * 0.01f; S->aBig = std::clamp(E[3], 0.0f, 1.0f);
         for (int d = 0; d < kND; d++) {
             const float z = d <= 12 ? Z[3] : d <= 19 ? Z[2] : d <= 25 ? Z[1] : d <= 30 ? Z[0] : 0.0f;
             S->aGain[d] = 1.0f + (E[1] - 1.0f) * std::clamp(z, 0.0f, 3.0f);
