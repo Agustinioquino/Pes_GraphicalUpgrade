@@ -2640,7 +2640,8 @@ function m.init(ctx)
     end
     ctx.torsobody_cuello = m.version
     if type(ctx.sider_dir) == "string" then
-        local okm, n = pcall(cargar_mapa_tonos, ctx.sider_dir)
+        local okm, n                    -- (1.18) sin pcall global: Sider no lo da a los modulos (la 1.16 no arrancaba)
+        if PC then okm, n = PC(cargar_mapa_tonos, ctx.sider_dir) else okm, n = true, cargar_mapa_tonos(ctx.sider_dir) end
         log("TorsoBody cuello: mapa de tonos " .. (okm and (tostring(n) .. " jugadores") or ("error: " .. tostring(n))))
     end
     if FUNDIR then                       -- la textura se arma con el zlib de Sider: se prueba una vez
