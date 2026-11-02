@@ -27,6 +27,9 @@ OVERJET_LO = 0.7 * MM   # (02/11) 0.9 -> 0.7, parejo   # (01/11 e) los incisivos
 PDEG = int(os.environ.get('PDEG', '2'))   # (01/11 f) parche por diente: grado 2 a lo ancho (sigue el arco), recto a lo alto
 CUT_STRIP = float(os.environ.get('CUT_STRIP', '0'))   # (01/11 i) la tira se corta a s > GUM + esto (0 = no cortar; 02/11: apagado, ver STRIP_GUM)
 STRIP_GUM = float(os.environ.get('STRIP_GUM', '0.3'))   # (02/11) la tira debajo de la encia (s > GUM) pasa a mostrar encia: s' = GUM - esto * (s - GUM)
+STRIP_FOLD = float(os.environ.get('STRIP_FOLD', '0.25'))   # (02/11 c) la tira mas alla de la encia (s > GUM) se recoge a este largo hacia el cuello
+FOLD_BACK = float(os.environ.get('FOLD_BACK', '1.5'))
+FOLD_S = float(os.environ.get('FOLD_S', '0.35'))   # (02/11 c) mm detras de la encia donde queda la tira recogida
 THROAT = int(os.environ.get('THROAT', '1'))   # (02/11) fondo de la garganta nuevo (throat.py) en lugar de la pared plana de Konami
 SINK = 1.5 * MM   # (01/11 d) 0.7 -> 1.5 mm: el cuello se mete bien detras de la encia (no asoma por arriba)
 PATCH = int(os.environ.get('PATCH', '1'))
@@ -361,6 +364,21 @@ def build(src_fmdl, texdir, log=print):
             sv2 = np.where(tz, GUM - STRIP_GUM * (sv - GUM), sv)
             vv2 = g + sv2 * (inc - g)
             UVc = UVc.copy(); UVc[:, 1] = np.where(tz, vv2 / 512.0, UVc[:, 1])
+            # (02/11 c) Agustin: 'encias por arriba de los dientes': la tira sigue en 3D por delante/detras de las coronas
+            # (el diente pintado de Konami y el doblez hacia el paladar / piso), y pintada de encia se veia como una banda
+            # rosada sobre la cara de atras de los dientes. Esa parte de la tira (s > GUM) se recoge al cuello: queda a un
+            # 20 % de su largo pegada a la encia, detras de los cuellos de los dientes 3D, y el paladar / piso siguen de ahi
+            # Solo pasando las puntas de las papilas (s > GUM + 0.35): la franja de la encia y las papilas no se mueven (si no,
+            # quedaban astillas de encia por delante de los cuellos)
+            tf = inx & (sv > GUM + FOLD_S)
+            # solo arriba: abajo la tira recogida cruzaba por delante de los incisivos (lineas oscuras) y desde arriba la de
+            # abajo ya queda tapada por los dientes
+            if STRIP_FOLD < 1 and up and tf.any():
+                Mg = strip_maps[c]
+                s0 = GUM + FOLD_S
+                Pg, Ng = Mg(np.stack([UVc[tf, 0], (g[tf] + s0 * (inc[tf] - g[tf])) / 512.0], 1))
+                Pg = Pg - Nc[tf] * (FOLD_BACK * MM)
+                Pc = Pc.copy(); Pc[tf] = Pg + (Pc[tf] - Pg) * STRIP_FOLD
         if CUT_STRIP:
             # solo la zona del diente pintado; el doblez de la tira pasando el borde incisal (conecta con el piso / paladar)
             # queda para no abrir agujeros, pero con la uv de un punto de mucosa oscura del atlas (no muestra bordes pintados)
