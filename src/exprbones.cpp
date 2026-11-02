@@ -32,7 +32,17 @@ namespace fx {
 
 namespace {
 struct Xf { float s[4], q[4], t[4]; };
+// (02/11) antes de leer se consulta la pagina (VirtualQuery): el volcado prueba valores que no son punteros y cada lectura
+// mala, aunque la atrape el SEH, queda anotada como excepcion en el registro de cierres (6 en el primer partido)
+static bool Readable(const void* p, size_t n) {
+    if (!p || (uintptr_t)p < 0x10000 || (uintptr_t)p > 0x00007fffffffffffull) return false;
+    MEMORY_BASIC_INFORMATION mi{};
+    if (!VirtualQuery(p, &mi, sizeof mi) || mi.State != MEM_COMMIT || (mi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) return false;
+    if (!(mi.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_WRITECOPY))) return false;
+    return (uintptr_t)p + n <= (uintptr_t)mi.BaseAddress + mi.RegionSize;
+}
 static bool SafeCopy(void* dst, const void* src, size_t n) {
+    if (!Readable(src, n)) return false;
     __try { memcpy(dst, src, n); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 static bool ReadXf(const void* p, Xf& x) {
