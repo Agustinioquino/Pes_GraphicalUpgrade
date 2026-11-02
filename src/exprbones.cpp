@@ -131,6 +131,25 @@ static const float kTeeth[][3] = {
     {  0.0004f,  0.0010f, 0.0f },     // nasolabialfold_t_l
     { -0.0004f,  0.0010f, 0.0f },     // nasolabialfold_t_r
 };
+// (02/11, Agustin con 2 capturas: "en la vista original la boca respeta la forma de los labios al abrirse, con el shader no")
+// al abrir la boca por huesos (corrimiento x apertura, ejes de la cabeza) los labios hacen el ovalo de la boca abierta del juego:
+// las comisuras se juntan hacia el medio y van un poco adelante, los costados del labio de abajo se redondean hacia adentro y
+// el de arriba acompana apenas; sin esto el giro de la mandibula estiraba las comisuras hacia afuera (boca cuadrada)
+static const float kOpen[][3] = {
+    { 0, 0, 0 },                       // skf_jaw
+    { -0.0012f,  0.0f,     0.0008f },  // lip_b_l: hacia el medio y adelante (labio de abajo redondo)
+    {  0.0012f,  0.0f,     0.0008f },  // lip_b_r
+    {  0.0f,     0.0f,     0.0010f },  // lip_b_c
+    { 0, 0, 0 },                       // doublechin
+    { -0.0030f, -0.0004f,  0.0010f },  // lip_s_l: la comisura se junta 3 mm
+    {  0.0030f, -0.0004f,  0.0010f },  // lip_s_r
+    { -0.0010f,  0.0f,     0.0f },     // cheek_s_l
+    {  0.0010f,  0.0f,     0.0f },     // cheek_s_r
+    { -0.0008f,  0.0f,     0.0004f },  // lip_t_l
+    {  0.0f,     0.0f,     0.0005f },  // lip_t_c
+    {  0.0008f,  0.0f,     0.0004f },  // lip_t_r
+};
+static const float* OpenOf(int d) { static const float z[3] = { 0, 0, 0 }; return d < (int)(sizeof(kOpen) / sizeof(kOpen[0])) ? kOpen[d] : z; }
 static const float* TeethOf(int d) { static const float z[3] = { 0, 0, 0 }; return d < (int)(sizeof(kTeeth) / sizeof(kTeeth[0])) ? kTeeth[d] : z; }
 enum { D_JAW = 0, D_LIPS_L = 5, D_LID_TL = 22, D_LID_TR = 23, D_LID_BL = 24, D_LID_BR = 25, D_BROW_IL = 26, D_EYE_L = 31, D_EYE_R = 32, D_HEAD = kND - 2 };
 
@@ -296,23 +315,24 @@ static void GazeHash2(float n, float seed, float* o) {
     o[0] = Frac(sinf((n + seed * 17.3f) * 12.9898f) * 43758.5453f);
     o[1] = Frac(sinf((n + seed * 29.7f) * 78.233f) * 43758.5453f);
 }
-static void GazeTarget(float n, float seed, float* g) {
+static void GazeTarget(float n, float seed, float* g) {   // (02/11) igual que PesGazeTarget (pes_expr.hlsli): mas natural
     float h[2]; GazeHash2(n, seed, h);
-    g[0] = (h[0] - 0.5f) * 2.0f * 0.078f; g[1] = (h[1] - 0.58f) * 2.0f * 0.052f;   // +-4.5 grados de lado, -3.5..+2.5 arriba/abajo
-    if (Frac(h[0] * 7.1f + h[1] * 3.3f) >= 0.75f) { g[0] *= 0.25f; g[1] *= 0.25f; }   // 1 de cada 4 vuelve al centro
+    g[0] = (h[0] - 0.5f) * 2.0f * 0.052f; g[1] = (h[1] - 0.58f) * 2.0f * 0.034f;
+    if (Frac(h[0] * 7.1f + h[1] * 3.3f) >= 0.67f) { g[0] *= 0.2f; g[1] *= 0.2f; }
 }
-// g[0] = de lado, g[1] = arriba (+) / abajo (-), radianes
+// g[0] = de lado, g[1] = arriba (+) / abajo (-), radianes. LA MISMA CUENTA que PesGaze (pes_expr.hlsli)
 static void Gaze(float t, float seed, float amp, float* g) {
     g[0] = g[1] = 0.0f; if (amp <= 0.0f) return;
-    const float tt = t + seed * 23.1f, per = 1.2f, n = floorf(tt / per);
+    const float tt = t + seed * 23.1f, per = 2.2f, n = floorf(tt / per);
     float h[2]; GazeHash2(n, seed + 0.5f, h);
-    const float x = tt - (n * per + h[0] * 0.6f);
+    const float x = tt - (n * per + h[0] * 1.2f);
     float g0[2], g1[2]; GazeTarget(n - 1.0f, seed, g0); GazeTarget(n, seed, g1);
-    float k = SStep(0.0f, 0.045f, x);
-    k = k * (1.0f + 0.12f * sinf(3.14159f * std::clamp(x / 0.09f, 0.0f, 1.0f)));
+    const float u = 1.0f - std::clamp(x / 0.070f, 0.0f, 1.0f);
+    float k = 1.0f - u * u * u;
+    k = k * 0.93f + 0.07f * SStep(0.10f, 0.22f, x);
     for (int i = 0; i < 2; i++) g[i] = g0[i] + (g1[i] - g0[i]) * k;
-    g[0] += sinf(tt * 1.7f + seed) * 0.0030f + sinf(tt * 23.0f + seed * 3.0f) * 0.0012f;
-    g[1] += sinf(tt * 1.3f + seed * 2.0f) * 0.0022f + sinf(tt * 19.0f + seed) * 0.0010f;
+    g[0] += sinf(tt * 0.63f + seed) * 0.0020f + sinf(tt * 1.37f + seed * 2.1f) * 0.0010f;
+    g[1] += sinf(tt * 0.51f + seed * 2.0f) * 0.0015f + sinf(tt * 1.13f + seed * 0.7f) * 0.0008f;
     g[0] *= amp; g[1] *= amp;
 }
 static float BlinkCurve(float t, float seed) {
@@ -458,8 +478,10 @@ void ExprBonesFrame(const void* skel) {
     const float A = 0.40f * o;    // (02/11, Agustin: "esta al reves") con el signo negativo la boca se cerraba al subir el slider: en el cuaternion del motor el menton baja con el angulo positivo
     for (int d = 0; d < kND; d++) {
         if (!S->cur[d]) continue;
-        const float* tv = TeethOf(d);
-        const bool rot = kDef[d].jaw > 0.0f && fabsf(A) > 1e-5f, mv = teeth > 0.001f && (tv[0] != 0.0f || tv[1] != 0.0f || tv[2] != 0.0f);
+        const float* tv = TeethOf(d); const float* ov = OpenOf(d);
+        const float op = (std::max)(o, 0.0f);
+        const float mvv0[3] = { tv[0] * teeth + ov[0] * op, tv[1] * teeth + ov[1] * op, tv[2] * teeth + ov[2] * op };
+        const bool rot = kDef[d].jaw > 0.0f && fabsf(A) > 1e-5f, mv = fabsf(mvv0[0]) + fabsf(mvv0[1]) + fabsf(mvv0[2]) > 1e-6f;
         if (!rot && !mv) continue;
         Xf x; if (!ReadBase(*S, d, x)) continue;
         float nq[4] = { x.q[0], x.q[1], x.q[2], x.q[3] }, nt[3] = { x.t[0], x.t[1], x.t[2] };
@@ -471,7 +493,7 @@ void ExprBonesFrame(const void* skel) {
             nt[0] = P[0] + rv[0]; nt[1] = P[1] + rv[1]; nt[2] = P[2] + rv[2];
         }
         if (mv) {   // corrimiento en los ejes de la cabeza (x a la izquierda del jugador, y arriba, z adelante) -> modelo
-            const float hv[3] = { tv[0] * teeth, tv[1] * teeth, tv[2] * teeth }; float mvv[3];
+            const float hv[3] = { mvv0[0], mvv0[1], mvv0[2] }; float mvv[3];
             QRot(hr, hv, mvv);
             nt[0] += mvv[0]; nt[1] += mvv[1]; nt[2] += mvv[2];
         }
