@@ -270,6 +270,29 @@ void PesTorsoRegrow(inout float3 mP, float3 mN, float3 rest, float3 org) {
   if (mm <= 0.0) return;
   mP += mN * rsqrt(max(dot(mN, mN), 1e-8)) * (mm * 0.001);
 }
+// (02/11 c) z352: CUELLO COMPLETO DE LA CARA (Agustin: "respetar el cuello completo, asi nos ahorramos problemas de costura").
+// Medido en 3 caras reales: el cuello de Konami sigue debajo del anillo del torso pero ADENTRO del TorsoBody (1-4 mm en el primer
+// cm, 3-8 a 1-2 cm, 5-10 a 2-4 cm, 7-18 mm mas abajo). Con TorsoBody_cuello 1.19 (CUELLO_COMPLETO: la cara ya no se corta) el
+// torso de los jugadores con camiseta se hunde z352 mm desde el anillo hasta 6 cm abajo (fundido hasta 12 cm, solo alrededor
+// del cuello): se ve el cuello entero de la cara y la costura queda bajo la camiseta. Sin camiseta solo 5 mm en el primer
+// centimetro (fundido a 2.5 cm): el borde del torso queda debajo del cuello de la cara, sin labio. z352 = 0: apagado (usar con 1.18b)
+void PesNeckSink(inout float3 mP, float3 mN, float3 rest, float3 org) {
+  float4 K = IniParams.Load(int2(352, 0));
+  if (K.z <= 0.0) return;
+  float3 p = float3(abs(rest.x), rest.y, rest.z);
+  float2 w = float2(p.x, p.z - 0.035); float rho = max(length(w), 1e-5); float c1 = w.y / rho;
+  float c2 = 2.0 * c1 * c1 - 1.0, c3 = (4.0 * c1 * c1 - 3.0) * c1, c4 = 2.0 * c2 * c2 - 1.0;
+  float rr = 0.07043 - 0.00015 * c1 - 0.01002 * c2 + 0.00154 * c3 + 0.00102 * c4;
+  float yy = 1.53524 - 0.01994 * c1 - 0.01021 * c2 + 0.00642 * c3 - 0.00158 * c4;
+  float hb = yy - p.y;                                     // cuanto debajo del anillo del cuello (m)
+  float nk = PesSS(-0.004, -0.001, hb) * (1.0 - PesSS(rr + 0.04, rr + 0.07, rho));
+  if (nk <= 0.0) return;
+  float4 T = IniParams.Load(int2(320, 0));
+  bool shirt = T.z > 0.5 && PesCharHasShirt(org) > 0.5;
+  float full = min(K.z, 25.0);
+  float mm = shirt ? full * (1.0 - PesSS(0.06, 0.12, hb)) : min(full, 5.0) * (1.0 - PesSS(0.005, 0.025, hb));
+  mP -= mN * rsqrt(max(dot(mN, mN), 1e-8)) * (mm * nk * 0.001);
+}
 // el VS del cuerpo la manda en la parte fraccionaria del codigo del jugador (o6.w = 1000 + i + 0.4 * torso)
 float PesSkinTorso(float code) { return saturate((code - round(code)) / 0.4); }
 // (24/10 e) medicion del color de la piel (variantes con PES_HL_ACC, solo en el menu Fisico): suma de albedo en punto fijo
