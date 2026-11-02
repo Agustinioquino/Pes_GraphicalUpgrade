@@ -130,21 +130,29 @@ float3 PesTongue(float3 rest, float2 uv, uint jaw)
   o.y += vivo * 0.0002 * lado * s * raiz * sin(6.2832 * 0.35 * t + 1.3);   // se inclina un poco hacia el lado al que va la punta
   o *= T.x * (1.0 - 0.7 * L);   // afuera, el lomo ya no se hunde
   if (L > 0.0) {
+    // (02/11 c, Agustin: "mas angosta al sacar y que el slider haga que sacar la lengua sea mas natural, suba y baje")
+    // el slider sigue una curva suave (sale despacio al principio y al final) y la punta recien cae sobre el labio cuando ya
+    // paso los dientes (L > 0.3); afuera la punta sube y baja sola, lento (~0.3 veces por segundo), como una lengua viva
+    float Le = L * L * (3.0 - 2.0 * L);
+    float Ld = saturate((L - 0.3) / 0.7);
     float sx = pow(s, 1.3);
     float3 q = 0;
-    q.z += L * 0.030 * sx;                                      // hasta 3 cm afuera en la punta
-    q.y += L * 0.0018 * sin(3.14159 * s) * raiz;                // el medio se levanta para pasar sobre los dientes de abajo
-    q.y -= L * 0.0060 * s * s;                                  // la punta cae sobre el labio de abajo
-    // (02/11, Agustin: "estirada bastante mas ancha") afuera la lengua se relaja y se ensancha (hasta +35 % hacia la punta)
-    q.x += rest.x * 0.35 * L * smoothstep(0.15, 0.8, s);
+    q.z += Le * 0.030 * sx;                                     // hasta 3 cm afuera en la punta
+    q.y += Le * 0.0018 * sin(3.14159 * s) * raiz;               // el medio se levanta para pasar sobre los dientes de abajo
+    q.y -= Ld * 0.0060 * s * s;                                 // la punta cae sobre el labio de abajo
+    float ud = sin(6.2832 * 0.30 * t + 1.1) + 0.35 * sin(6.2832 * 0.71 * t + 0.3);
+    q.y += Ld * 0.0035 * s * s * ud;                            // la punta sube y baja (+-3.5 mm)
+    q.y -= Ld * 0.0010 * sin(3.14159 * s) * ud;                 // el medio acompana al reves (la lengua se curva)
+    // (02/11 c) mas angosta: se afina hacia la punta un 12 % (antes se ensanchaba 35 %); la raiz sigue ancha (tapa la garganta)
+    q.x -= rest.x * 0.12 * Le * smoothstep(0.3, 1.0, s);
     // (02/11, Agustin: "que el inicio de la lengua se estire un poco para ocultar el agujero de la garganta") la raiz se
     // estira hacia atras y arriba y se ensancha, tapando la garganta que queda a la vista con la lengua afuera
     float r0 = 1.0 - smoothstep(0.0, 0.30, s);
-    q.z -= L * 0.0050 * r0;
-    q.y += L * 0.0020 * r0;
-    q.x += rest.x * 0.25 * L * r0;
-    q.y -= (rest.y - 1.636) * 0.15 * L * s;                     // y se aplana un poco (menos alto)
-    q.x += L * 0.0012 * s * s * sin(6.2832 * 0.4 * t + 0.5) * saturate(T.y);   // la punta se mueve apenas de lado (movimiento vivo)
+    q.z -= Le * 0.0050 * r0;
+    q.y += Le * 0.0020 * r0;
+    q.x += rest.x * 0.25 * Le * r0;
+    q.y -= (rest.y - 1.636) * 0.15 * Le * s;                    // y se aplana un poco (menos alto)
+    q.x += Le * 0.0012 * s * s * sin(6.2832 * 0.4 * t + 0.5) * saturate(T.y);   // la punta se mueve apenas de lado (movimiento vivo)
     o += q;
   }
   return o;
