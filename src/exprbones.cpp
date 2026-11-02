@@ -177,11 +177,15 @@ struct Skel {
     // (02/11 i) amplificador POR HUESOS: base del juego leida este cuadro (lo que se guarda como base al escribir), cuadro de la
     // ultima escritura y la cabeza del cuadro para medir el gesto (actual - cabeza rigida)
     float gq[kND][4] = {}, gt[kND][3] = {}; unsigned wFrame[kND] = {};
-    bool ampOn = false; float ahc[3] = {}, ahr[4] = { 0, 0, 0, 1 }, aGain[kND] = {}, aCap = 0.012f;
+    bool ampOn = false; float ahc[3] = {}, ahr[4] = { 0, 0, 0, 1 }, aGain[kND] = {}, aCap = 0.012f, aBig = 0.35f;
     // (02/11 l, Agustin: "vibra un poco al abrirse ... la camara lenta") cabeza del cuadro en que el JUEGO escribio cada hueso: en
     // camara lenta el juego no reescribe los huesos de la cara en todos los cuadros (16 mil lecturas con lo del mod puesto) pero la
     // cabeza si se mueve; medir el gesto contra la cabeza de ahora metia ese movimiento en el gesto y lo agrandaba a saltos
     float bHc[kND][3] = {}, bHr[kND][4] = {}; bool bHave[kND] = {}, fresh[kND] = {};
+    // (02/11 n, Agustin: "al subir la ganancia la cara se deforma pero no en partes") el gesto se medía contra el REPOSO del skl,
+    // pero la forma de cada cara (editor de caras del juego) tambien esta en los huesos: se agrandaba la forma de la cara entera.
+    // Ahora el gesto se mide contra la cara NEUTRA de este jugador: promedio lento (~10 s) de cada hueso en los ejes de la cabeza
+    float nT[kND][3] = {}, nQ[kND][4] = {}; int nN[kND] = {};
     float seed = 0.37f; bool seedHave = false; float seedCand = -1.0f; int seedCandN = 0;   // (02/11 c) semilla de la mirada, la misma que el VS del globo (PesExprSeed)
     // (02/11 e) sk_head del esqueleto del CUERPO (175 huesos) para la camara: el sk_head del esqueleto de la cara tiene la
     // transformacion actual en (0, 0, 0) (no es espacio del modelo: log 12:46 PC), el del cuerpo si lo es
@@ -414,14 +418,19 @@ static void Release(Skel& S, int d) {
 static void Amp(const Skel& S, int d, Xf& x) {
     if (!S.ampOn || d >= kND - 2) return;
     const float g = S.aGain[d]; if (fabsf(g - 1.0f) < 0.005f) return;
-    const Xf& R = S.rest[d]; const Xf& H = S.rest[D_HEAD];
+    if (S.nN[d] < 8) return;   // (02/11 n) todavia sin cara neutra de este jugador
     const float* hcU = S.bHave[d] ? S.bHc[d] : S.ahc; const float* hrU = S.bHave[d] ? S.bHr[d] : S.ahr;   // (02/11 l) cabeza de cuando el juego escribio el hueso
-    const float rv[3] = { R.t[0] - H.t[0], R.t[1] - H.t[1], R.t[2] - H.t[2] }; float rr[3]; QRot(hrU, rv, rr);
+    float rr[3]; QRot(hrU, S.nT[d], rr);
     float e[3] = { (x.t[0] - (hcU[0] + rr[0])) * (g - 1.0f), (x.t[1] - (hcU[1] + rr[1])) * (g - 1.0f), (x.t[2] - (hcU[2] + rr[2])) * (g - 1.0f) };
+    {   // (02/11 m, Agustin: "las opciones de slider no cambian nada") 340.w gestos grandes: lo que el gesto pasa de 1 cm se agranda
+        // solo esa fraccion (como hacia el shader), asi la boca muy abierta no se dispara
+        const float gl = sqrtf(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]) / (fabsf(g - 1.0f) > 1e-4f ? fabsf(g - 1.0f) : 1.0f);
+        if (gl > 0.01f) { const float k = (0.01f + S.aBig * (gl - 0.01f)) / gl; for (float& v : e) v *= k; }
+    }
     const float el = sqrtf(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]);
     if (el > S.aCap) for (float& v : e) v *= S.aCap / el;
     for (int k = 0; k < 3; k++) x.t[k] += e[k];
-    float rq[4], c[4], dq[4]; QMul(hrU, R.q, rq); QConj(rq, c); QMul(x.q, c, dq);
+    float rq[4], c[4], dq[4]; QMul(hrU, S.nQ[d], rq); QConj(rq, c); QMul(x.q, c, dq);
     if (dq[3] < 0) for (float& v : dq) v = -v;
     const float sn = sqrtf(dq[0] * dq[0] + dq[1] * dq[1] + dq[2] * dq[2]);
     if (sn > 1e-6f) {
@@ -430,6 +439,22 @@ static void Amp(const Skel& S, int d, Xf& x) {
         const float h = 0.5f * a, k = sinf(h) / sn, eq[4] = { dq[0] * k, dq[1] * k, dq[2] * k, cosf(h) };
         float nq[4]; QMul(eq, x.q, nq); memcpy(x.q, nq, sizeof nq);
     }
+}
+// (02/11 n) cara neutra: el hueso que dejo el juego, en los ejes de la cabeza del cuadro en que lo escribio; promedio que arranca
+// rapido (primeros 120 cuadros) y despues sigue lento (~10 s a 60 cuadros), asi un gesto de unos segundos no se vuelve neutro
+static void Neutral(Skel& S, int d, const Xf& g) {
+    float ihr[4]; QConj(S.bHr[d], ihr);
+    const float v[3] = { g.t[0] - S.bHc[d][0], g.t[1] - S.bHc[d][1], g.t[2] - S.bHc[d][2] }; float lt[3]; QRot(ihr, v, lt);
+    float lq[4]; QMul(ihr, g.q, lq);
+    const int n = S.nN[d];
+    if (n == 0) { memcpy(S.nT[d], lt, sizeof lt); memcpy(S.nQ[d], lq, sizeof lq); S.nN[d] = 1; return; }
+    const float a = n < 120 ? 1.0f / (float)(n + 1) : 1.0f / 600.0f;
+    for (int k = 0; k < 3; k++) S.nT[d][k] += (lt[k] - S.nT[d][k]) * a;
+    const float dt = lq[0] * S.nQ[d][0] + lq[1] * S.nQ[d][1] + lq[2] * S.nQ[d][2] + lq[3] * S.nQ[d][3];
+    const float sg = dt < 0 ? -1.0f : 1.0f; float l2 = 0;
+    for (int k = 0; k < 4; k++) { S.nQ[d][k] += (sg * lq[k] - S.nQ[d][k]) * a; l2 += S.nQ[d][k] * S.nQ[d][k]; }
+    const float il = l2 > 1e-12f ? 1.0f / sqrtf(l2) : 1.0f; for (float& q : S.nQ[d]) q *= il;
+    if (S.nN[d] < 1000000) S.nN[d]++;
 }
 static bool Base(Skel& S, int d, Xf& x) { if (!ReadBase(S, d, x)) return false; Amp(S, d, x); return true; }
 // gira la transformacion de un hueso alrededor de su propia posicion: q nuevo = r * q base (r en el espacio del modelo)
@@ -663,7 +688,7 @@ void ExprBonesFrame(const void* skel) {
         const float* E = g_cfg.live[340]; const float* Z = g_cfg.live[341];
         S->ampOn = E[1] > 1.005f || E[1] < 0.995f;
         memcpy(S->ahc, hc.t, sizeof S->ahc); memcpy(S->ahr, hr, sizeof S->ahr);
-        S->aCap = std::clamp(E[2], 0.1f, 3.0f) * 0.01f;
+        S->aCap = std::clamp(E[2], 0.1f, 3.0f) * 0.01f; S->aBig = std::clamp(E[3], 0.0f, 1.0f);
         for (int d = 0; d < kND; d++) {
             const float z = d <= 12 ? Z[3] : d <= 19 ? Z[2] : d <= 25 ? Z[1] : d <= 30 ? Z[0] : 0.0f;
             S->aGain[d] = 1.0f + (E[1] - 1.0f) * std::clamp(z, 0.0f, 3.0f);
@@ -672,6 +697,7 @@ void ExprBonesFrame(const void* skel) {
             if (!S->cur[d]) continue;
             Xf g; if (!ReadBase(*S, d, g)) continue;
             if (S->fresh[d] || !S->bHave[d]) { memcpy(S->bHc[d], hc.t, sizeof S->bHc[d]); memcpy(S->bHr[d], hr, sizeof S->bHr[d]); S->bHave[d] = true; }
+            if (S->fresh[d]) Neutral(*S, d, g);
             Xf x = g; Amp(*S, d, x);
             const float dt = fabsf(x.t[0] - g.t[0]) + fabsf(x.t[1] - g.t[1]) + fabsf(x.t[2] - g.t[2]);
             const float dq = fabsf(x.q[0] - g.q[0]) + fabsf(x.q[1] - g.q[1]) + fabsf(x.q[2] - g.q[2]) + fabsf(x.q[3] - g.q[3]);
