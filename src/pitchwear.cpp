@@ -36,12 +36,13 @@ static std::vector<PlayerPrev> s_pl;        // jugadores del cuadro anterior con
 static float s_wearCpu[128][256] = {};
 static float s_stain[3] = {};               // verde, tierra, cal (0..1)
 static ID3D11Buffer* s_ballCb = nullptr;    // b12 del PS de la pelota
-static const int kBallSlots = 64;
+static const int kBallSlots = 128;   // (2/11 paso 10) 64 desbordaba en silencio (22 x 2 botines + arbitros + pelota + repeticiones)
 static ID3D11Buffer* s_bdStage[kStages] = {}; static int s_bdFrame[kStages] = { -1, -1, -1 }; static std::atomic<int> s_bdW{0}; static std::atomic<int> s_bdCount{0};
 static UINT s_bdIdx[kStages][kBallSlots] = {};   // indice (vertices) de cada dibujo anotado, por anillo
 static std::atomic<UINT> s_ballIdx{0};      // indice de vertices del dibujo de la pelota (0 = aun no)
 static std::atomic<int> s_bdCalls{0}, s_bdOffX177{0}, s_bdNoStage{0}, s_bdNoCb{0}, s_bdNoted{0};   // (2/11 b) diagnostico: por que no se anota
-static int s_ballIdxVotes = 0; static int s_ballLogged = 0;
+static std::atomic<int> s_ballIdxVotes{0}; static int s_ballLogged = 0;
+static std::atomic<int> s_bdOverflow{0}; static int s_ballChanges = 0; static UINT s_ballHist[10] = {}; static int s_ballHp = 0;   // (2/11 paso 10) dibujos que no entraron en los slots; cambios del indice votado
 static void WearCpuAdd(float u, float v, float k, float radM) {
     // mismo pincel que pes_wear_ps.hlsl: k * exp(-r2 * 2.2), r en radios, hasta 1.5 radios
     float cu = u * 256.f, cv = v * 128.f, ru = radM / 140.f * 256.f, rv = radM / 79.f * 128.f;
@@ -376,9 +377,9 @@ ID3D11Buffer* PitchBallDrawNote(ID3D11DeviceContext* c, UINT verts) {
     if (!g_dev.dev || verts == 0) return nullptr;
     s_bdCalls++; if (g_cfg.live[177][0] < 0.001f) { s_bdOffX177++; return nullptr; }
     UINT bi = s_ballIdx.load(std::memory_order_relaxed);
-    if (bi == 0 || s_ballIdxVotes < 3) {   // todavia buscando: anotar
+    {   // (2/11 paso 10) se anota siempre (antes se dejaba de anotar con 3 votos y un botin votado quedaba fijo para todo el partido)
         int w = s_bdW.load(); if (!s_bdStage[w]) s_bdNoStage++; else { int i = s_bdCount.fetch_add(1);
-            if (i < kBallSlots) { ID3D11Buffer* cb = nullptr; UINT first = 0, num = 0; ID3D11DeviceContext1* c1 = nullptr;
+            if (i >= kBallSlots) s_bdOverflow++; else { ID3D11Buffer* cb = nullptr; UINT first = 0, num = 0; ID3D11DeviceContext1* c1 = nullptr;
                 if (SUCCEEDED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) && c1) { c1->VSGetConstantBuffers1(5, 1, &cb, &first, &num); c1->Release(); } else c->VSGetConstantBuffers(5, 1, &cb);
                 // (2/11 e) se copian las 8 primeras filas de b5 (128 B): la traslacion puede estar en la fila 3, en la 7 o en la columna w de las
                 // filas 4..6 (matriz traspuesta, como la del pasto); antes solo la fila 7 y la pelota nunca se reconocio
@@ -387,7 +388,7 @@ ID3D11Buffer* PitchBallDrawNote(ID3D11DeviceContext* c, UINT verts) {
                     else s_bdNoCb++;
                     cb->Release(); } } }
     }
-    return (bi != 0 && verts == bi) ? s_ballCb : nullptr;
+    return (bi != 0 && verts == bi && s_ballIdxVotes.load(std::memory_order_relaxed) >= 3) ? s_ballCb : nullptr;   // (2/11 paso 10) b12 solo con el indice confirmado
 }
 static void BallDrawPresent() {
     if (!g_dev.dev || !g_dev.imm) return;
@@ -400,27 +401,37 @@ static void BallDrawPresent() {
     int rd = (w + 1) % kStages; int pending = s_bdFrame[rd]; s_bdFrame[rd] = -1; s_bdW = rd;
     // (2/11 b) diagnostico mientras no se reconoce: cada 30 s, hasta 4 veces por partido, por que no se anota o no se lee
     { static int presents = 0, noPending = 0, noBall = 0, mapFail = 0, logs = 0, gen = -1;
-      if (g_matchGen.load() != gen) { gen = g_matchGen.load(); presents = noPending = noBall = mapFail = logs = 0; }
+      if (g_matchGen.load() != gen) { gen = g_matchGen.load(); presents = noPending = noBall = mapFail = logs = 0;
+          s_ballIdx = 0; s_ballIdxVotes = 0; s_ballChanges = 0; s_ballLogged = 0; memset(s_ballHist, 0, sizeof s_ballHist); s_ballHp = 0; }   // (2/11 paso 10) partido nuevo: se vuelve a buscar la pelota
       presents++; if (pending < 0) noPending++; if (!s_ballOk) noBall++;
-      if (s_ballIdx.load() == 0 && presents % 1800 == 0 && logs < 4) { logs++;
-          Log("pelota: diagnostico (%d cuadros): dibujos aadffecf %d, saltados por x177 %d, sin staging %d, sin b5 %d, anotados %d; cuadros sin anotaciones %d, sin pelota del pasto %d, lecturas que fallaron %d; x177 %.2f capsula %s (%.1f, %.2f, %.1f)",
-              presents, s_bdCalls.load(), s_bdOffX177.load(), s_bdNoStage.load(), s_bdNoCb.load(), s_bdNoted.load(), noPending, noBall, mapFail, g_cfg.live[177][0], s_ballOk ? "si" : "no", s_ball[0], s_ball[1], s_ball[2]); }
+      if (presents % 1800 == 0 && logs < 4) { logs++;   // (2/11 paso 10) tambien con indice ya votado (antes se callaba justo cuando el indice alternaba)
+          Log("pelota: diagnostico (%d cuadros): dibujos aadffecf %d, saltados por x177 %d, sin staging %d, sin b5 %d, anotados %d, desbordes %d; cuadros sin anotaciones %d, sin pelota del pasto %d, lecturas que fallaron %d; indice %u votos %d cambios %d; x177 %.2f capsula %s (%.1f, %.2f, %.1f)",
+              presents, s_bdCalls.load(), s_bdOffX177.load(), s_bdNoStage.load(), s_bdNoCb.load(), s_bdNoted.load(), s_bdOverflow.load(), noPending, noBall, mapFail, s_ballIdx.load(), s_ballIdxVotes.load(), s_ballChanges, g_cfg.live[177][0], s_ballOk ? "si" : "no", s_ball[0], s_ball[1], s_ball[2]); }
       if (pending < 0 || !s_bdStage[rd] || !s_ballOk) return;
-      D3D11_MAPPED_SUBRESOURCE m; if (FAILED(g_dev.imm->Map(s_bdStage[rd], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) { mapFail++; return; }
-    const float* q = (const float*)m.pData; UINT found = 0; int nf = 0; static int s_noMatch = 0; int nCand = 0;
+      D3D11_MAPPED_SUBRESOURCE m; if (FAILED(g_dev.imm->Map(s_bdStage[rd], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) { mapFail++; memset(s_bdIdx[rd], 0, sizeof s_bdIdx[rd]); return; }   // (2/11 paso 10) sin el memset los slots viejos volvian como candidatos
+    const float* q = (const float*)m.pData; UINT found = 0; int nf = 0; static int s_noMatch = 0; int nCand = 0; float bestD = 1e9f; int bestH = -1;
     for (int i = 0; i < kBallSlots; i++) { if (!s_bdIdx[rd][i]) continue; nCand++; const float* r = q + i * 32;
         // candidatos a traslacion: fila 3 (m_world por filas), fila 7 (matriz en 4..7), columna w de 0..2 y de 4..6 (matriz traspuesta)
         const float cand[4][3] = { { r[12], r[13], r[14] }, { r[28], r[29], r[30] }, { r[3], r[7], r[11] }, { r[19], r[23], r[27] } };
         for (int k = 0; k < 4; k++) { float dx = cand[k][0] - s_ball[0], dy = cand[k][1] - s_ball[1], dz = cand[k][2] - s_ball[2];
-            if (dx * dx + dy * dy + dz * dz < 0.3f * 0.3f) { found = s_bdIdx[rd][i]; nf++; break; } } }
-    if (!found && nCand > 0 && s_ballIdx.load() == 0) { if (++s_noMatch == 600) {   // ~10 s sin reconocerla: volcar que se leyo (una vez)
+            float d2 = dx * dx + dy * dy + dz * dz;
+            // (2/11 paso 10) antes se quedaba el ULTIMO dentro de 0.3 m: con la pelota al pie los botines (b5 a y 0..0.05, la capsula a ~0.11)
+            // entraban en el radio y el indice alternaba pelota <-> botin cada cuadro. Ahora: primero los que estan a la altura de la
+            // capsula (|dy| < 6 cm), y entre esos el mas cercano
+            if (d2 < 0.3f * 0.3f) { nf++; int h = fabsf(dy) < 0.06f ? 1 : 0; if (h > bestH || (h == bestH && d2 < bestD)) { bestH = h; bestD = d2; found = s_bdIdx[rd][i]; } break; } } }
+    if (!found && nCand > 0) { if (++s_noMatch == 600) {   // ~10 s sin reconocerla: volcar que se leyo (una vez)
             Log("pelota: sin dibujo reconocido tras 600 cuadros (%d dibujos de botines/pelota por cuadro); capsula del pasto (%.2f, %.2f, %.2f)", nCand, s_ball[0], s_ball[1], s_ball[2]);
             for (int i = 0, n = 0; i < kBallSlots && n < 3; i++) { if (!s_bdIdx[rd][i]) continue; n++; const float* r = q + i * 32;
                 Log("pelota: candidato %u indices b5 f0 (%.2f %.2f %.2f %.2f) f3 (%.2f %.2f %.2f %.2f) f4 (%.2f %.2f %.2f %.2f) f7 (%.2f %.2f %.2f %.2f)", s_bdIdx[rd][i],
                     r[0], r[1], r[2], r[3], r[12], r[13], r[14], r[15], r[16], r[17], r[18], r[19], r[28], r[29], r[30], r[31]); } } }
     g_dev.imm->Unmap(s_bdStage[rd], 0); memset(s_bdIdx[rd], 0, sizeof s_bdIdx[rd]);
-    if (found) { UINT cur = s_ballIdx.load(); if (cur == found) s_ballIdxVotes = std::min(s_ballIdxVotes + 1, 10); else { s_ballIdx = found; s_ballIdxVotes = 1; }
-        if (s_ballLogged < 2 && s_ballIdxVotes == 3) { s_ballLogged++; Log("pelota: dibujo reconocido (indice %u, %d dibujos cerca de la capsula); manchas verde %.2f tierra %.2f cal %.2f", found, nf, s_stain[0], s_stain[1], s_stain[2]); } }
+    if (found) {   // (2/11 paso 10) voto por el indice mas frecuente de los ultimos 10 cuadros con candidato (antes 3 seguidos, que un botin intercalado reiniciaba)
+        UINT* hist = s_ballHist; s_ballHist[s_ballHp] = found; s_ballHp = (s_ballHp + 1) % 10;
+        UINT best = 0; int bestN = 0; for (int a = 0; a < 10; a++) { if (!hist[a]) continue; int n = 0; for (int b = 0; b < 10; b++) n += hist[b] == hist[a]; if (n > bestN) { bestN = n; best = hist[a]; } }
+        UINT cur = s_ballIdx.load(); int prevVotes = s_ballIdxVotes.load();
+        if (best != cur) { s_ballChanges++; if (s_ballChanges <= 5) Log("pelota: indice candidato %u -> %u (%d de 10 cuadros, %d dibujos cerca de la capsula, dy %s)", cur, best, bestN, nf, bestH > 0 ? "a la altura de la capsula" : "por debajo"); }
+        s_ballIdx = best; s_ballIdxVotes = bestN;
+        if (s_ballLogged < 2 && prevVotes < 3 && bestN >= 3) { s_ballLogged++; Log("pelota: dibujo reconocido (indice %u, %d de 10 cuadros, %d dibujos cerca de la capsula); manchas verde %.2f tierra %.2f cal %.2f", best, bestN, nf, s_stain[0], s_stain[1], s_stain[2]); } }
     }
 }
 void PitchWearPresent() {

@@ -56,7 +56,8 @@ void main(uint3 id : SV_DispatchThreadID)
       Args.Store(o + 16, 0u);
       if (active) {
         Claim.Store(4 + s * 4, n);
-        if (s == 0u) { Claim.Store(76, asuint(cb2[5].y)); Claim.Store(80, asuint(cb2[20].x)); Claim.Store(84, asuint(cb2[20].y)); Claim.Store(88, asuint(cb2[20].z)); }
+        if (s == 0u) { Claim.Store(76, asuint(cb2[5].y)); Claim.Store(80, asuint(cb2[20].x)); Claim.Store(84, asuint(cb2[20].y)); Claim.Store(88, asuint(cb2[20].z));
+                       Claim.Store(92, Count.Load(76)); }   // (02/11 paso 10) celdas perdidas por ranura llena (la DLL lo muestra en 'pasto v3')
       }
     }
     return;
@@ -129,7 +130,7 @@ void main(uint3 id : SV_DispatchThreadID)
   uint slot = (uint)(gP1.z + 0.5) + b;
   uint idx;
   Count.InterlockedAdd(slot * 4, 1u, idx);
-  if (idx >= (uint)(gP1.y + 0.5)) return;          // tope de la ranura
+  if (idx >= (uint)(gP1.y + 0.5)) { Count.InterlockedAdd(76, 1u, idx); return; }   // tope de la ranura; (02/11 paso 10) se cuenta la celda perdida
   uint rot = ((id.x * 7u + id.y * 13u) ^ (id.x * id.y)) & 3u;
   // z = escala de la celda (1 / 2 / 4) + fraccion de la ultima tarjeta * 0.5
   Inst[slot * (uint)(gP1.y + 0.5) + idx] = float4(x, z, cell / 0.5 + fr * 0.5, (float)(lim * 4u + rot));
