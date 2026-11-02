@@ -107,6 +107,9 @@ void main(
   float3 nrm = v1.xyz, tng = v2.xyz;
   {
     float gAmp = IniParams.Load(int2(347, 0)).w;
+    // (02/11) con 350.y = 2 la DLL ya gira el hueso del ojo (exprbones.cpp, mirada por huesos): aca no se gira nada mas
+    float4 Rb350 = IniParams.Load(int2(350, 0));
+    if (Rb350.x > 0.5 && Rb350.y > 1.5) gAmp = 0.0;
     if (gAmp > 0.0 && g_pesExprMesh.w == 2u) {
       float4 E = v3.x == 0u ? g_pesExprEye[0] : g_pesExprEye[1];   // centro (xyz) y radio del ojo de este vertice
       if (E.w > 0.0) {

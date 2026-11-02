@@ -237,6 +237,9 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
 {
   float amt = IniParams.Load(int2(342, 0)).w;
   if (amt <= 0.0) return;
+  // (02/11) con 350.y = 2 la DLL parpadea girando los huesos de los parpados (exprbones.cpp): todas las mallas juntas
+  float4 Rb350 = IniParams.Load(int2(350, 0));
+  if (Rb350.x > 0.5 && Rb350.y > 1.5) return;
   uint4 L = g_pesExprLids;
   if (L.x > 31 && L.y > 31) return;
   if (rest.y < 1.670 || rest.y > 1.725 || rest.z < 0.110 || abs(rest.x) > 0.060) return;
