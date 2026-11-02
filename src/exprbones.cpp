@@ -209,6 +209,82 @@ void ExprBonesFrame(const void* skel) {
     }
 }
 
+// (02/11) VOLCADO de un esqueleto, una vez: en la PC el esqueleto del cuerpo tiene 175 huesos y solo se reconocen sk_head
+// (11) y sk_neck (6): los skf_* no estan con reposo en el espacio del modelo. Para ver que hay: el objeto esqueleto (0x80
+// bytes), el hueso de la cabeza entero (0xc0 bytes) con los punteros que apunten a texto (nombre?), el indice del padre de
+// cada hueso (+ 0x20) y el reposo de todos los huesos de la cabeza para arriba o con traslacion chica (local?)
+static bool LooksText(const char* p, char* out, int n) {
+    char b[48] = {}; if (!SafeCopy(b, p, 40)) return false;
+    int k = 0; while (k < 40 && b[k] >= 0x20 && b[k] < 0x7f) k++;
+    if (k < 3 || (k < 40 && b[k] != 0)) return false;
+    snprintf(out, n, "%.*s", k, b); return true;
+}
+static void Dump(const Skel& S) {
+    char l[1600]; int k;
+    unsigned char h[0x80] = {};
+    if (SafeCopy(h, S.skel, sizeof h)) {
+        k = snprintf(l, sizeof l, "boca por huesos: volcado esqueleto %p (%d huesos):", S.skel, S.n);
+        for (int i = 0; i < 0x80 && k < (int)sizeof l - 8; i++) k += snprintf(l + k, sizeof l - k, "%s%02X", (i % 8) == 0 ? " " : "", h[i]);
+        Log("%s", l);
+        k = snprintf(l, sizeof l, "boca por huesos: esqueleto %p punteros a texto:", S.skel);
+        for (int i = 0; i + 8 <= 0x80; i += 8) { void* q = nullptr; memcpy(&q, h + i, 8); char t[48]; if (q && LooksText((const char*)q, t, sizeof t)) k += snprintf(l + k, sizeof l - k, " +%02X \"%s\"", i, t); }
+        Log("%s", l);
+    }
+    const int hb = S.cur[D_HEAD] ? S.idx[D_HEAD] : 0;
+    unsigned char bb[0xc0] = {};
+    if (SafeCopy(bb, S.bones + (size_t)hb * 0xc0, sizeof bb)) {
+        k = snprintf(l, sizeof l, "boca por huesos: hueso %d (cabeza) %p:", hb, S.bones + (size_t)hb * 0xc0);
+        for (int i = 0; i < 0xc0 && k < (int)sizeof l - 8; i++) k += snprintf(l + k, sizeof l - k, "%s%02X", (i % 8) == 0 ? " " : "", bb[i]);
+        Log("%s", l);
+        k = snprintf(l, sizeof l, "boca por huesos: hueso %d punteros a texto:", hb);
+        for (int i = 0; i + 8 <= 0xc0; i += 8) {
+            void* q = nullptr; memcpy(&q, bb + i, 8); char t[48];
+            if (q && LooksText((const char*)q, t, sizeof t)) k += snprintf(l + k, sizeof l - k, " +%02X \"%s\"", i, t);
+            else if (q) { void* q2 = nullptr; if (ReadPtr(q, q2) && LooksText((const char*)q2, t, sizeof t)) k += snprintf(l + k, sizeof l - k, " +%02X->\"%s\"", i, t); }
+        }
+        Log("%s", l);
+    }
+    // padre e indice de cada hueso, reposo (traslacion) de los que estan a la altura de la cabeza o con traslacion chica
+    k = snprintf(l, sizeof l, "boca por huesos: esqueleto %p reposos (indice/padre:x y z):", S.skel);
+    int shown = 0;
+    for (int b = 0; b < S.n; b++) {
+        Xf r; if (!ReadXf(S.bones + (size_t)b * 0xc0 + 0x40, r)) continue;
+        void* par = nullptr; int pi = -1;
+        if (ReadPtr(S.bones + (size_t)b * 0xc0 + 0x20, par)) { ptrdiff_t d = (const char*)par - S.bones; if (d >= 0 && d % 0xc0 == 0 && d / 0xc0 < S.n) pi = (int)(d / 0xc0); }
+        const float m = fabsf(r.t[0]) + fabsf(r.t[1]) + fabsf(r.t[2]);
+        if (!(r.t[1] > 1.50f || m < 0.12f)) continue;
+        if (k > (int)sizeof l - 60) { Log("%s", l); k = snprintf(l, sizeof l, "boca por huesos: (sigue)"); }
+        k += snprintf(l + k, sizeof l - k, " %d/%d:%.3f %.3f %.3f", b, pi, r.t[0], r.t[1], r.t[2]); shown++;
+    }
+    k += snprintf(l + k, sizeof l - k, " (%d de %d)", shown, S.n);
+    Log("%s", l);
+    // el nodo del personaje (personajes.cpp): otros objetos con pinta de esqueleto colgados del nodo (el de la cara?), dos niveles
+    CharInfo ci[kCharSlots]; bool alive[kCharSlots] = {};
+    CharSnapshot(ci, alive);
+    void* node = nullptr;
+    for (int i = 0; i < kCharSlots; i++) if (alive[i] && ci[i].skel == S.skel) { node = ci[i].node; break; }
+    if (!node) { Log("boca por huesos: esqueleto %p sin nodo de personaje conocido", S.skel); return; }
+    auto looksSkel = [](const void* q, int* n, Xf* r0) {
+        void* arr = nullptr; int cnt = 0;
+        if (!ReadPtr((const char*)q + 0x28, arr) || !SafeCopy(&cnt, (const char*)q + 0x30, 4) || cnt < 2 || cnt > 1024) return false;
+        if (!ReadXf((const char*)arr + 0x40, *r0)) return false;
+        *n = cnt; return true;
+    };
+    k = snprintf(l, sizeof l, "boca por huesos: nodo %p (esqueleto principal en +88) objetos con pinta de esqueleto:", node);
+    int found = 0;
+    for (int off = 0; off + 8 <= 0x400 && k < (int)sizeof l - 100; off += 8) {
+        void* q = nullptr; if (!ReadPtr((const char*)node + off, q)) continue;
+        int n; Xf r0;
+        if (looksSkel(q, &n, &r0)) { k += snprintf(l + k, sizeof l - k, " +%X:%p(%d huesos, h0 %.3f %.3f %.3f)", off, q, n, r0.t[0], r0.t[1], r0.t[2]); found++; continue; }
+        for (int o2 = 0; o2 + 8 <= 0x200 && k < (int)sizeof l - 100; o2 += 8) {
+            void* q2 = nullptr; if (!ReadPtr((const char*)q + o2, q2) || q2 == node) continue;
+            if (looksSkel(q2, &n, &r0)) { k += snprintf(l + k, sizeof l - k, " +%X/+%X:%p(%d huesos, h0 %.3f %.3f %.3f)", off, o2, q2, n, r0.t[0], r0.t[1], r0.t[2]); found++; }
+        }
+    }
+    k += snprintf(l + k, sizeof l - k, " (%d)", found);
+    Log("%s", l);
+}
+
 // Present (hilo de render): estado para el shader (350.y) y resumen al log
 void ExprBonesPresent() {
     const unsigned fr = s_frame.fetch_add(1) + 1;
@@ -220,6 +296,8 @@ void ExprBonesPresent() {
     std::lock_guard<std::mutex> lk(s_mx);
     const int calls = s_calls.exchange(0), ap = s_applied.exchange(0), nj = s_noJaw.exchange(0), bw = s_badWrite.exchange(0);
     if (!calls) return;
+    static int dumped = 0;
+    if (dumped < 2) for (int i = 0; i < s_nSk && dumped < 2; i++) if (s_sk[i].n > 0 && fr - s_sk[i].lastFrame < 600) { Dump(s_sk[i]); dumped++; }
     if (s_logs < 40) {
         char l[1200]; int k = snprintf(l, sizeof l, "boca por huesos: %d pasos por el cuello, %d giros escritos, %d sin mandibula, %d escrituras fallidas; esqueletos:", calls, ap, nj, bw);
         for (int i = 0; i < s_nSk && k < (int)sizeof l - 120; i++) {
