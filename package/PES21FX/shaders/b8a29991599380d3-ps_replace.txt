@@ -307,6 +307,22 @@ void main(
   r2.w = -g_psScene.m_shadowProjection2._m33 * r2.w;
   r8.xyz = r3.xyw * r2.www + r6.xyz;
   r8.z = g_psScene.m_shadowProjection2._m33 + r8.z;
+  // (02/11) z314: sombra "al pie" sobre el pasto (matType 3). El pixel de la hoja se proyecta al suelo antes de muestrear el shadow
+  // map (como el rebote en 619b): la hoja recibe la misma sombra que el suelo bajo ella. Antes se evaluaba a la altura de cada hoja
+  // con su normal y sus derivadas y la sombra del botin / pelota salia "peinada", recortada hoja por hoja (captura 02/11 10:06)
+  float4 TS3 = IniParams.Load(int2(314,0)); bool pesFoot = false; float3 pesFootP = r6.xyz;
+  if (matType == 3 && TS3.z > 0.5) {
+    float3 upF = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
+    if (dot(pesLDir.xyz, upF) < 0.0) upF = -upF;                        // el sol siempre arriba
+    float pesHP = g_psScene.m_eyepos.y + dot(r6.xyz, upF);               // altura sobre la cancha (m)
+    if (pesHP > 0.004 && pesHP < 0.6) {
+      pesFoot = true;
+      pesFootP = r6.xyz - (pesHP - 0.01) * upF;                          // 1 cm sobre el suelo
+      float nU = saturate(dot(normalize(pesLDir.xyz), upF));
+      r8.xyz = pesFootP + upF * (-g_psScene.m_shadowProjection2._m33 * (1.0 - nU) * (1.0 - nU));   // sesgo del motor con la normal del suelo
+      r8.z += g_psScene.m_shadowProjection2._m33;
+    }
+  }
   r2.w = dot(r0.xy, float2(17,0.100000001));
   r2.w = g_psSystem.m_timeParam.z + r2.w;
   r2.w = sin(r2.w);
@@ -394,6 +410,7 @@ void main(
   { float2 duvdx = ddx(pesShUV), duvdy = ddy(pesShUV); float dzdx = ddx(pesShRef), dzdy = ddy(pesShRef);
     float detR = duvdx.x * duvdy.y - duvdx.y * duvdy.x;
     if (abs(detR) > 1e-14) pesDzduv = float2(duvdy.y * dzdx - duvdx.y * dzdy, -duvdy.x * dzdx + duvdx.x * dzdy) / detR; }
+  if (pesFoot) pesDzduv = 0.0;   // (02/11) al pie: las derivadas saltan de hoja en hoja, el suelo es plano
   // === PES21 sol dinamico (17/10): el Daylight Engine mueve el sol cada cuadro y lo deja bajo. Con el sol rasante
   // el shadow map hace acne (rayas en pasto y cara) y el borde repta al moverse. x53 sesgo de plano receptor (crece
   // solo donde la superficie es rasante a la luz, y mas con el sol bajo), y53 radio minimo del filtro en texeles
@@ -405,7 +422,7 @@ void main(
       float sunUp = saturate(abs(dot(normalize(pesLDir.xyz), normalize(upW))));
       float lowSun = 1.0 - smoothstep(0.08, 0.45, sunUp);
       float b = slope * max(DS.x, 0.0) * (1.0 + 2.0 * lowSun);
-      pesShRef += min(b, max(DS.z, 0.0) * 0.001);
+      pesShRef += pesFoot ? 0.4 * max(DS.z, 0.0) * 0.001 : min(b, max(DS.z, 0.0) * 0.001);   // (02/11) al pie: sesgo fijo chico
       g_pesDynMinR = max(DS.y, 0.0) * (0.5 + 0.5 * lowSun);
     } }
   // PES21 kits: la sombra del sol se calcula con la ropa SIN simular (el mod de ropa solo mueve la que se ve),
@@ -490,9 +507,10 @@ void main(
   r0.x = saturate(-g_psLight.m_lightSourceParam1.w + r0.x);
   r0.y = cmp(r9.x == -1.000000);
   r0.x = r0.y ? 1 : r0.x;
-  r7.xyzw = g_psObject.m_localParam[1].xyzw * r6.yyyy;
-  r7.xyzw = r6.xxxx * g_psObject.m_localParam[0].xyzw + r7.xyzw;
-  r7.xyzw = r6.zzzz * g_psObject.m_localParam[2].xyzw + r7.xyzw;
+  // (02/11) sombra del techo (t4) tambien al pie de la hoja (pesFootP = r6 fuera del pasto)
+  r7.xyzw = g_psObject.m_localParam[1].xyzw * pesFootP.yyyy;
+  r7.xyzw = pesFootP.xxxx * g_psObject.m_localParam[0].xyzw + r7.xyzw;
+  r7.xyzw = pesFootP.zzzz * g_psObject.m_localParam[2].xyzw + r7.xyzw;
   r7.xyzw = g_psObject.m_localParam[3].xyzw + r7.xyzw;
   r7.xyz = r7.xyz / r7.www;
   r8.xy = float2(0.5,0.5) * r7.xy;
@@ -518,8 +536,14 @@ void main(
   r5.zw = float2(0.5,0) + r8.xw;
   r1.x = g_ShadowAlphaMask.Sample(g_samplerLinear_Clamp_s, r5.zw).x;
   r0.y = r1.x * r0.y;
-  r1.x = 1 + -g_psObject.m_localParam[4].x;
-  r0.y = r0.y * r1.x + g_psObject.m_localParam[4].x;
+  // (02/11) w334: sombra del techo mas marcada solo sobre el cesped (el piso del juego + el ambiente la dejaban lavada); -1 = roja
+  float kRoof = IniParams.Load(int2(334,0)).w;
+  float flR = g_psObject.m_localParam[4].x;
+  if (matType == 3 && kRoof > 0.001) flR *= 1.0 - saturate(kRoof);
+  r1.x = 1 + -flR;
+  r0.y = r0.y * r1.x + flR;
+  if (matType == 3 && kRoof > 0.001) r0.y = pow(saturate(r0.y), 1.0 + 2.0 * saturate(kRoof));
+  float pesRoofT = r0.y;
   r0.x = min(r0.x, r0.y);
   r0.y = g_WorldShadowMask.Sample(g_samplerPoint_Clamp_s, r0.zw).x;
   r0.xyzw = min(r0.xxxx, r0.yyyy);
@@ -736,6 +760,8 @@ void main(
     shadowRGB = lerp(sh.xxx, shC, saturate(saturate(trans * 2.0) * sssBleed));
   }
   o0.xyz = r3.xyz * shadowRGB;
+  if (matType == 3 && TS3.z > 1.5) o0.xyz = pesFoot ? float3(2, 0, 0) : float3(0, 2, 0);   // (02/11) z314 = 2: rojo = hojas al pie, verde = suelo
+  if (matType == 3 && kRoof < -0.5) o0.xyz = lerp(float3(3, 0, 0), o0.xyz, saturate(pesRoofT));   // (02/11) w334 = -1: techo en rojo
   // === PES21 tela v2 (Claude, 16/10): iluminacion de tela para los kits ===
   // Los kits se reconocen por su id de material en el G-buffer (96 -> indice 6; lo escriben solo los 4 shaders de kits
   // y el de arbitros). x26 brillo de tela (sheen), y26 luz envolvente, z26 rugosidad del sheen, w26 on/off [Ctrl+Alt+Shift+F11... ver pes_mod.ini]
