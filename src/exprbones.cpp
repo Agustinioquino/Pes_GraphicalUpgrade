@@ -487,9 +487,9 @@ static void Secondary(Skel& S, const float* hr, float sm, float open) {
     static const Off kOff[] = {
         { 18,  0.0006f, 0.0018f, 0.0010f, 0 }, { 19, -0.0006f, 0.0018f, 0.0010f, 0 },   // cheek_l / r: pomulo arriba y afuera
         { 20,  0.0f,    0.0012f, 0.0006f, 0 }, { 21,  0.0f,    0.0012f, 0.0006f, 0 },   // orbicularisoculi_b: bajo el ojo sube
-        { 26,  0.0f,    0.0014f, 0.0f,    1 }, { 27,  0.0f,    0.0014f, 0.0f,    1 },   // brow_i: cejas internas arriba
-        { 28,  0.0f,    0.0010f, 0.0f,    1 }, { 29,  0.0f,    0.0010f, 0.0f,    1 },   // brow_o
-        { 30,  0.0f,    0.0009f, 0.0f,    1 },                                         // glabella
+        // (02/11 g, Agustin: "los parpados ya no vibran solos pero si cuando la boca se abre") las cejas y el entrecejo que subian
+        // con la boca abierta se sacan: el juego los reescribe despues (como los parpados) y ademas el shader del parpadeo mide la
+        // ceja para saber si la cara esta animada -> con 1.4 mm de mas el parpadeo se prendia y apagaba = parpados vibrando
     };
     const float ks = std::clamp(g_cfg.live[348][0], 0.0f, 2.0f) * sm, ko = std::clamp(g_cfg.live[348][2], 0.0f, 2.0f) * open;
     for (const Off& f : kOff) {
