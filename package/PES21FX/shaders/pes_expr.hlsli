@@ -140,11 +140,15 @@ float3 PesTongue(float3 rest, float2 uv, uint jaw)
     q.z += Le * 0.030 * sx;                                     // hasta 3 cm afuera en la punta
     q.y += Le * 0.0018 * sin(3.14159 * s) * raiz;               // el medio se levanta para pasar sobre los dientes de abajo
     q.y -= Ld * 0.0060 * s * s;                                 // la punta cae sobre el labio de abajo
-    float ud = sin(6.2832 * 0.30 * t + 1.1) + 0.35 * sin(6.2832 * 0.71 * t + 0.3);
-    q.y += Ld * 0.0035 * s * s * ud;                            // la punta sube y baja (+-3.5 mm)
+    // (02/11 d, Agustin: "que se pose sobre el labio de manera correcta") la punta parte APOYADA en el labio y solo se levanta
+    // (0..4 mm) y vuelve a apoyarse; antes subia y bajaba +-3.5 mm y al bajar atravesaba el labio
+    float ud = saturate(0.5 + 0.5 * sin(6.2832 * 0.30 * t + 1.1) * 0.8 + 0.2 * sin(6.2832 * 0.71 * t + 0.3));
+    ud = ud * ud;                                               // pasa mas tiempo apoyada que arriba
+    q.y += Ld * 0.0040 * s * s * ud;                            // la punta se levanta
     q.y -= Ld * 0.0010 * sin(3.14159 * s) * ud;                 // el medio acompana al reves (la lengua se curva)
-    // (02/11 c) mas angosta: se afina hacia la punta un 12 % (antes se ensanchaba 35 %); la raiz sigue ancha (tapa la garganta)
-    q.x -= rest.x * 0.12 * Le * smoothstep(0.3, 1.0, s);
+    // (02/11 d, Agustin: "un poco mas ancha en la punta") el medio se afina un poco (8 %) y la punta se abre (+12 %): forma de
+    // espatula, como una lengua relajada apoyada en el labio
+    q.x += rest.x * Le * (0.12 * smoothstep(0.65, 1.0, s) - 0.08 * smoothstep(0.25, 0.6, s) * (1.0 - smoothstep(0.75, 1.0, s)));
     // (02/11, Agustin: "que el inicio de la lengua se estire un poco para ocultar el agujero de la garganta") la raiz se
     // estira hacia atras y arriba y se ensancha, tapando la garganta que queda a la vista con la lengua afuera
     float r0 = 1.0 - smoothstep(0.0, 0.30, s);
@@ -153,6 +157,17 @@ float3 PesTongue(float3 rest, float2 uv, uint jaw)
     q.x += rest.x * 0.25 * Le * r0;
     q.y -= (rest.y - 1.636) * 0.15 * Le * s;                    // y se aplana un poco (menos alto)
     q.x += Le * 0.0012 * s * s * sin(6.2832 * 0.4 * t + 0.5) * saturate(T.y);   // la punta se mueve apenas de lado (movimiento vivo)
+    // (02/11 d) APOYO en el labio de abajo: el labio va con la mandibula igual que la lengua, asi que en el reposo es un lomo
+    // fijo (arriba del labio ~ y 1.6255 en z 0.174, redondeado hacia adelante y hacia atras). Lo que caeria por debajo se
+    // levanta hasta el lomo (suave, sin escalon); pasado el labio (z > 0.186) la punta cae por delante
+    float3 pp = rest + o + q;
+    float lz = (pp.z - 0.1745) / 0.0115;
+    float lipTop = 1.6255 - 0.0035 * lz * lz;
+    float inLip = (1.0 - smoothstep(0.8, 1.0, abs(lz))) * (1.0 - smoothstep(0.018, 0.026, abs(pp.x))) * Ld;
+    // se empuja la SECCION entera (todos los vertices de esa parte de la lengua lo mismo, sin aplastarla): el fondo de la
+    // seccion = este vertice menos su altura sobre la cara de abajo de la lengua en el reposo (~ y 1.6235)
+    float secBot = pp.y - max(rest.y - 1.6235, 0.0);
+    q.y += max(lipTop - secBot, 0.0) * inLip;
     o += q;
   }
   return o;
