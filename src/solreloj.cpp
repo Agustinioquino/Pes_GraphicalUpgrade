@@ -10,8 +10,10 @@
 namespace fx {
 
 static const unsigned  kExeStampSol = 0x62787C6A;
-static const uintptr_t kAtmoManager = 0x1437d59e8ull;   // +0xd8 cantidad de atmosferas, +0xe0 arreglo de punteros
-static const uintptr_t kTodLight    = 0x1437d4a20ull;   // +0x10 cantidad de spans, +0x64 segundos del dia (mod 86400)
+// (02/11 b) las dos son VARIABLES con un puntero al objeto (mov rcx,[0x1437d4a20] antes de TODLight_SetTime en 0x14195a92b;
+// mov rcx,[0x1437d59e8] en 0x141948b42): la primera version leia la variable como si fuera el objeto (0x7C000000 s, 0 atmosferas)
+static const uintptr_t kAtmoManagerPtr = 0x1437d59e8ull;   // -> manager: +0xd8 cantidad de atmosferas, +0xe0 arreglo de punteros
+static const uintptr_t kTodLightPtr    = 0x1437d4a20ull;   // -> TODLight: +0x10 cantidad de spans, +0x64 segundos del dia (mod 86400)
 
 static bool Readable(const void* p, size_t n) {
     if (!p) return false;
@@ -33,17 +35,20 @@ void SolRelojPresent() {
         HMODULE mod = GetModuleHandleW(nullptr);
         auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
         s_ok = (uintptr_t)mod == 0x140000000ull && nt->FileHeader.TimeDateStamp == kExeStampSol
-            && Readable((void*)kAtmoManager, 0xe8) && Readable((void*)kTodLight, 0x70);
+            && Readable((void*)kAtmoManagerPtr, 8) && Readable((void*)kTodLightPtr, 8);
         Log("hora del sol: registro %s (exe %08X)", s_ok ? "activo: atmosfera y reloj del motor cada 10 s" : "no disponible (exe distinto)", (unsigned)nt->FileHeader.TimeDateStamp);
     }
     if (!s_ok || s_lines >= 600) return;
     bool due = t >= s_next;
 
     // reloj del interpolador de luz por hora (TODLight): segundos del dia que el motor usa para mezclar los bloques _day/_night
-    unsigned sec = *(volatile unsigned*)(kTodLight + 0x64); int spans = *(volatile int*)(kTodLight + 0x10);
-    bool secChanged = s_lastSec != 0xffffffffu && (sec / 60 != s_lastSec / 60);   // cambio de minuto
+    const char* tod = *(const char* const volatile*)kTodLightPtr; const char* man = *(const char* const volatile*)kAtmoManagerPtr;
+    bool todOk = Readable(tod, 0x70), manOk = Readable(man, 0xe8);
+    unsigned sec = todOk ? *(const volatile unsigned*)(tod + 0x64) : 0xfffffffeu; int spans = todOk ? *(const volatile int*)(tod + 0x10) : -1;
+    if (todOk && sec >= 86400u) sec = 0xfffffffeu;
+    bool secChanged = s_lastSec != 0xffffffffu && sec != 0xfffffffeu && (sec / 60 != s_lastSec / 60);   // cambio de minuto
 
-    int n = *(volatile int*)(kAtmoManager + 0xd8); const char* const* arr = *(const char* const* volatile*)(kAtmoManager + 0xe0);
+    int n = manOk ? *(const volatile int*)(man + 0xd8) : 0; const char* const* arr = manOk ? *(const char* const* volatile*)(man + 0xe0) : nullptr;
     if (n < 0 || n > 4) n = 0;
     if (n > 0 && !Readable(arr, (size_t)n * 8)) n = 0;
     AtmoSnap cur[4] = {}; bool changed = n != s_lastN;
@@ -61,13 +66,14 @@ void SolRelojPresent() {
             || fabsf(s.lux - l.lux) > 1.0f || fabsf(s.skyScale - l.skyScale) > 0.001f || fabsf(s.lat - l.lat) > 0.01f || fabsf(s.lon - l.lon) > 0.01f || s.id != l.id) changed = true;
     }
     if (!due && !changed && !secChanged) return;
-    if (!changed && !secChanged) { if (++s_quiet > 6) { s_next = t + 60.0; return; } }   // sin cambios: cada 10 s x 6, luego cada minuto
-    else s_quiet = 0;
-    s_next = t + 10.0;
+    // sin cambios: cada 10 s las primeras 6 veces, despues una linea por minuto (la primera version dejaba de escribir)
+    if (!changed && !secChanged) s_quiet++; else s_quiet = 0;
+    s_next = t + (s_quiet > 6 ? 60.0 : 10.0);
     s_lastN = n; for (int i = 0; i < 4; i++) s_last[i] = cur[i]; s_lastSec = sec;
 
     s_lines++;
-    Log("hora del sol: reloj de la luz por hora %02u:%02u:%02u (%u s del dia, %d bloques de hora); %d atmosfera(s)%s",
+    if (sec == 0xfffffffeu) Log("hora del sol: reloj de la luz por hora sin objeto (%p); %d atmosfera(s) (manager %p)%s", (const void*)tod, n, (const void*)man, changed ? " (cambio)" : "");
+    else Log("hora del sol: reloj de la luz por hora %02u:%02u:%02u (%u s del dia, %d bloques de hora); %d atmosfera(s)%s",
         sec / 3600, (sec / 60) % 60, sec % 60, sec, spans, n, changed ? " (cambio)" : "");
     for (int i = 0; i < n; i++) {
         const AtmoSnap& s = cur[i]; if (s.dt[0] == 0 && s.lux == 0.0f && s.lat == 0.0f) continue;
