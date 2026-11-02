@@ -838,9 +838,13 @@ void main(
             float backSM = saturate(0.3 + dot(-nK, LK)) * (1.0 - saturate(nlK * 3.0));
             float3 Tc = float3(1.0, 0.92, 0.85);                                    // la tela de punto deja pasar un poco mas el rojo
             transK = max(Tk * backSM * 1.4, transK * saturate(KT.z)) ;
-            o0.xyz += lightK * transK * KA.y * 0.35 * Tc;
+            // (02/11) a contraluz (sol de frente a la camara) el traspaso sumado sin tope quemaba la camiseta: el tonemap lleva lo
+            // muy brillante al blanco y los kits claros (amarillo) perdian su color. Ahora se satura suave: como mucho la mitad de
+            // la luz directa del sol, asi el color del kit (que pone el albedo en la composicion) se sigue viendo.
+            float tAddK = transK * KA.y * 0.35;
+            o0.xyz += lightK * (tAddK / (1.0 + 2.0 * tAddK)) * Tc;
           } else
-          o0.xyz += lightK * transK * KA.y * 0.35;
+          o0.xyz += lightK * (transK * KA.y * 0.35 / (1.0 + 2.0 * transK * KA.y * 0.35));
         } }
       // diagnostico: w26 = 2 pinta de magenta todo lo que se detecta como kit
       if (KC.w > 1.5) { o0.xyz = float3(1.0, 0.0, 1.0) * dot(lightK, float3(0.3, 0.3, 0.3)); r1.yzw = 0; }
