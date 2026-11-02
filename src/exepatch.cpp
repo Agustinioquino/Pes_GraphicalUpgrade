@@ -407,10 +407,18 @@ static void ShadowFixCamLog() {
 // sale en camara + 0x40 (vista -> luz) y m_view / m_shadowProjection del shader, para comparar un estadio bueno con uno malo.
 static double s_casterLogT = 0; static int s_casterLogs = 0;
 static void CasterFixLog() {
-    if (!s_casterOn || !s_cave || s_casterLogs >= 12) return;
+    if (s_casterLogs >= 12) return;
     double t = Now(); if (t < s_casterLogT) return; s_casterLogT = t + 15.0;
-    uintptr_t cam = *(volatile uintptr_t*)(s_cave + 0x3e0); unsigned r12 = *(volatile unsigned*)(s_cave + 0x3e8);
-    if (!cam) return;
+    uintptr_t cam = (s_casterOn && s_cave) ? *(volatile uintptr_t*)(s_cave + 0x3e0) : 0; unsigned r12 = (s_casterOn && s_cave) ? *(volatile unsigned*)(s_cave + 0x3e8) : 0;
+    if (!cam) {   // (02/11) sin el parche: igual se anotan m_view y m_shadowProjection para comparar con la pasada de sombras
+        std::vector<float> S0;
+        if (NamedCBRead("SceneCB", S0) && S0.size() >= 64) { s_casterLogs++;
+            Log("sombra_parche %d: m_view (c8..c11) %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f", g_cfg.motorShadowFix,
+                S0[32], S0[33], S0[34], S0[35], S0[36], S0[37], S0[38], S0[39], S0[40], S0[41], S0[42], S0[43], S0[44], S0[45], S0[46], S0[47]);
+            Log("sombra_parche %d: m_shadowProjection (c12..c15) %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.3f %.3f %.3f %.3f", g_cfg.motorShadowFix,
+                S0[48], S0[49], S0[50], S0[51], S0[52], S0[53], S0[54], S0[55], S0[56], S0[57], S0[58], S0[59], S0[60], S0[61], S0[62], S0[63]); }
+        return;
+    }
     auto rd = [](uintptr_t at, float* m, size_t n) { SIZE_T got = 0; return ReadProcessMemory(GetCurrentProcess(), (const void*)at, m, n * 4, &got) && got == n * 4; };
     float m[20], o[16];
     if (!rd(cam + 0x1f0, m, 20)) return;
@@ -434,7 +442,7 @@ void ExePatchPresent() {
     if (!g_cfg.motorPatch) return;
     double t = Now(); if (t - s_lodT < 1.0) return; s_lodT = t;
     SunFixPresent();   // (27/10) el sol que gira con la camara
-    ShadowFixPresent(); ShadowFixCamLog(); CasterFixLog();   // (27/10) la sombra que gira con la camara
+    ShadowFixPresent(); ShadowFixCamLog(); CasterFixLog(); ShadowCasterLogPresent();   // (27/10) la sombra que gira con la camara
     volatile int* g = (volatile int*)0x14374cd94ull;
     if (!s_lodChecked) {
         s_lodChecked = true;
