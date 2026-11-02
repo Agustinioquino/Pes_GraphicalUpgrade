@@ -219,7 +219,9 @@ void PesTorsoInset(inout float3 mP, float3 mN, float3 rest, float3 org) {
   // suma donde lo medido pide mas (el menu Apariencia pone otra camiseta y otra pose que el partido medido)
   float base = 0.0;
   // (02/11) y320 = 3: torso, espalda y hombros (Agustin: con "solo el torso" el hombro asomaba por la remera)
-  if (T.x > 0.0) base = T.x * ((T.y > 0.5 && T.y < 1.5) ? PesTorsoMask(rest) : (T.y > 2.5 ? PesTorsoMaskA(rest, 0.08, 0.14) : PesTorsoInsetSmooth(rest)));
+  // (02/11 d) "solo el torso": pecho y espalda enteros, pero se suelta en los 4.5 cm del torso junto a la costura del hombro y la axila
+  // (con x320 9 mm quedaba un escalon: el brazo mas grueso que el torso en la union; Agustin: lo que atraviesa es pecho y espalda)
+  if (T.x > 0.0) base = T.x * ((T.y > 0.5 && T.y < 1.5) ? PesTorsoMask(rest) * (1.0 - PesArmPart(rest, -0.05, -0.005)) : (T.y > 2.5 ? PesTorsoMaskA(rest, 0.08, 0.14) : PesTorsoInsetSmooth(rest)));
   mm = base;
   if (T.y > 1.5 && T.y < 2.5 && g_torsoNeed.Load(PES_NEED_NX * PES_NEED_NY * PES_NEED_NZ) > 0.5) {
     float need = PesTorsoNeed(rest);
