@@ -1159,6 +1159,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         if (arm && vs->hash == 0x1c02a92ab4ae3362ULL) {   // (02/11) grupos musculares del brazo
             if (ID3D11ShaderResourceView* an = ArmAnatTexture(0)) { Remember(c, d, true, true, 26); c->PSSetShaderResources(26, 1, &an); }
             if (ID3D11ShaderResourceView* ac = ArmAnatTexture(1)) { Remember(c, d, true, true, 30); c->PSSetShaderResources(30, 1, &ac); }
+            if (ID3D11ShaderResourceView* ag = ArmAnatTexture(2)) { Remember(c, d, true, true, 36); c->PSSetShaderResources(36, 1, &ag); }   // (02/11 b) grupos
         }
         if (arm && vs->hash == 0x1c02a92ab4ae3362ULL) if (ID3D11ShaderResourceView* ev = MuscleEffortSRV()) { Remember(c, d, false, true, 123); c->VSSetShaderResources(123, 1, &ev); }   // (02/11) venas por esfuerzo
         // (26/10, v12.7) venas: textura en t29 del PS de la piel para los brazos y las manos (no en la sombra)

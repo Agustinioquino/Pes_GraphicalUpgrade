@@ -13,7 +13,7 @@ sys.path.insert(0, HERE); sys.path.insert(0, os.path.join(HERE, ".."))
 from torso_variants import arm_frame, ss, g
 from torso_mesh import load_parts
 from uvbake import bake, dilate
-from texio import write_dds_bc5_snorm, write_dds_bc4_unorm
+from texio import write_dds_bc5_snorm, write_dds_bc4_unorm, write_dds_float4
 
 def _b(t, th, t0, th0, st, sth):
     dth = (th - th0 + 180.0) % 360.0 - 180.0
@@ -70,6 +70,22 @@ def height(P):
     keep = ss(-0.005, 0.02, t) * (1 - ss(0.41, 0.43, t))   # nada en la costura del hombro ni en la mano
     return h * keep
 
+def groups(P):
+    """(02/11) a que grupo pertenece cada punto (0..1): deltoides, biceps + braquial (adelante), triceps (atras), antebrazo.
+    El PS marca cada grupo segun lo que hace el brazo (codo doblado, brazo arriba, esfuerzo)."""
+    t, th, r = arm_frame(P)
+    def win(a0, a1, b0, b1): return ss(a0, a1, t) * (1 - ss(b0, b1, t))
+    def ang(c, w):
+        d = (th - c + 180.0) % 360.0 - 180.0
+        return g(d / w)
+    dl = (1 - ss(0.085, 0.115, t)) * (1 - 0.85 * ang(0, 45))
+    bi = win(0.035, 0.07, 0.15, 0.185) * np.maximum(ang(-90, 50), 0.8 * ang(-150, 20))
+    tr = win(0.02, 0.05, 0.16, 0.19) * ang(95, 55)
+    fo = win(0.17, 0.21, 0.40, 0.43)
+    G = np.stack([dl, bi, tr, fo], -1)
+    s = G.sum(-1, keepdims=True)
+    return G / np.maximum(s, 1.0)
+
 def main(folder, outdir):
     T = load_parts(folder, [("arm", 0)])
     G = bake(T, [], W=2048, H=2048, vmax=1.0)
@@ -91,6 +107,10 @@ def main(folder, outdir):
         return out
     write_dds_bc5_snorm(os.path.join(outdir, "pes_arm_anat_n.dds"), mips(fullS))
     write_dds_bc4_unorm(os.path.join(outdir, "pes_arm_anat_c.dds"), [x[..., 0] for x in mips(fullC)])
+    Gg = np.zeros(m.shape + (4,), np.float32); Gg[ii] = groups(P)
+    fullG, _ = dilate(Gg, m, iters=32)
+    small = fullG.reshape(512, 4, 512, 4, 4).mean((1, 3))
+    write_dds_float4(os.path.join(outdir, "pes_arm_anat_g.dds"), small)
     print("pes_arm_anat_n/c.dds: %d texels del brazo, pendiente max %.2f, surco mas hondo %.2f mm" % (len(ii[0]), np.abs(sl).max(), -1000 * hh.min()))
     return sl, cav, m
 

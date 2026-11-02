@@ -79,7 +79,7 @@ ID3D11ShaderResourceView* VeinTexture() {
 ID3D11ShaderResourceView* ArmAnatTexture(int which) {
     if (g_cfg.live[305][0] < 0.5f) return nullptr;
     static std::atomic<bool> s_noted{false};
-    ID3D11ShaderResourceView* v = FileTextureAny(which == 0 ? "file:textures\\pes_arm_anat_n.dds" : "file:textures\\pes_arm_anat_c.dds");
+    ID3D11ShaderResourceView* v = FileTextureAny(which == 0 ? "file:textures\\pes_arm_anat_n.dds" : which == 1 ? "file:textures\\pes_arm_anat_c.dds" : "file:textures\\pes_arm_anat_g.dds");
     if (which == 0 && !s_noted.exchange(true)) Log("musculos del brazo: separaciones de los grupos %s", v ? "cargadas (t26 / t30 del PS)" : "NO CARGADAS (falta textures\\pes_arm_anat_n.dds)");
     return v;
 }

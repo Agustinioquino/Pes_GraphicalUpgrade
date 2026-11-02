@@ -59,6 +59,7 @@ Texture2D<float4> pesSkinMicro : register(t27);
 Texture2D<float4> pesFacePores : register(t28);
 Texture2D<float4> pesArmAnatN  : register(t26);   // (02/11) separaciones de los grupos musculares del brazo (tools/fox/torso/arm_anatomy.py; la DLL la enlaza solo en los brazos)
 Texture2D<float4> pesArmAnatC  : register(t30);   // (02/11) cavidad de esos surcos (1 = nada)
+Texture2D<float4> pesArmAnatG  : register(t36);   // (02/11) grupo de cada texel: x deltoides, y biceps + braquial, z triceps, w antebrazo
 Texture2D<float4> pesVeins     : register(t29);   // (26/10, v12.7) venas de brazos y manos (la DLL la enlaza solo en esos dibujos)
 Texture2D<float4> pesVarRob    : register(t16);   // (26/10) variantes del torso: normal delta del robusto (BC5 SNORM, v 0..0.5 del torso)
 Texture2D<float4> pesVarAtl    : register(t17);   //         normal delta del atletico
@@ -297,7 +298,21 @@ void main(
     uint aaW = 0, aaH = 0; pesArmAnatN.GetDimensions(aaW, aaH);
     if (lbOn && aaW > 0) {
       float dG = IniParams.Load(int2(172,0)).x; dG = dG > 0.01 ? clamp(dG, 0.0, 3.0) : 1.0;
-      float aK = saturate(0.55 * dG) * (1.0 + 1.2 * saturate(lbDef)) * (1.0 + 0.5 * vrWa - 0.6 * vrWr);
+      // (02/11 b) cada grupo segun lo que hace el brazo (Agustin: "cada grupo de musculos se marque dependiendo la accion"): el VS
+      // manda en v1.z = 7 + acciones / 1200 el codo (0..7), el brazo arriba (x8) y el esfuerzo (x64) de ESE brazo.
+      //   biceps y braquial: el codo doblado (mas con esfuerzo); triceps: el brazo estirado con esfuerzo (empuja / braceo al correr);
+      //   deltoides: el brazo arriba y el braceo; antebrazo: el esfuerzo (agarre, braceo) y algo el codo. Siempre queda un tono base.
+      float acQ = round((v1.z - 7.0) * 1200.0);
+      float acF = fmod(acQ, 8.0) / 7.0, acU = fmod(floor(acQ / 8.0), 8.0) / 7.0, acE = floor(acQ / 64.0) / 7.0;
+      float4 gW = float4(0, 0, 0, 0);
+      uint agW = 0, agH = 0; pesArmAnatG.GetDimensions(agW, agH);
+      if (agW > 0) gW = pesArmAnatG.SampleLevel(g_samplerLinear_Clamp_s, v2.xy, 0);
+      float4 gAct = float4(saturate(0.9 * acU + 0.5 * acE),            // deltoides
+                           saturate(acF * (0.55 + 0.45 * acE) + 0.15 * acE),   // biceps
+                           saturate((1.0 - acF) * acE * 0.9 + 0.25 * acE),     // triceps
+                           saturate(0.75 * acE + 0.3 * acF));                 // antebrazo
+      float gK = 0.45 + 1.1 * dot(gW, gAct) + 0.45 * (1.0 - saturate(dot(gW, float4(1, 1, 1, 1))));   // tono base 0.45 (codo y bordes: fijo)
+      float aK = saturate(0.55 * dG) * gK * (1.0 + 0.5 * vrWa - 0.6 * vrWr);
       r2.xy += aK * pesArmAnatN.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN).xy;
       float l2 = dot(r2.xy, r2.xy); if (l2 > 0.94) r2.xy *= rsqrt(l2 / 0.94);
       anatCav = saturate(aK) * (1.0 - pesArmAnatC.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN).x);

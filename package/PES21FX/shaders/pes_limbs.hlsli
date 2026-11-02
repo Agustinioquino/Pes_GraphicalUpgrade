@@ -42,8 +42,10 @@ float PesLimbEffort() {
     }
     return ex;
 }
-bool PesLimbOut(bool handDone, uint vid, float3 rest, out float defB, out float veinB) {
-    defB = 0.0; veinB = 0.0;
+// (02/11) actCode: lo que hace el brazo para los grupos musculares del PS (doblez del codo, brazo arriba, esfuerzo; 0..7 cada uno),
+// empaquetado en un entero 0..511 (igual en todos los vertices de ese brazo: el interpolado no lo cambia)
+bool PesLimbOut(bool handDone, uint vid, float3 rest, out float defB, out float veinB, out float actCode) {
+    defB = 0.0; veinB = 0.0; actCode = 0.0;
     float4 L5 = IniParams.Load(int2(305, 0));
     if (L5.x < 0.5) return false;
     uint w = 0, h = 0; g_handData.GetDimensions(w, h);
@@ -73,6 +75,7 @@ bool PesLimbOut(bool handDone, uint vid, float3 rest, out float defB, out float 
         float pose = saturate(max(flex, 0.6 * up));
         float eff = PesLimbEffort();
         veinB = Wv.w * (eff < 0.0 ? 0.5 * pose : smoothstep(0.2, 0.85, eff) * (0.55 + 0.45 * pose));
+        actCode = round(saturate(flex) * 7.0) + 8.0 * round(up * 7.0) + 64.0 * round(saturate(max(eff, 0.0)) * 7.0);
     } else {          // pierna: isquios, pantorrilla y (menos) cuadriceps con la rodilla
         defB = saturate(Wv.x * flex + Wv.y * flex + Wv.z * 0.6 * flex);
     }
