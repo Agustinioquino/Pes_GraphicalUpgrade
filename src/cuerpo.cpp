@@ -693,7 +693,7 @@ static void ReadMeasure(ID3D11DeviceContext* imm) {
 ID3D11ShaderResourceView* TorsoNeedSRV() { return s_ready.load(std::memory_order_acquire) ? s_mapSRV : nullptr; }
 // (31/10 b) en el dibujo de la camiseta (hooks.cpp): sus m_view y m_viewWorld al staging del cuadro; tipo = 0 / 1 / 2 (PS 7e64 / a41e / c7ae)
 // (01/11) la lista hace falta con el torso bajo la camiseta (w320) o con el torso original sin camiseta (fila 349)
-static bool ShirtListOn() { return g_cfg.live[320][3] > 0.5f || (g_cfg.live[349][3] > 0.5f && g_cfg.live[349][0] > 0.0f); }
+static bool ShirtListOn() { return g_cfg.live[320][3] > 0.5f || (g_cfg.live[349][3] > 0.5f && g_cfg.live[349][0] > 0.0f) || (g_cfg.live[350][3] > 0.5f && g_cfg.live[350][0] > 0.0f); }
 void TorsoShirtNote(ID3D11DeviceContext* c, int kind) {
     if (!s_ready.load(std::memory_order_acquire) || !ShirtListOn()) return;
     const int w = s_shW.load(std::memory_order_relaxed); ID3D11Buffer* st = s_shStage[w]; if (!st) return;
@@ -736,7 +736,8 @@ static void TorsoShirtPresent() {
                 const float r0 = q[0] * q[0] + q[1] * q[1] + q[2] * q[2];
                 if (!(r0 > 0.5f && r0 < 2.0f)) continue;   // sin rotacion de vista valida
                 bool dup = false;
-                for (int k = 0; k < n; k++) if (fabsf(L[k][0] - o[0]) < 0.05f && fabsf(L[k][1] - o[1]) < 0.05f && fabsf(L[k][2] - o[2]) < 0.05f) { dup = true; break; }
+                for (int k = 0; k < n; k++) if (fabsf(L[k][0] - o[0]) < 0.05f && fabsf(L[k][1] - o[1]) < 0.05f && fabsf(L[k][2] - o[2]) < 0.05f) {
+                    dup = true; if ((s_shKind[rd][i] & 4) && L[k][3] < 3.5f) L[k][3] += 4.0f; break; }   // (01/11) alguna parte ajustada: el personaje lleva ajustada
                 if (dup || n >= (int)kShMax) continue;
                 L[n][0] = o[0]; L[n][1] = o[1]; L[n][2] = o[2]; L[n][3] = (float)s_shKind[rd][i]; n++;
             }
@@ -747,7 +748,7 @@ static void TorsoShirtPresent() {
                 const double t = Now();
                 if (t > s_shLog) {
                     s_shLog = t + 30.0; char line[900]; int ln = 0; line[0] = 0;
-                    for (int k = 0; k < n && ln < 820; k++) ln += snprintf(line + ln, sizeof line - ln, " (%.1f, %.2f, %.1f)%s", L[k][0], L[k][1], L[k][2], L[k][3] > 1.5f ? " c7ae" : L[k][3] > 0.5f ? " a41e" : "");
+                    for (int k = 0; k < n && ln < 820; k++) ln += snprintf(line + ln, sizeof line - ln, " (%.1f, %.2f, %.1f)%s%s", L[k][0], L[k][1], L[k][2], fmodf(L[k][3], 4.0f) > 1.5f ? " c7ae" : fmodf(L[k][3], 4.0f) > 0.5f ? " a41e" : "", L[k][3] > 3.5f ? " ajustada" : "");
                     Log("torso bajo la camiseta: %d personajes con camiseta (de %d dibujos):%s", n, pn, line);
                 }
             } else if (++s_shAge == 30) { s_shList[0] = 0.0f; s_shList[1] = 0.0f; changed = true; }   // 30 cuadros sin camisetas: vale la fila 320.z
