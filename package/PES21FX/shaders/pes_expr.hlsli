@@ -341,8 +341,8 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
 // alrededor de la bisagra de skf_jaw (face_rig 111320: 0, 1.6369, 0.0795; eje x). Se suma a lo que ya haga el juego.
 // 1 = ~23 grados (boca abierta del todo), negativo = cierra un poco. Las comisuras van a la mitad; el resto del peso (labio de
 // arriba, mejillas) no se mueve, asi que la piel entre los dos se estira como en la boca abierta del juego.
-void PesJawApply(float4 p, uint4 I, float4 W, float3 n,
-                 inout float3 pos, inout float3 prev, inout float3 nrm)
+void PesJawApply(float4 p, uint4 I, float4 W, float3 n, float3 t,
+                 inout float3 pos, inout float3 prev, inout float3 nrm, inout float3 tng)
 {
   // (01/11 e, Agustin: "que la nariz se mueva un poquito mas con la boca ... las fosas nasales") 347.y: las alas y las fosas
   // nasales (x 0.6..2.8 cm del medio, y ~1.655) siguen la mitad del gesto del labio de arriba del medio (skf_lip_t_c: sonrisa,
@@ -411,10 +411,11 @@ void PesJawApply(float4 p, uint4 I, float4 W, float3 n,
     uint bit = 1u << j;
     float f = (full & bit) != 0u ? 1.0 : ((half_ & bit) != 0u ? 0.5 : 0.0);
     if (f <= 0.0) continue;
-    if (f < 1.0) { float c2 = cos(A * f), s2 = sin(A * f); float3 dh = PesRotX(q, c2, s2) - q; pos += w * mul(dh, (float3x3)g_vsBone.m_boneMatrices[j]); prev += w * mul(dh, (float3x3)g_vsPrevBone.m_boneMatrices[j]); nrm += w * mul(PesRotX(n, c2, s2) - n, (float3x3)g_vsBone.m_boneMatrices[j]); continue; }
+    if (f < 1.0) { float c2 = cos(A * f), s2 = sin(A * f); float3 dh = PesRotX(q, c2, s2) - q; pos += w * mul(dh, (float3x3)g_vsBone.m_boneMatrices[j]); prev += w * mul(dh, (float3x3)g_vsPrevBone.m_boneMatrices[j]); nrm += w * mul(PesRotX(n, c2, s2) - n, (float3x3)g_vsBone.m_boneMatrices[j]); tng += w * mul(PesRotX(t, c2, s2) - t, (float3x3)g_vsBone.m_boneMatrices[j]); continue; }
     pos  += w * mul(d, (float3x3)g_vsBone.m_boneMatrices[j]);
     prev += w * mul(d, (float3x3)g_vsPrevBone.m_boneMatrices[j]);
     nrm  += w * mul(dn, (float3x3)g_vsBone.m_boneMatrices[j]);
+    tng  += w * mul(PesRotX(t, c, s) - t, (float3x3)g_vsBone.m_boneMatrices[j]);   // (02/11) la tangente gira con la normal (sin esto el normal map de lo que cuelga de la mandibula quedaba torcido)
   }
 }
 // (01/11 i, Agustin: "inyectar mas huesos ... la malla se deforma con mas realismo y la luz se proyecta") MUSCULOS VIRTUALES,

@@ -147,7 +147,7 @@ void main(
     float3 pesPreBlink = r4.xyz;
     PesBlinkApply(v0, v0r, v3, v4, v1.xyz, r4.xyz, r2.xyz, r5.xyz);   // (01/11) parpadeo del mod (fila 342.w)
     pesBlinkD = r4.xyz - pesPreBlink;   // (01/11 k) el parpadeo no cuenta como gesto para las arrugas por compresion
-    PesJawApply(v0, v3, v4, v1.xyz, r4.xyz, r2.xyz, r5.xyz);   // (01/11) abrir la boca (fila 347.x)
+    PesJawApply(v0, v3, v4, v1.xyz, v2.xyz, r4.xyz, r2.xyz, r5.xyz, r1.xyz);   // (01/11) abrir la boca (fila 347.x)
     PesMuscleApply(v0, v0r, v3, v4, v1.xyz, r4.xyz, r2.xyz, r5.xyz);   // (01/11 i) musculos virtuales (fila 348)
   } else {
     r5.xyz = v1.xyz;
