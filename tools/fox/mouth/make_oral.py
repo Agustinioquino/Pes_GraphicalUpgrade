@@ -80,7 +80,7 @@ def rows_layout(teeth512):
         gs = ndi.gaussian_filter1d(gf, 1.0)
         pk, _ = signal.find_peaks(gs if down else -gs, prominence=2.5)
         rows.append({'g': ndi.gaussian_filter1d(gf, 2.0), 'inc': ndi.gaussian_filter1d(incf, 3.0), 'pk': pk,
-                     'x0': xs[ok][0], 'x1': xs[ok][-1], 'down': down})
+                     'x0': xs[ok][0], 'x1': xs[ok][-1], 'down': down, 'gum': GUM_UP if down else GUM})
     return rows
 
 def tooth_fields(rows, N, vmin=-0.15):
@@ -125,30 +125,47 @@ def tooth_ids(rows, N):
     return tid, kinds
 
 GUM = 0.08   # (01/11 h) 0.18 -> 0.08: dientes mas largos del lado de la encia (Agustin "muy cortos"); mouth3d.py usa el mismo valor
+# (02/11 v17b) Agustin: 'respetar tambien el tamano de la encia para los dientes de arriba': la fila de arriba deja la linea de
+# la encia donde la pinto Konami (sin correrla). Cada fila lleva su valor en rows[i]['gum'] (rows_layout)
+GUM_UP = float(os.environ.get('GUM_UP', '0.0'))
 
-def gum_warp(img, rows, gum=GUM):
+def gum_field(rows, N, vmin):
+    """valor de 'gum' de la fila de cada pixel (mismo criterio de 'adentro' que tooth_fields; afuera = GUM)"""
+    s = N / 512.0
+    G = np.full((N, N), GUM, np.float32)
+    yy = np.arange(N, dtype=np.float32)[:, None]
+    xs = (np.arange(N) + 0.5) / s - 0.5
+    for r in rows:
+        g = np.interp(xs, np.arange(512), r['g']) * s; inc = np.interp(xs, np.arange(512), r['inc']) * s
+        v = (yy - g[None, :]) / (inc - g)[None, :]
+        inside = (v >= vmin) & (v <= 1.1) & (xs >= r['x0'] - 2)[None, :] & (xs <= r['x1'] + 2)[None, :]
+        G = np.where(inside, np.float32(r.get('gum', GUM)), G)
+    return G
+
+def gum_warp(img, rows, gum=None):
     """corre la linea de la encia de las dos tiras: en cada columna, con s = 0 en la encia pintada y 1 en el borde incisal,
     la encia [-gum, 0] se estira a [-gum, gum] y el diente [0, 1] se comprime a [gum, 1] (mapa continuo: el festoneado se
     conserva y el diente pintado queda entero, mas corto)"""
-    if gum <= 0: return img
     n = img.shape[0]; sc = n / 512.0
     yy = (np.arange(n) + 0.5) / sc - 0.5
     src = np.repeat(yy[:, None], n, 1)
     xs = (np.arange(n) + 0.5) / sc - 0.5
     for r in rows:
+        gr = r.get('gum', GUM) if gum is None else gum
+        if gr <= 0: continue
         g = np.interp(xs, np.arange(512), r['g']); inc = np.interp(xs, np.arange(512), r['inc'])
         ins = (xs >= r['x0'] - 2) & (xs <= r['x1'] + 2)
         sv = (yy[:, None] - g[None]) / (inc - g)[None]
-        m = ins[None] & (sv >= -gum) & (sv <= 1.0)
+        m = ins[None] & (sv >= -gr) & (sv <= 1.0)
         # tramo de la encia: s en [-gum, gum] -> fuente [-gum, 0];  tramo del diente: [gum, 1] -> [0, 1]
-        ssrc = np.where(sv < gum, -gum + (sv + gum) * 0.5, (sv - gum) / (1 - gum))
+        ssrc = np.where(sv < gr, -gr + (sv + gr) * 0.5, (sv - gr) / (1 - gr))
         src = np.where(m, (g[None] + ssrc * (inc - g)[None]), src)
     src = (src + 0.5) * sc - 0.5
     xx = np.repeat(np.arange(n, dtype=np.float64)[None], n, 0)
     out = np.stack([ndi.map_coordinates(img[..., c], [src, xx], order=1, mode='nearest') for c in range(img.shape[2])], -1)
     return out.astype(img.dtype)
 
-def clean_gum(bsm, nrm, rows, tissue0, gum=GUM):
+def clean_gum(bsm, nrm, rows, tissue0, gum=None):
     """(01/11 d) margen de la encia limpio: gum_warp estira la encia pintada al doble (vetas verticales, 'pelo') y el borde
     pintado de Konami es dentado (bloques del DXT de 512). En la franja [-1.6 gum, gum + papila] el color pasa a ser la encia
     promediada (sin vetas) + punteado fino, y el borde encia/diente es una curva suave por diente: festoneado con la papila
@@ -156,6 +173,7 @@ def clean_gum(bsm, nrm, rows, tissue0, gum=GUM):
     la boca 3D usa solo el centro del diente pintado."""
     N = bsm.shape[0]
     U, V, W = tooth_fields(rows, N, vmin=-1.0)
+    if gum is None: gum = gum_field(rows, N, -1.0)
     ins = U >= 0
     u = np.clip(U, 0, 1)
     du = np.minimum(u, 1 - u)
@@ -201,7 +219,7 @@ def gum_detail(bsm, nrm, rows):
     U, V, W = tooth_fields(rows, N, vmin=-1.6)
     ins = U >= 0
     # distancia al margen (en alto de diente): 0 en el margen, crece hacia la raiz
-    dm = np.where(ins, np.clip(GUM - V, 0, 2), 1.0)
+    dm = np.where(ins, np.clip(gum_field(rows, N, -1.6) - V, 0, 2), 1.0)
     attached = sst(0.75, 0.45, dm)                                   # encia adherida (con punteado) cerca del diente
     mucosa = 1 - attached
     # punteado: hoyuelos finos, mas marcados en la adherida

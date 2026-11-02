@@ -31,6 +31,7 @@ CUT_STRIP = float(os.environ.get('CUT_STRIP', '0'))   # (01/11 i) la tira se cor
 STRIP_GUM = float(os.environ.get('STRIP_GUM', '0.3'))   # (02/11) la tira debajo de la encia (s > GUM) pasa a mostrar encia: s' = GUM - esto * (s - GUM)
 STRIP_FOLD = float(os.environ.get('STRIP_FOLD', '0.25'))   # (02/11 c) la tira mas alla de la encia (s > GUM) se recoge a este largo hacia el cuello
 FOLD_BACK = float(os.environ.get('FOLD_BACK', '1.5'))
+BS_UP = float(os.environ.get('BS_UP', '0.0'))   # (02/11 v17b) donde sale de la encia el diente de arriba (fraccion del alto)
 FOLD_S = float(os.environ.get('FOLD_S', '0.35'))   # (02/11 c) mm detras de la encia donde queda la tira recogida
 THROAT = int(os.environ.get('THROAT', '1'))   # (02/11) fondo de la garganta nuevo (throat.py) en lugar de la pared plana de Konami
 SINK = 1.5 * MM   # (01/11 d) 0.7 -> 1.5 mm: el cuello se mete bien detras de la encia (no asoma por arriba)
@@ -265,7 +266,9 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0
         # ancho 0.14): al centro del diente la encia corta en bb ~0.12, a los costados (papila) mas abajo. Y la cara de
         # adelante sale siempre 0.3 mm por delante de la tira (antes en las esquinas quedaba al ras y la tira la 'mordia')
         duT = 0.5 * (1 - np.abs(cx)) * (1 - 2 * gap / (uR - uL))
-        bs = 0.12 + (0.30 / (1 - GUM)) * np.exp(-(duT / 0.14) ** 2)
+        gum_r = make_oral.GUM_UP if upper else GUM
+        # (02/11 v17b) arriba el diente sale de la encia en la linea de Konami (antes 0.12 del alto mas abajo, ~1 mm)
+        bs = (BS_UP if upper else 0.12) + (0.30 / (1 - gum_r)) * np.exp(-(duT / 0.14) ** 2)
         bpos = bb - off
         lift = 0.3 * MM * sst(bs - 0.05, bs + 0.10, bpos)
         # (01/11 e) convexidad: maximo en el tercio del cuello (altura de contorno) y se aplana hacia el borde; surcos de
@@ -351,6 +354,7 @@ def build(src_fmdl, texdir, log=print):
     strip_maps = {}
     for c, r, up in ((c_up, rows[0], True), (c_lo, rows[1], False)):
         Pc, UVc, Fc, Wc = sub(c, 2)
+        GUM = r['gum']   # (02/11 v17b) arriba 0: la encia de Konami
         Nc = vnormals(Pc, Fc)
         # orientar: la tira mira hacia adelante (+z) en la zona de los dientes
         if Nc[:, 2].mean() < 0: Nc = -Nc
@@ -410,6 +414,7 @@ def build(src_fmdl, texdir, log=print):
     nteeth = 0; tooth_up = []; best_by_row = [None, None]
     for c, r, up in ((c_up, rows[0], True), (c_lo, rows[1], False)):
         M = strip_maps[c]
+        GUM = r['gum']
         pk = np.concatenate([[r['x0']], r['pk'], [r['x1']]]).astype(float)
         ntt = len(pk) - 1; mid = ntt / 2.0
         # (02/11) caja uv de referencia de la fila: el premolar mejor pintado (mas alto en uv); los dientes con menos de 22 px
