@@ -17,7 +17,7 @@
 //  * Diagnostico: cuanto gira la mandibula respecto de la cabeza en el Eval del cuello (min / max en 10 s): si se mueve
 //    mientras el jugador habla, la animacion facial del juego ya paso antes de este punto y lo que se escribe aca queda.
 //
-//   350 (ini): x boca por huesos (1 = si; 0 = por shader como antes), y = lo escribe la DLL (1 = activo: esqueletos con la
+//   350 (ini): x boca por huesos (1 = si; 0 = por shader como antes), y = lo escribe la DLL (1 = activo, 2 = ademas ojos y parpados por huesos: esqueletos con la
 //   mandibula encontrada en el ultimo segundo), z / w libres (proximo: pose facial propia: labios, cejas, parpados).
 #include "core.h"
 #include <atomic>
@@ -69,7 +69,10 @@ static void QConj(const float* a, float* o) { o[0] = -a[0]; o[1] = -a[1]; o[2] =
 
 // huesos de la cara por su reposo en el espacio del modelo (face_rig_111320: cara real de Konami; el .skl es comun).
 // jaw = cuanto del giro de la mandibula lleva (1 entero, 0.5 la mitad, 0 nada)
-struct BoneDef { const char* name; float x, y, z; float jaw; };
+// (02/11) hash = + 0x10 del hueso del motor (fijo en todas las caras: volcado /mnt/project-files/face/cara_49_huesos.txt); los
+// huesos con hash se reconocen SOLO por el hash: el globo del ojo y los dos parpados estan a 1..3 mm uno del otro y el reposo
+// cambia de cara a cara, asi que por posicion se confundian
+struct BoneDef { const char* name; float x, y, z; float jaw; uint32_t hash = 0; };
 static const BoneDef kDef[] = {
     { "skf_jaw",                 0.0000f, 1.6369f, 0.0795f, 1.0f },
     { "skf_lip_b_l",             0.0185f, 1.6244f, 0.1641f, 1.0f },
@@ -93,15 +96,17 @@ static const BoneDef kDef[] = {
     { "skf_cheek_r",            -0.0425f, 1.6623f, 0.1526f, 0.0f },
     { "skf_orbicularisoculi_b_l",0.0280f, 1.6866f, 0.1518f, 0.0f },
     { "skf_orbicularisoculi_b_r",-0.0280f, 1.6866f, 0.1518f, 0.0f },
-    { "skf_eyelid_t_l",          0.0280f, 1.6968f, 0.1380f, 0.0f },
-    { "skf_eyelid_t_r",         -0.0280f, 1.6968f, 0.1380f, 0.0f },
-    { "skf_eyelid_b_l",          0.0280f, 1.6958f, 0.1380f, 0.0f },
-    { "skf_eyelid_b_r",         -0.0280f, 1.6958f, 0.1380f, 0.0f },
+    { "skf_eyelid_t_l",          0.0280f, 1.6968f, 0.1380f, 0.0f, 0xC15DB1B9u },   // cara 22 (el mas alto del par)
+    { "skf_eyelid_t_r",         -0.0280f, 1.6968f, 0.1380f, 0.0f, 0xC9E134E6u },   // cara 25
+    { "skf_eyelid_b_l",          0.0280f, 1.6958f, 0.1380f, 0.0f, 0x65E49A52u },   // cara 23
+    { "skf_eyelid_b_r",         -0.0280f, 1.6958f, 0.1380f, 0.0f, 0x0769EE8Cu },   // cara 24
     { "skf_brow_i_l",            0.0157f, 1.7129f, 0.1718f, 0.0f },
     { "skf_brow_i_r",           -0.0157f, 1.7129f, 0.1718f, 0.0f },
     { "skf_brow_o_l",            0.0413f, 1.7149f, 0.1573f, 0.0f },
     { "skf_brow_o_r",           -0.0413f, 1.7149f, 0.1573f, 0.0f },
     { "skf_glabella",            0.0000f, 1.7038f, 0.1697f, 0.0f },
+    { "skf_eye_l",               0.0315f, 1.6966f, 0.1406f, 0.0f, 0xB9CDBDE1u },   // cara 26: globo del ojo (eye.fmdl paleta [0], peso 1)
+    { "skf_eye_r",              -0.0318f, 1.6968f, 0.1410f, 0.0f, 0x721A023Fu },   // cara 27
     { "sk_head",                 0.0000f, 1.6401f, 0.0543f, 0.0f },
     { "sk_neck",                 0.0000f, 1.5321f, 0.0335f, 0.0f },
 };
@@ -126,8 +131,27 @@ static const float kTeeth[][3] = {
     {  0.0004f,  0.0010f, 0.0f },     // nasolabialfold_t_l
     { -0.0004f,  0.0010f, 0.0f },     // nasolabialfold_t_r
 };
+// (02/11, Agustin con 2 capturas: "en la vista original la boca respeta la forma de los labios al abrirse, con el shader no")
+// al abrir la boca por huesos (corrimiento x apertura, ejes de la cabeza) los labios hacen el ovalo de la boca abierta del juego:
+// las comisuras se juntan hacia el medio y van un poco adelante, los costados del labio de abajo se redondean hacia adentro y
+// el de arriba acompana apenas; sin esto el giro de la mandibula estiraba las comisuras hacia afuera (boca cuadrada)
+static const float kOpen[][3] = {
+    { 0, 0, 0 },                       // skf_jaw
+    { -0.0012f,  0.0f,     0.0008f },  // lip_b_l: hacia el medio y adelante (labio de abajo redondo)
+    {  0.0012f,  0.0f,     0.0008f },  // lip_b_r
+    {  0.0f,     0.0f,     0.0010f },  // lip_b_c
+    { 0, 0, 0 },                       // doublechin
+    { -0.0030f, -0.0004f,  0.0010f },  // lip_s_l: la comisura se junta 3 mm
+    {  0.0030f, -0.0004f,  0.0010f },  // lip_s_r
+    { -0.0010f,  0.0f,     0.0f },     // cheek_s_l
+    {  0.0010f,  0.0f,     0.0f },     // cheek_s_r
+    { -0.0008f,  0.0f,     0.0004f },  // lip_t_l
+    {  0.0f,     0.0f,     0.0005f },  // lip_t_c
+    {  0.0008f,  0.0f,     0.0004f },  // lip_t_r
+};
+static const float* OpenOf(int d) { static const float z[3] = { 0, 0, 0 }; return d < (int)(sizeof(kOpen) / sizeof(kOpen[0])) ? kOpen[d] : z; }
 static const float* TeethOf(int d) { static const float z[3] = { 0, 0, 0 }; return d < (int)(sizeof(kTeeth) / sizeof(kTeeth[0])) ? kTeeth[d] : z; }
-enum { D_JAW = 0, D_HEAD = kND - 2 };
+enum { D_JAW = 0, D_LIPS_L = 5, D_LID_TL = 22, D_LID_TR = 23, D_LID_BL = 24, D_LID_BR = 25, D_BROW_IL = 26, D_EYE_L = 31, D_EYE_R = 32, D_HEAD = kND - 2 };
 
 struct Skel {
     const void* skel = nullptr; const char* bones = nullptr; int n = 0;   // esqueleto del cuerpo (clave) y su arreglo
@@ -141,13 +165,28 @@ struct Skel {
     unsigned lastFrame = 0; int rebuilds = 0; bool logged = false;
     // diagnostico: giro de la mandibula respecto de la cabeza (grados) en la ventana en curso
     float angMin = 1e9f, angMax = -1e9f; int angN = 0;
+    // (02/11) ojos: direccion del ojo respecto de la cabeza en el cuadro anterior (antes de escribir) para ver si el juego los mueve
+    float eyePrev[2][3] = {}; bool eyeHave = false; float gameEye = 0.0f;
+    // (02/11) lo ultimo que se escribio en cada hueso de ojos / parpados (q escrito y giro aplicado): si el juego no lo reescribe
+    // entre cuadros, se deshace el giro anterior antes de aplicar el nuevo (si no, se acumularia y el ojo daria vueltas)
+    // (02/11 b, Agustin: "las barbas al abrir la boca tambien vibran") vale para TODOS los huesos que se escriben: se guarda la base
+    // (lo que dejo el juego) y lo escrito; si al cuadro siguiente se lee lo escrito (el juego no reescribio, o el Eval del
+    // cuello paso dos veces en el mismo cuadro) se parte de la base guardada y no se gira dos veces
+    float wq[kND][4] = {}, wt[kND][3] = {}, bq[kND][4] = {}, bt[kND][3] = {}; bool wHave[kND] = {};
+    int reused = 0;
+    float seed = 0.37f; bool seedHave = false; float seedCand = -1.0f; int seedCandN = 0;   // (02/11 c) semilla de la mirada, la misma que el VS del globo (PesExprSeed)
+    // (02/11 e) sk_head del esqueleto del CUERPO (175 huesos) para la camara: el sk_head del esqueleto de la cara tiene la
+    // transformacion actual en (0, 0, 0) (no es espacio del modelo: log 12:46 PC), el del cuerpo si lo es
+    void* bHead = nullptr; int bHeadIdx = -1; Xf bHeadRest = {};
 };
 static const int kMaxSkel = 48;
 static std::mutex s_mx;
 static Skel s_sk[kMaxSkel]; static int s_nSk = 0;
 static std::atomic<unsigned> s_frame{0};
 static std::atomic<int> s_applied{0}, s_noJaw{0}, s_badWrite{0}, s_calls{0}, s_stale{0};
-static std::atomic<unsigned> s_lastActive{0};   // cuadro del ultimo giro aplicado o esqueleto con mandibula visto
+static std::atomic<unsigned> s_lastActive{0};
+static std::atomic<unsigned> s_lastEyes{0};   // (02/11) cuadro del ultimo giro de ojos / parpados por huesos
+static std::atomic<int> s_eyesW{0}, s_blinks{0};   // cuadro del ultimo giro aplicado o esqueleto con mandibula visto
 static int s_logs = 0;
 
 static float Dist2(const float* a, const BoneDef& d) { float x = a[0] - d.x, y = a[1] - d.y, z = a[2] - d.z; return x * x + y * y + z * z; }
@@ -176,12 +215,18 @@ static void Match(Skel& S, const char* bones, int n) {
     for (int b = 0; b < n; b++) {
         const char* bone = bones + (size_t)b * 0xc0;
         if (!ReadXf(bone + 0x40, rests[b])) continue;
+        uint32_t hs = 0;
+        if (SafeCopy(&hs, bone + 0x10, 4) && hs) {
+            bool hit = false;
+            for (int d = 0; d < kND; d++) if (kDef[d].hash == hs) { ps.push_back({ -2.0f, b, d }); hit = true; break; }
+            if (hit) continue;
+        }
         char nm[64];
         if (BoneName(bone, nm, sizeof nm)) {
             for (int d = 0; d < kND; d++) if (!strcmp(nm, kDef[d].name)) { ps.push_back({ -1.0f, b, d }); break; }
             continue;
         }
-        for (int d = 0; d < kND; d++) { float d2 = Dist2(rests[b].t, kDef[d]); if (d2 < 0.004f * 0.004f) ps.push_back({ d2, b, d }); }
+        for (int d = 0; d < kND; d++) { if (kDef[d].hash) continue; float d2 = Dist2(rests[b].t, kDef[d]); if (d2 < 0.004f * 0.004f) ps.push_back({ d2, b, d }); }
     }
     std::sort(ps.begin(), ps.end(), [](const Pair& a, const Pair& b) { return a.d2 < b.d2; });
     std::vector<char> usedB((size_t)n, 0);
@@ -208,6 +253,14 @@ static bool Build(Skel& S, const void* skel) {
     if (node && ReadPtr((const char*)node + 0xA0, face) && face != skel && LooksSkel(face, &S.fbones, &S.fn)) { S.face = face; Match(S, S.fbones, S.fn); }
     else { S.face = nullptr; S.fbones = nullptr; S.fn = 0; }
     Match(S, S.bones, S.n);
+    for (int b = 0; b < S.n && !S.bHead; b++) {   // sk_head del cuerpo (hash FF3D8D77 o nombre)
+        const char* bone = S.bones + (size_t)b * 0xc0;
+        uint32_t hs = 0; char nm[64];
+        const bool isHead = (SafeCopy(&hs, bone + 0x10, 4) && hs == 0xFF3D8D77u) || (BoneName(bone, nm, sizeof nm) && !strcmp(nm, "sk_head"));
+        if (!isHead) continue;
+        void* cur = nullptr; Xf r;
+        if (ReadXf(bone + 0x40, r) && ReadPtr(bone + 0x18, cur)) { S.bHead = cur; S.bHeadIdx = b; S.bHeadRest = r; }
+    }
     S.jawFound = S.cur[D_JAW] && S.cur[D_HEAD] ? 1 : 0;
     return true;
 }
@@ -237,6 +290,10 @@ static bool StillValid(const Skel& S) {
     void* arr = nullptr; int n = 0;
     if (!ReadPtr((const char*)S.face + 0x28, arr) || (const char*)arr != S.fbones || !SafeCopy(&n, (const char*)S.face + 0x30, 4) || n != S.fn) return false;
     if (!ReadPtr((const char*)S.skel + 0x28, arr) || (const char*)arr != S.bones || !SafeCopy(&n, (const char*)S.skel + 0x30, 4) || n != S.n) return false;
+    if (S.bHead) {
+        void* cur = nullptr; int ix = -1; const char* bone = S.bones + (size_t)S.bHeadIdx * 0xc0;
+        if (!ReadPtr(bone + 0x18, cur) || cur != S.bHead || !SafeCopy(&ix, bone, 4) || ix != S.bHeadIdx) return false;
+    }
     for (int d = 0; d < kND; d++) {
         if (!S.cur[d]) continue;
         const char* bone = S.src[d] + (size_t)S.idx[d] * 0xc0;
@@ -256,7 +313,278 @@ static bool JawAngle(const Skel& S, const Xf& jc, float* deg) {
     *deg = 2.0f * acosf(w) * 57.29578f;
     return true;
 }
+
+// (02/11, Agustin: "los ojos vivos es lo que rompe por que no mueve el esqueleto real", "haz que el parpado se mueva, siento que
+// los ojos se mueven pero no el parpado") MIRADA y PARPADEO por HUESOS. Antes el VS del globo (69758ab9) giraba la esfera y
+// el de la cara (PesBlinkApply) giraba los vertices de los parpados solo en las mallas donde la DLL los habia encontrado: las
+// pestanas y la otra malla del parpado quedaban quietas y se abrian ranuras. Ahora se giran skf_eye_l/r (el globo: eye.fmdl
+// pesa 1 en ellos) y skf_eyelid_t/b_l/r (todas las mallas de la cara, pestanas incluidas, pesan en ellos), con la misma
+// cuenta que el shader (PesGaze / PesBlinkCurve de pes_expr.hlsli): fijaciones de 0.45..1.9 s, sacadas de ~45 ms, deriva y
+// microsacadas; parpadeo cada ~5.5 s (cierra 0.08 s, 0.04 quieto, abre 0.18). El parpado de arriba acompana la mirada vertical
+// (baja 0.65 del angulo al mirar abajo, sube 0.35 al mirar arriba) y el de abajo un poco (0.2 al mirar abajo). La semilla es
+// por personaje (el nodo), asi que cada jugador mira y parpadea a su ritmo. Cuando esto corre, 350.y = 2 y el shader no gira
+// ni el globo ni los parpados (no se suma dos veces).
+static float Frac(float x) { return x - floorf(x); }
+static float SStep(float a, float b, float x) { float t = std::clamp((x - a) / (b - a), 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); }
+static void GazeHash2(float n, float seed, float* o) {
+    o[0] = Frac(sinf((n + seed * 17.3f) * 12.9898f) * 43758.5453f);
+    o[1] = Frac(sinf((n + seed * 29.7f) * 78.233f) * 43758.5453f);
+}
+static void GazeTarget(float n, float seed, float* g) {   // (02/11) igual que PesGazeTarget (pes_expr.hlsli): mas natural
+    float h[2]; GazeHash2(n, seed, h);
+    g[0] = (h[0] - 0.5f) * 2.0f * 0.052f; g[1] = (h[1] - 0.58f) * 2.0f * 0.034f;
+    if (Frac(h[0] * 7.1f + h[1] * 3.3f) >= 0.67f) { g[0] *= 0.2f; g[1] *= 0.2f; }
+}
+// g[0] = de lado, g[1] = arriba (+) / abajo (-), radianes. LA MISMA CUENTA que PesGaze (pes_expr.hlsli)
+static void Gaze(float t, float seed, float amp, float* g) {
+    g[0] = g[1] = 0.0f; if (amp <= 0.0f) return;
+    const float tt = t + seed * 23.1f, per = 2.2f, n = floorf(tt / per);
+    float h[2]; GazeHash2(n, seed + 0.5f, h);
+    const float x = tt - (n * per + h[0] * 1.2f);
+    float g0[2], g1[2]; GazeTarget(n - 1.0f, seed, g0); GazeTarget(n, seed, g1);
+    const float u = 1.0f - std::clamp(x / 0.070f, 0.0f, 1.0f);
+    float k = 1.0f - u * u * u;
+    k = k * 0.93f + 0.07f * SStep(0.10f, 0.22f, x);
+    for (int i = 0; i < 2; i++) g[i] = g0[i] + (g1[i] - g0[i]) * k;
+    g[0] += sinf(tt * 0.63f + seed) * 0.0020f + sinf(tt * 1.37f + seed * 2.1f) * 0.0010f;
+    g[1] += sinf(tt * 0.51f + seed * 2.0f) * 0.0015f + sinf(tt * 1.13f + seed * 0.7f) * 0.0008f;
+    g[0] *= amp; g[1] *= amp;
+}
+static float BlinkCurve(float t, float seed) {
+    const float per = 5.5f, tt = t + seed * 37.3f, n = floorf(tt / per);
+    const float h = Frac(sinf((n + seed * 13.1f) * 12.9898f) * 43758.5453f);
+    const float x = tt - (n * per + h * (per - 0.4f));
+    if (x < 0.0f || x > 0.30f) return 0.0f;
+    return x < 0.08f ? SStep(0.0f, 0.08f, x) : (x < 0.12f ? 1.0f : 1.0f - SStep(0.12f, 0.30f, x));
+}
+// transformacion actual del hueso SIN el giro del mod: si el cuaternion sigue siendo el que escribimos el cuadro anterior (el
+// juego no lo reescribio), se le saca ese giro
+static bool ReadBase(Skel& S, int d, Xf& x) {
+    if (!ReadXf(S.cur[d], x)) return false;
+    if (S.wHave[d]) {
+        // (02/11 c) el cuaternion y la traslacion se comparan POR SEPARADO: el juego puede reescribir solo el giro de un hueso y
+        // dejar la traslacion que escribimos (o al reves); antes se tomaba esa traslacion como base y se volvia a correr cada
+        // cuadro hasta que el juego la reponia: vaiven = la barba y los parpados vibraban (log d116b77: ~6 de 15 huesos por
+        // paso se leian con lo del mod todavia puesto)
+        const float* w = S.wq[d]; const float* u = S.wt[d];
+        const float dq = fabsf(x.q[0] - w[0]) + fabsf(x.q[1] - w[1]) + fabsf(x.q[2] - w[2]) + fabsf(x.q[3] - w[3]);
+        const float dt = fabsf(x.t[0] - u[0]) + fabsf(x.t[1] - u[1]) + fabsf(x.t[2] - u[2]);
+        bool hit = false;
+        if (dq < 2e-6f) { memcpy(x.q, S.bq[d], sizeof S.bq[d]); hit = true; }
+        if (dt < 1e-7f + 1e-6f * (fabsf(u[0]) + fabsf(u[1]) + fabsf(u[2]))) { memcpy(x.t, S.bt[d], sizeof S.bt[d]); hit = true; }
+        if (hit) S.reused++;
+    }
+    return true;
+}
+// escribe q / t nuevos y recuerda la base de la que salieron
+static bool WriteBone(Skel& S, int d, const Xf& base, const float* nq, const float* nt) {
+    float out[7] = { nq[0], nq[1], nq[2], nq[3], nt[0], nt[1], nt[2] };
+    if (!SafeCopy((char*)S.cur[d] + 16, out, 28)) return false;
+    Xf chk; if (ReadXf(S.cur[d], chk)) { memcpy(S.wq[d], chk.q, sizeof chk.q[0] * 4); memcpy(S.wt[d], chk.t, sizeof chk.t[0] * 3); }
+    else { memcpy(S.wq[d], nq, 4 * sizeof(float)); memcpy(S.wt[d], nt, 3 * sizeof(float)); }
+    memcpy(S.bq[d], base.q, sizeof S.bq[d]); memcpy(S.bt[d], base.t, sizeof S.bt[d]); S.wHave[d] = true;
+    return true;
+}
+// (02/11 d) devuelve el hueso a su base y deja de seguirlo: si el mod no lo mueve este cuadro NO se escribe nada (antes los
+// gestos secundarios reescribian cada cuadro pomulos, cejas y bajo-ojo aunque el corrimiento fuera 0; con 1cbce0f la boca 3D
+// se rompia con la boca por huesos y volvia con "Por shader", con 0 giros de mandibula escritos)
+static void Release(Skel& S, int d) {
+    if (!S.wHave[d] || !S.cur[d]) { S.wHave[d] = false; return; }
+    Xf x; if (ReadBase(S, d, x)) { float out[7] = { x.q[0], x.q[1], x.q[2], x.q[3], x.t[0], x.t[1], x.t[2] }; SafeCopy((char*)S.cur[d] + 16, out, 28); }
+    S.wHave[d] = false;
+}
+// gira la transformacion de un hueso alrededor de su propia posicion: q nuevo = r * q base (r en el espacio del modelo)
+static bool RotInPlace(Skel& S, int d, const float* r) {
+    Xf x; if (!ReadBase(S, d, x)) return false;
+    float nq[4]; QMul(r, x.q, nq);
+    return WriteBone(S, d, x, nq, x.t);
+}
+static void AxisAngle(const float* ax, float a, float* q) { const float s = sinf(0.5f * a); q[0] = ax[0] * s; q[1] = ax[1] * s; q[2] = ax[2] * s; q[3] = cosf(0.5f * a); }
+// posicion de un hueso en los ejes de la cabeza, actual menos reposo (metros): cuanto lo movio la animacion facial
+static float HeadSpaceMove(Skel& S, int d, const Xf& hc, const float* hrInv) {
+    if (!S.cur[d]) return 0.0f;
+    Xf x; if (!ReadBase(S, d, x)) return 0.0f;   // sin lo que haya dejado puesto el mod
+    const float v[3] = { x.t[0] - hc.t[0], x.t[1] - hc.t[1], x.t[2] - hc.t[2] }; float r[3]; QRot(hrInv, v, r);
+    const Xf& R = S.rest[d]; const Xf& H = S.rest[D_HEAD];
+    const float dx = r[0] - (R.t[0] - H.t[0]), dy = r[1] - (R.t[1] - H.t[1]), dz = r[2] - (R.t[2] - H.t[2]);
+    return sqrtf(dx * dx + dy * dy + dz * dz);
+}
+[[maybe_unused]] static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
+    const float amp = std::clamp(g_cfg.live[347][3], 0.0f, 2.0f), blinkAmt = std::clamp(g_cfg.live[342][3], 0.0f, 1.0f);
+    // (02/11 c, Agustin con video: "por shader los ojos vivos funcionan bien, con los huesos no se mueven y vibran") el globo NO
+    // se escribe: el juego vuelve a poner el hueso del ojo despues del Eval del cuello (control propio de la mirada), asi que lo
+    // escrito aca no se veia y alternaba con lo del juego. El globo lo vuelve a girar el VS 69758ab9 (PesGaze) y aca solo se
+    // mueven los PARPADOS, con la MISMA mirada que el VS: misma cuenta, mismo reloj (157.x) y misma semilla (la entrada de la
+    // tabla de tonos de piel mas cercana al personaje, filas 194..254, como PesExprSeed; 0.37 si no tiene entrada)
+    const bool eyes = false, lids = S.cur[D_LID_TL] && S.cur[D_LID_TR];
+    if (!lids) return;
+    float hrInv[4]; QConj(hr, hrInv);
+    // (02/11, Agustin: "veo que los ojos vibran"; con la mirada viva en 0 no vibran) el giro relativo sobre lo que deja el juego
+    // vibraba: el juego corrige el ojo desde donde quedo el hueso (control propio de la mirada) y los dos se peleaban cuadro a
+    // cuadro. Ahora el globo se escribe ABSOLUTO: reposo del ojo llevado por la cabeza actual + la mirada del mod, sin leer lo
+    // que dejo el juego (lo que el juego haga con el ojo se pisa entero, sin realimentacion)
+    // la animacion facial del juego (habla, festeja): sin parpadeo del mod (la animacion trae el suyo)
+    const float anim = (std::max)(HeadSpaceMove(S, D_LIPS_L, hc, hrInv), HeadSpaceMove(S, D_BROW_IL, hc, hrInv));
+    const float t = g_cfg.live[157][0];
+    {
+        const float* H = g_cfg.live[194];
+        float wp[3];
+        if (H[1] > 0.5f && CharNodeWorldPos(const_cast<void*>(S.node), wp)) {   // la tabla esta escrita (la rehace el Present)
+            int best = -1; float bd = H[2] * H[2];
+            const int n = (std::min)((int)(H[0] + 0.5f), 20);
+            for (int i = 0; i < n; i++) { const float* q = g_cfg.live[195 + 3 * i]; const float dx = wp[0] - q[0], dz = wp[2] - q[2], d2 = dx * dx + dz * dz; if (d2 < bd) { bd = d2; best = i; } }
+            // (02/11 e, Agustin: "los parpados vibran a lo lejos y de cerca") la tabla la rehace el Present en otro hilo: leida a
+            // mitad de camino daba otra entrada un cuadro si y otro no -> la mirada de los parpados saltaba entre dos semillas.
+            // La semilla cambia solo si la misma entrada nueva se ve 30 cuadros seguidos
+            const float cand = best >= 0 ? (float)best * 0.6180339f : 0.37f;
+            if (!S.seedHave) { S.seed = cand; S.seedHave = true; S.seedCandN = 0; }
+            else if (cand != S.seed) {
+                if (cand == S.seedCand) { if (++S.seedCandN >= 30) { S.seed = cand; S.seedCandN = 0; } }
+                else { S.seedCand = cand; S.seedCandN = 1; }
+            } else S.seedCandN = 0;
+        } else if (!S.seedHave && H[1] <= 0.5f && H[0] <= 0.5f) { S.seed = 0.37f; }
+    }
+    const float seed = S.seed;
+    float g[2]; Gaze(t, seed, amp, g);
+    const float b = BlinkCurve(t, seed) * blinkAmt * (1.0f - SStep(0.0008f, 0.0015f, anim));
+    static const float X[3] = { 1.0f, 0.0f, 0.0f }, Y[3] = { 0.0f, 1.0f, 0.0f };
+    float ax[3], ay[3]; QRot(hr, X, ax); QRot(hr, Y, ay);
+    // angulo positivo alrededor del eje X de la cabeza = el frente baja (como el menton con la boca: 3e57f2e)
+    bool wrote = false;
+    if (eyes) {
+        float qy[4], qp[4], r[4]; AxisAngle(ay, g[0], qy); AxisAngle(ax, -g[1], qp); QMul(qy, qp, r);
+        for (int e = 0; e < 2; e++) {
+            const int d = D_EYE_L + e;
+            float hq[4], nq[4]; QMul(hr, S.rest[d].q, hq); QMul(r, hq, nq);
+            Xf x; if (!ReadXf(S.cur[d], x)) { s_badWrite.fetch_add(1, std::memory_order_relaxed); continue; }
+            if (SafeCopy((char*)S.cur[d] + 16, nq, 16)) wrote = true; else s_badWrite.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    if (lids) {
+        // de arriba: el parpadeo lo baja 0.50 rad (~29 grados; el shader usaba lo mismo) y acompana la mirada vertical
+        // (02/11 d) con la sonrisa (sm) el ojo se achina: el de arriba baja un poco y el de abajo sube (sonrisa "de verdad")
+        const float up = 0.50f * b - g[1] * (g[1] < 0.0f ? 0.65f : 0.35f) + 0.06f * sm;
+        // de abajo: sube un poco al parpadear y baja un poco al mirar abajo
+        const float lo = -0.10f * b - (g[1] < 0.0f ? g[1] * 0.20f : 0.0f) - 0.16f * sm;
+        float qu[4], ql[4]; AxisAngle(ax, up, qu); AxisAngle(ax, lo, ql);
+        const int ds[4] = { D_LID_TL, D_LID_TR, D_LID_BL, D_LID_BR };
+        for (int i = 0; i < 4; i++) {
+            if (!S.cur[ds[i]]) continue;
+            if (RotInPlace(S, ds[i], i < 2 ? qu : ql)) wrote = true; else s_badWrite.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (b > 0.5f) s_blinks.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (wrote) { s_eyesW.fetch_add(1, std::memory_order_relaxed); s_lastEyes.store(s_frame.load(std::memory_order_relaxed), std::memory_order_relaxed); }
+}
 }   // namespace
+
+// (02/11 d, Agustin: "le falta mas naturalidad a los gestos de las expresiones") MOVIMIENTOS QUE ACOMPANAN al gesto, como en una
+// cara real (el juego mueve solo los huesos de la animacion; el resto de la cara queda quieto y se ve de goma):
+//  - sonrisa (las comisuras suben / se abren respecto del reposo): los pomulos suben e inflan, el musculo bajo el ojo sube y
+//    (en EyesFrame) el parpado de abajo sube y el de arriba baja apenas: el ojo se achina (sonrisa de Duchenne);
+//  - boca muy abierta (grito, del juego o del mod): las cejas y el entrecejo suben un poco.
+// Por huesos (todas las mallas juntas, sin cortes). Fuerza: 348.x (musculos virtuales, mejilla) para la sonrisa y 348.z (ceno) para
+// las cejas; 0 = como antes.
+static float Smile(Skel& S, const Xf& hc, const float* hrInv) {
+    float best = 0.0f;
+    for (int e = 0; e < 2; e++) {
+        const int d = D_LIPS_L + e; if (!S.cur[d]) continue;
+        Xf x; if (!ReadBase(S, d, x)) continue;
+        const float v[3] = { x.t[0] - hc.t[0], x.t[1] - hc.t[1], x.t[2] - hc.t[2] }; float r[3]; QRot(hrInv, v, r);
+        const Xf& R = S.rest[d]; const Xf& H = S.rest[D_HEAD];
+        const float dy = r[1] - (R.t[1] - H.t[1]), dx = (r[0] - (R.t[0] - H.t[0])) * (e == 0 ? 1.0f : -1.0f);
+        best = (std::max)(best, std::clamp((dy + 0.5f * dx - 0.0012f) / 0.0045f, 0.0f, 1.0f));   // zona muerta 1.2 mm: la cara quieta del juego no es exacto el reposo
+    }
+    return best * best * (3.0f - 2.0f * best);
+}
+static void Secondary(Skel& S, const float* hr, float sm, float open) {
+    struct Off { int d; float x, y, z; float k; };   // k: 0 = sonrisa, 1 = boca abierta
+    static const Off kOff[] = {
+        { 18,  0.0006f, 0.0018f, 0.0010f, 0 }, { 19, -0.0006f, 0.0018f, 0.0010f, 0 },   // cheek_l / r: pomulo arriba y afuera
+        { 20,  0.0f,    0.0012f, 0.0006f, 0 }, { 21,  0.0f,    0.0012f, 0.0006f, 0 },   // orbicularisoculi_b: bajo el ojo sube
+        { 26,  0.0f,    0.0014f, 0.0f,    1 }, { 27,  0.0f,    0.0014f, 0.0f,    1 },   // brow_i: cejas internas arriba
+        { 28,  0.0f,    0.0010f, 0.0f,    1 }, { 29,  0.0f,    0.0010f, 0.0f,    1 },   // brow_o
+        { 30,  0.0f,    0.0009f, 0.0f,    1 },                                         // glabella
+    };
+    const float ks = std::clamp(g_cfg.live[348][0], 0.0f, 2.0f) * sm, ko = std::clamp(g_cfg.live[348][2], 0.0f, 2.0f) * open;
+    for (const Off& f : kOff) {
+        if (!S.cur[f.d]) continue;
+        const float a = f.k == 0 ? ks : ko;
+        if (a <= 0.001f) { Release(S, f.d); continue; }
+        Xf x; if (!ReadBase(S, f.d, x)) continue;
+        float nt[3] = { x.t[0], x.t[1], x.t[2] };
+        { const float hv[3] = { f.x * a, f.y * a, f.z * a }; float mv[3]; QRot(hr, hv, mv); for (int k = 0; k < 3; k++) nt[k] += mv[k]; }
+        if (!WriteBone(S, f.d, x, x.q, nt)) s_badWrite.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+// ---- (02/11) la CARA EN EL MUNDO para la camara libre "seguir la cara" (freecam.cpp, fila 346) ----
+// Agustin: "una camara cercana a la cara que la siga en las animaciones, fija y centrada en el rostro". Antes la cabeza salia de
+// la matriz de sk_head copiada de b6 en el dibujo de la cara (expr.cpp) y llegaba casi en cero e intermitente. Ahora sale del
+// esqueleto (el mismo que mueve la boca por huesos, revalidado cada cuadro): sk_head actual (espacio del modelo) -> centro de la
+// cara (entre los ojos y la boca, un poco adelante) y los ejes frente / arriba de la cabeza -> mundo con la matriz del nodo.
+namespace {
+struct HeadPub { const void* node = nullptr; float c[3] = {}, fw[3] = {}, up[3] = {}; double t = 0; };
+std::mutex s_hpMx; HeadPub s_hp[8];
+std::atomic<int> s_hpOk{0}, s_hpFail{0};
+}
+static bool Norm3(float* v) { const float l = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); if (!(l > 1e-4f)) return false; v[0] /= l; v[1] /= l; v[2] /= l; return true; }
+static void PublishHead(const Skel& S) {
+    if (!S.node || !S.bHead) { s_hpFail.fetch_add(1, std::memory_order_relaxed); return; }
+    Xf hc; if (!ReadXf(S.bHead, hc)) { s_hpFail.fetch_add(1, std::memory_order_relaxed); return; }
+    // la cabeza de un personaje (de pie, sentado o tirado) nunca esta en el origen del modelo; si lo esta, no es espacio del modelo
+    if (fabsf(hc.t[0]) + fabsf(hc.t[1]) + fabsf(hc.t[2]) < 0.05f) {
+        if (s_hpFail.fetch_add(1, std::memory_order_relaxed) == 0) Log("camara libre: sk_head del cuerpo en el origen del modelo: sin dato de la cara");
+        return;
+    }
+    float c4[4], hr[4]; QConj(S.bHeadRest.q, c4); QMul(hc.q, c4, hr);   // giro de la cabeza respecto del reposo (el reposo mira a +z)
+    // centro de la cara respecto de sk_head en el reposo (face_rig: sk_head 0 / 1.640 / 0.054, ojos 1.697 / 0.138, labios ~1.63)
+    static const float kOff[3] = { 0.0f, 0.030f, 0.080f }, Z[3] = { 0.0f, 0.0f, 1.0f }, Y[3] = { 0.0f, 1.0f, 0.0f };
+    float o[3], fm[3], um[3]; QRot(hr, kOff, o); QRot(hr, Z, fm); QRot(hr, Y, um);
+    const float pm[3] = { hc.t[0] + o[0], hc.t[1] + o[1], hc.t[2] + o[2] };
+    HeadPub h; h.node = S.node;
+    void* nd = const_cast<void*>(S.node);
+    if (!CharNodeToWorld(nd, pm, h.c, true) || !CharNodeToWorld(nd, fm, h.fw, false) || !CharNodeToWorld(nd, um, h.up, false) || !Norm3(h.fw) || !Norm3(h.up)) {
+        s_hpFail.fetch_add(1, std::memory_order_relaxed); return;
+    }
+    h.t = Now();
+    std::lock_guard<std::mutex> lk(s_hpMx);
+    int at = 0; double oldest = 1e300;
+    for (int i = 0; i < 8; i++) { if (s_hp[i].node == S.node) { at = i; break; } if (s_hp[i].t < oldest) { oldest = s_hp[i].t; at = i; } }
+    s_hp[at] = h;
+    if (s_hpOk.fetch_add(1, std::memory_order_relaxed) == 0)
+        Log("camara libre: cara en el mundo desde el esqueleto (%.2f, %.2f, %.2f), frente (%.2f, %.2f, %.2f), arriba (%.2f, %.2f, %.2f); sk_head en el modelo (%.3f, %.3f, %.3f)",
+            h.c[0], h.c[1], h.c[2], h.fw[0], h.fw[1], h.fw[2], h.up[0], h.up[1], h.up[2], hc.t[0], hc.t[1], hc.t[2]);
+    {   // (02/11 e) cada ~10 s mientras se sigue: para ver si la cabeza se mueve con la animacion
+        static double s_lt = 0; static int s_ln = 0; const double now = h.t;
+        if (now - s_lt > 10.0 && s_ln < 30) { s_lt = now; s_ln++;
+            Log("camara libre: cara (%.3f, %.3f, %.3f) frente (%.2f, %.2f, %.2f) arriba (%.2f, %.2f, %.2f); sk_head cuerpo #%d modelo (%.3f, %.3f, %.3f) q (%.3f, %.3f, %.3f, %.3f), reposo (%.3f, %.3f, %.3f)",
+                h.c[0], h.c[1], h.c[2], h.fw[0], h.fw[1], h.fw[2], h.up[0], h.up[1], h.up[2], S.bHeadIdx, hc.t[0], hc.t[1], hc.t[2], hc.q[0], hc.q[1], hc.q[2], hc.q[3],
+                S.bHeadRest.t[0], S.bHeadRest.t[1], S.bHeadRest.t[2]); }
+    }
+}
+// la cara a seguir: la del personaje fijado (*lock) si sigue al dia; si no, la que esta mas al centro de la vista de la camara
+bool ExprFaceFrame(const float* camPos, const float* camFwd, const void** lock, float c[3], float fw[3], float up[3], double* age) {
+    std::lock_guard<std::mutex> lk(s_hpMx);
+    const double now = Now();
+    int best = -1;
+    if (lock && *lock) for (int i = 0; i < 8; i++) if (s_hp[i].node == *lock && now - s_hp[i].t < 0.5) { best = i; break; }
+    if (best < 0) {
+        float bs = -1e9f;
+        for (int i = 0; i < 8; i++) {
+            if (!s_hp[i].node || now - s_hp[i].t >= 0.5) continue;
+            float d[3] = { s_hp[i].c[0] - camPos[0], s_hp[i].c[1] - camPos[1], s_hp[i].c[2] - camPos[2] };
+            const float l = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+            const float sc = (l > 1e-3f ? (d[0] * camFwd[0] + d[1] * camFwd[1] + d[2] * camFwd[2]) / l : 1.0f) - 0.002f * l;   // al centro y, a igualdad, cerca
+            if (sc > bs) { bs = sc; best = i; }
+        }
+        if (best < 0) return false;
+        if (lock) *lock = s_hp[best].node;
+    }
+    memcpy(c, s_hp[best].c, 12); memcpy(fw, s_hp[best].fw, 12); memcpy(up, s_hp[best].up, 12);
+    if (age) *age = now - s_hp[best].t;
+    return true;
+}
 
 // en el Eval de la restriccion del cuello (musculo.cpp hk_Eval, clase "cuello"): una vez por personaje y cuadro
 void ExprBonesFrame(const void* skel) {
@@ -282,23 +610,36 @@ void ExprBonesFrame(const void* skel) {
         Build(*S, skel); S->rebuilds++;
         return;
     }
-    Xf jc; if (!ReadXf(S->cur[D_JAW], jc)) { Build(*S, skel); S->rebuilds++; return; }
+    Xf jc; if (!ReadBase(*S, D_JAW, jc)) { Build(*S, skel); S->rebuilds++; return; }
     s_lastActive.store(fr, std::memory_order_relaxed);
-    float deg; if (JawAngle(*S, jc, &deg)) { S->angMin = (std::min)(S->angMin, deg); S->angMax = (std::max)(S->angMax, deg); S->angN++; }
-    if (!on || (fabsf(o) < 0.001f && teeth < 0.001f)) return;
+    if (FreeCamActive() && g_cfg.live[346][0] > 0.5f) PublishHead(*S);   // (02/11) camara libre "seguir la cara"
+    float deg = 0.0f; if (JawAngle(*S, jc, &deg)) { S->angMin = (std::min)(S->angMin, deg); S->angMax = (std::max)(S->angMax, deg); S->angN++; }
+    if (!on) return;
     // eje X de la cabeza actual (el reposo del skl mira a +z, x a la izquierda) y pivote = mandibula actual
     Xf hc; if (!ReadXf(S->cur[D_HEAD], hc)) return;
     float c[4], hr[4]; QConj(S->rest[D_HEAD].q, c); QMul(hc.q, c, hr);
+    float hrInv[4]; QConj(hr, hrInv);
+    const float sm = Smile(*S, hc, hrInv);
+    const float openAll = std::clamp((std::max)(o, 0.0f) + SStep(4.0f, 20.0f, deg), 0.0f, 1.0f);   // boca abierta del mod o del juego (grados)
+    // (02/11 f, Agustin con video 13:06: "los parpados" siguen vibrando con 6969fd2) los parpados por huesos se pelean con el
+    // control de la mirada del juego (que tambien reescribe los parpados despues del Eval, como hacia con skf_eye): vuelven al
+    // shader (PesBlinkApply, que ya sigue la mirada vertical), que andaba sin vibrar. EyesFrame queda para cuando se sepa
+    // escribir despues del juego
+    for (int d = D_LID_TL; d <= D_LID_BR; d++) Release(*S, d);
+    Secondary(*S, hr, sm, openAll);
+    if (fabsf(o) < 0.001f && teeth < 0.001f) { for (int d = 0; d < 18; d++) if (S->wHave[d]) Release(*S, d); return; }   // slider en 0: la boca vuelve a la del juego
     static const float X[3] = { 1.0f, 0.0f, 0.0f }; float ax[3]; QRot(hr, X, ax);
     float ln = sqrtf(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]); if (ln < 0.5f) return; for (float& v : ax) v /= ln;
     const float P[3] = { jc.t[0], jc.t[1], jc.t[2] };
     const float A = 0.40f * o;    // (02/11, Agustin: "esta al reves") con el signo negativo la boca se cerraba al subir el slider: en el cuaternion del motor el menton baja con el angulo positivo
     for (int d = 0; d < kND; d++) {
         if (!S->cur[d]) continue;
-        const float* tv = TeethOf(d);
-        const bool rot = kDef[d].jaw > 0.0f && fabsf(A) > 1e-5f, mv = teeth > 0.001f && (tv[0] != 0.0f || tv[1] != 0.0f || tv[2] != 0.0f);
-        if (!rot && !mv) continue;
-        Xf x; if (!ReadXf(S->cur[d], x)) continue;
+        const float* tv = TeethOf(d); const float* ov = OpenOf(d);
+        const float op = (std::max)(o, 0.0f);
+        const float mvv0[3] = { tv[0] * teeth + ov[0] * op, tv[1] * teeth + ov[1] * op, tv[2] * teeth + ov[2] * op };
+        const bool rot = kDef[d].jaw > 0.0f && fabsf(A) > 1e-5f, mv = fabsf(mvv0[0]) + fabsf(mvv0[1]) + fabsf(mvv0[2]) > 1e-6f;
+        if (!rot && !mv) { if (d < 18 && S->wHave[d]) Release(*S, d); continue; }   // 18.. = gestos secundarios / parpados (otro dueno)
+        Xf x; if (!ReadBase(*S, d, x)) continue;
         float nq[4] = { x.q[0], x.q[1], x.q[2], x.q[3] }, nt[3] = { x.t[0], x.t[1], x.t[2] };
         if (rot) {
             const float h = 0.5f * A * kDef[d].jaw, sn = sinf(h);
@@ -308,12 +649,11 @@ void ExprBonesFrame(const void* skel) {
             nt[0] = P[0] + rv[0]; nt[1] = P[1] + rv[1]; nt[2] = P[2] + rv[2];
         }
         if (mv) {   // corrimiento en los ejes de la cabeza (x a la izquierda del jugador, y arriba, z adelante) -> modelo
-            const float hv[3] = { tv[0] * teeth, tv[1] * teeth, tv[2] * teeth }; float mvv[3];
+            const float hv[3] = { mvv0[0], mvv0[1], mvv0[2] }; float mvv[3];
             QRot(hr, hv, mvv);
             nt[0] += mvv[0]; nt[1] += mvv[1]; nt[2] += mvv[2];
         }
-        float out[7] = { nq[0], nq[1], nq[2], nq[3], nt[0], nt[1], nt[2] };
-        if (!SafeCopy((char*)S->cur[d] + 16, out, 28)) { s_badWrite.fetch_add(1, std::memory_order_relaxed); continue; }
+        if (!WriteBone(*S, d, x, nq, nt)) { s_badWrite.fetch_add(1, std::memory_order_relaxed); continue; }
         s_applied.fetch_add(1, std::memory_order_relaxed);
     }
 }
@@ -398,17 +738,19 @@ static void Dump(const Skel& S) {
 void ExprBonesPresent() {
     const unsigned fr = s_frame.fetch_add(1) + 1;
     const bool active = fr - s_lastActive.load(std::memory_order_relaxed) < 120;
-    g_cfg.live[350][1] = active ? 1.0f : 0.0f;
+    const bool eyesOn = fr - s_lastEyes.load(std::memory_order_relaxed) < 120;
+    g_cfg.live[350][1] = active ? (eyesOn ? 2.0f : 1.0f) : 0.0f;   // 2 = tambien ojos y parpados por huesos (el shader no los gira)
     static unsigned lastLog = 0;
     if (fr - lastLog < 600) return;   // cada ~10 s
     lastLog = fr;
     std::lock_guard<std::mutex> lk(s_mx);
-    const int calls = s_calls.exchange(0), ap = s_applied.exchange(0), nj = s_noJaw.exchange(0), bw = s_badWrite.exchange(0), st = s_stale.exchange(0);
+    const int calls = s_calls.exchange(0), ap = s_applied.exchange(0), nj = s_noJaw.exchange(0), bw = s_badWrite.exchange(0), st = s_stale.exchange(0), ew = s_eyesW.exchange(0), bl = s_blinks.exchange(0);
     if (!calls) return;
+    int reusedAll = 0; for (int i = 0; i < s_nSk; i++) { reusedAll += s_sk[i].reused; s_sk[i].reused = 0; }
     static int dumped = 0;
     if (dumped < 0) for (int i = 0; i < s_nSk && dumped < 2; i++) if (s_sk[i].n > 0 && fr - s_sk[i].lastFrame < 600) { Dump(s_sk[i]); dumped++; }
     if (s_logs < 40) {
-        char l[1200]; int k = snprintf(l, sizeof l, "boca por huesos: %d pasos por el cuello, %d giros escritos, %d sin mandibula, %d escrituras fallidas, %d rearmados por cambio de cara; esqueletos:", calls, ap, nj, bw, st);
+        char l[1200]; int k = snprintf(l, sizeof l, "boca por huesos: %d pasos por el cuello, %d giros escritos, %d sin mandibula, %d escrituras fallidas, %d rearmados por cambio de cara; ojos por huesos %d (cuadros con parpado cerrado %d); huesos leidos con el giro del mod todavia puesto %d; esqueletos:", calls, ap, nj, bw, st, ew, bl, reusedAll);
         for (int i = 0; i < s_nSk && k < (int)sizeof l - 120; i++) {
             Skel& S = s_sk[i];
             if (fr - S.lastFrame > 600) continue;

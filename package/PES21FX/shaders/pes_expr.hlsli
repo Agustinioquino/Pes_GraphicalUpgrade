@@ -55,7 +55,14 @@ void PesExprApply(float4 p, float3 rest, uint4 I, float4 W, float3 n, float3 t,
   // mascara: de la base del menton para arriba y no la nuca (01/11: antes cortaba en z 0.06..0.095 y dejaba fuera el fondo
   // de la boca / dientes de la boca 3D: labios agrandados y dientes no -> union rara)
   float face = smoothstep(1.580, 1.610, rest.y) * smoothstep(0.000, 0.035, rest.z);
-  float extra = (E.y - 1.0) * PesExprZoneShare(rest, Z) * face;
+  // (02/11, Agustin: captura con la lengua afuera, cortes finos en el menton) con la boca por HUESOS abierta por el mod (abrir la
+  // boca / sacar la lengua / mostrar los dientes) el amplificador agrandaba tambien ese giro (gesto de varios cm), y cada malla
+  // (cara, cara generica, barba) lo calcula con su propia paleta: en el menton no daba igual y se abrian ranuras. Con eso
+  // prendido la zona de la boca no se amplifica (lo del mod ya es el tamano pedido)
+  float4 Rb350a = IniParams.Load(int2(350, 0));
+  float modOpen = (Rb350a.x > 0.5 && Rb350a.y > 0.5) ? saturate(4.0 * max(max(IniParams.Load(int2(347, 0)).x, 0.45 * Rb350a.z), Rb350a.w)) : 0.0;
+  float4 Zm = float4(Z.xyz, Z.w * (1.0 - modOpen));
+  float extra = (E.y - 1.0) * PesExprZoneShare(rest, Zm) * face;
   if (abs(extra) < 0.001) return;
   float bigW = saturate(E.w);
   float cap = max(E.z, 0.0) * 0.01;
@@ -130,14 +137,49 @@ float3 PesTongue(float3 rest, float2 uv, uint jaw)
   o.y += vivo * 0.0002 * lado * s * raiz * sin(6.2832 * 0.35 * t + 1.3);   // se inclina un poco hacia el lado al que va la punta
   o *= T.x * (1.0 - 0.7 * L);   // afuera, el lomo ya no se hunde
   if (L > 0.0) {
-    float sx = pow(s, 1.3);
+    // (02/11 c, Agustin: "mas angosta al sacar y que el slider haga que sacar la lengua sea mas natural, suba y baje")
+    // el slider sigue una curva suave (sale despacio al principio y al final) y la punta recien cae sobre el labio cuando ya
+    // paso los dientes (L > 0.3); afuera la punta sube y baja sola, lento (~0.3 veces por segundo), como una lengua viva
+    // (02/11 e, Agustin: "como una animacion mas realista: empezar con la lengua normal, elevarse y caer de manera natural sobre
+    // el labio") el slider es una animacion en 3 tiempos: 0..0.5 la punta se ELEVA (sube ~5 mm y arquea el medio) mientras
+    // empieza a salir; 0.4..1 sigue saliendo y CAE sobre el labio de abajo; en 1 queda apoyada y relajada
+    float Le = smoothstep(0.05, 1.0, L);                         // cuanto salio (adelante)
+    float Lr = smoothstep(0.0, 0.40, L) * (1.0 - smoothstep(0.50, 0.95, L));   // elevacion (pico en ~0.45)
+    float Ld = smoothstep(0.45, 1.0, L);                         // caida sobre el labio
+    // (02/11 f, Agustin: "evita que la punta de la lengua se deforme") la PUNTA (s > 0.82) se mueve como un bloque: todo se
+    // calcula con s recortado (sc), asi la cara de arriba y la de abajo de la punta (que en uv van a s 0.93..1) reciben el
+    // mismo corrimiento y no se estiran ni se tuercen; el estiramiento queda en el medio de la lengua
+    float sc = min(s, 0.82);
+    float sx = pow(sc, 1.3);
+    float tipW = smoothstep(0.55, 0.82, sc);                     // 0 en el medio .. 1 en la punta (constante en la punta)
     float3 q = 0;
-    q.z += L * 0.030 * sx;                                      // hasta 3 cm afuera en la punta
-    q.y += L * 0.0018 * sin(3.14159 * s) * raiz;                // el medio se levanta para pasar sobre los dientes de abajo
-    q.y -= L * 0.0060 * s * s;                                  // la punta cae sobre el labio de abajo
-    q.x -= rest.x * 0.30 * L * s;                               // se afina hacia la punta
-    q.y -= (rest.y - 1.636) * 0.25 * L * s;                     // y se aplana (menos alto)
-    q.x += L * 0.0012 * s * s * sin(6.2832 * 0.4 * t + 0.5) * saturate(T.y);   // la punta se mueve apenas de lado (movimiento vivo)
+    q.z += Le * 0.0389 * sx;                                    // ~3 cm afuera en la punta
+    q.y += Lr * (0.0068 * sc * sc + 0.0015 * sin(3.81 * sc) * raiz);   // se eleva: la punta sube y el lomo se arquea
+    q.y += Le * 0.0018 * sin(3.81 * sc) * raiz;                // el medio se levanta para pasar sobre los dientes de abajo
+    q.y -= Ld * 0.0085 * sc * sc;                               // la punta cae sobre el labio de abajo
+    // (02/11 d) la punta parte APOYADA en el labio y solo se levanta (0..4 mm) y vuelve a apoyarse
+    float ud = saturate(0.5 + 0.5 * sin(6.2832 * 0.30 * t + 1.1) * 0.8 + 0.2 * sin(6.2832 * 0.71 * t + 0.3));
+    ud = ud * ud;                                               // pasa mas tiempo apoyada que arriba
+    q.y += Ld * 0.0055 * sc * sc * ud;                          // la punta se levanta
+    q.y -= Ld * 0.0010 * sin(3.81 * sc) * ud;                  // el medio acompana al reves (la lengua se curva)
+    // (02/11 d) forma de espatula: el medio se afina 8 %, la punta se abre 12 % (la punta entera por igual)
+    q.x += rest.x * Le * (0.12 * tipW - 0.08 * smoothstep(0.25, 0.55, sc) * (1.0 - tipW));
+    // (02/11) la raiz se estira hacia atras y arriba y se ensancha, tapando la garganta
+    float r0 = 1.0 - smoothstep(0.0, 0.30, s);
+    q.z -= Le * 0.0050 * r0;
+    q.y += Le * 0.0020 * r0;
+    q.x += rest.x * 0.25 * Le * r0;
+    q.y -= (rest.y - 1.636) * 0.15 * Le * sc * (1.0 - tipW);    // el medio se aplana un poco (la punta conserva su forma)
+    q.x += Le * 0.0012 * sc * sc * sin(6.2832 * 0.4 * t + 0.5) * saturate(T.y);   // la punta se mueve apenas de lado
+    // (02/11 d) APOYO en el labio de abajo (lomo fijo respecto de la mandibula: arriba ~ y 1.6255 en z 0.174). El empuje se
+    // calcula sobre la LINEA MEDIA de la lengua (z del centro de la seccion en el reposo + lo que salio), no por vertice: toda
+    // la seccion sube lo mismo y la punta, que es un bloque, sube entera
+    float zc = lerp(0.118, 0.1596, sc) + Le * 0.0389 * sx;
+    float lz = (zc - 0.1745) / 0.0115;
+    float lipTop = 1.6255 - 0.0035 * lz * lz;
+    float inLip = (1.0 - smoothstep(0.8, 1.0, abs(lz))) * Ld;
+    float botC = lerp(1.6200, 1.6235, sc) + o.y + q.y;           // fondo de la seccion en la linea media (reposo aprox + corrimiento)
+    q.y += max(lipTop - botC, 0.0) * inLip;
     o += q;
   }
   return o;
@@ -157,28 +199,31 @@ float2 PesGazeHash2(float n, float seed)
 float2 PesGazeTarget(float n, float seed)
 {
   float2 h = PesGazeHash2(n, seed);
-  // horizontal +-4.5 grados, vertical -3.5..+2.5 (se mira mas hacia abajo que hacia arriba); 1 de cada 4 fijaciones vuelve al centro
-  float2 g = float2((h.x - 0.5) * 2.0 * 0.078, (h.y - 0.58) * 2.0 * 0.052);
-  float back = step(0.75, frac(h.x * 7.1 + h.y * 3.3));
-  return lerp(g, g * 0.25, back);
+  // (02/11, Agustin: "el movimiento de ojos vivos se ve bastante robotico") puntos mas cerca del centro: +-3 grados de lado,
+  // -2.3..+1.6 arriba/abajo; 1 de cada 3 fijaciones vuelve casi al centro (mirar al frente es lo mas comun)
+  float2 g = float2((h.x - 0.5) * 2.0 * 0.052, (h.y - 0.58) * 2.0 * 0.034);
+  float back = step(0.67, frac(h.x * 7.1 + h.y * 3.3));
+  return lerp(g, g * 0.2, back);
 }
 float2 PesGaze(float t, float seed, float amp)
 {
   if (amp <= 0.0) return 0;
-  // fijaciones de largo variable: la cuenta avanza con una tabla de largos 0.45..1.9 s (suma 1.2 s de media)
+  // (02/11) mas natural: fijaciones de 1.0..3.4 s (antes 0.45..1.9: saltaba todo el tiempo), sacada de ~70 ms con curva de
+  // velocidad de ojo real (arranca rapido y frena, sin sobrepaso) y un retoque chico de correccion; sin las ondas rapidas
+  // periodicas (microsacadas de 3-4 Hz) que se veian mecanicas: solo una deriva lenta e irregular
   float tt = t + seed * 23.1;
-  float per = 1.2;
+  float per = 2.2;
   float n = floor(tt / per);
   float h = PesGazeHash2(n, seed + 0.5).x;
-  float start = n * per + h * 0.6;              // cuando salta dentro de esta ventana
+  float start = n * per + h * 1.2;              // cuando salta dentro de esta ventana
   float x = tt - start;                         // tiempo desde la sacada (negativo = todavia la fijacion anterior)
   float2 g0 = PesGazeTarget(n - 1.0, seed), g1 = PesGazeTarget(n, seed);
-  float k = smoothstep(0.0, 0.045, x);          // sacada ~45 ms (con sobrepaso chico)
-  k = k * (1.0 + 0.12 * sin(3.14159 * saturate(x / 0.09)));
-  float2 g = lerp(g0, g1, saturate(k) + (k - saturate(k)));
-  // deriva lenta + microsacadas
-  g += float2(sin(tt * 1.7 + seed) * 0.0030 + sin(tt * 23.0 + seed * 3.0) * 0.0012,
-              sin(tt * 1.3 + seed * 2.0) * 0.0022 + sin(tt * 19.0 + seed) * 0.0010);
+  float k = 1.0 - pow(1.0 - saturate(x / 0.070), 3.0);   // sacada: rapida al principio, frena al llegar
+  k = k * 0.93 + 0.07 * smoothstep(0.10, 0.22, x);        // queda un 7 % corto y lo corrige despues (como el ojo real)
+  float2 g = lerp(g0, g1, k);
+  // deriva lenta e irregular (suma de senos de periodos que no se repiten juntos)
+  g += float2(sin(tt * 0.63 + seed) * 0.0020 + sin(tt * 1.37 + seed * 2.1) * 0.0010,
+              sin(tt * 0.51 + seed * 2.0) * 0.0015 + sin(tt * 1.13 + seed * 0.7) * 0.0008);
   return g * amp;
 }
 // semilla por jugador: la misma cuenta que el parpadeo (tabla de tonos de piel por la posicion del hueso 0 en el mundo)
@@ -230,6 +275,9 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
 {
   float amt = IniParams.Load(int2(342, 0)).w;
   if (amt <= 0.0) return;
+  // (02/11) con 350.y = 2 la DLL parpadea girando los huesos de los parpados (exprbones.cpp): todas las mallas juntas
+  float4 Rb350 = IniParams.Load(int2(350, 0));
+  if (Rb350.x > 0.5 && Rb350.y > 1.5) return;
   uint4 L = g_pesExprLids;
   if (L.x > 31 && L.y > 31) return;
   if (rest.y < 1.670 || rest.y > 1.725 || rest.z < 0.110 || abs(rest.x) > 0.060) return;
@@ -293,8 +341,8 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
 // alrededor de la bisagra de skf_jaw (face_rig 111320: 0, 1.6369, 0.0795; eje x). Se suma a lo que ya haga el juego.
 // 1 = ~23 grados (boca abierta del todo), negativo = cierra un poco. Las comisuras van a la mitad; el resto del peso (labio de
 // arriba, mejillas) no se mueve, asi que la piel entre los dos se estira como en la boca abierta del juego.
-void PesJawApply(float4 p, uint4 I, float4 W, float3 n,
-                 inout float3 pos, inout float3 prev, inout float3 nrm)
+void PesJawApply(float4 p, uint4 I, float4 W, float3 n, float3 t,
+                 inout float3 pos, inout float3 prev, inout float3 nrm, inout float3 tng)
 {
   // (01/11 e, Agustin: "que la nariz se mueva un poquito mas con la boca ... las fosas nasales") 347.y: las alas y las fosas
   // nasales (x 0.6..2.8 cm del medio, y ~1.655) siguen la mitad del gesto del labio de arriba del medio (skf_lip_t_c: sonrisa,
@@ -316,7 +364,10 @@ void PesJawApply(float4 p, uint4 I, float4 W, float3 n,
     }
     du *= Rj.z; dv *= Rj.z;
     float lu = length(du), lv = length(dv);
-    if (lu > 0.006) du *= 0.006 / lu; if (lv > 0.006) dv *= 0.006 / lv;
+    // (02/11, Agustin: "al gritar o sonreir de mas se contrae mucho el labio superior") tope SUAVE de 2.5 mm (antes duro de 6 mm):
+    // los gestos chicos del labio siguen agrandados casi enteros, los grandes (grito, sonrisa amplia: ya grandes en el juego)
+    // casi no suman
+    du *= 1.0 / (1.0 + lu / 0.0025); dv *= 1.0 / (1.0 + lv / 0.0025);
     pos += du; prev += dv;
   }
   if (Rj.y > 0.0 && lt <= 31 && hh <= 31) {
@@ -360,10 +411,11 @@ void PesJawApply(float4 p, uint4 I, float4 W, float3 n,
     uint bit = 1u << j;
     float f = (full & bit) != 0u ? 1.0 : ((half_ & bit) != 0u ? 0.5 : 0.0);
     if (f <= 0.0) continue;
-    if (f < 1.0) { float c2 = cos(A * f), s2 = sin(A * f); float3 dh = PesRotX(q, c2, s2) - q; pos += w * mul(dh, (float3x3)g_vsBone.m_boneMatrices[j]); prev += w * mul(dh, (float3x3)g_vsPrevBone.m_boneMatrices[j]); nrm += w * mul(PesRotX(n, c2, s2) - n, (float3x3)g_vsBone.m_boneMatrices[j]); continue; }
+    if (f < 1.0) { float c2 = cos(A * f), s2 = sin(A * f); float3 dh = PesRotX(q, c2, s2) - q; pos += w * mul(dh, (float3x3)g_vsBone.m_boneMatrices[j]); prev += w * mul(dh, (float3x3)g_vsPrevBone.m_boneMatrices[j]); nrm += w * mul(PesRotX(n, c2, s2) - n, (float3x3)g_vsBone.m_boneMatrices[j]); tng += w * mul(PesRotX(t, c2, s2) - t, (float3x3)g_vsBone.m_boneMatrices[j]); continue; }
     pos  += w * mul(d, (float3x3)g_vsBone.m_boneMatrices[j]);
     prev += w * mul(d, (float3x3)g_vsPrevBone.m_boneMatrices[j]);
     nrm  += w * mul(dn, (float3x3)g_vsBone.m_boneMatrices[j]);
+    tng  += w * mul(PesRotX(t, c, s) - t, (float3x3)g_vsBone.m_boneMatrices[j]);   // (02/11) la tangente gira con la normal (sin esto el normal map de lo que cuelga de la mandibula quedaba torcido)
   }
 }
 // (01/11 i, Agustin: "inyectar mas huesos ... la malla se deforma con mas realismo y la luz se proyecta") MUSCULOS VIRTUALES,

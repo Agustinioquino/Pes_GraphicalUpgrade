@@ -42,7 +42,7 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
       float dz = abs(s.w - z);
       if (dz < dBest) { dBest = dz; nearest = s; }
       if (s.w <= 0.0 || dz > 0.05 * z) continue;
-      float w = exp(-dot(dp, dp) * (1.0 / 4.5));                  // gaussiana de 1.5 pixeles
+      float w = exp(-dot(dp, dp) * (1.0 / 12.5));                 // (02/11 c) gaussiana de 2.5 pixeles (antes 1.5: quedaba ruido en Completa)
       wSum += s.rgb * w; wT += w;
       m1 += s.rgb; m2 += s.rgb * s.rgb; n += 1.0;
     }
@@ -53,11 +53,18 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
     z = cur.w;
     if (z <= 0.0) return 0.0;
     // vecinos de este cuadro (3x3, misma superficie)
+    // (02/11) y el valor de este cuadro filtrado con ellos (bilateral gaussiano): cada pixel tiene 7-8 muestras y las del anillo lejano
+    // valen mucho (un cartel o un reflector) -> puntos blancos sueltos que cambian cada cuadro ("el rebote vibra mucho", Agustin)
+    float3 fS = 0; float fW = 0;
+    float fStr = z > 30.0 ? 2.0 : 1.0;   // (02/11 b) lejos (camara alejada) el filtro abarca el doble: alli un pixel es medio metro de cancha
     [unroll] for (int y = -1; y <= 1; y++) [unroll] for (int x = -1; x <= 1; x++) {
-      float4 s = inCur.SampleLevel(sPoint, uv + float2(x, y) * tx, 0);
+      float4 s = inCur.SampleLevel(sPoint, uv + float2(x, y) * tx * fStr, 0);
       if (abs(s.w - z) > 0.05 * z) continue;
       m1 += s.rgb; m2 += s.rgb * s.rgb; n += 1.0;
+      float w = exp(-(x * x + y * y) * 0.5);
+      fS += s.rgb * w; fW += w;
     }
+    cur.rgb = fS / max(fW, 1e-4);
   }
   m1 /= max(n, 1.0); m2 /= max(n, 1.0);
   if (recon) tx = 1.0 / float2(W * 2.0, H * 2.0);                // la historia esta a resolucion completa
@@ -70,6 +77,9 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   float cw = dot(q[3], hp);
   float4 P153 = IniParams.Load(int2(153, 0));
   float frames = clamp(P153.z > 0 ? P153.z : 12.0, 2.0, 40.0);
+  frames = min(frames * lerp(1.0, 2.0, saturate((z - 20.0) / 40.0)) * (recon ? 1.5 : 1.0), 40.0);   // (02/11 b) lejos se mueve poco en pantalla: mas historia
+  // (02/11 c) sin puntos sueltos: el valor de este cuadro no pasa de la media de los vecinos + 1 desvio
+  cur.rgb = min(cur.rgb, m1 + sd);
   // (23/10) sin historia valida (corte de camara, algo que aparece): en vez del valor de 8 muestras de este cuadro (ruidoso:
   // se veia "recalcular" el rebote en cada corte) se arranca del promedio de los vecinos de la misma superficie
   float a = 0.3; bool hasHist = false;

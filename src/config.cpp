@@ -589,6 +589,8 @@ void KeyActionUnlocked(KeyBind& k, int action) {
 }
 
 void PollKeys(bool focused) {
+    bool reload = false;   // (2/11) F10: recargar PES21FX.ini + shaders fuera del mutex (LoadConfig lo toma)
+  {
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     bool ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
     bool alt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
@@ -602,6 +604,7 @@ void PollKeys(bool focused) {
             Log("tecla: %s", k.name.c_str());   // (1/11) para ver en el log que la combinacion disparo
             if (!k.run.empty()) {
                 if (Lower(k.run).find("resetsweat") != std::string::npos) s_matchStart = Now();
+                if (Lower(k.run).find("reloadconfig") != std::string::npos) reload = true;
             }
             switch (k.type) {
             case KeyBind::Toggle: k.active = !k.active; ApplyAssign(k, k.active, -1); break;
@@ -611,6 +614,10 @@ void PollKeys(bool focused) {
             }
         } else if (release && k.type == KeyBind::Hold) ApplyAssign(k, false, -1);
     }
+  }
+    // (2/11) hasta hoy F10 no hacia nada en la DLL (el "config_reload" era de 3DMigoto): los cambios del ini en vivo solo
+    // entraban con el boton "Recargar config" del menu. Ahora [KeyPESReloadConfig] (F10 solo) hace lo mismo que el boton.
+    if (reload) { LoadConfig(); ReloadShaders(); Log("config: recargada con la tecla (F10)"); }
 }
 
 std::atomic<int> g_matchGen{0};

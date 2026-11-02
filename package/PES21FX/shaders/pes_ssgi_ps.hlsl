@@ -46,6 +46,9 @@ float2 UVofV(float3 P) {
 float3 ToWorldDir(float3 v) { return float3(dot(v, float3(c[8].x, c[9].x, c[10].x)), dot(v, float3(c[8].y, c[9].y, c[10].y)), dot(v, float3(c[8].z, c[9].z, c[10].z))); }
 
 // (01/11) devuelve rgb = luz x factor de forma, a = factor de forma (para no pasar del 100 % del hemisferio al sumar)
+// (02/11 b) tope del factor de forma de una muestra: 0.35 cerca; menor en el anillo lejano de los pixeles lejanos (camara alejada),
+// donde 4 muestras con areas enormes caian en carteles o reflectores y salian puntos que vibraban (Agustin: "pasa cuando la camara se aleja")
+static float g_ffCap = 0.35;
 float4 SampleV2(float2 uv, float2 uvS, float3 Pc, float3 Nc, float areaPx, bool skipTurf) {
   if (any(uvS < 0.0) || any(uvS > 1.0)) return 0.0;
   float dS = inDepth.SampleLevel(sPoint, uvS, 0).x;
@@ -78,7 +81,7 @@ float4 SampleV2(float2 uv, float2 uvS, float3 Pc, float3 Nc, float areaPx, bool 
   float area = areaPx * mpp * mpp / cosV;
   float ff = cosC * cosS * area / (3.14159265 * max(dist2, 0.04));
   float3 Ls = inAlb.SampleLevel(sPoint, uvS, 0).xyz * inDif.SampleLevel(sPoint, uvS, 0).xyz;
-  ff = min(ff, 0.35);                                               // una sola muestra nunca aporta mas de un tercio
+  ff = min(ff, g_ffCap);                                               // una sola muestra nunca aporta mas de un tercio
   return float4(Ls * ff, ff);
 }
 
@@ -109,6 +112,7 @@ float4 mainV2(float4 pos, float2 uv, float z0, float Rg, float fr0, float rot, f
     if (rOut > rIn + 4.0) {
       float aFar = 3.14159265 * (rOut * rOut - rIn * rIn) / 4.0;
       float4 accF = 0;
+      g_ffCap = lerp(0.08, 0.2, saturate(rPx / 24.0));   // (02/11 c) tope 0.2 en el anillo lejano (antes 0.35)
       [unroll] for (int j = 0; j < 4; j++) {
         float u = frac((j + 0.5) / 4.0 + fr0 * 0.61);
         float rr = sqrt(rIn * rIn + u * (rOut * rOut - rIn * rIn));
