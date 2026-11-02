@@ -94,7 +94,13 @@ void main(
 
   float3 v0r = v0.xyz;   // (27/10 d) reposo (los poros y el collar del PS lo siguen usando)
   v0.xyz += PesCollarSink(v0r, v1.xyz);   // (27/10 d) base del cuello hundida bajo el torso (y323)
-  v0.xyz += PesTongue(v0r, v5.xy, v3.x);   // (01/11) lengua de la boca 3D (pes_expr.hlsli, fila 342)
+  // (02/11, Agustin: "sacar la lengua no funciona, antes funcionaba") el hueso de la lengua = el de MAS PESO del vertice, no el
+  // primero (si la boca nueva guarda la cabeza primero con peso chico, la lengua se tomaba como cabeza y no se movia)
+  uint tgJ = v3.x; float tgW = v4.x;
+  if (v4.y > tgW) { tgJ = v3.y; tgW = v4.y; }
+  if (v4.z > tgW) { tgJ = v3.z; tgW = v4.z; }
+  if (v4.w > tgW) { tgJ = v3.w; tgW = v4.w; }
+  v0.xyz += PesTongue(v0r, v5.xy, tgJ);   // (01/11) lengua de la boca 3D (pes_expr.hlsli, fila 342)
 
   float3 pesBlinkD = 0;
   r0.x = cmp(g_vsObject.m_useWeightCount.x != 0.000000);
