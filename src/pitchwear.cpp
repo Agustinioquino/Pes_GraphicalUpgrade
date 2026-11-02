@@ -293,7 +293,7 @@ static void PitchFlatPresent() {
         for (int sIdx = 0; sIdx < steps && nb < kMaxPlayers; sIdx++) {
             float a = steps > 1 ? (float)sIdx / (steps - 1) : 1.0f;
             float bx = s_ballPrev[0] + dx * a, bz = s_ballPrev[2] + dz * a;
-            brush[nb][0] = bx / 140.f + 0.5f; brush[nb][1] = bz / 79.f + 0.5f; brush[nb][2] = std::min(0.5f, 0.12f + 9.0f * dt) * kb; brush[nb][3] = 0.21f; nb++;   // (2/11) Agustin: que marque mas al rodar
+            brush[nb][0] = bx / 140.f + 0.5f; brush[nb][1] = bz / 79.f + 0.5f; brush[nb][2] = std::min(0.2f, 0.04f + 2.5f * dt) * kb; brush[nb][3] = 0.21f; nb++;   // (2/11) Agustin: que marque mas al rodar. (2/11 c) antes 0.12 + 9 dt (~0.27 por cuadro): saturaba el rastro y el pasto quedaba 'aplastado todo el tiempo'
         }
         // pelota rapida al ras: algunos recortes de pasto
         float sp = dist / dt;

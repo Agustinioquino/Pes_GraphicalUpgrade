@@ -420,9 +420,11 @@ void main(
       float capE = saturate(0.99 - pesMsk.w) * 0.06 * max(pesH, 0.2) * pesTallE;
       capE = lerp(capE, max(capE, 0.035 * pesTallE), pesPaint);   // (27/10 h) la hoja pintada se queda parada (al menos 3.5 cm)
       r6.y = min(r6.y, capE);
-      float fr = max(saturate(pesSinkG / 0.06), saturate(max(pesMsk.x, pesDif.w) * 1.5) * saturate(P292.y));
+      // (2/11 c) borde suave (smoothstep en vez de un umbral duro: en Alaves / Etihad / Villarreal se veian manchas palidas recortadas sin
+      // hojas en el circulo central) y tope del 80 %: la zona gastada queda con pasto corto y ralo, no un agujero hasta el suelo
+      float fr = max(saturate(pesSinkG / 0.06), smoothstep(0.2, 0.9, max(pesMsk.x, pesDif.w)) * saturate(P292.y));
       fr *= 1.0 - 0.85 * pesPaint;   // (27/10 h) x295: las hojas pintadas no se entierran bajo la linea
-      pesSinkE = fr * 0.063 * pesTallE + (capE < 0.004 ? 0.004 : 0.0);
+      pesSinkE = fr * 0.05 * pesTallE + (capE < 0.004 ? 0.004 : 0.0);
     }
   } else if (pesFarK > 0.0) {
     r6.y = lerp(r6.y, min(v0.y, 0.06 * max(FA2.x, 0.1)), pesFarK);
