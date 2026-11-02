@@ -351,25 +351,16 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr) {
     const bool eyes = S.cur[D_EYE_L] && S.cur[D_EYE_R], lids = S.cur[D_LID_TL] && S.cur[D_LID_TR];
     if (!eyes && !lids) return;
     float hrInv[4]; QConj(hr, hrInv);
-    // el juego mueve los ojos (escenas, mira la pelota): la mirada del mod se aparta (como hacia el shader: 0 con 0.6 grados por cuadro)
-    if (eyes) {
-        float mv = 0.0f;
-        for (int e = 0; e < 2; e++) {
-            Xf x; if (!ReadBase(S, D_EYE_L + e, x)) return;
-            float rq[4], f[3]; static const float Z[3] = { 0.0f, 0.0f, 1.0f };
-            QMul(hrInv, x.q, rq); QRot(rq, Z, f);
-            if (S.eyeHave) { const float a = f[0] - S.eyePrev[e][0], b = f[1] - S.eyePrev[e][1], c = f[2] - S.eyePrev[e][2]; mv = (std::max)(mv, sqrtf(a * a + b * b + c * c)); }
-            memcpy(S.eyePrev[e], f, sizeof f);
-        }
-        S.eyeHave = true;
-        S.gameEye = (std::max)(SStep(0.0026f, 0.0105f, mv), S.gameEye * 0.9f);   // se suelta en ~0.5 s
-    }
+    // (02/11, Agustin: "veo que los ojos vibran"; con la mirada viva en 0 no vibran) el giro relativo sobre lo que deja el juego
+    // vibraba: el juego corrige el ojo desde donde quedo el hueso (control propio de la mirada) y los dos se peleaban cuadro a
+    // cuadro. Ahora el globo se escribe ABSOLUTO: reposo del ojo llevado por la cabeza actual + la mirada del mod, sin leer lo
+    // que dejo el juego (lo que el juego haga con el ojo se pisa entero, sin realimentacion)
     // la animacion facial del juego (habla, festeja): sin parpadeo del mod (la animacion trae el suyo)
     const float anim = (std::max)(HeadSpaceMove(S, D_LIPS_L, hc, hrInv), HeadSpaceMove(S, D_BROW_IL, hc, hrInv));
     const float t = g_cfg.live[157][0];
     const uint64_t hv = (uint64_t)(uintptr_t)S.node * 0x9E3779B97F4A7C15ull;
     const float seed = (float)((hv >> 40) & 0xffffff) / 16777216.0f * 9.7f;
-    float g[2]; Gaze(t, seed, amp * (1.0f - S.gameEye), g);
+    float g[2]; Gaze(t, seed, amp, g);
     const float b = BlinkCurve(t, seed) * blinkAmt * (1.0f - SStep(0.0008f, 0.0015f, anim));
     static const float X[3] = { 1.0f, 0.0f, 0.0f }, Y[3] = { 0.0f, 1.0f, 0.0f };
     float ax[3], ay[3]; QRot(hr, X, ax); QRot(hr, Y, ay);
@@ -377,7 +368,12 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr) {
     bool wrote = false;
     if (eyes) {
         float qy[4], qp[4], r[4]; AxisAngle(ay, g[0], qy); AxisAngle(ax, -g[1], qp); QMul(qy, qp, r);
-        for (int e = 0; e < 2; e++) if (RotInPlace(S, D_EYE_L + e, r)) wrote = true; else s_badWrite.fetch_add(1, std::memory_order_relaxed);
+        for (int e = 0; e < 2; e++) {
+            const int d = D_EYE_L + e;
+            float hq[4], nq[4]; QMul(hr, S.rest[d].q, hq); QMul(r, hq, nq);
+            Xf x; if (!ReadXf(S.cur[d], x)) { s_badWrite.fetch_add(1, std::memory_order_relaxed); continue; }
+            if (SafeCopy((char*)S.cur[d] + 16, nq, 16)) wrote = true; else s_badWrite.fetch_add(1, std::memory_order_relaxed);
+        }
     }
     if (lids) {
         // de arriba: el parpadeo lo baja 0.50 rad (~29 grados; el shader usaba lo mismo) y acompana la mirada vertical
