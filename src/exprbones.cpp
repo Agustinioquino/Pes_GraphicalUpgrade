@@ -150,7 +150,11 @@ struct Skel {
     float eyePrev[2][3] = {}; bool eyeHave = false; float gameEye = 0.0f;
     // (02/11) lo ultimo que se escribio en cada hueso de ojos / parpados (q escrito y giro aplicado): si el juego no lo reescribe
     // entre cuadros, se deshace el giro anterior antes de aplicar el nuevo (si no, se acumularia y el ojo daria vueltas)
-    float wq[kND][4] = {}, wr[kND][4] = {}; bool wHave[kND] = {};
+    // (02/11 b, Agustin: "las barbas al abrir la boca tambien vibran") vale para TODOS los huesos que se escriben: se guarda la base
+    // (lo que dejo el juego) y lo escrito; si al cuadro siguiente se lee lo escrito (el juego no reescribio, o el Eval del
+    // cuello paso dos veces en el mismo cuadro) se parte de la base guardada y no se gira dos veces
+    float wq[kND][4] = {}, wt[kND][3] = {}, bq[kND][4] = {}, bt[kND][3] = {}; bool wHave[kND] = {};
+    int reused = 0;
 };
 static const int kMaxSkel = 48;
 static std::mutex s_mx;
@@ -322,19 +326,27 @@ static float BlinkCurve(float t, float seed) {
 static bool ReadBase(Skel& S, int d, Xf& x) {
     if (!ReadXf(S.cur[d], x)) return false;
     if (S.wHave[d]) {
-        const float* w = S.wq[d];
-        const float dd = fabsf(x.q[0] - w[0]) + fabsf(x.q[1] - w[1]) + fabsf(x.q[2] - w[2]) + fabsf(x.q[3] - w[3]);
-        if (dd < 1e-5f) { float c[4], b[4]; QConj(S.wr[d], c); QMul(c, x.q, b); memcpy(x.q, b, sizeof b); }
+        const float* w = S.wq[d]; const float* u = S.wt[d];
+        const float dd = fabsf(x.q[0] - w[0]) + fabsf(x.q[1] - w[1]) + fabsf(x.q[2] - w[2]) + fabsf(x.q[3] - w[3])
+                       + fabsf(x.t[0] - u[0]) + fabsf(x.t[1] - u[1]) + fabsf(x.t[2] - u[2]);
+        if (dd < 2e-6f) { memcpy(x.q, S.bq[d], sizeof S.bq[d]); memcpy(x.t, S.bt[d], sizeof S.bt[d]); S.reused++; }
     }
+    return true;
+}
+// escribe q / t nuevos y recuerda la base de la que salieron
+static bool WriteBone(Skel& S, int d, const Xf& base, const float* nq, const float* nt) {
+    float out[7] = { nq[0], nq[1], nq[2], nq[3], nt[0], nt[1], nt[2] };
+    if (!SafeCopy((char*)S.cur[d] + 16, out, 28)) return false;
+    Xf chk; if (ReadXf(S.cur[d], chk)) { memcpy(S.wq[d], chk.q, sizeof chk.q[0] * 4); memcpy(S.wt[d], chk.t, sizeof chk.t[0] * 3); }
+    else { memcpy(S.wq[d], nq, 4 * sizeof(float)); memcpy(S.wt[d], nt, 3 * sizeof(float)); }
+    memcpy(S.bq[d], base.q, sizeof S.bq[d]); memcpy(S.bt[d], base.t, sizeof S.bt[d]); S.wHave[d] = true;
     return true;
 }
 // gira la transformacion de un hueso alrededor de su propia posicion: q nuevo = r * q base (r en el espacio del modelo)
 static bool RotInPlace(Skel& S, int d, const float* r) {
     Xf x; if (!ReadBase(S, d, x)) return false;
     float nq[4]; QMul(r, x.q, nq);
-    if (!SafeCopy((char*)S.cur[d] + 16, nq, 16)) return false;
-    memcpy(S.wq[d], nq, sizeof nq); memcpy(S.wr[d], r, 4 * sizeof(float)); S.wHave[d] = true;
-    return true;
+    return WriteBone(S, d, x, nq, x.t);
 }
 static void AxisAngle(const float* ax, float a, float* q) { const float s = sinf(0.5f * a); q[0] = ax[0] * s; q[1] = ax[1] * s; q[2] = ax[2] * s; q[3] = cosf(0.5f * a); }
 // posicion de un hueso en los ejes de la cabeza, actual menos reposo (metros): cuanto lo movio la animacion facial
@@ -416,7 +428,7 @@ void ExprBonesFrame(const void* skel) {
         Build(*S, skel); S->rebuilds++;
         return;
     }
-    Xf jc; if (!ReadXf(S->cur[D_JAW], jc)) { Build(*S, skel); S->rebuilds++; return; }
+    Xf jc; if (!ReadBase(*S, D_JAW, jc)) { Build(*S, skel); S->rebuilds++; return; }
     s_lastActive.store(fr, std::memory_order_relaxed);
     float deg; if (JawAngle(*S, jc, &deg)) { S->angMin = (std::min)(S->angMin, deg); S->angMax = (std::max)(S->angMax, deg); S->angN++; }
     if (!on) return;
@@ -434,7 +446,7 @@ void ExprBonesFrame(const void* skel) {
         const float* tv = TeethOf(d);
         const bool rot = kDef[d].jaw > 0.0f && fabsf(A) > 1e-5f, mv = teeth > 0.001f && (tv[0] != 0.0f || tv[1] != 0.0f || tv[2] != 0.0f);
         if (!rot && !mv) continue;
-        Xf x; if (!ReadXf(S->cur[d], x)) continue;
+        Xf x; if (!ReadBase(*S, d, x)) continue;
         float nq[4] = { x.q[0], x.q[1], x.q[2], x.q[3] }, nt[3] = { x.t[0], x.t[1], x.t[2] };
         if (rot) {
             const float h = 0.5f * A * kDef[d].jaw, sn = sinf(h);
@@ -448,8 +460,7 @@ void ExprBonesFrame(const void* skel) {
             QRot(hr, hv, mvv);
             nt[0] += mvv[0]; nt[1] += mvv[1]; nt[2] += mvv[2];
         }
-        float out[7] = { nq[0], nq[1], nq[2], nq[3], nt[0], nt[1], nt[2] };
-        if (!SafeCopy((char*)S->cur[d] + 16, out, 28)) { s_badWrite.fetch_add(1, std::memory_order_relaxed); continue; }
+        if (!WriteBone(*S, d, x, nq, nt)) { s_badWrite.fetch_add(1, std::memory_order_relaxed); continue; }
         s_applied.fetch_add(1, std::memory_order_relaxed);
     }
 }
@@ -542,10 +553,11 @@ void ExprBonesPresent() {
     std::lock_guard<std::mutex> lk(s_mx);
     const int calls = s_calls.exchange(0), ap = s_applied.exchange(0), nj = s_noJaw.exchange(0), bw = s_badWrite.exchange(0), st = s_stale.exchange(0), ew = s_eyesW.exchange(0), bl = s_blinks.exchange(0);
     if (!calls) return;
+    int reusedAll = 0; for (int i = 0; i < s_nSk; i++) { reusedAll += s_sk[i].reused; s_sk[i].reused = 0; }
     static int dumped = 0;
     if (dumped < 0) for (int i = 0; i < s_nSk && dumped < 2; i++) if (s_sk[i].n > 0 && fr - s_sk[i].lastFrame < 600) { Dump(s_sk[i]); dumped++; }
     if (s_logs < 40) {
-        char l[1200]; int k = snprintf(l, sizeof l, "boca por huesos: %d pasos por el cuello, %d giros escritos, %d sin mandibula, %d escrituras fallidas, %d rearmados por cambio de cara; ojos por huesos %d (cuadros con parpado cerrado %d); esqueletos:", calls, ap, nj, bw, st, ew, bl);
+        char l[1200]; int k = snprintf(l, sizeof l, "boca por huesos: %d pasos por el cuello, %d giros escritos, %d sin mandibula, %d escrituras fallidas, %d rearmados por cambio de cara; ojos por huesos %d (cuadros con parpado cerrado %d); huesos leidos con el giro del mod todavia puesto %d; esqueletos:", calls, ap, nj, bw, st, ew, bl, reusedAll);
         for (int i = 0; i < s_nSk && k < (int)sizeof l - 120; i++) {
             Skel& S = s_sk[i];
             if (fr - S.lastFrame > 600) continue;
