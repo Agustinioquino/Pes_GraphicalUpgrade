@@ -433,7 +433,8 @@ void main(
             float3 skyB = float3(0.80, 0.93, 1.18);
             { float4 SKb = IniParams.Load(int2(150,0)); float lumB = dot(sunC, float3(0.3, 0.5, 0.2));
               if (SKb.y > 0.01 && lumB > 1e-4) { float3 t = (sunC / lumB) * SKb.xyz; skyB = t / max(dot(t, float3(0.3, 0.5, 0.2)), 1e-4); } }
-            skyTint = lerp(float3(1, 1, 1), skyB, shF * 0.2 / max(shadeB, 1e-3));
+            // (02/11 b) Agustin: "le falta un toque mas verde al rebote en las sombras": el cielo tine a la mitad (el verde del cesped manda)
+            skyTint = lerp(float3(1, 1, 1), skyB, 0.5 * shF * 0.2 / max(shadeB, 1e-3));
           }
         }
       }

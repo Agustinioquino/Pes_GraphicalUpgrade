@@ -56,8 +56,9 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
     // (02/11) y el valor de este cuadro filtrado con ellos (bilateral gaussiano): cada pixel tiene 7-8 muestras y las del anillo lejano
     // valen mucho (un cartel o un reflector) -> puntos blancos sueltos que cambian cada cuadro ("el rebote vibra mucho", Agustin)
     float3 fS = 0; float fW = 0;
+    float fStr = z > 30.0 ? 2.0 : 1.0;   // (02/11 b) lejos (camara alejada) el filtro abarca el doble: alli un pixel es medio metro de cancha
     [unroll] for (int y = -1; y <= 1; y++) [unroll] for (int x = -1; x <= 1; x++) {
-      float4 s = inCur.SampleLevel(sPoint, uv + float2(x, y) * tx, 0);
+      float4 s = inCur.SampleLevel(sPoint, uv + float2(x, y) * tx * fStr, 0);
       if (abs(s.w - z) > 0.05 * z) continue;
       m1 += s.rgb; m2 += s.rgb * s.rgb; n += 1.0;
       float w = exp(-(x * x + y * y) * 0.5);
@@ -76,6 +77,7 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   float cw = dot(q[3], hp);
   float4 P153 = IniParams.Load(int2(153, 0));
   float frames = clamp(P153.z > 0 ? P153.z : 12.0, 2.0, 40.0);
+  frames = min(frames * lerp(1.0, 2.0, saturate((z - 20.0) / 40.0)), 40.0);   // (02/11 b) lejos se mueve poco en pantalla: mas historia
   // (23/10) sin historia valida (corte de camara, algo que aparece): en vez del valor de 8 muestras de este cuadro (ruidoso:
   // se veia "recalcular" el rebote en cada corte) se arranca del promedio de los vecinos de la misma superficie
   float a = 0.3; bool hasHist = false;
