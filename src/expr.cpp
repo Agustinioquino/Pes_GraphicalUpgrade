@@ -38,6 +38,7 @@ struct FaceMesh {
     const char* why = "";
     float hc[3] = {}; bool hcOk = false;   // (1/11) centro de la cara en espacio del modelo (vertices que pesan en sk_head): para "seguir la cara"
     UINT lastFrame = 0;   // (01/11) ultimo cuadro en que se dibujo (para echar las mallas viejas sin vaciar toda la tabla)
+    int lids[4] = { -1, -1, -1, -1 }; UINT lidCap = 0;   // (02/11 h) parpados en la paleta y ultimo cuadro en que se leyo la paleta
 };
 std::mutex s_mx;
 std::unordered_map<uint64_t, FaceMesh*> s_meshes;
@@ -330,6 +331,7 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
             }
         }
         m->cb = MakeCB((UINT)m->head, (UINT)mx, (UINT)m->id, eye ? 2u : (mouth ? 1u : 0u), lids, jawFull, jawHalf, lipTop, lipUp, eye ? eyes : nullptr, mus);
+        for (int i = 0; i < 4; i++) m->lids[i] = lids[i];
         ReleaseIA(m);
         if (!m->cb) { m->state = 4; m->why = "sin cbuffer"; s_hist[3]++; return; }
         m->state = 3; s_hist[m->head <= 1 ? m->head : m->head > 31 ? 3 : 2]++;
@@ -352,6 +354,7 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
 }   // namespace
 
 // en cada dibujo con la regla "expr = <slot>" (VS de la cabeza / cara): cbuffer de la malla para el VS (null = no enlazar)
+static void LidCapture(ID3D11DeviceContext* c, FaceMesh* m);   // (02/11 h) abajo
 ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, const float** headCentroid, int* headIdx) {
     if (headCentroid) *headCentroid = nullptr;
     if (!g_dev.dev) return nullptr;
@@ -369,7 +372,10 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
     auto it = s_meshes.find(key);
     if (it != s_meshes.end()) {
         rel(); FaceMesh* m = it->second; m->lastFrame = s_frame;
-        if (m->state == 3 && m->cb) { s_binds++; if (headCentroid && m->hcOk && m->nv >= 300) { *headCentroid = m->hc; if (headIdx) *headIdx = m->head; } return m->cb; }
+        if (m->state == 3 && m->cb) {
+            s_binds++;
+            if (m->head <= 31 && (m->lids[0] >= 0 || m->lids[1] >= 0) && s_frame - m->lidCap >= 120) { m->lidCap = s_frame; LidCapture(c, m); }
+            if (headCentroid && m->hcOk && m->nv >= 300) { *headCentroid = m->hc; if (headIdx) *headIdx = m->head; } return m->cb; }
         if (m->state == 4) s_bindsDisc++; else s_bindsWait++;
         s_bindsNone++; return s_none;
     }
@@ -419,6 +425,59 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
     s_meshes[key] = m;
     if (m->state == 0) s_pending.push_back(m); else { ReleaseIA(m); s_hist[3]++; }
     s_bindsNew++; s_bindsNone++; return s_none;
+}
+
+// ---- (02/11 h, Agustin: "los parpados no toman todos los modelos del rostro") LECTURA DE LA PALETA por malla: cada ~2 s se
+// copia la paleta (b6) de cada malla con parpados y en el Present se mide cuanto esta girado cada parpado respecto de sk_head
+// (grados alrededor del eje x de la cabeza, + = cierra el de arriba). Si las mallas de la misma cara dan angulos distintos en el
+// mismo momento, el giro de los huesos no llega igual a todas (y se sabe cuales).
+namespace {
+struct LidCap { ID3D11Buffer* st = nullptr; int id = 0, nv = 0, head = 0, lids[4] = {}; UINT frame = 0; int tries = 0; };
+std::mutex s_lmx; std::vector<LidCap> s_lcaps; int s_lidLogs = 0; double s_lidLogT = 0;
+}
+static void LidCapture(ID3D11DeviceContext* c, FaceMesh* m) {   // con s_mx tomado
+    if (s_lidLogs >= 400) return;
+    ID3D11DeviceContext1* c1 = nullptr;
+    if (FAILED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) || !c1) return;
+    ID3D11Buffer* b = nullptr; UINT first = 0, num = 0;
+    c1->VSGetConstantBuffers1(6, 1, &b, &first, &num); c1->Release();
+    if (!b) return;
+    D3D11_BUFFER_DESC d; b->GetDesc(&d);
+    const UINT a = first * 16, len = 32 * 48;
+    if (a + len > d.ByteWidth) { b->Release(); return; }
+    ID3D11Buffer* st = Staging(len);
+    if (st) {
+        D3D11_BOX bx = { a, 0, 0, a + len, 1, 1 }; c->CopySubresourceRegion(st, 0, 0, 0, 0, b, 0, &bx);
+        LidCap L; L.st = st; L.id = m->id; L.nv = (int)m->nv; L.head = m->head; L.frame = s_frame; for (int i = 0; i < 4; i++) L.lids[i] = m->lids[i];
+        std::lock_guard<std::mutex> lk(s_lmx); if (s_lcaps.size() < 64) s_lcaps.push_back(L); else st->Release();
+    }
+    b->Release();
+}
+static void LidPresent(ID3D11DeviceContext* imm) {
+    std::lock_guard<std::mutex> lk(s_lmx);
+    char line[1024]; int n = 0; line[0] = 0;
+    for (size_t i = 0; i < s_lcaps.size();) {
+        LidCap& L = s_lcaps[i];
+        D3D11_MAPPED_SUBRESOURCE mp; HRESULT hr = imm->Map(L.st, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mp);
+        if (hr == DXGI_ERROR_WAS_STILL_DRAWING && ++L.tries < 60) { i++; continue; }
+        if (SUCCEEDED(hr)) {
+            const float* r = (const float*)mp.pData;
+            auto R = [&](int s, int k, int j) { return r[s * 12 + k * 4 + j]; };
+            char part[160]; int pn = snprintf(part, sizeof part, " | malla %d (%d v, cuadro %u):", L.id, L.nv, L.frame);
+            static const char* nm[4] = { "arriba izq", "arriba der", "abajo izq", "abajo der" };
+            for (int q = 0; q < 4; q++) {
+                const int s = L.lids[q]; if (s < 0 || s > 31) continue;
+                float D[3][3];   // D = Rhead^T * Rlid
+                for (int x = 0; x < 3; x++) for (int y = 0; y < 3; y++) { float v = 0; for (int k = 0; k < 3; k++) v += R(L.head, k, x) * R(s, k, y); D[x][y] = v; }
+                const float ang = atan2f(D[2][1], D[1][1]) * 57.29578f;
+                if (pn < (int)sizeof part - 24) pn += snprintf(part + pn, sizeof part - pn, " %s[%d] %.1f", nm[q], s, ang);
+            }
+            imm->Unmap(L.st, 0);
+            if (n + pn < (int)sizeof line - 1) { memcpy(line + n, part, (size_t)pn + 1); n += pn; }
+        }
+        L.st->Release(); s_lcaps.erase(s_lcaps.begin() + i);
+    }
+    if (n > 0 && s_lidLogs < 400 && Now() - s_lidLogT > 1.5) { s_lidLogT = Now(); s_lidLogs++; Log("parpados por malla (giro leido de la paleta, grados; mismas caras deberian coincidir):%s", line); }
 }
 
 // ---- (1/11) posicion de la cabeza en el mundo para "seguir la cara" (freecam.cpp) ----
@@ -477,6 +536,7 @@ static void HeadPresent(ID3D11DeviceContext* imm) {
 void ExprPresent() {
     ID3D11DeviceContext* imm = g_dev.imm; if (!imm) return;
     HeadPresent(imm);
+    LidPresent(imm);   // (02/11 h)
     ExprBonesPresent();   // (01/11) boca por huesos: estado para el shader y resumen
     {   // con el candado tomado: los dibujos (otros hilos) leen state / cb y pueden vaciar la tabla. Los Map son DO_NOT_WAIT.
         std::lock_guard<std::mutex> lk(s_mx);
