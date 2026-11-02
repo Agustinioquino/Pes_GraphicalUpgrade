@@ -99,7 +99,12 @@ float3 PesTongue(float3 rest, float2 uv, uint jaw)
   if (uv.x < 0.295 || uv.x > 0.715 || uv.y < 0.668 || uv.y > 0.99) return 0;
   if (abs(rest.x) > 0.022 || rest.y < 1.615 || rest.y > 1.652 || rest.z < 0.110 || rest.z > 0.165) return 0;
   float4 T = IniParams.Load(int2(342, 0));
-  if (T.x <= 0.0) return 0;
+  // (02/11, Agustin: "un slider para sacar la lengua de forma realista") 350.z: la lengua se estira hacia afuera desde la raiz
+  // (que queda pegada a la garganta), pasa por encima de los dientes de abajo, se afina y la punta cae sobre el labio de
+  // abajo. Sigue a la mandibula (la DLL abre la boca al menos 0.45 x 350.z cuando la boca va por huesos).
+  float L = saturate(IniParams.Load(int2(350, 0)).z);
+  if (T.x <= 0.0 && L <= 0.0) return 0;
+  T.x = max(T.x, 0.0);
   // apertura: la punta de la lengua llevada por la mandibula contra llevada por la cabeza
   float4 tip = float4(0.0, 1.6274, 0.1596, 1.0);
   float J = saturate(length(mul(tip, g_vsBone.m_boneMatrices[jaw]) - mul(tip, g_vsBone.m_boneMatrices[head])) / 0.012);   // (01/11 b) se mueve ya con la boca a medio abrir
@@ -123,7 +128,19 @@ float3 PesTongue(float3 rest, float2 uv, uint jaw)
   o.z += vivo * 0.0003 * s * s * sin(6.2832 * 0.5 * t + 0.7);   // la punta va y viene
   o.x += vivo * 0.0005 * s * s * sin(6.2832 * 0.35 * t + 1.3);
   o.y += vivo * 0.0002 * lado * s * raiz * sin(6.2832 * 0.35 * t + 1.3);   // se inclina un poco hacia el lado al que va la punta
-  return o * T.x;
+  o *= T.x * (1.0 - 0.7 * L);   // afuera, el lomo ya no se hunde
+  if (L > 0.0) {
+    float sx = pow(s, 1.3);
+    float3 q = 0;
+    q.z += L * 0.030 * sx;                                      // hasta 3 cm afuera en la punta
+    q.y += L * 0.0018 * sin(3.14159 * s) * raiz;                // el medio se levanta para pasar sobre los dientes de abajo
+    q.y -= L * 0.0060 * s * s;                                  // la punta cae sobre el labio de abajo
+    q.x -= rest.x * 0.30 * L * s;                               // se afina hacia la punta
+    q.y -= (rest.y - 1.636) * 0.25 * L * s;                     // y se aplana (menos alto)
+    q.x += L * 0.0012 * s * s * sin(6.2832 * 0.4 * t + 0.5) * saturate(T.y);   // la punta se mueve apenas de lado (movimiento vivo)
+    o += q;
+  }
+  return o;
 }
 
 // (01/11 h, Agustin: "a los ojos les falta vida") MIRADA VIVA, fila 347.w (0 = como el juego, 1 = normal, 2 = inquieto).
@@ -256,7 +273,9 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
     float A = (up ? 0.50 : -0.10) * (1.0 - g);   // (01/11 d, Agustin: "los ojos se cierran mucho") antes 0.68 / -0.14   // orilla de arriba ~ +27 grados abierta -> ~ -12; la de abajo -22 -> ~ -14
     // angulo total del parpado: parpadeo + seguimiento de la mirada (el de arriba: -gy * 0.65 si mira abajo, -gy * 0.35 arriba;
     // el de abajo sube un poco al mirar abajo). El sentido: A > 0 cierra el de arriba (baja), A < 0 el de abajo (sube).
-    float fu = up ? (gy < 0.0 ? 0.65 : 0.35) : 0.15, fup = up ? (gyp < 0.0 ? 0.65 : 0.35) : 0.15;
+    // (02/11, video de Agustin: ranuras azules bajo el ojo al mover la mirada) el de abajo ya no acompana la mirada: solo se
+    // movia en las mallas donde la DLL encontro el parpado y se separaba de las pestanas / la otra malla del parpado
+    float fu = up ? (gy < 0.0 ? 0.65 : 0.35) : 0.0, fup = up ? (gyp < 0.0 ? 0.65 : 0.35) : 0.0;
     float a1 = A * b + (up ? -gy * fu : gy * fu) * (1.0 - g), a0 = A * bp + (up ? -gyp * fup : gyp * fup) * (1.0 - g);
     float c1 = cos(a1), s1 = sin(a1), c0 = cos(a0), s0 = sin(a0);
     float3 d1 = PesRotX(q, c1, s1) - q, d0 = PesRotX(q, c0, s0) - q;

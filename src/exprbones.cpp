@@ -106,6 +106,27 @@ static const BoneDef kDef[] = {
     { "sk_neck",                 0.0000f, 1.5321f, 0.0335f, 0.0f },
 };
 static const int kND = (int)(sizeof(kDef) / sizeof(kDef[0]));
+// (02/11) "mostrar los dientes" (350.w = 1): corrimiento de cada hueso en metros, ejes de la cabeza (x izquierda del jugador)
+static const float kTeeth[][3] = {
+    { 0, 0, 0 },                    // skf_jaw
+    {  0.0005f, -0.0030f, 0.0004f },  // lip_b_l: el labio de abajo baja y se despega un poco de los dientes
+    { -0.0005f, -0.0030f, 0.0004f },  // lip_b_r
+    {  0.0f,    -0.0035f, 0.0005f },  // lip_b_c
+    { 0, 0, 0 },                    // doublechin
+    {  0.0015f,  0.0008f, -0.0010f }, // lip_s_l: las comisuras se abren y van atras (mueca)
+    { -0.0015f,  0.0008f, -0.0010f }, // lip_s_r
+    { 0, 0, 0 }, { 0, 0, 0 },       // cheek_s
+    {  0.0003f,  0.0030f, 0.0004f },  // lip_t_l: el labio de arriba sube
+    {  0.0f,     0.0035f, 0.0005f },  // lip_t_c
+    { -0.0003f,  0.0030f, 0.0004f },  // lip_t_r
+    {  0.0f,     0.0030f, 0.0005f },  // lip_volume
+    { 0, 0, 0 },                    // nose
+    {  0.0003f,  0.0006f, 0.0f },     // nosewing_l: las alas acompanan un poco
+    { -0.0003f,  0.0006f, 0.0f },     // nosewing_r
+    {  0.0004f,  0.0010f, 0.0f },     // nasolabialfold_t_l
+    { -0.0004f,  0.0010f, 0.0f },     // nasolabialfold_t_r
+};
+static const float* TeethOf(int d) { static const float z[3] = { 0, 0, 0 }; return d < (int)(sizeof(kTeeth) / sizeof(kTeeth[0])) ? kTeeth[d] : z; }
 enum { D_JAW = 0, D_HEAD = kND - 2 };
 
 struct Skel {
@@ -243,7 +264,11 @@ void ExprBonesFrame(const void* skel) {
     s_calls.fetch_add(1, std::memory_order_relaxed);
     const unsigned fr = s_frame.load(std::memory_order_relaxed);
     const bool on = g_cfg.live[350][0] > 0.5f && g_cfg.live[340][0] > 0.5f;
-    const float o = std::clamp(g_cfg.live[347][0], -0.25f, 1.0f);
+    // (02/11, Agustin: "sacar la lengua de forma realista y mostrar mas los dientes") 350.z sacar la lengua (la lengua la
+    // estira el shader, PesTongue; para que salga la boca se abre al menos 0.45 x 350.z), 350.w mostrar los dientes (los
+    // labios se separan de los dientes: el de arriba sube, el de abajo baja, las comisuras se abren)
+    const float tongueOut = std::clamp(g_cfg.live[350][2], 0.0f, 1.0f), teeth = std::clamp(g_cfg.live[350][3], 0.0f, 1.5f);
+    const float o = (std::max)(std::clamp(g_cfg.live[347][0], -0.25f, 1.0f), 0.45f * tongueOut);
     std::lock_guard<std::mutex> lk(s_mx);
     Skel* S = Get(skel);
     S->lastFrame = fr;
@@ -260,7 +285,7 @@ void ExprBonesFrame(const void* skel) {
     Xf jc; if (!ReadXf(S->cur[D_JAW], jc)) { Build(*S, skel); S->rebuilds++; return; }
     s_lastActive.store(fr, std::memory_order_relaxed);
     float deg; if (JawAngle(*S, jc, &deg)) { S->angMin = (std::min)(S->angMin, deg); S->angMax = (std::max)(S->angMax, deg); S->angN++; }
-    if (!on || fabsf(o) < 0.001f) return;
+    if (!on || (fabsf(o) < 0.001f && teeth < 0.001f)) return;
     // eje X de la cabeza actual (el reposo del skl mira a +z, x a la izquierda) y pivote = mandibula actual
     Xf hc; if (!ReadXf(S->cur[D_HEAD], hc)) return;
     float c[4], hr[4]; QConj(S->rest[D_HEAD].q, c); QMul(hc.q, c, hr);
@@ -269,13 +294,25 @@ void ExprBonesFrame(const void* skel) {
     const float P[3] = { jc.t[0], jc.t[1], jc.t[2] };
     const float A = 0.40f * o;    // (02/11, Agustin: "esta al reves") con el signo negativo la boca se cerraba al subir el slider: en el cuaternion del motor el menton baja con el angulo positivo
     for (int d = 0; d < kND; d++) {
-        if (kDef[d].jaw <= 0.0f || !S->cur[d]) continue;
+        if (!S->cur[d]) continue;
+        const float* tv = TeethOf(d);
+        const bool rot = kDef[d].jaw > 0.0f && fabsf(A) > 1e-5f, mv = teeth > 0.001f && (tv[0] != 0.0f || tv[1] != 0.0f || tv[2] != 0.0f);
+        if (!rot && !mv) continue;
         Xf x; if (!ReadXf(S->cur[d], x)) continue;
-        const float h = 0.5f * A * kDef[d].jaw, sn = sinf(h);
-        const float qr[4] = { ax[0] * sn, ax[1] * sn, ax[2] * sn, cosf(h) };
-        float v[3] = { x.t[0] - P[0], x.t[1] - P[1], x.t[2] - P[2] }, rv[3], nq[4];
-        QRot(qr, v, rv); QMul(qr, x.q, nq);
-        float out[7] = { nq[0], nq[1], nq[2], nq[3], P[0] + rv[0], P[1] + rv[1], P[2] + rv[2] };
+        float nq[4] = { x.q[0], x.q[1], x.q[2], x.q[3] }, nt[3] = { x.t[0], x.t[1], x.t[2] };
+        if (rot) {
+            const float h = 0.5f * A * kDef[d].jaw, sn = sinf(h);
+            const float qr[4] = { ax[0] * sn, ax[1] * sn, ax[2] * sn, cosf(h) };
+            float v[3] = { x.t[0] - P[0], x.t[1] - P[1], x.t[2] - P[2] }, rv[3];
+            QRot(qr, v, rv); QMul(qr, x.q, nq);
+            nt[0] = P[0] + rv[0]; nt[1] = P[1] + rv[1]; nt[2] = P[2] + rv[2];
+        }
+        if (mv) {   // corrimiento en los ejes de la cabeza (x a la izquierda del jugador, y arriba, z adelante) -> modelo
+            const float hv[3] = { tv[0] * teeth, tv[1] * teeth, tv[2] * teeth }; float mvv[3];
+            QRot(hr, hv, mvv);
+            nt[0] += mvv[0]; nt[1] += mvv[1]; nt[2] += mvv[2];
+        }
+        float out[7] = { nq[0], nq[1], nq[2], nq[3], nt[0], nt[1], nt[2] };
         if (!SafeCopy((char*)S->cur[d] + 16, out, 28)) { s_badWrite.fetch_add(1, std::memory_order_relaxed); continue; }
         s_applied.fetch_add(1, std::memory_order_relaxed);
     }
@@ -384,8 +421,17 @@ void ExprBonesPresent() {
                 for (int d = 0; d < kND && j < (int)sizeof m - 40; d++) if (S.cur[d]) j += snprintf(m + j, sizeof m - j, " %s=%d", kDef[d].name, S.idx[d]);
                 Log("%s", m);
                 if (S.face) {   // todos los nombres del esqueleto de la cara (una vez): para la pose facial propia
-                    j = snprintf(m, sizeof m, "boca por huesos: esqueleto de la cara %p (%d huesos):", S.face, S.fn);
-                    for (int b = 0; b < S.fn && j < (int)sizeof m - 70; b++) { char nm[64]; Xf r; const char* bone = S.fbones + (size_t)b * 0xc0; if (!BoneName(bone, nm, sizeof nm)) snprintf(nm, sizeof nm, "?"); if (ReadXf(bone + 0x40, r)) j += snprintf(m + j, sizeof m - j, " %d:%s(%.3f %.3f %.3f)", b, nm, r.t[0], r.t[1], r.t[2]); else j += snprintf(m + j, sizeof m - j, " %d:%s", b, nm); }
+                    // (02/11) para separar el globo del ojo del parpado (mismo pivote): por hueso indice / padre / reposo (traslacion y
+                    // cuaternion) / hash (+ 0x10), en varias lineas
+                    j = snprintf(m, sizeof m, "boca por huesos: esqueleto de la cara %p (%d huesos), hueso: padre t(x y z) q(x y z w) hash:", S.face, S.fn);
+                    for (int b = 0; b < S.fn; b++) {
+                        Xf r; const char* bone = S.fbones + (size_t)b * 0xc0; uint32_t hs = 0; SafeCopy(&hs, bone + 0x10, 4);
+                        void* par = nullptr; int pi = -1;
+                        if (ReadPtr(bone + 0x20, par)) { ptrdiff_t dd = (const char*)par - S.fbones; if (dd >= 0 && dd % 0xc0 == 0 && dd / 0xc0 < S.fn) pi = (int)(dd / 0xc0); else pi = -2; }
+                        if (!ReadXf(bone + 0x40, r)) memset(&r, 0, sizeof r);
+                        if (j > (int)sizeof m - 110) { Log("%s", m); j = snprintf(m, sizeof m, "boca por huesos: (cara, sigue)"); }
+                        j += snprintf(m + j, sizeof m - j, " %d:%d t(%.4f %.4f %.4f) q(%.3f %.3f %.3f %.3f) %08X", b, pi, r.t[0], r.t[1], r.t[2], r.q[0], r.q[1], r.q[2], r.q[3], hs);
+                    }
                     Log("%s", m);
                 }
             }
