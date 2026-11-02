@@ -742,6 +742,7 @@ void main(
   { float3 aaN = normalize(r1.xyz);
     float3 aaX = ddx(aaN), aaY = ddy(aaN);
     float aaV = min(0.5 * (dot(aaX, aaX) + dot(aaY, aaY)), 0.18);
+    aaV *= 1.0 - saturate(2.0 * FZ.g);   // (02/11, regla de Agustin) nada cerca de la boca: los labios quedan como antes
     float aaA = r0.w * r0.w; aaA = aaA * aaA;
     r0.w = sqrt(sqrt(saturate(aaA + aaV))); }
   // ---- rugosidad codificada ----
