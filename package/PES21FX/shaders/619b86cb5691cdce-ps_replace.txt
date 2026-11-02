@@ -676,6 +676,69 @@ void main(
     float4 GA = IniParams.Load(int2(108,0));
     if (tyC == 3 && GA.x > 0.001 && IniParams.Load(int2(104,0)).x > 0.5) { float k = saturate(1.0 - GA.x); aoRaw = lerp(1.0, aoRaw, k); occRGB = lerp(float3(1,1,1), occRGB, k); }
   }
+  { // === PES21 piel en la sombra (02/11, 259) ===
+    // Agustin (02/11): con parche 0 o 1 la piel en sombra salia casi negra, gris y plana (cuello bajo el menton). Dos cosas reales
+    // que faltaban, solo en la piel:
+    //  a) luz de ambiente del hemisferio: arriba el cielo, abajo el rebote del cesped al sol (el cuello y la mandibula miran al
+    //     piso y no recibian nada). Esa luz tambien entra en la piel y sale rojiza (dispersion): se tine calida segun el tono.
+    //  b) borde de la sombra con dispersion: la luz del sol que entra al lado iluminado viaja unos mm bajo la piel y sale del lado
+    //     en sombra; el rojo viaja mas. Se promedia la mascara de sombra en un anillo de ~6 mm (rojo) y ~2 mm (verde/azul).
+    // x259 fuerza del ambiente (0 = 1, negativo = apagado), y259 borde de sombra (0 = 1), z259 rebote del piso (0 = 1).
+    float4 SA = IniParams.Load(int2(259,0));
+    if (skinC && geoOk && SA.x >= 0.0 && zsk < 60.0 && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {
+      float3 sc = max(pLc_color.xyz, 0.0);
+      float warmD = saturate((sc.r / max(sc.b, 1e-4) - 0.85) * 4.0);
+      float3 LdA = normalize(pLc_dir.xyz);
+      float3 upA = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
+      if (dot(LdA, upA) < 0) upA = -upA;
+      float sunUpA = saturate(dot(LdA, upA));
+      float dayA = smoothstep(0.0, 0.25, sunUpA) * warmD;
+      if (dayA > 0.01) {
+        float3 sunA = sc * g_psScene.m_exposure.zzz;
+        float lumA = dot(sunA, float3(0.3, 0.5, 0.2));
+        float mel = saturate(PESMelanin(saturate(r7.xyz)));
+        float3 sssT = lerp(float3(1.10, 0.95, 0.86), float3(1.06, 0.97, 0.92), mel);   // la luz que sale de adentro, rojiza
+        float shA = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
+        float fadeA = dayA * saturate((60.0 - zsk) / 20.0) * PESAmbGain();
+        // a) hemisferio
+        float kA = (SA.x > 0.0 ? SA.x : 1.0);
+        float kG = (SA.z > 0.0 ? SA.z : 1.0);
+        float upN = dot(Nsk, upA);
+        float fUp = saturate(0.5 + 0.5 * upN), fDn = saturate(0.5 - 0.5 * upN);
+        float3 skyA = float3(0.80, 0.93, 1.18);
+        { float4 SKa = IniParams.Load(int2(150,0));
+          if (SKa.y > 0.01) { float3 t = (sunA / max(lumA, 1e-4)) * SKa.xyz; skyA = t / max(dot(t, float3(0.3, 0.5, 0.2)), 1e-4); } }
+        skyA = lerp(float3(1, 1, 1), skyA, 0.5);                                  // la piel no se pone celeste: la mitad del color del cielo
+        float3 gndA = float3(0.62, 1.0, 0.42) * 0.16 * sunUpA;                     // cesped al sol (albedo ~0.16, verdoso suave)
+        gndA = lerp(gndA, dot(gndA, float3(0.3, 0.5, 0.2)).xxx, 0.5);               // la camiseta y el cuerpo tambien rebotan: menos verde
+        float aoA = lerp(1.0, saturate(aoRaw), 0.6);
+        float inShA = lerp(0.35, 1.0, 1.0 - shA);                                   // al sol el motor ya trae algo de ambiente
+        float3 E = lumA * (skyA * fUp * fUp * 0.05 + gndA * fDn * kG) * kA * inShA * aoA;
+        r2.xyz += E * sssT * fadeA;
+        // b) borde de la sombra (terminador rojo)
+        float kE = (SA.y > 0.0 ? SA.y : 1.0);
+        if (shA < 0.98) {
+          float pxmA = 1.0 / max(2.0 * abs(g_psScene.m_projectionParam.x) * zsk * g_psSystem.m_renderBuffer.z, 1e-5);
+          float rR = clamp(0.006 * pxmA, 1.0, 24.0), rG = max(rR / 3.0, 1.0);
+          float rot = 6.2831853 * frac(52.9829189 * frac(dot(v0.xy, float2(0.06711056, 0.00583715))));
+          float sR = 0, sG = 0, wR = 0, wG = 0;
+          [unroll] for (int ei = 0; ei < 8; ei++) {
+            float ang = ei * 0.78539816 + rot;
+            float2 dir = float2(cos(ang), sin(ang)) * g_psSystem.m_renderBuffer.zw;
+            float2 uR = uvC + dir * rR, uG = uvC + dir * rG;
+            float okR = (abs(inGBufferMaterial.SampleLevel(g_samplerPoint_Clamp_s, uR, 0).z - 0.98039) < 0.003 && abs(PESLinZ(uR) - zsk) < 0.02 + 0.01 * zsk) ? 1.0 : 0.0;
+            float okG = (abs(inGBufferMaterial.SampleLevel(g_samplerPoint_Clamp_s, uG, 0).z - 0.98039) < 0.003 && abs(PESLinZ(uG) - zsk) < 0.02 + 0.01 * zsk) ? 1.0 : 0.0;
+            sR += okR * saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uR, 0).x); wR += okR;
+            sG += okG * saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uG, 0).x); wG += okG;
+          }
+          float bR = wR > 0.5 ? sR / wR : shA, bG = wG > 0.5 ? sG / wG : shA;
+          float3 leak = max(float3(bR, bG, bG) - shA, 0.0) * float3(1.0, 0.45, 0.30);
+          float ndlE = saturate((dot(Nsk, LdA) + 0.35) / 1.35);                    // envolvente: tambien un poco pasado el terminador
+          r2.xyz += sunA * leak * ndlE * 0.5 * kE * lerp(1.0, 0.7, mel) * fadeA / max(PESAmbGain(), 1e-3);
+        }
+      }
+    }
+  }
   if (skinC) {
     // la luz ambiente del estadio es gris/verdosa: en la piel se calienta un poco
     r2.xyz *= lerp(float3(1,1,1), float3(1.07, 0.985, 0.93), saturate(P11.y));
