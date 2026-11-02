@@ -1232,6 +1232,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     g_drawOrder++;
     if (ps && g_layersAny.load()) { LayerOv ov;
         if (InspectShouldSkip(ps->hash, t_drawVerts)) { d.skip = true; g_layerSkips++; }
+    if (GrassSkipGameDraw()) d.skip = true;   // (2/11) x178: pasto propio del juego apagado con el mod emitiendo
         if (ID3D11PixelShader* hp = InspectHighlightPS(ps->hash)) { if (!d.restorePS) c->PSGetShader(&d.restorePS, nullptr, nullptr); c->PSSetShader(hp, nullptr, 0); g_layerSkips++; }
         if (InspectLayerFor(ps->hash, ov)) {
             for (auto& kv : ov.slot) {

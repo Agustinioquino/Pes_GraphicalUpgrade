@@ -377,6 +377,8 @@ static bool EnsureGPU() {
 // horneada del estadio que dejo la base debajo). x291: lejos el color de la hoja se mezcla con el del suelo (alfa de o0, 18af).
 static std::mutex s_bsMx;
 static thread_local bool t_gameGB = false;   // (26/10 g) GrassOnDraw: el dibujo en curso es el pasto del juego en el G-buffer
+static thread_local bool t_skipGame = false; // (2/11) x178: el dibujo del pasto propio del juego se omite (el mod cubre hasta la camara)
+bool GrassSkipGameDraw() { return t_skipGame; }
 static ID3D11DepthStencilState* s_baseDss = nullptr; static UINT s_baseSref = 0; static bool s_baseDssOk = false;   // ultimo dibujo de la base
 static ID3D11Device* s_hyDev = nullptr;
 // caches chicos (4 entradas cada uno): la emision del mod y el pasto del juego piden combinaciones distintas en el mismo cuadro
@@ -600,6 +602,9 @@ static void Thresholds(float* T) {
     // hojas del mod (w290, GrassGameStates), sin el borde oscuro de cuando T0 era 240
     const float t0 = g_cfg.live[294][0];
     T[0] = t0 >= 200.0f ? (std::min)(t0, 6000.0f) : 1000.0f; T[1] = 110.0f; T[2] = 45.0f;
+    // (2/11) x178 pasto del juego apagado (pedido de Agustin: 'cientos de tarjetas' que cuestan FPS y se ven peor): el nivel 0 del mod llega
+    // hasta la camara y los dibujos del pasto del juego en el G-buffer se omiten (GrassOnDraw / BeforeDraw). Solo si el mod esta emitiendo
+    if (g_cfg.live[178][0] > 0.5f && g_cfg.live[58][3] > 0.5f && !s_missing.load()) T[0] = 6000.0f;
     T[3] = 8.0f;    // (25/10) limite inferior del nivel lejano cuando el cesped lejano de la base (y61) esta prendido. (26/10 d) 15 -> 8:
                     // con 15 las camaras abiertas quedaban sin hojas 3D en el tercio lejano (anillo fijo a 60-75 m); a 8-15 px/m
                     // son 50-90 tarjetas por celda de 2 m, barato
@@ -987,7 +992,7 @@ static bool MainPass(ID3D11DeviceContext* c) {
 }
 
 void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, const ShaderEntry* ps, UINT count, UINT start, INT base) {
-    t_gameGB = false;
+    t_gameGB = false; t_skipGame = false;
     if (!vs || vs->hash != kGrassVS || g_cfg.bypass || !g_dev.dev) return;
     g_grassDbg.calls++;
     if (!vs->repl) { Why("el VS del pasto no tiene reemplazo (ver Errores)"); return; }
@@ -1041,6 +1046,10 @@ void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, const ShaderEntr
     // para la base tendria un PS nulo. Solo cuenta el dibujo con el PS de hojas del G-buffer.
     if (!ps || (ps->hash != kGrassPS && RtvCount(c) < 2)) { s_skipNoPs++; if (extraOn) Why("dibujo del pasto del juego sin el PS de hojas / sin G-buffer (prepasada): se espera al del G-buffer"); return; }
     if (ps->hash == kGrassPS) t_gameGB = true;   // (26/10 g) dibujo del pasto del juego en el G-buffer: GrassGameStates le pone los estados de las hojas
+    // (2/11) x178: con el mod emitiendo, el pasto del juego no se dibuja (se omite el DrawIndexed en BeforeDraw); la captura del estado,
+    // la pelota, los recortes y la emision de abajo siguen igual. Se anota una vez.
+    if (ps->hash == kGrassPS && g_cfg.live[178][0] > 0.5f && extraOn && !s_missing.load()) { t_skipGame = true;
+        static std::atomic<int> nLog{0}; if (nLog.fetch_add(1) == 0) Log("pasto: x178 = 1, el pasto propio del juego no se dibuja (el nivel 0 del mod llega hasta la camara)"); }
     const int f = s_frame.load();
     // (25/10) estado del dibujo de pasto del juego, una vez por grabacion: con el se emite desde la base de la cancha
     if (extraOn && RecClaim(c, &GRec::captured)) CaptureState(c, vs, ps);
