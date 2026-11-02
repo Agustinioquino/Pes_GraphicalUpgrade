@@ -1191,6 +1191,8 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (ps && ps->repl) { int si = SunPassIndex(ps->hash); if (si >= 0 && si < 7) if (ID3D11ShaderResourceView* hs = HeadShadowSRV()) { Remember(c, d, true, true, 30); c->PSSetShaderResources(30, 1, &hs); } }
     // 20/10: desgaste de la cancha en vivo: la posicion de cada jugador sale del dibujo de su short / medias (b5 del VS)
     if (ps && ps->hash == 0x55297925e0c66085ULL) PitchWearNotePlayer(c);
+    // (2/11) botines / pelota (aadffecf): anotar la traslacion para reconocer la pelota; en el dibujo de la pelota, b12 = manchas (fila 177)
+    if (ps && ps->hash == 0xaadffecf2090e4f1ULL && ps->repl) if (ID3D11Buffer* bb = PitchBallDrawNote(c, t_drawVerts)) { Remember(c, d, true, false, 12); c->PSSetConstantBuffers(12, 1, &bb); }
     // (27/10 c) hay camisetas en escena (PS de la camiseta 7e64 / a41e / c7ae): el torso se mete bajo la tela (fila 320, z la pone
     // la DLL en Present); sin camiseta (menu Apariencia / Fisico, tecla 4 de Sider) el torso queda entero, sin escalon en la costura
     if (ps && (ps->hash == 0x7e647d9c43b453f9ULL || ps->hash == 0xa41e7343f874154fULL || ps->hash == 0xc7ae89b63e889007ULL)) {
