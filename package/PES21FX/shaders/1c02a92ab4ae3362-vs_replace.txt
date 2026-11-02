@@ -172,7 +172,7 @@ void main(
     float mb = PesArmBulge(vid, v0.xyz);   // (02/11 c) el vientre del musculo que trabaja se levanta
     float3 mi = PesArmInertia(vid, v0.xyz, r4.xyz - r2.xyz);   // (02/11 e) la carne se queda un poco atras al moverse rapido
     twA += mb; twB += mb;
-    if (twA > 0.0 || twB > 0.0) { float3 twN = normalize(r5.xyz); r4.xyz += twA * twN; r2.xyz += twB * twN; }
+    if (twA != 0.0 || twB != 0.0) { float3 twN = normalize(r5.xyz); r4.xyz += twA * twN; r2.xyz += twB * twN; }
     r4.xyz += mi;
   }
   r4.w = v0.w;
