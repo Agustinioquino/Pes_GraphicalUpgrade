@@ -199,28 +199,31 @@ float2 PesGazeHash2(float n, float seed)
 float2 PesGazeTarget(float n, float seed)
 {
   float2 h = PesGazeHash2(n, seed);
-  // horizontal +-4.5 grados, vertical -3.5..+2.5 (se mira mas hacia abajo que hacia arriba); 1 de cada 4 fijaciones vuelve al centro
-  float2 g = float2((h.x - 0.5) * 2.0 * 0.078, (h.y - 0.58) * 2.0 * 0.052);
-  float back = step(0.75, frac(h.x * 7.1 + h.y * 3.3));
-  return lerp(g, g * 0.25, back);
+  // (02/11, Agustin: "el movimiento de ojos vivos se ve bastante robotico") puntos mas cerca del centro: +-3 grados de lado,
+  // -2.3..+1.6 arriba/abajo; 1 de cada 3 fijaciones vuelve casi al centro (mirar al frente es lo mas comun)
+  float2 g = float2((h.x - 0.5) * 2.0 * 0.052, (h.y - 0.58) * 2.0 * 0.034);
+  float back = step(0.67, frac(h.x * 7.1 + h.y * 3.3));
+  return lerp(g, g * 0.2, back);
 }
 float2 PesGaze(float t, float seed, float amp)
 {
   if (amp <= 0.0) return 0;
-  // fijaciones de largo variable: la cuenta avanza con una tabla de largos 0.45..1.9 s (suma 1.2 s de media)
+  // (02/11) mas natural: fijaciones de 1.0..3.4 s (antes 0.45..1.9: saltaba todo el tiempo), sacada de ~70 ms con curva de
+  // velocidad de ojo real (arranca rapido y frena, sin sobrepaso) y un retoque chico de correccion; sin las ondas rapidas
+  // periodicas (microsacadas de 3-4 Hz) que se veian mecanicas: solo una deriva lenta e irregular
   float tt = t + seed * 23.1;
-  float per = 1.2;
+  float per = 2.2;
   float n = floor(tt / per);
   float h = PesGazeHash2(n, seed + 0.5).x;
-  float start = n * per + h * 0.6;              // cuando salta dentro de esta ventana
+  float start = n * per + h * 1.2;              // cuando salta dentro de esta ventana
   float x = tt - start;                         // tiempo desde la sacada (negativo = todavia la fijacion anterior)
   float2 g0 = PesGazeTarget(n - 1.0, seed), g1 = PesGazeTarget(n, seed);
-  float k = smoothstep(0.0, 0.045, x);          // sacada ~45 ms (con sobrepaso chico)
-  k = k * (1.0 + 0.12 * sin(3.14159 * saturate(x / 0.09)));
-  float2 g = lerp(g0, g1, saturate(k) + (k - saturate(k)));
-  // deriva lenta + microsacadas
-  g += float2(sin(tt * 1.7 + seed) * 0.0030 + sin(tt * 23.0 + seed * 3.0) * 0.0012,
-              sin(tt * 1.3 + seed * 2.0) * 0.0022 + sin(tt * 19.0 + seed) * 0.0010);
+  float k = 1.0 - pow(1.0 - saturate(x / 0.070), 3.0);   // sacada: rapida al principio, frena al llegar
+  k = k * 0.93 + 0.07 * smoothstep(0.10, 0.22, x);        // queda un 7 % corto y lo corrige despues (como el ojo real)
+  float2 g = lerp(g0, g1, k);
+  // deriva lenta e irregular (suma de senos de periodos que no se repiten juntos)
+  g += float2(sin(tt * 0.63 + seed) * 0.0020 + sin(tt * 1.37 + seed * 2.1) * 0.0010,
+              sin(tt * 0.51 + seed * 2.0) * 0.0015 + sin(tt * 1.13 + seed * 0.7) * 0.0008);
   return g * amp;
 }
 // semilla por jugador: la misma cuenta que el parpadeo (tabla de tonos de piel por la posicion del hueso 0 en el mundo)
