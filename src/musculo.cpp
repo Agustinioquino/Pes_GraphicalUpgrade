@@ -205,7 +205,11 @@ static void ComputeFactors(const float (*P)[4], bool on, bool ropa, bool trans, 
     if (vec) { Push(f[M_TRAP], 0.6f, 0.8f, 0.0f, 0.012f, delt); Push(f[M_CLAV], 0.7f, 0.5f, 0.3f, 0.010f, delt); Push(f[M_SCAP], 0.5f, 0.3f, -0.6f, 0.008f, delt); }
     f[M_ARM].e = arm;                                  f[M_ARM].t[2] = armB;
     f[M_FORE].e = fore; f[M_FORE2].e = fore2;
-    f[M_ELBOW].e = (trans ? 0.4f * 0.5f * (arm + fore) : 0.0f) + (Gv(C[3]) - 1.0f);   // (24/10 g) + codos (166.w; no es musculo: sin "General")
+    // (02/11 g) Agustin: "el slider de codo modifica mucha area y no la punta del codo": el hueso dsk_elbow pesa en toda la
+    // vuelta del codo. Con los musculos con textura (x305) el slider lo hace el VS de la piel (pes_limbs.hlsli, PesArmBulge: solo
+    // la punta, el olecranon); el hueso queda solo con "Codos y rodillas acompanan". Sin x305, como antes.
+    const float elbowK = g_cfg.live[305][0] > 0.5f ? 0.0f : (Gv(C[3]) - 1.0f);
+    f[M_ELBOW].e = (trans ? 0.4f * 0.5f * (arm + fore) : 0.0f) + elbowK;   // (24/10 g) + codos (166.w; no es musculo: sin "General")
     f[M_WRIST].e = (trans ? 0.3f * fore2 : 0.0f) + (Gv(N[3]) - 1.0f);                 // + munecas (170.w)
     // la ropa solo crece (si se achicara con el musculo, lo que hay debajo y no se achica la atravesaria).
     // (25/10) y255: cuanto del crecimiento del brazo recibe el hueso de la manga. La manga esta mas lejos del eje que la piel
