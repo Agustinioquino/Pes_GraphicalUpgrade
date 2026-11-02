@@ -15,7 +15,7 @@ from scipy import ndimage as ndi
 import scipy.sparse as sp, scipy.sparse.csgraph as cg
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [HERE, os.path.join(HERE, '..'), os.path.join(HERE, '..', '..')]
-import fmdl, mouth_fmdl, make_oral
+import fmdl, mouth_fmdl, make_oral, throat
 
 MM = 0.001
 # (01/11) mordida: con la boca en reposo la tira de arriba termina en y 1.631 y la de abajo en 1.6285 (2.5 mm de luz); los dientes
@@ -25,7 +25,9 @@ EXT_UP, EXT_LO = float(os.environ.get('EXT_UP', '1.7')) * 0.001, 0.7 * 0.001   #
 GUM = 0.08   # = make_oral.GUM (01/11 h: 0.18 -> 0.08, dientes mas largos)
 OVERJET_LO = 0.9 * MM   # (01/11 e) los incisivos de abajo se meten 0.9 mm detras de los de arriba
 PDEG = int(os.environ.get('PDEG', '2'))   # (01/11 f) parche por diente: grado 2 a lo ancho (sigue el arco), recto a lo alto
-CUT_STRIP = float(os.environ.get('CUT_STRIP', '0.42'))   # (01/11 i) la tira se corta a s > GUM + esto (0 = no cortar)
+CUT_STRIP = float(os.environ.get('CUT_STRIP', '0'))   # (01/11 i) la tira se corta a s > GUM + esto (0 = no cortar; 02/11: apagado, ver STRIP_GUM)
+STRIP_GUM = float(os.environ.get('STRIP_GUM', '0.3'))   # (02/11) la tira debajo de la encia (s > GUM) pasa a mostrar encia: s' = GUM - esto * (s - GUM)
+THROAT = int(os.environ.get('THROAT', '1'))   # (02/11) fondo de la garganta nuevo (throat.py) en lugar de la pared plana de Konami
 SINK = 1.5 * MM   # (01/11 d) 0.7 -> 1.5 mm: el cuello se mete bien detras de la encia (no asoma por arriba)
 PATCH = int(os.environ.get('PATCH', '1'))
 UV_W, UV_V0, UV_V1 = 0.55, 0.15, 0.90   # (01/11 e) el borde translucido de la textura (0.62-0.92) cae adentro   # (01/11 d) parte del diente pintado que usa el diente 3D
@@ -158,7 +160,7 @@ def local_patch(M, u0, u1, v0, v1, n=9, deg=2, degv=None):
     return f
 
 # ---------------------------------------------------------------- un diente
-def tooth(M, uL, uR, vG, vI, kind, upper, na=22, nb=15, ext=0.0, mes=1.0, seed=0):
+def tooth(M, uL, uR, vG, vI, kind, upper, na=22, nb=14, ext=0.0, mes=1.0, seed=0):   # (02/11) nb 15 -> 14: lugar para la garganta (tope 21845 tri)
     """M: UVMap de la tira. uL/uR: limites en u; vG: v del cuello (encia); vI: v del borde incisal. kind: 'I' incisivo,
     'C' canino, 'P' premolar/molar. mes: lado de cx (+1/-1) que mira al centro de la boca (mesial). Devuelve P, UV, F
     (01/11 e) mas natural (Agustin 'poco naturales'): perfil recto (el parche sigue la tira a lo ancho pero es recto a lo alto:
@@ -176,8 +178,11 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=22, nb=15, ext=0.0, mes=1.0, seed=0
     b = -0.22 + 1.22 * np.sin(np.linspace(0, 1, nb) * np.pi / 2) ** 1.2   # mas filas cerca del borde incisal
     th = np.linspace(0, 2 * np.pi, na + 1)[:-1]   # 0 = adelante
     pw = {'IC': 3.4, 'I': 2.6, 'C': 2.5, 'P': 2.3}[kind]   # (01/11 e) 4.2 -> 3.4: cuadrados pero no 'baldosa'
-    cx = np.sign(np.sin(th)) * np.abs(np.sin(th)) ** (2 / pw)   # a lo ancho (-1..1)
-    cy = np.sign(np.cos(th)) * np.abs(np.cos(th)) ** (2 / pw)   # adelante (+1) / atras (-1)
+    # (02/11) la mitad de atras (lingual) redonda (pw 2): con la seccion cuadrada la cara de atras de las muelas era una
+    # placa plana que, vista desde adentro de la boca con la luz de adelante, salia como un bloque negro (Agustin)
+    pwv = np.where(np.cos(th) < 0, 2.0, pw)
+    cx = np.sign(np.sin(th)) * np.abs(np.sin(th)) ** (2 / pwv)   # a lo ancho (-1..1)
+    cy = np.sign(np.cos(th)) * np.abs(np.cos(th)) ** (2 / pwv)   # adelante (+1) / atras (-1)
     Ps = []; UVs = []
     # (01/11) mordida (Agustin): el diente se alarga 'ext' metros mas alla del borde de la tira, en la direccion cuello -> borde
     Pg, _ = M(np.array([[uc, vG]])); Pi, _ = M(np.array([[uc, vI]]))
@@ -203,8 +208,10 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=22, nb=15, ext=0.0, mes=1.0, seed=0
         shift = (0.3 * MM * sst(0.4, 1.0, bb)) if upper else (-OVERJET_LO * sst(0.3, 1.0, bb))
         Pf = Pf + Nf * np.reshape(shift, (-1, 1))
         # espesor (m): grueso en el cuello, fino en el borde
-        T0 = {'IC': 6.5, 'I': 6.0, 'C': 7.5, 'P': 8.0}[kind] * MM; T1 = {'IC': 1.1, 'I': 1.0, 'C': 2.0, 'P': 5.5}[kind] * MM
+        T0 = {'IC': 6.5, 'I': 6.0, 'C': 7.5, 'P': 7.0}[kind] * MM; T1 = {'IC': 1.1, 'I': 1.0, 'C': 2.0, 'P': 4.5}[kind] * MM   # (02/11) P 8/5.5 -> 7/4.5
         T = T0 + (T1 - T0) * sst(0.0, 1.0, bb) ** 0.8
+        if kind == 'P':   # (02/11) altura de contorno lingual: la cara de atras es convexa a lo alto (no una placa)
+            T = T + 0.6 * MM * np.exp(-((bb - 0.45) / 0.3) ** 2)
         if kind in ('IC', 'I'):   # (01/11 e) cingulo junto al cuello y fosa (pala) en el medio de la cara de atras
             T = T + 0.4 * MM * np.exp(-((bb - 0.18) / 0.12) ** 2) - 0.35 * MM * np.exp(-(cx / 0.55) ** 2) * sst(0.3, 0.6, bb) * sst(0.95, 0.75, bb)
         # adelante: sobre la tira + abultado del esmalte; el cuello se hunde detras de la encia
@@ -281,9 +288,11 @@ def build(src_fmdl, texdir, log=print):
     rows = make_oral.rows_layout(t512)
     teeth_mask = ndi.gaussian_filter(t512, 1.0)
     parts = []   # (P, UV, F, Wd)
-    def sub(c, times, smooth=1.0):
+    def sub(c, times, smooth=1.0, fmask=None):
         sel = np.where(lab == c)[0]; remap = -np.ones(len(P), np.int64); remap[sel] = np.arange(len(sel))
-        Fc = remap[F[(lab[F[:, 0]] == c)]]
+        fm = (lab[F[:, 0]] == c)
+        if fmask is not None: fm &= fmask
+        Fc = remap[F[fm]]
         Pc, UVc, Wc = P[sel], UV[sel], Wd[sel]
         for _ in range(times):
             Pc, Fc, (UVc, Wc) = loop(Pc, Fc, [UVc, Wc], smooth)
@@ -309,6 +318,16 @@ def build(src_fmdl, texdir, log=print):
         # (01/11 i) Agustin: 'borrar la otra boca asi no se sobreponen'. Los dientes PINTADOS de Konami de la tira quedaban
         # detras de los 3D y asomaban (gris entre los bordes, de costado). Se sacan las caras de la tira debajo de la encia
         # (s > GUM + papila + margen) en la zona de los dientes: queda solo la encia con sus papilas; el fondo es la boca
+        if STRIP_GUM:
+            # (02/11) Agustin: 'bloque negro a los dos lados de la muela' con la boca abierta vista desde adentro. Con el corte
+            # (CUT_STRIP) quedaban agujeros entre las muelas y pedazos de diente pintado (s entre GUM y GUM + 0.42) que asomaban
+            # de costado. Ahora la tira queda ENTERA (sin agujeros) y en la zona de los dientes pintados (s > GUM, doblez
+            # incluido) la uv se pliega de vuelta hacia la encia: s' = GUM - STRIP_GUM (s - GUM). Es continua en s = GUM (sin
+            # costura) y lo que se ve de la tira entre los dientes 3D, desde cualquier lado, es encia
+            tz = inx & (sv > GUM)
+            sv2 = np.where(tz, GUM - STRIP_GUM * (sv - GUM), sv)
+            vv2 = g + sv2 * (inc - g)
+            UVc = UVc.copy(); UVc[:, 1] = np.where(tz, vv2 / 512.0, UVc[:, 1])
         if CUT_STRIP:
             # solo la zona del diente pintado; el doblez de la tira pasando el borde incisal (conecta con el piso / paladar)
             # queda para no abrir agujeros, pero con la uv de un punto de mucosa oscura del atlas (no muestra bordes pintados)
@@ -355,14 +374,23 @@ def build(src_fmdl, texdir, log=print):
     Wc = np.zeros_like(Wc); Wc[:, names.index('skf_jaw')] = 1
     parts.append((Pc, UVc, Fc, Wc, 'lengua'))
     # ---- el resto, una subdivision
+    # (02/11) la pared plana del fondo (2 triangulos de Konami, en la parte de las mejillas) se saca: la reemplaza throat.py
+    bw = throat.back_wall_faces(F, P) if THROAT else np.zeros(len(F), bool)
     for c in np.unique(lab):
         if c in (c_up, c_lo, c_tg): continue
-        Pc, UVc, Fc, Wc = sub(c, 1)
+        Pc, UVc, Fc, Wc = sub(c, 1, fmask=~bw)
         # (01/11 c) la lengua se reconoce por uv en el VS (hilo de expresiones): u 0.295..0.715, v 0.668..0.99 tiene que ser
         # SOLO lengua. El piso y las mejillas de Konami rozan esa caja (u 0.28..0.314): se corren a u <= 0.279 (zona oscura)
         hit = (UVc[:, 0] > 0.279) & (UVc[:, 0] < 0.5) & (UVc[:, 1] >= 0.66) & (UVc[:, 1] <= 1.0)
         UVc = UVc.copy(); UVc[hit, 0] = 0.279
         parts.append((Pc, UVc, Fc, Wc, 'resto'))
+    # ---- (02/11) fondo de la garganta: velo del paladar, pilares, pared de la faringe y uvula (Agustin: 'mejorar el fondo de la
+    # garganta, realista, unos pocos vertices mas no hay drama'). La textura la pinta make_oral.py en throat.UV_BOX / UVULA_BOX
+    if THROAT:
+        Pt, UVt, Ft, wjt = throat.geometry()
+        Wt = np.zeros((len(Pt), len(names))); Wt[:, names.index('skf_jaw')] = wjt; Wt[:, names.index('sk_head')] = 1 - wjt
+        parts.append((Pt, UVt, Ft, Wt, 'garganta'))
+        log('  garganta: %d vertices, %d triangulos (pared vieja: %d caras sacadas)' % (len(Pt), len(Ft), bw.sum()))
     # ---- juntar
     Pa, UVa, Fa, Wa, tag = [], [], [], [], []
     base = 0
