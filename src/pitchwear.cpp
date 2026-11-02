@@ -282,7 +282,7 @@ static void PitchFlatPresent() {
         for (int sIdx = 0; sIdx < steps && nb < kMaxPlayers; sIdx++) {
             float a = steps > 1 ? (float)sIdx / (steps - 1) : 1.0f;
             float bx = s_ballPrev[0] + dx * a, bz = s_ballPrev[2] + dz * a;
-            brush[nb][0] = bx / 140.f + 0.5f; brush[nb][1] = bz / 79.f + 0.5f; brush[nb][2] = std::min(0.35f, 0.08f + 6.0f * dt) * kb; brush[nb][3] = 0.18f; nb++;
+            brush[nb][0] = bx / 140.f + 0.5f; brush[nb][1] = bz / 79.f + 0.5f; brush[nb][2] = std::min(0.5f, 0.12f + 9.0f * dt) * kb; brush[nb][3] = 0.21f; nb++;   // (2/11) Agustin: que marque mas al rodar
         }
         // pelota rapida al ras: algunos recortes de pasto
         float sp = dist / dt;
@@ -438,6 +438,17 @@ void PitchWearPresent() {
         float k = (0.25f + 0.75f * std::min(speed / 7.f, 1.f)) * rate * dt * 0.08f * (1.f + 3.f * pn.skid * kAct);   // parado: poco; corriendo: mas; frenando: mucho
         brush[nb][0] = pos[i][0] / 140.f + 0.5f; brush[nb][1] = pos[i][1] / 79.f + 0.5f; brush[nb][2] = k; brush[nb][3] = rad; nb++;
         WearCpuAdd(brush[nb - 1][0], brush[nb - 1][1], k, rad);
+        // (2/11) pisada fuerte (frenada / arranque, no la carrera pareja): suelta pasto (recortes), como en FC; respeta w116 / x116 / y116
+        if (pn.skid > 0.3f && kAct > 0.01f && g_cfg.live[116][3] > 0.5f && speed > 1.f && s_clips.size() < kMaxClips - 8) {
+            const float* C = g_cfg.live[116]; float amount = C[0] > 0.f ? C[0] : 1.0f, size = (C[1] > 0.f ? C[1] : 3.0f) * 0.01f;
+            float want = amount * pn.skid * kAct * 2.5f; int nEmit = (int)want; if (Rand01() < want - nEmit) nEmit++;
+            float ux = pn.vx / speed, uz = pn.vz / speed;
+            for (int e = 0; e < nEmit && s_clips.size() < kMaxClips; e++) {
+                Clip cp; cp.x = pos[i][0] + (Rand01() - 0.5f) * 0.3f; cp.z = pos[i][1] + (Rand01() - 0.5f) * 0.3f; cp.y = 0.03f;
+                cp.vx = ux * (0.8f + 1.6f * Rand01()) + (Rand01() - 0.5f) * 1.2f; cp.vz = uz * (0.8f + 1.6f * Rand01()) + (Rand01() - 0.5f) * 1.2f; cp.vy = 1.5f + 2.5f * Rand01();   // hacia adelante: la frenada patina
+                cp.age = 0.f; cp.life = 0.5f + 0.7f * Rand01(); cp.size = size * (0.7f + 0.9f * Rand01()); cp.rot = Rand01() * 6.2832f; s_clips.push_back(cp);
+            }
+        }
         if (pn.skid > 0.2f && kAct > 0.01f && speed > 1.f && nb < kMaxPlayers) {   // arrastre detras del jugador que frena
             float ux = pn.vx / speed, uz = pn.vz / speed, bx = pos[i][0] - ux * 0.4f, bz = pos[i][1] - uz * 0.4f;
             brush[nb][0] = bx / 140.f + 0.5f; brush[nb][1] = bz / 79.f + 0.5f; brush[nb][2] = k * 0.7f; brush[nb][3] = rad * 0.8f; nb++;
