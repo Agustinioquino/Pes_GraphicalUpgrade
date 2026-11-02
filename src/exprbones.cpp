@@ -501,7 +501,8 @@ static void Secondary(Skel& S, const float* hr, float sm, float open) {
     struct Off { int d; float x, y, z; float k; };   // k: 0 = sonrisa, 1 = boca abierta
     static const Off kOff[] = {
         { 18,  0.0006f, 0.0018f, 0.0010f, 0 }, { 19, -0.0006f, 0.0018f, 0.0010f, 0 },   // cheek_l / r: pomulo arriba y afuera
-        { 20,  0.0f,    0.0012f, 0.0006f, 0 }, { 21,  0.0f,    0.0012f, 0.0006f, 0 },   // orbicularisoculi_b: bajo el ojo sube
+        // (02/11 g, Agustin: "parpadean mucho abajo de los ojos") el bajo-ojo (orbicularisoculi_b) ya no sube con la sonrisa: la
+        // sonrisa medida en la comisura cambia de un cuadro a otro al hablar / abrir la boca y el bajo-ojo titilaba
         // (02/11 g, Agustin: "los parpados ya no vibran solos pero si cuando la boca se abre") las cejas y el entrecejo que subian
         // con la boca abierta se sacan: el juego los reescribe despues (como los parpados) y ademas el shader del parpadeo mide la
         // ceja para saber si la cara esta animada -> con 1.4 mm de mas el parpadeo se prendia y apagaba = parpados vibrando
