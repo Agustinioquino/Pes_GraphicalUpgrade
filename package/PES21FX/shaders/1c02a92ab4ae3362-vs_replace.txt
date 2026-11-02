@@ -167,6 +167,10 @@ void main(
     r4.xyz = mP;
     r2.xyz = mP;
   }
+  if (!handDone && skW) {   // (02/11 b) muneca: devuelve el volumen que el skinning lineal pierde cuando el antebrazo gira
+    float twA = PesArmTwistPush(vid, v4, v5, true), twB = PesArmTwistPush(vid, v4, v5, false);
+    if (twA > 0.0 || twB > 0.0) { float3 twN = normalize(r5.xyz); r4.xyz += twA * twN; r2.xyz += twB * twN; }
+  }
   r4.w = v0.w;
   r0.x = dot(r4.xyzw, g_vsObject.m_viewWorld._m00_m10_m20_m30);
   r0.y = dot(r4.xyzw, g_vsObject.m_viewWorld._m01_m11_m21_m31);
