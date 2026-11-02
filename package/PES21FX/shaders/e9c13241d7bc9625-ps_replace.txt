@@ -416,7 +416,9 @@ void main(
   { float2 duvdx = ddx(pesShUV), duvdy = ddy(pesShUV); float dzdx = ddx(pesShRef), dzdy = ddy(pesShRef);
     float detR = duvdx.x * duvdy.y - duvdx.y * duvdy.x;
     if (abs(detR) > 1e-14) pesDzduv = float2(duvdy.y * dzdx - duvdx.y * dzdy, -duvdy.x * dzdx + duvdx.x * dzdy) / detR; }
-  if (pesFoot) pesDzduv = 0.0;   // (02/11) al pie: las derivadas saltan de hoja en hoja, el suelo es plano
+  // (02/11 b) al pie el plano receptor SI vale: los pies de todas las hojas estan sobre el plano de la cancha, asi que las derivadas
+  // entre pixeles vecinos dan justo el plano del suelo. Sin el (primera version) el filtro se hacia sombra a si mismo en el borde de
+  // la sombra del estadio y quedaba una franja punteada de hojas sueltas al sol / en sombra (captura de Agustin 10:24 PC, camara TV)
   // === PES21 sol dinamico (17/10): el Daylight Engine mueve el sol cada cuadro y lo deja bajo. Con el sol rasante
   // el shadow map hace acne (rayas en pasto y cara) y el borde repta al moverse. x53 sesgo de plano receptor (crece
   // solo donde la superficie es rasante a la luz, y mas con el sol bajo), y53 radio minimo del filtro en texeles
@@ -428,7 +430,7 @@ void main(
       float sunUp = saturate(abs(dot(normalize(pesLDir.xyz), normalize(upW))));
       float lowSun = 1.0 - smoothstep(0.08, 0.45, sunUp);
       float b = slope * max(DS.x, 0.0) * (1.0 + 2.0 * lowSun);
-      pesShRef += pesFoot ? 0.4 * max(DS.z, 0.0) * 0.001 : min(b, max(DS.z, 0.0) * 0.001);   // (02/11) al pie: sesgo fijo chico
+      pesShRef += min(b, max(DS.z, 0.0) * 0.001);
       g_pesDynMinR = max(DS.y, 0.0) * (0.5 + 0.5 * lowSun);
     } }
   // PES21 kits: la sombra del sol se calcula con la ropa SIN simular (el mod de ropa solo mueve la que se ve),
@@ -559,7 +561,7 @@ void main(
   if (matType == 3 && kRoof > 0.001) flR *= 1.0 - saturate(kRoof);
   r1.x = 1 + -flR;
   r0.y = r0.y * r1.x + flR;
-  if (matType == 3 && kRoof > 0.001) r0.y = pow(saturate(r0.y), 1.0 + 2.0 * saturate(kRoof));
+  // (02/11 b) sin el realce pow(): con w334 0.5 la sombra del techo quedaba casi negra en los primeros planos (captura 10:25 PC)
   float pesRoofT = r0.y;
   r0.x = min(r0.x, r0.y);
   r0.y = g_WorldShadowMask.Sample(g_samplerPoint_Clamp_s, r0.zw).x;

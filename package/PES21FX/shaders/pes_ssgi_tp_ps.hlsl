@@ -53,11 +53,17 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
     z = cur.w;
     if (z <= 0.0) return 0.0;
     // vecinos de este cuadro (3x3, misma superficie)
+    // (02/11) y el valor de este cuadro filtrado con ellos (bilateral gaussiano): cada pixel tiene 7-8 muestras y las del anillo lejano
+    // valen mucho (un cartel o un reflector) -> puntos blancos sueltos que cambian cada cuadro ("el rebote vibra mucho", Agustin)
+    float3 fS = 0; float fW = 0;
     [unroll] for (int y = -1; y <= 1; y++) [unroll] for (int x = -1; x <= 1; x++) {
       float4 s = inCur.SampleLevel(sPoint, uv + float2(x, y) * tx, 0);
       if (abs(s.w - z) > 0.05 * z) continue;
       m1 += s.rgb; m2 += s.rgb * s.rgb; n += 1.0;
+      float w = exp(-(x * x + y * y) * 0.5);
+      fS += s.rgb * w; fW += w;
     }
+    cur.rgb = fS / max(fW, 1e-4);
   }
   m1 /= max(n, 1.0); m2 /= max(n, 1.0);
   if (recon) tx = 1.0 / float2(W * 2.0, H * 2.0);                // la historia esta a resolucion completa
