@@ -328,7 +328,7 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
     float4x3 M = g_vsBone.m_boneMatrices[j];
     float g = 0.0;   // el juego ya cierra este parpado: punto de la orilla con el hueso contra con la cabeza
     if (head <= 31) { float4 Q = float4(C + float3(0.0, up ? 0.008 : -0.006, 0.008), 1.0); g = saturate(length(mul(Q, M) - mul(Q, g_vsBone.m_boneMatrices[head])) / 0.006); }
-    float A = (up ? 0.50 : -0.10) * (1.0 - g);   // (01/11 d, Agustin: "los ojos se cierran mucho") antes 0.68 / -0.14   // orilla de arriba ~ +27 grados abierta -> ~ -12; la de abajo -22 -> ~ -14
+    float A = (up ? 0.64 : -0.12) * (1.0 - g);   // (02/11 k, Agustin: "no cierran del todo") 0.50 -> 0.64: el "se cierran mucho" de antes venia del parpado de abajo tomado como el de arriba (fd86e36)   // (01/11 d, Agustin: "los ojos se cierran mucho") antes 0.68 / -0.14   // orilla de arriba ~ +27 grados abierta -> ~ -12; la de abajo -22 -> ~ -14
     // angulo total del parpado: parpadeo + seguimiento de la mirada (el de arriba: -gy * 0.65 si mira abajo, -gy * 0.35 arriba;
     // el de abajo sube un poco al mirar abajo). El sentido: A > 0 cierra el de arriba (baja), A < 0 el de abajo (sube).
     // (02/11, video de Agustin: ranuras azules bajo el ojo al mover la mirada) el de abajo ya no acompana la mirada: solo se
