@@ -30,7 +30,8 @@ local QUITAR_COLLAR_AO = false
 -- del torso y en los PESOS_ALTO m de arriba pasa de a poco a los suyos. Asi, al girar o inclinar la cabeza, el borde de la cara
 -- y el del torso se mueven juntos (antes uno se metia en el otro o se abria una rendija). false = dejar los pesos de la cara.
 local PESOS_TORSO = true
-local PESOS_ALTO = 0.030
+local PESOS_ALTO = 0.015     -- (1.18b) era 3 cm: el cuello se doblaba en esa franja y la base del cuello (con los huesos del pecho)
+                              -- se salia del cuello de la camiseta al moverse el torso; ahora solo el borde, bajo el cuello de la camiseta
 -- El tono de piel del torso se adivina por el color del cuello de la cara (el log dice cual eligio). Si en algun
 -- jugador no coincide con el tono que tiene en el juego, se puede forzar aca: ["id de la cara"] = tono (1 a 6)
 -- ejemplo: local TONO_FORZADO = { ["12345"] = 4, ["67890"] = 2 }
@@ -50,7 +51,7 @@ local PERFIL = true
 -- las funciones definidas adentro)
 local NOJIT = false
 local function modulo_cuello()
-local m = { version = "1.18" }
+local m = { version = "1.18b" }
 
 local AXZ = 0.045          -- eje del cuello (z)
 -- (1.14) borde del cuello del torso con la forma del cuerpo de Konami (tools/fox/torso/neck_konami.py: el anillo de
@@ -2383,7 +2384,7 @@ local SEEN_TEX, n_seen = {}, 0      -- texturas de caras que llegaron sin grilla
 local CACHE_DIR = nil                -- se fija en init (ctx.sider_dir .. content\TorsoBody_cuello_cache\)
 local CACHE_OK = true                -- false si no se pudo escribir (carpeta inexistente): se sigue sin cache
 local FROM_CACHE = {}                -- archivos (en minusculas) que Sider esta sirviendo desde la cache
-local CACHE_TAG = "_v24"   -- (1.18) pesos de hueso del torso en la union
+local CACHE_TAG = "_v25"   -- (1.18) pesos de hueso del torso en la union
 local function cache_paths(fn)
     if not CACHE_DIR then return nil end
     local id = fn:match("face[\\/]+real[\\/]+([^\\/]+)[\\/]")
