@@ -315,7 +315,7 @@ void main(
     float3 upF = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
     if (dot(pesLDir.xyz, upF) < 0.0) upF = -upF;                        // el sol siempre arriba
     float pesHP = g_psScene.m_eyepos.y + dot(r6.xyz, upF);               // altura sobre la cancha (m)
-    if (pesHP > 0.004 && pesHP < 0.6) {
+    if (pesHP > 0.004 && pesHP < 0.25) {                                 // (02/11 c) solo alturas de hoja (antes 0.6)
       pesFoot = true;
       pesFootP = r6.xyz - (pesHP - 0.01) * upF;                          // 1 cm sobre el suelo
       float nU = saturate(dot(normalize(pesLDir.xyz), upF));
@@ -458,7 +458,7 @@ void main(
   float4 P34 = IniParams.Load(int2(34,0));
   bool pesSSSS = IniParams.Load(int2(95,0)).w > 0.5;   // 19/10: dispersion unificada (SSSS) prendida -> las difusiones viejas de la piel se apagan solas
   float pesShScale = (P34.w > 0.5 && !pesSSSS && matType == 0 && abs(skinTag - 0.98039) < 0.003) ? max(P34.x, 1.0) : 1.0;
-  r0.x = PESShadowFilter(pesShUV, pesShRef, pesShCas, v2.xy, r0.x, pesShScale, pesDzduv);   // PES21 sombras v2 + plano receptor
+  r0.x = PESShadowFilter(pesShUV, pesShRef, pesShCas, pesFoot ? float2(0.0, 0.0) : v2.xy, r0.x, pesShScale, pesDzduv);   // (02/11 c) al pie: giro fijo del filtro (el giro por pixel salia como puntos de hojas sueltas en la penumbra: el TAA no los junta en hojas finas)   // PES21 sombras v2 + plano receptor
   // PES21 fusion de cascadas (18/10): en la franja del borde de la cascada se mezcla con la siguiente (sin salto de nitidez). y87 = ancho
   { float4 PHb = IniParams.Load(int2(87,0)); float4 SHb = IniParams.Load(int2(20,0));
     if (PHb.y > 0.001 && SHb.y > 0.5 && pesShCas > -0.5 && pesShCas < 1.5) {

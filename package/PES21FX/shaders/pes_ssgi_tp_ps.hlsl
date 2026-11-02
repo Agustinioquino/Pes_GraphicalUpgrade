@@ -42,7 +42,7 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
       float dz = abs(s.w - z);
       if (dz < dBest) { dBest = dz; nearest = s; }
       if (s.w <= 0.0 || dz > 0.05 * z) continue;
-      float w = exp(-dot(dp, dp) * (1.0 / 4.5));                  // gaussiana de 1.5 pixeles
+      float w = exp(-dot(dp, dp) * (1.0 / 12.5));                 // (02/11 c) gaussiana de 2.5 pixeles (antes 1.5: quedaba ruido en Completa)
       wSum += s.rgb * w; wT += w;
       m1 += s.rgb; m2 += s.rgb * s.rgb; n += 1.0;
     }
@@ -77,7 +77,9 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   float cw = dot(q[3], hp);
   float4 P153 = IniParams.Load(int2(153, 0));
   float frames = clamp(P153.z > 0 ? P153.z : 12.0, 2.0, 40.0);
-  frames = min(frames * lerp(1.0, 2.0, saturate((z - 20.0) / 40.0)), 40.0);   // (02/11 b) lejos se mueve poco en pantalla: mas historia
+  frames = min(frames * lerp(1.0, 2.0, saturate((z - 20.0) / 40.0)) * (recon ? 1.5 : 1.0), 40.0);   // (02/11 b) lejos se mueve poco en pantalla: mas historia
+  // (02/11 c) sin puntos sueltos: el valor de este cuadro no pasa de la media de los vecinos + 1 desvio
+  cur.rgb = min(cur.rgb, m1 + sd);
   // (23/10) sin historia valida (corte de camara, algo que aparece): en vez del valor de 8 muestras de este cuadro (ruidoso:
   // se veia "recalcular" el rebote en cada corte) se arranca del promedio de los vecinos de la misma superficie
   float a = 0.3; bool hasHist = false;

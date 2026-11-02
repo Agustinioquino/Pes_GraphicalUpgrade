@@ -112,7 +112,7 @@ float4 mainV2(float4 pos, float2 uv, float z0, float Rg, float fr0, float rot, f
     if (rOut > rIn + 4.0) {
       float aFar = 3.14159265 * (rOut * rOut - rIn * rIn) / 4.0;
       float4 accF = 0;
-      g_ffCap = lerp(0.08, 0.35, saturate(rPx / 24.0));
+      g_ffCap = lerp(0.08, 0.2, saturate(rPx / 24.0));   // (02/11 c) tope 0.2 en el anillo lejano (antes 0.35)
       [unroll] for (int j = 0; j < 4; j++) {
         float u = frac((j + 0.5) / 4.0 + fr0 * 0.61);
         float rr = sqrt(rIn * rIn + u * (rOut * rOut - rIn * rIn));
