@@ -100,7 +100,11 @@ void main(uint3 id : SV_DispatchThreadID)
     float hM = gP4.z * (gPad[0].w > 0.0 ? lerp(1.0, gPad[0].w, smoothstep(hP0, hP1, pc)) : 1.0);
     float hpx = max(hM * pc, 1.0);
     float band = (cell * pc) * (cell * pc * sinE + hpx);
-    float capB = gP4.w * band;
+    // (02/11 tanda 15, paso 1) tope de capas por pixel mas bajo en las camaras de juego: por debajo de la rampa de cerca (gPad[0].y..z px/m)
+    // el tope manda la cuenta (a 200 px/m: 7167 tarjetas por C, ~1500 por el tope) y con Ultra eran 9.6 capas por pixel; ahora capK (gPad[3].x,
+    // 0.6 si la DLL no lo manda = 5.8 capas) y sube a 1.0 al llegar a la rampa: el primer plano al ras queda igual
+    float capK = lerp(gPad[3].x > 0.0 ? gPad[3].x : 0.6, 1.0, smoothstep(gPad[0].y, gPad[0].z, pc));
+    float capB = gP4.w * capK * band;
     // (26/10 d) piso de capas por pixel de SUELO (nivel 0, rampa de gPad[0].y a .z px/m): el tope por banda solo dejaba 6 capas
     // sobre la banda, 3-15x menos hojas por m2 que el pasto denso del juego que habia antes en esa zona
     float Dn = gPad[0].x * smoothstep(gPad[0].y, gPad[0].z, pc);
