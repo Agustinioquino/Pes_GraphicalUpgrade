@@ -1143,6 +1143,11 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (vs && vs->rule) RunRule(c, vs, d);
     // (20/10) reglas por pareja PS + VS: p.ej. la piel del cuerpo (aa7d1833) cuando dibuja la cabeza de una cara generica (VS faab87ee)
     if (ps && vs) if (const std::vector<const Rule*>* prs = ps->pairRules) for (const Rule* pr : *prs) if (pr->vsCond == vs->hash) RunRuleActions(c, pr, true, ps->hash, d);
+    // (2/11) recortes de pasto / tierra (pitchwear.cpp): el PS de las hojas lee el atlas de PARTICULAS (textures\pes_debris.dds, mismo formato)
+    if (PitchClipDrawActive()) {
+        if (ID3D11ShaderResourceView* a = FileTexture("file:textures\\pes_debris.dds")) { Remember(c, d, true, true, 8); c->PSSetShaderResources(8, 1, &a); }
+        if (ID3D11ShaderResourceView* b = FileTexture("file:textures\\pes_debris_n.dds")) { Remember(c, d, true, true, 9); c->PSSetShaderResources(9, 1, &b); }
+    }
     // (25/10) manos de TorsoBody (manos.cpp): datos por vertice de la mano en t126 del VS (cuaterniones duales + correctivas)
     if (vs && vs->repl) {
         bool arm = false, hand = false;

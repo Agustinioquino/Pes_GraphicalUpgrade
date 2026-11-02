@@ -315,7 +315,7 @@ std::string DescribeInputLayout(ID3D11InputLayout* il);   // elementos de un inp
 extern std::atomic<int> g_matchGen;                                        // sube en cada partido nuevo (reloj del cesped)
 void PitchWearNotePlayer(ID3D11DeviceContext* c); void PitchWearPresent(); void PitchWearReloadShaders();   // desgaste de la cancha en vivo
 void PitchClipsDraw(ID3D11DeviceContext* c, int frame);
-void PitchBallNote(ID3D11DeviceContext* c, int frame); ID3D11Buffer* PitchBallDrawNote(ID3D11DeviceContext* c, UINT verts);   // (2/11) dibujo de la pelota (aadffecf): b12 con las manchas o nullptr   // (20/10) capsula de la pelota del VS del pasto -> pasto aplastado   // recortes de pasto volando (desde el dibujo del pasto)
+void PitchBallNote(ID3D11DeviceContext* c, int frame); ID3D11Buffer* PitchBallDrawNote(ID3D11DeviceContext* c, UINT verts); bool PitchClipDrawActive();   // (2/11) dibujo de los recortes en curso (atlas pes_debris en t8/t9)   // (2/11) dibujo de la pelota (aadffecf): b12 con las manchas o nullptr   // (20/10) capsula de la pelota del VS del pasto -> pasto aplastado   // recortes de pasto volando (desde el dibujo del pasto)
 // (20/10) LOD de caras (lod.cpp): diagnostico (x118) y LOD0 forzado por sustitucion de geometria (y118)
 struct LodIA {
     ID3D11Buffer* vb[4] = {}; UINT stride[4] = {}, offset[4] = {};

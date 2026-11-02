@@ -75,7 +75,16 @@ static float LineDist(float x, float z) {
 static int s_matchGenSeen = -1; static bool s_cleared = false;
 static double s_lastT = 0; static int s_logged = 0;
 // ---- recortes de pasto (particulas en CPU, dibujadas con el PS de las hojas en la pasada del pasto)
-struct Clip { float x, y, z, vx, vy, vz, age, life, size, rot; };
+struct Clip { float x, y, z, vx, vy, vz, age, life, size, rot; int kind = 0; };   // (2/11) kind: 0 manojo arrancado, 1 terron de tierra, 2 polvo, 3 pedazo de hoja (bandas de textures\pes_debris.dds)
+static thread_local bool t_clipDraw = false; bool PitchClipDrawActive() { return t_clipDraw; }
+// (2/11) que particula suelta una pisada / la pelota en este punto: tierra donde la cancha esta pelada (desgaste en vivo), polvo si la cancha
+// esta seca, si no manojo (1 de 4) o pedazo de hoja
+static float WearCpuAt(float x, float z);
+static int ClipKindAt(float x, float z, float r) {
+    float w = WearCpuAt(x, z); bool dry = g_cfg.live[114][0] > 1.5f;
+    if (w > 0.3f && r < w * 0.9f) return (dry && r < w * 0.35f) ? 2 : 1;
+    return r < 0.25f ? 0 : 3;
+}
 static const int kMaxClips = 2048;
 static std::vector<Clip> s_clips;
 static ID3D11Buffer* s_clipBuf = nullptr; static ID3D11ShaderResourceView* s_clipSRV = nullptr; static ID3D11VertexShader* s_clipVS = nullptr; static bool s_clipTried = false;
@@ -110,7 +119,7 @@ static void ClipSimAndUpload(float dt) {
     float* q = (float*)m.pData;
     for (size_t i = 0; i < n; i++) { const Clip& c = s_clips[i]; float fade = std::min(1.0f, (c.life - c.age) * 4.0f);
         q[i * 8 + 0] = c.x; q[i * 8 + 1] = c.y; q[i * 8 + 2] = c.z; q[i * 8 + 3] = c.size * fade;
-        q[i * 8 + 4] = c.vx; q[i * 8 + 5] = c.vy; q[i * 8 + 6] = c.vz; q[i * 8 + 7] = c.rot; }
+        q[i * 8 + 4] = c.vx; q[i * 8 + 5] = c.vy; q[i * 8 + 6] = c.vz; q[i * 8 + 7] = fmodf(c.rot, 6.2832f) + 10.0f * (float)c.kind; }   // (2/11) w = giro + 10 * tipo
     g_dev.imm->Unmap(s_clipBuf, 0);
     s_clipCount = (int)n;
 }
@@ -123,7 +132,9 @@ void PitchClipsDraw(ID3D11DeviceContext* c, int frame) {
     ID3D11ShaderResourceView* oT[2] = {}; c->VSGetShaderResources(120, 1, &oT[0]); c->VSGetShaderResources(122, 1, &oT[1]);
     ID3D11ShaderResourceView* prm = g_dev.paramSRV; c->VSSetShaderResources(120, 1, &prm); c->VSSetShaderResources(122, 1, &s_clipSRV);
     c->VSSetShader(s_clipVS, nullptr, 0); c->IASetInputLayout(nullptr);
+    t_clipDraw = true;   // (2/11) BeforeDraw enlaza el atlas de particulas (pes_debris) en t8 / t9 en vez del de hojas
     c->DrawInstanced(6, (UINT)n, 0, 0);   // pasa por el gancho: PS de las hojas reemplazado + reglas (atlas t8/t9, t120)
+    t_clipDraw = false;
     c->VSSetShader(oVS, nullptr, 0); if (oVS) oVS->Release();
     c->IASetInputLayout(oIL); if (oIL) oIL->Release();
     c->VSSetShaderResources(120, 1, &oT[0]); c->VSSetShaderResources(122, 1, &oT[1]); for (auto* v : oT) if (v) v->Release();
@@ -289,7 +300,9 @@ static void PitchFlatPresent() {
         if (onGround > 0.5f && sp > 9.0f && sp < 45.0f && g_cfg.live[116][3] > 0.5f && s_clips.size() < kMaxClips && Rand01() < 0.6f) {
             Clip cp; cp.x = s_ball[0]; cp.z = s_ball[2]; cp.y = 0.02f; float ix = dist > 0 ? dx / dist : 0, iz = dist > 0 ? dz / dist : 0;
             cp.vx = ix * (1.0f + Rand01() * 2.0f) + (Rand01() - 0.5f); cp.vz = iz * (1.0f + Rand01() * 2.0f) + (Rand01() - 0.5f); cp.vy = 1.0f + 2.0f * Rand01();
-            cp.age = 0; cp.life = 0.4f + 0.5f * Rand01(); cp.size = 0.02f * (0.6f + 0.8f * Rand01()); cp.rot = Rand01() * 6.2832f; s_clips.push_back(cp);
+            cp.age = 0; cp.life = 0.4f + 0.5f * Rand01(); cp.size = 0.02f * (0.6f + 0.8f * Rand01()); cp.rot = Rand01() * 6.2832f;
+            cp.kind = ClipKindAt(cp.x, cp.z, Rand01()); if (cp.kind == 1) cp.size *= 1.5f; if (cp.kind == 2) { cp.size *= 3.0f; cp.life *= 0.7f; cp.vy *= 0.5f; }
+            s_clips.push_back(cp);
         }
     }
     ID3D11DeviceContext* c = g_dev.imm;
@@ -446,7 +459,9 @@ void PitchWearPresent() {
             for (int e = 0; e < nEmit && s_clips.size() < kMaxClips; e++) {
                 Clip cp; cp.x = pos[i][0] + (Rand01() - 0.5f) * 0.3f; cp.z = pos[i][1] + (Rand01() - 0.5f) * 0.3f; cp.y = 0.03f;
                 cp.vx = ux * (0.8f + 1.6f * Rand01()) + (Rand01() - 0.5f) * 1.2f; cp.vz = uz * (0.8f + 1.6f * Rand01()) + (Rand01() - 0.5f) * 1.2f; cp.vy = 1.5f + 2.5f * Rand01();   // hacia adelante: la frenada patina
-                cp.age = 0.f; cp.life = 0.5f + 0.7f * Rand01(); cp.size = size * (0.7f + 0.9f * Rand01()); cp.rot = Rand01() * 6.2832f; s_clips.push_back(cp);
+                cp.age = 0.f; cp.life = 0.5f + 0.7f * Rand01(); cp.size = size * (0.7f + 0.9f * Rand01()); cp.rot = Rand01() * 6.2832f;
+                cp.kind = ClipKindAt(cp.x, cp.z, Rand01() * 0.8f); if (cp.kind == 1) cp.size *= 1.6f; if (cp.kind == 2) { cp.size *= 3.5f; cp.life *= 0.7f; cp.vy *= 0.5f; }   // frenada en lo pelado: terrones y polvo
+                s_clips.push_back(cp);
             }
         }
         if (pn.skid > 0.2f && kAct > 0.01f && speed > 1.f && nb < kMaxPlayers) {   // arrastre detras del jugador que frena
@@ -470,6 +485,7 @@ void PitchWearPresent() {
                 cp.x = pos[i][0] - dirx * (0.1f + 0.3f * r1) + (r2 - 0.5f) * 0.3f; cp.z = pos[i][1] - dirz * (0.1f + 0.3f * r1) + (r3 - 0.5f) * 0.3f; cp.y = 0.03f;
                 cp.vx = -dirx * (0.4f + 1.4f * Rand01()) + (Rand01() - 0.5f) * 1.0f; cp.vz = -dirz * (0.4f + 1.4f * Rand01()) + (Rand01() - 0.5f) * 1.0f; cp.vy = 1.2f + 2.6f * Rand01();
                 cp.age = 0.f; cp.life = 0.5f + 0.7f * Rand01(); cp.size = size * (0.6f + 0.8f * Rand01()); cp.rot = Rand01() * 6.2832f;
+                cp.kind = ClipKindAt(cp.x, cp.z, Rand01()); if (cp.kind == 1) cp.size *= 1.4f; if (cp.kind == 2) { cp.size *= 3.0f; cp.life *= 0.6f; cp.vy *= 0.5f; }
                 s_clips.push_back(cp);
             }
         }
