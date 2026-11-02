@@ -220,9 +220,18 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
             }
             for (int sd = 0; sd < 2; sd++) {
                 if (!nc[sd]) continue;
-                int hi = cand[sd][0], lo = cand[sd][0];
-                for (int i = 1; i < nc[sd]; i++) { const int b = cand[sd][i]; if (cy[b] / all[b] > cy[hi] / all[hi]) hi = b; if (cy[b] / all[b] < cy[lo] / all[lo]) lo = b; }
-                lids[sd] = hi; if (lo != hi) lids[2 + sd] = lo;
+                // (02/11 j, Agustin: "la animacion de parpadear sigue rota"; lectura de la paleta: en la malla de 704 v el "parpado de
+                // arriba" giraba igual que los de ABAJO de las otras) con un solo candidato por lado se tomaba siempre como el de
+                // arriba: en las mallas que solo traen el parpado de abajo, el parpadeo lo cerraba hacia arriba. Ahora cada uno va
+                // por la altura de sus vertices respecto del centro del ojo (y 1.6965: arriba > , abajo <)
+                const float kEyeY = 1.6965f;
+                int hi = -1, lo = -1;
+                for (int i = 0; i < nc[sd]; i++) {
+                    const int b = cand[sd][i]; const float y = cy[b] / all[b];
+                    if (y >= kEyeY) { if (hi < 0 || y > cy[hi] / all[hi]) hi = b; }
+                    else { if (lo < 0 || y < cy[lo] / all[lo]) lo = b; }
+                }
+                lids[sd] = hi; lids[2 + sd] = lo;
             }
         }
         bool mouth = hd <= 31 && !thin && ylo > 1.58f && yhi < 1.68f && (yhi - ylo) < 0.06f;

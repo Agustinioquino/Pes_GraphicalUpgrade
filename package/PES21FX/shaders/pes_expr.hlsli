@@ -60,6 +60,10 @@ void PesExprApply(float4 p, float3 rest, uint4 I, float4 W, float3 n, float3 t,
   // (cara, cara generica, barba) lo calcula con su propia paleta: en el menton no daba igual y se abrian ranuras. Con eso
   // prendido la zona de la boca no se amplifica (lo del mod ya es el tamano pedido)
   float4 Rb350a = IniParams.Load(int2(350, 0));
+  // (02/11 i, Agustin: grietas en la boca y ojos desorbitados por el amplificador; con ganancia 1 se arreglaba) con la boca por
+  // HUESOS el amplificador corre en la DLL sobre los huesos de la cara (exprbones.cpp Amp): todas las mallas se mueven juntas.
+  // Aca ya no se suma nada (cada malla lo calculaba con su propia paleta y en los bordes no coincidia)
+  if (Rb350a.x > 0.5 && Rb350a.y > 0.5) return;
   float modOpen = (Rb350a.x > 0.5 && Rb350a.y > 0.5) ? saturate(4.0 * max(max(IniParams.Load(int2(347, 0)).x, 0.45 * Rb350a.z), Rb350a.w)) : 0.0;
   // (02/11 h) con los parpados por HUESOS (350.y = 2) la zona de los ojos tampoco se amplifica: cada malla lo agrandaba con su
   // propia paleta y el borde del parpado / las pestanas no quedaban con la piel (mismo problema que el menton)
