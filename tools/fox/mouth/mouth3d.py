@@ -23,7 +23,7 @@ MM = 0.001
 EXT_UP, EXT_LO = float(os.environ.get('EXT_UP', '1.7')) * 0.001, 0.7 * 0.001   # (01/11 f) 2.0 -> 1.5 mm: menos sobremordida (Agustin)   # (01/11 b) 2.4 / 0.8 -> 2.0 / 0.7: dientes un poco menos largos (Agustin)
 # (01/11 b) mas encia (Agustin): la linea de la encia baja GUM del alto del diente pintado; esa franja de la tira muestra encia
 GUM = 0.08   # = make_oral.GUM (01/11 h: 0.18 -> 0.08, dientes mas largos)
-OVERJET_LO = 0.9 * MM   # (01/11 e) los incisivos de abajo se meten 0.9 mm detras de los de arriba
+OVERJET_LO = 0.7 * MM   # (02/11) 0.9 -> 0.7, parejo   # (01/11 e) los incisivos de abajo se meten 0.9 mm detras de los de arriba
 PDEG = int(os.environ.get('PDEG', '2'))   # (01/11 f) parche por diente: grado 2 a lo ancho (sigue el arco), recto a lo alto
 CUT_STRIP = float(os.environ.get('CUT_STRIP', '0'))   # (01/11 i) la tira se corta a s > GUM + esto (0 = no cortar; 02/11: apagado, ver STRIP_GUM)
 STRIP_GUM = float(os.environ.get('STRIP_GUM', '0.3'))   # (02/11) la tira debajo de la encia (s > GUM) pasa a mostrar encia: s' = GUM - esto * (s - GUM)
@@ -160,7 +160,7 @@ def local_patch(M, u0, u1, v0, v1, n=9, deg=2, degv=None):
     return f
 
 # ---------------------------------------------------------------- un diente
-def tooth(M, uL, uR, vG, vI, kind, upper, na=22, nb=14, ext=0.0, mes=1.0, seed=0):   # (02/11) nb 15 -> 14: lugar para la garganta (tope 21845 tri)
+def tooth(M, uL, uR, vG, vI, kind, upper, na=22, nb=14, ext=0.0, mes=1.0, seed=0, uvbox=None):   # (02/11) nb 15 -> 14: lugar para la garganta (tope 21845 tri)
     """M: UVMap de la tira. uL/uR: limites en u; vG: v del cuello (encia); vI: v del borde incisal. kind: 'I' incisivo,
     'C' canino, 'P' premolar/molar. mes: lado de cx (+1/-1) que mira al centro de la boca (mesial). Devuelve P, UV, F
     (01/11 e) mas natural (Agustin 'poco naturales'): perfil recto (el parche sigue la tira a lo ancho pero es recto a lo alto:
@@ -168,10 +168,17 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=22, nb=14, ext=0.0, mes=1.0, seed=0
     mesial, cara de adelante convexa con el maximo en el tercio del cuello y dos surcos suaves en los incisivos, y una
     irregularidad chica por diente (largo, profundidad y giro) con semilla fija."""
     rng = np.random.default_rng(1000 + seed)
-    jit_len, jit_dep, jit_rot = rng.uniform(-0.18, 0.18) * MM, rng.uniform(-0.12, 0.12) * MM, rng.uniform(-1.0, 1.0)
+    # (02/11) Agustin: 'evitar que los dientes se deformen para adentro y queden chuecos': sin giro por diente, y la
+    # irregularidad de largo/profundidad mas chica (antes 0.18 / 0.12 mm y giro +-1)
+    jit_len, jit_dep, jit_rot = rng.uniform(-0.10, 0.10) * MM, rng.uniform(-0.05, 0.05) * MM, 0.0
+    M0 = M
     if PATCH:
         h = vI - vG
-        M = local_patch(M, uL - 0.1 * (uR - uL), uR + 0.1 * (uR - uL), vG - 0.3 * h, vI, deg=PDEG, degv=1)   # (01/11 f) todos rectos a lo alto; a lo ancho PDEG
+        # (02/11) Agustin: las muelas del final se doblaban (el parche de grado 2 seguia la vuelta de la tira en la esquina
+        # del arco, y el diente salia con un quiebre). Premolares y muelas: parche PLANO (grado 1 = la orientacion promedio
+        # de la tira en el lugar del diente), recto a lo ancho y a lo alto; la forma la ponen la convexidad y la seccion
+        deg = 1 if kind == 'P' else PDEG
+        M = local_patch(M, uL - 0.1 * (uR - uL), uR + 0.1 * (uR - uL), vG - 0.3 * h, vI, deg=deg, degv=1)   # (01/11 f) todos rectos a lo alto
     gap = (0.012 if kind == 'IC' else 0.035) * (uR - uL)   # (01/11 d) los centrales se tocan
     uL2, uR2 = uL + gap, uR - gap
     uc = 0.5 * (uL2 + uR2)
@@ -187,6 +194,24 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=22, nb=14, ext=0.0, mes=1.0, seed=0
     # (01/11) mordida (Agustin): el diente se alarga 'ext' metros mas alla del borde de la tira, en la direccion cuello -> borde
     Pg, _ = M(np.array([[uc, vG]])); Pi, _ = M(np.array([[uc, vI]]))
     dI = (Pi - Pg)[0]; dI /= max(np.linalg.norm(dI), 1e-9)
+    # (02/11) 'el diente tiene que estar sobre la encia': el parche ajustado puede quedar corrido de la tira real en el cuello;
+    # se ancla el centro del cuello del diente al punto real de la tira (corrimiento parejo de todo el diente)
+    Pg0, _ = M0(np.array([[uc, vG + 0.1 * (vI - vG)]])); Pg1, _ = M(np.array([[uc, vG + 0.1 * (vI - vG)]]))
+    anchor = (Pg0 - Pg1)[0]
+    # (02/11) tamano minimo en 3D: los premolares/muelas pintados del fondo de la tira son chiquitos (abajo 1-3 mm de alto, el
+    # ultimo hasta al reves) y salian como astillas hundidas en la encia (Agustin). El eje del diente apunta siempre hacia el
+    # borde libre (arriba +y para los de abajo, -y para los de arriba) y el alto / ancho en 3D no bajan de un minimo: el
+    # diente se extruye recto por su eje con ese alto (Ht) en vez de seguir la franja pintada
+    if (dI[1] > 0) == upper: dI = -dI
+    h3d = float(np.linalg.norm(Pi - Pg)); Ht = h3d
+    wsc = 1.0
+    if kind == 'P':
+        Ht = max(h3d, 5.5 * MM)
+        PL, _ = M(np.array([[uL2, vG]])); PR, _ = M(np.array([[uR2, vG]]))
+        w3d = float(np.linalg.norm(PR - PL)); wsc = max(1.0, 4.8 * MM / max(w3d, 1e-6))
+    # uv de la textura: la propia, o la de un diente bien pintado de la misma fila (uvbox = (uL2, uR2, vG, vI)) cuando la
+    # propia es una franja de pocos pixeles
+    tL, tR, tG, tI = uvbox if uvbox is not None else (uL2, uR2, vG, vI)
     for bi in b:
         # el borde incisal: canino en punta, incisivos con esquinas apenas redondeadas
         if kind == 'C':
@@ -197,15 +222,21 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=22, nb=14, ext=0.0, mes=1.0, seed=0
             bmax = 1 - rr * sst(0.5, 1.0, np.abs(cx)) ** 1.6
         bb = bi * bmax if bi > 0 else bi * np.ones_like(cx)
         v = vG + (vI - vG) * bb
-        uu = uc + 0.5 * (uR2 - uL2) * cx
+        uu = uc + 0.5 * (uR2 - uL2) * cx * wsc
         # cuello mas angosto
         narrow = (0.88 + 0.12 * sst(-0.1, 0.45, bb)) if kind == 'IC' else (0.80 + 0.20 * sst(-0.1, 0.45, bb))
         uu = uc + (uu - uc) * narrow
-        Pf, Nf = M(np.stack([uu, v], 1))
+        if kind == 'P':
+            Pf, Nf = M(np.stack([uu, vG * np.ones_like(uu)], 1))
+            Pf = Pf + dI[None, :] * (bb * Ht)[:, None]
+        else:
+            Pf, Nf = M(np.stack([uu, v], 1))
         Pf = Pf + dI[None, :] * ((ext + jit_len) * sst(0.35, 1.0, bb))[:, None]
         # (01/11 e) resalte (overjet): los incisivos de abajo quedaban 0.4 mm metidos dentro de la cara de atras de los de
         # arriba (franja clara cruzando los centrales). Arriba el borde sale 0.3 mm hacia afuera, abajo entra 0.9 mm
-        shift = (0.3 * MM * sst(0.4, 1.0, bb)) if upper else (-OVERJET_LO * sst(0.3, 1.0, bb))
+        # (02/11) el resalte era una inclinacion (crecia del cuello al borde) y los de abajo quedaban volcados hacia adentro:
+        # ahora es un corrimiento casi parejo de todo el diente (el cuello ya esta hundido en la encia)
+        shift = (0.3 * MM * sst(0.0, 0.4, bb)) if upper else (-OVERJET_LO * sst(0.0, 0.4, bb))
         Pf = Pf + Nf * np.reshape(shift, (-1, 1))
         # espesor (m): grueso en el cuello, fino en el borde
         T0 = {'IC': 6.5, 'I': 6.0, 'C': 7.5, 'P': 7.0}[kind] * MM; T1 = {'IC': 1.1, 'I': 1.0, 'C': 2.0, 'P': 4.5}[kind] * MM   # (02/11) P 8/5.5 -> 7/4.5
@@ -229,6 +260,7 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=22, nb=14, ext=0.0, mes=1.0, seed=0
         dev = (0.08 * MM * np.exp(-((np.abs(cx) - 0.38) / 0.12) ** 2) * sst(0.35, 0.85, bb)) if kind in ('IC', 'I') else 0 * cx
         rot = 0.25 * MM * jit_rot * cx * sst(0.0, 0.3, bb)
         bulge = convex - dev + rot + jit_dep * sst(0.0, 0.3, bb) + lift - SINK * sst(bs, bs - 0.27, bb)
+        Pf = Pf + anchor[None, :]
         front = Pf + Nf * bulge[:, None]
         # (01/11 d) la cara de atras sale con la normal PROMEDIO del diente, horizontal: con la normal de cada punto, en las muelas (donde la
         # tira dobla fuerte y el diente es grueso) la cara de atras se cruzaba y quedaban astillas
@@ -242,8 +274,9 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=22, nb=14, ext=0.0, mes=1.0, seed=0
         # uv: adelante la del diente pintado; atras la misma (espejada al ancho)
         # (01/11 d) uv solo del CENTRO del diente pintado: los bordes de la tira pintada (separaciones oscuras, encia, sombras
         # de Konami) quedaban sobre el borde y el cuello del diente 3D y lo hacian ver desparejo/roto
-        ut = uc + (uu - uc) * UV_W
-        vt = vG + (vI - vG) * (UV_V0 + (UV_V1 - UV_V0) * np.clip(bb, 0, 1))
+        tc = 0.5 * (tL + tR)
+        ut = tc + (uu - uc) * (tR - tL) / max(uR2 - uL2, 1e-6) / wsc * UV_W
+        vt = tG + (tI - tG) * (UV_V0 + (UV_V1 - UV_V0) * np.clip(bb, 0, 1))
         UVs.append(np.stack([ut, vt * np.ones_like(ut)], 1))
     P = np.stack(Ps); UV = np.stack(UVs)                  # (nb, na, ...)
     # tapa del borde incisal: un vertice al centro de la ultima fila
@@ -345,6 +378,16 @@ def build(src_fmdl, texdir, log=print):
         M = strip_maps[c]
         pk = np.concatenate([[r['x0']], r['pk'], [r['x1']]]).astype(float)
         ntt = len(pk) - 1; mid = ntt / 2.0
+        # (02/11) caja uv de referencia de la fila: el premolar mejor pintado (mas alto en uv); los dientes con menos de 22 px
+        # de alto pintado usan esa textura
+        best = None
+        for i in range(ntt):
+            xl, xr = pk[i], pk[i + 1]; xc = 0.5 * (xl + xr)
+            gi = np.interp(xc, np.arange(512), r['g']); ii = np.interp(xc, np.arange(512), r['inc'])
+            rank = int(abs((i + 0.5) - mid))
+            if rank >= 3 and (best is None or abs(ii - gi) > best[0]):
+                g2 = (0.035 * (xr - xl))
+                best = (abs(ii - gi), ((xl + g2) / 512.0, (xr - g2) / 512.0, (gi + GUM * (ii - gi)) / 512.0, min(ii / 512.0, 0.302) if up else max(ii / 512.0, 0.505)))
         for i in range(ntt):
             xl, xr = pk[i], pk[i + 1]
             if xr - xl < 8: continue
@@ -360,8 +403,9 @@ def build(src_fmdl, texdir, log=print):
             # mas cortas; mesial = hacia el centro de la fila
             dext = ({'IC': -0.1, 'I': -0.5, 'C': -0.2, 'P': -0.6} if up else {'I': 0.0, 'C': 0.25, 'P': -0.3})[kind] * MM
             mes = 1.0 if (i + 0.5) < mid else -1.0
+            uvbox = best[1] if (abs(ii - gi) < 22 and best is not None) else None
             Pt, UVt, Ft = tooth(M, xl / 512.0, xr / 512.0, vG, vI, kind, up, ext=(EXT_UP if up else EXT_LO) + dext, mes=mes,
-                                seed=nteeth)
+                                seed=nteeth, uvbox=uvbox)
             wt = np.zeros((len(Pt), len(names))); wt[:, names.index('sk_head' if up else 'skf_jaw')] = 1
             parts.append((Pt, UVt, Ft, wt, 'diente')); nteeth += 1
     # ---- lengua: dos subdivisiones, surco central
@@ -400,6 +444,18 @@ def build(src_fmdl, texdir, log=print):
     # (01/11) caras en el orden de Konami (horario desde afuera): la normal es la opuesta del producto cruz, y el signo de la
     # binormal que guarda Konami es el opuesto del que da tangents() (medido sobre la boca de Konami: N 0.95, T 0.98, w -1 -> +1)
     Na = -vnormals(Pa, Fa)
+    # (02/11 b) el marco de la garganta no comparte vertices con las mejillas / paladar de Konami: en su borde la normal se
+    # promedia con la del vertice vecino de Konami mas cercano (< 5 mm) para que no haya escalon de sombreado en la union
+    tagA = np.array(tag)
+    if THROAT and (tagA == 'garganta').any():
+        gi = np.where(tagA == 'garganta')[0][:throat.NR * throat.NC].reshape(throat.NR, throat.NC)
+        border = np.unique(np.concatenate([gi[:, 0], gi[:, -1], gi[-1, :]]))
+        ri = np.where(tagA == 'resto')[0]
+        from scipy.spatial import cKDTree
+        dist, j = cKDTree(Pa[ri]).query(Pa[border])
+        ok = dist < 5 * MM
+        nn = Na[border[ok]] + Na[ri[j[ok]]]
+        Na[border[ok]] = nn / np.maximum(np.linalg.norm(nn, axis=1, keepdims=True), 1e-9)
     Ta, tw = tangents(Pa, Na, UVa, Fa); tw = -tw
     # 4 huesos por vertice
     order = np.argsort(-Wa, 1)[:, :4]
