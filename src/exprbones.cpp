@@ -530,9 +530,9 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
         // de arriba: el parpadeo lo baja 0.64 rad (igual que el shader) y acompana la mirada vertical casi entera (como en una cara
         // real: mirar abajo baja el parpado con el ojo, mirar arriba lo sube)
         // (02/11 d) con la sonrisa (sm) el ojo se achina: el de arriba baja un poco y el de abajo sube (sonrisa "de verdad")
-        const float up = 0.64f * b - gy * (gy < 0.0f ? 0.80f : 0.55f) + 0.06f * sm;
+        const float up = (std::min)(0.64f * b - gy * (gy < 0.0f ? 0.80f : 0.55f) + 0.06f * sm, 0.66f);   // tope: cerrado, sin pasarse del ojo
         // de abajo: sube un poco al parpadear, baja con la mirada abajo y sube apenas con la mirada arriba
-        const float lo = -0.12f * b - gy * (gy < 0.0f ? 0.35f : 0.15f) - 0.16f * sm;
+        const float lo = std::clamp(-0.12f * b - gy * (gy < 0.0f ? 0.35f : 0.15f) - 0.16f * sm, -0.22f, 0.18f);
         float qu[4], ql[4]; AxisAngle(ax, up, qu); AxisAngle(ax, lo, ql);
         const int ds[4] = { D_LID_TL, D_LID_TR, D_LID_BL, D_LID_BR };
         for (int i = 0; i < 4; i++) {
