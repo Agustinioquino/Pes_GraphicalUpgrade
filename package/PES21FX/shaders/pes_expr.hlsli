@@ -364,7 +364,10 @@ void PesJawApply(float4 p, uint4 I, float4 W, float3 n,
     }
     du *= Rj.z; dv *= Rj.z;
     float lu = length(du), lv = length(dv);
-    if (lu > 0.006) du *= 0.006 / lu; if (lv > 0.006) dv *= 0.006 / lv;
+    // (02/11, Agustin: "al gritar o sonreir de mas se contrae mucho el labio superior") tope SUAVE de 2.5 mm (antes duro de 6 mm):
+    // los gestos chicos del labio siguen agrandados casi enteros, los grandes (grito, sonrisa amplia: ya grandes en el juego)
+    // casi no suman
+    du *= 1.0 / (1.0 + lu / 0.0025); dv *= 1.0 / (1.0 + lv / 0.0025);
     pos += du; prev += dv;
   }
   if (Rj.y > 0.0 && lt <= 31 && hh <= 31) {
