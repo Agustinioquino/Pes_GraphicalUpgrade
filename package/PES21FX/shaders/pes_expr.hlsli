@@ -255,7 +255,10 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
   float b = PesBlinkCurve(t, seed) * saturate(amt);
   float bp = PesBlinkCurve(t - 1.0 / 60.0, seed) * saturate(amt);   // cuadro anterior (vectores de movimiento)
   // (01/11 h) el parpado acompana la mirada vertical (347.w): abajo baja 0.65 del angulo, arriba sube 0.35 (solo el de arriba)
-  float gz = IniParams.Load(int2(347, 0)).w;
+  // (02/11, Agustin: "los ojos vivos es lo que rompe, no mueve el esqueleto real") el parpado ya NO sigue la mirada por shader:
+  // solo se movia en las mallas donde la DLL encontro el parpado y se separaba de las pestanas / la otra malla. Vuelve cuando
+  // la mirada y los parpados vayan por los huesos del esqueleto de la cara (exprbones.cpp)
+  float gz = 0.0;
   float gy = 0.0, gyp = 0.0;
   if (gz > 0.0) { gy = PesGaze(t, seed, gz).y; gyp = PesGaze(t - 1.0 / 60.0, seed, gz).y; }
   if (b <= 0.0 && bp <= 0.0 && abs(gy) < 0.0005 && abs(gyp) < 0.0005) return;
