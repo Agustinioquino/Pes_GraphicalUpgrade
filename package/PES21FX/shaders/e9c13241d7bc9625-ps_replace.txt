@@ -207,7 +207,7 @@ void main(
   // === PES21 (19/10) SOL LIBRE (experimentar): x101 on, y101 azimut (grados), z101 elevacion (grados), w101 intensidad,
   // x102 calidez (0 = color del juego, 1 = naranja atardecer). Mueve la direccion y el color del sol que ve ESTA pasada de luz;
   // las sombras siguen siendo las del sol real del juego (el shadow map lo arma el motor).
-  float4 pesLDir = g_psLight.m_lightDir0; float4 pesLCol = g_psLight.m_lightColor0; bool pesFreeSun = false;
+  float4 pesLDir = g_psLight.m_lightDir0; float4 pesLCol = g_psLight.m_lightColor0; bool pesFreeSun = false; bool pesShMis = IniParams.Load(int2(258,0)).x > 0.5;   // (02/11) shadow map sin alinear con la luz (sol_parche 1 y sombra_parche 0): no medir grosor con el
   { float4 SF = IniParams.Load(int2(101,0));
     if (SF.x > 0.5) { pesFreeSun = true;
       float az = radians(SF.y), el = radians(SF.z);
@@ -820,7 +820,7 @@ void main(
           // maximo en cm, z338 cuanto queda del termino viejo (toda la cara de frente), w338 on (0 = como antes).
           float4 KT = IniParams.Load(int2(338,0));
           float transK = backK * (0.5 + 0.5 * fwdK) * thinK;
-          if (KT.w > 0.5 && pesShCas > -0.5 && g_psScene.m_shadowMapResolutions.x > 1.0 && !pesFreeSun) {
+          if (KT.w > 0.5 && pesShCas > -0.5 && g_psScene.m_shadowMapResolutions.x > 1.0 && !pesFreeSun && !pesShMis) {
             float casK = pesShCas < 0.5 ? 1.0 : (pesShCas < 1.5 ? g_psScene.m_shadowProjection2._m03 : g_psScene.m_shadowProjection2._m13);
             float rpmK = max(length(g_psScene.m_shadowProjection._m02_m12_m22) * abs(g_psScene.m_shadowProjection2._m30) * abs(casK), 1e-5);
             float resK = g_psScene.m_shadowMapResolutions.x;
@@ -865,7 +865,7 @@ void main(
       float fwdH = pow(saturate(dot(VH, -LH)), 2.0);
       float thinH = 0.35 + 0.65 * saturate(trans * 1.6);
       float transH = backH * (0.4 + 0.6 * fwdH) * thinH * 0.5;                  // direccional (sin grosor)
-      if (pesShCas > -0.5 && g_psScene.m_shadowMapResolutions.x > 1.0 && !pesFreeSun) {
+      if (pesShCas > -0.5 && g_psScene.m_shadowMapResolutions.x > 1.0 && !pesFreeSun && !pesShMis) {
         float casH = pesShCas < 0.5 ? 1.0 : (pesShCas < 1.5 ? g_psScene.m_shadowProjection2._m03 : g_psScene.m_shadowProjection2._m13);
         float rpmH = max(length(g_psScene.m_shadowProjection._m02_m12_m22) * abs(g_psScene.m_shadowProjection2._m30) * abs(casH), 1e-5);
         float resH = g_psScene.m_shadowMapResolutions.x;
@@ -918,7 +918,7 @@ void main(
     transm = PESTransColor(transm, IniParams.Load(int2(34,0)).z);   // (25/10) z34 color de la contraluz
     // PES21 transmision por shadow map (18/10, Jimenez 2010): el grosor real que atraviesa la luz = distancia entre lo
     // que ve el sol (shadow map) y este pixel. Orejas y nariz se encienden solo cuando el sol esta realmente detras.
-    if (P64.x > 0.5 && P64.z > 0.0 && pesShCas > -0.5 && g_psScene.m_shadowMapResolutions.x > 1.0 && !pesFreeSun) {   // sol libre: el shadow map es del sol real, no sirve para medir grosor
+    if (P64.x > 0.5 && P64.z > 0.0 && pesShCas > -0.5 && g_psScene.m_shadowMapResolutions.x > 1.0 && !pesFreeSun && !pesShMis) {   // sol libre: el shadow map es del sol real, no sirve para medir grosor
       tookSM = true;
       float casS = pesShCas < 0.5 ? 1.0 : (pesShCas < 1.5 ? g_psScene.m_shadowProjection2._m03 : g_psScene.m_shadowProjection2._m13);
       float refPerM = max(length(g_psScene.m_shadowProjection._m02_m12_m22) * abs(g_psScene.m_shadowProjection2._m30) * abs(casS), 1e-5);

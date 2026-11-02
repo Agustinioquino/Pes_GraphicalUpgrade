@@ -474,6 +474,7 @@ static void UploadParams() {
         std::lock_guard<std::mutex> lk(g_cfgMutex);
         memcpy(p, g_cfg.live, sizeof(p));
         if (p[139][0] > 0.5f) p[104][0] = 1.0f;   // (20/10) pasto v5: necesita el pasto v3 (x104) prendido en la GPU
+        p[258][0] = (g_cfg.motorPatch && g_cfg.motorSunFix && g_cfg.motorShadowFix == 0) ? 1.0f : 0.0f;   // (02/11) x258: la luz esta corregida y el shadow map no (los shaders del sol no miden grosor con el)
         p[147][3] = 1.0f;   // (20/10) w147: esta DLL iguala la cabeza de las caras genericas con la cara (reglas PS + VS)
         for (auto& kv : g_cfg.rules) {
             if (kv.second.paramSet < 0) continue;
