@@ -434,6 +434,7 @@ void main(
   // lo que mira al costado la mitad; cambia con la altura del sol (mas azul de dia, violaceo al atardecer, nada de noche).
   // x47 fuerza, y47 cuanto azul (0 = gris), w47 on/off [Alt+Shift+C]
   float3 Nsk = 0; float3 Vsk = 0; float zsk = PESLinZ(uvC); bool geoOk = false;
+  float3 NskR = 0;   // (02/11) piel: normal suavizada para el canal rojo de la luz de ambiente (dispersion)
   // (31/10) normal geometrica desde la profundidad (fuera de todo if: las derivadas de pantalla necesitan el cuadrado entero):
   // relieve de las micro-sombras (z88) sin depender de la oclusion de pantalla, que cambia con la camara
   float3 Pgeo = float3(((uvC * float2(2, -2) + float2(-1, 1)) - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zsk, zsk);
@@ -448,6 +449,24 @@ void main(
     if (cmpOn && zsk > 0.1 && zsk < 400.0 && dot(Ld, Ld) > 1e-6) {
       geoOk = true;
       Nsk = PESDecN(uvC); Nsk.z = -Nsk.z;
+      NskR = Nsk;
+      // (02/11, 259) dispersion de la luz de ambiente en la piel: la luz del cielo y del rebote entra y viaja bajo la piel; el rojo
+      // llega mas lejos, asi que para el rojo los poros, pliegues finos y el borde de las formas se borran (normal promedio de un
+      // anillo de ~8 mm del mundo) y el azul ve la normal de detalle (Jimenez/Activision: normales por canal). La luz de ambiente
+      // deja de verse plana y gris: el color rojizo sale en las transiciones como en una piel real a la sombra.
+      if (skinC && zsk < 60.0 && IniParams.Load(int2(259,0)).x >= 0.0) {
+        float pxmN = 1.0 / max(2.0 * abs(g_psScene.m_projectionParam.x) * zsk * g_psSystem.m_renderBuffer.z, 1e-5);
+        float rN = clamp(0.008 * pxmN, 1.0, 28.0);
+        float3 nA = Nsk; float nWt = 1.0;
+        [unroll] for (int ni = 0; ni < 8; ni++) {
+          float angN = ni * 0.78539816 + 0.3927;
+          float2 uvN = uvC + float2(cos(angN), sin(angN)) * rN * g_psSystem.m_renderBuffer.zw;
+          float okN = (abs(inGBufferMaterial.SampleLevel(g_samplerPoint_Clamp_s, uvN, 0).z - 0.98039) < 0.003 && abs(PESLinZ(uvN) - zsk) < 0.02 + 0.01 * zsk) ? 1.0 : 0.0;
+          float3 nN = PESDecN(uvN); nN.z = -nN.z;
+          nA += nN * okN; nWt += okN;
+        }
+        NskR = normalize(nA / nWt + 1e-6);
+      }
       float2 sC = uvC * float2(2, -2) + float2(-1, 1);
       Vsk = normalize(float3((sC - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zsk, zsk));
       if (SKY.w > 0.5 && tyC != 1 && tyC != 3) {
@@ -477,7 +496,9 @@ void main(
             tint = lerp(float3(1, 1, 1), tk, saturate(SKY.y > 0 ? SKY.y : 1.0));
           } }
         float aoSky = lerp(1.0, saturate(inOcclusion.SampleLevel(g_samplerLinear_Clamp_s, uvC, 0).x), 0.7 * saturate(SKY.z));
-        r2.xyz += lum * tint * fSky * fSky * max(SKY.x, 0.0) * 0.12 * day * aoSky * saturate((400.0 - zsk) / 120.0) * PESAmbGain();
+        float3 fSk3 = fSky.xxx;
+        if (skinC) { float3 nG = normalize(NskR + Nsk); fSk3 = saturate(0.5 + 0.5 * float3(dot(NskR, upV), dot(nG, upV), dot(Nsk, upV))); }   // (02/11) rojo con la normal suavizada
+        r2.xyz += lum * tint * fSk3 * fSk3 * max(SKY.x, 0.0) * 0.12 * day * aoSky * saturate((400.0 - zsk) / 120.0) * PESAmbGain();
       }
     }
   }
@@ -703,15 +724,15 @@ void main(
         // a) hemisferio
         float kA = (SA.x > 0.0 ? SA.x : 1.0);
         float kG = (SA.z > 0.0 ? SA.z : 1.0);
-        float upN = dot(Nsk, upA);
-        float fUp = saturate(0.5 + 0.5 * upN), fDn = saturate(0.5 - 0.5 * upN);
+        float3 upN = float3(dot(NskR, upA), dot(normalize(NskR + Nsk), upA), dot(Nsk, upA));   // rojo con la normal suavizada
+        float3 fUp = saturate(0.5 + 0.5 * upN), fDn = saturate(0.5 - 0.5 * upN);
         float3 skyA = float3(0.80, 0.93, 1.18);
         { float4 SKa = IniParams.Load(int2(150,0));
           if (SKa.y > 0.01) { float3 t = (sunA / max(lumA, 1e-4)) * SKa.xyz; skyA = t / max(dot(t, float3(0.3, 0.5, 0.2)), 1e-4); } }
         skyA = lerp(float3(1, 1, 1), skyA, 0.5);                                  // la piel no se pone celeste: la mitad del color del cielo
         float3 gndA = float3(0.62, 1.0, 0.42) * 0.16 * sunUpA;                     // cesped al sol (albedo ~0.16, verdoso suave)
         gndA = lerp(gndA, dot(gndA, float3(0.3, 0.5, 0.2)).xxx, 0.5);               // la camiseta y el cuerpo tambien rebotan: menos verde
-        float aoA = lerp(1.0, saturate(aoRaw), 0.6);
+        float3 aoA = lerp(1.0, saturate(aoRaw).xxx, float3(0.45, 0.6, 0.7));             // el rojo rellena un poco las cuencas (dispersion)
         float inShA = lerp(0.35, 1.0, 1.0 - shA);                                   // al sol el motor ya trae algo de ambiente
         float3 E = lumA * (skyA * fUp * fUp * 0.05 + gndA * fDn * kG) * kA * inShA * aoA;
         r2.xyz += E * sssT * fadeA;
