@@ -456,13 +456,14 @@ void main(
       // deja de verse plana y gris: el color rojizo sale en las transiciones como en una piel real a la sombra.
       if (skinC && zsk < 60.0 && IniParams.Load(int2(259,0)).x >= 0.0) {
         float pxmN = 1.0 / max(2.0 * abs(g_psScene.m_projectionParam.x) * zsk * g_psSystem.m_renderBuffer.z, 1e-5);
-        float rN = clamp(0.008 * pxmN, 1.0, 28.0);
+        float rN = clamp(0.006 * pxmN, 1.0, 16.0);
         float3 nA = Nsk; float nWt = 1.0;
         [unroll] for (int ni = 0; ni < 8; ni++) {
           float angN = ni * 0.78539816 + 0.3927;
           float2 uvN = uvC + float2(cos(angN), sin(angN)) * rN * g_psSystem.m_renderBuffer.zw;
-          float okN = (abs(inGBufferMaterial.SampleLevel(g_samplerPoint_Clamp_s, uvN, 0).z - 0.98039) < 0.003 && abs(PESLinZ(uvN) - zsk) < 0.02 + 0.01 * zsk) ? 1.0 : 0.0;
+          float okN = (abs(inGBufferMaterial.SampleLevel(g_samplerPoint_Clamp_s, uvN, 0).z - 0.98039) < 0.003 && abs(PESLinZ(uvN) - zsk) < 0.006 + 0.002 * zsk) ? 1.0 : 0.0;
           float3 nN = PESDecN(uvN); nN.z = -nN.z;
+          okN *= saturate((dot(nN, Nsk) - 0.5) * 2.0);   // (02/11 b) sin mezclar a traves de un borde (mandibula sobre el cuello, parpado, aleta)
           nA += nN * okN; nWt += okN;
         }
         NskR = normalize(nA / nWt + 1e-6);
@@ -731,14 +732,16 @@ void main(
           if (SKa.y > 0.01) { float3 t = (sunA / max(lumA, 1e-4)) * SKa.xyz; skyA = t / max(dot(t, float3(0.3, 0.5, 0.2)), 1e-4); } }
         skyA = lerp(float3(1, 1, 1), skyA, 0.5);                                  // la piel no se pone celeste: la mitad del color del cielo
         float3 gndA = float3(0.62, 1.0, 0.42) * 0.16 * sunUpA;                     // cesped al sol (albedo ~0.16, verdoso suave)
-        gndA = lerp(gndA, dot(gndA, float3(0.3, 0.5, 0.2)).xxx, 0.5);               // la camiseta y el cuerpo tambien rebotan: menos verde
+        gndA = lerp(gndA, dot(gndA, float3(0.3, 0.5, 0.2)).xxx, 0.85);              // (02/11 b) casi neutro: verde bajo los ojos en la captura de Agustin
         float3 aoA = lerp(1.0, saturate(aoRaw).xxx, float3(0.45, 0.6, 0.7));             // el rojo rellena un poco las cuencas (dispersion)
         float inShA = lerp(0.35, 1.0, 1.0 - shA);                                   // al sol el motor ya trae algo de ambiente
         float3 E = lumA * (skyA * fUp * fUp * 0.05 + gndA * fDn * kG) * kA * inShA * aoA;
         r2.xyz += E * sssT * fadeA;
         // b) borde de la sombra (terminador rojo)
-        float kE = (SA.y > 0.0 ? SA.y : 1.0);
-        if (shA < 0.98) {
+        // (02/11 b) APAGADO por defecto: la SSSS de la DLL ya difunde el borde de la sombra del sol (esta en t9 antes del disco de
+        // Burley); sumado aca salian bordes rojos gruesos en parpados, nariz, mandibula y el cuello de la camiseta. y259 > 0 lo prende.
+        float kE = max(SA.y, 0.0) * 0.4;
+        if (kE > 0.0 && shA < 0.98) {
           float pxmA = 1.0 / max(2.0 * abs(g_psScene.m_projectionParam.x) * zsk * g_psSystem.m_renderBuffer.z, 1e-5);
           float rR = clamp(0.006 * pxmA, 1.0, 24.0), rG = max(rR / 3.0, 1.0);
           float rot = 6.2831853 * frac(52.9829189 * frac(dot(v0.xy, float2(0.06711056, 0.00583715))));
