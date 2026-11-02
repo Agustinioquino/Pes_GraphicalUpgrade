@@ -561,6 +561,8 @@ void main(
     }
 #endif
   }
+  // (02/11) AA especular (Kaplanyan / Tokuyoshi): varianza de la normal final en pantalla -> rugosidad extra (abajo, al codificarla)
+  float aaVb; { float3 aaN = normalize(r0.xyz); float3 aaX = ddx(aaN), aaY = ddy(aaN); aaVb = min(0.5 * (dot(aaX, aaX) + dot(aaY, aaY)), 0.18); }
   o0.w = 1;
   r0.w = abs(r0.x) + abs(r0.y);
   r0.w = r0.w + abs(r0.z);
@@ -605,6 +607,7 @@ void main(
     float rK = (rv > 0.5 && rv < 1.5 && (bodyOn || headPiece)) ? saturate(IniParams.Load(int2(12,0)).z) * 0.85 : 0.0;
     r0.x = lerp(r0.x, r0.x * 0.45, rK);
     o2.y = lerp(o2.y, max(o2.y, 0.5), rK * 0.8); }
+  { float aaA = r0.x * r0.x; aaA = aaA * aaA; r0.x = sqrt(sqrt(saturate(aaA + aaVb))); }   // AA especular (02/11)
   r0.y = r0.x * 0.0361702144 + 0.0904255286;
   r0.y = r0.y * r0.x + 0.180851057;
   r0.y = r0.y * r0.x + 0.271276593;
