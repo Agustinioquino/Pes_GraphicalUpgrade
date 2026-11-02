@@ -386,7 +386,7 @@ static float HeadSpaceMove(Skel& S, int d, const Xf& hc, const float* hrInv) {
     const float dx = r[0] - (R.t[0] - H.t[0]), dy = r[1] - (R.t[1] - H.t[1]), dz = r[2] - (R.t[2] - H.t[2]);
     return sqrtf(dx * dx + dy * dy + dz * dz);
 }
-static void EyesFrame(Skel& S, const Xf& hc, const float* hr) {
+static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
     const float amp = std::clamp(g_cfg.live[347][3], 0.0f, 2.0f), blinkAmt = std::clamp(g_cfg.live[342][3], 0.0f, 1.0f);
     // (02/11 c, Agustin con video: "por shader los ojos vivos funcionan bien, con los huesos no se mueven y vibran") el globo NO
     // se escribe: el juego vuelve a poner el hueso del ojo despues del Eval del cuello (control propio de la mirada), asi que lo
@@ -431,9 +431,10 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr) {
     }
     if (lids) {
         // de arriba: el parpadeo lo baja 0.50 rad (~29 grados; el shader usaba lo mismo) y acompana la mirada vertical
-        const float up = 0.50f * b - g[1] * (g[1] < 0.0f ? 0.65f : 0.35f);
+        // (02/11 d) con la sonrisa (sm) el ojo se achina: el de arriba baja un poco y el de abajo sube (sonrisa "de verdad")
+        const float up = 0.50f * b - g[1] * (g[1] < 0.0f ? 0.65f : 0.35f) + 0.06f * sm;
         // de abajo: sube un poco al parpadear y baja un poco al mirar abajo
-        const float lo = -0.10f * b - (g[1] < 0.0f ? g[1] * 0.20f : 0.0f);
+        const float lo = -0.10f * b - (g[1] < 0.0f ? g[1] * 0.20f : 0.0f) - 0.16f * sm;
         float qu[4], ql[4]; AxisAngle(ax, up, qu); AxisAngle(ax, lo, ql);
         const int ds[4] = { D_LID_TL, D_LID_TR, D_LID_BL, D_LID_BR };
         for (int i = 0; i < 4; i++) {
@@ -445,6 +446,45 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr) {
     if (wrote) { s_eyesW.fetch_add(1, std::memory_order_relaxed); s_lastEyes.store(s_frame.load(std::memory_order_relaxed), std::memory_order_relaxed); }
 }
 }   // namespace
+
+// (02/11 d, Agustin: "le falta mas naturalidad a los gestos de las expresiones") MOVIMIENTOS QUE ACOMPANAN al gesto, como en una
+// cara real (el juego mueve solo los huesos de la animacion; el resto de la cara queda quieto y se ve de goma):
+//  - sonrisa (las comisuras suben / se abren respecto del reposo): los pomulos suben e inflan, el musculo bajo el ojo sube y
+//    (en EyesFrame) el parpado de abajo sube y el de arriba baja apenas: el ojo se achina (sonrisa de Duchenne);
+//  - boca muy abierta (grito, del juego o del mod): las cejas y el entrecejo suben un poco.
+// Por huesos (todas las mallas juntas, sin cortes). Fuerza: 348.x (musculos virtuales, mejilla) para la sonrisa y 348.z (ceno) para
+// las cejas; 0 = como antes.
+static float Smile(Skel& S, const Xf& hc, const float* hrInv) {
+    float best = 0.0f;
+    for (int e = 0; e < 2; e++) {
+        const int d = D_LIPS_L + e; if (!S.cur[d]) continue;
+        Xf x; if (!ReadBase(S, d, x)) continue;
+        const float v[3] = { x.t[0] - hc.t[0], x.t[1] - hc.t[1], x.t[2] - hc.t[2] }; float r[3]; QRot(hrInv, v, r);
+        const Xf& R = S.rest[d]; const Xf& H = S.rest[D_HEAD];
+        const float dy = r[1] - (R.t[1] - H.t[1]), dx = (r[0] - (R.t[0] - H.t[0])) * (e == 0 ? 1.0f : -1.0f);
+        best = (std::max)(best, std::clamp((dy + 0.5f * dx - 0.0012f) / 0.0045f, 0.0f, 1.0f));   // zona muerta 1.2 mm: la cara quieta del juego no es exacto el reposo
+    }
+    return best * best * (3.0f - 2.0f * best);
+}
+static void Secondary(Skel& S, const float* hr, float sm, float open) {
+    struct Off { int d; float x, y, z; float k; };   // k: 0 = sonrisa, 1 = boca abierta
+    static const Off kOff[] = {
+        { 18,  0.0006f, 0.0018f, 0.0010f, 0 }, { 19, -0.0006f, 0.0018f, 0.0010f, 0 },   // cheek_l / r: pomulo arriba y afuera
+        { 20,  0.0f,    0.0012f, 0.0006f, 0 }, { 21,  0.0f,    0.0012f, 0.0006f, 0 },   // orbicularisoculi_b: bajo el ojo sube
+        { 26,  0.0f,    0.0014f, 0.0f,    1 }, { 27,  0.0f,    0.0014f, 0.0f,    1 },   // brow_i: cejas internas arriba
+        { 28,  0.0f,    0.0010f, 0.0f,    1 }, { 29,  0.0f,    0.0010f, 0.0f,    1 },   // brow_o
+        { 30,  0.0f,    0.0009f, 0.0f,    1 },                                         // glabella
+    };
+    const float ks = std::clamp(g_cfg.live[348][0], 0.0f, 2.0f) * sm, ko = std::clamp(g_cfg.live[348][2], 0.0f, 2.0f) * open;
+    for (const Off& f : kOff) {
+        if (!S.cur[f.d]) continue;
+        const float a = f.k == 0 ? ks : ko;
+        Xf x; if (!ReadBase(S, f.d, x)) continue;
+        float nt[3] = { x.t[0], x.t[1], x.t[2] };
+        if (a > 0.001f) { const float hv[3] = { f.x * a, f.y * a, f.z * a }; float mv[3]; QRot(hr, hv, mv); for (int k = 0; k < 3; k++) nt[k] += mv[k]; }
+        if (!WriteBone(S, f.d, x, x.q, nt)) s_badWrite.fetch_add(1, std::memory_order_relaxed);
+    }
+}
 
 // en el Eval de la restriccion del cuello (musculo.cpp hk_Eval, clase "cuello"): una vez por personaje y cuadro
 void ExprBonesFrame(const void* skel) {
@@ -472,12 +512,16 @@ void ExprBonesFrame(const void* skel) {
     }
     Xf jc; if (!ReadBase(*S, D_JAW, jc)) { Build(*S, skel); S->rebuilds++; return; }
     s_lastActive.store(fr, std::memory_order_relaxed);
-    float deg; if (JawAngle(*S, jc, &deg)) { S->angMin = (std::min)(S->angMin, deg); S->angMax = (std::max)(S->angMax, deg); S->angN++; }
+    float deg = 0.0f; if (JawAngle(*S, jc, &deg)) { S->angMin = (std::min)(S->angMin, deg); S->angMax = (std::max)(S->angMax, deg); S->angN++; }
     if (!on) return;
     // eje X de la cabeza actual (el reposo del skl mira a +z, x a la izquierda) y pivote = mandibula actual
     Xf hc; if (!ReadXf(S->cur[D_HEAD], hc)) return;
     float c[4], hr[4]; QConj(S->rest[D_HEAD].q, c); QMul(hc.q, c, hr);
-    EyesFrame(*S, hc, hr);   // antes de la boca: lee la comisura sin el giro de la mandibula del mod
+    float hrInv[4]; QConj(hr, hrInv);
+    const float sm = Smile(*S, hc, hrInv);
+    const float openAll = std::clamp((std::max)(o, 0.0f) + SStep(4.0f, 20.0f, deg), 0.0f, 1.0f);   // boca abierta del mod o del juego (grados)
+    EyesFrame(*S, hc, hr, sm);   // antes de la boca: lee la comisura sin el giro de la mandibula del mod
+    Secondary(*S, hr, sm, openAll);
     if (fabsf(o) < 0.001f && teeth < 0.001f) return;
     static const float X[3] = { 1.0f, 0.0f, 0.0f }; float ax[3]; QRot(hr, X, ax);
     float ln = sqrtf(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]); if (ln < 0.5f) return; for (float& v : ax) v /= ln;
