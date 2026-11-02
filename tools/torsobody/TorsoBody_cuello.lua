@@ -2392,19 +2392,74 @@ local function cache_paths(fn)
     if fn:find("face_bsm_alp%.ftex$") then return CACHE_DIR .. id .. CACHE_TAG .. ".face_bsm_alp.ftex", nil, id end
     return nil
 end
+-- (1.18) en el Sider de Agustin io.open devuelve nil sin error (tambien a edit21_db y PES21FX_match): la cache nunca se
+-- guardaba y cada cara se cortaba y fundia en cada carga (hasta 4 s por textura). Si io.open falla se usan las funciones de
+-- Windows por medio de ffi (luajit.ext.enabled = 1 en sider.ini). Sin pcall (el entorno de los modulos no lo tiene).
+local KW = nil
+local function kw()
+    if KW ~= nil then return KW end
+    KW = false
+    if type(ffi) ~= "table" or type(ffi.cdef) ~= "function" then return KW end
+    ffi.cdef[[
+        int tbc_MultiByteToWideChar(unsigned int cp, unsigned long flags, const char *s, int n, uint16_t *w, int wn) __asm__("MultiByteToWideChar");
+        void *tbc_CreateFileW(const uint16_t *name, unsigned long access, unsigned long share, void *sec, unsigned long disp, unsigned long flags, void *tmpl) __asm__("CreateFileW");
+        int tbc_WriteFile(void *h, const char *buf, unsigned long n, unsigned long *done, void *ov) __asm__("WriteFile");
+        int tbc_ReadFile(void *h, char *buf, unsigned long n, unsigned long *done, void *ov) __asm__("ReadFile");
+        unsigned long tbc_GetFileSize(void *h, unsigned long *hi) __asm__("GetFileSize");
+        unsigned long tbc_GetFileAttributesW(const uint16_t *name) __asm__("GetFileAttributesW");
+        int tbc_CreateDirectoryW(const uint16_t *name, void *sec) __asm__("CreateDirectoryW");
+        int tbc_CloseHandle(void *h) __asm__("CloseHandle");
+    ]]
+    KW = ffi.C
+    return KW
+end
+local function wide(p)
+    local n = KW.tbc_MultiByteToWideChar(65001, 0, p, -1, nil, 0)
+    local b = ffi.new("uint16_t[?]", n + 1)
+    KW.tbc_MultiByteToWideChar(65001, 0, p, -1, b, n)
+    return b
+end
+local function bad_handle(h) return ffi.cast("intptr_t", h) == -1 end
 local function file_read(p)
-    local f = io.open(p, "rb"); if not f then return nil end
-    local d = f:read("*a"); f:close(); return d
+    local f = io.open(p, "rb")
+    if f then local d = f:read("*a"); f:close(); return d end
+    if not kw() then return nil end
+    local h = KW.tbc_CreateFileW(wide(p), 0x80000000, 1, nil, 3, 0x80, nil)        -- GENERIC_READ, OPEN_EXISTING
+    if bad_handle(h) then return nil end
+    local n = tonumber(KW.tbc_GetFileSize(h, nil))
+    local d = nil
+    if n and n > 0 and n < 0x7fffffff then
+        local buf = ffi.new("char[?]", n); local got = ffi.new("unsigned long[1]")
+        if KW.tbc_ReadFile(h, buf, n, got, nil) ~= 0 and tonumber(got[0]) == n then d = ffi.string(buf, n) end
+    elseif n == 0 then d = "" end
+    KW.tbc_CloseHandle(h)
+    return d
+end
+local function raw_write(p, d)                 -- true si quedo escrito entero
+    local f = io.open(p, "wb")
+    if f then f:write(d); f:close(); return true end
+    if not kw() then return false end
+    local h = KW.tbc_CreateFileW(wide(p), 0x40000000, 0, nil, 2, 0x80, nil)        -- GENERIC_WRITE, CREATE_ALWAYS
+    if bad_handle(h) then return false end
+    local done = ffi.new("unsigned long[1]")
+    local ok = KW.tbc_WriteFile(h, d, #d, done, nil) ~= 0 and tonumber(done[0]) == #d
+    KW.tbc_CloseHandle(h)
+    return ok
+end
+local function make_dir(dir)
+    if type(fs) == "table" and type(fs.make_dirs) == "function" then fs.make_dirs(dir) end
+    if kw() then KW.tbc_CreateDirectoryW(wide(dir), nil) end
 end
 local function file_write(p, d)
-    local f = io.open(p, "wb")
-    if not f then
-        if CACHE_OK then CACHE_OK = false; log("TorsoBody cuello: no se puede escribir la cache en " .. tostring(CACHE_DIR) .. " (crea esa carpeta); se sigue sin cache") end
-        return false
-    end
-    f:write(d); f:close(); return true
+    if raw_write(p, d) then return true end
+    if CACHE_OK then CACHE_OK = false; log("TorsoBody cuello: no se puede escribir la cache en " .. tostring(CACHE_DIR) .. " (crea esa carpeta); se sigue sin cache") end
+    return false
 end
-local function file_exists(p) local f = io.open(p, "rb"); if f then f:close(); return true end; return false end
+local function file_exists(p)
+    local f = io.open(p, "rb"); if f then f:close(); return true end
+    if not kw() then return false end
+    return KW.tbc_GetFileAttributesW(wide(p)) ~= 0xFFFFFFFF
+end
 -- grillas de una cara: "clave\n" .. datos empaquetados, varias seguidas (largo fijo por grilla)
 local function grids_save(path, grids)
     local parts = {}
@@ -2604,12 +2659,11 @@ function m.init(ctx)
         local found = nil
         for _, rel in ipairs(cands) do
             local dir = ctx.sider_dir .. rel
-            if type(fs) == "table" and type(fs.make_dirs) == "function" then fs.make_dirs(dir) end
-            local f, err = io.open(dir .. "prueba_escritura.tmp", "wb")
-            if f then f:write("ok"); f:close(); found = dir; break end
-            log("TorsoBody cuello: cache en " .. dir .. " no se puede escribir: " .. tostring(err) .. " (fs.make_dirs " .. ((type(fs) == "table" and type(fs.make_dirs) == "function") and "si" or "no") .. ")")
+            make_dir(dir)
+            if raw_write(dir .. "prueba_escritura.tmp", "ok") then found = dir; break end
+            log("TorsoBody cuello: cache en " .. dir .. " no se puede escribir (ni con io.open ni con ffi: " .. (kw() and "si" or "no") .. ")")
         end
-        if found then CACHE_DIR = found; nojit = nojit .. " (cache en " .. found:sub(#ctx.sider_dir + 1) .. ")"
+        if found then CACHE_DIR = found; nojit = nojit .. " (cache en " .. found:sub(#ctx.sider_dir + 1) .. (KW and ", con ffi" or "") .. ")"
         else CACHE_OK = false; log("TorsoBody cuello: no se pudo escribir en ninguna carpeta de cache (content\\TorsoBody_cuello_cache); se sigue sin cache") end
         ctx.register("livecpk_make_key", make_key)
         ctx.register("livecpk_get_filepath", get_filepath)
