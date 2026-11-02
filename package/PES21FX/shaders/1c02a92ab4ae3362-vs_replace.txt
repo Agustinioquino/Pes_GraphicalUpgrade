@@ -169,6 +169,8 @@ void main(
   }
   if (!handDone && skW) {   // (02/11 b) muneca: devuelve el volumen que el skinning lineal pierde cuando el antebrazo gira
     float twA = PesArmTwistPush(vid, v4, v5, true), twB = PesArmTwistPush(vid, v4, v5, false);
+    float mb = PesArmBulge(vid, v0.xyz);   // (02/11 c) el vientre del musculo que trabaja se levanta
+    twA += mb; twB += mb;
     if (twA > 0.0 || twB > 0.0) { float3 twN = normalize(r5.xyz); r4.xyz += twA * twN; r2.xyz += twB * twN; }
   }
   r4.w = v0.w;
