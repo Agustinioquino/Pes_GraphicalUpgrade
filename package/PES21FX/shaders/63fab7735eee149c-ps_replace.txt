@@ -284,6 +284,13 @@ void main(
       { float back = saturate((v2.y - 0.66) / 0.30);
         float deepG = (mThroatZ * (0.35 + 0.65 * back) + mTongueZ * 0.35 * back) * saturate(Q98.z);
         r0.xyz *= 1.0 - 0.6 * deepG * lerp(1.0, mSunK, 0.5); }
+      // (02/11) Agustin: 'que las muelas se vean mas oscuras que el resto porque la luz normalmente no llega tan lejos'. Mismo
+      // parametro z98 (oscurecimiento hacia el fondo): las muelas 3D (su cuadro del atlas, u > 0.9, v 0.633..0.725) y, en las
+      // filas, los dientes de atras segun lo lejos que esten del centro (los premolares). Solo oscurece; lo demas no cambia
+      { float mMolar = smoothstep(0.893, 0.903, v2.x) * smoothstep(0.626, 0.636, v2.y) * smoothstep(0.732, 0.722, v2.y);
+        float mBackT = mRows * mTeeth * smoothstep(0.17, 0.31, abs(v2.x - 0.5)) * (1.0 - mMolar);
+        float deepM = (0.55 * mMolar + 0.35 * mBackT) * saturate(Q98.z);
+        r0.xyz *= 1.0 - deepM * lerp(1.0, mSunK, 0.35); }
       // lengua: rosa-rojo humedo con mas saturacion, papilas (ruido fino) y sin el gris del original
       { float tz = mTongueZ * mTissue * saturate(Q98.x);
         float lumT = dot(r0.xyz, float3(0.3, 0.59, 0.11));
