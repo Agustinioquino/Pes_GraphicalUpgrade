@@ -373,11 +373,13 @@ def build(src_fmdl, texdir, log=print):
             tf = inx & (sv > GUM + FOLD_S)
             # solo arriba: abajo la tira recogida cruzaba por delante de los incisivos (lineas oscuras) y desde arriba la de
             # abajo ya queda tapada por los dientes
-            if STRIP_FOLD < 1 and up and tf.any():
+            if STRIP_FOLD < 1 and tf.any():
                 Mg = strip_maps[c]
                 s0 = GUM + FOLD_S
                 Pg, Ng = Mg(np.stack([UVc[tf, 0], (g[tf] + s0 * (inc[tf] - g[tf])) / 512.0], 1))
-                Pg = Pg - Nc[tf] * (FOLD_BACK * MM)
+                # hacia atras con la normal de la tira EN LA ENCIA (Ng, mira hacia afuera); la del vertice (Nc) en el doblez
+                # apunta para arriba / atras y abajo empujaba la tira por delante de los incisivos
+                Pg = Pg - Ng * (FOLD_BACK * MM)
                 Pc = Pc.copy(); Pc[tf] = Pg + (Pc[tf] - Pg) * STRIP_FOLD
         if CUT_STRIP:
             # solo la zona del diente pintado; el doblez de la tira pasando el borde incisal (conecta con el piso / paladar)
