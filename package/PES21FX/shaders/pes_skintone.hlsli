@@ -155,6 +155,29 @@ float PesCharHasShirt(float3 org) {
   }
   return 0.0;
 }
+// (01/11) tipo de camiseta del personaje: -1 = no esta en la lista (o no hay lista), 0..2 = PS de la camiseta, +4 = ajustada
+float PesCharShirtType(float3 org) {
+  if (g_torsoNeed.Load(PES_SHIRT_BASE + 1) < 0.5) return -1.0;
+  int n = min((int)(g_torsoNeed.Load(PES_SHIRT_BASE) + 0.5), 32);
+  [loop] for (int i = 0; i < n; i++) {
+    int b = PES_SHIRT_BASE + 4 + 4 * i;
+    float3 p = float3(g_torsoNeed.Load(b), g_torsoNeed.Load(b + 1), g_torsoNeed.Load(b + 2));
+    float2 dd = org.xz - p.xz;
+    if (dot(dd, dd) < 0.36 && abs(org.y - p.y) < 1.0) return g_torsoNeed.Load(b + 3);
+  }
+  return -1.0;
+}
+// (01/11) fila 351: la camiseta ajustada no la simula el mod de ropa (queda pegada a la animacion, la piel no la puede empujar):
+// en los jugadores con camiseta ajustada el torso, los hombros y el brazo bajo la manga se meten x351 mm mas (mismo fundido que
+// y320 = 0: sin escalon en las costuras; cuello y cintura intactos). w351 on.
+void PesTorsoTight(inout float3 mP, float3 mN, float3 rest, float3 org) {
+  float4 K = IniParams.Load(int2(351, 0));
+  if (K.w < 0.5 || K.x <= 0.0) return;
+  if (PesCharShirtType(org) < 3.5) return;
+  float mm = min(K.x, 15.0) * PesTorsoInsetSmooth(rest);
+  if (mm <= 0.0) return;
+  mP -= mN * rsqrt(max(dot(mN, mN), 1e-8)) * (mm * 0.001);
+}
 void PesTorsoInset(inout float3 mP, float3 mN, float3 rest, float3 org) {
   float4 T = IniParams.Load(int2(320, 0));
   if (T.w < 0.5 || T.z < 0.5) return;

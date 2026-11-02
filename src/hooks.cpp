@@ -1197,7 +1197,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     // la DLL en Present); sin camiseta (menu Apariencia / Fisico, tecla 4 de Sider) el torso queda entero, sin escalon en la costura
     if (ps && (ps->hash == 0x7e647d9c43b453f9ULL || ps->hash == 0xa41e7343f874154fULL || ps->hash == 0xc7ae89b63e889007ULL)) {
         g_shirtSeen.store(true, std::memory_order_relaxed);
-        TorsoShirtNote(c, ps->hash == 0x7e647d9c43b453f9ULL ? 0 : ps->hash == 0xa41e7343f874154fULL ? 1 : 2);   // (31/10 b) camiseta por jugador
+        TorsoShirtNote(c, (ps->hash == 0x7e647d9c43b453f9ULL ? 0 : ps->hash == 0xa41e7343f874154fULL ? 1 : 2) | ((t_drawVerts == 7284 || t_drawVerts == 6006 || t_drawVerts == 7512 || t_drawVerts == 5550) ? 4 : 0));   // (01/11) +4 = camiseta ajustada (indices de [shirt_tight] detect de cloth.ini)   // (31/10 b) camiseta por jugador
     }
     // 19/10: SSS separable en pantalla antes de la composicion: la irradiancia (t9) llega ya difundida sobre la piel
     if (ps && (ps->hash == 0x619b86cb5691cdceULL || ps->hash == 0xf807e74d5b900a15ULL) && ps->repl) {
