@@ -273,7 +273,9 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
     float A = (up ? 0.50 : -0.10) * (1.0 - g);   // (01/11 d, Agustin: "los ojos se cierran mucho") antes 0.68 / -0.14   // orilla de arriba ~ +27 grados abierta -> ~ -12; la de abajo -22 -> ~ -14
     // angulo total del parpado: parpadeo + seguimiento de la mirada (el de arriba: -gy * 0.65 si mira abajo, -gy * 0.35 arriba;
     // el de abajo sube un poco al mirar abajo). El sentido: A > 0 cierra el de arriba (baja), A < 0 el de abajo (sube).
-    float fu = up ? (gy < 0.0 ? 0.65 : 0.35) : 0.15, fup = up ? (gyp < 0.0 ? 0.65 : 0.35) : 0.15;
+    // (02/11, video de Agustin: ranuras azules bajo el ojo al mover la mirada) el de abajo ya no acompana la mirada: solo se
+    // movia en las mallas donde la DLL encontro el parpado y se separaba de las pestanas / la otra malla del parpado
+    float fu = up ? (gy < 0.0 ? 0.65 : 0.35) : 0.0, fup = up ? (gyp < 0.0 ? 0.65 : 0.35) : 0.0;
     float a1 = A * b + (up ? -gy * fu : gy * fu) * (1.0 - g), a0 = A * bp + (up ? -gyp * fup : gyp * fup) * (1.0 - g);
     float c1 = cos(a1), s1 = sin(a1), c0 = cos(a0), s0 = sin(a0);
     float3 d1 = PesRotX(q, c1, s1) - q, d0 = PesRotX(q, c0, s0) - q;

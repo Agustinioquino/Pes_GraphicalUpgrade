@@ -421,8 +421,17 @@ void ExprBonesPresent() {
                 for (int d = 0; d < kND && j < (int)sizeof m - 40; d++) if (S.cur[d]) j += snprintf(m + j, sizeof m - j, " %s=%d", kDef[d].name, S.idx[d]);
                 Log("%s", m);
                 if (S.face) {   // todos los nombres del esqueleto de la cara (una vez): para la pose facial propia
-                    j = snprintf(m, sizeof m, "boca por huesos: esqueleto de la cara %p (%d huesos):", S.face, S.fn);
-                    for (int b = 0; b < S.fn && j < (int)sizeof m - 70; b++) { char nm[64]; Xf r; const char* bone = S.fbones + (size_t)b * 0xc0; if (!BoneName(bone, nm, sizeof nm)) snprintf(nm, sizeof nm, "?"); if (ReadXf(bone + 0x40, r)) j += snprintf(m + j, sizeof m - j, " %d:%s(%.3f %.3f %.3f)", b, nm, r.t[0], r.t[1], r.t[2]); else j += snprintf(m + j, sizeof m - j, " %d:%s", b, nm); }
+                    // (02/11) para separar el globo del ojo del parpado (mismo pivote): por hueso indice / padre / reposo (traslacion y
+                    // cuaternion) / hash (+ 0x10), en varias lineas
+                    j = snprintf(m, sizeof m, "boca por huesos: esqueleto de la cara %p (%d huesos), hueso: padre t(x y z) q(x y z w) hash:", S.face, S.fn);
+                    for (int b = 0; b < S.fn; b++) {
+                        Xf r; const char* bone = S.fbones + (size_t)b * 0xc0; uint32_t hs = 0; SafeCopy(&hs, bone + 0x10, 4);
+                        void* par = nullptr; int pi = -1;
+                        if (ReadPtr(bone + 0x20, par)) { ptrdiff_t dd = (const char*)par - S.fbones; if (dd >= 0 && dd % 0xc0 == 0 && dd / 0xc0 < S.fn) pi = (int)(dd / 0xc0); else pi = -2; }
+                        if (!ReadXf(bone + 0x40, r)) memset(&r, 0, sizeof r);
+                        if (j > (int)sizeof m - 110) { Log("%s", m); j = snprintf(m, sizeof m, "boca por huesos: (cara, sigue)"); }
+                        j += snprintf(m + j, sizeof m - j, " %d:%d t(%.4f %.4f %.4f) q(%.3f %.3f %.3f %.3f) %08X", b, pi, r.t[0], r.t[1], r.t[2], r.q[0], r.q[1], r.q[2], r.q[3], hs);
+                    }
                     Log("%s", m);
                 }
             }
