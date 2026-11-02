@@ -80,7 +80,7 @@ def rows_layout(teeth512):
         gs = ndi.gaussian_filter1d(gf, 1.0)
         pk, _ = signal.find_peaks(gs if down else -gs, prominence=2.5)
         rows.append({'g': ndi.gaussian_filter1d(gf, 2.0), 'inc': ndi.gaussian_filter1d(incf, 3.0), 'pk': pk,
-                     'x0': xs[ok][0], 'x1': xs[ok][-1], 'down': down})
+                     'x0': xs[ok][0], 'x1': xs[ok][-1], 'down': down, 'gum': GUM_UP if down else GUM})
     return rows
 
 def tooth_fields(rows, N, vmin=-0.15):
@@ -124,31 +124,49 @@ def tooth_ids(rows, N):
         base += ntt
     return tid, kinds
 
+TOOTH_FLAT = float(os.environ.get('TOOTH_FLAT', '0.9'))   # (02/11 v18) cuanto se empareja el sombreado horneado de los dientes
 GUM = 0.08   # (01/11 h) 0.18 -> 0.08: dientes mas largos del lado de la encia (Agustin "muy cortos"); mouth3d.py usa el mismo valor
+# (02/11 v17b) Agustin: 'respetar tambien el tamano de la encia para los dientes de arriba': la fila de arriba deja la linea de
+# la encia donde la pinto Konami (sin correrla). Cada fila lleva su valor en rows[i]['gum'] (rows_layout)
+GUM_UP = float(os.environ.get('GUM_UP', '0.0'))
 
-def gum_warp(img, rows, gum=GUM):
+def gum_field(rows, N, vmin):
+    """valor de 'gum' de la fila de cada pixel (mismo criterio de 'adentro' que tooth_fields; afuera = GUM)"""
+    s = N / 512.0
+    G = np.full((N, N), GUM, np.float32)
+    yy = np.arange(N, dtype=np.float32)[:, None]
+    xs = (np.arange(N) + 0.5) / s - 0.5
+    for r in rows:
+        g = np.interp(xs, np.arange(512), r['g']) * s; inc = np.interp(xs, np.arange(512), r['inc']) * s
+        v = (yy - g[None, :]) / (inc - g)[None, :]
+        inside = (v >= vmin) & (v <= 1.1) & (xs >= r['x0'] - 2)[None, :] & (xs <= r['x1'] + 2)[None, :]
+        G = np.where(inside, np.float32(r.get('gum', GUM)), G)
+    return G
+
+def gum_warp(img, rows, gum=None):
     """corre la linea de la encia de las dos tiras: en cada columna, con s = 0 en la encia pintada y 1 en el borde incisal,
     la encia [-gum, 0] se estira a [-gum, gum] y el diente [0, 1] se comprime a [gum, 1] (mapa continuo: el festoneado se
     conserva y el diente pintado queda entero, mas corto)"""
-    if gum <= 0: return img
     n = img.shape[0]; sc = n / 512.0
     yy = (np.arange(n) + 0.5) / sc - 0.5
     src = np.repeat(yy[:, None], n, 1)
     xs = (np.arange(n) + 0.5) / sc - 0.5
     for r in rows:
+        gr = r.get('gum', GUM) if gum is None else gum
+        if gr <= 0: continue
         g = np.interp(xs, np.arange(512), r['g']); inc = np.interp(xs, np.arange(512), r['inc'])
         ins = (xs >= r['x0'] - 2) & (xs <= r['x1'] + 2)
         sv = (yy[:, None] - g[None]) / (inc - g)[None]
-        m = ins[None] & (sv >= -gum) & (sv <= 1.0)
+        m = ins[None] & (sv >= -gr) & (sv <= 1.0)
         # tramo de la encia: s en [-gum, gum] -> fuente [-gum, 0];  tramo del diente: [gum, 1] -> [0, 1]
-        ssrc = np.where(sv < gum, -gum + (sv + gum) * 0.5, (sv - gum) / (1 - gum))
+        ssrc = np.where(sv < gr, -gr + (sv + gr) * 0.5, (sv - gr) / (1 - gr))
         src = np.where(m, (g[None] + ssrc * (inc - g)[None]), src)
     src = (src + 0.5) * sc - 0.5
     xx = np.repeat(np.arange(n, dtype=np.float64)[None], n, 0)
     out = np.stack([ndi.map_coordinates(img[..., c], [src, xx], order=1, mode='nearest') for c in range(img.shape[2])], -1)
     return out.astype(img.dtype)
 
-def clean_gum(bsm, nrm, rows, tissue0, gum=GUM):
+def clean_gum(bsm, nrm, rows, tissue0, gum=None):
     """(01/11 d) margen de la encia limpio: gum_warp estira la encia pintada al doble (vetas verticales, 'pelo') y el borde
     pintado de Konami es dentado (bloques del DXT de 512). En la franja [-1.6 gum, gum + papila] el color pasa a ser la encia
     promediada (sin vetas) + punteado fino, y el borde encia/diente es una curva suave por diente: festoneado con la papila
@@ -156,6 +174,7 @@ def clean_gum(bsm, nrm, rows, tissue0, gum=GUM):
     la boca 3D usa solo el centro del diente pintado."""
     N = bsm.shape[0]
     U, V, W = tooth_fields(rows, N, vmin=-1.0)
+    if gum is None: gum = gum_field(rows, N, -1.0)
     ins = U >= 0
     u = np.clip(U, 0, 1)
     du = np.minimum(u, 1 - u)
@@ -168,7 +187,7 @@ def clean_gum(bsm, nrm, rows, tissue0, gum=GUM):
     num = np.stack([blur(rgb[..., c] * wg, (5, 14)) for c in range(3)], -1); den = blur(wg, (5, 14))[..., None]
     base = num / np.maximum(den, 1e-4)
     base = np.where(den > 0.02, base, rgb)
-    st = noise(N, 1.1, 21) * 0.022 + noise(N, 4.0, 22) * 0.02
+    st = noise(N, 1.3, 21) * 0.010 + noise(N, 4.0, 22) * 0.018
     gumc = base * (1 + st)[..., None]
     # margen: 0..1 a lo largo de la franja, mas oscuro y un poco mas rojo pegado al diente
     dm = np.clip((edge - V) / 0.10, 0, 1)
@@ -201,7 +220,7 @@ def gum_detail(bsm, nrm, rows):
     U, V, W = tooth_fields(rows, N, vmin=-1.6)
     ins = U >= 0
     # distancia al margen (en alto de diente): 0 en el margen, crece hacia la raiz
-    dm = np.where(ins, np.clip(GUM - V, 0, 2), 1.0)
+    dm = np.where(ins, np.clip(gum_field(rows, N, -1.6) - V, 0, 2), 1.0)
     attached = sst(0.75, 0.45, dm)                                   # encia adherida (con punteado) cerca del diente
     mucosa = 1 - attached
     # punteado: hoyuelos finos, mas marcados en la adherida
@@ -213,12 +232,13 @@ def gum_detail(bsm, nrm, rows):
     r2 = 1 - np.abs(noise(N, 2.0, 44, aniso=(2.0, 1.0)))
     vess = np.clip((np.maximum(r1, 0.8 * r2) - 0.89) / 0.11, 0, 1) ** 1.3
     vess *= sst(-0.3, 0.6, noise(N, 18, 45))                        # por zonas, no en todos lados
-    w_v = vess * (0.35 * attached + 1.0 * mucosa)
+    w_v = vess * (0.2 * attached + 0.6 * mucosa)   # (02/11 v18) capilares mas suaves (encia con 'pelos')
     # color: adherida coral mas clara y mate, mucosa algo mas roja y oscura; capilares rojo oscuro
     # nitidez: la base de 512 agrandada queda blanda -> mascara de enfoque + micro variacion
-    col = np.clip(rgb + 0.7 * (rgb - np.stack([ndi.gaussian_filter(rgb[..., c], 2.5) for c in range(3)], -1)), 0, 1)
-    col = col * (1 + 0.03 * noise(N, 0.6, 46))[..., None]
-    lum_mod = 1 - 0.12 * stipple * (0.4 + 0.6 * attached)
+    col = np.clip(rgb + 0.4 * (rgb - np.stack([ndi.gaussian_filter(rgb[..., c], 2.5) for c in range(3)], -1)), 0, 1)
+    # (02/11 v18) acabado: el grano salia como sal y pimienta; punteado mas suave y grano a la mitad
+    col = col * (1 + 0.015 * noise(N, 0.8, 46))[..., None]
+    lum_mod = 1 - 0.06 * ndi.gaussian_filter(stipple, 0.6) * (0.4 + 0.6 * attached)
     col = col * lum_mod[..., None]
     col = col * (1 + mucosa[..., None] * np.array([0.02, -0.07, -0.05], np.float32))
     col = col * (1 + attached[..., None] * np.array([0.03, 0.02, 0.02], np.float32))
@@ -248,6 +268,10 @@ def build(src, N=2048, NS=1024, log=print):
     teeth = ndi.gaussian_filter(teeth0, 1.5)
     U, V, W = tooth_fields(rows, N)
     on = (U >= 0).astype(np.float32) * teeth
+    # (02/11 v18) todo el diente pintado cuenta como diente, tambien la parte que Konami pinto gris/oscura (la mitad de los
+    # de abajo tapada por los de arriba): la boca 3D la usa entera
+    onF = (U >= 0) * sst(-0.03, 0.03, V) * sst(1.0, 0.95, V)
+    on = np.maximum(on, ndi.gaussian_filter(onF.astype(np.float32), 1.0))
     u = np.clip(U, 0, 1); v = np.clip(V, 0, 1)
     # distancia al limite entre dientes en pixeles
     du = np.minimum(u, 1 - u) * np.maximum(W, 1)
@@ -267,10 +291,10 @@ def build(src, N=2048, NS=1024, log=print):
     # --- color: factor sobre el color de Konami (conserva su sombreado general y la clasificacion del shader)
     D = np.ones((N, N, 3), np.float32)
     D *= (1 + 0.07 * (crown - 0.6))[..., None]
-    D *= (1 + 0.015 * lobes + 0.008 * perik + 0.012 * fine)[..., None]
+    D *= (1 + 0.015 * lobes + 0.003 * perik * cerv + 0.010 * fine)[..., None]   # (02/11 v18) periquimatias solo junto al cuello (se veian rayas)
     D *= 1 + cerv[..., None] * np.array([0.015, -0.02, -0.08], np.float32)          # dentina calida en el cuello
     D *= 1 + incis[..., None] * np.array([-0.04, -0.02, 0.03], np.float32)          # borde incisal: esmalte fino, gris azulado
-    D *= (1 - 0.32 * line - 0.30 * corner)[..., None]
+    D *= (1 - 0.20 * line - 0.30 * corner)[..., None]   # (02/11 v18) linea entre dientes 0.32 -> 0.20 (rayas negras finas)
     rgb = B[..., :3]
     # los bloques de 4x4 del DXT1 de 512 se ven a 2048: dentro de los dientes el color base sale suavizado (el detalle lo pone D)
     soft = np.stack([ndi.gaussian_filter(rgb[..., c], 3.0) for c in range(3)], -1)
@@ -286,6 +310,20 @@ def build(src, N=2048, NS=1024, log=print):
     # clasificacion del shader 63fab773 (dientes: max > 0.45, saturacion < 0.26, R-G < 0.11; tejido: R-G > 0.13).
     lumw = np.array([0.30, 0.55, 0.15], np.float32)
     Lp = (out * lumw).sum(-1, keepdims=True)
+    # (02/11 v18) acabado (Agustin 'mejor acabado en las texturas'): el diente pintado de Konami trae sombreado horneado
+    # (manchas grises en media corona, mas en la fila de abajo) que la boca 3D hereda. Se saca la luminancia de baja
+    # frecuencia dentro de cada diente (convolucion normalizada sobre 'on') y se lleva a un nivel parejo; el detalle fino
+    # (lobulos, periquimatias, grano) queda. La luz la pone la malla 3D
+    if TOOTH_FLAT > 0:
+        wq = (on > 0.5).astype(np.float32)
+        Lq = Lp[..., 0]
+        low = ndi.gaussian_filter(Lq * wq, 5) / np.maximum(ndi.gaussian_filter(wq, 5), 1e-4)
+        Lt = float(np.percentile(Lq[wq > 0], 80))
+        shape = 1 + 0.06 * (crown - 0.6) + 0.012 * lobes          # el abombado propio (el de Konami se fue con el pasa-bajos)
+        ratio = np.clip((Lt * shape / np.maximum(low, 1e-3)) ** TOOTH_FLAT, 0.6, 2.2)
+        ratio = 1 + (ratio - 1) * sst(0.3, 0.8, on)
+        out = out * ratio[..., None]; Lp = Lp * ratio[..., None]
+        log('  dientes: sombreado de Konami emparejado a luminancia %.3f' % Lt)
     gy0, gx0 = (np.mgrid[0:N, 0:N] + 0.5) / N
     tongue_c = (sst(0.27, 0.31, gx0) * sst(0.74, 0.70, gx0) * sst(0.65, 0.69, gy0))[..., None]
     ivory = np.array([1.0, 0.955, 0.86], np.float32); ivory /= (ivory * lumw).sum()
@@ -330,7 +368,7 @@ def build(src, N=2048, NS=1024, log=print):
     margin_roll = np.exp(-(ndi.distance_transform_edt(teeth0 < 0.5).astype(np.float32) / 7.0) ** 2) * (teeth0 < 0.5) * (tis > 0.3)
     rugae = np.sin(gyy * 2 * np.pi * 26 + 3.0 * noise(N, 18, 14)) * sst(0.80, 0.86, gyy)
     tcen = np.exp(-((gxx - 0.505) / 0.012) ** 2)
-    h = on * (0.9 * crown + 0.35 * lobes + 0.022 * perik + 0.04 * fine - 0.18 * groove - 0.7 * line - 0.6 * corner)
+    h = on * (0.9 * crown + 0.35 * lobes + 0.010 * perik * (0.3 + 0.7 * cerv) + 0.04 * fine - 0.18 * groove - 0.7 * line - 0.6 * corner)
     h += tis * (1 - tongue) * (0.07 * stipple + 0.35 * margin_roll)
     h += tongue * (0.10 * papil + 0.12 * fung - 0.45 * tcen)
     h += palate * 0.18 * rugae
@@ -364,6 +402,7 @@ def build(src, N=2048, NS=1024, log=print):
     bsm_o, nrm_o = clean_gum(bsm_o, nrm_o, rows, tissue0)
     bsm_o, nrm_o = gum_detail(bsm_o, nrm_o, rows)
     bsm_o, nrm_o, S, Tr = paint_throat(bsm_o, nrm_o, S, Tr, tis * (gyy < 0.64), log)
+    bsm_o, nrm_o, S, Tr = paint_molars(bsm_o, nrm_o, S, Tr, on * (V > 0.35) * (V < 0.8), log)
     return {'bsm': bsm_o, 'nrm': nrm_o, 'srm': S, 'trm': Tr}, (B, on, line, crown, corner, cerv)
 
 def paint_throat(bsm, nrm, srm, trm, gum_mask, log=print):
@@ -409,6 +448,42 @@ def paint_throat(bsm, nrm, srm, trm, gum_mask, log=print):
         sm = np.stack([0.06 + 0.02 * apS, np.clip(0.22 + 0.10 * apS + rvS, 0, 1), np.zeros_like(apS)], -1)   # mucosa humeda: brilla mas que la encia
         put(srm[..., :3], ys0, ys1, xs0, xs1, sm, PAD // 2)
         put(trm[..., :3], ys0, ys1, xs0, xs1, np.zeros((ys1 - ys0, xs1 - xs0, 3)) + tr_gum, PAD // 2)
+    return bsm, nrm, srm, trm
+
+def paint_molars(bsm, nrm, srm, trm, enamel_mask, log=print):
+    """(02/11 g) textura propia de las muelas 3D (molar.py) en el cuadrado libre molar.MOLAR_BOX: paredes con esmalte (cuello mas
+    amarillo, vetas, periquimatias en la normal) y cara oclusal con surcos y fosas manchados (marron) y puntas de las cuspides
+    claras. Color base = promedio del esmalte de los dientes pintados (combina con los otros dientes 3D). Brillo / translucidez:
+    los de los dientes; los surcos mas asperos."""
+    import molar
+    N = bsm.shape[0]; NS = srm.shape[0]; PAD = 10
+    m = enamel_mask > 0.5
+    en = bsm[..., :3][m].mean(0) if m.any() else np.array([0.80, 0.77, 0.70])
+    log('  muelas: esmalte base %s' % np.round(en, 3).tolist())
+    u0, u1, v0, v1 = molar.MOLAR_BOX
+    x0, x1, y0, y1 = int(round(u0 * N)), int(round(u1 * N)), int(round(v0 * N)), int(round(v1 * N))
+    col, h, groove, cerv = molar.paint(x1 - x0, y1 - y0, en)
+    def put(dst, y0, y1, x0, x1, a, pad):
+        ap_ = np.pad(a, ((pad, pad), (pad, pad)) + ((0, 0),) * (a.ndim - 2), mode='edge')
+        Y0, Y1, X0, X1 = max(y0 - pad, 0), min(y1 + pad, dst.shape[0]), max(x0 - pad, 0), min(x1 + pad, dst.shape[1])
+        dst[Y0:Y1, X0:X1] = ap_[Y0 - (y0 - pad):Y1 - (y0 - pad), X0 - (x0 - pad):X1 - (x0 - pad)]
+    bsm = bsm.copy(); nrm = nrm.copy(); srm = srm.copy(); trm = trm.copy()
+    put(bsm[..., :3], y0, y1, x0, x1, col, PAD); bsm[max(y0 - PAD, 0):y1 + PAD, max(x0 - PAD, 0):x1 + PAD, 3] = 1
+    rg = col[..., 0] - col[..., 1]; mx = col.max(-1); sat = (mx - col.min(-1)) / np.maximum(mx, 1e-6)
+    log('  muelas: diente para el shader %.0f%% (max > 0.45, sat < 0.26, R-G < 0.11), tejido %.1f%%' % (
+        100 * ((mx > 0.45) & (sat < 0.26) & (rg < 0.11)).mean(), 100 * (rg > 0.13).mean()))
+    hy, hx = np.gradient(ndi.gaussian_filter(h, 0.8))
+    sc = 0.6
+    nx, ny = -hx * sc, -hy * sc
+    nz = np.sqrt(np.clip(1 - nx * nx - ny * ny, 0.04, 1)); ln = np.sqrt(nx * nx + ny * ny + nz * nz)
+    put(nrm, y0, y1, x0, x1, np.stack([np.ones_like(nx), (ny / ln) * 0.5 + 0.5, np.zeros_like(nx), (nx / ln) * 0.5 + 0.5], -1), PAD)
+    xs0, xs1, ys0, ys1 = int(round(u0 * NS)), int(round(u1 * NS)), int(round(v0 * NS)), int(round(v1 * NS))
+    z = lambda a: ndi.zoom(a, (float(ys1 - ys0) / a.shape[0], float(xs1 - xs0) / a.shape[1]), order=1)
+    gS, cS = z(groove), z(cerv)
+    put(srm[..., :3], ys0, ys1, xs0, xs1, np.stack([0.08 * (1 - 0.6 * gS), np.clip(0.34 + 0.06 * cS + 0.25 * gS, 0, 1), np.zeros_like(gS)], -1), PAD // 2)
+    em = ndi.zoom(enamel_mask, NS / N, order=1) > 0.5
+    tr = trm[..., :3][em].mean(0) if em.any() else trm[..., :3].mean((0, 1))
+    put(trm[..., :3], ys0, ys1, xs0, xs1, np.zeros((ys1 - ys0, xs1 - xs0, 3)) + tr * (1 - 0.5 * gS)[..., None], PAD // 2)
     return bsm, nrm, srm, trm
 
 def main():
