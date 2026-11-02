@@ -260,7 +260,7 @@ void main(
     // centro de la celda (la misma decision en todos los vertices de la tarjeta). Antes el desgaste solo acortaba y tenia las hojas, y
     // las capas de hojas tapaban el suelo gastado; lejos (< 20 px/m) el suelo ya se ve por el color mezclado (y291)
     float4 P292w = IniParams.Load(int2(292, 0));
-    if (pesIsExt && pesCard >= 0 && P292w.z > 0.5 && pesPx > 14.0) {
+    if (pesIsExt && pesCard >= 0 && P292w.z > 0.5 && pesPx > 8.0) {   // (02/11 paso 6) 14 -> 8: el raleo empieza a verse en camara de juego
       // (26/10 g) punto al azar dentro de la celda (por tarjeta): con la esquina, el raleo cambiaba en cuadrados de 0.5-2 m
       float2 jC = float2(PESGh21(float2((float)pesCard * 0.0731 + 0.17, (float)pesRot * 0.23) + pesExtOrg * 0.41),
                          PESGh21(float2((float)pesCard * 0.0389 + 0.53, (float)pesRot * 0.31) + pesExtOrg * 0.67)) - 0.5;
@@ -269,7 +269,7 @@ void main(
       float lvC = PESWearMap.SampleLevel(g_samplerLinear_Clamp_s, puvC, 0).x;
       float2 wC = PESWear(PESPitchMeters(puvC), pC, Q4.w, Q7.x, Q7.z, lvC);
       float4 LWv = IniParams.Load(int2(115, 0));
-      float thin = saturate(wC.y + (LWv.w > 0.5 ? 0.7 * smoothstep(0.15, 0.9, PESWearLiveCurve(lvC)) : 0.0)) * smoothstep(14.0, 28.0, pesPx);   // sin saltos al cruzar el limite
+      float thin = saturate(wC.y + (LWv.w > 0.5 ? 0.7 * smoothstep(0.15, 0.9, PESWearLiveCurve(lvC)) : 0.0)) * smoothstep(8.0, 40.0, pesPx);   // sin saltos al cruzar el limite; (02/11 paso 6) rampa larga 8..40 (antes 14..28: popping)
       float hc = PESGh21(float2((float)pesCard * 0.0413 + pesExtOrg.x * 0.37, pesExtOrg.y * 0.61 + (float)pesRot * 0.29) + 0.73);
       if (hc < thin) pesKill = true;
     }
@@ -306,6 +306,8 @@ void main(
       }
     }
   }
+  // (02/11 paso 7) w177: la pelota y las pisadas HUNDEN las hojas del mod ademas de inclinarlas (con z104 1.6 la pelota quedaba tapada / flotando)
+  float pesSinkF = 0.0; float4 W177 = IniParams.Load(int2(177, 0));
   if (pesV5 && Q39.z > 0.001) {
     // (20/10) pasto v5: pisadas y rastro de la pelota (mapa pes_flat de la DLL) solo doblan las hojas hacia afuera del
     // rastro y las agachan; la base de la cancha no cambia de color (eso daba manchones)
@@ -313,6 +315,7 @@ void main(
     // (27/10 n) R = pisadas (se levantan en segundos), G = rastro de la pelota (dura z329 s): las hojas se agachan con el mayor de los dos
     float2 fl2 = PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF, 0).xy;
     float fl0 = max(fl2.x, fl2.y);
+    if (pesIsExt && W177.w > 0.001) pesSinkF = saturate(0.55 * saturate(fl2.x) + 0.35 * saturate(fl2.y)) * saturate(W177.w);   // (02/11 paso 7) R pisadas, G rastro de la pelota
     if (fl0 > 0.003) {
       const float2 tx = float2(2.0 / 1024.0, 2.0 / 512.0);
       #define PESFL(o) (max(PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF + (o), 0).x, PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF + (o), 0).y))
@@ -349,6 +352,7 @@ void main(
   r0.y = max(r0.y, 0.0);
   r0.x = r0.y * r0.x;
   r0.x = r0.x * 16.0;
+  if (pesIsExt && W177.w > 0.001 && cb4[3].y < 0.35) pesSinkF = max(pesSinkF, 0.7 * smoothstep(0.22, 0.10, length(r1.xz - cb4[3].xz)) * saturate(W177.w));   // (02/11 paso 7) la pelota se apoya (capsula radio 0.112)
   r0.yz = cb4[3].xz + cb4[4].xz;
   r0.yz = -r0.yz * 0.5 + r1.xz;
   r0.xz = r0.yz * r0.xx;
@@ -413,7 +417,7 @@ void main(
     // parcelas extendidas: altura = la de la hoja, tope 6 cm x alto
     // (2/11 d) el tope escala con el alto elegido (z104 / tipo / matas), como en el pasto del juego (0.06 * pesH mas arriba): con z104 = 1.6
     // el tope fijo de 6 cm recortaba la tarjeta a 2/3 y la hoja de cerca perdia la punta (quedaba chata, 'aplastada')
-    r6.y = min(v0.y, 0.06 * max(pesH, 0.2) * pesTallE);
+    r6.y = min(v0.y, 0.06 * max(pesH, 0.2) * pesTallE) * (1.0 - pesSinkF);   // (02/11 paso 7) hundimiento bajo pelota / pisadas (antes del largo constante: la hoja sigue doblandose)
     // (26/10 f) x292: el hundimiento del juego tambien en las hojas del mod (las del juego se entierran donde la textura del estadio marca
     // lineas, areas gastadas o sin pasto; las del mod tapaban todo eso) y su tope de alto (mask.w); y292 entierra ademas las hojas sobre
     // la pintura de las lineas. Se resta despues del largo constante (v5) para que queden bajo el suelo y no como astillas encima

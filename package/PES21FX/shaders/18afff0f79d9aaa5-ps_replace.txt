@@ -70,6 +70,7 @@ void main(
   // eran el granulado de lejos (cada hoja de 2-6 px con otra receta que el suelo de al lado). Cerca (>= 140 px/m) queda como antes
   float4 P291 = IniParams.Load(int2(291,0));
   float pesCf = 1.0;
+  float pesDayK = IniParams.Load(int2(114,0)).w > 0.5 ? 1.0 : 0.0;   // (02/11 paso 5) dia soleado (114.w); de noche la elevacion del sol no sirve (la fila 111 es la luz de las torres)
   if (pesV3 && v4.w > 0.0 && P291.x > 0.5) { float c0 = max(P291.y, 1.0), c1 = max(P291.z, c0 + 1.0); pesCf = smoothstep(c0, c1, v4.w); }
   float4 Q5 = IniParams.Load(int2(105,0)), Q6 = IniParams.Load(int2(106,0)), Q7 = IniParams.Load(int2(107,0));
   // (27/10 h) pasto tanda 7 (la foto): x295 hojas pintadas por la linea (lo decide el VS por hoja: v5.w negativo), y295 contraste y definicion
@@ -147,7 +148,7 @@ void main(
   if (pesV3) {
     // sombra entre hojas: oclusion del atlas (2*G), mas fuerte con el sol bajo (las raices quedan en sombra)
     float sunUp = saturate(PESSunWorld().y);   // (20/10) sol en mundo publicado por la DLL
-    float aoK = clamp(Q6.y, 0.0, 2.0) * (1.15 - 0.45 * sunUp);
+    float aoK = clamp(Q6.y, 0.0, 2.0) * lerp(0.85, 1.15 - 0.45 * sunUp, pesDayK);   // (02/11 paso 5) de noche / nublado raices ~25 % menos oscuras
     r0.y = 1.0 - (1.0 - r0.w) * aoK;
   }
   r0.w = cmp(r0.y < 1);
@@ -183,7 +184,7 @@ void main(
     // mip y de 1.5 a 6 px de ancho quedaba en 14-58%): "sombra entre las hojas" que no depende del filtro de sombras ni del SSAO
     float sunUpC = saturate(PESSunWorld().y);
     // (26/10 e) 0.4 -> 0.25: la raiz quedaba negra cerca. (27/10 h) y295: + 0.10 por punto de contraste (0.35 natural): bases mas oscuras, como en la foto
-    float aoC = lerp(1.0 - saturate((0.25 + 0.10 * kC + 0.15 * kS * nearF) * kRoot) * saturate(Q6.y) * (1.15 - 0.45 * sunUpC), 1.0, smoothstep(0.0, 0.85, relH));   // (2/11) z325   // (27/10 p) z334: raiz mas oscura de cerca
+    float aoC = lerp(1.0 - saturate((0.25 + 0.10 * kC + 0.15 * kS * nearF) * kRoot) * saturate(Q6.y) * lerp(0.85, 1.15 - 0.45 * sunUpC, pesDayK), 1.0, smoothstep(0.0, 0.85, relH));   // (2/11) z325   // (27/10 p) z334: raiz mas oscura de cerca
     r1.xyz *= lerp(1.0, aoC, pesCf);   // (26/10 f) lejos sin la sombra raiz -> punta (de lejos solo pasan el alfa los texeles de la raiz)
   }
   o0.xyz = v1.zzz * r1.xyz;
@@ -365,7 +366,7 @@ void main(
   if (pesV3 && nearF > 0.001 && kS > 0.001) {
     float3 S = PESSunWorld(); float sunAz = atan2(S.z, S.x); float yaw = v8.z * 6.2832;
     float face = 0.5 + 0.5 * cos(yaw - sunAz);
-    float sunny = IniParams.Load(int2(114,0)).w > 0.5 ? 1.0 : 0.5;
+    float sunny = lerp(0.3, 1.0, pesDayK);   // (02/11 paso 5) de noche casi no hay 'lado al sol'
     float expo = lerp(1.0, lerp(0.78, 1.10, face), kS * nearF * sunny * (0.5 + 0.5 * saturate(S.y)) * (1.0 - 0.7 * pesPaintF));
     o0.xyz = saturate(o0.xyz * expo);
   }
