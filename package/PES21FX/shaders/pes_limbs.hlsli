@@ -19,6 +19,29 @@ float PesLimbFlex(float4 S, float3 Xu, float3 Xl) {
     return saturate((acos(clamp(dot(xu, xl), -1.0, 1.0)) - S.w) * S.z);
 }
 
+// (02/11) muneca fina con la palma hacia adelante (Agustin, captura muneca_fina_20261102_1433): al girar, el juego reparte el giro
+// del antebrazo entre dsk_forearm_t y dsk_forearm (y dsk_wrist / la mano cerca de la muneca); el skinning lineal mezcla dos
+// rotaciones distintas y la piel entre ellas se achica (efecto caramelo). En los dibujos del brazo (datos de pes_limb, tipo 1) los
+// vertices con peso en esos huesos se deforman por cuaterniones duales (pes_hands.hlsli), que conservan el volumen. Sin giro los
+// dos metodos dan lo mismo: solo cambia la pose que gira. Paleta del brazo de TorsoBody: 2 / 5 mano, 10..15 giro del antebrazo y
+// muneca. Se prende con x305 (musculos con textura) y y300 (cuaterniones duales de las manos, la misma cantidad).
+bool PesArmTwistSkin(uint vid, float3 p, float3 n, float3 t, uint4 bi, float4 bw, out float3 op, out float3 on, out float3 ot, out float3 opp) {
+    op = p; on = n; ot = t; opp = p;
+    float4 L5 = IniParams.Load(int2(305, 0)), P0 = IniParams.Load(int2(300, 0));
+    if (L5.x < 0.5 || P0.x < 0.5 || P0.y <= 0.0) return false;
+    uint w = 0, h = 0; g_handData.GetDimensions(w, h);
+    if (h != 2 || vid >= w) return false;
+    if ((int)round(g_handData.Load(int3(0, 0, 0)).x) != 1) return false;
+    float kt = 0.0;
+    [unroll] for (int k = 0; k < 4; k++) { uint b = bi[k]; if ((b >= 10 && b <= 15) || b == 2 || b == 5) kt += bw[k]; }
+    float kd = saturate(2.0 * kt) * saturate(P0.y);
+    if (kd <= 0.0) return false;
+    float3 dn, dt;
+    PesSkinBoth(true, p, n, t, bi, bw, kd, op, on, ot);
+    PesSkinBoth(false, p, n, t, bi, bw, kd, opp, dn, dt);
+    return true;
+}
+
 // handDone: el dibujo es una mano de TorsoBody (pes_hands); vid / rest: vertice y su posicion de reposo
 // (02/11) esfuerzo de ESTE jugador (agitacion de la DLL, musculo.cpp): tabla en t123 con la posicion de cada personaje; se toma
 // el mas cercano en el piso (a menos de 1.4 m). -1 = sin tabla (DLL vieja o musculatura viva apagada).

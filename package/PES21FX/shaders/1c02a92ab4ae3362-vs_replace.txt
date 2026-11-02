@@ -121,7 +121,9 @@ void main(
   float4 mP4 = float4(mP, v0.w);
   float3 hP, hN, hT, hPP; float hDbg;
   bool handDone = (r0.x != 0) && PesHandSkin(vid, mP, mN, mT, v4, v5, hP, hN, hT, hPP, hDbg);
-  if (handDone) {
+  // (02/11) munecas: el antebrazo de TorsoBody por cuaterniones duales donde gira (palma adelante), sin perder volumen
+  bool twistDone = !handDone && (r0.x != 0) && PesArmTwistSkin(vid, mP, mN, mT, v4, v5, hP, hN, hT, hPP);
+  if (handDone || twistDone) {
     r4.xyz = hP; r5.xyz = hN; r1.xyz = hT; r2.xyz = hPP;
   } else if (r0.x != 0) {
     r0.xyzw = (int4)v4.xyzw * int4(3,3,3,3);
