@@ -133,11 +133,16 @@ float3 PesTongue(float3 rest, float2 uv, uint jaw)
     // (02/11 c, Agustin: "mas angosta al sacar y que el slider haga que sacar la lengua sea mas natural, suba y baje")
     // el slider sigue una curva suave (sale despacio al principio y al final) y la punta recien cae sobre el labio cuando ya
     // paso los dientes (L > 0.3); afuera la punta sube y baja sola, lento (~0.3 veces por segundo), como una lengua viva
-    float Le = L * L * (3.0 - 2.0 * L);
-    float Ld = saturate((L - 0.3) / 0.7);
+    // (02/11 e, Agustin: "como una animacion mas realista: empezar con la lengua normal, elevarse y caer de manera natural sobre
+    // el labio") el slider es una animacion en 3 tiempos: 0..0.5 la punta se ELEVA (sube ~5 mm y arquea el medio) mientras
+    // empieza a salir; 0.4..1 sigue saliendo y CAE sobre el labio de abajo; en 1 queda apoyada y relajada
+    float Le = smoothstep(0.05, 1.0, L);                         // cuanto salio (adelante)
+    float Lr = smoothstep(0.0, 0.40, L) * (1.0 - smoothstep(0.50, 0.95, L));   // elevacion (pico en ~0.45)
+    float Ld = smoothstep(0.45, 1.0, L);                         // caida sobre el labio
     float sx = pow(s, 1.3);
     float3 q = 0;
     q.z += Le * 0.030 * sx;                                     // hasta 3 cm afuera en la punta
+    q.y += Lr * (0.0050 * s * s + 0.0015 * sin(3.14159 * s) * raiz);   // se eleva: la punta sube y el lomo se arquea
     q.y += Le * 0.0018 * sin(3.14159 * s) * raiz;               // el medio se levanta para pasar sobre los dientes de abajo
     q.y -= Ld * 0.0060 * s * s;                                 // la punta cae sobre el labio de abajo
     // (02/11 d, Agustin: "que se pose sobre el labio de manera correcta") la punta parte APOYADA en el labio y solo se levanta
