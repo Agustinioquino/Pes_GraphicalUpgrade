@@ -101,6 +101,7 @@ void main(
   r2.x = g_psSystem.m_param.w * r2.z;
   r3.xyzw = g_tex_diffuse.SampleBias(g_sampler_diffuse_s, v2.xy, fpBias).xyzw;
   r0.x = r3.w;
+  float fpA = r3.w;   // (03/11) cobertura del pelo en este pixel (vello ralo / barba de pocos dias = bajo)
   r0.xy = -r2.xy + r0.xy;
   r0.xy = cmp(r0.xy < float2(0,0));
   r0.x = (int)r0.y | (int)r0.x;
@@ -197,6 +198,15 @@ void main(
   r0.xyw = (uint3)r0.xyz;
   o1.xyw = float3(0.000977517106,0.000977517106,0.333333343) * r0.xyw;
   o1.z = 0;
+  // (03/11) piel con pelo en alpha (Agustin: "mejorar la piel con pelo en alpha"). Este dibujo pisa la piel de la cara con
+  // pixeles tramados de pelo (cejas, pestanas, barba y bigote ralos) marcados "no piel": la SSSS los saltea y las pasadas del sol
+  // les dan la luz dura del material comun -> granos y manchas grises en la barba de pocos dias y el borde de las cejas.
+  // Ahora: donde el pelo es ralo (cobertura baja) el pixel sigue siendo piel para la luz (marca 250/255 + algo de translucidez:
+  // la luz se difunde como en la piel de al lado y el color oscuro del pelo queda encima); donde es denso, marca de pelo
+  // (252/255, como el pelo de la cabeza: contraluz entre las hebras con la fila 339). y36 < 0 = como antes.
+  float4 P36b = IniParams.Load(int2(36,0));
+  bool fpSkin = P36b.y >= 0.0 && fpA < 0.55;
+  if (fpSkin) o1.z = 0.000977517106 * 304.0;   // material 0 (4 bits bajos) + translucidez 19/63 ~ 0.30 (bits altos), como lo empaqueta la cara
   r0.xyz = ddx_fine(r2.xyz);
   r0.xyz = -r0.xyz * r1.xxx + r2.xyz;
   r1.xzw = ddy_fine(r0.xyz);
@@ -228,7 +238,7 @@ void main(
   r0.y = r0.y * r0.x + 0.271276593;
   r0.y = r0.y * r0.x + 0.271276593;
   o2.x = r0.y * r0.x + 0.150000006;
-  o2.z = 1;
+  o2.z = fpSkin ? 0.98039 : ((P36b.y >= 0.0 && IniParams.Load(int2(339,0)).w > 0.5) ? 0.98823529 : 1);   // (03/11) piel / pelo / como antes
   o2.w = g_psMaterial.m_materials[0].x;
   r0.xyzw = v7.xyzw / w2.xxyy;   // arreglo del decompilador
   r0.xyzw = r0.xyzw * float4(0.5,0.5,0.5,0.5) + float4(0.5,0.5,0.5,0.5);
