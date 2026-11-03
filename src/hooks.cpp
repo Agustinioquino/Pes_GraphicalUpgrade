@@ -981,16 +981,60 @@ static void ResNote(ID3D11DeviceContext* c, int n) {
     int m = s_resMax.load(std::memory_order_relaxed);
     while (n > m) { if (s_resMax.compare_exchange_weak(m, n)) { CtxState& cs = Ctx(c); s_resMaxPS = cs.ps ? cs.ps->hash : 0; s_resMaxVS = cs.vs ? cs.vs->hash : 0; break; } }
 }
+// (03/11, Agustin: "con barba aveces se muestran las texturas de los brazos como pasaba antes") 1 cuadro de cada 30, ANTES de
+// enlazar nada: si t0..t3 del PS ya tienen una textura que solo pone la DLL (brazos de TorsoBody, grupos del brazo, venas, boca),
+// es una filtracion del dibujo anterior. Y cada cambio de t0 por ArmsTextureFor se anota por PS (por si un dibujo que no es brazo
+// se reconoce como brazo por su cantidad de indices).
+extern thread_local UINT t_drawVerts;
+static std::atomic<int> s_leakDraws{0}, s_leakChecked{0}, s_armSwapDraws{0};
+static const char* LeakName(ID3D11ShaderResourceView* v) {
+    if (!v) return nullptr;
+    switch (ArmsModTextureKind(v)) { case 1: return "arm_N_bsm (brazo de TorsoBody)"; case 2: return "thigh_N_bsm (muslo de TorsoBody)"; case 3: return "torso_N_bsm (torso de TorsoBody)"; case 4: return "referencia de tono del brazo"; default: break; }
+    static const char* kF[] = { "file:textures\\pes_arm_anat_n.dds", "file:textures\\pes_arm_anat_c.dds", "file:textures\\pes_arm_anat_g.dds", "file:textures\\pes_veins_arm.dds",
+        "file:textures\\pes_oral_bsm.dds", "file:textures\\pes_oral_nrm.dds", "file:textures\\pes_oral_srm.dds", "file:textures\\pes_oral_trm.dds" };
+    for (const char* f : kF) if (FileTextureAny(f) == v) return f + 14;
+    return nullptr;
+}
+static void LeakCheck(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEntry* vs) {
+    if ((s_presentNo.load(std::memory_order_relaxed) % 30) != 0) return;
+    s_leakChecked.fetch_add(1, std::memory_order_relaxed);
+    ID3D11ShaderResourceView* v[4] = {}; c->PSGetShaderResources(0, 4, v);
+    int hit = -1; const char* name = nullptr;
+    for (int i = 0; i < 4 && hit < 0; i++) if (const char* n = LeakName(v[i])) { hit = i; name = n; }
+    for (auto* x : v) if (x) x->Release();
+    if (hit < 0) return;
+    s_leakDraws.fetch_add(1, std::memory_order_relaxed);
+    static std::mutex mx; static std::vector<uint64_t> seen;
+    const uint64_t key = ((ps ? ps->hash : 0) * 31 + (vs ? vs->hash : 0)) * 8 + hit;
+    std::lock_guard<std::mutex> lk(mx);
+    if (seen.size() >= 40) return;
+    for (uint64_t k : seen) if (k == key) return;
+    seen.push_back(key);
+    Log("FILTRACION: dibujo PS %016llX VS %016llX (%u indices) llega con %s en t%d antes de que la DLL enlace nada (la dejo puesta otro dibujo)",
+        (unsigned long long)(ps ? ps->hash : 0), (unsigned long long)(vs ? vs->hash : 0), t_drawVerts, name, hit);
+}
+static void ArmSwapNote(const ShaderEntry* ps, UINT idx) {
+    s_armSwapDraws.fetch_add(1, std::memory_order_relaxed);
+    static std::mutex mx; static std::vector<uint64_t> seen;
+    const uint64_t key = (ps ? ps->hash : 0) * 131071ULL + idx;
+    std::lock_guard<std::mutex> lk(mx);
+    if (seen.size() >= 24) return;
+    for (uint64_t k : seen) if (k == key) return;
+    seen.push_back(key);
+    Log("brazos: t0 cambiado por la textura de TorsoBody en dibujo PS %016llX (%u indices)", (unsigned long long)(ps ? ps->hash : 0), idx);
+}
 void ResourcesLogPresent() {
     static double s_next = 0; static int s_lines = 0;
     double t = Now(); if (t < s_next || s_lines >= 40) return;
     s_next = t + 30.0;
     int draws = s_resDraws.exchange(0), mouth = s_mouthDraws.exchange(0);
-    if (!draws && !mouth) return;
+    if (!draws && !mouth && !s_leakDraws.load() && !s_armSwapDraws.load()) return;
     s_lines++;
     Log("recursos por dibujo (30 s): %d dibujos con recursos del mod, maximo %d de %d (PS %016llX VS %016llX), mas de 24: %d | boca 63fab: %d dibujos, t0..t3 del mod %d, otra textura %d, sin regla %d",
         draws, s_resMax.exchange(0), kSavedMax, (unsigned long long)s_resMaxPS.load(), (unsigned long long)s_resMaxVS.load(), s_resOver24.exchange(0),
         mouth, s_mouthOk.exchange(0), s_mouthOther.exchange(0), s_mouthNoRule.exchange(0));
+    Log("filtraciones (30 s): %d de %d dibujos revisados llegan con una textura del mod en t0..t3; t0 cambiado por brazos de TorsoBody en %d dibujos",
+        s_leakDraws.exchange(0), s_leakChecked.exchange(0), s_armSwapDraws.exchange(0));
 }
 static void MouthCheck(ID3D11DeviceContext* c, const ShaderEntry* ps) {
     s_mouthDraws.fetch_add(1, std::memory_order_relaxed);
@@ -1136,7 +1180,8 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     const ShaderEntry *ps = s.ps, *vs = s.vs;
     // (27/10 b) brazos, manos, muslos y torso de TorsoBody del tono de la cara (brazos.cpp, filas 321 / 327): son las texturas
     // del cuerpo, no un shader, asi que valen tambien con "Ver original" (el shader original lee el mismo t0)
-    if (vs) if (ID3D11ShaderResourceView* at = ArmsTextureFor(c, vs->hash, t_drawVerts)) { Remember(c, d, true, true, 0); c->PSSetShaderResources(0, 1, &at); }
+    LeakCheck(c, ps, vs);
+    if (vs) if (ID3D11ShaderResourceView* at = ArmsTextureFor(c, vs->hash, t_drawVerts)) { ArmSwapNote(ps, t_drawVerts); Remember(c, d, true, true, 0); c->PSSetShaderResources(0, 1, &at); }
     if (g_cfg.bypass) return d.n > 0;
     if (g_skinDiagArmed.load(std::memory_order_relaxed)) SkinDiagDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0, t_drawVerts);   // (24/10) skintone.cpp
     if (g_toneChkArmed.load(std::memory_order_relaxed)) SkinToneCheckDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0);   // (24/10 c) punto de los dibujos de piel

@@ -497,6 +497,7 @@ ID3D11ShaderResourceView* ArmAnatTexture(int which);   // (02/11) grupos muscula
 // (27/10) brazos.cpp: brazos, manos y muslos de TorsoBody para las caras reales (la cara trae arm_bsm / thigh_bsm de 2048):
 // textura de TorsoBody del tono del jugador para t0 del PS en ese dibujo (nullptr = dejar la del juego); Present lee las huellas
 ID3D11ShaderResourceView* ArmsTextureFor(ID3D11DeviceContext* c, uint64_t vsHash, UINT indexCount);
+int ArmsModTextureKind(ID3D11ShaderResourceView* v);   // (03/11) 0 = no es del mod; 1 arm, 2 thigh, 3 torso, 4 referencia
 void ArmsPresent();
 int CharSkinToneFor(uint32_t id);   // (27/10) tono 1..6 de PES21FX\tonos_piel.txt (0 = no esta), fila 324
 ID3D11ShaderResourceView* ArmsTorsoTextureForFace();   // (27/10) torso_N para t29 de los PS de la cara (cuello, pes_collar.hlsli, fila 322)
