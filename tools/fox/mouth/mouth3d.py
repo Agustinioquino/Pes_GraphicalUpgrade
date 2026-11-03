@@ -26,16 +26,52 @@ GUM = 0.08   # = make_oral.GUM (01/11 h: 0.18 -> 0.08, dientes mas largos)
 KONAMI_BITE = int(os.environ.get('KONAMI_BITE', '1'))   # (02/11 g) Agustin: 'que la mordida sea la misma que la de Konami': el borde de cada diente 3D queda
 # justo en el borde del diente pintado de Konami (sin alargar, sin resalte); los premolares chicos crecen hacia la encia, no hacia el borde
 OVERJET_LO = 0.7 * MM   # (02/11) 0.9 -> 0.7, parejo   # (01/11 e) los incisivos de abajo se meten 0.9 mm detras de los de arriba
-PDEG = int(os.environ.get('PDEG', '2'))   # (01/11 f) parche por diente: grado 2 a lo ancho (sigue el arco), recto a lo alto
+PDEG = int(os.environ.get('PDEG', '1'))   # (03/11) Agustin 'dientes curveados de una manera poco natural': rectos a lo ancho (la forma la da la convexidad), antes 2   # (01/11 f) parche por diente: grado 2 a lo ancho (sigue el arco), recto a lo alto
 CUT_STRIP = float(os.environ.get('CUT_STRIP', '0'))   # (01/11 i) la tira se corta a s > GUM + esto (0 = no cortar; 02/11: apagado, ver STRIP_GUM)
 STRIP_GUM = float(os.environ.get('STRIP_GUM', '0.3'))   # (02/11) la tira debajo de la encia (s > GUM) pasa a mostrar encia: s' = GUM - esto * (s - GUM)
 STRIP_FOLD = float(os.environ.get('STRIP_FOLD', '0.25'))   # (02/11 c) la tira mas alla de la encia (s > GUM) se recoge a este largo hacia el cuello
 FOLD_BACK = float(os.environ.get('FOLD_BACK', '1.5'))
 REAL_TEETH = int(os.environ.get('REAL_TEETH', '1'))   # (03/11) Agustin: 'basate en una dentadura real': anchos reales por diente
+REAL_GAP = float(os.environ.get('REAL_GAP', '0.024'))      # (03/11 v19c) aire entre dientes (fraccion del ancho de cada lado)
+REAL_GAP_IC = float(os.environ.get('REAL_GAP_IC', '0.012'))
+REAL_AIR = float(os.environ.get('REAL_AIR', '0.2'))      # (03/11 v19c) aire minimo (mm) entre dientes vecinos, mitad de adelante
+ARCH_Z = float(os.environ.get('ARCH_Z', '0.125'))          # z (m) aproximado del centro del arco (para saber que es 'adelante')
+NECK_N = float(os.environ.get('NECK_N', '0.78'))           # (03/11 v19c) ancho del cuello de incisivos/caninos (fraccion)
 LO_OVERBITE = float(os.environ.get('LO_OVERBITE', '2.2'))   # (03/11) mm que los de abajo suben detras de los de arriba (sobremordida)
 LO_OVERJET = float(os.environ.get('LO_OVERJET', '1.0'))     # (03/11) mm que los de abajo van detras (resalte)
 # anchos mesiodistales reales (mm), del centro hacia atras: arriba IC, I, C, P1, P2; abajo I1, I2, C, P1, P2, M
 REAL_W = {True: [8.6, 6.6, 7.6, 7.0, 6.6], False: [5.3, 5.8, 6.9, 7.0, 7.1, 8.5]}
+
+def fit_row(row, log=print, name=''):
+    """(03/11 v19c) Agustin: 'ni todos pegados ni separados'. Entre dientes vecinos de una fila (en orden por el arco) se mide
+    cuanto se enciman las caras de ADELANTE (lo que se ve; atras convergen con la curva del arco, como en una dentadura real) y
+    se angosta solo el lado que mira al vecino (escala hacia su centro) hasta dejar REAL_AIR mm de aire. Arregla los
+    premolares de arriba que se encimaban (el arco 3D ahi es mas corto que el ancho real del diente). Tope: 20 % por lado"""
+    air = REAL_AIR * MM
+    C = [q[0].mean(0) for q in row]
+    def front(P, c):   # caras de adelante: hacia afuera del arco (centro del arco en z ARCH_Z)
+        o = c - np.array([0.0, c[1], ARCH_Z]); o[1] = 0; o /= max(np.linalg.norm(o), 1e-9)
+        t = (P - c) @ o
+        return P[t > t.min() + 0.6 * np.ptp(t)]
+    fac = [[1.0, 1.0] for _ in row]   # (hacia el anterior, hacia el siguiente)
+    U = []
+    nfix = 0
+    for i in range(len(row) - 1):
+        ca, cb = C[i], C[i + 1]
+        d = cb - ca; d[1] = 0; L = float(np.linalg.norm(d)); u = d / max(L, 1e-9); U.append(u)
+        ea = float(((front(row[i][0], ca) - ca) @ u).max()); eb = float(((cb - front(row[i + 1][0], cb)) @ u).max())
+        over = ea + eb + air - L
+        if over > 0:
+            nfix += 1
+            fac[i][1] = max(0.8, 1 - 0.5 * over / max(ea, 1e-6)); fac[i + 1][0] = max(0.8, 1 - 0.5 * over / max(eb, 1e-6))
+    for i, q in enumerate(row):
+        P, c = q[0], C[i]
+        for k, j in ((0, i - 1), (1, i)):
+            if not (0 <= j < len(U)) or fac[i][k] >= 1.0: continue
+            u = U[j] if k == 1 else -U[j]
+            t = (P - c) @ u; side = t > 0
+            P[side] -= np.outer(t[side] * (1 - fac[i][k]), u)
+    log('  ajuste de la fila %s: %d pares encimados angostados (aire %.2f mm)' % (name, nfix, REAL_AIR))
 
 def real_bounds(M, r, pk, up, log=print):
     """(03/11) limites entre dientes (x del atlas, 0..512) con las proporciones de una dentadura real: se mide el largo de
@@ -60,7 +96,7 @@ def real_bounds(M, r, pk, up, log=print):
 BS_UP = float(os.environ.get('BS_UP', '0.0'))   # (02/11 v17b) donde sale de la encia el diente de arriba (fraccion del alto)
 FOLD_S = float(os.environ.get('FOLD_S', '0.35'))   # (02/11 c) mm detras de la encia donde queda la tira recogida
 THROAT = int(os.environ.get('THROAT', '1'))   # (02/11) fondo de la garganta nuevo (throat.py) en lugar de la pared plana de Konami
-SINK = 1.5 * MM   # (01/11 d) 0.7 -> 1.5 mm: el cuello se mete bien detras de la encia (no asoma por arriba)
+SINK = float(os.environ.get('SINK_MM', '2.0' if int(os.environ.get('REAL_TEETH', '1')) else '1.5')) * MM   # (03/11 v19c) 2 mm: la encia abraza el cuello   # (01/11 d) 0.7 -> 1.5 mm: el cuello se mete bien detras de la encia (no asoma por arriba)
 PATCH = int(os.environ.get('PATCH', '1'))
 MOLARS = int(os.environ.get('MOLARS', '2'))   # (02/11) muelas 3D por lado y por arcada, detras del ultimo premolar (Agustin: 'que las muelas sean 3d')
 MOLAR_L = [float(x) for x in os.environ.get('MOLAR_L', '10.0,9.0').split(',')]   # largo mesio-distal (mm) de cada muela
@@ -214,7 +250,7 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0
         deg = 1 if kind == 'P' else PDEG
         M = local_patch(M, uL - 0.1 * (uR - uL), uR + 0.1 * (uR - uL), vG - 0.3 * h, vI, deg=deg, degv=1)   # (01/11 f) todos rectos a lo alto
     gap = (0.012 if kind == 'IC' else 0.035) * (uR - uL)   # (01/11 d) los centrales se tocan
-    if REAL_TEETH: gap = (0.004 if kind == 'IC' else 0.012) * (uR - uL)   # (03/11) dientes en contacto (Agustin 'no mucha separacion')
+    if REAL_TEETH: gap = (REAL_GAP_IC if kind == 'IC' else REAL_GAP) * (uR - uL)   # (03/11 v19c) Agustin: 'ni pegados ni separados': un poco de aire entre dientes
     uL2, uR2 = uL + gap, uR - gap
     uc = 0.5 * (uL2 + uR2)
     b = -0.22 + 1.22 * np.sin(np.linspace(0, 1, nb) * np.pi / 2) ** 1.2   # mas filas cerca del borde incisal
@@ -270,7 +306,7 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0
         # cuello mas angosto
         narrow = (0.88 + 0.12 * sst(-0.1, 0.45, bb)) if kind == 'IC' else (0.80 + 0.20 * sst(-0.1, 0.45, bb))
         if REAL_TEETH and kind in ('I', 'C'):   # (03/11) el ancho maximo (contacto) en el tercio incisal; cuello algo angosto
-            narrow = 0.84 + 0.16 * sst(-0.1, 0.55, bb)
+            narrow = NECK_N + (1 - NECK_N) * sst(-0.1, 0.55, bb)   # (03/11 v19c) cuello mas angosto: asoma la papila de encia entre dientes
         uu = uc + (uu - uc) * narrow
         if kind == 'P':
             Pf, Nf = M(np.stack([uu, vG * np.ones_like(uu)], 1))
@@ -453,7 +489,7 @@ def build(src_fmdl, texdir, log=print):
         GUM = r['gum']
         pk = np.concatenate([[r['x0']], r['pk'], [r['x1']]]).astype(float)
         ntt = len(pk) - 1; mid = ntt / 2.0
-        pk_paint = pk.copy()
+        pk_paint = pk.copy(); row_parts = []
         if REAL_TEETH:
             pk, tw_row = real_bounds(M, r, pk, up, log)
         # (02/11) caja uv de referencia de la fila: el premolar mejor pintado (mas alto en uv); los dientes con menos de 22 px
@@ -482,9 +518,12 @@ def build(src_fmdl, texdir, log=print):
             dext = ({'IC': -0.1, 'I': -0.5, 'C': -0.2, 'P': -0.6} if up else {'I': 0.0, 'C': 0.25, 'P': -0.3})[kind] * MM
             mes = 1.0 if (i + 0.5) < mid else -1.0
             uvbox = best[1] if (abs(ii - gi) < 22 and best is not None) else None
-            if REAL_TEETH and uvbox is None:
+            lastP = kind == 'P' and rank >= int(mid) - 1
+            if REAL_TEETH and (uvbox is None or lastP):
                 # (03/11) la textura sigue siendo la del diente pintado de Konami de ese lugar (los limites 3D se movieron)
-                xl0, xr0 = pk_paint[i], pk_paint[i + 1]; xc0 = 0.5 * (xl0 + xr0); g2 = 0.035 * (xr0 - xl0)
+                # (03/11 v19c) el ultimo premolar usa la del vecino hacia el centro: su franja pintada tiene encia (salia rojizo)
+                ip = i + (int(mes) if lastP else 0)
+                xl0, xr0 = pk_paint[ip], pk_paint[ip + 1]; xc0 = 0.5 * (xl0 + xr0); g2 = 0.035 * (xr0 - xl0)
                 gi0 = np.interp(xc0, np.arange(512), r['g']); ii0 = np.interp(xc0, np.arange(512), r['inc'])
                 uvbox = ((xl0 + g2) / 512.0, (xr0 - g2) / 512.0, (gi0 + GUM * (ii0 - gi0)) / 512.0, min(ii0 / 512.0, 0.302) if up else max(ii0 / 512.0, 0.505))
             if REAL_TEETH:
@@ -494,8 +533,11 @@ def build(src_fmdl, texdir, log=print):
                 ext = ((0.0 if kind == 'P' else (-0.2 if up else 1.0)) * MM if KONAMI_BITE else (EXT_UP if up else EXT_LO) + dext)
             Pt, UVt, Ft = tooth(M, xl / 512.0, xr / 512.0, vG, vI, kind, up, ext=ext, mes=mes, tw=(tw_row[i] if REAL_TEETH else None),
                                 seed=nteeth, uvbox=uvbox)
+            if os.environ.get('TOOTH_DBG'): log('    diente %s %d %s x %.1f y %.1f z %.1f ancho %.1f' % ('arr' if up else 'abj', i, kind, *(Pt.mean(0) * 1000), np.ptp(Pt[:, 0]) * 1000))
             wt = np.zeros((len(Pt), len(names))); wt[:, names.index('sk_head' if up else 'skf_jaw')] = 1
-            parts.append((Pt, UVt, Ft, wt, 'diente')); nteeth += 1; tooth_up.append(up)
+            row_parts.append([Pt, UVt, Ft, wt, 'diente']); nteeth += 1; tooth_up.append(up)
+        if REAL_TEETH: fit_row(row_parts, log, 'arriba' if up else 'abajo')
+        parts.extend(tuple(q) for q in row_parts)
         best_by_row[0 if up else 1] = best[1]
     # ---- (02/11) muelas 3D del fondo (Agustin: 'que las muelas sean 3d'): detras del ultimo premolar de cada lado la tira
     # de Konami es solo encia (no hay diente pintado). Se arman MOLARS muelas por lado y por arcada siguiendo la linea de la
