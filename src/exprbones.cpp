@@ -719,7 +719,9 @@ void ExprBonesFrame(const void* skel) {
     s_lastActive.store(fr, std::memory_order_relaxed);
     if (FreeCamActive() && g_cfg.live[346][0] > 0.5f) PublishHead(*S);   // (02/11) camara libre "seguir la cara"
     float deg = 0.0f; if (JawAngle(*S, jc, &deg)) { S->angMin = (std::min)(S->angMin, deg); S->angMax = (std::max)(S->angMax, deg); S->angN++; }
-    if (!on) return;
+    // (03/11, Agustin: con x340 = 0 "no cambia nada") al apagar, lo ultimo escrito quedaba puesto: el juego no reescribe todos los
+    // huesos de la cara en cada cuadro (editor quieto), asi que la cara seguia deformada. Ahora al apagar se devuelve la base del juego
+    if (!on) { for (int d = 0; d < kND - 2; d++) if (S->wHave[d]) Release(*S, d); return; }
     // eje X de la cabeza actual (el reposo del skl mira a +z, x a la izquierda) y pivote = mandibula actual
     Xf hc; if (!ReadXf(S->cur[D_HEAD], hc)) return;
     float c[4], hr[4]; QConj(S->rest[D_HEAD].q, c); QMul(hc.q, c, hr);
