@@ -222,8 +222,10 @@ void main(
   r1.yzw = PESSunColor() * g_psScene.m_exposure.zzz;
   r7.xyzw = float4(0,0.699999988,0.606217802,-0.349999994) / g_psScene.m_shadowMapResolutions.xxxx;
   r6.w = 1;
-  r8.x = dot(r6.xyzw, g_psScene.m_shadowProjection._m00_m10_m20_m30);
-  r8.y = dot(r6.xyzw, g_psScene.m_shadowProjection._m01_m11_m21_m31);
+  // PES21 (02/11) w337 "Sombra alineada" tambien en esta variante (faltaba: con w337 = 1 la sombra que leia este PS seguia girando)
+  float4 pesAl = float4(PESShadowAlign(r6.xyz, g_psScene.m_view, IniParams.Load(int2(337,0)).w), 1.0);
+  r8.x = dot(pesAl, g_psScene.m_shadowProjection._m00_m10_m20_m30);
+  r8.y = dot(pesAl, g_psScene.m_shadowProjection._m01_m11_m21_m31);
   r2.w = -g_psScene.m_shadowProjection2._m31 + r6.z;
   r2.w = r2.w * g_psScene.m_shadowProjection2._m32 + 1;
   r2.w = max(1, r2.w);

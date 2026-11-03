@@ -342,6 +342,14 @@ static bool KeyOf(ID3D11DeviceContext* c, ID3D11Buffer** b, UINT* f) {
 }
 }   // namespace
 
+// (03/11, Agustin: "con barba aveces se muestran las texturas de los brazos") registro: es una de las texturas de TorsoBody que
+// enlaza la DLL (arm / thigh / torso de cada tono o su referencia de 64 px)? 0 = no; 1 = arm, 2 = thigh, 3 = torso, 4 = referencia
+int ArmsModTextureKind(ID3D11ShaderResourceView* v) {
+    if (!v) return 0;
+    for (int k = 0; k < 3; k++) for (int n = 0; n <= kTones; n++) if (s_tex[k][n] == v) return 1 + k;
+    for (int n = 0; n < kTones; n++) if (s_armRef[n] == v) return 4;
+    return 0;
+}
 // dibujo del VS de la piel: si es un brazo / mano / muslo con una textura que no es la de TorsoBody, la textura de TorsoBody
 // del tono del jugador para enlazar en t0 (el que llama la devuelve despues del dibujo); nullptr = no cambiar nada
 ID3D11ShaderResourceView* ArmsTextureFor(ID3D11DeviceContext* c, uint64_t vsHash, UINT indexCount) {

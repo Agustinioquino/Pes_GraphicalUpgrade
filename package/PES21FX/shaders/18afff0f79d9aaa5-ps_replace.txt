@@ -348,6 +348,18 @@ void main(
   // capas de hojas gana la de adelante (antes cada capa volvia a mezclar sobre la anterior y el resultado dependia del orden). z59 sin mezclar
   // (27/10 l) tanda 9a, z299: las hojas pintadas por la linea toman el color del suelo (la linea de la base, nitida) hasta que la hoja mide en
   // pantalla (rampa pesCfN, desde z291): a media distancia la linea se veia punteada por las hojas blancas sombreadas
+  // (03/11) y330: color del suelo en las hojas de CERCA. En canchas de parche (id 9, 03/11) el color del pasto del juego (v3) y su mascara de
+  // lineas no coinciden con la base: las hojas quedaban a 0.63x del original y tapaban la cal. La hoja toma el color de la base dibujada
+  // detras (copia de RT0: color, franjas de corte, cal, desgaste de la cancha) y conserva su propio sombreado (raiz, claridad, puntas, seco,
+  // matas, lado al sol) como un factor relativo a su color plano. 0 = como antes, 1 = todo el color del suelo
+  float4 P330 = IniParams.Load(int2(330,0));
+  if (pesFB && v5.w < 0.5 && !pesFar && P330.y > 0.001) {
+    float3 gnd = PESBaseRT0.Load(int3(v0.xy, 0)).xyz;
+    float3 flatC = saturate(v1.zzz * v3.xyz);
+    { float3 cg = flatC; PESGrassColorGrade(cg); flatC = saturate(cg); }
+    float3 rel = clamp(o0.xyz / max(flatC, 0.02), 0.0, 1.6);
+    o0.xyz = lerp(o0.xyz, saturate(gnd * rel), saturate(P330.y));
+  }
   float pesCfB = (pesPaintF > 0.001 && P299.z > 0.5) ? lerp(pesCf, pesCf * pesCfN, pesPaintF) : pesCf;
   if (pesFB && v5.w < 0.5) o0.xyz = lerp(PESBaseRT0.Load(int3(v0.xy, 0)).xyz, o0.xyz, pesCfB);
   // (27/10 m) tanda 10, z328: oclusion entre matas. v8.y la manda el VS por hoja (0.5..1): las matas bajas, los bordes de cada mata y las hojas

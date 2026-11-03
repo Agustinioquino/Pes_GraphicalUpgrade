@@ -956,15 +956,97 @@ template<int V> static void STDMETHODCALLTYPE hk_SetCS(ID3D11DeviceContext* c, I
 // ---------------------------------------------------------------- reglas antes de cada dibujo
 // lo que una regla enlaza se devuelve a como estaba despues del dibujo (como "post ps-t20 = ..." en 3DMigoto)
 struct Saved { bool ps; bool srv; int slot; IUnknown* prev; };
-struct DrawScope { Saved s[24]; int n = 0; FaceGenExtra brow; bool skip = false; ID3D11PixelShader* restorePS = nullptr; LodIA lod; GlassScope glass; RingScope ring; };   // glass: vidrio de los menus (glass.cpp)   // lod.count > 0: dibujar con la geometria de LOD0 (lod.cpp)
+static const int kSavedMax = 64;   // (02/11) 24 -> 64: con los grupos del brazo (t26/t30/t36/t123) los dibujos del brazo pasaban de 24 y lo enlazado despues no se devolvia (se filtraba al dibujo siguiente: la boca tomaba texturas ajenas)
+struct DrawScope { Saved s[kSavedMax]; int n = 0; FaceGenExtra brow; bool skip = false; ID3D11PixelShader* restorePS = nullptr; LodIA lod; GlassScope glass; RingScope ring; };   // glass: vidrio de los menus (glass.cpp)   // lod.count > 0: dibujar con la geometria de LOD0 (lod.cpp)
 
 static void Remember(ID3D11DeviceContext* c, DrawScope& d, bool ps, bool srv, int slot) {
-    if (d.n >= 24) return;   // (26/10 d) 12 -> 24: el torso ya enlaza 11 (t127, t16..t21, t24, t31..t33); lo que no entra no se devolveria
+    if (d.n >= kSavedMax) {   // (26/10 d) 12 -> 24, (02/11) -> 64: lo que no entra no se devolveria
+        static std::atomic<bool> s_full{false};
+        if (!s_full.exchange(true)) Log("AVISO: un dibujo enlazo mas de %d recursos del mod; lo que sigue no se devuelve", kSavedMax);
+        return;
+    }
+    if (d.n == 24) { static std::atomic<int> s_over{0}; if (s_over.fetch_add(1) < 3) Log("recursos por dibujo: un dibujo paso de 24 (slot %c t%d): con la DLL anterior esto quedaba enlazado para el dibujo siguiente", ps ? 'P' : 'V', slot); }
     Saved& s = d.s[d.n++]; s.ps = ps; s.srv = srv; s.slot = slot; s.prev = nullptr;
     if (srv) { ID3D11ShaderResourceView* v = nullptr; if (ps) c->PSGetShaderResources(slot, 1, &v); else c->VSGetShaderResources(slot, 1, &v); s.prev = v; }
     else { ID3D11Buffer* b = nullptr; if (ps) c->PSGetConstantBuffers(slot, 1, &b); else c->VSGetConstantBuffers(slot, 1, &b); s.prev = b; }
 }
+// (03/11) registro: maximo de recursos del mod enlazados en un dibujo (cada 30 s, aunque no pase del tope) y control de la boca
+static std::atomic<int> s_resMax{0}, s_resDraws{0}, s_resOver24{0};
+static std::atomic<uint64_t> s_resMaxPS{0}, s_resMaxVS{0};
+static std::atomic<int> s_mouthDraws{0}, s_mouthOk{0}, s_mouthOther{0}, s_mouthNoRule{0};
+static void ResNote(ID3D11DeviceContext* c, int n) {
+    if (n <= 0) return;
+    s_resDraws.fetch_add(1, std::memory_order_relaxed);
+    if (n > 24) s_resOver24.fetch_add(1, std::memory_order_relaxed);
+    int m = s_resMax.load(std::memory_order_relaxed);
+    while (n > m) { if (s_resMax.compare_exchange_weak(m, n)) { CtxState& cs = Ctx(c); s_resMaxPS = cs.ps ? cs.ps->hash : 0; s_resMaxVS = cs.vs ? cs.vs->hash : 0; break; } }
+}
+// (03/11, Agustin: "con barba aveces se muestran las texturas de los brazos como pasaba antes") 1 cuadro de cada 30, ANTES de
+// enlazar nada: si t0..t3 del PS ya tienen una textura que solo pone la DLL (brazos de TorsoBody, grupos del brazo, venas, boca),
+// es una filtracion del dibujo anterior. Y cada cambio de t0 por ArmsTextureFor se anota por PS (por si un dibujo que no es brazo
+// se reconoce como brazo por su cantidad de indices).
+extern thread_local UINT t_drawVerts;
+static std::atomic<int> s_leakDraws{0}, s_leakChecked{0}, s_armSwapDraws{0};
+static const char* LeakName(ID3D11ShaderResourceView* v) {
+    if (!v) return nullptr;
+    switch (ArmsModTextureKind(v)) { case 1: return "arm_N_bsm (brazo de TorsoBody)"; case 2: return "thigh_N_bsm (muslo de TorsoBody)"; case 3: return "torso_N_bsm (torso de TorsoBody)"; case 4: return "referencia de tono del brazo"; default: break; }
+    static const char* kF[] = { "file:textures\\pes_arm_anat_n.dds", "file:textures\\pes_arm_anat_c.dds", "file:textures\\pes_arm_anat_g.dds", "file:textures\\pes_veins_arm.dds",
+        "file:textures\\pes_oral_bsm.dds", "file:textures\\pes_oral_nrm.dds", "file:textures\\pes_oral_srm.dds", "file:textures\\pes_oral_trm.dds" };
+    for (const char* f : kF) if (FileTextureAny(f) == v) return f + 14;
+    return nullptr;
+}
+static void LeakCheck(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEntry* vs) {
+    if ((s_presentNo.load(std::memory_order_relaxed) % 30) != 0) return;
+    s_leakChecked.fetch_add(1, std::memory_order_relaxed);
+    ID3D11ShaderResourceView* v[4] = {}; c->PSGetShaderResources(0, 4, v);
+    int hit = -1; const char* name = nullptr;
+    for (int i = 0; i < 4 && hit < 0; i++) if (const char* n = LeakName(v[i])) { hit = i; name = n; }
+    for (auto* x : v) if (x) x->Release();
+    if (hit < 0) return;
+    s_leakDraws.fetch_add(1, std::memory_order_relaxed);
+    static std::mutex mx; static std::vector<uint64_t> seen;
+    const uint64_t key = ((ps ? ps->hash : 0) * 31 + (vs ? vs->hash : 0)) * 8 + hit;
+    std::lock_guard<std::mutex> lk(mx);
+    if (seen.size() >= 40) return;
+    for (uint64_t k : seen) if (k == key) return;
+    seen.push_back(key);
+    Log("FILTRACION: dibujo PS %016llX VS %016llX (%u indices) llega con %s en t%d antes de que la DLL enlace nada (la dejo puesta otro dibujo)",
+        (unsigned long long)(ps ? ps->hash : 0), (unsigned long long)(vs ? vs->hash : 0), t_drawVerts, name, hit);
+}
+static void ArmSwapNote(const ShaderEntry* ps, UINT idx) {
+    s_armSwapDraws.fetch_add(1, std::memory_order_relaxed);
+    static std::mutex mx; static std::vector<uint64_t> seen;
+    const uint64_t key = (ps ? ps->hash : 0) * 131071ULL + idx;
+    std::lock_guard<std::mutex> lk(mx);
+    if (seen.size() >= 24) return;
+    for (uint64_t k : seen) if (k == key) return;
+    seen.push_back(key);
+    Log("brazos: t0 cambiado por la textura de TorsoBody en dibujo PS %016llX (%u indices)", (unsigned long long)(ps ? ps->hash : 0), idx);
+}
+void ResourcesLogPresent() {
+    static double s_next = 0; static int s_lines = 0;
+    double t = Now(); if (t < s_next || s_lines >= 40) return;
+    s_next = t + 30.0;
+    int draws = s_resDraws.exchange(0), mouth = s_mouthDraws.exchange(0);
+    if (!draws && !mouth && !s_leakDraws.load() && !s_armSwapDraws.load()) return;
+    s_lines++;
+    Log("recursos por dibujo (30 s): %d dibujos con recursos del mod, maximo %d de %d (PS %016llX VS %016llX), mas de 24: %d | boca 63fab: %d dibujos, t0..t3 del mod %d, otra textura %d, sin regla %d",
+        draws, s_resMax.exchange(0), kSavedMax, (unsigned long long)s_resMaxPS.load(), (unsigned long long)s_resMaxVS.load(), s_resOver24.exchange(0),
+        mouth, s_mouthOk.exchange(0), s_mouthOther.exchange(0), s_mouthNoRule.exchange(0));
+    Log("filtraciones (30 s): %d de %d dibujos revisados llegan con una textura del mod en t0..t3; t0 cambiado por brazos de TorsoBody en %d dibujos",
+        s_leakDraws.exchange(0), s_leakChecked.exchange(0), s_armSwapDraws.exchange(0));
+}
+static void MouthCheck(ID3D11DeviceContext* c, const ShaderEntry* ps) {
+    s_mouthDraws.fetch_add(1, std::memory_order_relaxed);
+    if (!ps->rule) { s_mouthNoRule.fetch_add(1, std::memory_order_relaxed); return; }
+    static const char* kF[4] = { "file:textures\\pes_oral_bsm.dds", "file:textures\\pes_oral_nrm.dds", "file:textures\\pes_oral_srm.dds", "file:textures\\pes_oral_trm.dds" };
+    ID3D11ShaderResourceView* v[4] = {}; c->PSGetShaderResources(0, 4, v);
+    bool ok = true;
+    for (int i = 0; i < 4; i++) { if (v[i] != FileTexture(kF[i])) ok = false; if (v[i]) v[i]->Release(); }
+    (ok ? s_mouthOk : s_mouthOther).fetch_add(1, std::memory_order_relaxed);
+}
 static void Restore(ID3D11DeviceContext* c, DrawScope& d) {
+    ResNote(c, d.n);
     for (int i = d.n - 1; i >= 0; i--) {
         Saved& s = d.s[i];
         if (s.srv) { auto* v = (ID3D11ShaderResourceView*)s.prev; if (s.ps) c->PSSetShaderResources(s.slot, 1, &v); else c->VSSetShaderResources(s.slot, 1, &v); }
@@ -1098,7 +1180,8 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     const ShaderEntry *ps = s.ps, *vs = s.vs;
     // (27/10 b) brazos, manos, muslos y torso de TorsoBody del tono de la cara (brazos.cpp, filas 321 / 327): son las texturas
     // del cuerpo, no un shader, asi que valen tambien con "Ver original" (el shader original lee el mismo t0)
-    if (vs) if (ID3D11ShaderResourceView* at = ArmsTextureFor(c, vs->hash, t_drawVerts)) { Remember(c, d, true, true, 0); c->PSSetShaderResources(0, 1, &at); }
+    LeakCheck(c, ps, vs);
+    if (vs) if (ID3D11ShaderResourceView* at = ArmsTextureFor(c, vs->hash, t_drawVerts)) { ArmSwapNote(ps, t_drawVerts); Remember(c, d, true, true, 0); c->PSSetShaderResources(0, 1, &at); }
     if (g_cfg.bypass) return d.n > 0;
     if (g_skinDiagArmed.load(std::memory_order_relaxed)) SkinDiagDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0, t_drawVerts);   // (24/10) skintone.cpp
     if (g_toneChkArmed.load(std::memory_order_relaxed)) SkinToneCheckDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0);   // (24/10 c) punto de los dibujos de piel
@@ -1140,6 +1223,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         if (!s_firstRule.exchange(true)) Log("primer dibujo con regla");
     }
     if (ps && ps->rule) RunRule(c, ps, d);
+    if (ps && ps->hash == 0x63fab7735eee149cULL) MouthCheck(c, ps);   // (03/11) la boca tiene sus 4 texturas del mod? (log 'recursos por dibujo')
     if (vs && vs->rule) RunRule(c, vs, d);
     // (20/10) reglas por pareja PS + VS: p.ej. la piel del cuerpo (aa7d1833) cuando dibuja la cabeza de una cara generica (VS faab87ee)
     if (ps && vs) if (const std::vector<const Rule*>* prs = ps->pairRules) for (const Rule* pr : *prs) if (pr->vsCond == vs->hash) RunRuleActions(c, pr, true, ps->hash, d);
@@ -1297,30 +1381,45 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
 // a las lineas 'sombra_parche 1:' para comparar las dos matrices en un estadio bueno y uno malo.
 static ID3D11Buffer* s_casterStage = nullptr; static UINT s_casterStageSize = 0; static std::atomic<int> s_casterWant{0};
 static int s_casterLogN = 0; static double s_casterNext = 0; static uint64_t s_casterVS = 0; static float s_casterVp[2] = {};
+// (02/11 c) diagnostico: por que no sale la muestra (f61bed9 en Mestalla: 0 lineas con el shadow map reconocido y la cabeza replicada)
+static std::atomic<int> s_cpCalls{0}, s_cpIdle{0}, s_cpVp{0}, s_cpNoCb{0}, s_cpCreateFail{0}, s_cpRace{0}, s_cpCopied{0}; static std::atomic<long> s_cpMapHr{0}; static std::atomic<int> s_cpMapFail{0}; static int s_cpDiagN = 0; static double s_cpDiagT = 0;
 static void ShadowCasterProbe(ID3D11DeviceContext* c) {
-    if (s_casterWant.load(std::memory_order_relaxed) != 1 || !g_dev.dev) return;   // (02/11 b) tambien en contextos diferidos: la pasada de sombras no va por el inmediato
+    s_cpCalls.fetch_add(1, std::memory_order_relaxed);
+    if (s_casterWant.load(std::memory_order_relaxed) != 1 || !g_dev.dev) { s_cpIdle.fetch_add(1, std::memory_order_relaxed); return; }   // (02/11 b) tambien en contextos diferidos: la pasada de sombras no va por el inmediato
     D3D11_VIEWPORT vp; UINT n = 1; c->RSGetViewports(&n, &vp);
-    if (n < 1 || vp.TopLeftX > 0.5f || vp.TopLeftY > 0.5f) return;
-    ID3D11Buffer* b = nullptr; c->VSGetConstantBuffers(2, 1, &b); if (!b) return;
+    if (n < 1 || vp.TopLeftX > 0.5f || vp.TopLeftY > 0.5f) { s_cpVp.fetch_add(1, std::memory_order_relaxed); return; }
+    ID3D11Buffer* b = nullptr; c->VSGetConstantBuffers(2, 1, &b); if (!b) { s_cpNoCb.fetch_add(1, std::memory_order_relaxed); return; }
     D3D11_BUFFER_DESC bd; b->GetDesc(&bd);
     if (!s_casterStage || s_casterStageSize != bd.ByteWidth) {
         if (s_casterStage) s_casterStage->Release(); s_casterStage = nullptr;
         D3D11_BUFFER_DESC sd{}; sd.ByteWidth = bd.ByteWidth; sd.Usage = D3D11_USAGE_STAGING; sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-        if (FAILED(g_dev.dev->CreateBuffer(&sd, nullptr, &s_casterStage))) { b->Release(); s_casterWant = 0; return; }
+        if (FAILED(g_dev.dev->CreateBuffer(&sd, nullptr, &s_casterStage))) { b->Release(); s_casterWant = 0; s_cpCreateFail.fetch_add(1, std::memory_order_relaxed); return; }
         s_casterStageSize = bd.ByteWidth;
     }
-    if (s_casterWant.exchange(3) != 1) { b->Release(); return; }   // un solo contexto toma la copia
+    // un solo contexto toma la copia. (03/11) compare_exchange: con exchange(3) un segundo contexto que llegaba tarde pisaba el 2
+    // (copia lista) con un 3 y el registro quedaba trabado para siempre en "estado 3, sin pedido" (partido 02/11 22:44)
+    { int one = 1; if (!s_casterWant.compare_exchange_strong(one, 3)) { b->Release(); s_cpRace.fetch_add(1, std::memory_order_relaxed); return; } }
+    s_cpCopied.fetch_add(1, std::memory_order_relaxed);
     c->CopyResource(s_casterStage, b); b->Release();
     CtxState& cs = Ctx(c); s_casterVS = cs.vs ? cs.vs->hash : 0; s_casterVp[0] = vp.Width; s_casterVp[1] = vp.Height;
     s_casterWant = 2;
 }
 void ShadowCasterLogPresent() {
+    ResourcesLogPresent();
     if (s_casterLogN >= 12 || !g_dev.imm) return;
     int w = s_casterWant.load();
+    { double t = Now();   // (02/11 c) diagnostico cada 30 s (10 veces): en que paso se queda la muestra
+      // (02/11 d) el tope de 10 se gastaba en el menu (0 dibujos): ahora solo cuentan las lineas con dibujos o con Map fallido,
+      // y sin dibujos sale una linea cada 5 minutos (para saber que el registro sigue vivo)
+      bool any = s_cpCalls.load() > 0 || s_cpMapFail.load() > 0; static double s_cpIdleT = 0;
+      if (s_cpDiagN < 10 && t >= s_cpDiagT && (any || t >= s_cpIdleT)) { s_cpDiagT = t + 30.0; s_cpIdleT = t + 300.0; if (any) s_cpDiagN++;
+          Log("sombra jugadores (30 s): estado %d, dibujos en la pasada de sombras %d (sin pedido %d, vista corrida %d, sin b2 %d, no se pudo crear la copia %d, otro contexto %d, copiados %d), Map fallido %d (hr %08lX), muestras %d / 12",
+              w, s_cpCalls.exchange(0), s_cpIdle.exchange(0), s_cpVp.exchange(0), s_cpNoCb.exchange(0), s_cpCreateFail.exchange(0), s_cpRace.exchange(0), s_cpCopied.exchange(0), s_cpMapFail.exchange(0), (unsigned long)s_cpMapHr.load(), s_casterLogN); } }
     if (w == 0) { double t = Now(); if (t >= s_casterNext) { s_casterNext = t + 15.0; s_casterWant = 1; } return; }
     if (w != 2 || !s_casterStage) return;
     D3D11_MAPPED_SUBRESOURCE m;
-    if (FAILED(g_dev.imm->Map(s_casterStage, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) return;   // todavia no ejecuto: se reintenta el proximo segundo
+    { HRESULT hr = g_dev.imm->Map(s_casterStage, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m);
+      if (FAILED(hr)) { s_cpMapFail.fetch_add(1, std::memory_order_relaxed); s_cpMapHr.store((long)hr); return; } }   // todavia no ejecuto: se reintenta el proximo segundo
     float f[48] = {}; memcpy(f, m.pData, (std::min)((size_t)s_casterStageSize, sizeof f)); g_dev.imm->Unmap(s_casterStage, 0);
     s_casterWant = 0; s_casterLogN++;
     Log("sombra jugadores: VS %016llX cascada %.0fx%.0f, b2 %u bytes | c0..c3 %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f",

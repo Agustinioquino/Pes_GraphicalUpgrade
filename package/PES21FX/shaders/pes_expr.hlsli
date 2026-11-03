@@ -60,8 +60,15 @@ void PesExprApply(float4 p, float3 rest, uint4 I, float4 W, float3 n, float3 t,
   // (cara, cara generica, barba) lo calcula con su propia paleta: en el menton no daba igual y se abrian ranuras. Con eso
   // prendido la zona de la boca no se amplifica (lo del mod ya es el tamano pedido)
   float4 Rb350a = IniParams.Load(int2(350, 0));
+  // (02/11 i, Agustin: grietas en la boca y ojos desorbitados por el amplificador; con ganancia 1 se arreglaba) con la boca por
+  // HUESOS el amplificador corre en la DLL sobre los huesos de la cara (exprbones.cpp Amp): todas las mallas se mueven juntas.
+  // Aca ya no se suma nada (cada malla lo calculaba con su propia paleta y en los bordes no coincidia)
+  if (Rb350a.x > 0.5 && Rb350a.y > 0.5) return;
   float modOpen = (Rb350a.x > 0.5 && Rb350a.y > 0.5) ? saturate(4.0 * max(max(IniParams.Load(int2(347, 0)).x, 0.45 * Rb350a.z), Rb350a.w)) : 0.0;
-  float4 Zm = float4(Z.xyz, Z.w * (1.0 - modOpen));
+  // (02/11 h) con los parpados por HUESOS (350.y = 2) la zona de los ojos tampoco se amplifica: cada malla lo agrandaba con su
+  // propia paleta y el borde del parpado / las pestanas no quedaban con la piel (mismo problema que el menton)
+  float lidBones = (Rb350a.x > 0.5 && Rb350a.y > 1.5) ? 1.0 : 0.0;
+  float4 Zm = float4(Z.x, Z.y * (1.0 - lidBones), Z.z, Z.w * (1.0 - modOpen));
   float extra = (E.y - 1.0) * PesExprZoneShare(rest, Zm) * face;
   if (abs(extra) < 0.001) return;
   float bigW = saturate(E.w);
@@ -207,6 +214,10 @@ float2 PesGazeTarget(float n, float seed)
 }
 float2 PesGaze(float t, float seed, float amp)
 {
+  // (03/11, Agustin: "un slider para poder mover los ojos en circulos") 354.x vueltas por segundo (0 = apagado), 354.y radio en
+  // grados: los ojos giran en circulo (prueba de los parpados que siguen la mirada); pisa la mirada viva. Misma cuenta en la DLL
+  float4 Ci = IniParams.Load(int2(354, 0));
+  if (Ci.x > 0.0) { float a = t * Ci.x * 6.2831853; return float2(cos(a), sin(a)) * (Ci.y * 0.0174533); }
   if (amp <= 0.0) return 0;
   // (02/11) mas natural: fijaciones de 1.0..3.4 s (antes 0.45..1.9: saltaba todo el tiempo), sacada de ~70 ms con curva de
   // velocidad de ojo real (arranca rapido y frena, sin sobrepaso) y un retoque chico de correccion; sin las ondas rapidas
@@ -248,7 +259,7 @@ float3 PesGazeRot(float3 q, float2 g)
 float3 PesGazeEye(float3 rest, float3 center, float t, float seed)
 {
   float amp = IniParams.Load(int2(347, 0)).w;
-  if (amp <= 0.0) return rest;
+  if (amp <= 0.0 && IniParams.Load(int2(354, 0)).x <= 0.0) return rest;
   float2 g = PesGaze(t, seed, amp);
   return center + PesGazeRot(rest - center, g);
 }
@@ -321,7 +332,7 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
     float4x3 M = g_vsBone.m_boneMatrices[j];
     float g = 0.0;   // el juego ya cierra este parpado: punto de la orilla con el hueso contra con la cabeza
     if (head <= 31) { float4 Q = float4(C + float3(0.0, up ? 0.008 : -0.006, 0.008), 1.0); g = saturate(length(mul(Q, M) - mul(Q, g_vsBone.m_boneMatrices[head])) / 0.006); }
-    float A = (up ? 0.50 : -0.10) * (1.0 - g);   // (01/11 d, Agustin: "los ojos se cierran mucho") antes 0.68 / -0.14   // orilla de arriba ~ +27 grados abierta -> ~ -12; la de abajo -22 -> ~ -14
+    float A = (up ? 0.64 : -0.12) * (1.0 - g);   // (02/11 k, Agustin: "no cierran del todo") 0.50 -> 0.64: el "se cierran mucho" de antes venia del parpado de abajo tomado como el de arriba (fd86e36)   // (01/11 d, Agustin: "los ojos se cierran mucho") antes 0.68 / -0.14   // orilla de arriba ~ +27 grados abierta -> ~ -12; la de abajo -22 -> ~ -14
     // angulo total del parpado: parpadeo + seguimiento de la mirada (el de arriba: -gy * 0.65 si mira abajo, -gy * 0.35 arriba;
     // el de abajo sube un poco al mirar abajo). El sentido: A > 0 cierra el de arriba (baja), A < 0 el de abajo (sube).
     // (02/11, video de Agustin: ranuras azules bajo el ojo al mover la mirada) el de abajo ya no acompana la mirada: solo se

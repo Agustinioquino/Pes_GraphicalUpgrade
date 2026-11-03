@@ -441,6 +441,7 @@ static int s_lodBase = -1, s_lodLast = -1; static bool s_lodChecked = false, s_l
 void ExePatchPresent() {
     if (!g_cfg.motorPatch) return;
     double t = Now(); if (t - s_lodT < 1.0) return; s_lodT = t;
+    SolRelojPresent();   // (02/11) hora del dia, sol y sunLux del motor (solo registro)
     SunFixPresent();   // (27/10) el sol que gira con la camara
     ShadowFixPresent(); ShadowFixCamLog(); CasterFixLog(); ShadowCasterLogPresent();   // (27/10) la sombra que gira con la camara
     volatile int* g = (volatile int*)0x14374cd94ull;
