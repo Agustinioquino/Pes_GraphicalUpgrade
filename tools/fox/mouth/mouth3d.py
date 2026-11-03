@@ -31,6 +31,32 @@ CUT_STRIP = float(os.environ.get('CUT_STRIP', '0'))   # (01/11 i) la tira se cor
 STRIP_GUM = float(os.environ.get('STRIP_GUM', '0.3'))   # (02/11) la tira debajo de la encia (s > GUM) pasa a mostrar encia: s' = GUM - esto * (s - GUM)
 STRIP_FOLD = float(os.environ.get('STRIP_FOLD', '0.25'))   # (02/11 c) la tira mas alla de la encia (s > GUM) se recoge a este largo hacia el cuello
 FOLD_BACK = float(os.environ.get('FOLD_BACK', '1.5'))
+REAL_TEETH = int(os.environ.get('REAL_TEETH', '1'))   # (03/11) Agustin: 'basate en una dentadura real': anchos reales por diente
+LO_OVERBITE = float(os.environ.get('LO_OVERBITE', '2.2'))   # (03/11) mm que los de abajo suben detras de los de arriba (sobremordida)
+LO_OVERJET = float(os.environ.get('LO_OVERJET', '1.0'))     # (03/11) mm que los de abajo van detras (resalte)
+# anchos mesiodistales reales (mm), del centro hacia atras: arriba IC, I, C, P1, P2; abajo I1, I2, C, P1, P2, M
+REAL_W = {True: [8.6, 6.6, 7.6, 7.0, 6.6], False: [5.3, 5.8, 6.9, 7.0, 7.1, 8.5]}
+
+def real_bounds(M, r, pk, up, log=print):
+    """(03/11) limites entre dientes (x del atlas, 0..512) con las proporciones de una dentadura real: se mide el largo de
+    la tira a lo largo del arco (a media altura del diente) y se reparte simetrico desde el centro con REAL_W, escalado para
+    que entre en el mismo tramo que los dientes pintados"""
+    ntt = len(pk) - 1; half = ntt // 2
+    xs = np.linspace(pk[0], pk[-1], 400)
+    g = np.interp(xs, np.arange(512), r['g']); inc = np.interp(xs, np.arange(512), r['inc'])
+    Pm, _ = M(np.stack([xs / 512.0, (0.5 * (g + inc)) / 512.0], 1))
+    s = np.r_[0, np.cumsum(np.linalg.norm(np.diff(Pm, axis=0), axis=1))]
+    xc = pk[half] if ntt % 2 == 0 else 0.5 * (pk[half] + pk[half + 1])
+    sc_ = np.interp(xc, xs, s)
+    w = np.array((REAL_W[up] * 2)[:half], float) * MM
+    k = min(sc_, s[-1] - sc_) / w.sum()   # escala para que entren (simetrico)
+    cum = np.r_[0, np.cumsum(w * k)]
+    right = np.interp(sc_ + cum, s, xs); left = np.interp(sc_ - cum, s, xs)
+    out = np.r_[left[::-1], right[1:]]
+    log('  dentadura real %s: escala %.2f, anchos %s mm' % ('arriba' if up else 'abajo', k, np.round(w * k / MM, 1).tolist()))
+    wt = np.r_[(w * k)[::-1], w * k]
+    return out, wt
+
 BS_UP = float(os.environ.get('BS_UP', '0.0'))   # (02/11 v17b) donde sale de la encia el diente de arriba (fraccion del alto)
 FOLD_S = float(os.environ.get('FOLD_S', '0.35'))   # (02/11 c) mm detras de la encia donde queda la tira recogida
 THROAT = int(os.environ.get('THROAT', '1'))   # (02/11) fondo de la garganta nuevo (throat.py) en lugar de la pared plana de Konami
@@ -168,7 +194,7 @@ def local_patch(M, u0, u1, v0, v1, n=9, deg=2, degv=None):
     return f
 
 # ---------------------------------------------------------------- un diente
-def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0, uvbox=None):   # (02/11) nb 15 -> 14: lugar para la garganta; (02/11 d) na 22 -> 20, nb 14 -> 13: lugar para las 8 muelas 3D (tope 21845 tri)
+def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0, uvbox=None, tw=None):   # (02/11) nb 15 -> 14: lugar para la garganta; (02/11 d) na 22 -> 20, nb 14 -> 13: lugar para las 8 muelas 3D (tope 21845 tri)
     """M: UVMap de la tira. uL/uR: limites en u; vG: v del cuello (encia); vI: v del borde incisal. kind: 'I' incisivo,
     'C' canino, 'P' premolar/molar. mes: lado de cx (+1/-1) que mira al centro de la boca (mesial). Devuelve P, UV, F
     (01/11 e) mas natural (Agustin 'poco naturales'): perfil recto (el parche sigue la tira a lo ancho pero es recto a lo alto:
@@ -188,6 +214,7 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0
         deg = 1 if kind == 'P' else PDEG
         M = local_patch(M, uL - 0.1 * (uR - uL), uR + 0.1 * (uR - uL), vG - 0.3 * h, vI, deg=deg, degv=1)   # (01/11 f) todos rectos a lo alto
     gap = (0.012 if kind == 'IC' else 0.035) * (uR - uL)   # (01/11 d) los centrales se tocan
+    if REAL_TEETH: gap = (0.004 if kind == 'IC' else 0.012) * (uR - uL)   # (03/11) dientes en contacto (Agustin 'no mucha separacion')
     uL2, uR2 = uL + gap, uR - gap
     uc = 0.5 * (uL2 + uR2)
     b = -0.22 + 1.22 * np.sin(np.linspace(0, 1, nb) * np.pi / 2) ** 1.2   # mas filas cerca del borde incisal
@@ -217,6 +244,9 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0
         Ht = max(h3d, (5.5 if (upper or not KONAMI_BITE) else 4.5) * MM)   # (02/11 g) abajo 4.5: con la mordida de Konami no se cruzan con los de arriba
         PL, _ = M(np.array([[uL2, vG]])); PR, _ = M(np.array([[uR2, vG]]))
         w3d = float(np.linalg.norm(PR - PL)); wsc = max(1.0, 4.8 * MM / max(w3d, 1e-6))
+    if tw:   # (03/11) ancho real del diente en 3D (la uv de la tira no es proporcional al 3D a la altura del diente)
+        PL, _ = M(np.array([[uL2, 0.5 * (vG + vI)]])); PR, _ = M(np.array([[uR2, 0.5 * (vG + vI)]]))
+        w3d = float(np.linalg.norm(PR - PL)); wsc = max(wsc if kind == 'P' else 0.0, (tw * (1 - 2 * gap / (uR - uL))) / max(w3d, 1e-6))
     # uv de la textura: la propia, o la de un diente bien pintado de la misma fila (uvbox = (uL2, uR2, vG, vI)) cuando la
     # propia es una franja de pocos pixeles
     tL, tR, tG, tI = uvbox if uvbox is not None else (uL2, uR2, vG, vI)
@@ -230,6 +260,8 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0
             bmax = 1 - 0.30 * np.abs(cx - 0.18 * mes) ** 1.35
         else:
             r_m, r_d = {'IC': (0.03, 0.11), 'I': (0.07, 0.24), 'P': (0.14, 0.14)}[kind]
+            if REAL_TEETH:   # (03/11) dentadura real: esquinas casi rectas en los incisivos (los de abajo, rectos)
+                r_m, r_d = {'IC': (0.02, 0.08), 'I': (0.04, 0.14) if upper else (0.03, 0.06), 'P': (0.14, 0.14)}[kind]
             rr = np.where(cx * mes > 0, r_m, r_d)
             bmax = 1 - rr * sst(0.5, 1.0, np.abs(cx)) ** 1.6
         bb = bi * bmax if bi > 0 else bi * np.ones_like(cx)
@@ -237,6 +269,8 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0
         uu = uc + 0.5 * (uR2 - uL2) * cx * wsc
         # cuello mas angosto
         narrow = (0.88 + 0.12 * sst(-0.1, 0.45, bb)) if kind == 'IC' else (0.80 + 0.20 * sst(-0.1, 0.45, bb))
+        if REAL_TEETH and kind in ('I', 'C'):   # (03/11) el ancho maximo (contacto) en el tercio incisal; cuello algo angosto
+            narrow = 0.84 + 0.16 * sst(-0.1, 0.55, bb)
         uu = uc + (uu - uc) * narrow
         if kind == 'P':
             Pf, Nf = M(np.stack([uu, vG * np.ones_like(uu)], 1))
@@ -253,6 +287,8 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0
             # adelante sin resalte (como Konami); premolares: los de arriba un poco hacia afuera y los de abajo hacia la lengua, para
             # que la cuspide de afuera de arriba quede por fuera de la de abajo al cerrar (sin cruzarse)
             shift = ((0.5 if upper else -1.0) * MM * sst(0.0, 0.4, bb)) if kind == 'P' else 0.0 * bb
+            if REAL_TEETH and kind != 'P' and not upper:
+                shift = -LO_OVERJET * MM * sst(0.0, 0.4, bb)   # (03/11) resalte real: los de abajo detras de los de arriba
         Pf = Pf + Nf * np.reshape(shift, (-1, 1))
         # espesor (m): grueso en el cuello, fino en el borde
         T0 = {'IC': 6.5, 'I': 6.0, 'C': 7.5, 'P': 7.0}[kind] * MM; T1 = {'IC': 1.1, 'I': 1.0, 'C': 2.0, 'P': 4.5}[kind] * MM   # (02/11) P 8/5.5 -> 7/4.5
@@ -417,6 +453,9 @@ def build(src_fmdl, texdir, log=print):
         GUM = r['gum']
         pk = np.concatenate([[r['x0']], r['pk'], [r['x1']]]).astype(float)
         ntt = len(pk) - 1; mid = ntt / 2.0
+        pk_paint = pk.copy()
+        if REAL_TEETH:
+            pk, tw_row = real_bounds(M, r, pk, up, log)
         # (02/11) caja uv de referencia de la fila: el premolar mejor pintado (mas alto en uv); los dientes con menos de 22 px
         # de alto pintado usan esa textura
         best = None
@@ -429,7 +468,7 @@ def build(src_fmdl, texdir, log=print):
                 best = (abs(ii - gi), ((xl + g2) / 512.0, (xr - g2) / 512.0, (gi + GUM * (ii - gi)) / 512.0, min(ii / 512.0, 0.302) if up else max(ii / 512.0, 0.505)))
         for i in range(ntt):
             xl, xr = pk[i], pk[i + 1]
-            if xr - xl < 8: continue
+            if pk_paint[i + 1] - pk_paint[i] < 8: continue
             xc = 0.5 * (xl + xr)
             gi = np.interp(xc, np.arange(512), r['g']); ii = np.interp(xc, np.arange(512), r['inc'])
             # posicion desde el centro: 0,1 incisivos, 2 canino, el resto premolares/molares
@@ -443,7 +482,17 @@ def build(src_fmdl, texdir, log=print):
             dext = ({'IC': -0.1, 'I': -0.5, 'C': -0.2, 'P': -0.6} if up else {'I': 0.0, 'C': 0.25, 'P': -0.3})[kind] * MM
             mes = 1.0 if (i + 0.5) < mid else -1.0
             uvbox = best[1] if (abs(ii - gi) < 22 and best is not None) else None
-            Pt, UVt, Ft = tooth(M, xl / 512.0, xr / 512.0, vG, vI, kind, up, ext=((0.0 if kind == 'P' else (-0.2 if up else 1.0)) * MM if KONAMI_BITE else (EXT_UP if up else EXT_LO) + dext), mes=mes,
+            if REAL_TEETH and uvbox is None:
+                # (03/11) la textura sigue siendo la del diente pintado de Konami de ese lugar (los limites 3D se movieron)
+                xl0, xr0 = pk_paint[i], pk_paint[i + 1]; xc0 = 0.5 * (xl0 + xr0); g2 = 0.035 * (xr0 - xl0)
+                gi0 = np.interp(xc0, np.arange(512), r['g']); ii0 = np.interp(xc0, np.arange(512), r['inc'])
+                uvbox = ((xl0 + g2) / 512.0, (xr0 - g2) / 512.0, (gi0 + GUM * (ii0 - gi0)) / 512.0, min(ii0 / 512.0, 0.302) if up else max(ii0 / 512.0, 0.505))
+            if REAL_TEETH:
+                # (03/11) curva de la sonrisa real: laterales ~0.7 mm mas cortos que los centrales, canino con la punta casi al nivel
+                ext = (0.0 if kind == 'P' else ({'IC': -0.1, 'I': -0.8, 'C': -0.3}[kind] if up else LO_OVERBITE)) * MM
+            else:
+                ext = ((0.0 if kind == 'P' else (-0.2 if up else 1.0)) * MM if KONAMI_BITE else (EXT_UP if up else EXT_LO) + dext)
+            Pt, UVt, Ft = tooth(M, xl / 512.0, xr / 512.0, vG, vI, kind, up, ext=ext, mes=mes, tw=(tw_row[i] if REAL_TEETH else None),
                                 seed=nteeth, uvbox=uvbox)
             wt = np.zeros((len(Pt), len(names))); wt[:, names.index('sk_head' if up else 'skf_jaw')] = 1
             parts.append((Pt, UVt, Ft, wt, 'diente')); nteeth += 1; tooth_up.append(up)
