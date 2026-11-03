@@ -200,7 +200,7 @@ static std::atomic<int> s_applied{0}, s_noJaw{0}, s_badWrite{0}, s_calls{0}, s_s
 static std::atomic<unsigned> s_lastActive{0};
 static std::atomic<unsigned> s_lastEyes{0};   // (02/11) cuadro del ultimo giro de ojos / parpados por huesos
 static std::atomic<int> s_eyesW{0}, s_blinks{0};
-static std::atomic<int> s_ampW{0};   // (02/11 i) huesos agrandados escritos (amplificador por huesos)   // cuadro del ultimo giro aplicado o esqueleto con mandibula visto
+static std::atomic<int> s_ampW{0}, s_ampSkip{0};   // (02/11 i) huesos agrandados escritos (amplificador por huesos)   // cuadro del ultimo giro aplicado o esqueleto con mandibula visto
 static int s_logs = 0;
 
 static float Dist2(const float* a, const BoneDef& d) { float x = a[0] - d.x, y = a[1] - d.y, z = a[2] - d.z; return x * x + y * y + z * z; }
@@ -428,6 +428,13 @@ static void Amp(const Skel& S, int d, Xf& x) {
     const float* hcU = S.bHave[d] ? S.bHc[d] : S.ahc; const float* hrU = S.bHave[d] ? S.bHr[d] : S.ahr;   // (02/11 l) cabeza de cuando el juego escribio el hueso
     float rr[3]; QRot(hrU, S.nT[d], rr);
     float e[3] = { (x.t[0] - (hcU[0] + rr[0])) * (g - 1.0f), (x.t[1] - (hcU[1] + rr[1])) * (g - 1.0f), (x.t[2] - (hcU[2] + rr[2])) * (g - 1.0f) };
+    {   // (03/11, registro "gira 0..120 grados" en el editor) seguro: si lo que dejo el juego ya esta a mas de 2.5 cm o 30 grados de
+        // la cara neutra (cambio de cara, editor girando, lectura rara) no se agranda nada: nunca se suma sobre un hueso fuera de rango
+        const float raw = sqrtf(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]) / (fabsf(g - 1.0f) > 1e-4f ? fabsf(g - 1.0f) : 1.0f);
+        float q0[4], c0[4], d0[4]; QMul(hrU, S.nQ[d], q0); QConj(q0, c0); QMul(x.q, c0, d0);
+        const float ang = 2.0f * acosf((std::min)(fabsf(d0[3]), 1.0f));
+        if (raw > 0.025f || ang > 0.52f) { s_ampSkip.fetch_add(1, std::memory_order_relaxed); return; }
+    }
     {   // (02/11 m, Agustin: "las opciones de slider no cambian nada") 340.w gestos grandes: lo que el gesto pasa de 1 cm se agranda
         // solo esa fraccion (como hacia el shader), asi la boca muy abierta no se dispara
         const float gl = sqrtf(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]) / (fabsf(g - 1.0f) > 1e-4f ? fabsf(g - 1.0f) : 1.0f);
@@ -691,7 +698,10 @@ void ExprBonesFrame(const void* skel) {
     // estira el shader, PesTongue; para que salga la boca se abre al menos 0.45 x 350.z), 350.w mostrar los dientes (los
     // labios se separan de los dientes: el de arriba sube, el de abajo baja, las comisuras se abren)
     const float tongueOut = std::clamp(g_cfg.live[350][2], 0.0f, 1.0f), teeth = std::clamp(g_cfg.live[350][3], 0.0f, 1.5f);
-    const float o = (std::max)(std::clamp(g_cfg.live[347][0], -0.25f, 1.0f), 0.45f * tongueOut);
+    // (03/11, Agustin: "en las animaciones del juego ahora las barbas tambien se ven mal") con x347 negativo (-0.25 en su ini) la
+    // DLL cerraba la mandibula de la cara en CADA cuadro, tambien en las animaciones del juego, y la malla de la barba no recibe
+    // ese giro (sus huesos salen de otro lado): quedaba delante de la boca. Por huesos ya no se cierra: 0 o mas
+    const float o = (std::max)(std::clamp(g_cfg.live[347][0], 0.0f, 1.0f), 0.45f * tongueOut);
     std::lock_guard<std::mutex> lk(s_mx);
     Skel* S = Get(skel);
     S->lastFrame = fr;
@@ -751,7 +761,9 @@ void ExprBonesFrame(const void* skel) {
     static const float X[3] = { 1.0f, 0.0f, 0.0f }; float ax[3]; QRot(hr, X, ax);
     float ln = sqrtf(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]); if (ln < 0.5f) return; for (float& v : ax) v /= ln;
     const float P[3] = { jc.t[0], jc.t[1], jc.t[2] };
-    const float A = 0.40f * o;    // (02/11, Agustin: "esta al reves") con el signo negativo la boca se cerraba al subir el slider: en el cuaternion del motor el menton baja con el angulo positivo
+    float A = 0.40f * o;
+    // (03/11) tope de la mandibula: lo del juego + lo del mod no pasa de 35 grados (la barba y la cara no dan para mas)
+    if (A > 0.0f) A = (std::min)(A, (std::max)(0.0f, (35.0f - deg) / 57.29578f));    // (02/11, Agustin: "esta al reves") con el signo negativo la boca se cerraba al subir el slider: en el cuaternion del motor el menton baja con el angulo positivo
     for (int d = 0; d < kND; d++) {
         if (!S->cur[d]) continue;
         const float* tv = TeethOf(d); const float* ov = OpenOf(d);
@@ -864,13 +876,13 @@ void ExprBonesPresent() {
     if (fr - lastLog < 600) return;   // cada ~10 s
     lastLog = fr;
     std::lock_guard<std::mutex> lk(s_mx);
-    const int calls = s_calls.exchange(0), ap = s_applied.exchange(0), nj = s_noJaw.exchange(0), bw = s_badWrite.exchange(0), st = s_stale.exchange(0), ew = s_eyesW.exchange(0), bl = s_blinks.exchange(0), aw = s_ampW.exchange(0);
+    const int calls = s_calls.exchange(0), ap = s_applied.exchange(0), nj = s_noJaw.exchange(0), bw = s_badWrite.exchange(0), st = s_stale.exchange(0), ew = s_eyesW.exchange(0), bl = s_blinks.exchange(0), aw = s_ampW.exchange(0), ask = s_ampSkip.exchange(0);
     if (!calls) return;
     int reusedAll = 0; for (int i = 0; i < s_nSk; i++) { reusedAll += s_sk[i].reused; s_sk[i].reused = 0; }
     static int dumped = 0;
     if (dumped < 0) for (int i = 0; i < s_nSk && dumped < 2; i++) if (s_sk[i].n > 0 && fr - s_sk[i].lastFrame < 600) { Dump(s_sk[i]); dumped++; }
     if (s_logs < 40) {
-        char l[1200]; int k = snprintf(l, sizeof l, "boca por huesos: %d pasos por el cuello, %d huesos agrandados (amplificador por huesos), %d giros escritos, %d sin mandibula, %d escrituras fallidas, %d rearmados por cambio de cara; ojos por huesos %d (cuadros con parpado cerrado %d); huesos leidos con el giro del mod todavia puesto %d; esqueletos:", calls, aw, ap, nj, bw, st, ew, bl, reusedAll);
+        char l[1200]; int k = snprintf(l, sizeof l, "boca por huesos: %d pasos por el cuello, %d huesos agrandados (amplificador por huesos; %d sin agrandar por fuera de rango), %d giros escritos, %d sin mandibula, %d escrituras fallidas, %d rearmados por cambio de cara; ojos por huesos %d (cuadros con parpado cerrado %d); huesos leidos con el giro del mod todavia puesto %d; esqueletos:", calls, aw, ask, ap, nj, bw, st, ew, bl, reusedAll);
         for (int i = 0; i < s_nSk && k < (int)sizeof l - 120; i++) {
             Skel& S = s_sk[i];
             if (fr - S.lastFrame > 600) continue;
