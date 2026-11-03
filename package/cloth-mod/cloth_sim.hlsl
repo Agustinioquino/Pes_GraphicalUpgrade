@@ -623,6 +623,13 @@ void predictParticle(uint p, uint s, float h, float3 grav, float3 windBase, floa
     xPrev = gx[p];
     float3 vBody = (rest1 - restPrev) / h;
     if (pin >= 0.999) { gx[p] = rest1; vel = vBody; return; }
+    // cloth-mod 0.9.9: salto del cuerpo (> 50 m/s, teletransporte / cambio de pose): la tela viaja con el cuerpo, sin velocidad
+    if (dot(vBody, vBody) > 50.0 * 50.0) {
+        gx[p] += rest1 - restPrev;
+        xPrev = gx[p];
+        vel = 0;
+        return;
+    }
     float3 v = vel + grav * h;
     if (s == 0) v += s_kick;
     float sleeveW = float((g_rest[p].skin.w >> 8) & 255) / 255.0;
@@ -1775,7 +1782,13 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
             float3 tRest = mul(A, tB);
             float3 n = g_pnrm[s_pnrmBase + (p)].xyz;
             float strainO = PES_STRAIN_ENC ? saturate(g_pnrm[s_pnrmBase + (p)].w) : 0.0;   // PES21 FX: compresion (0..1)
-            if (g_mapped) {
+            // cloth-mod 0.9.9: kits demasiado grandes (arbitros, arqueros con manga larga): el cuello / la manga de abajo
+            // vienen marcados con w = 0xffffffff y se mueven con el cuerpo como en el juego original
+            if (g_mapped && g_rmap[i].w == 0xffffffffu) {
+                x = mul(A, v) + tr;
+                n = nRest;
+                strainO = 0.0;
+            } else if (g_mapped) {
                 uint4 rm = g_rmap[i];
                 float w0 = float(rm.w & 0xffff) / 65535.0, w1 = float(rm.w >> 16) / 65535.0, w2 = max(1.0 - w0 - w1, 0.0);
                 uint3 pp = min(rm.xyz, MAXP - 1);
@@ -1805,7 +1818,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
             float3x3 Ai = inverse3(A, det);
             float3 outV = v;
             uint4 outNT = nt;
-            if (abs(det) > 1e-8 && all(isfinite(x))) {
+            if (abs(det) > 1e-3 && all(isfinite(x))) {   // cloth-mod 0.10.0: umbral 1e-3 (antes 1e-8)
                 outV = mul(Ai, x - tr);
                 float3 nb = normalize(mul(Ai, n)) * (1.0 + strainO);   // PES21 FX: largo de la normal = 1 + compresion (lo lee el shader de kit)
                 float3 tb = normalize(mul(Ai, t));
