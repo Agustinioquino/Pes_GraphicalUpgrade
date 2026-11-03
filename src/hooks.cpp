@@ -1285,7 +1285,9 @@ static void ShadowCasterProbe(ID3D11DeviceContext* c) {
         if (FAILED(g_dev.dev->CreateBuffer(&sd, nullptr, &s_casterStage))) { b->Release(); s_casterWant = 0; s_cpCreateFail.fetch_add(1, std::memory_order_relaxed); return; }
         s_casterStageSize = bd.ByteWidth;
     }
-    if (s_casterWant.exchange(3) != 1) { b->Release(); s_cpRace.fetch_add(1, std::memory_order_relaxed); return; }   // un solo contexto toma la copia
+    // un solo contexto toma la copia. (03/11) compare_exchange: con exchange(3) un segundo contexto que llegaba tarde pisaba el 2
+    // (copia lista) con un 3 y el registro quedaba trabado para siempre en "estado 3, sin pedido" (partido 02/11 22:44)
+    { int one = 1; if (!s_casterWant.compare_exchange_strong(one, 3)) { b->Release(); s_cpRace.fetch_add(1, std::memory_order_relaxed); return; } }
     s_cpCopied.fetch_add(1, std::memory_order_relaxed);
     c->CopyResource(s_casterStage, b); b->Release();
     CtxState& cs = Ctx(c); s_casterVS = cs.vs ? cs.vs->hash : 0; s_casterVp[0] = vp.Width; s_casterVp[1] = vp.Height;

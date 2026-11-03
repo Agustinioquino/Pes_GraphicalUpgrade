@@ -22,7 +22,7 @@ static bool Readable(const void* p, size_t n) {
     return (const char*)p + n <= (const char*)mi.BaseAddress + mi.RegionSize;
 }
 
-struct AtmoSnap { short dt[6]; float lat, lon, north, gmt, sun[4], lux, moonLux, skyScale, fin, finMoon; unsigned flags; unsigned long long id; };
+struct AtmoSnap { short dt[6]; float lat, lon, north; int gmt; float sun[4], lux, moonLux, skyScale, fin, finMoon; unsigned flags; unsigned long long id; };
 
 static bool s_checked = false, s_ok = false; static double s_next = 0; static int s_lines = 0, s_quiet = 0;
 static AtmoSnap s_last[4] = {}; static int s_lastN = -1; static unsigned s_lastSec = 0xffffffffu;
@@ -56,7 +56,7 @@ void SolRelojPresent() {
         const char* a = arr[i]; if (!Readable(a, 0x3d8)) { changed = true; continue; }
         AtmoSnap& s = cur[i];
         for (int k = 0; k < 6; k++) s.dt[k] = *(const short*)(a + 0x170 + 2 * k);
-        s.lon = *(const float*)(a + 0xc0); s.lat = *(const float*)(a + 0xc4); s.north = *(const float*)(a + 0xcc); s.gmt = *(const float*)(a + 0x1d4);
+        s.lon = *(const float*)(a + 0xc0); s.lat = *(const float*)(a + 0xc4); s.north = *(const float*)(a + 0xcc); s.gmt = *(const int*)(a + 0x1d4);   // (03/11) entero: Sky_UpdB lo carga con mov r8d
         for (int k = 0; k < 4; k++) s.sun[k] = *(const float*)(a + 0x130 + 4 * k);
         s.lux = *(const float*)(a + 0x140); s.moonLux = *(const float*)(a + 0x160); s.skyScale = *(const float*)(a + 0x1b0);
         s.fin = *(const float*)(a + 0x1c0); s.finMoon = *(const float*)(a + 0x1c4); s.flags = *(const unsigned*)(a + 0x3d0);
@@ -78,19 +78,20 @@ void SolRelojPresent() {
     for (int i = 0; i < n; i++) {
         const AtmoSnap& s = cur[i]; if (s.dt[0] == 0 && s.lux == 0.0f && s.lat == 0.0f) continue;
         float len = sqrtf(s.sun[0] * s.sun[0] + s.sun[1] * s.sun[1] + s.sun[2] * s.sun[2]);
-        float alt = len > 1e-6f ? asinf((std::max)(-1.0f, (std::min)(1.0f, s.sun[1] / len))) * 57.2958f : 0.0f;
-        float az = atan2f(s.sun[2], s.sun[0]) * 57.2958f;
+        // (03/11) +0x130 guarda la direccion EN LA QUE VIAJA la luz (Sky_UpdA la invierte): el sol esta en -d
+        float alt = len > 1e-6f ? asinf((std::max)(-1.0f, (std::min)(1.0f, -s.sun[1] / len))) * 57.2958f : 0.0f;
+        float az = atan2f(-s.sun[2], -s.sun[0]) * 57.2958f;
         s_lines++;
-        Log("hora del sol: atmosfera %d (id %llX): fecha %04d-%02d-%02d %02d:%02d:%02d, GMT %+.1f, latitud %.3f, longitud %.3f, norte %.1f | sol (%.3f, %.3f, %.3f) altura %.1f rumbo %.0f %s | sunLux %.0f, moonLux %.2f, skyLightSunScale %.3f, intensidad final sol %.0f luna %.2f | sucio %08X",
+        Log("hora del sol: atmosfera %d (id %llX): fecha %04d-%02d-%02d %02d:%02d:%02d, GMT %+d, latitud %.3f, longitud %.3f, norte %.1f | luz hacia (%.3f, %.3f, %.3f): sol a %.1f grados de altura, rumbo %.0f %s | sunLux %.0f, moonLux %.2f, skyLightSunScale %.3f, intensidad final sol %.0f luna %.2f | sucio %08X",
             i, s.id, s.dt[0], s.dt[1], s.dt[2], s.dt[3], s.dt[4], s.dt[5], s.gmt, s.lat, s.lon, s.north,
             s.sun[0], s.sun[1], s.sun[2], alt, az, s.sun[3] >= 0.0f ? "(sube)" : "(baja)", s.lux, s.moonLux, s.skyScale, s.fin, s.finMoon, s.flags);
-        // luz direccional que la atmosfera alimenta (Atmo_Sub1 0x14195aac0 escribe +0x110 direccion, +0x1c4 intensidad, +0x1d0 color)
+        // luz direccional que la atmosfera alimenta (Atmo_Sub1 0x14195aac0 escribe +0x110 direccion, +0x1c4 intensidad, +0x1cc y +0x1d0 escalares, +0x1dc banderas)
         const char* a = arr[i]; const char* luz = *(const char* const*)(a + 0x188);
         if (Readable(luz, 0x1e0)) {
-            const float* d = (const float*)(luz + 0x110); const float* c = (const float*)(luz + 0x1d0);
+            const float* d = (const float*)(luz + 0x110); float c1cc = *(const float*)(luz + 0x1cc), c1d0 = *(const float*)(luz + 0x1d0);
             s_lines++;
-            Log("hora del sol:   luz direccional: direccion (%.3f, %.3f, %.3f), intensidad %.1f, color (%.3f, %.3f, %.3f), activa %d",
-                d[0], d[1], d[2], *(const float*)(luz + 0x1c4), c[0], c[1], c[2], (int)*(const unsigned char*)(luz + 0x1dc));
+            Log("hora del sol:   luz direccional: direccion (%.3f, %.3f, %.3f), intensidad %.1f, +0x1cc %.3f, +0x1d0 %.3f, banderas %08X",
+                d[0], d[1], d[2], *(const float*)(luz + 0x1c4), c1cc, c1d0, *(const unsigned*)(luz + 0x1dc));
         }
     }
 }
