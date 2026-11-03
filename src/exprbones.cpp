@@ -698,7 +698,10 @@ void ExprBonesFrame(const void* skel) {
     // estira el shader, PesTongue; para que salga la boca se abre al menos 0.45 x 350.z), 350.w mostrar los dientes (los
     // labios se separan de los dientes: el de arriba sube, el de abajo baja, las comisuras se abren)
     const float tongueOut = std::clamp(g_cfg.live[350][2], 0.0f, 1.0f), teeth = std::clamp(g_cfg.live[350][3], 0.0f, 1.5f);
-    const float o = (std::max)(std::clamp(g_cfg.live[347][0], -0.25f, 1.0f), 0.45f * tongueOut);
+    // (03/11, Agustin: "en las animaciones del juego ahora las barbas tambien se ven mal") con x347 negativo (-0.25 en su ini) la
+    // DLL cerraba la mandibula de la cara en CADA cuadro, tambien en las animaciones del juego, y la malla de la barba no recibe
+    // ese giro (sus huesos salen de otro lado): quedaba delante de la boca. Por huesos ya no se cierra: 0 o mas
+    const float o = (std::max)(std::clamp(g_cfg.live[347][0], 0.0f, 1.0f), 0.45f * tongueOut);
     std::lock_guard<std::mutex> lk(s_mx);
     Skel* S = Get(skel);
     S->lastFrame = fr;
