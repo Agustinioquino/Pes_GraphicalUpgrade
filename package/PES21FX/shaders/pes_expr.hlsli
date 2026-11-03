@@ -214,6 +214,10 @@ float2 PesGazeTarget(float n, float seed)
 }
 float2 PesGaze(float t, float seed, float amp)
 {
+  // (03/11, Agustin: "un slider para poder mover los ojos en circulos") 354.x vueltas por segundo (0 = apagado), 354.y radio en
+  // grados: los ojos giran en circulo (prueba de los parpados que siguen la mirada); pisa la mirada viva. Misma cuenta en la DLL
+  float4 Ci = IniParams.Load(int2(354, 0));
+  if (Ci.x > 0.0) { float a = t * Ci.x * 6.2831853; return float2(cos(a), sin(a)) * (Ci.y * 0.0174533); }
   if (amp <= 0.0) return 0;
   // (02/11) mas natural: fijaciones de 1.0..3.4 s (antes 0.45..1.9: saltaba todo el tiempo), sacada de ~70 ms con curva de
   // velocidad de ojo real (arranca rapido y frena, sin sobrepaso) y un retoque chico de correccion; sin las ondas rapidas
@@ -255,7 +259,7 @@ float3 PesGazeRot(float3 q, float2 g)
 float3 PesGazeEye(float3 rest, float3 center, float t, float seed)
 {
   float amp = IniParams.Load(int2(347, 0)).w;
-  if (amp <= 0.0) return rest;
+  if (amp <= 0.0 && IniParams.Load(int2(354, 0)).x <= 0.0) return rest;
   float2 g = PesGaze(t, seed, amp);
   return center + PesGazeRot(rest - center, g);
 }

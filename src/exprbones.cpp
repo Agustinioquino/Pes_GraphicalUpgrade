@@ -351,7 +351,12 @@ static void GazeTarget(float n, float seed, float* g) {   // (02/11) igual que P
 }
 // g[0] = de lado, g[1] = arriba (+) / abajo (-), radianes. LA MISMA CUENTA que PesGaze (pes_expr.hlsli)
 static void Gaze(float t, float seed, float amp, float* g) {
-    g[0] = g[1] = 0.0f; if (amp <= 0.0f) return;
+    g[0] = g[1] = 0.0f;
+    {   // (03/11) 354.x ojos en circulos (vueltas por segundo), 354.y radio en grados: igual que PesGaze
+        const float* C = g_cfg.live[354];
+        if (C[0] > 0.0f) { const float a = t * C[0] * 6.2831853f, r = C[1] * 0.0174533f; g[0] = cosf(a) * r; g[1] = sinf(a) * r; return; }
+    }
+    if (amp <= 0.0f) return;
     const float tt = t + seed * 23.1f, per = 2.2f, n = floorf(tt / per);
     float h[2]; GazeHash2(n, seed + 0.5f, h);
     const float x = tt - (n * per + h[0] * 1.2f);
