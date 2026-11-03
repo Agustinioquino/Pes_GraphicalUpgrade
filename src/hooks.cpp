@@ -970,7 +970,39 @@ static void Remember(ID3D11DeviceContext* c, DrawScope& d, bool ps, bool srv, in
     if (srv) { ID3D11ShaderResourceView* v = nullptr; if (ps) c->PSGetShaderResources(slot, 1, &v); else c->VSGetShaderResources(slot, 1, &v); s.prev = v; }
     else { ID3D11Buffer* b = nullptr; if (ps) c->PSGetConstantBuffers(slot, 1, &b); else c->VSGetConstantBuffers(slot, 1, &b); s.prev = b; }
 }
+// (03/11) registro: maximo de recursos del mod enlazados en un dibujo (cada 30 s, aunque no pase del tope) y control de la boca
+static std::atomic<int> s_resMax{0}, s_resDraws{0}, s_resOver24{0};
+static std::atomic<uint64_t> s_resMaxPS{0}, s_resMaxVS{0};
+static std::atomic<int> s_mouthDraws{0}, s_mouthOk{0}, s_mouthOther{0}, s_mouthNoRule{0};
+static void ResNote(ID3D11DeviceContext* c, int n) {
+    if (n <= 0) return;
+    s_resDraws.fetch_add(1, std::memory_order_relaxed);
+    if (n > 24) s_resOver24.fetch_add(1, std::memory_order_relaxed);
+    int m = s_resMax.load(std::memory_order_relaxed);
+    while (n > m) { if (s_resMax.compare_exchange_weak(m, n)) { CtxState& cs = Ctx(c); s_resMaxPS = cs.ps ? cs.ps->hash : 0; s_resMaxVS = cs.vs ? cs.vs->hash : 0; break; } }
+}
+void ResourcesLogPresent() {
+    static double s_next = 0; static int s_lines = 0;
+    double t = Now(); if (t < s_next || s_lines >= 40) return;
+    s_next = t + 30.0;
+    int draws = s_resDraws.exchange(0), mouth = s_mouthDraws.exchange(0);
+    if (!draws && !mouth) return;
+    s_lines++;
+    Log("recursos por dibujo (30 s): %d dibujos con recursos del mod, maximo %d de %d (PS %016llX VS %016llX), mas de 24: %d | boca 63fab: %d dibujos, t0..t3 del mod %d, otra textura %d, sin regla %d",
+        draws, s_resMax.exchange(0), kSavedMax, (unsigned long long)s_resMaxPS.load(), (unsigned long long)s_resMaxVS.load(), s_resOver24.exchange(0),
+        mouth, s_mouthOk.exchange(0), s_mouthOther.exchange(0), s_mouthNoRule.exchange(0));
+}
+static void MouthCheck(ID3D11DeviceContext* c, const ShaderEntry* ps) {
+    s_mouthDraws.fetch_add(1, std::memory_order_relaxed);
+    if (!ps->rule) { s_mouthNoRule.fetch_add(1, std::memory_order_relaxed); return; }
+    static const char* kF[4] = { "file:textures\\pes_oral_bsm.dds", "file:textures\\pes_oral_nrm.dds", "file:textures\\pes_oral_srm.dds", "file:textures\\pes_oral_trm.dds" };
+    ID3D11ShaderResourceView* v[4] = {}; c->PSGetShaderResources(0, 4, v);
+    bool ok = true;
+    for (int i = 0; i < 4; i++) { if (v[i] != FileTexture(kF[i])) ok = false; if (v[i]) v[i]->Release(); }
+    (ok ? s_mouthOk : s_mouthOther).fetch_add(1, std::memory_order_relaxed);
+}
 static void Restore(ID3D11DeviceContext* c, DrawScope& d) {
+    ResNote(c, d.n);
     for (int i = d.n - 1; i >= 0; i--) {
         Saved& s = d.s[i];
         if (s.srv) { auto* v = (ID3D11ShaderResourceView*)s.prev; if (s.ps) c->PSSetShaderResources(s.slot, 1, &v); else c->VSSetShaderResources(s.slot, 1, &v); }
@@ -1146,6 +1178,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         if (!s_firstRule.exchange(true)) Log("primer dibujo con regla");
     }
     if (ps && ps->rule) RunRule(c, ps, d);
+    if (ps && ps->hash == 0x63fab7735eee149cULL) MouthCheck(c, ps);   // (03/11) la boca tiene sus 4 texturas del mod? (log 'recursos por dibujo')
     if (vs && vs->rule) RunRule(c, vs, d);
     // (20/10) reglas por pareja PS + VS: p.ej. la piel del cuerpo (aa7d1833) cuando dibuja la cabeza de una cara generica (VS faab87ee)
     if (ps && vs) if (const std::vector<const Rule*>* prs = ps->pairRules) for (const Rule* pr : *prs) if (pr->vsCond == vs->hash) RunRuleActions(c, pr, true, ps->hash, d);
@@ -1325,6 +1358,7 @@ static void ShadowCasterProbe(ID3D11DeviceContext* c) {
     s_casterWant = 2;
 }
 void ShadowCasterLogPresent() {
+    ResourcesLogPresent();
     if (s_casterLogN >= 12 || !g_dev.imm) return;
     int w = s_casterWant.load();
     { double t = Now();   // (02/11 c) diagnostico cada 30 s (10 veces): en que paso se queda la muestra
