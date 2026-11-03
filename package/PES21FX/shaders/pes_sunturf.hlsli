@@ -6,14 +6,16 @@
 //      hoja de ~1 cm ocupa menos de ~1.5 px (lejos: ahi lo hace la oclusion del atlas del pasto)
 // y313 la luz que pasa a traves de la hoja (la parte de la translucidez) se tine amarillo verdosa (clorofila)
 // z313 sol bajo mas dorado sobre el pasto (de ~10 a ~25 grados de altura)
-// w313 on/off
+// w313 on/off. (03/11) w313 entre 1 y 2: 'pasto como manto' (prueba): la luz directa de cada hoja usa su normal mezclada con la de
+//      la cancha (w313 - 1 = cuanto). Las hojas 3D tienen normales casi horizontales: con el sol a 39 grados recibian la mitad que
+//      el suelo y la cancha al sol quedaba a 0.64x de Ver original (cancha 9, 03/11). 1 = como antes. pass upNL = N cancha . L
 // Se incluye despues de declarar IniParams (lee la fila 111 para la altura del sol).
 
 // difusa del sol sobre el pasto: wrapD es la del motor (directa + envoltura por translucidez)
 // trans: translucidez del G-buffer (27/10: las hojas pintadas de cal llevan ~0.1 y no se tinen; las verdes 0.4-1.0)
-float3 PESTurfDiffuse(float3 sunC, float rawNdotL, float wrapD, float4 PG, float trans)
+float3 PESTurfDiffuse(float3 sunC, float rawNdotL, float wrapD, float4 PG, float trans, float upNL)
 {
-  float dirD = saturate(rawNdotL);
+  float dirD = saturate(lerp(rawNdotL, upNL, saturate(PG.w - 1.0)));   // (03/11) manto: hacia la normal de la cancha
   float through = max(saturate(wrapD) - dirD, 0.0);
   float3 leaf = lerp(float3(1.0, 1.0, 1.0), float3(1.0, 0.96, 0.72), saturate(PG.y) * saturate((trans - 0.15) / 0.25));   // (27/10) la mitad: el pasto al sol salia lima
   float4 SW = IniParams.Load(int2(111, 0));

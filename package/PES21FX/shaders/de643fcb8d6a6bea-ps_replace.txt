@@ -539,7 +539,9 @@ void main(
   r3.xyz = r2.xxx * r8.xyz;
   // (27/10) el sol sobre el pasto (313, pes_sunturf.hlsli): solo cancha y hojas (tipo 3)
   float4 pesPG = IniParams.Load(int2(313,0)); bool pesTurf = matType == 3 && pesPG.w > 0.5;
-  if (pesTurf) r3.xyz = PESTurfDiffuse(r8.xyz, rawNdotL, r2.x, pesPG, trans);
+  if (pesTurf) { float3 upT = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));   // arriba (cancha) en vista
+    float upNL = dot(upT, normalize(pesLDir.xyz)); if (upNL < -0.2 && pesPG.w > 1.0) upNL = -upNL;   // (03/11) como el rebote: el sol siempre arriba
+    r3.xyz = PESTurfDiffuse(r8.xyz, rawNdotL, r2.x, pesPG, trans, upNL); }
   // PES21 (18/10): curvatura en pantalla (cuanto gira la normal por metro); fuera de los if para poder usar derivadas
   float pesCurv = 0.0;
   { float3 nC = normalize(r3.xyw);
