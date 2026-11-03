@@ -727,7 +727,10 @@ void pesBodyVertex(uint v, out float3 y, out float3 n, out float3 u)
 // huesos de la propia prenda (reposo de la prenda -> modelo en ese momento); se guardan hasta dos planos tangentes (el mas
 // cercano y el mejor con otra orientacion: axila, costado contra el brazo) en el reposo de la prenda, mas lo que la piel se
 // mueve por su cuenta respecto de la prenda (un brazo que se acerca al torso), para seguirlos en los sub-pasos.
-void pesBodyQuery(uint p, uint k, float3 x)
+// (01/11) xr = reposo de la prenda (anclaje, junto a la piel): si la tela ya se metio en el cuerpo mas que PES_BODY_RADIUS (espalda
+// con la fisica: la libertad z256 la deja entrar hasta 2 cm mas), alrededor de x no hay piel y el punto quedaba sin choque para
+// siempre. Entonces se busca la piel alrededor del reposo: su plano la vuelve a sacar (empuje acotado por w256 en cada sub-paso).
+void pesBodyQuery(uint p, uint k, float3 x, float3 xr)
 {
     s_bv[k][0] = uint2(0, 0); s_bv[k][1] = uint2(0, 0);
     if (s_bodyTab == 0xffffffffu || g_legCount > 0) return;
@@ -736,16 +739,19 @@ void pesBodyQuery(uint p, uint k, float3 x)
     float det;
     float3x3 Ai = inverse3((float3x3)A, det);
     if (!(abs(det) > 1e-9)) return;
-    float3 b = mul(Ai, x - float3(A[0].w, A[1].w, A[2].w));
     bool prevC = s_bodyTc < 0.5;
     float3x4 B0 = pesSkinModel(r, prevC);
     float3x4 Bp = pesSkinModel(r, true), B1 = pesSkinModel(r, false);
-    float3 xm = xform(B0, b);
-    if (!all(isfinite(xm))) return;
-    int3 c0 = (int3)floor(xm / PES_BODY_CELL) - 1;
     uint tb = s_bodyTab * PES_BODY_STRIDE + 16;
     const float R2 = PES_BODY_RADIUS * PES_BODY_RADIUS;
     float dA = R2, dB = R2; uint vA = 0, vB = 0; float3 nA = 0, nB = 0;
+    float3 xm = 0; int3 c0 = 0;
+    [loop] for (uint qp = 0; qp < 2 && vA == 0; ++qp) {
+    if (qp == 1 && !(all(isfinite(xr)) && dot(xr, xr) > 1e-8)) break;   // reposo no calculado: nada
+    float3 b = mul(Ai, (qp == 0 ? x : xr) - float3(A[0].w, A[1].w, A[2].w));
+    xm = xform(B0, b);
+    if (!all(isfinite(xm))) return;
+    c0 = (int3)floor(xm / PES_BODY_CELL) - 1;
     [loop] for (uint ci = 0; ci < 27; ++ci) {
         int3 c = c0 + int3(ci % 3, (ci / 3) % 3, ci / 9);
         uint e = g_bodyTab[tb + pesBodyHash(c)];
@@ -763,6 +769,7 @@ void pesBodyQuery(uint p, uint k, float3 x)
             e = g_bodyNext[v];
         }
     }
+    }   // qp (primero x, despues el reposo)
     if (vA == 0) return;
 #if PES_BODY_SMOOTH
     // (27/10) normal y movimiento promediados con la piel vecina del mismo lado (peso (1 - d2/R2)^2): el vertice mas cercano
@@ -883,7 +890,7 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
     if (pin < 0.999) {
         float3 x = gx[p];
 #if PES_BODY
-        if (s == 0) pesBodyQuery(p, k, x);   // (25/10) la piel cercana, una vez por cuadro
+        if (s == 0) pesBodyQuery(p, k, x, rest1);   // (25/10) la piel cercana, una vez por cuadro
         bool pesBodyHas = ((s_bv[k][0].y | s_bv[k][1].y) & 0x10000u) != 0;
 #if PES_BODY_DIAG
         if (s == 0 && pesBodyHas) { uint dg; InterlockedAdd(gBodyCnt[0], 1u, dg); }
@@ -941,9 +948,34 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
         // delgado: el punto de reposo baja con la gravedad -> la remera cuelga mas larga (solo tela libre)
         float3 restT = rest1;
         if (pesFit > 0.0) { float gl = length(s_grav); if (gl > 1e-4) restT += (s_grav / gl) * pesFit * PES_FIT_HANG * fitFree; }
+        // (02/11) fila 352 (Agustin: en la vida real las mangas van mas pegadas al brazo): el REPOSO de la manga se cierra hacia
+        // el eje de su tramo (centro de la tela de ese tramo, como el brazo como volumen): x352 = cuanto del exceso sobre el radio
+        // minimo del tramo se saca, y352 = maximo en cm. Solo cambia adonde la tira el anclaje: la manga sigue igual de libre
+        // (mismo pin, misma correa) y la piel real la frena (el levantado de abajo corre el reposo afuera de la piel). Se apaga
+        // junto al hombro y junto al puno (el puno es otra malla que sigue al esqueleto: sin escalon).
+        float3 restS = rest1;
+        { float4 SL = IniParams.Load(int2(352, 0));
+          if (SL.w > 0.5 && SL.x > 0.0 && g_legCount == 0 && s_tOk) {
+            float3 r0s = rest1 - rnrm1 * g_rest[p].nrm.w;
+            float sws = pesLimbW(p, r0s);
+            if (sws > 0.2) {
+                uint sdS = dot(r0s - s_tC, s_tSide) < 0.0 ? 0u : 1u;
+                if (s_armOk[sdS]) {
+                    uint bS = (uint)clamp((sws - 0.2) / 0.8 * PES_ARM_BANDS, 0.0, PES_ARM_BANDS - 1.0);
+                    uint bS2 = bS + 1 < PES_ARM_BANDS ? bS + 1 : bS - 1;
+                    float3 axS = normalize(s_armC[sdS][bS2] - s_armC[sdS][bS] + 1e-6);
+                    float3 dvS = rest1 - s_armC[sdS][bS]; float3 radV = dvS - axS * dot(dvS, axS);
+                    float radS = length(radV);
+                    float wS = smoothstep(0.2, 0.35, sws) * (1.0 - smoothstep(0.8, 0.95, sws));
+                    float inS = min(saturate(SL.x) * max(radS - s_armR[sdS][bS], 0.0), clamp(SL.y, 0.0, 5.0) * 0.01) * wS;
+                    if (radS > 1e-4 && inS > 0.0 && all(isfinite(radV))) restS = rest1 - radV / radS * inS;
+                }
+            }
+          } }
+        restT += restS - rest1;
 #if PES_BODY && PES_BODY_LIFT
-        float3 restB = rest1;   // (27/10) reposo afuera de la piel real (tambien para las costuras cosidas, mas abajo)
-        if (pesBodyHas) { restB = pesBodyLift(p, k, t, rest1); restT += restB - rest1; }
+        float3 restB = restS;   // (27/10) reposo afuera de la piel real (tambien para las costuras cosidas, mas abajo)
+        if (pesBodyHas) { restB = pesBodyLift(p, k, t, restS); restT += restB - restS; }
 #else
         float3 restB = rest1;
 #endif

@@ -114,7 +114,10 @@ void main(
   int se = PesSkinNearest(PesSkinPoint(g_vsObject.m_world, g_vsObject.m_viewWorld, g_vsScene.m_view, sb0, sb0b, skW));
   float3 mP = v0.xyz, mN = v1.xyz, mT = v3.xyz;
   PesVariantMorph(vid, PesVariantT(se), mP, mN, mT);
-  PesTorsoInset(mP, mN, v0.xyz);   // (27/10) torso bajo la camiseta ajustada (x320)
+  PesTorsoInset(mP, mN, v0.xyz, PesCharOrigin(g_vsObject.m_viewWorld, g_vsScene.m_view));   // (27/10) torso bajo la camiseta ajustada (x320)
+  PesTorsoRegrow(mP, mN, v0.xyz, PesCharOrigin(g_vsObject.m_viewWorld, g_vsScene.m_view));   // (01/11) sin camiseta: torso de tamano original (fila 349)
+  PesTorsoTight(mP, mN, v0.xyz, PesCharOrigin(g_vsObject.m_viewWorld, g_vsScene.m_view));   // (01/11) camiseta ajustada: el torso se mete x351 mm (fila 351)
+  PesNeckSink(mP, mN, v0.xyz, PesCharOrigin(g_vsObject.m_viewWorld, g_vsScene.m_view));   // (02/11) cuello completo de la cara: el torso se hunde debajo (z352)
   float4 mP4 = float4(mP, v0.w);
   float3 hP, hN, hT, hPP; float hDbg;
   bool handDone = (r0.x != 0) && PesHandSkin(vid, mP, mN, mT, v4, v5, hP, hN, hT, hPP, hDbg);
@@ -164,6 +167,14 @@ void main(
     r4.xyz = mP;
     r2.xyz = mP;
   }
+  if (!handDone && skW) {   // (02/11 b) muneca: devuelve el volumen que el skinning lineal pierde cuando el antebrazo gira
+    float twA = PesArmTwistPush(vid, v4, v5, true), twB = PesArmTwistPush(vid, v4, v5, false);
+    float mb = PesArmBulge(vid, v0.xyz);   // (02/11 c) el vientre del musculo que trabaja se levanta
+    float3 mi = PesArmInertia(vid, v0.xyz, r4.xyz - r2.xyz);   // (02/11 e) la carne se queda un poco atras al moverse rapido
+    twA += mb; twB += mb;
+    if (twA != 0.0 || twB != 0.0) { float3 twN = normalize(r5.xyz); r4.xyz += twA * twN; r2.xyz += twB * twN; }
+    r4.xyz += mi;
+  }
   r4.w = v0.w;
   r0.x = dot(r4.xyzw, g_vsObject.m_viewWorld._m00_m10_m20_m30);
   r0.y = dot(r4.xyzw, g_vsObject.m_viewWorld._m01_m11_m21_m31);
@@ -211,8 +222,8 @@ void main(
   o1.w = g_vsObject.m_useWeightCount.w;
   {   // (26/10, v12.7) musculos con textura (pes_limbs.hlsli): en los brazos, piernas y manos de TorsoBody el PS de la piel recibe
       // en o1.xyz cuanto marcar el relieve muscular y las venas (z = 7: marca; ese PS no usa el color del vertice)
-    float lbD = 0.0, lbV = 0.0;
-    if (PesLimbOut(handDone, vid, v0.xyz, lbD, lbV)) o1.xyz = float3(lbD, lbV, 7.0);
+    float lbD = 0.0, lbV = 0.0, lbA = 0.0;
+    if (PesLimbOut(handDone, vid, v0.xyz, lbD, lbV, lbA)) o1.xyz = float3(lbD, lbV, 7.0 + lbA / 1200.0);   // (02/11) z = 7 + acciones / 1200
   }
   o7.xy = r3.xy;
   o2.xy = v6.xy;

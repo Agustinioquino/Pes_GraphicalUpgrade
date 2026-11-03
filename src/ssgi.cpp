@@ -6,6 +6,7 @@
 // La DLL publica en 155: x = 1 si el SSGI temporal corrio en el cuadro anterior, y = contador de cuadros (patron que gira).
 #include "core.h"
 #include <atomic>
+#include <mutex>
 
 namespace fx {
 
@@ -20,6 +21,43 @@ static int s_ping = 0; static std::atomic<int> s_ranFrame{-100}; static int s_co
 // (01/11) Agustin: 'el SSGI no hace ningun cambio'. Registro cada 30 s: cuantas veces corrio y por que no (motivo de cada salida)
 static std::atomic<int> s_nRan{0}, s_nCalls{0}, s_why[8] = {};   // 0 sin shaders, 1 faltan texturas, 2 tamano, 3 msaa/targets, 4 sin cbuffer, 5 cbuffer chico, 6 prev
 static double s_logT = 0; static int s_logs = 0;
+// (02/11) medidor de GPU del SSGI (pedido del hilo del sol para el antes/despues de la Completa barata): consultas de tiempo alrededor
+// de los 2 Draw (paso 1 trazado, paso 2 acumulacion/reconstruccion), como el "pasto GPU"; se leen en Present 3 cuadros despues sin esperar
+static const int kSsgiTimers = 6;
+struct SsgiTimer { ID3D11Query* dis = nullptr; ID3D11Query* ts[3] = {}; std::atomic<int> tag{-1}; };
+static SsgiTimer s_tm[kSsgiTimers]; static std::atomic<int> s_tmState{0}; static std::mutex s_tmMx;
+static double s_tmSum[2] = {}, s_tmMax[2] = {}; static int s_tmN = 0, s_tmLost = 0, s_tmDisjoint = 0;
+static bool SsgiTimersReady() {
+    int st = s_tmState.load(); if (st) return st == 1;
+    std::lock_guard<std::mutex> lk(s_tmMx);
+    if (s_tmState.load()) return s_tmState.load() == 1;
+    D3D11_QUERY_DESC qd = {}; bool ok = g_dev.dev != nullptr;
+    for (auto& t : s_tm) { if (!ok) break;
+        qd.Query = D3D11_QUERY_TIMESTAMP_DISJOINT; if (FAILED(g_dev.dev->CreateQuery(&qd, &t.dis))) { t.dis = nullptr; ok = false; }
+        qd.Query = D3D11_QUERY_TIMESTAMP; for (auto& q : t.ts) if (ok && FAILED(g_dev.dev->CreateQuery(&qd, &q))) { q = nullptr; ok = false; } }
+    if (!ok) { for (auto& t : s_tm) { if (t.dis) t.dis->Release(); t.dis = nullptr; for (auto& q : t.ts) { if (q) q->Release(); q = nullptr; } } Log("SSGI GPU: no se pudieron crear las consultas de tiempo (sin medidor)"); }
+    s_tmState.store(ok ? 1 : 2); return ok;
+}
+static SsgiTimer* SsgiTimerClaim(int frame) {
+    if (!SsgiTimersReady()) return nullptr;
+    for (auto& t : s_tm) { int e = -1; if (t.tag.compare_exchange_strong(e, frame)) {
+        if (!t.dis || !t.ts[0] || !t.ts[1] || !t.ts[2]) { t.tag = -1; return nullptr; }
+        return &t; } }
+    return nullptr;
+}
+static void SsgiTimersRead(int f) {   // contexto inmediato (Present)
+    if (s_tmState.load() != 1 || !g_dev.imm) return;
+    for (auto& t : s_tm) { int tg = t.tag.load(); if (tg < 0 || tg > f - 3) continue;
+        if (f - tg > 90) { t.tag = -1; s_tmLost++; continue; }
+        D3D11_QUERY_DATA_TIMESTAMP_DISJOINT d = {}; if (g_dev.imm->GetData(t.dis, &d, sizeof d, D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK) continue;
+        UINT64 v[3] = {}; bool all = true;
+        for (int i = 0; i < 3 && all; i++) if (g_dev.imm->GetData(t.ts[i], &v[i], 8, D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK) all = false;
+        if (!all) continue;
+        t.tag = -1;
+        if (d.Disjoint || d.Frequency == 0) { s_tmDisjoint++; continue; }
+        for (int i = 0; i < 2; i++) { double ms = v[i + 1] >= v[i] ? (double)(v[i + 1] - v[i]) * 1000.0 / (double)d.Frequency : 0.0; s_tmSum[i] += ms; if (ms > s_tmMax[i]) s_tmMax[i] = ms; }
+        s_tmN++; }
+}
 
 static void EnsureShaders() {
     if (s_tried || !g_dev.dev) return; s_tried = true;
@@ -67,8 +105,14 @@ void SSGIPresent(int presentNo) {
     // (02/11) z337 = 1 ("Completa"): se calcula a media resolucion un pixel exacto de cada 2x2 (fase que rota) y se reconstruye
     // a resolucion completa en el paso 2: definicion de Completa con el costo de Media. 155.z = 1 + fase (0 = modo viejo)
     p[2] = (g_cfg.live[337][2] > 0.5f) ? (float)(1 + (s_counter & 3)) : 0.0f;
+    SsgiTimersRead(presentNo);
     double t = Now();
     if (s_logs < 40 && t - s_logT >= 30.0) { s_logT = t; s_logs++;
+        if (s_tmN > 0 || s_tmLost || s_tmDisjoint) {
+            Log("SSGI GPU (30 s): %d cuadros medidos | paso 1 trazado %.2f ms (max %.2f) | paso 2 acumulacion %.2f (max %.2f) | total %.2f ms por cuadro | modo %s %ux%u -> %ux%u | descartadas: reloj %d, listas sin ejecutar %d",
+                s_tmN, s_tmN ? s_tmSum[0] / s_tmN : 0.0, s_tmMax[0], s_tmN ? s_tmSum[1] / s_tmN : 0.0, s_tmMax[1], s_tmN ? (s_tmSum[0] + s_tmSum[1]) / s_tmN : 0.0,
+                g_cfg.live[337][2] > 0.5f ? (g_cfg.live[155][2] > 0.5f ? "Completa reconstruida" : "Completa") : "Media", s_hw, s_hh, s_w, s_h, s_tmDisjoint, s_tmLost);
+            s_tmSum[0] = s_tmSum[1] = s_tmMax[0] = s_tmMax[1] = 0; s_tmN = s_tmLost = s_tmDisjoint = 0; }
         Log("SSGI (30 s): prendido %d, corrio %d de %d llamadas de la composicion%s | no corrio: sin shaders %d, faltan texturas %d, tamano %d, msaa/targets %d, sin cbuffer %d, cbuffer chico %d, prev %d | fuerza w153 %.2f, z337 %.0f (%ux%u)",
             g_cfg.live[153][0] > 0.5f ? 1 : 0, s_nRan.exchange(0), s_nCalls.exchange(0), (s_vs && s_ps && s_tp) ? "" : " (SHADERS SIN COMPILAR: ver errores de pes_ssgi)",
             s_why[0].exchange(0), s_why[1].exchange(0), s_why[2].exchange(0), s_why[3].exchange(0), s_why[4].exchange(0), s_why[5].exchange(0), s_why[6].exchange(0),
@@ -127,10 +171,13 @@ ID3D11ShaderResourceView* SSGIBeforeComposition(ID3D11DeviceContext* c, int fram
     D3D11_VIEWPORT vp{ 0, 0, (float)hw, (float)hh, 0, 1 }; c->RSSetViewports(1, &vp);
     ID3D11ShaderResourceView* prm = g_dev.paramSRV; c->PSSetShaderResources(120, 1, &prm);
     c->PSSetConstantBuffers(2, 1, &scb); if (sys) c->PSSetConstantBuffers(0, 1, &sys);
+    SsgiTimer* tm = (g_cfg.live[153][0] > 0.5f) ? SsgiTimerClaim(frame) : nullptr;
+    if (tm) { c->Begin(tm->dis); c->End(tm->ts[0]); }
     // 1) SSGI de este cuadro -> tex0
     c->OMSetRenderTargets(1, &s_rtv[0], nullptr);
     ID3D11ShaderResourceView* sv0[4] = { depth, nrm, alb, dif }; c->PSSetShaderResources(0, 4, sv0);
     c->PSSetShader(s_ps, nullptr, 0); c->Draw(3, 0);
+    if (tm) c->End(tm->ts[1]);
     // 2) acumulacion: tex0 + historia anterior -> historia nueva
     int hNew = 1 + s_ping, hOld = 1 + (1 - s_ping); s_ping = 1 - s_ping;
     c->PSSetShaderResources(0, 4, nulls); c->OMSetRenderTargets(1, &s_rtv[hNew], nullptr);
@@ -138,6 +185,7 @@ ID3D11ShaderResourceView* SSGIBeforeComposition(ID3D11DeviceContext* c, int fram
     ID3D11ShaderResourceView* sv1[3] = { s_srv[0], s_srv[hOld], depth }; c->PSSetShaderResources(0, 3, sv1);
     c->PSSetConstantBuffers(3, 1, &s_prev);
     c->PSSetShader(s_tp, nullptr, 0); c->Draw(3, 0);
+    if (tm) { c->End(tm->ts[2]); c->End(tm->dis); }
     c->PSSetShaderResources(0, 4, nulls);
     // la camara de este cuadro queda como "anterior" para el proximo
     c->CopyResource(s_prev, scb);

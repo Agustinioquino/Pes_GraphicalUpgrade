@@ -474,6 +474,7 @@ static void UploadParams() {
         std::lock_guard<std::mutex> lk(g_cfgMutex);
         memcpy(p, g_cfg.live, sizeof(p));
         if (p[139][0] > 0.5f) p[104][0] = 1.0f;   // (20/10) pasto v5: necesita el pasto v3 (x104) prendido en la GPU
+        p[258][0] = (g_cfg.motorPatch && g_cfg.motorSunFix && g_cfg.motorShadowFix == 0) ? 1.0f : 0.0f;   // (02/11) x258: la luz esta corregida y el shadow map no (los shaders del sol no miden grosor con el)
         p[147][3] = 1.0f;   // (20/10) w147: esta DLL iguala la cabeza de las caras genericas con la cara (reglas PS + VS)
         for (auto& kv : g_cfg.rules) {
             if (kv.second.paramSet < 0) continue;
@@ -955,15 +956,53 @@ template<int V> static void STDMETHODCALLTYPE hk_SetCS(ID3D11DeviceContext* c, I
 // ---------------------------------------------------------------- reglas antes de cada dibujo
 // lo que una regla enlaza se devuelve a como estaba despues del dibujo (como "post ps-t20 = ..." en 3DMigoto)
 struct Saved { bool ps; bool srv; int slot; IUnknown* prev; };
-struct DrawScope { Saved s[24]; int n = 0; FaceGenExtra brow; bool skip = false; ID3D11PixelShader* restorePS = nullptr; LodIA lod; GlassScope glass; RingScope ring; };   // glass: vidrio de los menus (glass.cpp)   // lod.count > 0: dibujar con la geometria de LOD0 (lod.cpp)
+static const int kSavedMax = 64;   // (02/11) 24 -> 64: con los grupos del brazo (t26/t30/t36/t123) los dibujos del brazo pasaban de 24 y lo enlazado despues no se devolvia (se filtraba al dibujo siguiente: la boca tomaba texturas ajenas)
+struct DrawScope { Saved s[kSavedMax]; int n = 0; FaceGenExtra brow; bool skip = false; ID3D11PixelShader* restorePS = nullptr; LodIA lod; GlassScope glass; RingScope ring; };   // glass: vidrio de los menus (glass.cpp)   // lod.count > 0: dibujar con la geometria de LOD0 (lod.cpp)
 
 static void Remember(ID3D11DeviceContext* c, DrawScope& d, bool ps, bool srv, int slot) {
-    if (d.n >= 24) return;   // (26/10 d) 12 -> 24: el torso ya enlaza 11 (t127, t16..t21, t24, t31..t33); lo que no entra no se devolveria
+    if (d.n >= kSavedMax) {   // (26/10 d) 12 -> 24, (02/11) -> 64: lo que no entra no se devolveria
+        static std::atomic<bool> s_full{false};
+        if (!s_full.exchange(true)) Log("AVISO: un dibujo enlazo mas de %d recursos del mod; lo que sigue no se devuelve", kSavedMax);
+        return;
+    }
+    if (d.n == 24) { static std::atomic<int> s_over{0}; if (s_over.fetch_add(1) < 3) Log("recursos por dibujo: un dibujo paso de 24 (slot %c t%d): con la DLL anterior esto quedaba enlazado para el dibujo siguiente", ps ? 'P' : 'V', slot); }
     Saved& s = d.s[d.n++]; s.ps = ps; s.srv = srv; s.slot = slot; s.prev = nullptr;
     if (srv) { ID3D11ShaderResourceView* v = nullptr; if (ps) c->PSGetShaderResources(slot, 1, &v); else c->VSGetShaderResources(slot, 1, &v); s.prev = v; }
     else { ID3D11Buffer* b = nullptr; if (ps) c->PSGetConstantBuffers(slot, 1, &b); else c->VSGetConstantBuffers(slot, 1, &b); s.prev = b; }
 }
+// (03/11) registro: maximo de recursos del mod enlazados en un dibujo (cada 30 s, aunque no pase del tope) y control de la boca
+static std::atomic<int> s_resMax{0}, s_resDraws{0}, s_resOver24{0};
+static std::atomic<uint64_t> s_resMaxPS{0}, s_resMaxVS{0};
+static std::atomic<int> s_mouthDraws{0}, s_mouthOk{0}, s_mouthOther{0}, s_mouthNoRule{0};
+static void ResNote(ID3D11DeviceContext* c, int n) {
+    if (n <= 0) return;
+    s_resDraws.fetch_add(1, std::memory_order_relaxed);
+    if (n > 24) s_resOver24.fetch_add(1, std::memory_order_relaxed);
+    int m = s_resMax.load(std::memory_order_relaxed);
+    while (n > m) { if (s_resMax.compare_exchange_weak(m, n)) { CtxState& cs = Ctx(c); s_resMaxPS = cs.ps ? cs.ps->hash : 0; s_resMaxVS = cs.vs ? cs.vs->hash : 0; break; } }
+}
+void ResourcesLogPresent() {
+    static double s_next = 0; static int s_lines = 0;
+    double t = Now(); if (t < s_next || s_lines >= 40) return;
+    s_next = t + 30.0;
+    int draws = s_resDraws.exchange(0), mouth = s_mouthDraws.exchange(0);
+    if (!draws && !mouth) return;
+    s_lines++;
+    Log("recursos por dibujo (30 s): %d dibujos con recursos del mod, maximo %d de %d (PS %016llX VS %016llX), mas de 24: %d | boca 63fab: %d dibujos, t0..t3 del mod %d, otra textura %d, sin regla %d",
+        draws, s_resMax.exchange(0), kSavedMax, (unsigned long long)s_resMaxPS.load(), (unsigned long long)s_resMaxVS.load(), s_resOver24.exchange(0),
+        mouth, s_mouthOk.exchange(0), s_mouthOther.exchange(0), s_mouthNoRule.exchange(0));
+}
+static void MouthCheck(ID3D11DeviceContext* c, const ShaderEntry* ps) {
+    s_mouthDraws.fetch_add(1, std::memory_order_relaxed);
+    if (!ps->rule) { s_mouthNoRule.fetch_add(1, std::memory_order_relaxed); return; }
+    static const char* kF[4] = { "file:textures\\pes_oral_bsm.dds", "file:textures\\pes_oral_nrm.dds", "file:textures\\pes_oral_srm.dds", "file:textures\\pes_oral_trm.dds" };
+    ID3D11ShaderResourceView* v[4] = {}; c->PSGetShaderResources(0, 4, v);
+    bool ok = true;
+    for (int i = 0; i < 4; i++) { if (v[i] != FileTexture(kF[i])) ok = false; if (v[i]) v[i]->Release(); }
+    (ok ? s_mouthOk : s_mouthOther).fetch_add(1, std::memory_order_relaxed);
+}
 static void Restore(ID3D11DeviceContext* c, DrawScope& d) {
+    ResNote(c, d.n);
     for (int i = d.n - 1; i >= 0; i--) {
         Saved& s = d.s[i];
         if (s.srv) { auto* v = (ID3D11ShaderResourceView*)s.prev; if (s.ps) c->PSSetShaderResources(s.slot, 1, &v); else c->VSSetShaderResources(s.slot, 1, &v); }
@@ -973,7 +1012,7 @@ static void Restore(ID3D11DeviceContext* c, DrawScope& d) {
     d.n = 0;
 }
 
-extern thread_local UINT t_drawVerts; extern thread_local UINT t_drawStart; extern thread_local INT t_drawBase; extern thread_local bool t_lodNoted;   // (definidas mas abajo)
+extern thread_local UINT t_drawVerts; extern thread_local int t_drawKind; extern thread_local UINT t_drawStart; extern thread_local INT t_drawBase; extern thread_local bool t_lodNoted;   // (definidas mas abajo)
 static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, uint64_t hash, DrawScope& d);
 static void RunRule(ID3D11DeviceContext* c, const ShaderEntry* e, DrawScope& d) { RunRuleActions(c, e->rule, e->type == 'p', e->hash, d); }
 static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, uint64_t hash, DrawScope& d) {
@@ -1069,6 +1108,13 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
                 }
             }
             break; }
+        case RuleAction::Expr: {   // (31/10) expresiones faciales: donde esta sk_head en la paleta de esta malla (expr.cpp)
+            if (ps) break;
+            // solo DrawIndexed (con otro tipo de dibujo count 0 -> cbuffer "sin dato")
+            const float* hc = nullptr; int hd = -1;
+            if (ID3D11Buffer* b = ExprBufferForDraw(c, t_drawKind == 1 ? t_drawVerts : 0, t_drawStart, t_drawBase, &hc, &hd)) { Remember(c, d, false, false, a.slot); c->VSSetConstantBuffers(a.slot, 1, &b); }
+            if (hc && FreeCamWantsHead()) ExprCaptureHead(c, hc, hd);   // (1/11) camara libre "seguir la cara": matriz de sk_head de este dibujo
+            break; }
         case RuleAction::SetParam: break;   // ya resuelto con la textura de parametros alternativa
         }
     }
@@ -1077,7 +1123,7 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
 static std::atomic<bool> g_shirtSeen{false};   // (27/10 c) se dibujo una camiseta desde el ultimo Present
 static std::atomic<bool> s_firstRule{false};
 thread_local bool t_sparseGrass = false;
-thread_local UINT t_drawVerts = 0; thread_local UINT t_drawStart = 0; thread_local INT t_drawBase = 0; thread_local bool t_lodNoted = false; thread_local LodIA t_grassSub;   // (20/10) DrawIndexed en curso (LOD de caras)   // vertices del dibujo en curso (para "solo esta capa" del inspector)   // el dibujo en curso es una parcela lejana del pasto (lo marca GrassOnDraw)
+thread_local UINT t_drawVerts = 0; thread_local int t_drawKind = 0; thread_local UINT t_drawStart = 0; thread_local INT t_drawBase = 0; thread_local bool t_lodNoted = false; thread_local LodIA t_grassSub;   // (20/10) DrawIndexed en curso (LOD de caras)   // vertices del dibujo en curso (para "solo esta capa" del inspector)   // el dibujo en curso es una parcela lejana del pasto (lo marca GrassOnDraw)
 static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (!g_dev.dev) return false;
     CtxState& s = Ctx(c);
@@ -1132,15 +1178,29 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         if (!s_firstRule.exchange(true)) Log("primer dibujo con regla");
     }
     if (ps && ps->rule) RunRule(c, ps, d);
+    if (ps && ps->hash == 0x63fab7735eee149cULL) MouthCheck(c, ps);   // (03/11) la boca tiene sus 4 texturas del mod? (log 'recursos por dibujo')
     if (vs && vs->rule) RunRule(c, vs, d);
     // (20/10) reglas por pareja PS + VS: p.ej. la piel del cuerpo (aa7d1833) cuando dibuja la cabeza de una cara generica (VS faab87ee)
     if (ps && vs) if (const std::vector<const Rule*>* prs = ps->pairRules) for (const Rule* pr : *prs) if (pr->vsCond == vs->hash) RunRuleActions(c, pr, true, ps->hash, d);
+    // (2/11) recortes de pasto / tierra (pitchwear.cpp): el PS de las hojas lee el atlas de PARTICULAS (textures\pes_debris.dds, mismo formato)
+    if (PitchClipDrawActive()) {
+        if (ID3D11ShaderResourceView* a = FileTexture("file:textures\\pes_debris.dds")) { Remember(c, d, true, true, 8); c->PSSetShaderResources(8, 1, &a); }
+        if (ID3D11ShaderResourceView* b = FileTexture("file:textures\\pes_debris_n.dds")) { Remember(c, d, true, true, 9); c->PSSetShaderResources(9, 1, &b); }
+    }
     // (25/10) manos de TorsoBody (manos.cpp): datos por vertice de la mano en t126 del VS (cuaterniones duales + correctivas)
     if (vs && vs->repl) {
         bool arm = false, hand = false;
         ID3D11ShaderResourceView* hv = HandDataFor(vs->hash, t_drawVerts, t_drawStart, t_drawBase); hand = hv != nullptr;
         if (!hv) hv = LimbDataFor(vs->hash, t_drawVerts, t_drawStart, t_drawBase, &arm);   // (26/10, v12.7) brazos y piernas
         if (hv) { Remember(c, d, false, true, 126); c->VSSetShaderResources(126, 1, &hv); }
+        // (31/10) torso bajo la camiseta preciso: mapa de lo que asoma (cuerpo.cpp) en t124 del VS de la piel y de su sombra
+        if (vs->hash == 0x1c02a92ab4ae3362ULL || vs->hash == 0xc6ef0c7519ec95a5ULL) if (ID3D11ShaderResourceView* nv = TorsoNeedSRV()) { Remember(c, d, false, true, 124); c->VSSetShaderResources(124, 1, &nv); }
+        if (arm && vs->hash == 0x1c02a92ab4ae3362ULL) {   // (02/11) grupos musculares del brazo
+            if (ID3D11ShaderResourceView* an = ArmAnatTexture(0)) { Remember(c, d, true, true, 26); c->PSSetShaderResources(26, 1, &an); }
+            if (ID3D11ShaderResourceView* ac = ArmAnatTexture(1)) { Remember(c, d, true, true, 30); c->PSSetShaderResources(30, 1, &ac); }
+            if (ID3D11ShaderResourceView* ag = ArmAnatTexture(2)) { Remember(c, d, true, true, 36); c->PSSetShaderResources(36, 1, &ag); }   // (02/11 b) grupos
+        }
+        if (arm && vs->hash == 0x1c02a92ab4ae3362ULL) if (ID3D11ShaderResourceView* ev = MuscleEffortSRV()) { Remember(c, d, false, true, 123); c->VSSetShaderResources(123, 1, &ev); }   // (02/11) venas por esfuerzo
         // (26/10, v12.7) venas: textura en t29 del PS de la piel para los brazos y las manos (no en la sombra)
         if ((hand || arm) && vs->hash == 0x1c02a92ab4ae3362ULL) if (ID3D11ShaderResourceView* vt = VeinTexture()) { Remember(c, d, true, true, 29); c->PSSetShaderResources(29, 1, &vt); }
         // (27/10) brazos, manos y muslos de TorsoBody para las caras reales: ArmsTextureFor al principio de BeforeDraw
@@ -1181,9 +1241,14 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (ps && ps->repl) { int si = SunPassIndex(ps->hash); if (si >= 0 && si < 7) if (ID3D11ShaderResourceView* hs = HeadShadowSRV()) { Remember(c, d, true, true, 30); c->PSSetShaderResources(30, 1, &hs); } }
     // 20/10: desgaste de la cancha en vivo: la posicion de cada jugador sale del dibujo de su short / medias (b5 del VS)
     if (ps && ps->hash == 0x55297925e0c66085ULL) PitchWearNotePlayer(c);
+    // (2/11) botines / pelota (aadffecf): anotar la traslacion para reconocer la pelota; en el dibujo de la pelota, b12 = manchas (fila 177)
+    if (ps && ps->hash == 0xaadffecf2090e4f1ULL && ps->repl) if (ID3D11Buffer* bb = PitchBallDrawNote(c, t_drawVerts)) { Remember(c, d, true, false, 12); c->PSSetConstantBuffers(12, 1, &bb); }
     // (27/10 c) hay camisetas en escena (PS de la camiseta 7e64 / a41e / c7ae): el torso se mete bajo la tela (fila 320, z la pone
     // la DLL en Present); sin camiseta (menu Apariencia / Fisico, tecla 4 de Sider) el torso queda entero, sin escalon en la costura
-    if (ps && (ps->hash == 0x7e647d9c43b453f9ULL || ps->hash == 0xa41e7343f874154fULL || ps->hash == 0xc7ae89b63e889007ULL)) g_shirtSeen.store(true, std::memory_order_relaxed);
+    if (ps && (ps->hash == 0x7e647d9c43b453f9ULL || ps->hash == 0xa41e7343f874154fULL || ps->hash == 0xc7ae89b63e889007ULL)) {
+        g_shirtSeen.store(true, std::memory_order_relaxed);
+        TorsoShirtNote(c, (ps->hash == 0x7e647d9c43b453f9ULL ? 0 : ps->hash == 0xa41e7343f874154fULL ? 1 : 2) | ((t_drawVerts == 7284 || t_drawVerts == 6006 || t_drawVerts == 7512 || t_drawVerts == 5550) ? 4 : 0));   // (01/11) +4 = camiseta ajustada (indices de [shirt_tight] detect de cloth.ini)   // (31/10 b) camiseta por jugador
+    }
     // 19/10: SSS separable en pantalla antes de la composicion: la irradiancia (t9) llega ya difundida sobre la piel
     if (ps && (ps->hash == 0x619b86cb5691cdceULL || ps->hash == 0xf807e74d5b900a15ULL) && ps->repl) {
         if (ID3D11ShaderResourceView* v = SSSSBeforeComposition(c)) { Remember(c, d, true, true, 9); c->PSSetShaderResources(9, 1, &v);
@@ -1213,6 +1278,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
             if (g_cfg.live[323][3] > 0.5f) { static std::atomic<int> n{0}; if (n.fetch_add(1) < 40) Log("camiseta interior oculta: %u indices, vs %016llx ps %016llx", t_drawVerts, (unsigned long long)vs->hash, (unsigned long long)(ps ? ps->hash : 0)); }
         }
     }
+    if (GrassSkipGameDraw()) d.skip = true;   // (2/11) x178: pasto propio del juego apagado con el mod emitiendo
     // 19/10: capas editadas desde el inspector (PES21FX_capas.ini): textura por slot u "ocultar" el dibujo
     g_drawOrder++;
     if (ps && g_layersAny.load()) { LayerOv ov;
@@ -1251,7 +1317,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     RingFaceBind(c, d.ring);   // (24/10 e) medicion del color de la cara: u7 (despues de las cejas en u5 / u6)
     return d.n > 0;
 }
-#define FX_DRAW(verts, kind, inst, call) if (g_catalogHook) { CtxState& cs_ = Ctx(c); CatalogDraw(c, cs_.vs, cs_.ps, verts, kind, inst); } t_drawVerts = (UINT)(verts); DrawScope ds; bool r = BeforeDraw(c, ds); \
+#define FX_DRAW(verts, kind, inst, call) if (g_catalogHook) { CtxState& cs_ = Ctx(c); CatalogDraw(c, cs_.vs, cs_.ps, verts, kind, inst); } t_drawVerts = (UINT)(verts); t_drawKind = (kind); DrawScope ds; bool r = BeforeDraw(c, ds); \
     if ((kind) == 1 && g_lodAny) { if (!t_lodNoted && !ds.lod.count) { CtxState& cl_ = Ctx(c); LodNoteAnyDraw(c, cl_.vs ? cl_.vs->hash : 0, cl_.ps ? cl_.ps->hash : 0, verts, t_drawStart, t_drawBase, &ds.lod); } t_lodNoted = false; } \
     if ((kind) == 1 && t_grassSub.count) { if (!ds.lod.count) ds.lod = t_grassSub; else t_grassSub.Release(); t_grassSub = LodIA(); } \
     if (!ds.skip) { call; } if (ds.restorePS) { c->PSSetShader(ds.restorePS, nullptr, 0); ds.restorePS->Release(); } if (ds.glass.on) GlassAfterDraw(c, ds.glass); if (ds.ring.on) RingAfterDraw(c, ds.ring); \
@@ -1294,6 +1360,7 @@ static void ShadowCasterProbe(ID3D11DeviceContext* c) {
     s_casterWant = 2;
 }
 void ShadowCasterLogPresent() {
+    ResourcesLogPresent();
     if (s_casterLogN >= 12 || !g_dev.imm) return;
     int w = s_casterWant.load();
     { double t = Now();   // (02/11 c) diagnostico cada 30 s (10 veces): en que paso se queda la muestra
@@ -1348,7 +1415,7 @@ template<int V> static void STDMETHODCALLTYPE hk_DrawIdx(ID3D11DeviceContext* c,
     GRASS_FLUSH(c)
     { CtxState& cg = Ctx(c); const ShaderEntry* gvs = cg.vs;
       if (g_grassProbeOn) CatalogGrassDraw(c, gvs, a, b, d);
-      if (gvs && gvs->hash == 0x498b30bad256e8edULL) GrassOnDraw(c, gvs, cg.ps, a, b, d);
+      if (gvs && gvs->hash == 0x498b30bad256e8edULL) GrassOnDraw(c, gvs, cg.ps, a, b, d); else GrassClearSkip();   // (2/11 b) la omision x178 es solo de ESTE dibujo
       if (gvs && gvs->hash == 0x1c02a92ab4ae3362ULL) BodyOnDraw(c, a, b, d);   // (25/10) piel del cuerpo -> la ropa choca con ella (es fisica: no depende de "Ver original")
       else if (cg.ps && (cg.ps->hash == 0x7e647d9c43b453f9ULL || cg.ps->hash == 0xa41e7343f874154fULL || cg.ps->hash == 0xc7ae89b63e889007ULL) && g_cfg.live[327][3] > 0.5f) BodyOnDraw(c, a, b, d, 1);   // (27/10 d) camiseta: medicion contra el torso
       if (g_autoDumpAny) InspectAutoDump(c, cg.ps); }
@@ -1704,11 +1771,14 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     SSGIPresent(s_presentNo.load());
     LightMeterPresent();
     CamHookPresent();   // (23/10) camara del motor: ganchos (primer Present), cortes de camara -> 160, log
+    TiempoPresent();    // (31/10) camara lenta: ganchos (visor del editor / reloj del partido, primer Present), 343.w, log
+    FreeCamPresent();   // (1/11) camara libre: gancho a la camara del visor del editor (primer Present), log
     CharTrackPresent();    // (24/10) personajes: que jugador es cada esqueleto (ganchos en el primer Present, log)
     SkinDiagPresent();     // (24/10) tono de piel: diagnostico de los dibujos de personajes (w184)
     SkinTonePresent();     // (24/10) tono de piel por jugador: guardado y vista previa en el menu Fisico
     GlassPresent();        // (24/10) vidrio de los menus: lectura de lo anotado por el PS y plan de copias del fondo
     MuscleHookPresent();   // (23/10) musculatura: ganchos a los huesos de musculo del motor (primer Present)
+    ExprPresent();         // (31/10) expresiones faciales: mallas de cara nuevas (cabeza en la paleta)
     BodyPresent();         // (25/10) la ropa contra el cuerpo real: mallas de piel nuevas, cuadro nuevo
     ArmsPresent();         // (27/10) brazos de TorsoBody para las caras reales: huellas de los torsos del juego, claves del cuadro
     { static unsigned s_noShirt = 1000; s_noShirt = g_shirtSeen.exchange(false) ? 0 : (std::min)(s_noShirt + 1, 1000u);   // (27/10 c) fila 320.z: camisetas en los ultimos 30 Present
@@ -1827,6 +1897,7 @@ bool InstallHooks() {
     Log("compilador de shaders: %ls", s_compile ? cpath : L"NO ENCONTRADO");
     ScanShaderFolder();
     if (MH_Initialize() != MH_OK) { Log("MinHook no inicio"); return false; }
+    KeyBlockInstall();   // (31/10) teclas del juego bloqueadas mientras se escribe en el menu
     ExePatchInstall();   // (20/10) parches en memoria del motor (antes de que el juego lea su configuracion grafica)
     return true;
 }

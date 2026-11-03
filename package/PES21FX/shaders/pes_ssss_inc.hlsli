@@ -22,6 +22,7 @@ Texture2D<float4> inMat   : register(t2);
 Texture2D<float4> inNrm   : register(t3);
 Texture2D<float4> inAlb   : register(t4);   // (20/10) albedo del G-buffer: tono de la piel (melanina)
 Texture2D<float4> inSpec  : register(t5);   // (27/10 b) luz especular del juego (t10): la luz de prueba le suma su brillo
+Texture2D<float4> inRef   : register(t6);   // (01/11) referencia de intensidad de la luz de prueba (1x1, suavizada)
 Texture1D<float4> IniParams : register(t120);
 SamplerState sPoint : register(s0);
 SamplerState sLinear : register(s1);
@@ -35,7 +36,23 @@ static const float kBurleyX[8] = { 0.1305, 0.4299, 0.7976, 1.2651, 1.8883, 2.779
 
 float BurleyF(float x) { return exp(-x) + exp(-x / 3.0); }
 
-#ifdef SSSS_PRE
+#ifdef SSSS_REF
+// ===================================================================================================================
+// (01/11) Pasada 0 de la luz de prueba del editor: referencia de intensidad (la irradiancia de estudio mas alta sobre la piel,
+// rejilla de 8x8) en una textura de 1x1 que la DLL mezcla con la del cuadro anterior (blend factor ~0.1). Antes se media en
+// cada pixel cada cuadro con 6x6 puntos fijos de la pantalla: al mover la camara los puntos caian o no sobre la piel y toda la
+// luz de prueba saltaba de intensidad (Agustin: "parpadea mucho al mover la camara").
+float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
+  float S = 0, Sall = 0;
+  [unroll] for (int gj = 0; gj < 8; gj++) [unroll] for (int gi = 0; gi < 8; gi++) {
+    float2 ug = float2((gi + 0.5) / 8.0, (gj + 0.5) / 8.0);
+    float l = Lum(inLight.SampleLevel(sPoint, ug, 0).xyz);
+    Sall = max(Sall, l); if (IsSkin(ug)) S = max(S, l);
+  }
+  if (S <= 1e-6) S = Sall;
+  return float4(S, Sall, 0, 1);
+}
+#elif defined(SSSS_PRE)
 // ===================================================================================================================
 // Pasada 1: copia + luz de prueba del editor (27/10 b)
 // En el editor y los menus 3D el juego no corre la pasada del sol: ilumina con un mapa esferico de estudio, plano y de
@@ -43,9 +60,10 @@ float BurleyF(float x) { return exp(-x) + exp(-x / 3.0); }
 // irradiancia (t9) y el brillo (t10) con los mismos datos que usa la pasada de luz real (normal, rugosidad y translucidez
 // del G-buffer), una sombra trazada en pantalla (la nariz sobre la mejilla, el menton sobre el cuello) y se atenua la luz
 // de estudio para que la sombra se vea. Solo donde no hubo sol hace poco (w44 = 0) y en escena de menu sin cancha (w255 = 1).
-//   x297 prendido | y297 preset (0 manual, 1 dia, 2 tarde, 3 noche) | z297 rumbo (grados; 0 = desde la camara, 90 = derecha,
+//   x297 prendido | y297 preset (0 manual, 1 dia, 2 tarde, 3 noche, 4 estudio) | z297 rumbo (grados; 0 = desde la camara, 90 = derecha,
 //   180 = contraluz) | w297 altura (grados) | x298 intensidad (veces la luz de estudio sobre la piel) | y298 calidez (0 azul
 //   .. 1 naranja) | z298 luz de estudio que queda | w298 sombra trazada (0 = sin sombra)
+//   x319 icono de las luces en pantalla (DLL, overlay.cpp) | y319 relleno del estudio | z319 recorte del estudio
 struct PreOut { float4 c : SV_Target0; float4 s : SV_Target1; };
 
 float3 DecodeN(float2 uv) {   // normal del G-buffer (octaedro 10/10 + 2 bits), igual que en la pasada de luz 1f623
@@ -58,119 +76,144 @@ float3 DecodeN(float2 uv) {   // normal del G-buffer (octaedro 10/10 + 2 bits), 
   return n;
 }
 
-PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
-  PreOut o;
-  float3 c0 = inLight.SampleLevel(sPoint, uv, 0).xyz;
-  float3 s0 = inSpec.SampleLevel(sPoint, uv, 0).xyz;
-  o.c = float4(c0, 1); o.s = float4(s0, 1);
-  float4 E = IniParams.Load(int2(297, 0)), E2 = IniParams.Load(int2(298, 0));
-  bool noSun = IniParams.Load(int2(44, 0)).w < 0.5 && IniParams.Load(int2(255, 0)).w > 0.5;
-  if (E.x < 0.5 || !noSun) return o;
-  float zC = LinZ(uv);
-  float zSgn = zC < 0.0 ? -1.0 : 1.0, zA = abs(zC);
-  if (zA < 0.1 || zA > 60.0) return o;   // fondo del editor, sin geometria
-  // --- preset o manual ---
-  int preset = (int)(E.y + 0.5);
-  float az = E.z, el = E.w, inten = E2.x > 0 ? E2.x : 1.1, warm = E2.y, keep = E2.z, shK = E2.w;
-  if (preset == 1) { az = 50; el = 45; inten = 1.1; warm = 0.62; keep = 0.55; }   // (27/10 c) 2.5 quemaba la cara: el tonemap del editor expone para la luz de estudio        // dia: sol alto, calido
-  else if (preset == 2) { az = 70; el = 12; inten = 0.9; warm = 0.95; keep = 0.45; }   // tarde: sol bajo, naranja
-  else if (preset == 3) { az = -40; el = 60; inten = 0.8; warm = 0.15; keep = 0.35; }  // noche: torre alta, blanca azulada
-  float3 tint = lerp(float3(0.80, 0.88, 1.00), float3(1.00, 0.62, 0.32), saturate(warm));   // azul frio .. naranja
-  tint /= max(Lum(tint), 1e-4);
-  // --- referencia de intensidad: la irradiancia de estudio mas alta sobre la piel (rejilla fija de 6x6 puntos) ---
-  float S = 0, Sall = 0;
-  [unroll] for (int gj = 0; gj < 6; gj++) [unroll] for (int gi = 0; gi < 6; gi++) {
-    float2 ug = float2((gi + 0.5) / 6.0, (gj + 0.5) / 6.0);
-    float l = Lum(inLight.SampleLevel(sPoint, ug, 0).xyz);
-    Sall = max(Sall, l); if (IsSkin(ug)) S = max(S, l);
-  }
-  if (S <= 1e-6) S = Sall;
-  if (S <= 1e-6) return o;
-  float3 sunC = tint * (S * inten);
-  // --- geometria en vista, como la pasada de luz 1f623 (posicion desde la profundidad, normal del G-buffer) ---
-  float2 sC = uv * float2(2, -2) + float2(-1, 1);
-  float2 pp = (sC - m_cameraCenterOffset.xy) * m_projectionParam.xy;
-  float3 Pv = float3(pp * zC, zC);
-  float3 V = -normalize(float3(pp, 1));
-  float3 n = DecodeN(uv);
-  float ca = cos(radians(az)), sa = sin(radians(az)), ce = cos(radians(el)), se = sin(radians(el));
-  float3 L = normalize(float3(ce * sa, se, -ce * ca * zSgn));   // rumbo 0 = de frente (hacia la camara), 90 = desde la derecha
-  bool skin = IsSkin(uv);
-  float4 mat = inMat.SampleLevel(sPoint, uv, 0);
-  float rawNL = dot(n, L);
-  // --- sombra trazada en pantalla (12 pasos hacia la luz; la de contacto de la pasada de luz, sin shadow map) ---
-  float sh = 1.0;
-  if (shK > 0.001 && rawNL > 0.02) {
-    float ign = frac(52.9829189 * frac(dot(pos.xy, float2(0.06711056, 0.00583715))));
-    float csLen = 0.45;
-    float bias = (0.008 + 0.0018 * zA) * (0.6 + 0.4 / max(rawNL, 0.12));
-    float3 Q = Pv + L * bias;
-    float occ = 0;
-    [loop] for (int ci = 0; ci < 12; ci++) {
-      float f = (ci + ign) / 12.0;
-      float t = f * f * csLen;
-      float3 R = Q + L * t;
-      float RzA = R.z * zSgn;
-      if (RzA < 0.1) break;
-      float2 s = R.xy / (R.z * m_projectionParam.xy) + m_cameraCenterOffset.xy;
-      float2 uvR = s * float2(0.5, -0.5) + 0.5;
-      if (any(uvR < 0.0) || any(uvR > 1.0)) break;
-      float zS = LinZ(uvR);
-      float dz = (R.z - zS) * zSgn;
-      float thick = 0.10 + 0.25 * t + 0.0015 * RzA;
-      if (dz > 0.003 + 0.0008 * RzA && dz < thick && (zC - zS) * zSgn > 0.03 + 0.002 * zA) {
-        occ = (1.0 - 0.5 * f) * saturate(dz / (0.35 * thick));
-        break;
-      }
+// sombra trazada en pantalla (12 pasos hacia la luz; la de contacto de la pasada de luz, sin shadow map)
+float PesTraceShadow(float3 Pv, float3 L, float rawNL, float zC, float zSgn, float zA, float2 uv, float2 pxy, float shK) {
+  if (shK <= 0.001 || rawNL <= 0.02) return 1.0;
+  float ign = frac(52.9829189 * frac(dot(pxy, float2(0.06711056, 0.00583715))));
+  float csLen = 0.45;
+  float bias = (0.008 + 0.0018 * zA) * (0.6 + 0.4 / max(rawNL, 0.12));
+  float3 Q = Pv + L * bias;
+  float occ = 0;
+  [loop] for (int ci = 0; ci < 12; ci++) {
+    float f = (ci + ign) / 12.0;
+    float t = f * f * csLen;
+    float3 R = Q + L * t;
+    float RzA = R.z * zSgn;
+    if (RzA < 0.1) break;
+    float2 s = R.xy / (R.z * m_projectionParam.xy) + m_cameraCenterOffset.xy;
+    float2 uvR = s * float2(0.5, -0.5) + 0.5;
+    if (any(uvR < 0.0) || any(uvR > 1.0)) break;
+    float zS = LinZ(uvR);
+    float dz = (R.z - zS) * zSgn;
+    float thick = 0.10 + 0.25 * t + 0.0015 * RzA;
+    if (dz > 0.003 + 0.0008 * RzA && dz < thick && (zC - zS) * zSgn > 0.03 + 0.002 * zA) {
+      occ = (1.0 - 0.5 * f) * saturate(dz / (0.35 * thick));
+      break;
     }
-    float2 eM = saturate(min(uv, 1.0 - uv) * 10.0);
-    sh = 1.0 - saturate(occ * saturate(shK) * eM.x * eM.y);
   }
+  float2 eM = saturate(min(uv, 1.0 - uv) * 10.0);
+  return 1.0 - saturate(occ * saturate(shK) * eM.x * eM.y);
+}
+
+float3 PesTint(float warm) {   // azul frio .. naranja, luminancia 1
+  float3 t = lerp(float3(0.80, 0.88, 1.00), float3(1.00, 0.62, 0.32), saturate(warm));
+  return t / max(Lum(t), 1e-4);
+}
+
+float3 PesDirL(float az, float el, float zSgn) {   // rumbo 0 = de frente (hacia la camara), 90 = desde la derecha
+  float ca = cos(radians(az)), sa = sin(radians(az)), ce = cos(radians(el)), se = sin(radians(el));
+  return normalize(float3(ce * sa, se, -ce * ca * zSgn));
+}
+
+// una luz direccional: difusa (Lambert + borde rojizo de la piel + contraluz por la translucidez) y brillo (GGX + lobulo fino)
+void PesOneLight(float3 L, float3 col, float sh, float3 n, float3 V, bool skin, float rough, float trans, inout float3 dif, inout float3 spec) {
+  float rawNL = dot(n, L);
   // --- difusa: Lambert con un borde apenas envuelto en la piel (el resto lo hace el disco de Burley de la pasada 2) ---
   float wrap = skin ? 0.03 : 0.0;
   float nl = saturate((rawNL + wrap) / (1.0 + wrap));
-  float3 dif = sunC * nl * sh;
-  // (27/10 e) videos del editor de Agustin: el lado al sol se veia gris y el paso a la sombra sin el borde calido de la piel.
-  // Borde de la sombra rojizo (la luz que entra en la piel sale un poco mas alla del terminador, mas el rojo que el verde y el
-  // azul: envoltura por canal), solo en la franja del terminador, con la misma sombra trazada suavizada
+  dif += col * nl * sh;
+  // (27/10 e) borde de la sombra rojizo (envoltura por canal), solo en la franja del terminador
   if (skin) {
     float3 wr = float3(0.30, 0.10, 0.05);
     float3 nl3 = saturate((rawNL + wr) / (1.0 + wr));
-    dif += sunC * max(nl3 - nl, 0.0) * 0.8 * lerp(1.0, sh, 0.6);
-  }
-  if (skin) {   // contraluz: orejas y aletas de la nariz dejan pasar luz (translucidez del G-buffer), como en la pasada de luz
-    uint tq = (uint)(inNrm.SampleLevel(sPoint, uv, 0).z * 1023.0 + 0.5);
-    float trans = (float)(tq >> 4) / 63.0;
+    dif += col * max(nl3 - nl, 0.0) * 0.8 * lerp(1.0, sh, 0.6);
+    // contraluz: orejas y aletas de la nariz dejan pasar luz (translucidez del G-buffer), como en la pasada de luz
     float3 Lt = normalize(L + n * 0.3);
     float tv = pow(saturate(dot(V, -Lt)), 3.0);
     float thick = saturate(trans * 1.6);
     float x5 = IniParams.Load(int2(5, 0)).x;
-    dif += sunC * thick * smoothstep(0.2, 0.7, thick) * tv * float3(1.0, 0.24, 0.10) * (x5 > 0 ? x5 : 1.0) * sqrt(sh);
+    dif += col * thick * smoothstep(0.2, 0.7, thick) * tv * float3(1.0, 0.24, 0.10) * (x5 > 0 ? x5 : 1.0) * sqrt(sh);
   }
   // --- brillo: GGX con la rugosidad del G-buffer y, en la piel, el lobulo fino (grasa / sudor) ---
   float3 H = normalize(L + V);
   float nh = saturate(dot(n, H)), nv = saturate(dot(n, V)), vh = saturate(dot(V, H));
-  float rough = clamp(mat.x, 0.08, 1.0), a2 = rough * rough; a2 *= a2;
+  float a2 = rough * rough; a2 *= a2;
   float dd = nh * nh * (a2 - 1) + 1;
   float D = a2 / (3.14159 * dd * dd);
   float F0 = skin ? 0.028 : 0.04;
   float F = F0 + (1 - F0) * pow(1 - vh, 5);
   float k = (rough + 1) * (rough + 1) / 8.0;
   float G = (nv / (nv * (1 - k) + k)) * (nl / (nl * (1 - k) + k));
-  float3 spec = sunC * (D * F * G / max(4.0 * nv * nl, 1e-3)) * nl * sh;
+  spec += col * (D * F * G / max(4.0 * nv * nl, 1e-3)) * nl * sh;
   if (skin) {
     float a2s = 0.18 * 0.18; a2s *= a2s;
     float dds = nh * nh * (a2s - 1) + 1;
     float Ds = a2s / (3.14159 * dds * dds);
     float y5 = IniParams.Load(int2(5, 0)).y;
-    spec += sunC * Ds * F * nl * 0.25 * (y5 > 0 ? y5 : 1.0) * sh;
+    spec += col * Ds * F * nl * 0.25 * (y5 > 0 ? y5 : 1.0) * sh;
   }
-  // (27/10 g) relleno de cielo: el lado en sombra no queda gris plano; luz difusa del cielo (azulada, de arriba) y un poco de
-  // rebote del suelo (calido, de abajo), proporcional al sol. El cielo es mas azul cuanto mas calido (bajo) esta el sol.
-  float3 skyC = lerp(float3(0.55, 0.70, 1.00), float3(0.35, 0.50, 1.00), saturate(warm)) * (S * inten) * 0.16;
-  float3 gndC = float3(1.00, 0.72, 0.50) * (S * inten) * 0.05;
-  float up = n.y * 0.5 + 0.5;   // normal en vista: y arriba
-  dif += skyC * up + gndC * (1.0 - up);
+}
+
+PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
+  PreOut o;
+  float3 c0 = inLight.SampleLevel(sPoint, uv, 0).xyz;
+  float3 s0 = inSpec.SampleLevel(sPoint, uv, 0).xyz;
+  o.c = float4(c0, 1); o.s = float4(s0, 1);
+  float4 E = IniParams.Load(int2(297, 0)), E2 = IniParams.Load(int2(298, 0)), E3 = IniParams.Load(int2(319, 0));
+  bool noSun = IniParams.Load(int2(44, 0)).w < 0.5 && IniParams.Load(int2(255, 0)).w > 0.5;
+  if (E.x < 0.5 || !noSun) return o;
+  float zC = LinZ(uv);
+  float zSgn = zC < 0.0 ? -1.0 : 1.0, zA = abs(zC);
+  if (zA < 0.1 || zA > 60.0) return o;   // fondo del editor, sin geometria
+  // --- preset o manual ---
+  // (01/11) 4 = estudio: luz principal con los sliders manuales (rumbo, altura, intensidad, calidez, sombra) + relleno del
+  // lado opuesto (y319, sin sombra, apenas frio) + recorte desde atras (z319, contorno del pelo, orejas y mandibula), sin
+  // relleno de cielo ni rebote del suelo: la luz la controla uno, como en una sesion de fotos de piel
+  int preset = (int)(E.y + 0.5);
+  float az = E.z, el = E.w, inten = E2.x > 0 ? E2.x : 1.1, warm = E2.y, keep = E2.z, shK = E2.w;
+  if (preset == 1) { az = 50; el = 45; inten = 1.1; warm = 0.62; keep = 0.55; }   // (27/10 c) 2.5 quemaba la cara: el tonemap del editor expone para la luz de estudio        // dia: sol alto, calido
+  else if (preset == 2) { az = 70; el = 12; inten = 0.9; warm = 0.95; keep = 0.45; }   // tarde: sol bajo, naranja
+  else if (preset == 3) { az = -40; el = 60; inten = 0.8; warm = 0.15; keep = 0.35; }  // noche: torre alta, blanca azulada
+  bool studio = preset == 4;
+  // --- referencia de intensidad: la irradiancia de estudio mas alta sobre la piel, suavizada en el tiempo (pasada 0, t6) ---
+  float S = inRef.Load(int3(0, 0, 0)).x;
+  if (S <= 1e-6) return o;
+  float3 sunC = PesTint(warm) * (S * inten);
+  // --- geometria en vista, como la pasada de luz 1f623 (posicion desde la profundidad, normal del G-buffer) ---
+  float2 sC = uv * float2(2, -2) + float2(-1, 1);
+  float2 pp = (sC - m_cameraCenterOffset.xy) * m_projectionParam.xy;
+  float3 Pv = float3(pp * zC, zC);
+  float3 V = -normalize(float3(pp, 1));
+  float3 n = DecodeN(uv);
+  float3 L = PesDirL(az, el, zSgn);
+  bool skin = IsSkin(uv);
+  float4 mat = inMat.SampleLevel(sPoint, uv, 0);
+  float rough = clamp(mat.x, 0.08, 1.0);
+  uint tq = (uint)(inNrm.SampleLevel(sPoint, uv, 0).z * 1023.0 + 0.5);
+  float trans = (float)(tq >> 4) / 63.0;
+  float3 dif = 0, spec = 0;
+  float sh = PesTraceShadow(Pv, L, dot(n, L), zC, zSgn, zA, uv, pos.xy, shK);
+  PesOneLight(L, sunC, sh, n, V, skin, rough, trans, dif, spec);
+  if (studio) {
+    float fillK = E3.y, rimK = E3.z;
+    if (fillK > 0.001) {   // relleno: del otro lado de la camara, bajo, un poco frio, sin sombra
+      float azF = (az >= 0 ? -1.0 : 1.0) * clamp(90.0 - abs(az) * 0.5, 25.0, 70.0);
+      PesOneLight(PesDirL(azF, 8.0, zSgn), PesTint(saturate(warm - 0.2)) * (S * inten * fillK), 1.0, n, V, skin, rough, trans, dif, spec);
+    }
+    if (rimK > 0.001) {   // recorte: desde atras, del mismo lado que la principal, alto
+      float azR = (az >= 0 ? 1.0 : -1.0) * 150.0;
+      float3 LR = PesDirL(azR, 35.0, zSgn);
+      float shR = PesTraceShadow(Pv, LR, dot(n, LR), zC, zSgn, zA, uv, pos.xy + 17.0, shK);
+      PesOneLight(LR, PesTint(0.45) * (S * inten * rimK), shR, n, V, skin, rough, trans, dif, spec);
+    }
+  } else {
+    // (27/10 g) relleno de cielo: el lado en sombra no queda gris plano; luz difusa del cielo (azulada, de arriba) y un poco de
+    // rebote del suelo (calido, de abajo), proporcional al sol. El cielo es mas azul cuanto mas calido (bajo) esta el sol.
+    float3 skyC = lerp(float3(0.55, 0.70, 1.00), float3(0.35, 0.50, 1.00), saturate(warm)) * (S * inten) * 0.16;
+    float3 gndC = float3(1.00, 0.72, 0.50) * (S * inten) * 0.05;
+    float up = n.y * 0.5 + 0.5;   // normal en vista: y arriba
+    dif += skyC * up + gndC * (1.0 - up);
+  }
   o.c = float4(c0 * saturate(keep) + dif, 1);
   o.s = float4(s0 * saturate(keep) + spec, 1);
   return o;

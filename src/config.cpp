@@ -137,6 +137,7 @@ static bool LoadConfigLocked() {
         if (Lower(section) == "pes21fx") {
             if (kl == "menu_key") c.menuKey = VkFromName(v);
             else if (kl == "tutorials") c.tutorials = atoi(v.c_str()) != 0;
+            else if (kl == "bloquear_teclado") c.blockKeys = std::clamp(atoi(v.c_str()), 0, 2);
             else if (kl == "favoritos") c.favorites = v;
             else if (kl == "ui_scale") c.uiScale = std::clamp((float)atof(v.c_str()), 0.7f, 2.0f);
             else if (kl == "compacto") c.compact = atoi(v.c_str()) != 0;
@@ -296,6 +297,7 @@ static bool LoadConfigLocked() {
                 r->hasParamOverride = true;
             }
             else if (k == "event" && Lower(v) == "turf") a.kind = RuleAction::EventTurf;
+            else if (k == "expr") { a.kind = RuleAction::Expr; ss >> a.slot; }   // (31/10) expresiones: cbuffer de la malla de cara en el VS (expr.cpp)
             else if (k == "facegen") { a.kind = RuleAction::FaceGen; ss >> a.slot >> a.idx; if (a.idx <= 0) a.idx = a.slot + 1; }
             else continue;
             r->actions.push_back(a);
@@ -473,6 +475,39 @@ bool SaveCloth() {
     return true;
 }
 
+// (02/11) fila 353: el viento cambia de partido a partido (pedido de Agustin: segun la hora, el clima, la estacion). Al leer un
+// match.ini nuevo (modulo de Sider PES21FX_match.lua: dia/noche, despejado/lluvia, verano/invierno) se escribe en cloth.ini
+// [sim] wind_x / wind_y / wind_z / wind_gust a partir del viento base del usuario (el de cloth.ini al abrir el juego):
+// rumbo al azar, fuerza x de noche 0.7, lluvia 1.6, invierno 1.25, verano 0.9, y un azar de partido (y353 = cuanto, 0..1).
+// x353 escala total, w353 on. El pelo toma la misma direccion (SaveCloth). wind_response (cuanto reacciona la tela) no se toca.
+void MatchWind(const MatchInfo& m, unsigned long long seed) {
+    Config& c = g_cfg;
+    if (c.live[353][3] < 0.5f || !c.clothFound) return;
+    static bool haveBase = false; static float bx = 2.0f, by = 1.5f, bz = 0.0f, bg = 3.0f;
+    if (!haveBase) {
+        auto get = [&](const char* k, float d) { auto it = c.clothLoaded.find(k); return it != c.clothLoaded.end() ? it->second : d; };
+        bx = get("sim.wind_x", 2.0f); by = get("sim.wind_y", 1.5f); bz = get("sim.wind_z", 0.0f); bg = get("sim.wind_gust", 3.0f);
+        haveBase = true;
+    }
+    unsigned long long h = seed ^ (0x9E3779B97F4A7C15ull * (unsigned long long)(m.stadium + 7)) ^ ((unsigned long long)(m.timeofday + 3) << 40) ^ ((unsigned long long)(m.weather + 5) << 48);
+    auto rnd = [&]() { h ^= h >> 33; h *= 0xff51afd7ed558ccdull; h ^= h >> 33; h *= 0xc4ceb9fe1a85ec53ull; h ^= h >> 33; return (double)(h >> 11) * (1.0 / 9007199254740992.0); };
+    const float var = std::clamp(c.live[353][1], 0.0f, 1.0f), sc = std::clamp(c.live[353][0], 0.0f, 3.0f);
+    float k = (m.timeofday == 1 ? 0.7f : 1.0f) * (m.weather == 1 ? 1.6f : 1.0f) * (m.season == 1 ? 1.25f : m.season == 0 ? 0.9f : 1.0f);
+    const double r1 = rnd(), r2 = rnd(), r3 = rnd();
+    k *= (float)(1.0 + var * (r1 * 1.3 - 0.55));   // 0.45 .. 1.75 con var = 1
+    k *= sc;
+    const float sp = sqrtf(bx * bx + bz * bz) * k, ang = (float)(r2 * 6.283185307);
+    const float gust = bg * (m.weather == 1 ? 1.4f : 1.0f) * (float)(1.0 + var * (r3 * 0.6 - 0.3));
+    c.clothVals["sim.wind_x"] = roundf(sp * cosf(ang) * 100.0f) / 100.0f;
+    c.clothVals["sim.wind_z"] = roundf(sp * sinf(ang) * 100.0f) / 100.0f;
+    c.clothVals["sim.wind_y"] = roundf(by * std::clamp(k, 0.3f, 2.0f) * 100.0f) / 100.0f;
+    c.clothVals["sim.wind_gust"] = roundf(gust * 100.0f) / 100.0f;
+    SaveCloth();
+    Log("viento del partido: estadio %d, %s, %s, %s -> fuerza x%.2f, rumbo %.0f grados (wind_x %.2f, wind_z %.2f, wind_y %.2f, rafagas %.2f)",
+        m.stadium, m.timeofday == 1 ? "noche" : m.timeofday == 0 ? "dia" : "hora ?", m.weather == 1 ? "lluvia" : m.weather == 0 ? "despejado" : "clima ?",
+        m.season == 1 ? "invierno" : m.season == 0 ? "verano" : "estacion ?", k, ang * 57.2958f, c.clothVals["sim.wind_x"], c.clothVals["sim.wind_z"], c.clothVals["sim.wind_y"], c.clothVals["sim.wind_gust"]);
+}
+
 bool SaveConfigValues() {
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     std::vector<std::string> lines;
@@ -491,6 +526,12 @@ bool SaveConfigValues() {
         // (20/10) una clave que no estaba cuando se leyo el ini (se agrego con el juego abierto, sin "Recargar config")
         // conserva el valor del archivo: antes se guardaba el valor vivo (0) y se perdian opciones nuevas
         if (!g_cfg.info[idx][comp].defined) continue;
+        // (31/10) nunca guardar fuera del rango del slider de la tarjeta (x318 se guardaba en -1.17 / 2.61 con rango 0..1)
+        for (auto& g : g_cfg.groups) for (auto& sl : g.sliders) {
+            if (!sl.ext.empty() || sl.idx != idx || sl.comp != comp || !sl.optVals.empty()) continue;
+            float& v = g_cfg.live[idx][comp];
+            if (v < sl.lo || v > sl.hi) { float cl = v < sl.lo ? sl.lo : sl.hi; Log("guardar: %s = %g fuera del rango %g..%g del slider '%s': guardado %g", k.c_str(), v, sl.lo, sl.hi, sl.label.c_str(), cl); v = cl; }
+        }
         char buf[64]; snprintf(buf, sizeof(buf), "%g", g_cfg.live[idx][comp]);
         raw = k + " = " + buf;
         g_cfg.base[idx][comp] = g_cfg.live[idx][comp];
@@ -548,6 +589,8 @@ void KeyActionUnlocked(KeyBind& k, int action) {
 }
 
 void PollKeys(bool focused) {
+    bool reload = false;   // (2/11) F10: recargar PES21FX.ini + shaders fuera del mutex (LoadConfig lo toma)
+  {
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     bool ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
     bool alt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
@@ -558,8 +601,10 @@ void PollKeys(bool focused) {
         bool press = down && !k.wasDown, release = !down && k.wasDown;
         k.wasDown = down;
         if (press) {
+            Log("tecla: %s", k.name.c_str());   // (1/11) para ver en el log que la combinacion disparo
             if (!k.run.empty()) {
                 if (Lower(k.run).find("resetsweat") != std::string::npos) s_matchStart = Now();
+                if (Lower(k.run).find("reloadconfig") != std::string::npos) reload = true;
             }
             switch (k.type) {
             case KeyBind::Toggle: k.active = !k.active; ApplyAssign(k, k.active, -1); break;
@@ -569,6 +614,10 @@ void PollKeys(bool focused) {
             }
         } else if (release && k.type == KeyBind::Hold) ApplyAssign(k, false, -1);
     }
+  }
+    // (2/11) hasta hoy F10 no hacia nada en la DLL (el "config_reload" era de 3DMigoto): los cambios del ini en vivo solo
+    // entraban con el boton "Recargar config" del menu. Ahora [KeyPESReloadConfig] (F10 solo) hace lo mismo que el boton.
+    if (reload) { LoadConfig(); ReloadShaders(); Log("config: recargada con la tecla (F10)"); }
 }
 
 std::atomic<int> g_matchGen{0};

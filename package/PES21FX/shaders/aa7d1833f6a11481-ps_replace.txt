@@ -57,6 +57,9 @@ Texture2D<float4> pesSSSMap    : register(t22);   // (20/10) solo enlazados en l
 Texture2D<float4> pesZones     : register(t25);
 Texture2D<float4> pesSkinMicro : register(t27);
 Texture2D<float4> pesFacePores : register(t28);
+Texture2D<float4> pesArmAnatN  : register(t26);   // (02/11) separaciones de los grupos musculares del brazo (tools/fox/torso/arm_anatomy.py; la DLL la enlaza solo en los brazos)
+Texture2D<float4> pesArmAnatC  : register(t30);   // (02/11) cavidad de esos surcos (1 = nada)
+Texture2D<float4> pesArmAnatG  : register(t36);   // (02/11) grupo de cada texel: x deltoides, y biceps + braquial, z triceps, w antebrazo
 Texture2D<float4> pesVeins     : register(t29);   // (26/10, v12.7) venas de brazos y manos (la DLL la enlaza solo en esos dibujos)
 Texture2D<float4> pesVarRob    : register(t16);   // (26/10) variantes del torso: normal delta del robusto (BC5 SNORM, v 0..0.5 del torso)
 Texture2D<float4> pesVarAtl    : register(t17);   //         normal delta del atletico
@@ -136,8 +139,8 @@ void main(
   float3 hpPM = pR.xyz;
   float3 hpDPx = ddx(hpPM), hpDPy = ddy(hpPM);
   float2 hpDUx = ddx(v2.xy), hpDUy = ddy(v2.xy);
-  float hpTileM = 0.022 * 7.0 / max(P94h.y, 1.0);
-  float hpPoreA = 0.0, hpMicroVar = 0.0, hpPoreOcc = 1.0, hpTZone = 0.0;
+  float hpTileM = PES_PORE_TILE_MM * 0.001 * 7.0 / max(P94h.y, 1.0);   // (31/10) 50 mm por mosaico (pes_pores.hlsli)
+  float hpPoreA = 0.0, hpPoreC = 0.0, hpMicroVar = 0.0, hpPoreOcc = 1.0, hpTZone = 0.0;
   float2 nfDx = ddx(v2.xy), nfDy = ddy(v2.xy);   // (26/10) unas de los jugadores: derivadas fuera de las ramas
   float2 pdQ = (v2.xy - 0.5) * 11.1;              // (26/10 d) pelvis: mosaico del detalle de piel (0.40 uv por metro, 22.5 cm)
   float2 pdDx = ddx(pdQ), pdDy = ddy(pdQ);
@@ -266,7 +269,7 @@ void main(
       r2.xy += vd * abs(vrT) * vrTm * vrTexK;
       float l2 = dot(r2.xy, r2.xy); if (l2 > 0.94) r2.xy *= rsqrt(l2 / 0.94);
     }
-    if (vrArm > 0.001 && P305.x > 0.5) lbVein = max(lbVein * (1.0 - 0.7 * vrWr * vrArm), 0.25 * vrWa * vrArm * max(P305.z, 0.0));
+    if (vrArm > 0.001 && P305.x > 0.5) lbVein = max(lbVein * (1.0 - 0.7 * vrWr * vrArm), 0.12 * vrWa * vrArm * max(P305.z, 0.0));   // (02/11) base del atletico a la mitad (se veia todo el partido)
   }
   {   // (26/10) columna marcada (todos los torsos de TorsoBody, con o sin variante): surco de la columna y erectores (x288 = fuerza;
       // la DLL enlaza t19 solo en los dibujos del torso). El robusto la tapa un poco y el atletico la marca un poco mas
@@ -287,6 +290,62 @@ void main(
       lbVM = saturate(lbVein * lv.z);
     }
   }
+  float jsCav = 0.0, jsLift = 0.0;
+  {   // (02/11 g) piel de las articulaciones segun la pose (Agustin: "el codo no se ve igual al doblarse que al estar estirado" y
+      // "lo mismo con las manos"). tools/fox/torso/joint_skin.py deja en w de pesVeins (t29) la profundidad de los pliegues en
+      // texeles: w > 0.5 atras / dorso (piel floja: se ven con la articulacion estirada y se van al doblar), w < 0.5 adelante / palma
+      // (se hunden al doblar). La pendiente sale de 4 lecturas a un texel. El VS manda el doblez: codo en v1.z = 7 + acciones / 1200
+      // (0..511, 0..7 el codo) y la mano 7 + (520 + cierre 0..7) / 1200. El codo sigue al slider "Codos" (w166).
+    uint jvW = 0, jvH = 0; pesVeins.GetDimensions(jvW, jvH);
+    if (lbOn && jvW > 0) {
+      float jQ = round((v1.z - 7.0) * 1200.0);
+      bool jHand = jQ > 515.5;
+      float jB = jHand ? saturate((jQ - 520.0) / 7.0) : fmod(jQ, 8.0) / 7.0;
+      float jK = jHand ? 1.0 : clamp(IniParams.Load(int2(166,0)).w, 0.7, 1.5);
+      float kb = (1.0 - 0.85 * jB) * jK, kf = (0.35 + 0.65 * jB) * jK;
+      float2 jd = float2(1.0 / jvW, 1.0 / jvH);
+      float4 jw = float4(pesVeins.SampleBias(g_samplerLinear_Clamp_s, v2.xy + float2(jd.x, 0.0), bBN).w,
+                         pesVeins.SampleBias(g_samplerLinear_Clamp_s, v2.xy - float2(jd.x, 0.0), bBN).w,
+                         pesVeins.SampleBias(g_samplerLinear_Clamp_s, v2.xy + float2(0.0, jd.y), bBN).w,
+                         pesVeins.SampleBias(g_samplerLinear_Clamp_s, v2.xy - float2(0.0, jd.y), bBN).w) - 0.5;
+      float4 jh = (kb * max(jw, 0.0) + kf * max(-jw, 0.0)) * (2.0 * 2.0);   // profundidad (texeles, KQ = 2 en joint_skin.py) con la pose;
+      // la pendiente del marco tangente: +x con +u, +y con -v (medido en el horneado)
+      float2 js = float2((jh.x - jh.y), -(jh.z - jh.w)) * (0.5 * 1.8);
+      r2.xy += clamp(js, -0.45, 0.45);
+      float l2 = dot(r2.xy, r2.xy); if (l2 > 0.94) r2.xy *= rsqrt(l2 / 0.94);
+      jsCav = saturate(0.25 * dot(jh, float4(1, 1, 1, 1)) / (2.0 * 2.0) * 2.2);   // fondo del pliegue: mas oscuro
+      float jl = pesVeins.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN + 5.0).w - 0.5;
+      jsLift = saturate(jl * 14.0) * jB * jK;   // doblado: la piel estirada sobre el hueso (punta del codo, nudillos) mas clara
+    }
+  }
+  float anatCav = 0.0;
+  {   // (02/11) grupos musculares del brazo (Agustin: "mejor definicion del grupo de musculos"): las separaciones entre cabezas y
+      // grupos (deltoides, biceps, herradura del triceps, braquiorradial, flexores / extensores, tendones de la muneca) que la malla
+      // no tiene. Con la definicion general (x172) y la del jugador, mas en el musculo que trabaja (lbDef); el atletico mas, el
+      // robusto menos. w305 >= 0 (la fila de las venas de las manos) no lo apaga: lo apaga x305 = 0 con todo lo demas.
+    uint aaW = 0, aaH = 0; pesArmAnatN.GetDimensions(aaW, aaH);
+    if (lbOn && aaW > 0) {
+      float dG = IniParams.Load(int2(172,0)).x; dG = dG > 0.01 ? clamp(dG, 0.0, 3.0) : 1.0;
+      // (02/11 b) cada grupo segun lo que hace el brazo (Agustin: "cada grupo de musculos se marque dependiendo la accion"): el VS
+      // manda en v1.z = 7 + acciones / 1200 el codo (0..7), el brazo arriba (x8) y el esfuerzo (x64) de ESE brazo.
+      //   biceps y braquial: el codo doblado (mas con esfuerzo); triceps: el brazo estirado con esfuerzo (empuja / braceo al correr);
+      //   deltoides: el brazo arriba y el braceo; antebrazo: el esfuerzo (agarre, braceo) y algo el codo. Siempre queda un tono base.
+      float acQ = round((v1.z - 7.0) * 1200.0);
+      float acF = fmod(acQ, 8.0) / 7.0, acU = fmod(floor(acQ / 8.0), 8.0) / 7.0, acE = floor(acQ / 64.0) / 7.0;
+      float4 gW = float4(0, 0, 0, 0);
+      uint agW = 0, agH = 0; pesArmAnatG.GetDimensions(agW, agH);
+      if (agW > 0) gW = pesArmAnatG.SampleLevel(g_samplerLinear_Clamp_s, v2.xy, 0);
+      float4 gAct = float4(saturate(0.9 * acU + 0.5 * acE),            // deltoides
+                           saturate(acF * (0.55 + 0.45 * acE) + 0.15 * acE),   // biceps
+                           saturate((1.0 - acF) * acE * 0.9 + 0.25 * acE),     // triceps
+                           saturate(0.75 * acE + 0.3 * acF));                 // antebrazo
+      float gK = 0.45 + 1.1 * dot(gW, gAct) + 0.45 * (1.0 - saturate(dot(gW, float4(1, 1, 1, 1))));   // tono base 0.45 (codo y bordes: fijo)
+      float aK = saturate(0.55 * dG) * gK * (1.0 + 0.5 * vrWa - 0.6 * vrWr);
+      r2.xy += aK * pesArmAnatN.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN).xy;
+      float l2 = dot(r2.xy, r2.xy); if (l2 > 0.94) r2.xy *= rsqrt(l2 / 0.94);
+      anatCav = saturate(aK) * (1.0 - pesArmAnatC.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN).x);
+    }
+  }
   if (hpK > 0.001 && P94h.w > 0.5) {   // (20/10) micro normal de poros, mismo mosaico en reposo que la cara: sigue sin costura
     float4 guide = pesFacePores.Sample(g_samplerLinear_Clamp_s, v2.xy);
     PesPores pp = PesTriPores(pesSkinMicro, g_samplerLinear_Clamp_s, hpPM, hpDPx, hpDPy, hpDUx, hpDUy, hpTileM, guide.g, hpHasR);
@@ -297,7 +356,8 @@ void main(
       float str = clamp(P94h.x, 0.0, 2.0) * near * 1.1 * skinM * (0.25 + 1.0 * guide.r) * hpK;
       r2.xy += pp.dT * str;
       hpPoreA = pp.a * near * (0.3 + guide.r);
-      hpPoreOcc = 1.0 - hpPoreA * guide.a * 0.55 * saturate(P94h.x);
+      hpPoreC = hpPoreA * pp.close;   // (31/10) hueco oscuro del poro solo en primer plano real (ver pes_pores.hlsli)
+      hpPoreOcc = 1.0 - hpPoreC * guide.a * 0.55 * saturate(P94h.x);
       hpMicroVar = pp.var * saturate(P94h.x * 0.7) * skinM;
     }
   }
@@ -433,7 +493,10 @@ void main(
       r2.yzw = PesNailFix(g_tex_diffuse, g_samplerLinear_Clamp_s, v2.xy, nfDx * nfB, nfDy * nfB, r2.yzw, saturate(P304.y));
     }
   }
-  if (lbVM > 0.001) r2.yzw *= lerp(float3(1.0, 1.0, 1.0), float3(0.86, 0.91, 0.99), lbVM * 0.6);   // (26/10, v12.7) la vena: un poco mas oscura y fria
+  if (lbVM > 0.001) r2.yzw *= lerp(float3(1.0, 1.0, 1.0), float3(0.86, 0.91, 0.99), lbVM * 0.6);
+  if (jsCav > 0.001) r2.yzw *= lerp(float3(1.0, 1.0, 1.0), float3(0.84, 0.80, 0.80), jsCav * 0.6);   // (02/11 g) pliegue de la articulacion
+  if (jsLift > 0.001) r2.yzw = lerp(r2.yzw, r2.yzw * float3(1.06, 1.04, 1.05), saturate(jsLift));    // (02/11 g) piel estirada sobre el hueso
+  if (anatCav > 0.001) r2.yzw *= lerp(float3(1.0, 1.0, 1.0), float3(0.90, 0.86, 0.85), anatCav * 0.7);   // (02/11) surco entre musculos: un poco mas oscuro y calido   // (26/10, v12.7) la vena: un poco mas oscura y fria
   if (vrWr > 0.001 && vrTm > 0.001 && v2.y < 0.5) {   // (26/10) estrias del robusto: un poco mas claras (blanquecinas)
     uint vsW = 0, vsH = 0; pesVarStr.GetDimensions(vsW, vsH);
     if (vsW > 0) {
@@ -448,6 +511,20 @@ void main(
   float hpTrans = g_tex_translucent.Sample(g_samplerLinear_Clamp_s, v2.xy).y;
   if (skTrans >= 0.0) hpTrans = skTrans;   // (26/10 b) piel real
   float hpFilm = 0.0;
+  // (01/11) color base de la cara en TODA la cabeza generica (cuello, orejas, nuca, cuero cabelludo y patillas), con
+  // "Mejoras de piel (cara)" prendida, aunque x147 este apagado: la cara (5ce3 / ce188) satura el albedo (y), calienta lo
+  // fino (x2) y escala la translucidez (x); la cabeza quedaba con el color y la translucidez del juego y se veia el salto de
+  // color en el borde de la mascara (zona del pelo). Lo propio de la cara (sudor, poros, sangre, zona T) sigue solo en hpK.
+  bool hpBaseOn = (P0b.w > 0.5) && hpHasR;
+  float3 hpBA0 = r2.yzw; float hpBT0 = hpTrans;
+  float3 hpBA = hpBA0; float hpBT = hpBT0;
+  if (hpBaseOn) {
+    float bSat = P0b.y > 0 ? P0b.y : 1.0;
+    float bLum = dot(hpBA0, float3(0.2126, 0.7152, 0.0722));
+    hpBA = max(0, lerp(bLum.xxx, hpBA0, bSat));
+    hpBA = saturate(hpBA * lerp(float3(1,1,1), float3(1.04, 0.98, 0.96), saturate(hpBT0 * IniParams.Load(int2(2,0)).x)));
+    hpBT = saturate(hpBT0 * (P0b.x > 0 ? P0b.x : 1.0));
+  }
   if (hpK > 0.001) {
     float3 hpAlb0 = r2.yzw; float hpTr0 = hpTrans;
     float4 P2h = IniParams.Load(int2(2,0));
@@ -492,6 +569,10 @@ void main(
     hpTrans = saturate(hpTrans * sssB);
     r2.yzw = lerp(hpAlb0, r2.yzw, hpK);
     hpTrans = lerp(hpTr0, hpTrans, hpK);
+  }
+  if (hpBaseOn) {   // fuera de hpK: solo el color base (con hpK = 1 queda todo lo de la cara)
+    r2.yzw += (hpBA - hpBA0) * (1.0 - hpK);
+    hpTrans += (hpBT - hpBT0) * (1.0 - hpK);
   }
   float3 stVeil = g_psMaterial.m_materials[2].xyz;
   bool stBody = v3.w > 1.999 && v3.w < 3.001;   // (24/10 e) VS 1c02a92a = cuerpo (la cabeza generica viene con faab87ee)
@@ -542,6 +623,8 @@ void main(
     }
 #endif
   }
+  // (02/11) AA especular (Kaplanyan / Tokuyoshi): varianza de la normal final en pantalla -> rugosidad extra (abajo, al codificarla)
+  float aaVb; { float3 aaN = normalize(r0.xyz); float3 aaX = ddx(aaN), aaY = ddy(aaN); aaVb = min(0.5 * (dot(aaX, aaX) + dot(aaY, aaY)), 0.18); }
   o0.w = 1;
   r0.w = abs(r0.x) + abs(r0.y);
   r0.w = r0.w + abs(r0.z);
@@ -577,7 +660,7 @@ void main(
     r0.x = saturate(r0.x + hpMicroVar * 0.30 + hpPoreA * 0.20);
     r0.x = saturate(r0.x * lerp(1.06, 0.86, hpTZone * saturate(P94h.x)));
     o2.y = lerp(o2.y, max(o2.y, 0.5), hpFilm * 0.8);
-    o2.y *= (1.0 - 0.45 * hpPoreA) * lerp(0.95, 1.12, hpTZone * saturate(P94h.x));
+    o2.y *= (1.0 - 0.45 * hpPoreC) * lerp(0.95, 1.12, hpTZone * saturate(P94h.x));   // (31/10) brillo del poro solo en primer plano
     r0.x = lerp(hpR0, r0.x, hpK); o2.y = lerp(hpS0, o2.y, hpK);
   }
   // (25/10) lluvia en la piel (z12): con lluvia en el partido (114.x = 1) brazos, piernas, cuello y cabeza de las genericas
@@ -586,6 +669,7 @@ void main(
     float rK = (rv > 0.5 && rv < 1.5 && (bodyOn || headPiece)) ? saturate(IniParams.Load(int2(12,0)).z) * 0.85 : 0.0;
     r0.x = lerp(r0.x, r0.x * 0.45, rK);
     o2.y = lerp(o2.y, max(o2.y, 0.5), rK * 0.8); }
+  { float aaA = r0.x * r0.x; aaA = aaA * aaA; r0.x = sqrt(sqrt(saturate(aaA + aaVb))); }   // AA especular (02/11)
   r0.y = r0.x * 0.0361702144 + 0.0904255286;
   r0.y = r0.y * r0.x + 0.180851057;
   r0.y = r0.y * r0.x + 0.271276593;

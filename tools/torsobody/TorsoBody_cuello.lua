@@ -26,10 +26,21 @@ local NORMALES_TORSO = true
 -- La capa collar_ao (la que agrega detalle al cuello, por ejemplo al gritar) se corta en el borde del torso y lo
 -- de arriba queda igual. Con true se quita entera, como en las caras genericas de TorsoBody.
 local QUITAR_COLLAR_AO = false
+-- (1.18) Huesos del cuello en la union: abajo del todo el cuello de la cara se mueve con los mismos huesos (y pesos) que el borde
+-- del torso y en los PESOS_ALTO m de arriba pasa de a poco a los suyos. Asi, al girar o inclinar la cabeza, el borde de la cara
+-- y el del torso se mueven juntos (antes uno se metia en el otro o se abria una rendija). false = dejar los pesos de la cara.
+-- (1.19) CUELLO_COMPLETO: el cuello de la cara NO se corta ni se suelda (queda el de Konami entero, con su textura). El torso se
+-- hunde debajo en el VS de la piel (PES21FX fila 352, z352 mm: pes_skintone.hlsli PesNeckSink) y la costura queda bajo la
+-- camiseta. Sin z352 > 0 el cuello de la cara queda adentro del torso (sin camiseta igual se hunden 5 mm del borde). false = como 1.18b
+local CUELLO_COMPLETO = true
+local PESOS_TORSO = true
+local PESOS_ALTO = 0.015     -- (1.18b) era 3 cm: el cuello se doblaba en esa franja y la base del cuello (con los huesos del pecho)
+                              -- se salia del cuello de la camiseta al moverse el torso; ahora solo el borde, bajo el cuello de la camiseta
 -- El tono de piel del torso se adivina por el color del cuello de la cara (el log dice cual eligio). Si en algun
 -- jugador no coincide con el tono que tiene en el juego, se puede forzar aca: ["id de la cara"] = tono (1 a 6)
 -- ejemplo: local TONO_FORZADO = { ["12345"] = 4, ["67890"] = 2 }
 local TONO_FORZADO = {}
+local TONO_MAPA = {}      -- (1.18) declarada aca: texture_ready (mas abajo) la usa y en la 1.16 quedaba como global nil
 -- El compilador JIT de LuaJIT 2.1.0-beta3 (el que trae Sider) a veces compila mal los bucles largos de este modulo
 -- y salen valores raros que fuera del juego no aparecen. Con true el modulo corre interpretado (solo este modulo:
 -- los demas no cambian). Cuesta 0,3-0,8 s por textura de cara, una sola vez por cara.
@@ -44,7 +55,7 @@ local PERFIL = true
 -- las funciones definidas adentro)
 local NOJIT = false
 local function modulo_cuello()
-local m = { version = "1.16" }
+local m = { version = "1.19" }
 
 local AXZ = 0.045          -- eje del cuello (z)
 -- (1.14) borde del cuello del torso con la forma del cuerpo de Konami (tools/fox/torso/neck_konami.py: el anillo de
@@ -77,6 +88,60 @@ local RING_N = {
     {0.4406, 0.4424, 0.7811}, {0.4822, 0.5432, 0.6873}, {0.4582, 0.6547, 0.6013}, {0.4739, 0.6860, 0.5521},
     {0.5785, 0.7457, 0.3305}, {0.5627, 0.7884, -0.2486}, {0.4554, 0.7402, -0.4946}, {0.3052, 0.6295, -0.7145},
     {0.1506, 0.5491, -0.8220}, {0.1016, 0.5207, -0.8477}, {0.0825, 0.5166, -0.8522}, {-0.0000, 0.4967, -0.8679},
+}
+-- (1.18) huesos del borde del torso en cada punto de LOOP (pants_out_sub de TorsoBody; el cuello generico de TorsoBody tiene
+-- exactamente estos pesos en su borde, por eso empalma perfecto). Las caras reales traen en su corte otros pesos (medido en 3
+-- caras: sk_chest 0.55 contra 0.92 del torso adelante): al mover la cabeza el borde de la cara y el del torso se movian distinto
+-- y la union se abria o una malla atravesaba a la otra (tambien con "Ver original").
+local RING_W = {
+    { { "sk_chest", 0.663 }, { "sk_neck", 0.180 }, { "dsk_neckback", 0.157 } },
+    { { "sk_chest", 0.671 }, { "sk_neck", 0.173 }, { "dsk_neckback", 0.157 } },
+    { { "sk_chest", 0.667 }, { "sk_neck", 0.188 }, { "dsk_neckback", 0.125 }, { "dsk_scm", 0.020 } },
+    { { "sk_chest", 0.753 }, { "sk_neck", 0.184 }, { "dsk_neckback", 0.063 } },
+    { { "sk_chest", 0.714 }, { "sk_neck", 0.251 }, { "dsk_neckback", 0.031 }, { "dsk_scm", 0.004 } },
+    { { "sk_chest", 0.675 }, { "sk_neck", 0.314 }, { "dsk_scm", 0.012 } },
+    { { "sk_chest", 0.494 }, { "sk_neck", 0.337 }, { "dsk_clavicle_r", 0.118 }, { "dsk_scm", 0.051 } },
+    { { "sk_chest", 0.600 }, { "sk_neck", 0.349 }, { "dsk_clavicle_r", 0.051 } },
+    { { "sk_chest", 0.608 }, { "sk_neck", 0.349 }, { "dsk_clavicle_r", 0.043 } },
+    { { "sk_chest", 0.706 }, { "dsk_clavicle_r", 0.208 }, { "sk_neck", 0.086 } },
+    { { "sk_chest", 0.780 }, { "dsk_clavicle_r", 0.220 } },
+    { { "sk_chest", 0.773 }, { "dsk_clavicle_r", 0.227 } },
+    { { "sk_chest", 0.784 }, { "dsk_clavicle_r", 0.216 } },
+    { { "sk_chest", 0.906 }, { "dsk_clavicle_r", 0.094 } },
+    { { "sk_chest", 0.914 }, { "dsk_clavicle_r", 0.086 } },
+    { { "sk_chest", 0.937 }, { "dsk_clavicle_r", 0.063 } },
+    { { "sk_chest", 0.906 }, { "dsk_clavicle_r", 0.094 } },
+    { { "sk_chest", 0.894 }, { "dsk_clavicle_r", 0.106 } },
+    { { "sk_chest", 0.910 }, { "dsk_clavicle_r", 0.090 } },
+    { { "sk_chest", 0.925 }, { "dsk_clavicle_r", 0.075 } },
+    { { "sk_chest", 0.937 }, { "dsk_clavicle_r", 0.063 } },
+    { { "sk_chest", 0.933 }, { "dsk_clavicle_r", 0.067 } },
+    { { "sk_chest", 0.941 }, { "dsk_clavicle_r", 0.047 }, { "dsk_clavicle_l", 0.012 } },
+    { { "sk_chest", 0.992 }, { "dsk_clavicle_l", 0.008 } },
+    { { "sk_chest", 0.941 }, { "dsk_clavicle_l", 0.059 } },
+    { { "sk_chest", 0.933 }, { "dsk_clavicle_l", 0.067 } },
+    { { "sk_chest", 0.937 }, { "dsk_clavicle_l", 0.063 } },
+    { { "sk_chest", 0.925 }, { "dsk_clavicle_l", 0.075 } },
+    { { "sk_chest", 0.910 }, { "dsk_clavicle_l", 0.090 } },
+    { { "sk_chest", 0.894 }, { "dsk_clavicle_l", 0.106 } },
+    { { "sk_chest", 0.906 }, { "dsk_clavicle_l", 0.094 } },
+    { { "sk_chest", 0.937 }, { "dsk_clavicle_l", 0.063 } },
+    { { "sk_chest", 0.914 }, { "dsk_clavicle_l", 0.086 } },
+    { { "sk_chest", 0.906 }, { "dsk_clavicle_l", 0.094 } },
+    { { "sk_chest", 0.784 }, { "dsk_clavicle_l", 0.216 } },
+    { { "sk_chest", 0.773 }, { "dsk_clavicle_l", 0.227 } },
+    { { "sk_chest", 0.780 }, { "dsk_clavicle_l", 0.220 } },
+    { { "sk_chest", 0.706 }, { "dsk_clavicle_l", 0.208 }, { "sk_neck", 0.086 } },
+    { { "sk_chest", 0.608 }, { "sk_neck", 0.349 }, { "dsk_clavicle_l", 0.043 } },
+    { { "sk_chest", 0.600 }, { "sk_neck", 0.349 }, { "dsk_clavicle_l", 0.051 } },
+    { { "sk_chest", 0.494 }, { "sk_neck", 0.337 }, { "dsk_clavicle_l", 0.118 }, { "dsk_scm", 0.051 } },
+    { { "sk_chest", 0.675 }, { "sk_neck", 0.314 }, { "dsk_scm", 0.012 } },
+    { { "sk_chest", 0.714 }, { "sk_neck", 0.251 }, { "dsk_neckback", 0.031 }, { "dsk_scm", 0.004 } },
+    { { "sk_chest", 0.753 }, { "sk_neck", 0.184 }, { "dsk_neckback", 0.063 } },
+    { { "sk_chest", 0.667 }, { "sk_neck", 0.188 }, { "dsk_neckback", 0.125 }, { "dsk_scm", 0.020 } },
+    { { "sk_chest", 0.671 }, { "sk_neck", 0.173 }, { "dsk_neckback", 0.157 } },
+    { { "sk_chest", 0.663 }, { "sk_neck", 0.180 }, { "dsk_neckback", 0.157 } },
+    { { "sk_chest", 0.616 }, { "dsk_neckback", 0.212 }, { "sk_neck", 0.173 } },
 }
 -- intentos: {corte (m por debajo del borde), vertices hasta esta altura sobre el borde cuentan como borde,
 --            puntos de corte casi iguales que se juntan (m), [vertices de abajo que se pueden dejar (m)]}
@@ -165,6 +230,32 @@ local function ring_r(phi)                 -- (1.12) distancia horizontal del ej
     if abs(sa - sb) > 1e-15 then t = sa / (sa - sb) end
     local x, z = a[1] + (b[1] - a[1]) * t, a[3] + (b[3] - a[3]) * t
     return sqrt(x * x + (z - AXZ) ^ 2), y
+end
+
+-- (1.18) pesos del borde del torso en el angulo phi (interpolados como loop_y): tabla nombre de hueso -> peso
+local function ring_w(phi)
+    local i
+    if phi < LPH[1] or phi >= LPH[NL] then i = NL
+    else
+        local lo, hi = 1, NL
+        while hi - lo > 1 do
+            local mid = floor((lo + hi) / 2)
+            if LPH[mid] <= phi then lo = mid else hi = mid end
+        end
+        i = lo
+    end
+    local j = i % NL + 1
+    local a, b = LOOP[i], LOOP[j]
+    local r = rad(phi); local c, s = cos(r), sin(r)
+    local sa = a[1] * c - (a[3] - AXZ) * s
+    local sb = b[1] * c - (b[3] - AXZ) * s
+    local t = 0
+    if abs(sa - sb) > 1e-15 then t = sa / (sa - sb) end
+    if t < 0 then t = 0 elseif t > 1 then t = 1 end
+    local acc = {}
+    for _, e in ipairs(RING_W[i]) do acc[e[1]] = (acc[e[1]] or 0) + e[2] * (1 - t) end
+    for _, e in ipairs(RING_W[j]) do acc[e[1]] = (acc[e[1]] or 0) + e[2] * t end
+    return acc
 end
 
 -- ---------- lectura / escritura binaria ----------
@@ -838,6 +929,77 @@ local function blend_normals(M, plan)
                 if no then
                     wr(An.addr + i * An.stride, enc_attr(6, no))
                     if to then wr(At.addr + i * At.stride, enc_attr(6, to)) end
+                end
+            end
+        end
+    end
+    return n
+end
+
+-- (1.18) pesos de hueso del cuello en la union = los del borde del torso (ring_w), y de a poco los suyos hasta PESOS_ALTO m
+-- mas arriba. Los indices de la malla son del grupo de huesos de la malla: se buscan ahi por nombre; si a la cara le falta
+-- un hueso del torso (algunas no traen claviculas / nuca en el grupo de la piel) ese peso va a sk_chest (su padre).
+-- Se llama ANTES de apply_plan (como blend_normals): a los vertices nuevos se les cambian los valores del plan.
+local function blend_weights(F, M, mi, plan)
+    if not (M.W and M.I) then return 0 end
+    local me = entry(F, 3, mi); if not me then return 0 end
+    local ge = entry(F, 5, u16(me, 6)); if not ge then return 0 end
+    local gn = u16(ge, 2); if gn < 1 or gn > 32 then return 0 end
+    local loc = {}
+    for k = 0, gn - 1 do
+        local be = entry(F, 0, u16(ge, 4 + 2 * k))
+        if be then local nm = str(F, u16(be, 0)); if loc[nm] == nil then loc[nm] = k end end
+    end
+    local chest = loc["sk_chest"] or loc["sk_neck"]
+    if not chest then return 0 end
+    local n = 0
+    local function neww(p, wv, iv, d)
+        local w
+        if d >= 0 then w = 1 else
+            local x = -d / PESOS_ALTO; if x >= 1 then return nil end
+            w = 1 - x * x * (3 - 2 * x)
+        end
+        local acc = {}
+        for k = 1, 4 do
+            local wk = wv[k]
+            if wk and wk > 0 then acc[iv[k]] = (acc[iv[k]] or 0) + wk / 255 * (1 - w) end
+        end
+        for nm, rw in pairs(ring_w(deg(atan2(p[1], p[3] - AXZ)))) do
+            local li = loc[nm] or chest
+            acc[li] = (acc[li] or 0) + rw * w
+        end
+        local lst = {}
+        for bi, ww in pairs(acc) do if ww > 0 then lst[#lst + 1] = { bi, ww } end end
+        table.sort(lst, function(x, y) return x[2] > y[2] end)
+        local nn = math.min(4, #lst); if nn == 0 then return nil end
+        local tot = 0
+        for k = 1, nn do tot = tot + lst[k][2] end
+        local wo, io, ssum = { 0, 0, 0, 0 }, { 0, 0, 0, 0 }, 0
+        for k = 1, nn do io[k] = lst[k][1]; wo[k] = floor(lst[k][2] / tot * 255 + 0.5); ssum = ssum + wo[k] end
+        wo[1] = wo[1] + (255 - ssum)
+        n = n + 1
+        return wo, io
+    end
+    local newset = {}
+    for _, nvd in ipairs(plan.newv) do
+        newset[nvd.v] = true
+        local p
+        for a, val in pairs(nvd.vals) do if a.type == 0 and a.fmt == 1 then p = val end end
+        local wv, iv = nvd.vals[M.W], nvd.vals[M.I]
+        if p and wv and iv then
+            local wo, io = neww(p, wv, iv, 0)
+            if wo then nvd.vals[M.W] = wo; nvd.vals[M.I] = io end
+        end
+    end
+    for i = 0, M.nv - 1 do
+        if not newset[i] then
+            local mv = plan.moves and plan.moves[i]
+            local d = mv and 0 or M.d[i]
+            if d > -PESOS_ALTO then
+                local wo, io = neww(mv or M.P[i], M.W.vals[i], M.I.vals[i], d)
+                if wo then
+                    wr(M.W.addr + i * M.W.stride, enc_attr(M.W.fmt, wo))
+                    wr(M.I.addr + i * M.I.stride, enc_attr(M.I.fmt, io))
                 end
             end
         end
@@ -1956,7 +2118,7 @@ local function weld_deltas(M)
     local DY, LOWD, my = {}, {}, 0
     for ia = 0, 23 do
         local lw = low[ia]
-        if lw and lw > -0.02 and lw < CORTE_BAJO then DY[ia] = math.min(CORTE_BAJO - lw, 0.015); LOWD[ia] = lw else DY[ia] = 0; LOWD[ia] = lw or 0 end
+        if lw and lw > -0.045 and lw < CORTE_BAJO then DY[ia] = math.min(CORTE_BAJO - lw, 0.045); LOWD[ia] = lw else DY[ia] = 0; LOWD[ia] = lw or 0 end   -- (1.15c) hasta 4.5 cm (la nuca de algunas caras terminaba > 2 cm arriba: rendija)
         if DY[ia] > my then my = DY[ia] end
     end
     D.DY, D.LOWD = DY, LOWD
@@ -1981,7 +2143,7 @@ local function weld_move(D, p, d)
         if gy > 0 then
             local lw = D.LOWD[a] * (1 - t) + D.LOWD[b] * t
             local h = lw - d                          -- altura sobre lo mas bajo de la cara (m)
-            local x = h / 0.03
+            local x = h / math.max(0.03, 2.0 * gy)      -- (1.15c) si baja mucho, de a poco en el doble de lo que baja
             if x < 1 then if x < 0 then x = 0 end; x = 1 - x; dy = gy * x * x * (3 - 2 * x) end
         end
     end
@@ -2010,6 +2172,7 @@ local function apply_weld(M, plan, D)
 end
 
 local function cut_mesh(F, mi, name, shader)
+    if CUELLO_COMPLETO then return "cuello completo (sin corte ni fundido; el torso se hunde, z352)" end   -- (1.19)
     local M, err = read_mesh(F, mi)
     if not M then return err end
     if PERFIL and name == "fox_skin_mat" and CUR_FACE_KEY and not PERFIL_HECHO[CUR_FACE_KEY] then
@@ -2036,6 +2199,12 @@ local function cut_mesh(F, mi, name, shader)
             if NORMALES_TORSO and name:find("skin", 1, true) and (shader == "" or shader:find("skin", 1, true)) then
                 local nn = blend_normals(M, plan)
                 if nn > 0 then note = note .. string.format(" [%d normales de la union]", nn) end
+            end
+            if PESOS_TORSO then                             -- (1.18) mismos huesos que el borde del torso (todas las mallas cortadas; antes de la soldadura: usa la altura original)
+                local nwt
+                if PC then local okb, r1 = PC(blend_weights, F, M, mi, plan); nwt = okb and r1 or 0; if not okb then note = note .. " [pesos: error " .. tostring(r1) .. "]" end
+                else nwt = blend_weights(F, M, mi, plan) end
+                if nwt > 0 then note = note .. string.format(" [%d pesos de hueso del torso]", nwt) end
             end
             if SOLDAR > 0 then                              -- (1.12) soldadura del cuello de esta cara al borde del torso
                 local D, wmsg = CUR_DELTA, nil
@@ -2220,7 +2389,7 @@ local SEEN_TEX, n_seen = {}, 0      -- texturas de caras que llegaron sin grilla
 local CACHE_DIR = nil                -- se fija en init (ctx.sider_dir .. content\TorsoBody_cuello_cache\)
 local CACHE_OK = true                -- false si no se pudo escribir (carpeta inexistente): se sigue sin cache
 local FROM_CACHE = {}                -- archivos (en minusculas) que Sider esta sirviendo desde la cache
-local CACHE_TAG = "_v23"   -- (1.10) color del tono 1 nuevo
+local CACHE_TAG = "_v26"   -- (1.18) pesos de hueso del torso en la union
 local function cache_paths(fn)
     if not CACHE_DIR then return nil end
     local id = fn:match("face[\\/]+real[\\/]+([^\\/]+)[\\/]")
@@ -2229,19 +2398,74 @@ local function cache_paths(fn)
     if fn:find("face_bsm_alp%.ftex$") then return CACHE_DIR .. id .. CACHE_TAG .. ".face_bsm_alp.ftex", nil, id end
     return nil
 end
+-- (1.18) en el Sider de Agustin io.open devuelve nil sin error (tambien a edit21_db y PES21FX_match): la cache nunca se
+-- guardaba y cada cara se cortaba y fundia en cada carga (hasta 4 s por textura). Si io.open falla se usan las funciones de
+-- Windows por medio de ffi (luajit.ext.enabled = 1 en sider.ini). Sin pcall (el entorno de los modulos no lo tiene).
+local KW = nil
+local function kw()
+    if KW ~= nil then return KW end
+    KW = false
+    if type(ffi) ~= "table" or type(ffi.cdef) ~= "function" then return KW end
+    ffi.cdef[[
+        int tbc_MultiByteToWideChar(unsigned int cp, unsigned long flags, const char *s, int n, uint16_t *w, int wn) __asm__("MultiByteToWideChar");
+        void *tbc_CreateFileW(const uint16_t *name, unsigned long access, unsigned long share, void *sec, unsigned long disp, unsigned long flags, void *tmpl) __asm__("CreateFileW");
+        int tbc_WriteFile(void *h, const char *buf, unsigned long n, unsigned long *done, void *ov) __asm__("WriteFile");
+        int tbc_ReadFile(void *h, char *buf, unsigned long n, unsigned long *done, void *ov) __asm__("ReadFile");
+        unsigned long tbc_GetFileSize(void *h, unsigned long *hi) __asm__("GetFileSize");
+        unsigned long tbc_GetFileAttributesW(const uint16_t *name) __asm__("GetFileAttributesW");
+        int tbc_CreateDirectoryW(const uint16_t *name, void *sec) __asm__("CreateDirectoryW");
+        int tbc_CloseHandle(void *h) __asm__("CloseHandle");
+    ]]
+    KW = ffi.C
+    return KW
+end
+local function wide(p)
+    local n = KW.tbc_MultiByteToWideChar(65001, 0, p, -1, nil, 0)
+    local b = ffi.new("uint16_t[?]", n + 1)
+    KW.tbc_MultiByteToWideChar(65001, 0, p, -1, b, n)
+    return b
+end
+local function bad_handle(h) return ffi.cast("intptr_t", h) == -1 end
 local function file_read(p)
-    local f = io.open(p, "rb"); if not f then return nil end
-    local d = f:read("*a"); f:close(); return d
+    local f = io.open(p, "rb")
+    if f then local d = f:read("*a"); f:close(); return d end
+    if not kw() then return nil end
+    local h = KW.tbc_CreateFileW(wide(p), 0x80000000, 1, nil, 3, 0x80, nil)        -- GENERIC_READ, OPEN_EXISTING
+    if bad_handle(h) then return nil end
+    local n = tonumber(KW.tbc_GetFileSize(h, nil))
+    local d = nil
+    if n and n > 0 and n < 0x7fffffff then
+        local buf = ffi.new("char[?]", n); local got = ffi.new("unsigned long[1]")
+        if KW.tbc_ReadFile(h, buf, n, got, nil) ~= 0 and tonumber(got[0]) == n then d = ffi.string(buf, n) end
+    elseif n == 0 then d = "" end
+    KW.tbc_CloseHandle(h)
+    return d
+end
+local function raw_write(p, d)                 -- true si quedo escrito entero
+    local f = io.open(p, "wb")
+    if f then f:write(d); f:close(); return true end
+    if not kw() then return false end
+    local h = KW.tbc_CreateFileW(wide(p), 0x40000000, 0, nil, 2, 0x80, nil)        -- GENERIC_WRITE, CREATE_ALWAYS
+    if bad_handle(h) then return false end
+    local done = ffi.new("unsigned long[1]")
+    local ok = KW.tbc_WriteFile(h, d, #d, done, nil) ~= 0 and tonumber(done[0]) == #d
+    KW.tbc_CloseHandle(h)
+    return ok
+end
+local function make_dir(dir)
+    if type(fs) == "table" and type(fs.make_dirs) == "function" then fs.make_dirs(dir) end
+    if kw() then KW.tbc_CreateDirectoryW(wide(dir), nil) end
 end
 local function file_write(p, d)
-    local f = io.open(p, "wb")
-    if not f then
-        if CACHE_OK then CACHE_OK = false; log("TorsoBody cuello: no se puede escribir la cache en " .. tostring(CACHE_DIR) .. " (crea esa carpeta); se sigue sin cache") end
-        return false
-    end
-    f:write(d); f:close(); return true
+    if raw_write(p, d) then return true end
+    if CACHE_OK then CACHE_OK = false; log("TorsoBody cuello: no se puede escribir la cache en " .. tostring(CACHE_DIR) .. " (crea esa carpeta); se sigue sin cache") end
+    return false
 end
-local function file_exists(p) local f = io.open(p, "rb"); if f then f:close(); return true end; return false end
+local function file_exists(p)
+    local f = io.open(p, "rb"); if f then f:close(); return true end
+    if not kw() then return false end
+    return KW.tbc_GetFileAttributesW(wide(p)) ~= 0xFFFFFFFF
+end
 -- grillas de una cara: "clave\n" .. datos empaquetados, varias seguidas (largo fijo por grilla)
 local function grids_save(path, grids)
     local parts = {}
@@ -2384,7 +2608,7 @@ end
 -- (1.16) tono del torso por jugador: el mismo que usa la DLL (PES21FX\tonos_piel.txt manda; base shirtless_skin_map.bin,
 -- en PES21FX\ o en modules\ de Sider). Con el mapa, el fundido del cuello usa el tono con el que el juego dibuja el torso
 -- en vez de adivinarlo por el color del cuello. TONO_FORZADO (arriba) manda sobre todo.
-local TONO_MAPA = {}
+-- (TONO_MAPA esta declarada arriba, junto a TONO_FORZADO)
 local function u32(s, i) local a, b, c, d = byte(s, i, i + 3); return a + b * 256 + c * 65536 + d * 16777216 end
 local function cargar_mapa_tonos(dir)
     local n = 0
@@ -2422,7 +2646,8 @@ function m.init(ctx)
     end
     ctx.torsobody_cuello = m.version
     if type(ctx.sider_dir) == "string" then
-        local okm, n = pcall(cargar_mapa_tonos, ctx.sider_dir)
+        local okm, n                    -- (1.18) sin pcall global: Sider no lo da a los modulos (la 1.16 no arrancaba)
+        if PC then okm, n = PC(cargar_mapa_tonos, ctx.sider_dir) else okm, n = true, cargar_mapa_tonos(ctx.sider_dir) end
         log("TorsoBody cuello: mapa de tonos " .. (okm and (tostring(n) .. " jugadores") or ("error: " .. tostring(n))))
     end
     if FUNDIR then                       -- la textura se arma con el zlib de Sider: se prueba una vez
@@ -2441,17 +2666,18 @@ function m.init(ctx)
         local found = nil
         for _, rel in ipairs(cands) do
             local dir = ctx.sider_dir .. rel
-            if type(fs) == "table" and type(fs.make_dirs) == "function" then fs.make_dirs(dir) end
-            local f = io.open(dir .. "prueba_escritura.tmp", "wb")
-            if f then f:write("ok"); f:close(); found = dir; break end
+            make_dir(dir)
+            if raw_write(dir .. "prueba_escritura.tmp", "ok") then found = dir; break end
+            log("TorsoBody cuello: cache en " .. dir .. " no se puede escribir (ni con io.open ni con ffi: " .. (kw() and "si" or "no") .. ")")
         end
-        if found then CACHE_DIR = found; nojit = nojit .. " (cache en " .. found:sub(#ctx.sider_dir + 1) .. ")"
+        if found then CACHE_DIR = found; nojit = nojit .. " (cache en " .. found:sub(#ctx.sider_dir + 1) .. (KW and ", con ffi" or "") .. ")"
         else CACHE_OK = false; log("TorsoBody cuello: no se pudo escribir en ninguna carpeta de cache (content\\TorsoBody_cuello_cache); se sigue sin cache") end
         ctx.register("livecpk_make_key", make_key)
         ctx.register("livecpk_get_filepath", get_filepath)
     end
     ctx.register("livecpk_data_ready", data_ready)
-    log("TorsoBody cuello " .. m.version .. ": corta el cuello de las caras reales en el borde del torso" .. (FUNDIR and " y funde su textura con el torso" or "") .. nojit)
+    if CUELLO_COMPLETO then log("TorsoBody cuello " .. m.version .. ": CUELLO COMPLETO (las caras quedan enteras; el torso se hunde debajo con PES21FX z352)" .. nojit)
+    else log("TorsoBody cuello " .. m.version .. ": corta el cuello de las caras reales en el borde del torso" .. (FUNDIR and " y funde su textura con el torso" or "") .. nojit) end
 end
 
 m._test = { process_fmdl = process_fmdl, data_ready = data_ready, depth = depth, tex_process = tex_process, make_grid = make_grid, GRIDS = GRIDS,

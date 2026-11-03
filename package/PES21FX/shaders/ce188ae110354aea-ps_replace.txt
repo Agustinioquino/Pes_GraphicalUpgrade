@@ -172,6 +172,7 @@ void main(
   float2 w2 : TEXCOORD9,   // PES21 (19/10 c): AL FINAL. En ce188 el VS (455eb97bc2c3a958) saca TEXCOORD9 en su propio registro (v8),
                            // despues de TEXCOORD8; declarado antes corria todos los registros uno y la cara salia rayada. (27/10 j: float2 como el VS)
   float4 pR : TEXCOORD10,   // (27/10 j) posicion de reposo (x, y, z) del VS de la cabeza, w = 11
+  float4 pD : TEXCOORD11,   // (01/11 j) gesto respecto de la cabeza rigida (marco de reposo), w = 12
   out float4 o0 : SV_Target0,
   out float4 o1 : SV_Target1,
   out float4 o2 : SV_Target2,
@@ -241,6 +242,36 @@ void main(
   o3.xy = g_psSystem.m_renderBuffer.xy * r0.zw;
   float2 pesMotionRaw = r0.zw;   // PES21 cejas: movimiento sin escalar (para las hebras)
 
+  // ---- (01/11 j, hilo expresiones) ARRUGAS POR COMPRESION REAL DE LA PIEL (348.w) ----
+  // El VS manda el gesto D (posicion con huesos, amplificador y musculos virtuales menos la cabeza rigida) en el marco de reposo
+  // y la posicion de reposo R. Con las derivadas de pantalla se arma el jacobiano de D sobre la superficie de reposo (2 x 2 en la
+  // base tangente): su parte simetrica es la deformacion de la piel y su autovalor minimo, si es negativo, cuanto se comprime la
+  // piel en este pixel (12 % = arrugas enteras). Eso entra como peso de arrugas donde la mascara del juego las permite, ademas
+  // de los pesos por zona del motor: las arrugas aparecen donde la piel realmente se arruga. Derivadas fuera de toda rama (fxc).
+  float pesCmp = 0.0;
+  {
+    float3 dRx = ddx(pR.xyz), dRy = ddy(pR.xyz), dDx = ddx(pD.xyz), dDy = ddy(pD.xyz);
+    float pesCmpW = IniParams.Load(int2(348, 0)).w;
+    float lx = length(dRx);
+    float3 e1 = lx > 1e-9 ? dRx / lx : float3(1.0, 0.0, 0.0);
+    float3 e2 = dRy - e1 * dot(dRy, e1); float l2 = length(e2); e2 = l2 > 1e-9 ? e2 / l2 : float3(0.0, 1.0, 0.0);
+    float a11 = dot(dRx, e1), a12 = dot(dRx, e2), a21 = dot(dRy, e1), a22 = dot(dRy, e2);
+    float b11 = dot(dDx, e1), b12 = dot(dDx, e2), b21 = dot(dDy, e1), b22 = dot(dDy, e2);
+    float det = a11 * a22 - a12 * a21;
+    if (pesCmpW > 0.0 && pD.w > 9.0 && abs(det) > 1e-14) {
+      // J = A^-1 B
+      float j11 = ( a22 * b11 - a12 * b21) / det, j12 = ( a22 * b12 - a12 * b22) / det;
+      float j21 = (-a21 * b11 + a11 * b21) / det, j22 = (-a21 * b12 + a11 * b22) / det;
+      float exx = j11, eyy = j22, exy = 0.5 * (j12 + j21);
+      float m = 0.5 * (exx + eyy), rr = sqrt(max(0.25 * (exx - eyy) * (exx - eyy) + exy * exy, 0.0));
+      float lmin = m - rr;
+      // (01/11 l, capturas: rayas finas en la mandibula con la boca abierta) 20 % = entero y como mucho 0.6 de peso
+      pesCmp = saturate(-lmin / 0.20 * pesCmpW) * 0.6;
+      // (01/11 k, Agustin: "las arrugas debajo del ojo estan muy fuertes") bajo el ojo (y 167.0..169.6, |x| 1.2..4.8 cm) a un cuarto
+      float ueY = smoothstep(1.664, 1.672, pR.y) * (1.0 - smoothstep(1.694, 1.700, pR.y)), ueX = smoothstep(0.009, 0.014, abs(pR.x)) * (1.0 - smoothstep(0.046, 0.052, abs(pR.x)));
+      pesCmp *= 1.0 - 0.75 * ueY * ueX;
+    }
+  }
   // ---- arrugas animadas ----
   r0.z = cmp(v2.x < 0.5);
   if (r0.z != 0) {
@@ -262,10 +293,24 @@ void main(
     float smile = sqrt(saturate(max(g_psMaterial.m_materials[0].y, g_psMaterial.m_materials[4].x)) * saturate(wTop.w));
     wTop *= float4(wrZone.x, wrZone.x, wrZone.y, wrZone.z * (1.0 + wrSmile * smile));
     wBot.x *= wrZone.w;
+    // (01/11, hilo expresiones; Agustin: "la malla se deforma con mas realismo y la luz se proyecta en las arrugas") las arrugas
+    // siguen al gesto agrandado por el VS (pes_expr.hlsli: ganancia y340 por zona x341..w341) y a la boca abierta del slider (x347)
+    float4 pesXE = IniParams.Load(int2(340, 0)), pesXZ = IniParams.Load(int2(341, 0));
+    if (pesXE.x > 0.5) {
+      float pesXg = max(pesXE.y, 0.0);
+      wTop *= float4(pesXg * pesXZ.x, pesXg * pesXZ.x, pesXg * pesXZ.x, 1.0 + (pesXg - 1.0) * (pesXZ.y + pesXZ.z) * 0.5);
+      wBot.x *= 1.0 + (pesXg - 1.0) * pesXZ.w;
+    }
+    float pesXO = saturate(IniParams.Load(int2(347, 0)).x);
+    wBot += pesXO * float4(0.35, 0.60, 0.60, 0.30);   // boca abierta: comisuras, mandibula der/izq y cuello
   }
   r0.z = dot(wTop, r2.xyzw);
   r0.w = dot(wBot, r3.xyzw);
   r0.z = saturate(r0.z + r0.w);
+  if (pesCmp > 0.0) {   // (01/11 j) compresion real: donde la mascara del juego tiene arrugas (cualquiera de las 8 zonas)
+    float pesMaskAny = saturate(dot(r2.xyzw, float4(1,1,1,1)) + dot(r3.xyzw, float4(1,1,1,1)));
+    r0.z = max(r0.z, pesCmp * pesMaskAny);
+  }
   if (wrOn) {
     // zona muerta: los pesos chicos de la cara en reposo no dibujan arrugas (y15)
     float wrDead = saturate(P15.y);
@@ -329,7 +374,7 @@ void main(
   r1.xyz = r1.xyz * r0.zzz;
   // === PES21 (19/10) micro normal de poros: mosaico fino sobre la normal del juego, solo de cerca.
   // x94 intensidad, y94 escala (repeticiones sobre la cara), w94 on/off
-  float pesPoreA = 0.0, pesMicroVar = 0.0, pesPoreOcc = 1.0, pesTZone = 0.0;
+  float pesPoreA = 0.0, pesPoreC = 0.0, pesMicroVar = 0.0, pesPoreOcc = 1.0, pesTZone = 0.0;
   float4 P94 = IniParams.Load(int2(94,0));   // (declarado aca: lo usa tambien el bloque del especular mas abajo)
   float3 pesMicroDbg = float3(-1, 0, 0);     // dbg: intensidad = 2.00 pinta el mosaico;  pesMicroVar: varianza de la micro normal (Toksvig) -> rugosidad extra
   // (27/10 c) poros triplanares sobre la posicion de reposo de la malla (pes_pores.hlsli): el VS de la cabeza deja la posicion
@@ -339,7 +384,7 @@ void main(
   float3 pesDPx = ddx(pesPM), pesDPy = ddy(pesPM);
   float2 pesDUx = ddx(v2.xy), pesDUy = ddy(v2.xy);
   { if (enhance && P94.w > 0.5) {
-      float tileM = 0.022 * 7.0 / max(P94.y, 1.0);   // un mosaico = 22 mm de piel con y94 = 7 (mas = poros mas chicos)
+      float tileM = PES_PORE_TILE_MM * 0.001 * 7.0 / max(P94.y, 1.0);   // un mosaico = 50 mm de piel con y94 = 7 (mas = poros mas chicos)
       float4 guide = pesFacePores.Sample(g_samplerLinear_Clamp_s, v2.xy);   // por zona: densidad, tamano, zona T, oclusion
       PesPores pp = PesTriPores(pesSkinMicro, g_samplerAnisotropic_Clamp_s, pesPM, pesDPx, pesDPy, pesDUx, pesDUy, tileM, guide.g, pesHasR);
       float near = pp.near;
@@ -355,8 +400,9 @@ void main(
         r1.xy += pp.dT * str;   // en el espacio tangente del normal map (se pasa a vista mas abajo)
         r1.xyz = normalize(r1.xyz);
         pesPoreA = pp.a * near * (0.3 + guide.r);
+        pesPoreC = pesPoreA * pp.close;   // (31/10) hueco oscuro del poro solo en primer plano real (ver pes_pores.hlsli)
         // oclusion de poro: el fondo del poro recibe menos luz (ambiente y directa). Mas donde la guia marca oclusion.
-        pesPoreOcc = 1.0 - pesPoreA * guide.a * 0.55 * saturate(P94.x);
+        pesPoreOcc = 1.0 - pesPoreC * guide.a * 0.55 * saturate(P94.x);
         if (P94.x >= 1.995) pesMicroDbg = float3(pp.dbg, near);   // diagnostico: con Intensidad al tope se ve el mosaico en crudo (rojo/verde) y el fundido en azul
         pesMicroVar = pp.var * saturate(P94.x * 0.7) * skinM;
       } } }
@@ -626,7 +672,7 @@ void main(
   r0.w = saturate(r0.w + pesMicroVar * 0.30 + pesPoreA * 0.20);
   // zona T mas brillante (grasa natural), mejillas mas mate; y el albedo se oscurece en el fondo de los poros
   r0.w = saturate(r0.w * lerp(1.06, 0.86, pesTZone * saturate(P94.x)));
-  r0.z *= (1.0 - 0.45 * pesPoreA) * lerp(0.95, 1.12, pesTZone * saturate(P94.x));
+  r0.z *= (1.0 - 0.45 * pesPoreC) * lerp(0.95, 1.12, pesTZone * saturate(P94.x));   // (31/10) brillo del poro solo en primer plano
   r2.xyz *= pesPoreOcc;
   r0.z *= (1.0 - 0.6 * fhMask);
   r0.z = lerp(r0.z, max(r0.z, 0.75), sweatWet);
@@ -690,6 +736,15 @@ void main(
   if (PC322.w > 0.5) o0.xyz = lerp(o0.xyz, float3(1.0, 0.0, 0.0), pesCol);   // (27/10) diagnostico w322: rojo = franja del cuello
   if (P147.y > 0.5) o0.xyz = lerp(o0.xyz, float3(1.0, 0.0, 0.0), pesEdge);   // (20/10) diagnostico y147: rojo = franja del borde de la mascara generica
 
+  // (02/11) AA especular (Kaplanyan 2016 / Tokuyoshi 2019): donde la normal final cambia mas rapido que un pixel (poros, pliegues
+  // finos, la piel que se aleja) el brillo del sol titila y sale pixelado. La varianza de la normal en pantalla se suma a la
+  // rugosidad (en alfa^2, con tope 0.18): el brillo se ensancha justo lo que el pixel no puede mostrar. Sin cambio de cerca.
+  { float3 aaN = normalize(r1.xyz);
+    float3 aaX = ddx(aaN), aaY = ddy(aaN);
+    float aaV = min(0.5 * (dot(aaX, aaX) + dot(aaY, aaY)), 0.18);
+    aaV *= 1.0 - saturate(2.0 * FZ.g);   // (02/11, regla de Agustin) nada cerca de la boca: los labios quedan como antes
+    float aaA = r0.w * r0.w; aaA = aaA * aaA;
+    r0.w = sqrt(sqrt(saturate(aaA + aaV))); }
   // ---- rugosidad codificada ----
   r0.x = r0.w * 0.0361702144 + 0.0904255286;
   r0.x = r0.x * r0.w + 0.180851057;
