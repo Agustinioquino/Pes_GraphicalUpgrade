@@ -45,7 +45,8 @@ struct FaceMesh {
     int shapeOff = -1; uint32_t huella = 0; ID3D11ShaderResourceView* shapeWr = nullptr;   // (04/11) gestos esculpidos (formas\<huella>.bin): primer float4 de esta malla en s_shapeData
     ID3D11Buffer* seamBuf = nullptr; ID3D11ShaderResourceView* seamSrv = nullptr; int seamN = 0;   // (04/11 b) teselacion (facetess.cpp): peso de borde por vertice (t119), solo piel de la cara; seamN = vertices con peso 0
     bool body = false;   // (04/11 g) piel del cuerpo (VS 1c02a92a): solo pesos de borde para la teselacion, sin nada de cara
-    UINT cbv[28] = {}; std::vector<float> xferPs; uint64_t xferIb = 0;   // (04/11 c) lo que lleva el cbuffer y, si espera formas pasadas de la piel, sus vertices
+    UINT cbv[28] = {}; std::vector<float> xferPs; uint64_t xferIb = 0; int xferUsed = 0; bool xferGate = false; ID3D11Buffer* cbNoShape = nullptr; ID3D11Buffer* cbTeeth = nullptr;
+    bool beard = false, beardSrc = false; int geoId = 0, teethHits = 0; bool teethOn = false; ID3D11Buffer* idBuf = nullptr; std::vector<float> beardPs; int beardTries = 0;   // (04/11 c) barba: malla del pelo enlazada a la piel / piel que le pasa su paleta   // (04/11 c) lo que lleva el cbuffer y, si espera formas pasadas de la piel, sus vertices
 };
 std::mutex s_mx;
 std::unordered_map<uint64_t, FaceMesh*> s_meshes;
@@ -56,6 +57,8 @@ UINT s_frame = 0;   // cuadros (Present) desde el arranque
 int s_evicted = 0;   // mallas echadas por viejas (resumen)
 std::atomic<int> s_binds{0}, s_bindsNone{0};
 std::atomic<int> s_shapeDraws{0};   // (04/11) dibujos con gestos esculpidos
+UINT s_drawSeq = 0, s_packSeq = 0, s_packFrame = 0xffffffffu; struct GateE { int id = 0; UINT seq = 0; }; GateE s_gateRing[16]; UINT s_gateAt = 0; GateE s_gateOk[32]; UINT s_gateOkAt = 0; int s_gateOn = 0, s_gateOff = 0, s_teethOn = 0;   // (04/11 d) mallas pegadas a una piel con formas
+thread_local bool t_beardDraw = false;   // (04/11 c) el dibujo en curso es del VS del pelo (BeardForDraw)
 std::atomic<int> s_bindsWait{0}, s_bindsDisc{0}, s_bindsNew{0};   // (01/11) de los 'sin dato': malla en lectura / descartada o no cara / recien vista
 int s_hist[4] = {};   // mallas listas con cabeza 0 / 1 / 2..31 / descartadas
 
@@ -158,6 +161,7 @@ std::atomic<UINT> s_dumpUntil{0};
 void FreeMesh(FaceMesh* m) {   // (04/11 b) todo lo de una malla que sale de la tabla
     ReleaseIA(m); if (m->cb) m->cb->Release();
     if (m->seamSrv) m->seamSrv->Release(); if (m->seamBuf) m->seamBuf->Release();
+    if (m->cbNoShape) m->cbNoShape->Release(); if (m->cbTeeth) m->cbTeeth->Release(); if (m->idBuf) m->idBuf->Release();   // (04/11 c) cbuffers sin formas / de los dientes y id de la barba
     delete m;
 }
 // (04/11 b, Agustin: "las caras se dividen en partes para que las expresiones funcionen y van por capas") PESOS DE BORDE para la
@@ -200,7 +204,7 @@ std::map<uint32_t, ID3D11ShaderResourceView*> s_shapeWr;   // por grupo (formas\
 std::unordered_map<uint32_t, ShapePack> s_shapes;
 std::vector<float> s_shapeData;
 ID3D11Buffer* s_shapeBuf = nullptr; ID3D11ShaderResourceView* s_shapeSrv = nullptr;
-constexpr UINT kShapeN = 5;
+constexpr UINT kShapeN = 6;   // (04/11 c) sonrisa grito enojo asombro puchero + sonrisa grande (el tope del slider Sonrisa, messi6 de Agustin)
 // (04/11 c, Agustin: "con la sonrisa no se mueven todas las partes del ojo y modelos") las pestanas, la sombra del ojo y las demas
 // mallas de la cara que no tienen formas propias se quedaban quietas mientras la piel se movia: ahora toman la forma de la piel mas
 // cercana (vertices de la piel que tienen formas, a menos de 1.5 cm; se apaga entre 6 y 15 mm). La boca y el globo del ojo no.
@@ -221,16 +225,24 @@ bool ShapeUpload() {   // con s_mx tomado: rehace el buffer con todo s_shapeData
     s_shapeBuf = b; s_shapeSrv = v; return true;
 }
 // formas de una malla sin paquete propio, sacadas de la piel cercana; -1 si no hay piel con formas cerca
+// (04/11 d, log 05:39: solo la malla 75 (94 v) era del mismo buffer; las pestanas (29 y 71 v) vienen en otro) una malla chica
+// (<= 3000 v) de otro buffer tambien la toma si el 85 % de sus vertices esta a menos de 6 mm de esa piel; como todas las caras
+// estan en el mismo lugar del modelo, esas formas solo se enlazan cuando la malla se dibuja pegada (en el mismo cuadro, a pocos
+// dibujos) a una piel con formas propias: las pestanas de otro jugador no se tocan (ExprBufferForDraw, xferGate)
+// devuelve -2 si no hay pieles nuevas desde la ultima vez (nada que rehacer)
 int ShapeXfer(FaceMesh* m, const float* ps, uint64_t ib) {   // con s_mx tomado
     if (m->nv > 20000) return -1;
     bool same = false; for (const ShapeSrc& S : s_src) if (S.ib == ib) same = true;
-    if (!same) return -1;
+    if (!same && m->nv > 3000) return -1;
+    int used = 0; for (const ShapeSrc& S : s_src) if (!same || S.ib == ib) used++;
+    if (used == m->xferUsed) return -2;
+    m->xferUsed = used;
     std::vector<float> d((size_t)m->nv * kShapeN * 4, 0.0f);
-    int nCerca = 0; float mx = 0.0f;
+    int nCerca = 0, nPegado = 0; float mx = 0.0f;
     for (UINT v = 0; v < m->nv; v++) {
         const float* P = ps + (size_t)v * 3;
         struct Nb { float d2; const ShapeSrc* s; UINT i; } nb[4]; int nn = 0;
-        for (const ShapeSrc& S : s_src) if (S.ib == ib) for (UINT i = 0; i < S.nv; i++) {
+        for (const ShapeSrc& S : s_src) if (!same || S.ib == ib) for (UINT i = 0; i < S.nv; i++) {
             const float* Q = &S.p[(size_t)i * 3];
             const float dx = P[0] - Q[0], dy = P[1] - Q[1], dz = P[2] - Q[2], d2 = dx * dx + dy * dy + dz * dz;
             if (d2 > 0.015f * 0.015f) continue;
@@ -239,6 +251,7 @@ int ShapeXfer(FaceMesh* m, const float* ps, uint64_t ib) {   // con s_mx tomado
         }
         if (!nn) continue;
         float dmin = 1e9f; for (int k = 0; k < nn; k++) dmin = (std::min)(dmin, nb[k].d2); dmin = sqrtf(dmin);
+        if (dmin < 0.006f) nPegado++;
         const float t = std::clamp((dmin - 0.006f) / 0.009f, 0.0f, 1.0f), fall = 1.0f - t * t * (3.0f - 2.0f * t);
         if (fall <= 0.0f) continue;
         float ws = 0.0f, w[4];
@@ -252,11 +265,20 @@ int ShapeXfer(FaceMesh* m, const float* ps, uint64_t ib) {   // con s_mx tomado
         const float* q = &d[(size_t)v * kShapeN * 4]; mx = (std::max)(mx, sqrtf(q[0] * q[0] + q[1] * q[1] + q[2] * q[2]));
     }
     if (nCerca == 0 || mx < 1e-4f) return -1;
+    if (!same && nPegado < (int)(0.85f * (float)m->nv)) return -1;
+    m->xferGate = !same;
     const size_t off4 = s_shapeData.size() / 4;
     s_shapeData.insert(s_shapeData.end(), d.begin(), d.end());
     if (!ShapeUpload()) { s_shapeData.resize(off4 * 4); return -1; }
-    Log("expresiones: formas pasadas de la piel a la malla %d (%08X, %u vertices, %d cerca de la piel; sonrisa maximo %.1f mm)", m->id, m->huella, m->nv, nCerca, mx * 1000);
+    Log("expresiones: formas pasadas de la piel a la malla %d (%08X, %u vertices, %d cerca de la piel, %d pegados; sonrisa maximo %.1f mm%s)", m->id, m->huella, m->nv, nCerca, nPegado, mx * 1000, same ? "" : "; otro buffer: solo junto a su piel");
     return (int)off4;
+}
+// cbuffer con las formas pasadas (y, si van solo junto a su piel, el mismo sin formas para cuando no)
+void ShapeXferCB(FaceMesh* m, int off) {
+    UINT v[28]; memcpy(v, m->cbv, sizeof v); v[24] = (UINT)off; v[25] = m->nv; v[26] = m->vmin; v[27] = kShapeN;
+    ID3D11Buffer* b = MakeCBRaw(v); if (!b) return;
+    if (m->xferGate && !m->cbNoShape) { UINT z[28]; memcpy(z, m->cbv, sizeof z); z[27] = 0; m->cbNoShape = MakeCBRaw(z); if (!m->cbNoShape) { b->Release(); return; } }
+    memcpy(m->cbv, v, sizeof v); m->cb = b; m->shapeOff = off;   // el cbuffer viejo no se libera (otro hilo lo puede estar por enlazar)
 }
 void ShapeXferPending() {   // con s_mx tomado: llego piel con formas nueva, las mallas que esperaban la toman
     for (auto& kv : s_meshes) {
@@ -264,8 +286,7 @@ void ShapeXferPending() {   // con s_mx tomado: llego piel con formas nueva, las
         if (m->state != 3 || m->xferPs.empty()) continue;
         const int off = ShapeXfer(m, m->xferPs.data(), m->xferIb);
         if (off < 0) continue;
-        UINT v[28]; memcpy(v, m->cbv, sizeof v); v[24] = (UINT)off; v[25] = m->nv; v[26] = m->vmin; v[27] = kShapeN;
-        if (ID3D11Buffer* b = MakeCBRaw(v)) { memcpy(m->cbv, v, sizeof v); m->cb = b; m->shapeOff = off; }   // el cbuffer viejo no se libera (otro hilo lo puede estar por enlazar)
+        ShapeXferCB(m, off);
     }
 }
 int ShapeFind(uint32_t hu, UINT nv, const float* ps, uint64_t ib) {   // con s_mx tomado
@@ -277,10 +298,13 @@ int ShapeFind(uint32_t hu, UINT nv, const float* ps, uint64_t ib) {   // con s_m
     FILE* f = _wfopen((g_cfg.baseDir + nm).c_str(), L"rb");
     if (!f) return -1;
     char mg[4] = {}; uint32_t hd[4] = {};
-    const bool okh = fread(mg, 1, 4, f) == 4 && fread(hd, 4, 4, f) == 4 && !memcmp(mg, "PFXF", 4) && hd[0] == 1 && hd[2] == kShapeN;
+    const bool okh = fread(mg, 1, 4, f) == 4 && fread(hd, 4, 4, f) == 4 && !memcmp(mg, "PFXF", 4) && hd[0] == 1 && (hd[2] == kShapeN || hd[2] == 5);   // (04/11 c) los paquetes de 5 formas siguen valiendo (sin sonrisa grande)
     if (!okh || hd[1] != nv) { fclose(f); Log("expresiones: formas %08X.bin no valido (%s, %u vertices, la malla tiene %u)", hu, okh ? "otra malla" : "cabecera", okh ? hd[1] : 0u, nv); return -1; }
-    std::vector<float> d((size_t)nv * kShapeN * 4);
-    const bool okd = fread(d.data(), 4, d.size(), f) == d.size(); fclose(f);
+    std::vector<float> d((size_t)nv * kShapeN * 4, 0.0f);
+    bool okd = true;
+    { std::vector<float> r((size_t)nv * hd[2] * 4); okd = fread(r.data(), 4, r.size(), f) == r.size();
+      for (UINT v = 0; okd && v < nv; v++) memcpy(&d[(size_t)v * kShapeN * 4], &r[(size_t)v * hd[2] * 4], hd[2] * 16); }
+    fclose(f);
     if (!okd) { Log("expresiones: formas %08X.bin cortado", hu); return -1; }
     float mx[kShapeN] = {};
     for (UINT v = 0; v < nv; v++) for (UINT k = 0; k < kShapeN; k++) {
@@ -306,7 +330,7 @@ int ShapeFind(uint32_t hu, UINT nv, const float* ps, uint64_t ib) {   // con s_m
         }
         sp.wr = it->second;
     }
-    Log("expresiones: formas %08X.bin cargadas (%u vertices; maximo mm: sonrisa %.1f grito %.1f enojo %.1f asombro %.1f puchero %.1f)", hu, nv, mx[0] * 1000, mx[1] * 1000, mx[2] * 1000, mx[3] * 1000, mx[4] * 1000);
+    Log("expresiones: formas %08X.bin cargadas (%u vertices; maximo mm: sonrisa %.1f grito %.1f enojo %.1f asombro %.1f puchero %.1f sonrisa grande %.1f)", hu, nv, mx[0] * 1000, mx[1] * 1000, mx[2] * 1000, mx[3] * 1000, mx[4] * 1000, mx[5] * 1000);
     return sp.off;
 }
 void DumpObj(FaceMesh* m, const std::vector<float>& ps, const std::vector<float>& uvs, const std::vector<uint32_t>& iv, const std::vector<float>& wv, float ylo, float yhi) {
@@ -339,6 +363,121 @@ void DumpObj(FaceMesh* m, const std::vector<float>& ps, const std::vector<float>
         fclose(t);
     }
     Log("expresiones: volcado %ls.obj (malla %d, %u vertices, %u triangulos, alto %.3f..%.3f, uv %s, huella %08X)", name, m->id, m->nv, m->count / 3, ylo, yhi, hasUv ? "si" : "no", (unsigned)(h ^ (h >> 32)));
+}
+
+// ---- (04/11 c, Agustin: "la barba no acompana del todo" / "la barba es un modelo aparte tiene un skeleton hair") BARBA POR LOS
+// HUESOS DE LA CARA. La barba (hair_parts, VS del pelo 2f1af485) solo pesa en la cabeza: no sigue la mandibula, los labios ni la
+// sonrisa. Cada vertice de la barba se enlaza (una vez, en la CPU) a los 4 vertices mas cercanos de la piel de la cara (mismo espacio
+// del modelo; los pedazos de la cara comparten buffer) y toma sus huesos y pesos (y sus formas esculpidas). En cada dibujo de esa
+// piel la DLL copia su paleta (b6: cuadro actual y anterior) y su m_world (b5) a un pozo en la GPU (t116, 64 lugares, sin leer nada
+// en la CPU); el VS del pelo (pes_beard.hlsli) busca el lugar de su piel cuya cabeza cae donde esta la barba (mismo jugador) y le
+// suma el gesto: lo que los huesos de la cara corren el punto respecto de la cabeza.
+struct BeardSrc { int id = 0; uint64_t ib = 0; UINT nv = 0; int head = 0; int shapeOff = -1; std::vector<float> p, w; std::vector<uint8_t> j; };
+std::vector<BeardSrc> s_bsrc; size_t s_bsrcBytes = 0;
+// (04/11 d, arranque 06:53: "0 paletas copiadas") la piel se reconoce por su GEOMETRIA (buffer, primer vertice, vertices), no por el id de
+// la malla: la misma piel tiene varias entradas en la tabla (otra pasada con otro input layout, LOD, mallas echadas y vueltas a leer) y la
+// barba quedaba enlazada a una que no se dibujaba
+std::map<uint64_t, int> s_geoIds; std::vector<int> s_geoUsed;
+int GeoId(uint64_t ib, UINT vmin, UINT nv) { const uint64_t k = Fnv(Fnv(Fnv(0xcbf29ce484222325ULL, ib), vmin), nv); auto it = s_geoIds.find(k); if (it != s_geoIds.end()) return it->second; const int id = (int)s_geoIds.size() + 1; s_geoIds[k] = id; return id; }
+int s_poolFail[4] = {};   // sin pozo, sin id, sin b5/b6, b5/b6 fuera de rango
+std::vector<float> s_beardData; ID3D11Buffer* s_beardBuf = nullptr; ID3D11ShaderResourceView* s_beardSrv = nullptr;
+ID3D11Buffer* s_pool = nullptr; ID3D11ShaderResourceView* s_poolSrv = nullptr; UINT s_poolAt = 0;
+constexpr UINT kPoolSlots = 64, kSlotF4 = 200, kBeardF4 = 9;
+int s_beardCopies = 0, s_beardDraws = 0;
+bool BeardUpload() {
+    if (s_beardData.empty() || !g_dev.dev) return false;
+    D3D11_BUFFER_DESC d{}; d.ByteWidth = (UINT)(s_beardData.size() * 4); d.Usage = D3D11_USAGE_IMMUTABLE; d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = s_beardData.data();
+    ID3D11Buffer* b = nullptr; if (FAILED(g_dev.dev->CreateBuffer(&d, &sd, &b))) return false;
+    D3D11_SHADER_RESOURCE_VIEW_DESC v{}; v.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; v.ViewDimension = D3D11_SRV_DIMENSION_BUFFER; v.Buffer.NumElements = (UINT)(s_beardData.size() / 4);
+    ID3D11ShaderResourceView* sv = nullptr; if (FAILED(g_dev.dev->CreateShaderResourceView(b, &v, &sv))) { b->Release(); return false; }
+    s_beardBuf = b; s_beardSrv = sv;   // las vistas viejas NO se liberan (otro hilo puede tenerlas en la mano; pocas veces y pocos KB)
+    return true;
+}
+void BeardKeepSrc(FaceMesh* m, const std::vector<float>& ps, const std::vector<uint32_t>& iv, const std::vector<float>& wv) {   // con s_mx tomado
+    m->geoId = GeoId((uint64_t)m->ib, m->vmin, m->nv);
+    if (std::find(s_geoUsed.begin(), s_geoUsed.end(), m->geoId) != s_geoUsed.end()) m->beardSrc = true;
+    for (const BeardSrc& b : s_bsrc) if (b.id == m->geoId) return;
+    const size_t by = (size_t)m->nv * (12 + 16 + 4);
+    if (s_bsrcBytes + by > (32u << 20)) return;
+    BeardSrc b; b.id = m->geoId; b.ib = (uint64_t)m->ib; b.nv = m->nv; b.head = m->head; b.shapeOff = m->xferGate ? -1 : m->shapeOff;
+    b.p = ps; b.w = wv; b.j.resize(iv.size()); for (size_t i = 0; i < iv.size(); i++) b.j[i] = (uint8_t)(std::min)(iv[i], 31u);
+    s_bsrcBytes += by; s_bsrc.push_back(std::move(b));
+}
+bool BeardBind(FaceMesh* m, const std::vector<float>& ps) {   // con s_mx tomado
+    if (s_bsrc.empty() || m->nv == 0) return false;
+    // 1) que cara: la que mas vertices de la barba tiene a menos de 12 mm (muestra de ~64 vertices), por buffer (los pedazos de una cara)
+    std::map<uint64_t, int> cov; std::map<uint64_t, double> dsum;
+    const UINT stp = (std::max)(1u, m->nv / 64);
+    for (UINT v = 0; v < m->nv; v += stp) {
+        const float* q = &ps[(size_t)v * 3];
+        std::map<uint64_t, float> best;
+        for (const BeardSrc& S : s_bsrc) {
+            float b2 = 1e9f;
+            for (UINT u = 0; u < S.nv; u++) { const float* r = &S.p[(size_t)u * 3]; const float dx = q[0] - r[0], dy = q[1] - r[1], dz = q[2] - r[2]; b2 = (std::min)(b2, dx * dx + dy * dy + dz * dz); }
+            auto it = best.find(S.ib); if (it == best.end() || b2 < it->second) best[S.ib] = b2;
+        }
+        for (auto& kv : best) { const float d = sqrtf(kv.second); if (d < 0.012f) { cov[kv.first]++; dsum[kv.first] += d; } }
+    }
+    uint64_t gib = 0; int gc = 0; double gd = 1e9;
+    for (auto& kv : cov) { const double md = dsum[kv.first] / kv.second; if (kv.second > gc || (kv.second == gc && md < gd)) { gib = kv.first; gc = kv.second; gd = md; } }
+    const int ns = (int)((m->nv + stp - 1) / stp);
+    if (gc * 2 < ns) {   // (04/11 d, Agustin: "el head shield del pelo no se mueve con los huesos") que malla del pelo no se enlaza y por que
+        if (m->beardTries == 0 || m->beardTries == 14) Log("expresiones: pelo %d (%u vertices) sin enlazar a la piel (intento %d): muestra %d / %d a menos de 12 mm (hace falta la mitad)", m->id, m->nv, m->beardTries + 1, gc, ns);
+        return false;
+    }
+    // 2) por vertice: la pieza de la piel con el vertice mas cercano y sus 4 vecinos mas cercanos (1/d^4); se apaga de 8 a 25 mm
+    std::vector<float> d((size_t)m->nv * kBeardF4 * 4, 0.0f);
+    int nOk = 0; float dmax = 0;
+    std::vector<int> used;
+    for (UINT v = 0; v < m->nv; v++) {
+        const float* q = &ps[(size_t)v * 3];
+        const BeardSrc* bs = nullptr; struct Nb { float d2; UINT i; } nb[4] = { { 1e9f, 0 }, { 1e9f, 0 }, { 1e9f, 0 }, { 1e9f, 0 } };
+        float bestAll = 1e9f;
+        for (const BeardSrc& S : s_bsrc) {
+            if (S.ib != gib) continue;
+            Nb loc[4] = { { 1e9f, 0 }, { 1e9f, 0 }, { 1e9f, 0 }, { 1e9f, 0 } };
+            for (UINT u = 0; u < S.nv; u++) {
+                const float* r = &S.p[(size_t)u * 3]; const float dx = q[0] - r[0], dy = q[1] - r[1], dz = q[2] - r[2]; const float d2 = dx * dx + dy * dy + dz * dz;
+                if (d2 >= loc[3].d2) continue;
+                int k = 3; while (k > 0 && loc[k - 1].d2 > d2) { loc[k] = loc[k - 1]; k--; } loc[k] = { d2, u };
+            }
+            if (loc[0].d2 < bestAll) { bestAll = loc[0].d2; bs = &S; memcpy(nb, loc, sizeof nb); }
+        }
+        if (!bs) continue;
+        const float dn = sqrtf(bestAll);
+        const float fade = dn <= 0.008f ? 1.0f : dn >= 0.025f ? 0.0f : 1.0f - (dn - 0.008f) / 0.017f;
+        if (fade <= 0.0f) continue;
+        float bw[32] = {}, ws = 0;
+        float sh[kShapeN][3] = {};
+        for (const Nb& n : nb) {
+            if (n.d2 >= 1e8f) continue;
+            const float w = 1.0f / (std::max)(n.d2 * n.d2, 1e-16f); ws += w;
+            for (int k = 0; k < 4; k++) bw[bs->j[(size_t)n.i * 4 + k]] += w * bs->w[(size_t)n.i * 4 + k];
+            if (bs->shapeOff >= 0) for (UINT g = 0; g < kShapeN; g++) for (int c = 0; c < 3; c++) sh[g][c] += w * s_shapeData[((bs->shapeOff + (size_t)n.i * kShapeN + g) * 4) + c];
+        }
+        if (ws <= 0) continue;
+        int top[4] = { -1, -1, -1, -1 };
+        for (int b = 0; b < 32; b++) { if (bw[b] <= 0) continue; int k = 4; while (k > 0 && (top[k - 1] < 0 || bw[top[k - 1]] < bw[b])) k--; if (k < 4) { for (int t = 3; t > k; t--) top[t] = top[t - 1]; top[k] = b; } }
+        float tw = 0; for (int k = 0; k < 4; k++) if (top[k] >= 0) tw += bw[top[k]];
+        if (tw <= 0) continue;
+        float* o = &d[(size_t)v * kBeardF4 * 4];
+        for (int k = 0; k < 4; k++) { o[k] = top[k] >= 0 ? (float)top[k] : 0.0f; o[4 + k] = top[k] >= 0 ? bw[top[k]] / tw * fade : 0.0f; }
+        o[8] = (float)bs->id; o[9] = (float)bs->head;
+        for (UINT g = 0; g < kShapeN; g++) for (int c = 0; c < 3; c++) o[12 + g * 4 + c] = sh[g][c] / ws * fade;
+        nOk++; dmax = (std::max)(dmax, dn);
+        if (std::find(used.begin(), used.end(), bs->id) == used.end()) used.push_back(bs->id);
+    }
+    if (!nOk) return false;
+    const size_t off4 = s_beardData.size() / 4;
+    s_beardData.insert(s_beardData.end(), d.begin(), d.end());
+    if (!BeardUpload()) { s_beardData.resize(off4 * 4); return false; }
+    for (int g : used) if (std::find(s_geoUsed.begin(), s_geoUsed.end(), g) == s_geoUsed.end()) s_geoUsed.push_back(g);
+    int nMark = 0; for (auto& kv : s_meshes) if (kv.second->geoId && std::find(used.begin(), used.end(), kv.second->geoId) != used.end()) { kv.second->beardSrc = true; nMark++; }
+    const UINT cv[28] = { (UINT)off4, m->nv, m->vmin, 1u };
+    m->cb = MakeCBRaw(cv);
+    Log("expresiones: barba %d (%u vertices) enlazada a la piel de la cara (%d piezas, %d mallas de la tabla, %d de %u vertices a menos de 25 mm, muestra %d / %d a menos de 12 mm, %.1f mm de promedio)", m->id, m->nv, (int)used.size(), nMark, nOk, m->nv, gc, ns, gd * 1000.0);
+    return m->cb != nullptr;
 }
 
 void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
@@ -446,6 +585,11 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
             return;
         }
         if (mx < 0 || mx > 31) { Reject(m, "indices de hueso fuera de la paleta de 32"); return; }
+        if (m->beard) {   // (04/11 c) malla del VS del pelo: se enlaza a la piel de la cara (si todavia no se leyo la piel, se reintenta)
+            ReleaseIA(m);
+            if (BeardBind(m, ps)) { m->state = 3; return; }
+            m->beardPs = std::move(ps); m->state = 5; m->why = "pelo sin piel de cara cerca (todavia)"; return;
+        }
         // (01/11) pestanas / parpados (mallas de 1-2 cm de alto): arriba gana el parpado superior (peso 1); ahi sk_head es el
         // hueso que esta en MAS vertices (face_rig: 191 / 125 / 114 / 91 contra 139 / 61 / 57 / 79 del parpado)
         const bool thin = (yhi - ylo) < 0.03f;
@@ -593,14 +737,16 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
         m->shapeOff = (hd <= 31 && !eye && !mouth) ? ShapeFind(m->huella, m->nv, ps.data(), ibKey) : -1;
         if (m->shapeOff >= 0) m->shapeWr = s_shapes[m->huella].wr;
         else if (hd <= 31 && !eye && !mouth) {   // (04/11 c) sin formas propias: las de la piel cercana del mismo modelo (ahora o cuando llegue)
-            m->shapeOff = ShapeXfer(m, ps.data(), ibKey);
+            const int xo = ShapeXfer(m, ps.data(), ibKey); m->shapeOff = xo >= 0 ? xo : -1;
             // se guardan los vertices por si llega otro pedazo de esa piel despues (la cara viene en 3 pedazos): solo mallas chicas,
             // con tope total de ~24 MB
             static size_t kept = 0;
             if (m->nv <= 20000 && kept + ps.size() * 4 < (24u << 20)) { m->xferPs = ps; m->xferIb = ibKey; kept += ps.size() * 4; }
         }
+        if (hd <= 31 && !eye && !mouth && !thin && m->nv >= 300 && m->nv <= 20000) BeardKeepSrc(m, ps, iv, wv);   // (04/11 c) piel de cara: la barba se enlaza a ella
         const UINT shp[4] = { m->shapeOff >= 0 ? (UINT)m->shapeOff : 0u, m->nv, m->vmin, m->shapeOff >= 0 ? kShapeN : 0u };
         m->cb = MakeCB((UINT)m->head, (UINT)mx, (UINT)m->id, eye ? 2u : (mouth ? 1u : 0u), lids, jawFull, jawHalf, lipTop, lipUp, eye ? eyes : nullptr, mus, shp, m->cbv);
+        if (m->cb && m->xferGate && m->shapeOff >= 0) { UINT z[28]; memcpy(z, m->cbv, sizeof z); z[27] = 0; m->cbNoShape = MakeCBRaw(z); }
         for (int i = 0; i < 4; i++) m->lids[i] = lids[i];
         if (m->dump && hd <= 31 && !eye && !mouth && m->nv >= 200) DumpObj(m, ps, uvs, iv, wv, ylo, yhi);
         // (04/11 b) teselacion de la cara (facetess.cpp): solo la piel de la cara (no boca, no ojo, no pestanas / parpados finos,
@@ -640,6 +786,50 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
 
 // en cada dibujo con la regla "expr = <slot>" (VS de la cabeza / cara): cbuffer de la malla para el VS (null = no enlazar)
 static void LidCapture(ID3D11DeviceContext* c, FaceMesh* m);   // (02/11 h) abajo
+// (04/11 c) barba: la paleta (b6, actual + anterior) y el m_world (b5) de esta piel a un lugar del pozo, con su id y su cabeza adelante
+static void BeardPoolCopy(ID3D11DeviceContext* c, FaceMesh* m) {   // con s_mx tomado
+    if (!s_pool) {
+        D3D11_BUFFER_DESC d{}; d.ByteWidth = kPoolSlots * kSlotF4 * 16; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        std::vector<float> z((size_t)kPoolSlots * kSlotF4 * 4, 0.0f); D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = z.data();
+        if (FAILED(g_dev.dev->CreateBuffer(&d, &sd, &s_pool))) { s_pool = nullptr; s_poolFail[0]++; return; }
+        D3D11_SHADER_RESOURCE_VIEW_DESC v{}; v.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; v.ViewDimension = D3D11_SRV_DIMENSION_BUFFER; v.Buffer.NumElements = kPoolSlots * kSlotF4;
+        if (FAILED(g_dev.dev->CreateShaderResourceView(s_pool, &v, &s_poolSrv))) { s_poolSrv = nullptr; }
+    }
+    if (!s_poolSrv) { s_poolFail[0]++; return; }
+    if (!m->idBuf) {
+        const float h[4] = { (float)m->geoId, (float)m->head, 0.0f, 0.0f };
+        D3D11_BUFFER_DESC d{}; d.ByteWidth = 16; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = h;
+        if (FAILED(g_dev.dev->CreateBuffer(&d, &sd, &m->idBuf))) { m->idBuf = nullptr; s_poolFail[1]++; return; }
+    }
+    ID3D11DeviceContext1* c1 = nullptr;
+    if (FAILED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) || !c1) { s_poolFail[2]++; return; }
+    ID3D11Buffer* b6 = nullptr; ID3D11Buffer* b5 = nullptr; UINT f6 = 0, n6 = 0, f5 = 0, n5 = 0;
+    c1->VSGetConstantBuffers1(6, 1, &b6, &f6, &n6); c1->VSGetConstantBuffers1(5, 1, &b5, &f5, &n5); c1->Release();
+    if (b6 && b5) {
+        D3D11_BUFFER_DESC d6, d5; b6->GetDesc(&d6); b5->GetDesc(&d5);
+        const UINT a6 = f6 * 16, a5 = f5 * 16 + 64;
+        if (a6 < d6.ByteWidth && a5 + 64 <= d5.ByteWidth) {
+            const UINT slot = s_poolAt++ % kPoolSlots, base = slot * kSlotF4 * 16;
+            const UINT len6 = (std::min)(192u * 16u, d6.ByteWidth - a6) & ~15u;
+            D3D11_BOX x6 = { a6, 0, 0, a6 + len6, 1, 1 }; c->CopySubresourceRegion(s_pool, 0, base + 16, 0, 0, b6, 0, &x6);
+            D3D11_BOX x5 = { a5, 0, 0, a5 + 64, 1, 1 }; c->CopySubresourceRegion(s_pool, 0, base + 193 * 16, 0, 0, b5, 0, &x5);
+            D3D11_BOX xh = { 0, 0, 0, 16, 1, 1 }; c->CopySubresourceRegion(s_pool, 0, base, 0, 0, m->idBuf, 0, &xh);
+            s_beardCopies++;
+        } else s_poolFail[3]++;
+    } else s_poolFail[2]++;
+    if (b6) b6->Release(); if (b5) b5->Release();
+}
+bool BeardForDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, ID3D11Buffer** cb, ID3D11ShaderResourceView** pool, ID3D11ShaderResourceView** bind) {
+    *cb = nullptr; *pool = nullptr; *bind = nullptr;
+    t_beardDraw = true;
+    ID3D11Buffer* b = ExprBufferForDraw(c, count, start, base);
+    t_beardDraw = false;
+    if (!b || b == s_none) return false;
+    std::lock_guard<std::mutex> lk(s_mx);
+    *cb = b; *pool = s_poolSrv; *bind = s_beardSrv;
+    return s_poolSrv && s_beardSrv;
+}
 ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, const float** headCentroid, int* headIdx, ID3D11ShaderResourceView** shapeSrv, ID3D11ShaderResourceView** shapeWr, ID3D11ShaderResourceView** tessSeam, bool body) {
     if (headCentroid) *headCentroid = nullptr;
     if (tessSeam) *tessSeam = nullptr;
@@ -656,12 +846,41 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
     uint64_t key = 0xcbf29ce484222325ULL;
     key = Fnv(key, (uint64_t)ib); key = Fnv(key, ibOff); key = Fnv(key, start); key = Fnv(key, count); key = Fnv(key, (uint64_t)(int64_t)base);
     key = Fnv(key, (uint64_t)il); for (int i = 0; i < 4; i++) { key = Fnv(key, (uint64_t)vb[i]); key = Fnv(key, off[i]); key = Fnv(key, stride[i]); }
+    if (t_beardDraw) key = Fnv(key, 0xbea5dULL);
     std::lock_guard<std::mutex> lk(s_mx);
     auto it = s_meshes.find(key);
     if (it != s_meshes.end()) {
         rel(); FaceMesh* m = it->second; m->lastFrame = s_frame;
+        if (m->beard) { if (m->state == 3 && m->cb) { s_beardDraws++; return m->cb; } return nullptr; }
         if (m->state == 3 && m->cb) {
             s_binds++;
+            if (m->beardSrc) BeardPoolCopy(c, m);
+            const UINT seq = ++s_drawSeq;
+            if (m->shapeOff >= 0 && !m->xferGate) {   // piel con formas propias: las mallas pegadas de antes en este cuadro quedan habilitadas
+                s_packSeq = seq; s_packFrame = s_frame;
+                for (const GateE& g : s_gateRing) if (g.id && g.seq + 16 >= seq && g.seq <= seq) s_gateOk[s_gateOkAt++ % 32] = { g.id, s_frame };   // seq del ok = cuadro
+            }
+            if (m->xferGate && m->shapeOff >= 0) {
+                s_gateRing[s_gateAt++ % 16] = { m->id, seq };
+                bool ok = s_packFrame == s_frame && seq - s_packSeq <= 16;   // dibujada poco despues de su piel
+                for (const GateE& g : s_gateOk) if (g.id == m->id && s_frame - g.seq <= 2) ok = true;   // o poco antes (cuadro anterior)
+                // (04/11 d) como la boca: despues de 8 veces junto a su piel queda habilitada (si no, iba y venia entre pasadas: vibraba)
+                if (ok && !m->teethOn && ++m->teethHits >= 8) m->teethOn = true;
+                if (m->teethOn) ok = true;
+                if (!ok) { s_gateOff++; if (m->head <= 31 && (m->lids[0] >= 0 || m->lids[1] >= 0) && s_frame - m->lidCap >= 120) { m->lidCap = s_frame; LidCapture(c, m); } return m->cbNoShape ? m->cbNoShape : s_none; }
+                s_gateOn++;
+            }
+            // (04/11 c, Agustin: "en la sonrisa deberias estirar los dientes horizontalmente un poco asi como bajar los dientes un
+            // poco"; OK de Agustin para tocar la boca SOLO con la sonrisa) la boca que se dibuja justo despues de una piel con formas
+            // propias (la cara esculpida: Messi) lleva la marca de dientes con sonrisa (b12 g_pesExprShape.x = 1; pes_expr.hlsli
+            // PesTeethSmile). Sin sonrisa el shader no mueve nada; las otras bocas quedan como siempre
+            // (04/11 d, Agustin: "la boca de messi si vibra bastante") la marca iba y venia segun el orden de los dibujos de cada pasada
+            // (una pasada con los dientes corridos y otra sin): ahora, despues de 8 veces junto a su piel, esa boca queda marcada
+            if (m->cbv[3] == 1 && !m->teethOn && s_packFrame == s_frame && seq - s_packSeq <= 4 && ++m->teethHits >= 8) m->teethOn = true;
+            if (m->cbv[3] == 1 && m->teethOn) {
+                if (!m->cbTeeth) { UINT z[28]; memcpy(z, m->cbv, sizeof z); z[24] = 1; z[25] = 0; z[26] = 0; z[27] = 0; m->cbTeeth = MakeCBRaw(z); }
+                if (m->cbTeeth) { s_teethOn++; if (headCentroid && m->hcOk && m->nv >= 300) { *headCentroid = m->hc; if (headIdx) *headIdx = m->head; } return m->cbTeeth; }
+            }
             if (shapeSrv && m->shapeOff >= 0 && s_shapeSrv) { *shapeSrv = s_shapeSrv; s_shapeDraws++; if (shapeWr) *shapeWr = m->shapeWr; }
             if (tessSeam && m->seamSrv) *tessSeam = m->seamSrv;   // (04/11 b) piel de la cara: se puede teselar
             if (m->head <= 31 && (m->lids[0] >= 0 || m->lids[1] >= 0) && s_frame - m->lidCap >= 120) { m->lidCap = s_frame; LidCapture(c, m); }
@@ -690,7 +909,7 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
             s_meshes.clear(); s_pending.clear();
         }
     }
-    FaceMesh* m = new FaceMesh(); m->id = s_nextId++; m->lastFrame = s_frame;
+    FaceMesh* m = new FaceMesh(); m->id = s_nextId++; m->lastFrame = s_frame; m->beard = t_beardDraw;
     m->dump = !body && s_frame < s_dumpUntil.load(std::memory_order_relaxed);
     m->body = body;
     m->ib = ib; m->ibFmt = ibFmt; m->ibOff = ibOff; m->start = start; m->count = count; m->base = base;
@@ -838,7 +1057,7 @@ void ExprPresent() {
             static bool was = false; const bool now = g_cfg.live[354][3] > 0.5f;
             if (now && !was) {
                 for (auto& kv : s_meshes) FreeMesh(kv.second);
-                s_meshes.clear(); s_pending.clear();
+                s_meshes.clear(); s_pending.clear(); s_bsrc.clear(); s_bsrcBytes = 0;
                 s_dumpUntil.store(s_frame + 600, std::memory_order_relaxed);
                 Log("expresiones: volcado de las mallas de la cara pedido (w354 = 1): se releen las que se dibujen en los proximos 10 s -> PES21FX\\dump\\caras\\");
             }
@@ -848,6 +1067,19 @@ void ExprPresent() {
         std::stable_sort(s_pending.begin(), s_pending.end(), [](FaceMesh* a, FaceMesh* b) { return a->lastFrame > b->lastFrame; });
         for (size_t i = 0; i < s_pending.size() && i < 16; i++) Step(imm, s_pending[i]);
         s_pending.erase(std::remove_if(s_pending.begin(), s_pending.end(), [](FaceMesh* m) { return m->state >= 3; }), s_pending.end());
+        // (04/11 c) barbas que se leyeron antes que su piel: se reintenta cada ~2 s (hasta 15 veces) mientras se sigan dibujando
+        if ((s_frame % 120) == 7) {
+            int n = 0;
+            for (auto& kv : s_meshes) {
+                FaceMesh* b = kv.second;
+                if (b->state != 5 || b->beardPs.empty() || s_frame - b->lastFrame > 120 || n >= 2) continue;
+                n++;
+                if (BeardBind(b, b->beardPs)) { b->state = 3; b->beardPs.clear(); b->beardPs.shrink_to_fit(); }
+                else if (++b->beardTries >= 15) { b->state = 4; b->why = "pelo: no hay piel de cara debajo"; b->beardPs.clear(); b->beardPs.shrink_to_fit(); }
+            }
+        }
+        if (s_beardDraws || s_beardCopies) { static UINT lastB = 0; if (s_frame - lastB >= 3600) { lastB = s_frame; int nSrc = 0; for (auto& kv : s_meshes) if (kv.second->beardSrc) nSrc++;
+            Log("expresiones: barba por huesos: %d dibujos de barba, %d paletas de piel copiadas (~60 s; %d mallas de piel marcadas, %d geometrias; fallas: pozo %d, id %d, b5/b6 %d, rango %d)", s_beardDraws, s_beardCopies, nSrc, (int)s_geoUsed.size(), s_poolFail[0], s_poolFail[1], s_poolFail[2], s_poolFail[3]); s_beardDraws = s_beardCopies = 0; for (int& f : s_poolFail) f = 0; } }
     }
     static int frames = 0;
     if (++frames >= 3600) {
@@ -860,7 +1092,9 @@ void ExprPresent() {
             int np = 0; for (auto& kv : s_shapes) if (kv.second.off >= 0) np++;
             const int sd = s_shapeDraws.exchange(0);
             if (np || sd) Log("expresiones: gestos esculpidos: %d mallas con formas, %d dibujos (sonrisa %.2f grito %.2f enojo %.2f asombro %.2f puchero %.2f, perfiles %s)", np, sd,
-                g_cfg.live[355][1], g_cfg.live[356][0], g_cfg.live[355][0], g_cfg.live[355][2], g_cfg.live[356][1], g_cfg.live[356][3] > 0.5f ? "si" : "no"); }
+                g_cfg.live[355][1], g_cfg.live[356][0], g_cfg.live[355][0], g_cfg.live[355][2], g_cfg.live[356][1], g_cfg.live[356][3] > 0.5f ? "si" : "no");
+            if (s_gateOn || s_gateOff) { Log("expresiones: mallas pegadas (pestanas de otro buffer): %d dibujos con formas, %d sin (lejos de su piel)", s_gateOn, s_gateOff); s_gateOn = s_gateOff = 0; }
+            if (s_teethOn) { Log("expresiones: boca de la cara esculpida (dientes con la sonrisa): %d dibujos", s_teethOn); s_teethOn = 0; } }
     }
 }
 

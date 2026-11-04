@@ -64,7 +64,7 @@ bool FaceTessBegin(ID3D11DeviceContext* c, uint64_t vsHash, ID3D11ShaderResource
     if (!seam || !params || !g_dev.dev) return false;
     const int v = vsHash == kVsHead ? 0 : vsHash == kVsFace ? 1 : vsHash == kVsBody ? 2 : -1;
     if (v < 0) return false;
-    if (g_cfg.live[v == 2 ? 361 : 357][0] < 0.5f) { if (v < 2) s_off.fetch_add(1, std::memory_order_relaxed); return false; }   // (04/11 g) cuerpo: fila 361
+    if (g_cfg.live[v == 2 ? 364 : 357][0] < 0.5f) { if (v < 2) s_off.fetch_add(1, std::memory_order_relaxed); return false; }   // (04/11 g) cuerpo: fila 364
     const int w = g_cfg.live[358][3] > 0.5f ? 1 : 0;
     ID3D11HullShader* hs; ID3D11DomainShader* ds;
     { std::lock_guard<std::mutex> lk(s_mx); Ensure(); hs = s_hs[v][w]; ds = s_ds[v]; }
@@ -119,7 +119,7 @@ void FaceTessPresent() {
     if (nsm || npr || off) Log("teselacion de caras: dibujos de piel de la cara SIN teselar en 60 s: %d sin pesos de borde (malla en lectura / no teselable), %d sin parametros t120, %d con la tarjeta apagada", nsm, npr, off);
     if (!d && !st && !ns && !db) return;
     Log("teselacion de caras: %d dibujos teselados en 60 s (con relieve %d; sin triangulos sueltos %d, sin shader %d); cuerpo (manos, brazos, piernas): %d dibujos, densidad %.0f, hasta %.1f m, tope %.1f mm; viewport %dx%d; suavidad %.2f, densidad %.1f, factor maximo %.0f, hasta %.2f m (+%.2f), tope %.1f mm, orientacion %s%s; relieve x%.2f surcos %.2f mm relieve %.2f mm mip %.0f",
-        d, rl, st, ns, db, g_cfg.live[361][1], g_cfg.live[361][2], g_cfg.live[361][3], s_lastVpW.load(), s_lastVpH.load(), g_cfg.live[357][1], g_cfg.live[357][2], g_cfg.live[357][3], g_cfg.live[358][0], g_cfg.live[358][1], g_cfg.live[358][2], g_cfg.live[358][3] > 0.5f ? "invertida" : "igual", g_cfg.live[360][0] > 0.5f ? " (PRUEBA: cara inflada)" : "", g_cfg.live[359][0], g_cfg.live[359][1], g_cfg.live[359][2], g_cfg.live[359][3]);
+        d, rl, st, ns, db, g_cfg.live[364][1], g_cfg.live[364][2], g_cfg.live[364][3], s_lastVpW.load(), s_lastVpH.load(), g_cfg.live[357][1], g_cfg.live[357][2], g_cfg.live[357][3], g_cfg.live[358][0], g_cfg.live[358][1], g_cfg.live[358][2], g_cfg.live[358][3] > 0.5f ? "invertida" : "igual", g_cfg.live[360][0] > 0.5f ? " (PRUEBA: cara inflada)" : "", g_cfg.live[359][0], g_cfg.live[359][1], g_cfg.live[359][2], g_cfg.live[359][3]);
 }
 
 }   // namespace fx

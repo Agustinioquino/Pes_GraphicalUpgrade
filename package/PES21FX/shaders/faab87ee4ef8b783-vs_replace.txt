@@ -97,6 +97,7 @@ void main(
   float3 v0r = v0.xyz;   // (27/10 d) reposo (los poros y el collar del PS lo siguen usando)
   v0.xyz += PesCollarSink(v0r, v1.xyz);   // (27/10 d) base del cuello hundida bajo el torso (y323)
   v0.xyz += PesShapeDelta(pesVid);   // (04/11) gestos esculpidos (formas\<huella>.bin), antes del skinning: los huesos los llevan
+  v0.xyz += PesTeethSmile(v0r, v5.xy);   // (04/11 c) dientes con la sonrisa en la boca de la cara esculpida (pes_expr.hlsli)
   // (02/11, Agustin: "sacar la lengua no funciona, antes funcionaba") el hueso de la lengua = el de MAS PESO del vertice, no el
   // primero (si la boca nueva guarda la cabeza primero con peso chico, la lengua se tomaba como cabeza y no se movia)
   uint tgJ = v3.x; float tgW = v4.x;

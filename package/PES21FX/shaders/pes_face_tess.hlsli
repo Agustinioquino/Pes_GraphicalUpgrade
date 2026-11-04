@@ -25,7 +25,7 @@
 // PES_TESS_V455 = 1: variante del VS 455eb97b (TEXCOORD0 float4, TEXCOORD9 al final); 0: faab87ee (TEXCOORD0 y 9 float2 juntos).
 // PES_TESS_CCW = 1: triangulos de salida con la orientacion invertida (w358; si la cara se ve del reves / desaparece).
 // PES_TESS_BODY = 1 (04/11 g, Agustin: "teselacion a las manos, brazos y piernas"): variante del VS de la piel del cuerpo
-// 1c02a92a (misma salida que faab87ee sin TEXCOORD11): fila 361 (x prendido, y densidad, z distancia maxima m, w tope mm),
+// 1c02a92a (misma salida que faab87ee sin TEXCOORD11): fila 364 (x prendido, y densidad, z distancia maxima m, w tope mm),
 // suavidad y357, transicion y358; sin relieve (el cuerpo no tiene quinta textura), sin zona de orejas ni de cuello.
 #ifndef PES_TESS_BODY
 #define PES_TESS_BODY 0
@@ -98,14 +98,14 @@ cbuffer PESTessView : register(b13)
   float4 g_pesTessVp;   // x ancho, y alto del viewport en pixeles (lo pone la DLL)
 }
 
-// (04/11 g) filas de parametros: cara 357 / 358; cuerpo 361 (x prendido, y densidad, z distancia maxima, w tope) con la
+// (04/11 g) filas de parametros: cara 357 / 358; cuerpo 364 (x prendido, y densidad, z distancia maxima, w tope) con la
 // suavidad y357 y la transicion y358 de la cara
 void PesTessParams(out float4 T, out float4 U)
 {
   T = IniParams.Load(int2(357, 0));   // x on, y suavidad, z densidad, w factor maximo
   U = IniParams.Load(int2(358, 0));   // x distancia maxima (m), y transicion (m), z tope (mm), w orientacion
 #if PES_TESS_BODY
-  float4 B = IniParams.Load(int2(361, 0));
+  float4 B = IniParams.Load(int2(364, 0));
   T.x = B.x; T.z = B.y; U.x = B.z; U.z = B.w;
 #endif
 }

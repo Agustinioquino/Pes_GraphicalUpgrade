@@ -49,11 +49,35 @@ float3 PesShapeDelta(uint vid)
   if (vid < g_pesExprShape.z || lv >= g_pesExprShape.y) return 0;
   float4 G5 = IniParams.Load(int2(355, 0)), G6 = IniParams.Load(int2(356, 0));
   if (G6.w < 0.5) return 0;
-  float w[5] = { saturate(G5.y), saturate(G6.x), saturate(G5.x), saturate(G5.z), saturate(G6.y) };
-  uint b = g_pesExprShape.x + lv * 5;
+  // (04/11 c, Agustin: messi6 "la sonrisa mayor ... como la sonrisa mas alta") Sonrisa 0..1 = la forma de siempre; de 1 a 1.5 pasa
+  // a la sonrisa grande (forma 5; un paquete viejo de 5 formas no la trae y queda la de siempre)
+  uint nS = g_pesExprShape.w;
+  float sG = nS >= 6 ? saturate((G5.y - 1.0) * 2.0) : 0.0;
+  float w[6] = { saturate(G5.y) * (1.0 - sG), saturate(G6.x), saturate(G5.x), saturate(G5.z), saturate(G6.y), sG };
+  uint b = g_pesExprShape.x + lv * nS;
   float3 d = 0;
-  [unroll] for (uint k = 0; k < 5; k++) if (w[k] > 0.001) d += g_pesShapes[b + k].xyz * w[k];
+  [unroll] for (uint k = 0; k < 6; k++) if (k < nS && w[k] > 0.001) d += g_pesShapes[b + k].xyz * w[k];
   return d;
+}
+
+// (04/11 c, Agustin: "en la sonrisa deberias estirar los dientes horizontalmente un poco asi como bajar los dientes un poco"; con su
+// OK para tocar la boca SOLO con la sonrisa) en la boca de la cara esculpida (la DLL la marca: g_pesExprShape.x = 1 solo en la boca
+// que se dibuja junto a la piel de Messi, expr.cpp) los dientes y la encia se abren a lo ancho y bajan con el slider Sonrisa (355.y),
+// con "Perfiles por cara" (356.w). Solo dientes, encia y muelas, por la uv de la boca v20 (medida por el hilo de la boca: filas
+// v < 0.65 y u < 0.89, muelas u > 0.89 y v 0.62..0.74); la lengua, la garganta y las mejillas quedan. Sin sonrisa no cambia nada.
+// A 1.0: 6 % mas ancho y 0.7 mm abajo; a 1.5: 8 % y 1.0 mm
+float3 PesTeethSmile(float3 rest, float2 uv)
+{
+  if (g_pesExprMesh.w != 1 || g_pesExprShape.x != 1) return 0;
+  float4 G5 = IniParams.Load(int2(355, 0)), G6 = IniParams.Load(int2(356, 0));
+  if (G6.w < 0.5) return 0;
+  float s = clamp(G5.y, 0.0, 1.5);
+  if (s <= 0.001) return 0;
+  float sx = s <= 1.0 ? 0.06 * s : 0.06 + 0.04 * (s - 1.0);
+  float rows = (1.0 - smoothstep(0.64, 0.66, uv.y)) * (1.0 - smoothstep(0.885, 0.895, uv.x));
+  float molar = smoothstep(0.885, 0.895, uv.x) * smoothstep(0.61, 0.63, uv.y) * (1.0 - smoothstep(0.73, 0.75, uv.y));
+  float front = max(rows, molar);
+  return float3(rest.x * sx, -0.0007 * s, 0.0) * front;
 }
 
 float PesExprZoneShare(float3 r, float4 Z)
@@ -322,8 +346,11 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
   // del parpadeo; tambien con el parpadeo apagado
   float4 G5 = IniParams.Load(int2(355, 0)), G6 = IniParams.Load(int2(356, 0));
   float gAng = clamp(G5.x, 0.0, 1.5), gSmi = clamp(G5.y, 0.0, 1.5), gSur = clamp(G5.z, 0.0, 1.5), gGri = clamp(G6.x, 0.0, 1.5), gPuc = clamp(G6.y, 0.0, 1.5);
-  float geU = 0.15 * gSmi + 0.14 * gAng - 0.20 * gSur + 0.10 * gGri + 0.05 * gPuc;   // > 0 baja el de arriba
-  float geL = -(0.16 * gSmi + 0.06 * gAng + 0.10 * gGri) + 0.04 * gSur;            // < 0 sube el de abajo
+  // (04/11 c, Agustin: "y cierra mas los ojos con un slider alto de sonrisa") pasando 1.0 de Sonrisa el ojo se achina mucho mas
+  // (risa: a 1.5 el de arriba baja ~+0.13 rad y el de abajo sube ~+0.11 rad mas que antes)
+  float gBig = max(gSmi - 1.0, 0.0);
+  float geU = 0.15 * gSmi + 0.26 * gBig + 0.14 * gAng - 0.20 * gSur + 0.10 * gGri + 0.05 * gPuc;   // > 0 baja el de arriba
+  float geL = -(0.16 * gSmi + 0.22 * gBig + 0.06 * gAng + 0.10 * gGri) + 0.04 * gSur;            // < 0 sube el de abajo
   bool ges = abs(geU) > 0.001 || abs(geL) > 0.001;
   if (amt <= 0.0 && !ges) return;
   // (02/11) con 350.y = 2 la DLL parpadea girando los huesos de los parpados (exprbones.cpp): todas las mallas juntas
@@ -391,7 +418,11 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
     // (04/11, Agustin con los ojos en circulos: "los ojos no mueven los parpados de abajo") el de abajo acompana mas: 0.25 -> 0.45 al mirar
     // abajo y 0.10 -> 0.22 al mirar arriba (en una cara real el de abajo baja casi la mitad de lo que baja el ojo)
     float fu = up ? (gy > 0.0 ? 0.80 : 0.55) : (gy > 0.0 ? 0.45 : 0.22), fup = up ? (gyp > 0.0 ? 0.80 : 0.55) : (gyp > 0.0 ? 0.45 : 0.22);
-    float ge = (up ? geU : geL) * (1.0 - g);   // (04/11) forma del ojo con el gesto
+    // (04/11 d, video de Agustin: los parpados vibran "solo con la sonrisa") la forma del ojo del gesto se apagaba con (1 - g): g es
+    // lo que el juego mueve el parpado ahora, y el juego lo corrige con la mirada un poco en cada cuadro (g 0.1..0.4): con la sonrisa
+    // alta (~0.26 rad) ese vaiven pasaba entero al parpado. Ahora el gesto solo se apaga cuando el juego de verdad cierra el ojo
+    // (g > 0.55: parpadeo o animacion), el temblor chico de la mirada ya no lo mueve
+    float ge = (up ? geU : geL) * (1.0 - smoothstep(0.55, 1.0, g));
     float a1 = A * b + gy * fu * (1.0 - g) + ge, a0 = A * bp + gyp * fup * (1.0 - g) + ge;
     float c1 = cos(a1), s1 = sin(a1), c0 = cos(a0), s0 = sin(a0);
     float3 d1 = PesRotX(q, c1, s1) - q, d0 = PesRotX(q, c0, s0) - q;
