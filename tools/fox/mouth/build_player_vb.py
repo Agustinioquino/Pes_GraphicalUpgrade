@@ -23,7 +23,7 @@ def build(konami, texdir, profile, tmp):
     r = subprocess.run([sys.executable, os.path.join(HERE, 'mouth3d.py'), konami, texdir, os.path.join(tmp, 'x.fmdl'), out],
                        env=env, capture_output=True, text=True)
     if r.returncode: raise SystemExit('mouth3d.py (%s) fallo:\n%s' % (profile or 'comun', r.stdout[-2000:] + r.stderr[-2000:]))
-    return np.load(out)
+    with np.load(out) as z: return {k: z[k] for k in z.files}   # (04/11) cerrar el .npz: en Windows la carpeta temporal no se podia borrar (WinError 32)
 
 def main(konami, texdir, profile, dst):
     kb = open(konami, 'rb').read()
