@@ -88,10 +88,12 @@ float PesTraceShadow(float3 Pv, float3 L, float rawNL, float zC, float zSgn, flo
   float2 px = pxy + 5.588238 * fr;
   float ign = frac(52.9829189 * frac(dot(px, float2(0.06711056, 0.00583715))));
   float ign2 = frac(52.9829189 * frac(dot(px + 37.0, float2(0.00583715, 0.06711056))));
-  { // penumbra: la direccion de la luz se mueve dentro de un cono chico (radio ~0.021 rad)
+  // (04/11 p, Agustin: con el cono de 1.2 grados la sombra de la nariz y la ceja se abria y la cara quedaba plana; la version de
+  // las 05:41 con sombra dura se veia mejor) radio del sol real (0.27 grados = 0.0047 rad): borde nitido, sin escalones (biseccion)
+  { // penumbra: la direccion de la luz se mueve dentro de un cono chico (radio ~0.0047 rad, el sol)
     float3 up = abs(L.y) < 0.95 ? float3(0, 1, 0) : float3(1, 0, 0);
     float3 ta = normalize(cross(up, L)), tb = cross(L, ta);
-    float ang = 6.2831853 * ign2, rr = sqrt(frac(ign + 0.618034)) * 0.021;
+    float ang = 6.2831853 * ign2, rr = sqrt(frac(ign + 0.618034)) * 0.0047;
     L = normalize(L + (ta * cos(ang) + tb * sin(ang)) * rr);
   }
   float csLen = 0.45;
