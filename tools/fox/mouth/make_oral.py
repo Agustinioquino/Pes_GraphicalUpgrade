@@ -405,6 +405,7 @@ def build(src, N=2048, NS=1024, log=print):
     bsm_o, nrm_o, S, Tr = paint_molars(bsm_o, nrm_o, S, Tr, on * (V > 0.35) * (V < 0.8), log)
     bsm_o = lift_teeth(bsm_o, log)
     bsm_o, S = wet_tissue(bsm_o, S, log)
+    bsm_o = konami_tone(bsm_o, log)
     nrm_o, S, Tr = detail_maps(bsm_o, nrm_o, S, Tr, rows, log)
     return {'bsm': bsm_o, 'nrm': nrm_o, 'srm': S, 'trm': Tr}, (B, on, line, crown, corner, cerv)
 
@@ -452,6 +453,53 @@ def lift_teeth(bsm, log=print):
     kk = m > 0.5
     log('  clasificacion del shader tras aclarar: diente %.1f%% de lo que era diente' % (
         100 * ((omx > 0.45) & (osat < 0.26) & (org < 0.11))[kk & (mbox < 0.5)].mean()))
+    return out
+
+KONAMI_TONE = float(os.environ.get('KONAMI_TONE', '1.0'))   # (04/11 d) 0 = como v20
+KT_TEETH = np.array([0.580, 0.518, 0.439], np.float32)   # mediana de los dientes de oral_bsm de Konami (filas, clase diente del shader)
+KT_GUM = np.array([0.451, 0.286, 0.267], np.float32)     # mediana de la encia de Konami (R-G > 0.13)
+def konami_tone(bsm, log=print):
+    """(04/11 d) Agustin (captura de Messi, shader vs Ver original): 'en la vista original los dientes se ven mucho mas realistas',
+    'cambia la sombra pero no el color de las encias y dientes'. Ver original usa la textura de Konami: dientes marfil apagado
+    (luminancia ~0.53) y encia rosa oscuro poco saturada (~0.34). La v20 los tenia en 0.81 y 0.56 (encia rosa chicle, dientes
+    blanco papel). Aca: en las filas (sin lengua ni garganta) el tono pasa al de Konami y la luminancia a la suya (dientes un poco
+    mas claros, 0.60), con el detalle propio (bordes, surcos, papilas) a 70% de contraste. La clasificacion del shader se conserva."""
+    if KONAMI_TONE <= 0: return bsm
+    N = bsm.shape[0]
+    c = bsm[..., :3]; mx = c.max(-1); sat = (mx - c.min(-1)) / np.maximum(mx, 1e-6); rg = c[..., 0] - c[..., 1]
+    gy, gx = (np.mgrid[0:N, 0:N] + 0.5) / N
+    tongue = sst(0.645, 0.665, gy) * sst(0.27, 0.30, gx) * sst(0.745, 0.715, gx)
+    area = sst(0.02, 0.04, gy) * (1 - tongue) * sst(0.70, 0.66, gy)
+    import molar
+    u0, u1, v0, v1 = molar.MOLAR_BOX
+    mbox = sst(u0 - 0.004, u0 + 0.004, gx) * sst(u1 + 0.004, u1 - 0.004, gx) * sst(v0 - 0.004, v0 + 0.004, gy) * sst(v1 + 0.004, v1 - 0.004, gy)
+    mt = np.maximum(sst(0.30, 0.42, mx) * sst(0.32, 0.24, sat) * sst(0.13, 0.10, rg), mbox) * np.maximum(area, mbox)
+    mg = (1 - mt) * sst(0.08, 0.13, rg) * sst(0.12, 0.20, mx) * area
+    lumw = np.array([0.30, 0.59, 0.11], np.float32)
+    L = (c * lumw).sum(-1)
+    Lb = ndi.gaussian_filter(L, 4)
+    def retone(mask, target_rgb, target_L, hue_k):
+        k = mask > 0.5
+        med = float(np.median(L[k])) if k.any() else 0.5
+        Ln = (Lb + 0.7 * (L - Lb)) * (target_L / max(med, 1e-3))
+        th = target_rgb / (target_rgb * lumw).sum()
+        own = c / np.maximum(L, 1e-4)[..., None]
+        hue = own * (1 - hue_k) + th * hue_k
+        return np.clip(hue * Ln[..., None], 0, 1), med
+    w = min(KONAMI_TONE, 1.0)
+    tT, mT = retone(mt, KT_TEETH, 0.60, 0.6)
+    tG, mG = retone(mg, KT_GUM, 0.34, 0.9)
+    tG[..., 0] = np.maximum(tG[..., 0], np.minimum(tG[..., 1] + 0.15, 1.0))   # la encia sigue siendo tejido para el shader (R-G > 0.13)
+    out = bsm.copy()
+    o = c * (1 - w * (mt + mg))[..., None] + w * (tT * mt[..., None] + tG * mg[..., None])
+    out[..., :3] = o
+    omx = o.max(-1); osat = (omx - o.min(-1)) / np.maximum(omx, 1e-6); org = o[..., 0] - o[..., 1]
+    kt = (mt > 0.5) & (mbox < 0.5); kg = mg > 0.5
+    lo = (o * lumw).sum(-1)
+    log('  tono Konami: dientes L %.3f -> %.3f %s, encia L %.3f -> %.3f %s' % (mT, float(np.median(lo[kt])), np.median(o[kt], 0).round(3).tolist(),
+        mG, float(np.median(lo[kg])), np.median(o[kg], 0).round(3).tolist()))
+    log('  clasificacion del shader: diente %.1f%%, tejido %.1f%%' % (100 * ((omx > 0.45) & (osat < 0.26) & (org < 0.11))[kt].mean(),
+        100 * (org > 0.13)[kg].mean()))
     return out
 
 TISSUE_LIFT = float(os.environ.get('TISSUE_LIFT', '1.0'))   # (04/11 b) 0 = como v18
