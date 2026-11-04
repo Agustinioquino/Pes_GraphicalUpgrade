@@ -102,8 +102,8 @@ def write_dds(path, mips, dxgi):
 
 # ------------------------------------------------------------------ reescalado
 def lanczos(a, size):
-    """a: float32 HxWxC 0..1 -> size x size"""
-    chans = [np.asarray(Image.fromarray(a[..., c].astype(np.float32), 'F').resize((size, size), Image.LANCZOS)) for c in range(a.shape[2])]
+    """a: float32 HxWxC 0..1 -> size = (ancho, alto) (el pelo es 2048x1024: no siempre cuadrado)"""
+    chans = [np.asarray(Image.fromarray(a[..., c].astype(np.float32), 'F').resize(size, Image.LANCZOS)) for c in range(a.shape[2])]
     return np.stack(chans, -1)
 
 
@@ -158,9 +158,9 @@ def up_rgb(rgb, size, ia):
     if ia is None:
         return lanczos(rgb, size)
     r = rgb
-    while r.shape[0] < size:            # x4 una vez (1024 -> 4096); si hace falta mas, otra pasada
+    while r.shape[1] < size[0]:         # x4 una vez (1024 -> 4096); si hace falta mas, otra pasada
         r = ia.run(r)
-    if r.shape[0] != size:
+    if (r.shape[1], r.shape[0]) != tuple(size):
         r = lanczos(r, size)
     return r
 
@@ -205,10 +205,10 @@ def mips_of(img, kind, fmt):
         if kind == 'nrm':
             m = normalize_nrm(m, fmt)
         out.append((np.clip(m, 0, 1) * 255 + 0.5).astype(np.uint8))
-        if cur.shape[0] == 1:
+        if cur.shape[0] == 1 and cur.shape[1] == 1:
             break
-        s = max(1, cur.shape[0] // 2)
-        cur = np.stack([np.asarray(Image.fromarray(cur[..., c], 'F').resize((s, s), Image.BOX)) for c in range(4)], -1)
+        s = (max(1, cur.shape[1] // 2), max(1, cur.shape[0] // 2))
+        cur = np.stack([np.asarray(Image.fromarray(cur[..., c], 'F').resize(s, Image.BOX)) for c in range(4)], -1)
     return out
 
 
@@ -245,7 +245,8 @@ def process(root, fid, ia, rehacer):
         vs = view_srgb(info, slot)
         if vs is not None:
             srgb = vs
-        n = a.shape[0]
+        n = max(a.shape[0], a.shape[1])             # lado mayor (pelo 2048x1024 -> 4096x2048)
+        dims = lambda side: (a.shape[1] * side // n, a.shape[0] * side // n)
         sizes = [4096] + ([2048] if n < 2048 else [])
         todo = [s for s in sizes if rehacer or not os.path.exists(os.path.join(root, '%s_%s_%dk.dds' % (fid, kind, s // 1024)))]
         if not todo:
@@ -254,15 +255,15 @@ def process(root, fid, ia, rehacer):
         x = a.astype(np.float32) / 255
         if kind == 'bsm':
             # pelo / barba (id 'p...'): el alfa son los mechones -> tambien con la IA, pero conservando la cobertura de Lanczos
-            alpha = up_data(x[..., 3:], 4096, ia) if fid.startswith('p') else up_alpha(x[..., 3:], 4096)
-            big = np.concatenate([up_rgb(x[..., :3], 4096, ia), alpha], -1)
+            alpha = up_data(x[..., 3:], dims(4096), ia) if fid.startswith('p') else up_alpha(x[..., 3:], dims(4096))
+            big = np.concatenate([up_rgb(x[..., :3], dims(4096), ia), alpha], -1)
         elif kind == 'nrm':
-            big = lanczos(x, 4096)
+            big = lanczos(x, dims(4096))
         else:
-            big = up_data(x, 4096, ia)
+            big = up_data(x, dims(4096), ia)
         dx = out_format(kind, fmt, srgb)
         for s in todo:
-            img = big if s == 4096 else np.stack([np.asarray(Image.fromarray(big[..., c], 'F').resize((s, s), Image.LANCZOS)) for c in range(4)], -1)
+            img = big if s == 4096 else np.stack([np.asarray(Image.fromarray(big[..., c], 'F').resize(dims(s), Image.LANCZOS)) for c in range(4)], -1)
             write_dds(os.path.join(root, '%s_%s_%dk.dds' % (fid, kind, s // 1024)), mips_of(img.astype(np.float32), kind, fmt), dx)
         print('  %s_%s: %d px %s%s -> %s (dxgi %d) en %.0f s' % (fid, kind, n, fmt, ' sRGB' if srgb else '', '+'.join('%d' % s for s in todo), dx, time.time() - t))
 
