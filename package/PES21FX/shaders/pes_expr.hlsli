@@ -291,8 +291,8 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
   // del parpadeo; tambien con el parpadeo apagado
   float4 G5 = IniParams.Load(int2(355, 0)), G6 = IniParams.Load(int2(356, 0));
   float gAng = clamp(G5.x, 0.0, 1.5), gSmi = clamp(G5.y, 0.0, 1.5), gSur = clamp(G5.z, 0.0, 1.5), gGri = clamp(G6.x, 0.0, 1.5), gPuc = clamp(G6.y, 0.0, 1.5);
-  float geU = 0.12 * gSmi + 0.14 * gAng - 0.20 * gSur + 0.10 * gGri + 0.05 * gPuc;   // > 0 baja el de arriba
-  float geL = -(0.12 * gSmi + 0.06 * gAng + 0.10 * gGri) + 0.04 * gSur;            // < 0 sube el de abajo
+  float geU = 0.15 * gSmi + 0.14 * gAng - 0.20 * gSur + 0.10 * gGri + 0.05 * gPuc;   // > 0 baja el de arriba
+  float geL = -(0.16 * gSmi + 0.06 * gAng + 0.10 * gGri) + 0.04 * gSur;            // < 0 sube el de abajo
   bool ges = abs(geU) > 0.001 || abs(geL) > 0.001;
   if (amt <= 0.0 && !ges) return;
   // (02/11) con 350.y = 2 la DLL parpadea girando los huesos de los parpados (exprbones.cpp): todas las mallas juntas
