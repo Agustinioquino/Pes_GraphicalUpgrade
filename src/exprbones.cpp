@@ -710,6 +710,10 @@ static void Secondary(Skel& S, const float* hr, float sm, float open) {
         // (02/11 p, Agustin: "los sliders de musculos que no sean de hueso real no afectan") 348.y surco nasolabial POR HUESOS: con la
         // sonrisa el hueso del surco sube, va un poco afuera y atras = el pliegue entre la nariz y la comisura se marca
         { 16,  0.0004f, 0.0012f, -0.0008f, 2 }, { 17, -0.0004f, 0.0012f, -0.0008f, 2 },
+        // (04/11, Agustin: "le falta mas naturalidad a la sonrisa") sonrisa de verdad (Duchenne): con el slider Sonrisa (355.y,
+        // fijo, no medido: no titila) el pomulo sube mas y el bajo-ojo (orbicularisoculi_b) sube y se adelanta = ojo achinado
+        { 18,  0.0008f, 0.0022f, 0.0008f, 3 }, { 19, -0.0008f, 0.0022f, 0.0008f, 3 },
+        { 20,  0.0003f, 0.0016f, 0.0006f, 3 }, { 21, -0.0003f, 0.0016f, 0.0006f, 3 },
         // (02/11 g, Agustin: "parpadean mucho abajo de los ojos") el bajo-ojo (orbicularisoculi_b) ya no sube con la sonrisa: la
         // sonrisa medida en la comisura cambia de un cuadro a otro al hablar / abrir la boca y el bajo-ojo titilaba
         // (02/11 g, Agustin: "los parpados ya no vibran solos pero si cuando la boca se abre") las cejas y el entrecejo que subian
@@ -718,14 +722,24 @@ static void Secondary(Skel& S, const float* hr, float sm, float open) {
     };
     const float ks = std::clamp(g_cfg.live[348][0], 0.0f, 2.0f) * (std::max)(sm, s_poseSmile), ko = std::clamp(g_cfg.live[348][2], 0.0f, 2.0f) * open;
     const float kn = std::clamp(g_cfg.live[348][1], 0.0f, 2.0f) * (std::max)(sm, s_poseSmile);
+    // varias filas pueden mover el mismo hueso (pomulo: medido + slider): se suman y se escribe una vez por hueso
+    float acc[kND][3] = {}; bool use[kND] = {};
     for (const Off& f : kOff) {
         if (!S.cur[f.d]) continue;
-        const float a = f.k == 0 ? ks : f.k == 2 ? kn : ko;
-        if (a <= 0.001f) { Release(S, f.d); continue; }
-        Xf x; if (!Base(S, f.d, x)) continue;
+        const float a = f.k == 0 ? ks : f.k == 2 ? kn : f.k == 3 ? s_poseSmile : ko;
+        if (a <= 0.001f) continue;
+        acc[f.d][0] += f.x * a; acc[f.d][1] += f.y * a; acc[f.d][2] += f.z * a; use[f.d] = true;
+    }
+    bool done[kND] = {};
+    for (const Off& f : kOff) {
+        const int d = f.d;
+        if (!S.cur[d] || done[d]) continue;   // el mismo hueso en dos filas: una sola escritura
+        done[d] = true;
+        if (!use[d]) { Release(S, d); continue; }
+        Xf x; if (!Base(S, d, x)) continue;
         float nt[3] = { x.t[0], x.t[1], x.t[2] };
-        { const float hv[3] = { f.x * a, f.y * a, f.z * a }; float mv[3]; QRot(hr, hv, mv); for (int k = 0; k < 3; k++) nt[k] += mv[k]; }
-        if (!WriteBone(S, f.d, x, x.q, nt)) s_badWrite.fetch_add(1, std::memory_order_relaxed);
+        { float mv[3]; QRot(hr, acc[d], mv); for (int k = 0; k < 3; k++) nt[k] += mv[k]; }
+        if (!WriteBone(S, d, x, x.q, nt)) s_badWrite.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -845,7 +859,7 @@ void ExprBonesFrame(const void* skel) {
         talkO = pTalk * 0.30f * (std::max)(w, 0.0f) * env;
         talkRound = pTalk * sinf(t * 6.2831853f * 1.7f + 0.6f) * env;   // labios que se redondean (o / u) y se estiran (e / i)
     }
-    const float o = (std::max)((std::max)(std::clamp(g_cfg.live[347][0], 0.0f, 1.0f), 0.45f * tongueOut), (std::min)(1.0f, 0.40f * pSur + 0.85f * pGri + talkO));
+    const float o = (std::max)((std::max)(std::clamp(g_cfg.live[347][0], 0.0f, 1.0f), 0.45f * tongueOut), (std::min)(1.0f, 0.40f * pSur + 0.85f * pGri + 0.12f * pSmi + talkO));   // (04/11) la sonrisa abre un poco la boca
     bool poseOn = pAng > 0.001f || pSmi > 0.001f || pSur > 0.001f || pGri > 0.001f || pPuc > 0.001f || fabsf(talkRound) > 0.001f;
     std::lock_guard<std::mutex> lk(s_mx);
     if (s_profCheck == 0xffffffffu || fr - s_profCheck >= 300) { s_profCheck = fr; ProfLoad(); }   // caras.ini: al arrancar y cada ~10 s si cambio
