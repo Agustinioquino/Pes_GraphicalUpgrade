@@ -70,6 +70,7 @@ Texture2D<float4> g_tex_rotation_mask : register(t7);
 Texture2D<float4> g_tex_mesh : register(t15);
 // texturas remasterizadas (las carga d3dx.ini: ResourcePESWrinkleN / ResourcePESWrinkleM)
 Texture2D<float4> pesWrinkleN : register(t20);   // normal de arrugas 2048 (mismo formato que el juego)
+Texture2D<float4> pesShapeWr  : register(t31);   // (04/11) arrugas esculpidas de la sonrisa de esta cara (expr.cpp, formas\grupo_<n>_sonrisa.dds; RG = normal)
 Texture2D<float4> pesWrinkleM : register(t21);   // mascara de zonas 512x1024 (+ surco nasogeniano y pomulos)
 Texture2D<float4> pesSSSMap   : register(t22);   // PES21 (18/10) mapa de SSS de la cara: R finura, G curvatura, B sangre, A piel
 Texture2D<float4> pesFaceA    : register(t23);   // PES21 (18/10) quinta textura generada en vivo por cara: R cavidad, G curvatura, B grosor, A vello/pelo
@@ -372,6 +373,15 @@ void main(
   r0.z = dot(r1.xyz, r1.xyz);
   r0.z = rsqrt(r0.z);
   r1.xyz = r1.xyz * r0.zzz;
+  // (04/11, Agustin esculpio las arrugas de la sonrisa de Messi en Blender) normal esculpida del gesto, por el slider Sonrisa (355.y)
+  // con "Perfiles por cara" (356.w). Solo la enlaza la DLL en las mallas con formas (sin textura: tamano 0 -> nada)
+  { float4 G5w = IniParams.Load(int2(355, 0)), G6w = IniParams.Load(int2(356, 0));
+    float shW = G6w.w > 0.5 ? saturate(G5w.y) : 0.0;
+    uint shTw = 0, shTh = 0; pesShapeWr.GetDimensions(shTw, shTh);
+    if (shW > 0.001 && shTw > 1) {
+      float2 shN = pesShapeWr.Sample(g_samplerAnisotropic_Clamp_s, v2.xy).xy * 2.0 - 1.0;
+      r1.xy += shN * shW; r1.xyz = normalize(r1.xyz);
+    } }
   // === PES21 (19/10) micro normal de poros: mosaico fino sobre la normal del juego, solo de cerca.
   // x94 intensidad, y94 escala (repeticiones sobre la cara), w94 on/off
   float pesPoreA = 0.0, pesPoreC = 0.0, pesMicroVar = 0.0, pesPoreOcc = 1.0, pesTZone = 0.0;

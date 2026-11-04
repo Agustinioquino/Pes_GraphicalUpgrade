@@ -1160,7 +1160,10 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
             if (ps) break;
             // solo DrawIndexed (con otro tipo de dibujo count 0 -> cbuffer "sin dato")
             const float* hc = nullptr; int hd = -1;
-            if (ID3D11Buffer* b = ExprBufferForDraw(c, t_drawKind == 1 ? t_drawVerts : 0, t_drawStart, t_drawBase, &hc, &hd)) { Remember(c, d, false, false, a.slot); c->VSSetConstantBuffers(a.slot, 1, &b); }
+            ID3D11ShaderResourceView* shp = nullptr; ID3D11ShaderResourceView* shw = nullptr;
+            if (ID3D11Buffer* b = ExprBufferForDraw(c, t_drawKind == 1 ? t_drawVerts : 0, t_drawStart, t_drawBase, &hc, &hd, &shp, &shw)) { Remember(c, d, false, false, a.slot); c->VSSetConstantBuffers(a.slot, 1, &b); }
+            if (shp) { Remember(c, d, false, true, 118); c->VSSetShaderResources(118, 1, &shp); }   // (04/11) gestos esculpidos de esta malla
+            if (shw) { Remember(c, d, true, true, 31); c->PSSetShaderResources(31, 1, &shw); }      // (04/11) arrugas esculpidas de la sonrisa (PS de la cara)
             if (hc && FreeCamWantsHead()) ExprCaptureHead(c, hc, hd);   // (1/11) camara libre "seguir la cara": matriz de sk_head de este dibujo
             break; }
         case RuleAction::SetParam: break;   // ya resuelto con la textura de parametros alternativa
