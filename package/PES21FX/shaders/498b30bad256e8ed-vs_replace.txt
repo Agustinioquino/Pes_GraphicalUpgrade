@@ -61,7 +61,7 @@ void main(
   out float4 o4 : TEXCOORD3,
   out float4 o5 : TEXCOORD4,
   out float4 o6 : TEXCOORD5,
-  out float2 o7 : TEXCOORD6,
+  out float4 o7 : TEXCOORD6,   // (04/11) zw = raiz de la hoja en pantalla (NDC), para el color del suelo de x291 / y330
   out float4 o8 : TEXCOORD7)   // PES21 pasto v3: x seco (0..1), y pelado, z valor al azar por hoja (27/10 h), w = 1 + banda del atlas (0 = sin v3)
 {
   float4 r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11;
@@ -772,6 +772,14 @@ void main(
   o6.z = dot(r6p, cb2[16]);
   o6.w = dot(r6p, cb2[17]);
   o7.y = dot(r6p, cb2[19]);
+  // (04/11) x291 / y330: el color del suelo se toma en la RAIZ de la hoja, no en su pixel. En el pixel de la hoja, una hoja delante de un
+  // botin o de la pelota copiaba el color del botin (la copia de RT0 ya tiene al jugador): el pasto se veia transparente y el botin entero
+  {
+    float4 rw = float4(pesRoot.x, 0.0, pesRoot.y, 1.0);
+    float4 rv = float4(dot(rw, cb2[8]), dot(rw, cb2[9]), dot(rw, cb2[10]), dot(rw, cb2[11]));
+    float rcw = dot(rv, cb2[7]);
+    o7.zw = rcw > 0.01 ? float2(dot(rv, cb2[4]), dot(rv, cb2[5])) / rcw : float2(9.0, 9.0);   // 9 = fuera de pantalla: el PS usa su pixel
+  }
   // (27/10 m) y = oclusion de la mata (tanda 10, 0.5..1; antes el pelado, que el PS solo usaba en la depuracion w107 = 2)
   o8 = float4(pesWear.x, pesIsExt ? pesClumpAO : 1.0, pesHv, pesV3 ? 1.0 + pesBand + ((pesFl & 2) != 0 ? 8.0 : 0.0) : 0.0);   // z (27/10 h) valor al azar por hoja (antes pesH, el PS no lo leia); w = 1 + banda del atlas (0 = sin v3) + 8 si se mezcla con el suelo (igual en todo el dibujo)
   if (pesKill) o0 = float4(0.0, 0.0, -2.0, 1.0);   // todos los vertices iguales: triangulos nulos, no se rasteriza

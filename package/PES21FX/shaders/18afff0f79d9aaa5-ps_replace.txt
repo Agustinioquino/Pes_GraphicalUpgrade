@@ -41,7 +41,7 @@ void main(
   float4 v4 : TEXCOORD3,
   float4 v5 : TEXCOORD4,
   float4 v6 : TEXCOORD5,
-  float2 v7 : TEXCOORD6,
+  float4 v7 : TEXCOORD6,   // (04/11) zw = raiz de la hoja en pantalla (NDC)
   float4 v8 : TEXCOORD7,
   out float4 o0 : SV_Target0,
   out float4 o1 : SV_Target1,
@@ -352,16 +352,24 @@ void main(
   // lineas no coinciden con la base: las hojas quedaban a 0.63x del original y tapaban la cal. La hoja toma el color de la base dibujada
   // detras (copia de RT0: color, franjas de corte, cal, desgaste de la cancha) y conserva su propio sombreado (raiz, claridad, puntas, seco,
   // matas, lado al sol) como un factor relativo a su color plano. 0 = como antes, 1 = todo el color del suelo
+  // (04/11) el suelo se lee en la raiz de la hoja (v7.zw del VS): en el pixel de la hoja la copia de RT0 tiene lo que esta DETRAS (botin,
+  // pelota, piernas) y la hoja delante de un botin tomaba su color: parecia transparente. La raiz esta en el suelo, delante del jugador
+  int2 pesGndPx = int2(v0.xy);
+  if (all(abs(v7.zw) < 1.0)) {
+    float2 rb = g_psSystem.m_renderBuffer.xy;
+    if (rb.x < 1.0) { uint bw, bh; PESBaseRT0.GetDimensions(bw, bh); rb = float2(bw, bh); }
+    pesGndPx = int2(clamp((v7.zw * float2(0.5, -0.5) + 0.5) * rb, 0.0, rb - 1.0));
+  }
   float4 P330 = IniParams.Load(int2(330,0));
   if (pesFB && v5.w < 0.5 && !pesFar && P330.y > 0.001) {
-    float3 gnd = PESBaseRT0.Load(int3(v0.xy, 0)).xyz;
+    float3 gnd = PESBaseRT0.Load(int3(pesGndPx, 0)).xyz;
     float3 flatC = saturate(v1.zzz * v3.xyz);
     { float3 cg = flatC; PESGrassColorGrade(cg); flatC = saturate(cg); }
     float3 rel = clamp(o0.xyz / max(flatC, 0.02), 0.0, 1.6);
     o0.xyz = lerp(o0.xyz, saturate(gnd * rel), saturate(P330.y));
   }
   float pesCfB = (pesPaintF > 0.001 && P299.z > 0.5) ? lerp(pesCf, pesCf * pesCfN, pesPaintF) : pesCf;
-  if (pesFB && v5.w < 0.5) o0.xyz = lerp(PESBaseRT0.Load(int3(v0.xy, 0)).xyz, o0.xyz, pesCfB);
+  if (pesFB && v5.w < 0.5) o0.xyz = lerp(PESBaseRT0.Load(int3(pesGndPx, 0)).xyz, o0.xyz, pesCfB);
   // (27/10 m) tanda 10, z328: oclusion entre matas. v8.y la manda el VS por hoja (0.5..1): las matas bajas, los bordes de cada mata y las hojas
   // cortas reciben menos luz que las altas que asoman; mas en la raiz que en la punta. Va DESPUES de la mezcla con el suelo para que a media
   // distancia (30-110 px/m), donde la hoja ya toma el color del suelo, el pasto siga leyendose como matas de 12 cm (claras / oscuras,
