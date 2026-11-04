@@ -1,7 +1,7 @@
 import sys;sys.path.insert(0,__import__('os').path.dirname(__import__('os').path.abspath(__file__)))
 from shapes import *
 from PIL import Image,ImageDraw,ImageFont
-S=make()
+S=make() if __name__=='__main__' else None
 def rend(V,col=None,W=420,H=440,sc=2600,cy=1.655):
     img=Image.new('RGB',(W,H),(255,255,255));d=ImageDraw.Draw(img)
     fn=np.cross(V[WF[:,2]]-V[WF[:,0]],V[WF[:,1]]-V[WF[:,0]]);fn/=np.linalg.norm(fn,axis=1,keepdims=True)+1e-12
@@ -19,12 +19,13 @@ def mesh_to_U(per):   # promedio por vertice soldado
     for i,d in enumerate(per):
         np.add.at(acc,wid[off[i]:off[i+1]],d);np.add.at(n,wid[off[i]:off[i+1]],1)
     return acc/n[:,None]
-out=Image.new('RGB',(420*6,440*2),'white');dr=ImageDraw.Draw(out)
-out.paste(rend(U),(0,0));dr.text((10,10),'neutra',fill=(0,0,0))
-for k,g in enumerate(G):
-    bon=mesh_to_U(bone_preview(g));cor=S[g].d
-    out.paste(rend(U+bon+cor),(420*(k+1),0));dr.text((420*(k+1)+10,10),g+' (huesos + esculpido)',fill=(0,0,0))
-    a=np.linalg.norm(cor,axis=1)[WF].mean(1)/0.002
-    col=np.stack([200+55*np.clip(a,0,1),200-150*np.clip(a,0,1),200-150*np.clip(a,0,1)],1)
-    out.paste(rend(U+bon+cor,col),(420*(k+1),440));dr.text((420*(k+1)+10,450),'rojo = esculpido',fill=(0,0,0))
-out.save(sys.argv[1] if len(sys.argv)>1 else 'gestos.png')
+if __name__=='__main__':
+    out=Image.new('RGB',(420*6,440*2),'white');dr=ImageDraw.Draw(out)
+    out.paste(rend(U),(0,0));dr.text((10,10),'neutra',fill=(0,0,0))
+    for k,g in enumerate(G):
+        bon=mesh_to_U(bone_preview(g));cor=S[g].d
+        out.paste(rend(U+bon+cor),(420*(k+1),0));dr.text((420*(k+1)+10,10),g+' (huesos + esculpido)',fill=(0,0,0))
+        a=np.linalg.norm(cor,axis=1)[WF].mean(1)/0.002
+        col=np.stack([200+55*np.clip(a,0,1),200-150*np.clip(a,0,1),200-150*np.clip(a,0,1)],1)
+        out.paste(rend(U+bon+cor,col),(420*(k+1),440));dr.text((420*(k+1)+10,450),'rojo = esculpido',fill=(0,0,0))
+    out.save(sys.argv[1] if len(sys.argv)>1 else 'gestos.png')
