@@ -8,6 +8,9 @@
 //    5ce3ed87 / ce188ae1; la boca 63fab773 no tiene esa regla y no se toca) se cambian t0..t3 por las grandes.
 //    4096 solo para las caras "cercanas" (cuadros con pocas caras distintas: editor, repeticion, celebracion), 2048 para el resto.
 //    De lejos la GPU elige sola los mips chicos.
+// (04/11 b) Pelo y barba: misma idea con los PS del pelo (c75f6047, barba 02f1d510; t0 bsm con alfa, t1 normal, t2 srm_hair,
+//    t3 translucent). Id = 'p' + huella de su t0 (p<hash>_bsm.dds ...). Tambien en la composicion (4a848614) y la sombra (213f9f12)
+//    del pelo, solo en los slots que tienen la MISMA textura del juego que se volco (alfa igual en las tres pasadas).
 // Interruptor: PES21FX\caras_hd\caras_hd.ini (se relee cada 2 s): activo, volcar, caras_4k, caras_cerca.
 #include "core.h"
 #include <d3d11_1.h>
@@ -45,6 +48,11 @@ static std::set<std::string> s_dumped;                    // caras ya revisadas 
 static std::vector<std::pair<int, ID3D11ShaderResourceView*>> s_grave;   // (cuadro, vista) a liberar mas tarde (listas diferidas)
 static int s_frame = 0;
 static std::set<std::string> s_frameIds;                  // caras con la piel dibujada en este cuadro
+static std::set<std::string> s_frameHair;                 // (04/11 b) pelos dibujados en este cuadro
+struct HairKey { std::string id; ID3D11Resource* orig[4] = {}; };   // id vacio = pendiente; orig = recursos del juego (sin retener)
+static std::unordered_map<ID3D11Resource*, HairKey> s_hairKeys;      // por la textura t0 del pelo
+struct HairReq { ID3D11Resource* key; ID3D11ShaderResourceView* in[4]; };
+static std::vector<HairReq> s_hairReqs;
 static std::atomic<int> s_stBind{0}, s_stBind4k{0}, s_stMiss{0};
 
 // configuracion (caras_hd.ini)
@@ -196,11 +204,65 @@ bool CarasHdGet(const std::string& id, ID3D11ShaderResourceView* out[4]) {
     return any;
 }
 
+// ---------------------------------------------------------------- (04/11 b) pelo y barba (hooks.cpp, cualquier contexto)
+void CarasHdHair(ID3D11DeviceContext* c, uint64_t psHash, ID3D11ShaderResourceView* out[4]) {
+    for (int i = 0; i < 4; i++) out[i] = nullptr;
+    if (!s_on && !s_dump) return;
+    ID3D11ShaderResourceView* in[4] = {}; c->PSGetShaderResources(0, 4, in);
+    ID3D11Resource* res[4] = {};
+    for (int i = 0; i < 4; i++) if (in[i]) in[i]->GetResource(&res[i]);
+    const bool main = psHash == 0xc75f6047d5817df9ULL || psHash == 0x02f1d51037669342ULL;   // el pelo / la barba (las otras dos solo usan)
+    if (res[0]) {
+        std::lock_guard<std::mutex> lk(s_mx);
+        auto it = s_hairKeys.find(res[0]);
+        if (it == s_hairKeys.end()) {
+            if (main && in[1] && in[2] && s_hairKeys.size() < 256) {
+                HairKey& k = s_hairKeys[res[0]]; for (int i = 0; i < 4; i++) k.orig[i] = res[i];
+                HairReq r{ res[0], {} }; for (int i = 0; i < 4; i++) { r.in[i] = in[i]; if (in[i]) in[i]->AddRef(); }
+                s_hairReqs.push_back(r);
+            }
+        } else if (!it->second.id.empty() && s_on) {
+            s_frameHair.insert(it->second.id);
+            auto ft = s_faces.find(it->second.id);
+            if (ft != s_faces.end()) { HdFace& f = ft->second; f.lastFrame = s_frame;
+                for (int i = 0; i < 4; i++) {
+                    if (!res[i] || res[i] != it->second.orig[i]) continue;   // otra textura en ese slot: no tocar
+                    ID3D11ShaderResourceView* v = (f.want4k && f.t4k[i].srv) ? f.t4k[i].srv : f.t2k[i].srv;
+                    if (v) out[i] = v;
+                } }
+        }
+    }
+    for (int i = 0; i < 4; i++) { if (res[i]) res[i]->Release(); if (in[i]) in[i]->Release(); }
+}
+static void HairPresent(ID3D11DeviceContext* c) {   // fuera de s_mx: huella del t0 y volcado de hasta 2 pelos nuevos por cuadro
+    std::vector<HairReq> todo;
+    { std::lock_guard<std::mutex> lk(s_mx); size_t n = std::min<size_t>(2, s_hairReqs.size());
+      todo.assign(s_hairReqs.begin(), s_hairReqs.begin() + n); s_hairReqs.erase(s_hairReqs.begin(), s_hairReqs.begin() + n); }
+    for (auto& r : todo) {
+        std::string h = HashFaceTexture(c, r.key);
+        std::string id = h.empty() ? std::string() : "p" + h;
+        if (!id.empty()) {
+            { std::lock_guard<std::mutex> lk(s_mx); auto it = s_hairKeys.find(r.key); if (it != s_hairKeys.end()) it->second.id = id; }
+            CarasHdNewFace(c, id, r.in);
+            Log("caras hd: pelo %s registrado", id.c_str());
+        }
+        for (auto* v : r.in) if (v) v->Release();
+    }
+}
+// partido nuevo (facegen.cpp FaceGenClear): las direcciones de las texturas del pelo se pueden reutilizar
+void CarasHdClearKeys() {
+    std::lock_guard<std::mutex> lk(s_mx);
+    s_hairKeys.clear();
+    for (auto& r : s_hairReqs) for (auto* v : r.in) if (v) v->Release();
+    s_hairReqs.clear();
+}
+
 // ---------------------------------------------------------------- Present: que caras piden 4096, cola de carga, liberar
 void CarasHdPresent() {
     double t = Now();
     if (t > s_iniNext) { s_iniNext = t + 2.0; ReadIni(); }
     static double logNext = 0;
+    if (g_dev.imm) HairPresent(g_dev.imm);
     static double scanNext = 0;
     std::lock_guard<std::mutex> lk(s_mx);
     s_frame++;
@@ -211,12 +273,14 @@ void CarasHdPresent() {
     // primer plano: pocas caras distintas en este cuadro -> esas piden 4096
     bool close = !s_frameIds.empty() && (int)s_frameIds.size() <= s_near.load();
     if (close) for (auto& id : s_frameIds) { auto it = s_faces.find(id); if (it != s_faces.end()) it->second.last4kFrame = s_frame; }
-    s_frameIds.clear();
+    if (close) for (auto& id : s_frameHair) { auto it = s_faces.find(id); if (it != s_faces.end()) it->second.last4kFrame = s_frame; }   // pelo del primer plano
+    s_frameIds.clear(); s_frameHair.clear();
     // las mas recientes con pedido de 4096 (hasta caras_4k) la tienen; el resto vuelve a 2048 a los ~10 s sin primer plano
     std::vector<std::pair<int, std::string>> cand;
     for (auto& kv : s_faces) if (s_frame - kv.second.last4kFrame < 600) cand.push_back({ kv.second.last4kFrame, kv.first });
     std::sort(cand.begin(), cand.end(), [](auto& a, auto& b) { return a.first > b.first; });
-    std::set<std::string> keep; for (size_t i = 0; i < cand.size() && (int)i < s_max4k.load(); i++) keep.insert(cand[i].second);
+    std::set<std::string> keep; int nf = 0, nh = 0;   // caras_4k caras y caras_4k pelos
+    for (auto& cd : cand) { int& n = cd.second[0] == 'p' ? nh : nf; if (n < s_max4k.load()) { n++; keep.insert(cd.second); } }
     for (auto& kv : s_faces) {
         HdFace& f = kv.second; bool w = keep.count(kv.first) > 0;
         bool any4k = f.has4k[0] || f.has4k[1] || f.has4k[2] || f.has4k[3];

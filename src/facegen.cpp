@@ -69,7 +69,7 @@ static HairCB MakeHairCB(const HairType& t, bool userMap, const std::string& id 
     return cb;
 }
 // identidad estable de una cara: hash FNV-1a de un mip chico (<= 64 px) de su mapa de normales (copia a staging, contexto inmediato)
-static std::string HashFaceTexture(ID3D11DeviceContext* c, ID3D11Resource* res) {
+std::string HashFaceTexture(ID3D11DeviceContext* c, ID3D11Resource* res) {   // (04/11) tambien caras_hd.cpp (pelo)
     D3D11_RESOURCE_DIMENSION dim; res->GetType(&dim); if (dim != D3D11_RESOURCE_DIMENSION_TEXTURE2D) return "";
     ID3D11Texture2D* tex = (ID3D11Texture2D*)res; D3D11_TEXTURE2D_DESC d; tex->GetDesc(&d);
     UINT mip = 0; UINT w = d.Width, h = d.Height;
@@ -166,6 +166,7 @@ static void EnsureBrowShaders() {
 bool BrowReady() { return s_browPS && (s_browGS[0] || s_browGS[1]); }
 
 void FaceGenClear() {
+    CarasHdClearKeys();   // (04/11 b) pelo en alta: las direcciones de las texturas se reutilizan en el partido nuevo
     std::lock_guard<std::mutex> lk(s_mx);
     for (auto& kv : s_cache) ReleaseEntry(kv.second);
     s_cache.clear();
