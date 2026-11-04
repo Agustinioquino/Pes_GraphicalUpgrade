@@ -80,7 +80,9 @@ bool FaceTessBegin(ID3D11DeviceContext* c, uint64_t vsHash, ID3D11ShaderResource
     ID3D11Buffer* b2 = nullptr; UINT first = 0, num = 0; ID3D11DeviceContext1* c1 = nullptr;
     if (SUCCEEDED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) && c1) {
         c1->VSGetConstantBuffers1(2, 1, &b2, &first, &num);
-        if (b2) { if (num) c1->DSSetConstantBuffers1(2, 1, &b2, &first, &num); else c1->DSSetConstantBuffers(2, 1, &b2); }
+        // (04/11 d) ventana solo si es real (VSSetConstantBuffers comun devuelve 0 / 4096: como en hooks.cpp RefCB)
+        if (b2) { D3D11_BUFFER_DESC bd; b2->GetDesc(&bd); const bool win = num && (first > 0 || num * 16 < bd.ByteWidth);
+                  if (win) c1->DSSetConstantBuffers1(2, 1, &b2, &first, &num); else c1->DSSetConstantBuffers(2, 1, &b2); }
         c1->Release();
     } else { c->VSGetConstantBuffers(2, 1, &b2); if (b2) c->DSSetConstantBuffers(2, 1, &b2); }
     if (b2) b2->Release();
