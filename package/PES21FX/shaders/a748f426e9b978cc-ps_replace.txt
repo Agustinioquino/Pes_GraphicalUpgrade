@@ -96,6 +96,7 @@ Texture2D<float4> StereoParams : register(t125);
 #include "pes_common.hlsli"   // PES21 (18/10): curva del dia, transmision de piel, tamano del sol
 #include "pes_sunturf.hlsli"   // (27/10) el sol sobre el pasto (313)
 #include "pes_headshadow.hlsli"   // (27/10 c) sombra propia de la cabeza (t30)
+#include "pes_skinthick.hlsli"   // (04/11) grosor real de la piel con el atlas de la cabeza (t30)
 
 
 // === PES21 SOL: color del sol segun su altura (calido al atardecer, blanco calido al mediodia) ===
@@ -204,7 +205,7 @@ void main(
   // === PES21 (19/10) SOL LIBRE (experimentar): x101 on, y101 azimut (grados), z101 elevacion (grados), w101 intensidad,
   // x102 calidez (0 = color del juego, 1 = naranja atardecer). Mueve la direccion y el color del sol que ve ESTA pasada de luz;
   // las sombras siguen siendo las del sol real del juego (el shadow map lo arma el motor).
-  float4 pesLDir = g_psLight.m_lightDir0; float4 pesLCol = g_psLight.m_lightColor0; bool pesFreeSun = false; bool pesShMis = IniParams.Load(int2(258,0)).x > 0.5;   // (02/11) shadow map sin alinear con la luz (sol_parche 1 y sombra_parche 0): no medir grosor con el
+  float4 pesLDir = g_psLight.m_lightDir0; float4 pesLCol = g_psLight.m_lightColor0; bool pesFreeSun = false; float4 pesP258 = IniParams.Load(int2(258,0)); bool pesShMis = pesP258.x > 0.5 || pesP258.y > 0.5;   // (04/11) y258 = 1: tampoco medir grosor con el shadow map del juego (sol_parche 0: manchas naranjas duras en la piel)   // (02/11) shadow map sin alinear con la luz (sol_parche 1 y sombra_parche 0): no medir grosor con el
   { float4 SF = IniParams.Load(int2(101,0));
     if (SF.x > 0.5) { pesFreeSun = true;
       float az = radians(SF.y), el = radians(SF.z);
@@ -694,6 +695,7 @@ void main(
     if (pesTurf && pesPG.x > 0.0 && r0.x > 0.02)
       r0.xyz *= PESTurfMicroShadow(g_DepthTexture, g_samplerPoint_Wrap_s, sT, uT, AmT, BmT, v2.xy, normalize(pesLDir.xyz), g_psScene.m_projectionParam,
                                    g_psScene.m_cameraCenterOffset.xy, g_psSystem.m_renderBuffer.x, g_psSystem.m_timeParam.z, pesPG.x); }
+  float3 pesHsP = 0;   // (04/11) posicion en la vista del atlas, para el grosor real de la piel
   // (27/10 c) sombra propia de la cabeza: el atlas de alta resolucion de las cabezas cercanas (t30) multiplica la sombra del sol
   { float2 hsS = v0.xy / v0.ww, hsU = v1.xy / v1.ww;
     float hsD = g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, hsU, 0).x;
@@ -701,6 +703,7 @@ void main(
     float3 hsP = float3((hsS - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * hsZ, hsZ);
     float hsZs = hsZ < 0.0 ? -1.0 : 1.0;   // (27/10 d) a la vista de la proyeccion (z positiva hacia adelante), como la DLL
     hsP *= float3((g_psScene.m_projectionParam.x < 0.0 ? -1.0 : 1.0) * hsZs, (g_psScene.m_projectionParam.y < 0.0 ? -1.0 : 1.0) * hsZs, hsZs);
+    pesHsP = hsP;
     r0.xyz = PESHeadShadowMix(r0.xyz, hsP, rawNdotL, g_samplerLinear_Clamp_s); }   // (02/11) dentro de la caja de la cabeza manda el atlas
   float3 shadowRGB = r0.xyz;
   shadowScalar = saturate(r0.x);
@@ -884,25 +887,40 @@ void main(
     transm = PESTransColor(transm, IniParams.Load(int2(34,0)).z);   // (25/10) z34 color de la contraluz
     // PES21 transmision por shadow map (18/10, Jimenez 2010): el grosor real que atraviesa la luz = distancia entre lo
     // que ve el sol (shadow map) y este pixel. Orejas y nariz se encienden solo cuando el sol esta realmente detras.
-    if (P64.x > 0.5 && P64.z > 0.0 && pesShCas > -0.5 && g_psScene.m_shadowMapResolutions.x > 1.0 && !pesFreeSun && !pesShMis) {   // sol libre: el shadow map es del sol real, no sirve para medir grosor
+    // (04/11) grosor REAL: dentro de la caja de una cabeza cercana (cara, cuello, hombros, brazos, torso) sale del atlas propio del
+    // mod (t30, misma luz que esta pasada: vale con cualquier sol_parche / sombra_parche); afuera, del shadow map del juego solo si
+    // esta alineado con la luz (pesShMis apagado: x258 / y258), si no la transmision direccional.
+    bool pesSmOK = P64.x > 0.5 && P64.z > 0.0 && pesShCas > -0.5 && g_psScene.m_shadowMapResolutions.x > 1.0 && !pesFreeSun && !pesShMis;   // sol libre: el shadow map es del sol real, no sirve para medir grosor
+    float pesHsIn = 0.0; float pesHsThk = PESSkinThickAtlas(pesHsP, g_samplerPoint_Clamp_s, pesHsIn);
+    bool pesHsOK = P64.x > 0.5 && P64.z > 0.0 && !pesFreeSun && pesHsIn > 0.0;
+    if (pesSmOK || pesHsOK) {
       tookSM = true;
+      float thickM = 0.08;
+      if (pesSmOK) {
       float casS = pesShCas < 0.5 ? 1.0 : (pesShCas < 1.5 ? g_psScene.m_shadowProjection2._m03 : g_psScene.m_shadowProjection2._m13);
       float refPerM = max(length(g_psScene.m_shadowProjection._m02_m12_m22) * abs(g_psScene.m_shadowProjection2._m30) * abs(casS), 1e-5);
       float resS = g_psScene.m_shadowMapResolutions.x;
       float2 txS = float2(1.0 / resS, 1.0 / (3.0 * resS));
-      float dS = g_ShadowTexture.SampleLevel(g_samplerPoint_Clamp_s, pesShUV, 0).x;
-      dS += g_ShadowTexture.SampleLevel(g_samplerPoint_Clamp_s, pesShUV + float2( txS.x, 0), 0).x;
-      dS += g_ShadowTexture.SampleLevel(g_samplerPoint_Clamp_s, pesShUV + float2(-txS.x, 0), 0).x;
-      dS += g_ShadowTexture.SampleLevel(g_samplerPoint_Clamp_s, pesShUV + float2(0,  txS.y), 0).x;
-      dS += g_ShadowTexture.SampleLevel(g_samplerPoint_Clamp_s, pesShUV + float2(0, -txS.y), 0).x;
-      dS *= 0.2;
-      float thickM = max(abs(dS - pesShRef) - 0.5 / refPerM * 0.004, 0.0) / refPerM;   // 18/10: distancia sin asumir el sentido del eje Z del shadow map
+      // (04/11) grosor real robusto: 9 muestras a 1.5 texeles, cada una con su grosor recortado a 8 cm antes de promediar
+      // (el fondo lejano en el borde de la cabeza ya no hace saltos de 1 texel = bordes duros), piso de 2 mm
+      thickM = 0.0; float wTk = 0.0;
+      [unroll] for (int pesTy = -1; pesTy <= 1; pesTy++) [unroll] for (int pesTx = -1; pesTx <= 1; pesTx++) {
+        float wk = (pesTx == 0 && pesTy == 0) ? 2.0 : ((pesTx == 0 || pesTy == 0) ? 1.0 : 0.5);
+        float dk = g_ShadowTexture.SampleLevel(g_samplerPoint_Clamp_s, pesShUV + float2(pesTx, pesTy) * txS * 1.5, 0).x;
+        thickM += wk * min(max(abs(dk - pesShRef) - 0.5 / refPerM * 0.004, 0.0) / refPerM, 0.08); wTk += wk; }
+      thickM = max(thickM / wTk, 0.002);   // 18/10: distancia sin asumir el sentido del eje Z del shadow map
+      }
+      if (pesHsOK) thickM = pesSmOK ? lerp(thickM, pesHsThk, pesHsIn) : pesHsThk;   // el atlas manda dentro de la caja
       float dens = (P64.w > 0 ? P64.w : 30.0) * (1.25 - thin);   // el mapa de SSS afina: orejas/nariz dejan pasar mas luz
       float3 Tt = PESSkinTransmittance(thickM * dens);
       Tt = PESTransColor(Tt, IniParams.Load(int2(34,0)).z);
-      float backL = saturate(0.3 + dot(L, -n)) * (1.0 - saturate(rawNdotL * 3.0));
+      // (04/11) la luz solo atraviesa tejido si entra por el otro lado: piel de espaldas al sol. Antes 0.3 + dot dejaba pasar
+      // la piel de frente en la sombra de la nariz / ceja / pelo, donde el 'grosor' medido es el aire entre los dos -> manchas
+      // naranjas con el borde de esa sombra. Las zonas gruesas (mejilla, frente) pesan menos segun el mapa de SSS del juego.
+      float backL = smoothstep(0.0, 0.35, dot(L, -n)) * (1.0 - saturate(rawNdotL * 3.0)) * lerp(0.35, 1.0, smoothstep(0.25, 0.75, thin));
       float3 transSM = Tt * backL * P64.z * 0.8;
-      o0.xyz += max(transSM, transm * visT * 0.5) * lightC;   // sin perder el contraluz direccional cuando el shadow map no alcanza
+      float3 pesTrM = max(transSM, transm * visT * 0.5);   // sin perder el contraluz direccional cuando el mapa no alcanza
+      o0.xyz += (pesSmOK ? pesTrM : lerp(transm * visT, pesTrM, pesHsIn)) * lightC;   // borde de la caja del atlas: fundido con la direccional
       // diagnostico w12 = 3: rojo = grosor medido (10 cm = 1), verde = de espaldas al sol, azul = en sombra segun el shadow map
       if (dbgT) o0.xyz = float3(saturate(thickM / 0.10), saturate(dot(L, -n)), r0.x < 0.5 ? 0.6 : 0.0) * 4.0;
     } else if (P34.w > 0.5) o0.xyz += transm * lightC * visT;
