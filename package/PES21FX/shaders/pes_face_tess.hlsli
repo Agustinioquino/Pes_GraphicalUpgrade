@@ -88,6 +88,15 @@ cbuffer PESTessView : register(b13)
   float4 g_pesTessVp;   // x ancho, y alto del viewport en pixeles (lo pone la DLL)
 }
 
+// (04/11 e) 1 dentro de la zona de la oreja (posicion de reposo en el marco de la cabeza), 0 en el resto de la cara; bordes suaves
+float PesTessEar(float3 r)
+{
+  float ex = smoothstep(0.052, 0.066, abs(r.x));
+  float ez = 1.0 - smoothstep(0.080, 0.105, r.z);
+  float ey = smoothstep(1.615, 1.635, r.y) * (1.0 - smoothstep(1.725, 1.745, r.y));
+  return ex * ez * ey;
+}
+
 PesTessConst PesTessPatch(InputPatch<PesTessVS, 3> p)
 {
   PesTessConst k;
@@ -106,10 +115,16 @@ PesTessConst PesTessPatch(InputPatch<PesTessVS, 3> p)
     float2 s2 = p[2].o0.xy / p[2].o0.w * 0.5 * g_pesTessVp.xy;
     // (04/11 d, Agustin puso 40 creyendo que era mas detalle) z357 = DENSIDAD: mas = mas triangulos; pixeles por segmento = 40 / z
     float px = clamp(40.0 / max(T.z, 0.5), 2.0, 80.0), fmax = clamp(T.w, 1.0, 16.0);
+    // (04/11 e, Agustin: "un valor para subir la teselacion de las orejas") y360 = densidad extra en las orejas: zona en reposo
+    // (marco de la cabeza: ojos en y 1.697 z 0.138, labios z 0.17): a los costados (|x| > 5-7 cm), detras de los pomulos
+    // (z < 8-10 cm) y entre el lobulo y la punta (y 1.62..1.73). Cada arista toma el mayor de sus dos extremos.
+    float em = clamp(IniParams.Load(int2(360, 0)).y, 1.0, 6.0);
+    float3 ek = float3(PesTessEar(p[0].pR.xyz), PesTessEar(p[1].pR.xyz), PesTessEar(p[2].pR.xyz));
+    float3 mul3 = lerp(float3(1.0, 1.0, 1.0), float3(em, em, em), float3(max(ek.y, ek.z), max(ek.z, ek.x), max(ek.x, ek.y)));
     // arista k = la opuesta al vertice k (convencion de D3D: e[0] entre los puntos 1 y 2)
-    f[0] = clamp(length(s1 - s2) / px, 1.0, fmax);
-    f[1] = clamp(length(s2 - s0) / px, 1.0, fmax);
-    f[2] = clamp(length(s0 - s1) / px, 1.0, fmax);
+    f[0] = clamp(length(s1 - s2) / px * mul3.x, 1.0, min(16.0, fmax * mul3.x));
+    f[1] = clamp(length(s2 - s0) / px * mul3.y, 1.0, min(16.0, fmax * mul3.y));
+    f[2] = clamp(length(s0 - s1) / px * mul3.z, 1.0, min(16.0, fmax * mul3.z));
     // fuera de pantalla (los tres puntos del mismo lado): sin division (nada que ver)
     float2 lo = min(min(s0, s1), s2), hi = max(max(s0, s1), s2);
     float2 hv = 0.5 * g_pesTessVp.xy + 2.0;
