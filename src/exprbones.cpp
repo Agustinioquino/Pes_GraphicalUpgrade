@@ -297,7 +297,7 @@ struct Skel {
     // (02/11 l, Agustin: "vibra un poco al abrirse ... la camara lenta") cabeza del cuadro en que el JUEGO escribio cada hueso: en
     // camara lenta el juego no reescribe los huesos de la cara en todos los cuadros (16 mil lecturas con lo del mod puesto) pero la
     // cabeza si se mueve; medir el gesto contra la cabeza de ahora metia ese movimiento en el gesto y lo agrandaba a saltos
-    float bHc[kND][3] = {}, bHr[kND][4] = {}; bool bHave[kND] = {}, fresh[kND] = {};
+    float bHc[kND][3] = {}, bHr[kND][4] = {}; bool bHave[kND] = {}, fresh[kND] = {}; unsigned ahFrame = ~0u;
     // (02/11 n, Agustin: "al subir la ganancia la cara se deforma pero no en partes") el gesto se medía contra el REPOSO del skl,
     // pero la forma de cada cara (editor de caras del juego) tambien esta en los huesos: se agrandaba la forma de la cara entera.
     // Ahora el gesto se mide contra la cara NEUTRA de este jugador: promedio lento (~10 s) de cada hueso en los ejes de la cabeza
@@ -321,6 +321,7 @@ static std::atomic<unsigned> s_lastActive{0};
 static std::atomic<unsigned> s_lastEyes{0};   // (02/11) cuadro del ultimo giro de ojos / parpados por huesos
 static std::atomic<int> s_eyesW{0}, s_blinks{0};
 static std::atomic<int> s_lidAmpSkip{0};   // (04/11) parpados que el amplificador ya no toca
+static std::atomic<int> s_lidHeadFix{0};   // (04/11) parpados con la base llevada a la cabeza del cuadro
 static std::atomic<int> s_ampW{0}, s_ampSkip{0};   // (02/11 i) huesos agrandados escritos (amplificador por huesos)   // cuadro del ultimo giro aplicado o esqueleto con mandibula visto
 static int s_logs = 0;
 
@@ -516,6 +517,19 @@ static bool ReadBase(Skel& S, int d, Xf& x) {
         S.fresh[d] = !(hq && ht);   // el juego escribio algo nuevo en este hueso
     } else S.fresh[d] = true;
     memcpy(S.gq[d], x.q, sizeof S.gq[d]); memcpy(S.gt[d], x.t, sizeof S.gt[d]);
+    // (04/11, Agustin: los parpados "siguen vibrando al hacer animaciones, por eso en partido se nota") el juego no reescribe los
+    // parpados en todos los cuadros: en los que no, la base guardada es la del cuadro en que los escribio, con la cabeza de ESE
+    // momento, y el giro del parpado se arma con la cabeza de ahora: con la cabeza en movimiento el parpado quedaba un cuadro atras
+    // y saltaba al cuadro siguiente. Ahora esa base se lleva a la cabeza de este cuadro (lo que se guarda sigue siendo lo del juego)
+    if (d >= D_LID_TL && d <= D_LID_BR && S.wHave[d] && !S.fresh[d] && S.bHave[d] && S.ahFrame == s_frame.load(std::memory_order_relaxed)) {
+        float ic[4], D[4]; QConj(S.bHr[d], ic); QMul(S.ahr, ic, D);
+        if (fabsf(D[3]) > 0.94f) {   // hasta 40 grados de giro de la cabeza (mas = lectura rara o cambio de cara: se deja)
+            float nq[4]; QMul(D, x.q, nq); memcpy(x.q, nq, sizeof nq);
+            const float v[3] = { x.t[0] - S.bHc[d][0], x.t[1] - S.bHc[d][1], x.t[2] - S.bHc[d][2] }; float r[3]; QRot(D, v, r);
+            for (int k = 0; k < 3; k++) x.t[k] = S.ahc[k] + r[k];
+            s_lidHeadFix.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
     return true;
 }
 // escribe q / t nuevos y recuerda la base de la que salieron
@@ -692,9 +706,10 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
         // (04/11) la sonrisa medida en la comisura salta de un cuadro a otro al hablar: para los parpados va suavizada (~10 cuadros)
         S.lidSm = S.lidSmHave ? S.lidSm + (sm - S.lidSm) * 0.10f : sm; S.lidSmHave = true;
         const float smL = S.lidSm;
-        float up = (std::min)(0.64f * b - gy * (gy < 0.0f ? 0.80f : 0.55f) + 0.06f * smL, 0.66f);   // tope: cerrado, sin pasarse del ojo
+        // (04/11, Agustin: "el parpadeo hace que se muevan bastante") parpadeo mas suave: arriba 0.64 -> 0.58, abajo 0.12 -> 0.07
+        float up = (std::min)(0.58f * b - gy * (gy < 0.0f ? 0.80f : 0.55f) + 0.06f * smL, 0.66f);   // tope: cerrado, sin pasarse del ojo
         // de abajo: sube un poco al parpadear, baja con la mirada abajo y sube apenas con la mirada arriba
-        float lo = std::clamp(-0.12f * b - gy * (gy < 0.0f ? 0.35f : 0.15f) - 0.16f * smL, -0.22f, 0.18f);
+        float lo = std::clamp(-0.07f * b - gy * (gy < 0.0f ? 0.35f : 0.15f) - 0.16f * smL, -0.22f, 0.18f);
         // (04/11) limite de velocidad fuera del parpadeo: un cambio chico de un cuadro a otro (temblor de la medida) se frena;
         // el parpadeo (b) y los saltos grandes pasan enteros
         if (S.lidHave && b < 0.02f) {
@@ -913,7 +928,7 @@ void ExprBonesFrame(const void* skel) {
         talkO = pTalk * 0.30f * (std::max)(w, 0.0f) * env;
         talkRound = pTalk * sinf(t * 6.2831853f * 1.7f + 0.6f) * env;   // labios que se redondean (o / u) y se estiran (e / i)
     }
-    const float o = (std::max)((std::max)(std::clamp(g_cfg.live[347][0], 0.0f, 1.0f), 0.45f * tongueOut), (std::min)(1.0f, 0.40f * pSur + 0.85f * pGri + 0.12f * pSmi + talkO));   // (04/11) la sonrisa abre un poco la boca
+    const float o = (std::max)((std::max)(std::clamp(g_cfg.live[347][0], 0.0f, 1.0f), 0.45f * tongueOut), (std::min)(1.0f, 0.40f * pSur + 0.85f * pGri + talkO));   // (04/11 b, Agustin: "la sonrisa con los dientes cerrados") la sonrisa ya no abre la mandibula (antes 0.12): los labios se separan, los dientes quedan juntos
     bool poseOn = pAng > 0.001f || pSmi > 0.001f || pSur > 0.001f || pGri > 0.001f || pPuc > 0.001f || fabsf(talkRound) > 0.001f;
     std::lock_guard<std::mutex> lk(s_mx);
     if (s_profCheck == 0xffffffffu || fr - s_profCheck >= 300) { s_profCheck = fr; ProfLoad(); }   // caras.ini: al arrancar y cada ~10 s si cambio
@@ -947,7 +962,7 @@ void ExprBonesFrame(const void* skel) {
     {   // (02/11 i) amplificador por huesos: ganancia por zona y escritura de los huesos que el juego mueve
         const float* E = g_cfg.live[340]; const float* Z = g_cfg.live[341];
         S->ampOn = E[1] > 1.005f || E[1] < 0.995f;
-        memcpy(S->ahc, hc.t, sizeof S->ahc); memcpy(S->ahr, hr, sizeof S->ahr);
+        memcpy(S->ahc, hc.t, sizeof S->ahc); memcpy(S->ahr, hr, sizeof S->ahr); S->ahFrame = s_frame.load(std::memory_order_relaxed);
         S->aCap = std::clamp(E[2], 0.1f, 3.0f) * 0.01f; S->aBig = std::clamp(E[3], 0.0f, 1.0f);
         for (int d = 0; d < kND; d++) {
             const float z = d <= 12 ? Z[3] : d <= 19 ? Z[2] : d <= 25 ? Z[1] : d <= 30 ? Z[0] : 0.0f;
@@ -1111,14 +1126,14 @@ void ExprBonesPresent() {
     if (fr - lastLog < 600) return;   // cada ~10 s
     lastLog = fr;
     std::lock_guard<std::mutex> lk(s_mx);
-    const int calls = s_calls.exchange(0), ap = s_applied.exchange(0), nj = s_noJaw.exchange(0), bw = s_badWrite.exchange(0), st = s_stale.exchange(0), ew = s_eyesW.exchange(0), bl = s_blinks.exchange(0), aw = s_ampW.exchange(0), ask = s_ampSkip.exchange(0), lsk = s_lidAmpSkip.exchange(0);
+    const int calls = s_calls.exchange(0), ap = s_applied.exchange(0), nj = s_noJaw.exchange(0), bw = s_badWrite.exchange(0), st = s_stale.exchange(0), ew = s_eyesW.exchange(0), bl = s_blinks.exchange(0), aw = s_ampW.exchange(0), ask = s_ampSkip.exchange(0), lsk = s_lidAmpSkip.exchange(0), lhf = s_lidHeadFix.exchange(0);
     if (!calls) return;
     int reusedAll = 0; for (int i = 0; i < s_nSk; i++) { reusedAll += s_sk[i].reused; s_sk[i].reused = 0; }
     static int dumped = 0;
     if (dumped < 0) for (int i = 0; i < s_nSk && dumped < 2; i++) if (s_sk[i].n > 0 && fr - s_sk[i].lastFrame < 600) { Dump(s_sk[i]); dumped++; }
     if (s_logs < 40) {
         char l[1200]; int k = snprintf(l, sizeof l, "boca por huesos [vivo x340 %.2f y340 %.2f x347 %.2f x350 %.0f]: %d pasos por el cuello, %d huesos agrandados (amplificador por huesos; %d sin agrandar por fuera de rango), %d giros escritos, %d sin mandibula, %d escrituras fallidas, %d rearmados por cambio de cara; ojos por huesos %d (cuadros con parpado cerrado %d); huesos leidos con el giro del mod todavia puesto %d; esqueletos:", g_cfg.live[340][0], g_cfg.live[340][1], g_cfg.live[347][0], g_cfg.live[350][0], calls, aw, ask, ap, nj, bw, st, ew, bl, reusedAll);
-        k += snprintf(l + k, sizeof l - k, " [parpados sin agrandar %d]", lsk);
+        k += snprintf(l + k, sizeof l - k, " [parpados sin agrandar %d, llevados a la cabeza %d]", lsk, lhf);
         for (int i = 0; i < s_nSk && k < (int)sizeof l - 120; i++) {
             Skel& S = s_sk[i];
             if (fr - S.lastFrame > 600) continue;
