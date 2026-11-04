@@ -55,7 +55,9 @@ Texture2D<float4> g_tex_Dirty : register(t4);
 Texture2D<float4> g_tex_mesh : register(t15);
 Texture2D<float4> pesSSSMap    : register(t22);   // (20/10) solo enlazados en la cabeza de las genericas (regla de la DLL)
 Texture2D<float4> pesZones     : register(t25);
-Texture2D<float4> pesSkinMicro : register(t27);
+Texture2D<float4> pesSkinMicro : register(t27);   // (04/11 poros v4) poros redondos (pes_skin_pores_round.dds)
+Texture2D<float4> pesSkinCrepe : register(t37);   // (04/11) arruguitas cruzadas
+Texture2D<float4> pesSkinLips  : register(t38);   // (04/11) estrias de los labios
 Texture2D<float4> pesFacePores : register(t28);
 Texture2D<float4> pesArmAnatN  : register(t26);   // (02/11) separaciones de los grupos musculares del brazo (tools/fox/torso/arm_anatomy.py; la DLL la enlaza solo en los brazos)
 Texture2D<float4> pesArmAnatC  : register(t30);   // (02/11) cavidad de esos surcos (1 = nada)
@@ -139,8 +141,8 @@ void main(
   float3 hpPM = pR.xyz;
   float3 hpDPx = ddx(hpPM), hpDPy = ddy(hpPM);
   float2 hpDUx = ddx(v2.xy), hpDUy = ddy(v2.xy);
-  float hpTileM = PES_PORE_TILE_MM * 0.001 * 7.0 / max(P94h.y, 1.0);   // (31/10) 50 mm por mosaico (pes_pores.hlsli)
-  float hpPoreA = 0.0, hpPoreC = 0.0, hpMicroVar = 0.0, hpPoreOcc = 1.0, hpTZone = 0.0;
+  float hpTileM = PES_PORE_TILE_MM_Z * 0.001 * 7.0 / max(P94h.y, 1.0);   // (04/11 poros v4) 20 mm por mosaico con y94 = 7 (pes_pores.hlsli)
+  float hpPoreA = 0.0, hpPoreC = 0.0, hpMicroVar = 0.0, hpTZone = 0.0; float3 hpPoreOcc = 1.0;
   float2 nfDx = ddx(v2.xy), nfDy = ddy(v2.xy);   // (26/10) unas de los jugadores: derivadas fuera de las ramas
   float2 pdQ = (v2.xy - 0.5) * 11.1;              // (26/10 d) pelvis: mosaico del detalle de piel (0.40 uv por metro, 22.5 cm)
   float2 pdDx = ddx(pdQ), pdDy = ddy(pdQ);
@@ -349,17 +351,20 @@ void main(
     }
   }
   if (hpK > 0.001 && P94h.w > 0.5) {   // (20/10) micro normal de poros, mismo mosaico en reposo que la cara: sigue sin costura
-    float4 guide = pesFacePores.Sample(g_samplerLinear_Clamp_s, v2.xy);
-    PesPores pp = PesTriPores(pesSkinMicro, g_samplerLinear_Clamp_s, hpPM, hpDPx, hpDPy, hpDUx, hpDUy, hpTileM, guide.g, hpHasR);
+    float4 guide = pesFacePores.Sample(g_samplerLinear_Clamp_s, v2.xy);   // R densidad, G tamano, B zona T, A arruguitas
+    float4 hpFZp = pesZones.Sample(g_samplerLinear_Clamp_s, v2.xy);       // G labios, A piel
+    // (04/11 poros v4) poros redondos por tamano de zona, arruguitas (parpados / ojeras) y estrias de labios, como la cara
+    PesPores pp = PesTriPoresZ(pesSkinMicro, pesSkinCrepe, pesSkinLips, g_samplerLinear_Clamp_s, hpPM, hpDPx, hpDPy, hpDUx, hpDUy, hpTileM, float3(guide.g, guide.a, hpFZp.g), hpHasR);
     float near = pp.near;
     if (near > 0.001) {
       hpTZone = guide.b;
-      float skinM = lerp(0.5, 1.0, pesZones.Sample(g_samplerLinear_Clamp_s, v2.xy).a);
-      float str = clamp(P94h.x, 0.0, 2.0) * near * 1.1 * skinM * (0.25 + 1.0 * guide.r) * hpK;
+      float skinM = lerp(0.5, 1.0, hpFZp.a);
+      float wPore = saturate(1.0 - guide.a - hpFZp.g);
+      float str = clamp(P94h.x, 0.0, 2.0) * near * 1.1 * skinM * lerp(0.8, 0.25 + 1.0 * guide.r, wPore) * hpK;
       r2.xy += pp.dT * str;
-      hpPoreA = pp.a * near * (0.3 + guide.r);
-      hpPoreC = hpPoreA * pp.close;   // (31/10) hueco oscuro del poro solo en primer plano real (ver pes_pores.hlsli)
-      hpPoreOcc = 1.0 - hpPoreC * guide.a * 0.55 * saturate(P94h.x);
+      hpPoreA = pp.a * near * lerp(0.5, 0.3 + guide.r, wPore);
+      hpPoreC = hpPoreA * pp.close;   // hueco del poro solo en primer plano real (ver pes_pores.hlsli)
+      hpPoreOcc = 1.0 - hpPoreC * lerp(0.5, saturate(guide.r * (0.6 + 0.4 * guide.g)), wPore) * saturate(P94h.x) * float3(0.20, 0.32, 0.34);   // (04/11) calido, no gris
       hpMicroVar = pp.var * saturate(P94h.x * 0.7) * skinM;
     }
   }

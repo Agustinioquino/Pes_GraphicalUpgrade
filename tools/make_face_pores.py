@@ -1,6 +1,7 @@
 # PES21 FX - textures\pes_face_pores.dds (1024, UV de la cara de PES 2021, mismo layout que pes_face_zones.dds):
 #   R = densidad de poros (0 parpados/labios .. 1 nariz/frente),  G = tamano de poro (0 chico .. 1 grande: nariz, barbilla),
-#   B = sesgo de rugosidad (0 = mate como mejilla, 1 = zona T brillante),  A = peso de la oclusion de poro
+#   B = sesgo de rugosidad (0 = mate como mejilla, 1 = zona T brillante),  A = (04/11 poros v4) peso de las ARRUGUITAS cruzadas
+#   (parpados, ojeras, patas de gallo: pes_skin_crepe.dds en vez de poros; antes A era el peso de la oclusion, ahora sale de R y G)
 import numpy as np, struct, sys, os
 from scipy.ndimage import gaussian_filter
 N = 1024
@@ -24,13 +25,20 @@ dens = np.clip(dens, 0, 1) * (1 - 0.9 * eyes) * (1 - 0.95 * lips)
 size = 0.25 + 0.7 * nose + 0.45 * chin + 0.25 * cheeks + 0.15 * forehead
 size = np.clip(size, 0, 1)
 tzone = np.clip(0.9 * forehead + nose + 0.5 * chin + 0.3 * temples, 0, 1)
+# (04/11 poros v4) arruguitas: parpados (zona de los ojos mas ancha), ojeras debajo y patas de gallo al costado
+lids   = np.maximum(ell(0.36, 0.37, 0.09, 0.05, 0.05), ell(0.64, 0.37, 0.09, 0.05, 0.05))
+under  = np.maximum(ell(0.36, 0.425, 0.075, 0.03, 0.05), ell(0.64, 0.425, 0.075, 0.03, 0.05))
+crow   = np.maximum(ell(0.265, 0.38, 0.035, 0.05, 0.05), ell(0.735, 0.38, 0.035, 0.05, 0.05))
+crepe  = np.clip(np.maximum(np.maximum(lids, 0.85 * under), 0.7 * crow), 0, 1)
+# poros mas chicos al acercarse a los ojos y a la boca (la piel fina de alrededor)
+size = size * (1.0 - 0.55 * np.clip(under + crow, 0, 1)) * (1.0 - 0.5 * ell(0.5, 0.62, 0.11, 0.06, 0.06))
 ao = np.clip(dens * (0.6 + 0.4 * size), 0, 1)
 # variacion organica: manchas de densidad (la piel real no es uniforme)
 rng = np.random.default_rng(5)
 blot = gaussian_filter(rng.random((64, 64)).astype(np.float32), 1.5, mode='wrap')
 blot = np.kron(blot, np.ones((16, 16), np.float32)); blot = gaussian_filter(blot, 8); blot = (blot - blot.mean()) / (blot.std() + 1e-6)
 dens = np.clip(dens * (1 + 0.18 * blot), 0, 1)
-img = np.stack([dens, size, tzone, ao], -1)
+img = np.stack([dens, size, tzone, crepe], -1)
 img = gaussian_filter(img, (6, 6, 0))
 def write_dds(path, img):
     mips = []; cur = img.astype(np.float32)
