@@ -949,7 +949,15 @@ void ExprBonesFrame(const void* skel) {
         talkRound = pTalk * sinf(t * 6.2831853f * 1.7f + 0.6f) * env;   // labios que se redondean (o / u) y se estiran (e / i)
     }
     const float o = (std::max)((std::max)(std::clamp(g_cfg.live[347][0], 0.0f, 1.0f), 0.45f * tongueOut), (std::min)(1.0f, 0.40f * pSur + 0.85f * pGri + talkO + 0.60f * (std::max)(0.0f, pSmi - 1.0f)));   // (04/11 b, Agustin: "la sonrisa con los dientes cerrados") la sonrisa ya no abre la mandibula (antes 0.12): los labios se separan, los dientes quedan juntos; (04/11 c) pasando 1.0 la sonrisa grande abre la boca (1.5 = 0.30, como en la foto de Messi riendo)
-    bool poseOn = pAng > 0.001f || pSmi > 0.001f || pSur > 0.001f || pGri > 0.001f || pPuc > 0.001f || fabsf(talkRound) > 0.001f;
+    // (04/11 d, Agustin: "deberia haber mas sliders de animaciones, tambien como opciones para modificar la mordida, y levantar las
+    // cejas por hueso, opciones por hueso como ahora") filas 361 / 362, por huesos, de -1.5 a 1.5 (0 = nada):
+    //   x361 cejas (arriba +, abajo -), y361 mordida (mandibula adelante + / atras -), z361 mandibula de costado (+ a su izquierda),
+    //   w361 media sonrisa (+ su lado izquierdo, - el derecho); x362 inflar los cachetes, y362 beso (labios adelante y juntos),
+    //   z362 desprecio (labio de arriba de un lado: + izquierdo, - derecho), w362 una ceja (+ la izquierda arriba, - la derecha)
+    const float* PB = g_cfg.live[361]; const float* PC = g_cfg.live[362];
+    float xB[8]; for (int i = 0; i < 4; i++) { xB[i] = std::clamp(PB[i], -1.5f, 1.5f); xB[4 + i] = std::clamp(PC[i], -1.5f, 1.5f); }
+    bool xOn = false; for (float v : xB) if (fabsf(v) > 0.001f) xOn = true;
+    bool poseOn = pAng > 0.001f || pSmi > 0.001f || pSur > 0.001f || pGri > 0.001f || pPuc > 0.001f || fabsf(talkRound) > 0.001f || xOn;
     std::lock_guard<std::mutex> lk(s_mx);
     if (s_profCheck == 0xffffffffu || fr - s_profCheck >= 300) { s_profCheck = fr; ProfLoad(); }   // caras.ini: al arrancar y cada ~10 s si cambio
     Skel* S = Get(skel);
@@ -1038,6 +1046,28 @@ void ExprBonesFrame(const void* skel) {
         // temporomandibular): los huesos que siguen a la mandibula bajan y van adelante un poco con la apertura del mod
         if (kDef[d].jaw > 0.0f && op > 0.0f) { po[1] -= 0.0010f * op * kDef[d].jaw; po[2] += 0.0022f * op * kDef[d].jaw; }
         if (d == 5 || d == 6) po[0] += (d == 5 ? -1.0f : 1.0f) * 0.0012f * talkRound;   // hablar: comisuras adentro / afuera
+        if (xOn) {   // (04/11 d) filas 361 / 362 (ejes de la cabeza: x a la izquierda del jugador, y arriba, z adelante; metros por 1.0)
+            const bool isL = d <= 11 ? (d % 2) == 1 : (d % 2) == 0;   // izquierdos: lip_b_l 1, lip_s_l 5, cheek_s_l 7, lip_t_l 9, nosewing_l 14, nasolabial_l 16, ..., brow_i_l 26, brow_o_l 28
+            const float sl = isL ? 1.0f : -1.0f;
+            if (d >= 26 && d <= 29) po[1] += 0.0040f * xB[0];                       // cejas
+            if (d == 30) po[1] += 0.0020f * xB[0];                                  // entrecejo
+            if (kDef[d].jaw > 0.0f) { po[2] += 0.0030f * xB[1] * kDef[d].jaw; po[0] += 0.0030f * xB[2] * kDef[d].jaw; }   // mordida / costado
+            if (d == 5 || d == 6) {                                                 // media sonrisa
+                const float side = d == 5 ? (std::max)(xB[3], 0.0f) : (std::max)(-xB[3], 0.0f);
+                po[0] += sl * 0.0025f * side; po[1] += 0.0035f * side; po[2] -= 0.0010f * side;
+            }
+            if ((d == 7 || d == 8) && xB[4] != 0.0f) { po[0] += sl * 0.0030f * xB[4]; po[2] += 0.0010f * xB[4]; }   // cachetes
+            if ((d == 16 || d == 17) && xB[4] != 0.0f) po[0] += sl * 0.0015f * xB[4];
+            if (d == 5 || d == 6) { po[0] -= sl * 0.0040f * xB[5]; po[2] += 0.0020f * xB[5]; }                    // beso
+            if (d == 1 || d == 2 || d == 3 || d == 9 || d == 10 || d == 11) po[2] += 0.0025f * xB[5];
+            {   // desprecio: labio de arriba, ala de la nariz y comisura de un lado
+                const float side = isL ? (std::max)(xB[6], 0.0f) : (std::max)(-xB[6], 0.0f);
+                if (d == 9 || d == 11) po[1] += 0.0030f * side;
+                if (d == 14 || d == 15) po[1] += 0.0015f * side;
+                if (d == 5 || d == 6) po[1] += 0.0010f * side;
+            }
+            if (d >= 26 && d <= 29) { const float side = isL ? (std::max)(xB[7], 0.0f) : (std::max)(-xB[7], 0.0f); po[1] += 0.0045f * side; }   // una ceja
+        }
         const float mvv0[3] = { tv[0] * teeth + ov[0] * op + po[0], tv[1] * teeth + ov[1] * op + po[1], tv[2] * teeth + ov[2] * op + po[2] };
         const bool rot = kDef[d].jaw > 0.0f && fabsf(A) > 1e-5f, mv = fabsf(mvv0[0]) + fabsf(mvv0[1]) + fabsf(mvv0[2]) > 1e-6f;
         if (!rot && !mv) { if ((d < 18 || (d >= 26 && d <= 30)) && S->wHave[d]) Release(*S, d); continue; }   // 18.. = gestos secundarios / parpados (otro dueno)
