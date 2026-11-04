@@ -125,10 +125,11 @@ static const unsigned char kSunFixNew[57] = {
     0x0f,0x28,0x05,0xb5,0xcd,0x2e,0x01,       // movaps xmm0,[rip+...] = 0x142a0b090 (la misma constante, 3 bytes antes)
     0x41,0x0f,0x59,0x40,0x40 };               // mulps  xmm0,[r8+40]
 static bool s_sunFixDone = false; static int s_sunFixTries = 0;
+static bool s_sunOn = false;   // (04/11) el parche del sol esta escrito en el exe (no se quita en vivo: queda aunque sol_parche pase a 0)
 static void SunFixPresent() {
     if (s_sunFixDone || !g_cfg.motorSunFix) return;
     if (!SigOk(kSunFixAt, kSunFixOld, sizeof kSunFixOld)) {
-        if (SigOk(kSunFixAt, kSunFixNew, sizeof kSunFixNew)) { s_sunFixDone = true; Log("motor: sol_parche ya estaba puesto"); return; }
+        if (SigOk(kSunFixAt, kSunFixNew, sizeof kSunFixNew)) { s_sunFixDone = true; s_sunOn = true; Log("motor: sol_parche ya estaba puesto"); return; }
         if (++s_sunFixTries == 30) Log("motor: sol_parche: los bytes de 0x14171e2a7 no coinciden con los esperados (exe distinto?): no se parchea");
         return;
     }
@@ -158,7 +159,7 @@ static void SunFixPresent() {
         }
     }
     for (HANDLE th : held) { ResumeThread(th); CloseHandle(th); }
-    if (written) { s_sunFixDone = true; Log("motor: sol_parche puesto en 0x14171e2a7: el sol en vista se calcula con las columnas de la matriz de vista (luz y sombra fijas al cielo)"); }
+    if (written) { s_sunFixDone = true; s_sunOn = true; Log("motor: sol_parche puesto en 0x14171e2a7: el sol en vista se calcula con las columnas de la matriz de vista (luz y sombra fijas al cielo)"); }
     else if (!busy) { s_sunFixDone = true; Log("motor: sol_parche: no se pudo escribir el codigo (VirtualProtect)"); }
 }
 
@@ -306,6 +307,10 @@ static void CasterFixPresent() {
         else if (r < 0) { s_casterTries = 30; Log("motor: sombra_parche: no se pudo restaurar 0x1416c61e9"); }
     }
 }
+
+// (04/11) lo que el exe tiene puesto de verdad (no lo que dice el ini): el sol corregido y la camara de sombras corregida
+bool ExeSunFixOn() { return s_sunOn; }
+bool ExeCasterFixOn() { return s_casterOn; }
 
 static void ShadowFixPresent() {
     // (27/10) los modos 1 y 2 ya no tocan el exe: la matriz se corrige en el cbuffer de escena (hooks.cpp, SceneShadowFix).
