@@ -823,6 +823,23 @@ void main(
   // z339 grosor maximo (cm), w339 on. Sin shadow map (sol libre): solo el termino direccional.
   bool isHair = !isSkin && (matType == 0) && (abs(skinTag - 0.98823529) < 0.0015);
   if (isHair) {
+    // (04/11 piel, Agustin: "revisa como el pelo toma la luz del sol") 1) el segundo brillo del pelo (TRT: el que toma el color del
+    // pelo, x51) se pintaba en el albedo en el G-buffer (02f1d510 / c75f6047) y se veia tambien en el pelo a la sombra: ahora va aca,
+    // con la sombra real del sol (atlas de las cabezas incluido); lobulo ancho sobre la normal del pelo (que ya mira hacia la banda
+    // de Kajiya-Kay, x50), el color lo pone el albedo en la composicion. 2) luz difusa envolvente: la luz se dispersa entre las
+    // hebras y el pelo no corta en seco en el terminador (pasa al lado oscuro un 35 %)
+    { float4 HKs = IniParams.Load(int2(50,0)), HK2s = IniParams.Load(int2(51,0));
+      float3 nHs = normalize(r3.xyw);
+      float2 ppHs = (v0.xy / v0.ww - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy;
+      float3 VHs = -normalize(float3(ppHs, 1));
+      float3 LHs = normalize(pesLDir.xyz);
+      float3 lightHs = PESSunColor() * g_psScene.m_exposure.zzz;
+      float nlHs = dot(nHs, LHs);
+      o0.xyz += lightHs * shadowScalar * (saturate((nlHs + 0.35) / 1.35) - saturate(nlHs)) * 0.8;
+      if (HKs.w > 0.5 && HK2s.x > 0.0) {
+        float trtHs = pow(saturate(dot(nHs, normalize(LHs + VHs))), 24.0) * saturate(nlHs * 2.0 + 0.3);
+        o0.xyz += lightHs * shadowScalar * trtHs * HK2s.x * 0.5;
+      } }
     float4 HT = IniParams.Load(int2(339,0));
     if (HT.w > 0.5 && HT.x > 0.0) {
       float3 nH = normalize(r3.xyw);
