@@ -55,6 +55,7 @@ Texture2D<float4> g_MaterialTexture : register(t10);
 // 3Dmigoto declarations
 #define cmp -
 Texture1D<float4> IniParams : register(t120);
+Texture2D<float> pesMouthMask : register(t43);   // (04/11 boca) mascara del interior de la boca (mouthmask.cpp): 1 = boca
 Texture2D<float4> StereoParams : register(t125);
 #include "pes_common.hlsli"   // curva del dia, atmosfera
 
@@ -175,6 +176,12 @@ void main(
   r3.w = -r3.z;
   float3 skN = normalize(r3.xyw);   // (03/11) normal para la piel (r3.x se pisa mas abajo)
   float skCurv = PesSkCurv(skN, skZ);   // (04/11) curvatura para la piel de lejos (fuera de los if: usa derivadas)
+  float skCurvT = PesSkCurvConvex(skN, float3(skPP * skZ, skZ));   // (04/11 entrecejo) solo convexa, para el grosor de la contraluz
+  { // (04/11 boca) REGLA de Agustin: el interior de la boca no cambia. Sin la mascara de la DLL (o donde marca boca) queda la
+    // curvatura de antes, identica; la curvatura convexa solo se usa con la mascara presente y fuera de la boca
+    uint mmW = 0, mmH = 0; pesMouthMask.GetDimensions(mmW, mmH);
+    bool mmMouth = mmW == 0 || pesMouthMask.Load(int3(min((uint2)v2.xy, uint2(mmW - 1, mmH - 1)), 0)) > 0.5;
+    if (mmMouth) skCurvT = skCurv; }
   r0.w = dot(g_psLight.m_lightDir0.xyz, r3.xyw);
   r1.x = dot(-r0.xyz, r3.xyw);
   r2.x = r1.x + r1.x;
@@ -205,7 +212,7 @@ void main(
     // (04/11 b) sin pasada de sombras (editor, menus) no hay grosor medido: se estima por la forma (curvatura + mapa de SSS) y la
     // luz cruza orejas, nariz y dedos segun su ancho real, solo con la piel de espaldas a la luz
     float4 skP64 = IniParams.Load(int2(64, 0));
-    if (skP64.x > 0.5 && skP64.z > 0.0) skTr = max(skTr, PesSkTransThick(PesSkThickCurv(r5.y, skCurv), skN, skL, skNL, r5.y));
+    if (skP64.x > 0.5 && skP64.z > 0.0) skTr = max(skTr, PesSkTransThick(PesSkThickCurv(r5.y, skCurvT), skN, skL, skNL, r5.y));
     o0.xyz = PesSkDiffuse(skNL, r5.y, skTF, skZ, skCurv) * r1.yzw + skTr * r1.yzw;
   }
   r3.xyz = r7.xyz * r2.zzz;
