@@ -1,0 +1,377 @@
+
+==== pes_browsh_a_gs.hlsl
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_light.hlsli(27,3): warning X4000: use of potentially uninitialized variable (PesBrowLightDir)
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+
+compilation failed; no code produced
+
+==== pes_browsh_b_gs.hlsl
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_light.hlsli(27,3): warning X4000: use of potentially uninitialized variable (PesBrowLightDir)
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(340,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_gs.hlsli(180,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+
+compilation failed; no code produced
+
+==== pes_lashsh_gs.hlsl
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_brow_light.hlsli(27,3): warning X4000: use of potentially uninitialized variable (PesBrowLightDir)
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: sideV
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: sideV
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: sideV
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: sideV
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: sideV
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: sideV
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: sideV
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: sideV
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: sideV
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: sideV
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: sideV
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: sideV
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: sideV
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: sideV
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: sideV
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: sideV
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,17-39): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,42-64): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,67-89): error X4580: this variable dependent on potentially uninitialized data: p
+error X4580: emitting a system-interpreted value which is not written in every execution path of the shader. Unconditional initialization may help.
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(179,23-44): error X4580: this variable dependent on potentially uninitialized data: p
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\pes_lash_gs.hlsl(68,92-114): error X4580: this variable dependent on potentially uninitialized data: p
+
+compilation failed; no code produced
+
+shaders: 140, con errores: 3 (fxc: C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\fxc.exe)
