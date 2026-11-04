@@ -957,9 +957,9 @@ void ExprBonesFrame(const void* skel) {
     //   z362 desprecio (labio de arriba de un lado: + izquierdo, - derecho), w362 una ceja (+ la izquierda arriba, - la derecha)
     const float* PB = g_cfg.live[361]; const float* PC = g_cfg.live[362];
     float xB[8]; for (int i = 0; i < 4; i++) { xB[i] = std::clamp(PB[i], -1.5f, 1.5f); xB[4 + i] = std::clamp(PC[i], -1.5f, 1.5f); }
-    // (04/11 f, Agustin: "un slider para subir el angulo de las cejas o bajarlas ... subir el inicio de las cejas") x364: angulo de las
+    // (04/11 f, Agustin: "un slider para subir el angulo de las cejas o bajarlas ... subir el inicio de las cejas") x365: angulo de las
     // cejas: + sube el inicio (la punta de adentro, cara preocupada / triste) y baja apenas la de afuera; - al reves (cara de enojo)
-    const float xAng = std::clamp(g_cfg.live[364][0], -1.5f, 1.5f);
+    const float xAng = std::clamp(g_cfg.live[365][0], -1.5f, 1.5f);
     bool xOn = fabsf(xAng) > 0.001f; for (float v : xB) if (fabsf(v) > 0.001f) xOn = true;
     bool poseOn = pAng > 0.001f || pSmi > 0.001f || pSur > 0.001f || pGri > 0.001f || pPuc > 0.001f || fabsf(talkRound) > 0.001f || xOn;
     std::lock_guard<std::mutex> lk(s_mx);
