@@ -91,13 +91,7 @@ struct PesTessConst
   float i : SV_InsideTessFactor;
 };
 
-#if PES_TESS_HS
-// ---------------------------------------------------------------- hull shader
-cbuffer PESTessView : register(b13)
-{
-  float4 g_pesTessVp;   // x ancho, y alto del viewport en pixeles (lo pone la DLL)
-}
-
+// (04/11) fuera del bloque del hull shader: el domain shader tambien la usa (sin esto los DS no compilaban)
 // (04/11 g) filas de parametros: cara 357 / 358; cuerpo 364 (x prendido, y densidad, z distancia maxima, w tope) con la
 // suavidad y357 y la transicion y358 de la cara
 void PesTessParams(out float4 T, out float4 U)
@@ -109,6 +103,14 @@ void PesTessParams(out float4 T, out float4 U)
   T.x = B.x; T.z = B.y; U.x = B.z; U.z = B.w;
 #endif
 }
+
+#if PES_TESS_HS
+// ---------------------------------------------------------------- hull shader
+cbuffer PESTessView : register(b13)
+{
+  float4 g_pesTessVp;   // x ancho, y alto del viewport en pixeles (lo pone la DLL)
+}
+
 
 // (04/11 e) 1 dentro de la zona de la oreja (posicion de reposo en el marco de la cabeza), 0 en el resto de la cara; bordes suaves
 float PesTessEar(float3 r)
