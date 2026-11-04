@@ -139,6 +139,7 @@ static bool LoadConfigLocked() {
             else if (kl == "tutorials") c.tutorials = atoi(v.c_str()) != 0;
             else if (kl == "bloquear_teclado") c.blockKeys = std::clamp(atoi(v.c_str()), 0, 2);
             else if (kl == "favoritos") c.favorites = v;
+            else if (kl == "menu_seccion") c.menuSection = v;
             else if (kl == "ui_scale") c.uiScale = std::clamp((float)atof(v.c_str()), 0.7f, 2.0f);
             else if (kl == "compacto") c.compact = atoi(v.c_str()) != 0;
             else if (kl == "language" || kl == "idioma") { const std::string lv = Lower(v); c.lang = (lv == "en" || lv == "english" || v == "1") ? 1 : (lv == "pt" || lv == "portugues" || lv == "portuguese" || v == "2") ? 2 : 0; }

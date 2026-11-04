@@ -32,6 +32,7 @@ static ID3D11ShaderResourceView* s_logo = nullptr; static float s_logoAspect = 1
 static constexpr float kFontUp = 1.15f;
 static float s_fontsH = 0.0f;
 static ImGuiStyle s_baseStyle;
+static bool s_iconsOk = false;   // (04/11 n) textures\pes_icons.ttf cargada
 static float UIK() { return ImGui::GetFontSize() / 19.0f; }   // escala de los anchos fijos del menu (pensados para 19 px)
 static void BuildFonts(float H) {
     ImGuiIO& io = ImGui::GetIO();
@@ -40,6 +41,25 @@ static void BuildFonts(float H) {
     if (!io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", std::round(19.0f * k), nullptr, io.Fonts->GetGlyphRangesDefault())) io.Fonts->AddFontDefault();
     s_fontBig = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeuib.ttf", std::round(26.0f * k), nullptr, io.Fonts->GetGlyphRangesDefault());
     s_fontBold = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeuib.ttf", std::round(19.0f * k), nullptr, io.Fonts->GetGlyphRangesDefault());
+    {   // (04/11 n) iconos del menu (Font Awesome Free, recortado): se mezclan en la letra normal y en la negrita
+        static const ImWchar kIcoRanges[] = { 0xe000, 0xf8ff, 0 };
+        int len = WideCharToMultiByte(CP_UTF8, 0, g_cfg.baseDir.c_str(), -1, nullptr, 0, nullptr, nullptr);
+        std::string dir(len > 0 ? len - 1 : 0, '\0');
+        if (len > 1) WideCharToMultiByte(CP_UTF8, 0, g_cfg.baseDir.c_str(), -1, &dir[0], len, nullptr, nullptr);
+        const std::string path = dir + "textures\\pes_icons.ttf";
+        s_iconsOk = GetFileAttributesW((g_cfg.baseDir + L"textures\\pes_icons.ttf").c_str()) != INVALID_FILE_ATTRIBUTES;
+        if (s_iconsOk) {
+            ImFont* fonts[2] = { io.Fonts->Fonts.Size ? io.Fonts->Fonts[0] : nullptr, s_fontBold };
+            for (ImFont* f : fonts) {
+                if (!f) continue;
+                ImFontConfig ic; ic.MergeMode = true; ic.PixelSnapH = true; ic.DstFont = f;
+                const float px = std::round(16.0f * k);
+                ic.GlyphMinAdvanceX = px * 1.15f; ic.GlyphOffset = ImVec2(0, std::round(1.0f * k));
+                if (!io.Fonts->AddFontFromFileTTF(path.c_str(), px, &ic, kIcoRanges)) s_iconsOk = false;
+            }
+        }
+        Log("menu: iconos %s", s_iconsOk ? "ok (textures\\pes_icons.ttf)" : "no encontrados (textures\\pes_icons.ttf): el menu va sin iconos");
+    }
     ImGui::GetStyle() = s_baseStyle;
     ImGui::GetStyle().ScaleAllSizes(k);
     s_fontsH = H;
@@ -139,11 +159,17 @@ static void Init(IDXGISwapChain* sc) {
 }
 
 // --- 19/10: comodidad del menu: busqueda, favoritos, contraer grupos, "solo activos", tamano ---
+// (04/11 n) menu nuevo (pedido de Agustin: "mas rapido de acceder a las cosas, mejor organizado, mas practico", "Ctrl+Z", "iconos en
+// las categorias"): barra lateral con categorias e iconos, paginas Inicio (Favoritos / Cambiados / Recientes), herramientas y ajustes
+// aparte, Deshacer / Rehacer (Ctrl+Z / Ctrl+Y) de los cambios hechos en el menu, Ctrl+S guarda, Ctrl+F busca, Esc limpia la busqueda
 static char s_search[96] = "";
 static bool s_onlyActive = false;
 static bool s_focusSearch = false;
 static std::map<std::string, bool> s_collapsed;   // titulo -> contraido (sesion)
 static int s_collapseAll = 0;                     // 1 = contraer todo, 2 = expandir todo (se aplica en el proximo dibujo)
+static std::set<std::string> s_descOpen;          // (04/11 n) grupos con la descripcion completa ("mas")
+static std::string s_sel;                         // (04/11 n) pagina de la barra lateral: "sec:<seccion>", "fav", "chg", "rec", "presets", "tools", "settings", "errors"
+static std::vector<std::string> s_recent;         // (04/11 n) titulos de los ultimos grupos tocados, el mas nuevo primero
 static std::string LowerU(std::string x) { for (auto& ch : x) ch = (char)tolower((unsigned char)ch); return x; }
 static bool IsFav(const std::string& title) { return (g_cfg.favorites.find("|" + title + "|") != std::string::npos); }
 static void SetFav(const std::string& title, bool on) {
@@ -163,19 +189,159 @@ static bool GroupMatches(const MenuGroup& g, const std::string& q) {
     return true;
 }
 static bool GroupActive(const MenuGroup& g) { return g.tIdx < 0 || g_cfg.live[g.tIdx][g.tComp] > 0.5f; }
+// (04/11 n) el grupo tiene valores distintos de lo guardado en PES21FX.ini (la ropa no cuenta: cloth.ini se escribe solo)
+static bool GroupChanged(const MenuGroup& g) {
+    if (g.tIdx >= 0 && fabsf(g_cfg.live[g.tIdx][g.tComp] - g_cfg.base[g.tIdx][g.tComp]) > 1e-4f) return true;
+    for (auto& sl : g.sliders) if (sl.ext.empty() && fabsf(g_cfg.live[sl.idx][sl.comp] - g_cfg.base[sl.idx][sl.comp]) > 1e-4f) return true;
+    return false;
+}
+static std::string SecKey(const MenuGroup& g) { return g.section.empty() ? "Otros" : g.section; }
+
+// --- (04/11 n) iconos (textures\pes_icons.ttf: recorte de Font Awesome Free 6, licencia en pes_icons_LICENSE.txt) ---
+static std::string Ico(unsigned cp) {
+    if (!s_iconsOk || !cp) return "";
+    char b[5] = {};
+    if (cp < 0x800) { b[0] = (char)(0xC0 | (cp >> 6)); b[1] = (char)(0x80 | (cp & 0x3F)); }
+    else { b[0] = (char)(0xE0 | (cp >> 12)); b[1] = (char)(0x80 | ((cp >> 6) & 0x3F)); b[2] = (char)(0x80 | (cp & 0x3F)); }
+    return b;
+}
+static std::string IcoL(unsigned cp, const char* txt) { std::string i = Ico(cp); return i.empty() ? std::string(txt) : i + "  " + txt; }
+enum : unsigned {
+    kIcoLight = 0xf0eb, kIcoShadow = 0xf042, kIcoPalette = 0xf53f, kIcoWand = 0xe2ca, kIcoBall = 0xf1e3, kIcoStadium = 0xf66f,
+    kIcoFace = 0xf118, kIcoHand = 0xf256, kIcoHair = 0xf0c4, kIcoDrop = 0xf043, kIcoBody = 0xf183, kIcoShirt = 0xf553, kIcoWind = 0xf72e,
+    kIcoCamera = 0xf030, kIcoPad = 0xf11b, kIcoDiag = 0xf0f1, kIcoLayers = 0xf5fd, kIcoStar = 0xf005, kIcoPen = 0xf304, kIcoHistory = 0xf1da,
+    kIcoSliders = 0xf1de, kIcoTools = 0xf7d9, kIcoGear = 0xf013, kIcoWarn = 0xf071, kIcoSave = 0xf0c7, kIcoUndo = 0xf2ea, kIcoRedo = 0xf2f9,
+    kIcoRevert = 0xf0e2, kIcoEye = 0xf06e, kIcoReload = 0xf021, kIcoSearch = 0xf002, kIcoX = 0xf00d, kIcoCompress = 0xf066, kIcoExpand = 0xf065,
+    kIcoFilter = 0xf0b0, kIcoDot = 0xf111, kIcoHelp = 0xf059, kIcoDown = 0xf078, kIcoRight = 0xf054, kIcoKeys = 0xf11c, kIcoMuscle = 0xf44b,
+};
+// categoria (0 escena, 1 jugadores, 2 otros), orden dentro de ella e icono de cada seccion (la clave es la seccion en espanol)
+static void SecInfo(const std::string& s, int& cat, int& ord, unsigned& ico) {
+    struct E { const char* pre; int cat, ord; unsigned ico; };
+    static const E kE[] = {
+        { "Ilumin", 0, 0, kIcoLight }, { "Sombra", 0, 1, kIcoShadow }, { "Color", 0, 2, kIcoPalette }, { "Post", 0, 3, kIcoWand },
+        { "Cancha", 0, 4, kIcoBall }, { "Estadio", 0, 5, kIcoStadium },
+        { "Cara", 1, 0, kIcoFace }, { "Piel", 1, 1, kIcoHand }, { "Pelo", 1, 2, kIcoHair }, { "Sudor", 1, 3, kIcoDrop },
+        { "Cuerpo", 1, 4, kIcoBody }, { "Kits", 1, 5, kIcoShirt }, { "Ropa", 1, 6, kIcoWind },
+        { "Diagn", 2, 9, kIcoDiag },
+    };
+    for (auto& e : kE) if (s.rfind(e.pre, 0) == 0) { cat = e.cat; ord = e.ord; ico = e.ico; return; }
+    const std::string l = LowerU(s);
+    if (l.find("mara") != std::string::npos) { cat = 2; ord = 0; ico = kIcoCamera; return; }   // Camara (con o sin tilde)
+    if (l.rfind("men", 0) == 0) { cat = 2; ord = 1; ico = kIcoPad; return; }                     // Menus del juego
+    cat = 2; ord = 5; ico = kIcoLayers;
+}
+
+// --- (04/11 n) Deshacer / Rehacer (Ctrl+Z / Ctrl+Y): cada gesto (un arrastre de slider, un clic, "<<", "Descartar cambios") es un paso.
+// Se miran solo los valores que tienen tarjeta en el menu (interruptores y sliders, tambien los de cloth.ini): la DLL escribe otras filas
+// sola (sol, camara, medidores) y no tienen que llenar el historial. Todo esto corre con g_cfgMutex tomado.
+struct UndoCell { int idx = 0, comp = 0; std::string ext; float from = 0, to = 0; };
+struct UndoStep { std::vector<UndoCell> cells; std::string what; };
+static std::vector<UndoStep> s_undo, s_redo;
+static std::map<std::pair<int, int>, float> s_gesture; static std::map<std::string, float> s_gestureExt;   // valor antes del gesto en curso
+static std::vector<float> s_snap; static std::map<std::string, float> s_snapExt;
+static int s_undoReq = 0;          // 1 deshacer, 2 rehacer (se aplica al principio del proximo cuadro)
+static bool s_revertAllReq = false;
+static std::string s_undoMsg;      // texto del ultimo deshacer / rehacer (abajo del todo)
+static double s_undoMsgT = 0;
+static void PushRecent(const std::string& title) {
+    auto it = std::find(s_recent.begin(), s_recent.end(), title);
+    if (it != s_recent.end()) s_recent.erase(it);
+    s_recent.insert(s_recent.begin(), title);
+    if (s_recent.size() > 12) s_recent.resize(12);
+}
+static const MenuGroup* GroupOfCell(const UndoCell& c) {
+    for (auto& g : g_cfg.groups) {
+        if (c.ext.empty() && g.tIdx == c.idx && g.tComp == c.comp) return &g;
+        for (auto& sl : g.sliders) if (c.ext.empty() ? (sl.ext.empty() && sl.idx == c.idx && sl.comp == c.comp) : sl.ext == c.ext) return &g;
+    }
+    return nullptr;
+}
+static void UndoSnapshot() {
+    s_snap.assign(&g_cfg.live[0][0], &g_cfg.live[0][0] + kParamCount * 4);
+    s_snapExt = g_cfg.clothVals;
+}
+static void UndoApply(UndoStep& st, bool undo) {
+    for (auto& c : st.cells) {
+        const float v = undo ? c.from : c.to;
+        if (!c.ext.empty()) { g_cfg.clothVals[c.ext] = v; g_cfg.clothDirty = true; g_cfg.clothChangeT = Now(); }
+        else g_cfg.live[c.idx][c.comp] = v;
+    }
+    s_undoMsg = std::string(TRS(undo ? "Deshecho" : "Rehecho")) + ": " + st.what; s_undoMsgT = Now();
+}
+static void UndoRequests() {
+    if (s_undoReq == 1 && !s_undo.empty()) { UndoStep st = s_undo.back(); s_undo.pop_back(); UndoApply(st, true); s_redo.push_back(st); }
+    else if (s_undoReq == 2 && !s_redo.empty()) { UndoStep st = s_redo.back(); s_redo.pop_back(); UndoApply(st, false); s_undo.push_back(st); }
+    s_undoReq = 0;
+}
+static void UndoCollect() {
+    if ((int)s_snap.size() != kParamCount * 4) return;
+    auto look = [](int idx, int comp) {
+        if (idx < 0 || idx >= kParamCount || comp < 0 || comp > 3) return;
+        const float before = s_snap[idx * 4 + comp];
+        if (fabsf(g_cfg.live[idx][comp] - before) > 1e-7f && !s_gesture.count({ idx, comp })) s_gesture[{ idx, comp }] = before;
+    };
+    for (auto& g : g_cfg.groups) {
+        if (g.tIdx >= 0) look(g.tIdx, g.tComp);
+        for (auto& sl : g.sliders) {
+            if (sl.ext.empty()) { look(sl.idx, sl.comp); continue; }
+            auto it = g_cfg.clothVals.find(sl.ext); if (it == g_cfg.clothVals.end()) continue;
+            auto ib = s_snapExt.find(sl.ext); const float before = ib == s_snapExt.end() ? sl.def : ib->second;
+            if (fabsf(it->second - before) > 1e-7f && !s_gestureExt.count(sl.ext)) s_gestureExt[sl.ext] = before;
+        }
+    }
+    if ((s_gesture.empty() && s_gestureExt.empty()) || ImGui::IsAnyItemActive()) return;   // el gesto sigue (slider agarrado)
+    UndoStep st;
+    for (auto& kv : s_gesture) { UndoCell c; c.idx = kv.first.first; c.comp = kv.first.second; c.from = kv.second; c.to = g_cfg.live[c.idx][c.comp]; if (fabsf(c.to - c.from) > 1e-7f) st.cells.push_back(c); }
+    for (auto& kv : s_gestureExt) { UndoCell c; c.ext = kv.first; c.from = kv.second; c.to = g_cfg.clothVals[kv.first]; if (fabsf(c.to - c.from) > 1e-7f) st.cells.push_back(c); }
+    s_gesture.clear(); s_gestureExt.clear();
+    if (st.cells.empty()) return;
+    std::set<std::string> titles;
+    for (auto& c : st.cells) if (const MenuGroup* g = GroupOfCell(c)) {
+        if (titles.insert(g->title).second) { PushRecent(g->title); if (!st.what.empty()) st.what += ", "; if (titles.size() <= 3) st.what += Utf8(LS(g->title, g->titleEn)); }
+    }
+    if (titles.size() > 3) st.what += " (+" + std::to_string(titles.size() - 3) + ")";
+    if (st.what.empty()) st.what = TRS("valores");
+    s_undo.push_back(std::move(st)); s_redo.clear();
+    if (s_undo.size() > 200) s_undo.erase(s_undo.begin());
+}
+static void UndoClear() { s_undo.clear(); s_redo.clear(); s_gesture.clear(); s_gestureExt.clear(); s_snap.clear(); }
+// "Descartar cambios": todos los interruptores y sliders del menu vuelven a lo guardado en PES21FX.ini (se puede deshacer)
+static void RevertAll() {
+    for (auto& g : g_cfg.groups) {
+        if (g.tIdx >= 0) g_cfg.live[g.tIdx][g.tComp] = g_cfg.base[g.tIdx][g.tComp];
+        for (auto& sl : g.sliders) if (sl.ext.empty()) g_cfg.live[sl.idx][sl.comp] = g_cfg.base[sl.idx][sl.comp];
+    }
+}
+
+// descripcion corta: la primera oracion (o ~110 letras); el resto con "mas"
+static std::string ShortDesc(const std::string& d, bool& cut) {
+    cut = false;
+    size_t p = d.find(". ");
+    if (p != std::string::npos && p + 1 <= 150 && p + 2 < d.size()) { cut = true; return d.substr(0, p + 1); }
+    if (d.size() <= 150) return d;
+    size_t s = d.rfind(' ', 110); if (s == std::string::npos || s < 60) s = 110;
+    cut = true; return d.substr(0, s) + "...";
+}
 
 static void DrawGroup(MenuGroup& g, int gid) {
     ImGui::PushID(1000 + gid);
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.11f, 0.12f, 0.15f, 1));   // fondo de la tarjeta
     ImGui::BeginChild("card", ImVec2(0 * UIK(), 0), ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_FrameStyle);
+    ImGui::PopStyleColor();
+    // (04/11 n) dentro de la tarjeta los sliders, casillas y selectores van un tono mas claro (antes eran del mismo color que la tarjeta)
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.18f, 0.20f, 0.25f, 1)); ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.22f, 0.25f, 0.30f, 1));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.24f, 0.27f, 0.33f, 1));
     bool hasT = g.tIdx >= 0;
     bool on = hasT ? (g_cfg.live[g.tIdx][g.tComp] > 0.5f) : true;
     // contraer / favorito / restablecer (fila de la derecha)
     if (s_collapsed.find(g.title) == s_collapsed.end()) s_collapsed[g.title] = g_cfg.compact;
     bool& col = s_collapsed[g.title];
-    float rightW = 96; float availW = ImGui::GetContentRegionAvail().x;
+    const bool changed = GroupChanged(g);
+    float availW = ImGui::GetContentRegionAvail().x;
+    float rightW = (s_iconsOk ? 64.0f : 96.0f) * UIK();
     ImGui::BeginGroup();
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-    if (ImGui::SmallButton(col ? "+" : "-")) col = !col;
+    if (ImGui::SmallButton(s_iconsOk ? (Ico(col ? kIcoRight : kIcoDown) + "##cx").c_str() : (col ? "+" : "-"))) col = !col;
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS(col ? "Expandir" : "Contraer"));
     ImGui::PopStyleColor();
     ImGui::SameLine();
@@ -184,24 +350,51 @@ static void DrawGroup(MenuGroup& g, int gid) {
     if (hasT) { if (ImGui::Checkbox(gTitle.c_str(), &on)) { float b = g_cfg.base[g.tIdx][g.tComp]; g_cfg.live[g.tIdx][g.tComp] = on ? (b > 0.5f ? b : 1.0f) : 0.0f; } }
     else ImGui::TextUnformatted(gTitle.c_str());
     if (s_fontBold) ImGui::PopFont();
+    if (changed) {   // (04/11 n) aviso de cambios sin guardar en la tarjeta
+        ImGui::SameLine(); ImGui::TextColored(ImVec4(0.95f, 0.80f, 0.35f, 1), "%s", s_iconsOk ? Ico(kIcoDot).c_str() : "*");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Cambiado sin guardar (Ctrl+S guarda, Ctrl+Z deshace)"));
+    }
     ImGui::EndGroup();
-    ImGui::SameLine(availW - rightW);
+    ImGui::SameLine(std::max(availW - rightW, ImGui::GetCursorPosX()));
     { bool fav = IsFav(g.title);
+      ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
       if (fav) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.78f, 0.3f, 1));
-      if (ImGui::SmallButton(fav ? "* fav" : "+ fav")) SetFav(g.title, !fav);
-      if (fav) ImGui::PopStyleColor();
-      if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS(fav ? "Quitar de Favoritos" : "Agregar a la pestana Favoritos"));
+      else if (s_iconsOk) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.42f, 0.45f, 0.50f, 1));
+      if (ImGui::SmallButton(s_iconsOk ? (Ico(kIcoStar) + "##fav").c_str() : (fav ? "* fav" : "+ fav"))) SetFav(g.title, !fav);
+      if (fav || s_iconsOk) ImGui::PopStyleColor();
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS(fav ? "Quitar de Favoritos" : "Agregar a Favoritos"));
       ImGui::SameLine();
-      if (ImGui::SmallButton("<<")) { for (auto& sl : g.sliders) if (sl.ext.empty()) g_cfg.live[sl.idx][sl.comp] = g_cfg.base[sl.idx][sl.comp]; if (hasT) g_cfg.live[g.tIdx][g.tComp] = g_cfg.base[g.tIdx][g.tComp]; }
-      if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Volver todo el grupo a lo guardado")); }
-    if (col) { if (!gDesc.empty()) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.52f, 0.56f, 1)); ImGui::TextUnformatted(Utf8(gDesc.substr(0, 90) + (gDesc.size() > 90 ? "..." : "")).c_str()); ImGui::PopStyleColor(); } ImGui::EndChild(); ImGui::Spacing(); ImGui::PopID(); return; }
-    if (!gDesc.empty()) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.66f, 0.69f, 0.74f, 1)); ImGui::TextWrapped("%s", Utf8(gDesc).c_str()); ImGui::PopStyleColor(); }
+      ImGui::BeginDisabled(!changed);
+      if (ImGui::SmallButton(s_iconsOk ? (Ico(kIcoRevert) + "##rst").c_str() : "<<")) { for (auto& sl : g.sliders) if (sl.ext.empty()) g_cfg.live[sl.idx][sl.comp] = g_cfg.base[sl.idx][sl.comp]; if (hasT) g_cfg.live[g.tIdx][g.tComp] = g_cfg.base[g.tIdx][g.tComp]; }
+      ImGui::EndDisabled();
+      ImGui::PopStyleColor();
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", TRS("Volver todo el grupo a lo guardado")); }
+    if (col) { if (!gDesc.empty()) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.52f, 0.56f, 1)); ImGui::TextUnformatted(Utf8(gDesc.substr(0, 90) + (gDesc.size() > 90 ? "..." : "")).c_str()); ImGui::PopStyleColor(); } ImGui::PopStyleColor(3); ImGui::EndChild(); ImGui::Spacing(); ImGui::PopID(); return; }
+    if (!gDesc.empty()) {   // (04/11 n) descripcion corta; clic para leerla entera
+        const bool open = s_descOpen.count(g.title) != 0;
+        bool cut = false; const std::string sd = open ? gDesc : ShortDesc(gDesc, cut);
+        const float moreW = (cut || open) ? ImGui::CalcTextSize(TRS("mas...")).x + 2.0f * ImGui::GetStyle().FramePadding.x + ImGui::GetStyle().ItemSpacing.x : 0.0f;
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + std::max(100.0f, ImGui::GetContentRegionAvail().x - moreW));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.66f, 0.69f, 0.74f, 1)); ImGui::TextWrapped("%s", Utf8(sd).c_str()); ImGui::PopStyleColor();
+        ImGui::PopTextWrapPos();
+        if (cut || open) {
+            if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            if (ImGui::IsItemClicked()) { if (open) s_descOpen.erase(g.title); else s_descOpen.insert(g.title); }
+            ImGui::SameLine(); ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0)); ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.75f, 0.55f, 1));
+            if (ImGui::SmallButton(TRS(open ? "menos" : "mas..."))) { if (open) s_descOpen.erase(g.title); else s_descOpen.insert(g.title); }
+            ImGui::PopStyleColor(2);
+        }
+    }
     bool anyExt = false; for (auto& sl : g.sliders) anyExt |= !sl.ext.empty();
     if (anyExt && !g_cfg.clothFound) ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.35f, 1), "%s", TRS("No se encontro cloth-mod\\cloth.ini"));
     if (!g.sliders.empty()) {
         ImGui::Spacing();
         ImGui::BeginDisabled(!on);
-        float w = ImGui::GetContentRegionAvail().x;
+        const float w = ImGui::GetContentRegionAvail().x;
+        // (04/11 n) en tarjetas anchas la etiqueta va a la izquierda y el slider en la misma fila (la mitad de alto)
+        const bool wide = w > 520.0f * UIK();
+        const float labelW = wide ? std::clamp(w * 0.38f, 160.0f * UIK(), 300.0f * UIK()) : 0.0f;
+        const float resetW = ImGui::GetFrameHeight() * 1.1f;
         for (auto& sl : g.sliders) {
             ImGui::PushID(&sl);
             bool isExt = !sl.ext.empty();
@@ -209,16 +402,28 @@ static void DrawGroup(MenuGroup& g, int gid) {
             if (isExt && !g_cfg.clothVals.count(sl.ext)) g_cfg.clothVals[sl.ext] = sl.def;
             float& val = isExt ? g_cfg.clothVals[sl.ext] : g_cfg.live[sl.idx][sl.comp];
             float before = val;
-            { float savedV = isExt ? (g_cfg.clothLoaded.count(sl.ext) ? g_cfg.clothLoaded[sl.ext] : sl.def) : g_cfg.base[sl.idx][sl.comp];
-              bool changed = fabsf(savedV - val) > 1e-4f;
-              if (changed) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.85f, 0.45f, 1));
-              ImGui::TextUnformatted(Utf8(LS(sl.label, sl.labelEn)).c_str());
-              if (changed) { ImGui::PopStyleColor(); if (ImGui::IsItemHovered()) ImGui::SetTooltip(TRS("Cambiado (sin guardar). Guardado: %.3f"), savedV); } }
-            if (!sl.help.empty()) {
-                ImGui::SameLine(); ImGui::TextDisabled("(?)");
-                if (ImGui::IsItemHovered()) { ImGui::BeginTooltip(); ImGui::PushTextWrapPos(380); ImGui::TextUnformatted(Utf8(LS(sl.help, sl.helpEn)).c_str()); ImGui::PopTextWrapPos(); ImGui::EndTooltip(); }
+            const float savedV = isExt ? (g_cfg.clothLoaded.count(sl.ext) ? g_cfg.clothLoaded[sl.ext] : sl.def) : g_cfg.base[sl.idx][sl.comp];
+            const bool slChanged = fabsf(savedV - val) > 1e-4f;
+            const std::string help = sl.help.empty() ? std::string() : Utf8(LS(sl.help, sl.helpEn));
+            auto helpTip = [&]() {
+                ImGui::BeginTooltip(); ImGui::PushTextWrapPos(380 * UIK());
+                if (!help.empty()) ImGui::TextUnformatted(help.c_str());
+                if (slChanged) ImGui::TextColored(ImVec4(0.95f, 0.85f, 0.45f, 1), TRS("Cambiado (sin guardar). Guardado: %.3f"), savedV);
+                ImGui::PopTextWrapPos(); ImGui::EndTooltip();
+            };
+            {   // etiqueta
+                const float x0 = ImGui::GetCursorPosX();
+                if (wide) ImGui::AlignTextToFramePadding();
+                if (slChanged) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.85f, 0.45f, 1));
+                if (wide) ImGui::PushTextWrapPos(x0 + labelW - 10.0f * UIK());
+                ImGui::TextWrapped("%s", Utf8(LS(sl.label, sl.labelEn)).c_str());
+                if (wide) ImGui::PopTextWrapPos();
+                if (slChanged) ImGui::PopStyleColor();
+                if ((!help.empty() || slChanged) && ImGui::IsItemHovered()) helpTip();
+                if (!help.empty() && !wide) { ImGui::SameLine(); ImGui::TextDisabled("(?)"); if (ImGui::IsItemHovered()) helpTip(); }
+                if (wide) ImGui::SameLine(x0 + labelW);
             }
-            ImGui::SetNextItemWidth(w - 70 * UIK());
+            ImGui::SetNextItemWidth(std::max(60.0f * UIK(), (wide ? w - labelW : w) - resetW - ImGui::GetStyle().ItemSpacing.x));
             if (!sl.options.empty()) {
                 const auto& opts = (g_cfg.lang != 0 && sl.optionsEn.size() == sl.options.size()) ? sl.optionsEn : sl.options;
                 int cur = (int)(val + 0.5f); if (cur < 0) cur = 0; if (cur >= (int)sl.options.size()) cur = (int)sl.options.size() - 1;
@@ -238,12 +443,20 @@ static void DrawGroup(MenuGroup& g, int gid) {
                 // venga de afuera (teclas, Avanzado) para que el ini nunca guarde un valor fuera del rango
                 if (!isExt && (val < sl.lo || val > sl.hi)) { float cl = val < sl.lo ? sl.lo : sl.hi; Log("menu: %c%d = %g fuera del rango %g..%g del slider '%s': recortado a %g", "xyzw"[sl.comp], sl.idx, val, sl.lo, sl.hi, sl.label.c_str(), cl); val = cl; }
                 ImGui::SliderFloat("##s", &val, sl.lo, sl.hi, sl.fmt.c_str(), ImGuiSliderFlags_AlwaysClamp);
-                if (ImGui::IsItemHovered() && !ImGui::IsItemActive()) ImGui::SetTooltip("%s", TRS("Ctrl+clic para escribir un valor exacto"));
+                if (ImGui::IsItemHovered() && !ImGui::IsItemActive()) ImGui::SetTooltip("%s", TRS("Ctrl+clic para escribir un valor exacto. Clic derecho: volver a lo guardado o al de fabrica"));
+            }
+            if (ImGui::BeginPopupContextItem("ctx")) {   // (04/11 n) clic derecho sobre el slider
+                if (ImGui::MenuItem(TRS("Volver a lo guardado"), nullptr, false, slChanged)) val = savedV;
+                if (isExt && ImGui::MenuItem(TRS("Valor de fabrica"))) val = sl.def;
+                ImGui::EndPopup();
             }
             ImGui::SameLine();
-            float saved = isExt ? (g_cfg.clothLoaded.count(sl.ext) ? g_cfg.clothLoaded[sl.ext] : sl.def) : g_cfg.base[sl.idx][sl.comp];
-            if (ImGui::SmallButton("<")) val = saved;
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip(TRS(isExt ? "Volver al valor que tenia cloth.ini (%.4g); fabrica: %.4g" : "Volver al valor guardado (%.3f)"), saved, sl.def);
+            if (slChanged) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                if (ImGui::Button(s_iconsOk ? Ico(kIcoRevert).c_str() : "<", ImVec2(resetW, 0))) val = savedV;
+                ImGui::PopStyleColor();
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip(TRS(isExt ? "Volver al valor que tenia cloth.ini (%.4g); fabrica: %.4g" : "Volver al valor guardado (%.3f)"), savedV, sl.def);
+            } else ImGui::Dummy(ImVec2(resetW, ImGui::GetFrameHeight()));
             if (isExt && val != before) { g_cfg.clothDirty = true; g_cfg.clothChangeT = Now(); }
             ImGui::PopID();
         }
@@ -261,6 +474,7 @@ static void DrawGroup(MenuGroup& g, int gid) {
         }
         ImGui::NewLine();
     }
+    ImGui::PopStyleColor(3);
     ImGui::EndChild();
     ImGui::Spacing();
     ImGui::PopID();
@@ -354,7 +568,7 @@ static void DrawTutorial(const std::string& sec, const std::string& shown) {
     if (ImGui::Button(TRS("Entendido"), ImVec2(110 * UIK(), 0))) s_tutDone.insert(sec);
     ImGui::SameLine();
     if (ImGui::Button(TRS("No mostrar mas tutoriales"), ImVec2(220 * UIK(), 0))) { g_cfg.tutorials = false; SaveOption("tutorials", "0"); }
-    ImGui::SameLine(); ImGui::TextDisabled("%s", TRS("(se vuelven a prender arriba, en 'Tutoriales')"));
+    ImGui::SameLine(); ImGui::TextDisabled("%s", TRS("(se vuelven a prender en Ajustes)"));
     ImGui::EndChild();
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
@@ -430,253 +644,465 @@ static void DrawPresetsTab() {
     }
 }
 
+// --- (04/11 n) menu nuevo: barra lateral + pagina ---
+static int s_toolReq = 0;          // acciones de Herramientas que se hacen sin g_cfgMutex: 1 capturar, 2 detener catalogo, 3 cbuffers, 4 pasto, 5 grabar, 6 detener grabacion
+static bool s_saveReq = false;
+static void SelectPage(const std::string& key) {
+    if (s_sel == key) return;
+    s_sel = key; g_cfg.menuSection = key; SaveOption("menu_seccion", key);
+}
+static void NavHeader(const char* txt) {
+    ImGui::Dummy(ImVec2(0, 4.0f * UIK()));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.47f, 0.50f, 0.56f, 1));
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.0f * UIK());
+    ImGui::TextUnformatted(txt);
+    ImGui::PopStyleColor();
+}
+static void NavItem(const std::string& key, unsigned ico, const std::string& label, const std::string& right, bool dot) {
+    const bool sel = s_sel == key;
+    ImGui::PushID(key.c_str());
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float w = ImGui::GetContentRegionAvail().x, h = ImGui::GetFrameHeight();
+    ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.15f, 0.33f, 0.25f, 1));
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, sel ? ImVec4(0.17f, 0.37f, 0.28f, 1) : ImVec4(0.15f, 0.17f, 0.21f, 1));
+    if (ImGui::Selectable("##nav", sel, ImGuiSelectableFlags_None, ImVec2(w, h))) SelectPage(key);
+    ImGui::PopStyleColor(2);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float fs = ImGui::GetFontSize(), ty = p.y + (h - fs) * 0.5f, pad = 8.0f * UIK();
+    const ImU32 cText = ImGui::GetColorU32(sel ? ImVec4(1, 1, 1, 1) : ImVec4(0.86f, 0.88f, 0.91f, 1));
+    const ImU32 cDim = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+    const ImU32 cIco = ImGui::GetColorU32(sel ? ImVec4(0.40f, 0.90f, 0.62f, 1) : ImVec4(0.55f, 0.60f, 0.66f, 1));
+    const ImVec2 rs = right.empty() ? ImVec2(0, 0) : ImGui::CalcTextSize(right.c_str());
+    float x = p.x + pad;
+    if (s_iconsOk && ico) { const std::string ic = Ico(ico); dl->AddText(ImVec2(x, ty), cIco, ic.c_str()); x += fs * 1.55f; }
+    const float xr = p.x + w - pad - rs.x - (dot ? 12.0f * UIK() : 0.0f);
+    const ImVec4 clip(x, p.y, std::max(x, xr - 4.0f * UIK()), p.y + h);
+    dl->AddText(ImGui::GetFont(), fs, ImVec2(x, ty), cText, label.c_str(), nullptr, 0.0f, &clip);
+    if (dot) dl->AddCircleFilled(ImVec2(p.x + w - pad - rs.x - 7.0f * UIK(), p.y + h * 0.5f), 3.5f * UIK(), IM_COL32(242, 204, 89, 255));
+    if (!right.empty()) dl->AddText(ImVec2(p.x + w - pad - rs.x, ty), cDim, right.c_str());
+    ImGui::PopID();
+}
+static void PageTitle(unsigned ico, const std::string& title, const char* sub = nullptr) {
+    if (s_fontBig) ImGui::PushFont(s_fontBig);
+    if (s_iconsOk && ico) { ImGui::TextColored(ImVec4(0.40f, 0.90f, 0.62f, 1), "%s", Ico(ico).c_str()); ImGui::SameLine(); }
+    ImGui::TextUnformatted(title.c_str());
+    if (s_fontBig) ImGui::PopFont();
+    if (sub) { ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled)); ImGui::TextWrapped("%s", sub); ImGui::PopStyleColor(); }
+}
+// barra de cada pagina de tarjetas: solo activos, contraer / expandir
+static void CardsToolbar() {
+    ImGui::Checkbox(IcoL(kIcoFilter, TRS("Solo activos")).c_str(), &s_onlyActive);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Mostrar solo los grupos con el interruptor prendido"));
+    ImGui::SameLine(); if (ImGui::SmallButton(IcoL(kIcoCompress, TRS("Contraer todo")).c_str())) s_collapseAll = 1;
+    ImGui::SameLine(); if (ImGui::SmallButton(IcoL(kIcoExpand, TRS("Expandir todo")).c_str())) s_collapseAll = 2;
+}
+static void DrawSectionExtras(const std::string& sname) {
+    if (sname.rfind("Ropa", 0) == 0 && !g_cfg.clothStatus.empty()) { ImGui::TextDisabled("%s", g_cfg.clothStatus.c_str()); ImGui::Spacing(); }
+    if (sname.rfind("Diagn", 0) == 0) {
+        ImGui::TextWrapped("%s", TRS("Prueba automatica: toca cada grupo del menu (su interruptor o su primer deslizador), espera unos cuadros y mide si la imagen cambia. Pausa una repeticion con jugadores de cerca antes de correrla; tarda unos 30 segundos."));
+        if (!MenuTestActive()) { if (ImGui::Button(TRS("Probar todo el menu"), ImVec2(180 * UIK(), 0))) MenuTestStart(); }
+        else { if (ImGui::Button(TRS("Cancelar"), ImVec2(180 * UIK(), 0))) MenuTestStop(); }
+        ImGui::SameLine(); ImGui::TextUnformatted(Utf8(MenuTestStatus()).c_str());
+        size_t nres = MenuTestResults();
+        if (nres) {
+            ImGui::TextDisabled(TRS("ruido de la escena: %.4f (si es alto, la camara se movio: pausa y repeti)"), MenuTestNoise());
+            if (ImGui::BeginTable("mt", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+                for (size_t i = 0; i < nres; i++) {
+                    std::string grp, sec; float df; int st;
+                    if (!MenuTestResult_(i, grp, sec, df, st)) break;
+                    ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted(Utf8(sec).c_str());
+                    ImGui::TableSetColumnIndex(1); ImGui::TextUnformatted(Utf8(grp).c_str());
+                    ImGui::TableSetColumnIndex(2);
+                    if (st == 1) ImGui::TextColored(ImVec4(0.45f, 0.9f, 0.45f, 1), TRS("cambia la imagen (%.4f)"), df);
+                    else if (st == 0) ImGui::TextColored(ImVec4(0.95f, 0.5f, 0.4f, 1), TRS("sin efecto en esta escena (%.4f)"), df);
+                    else ImGui::TextDisabled("%s", TRS("no se prueba (ropa)"));
+                }
+                ImGui::EndTable();
+            }
+        }
+        ImGui::Spacing();
+    }
+    if (sname.rfind("Ilumin", 0) == 0) { ImGui::TextDisabled("%s", LightMeterSummary().c_str()); ImGui::Spacing(); }
+    if (sname.rfind("Cancha", 0) == 0) { ImGui::TextDisabled(TRS("Pasto: parcelas lejanas del juego escaladas: %d en 3 s. Extendido: %d parcelas/cuadro (anillos %d/%d/%d), variante %u idx, camara %s (%.0f, %.0f), estado: %s"), g_grassDbg.sparseLast, g_grassDbg.patches, g_grassDbg.ring[0], g_grassDbg.ring[1], g_grassDbg.ring[2], g_grassDbg.lod, g_grassDbg.cam ? "ok" : "no", g_grassDbg.ex, g_grassDbg.ez, g_grassDbg.why ? g_grassDbg.why : "-"); ImGui::Spacing(); }
+}
+static void SectionLabel(const MenuGroup& g) {
+    int cat, ord; unsigned ico; SecInfo(SecKey(g), cat, ord, ico);
+    const std::string s = Utf8(g.section.empty() ? std::string(TRS("Otros")) : LS(g.section, g.sectionEn));
+    ImGui::TextDisabled("%s", (s_iconsOk ? Ico(ico) + "  " + s : s).c_str());
+}
+static void EmptyState(const char* txt) { ImGui::Dummy(ImVec2(0, 20.0f * UIK())); ImGui::TextDisabled("%s", txt); }
+
+static void DrawToolsPage() {
+    PageTitle(kIcoTools, TRS("Herramientas"), TRS("Para ver que hace el mod y pasarle datos a Claude; no hacen falta para jugar."));
+    ImGui::Spacing();
+    if (ImGui::CollapsingHeader(TRS("Inspector y catalogo de shaders"), ImGuiTreeNodeFlags_DefaultOpen)) {
+        { bool ins = g_inspectOn.load(); if (ins) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.25f, 0.2f, 1));
+          if (ImGui::Button(ins ? "Inspector: ON" : "Inspector", ImVec2(130 * UIK(), 0))) { g_inspectOn = !ins; s_status = TRS(ins ? "Inspector apagado" : "Inspector visual: flechas sobre cada parte conocida; clic en una ficha para ver sus texturas"); }
+          if (ins) ImGui::PopStyleColor();
+          if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Modo debug visual: marca en pantalla cara, pelo, kit, medias, botines, pasto y cielo, que hace el mod en cada uno y de donde sale cada textura (juego / archivo / generada).")); }
+        ImGui::SameLine();
+        if (!g_catalogActive) {
+            if (ImGui::Button(TRS("Capturar shaders"), ImVec2(160 * UIK(), 0))) s_toolReq = 1;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Anota cada shader que se dibuja (render target, vertices, orden) mientras jugas.\nDetener escribe PES21FX\\catalog\\shaders.txt con una ficha por shader (rol, cbuffers, texturas, uso)\ny catalog\\frame.txt con la linea de tiempo del ultimo cuadro. Pasalo a Claude para que sepa que toca cada uno."));
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.25f, 0.2f, 1));
+            if (ImGui::Button(TRS("Detener y escribir catalogo"), ImVec2(240 * UIK(), 0))) s_toolReq = 2;
+            ImGui::PopStyleColor();
+        }
+        if (ImGui::Button(TRS("Volcar cbuffers"), ImVec2(160 * UIK(), 0))) s_toolReq = 3;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Escribe catalog\\cbuffers.txt: los valores que el motor le pasa a la composicion y a la luz del sol\n(sol, exposicion, niebla, matrices de sombra) con el nombre de cada campo. Hacelo con un partido en pantalla."));
+        ImGui::SameLine();
+        if (ImGui::Button(TRS("Volcar pasto"), ImVec2(130 * UIK(), 0))) s_toolReq = 4;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Mide las parcelas de pasto que dibuja el juego en un cuadro (tamano, grilla, cantidad)\ny lo escribe en catalog\\grass.txt. Hacelo con un partido en pantalla."));
+        ImGui::SameLine();
+        if (!g_recordOn) { if (ImGui::Button(TRS("Grabar partido"), ImVec2(150 * UIK(), 0))) s_toolReq = 5; }
+        else { ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.25f, 0.2f, 1)); if (ImGui::Button(TRS("Detener grabacion"), ImVec2(170 * UIK(), 0))) s_toolReq = 6; ImGui::PopStyleColor(); }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Mientras jugas, cada 5 s vuelca pasto y cbuffers numerados en catalog\\rec\\ (con la camara de ese momento)\ny deja la captura de shaders andando. Al terminar: Detener grabacion y despues Detener y escribir catalogo."));
+        { std::string cst = g_catalogStatus; if (!cst.empty()) ImGui::TextDisabled("%s", cst.c_str()); }
+        ImGui::Spacing();
+    }
+    if (ImGui::CollapsingHeader(TRS("Efectos por tecla"), ImGuiTreeNodeFlags_DefaultOpen)) {
+        int id = 0;
+        for (auto& k : g_cfg.keys) {
+            ImGui::PushID(id++);
+            std::string lab = Utf8(LS(k.label, k.labelEn));
+            if (k.type == KeyBind::Cycle) {
+                if (ImGui::Button(TRS("Siguiente"))) KeyActionUnlocked(k, 1);
+                ImGui::SameLine(); ImGui::TextUnformatted(lab.c_str());
+            } else if (k.type == KeyBind::Toggle && !k.assigns.empty()) {
+                bool offSwitch = k.assigns[0].values[0] <= 0.0f;
+                bool on = offSwitch ? !k.active : k.active;
+                if (ImGui::Checkbox(lab.c_str(), &on)) KeyActionUnlocked(k, 0);
+            }
+            ImGui::PopID();
+        }
+    }
+    if (ImGui::CollapsingHeader(TRS("Todos los parametros"))) {
+        ImGui::TextDisabled("%s", TRS("Los valores crudos que leen los shaders (x0..w372). Lo que cambies aca tambien se guarda con Guardar."));
+        std::string lastComment;
+        const char* cn = "xyzw";
+        for (int i = 0; i < kParamCount; i++) {
+            bool any = false;
+            for (int c = 0; c < 4; c++) any |= g_cfg.info[i][c].defined;
+            if (!any) continue;
+            for (int c = 0; c < 4; c++) {
+                if (!g_cfg.info[i][c].defined) continue;
+                const std::string& cm = g_cfg.info[i][c].comment;
+                if (!cm.empty() && cm != lastComment) { ImGui::TextDisabled("%s", Utf8(cm).c_str()); lastComment = cm; }
+            }
+            for (int c = 0; c < 4; c++) {
+                if (!g_cfg.info[i][c].defined) continue;
+                char name[16]; if (i) snprintf(name, sizeof(name), "%c%d", cn[c], i); else snprintf(name, sizeof(name), "%c", cn[c]);
+                ImGui::SetNextItemWidth(120 * UIK());
+                ImGui::DragFloat(name, &g_cfg.live[i][c], 0.01f, -100.0f, 100.0f, "%.3f");
+                ImGui::SameLine();
+            }
+            ImGui::NewLine();
+        }
+    }
+}
+static void DrawSettingsPage() {
+    PageTitle(kIcoGear, TRS("Ajustes del menu"));
+    ImGui::Spacing();
+    const float lw = 230.0f * UIK();
+    auto row = [&](const char* label) { ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted(label); ImGui::SameLine(lw); };
+    {   // (27/10) idioma del menu: se guarda en [PES21FX] language
+        static const char* const kLangs[3] = { "Espa\xC3\xB1ol", "English", "Portugu\xC3\xAAs" };
+        static const char* const kLangKey[3] = { "es", "en", "pt" };
+        int lg = (g_cfg.lang >= 0 && g_cfg.lang <= 2) ? g_cfg.lang : 0;
+        row("Idioma / Language / Idioma");
+        ImGui::SetNextItemWidth(200 * UIK());
+        if (ImGui::Combo("##idioma", &lg, kLangs, 3)) { g_cfg.lang = lg; SaveOption("language", kLangKey[lg]); LoadMenuLang(); }
+    }
+    {   // (31/10) que el juego no reciba las teclas mientras se escribe en el menu: [PES21FX] bloquear_teclado
+        const char* kBlk[3] = { TRS("Siempre"), TRS("No mientras escribo"), TRS("No con el menu abierto") };
+        int bk = std::clamp(g_cfg.blockKeys, 0, 2);
+        row(TRS("El juego recibe las teclas"));
+        ImGui::SetNextItemWidth(260 * UIK());
+        if (ImGui::Combo("##bloqteclas", &bk, kBlk, 3)) { g_cfg.blockKeys = bk; SaveOption("bloquear_teclado", std::to_string(bk)); }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Que el juego no reciba las teclas mientras escribis en el menu (buscador, nombres). 'No al escribir' = solo con un campo de texto activo; 'No con el menu' = mientras el menu esta abierto."));
+    }
+    {
+        row(TRS("Tamano del menu"));
+        ImGui::SetNextItemWidth(200 * UIK());
+        float sc = g_cfg.uiScale;
+        if (ImGui::SliderFloat("##uiscale", &sc, 0.8f, 1.6f, "x%.2f")) { g_cfg.uiScale = sc; ImGui::GetIO().FontGlobalScale = sc; }
+        if (ImGui::IsItemDeactivatedAfterEdit()) { char b[32]; snprintf(b, sizeof(b), "%.2f", g_cfg.uiScale); SaveOption("ui_scale", b); }
+    }
+    ImGui::Spacing();
+    if (ImGui::Checkbox(TRS("Tarjetas contraidas al abrir (compacto)"), &g_cfg.compact)) { SaveOption("compacto", g_cfg.compact ? "1" : "0"); s_collapseAll = g_cfg.compact ? 1 : 2; }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Abrir los grupos contraidos (solo el titulo y el interruptor); + para desplegar uno"));
+    if (ImGui::Checkbox(TRS("Tutoriales al principio de cada seccion"), &g_cfg.tutorials)) { SaveOption("tutorials", g_cfg.tutorials ? "1" : "0"); if (g_cfg.tutorials) s_tutDone.clear(); }
+    if (ImGui::Checkbox(TRS("Captura automatica en partido"), &g_cfg.autoCap)) SaveOption("auto_captura", g_cfg.autoCap ? "1" : "0");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip(TRS("En partido, cada %.0f s guarda una imagen (jpg) en PES21FX\\capturas\\ y los valores de luz de ese momento en capturas\\luz.txt,\npara que Claude calibre la luz sin que tengas que sacar capturas. Tope: %d imagenes por sesion."), g_cfg.autoCapSec, g_cfg.autoCapMax);
+    ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+    if (s_fontBold) ImGui::PushFont(s_fontBold);
+    ImGui::TextUnformatted(IcoL(kIcoKeys, TRS("Atajos del menu")).c_str());
+    if (s_fontBold) ImGui::PopFont();
+    if (ImGui::BeginTable("atajos", 2, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg)) {
+        const char* kA[][2] = {
+            { "Insert", "Abrir / cerrar el menu" }, { "Ctrl+Z", "Deshacer el ultimo cambio" }, { "Ctrl+Y  /  Ctrl+Shift+Z", "Rehacer" },
+            { "Ctrl+S", "Guardar en PES21FX.ini" }, { "Ctrl+F", "Buscar una opcion" }, { "Esc", "Limpiar la busqueda" },
+            { "Ctrl+clic", "Escribir un valor exacto en un slider" }, { "Clic derecho", "Volver un slider a lo guardado" },
+        };
+        for (auto& a : kA) { ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextColored(ImVec4(0.85f, 0.68f, 0.28f, 1), "%s", a[0]); ImGui::TableSetColumnIndex(1); ImGui::TextUnformatted(TRS(a[1])); }
+        ImGui::EndTable();
+    }
+}
+
 static void DrawMenu() {
-    ImGui::SetNextWindowSize(ImVec2(640 * UIK(), 760 * UIK()), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(320 * UIK(), 240 * UIK()), ImVec2(ImGui::GetIO().DisplaySize.x * 0.97f, ImGui::GetIO().DisplaySize.y * 0.95f));   // (04/11) nunca mas grande que la pantalla
+    ImGuiIO& io = ImGui::GetIO();
+    const ImVec2 ds = io.DisplaySize;
+    ImGui::SetNextWindowSize(ImVec2(std::min(920 * UIK(), ds.x * 0.9f), std::min(800 * UIK(), ds.y * 0.88f)), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(420 * UIK(), 300 * UIK()), ImVec2(ds.x * 0.97f, ds.y * 0.95f));   // (04/11) nunca mas grande que la pantalla
     ImGui::SetNextWindowPos(ImVec2(40, 60), ImGuiCond_FirstUseEver);
     bool open = true;
     ImGui::Begin("##pes21fx", &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
     if (!open) g_menuOpen = false;
-    // --- cabecera: logo del PES Editor + nombre del mod ---
-    float headY = ImGui::GetCursorPosY();
-    if (s_logo) {
-        float h = 64.0f * UIK();
-        ImGui::Image((ImTextureID)(intptr_t)s_logo, ImVec2(h * s_logoAspect, h));
-        ImGui::SameLine();
-        ImGui::SetCursorPosY(headY + 6);
-        ImGui::BeginGroup();
-        if (s_fontBold) ImGui::PushFont(s_fontBold);
-        ImGui::TextColored(ImVec4(0.85f, 0.68f, 0.28f, 1), "FX  0.2");
-        if (s_fontBold) ImGui::PopFont();
-        ImGui::TextDisabled("%s", TRS("Mod grafico  |  Insert: cerrar"));
-        ImGui::EndGroup();
-    } else {
-        if (s_fontBig) ImGui::PushFont(s_fontBig);
-        ImGui::TextUnformatted("PES21 FX");
-        if (s_fontBig) ImGui::PopFont();
-        ImGui::SameLine();
-        ImGui::TextDisabled("%s", TRS("  0.2   |   Insert: cerrar"));
+    // (04/11 n) casillas, selectores y el buscador fuera de las tarjetas: un tono mas claro que el fondo de la ventana
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.16f, 0.18f, 0.22f, 1)); ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.20f, 0.23f, 0.28f, 1));
+
+    // --- atajos de teclado (04/11 n) ---
+    const bool typing = io.WantTextInput, busy = ImGui::IsAnyItemActive();
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) s_saveReq = true;
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_F, false)) s_focusSearch = true;
+    if (!typing && !busy && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z)) s_undoReq = io.KeyShift ? 2 : 1;
+    if (!typing && !busy && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y)) s_undoReq = 2;
+    if (s_search[0] && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) s_search[0] = 0;
+
+    // lo que hace falta saber para la barra de arriba (corto, con el mutex)
+    int nChanged = 0, nErr = 0;
+    { std::lock_guard<std::mutex> lk(g_cfgMutex); for (auto& g : g_cfg.groups) nChanged += GroupChanged(g) ? 1 : 0; }
+    { std::lock_guard<std::mutex> lk2(g_errMutex); nErr = (int)g_compileErrors.size(); }
+
+    // --- cabecera: logo + nombre + estado de los shaders, X a la derecha ---
+    const float headY = ImGui::GetCursorPosY();
+    if (s_logo) { const float h = 46.0f * UIK(); ImGui::Image((ImTextureID)(intptr_t)s_logo, ImVec2(h * s_logoAspect, h)); ImGui::SameLine(); }
+    ImGui::BeginGroup();
+    if (s_fontBold) ImGui::PushFont(s_fontBold);
+    ImGui::TextColored(ImVec4(0.85f, 0.68f, 0.28f, 1), "%s", s_logo ? "FX  0.2" : "PES21 FX  0.2");
+    if (s_fontBold) ImGui::PopFont();
+    {
+        const int rep = g_replacedCount.load(), fail = g_failedCount.load();
+        ImGui::PushStyleColor(ImGuiCol_Text, fail ? ImVec4(0.95f, 0.55f, 0.35f, 1) : ImVec4(0.45f, 0.85f, 0.55f, 1));
+        ImGui::Text(TRS("%s  %d shaders propios activos"), fail ? "!" : "OK", rep);
+        ImGui::PopStyleColor();
+        if (fail) { ImGui::SameLine(); ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.35f, 1), TRS("   %d con error (ver Errores)"), fail); if (ImGui::IsItemClicked()) SelectPage("errors"); }
     }
-    ImGui::SameLine(ImGui::GetWindowWidth() - 60);
+    ImGui::EndGroup();
+    ImGui::SameLine(ImGui::GetWindowWidth() - 54.0f * UIK());
     ImGui::SetCursorPosY(headY);
-    if (ImGui::Button("X", ImVec2(34 * UIK(), 0))) g_menuOpen = false;
-    ImGui::Separator();
-    int rep = g_replacedCount.load(), fail = g_failedCount.load();
-    ImGui::PushStyleColor(ImGuiCol_Text, fail ? ImVec4(0.95f, 0.55f, 0.35f, 1) : ImVec4(0.45f, 0.85f, 0.55f, 1));
-    ImGui::Text(TRS("%s  %d shaders propios activos"), fail ? "!" : "OK", rep);
-    ImGui::PopStyleColor();
-    if (fail) { ImGui::SameLine(); ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.35f, 1), TRS("   %d con error (ver pestana Errores)"), fail); }
+    if (ImGui::Button(s_iconsOk ? Ico(kIcoX).c_str() : "X", ImVec2(36 * UIK(), 0))) g_menuOpen = false;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Cerrar (Insert)"));
     ImGui::Spacing();
-    if (ImGui::Button(TRS("Guardar"), ImVec2(120 * UIK(), 0))) s_status = TRS(SaveConfigValues() ? "Guardado en PES21FX.ini" : "No se pudo guardar");
-    ImGui::SameLine();
-    if (ImGui::Button(TRS("Recargar shaders"), ImVec2(150 * UIK(), 0))) { ReloadShaders(); s_status = TRS("Shaders recargados"); }
-    ImGui::SameLine();
-    if (ImGui::Button(TRS("Recargar config"), ImVec2(140 * UIK(), 0))) { LoadConfig(); ReloadShaders(); s_status = TRS("Configuracion recargada"); }
-    ImGui::SameLine();
-    ImGui::Checkbox(TRS("Ver original"), &g_cfg.bypass);
-    ImGui::SameLine();
-    if (ImGui::Checkbox(TRS("Tutoriales"), &g_cfg.tutorials)) { SaveOption("tutorials", g_cfg.tutorials ? "1" : "0"); if (g_cfg.tutorials) s_tutDone.clear(); }
-    ImGui::SameLine();
-    {   // (27/10) selector de idioma del menu: se guarda en [PES21FX] language
-        static const char* const kLangs[3] = { "Espa\xC3\xB1ol", "English", "Portugu\xC3\xAAs" };
-        static const char* const kLangKey[3] = { "es", "en", "pt" };
-        int lg = (g_cfg.lang >= 0 && g_cfg.lang <= 2) ? g_cfg.lang : 0;
-        ImGui::SetNextItemWidth(110 * UIK());
-        if (ImGui::Combo("##idioma", &lg, kLangs, 3)) { g_cfg.lang = lg; SaveOption("language", kLangKey[lg]); LoadMenuLang(); }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Idioma del menu / Menu language / Idioma do menu");
-    }
-    ImGui::SameLine();
-    {   // (31/10) que el juego no reciba las teclas mientras se escribe en el menu: [PES21FX] bloquear_teclado
-        const char* kBlk[3] = { TRS("Teclas del juego: siempre"), TRS("Teclas del juego: no al escribir"), TRS("Teclas del juego: no con el menu") };
-        int bk = std::clamp(g_cfg.blockKeys, 0, 2);
-        ImGui::SetNextItemWidth(250 * UIK());
-        if (ImGui::Combo("##bloqteclas", &bk, kBlk, 3)) { g_cfg.blockKeys = bk; SaveOption("bloquear_teclado", std::to_string(bk)); }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Que el juego no reciba las teclas mientras escribis en el menu (buscador, nombres). 'No al escribir' = solo con un campo de texto activo; 'No con el menu' = mientras el menu esta abierto."));
-    }
-    if (!s_status.empty()) ImGui::TextDisabled("%s", s_status.c_str());
-    // --- catalogo de shaders: capturar lo que se dibuja y escribir las fichas ---
-    if (!g_catalogActive) {
-    { bool ins = g_inspectOn.load(); if (ins) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.25f, 0.2f, 1));
-      if (ImGui::Button(ins ? "Inspector: ON" : "Inspector", ImVec2(110 * UIK(), 0))) { g_inspectOn = !ins; s_status = TRS(ins ? "Inspector apagado" : "Inspector visual: flechas sobre cada parte conocida; clic en una ficha para ver sus texturas"); }
-      if (ins) ImGui::PopStyleColor();
-      if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Modo debug visual: marca en pantalla cara, pelo, kit, medias, botines, pasto y cielo, que hace el mod en cada uno y de donde sale cada textura (juego / archivo / generada).")); }
+
+    // --- barra de arriba: guardar, deshacer, rehacer, descartar, ver original, recargar, buscar ---
+    {
+        const bool dirty = nChanged > 0;
+        if (dirty) { ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.52f, 0.34f, 1)); ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.62f, 0.41f, 1)); }
+        std::string sv = IcoL(kIcoSave, TRS("Guardar"));
+        if (dirty) sv += " (" + std::to_string(nChanged) + ")";
+        if (ImGui::Button((sv + "###guardar").c_str())) s_saveReq = true;
+        if (dirty) ImGui::PopStyleColor(2);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip(dirty ? TRS("Guardar en PES21FX.ini (Ctrl+S). %d grupos con cambios sin guardar.") : TRS("Guardar en PES21FX.ini (Ctrl+S). No hay cambios sin guardar."), nChanged);
         ImGui::SameLine();
-        if (ImGui::Button(TRS("Capturar shaders"), ImVec2(150 * UIK(), 0))) CatalogStart();
-        ImGui::SameLine(); ImGui::TextDisabled("(?)");
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Anota cada shader que se dibuja (render target, vertices, orden) mientras jugas.\nDetener escribe PES21FX\\catalog\\shaders.txt con una ficha por shader (rol, cbuffers, texturas, uso)\ny catalog\\frame.txt con la linea de tiempo del ultimo cuadro. Pasalo a Claude para que sepa que toca cada uno."));
-    } else {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.25f, 0.2f, 1));
-        if (ImGui::Button(TRS("Detener y escribir catalogo"), ImVec2(230 * UIK(), 0))) {
+        ImGui::BeginDisabled(s_undo.empty());
+        if (ImGui::Button(s_iconsOk ? (Ico(kIcoUndo) + "##undo").c_str() : TRS("Deshacer"))) s_undoReq = 1;
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) { if (s_undo.empty()) ImGui::SetTooltip("%s", TRS("Deshacer (Ctrl+Z): no hay nada para deshacer")); else ImGui::SetTooltip(TRS("Deshacer (Ctrl+Z): %s  (%d pasos)"), s_undo.back().what.c_str(), (int)s_undo.size()); }
+        ImGui::SameLine(0, 4.0f * UIK());
+        ImGui::BeginDisabled(s_redo.empty());
+        if (ImGui::Button(s_iconsOk ? (Ico(kIcoRedo) + "##redo").c_str() : TRS("Rehacer"))) s_undoReq = 2;
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) { if (s_redo.empty()) ImGui::SetTooltip("%s", TRS("Rehacer (Ctrl+Y): no hay nada para rehacer")); else ImGui::SetTooltip(TRS("Rehacer (Ctrl+Y): %s"), s_redo.back().what.c_str()); }
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!dirty);
+        if (ImGui::Button(IcoL(kIcoRevert, TRS("Descartar")).c_str())) s_revertAllReq = true;
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", TRS("Volver todo el menu a lo guardado en PES21FX.ini (se puede deshacer con Ctrl+Z)"));
+        ImGui::SameLine();
+        ImGui::Checkbox(IcoL(kIcoEye, TRS("Ver original")).c_str(), &g_cfg.bypass);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Ver el juego sin el mod, para comparar"));
+        ImGui::SameLine();
+        if (ImGui::Button((IcoL(kIcoReload, TRS("Recargar")) + "###recargar").c_str())) ImGui::OpenPopup("recargar_pop");
+        if (ImGui::BeginPopup("recargar_pop")) {
+            if (ImGui::MenuItem(TRS("Recargar shaders"))) { ReloadShaders(); s_status = TRS("Shaders recargados"); }
+            if (ImGui::MenuItem(TRS("Recargar config"))) { LoadConfig(); ReloadShaders(); UndoClear(); s_status = TRS("Configuracion recargada"); }
+            ImGui::TextDisabled("%s", TRS("Recargar config vuelve a leer PES21FX.ini (se pierde lo no guardado)"));
+            ImGui::EndPopup();
+        }
+        ImGui::SameLine();
+        if (s_focusSearch) { ImGui::SetKeyboardFocusHere(); s_focusSearch = false; }
+        ImGui::SetNextItemWidth(std::max(140.0f * UIK(), ImGui::GetContentRegionAvail().x - (s_search[0] ? ImGui::GetFrameHeight() + 6.0f * UIK() : 0.0f)));
+        ImGui::InputTextWithHint("##buscar", IcoL(kIcoSearch, TRS("Buscar opcion (Ctrl+F)")).c_str(), s_search, sizeof(s_search));
+        if (s_search[0]) { ImGui::SameLine(0, 4.0f * UIK()); if (ImGui::Button(s_iconsOk ? (Ico(kIcoX) + "##limpiar").c_str() : "x", ImVec2(ImGui::GetFrameHeight(), 0))) s_search[0] = 0; }
+    }
+    ImGui::Spacing();
+
+    const float footH = ImGui::GetTextLineHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
+    {
+        std::lock_guard<std::mutex> lk(g_cfgMutex);
+        UndoRequests();
+        UndoSnapshot();
+        if (s_revertAllReq) { RevertAll(); s_revertAllReq = false; s_status = TRS("Cambios descartados (Ctrl+Z para recuperarlos)"); }
+        if (s_collapseAll) { for (auto& g : g_cfg.groups) s_collapsed[g.title] = (s_collapseAll == 1); s_collapseAll = 0; }
+
+        // secciones: conteos, cambios, categoria e icono
+        struct Sec { std::string key, shown; int cat = 2, ord = 5; unsigned ico = kIcoLayers; int total = 0, active = 0; bool changed = false; };
+        std::vector<Sec> secs;
+        int nFav = 0;
+        for (auto& g : g_cfg.groups) {
+            const std::string k = SecKey(g);
+            Sec* s = nullptr; for (auto& x : secs) if (x.key == k) { s = &x; break; }
+            if (!s) { secs.push_back(Sec()); s = &secs.back(); s->key = k; s->shown = Utf8(g.section.empty() ? std::string(TRS("Otros")) : LS(g.section, g.sectionEn)); SecInfo(k, s->cat, s->ord, s->ico); }
+            s->total++; if (g.tIdx < 0 || GroupActive(g)) s->active++; if (GroupChanged(g)) s->changed = true;
+            if (IsFav(g.title)) nFav++;
+        }
+        std::stable_sort(secs.begin(), secs.end(), [](const Sec& a, const Sec& b) { return a.cat != b.cat ? a.cat < b.cat : a.ord < b.ord; });
+        // pagina elegida (la de la ultima vez; si ya no existe, la primera seccion)
+        if (s_sel.empty()) s_sel = g_cfg.menuSection;
+        {
+            bool ok = s_sel == "fav" || s_sel == "chg" || s_sel == "rec" || s_sel == "presets" || s_sel == "tools" || s_sel == "settings" || (s_sel == "errors" && nErr > 0);
+            for (auto& s : secs) ok |= s_sel == "sec:" + s.key;
+            if (!ok) s_sel = secs.empty() ? "presets" : "sec:" + secs[0].key;
+        }
+
+        // --- barra lateral ---
+        const float navW = std::clamp(ImGui::GetContentRegionAvail().x * 0.28f, 205.0f * UIK(), 290.0f * UIK());
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.09f, 0.10f, 0.12f, 1));
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f * UIK());
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 2.0f * UIK()));
+        ImGui::BeginChild("nav", ImVec2(navW, -footH), ImGuiChildFlags_AlwaysUseWindowPadding);
+        NavHeader(TRS("INICIO"));
+        NavItem("fav", kIcoStar, TRS("Favoritos"), nFav ? std::to_string(nFav) : "", false);
+        NavItem("chg", kIcoPen, TRS("Cambiados"), nChanged ? std::to_string(nChanged) : "", nChanged > 0);
+        NavItem("rec", kIcoHistory, TRS("Recientes"), s_recent.empty() ? "" : std::to_string(s_recent.size()), false);
+        const char* kCat[3] = { TRS("ESCENA"), TRS("JUGADORES"), TRS("OTROS") };
+        int lastCat = -1;
+        for (auto& s : secs) {
+            if (s.cat != lastCat) { NavHeader(kCat[s.cat]); lastCat = s.cat; }
+            NavItem("sec:" + s.key, s.ico, s.shown, std::to_string(s.active) + "/" + std::to_string(s.total), s.changed);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip(TRS("%d de %d grupos prendidos"), s.active, s.total);
+        }
+        NavHeader(TRS("SISTEMA"));
+        NavItem("presets", kIcoSliders, TRS("Presets por estadio"), g_cfg.presetActive.file.empty() ? "" : "ON", false);
+        NavItem("tools", kIcoTools, TRS("Herramientas"), g_catalogActive || g_recordOn ? "REC" : "", false);
+        NavItem("settings", kIcoGear, TRS("Ajustes"), "", false);
+        if (nErr) NavItem("errors", kIcoWarn, TRS("Errores"), std::to_string(nErr), true);
+        ImGui::EndChild();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor();
+        ImGui::SameLine();
+
+        // --- pagina ---
+        ImGui::BeginChild("page", ImVec2(0, -footH), ImGuiChildFlags_None);
+        const std::string q = LowerU(s_search);
+        if (!q.empty()) {
+            int n = 0; for (auto& g : g_cfg.groups) if (GroupMatches(g, q)) n++;
+            char sub[128]; snprintf(sub, sizeof sub, TRS("%d grupos coinciden (Esc para limpiar)"), n);
+            PageTitle(kIcoSearch, std::string(TRS("Resultados")) + ": \"" + s_search + "\"", sub);
+            CardsToolbar();
+            ImGui::BeginChild("cards_res", ImVec2(0, 0), ImGuiChildFlags_None);
+            int gid = 0; std::string lastSec;
+            for (auto& g : g_cfg.groups) {
+                if (GroupMatches(g, q) && (!s_onlyActive || GroupActive(g))) { if (SecKey(g) != lastSec) { SectionLabel(g); lastSec = SecKey(g); } DrawGroup(g, gid); }
+                gid++;
+            }
+            if (!n) EmptyState(TRS("Nada coincide. Proba con otra palabra (busca en titulos, descripciones y sliders)."));
+            ImGui::EndChild();
+        } else if (s_sel == "fav" || s_sel == "chg" || s_sel == "rec") {
+            const bool fav = s_sel == "fav", chg = s_sel == "chg";
+            if (fav) PageTitle(kIcoStar, TRS("Favoritos"), TRS("Tus tarjetas marcadas con la estrella, de todas las secciones."));
+            else if (chg) PageTitle(kIcoPen, TRS("Cambiados"), TRS("Tarjetas con valores distintos de lo guardado. Guardar (Ctrl+S) los deja fijos; Descartar los vuelve atras."));
+            else PageTitle(kIcoHistory, TRS("Recientes"), TRS("Lo ultimo que tocaste en esta sesion, lo mas nuevo arriba."));
+            CardsToolbar();
+            if (!fav && !chg && !s_recent.empty()) { ImGui::SameLine(); if (ImGui::SmallButton(TRS("Borrar la lista"))) s_recent.clear(); }
+            ImGui::BeginChild(("cards_" + s_sel).c_str(), ImVec2(0, 0), ImGuiChildFlags_None);
+            int n = 0;
+            if (fav || chg) {
+                int gid = 0;
+                for (auto& g : g_cfg.groups) {
+                    if ((fav ? IsFav(g.title) : GroupChanged(g)) && (!s_onlyActive || GroupActive(g))) { SectionLabel(g); DrawGroup(g, gid); n++; }
+                    gid++;
+                }
+            } else {
+                const std::vector<std::string> rec = s_recent;   // DrawGroup puede tocar s_recent (no, pero por las dudas)
+                for (auto& t : rec) {
+                    int gid = 0;
+                    for (auto& g : g_cfg.groups) { if (g.title == t) { if (!s_onlyActive || GroupActive(g)) { SectionLabel(g); DrawGroup(g, gid); n++; } break; } gid++; }
+                }
+            }
+            if (!n) EmptyState(fav ? TRS("Todavia no hay favoritos: toca la estrella de una tarjeta para tenerla a mano aca.")
+                             : chg ? TRS("No hay cambios sin guardar.") : TRS("Todavia no tocaste nada en esta sesion."));
+            ImGui::EndChild();
+        } else if (s_sel.rfind("sec:", 0) == 0) {
+            const std::string sname = s_sel.substr(4);
+            const Sec* s = nullptr; for (auto& x : secs) if (x.key == sname) s = &x;
+            char sub[96]; snprintf(sub, sizeof sub, TRS("%d de %d grupos prendidos"), s ? s->active : 0, s ? s->total : 0);
+            PageTitle(s ? s->ico : kIcoLayers, s ? s->shown : Utf8(sname), sub);
+            CardsToolbar();
+            ImGui::BeginChild(("cards_" + s_sel).c_str(), ImVec2(0, 0), ImGuiChildFlags_None);
+            DrawTutorial(sname, s ? s->shown : sname);
+            DrawSectionExtras(sname);
+            int gid = 0;
+            for (auto& g : g_cfg.groups) { if (SecKey(g) == sname && (!s_onlyActive || GroupActive(g))) DrawGroup(g, gid); gid++; }
+            ImGui::EndChild();
+        } else if (s_sel == "presets") {
+            PageTitle(kIcoSliders, TRS("Presets por estadio"));
+            ImGui::BeginChild("cards_presets", ImVec2(0, 0), ImGuiChildFlags_None);
+            DrawTutorial("Presets", "Presets");
+            DrawPresetsTab();
+            ImGui::EndChild();
+        } else if (s_sel == "tools") {
+            ImGui::BeginChild("cards_tools", ImVec2(0, 0), ImGuiChildFlags_None);
+            DrawToolsPage();
+            ImGui::EndChild();
+        } else if (s_sel == "settings") {
+            ImGui::BeginChild("cards_settings", ImVec2(0, 0), ImGuiChildFlags_None);
+            DrawSettingsPage();
+            ImGui::EndChild();
+        } else if (s_sel == "errors") {
+            PageTitle(kIcoWarn, TRS("Errores de compilacion"), TRS("Shaders propios que no compilaron: el juego usa el original en su lugar."));
+            ImGui::BeginChild("cards_errors", ImVec2(0, 0), ImGuiChildFlags_None);
+            std::lock_guard<std::mutex> lk2(g_errMutex);
+            for (auto& e : g_compileErrors) ImGui::TextWrapped("%s", e.c_str());
+            ImGui::EndChild();
+        }
+        ImGui::EndChild();
+        UndoCollect();
+    }
+
+    // --- linea de abajo: ultimo aviso + atajos ---
+    {
+        std::string msg = (!s_undoMsg.empty() && Now() - s_undoMsgT < 4.0) ? s_undoMsg : s_status;
+        ImGui::TextDisabled("%s", msg.c_str());
+        const char* hint = TRS("Ctrl+Z deshacer   Ctrl+S guardar   Ctrl+F buscar   Insert cerrar");
+        const float hw = ImGui::CalcTextSize(hint).x;
+        if (ImGui::GetWindowWidth() - hw - 30.0f * UIK() > ImGui::CalcTextSize(msg.c_str()).x + 40.0f * UIK()) {
+            ImGui::SameLine(ImGui::GetWindowWidth() - hw - ImGui::GetStyle().WindowPadding.x);
+            ImGui::TextDisabled("%s", hint);
+        }
+    }
+    ImGui::PopStyleColor(2);
+    ImGui::End();
+
+    // acciones que no pueden correr con g_cfgMutex tomado
+    if (s_saveReq) { s_saveReq = false; s_status = TRS(SaveConfigValues() ? "Guardado en PES21FX.ini" : "No se pudo guardar"); }
+    if (s_toolReq) {
+        const int a = s_toolReq; s_toolReq = 0;
+        if (a == 1) CatalogStart();
+        else if (a == 2) {
             UINT w = 0, h = 0;
             if (s_rtv) { ID3D11Resource* res = nullptr; s_rtv->GetResource(&res); ID3D11Texture2D* t = nullptr;
                 if (res && SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t)) && t) { D3D11_TEXTURE2D_DESC d; t->GetDesc(&d); w = d.Width; h = d.Height; t->Release(); }
                 if (res) res->Release(); }
             CatalogStop(w, h, AllShaders());
         }
-        ImGui::PopStyleColor();
+        else if (a == 3) CatalogDumpCBs();
+        else if (a == 4) CatalogProbeGrass();
+        else if (a == 5) CatalogRecord(true);
+        else if (a == 6) CatalogRecord(false);
     }
-    ImGui::SameLine();
-    if (ImGui::Button(TRS("Volcar cbuffers"), ImVec2(130 * UIK(), 0))) CatalogDumpCBs();
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Escribe catalog\\cbuffers.txt: los valores que el motor le pasa a la composicion y a la luz del sol\n(sol, exposicion, niebla, matrices de sombra) con el nombre de cada campo. Hacelo con un partido en pantalla."));
-    ImGui::SameLine();
-    if (ImGui::Button(TRS("Volcar pasto"), ImVec2(110 * UIK(), 0))) CatalogProbeGrass();
-    ImGui::SameLine();
-    if (!g_recordOn) { if (ImGui::Button(TRS("Grabar partido"), ImVec2(130 * UIK(), 0))) CatalogRecord(true); }
-    else { ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.25f, 0.2f, 1)); if (ImGui::Button(TRS("Detener grabacion"), ImVec2(150 * UIK(), 0))) CatalogRecord(false); ImGui::PopStyleColor(); }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Mientras jugas, cada 5 s vuelca pasto y cbuffers numerados en catalog\\rec\\ (con la camara de ese momento)\ny deja la captura de shaders andando. Al terminar: Detener grabacion y despues Detener y escribir catalogo."));
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Mide las parcelas de pasto que dibuja el juego en un cuadro (tamano, grilla, cantidad)\ny lo escribe en catalog\\grass.txt. Hacelo con un partido en pantalla."));
-    { std::string cst = g_catalogStatus; if (!cst.empty()) { ImGui::SameLine(); ImGui::TextDisabled("%s", cst.c_str()); } }
-    ImGui::Spacing();
-
-    std::lock_guard<std::mutex> lk(g_cfgMutex);
-    // --- 19/10: barra de comodidad: buscar (Ctrl+F), solo activos, contraer/expandir, tamano ---
-    {
-        if (ImGui::IsKeyPressed(ImGuiKey_F) && ImGui::GetIO().KeyCtrl) s_focusSearch = true;
-        if (s_focusSearch) { ImGui::SetKeyboardFocusHere(); s_focusSearch = false; }
-        ImGui::SetNextItemWidth(220 * UIK());
-        ImGui::InputTextWithHint("##buscar", TRS("Buscar opcion (Ctrl+F)"), s_search, sizeof(s_search));
-        ImGui::SameLine(); if (ImGui::SmallButton("x")) s_search[0] = 0;
-        ImGui::SameLine(); ImGui::Checkbox(TRS("Solo activos"), &s_onlyActive);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Mostrar solo los grupos con el interruptor prendido"));
-        ImGui::SameLine(); if (ImGui::SmallButton(TRS("Contraer todo"))) s_collapseAll = 1;
-        ImGui::SameLine(); if (ImGui::SmallButton(TRS("Expandir todo"))) s_collapseAll = 2;
-        ImGui::SameLine(); ImGui::SetNextItemWidth(90 * UIK());
-        float sc = g_cfg.uiScale;
-        if (ImGui::SliderFloat("##uiscale", &sc, 0.8f, 1.6f, "x%.2f")) { g_cfg.uiScale = sc; ImGui::GetIO().FontGlobalScale = sc; }
-        if (ImGui::IsItemDeactivatedAfterEdit()) { char b[32]; snprintf(b, sizeof(b), "%.2f", g_cfg.uiScale); SaveOption("ui_scale", b); }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Tamano del menu"));
-        ImGui::SameLine(); if (ImGui::Checkbox(TRS("Compacto"), &g_cfg.compact)) { SaveOption("compacto", g_cfg.compact ? "1" : "0"); s_collapseAll = g_cfg.compact ? 1 : 2; }
-        ImGui::SameLine(); if (ImGui::Checkbox(TRS("Captura auto"), &g_cfg.autoCap)) SaveOption("auto_captura", g_cfg.autoCap ? "1" : "0");
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip(TRS("En partido, cada %.0f s guarda una imagen (jpg) en PES21FX\\capturas\\ y los valores de luz de ese momento en capturas\\luz.txt,\npara que Claude calibre la luz sin que tengas que sacar capturas. Tope: %d imagenes por sesion."), g_cfg.autoCapSec, g_cfg.autoCapMax);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Abrir los grupos contraidos (solo el titulo y el interruptor); + para desplegar uno"));
-    }
-    if (s_collapseAll) { for (auto& g : g_cfg.groups) s_collapsed[g.title] = (s_collapseAll == 1); s_collapseAll = 0; }
-    std::string q = LowerU(s_search);
-    if (ImGui::BeginTabBar("tabs", ImGuiTabBarFlags_FittingPolicyScroll)) {
-        if (!q.empty()) {   // resultados de la busqueda, de todas las pestanas
-            if (ImGui::BeginTabItem((std::string(TRS("Resultados")) + "###res").c_str(), nullptr, ImGuiTabItemFlags_SetSelected)) {
-                ImGui::BeginChild("scrollR", ImVec2(0 * UIK(), 0), ImGuiChildFlags_None);
-                int gid = 0, n = 0;
-                for (auto& g : g_cfg.groups) { if (GroupMatches(g, q) && (!s_onlyActive || GroupActive(g))) { ImGui::TextDisabled("%s", Utf8(LS(g.section, g.sectionEn)).c_str()); DrawGroup(g, gid); n++; } gid++; }
-                if (!n) ImGui::TextDisabled(TRS("Nada coincide con \"%s\""), s_search);
-                ImGui::EndChild();
-                ImGui::EndTabItem();
-            }
-        }
-        if (!g_cfg.favorites.empty()) {
-            if (ImGui::BeginTabItem((std::string(TRS("Favoritos")) + "###fav").c_str())) {
-                ImGui::BeginChild("scrollF", ImVec2(0 * UIK(), 0), ImGuiChildFlags_None);
-                ImGui::TextDisabled("%s", TRS("Tus grupos marcados con * fav, de todas las pestanas."));
-                int gid = 0;
-                for (auto& g : g_cfg.groups) { if (IsFav(g.title) && (!s_onlyActive || GroupActive(g))) { ImGui::TextDisabled("%s", Utf8(LS(g.section, g.sectionEn)).c_str()); DrawGroup(g, gid); } gid++; }
-                ImGui::EndChild();
-                ImGui::EndTabItem();
-            }
-        }
-        // una pestana por seccion de los grupos
-        std::vector<std::string> secs, secsShown;   // (27/10) la clave es la seccion en espanol; el rotulo, la del idioma elegido
-        for (auto& g : g_cfg.groups) { std::string sname = g.section.empty() ? "Otros" : g.section; bool f = false; for (auto& x : secs) f |= (x == sname); if (!f) { secs.push_back(sname); secsShown.push_back(g.section.empty() ? TRS("Otros") : LS(g.section, g.sectionEn)); } }
-        for (size_t si = 0; si < secs.size(); si++) {
-            const std::string& sname = secs[si];
-            if (ImGui::BeginTabItem((Utf8(secsShown[si]) + "###" + Utf8(sname)).c_str())) {
-                ImGui::BeginChild("scroll", ImVec2(0 * UIK(), 0), ImGuiChildFlags_None);
-                DrawTutorial(sname, secsShown[si]);
-                if (sname.rfind("Ropa", 0) == 0 && !g_cfg.clothStatus.empty()) { ImGui::TextDisabled("%s", g_cfg.clothStatus.c_str()); ImGui::Spacing(); }
-                if (sname.rfind("Diagn", 0) == 0) {
-                    ImGui::TextWrapped("%s", TRS("Prueba automatica: toca cada grupo del menu (su interruptor o su primer deslizador), espera unos cuadros y mide si la imagen cambia. Pausa una repeticion con jugadores de cerca antes de correrla; tarda unos 30 segundos."));
-                    if (!MenuTestActive()) { if (ImGui::Button(TRS("Probar todo el menu"), ImVec2(180 * UIK(), 0))) MenuTestStart(); }
-                    else { if (ImGui::Button(TRS("Cancelar"), ImVec2(180 * UIK(), 0))) MenuTestStop(); }
-                    ImGui::SameLine(); ImGui::TextUnformatted(Utf8(MenuTestStatus()).c_str());
-                    size_t nres = MenuTestResults();
-                    if (nres) {
-                        ImGui::TextDisabled(TRS("ruido de la escena: %.4f (si es alto, la camara se movio: pausa y repeti)"), MenuTestNoise());
-                        if (ImGui::BeginTable("mt", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
-                            for (size_t i = 0; i < nres; i++) {
-                                std::string grp, sec; float df; int st;
-                                if (!MenuTestResult_(i, grp, sec, df, st)) break;
-                                ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted(Utf8(sec).c_str());
-                                ImGui::TableSetColumnIndex(1); ImGui::TextUnformatted(Utf8(grp).c_str());
-                                ImGui::TableSetColumnIndex(2);
-                                if (st == 1) ImGui::TextColored(ImVec4(0.45f, 0.9f, 0.45f, 1), TRS("cambia la imagen (%.4f)"), df);
-                                else if (st == 0) ImGui::TextColored(ImVec4(0.95f, 0.5f, 0.4f, 1), TRS("sin efecto en esta escena (%.4f)"), df);
-                                else ImGui::TextDisabled("%s", TRS("no se prueba (ropa)"));
-                            }
-                            ImGui::EndTable();
-                        }
-                    }
-                    ImGui::Spacing();
-                }
-                if (sname.rfind("Ilumin", 0) == 0) { ImGui::TextDisabled("%s", LightMeterSummary().c_str()); ImGui::Spacing(); }
-                if (sname.rfind("Cancha", 0) == 0) { ImGui::TextDisabled(TRS("Pasto: parcelas lejanas del juego escaladas: %d en 3 s. Extendido: %d parcelas/cuadro (anillos %d/%d/%d), variante %u idx, camara %s (%.0f, %.0f), estado: %s"), g_grassDbg.sparseLast, g_grassDbg.patches, g_grassDbg.ring[0], g_grassDbg.ring[1], g_grassDbg.ring[2], g_grassDbg.lod, g_grassDbg.cam ? "ok" : "no", g_grassDbg.ex, g_grassDbg.ez, g_grassDbg.why ? g_grassDbg.why : "-"); ImGui::Spacing(); }
-                int gid = 0;
-                for (auto& g : g_cfg.groups) { std::string s2 = g.section.empty() ? "Otros" : g.section; if (s2 == sname && (!s_onlyActive || GroupActive(g))) DrawGroup(g, gid); gid++; }
-                ImGui::EndChild();
-                ImGui::EndTabItem();
-            }
-        }
-        if (ImGui::BeginTabItem("Presets###presets")) {
-            ImGui::BeginChild("scrollP", ImVec2(0 * UIK(), 0), ImGuiChildFlags_None);
-            DrawTutorial("Presets", "Presets");
-            DrawPresetsTab();
-            ImGui::EndChild();
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem((std::string(TRS("Avanzado")) + "###avanzado").c_str())) {
-            ImGui::BeginChild("scroll2", ImVec2(0 * UIK(), 0), ImGuiChildFlags_None);
-            DrawTutorial("Avanzado", TRS("Avanzado"));
-            if (ImGui::CollapsingHeader(TRS("Efectos por tecla"), ImGuiTreeNodeFlags_DefaultOpen)) {
-                int id = 0;
-                for (auto& k : g_cfg.keys) {
-                    ImGui::PushID(id++);
-                    std::string lab = Utf8(LS(k.label, k.labelEn));
-                    if (k.type == KeyBind::Cycle) {
-                        if (ImGui::Button(TRS("Siguiente"))) KeyActionUnlocked(k, 1);
-                        ImGui::SameLine(); ImGui::TextUnformatted(lab.c_str());
-                    } else if (k.type == KeyBind::Toggle && !k.assigns.empty()) {
-                        bool offSwitch = k.assigns[0].values[0] <= 0.0f;
-                        bool on = offSwitch ? !k.active : k.active;
-                        if (ImGui::Checkbox(lab.c_str(), &on)) KeyActionUnlocked(k, 0);
-                    }
-                    ImGui::PopID();
-                }
-            }
-            if (ImGui::CollapsingHeader(TRS("Todos los parametros"))) {
-                std::string lastComment;
-                const char* cn = "xyzw";
-                for (int i = 0; i < kParamCount; i++) {
-                    bool any = false;
-                    for (int c = 0; c < 4; c++) any |= g_cfg.info[i][c].defined;
-                    if (!any) continue;
-                    for (int c = 0; c < 4; c++) {
-                        if (!g_cfg.info[i][c].defined) continue;
-                        const std::string& cm = g_cfg.info[i][c].comment;
-                        if (!cm.empty() && cm != lastComment) { ImGui::TextDisabled("%s", Utf8(cm).c_str()); lastComment = cm; }
-                    }
-                    for (int c = 0; c < 4; c++) {
-                        if (!g_cfg.info[i][c].defined) continue;
-                        char name[16]; if (i) snprintf(name, sizeof(name), "%c%d", cn[c], i); else snprintf(name, sizeof(name), "%c", cn[c]);
-                        ImGui::SetNextItemWidth(120 * UIK());
-                        ImGui::DragFloat(name, &g_cfg.live[i][c], 0.01f, -100.0f, 100.0f, "%.3f");
-                        ImGui::SameLine();
-                    }
-                    ImGui::NewLine();
-                }
-            }
-            ImGui::EndChild();
-            ImGui::EndTabItem();
-        }
-        {
-            std::lock_guard<std::mutex> lk2(g_errMutex);
-            if (!g_compileErrors.empty() && ImGui::BeginTabItem((std::string(TRS("Errores")) + "###errores").c_str())) {
-                ImGui::BeginChild("scroll3", ImVec2(0 * UIK(), 0), ImGuiChildFlags_None);
-                for (auto& e : g_compileErrors) ImGui::TextWrapped("%s", e.c_str());
-                ImGui::EndChild();
-                ImGui::EndTabItem();
-            }
-        }
-        ImGui::EndTabBar();
-    }
-    ImGui::End();
 }
 
 // --- 24/10: menu Fisico del juego (Editar > Jugadores > Fisico): Insert abre una ventana chica con la musculatura de ese

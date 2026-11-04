@@ -160,6 +160,7 @@ struct Config {
     // [PES21FX] para aislar problemas: replace_shaders / rules / overlay = 0 apagan cada parte
     bool tutorials = true;                     // tarjetas de tutorial al abrir cada pestana ([PES21FX] tutorials)
     std::string favorites;                     // 19/10: titulos de grupos favoritos separados por '|' ([PES21FX] favoritos)
+    std::string menuSection;                   // (04/11 n) ultima pagina del menu ([PES21FX] menu_seccion: sec:<seccion>, fav, chg, rec, presets, tools, settings)
     float uiScale = 1.0f;                      // 19/10: tamano del menu ([PES21FX] ui_scale)
     bool compact = false;                      // 19/10: grupos contraidos por defecto ([PES21FX] compacto)
     int blockKeys = 1;                         // (31/10) teclas del juego con el menu: 0 nunca se bloquean, 1 al escribir en un campo, 2 con el menu abierto ([PES21FX] bloquear_teclado)
