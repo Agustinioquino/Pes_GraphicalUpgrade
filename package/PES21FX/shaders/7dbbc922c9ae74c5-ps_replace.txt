@@ -98,6 +98,8 @@ float3 PESSunColor() {
 }
 // === FIN SOL ===
 #include "pes_skinlight.hlsli"   // (03/11) modelo de piel compacto (la piel igual en todos los modos)
+#include "pes_headshadow.hlsli"  // (04/11 b) atlas de sombras de las cabezas y piernas cercanas (t30, la DLL lo ata a esta pasada)
+#include "pes_skinthick.hlsli"   // (04/11 b) grosor real de la piel con ese atlas
 
 void main(
   float4 v0 : TEXCOORD0,
@@ -146,6 +148,8 @@ void main(
   r5.z = g_psScene.m_projectionParam.z / r0.z;
   float skZ = r5.z;   // (03/11) distancia para la piel
   r5.xy = r5.zz * r4.zw;
+  float3 skPv = float3(r5.xy, r5.z);   // (04/11 b) posicion en la vista del atlas (como pesHsP de las 5 grandes del sol)
+  { float zs = r5.z < 0.0 ? -1.0 : 1.0; skPv *= float3((g_psScene.m_projectionParam.x < 0.0 ? -1.0 : 1.0) * zs, (g_psScene.m_projectionParam.y < 0.0 ? -1.0 : 1.0) * zs, zs); }
   r6.xyzw = g_psObject.m_localParam[1].xyzw * r5.yyyy;
   r6.xyzw = r5.xxxx * g_psObject.m_localParam[0].xyzw + r6.xyzw;
   r6.xyzw = r5.zzzz * g_psObject.m_localParam[2].xyzw + r6.xyzw;
@@ -278,7 +282,16 @@ void main(
   o0.xyz = r3.xyz * r6.xyz;
   r0.xyz = r0.xyz * r2.www;
   if (skOn) {   // (03/11) contraluz (entra aunque el frente este en sombra) y brillo de piel
-    o0.xyz += PesSkTrans(skN, skV, skL, r4.y) * r1.xyw * lerp(0.25, 1.0, saturate(r6.x));
+    float3 skTrD = PesSkTrans(skN, skV, skL, r4.y) * lerp(0.25, 1.0, saturate(r6.x));
+    // (04/11 b) grosor REAL dentro de la caja del atlas (cabezas y piernas cercanas), fundido con la direccional en el borde
+    // afuera (jugadores lejanos, sin atlas): grosor estimado por la forma (curvatura + mapa de SSS)
+    float skIn = 0.0; float skThk = PESSkinThickAtlas(skPv, g_samplerPoint_Clamp_s, skIn);
+    float4 skP64 = IniParams.Load(int2(64, 0));
+    if (skP64.x > 0.5 && skP64.z > 0.0) {
+      skTrD = max(skTrD, PesSkTransThick(PesSkThickCurv(r4.y, skCurv), skN, skL, skNL, r4.y) * lerp(0.25, 1.0, saturate(r6.x)));
+      if (skIn > 0.0) skTrD = lerp(skTrD, max(PesSkTransThick(skThk, skN, skL, skNL, r4.y), skTrD * 0.5), skIn);
+    }
+    o0.xyz += skTrD * r1.xyw;
     r0.xyz = PesSkSpec(r0.xyz, skN, skV, skL, skRough, skSpecI, r1.xyw, saturate(r2.w));
   }
   o1.xyz = min(float3(10000,10000,10000), r0.xyz);
