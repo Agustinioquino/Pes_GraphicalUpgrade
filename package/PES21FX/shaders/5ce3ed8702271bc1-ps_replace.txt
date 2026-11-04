@@ -367,7 +367,11 @@ void main(
     }
   }
   r2.xyz = float3(-1,-1,-1) + r3.xyz;
-  r1.xyz = r2.xyz * r0.zzz + r1.xyz;
+  // (04/11 i, Agustin: "el nrm de arrugas no es muy notorio junto a sus texturas") z365 = relieve de las arrugas (normal del gesto
+  // y esculpida) por encima del detalle de la textura de la cara; 1 = como antes
+  float wrRelief = enhance ? clamp(IniParams.Load(int2(365, 0)).z, 0.0, 3.0) : 1.0;
+  if (wrRelief <= 0.0) wrRelief = 1.0;
+  r1.xyz = r2.xyz * (r0.zzz * wrRelief) + r1.xyz;
   r0.z = dot(r1.xyz, r1.xyz);
   r0.z = rsqrt(r0.z);
   r1.xyz = r1.xyz * r0.zzz;
@@ -380,7 +384,7 @@ void main(
       // (04/11 c) RG = arrugas de la sonrisa, BA = las de la sonrisa grande (messi6 de Agustin): de 1 a 1.5 pasa a las grandes
       float4 shT = pesShapeWr.Sample(g_samplerAnisotropic_Clamp_s, v2.xy);
       float2 shN = lerp(shT.xy, shT.zw, saturate((G5w.y - 1.0) * 2.0)) * 2.0 - 1.0;
-      r1.xy += shN * shW; r1.xyz = normalize(r1.xyz);
+      r1.xy += shN * shW * wrRelief; r1.xyz = normalize(r1.xyz);
       // (04/11 h, Agustin: "mas detalle de srm y trm en las expresiones asi como en el nrm") divergencia de la normal esculpida:
       // donde las normales miran hacia adentro hay surco, hacia afuera cresta. Lo usan brillo / rugosidad / translucidez mas abajo
       float sdx = 1.5 / shTw, sdy = 1.5 / shTh, sbl = saturate((G5w.y - 1.0) * 2.0);
