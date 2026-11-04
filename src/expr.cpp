@@ -421,7 +421,7 @@ void DumpObj(FaceMesh* m, const std::vector<float>& ps, const std::vector<float>
 // piel la DLL copia su paleta (b6: cuadro actual y anterior) y su m_world (b5) a un pozo en la GPU (t116, 64 lugares, sin leer nada
 // en la CPU); el VS del pelo (pes_beard.hlsli) busca el lugar de su piel cuya cabeza cae donde esta la barba (mismo jugador) y le
 // suma el gesto: lo que los huesos de la cara corren el punto respecto de la cabeza.
-struct BeardSrc { int id = 0; uint64_t ib = 0; UINT nv = 0; int head = 0; int shapeOff = -1; std::vector<float> p, w; std::vector<uint8_t> j; };
+struct BeardSrc { int id = 0; uint64_t ib = 0; UINT nv = 0; int head = 0; int shapeOff = -1; bool jaw = false; std::vector<float> p, w; std::vector<uint8_t> j; };
 std::vector<BeardSrc> s_bsrc; size_t s_bsrcBytes = 0;
 // (04/11 d, arranque 06:53: "0 paletas copiadas") la piel se reconoce por su GEOMETRIA (buffer, primer vertice, vertices), no por el id de
 // la malla: la misma piel tiene varias entradas en la tabla (otra pasada con otro input layout, LOD, mallas echadas y vueltas a leer) y la
@@ -457,16 +457,16 @@ bool BeardUpload() {
     s_beardBuf = b; s_beardSrv = sv;
     return true;
 }
-void BeardKeepSrc(FaceMesh* m, const std::vector<float>& ps, const std::vector<uint32_t>& iv, const std::vector<float>& wv) {   // con s_mx tomado
+void BeardKeepSrc(FaceMesh* m, const std::vector<float>& ps, const std::vector<uint32_t>& iv, const std::vector<float>& wv, bool jaw) {   // con s_mx tomado
     m->geoId = GeoId((uint64_t)m->ib, m->vmin, m->nv);
     if (std::find(s_geoUsed.begin(), s_geoUsed.end(), m->geoId) != s_geoUsed.end()) m->beardSrc = true;
-    for (const BeardSrc& b : s_bsrc) if (b.id == m->geoId) return;
+    for (BeardSrc& b : s_bsrc) if (b.id == m->geoId) { b.jaw = b.jaw || jaw; return; }
     const size_t by = (size_t)m->nv * (12 + 16 + 4);
     if (s_bsrcBytes + by > (32u << 20)) return;
-    BeardSrc b; b.id = m->geoId; b.ib = (uint64_t)m->ib; b.nv = m->nv; b.head = m->head; b.shapeOff = m->xferGate ? -1 : m->shapeOff;
+    BeardSrc b; b.id = m->geoId; b.ib = (uint64_t)m->ib; b.nv = m->nv; b.head = m->head; b.shapeOff = m->xferGate ? -1 : m->shapeOff; b.jaw = jaw;
     b.p = ps; b.w = wv; b.j.resize(iv.size()); for (size_t i = 0; i < iv.size(); i++) b.j[i] = (uint8_t)(std::min)(iv[i], 31u);
     s_bsrcBytes += by; s_bsrc.push_back(std::move(b));
-    static int nl = 0; if (nl++ < 60) Log("expresiones: piel para la barba: malla %d, geometria %d (%u vertices, primer vertice %u, cabeza %d%s)", m->id, m->geoId, m->nv, m->vmin, m->head, m->shapeOff >= 0 ? ", con formas" : "");
+    static int nl = 0; if (nl++ < 60) Log("expresiones: piel para la barba: malla %d, geometria %d (%u vertices, primer vertice %u, cabeza %d%s%s)", m->id, m->geoId, m->nv, m->vmin, m->head, m->shapeOff >= 0 ? ", con formas" : "", jaw ? ", abre la boca" : ", pieza sin abrir la boca");
 }
 bool BeardBind(FaceMesh* m, const std::vector<float>& ps) {   // con s_mx tomado
     if (s_bsrc.empty() || m->nv == 0) return false;
@@ -503,23 +503,32 @@ bool BeardBind(FaceMesh* m, const std::vector<float>& ps) {   // con s_mx tomado
         if (m->beardTries == 0 || m->beardTries == 14) Log("expresiones: pelo %d (%u vertices) sin enlazar a la piel (intento %d): muestra %d / %d a menos de 12 mm (hace falta la mitad)", m->id, m->nv, m->beardTries + 1, gc, ns);
         return false;
     }
+    // (04/11 m, Agustin: "la barba sigue sin seguir ... con otros modelos de barba y el de messi tambien pero es menos notorio";
+    // log 13:59 jugador 5e32: la barba de 6102 v quedo entera en la geometria 18 de 341 v) la cara de algunos jugadores viene en
+    // pedazos de buffers distintos y la barba solo miraba el buffer elegido; ademas un pedazo que no es la cara entera no tiene las
+    // mascaras de "abrir la boca" (whole) y lo que se enlazaba a el no abria. Ahora entran tambien los otros buffers de piel dibujados
+    // a menos de 4 dibujos del elegido (el mismo jugador) y, por vertice, un pedazo sin "abrir la boca" pierde contra uno que si abre
+    // salvo que este 6 mm mas cerca
+    std::vector<uint64_t> cand{ gib };
+    if (recent) for (auto& kv : nearDraw) if (kv.first != gib && kv.second <= gq + 4 && cov.count(kv.first)) cand.push_back(kv.first);
     // 2) por vertice: la pieza de la piel con el vertice mas cercano y sus 4 vecinos mas cercanos (1/d^4); se apaga de 8 a 25 mm
     std::vector<float> d((size_t)m->nv * kBeardF4 * 4, 0.0f);
-    int nOk = 0; float dmax = 0;
+    int nOk = 0, nJaw = 0; float dmax = 0;
     std::vector<int> used;
     for (UINT v = 0; v < m->nv; v++) {
         const float* q = &ps[(size_t)v * 3];
         const BeardSrc* bs = nullptr; struct Nb { float d2; UINT i; } nb[4] = { { 1e9f, 0 }, { 1e9f, 0 }, { 1e9f, 0 }, { 1e9f, 0 } };
-        float bestAll = 1e9f;
+        float bestAll = 1e9f, bestEff = 1e9f;
         for (const BeardSrc& S : s_bsrc) {
-            if (S.ib != gib) continue;
+            if (std::find(cand.begin(), cand.end(), S.ib) == cand.end()) continue;
             Nb loc[4] = { { 1e9f, 0 }, { 1e9f, 0 }, { 1e9f, 0 }, { 1e9f, 0 } };
             for (UINT u = 0; u < S.nv; u++) {
                 const float* r = &S.p[(size_t)u * 3]; const float dx = q[0] - r[0], dy = q[1] - r[1], dz = q[2] - r[2]; const float d2 = dx * dx + dy * dy + dz * dz;
                 if (d2 >= loc[3].d2) continue;
                 int k = 3; while (k > 0 && loc[k - 1].d2 > d2) { loc[k] = loc[k - 1]; k--; } loc[k] = { d2, u };
             }
-            if (loc[0].d2 < bestAll) { bestAll = loc[0].d2; bs = &S; memcpy(nb, loc, sizeof nb); }
+            const float eff = sqrtf(loc[0].d2) + (S.jaw ? 0.0f : 0.006f);
+            if (eff < bestEff) { bestEff = eff; bestAll = loc[0].d2; bs = &S; memcpy(nb, loc, sizeof nb); }
         }
         if (!bs) continue;
         const float dn = sqrtf(bestAll);
@@ -545,7 +554,7 @@ bool BeardBind(FaceMesh* m, const std::vector<float>& ps) {   // con s_mx tomado
         for (int k = 0; k < 4; k++) { o[k] = top[k] >= 0 ? (float)top[k] : 0.0f; o[4 + k] = top[k] >= 0 ? bw[top[k]] / tw * fade : 0.0f; }
         o[8] = (float)bs->id; o[9] = (float)bs->head;
         for (UINT g = 0; g < kShapeN; g++) for (int c = 0; c < 3; c++) o[12 + g * 4 + c] = sh[g][c] / ws * fade;
-        nOk++; dmax = (std::max)(dmax, dn);
+        nOk++; dmax = (std::max)(dmax, dn); if (bs->jaw) nJaw++;
         if (std::find(used.begin(), used.end(), bs->id) == used.end()) used.push_back(bs->id);
     }
     if (!nOk) return false;
@@ -559,7 +568,7 @@ bool BeardBind(FaceMesh* m, const std::vector<float>& ps) {   // con s_mx tomado
     m->beardUsed = used; m->beardOjo = !recent;   // (04/11 l) enlazada sin piel dibujada junto: se reintenta
     char ug[96]; int uk = 0; ug[0] = 0; for (size_t i = 0; i < used.size() && uk < 80; i++) uk += snprintf(ug + uk, sizeof ug - uk, "%s%d", i ? "," : "", used[i]);
     static int nLogB = 0;
-    if (nLogB < 80 && ++nLogB) Log("expresiones: barba %d (%u vertices) enlazada a la piel de la cara (%d piezas: geometrias %s, %d mallas de la tabla, %s, %d de %u vertices a menos de 25 mm, muestra %d / %d a menos de 12 mm, %.1f mm de promedio)", m->id, m->nv, (int)used.size(), ug, nMark, recent ? "piel dibujada junto a la barba" : "OJO: ninguna piel dibujada cerca, la mas cercana", nOk, m->nv, gc, ns, gd * 1000.0);
+    if (nLogB < 80 && ++nLogB) Log("expresiones: barba %d (%u vertices) enlazada a la piel de la cara (%d piezas: geometrias %s, %d mallas de la tabla, %s, %d de %u vertices a menos de 25 mm, muestra %d / %d a menos de 12 mm, %.1f mm de promedio; %d buffers de piel, %d vertices en piel que abre la boca)", m->id, m->nv, (int)used.size(), ug, nMark, recent ? "piel dibujada junto a la barba" : "OJO: ninguna piel dibujada cerca, la mas cercana", nOk, m->nv, gc, ns, gd * 1000.0, (int)cand.size(), nJaw);
     return m->cb != nullptr;
 }
 
@@ -826,7 +835,7 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
             static size_t kept = 0;
             if (m->nv <= 20000 && kept + ps.size() * 4 < (24u << 20)) { m->xferPs = ps; m->xferIb = ibKey; kept += ps.size() * 4; }
         }
-        if (hd <= 31 && !eye && !mouth && !thin && m->nv >= 300 && m->nv <= 20000) BeardKeepSrc(m, ps, iv, wv);   // (04/11 c) piel de cara: la barba se enlaza a ella
+        if (hd <= 31 && !eye && !mouth && !thin && m->nv >= 300 && m->nv <= 20000) BeardKeepSrc(m, ps, iv, wv, (jawFull | jawHalf) != 0u);   // (04/11 c) piel de cara: la barba se enlaza a ella
         const UINT shp[4] = { m->shapeOff >= 0 ? (UINT)m->shapeOff : 0u, m->nv, m->vmin, m->shapeOff >= 0 ? kShapeN : 0u };
         m->cb = MakeCB((UINT)m->head, (UINT)mx, (UINT)m->id, eye ? 2u : (mouth ? 1u : 0u), lids, jawFull, jawHalf, lipTop, lipUp, eye ? eyes : nullptr, mus, shp, m->cbv);
         if (m->cb && m->xferGate && m->shapeOff >= 0) { UINT z[28]; memcpy(z, m->cbv, sizeof z); z[27] = 0; m->cbNoShape = MakeCBRaw(z); }
