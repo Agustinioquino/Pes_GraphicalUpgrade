@@ -12,6 +12,18 @@
 // (04/11) z330 / w330: translucidez a contraluz (PESTurfTransmit), fuerza y cuanto queda de lejos
 // Se incluye despues de declarar IniParams (lee la fila 111 para la altura del sol).
 
+// (04/11) el sol del CIELO en vista para el pasto. En repeticiones y cortes el motor gira la luz con la camara (rumbo = cielo + 2 x
+// (camara + 90), hasta 113 grados en el log del 04/11) y el brillo de las hojas, el contraluz y la sombra entre hojas la seguian (Agustin:
+// "when you rotate camera sun obligates grass"). La fila 312 (DLL) trae el sol del cielo en mundo (PESSunStable); se pasa a vista con la
+// matriz de la escena (las mismas cuentas que la sombra de las nubes). La sombra del shadow map sigue siendo la del motor
+float3 PESTurfSunView(float3 Lv, float4x4 Mv)
+{
+  float3 vX = float3(Mv._m00, Mv._m01, Mv._m02), vY = float3(Mv._m10, Mv._m11, Mv._m12), vZ = float3(Mv._m20, Mv._m21, Mv._m22);
+  float3 Lw = normalize(float3(dot(Lv, vX), dot(Lv, vY), dot(Lv, vZ)));
+  float3 Sw = PESSunStable(Lw);
+  return normalize(Sw.x * vX + Sw.y * vY + Sw.z * vZ);
+}
+
 // difusa del sol sobre el pasto: wrapD es la del motor (directa + envoltura por translucidez)
 // trans: translucidez del G-buffer (27/10: las hojas pintadas de cal llevan ~0.1 y no se tinen; las verdes 0.4-1.0)
 float3 PESTurfDiffuse(float3 sunC, float rawNdotL, float wrapD, float4 PG, float trans, float upNL)

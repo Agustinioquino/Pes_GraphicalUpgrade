@@ -531,15 +531,20 @@ void main(
   r2.w = r5.y * r5.x;
   transFloor = r2.w;
   r2.x = saturate(max(r2.x, r2.w));
+  float3 pesNT = r3.xyw;   // (04/11) normal antes de que r3.xyz pase a ser la luz (la usa el pasto con el sol del cielo)
   r3.xyz = r2.xxx * r8.xyz;
   // (27/10) el sol sobre el pasto (313, pes_sunturf.hlsli): solo cancha y hojas (tipo 3)
   float4 pesPG = IniParams.Load(int2(313,0)); bool pesTurf = matType == 3 && pesPG.w > 0.5;
-  if (pesTurf) { float3 upT = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));   // arriba (cancha) en vista
-    float upNL = dot(upT, normalize(pesLDir.xyz)); if (upNL < -0.2 && pesPG.w > 1.0) upNL = -upNL;   // (03/11) como el rebote: el sol siempre arriba
-    r3.xyz = PESTurfDiffuse(r8.xyz, rawNdotL, r2.x, pesPG, trans, upNL);
+  // (04/11) el pasto con el sol del cielo (no gira con la camara en repeticiones): N.L y envoltura de nuevo con ese sol
+  float3 pesLT = normalize(pesLDir.xyz);
+  if (pesTurf) pesLT = PESTurfSunView(pesLT, g_psScene.m_view);
+  if (pesTurf) { float rawT = dot(pesNT, pesLT); float wrapT = saturate(max(rawT + trans * (1.0 - rawT * rawT), transFloor));
+    float3 upT = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));   // arriba (cancha) en vista
+    float upNL = dot(upT, pesLT); if (upNL < -0.2 && pesPG.w > 1.0) upNL = -upNL;   // (03/11) como el rebote: el sol siempre arriba
+    r3.xyz = PESTurfDiffuse(r8.xyz, rawT, wrapT, pesPG, trans, upNL);
     // (04/11) z330: la luz que atraviesa la hoja hacia la camara (contraluz), fina de cerca y suave de lejos (pes_sunturf.hlsli)
     r3.xyz += PESTurfTransmit(r8.xyz, v0.xy / v0.ww, v1.xy / v1.ww, g_DepthTexture, g_samplerPoint_Wrap_s, g_psScene.m_projectionParam,
-                              g_psScene.m_cameraCenterOffset.xy, g_psSystem.m_renderBuffer.x, normalize(pesLDir.xyz), rawNdotL, trans, pesPG); }
+                              g_psScene.m_cameraCenterOffset.xy, g_psSystem.m_renderBuffer.x, pesLT, rawT, trans, pesPG); }
   // PES21 (18/10): curvatura en pantalla (cuanto gira la normal por metro); fuera de los if para poder usar derivadas
   float pesCurv = 0.0;
   { float3 nC = normalize(r3.xyw);
@@ -678,7 +683,7 @@ void main(
     dST = (abs(dST) < 1e-9) ? 1e-9 : dST;
     float2 AmT = dUT / dST, BmT = uT - AmT * sT;
     if (pesTurf && pesPG.x > 0.0 && r0.x > 0.02)
-      r0.xyz *= PESTurfMicroShadow(g_DepthTexture, g_samplerPoint_Wrap_s, sT, uT, AmT, BmT, v2.xy, normalize(pesLDir.xyz), g_psScene.m_projectionParam,
+      r0.xyz *= PESTurfMicroShadow(g_DepthTexture, g_samplerPoint_Wrap_s, sT, uT, AmT, BmT, v2.xy, pesLT, g_psScene.m_projectionParam,
                                    g_psScene.m_cameraCenterOffset.xy, g_psSystem.m_renderBuffer.x, g_psSystem.m_timeParam.z, pesPG.x); }
   float3 pesHsP = 0;   // (04/11) posicion en la vista del atlas, para el grosor real de la piel
   // (27/10 c) sombra propia de la cabeza: el atlas de alta resolucion de las cabezas cercanas (t30) multiplica la sombra del sol
