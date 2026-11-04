@@ -5,9 +5,13 @@
 # (Descartado: copiar los dientes a una "zona libre" del atlas; la boca plana de Konami de 28 caras usa esa zona.)
 import numpy as np
 
-TONES = {'messi': (1.04, 1.04, 1.035)}   # (04/11 c) mas blancos que la comun (carillas; antes marfil calido 1/.985/.95)
+TONES = {'messi': (1.04, 1.04, 1.035)}
+# (04/11 e) Agustin: 'no me convence ... los dientes de arriba, el color'. Desde la v25 la comun tiene el marfil de Konami
+# (L 0.60); Messi lleva carillas: blanco apenas calido y mas claro. (luminancia mediana, color objetivo); reemplaza TONES/LO_WHITE
+WHITE = {'messi': (0.74, (1.0, 0.975, 0.935))}
+LUMW = np.array([0.30, 0.59, 0.11], np.float32)   # (04/11 c) mas blancos que la comun (carillas; antes marfil calido 1/.985/.95)
 # (04/11) dientes de abajo (fila de abajo del atlas, v 0.36-0.66): mas blancos ('un tono un poco mas blanco para los de abajo')
-LO_WHITE = {'messi': 0.35}   # 0 = como arriba; 1 = gris claro sin tinte
+LO_WHITE = {'messi': 0.0}   # (04/11 e) con WHITE todos los dientes de Messi van parejos   # 0 = como arriba; 1 = gris claro sin tinte
 MARKER = {'messi': 64995}               # indices del dibujo de su boca (21664 triangulos comunes + 1 degenerado)
 
 def sst(e0, e1, x):
@@ -19,6 +23,16 @@ def tone_bsm(bsm, profile, log=print):
     m = sst(0.25, 0.40, mx) * sst(0.40, 0.28, sat) * sst(0.16, 0.10, rg)
     out = bsm.copy()
     t = c * (1 + m[..., None] * (np.array(TONES[profile]) - 1))
+    tw = WHITE.get(profile)
+    if tw:   # (04/11 e) tono propio: luminancia mediana y color objetivo, detalle propio conservado
+        L = (c * LUMW).sum(-1); k = m > 0.5
+        med = float(np.median(L[k])) if k.any() else 0.6
+        th = np.array(tw[1], np.float32); th = th / (th * LUMW).sum()
+        own = c / np.maximum(L, 1e-4)[..., None]
+        tt = np.clip((own * 0.3 + th * 0.7) * (L * (tw[0] / med))[..., None], 0, 1)
+        t = c * (1 - m[..., None]) + tt * m[..., None]
+        lt = (t * LUMW).sum(-1)
+        log('  tono %s: dientes L %.3f -> %.3f %s' % (profile, med, float(np.median(lt[k])), np.median(t[k], 0).round(3).tolist()))
     w = LO_WHITE.get(profile, 0.0)
     if w:
         H = bsm.shape[0]; v = (np.arange(H) + 0.5) / H
