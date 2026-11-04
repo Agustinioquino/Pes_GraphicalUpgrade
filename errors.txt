@@ -1,0 +1,6 @@
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\expr.cpp(437,23): error C2059: syntax error: '.' [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\expr.cpp(437,40): error C3536: 'it': cannot be used before it is initialized [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\expr.cpp(437,50): error C2059: syntax error: '.' [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\expr.cpp(442,23): error C2059: syntax error: '.' [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\expr.cpp(442,44): error C3536: 'nq': cannot be used before it is initialized [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\expr.cpp(442,54): error C2059: syntax error: '.' [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
