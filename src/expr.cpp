@@ -43,7 +43,7 @@ struct FaceMesh {
     UINT lastFrame = 0;   // (01/11) ultimo cuadro en que se dibujo (para echar las mallas viejas sin vaciar toda la tabla)
     int lids[4] = { -1, -1, -1, -1 }; UINT lidCap = 0;   // (02/11 h) parpados en la paleta y ultimo cuadro en que se leyo la paleta
     int shapeOff = -1; uint32_t huella = 0; ID3D11ShaderResourceView* shapeWr = nullptr;   // (04/11) gestos esculpidos (formas\<huella>.bin): primer float4 de esta malla en s_shapeData
-    UINT cbv[28] = {}; std::vector<float> xferPs; uint64_t xferIb = 0;   // (04/11 c) lo que lleva el cbuffer y, si espera formas pasadas de la piel, sus vertices
+    UINT cbv[28] = {}; std::vector<float> xferPs; uint64_t xferIb = 0; int xferUsed = 0; bool xferGate = false; ID3D11Buffer* cbNoShape = nullptr;   // (04/11 c) lo que lleva el cbuffer y, si espera formas pasadas de la piel, sus vertices
 };
 std::mutex s_mx;
 std::unordered_map<uint64_t, FaceMesh*> s_meshes;
@@ -54,6 +54,7 @@ UINT s_frame = 0;   // cuadros (Present) desde el arranque
 int s_evicted = 0;   // mallas echadas por viejas (resumen)
 std::atomic<int> s_binds{0}, s_bindsNone{0};
 std::atomic<int> s_shapeDraws{0};   // (04/11) dibujos con gestos esculpidos
+UINT s_drawSeq = 0, s_packSeq = 0, s_packFrame = 0xffffffffu; struct GateE { int id = 0; UINT seq = 0; }; GateE s_gateRing[16]; UINT s_gateAt = 0; GateE s_gateOk[32]; UINT s_gateOkAt = 0; int s_gateOn = 0, s_gateOff = 0;   // (04/11 d) mallas pegadas a una piel con formas
 std::atomic<int> s_bindsWait{0}, s_bindsDisc{0}, s_bindsNew{0};   // (01/11) de los 'sin dato': malla en lectura / descartada o no cara / recien vista
 int s_hist[4] = {};   // mallas listas con cabeza 0 / 1 / 2..31 / descartadas
 
@@ -188,16 +189,24 @@ bool ShapeUpload() {   // con s_mx tomado: rehace el buffer con todo s_shapeData
     s_shapeBuf = b; s_shapeSrv = v; return true;
 }
 // formas de una malla sin paquete propio, sacadas de la piel cercana; -1 si no hay piel con formas cerca
+// (04/11 d, log 05:39: solo la malla 75 (94 v) era del mismo buffer; las pestanas (29 y 71 v) vienen en otro) una malla chica
+// (<= 3000 v) de otro buffer tambien la toma si el 85 % de sus vertices esta a menos de 6 mm de esa piel; como todas las caras
+// estan en el mismo lugar del modelo, esas formas solo se enlazan cuando la malla se dibuja pegada (en el mismo cuadro, a pocos
+// dibujos) a una piel con formas propias: las pestanas de otro jugador no se tocan (ExprBufferForDraw, xferGate)
+// devuelve -2 si no hay pieles nuevas desde la ultima vez (nada que rehacer)
 int ShapeXfer(FaceMesh* m, const float* ps, uint64_t ib) {   // con s_mx tomado
     if (m->nv > 20000) return -1;
     bool same = false; for (const ShapeSrc& S : s_src) if (S.ib == ib) same = true;
-    if (!same) return -1;
+    if (!same && m->nv > 3000) return -1;
+    int used = 0; for (const ShapeSrc& S : s_src) if (!same || S.ib == ib) used++;
+    if (used == m->xferUsed) return -2;
+    m->xferUsed = used;
     std::vector<float> d((size_t)m->nv * kShapeN * 4, 0.0f);
-    int nCerca = 0; float mx = 0.0f;
+    int nCerca = 0, nPegado = 0; float mx = 0.0f;
     for (UINT v = 0; v < m->nv; v++) {
         const float* P = ps + (size_t)v * 3;
         struct Nb { float d2; const ShapeSrc* s; UINT i; } nb[4]; int nn = 0;
-        for (const ShapeSrc& S : s_src) if (S.ib == ib) for (UINT i = 0; i < S.nv; i++) {
+        for (const ShapeSrc& S : s_src) if (!same || S.ib == ib) for (UINT i = 0; i < S.nv; i++) {
             const float* Q = &S.p[(size_t)i * 3];
             const float dx = P[0] - Q[0], dy = P[1] - Q[1], dz = P[2] - Q[2], d2 = dx * dx + dy * dy + dz * dz;
             if (d2 > 0.015f * 0.015f) continue;
@@ -206,6 +215,7 @@ int ShapeXfer(FaceMesh* m, const float* ps, uint64_t ib) {   // con s_mx tomado
         }
         if (!nn) continue;
         float dmin = 1e9f; for (int k = 0; k < nn; k++) dmin = (std::min)(dmin, nb[k].d2); dmin = sqrtf(dmin);
+        if (dmin < 0.006f) nPegado++;
         const float t = std::clamp((dmin - 0.006f) / 0.009f, 0.0f, 1.0f), fall = 1.0f - t * t * (3.0f - 2.0f * t);
         if (fall <= 0.0f) continue;
         float ws = 0.0f, w[4];
@@ -219,11 +229,20 @@ int ShapeXfer(FaceMesh* m, const float* ps, uint64_t ib) {   // con s_mx tomado
         const float* q = &d[(size_t)v * kShapeN * 4]; mx = (std::max)(mx, sqrtf(q[0] * q[0] + q[1] * q[1] + q[2] * q[2]));
     }
     if (nCerca == 0 || mx < 1e-4f) return -1;
+    if (!same && nPegado < (int)(0.85f * (float)m->nv)) return -1;
+    m->xferGate = !same;
     const size_t off4 = s_shapeData.size() / 4;
     s_shapeData.insert(s_shapeData.end(), d.begin(), d.end());
     if (!ShapeUpload()) { s_shapeData.resize(off4 * 4); return -1; }
-    Log("expresiones: formas pasadas de la piel a la malla %d (%08X, %u vertices, %d cerca de la piel; sonrisa maximo %.1f mm)", m->id, m->huella, m->nv, nCerca, mx * 1000);
+    Log("expresiones: formas pasadas de la piel a la malla %d (%08X, %u vertices, %d cerca de la piel, %d pegados; sonrisa maximo %.1f mm%s)", m->id, m->huella, m->nv, nCerca, nPegado, mx * 1000, same ? "" : "; otro buffer: solo junto a su piel");
     return (int)off4;
+}
+// cbuffer con las formas pasadas (y, si van solo junto a su piel, el mismo sin formas para cuando no)
+void ShapeXferCB(FaceMesh* m, int off) {
+    UINT v[28]; memcpy(v, m->cbv, sizeof v); v[24] = (UINT)off; v[25] = m->nv; v[26] = m->vmin; v[27] = kShapeN;
+    ID3D11Buffer* b = MakeCBRaw(v); if (!b) return;
+    if (m->xferGate && !m->cbNoShape) { UINT z[28]; memcpy(z, m->cbv, sizeof z); z[27] = 0; m->cbNoShape = MakeCBRaw(z); if (!m->cbNoShape) { b->Release(); return; } }
+    memcpy(m->cbv, v, sizeof v); m->cb = b; m->shapeOff = off;   // el cbuffer viejo no se libera (otro hilo lo puede estar por enlazar)
 }
 void ShapeXferPending() {   // con s_mx tomado: llego piel con formas nueva, las mallas que esperaban la toman
     for (auto& kv : s_meshes) {
@@ -231,8 +250,7 @@ void ShapeXferPending() {   // con s_mx tomado: llego piel con formas nueva, las
         if (m->state != 3 || m->xferPs.empty()) continue;
         const int off = ShapeXfer(m, m->xferPs.data(), m->xferIb);
         if (off < 0) continue;
-        UINT v[28]; memcpy(v, m->cbv, sizeof v); v[24] = (UINT)off; v[25] = m->nv; v[26] = m->vmin; v[27] = kShapeN;
-        if (ID3D11Buffer* b = MakeCBRaw(v)) { memcpy(m->cbv, v, sizeof v); m->cb = b; m->shapeOff = off; }   // el cbuffer viejo no se libera (otro hilo lo puede estar por enlazar)
+        ShapeXferCB(m, off);
     }
 }
 int ShapeFind(uint32_t hu, UINT nv, const float* ps, uint64_t ib) {   // con s_mx tomado
@@ -538,7 +556,7 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
         m->shapeOff = (hd <= 31 && !eye && !mouth) ? ShapeFind(m->huella, m->nv, ps.data(), ibKey) : -1;
         if (m->shapeOff >= 0) m->shapeWr = s_shapes[m->huella].wr;
         else if (hd <= 31 && !eye && !mouth) {   // (04/11 c) sin formas propias: las de la piel cercana del mismo modelo (ahora o cuando llegue)
-            m->shapeOff = ShapeXfer(m, ps.data(), ibKey);
+            const int xo = ShapeXfer(m, ps.data(), ibKey); m->shapeOff = xo >= 0 ? xo : -1;
             // se guardan los vertices por si llega otro pedazo de esa piel despues (la cara viene en 3 pedazos): solo mallas chicas,
             // con tope total de ~24 MB
             static size_t kept = 0;
@@ -546,6 +564,7 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
         }
         const UINT shp[4] = { m->shapeOff >= 0 ? (UINT)m->shapeOff : 0u, m->nv, m->vmin, m->shapeOff >= 0 ? kShapeN : 0u };
         m->cb = MakeCB((UINT)m->head, (UINT)mx, (UINT)m->id, eye ? 2u : (mouth ? 1u : 0u), lids, jawFull, jawHalf, lipTop, lipUp, eye ? eyes : nullptr, mus, shp, m->cbv);
+        if (m->cb && m->xferGate && m->shapeOff >= 0) { UINT z[28]; memcpy(z, m->cbv, sizeof z); z[27] = 0; m->cbNoShape = MakeCBRaw(z); }
         for (int i = 0; i < 4; i++) m->lids[i] = lids[i];
         if (m->dump && hd <= 31 && !eye && !mouth && m->nv >= 200) DumpObj(m, ps, uvs, iv, wv, ylo, yhi);
         m->tri.clear(); m->tri.shrink_to_fit();
@@ -594,6 +613,18 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
         rel(); FaceMesh* m = it->second; m->lastFrame = s_frame;
         if (m->state == 3 && m->cb) {
             s_binds++;
+            const UINT seq = ++s_drawSeq;
+            if (m->shapeOff >= 0 && !m->xferGate) {   // piel con formas propias: las mallas pegadas de antes en este cuadro quedan habilitadas
+                s_packSeq = seq; s_packFrame = s_frame;
+                for (const GateE& g : s_gateRing) if (g.id && g.seq + 16 >= seq && g.seq <= seq) s_gateOk[s_gateOkAt++ % 32] = { g.id, s_frame };   // seq del ok = cuadro
+            }
+            if (m->xferGate && m->shapeOff >= 0) {
+                s_gateRing[s_gateAt++ % 16] = { m->id, seq };
+                bool ok = s_packFrame == s_frame && seq - s_packSeq <= 16;   // dibujada poco despues de su piel
+                for (const GateE& g : s_gateOk) if (g.id == m->id && s_frame - g.seq <= 2) ok = true;   // o poco antes (cuadro anterior)
+                if (!ok) { s_gateOff++; if (m->head <= 31 && (m->lids[0] >= 0 || m->lids[1] >= 0) && s_frame - m->lidCap >= 120) { m->lidCap = s_frame; LidCapture(c, m); } return m->cbNoShape ? m->cbNoShape : s_none; }
+                s_gateOn++;
+            }
             if (shapeSrv && m->shapeOff >= 0 && s_shapeSrv) { *shapeSrv = s_shapeSrv; s_shapeDraws++; if (shapeWr) *shapeWr = m->shapeWr; }
             if (m->head <= 31 && (m->lids[0] >= 0 || m->lids[1] >= 0) && s_frame - m->lidCap >= 120) { m->lidCap = s_frame; LidCapture(c, m); }
             if (headCentroid && m->hcOk && m->nv >= 300) { *headCentroid = m->hc; if (headIdx) *headIdx = m->head; } return m->cb; }
@@ -790,7 +821,8 @@ void ExprPresent() {
             int np = 0; for (auto& kv : s_shapes) if (kv.second.off >= 0) np++;
             const int sd = s_shapeDraws.exchange(0);
             if (np || sd) Log("expresiones: gestos esculpidos: %d mallas con formas, %d dibujos (sonrisa %.2f grito %.2f enojo %.2f asombro %.2f puchero %.2f, perfiles %s)", np, sd,
-                g_cfg.live[355][1], g_cfg.live[356][0], g_cfg.live[355][0], g_cfg.live[355][2], g_cfg.live[356][1], g_cfg.live[356][3] > 0.5f ? "si" : "no"); }
+                g_cfg.live[355][1], g_cfg.live[356][0], g_cfg.live[355][0], g_cfg.live[355][2], g_cfg.live[356][1], g_cfg.live[356][3] > 0.5f ? "si" : "no");
+            if (s_gateOn || s_gateOff) { Log("expresiones: mallas pegadas (pestanas de otro buffer): %d dibujos con formas, %d sin (lejos de su piel)", s_gateOn, s_gateOff); s_gateOn = s_gateOff = 0; } }
     }
 }
 
