@@ -242,6 +242,7 @@ static void ProfLoad() {   // con s_mx tomado
         *eq = 0; char* k = a; char* v = eq + 1; ProfTrim(k); ProfTrim(v);
         if (!_stricmp(k, "id")) { cur->id = (uint32_t)strtoul(v, nullptr, 10); continue; }
         if (!_stricmp(k, "nombre")) { snprintf(cur->name, sizeof cur->name, "%s", v); continue; }
+        if (!_stricmp(k, "boca") || !_stricmp(k, "cara")) continue;   // (04/11) boca propia por jugador: las lee bocajug.cpp
         char* dot = strchr(k, '.'); if (!dot) { bad++; continue; } *dot = 0; const char* bn = dot + 1;
         int g = -1; for (int i = 0; i < PG_N; i++) if (!_stricmp(k, kPgName[i])) g = i;
         int d = -1; for (int i = 0; i < kND; i++) if (!_stricmp(bn, kDef[i].name) || !_stricmp(bn, kDef[i].name + (strncmp(kDef[i].name, "skf_", 4) ? 0 : 4))) d = i;
