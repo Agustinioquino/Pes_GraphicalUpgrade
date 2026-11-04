@@ -26,7 +26,7 @@ void ScanRefsInto(uintptr_t base, uintptr_t end, const char* dllName);   // quie
 extern void* g_overlayOldProc;
 
 // ---------------------------------------------------------------- parametros (lo que en 3DMigoto era IniParams)
-constexpr int kParamCount = 367;           // float4 x 348 -> t120 en los shaders (IniParams.Load(int2(i,0))). (20/10: era 128 y los parametros 128+ se perdian; 25/10: 256 -> 320, la ropa contra el cuerpo usa 256 / 257; 27/10: 320 -> 336: la fila 320 (torso bajo la camiseta) quedaba fuera y el ini la descartaba; 31/10: 340 -> 344 (expresiones 340 / 341); 01/11: 344 -> 346: 343 camara lenta, 344 / 345 camara libre; 01/11 b: 346 -> 347: 346 seguir la cara; 347 -> 348: 347 abrir la boca / nariz; 348 -> 349: 348 musculos virtuales; 01/11 c: 349 -> 351: 349 torso, 350 boca por huesos; 351 torso bajo la camiseta ajustada; 352 mangas mas pegadas al brazo; 353 viento por partido; 03/11: 354 -> 355: 354 ojos en circulos (expresiones); 355 -> 356: 355 gestos enojo / sonrisa / asombro / hablar; 04/11: 356 -> 357: 356 grito, puchero, perfiles por cara; 04/11 b: 357 -> 359: 357 / 358 teselacion de la cara; 04/11 c: 359 -> 360: 359 relieve de la teselacion; 04/11 d: 360 -> 361: 360 prueba de la teselacion; 04/11 e: 361 / 362 sliders por hueso (expresiones); 363 -> 364: 363 caja de las piernas del atlas de sombras (grosor de la piel))   // (04/11 g) 364 = teselacion del cuerpo -> 365; (04/11 h) 365 = angulo de las cejas (expresiones), 366 = borde del ojo -> 367
+constexpr int kParamCount = 369;           // float4 x 348 -> t120 en los shaders (IniParams.Load(int2(i,0))). (20/10: era 128 y los parametros 128+ se perdian; 25/10: 256 -> 320, la ropa contra el cuerpo usa 256 / 257; 27/10: 320 -> 336: la fila 320 (torso bajo la camiseta) quedaba fuera y el ini la descartaba; 31/10: 340 -> 344 (expresiones 340 / 341); 01/11: 344 -> 346: 343 camara lenta, 344 / 345 camara libre; 01/11 b: 346 -> 347: 346 seguir la cara; 347 -> 348: 347 abrir la boca / nariz; 348 -> 349: 348 musculos virtuales; 01/11 c: 349 -> 351: 349 torso, 350 boca por huesos; 351 torso bajo la camiseta ajustada; 352 mangas mas pegadas al brazo; 353 viento por partido; 03/11: 354 -> 355: 354 ojos en circulos (expresiones); 355 -> 356: 355 gestos enojo / sonrisa / asombro / hablar; 04/11: 356 -> 357: 356 grito, puchero, perfiles por cara; 04/11 b: 357 -> 359: 357 / 358 teselacion de la cara; 04/11 c: 359 -> 360: 359 relieve de la teselacion; 04/11 d: 360 -> 361: 360 prueba de la teselacion; 04/11 e: 361 / 362 sliders por hueso (expresiones); 363 -> 364: 363 caja de las piernas del atlas de sombras (grosor de la piel))   // (04/11 g) 364 = teselacion del cuerpo -> 365; (04/11 h) 365 = angulo de las cejas (expresiones), 366 = borde del ojo -> 367; (04/11 i) 367 = color de las cejas del jugador -> 368; 368 = pestanas con hebras -> 369
 // (26/10) filas de t120 ocupadas por tablas que escribe la DLL en cada cuadro (no usarlas para el ini): 194..254 tonos de piel por
 // jugador (skintone.cpp), 257 cuadro de la ropa contra el cuerpo (cuerpo.cpp). 300..304 son de las manos (manos.cpp + pes_hands.hlsli; 303 = manos relajadas, 304 = unas de los jugadores con textura propia, pes_nailfix.hlsli en el PS aa7d1833; v12.6).
 // 260..263 son de la musculatura (musculo.cpp: grupos de la v7 y musculos vivos).
@@ -134,7 +134,7 @@ struct HairType {
     float cejaGrosor = 1.0f, cejaDens = 1.0f, cejaElev = 1.0f, cejaLargo = 1.0f;
 };
 struct HairCfg { std::vector<HairType> types; std::map<std::string, std::string> faces; std::string defType = "corto"; bool loaded = false;
-    std::map<std::string, std::pair<float, float>> browFace; };   // (04/11) [cejas_cara] id = cantidad, largo (multiplicadores por jugador)
+    std::map<std::string, std::vector<float>> browFace; };   // (04/11 i) id = cantidad, largo, mezcla de color, r, g, b   // (04/11) [cejas_cara] id = cantidad, largo (multiplicadores por jugador)
 
 struct Config {
     std::wstring baseDir;                      // carpeta del mod (termina en '\')
@@ -284,7 +284,7 @@ struct FaceGenExtra { ID3D11ShaderResourceView* seedMap = nullptr; ID3D11ShaderR
 extern std::atomic<int> g_depthClearZero, g_depthClearOne;
 bool FaceGenLookup(ID3D11DeviceContext* c, ID3D11ShaderResourceView** outA, ID3D11ShaderResourceView** outB, FaceGenExtra* ex);
 // (04/11) cejas con hebras v2: repetir el dibujo de la cara con el GS de hebras (facegen.cpp; el dibujo lo hace hooks.cpp)
-bool BrowWanted(const FaceGenExtra& ex, uint64_t vsHash); bool BrowStrandsBegin(ID3D11DeviceContext* c, const FaceGenExtra* ex, uint64_t vsHash); void BrowStrandsEnd(ID3D11DeviceContext* c);
+bool BrowWanted(const FaceGenExtra& ex, uint64_t vsHash); bool LashWanted(uint64_t vsHash, uint64_t psHash); bool BrowStrandsBegin(ID3D11DeviceContext* c, const FaceGenExtra* ex, uint64_t vsHash); void BrowStrandsEnd(ID3D11DeviceContext* c);
 void FaceGenPresent(); void FaceGenClear(); void FaceGenReloadShaders(); int FaceGenCount();
 // inspector visual (inspect.cpp)
 extern std::atomic<bool> g_inspectOn; extern std::atomic<int> g_inspectSel;

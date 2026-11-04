@@ -981,7 +981,7 @@ bool LoadHairConfig() {
             h.faces[k] = Lower(v);
         } else if (sec == "cejas_cara") {   // (04/11) id = cantidad, largo
             std::vector<float> f = ParseFloats(v);
-            if (!f.empty()) h.browFace[k] = { f[0], f.size() > 1 ? f[1] : 1.0f };
+            if (!f.empty()) { std::vector<float> b = { 1.f, 1.f, 0.f, 0.35f, 0.2f, 0.12f }; for (size_t i = 0; i < f.size() && i < 6; i++) b[i] = f[i]; h.browFace[k] = b; }   // (04/11 i) + mezcla, r, g, b
         } else if (sec == "auto") {
             if (k == "default") h.defType = Lower(v);
         }

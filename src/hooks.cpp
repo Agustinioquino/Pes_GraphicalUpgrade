@@ -1401,6 +1401,10 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         }
         for (auto* v : chk) if (v) v->Release();
     }
+    // (04/11 i) pestanas con hebras: la tira de pestanas (VS 66917213 / PS f0d74b9c) se repite con el GS de pestanas al terminar
+    if (t_drawKind == 1 && vs && ps && !g_cfg.bypass && !d.brow.browVS && LashWanted(vs->hash, ps->hash)) {
+        d.brow = FaceGenExtra(); d.brow.browVS = vs->hash; d.brow.browCount = t_drawVerts; d.brow.browStart = t_drawStart; d.brow.browBase = t_drawBase;
+    }
     RingFaceBind(c, d.ring);   // (24/10 e) medicion del color de la cara: u7 (despues de las cejas en u5 / u6)
     return d.n > 0;
 }
