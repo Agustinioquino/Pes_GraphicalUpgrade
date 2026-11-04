@@ -979,6 +979,9 @@ bool LoadHairConfig() {
             if (f.size() > 0) t.cejaGrosor = f[0]; if (f.size() > 1) t.cejaDens = f[1]; if (f.size() > 2) t.cejaElev = f[2]; if (f.size() > 3) t.cejaLargo = f[3];
         } else if (sec == "caras") {
             h.faces[k] = Lower(v);
+        } else if (sec == "cejas_cara") {   // (04/11) id = cantidad, largo
+            std::vector<float> f = ParseFloats(v);
+            if (!f.empty()) h.browFace[k] = { f[0], f.size() > 1 ? f[1] : 1.0f };
         } else if (sec == "auto") {
             if (k == "default") h.defType = Lower(v);
         }

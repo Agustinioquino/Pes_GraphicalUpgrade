@@ -18,6 +18,9 @@
 #include <wincodec.h>
 #include <objbase.h>
 #include <cstdio>
+#include <set>
+#include <map>
+#include <fstream>
 
 namespace fx {
 
@@ -35,6 +38,21 @@ static std::atomic<int> s_hairGen{0};
 void FaceGenHairChanged() { s_hairGen++; }
 static float FaceSeed(const std::string& id) {   // 19/10: semilla 0..1 estable por cara (para variar dientes/encias por jugador)
     uint32_t h = 2166136261u; for (unsigned char ch : id) { h ^= ch; h *= 16777619u; } return (h & 0xffffff) / 16777216.0f; }
+// (04/11) cejas por jugador (Agustin: "modificar el largo y la cantidad de hebras por jugador"). El "jugador actual" es la UNICA
+// cara con hebras en los ultimos ~30 cuadros (editor, presentacion de un jugador). Sus valores (z77 cantidad, w77 largo) se
+// aplican en vivo a esa cara; "Guardar cejas de este jugador" los escribe en PES21FX_hair.ini [cejas_cara] id = cantidad, largo.
+static std::string BLower(std::string x) { for (auto& ch : x) ch = (char)tolower((unsigned char)ch); return x; }
+static std::string BTrim(const std::string& x) { size_t a = x.find_first_not_of(" \t\r\n"), b = x.find_last_not_of(" \t\r\n"); return a == std::string::npos ? std::string() : x.substr(a, b - a + 1); }
+static std::mutex s_browMx;
+static std::map<std::string, std::pair<float, float>> s_browLive;   // lo tocado en el menu en esta sesion (aun sin guardar)
+static std::string s_browCur;                                        // jugador actual ("" = ninguno o varios)
+static std::set<std::string> s_browSeen;                             // caras con hebras desde el ultimo corte
+static bool BrowFaceMul(const std::string& id, float& cant, float& largo) {
+    if (id.empty()) return false;
+    { std::lock_guard<std::mutex> lk(s_browMx); auto it = s_browLive.find(id); if (it != s_browLive.end()) { cant = it->second.first; largo = it->second.second; return true; } }
+    auto it = g_cfg.hair.browFace.find(BLower(id)); if (it == g_cfg.hair.browFace.end()) return false;
+    cant = it->second.first; largo = it->second.second; return true;
+}
 static HairCB MakeHairCB(const HairType& t, bool userMap, const std::string& id = "") {
     HairCB cb{};
     cb.a[0] = t.largo; cb.a[1] = t.rizo; cb.a[2] = t.rigidez; cb.a[3] = t.peso;
@@ -42,6 +60,8 @@ static HairCB MakeHairCB(const HairType& t, bool userMap, const std::string& id 
     for (int i = 0; i < 3; i++) { cb.root[i] = t.raiz[i] < 0 ? 0 : t.raiz[i]; cb.tip[i] = t.punta[i] < 0 ? 0 : t.punta[i]; }
     cb.root[3] = t.raiz[0] >= 0 ? 1.f : 0.f; cb.tip[3] = t.punta[0] >= 0 ? 1.f : 0.f;
     cb.brow[0] = t.cejaGrosor; cb.brow[1] = t.cejaDens; cb.brow[2] = t.cejaElev; cb.brow[3] = t.cejaLargo;
+    { float cant = 1.f, largo = 1.f;   // (04/11) cejas por jugador: lo guardado en [cejas_cara] o lo que se esta tocando en el menu
+      if (BrowFaceMul(id, cant, largo)) { cb.brow[1] *= cant; cb.brow[3] *= largo; } }
     cb.misc[0] = 1.f; cb.misc[1] = userMap ? 1.f : 0.f; cb.misc[2] = FaceSeed(id); cb.misc[3] = 0;
     return cb;
 }
@@ -221,6 +241,28 @@ void FaceGenPresent() {
         for (auto& kv : s_cache) { FaceEntry& fe = kv.second; if (!fe.hairCB) continue;
             const HairType* ht = HairTypeFor(fe.id, &fe.type);
             if (ht) { HairCB cb = MakeHairCB(*ht, fe.userMap, fe.id); g_dev.imm->UpdateSubresource(fe.hairCB, 0, nullptr, &cb, 0, 0); fe.hairGen = g; } } } }
+    // (04/11) cejas por jugador: cada 30 cuadros, si una sola cara tuvo hebras es el "jugador actual"; al cambiar, los sliders
+    // z77 / w77 toman sus valores; si el usuario los mueve, se aplican en vivo a su cbuffer
+    { static int frames = 0; static float lastC = -1, lastL = -1;
+      std::string cur;
+      { std::lock_guard<std::mutex> lk(s_browMx);
+        if (++frames >= 30) { frames = 0; std::string nc = s_browSeen.size() == 1 ? *s_browSeen.begin() : std::string(); s_browSeen.clear();
+            if (nc != s_browCur) { s_browCur = nc;
+                if (!nc.empty()) { float c0 = 1.f, l0 = 1.f; auto it = s_browLive.find(nc);
+                    if (it != s_browLive.end()) { c0 = it->second.first; l0 = it->second.second; }
+                    else { auto jt = g_cfg.hair.browFace.find(BLower(nc)); if (jt != g_cfg.hair.browFace.end()) { c0 = jt->second.first; l0 = jt->second.second; } }
+                    g_cfg.live[77][2] = c0; g_cfg.live[77][3] = l0;
+                    Log("cejas: jugador actual = cara %s (cantidad %.2f, largo %.2f)", nc.c_str(), c0, l0); }
+                lastC = g_cfg.live[77][2]; lastL = g_cfg.live[77][3]; } }
+        cur = s_browCur; }
+      float c1 = g_cfg.live[77][2], l1 = g_cfg.live[77][3];
+      if (!cur.empty() && (c1 != lastC || l1 != lastL) && c1 > 0.f && l1 > 0.f) {
+          lastC = c1; lastL = l1;
+          { std::lock_guard<std::mutex> lk(s_browMx); s_browLive[cur] = { c1, l1 }; }
+          std::lock_guard<std::mutex> lk(s_mx);
+          for (auto& kv : s_cache) { FaceEntry& fe = kv.second; if (fe.id != cur || !fe.hairCB) continue;
+              if (const HairType* ht = HairTypeFor(fe.id, &fe.type)) { HairCB cb = MakeHairCB(*ht, fe.userMap, fe.id); g_dev.imm->UpdateSubresource(fe.hairCB, 0, nullptr, &cb, 0, 0); } }
+      } }
     std::vector<FaceReq> todo;
     {
         std::lock_guard<std::mutex> lk(s_mx);
@@ -420,6 +462,7 @@ bool BrowStrandsBegin(ID3D11DeviceContext* c, const FaceGenExtra* ex, uint64_t v
     c->RSSetState(s_browRS);   // sin culling (cintas vistas de ambos lados)
     if (useDSS) c->OMSetDepthStencilState(useDSS, s.ref);
     s_stDraw++;
+    if (!ex->id.empty()) { std::lock_guard<std::mutex> lk(s_browMx); s_browSeen.insert(ex->id); }
     return true;
 }
 void BrowStrandsEnd(ID3D11DeviceContext* c) {
@@ -434,6 +477,31 @@ void BrowStrandsEnd(ID3D11DeviceContext* c) {
     if (s.gsT0) s.gsT0->Release(); if (s.gsT26) s.gsT26->Release(); if (s.gsT120) s.gsT120->Release(); if (s.gsS0) s.gsS0->Release();
     if (s.psCB11) s.psCB11->Release(); if (s.psT120) s.psT120->Release();
     s = BrowSaved();
+}
+
+// (04/11) "Guardar cejas de este jugador": escribe [cejas_cara] <id> = cantidad, largo en PES21FX_hair.ini (reemplaza la linea si ya estaba)
+std::string BrowSaveCurrent() {
+    std::string cur; { std::lock_guard<std::mutex> lk(s_browMx); cur = s_browCur; }
+    if (cur.empty()) return "Cejas: no hay un jugador solo en pantalla (abri el editor con un jugador de cerca)";
+    float c = g_cfg.live[77][2], l = g_cfg.live[77][3];
+    const std::wstring path = g_cfg.baseDir + L"PES21FX_hair.ini";
+    std::vector<std::string> lines; { std::ifstream f(path); std::string ln; while (std::getline(f, ln)) { if (!ln.empty() && ln.back() == '\r') ln.pop_back(); lines.push_back(ln); } }
+    char val[96]; snprintf(val, sizeof(val), "%s = %.2f, %.2f", cur.c_str(), c, l);
+    int sec = -1, end = (int)lines.size(), hit = -1;
+    for (int i = 0; i < (int)lines.size(); i++) {
+        std::string t = BLower(BTrim(lines[i]));
+        if (!t.empty() && t[0] == '[') { if (sec >= 0 && end == (int)lines.size()) end = i; if (t.rfind("[cejas_cara]", 0) == 0) { sec = i; end = (int)lines.size(); } continue; }
+        if (sec >= 0 && i < end) { size_t eq = t.find('='); if (eq != std::string::npos && BTrim(t.substr(0, eq)) == BLower(cur)) hit = i; }
+    }
+    if (hit >= 0) lines[hit] = val;
+    else if (sec >= 0) { int at = end; while (at > sec + 1 && BTrim(lines[at - 1]).empty()) at--; lines.insert(lines.begin() + at, val); }
+    else { lines.push_back(""); lines.push_back("[cejas_cara]"); lines.push_back("; (04/11) cejas por jugador: id = cantidad, largo (multiplicadores; los escribe el menu Cejas con hebras > Guardar)"); lines.push_back(val); }
+    { std::ofstream f(path, std::ios::binary | std::ios::trunc); if (!f) return "Cejas: no se pudo escribir PES21FX_hair.ini";
+      for (auto& ln : lines) f << ln << "\r\n"; }
+    { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.hair.browFace[BLower(cur)] = { c, l }; }
+    Log("cejas: guardado jugador %s: cantidad %.2f, largo %.2f", cur.c_str(), c, l);
+    char msg[160]; snprintf(msg, sizeof(msg), "Cejas guardadas para la cara %s: cantidad %.2f, largo %.2f", cur.c_str(), c, l);
+    return msg;
 }
 
 } // namespace fx

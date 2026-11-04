@@ -133,7 +133,8 @@ struct HairType {
     float raiz[3] = { -1, -1, -1 }, punta[3] = { -1, -1, -1 };   // -1 = del propio bsm
     float cejaGrosor = 1.0f, cejaDens = 1.0f, cejaElev = 1.0f, cejaLargo = 1.0f;
 };
-struct HairCfg { std::vector<HairType> types; std::map<std::string, std::string> faces; std::string defType = "corto"; bool loaded = false; };
+struct HairCfg { std::vector<HairType> types; std::map<std::string, std::string> faces; std::string defType = "corto"; bool loaded = false;
+    std::map<std::string, std::pair<float, float>> browFace; };   // (04/11) [cejas_cara] id = cantidad, largo (multiplicadores por jugador)
 
 struct Config {
     std::wstring baseDir;                      // carpeta del mod (termina en '\')
@@ -310,7 +311,8 @@ std::string NamedOrigin(ID3D11ShaderResourceView* v);     // hooks.cpp: "archivo
 std::string FaceGenOrigin(ID3D11ShaderResourceView* v);   // facegen.cpp: "generada: quinta textura A" etc.
 extern std::atomic<int> g_stFaceDraws, g_stFaceRule, g_stFaceT23, g_stFaceT26, g_stFaceCtxDef;
 void FaceGenHairChanged();                     // PES21FX_hair.ini recargado: refrescar los cbuffers por cara
-int FaceGenExportHair(std::string& status);   // vuelca hair\\auto\\<id>.dds de cada cara generada (plantillas para editar)
+int FaceGenExportHair(std::string& status);
+std::string BrowSaveCurrent();                 // (04/11) guarda cantidad / largo de cejas (z77 / w77) del jugador solo en pantalla en [cejas_cara]   // vuelca hair\\auto\\<id>.dds de cada cara generada (plantillas para editar)
 bool LoadHairConfig();                         // PES21FX_hair.ini
 const HairType* HairTypeFor(const std::string& id, std::string* outName);
 ID3DBlob* CompileNamedShader(const wchar_t* file, const char* profile);   // shaders\<file> con #include

@@ -151,7 +151,11 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     float3 bt = normalize(cross(n, d));
     float ga = (r2 - 0.5) * 0.5;                    // giro individual de +-14 grados
     float3 dd = normalize(d * cos(ga) + bt * sin(ga));
-    root += n * 0.0004;                             // apenas fuera de la piel (con la teselacion la piel sube algo)
+    // apenas fuera de la piel; con la teselacion de la cara prendida (x357) la piel redondeada puede subir hasta z358 mm (tope del
+    // corrimiento) + z359 mm (relieve hacia afuera): la raiz sube lo mismo para que la piel no tape las hebras de cerca
+    float4 P357 = IniParams.Load(int2(357,0)), P358 = IniParams.Load(int2(358,0)), P359 = IniParams.Load(int2(359,0));
+    float tessLift = P357.x > 0.5 ? (max(P358.z, 0.0) * 0.6 + max(P359.z, 0.0)) * 0.001 : 0.0;
+    root += n * (0.0004 + tessLift);
     float len = max(P74.z, 0.1) * 0.01 * mLen * (0.55 + 0.45 * m.g) * (0.8 + 0.4 * r3);
     float widB = max(P74.w, 0.05) * 0.001 * mWid * 0.5;
     // color: el de la ceja pintada en ese punto (raiz) y la punta un poco mas clara, o el del tipo de pelo
