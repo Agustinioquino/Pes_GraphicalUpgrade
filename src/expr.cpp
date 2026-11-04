@@ -872,8 +872,11 @@ static void BeardPoolCopy(ID3D11DeviceContext* c, FaceMesh* m) {   // con s_mx t
     }
     if (!s_poolSrv) { s_poolFail[0]++; return; }
     if (!m->idBuf) {
-        const float h[4] = { (float)m->geoId, (float)m->head, 0.0f, 0.0f };
-        D3D11_BUFFER_DESC d{}; d.ByteWidth = 16; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        // (04/11 j, captura de Agustin: pelos de la barba sobre los dientes con la boca abierta) tambien las mascaras de "abrir la boca"
+        // de esta piel (huesos de abajo enteros / comisuras a la mitad, b12 g_pesExprJaw.xy) partidas en 16 bits: la barba gira igual
+        const UINT jf = m->cbv[8], jh = m->cbv[9];
+        const float h[8] = { (float)m->geoId, (float)m->head, (float)(jf & 0xFFFFu), (float)(jf >> 16), (float)(jh & 0xFFFFu), (float)(jh >> 16), 0.0f, 0.0f };
+        D3D11_BUFFER_DESC d{}; d.ByteWidth = 32; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
         D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = h;
         if (FAILED(g_dev.dev->CreateBuffer(&d, &sd, &m->idBuf))) { m->idBuf = nullptr; s_poolFail[1]++; return; }
     }
@@ -890,6 +893,7 @@ static void BeardPoolCopy(ID3D11DeviceContext* c, FaceMesh* m) {   // con s_mx t
             D3D11_BOX x6 = { a6, 0, 0, a6 + len6, 1, 1 }; c->CopySubresourceRegion(s_pool, 0, base + 16, 0, 0, b6, 0, &x6);
             D3D11_BOX x5 = { a5, 0, 0, a5 + 64, 1, 1 }; c->CopySubresourceRegion(s_pool, 0, base + 193 * 16, 0, 0, b5, 0, &x5);
             D3D11_BOX xh = { 0, 0, 0, 16, 1, 1 }; c->CopySubresourceRegion(s_pool, 0, base, 0, 0, m->idBuf, 0, &xh);
+            D3D11_BOX xj = { 16, 0, 0, 32, 1, 1 }; c->CopySubresourceRegion(s_pool, 0, base + 197 * 16, 0, 0, m->idBuf, 0, &xj);   // (04/11 j)
             s_beardCopies++;
         } else s_poolFail[3]++;
     } else s_poolFail[2]++;
