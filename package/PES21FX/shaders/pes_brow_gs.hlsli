@@ -229,7 +229,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
 #else
     float2 uvT = uv;
 #endif
-    root += PesTessDisp(v, b, uvT) + n * 0.00015;   // (04/11 e) sobre la piel teselada real + 0.15 mm (antes 0.4 mm + 1.4 mm fijos)
+    root += PesTessDisp(v, b, uvT);   // (04/11 e) sobre la piel teselada real (antes 0.4 mm + 1.4 mm fijos por la normal)
     float len = max(P74.z, 0.1) * 0.01 * mLen * (0.55 + 0.45 * m.g) * (0.8 + 0.4 * r3) * 0.8;
     // la hebra no sale de la ceja pintada: si la punta (o la mitad) cae en piel, se acorta
     {
@@ -251,7 +251,11 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     [unroll] for (uint ring = 0; ring <= PES_SEG; ring++) {
       float t = (float)ring / (float)PES_SEG;
       // sale levantada y se acuesta hacia la punta (pelo de ceja real); el rizo la tuerce en el plano de la piel
-      float3 p = root + dd * len * t + n * len * lift * (0.35 * sin(t * 3.14159) + 0.1 * t) + bt * len * curl * 0.5 * sin(t * 6.2831853 + r3 * 6.2831853) * t;
+      // (04/11 e, Agustin: "que se sienta natural, la ceja sale desde el modelo o desde adentro del modelo, como el FC") la raiz
+      // nace 0.3 mm DENTRO de la piel y atraviesa la superficie en el primer cuarto de la hebra: la piel tapa el arranque y el
+      // pelo se ve salir del poro, sin borde ni separacion
+      float emerge = -0.0003 + 0.00045 * saturate(t * 4.0);
+      float3 p = root + n * emerge + dd * len * t + n * len * lift * (0.35 * sin(t * 3.14159) + 0.1 * t) + bt * len * curl * 0.5 * sin(t * 6.2831853 + r3 * 6.2831853) * t;
       float wid = widB * (1.0 - 0.85 * t);
       float pxV = 2.0 * abs(p.z) / (max(abs(m_projection[1].y), 1e-4) * vpH);   // un pixel en la vista a esta distancia
       wid = max(wid, pxV * (P75.z > 0.5 ? 1.25 : 0.45));                         // nunca menos de ~1 px de ancho total
