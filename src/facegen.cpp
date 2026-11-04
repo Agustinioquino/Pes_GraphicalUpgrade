@@ -135,6 +135,7 @@ static void ReleaseEntry(FaceEntry& e) {
 // (04/11) v2: GS sobre la malla de la cara (pes_brow_a_gs = VS faab87ee, pes_brow_b_gs = VS 455eb97b) + el mismo PS de la v1
 static ID3D11VertexShader* s_browVS = nullptr; static ID3D11PixelShader* s_browPS = nullptr; static bool s_browTried = false; static ID3D11RasterizerState* s_browRS = nullptr;
 static ID3D11GeometryShader* s_browGS[2] = {};
+static ID3D11GeometryShader* s_lashGS = nullptr;   // (04/11 i) pestanas con hebras (pes_lash_gs.hlsl, VS 66917213)
 static void EnsureBrowShaders() {
     if (s_browTried || !g_dev.dev) return;
     s_browTried = true;
@@ -142,6 +143,8 @@ static void EnsureBrowShaders() {
     if (pb) { g_dev.dev->CreatePixelShader(pb->GetBufferPointer(), pb->GetBufferSize(), nullptr, &s_browPS); pb->Release(); }
     const wchar_t* gsf[2] = { L"pes_brow_a_gs.hlsl", L"pes_brow_b_gs.hlsl" };
     for (int i = 0; i < 2; i++) if (ID3DBlob* gb = CompileNamedShader(gsf[i], "gs_5_0")) { g_dev.dev->CreateGeometryShader(gb->GetBufferPointer(), gb->GetBufferSize(), nullptr, &s_browGS[i]); gb->Release(); }
+    if (ID3DBlob* lb = CompileNamedShader(L"pes_lash_gs.hlsl", "gs_5_0")) { g_dev.dev->CreateGeometryShader(lb->GetBufferPointer(), lb->GetBufferSize(), nullptr, &s_lashGS); lb->Release(); }
+    Log("pestanas: hebras (sobre la tira de pestanas): GS %s", s_lashGS ? "si" : "NO (ver errores)");
     if (!s_browRS) { D3D11_RASTERIZER_DESC rd{}; rd.FillMode = D3D11_FILL_SOLID; rd.CullMode = D3D11_CULL_NONE; rd.DepthClipEnable = TRUE; g_dev.dev->CreateRasterizerState(&rd, &s_browRS); }
     Log("cejas: hebras v2 (pegadas a la malla de la cara): PS %s, GS cabeza %s, GS cara animada %s", s_browPS ? "si" : "NO", s_browGS[0] ? "si" : "NO", s_browGS[1] ? "si" : "NO (ver errores)");
 }
@@ -163,6 +166,7 @@ void FaceGenReloadShaders() {
     if (s_browVS) { s_browVS->Release(); s_browVS = nullptr; }
     if (s_browPS) { s_browPS->Release(); s_browPS = nullptr; }
     for (auto*& g : s_browGS) if (g) { g->Release(); g = nullptr; }
+    if (s_lashGS) { s_lashGS->Release(); s_lashGS = nullptr; }
     s_browTried = false;
     // lo ya generado se rehace con el shader nuevo
     for (auto& kv : s_cache) ReleaseEntry(kv.second);
@@ -418,7 +422,7 @@ int FaceGenExportHair(std::string& status) {
 // La DLL (hooks.cpp BrowStrands) llama Begin, repite el DrawIndexed original (sin pasar por los hooks) y llama End.
 // v1 (18/10) usaba semillas que el PS de la cara escribia cada cuadro en un UAV: solo nacian donde la cara tenia pixeles
 // (aparecian y desaparecian con la distancia) y en el editor salian cintas gigantes; por eso estaba solo en partido.
-static constexpr uint64_t kVSHead = 0xfaab87ee4ef8b783ULL, kVSFaceAnim = 0x455eb97bc2c3a958ULL;
+static constexpr uint64_t kVSHead = 0xfaab87ee4ef8b783ULL, kVSFaceAnim = 0x455eb97bc2c3a958ULL, kVSLash = 0x66917213728b4dc9ULL;
 struct BrowSaved {
     ID3D11VertexShader* vs = nullptr; ID3D11PixelShader* ps = nullptr; ID3D11GeometryShader* gs = nullptr; ID3D11HullShader* hs = nullptr; ID3D11DomainShader* ds = nullptr;
     D3D11_PRIMITIVE_TOPOLOGY topo = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED; ID3D11RasterizerState* rs = nullptr;
@@ -435,12 +439,20 @@ bool BrowWanted(const FaceGenExtra& ex, uint64_t vsHash) {
     if (g_cfg.live[77][1] < 0.5f && g_cfg.live[93][3] < 0.5f) return false;
     return true;
 }
+// (04/11 i, Agustin: "puedes darle hebras a las pestanas?") la tira de pestanas: VS 66917213 (reemplazo de expresiones) + PS del
+// juego f0d74b9c; fila 368.x prende. Se repite con pes_lash_gs y el PS de las hebras (BrowStrandsBegin con vsHash = kVSLash)
+bool LashWanted(uint64_t vsHash, uint64_t psHash) {
+    if (vsHash != kVSLash || psHash != 0xf0d74b9c069f3ee3ULL || g_cfg.live[368][0] < 0.5f) return false;
+    return s_lashGS && s_browPS;   // los shaders se compilan en Present (EnsureBrowShaders)
+}
 bool BrowStrandsBegin(ID3D11DeviceContext* c, const FaceGenExtra* ex, uint64_t vsHash) {
-    if (!ex || !ex->seedMap || !ex->browMap || !s_browPS || !s_browRS) return false;
-    ID3D11GeometryShader* gs = s_browGS[vsHash == kVSFaceAnim ? 1 : 0];
+    const bool lash = vsHash == kVSLash;
+    if (!s_browPS || !s_browRS) return false;
+    if (!lash && (!ex || !ex->seedMap || !ex->browMap)) return false;
+    ID3D11GeometryShader* gs = lash ? s_lashGS : s_browGS[vsHash == kVSFaceAnim ? 1 : 0];
     if (!gs) return false;
     int maxFaces = (int)g_cfg.live[77][0]; if (maxFaces < 1) maxFaces = 22;
-    if (s_browFaces.fetch_add(1) >= maxFaces) return false;   // tope de caras por cuadro (rendimiento)
+    if (!lash && s_browFaces.fetch_add(1) >= maxFaces) return false;   // tope de caras por cuadro (rendimiento)
     BrowSaved& s = t_bs; s = BrowSaved();
     c->VSGetShader(&s.vs, nullptr, nullptr); c->PSGetShader(&s.ps, nullptr, nullptr); c->GSGetShader(&s.gs, nullptr, nullptr); c->HSGetShader(&s.hs, nullptr, nullptr); c->DSGetShader(&s.ds, nullptr, nullptr);
     c->IAGetPrimitiveTopology(&s.topo); c->RSGetState(&s.rs); c->OMGetDepthStencilState(&s.dss, &s.ref);
@@ -470,16 +482,19 @@ bool BrowStrandsBegin(ID3D11DeviceContext* c, const FaceGenExtra* ex, uint64_t v
         useDSS = cacheDSS[ci];
     }
     static std::atomic<int> s_logged{0};
-    if (s_logged.fetch_add(1) < 2) Log("cejas v2: primer dibujo de hebras (VS %s, profundidad del juego func %d, %s, cara %s)", vsHash == kVSFaceAnim ? "455eb97b" : "faab87ee", (int)origFunc, reversed ? "invertida" : "normal", ex->id.empty() ? "?" : ex->id.c_str());
+    static std::atomic<int> s_lashLogged{0};
+    if (lash) { if (s_lashLogged.fetch_add(1) < 2) Log("pestanas: dibujo de hebras sobre la tira (%u indices)", ex ? ex->browCount : 0u); }
+    else if (s_logged.fetch_add(1) < 2) Log("cejas v2: primer dibujo de hebras (VS %s, profundidad del juego func %d, %s, cara %s)", vsHash == kVSFaceAnim ? "455eb97b" : "faab87ee", (int)origFunc, reversed ? "invertida" : "normal", ex->id.empty() ? "?" : ex->id.c_str());
     // el VS (reemplazo del mod) queda como esta: sus salidas son la entrada del GS. Teselacion fuera (el GS va despues del VS).
     c->HSSetShader(nullptr, nullptr, 0); c->DSSetShader(nullptr, nullptr, 0);
     c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     c->GSSetShader(gs, nullptr, 0); c->PSSetShader(s_browPS, nullptr, 0);
     ID3D11Buffer* b2 = nullptr; c->VSGetConstantBuffers(2, 1, &b2); c->GSSetConstantBuffers(2, 1, &b2); if (b2) b2->Release();
-    if (ex->hairCB) { c->GSSetConstantBuffers(11, 1, &ex->hairCB); c->PSSetConstantBuffers(11, 1, &ex->hairCB); }
+    if (!lash && ex->hairCB) { c->GSSetConstantBuffers(11, 1, &ex->hairCB); c->PSSetConstantBuffers(11, 1, &ex->hairCB); }
+    else if (lash) { ID3D11Buffer* nb = nullptr; c->PSSetConstantBuffers(11, 1, &nb); }   // sin tipo de pelo: valores por defecto del PS
     ID3D11ShaderResourceView* t0 = nullptr; c->PSGetShaderResources(0, 1, &t0); c->GSSetShaderResources(0, 1, &t0); if (t0) t0->Release();
-    ID3D11ShaderResourceView* hm = ex->seedMap; c->GSSetShaderResources(26, 1, &hm);
-    ID3D11ShaderResourceView* bm = ex->browMap; c->GSSetShaderResources(27, 1, &bm);
+    ID3D11ShaderResourceView* hm = lash ? nullptr : ex->seedMap; c->GSSetShaderResources(26, 1, &hm);
+    ID3D11ShaderResourceView* bm = lash ? nullptr : ex->browMap; c->GSSetShaderResources(27, 1, &bm);
     ID3D11ShaderResourceView* prm = g_dev.paramSRV; c->GSSetShaderResources(120, 1, &prm); c->PSSetShaderResources(120, 1, &prm);
     c->GSSetSamplers(0, 1, &s_samp);
     // (04/11 e, Agustin: "las cejas no salen desde el modelo del rostro o se ven separadas") si este dibujo de la cara esta teselado
@@ -494,7 +509,7 @@ bool BrowStrandsBegin(ID3D11DeviceContext* c, const FaceGenExtra* ex, uint64_t v
     c->RSSetState(s_browRS);   // sin culling (cintas vistas de ambos lados)
     if (useDSS) c->OMSetDepthStencilState(useDSS, s.ref);
     s_stDraw++;
-    if (!ex->id.empty()) { std::lock_guard<std::mutex> lk(s_browMx); s_browSeen.insert(ex->id); }
+    if (!lash && !ex->id.empty()) { std::lock_guard<std::mutex> lk(s_browMx); s_browSeen.insert(ex->id); }
     return true;
 }
 void BrowStrandsEnd(ID3D11DeviceContext* c) {
