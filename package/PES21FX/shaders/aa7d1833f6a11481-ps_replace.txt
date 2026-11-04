@@ -355,23 +355,23 @@ void main(
   }
   if (hpK > 0.001 && P94h.w > 0.5) {   // (20/10) micro normal de poros, mismo mosaico en reposo que la cara: sigue sin costura
     float4 guide = pesFacePores.Sample(g_samplerLinear_Clamp_s, v2.xy);   // R densidad, G tamano, B zona T, A arruguitas
-    float4 guide2 = pesFacePores2.Sample(g_samplerLinear_Clamp_s, v2.xy);  // R frente, G sobre las cejas, B cuello
+    float4 guide2 = pesFacePores2.Sample(g_samplerLinear_Clamp_s, v2.xy);  // R frente, G sobre las cejas, B cuello, A = 1 - labios (v6: los dos labios)
     float4 hpFZp = pesZones.Sample(g_samplerLinear_Clamp_s, v2.xy);       // G labios, A piel
     // (04/11 poros v5) seis relieves por zona a tamano real fijo, mezcla RNM y signo del marco verificado, como la cara (pes_pores.hlsli)
     PesPores pp = PesTriPores5(pesSkinMicro, pesSkinLarge, pesSkinFhead, pesSkinCrepe, pesSkinLips, pesSkinNeck, g_samplerLinear_Clamp_s,
-                               hpPM, hpDPx, hpDPy, hpDUx, hpDUy, float4(guide.g, guide.a, hpFZp.g, guide2.b), guide2.rg, hpHasR);
+                               hpPM, hpDPx, hpDPy, hpDUx, hpDUy, float4(guide.g, guide.a, 1.0 - guide2.a, guide2.b), guide2.rg, hpHasR);
     float near = pp.near;
     if (near > 0.001) {
       hpTZone = guide.b;
       float skinM = lerp(0.5, 1.0, hpFZp.a);
-      float wPore = saturate(1.0 - guide.a - hpFZp.g - guide2.b);
+      float wPore = saturate(guide2.a - guide.a - guide2.b);
       float str = clamp(P94h.x, 0.0, 2.0) * near * 1.1 * skinM * lerp(0.8, 0.25 + 1.0 * guide.r, wPore) * hpK;
       float2 hpTS = PesTanSigns(v4.xyz, v5.xyz, v3.xyz, hpDUx, hpDUy);
       float3 hpNb = PesRNM(float3(r2.xy, sqrt(saturate(1.0 - dot(r2.xy, r2.xy)))), normalize(float3(pp.dT * hpTS * str, 1.0)));
       r2.xy = hpNb.xy;
       hpPoreA = pp.a * near * lerp(0.5, 0.3 + guide.r, wPore);
       hpPoreC = hpPoreA * pp.close;   // hueco del poro solo en primer plano real (ver pes_pores.hlsli)
-      hpPoreOcc = 1.0 - hpPoreC * lerp(0.5, saturate(guide.r * (0.6 + 0.4 * guide.g)), wPore) * saturate(P94h.x) * float3(0.20, 0.32, 0.34);   // (04/11) calido, no gris
+      hpPoreOcc = 1.0 - hpPoreC * lerp(0.5, saturate(guide.r * (0.6 + 0.4 * guide.g)), wPore) * saturate(P94h.x) * 0.10;   // (04/11 v6) gris y suave: el poro se ve por la luz y el brillo, no pintado de color
       hpMicroVar = pp.var * saturate(P94h.x * 0.7) * skinM;
     }
   }
