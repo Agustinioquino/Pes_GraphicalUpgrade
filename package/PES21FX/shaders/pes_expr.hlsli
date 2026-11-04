@@ -353,9 +353,13 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
     // el de abajo sube un poco al mirar abajo). El sentido: A > 0 cierra el de arriba (baja), A < 0 el de abajo (sube).
     // (02/11, video de Agustin: ranuras azules bajo el ojo al mover la mirada) el de abajo ya no acompana la mirada: solo se
     // movia en las mallas donde la DLL encontro el parpado y se separaba de las pestanas / la otra malla del parpado
-    float fu = up ? (gy < 0.0 ? 0.80 : 0.55) : 0.0, fup = up ? (gyp < 0.0 ? 0.80 : 0.55) : 0.0;   // (03/11) como la DLL (d1fb166)
+    // (04/11, video de Agustin con los ojos en circulos: "los parpados no acompanan correctamente") el SIGNO estaba al reves: en
+    // PesGazeRot (globo) y PesRotX (parpado) un angulo positivo lleva el frente hacia ABAJO, o sea gy > 0 = mira abajo; el parpado
+    // giraba -gy: subia al mirar abajo (blanco del ojo arriba del iris) y bajaba al mirar arriba (tapaba el iris). Ahora acompana:
+    // el de arriba 0.80 al mirar abajo y 0.55 al mirar arriba; el de abajo baja 0.25 al mirar abajo y sube 0.10 al mirar arriba
+    float fu = up ? (gy > 0.0 ? 0.80 : 0.55) : (gy > 0.0 ? 0.25 : 0.10), fup = up ? (gyp > 0.0 ? 0.80 : 0.55) : (gyp > 0.0 ? 0.25 : 0.10);
     float ge = (up ? geU : geL) * (1.0 - g);   // (04/11) forma del ojo con el gesto
-    float a1 = A * b + (up ? -gy * fu : gy * fu) * (1.0 - g) + ge, a0 = A * bp + (up ? -gyp * fup : gyp * fup) * (1.0 - g) + ge;
+    float a1 = A * b + gy * fu * (1.0 - g) + ge, a0 = A * bp + gyp * fup * (1.0 - g) + ge;
     float c1 = cos(a1), s1 = sin(a1), c0 = cos(a0), s0 = sin(a0);
     float3 d1 = PesRotX(q, c1, s1) - q, d0 = PesRotX(q, c0, s0) - q;
     pos  += w * mul(d1, (float3x3)M);

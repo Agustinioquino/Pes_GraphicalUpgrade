@@ -671,7 +671,9 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
             gp = std::clamp(gp / (float)ne, -0.45f, 0.45f);
             S.eyeP = S.eyePHave ? S.eyeP + (gp - S.eyeP) * 0.5f : gp; S.eyePHave = true;   // medio cuadro de suavizado: sin temblor
         }
-        const float gy = g[1] + (S.eyePHave ? S.eyeP : 0.0f);
+        // (04/11, video de Agustin: "los parpados no acompanan") la mirada del mod (Gaze, la misma cuenta que PesGaze del shader)
+        // tiene + = mira ABAJO; la del juego (eyeP) + = arriba: se sumaban con signos distintos y el parpado iba al reves de la mirada del mod
+        const float gy = -g[1] + (S.eyePHave ? S.eyeP : 0.0f);
         // de arriba: el parpadeo lo baja 0.64 rad (igual que el shader) y acompana la mirada vertical casi entera (como en una cara
         // real: mirar abajo baja el parpado con el ojo, mirar arriba lo sube)
         // (02/11 d) con la sonrisa (sm) el ojo se achina: el de arriba baja un poco y el de abajo sube (sonrisa "de verdad")
