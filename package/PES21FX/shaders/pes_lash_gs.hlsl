@@ -30,10 +30,9 @@ cbuffer cPSSystem : register(b0)
 {
   struct { float4 m_param; float4 m_renderInfo; float4 m_renderBuffer; float4 m_dominantLightDir; float4 m_timeParam; } g_psSystem;
 }
-float3 PesShadowL() {
-  float3 L = g_psSystem.m_dominantLightDir.xyz;
-  if (IniParams.Load(int2(50, 0)).z < 0.5) L = float3(dot(L, m_view[0].xyz), dot(L, m_view[1].xyz), dot(L, m_view[2].xyz));
-  return dot(L, L) > 0.25 ? normalize(L) : float3(0, 0, 0);
+#include "pes_brow_light.hlsli"
+float3 PesShadowL(float vz) {   // (04/11 o) la luz real (pes_brow_light.hlsli)
+  return PesBrowLightDir(m_view[0].xyz, m_view[1].xyz, m_view[2].xyz, g_psSystem.m_dominantLightDir.xyz, vz);
 }
 #endif
 Texture2D<float4> tLash : register(t0);      // difusa de las pestanas (la misma del dibujo; alfa = pestana)
@@ -157,7 +156,7 @@ void main(triangle LashV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     float curl = 0.22 + 0.1 * r2;
 #ifdef PES_SHADOW
     // (04/11 k) sombra de la pestana sobre el parpado / el ojo: la pestana proyectada siguiendo la luz al plano de la tira
-    float3 Ls = PesShadowL();
+    float3 Ls = PesShadowL(root.z);
     float nl = abs(dot(Ls, n));
     if (dot(Ls, Ls) < 0.5 || nl < 0.08) continue;
 #endif

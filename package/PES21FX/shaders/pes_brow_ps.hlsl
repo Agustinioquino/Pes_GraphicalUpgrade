@@ -47,15 +47,14 @@ cbuffer cPSScene : register(b2)
 // (02f1d510 PESHairAniso, filas 50 / 51): la normal se lleva hacia la que refleja el sol hacia la camara para ESTA hebra ->
 // el GGX de la pasada diferida da la banda de brillo del pelo (Kajiya-Kay) en vez de un punto; y la marca 252/255 hace que
 // el sol le sume la luz envolvente, el segundo brillo (TRT, fila 51) con la sombra real y el contraluz (fila 339)
+#include "pes_brow_light.hlsli"
 float3 PesBrowAniso(float3 N, float3 T, float3 V, float t)
 {
   float4 HK = IniParams.Load(int2(50,0));
   float4 HK2 = IniParams.Load(int2(51,0));
   if (HK.w < 0.5) return N;
-  float3 L = g_psSystem.m_dominantLightDir.xyz;
-  if (HK.z < 0.5) L = float3(dot(L, g_psScene.m_view._m00_m10_m20), dot(L, g_psScene.m_view._m01_m11_m21), dot(L, g_psScene.m_view._m02_m12_m22));
+  float3 L = PesBrowLightDir(g_psScene.m_view._m00_m10_m20, g_psScene.m_view._m01_m11_m21, g_psScene.m_view._m02_m12_m22, g_psSystem.m_dominantLightDir.xyz, -V.z);   // (04/11 o) la luz real
   if (dot(L, L) < 0.25) return N;   // escena o luz sin enlazar: normal de antes
-  L = normalize(L);
   float3 H = normalize(L + V);
   T = normalize(T);
   float sh1 = HK.y + (t - 0.5) * HK2.y;
@@ -98,19 +97,20 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   // (castano, colorado) en vez de quedar como plastico oscuro; el contraluz y el brillo siguen en la pasada del sol (marca de pelo)
   if (P75.z < 0.5) {
     float3 cs = saturate(col);
-    float3 ms = pow(cs + 1e-4, 0.8);
+    // (04/11 o, Agustin: "no me gusta como pasa la luz ni el color poco natural") mucho mas suave: el realce anterior (^0.8, sat x1.15)
+    // sumado al de browmap dejaba las cejas naranjas y como iluminadas desde adentro
+    float3 ms = pow(cs + 1e-4, 0.95);
     float ml = dot(ms, float3(0.2126, 0.7152, 0.0722));
-    col = max(ml + (ms - ml) * 1.15, 0.0);
+    col = max(ml + (ms - ml) * 0.95, 0.0);
   }
   // (04/11 l, Agustin: "me gustaria poder cambiar el color frente a la luz o normal y a contraluz") con la luz detras de la ceja
   // (mirando hacia el sol) el pelo deja pasar la luz y se ve de otro tono: el color elegido para el contraluz entra segun cuanto
   // esta la camara del lado opuesto a la luz. Las pestanas (sin b11) y x369 = 0 quedan igual
   if (P75.z < 0.5 && pesHairMisc.x > 0.5 && pesBrowBack.w > 0.001) {
-    float3 L = g_psSystem.m_dominantLightDir.xyz;
-    if (IniParams.Load(int2(50,0)).z < 0.5) L = float3(dot(L, g_psScene.m_view._m00_m10_m20), dot(L, g_psScene.m_view._m01_m11_m21), dot(L, g_psScene.m_view._m02_m12_m22));
+    float3 L = PesBrowLightDir(g_psScene.m_view._m00_m10_m20, g_psScene.m_view._m01_m11_m21, g_psScene.m_view._m02_m12_m22, g_psSystem.m_dominantLightDir.xyz, -i.viewV.z);
     if (dot(L, L) > 0.25) {
-      // (04/11 n, Agustin: "esta al reves") m_dominantLightDir apunta hacia donde VA la luz: contraluz = luz y camara del mismo lado de L
-      float kb = smoothstep(0.05, 0.75, dot(normalize(L), normalize(i.viewV))) * saturate(pesBrowBack.w);
+      // (04/11 o) L = HACIA la luz: contraluz = la luz del otro lado de la ceja respecto de la camara
+      float kb = smoothstep(0.05, 0.75, dot(-L, normalize(i.viewV))) * saturate(pesBrowBack.w);
       float3 cb = saturate(pesBrowBack.rgb) * lerp(1.0, 1.15, t);   // la punta deja pasar mas luz
       col = lerp(col, cb, kb);
     }
@@ -121,7 +121,7 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   n = PesBrowAniso(n, i.tanV, normalize(i.viewV), t);
   // (04/11) la luz pasa por el pelo: translucidez alta (la punta mas que la raiz) + marca de PELO 252/255 (o2.z, abajo) para
   // que las pasadas del sol le apliquen el contraluz del pelo (fila 339), como el pelo de la cabeza
-  float trans = lerp(0.45, 0.8, t);   // (04/11 e) un poco mas de luz atravesando el pelo (la raiz tambien es fina)
+  float trans = lerp(0.18, 0.4, t);   // (04/11 o) menos luz atravesando: la ceja ya no brilla como pelo fino de la cabeza a contraluz   // (04/11 e) un poco mas de luz atravesando el pelo (la raiz tambien es fina)
   float3 r1 = n; float r1w = trans;
   float4 r0;
   r0.x = r1w * 63 + 0.5;
@@ -145,7 +145,7 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   float rc = rough * 0.0361702144 + 0.0904255286;
   rc = rc * rough + 0.180851057; rc = rc * rough + 0.271276593; rc = rc * rough + 0.271276593;
   o2.x = rc * rough + 0.150000006;
-  o2.y = 0.5 * (pesHairMisc.x > 0.5 ? saturate(pesHairB.z) / 0.6 : 1.0);   // brillo del tipo de pelo (0.6 = natural)
+  o2.y = 0.32 * (pesHairMisc.x > 0.5 ? saturate(pesHairB.z) / 0.6 : 1.0);   // brillo del tipo de pelo (0.6 = natural)
   o2.z = IniParams.Load(int2(339,0)).w > 0.5 ? 0.98823529 : 1.0;   // (04/11) pelo a contraluz; sin eso como antes (ni piel ni kit)
   o2.w = g_psMaterial.m_materials[0].x;
   o3.xy = g_psSystem.m_renderBuffer.xy * i.motion;
