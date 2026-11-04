@@ -20,7 +20,9 @@ static ID3D11DomainShader* s_ds[2] = {};
 static std::map<uint64_t, ID3D11Buffer*> s_vpCB;   // cbuffer b13 del HS por tamano de viewport (inmutables, pocos)
 static std::atomic<int> s_draws{0}, s_skipTopo{0}, s_noShader{0}, s_skipFar{0};
 static std::atomic<int> s_lastVpW{0}, s_lastVpH{0};
-static std::atomic<int> s_relief{0};   // (04/11 c) dibujos con la quinta textura en el DS (relieve)
+static std::atomic<int> s_relief{0};
+static std::atomic<int> s_noSeam{0}, s_noPrm{0}, s_off{0};   // (04/11 d) dibujos de piel de la cara que NO se teselaron y por que
+void FaceTessNote(int why) { (why == 0 ? s_noSeam : why == 1 ? s_noPrm : s_off).fetch_add(1, std::memory_order_relaxed); }   // (04/11 c) dibujos con la quinta textura en el DS (relieve)
 static ID3D11SamplerState* s_samp = nullptr;
 
 static void Ensure() {
@@ -59,7 +61,8 @@ static ID3D11Buffer* VpCB(float w, float h) {
 }
 
 bool FaceTessBegin(ID3D11DeviceContext* c, uint64_t vsHash, ID3D11ShaderResourceView* seam, ID3D11ShaderResourceView* params, FaceTessScope& s) {
-    if (!seam || !params || !g_dev.dev || g_cfg.live[357][0] < 0.5f) return false;
+    if (!seam || !params || !g_dev.dev) return false;
+    if (g_cfg.live[357][0] < 0.5f) { s_off.fetch_add(1, std::memory_order_relaxed); return false; }
     const int v = vsHash == kVsHead ? 0 : vsHash == kVsFace ? 1 : -1;
     if (v < 0) return false;
     const int w = g_cfg.live[358][3] > 0.5f ? 1 : 0;
@@ -110,9 +113,11 @@ void FaceTessPresent() {
     if (++frames < 3600) return;
     frames = 0;
     const int d = s_draws.exchange(0), st = s_skipTopo.exchange(0), ns = s_noShader.exchange(0), rl = s_relief.exchange(0);
+    const int nsm = s_noSeam.exchange(0), npr = s_noPrm.exchange(0), off = s_off.exchange(0);
+    if (nsm || npr || off) Log("teselacion de caras: dibujos de piel de la cara SIN teselar en 60 s: %d sin pesos de borde (malla en lectura / no teselable), %d sin parametros t120, %d con la tarjeta apagada", nsm, npr, off);
     if (!d && !st && !ns) return;
-    Log("teselacion de caras: %d dibujos teselados en 60 s (con relieve %d; sin triangulos sueltos %d, sin shader %d); viewport %dx%d; suavidad %.2f, %.0f px por segmento, factor maximo %.0f, hasta %.2f m (+%.2f), tope %.1f mm, orientacion %s; relieve x%.2f surcos %.2f mm relieve %.2f mm mip %.0f",
-        d, rl, st, ns, s_lastVpW.load(), s_lastVpH.load(), g_cfg.live[357][1], g_cfg.live[357][2], g_cfg.live[357][3], g_cfg.live[358][0], g_cfg.live[358][1], g_cfg.live[358][2], g_cfg.live[358][3] > 0.5f ? "invertida" : "igual", g_cfg.live[359][0], g_cfg.live[359][1], g_cfg.live[359][2], g_cfg.live[359][3]);
+    Log("teselacion de caras: %d dibujos teselados en 60 s (con relieve %d; sin triangulos sueltos %d, sin shader %d); viewport %dx%d; suavidad %.2f, densidad %.1f, factor maximo %.0f, hasta %.2f m (+%.2f), tope %.1f mm, orientacion %s%s; relieve x%.2f surcos %.2f mm relieve %.2f mm mip %.0f",
+        d, rl, st, ns, s_lastVpW.load(), s_lastVpH.load(), g_cfg.live[357][1], g_cfg.live[357][2], g_cfg.live[357][3], g_cfg.live[358][0], g_cfg.live[358][1], g_cfg.live[358][2], g_cfg.live[358][3] > 0.5f ? "invertida" : "igual", g_cfg.live[360][0] > 0.5f ? " (PRUEBA: cara inflada)" : "", g_cfg.live[359][0], g_cfg.live[359][1], g_cfg.live[359][2], g_cfg.live[359][3]);
 }
 
 }   // namespace fx

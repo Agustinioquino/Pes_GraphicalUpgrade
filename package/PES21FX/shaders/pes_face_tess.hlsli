@@ -104,7 +104,8 @@ PesTessConst PesTessPatch(InputPatch<PesTessVS, 3> p)
     float2 s0 = p[0].o0.xy / p[0].o0.w * 0.5 * g_pesTessVp.xy;
     float2 s1 = p[1].o0.xy / p[1].o0.w * 0.5 * g_pesTessVp.xy;
     float2 s2 = p[2].o0.xy / p[2].o0.w * 0.5 * g_pesTessVp.xy;
-    float px = max(T.z, 2.0), fmax = clamp(T.w, 1.0, 16.0);
+    // (04/11 d, Agustin puso 40 creyendo que era mas detalle) z357 = DENSIDAD: mas = mas triangulos; pixeles por segmento = 40 / z
+    float px = clamp(40.0 / max(T.z, 0.5), 2.0, 80.0), fmax = clamp(T.w, 1.0, 16.0);
     // arista k = la opuesta al vertice k (convencion de D3D: e[0] entre los puntos 1 y 2)
     f[0] = clamp(length(s1 - s2) / px, 1.0, fmax);
     f[1] = clamp(length(s2 - s0) / px, 1.0, fmax);
@@ -225,6 +226,9 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
       d += Nn * (clamp(hmm * R.x, -3.0, 3.0) * 0.001 * seam * fade);
     }
   }
+  // (04/11 d) PRUEBA (fila 360.x): infla la piel 1 cm por la normal, sin tope ni distancia, para ver sin duda que la teselacion
+  // llega a la imagen (los bordes de cada pieza quedan fijos). Solo para probar: volver a "No".
+  if (IniParams.Load(int2(360, 0)).x > 0.5) d += normalize(b.x * N0 + b.y * N1 + b.z * N2) * (0.01 * seam);
   float3 pv = pl + d;
 
   float4 clip = mul(float4(pv, 1.0), g_vsScene.m_projection);
