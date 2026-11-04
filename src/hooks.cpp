@@ -1313,7 +1313,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     // variacion de dientes/encias por jugador
     if (ps && ps->hash == 0x63fab7735eee149cULL && ps->repl && s.lastHairCB) { Remember(c, d, true, false, 11); c->PSSetConstantBuffers(11, 1, &s.lastHairCB); }
     // (27/10 c) sombra de la cabeza: el atlas propio (t30) a los 7 shaders del sol reemplazados
-    if (ps && ps->repl) { int si = SunPassIndex(ps->hash); if (si >= 0 && si < 7) if (ID3D11ShaderResourceView* hs = HeadShadowSRV()) { Remember(c, d, true, true, 30); c->PSSetShaderResources(30, 1, &hs); } }
+    if (ps && ps->repl) { int si = SunPassIndex(ps->hash); if (si >= 0 && si != 7) if (ID3D11ShaderResourceView* hs = HeadShadowSRV()) { Remember(c, d, true, true, 30); c->PSSetShaderResources(30, 1, &hs); } }
     // 20/10: desgaste de la cancha en vivo: la posicion de cada jugador sale del dibujo de su short / medias (b5 del VS)
     if (ps && ps->hash == 0x55297925e0c66085ULL) PitchWearNotePlayer(c);
     // (2/11) botines / pelota (aadffecf): anotar la traslacion para reconocer la pelota; en el dibujo de la pelota, b12 = manchas (fila 177)
@@ -1469,7 +1469,9 @@ template<int V, class F> static void HeadShadowReplay(ID3D11DeviceContext* c, ID
     ID3D11RasterizerState* oldRS = nullptr; c->RSGetState(&oldRS);
     if (ID3D11RasterizerState* nc = HeadShadowNoCullRS(oldRS)) c->RSSetState(nc);   // (27/10 f) sin descarte de caras
     o_OMSetRT[V](c, 0, nullptr, dsv);
-    for (int i = 0; i < n; i++) {
+    const bool body = HeadShadowBodyOn();   // (04/11 piel) cuadrante 3: piernas del mas cercano
+    for (int i = 0; i < 4; i++) {
+        if (i >= n && !(i == 3 && body)) continue;
         ID3D11Buffer* cb = HeadShadowCB(i); if (!cb) continue;
         D3D11_VIEWPORT vp; HeadShadowViewport(i, vp);
         D3D11_RECT rc{ (LONG)vp.TopLeftX, (LONG)vp.TopLeftY, (LONG)(vp.TopLeftX + vp.Width), (LONG)(vp.TopLeftY + vp.Height) };
@@ -1477,7 +1479,7 @@ template<int V, class F> static void HeadShadowReplay(ID3D11DeviceContext* c, ID
         c->VSSetConstantBuffers(2, 1, &cb);
         draw();
     }
-    g_headShadowReplays.fetch_add(n, std::memory_order_relaxed);
+    g_headShadowReplays.fetch_add(n + (body ? 1 : 0), std::memory_order_relaxed);
     o_OMSetRT[V](c, 8, rt, oldDsv);
     c->VSSetConstantBuffers(2, 1, &oldB2);
     if (nvp) c->RSSetViewports(nvp, vps); if (nsc) c->RSSetScissorRects(nsc, scs);
