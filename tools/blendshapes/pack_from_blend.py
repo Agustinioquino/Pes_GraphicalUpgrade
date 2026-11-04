@@ -1,11 +1,11 @@
 # Lee las shape keys esculpidas del .blend de Agustin (objeto cara_messi, importado del .glb de glb.py) y escribe un paquete de
 # formas por malla del juego: PES21FX\formas\<HUELLA>.bin (la DLL lo reconoce por la huella del volcado). Correr con bpy:
 #   MALLAS=<carpeta del volcado> python pack_from_blend.py <archivo.blend> <carpeta de salida> [gestos...]
-# Formato: "PFXF", u32 version 1, u32 vertices, u32 formas (5: sonrisa grito enojo asombro puchero), u32 grupo (GRUPO=<n>: la cara;
+# Formato: "PFXF", u32 version 1, u32 vertices, u32 formas (6: sonrisa grito enojo asombro puchero sonrisa_grande; la DLL acepta tambien 5), u32 grupo (GRUPO=<n>: la cara;
 # las arrugas del gesto van en formas\grupo_<n>_<gesto>.dds, ver wrinkle_dds.py; 0 = sin arrugas),
 # despues vertices x formas x float4 (delta en metros, espacio del modelo del juego; w = 0). Un gesto que no se pide va en 0.
 import bpy,sys,os,struct,glob,numpy as np
-G=['sonrisa','grito','enojo','asombro','puchero']
+G=['sonrisa','grito','enojo','asombro','puchero','sonrisa_grande']   # (04/11 c) 6: sonrisa grande = el tope del slider Sonrisa
 blend,outdir=sys.argv[1],sys.argv[2];want=sys.argv[3:] or G
 D=os.environ.get('MALLAS','mallas')
 bpy.ops.wm.open_mainfile(filepath=blend)

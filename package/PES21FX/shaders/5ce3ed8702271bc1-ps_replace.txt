@@ -374,7 +374,9 @@ void main(
     float shW = G6w.w > 0.5 ? saturate(G5w.y) : 0.0;
     uint shTw = 0, shTh = 0; pesShapeWr.GetDimensions(shTw, shTh);
     if (shW > 0.001 && shTw > 1) {
-      float2 shN = pesShapeWr.Sample(g_samplerAnisotropic_Clamp_s, v2.xy).xy * 2.0 - 1.0;
+      // (04/11 c) RG = arrugas de la sonrisa, BA = las de la sonrisa grande (messi6 de Agustin): de 1 a 1.5 pasa a las grandes
+      float4 shT = pesShapeWr.Sample(g_samplerAnisotropic_Clamp_s, v2.xy);
+      float2 shN = lerp(shT.xy, shT.zw, saturate((G5w.y - 1.0) * 2.0)) * 2.0 - 1.0;
       r1.xy += shN * shW; r1.xyz = normalize(r1.xyz);
     } }
   // === PES21 (19/10) micro normal de poros: mosaico fino sobre la normal del juego, solo de cerca.

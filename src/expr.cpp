@@ -43,7 +43,7 @@ struct FaceMesh {
     UINT lastFrame = 0;   // (01/11) ultimo cuadro en que se dibujo (para echar las mallas viejas sin vaciar toda la tabla)
     int lids[4] = { -1, -1, -1, -1 }; UINT lidCap = 0;   // (02/11 h) parpados en la paleta y ultimo cuadro en que se leyo la paleta
     int shapeOff = -1; uint32_t huella = 0; ID3D11ShaderResourceView* shapeWr = nullptr;   // (04/11) gestos esculpidos (formas\<huella>.bin): primer float4 de esta malla en s_shapeData
-    UINT cbv[28] = {}; std::vector<float> xferPs; uint64_t xferIb = 0; int xferUsed = 0; bool xferGate = false; ID3D11Buffer* cbNoShape = nullptr;   // (04/11 c) lo que lleva el cbuffer y, si espera formas pasadas de la piel, sus vertices
+    UINT cbv[28] = {}; std::vector<float> xferPs; uint64_t xferIb = 0; int xferUsed = 0; bool xferGate = false; ID3D11Buffer* cbNoShape = nullptr; ID3D11Buffer* cbTeeth = nullptr;   // (04/11 c) lo que lleva el cbuffer y, si espera formas pasadas de la piel, sus vertices
 };
 std::mutex s_mx;
 std::unordered_map<uint64_t, FaceMesh*> s_meshes;
@@ -54,7 +54,7 @@ UINT s_frame = 0;   // cuadros (Present) desde el arranque
 int s_evicted = 0;   // mallas echadas por viejas (resumen)
 std::atomic<int> s_binds{0}, s_bindsNone{0};
 std::atomic<int> s_shapeDraws{0};   // (04/11) dibujos con gestos esculpidos
-UINT s_drawSeq = 0, s_packSeq = 0, s_packFrame = 0xffffffffu; struct GateE { int id = 0; UINT seq = 0; }; GateE s_gateRing[16]; UINT s_gateAt = 0; GateE s_gateOk[32]; UINT s_gateOkAt = 0; int s_gateOn = 0, s_gateOff = 0;   // (04/11 d) mallas pegadas a una piel con formas
+UINT s_drawSeq = 0, s_packSeq = 0, s_packFrame = 0xffffffffu; struct GateE { int id = 0; UINT seq = 0; }; GateE s_gateRing[16]; UINT s_gateAt = 0; GateE s_gateOk[32]; UINT s_gateOkAt = 0; int s_gateOn = 0, s_gateOff = 0, s_teethOn = 0;   // (04/11 d) mallas pegadas a una piel con formas
 std::atomic<int> s_bindsWait{0}, s_bindsDisc{0}, s_bindsNew{0};   // (01/11) de los 'sin dato': malla en lectura / descartada o no cara / recien vista
 int s_hist[4] = {};   // mallas listas con cabeza 0 / 1 / 2..31 / descartadas
 
@@ -168,7 +168,7 @@ std::map<uint32_t, ID3D11ShaderResourceView*> s_shapeWr;   // por grupo (formas\
 std::unordered_map<uint32_t, ShapePack> s_shapes;
 std::vector<float> s_shapeData;
 ID3D11Buffer* s_shapeBuf = nullptr; ID3D11ShaderResourceView* s_shapeSrv = nullptr;
-constexpr UINT kShapeN = 5;
+constexpr UINT kShapeN = 6;   // (04/11 c) sonrisa grito enojo asombro puchero + sonrisa grande (el tope del slider Sonrisa, messi6 de Agustin)
 // (04/11 c, Agustin: "con la sonrisa no se mueven todas las partes del ojo y modelos") las pestanas, la sombra del ojo y las demas
 // mallas de la cara que no tienen formas propias se quedaban quietas mientras la piel se movia: ahora toman la forma de la piel mas
 // cercana (vertices de la piel que tienen formas, a menos de 1.5 cm; se apaga entre 6 y 15 mm). La boca y el globo del ojo no.
@@ -262,10 +262,13 @@ int ShapeFind(uint32_t hu, UINT nv, const float* ps, uint64_t ib) {   // con s_m
     FILE* f = _wfopen((g_cfg.baseDir + nm).c_str(), L"rb");
     if (!f) return -1;
     char mg[4] = {}; uint32_t hd[4] = {};
-    const bool okh = fread(mg, 1, 4, f) == 4 && fread(hd, 4, 4, f) == 4 && !memcmp(mg, "PFXF", 4) && hd[0] == 1 && hd[2] == kShapeN;
+    const bool okh = fread(mg, 1, 4, f) == 4 && fread(hd, 4, 4, f) == 4 && !memcmp(mg, "PFXF", 4) && hd[0] == 1 && (hd[2] == kShapeN || hd[2] == 5);   // (04/11 c) los paquetes de 5 formas siguen valiendo (sin sonrisa grande)
     if (!okh || hd[1] != nv) { fclose(f); Log("expresiones: formas %08X.bin no valido (%s, %u vertices, la malla tiene %u)", hu, okh ? "otra malla" : "cabecera", okh ? hd[1] : 0u, nv); return -1; }
-    std::vector<float> d((size_t)nv * kShapeN * 4);
-    const bool okd = fread(d.data(), 4, d.size(), f) == d.size(); fclose(f);
+    std::vector<float> d((size_t)nv * kShapeN * 4, 0.0f);
+    bool okd = true;
+    { std::vector<float> r((size_t)nv * hd[2] * 4); okd = fread(r.data(), 4, r.size(), f) == r.size();
+      for (UINT v = 0; okd && v < nv; v++) memcpy(&d[(size_t)v * kShapeN * 4], &r[(size_t)v * hd[2] * 4], hd[2] * 16); }
+    fclose(f);
     if (!okd) { Log("expresiones: formas %08X.bin cortado", hu); return -1; }
     float mx[kShapeN] = {};
     for (UINT v = 0; v < nv; v++) for (UINT k = 0; k < kShapeN; k++) {
@@ -291,7 +294,7 @@ int ShapeFind(uint32_t hu, UINT nv, const float* ps, uint64_t ib) {   // con s_m
         }
         sp.wr = it->second;
     }
-    Log("expresiones: formas %08X.bin cargadas (%u vertices; maximo mm: sonrisa %.1f grito %.1f enojo %.1f asombro %.1f puchero %.1f)", hu, nv, mx[0] * 1000, mx[1] * 1000, mx[2] * 1000, mx[3] * 1000, mx[4] * 1000);
+    Log("expresiones: formas %08X.bin cargadas (%u vertices; maximo mm: sonrisa %.1f grito %.1f enojo %.1f asombro %.1f puchero %.1f sonrisa grande %.1f)", hu, nv, mx[0] * 1000, mx[1] * 1000, mx[2] * 1000, mx[3] * 1000, mx[4] * 1000, mx[5] * 1000);
     return sp.off;
 }
 void DumpObj(FaceMesh* m, const std::vector<float>& ps, const std::vector<float>& uvs, const std::vector<uint32_t>& iv, const std::vector<float>& wv, float ylo, float yhi) {
@@ -625,6 +628,14 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
                 if (!ok) { s_gateOff++; if (m->head <= 31 && (m->lids[0] >= 0 || m->lids[1] >= 0) && s_frame - m->lidCap >= 120) { m->lidCap = s_frame; LidCapture(c, m); } return m->cbNoShape ? m->cbNoShape : s_none; }
                 s_gateOn++;
             }
+            // (04/11 c, Agustin: "en la sonrisa deberias estirar los dientes horizontalmente un poco asi como bajar los dientes un
+            // poco"; OK de Agustin para tocar la boca SOLO con la sonrisa) la boca que se dibuja justo despues de una piel con formas
+            // propias (la cara esculpida: Messi) lleva la marca de dientes con sonrisa (b12 g_pesExprShape.x = 1; pes_expr.hlsli
+            // PesTeethSmile). Sin sonrisa el shader no mueve nada; las otras bocas quedan como siempre
+            if (m->cbv[3] == 1 && s_packFrame == s_frame && seq - s_packSeq <= 4) {
+                if (!m->cbTeeth) { UINT z[28]; memcpy(z, m->cbv, sizeof z); z[24] = 1; z[25] = 0; z[26] = 0; z[27] = 0; m->cbTeeth = MakeCBRaw(z); }
+                if (m->cbTeeth) { s_teethOn++; if (headCentroid && m->hcOk && m->nv >= 300) { *headCentroid = m->hc; if (headIdx) *headIdx = m->head; } return m->cbTeeth; }
+            }
             if (shapeSrv && m->shapeOff >= 0 && s_shapeSrv) { *shapeSrv = s_shapeSrv; s_shapeDraws++; if (shapeWr) *shapeWr = m->shapeWr; }
             if (m->head <= 31 && (m->lids[0] >= 0 || m->lids[1] >= 0) && s_frame - m->lidCap >= 120) { m->lidCap = s_frame; LidCapture(c, m); }
             if (headCentroid && m->hcOk && m->nv >= 300) { *headCentroid = m->hc; if (headIdx) *headIdx = m->head; } return m->cb; }
@@ -822,7 +833,8 @@ void ExprPresent() {
             const int sd = s_shapeDraws.exchange(0);
             if (np || sd) Log("expresiones: gestos esculpidos: %d mallas con formas, %d dibujos (sonrisa %.2f grito %.2f enojo %.2f asombro %.2f puchero %.2f, perfiles %s)", np, sd,
                 g_cfg.live[355][1], g_cfg.live[356][0], g_cfg.live[355][0], g_cfg.live[355][2], g_cfg.live[356][1], g_cfg.live[356][3] > 0.5f ? "si" : "no");
-            if (s_gateOn || s_gateOff) { Log("expresiones: mallas pegadas (pestanas de otro buffer): %d dibujos con formas, %d sin (lejos de su piel)", s_gateOn, s_gateOff); s_gateOn = s_gateOff = 0; } }
+            if (s_gateOn || s_gateOff) { Log("expresiones: mallas pegadas (pestanas de otro buffer): %d dibujos con formas, %d sin (lejos de su piel)", s_gateOn, s_gateOff); s_gateOn = s_gateOff = 0; }
+            if (s_teethOn) { Log("expresiones: boca de la cara esculpida (dientes con la sonrisa): %d dibujos", s_teethOn); s_teethOn = 0; } }
     }
 }
 
