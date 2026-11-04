@@ -30,7 +30,8 @@ struct FaceMesh {
     int id = 0, state = 0, tries = 0;   // 0 copiar indices, 1 leer indices / copiar vertices, 2 leer vertices, 3 listo, 4 descartada
     ID3D11Buffer* ib = nullptr; DXGI_FORMAT ibFmt = DXGI_FORMAT_UNKNOWN; UINT ibOff = 0, start = 0, count = 0; INT base = 0;
     ID3D11Buffer* vb[4] = {}; UINT stride[4] = {}, off[4] = {};
-    Elem pos, idx, wgt;
+    Elem pos, idx, wgt, uv;   // (04/11) uv: TEXCOORD0, solo para el volcado
+    bool dump = false; std::vector<uint32_t> tri;   // (04/11) volcar esta malla a OBJ (w354 = 1) y sus indices (relativos a vmin)
     ID3D11Buffer* stIB = nullptr; ID3D11Buffer* stVB[4] = {};
     UINT vmin = 0, nv = 0;
     int maxIdx = -1, head = 99;
@@ -58,6 +59,7 @@ UINT FmtBytes(DXGI_FORMAT f) {
     case DXGI_FORMAT_R32G32B32_FLOAT: case DXGI_FORMAT_R32G32B32_UINT: return 12;
     case DXGI_FORMAT_R16G16B16A16_FLOAT: case DXGI_FORMAT_R16G16B16A16_UNORM: case DXGI_FORMAT_R16G16B16A16_UINT: case DXGI_FORMAT_R32G32_FLOAT: return 8;
     case DXGI_FORMAT_R8G8B8A8_UNORM: case DXGI_FORMAT_R8G8B8A8_UINT: case DXGI_FORMAT_B8G8R8A8_UNORM: case DXGI_FORMAT_R10G10B10A2_UNORM: return 4;
+    case DXGI_FORMAT_R16G16_FLOAT: case DXGI_FORMAT_R16G16_UNORM: return 4;
     default: return 0;
     }
 }
@@ -82,6 +84,15 @@ bool ReadPos(const uint8_t* p, DXGI_FORMAT f, float o[3]) {
     switch (f) {
     case DXGI_FORMAT_R32G32B32A32_FLOAT: case DXGI_FORMAT_R32G32B32_FLOAT: memcpy(o, p, 12); return true;
     case DXGI_FORMAT_R16G16B16A16_FLOAT: for (int i = 0; i < 3; i++) { uint16_t h; memcpy(&h, p + 2 * i, 2); o[i] = Half(h); } return true;
+    default: return false;
+    }
+}
+bool ReadUV(const uint8_t* p, DXGI_FORMAT f, float o[2]) {   // (04/11) para el volcado
+    o[0] = o[1] = 0;
+    switch (f) {
+    case DXGI_FORMAT_R32G32_FLOAT: case DXGI_FORMAT_R32G32B32_FLOAT: case DXGI_FORMAT_R32G32B32A32_FLOAT: memcpy(o, p, 8); return true;
+    case DXGI_FORMAT_R16G16_FLOAT: case DXGI_FORMAT_R16G16B16A16_FLOAT: for (int i = 0; i < 2; i++) { uint16_t h; memcpy(&h, p + 2 * i, 2); o[i] = Half(h); } return true;
+    case DXGI_FORMAT_R16G16_UNORM: for (int i = 0; i < 2; i++) { uint16_t h; memcpy(&h, p + 2 * i, 2); o[i] = h / 65535.0f; } return true;
     default: return false;
     }
 }
@@ -121,6 +132,44 @@ void Reject(FaceMesh* m, const char* why) {
     static int n = 0; if (n++ < 40) Log("expresiones: malla de cara %d descartada (%u indices): %s", m->id, m->count, why);
 }
 
+// (04/11, Agustin: gestos "como si fueran esculpidos para messi") VOLCADO de las mallas de la cara tal como las carga el juego
+// (la del Dream Patch, no la de Konami): con w354 = 1 (sube de 0 a 1) se vuelven a leer todas las mallas que se dibujen en los
+// proximos ~10 s y cada malla de cara (piel, pestanas; no la boca ni los ojos) se escribe en PES21FX\dump\caras\ como OBJ
+// (posicion en reposo, en metros, uv, caras) + un .txt con la huella (para reconocerla despues) y huesos / pesos por vertice.
+// Sirve para esculpir en Blender las formas de cada gesto (blendshapes) sobre la malla exacta.
+std::atomic<UINT> s_dumpUntil{0};
+void DumpObj(FaceMesh* m, const std::vector<float>& ps, const std::vector<float>& uvs, const std::vector<uint32_t>& iv, const std::vector<float>& wv, float ylo, float yhi) {
+    const std::wstring dir = g_cfg.baseDir + L"dump\\caras\\";
+    CreateDirectoryW((g_cfg.baseDir + L"dump").c_str(), nullptr); CreateDirectoryW(dir.c_str(), nullptr);
+    double sx = 0, sy = 0, sz = 0; for (UINT v = 0; v < m->nv; v++) { sx += ps[(size_t)v * 3]; sy += ps[(size_t)v * 3 + 1]; sz += ps[(size_t)v * 3 + 2]; }
+    uint64_t h = 0xcbf29ce484222325ULL; h = Fnv(h, m->nv); h = Fnv(h, m->count);
+    for (UINT v = 0; v < m->nv; v++) for (int k = 0; k < 3; k++) h = Fnv(h, (uint64_t)(int64_t)llround(ps[(size_t)v * 3 + k] * 10000.0));   // a 0.1 mm
+    wchar_t name[160]; swprintf(name, 160, L"cara_%uv_%ut_%08X", m->nv, m->count / 3, (unsigned)(h ^ (h >> 32)));
+    FILE* f = _wfopen((dir + name + L".obj").c_str(), L"wb");
+    if (!f) { Log("expresiones: volcado: no se pudo escribir %ls.obj", name); return; }
+    fprintf(f, "# PES21 FX: malla de cara %d tal como la carga el juego (reposo, metros). %u vertices, %u triangulos, alto %.3f..%.3f, cabeza en la paleta %d\n", m->id, m->nv, m->count / 3, ylo, yhi, m->head);
+    fprintf(f, "o %ls\n", name);
+    for (UINT v = 0; v < m->nv; v++) fprintf(f, "v %.6f %.6f %.6f\n", ps[(size_t)v * 3], ps[(size_t)v * 3 + 1], ps[(size_t)v * 3 + 2]);
+    const bool hasUv = uvs.size() == (size_t)m->nv * 2;
+    if (hasUv) for (UINT v = 0; v < m->nv; v++) fprintf(f, "vt %.6f %.6f\n", uvs[(size_t)v * 2], 1.0f - uvs[(size_t)v * 2 + 1]);
+    for (size_t i = 0; i + 2 < m->tri.size(); i += 3) {
+        const UINT a = m->tri[i] - m->vmin + 1, b = m->tri[i + 1] - m->vmin + 1, c = m->tri[i + 2] - m->vmin + 1;
+        if (hasUv) fprintf(f, "f %u/%u %u/%u %u/%u\n", a, a, b, b, c, c); else fprintf(f, "f %u %u %u\n", a, b, c);
+    }
+    fclose(f);
+    if (FILE* t = _wfopen((dir + name + L".txt").c_str(), L"wb")) {
+        fprintf(t, "huella %08X vertices %u indices %u suma %.6f %.6f %.6f alto %.4f %.4f cabeza %d\n", (unsigned)(h ^ (h >> 32)), m->nv, m->count, sx, sy, sz, ylo, yhi, m->head);
+        fprintf(t, "# vertice: hueso:peso x4 (indice en la paleta de 32 del dibujo)\n");
+        for (UINT v = 0; v < m->nv; v++) {
+            fprintf(t, "%u", v);
+            for (int k = 0; k < 4; k++) fprintf(t, " %u:%.3f", iv[(size_t)v * 4 + k], wv[(size_t)v * 4 + k]);
+            fprintf(t, "\n");
+        }
+        fclose(t);
+    }
+    Log("expresiones: volcado %ls.obj (malla %d, %u vertices, %u triangulos, alto %.3f..%.3f, uv %s, huella %08X)", name, m->id, m->nv, m->count / 3, ylo, yhi, hasUv ? "si" : "no", (unsigned)(h ^ (h >> 32)));
+}
+
 void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
     const UINT isz = m->ibFmt == DXGI_FORMAT_R16_UINT ? 2 : 4;
     if (m->state == 0) {
@@ -137,17 +186,19 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
         if (FAILED(hr)) { Reject(m, "no se pudieron leer los indices"); return; }
         UINT lo = 0xffffffffu, hi = 0;
         for (UINT i = 0; i < m->count; i++) { UINT v = isz == 2 ? ((const uint16_t*)mp.pData)[i] : ((const uint32_t*)mp.pData)[i]; lo = (std::min)(lo, v); hi = (std::max)(hi, v); }
+        if (m->dump) { m->tri.resize(m->count); for (UINT i = 0; i < m->count; i++) m->tri[i] = isz == 2 ? ((const uint16_t*)mp.pData)[i] : ((const uint32_t*)mp.pData)[i]; }
         imm->Unmap(m->stIB, 0); m->stIB->Release(); m->stIB = nullptr;
         if (hi < lo) { Reject(m, "sin indices"); return; }
         m->vmin = lo; m->nv = hi - lo + 1;
         if (m->nv > 65536) { Reject(m, "demasiados vertices"); return; }
-        for (int s : { m->pos.slot, m->idx.slot, m->wgt.slot }) {
-            if (m->stVB[s]) continue;
+        for (int s : { m->pos.slot, m->idx.slot, m->wgt.slot, m->dump ? m->uv.slot : -1 }) {
+            if (s < 0 || !m->vb[s] || m->stVB[s]) continue;
             D3D11_BUFFER_DESC d; m->vb[s]->GetDesc(&d);
             UINT used = 1;
             if (m->pos.slot == s) used = (std::max)(used, m->pos.off + FmtBytes(m->pos.fmt));
             if (m->idx.slot == s) used = (std::max)(used, m->idx.off + FmtBytes(m->idx.fmt));
             if (m->wgt.slot == s) used = (std::max)(used, m->wgt.off + FmtBytes(m->wgt.fmt));
+            if (m->dump && m->uv.slot == s) used = (std::max)(used, m->uv.off + FmtBytes(m->uv.fmt));
             used = (std::min)(used, m->stride[s] ? m->stride[s] : 1u);
             const UINT64 a = (UINT64)m->off[s] + (UINT64)((INT64)m->base + lo) * m->stride[s], b = a + (UINT64)(m->nv - 1) * m->stride[s] + used;
             if (!m->stride[s] || b > d.ByteWidth) { Reject(m, "vertices fuera del buffer"); return; }
@@ -193,6 +244,11 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
                 cx[b] += w * xs[v]; cy[b] += w * ys[v]; cz[b] += w * zs[v];
                 if (w > wmax[b]) { wmax[b] = w; px[b] = xs[v]; py[b] = ys[v]; pz[b] = zs[v]; }
             }
+        }
+        std::vector<float> uvs;   // (04/11) volcado: uv de cada vertice
+        if (ok && m->dump && m->uv.slot >= 0 && mapped[m->uv.slot]) {
+            uvs.resize((size_t)m->nv * 2);
+            for (UINT v = 0; v < m->nv; v++) ReadUV((const uint8_t*)mp[m->uv.slot].pData + (size_t)v * m->stride[m->uv.slot] + m->uv.off, m->uv.fmt, &uvs[(size_t)v * 2]);
         }
         for (int s = 0; s < 4; s++) if (mapped[s]) imm->Unmap(m->stVB[s], 0);
         if (!ok) { Reject(m, "formato de posicion, huesos o pesos desconocido"); return; }
@@ -341,6 +397,8 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
         }
         m->cb = MakeCB((UINT)m->head, (UINT)mx, (UINT)m->id, eye ? 2u : (mouth ? 1u : 0u), lids, jawFull, jawHalf, lipTop, lipUp, eye ? eyes : nullptr, mus);
         for (int i = 0; i < 4; i++) m->lids[i] = lids[i];
+        if (m->dump && hd <= 31 && !eye && !mouth && m->nv >= 200) DumpObj(m, ps, uvs, iv, wv, ylo, yhi);
+        m->tri.clear(); m->tri.shrink_to_fit();
         ReleaseIA(m);
         if (!m->cb) { m->state = 4; m->why = "sin cbuffer"; s_hist[3]++; return; }
         m->state = 3; s_hist[m->head <= 1 ? m->head : m->head > 31 ? 3 : 2]++;
@@ -410,6 +468,7 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
         }
     }
     FaceMesh* m = new FaceMesh(); m->id = s_nextId++; m->lastFrame = s_frame;
+    m->dump = s_frame < s_dumpUntil.load(std::memory_order_relaxed);
     m->ib = ib; m->ibFmt = ibFmt; m->ibOff = ibOff; m->start = start; m->count = count; m->base = base;
     for (int i = 0; i < 4; i++) { m->vb[i] = vb[i]; m->stride[i] = stride[i]; m->off[i] = off[i]; vb[i] = nullptr; }
     ib = nullptr;
@@ -425,6 +484,7 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
             if (e.idx == 0 && !_stricmp(e.sem.c_str(), "POSITION")) t = &m->pos;
             else if (e.idx == 0 && !_stricmp(e.sem.c_str(), "BLENDINDICES")) t = &m->idx;
             else if (e.idx == 0 && !_stricmp(e.sem.c_str(), "BLENDWEIGHT")) t = &m->wgt;
+            else if (e.idx == 0 && !_stricmp(e.sem.c_str(), "TEXCOORD")) t = &m->uv;
             if (t && e.slot < 4) { t->slot = (int)e.slot; t->off = o; t->fmt = (DXGI_FORMAT)e.fmt; }
         }
         if (m->pos.slot < 0 || m->idx.slot < 0 || m->wgt.slot < 0) { m->state = 4; m->why = "sin POSITION / BLENDINDICES / BLENDWEIGHT"; }
@@ -550,6 +610,16 @@ void ExprPresent() {
     {   // con el candado tomado: los dibujos (otros hilos) leen state / cb y pueden vaciar la tabla. Los Map son DO_NOT_WAIT.
         std::lock_guard<std::mutex> lk(s_mx);
         s_frame++;
+        {   // (04/11) volcado de las mallas de la cara: w354 sube de 0 a 1 -> se vacia la tabla y las que se vuelvan a dibujar en ~10 s se vuelcan
+            static bool was = false; const bool now = g_cfg.live[354][3] > 0.5f;
+            if (now && !was) {
+                for (auto& kv : s_meshes) { ReleaseIA(kv.second); if (kv.second->cb) kv.second->cb->Release(); delete kv.second; }
+                s_meshes.clear(); s_pending.clear();
+                s_dumpUntil.store(s_frame + 600, std::memory_order_relaxed);
+                Log("expresiones: volcado de las mallas de la cara pedido (w354 = 1): se releen las que se dibujen en los proximos 10 s -> PES21FX\\dump\\caras\\");
+            }
+            was = now;
+        }
         // (01/11) primero las mallas que se estan dibujando ahora (las pasajeras que ya no se dibujan van al final), 16 por cuadro
         std::stable_sort(s_pending.begin(), s_pending.end(), [](FaceMesh* a, FaceMesh* b) { return a->lastFrame > b->lastFrame; });
         for (size_t i = 0; i < s_pending.size() && i < 16; i++) Step(imm, s_pending[i]);
