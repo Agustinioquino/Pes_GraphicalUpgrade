@@ -406,6 +406,7 @@ def build(src, N=2048, NS=1024, log=print):
     bsm_o = lift_teeth(bsm_o, log)
     bsm_o, S = wet_tissue(bsm_o, S, log)
     bsm_o = konami_tone(bsm_o, log)
+    bsm_o = tongue_ao(bsm_o, B, log)
     nrm_o, S, Tr = detail_maps(bsm_o, nrm_o, S, Tr, rows, log)
     return {'bsm': bsm_o, 'nrm': nrm_o, 'srm': S, 'trm': Tr}, (B, on, line, crown, corner, cerv)
 
@@ -502,6 +503,32 @@ def konami_tone(bsm, log=print):
         100 * (org > 0.13)[kg].mean()))
     return out
 
+TONGUE_AO = float(os.environ.get('TONGUE_AO', '1.0'))   # (04/11 f) 0 = sin oclusion en la lengua
+def tongue_ao(bsm, B, log=print):
+    """(04/11 f) Agustin: a la lengua 'le falta oclusion'. La de Konami trae la luz horneada: la punta (v alto) iluminada y el fondo,
+    los costados y lo que queda bajo los dientes oscuros. Esa luminancia (suavizada, normalizada dentro de la caja de la lengua)
+    oscurece la lengua nueva: punta 100%, fondo ~50%, mas un borde oscuro a los costados."""
+    if TONGUE_AO <= 0: return bsm
+    N = bsm.shape[0]
+    gy, gx = (np.mgrid[0:N, 0:N] + 0.5) / N
+    tongue = sst(0.29, 0.32, gx) * sst(0.725, 0.695, gx) * sst(0.655, 0.68, gy)
+    lumw = np.array([0.30, 0.59, 0.11], np.float32)
+    Lk = ndi.gaussian_filter((B[..., :3] * lumw).sum(-1), 10)
+    k = tongue > 0.5
+    lo, hi = np.percentile(Lk[k], 5), np.percentile(Lk[k], 97)
+    ao = np.clip((Lk - lo) / max(hi - lo, 1e-4), 0, 1) ** 0.75
+    tu = (gx - 0.503) / 0.205
+    occ = (0.50 + 0.50 * ao) * (1 - 0.30 * sst(0.7, 1.0, np.abs(tu)))
+    tv = (0.99 - gy) / 0.32
+    occ *= 1 - 0.45 * sst(0.45, 1.0, tv)   # hacia la garganta (bajo los dientes de arriba) cada vez menos luz
+    w = (tongue * min(TONGUE_AO, 1.0))[..., None]
+    out = bsm.copy()
+    out[..., :3] = bsm[..., :3] * (1 - w) + bsm[..., :3] * occ[..., None] * w
+    Lo = (out[..., :3] * lumw).sum(-1)
+    log('  lengua con oclusion: luminancia punta %.3f, medio %.3f, fondo %.3f (factor medio %.2f)' % (
+        float(np.median(Lo[k & (gy > 0.92)])), float(np.median(Lo[k & (gy > 0.78) & (gy < 0.86)])), float(np.median(Lo[k & (gy < 0.72)])), float(occ[k].mean())))
+    return out
+
 TISSUE_LIFT = float(os.environ.get('TISSUE_LIFT', '1.0'))   # (04/11 b) 0 = como v18
 def wet_tissue(bsm, srm, log=print):
     """(04/11 b) Agustin (foto de referencia): 'una textura mas asi para la lengua, con su propio reflejo de las encias y la lengua,
@@ -528,16 +555,25 @@ def wet_tissue(bsm, srm, log=print):
     out[..., :3] = c * (1 - tis[..., None]) + g * tis[..., None]
     # lengua: base rosada, surco central, papilas
     rng = np.random.default_rng(57)
-    tu = (gx - 0.505) / 0.21; tv = (gy - 0.66) / 0.34                    # -1..1 a lo ancho, 0 punta .. 1 fondo (aprox.)
-    groove = np.exp(-(tu / 0.06) ** 2) * sst(0.05, 0.25, tv) * sst(1.0, 0.7, tv)
+    tu = (gx - 0.503) / 0.205; tv = (0.99 - gy) / 0.32                    # -1..1 a lo ancho, 0 punta .. 1 fondo
+    # (04/11 f) medido en la malla: v alto = adelante (z 0.149 en v 0.95, 0.117 en v 0.68): la punta es v ~0.99 (antes al reves)
+    groove = np.exp(-(tu / 0.13) ** 2) * sst(0.08, 0.35, tv) * sst(0.95, 0.6, tv)   # (04/11 f) surco ancho y suave (era una raya dura)
     fil = ndi.gaussian_filter(rng.standard_normal((N, N)).astype(np.float32), 0.7)
     fil = sst(1.2, 2.2, fil / max(float(fil.std()), 1e-6))                 # puntitos claros (filiformes)
     fun = ndi.gaussian_filter(rng.standard_normal((N, N)).astype(np.float32), 1.6)
     fun = sst(2.6, 3.4, fun / max(float(fun.std()), 1e-6)) * (0.4 + 0.6 * sst(0.5, 0.9, np.abs(tu)) + 0.6 * sst(0.25, 0.0, tv))   # rojas, mas en los bordes y la punta
     low = ndi.gaussian_filter(rng.standard_normal((N, N)).astype(np.float32), 25); low /= max(float(np.abs(low).max()), 1e-6)
     tcol = np.array([0.84, 0.46, 0.45], np.float32)
-    Lt = 0.44 * (1 + 0.06 * low - 0.22 * groove - 0.10 * sst(0.6, 1.0, tv))
+    # (04/11 f) Agustin: 'la textura de la lengua no me convence, le falta oclusion y una textura mas real': celdas de papilas
+    # (relieve irregular a dos escalas), saburra blanquecina leve en el centro y atras, bordes y punta mas rojos
+    cell = ndi.gaussian_filter(rng.standard_normal((N, N)).astype(np.float32), 2.2); cell /= max(float(cell.std()), 1e-6)
+    cell2 = ndi.gaussian_filter(rng.standard_normal((N, N)).astype(np.float32), 5.0); cell2 /= max(float(cell2.std()), 1e-6)
+    Lt = 0.44 * (1 + 0.06 * low - 0.16 * groove + 0.045 * np.tanh(cell) + 0.05 * np.tanh(cell2))
     T = tcol / (tcol * lumw).sum() * Lt[..., None]
+    coat = np.exp(-(tu / 0.45) ** 2) * sst(0.25, 0.75, tv) * (0.5 + 0.5 * sst(-0.5, 1.0, cell2))
+    T = T * (1 - 0.22 * coat[..., None]) + np.array([0.86, 0.74, 0.72], np.float32) * Lt[..., None] * 1.15 * 0.22 * coat[..., None]
+    edge = sst(0.6, 0.95, np.abs(tu)) + sst(0.25, 0.0, tv)
+    T = T * (1 + np.clip(edge, 0, 1)[..., None] * np.array([0.06, -0.06, -0.04], np.float32))
     T = T * (1 - 0.30 * fil[..., None]) + np.array([0.86, 0.72, 0.70], np.float32) * Lt[..., None] * 1.25 * 0.30 * fil[..., None]
     T = T * (1 - 0.5 * fun[..., None]) + np.array([0.80, 0.26, 0.28], np.float32) * 0.5 * fun[..., None]
     T = np.clip(T, 0, 1)
