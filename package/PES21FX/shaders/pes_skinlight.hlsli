@@ -24,11 +24,21 @@ bool PesSkIsSkin(int matType, float trans, float skinTag) {
 // la difusion de verdad la hace esa pasada en milimetros
 // zView = distancia en metros: de cerca la SSSS resuelve la difusion (borde angosto); de lejos (menos de un pixel de SSSS) queda
 // la piel pre-integrada entera, como en las 7 grandes
-float3 PesSkDiffuse(float rawNdotL, float trans, float transFloor, float zView) {
+// curvatura en pantalla (cuanto gira la normal por metro), igual que pesCurv de las 7 grandes: radio de 2 cm = 1, frente = 0.2.
+// Usa derivadas: llamarla FUERA de los if (flujo uniforme)
+float PesSkCurv(float3 n, float zView) {
+  float mpp = max(abs(zView) * abs(g_psScene.m_projectionParam.x) * 2.0 / max(g_psScene.m_viewportSize.x, 1.0), 1e-6);
+  return saturate(length(fwidth(n)) / mpp * 0.02);
+}
+
+// curv: PesSkCurv; con la fila 62 (x on, w fuerza) la difusion sigue la curvatura real (Penner 2011): mas en nariz, orejas y
+// labios, menos en frente y mejillas. Es lo que le queda a la piel de lejos, donde la SSSS no llega a un pixel
+float3 PesSkDiffuse(float rawNdotL, float trans, float transFloor, float zView, float curv) {
   bool uni = IniParams.Load(int2(95,0)).w > 0.5;
   float4 P3 = IniParams.Load(int2(3,0));
   float wd = uni ? 1.5 : (P3.x > 0 ? P3.x : 1.0);
   float3 w = saturate(trans) * wd * float3(1.0, 0.6, 0.45);
+  { float4 Q62 = IniParams.Load(int2(62,0)); if (Q62.x > 0.5 && Q62.w > 0.0) w *= lerp(1.0, 0.45 + 1.4 * curv, saturate(Q62.w)); }
   w = min(w * 0.12, float3(0.22, 0.11, 0.07));
   if (uni) {
     float mpp = max(abs(zView) * abs(g_psScene.m_projectionParam.x) * 2.0 / max(g_psScene.m_viewportSize.x, 1.0), 1e-6);

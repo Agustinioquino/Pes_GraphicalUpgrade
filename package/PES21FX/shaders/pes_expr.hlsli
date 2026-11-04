@@ -285,7 +285,16 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
                    inout float3 pos, inout float3 prev, inout float3 nrm)
 {
   float amt = IniParams.Load(int2(342, 0)).w;
-  if (amt <= 0.0) return;
+  // (04/11, Agustin: "los ojos y su forma con los parpados no cambia mucho" con los gestos) los gestos del mod (355 enojo /
+  // sonrisa / asombro, 356 grito / puchero) le dan forma a los ojos: con la sonrisa y el grito el ojo se achina (el de arriba
+  // baja y el de abajo sube), con el enojo el de arriba baja, con el asombro se abre. Angulo fijo (en radianes) que se suma al
+  // del parpadeo; tambien con el parpadeo apagado
+  float4 G5 = IniParams.Load(int2(355, 0)), G6 = IniParams.Load(int2(356, 0));
+  float gAng = clamp(G5.x, 0.0, 1.5), gSmi = clamp(G5.y, 0.0, 1.5), gSur = clamp(G5.z, 0.0, 1.5), gGri = clamp(G6.x, 0.0, 1.5), gPuc = clamp(G6.y, 0.0, 1.5);
+  float geU = 0.15 * gSmi + 0.14 * gAng - 0.20 * gSur + 0.10 * gGri + 0.05 * gPuc;   // > 0 baja el de arriba
+  float geL = -(0.16 * gSmi + 0.06 * gAng + 0.10 * gGri) + 0.04 * gSur;            // < 0 sube el de abajo
+  bool ges = abs(geU) > 0.001 || abs(geL) > 0.001;
+  if (amt <= 0.0 && !ges) return;
   // (02/11) con 350.y = 2 la DLL parpadea girando los huesos de los parpados (exprbones.cpp): todas las mallas juntas
   float4 Rb350 = IniParams.Load(int2(350, 0));
   if (Rb350.x > 0.5 && Rb350.y > 1.5) return;
@@ -301,8 +310,11 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
     uint cj = g_pesExprMus.x, bj = g_pesExprMus.z;
     if (cj <= 31) anim = max(anim, length(mul(Pc, g_vsBone.m_boneMatrices[cj]) - mul(Pc, g_vsBone.m_boneMatrices[head])));
     if (bj <= 31) anim = max(anim, length(mul(Pb, g_vsBone.m_boneMatrices[bj]) - mul(Pb, g_vsBone.m_boneMatrices[head])));
-    amt *= 1.0 - smoothstep(0.0008, 0.0015, anim);
-    if (amt <= 0.0) return;
+    // (04/11) los gestos y el retoque de la neutra del mod tambien mueven la comisura y la ceja: no son una animacion del juego,
+    // asi que el umbral sube con lo que mueve el mod (si no, el parpadeo se apagaba con cualquier gesto)
+    float modMv = 0.0045 * saturate(gAng + gSmi + gSur + gGri + gPuc) + (G6.w > 0.5 ? 0.0010 * saturate(G6.z) : 0.0);
+    amt *= 1.0 - smoothstep(0.0008 + modMv, 0.0015 + modMv, anim);
+    if (amt <= 0.0 && !ges) return;
   }
   // semilla por jugador (la misma cuenta que el tono de piel al final del VS)
   bool sk = g_vsObject.m_useWeightCount.x != 0;
@@ -311,8 +323,8 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
   int se = PesSkinNearest(PesSkinPoint(g_vsObject.m_world, g_vsObject.m_viewWorld, g_vsScene.m_view, b0, b0b, sk));
   float seed = se >= 0 ? (float)se * 0.6180339 : 0.37;
   float t = IniParams.Load(int2(157, 0)).x;
-  float b = PesBlinkCurve(t, seed) * saturate(amt);
-  float bp = PesBlinkCurve(t - 1.0 / 60.0, seed) * saturate(amt);   // cuadro anterior (vectores de movimiento)
+  float b = amt > 0.0 ? PesBlinkCurve(t, seed) * saturate(amt) : 0.0;
+  float bp = amt > 0.0 ? PesBlinkCurve(t - 1.0 / 60.0, seed) * saturate(amt) : 0.0;   // cuadro anterior (vectores de movimiento)
   // (01/11 h) el parpado acompana la mirada vertical (347.w): abajo baja 0.65 del angulo, arriba sube 0.35 (solo el de arriba)
   // (02/11, Agustin: "los ojos vivos es lo que rompe, no mueve el esqueleto real") el parpado ya NO sigue la mirada por shader:
   // solo se movia en las mallas donde la DLL encontro el parpado y se separaba de las pestanas / la otra malla. Vuelve cuando
@@ -324,7 +336,7 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
   float gz = IniParams.Load(int2(347, 0)).w;
   float gy = 0.0, gyp = 0.0;
   if (gz > 0.0 || IniParams.Load(int2(354, 0)).x > 0.0) { gy = PesGaze(t, seed, gz).y; gyp = PesGaze(t - 1.0 / 60.0, seed, gz).y; }
-  if (b <= 0.0 && bp <= 0.0 && abs(gy) < 0.0005 && abs(gyp) < 0.0005) return;
+  if (b <= 0.0 && bp <= 0.0 && abs(gy) < 0.0005 && abs(gyp) < 0.0005 && !ges) return;
   float3 C = float3(rest.x >= 0.0 ? 0.028 : -0.028, 1.6968, 0.138);
   float3 q = p.xyz - C;
   [unroll] for (int k = 0; k < 4; k++) {
@@ -341,8 +353,13 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
     // el de abajo sube un poco al mirar abajo). El sentido: A > 0 cierra el de arriba (baja), A < 0 el de abajo (sube).
     // (02/11, video de Agustin: ranuras azules bajo el ojo al mover la mirada) el de abajo ya no acompana la mirada: solo se
     // movia en las mallas donde la DLL encontro el parpado y se separaba de las pestanas / la otra malla del parpado
-    float fu = up ? (gy < 0.0 ? 0.80 : 0.55) : 0.0, fup = up ? (gyp < 0.0 ? 0.80 : 0.55) : 0.0;   // (03/11) como la DLL (d1fb166)
-    float a1 = A * b + (up ? -gy * fu : gy * fu) * (1.0 - g), a0 = A * bp + (up ? -gyp * fup : gyp * fup) * (1.0 - g);
+    // (04/11, video de Agustin con los ojos en circulos: "los parpados no acompanan correctamente") el SIGNO estaba al reves: en
+    // PesGazeRot (globo) y PesRotX (parpado) un angulo positivo lleva el frente hacia ABAJO, o sea gy > 0 = mira abajo; el parpado
+    // giraba -gy: subia al mirar abajo (blanco del ojo arriba del iris) y bajaba al mirar arriba (tapaba el iris). Ahora acompana:
+    // el de arriba 0.80 al mirar abajo y 0.55 al mirar arriba; el de abajo baja 0.25 al mirar abajo y sube 0.10 al mirar arriba
+    float fu = up ? (gy > 0.0 ? 0.80 : 0.55) : (gy > 0.0 ? 0.25 : 0.10), fup = up ? (gyp > 0.0 ? 0.80 : 0.55) : (gyp > 0.0 ? 0.25 : 0.10);
+    float ge = (up ? geU : geL) * (1.0 - g);   // (04/11) forma del ojo con el gesto
+    float a1 = A * b + gy * fu * (1.0 - g) + ge, a0 = A * bp + gyp * fup * (1.0 - g) + ge;
     float c1 = cos(a1), s1 = sin(a1), c0 = cos(a0), s0 = sin(a0);
     float3 d1 = PesRotX(q, c1, s1) - q, d0 = PesRotX(q, c0, s0) - q;
     pos  += w * mul(d1, (float3x3)M);
