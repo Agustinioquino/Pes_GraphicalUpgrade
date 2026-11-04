@@ -48,9 +48,9 @@ REAL_W = {True: [8.1, 6.8, 7.7, 7.1, 6.7],   # (04/11) Agustin 'reducir el taman
 PROFILE = os.environ.get('MOUTH_PROFILE', '')
 PROF = {
     '': dict(ext_up={'IC': -0.8, 'I': -0.8, 'C': -0.3}, corner_ic=(0.02, 0.08), corner_i_up=(0.04, 0.14), lat_back=0.0, canine=0.30),
-    'messi': dict(ext_up={'IC': -1.1, 'I': -1.5, 'C': -1.4}, corner_ic=(0.05, 0.12), corner_i_up=(0.08, 0.18), lat_back=0.0, canine=0.18),   # (04/11 b) Agustin 'no me convencen': su sonrisa actual (fotos): parejos, anchos, borde en arco suave, caninos romos
+    'messi': dict(ext_up={'IC': -1.0, 'I': -1.0, 'C': -1.1}, corner_ic=(0.02, 0.05), corner_i_up=(0.02, 0.06), lat_back=0.0, canine=0.05, even=True, ext_lo=1.9, corner_lo=(0.01, 0.02)),   # (04/11 c) Agustin 'no siento mucha diferencia': carillas parejas, laterales casi como los centrales, borde recto, esquinas cuadradas, caninos romos   # (04/11 b) Agustin 'no me convencen': su sonrisa actual (fotos): parejos, anchos, borde en arco suave, caninos romos
 }[PROFILE]
-if PROFILE == 'messi': REAL_W = {True: [8.8, 7.0, 7.9, 7.2, 6.8], False: REAL_W[False]}
+if PROFILE == 'messi': REAL_W = {True: [8.4, 8.1, 7.9, 7.2, 6.8], False: REAL_W[False]}   # (04/11 c) laterales anchos (comun 8.1 / 6.8)
 
 def fit_row(row, log=print, name=''):
     """(03/11 v19c) Agustin: 'ni todos pegados ni separados'. Entre dientes vecinos de una fila (en orden por el arco) se mide
@@ -310,7 +310,7 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0
         else:
             r_m, r_d = {'IC': (0.03, 0.11), 'I': (0.07, 0.24), 'P': (0.14, 0.14)}[kind]
             if REAL_TEETH:   # (03/11) dentadura real: esquinas casi rectas en los incisivos (los de abajo, rectos)
-                r_m, r_d = {'IC': PROF['corner_ic'], 'I': PROF['corner_i_up'] if upper else (0.03, 0.06), 'P': (0.14, 0.14)}[kind]
+                r_m, r_d = {'IC': PROF['corner_ic'], 'I': PROF['corner_i_up'] if upper else PROF.get('corner_lo', (0.03, 0.06)), 'P': (0.14, 0.14)}[kind]
             rr = np.where(cx * mes > 0, r_m, r_d)
             bmax = 1 - rr * sst(0.5, 1.0, np.abs(cx)) ** 1.6
         bb = bi * bmax if bi > 0 else bi * np.ones_like(cx)
@@ -517,6 +517,8 @@ def build(src_fmdl, texdir, log=print):
             if rank >= 3 and (best is None or abs(ii - gi) > best[0]):
                 g2 = (0.035 * (xr - xl))
                 best = (abs(ii - gi), ((xl + g2) / 512.0, (xr - g2) / 512.0, (gi + GUM * (ii - gi)) / 512.0, min(ii / 512.0, 0.302) if up else max(ii / 512.0, 0.505)))
+        _fr = [np.interp(0.5 * (pk[i] + pk[i + 1]), np.arange(512), r['inc']) for i in range(ntt) if int(abs((i + 0.5) - mid)) < 3 and pk_paint[i + 1] - pk_paint[i] >= 8]
+        even_ii = float(np.median(_fr)) if _fr else 0.0
         for i in range(ntt):
             xl, xr = pk[i], pk[i + 1]
             if pk_paint[i + 1] - pk_paint[i] < 8: continue
@@ -525,6 +527,8 @@ def build(src_fmdl, texdir, log=print):
             # posicion desde el centro: 0,1 incisivos, 2 canino, el resto premolares/molares
             rank = int(abs((i + 0.5) - mid))
             kind = 'IC' if (rank == 0 and up) else ('I' if rank < 2 else ('C' if rank == 2 else 'P'))
+            if PROF.get('even') and rank < 3:   # (04/11 c) Messi: borde incisal parejo (carillas): todos los de adelante al mismo nivel
+                ii = even_ii
             vG, vI = (gi + GUM * (ii - gi)) / 512.0, ii / 512.0
             if up: vI = min(vI, 0.302)         # el frente de la tira de arriba termina en v 0.30 (despues dobla hacia atras)
             else: vI = max(vI, 0.505)
@@ -543,7 +547,7 @@ def build(src_fmdl, texdir, log=print):
                 uvbox = ((xl0 + g2) / 512.0, (xr0 - g2) / 512.0, (gi0 + GUM * (ii0 - gi0)) / 512.0, min(ii0 / 512.0, 0.302) if up else max(ii0 / 512.0, 0.505))
             if REAL_TEETH:
                 # (03/11) curva de la sonrisa real: laterales ~0.7 mm mas cortos que los centrales, canino con la punta casi al nivel
-                ext = (0.0 if kind == 'P' else (PROF['ext_up'][kind] if up else LO_OVERBITE)) * MM
+                ext = (0.0 if kind == 'P' else (PROF['ext_up'][kind] if up else PROF.get('ext_lo', LO_OVERBITE))) * MM
             else:
                 ext = ((0.0 if kind == 'P' else (-0.2 if up else 1.0)) * MM if KONAMI_BITE else (EXT_UP if up else EXT_LO) + dext)
             Pt, UVt, Ft = tooth(M, xl / 512.0, xr / 512.0, vG, vI, kind, up, ext=ext, mes=mes, tw=(tw_row[i] if REAL_TEETH else None),

@@ -5,7 +5,7 @@
 # (Descartado: copiar los dientes a una "zona libre" del atlas; la boca plana de Konami de 28 caras usa esa zona.)
 import numpy as np
 
-TONES = {'messi': (1.0, 0.985, 0.95)}   # marfil apenas mas calido (fotos de Agustin)
+TONES = {'messi': (1.04, 1.04, 1.035)}   # (04/11 c) mas blancos que la comun (carillas; antes marfil calido 1/.985/.95)
 # (04/11) dientes de abajo (fila de abajo del atlas, v 0.36-0.66): mas blancos ('un tono un poco mas blanco para los de abajo')
 LO_WHITE = {'messi': 0.35}   # 0 = como arriba; 1 = gris claro sin tinte
 MARKER = {'messi': 64995}               # indices del dibujo de su boca (21664 triangulos comunes + 1 degenerado)
