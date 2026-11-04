@@ -1,0 +1,133 @@
+// PES 2021 - Luz diferida de FOCO / PUNTO (sin sombra, solo difusa)  [hash 68d58aa84c0256f5]
+// (04/11) Es la luz de estudio del editor (corre x48 por cuadro) y aparece en los focos del partido. No tenia reemplazo: en la
+// piel daba la difusa comun del juego (NdotL envuelto por la translucidez: borde ancho y gris, sin contraluz ni brillo), y la
+// cara del editor no se veia como en el partido. Ahora la piel usa el mismo modelo que las pasadas del sol (pes_skinlight.hlsli):
+// terminador suave por canal, contraluz y el brillo fino de piel (el juego no le da brillo a esta luz: o1 quedaba en 0).
+// Todo lo que no es piel sale identico al original. Base: traduccion a mano del ensamblador del catalogo (87 instrucciones).
+// Agustin (03/11): "la piel en general en todos los menus y modos".
+
+cbuffer cPSScene : register(b2)
+{
+  struct
+  {
+    float4x4 m_projectionView;
+    float4x4 m_projection;
+    float4x4 m_view;
+    float4x4 m_shadowProjection;
+    float4x4 m_shadowProjection2;
+    float4 m_eyepos;
+    float4 m_projectionParam;
+    float4 m_viewportSize;
+    float4 m_exposure;
+    float4 m_fogParam[3];
+    float4 m_fogColor;
+    float4 m_cameraCenterOffset;
+    float4 m_shadowMapResolutions;
+  } g_psScene : packoffset(c0);
+}
+
+cbuffer cPSLight : register(b3)
+{
+  struct
+  {
+    float4 m_lightDir0;
+    float4 m_lightColor0;
+    float4 m_lightColor1;
+    float4 m_lightSourcePos;
+    float4 m_lightSourceColor;
+    float4 m_lightSourceDir;
+    float4 m_lightSourceParam1;
+    float4 m_lightSourceParam2;
+    float4 m_lightSourceParam3;
+    float4 m_lightPos0;
+    float4 m_lightParam2;
+  } g_psLight : packoffset(c0);
+}
+
+cbuffer cPSMaterial : register(b4)
+{
+  struct
+  {
+    float4 m_materials[8];
+  } g_psMaterial : packoffset(c0);
+}
+
+SamplerState g_samplerPoint_Wrap_s : register(s8);
+SamplerState g_samplerPoint_Clamp_s : register(s9);
+SamplerState g_samplerLinear_Clamp_s : register(s11);
+Texture2D<float4> g_NormalTexture : register(t0);
+Texture2D<float4> g_SpecularTexture : register(t1);
+Texture2D<float4> g_DepthTexture : register(t2);
+Texture2D<float4> g_lut1 : register(t9);
+Texture2D<float4> g_MaterialTexture : register(t10);
+
+// 3Dmigoto declarations
+#define cmp -
+Texture1D<float4> IniParams : register(t120);
+Texture2D<float4> StereoParams : register(t125);
+#include "pes_common.hlsli"
+float3 PESSunColor() { return g_psLight.m_lightSourceColor.xyz; }   // pes_skinlight lo pide; aca el brillo del juego es 0 y no se usa
+#include "pes_skinlight.hlsli"
+
+void main(
+  float4 v0 : TEXCOORD0,
+  float4 v1 : TEXCOORD1,
+  float4 v2 : SV_Position0,
+  out float4 o0 : SV_Target0,
+  out float4 o1 : SV_Target1,
+  out float4 o2 : SV_Target2)
+{
+  float2 uv = v1.xy / v1.ww;
+  float4 nt = g_NormalTexture.Sample(g_samplerPoint_Wrap_s, uv);
+  float4 st = g_SpecularTexture.Sample(g_samplerPoint_Wrap_s, uv);   // z = marca de piel, x = aspereza, y = intensidad, w = material
+  // normal octaedrica de 11 bits (x e y de 10 bits + 2 bits en w)
+  uint3 q = (uint3)(nt.xyw * float3(1023, 1023, 3));
+  uint ux = (q.x << 1) | (q.z >> 1);
+  uint uy = (q.y << 1) | (q.z & 1);
+  float2 e = float2((float)ux, (float)uy) * asfloat(0x3a801002) - 1.0;
+  float3 n;
+  n.z = 1.0 - abs(e.x) - abs(e.y);
+  float2 sg = float2(e.x >= 0 ? 1.0 : -1.0, e.y >= 0 ? 1.0 : -1.0);
+  n.xy = n.z >= 0 ? e : float2((1.0 - abs(e.y)) * sg.x, (1.0 - abs(e.x)) * sg.y);
+  n = n * rsqrt(dot(n, n));
+  // material (4 bits bajos) y translucidez (resto / 63)
+  uint mv = (uint)(nt.z * 1023 + 0.5);
+  int mat = (int)(mv & 15);
+  float trans = 0, matU = 0, floorK = 0;
+  if (mat == 1) { trans = 0; matU = 0; }
+  else if (mat == 3) { trans = (float)(mv >> 4) * asfloat(0x3c820821); matU = 0; }
+  else { matU = st.w; trans = (float)(mv >> 4) * asfloat(0x3c820821); }
+  // posicion en vista
+  float d = g_DepthTexture.Sample(g_samplerPoint_Wrap_s, uv).x;
+  float2 pp = (v0.xy / v0.ww - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy;
+  float3 P; P.z = g_psScene.m_projectionParam.z / (d - g_psScene.m_projectionParam.w); P.xy = pp * P.z;
+  // foco: caida por distancia (con tope del material 7.w) y cono
+  float3 Lv = g_psLight.m_lightSourcePos.xyz - P;
+  float dist2 = dot(Lv, Lv), invD = rsqrt(dist2);
+  float3 L = Lv * invD;
+  float att = invD * invD - dist2 * g_psLight.m_lightSourceParam1.w;
+  att = max(min(att, g_psMaterial.m_materials[7].w), 0);
+  float cone = exp2(log2(saturate((dot(g_psLight.m_lightSourceDir.xyz, -L) - g_psLight.m_lightSourceParam2.x) * g_psLight.m_lightSourceParam2.y)) * g_psLight.m_lightSourceParam2.z);
+  float3 col = cone * (att * g_psLight.m_lightSourceColor.xyz) * g_psScene.m_exposure.z;
+  if (mat == 1) { floorK = 0; trans = 0; }
+  else if (mat == 3) floorK = 1;
+  else floorK = g_MaterialTexture.SampleLevel(g_samplerPoint_Clamp_s, float2(matU, 0.25), 0).w;
+  float3 nn = float3(n.x, n.y, -n.z);
+  float nl = dot(L, nn);
+  float dGame = saturate(max(floorK * trans, (1 - nl * nl) * trans + nl));
+  float kOut = g_psLight.m_lightSourceParam3.y;
+  // piel (03/11 pes_skinlight): curvatura fuera de los if (usa derivadas)
+  float3 skN = normalize(nn);
+  float skCurv = PesSkCurv(skN, P.z);
+  bool skOn = PesSkIsSkin(mat, trans, st.z);
+  float3 skV = -normalize(P);
+  o0.xyz = col * dGame * kOut;
+  o1.xyzw = float4(0, 0, 0, 1);
+  if (skOn) {
+    o0.xyz = (PesSkDiffuse(nl, trans, floorK * trans, P.z, skCurv) + PesSkTrans(skN, skV, L, trans)) * col * kOut;
+    o1.xyz = min(PesSkSpec(0.0.xxx, skN, skV, L, st.x, st.y, col * kOut, 1.0), 10000.0.xxx);
+  }
+  o0.w = 1;
+  o2.xyzw = float4(1, 1, 1, 1);
+  return;
+}
