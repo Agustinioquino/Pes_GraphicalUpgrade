@@ -282,6 +282,12 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     float3 painted = tBrow.SampleLevel(sLin, uv, 0).rgb;   // (04/11 d) el color de los pelos pintados de esa zona (no la piel de al lado)
     float3 cR = (hb && pesHairRoot.w > 0.5) ? pesHairRoot.xyz : painted;
     float3 cT = (hb && pesHairTip.w > 0.5) ? pesHairTip.xyz : painted * float3(1.25, 1.18, 1.1);   // punta apenas mas clara
+    { // (04/11 o, Agustin: "falta el color para las hebras normales que se aplique a todas") fila 373: color de las hebras de TODOS
+      // los jugadores (x mezcla con el color pintado, yzw rgb); el color propio del jugador (367) va encima
+      float4 G = IniParams.Load(int2(373, 0));
+      float kg = saturate(G.x);
+      if (kg > 0.001) { cR = lerp(cR, saturate(G.yzw), kg); cT = lerp(cT, saturate(G.yzw) * float3(1.25, 1.18, 1.1), kg); }
+    }
     if (hb && pesBrowCol.w > 0.001) {   // (04/11 i) color elegido para este jugador (menu Cejas con hebras)
       float km = saturate(pesBrowCol.w);
       cR = lerp(cR, pesBrowCol.rgb, km); cT = lerp(cT, pesBrowCol.rgb * float3(1.25, 1.18, 1.1), km);
