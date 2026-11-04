@@ -298,6 +298,15 @@ void main(
     r0.x = (saturate((r1.yyyy * r0.yyyy + r0.xxxx))).x;
     // PES21 x332 / z332: piso del peso hacia el cuadro actual (la historia no acumula sin limite); mas donde hay contraste fino
     if (pesOn) r0.x = max(r0.x, saturate(clamp(P332.x, 0.0, 0.5) + clamp(P332.z, 0.0, 0.5) * saturate(pesCon * 2.0 - 0.1)));
+    if (pesOn) {
+      // PES21 (04/11) mezcla pesada por luminancia (anti-titileo, tipo Lottes/Karis): un pixel claro del cuadro actual (punta de hoja
+      // con sol, brillo del pelo, borde de la cara contra el cielo) pesa menos que uno oscuro, asi el borde serruchado del cuadro
+      // actual no "salta" encima de la historia suavizada. Con el mismo alfa da lo mismo en zonas planas.
+      float3 pesCur = r1.xzw + r9.xyz;            // cuadro actual reconstruido (r1.xzw = actual - historia)
+      float wc = r0.x / (1.0 + dot(pesCur, float3(0.2126, 0.7152, 0.0722)));
+      float wh = (1.0 - r0.x) / (1.0 + dot(r9.xyz, float3(0.2126, 0.7152, 0.0722)));
+      r1.xyz = (pesCur * wc + r9.xyz * wh) / max(wc + wh, 1e-5);
+    } else
     r1.xyz = ((r0.xxxx * r1.xzwx + r9.xyzx)).xyz;
     r7.xyz = (r17.xyzx).xyz;
     r6.w = (r0.wwww).w;
