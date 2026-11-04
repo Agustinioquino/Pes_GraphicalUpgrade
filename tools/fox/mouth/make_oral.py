@@ -490,6 +490,8 @@ def main():
     ap = argparse.ArgumentParser(); ap.add_argument('src'); ap.add_argument('dst'); ap.add_argument('--preview')
     a = ap.parse_args()
     tex, dbg = build(a.src)
+    import player_tone   # (04/11) copias de los dientes con tono propio por jugador en la zona libre del atlas (Messi)
+    for prof in player_tone.TONES: tex = player_tone.paint(tex, prof)
     os.makedirs(a.dst, exist_ok=True)
     import hashlib
     for k, v in tex.items():
