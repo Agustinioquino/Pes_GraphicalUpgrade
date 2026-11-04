@@ -224,6 +224,7 @@ void main(
   }
   r7.w = -r7.z;
   float3 skN = normalize(r7.xyw);   // (03/11) normal para la piel
+  float skCurv = PesSkCurv(skN, skZ);   // (04/11) curvatura para la piel de lejos (fuera de los if: usa derivadas)
   r0.w = dot(g_psLight.m_lightDir0.xyz, r7.xyw);
   r1.z = dot(-r0.xyz, r7.xyw);
   r2.x = r1.z + r1.z;
@@ -249,7 +250,7 @@ void main(
   r3.xyz = r3.xxx * r1.xyw;
   bool skOn = PesSkIsSkin(skMat, r4.y, skTag);
   float3 skV = -normalize(float3(skPP, 1)), skL = normalize(g_psLight.m_lightDir0.xyz);
-  if (skOn) r3.xyz = PesSkDiffuse(skNL, r4.y, skTF, skZ) * r1.xyw;   // (03/11) piel
+  if (skOn) r3.xyz = PesSkDiffuse(skNL, r4.y, skTF, skZ, skCurv) * r1.xyw;   // (03/11) piel
   r4.xyz = r8.xyz * r2.zzz;
   r5.x = dot(r0.xyz, g_psLight.m_lightDir0.xyz);
   r0.x = g_lut1.Sample(g_samplerLinear_Clamp_s, r5.xy).x;
