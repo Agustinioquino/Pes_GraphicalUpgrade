@@ -265,8 +265,14 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
         GSOut o;
         float side = (float)s;
         o.pos = ProjV(p + sideV * wid * side);
-        float3 nCyl = normalize(V * 0.6 + sideV * side * 0.8);
-        o.nrmV = normalize(lerp(n, nCyl, 0.65));
+        // (04/11 e, Agustin: "que la luz la tome bien el pelo de la ceja") antes la normal miraba a la CAMARA (V * 0.6): con el sol
+        // de costado la hebra se iluminaba distinto que la piel de abajo (alambre oscuro o brillante). Ahora es la normal de la piel
+        // redondeada solo hacia los costados de la hebra (perpendicular a su direccion, en el plano de la piel): de lejos la ceja
+        // toma la misma luz y sombra que la cara, de cerca cada pelo tiene volumen; la punta levantada se inclina un poco hacia
+        // donde apunta el pelo
+        float3 sideS = normalize(cross(n, dd));
+        float3 nH = normalize(n + sideS * side * 0.55 + dd * (lift * 0.6 * t));
+        o.nrmV = nH;
         o.col = cR; o.col2 = cT;
         o.tw = float2(t, side);
         o.motion = motion;

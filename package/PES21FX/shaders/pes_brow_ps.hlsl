@@ -47,7 +47,7 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   float3 n = normalize(i.nrmV);
   // (04/11) la luz pasa por el pelo: translucidez alta (la punta mas que la raiz) + marca de PELO 252/255 (o2.z, abajo) para
   // que las pasadas del sol le apliquen el contraluz del pelo (fila 339), como el pelo de la cabeza
-  float trans = lerp(0.35, 0.75, t);
+  float trans = lerp(0.45, 0.8, t);   // (04/11 e) un poco mas de luz atravesando el pelo (la raiz tambien es fina)
   float3 r1 = n; float r1w = trans;
   float4 r0;
   r0.x = r1w * 63 + 0.5;
@@ -63,11 +63,11 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   o1.xyw = float3(0.000977517106, 0.000977517106, 0.333333343) * float3(hi.x, hi.y, lo);
   o1.z = 0.000977517106 * (float)(rx << 4);
   // rugosidad (misma curva que la cara) y especular bajos: el pelo de ceja es mate con un brillo fino
-  float rough = 0.5;   // (04/11 b) el pelo tiene un brillo fino (cuticula): un poco mas liso que la piel
+  float rough = 0.58;   // (04/11 e) brillo fino pero suave: sin tangente en el G-buffer un brillo muy chico titila en cintas de 1 px
   float rc = rough * 0.0361702144 + 0.0904255286;
   rc = rc * rough + 0.180851057; rc = rc * rough + 0.271276593; rc = rc * rough + 0.271276593;
   o2.x = rc * rough + 0.150000006;
-  o2.y = 0.42 * (pesHairMisc.x > 0.5 ? saturate(pesHairB.z) / 0.6 : 1.0);   // brillo del tipo de pelo (0.6 = natural)
+  o2.y = 0.36 * (pesHairMisc.x > 0.5 ? saturate(pesHairB.z) / 0.6 : 1.0);   // brillo del tipo de pelo (0.6 = natural)
   o2.z = IniParams.Load(int2(339,0)).w > 0.5 ? 0.98823529 : 1.0;   // (04/11) pelo a contraluz; sin eso como antes (ni piel ni kit)
   o2.w = g_psMaterial.m_materials[0].x;
   o3.xy = g_psSystem.m_renderBuffer.xy * i.motion;
