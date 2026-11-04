@@ -45,7 +45,7 @@ struct FaceMesh {
     int shapeOff = -1; uint32_t huella = 0; ID3D11ShaderResourceView* shapeWr = nullptr;   // (04/11) gestos esculpidos (formas\<huella>.bin): primer float4 de esta malla en s_shapeData
     ID3D11Buffer* seamBuf = nullptr; ID3D11ShaderResourceView* seamSrv = nullptr; int seamN = 0;   // (04/11 b) teselacion (facetess.cpp): peso de borde por vertice (t119), solo piel de la cara; seamN = vertices con peso 0
     UINT cbv[28] = {}; std::vector<float> xferPs; uint64_t xferIb = 0; int xferUsed = 0; bool xferGate = false; ID3D11Buffer* cbNoShape = nullptr; ID3D11Buffer* cbTeeth = nullptr;
-    bool beard = false, beardSrc = false; ID3D11Buffer* idBuf = nullptr; std::vector<float> beardPs; int beardTries = 0;   // (04/11 c) barba: malla del pelo enlazada a la piel / piel que le pasa su paleta   // (04/11 c) lo que lleva el cbuffer y, si espera formas pasadas de la piel, sus vertices
+    bool beard = false, beardSrc = false; int geoId = 0, teethHits = 0; bool teethOn = false; ID3D11Buffer* idBuf = nullptr; std::vector<float> beardPs; int beardTries = 0;   // (04/11 c) barba: malla del pelo enlazada a la piel / piel que le pasa su paleta   // (04/11 c) lo que lleva el cbuffer y, si espera formas pasadas de la piel, sus vertices
 };
 std::mutex s_mx;
 std::unordered_map<uint64_t, FaceMesh*> s_meshes;
@@ -373,6 +373,12 @@ void DumpObj(FaceMesh* m, const std::vector<float>& ps, const std::vector<float>
 // suma el gesto: lo que los huesos de la cara corren el punto respecto de la cabeza.
 struct BeardSrc { int id = 0; uint64_t ib = 0; UINT nv = 0; int head = 0; int shapeOff = -1; std::vector<float> p, w; std::vector<uint8_t> j; };
 std::vector<BeardSrc> s_bsrc; size_t s_bsrcBytes = 0;
+// (04/11 d, arranque 06:53: "0 paletas copiadas") la piel se reconoce por su GEOMETRIA (buffer, primer vertice, vertices), no por el id de
+// la malla: la misma piel tiene varias entradas en la tabla (otra pasada con otro input layout, LOD, mallas echadas y vueltas a leer) y la
+// barba quedaba enlazada a una que no se dibujaba
+std::map<uint64_t, int> s_geoIds; std::vector<int> s_geoUsed;
+int GeoId(uint64_t ib, UINT vmin, UINT nv) { const uint64_t k = Fnv(Fnv(Fnv(0xcbf29ce484222325ULL, ib), vmin), nv); auto it = s_geoIds.find(k); if (it != s_geoIds.end()) return it->second; const int id = (int)s_geoIds.size() + 1; s_geoIds[k] = id; return id; }
+int s_poolFail[4] = {};   // sin pozo, sin id, sin b5/b6, b5/b6 fuera de rango
 std::vector<float> s_beardData; ID3D11Buffer* s_beardBuf = nullptr; ID3D11ShaderResourceView* s_beardSrv = nullptr;
 ID3D11Buffer* s_pool = nullptr; ID3D11ShaderResourceView* s_poolSrv = nullptr; UINT s_poolAt = 0;
 constexpr UINT kPoolSlots = 64, kSlotF4 = 200, kBeardF4 = 9;
@@ -388,10 +394,12 @@ bool BeardUpload() {
     return true;
 }
 void BeardKeepSrc(FaceMesh* m, const std::vector<float>& ps, const std::vector<uint32_t>& iv, const std::vector<float>& wv) {   // con s_mx tomado
-    for (const BeardSrc& b : s_bsrc) if (b.id == m->id) return;
+    m->geoId = GeoId((uint64_t)m->ib, m->vmin, m->nv);
+    if (std::find(s_geoUsed.begin(), s_geoUsed.end(), m->geoId) != s_geoUsed.end()) m->beardSrc = true;
+    for (const BeardSrc& b : s_bsrc) if (b.id == m->geoId) return;
     const size_t by = (size_t)m->nv * (12 + 16 + 4);
     if (s_bsrcBytes + by > (32u << 20)) return;
-    BeardSrc b; b.id = m->id; b.ib = (uint64_t)m->ib; b.nv = m->nv; b.head = m->head; b.shapeOff = m->xferGate ? -1 : m->shapeOff;
+    BeardSrc b; b.id = m->geoId; b.ib = (uint64_t)m->ib; b.nv = m->nv; b.head = m->head; b.shapeOff = m->xferGate ? -1 : m->shapeOff;
     b.p = ps; b.w = wv; b.j.resize(iv.size()); for (size_t i = 0; i < iv.size(); i++) b.j[i] = (uint8_t)(std::min)(iv[i], 31u);
     s_bsrcBytes += by; s_bsrc.push_back(std::move(b));
 }
@@ -413,7 +421,10 @@ bool BeardBind(FaceMesh* m, const std::vector<float>& ps) {   // con s_mx tomado
     uint64_t gib = 0; int gc = 0; double gd = 1e9;
     for (auto& kv : cov) { const double md = dsum[kv.first] / kv.second; if (kv.second > gc || (kv.second == gc && md < gd)) { gib = kv.first; gc = kv.second; gd = md; } }
     const int ns = (int)((m->nv + stp - 1) / stp);
-    if (gc * 2 < ns) return false;
+    if (gc * 2 < ns) {   // (04/11 d, Agustin: "el head shield del pelo no se mueve con los huesos") que malla del pelo no se enlaza y por que
+        if (m->beardTries == 0 || m->beardTries == 14) Log("expresiones: pelo %d (%u vertices) sin enlazar a la piel (intento %d): muestra %d / %d a menos de 12 mm (hace falta la mitad)", m->id, m->nv, m->beardTries + 1, gc, ns);
+        return false;
+    }
     // 2) por vertice: la pieza de la piel con el vertice mas cercano y sus 4 vecinos mas cercanos (1/d^4); se apaga de 8 a 25 mm
     std::vector<float> d((size_t)m->nv * kBeardF4 * 4, 0.0f);
     int nOk = 0; float dmax = 0;
@@ -460,10 +471,11 @@ bool BeardBind(FaceMesh* m, const std::vector<float>& ps) {   // con s_mx tomado
     const size_t off4 = s_beardData.size() / 4;
     s_beardData.insert(s_beardData.end(), d.begin(), d.end());
     if (!BeardUpload()) { s_beardData.resize(off4 * 4); return false; }
-    for (auto& kv : s_meshes) if (std::find(used.begin(), used.end(), kv.second->id) != used.end()) kv.second->beardSrc = true;
+    for (int g : used) if (std::find(s_geoUsed.begin(), s_geoUsed.end(), g) == s_geoUsed.end()) s_geoUsed.push_back(g);
+    int nMark = 0; for (auto& kv : s_meshes) if (kv.second->geoId && std::find(used.begin(), used.end(), kv.second->geoId) != used.end()) { kv.second->beardSrc = true; nMark++; }
     const UINT cv[28] = { (UINT)off4, m->nv, m->vmin, 1u };
     m->cb = MakeCBRaw(cv);
-    Log("expresiones: barba %d (%u vertices) enlazada a la piel de la cara (%d piezas, %d de %u vertices a menos de 25 mm, muestra %d / %d a menos de 12 mm, %.1f mm de promedio)", m->id, m->nv, (int)used.size(), nOk, m->nv, gc, ns, gd * 1000.0);
+    Log("expresiones: barba %d (%u vertices) enlazada a la piel de la cara (%d piezas, %d mallas de la tabla, %d de %u vertices a menos de 25 mm, muestra %d / %d a menos de 12 mm, %.1f mm de promedio)", m->id, m->nv, (int)used.size(), nMark, nOk, m->nv, gc, ns, gd * 1000.0);
     return m->cb != nullptr;
 }
 
@@ -757,19 +769,19 @@ static void BeardPoolCopy(ID3D11DeviceContext* c, FaceMesh* m) {   // con s_mx t
     if (!s_pool) {
         D3D11_BUFFER_DESC d{}; d.ByteWidth = kPoolSlots * kSlotF4 * 16; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
         std::vector<float> z((size_t)kPoolSlots * kSlotF4 * 4, 0.0f); D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = z.data();
-        if (FAILED(g_dev.dev->CreateBuffer(&d, &sd, &s_pool))) { s_pool = nullptr; m->beardSrc = false; return; }
+        if (FAILED(g_dev.dev->CreateBuffer(&d, &sd, &s_pool))) { s_pool = nullptr; s_poolFail[0]++; return; }
         D3D11_SHADER_RESOURCE_VIEW_DESC v{}; v.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; v.ViewDimension = D3D11_SRV_DIMENSION_BUFFER; v.Buffer.NumElements = kPoolSlots * kSlotF4;
         if (FAILED(g_dev.dev->CreateShaderResourceView(s_pool, &v, &s_poolSrv))) { s_poolSrv = nullptr; }
     }
-    if (!s_poolSrv) return;
+    if (!s_poolSrv) { s_poolFail[0]++; return; }
     if (!m->idBuf) {
-        const float h[4] = { (float)m->id, (float)m->head, 0.0f, 0.0f };
+        const float h[4] = { (float)m->geoId, (float)m->head, 0.0f, 0.0f };
         D3D11_BUFFER_DESC d{}; d.ByteWidth = 16; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
         D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = h;
-        if (FAILED(g_dev.dev->CreateBuffer(&d, &sd, &m->idBuf))) { m->idBuf = nullptr; m->beardSrc = false; return; }
+        if (FAILED(g_dev.dev->CreateBuffer(&d, &sd, &m->idBuf))) { m->idBuf = nullptr; s_poolFail[1]++; return; }
     }
     ID3D11DeviceContext1* c1 = nullptr;
-    if (FAILED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) || !c1) return;
+    if (FAILED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) || !c1) { s_poolFail[2]++; return; }
     ID3D11Buffer* b6 = nullptr; ID3D11Buffer* b5 = nullptr; UINT f6 = 0, n6 = 0, f5 = 0, n5 = 0;
     c1->VSGetConstantBuffers1(6, 1, &b6, &f6, &n6); c1->VSGetConstantBuffers1(5, 1, &b5, &f5, &n5); c1->Release();
     if (b6 && b5) {
@@ -782,8 +794,8 @@ static void BeardPoolCopy(ID3D11DeviceContext* c, FaceMesh* m) {   // con s_mx t
             D3D11_BOX x5 = { a5, 0, 0, a5 + 64, 1, 1 }; c->CopySubresourceRegion(s_pool, 0, base + 193 * 16, 0, 0, b5, 0, &x5);
             D3D11_BOX xh = { 0, 0, 0, 16, 1, 1 }; c->CopySubresourceRegion(s_pool, 0, base, 0, 0, m->idBuf, 0, &xh);
             s_beardCopies++;
-        }
-    }
+        } else s_poolFail[3]++;
+    } else s_poolFail[2]++;
     if (b6) b6->Release(); if (b5) b5->Release();
 }
 bool BeardForDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, ID3D11Buffer** cb, ID3D11ShaderResourceView** pool, ID3D11ShaderResourceView** bind) {
@@ -830,6 +842,9 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
                 s_gateRing[s_gateAt++ % 16] = { m->id, seq };
                 bool ok = s_packFrame == s_frame && seq - s_packSeq <= 16;   // dibujada poco despues de su piel
                 for (const GateE& g : s_gateOk) if (g.id == m->id && s_frame - g.seq <= 2) ok = true;   // o poco antes (cuadro anterior)
+                // (04/11 d) como la boca: despues de 8 veces junto a su piel queda habilitada (si no, iba y venia entre pasadas: vibraba)
+                if (ok && !m->teethOn && ++m->teethHits >= 8) m->teethOn = true;
+                if (m->teethOn) ok = true;
                 if (!ok) { s_gateOff++; if (m->head <= 31 && (m->lids[0] >= 0 || m->lids[1] >= 0) && s_frame - m->lidCap >= 120) { m->lidCap = s_frame; LidCapture(c, m); } return m->cbNoShape ? m->cbNoShape : s_none; }
                 s_gateOn++;
             }
@@ -837,7 +852,10 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
             // poco"; OK de Agustin para tocar la boca SOLO con la sonrisa) la boca que se dibuja justo despues de una piel con formas
             // propias (la cara esculpida: Messi) lleva la marca de dientes con sonrisa (b12 g_pesExprShape.x = 1; pes_expr.hlsli
             // PesTeethSmile). Sin sonrisa el shader no mueve nada; las otras bocas quedan como siempre
-            if (m->cbv[3] == 1 && s_packFrame == s_frame && seq - s_packSeq <= 4) {
+            // (04/11 d, Agustin: "la boca de messi si vibra bastante") la marca iba y venia segun el orden de los dibujos de cada pasada
+            // (una pasada con los dientes corridos y otra sin): ahora, despues de 8 veces junto a su piel, esa boca queda marcada
+            if (m->cbv[3] == 1 && !m->teethOn && s_packFrame == s_frame && seq - s_packSeq <= 4 && ++m->teethHits >= 8) m->teethOn = true;
+            if (m->cbv[3] == 1 && m->teethOn) {
                 if (!m->cbTeeth) { UINT z[28]; memcpy(z, m->cbv, sizeof z); z[24] = 1; z[25] = 0; z[26] = 0; z[27] = 0; m->cbTeeth = MakeCBRaw(z); }
                 if (m->cbTeeth) { s_teethOn++; if (headCentroid && m->hcOk && m->nv >= 300) { *headCentroid = m->hc; if (headIdx) *headIdx = m->head; } return m->cbTeeth; }
             }
@@ -1037,7 +1055,8 @@ void ExprPresent() {
                 else if (++b->beardTries >= 15) { b->state = 4; b->why = "pelo: no hay piel de cara debajo"; b->beardPs.clear(); b->beardPs.shrink_to_fit(); }
             }
         }
-        if (s_beardDraws || s_beardCopies) { static UINT lastB = 0; if (s_frame - lastB >= 3600) { lastB = s_frame; Log("expresiones: barba por huesos: %d dibujos de barba, %d paletas de piel copiadas (~60 s)", s_beardDraws, s_beardCopies); s_beardDraws = s_beardCopies = 0; } }
+        if (s_beardDraws || s_beardCopies) { static UINT lastB = 0; if (s_frame - lastB >= 3600) { lastB = s_frame; int nSrc = 0; for (auto& kv : s_meshes) if (kv.second->beardSrc) nSrc++;
+            Log("expresiones: barba por huesos: %d dibujos de barba, %d paletas de piel copiadas (~60 s; %d mallas de piel marcadas, %d geometrias; fallas: pozo %d, id %d, b5/b6 %d, rango %d)", s_beardDraws, s_beardCopies, nSrc, (int)s_geoUsed.size(), s_poolFail[0], s_poolFail[1], s_poolFail[2], s_poolFail[3]); s_beardDraws = s_beardCopies = 0; for (int& f : s_poolFail) f = 0; } }
     }
     static int frames = 0;
     if (++frames >= 3600) {
