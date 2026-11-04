@@ -36,6 +36,7 @@ static ID3D11Resource* s_shadowRes = nullptr;   // recurso del shadow map del ju
 static int s_shadowResFrame = -1;
 static std::atomic<ID3D11DepthStencilView*> s_cascadeDSV{nullptr};   // DSV de la primera cascada dibujada despues de la limpieza (la mas cercana)
 static float s_half = 0.9f;
+static std::atomic<int> s_tessDraws{0}, s_tessEarly{0}, s_tessNoDS{0};   // (04/11 piel) cara teselada en el atlas (registro cada 10 s)
 std::atomic<int> g_headShadowReplays{0};
 static int s_replayLast = 0; static double s_logT = 0;
 // (27/10 d) diagnostico: la primera version no replico ningun dibujo (log de Agustin: "0 dibujos replicados") y casi nunca
@@ -196,7 +197,8 @@ void HeadShadowPresent() {
     s_count = n;
     double t = Now();
     if (t - s_logT > 10.0) { s_logT = t; int r = g_headShadowReplays.exchange(0);
-        Log("sombra cabeza: %d cabezas%s, %d dibujos replicados en 10 s (z %s)", n, s_body ? " + piernas del mas cercano" : "", r, s_reversed ? "invertida" : "normal");
+        Log("sombra cabeza: %d cabezas%s, %d dibujos replicados en 10 s (z %s); cara teselada en el atlas: %d dibujos, %d salteados (el atlas todavia no se limpio en ese cuadro), %d sin DS",
+            n, s_body ? " + piernas del mas cercano" : "", r, s_reversed ? "invertida" : "normal", s_tessDraws.exchange(0), s_tessEarly.exchange(0), s_tessNoDS.exchange(0));
         Log("sombra cabeza (diag): personajes %d (sin posicion %d, detras %d, fuera de pantalla %d, lejos %d, validos %d); el mas cercano en vista (%.2f %.2f %.2f) w %.2f; ojo %.2f %.2f %.2f",
             s_cAlive, s_cNoPos, s_cBehind, s_cOff, s_cFar, s_cOk, s_cNear[0], s_cNear[1], s_cNear[2], s_cNear[3], s_cEye[0], s_cEye[1], s_cEye[2]);
         Log("sombra cabeza (diag): el mas cercano en recorte: con m_projectionView (%.2f %.2f %.2f %.2f), con m_projection x vista (%.2f %.2f %.2f %.2f); projParam (%.4f %.4f %.4f %.4f) -> signos de la vista del sol x %.0f y %.0f z %.0f; sol en vista %.3f %.3f %.3f",
@@ -214,7 +216,8 @@ bool HeadShadowBodyOn() { return s_body && s_count > 0; }   // (04/11 piel) cuad
 // orientacion opuesta a la matriz de sombras del juego y entonces el descarte dejaba solo las caras de atras (sombra de la cara
 // opuesta: manchas). Con las dos caras se queda la mas cercana al sol, como corresponde. Cache por estado original.
 static std::map<ID3D11RasterizerState*, ID3D11RasterizerState*> s_rsNoCull;
-ID3D11RasterizerState* HeadShadowNoCullRS(ID3D11RasterizerState* orig) {
+static std::atomic<ID3D11RasterizerState*> s_lastShadowRS{nullptr};   // (04/11 piel) el ultimo de la repeticion (pasada de sombras)
+static ID3D11RasterizerState* NoCullRS(ID3D11RasterizerState* orig) {
     auto it = s_rsNoCull.find(orig); if (it != s_rsNoCull.end()) return it->second;
     if (!g_dev.dev) return nullptr;
     D3D11_RASTERIZER_DESC rd{};
@@ -223,6 +226,30 @@ ID3D11RasterizerState* HeadShadowNoCullRS(ID3D11RasterizerState* orig) {
     ID3D11RasterizerState* rs = nullptr; g_dev.dev->CreateRasterizerState(&rd, &rs);
     if (orig) orig->AddRef();   // la clave se retiene para que el puntero no se reutilice con otro estado
     s_rsNoCull[orig] = rs; return rs;
+}
+ID3D11RasterizerState* HeadShadowNoCullRS(ID3D11RasterizerState* orig) {
+    ID3D11RasterizerState* r = NoCullRS(orig);
+    if (r) s_lastShadowRS.store(r);   // (04/11 piel) lo usa tambien la cara teselada en el atlas
+    return r;
+}
+// (04/11 piel) cara teselada en el atlas (hooks.cpp TessAtlas): mismo estado de rasterizado que la repeticion de la pasada de sombras
+// (el del juego en esa pasada, con su sesgo de profundidad, sin descarte de caras) y profundidad "menor o igual" (o "mayor o igual"
+// con la profundidad invertida del shadow map), escribiendo. El dibujo se hace solo si el atlas ya se limpio en este cuadro.
+static ID3D11DepthStencilState* s_atlasDSS[2] = {};
+bool HeadShadowClearedThisFrame() { return s_clearFrame == PresentNo(); }
+void HeadShadowTessNote(int what) { (what == 0 ? s_tessDraws : what == 1 ? s_tessEarly : s_tessNoDS).fetch_add(1, std::memory_order_relaxed); }
+ID3D11RasterizerState* HeadShadowAtlasRS(ID3D11RasterizerState* cur) {
+    if (ID3D11RasterizerState* rs = s_lastShadowRS.load()) return rs;
+    return NoCullRS(cur);   // todavia no hubo repeticion: el del dibujo sin descarte de caras
+}
+ID3D11DepthStencilState* HeadShadowAtlasDSS() {
+    const int k = s_reversed ? 1 : 0;
+    if (!s_atlasDSS[k] && g_dev.dev) {
+        D3D11_DEPTH_STENCIL_DESC dd{}; dd.DepthEnable = TRUE; dd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+        dd.DepthFunc = s_reversed ? D3D11_COMPARISON_GREATER_EQUAL : D3D11_COMPARISON_LESS_EQUAL; dd.StencilEnable = FALSE;
+        g_dev.dev->CreateDepthStencilState(&dd, &s_atlasDSS[k]);
+    }
+    return s_atlasDSS[k];
 }
 ID3D11ShaderResourceView* HeadShadowSRV() { return s_count > 0 ? s_srv : nullptr; }
 ID3D11DepthStencilView* HeadShadowDSV() { return s_dsv; }
@@ -277,6 +304,7 @@ bool HeadShadowIsNearCascade(ID3D11DeviceContext* c, ID3D11DepthStencilView* dsv
     return true;
 }
 void HeadShadowRelease() {
+    for (auto*& d : s_atlasDSS) { if (d) d->Release(); d = nullptr; }
     for (int i = 0; i <= kHsSlots; i++) { if (s_cb[i]) s_cb[i]->Release(); s_cb[i] = nullptr; }
     if (s_srv) s_srv->Release(); if (s_dsv) s_dsv->Release(); if (s_tex) s_tex->Release(); s_srv = nullptr; s_dsv = nullptr; s_tex = nullptr;
 }

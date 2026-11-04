@@ -1164,7 +1164,8 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
             if (seam && t_drawKind == 1 && Ctx(c).ps && Ctx(c).ps->hash != 0x63fab7735eee149cULL) {
                 ID3D11ShaderResourceView* prm = nullptr; c->VSGetShaderResources(120, 1, &prm);
                 if (!prm) FaceTessNote(1);
-                if (prm) { if (FaceTessBegin(c, hash, seam, prm, d.tess)) { Remember(c, d, false, true, 119); c->VSSetShaderResources(119, 1, &seam); } prm->Release(); }
+                if (prm) { if (FaceTessBegin(c, hash, seam, prm, d.tess)) { Remember(c, d, false, true, 119); c->VSSetShaderResources(119, 1, &seam);
+                    d.tess.cnt = t_drawVerts; d.tess.start = t_drawStart; d.tess.base = t_drawBase; } prm->Release(); }
             }
             if (hc && FreeCamWantsHead()) ExprCaptureHead(c, hc, hd);   // (1/11) camara libre "seguir la cara": matriz de sk_head de este dibujo
             break; }
@@ -1410,7 +1411,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (ds.ring.overlay && !ds.skip) { RingOverlayBegin(c, ds.ring); call; RingOverlayEnd(c, ds.ring); } \
     if (g_meterHook) { CtxState& cm_ = Ctx(c); if (cm_.ps && cm_.ps->hash == 0x619b86cb5691cdceULL) LightMeterAfterComposition(c); } \
     if (g_inspectOn) { CtxState& ci_ = Ctx(c); if (InspectBegin(c, ci_.ps, ci_.vs, kind, verts, inst)) { call; InspectEnd(c); } } \
-    if (ds.brow.browVS && !ds.skip) BrowStrands<V>(c, ds); if (ds.tess.on) FaceTessEnd(c, ds.tess); if (r) Restore(c, ds); if (ds.lod.count) ds.lod.Release();
+    if (ds.brow.browVS && !ds.skip) BrowStrands<V>(c, ds); if (ds.tess.on && !ds.skip && (kind) == 1) TessAtlas<V>(c, ds); if (ds.tess.on) FaceTessEnd(c, ds.tess); if (r) Restore(c, ds); if (ds.lod.count) ds.lod.Release();
 // (26/10 g) antes de cada dibujo que no sea de la base de la cancha: la emision pendiente del pasto del mod (ver GrassBaseFlush)
 #define GRASS_FLUSH(c) if (g_grassPendN.load(std::memory_order_relaxed) > 0) { CtxState& cf_ = Ctx(c); GrassBaseFlush(c, 0, cf_.ps ? cf_.ps->hash : 0); }
 // (27/10 c) sombra de la cabeza: el mismo dibujo de la pasada de sombras del juego (cascada mas cercana) se repite en el atlas
@@ -1505,6 +1506,51 @@ template<int V> static void BrowStrands(ID3D11DeviceContext* c, DrawScope& ds) {
     if (!BrowStrandsBegin(c, &ds.brow, ds.brow.browVS)) return;
     if (ds.lod.count) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.brow.browCount, ds.brow.browStart, ds.brow.browBase);
     BrowStrandsEnd(c);
+}
+// (04/11 piel) CARA TESELADA EN EL ATLAS de las cabezas (headshadow.cpp, t30: sombra propia de la cabeza y grosor de la piel). La
+// repeticion de la pasada de sombras del juego (HeadShadowReplay) dibuja la malla del modelo, sin teselar: la sombra de la nariz y
+// del menton y el grosor del contraluz salian de los triangulos. Aca, apenas termina el dibujo de la piel de la cara teselada en el
+// G-buffer, se repite el mismo dibujo (mismo VS, mismo HS = mismos triangulos) sin PS y sobre el atlas, con el DS del atlas
+// (pes_face_tess_*_atlas_ds.hlsl: la posicion teselada de la vista al mundo y del mundo a la caja de cada cabeza, b12). Solo si el
+// atlas ya se limpio en este cuadro (la pasada de sombras del juego va ANTES del G-buffer); si no, se saltea y queda en el registro.
+// En el atlas quedan las dos (la del modelo y la teselada) y gana la mas cercana al sol: la cara redondeada en lo convexo.
+template<int V> static void TessAtlas(ID3D11DeviceContext* c, DrawScope& ds) {
+    if (ds.tess.v < 0 || ds.tess.v > 1 || !ds.tess.cnt) return;
+    if (g_cfg.live[309][0] < 0.5f) return;
+    const int n = HeadShadowSlots(); ID3D11DepthStencilView* dsv = HeadShadowDSV();
+    if (n <= 0 || !dsv) return;
+    if (!HeadShadowClearedThisFrame()) { HeadShadowTessNote(1); return; }
+    ID3D11DomainShader* ads = FaceTessAtlasDS(ds.tess.v); if (!ads) { HeadShadowTessNote(2); return; }
+    ID3D11RenderTargetView* rt[8] = {}; ID3D11DepthStencilView* oldDsv = nullptr; c->OMGetRenderTargets(8, rt, &oldDsv);
+    UINT nrt = 0; for (UINT i = 0; i < 8; i++) if (rt[i]) nrt = i + 1;   // al devolver: solo los slots que estaban (no pisar UAVs de mas arriba)
+    ID3D11PixelShader* oldPS = nullptr; c->PSGetShader(&oldPS, nullptr, nullptr);
+    ID3D11DomainShader* oldDS = nullptr; c->DSGetShader(&oldDS, nullptr, nullptr);
+    ID3D11Buffer* oldB12 = nullptr; c->DSGetConstantBuffers(12, 1, &oldB12);
+    D3D11_VIEWPORT vps[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]; UINT nvp = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE; c->RSGetViewports(&nvp, vps);
+    D3D11_RECT scs[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]; UINT nsc = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE; c->RSGetScissorRects(&nsc, scs);
+    ID3D11RasterizerState* oldRS = nullptr; c->RSGetState(&oldRS);
+    ID3D11DepthStencilState* oldDSS = nullptr; UINT oldRef = 0; c->OMGetDepthStencilState(&oldDSS, &oldRef);
+    o_OMSetRT[V](c, 0, nullptr, dsv);
+    o_SetPS[V](c, nullptr, nullptr, 0);   // sin PS (solo profundidad): la funcion original, el registro del contexto (Ctx.ps) no cambia
+    c->DSSetShader(ads, nullptr, 0);
+    if (ID3D11RasterizerState* rs = HeadShadowAtlasRS(oldRS)) c->RSSetState(rs);
+    if (ID3D11DepthStencilState* dss = HeadShadowAtlasDSS()) c->OMSetDepthStencilState(dss, 0);
+    for (int i = 0; i < n; i++) {
+        ID3D11Buffer* cb = HeadShadowCB(i); if (!cb) continue;
+        D3D11_VIEWPORT vp; HeadShadowViewport(i, vp);
+        D3D11_RECT rc{ (LONG)vp.TopLeftX, (LONG)vp.TopLeftY, (LONG)(vp.TopLeftX + vp.Width), (LONG)(vp.TopLeftY + vp.Height) };
+        c->RSSetViewports(1, &vp); c->RSSetScissorRects(1, &rc);
+        c->DSSetConstantBuffers(12, 1, &cb);
+        if (ds.lod.count) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.tess.cnt, ds.tess.start, ds.tess.base);
+        HeadShadowTessNote(0);
+    }
+    o_OMSetRT[V](c, nrt, rt, oldDsv);
+    o_SetPS[V](c, oldPS, nullptr, 0);
+    c->DSSetShader(oldDS, nullptr, 0); c->DSSetConstantBuffers(12, 1, &oldB12);
+    if (nvp) c->RSSetViewports(nvp, vps); if (nsc) c->RSSetScissorRects(nsc, scs);
+    c->RSSetState(oldRS); c->OMSetDepthStencilState(oldDSS, oldRef);
+    for (auto* r : rt) if (r) r->Release(); if (oldDsv) oldDsv->Release(); if (oldPS) oldPS->Release(); if (oldDS) oldDS->Release(); if (oldB12) oldB12->Release();
+    if (oldRS) oldRS->Release(); if (oldDSS) oldDSS->Release();
 }
 template<int V> static void STDMETHODCALLTYPE hk_DrawIdx(ID3D11DeviceContext* c, UINT a, UINT b, INT d) {
     GRASS_FLUSH(c)
