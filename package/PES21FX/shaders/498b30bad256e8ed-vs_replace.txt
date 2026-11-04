@@ -384,7 +384,7 @@ void main(
     // hojas blancas y verdes mezcladas, como en la foto
     float4 P334v = IniParams.Load(int2(334, 0));
     float kP = clamp(P334v.y, 0.0, 2.0);
-    float nearP = pesIsExt ? smoothstep(250.0, 600.0, pesPx) : 1.0;
+    float nearP = pesIsExt ? smoothstep(175.0, 420.0, pesPx) : 1.0;   // (04/11) antes 250-600, como nearF del PS
     if (kP > 0.001 && nearP > 0.001) {
       float2 jR = (float2(frac(pesHv * 5.17 + 0.31), frac(pesHv * 11.3 + 0.77)) - 0.5) * 0.08 * kP;
       float2 puvJ = (pesRoot + jR) * cb4[1].xy + cb4[1].zw;

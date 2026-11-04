@@ -81,7 +81,7 @@ float3 PESTurfTransmit(float3 sunC, float2 sC, float2 uvC, Texture2D<float4> dT,
   float zA = abs(zC);
   if (zA < 0.05) return float3(0.0, 0.0, 0.0);
   float mpp = zA * abs(pp.x) * 2.0 / max(rbX, 1.0);
-  float nearQ = 1.0 - smoothstep(0.003, 0.03, mpp);     // 1 = hoja de cerca (3 mm por pixel o menos), 0 = TV y lejos
+  float nearQ = 1.0 - smoothstep(0.0045, 0.035, mpp);   // 1 = hoja de cerca (4.5 mm por pixel o menos; 04/11 llega ~1.4x mas lejos), 0 = TV y lejos
   float3 V = normalize(float3((sC - cOff) * pp.xy * zC, zC));   // de la camara al punto, como el trazado de la sombra entre hojas
   float VL = dot(V, L);                                  // 1 = mirando hacia el sol
   float ph = saturate(0.5 + 0.5 * VL);

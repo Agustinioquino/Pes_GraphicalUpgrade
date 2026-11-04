@@ -97,7 +97,7 @@ void main(
   // fino (gotas a lo largo de la hoja), y334 cal mas densa (lo decide el VS), z334 sombra por hoja (raiz mas oscura, lado al sol / en sombra)
   float4 P334 = IniParams.Load(int2(334,0));
   float pxA = abs(v4.w);
-  float nearF = (pesV3 && pxA > 0.0) ? smoothstep(250.0, 600.0, pxA) : 0.0;
+  float nearF = (pesV3 && pxA > 0.0) ? smoothstep(175.0, 420.0, pxA) : 0.0;   // (04/11) antes 250-600: el detalle de cerca llega ~1.4x mas lejos (pedido de Agustin)
   // (04/11) v8.z = (sector de 32 hacia donde se abre la hoja + azar por hoja) / 32 (VS 498b30): el giro de z334 lee v8.z entero, el tono,
   // el rocio y la translucidez por hoja leen solo el azar (asi no se ordenan alrededor de la mata)
   float pesHvR = frac(v8.z * 32.0);
@@ -125,7 +125,7 @@ void main(
   if (pesV3) {
     // (27/10 j) pegado a la camara (>= 600 px/m) el atlas se muestrea mas nitido (gradientes a la mitad = un mip mas fino): las hojas de
     // muy cerca se veian blandas, "con poco detalle"
-    float shp = lerp(1.0, 0.5, smoothstep(600.0, 1500.0, abs(v4.w)));
+    float shp = lerp(1.0, 0.5, smoothstep(420.0, 1050.0, abs(v4.w)));
     r0.xyzw = PESGrassAtlas.SampleGrad(g_samplerLinear_Wrap_s, uvA, dUx * shp, dUy * shp).xyzw;
     if (!pesFar) pesN = PESGrassAtlasN.SampleGrad(g_samplerLinear_Wrap_s, uvA, dUx * shp, dUy * shp).xyzw;   // (1/11) lejos no se usa (x pesCf = 0)
     // de lejos el filtrado adelgaza el alfa: se compensa un poco con el nivel de mip
