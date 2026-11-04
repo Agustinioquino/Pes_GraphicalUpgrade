@@ -912,7 +912,7 @@ void ExprBonesFrame(const void* skel) {
         talkO = pTalk * 0.30f * (std::max)(w, 0.0f) * env;
         talkRound = pTalk * sinf(t * 6.2831853f * 1.7f + 0.6f) * env;   // labios que se redondean (o / u) y se estiran (e / i)
     }
-    const float o = (std::max)((std::max)(std::clamp(g_cfg.live[347][0], 0.0f, 1.0f), 0.45f * tongueOut), (std::min)(1.0f, 0.40f * pSur + 0.85f * pGri + 0.12f * pSmi + talkO));   // (04/11) la sonrisa abre un poco la boca
+    const float o = (std::max)((std::max)(std::clamp(g_cfg.live[347][0], 0.0f, 1.0f), 0.45f * tongueOut), (std::min)(1.0f, 0.40f * pSur + 0.85f * pGri + talkO));   // (04/11 b, Agustin: "la sonrisa con los dientes cerrados") la sonrisa ya no abre la mandibula (antes 0.12): los labios se separan, los dientes quedan juntos
     bool poseOn = pAng > 0.001f || pSmi > 0.001f || pSur > 0.001f || pGri > 0.001f || pPuc > 0.001f || fabsf(talkRound) > 0.001f;
     std::lock_guard<std::mutex> lk(s_mx);
     if (s_profCheck == 0xffffffffu || fr - s_profCheck >= 300) { s_profCheck = fr; ProfLoad(); }   // caras.ini: al arrancar y cada ~10 s si cambio
