@@ -139,24 +139,64 @@ float3 PesDirL(float az, float el, float zSgn) {   // rumbo 0 = de frente (hacia
   return normalize(float3(ce * sa, se, -ce * ca * zSgn));
 }
 
-// una luz direccional: difusa (Lambert + borde rojizo de la piel + contraluz por la translucidez) y brillo (GGX + lobulo fino)
-void PesOneLight(float3 L, float3 col, float sh, float3 n, float3 V, bool skin, float rough, float trans, inout float3 dif, inout float3 spec) {
+// (04/11 nariz) transmitancia de la piel (perfil de Jimenez, d en mm) y su color (z34): copia de PESSkinTransmittance /
+// PESTransColor de pes_common.hlsli (este archivo no lo incluye), para que la luz de prueba use la misma contraluz que el partido
+float3 PesSsTransmit(float d) {
+  float dd = -d * d;
+  return float3(0.233, 0.455, 0.649) * exp(dd / 0.0064) + float3(0.100, 0.336, 0.344) * exp(dd / 0.0484)
+       + float3(0.118, 0.198, 0.000) * exp(dd / 0.187)  + float3(0.113, 0.007, 0.007) * exp(dd / 0.567)
+       + float3(0.358, 0.004, 0.000) * exp(dd / 1.99)   + float3(0.078, 0.000, 0.000) * exp(dd / 7.41);
+}
+float3 PesSsTransColor(float3 T, float k) {
+  const float3 lw = float3(0.2126, 0.7152, 0.0722), tint = float3(1.0, 0.56, 0.40);
+  return lerp(T, dot(T, lw) / dot(tint, lw) * tint, saturate(k));
+}
+
+// una luz direccional: difusa (Lambert + borde rojizo de la piel + contraluz por el grosor) y brillo (GGX + lobulo fino)
+// (04/11 nariz) Agustin: "algunas caras reaccionan mal al sss y a la luz, ves la sombra de la nariz" (cara pecosa, sol de prueba
+// -130 / 14 / 1.6 / 0.62: mejilla junto a la nariz naranja con un corte marcado). Dos causas:
+//  1) la contraluz salia SOLO del trm del G-buffer (thick = trm x 1.6): en caras con el trm claro y parejo (la de la captura tiene
+//     la mejilla en 0.17 y la nariz en 0.21; Messi 0.14 / 0.19) la zona de la nariz pasaba el umbral y la mejilla brillaba roja como
+//     si fuera una oreja. Ahora es la de las pasadas del sol (PesSkTransThick): grosor por la CURVATURA medida en pantalla (oreja,
+//     aleta: finas; mejilla, frente: gruesas), el trm solo afina la densidad, y solo en la piel de espaldas a la luz.
+//  2) la sombra trazada solo corre con N.L > 0.02 y del otro lado vale 1: contraluz (x sqrt(sh)) y borde rojizo (x lerp(1, sh,
+//     0.6)) saltaban de golpe en esa linea. Ahora la contraluz es 0 donde la piel mira a la luz (no necesita la sombra) y el
+//     borde usa la sombra con un fundido desde N.L = 0.02, sin escalon. Con la SSSS prendida (w95) el borde rojizo es mas angosto:
+//     la difusion en milimetros ya la hace la pasada 2 (igual que en el partido, fila 259 apagada por eso)
+// (04/11 nariz b) REGLA FIJA de Agustin: el interior de la boca no cambia. La lengua tiene la marca de piel (w18 = 1) y en el
+// G-buffer no hay nada que la distinga de la cara, asi que los pixeles de piel EN UNA CAVIDAD (rodeados de superficie mas cerca de
+// la camara en 7 de 8 direcciones, hasta 4 cm: lengua y garganta detras de labios y dientes; tambien las fosas nasales) siguen con
+// la formula de antes, identica (legacy = true). thickM no se usa en ese caso
+void PesOneLight(float3 L, float3 col, float sh, float3 n, float3 V, bool skin, float rough, float trans, float thickM, bool legacy, inout float3 dif, inout float3 spec) {
   float rawNL = dot(n, L);
   // --- difusa: Lambert con un borde apenas envuelto en la piel (el resto lo hace el disco de Burley de la pasada 2) ---
   float wrap = skin ? 0.03 : 0.0;
   float nl = saturate((rawNL + wrap) / (1.0 + wrap));
   dif += col * nl * sh;
   // (27/10 e) borde de la sombra rojizo (envoltura por canal), solo en la franja del terminador
-  if (skin) {
+  if (skin && legacy) {   // formula de antes del 04/11 (interior de la boca y cavidades), sin cambios
     float3 wr = float3(0.30, 0.10, 0.05);
     float3 nl3 = saturate((rawNL + wr) / (1.0 + wr));
     dif += col * max(nl3 - nl, 0.0) * 0.8 * lerp(1.0, sh, 0.6);
-    // contraluz: orejas y aletas de la nariz dejan pasar luz (translucidez del G-buffer), como en la pasada de luz
     float3 Lt = normalize(L + n * 0.3);
     float tv = pow(saturate(dot(V, -Lt)), 3.0);
     float thick = saturate(trans * 1.6);
     float x5 = IniParams.Load(int2(5, 0)).x;
     dif += col * thick * smoothstep(0.2, 0.7, thick) * tv * float3(1.0, 0.24, 0.10) * (x5 > 0 ? x5 : 1.0) * sqrt(sh);
+  } else if (skin) {
+    bool ssssOn = IniParams.Load(int2(95, 0)).w > 0.5;
+    float3 wr = ssssOn ? float3(0.12, 0.04, 0.02) : float3(0.30, 0.10, 0.05);
+    float3 nl3 = saturate((rawNL + wr) / (1.0 + wr));
+    float shT = lerp(1.0, sh, smoothstep(0.02, 0.12, rawNL));   // sin escalon donde empieza la sombra trazada
+    dif += col * max(nl3 - nl, 0.0) * 0.8 * lerp(1.0, shT, 0.6);
+    // contraluz por grosor (como PesSkTransThick de las pasadas del sol): oreja y aletas de la nariz si, mejilla no
+    float4 P64 = IniParams.Load(int2(64, 0));
+    float thin = saturate(trans * 1.6);
+    float dens = (P64.w > 0 ? P64.w : 30.0) * (1.25 - thin);
+    float3 Tt = PesSsTransColor(PesSsTransmit(thickM * dens), IniParams.Load(int2(34, 0)).z);
+    float backL = smoothstep(0.0, 0.35, dot(L, -n)) * (1.0 - saturate(rawNL * 3.0)) * lerp(0.35, 1.0, smoothstep(0.25, 0.75, thin));
+    float x5 = IniParams.Load(int2(5, 0)).x;
+    dif += col * Tt * backL * (P64.z > 0 ? P64.z : 1.0) * 0.8 * (x5 > 0 ? x5 : 1.0);
   }
   // --- brillo: GGX con la rugosidad del G-buffer y, en la piel, el lobulo fino (grasa / sudor) ---
   float3 H = normalize(L + V);
@@ -224,26 +264,70 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   float rough = clamp(mat.x, 0.08, 1.0);
   uint tq = (uint)(inNrm.SampleLevel(sPoint, uv, 0).z * 1023.0 + 0.5);
   float trans = (float)(tq >> 4) / 63.0;
+  // (04/11 nariz) grosor por la curvatura (como PesSkThickCurv del partido, sin atlas en el editor): normales del G-buffer a ~10 mm
+  // a cada lado, descartando lo que no es piel o salta de superficie (borde de la nariz sobre la mejilla). curv 1 = radio de 2 cm
+  float thickM = 0.08;
+  bool legacy = false;
+  if (skin) {
+    float W, H; inNrm.GetDimensions(W, H);
+    float mpp = max(2.0 * abs(m_projectionParam.x) * zA / max(W, 1.0), 1e-6);
+    { // cavidad (boca abierta, fosas nasales): en cuantas de 8 direcciones aparece algo 5 mm o mas por delante, a 8..40 mm
+      int enc = 0;
+      [unroll] for (int di = 0; di < 8; di++) {
+        float a = di * 0.78539816;
+        float2 dir = float2(cos(a), sin(a)) / float2(W, H);
+        bool hit = false;
+        [unroll] for (int ri = 0; ri < 4; ri++) {
+          float rM = ri == 0 ? 0.008 : (ri == 1 ? 0.016 : (ri == 2 ? 0.026 : 0.040));
+          float2 uvS = uv + dir * (rM / mpp);
+          if (any(uvS < 0.0) || any(uvS > 1.0)) continue;
+          if ((zC - LinZ(uvS)) * zSgn > 0.005) hit = true;
+        }
+        enc += hit ? 1 : 0;
+      }
+      legacy = enc >= 7;
+    }
+    float oPx = clamp(0.010 / mpp, 1.0, 32.0);
+    float curv = 0.0;
+    [unroll] for (int ax = 0; ax < 2; ax++) {
+      float2 dpx = (ax == 0 ? float2(oPx, 0) : float2(0, oPx)) / float2(W, H);
+      float3 nA = n, nB = n, pA = Pv, pB = Pv;
+      [unroll] for (int sd = 0; sd < 2; sd++) {
+        float2 uvS = uv + (sd == 0 ? dpx : -dpx);
+        if (any(uvS < 0.0) || any(uvS > 1.0) || !IsSkin(uvS)) continue;
+        float zS = LinZ(uvS);
+        float2 ppS = ((uvS * float2(2, -2) + float2(-1, 1)) - m_cameraCenterOffset.xy) * m_projectionParam.xy;
+        float3 PS = float3(ppS * zS, zS);
+        if (length(PS - Pv) > 0.025) continue;   // salto de superficie
+        if (sd == 0) { nA = DecodeN(uvS); pA = PS; } else { nB = DecodeN(uvS); pB = PS; }
+      }
+      float dl = length(pA - pB);
+      if (dl > 0.002) curv = max(curv, 0.02 * length(nA - nB) / dl);
+    }
+    curv = saturate(curv);
+    float thinT = saturate(trans * 1.6);
+    thickM = clamp(0.02 / max(curv, 0.15) * lerp(1.2, 0.35, smoothstep(0.45, 0.9, thinT)), 0.004, 0.08);
+  }
   float3 dif = 0, spec = 0;
   float sh = PesTraceShadow(Pv, L, dot(n, L), zC, zSgn, zA, uv, pos.xy, shK);
-  PesOneLight(L, sunC, sh, n, V, skin, rough, trans, dif, spec);
+  PesOneLight(L, sunC, sh, n, V, skin, rough, trans, thickM, legacy, dif, spec);
   if (studio) {
     float fillK = E3.y, rimK = E3.z;
     if (fillK > 0.001) {   // relleno: del otro lado de la camara, bajo, un poco frio, sin sombra
       float azF = (az >= 0 ? -1.0 : 1.0) * clamp(90.0 - abs(az) * 0.5, 25.0, 70.0);
-      PesOneLight(PesDirL(azF, 8.0, zSgn), PesTint(saturate(warm - 0.2)) * (S * inten * fillK), 1.0, n, V, skin, rough, trans, dif, spec);
+      PesOneLight(PesDirL(azF, 8.0, zSgn), PesTint(saturate(warm - 0.2)) * (S * inten * fillK), 1.0, n, V, skin, rough, trans, thickM, legacy, dif, spec);
     }
     if (rimK > 0.001) {   // recorte: desde atras, del mismo lado que la principal, alto
       float azR = (az >= 0 ? 1.0 : -1.0) * 150.0;
       float3 LR = PesDirL(azR, 35.0, zSgn);
       float shR = PesTraceShadow(Pv, LR, dot(n, LR), zC, zSgn, zA, uv, pos.xy + 17.0, shK);
-      PesOneLight(LR, PesTint(0.45) * (S * inten * rimK), shR, n, V, skin, rough, trans, dif, spec);
+      PesOneLight(LR, PesTint(0.45) * (S * inten * rimK), shR, n, V, skin, rough, trans, thickM, legacy, dif, spec);
     }
   } else {
     if (tower2) {   // (04/11) segunda torre del lado opuesto, un poco mas debil, con su propia sombra
       float3 L2 = PesDirL(az + 180.0, el, zSgn);
       float sh2 = PesTraceShadow(Pv, L2, dot(n, L2), zC, zSgn, zA, uv, pos.xy + 29.0, shK);
-      PesOneLight(L2, sunC * 0.7, sh2, n, V, skin, rough, trans, dif, spec);
+      PesOneLight(L2, sunC * 0.7, sh2, n, V, skin, rough, trans, thickM, legacy, dif, spec);
     }
     // (27/10 g) relleno de cielo: el lado en sombra no queda gris plano; luz difusa del cielo (azulada, de arriba) y un poco de
     // rebote del suelo (calido, de abajo), proporcional al sol. El cielo es mas azul cuanto mas calido (bajo) esta el sol.

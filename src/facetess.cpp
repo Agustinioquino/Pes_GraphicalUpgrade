@@ -9,6 +9,11 @@
 #include <mutex>
 #include <map>
 #include <atomic>
+#include <set>
+#include <string>
+#include <vector>
+#include <fstream>
+#include <cmath>
 
 namespace fx {
 
@@ -25,6 +30,119 @@ static std::atomic<int> s_relief{0};
 static std::atomic<int> s_noSeam{0}, s_noPrm{0}, s_off{0};   // (04/11 d) dibujos de piel de la cara que NO se teselaron y por que
 void FaceTessNote(int why) { (why == 0 ? s_noSeam : why == 1 ? s_noPrm : s_off).fetch_add(1, std::memory_order_relaxed); }   // (04/11 c) dibujos con la quinta textura en el DS (relieve)
 static ID3D11SamplerState* s_samp = nullptr;
+
+// ---------------------------------------------------------------- (04/11 m) teselacion por jugador
+// Agustin: "la teselacion si puedes ofrecer opciones por jugador". Como las cejas por jugador (facegen.cpp): el "jugador actual" es
+// la UNICA cara teselable dibujada en los ultimos ~30 cuadros (editor, presentacion). Al aparecer, las filas 371 / 372 toman sus
+// valores (o 1 si no tiene); si se mueven, se aplican en vivo SOLO a esa cara; "Guardar teselacion de este jugador" los escribe en
+// PES21FX_hair.ini [teselacion_cara] id = teselar, densidad, suavidad, tope, relieve, surcos, formas, relieve en la luz.
+// Cada cara con valores tiene su cbuffer (b10 del HS / DS, pes_face_tess_player.hlsli); sin valores b10 queda vacio (= todo 1).
+using TessVals = std::vector<float>;
+static const int kTessVals = 8;
+static TessVals TessDefault() { return TessVals(kTessVals, 1.f); }
+static std::mutex s_pmx;                                  // todo lo de abajo
+static std::map<std::string, TessVals> s_pSaved;          // lo leido de [teselacion_cara] (ids en minusculas)
+static std::map<std::string, TessVals> s_pLive;           // lo tocado en el menu en esta sesion (aun sin guardar)
+static std::set<std::string> s_pSeen;                     // caras teselables desde el ultimo corte
+static std::string s_pCur;                                // jugador actual ("" = ninguno o varios)
+struct TessFaceCB { ID3D11Buffer* b = nullptr; TessVals v; bool dirty = false; };
+static std::map<std::string, TessFaceCB> s_pCB;
+static std::atomic<int> s_pBound{0}, s_pOff{0};
+static std::string TLower(std::string x) { for (auto& ch : x) ch = (char)tolower((unsigned char)ch); return x; }
+static std::string TTrim(const std::string& x) { size_t a = x.find_first_not_of(" \t\r\n"), b = x.find_last_not_of(" \t\r\n"); return a == std::string::npos ? std::string() : x.substr(a, b - a + 1); }
+static bool TessIsDefault(const TessVals& v) { for (float f : v) if (std::fabs(f - 1.f) > 1e-3f) return false; return true; }
+// con s_pmx tomado: valores de esta cara (lo tocado en el menu o lo guardado); false = sin valores propios
+static bool TessValsLocked(const std::string& id, TessVals& v) {
+    auto it = s_pLive.find(id); if (it != s_pLive.end()) { v = it->second; return true; }
+    auto jt = s_pSaved.find(id); if (jt != s_pSaved.end()) { v = jt->second; return true; }
+    return false;
+}
+static void TessPack(const TessVals& v, float out[12]) {
+    for (int i = 0; i < 8; i++) out[i] = i < (int)v.size() ? v[i] : 1.f;
+    out[8] = 1.f; out[9] = out[10] = out[11] = 0.f;
+}
+void FaceTessSetSaved(const std::map<std::string, std::vector<float>>& m) {   // config.cpp LoadHairConfig
+    std::lock_guard<std::mutex> lk(s_pmx);
+    s_pSaved.clear();
+    for (auto& kv : m) { TessVals v = TessDefault(); for (size_t i = 0; i < kv.second.size() && i < (size_t)kTessVals; i++) v[i] = kv.second[i]; s_pSaved[TLower(kv.first)] = v; }
+    s_pLive.clear();   // recargar = lo que dice el archivo
+    s_pCur.clear();    // el jugador actual se vuelve a detectar y los sliders toman lo guardado
+    for (auto& kv : s_pCB) { TessVals v; if (!TessValsLocked(kv.first, v)) v = TessDefault(); if (v != kv.second.v) { kv.second.v = v; kv.second.dirty = true; } }
+}
+// cbuffer de esta cara para b10 (nullptr = sin valores propios); off = el jugador tiene la teselacion apagada
+static ID3D11Buffer* TessFaceBuffer(const std::string& idIn, bool& off) {
+    off = false;
+    if (idIn.empty()) return nullptr;
+    const std::string id = TLower(idIn);   // [teselacion_cara] se lee en minusculas
+    std::lock_guard<std::mutex> lk(s_pmx);
+    s_pSeen.insert(id);
+    auto it = s_pCB.find(id);
+    if (it != s_pCB.end() && it->second.b) { off = !it->second.v.empty() && it->second.v[0] < 0.5f; return it->second.b; }
+    TessVals v; if (!TessValsLocked(id, v)) return nullptr;
+    off = v[0] < 0.5f;
+    if (s_pCB.size() > 256) return nullptr;   // no acumular sin fin
+    float data[12]; TessPack(v, data);
+    D3D11_BUFFER_DESC d{}; d.ByteWidth = sizeof(data); d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = data;
+    ID3D11Buffer* b = nullptr; if (FAILED(g_dev.dev->CreateBuffer(&d, &sd, &b))) return nullptr;
+    TessFaceCB& e = s_pCB[id]; e.b = b; e.v = v; e.dirty = false;
+    return b;
+}
+// en Present: jugador actual, sliders 371 / 372, cbuffers cambiados
+static void TessPlayerPresent() {
+    static int frames = 0; static TessVals last;
+    auto cur8 = []() { return TessVals{ g_cfg.live[371][0], g_cfg.live[371][1], g_cfg.live[371][2], g_cfg.live[371][3], g_cfg.live[372][0], g_cfg.live[372][1], g_cfg.live[372][2], g_cfg.live[372][3] }; };
+    auto set8 = [](const TessVals& v) { for (int i = 0; i < 4; i++) { g_cfg.live[371][i] = v[i]; g_cfg.live[372][i] = v[4 + i]; } };
+    std::lock_guard<std::mutex> lk(s_pmx);
+    if (++frames >= 30) { frames = 0;
+        std::string nc = s_pSeen.size() == 1 ? *s_pSeen.begin() : std::string(); s_pSeen.clear();
+        if (nc != s_pCur) { s_pCur = nc;
+            TessVals v = TessDefault();
+            const bool own = !nc.empty() && TessValsLocked(nc, v);
+            set8(v);
+            if (!nc.empty()) Log("teselacion por jugador: jugador actual = cara %s (%s: teselar %s, densidad x%.2f, suavidad x%.2f, tope x%.2f, relieve x%.2f, surcos x%.2f, formas x%.2f, relieve en la luz x%.2f)",
+                nc.c_str(), own ? "valores propios" : "como todos", v[0] > 0.5f ? "si" : "no", v[1], v[2], v[3], v[4], v[5], v[6], v[7]);
+            last = cur8(); } }
+    TessVals now = cur8();
+    if (!s_pCur.empty() && now != last) {
+        last = now;
+        s_pLive[s_pCur] = now;
+        auto it = s_pCB.find(s_pCur); if (it != s_pCB.end()) { it->second.v = now; it->second.dirty = true; }
+    }
+    if (g_dev.imm) for (auto& kv : s_pCB) if (kv.second.dirty && kv.second.b) { float data[12]; TessPack(kv.second.v, data); g_dev.imm->UpdateSubresource(kv.second.b, 0, nullptr, data, 0, 0); kv.second.dirty = false; }
+}
+// "Guardar teselacion de este jugador" (menu Teselacion de la cara): PES21FX_hair.ini [teselacion_cara]; todo en 1 = se borra la linea
+std::string FaceTessSaveCurrent() {
+    std::string cur; { std::lock_guard<std::mutex> lk(s_pmx); cur = s_pCur; }
+    if (cur.empty()) return "Teselacion: no hay un jugador solo en pantalla (abri el editor con un jugador de cerca)";
+    TessVals v = { g_cfg.live[371][0] > 0.5f ? 1.f : 0.f, g_cfg.live[371][1], g_cfg.live[371][2], g_cfg.live[371][3], g_cfg.live[372][0], g_cfg.live[372][1], g_cfg.live[372][2], g_cfg.live[372][3] };
+    const bool erase = TessIsDefault(v);
+    const std::wstring path = g_cfg.baseDir + L"PES21FX_hair.ini";
+    std::vector<std::string> lines; { std::ifstream f(path); std::string ln; while (std::getline(f, ln)) { if (!ln.empty() && ln.back() == '\r') ln.pop_back(); lines.push_back(ln); } }
+    char val[200]; snprintf(val, sizeof(val), "%s = %.0f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f", cur.c_str(), v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]);
+    int sec = -1, end = (int)lines.size(), hit = -1;
+    for (int i = 0; i < (int)lines.size(); i++) {
+        std::string t = TLower(TTrim(lines[i]));
+        if (!t.empty() && t[0] == '[') { if (sec >= 0 && end == (int)lines.size()) end = i; if (t.rfind("[teselacion_cara]", 0) == 0) { sec = i; end = (int)lines.size(); } continue; }
+        if (sec >= 0 && i < end) { size_t eq = t.find('='); if (eq != std::string::npos && TTrim(t.substr(0, eq)) == TLower(cur)) hit = i; }
+    }
+    if (erase) { if (hit >= 0) lines.erase(lines.begin() + hit); }
+    else if (hit >= 0) lines[hit] = val;
+    else if (sec >= 0) { int at = end; while (at > sec + 1 && TTrim(lines[at - 1]).empty()) at--; lines.insert(lines.begin() + at, val); }
+    else { lines.push_back(""); lines.push_back("[teselacion_cara]"); lines.push_back("; (04/11 m) teselacion por jugador: id = teselar (1 / 0), densidad, suavidad, tope, relieve, surcos, formas, relieve en la luz (multiplicadores; los escribe el menu Teselacion de la cara > Guardar)"); lines.push_back(val); }
+    { std::ofstream f(path, std::ios::binary | std::ios::trunc); if (!f) return "Teselacion: no se pudo escribir PES21FX_hair.ini";
+      for (auto& ln : lines) f << ln << "\r\n"; }
+    { std::lock_guard<std::mutex> lk(s_pmx);
+      if (erase) s_pSaved.erase(cur); else s_pSaved[cur] = v;
+      s_pLive[cur] = v;
+      auto it = s_pCB.find(cur); if (it != s_pCB.end()) { it->second.v = v; it->second.dirty = true; } }
+    Log("teselacion por jugador: %s cara %s: teselar %s, densidad x%.2f, suavidad x%.2f, tope x%.2f, relieve x%.2f, surcos x%.2f, formas x%.2f, relieve en la luz x%.2f",
+        erase ? "borrada (todo en 1)" : "guardada", cur.c_str(), v[0] > 0.5f ? "si" : "no", v[1], v[2], v[3], v[4], v[5], v[6], v[7]);
+    char msg[200];
+    if (erase) snprintf(msg, sizeof(msg), "Teselacion de la cara %s: todo en 1, vuelve a la de todos", cur.c_str());
+    else snprintf(msg, sizeof(msg), "Teselacion guardada para la cara %s%s", cur.c_str(), v[0] > 0.5f ? "" : " (apagada)");
+    return msg;
+}
 
 static void Ensure() {
     if (s_tried || !g_dev.dev) return;
@@ -71,10 +189,13 @@ ID3D11DomainShader* FaceTessAtlasDS(int v) {
     std::lock_guard<std::mutex> lk(s_mx); Ensure(); return s_dsAtlas[v];
 }
 
-bool FaceTessBegin(ID3D11DeviceContext* c, uint64_t vsHash, ID3D11ShaderResourceView* seam, ID3D11ShaderResourceView* params, FaceTessScope& s) {
+bool FaceTessBegin(ID3D11DeviceContext* c, uint64_t vsHash, ID3D11ShaderResourceView* seam, ID3D11ShaderResourceView* params, FaceTessScope& s, const std::string& faceId) {
     if (!seam || !params || !g_dev.dev) return false;
     const int v = vsHash == kVsHead ? 0 : vsHash == kVsFace ? 1 : vsHash == kVsBody ? 2 : -1;
     if (v < 0) return false;
+    // (04/11 m) valores propios de esta cara (y la anota para el "jugador actual" aunque la teselacion este apagada)
+    bool pOff = false; ID3D11Buffer* pcb = v < 2 ? TessFaceBuffer(faceId, pOff) : nullptr;
+    if (pOff) { s_pOff.fetch_add(1, std::memory_order_relaxed); return false; }
     if (g_cfg.live[v == 2 ? 364 : 357][0] < 0.5f) { if (v < 2) s_off.fetch_add(1, std::memory_order_relaxed); return false; }   // (04/11 g) cuerpo: fila 364
     const int w = g_cfg.live[358][3] > 0.5f ? 1 : 0;
     ID3D11HullShader* hs; ID3D11DomainShader* ds;
@@ -99,6 +220,8 @@ bool FaceTessBegin(ID3D11DeviceContext* c, uint64_t vsHash, ID3D11ShaderResource
     if (b2) b2->Release();
     c->HSSetShader(hs, nullptr, 0); c->DSSetShader(ds, nullptr, 0);
     c->HSSetConstantBuffers(13, 1, &vb);
+    c->HSSetConstantBuffers(10, 1, &pcb); c->DSSetConstantBuffers(10, 1, &pcb);   // (04/11 m) por jugador (nullptr = como todos)
+    if (pcb) s_pBound.fetch_add(1, std::memory_order_relaxed);
     c->HSSetShaderResources(120, 1, &params); c->DSSetShaderResources(120, 1, &params);
     // (04/11 c) relieve: la quinta textura de la cara (t23 / t24 del PS, la pone la regla facegen antes) tambien al DS
     if (v < 2) { ID3D11ShaderResourceView* fab[2] = {}; c->PSGetShaderResources(23, 2, fab);   // (04/11 g) el cuerpo no tiene quinta textura: sin relieve
@@ -117,14 +240,18 @@ void FaceTessEnd(ID3D11DeviceContext* c, FaceTessScope& s) {
     c->HSSetShader(nullptr, nullptr, 0); c->DSSetShader(nullptr, nullptr, 0);
     ID3D11Buffer* nb = nullptr; ID3D11ShaderResourceView* nv = nullptr;
     c->HSSetConstantBuffers(13, 1, &nb); c->DSSetConstantBuffers(2, 1, &nb);
+    c->HSSetConstantBuffers(10, 1, &nb); c->DSSetConstantBuffers(10, 1, &nb);
     c->HSSetShaderResources(120, 1, &nv); c->DSSetShaderResources(120, 1, &nv);
     if (s.relief) { ID3D11ShaderResourceView* n2[2] = {}; ID3D11SamplerState* ns = nullptr; c->DSSetShaderResources(23, 2, n2); c->DSSetSamplers(0, 1, &ns); s.relief = false; }
 }
 
 void FaceTessPresent() {
+    TessPlayerPresent();   // (04/11 m)
     static int frames = 0;
     if (++frames < 3600) return;
     frames = 0;
+    { const int pb = s_pBound.exchange(0), po = s_pOff.exchange(0); size_t ns; { std::lock_guard<std::mutex> lk(s_pmx); ns = s_pSaved.size(); }
+      if (pb || po || ns) Log("teselacion por jugador: %d caras guardadas; en 60 s %d dibujos con valores propios, %d sin teselar (apagada para ese jugador)", (int)ns, pb, po); }
     const int d = s_draws.exchange(0), st = s_skipTopo.exchange(0), ns = s_noShader.exchange(0), rl = s_relief.exchange(0), db = s_drawsBody.exchange(0);
     const int nsm = s_noSeam.exchange(0), npr = s_noPrm.exchange(0), off = s_off.exchange(0);
     if (nsm || npr || off) Log("teselacion de caras: dibujos de piel de la cara SIN teselar en 60 s: %d sin pesos de borde (malla en lectura / no teselable), %d sin parametros t120, %d con la tarjeta apagada", nsm, npr, off);

@@ -908,6 +908,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
         std::string a = s_btnPending; s_btnPending.clear();
         if (a == "hair_export") { std::string st; FaceGenExportHair(st); s_status = st; }
         else if (a == "brow_save") { s_status = BrowSaveCurrent(); }
+        else if (a == "tess_save") { s_status = FaceTessSaveCurrent(); }   // (04/11 m) teselacion por jugador
         else if (a == "hair_reload") { LoadHairConfig(); s_status = "PES21FX_hair.ini recargado (" + std::to_string(g_cfg.hair.types.size()) + " tipos, " + std::to_string(g_cfg.hair.faces.size()) + " caras asignadas)"; }
         else if (a == "muscle_reset" || a.rfind("muscle_preset_", 0) == 0) {
             // (26/10) tipos de cuerpo para las tarjetas generales (muscle_reset = "Como el juego": todo en 1 y la definicion en 1).
