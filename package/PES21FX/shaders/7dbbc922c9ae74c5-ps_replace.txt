@@ -284,10 +284,13 @@ void main(
   if (skOn) {   // (03/11) contraluz (entra aunque el frente este en sombra) y brillo de piel
     float3 skTrD = PesSkTrans(skN, skV, skL, r4.y) * lerp(0.25, 1.0, saturate(r6.x));
     // (04/11 b) grosor REAL dentro de la caja del atlas (cabezas y piernas cercanas), fundido con la direccional en el borde
+    // afuera (jugadores lejanos, sin atlas): grosor estimado por la forma (curvatura + mapa de SSS)
     float skIn = 0.0; float skThk = PESSkinThickAtlas(skPv, g_samplerPoint_Clamp_s, skIn);
     float4 skP64 = IniParams.Load(int2(64, 0));
-    if (skP64.x > 0.5 && skP64.z > 0.0 && skIn > 0.0)
-      skTrD = lerp(skTrD, max(PESSkinThickTrans(skThk, skN, skL, skNL, r4.y), skTrD * 0.5), skIn);
+    if (skP64.x > 0.5 && skP64.z > 0.0) {
+      skTrD = max(skTrD, PesSkTransThick(PesSkThickCurv(r4.y, skCurv), skN, skL, skNL, r4.y) * lerp(0.25, 1.0, saturate(r6.x)));
+      if (skIn > 0.0) skTrD = lerp(skTrD, max(PesSkTransThick(skThk, skN, skL, skNL, r4.y), skTrD * 0.5), skIn);
+    }
     o0.xyz += skTrD * r1.xyw;
     r0.xyz = PesSkSpec(r0.xyz, skN, skV, skL, skRough, skSpecI, r1.xyw, saturate(r2.w));
   }

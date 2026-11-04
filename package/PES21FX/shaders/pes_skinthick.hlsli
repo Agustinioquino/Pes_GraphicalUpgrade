@@ -8,7 +8,7 @@
 // (04/11 b) + caja de las PIERNAS del jugador mas cercano (cuarto cuadrante del atlas, fila 363: centro y medio lado propios, mismos
 // ejes): la caja de la cabeza se funde desde la cadera para abajo. Y si el atlas esta vacio en ese punto (lo que no entro en la
 // cascada que la DLL repite) la caja no cuenta: antes daba 2 mm = contraluz maxima.
-// Necesita pes_headshadow.hlsli antes (PESHeadShadow, filas 309/310/316/317..319, 363) y pes_common.hlsli (transmitancia).
+// Necesita pes_headshadow.hlsli antes (PESHeadShadow, filas 309/310/316/317..319, 363).
 #ifndef PES_SKINTHICK_HLSLI
 #define PES_SKINTHICK_HLSLI
 
@@ -64,14 +64,4 @@ float PESSkinThickAtlas(float3 Pv, SamplerState smp, out float inBox) {
   return thk;
 }
 
-// (04/11 b) contraluz por grosor real para las pasadas con el modelo de piel compacto (7dbbc): la misma de las 5 grandes del sol
-// (densidad del mapa de SSS, perfil de Jimenez, color z34, solo piel de espaldas a la luz). trans = translucidez del G-buffer
-float3 PESSkinThickTrans(float thickM, float3 n, float3 L, float rawNdotL, float trans) {
-  float4 P64 = IniParams.Load(int2(64, 0));
-  float thin = saturate(trans * 1.6);
-  float dens = (P64.w > 0 ? P64.w : 30.0) * (1.25 - thin);
-  float3 Tt = PESTransColor(PESSkinTransmittance(thickM * dens), IniParams.Load(int2(34, 0)).z);
-  float backL = smoothstep(0.0, 0.35, dot(L, -n)) * (1.0 - saturate(rawNdotL * 3.0)) * lerp(0.35, 1.0, smoothstep(0.25, 0.75, thin));
-  return Tt * backL * P64.z * 0.8;
-}
 #endif
