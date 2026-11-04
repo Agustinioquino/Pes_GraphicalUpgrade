@@ -250,6 +250,11 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
       float km = saturate(pesBrowCol.w);
       cR = lerp(cR, pesBrowCol.rgb, km); cT = lerp(cT, pesBrowCol.rgb * float3(1.25, 1.18, 1.1), km);
     }
+    // (04/11 j, Agustin: "necesitan un sombreado entre pelos mejor") sombra entre pelos: la raiz queda tapada por los vecinos (mas
+    // oscura donde la ceja es tupida = contorno alto del mapa) y cada pelo con un tono apenas distinto (se ven capas)
+    { float occ = lerp(0.88, 0.62, saturate(ph * 1.2));
+      float layer = lerp(0.78, 1.06, frac(r3 * 7.31 + rk * 3.17));
+      cR *= occ * layer; cT *= layer; }
     // vectores de movimiento de la raiz (misma cuenta que el PS de la cara: actual - anterior en UV de pantalla)
     float4 cp = v[0].clipCP * b.x + v[1].clipCP * b.y + v[2].clipCP * b.z;
     float2 ww = v[0].ww * b.x + v[1].ww * b.y + v[2].ww * b.z;
