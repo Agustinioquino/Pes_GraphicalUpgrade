@@ -41,6 +41,15 @@ LO_OVERBITE = float(os.environ.get('LO_OVERBITE', '2.2'))   # (03/11) mm que los
 LO_OVERJET = float(os.environ.get('LO_OVERJET', '1.0'))     # (03/11) mm que los de abajo van detras (resalte)
 # anchos mesiodistales reales (mm), del centro hacia atras: arriba IC, I, C, P1, P2; abajo I1, I2, C, P1, P2, M
 REAL_W = {True: [8.6, 6.6, 7.6, 7.0, 6.6], False: [5.3, 5.8, 6.9, 7.0, 7.1, 8.5]}
+# (04/11) perfiles por jugador (Agustin: 'una boca especifica para Messi', fotos de su sonrisa): MOUTH_PROFILE=messi
+# centrales de arriba grandes y cuadrados, laterales angostos, mas cortos y un poco hacia atras (escalon marcado),
+# caninos con punta; abajo igual que la comun (casi no se ve)
+PROFILE = os.environ.get('MOUTH_PROFILE', '')
+PROF = {
+    '': dict(ext_up={'IC': -0.1, 'I': -0.8, 'C': -0.3}, corner_ic=(0.02, 0.08), corner_i_up=(0.04, 0.14), lat_back=0.0, canine=0.30),
+    'messi': dict(ext_up={'IC': 0.5, 'I': -1.2, 'C': -0.2}, corner_ic=(0.01, 0.05), corner_i_up=(0.06, 0.20), lat_back=0.35, canine=0.38),
+}[PROFILE]
+if PROFILE == 'messi': REAL_W = {True: [9.0, 6.3, 7.8, 7.0, 6.6], False: REAL_W[False]}
 
 def fit_row(row, log=print, name=''):
     """(03/11 v19c) Agustin: 'ni todos pegados ni separados'. Entre dientes vecinos de una fila (en orden por el arco) se mide
@@ -293,11 +302,11 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0
     for bi in b:
         # el borde incisal: canino en punta, incisivos con esquinas apenas redondeadas
         if kind == 'C':
-            bmax = 1 - 0.30 * np.abs(cx - 0.18 * mes) ** 1.35
+            bmax = 1 - (PROF['canine'] if REAL_TEETH else 0.30) * np.abs(cx - 0.18 * mes) ** 1.35
         else:
             r_m, r_d = {'IC': (0.03, 0.11), 'I': (0.07, 0.24), 'P': (0.14, 0.14)}[kind]
             if REAL_TEETH:   # (03/11) dentadura real: esquinas casi rectas en los incisivos (los de abajo, rectos)
-                r_m, r_d = {'IC': (0.02, 0.08), 'I': (0.04, 0.14) if upper else (0.03, 0.06), 'P': (0.14, 0.14)}[kind]
+                r_m, r_d = {'IC': PROF['corner_ic'], 'I': PROF['corner_i_up'] if upper else (0.03, 0.06), 'P': (0.14, 0.14)}[kind]
             rr = np.where(cx * mes > 0, r_m, r_d)
             bmax = 1 - rr * sst(0.5, 1.0, np.abs(cx)) ** 1.6
         bb = bi * bmax if bi > 0 else bi * np.ones_like(cx)
@@ -325,6 +334,8 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0
             shift = ((0.5 if upper else -1.0) * MM * sst(0.0, 0.4, bb)) if kind == 'P' else 0.0 * bb
             if REAL_TEETH and kind != 'P' and not upper:
                 shift = -LO_OVERJET * MM * sst(0.0, 0.4, bb)   # (03/11) resalte real: los de abajo detras de los de arriba
+            if REAL_TEETH and kind == 'I' and upper and PROF['lat_back']:
+                shift = -PROF['lat_back'] * MM * sst(0.0, 0.4, bb)   # (04/11) perfil: laterales un poco detras de los centrales
         Pf = Pf + Nf * np.reshape(shift, (-1, 1))
         # espesor (m): grueso en el cuello, fino en el borde
         T0 = {'IC': 6.5, 'I': 6.0, 'C': 7.5, 'P': 7.0}[kind] * MM; T1 = {'IC': 1.1, 'I': 1.0, 'C': 2.0, 'P': 4.5}[kind] * MM   # (02/11) P 8/5.5 -> 7/4.5
@@ -528,7 +539,7 @@ def build(src_fmdl, texdir, log=print):
                 uvbox = ((xl0 + g2) / 512.0, (xr0 - g2) / 512.0, (gi0 + GUM * (ii0 - gi0)) / 512.0, min(ii0 / 512.0, 0.302) if up else max(ii0 / 512.0, 0.505))
             if REAL_TEETH:
                 # (03/11) curva de la sonrisa real: laterales ~0.7 mm mas cortos que los centrales, canino con la punta casi al nivel
-                ext = (0.0 if kind == 'P' else ({'IC': -0.1, 'I': -0.8, 'C': -0.3}[kind] if up else LO_OVERBITE)) * MM
+                ext = (0.0 if kind == 'P' else (PROF['ext_up'][kind] if up else LO_OVERBITE)) * MM
             else:
                 ext = ((0.0 if kind == 'P' else (-0.2 if up else 1.0)) * MM if KONAMI_BITE else (EXT_UP if up else EXT_LO) + dext)
             Pt, UVt, Ft = tooth(M, xl / 512.0, xr / 512.0, vG, vI, kind, up, ext=ext, mes=mes, tw=(tw_row[i] if REAL_TEETH else None),
