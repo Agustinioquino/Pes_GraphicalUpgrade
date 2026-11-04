@@ -22,7 +22,8 @@ Texture2D<float4> inMat   : register(t2);
 Texture2D<float4> inNrm   : register(t3);
 Texture2D<float4> inAlb   : register(t4);   // (20/10) albedo del G-buffer: tono de la piel (melanina)
 Texture2D<float4> inSpec  : register(t5);   // (27/10 b) luz especular del juego (t10): la luz de prueba le suma su brillo
-Texture2D<float4> inRef   : register(t6);   // (01/11) referencia de intensidad de la luz de prueba (1x1, suavizada)
+Texture2D<float4> inRef   : register(t6);
+Texture2D<float>  inMouth : register(t7);   // (04/11 boca) mascara del interior de la boca de la DLL (mouthmask.cpp): 1 = boca   // (01/11) referencia de intensidad de la luz de prueba (1x1, suavizada)
 Texture1D<float4> IniParams : register(t120);
 SamplerState sPoint : register(s0);
 SamplerState sLinear : register(s1);
@@ -297,6 +298,10 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
         enc += hit ? 1 : 0;
       }
       legacy = enc >= 7;
+      // (04/11 boca) con la mascara de la DLL la lengua se reconoce de verdad (tambien afuera de los labios); la prueba de cavidad
+      // queda como respaldo (sin mascara, o fosas nasales)
+      uint mmW = 0, mmH = 0; inMouth.GetDimensions(mmW, mmH);
+      if (mmW > 0 && inMouth.Load(int3(min((uint2)pos.xy, uint2(mmW - 1, mmH - 1)), 0)) > 0.5) legacy = true;
     }
     float oPx = clamp(0.010 / mpp, 1.0, 32.0);
     float curv = 0.0;

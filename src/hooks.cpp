@@ -957,7 +957,7 @@ template<int V> static void STDMETHODCALLTYPE hk_SetCS(ID3D11DeviceContext* c, I
 // lo que una regla enlaza se devuelve a como estaba despues del dibujo (como "post ps-t20 = ..." en 3DMigoto)
 struct Saved { bool ps; bool srv; int slot; IUnknown* prev; };
 static const int kSavedMax = 64;   // (02/11) 24 -> 64: con los grupos del brazo (t26/t30/t36/t123) los dibujos del brazo pasaban de 24 y lo enlazado despues no se devolvia (se filtraba al dibujo siguiente: la boca tomaba texturas ajenas)
-struct DrawScope { Saved s[kSavedMax]; int n = 0; FaceGenExtra brow; std::string faceId; bool skip = false; ID3D11PixelShader* restorePS = nullptr; LodIA lod; GlassScope glass; RingScope ring; FaceTessScope tess; };   // tess: teselacion de la cara (facetess.cpp)   // glass: vidrio de los menus (glass.cpp)   // lod.count > 0: dibujar con la geometria de LOD0 (lod.cpp)
+struct DrawScope { Saved s[kSavedMax]; int n = 0; FaceGenExtra brow; std::string faceId; bool skip = false; ID3D11PixelShader* restorePS = nullptr; LodIA lod; GlassScope glass; RingScope ring; FaceTessScope tess; bool mouth = false; UINT mCnt = 0, mStart = 0; INT mBase = 0; };   // tess: teselacion de la cara (facetess.cpp)   // glass: vidrio de los menus (glass.cpp)   // lod.count > 0: dibujar con la geometria de LOD0 (lod.cpp)
 
 static void Remember(ID3D11DeviceContext* c, DrawScope& d, bool ps, bool srv, int slot) {
     if (d.n >= kSavedMax) {   // (26/10 d) 12 -> 24, (02/11) -> 64: lo que no entra no se devolveria
@@ -1250,7 +1250,9 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (ps && (ps->hash == 0xc75f6047d5817df9ULL || ps->hash == 0x02f1d51037669342ULL || ps->hash == 0x4a8486141c44a44dULL || ps->hash == 0x213f9f126b6af9c4ULL)) {
         ID3D11ShaderResourceView* hd[4]; CarasHdHair(c, ps->hash, hd);
         for (int i = 0; i < 4; i++) if (hd[i]) { Remember(c, d, true, true, i); c->PSSetShaderResources(i, 1, &hd[i]); } }
-    if (ps && ps->hash == 0x63fab7735eee149cULL) MouthCheck(c, ps);   // (03/11) la boca tiene sus 4 texturas del mod? (log 'recursos por dibujo')
+    if (ps && ps->hash == 0x63fab7735eee149cULL) MouthCheck(c, ps);
+    // (04/11 boca) mascara del interior de la boca: el mismo dibujo se repite despues con el PS de la mascara (MouthMaskReplay)
+    if (ps && ps->hash == 0x63fab7735eee149cULL && t_drawKind == 1 && MouthMaskOn()) { d.mouth = true; d.mCnt = t_drawVerts; d.mStart = t_drawStart; d.mBase = t_drawBase; }   // (03/11) la boca tiene sus 4 texturas del mod? (log 'recursos por dibujo')
     // (04/11) boca propia por jugador (bocajug.cpp): misma malla, vertices del perfil de caras.ini (boca = ...) para la boca de esa cara
     if (ps && ps->hash == 0x63fab7735eee149cULL && t_drawKind == 1 && !d.lod.count) {
         LodIA L; ID3D11ShaderResourceView* bsm = nullptr;
@@ -1317,6 +1319,8 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (ps && ps->hash == 0x63fab7735eee149cULL && ps->repl && s.lastHairCB) { Remember(c, d, true, false, 11); c->PSSetConstantBuffers(11, 1, &s.lastHairCB); }
     // (27/10 c) sombra de la cabeza: el atlas propio (t30) a los 7 shaders del sol reemplazados
     if (ps && ps->repl) { int si = SunPassIndex(ps->hash); if (si >= 0 && si != 7) if (ID3D11ShaderResourceView* hs = HeadShadowSRV()) { Remember(c, d, true, true, 30); c->PSSetShaderResources(30, 1, &hs); } }
+    // (04/11 boca) d0e9 / 7dbbc: mascara del interior de la boca en t43 (donde hay boca, la contraluz de antes)
+    if (ps && ps->repl && (ps->hash == 0xd0e9d81c09b3da66ULL || ps->hash == 0x7dbbc922c9ae74c5ULL)) if (ID3D11ShaderResourceView* mm = MouthMaskSRV()) { Remember(c, d, true, true, 43); c->PSSetShaderResources(43, 1, &mm); }
     // 20/10: desgaste de la cancha en vivo: la posicion de cada jugador sale del dibujo de su short / medias (b5 del VS)
     if (ps && ps->hash == 0x55297925e0c66085ULL) PitchWearNotePlayer(c);
     // (2/11) botines / pelota (aadffecf): anotar la traslacion para reconocer la pelota; en el dibujo de la pelota, b12 = manchas (fila 177)
@@ -1424,6 +1428,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (ds.ring.overlay && !ds.skip) { RingOverlayBegin(c, ds.ring); call; RingOverlayEnd(c, ds.ring); } \
     if (g_meterHook) { CtxState& cm_ = Ctx(c); if (cm_.ps && cm_.ps->hash == 0x619b86cb5691cdceULL) LightMeterAfterComposition(c); } \
     if (g_inspectOn) { CtxState& ci_ = Ctx(c); if (InspectBegin(c, ci_.ps, ci_.vs, kind, verts, inst)) { call; InspectEnd(c); } } \
+    if (ds.mouth && !ds.skip) MouthMaskReplay<V>(c, ds); \
     if (ds.brow.browVS && !ds.skip) BrowStrands<V>(c, ds); if (ds.tess.on && !ds.skip && (kind) == 1) TessAtlas<V>(c, ds); if (ds.tess.on) FaceTessEnd(c, ds.tess); if (r) Restore(c, ds); if (ds.lod.count) ds.lod.Release();
 // (26/10 g) antes de cada dibujo que no sea de la base de la cancha: la emision pendiente del pasto del mod (ver GrassBaseFlush)
 #define GRASS_FLUSH(c) if (g_grassPendN.load(std::memory_order_relaxed) > 0) { CtxState& cf_ = Ctx(c); GrassBaseFlush(c, 0, cf_.ps ? cf_.ps->hash : 0); }
@@ -1513,6 +1518,30 @@ template<int V, class F> static void HeadShadowReplay(ID3D11DeviceContext* c, ID
 }
 // (20/10) LOD0 forzado: el dibujo sale con los buffers/cuentas de la malla de mas detalle y se devuelve el estado del juego
 template<int V> static void LodDrawSub(ID3D11DeviceContext* c, DrawScope& ds) { LodIA sv; LodBind(c, ds.lod, sv); o_DrawIdx[V](c, ds.lod.count, ds.lod.start, ds.lod.base); LodRestore(c, sv, ds.lod); }
+// (04/11 boca) mascara del interior de la boca (mouthmask.cpp): el mismo DrawIndexed de la boca otra vez, con el PS de la mascara
+// sobre la textura R8, la profundidad del juego sin escribir y sin mezcla; despues vuelve todo como estaba. Funciones originales.
+template<int V> static void MouthMaskReplay(ID3D11DeviceContext* c, DrawScope& ds) {
+    ID3D11RenderTargetView* rt[8] = {}; ID3D11DepthStencilView* dsv = nullptr; c->OMGetRenderTargets(8, rt, &dsv);
+    UINT nrt = 0; for (UINT i = 0; i < 8; i++) if (rt[i]) nrt = i + 1;
+    ID3D11DepthStencilState* oldDSS = nullptr; UINT oldRef = 0; c->OMGetDepthStencilState(&oldDSS, &oldRef);
+    ID3D11PixelShader* mps = nullptr; ID3D11DepthStencilState* mdss = nullptr;
+    ID3D11RenderTargetView* mrtv = (dsv && rt[0]) ? MouthMaskBegin(rt[0], oldDSS, &mps, &mdss) : nullptr;
+    if (mrtv && mps && mdss) {
+        ID3D11PixelShader* oldPS = nullptr; c->PSGetShader(&oldPS, nullptr, nullptr);
+        ID3D11BlendState* oldBS = nullptr; float oldBF[4] = {}; UINT oldSM = 0; c->OMGetBlendState(&oldBS, oldBF, &oldSM);
+        o_OMSetRT[V](c, 1, &mrtv, dsv);
+        o_SetPS[V](c, mps, nullptr, 0);
+        c->OMSetDepthStencilState(mdss, 0);
+        c->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+        if (ds.lod.count) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.mCnt, ds.mStart, ds.mBase);
+        o_OMSetRT[V](c, nrt, rt, dsv);
+        o_SetPS[V](c, oldPS, nullptr, 0); if (oldPS) oldPS->Release();
+        c->OMSetBlendState(oldBS, oldBF, oldSM); if (oldBS) oldBS->Release();
+        c->OMSetDepthStencilState(oldDSS, oldRef);
+    }
+    if (oldDSS) oldDSS->Release();
+    for (auto* r : rt) if (r) r->Release(); if (dsv) dsv->Release();
+}
 // (04/11) cejas con hebras v2: el mismo DrawIndexed de la cara otra vez, con el GS de hebras (facegen.cpp), ANTES de devolver el
 // estado (huesos, gestos, expresiones y render targets de la cara siguen enlazados). Llama la funcion original (sin hooks).
 template<int V> static void BrowStrands(ID3D11DeviceContext* c, DrawScope& ds) {
@@ -1939,6 +1968,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     ExprPresent();         // (31/10) expresiones faciales: mallas de cara nuevas (cabeza en la paleta)
     FaceTessPresent();     // (04/11 b) teselacion de la cara: resumen
     BodyPresent();         // (25/10) la ropa contra el cuerpo real: mallas de piel nuevas, cuadro nuevo
+    MouthMaskPresent();    // (04/11 boca) mascara del interior de la boca: limpiar para el cuadro siguiente
     ArmsPresent();         // (27/10) brazos de TorsoBody para las caras reales: huellas de los torsos del juego, claves del cuadro
     { static unsigned s_noShirt = 1000; s_noShirt = g_shirtSeen.exchange(false) ? 0 : (std::min)(s_noShirt + 1, 1000u);   // (27/10 c) fila 320.z: camisetas en los ultimos 30 Present
       // (27/10 d) en el menu Fisico el jugador se ve sin camiseta: aunque haya camisetas de otros modelos, el torso va entero
@@ -2023,6 +2053,7 @@ void ReloadShaders() {
     ScanShaderFolder();
     FaceGenReloadShaders();
     SSSSReloadShaders();
+    MouthMaskReloadShaders();
     PitchWearReloadShaders();
     LightMeterReloadShaders();
     GTAOReloadShaders();
