@@ -87,7 +87,7 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   float3 col = lerp(i.col, i.col2, t);   // (04/11 d) el color del mapa de la ceja tal cual (antes se oscurecia / aclaraba aca)   // (04/11 b) antes 0.55 en la raiz: salian negras como alambre
   // (04/11 e, referencia eFootball de Agustin) la raiz queda entre los pelos de al lado y la piel (oclusion suave), la punta sale
   // a la luz: el pelo de la ceja se ve con volumen y brillo arriba, sin la raiz negra de la v1 (0.55)
-  col *= lerp(0.82, 1.0, saturate(t * 2.5));
+  col *= lerp(0.9, 1.0, saturate(t * 2.5));   // (04/11 e) 0.82 -> 0.9: con el color nuevo ya no hace falta oscurecer tanto
   if (P75.z > 0.5) col = float3(1, 0, 1);   // diagnosticos 1 y 3: magenta
   o0 = float4(saturate(col), 1.0);
   // normal + translucidez (hebra: 0.15) empaquetadas como en el shader de cara

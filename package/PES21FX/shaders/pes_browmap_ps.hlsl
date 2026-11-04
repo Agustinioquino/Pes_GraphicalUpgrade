@@ -25,14 +25,19 @@ void BrowMap(float2 uv, float2 texel, out float4 o3) {
   sk = max(sk, 0.01);
   float l1 = LumF(tDiffuse.SampleLevel(sLin, uv, 1.0).rgb);
   float mask = smoothstep(0.80, 0.58, l1 / sk) * zone;
-  // color: texeles oscuros (pelo) de 5x5 alrededor, pesados por cuanto mas oscuros que la piel
-  float3 acc = 0; float wsum = 0;
+  // color (04/11 e, Agustin: "el color es lo que falla", salian casi negras): antes pesaba al CUADRADO lo oscuro -> ganaba solo el
+  // texel mas negro. Ahora: promedio de los texeles de pelo (peso suave, no al cuadrado) mezclado con el promedio de la zona, y
+  // se le devuelve el tono (saturacion x1.35) y algo de luz: el pelo de la ceja es castano / rubio translucido, no negro
+  float3 acc = 0, accAll = 0; float wsum = 0;
   [unroll] for (int y = -2; y <= 2; y++) [unroll] for (int x = -2; x <= 2; x++) {
     float3 c = tDiffuse.SampleLevel(sLin, uv + float2(x, y) * texel * 2.0, 0.0).rgb;
-    float w = smoothstep(0.75, 0.40, LumF(c) / sk); w *= w;
-    acc += c * w; wsum += w;
+    float w = smoothstep(0.85, 0.55, LumF(c) / sk);
+    acc += c * w; wsum += w; accAll += c;
   }
-  float3 hc = wsum > 1e-3 ? acc / wsum : tDiffuse.SampleLevel(sLin, uv, 0.0).rgb * 0.7;
+  float3 hc = wsum > 1e-3 ? acc / wsum : tDiffuse.SampleLevel(sLin, uv, 0.0).rgb * 0.8;
+  hc = lerp(hc, accAll / 25.0, 0.3);
+  float hl = LumF(hc);
+  hc = max(hl + (hc - hl) * 1.35, 0.0) * 1.15;
   o3 = float4(hc, mask);
 }
 void main(float4 pos : SV_Position, float2 uv : TEXCOORD0, out float4 o0 : SV_Target0)
