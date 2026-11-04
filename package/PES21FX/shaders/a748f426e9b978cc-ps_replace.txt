@@ -204,7 +204,7 @@ void main(
   // === PES21 (19/10) SOL LIBRE (experimentar): x101 on, y101 azimut (grados), z101 elevacion (grados), w101 intensidad,
   // x102 calidez (0 = color del juego, 1 = naranja atardecer). Mueve la direccion y el color del sol que ve ESTA pasada de luz;
   // las sombras siguen siendo las del sol real del juego (el shadow map lo arma el motor).
-  float4 pesLDir = g_psLight.m_lightDir0; float4 pesLCol = g_psLight.m_lightColor0; bool pesFreeSun = false; bool pesShMis = IniParams.Load(int2(258,0)).x > 0.5;   // (02/11) shadow map sin alinear con la luz (sol_parche 1 y sombra_parche 0): no medir grosor con el
+  float4 pesLDir = g_psLight.m_lightDir0; float4 pesLCol = g_psLight.m_lightColor0; bool pesFreeSun = false; float4 pesP258 = IniParams.Load(int2(258,0)); bool pesShMis = pesP258.x > 0.5 || pesP258.y > 0.5;   // (04/11) y258 = 1: tampoco medir grosor con el shadow map del juego (sol_parche 0: manchas naranjas duras en la piel)   // (02/11) shadow map sin alinear con la luz (sol_parche 1 y sombra_parche 0): no medir grosor con el
   { float4 SF = IniParams.Load(int2(101,0));
     if (SF.x > 0.5) { pesFreeSun = true;
       float az = radians(SF.y), el = radians(SF.z);
