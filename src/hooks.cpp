@@ -508,7 +508,7 @@ static void UploadParams() {
 }
 
 // ---------------------------------------------------------------- estado por contexto
-struct CtxState { const ShaderEntry* ps = nullptr; const ShaderEntry* vs = nullptr; ID3D11Device* dev = nullptr; bool devKnown = false; ID3D11Buffer* lastHairCB = nullptr; bool clothCS = false; ID3D11DepthStencilView* shadowDSV = nullptr; bool gameShadow = false; };   // shadowDSV: (27/10 c) el DSV puesto es el shadow map del sol del juego (sombra de la cabeza)   // clothCS: el CS puesto es el simulador del mod de ropa (diagnostico en Dispatch)   // lastHairCB: b11 de la ultima cara dibujada en este contexto (la boca la hereda)
+struct CtxState { const ShaderEntry* ps = nullptr; const ShaderEntry* vs = nullptr; ID3D11Device* dev = nullptr; bool devKnown = false; ID3D11Buffer* lastHairCB = nullptr; uint64_t lastFace = 0; bool clothCS = false; ID3D11DepthStencilView* shadowDSV = nullptr; bool gameShadow = false; };   // shadowDSV: (27/10 c) el DSV puesto es el shadow map del sol del juego (sombra de la cabeza)   // clothCS: el CS puesto es el simulador del mod de ropa (diagnostico en Dispatch)   // lastHairCB: b11 de la ultima cara dibujada en este contexto (la boca la hereda)
 static std::unordered_map<ID3D11DeviceContext*, CtxState> s_ctx;
 static std::shared_mutex s_ctxMutex;
 static CtxState& Ctx(ID3D11DeviceContext* c) {
@@ -1035,6 +1035,7 @@ void ResourcesLogPresent() {
         mouth, s_mouthOk.exchange(0), s_mouthOther.exchange(0), s_mouthNoRule.exchange(0));
     Log("filtraciones (30 s): %d de %d dibujos revisados llegan con una textura del mod en t0..t3; t0 cambiado por brazos de TorsoBody en %d dibujos",
         s_leakDraws.exchange(0), s_leakChecked.exchange(0), s_armSwapDraws.exchange(0));
+    BocaJugLog();
 }
 static void MouthCheck(ID3D11DeviceContext* c, const ShaderEntry* ps) {
     s_mouthDraws.fetch_add(1, std::memory_order_relaxed);
@@ -1129,6 +1130,8 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
             bool fgFound = FaceGenLookup(c, &fa, &fb, &ex);
             // (20/10) LOD de caras: anotar la malla de este dibujo y, con LOD0 forzado, cambiarla por la de mas detalle
             if (g_lodAny && ex.key && t_drawVerts > 0) { const ShaderEntry* vse = Ctx(c).vs; t_lodNoted = true; LodNoteFace(c, ex.key, ex.t0, ex.id, vse ? vse->hash : 0, hash, t_drawVerts, t_drawStart, t_drawBase, &d.lod); }
+            // (04/11) la boca que sigue es de esta cara (bocajug.cpp); sin identidad (cara pendiente) = 0, nunca la cara anterior
+            Ctx(c).lastFace = (fgFound && !ex.id.empty()) ? strtoull(ex.id.c_str(), nullptr, 16) : 0;
             if (fgFound) {
                 // 19/10 c: la boca hereda este b11; se retiene con AddRef porque la entrada de cara puede liberarse (partido nuevo,
                 // recarga de tipos de pelo) antes del dibujo de la boca -> puntero colgado -> el driver se caia (nvwgf2umx 0xc0000005)
@@ -1225,6 +1228,12 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     }
     if (ps && ps->rule) RunRule(c, ps, d);
     if (ps && ps->hash == 0x63fab7735eee149cULL) MouthCheck(c, ps);   // (03/11) la boca tiene sus 4 texturas del mod? (log 'recursos por dibujo')
+    // (04/11) boca propia por jugador (bocajug.cpp): misma malla, vertices del perfil de caras.ini (boca = ...) para la boca de esa cara
+    if (ps && ps->hash == 0x63fab7735eee149cULL && t_drawKind == 1 && !d.lod.count) {
+        LodIA L; ID3D11ShaderResourceView* bsm = nullptr;
+        const uint64_t lf = Ctx(c).lastFace; Ctx(c).lastFace = 0;   // una boca por cara: la siguiente boca sin cara nueva queda comun
+        if (BocaJugDraw(c, lf, t_drawVerts, t_drawStart, L, &bsm)) { d.lod = L; if (bsm) { Remember(c, d, true, true, 0); c->PSSetShaderResources(0, 1, &bsm); } }
+    }
     if (vs && vs->rule) RunRule(c, vs, d);
     // (20/10) reglas por pareja PS + VS: p.ej. la piel del cuerpo (aa7d1833) cuando dibuja la cabeza de una cara generica (VS faab87ee)
     if (ps && vs) if (const std::vector<const Rule*>* prs = ps->pairRules) for (const Rule* pr : *prs) if (pr->vsCond == vs->hash) RunRuleActions(c, pr, true, ps->hash, d);

@@ -155,7 +155,7 @@ bool FaceGenLookup(ID3D11DeviceContext* c, ID3D11ShaderResourceView** outA, ID3D
         std::lock_guard<std::mutex> lk(s_mx);
         auto it = s_cache.find(key);
         if (it != s_cache.end()) {
-            if (ex && g_lodAny) ex->id = it->second.id;
+            if (ex) ex->id = it->second.id;   // (04/11) tambien para la boca por jugador (bocajug.cpp)
             if (it->second.a) { s_stHit++; *outA = it->second.a; *outB = it->second.b; found = true;
                 FaceEntry& fe = it->second;
                 if (ex) { ex->seedMap = fe.c; ex->seedsUAV = fe.seedsUAV; ex->seedsSRV = fe.seedsSRV; ex->args = fe.args; ex->argsUAV = fe.argsUAV; ex->hairCB = fe.hairCB; } }

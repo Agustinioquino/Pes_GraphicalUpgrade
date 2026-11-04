@@ -47,9 +47,9 @@ REAL_W = {True: [8.6, 6.6, 7.6, 7.0, 6.6], False: [5.3, 5.8, 6.9, 7.0, 7.1, 8.5]
 PROFILE = os.environ.get('MOUTH_PROFILE', '')
 PROF = {
     '': dict(ext_up={'IC': -0.1, 'I': -0.8, 'C': -0.3}, corner_ic=(0.02, 0.08), corner_i_up=(0.04, 0.14), lat_back=0.0, canine=0.30),
-    'messi': dict(ext_up={'IC': 0.5, 'I': -1.2, 'C': -0.2}, corner_ic=(0.01, 0.05), corner_i_up=(0.06, 0.20), lat_back=0.35, canine=0.38),
+    'messi': dict(ext_up={'IC': -1.1, 'I': -1.5, 'C': -1.4}, corner_ic=(0.05, 0.12), corner_i_up=(0.08, 0.18), lat_back=0.0, canine=0.18),   # (04/11 b) Agustin 'no me convencen': su sonrisa actual (fotos): parejos, anchos, borde en arco suave, caninos romos
 }[PROFILE]
-if PROFILE == 'messi': REAL_W = {True: [9.0, 6.3, 7.8, 7.0, 6.6], False: REAL_W[False]}
+if PROFILE == 'messi': REAL_W = {True: [8.8, 7.0, 7.9, 7.2, 6.8], False: REAL_W[False]}
 
 def fit_row(row, log=print, name=''):
     """(03/11 v19c) Agustin: 'ni todos pegados ni separados'. Entre dientes vecinos de una fila (en orden por el arco) se mide
@@ -108,6 +108,7 @@ THROAT = int(os.environ.get('THROAT', '1'))   # (02/11) fondo de la garganta nue
 SINK = float(os.environ.get('SINK_MM', '2.0' if int(os.environ.get('REAL_TEETH', '1')) else '1.5')) * MM   # (03/11 v19c) 2 mm: la encia abraza el cuello   # (01/11 d) 0.7 -> 1.5 mm: el cuello se mete bien detras de la encia (no asoma por arriba)
 PATCH = int(os.environ.get('PATCH', '1'))
 MOLARS = int(os.environ.get('MOLARS', '2'))   # (02/11) muelas 3D por lado y por arcada, detras del ultimo premolar (Agustin: 'que las muelas sean 3d')
+MOL_AIR = float(os.environ.get('MOL_AIR', '0.3')); MOL_S0_UP = float(os.environ.get('MOL_S0_UP', '0.4')); MOL_S0_LO = float(os.environ.get('MOL_S0_LO', '0.4'))   # (04/11) donde arranca la 1a muela detras del ultimo premolar (mm por la encia; negativo = mas adelante)
 MOLAR_L = [float(x) for x in os.environ.get('MOLAR_L', '10.0,9.0').split(',')]   # largo mesio-distal (mm) de cada muela
 UV_W, UV_V0, UV_V1 = 0.55, 0.15, 0.90   # (01/11 e) el borde translucido de la textura (0.62-0.92) cae adentro   # (01/11 d) parte del diente pintado que usa el diente 3D
 
@@ -571,10 +572,15 @@ def build(src_fmdl, texdir, log=print):
                 ztail = last[:, 2].min(); ybot = last[:, 1].min(); ytop = last[:, 1].max()
                 sel = (np.sign(line[:, 0]) == side)
                 ln = line[sel]; ln = ln[np.argsort(-ln[:, 2])]   # de adelante hacia atras
-                ln = ln[ln[:, 2] < ztail + 0.3 * MM]
+                ln = ln[ln[:, 2] < ztail + 8.0 * MM]   # (04/11) margen hacia adelante para poder acercar la 1a muela
                 seg = np.r_[0, np.cumsum(np.linalg.norm(np.diff(ln[:, [0, 2]], axis=0), axis=1))]
-                s0 = 0.4 * MM
-                for k in range(min(MOLARS, len(MOLAR_L))):
+                s_tail = float(np.interp(-(ztail + 0.3 * MM), -ln[:, 2], seg))   # donde la encia pasa por detras del ultimo premolar
+                s0 = s_tail + (MOL_S0_UP if up else MOL_S0_LO) * MM
+                # (04/11) Agustin: 'parece que falta una muela y estan muy separadas del resto' (habia 1.6-2.9 mm de hueco): la 1a
+                # muela se arma, se mide el hueco con el ultimo premolar y se vuelve a armar corrida para dejar MOL_AIR mm
+                from scipy.spatial import cKDTree as _KD
+                k = 0; retried = 0
+                while k < min(MOLARS, len(MOLAR_L)):
                     Lk = MOLAR_L[k] * MM
                     if s0 + Lk > seg[-1]: break
                     pa = np.array([np.interp(s0, seg, ln[:, i]) for i in range(3)]); pb = np.array([np.interp(s0 + Lk, seg, ln[:, i]) for i in range(3)])
@@ -603,10 +609,16 @@ def build(src_fmdl, texdir, log=print):
                         ytip = lo_tips.get((side, k), ybot + 0.4 * MM) + 0.2 * MM
                         cc[1] = ytip + tipz + Hc
                     Pm, UVm, Fm = molar.geometry(cc, t, bd, up, 0.94 * Lk, Wb, Hc, 1.5 * MM, kind, seed=nmol)
+                    if k == 0 and retried < 3:
+                        retried += 1
+                        gap = float(_KD(last).query(Pm)[0].min())
+                        if abs(gap - MOL_AIR * MM) > 0.15 * MM:
+                            s0 -= gap - MOL_AIR * MM
+                            log('  muela 1 %s lado %+d: hueco %.1f mm -> se corre' % ('arriba' if up else 'abajo', side, gap / MM)); continue
                     wm = np.zeros((len(Pm), len(names))); wm[:, names.index('sk_head' if up else 'skf_jaw')] = 1
                     parts.append((Pm, UVm, Fm, wm, 'diente')); nmol += 1; mol_parts.append(Pm)
                     foot.append((cc, t, bd, 0.94 * Lk, Wb, up, Hc + tipz))
-                    s0 += Lk + 0.3 * MM
+                    s0 += Lk + 0.3 * MM; k += 1
         # la tira de Konami detras del ultimo premolar sube como una pared (la encia de atras) y pasaba por adentro de la segunda
         # muela (se veia una franja oscura cruzando la corona): lo que de la tira queda adentro de la huella de una muela, a la
         # altura de la corona, baja (arriba: sube) hasta el cuello de la muela
