@@ -212,6 +212,7 @@ void main(
   // en la raiz, las altas al sol). Las hojas del juego (cerca de la camara) no cambian: la geometria la decide su malla
   float4 P328 = IniParams.Load(int2(328, 0));
   float pesClumpAO = 1.0; float2 pesClumpLean = float2(0.0, 0.0); float pesHmul = 1.0, pesWmul = 1.0;
+  float pesYaw = pesHv;   // (04/11) giro de la hoja para la luz por hoja del PS (z334): sin matas, al azar
   if (pesV3 && pesIsExt && pesCard >= 0) {
     float kM = clamp(P328.x, 0.0, 2.0), kV = clamp(P328.y, 0.0, 2.0);
     if (kM > 0.001) {
@@ -235,6 +236,10 @@ void main(
       pesClumpLean += float2(cos(ca), sin(ca)) * 0.25 * frac(pesHv * 5.3 + 0.37) * kV;
       pesClumpAO *= lerp(1.0, 0.85 + 0.3 * h1, 0.5 * saturate(kV));   // la hoja alta asoma: mas luz
     }
+    // (04/11) matojos: la hoja mira hacia donde se abre desde el centro de su mata (+ su curva propia). El PS (z334) la ilumina segun
+    // ese giro: el lado de la mata que da al sol claro y el de atras en sombra, un manojo con volumen en vez de puntos sueltos
+    float lnL = length(pesClumpLean);
+    if (kM > 0.001 && lnL > 1e-4) pesYaw = frac(atan2(pesClumpLean.y, pesClumpLean.x) * 0.15915494 + 1.0);
   }
   if (pesV3) {
     float4 Q6 = IniParams.Load(int2(106, 0)), Q7 = IniParams.Load(int2(107, 0));
@@ -781,6 +786,6 @@ void main(
     o7.zw = rcw > 0.01 ? float2(dot(rv, cb2[4]), dot(rv, cb2[5])) / rcw : float2(9.0, 9.0);   // 9 = fuera de pantalla: el PS usa su pixel
   }
   // (27/10 m) y = oclusion de la mata (tanda 10, 0.5..1; antes el pelado, que el PS solo usaba en la depuracion w107 = 2)
-  o8 = float4(pesWear.x, pesIsExt ? pesClumpAO : 1.0, pesHv, pesV3 ? 1.0 + pesBand + ((pesFl & 2) != 0 ? 8.0 : 0.0) : 0.0);   // z (27/10 h) valor al azar por hoja (antes pesH, el PS no lo leia); w = 1 + banda del atlas (0 = sin v3) + 8 si se mezcla con el suelo (igual en todo el dibujo)
+  o8 = float4(pesWear.x, pesIsExt ? pesClumpAO : 1.0, (min(floor(pesYaw * 32.0), 31.0) + frac(pesHv * 37.1 + 0.13) * 0.999) / 32.0, pesV3 ? 1.0 + pesBand + ((pesFl & 2) != 0 ? 8.0 : 0.0) : 0.0);   // z (27/10 h) valor al azar por hoja (antes pesH, el PS no lo leia); (04/11) z = (sector de 32 del giro + azar) / 32; w = 1 + banda del atlas (0 = sin v3) + 8 si se mezcla con el suelo (igual en todo el dibujo)
   if (pesKill) o0 = float4(0.0, 0.0, -2.0, 1.0);   // todos los vertices iguales: triangulos nulos, no se rasteriza
 }
