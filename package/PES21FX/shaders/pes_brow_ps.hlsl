@@ -40,7 +40,7 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   // con cintas de ~1 px el descarte tiene que ser suave: solo el borde exterior y la punta
   if (P75.z < 0.5 && edge < 0.08 + 0.35 * t * t) discard;
   // color: la raiz mas oscura, la punta un poco mas clara y calida
-  float3 col = lerp(i.col, i.col2, t) * (0.55 + 0.6 * t) * float3(1.0, 0.97, 0.94);
+  float3 col = lerp(i.col, i.col2, t) * (0.85 + 0.25 * t);   // (04/11 b) antes 0.55 en la raiz: salian negras como alambre
   if (P75.z > 0.5) col = float3(1, 0, 1);   // diagnosticos 1 y 3: magenta
   o0 = float4(saturate(col), 1.0);
   // normal + translucidez (hebra: 0.15) empaquetadas como en el shader de cara
@@ -63,11 +63,11 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   o1.xyw = float3(0.000977517106, 0.000977517106, 0.333333343) * float3(hi.x, hi.y, lo);
   o1.z = 0.000977517106 * (float)(rx << 4);
   // rugosidad (misma curva que la cara) y especular bajos: el pelo de ceja es mate con un brillo fino
-  float rough = 0.62;
+  float rough = 0.5;   // (04/11 b) el pelo tiene un brillo fino (cuticula): un poco mas liso que la piel
   float rc = rough * 0.0361702144 + 0.0904255286;
   rc = rc * rough + 0.180851057; rc = rc * rough + 0.271276593; rc = rc * rough + 0.271276593;
   o2.x = rc * rough + 0.150000006;
-  o2.y = 0.30 * (pesHairMisc.x > 0.5 ? saturate(pesHairB.z) / 0.6 : 1.0);   // brillo del tipo de pelo (0.6 = natural)
+  o2.y = 0.42 * (pesHairMisc.x > 0.5 ? saturate(pesHairB.z) / 0.6 : 1.0);   // brillo del tipo de pelo (0.6 = natural)
   o2.z = IniParams.Load(int2(339,0)).w > 0.5 ? 0.98823529 : 1.0;   // (04/11) pelo a contraluz; sin eso como antes (ni piel ni kit)
   o2.w = g_psMaterial.m_materials[0].x;
   o3.xy = g_psSystem.m_renderBuffer.xy * i.motion;
