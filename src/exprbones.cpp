@@ -308,6 +308,7 @@ static std::atomic<int> s_applied{0}, s_noJaw{0}, s_badWrite{0}, s_calls{0}, s_s
 static std::atomic<unsigned> s_lastActive{0};
 static std::atomic<unsigned> s_lastEyes{0};   // (02/11) cuadro del ultimo giro de ojos / parpados por huesos
 static std::atomic<int> s_eyesW{0}, s_blinks{0};
+static std::atomic<int> s_lidAmpSkip{0};   // (04/11) parpados que el amplificador ya no toca
 static std::atomic<int> s_ampW{0}, s_ampSkip{0};   // (02/11 i) huesos agrandados escritos (amplificador por huesos)   // cuadro del ultimo giro aplicado o esqueleto con mandibula visto
 static int s_logs = 0;
 
@@ -886,6 +887,11 @@ void ExprBonesFrame(const void* skel) {
             if (S->fresh[d] || !S->bHave[d]) { memcpy(S->bHc[d], hc.t, sizeof S->bHc[d]); memcpy(S->bHr[d], hr, sizeof S->bHr[d]); S->bHave[d] = true; }
             if (S->fresh[d]) Neutral(*S, d, g);   // (02/11 p) la cara neutra se aprende siempre (la usa tambien la sonrisa)
             if (!S->ampOn) continue;
+            // (04/11, Agustin: "revisa bien como los huesos de parpados se seleccionan, vibran un poco") los 4 parpados (22..25,
+            // por hash) NO se agrandan por huesos: el juego los vuelve a corregir con la mirada DESPUES del Eval del cuello, y el
+            // gesto medido salta entre lo del juego y lo corregido (vibraban con la zona "ojos" > 0). Los parpados los lleva el
+            // shader (PesBlinkApply sigue la mirada) o EyesFrame con "Por huesos + parpados"
+            if (d >= D_LID_TL && d <= D_LID_BR) { s_lidAmpSkip.fetch_add(1, std::memory_order_relaxed); continue; }
             Xf x = g; Amp(*S, d, x);
             const float dt = fabsf(x.t[0] - g.t[0]) + fabsf(x.t[1] - g.t[1]) + fabsf(x.t[2] - g.t[2]);
             const float dq = fabsf(x.q[0] - g.q[0]) + fabsf(x.q[1] - g.q[1]) + fabsf(x.q[2] - g.q[2]) + fabsf(x.q[3] - g.q[3]);
@@ -1033,13 +1039,14 @@ void ExprBonesPresent() {
     if (fr - lastLog < 600) return;   // cada ~10 s
     lastLog = fr;
     std::lock_guard<std::mutex> lk(s_mx);
-    const int calls = s_calls.exchange(0), ap = s_applied.exchange(0), nj = s_noJaw.exchange(0), bw = s_badWrite.exchange(0), st = s_stale.exchange(0), ew = s_eyesW.exchange(0), bl = s_blinks.exchange(0), aw = s_ampW.exchange(0), ask = s_ampSkip.exchange(0);
+    const int calls = s_calls.exchange(0), ap = s_applied.exchange(0), nj = s_noJaw.exchange(0), bw = s_badWrite.exchange(0), st = s_stale.exchange(0), ew = s_eyesW.exchange(0), bl = s_blinks.exchange(0), aw = s_ampW.exchange(0), ask = s_ampSkip.exchange(0), lsk = s_lidAmpSkip.exchange(0);
     if (!calls) return;
     int reusedAll = 0; for (int i = 0; i < s_nSk; i++) { reusedAll += s_sk[i].reused; s_sk[i].reused = 0; }
     static int dumped = 0;
     if (dumped < 0) for (int i = 0; i < s_nSk && dumped < 2; i++) if (s_sk[i].n > 0 && fr - s_sk[i].lastFrame < 600) { Dump(s_sk[i]); dumped++; }
     if (s_logs < 40) {
         char l[1200]; int k = snprintf(l, sizeof l, "boca por huesos [vivo x340 %.2f y340 %.2f x347 %.2f x350 %.0f]: %d pasos por el cuello, %d huesos agrandados (amplificador por huesos; %d sin agrandar por fuera de rango), %d giros escritos, %d sin mandibula, %d escrituras fallidas, %d rearmados por cambio de cara; ojos por huesos %d (cuadros con parpado cerrado %d); huesos leidos con el giro del mod todavia puesto %d; esqueletos:", g_cfg.live[340][0], g_cfg.live[340][1], g_cfg.live[347][0], g_cfg.live[350][0], calls, aw, ask, ap, nj, bw, st, ew, bl, reusedAll);
+        k += snprintf(l + k, sizeof l - k, " [parpados sin agrandar %d]", lsk);
         for (int i = 0; i < s_nSk && k < (int)sizeof l - 120; i++) {
             Skel& S = s_sk[i];
             if (fr - S.lastFrame > 600) continue;
@@ -1050,7 +1057,7 @@ void ExprBonesPresent() {
             if (!S.logged && S.found) {   // una vez por esqueleto: que hueso se reconocio (indice en el arreglo)
                 S.logged = true;
                 char m[1500]; int j = snprintf(m, sizeof m, "boca por huesos: esqueleto %p huesos reconocidos:", S.skel);
-                for (int d = 0; d < kND && j < (int)sizeof m - 40; d++) if (S.cur[d]) j += snprintf(m + j, sizeof m - j, " %s=%d", kDef[d].name, S.idx[d]);
+                for (int d = 0; d < kND && j < (int)sizeof m - 40; d++) if (S.cur[d]) j += snprintf(m + j, sizeof m - j, " %s=%d%s", kDef[d].name, S.idx[d], S.src[d] == S.fbones ? "" : "(cuerpo)");   // (04/11) (cuerpo) = salio del esqueleto del cuerpo, no del de la cara
                 Log("%s", m);
                 if (S.face) {   // todos los nombres del esqueleto de la cara (una vez): para la pose facial propia
                     // (02/11) para separar el globo del ojo del parpado (mismo pivote): por hueso indice / padre / reposo (traslacion y
