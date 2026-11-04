@@ -111,6 +111,7 @@ void main(
   r0.w = dot(r0.xyz, r0.xyz);
   r0.w = rsqrt(r0.w);
   r0.xyz = r0.xyz * r0.www;
+  float3 eyeVt = r0.xyz;   // (04/11) vista en el espacio tangente del ojo (para la profundidad del iris)
   r0.w = g_tex_height.Sample(g_sampler_height_s, v2.xy).y;
   float eyeH = r0.w;
   r0.xy = r0.xy * r0.ww;
@@ -122,6 +123,18 @@ void main(
   r0.xy = float2(0.25,0.25) * r0.xy;
   r0.xy = r0.xy / r0.zz;
   r0.xy = v2.xy + -r0.xy;
+  // (04/11, Agustin: "les hace falta una mayor naturalidad a los modelos eye, quizas colocando el iris con profundidad?") y318:
+  // PROFUNDIDAD DEL IRIS por refraccion de la cornea. El iris real esta ~2.5 mm detras de la cornea (camara anterior, n = 1.376):
+  // mirado de costado se corre bajo la cornea y la pupila se ve hundida. El juego ya hace un paralaje chico con la altura (arriba);
+  // esto suma el corrimiento refractado (angulo de Snell) hasta 0.10 de la textura (~2.5 mm, con el iris de 0.245 = 6 mm) por la
+  // altura del ojo, solo dentro de la cornea. 0 = como el juego.
+  { float dep = clamp(IniParams.Load(int2(318,0)).y, 0.0, 2.0);
+    if (dep > 0.001) {
+      float s1 = length(eyeVt.xy);
+      float st = s1 / 1.376, ct = sqrt(max(1.0 - st * st, 0.04));
+      float2 dir = s1 > 1e-4 ? eyeVt.xy / s1 : float2(0, 0);
+      r0.xy -= dir * (st / ct) * 0.10 * dep * eyeH * eyeIris;
+    } }
   // === PES21 (19/10) iris realista: la textura del ojo esta centrada en (0.5, 0.5); el iris llega a r = 0.245 y la pupila a 0.088
   // (medido en las texturas volcadas). Con eso se pasa a polares y se leen las texturas de detalle del mod (t20/t21),
   // que sirven para cualquier color: el color sigue saliendo de la textura del juego (t6).
