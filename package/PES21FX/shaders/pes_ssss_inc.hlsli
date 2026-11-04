@@ -169,7 +169,7 @@ float3 PesSsTransColor(float3 T, float k) {
 // G-buffer no hay nada que la distinga de la cara, asi que los pixeles de piel EN UNA CAVIDAD (rodeados de superficie mas cerca de
 // la camara en 7 de 8 direcciones, hasta 4 cm: lengua y garganta detras de labios y dientes; tambien las fosas nasales) siguen con
 // la formula de antes, identica (legacy = true). thickM no se usa en ese caso
-void PesOneLight(float3 L, float3 col, float sh, float3 n, float3 V, bool skin, float rough, float trans, float thickM, bool legacy, inout float3 dif, inout float3 spec) {
+void PesOneLight(float3 L, float3 col, float sh, float3 n, float3 V, bool skin, float rough, float trans, float thickM, float silK, bool legacy, inout float3 dif, inout float3 spec) {
   float rawNL = dot(n, L);
   // --- difusa: Lambert con un borde apenas envuelto en la piel (el resto lo hace el disco de Burley de la pasada 2) ---
   float wrap = skin ? 0.03 : 0.0;
@@ -198,7 +198,7 @@ void PesOneLight(float3 L, float3 col, float sh, float3 n, float3 V, bool skin, 
     float3 Tt = PesSsTransColor(PesSsTransmit(thickM * dens), IniParams.Load(int2(34, 0)).z);
     float backL = smoothstep(0.0, 0.35, dot(L, -n)) * (1.0 - saturate(rawNL * 3.0)) * lerp(0.35, 1.0, smoothstep(0.25, 0.75, thin));
     float x5 = IniParams.Load(int2(5, 0)).x;
-    dif += col * Tt * backL * (P64.z > 0 ? P64.z : 1.0) * 0.8 * (x5 > 0 ? x5 : 1.0);
+    dif += col * Tt * backL * silK * (P64.z > 0 ? P64.z : 1.0) * 0.8 * (x5 > 0 ? x5 : 1.0);
   }
   // --- brillo: GGX con la rugosidad del G-buffer y, en la piel, el lobulo fino (grasa / sudor) ---
   float3 H = normalize(L + V);
@@ -271,7 +271,13 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   float trans = (float)(tq >> 4) / 63.0;
   // (04/11 nariz) grosor por la curvatura (como PesSkThickCurv del partido, sin atlas en el editor): normales del G-buffer a ~10 mm
   // a cada lado, descartando lo que no es piel o salta de superficie (borde de la nariz sobre la mejilla). curv 1 = radio de 2 cm
-  float thickM = 0.08;
+  // (04/11 entrecejo) Agustin, luz Manual a contraluz (rumbo -173, altura 4): "linea dura que baja del entrecejo por la nariz".
+  // Con la luz detras de la cabeza TODA la cara mira para el otro lado (backL = 1) y la contraluz por curvatura encendia el
+  // pliegue entre la nariz y la mejilla y el entrecejo: la curvatura no tenia signo y un pliegue (concavo) contaba como "fino"
+  // igual que el borde de la oreja. Ahora: (1) solo curvatura CONVEXA (las normales se abren); (2) la luz solo atraviesa cerca
+  // de una silueta (fondo a menos de ~15 mm en pantalla: borde de la oreja, aletas de la nariz de perfil): una nariz vista de
+  // frente tiene el craneo detras y no deja pasar el sol de atras
+  float thickM = 0.08, silK = 0.0;
   bool legacy = false;
   if (skin) {
     float W, H; inNrm.GetDimensions(W, H);
@@ -307,32 +313,44 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
         if (sd == 0) { nA = DecodeN(uvS); pA = PS; } else { nB = DecodeN(uvS); pB = PS; }
       }
       float dl = length(pA - pB);
-      if (dl > 0.002) curv = max(curv, 0.02 * length(nA - nB) / dl);
+      if (dl > 0.002) curv = max(curv, 0.02 * max(dot(nA - nB, pA - pB), 0.0) / (dl * dl));   // solo convexo
     }
     curv = saturate(curv);
     float thinT = saturate(trans * 1.6);
     thickM = clamp(0.02 / max(curv, 0.15) * lerp(1.2, 0.35, smoothstep(0.45, 0.9, thinT)), 0.004, 0.08);
+    // cercania a una silueta: fondo (5 cm o mas por detras, o sin geometria) a 4..16 mm en alguna de 8 direcciones
+    [unroll] for (int si = 0; si < 8; si++) {
+      float a = si * 0.78539816 + 0.3926991;
+      float2 dir = float2(cos(a), sin(a)) / float2(W, H);
+      [unroll] for (int ri = 0; ri < 4; ri++) {
+        float rM = 0.004 * (ri + 1);
+        float2 uvS = uv + dir * (rM / mpp);
+        if (any(uvS < 0.0) || any(uvS > 1.0)) continue;
+        float zS = LinZ(uvS), zSA = zS * zSgn;
+        if (zSA < 0.1 || zSA > 60.0 || (zS - zC) * zSgn > 0.05) silK = max(silK, 1.0 - 0.2 * ri);
+      }
+    }
   }
   float3 dif = 0, spec = 0;
   float sh = PesTraceShadow(Pv, L, dot(n, L), zC, zSgn, zA, uv, pos.xy, shK);
-  PesOneLight(L, sunC, sh, n, V, skin, rough, trans, thickM, legacy, dif, spec);
+  PesOneLight(L, sunC, sh, n, V, skin, rough, trans, thickM, silK, legacy, dif, spec);
   if (studio) {
     float fillK = E3.y, rimK = E3.z;
     if (fillK > 0.001) {   // relleno: del otro lado de la camara, bajo, un poco frio, sin sombra
       float azF = (az >= 0 ? -1.0 : 1.0) * clamp(90.0 - abs(az) * 0.5, 25.0, 70.0);
-      PesOneLight(PesDirL(azF, 8.0, zSgn), PesTint(saturate(warm - 0.2)) * (S * inten * fillK), 1.0, n, V, skin, rough, trans, thickM, legacy, dif, spec);
+      PesOneLight(PesDirL(azF, 8.0, zSgn), PesTint(saturate(warm - 0.2)) * (S * inten * fillK), 1.0, n, V, skin, rough, trans, thickM, silK, legacy, dif, spec);
     }
     if (rimK > 0.001) {   // recorte: desde atras, del mismo lado que la principal, alto
       float azR = (az >= 0 ? 1.0 : -1.0) * 150.0;
       float3 LR = PesDirL(azR, 35.0, zSgn);
       float shR = PesTraceShadow(Pv, LR, dot(n, LR), zC, zSgn, zA, uv, pos.xy + 17.0, shK);
-      PesOneLight(LR, PesTint(0.45) * (S * inten * rimK), shR, n, V, skin, rough, trans, thickM, legacy, dif, spec);
+      PesOneLight(LR, PesTint(0.45) * (S * inten * rimK), shR, n, V, skin, rough, trans, thickM, silK, legacy, dif, spec);
     }
   } else {
     if (tower2) {   // (04/11) segunda torre del lado opuesto, un poco mas debil, con su propia sombra
       float3 L2 = PesDirL(az + 180.0, el, zSgn);
       float sh2 = PesTraceShadow(Pv, L2, dot(n, L2), zC, zSgn, zA, uv, pos.xy + 29.0, shK);
-      PesOneLight(L2, sunC * 0.7, sh2, n, V, skin, rough, trans, thickM, legacy, dif, spec);
+      PesOneLight(L2, sunC * 0.7, sh2, n, V, skin, rough, trans, thickM, silK, legacy, dif, spec);
     }
     // (27/10 g) relleno de cielo: el lado en sombra no queda gris plano; luz difusa del cielo (azulada, de arriba) y un poco de
     // rebote del suelo (calido, de abajo), proporcional al sol. El cielo es mas azul cuanto mas calido (bajo) esta el sol.
