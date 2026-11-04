@@ -41,6 +41,7 @@ cbuffer PESHair : register(b11)
   float4 pesBrowX;      // (04/11 l) x = hebras extra del jugador (fila 370)
 }
 Texture1D<float4> IniParams : register(t120);
+#include "pes_face_tess_player.hlsli"   // (04/11 m) teselacion por jugador: la DLL copia el b10 del DS de la cara al GS
 #ifdef PES_SHADOW
 // (04/11 k) modo SOMBRA DE CONTACTO (pes_browsh_*_gs): la luz principal del dibujo (b0 del PS, la DLL la pasa al GS)
 cbuffer cPSSystem : register(b0)
@@ -140,6 +141,7 @@ float3 PesTessDisp(FaceV v[3], float3 b, float2 uvT)
 {
   if (TessOn.Load(int2(357, 0)).x < 0.5) return float3(0, 0, 0);
   float4 T = IniParams.Load(int2(357, 0)), U = IniParams.Load(int2(358, 0));
+  PesTessApplyPlayer(T, U);   // (04/11 m) los mismos multiplicadores del jugador que el DS
   float3 P0 = v[0].pV.xyz, P1 = v[1].pV.xyz, P2 = v[2].pV.xyz;
   float3 N0 = normalize(v[0].nrm.xyz), N1 = normalize(v[1].nrm.xyz), N2 = normalize(v[2].nrm.xyz);
   float3 pl = b.x * P0 + b.y * P1 + b.z * P2;
@@ -159,6 +161,7 @@ float3 PesTessDisp(FaceV v[3], float3 b, float2 uvT)
   float dl = length(d), tope = lerp(max(U.z, 0.0), clamp(EB.y, 0.0, max(U.z, 0.0)), saturate(eyeMix * 2.0)) * 0.001;
   if (dl > tope) d *= tope / max(dl, 1e-6);
   float4 R = IniParams.Load(int2(359, 0));
+  PesTessApplyRelief(R);
   if (R.x > 0.001 && T.x > 0.5) {
     float lod = clamp(R.w, 0.0, 6.0);
     float4 FB = pesFaceB.SampleLevel(sLin, uvT, lod);

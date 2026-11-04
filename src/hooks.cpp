@@ -957,7 +957,7 @@ template<int V> static void STDMETHODCALLTYPE hk_SetCS(ID3D11DeviceContext* c, I
 // lo que una regla enlaza se devuelve a como estaba despues del dibujo (como "post ps-t20 = ..." en 3DMigoto)
 struct Saved { bool ps; bool srv; int slot; IUnknown* prev; };
 static const int kSavedMax = 64;   // (02/11) 24 -> 64: con los grupos del brazo (t26/t30/t36/t123) los dibujos del brazo pasaban de 24 y lo enlazado despues no se devolvia (se filtraba al dibujo siguiente: la boca tomaba texturas ajenas)
-struct DrawScope { Saved s[kSavedMax]; int n = 0; FaceGenExtra brow; bool skip = false; ID3D11PixelShader* restorePS = nullptr; LodIA lod; GlassScope glass; RingScope ring; FaceTessScope tess; };   // tess: teselacion de la cara (facetess.cpp)   // glass: vidrio de los menus (glass.cpp)   // lod.count > 0: dibujar con la geometria de LOD0 (lod.cpp)
+struct DrawScope { Saved s[kSavedMax]; int n = 0; FaceGenExtra brow; std::string faceId; bool skip = false; ID3D11PixelShader* restorePS = nullptr; LodIA lod; GlassScope glass; RingScope ring; FaceTessScope tess; };   // tess: teselacion de la cara (facetess.cpp)   // glass: vidrio de los menus (glass.cpp)   // lod.count > 0: dibujar con la geometria de LOD0 (lod.cpp)
 
 static void Remember(ID3D11DeviceContext* c, DrawScope& d, bool ps, bool srv, int slot) {
     if (d.n >= kSavedMax) {   // (26/10 d) 12 -> 24, (02/11) -> 64: lo que no entra no se devolveria
@@ -1133,6 +1133,7 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
             // (04/11) la boca que sigue es de esta cara (bocajug.cpp); sin identidad (cara pendiente) = 0, nunca la cara anterior
             Ctx(c).lastFace = (fgFound && !ex.id.empty()) ? strtoull(ex.id.c_str(), nullptr, 16) : 0;
             if (fgFound) {
+                d.faceId = ex.id;   // (04/11 m) teselacion por jugador: la regla de la cara (VS, Expr) corre despues de esta (PS)
                 // 19/10 c: la boca hereda este b11; se retiene con AddRef porque la entrada de cara puede liberarse (partido nuevo,
                 // recarga de tipos de pelo) antes del dibujo de la boca -> puntero colgado -> el driver se caia (nvwgf2umx 0xc0000005)
                 if (ex.hairCB) { CtxState& cs = Ctx(c); if (cs.lastHairCB != ex.hairCB) { ex.hairCB->AddRef(); if (cs.lastHairCB) cs.lastHairCB->Release(); cs.lastHairCB = ex.hairCB; } }
@@ -1167,7 +1168,7 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
             if (seam && t_drawKind == 1 && Ctx(c).ps && Ctx(c).ps->hash != 0x63fab7735eee149cULL) {
                 ID3D11ShaderResourceView* prm = nullptr; c->VSGetShaderResources(120, 1, &prm);
                 if (!prm) FaceTessNote(1);
-                if (prm) { if (FaceTessBegin(c, hash, seam, prm, d.tess)) { Remember(c, d, false, true, 119); c->VSSetShaderResources(119, 1, &seam);
+                if (prm) { if (FaceTessBegin(c, hash, seam, prm, d.tess, d.faceId)) { Remember(c, d, false, true, 119); c->VSSetShaderResources(119, 1, &seam);
                     d.tess.cnt = t_drawVerts; d.tess.start = t_drawStart; d.tess.base = t_drawBase; } prm->Release(); }
             }
             if (hc && FreeCamWantsHead()) ExprCaptureHead(c, hc, hd);   // (1/11) camara libre "seguir la cara": matriz de sk_head de este dibujo

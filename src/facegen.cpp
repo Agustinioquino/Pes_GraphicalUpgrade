@@ -535,6 +535,8 @@ bool BrowStrandsBegin(ID3D11DeviceContext* c, const FaceGenExtra* ex, uint64_t v
     {
         ID3D11ShaderResourceView* rel[2] = {}; ID3D11ShaderResourceView* on = nullptr;
         if (s.ds) { c->DSGetShaderResources(23, 2, rel); on = g_dev.paramSRV; }
+        // (04/11 m) teselacion por jugador: los multiplicadores de esta cara (b10 del DS) tambien al GS (gsCB 0..11 se restaura en End)
+        { ID3D11Buffer* pb = nullptr; if (s.ds) c->DSGetConstantBuffers(10, 1, &pb); c->GSSetConstantBuffers(10, 1, &pb); if (pb) pb->Release(); }
         c->GSSetShaderResources(23, 2, rel); c->GSSetShaderResources(121, 1, &on);
         for (auto* r : rel) if (r) r->Release();
     }
