@@ -21,6 +21,21 @@ float3 PesBeardBoneP(uint s, uint row0, uint j, float4 P)
   return float3(dot(P, g_pesBeardPool[b]), dot(P, g_pesBeardPool[b + 1]), dot(P, g_pesBeardPool[b + 2]));
 }
 
+// (04/11 i, Agustin: "la barba sigue desconectada al expresar", captura de Messi: el bigote y las comisuras quedan atras de la piel)
+// la piel suma, ademas de los huesos del juego, el AMPLIFICADOR del mod (pes_expr.hlsli PesExprApply, fila 340: y340 1.35 = cada
+// gesto un 35 % mas, por zona 341) en el VS de la cara; la barba solo seguia los huesos. Las mismas cuentas aca, con la paleta de
+// la piel copiada al pozo (con la boca por huesos, 350.y >= 1, el amplificador ya va en los huesos y aca no se suma nada)
+float PesBeardZone(float3 r, float4 Z)
+{
+  float ex = abs(r.x) - 0.028, ey = (r.y - 1.697) * 1.4;
+  float we = 1.0 - smoothstep(0.012, 0.022, sqrt(ex * ex + ey * ey));
+  float wb = smoothstep(1.700, 1.714, r.y) * (1.0 - we);
+  float wm = (1.0 - smoothstep(1.646, 1.664, r.y)) * (1.0 - we);
+  float wc = saturate(1.0 - we - wb - wm);
+  return wb * Z.x + we * Z.y + wc * Z.z + wm * Z.w;
+}
+bool PesBeardSkip(uint j, uint head) { if (j == head) return true; if (head <= 2) return j < head; return j + 1 == head; }
+
 // rest = posicion de reposo del vertice (espacio del modelo), pos / prev = salida del skinning del pelo (espacio del objeto)
 void PesBeardFollow(uint vid, float3 rest, inout float3 pos, inout float3 prev)
 {
@@ -58,6 +73,28 @@ void PesBeardFollow(uint vid, float3 rest, inout float3 pos, inout float3 prev)
     [unroll] for (uint k = 0; k < 4; k++) if (BW[k] > 0.0) {
       d  += BW[k] * PesBeardBoneP(s, 1, (uint)(BI[k] + 0.5), Pd);
       dq += BW[k] * PesBeardBoneP(s, 97, (uint)(BI[k] + 0.5), Pd);
+    }
+    {   // (04/11 i) amplificador del mod, igual que en la piel
+      float4 E = IniParams.Load(int2(340, 0)), Z = IniParams.Load(int2(341, 0)), R = IniParams.Load(int2(350, 0));
+      if (E.x > 0.5 && !(R.x > 0.5 && R.y > 0.5)) {
+        float face = smoothstep(1.580, 1.610, rest.y) * smoothstep(0.000, 0.035, rest.z);
+        float extra = (E.y - 1.0) * PesBeardZone(rest, Z) * face;
+        if (abs(extra) >= 0.001) {
+          float bigW = saturate(E.w), cap = max(E.z, 0.0) * 0.01;
+          float3 hP = PesBeardBoneP(s, 1, hd, Pd), hQ = PesBeardBoneP(s, 97, hd, Pd), aP = 0, aQ = 0;
+          [unroll] for (uint k = 0; k < 4; k++) {
+            uint j = (uint)(BI[k] + 0.5);
+            if (BW[k] <= 0.0 || j > 31 || PesBeardSkip(j, hd)) continue;
+            float3 dk = PesBeardBoneP(s, 1, j, Pd) - hP;
+            float sk = BW[k] / fs * lerp(1.0, bigW, smoothstep(0.012, 0.040, length(dk)));
+            aP += sk * dk; aQ += sk * (PesBeardBoneP(s, 97, j, Pd) - hQ);
+          }
+          aP *= extra; aQ *= extra;
+          float la = length(aP), lb = length(aQ);
+          if (cap > 0.0) { if (la > cap) aP *= cap / la; if (lb > cap) aQ *= cap / lb; }
+          d += aP; dq += aQ;
+        }
+      }
     }
     // del objeto de la piel al mundo y del mundo al objeto del pelo (m_world = giro * escala pareja)
     float3 dw = float3(dot(d, W0.xyz), dot(d, W1.xyz), dot(d, W2.xyz));

@@ -362,17 +362,24 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
   uint head = g_pesExprMesh.x;
   // (01/11 l, Agustin: "el parpadeo en una animacion facial no deberia ocurrir") si el juego esta animando la cara (la comisura
   // o la ceja interna se movieron mas de 1.5 mm respecto de la cabeza) el parpadeo del mod se apaga (la animacion trae el suyo)
-  float anim = 0.0;
+  float anim = 0.0, animP = 0.0, amtP = amt;
   if (head <= 31) {
     float4 Pc = float4(0.0236, 1.6297, 0.1615, 1.0), Pb = float4(0.0157, 1.7129, 0.1718, 1.0);
     uint cj = g_pesExprMus.x, bj = g_pesExprMus.z;
     if (cj <= 31) anim = max(anim, length(mul(Pc, g_vsBone.m_boneMatrices[cj]) - mul(Pc, g_vsBone.m_boneMatrices[head])));
     if (bj <= 31) anim = max(anim, length(mul(Pb, g_vsBone.m_boneMatrices[bj]) - mul(Pb, g_vsBone.m_boneMatrices[head])));
+    // (04/11 i, Agustin: "los parpados todavia vibran en distintas animaciones") lo mismo con los huesos del cuadro anterior: el
+    // vector de movimiento tiene que llevar el cambio de este cuadro, si no el TAA lo ve como temblor
+    if (cj <= 31) animP = max(animP, length(mul(Pc, g_vsPrevBone.m_boneMatrices[cj]) - mul(Pc, g_vsPrevBone.m_boneMatrices[head])));
+    if (bj <= 31) animP = max(animP, length(mul(Pb, g_vsPrevBone.m_boneMatrices[bj]) - mul(Pb, g_vsPrevBone.m_boneMatrices[head])));
     // (04/11) los gestos y el retoque de la neutra del mod tambien mueven la comisura y la ceja: no son una animacion del juego,
     // asi que el umbral sube con lo que mueve el mod (si no, el parpadeo se apagaba con cualquier gesto)
     float modMv = 0.0045 * saturate(gAng + gSmi + gSur + gGri + gPuc) + (G6.w > 0.5 ? 0.0010 * saturate(G6.z) : 0.0);
-    amt *= 1.0 - smoothstep(0.0008 + modMv, 0.0015 + modMv, anim);
-    if (amt <= 0.0 && !ges) return;
+    // (04/11 i) banda mas ancha (0.8..3 mm): en las animaciones del juego la comisura anda cerca del umbral y el parpadeo del
+    // mod se prendia y apagaba de un cuadro al otro
+    amt  *= 1.0 - smoothstep(0.0008 + modMv, 0.0030 + modMv, anim);
+    amtP *= 1.0 - smoothstep(0.0008 + modMv, 0.0030 + modMv, animP);
+    if (amt <= 0.0 && amtP <= 0.0 && !ges) return;
   }
   // semilla por jugador (la misma cuenta que el tono de piel al final del VS)
   bool sk = g_vsObject.m_useWeightCount.x != 0;
@@ -382,7 +389,7 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
   float seed = se >= 0 ? (float)se * 0.6180339 : 0.37;
   float t = IniParams.Load(int2(157, 0)).x;
   float b = amt > 0.0 ? PesBlinkCurve(t, seed) * saturate(amt) : 0.0;
-  float bp = amt > 0.0 ? PesBlinkCurve(t - 1.0 / 60.0, seed) * saturate(amt) : 0.0;   // cuadro anterior (vectores de movimiento)
+  float bp = amtP > 0.0 ? PesBlinkCurve(t - 1.0 / 60.0, seed) * saturate(amtP) : 0.0;   // cuadro anterior (vectores de movimiento)
   // (01/11 h) el parpado acompana la mirada vertical (347.w): abajo baja 0.65 del angulo, arriba sube 0.35 (solo el de arriba)
   // (02/11, Agustin: "los ojos vivos es lo que rompe, no mueve el esqueleto real") el parpado ya NO sigue la mirada por shader:
   // solo se movia en las mallas donde la DLL encontro el parpado y se separaba de las pestanas / la otra malla. Vuelve cuando
@@ -404,9 +411,13 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
     bool up = (j == L.x || j == L.y), lo = (j == L.z || j == L.w);
     if (!up && !lo) continue;
     float4x3 M = g_vsBone.m_boneMatrices[j];
-    float g = 0.0;   // el juego ya cierra este parpado: punto de la orilla con el hueso contra con la cabeza
-    if (head <= 31) { float4 Q = float4(C + float3(0.0, up ? 0.008 : -0.006, 0.008), 1.0); g = saturate(length(mul(Q, M) - mul(Q, g_vsBone.m_boneMatrices[head])) / 0.006); }
-    float A = (up ? 0.64 : -0.12) * (1.0 - g);   // (02/11 k, Agustin: "no cierran del todo") 0.50 -> 0.64: el "se cierran mucho" de antes venia del parpado de abajo tomado como el de arriba (fd86e36)   // (01/11 d, Agustin: "los ojos se cierran mucho") antes 0.68 / -0.14   // orilla de arriba ~ +27 grados abierta -> ~ -12; la de abajo -22 -> ~ -14
+    float g = 0.0, gp = 0.0;   // el juego ya cierra este parpado: punto de la orilla con el hueso contra con la cabeza
+    // (04/11 i) gp: lo mismo en el cuadro anterior. Antes el cuadro anterior usaba g de este cuadro: cuando la animacion del juego
+    // movia el parpado, lo que el mod le suma cambiaba sin vector de movimiento y el TAA lo hacia temblar
+    if (head <= 31) { float4 Q = float4(C + float3(0.0, up ? 0.008 : -0.006, 0.008), 1.0);
+      g  = saturate(length(mul(Q, M) - mul(Q, g_vsBone.m_boneMatrices[head])) / 0.006);
+      gp = saturate(length(mul(Q, g_vsPrevBone.m_boneMatrices[j]) - mul(Q, g_vsPrevBone.m_boneMatrices[head])) / 0.006); }
+    float A = (up ? 0.64 : -0.12) * (1.0 - g), Ap = (up ? 0.64 : -0.12) * (1.0 - gp);   // (02/11 k, Agustin: "no cierran del todo") 0.50 -> 0.64: el "se cierran mucho" de antes venia del parpado de abajo tomado como el de arriba (fd86e36)   // (01/11 d, Agustin: "los ojos se cierran mucho") antes 0.68 / -0.14   // orilla de arriba ~ +27 grados abierta -> ~ -12; la de abajo -22 -> ~ -14
     // angulo total del parpado: parpadeo + seguimiento de la mirada (el de arriba: -gy * 0.65 si mira abajo, -gy * 0.35 arriba;
     // el de abajo sube un poco al mirar abajo). El sentido: A > 0 cierra el de arriba (baja), A < 0 el de abajo (sube).
     // (02/11, video de Agustin: ranuras azules bajo el ojo al mover la mirada) el de abajo ya no acompana la mirada: solo se
@@ -422,8 +433,8 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
     // lo que el juego mueve el parpado ahora, y el juego lo corrige con la mirada un poco en cada cuadro (g 0.1..0.4): con la sonrisa
     // alta (~0.26 rad) ese vaiven pasaba entero al parpado. Ahora el gesto solo se apaga cuando el juego de verdad cierra el ojo
     // (g > 0.55: parpadeo o animacion), el temblor chico de la mirada ya no lo mueve
-    float ge = (up ? geU : geL) * (1.0 - smoothstep(0.55, 1.0, g));
-    float a1 = A * b + gy * fu * (1.0 - g) + ge, a0 = A * bp + gyp * fup * (1.0 - g) + ge;
+    float ge = (up ? geU : geL) * (1.0 - smoothstep(0.55, 1.0, g)), gep = (up ? geU : geL) * (1.0 - smoothstep(0.55, 1.0, gp));
+    float a1 = A * b + gy * fu * (1.0 - g) + ge, a0 = Ap * bp + gyp * fup * (1.0 - gp) + gep;
     float c1 = cos(a1), s1 = sin(a1), c0 = cos(a0), s0 = sin(a0);
     float3 d1 = PesRotX(q, c1, s1) - q, d0 = PesRotX(q, c0, s0) - q;
     pos  += w * mul(d1, (float3x3)M);
