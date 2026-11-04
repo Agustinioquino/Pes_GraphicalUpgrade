@@ -957,7 +957,10 @@ void ExprBonesFrame(const void* skel) {
     //   z362 desprecio (labio de arriba de un lado: + izquierdo, - derecho), w362 una ceja (+ la izquierda arriba, - la derecha)
     const float* PB = g_cfg.live[361]; const float* PC = g_cfg.live[362];
     float xB[8]; for (int i = 0; i < 4; i++) { xB[i] = std::clamp(PB[i], -1.5f, 1.5f); xB[4 + i] = std::clamp(PC[i], -1.5f, 1.5f); }
-    bool xOn = false; for (float v : xB) if (fabsf(v) > 0.001f) xOn = true;
+    // (04/11 f, Agustin: "un slider para subir el angulo de las cejas o bajarlas ... subir el inicio de las cejas") x364: angulo de las
+    // cejas: + sube el inicio (la punta de adentro, cara preocupada / triste) y baja apenas la de afuera; - al reves (cara de enojo)
+    const float xAng = std::clamp(g_cfg.live[364][0], -1.5f, 1.5f);
+    bool xOn = fabsf(xAng) > 0.001f; for (float v : xB) if (fabsf(v) > 0.001f) xOn = true;
     bool poseOn = pAng > 0.001f || pSmi > 0.001f || pSur > 0.001f || pGri > 0.001f || pPuc > 0.001f || fabsf(talkRound) > 0.001f || xOn;
     std::lock_guard<std::mutex> lk(s_mx);
     if (s_profCheck == 0xffffffffu || fr - s_profCheck >= 300) { s_profCheck = fr; ProfLoad(); }   // caras.ini: al arrancar y cada ~10 s si cambio
@@ -1057,6 +1060,9 @@ void ExprBonesFrame(const void* skel) {
             const float sl = isL ? 1.0f : -1.0f;
             if (d >= 26 && d <= 29) po[1] += 0.0040f * xB[0];                       // cejas
             if (d == 30) po[1] += 0.0020f * xB[0];                                  // entrecejo
+            if (d == 26 || d == 27) { po[1] += 0.0035f * xAng; po[0] -= sl * 0.0006f * xAng; }   // angulo: inicio de la ceja (y un poco al medio)
+            if (d == 28 || d == 29) po[1] -= 0.0012f * xAng;                      // angulo: la punta de afuera
+            if (d == 30) po[1] += 0.0015f * xAng;                                  // angulo: el entrecejo acompana el inicio
             if (kDef[d].jaw > 0.0f) po[0] += 0.0030f * xB[2] * kDef[d].jaw;   // mandibula de costado
             if (xB[1] > 0.0f) {   // apretar los dientes: maseteros afuera, labios apretados uno contra otro, menton que sube, comisuras tensas
                 const float k = xB[1];
