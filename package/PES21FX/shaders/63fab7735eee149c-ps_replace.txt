@@ -262,7 +262,9 @@ void main(
       r0.xyz = lerp(r0.xyz, r0.xyz * tooth, mTeeth);
       // linea de encia: oclusion fina donde el diente nace de la encia
       mGumLine = saturate(Q97.y) * (mUpper * smoothstep(0.16, 0.09, v2.y) + mLower * smoothstep(0.54, 0.61, v2.y)) * (mTeeth + mTissue * 0.6);
-      r0.xyz *= 1.0 - 0.18 * mGumLine * mSunK;   // (04/11 c) la mitad: el modelo 3D ya hace la sombra donde nace el diente
+      r0.xyz *= 1.0 - 0.30 * mGumLine * mSunK;   // (04/11 h) Agustin: 'la oclusion en los dientes y lengua no es muy buena': mas sombra donde nace el diente
+      // (04/11 h) oclusion del cuello del diente: hacia la encia llega menos luz (la cara del diente va hacia adentro), no depende de x17
+      r0.xyz *= 1.0 - 0.22 * mTeeth * mRows * saturate(1.0 - mIncisal * 1.4) * lerp(1.0, mSunK, 0.5);
       // ENCIAS: rosado sano, menos "carne cruda": subir un poco la saturacion y llevar el tono a rosa-coral
       float gum = mTissue * saturate(Q96.z) * (0.75 + 0.5 * vr2 * saturate(Q97.w) + 0.25 * (1 - saturate(Q97.w)));
       mEnamelT *= (0.8 + 0.4 * vr3 * saturate(Q97.w) + 0.2 * (1 - saturate(Q97.w)));
@@ -282,11 +284,13 @@ void main(
       // sombra entre dientes (espacio interproximal): donde la normal del mapa se inclina de costado dentro de las filas
       { float3 nm = g_tex_normal.SampleBias(g_sampler_normal_s, v2.xy, 1.0).xyw; float nx = abs(nm.x * nm.z * 2.0 - 1.0);
         float gap = smoothstep(0.25, 0.6, nx) * mRows * mTeeth;
-        gap = 0.0;   // (04/11 c) los dientes 3D ya tienen el hueco real entre vecinos: esta sombra pintada los ensuciaba de gris
+        gap *= 0.5;   // (04/11 c) los dientes 3D ya tienen el hueco real; (04/11 h) a la mitad: sin nada no habia oclusion entre vecinos
         r0.xyz *= 1.0 - 0.45 * gap * saturate(Q98.y) * mSunK; }
       // oscurecimiento hacia la garganta: cuanto mas atras en la boca, menos luz (y la lengua, mas atras tambien)
       { float back = saturate((v2.y - 0.66) / 0.30);
-        float deepG = (mThroatZ * (0.35 + 0.65 * back) + mTongueZ * 0.35 * back) * saturate(Q98.z);
+        // (04/11 h) la lengua estaba AL REVES: v alto es la punta (medido en la malla v20), oscurecia la punta y dejaba claro el fondo
+        float backT = saturate((0.99 - v2.y) / 0.32);
+        float deepG = (mThroatZ * (0.35 + 0.65 * back) + mTongueZ * 0.65 * backT * backT) * saturate(Q98.z);
         r0.xyz *= 1.0 - 0.6 * deepG * lerp(1.0, mSunK, 0.5); }
       // (02/11) Agustin: 'que las muelas se vean mas oscuras que el resto porque la luz normalmente no llega tan lejos'. Mismo
       // parametro z98 (oscurecimiento hacia el fondo): las muelas 3D (su cuadro del atlas, u > 0.9, v 0.633..0.725) y, en las
@@ -294,7 +298,7 @@ void main(
       { float mMolar = smoothstep(0.893, 0.903, v2.x) * smoothstep(0.626, 0.636, v2.y) * smoothstep(0.732, 0.722, v2.y);
         float mBackT = mRows * mTeeth * smoothstep(0.17, 0.31, abs(v2.x - 0.5)) * (1.0 - mMolar);
         float deepM = (0.55 * mMolar + 0.35 * mBackT) * saturate(Q98.z);
-        r0.xyz *= 1.0 - 0.5 * deepM * lerp(1.0, mSunK, 0.35); }   // (04/11 c) la mitad
+        r0.xyz *= 1.0 - deepM * lerp(1.0, mSunK, 0.35); }   // (04/11 h) muelas y dientes de atras: oclusion entera otra vez
       // lengua: rosa-rojo humedo con mas saturacion, papilas (ruido fino) y sin el gris del original
       { float tz = mTongueZ * mTissue * saturate(Q98.x);
         float lumT = dot(r0.xyz, float3(0.3, 0.59, 0.11));
