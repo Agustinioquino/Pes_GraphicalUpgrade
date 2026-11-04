@@ -518,7 +518,10 @@ bool BeardBind(FaceMesh* m, const std::vector<float>& ps) {   // con s_mx tomado
         }
         if (!bs) continue;
         const float dn = sqrtf(bestAll);
-        const float fade = dn <= 0.008f ? 1.0f : dn >= 0.025f ? 0.0f : 1.0f - (dn - 0.008f) / 0.017f;
+        // (04/11 k, Agustin: "la barba no sigue el menton y se deforma al abrir la boca") la barba 3D tiene pelos largos: los que
+        // quedaban a mas de 8 mm de la piel seguian menos y a 25 mm nada (13 % de la barba de Messi), y la barba se estiraba. Ahora
+        // siguen enteros hasta 30 mm y se apagan recien a 60 mm
+        const float fade = dn <= 0.030f ? 1.0f : dn >= 0.060f ? 0.0f : 1.0f - (dn - 0.030f) / 0.030f;
         if (fade <= 0.0f) continue;
         float bw[32] = {}, ws = 0;
         float sh[kShapeN][3] = {};
