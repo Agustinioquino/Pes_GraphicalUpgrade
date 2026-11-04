@@ -297,6 +297,7 @@ struct Skel {
     // camara lenta el juego no reescribe los huesos de la cara en todos los cuadros (16 mil lecturas con lo del mod puesto) pero la
     // cabeza si se mueve; medir el gesto contra la cabeza de ahora metia ese movimiento en el gesto y lo agrandaba a saltos
     float bHc[kND][3] = {}, bHr[kND][4] = {}; bool bHave[kND] = {}, fresh[kND] = {}; unsigned ahFrame = ~0u;
+    bool lidRq[kND] = {}, lidRt[kND] = {}, lqHave[kND] = {}, ltHave[kND] = {}; float lqHr[kND][4] = {}, ltHr[kND][4] = {}, ltHc[kND][3] = {};
     // (02/11 n, Agustin: "al subir la ganancia la cara se deforma pero no en partes") el gesto se medía contra el REPOSO del skl,
     // pero la forma de cada cara (editor de caras del juego) tambien esta en los huesos: se agrandaba la forma de la cara entera.
     // Ahora el gesto se mide contra la cara NEUTRA de este jugador: promedio lento (~10 s) de cada hueso en los ejes de la cabeza
@@ -320,7 +321,7 @@ static std::atomic<unsigned> s_lastActive{0};
 static std::atomic<unsigned> s_lastEyes{0};   // (02/11) cuadro del ultimo giro de ojos / parpados por huesos
 static std::atomic<int> s_eyesW{0}, s_blinks{0};
 static std::atomic<int> s_lidAmpSkip{0};   // (04/11) parpados que el amplificador ya no toca
-static std::atomic<int> s_lidHeadFix{0};   // (04/11) parpados con la base llevada a la cabeza del cuadro
+static std::atomic<int> s_lidHeadFix{0}, s_lidHeadFixT{0};   // (04/11) parpados con la base llevada a la cabeza del cuadro
 static std::atomic<int> s_ampW{0}, s_ampSkip{0};   // (02/11 i) huesos agrandados escritos (amplificador por huesos)   // cuadro del ultimo giro aplicado o esqueleto con mandibula visto
 static int s_logs = 0;
 
@@ -513,21 +514,30 @@ static bool ReadBase(Skel& S, int d, Xf& x) {
         if (dq < 2e-6f) { memcpy(x.q, S.bq[d], sizeof S.bq[d]); hit = hq = true; }
         if (dt < 1e-7f + 1e-6f * (fabsf(u[0]) + fabsf(u[1]) + fabsf(u[2]))) { memcpy(x.t, S.bt[d], sizeof S.bt[d]); hit = ht = true; }
         if (hit) S.reused++;
+        S.lidRq[d] = hq; S.lidRt[d] = ht;
         S.fresh[d] = !(hq && ht);   // el juego escribio algo nuevo en este hueso
-    } else S.fresh[d] = true;
+    } else { S.fresh[d] = true; S.lidRq[d] = S.lidRt[d] = false; }
     memcpy(S.gq[d], x.q, sizeof S.gq[d]); memcpy(S.gt[d], x.t, sizeof S.gt[d]);
     // (04/11, Agustin: los parpados "siguen vibrando al hacer animaciones, por eso en partido se nota") el juego no reescribe los
     // parpados en todos los cuadros: en los que no, la base guardada es la del cuadro en que los escribio, con la cabeza de ESE
     // momento, y el giro del parpado se arma con la cabeza de ahora: con la cabeza en movimiento el parpado quedaba un cuadro atras
     // y saltaba al cuadro siguiente. Ahora esa base se lleva a la cabeza de este cuadro (lo que se guarda sigue siendo lo del juego)
-    if (d >= D_LID_TL && d <= D_LID_BR && S.wHave[d] && !S.fresh[d] && S.bHave[d] && S.ahFrame == s_frame.load(std::memory_order_relaxed)) {
-        float ic[4], D[4]; QConj(S.bHr[d], ic); QMul(S.ahr, ic, D);
-        if (fabsf(D[3]) > 0.94f) {   // hasta 40 grados de giro de la cabeza (mas = lectura rara o cambio de cara: se deja)
-            float nq[4]; QMul(D, x.q, nq); memcpy(x.q, nq, sizeof nq);
-            const float v[3] = { x.t[0] - S.bHc[d][0], x.t[1] - S.bHc[d][1], x.t[2] - S.bHc[d][2] }; float r[3]; QRot(D, v, r);
-            for (int k = 0; k < 3; k++) x.t[k] = S.ahc[k] + r[k];
-            s_lidHeadFix.fetch_add(1, std::memory_order_relaxed);
-        }
+    // (04/11, log 04:58 PC: "llevados a la cabeza 0") el juego nunca deja el parpado entero sin tocar: reescribe el giro O la
+    // posicion. Entonces cada parte se lleva por separado, con la cabeza del ultimo cuadro en que el juego escribio ESA parte
+    if (d >= D_LID_TL && d <= D_LID_BR && S.ahFrame == s_frame.load(std::memory_order_relaxed)) {
+        const bool rq = S.wHave[d] && S.lidRq[d], rt = S.wHave[d] && S.lidRt[d];
+        if (rq && S.lqHave[d]) {
+            float ic[4], D[4]; QConj(S.lqHr[d], ic); QMul(S.ahr, ic, D);
+            if (fabsf(D[3]) > 0.94f) { float nq[4]; QMul(D, x.q, nq); memcpy(x.q, nq, sizeof nq); s_lidHeadFix.fetch_add(1, std::memory_order_relaxed); }
+        } else if (!rq) { memcpy(S.lqHr[d], S.ahr, sizeof S.lqHr[d]); S.lqHave[d] = true; }
+        if (rt && S.ltHave[d]) {
+            float ic[4], D[4]; QConj(S.ltHr[d], ic); QMul(S.ahr, ic, D);
+            if (fabsf(D[3]) > 0.94f) {
+                const float v[3] = { x.t[0] - S.ltHc[d][0], x.t[1] - S.ltHc[d][1], x.t[2] - S.ltHc[d][2] }; float r[3]; QRot(D, v, r);
+                for (int k = 0; k < 3; k++) x.t[k] = S.ahc[k] + r[k];
+                s_lidHeadFixT.fetch_add(1, std::memory_order_relaxed);
+            }
+        } else if (!rt) { memcpy(S.ltHr[d], S.ahr, sizeof S.ltHr[d]); memcpy(S.ltHc[d], S.ahc, sizeof S.ltHc[d]); S.ltHave[d] = true; }
     }
     return true;
 }
@@ -1125,14 +1135,14 @@ void ExprBonesPresent() {
     if (fr - lastLog < 600) return;   // cada ~10 s
     lastLog = fr;
     std::lock_guard<std::mutex> lk(s_mx);
-    const int calls = s_calls.exchange(0), ap = s_applied.exchange(0), nj = s_noJaw.exchange(0), bw = s_badWrite.exchange(0), st = s_stale.exchange(0), ew = s_eyesW.exchange(0), bl = s_blinks.exchange(0), aw = s_ampW.exchange(0), ask = s_ampSkip.exchange(0), lsk = s_lidAmpSkip.exchange(0), lhf = s_lidHeadFix.exchange(0);
+    const int calls = s_calls.exchange(0), ap = s_applied.exchange(0), nj = s_noJaw.exchange(0), bw = s_badWrite.exchange(0), st = s_stale.exchange(0), ew = s_eyesW.exchange(0), bl = s_blinks.exchange(0), aw = s_ampW.exchange(0), ask = s_ampSkip.exchange(0), lsk = s_lidAmpSkip.exchange(0), lhf = s_lidHeadFix.exchange(0), lhft = s_lidHeadFixT.exchange(0);
     if (!calls) return;
     int reusedAll = 0; for (int i = 0; i < s_nSk; i++) { reusedAll += s_sk[i].reused; s_sk[i].reused = 0; }
     static int dumped = 0;
     if (dumped < 0) for (int i = 0; i < s_nSk && dumped < 2; i++) if (s_sk[i].n > 0 && fr - s_sk[i].lastFrame < 600) { Dump(s_sk[i]); dumped++; }
     if (s_logs < 40) {
         char l[1200]; int k = snprintf(l, sizeof l, "boca por huesos [vivo x340 %.2f y340 %.2f x347 %.2f x350 %.0f]: %d pasos por el cuello, %d huesos agrandados (amplificador por huesos; %d sin agrandar por fuera de rango), %d giros escritos, %d sin mandibula, %d escrituras fallidas, %d rearmados por cambio de cara; ojos por huesos %d (cuadros con parpado cerrado %d); huesos leidos con el giro del mod todavia puesto %d; esqueletos:", g_cfg.live[340][0], g_cfg.live[340][1], g_cfg.live[347][0], g_cfg.live[350][0], calls, aw, ask, ap, nj, bw, st, ew, bl, reusedAll);
-        k += snprintf(l + k, sizeof l - k, " [parpados sin agrandar %d, llevados a la cabeza %d]", lsk, lhf);
+        k += snprintf(l + k, sizeof l - k, " [parpados sin agrandar %d, llevados a la cabeza %d giro / %d posicion]", lsk, lhf, lhft);
         for (int i = 0; i < s_nSk && k < (int)sizeof l - 120; i++) {
             Skel& S = s_sk[i];
             if (fr - S.lastFrame > 600) continue;
