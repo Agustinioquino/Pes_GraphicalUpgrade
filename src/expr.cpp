@@ -44,6 +44,7 @@ struct FaceMesh {
     int lids[4] = { -1, -1, -1, -1 }; UINT lidCap = 0;   // (02/11 h) parpados en la paleta y ultimo cuadro en que se leyo la paleta
     int shapeOff = -1; uint32_t huella = 0; ID3D11ShaderResourceView* shapeWr = nullptr;   // (04/11) gestos esculpidos (formas\<huella>.bin): primer float4 de esta malla en s_shapeData
     ID3D11Buffer* seamBuf = nullptr; ID3D11ShaderResourceView* seamSrv = nullptr; int seamN = 0;   // (04/11 b) teselacion (facetess.cpp): peso de borde por vertice (t119), solo piel de la cara; seamN = vertices con peso 0
+    int seamEye = 0;   // (04/11 h) vertices del borde de la abertura del ojo (peso 2: redondeo propio, fila 366)
     bool body = false;   // (04/11 g) piel del cuerpo (VS 1c02a92a): solo pesos de borde para la teselacion, sin nada de cara
     UINT cbv[28] = {}; std::vector<float> xferPs; uint64_t xferIb = 0; int xferUsed = 0; bool xferGate = false; ID3D11Buffer* cbNoShape = nullptr; ID3D11Buffer* cbTeeth = nullptr;
     bool beard = false, beardSrc = false; int geoId = 0, teethHits = 0; bool teethOn = false; ID3D11Buffer* idBuf = nullptr; std::vector<float> beardPs; int beardTries = 0;   // (04/11 c) barba: malla del pelo enlazada a la piel / piel que le pasa su paleta   // (04/11 c) lo que lleva el cbuffer y, si espera formas pasadas de la piel, sus vertices
@@ -168,7 +169,10 @@ void FreeMesh(FaceMesh* m) {   // (04/11 b) todo lo de una malla que sale de la 
 // teselacion (pes_face_tess.hlsli): 0 en los vertices del borde de la pieza (arista con un solo triangulo: ahi empieza otra pieza
 // o termina la malla) y en los duplicados por posicion (costuras duras / de UV: el otro vertice tiene otra normal y el borde
 // curvado no coincidiria), 1 en el resto. Con 0 en los dos extremos la arista queda recta en las dos piezas y siguen encajando.
-void SeamWeights(const std::vector<uint32_t>& tri, UINT vmin, UINT nv, const std::vector<float>& ps, std::vector<float>& w, int* nSeam) {
+// (04/11 h, Agustin: "se nota el bajo nivel poligonal en el lagrimal") eyeTag: en la cara, los vertices del BORDE de la pieza que caen
+// en la abertura del ojo (reposo |x| 1.0..5.0 cm, y 1.680..1.715, z > 0.10) y que no son duplicados de otra pieza llevan 2.0 en vez de 0:
+// el shader (fila 366) los deja redondear con su propio tope (lagrimal y contorno de los parpados)
+void SeamWeights(const std::vector<uint32_t>& tri, UINT vmin, UINT nv, const std::vector<float>& ps, std::vector<float>& w, int* nSeam, bool eyeTag = false, int* nEye = nullptr) {
     w.assign(nv, 1.0f);
     std::unordered_map<uint64_t, int> edges; edges.reserve(tri.size());
     for (size_t t = 0; t + 2 < tri.size(); t += 3) {
@@ -177,15 +181,24 @@ void SeamWeights(const std::vector<uint32_t>& tri, UINT vmin, UINT nv, const std
         auto E = [&](uint32_t x, uint32_t y) { if (x > y) std::swap(x, y); edges[((uint64_t)x << 32) | y]++; };
         E(a, b); E(b, c); E(c, a);
     }
-    for (auto& kv : edges) if (kv.second == 1) { w[(UINT)(kv.first >> 32)] = 0; w[(UINT)(kv.first & 0xffffffffu)] = 0; }
+    std::vector<uint8_t> border(eyeTag ? nv : 0);
+    for (auto& kv : edges) if (kv.second == 1) { w[(UINT)(kv.first >> 32)] = 0; w[(UINT)(kv.first & 0xffffffffu)] = 0; if (eyeTag) { border[(UINT)(kv.first >> 32)] = 1; border[(UINT)(kv.first & 0xffffffffu)] = 1; } }
+    std::vector<uint8_t> dup(eyeTag ? nv : 0);
     std::unordered_map<uint64_t, uint32_t> pos; pos.reserve(nv);
     for (UINT v = 0; v < nv; v++) {   // posicion a 0.05 mm
         const float* P = &ps[(size_t)v * 3];
         const int64_t qx = (int64_t)llroundf(P[0] * 20000.0f), qy = (int64_t)llroundf(P[1] * 20000.0f), qz = (int64_t)llroundf(P[2] * 20000.0f);
         uint64_t h = 0xcbf29ce484222325ULL; h = Fnv(h, (uint64_t)qx); h = Fnv(h, (uint64_t)qy); h = Fnv(h, (uint64_t)qz);
         auto it = pos.find(h);
-        if (it == pos.end()) pos[h] = v; else { w[v] = 0; w[it->second] = 0; }
+        if (it == pos.end()) pos[h] = v; else { w[v] = 0; w[it->second] = 0; if (eyeTag) { dup[v] = 1; dup[it->second] = 1; } }
     }
+    int ne = 0;
+    if (eyeTag) for (UINT v = 0; v < nv; v++) {
+        if (!border[v] || dup[v]) continue;
+        const float* P = &ps[(size_t)v * 3]; const float ax = fabsf(P[0]);
+        if (ax >= 0.010f && ax <= 0.050f && P[1] >= 1.680f && P[1] <= 1.715f && P[2] > 0.10f) { w[v] = 2.0f; ne++; }
+    }
+    if (nEye) *nEye = ne;
     int n = 0; for (float f : w) if (f == 0) n++;
     if (nSeam) *nSeam = n;
 }
@@ -752,7 +765,7 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
         // (04/11 b) teselacion de la cara (facetess.cpp): solo la piel de la cara (no boca, no ojo, no pestanas / parpados finos,
         // no piezas chicas): pesos de borde por vertice en un Buffer<float> (t119 del VS)
         if (hd <= 31 && !eye && !mouth && !thin && m->nv >= 200 && g_dev.dev) {
-            std::vector<float> w; SeamWeights(m->tri, m->vmin, m->nv, ps, w, &m->seamN);
+            std::vector<float> w; SeamWeights(m->tri, m->vmin, m->nv, ps, w, &m->seamN, true, &m->seamEye);
             D3D11_BUFFER_DESC bd{}; bd.ByteWidth = (UINT)(w.size() * 4); bd.Usage = D3D11_USAGE_IMMUTABLE; bd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
             D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = w.data();
             if (SUCCEEDED(g_dev.dev->CreateBuffer(&bd, &sd, &m->seamBuf))) {
@@ -769,7 +782,7 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
         if (n++ < 80) {   // uso de cada hueso de la paleta (peso total / peso en la parte alta) para comparar con face_rig.py
             char l[1400]; int k = snprintf(l, sizeof l, "expresiones: malla de cara %d (%u indices, %u vertices, alto %.3f..%.3f m): hueso maximo %d -> cabeza en la paleta %d%s, parpados %d %d / %d %d, boca abajo %08X mitad %08X labio %u arriba %08X comisuras %d %d cejas %d %d%s%s |",
                                            m->id, m->count, m->nv, ylo, yhi, mx, m->head, m->head > 31 ? " (no es cara)" : thin ? " (fina: por vertices)" : mouth ? " (boca: lengua)" : "", lids[0], lids[1], lids[2], lids[3], jawFull, jawHalf, lipTop, lipUp, mus[0], mus[1], mus[2], mus[3], eye ? " (OJO)" : "", (!whole && !mouth && !eye && hd <= 31) ? " (pieza: sin boca/nariz/musculos)" : "");
-            if (m->seamSrv) k += snprintf(l + k, sizeof l - k, " teselable (%d vertices de borde)", m->seamN);
+            if (m->seamSrv) k += snprintf(l + k, sizeof l - k, " teselable (%d vertices de borde, %d en el borde del ojo)", m->seamN, m->seamEye);
             if (eye) k += snprintf(l + k, sizeof l - k, " ojos: izq (%.4f %.4f %.4f) r %.4f, der (%.4f %.4f %.4f) r %.4f", eyes[0], eyes[1], eyes[2], eyes[3], eyes[4], eyes[5], eyes[6], eyes[7]);
             for (int b = 0; b <= mx && k < (int)sizeof l - 24; b++) if (all[b] > 0) k += snprintf(l + k, sizeof l - k, " %d:%.0f/%.0f", b, all[b], top[b]);
             Log("%s", l);
