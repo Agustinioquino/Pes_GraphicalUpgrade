@@ -37,6 +37,8 @@ cbuffer PESHair : register(b11)
   float4 pesHairBrow;   // ceja: grosor, densidad, elevacion, largo (multiplicadores)
   float4 pesHairMisc;   // x = 1 enlazado, y = 1 mapa de pelo propio del usuario
   float4 pesBrowCol;    // (04/11 i) color de ceja del jugador (fila 367 / [cejas_cara]): rgb, w = mezcla con el color pintado
+  float4 pesBrowBack;   // (04/11 l) color a contraluz (fila 369; lo usa el PS)
+  float4 pesBrowX;      // (04/11 l) x = hebras extra del jugador (fila 370)
 }
 Texture1D<float4> IniParams : register(t120);
 #ifdef PES_SHADOW
@@ -215,7 +217,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
 
   [loop] for (uint k = 0; k < PES_PER_INST; k++) {
     uint seed = PesHash(pid * 7919u + (inst * PES_PER_INST + k) * 104729u + 17u);
-    float r0 = PesRnd(seed), r1 = PesRnd(seed), r2 = PesRnd(seed), r3 = PesRnd(seed), rk = PesRnd(seed);
+    float r0 = PesRnd(seed), r1 = PesRnd(seed), r2 = PesRnd(seed), r3 = PesRnd(seed), rk = PesRnd(seed), re = PesRnd(seed);
     if (r0 + r1 > 1.0) { r0 = 1.0 - r0; r1 = 1.0 - r1; }
     float3 b = float3(1.0 - r0 - r1, r0, r1);
     float2 uv = uv0 * b.x + uv1 * b.y + uv2 * b.z;
@@ -225,21 +227,37 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     // (04/11 i, Agustin: "la cantidad tiene que agregar mas pelo donde falta") con cantidad > 1 la hebra tambien nace en la parte
     // rala / clara de la ceja pintada (umbral del contorno mas bajo) y alli con la misma densidad que en lo tupido: rellena huecos
     float fill = hb ? saturate((pesHairBrow.y - 1.0) * 0.6) : 0.0;
-    if (ph < lerp(0.35, 0.12, fill)) continue;               // fuera de la ceja pintada
     // (04/11 l, Agustin: "no me gusta la cantidad de pelo y como respeta la textura") la densidad sigue la pintura: tupido donde la
     // ceja pintada es oscura y llena, ralo en el borde claro (antes casi pareja en toda la ceja)
-    if (rk >= keepBase * saturate(m.r + fill) * saturate((ph - 0.3) * 2.2 + fill * 1.5)) continue;
+    bool born = ph >= lerp(0.35, 0.12, fill) && rk < keepBase * saturate(m.r + fill) * saturate((ph - 0.3) * 2.2 + fill * 1.5);
+    // (04/11 l, Agustin: "permitirme cargar 400 hebras mas por jugador") x370 = hebras EXTRA en total (las dos cejas, ~0.016 de area UV
+    // cada una): nacen sobre todo donde la ceja pintada es rala (rellenan huecos), nunca fuera de la ceja pintada
+    float pX = hb ? uvArea * max(pesBrowX.x, 0.0) * 31.0 / (float)(PES_INST * PES_PER_INST) * saturate(1.3 - ph) * 1.6 : 0.0;
+    bool extra = ph >= 0.12 && re < pX;
+    if (!born && !extra) continue;
     float3 root = P0 * b.x + P1 * b.y + P2 * b.z;
     float3 n = normalize(v[0].nrm.xyz * b.x + v[1].nrm.xyz * b.y + v[2].nrm.xyz * b.z);
     // direccion del peinado: angulo del mapa (B) en el plano UV, llevado a 3D y apoyado sobre la piel
     float ang = m.b * 6.2831853;
-    float2 dirUV = normalize(lerp(PesBrowDirUV(uv), float2(cos(ang), sin(ang)), 0.7)) * flip;   // (04/11 l) 70 % los trazos pintados + 30 % plantilla (antes 25 %)
+    float2 dirUV = normalize(lerp(PesBrowDirUV(uv), float2(cos(ang), sin(ang)), 0.9)) * flip;   // (04/11 l) 90 % los trazos pintados (Agustin: "que crezcan casi todos los trazos de la textura")
     float3 d = dPdu * dirUV.x + dPdv * dirUV.y;
     float mPerUV = length(d);
     d = d - n * dot(d, n);
     if (dot(d, d) < 1e-12) continue;
     d = normalize(d);
     float3 bt = normalize(cross(n, d));
+    // (04/11 l, Agustin: "abajo de las cejas, con animaciones muy extremas" no siguen) la hebra era recta en el plano de la raiz: con
+    // un gesto fuerte la piel de abajo se pliega y la punta se hundia. Curvatura de la piel a lo largo del pelo (normales del
+    // triangulo deformado): la hebra sube con el pliegue (concavo) y baja a medias en lo convexo, siempre pegada a la piel
+    float kap;
+    {
+      float3 n0 = v[0].nrm.xyz, n1 = v[1].nrm.xyz, n2 = v[2].nrm.xyz;
+      float3 f1 = n1 - n0, f2 = n2 - n0;
+      float3 dNdu = (f1 * d2.y - f2 * d1.y) / det, dNdv = (f2 * d1.x - f1 * d2.x) / det;
+      float3 dNds = (dNdu * dirUV.x + dNdv * dirUV.y) / max(mPerUV, 1e-5);
+      kap = clamp(-dot(dNds, d), -60.0, 400.0);   // 1/m: > 0 la piel sube delante del pelo (pliegue)
+      kap = kap > 0.0 ? kap : kap * 0.5;
+    }
     float ga = (r2 - 0.5) * 0.28;                   // giro individual de +-8 grados
     float3 dd = normalize(d * cos(ga) + bt * sin(ga));
     // apenas fuera de la piel; con la teselacion de la cara prendida (x357) la piel redondeada puede subir hasta z358 mm (tope del
@@ -292,6 +310,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
       // pelo se ve salir del poro, sin borde ni separacion
       float emerge = -0.0003 + 0.00045 * saturate(t * 4.0);
       float3 p = root + n * emerge + dd * len * t + n * len * lift * (0.35 * sin(t * 3.14159) + 0.1 * t) + bt * len * curl * 0.5 * sin(t * 6.2831853 + r3 * 6.2831853) * t;
+      p += n * clamp(0.5 * kap * (len * t) * (len * t), -0.25 * len, 0.6 * len);   // (04/11 l) sigue el pliegue de la piel
       float wid = widB * (1.0 - 0.85 * t);
       float pxV = 2.0 * abs(p.z) / (max(abs(m_projection[1].y), 1e-4) * vpH);   // un pixel en la vista a esta distancia
       wid = max(wid, pxV * (P75.z > 0.5 ? 1.25 : 0.45));                         // nunca menos de ~1 px de ancho total

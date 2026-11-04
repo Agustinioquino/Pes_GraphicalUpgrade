@@ -18,6 +18,9 @@ cbuffer PESHair : register(b11)
   float4 pesHairTip;    // color punta rgb, w = 1 si esta definido
   float4 pesHairBrow;   // ceja: grosor, densidad, elevacion, largo (multiplicadores)
   float4 pesHairMisc;   // x = 1 enlazado, y = 1 mapa de pelo propio del usuario
+  float4 pesBrowCol;    // (04/11 i) color de ceja del jugador (lo usa el GS)
+  float4 pesBrowBack;   // (04/11 l) color A CONTRALUZ del jugador (fila 369): rgb, w = mezcla (0 = el mismo de frente)
+  float4 pesBrowX;      // (04/11 l) x = hebras extra (lo usa el GS)
 }
 Texture1D<float4> IniParams : register(t120);
 // (04/11 e) la escena del PS (la deja enlazada el dibujo de la cara; misma que usa el pelo 02f1d510): matriz de la vista para la luz
@@ -98,6 +101,18 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
     float3 ms = pow(cs + 1e-4, 0.8);
     float ml = dot(ms, float3(0.2126, 0.7152, 0.0722));
     col = max(ml + (ms - ml) * 1.15, 0.0);
+  }
+  // (04/11 l, Agustin: "me gustaria poder cambiar el color frente a la luz o normal y a contraluz") con la luz detras de la ceja
+  // (mirando hacia el sol) el pelo deja pasar la luz y se ve de otro tono: el color elegido para el contraluz entra segun cuanto
+  // esta la camara del lado opuesto a la luz. Las pestanas (sin b11) y x369 = 0 quedan igual
+  if (P75.z < 0.5 && pesHairMisc.x > 0.5 && pesBrowBack.w > 0.001) {
+    float3 L = g_psSystem.m_dominantLightDir.xyz;
+    if (IniParams.Load(int2(50,0)).z < 0.5) L = float3(dot(L, g_psScene.m_view._m00_m10_m20), dot(L, g_psScene.m_view._m01_m11_m21), dot(L, g_psScene.m_view._m02_m12_m22));
+    if (dot(L, L) > 0.25) {
+      float kb = smoothstep(0.05, 0.75, dot(-normalize(L), normalize(i.viewV))) * saturate(pesBrowBack.w);
+      float3 cb = saturate(pesBrowBack.rgb) * lerp(1.0, 1.15, t);   // la punta deja pasar mas luz
+      col = lerp(col, cb, kb);
+    }
   }
   o0 = float4(saturate(col), 1.0);
   // normal + translucidez (hebra: 0.15) empaquetadas como en el shader de cara
