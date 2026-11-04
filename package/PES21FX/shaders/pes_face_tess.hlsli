@@ -17,6 +17,11 @@
 // - Las salidas del DS son las del VS en el MISMO orden (los PS del juego leen los registros por orden): la posicion en clip,
 //   o7.xy / o8.x (TEXCOORD8 / 9) y el vector a la camara (o3.xyz) se recalculan con la posicion nueva; el resto se interpola.
 //
+// - (04/11 c, Agustin: "no noto alguna diferencia") RELIEVE: con la fila 359 los puntos nuevos ademas se corren por la normal
+//   segun la quinta textura de la cara (facegen.cpp, sacada del normal map del juego: t23 A.r cavidad, A.g curvatura, t24 B.b
+//   convexidad grande): surcos, comisuras y arrugas se hunden (y359 mm), labios, nariz, orejas y pomulos suben (z359 mm), por
+//   x359 (fuerza, 0 = apagado). Solo donde hay peso de borde y de cerca, como el redondeo.
+//
 // PES_TESS_V455 = 1: variante del VS 455eb97b (TEXCOORD0 float4, TEXCOORD9 al final); 0: faab87ee (TEXCOORD0 y 9 float2 juntos).
 // PES_TESS_CCW = 1: triangulos de salida con la orientacion invertida (w358; si la cara se ve del reves / desaparece).
 
@@ -172,6 +177,11 @@ cbuffer cVSScene : register(b2)
 
 #define PES_LERP3(F) (b.x * p[0].F + b.y * p[1].F + b.z * p[2].F)
 
+// (04/11 c) quinta textura de la cara (la misma del PS de la piel, la DLL la copia al DS)
+Texture2D<float4> pesFaceA : register(t23);
+Texture2D<float4> pesFaceB : register(t24);
+SamplerState pesTessSamp : register(s0);
+
 [domain("tri")]
 PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<PesTessCP, 3> p)
 {
@@ -191,6 +201,23 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
   float3 d = (pp - pl) * (saturate(T.y) * seam * fade * (T.x > 0.5 ? 1.0 : 0.0));
   float dl = length(d), tope = max(U.z, 0.0) * 0.001;
   if (dl > tope) d *= tope / max(dl, 1e-6);
+  // (04/11 c) relieve desde la quinta textura (fila 359): por la normal interpolada, mm
+  float4 R = IniParams.Load(int2(359, 0));   // x fuerza, y hundir surcos (mm), z levantar relieve (mm), w mip
+  if (R.x > 0.001 && T.x > 0.5) {
+#if PES_TESS_V455
+    float2 uv = PES_LERP3(o2).zw;   // ce188: UV de la cara en TEXCOORD0.zw
+#else
+    float2 uv = PES_LERP3(o2).xy;
+#endif
+    float lod = clamp(R.w, 0.0, 6.0);
+    float4 FB = pesFaceB.SampleLevel(pesTessSamp, uv, lod);
+    if (FB.a > 0.5) {
+      float4 FA = pesFaceA.SampleLevel(pesTessSamp, uv, lod);
+      float hmm = max(R.z, 0.0) * (FB.b + saturate(FA.g * 2.0 - 1.0)) - max(R.y, 0.0) * FA.r;
+      float3 Nn = normalize(b.x * N0 + b.y * N1 + b.z * N2);
+      d += Nn * (clamp(hmm * R.x, -3.0, 3.0) * 0.001 * seam * fade);
+    }
+  }
   float3 pv = pl + d;
 
   float4 clip = mul(float4(pv, 1.0), g_vsScene.m_projection);

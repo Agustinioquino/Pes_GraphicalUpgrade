@@ -20,6 +20,8 @@ static ID3D11DomainShader* s_ds[2] = {};
 static std::map<uint64_t, ID3D11Buffer*> s_vpCB;   // cbuffer b13 del HS por tamano de viewport (inmutables, pocos)
 static std::atomic<int> s_draws{0}, s_skipTopo{0}, s_noShader{0}, s_skipFar{0};
 static std::atomic<int> s_lastVpW{0}, s_lastVpH{0};
+static std::atomic<int> s_relief{0};   // (04/11 c) dibujos con la quinta textura en el DS (relieve)
+static ID3D11SamplerState* s_samp = nullptr;
 
 static void Ensure() {
     if (s_tried || !g_dev.dev) return;
@@ -31,6 +33,7 @@ static void Ensure() {
         for (int w = 0; w < 2; w++) if (ID3DBlob* b = CompileNamedShader(hs[v][w], "hs_5_0")) { if (SUCCEEDED(g_dev.dev->CreateHullShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_hs[v][w]))) ok++; b->Release(); }
         if (ID3DBlob* b = CompileNamedShader(ds[v], "ds_5_0")) { if (SUCCEEDED(g_dev.dev->CreateDomainShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_ds[v]))) ok++; b->Release(); }
     }
+    if (!s_samp) { D3D11_SAMPLER_DESC sd{}; sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR; sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP; sd.MaxLOD = D3D11_FLOAT32_MAX; g_dev.dev->CreateSamplerState(&sd, &s_samp); }
     Log("teselacion de caras: shaders %d de 6 %s", ok, ok == 6 ? "listos" : "(faltan: ver errores de compilacion)");
 }
 
@@ -81,6 +84,10 @@ bool FaceTessBegin(ID3D11DeviceContext* c, uint64_t vsHash, ID3D11ShaderResource
     c->HSSetShader(hs, nullptr, 0); c->DSSetShader(ds, nullptr, 0);
     c->HSSetConstantBuffers(13, 1, &vb);
     c->HSSetShaderResources(120, 1, &params); c->DSSetShaderResources(120, 1, &params);
+    // (04/11 c) relieve: la quinta textura de la cara (t23 / t24 del PS, la pone la regla facegen antes) tambien al DS
+    { ID3D11ShaderResourceView* fab[2] = {}; c->PSGetShaderResources(23, 2, fab);
+      if (fab[0] && fab[1]) { c->DSSetShaderResources(23, 2, fab); if (s_samp) c->DSSetSamplers(0, 1, &s_samp); s.relief = true; s_relief.fetch_add(1, std::memory_order_relaxed); }
+      for (auto* v : fab) if (v) v->Release(); }
     c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
     s.on = true; s.topo = topo;
     s_draws.fetch_add(1, std::memory_order_relaxed);
@@ -95,16 +102,17 @@ void FaceTessEnd(ID3D11DeviceContext* c, FaceTessScope& s) {
     ID3D11Buffer* nb = nullptr; ID3D11ShaderResourceView* nv = nullptr;
     c->HSSetConstantBuffers(13, 1, &nb); c->DSSetConstantBuffers(2, 1, &nb);
     c->HSSetShaderResources(120, 1, &nv); c->DSSetShaderResources(120, 1, &nv);
+    if (s.relief) { ID3D11ShaderResourceView* n2[2] = {}; ID3D11SamplerState* ns = nullptr; c->DSSetShaderResources(23, 2, n2); c->DSSetSamplers(0, 1, &ns); s.relief = false; }
 }
 
 void FaceTessPresent() {
     static int frames = 0;
     if (++frames < 3600) return;
     frames = 0;
-    const int d = s_draws.exchange(0), st = s_skipTopo.exchange(0), ns = s_noShader.exchange(0);
+    const int d = s_draws.exchange(0), st = s_skipTopo.exchange(0), ns = s_noShader.exchange(0), rl = s_relief.exchange(0);
     if (!d && !st && !ns) return;
-    Log("teselacion de caras: %d dibujos teselados en 60 s (sin triangulos sueltos %d, sin shader %d); viewport %dx%d; suavidad %.2f, %.0f px por segmento, factor maximo %.0f, hasta %.2f m (+%.2f), tope %.1f mm, orientacion %s",
-        d, st, ns, s_lastVpW.load(), s_lastVpH.load(), g_cfg.live[357][1], g_cfg.live[357][2], g_cfg.live[357][3], g_cfg.live[358][0], g_cfg.live[358][1], g_cfg.live[358][2], g_cfg.live[358][3] > 0.5f ? "invertida" : "igual");
+    Log("teselacion de caras: %d dibujos teselados en 60 s (con relieve %d; sin triangulos sueltos %d, sin shader %d); viewport %dx%d; suavidad %.2f, %.0f px por segmento, factor maximo %.0f, hasta %.2f m (+%.2f), tope %.1f mm, orientacion %s; relieve x%.2f surcos %.2f mm relieve %.2f mm mip %.0f",
+        d, rl, st, ns, s_lastVpW.load(), s_lastVpH.load(), g_cfg.live[357][1], g_cfg.live[357][2], g_cfg.live[357][3], g_cfg.live[358][0], g_cfg.live[358][1], g_cfg.live[358][2], g_cfg.live[358][3] > 0.5f ? "invertida" : "igual", g_cfg.live[359][0], g_cfg.live[359][1], g_cfg.live[359][2], g_cfg.live[359][3]);
 }
 
 }   // namespace fx
