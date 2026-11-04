@@ -48,7 +48,7 @@ REAL_W = {True: [8.1, 6.8, 7.7, 7.1, 6.7],   # (04/11) Agustin 'reducir el taman
 PROFILE = os.environ.get('MOUTH_PROFILE', '')
 PROF = {
     '': dict(ext_up={'IC': -0.8, 'I': -0.8, 'C': -0.3}, corner_ic=(0.02, 0.08), corner_i_up=(0.04, 0.14), lat_back=0.0, canine=0.30),
-    'messi': dict(ext_up={'IC': 0.6, 'I': 0.4, 'C': 0.0}, corner_ic=(0.03, 0.06), corner_i_up=(0.03, 0.07), lat_back=0.0, canine=0.08, even=True, ext_lo=2.0, corner_lo=(0.02, 0.04)),   # (04/11 e) Agustin con captura del juego vs foto ('le falta naturalidad con las encias y el tamano de los dientes'): en la foto los de arriba son largos, anchos y parejos (carillas) y se ven enteros; en el juego cortos -> 1.6 mm mas largos que antes, esquinas apenas redondeadas
+    'messi': dict(ext_up={'IC': -0.2, 'I': -0.4, 'C': -0.7}, corner_ic=(0.03, 0.06), corner_i_up=(0.03, 0.07), lat_back=0.0, canine=0.08, even=True, ext_lo=2.0, corner_lo=(0.02, 0.04)),   # (04/11 e) Agustin con captura del juego vs foto ('le falta naturalidad con las encias y el tamano de los dientes'): en la foto los de arriba son largos, anchos y parejos (carillas) y se ven enteros; en el juego cortos -> 1.6 mm mas largos que antes, esquinas apenas redondeadas. (04/11 g) 'ahora son muy largos, un poco mas cortos': -0.8 mm (a mitad de camino)
 }[PROFILE]
 if PROFILE == 'messi': REAL_W = {True: [8.7, 7.7, 7.9, 7.1, 6.7], False: REAL_W[False]}   # (04/11 e) foto: centrales y laterales anchos   # (04/11 c) laterales anchos (comun 8.1 / 6.8)
 
