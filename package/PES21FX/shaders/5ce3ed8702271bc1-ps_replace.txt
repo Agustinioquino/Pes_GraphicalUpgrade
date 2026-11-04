@@ -42,6 +42,26 @@ cbuffer cPSMaterial : register(b4)
   } g_psMaterial : packoffset(c0);
 }
 
+cbuffer cPSScene : register(b2)   // (04/11 piel) vista, para llevar la luz dominante (mundo) a la vista: micro sombra de los poros
+{
+  struct
+  {
+    float4x4 m_projectionView;
+    float4x4 m_projection;
+    float4x4 m_view;
+    float4x4 m_shadowProjection;
+    float4x4 m_shadowProjection2;
+    float4 m_eyepos;
+    float4 m_projectionParam;
+    float4 m_viewportSize;
+    float4 m_exposure;
+    float4 m_fogParam[3];
+    float4 m_fogColor;
+    float4 m_cameraCenterOffset;
+    float4 m_shadowMapResolutions;
+  } g_psScene : packoffset(c0);
+}
+
 cbuffer cPSSystem : register(b0)
 {
   struct
@@ -857,6 +877,19 @@ void main(
           if (dbg75 > 1.5) o0.xyz = float3(0.0, 1.0, 1.0);   // diagnostico 2: pixel que escribio la semilla en cian
         }
       }
+    } }
+  // (04/11 piel) MICRO SOMBRA de los poros y surcos (Chan 2018, Call of Duty WWII; la de HDRP / UE5 para el detalle): la normal del
+  // poro ya cambia como le pega la luz, pero el fondo de un hueco ademas queda TAPADO por sus paredes cuando la luz viene rasante
+  // (de costado, sol bajo, luz de arriba en la frente). Visibilidad = saturate(|N.L| + 2 ao^2 - 1): con la luz de frente no cambia
+  // nada, rasante el fondo del poro se oscurece. Luz = la dominante del cuadro (el sol), llevada a la vista como el pelo y los ojos
+  if (enhance && pesPoreA > 0.001) {
+    float3 Lw = g_psSystem.m_dominantLightDir.xyz;
+    float vOk = dot(g_psScene.m_view._m00_m10_m20, g_psScene.m_view._m00_m10_m20);   // b2 enlazado (si no, no se toca nada)
+    if (vOk > 0.25 && dot(Lw, Lw) > 0.25) {
+      float3 Lv = normalize(float3(dot(Lw, g_psScene.m_view._m00_m10_m20), dot(Lw, g_psScene.m_view._m01_m11_m21), dot(Lw, g_psScene.m_view._m02_m12_m22)));
+      float msAo = 1.0 - saturate(pesPoreA * 0.75 * saturate(IniParams.Load(int2(94,0)).x));
+      float msVis = saturate(abs(dot(normalize(r1.xyz), Lv)) + 2.0 * msAo * msAo - 1.0);
+      o0.xyz *= lerp(1.0, msVis, 0.85);
     } }
   // ---- empaquetado normal octaedrica + translucidez ----
   r0.x = r1.w * 63 + 0.5;
