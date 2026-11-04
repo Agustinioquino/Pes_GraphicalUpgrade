@@ -44,6 +44,7 @@ struct FaceMesh {
     int lids[4] = { -1, -1, -1, -1 }; UINT lidCap = 0;   // (02/11 h) parpados en la paleta y ultimo cuadro en que se leyo la paleta
     int shapeOff = -1; uint32_t huella = 0; ID3D11ShaderResourceView* shapeWr = nullptr;   // (04/11) gestos esculpidos (formas\<huella>.bin): primer float4 de esta malla en s_shapeData
     ID3D11Buffer* seamBuf = nullptr; ID3D11ShaderResourceView* seamSrv = nullptr; int seamN = 0;   // (04/11 b) teselacion (facetess.cpp): peso de borde por vertice (t119), solo piel de la cara; seamN = vertices con peso 0
+    bool body = false;   // (04/11 g) piel del cuerpo (VS 1c02a92a): solo pesos de borde para la teselacion, sin nada de cara
     UINT cbv[28] = {}; std::vector<float> xferPs; uint64_t xferIb = 0; int xferUsed = 0; bool xferGate = false; ID3D11Buffer* cbNoShape = nullptr; ID3D11Buffer* cbTeeth = nullptr;
     bool beard = false, beardSrc = false; int geoId = 0, teethHits = 0; bool teethOn = false; ID3D11Buffer* idBuf = nullptr; std::vector<float> beardPs; int beardTries = 0;   // (04/11 c) barba: malla del pelo enlazada a la piel / piel que le pasa su paleta   // (04/11 c) lo que lleva el cbuffer y, si espera formas pasadas de la piel, sus vertices
 };
@@ -562,6 +563,27 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
         }
         for (int s = 0; s < 4; s++) if (mapped[s]) imm->Unmap(m->stVB[s], 0);
         if (!ok) { Reject(m, "formato de posicion, huesos o pesos desconocido"); return; }
+        if (m->body) {
+            // (04/11 g, Agustin: "teselacion a las manos, brazos y piernas") PIEL DEL CUERPO: solo los pesos de borde (bordes de la pieza y
+            // vertices duplicados = 0) en t119 y el cbuffer con vertices / primer indice (g_pesExprShape.y / .z, con el base del dibujo);
+            // nada de cabeza, parpados ni formas. La paleta del cuerpo puede pasar de 32 huesos: no importa aca.
+            std::vector<float> w; SeamWeights(m->tri, m->vmin, m->nv, ps, w, &m->seamN);
+            D3D11_BUFFER_DESC bd{}; bd.ByteWidth = (UINT)(w.size() * 4); bd.Usage = D3D11_USAGE_IMMUTABLE; bd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = w.data();
+            if (SUCCEEDED(g_dev.dev->CreateBuffer(&bd, &sd, &m->seamBuf))) {
+                D3D11_SHADER_RESOURCE_VIEW_DESC vd{}; vd.Format = DXGI_FORMAT_R32_FLOAT; vd.ViewDimension = D3D11_SRV_DIMENSION_BUFFER; vd.Buffer.FirstElement = 0; vd.Buffer.NumElements = (UINT)w.size();
+                if (FAILED(g_dev.dev->CreateShaderResourceView(m->seamBuf, &vd, &m->seamSrv))) { m->seamBuf->Release(); m->seamBuf = nullptr; m->seamSrv = nullptr; }
+            } else m->seamBuf = nullptr;
+            const UINT shp[4] = { 0u, m->nv, m->vmin, 0u };   // igual que la cara (PesTessSeam: vid - vmin)
+            m->head = 99; m->maxIdx = mx < 0 ? 0 : mx;
+            m->cb = MakeCB(99, (UINT)m->maxIdx, (UINT)m->id, 0, nullptr, 0, 0, 99, 0, nullptr, nullptr, shp, m->cbv);
+            m->tri.clear(); m->tri.shrink_to_fit(); ReleaseIA(m);
+            if (!m->cb || !m->seamSrv) { m->state = 4; m->why = m->cb ? "sin pesos de borde" : "sin cbuffer"; s_hist[3]++; return; }
+            m->state = 3;
+            static int nb = 0;
+            if (nb < 80) { nb++; Log("teselacion del cuerpo: malla %d: %u vertices, %u triangulos, alto %.2f..%.2f m, ancho %.2f m: teselable (%d vertices de borde)", m->id, m->nv, m->count / 3, ylo, yhi, xhi - xlo, m->seamN); }
+            return;
+        }
         if (mx < 0 || mx > 31) { Reject(m, "indices de hueso fuera de la paleta de 32"); return; }
         if (m->beard) {   // (04/11 c) malla del VS del pelo: se enlaza a la piel de la cara (si todavia no se leyo la piel, se reintenta)
             ReleaseIA(m);
@@ -808,14 +830,14 @@ bool BeardForDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, ID3D
     *cb = b; *pool = s_poolSrv; *bind = s_beardSrv;
     return s_poolSrv && s_beardSrv;
 }
-ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, const float** headCentroid, int* headIdx, ID3D11ShaderResourceView** shapeSrv, ID3D11ShaderResourceView** shapeWr, ID3D11ShaderResourceView** tessSeam) {
+ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, const float** headCentroid, int* headIdx, ID3D11ShaderResourceView** shapeSrv, ID3D11ShaderResourceView** shapeWr, ID3D11ShaderResourceView** tessSeam, bool body) {
     if (headCentroid) *headCentroid = nullptr;
     if (tessSeam) *tessSeam = nullptr;
     if (shapeSrv) *shapeSrv = nullptr;
     if (shapeWr) *shapeWr = nullptr;
     if (!g_dev.dev) return nullptr;
     if (!s_none) { std::lock_guard<std::mutex> lk(s_mx); if (!s_none) s_none = MakeCB(99, 0, 0); }
-    if (g_cfg.live[340][0] < 0.5f || count < 3) { s_bindsNone++; return s_none; }
+    if ((!body && g_cfg.live[340][0] < 0.5f) || count < 3) { s_bindsNone++; return s_none; }   // (04/11 g) el cuerpo no depende de las expresiones
     ID3D11Buffer* ib = nullptr; DXGI_FORMAT ibFmt = DXGI_FORMAT_UNKNOWN; UINT ibOff = 0; c->IAGetIndexBuffer(&ib, &ibFmt, &ibOff);
     ID3D11Buffer* vb[4] = {}; UINT stride[4] = {}, off[4] = {}; c->IAGetVertexBuffers(0, 4, vb, stride, off);
     ID3D11InputLayout* il = nullptr; c->IAGetInputLayout(&il);
@@ -888,7 +910,8 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
         }
     }
     FaceMesh* m = new FaceMesh(); m->id = s_nextId++; m->lastFrame = s_frame; m->beard = t_beardDraw;
-    m->dump = s_frame < s_dumpUntil.load(std::memory_order_relaxed);
+    m->dump = !body && s_frame < s_dumpUntil.load(std::memory_order_relaxed);
+    m->body = body;
     m->ib = ib; m->ibFmt = ibFmt; m->ibOff = ibOff; m->start = start; m->count = count; m->base = base;
     for (int i = 0; i < 4; i++) { m->vb[i] = vb[i]; m->stride[i] = stride[i]; m->off[i] = off[i]; vb[i] = nullptr; }
     ib = nullptr;
