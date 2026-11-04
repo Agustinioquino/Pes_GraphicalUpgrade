@@ -181,6 +181,81 @@ static void PoseOf(int d, float ang, float smi, float sur, float* o) {
     for (const PoseOff& p : kPose) if (p.d == d) { for (int k = 0; k < 3; k++) o[k] = p.a[k] * ang + p.s[k] * smi + p.u[k] * sur; return; }
 }
 static float s_poseSmile = 0.0f;   // para Secondary (mejillas)
+// (04/11, Agustin: "para messi una expresion de gritar custom ... para una mayor similitud a la vida real"; "la cara neutra me gusta
+// la del juego pero si puedes modificarla poco") GESTOS NUEVOS (fila 356: x grito, y puchero) y PERFILES POR CARA (PES21FX\caras.ini):
+// por jugador (id de face\real\<id> o parte del nombre) corrimientos propios por hueso para la neutra (z356 dosifica, 0 = la del juego)
+// y para cada gesto (se suman a los del mod). En mm, ejes de la cabeza (x a la izquierda del jugador, y arriba, z adelante).
+// Solo huesos de labios / nariz / cejas (1..17, 26..30): los parpados y las mejillas tienen otro dueno, la mandibula gira aparte.
+struct PoseOff2 { int d; float g[3], p[3]; };   // g = grito, p = puchero
+static const PoseOff2 kPose2[] = {
+    {  1, { -0.0006f, -0.0010f, 0 },          {  0.0003f,  0.0015f,  0.0012f } },   // lip_b_l
+    {  2, {  0.0006f, -0.0010f, 0 },          { -0.0003f,  0.0015f,  0.0012f } },   // lip_b_r
+    {  3, { 0, -0.0010f, 0 },                 { 0,  0.0025f,  0.0020f } },          // lip_b_c: puchero = labio de abajo arriba y afuera
+    {  4, { 0, 0, 0 },                        { 0,  0.0020f,  0.0010f } },          // doublechin: menton que sube (mentoniano)
+    {  5, {  0.0030f, -0.0005f, -0.0012f },   { -0.0005f, -0.0020f, 0 } },          // lip_s_l: grito = comisura afuera y atras
+    {  6, { -0.0030f, -0.0005f, -0.0012f },   {  0.0005f, -0.0020f, 0 } },          // lip_s_r
+    {  7, {  0.0010f, -0.0005f, 0 },          { 0, -0.0008f, 0 } },                 // cheek_s_l
+    {  8, { -0.0010f, -0.0005f, 0 },          { 0, -0.0008f, 0 } },                 // cheek_s_r
+    {  9, {  0.0005f,  0.0020f, 0 },          { 0,  0.0003f,  0.0008f } },          // lip_t_l: grito = labio de arriba sube (dientes)
+    { 10, { 0,  0.0018f, 0 },                 { 0,  0.0003f,  0.0008f } },          // lip_t_c
+    { 11, { -0.0005f,  0.0020f, 0 },          { 0,  0.0003f,  0.0008f } },          // lip_t_r
+    { 14, {  0.0004f,  0.0012f, 0 },          { 0, 0, 0 } },                        // nosewing_l
+    { 15, { -0.0004f,  0.0012f, 0 },          { 0, 0, 0 } },                        // nosewing_r
+    { 16, {  0.0005f,  0.0012f, 0 },          { 0, 0, 0 } },                        // nasolabialfold_t_l
+    { 17, { -0.0005f,  0.0012f, 0 },          { 0, 0, 0 } },                        // nasolabialfold_t_r
+    { 26, { -0.0018f,  0.0015f, 0.0004f },    { -0.0008f,  0.0030f, 0 } },          // brow_i_l: grito = juntas y arriba; puchero = triste
+    { 27, {  0.0018f,  0.0015f, 0.0004f },    {  0.0008f,  0.0030f, 0 } },          // brow_i_r
+    { 28, { 0, -0.0008f, 0 },                 { 0, -0.0005f, 0 } },                 // brow_o_l
+    { 29, { 0, -0.0008f, 0 },                 { 0, -0.0005f, 0 } },                 // brow_o_r
+    { 30, { 0, -0.0008f, -0.0003f },          { 0,  0.0010f, 0 } },                 // glabella: arruga del entrecejo
+};
+enum { PG_NEUTRA = 0, PG_ENOJO, PG_SONRISA, PG_ASOMBRO, PG_GRITO, PG_PUCHERO, PG_N };
+static const char* const kPgName[PG_N] = { "neutra", "enojo", "sonrisa", "asombro", "grito", "puchero" };
+struct FaceProf { char sec[48] = {}; uint32_t id = 0; char name[48] = {}; float off[PG_N][kND][3] = {}; bool has[PG_N] = {}; int nVals = 0; };
+static std::vector<FaceProf> s_prof; static unsigned s_profGen = 0; static FILETIME s_profTime = {}; static bool s_profHave = false;
+static unsigned s_profCheck = 0xffffffffu;
+static bool ProfBoneOk(int d) { return (d >= 1 && d <= 17) || (d >= 26 && d <= 30); }
+static void ProfTrim(char*& a) { while (*a == ' ' || *a == '\t') a++; char* e = a + strlen(a); while (e > a && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r' || e[-1] == '\n')) *--e = 0; }
+static void ProfLoad() {   // con s_mx tomado
+    const std::wstring path = g_cfg.baseDir + L"caras.ini";
+    WIN32_FILE_ATTRIBUTE_DATA fa = {};
+    const bool have = GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &fa) != 0;
+    if (have == s_profHave && (!have || CompareFileTime(&fa.ftLastWriteTime, &s_profTime) == 0)) return;
+    s_profHave = have; s_profTime = fa.ftLastWriteTime; s_prof.clear(); s_profGen++;
+    if (!have) { Log("caras: sin caras.ini (perfiles por cara apagados)"); return; }
+    FILE* f = _wfopen(path.c_str(), L"rb"); if (!f) { Log("caras: caras.ini no se pudo abrir"); return; }
+    char line[512]; int bad = 0, lineNo = 0; FaceProf* cur = nullptr;
+    while (fgets(line, sizeof line, f)) {
+        lineNo++;
+        char* a = line; if (char* c = strchr(a, ';')) *c = 0; ProfTrim(a); if (!*a) continue;
+        if (*a == '[') { char* e = strchr(a, ']'); if (!e) { bad++; continue; } *e = 0; s_prof.emplace_back(); cur = &s_prof.back(); snprintf(cur->sec, sizeof cur->sec, "%s", a + 1); continue; }
+        char* eq = strchr(a, '='); if (!eq || !cur) { bad++; continue; }
+        *eq = 0; char* k = a; char* v = eq + 1; ProfTrim(k); ProfTrim(v);
+        if (!_stricmp(k, "id")) { cur->id = (uint32_t)strtoul(v, nullptr, 10); continue; }
+        if (!_stricmp(k, "nombre")) { snprintf(cur->name, sizeof cur->name, "%s", v); continue; }
+        char* dot = strchr(k, '.'); if (!dot) { bad++; continue; } *dot = 0; const char* bn = dot + 1;
+        int g = -1; for (int i = 0; i < PG_N; i++) if (!_stricmp(k, kPgName[i])) g = i;
+        int d = -1; for (int i = 0; i < kND; i++) if (!_stricmp(bn, kDef[i].name) || !_stricmp(bn, kDef[i].name + (strncmp(kDef[i].name, "skf_", 4) ? 0 : 4))) d = i;
+        float x = 0, y = 0, z = 0;
+        if (g < 0 || d < 0 || !ProfBoneOk(d) || sscanf(v, "%f %f %f", &x, &y, &z) != 3) { bad++; if (bad <= 6) Log("caras: linea %d no valida: %s.%s", lineNo, k, bn); continue; }
+        x = std::clamp(x, -4.0f, 4.0f); y = std::clamp(y, -4.0f, 4.0f); z = std::clamp(z, -4.0f, 4.0f);   // tope 4 mm por hueso
+        cur->off[g][d][0] = x * 0.001f; cur->off[g][d][1] = y * 0.001f; cur->off[g][d][2] = z * 0.001f; cur->has[g] = true; cur->nVals++;
+    }
+    fclose(f);
+    for (const FaceProf& p : s_prof) Log("caras: perfil [%s] id %u nombre '%s', %d valores", p.sec, p.id, p.name, p.nVals);
+    Log("caras: caras.ini leido, %d perfiles, %d lineas no validas", (int)s_prof.size(), bad);
+}
+static bool ProfNameHas(const char* hay, const char* needle) {   // contiene, sin mayusculas (ASCII)
+    if (!*needle) return false;
+    const size_t n = strlen(needle);
+    for (const char* h = hay; *h; h++) if (!_strnicmp(h, needle, n)) return true;
+    return false;
+}
+static int ProfFind(uint32_t id, const char* name) {
+    for (int i = 0; i < (int)s_prof.size(); i++) if (s_prof[i].id && s_prof[i].id == id) return i;
+    for (int i = 0; i < (int)s_prof.size(); i++) if (name[0] && ProfNameHas(name, s_prof[i].name)) return i;
+    return -1;
+}
 static const float* TeethOf(int d) { static const float z[3] = { 0, 0, 0 }; return d < (int)(sizeof(kTeeth) / sizeof(kTeeth[0])) ? kTeeth[d] : z; }
 enum { D_JAW = 0, D_LIPS_L = 5, D_LID_TL = 22, D_LID_TR = 23, D_LID_BL = 24, D_LID_BR = 25, D_BROW_IL = 26, D_EYE_L = 31, D_EYE_R = 32, D_HEAD = kND - 2 };
 
@@ -222,6 +297,8 @@ struct Skel {
     // (02/11 e) sk_head del esqueleto del CUERPO (175 huesos) para la camara: el sk_head del esqueleto de la cara tiene la
     // transformacion actual en (0, 0, 0) (no es espacio del modelo: log 12:46 PC), el del cuerpo si lo es
     void* bHead = nullptr; int bHeadIdx = -1; Xf bHeadRest = {};
+    // (04/11) perfil por cara: jugador de este esqueleto (personajes.cpp) y perfil de caras.ini (-1 = ninguno)
+    uint32_t pid = 0; bool pKnown = false; int prof = -1; unsigned profGen = 0xffffffffu; unsigned profFrame = 0; bool profLogged = false;
 };
 static const int kMaxSkel = 48;
 static std::mutex s_mx;
@@ -720,6 +797,23 @@ bool ExprFaceFrame(const float* camPos, const float* camFwd, const void** lock, 
 }
 
 // en el Eval de la restriccion del cuello (musculo.cpp hk_Eval, clase "cuello"): una vez por personaje y cuadro
+// (04/11) que jugador es este esqueleto y que perfil de caras.ini le toca: al armar, al recargar caras.ini y cada ~2 s mientras
+// personajes.cpp todavia no sabe quien es. Una linea por jugador nuevo: "caras: jugador <id> '<nombre>' -> perfil ..."
+static int s_profLogs = 0;
+static void ProfResolve(Skel& S, unsigned fr) {
+    if (S.profGen == s_profGen && (S.pKnown || fr - S.profFrame < 60)) return;
+    S.profGen = s_profGen; S.profFrame = fr;
+    const int slot = CharSlotForSkel(S.skel);
+    CharInfo ci; if (slot < 0 || !CharGet(slot, ci) || !ci.known) { S.pKnown = false; S.prof = -1; return; }
+    const bool changed = !S.pKnown || S.pid != ci.id;
+    S.pKnown = true; S.pid = ci.id;
+    const int was = S.prof; S.prof = ProfFind(ci.id, ci.name);
+    if ((changed || was != S.prof) && s_profLogs < 80) {
+        s_profLogs++;
+        if (S.prof >= 0) Log("caras: jugador %u '%s' -> perfil [%s]", ci.id, ci.name, s_prof[S.prof].sec);
+        else Log("caras: jugador %u '%s' -> sin perfil", ci.id, ci.name);
+    }
+}
 void ExprBonesFrame(const void* skel) {
     if (!skel) return;
     s_calls.fetch_add(1, std::memory_order_relaxed);
@@ -735,6 +829,9 @@ void ExprBonesFrame(const void* skel) {
     const float* PZ = g_cfg.live[355];
     const float pAng = std::clamp(PZ[0], 0.0f, 1.5f), pSmi = std::clamp(PZ[1], 0.0f, 1.5f), pSur = std::clamp(PZ[2], 0.0f, 1.5f), pTalk = std::clamp(PZ[3], 0.0f, 1.5f);
     s_poseSmile = pSmi;
+    const float* PX = g_cfg.live[356];
+    const float pGri = std::clamp(PX[0], 0.0f, 1.5f), pPuc = std::clamp(PX[1], 0.0f, 1.5f), pNeu = std::clamp(PX[2], 0.0f, 1.5f);
+    const bool profOn = PX[3] > 0.5f;
     // hablar: la mandibula sube y baja con un ritmo de silabas irregular (dos ondas que no se repiten juntas), por personaje distinto
     float talkO = 0.0f, talkRound = 0.0f;
     if (pTalk > 0.001f) {
@@ -744,9 +841,10 @@ void ExprBonesFrame(const void* skel) {
         talkO = pTalk * 0.30f * (std::max)(w, 0.0f) * env;
         talkRound = pTalk * sinf(t * 6.2831853f * 1.7f + 0.6f) * env;   // labios que se redondean (o / u) y se estiran (e / i)
     }
-    const float o = (std::max)((std::max)(std::clamp(g_cfg.live[347][0], 0.0f, 1.0f), 0.45f * tongueOut), (std::min)(1.0f, 0.40f * pSur + talkO));
-    const bool poseOn = pAng > 0.001f || pSmi > 0.001f || pSur > 0.001f || fabsf(talkRound) > 0.001f;
+    const float o = (std::max)((std::max)(std::clamp(g_cfg.live[347][0], 0.0f, 1.0f), 0.45f * tongueOut), (std::min)(1.0f, 0.40f * pSur + 0.85f * pGri + talkO));
+    bool poseOn = pAng > 0.001f || pSmi > 0.001f || pSur > 0.001f || pGri > 0.001f || pPuc > 0.001f || fabsf(talkRound) > 0.001f;
     std::lock_guard<std::mutex> lk(s_mx);
+    if (s_profCheck == 0xffffffffu || fr - s_profCheck >= 300) { s_profCheck = fr; ProfLoad(); }   // caras.ini: al arrancar y cada ~10 s si cambio
     Skel* S = Get(skel);
     S->lastFrame = fr;
     if (!S->jawFound) {
@@ -761,6 +859,9 @@ void ExprBonesFrame(const void* skel) {
     }
     Xf jc; if (!ReadBase(*S, D_JAW, jc)) { Build(*S, skel); S->rebuilds++; return; }
     s_lastActive.store(fr, std::memory_order_relaxed);
+    ProfResolve(*S, fr);
+    const FaceProf* PF = profOn && S->prof >= 0 && S->prof < (int)s_prof.size() ? &s_prof[S->prof] : nullptr;
+    if (PF && pNeu > 0.001f && PF->has[PG_NEUTRA]) poseOn = true;
     if (FreeCamActive() && g_cfg.live[346][0] > 0.5f) PublishHead(*S);   // (02/11) camara libre "seguir la cara"
     float deg = 0.0f; if (JawAngle(*S, jc, &deg)) { S->angMin = (std::min)(S->angMin, deg); S->angMax = (std::max)(S->angMax, deg); S->angN++; }
     // (03/11, Agustin: con x340 = 0 "no cambia nada") al apagar, lo ultimo escrito quedaba puesto: el juego no reescribe todos los
@@ -815,6 +916,11 @@ void ExprBonesFrame(const void* skel) {
         const float* tv = TeethOf(d); const float* ov = OpenOf(d);
         const float op = (std::max)(o, 0.0f);
         float po[3]; PoseOf(d, pAng, pSmi, pSur, po);
+        for (const PoseOff2& p : kPose2) if (p.d == d) { for (int k = 0; k < 3; k++) po[k] += p.g[k] * pGri + p.p[k] * pPuc; break; }
+        if (PF && ProfBoneOk(d)) {   // (04/11) perfil de esta cara: neutra (z356) y cada gesto con su slider
+            const float w[PG_N] = { pNeu, pAng, pSmi, pSur, pGri, pPuc };
+            for (int g = 0; g < PG_N; g++) if (PF->has[g] && w[g] > 0.001f) for (int k = 0; k < 3; k++) po[k] += PF->off[g][d][k] * w[g];
+        }
         // (04/11) la mandibula real no gira en el lugar: al abrir, el condilo se desliza adelante y abajo (articulacion
         // temporomandibular): los huesos que siguen a la mandibula bajan y van adelante un poco con la apertura del mod
         if (kDef[d].jaw > 0.0f && op > 0.0f) { po[1] -= 0.0010f * op * kDef[d].jaw; po[2] += 0.0022f * op * kDef[d].jaw; }
