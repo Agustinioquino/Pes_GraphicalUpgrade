@@ -165,6 +165,9 @@ void main(
   r0.x = g_tex_diffuse.CalculateLevelOfDetail(g_samplerLinear_Clamp_s, v2.xy);
   r0.x = clamp(r0.x + hBias, 0, 5);
   r0.x = g_tex_diffuse.SampleLevel(g_samplerLinear_Clamp_s, v2.xy, r0.x).w;
+  // (04/11 l, Agustin: "el headshell tiene su alfa abajo que hace clipping en las cejas") con las cejas en hebras (x74) el borde casi
+  // transparente del headshell (alfa < 0.25) ya no tapa con su tramado las hebras de la ceja que se dibujaron antes
+  if (IniParams.Load(int2(74,0)).x > 0.5 && r0.x < 0.25) discard;
   r0.y = cmp(r0.x >= 0.980392158);
   r0.x = 0.615686297 * r0.x;
   r0.y = r0.y ? 1.000000 : 0;

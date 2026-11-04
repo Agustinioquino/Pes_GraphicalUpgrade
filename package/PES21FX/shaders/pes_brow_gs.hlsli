@@ -226,12 +226,14 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     // rala / clara de la ceja pintada (umbral del contorno mas bajo) y alli con la misma densidad que en lo tupido: rellena huecos
     float fill = hb ? saturate((pesHairBrow.y - 1.0) * 0.6) : 0.0;
     if (ph < lerp(0.35, 0.12, fill)) continue;               // fuera de la ceja pintada
-    if (rk >= keepBase * saturate(m.r + fill) * saturate(ph * 1.5 + fill * 1.5)) continue;   // densidad del mapa y de la pintura
+    // (04/11 l, Agustin: "no me gusta la cantidad de pelo y como respeta la textura") la densidad sigue la pintura: tupido donde la
+    // ceja pintada es oscura y llena, ralo en el borde claro (antes casi pareja en toda la ceja)
+    if (rk >= keepBase * saturate(m.r + fill) * saturate((ph - 0.3) * 2.2 + fill * 1.5)) continue;
     float3 root = P0 * b.x + P1 * b.y + P2 * b.z;
     float3 n = normalize(v[0].nrm.xyz * b.x + v[1].nrm.xyz * b.y + v[2].nrm.xyz * b.z);
     // direccion del peinado: angulo del mapa (B) en el plano UV, llevado a 3D y apoyado sobre la piel
     float ang = m.b * 6.2831853;
-    float2 dirUV = normalize(lerp(PesBrowDirUV(uv), float2(cos(ang), sin(ang)), 0.25)) * flip;   // plantilla + 25 % de los trazos pintados
+    float2 dirUV = normalize(lerp(PesBrowDirUV(uv), float2(cos(ang), sin(ang)), 0.7)) * flip;   // (04/11 l) 70 % los trazos pintados + 30 % plantilla (antes 25 %)
     float3 d = dPdu * dirUV.x + dPdv * dirUV.y;
     float mPerUV = length(d);
     d = d - n * dot(d, n);

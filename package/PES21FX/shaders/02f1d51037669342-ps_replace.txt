@@ -228,6 +228,9 @@ void main(
     r3.xy = g_psMaterial.m_materials[5].xy * r0.zw;
     r3.z = g_psMaterial.m_materials[5].z * r1.w;
   }
+  // (04/11 l, Agustin: "el headshell tiene su alfa abajo que hace clipping en las cejas") con las cejas en hebras (x74) el borde casi
+  // transparente del headshell (alfa < 0.25) ya no tapa con su tramado las hebras de la ceja que se dibujaron antes
+  if (IniParams.Load(int2(74,0)).x > 0.5 && r3.w < 0.25) discard;
   r0.z = 0.615686297 * r3.w;
   r0.w = cmp(r3.w >= 0.980392158);
   r0.w = r0.w ? 1.000000 : 0;
