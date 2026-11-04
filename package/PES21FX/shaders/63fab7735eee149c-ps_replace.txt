@@ -225,6 +225,7 @@ void main(
   if (mOn) {
     // reflejo del ambiente: el juego lo suma sin ocluir -> dientes que "brillan" en la oscuridad
     r3.xyz *= mRefl * lerp(1.0, 0.35, mDeep) * (1.0 - 0.6 * mCavity * (1.0 - mTeeth));
+    float3 mAlb = r0.xyz;   // (04/11) color de la textura, antes de tocar los dientes
     // dientes: menos blanco fosforescente y tono marfil natural
     r0.xyz = lerp(r0.xyz, r0.xyz * mWhite * float3(1.0, 0.975, 0.93), mTeeth);
     // (31/10) la oscuridad de la boca es OCLUSION DEL AMBIENTE: al multiplicar el color (albedo) tambien se apagaba la luz directa
@@ -298,6 +299,12 @@ void main(
         float3 tongue = lerp(r0.xyz, float3(0.95, 0.42, 0.45) * lumT * 2.0 * pap, 0.5);
         r0.xyz = lerp(r0.xyz, tongue, tz); }
     }
+    // (04/11) Agustin: 'en la vista original los dientes se ven mucho mas realistas, el shader les cambia los colores demasiado'.
+    // Desde la boca v20 la textura ya trae el color real del diente (esmalte, dentina, muelas): los dientes vuelven al TONO de la
+    // textura y de todo lo anterior queda solo cuanta luz reciben (cavidad, sol, labio, encia, entre dientes, fondo). Sin marfil,
+    // sin dentina amarilla, sin borde azul: solo mas claro u oscuro. Encias y lengua siguen igual.
+    { float la = dot(mAlb, float3(0.3, 0.59, 0.11)), lr = dot(r0.xyz, float3(0.3, 0.59, 0.11));
+      r0.xyz = lerp(r0.xyz, mAlb * (lr / max(la, 1e-4)), mTeeth); }
   }
   r0.xyz = r0.xyz * r0.www + r3.xyz;
   r3.xyz = max(float3(9.99999975e-006,9.99999975e-006,9.99999975e-006), r0.xyz);
