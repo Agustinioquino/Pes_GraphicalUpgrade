@@ -375,6 +375,23 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
 #if PES_TESS_V455
   o.o8 = PES_LERP3(o8); o.o8.x = clip.w;
 #endif
+#if !PES_TESS_ATLAS
+  {
+    // (04/11 TAA, Agustin: "con la teselacion y las expresiones todo vibra demasiado") el cuadro anterior (o7.zw / w en TEXCOORD9.y)
+    // venia interpolado SIN el corrimiento (Phong + relieve): el vector de movimiento llevaba el corrimiento como si la piel se
+    // moviera y el TAA reproyectaba la historia al lugar equivocado -> temblor. Ahora el punto nuevo se mueve en pantalla igual que
+    // el triangulo original: anterior = actual corrido - (movimiento del triangulo sin teselar).
+    float4 l7 = PES_LERP3(o7);
+#if PES_TESS_V455
+    float2 lw = PES_LERP3(o8);
+#else
+    float2 lw = PES_LERP3(p2);
+#endif
+    float wc = max(lw.x, 1e-4), wp = max(lw.y, 1e-4);
+    float2 mot = l7.xy / wc - l7.zw / wp;
+    o.o7.zw = (clip.xy / max(clip.w, 1e-4) - mot) * wp;
+  }
+#endif
   o.pR = PES_LERP3(pR); o.pR.w = p[0].pR.w;
 #if !PES_TESS_BODY
   o.pD = PES_LERP3(pD); o.pD.w = p[0].pD.w;
