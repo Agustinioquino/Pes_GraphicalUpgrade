@@ -972,9 +972,19 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
             } else ++it2;
           }
         }
-        if (s_meshes.size() >= 4096) {   // partido largo / muchas caras: se empieza de nuevo (las cuentas y buffers cambian entre partidos)
-            for (auto& kv : s_meshes) FreeMesh(kv.second);
-            s_meshes.clear(); s_pending.clear();
+        if (s_meshes.size() >= 4096) {
+            // (04/11 i, cuelgue 08:17) antes se vaciaba entera: todas las caras se releian y se les volvian a pasar formas / enlazar la
+            // barba en bucle. Ahora se echan las mas viejas hasta 3072, nunca las dibujadas en los ultimos 3 cuadros
+            std::vector<std::pair<UINT, decltype(s_meshes.begin())>> old; old.reserve(s_meshes.size());
+            for (auto it2 = s_meshes.begin(); it2 != s_meshes.end(); ++it2) if (s_frame - it2->second->lastFrame > 3) old.push_back({ it2->second->lastFrame, it2 });
+            std::sort(old.begin(), old.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
+            size_t need = s_meshes.size() - 3072;
+            for (size_t k = 0; k < old.size() && k < need; k++) {
+                FaceMesh* o = old[k].second->second;
+                s_pending.erase(std::remove(s_pending.begin(), s_pending.end(), o), s_pending.end());
+                FreeMesh(o); s_meshes.erase(old[k].second); s_evicted++;
+            }
+            static int nFull = 0; if (nFull < 20) { nFull++; Log("expresiones: tabla llena (4096 mallas): echadas las %d mas viejas", (int)(std::min)(old.size(), need)); }
         }
     }
     FaceMesh* m = new FaceMesh(); m->id = s_nextId++; m->lastFrame = s_frame; m->beard = t_beardDraw; m->seqAt = s_drawSeq;
