@@ -248,6 +248,9 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   else if (preset == 7) { az = 30;  el = 78; inten = 1.25; warm = 0.58; keep = 0.50; }   // mediodia: sol casi vertical (cuencas de los ojos oscuras)
   else if (preset == 8) { az = 165; el = 10; inten = 1.00; warm = 0.95; keep = 0.45; }   // atardecer a contraluz: sol bajo detras del jugador
   else if (preset == 9) { az = -45; el = 35; inten = 0.70; warm = 0.15; keep = 0.35; tower2 = true; }   // noche con dos torres opuestas (dos sombras)
+  // (04/11 q, Agustin: "en el preset del dia por que no me permites rotar el sol") en los presets el Rumbo gira el sol alrededor del
+  // jugador: se suma al rumbo del preset (0 = el del preset)
+  if (preset != 0 && preset != 4) az += E.z;
   shK *= shMul;
   bool studio = preset == 4;
   // --- referencia de intensidad: la irradiancia de estudio mas alta sobre la piel, suavizada en el tiempo (pasada 0, t6) ---
