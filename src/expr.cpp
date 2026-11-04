@@ -40,6 +40,7 @@ struct FaceMesh {
     float hc[3] = {}; bool hcOk = false;   // (1/11) centro de la cara en espacio del modelo (vertices que pesan en sk_head): para "seguir la cara"
     UINT lastFrame = 0;   // (01/11) ultimo cuadro en que se dibujo (para echar las mallas viejas sin vaciar toda la tabla)
     int lids[4] = { -1, -1, -1, -1 }; UINT lidCap = 0;   // (02/11 h) parpados en la paleta y ultimo cuadro en que se leyo la paleta
+    int shapeOff = -1; uint32_t huella = 0;   // (04/11) gestos esculpidos (formas\<huella>.bin): primer float4 de esta malla en s_shapeData
 };
 std::mutex s_mx;
 std::unordered_map<uint64_t, FaceMesh*> s_meshes;
@@ -49,6 +50,7 @@ int s_nextId = 1;
 UINT s_frame = 0;   // cuadros (Present) desde el arranque
 int s_evicted = 0;   // mallas echadas por viejas (resumen)
 std::atomic<int> s_binds{0}, s_bindsNone{0};
+std::atomic<int> s_shapeDraws{0};   // (04/11) dibujos con gestos esculpidos
 std::atomic<int> s_bindsWait{0}, s_bindsDisc{0}, s_bindsNew{0};   // (01/11) de los 'sin dato': malla en lectura / descartada o no cara / recien vista
 int s_hist[4] = {};   // mallas listas con cabeza 0 / 1 / 2..31 / descartadas
 
@@ -105,15 +107,17 @@ bool ReadW(const uint8_t* p, DXGI_FORMAT f, float o[4]) {
     default: return false;
     }
 }
-ID3D11Buffer* MakeCB(UINT head, UINT maxIdx, UINT id, UINT mouth = 0, const int* lids = nullptr, UINT jawFull = 0, UINT jawHalf = 0, UINT lipTop = 99, UINT lipUp = 0, const float* eyes = nullptr, const int* mus = nullptr) {
+ID3D11Buffer* MakeCB(UINT head, UINT maxIdx, UINT id, UINT mouth = 0, const int* lids = nullptr, UINT jawFull = 0, UINT jawHalf = 0, UINT lipTop = 99, UINT lipUp = 0, const float* eyes = nullptr, const int* mus = nullptr, const UINT* shape = nullptr) {
     if (!g_dev.dev) return nullptr;
     // 48 bytes de uint4 + 2 float4: centros de los ojos (x y z radio) izquierdo (+x, hueso 0) y derecho (hueso 1), para la mirada
     // + uint4 musculos virtuales (01/11 i): comisura izq / der, ceja interna izq / der (99 = no hay)
-    UINT v[24] = { head, maxIdx, id, mouth, 99, 99, 99, 99, jawFull, jawHalf, lipTop, lipUp, 0, 0, 0, 0, 0, 0, 0, 0, 99, 99, 99, 99 };
+    // + (04/11) uint4 gestos esculpidos: x primer float4 de la malla en el buffer de formas (t118), y vertices, z primer indice (vmin), w formas (0 = no hay)
+    UINT v[28] = { head, maxIdx, id, mouth, 99, 99, 99, 99, jawFull, jawHalf, lipTop, lipUp, 0, 0, 0, 0, 0, 0, 0, 0, 99, 99, 99, 99, 0, 0, 0, 0 };
+    if (shape) for (int i = 0; i < 4; i++) v[24 + i] = shape[i];
     if (lids) for (int i = 0; i < 4; i++) v[4 + i] = lids[i] >= 0 ? (UINT)lids[i] : 99u;
     if (eyes) memcpy(v + 12, eyes, 32);
     if (mus) for (int i = 0; i < 4; i++) v[20 + i] = mus[i] >= 0 ? (UINT)mus[i] : 99u;
-    D3D11_BUFFER_DESC d{}; d.ByteWidth = 96; d.Usage = D3D11_USAGE_IMMUTABLE; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    D3D11_BUFFER_DESC d{}; d.ByteWidth = 112; d.Usage = D3D11_USAGE_IMMUTABLE; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     D3D11_SUBRESOURCE_DATA s{}; s.pSysMem = v;
     ID3D11Buffer* b = nullptr; return SUCCEEDED(g_dev.dev->CreateBuffer(&d, &s, &b)) ? b : nullptr;
 }
@@ -138,6 +142,58 @@ void Reject(FaceMesh* m, const char* why) {
 // (posicion en reposo, en metros, uv, caras) + un .txt con la huella (para reconocerla despues) y huesos / pesos por vertice.
 // Sirve para esculpir en Blender las formas de cada gesto (blendshapes) sobre la malla exacta.
 std::atomic<UINT> s_dumpUntil{0};
+uint32_t Huella(const FaceMesh* m, const std::vector<float>& ps) {   // la del volcado: vertices, indices y posiciones a 0.1 mm
+    uint64_t h = 0xcbf29ce484222325ULL; h = Fnv(h, m->nv); h = Fnv(h, m->count);
+    for (UINT v = 0; v < m->nv; v++) for (int k = 0; k < 3; k++) h = Fnv(h, (uint64_t)(int64_t)llround(ps[(size_t)v * 3 + k] * 10000.0));
+    return (uint32_t)(h ^ (h >> 32));
+}
+// ---- (04/11, Agustin: gestos "como si fueran esculpidos para Messi"; eligio "entre los dos": formas por codigo + retoque en Blender)
+// GESTOS ESCULPIDOS POR VERTICE: PES21FX\formas\<HUELLA>.bin (tools/blendshapes/pack_from_blend.py) = para cada vertice de esa
+// malla 5 corrimientos (sonrisa, grito, enojo, asombro, puchero; metros, espacio del modelo) que el VS de la cara suma ANTES del
+// skinning por el slider de cada gesto (filas 355/356, con w356 "Perfiles por cara"). Se suman a los huesos del mod (correctivos).
+// Todas las formas cargadas van juntas en un Buffer<float4> (t118 del VS); el cbuffer de la malla dice donde empieza la suya.
+struct ShapePack { bool tried = false; int off = -1; UINT nv = 0; };
+std::unordered_map<uint32_t, ShapePack> s_shapes;
+std::vector<float> s_shapeData;
+ID3D11Buffer* s_shapeBuf = nullptr; ID3D11ShaderResourceView* s_shapeSrv = nullptr;
+constexpr UINT kShapeN = 5;
+int ShapeFind(uint32_t hu, UINT nv) {   // con s_mx tomado
+    ShapePack& sp = s_shapes[hu];
+    if (sp.tried) return sp.nv == nv ? sp.off : -1;
+    sp.tried = true;
+    wchar_t nm[64]; swprintf(nm, 64, L"formas\\%08X.bin", hu);
+    FILE* f = _wfopen((g_cfg.baseDir + nm).c_str(), L"rb");
+    if (!f) return -1;
+    char mg[4] = {}; uint32_t hd[4] = {};
+    const bool okh = fread(mg, 1, 4, f) == 4 && fread(hd, 4, 4, f) == 4 && !memcmp(mg, "PFXF", 4) && hd[0] == 1 && hd[2] == kShapeN;
+    if (!okh || hd[1] != nv) { fclose(f); Log("expresiones: formas %08X.bin no valido (%s, %u vertices, la malla tiene %u)", hu, okh ? "otra malla" : "cabecera", okh ? hd[1] : 0u, nv); return -1; }
+    std::vector<float> d((size_t)nv * kShapeN * 4);
+    const bool okd = fread(d.data(), 4, d.size(), f) == d.size(); fclose(f);
+    if (!okd) { Log("expresiones: formas %08X.bin cortado", hu); return -1; }
+    float mx[kShapeN] = {};
+    for (UINT v = 0; v < nv; v++) for (UINT k = 0; k < kShapeN; k++) {
+        float* q = &d[((size_t)v * kShapeN + k) * 4];
+        for (int c = 0; c < 3; c++) q[c] = std::clamp(std::isfinite(q[c]) ? q[c] : 0.0f, -0.02f, 0.02f);   // tope 2 cm por vertice
+        q[3] = 0; mx[k] = (std::max)(mx[k], sqrtf(q[0] * q[0] + q[1] * q[1] + q[2] * q[2]));
+    }
+    const size_t off4 = s_shapeData.size() / 4;
+    s_shapeData.insert(s_shapeData.end(), d.begin(), d.end());
+    D3D11_BUFFER_DESC bd{}; bd.ByteWidth = (UINT)(s_shapeData.size() * 4); bd.Usage = D3D11_USAGE_IMMUTABLE; bd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = s_shapeData.data();
+    ID3D11Buffer* b = nullptr; ID3D11ShaderResourceView* v = nullptr;
+    if (SUCCEEDED(g_dev.dev->CreateBuffer(&bd, &sd, &b))) {
+        D3D11_SHADER_RESOURCE_VIEW_DESC vd{}; vd.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; vd.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+        vd.Buffer.FirstElement = 0; vd.Buffer.NumElements = (UINT)(s_shapeData.size() / 4);
+        if (FAILED(g_dev.dev->CreateShaderResourceView(b, &vd, &v))) { b->Release(); b = nullptr; }
+    }
+    if (!v) { s_shapeData.resize(off4 * 4); Log("expresiones: formas %08X: no se pudo crear el buffer", hu); return -1; }
+    // la vista vieja NO se libera: un dibujo de otro hilo puede tenerla en la mano entre ExprBufferForDraw y VSSetShaderResources
+    // (solo pasa al cargar un paquete nuevo: unos pocos KB)
+    s_shapeBuf = b; s_shapeSrv = v;
+    sp.off = (int)off4; sp.nv = nv;
+    Log("expresiones: formas %08X.bin cargadas (%u vertices; maximo mm: sonrisa %.1f grito %.1f enojo %.1f asombro %.1f puchero %.1f)", hu, nv, mx[0] * 1000, mx[1] * 1000, mx[2] * 1000, mx[3] * 1000, mx[4] * 1000);
+    return sp.off;
+}
 void DumpObj(FaceMesh* m, const std::vector<float>& ps, const std::vector<float>& uvs, const std::vector<uint32_t>& iv, const std::vector<float>& wv, float ylo, float yhi) {
     const std::wstring dir = g_cfg.baseDir + L"dump\\caras\\";
     CreateDirectoryW((g_cfg.baseDir + L"dump").c_str(), nullptr); CreateDirectoryW(dir.c_str(), nullptr);
@@ -395,7 +451,10 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
                 if (n >= 20) { for (int k = 0; k < 3; k++) m->hc[k] = (float)(c[k] / n); m->hcOk = true; break; }
             }
         }
-        m->cb = MakeCB((UINT)m->head, (UINT)mx, (UINT)m->id, eye ? 2u : (mouth ? 1u : 0u), lids, jawFull, jawHalf, lipTop, lipUp, eye ? eyes : nullptr, mus);
+        m->huella = Huella(m, ps);
+        m->shapeOff = (hd <= 31 && !eye && !mouth) ? ShapeFind(m->huella, m->nv) : -1;
+        const UINT shp[4] = { m->shapeOff >= 0 ? (UINT)m->shapeOff : 0u, m->nv, m->vmin, m->shapeOff >= 0 ? kShapeN : 0u };
+        m->cb = MakeCB((UINT)m->head, (UINT)mx, (UINT)m->id, eye ? 2u : (mouth ? 1u : 0u), lids, jawFull, jawHalf, lipTop, lipUp, eye ? eyes : nullptr, mus, shp);
         for (int i = 0; i < 4; i++) m->lids[i] = lids[i];
         if (m->dump && hd <= 31 && !eye && !mouth && m->nv >= 200) DumpObj(m, ps, uvs, iv, wv, ylo, yhi);
         m->tri.clear(); m->tri.shrink_to_fit();
@@ -422,8 +481,9 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
 
 // en cada dibujo con la regla "expr = <slot>" (VS de la cabeza / cara): cbuffer de la malla para el VS (null = no enlazar)
 static void LidCapture(ID3D11DeviceContext* c, FaceMesh* m);   // (02/11 h) abajo
-ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, const float** headCentroid, int* headIdx) {
+ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, const float** headCentroid, int* headIdx, ID3D11ShaderResourceView** shapeSrv) {
     if (headCentroid) *headCentroid = nullptr;
+    if (shapeSrv) *shapeSrv = nullptr;
     if (!g_dev.dev) return nullptr;
     if (!s_none) { std::lock_guard<std::mutex> lk(s_mx); if (!s_none) s_none = MakeCB(99, 0, 0); }
     if (g_cfg.live[340][0] < 0.5f || count < 3) { s_bindsNone++; return s_none; }
@@ -441,6 +501,7 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
         rel(); FaceMesh* m = it->second; m->lastFrame = s_frame;
         if (m->state == 3 && m->cb) {
             s_binds++;
+            if (shapeSrv && m->shapeOff >= 0 && s_shapeSrv) { *shapeSrv = s_shapeSrv; s_shapeDraws++; }
             if (m->head <= 31 && (m->lids[0] >= 0 || m->lids[1] >= 0) && s_frame - m->lidCap >= 120) { m->lidCap = s_frame; LidCapture(c, m); }
             if (headCentroid && m->hcOk && m->nv >= 300) { *headCentroid = m->hc; if (headIdx) *headIdx = m->head; } return m->cb; }
         if (m->state == 4) s_bindsDisc++; else s_bindsWait++;
@@ -632,7 +693,11 @@ void ExprPresent() {
         const int bw = s_bindsWait.exchange(0), bd = s_bindsDisc.exchange(0), bnew = s_bindsNew.exchange(0);
         if (b || bn) { std::lock_guard<std::mutex> lk(s_mx);
             Log("expresiones: %d mallas de cara (cabeza en 0: %d, en 1: %d, en otro: %d, descartadas o no cara %d); dibujos con dato %d, sin dato %d (en lectura %d, descartadas o no cara %d, nuevas %d, apagado %d); echadas por viejas %d; ganancia %.2f",
-                (int)s_meshes.size(), s_hist[0], s_hist[1], s_hist[2], s_hist[3], b, bn, bw, bd, bnew, bn - bw - bd - bnew, s_evicted, g_cfg.live[340][1]); }
+                (int)s_meshes.size(), s_hist[0], s_hist[1], s_hist[2], s_hist[3], b, bn, bw, bd, bnew, bn - bw - bd - bnew, s_evicted, g_cfg.live[340][1]);
+            int np = 0; for (auto& kv : s_shapes) if (kv.second.off >= 0) np++;
+            const int sd = s_shapeDraws.exchange(0);
+            if (np || sd) Log("expresiones: gestos esculpidos: %d mallas con formas, %d dibujos (sonrisa %.2f grito %.2f enojo %.2f asombro %.2f puchero %.2f, perfiles %s)", np, sd,
+                g_cfg.live[355][1], g_cfg.live[356][0], g_cfg.live[355][0], g_cfg.live[355][2], g_cfg.live[356][1], g_cfg.live[356][3] > 0.5f ? "si" : "no"); }
     }
 }
 

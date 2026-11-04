@@ -23,6 +23,26 @@ cbuffer PESExprMesh : register(b12)
   // (01/11 h) ojos (VS 69758ab9): centro (xyz) y radio del globo izquierdo (+x, hueso 0 del eye.fmdl) y derecho (hueso 1); radio 0 = no hay
   float4 g_pesExprEye[2];
   uint4 g_pesExprMus;    // (01/11 i) musculos virtuales: x comisura izq (+x), y comisura der, z ceja interna izq, w ceja interna der (99 = no hay)
+  uint4 g_pesExprShape;  // (04/11) gestos esculpidos: x primer float4 de la malla en g_pesShapes, y vertices, z primer indice (vmin), w formas (0 = no hay)
+}
+
+// (04/11, Agustin: gestos "esculpidos para Messi") GESTOS ESCULPIDOS POR VERTICE: la DLL carga PES21FX\formas\<huella>.bin por
+// malla (5 corrimientos por vertice, metros, espacio del modelo) y los enlaza en t118. Se suman a la posicion de reposo ANTES del
+// skinning, por el slider de cada gesto (355.y sonrisa, 356.x grito, 355.x enojo, 355.z asombro, 356.y puchero), solo con
+// "Perfiles por cara" (356.w) prendido. La boca por dentro no tiene formas (no se toca). Sin paquete (w = 0) no hace nada.
+Buffer<float4> g_pesShapes : register(t118);
+float3 PesShapeDelta(uint vid)
+{
+  if (g_pesExprShape.w == 0) return 0;
+  uint lv = vid - g_pesExprShape.z;
+  if (vid < g_pesExprShape.z || lv >= g_pesExprShape.y) return 0;
+  float4 G5 = IniParams.Load(int2(355, 0)), G6 = IniParams.Load(int2(356, 0));
+  if (G6.w < 0.5) return 0;
+  float w[5] = { saturate(G5.y), saturate(G6.x), saturate(G5.x), saturate(G5.z), saturate(G6.y) };
+  uint b = g_pesExprShape.x + lv * 5;
+  float3 d = 0;
+  [unroll] for (uint k = 0; k < 5; k++) if (w[k] > 0.001) d += g_pesShapes[b + k].xyz * w[k];
+  return d;
 }
 
 float PesExprZoneShare(float3 r, float4 Z)
