@@ -350,6 +350,10 @@ std::vector<float> s_beardData; ID3D11Buffer* s_beardBuf = nullptr; ID3D11Shader
 ID3D11Buffer* s_pool = nullptr; ID3D11ShaderResourceView* s_poolSrv = nullptr; UINT s_poolAt = 0;
 constexpr UINT kPoolSlots = 64, kSlotF4 = 200, kBeardF4 = 9;
 int s_beardCopies = 0, s_beardDraws = 0;
+// (04/11 e, arranque 07:44: "0 paletas copiadas" con 27 mallas marcadas y 0 fallas = ninguna piel marcada se dibuja) que pieles de cara se
+// dibujan de verdad (geometria, vertices) contra las que usa la barba, para ver por que no coinciden
+struct GeoSeen { int geo, id; UINT nv; int n; bool mk; };
+GeoSeen s_geoSeen[16]; int s_geoSeenN = 0, s_skinNoGeo = 0, s_skinNoGeoNv = 0;
 bool BeardUpload() {
     if (s_beardData.empty() || !g_dev.dev) return false;
     D3D11_BUFFER_DESC d{}; d.ByteWidth = (UINT)(s_beardData.size() * 4); d.Usage = D3D11_USAGE_IMMUTABLE; d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
@@ -369,6 +373,7 @@ void BeardKeepSrc(FaceMesh* m, const std::vector<float>& ps, const std::vector<u
     BeardSrc b; b.id = m->geoId; b.ib = (uint64_t)m->ib; b.nv = m->nv; b.head = m->head; b.shapeOff = m->xferGate ? -1 : m->shapeOff;
     b.p = ps; b.w = wv; b.j.resize(iv.size()); for (size_t i = 0; i < iv.size(); i++) b.j[i] = (uint8_t)(std::min)(iv[i], 31u);
     s_bsrcBytes += by; s_bsrc.push_back(std::move(b));
+    static int nl = 0; if (nl++ < 60) Log("expresiones: piel para la barba: malla %d, geometria %d (%u vertices, primer vertice %u, cabeza %d%s)", m->id, m->geoId, m->nv, m->vmin, m->head, m->shapeOff >= 0 ? ", con formas" : "");
 }
 bool BeardBind(FaceMesh* m, const std::vector<float>& ps) {   // con s_mx tomado
     if (s_bsrc.empty() || m->nv == 0) return false;
@@ -442,7 +447,8 @@ bool BeardBind(FaceMesh* m, const std::vector<float>& ps) {   // con s_mx tomado
     int nMark = 0; for (auto& kv : s_meshes) if (kv.second->geoId && std::find(used.begin(), used.end(), kv.second->geoId) != used.end()) { kv.second->beardSrc = true; nMark++; }
     const UINT cv[28] = { (UINT)off4, m->nv, m->vmin, 1u };
     m->cb = MakeCBRaw(cv);
-    Log("expresiones: barba %d (%u vertices) enlazada a la piel de la cara (%d piezas, %d mallas de la tabla, %d de %u vertices a menos de 25 mm, muestra %d / %d a menos de 12 mm, %.1f mm de promedio)", m->id, m->nv, (int)used.size(), nMark, nOk, m->nv, gc, ns, gd * 1000.0);
+    char ug[96]; int uk = 0; ug[0] = 0; for (size_t i = 0; i < used.size() && uk < 80; i++) uk += snprintf(ug + uk, sizeof ug - uk, "%s%d", i ? "," : "", used[i]);
+    Log("expresiones: barba %d (%u vertices) enlazada a la piel de la cara (%d piezas: geometrias %s, %d mallas de la tabla, %d de %u vertices a menos de 25 mm, muestra %d / %d a menos de 12 mm, %.1f mm de promedio)", m->id, m->nv, (int)used.size(), ug, nMark, nOk, m->nv, gc, ns, gd * 1000.0);
     return m->cb != nullptr;
 }
 
@@ -786,6 +792,11 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
         if (m->state == 3 && m->cb) {
             s_binds++;
             if (m->beardSrc) BeardPoolCopy(c, m);
+            if (m->head <= 31 && m->cbv[3] == 0 && m->nv >= 300) {   // (04/11 e) piel de cara dibujada (registro de la barba)
+                if (!m->geoId) { s_skinNoGeo++; s_skinNoGeoNv = (int)m->nv; }
+                else { int i = 0; for (; i < s_geoSeenN; i++) if (s_geoSeen[i].geo == m->geoId) { s_geoSeen[i].n++; break; }
+                       if (i == s_geoSeenN && s_geoSeenN < 16) s_geoSeen[s_geoSeenN++] = { m->geoId, m->id, m->nv, 1, m->beardSrc }; }
+            }
             const UINT seq = ++s_drawSeq;
             if (m->shapeOff >= 0 && !m->xferGate) {   // piel con formas propias: las mallas pegadas de antes en este cuadro quedan habilitadas
                 s_packSeq = seq; s_packFrame = s_frame;
@@ -1008,7 +1019,10 @@ void ExprPresent() {
             }
         }
         if (s_beardDraws || s_beardCopies) { static UINT lastB = 0; if (s_frame - lastB >= 3600) { lastB = s_frame; int nSrc = 0; for (auto& kv : s_meshes) if (kv.second->beardSrc) nSrc++;
-            Log("expresiones: barba por huesos: %d dibujos de barba, %d paletas de piel copiadas (~60 s; %d mallas de piel marcadas, %d geometrias; fallas: pozo %d, id %d, b5/b6 %d, rango %d)", s_beardDraws, s_beardCopies, nSrc, (int)s_geoUsed.size(), s_poolFail[0], s_poolFail[1], s_poolFail[2], s_poolFail[3]); s_beardDraws = s_beardCopies = 0; for (int& f : s_poolFail) f = 0; } }
+            Log("expresiones: barba por huesos: %d dibujos de barba, %d paletas de piel copiadas (~60 s; %d mallas de piel marcadas, %d geometrias; fallas: pozo %d, id %d, b5/b6 %d, rango %d)", s_beardDraws, s_beardCopies, nSrc, (int)s_geoUsed.size(), s_poolFail[0], s_poolFail[1], s_poolFail[2], s_poolFail[3]); char gl[400]; int gk = 0; gl[0] = 0; for (int i = 0; i < s_geoSeenN && gk < 360; i++) gk += snprintf(gl + gk, sizeof gl - gk, " %d(%u v, malla %d, %d%s)", s_geoSeen[i].geo, s_geoSeen[i].nv, s_geoSeen[i].id, s_geoSeen[i].n, s_geoSeen[i].mk ? ", marcada" : "");
+            Log("expresiones: barba por huesos: pieles de cara dibujadas por geometria:%s; sin geometria %d dibujos (ultima %d v); geometrias de la barba: %d", gl[0] ? gl : " ninguna", s_skinNoGeo, s_skinNoGeoNv, (int)s_geoUsed.size());
+            s_geoSeenN = 0; s_skinNoGeo = 0;
+            s_beardDraws = s_beardCopies = 0; for (int& f : s_poolFail) f = 0; } }
     }
     static int frames = 0;
     if (++frames >= 3600) {
