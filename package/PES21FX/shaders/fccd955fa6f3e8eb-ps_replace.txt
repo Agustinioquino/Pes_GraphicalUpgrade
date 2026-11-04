@@ -320,6 +320,23 @@ void main(
         white = lerp(white, white * float3(1.0, 0.94, 0.92), smoothstep(1.8, 3.0, irisR) * 0.6);
         base = lerp(base, white * 1.12, eyeClr * scleraM);
       } }
+    // (04/11, Agustin: "les hace falta una mayor naturalidad a los modelos eye") z318 BORDES DEL OJO: (1) el anillo del limbo se
+    // oscurece al mirar el ojo de costado (la cornea es mas gruesa en el borde y el limbo queda en sombra); (2) venitas muy finas
+    // en la esclerotica, solo lejos del iris y apagadas donde serian mas chicas que un pixel; (3) sombra suave hacia los
+    // lagrimales y las comisuras del ojo (el globo se mete bajo los parpados). 0 = como antes
+    { float bo = clamp(IniParams.Load(int2(318,0)).z, 0.0, 1.5);
+      if (bo > 0.001) {
+        float ndv2 = saturate(dot(eyeNc, eyeV));
+        float limb = smoothstep(0.85, 1.0, irisR) * (1.0 - smoothstep(1.05, 1.3, irisR));
+        base *= 1.0 - bo * limb * (0.10 + 0.30 * (1.0 - ndv2));
+        float th = irisTh * 6.2831853;
+        float vw = fwidth(th * 23.0);
+        float vein = pow(saturate(1.0 - abs(sin(th * 23.0 + 2.6 * sin(th * 7.0) + 1.7 * sin(irisR * 3.1)))), 24.0);
+        vein *= 1.0 - smoothstep(0.6, 2.0, vw);                       // sin vetas que titilan de lejos
+        vein *= smoothstep(1.7, 2.6, irisR) * (0.6 + 0.4 * sin(th * 3.0 + 1.1));
+        base *= lerp(float3(1, 1, 1), float3(0.97, 0.80, 0.80), saturate(bo * 0.35 * vein));
+        base *= 1.0 - bo * 0.22 * smoothstep(2.3, 3.4, irisR);
+      } }
     o0.xyz = base + refl;
     // brillo del sol/focos sobre la cornea: rugosidad baja donde hay cornea (lo resuelve la luz diferida del juego).
     // o2.x es la rugosidad CODIFICADA del juego (minimo valido ~0.13: por debajo la pasada de luz devuelve negro;
