@@ -35,6 +35,7 @@
 #endif
 
 Texture1D<float4> IniParams : register(t120);
+#include "pes_face_tess_player.hlsli"   // (04/11 m) multiplicadores por jugador (b10)
 
 // lo que sale del VS (y entra al HS), en el orden del VS
 struct PesTessVS
@@ -104,6 +105,8 @@ void PesTessParams(out float4 T, out float4 U)
 #if PES_TESS_BODY
   float4 B = IniParams.Load(int2(364, 0));
   T.x = B.x; T.z = B.y; U.x = B.z; U.z = B.w;
+#else
+  PesTessApplyPlayer(T, U);   // (04/11 m) teselacion por jugador
 #endif
 }
 
@@ -301,6 +304,9 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
   if (dl > tope) d *= tope / max(dl, 1e-6);
   // (04/11 c) relieve desde la quinta textura (fila 359): por la normal interpolada, mm
   float4 R = IniParams.Load(int2(359, 0));   // x fuerza, y hundir surcos (mm), z levantar relieve (mm), w mip
+#if !PES_TESS_BODY
+  PesTessApplyRelief(R);   // (04/11 m) relieve por jugador
+#endif
   bool tilt = false; float3 tiltN = 0, tiltT = 0, tiltB = 0;   // (04/11 d) relieve en la luz
 #if !PES_TESS_BODY
   if (R.x > 0.001 && T.x > 0.5) {
@@ -326,7 +332,7 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
       // (04/11 d, Agustin: "no hace nada") RELIEVE EN LA LUZ (w360): un corrimiento de 1 mm casi no cambia la imagen de frente
       // porque la luz sale de la normal, no de la posicion. Aca la normal (y con ella la tangente y la bitangente que arman el
       // marco del normal map en el PS) se inclina con la pendiente de la altura, asi el relieve tambien se ve en el sombreado.
-      float relL = IniParams.Load(int2(360, 0)).w;
+      float relL = IniParams.Load(int2(360, 0)).w * PesTessReliefLight();   // (04/11 m) x el del jugador
       if (abs(relL) > 0.001) {
         float e = 2.0 / 1024.0;
         float4 FBu = pesFaceB.SampleLevel(pesTessSamp, uv + float2(e, 0), lod), FAu = pesFaceA.SampleLevel(pesTessSamp, uv + float2(e, 0), lod);
