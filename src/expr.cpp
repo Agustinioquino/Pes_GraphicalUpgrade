@@ -388,7 +388,10 @@ bool BeardBind(FaceMesh* m, const std::vector<float>& ps) {   // con s_mx tomado
     uint64_t gib = 0; int gc = 0; double gd = 1e9;
     for (auto& kv : cov) { const double md = dsum[kv.first] / kv.second; if (kv.second > gc || (kv.second == gc && md < gd)) { gib = kv.first; gc = kv.second; gd = md; } }
     const int ns = (int)((m->nv + stp - 1) / stp);
-    if (gc * 2 < ns) return false;
+    if (gc * 2 < ns) {   // (04/11 d, Agustin: "el head shield del pelo no se mueve con los huesos") que malla del pelo no se enlaza y por que
+        if (m->beardTries == 0 || m->beardTries == 14) Log("expresiones: pelo %d (%u vertices) sin enlazar a la piel (intento %d): muestra %d / %d a menos de 12 mm (hace falta la mitad)", m->id, m->nv, m->beardTries + 1, gc, ns);
+        return false;
+    }
     // 2) por vertice: la pieza de la piel con el vertice mas cercano y sus 4 vecinos mas cercanos (1/d^4); se apaga de 8 a 25 mm
     std::vector<float> d((size_t)m->nv * kBeardF4 * 4, 0.0f);
     int nOk = 0; float dmax = 0;
