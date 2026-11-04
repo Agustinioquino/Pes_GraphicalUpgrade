@@ -225,7 +225,43 @@ constexpr UINT kShapeN = 6;   // (04/11 c) sonrisa grito enojo asombro puchero +
 // modelo y las pestanas de otro jugador tomarian la forma de Messi
 struct ShapeSrc { std::vector<float> p; size_t off4 = 0; UINT nv = 0; uint32_t hu = 0; uint64_t ib = 0; };   // ib: buffer de indices de la ultima vez que se vio esa piel
 std::vector<ShapeSrc> s_src;
-bool ShapeUpload() {   // con s_mx tomado: rehace el buffer con todo s_shapeData (la vista vieja NO se libera, ver abajo)
+// (04/11 i, cuelgue 08:17 PC: 65 GB privados en el partido) en partido el juego rearma cientos de mallas por segundo ("nuevas 64380"
+// en 60 s) y a cada una se le pasaban formas / se enlazaba la barba: s_shapeData / s_beardData crecian sin fin y CADA vez se creaba
+// un buffer nuevo con todo lo anterior sin liberar el viejo (crecimiento cuadratico). Ahora: (1) los datos iguales (la misma malla
+// rearmada) reusan el mismo lugar del buffer, sin subir nada; (2) tope de 48 MB para formas y 24 MB para barbas (log una vez);
+// (3) los buffers viejos se liberan 120 cuadros despues (el dibujo de otro hilo que los tenia en la mano ya termino, y uno que
+// sigue enlazado lo retiene D3D11)
+constexpr size_t kShapeCapF = (48u << 20) / 4, kBeardCapF = (24u << 20) / 4;
+std::unordered_map<uint64_t, size_t> s_shapeDedup, s_beardDedup;   // huella de los datos -> primer float4
+int s_dedupHits = 0, s_capHits = 0;
+struct Retired { IUnknown* b; IUnknown* v; UINT frame; }; std::vector<Retired> s_retired;
+uint64_t HashF(const std::vector<float>& d) {
+    uint64_t h = 1469598103934665603ull; const unsigned char* p = (const unsigned char*)d.data();
+    for (size_t i = 0, n = d.size() * 4; i < n; i++) { h ^= p[i]; h *= 1099511628211ull; }
+    return h ^ (uint64_t)d.size();
+}
+void Retire(IUnknown* b, IUnknown* v) { if (b || v) s_retired.push_back({ b, v, s_frame }); }
+void RetiredPresent() {   // con s_mx tomado, una vez por cuadro
+    for (auto it = s_retired.begin(); it != s_retired.end();) {
+        if (s_frame - it->frame > 120) { if (it->v) it->v->Release(); if (it->b) it->b->Release(); it = s_retired.erase(it); } else ++it;
+    }
+}
+// agrega d a data (o reusa un lugar con los mismos datos); devuelve el primer float4, -1 si se paso del tope / fallo la subida
+template <class Up> long long AppendPool(std::vector<float>& data, std::unordered_map<uint64_t, size_t>& dd, size_t cap, const std::vector<float>& d, Up up, const char* what) {
+    const uint64_t h = HashF(d);
+    auto it = dd.find(h);
+    if (it != dd.end() && (it->second * 4 + d.size()) <= data.size() && !memcmp(&data[it->second * 4], d.data(), d.size() * 4)) { s_dedupHits++; return (long long)it->second; }
+    if (data.size() + d.size() > cap) {
+        if (s_capHits++ == 0) Log("expresiones: OJO tope de memoria de %s (%u MB): no se pasan mas hasta reiniciar el juego", what, (unsigned)(cap * 4 >> 20));
+        return -1;
+    }
+    const size_t off4 = data.size() / 4;
+    data.insert(data.end(), d.begin(), d.end());
+    if (!up()) { data.resize(off4 * 4); return -1; }
+    dd[h] = off4;
+    return (long long)off4;
+}
+bool ShapeUpload() {   // con s_mx tomado: rehace el buffer con todo s_shapeData (el viejo se libera 120 cuadros despues)
     D3D11_BUFFER_DESC bd{}; bd.ByteWidth = (UINT)(s_shapeData.size() * 4); bd.Usage = D3D11_USAGE_IMMUTABLE; bd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
     D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = s_shapeData.data();
     ID3D11Buffer* b = nullptr; ID3D11ShaderResourceView* v = nullptr;
@@ -235,6 +271,7 @@ bool ShapeUpload() {   // con s_mx tomado: rehace el buffer con todo s_shapeData
         if (FAILED(g_dev.dev->CreateShaderResourceView(b, &vd, &v))) { b->Release(); b = nullptr; }
     }
     if (!v) return false;
+    Retire(s_shapeBuf, s_shapeSrv);
     s_shapeBuf = b; s_shapeSrv = v; return true;
 }
 // formas de una malla sin paquete propio, sacadas de la piel cercana; -1 si no hay piel con formas cerca
@@ -280,9 +317,10 @@ int ShapeXfer(FaceMesh* m, const float* ps, uint64_t ib) {   // con s_mx tomado
     if (nCerca == 0 || mx < 1e-4f) return -1;
     if (!same && nPegado < (int)(0.85f * (float)m->nv)) return -1;
     m->xferGate = !same;
-    const size_t off4 = s_shapeData.size() / 4;
-    s_shapeData.insert(s_shapeData.end(), d.begin(), d.end());
-    if (!ShapeUpload()) { s_shapeData.resize(off4 * 4); return -1; }
+    const long long o4 = AppendPool(s_shapeData, s_shapeDedup, kShapeCapF, d, ShapeUpload, "formas");
+    if (o4 < 0) return -1;
+    const size_t off4 = (size_t)o4;
+    static int nLog = 0; if (nLog < 60) nLog++; else return (int)off4;   // (04/11 i) el log tambien tiene tope
     Log("expresiones: formas pasadas de la piel a la malla %d (%08X, %u vertices, %d cerca de la piel, %d pegados; sonrisa maximo %.1f mm%s)", m->id, m->huella, m->nv, nCerca, nPegado, mx * 1000, same ? "" : "; otro buffer: solo junto a su piel");
     return (int)off4;
 }
@@ -325,11 +363,9 @@ int ShapeFind(uint32_t hu, UINT nv, const float* ps, uint64_t ib) {   // con s_m
         for (int c = 0; c < 3; c++) q[c] = std::clamp(std::isfinite(q[c]) ? q[c] : 0.0f, -0.02f, 0.02f);   // tope 2 cm por vertice
         q[3] = 0; mx[k] = (std::max)(mx[k], sqrtf(q[0] * q[0] + q[1] * q[1] + q[2] * q[2]));
     }
-    const size_t off4 = s_shapeData.size() / 4;
-    s_shapeData.insert(s_shapeData.end(), d.begin(), d.end());
-    // la vista vieja NO se libera: un dibujo de otro hilo puede tenerla en la mano entre ExprBufferForDraw y VSSetShaderResources
-    // (solo pasa al cargar un paquete nuevo: unos pocos KB)
-    if (!ShapeUpload()) { s_shapeData.resize(off4 * 4); Log("expresiones: formas %08X: no se pudo crear el buffer", hu); return -1; }
+    const long long o4 = AppendPool(s_shapeData, s_shapeDedup, kShapeCapF, d, ShapeUpload, "formas");
+    if (o4 < 0) { Log("expresiones: formas %08X: no se pudo crear el buffer", hu); return -1; }
+    const size_t off4 = (size_t)o4;
     sp.off = (int)off4; sp.nv = nv;
     { ShapeSrc src; src.p.assign(ps, ps + (size_t)nv * 3); src.off4 = off4; src.nv = nv; src.hu = hu; src.ib = ib; s_src.push_back(std::move(src)); }
     if (hd[3]) {   // (04/11) arrugas esculpidas de la sonrisa de esta cara: normal map en las uv de la cara (wrinkle_dds.py)
@@ -412,7 +448,8 @@ bool BeardUpload() {
     ID3D11Buffer* b = nullptr; if (FAILED(g_dev.dev->CreateBuffer(&d, &sd, &b))) return false;
     D3D11_SHADER_RESOURCE_VIEW_DESC v{}; v.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; v.ViewDimension = D3D11_SRV_DIMENSION_BUFFER; v.Buffer.NumElements = (UINT)(s_beardData.size() / 4);
     ID3D11ShaderResourceView* sv = nullptr; if (FAILED(g_dev.dev->CreateShaderResourceView(b, &v, &sv))) { b->Release(); return false; }
-    s_beardBuf = b; s_beardSrv = sv;   // las vistas viejas NO se liberan (otro hilo puede tenerlas en la mano; pocas veces y pocos KB)
+    Retire(s_beardBuf, s_beardSrv);   // (04/11 i) se liberan 120 cuadros despues (antes nunca: 65 GB en el partido)
+    s_beardBuf = b; s_beardSrv = sv;
     return true;
 }
 void BeardKeepSrc(FaceMesh* m, const std::vector<float>& ps, const std::vector<uint32_t>& iv, const std::vector<float>& wv) {   // con s_mx tomado
@@ -504,16 +541,17 @@ bool BeardBind(FaceMesh* m, const std::vector<float>& ps) {   // con s_mx tomado
         if (std::find(used.begin(), used.end(), bs->id) == used.end()) used.push_back(bs->id);
     }
     if (!nOk) return false;
-    const size_t off4 = s_beardData.size() / 4;
-    s_beardData.insert(s_beardData.end(), d.begin(), d.end());
-    if (!BeardUpload()) { s_beardData.resize(off4 * 4); return false; }
+    const long long o4 = AppendPool(s_beardData, s_beardDedup, kBeardCapF, d, BeardUpload, "barbas");
+    if (o4 < 0) return false;
+    const size_t off4 = (size_t)o4;
     for (int g : used) if (std::find(s_geoUsed.begin(), s_geoUsed.end(), g) == s_geoUsed.end()) s_geoUsed.push_back(g);
     int nMark = 0; for (auto& kv : s_meshes) if (kv.second->geoId && std::find(used.begin(), used.end(), kv.second->geoId) != used.end()) { kv.second->beardSrc = true; nMark++; }
     const UINT cv[28] = { (UINT)off4, m->nv, m->vmin, 1u };
     m->cb = MakeCBRaw(cv);   // (el cbuffer viejo de un re-enlace no se libera: otro hilo puede tenerlo en la mano)
     m->beardUsed = used;
     char ug[96]; int uk = 0; ug[0] = 0; for (size_t i = 0; i < used.size() && uk < 80; i++) uk += snprintf(ug + uk, sizeof ug - uk, "%s%d", i ? "," : "", used[i]);
-    Log("expresiones: barba %d (%u vertices) enlazada a la piel de la cara (%d piezas: geometrias %s, %d mallas de la tabla, %s, %d de %u vertices a menos de 25 mm, muestra %d / %d a menos de 12 mm, %.1f mm de promedio)", m->id, m->nv, (int)used.size(), ug, nMark, recent ? "piel dibujada junto a la barba" : "OJO: ninguna piel dibujada cerca, la mas cercana", nOk, m->nv, gc, ns, gd * 1000.0);
+    static int nLogB = 0;
+    if (nLogB < 80 && ++nLogB) Log("expresiones: barba %d (%u vertices) enlazada a la piel de la cara (%d piezas: geometrias %s, %d mallas de la tabla, %s, %d de %u vertices a menos de 25 mm, muestra %d / %d a menos de 12 mm, %.1f mm de promedio)", m->id, m->nv, (int)used.size(), ug, nMark, recent ? "piel dibujada junto a la barba" : "OJO: ninguna piel dibujada cerca, la mas cercana", nOk, m->nv, gc, ns, gd * 1000.0);
     return m->cb != nullptr;
 }
 
@@ -947,9 +985,19 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
             } else ++it2;
           }
         }
-        if (s_meshes.size() >= 4096) {   // partido largo / muchas caras: se empieza de nuevo (las cuentas y buffers cambian entre partidos)
-            for (auto& kv : s_meshes) FreeMesh(kv.second);
-            s_meshes.clear(); s_pending.clear();
+        if (s_meshes.size() >= 4096) {
+            // (04/11 i, cuelgue 08:17) antes se vaciaba entera: todas las caras se releian y se les volvian a pasar formas / enlazar la
+            // barba en bucle. Ahora se echan las mas viejas hasta 3072, nunca las dibujadas en los ultimos 3 cuadros
+            std::vector<std::pair<UINT, decltype(s_meshes.begin())>> old; old.reserve(s_meshes.size());
+            for (auto it2 = s_meshes.begin(); it2 != s_meshes.end(); ++it2) if (s_frame - it2->second->lastFrame > 3) old.push_back({ it2->second->lastFrame, it2 });
+            std::sort(old.begin(), old.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
+            size_t need = s_meshes.size() - 3072;
+            for (size_t k = 0; k < old.size() && k < need; k++) {
+                FaceMesh* o = old[k].second->second;
+                s_pending.erase(std::remove(s_pending.begin(), s_pending.end(), o), s_pending.end());
+                FreeMesh(o); s_meshes.erase(old[k].second); s_evicted++;
+            }
+            static int nFull = 0; if (nFull < 20) { nFull++; Log("expresiones: tabla llena (4096 mallas): echadas las %d mas viejas", (int)(std::min)(old.size(), need)); }
         }
     }
     FaceMesh* m = new FaceMesh(); m->id = s_nextId++; m->lastFrame = s_frame; m->beard = t_beardDraw; m->seqAt = s_drawSeq;
@@ -1096,6 +1144,7 @@ void ExprPresent() {
     {   // con el candado tomado: los dibujos (otros hilos) leen state / cb y pueden vaciar la tabla. Los Map son DO_NOT_WAIT.
         std::lock_guard<std::mutex> lk(s_mx);
         s_frame++;
+        RetiredPresent();   // (04/11 i)
         {   // (04/11) volcado de las mallas de la cara: w354 sube de 0 a 1 -> se vacia la tabla y las que se vuelvan a dibujar en ~10 s se vuelcan
             static bool was = false; const bool now = g_cfg.live[354][3] > 0.5f;
             if (now && !was) {
@@ -1148,6 +1197,7 @@ void ExprPresent() {
         if (b || bn) { std::lock_guard<std::mutex> lk(s_mx);
             Log("expresiones: %d mallas de cara (cabeza en 0: %d, en 1: %d, en otro: %d, descartadas o no cara %d); dibujos con dato %d, sin dato %d (en lectura %d, descartadas o no cara %d, nuevas %d, apagado %d); echadas por viejas %d; ganancia %.2f",
                 (int)s_meshes.size(), s_hist[0], s_hist[1], s_hist[2], s_hist[3], b, bn, bw, bd, bnew, bn - bw - bd - bnew, s_evicted, g_cfg.live[340][1]);
+            Log("expresiones: memoria de formas %u KB, barbas %u KB; reusadas %d, tope %d, buffers por liberar %d", (unsigned)(s_shapeData.size() * 4 >> 10), (unsigned)(s_beardData.size() * 4 >> 10), s_dedupHits, s_capHits, (int)s_retired.size());   // (04/11 i)
             int np = 0; for (auto& kv : s_shapes) if (kv.second.off >= 0) np++;
             const int sd = s_shapeDraws.exchange(0);
             if (np || sd) Log("expresiones: gestos esculpidos: %d mallas con formas, %d dibujos (sonrisa %.2f grito %.2f enojo %.2f asombro %.2f puchero %.2f, perfiles %s)", np, sd,
