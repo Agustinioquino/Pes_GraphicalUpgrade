@@ -25,6 +25,17 @@ cbuffer cVSScene : register(b2)
   float4 m_shadowMapResolutions;
 }
 Texture1D<float4> IniParams : register(t120);
+#ifdef PES_SHADOW
+cbuffer cPSSystem : register(b0)
+{
+  struct { float4 m_param; float4 m_renderInfo; float4 m_renderBuffer; float4 m_dominantLightDir; float4 m_timeParam; } g_psSystem;
+}
+float3 PesShadowL() {
+  float3 L = g_psSystem.m_dominantLightDir.xyz;
+  if (IniParams.Load(int2(50, 0)).z < 0.5) L = float3(dot(L, m_view[0].xyz), dot(L, m_view[1].xyz), dot(L, m_view[2].xyz));
+  return dot(L, L) > 0.25 ? normalize(L) : float3(0, 0, 0);
+}
+#endif
 Texture2D<float4> tLash : register(t0);      // difusa de las pestanas (la misma del dibujo; alfa = pestana)
 SamplerState sLin : register(s0);
 
@@ -136,6 +147,7 @@ void main(triangle LashV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     float widB = 0.00004 * mWid;                               // ~0.08 mm de ancho total en la raiz
     float4 tc = tLash.SampleLevel(sLin, uv, 0);
     float3 cR = tc.rgb, cT = tc.rgb * float3(1.15, 1.1, 1.05);
+    { float layer = lerp(0.75, 1.05, frac(r3 * 5.71 + r2 * 2.13)); cR *= 0.72 * layer; cT *= layer; }   // (04/11 j) sombra entre pelos: raiz tapada + capas
     float4 cp = v[0].clipCP * b.x + v[1].clipCP * b.y + v[2].clipCP * b.z;
     float2 ww = v[0].ww * b.x + v[1].ww * b.y + v[2].ww * b.z;
     float4 q = cp / ww.xxyy;
@@ -143,12 +155,22 @@ void main(triangle LashV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     q = q.zwxy * float4(1, -1, 1, -1) + float4(0, 1, 0, 1);
     float2 motion = q.zw - q.xy;
     float curl = 0.22 + 0.1 * r2;
+#ifdef PES_SHADOW
+    // (04/11 k) sombra de la pestana sobre el parpado / el ojo: la pestana proyectada siguiendo la luz al plano de la tira
+    float3 Ls = PesShadowL();
+    float nl = abs(dot(Ls, n));
+    if (dot(Ls, Ls) < 0.5 || nl < 0.08) continue;
+#endif
     [unroll] for (uint ring = 0; ring <= PES_SEG; ring++) {
       float t = (float)ring / (float)PES_SEG;
       float3 p = root + d * len * t + n * len * curl * t * t;  // se curva hacia afuera hacia la punta
       float wid = widB * (1.0 - 0.8 * t);
       float pxV = 2.0 * abs(p.z) / (max(abs(m_projection[1].y), 1e-4) * vpH);
       wid = max(wid, pxV * (P75.z > 0.5 ? 1.25 : 0.4));
+#ifdef PES_SHADOW
+      { float hgt = abs(dot(p - root, n)) + len * 0.15 * t;                      // la tira esta separada del parpado: sombra corrida
+        p = p - Ls * (hgt / max(nl, 0.25)); wid = wid * 1.8 + hgt * 0.05; }
+#endif
       float3 V = normalize(-p);
       float3 tanR = normalize(d + n * curl * 2.0 * t);
       float3 sideV = normalize(cross(tanR, V) + 1e-6);

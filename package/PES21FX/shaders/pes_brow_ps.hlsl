@@ -61,7 +61,7 @@ float3 PesBrowAniso(float3 N, float3 T, float3 V, float t)
   float nkl = length(Nk);
   Nk = nkl > 1e-4 ? Nk / nkl : N;
   if (dot(Nk, V) < 0.05) Nk = N;
-  return normalize(lerp(N, Nk, saturate(HK.x) * 0.7));   // un poco menos que en la cabeza: la ceja es corta y va pegada a la piel
+  return normalize(lerp(N, Nk, saturate(HK.x) * 0.9));   // (04/11 j) la banda de brillo (R de Marschner) tiene que verse y moverse a lo largo del pelo
 }
 
 struct VSOut {
@@ -89,6 +89,16 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   // a la luz: el pelo de la ceja se ve con volumen y brillo arriba, sin la raiz negra de la v1 (0.55)
   col *= lerp(0.9, 1.0, saturate(t * 2.5));   // (04/11 e) 0.82 -> 0.9: con el color nuevo ya no hace falta oscurecer tanto
   if (P75.z > 0.5) col = float3(1, 0, 1);   // diagnosticos 1 y 3: magenta
+  // (04/11 j, Agustin: "la luz al cambiar el color no es realista, no traspasa de frente") un pelo no es una superficie opaca: la luz
+  // entra, se dispersa entre las hebras y sale con el color del pelo (dispersion multiple). En el G-buffer eso equivale a un albedo
+  // mas claro y saturado que el color "pintado" (col^0.8, saturacion x1.15): con luz de frente la ceja toma el tono del pelo
+  // (castano, colorado) en vez de quedar como plastico oscuro; el contraluz y el brillo siguen en la pasada del sol (marca de pelo)
+  if (P75.z < 0.5) {
+    float3 cs = saturate(col);
+    float3 ms = pow(cs + 1e-4, 0.8);
+    float ml = dot(ms, float3(0.2126, 0.7152, 0.0722));
+    col = max(ml + (ms - ml) * 1.15, 0.0);
+  }
   o0 = float4(saturate(col), 1.0);
   // normal + translucidez (hebra: 0.15) empaquetadas como en el shader de cara
   float3 n = normalize(i.nrmV);
@@ -111,11 +121,15 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   o1.xyw = float3(0.000977517106, 0.000977517106, 0.333333343) * float3(hi.x, hi.y, lo);
   o1.z = 0.000977517106 * (float)(rx << 4);
   // rugosidad (misma curva que la cara) y especular bajos: el pelo de ceja es mate con un brillo fino
-  float rough = 0.58;   // (04/11 e) brillo fino pero suave: sin tangente en el G-buffer un brillo muy chico titila en cintas de 1 px
+  // (04/11 j, Agustin: "toma en cuenta como funciona la luz en pelo real, no solo cambian de color") pelo real (Marschner): R = brillo
+  // blanco en banda que se corre hacia la raiz y se mueve con la camara / el sol (normal de Kajiya-Kay de arriba + GGX mas liso),
+  // TRT = segundo brillo con el color del pelo y TT = contraluz (pasada del sol, marca de pelo), dispersion multiple (albedo de
+  // abajo) y sombra entre pelos (GS). Antes el GGX era tan rugoso que la banda no se veia y solo cambiaba el color
+  float rough = 0.4;
   float rc = rough * 0.0361702144 + 0.0904255286;
   rc = rc * rough + 0.180851057; rc = rc * rough + 0.271276593; rc = rc * rough + 0.271276593;
   o2.x = rc * rough + 0.150000006;
-  o2.y = 0.36 * (pesHairMisc.x > 0.5 ? saturate(pesHairB.z) / 0.6 : 1.0);   // brillo del tipo de pelo (0.6 = natural)
+  o2.y = 0.5 * (pesHairMisc.x > 0.5 ? saturate(pesHairB.z) / 0.6 : 1.0);   // brillo del tipo de pelo (0.6 = natural)
   o2.z = IniParams.Load(int2(339,0)).w > 0.5 ? 0.98823529 : 1.0;   // (04/11) pelo a contraluz; sin eso como antes (ni piel ni kit)
   o2.w = g_psMaterial.m_materials[0].x;
   o3.xy = g_psSystem.m_renderBuffer.xy * i.motion;

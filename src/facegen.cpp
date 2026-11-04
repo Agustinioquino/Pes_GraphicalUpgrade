@@ -135,7 +135,12 @@ static void ReleaseEntry(FaceEntry& e) {
 // (04/11) v2: GS sobre la malla de la cara (pes_brow_a_gs = VS faab87ee, pes_brow_b_gs = VS 455eb97b) + el mismo PS de la v1
 static ID3D11VertexShader* s_browVS = nullptr; static ID3D11PixelShader* s_browPS = nullptr; static bool s_browTried = false; static ID3D11RasterizerState* s_browRS = nullptr;
 static ID3D11GeometryShader* s_browGS[2] = {};
-static ID3D11GeometryShader* s_lashGS = nullptr;   // (04/11 i) pestanas con hebras (pes_lash_gs.hlsl, VS 66917213)
+static ID3D11GeometryShader* s_lashGS = nullptr;
+// (04/11 k, Agustin: "no solo brillo, luz real") SOMBRA DE CONTACTO de cada pelo sobre la piel de abajo, con la direccion real
+// del sol / luz principal: antes de las hebras se repite el GS en modo sombra (la hebra proyectada sobre el plano de la piel
+// siguiendo la luz) con un PS que multiplica el albedo del G-buffer (solo RT0, mezcla multiplicativa, sin escribir profundidad)
+static ID3D11GeometryShader* s_shGS[3] = {};   // cabeza, cara animada, pestanas
+static ID3D11PixelShader* s_shPS = nullptr; static ID3D11BlendState* s_shBlend = nullptr;   // (04/11 i) pestanas con hebras (pes_lash_gs.hlsl, VS 66917213)
 static void EnsureBrowShaders() {
     if (s_browTried || !g_dev.dev) return;
     s_browTried = true;
@@ -143,6 +148,16 @@ static void EnsureBrowShaders() {
     if (pb) { g_dev.dev->CreatePixelShader(pb->GetBufferPointer(), pb->GetBufferSize(), nullptr, &s_browPS); pb->Release(); }
     const wchar_t* gsf[2] = { L"pes_brow_a_gs.hlsl", L"pes_brow_b_gs.hlsl" };
     for (int i = 0; i < 2; i++) if (ID3DBlob* gb = CompileNamedShader(gsf[i], "gs_5_0")) { g_dev.dev->CreateGeometryShader(gb->GetBufferPointer(), gb->GetBufferSize(), nullptr, &s_browGS[i]); gb->Release(); }
+    { const wchar_t* shf[3] = { L"pes_browsh_a_gs.hlsl", L"pes_browsh_b_gs.hlsl", L"pes_lashsh_gs.hlsl" };
+      for (int i = 0; i < 3; i++) if (ID3DBlob* gb = CompileNamedShader(shf[i], "gs_5_0")) { g_dev.dev->CreateGeometryShader(gb->GetBufferPointer(), gb->GetBufferSize(), nullptr, &s_shGS[i]); gb->Release(); }
+      if (ID3DBlob* sb = CompileNamedShader(L"pes_browsh_ps.hlsl", "ps_5_0")) { g_dev.dev->CreatePixelShader(sb->GetBufferPointer(), sb->GetBufferSize(), nullptr, &s_shPS); sb->Release(); }
+      if (!s_shBlend) { D3D11_BLEND_DESC bd{}; bd.IndependentBlendEnable = TRUE;
+          bd.RenderTarget[0].BlendEnable = TRUE; bd.RenderTarget[0].SrcBlend = D3D11_BLEND_ZERO; bd.RenderTarget[0].DestBlend = D3D11_BLEND_SRC_COLOR; bd.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+          bd.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ZERO; bd.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ONE; bd.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+          bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_RED | D3D11_COLOR_WRITE_ENABLE_GREEN | D3D11_COLOR_WRITE_ENABLE_BLUE;
+          for (int i = 1; i < 8; i++) bd.RenderTarget[i].RenderTargetWriteMask = 0;
+          g_dev.dev->CreateBlendState(&bd, &s_shBlend); }
+      Log("hebras: sombra de contacto sobre la piel: GS %s %s %s, PS %s", s_shGS[0] ? "si" : "NO", s_shGS[1] ? "si" : "NO", s_shGS[2] ? "si" : "NO", s_shPS ? "si" : "NO"); }
     if (ID3DBlob* lb = CompileNamedShader(L"pes_lash_gs.hlsl", "gs_5_0")) { g_dev.dev->CreateGeometryShader(lb->GetBufferPointer(), lb->GetBufferSize(), nullptr, &s_lashGS); lb->Release(); }
     Log("pestanas: hebras (sobre la tira de pestanas): GS %s", s_lashGS ? "si" : "NO (ver errores)");
     if (!s_browRS) { D3D11_RASTERIZER_DESC rd{}; rd.FillMode = D3D11_FILL_SOLID; rd.CullMode = D3D11_CULL_NONE; rd.DepthClipEnable = TRUE; g_dev.dev->CreateRasterizerState(&rd, &s_browRS); }
@@ -167,6 +182,8 @@ void FaceGenReloadShaders() {
     if (s_browPS) { s_browPS->Release(); s_browPS = nullptr; }
     for (auto*& g : s_browGS) if (g) { g->Release(); g = nullptr; }
     if (s_lashGS) { s_lashGS->Release(); s_lashGS = nullptr; }
+    for (auto*& g : s_shGS) if (g) { g->Release(); g = nullptr; }
+    if (s_shPS) { s_shPS->Release(); s_shPS = nullptr; }
     s_browTried = false;
     // lo ya generado se rehace con el shader nuevo
     for (auto& kv : s_cache) ReleaseEntry(kv.second);
@@ -431,6 +448,8 @@ struct BrowSaved {
     ID3D11Buffer* gsCB[12] = {}; ID3D11ShaderResourceView* gsT0 = nullptr; ID3D11ShaderResourceView* gsT26 = nullptr; ID3D11ShaderResourceView* gsT27 = nullptr; ID3D11ShaderResourceView* gsT120 = nullptr;
     ID3D11SamplerState* gsS0 = nullptr; ID3D11Buffer* psCB11 = nullptr; ID3D11ShaderResourceView* psT120 = nullptr;
     ID3D11ShaderResourceView* gsT23[2] = {}; ID3D11ShaderResourceView* gsT121 = nullptr;   // (04/11 e) relieve + aviso de teselacion
+    ID3D11BlendState* blend = nullptr; float blendF[4] = {}; UINT blendM = 0xffffffff;   // (04/11 k) pasada de sombra
+    ID3D11DepthStencilState* strandDSS = nullptr; ID3D11DepthStencilState* shadowDSS = nullptr; ID3D11GeometryShader* strandGS = nullptr; ID3D11GeometryShader* shadowGS = nullptr;   // no se liberan (cache / globales)
 };
 static thread_local BrowSaved t_bs;
 bool BrowWanted(const FaceGenExtra& ex, uint64_t vsHash) {
@@ -474,13 +493,19 @@ bool BrowStrandsBegin(ID3D11DeviceContext* c, const FaceGenExtra* ex, uint64_t v
     ID3D11DepthStencilState* useDSS = nullptr;
     {
         static std::mutex mx; std::lock_guard<std::mutex> lk(mx);
-        static ID3D11DepthStencilState* cacheDSS[2] = {}; static D3D11_DEPTH_STENCIL_DESC cacheDesc[2] = {}; static bool cacheOk[2] = {};
+        static ID3D11DepthStencilState* cacheDSS[4] = {}; static D3D11_DEPTH_STENCIL_DESC cacheDesc[4] = {}; static bool cacheOk[4] = {};
         int ci = reversed ? 1 : 0;
         if (!cacheOk[ci] || memcmp(&cacheDesc[ci], &dd, sizeof(dd)) != 0) {
             if (cacheDSS[ci]) { cacheDSS[ci]->Release(); cacheDSS[ci] = nullptr; }
             g_dev.dev->CreateDepthStencilState(&dd, &cacheDSS[ci]); cacheDesc[ci] = dd; cacheOk[ci] = true;
         }
         useDSS = cacheDSS[ci];
+        D3D11_DEPTH_STENCIL_DESC dn = dd; dn.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;   // (04/11 k) sombra: prueba sin escribir
+        if (!cacheOk[ci + 2] || memcmp(&cacheDesc[ci + 2], &dn, sizeof(dn)) != 0) {
+            if (cacheDSS[ci + 2]) { cacheDSS[ci + 2]->Release(); cacheDSS[ci + 2] = nullptr; }
+            g_dev.dev->CreateDepthStencilState(&dn, &cacheDSS[ci + 2]); cacheDesc[ci + 2] = dn; cacheOk[ci + 2] = true;
+        }
+        t_bs.shadowDSS = cacheDSS[ci + 2];
     }
     static std::atomic<int> s_logged{0};
     static std::atomic<int> s_lashLogged{0};
@@ -509,12 +534,34 @@ bool BrowStrandsBegin(ID3D11DeviceContext* c, const FaceGenExtra* ex, uint64_t v
     }
     c->RSSetState(s_browRS);   // sin culling (cintas vistas de ambos lados)
     if (useDSS) c->OMSetDepthStencilState(useDSS, s.ref);
+    s.strandDSS = useDSS; s.strandGS = gs;
+    s.shadowGS = s_shGS[lash ? 2 : (vsHash == kVSFaceAnim ? 1 : 0)];
+    c->OMGetBlendState(&s.blend, s.blendF, &s.blendM);
     s_stDraw++;
     if (!lash && !ex->id.empty()) { std::lock_guard<std::mutex> lk(s_browMx); s_browSeen.insert(ex->id); }
     return true;
 }
+// (04/11 k) pasada de sombra de contacto (entre Begin y el dibujo de las hebras): GS en modo sombra, PS multiplicativo, sin
+// escribir profundidad; la luz principal (b0 del PS de la cara / pestanas: m_dominantLightDir) tambien va al GS
+bool BrowShadowOn(ID3D11DeviceContext* c) {
+    BrowSaved& s = t_bs;
+    if (!s.shadowGS || !s_shPS || !s_shBlend || !s.shadowDSS) return false;
+    ID3D11Buffer* b0 = nullptr; c->PSGetConstantBuffers(0, 1, &b0); if (!b0) return false;
+    c->GSSetConstantBuffers(0, 1, &b0); b0->Release();
+    c->GSSetShader(s.shadowGS, nullptr, 0); c->PSSetShader(s_shPS, nullptr, 0);
+    float bf[4] = { 1, 1, 1, 1 }; c->OMSetBlendState(s_shBlend, bf, 0xffffffff);
+    c->OMSetDepthStencilState(s.shadowDSS, s.ref);
+    return true;
+}
+void BrowShadowOff(ID3D11DeviceContext* c) {
+    BrowSaved& s = t_bs;
+    c->GSSetShader(s.strandGS, nullptr, 0); c->PSSetShader(s_browPS, nullptr, 0);
+    c->OMSetBlendState(s.blend, s.blendF, s.blendM);
+    if (s.strandDSS) c->OMSetDepthStencilState(s.strandDSS, s.ref);
+}
 void BrowStrandsEnd(ID3D11DeviceContext* c) {
     BrowSaved& s = t_bs;
+    c->OMSetBlendState(s.blend, s.blendF, s.blendM); if (s.blend) s.blend->Release();
     c->VSSetShader(s.vs, nullptr, 0); c->PSSetShader(s.ps, nullptr, 0); c->GSSetShader(s.gs, nullptr, 0); c->HSSetShader(s.hs, nullptr, 0); c->DSSetShader(s.ds, nullptr, 0);
     c->IASetPrimitiveTopology(s.topo); c->RSSetState(s.rs); c->OMSetDepthStencilState(s.dss, s.ref);
     c->GSSetConstantBuffers(0, 12, s.gsCB); c->GSSetShaderResources(0, 1, &s.gsT0); c->GSSetShaderResources(26, 1, &s.gsT26); c->GSSetShaderResources(27, 1, &s.gsT27); c->GSSetShaderResources(120, 1, &s.gsT120);
