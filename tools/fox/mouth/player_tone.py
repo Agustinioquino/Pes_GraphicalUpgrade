@@ -8,7 +8,7 @@ import numpy as np
 TONES = {'messi': (1.04, 1.04, 1.035)}
 # (04/11 e) Agustin: 'no me convence ... los dientes de arriba, el color'. Desde la v25 la comun tiene el marfil de Konami
 # (L 0.60); Messi lleva carillas: blanco apenas calido y mas claro. (luminancia mediana, color objetivo); reemplaza TONES/LO_WHITE
-WHITE = {'messi': (0.74, (1.0, 0.975, 0.935))}
+WHITE = {'messi': (0.78, (1.0, 0.98, 0.95))}   # Agustin: 'los dientes de messi si son blancos'
 LUMW = np.array([0.30, 0.59, 0.11], np.float32)   # (04/11 c) mas blancos que la comun (carillas; antes marfil calido 1/.985/.95)
 # (04/11) dientes de abajo (fila de abajo del atlas, v 0.36-0.66): mas blancos ('un tono un poco mas blanco para los de abajo')
 LO_WHITE = {'messi': 0.0}   # (04/11 e) con WHITE todos los dientes de Messi van parejos   # 0 = como arriba; 1 = gris claro sin tinte
