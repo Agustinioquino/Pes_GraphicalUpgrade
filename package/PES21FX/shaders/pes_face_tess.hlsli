@@ -24,6 +24,12 @@
 //
 // PES_TESS_V455 = 1: variante del VS 455eb97b (TEXCOORD0 float4, TEXCOORD9 al final); 0: faab87ee (TEXCOORD0 y 9 float2 juntos).
 // PES_TESS_CCW = 1: triangulos de salida con la orientacion invertida (w358; si la cara se ve del reves / desaparece).
+// PES_TESS_BODY = 1 (04/11 g, Agustin: "teselacion a las manos, brazos y piernas"): variante del VS de la piel del cuerpo
+// 1c02a92a (misma salida que faab87ee sin TEXCOORD11): fila 361 (x prendido, y densidad, z distancia maxima m, w tope mm),
+// suavidad y357, transicion y358; sin relieve (el cuerpo no tiene quinta textura), sin zona de orejas ni de cuello.
+#ifndef PES_TESS_BODY
+#define PES_TESS_BODY 0
+#endif
 
 Texture1D<float4> IniParams : register(t120);
 
@@ -47,7 +53,9 @@ struct PesTessVS
   float2 o8 : TEXCOORD9;
 #endif
   float4 pR : TEXCOORD10;
+#if !PES_TESS_BODY
   float4 pD : TEXCOORD11;
+#endif
   float4 pV : TEXCOORD12;   // xyz posicion en espacio de la vista (antes de proyectar), w peso de borde (0 = costura, 1 = interior)
 };
 
@@ -71,7 +79,9 @@ struct PesTessCP
   float2 o8 : TEXCOORD9;
 #endif
   float4 pR : TEXCOORD10;
+#if !PES_TESS_BODY
   float4 pD : TEXCOORD11;
+#endif
   float4 pV : TEXCOORD12;
 };
 
@@ -88,6 +98,18 @@ cbuffer PESTessView : register(b13)
   float4 g_pesTessVp;   // x ancho, y alto del viewport en pixeles (lo pone la DLL)
 }
 
+// (04/11 g) filas de parametros: cara 357 / 358; cuerpo 361 (x prendido, y densidad, z distancia maxima, w tope) con la
+// suavidad y357 y la transicion y358 de la cara
+void PesTessParams(out float4 T, out float4 U)
+{
+  T = IniParams.Load(int2(357, 0));   // x on, y suavidad, z densidad, w factor maximo
+  U = IniParams.Load(int2(358, 0));   // x distancia maxima (m), y transicion (m), z tope (mm), w orientacion
+#if PES_TESS_BODY
+  float4 B = IniParams.Load(int2(361, 0));
+  T.x = B.x; T.z = B.y; U.x = B.z; U.z = B.w;
+#endif
+}
+
 // (04/11 e) 1 dentro de la zona de la oreja (posicion de reposo en el marco de la cabeza), 0 en el resto de la cara; bordes suaves
 float PesTessEar(float3 r)
 {
@@ -100,8 +122,7 @@ float PesTessEar(float3 r)
 PesTessConst PesTessPatch(InputPatch<PesTessVS, 3> p)
 {
   PesTessConst k;
-  float4 T = IniParams.Load(int2(357, 0));   // x on, y suavidad, z pixeles por segmento, w factor maximo
-  float4 U = IniParams.Load(int2(358, 0));   // x distancia maxima (m), y transicion (m)
+  float4 T, U; PesTessParams(T, U);
   float f[3] = { 1.0, 1.0, 1.0 };
   bool ok = T.x > 0.5 && p[0].o0.w > 0.01 && p[1].o0.w > 0.01 && p[2].o0.w > 0.01;
   float dmin = min(length(p[0].pV.xyz), min(length(p[1].pV.xyz), length(p[2].pV.xyz)));
@@ -110,7 +131,9 @@ PesTessConst PesTessPatch(InputPatch<PesTessVS, 3> p)
   // los tres con peso 0 (triangulo entero en una costura): se queda como esta
   if (p[0].pV.w + p[1].pV.w + p[2].pV.w <= 0.0) ok = false;
   // (04/11 f) los tres puntos por debajo del collar del torso (reposo y < 1.53): nada que dividir (el DS apaga todo ahi)
+#if !PES_TESS_BODY
   if (max(p[0].pR.y, max(p[1].pR.y, p[2].pR.y)) < 1.53) ok = false;
+#endif
   if (ok) {
     float2 s0 = p[0].o0.xy / p[0].o0.w * 0.5 * g_pesTessVp.xy;
     float2 s1 = p[1].o0.xy / p[1].o0.w * 0.5 * g_pesTessVp.xy;
@@ -120,8 +143,12 @@ PesTessConst PesTessPatch(InputPatch<PesTessVS, 3> p)
     // (04/11 e, Agustin: "un valor para subir la teselacion de las orejas") y360 = densidad extra en las orejas: zona en reposo
     // (marco de la cabeza: ojos en y 1.697 z 0.138, labios z 0.17): a los costados (|x| > 5-7 cm), detras de los pomulos
     // (z < 8-10 cm) y entre el lobulo y la punta (y 1.62..1.73). Cada arista toma el mayor de sus dos extremos.
+#if PES_TESS_BODY
+    float em = 1.0; float3 ek = float3(0.0, 0.0, 0.0);
+#else
     float em = clamp(IniParams.Load(int2(360, 0)).y, 1.0, 6.0);
     float3 ek = float3(PesTessEar(p[0].pR.xyz), PesTessEar(p[1].pR.xyz), PesTessEar(p[2].pR.xyz));
+#endif
     float3 mul3 = lerp(float3(1.0, 1.0, 1.0), float3(em, em, em), float3(max(ek.y, ek.z), max(ek.z, ek.x), max(ek.x, ek.y)));
     // arista k = la opuesta al vertice k (convencion de D3D: e[0] entre los puntos 1 y 2)
     f[0] = clamp(length(s1 - s2) / px * mul3.x, 1.0, min(16.0, fmax * mul3.x));
@@ -165,7 +192,9 @@ PesTessCP main(InputPatch<PesTessVS, 3> p, uint i : SV_OutputControlPointID)
   o.o8 = p[i].o8;
 #endif
   o.pR = p[i].pR;
+#if !PES_TESS_BODY
   o.pD = p[i].pD;
+#endif
   o.pV = p[i].pV;
   return o;
 }
@@ -204,8 +233,7 @@ SamplerState pesTessSamp : register(s0);
 PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<PesTessCP, 3> p)
 {
   PesTessVS o;
-  float4 T = IniParams.Load(int2(357, 0));
-  float4 U = IniParams.Load(int2(358, 0));
+  float4 T, U; PesTessParams(T, U);
   // posicion lineal (la del triangulo plano) y la de Phong (proyectada sobre los tres planos tangentes)
   float3 P0 = p[0].pV.xyz, P1 = p[1].pV.xyz, P2 = p[2].pV.xyz;
   float3 N0 = normalize(p[0].o6.xyz), N1 = normalize(p[1].o6.xyz), N2 = normalize(p[2].o6.xyz);
@@ -217,8 +245,14 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
   // (04/11 f, Agustin: "en el cuello a veces lo rompe, que se desactive en la parte baja del cuello cerca del collar") el anillo
   // del collar del torso esta en y 1.51..1.56 del reposo (pes_collar.hlsli); de ahi hasta z360 cm mas arriba (defecto 6, hasta la
   // base del menton en 1.58) el corrimiento, el relieve y la inclinacion de la normal se apagan en rampa; el torso no se tesela.
+#if !PES_TESS_BODY
   { float nh = clamp(IniParams.Load(int2(360, 0)).z, 0.0, 15.0) * 0.01;
     seam *= smoothstep(1.53, 1.53 + max(nh, 0.01), PES_LERP3(pR).y); }
+#else
+  // (04/11 g) cuerpo: hombros, cuello y escote (reposo y > 1.40..1.47) quedan como el juego: ahi el torso se mete bajo la camiseta
+  // y bajo el cuello de la cara (z352 / x351), un redondeo hacia afuera los haria asomar
+  seam *= 1.0 - smoothstep(1.40, 1.47, PES_LERP3(pR).y);
+#endif
   float dist = length(pl);
   float fade = 1.0 - smoothstep(U.x - max(U.y, 0.01), U.x, dist);
   float3 d = (pp - pl) * (saturate(T.y) * seam * fade * (T.x > 0.5 ? 1.0 : 0.0));
@@ -227,6 +261,7 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
   // (04/11 c) relieve desde la quinta textura (fila 359): por la normal interpolada, mm
   float4 R = IniParams.Load(int2(359, 0));   // x fuerza, y hundir surcos (mm), z levantar relieve (mm), w mip
   bool tilt = false; float3 tiltN = 0, tiltT = 0, tiltB = 0;   // (04/11 d) relieve en la luz
+#if !PES_TESS_BODY
   if (R.x > 0.001 && T.x > 0.5) {
 #if PES_TESS_V455
     float2 uv = PES_LERP3(o2).zw;   // ce188: UV de la cara en TEXCOORD0.zw
@@ -273,6 +308,7 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
       }
     }
   }
+#endif   // !PES_TESS_BODY (relieve solo en la cara)
   // (04/11 d) PRUEBA (fila 360.x): infla la piel 1 cm por la normal, sin tope ni distancia, para ver sin duda que la teselacion
   // llega a la imagen (los bordes de cada pieza quedan fijos). Solo para probar: volver a "No".
   if (IniParams.Load(int2(360, 0)).x > 0.5) d += normalize(b.x * N0 + b.y * N1 + b.z * N2) * (0.01 * seam);
@@ -295,7 +331,9 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
   o.o8 = PES_LERP3(o8); o.o8.x = clip.w;
 #endif
   o.pR = PES_LERP3(pR); o.pR.w = p[0].pR.w;
+#if !PES_TESS_BODY
   o.pD = PES_LERP3(pD); o.pD.w = p[0].pD.w;
+#endif
   o.pV = float4(pv, seam);
   return o;
 }
