@@ -22,6 +22,9 @@ def main(src, texdir, dst, konami, profile):
     tmp = dst + '.mouth_konami.fmdl'; open(tmp, 'wb').write(kb)
     print('perfil de dientes: %s' % (mouth3d.PROFILE or 'comun'))
     r = mouth3d.build(tmp, texdir)
+    import player_tone
+    if int(os.environ.get('MOUTH_TONE', '1')) and profile in player_tone.MARKER:   # (04/11) marca para la regla de la DLL (tono propio)
+        r['faces'] = player_tone.mark_faces(r['faces'], profile); print('marca de tono: %d indices' % (3 * len(r['faces'])))
     new = mouth_fmdl.write(tmp, dst + '.oral.fmdl', r['pos'], r['nrm'], r['tan'], r['w'], r['bidx'], r['uv'], r['faces'])
     os.remove(tmp)
     old = {e[0]: e[1] for e in f['ents']}

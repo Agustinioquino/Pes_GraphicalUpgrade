@@ -15,7 +15,7 @@ from scipy import ndimage as ndi
 import scipy.sparse as sp, scipy.sparse.csgraph as cg
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [HERE, os.path.join(HERE, '..'), os.path.join(HERE, '..', '..')]
-import fmdl, mouth_fmdl, make_oral, throat, molar, player_tone
+import fmdl, mouth_fmdl, make_oral, throat, molar
 
 MM = 0.001
 # (01/11) mordida: con la boca en reposo la tira de arriba termina en y 1.631 y la de abajo en 1.6285 (2.5 mm de luz); los dientes
@@ -544,8 +544,6 @@ def build(src_fmdl, texdir, log=print):
                 ext = ((0.0 if kind == 'P' else (-0.2 if up else 1.0)) * MM if KONAMI_BITE else (EXT_UP if up else EXT_LO) + dext)
             Pt, UVt, Ft = tooth(M, xl / 512.0, xr / 512.0, vG, vI, kind, up, ext=ext, mes=mes, tw=(tw_row[i] if REAL_TEETH else None),
                                 seed=nteeth, uvbox=uvbox)
-            if PROFILE in player_tone.TONES and int(os.environ.get('MOUTH_TONE', '1')):   # (04/11) los dientes de este jugador usan la copia con su tono (zona libre del atlas)
-                UVt = player_tone.remap_uv(UVt, up)
             if os.environ.get('TOOTH_DBG'): log('    diente %s %d %s x %.1f y %.1f z %.1f ancho %.1f' % ('arr' if up else 'abj', i, kind, *(Pt.mean(0) * 1000), np.ptp(Pt[:, 0]) * 1000))
             wt = np.zeros((len(Pt), len(names))); wt[:, names.index('sk_head' if up else 'skf_jaw')] = 1
             row_parts.append([Pt, UVt, Ft, wt, 'diente']); nteeth += 1; tooth_up.append(up)
