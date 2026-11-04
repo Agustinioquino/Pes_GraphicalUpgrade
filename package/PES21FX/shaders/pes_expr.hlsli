@@ -317,9 +317,13 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
   // (02/11, Agustin: "los ojos vivos es lo que rompe, no mueve el esqueleto real") el parpado ya NO sigue la mirada por shader:
   // solo se movia en las mallas donde la DLL encontro el parpado y se separaba de las pestanas / la otra malla. Vuelve cuando
   // la mirada y los parpados vayan por los huesos del esqueleto de la cara (exprbones.cpp)
-  float gz = 0.0;
+  // (03/11, Agustin: "los parpados que vibran es en los partidos ... por huesos mas parpados") los parpados por huesos se peleaban
+  // con la correccion de la mirada del juego. Vuelven a seguir la mirada DEL MOD aca, en el VS: es lo ultimo antes de dibujar y el
+  // juego no lo pisa (la mirada del juego ya viene en los huesos de los parpados). La paleta por malla ya coincide en todas las
+  // mallas de la cara (registro "parpados por malla", fd86e36). Solo el de arriba; el de abajo sigue quieto (ranuras azules)
+  float gz = IniParams.Load(int2(347, 0)).w;
   float gy = 0.0, gyp = 0.0;
-  if (gz > 0.0) { gy = PesGaze(t, seed, gz).y; gyp = PesGaze(t - 1.0 / 60.0, seed, gz).y; }
+  if (gz > 0.0 || IniParams.Load(int2(354, 0)).x > 0.0) { gy = PesGaze(t, seed, gz).y; gyp = PesGaze(t - 1.0 / 60.0, seed, gz).y; }
   if (b <= 0.0 && bp <= 0.0 && abs(gy) < 0.0005 && abs(gyp) < 0.0005) return;
   float3 C = float3(rest.x >= 0.0 ? 0.028 : -0.028, 1.6968, 0.138);
   float3 q = p.xyz - C;
@@ -337,7 +341,7 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
     // el de abajo sube un poco al mirar abajo). El sentido: A > 0 cierra el de arriba (baja), A < 0 el de abajo (sube).
     // (02/11, video de Agustin: ranuras azules bajo el ojo al mover la mirada) el de abajo ya no acompana la mirada: solo se
     // movia en las mallas donde la DLL encontro el parpado y se separaba de las pestanas / la otra malla del parpado
-    float fu = up ? (gy < 0.0 ? 0.65 : 0.35) : 0.0, fup = up ? (gyp < 0.0 ? 0.65 : 0.35) : 0.0;
+    float fu = up ? (gy < 0.0 ? 0.80 : 0.55) : 0.0, fup = up ? (gyp < 0.0 ? 0.80 : 0.55) : 0.0;   // (03/11) como la DLL (d1fb166)
     float a1 = A * b + (up ? -gy * fu : gy * fu) * (1.0 - g), a0 = A * bp + (up ? -gyp * fup : gyp * fup) * (1.0 - g);
     float c1 = cos(a1), s1 = sin(a1), c0 = cos(a0), s0 = sin(a0);
     float3 d1 = PesRotX(q, c1, s1) - q, d0 = PesRotX(q, c0, s0) - q;
