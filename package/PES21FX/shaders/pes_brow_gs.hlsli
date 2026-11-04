@@ -39,6 +39,19 @@ cbuffer PESHair : register(b11)
   float4 pesBrowCol;    // (04/11 i) color de ceja del jugador (fila 367 / [cejas_cara]): rgb, w = mezcla con el color pintado
 }
 Texture1D<float4> IniParams : register(t120);
+#ifdef PES_SHADOW
+// (04/11 k) modo SOMBRA DE CONTACTO (pes_browsh_*_gs): la luz principal del dibujo (b0 del PS, la DLL la pasa al GS)
+cbuffer cPSSystem : register(b0)
+{
+  struct { float4 m_param; float4 m_renderInfo; float4 m_renderBuffer; float4 m_dominantLightDir; float4 m_timeParam; } g_psSystem;
+}
+// direccion HACIA la luz en la vista (como PesBrowAniso del PS: fila 50.z = 0 -> la luz viene en el mundo)
+float3 PesShadowL() {
+  float3 L = g_psSystem.m_dominantLightDir.xyz;
+  if (IniParams.Load(int2(50, 0)).z < 0.5) L = float3(dot(L, m_view[0].xyz), dot(L, m_view[1].xyz), dot(L, m_view[2].xyz));
+  return dot(L, L) > 0.25 ? normalize(L) : float3(0, 0, 0);
+}
+#endif
 Texture2D<float4> tFace : register(t0);      // difusa de la cara (la misma del dibujo)
 Texture2D<float4> tHairMap : register(t26);  // mapa de pelo de esta cara
 Texture2D<float4> tBrow : register(t27);     // (04/11 d) mapa de la ceja: rgb color de sus pelos, a contorno
@@ -262,6 +275,13 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     q = q * 0.5 + 0.5;
     q = q.zwxy * float4(1, -1, 1, -1) + float4(0, 1, 0, 1);
     float2 motion = q.zw - q.xy;
+#ifdef PES_SHADOW
+    // (04/11 k, Agustin: "no solo brillo, luz real") la hebra proyectada sobre el plano de la piel siguiendo la luz: la sombra que
+    // el pelo le hace a la piel de abajo (y a la ceja pintada). Sin luz o con la piel de espaldas a la luz, nada
+    float3 Ls = PesShadowL();
+    float nl = dot(Ls, n);
+    if (nl < 0.08) continue;
+#endif
     [unroll] for (uint ring = 0; ring <= PES_SEG; ring++) {
       float t = (float)ring / (float)PES_SEG;
       // sale levantada y se acuesta hacia la punta (pelo de ceja real); el rizo la tuerce en el plano de la piel
@@ -273,6 +293,11 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
       float wid = widB * (1.0 - 0.85 * t);
       float pxV = 2.0 * abs(p.z) / (max(abs(m_projection[1].y), 1e-4) * vpH);   // un pixel en la vista a esta distancia
       wid = max(wid, pxV * (P75.z > 0.5 ? 1.25 : 0.45));                         // nunca menos de ~1 px de ancho total
+#ifdef PES_SHADOW
+      float hgt = max(dot(p - root, n), 0.0);                                    // altura sobre la piel
+      p = p - Ls * (hgt / max(nl, 0.25)) + n * 0.00005;                          // al plano de la piel, siguiendo la luz
+      wid = wid * 1.6 + hgt * 0.04;                                              // penumbra que se abre con la altura
+#endif
       float3 V = normalize(-p);
       float3 tanR = normalize(dd + n * lift * (0.35 * 3.14159 * cos(t * 3.14159) + 0.1));
       float3 sideV = normalize(cross(dd, V) + 1e-6);

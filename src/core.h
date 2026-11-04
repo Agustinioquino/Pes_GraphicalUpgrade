@@ -284,7 +284,7 @@ struct FaceGenExtra { ID3D11ShaderResourceView* seedMap = nullptr; ID3D11ShaderR
 extern std::atomic<int> g_depthClearZero, g_depthClearOne;
 bool FaceGenLookup(ID3D11DeviceContext* c, ID3D11ShaderResourceView** outA, ID3D11ShaderResourceView** outB, FaceGenExtra* ex);
 // (04/11) cejas con hebras v2: repetir el dibujo de la cara con el GS de hebras (facegen.cpp; el dibujo lo hace hooks.cpp)
-bool BrowWanted(const FaceGenExtra& ex, uint64_t vsHash); bool LashWanted(uint64_t vsHash, uint64_t psHash); bool BrowStrandsBegin(ID3D11DeviceContext* c, const FaceGenExtra* ex, uint64_t vsHash); void BrowStrandsEnd(ID3D11DeviceContext* c);
+bool BrowWanted(const FaceGenExtra& ex, uint64_t vsHash); bool LashWanted(uint64_t vsHash, uint64_t psHash); bool BrowShadowOn(ID3D11DeviceContext* c); void BrowShadowOff(ID3D11DeviceContext* c); bool BrowStrandsBegin(ID3D11DeviceContext* c, const FaceGenExtra* ex, uint64_t vsHash); void BrowStrandsEnd(ID3D11DeviceContext* c);
 void FaceGenPresent(); void FaceGenClear(); void FaceGenReloadShaders(); int FaceGenCount();
 // inspector visual (inspect.cpp)
 extern std::atomic<bool> g_inspectOn; extern std::atomic<int> g_inspectSel;

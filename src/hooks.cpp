@@ -1508,6 +1508,10 @@ template<int V> static void LodDrawSub(ID3D11DeviceContext* c, DrawScope& ds) { 
 // estado (huesos, gestos, expresiones y render targets de la cara siguen enlazados). Llama la funcion original (sin hooks).
 template<int V> static void BrowStrands(ID3D11DeviceContext* c, DrawScope& ds) {
     if (!BrowStrandsBegin(c, &ds.brow, ds.brow.browVS)) return;
+    if (BrowShadowOn(c)) {   // (04/11 k) sombra de contacto de los pelos sobre la piel (antes de las hebras: ellas no se oscurecen)
+        if (ds.lod.count) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.brow.browCount, ds.brow.browStart, ds.brow.browBase);
+        BrowShadowOff(c);
+    }
     if (ds.lod.count) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.brow.browCount, ds.brow.browStart, ds.brow.browBase);
     BrowStrandsEnd(c);
 }
