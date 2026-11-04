@@ -8,6 +8,9 @@ namespace fx {
 
 static const char* const kEn[][2] = {
     // (04/11 n) menu nuevo: barra lateral, deshacer / rehacer, ajustes
+    { "Arrastra o usa la cajita del numero. Clic derecho: volver a lo guardado o al de fabrica", "Drag, or use the number box. Right click: back to the saved or factory value" },
+    { "Clic para escribir el valor", "Click to type the value" },
+    { "Clic en el cuadro de color: rueda de color; Ctrl+clic en un numero para escribirlo", "Click the color box: color wheel; Ctrl+click a number to type it" },
     { "   %d con error (ver Errores)", "   %d with errors (see Errors)" },
     { " y ", " and " },
     { "%d de %d grupos prendidos", "%d of %d groups on" },
@@ -444,6 +447,9 @@ static const char* const kEn[][2] = {
 // (27/10) portugues: mismo orden que kEn
 static const char* const kPt[][2] = {
     // (04/11 n) menu nuevo
+    { "Arrastra o usa la cajita del numero. Clic derecho: volver a lo guardado o al de fabrica", "Arraste ou use a caixinha do n\303\272mero. Clique direito: voltar ao salvo ou ao de f\303\241brica" },
+    { "Clic para escribir el valor", "Clique para digitar o valor" },
+    { "Clic en el cuadro de color: rueda de color; Ctrl+clic en un numero para escribirlo", "Clique no quadro de cor: roda de cores; Ctrl+clique num n\303\272mero para digit\303\241-lo" },
     { "   %d con error (ver Errores)", "   %d com erro (ver Erros)" },
     { " y ", " e " },
     { "%d de %d grupos prendidos", "%d de %d grupos ligados" },

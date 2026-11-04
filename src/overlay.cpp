@@ -4,6 +4,7 @@
 #include <cmath>
 #include <algorithm>
 #include <imgui.h>
+#include <imgui_internal.h>   // (04/11 n) TempInputIsActive: el slider nuevo muestra el numero de ImGui solo al escribirlo con Ctrl+clic
 #include <imgui_impl_dx11.h>
 #include <imgui_impl_win32.h>
 #include <DDSTextureLoader.h>
@@ -190,9 +191,17 @@ static bool GroupMatches(const MenuGroup& g, const std::string& q) {
 }
 static bool GroupActive(const MenuGroup& g) { return g.tIdx < 0 || g_cfg.live[g.tIdx][g.tComp] > 0.5f; }
 // (04/11 n) el grupo tiene valores distintos de lo guardado en PES21FX.ini (la ropa no cuenta: cloth.ini se escribe solo)
+// formato "color" (cejas, 653c864): el slider maneja su componente y las dos siguientes (rojo / verde / azul)
+static int SlSpan(const MenuSlider& sl) { return (sl.ext.empty() && sl.fmt == "color" && sl.comp <= 1) ? 3 : 1; }
+static bool SlChanged(const MenuSlider& sl) {
+    if (!sl.ext.empty()) return false;
+    for (int k = 0; k < SlSpan(sl); k++) if (fabsf(g_cfg.live[sl.idx][sl.comp + k] - g_cfg.base[sl.idx][sl.comp + k]) > 1e-4f) return true;
+    return false;
+}
+static void SlRevert(const MenuSlider& sl) { if (sl.ext.empty()) for (int k = 0; k < SlSpan(sl); k++) g_cfg.live[sl.idx][sl.comp + k] = g_cfg.base[sl.idx][sl.comp + k]; }
 static bool GroupChanged(const MenuGroup& g) {
     if (g.tIdx >= 0 && fabsf(g_cfg.live[g.tIdx][g.tComp] - g_cfg.base[g.tIdx][g.tComp]) > 1e-4f) return true;
-    for (auto& sl : g.sliders) if (sl.ext.empty() && fabsf(g_cfg.live[sl.idx][sl.comp] - g_cfg.base[sl.idx][sl.comp]) > 1e-4f) return true;
+    for (auto& sl : g.sliders) if (SlChanged(sl)) return true;
     return false;
 }
 static std::string SecKey(const MenuGroup& g) { return g.section.empty() ? "Otros" : g.section; }
@@ -283,7 +292,7 @@ static void UndoCollect() {
     for (auto& g : g_cfg.groups) {
         if (g.tIdx >= 0) look(g.tIdx, g.tComp);
         for (auto& sl : g.sliders) {
-            if (sl.ext.empty()) { look(sl.idx, sl.comp); continue; }
+            if (sl.ext.empty()) { for (int k = 0; k < SlSpan(sl); k++) look(sl.idx, sl.comp + k); continue; }
             auto it = g_cfg.clothVals.find(sl.ext); if (it == g_cfg.clothVals.end()) continue;
             auto ib = s_snapExt.find(sl.ext); const float before = ib == s_snapExt.end() ? sl.def : ib->second;
             if (fabsf(it->second - before) > 1e-7f && !s_gestureExt.count(sl.ext)) s_gestureExt[sl.ext] = before;
@@ -309,7 +318,7 @@ static void UndoClear() { s_undo.clear(); s_redo.clear(); s_gesture.clear(); s_g
 static void RevertAll() {
     for (auto& g : g_cfg.groups) {
         if (g.tIdx >= 0) g_cfg.live[g.tIdx][g.tComp] = g_cfg.base[g.tIdx][g.tComp];
-        for (auto& sl : g.sliders) if (sl.ext.empty()) g_cfg.live[sl.idx][sl.comp] = g_cfg.base[sl.idx][sl.comp];
+        for (auto& sl : g.sliders) SlRevert(sl);
     }
 }
 
@@ -321,6 +330,55 @@ static std::string ShortDesc(const std::string& d, bool& cut) {
     if (d.size() <= 150) return d;
     size_t s = d.rfind(' ', 110); if (s == std::string::npos || s < 60) s = 110;
     cut = true; return d.substr(0, s) + "...";
+}
+
+// (04/11 n) slider nuevo (Agustin: "mejora el diseno de los sliders"): barra fina con relleno, perilla redonda, marca del valor guardado
+// y el numero en una cajita aparte que se toca para escribirlo. Por debajo sigue el SliderFloat de ImGui (arrastre, Ctrl+clic, teclado),
+// asi que el lugar de la perilla es el mismo que el del agarre de ImGui (2 px de margen + medio agarre a cada lado).
+// Devuelve true con clic derecho sobre la barra (el menu de "volver a lo guardado" lo abre quien llama).
+static bool PrettySlider(float* v, float lo, float hi, const char* fmt, float width, bool changed, float savedV, const char* tip) {
+    ImGuiStyle& st = ImGui::GetStyle();
+    const float valW = std::clamp(ImGui::CalcTextSize("-000.000").x + st.FramePadding.x * 2.0f, 62.0f * UIK(), 120.0f * UIK());
+    const float trackW = std::max(40.0f * UIK(), width - valW - st.ItemSpacing.x);
+    const ImGuiID sid = ImGui::GetID("##trk");
+    const bool typing = ImGui::TempInputIsActive(sid);
+    if (!typing) {
+        const ImVec4 z(0, 0, 0, 0);
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, z); ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, z); ImGui::PushStyleColor(ImGuiCol_FrameBgActive, z);
+        ImGui::PushStyleColor(ImGuiCol_SliderGrab, z); ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, z); ImGui::PushStyleColor(ImGuiCol_Text, z);
+    }
+    ImGui::SetNextItemWidth(trackW);
+    ImGui::SliderFloat("##trk", v, lo, hi, fmt, ImGuiSliderFlags_AlwaysClamp);
+    if (!typing) ImGui::PopStyleColor(6);
+    const bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
+    const bool rclick = ImGui::IsItemClicked(ImGuiMouseButton_Right);
+    if (hov && !act && tip) ImGui::SetTooltip("%s", tip);
+    if (!typing) {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+        const float gs = std::min(st.GrabMinSize, b.x - a.x - 4.0f);
+        const float x0 = a.x + 2.0f + gs * 0.5f, x1 = b.x - 2.0f - gs * 0.5f, cy = std::round((a.y + b.y) * 0.5f);
+        auto px = [&](float x) { const float t = hi != lo ? std::clamp((x - lo) / (hi - lo), 0.0f, 1.0f) : 0.0f; return x0 + t * (x1 - x0); };
+        const float th = std::max(4.0f, 5.0f * UIK()), kx = px(*v);
+        const ImVec4 fill = changed ? ImVec4(0.95f, 0.78f, 0.33f, 1) : ImVec4(0.20f, 0.72f, 0.46f, 1);
+        dl->AddRectFilled(ImVec2(x0, cy - th * 0.5f), ImVec2(x1, cy + th * 0.5f), ImGui::GetColorU32(hov || act ? ImVec4(0.30f, 0.33f, 0.40f, 1) : ImVec4(0.25f, 0.28f, 0.34f, 1)), th * 0.5f);
+        if (kx > x0 + 0.5f) dl->AddRectFilled(ImVec2(x0, cy - th * 0.5f), ImVec2(kx, cy + th * 0.5f), ImGui::GetColorU32(fill), th * 0.5f);
+        if (changed) { const float sx = px(savedV); dl->AddRectFilled(ImVec2(sx - 1.0f, cy - th * 1.3f), ImVec2(sx + 1.0f, cy + th * 1.3f), ImGui::GetColorU32(ImVec4(0.80f, 0.83f, 0.88f, 0.85f)), 1.0f); }
+        const float r = (act ? 9.0f : hov ? 8.5f : 7.5f) * UIK();
+        dl->AddCircleFilled(ImVec2(kx, cy + 1.0f), r + 1.0f, ImGui::GetColorU32(ImVec4(0, 0, 0, 0.45f)), 24);
+        dl->AddCircleFilled(ImVec2(kx, cy), r, ImGui::GetColorU32(ImVec4(0.96f, 0.97f, 0.98f, 1)), 24);
+        dl->AddCircleFilled(ImVec2(kx, cy), r * 0.42f, ImGui::GetColorU32(fill), 16);
+    }
+    ImGui::SameLine(0, st.ItemSpacing.x);
+    ImGui::SetNextItemWidth(valW);
+    float tmp = *v;
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.13f, 0.14f, 0.17f, 1));
+    if (changed) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.98f, 0.86f, 0.50f, 1));
+    if (ImGui::InputFloat("##val", &tmp, 0.0f, 0.0f, fmt)) *v = std::clamp(tmp, std::min(lo, hi), std::max(lo, hi));
+    if (changed) ImGui::PopStyleColor();
+    ImGui::PopStyleColor();
+    if (ImGui::IsItemHovered() && !ImGui::IsItemActive()) ImGui::SetTooltip("%s", TRS("Clic para escribir el valor"));
+    return rclick || ImGui::IsItemClicked(ImGuiMouseButton_Right);
 }
 
 static void DrawGroup(MenuGroup& g, int gid) {
@@ -365,7 +423,7 @@ static void DrawGroup(MenuGroup& g, int gid) {
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS(fav ? "Quitar de Favoritos" : "Agregar a Favoritos"));
       ImGui::SameLine();
       ImGui::BeginDisabled(!changed);
-      if (ImGui::SmallButton(s_iconsOk ? (Ico(kIcoRevert) + "##rst").c_str() : "<<")) { for (auto& sl : g.sliders) if (sl.ext.empty()) g_cfg.live[sl.idx][sl.comp] = g_cfg.base[sl.idx][sl.comp]; if (hasT) g_cfg.live[g.tIdx][g.tComp] = g_cfg.base[g.tIdx][g.tComp]; }
+      if (ImGui::SmallButton(s_iconsOk ? (Ico(kIcoRevert) + "##rst").c_str() : "<<")) { for (auto& sl : g.sliders) SlRevert(sl); if (hasT) g_cfg.live[g.tIdx][g.tComp] = g_cfg.base[g.tIdx][g.tComp]; }
       ImGui::EndDisabled();
       ImGui::PopStyleColor();
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", TRS("Volver todo el grupo a lo guardado")); }
@@ -403,7 +461,7 @@ static void DrawGroup(MenuGroup& g, int gid) {
             float& val = isExt ? g_cfg.clothVals[sl.ext] : g_cfg.live[sl.idx][sl.comp];
             float before = val;
             const float savedV = isExt ? (g_cfg.clothLoaded.count(sl.ext) ? g_cfg.clothLoaded[sl.ext] : sl.def) : g_cfg.base[sl.idx][sl.comp];
-            const bool slChanged = fabsf(savedV - val) > 1e-4f;
+            const bool slChanged = isExt ? fabsf(savedV - val) > 1e-4f : SlChanged(sl);
             const std::string help = sl.help.empty() ? std::string() : Utf8(LS(sl.help, sl.helpEn));
             auto helpTip = [&]() {
                 ImGui::BeginTooltip(); ImGui::PushTextWrapPos(380 * UIK());
@@ -423,7 +481,9 @@ static void DrawGroup(MenuGroup& g, int gid) {
                 if (!help.empty() && !wide) { ImGui::SameLine(); ImGui::TextDisabled("(?)"); if (ImGui::IsItemHovered()) helpTip(); }
                 if (wide) ImGui::SameLine(x0 + labelW);
             }
-            ImGui::SetNextItemWidth(std::max(60.0f * UIK(), (wide ? w - labelW : w) - resetW - ImGui::GetStyle().ItemSpacing.x));
+            const float itemW = std::max(60.0f * UIK(), (wide ? w - labelW : w) - resetW - ImGui::GetStyle().ItemSpacing.x);
+            ImGui::SetNextItemWidth(itemW);
+            bool openCtx = false;
             if (!sl.options.empty()) {
                 const auto& opts = (g_cfg.lang != 0 && sl.optionsEn.size() == sl.options.size()) ? sl.optionsEn : sl.options;
                 int cur = (int)(val + 0.5f); if (cur < 0) cur = 0; if (cur >= (int)sl.options.size()) cur = (int)sl.options.size() - 1;
@@ -437,23 +497,31 @@ static void DrawGroup(MenuGroup& g, int gid) {
                     }
                     ImGui::EndCombo();
                 }
+                openCtx = ImGui::IsItemClicked(ImGuiMouseButton_Right);
+            } else if (!isExt && sl.fmt == "color" && sl.comp <= 1) {
+                // (04/11 n, Agustin: "el selector de color no es muy preciso") formato "color": un selector de color (rueda + valores)
+                // sobre esta componente y las dos siguientes (rojo / verde / azul) en vez de tres sliders
+                float* rgb = &g_cfg.live[sl.idx][sl.comp];
+                for (int k = 0; k < 3; k++) rgb[k] = rgb[k] < 0.f ? 0.f : rgb[k] > 1.f ? 1.f : rgb[k];
+                ImGui::ColorEdit3("##col", rgb, ImGuiColorEditFlags_PickerHueWheel | ImGuiColorEditFlags_DisplayRGB | ImGuiColorEditFlags_Float);
+                if (ImGui::IsItemHovered() && !ImGui::IsItemActive()) ImGui::SetTooltip("%s", TRS("Clic en el cuadro de color: rueda de color; Ctrl+clic en un numero para escribirlo"));
             } else {
                 // (31/10) AlwaysClamp: el valor escrito con Ctrl+clic tambien queda dentro del rango del slider
                 // (x318 "Claridad del ojo" se guardaba en -1.17 / 2.61 con rango 0..1); ademas se recorta lo que
                 // venga de afuera (teclas, Avanzado) para que el ini nunca guarde un valor fuera del rango
                 if (!isExt && (val < sl.lo || val > sl.hi)) { float cl = val < sl.lo ? sl.lo : sl.hi; Log("menu: %c%d = %g fuera del rango %g..%g del slider '%s': recortado a %g", "xyzw"[sl.comp], sl.idx, val, sl.lo, sl.hi, sl.label.c_str(), cl); val = cl; }
-                ImGui::SliderFloat("##s", &val, sl.lo, sl.hi, sl.fmt.c_str(), ImGuiSliderFlags_AlwaysClamp);
-                if (ImGui::IsItemHovered() && !ImGui::IsItemActive()) ImGui::SetTooltip("%s", TRS("Ctrl+clic para escribir un valor exacto. Clic derecho: volver a lo guardado o al de fabrica"));
+                openCtx = PrettySlider(&val, sl.lo, sl.hi, sl.fmt.c_str(), itemW, slChanged, savedV, TRS("Arrastra o usa la cajita del numero. Clic derecho: volver a lo guardado o al de fabrica"));
             }
-            if (ImGui::BeginPopupContextItem("ctx")) {   // (04/11 n) clic derecho sobre el slider
-                if (ImGui::MenuItem(TRS("Volver a lo guardado"), nullptr, false, slChanged)) val = savedV;
+            if (openCtx) ImGui::OpenPopup("ctx");
+            if (ImGui::BeginPopup("ctx")) {   // (04/11 n) clic derecho sobre el slider
+                if (ImGui::MenuItem(TRS("Volver a lo guardado"), nullptr, false, slChanged)) { if (isExt) val = savedV; else SlRevert(sl); }
                 if (isExt && ImGui::MenuItem(TRS("Valor de fabrica"))) val = sl.def;
                 ImGui::EndPopup();
             }
             ImGui::SameLine();
             if (slChanged) {
                 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-                if (ImGui::Button(s_iconsOk ? Ico(kIcoRevert).c_str() : "<", ImVec2(resetW, 0))) val = savedV;
+                if (ImGui::Button(s_iconsOk ? Ico(kIcoRevert).c_str() : "<", ImVec2(resetW, 0))) { if (isExt) val = savedV; else SlRevert(sl); }
                 ImGui::PopStyleColor();
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip(TRS(isExt ? "Volver al valor que tenia cloth.ini (%.4g); fabrica: %.4g" : "Volver al valor guardado (%.3f)"), savedV, sl.def);
             } else ImGui::Dummy(ImVec2(resetW, ImGui::GetFrameHeight()));
@@ -877,7 +945,7 @@ static void DrawMenu() {
 
     // --- cabecera: logo + nombre + estado de los shaders, X a la derecha ---
     const float headY = ImGui::GetCursorPosY();
-    if (s_logo) { const float h = 46.0f * UIK(); ImGui::Image((ImTextureID)(intptr_t)s_logo, ImVec2(h * s_logoAspect, h)); ImGui::SameLine(); }
+    if (s_logo) { const float h = 58.0f * UIK(); ImGui::Image((ImTextureID)(intptr_t)s_logo, ImVec2(h * s_logoAspect, h)); ImGui::SameLine(); }
     ImGui::BeginGroup();
     if (s_fontBold) ImGui::PushFont(s_fontBold);
     ImGui::TextColored(ImVec4(0.85f, 0.68f, 0.28f, 1), "%s", s_logo ? "FX  0.2" : "PES21 FX  0.2");
