@@ -214,6 +214,13 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
     if (FB.a > 0.5) {
       float4 FA = pesFaceA.SampleLevel(pesTessSamp, uv, lod);
       float hmm = max(R.z, 0.0) * (FB.b + saturate(FA.g * 2.0 - 1.0)) - max(R.y, 0.0) * FA.r;
+      // (04/11 c, regla de Agustin: la boca por dentro no se toca) alrededor de la abertura de la boca (posicion de reposo, la de
+      // expresiones: labios y 1.622..1.635, comisuras |x| 2.5 cm) la piel nunca se hunde hacia adentro; solo puede subir (afuera)
+      float3 r0 = PES_LERP3(pR).xyz;
+      float2 me = float2(r0.x / 0.034, (r0.y - 1.6285) / 0.016);
+      float mouthK = smoothstep(1.0, 1.6, length(me));
+      if (r0.z < 0.09) mouthK = 1.0;   // detras de la cara (nuca, orejas): sin zona de boca
+      if (hmm < 0.0) hmm *= mouthK;
       float3 Nn = normalize(b.x * N0 + b.y * N1 + b.z * N2);
       d += Nn * (clamp(hmm * R.x, -3.0, 3.0) * 0.001 * seam * fade);
     }
