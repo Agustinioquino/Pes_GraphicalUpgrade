@@ -9,6 +9,10 @@
 //   309 (ini): x prendido, y fuerza, z suavidad (texels), w sesgo (texels)
 //   310 (DLL): x cantidad de cabezas, yzw direccion hacia el sol en vista | 316: xyz eje "derecha" de la caja en vista, w medio lado
 //   317..319 (DLL): centro de cada caja en vista; w = 1 si la profundidad del juego es invertida (0 = cerca)
+// (04/11 piel) cuarto cuadrante del atlas (libre: las cabezas usan como mucho 3) = PIERNAS del jugador mas cercano: caja de 1.2 m
+// (centro pos + 0.55 m, medio lado 0.6: de los pies a la cadera, 1.17 mm por texel) con los mismos ejes que las cabezas. Solo la lee
+// el grosor de la piel (pes_skinthick.hlsli: contraluz real en piernas y manos); la sombra de la cara no cambia.
+//   363 (DLL): xyz centro de la caja de las piernas en vista, w medio lado (0 = sin caja este cuadro)
 #include "core.h"
 #include <d3d11.h>
 #include <cmath>
@@ -20,10 +24,12 @@
 namespace fx {
 
 static const int kHsSlots = 3, kHsAtlas = 2048, kHsSlotPx = 1024;
-static const int kHsRowUser = 309, kHsRowInfo = 310, kHsRowAxis = 316, kHsRowCenter = 317;
+static const int kHsRowUser = 309, kHsRowInfo = 310, kHsRowAxis = 316, kHsRowCenter = 317, kHsRowBody = 363;
+static const int kHsBodySlot = 3; static const float kHsBodyUp = 0.55f, kHsBodyHalf = 0.6f;   // (04/11 piel) piernas: cuarto cuadrante
 static ID3D11Texture2D* s_tex = nullptr; static ID3D11DepthStencilView* s_dsv = nullptr; static ID3D11ShaderResourceView* s_srv = nullptr;
-static ID3D11Buffer* s_cb[kHsSlots] = {};
+static ID3D11Buffer* s_cb[kHsSlots + 1] = {};   // + 1: piernas (cuadrante 3)
 static int s_count = 0;                    // cabezas con caja este cuadro
+static bool s_body = false;                // (04/11 piel) caja de las piernas del mas cercano este cuadro
 static bool s_reversed = false;            // el juego limpia su shadow map a 0 (profundidad invertida)
 static int s_clearFrame = -1;              // cuadro en el que se limpio el atlas
 static ID3D11Resource* s_shadowRes = nullptr;   // recurso del shadow map del juego (comparacion, sin referencia propia)
@@ -49,7 +55,7 @@ static bool Ensure() {
     D3D11_SHADER_RESOURCE_VIEW_DESC sd{}; sd.Format = DXGI_FORMAT_R32_FLOAT; sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D; sd.Texture2D.MipLevels = 1;
     if (FAILED(g_dev.dev->CreateDepthStencilView(s_tex, &dd, &s_dsv)) || FAILED(g_dev.dev->CreateShaderResourceView(s_tex, &sd, &s_srv))) { Log("sombra cabeza: no se pudieron crear las vistas"); return false; }
     D3D11_BUFFER_DESC bd{}; bd.ByteWidth = 512; bd.Usage = D3D11_USAGE_DEFAULT; bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-    for (int i = 0; i < kHsSlots; i++) if (FAILED(g_dev.dev->CreateBuffer(&bd, nullptr, &s_cb[i]))) { Log("sombra cabeza: no se pudo crear el cbuffer %d", i); return false; }
+    for (int i = 0; i <= kHsSlots; i++) if (FAILED(g_dev.dev->CreateBuffer(&bd, nullptr, &s_cb[i]))) { Log("sombra cabeza: no se pudo crear el cbuffer %d", i); return false; }
     Log("sombra cabeza: atlas %dx%d, %d cabezas de %d px", kHsAtlas, kHsAtlas, kHsSlots, kHsSlotPx);
     return true;
 }
@@ -68,6 +74,7 @@ void HeadShadowPresent() {
     const float* U = g_cfg.live[kHsRowUser];
     float* I = g_cfg.live[kHsRowInfo];
     s_count = 0; I[0] = 0.0f;
+    s_body = false; g_cfg.live[kHsRowBody][3] = 0.0f;
     if (U[0] < 0.5f || g_cfg.live[101][0] > 0.5f) return;   // apagado, o "sol libre" (la luz no es la del LightCB)
     if (!Ensure() || !g_dev.imm) return;
     std::vector<float> L, S; int lf = -1, sf = -1;
@@ -161,13 +168,35 @@ void HeadShadowPresent() {
         g_dev.imm->UpdateSubresource(s_cb[i], 0, nullptr, cb, 0, 0);
         float* C = g_cfg.live[kHsRowCenter + i]; C[0] = c.cv[0]; C[1] = c.cv[1]; C[2] = c.cv[2]; C[3] = (s_reversed ? 1.0f : 0.0f) + (S[16] < 0 ? 2.0f : 0.0f) + (S[21] < 0 ? 4.0f : 0.0f) + (s_vDet < 0 ? 8.0f : 0.0f);   // bit 0 z invertida, 1 / 2 signo de P0 / P5, 3 vista reflejada
     }
+    // (04/11 piel) piernas del jugador mas cercano en el cuadrante 3: la caja de la cabeza (centro + 1.45 m, fundido desde 0.54 m del
+    // centro) deja afuera de la cadera para abajo; aca va una caja propia, mas chica (mas fina), que el grosor de la piel usa donde
+    // no hay cabeza. Mismos ejes (R, U, L) que las cabezas: el shader comparte las filas 310 / 316 / 317.w
+    if (n > 0) {
+        float cw[3] = { cand[0].cw[0], cand[0].cw[1] - 1.45f + kHsBodyUp, cand[0].cw[2] };
+        const float hb = kHsBodyHalf, tx = 2.0f * hb / kHsSlotPx;
+        float cr = Dot(cw, Rw), cu = Dot(cw, Uw), cl = Dot(cw, Lw);
+        cr = floorf(cr / tx + 0.5f) * tx; cu = floorf(cu / tx + 0.5f) * tx;
+        for (int k = 0; k < 3; k++) cw[k] = cr * Rw[k] + cu * Uw[k] + cl * Lw[k];
+        float cv[3]; toV(cw, cv, true);
+        float cb[128] = {};
+        float kz = s_reversed ? 1.0f : -1.0f;
+        cb[0] = Rw[0] / hb; cb[1] = Rw[1] / hb; cb[2] = Rw[2] / hb; cb[3] = -Dot(cw, Rw) / hb;
+        cb[4] = Uw[0] / hb; cb[5] = Uw[1] / hb; cb[6] = Uw[2] / hb; cb[7] = -Dot(cw, Uw) / hb;
+        cb[8] = kz * Lw[0] / (2 * hb); cb[9] = kz * Lw[1] / (2 * hb); cb[10] = kz * Lw[2] / (2 * hb); cb[11] = -kz * Dot(cw, Lw) / (2 * hb) + 0.5f;
+        cb[15] = 1.0f;
+        for (int k = 0; k < 16; k++) { cb[16 + k] = cb[k]; }
+        cb[32] = cb[37] = cb[42] = cb[47] = 1.0f;
+        g_dev.imm->UpdateSubresource(s_cb[kHsBodySlot], 0, nullptr, cb, 0, 0);
+        float* B = g_cfg.live[kHsRowBody]; B[0] = cv[0]; B[1] = cv[1]; B[2] = cv[2]; B[3] = hb;
+        s_body = true;
+    }
     float Rv[3]; toV(Rw, Rv, false);
     I[0] = (float)n; I[1] = Lv[0]; I[2] = Lv[1]; I[3] = Lv[2];
     float* A = g_cfg.live[kHsRowAxis]; A[0] = Rv[0]; A[1] = Rv[1]; A[2] = Rv[2]; A[3] = half;
     s_count = n;
     double t = Now();
     if (t - s_logT > 10.0) { s_logT = t; int r = g_headShadowReplays.exchange(0);
-        Log("sombra cabeza: %d cabezas, %d dibujos replicados en 10 s (z %s)", n, r, s_reversed ? "invertida" : "normal");
+        Log("sombra cabeza: %d cabezas%s, %d dibujos replicados en 10 s (z %s)", n, s_body ? " + piernas del mas cercano" : "", r, s_reversed ? "invertida" : "normal");
         Log("sombra cabeza (diag): personajes %d (sin posicion %d, detras %d, fuera de pantalla %d, lejos %d, validos %d); el mas cercano en vista (%.2f %.2f %.2f) w %.2f; ojo %.2f %.2f %.2f",
             s_cAlive, s_cNoPos, s_cBehind, s_cOff, s_cFar, s_cOk, s_cNear[0], s_cNear[1], s_cNear[2], s_cNear[3], s_cEye[0], s_cEye[1], s_cEye[2]);
         Log("sombra cabeza (diag): el mas cercano en recorte: con m_projectionView (%.2f %.2f %.2f %.2f), con m_projection x vista (%.2f %.2f %.2f %.2f); projParam (%.4f %.4f %.4f %.4f) -> signos de la vista del sol x %.0f y %.0f z %.0f; sol en vista %.3f %.3f %.3f",
@@ -180,6 +209,7 @@ void HeadShadowPresent() {
 }
 
 int HeadShadowSlots() { return s_count; }
+bool HeadShadowBodyOn() { return s_body && s_count > 0; }   // (04/11 piel) cuadrante 3 = piernas del mas cercano
 // (27/10 f) estado de rasterizado para la repeticion: el del juego pero SIN descarte de caras. La caja propia puede tener la
 // orientacion opuesta a la matriz de sombras del juego y entonces el descarte dejaba solo las caras de atras (sombra de la cara
 // opuesta: manchas). Con las dos caras se queda la mas cercana al sol, como corresponde. Cache por estado original.
@@ -196,7 +226,7 @@ ID3D11RasterizerState* HeadShadowNoCullRS(ID3D11RasterizerState* orig) {
 }
 ID3D11ShaderResourceView* HeadShadowSRV() { return s_count > 0 ? s_srv : nullptr; }
 ID3D11DepthStencilView* HeadShadowDSV() { return s_dsv; }
-ID3D11Buffer* HeadShadowCB(int i) { return (i >= 0 && i < kHsSlots) ? s_cb[i] : nullptr; }
+ID3D11Buffer* HeadShadowCB(int i) { return (i >= 0 && i <= kHsSlots) ? s_cb[i] : nullptr; }
 void HeadShadowViewport(int i, D3D11_VIEWPORT& vp) { vp.TopLeftX = (float)((i % 2) * kHsSlotPx); vp.TopLeftY = (float)((i / 2) * kHsSlotPx); vp.Width = vp.Height = (float)kHsSlotPx; vp.MinDepth = 0; vp.MaxDepth = 1; }
 
 // el DSV es el shadow map del sol del juego? (se compara el recurso con el SRV que las reglas guardan como "ShadowMap")
@@ -247,7 +277,7 @@ bool HeadShadowIsNearCascade(ID3D11DeviceContext* c, ID3D11DepthStencilView* dsv
     return true;
 }
 void HeadShadowRelease() {
-    for (int i = 0; i < kHsSlots; i++) { if (s_cb[i]) s_cb[i]->Release(); s_cb[i] = nullptr; }
+    for (int i = 0; i <= kHsSlots; i++) { if (s_cb[i]) s_cb[i]->Release(); s_cb[i] = nullptr; }
     if (s_srv) s_srv->Release(); if (s_dsv) s_dsv->Release(); if (s_tex) s_tex->Release(); s_srv = nullptr; s_dsv = nullptr; s_tex = nullptr;
 }
 

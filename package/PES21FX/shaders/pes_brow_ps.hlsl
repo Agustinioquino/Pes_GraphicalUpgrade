@@ -45,7 +45,9 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   o0 = float4(saturate(col), 1.0);
   // normal + translucidez (hebra: 0.15) empaquetadas como en el shader de cara
   float3 n = normalize(i.nrmV);
-  float trans = 0.15;
+  // (04/11) la luz pasa por el pelo: translucidez alta (la punta mas que la raiz) + marca de PELO 252/255 (o2.z, abajo) para
+  // que las pasadas del sol le apliquen el contraluz del pelo (fila 339), como el pelo de la cabeza
+  float trans = lerp(0.35, 0.75, t);
   float3 r1 = n; float r1w = trans;
   float4 r0;
   r0.x = r1w * 63 + 0.5;
@@ -66,7 +68,7 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   rc = rc * rough + 0.180851057; rc = rc * rough + 0.271276593; rc = rc * rough + 0.271276593;
   o2.x = rc * rough + 0.150000006;
   o2.y = 0.30 * (pesHairMisc.x > 0.5 ? saturate(pesHairB.z) / 0.6 : 1.0);   // brillo del tipo de pelo (0.6 = natural)
-  o2.z = 1.0;                                   // sin marca de piel ni de kit
+  o2.z = IniParams.Load(int2(339,0)).w > 0.5 ? 0.98823529 : 1.0;   // (04/11) pelo a contraluz; sin eso como antes (ni piel ni kit)
   o2.w = g_psMaterial.m_materials[0].x;
   o3.xy = g_psSystem.m_renderBuffer.xy * i.motion;
   o3.zw = 0;

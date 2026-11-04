@@ -26,7 +26,7 @@ void ScanRefsInto(uintptr_t base, uintptr_t end, const char* dllName);   // quie
 extern void* g_overlayOldProc;
 
 // ---------------------------------------------------------------- parametros (lo que en 3DMigoto era IniParams)
-constexpr int kParamCount = 363;           // float4 x 348 -> t120 en los shaders (IniParams.Load(int2(i,0))). (20/10: era 128 y los parametros 128+ se perdian; 25/10: 256 -> 320, la ropa contra el cuerpo usa 256 / 257; 27/10: 320 -> 336: la fila 320 (torso bajo la camiseta) quedaba fuera y el ini la descartaba; 31/10: 340 -> 344 (expresiones 340 / 341); 01/11: 344 -> 346: 343 camara lenta, 344 / 345 camara libre; 01/11 b: 346 -> 347: 346 seguir la cara; 347 -> 348: 347 abrir la boca / nariz; 348 -> 349: 348 musculos virtuales; 01/11 c: 349 -> 351: 349 torso, 350 boca por huesos; 351 torso bajo la camiseta ajustada; 352 mangas mas pegadas al brazo; 353 viento por partido; 03/11: 354 -> 355: 354 ojos en circulos (expresiones); 355 -> 356: 355 gestos enojo / sonrisa / asombro / hablar; 04/11: 356 -> 357: 356 grito, puchero, perfiles por cara; 357..360 teselacion (otro hilo); 04/11 e: 361 / 362 gestos por huesos extra: cejas, mordida, mandibula de costado, media sonrisa, cachetes, beso, desprecio, una ceja)
+constexpr int kParamCount = 365;           // float4 x 348 -> t120 en los shaders (IniParams.Load(int2(i,0))). (20/10: era 128 y los parametros 128+ se perdian; 25/10: 256 -> 320, la ropa contra el cuerpo usa 256 / 257; 27/10: 320 -> 336: la fila 320 (torso bajo la camiseta) quedaba fuera y el ini la descartaba; 31/10: 340 -> 344 (expresiones 340 / 341); 01/11: 344 -> 346: 343 camara lenta, 344 / 345 camara libre; 01/11 b: 346 -> 347: 346 seguir la cara; 347 -> 348: 347 abrir la boca / nariz; 348 -> 349: 348 musculos virtuales; 01/11 c: 349 -> 351: 349 torso, 350 boca por huesos; 351 torso bajo la camiseta ajustada; 352 mangas mas pegadas al brazo; 353 viento por partido; 03/11: 354 -> 355: 354 ojos en circulos (expresiones); 355 -> 356: 355 gestos enojo / sonrisa / asombro / hablar; 04/11: 356 -> 357: 356 grito, puchero, perfiles por cara; 04/11 b: 357 -> 359: 357 / 358 teselacion de la cara; 04/11 c: 359 -> 360: 359 relieve de la teselacion; 04/11 d: 360 -> 361: 360 prueba de la teselacion; 04/11 e: 361 / 362 sliders por hueso (expresiones); 363 -> 364: 363 caja de las piernas del atlas de sombras (grosor de la piel))   // (04/11 g) 364 = teselacion del cuerpo -> 365
 // (26/10) filas de t120 ocupadas por tablas que escribe la DLL en cada cuadro (no usarlas para el ini): 194..254 tonos de piel por
 // jugador (skintone.cpp), 257 cuadro de la ropa contra el cuerpo (cuerpo.cpp). 300..304 son de las manos (manos.cpp + pes_hands.hlsli; 303 = manos relajadas, 304 = unas de los jugadores con textura propia, pes_nailfix.hlsli en el PS aa7d1833; v12.6).
 // 260..263 son de la musculatura (musculo.cpp: grupos de la v7 y musculos vivos).
@@ -133,7 +133,8 @@ struct HairType {
     float raiz[3] = { -1, -1, -1 }, punta[3] = { -1, -1, -1 };   // -1 = del propio bsm
     float cejaGrosor = 1.0f, cejaDens = 1.0f, cejaElev = 1.0f, cejaLargo = 1.0f;
 };
-struct HairCfg { std::vector<HairType> types; std::map<std::string, std::string> faces; std::string defType = "corto"; bool loaded = false; };
+struct HairCfg { std::vector<HairType> types; std::map<std::string, std::string> faces; std::string defType = "corto"; bool loaded = false;
+    std::map<std::string, std::pair<float, float>> browFace; };   // (04/11) [cejas_cara] id = cantidad, largo (multiplicadores por jugador)
 
 struct Config {
     std::wstring baseDir;                      // carpeta del mod (termina en '\')
@@ -278,10 +279,12 @@ extern DeviceState g_dev;
 void OverlayPresent(IDXGISwapChain* sc);
 // quinta textura de la cara generada en vivo (facegen.cpp)
 struct FaceGenExtra { ID3D11ShaderResourceView* seedMap = nullptr; ID3D11UnorderedAccessView* seedsUAV = nullptr; ID3D11ShaderResourceView* seedsSRV = nullptr; ID3D11Buffer* args = nullptr; ID3D11UnorderedAccessView* argsUAV = nullptr; ID3D11Buffer* hairCB = nullptr; int rtCount = 0;
+    uint64_t browVS = 0; UINT browCount = 0, browStart = 0; INT browBase = 0;   // (04/11) hebras v2: VS del dibujo de la cara y sus argumentos (0 = sin hebras)
     ID3D11Resource* key = nullptr; ID3D11Resource* t0 = nullptr; std::string id; };   // (20/10) identidad de la cara para el LOD: textura clave (t1), t0 y hash (punteros sin retener)
 extern std::atomic<int> g_depthClearZero, g_depthClearOne;
 bool FaceGenLookup(ID3D11DeviceContext* c, ID3D11ShaderResourceView** outA, ID3D11ShaderResourceView** outB, FaceGenExtra* ex);
-void BrowDrawAfterFace(ID3D11DeviceContext* c, FaceGenExtra* ex);
+// (04/11) cejas con hebras v2: repetir el dibujo de la cara con el GS de hebras (facegen.cpp; el dibujo lo hace hooks.cpp)
+bool BrowWanted(const FaceGenExtra& ex, uint64_t vsHash); bool BrowStrandsBegin(ID3D11DeviceContext* c, const FaceGenExtra* ex, uint64_t vsHash); void BrowStrandsEnd(ID3D11DeviceContext* c);
 void FaceGenPresent(); void FaceGenClear(); void FaceGenReloadShaders(); int FaceGenCount();
 // inspector visual (inspect.cpp)
 extern std::atomic<bool> g_inspectOn; extern std::atomic<int> g_inspectSel;
@@ -308,7 +311,8 @@ std::string NamedOrigin(ID3D11ShaderResourceView* v);     // hooks.cpp: "archivo
 std::string FaceGenOrigin(ID3D11ShaderResourceView* v);   // facegen.cpp: "generada: quinta textura A" etc.
 extern std::atomic<int> g_stFaceDraws, g_stFaceRule, g_stFaceT23, g_stFaceT26, g_stFaceCtxDef;
 void FaceGenHairChanged();                     // PES21FX_hair.ini recargado: refrescar los cbuffers por cara
-int FaceGenExportHair(std::string& status);   // vuelca hair\\auto\\<id>.dds de cada cara generada (plantillas para editar)
+int FaceGenExportHair(std::string& status);
+std::string BrowSaveCurrent();                 // (04/11) guarda cantidad / largo de cejas (z77 / w77) del jugador solo en pantalla en [cejas_cara]   // vuelca hair\\auto\\<id>.dds de cada cara generada (plantillas para editar)
 bool LoadHairConfig();                         // PES21FX_hair.ini
 const HairType* HairTypeFor(const std::string& id, std::string* outName);
 ID3DBlob* CompileNamedShader(const wchar_t* file, const char* profile);   // shaders\<file> con #include
@@ -377,7 +381,7 @@ struct InputElemInfo { std::string sem; UINT idx, fmt, slot, off; };
 bool InputLayoutInfo(ID3D11InputLayout* il, std::vector<InputElemInfo>& out);
 // (04/11 c) barba que sigue los huesos de la cara (regla "beard = <slot>" en el VS del pelo 2f1af485): cbuffer de la malla + paleta de las pieles (t116) + enlace por vertice (t117)
 bool BeardForDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, ID3D11Buffer** cb, ID3D11ShaderResourceView** pool, ID3D11ShaderResourceView** bind);
-ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, const float** headCentroid = nullptr, int* headIdx = nullptr, ID3D11ShaderResourceView** shapeSrv = nullptr, ID3D11ShaderResourceView** shapeWr = nullptr, ID3D11ShaderResourceView** tessSeam = nullptr);   // (04/11 b) tessSeam: pesos de borde de la malla (t119 del VS) solo si es piel de la cara teselable (facetess.cpp)
+ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, const float** headCentroid = nullptr, int* headIdx = nullptr, ID3D11ShaderResourceView** shapeSrv = nullptr, ID3D11ShaderResourceView** shapeWr = nullptr, ID3D11ShaderResourceView** tessSeam = nullptr, bool body = false);   // (04/11 g) body: piel del cuerpo (VS 1c02a92a), solo pesos de borde   // (04/11 b) tessSeam: pesos de borde de la malla (t119 del VS) solo si es piel de la cara teselable (facetess.cpp)
 // (04/11 b) teselacion de la cara en primeros planos (facetess.cpp): HS + DS detras del VS de la cabeza / cara, por dibujo
 struct FaceTessScope { bool on = false, relief = false; D3D11_PRIMITIVE_TOPOLOGY topo = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST; };
 bool FaceTessBegin(ID3D11DeviceContext* c, uint64_t vsHash, ID3D11ShaderResourceView* seam, ID3D11ShaderResourceView* params, FaceTessScope& s);
@@ -469,7 +473,7 @@ ID3D11ShaderResourceView* SSGIBeforeComposition(ID3D11DeviceContext* c, int fram
 void LightMeterAfterComposition(ID3D11DeviceContext* c); void LightMeterPresent(); void LightMeterReloadShaders(); std::string LightMeterSummary();   // posicion de la camara (m_eyepos del SceneCB, config.cpp, 2 cuadros de atraso)
 void AutoCapturePresent(ID3D11Texture2D* frame);   // hooks.cpp
 // (27/10 c) sombra propia de la cabeza (headshadow.cpp): atlas de sombras de alta resolucion de las cabezas mas cercanas
-void HeadShadowPresent(); int HeadShadowSlots(); ID3D11ShaderResourceView* HeadShadowSRV(); ID3D11DepthStencilView* HeadShadowDSV();
+void HeadShadowPresent(); int HeadShadowSlots(); bool HeadShadowBodyOn(); ID3D11ShaderResourceView* HeadShadowSRV(); ID3D11DepthStencilView* HeadShadowDSV();
 ID3D11Buffer* HeadShadowCB(int i); void HeadShadowViewport(int i, D3D11_VIEWPORT& vp); bool HeadShadowIsGameShadow(ID3D11DepthStencilView* v); bool HeadShadowIsGameRes(ID3D11DepthStencilView* v);
 bool HeadShadowIsNearCascade(ID3D11DeviceContext* c, ID3D11DepthStencilView* gameDSV, int kind); ID3D11DepthStencilView* HeadShadowBind(UINT n, ID3D11RenderTargetView* const* rt, ID3D11DepthStencilView* dsv); void HeadShadowOnClear(ID3D11DeviceContext* c, ID3D11DepthStencilView* v, float depth);
 void HeadShadowRelease(); extern std::atomic<int> g_headShadowReplays; ID3D11RasterizerState* HeadShadowNoCullRS(ID3D11RasterizerState* orig);
