@@ -407,7 +407,11 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
     // (04/11, Agustin con los ojos en circulos: "los ojos no mueven los parpados de abajo") el de abajo acompana mas: 0.25 -> 0.45 al mirar
     // abajo y 0.10 -> 0.22 al mirar arriba (en una cara real el de abajo baja casi la mitad de lo que baja el ojo)
     float fu = up ? (gy > 0.0 ? 0.80 : 0.55) : (gy > 0.0 ? 0.45 : 0.22), fup = up ? (gyp > 0.0 ? 0.80 : 0.55) : (gyp > 0.0 ? 0.45 : 0.22);
-    float ge = (up ? geU : geL) * (1.0 - g);   // (04/11) forma del ojo con el gesto
+    // (04/11 d, video de Agustin: los parpados vibran "solo con la sonrisa") la forma del ojo del gesto se apagaba con (1 - g): g es
+    // lo que el juego mueve el parpado ahora, y el juego lo corrige con la mirada un poco en cada cuadro (g 0.1..0.4): con la sonrisa
+    // alta (~0.26 rad) ese vaiven pasaba entero al parpado. Ahora el gesto solo se apaga cuando el juego de verdad cierra el ojo
+    // (g > 0.55: parpadeo o animacion), el temblor chico de la mirada ya no lo mueve
+    float ge = (up ? geU : geL) * (1.0 - smoothstep(0.55, 1.0, g));
     float a1 = A * b + gy * fu * (1.0 - g) + ge, a0 = A * bp + gyp * fup * (1.0 - g) + ge;
     float c1 = cos(a1), s1 = sin(a1), c0 = cos(a0), s0 = sin(a0);
     float3 d1 = PesRotX(q, c1, s1) - q, d0 = PesRotX(q, c0, s0) - q;
