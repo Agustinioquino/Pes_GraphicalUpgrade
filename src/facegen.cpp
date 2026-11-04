@@ -26,6 +26,7 @@ namespace fx {
 
 struct FaceEntry {
     ID3D11ShaderResourceView* a = nullptr; ID3D11ShaderResourceView* b = nullptr; ID3D11ShaderResourceView* c = nullptr;   // c = semillas de cejas
+    ID3D11ShaderResourceView* d = nullptr;   // (04/11 d) mapa de la CEJA a resolucion completa: rgb color de sus pelos, a contorno
     ID3D11Buffer* seeds = nullptr; ID3D11UnorderedAccessView* seedsUAV = nullptr; ID3D11ShaderResourceView* seedsSRV = nullptr;
     ID3D11Buffer* args = nullptr; ID3D11UnorderedAccessView* argsUAV = nullptr;   // 18/10: argumentos de DrawInstancedIndirect (cuenta de semillas que escribe la cara)
     bool pending = false; bool failed = false;
@@ -116,12 +117,13 @@ static std::mutex s_mx;
 static ID3D11VertexShader* s_vs = nullptr;
 static ID3D11PixelShader* s_ps = nullptr;
 static ID3D11SamplerState* s_samp = nullptr;
+static ID3D11PixelShader* s_bmPS = nullptr;   // (04/11 d) mapa de la ceja (pes_browmap_ps.hlsl)
 static bool s_shadersTried = false, s_shadersOk = false;
 static int s_generated = 0;
 int FaceGenCount() { return s_generated; }
 
 static void ReleaseEntry(FaceEntry& e) {
-    if (e.a) e.a->Release(); if (e.b) e.b->Release(); if (e.c) e.c->Release(); e.a = e.b = e.c = nullptr;
+    if (e.a) e.a->Release(); if (e.b) e.b->Release(); if (e.c) e.c->Release(); if (e.d) e.d->Release(); e.a = e.b = e.c = e.d = nullptr;
     if (e.seedsUAV) e.seedsUAV->Release(); if (e.seedsSRV) e.seedsSRV->Release(); if (e.seeds) e.seeds->Release();
     e.seedsUAV = nullptr; e.seedsSRV = nullptr; e.seeds = nullptr;
     if (e.argsUAV) e.argsUAV->Release(); if (e.args) e.args->Release(); e.argsUAV = nullptr; e.args = nullptr;
@@ -154,6 +156,7 @@ void FaceGenReloadShaders() {
     std::lock_guard<std::mutex> lk(s_mx);
     if (s_vs) { s_vs->Release(); s_vs = nullptr; }
     if (s_ps) { s_ps->Release(); s_ps = nullptr; }
+    if (s_bmPS) { s_bmPS->Release(); s_bmPS = nullptr; }
     s_shadersTried = false; s_shadersOk = false;
     if (s_browVS) { s_browVS->Release(); s_browVS = nullptr; }
     if (s_browPS) { s_browPS->Release(); s_browPS = nullptr; }
@@ -166,7 +169,7 @@ void FaceGenReloadShaders() {
 
 // llamado antes de un dibujo con regla facegen (cualquier contexto): devuelve las dos texturas si ya existen
 bool FaceGenLookup(ID3D11DeviceContext* c, ID3D11ShaderResourceView** outA, ID3D11ShaderResourceView** outB, FaceGenExtra* ex) {
-    *outA = *outB = nullptr; if (ex) { ex->seedMap = nullptr; ex->seedsUAV = nullptr; ex->seedsSRV = nullptr; ex->hairCB = nullptr; ex->key = nullptr; ex->t0 = nullptr; ex->id.clear(); }
+    *outA = *outB = nullptr; if (ex) { ex->seedMap = nullptr; ex->browMap = nullptr; ex->seedsUAV = nullptr; ex->seedsSRV = nullptr; ex->hairCB = nullptr; ex->key = nullptr; ex->t0 = nullptr; ex->id.clear(); }
     ID3D11ShaderResourceView* in[4] = {};
     c->PSGetShaderResources(0, 4, in);
     s_stLook++;
@@ -181,7 +184,7 @@ bool FaceGenLookup(ID3D11DeviceContext* c, ID3D11ShaderResourceView** outA, ID3D
             if (ex) ex->id = it->second.id;   // (04/11) tambien para la boca por jugador (bocajug.cpp)
             if (it->second.a) { s_stHit++; *outA = it->second.a; *outB = it->second.b; found = true;
                 FaceEntry& fe = it->second;
-                if (ex) { ex->seedMap = fe.c; ex->seedsUAV = fe.seedsUAV; ex->seedsSRV = fe.seedsSRV; ex->args = fe.args; ex->argsUAV = fe.argsUAV; ex->hairCB = fe.hairCB; } }
+                if (ex) { ex->seedMap = fe.c; ex->browMap = fe.d; ex->seedsUAV = fe.seedsUAV; ex->seedsSRV = fe.seedsSRV; ex->args = fe.args; ex->argsUAV = fe.argsUAV; ex->hairCB = fe.hairCB; } }
             else s_stPend++;
         } else if (in[0] && in[2] && in[3] && s_cache.size() < 96) {
             D3D11_RESOURCE_DIMENSION dim; key->GetType(&dim);
@@ -204,6 +207,7 @@ static bool EnsureShaders() {
     s_shadersTried = true;
     ID3DBlob* vb = CompileNamedShader(L"pes_facegen_vs.hlsl", "vs_5_0");
     ID3DBlob* pb = CompileNamedShader(L"pes_facegen_ps.hlsl", "ps_5_0");
+    if (ID3DBlob* bb = CompileNamedShader(L"pes_browmap_ps.hlsl", "ps_5_0")) { if (g_dev.dev) g_dev.dev->CreatePixelShader(bb->GetBufferPointer(), bb->GetBufferSize(), nullptr, &s_bmPS); bb->Release(); }
     if (vb && pb && g_dev.dev) {
         if (SUCCEEDED(g_dev.dev->CreateVertexShader(vb->GetBufferPointer(), vb->GetBufferSize(), nullptr, &s_vs)) &&
             SUCCEEDED(g_dev.dev->CreatePixelShader(pb->GetBufferPointer(), pb->GetBufferSize(), nullptr, &s_ps))) s_shadersOk = true;
@@ -291,7 +295,7 @@ void FaceGenPresent() {
     for (auto& r : todo) {
         FaceEntry e;
         if (ok) {
-            ID3D11Texture2D *ta = nullptr, *tb = nullptr, *tc = nullptr; ID3D11RenderTargetView *ra = nullptr, *rb = nullptr, *rc = nullptr;
+            ID3D11Texture2D *ta = nullptr, *tb = nullptr, *tc = nullptr, *td = nullptr; ID3D11RenderTargetView *ra = nullptr, *rb = nullptr, *rc = nullptr, *rd = nullptr;
             if (MakeTarget(r.w, r.h, &ta, &ra, &e.a) && MakeTarget(r.w, r.h, &tb, &rb, &e.b) && MakeTarget(r.w, r.h, &tc, &rc, &e.c)) {
                 // buffer de semillas de cejas (lo escribe el shader de cara en cada dibujo, lo lee el dibujo de hebras)
                 D3D11_BUFFER_DESC bd{}; bd.ByteWidth = kSeedCount * kSeedBytes; bd.Usage = D3D11_USAGE_DEFAULT;
@@ -319,6 +323,15 @@ void FaceGenPresent() {
                 c->Draw(3, 0);
                 ID3D11RenderTargetView* none[3] = {}; c->OMSetRenderTargets(3, none, nullptr);
                 c->GenerateMips(e.a); c->GenerateMips(e.b); c->GenerateMips(e.c);
+                // (04/11 d) mapa de la ceja (color + contorno) a la mitad de la resolucion: otra pasada con pes_browmap_ps
+                if (s_bmPS && MakeTarget(std::max(r.w / 2, 64u), std::max(r.h / 2, 64u), &td, &rd, &e.d)) {
+                    c->OMSetRenderTargets(1, &rd, nullptr);
+                    D3D11_VIEWPORT vp2{ 0, 0, (float)std::max(r.w / 2, 64u), (float)std::max(r.h / 2, 64u), 0, 1 }; c->RSSetViewports(1, &vp2);
+                    c->PSSetShader(s_bmPS, nullptr, 0);
+                    c->Draw(3, 0);
+                    ID3D11RenderTargetView* none1 = nullptr; c->OMSetRenderTargets(1, &none1, nullptr);
+                    c->GenerateMips(e.d);
+                }
                 s_generated++;
                 e.w = r.w; e.h = r.h;
                 // 18/10 pelo: identidad de la cara, tipo de pelo (PES21FX_hair.ini) y mapa de pelo propio (PES21FX\hair\<id>.dds)
@@ -337,7 +350,7 @@ void FaceGenPresent() {
                 }
                 Log("pelo: cara %s (%ux%u) -> tipo '%s'%s", e.id.empty() ? "?" : e.id.c_str(), r.w, r.h, e.type.c_str(), e.userMap ? ", mapa propio hair\\<id>.png" : "");
             } else { ReleaseEntry(e); e.failed = true; }
-            if (ra) ra->Release(); if (rb) rb->Release(); if (rc) rc->Release(); if (ta) ta->Release(); if (tb) tb->Release(); if (tc) tc->Release();
+            if (ra) ra->Release(); if (rb) rb->Release(); if (rc) rc->Release(); if (rd) rd->Release(); if (ta) ta->Release(); if (tb) tb->Release(); if (tc) tc->Release(); if (td) td->Release();
         } else e.failed = true;
         e.pending = false;
         { std::lock_guard<std::mutex> lk(s_mx); auto it = s_cache.find(r.key); if (it != s_cache.end()) { ReleaseEntry(it->second); it->second = e; } else ReleaseEntry(e); }
@@ -364,6 +377,7 @@ std::string FaceGenOrigin(ID3D11ShaderResourceView* v) {
     for (auto& kv : s_cache) { FaceEntry& e = kv.second;
         if (v == e.a) return "generada: quinta textura A (cavidad/curvatura/grosor/vello) cara " + e.id;
         if (v == e.b) return "generada: quinta textura B (poros/brillo/convexidad) cara " + e.id;
+        if (v == e.d) return "mapa de la ceja (color y contorno), cara " + e.id;
         if (v == e.c) return std::string(e.userMap ? "mapa de pelo PROPIO hair\\" : "mapa de pelo automatico, cara ") + e.id + (e.userMap ? ".png" : "");
         if (v == e.seedsSRV) return "semillas de cejas (buffer) cara " + e.id; }
     return "";
@@ -403,7 +417,7 @@ struct BrowSaved {
     ID3D11VertexShader* vs = nullptr; ID3D11PixelShader* ps = nullptr; ID3D11GeometryShader* gs = nullptr; ID3D11HullShader* hs = nullptr; ID3D11DomainShader* ds = nullptr;
     D3D11_PRIMITIVE_TOPOLOGY topo = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED; ID3D11RasterizerState* rs = nullptr;
     ID3D11DepthStencilState* dss = nullptr; UINT ref = 0;
-    ID3D11Buffer* gsCB[12] = {}; ID3D11ShaderResourceView* gsT0 = nullptr; ID3D11ShaderResourceView* gsT26 = nullptr; ID3D11ShaderResourceView* gsT120 = nullptr;
+    ID3D11Buffer* gsCB[12] = {}; ID3D11ShaderResourceView* gsT0 = nullptr; ID3D11ShaderResourceView* gsT26 = nullptr; ID3D11ShaderResourceView* gsT27 = nullptr; ID3D11ShaderResourceView* gsT120 = nullptr;
     ID3D11SamplerState* gsS0 = nullptr; ID3D11Buffer* psCB11 = nullptr; ID3D11ShaderResourceView* psT120 = nullptr;
 };
 static thread_local BrowSaved t_bs;
@@ -415,7 +429,7 @@ bool BrowWanted(const FaceGenExtra& ex, uint64_t vsHash) {
     return true;
 }
 bool BrowStrandsBegin(ID3D11DeviceContext* c, const FaceGenExtra* ex, uint64_t vsHash) {
-    if (!ex || !ex->seedMap || !s_browPS || !s_browRS) return false;
+    if (!ex || !ex->seedMap || !ex->browMap || !s_browPS || !s_browRS) return false;
     ID3D11GeometryShader* gs = s_browGS[vsHash == kVSFaceAnim ? 1 : 0];
     if (!gs) return false;
     int maxFaces = (int)g_cfg.live[77][0]; if (maxFaces < 1) maxFaces = 22;
@@ -423,7 +437,7 @@ bool BrowStrandsBegin(ID3D11DeviceContext* c, const FaceGenExtra* ex, uint64_t v
     BrowSaved& s = t_bs; s = BrowSaved();
     c->VSGetShader(&s.vs, nullptr, nullptr); c->PSGetShader(&s.ps, nullptr, nullptr); c->GSGetShader(&s.gs, nullptr, nullptr); c->HSGetShader(&s.hs, nullptr, nullptr); c->DSGetShader(&s.ds, nullptr, nullptr);
     c->IAGetPrimitiveTopology(&s.topo); c->RSGetState(&s.rs); c->OMGetDepthStencilState(&s.dss, &s.ref);
-    c->GSGetConstantBuffers(0, 12, s.gsCB); c->GSGetShaderResources(0, 1, &s.gsT0); c->GSGetShaderResources(26, 1, &s.gsT26); c->GSGetShaderResources(120, 1, &s.gsT120);
+    c->GSGetConstantBuffers(0, 12, s.gsCB); c->GSGetShaderResources(0, 1, &s.gsT0); c->GSGetShaderResources(26, 1, &s.gsT26); c->GSGetShaderResources(27, 1, &s.gsT27); c->GSGetShaderResources(120, 1, &s.gsT120);
     c->GSGetSamplers(0, 1, &s.gsS0); c->PSGetConstantBuffers(11, 1, &s.psCB11); c->PSGetShaderResources(120, 1, &s.psT120);
     // profundidad: la cara se dibuja con "igual" (pre-pasada) y eso descartaria todas las hebras -> "menor o igual"
     // (o "mayor o igual" si el juego usa profundidad invertida), escribiendo profundidad
@@ -457,6 +471,7 @@ bool BrowStrandsBegin(ID3D11DeviceContext* c, const FaceGenExtra* ex, uint64_t v
     if (ex->hairCB) { c->GSSetConstantBuffers(11, 1, &ex->hairCB); c->PSSetConstantBuffers(11, 1, &ex->hairCB); }
     ID3D11ShaderResourceView* t0 = nullptr; c->PSGetShaderResources(0, 1, &t0); c->GSSetShaderResources(0, 1, &t0); if (t0) t0->Release();
     ID3D11ShaderResourceView* hm = ex->seedMap; c->GSSetShaderResources(26, 1, &hm);
+    ID3D11ShaderResourceView* bm = ex->browMap; c->GSSetShaderResources(27, 1, &bm);
     ID3D11ShaderResourceView* prm = g_dev.paramSRV; c->GSSetShaderResources(120, 1, &prm); c->PSSetShaderResources(120, 1, &prm);
     c->GSSetSamplers(0, 1, &s_samp);
     c->RSSetState(s_browRS);   // sin culling (cintas vistas de ambos lados)
@@ -469,12 +484,12 @@ void BrowStrandsEnd(ID3D11DeviceContext* c) {
     BrowSaved& s = t_bs;
     c->VSSetShader(s.vs, nullptr, 0); c->PSSetShader(s.ps, nullptr, 0); c->GSSetShader(s.gs, nullptr, 0); c->HSSetShader(s.hs, nullptr, 0); c->DSSetShader(s.ds, nullptr, 0);
     c->IASetPrimitiveTopology(s.topo); c->RSSetState(s.rs); c->OMSetDepthStencilState(s.dss, s.ref);
-    c->GSSetConstantBuffers(0, 12, s.gsCB); c->GSSetShaderResources(0, 1, &s.gsT0); c->GSSetShaderResources(26, 1, &s.gsT26); c->GSSetShaderResources(120, 1, &s.gsT120);
+    c->GSSetConstantBuffers(0, 12, s.gsCB); c->GSSetShaderResources(0, 1, &s.gsT0); c->GSSetShaderResources(26, 1, &s.gsT26); c->GSSetShaderResources(27, 1, &s.gsT27); c->GSSetShaderResources(120, 1, &s.gsT120);
     c->GSSetSamplers(0, 1, &s.gsS0); c->PSSetConstantBuffers(11, 1, &s.psCB11); c->PSSetShaderResources(120, 1, &s.psT120);
     if (s.vs) s.vs->Release(); if (s.ps) s.ps->Release(); if (s.gs) s.gs->Release(); if (s.hs) s.hs->Release(); if (s.ds) s.ds->Release();
     if (s.rs) s.rs->Release(); if (s.dss) s.dss->Release();
     for (auto* b : s.gsCB) if (b) b->Release();
-    if (s.gsT0) s.gsT0->Release(); if (s.gsT26) s.gsT26->Release(); if (s.gsT120) s.gsT120->Release(); if (s.gsS0) s.gsS0->Release();
+    if (s.gsT0) s.gsT0->Release(); if (s.gsT26) s.gsT26->Release(); if (s.gsT27) s.gsT27->Release(); if (s.gsT120) s.gsT120->Release(); if (s.gsS0) s.gsS0->Release();
     if (s.psCB11) s.psCB11->Release(); if (s.psT120) s.psT120->Release();
     s = BrowSaved();
 }
