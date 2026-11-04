@@ -950,7 +950,9 @@ void ExprBonesFrame(const void* skel) {
     const float o = (std::max)((std::max)(std::clamp(g_cfg.live[347][0], 0.0f, 1.0f), 0.45f * tongueOut), (std::min)(1.0f, 0.40f * pSur + 0.85f * pGri + talkO + 0.60f * (std::max)(0.0f, pSmi - 1.0f)));   // (04/11 b, Agustin: "la sonrisa con los dientes cerrados") la sonrisa ya no abre la mandibula (antes 0.12): los labios se separan, los dientes quedan juntos; (04/11 c) pasando 1.0 la sonrisa grande abre la boca (1.5 = 0.30, como en la foto de Messi riendo)
     // (04/11 d, Agustin: "deberia haber mas sliders de animaciones, tambien como opciones para modificar la mordida, y levantar las
     // cejas por hueso, opciones por hueso como ahora") filas 361 / 362, por huesos, de -1.5 a 1.5 (0 = nada):
-    //   x361 cejas (arriba +, abajo -), y361 mordida (mandibula adelante + / atras -), z361 mandibula de costado (+ a su izquierda),
+    //   x361 cejas (arriba +, abajo -), y361 mordida (04/11 e, Agustin: "con mordida me referia a hacer que los dientes se apreten o se
+//   suelten"): + aprieta (la mandibula sube lo que el juego la tenga abierta, maseteros, labios apretados, menton tenso), - suelta
+//   (la mandibula baja: los dientes se separan, ~4 grados a -1.5), z361 mandibula de costado (+ a su izquierda),
     //   w361 media sonrisa (+ su lado izquierdo, - el derecho); x362 inflar los cachetes, y362 beso (labios adelante y juntos),
     //   z362 desprecio (labio de arriba de un lado: + izquierdo, - derecho), w362 una ceja (+ la izquierda arriba, - la derecha)
     const float* PB = g_cfg.live[361]; const float* PC = g_cfg.live[362];
@@ -1030,6 +1032,11 @@ void ExprBonesFrame(const void* skel) {
     const float P[3] = { jc.t[0], jc.t[1], jc.t[2] };
     float A = 0.40f * o;
     // (03/11) tope de la mandibula: lo del juego + lo del mod no pasa de 35 grados (la barba y la cara no dan para mas)
+    {   // (04/11 e) mordida: soltar abre la mandibula; apretar la cierra solo lo que el juego la tenga abierta (los dientes no se pasan)
+        const float bite = std::clamp(g_cfg.live[361][1], -1.5f, 1.5f);
+        if (bite < 0.0f) A += 0.045f * -bite;
+        else if (bite > 0.0f) A -= (std::min)(0.045f * bite, (std::max)(0.0f, deg / 57.29578f + (std::max)(A, 0.0f)));
+    }
     if (A > 0.0f) A = (std::min)(A, (std::max)(0.0f, (35.0f - deg) / 57.29578f));    // (02/11, Agustin: "esta al reves") con el signo negativo la boca se cerraba al subir el slider: en el cuaternion del motor el menton baja con el angulo positivo
     for (int d = 0; d < kND; d++) {
         if (!S->cur[d]) continue;
@@ -1050,7 +1057,15 @@ void ExprBonesFrame(const void* skel) {
             const float sl = isL ? 1.0f : -1.0f;
             if (d >= 26 && d <= 29) po[1] += 0.0040f * xB[0];                       // cejas
             if (d == 30) po[1] += 0.0020f * xB[0];                                  // entrecejo
-            if (kDef[d].jaw > 0.0f) { po[2] += 0.0030f * xB[1] * kDef[d].jaw; po[0] += 0.0030f * xB[2] * kDef[d].jaw; }   // mordida / costado
+            if (kDef[d].jaw > 0.0f) po[0] += 0.0030f * xB[2] * kDef[d].jaw;   // mandibula de costado
+            if (xB[1] > 0.0f) {   // apretar los dientes: maseteros afuera, labios apretados uno contra otro, menton que sube, comisuras tensas
+                const float k = xB[1];
+                if (d == 7 || d == 8) po[0] += sl * 0.0012f * k;
+                if (d == 1 || d == 2 || d == 3) po[1] += 0.0006f * k;
+                if (d == 9 || d == 10 || d == 11) po[1] -= 0.0005f * k;
+                if (d == 4) { po[1] += 0.0008f * k; po[2] += 0.0005f * k; }
+                if (d == 5 || d == 6) po[0] += sl * 0.0008f * k;
+            }
             if (d == 5 || d == 6) {                                                 // media sonrisa
                 const float side = d == 5 ? (std::max)(xB[3], 0.0f) : (std::max)(-xB[3], 0.0f);
                 po[0] += sl * 0.0025f * side; po[1] += 0.0035f * side; po[2] -= 0.0010f * side;
