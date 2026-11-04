@@ -457,7 +457,7 @@ void main(
   // PES21 piel (16/10): sobre la cara el borde de la sombra del sol se filtra mas ancho (x34) -> sin escalones
   float4 P34 = IniParams.Load(int2(34,0));
   bool pesSSSS = IniParams.Load(int2(95,0)).w > 0.5;   // 19/10: dispersion unificada (SSSS) prendida -> las difusiones viejas de la piel se apagan solas
-  float pesShScale = (P34.w > 0.5 && !pesSSSS && matType == 0 && abs(skinTag - 0.98039) < 0.003) ? max(P34.x, 1.0) : 1.0;
+  float pesShScale = (matType == 0 && abs(skinTag - 0.98039) < 0.003 && (P34.x > 1.01 || (P34.w > 0.5 && !pesSSSS))) ? max(P34.x, 1.0) : 1.0;   // (04/11) x34 > 1 ensancha el borde de la sombra del sol en la cara tambien con la SSSS (el disco de la SSSS es de mm y no tapa texeles de ~2 cm: borde serrucho en primeros planos)
   r0.x = PESShadowFilter(pesShUV, pesShRef, pesShCas, pesFoot ? float2(0.0, 0.0) : v2.xy, r0.x, pesShScale, pesDzduv);   // (02/11 c) al pie: giro fijo del filtro (el giro por pixel salia como puntos de hojas sueltas en la penumbra: el TAA no los junta en hojas finas)   // PES21 sombras v2 + plano receptor
   // PES21 fusion de cascadas (18/10): en la franja del borde de la cascada se mezcla con la siguiente (sin salto de nitidez). y87 = ancho
   { float4 PHb = IniParams.Load(int2(87,0)); float4 SHb = IniParams.Load(int2(20,0));
