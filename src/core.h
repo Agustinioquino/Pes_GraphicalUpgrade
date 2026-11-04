@@ -278,10 +278,12 @@ extern DeviceState g_dev;
 void OverlayPresent(IDXGISwapChain* sc);
 // quinta textura de la cara generada en vivo (facegen.cpp)
 struct FaceGenExtra { ID3D11ShaderResourceView* seedMap = nullptr; ID3D11UnorderedAccessView* seedsUAV = nullptr; ID3D11ShaderResourceView* seedsSRV = nullptr; ID3D11Buffer* args = nullptr; ID3D11UnorderedAccessView* argsUAV = nullptr; ID3D11Buffer* hairCB = nullptr; int rtCount = 0;
+    uint64_t browVS = 0; UINT browCount = 0, browStart = 0; INT browBase = 0;   // (04/11) hebras v2: VS del dibujo de la cara y sus argumentos (0 = sin hebras)
     ID3D11Resource* key = nullptr; ID3D11Resource* t0 = nullptr; std::string id; };   // (20/10) identidad de la cara para el LOD: textura clave (t1), t0 y hash (punteros sin retener)
 extern std::atomic<int> g_depthClearZero, g_depthClearOne;
 bool FaceGenLookup(ID3D11DeviceContext* c, ID3D11ShaderResourceView** outA, ID3D11ShaderResourceView** outB, FaceGenExtra* ex);
-void BrowDrawAfterFace(ID3D11DeviceContext* c, FaceGenExtra* ex);
+// (04/11) cejas con hebras v2: repetir el dibujo de la cara con el GS de hebras (facegen.cpp; el dibujo lo hace hooks.cpp)
+bool BrowWanted(const FaceGenExtra& ex, uint64_t vsHash); bool BrowStrandsBegin(ID3D11DeviceContext* c, const FaceGenExtra* ex, uint64_t vsHash); void BrowStrandsEnd(ID3D11DeviceContext* c);
 void FaceGenPresent(); void FaceGenClear(); void FaceGenReloadShaders(); int FaceGenCount();
 // inspector visual (inspect.cpp)
 extern std::atomic<bool> g_inspectOn; extern std::atomic<int> g_inspectSel;

@@ -190,7 +190,7 @@ static const ShaderEntry* FindShader(void* p) {
     std::shared_lock<std::shared_mutex> lk(s_shMutex);
     auto it = s_shaders.find(p);
     if (it != s_shaders.end()) return &it->second;
-    auto r = s_replToObj.find(p);   // es uno de nuestros reemplazos (lo volvio a enlazar BrowDrawAfterFace o un restore)
+    auto r = s_replToObj.find(p);   // es uno de nuestros reemplazos (lo volvio a enlazar un restore)
     if (r != s_replToObj.end()) { it = s_shaders.find(r->second); if (it != s_shaders.end()) return &it->second; }
     return nullptr;
 }
@@ -1140,19 +1140,12 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
                 Remember(c, d, true, true, a.idx);  c->PSSetShaderResources(a.idx, 1, &fb);
                 // 18/10 pelo: parametros del tipo de pelo de ESTA cara (PES21FX_hair.ini) en b11
                 if (ex.hairCB) { Remember(c, d, true, false, 11); c->PSSetConstantBuffers(11, 1, &ex.hairCB); }
-                // cejas con hebras: mapa de semillas en t26 y buffer de semillas (UAV 5) limpio para este dibujo
-                if (ex.seedMap && ex.seedsUAV && g_cfg.live[74][0] > 0.5f) {
+                // cejas con hebras v2 (04/11): el mapa de pelo en t26 (lo usa el diagnostico "semillas sobre la cara") y se anota este
+                // dibujo para repetirlo con el GS de hebras apenas termine (BrowStrands). Ya no se enlaza el UAV de semillas de la v1.
+                const ShaderEntry* bvs = Ctx(c).vs;
+                if (t_drawKind == 1 && bvs && bvs->repl && !g_cfg.bypass && BrowWanted(ex, bvs->hash)) {
                     Remember(c, d, true, true, 26); c->PSSetShaderResources(26, 1, &ex.seedMap);
-                    const UINT z[4] = { 0, 0, 0, 0 };
-                    if (ex.argsUAV) c->ClearUnorderedAccessViewUint(ex.argsUAV, z);   // 18/10: solo se limpia el contador (las semillas se escriben compactas)
-                    else c->ClearUnorderedAccessViewUint(ex.seedsUAV, z);
-                    // el UAV va en el slot 5 (u5): hay que enlazarlo con la cuenta real de render targets (<= 5), no con "mantener",
-                    // porque si el juego dejo 8 slots declarados la llamada se rechaza en silencio
-                    ID3D11RenderTargetView* rts[8] = {}; ID3D11DepthStencilView* dsv = nullptr; c->OMGetRenderTargets(8, rts, &dsv);
-                    UINT nrt = 0; for (UINT i = 0; i < 8; i++) if (rts[i]) nrt = i + 1;
-                    if (nrt <= 5) { ID3D11UnorderedAccessView* uavs[2] = { ex.seedsUAV, ex.argsUAV }; c->OMSetRenderTargetsAndUnorderedAccessViews(nrt, rts, dsv, 5, ex.argsUAV ? 2 : 1, uavs, nullptr); d.brow = ex; d.brow.rtCount = (int)nrt; }
-                    else { static std::atomic<bool> warned{false}; if (!warned.exchange(true)) Log("cejas: la cara se dibuja con %u render targets, no puedo enlazar el buffer de semillas", nrt); }
-                    for (auto* v : rts) if (v) v->Release(); if (dsv) dsv->Release();
+                    d.brow = ex; d.brow.browVS = bvs->hash; d.brow.browCount = t_drawVerts; d.brow.browStart = t_drawStart; d.brow.browBase = t_drawBase;
                 }
             }
             break; }
@@ -1399,7 +1392,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (ds.ring.overlay && !ds.skip) { RingOverlayBegin(c, ds.ring); call; RingOverlayEnd(c, ds.ring); } \
     if (g_meterHook) { CtxState& cm_ = Ctx(c); if (cm_.ps && cm_.ps->hash == 0x619b86cb5691cdceULL) LightMeterAfterComposition(c); } \
     if (g_inspectOn) { CtxState& ci_ = Ctx(c); if (InspectBegin(c, ci_.ps, ci_.vs, kind, verts, inst)) { call; InspectEnd(c); } } \
-    if (ds.tess.on) FaceTessEnd(c, ds.tess); if (r) Restore(c, ds); if (ds.brow.seedsUAV) BrowDrawAfterFace(c, &ds.brow); if (ds.lod.count) ds.lod.Release();
+    if (ds.brow.browVS && !ds.skip) BrowStrands<V>(c, ds); if (ds.tess.on) FaceTessEnd(c, ds.tess); if (r) Restore(c, ds); if (ds.lod.count) ds.lod.Release();
 // (26/10 g) antes de cada dibujo que no sea de la base de la cancha: la emision pendiente del pasto del mod (ver GrassBaseFlush)
 #define GRASS_FLUSH(c) if (g_grassPendN.load(std::memory_order_relaxed) > 0) { CtxState& cf_ = Ctx(c); GrassBaseFlush(c, 0, cf_.ps ? cf_.ps->hash : 0); }
 // (27/10 c) sombra de la cabeza: el mismo dibujo de la pasada de sombras del juego (cascada mas cercana) se repite en el atlas
@@ -1486,6 +1479,13 @@ template<int V, class F> static void HeadShadowReplay(ID3D11DeviceContext* c, ID
 }
 // (20/10) LOD0 forzado: el dibujo sale con los buffers/cuentas de la malla de mas detalle y se devuelve el estado del juego
 template<int V> static void LodDrawSub(ID3D11DeviceContext* c, DrawScope& ds) { LodIA sv; LodBind(c, ds.lod, sv); o_DrawIdx[V](c, ds.lod.count, ds.lod.start, ds.lod.base); LodRestore(c, sv, ds.lod); }
+// (04/11) cejas con hebras v2: el mismo DrawIndexed de la cara otra vez, con el GS de hebras (facegen.cpp), ANTES de devolver el
+// estado (huesos, gestos, expresiones y render targets de la cara siguen enlazados). Llama la funcion original (sin hooks).
+template<int V> static void BrowStrands(ID3D11DeviceContext* c, DrawScope& ds) {
+    if (!BrowStrandsBegin(c, &ds.brow, ds.brow.browVS)) return;
+    if (ds.lod.count) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.brow.browCount, ds.brow.browStart, ds.brow.browBase);
+    BrowStrandsEnd(c);
+}
 template<int V> static void STDMETHODCALLTYPE hk_DrawIdx(ID3D11DeviceContext* c, UINT a, UINT b, INT d) {
     GRASS_FLUSH(c)
     { CtxState& cg = Ctx(c); const ShaderEntry* gvs = cg.vs;
