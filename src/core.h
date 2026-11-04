@@ -383,7 +383,9 @@ bool InputLayoutInfo(ID3D11InputLayout* il, std::vector<InputElemInfo>& out);
 bool BeardForDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, ID3D11Buffer** cb, ID3D11ShaderResourceView** pool, ID3D11ShaderResourceView** bind);
 ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, const float** headCentroid = nullptr, int* headIdx = nullptr, ID3D11ShaderResourceView** shapeSrv = nullptr, ID3D11ShaderResourceView** shapeWr = nullptr, ID3D11ShaderResourceView** tessSeam = nullptr, bool body = false);   // (04/11 g) body: piel del cuerpo (VS 1c02a92a), solo pesos de borde   // (04/11 b) tessSeam: pesos de borde de la malla (t119 del VS) solo si es piel de la cara teselable (facetess.cpp)
 // (04/11 b) teselacion de la cara en primeros planos (facetess.cpp): HS + DS detras del VS de la cabeza / cara, por dibujo
-struct FaceTessScope { bool on = false, relief = false; D3D11_PRIMITIVE_TOPOLOGY topo = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST; };
+struct FaceTessScope { bool on = false, relief = false; D3D11_PRIMITIVE_TOPOLOGY topo = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST; int v = -1; UINT cnt = 0, start = 0; INT base = 0; };   // (04/11 piel) v / cnt / start / base: para repetir la cara teselada en el atlas de las cabezas
+ID3D11DomainShader* FaceTessAtlasDS(int v);   // (04/11 piel) DS de la cara teselada para el atlas de las cabezas (v 0 cabeza, 1 cara animada)
+bool HeadShadowClearedThisFrame(); ID3D11DepthStencilState* HeadShadowAtlasDSS(); ID3D11RasterizerState* HeadShadowAtlasRS(ID3D11RasterizerState* cur); void HeadShadowTessNote(int what);   // (04/11 piel) cara teselada en el atlas
 bool FaceTessBegin(ID3D11DeviceContext* c, uint64_t vsHash, ID3D11ShaderResourceView* seam, ID3D11ShaderResourceView* params, FaceTessScope& s);
 void FaceTessEnd(ID3D11DeviceContext* c, FaceTessScope& s);
 void FaceTessReloadShaders(); void FaceTessPresent(); void FaceTessNote(int why);   // why: 0 sin pesos de borde, 1 sin t120, 2 apagada   // shapeWr: arrugas de la sonrisa esculpidas (PS t31)   // (04/11) shapeSrv: formas esculpidas de la malla (VS t118)

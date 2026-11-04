@@ -654,6 +654,11 @@ void main(
       float cavK = FA.r * saturate(P68.y);
       r2.xyz *= lerp(float3(1,1,1), float3(0.88, 0.83, 0.81), cavK);   // 21/10: casi neutro (con el rojo-marron fuerte la cara quedaba naranja y manchada; el AO ya oscurece el hueco)
       r0.w = lerp(r0.w, max(r0.w, 0.7), cavK * 0.4);
+      // (04/11 piel) con la teselacion hundiendo los surcos de la quinta textura (fila 359: x fuerza, y mm), el brillo se apaga
+      // en el fondo del surco en proporcion a lo que se hundio (oclusion especular del relieve; hasta -45 % con 0.8 mm o mas)
+      { float4 R359 = IniParams.Load(int2(359,0));
+        if (IniParams.Load(int2(357,0)).x > 0.5 && R359.x > 0.001 && R359.y > 0.001)
+          r0.z *= 1.0 - 0.45 * saturate(FA.r * saturate(R359.x) * R359.y / 0.8); }
     }
     r2.xyz = saturate(r2.xyz);
     // rubor progresivo por el esfuerzo (sube con el reloj del partido)
