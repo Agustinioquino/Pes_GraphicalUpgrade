@@ -243,7 +243,15 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
   float3 pp = b.x * (pl - dot(pl - P0, N0) * N0)
             + b.y * (pl - dot(pl - P1, N1) * N1)
             + b.z * (pl - dot(pl - P2, N2) * N2);
-  float seam = saturate(b.x * p[0].pV.w + b.y * p[1].pV.w + b.z * p[2].pV.w);   // 0 en las costuras / bordes de la pieza
+  // (04/11 h, Agustin: "se nota el bajo nivel poligonal en el lagrimal") peso 2 = borde de la abertura del ojo (la DLL lo marca solo en
+  // la cara): redondea con x366 (0..1) y su propio tope y366 mm; el relieve no entra ahi (seamR)
+  float4 EB = IniParams.Load(int2(366, 0));
+  float3 wv = float3(p[0].pV.w, p[1].pV.w, p[2].pV.w);
+  float3 isEye = step(1.5, wv);
+  float3 wPh = lerp(saturate(wv), saturate(EB.xxx), isEye);
+  float eyeMix = dot(b, isEye);
+  float seam = saturate(dot(b, wPh));   // 0 en las costuras / bordes de la pieza
+  float seamR = saturate(dot(b, wv * (1.0 - isEye)));
   // (04/11 f, Agustin: "en el cuello a veces lo rompe, que se desactive en la parte baja del cuello cerca del collar") el anillo
   // del collar del torso esta en y 1.51..1.56 del reposo (pes_collar.hlsli); de ahi hasta z360 cm mas arriba (defecto 6, hasta la
   // base del menton en 1.58) el corrimiento, el relieve y la inclinacion de la normal se apagan en rampa; el torso no se tesela.
@@ -258,7 +266,7 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
   float dist = length(pl);
   float fade = 1.0 - smoothstep(U.x - max(U.y, 0.01), U.x, dist);
   float3 d = (pp - pl) * (saturate(T.y) * seam * fade * (T.x > 0.5 ? 1.0 : 0.0));
-  float dl = length(d), tope = max(U.z, 0.0) * 0.001;
+  float dl = length(d), tope = lerp(max(U.z, 0.0), clamp(EB.y, 0.0, max(U.z, 0.0)), saturate(eyeMix * 2.0)) * 0.001;
   if (dl > tope) d *= tope / max(dl, 1e-6);
   // (04/11 c) relieve desde la quinta textura (fila 359): por la normal interpolada, mm
   float4 R = IniParams.Load(int2(359, 0));   // x fuerza, y hundir surcos (mm), z levantar relieve (mm), w mip
@@ -283,7 +291,7 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
       if (r0.z < 0.09) mouthK = 1.0;   // detras de la cara (nuca, orejas): sin zona de boca
       if (hmm < 0.0) hmm *= mouthK;
       float3 Nn = normalize(b.x * N0 + b.y * N1 + b.z * N2);
-      d += Nn * (clamp(hmm * R.x, -3.0, 3.0) * 0.001 * seam * fade);
+      d += Nn * (clamp(hmm * R.x, -3.0, 3.0) * 0.001 * min(seam, seamR) * fade);
       // (04/11 d, Agustin: "no hace nada") RELIEVE EN LA LUZ (w360): un corrimiento de 1 mm casi no cambia la imagen de frente
       // porque la luz sale de la normal, no de la posicion. Aca la normal (y con ella la tangente y la bitangente que arman el
       // marco del normal map en el PS) se inclina con la pendiente de la altura, asi el relieve tambien se ve en el sombreado.
@@ -295,7 +303,7 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
         float hu = max(R.z, 0.0) * (FBu.b + saturate(FAu.g * 2.0 - 1.0)) - max(R.y, 0.0) * FAu.r;
         float hv = max(R.z, 0.0) * (FBv.b + saturate(FAv.g * 2.0 - 1.0)) - max(R.y, 0.0) * FAv.r;
         // pendiente: mm de altura por mm de piel (una unidad de UV ~ 250 mm de cara)
-        float2 g = float2(hu - hmm, hv - hmm) / (e * 250.0) * R.x * relL * seam * fade;
+        float2 g = float2(hu - hmm, hv - hmm) / (e * 250.0) * R.x * relL * min(seam, seamR) * fade;
         float3 Tn = normalize(b.x * p[0].o4.xyz + b.y * p[1].o4.xyz + b.z * p[2].o4.xyz);
         float3 Bn = normalize(b.x * p[0].o5.xyz + b.y * p[1].o5.xyz + b.z * p[2].o5.xyz);
         float3 Nt = normalize(Nn - Tn * g.x - Bn * g.y);
@@ -313,7 +321,7 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
 #endif   // !PES_TESS_BODY (relieve solo en la cara)
   // (04/11 d) PRUEBA (fila 360.x): infla la piel 1 cm por la normal, sin tope ni distancia, para ver sin duda que la teselacion
   // llega a la imagen (los bordes de cada pieza quedan fijos). Solo para probar: volver a "No".
-  if (IniParams.Load(int2(360, 0)).x > 0.5) d += normalize(b.x * N0 + b.y * N1 + b.z * N2) * (0.01 * seam);
+  if (IniParams.Load(int2(360, 0)).x > 0.5) d += normalize(b.x * N0 + b.y * N1 + b.z * N2) * (0.01 * min(seam, seamR));
   float3 pv = pl + d;
 
   float4 clip = mul(float4(pv, 1.0), g_vsScene.m_projection);
