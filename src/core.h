@@ -286,6 +286,9 @@ bool FaceGenLookup(ID3D11DeviceContext* c, ID3D11ShaderResourceView** outA, ID3D
 // (04/11) cejas con hebras v2: repetir el dibujo de la cara con el GS de hebras (facegen.cpp; el dibujo lo hace hooks.cpp)
 bool BrowWanted(const FaceGenExtra& ex, uint64_t vsHash); bool LashWanted(uint64_t vsHash, uint64_t psHash); bool BrowShadowOn(ID3D11DeviceContext* c); void BrowShadowOff(ID3D11DeviceContext* c); bool BrowStrandsBegin(ID3D11DeviceContext* c, const FaceGenExtra* ex, uint64_t vsHash); void BrowStrandsEnd(ID3D11DeviceContext* c);
 void FaceGenPresent(); void FaceGenClear(); void FaceGenReloadShaders(); int FaceGenCount();
+// (04/11) caras en alta desde PES21FX\caras_hd (caras_hd.cpp): volcado de originales, texturas grandes para t0..t3 de la piel
+void CarasHdNewFace(ID3D11DeviceContext* c, const std::string& id, ID3D11ShaderResourceView* const in[4]);
+bool CarasHdGet(const std::string& id, ID3D11ShaderResourceView* out[4]); void CarasHdPresent();
 // inspector visual (inspect.cpp)
 extern std::atomic<bool> g_inspectOn; extern std::atomic<int> g_inspectSel;
 extern std::atomic<bool> g_autoDumpAny; void InspectAutoDump(ID3D11DeviceContext* c, const ShaderEntry* ps);   // volcado automatico de texturas (clases con volcar = 1)

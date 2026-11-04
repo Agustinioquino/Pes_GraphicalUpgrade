@@ -26,6 +26,25 @@ static std::string s_status;
 static std::string s_btnPending;   // accion de un "button =" del ini (se ejecuta fuera de g_cfgMutex)
 static ImFont* s_fontBig = nullptr; static ImFont* s_fontBold = nullptr;
 static ID3D11ShaderResourceView* s_logo = nullptr; static float s_logoAspect = 1.0f;
+// (04/11) el menu se adapta a la resolucion (pedido de Agustin): letras, espacios y anchos crecen con el alto de la pantalla (1080 = 1)
+// y las letras base son mas grandes (19 -> 22 px a 1080). ui_scale queda como ajuste fino encima. Las fuentes se rasterizan al tamano
+// final (nitidas) y se rehacen si cambia la resolucion
+static constexpr float kFontUp = 1.15f;
+static float s_fontsH = 0.0f;
+static ImGuiStyle s_baseStyle;
+static float UIK() { return ImGui::GetFontSize() / 19.0f; }   // escala de los anchos fijos del menu (pensados para 19 px)
+static void BuildFonts(float H) {
+    ImGuiIO& io = ImGui::GetIO();
+    const float k = std::clamp(H / 1080.0f, 0.75f, 3.0f) * kFontUp;
+    io.Fonts->Clear();
+    if (!io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", std::round(19.0f * k), nullptr, io.Fonts->GetGlyphRangesDefault())) io.Fonts->AddFontDefault();
+    s_fontBig = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeuib.ttf", std::round(26.0f * k), nullptr, io.Fonts->GetGlyphRangesDefault());
+    s_fontBold = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeuib.ttf", std::round(19.0f * k), nullptr, io.Fonts->GetGlyphRangesDefault());
+    ImGui::GetStyle() = s_baseStyle;
+    ImGui::GetStyle().ScaleAllSizes(k);
+    s_fontsH = H;
+    Log("menu: letras para %.0f px de alto (x%.2f)", H, k);
+}
 
 void OverlayResize() { if (s_rtv) { s_rtv->Release(); s_rtv = nullptr; } }
 
@@ -76,9 +95,6 @@ static void Init(IDXGISwapChain* sc) {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;
-    io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 19.0f, nullptr, io.Fonts->GetGlyphRangesDefault());
-    s_fontBig = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeuib.ttf", 26.0f, nullptr, io.Fonts->GetGlyphRangesDefault());
-    s_fontBold = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeuib.ttf", 19.0f, nullptr, io.Fonts->GetGlyphRangesDefault());
     ImGui::StyleColorsDark();
     ImGuiStyle& st = ImGui::GetStyle();
     st.WindowRounding = 10.0f; st.FrameRounding = 6.0f; st.GrabRounding = 6.0f; st.TabRounding = 6.0f; st.PopupRounding = 6.0f;
@@ -98,6 +114,8 @@ static void Init(IDXGISwapChain* sc) {
     c[ImGuiCol_Separator] = ImVec4(0.22f, 0.25f, 0.30f, 1.0f); c[ImGuiCol_Text] = ImVec4(0.93f, 0.94f, 0.96f, 1.0f);
     c[ImGuiCol_TextDisabled] = ImVec4(0.55f, 0.58f, 0.64f, 1.0f); c[ImGuiCol_ScrollbarBg] = ImVec4(0, 0, 0, 0);
     c[ImGuiCol_ScrollbarGrab] = panelH; c[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.3f, 0.33f, 0.38f, 1.0f);
+    s_baseStyle = st;
+    BuildFonts((float)(d.BufferDesc.Height ? d.BufferDesc.Height : 1080));
     ImGui_ImplWin32_Init(s_hwnd);
     ImGui_ImplDX11_Init(g_dev.dev, g_dev.imm);
     s_oldProc = (WNDPROC)SetWindowLongPtrW(s_hwnd, GWLP_WNDPROC, (LONG_PTR)MenuProc);
@@ -148,7 +166,7 @@ static bool GroupActive(const MenuGroup& g) { return g.tIdx < 0 || g_cfg.live[g.
 
 static void DrawGroup(MenuGroup& g, int gid) {
     ImGui::PushID(1000 + gid);
-    ImGui::BeginChild("card", ImVec2(0, 0), ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_FrameStyle);
+    ImGui::BeginChild("card", ImVec2(0 * UIK(), 0), ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_FrameStyle);
     bool hasT = g.tIdx >= 0;
     bool on = hasT ? (g_cfg.live[g.tIdx][g.tComp] > 0.5f) : true;
     // contraer / favorito / restablecer (fila de la derecha)
@@ -200,7 +218,7 @@ static void DrawGroup(MenuGroup& g, int gid) {
                 ImGui::SameLine(); ImGui::TextDisabled("(?)");
                 if (ImGui::IsItemHovered()) { ImGui::BeginTooltip(); ImGui::PushTextWrapPos(380); ImGui::TextUnformatted(Utf8(LS(sl.help, sl.helpEn)).c_str()); ImGui::PopTextWrapPos(); ImGui::EndTooltip(); }
             }
-            ImGui::SetNextItemWidth(w - 70);
+            ImGui::SetNextItemWidth(w - 70 * UIK());
             if (!sl.options.empty()) {
                 const auto& opts = (g_cfg.lang != 0 && sl.optionsEn.size() == sl.options.size()) ? sl.optionsEn : sl.options;
                 int cur = (int)(val + 0.5f); if (cur < 0) cur = 0; if (cur >= (int)sl.options.size()) cur = (int)sl.options.size() - 1;
@@ -321,7 +339,7 @@ static void DrawTutorial(const std::string& sec, const std::string& shown) {
     if (!t) return;
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.10f, 0.16f, 0.22f, 1.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
-    ImGui::BeginChild(("tut_" + sec).c_str(), ImVec2(0, 0), ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding);
+    ImGui::BeginChild(("tut_" + sec).c_str(), ImVec2(0 * UIK(), 0), ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding);
     if (s_fontBold) ImGui::PushFont(s_fontBold);
     ImGui::TextColored(ImVec4(0.85f, 0.68f, 0.28f, 1), "Tutorial: %s", Utf8(shown).c_str());
     if (s_fontBold) ImGui::PopFont();
@@ -333,9 +351,9 @@ static void DrawTutorial(const std::string& sec, const std::string& shown) {
         ImGui::Spacing();
         a = b + 1;
     }
-    if (ImGui::Button(TRS("Entendido"), ImVec2(110, 0))) s_tutDone.insert(sec);
+    if (ImGui::Button(TRS("Entendido"), ImVec2(110 * UIK(), 0))) s_tutDone.insert(sec);
     ImGui::SameLine();
-    if (ImGui::Button(TRS("No mostrar mas tutoriales"), ImVec2(220, 0))) { g_cfg.tutorials = false; SaveOption("tutorials", "0"); }
+    if (ImGui::Button(TRS("No mostrar mas tutoriales"), ImVec2(220 * UIK(), 0))) { g_cfg.tutorials = false; SaveOption("tutorials", "0"); }
     ImGui::SameLine(); ImGui::TextDisabled("%s", TRS("(se vuelven a prender arriba, en 'Tutoriales')"));
     ImGui::EndChild();
     ImGui::PopStyleVar();
@@ -377,12 +395,12 @@ static void DrawPresetsTab() {
     if (s_fontBold) ImGui::PushFont(s_fontBold);
     ImGui::TextUnformatted(TRS("Guardar los valores actuales como preset de este estadio"));
     if (s_fontBold) ImGui::PopFont();
-    ImGui::SetNextItemWidth(300); ImGui::InputText(TRS("Nombre"), s_pName, sizeof(s_pName));
-    ImGui::SetNextItemWidth(300); ImGui::InputText(TRS("Autor"), s_pAuthor, sizeof(s_pAuthor));
+    ImGui::SetNextItemWidth(300 * UIK()); ImGui::InputText(TRS("Nombre"), s_pName, sizeof(s_pName));
+    ImGui::SetNextItemWidth(300 * UIK()); ImGui::InputText(TRS("Autor"), s_pAuthor, sizeof(s_pAuthor));
     ImGui::Checkbox(TRS("Solo para esta hora (dia / noche)"), &s_pOnlyTime);
     ImGui::SameLine(); ImGui::TextDisabled("(?)"); if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Marcado: el preset vale solo de dia o solo de noche (segun el partido actual).\nSin marcar: vale para el estadio a cualquier hora."));
     ImGui::BeginDisabled(m.stadium < 0);
-    if (ImGui::Button(TRS("Guardar preset para este estadio"), ImVec2(280, 0))) pending = 4;
+    if (ImGui::Button(TRS("Guardar preset para este estadio"), ImVec2(280 * UIK(), 0))) pending = 4;
     ImGui::EndDisabled();
     if (!s_pStatus.empty()) ImGui::TextDisabled("%s", s_pStatus.c_str());
     ImGui::Separator();
@@ -413,7 +431,8 @@ static void DrawPresetsTab() {
 }
 
 static void DrawMenu() {
-    ImGui::SetNextWindowSize(ImVec2(640, 760), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(640 * UIK(), 760 * UIK()), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(320 * UIK(), 240 * UIK()), ImVec2(ImGui::GetIO().DisplaySize.x * 0.97f, ImGui::GetIO().DisplaySize.y * 0.95f));   // (04/11) nunca mas grande que la pantalla
     ImGui::SetNextWindowPos(ImVec2(40, 60), ImGuiCond_FirstUseEver);
     bool open = true;
     ImGui::Begin("##pes21fx", &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
@@ -421,7 +440,7 @@ static void DrawMenu() {
     // --- cabecera: logo del PES Editor + nombre del mod ---
     float headY = ImGui::GetCursorPosY();
     if (s_logo) {
-        float h = 64.0f;
+        float h = 64.0f * UIK();
         ImGui::Image((ImTextureID)(intptr_t)s_logo, ImVec2(h * s_logoAspect, h));
         ImGui::SameLine();
         ImGui::SetCursorPosY(headY + 6);
@@ -440,7 +459,7 @@ static void DrawMenu() {
     }
     ImGui::SameLine(ImGui::GetWindowWidth() - 60);
     ImGui::SetCursorPosY(headY);
-    if (ImGui::Button("X", ImVec2(34, 0))) g_menuOpen = false;
+    if (ImGui::Button("X", ImVec2(34 * UIK(), 0))) g_menuOpen = false;
     ImGui::Separator();
     int rep = g_replacedCount.load(), fail = g_failedCount.load();
     ImGui::PushStyleColor(ImGuiCol_Text, fail ? ImVec4(0.95f, 0.55f, 0.35f, 1) : ImVec4(0.45f, 0.85f, 0.55f, 1));
@@ -448,11 +467,11 @@ static void DrawMenu() {
     ImGui::PopStyleColor();
     if (fail) { ImGui::SameLine(); ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.35f, 1), TRS("   %d con error (ver pestana Errores)"), fail); }
     ImGui::Spacing();
-    if (ImGui::Button(TRS("Guardar"), ImVec2(120, 0))) s_status = TRS(SaveConfigValues() ? "Guardado en PES21FX.ini" : "No se pudo guardar");
+    if (ImGui::Button(TRS("Guardar"), ImVec2(120 * UIK(), 0))) s_status = TRS(SaveConfigValues() ? "Guardado en PES21FX.ini" : "No se pudo guardar");
     ImGui::SameLine();
-    if (ImGui::Button(TRS("Recargar shaders"), ImVec2(150, 0))) { ReloadShaders(); s_status = TRS("Shaders recargados"); }
+    if (ImGui::Button(TRS("Recargar shaders"), ImVec2(150 * UIK(), 0))) { ReloadShaders(); s_status = TRS("Shaders recargados"); }
     ImGui::SameLine();
-    if (ImGui::Button(TRS("Recargar config"), ImVec2(140, 0))) { LoadConfig(); ReloadShaders(); s_status = TRS("Configuracion recargada"); }
+    if (ImGui::Button(TRS("Recargar config"), ImVec2(140 * UIK(), 0))) { LoadConfig(); ReloadShaders(); s_status = TRS("Configuracion recargada"); }
     ImGui::SameLine();
     ImGui::Checkbox(TRS("Ver original"), &g_cfg.bypass);
     ImGui::SameLine();
@@ -462,7 +481,7 @@ static void DrawMenu() {
         static const char* const kLangs[3] = { "Espa\xC3\xB1ol", "English", "Portugu\xC3\xAAs" };
         static const char* const kLangKey[3] = { "es", "en", "pt" };
         int lg = (g_cfg.lang >= 0 && g_cfg.lang <= 2) ? g_cfg.lang : 0;
-        ImGui::SetNextItemWidth(110);
+        ImGui::SetNextItemWidth(110 * UIK());
         if (ImGui::Combo("##idioma", &lg, kLangs, 3)) { g_cfg.lang = lg; SaveOption("language", kLangKey[lg]); LoadMenuLang(); }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Idioma del menu / Menu language / Idioma do menu");
     }
@@ -470,7 +489,7 @@ static void DrawMenu() {
     {   // (31/10) que el juego no reciba las teclas mientras se escribe en el menu: [PES21FX] bloquear_teclado
         const char* kBlk[3] = { TRS("Teclas del juego: siempre"), TRS("Teclas del juego: no al escribir"), TRS("Teclas del juego: no con el menu") };
         int bk = std::clamp(g_cfg.blockKeys, 0, 2);
-        ImGui::SetNextItemWidth(250);
+        ImGui::SetNextItemWidth(250 * UIK());
         if (ImGui::Combo("##bloqteclas", &bk, kBlk, 3)) { g_cfg.blockKeys = bk; SaveOption("bloquear_teclado", std::to_string(bk)); }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Que el juego no reciba las teclas mientras escribis en el menu (buscador, nombres). 'No al escribir' = solo con un campo de texto activo; 'No con el menu' = mientras el menu esta abierto."));
     }
@@ -478,16 +497,16 @@ static void DrawMenu() {
     // --- catalogo de shaders: capturar lo que se dibuja y escribir las fichas ---
     if (!g_catalogActive) {
     { bool ins = g_inspectOn.load(); if (ins) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.25f, 0.2f, 1));
-      if (ImGui::Button(ins ? "Inspector: ON" : "Inspector", ImVec2(110, 0))) { g_inspectOn = !ins; s_status = TRS(ins ? "Inspector apagado" : "Inspector visual: flechas sobre cada parte conocida; clic en una ficha para ver sus texturas"); }
+      if (ImGui::Button(ins ? "Inspector: ON" : "Inspector", ImVec2(110 * UIK(), 0))) { g_inspectOn = !ins; s_status = TRS(ins ? "Inspector apagado" : "Inspector visual: flechas sobre cada parte conocida; clic en una ficha para ver sus texturas"); }
       if (ins) ImGui::PopStyleColor();
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Modo debug visual: marca en pantalla cara, pelo, kit, medias, botines, pasto y cielo, que hace el mod en cada uno y de donde sale cada textura (juego / archivo / generada).")); }
         ImGui::SameLine();
-        if (ImGui::Button(TRS("Capturar shaders"), ImVec2(150, 0))) CatalogStart();
+        if (ImGui::Button(TRS("Capturar shaders"), ImVec2(150 * UIK(), 0))) CatalogStart();
         ImGui::SameLine(); ImGui::TextDisabled("(?)");
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Anota cada shader que se dibuja (render target, vertices, orden) mientras jugas.\nDetener escribe PES21FX\\catalog\\shaders.txt con una ficha por shader (rol, cbuffers, texturas, uso)\ny catalog\\frame.txt con la linea de tiempo del ultimo cuadro. Pasalo a Claude para que sepa que toca cada uno."));
     } else {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.25f, 0.2f, 1));
-        if (ImGui::Button(TRS("Detener y escribir catalogo"), ImVec2(230, 0))) {
+        if (ImGui::Button(TRS("Detener y escribir catalogo"), ImVec2(230 * UIK(), 0))) {
             UINT w = 0, h = 0;
             if (s_rtv) { ID3D11Resource* res = nullptr; s_rtv->GetResource(&res); ID3D11Texture2D* t = nullptr;
                 if (res && SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t)) && t) { D3D11_TEXTURE2D_DESC d; t->GetDesc(&d); w = d.Width; h = d.Height; t->Release(); }
@@ -497,13 +516,13 @@ static void DrawMenu() {
         ImGui::PopStyleColor();
     }
     ImGui::SameLine();
-    if (ImGui::Button(TRS("Volcar cbuffers"), ImVec2(130, 0))) CatalogDumpCBs();
+    if (ImGui::Button(TRS("Volcar cbuffers"), ImVec2(130 * UIK(), 0))) CatalogDumpCBs();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Escribe catalog\\cbuffers.txt: los valores que el motor le pasa a la composicion y a la luz del sol\n(sol, exposicion, niebla, matrices de sombra) con el nombre de cada campo. Hacelo con un partido en pantalla."));
     ImGui::SameLine();
-    if (ImGui::Button(TRS("Volcar pasto"), ImVec2(110, 0))) CatalogProbeGrass();
+    if (ImGui::Button(TRS("Volcar pasto"), ImVec2(110 * UIK(), 0))) CatalogProbeGrass();
     ImGui::SameLine();
-    if (!g_recordOn) { if (ImGui::Button(TRS("Grabar partido"), ImVec2(130, 0))) CatalogRecord(true); }
-    else { ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.25f, 0.2f, 1)); if (ImGui::Button(TRS("Detener grabacion"), ImVec2(150, 0))) CatalogRecord(false); ImGui::PopStyleColor(); }
+    if (!g_recordOn) { if (ImGui::Button(TRS("Grabar partido"), ImVec2(130 * UIK(), 0))) CatalogRecord(true); }
+    else { ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.25f, 0.2f, 1)); if (ImGui::Button(TRS("Detener grabacion"), ImVec2(150 * UIK(), 0))) CatalogRecord(false); ImGui::PopStyleColor(); }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Mientras jugas, cada 5 s vuelca pasto y cbuffers numerados en catalog\\rec\\ (con la camara de ese momento)\ny deja la captura de shaders andando. Al terminar: Detener grabacion y despues Detener y escribir catalogo."));
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Mide las parcelas de pasto que dibuja el juego en un cuadro (tamano, grilla, cantidad)\ny lo escribe en catalog\\grass.txt. Hacelo con un partido en pantalla."));
     { std::string cst = g_catalogStatus; if (!cst.empty()) { ImGui::SameLine(); ImGui::TextDisabled("%s", cst.c_str()); } }
@@ -514,14 +533,14 @@ static void DrawMenu() {
     {
         if (ImGui::IsKeyPressed(ImGuiKey_F) && ImGui::GetIO().KeyCtrl) s_focusSearch = true;
         if (s_focusSearch) { ImGui::SetKeyboardFocusHere(); s_focusSearch = false; }
-        ImGui::SetNextItemWidth(220);
+        ImGui::SetNextItemWidth(220 * UIK());
         ImGui::InputTextWithHint("##buscar", TRS("Buscar opcion (Ctrl+F)"), s_search, sizeof(s_search));
         ImGui::SameLine(); if (ImGui::SmallButton("x")) s_search[0] = 0;
         ImGui::SameLine(); ImGui::Checkbox(TRS("Solo activos"), &s_onlyActive);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Mostrar solo los grupos con el interruptor prendido"));
         ImGui::SameLine(); if (ImGui::SmallButton(TRS("Contraer todo"))) s_collapseAll = 1;
         ImGui::SameLine(); if (ImGui::SmallButton(TRS("Expandir todo"))) s_collapseAll = 2;
-        ImGui::SameLine(); ImGui::SetNextItemWidth(90);
+        ImGui::SameLine(); ImGui::SetNextItemWidth(90 * UIK());
         float sc = g_cfg.uiScale;
         if (ImGui::SliderFloat("##uiscale", &sc, 0.8f, 1.6f, "x%.2f")) { g_cfg.uiScale = sc; ImGui::GetIO().FontGlobalScale = sc; }
         if (ImGui::IsItemDeactivatedAfterEdit()) { char b[32]; snprintf(b, sizeof(b), "%.2f", g_cfg.uiScale); SaveOption("ui_scale", b); }
@@ -536,7 +555,7 @@ static void DrawMenu() {
     if (ImGui::BeginTabBar("tabs", ImGuiTabBarFlags_FittingPolicyScroll)) {
         if (!q.empty()) {   // resultados de la busqueda, de todas las pestanas
             if (ImGui::BeginTabItem((std::string(TRS("Resultados")) + "###res").c_str(), nullptr, ImGuiTabItemFlags_SetSelected)) {
-                ImGui::BeginChild("scrollR", ImVec2(0, 0), ImGuiChildFlags_None);
+                ImGui::BeginChild("scrollR", ImVec2(0 * UIK(), 0), ImGuiChildFlags_None);
                 int gid = 0, n = 0;
                 for (auto& g : g_cfg.groups) { if (GroupMatches(g, q) && (!s_onlyActive || GroupActive(g))) { ImGui::TextDisabled("%s", Utf8(LS(g.section, g.sectionEn)).c_str()); DrawGroup(g, gid); n++; } gid++; }
                 if (!n) ImGui::TextDisabled(TRS("Nada coincide con \"%s\""), s_search);
@@ -546,7 +565,7 @@ static void DrawMenu() {
         }
         if (!g_cfg.favorites.empty()) {
             if (ImGui::BeginTabItem((std::string(TRS("Favoritos")) + "###fav").c_str())) {
-                ImGui::BeginChild("scrollF", ImVec2(0, 0), ImGuiChildFlags_None);
+                ImGui::BeginChild("scrollF", ImVec2(0 * UIK(), 0), ImGuiChildFlags_None);
                 ImGui::TextDisabled("%s", TRS("Tus grupos marcados con * fav, de todas las pestanas."));
                 int gid = 0;
                 for (auto& g : g_cfg.groups) { if (IsFav(g.title) && (!s_onlyActive || GroupActive(g))) { ImGui::TextDisabled("%s", Utf8(LS(g.section, g.sectionEn)).c_str()); DrawGroup(g, gid); } gid++; }
@@ -560,13 +579,13 @@ static void DrawMenu() {
         for (size_t si = 0; si < secs.size(); si++) {
             const std::string& sname = secs[si];
             if (ImGui::BeginTabItem((Utf8(secsShown[si]) + "###" + Utf8(sname)).c_str())) {
-                ImGui::BeginChild("scroll", ImVec2(0, 0), ImGuiChildFlags_None);
+                ImGui::BeginChild("scroll", ImVec2(0 * UIK(), 0), ImGuiChildFlags_None);
                 DrawTutorial(sname, secsShown[si]);
                 if (sname.rfind("Ropa", 0) == 0 && !g_cfg.clothStatus.empty()) { ImGui::TextDisabled("%s", g_cfg.clothStatus.c_str()); ImGui::Spacing(); }
                 if (sname.rfind("Diagn", 0) == 0) {
                     ImGui::TextWrapped("%s", TRS("Prueba automatica: toca cada grupo del menu (su interruptor o su primer deslizador), espera unos cuadros y mide si la imagen cambia. Pausa una repeticion con jugadores de cerca antes de correrla; tarda unos 30 segundos."));
-                    if (!MenuTestActive()) { if (ImGui::Button(TRS("Probar todo el menu"), ImVec2(180, 0))) MenuTestStart(); }
-                    else { if (ImGui::Button(TRS("Cancelar"), ImVec2(180, 0))) MenuTestStop(); }
+                    if (!MenuTestActive()) { if (ImGui::Button(TRS("Probar todo el menu"), ImVec2(180 * UIK(), 0))) MenuTestStart(); }
+                    else { if (ImGui::Button(TRS("Cancelar"), ImVec2(180 * UIK(), 0))) MenuTestStop(); }
                     ImGui::SameLine(); ImGui::TextUnformatted(Utf8(MenuTestStatus()).c_str());
                     size_t nres = MenuTestResults();
                     if (nres) {
@@ -596,14 +615,14 @@ static void DrawMenu() {
             }
         }
         if (ImGui::BeginTabItem("Presets###presets")) {
-            ImGui::BeginChild("scrollP", ImVec2(0, 0), ImGuiChildFlags_None);
+            ImGui::BeginChild("scrollP", ImVec2(0 * UIK(), 0), ImGuiChildFlags_None);
             DrawTutorial("Presets", "Presets");
             DrawPresetsTab();
             ImGui::EndChild();
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem((std::string(TRS("Avanzado")) + "###avanzado").c_str())) {
-            ImGui::BeginChild("scroll2", ImVec2(0, 0), ImGuiChildFlags_None);
+            ImGui::BeginChild("scroll2", ImVec2(0 * UIK(), 0), ImGuiChildFlags_None);
             DrawTutorial("Avanzado", TRS("Avanzado"));
             if (ImGui::CollapsingHeader(TRS("Efectos por tecla"), ImGuiTreeNodeFlags_DefaultOpen)) {
                 int id = 0;
@@ -636,7 +655,7 @@ static void DrawMenu() {
                     for (int c = 0; c < 4; c++) {
                         if (!g_cfg.info[i][c].defined) continue;
                         char name[16]; if (i) snprintf(name, sizeof(name), "%c%d", cn[c], i); else snprintf(name, sizeof(name), "%c", cn[c]);
-                        ImGui::SetNextItemWidth(120);
+                        ImGui::SetNextItemWidth(120 * UIK());
                         ImGui::DragFloat(name, &g_cfg.live[i][c], 0.01f, -100.0f, 100.0f, "%.3f");
                         ImGui::SameLine();
                     }
@@ -649,7 +668,7 @@ static void DrawMenu() {
         {
             std::lock_guard<std::mutex> lk2(g_errMutex);
             if (!g_compileErrors.empty() && ImGui::BeginTabItem((std::string(TRS("Errores")) + "###errores").c_str())) {
-                ImGui::BeginChild("scroll3", ImVec2(0, 0), ImGuiChildFlags_None);
+                ImGui::BeginChild("scroll3", ImVec2(0 * UIK(), 0), ImGuiChildFlags_None);
                 for (auto& e : g_compileErrors) ImGui::TextWrapped("%s", e.c_str());
                 ImGui::EndChild();
                 ImGui::EndTabItem();
@@ -664,7 +683,8 @@ static void DrawMenu() {
 // jugador (la tarjeta "Musculatura por jugador"); "Menu completo" pasa al menu de siempre. Al entrar, un aviso abajo.
 static bool s_fullMenu = false;
 static void DrawPhysiqueWindow() {
-    ImGui::SetNextWindowSize(ImVec2(560, 960), ImGuiCond_FirstUseEver);   // (26/10 c) diseno nuevo: mapa del cuerpo arriba, filas abajo
+    ImGui::SetNextWindowSize(ImVec2(560 * UIK(), 960 * UIK()), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(320 * UIK(), 240 * UIK()), ImVec2(ImGui::GetIO().DisplaySize.x * 0.97f, ImGui::GetIO().DisplaySize.y * 0.95f));   // (26/10 c) diseno nuevo: mapa del cuerpo arriba, filas abajo
     ImGui::SetNextWindowPos(ImVec2(24, 50), ImGuiCond_FirstUseEver);
     bool open = true;
     ImGui::Begin((std::string(TRS("Musculatura del jugador")) + "###fisico").c_str(), &open, ImGuiWindowFlags_NoCollapse);
@@ -673,12 +693,12 @@ static void DrawPhysiqueWindow() {
     ImGui::TextColored(ImVec4(0.85f, 0.68f, 0.28f, 1), "%s", TRS("PES21 FX  -  musculatura"));
     if (s_fontBold) ImGui::PopFont();
     ImGui::SameLine(ImGui::GetWindowWidth() - 150);
-    if (ImGui::Button(TRS("Menu completo"), ImVec2(130, 0))) s_fullMenu = true;
+    if (ImGui::Button(TRS("Menu completo"), ImVec2(130 * UIK(), 0))) s_fullMenu = true;
     ImGui::TextDisabled("%s", TRS("Insert: cerrar. Los valores de este jugador se guardan solos."));
     ImGui::Separator();
     {
         std::lock_guard<std::mutex> lk(g_cfgMutex);
-        ImGui::BeginChild("fisico_panel", ImVec2(0, 0), ImGuiChildFlags_None);
+        ImGui::BeginChild("fisico_panel", ImVec2(0 * UIK(), 0), ImGuiChildFlags_None);
         MuscleDrawFisicoWindow(s_fontBold, s_fontBig);   // (26/10 c) mapa del cuerpo, pestanas por zona, barras con la marca del juego
         ImGui::EndChild();
     }
@@ -856,6 +876,13 @@ void OverlayPresent(IDXGISwapChain* sc) {
         g_dev.dev->CreateRenderTargetView(bb, nullptr, &s_rtv);
         bb->Release();
         if (!s_rtv) return;
+    }
+    {   // (04/11) resolucion cambiada: letras y espacios de nuevo (la textura de las fuentes se rehace en el NewFrame)
+        DXGI_SWAP_CHAIN_DESC dd;
+        if (SUCCEEDED(sc->GetDesc(&dd)) && dd.BufferDesc.Height > 0 && std::fabs((float)dd.BufferDesc.Height - s_fontsH) > 1.0f) {
+            BuildFonts((float)dd.BufferDesc.Height);
+            ImGui_ImplDX11_InvalidateDeviceObjects();
+        }
     }
     ImGui_ImplDX11_NewFrame();
     ImGui_ImplWin32_NewFrame();

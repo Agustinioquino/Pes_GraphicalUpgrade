@@ -15,6 +15,7 @@
 #include <cstring>
 
 namespace fx {
+static float MUIK() { return ImGui::GetFontSize() / 19.0f; }   // (04/11) anchos fijos que crecen con las letras del menu (resolucion)
 
 // ---------------------------------------------------------------- filas y zonas del mapa
 // region: 0 brazos, 1 pecho y espalda, 2 abdomen y cadera, 3 piernas, -1 todo el cuerpo. vista: 1 frente, 2 espalda, 3 las dos,
@@ -382,7 +383,7 @@ void MuscleUiDraw(MusUiModel& m, ImFont* bold, ImFont* big) {
     {
         if (big) ImGui::PushFont(big);
         if (m.PlayerCount() > 1) {
-            ImGui::SetNextItemWidth(std::min(W - 200.0f, 300.0f));
+            ImGui::SetNextItemWidth(std::min(W - 200.0f * MUIK(), 300.0f * MUIK()));
             if (ImGui::BeginCombo("##jug", pl.name.empty() ? TRS("(sin nombre)") : pl.name.c_str())) {
                 for (int i = 0; i < m.PlayerCount(); i++) {
                     const MusUiPlayer& q = m.Player(i);
@@ -437,7 +438,7 @@ void MuscleUiDraw(MusUiModel& m, ImFont* bold, ImFont* big) {
             if (nch) snprintf(tl, sizeof tl, "%s  %d###z%d", TRS(kRegion[z]), nch, z); else snprintf(tl, sizeof tl, "%s###z%d", TRS(kRegion[z]), z);
             if (ImGui::BeginTabItem(tl, nullptr, tf)) {
                 const float reserve = (m.HasOwn() ? 3.0f : 1.0f) * (ImGui::GetFrameHeight() + st.ItemSpacing.y) + 24.0f;   // lugar para los botones de abajo
-                ImGui::BeginChild("##filas", ImVec2(0, std::max(ImGui::GetContentRegionAvail().y - reserve, 240.0f)), ImGuiChildFlags_None);
+                ImGui::BeginChild("##filas", ImVec2(0, std::max(ImGui::GetContentRegionAvail().y - reserve, 240.0f * MUIK())), ImGuiChildFlags_None);
                 if (BeginRows("##t")) { for (int i = 0; i < kNRows; i++) if (kRows[i].region == z) Row(m, i, 0.0f); ImGui::EndTable(); }
                 ImGui::EndChild();
                 ImGui::EndTabItem();
@@ -475,7 +476,7 @@ void MuscleUiDraw(MusUiModel& m, ImFont* bold, ImFont* big) {
         auto bw = [&](const char* t) { return ImGui::CalcTextSize(t).x + 2.0f * st.FramePadding.x; };
         const float row1 = (m.OtherCount() > 0 ? 200.0f + st.ItemSpacing.x : 0.0f) + bw(TRS("Copiar los generales")) + st.ItemSpacing.x + bw(TRS("Quitar sus valores"));
         if (m.OtherCount() > 0) {
-            ImGui::SetNextItemWidth(200.0f);
+            ImGui::SetNextItemWidth(200.0f * MUIK());
             if (ImGui::BeginCombo("##copiar", TRS("Copiar de otro jugador..."))) {
                 for (int i = 0; i < m.OtherCount(); i++) if (ImGui::Selectable(m.OtherName(i))) m.CopyFromOther(i);
                 ImGui::EndCombo();
@@ -489,13 +490,13 @@ void MuscleUiDraw(MusUiModel& m, ImFont* bold, ImFont* big) {
         if (ImGui::Button(TRS("Quitar sus valores"))) m.ClearOwn();
         ImGui::PopStyleColor(2);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Vuelve a usar los valores generales (borra los suyos del archivo)."));
-        ImGui::SetNextItemWidth(170.0f);
+        ImGui::SetNextItemWidth(170.0f * MUIK());
         ImGui::InputTextWithHint("##nomtipo", TRS("nombre del tipo"), s_typeName, sizeof s_typeName);
         ImGui::SameLine();
         if (ImGui::Button(TRS("Guardar como tipo de cuerpo"))) m.Status() = m.SaveAsType(s_typeName);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Guarda este cuerpo como un tipo propio: aparece en las listas de tipos (tambi\xC3\xA9n en el men\xC3\xBA F\xC3\xADsico del juego)."));
         if (m.TypeCount() > m.BuiltinTypes()) {
-            ImGui::SameLine(); ImGui::SetNextItemWidth(130.0f);
+            ImGui::SameLine(); ImGui::SetNextItemWidth(130.0f * MUIK());
             if (ImGui::BeginCombo("##borrar", TRS("Borrar tipo..."))) {
                 for (int k = m.BuiltinTypes(); k < m.TypeCount(); k++) if (ImGui::Selectable(m.TypeName(k))) m.DeleteUserType(k);
                 ImGui::EndCombo();
