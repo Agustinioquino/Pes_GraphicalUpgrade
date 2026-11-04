@@ -31,6 +31,17 @@ cbuffer PESExprMesh : register(b12)
 // skinning, por el slider de cada gesto (355.y sonrisa, 356.x grito, 355.x enojo, 355.z asombro, 356.y puchero), solo con
 // "Perfiles por cara" (356.w) prendido. La boca por dentro no tiene formas (no se toca). Sin paquete (w = 0) no hace nada.
 Buffer<float4> g_pesShapes : register(t118);
+
+// (04/11) TESELACION DE LA CARA (pes_face_tess.hlsli, facetess.cpp): peso de borde por vertice que calcula la DLL (t119, solo en los
+// dibujos de piel de la cara que se teselan): 0 = vertice en el borde de la pieza o duplicado (costura), 1 = interior. El VS lo
+// saca en TEXCOORD12.w; sin buffer enlazado vale 0 (nada se mueve).
+Buffer<float> g_pesTessSeam : register(t119);
+float PesTessSeam(uint vid)
+{
+  uint lv = vid - g_pesExprShape.z;
+  if (vid < g_pesExprShape.z || lv >= g_pesExprShape.y) return 0;
+  return g_pesTessSeam[lv];
+}
 float3 PesShapeDelta(uint vid)
 {
   if (g_pesExprShape.w == 0) return 0;
