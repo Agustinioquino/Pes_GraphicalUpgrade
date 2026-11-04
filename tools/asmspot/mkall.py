@@ -51,3 +51,33 @@ build(W+'9ce9d8463800b399.hlsl','9ce9d8463800b399-ps_replace.txt',
  ('r3.xyz = ((r10.xyzx * r0.wwww)).xyz;','  if (skOn) r3.xyz = (PesSkDiffuse(skNL, r5.y, skTF, skZ, skCurv) + PesSkTrans(skN, skV, skL, r5.y)) * r10.xyz;   // (04/11) piel\n'),
  ('r0.yzw = ((r2.xxzw * r0.yyzw)).yzw;','  if (skOn) r0.yzw = PesSkSpec(r0.yzw, skN, skV, skL, skRough, skSpecI, r10.xyz, 1.0);   // (04/11) brillo de piel (la sombra del foco va despues)\n'),
 ])
+# 142c1827: luz PUNTUAL (sin cono, caida 1/(d + x)^2) + GGX
+build(W+'142c18270479a113.hlsl','142c18270479a113-ps_replace.txt',
+"// PES 2021 - Luz diferida PUNTUAL con brillo GGX (sin cono ni sombra; caida 1/(d + p1.x)^2 - p1.w)  [hash 142c18270479a113]\n"
+"// (04/11) Sin reemplazo hasta hoy: la piel recibia la difusa y el brillo comunes con esta luz. Ahora usa pes_skinlight\n"
+"// (terminador suave, contraluz, brillo de piel y lobulo fino). Lo demas, identico.\n"+CREDIT,
+[('r2.xyzw = ((g_SpecularTexture.Sample(','  float skTag = r2.x, skRough = r2.y, skSpecI = r2.z;   // (04/11) piel\n'),
+ ('& 15))).w;','  int skMat = (int)r0.w;\n'),
+ ('r6.xy = ((r0.yzyy * r6.zzzz)).xy;','  float skZ = r6.z;\n'),
+ ('r0.xyz = ((r0.xxxx * r6.xyzx)).xyz;','  float3 skV = -r0.xyz;\n'),
+ ('r1.yzw = ((r1.yyzw / r2.wwww)).yzw;','  float3 skL = r1.yzw;\n'),
+ ('r3.w = (-(r3.zzzz)).w;','  float3 skN = normalize(r3.xyw);\n  float skCurv = PesSkCurv(skN, skZ);   // fuera de los if: usa derivadas\n  bool skOn = PesSkIsSkin(skMat, r5.y, skTag);\n  float skTF = r5.x * r5.y;\n'),
+ ('r0.w = ((dot((r1.yzwy).xyz, (r3.xywx).xyz)).xxxx).w;','  float skNL = r0.w;\n'),
+ ('r3.xyz = ((r6.xyzx * r2.wwww)).xyz;','  if (skOn) r3.xyz = (PesSkDiffuse(skNL, r5.y, skTF, skZ, skCurv) + PesSkTrans(skN, skV, skL, r5.y)) * r6.xyz;   // (04/11) piel\n'),
+ ('r0.xyz = ((r4.xyzx * r0.xyzx)).xyz;','  if (skOn) r0.xyz = PesSkSpec(r0.xyz, skN, skV, skL, skRough, skSpecI, r6.xyz, 1.0);   // (04/11) brillo de piel\n'),
+])
+# d5037e25: foco con sombra, sin especular
+build(W+'d5037e255559ea13.hlsl','d5037e255559ea13-ps_replace.txt',
+"// PES 2021 - Luz diferida de FOCO con SOMBRA (12 muestras PCF de t3 con ruido animado), solo difusa  [hash d5037e255559ea13]\n"
+"// (04/11) Sin reemplazo hasta hoy: la piel recibia la difusa comun (borde ancho, sin contraluz ni brillo). Ahora usa\n"
+"// pes_skinlight; el brillo de piel (el juego no le da brillo a esta luz) y la difusa llevan la sombra del foco. Lo demas, identico.\n"+CREDIT,
+[('r0.zw = ((v1.xxxy / v1.wwww)).zw;','  float4 skSt = g_SpecularTexture.Sample(g_samplerPoint_Wrap_s, r0.zw);   // (04/11) piel: z marca, x aspereza, y intensidad\n'),
+ ('r1.y = (float4(0.0, (float)((int)r1.x & 15), 0.0, 0.0)).y;','  int skMat = (int)r1.y;\n'),
+ ('r5.xy = ((r1.xwxx * r5.zzzz)).xy;','  float3 skP = r5.xyz;\n'),
+ ('r6.xyz = ((r0.wwww * r6.xyzx)).xyz;','  float3 skL = r6.xyz;\n'),
+ ('r2.w = (-(r2.zzzz)).w;','  float3 skN = normalize(r2.xyw);\n  float skCurv = PesSkCurv(skN, skP.z);   // fuera de los if: usa derivadas\n  bool skOn = PesSkIsSkin(skMat, r3.y, skSt.z);\n  float3 skV = -normalize(skP);\n  float skTF = r3.x * r3.y;\n'),
+ ('r0.y = ((dot((r6.xyzx).xyz, (r2.xywx).xyz)).xxxx).y;','  float skNL = r0.y;\n'),
+ ('r0.yzw = ((r7.xxyz * r0.yyyy)).yzw;','  if (skOn) r0.yzw = (PesSkDiffuse(skNL, r3.y, skTF, skP.z, skCurv) + PesSkTrans(skN, skV, skL, r3.y)) * r7.xyz;   // (04/11) piel\n'),
+ ('r0.x = ((g_psLight.m_lightSourceParam3.zzzz * r0.xxxx','  float skSh = r0.x;   // sombra del foco\n'),
+ ('o1.xyzw = (float4(0.0, 0.0, 0.0, 1.000000)).xyzw;','  if (skOn) o1.xyz = min(PesSkSpec(0.0.xxx, skN, skV, skL, skSt.x, skSt.y, r7.xyz * g_psLight.m_lightSourceParam3.y, 1.0) * skSh, 10000.0.xxx);   // (04/11) brillo de piel\n'),
+])

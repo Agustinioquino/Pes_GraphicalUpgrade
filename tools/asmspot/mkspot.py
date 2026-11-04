@@ -43,6 +43,9 @@ def build(gen_path, out_name, head, splices):
     pre = sysdecl if 'cb0[' in gen else ''
     i=gen.index('uint4 PESBfi'); bfi=gen[i:gen.index('\n',i)+1]
     code=gen[gen.index('void main('):]
+    # ensamblador en decimal (6 decimales): las constantes conocidas con sus bits exactos (ver EXACT en tools/asm2hlsl.py)
+    for k,v in {'0.000977':'asfloat(0x3a801002U)','0.015873':'asfloat(0x3c820821U)','0.083333':'asfloat(0x3daaaaabU)'}.items():
+        code=re.sub(r'(?<![0-9.])'+re.escape(k)+r'(?![0-9])',v,code)
     for k,v in REP.items(): code=code.replace(k,v)
     assert not re.search(r'\bcb[0-9]\[',code), re.findall(r'\bcb[0-9]\[\d+\]',code)
     code=re.sub(r'\bs(8|9|11|15)\b',lambda m:'ss'+m.group(1),code)
