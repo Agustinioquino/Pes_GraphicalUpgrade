@@ -21,6 +21,8 @@
 #include <cstring>
 #include <algorithm>
 #include <cmath>
+#include <map>
+#include <DDSTextureLoader.h>
 
 namespace fx {
 
@@ -40,7 +42,7 @@ struct FaceMesh {
     float hc[3] = {}; bool hcOk = false;   // (1/11) centro de la cara en espacio del modelo (vertices que pesan en sk_head): para "seguir la cara"
     UINT lastFrame = 0;   // (01/11) ultimo cuadro en que se dibujo (para echar las mallas viejas sin vaciar toda la tabla)
     int lids[4] = { -1, -1, -1, -1 }; UINT lidCap = 0;   // (02/11 h) parpados en la paleta y ultimo cuadro en que se leyo la paleta
-    int shapeOff = -1; uint32_t huella = 0;   // (04/11) gestos esculpidos (formas\<huella>.bin): primer float4 de esta malla en s_shapeData
+    int shapeOff = -1; uint32_t huella = 0; ID3D11ShaderResourceView* shapeWr = nullptr;   // (04/11) gestos esculpidos (formas\<huella>.bin): primer float4 de esta malla en s_shapeData
 };
 std::mutex s_mx;
 std::unordered_map<uint64_t, FaceMesh*> s_meshes;
@@ -152,7 +154,8 @@ uint32_t Huella(const FaceMesh* m, const std::vector<float>& ps) {   // la del v
 // malla 5 corrimientos (sonrisa, grito, enojo, asombro, puchero; metros, espacio del modelo) que el VS de la cara suma ANTES del
 // skinning por el slider de cada gesto (filas 355/356, con w356 "Perfiles por cara"). Se suman a los huesos del mod (correctivos).
 // Todas las formas cargadas van juntas en un Buffer<float4> (t118 del VS); el cbuffer de la malla dice donde empieza la suya.
-struct ShapePack { bool tried = false; int off = -1; UINT nv = 0; };
+struct ShapePack { bool tried = false; int off = -1; UINT nv = 0; ID3D11ShaderResourceView* wr = nullptr; };   // wr: arrugas de la sonrisa (PS t31)
+std::map<uint32_t, ID3D11ShaderResourceView*> s_shapeWr;   // por grupo (formas\\grupo_<n>_sonrisa.dds); nunca se liberan
 std::unordered_map<uint32_t, ShapePack> s_shapes;
 std::vector<float> s_shapeData;
 ID3D11Buffer* s_shapeBuf = nullptr; ID3D11ShaderResourceView* s_shapeSrv = nullptr;
@@ -160,6 +163,7 @@ constexpr UINT kShapeN = 5;
 int ShapeFind(uint32_t hu, UINT nv) {   // con s_mx tomado
     ShapePack& sp = s_shapes[hu];
     if (sp.tried) return sp.nv == nv ? sp.off : -1;
+    // (las arrugas de la malla quedan en sp.wr; ExprShapeWr las da)
     sp.tried = true;
     wchar_t nm[64]; swprintf(nm, 64, L"formas\\%08X.bin", hu);
     FILE* f = _wfopen((g_cfg.baseDir + nm).c_str(), L"rb");
@@ -191,6 +195,17 @@ int ShapeFind(uint32_t hu, UINT nv) {   // con s_mx tomado
     // (solo pasa al cargar un paquete nuevo: unos pocos KB)
     s_shapeBuf = b; s_shapeSrv = v;
     sp.off = (int)off4; sp.nv = nv;
+    if (hd[3]) {   // (04/11) arrugas esculpidas de la sonrisa de esta cara: normal map en las uv de la cara (wrinkle_dds.py)
+        auto it = s_shapeWr.find(hd[3]);
+        if (it == s_shapeWr.end()) {
+            wchar_t wn[80]; swprintf(wn, 80, L"formas\\grupo_%u_sonrisa.dds", hd[3]);
+            ID3D11ShaderResourceView* w = nullptr;
+            if (GetFileAttributesW((g_cfg.baseDir + wn).c_str()) != INVALID_FILE_ATTRIBUTES && FAILED(DirectX::CreateDDSTextureFromFile(g_dev.dev, (g_cfg.baseDir + wn).c_str(), nullptr, &w))) w = nullptr;
+            Log("expresiones: arrugas de la sonrisa %ls: %s", wn, w ? "cargadas" : "no estan o no se pudieron leer");
+            it = s_shapeWr.emplace(hd[3], w).first;
+        }
+        sp.wr = it->second;
+    }
     Log("expresiones: formas %08X.bin cargadas (%u vertices; maximo mm: sonrisa %.1f grito %.1f enojo %.1f asombro %.1f puchero %.1f)", hu, nv, mx[0] * 1000, mx[1] * 1000, mx[2] * 1000, mx[3] * 1000, mx[4] * 1000);
     return sp.off;
 }
@@ -453,6 +468,7 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
         }
         m->huella = Huella(m, ps);
         m->shapeOff = (hd <= 31 && !eye && !mouth) ? ShapeFind(m->huella, m->nv) : -1;
+        if (m->shapeOff >= 0) m->shapeWr = s_shapes[m->huella].wr;
         const UINT shp[4] = { m->shapeOff >= 0 ? (UINT)m->shapeOff : 0u, m->nv, m->vmin, m->shapeOff >= 0 ? kShapeN : 0u };
         m->cb = MakeCB((UINT)m->head, (UINT)mx, (UINT)m->id, eye ? 2u : (mouth ? 1u : 0u), lids, jawFull, jawHalf, lipTop, lipUp, eye ? eyes : nullptr, mus, shp);
         for (int i = 0; i < 4; i++) m->lids[i] = lids[i];
@@ -481,9 +497,10 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
 
 // en cada dibujo con la regla "expr = <slot>" (VS de la cabeza / cara): cbuffer de la malla para el VS (null = no enlazar)
 static void LidCapture(ID3D11DeviceContext* c, FaceMesh* m);   // (02/11 h) abajo
-ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, const float** headCentroid, int* headIdx, ID3D11ShaderResourceView** shapeSrv) {
+ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, const float** headCentroid, int* headIdx, ID3D11ShaderResourceView** shapeSrv, ID3D11ShaderResourceView** shapeWr) {
     if (headCentroid) *headCentroid = nullptr;
     if (shapeSrv) *shapeSrv = nullptr;
+    if (shapeWr) *shapeWr = nullptr;
     if (!g_dev.dev) return nullptr;
     if (!s_none) { std::lock_guard<std::mutex> lk(s_mx); if (!s_none) s_none = MakeCB(99, 0, 0); }
     if (g_cfg.live[340][0] < 0.5f || count < 3) { s_bindsNone++; return s_none; }
@@ -501,7 +518,7 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
         rel(); FaceMesh* m = it->second; m->lastFrame = s_frame;
         if (m->state == 3 && m->cb) {
             s_binds++;
-            if (shapeSrv && m->shapeOff >= 0 && s_shapeSrv) { *shapeSrv = s_shapeSrv; s_shapeDraws++; }
+            if (shapeSrv && m->shapeOff >= 0 && s_shapeSrv) { *shapeSrv = s_shapeSrv; s_shapeDraws++; if (shapeWr) *shapeWr = m->shapeWr; }
             if (m->head <= 31 && (m->lids[0] >= 0 || m->lids[1] >= 0) && s_frame - m->lidCap >= 120) { m->lidCap = s_frame; LidCapture(c, m); }
             if (headCentroid && m->hcOk && m->nv >= 300) { *headCentroid = m->hc; if (headIdx) *headIdx = m->head; } return m->cb; }
         if (m->state == 4) s_bindsDisc++; else s_bindsWait++;
