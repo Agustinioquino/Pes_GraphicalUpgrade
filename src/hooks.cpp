@@ -1136,6 +1136,9 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
                 // 19/10 c: la boca hereda este b11; se retiene con AddRef porque la entrada de cara puede liberarse (partido nuevo,
                 // recarga de tipos de pelo) antes del dibujo de la boca -> puntero colgado -> el driver se caia (nvwgf2umx 0xc0000005)
                 if (ex.hairCB) { CtxState& cs = Ctx(c); if (cs.lastHairCB != ex.hairCB) { ex.hairCB->AddRef(); if (cs.lastHairCB) cs.lastHairCB->Release(); cs.lastHairCB = ex.hairCB; } }
+                // (04/11) caras en alta (caras_hd.cpp): t0 bsm, t1 normal, t2 srm, t3 trm reescaladas, si existen en PES21FX\caras_hd
+                if (!ex.id.empty()) { ID3D11ShaderResourceView* hd[4];
+                    if (CarasHdGet(ex.id, hd)) for (int i = 0; i < 4; i++) if (hd[i]) { Remember(c, d, true, true, i); c->PSSetShaderResources(i, 1, &hd[i]); } }
                 Remember(c, d, true, true, a.slot); c->PSSetShaderResources(a.slot, 1, &fa);
                 Remember(c, d, true, true, a.idx);  c->PSSetShaderResources(a.idx, 1, &fb);
                 // 18/10 pelo: parametros del tipo de pelo de ESTA cara (PES21FX_hair.ini) en b11
@@ -1947,6 +1950,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     PitchWearPresent();
     GrassPresent();
     FaceGenPresent();
+    CarasHdPresent();
     InspectPresent();
     FrameCopyPresent(sc);   // antes del menu, para que el menu no se refleje en los ojos
     AsyncShotPresent();
