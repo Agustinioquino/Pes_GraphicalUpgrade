@@ -12,7 +12,7 @@
 // (04/11 piel) cuarto cuadrante del atlas (libre: las cabezas usan como mucho 3) = PIERNAS del jugador mas cercano: caja de 1.2 m
 // (centro pos + 0.55 m, medio lado 0.6: de los pies a la cadera, 1.17 mm por texel) con los mismos ejes que las cabezas. Solo la lee
 // el grosor de la piel (pes_skinthick.hlsli: contraluz real en piernas y manos); la sombra de la cara no cambia.
-//   361 (DLL): xyz centro de la caja de las piernas en vista, w medio lado (0 = sin caja este cuadro)
+//   363 (DLL): xyz centro de la caja de las piernas en vista, w medio lado (0 = sin caja este cuadro)
 #include "core.h"
 #include <d3d11.h>
 #include <cmath>
@@ -24,7 +24,7 @@
 namespace fx {
 
 static const int kHsSlots = 3, kHsAtlas = 2048, kHsSlotPx = 1024;
-static const int kHsRowUser = 309, kHsRowInfo = 310, kHsRowAxis = 316, kHsRowCenter = 317, kHsRowBody = 361;
+static const int kHsRowUser = 309, kHsRowInfo = 310, kHsRowAxis = 316, kHsRowCenter = 317, kHsRowBody = 363;
 static const int kHsBodySlot = 3; static const float kHsBodyUp = 0.55f, kHsBodyHalf = 0.6f;   // (04/11 piel) piernas: cuarto cuadrante
 static ID3D11Texture2D* s_tex = nullptr; static ID3D11DepthStencilView* s_dsv = nullptr; static ID3D11ShaderResourceView* s_srv = nullptr;
 static ID3D11Buffer* s_cb[kHsSlots + 1] = {};   // + 1: piernas (cuadrante 3)

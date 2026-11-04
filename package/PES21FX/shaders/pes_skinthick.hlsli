@@ -5,10 +5,10 @@
 // sol_parche / sombra_parche (el shadow map del juego no: con el receptor girado daba manchas naranjas de borde duro, 04/11).
 // Agustin (04/11): "quiero que el shadder lea el grosor de piel real" / "que el sss permita la translucidez de la luz real, y con
 // forma real dependiendo la cara y brazos, piernas de la luz".
-// (04/11 b) + caja de las PIERNAS del jugador mas cercano (cuarto cuadrante del atlas, fila 361: centro y medio lado propios, mismos
+// (04/11 b) + caja de las PIERNAS del jugador mas cercano (cuarto cuadrante del atlas, fila 363: centro y medio lado propios, mismos
 // ejes): la caja de la cabeza se funde desde la cadera para abajo. Y si el atlas esta vacio en ese punto (lo que no entro en la
 // cascada que la DLL repite) la caja no cuenta: antes daba 2 mm = contraluz maxima.
-// Necesita pes_headshadow.hlsli antes (PESHeadShadow, filas 309/310/316/317..319, 361) y pes_common.hlsli (transmitancia).
+// Necesita pes_headshadow.hlsli antes (PESHeadShadow, filas 309/310/316/317..319, 363) y pes_common.hlsli (transmitancia).
 #ifndef PES_SKINTHICK_HLSLI
 #define PES_SKINTHICK_HLSLI
 
@@ -37,7 +37,7 @@ float PESSkThkBox(float3 Pv, float3 C, float hf, int quad, float3 R, float3 Up, 
   return edge;
 }
 
-// grosor en metros con la caja de mas peso (cabezas 317..319 o piernas 361); inBox = su peso (0 = afuera de todas)
+// grosor en metros con la caja de mas peso (cabezas 317..319 o piernas 363); inBox = su peso (0 = afuera de todas)
 float PESSkinThickAtlas(float3 Pv, SamplerState smp, out float inBox) {
   inBox = 0.0;
   float thk = 0.08;
@@ -56,7 +56,7 @@ float PESSkinThickAtlas(float3 Pv, SamplerState smp, out float inBox) {
     float tk; float e = PESSkThkBox(Pv, IniParams.Load(int2(317 + i, 0)).xyz, hf, i, R, Up, L, rev, smp, tk);
     if (e > inBox) { inBox = e; thk = tk; }
   }
-  float4 B = IniParams.Load(int2(361, 0));
+  float4 B = IniParams.Load(int2(363, 0));
   if (B.w > 0.05 && inBox < 0.999) {
     float tk; float e = PESSkThkBox(Pv, B.xyz, B.w, 3, R, Up, L, rev, smp, tk);
     if (e > inBox) { inBox = e; thk = tk; }
