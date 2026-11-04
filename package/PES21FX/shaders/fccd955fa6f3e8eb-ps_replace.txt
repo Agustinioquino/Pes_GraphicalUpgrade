@@ -142,13 +142,43 @@ void main(
   float4 P91 = IniParams.Load(int2(91,0));   // x91 relieve del iris, y91 criptas/contraste, z91 sombra del parpado sobre el iris, w91 tamano de la pupila (1 = del juego)
   float4 P92 = IniParams.Load(int2(92,0));   // x92 reflejo en pantalla, y92 humedad (brillo de la esclerotica), z92 saturacion del iris, w92 brillo del iris
   float2 irisD = r0.xy - 0.5;
-  float irisR = length(irisD) / 0.245;
-  // pupila: w91 < 1 la achica, > 1 la agranda (se remapea el radio dentro del iris; el borde del iris no se mueve)
-  // pupila reactiva (y93 on/off, z93 cuanto): con sol pleno se contrae, de noche se dilata (x93 = brillo adaptado, lo pone la DLL)
+  // (04/11, Agustin: "el tamano de los ojos cambia", el iris del mod se veia ~25 % mas grande que con Ver original) el radio del iris
+  // ya no es fijo (0.245): cada cara trae su textura y en muchas el iris del juego es mas chico, asi que el detalle, la sombra del borde,
+  // el limbo y el reflejo en pantalla oscurecian un anillo de lo blanco y el iris parecia mas grande. Se mide el borde REAL del iris en
+  // la direccion de este pixel con la altura del juego (la misma mascara que usa el juego para mezclar iris y esclerotica, eyeIris)
+  float irisRad = 0.245;
+  { float2 dU = irisD / max(length(irisD), 1e-5);
+    float prevE = 1.0, prevR = 0.06, found = -1.0;
+    [unroll] for (int k = 0; k < 16; k++) {
+      float rr = 0.08 + 0.016 * k;
+      float hh = g_tex_height.SampleLevel(g_sampler_height_s, 0.5 + dU * rr, 0).y;
+      float e = 1.0 - pow(1.0 - hh, 4.0);
+      if (found < 0.0 && e < 0.5) found = lerp(prevR, rr, saturate((prevE - 0.5) / max(prevE - e, 1e-4)));
+      prevE = e; prevR = rr;
+    }
+    if (found > 0.0) irisRad = clamp(found, 0.12, 0.30); }
+  float irisR = length(irisD) / irisRad;
+  // PUPILA REACTIVA (04/11 b, Agustin: "la idea de la pupila reactiva no es cambiar el tamano si no modificar la forma"; "va asi"):
+  // como un ojo real, el agujero del medio se abre o se cierra y el iris se estira (luz fuerte: fibras finas y largas) o se arruga
+  // (poca luz: fibras juntas), el borde de afuera del iris no se mueve. Se remapea en radio la UV con la que se lee la textura del
+  // juego (t6), asi la pupila del juego cambia de verdad y no solo el detalle. Base = tamano del juego; cambio chico (hasta +-15 %
+  // por z93) y lento (x93 lo adapta la DLL: se cierra en ~0.4 s, se abre en ~3 s), SOLO en partido (w93): en el editor queda la
+  // pupila del juego. Forma: apenas ovalada y con el borde irregular, y un temblor chico (hippus). y93 on/off.
+  // Pupila del juego en la textura: 0.36 del radio del iris (0.088 / 0.245, medido en las texturas volcadas).
   float4 P93 = IniParams.Load(int2(93,0));
-  float pupAuto = (P93.y > 0.5) ? lerp(1.0, lerp(1.4, 0.72, saturate(P93.x)), saturate(P93.z)) : 1.0;
-  { float pup = clamp(P91.w * pupAuto, 0.55, 1.7); float rIn = 0.36 * pup;
-    irisR = irisR < rIn ? irisR / pup : lerp(0.36, 1.0, (irisR - rIn) / max(1.0 - rIn, 1e-3)) ; }
+  { float rn = irisR, rs = rn;
+    if (P93.y > 0.5 && rn < 1.0) {
+      float th = atan2(irisD.y, irisD.x);
+      float k = 1.0;
+      if (P93.w > 0.5) k = 1.0 + 0.15 * saturate(P93.z) * (1.0 - 2.0 * saturate(P93.x));   // sol pleno -> 0.85, noche -> 1.15
+      float t = IniParams.Load(int2(157, 0)).x;
+      k *= 1.0 + 0.012 * sin(t * 1.7) * sin(t * 0.63 + 1.3);                                  // hippus: temblor de decimas de mm
+      float shp = 1.0 + 0.025 * cos(2.0 * th) + 0.018 * sin(5.0 * th + 0.7) + 0.012 * sin(9.0 * th + 2.1);   // ovalada e irregular
+      float pb = 0.36 * k * shp;                                                              // borde de la pupila que se ve
+      rs = rn < pb ? rn * (0.36 / pb) : lerp(0.36, 1.0, (rn - pb) / max(1.0 - pb, 1e-3));
+      r0.xy = 0.5 + irisD * (rs / max(rn, 1e-5));
+    }
+    irisR = rs; }
   float irisTh = atan2(irisD.y, irisD.x) * 0.15915494 + 0.5;
   float irisVt = saturate((irisR - 0.36) / 0.64);                    // 0 = borde de la pupila, 1 = borde del iris
   float irisIn = (1 - smoothstep(0.97, 1.03, irisR)) * smoothstep(0.30, 0.37, irisR);   // 1 dentro del iris (sin pupila)
