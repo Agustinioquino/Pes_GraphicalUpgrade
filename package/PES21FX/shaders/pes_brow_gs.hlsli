@@ -91,10 +91,14 @@ float PesRnd(inout uint s) { s = PesHash(s); return (float)(s & 0xffffff) / 1677
 
 // (04/11 b) pelo PINTADO en ese punto de la textura de la cara: oscuro respecto de la piel de alrededor (mip 1 contra mip 5).
 // Agustin: "la forma de las cejas esta mal" -> las hebras solo nacen (y solo llegan) donde la ceja esta pintada
+float PesLum(float2 uv, float mip) { return dot(tFace.SampleLevel(sLin, uv, mip).rgb, float3(0.2126, 0.7152, 0.0722)); }
 float PesPaintedHair(float2 uv) {
-  float l1 = dot(tFace.SampleLevel(sLin, uv, 1.0).rgb, float3(0.2126, 0.7152, 0.0722));
-  float l5 = dot(tFace.SampleLevel(sLin, uv, 5.0).rgb, float3(0.2126, 0.7152, 0.0722));
-  return smoothstep(0.82, 0.55, l1 / max(l5, 0.005));
+  // (04/11 c) la referencia de piel ya no sale del mip 5 (si la textura trae pocos mips, mip 1 = mip 5 y no nacia ningun pelo):
+  // la piel mas clara de 4 puntos a ~1 cm (arriba, abajo, a los lados) en el mip 2
+  float l1 = PesLum(uv, 1.0);
+  float sk = max(max(PesLum(uv + float2(0, -0.035), 2.0), PesLum(uv + float2(0, 0.035), 2.0)),
+                 max(PesLum(uv + float2(-0.03, 0), 2.0), PesLum(uv + float2(0.03, 0), 2.0)));
+  return smoothstep(0.9, 0.65, l1 / max(sk, 0.005));
 }
 // (04/11 b) direccion anatomica de la ceja en el plano UV (Agustin: "la orientacion hacia donde van los pelos tambien"):
 // la cabeza (junto a la nariz) crece hacia ARRIBA, el cuerpo hacia afuera y un poco arriba, la cola hacia afuera y abajo.
@@ -161,8 +165,8 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     float4 m = tHairMap.SampleLevel(sLin, uv, 0);
     if (m.a < 0.97) continue;                      // fuera de la zona de ceja (0.9 = cuero cabelludo, 0 = nada)
     float ph = PesPaintedHair(uv);
-    if (ph < 0.3) continue;                                  // fuera de la ceja pintada
-    if (rk >= keepBase * saturate(m.r) * ph) continue;     // densidad del mapa y de la pintura
+    if (ph < 0.15) continue;                                 // fuera de la ceja pintada
+    if (rk >= keepBase * saturate(m.r) * saturate(ph * 1.5)) continue;   // densidad del mapa y de la pintura
     float3 root = P0 * b.x + P1 * b.y + P2 * b.z;
     float3 n = normalize(v[0].nrm.xyz * b.x + v[1].nrm.xyz * b.y + v[2].nrm.xyz * b.z);
     // direccion del peinado: angulo del mapa (B) en el plano UV, llevado a 3D y apoyado sobre la piel
@@ -185,7 +189,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     // la hebra no sale de la ceja pintada: si la punta (o la mitad) cae en piel, se acorta
     {
       float lenUV = len / max(mPerUV, 1e-5);
-      if (PesPaintedHair(uv + dirUV * lenUV) < 0.25) len *= (PesPaintedHair(uv + dirUV * lenUV * 0.5) < 0.25) ? 0.35 : 0.6;
+      if (PesPaintedHair(uv + dirUV * lenUV) < 0.1) len *= (PesPaintedHair(uv + dirUV * lenUV * 0.5) < 0.1) ? 0.45 : 0.7;
     }
     float widB = max(P74.w, 0.05) * 0.001 * mWid * 0.25;   // (04/11 b) mas finas: 0.35 -> ~0.09 mm de ancho real
     // color: el de la ceja pintada en ese punto (raiz) y la punta un poco mas clara, o el del tipo de pelo
