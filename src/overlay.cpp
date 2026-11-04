@@ -781,6 +781,11 @@ static void DrawEditorLightIcons() {
     if (preset == 1) { az = 50; el = 45; warm = 0.62f; }
     else if (preset == 2) { az = 70; el = 12; warm = 0.95f; }
     else if (preset == 3) { az = -40; el = 60; warm = 0.15f; }
+    else if (preset == 5) { az = 20; el = 70; warm = 0.50f; }    // (04/11) nublado (igual que pes_ssss_inc.hlsli)
+    else if (preset == 6) { az = 20; el = 70; warm = 0.35f; }    // lluvia
+    else if (preset == 7) { az = 30; el = 78; warm = 0.58f; }    // mediodia
+    else if (preset == 8) { az = 165; el = 10; warm = 0.95f; }   // atardecer a contraluz
+    else if (preset == 9) { az = -45; el = 35; warm = 0.15f; }   // noche con dos torres
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     // centro: la cara (alto medido en skintone.cpp, fila 192 z/w en pixeles del cuadro) o el centro de la pantalla
     ImVec2 c(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.42f);
@@ -794,6 +799,9 @@ static void DrawEditorLightIcons() {
         if (E3[1] > 0.001f) DrawOneLightIcon(dl, c, R, (az >= 0 ? -1.0f : 1.0f) * std::clamp(90.0f - std::fabs(az) * 0.5f, 25.0f, 70.0f), 8.0f, std::max(warm - 0.2f, 0.0f), "Relleno");
         if (E3[2] > 0.001f) DrawOneLightIcon(dl, c, R, (az >= 0 ? 1.0f : -1.0f) * 150.0f, 35.0f, 0.45f, "Recorte");
         DrawOneLightIcon(dl, c, R, az, el, warm, "Principal");
+    } else if (preset == 9) {
+        DrawOneLightIcon(dl, c, R, az + 180.0f, el, warm, "Torre 2");
+        DrawOneLightIcon(dl, c, R, az, el, warm, "Torre 1");
     } else DrawOneLightIcon(dl, c, R, az, el, warm, "Sol de prueba");
 }
 
@@ -865,6 +873,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
     if (!s_btnPending.empty()) {
         std::string a = s_btnPending; s_btnPending.clear();
         if (a == "hair_export") { std::string st; FaceGenExportHair(st); s_status = st; }
+        else if (a == "brow_save") { s_status = BrowSaveCurrent(); }
         else if (a == "hair_reload") { LoadHairConfig(); s_status = "PES21FX_hair.ini recargado (" + std::to_string(g_cfg.hair.types.size()) + " tipos, " + std::to_string(g_cfg.hair.faces.size()) + " caras asignadas)"; }
         else if (a == "muscle_reset" || a.rfind("muscle_preset_", 0) == 0) {
             // (26/10) tipos de cuerpo para las tarjetas generales (muscle_reset = "Como el juego": todo en 1 y la definicion en 1).

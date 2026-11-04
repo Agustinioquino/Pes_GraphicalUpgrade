@@ -190,7 +190,7 @@ static const ShaderEntry* FindShader(void* p) {
     std::shared_lock<std::shared_mutex> lk(s_shMutex);
     auto it = s_shaders.find(p);
     if (it != s_shaders.end()) return &it->second;
-    auto r = s_replToObj.find(p);   // es uno de nuestros reemplazos (lo volvio a enlazar BrowDrawAfterFace o un restore)
+    auto r = s_replToObj.find(p);   // es uno de nuestros reemplazos (lo volvio a enlazar un restore)
     if (r != s_replToObj.end()) { it = s_shaders.find(r->second); if (it != s_shaders.end()) return &it->second; }
     return nullptr;
 }
@@ -508,7 +508,7 @@ static void UploadParams() {
 }
 
 // ---------------------------------------------------------------- estado por contexto
-struct CtxState { const ShaderEntry* ps = nullptr; const ShaderEntry* vs = nullptr; ID3D11Device* dev = nullptr; bool devKnown = false; ID3D11Buffer* lastHairCB = nullptr; bool clothCS = false; ID3D11DepthStencilView* shadowDSV = nullptr; bool gameShadow = false; };   // shadowDSV: (27/10 c) el DSV puesto es el shadow map del sol del juego (sombra de la cabeza)   // clothCS: el CS puesto es el simulador del mod de ropa (diagnostico en Dispatch)   // lastHairCB: b11 de la ultima cara dibujada en este contexto (la boca la hereda)
+struct CtxState { const ShaderEntry* ps = nullptr; const ShaderEntry* vs = nullptr; ID3D11Device* dev = nullptr; bool devKnown = false; ID3D11Buffer* lastHairCB = nullptr; uint64_t lastFace = 0; bool clothCS = false; ID3D11DepthStencilView* shadowDSV = nullptr; bool gameShadow = false; };   // shadowDSV: (27/10 c) el DSV puesto es el shadow map del sol del juego (sombra de la cabeza)   // clothCS: el CS puesto es el simulador del mod de ropa (diagnostico en Dispatch)   // lastHairCB: b11 de la ultima cara dibujada en este contexto (la boca la hereda)
 static std::unordered_map<ID3D11DeviceContext*, CtxState> s_ctx;
 static std::shared_mutex s_ctxMutex;
 static CtxState& Ctx(ID3D11DeviceContext* c) {
@@ -957,7 +957,7 @@ template<int V> static void STDMETHODCALLTYPE hk_SetCS(ID3D11DeviceContext* c, I
 // lo que una regla enlaza se devuelve a como estaba despues del dibujo (como "post ps-t20 = ..." en 3DMigoto)
 struct Saved { bool ps; bool srv; int slot; IUnknown* prev; };
 static const int kSavedMax = 64;   // (02/11) 24 -> 64: con los grupos del brazo (t26/t30/t36/t123) los dibujos del brazo pasaban de 24 y lo enlazado despues no se devolvia (se filtraba al dibujo siguiente: la boca tomaba texturas ajenas)
-struct DrawScope { Saved s[kSavedMax]; int n = 0; FaceGenExtra brow; bool skip = false; ID3D11PixelShader* restorePS = nullptr; LodIA lod; GlassScope glass; RingScope ring; };   // glass: vidrio de los menus (glass.cpp)   // lod.count > 0: dibujar con la geometria de LOD0 (lod.cpp)
+struct DrawScope { Saved s[kSavedMax]; int n = 0; FaceGenExtra brow; bool skip = false; ID3D11PixelShader* restorePS = nullptr; LodIA lod; GlassScope glass; RingScope ring; FaceTessScope tess; };   // tess: teselacion de la cara (facetess.cpp)   // glass: vidrio de los menus (glass.cpp)   // lod.count > 0: dibujar con la geometria de LOD0 (lod.cpp)
 
 static void Remember(ID3D11DeviceContext* c, DrawScope& d, bool ps, bool srv, int slot) {
     if (d.n >= kSavedMax) {   // (26/10 d) 12 -> 24, (02/11) -> 64: lo que no entra no se devolveria
@@ -1035,6 +1035,7 @@ void ResourcesLogPresent() {
         mouth, s_mouthOk.exchange(0), s_mouthOther.exchange(0), s_mouthNoRule.exchange(0));
     Log("filtraciones (30 s): %d de %d dibujos revisados llegan con una textura del mod en t0..t3; t0 cambiado por brazos de TorsoBody en %d dibujos",
         s_leakDraws.exchange(0), s_leakChecked.exchange(0), s_armSwapDraws.exchange(0));
+    BocaJugLog();
 }
 static void MouthCheck(ID3D11DeviceContext* c, const ShaderEntry* ps) {
     s_mouthDraws.fetch_add(1, std::memory_order_relaxed);
@@ -1116,6 +1117,7 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
             if (b) { Remember(c, d, ps, false, a.slot); if (ps) c->PSSetConstantBuffers(a.slot, 1, &b); else c->VSSetConstantBuffers(a.slot, 1, &b); }
             break; }
         case RuleAction::BindSRV: {
+            if ((a.onlyIdx && t_drawVerts != a.onlyIdx) || (a.skipIdx && t_drawVerts == a.skipIdx)) break;   // (04/11) boca propia por jugador
             ID3D11ShaderResourceView* v = nullptr;
             if (a.name.rfind("file:", 0) == 0) v = FileTexture(a.name);
             else { std::lock_guard<std::mutex> lk(s_namedMutex); auto it = s_named.find(a.name); if (it != s_named.end()) v = it->second.srv; }
@@ -1128,6 +1130,8 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
             bool fgFound = FaceGenLookup(c, &fa, &fb, &ex);
             // (20/10) LOD de caras: anotar la malla de este dibujo y, con LOD0 forzado, cambiarla por la de mas detalle
             if (g_lodAny && ex.key && t_drawVerts > 0) { const ShaderEntry* vse = Ctx(c).vs; t_lodNoted = true; LodNoteFace(c, ex.key, ex.t0, ex.id, vse ? vse->hash : 0, hash, t_drawVerts, t_drawStart, t_drawBase, &d.lod); }
+            // (04/11) la boca que sigue es de esta cara (bocajug.cpp); sin identidad (cara pendiente) = 0, nunca la cara anterior
+            Ctx(c).lastFace = (fgFound && !ex.id.empty()) ? strtoull(ex.id.c_str(), nullptr, 16) : 0;
             if (fgFound) {
                 // 19/10 c: la boca hereda este b11; se retiene con AddRef porque la entrada de cara puede liberarse (partido nuevo,
                 // recarga de tipos de pelo) antes del dibujo de la boca -> puntero colgado -> el driver se caia (nvwgf2umx 0xc0000005)
@@ -1136,19 +1140,12 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
                 Remember(c, d, true, true, a.idx);  c->PSSetShaderResources(a.idx, 1, &fb);
                 // 18/10 pelo: parametros del tipo de pelo de ESTA cara (PES21FX_hair.ini) en b11
                 if (ex.hairCB) { Remember(c, d, true, false, 11); c->PSSetConstantBuffers(11, 1, &ex.hairCB); }
-                // cejas con hebras: mapa de semillas en t26 y buffer de semillas (UAV 5) limpio para este dibujo
-                if (ex.seedMap && ex.seedsUAV && g_cfg.live[74][0] > 0.5f) {
+                // cejas con hebras v2 (04/11): el mapa de pelo en t26 (lo usa el diagnostico "semillas sobre la cara") y se anota este
+                // dibujo para repetirlo con el GS de hebras apenas termine (BrowStrands). Ya no se enlaza el UAV de semillas de la v1.
+                const ShaderEntry* bvs = Ctx(c).vs;
+                if (t_drawKind == 1 && bvs && bvs->repl && !g_cfg.bypass && BrowWanted(ex, bvs->hash)) {
                     Remember(c, d, true, true, 26); c->PSSetShaderResources(26, 1, &ex.seedMap);
-                    const UINT z[4] = { 0, 0, 0, 0 };
-                    if (ex.argsUAV) c->ClearUnorderedAccessViewUint(ex.argsUAV, z);   // 18/10: solo se limpia el contador (las semillas se escriben compactas)
-                    else c->ClearUnorderedAccessViewUint(ex.seedsUAV, z);
-                    // el UAV va en el slot 5 (u5): hay que enlazarlo con la cuenta real de render targets (<= 5), no con "mantener",
-                    // porque si el juego dejo 8 slots declarados la llamada se rechaza en silencio
-                    ID3D11RenderTargetView* rts[8] = {}; ID3D11DepthStencilView* dsv = nullptr; c->OMGetRenderTargets(8, rts, &dsv);
-                    UINT nrt = 0; for (UINT i = 0; i < 8; i++) if (rts[i]) nrt = i + 1;
-                    if (nrt <= 5) { ID3D11UnorderedAccessView* uavs[2] = { ex.seedsUAV, ex.argsUAV }; c->OMSetRenderTargetsAndUnorderedAccessViews(nrt, rts, dsv, 5, ex.argsUAV ? 2 : 1, uavs, nullptr); d.brow = ex; d.brow.rtCount = (int)nrt; }
-                    else { static std::atomic<bool> warned{false}; if (!warned.exchange(true)) Log("cejas: la cara se dibuja con %u render targets, no puedo enlazar el buffer de semillas", nrt); }
-                    for (auto* v : rts) if (v) v->Release(); if (dsv) dsv->Release();
+                    d.brow = ex; d.brow.browVS = bvs->hash; d.brow.browCount = t_drawVerts; d.brow.browStart = t_drawStart; d.brow.browBase = t_drawBase;
                 }
             }
             break; }
@@ -1156,10 +1153,19 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
             if (ps) break;
             // solo DrawIndexed (con otro tipo de dibujo count 0 -> cbuffer "sin dato")
             const float* hc = nullptr; int hd = -1;
-            ID3D11ShaderResourceView* shp = nullptr; ID3D11ShaderResourceView* shw = nullptr;
-            if (ID3D11Buffer* b = ExprBufferForDraw(c, t_drawKind == 1 ? t_drawVerts : 0, t_drawStart, t_drawBase, &hc, &hd, &shp, &shw)) { Remember(c, d, false, false, a.slot); c->VSSetConstantBuffers(a.slot, 1, &b); }
+            ID3D11ShaderResourceView* shp = nullptr; ID3D11ShaderResourceView* shw = nullptr; ID3D11ShaderResourceView* seam = nullptr;
+            if (ID3D11Buffer* b = ExprBufferForDraw(c, t_drawKind == 1 ? t_drawVerts : 0, t_drawStart, t_drawBase, &hc, &hd, &shp, &shw, &seam)) { Remember(c, d, false, false, a.slot); c->VSSetConstantBuffers(a.slot, 1, &b); }
             if (shp) { Remember(c, d, false, true, 118); c->VSSetShaderResources(118, 1, &shp); }   // (04/11) gestos esculpidos de esta malla
             if (shw) { Remember(c, d, true, true, 31); c->PSSetShaderResources(31, 1, &shw); }      // (04/11) arrugas esculpidas de la sonrisa (PS de la cara)
+            // (04/11 b) teselacion de la cara en primeros planos (facetess.cpp): solo piel de la cara (nunca la boca, los ojos ni las
+            // pestanas: expr.cpp no les da pesos de borde), con DrawIndexed y el PS de la cara con reemplazo (los parametros t120 del dibujo)
+            { const ShaderEntry* fp = Ctx(c).ps; const bool skin = fp && (fp->hash == 0x5ce3ed8702271bc1ULL || fp->hash == 0xce188ae110354aeaULL);
+              if (skin && t_drawKind == 1 && !seam) FaceTessNote(0); }   // (04/11 d) registro: piel de la cara sin teselar
+            if (seam && t_drawKind == 1 && Ctx(c).ps && Ctx(c).ps->hash != 0x63fab7735eee149cULL) {
+                ID3D11ShaderResourceView* prm = nullptr; c->VSGetShaderResources(120, 1, &prm);
+                if (!prm) FaceTessNote(1);
+                if (prm) { if (FaceTessBegin(c, hash, seam, prm, d.tess)) { Remember(c, d, false, true, 119); c->VSSetShaderResources(119, 1, &seam); } prm->Release(); }
+            }
             if (hc && FreeCamWantsHead()) ExprCaptureHead(c, hc, hd);   // (1/11) camara libre "seguir la cara": matriz de sk_head de este dibujo
             break; }
         case RuleAction::Beard: {   // (04/11 c) barba que sigue los huesos de la cara (expr.cpp BeardForDraw, pes_beard.hlsli)
@@ -1235,6 +1241,12 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     }
     if (ps && ps->rule) RunRule(c, ps, d);
     if (ps && ps->hash == 0x63fab7735eee149cULL) MouthCheck(c, ps);   // (03/11) la boca tiene sus 4 texturas del mod? (log 'recursos por dibujo')
+    // (04/11) boca propia por jugador (bocajug.cpp): misma malla, vertices del perfil de caras.ini (boca = ...) para la boca de esa cara
+    if (ps && ps->hash == 0x63fab7735eee149cULL && t_drawKind == 1 && !d.lod.count) {
+        LodIA L; ID3D11ShaderResourceView* bsm = nullptr;
+        const uint64_t lf = Ctx(c).lastFace; Ctx(c).lastFace = 0;   // una boca por cara: la siguiente boca sin cara nueva queda comun
+        if (BocaJugDraw(c, lf, t_drawVerts, t_drawStart, L, &bsm)) { d.lod = L; if (bsm) { Remember(c, d, true, true, 0); c->PSSetShaderResources(0, 1, &bsm); } }
+    }
     if (vs && vs->rule) RunRule(c, vs, d);
     // (20/10) reglas por pareja PS + VS: p.ej. la piel del cuerpo (aa7d1833) cuando dibuja la cabeza de una cara generica (VS faab87ee)
     if (ps && vs) if (const std::vector<const Rule*>* prs = ps->pairRules) for (const Rule* pr : *prs) if (pr->vsCond == vs->hash) RunRuleActions(c, pr, true, ps->hash, d);
@@ -1294,11 +1306,29 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     // variacion de dientes/encias por jugador
     if (ps && ps->hash == 0x63fab7735eee149cULL && ps->repl && s.lastHairCB) { Remember(c, d, true, false, 11); c->PSSetConstantBuffers(11, 1, &s.lastHairCB); }
     // (27/10 c) sombra de la cabeza: el atlas propio (t30) a los 7 shaders del sol reemplazados
-    if (ps && ps->repl) { int si = SunPassIndex(ps->hash); if (si >= 0 && si < 7) if (ID3D11ShaderResourceView* hs = HeadShadowSRV()) { Remember(c, d, true, true, 30); c->PSSetShaderResources(30, 1, &hs); } }
+    if (ps && ps->repl) { int si = SunPassIndex(ps->hash); if (si >= 0 && si != 7) if (ID3D11ShaderResourceView* hs = HeadShadowSRV()) { Remember(c, d, true, true, 30); c->PSSetShaderResources(30, 1, &hs); } }
     // 20/10: desgaste de la cancha en vivo: la posicion de cada jugador sale del dibujo de su short / medias (b5 del VS)
     if (ps && ps->hash == 0x55297925e0c66085ULL) PitchWearNotePlayer(c);
     // (2/11) botines / pelota (aadffecf): anotar la traslacion para reconocer la pelota; en el dibujo de la pelota, b12 = manchas (fila 177)
     if (ps && ps->hash == 0xaadffecf2090e4f1ULL && ps->repl) if (ID3D11Buffer* bb = PitchBallDrawNote(c, t_drawVerts)) { Remember(c, d, true, false, 12); c->PSSetConstantBuffers(12, 1, &bb); }
+    // (04/11 g, Agustin: "teselacion a las manos, brazos y piernas") piel del cuerpo (VS 1c02a92a + PS aa7d1833 reemplazado, DrawIndexed):
+    // expr.cpp lee la malla una vez (solo pesos de borde) y facetess.cpp pone el HS / DS del cuerpo; b12 = vertices / primer indice
+    // de la malla, t119 = pesos de borde (los lee el VS para TEXCOORD12). Fila 364 (361 / 362 expresiones, 363 piel).
+    if (vs && vs->hash == 0x1c02a92ab4ae3362ULL && ps && ps->hash == 0xaa7d1833f6a11481ULL && ps->repl && t_drawKind == 1 && g_cfg.live[364][0] > 0.5f) {
+        ID3D11ShaderResourceView* seam = nullptr;
+        if (ID3D11Buffer* b = ExprBufferForDraw(c, t_drawVerts, t_drawStart, t_drawBase, nullptr, nullptr, nullptr, nullptr, &seam, true)) {
+            if (seam) {
+                ID3D11ShaderResourceView* prm = nullptr; c->VSGetShaderResources(120, 1, &prm);
+                if (prm) {
+                    if (FaceTessBegin(c, vs->hash, seam, prm, d.tess)) {
+                        Remember(c, d, false, false, 12); c->VSSetConstantBuffers(12, 1, &b);
+                        Remember(c, d, false, true, 119); c->VSSetShaderResources(119, 1, &seam);
+                    }
+                    prm->Release();
+                }
+            }
+        }
+    }
     // (27/10 c) hay camisetas en escena (PS de la camiseta 7e64 / a41e / c7ae): el torso se mete bajo la tela (fila 320, z la pone
     // la DLL en Present); sin camiseta (menu Apariencia / Fisico, tecla 4 de Sider) el torso queda entero, sin escalon en la costura
     if (ps && (ps->hash == 0x7e647d9c43b453f9ULL || ps->hash == 0xa41e7343f874154fULL || ps->hash == 0xc7ae89b63e889007ULL)) {
@@ -1380,7 +1410,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (ds.ring.overlay && !ds.skip) { RingOverlayBegin(c, ds.ring); call; RingOverlayEnd(c, ds.ring); } \
     if (g_meterHook) { CtxState& cm_ = Ctx(c); if (cm_.ps && cm_.ps->hash == 0x619b86cb5691cdceULL) LightMeterAfterComposition(c); } \
     if (g_inspectOn) { CtxState& ci_ = Ctx(c); if (InspectBegin(c, ci_.ps, ci_.vs, kind, verts, inst)) { call; InspectEnd(c); } } \
-    if (r) Restore(c, ds); if (ds.brow.seedsUAV) BrowDrawAfterFace(c, &ds.brow); if (ds.lod.count) ds.lod.Release();
+    if (ds.brow.browVS && !ds.skip) BrowStrands<V>(c, ds); if (ds.tess.on) FaceTessEnd(c, ds.tess); if (r) Restore(c, ds); if (ds.lod.count) ds.lod.Release();
 // (26/10 g) antes de cada dibujo que no sea de la base de la cancha: la emision pendiente del pasto del mod (ver GrassBaseFlush)
 #define GRASS_FLUSH(c) if (g_grassPendN.load(std::memory_order_relaxed) > 0) { CtxState& cf_ = Ctx(c); GrassBaseFlush(c, 0, cf_.ps ? cf_.ps->hash : 0); }
 // (27/10 c) sombra de la cabeza: el mismo dibujo de la pasada de sombras del juego (cascada mas cercana) se repite en el atlas
@@ -1450,7 +1480,9 @@ template<int V, class F> static void HeadShadowReplay(ID3D11DeviceContext* c, ID
     ID3D11RasterizerState* oldRS = nullptr; c->RSGetState(&oldRS);
     if (ID3D11RasterizerState* nc = HeadShadowNoCullRS(oldRS)) c->RSSetState(nc);   // (27/10 f) sin descarte de caras
     o_OMSetRT[V](c, 0, nullptr, dsv);
-    for (int i = 0; i < n; i++) {
+    const bool body = HeadShadowBodyOn();   // (04/11 piel) cuadrante 3: piernas del mas cercano
+    for (int i = 0; i < 4; i++) {
+        if (i >= n && !(i == 3 && body)) continue;
         ID3D11Buffer* cb = HeadShadowCB(i); if (!cb) continue;
         D3D11_VIEWPORT vp; HeadShadowViewport(i, vp);
         D3D11_RECT rc{ (LONG)vp.TopLeftX, (LONG)vp.TopLeftY, (LONG)(vp.TopLeftX + vp.Width), (LONG)(vp.TopLeftY + vp.Height) };
@@ -1458,7 +1490,7 @@ template<int V, class F> static void HeadShadowReplay(ID3D11DeviceContext* c, ID
         c->VSSetConstantBuffers(2, 1, &cb);
         draw();
     }
-    g_headShadowReplays.fetch_add(n, std::memory_order_relaxed);
+    g_headShadowReplays.fetch_add(n + (body ? 1 : 0), std::memory_order_relaxed);
     o_OMSetRT[V](c, 8, rt, oldDsv);
     c->VSSetConstantBuffers(2, 1, &oldB2);
     if (nvp) c->RSSetViewports(nvp, vps); if (nsc) c->RSSetScissorRects(nsc, scs);
@@ -1467,6 +1499,13 @@ template<int V, class F> static void HeadShadowReplay(ID3D11DeviceContext* c, ID
 }
 // (20/10) LOD0 forzado: el dibujo sale con los buffers/cuentas de la malla de mas detalle y se devuelve el estado del juego
 template<int V> static void LodDrawSub(ID3D11DeviceContext* c, DrawScope& ds) { LodIA sv; LodBind(c, ds.lod, sv); o_DrawIdx[V](c, ds.lod.count, ds.lod.start, ds.lod.base); LodRestore(c, sv, ds.lod); }
+// (04/11) cejas con hebras v2: el mismo DrawIndexed de la cara otra vez, con el GS de hebras (facegen.cpp), ANTES de devolver el
+// estado (huesos, gestos, expresiones y render targets de la cara siguen enlazados). Llama la funcion original (sin hooks).
+template<int V> static void BrowStrands(ID3D11DeviceContext* c, DrawScope& ds) {
+    if (!BrowStrandsBegin(c, &ds.brow, ds.brow.browVS)) return;
+    if (ds.lod.count) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.brow.browCount, ds.brow.browStart, ds.brow.browBase);
+    BrowStrandsEnd(c);
+}
 template<int V> static void STDMETHODCALLTYPE hk_DrawIdx(ID3D11DeviceContext* c, UINT a, UINT b, INT d) {
     GRASS_FLUSH(c)
     { CtxState& cg = Ctx(c); const ShaderEntry* gvs = cg.vs;
@@ -1835,6 +1874,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     GlassPresent();        // (24/10) vidrio de los menus: lectura de lo anotado por el PS y plan de copias del fondo
     MuscleHookPresent();   // (23/10) musculatura: ganchos a los huesos de musculo del motor (primer Present)
     ExprPresent();         // (31/10) expresiones faciales: mallas de cara nuevas (cabeza en la paleta)
+    FaceTessPresent();     // (04/11 b) teselacion de la cara: resumen
     BodyPresent();         // (25/10) la ropa contra el cuerpo real: mallas de piel nuevas, cuadro nuevo
     ArmsPresent();         // (27/10) brazos de TorsoBody para las caras reales: huellas de los torsos del juego, claves del cuadro
     { static unsigned s_noShirt = 1000; s_noShirt = g_shirtSeen.exchange(false) ? 0 : (std::min)(s_noShirt + 1, 1000u);   // (27/10 c) fila 320.z: camisetas en los ultimos 30 Present
@@ -1922,6 +1962,7 @@ void ReloadShaders() {
     PitchWearReloadShaders();
     LightMeterReloadShaders();
     GTAOReloadShaders();
+    FaceTessReloadShaders();
     GlassReloadShaders();
     RingReloadShaders();
     SSGIReloadShaders();

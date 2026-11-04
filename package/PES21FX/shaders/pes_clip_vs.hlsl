@@ -10,7 +10,7 @@ StructuredBuffer<float4> PESClips : register(t122);   // 2 por particula: (x, y,
 
 struct VSOut {
   float4 o0 : SV_Position0; float4 o1 : TEXCOORD0; float4 o2 : TEXCOORD1; float4 o3 : TEXCOORD2; float4 o4 : TEXCOORD3;
-  float4 o5 : TEXCOORD4; float4 o6 : TEXCOORD5; float2 o7 : TEXCOORD6; float4 o8 : TEXCOORD7;
+  float4 o5 : TEXCOORD4; float4 o6 : TEXCOORD5; float4 o7 : TEXCOORD6; float4 o8 : TEXCOORD7;
 };
 VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID)
 {
@@ -50,7 +50,7 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID)
   o.o4 = float4(dot(nW, cb2[8].xyz), dot(nW, cb2[9].xyz), dot(nW, cb2[10].xyz), 0.0);
   o.o5 = float4(0.3, 0.3, 0.0, 0.0);
   o.o6 = float4(cp.xy, dot(wp, cb2[16]), dot(wp, cb2[17]));
-  o.o7 = float2(cp.w, dot(wp, cb2[19]));
+  o.o7 = float4(cp.w, dot(wp, cb2[19]), 9.0, 9.0);   // (04/11) zw: raiz en pantalla (9 = sin raiz, las particulas no toman el suelo)
   o.o8 = float4(kind == 1.0 ? 1.0 : 0.0, 0.0, frac(iid * 0.618), 1.0 + kind);   // pelado si es tierra, al azar por particula, banda = tipo (atlas de particulas)
   return o;
 }

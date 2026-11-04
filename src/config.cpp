@@ -287,7 +287,11 @@ static bool LoadConfigLocked() {
             if (k == "copy_cb") { a.kind = RuleAction::CopyCB; ss >> a.slot >> a.name; }
             else if (k == "ref_srv") { a.kind = RuleAction::RefSRV; ss >> a.slot >> a.name; }
             else if (k == "cb") { a.kind = RuleAction::BindCB; ss >> a.slot >> a.name; }
-            else if (k == "srv") { a.kind = RuleAction::BindSRV; ss >> a.slot >> a.name; }
+            else if (k == "srv") { a.kind = RuleAction::BindSRV; ss >> a.slot >> a.name;
+                // (04/11) "indices=N": solo en el dibujo de N indices; "no_indices=N": en todos menos ese (boca de Messi, 64995)
+                std::string t; while (ss >> t) { t = Lower(t);
+                    if (t.rfind("indices=", 0) == 0) a.onlyIdx = (UINT)strtoul(t.c_str() + 8, nullptr, 10);
+                    else if (t.rfind("no_indices=", 0) == 0) a.skipIdx = (UINT)strtoul(t.c_str() + 11, nullptr, 10); } }
             else if (k == "param") {
                 if (r->vsCond) continue;   // las reglas con VS no tienen juego de parametros propio
                 std::string pn; ss >> pn >> arg2;
@@ -975,6 +979,9 @@ bool LoadHairConfig() {
             if (f.size() > 0) t.cejaGrosor = f[0]; if (f.size() > 1) t.cejaDens = f[1]; if (f.size() > 2) t.cejaElev = f[2]; if (f.size() > 3) t.cejaLargo = f[3];
         } else if (sec == "caras") {
             h.faces[k] = Lower(v);
+        } else if (sec == "cejas_cara") {   // (04/11) id = cantidad, largo
+            std::vector<float> f = ParseFloats(v);
+            if (!f.empty()) h.browFace[k] = { f[0], f.size() > 1 ? f[1] : 1.0f };
         } else if (sec == "auto") {
             if (k == "default") h.defType = Lower(v);
         }

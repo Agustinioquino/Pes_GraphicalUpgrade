@@ -60,7 +60,7 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
 // irradiancia (t9) y el brillo (t10) con los mismos datos que usa la pasada de luz real (normal, rugosidad y translucidez
 // del G-buffer), una sombra trazada en pantalla (la nariz sobre la mejilla, el menton sobre el cuello) y se atenua la luz
 // de estudio para que la sombra se vea. Solo donde no hubo sol hace poco (w44 = 0) y en escena de menu sin cancha (w255 = 1).
-//   x297 prendido | y297 preset (0 manual, 1 dia, 2 tarde, 3 noche, 4 estudio) | z297 rumbo (grados; 0 = desde la camara, 90 = derecha,
+//   x297 prendido | y297 preset (0 manual, 1 dia, 2 tarde, 3 noche, 4 estudio, 5 nublado, 6 lluvia, 7 mediodia, 8 contraluz, 9 noche 2 torres) | z297 rumbo (grados; 0 = desde la camara, 90 = derecha,
 //   180 = contraluz) | w297 altura (grados) | x298 intensidad (veces la luz de estudio sobre la piel) | y298 calidez (0 azul
 //   .. 1 naranja) | z298 luz de estudio que queda | w298 sombra trazada (0 = sin sombra)
 //   x319 icono de las luces en pantalla (DLL, overlay.cpp) | y319 relleno del estudio | z319 recorte del estudio
@@ -174,6 +174,15 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   if (preset == 1) { az = 50; el = 45; inten = 1.1; warm = 0.62; keep = 0.55; }   // (27/10 c) 2.5 quemaba la cara: el tonemap del editor expone para la luz de estudio        // dia: sol alto, calido
   else if (preset == 2) { az = 70; el = 12; inten = 0.9; warm = 0.95; keep = 0.45; }   // tarde: sol bajo, naranja
   else if (preset == 3) { az = -40; el = 60; inten = 0.8; warm = 0.15; keep = 0.35; }  // noche: torre alta, blanca azulada
+  // (04/11) presets de clima para comparar con capturas (pedido de Agustin). skyK / gndK = relleno de cielo y suelo (x sol),
+  // shMul = cuanto oscurece la sombra trazada, specMul = brillo (piel mojada con lluvia), tower2 = segunda torre con sombra
+  float skyK = 0.16, gndK = 0.05, shMul = 1.0, specMul = 1.0; bool tower2 = false;
+  if (preset == 5)      { az = 20;  el = 70; inten = 0.28; warm = 0.45; keep = 0.75; skyK = 0.70; gndK = 0.08; shMul = 0.15; }   // nublado: cielo cubierto, luz de arriba casi sin sombra (04/11 b: mas plana, en la captura se parecia al dia)
+  else if (preset == 6) { az = 20;  el = 70; inten = 0.20; warm = 0.30; keep = 0.62; skyK = 0.60; gndK = 0.04; shMul = 0.10; specMul = 2.5; }   // lluvia: cubierto, frio, piel mojada
+  else if (preset == 7) { az = 30;  el = 78; inten = 1.25; warm = 0.58; keep = 0.50; }   // mediodia: sol casi vertical (cuencas de los ojos oscuras)
+  else if (preset == 8) { az = 165; el = 10; inten = 1.00; warm = 0.95; keep = 0.45; }   // atardecer a contraluz: sol bajo detras del jugador
+  else if (preset == 9) { az = -45; el = 35; inten = 0.70; warm = 0.15; keep = 0.35; tower2 = true; }   // noche con dos torres opuestas (dos sombras)
+  shK *= shMul;
   bool studio = preset == 4;
   // --- referencia de intensidad: la irradiancia de estudio mas alta sobre la piel, suavizada en el tiempo (pasada 0, t6) ---
   float S = inRef.Load(int3(0, 0, 0)).x;
@@ -207,15 +216,21 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
       PesOneLight(LR, PesTint(0.45) * (S * inten * rimK), shR, n, V, skin, rough, trans, dif, spec);
     }
   } else {
+    if (tower2) {   // (04/11) segunda torre del lado opuesto, un poco mas debil, con su propia sombra
+      float3 L2 = PesDirL(az + 180.0, el, zSgn);
+      float sh2 = PesTraceShadow(Pv, L2, dot(n, L2), zC, zSgn, zA, uv, pos.xy + 29.0, shK);
+      PesOneLight(L2, sunC * 0.7, sh2, n, V, skin, rough, trans, dif, spec);
+    }
     // (27/10 g) relleno de cielo: el lado en sombra no queda gris plano; luz difusa del cielo (azulada, de arriba) y un poco de
     // rebote del suelo (calido, de abajo), proporcional al sol. El cielo es mas azul cuanto mas calido (bajo) esta el sol.
-    float3 skyC = lerp(float3(0.55, 0.70, 1.00), float3(0.35, 0.50, 1.00), saturate(warm)) * (S * inten) * 0.16;
-    float3 gndC = float3(1.00, 0.72, 0.50) * (S * inten) * 0.05;
+    float3 skyC = lerp(float3(0.55, 0.70, 1.00), float3(0.35, 0.50, 1.00), saturate(warm)) * (S * inten) * skyK;
+    float3 gndC = float3(1.00, 0.72, 0.50) * (S * inten) * gndK;
+    if (preset == 5 || preset == 6) skyC = float3(0.80, 0.85, 0.95) * (S * inten) * skyK;   // cielo cubierto: gris, no azul
     float up = n.y * 0.5 + 0.5;   // normal en vista: y arriba
     dif += skyC * up + gndC * (1.0 - up);
   }
   o.c = float4(c0 * saturate(keep) + dif, 1);
-  o.s = float4(s0 * saturate(keep) + spec, 1);
+  o.s = float4(s0 * saturate(keep) + spec * specMul, 1);
   return o;
 }
 #else

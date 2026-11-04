@@ -14,13 +14,10 @@ import fmdl
 def pad16(b): return b + b'\0' * ((-len(b)) % 16)
 def pad32(b): return b + b'\0' * ((-len(b)) % 32)   # el de Konami deja los indices alineados a 32
 
-def write(src, dst, pos, nrm, tan, w, bidx, uv, faces, log=print):
-    """pos (N,3) f32; nrm/tan (N,4) (tan.w = signo de la binormal); w (N,4) 0..1; bidx (N,4) indices DEL GRUPO de huesos (0..5);
-    uv (N,2); faces (M,3) indices locales"""
-    f = fmdl.Fmdl(src); d = bytearray(f.d)
-    N = len(pos); M = len(faces)
-    assert N < 65536 and faces.max() < N
-    assert f.b0[3][0] == 1, 'se espera una sola malla'
+def streams(pos, nrm, tan, w, bidx, uv):
+    """los dos buffers de vertices tal como van al fmdl (y a la GPU): 0 = posicion float3 (12 B), 1 = normal/tangente half4, pesos u8x4,
+    huesos u8x4, uv half2 (28 B). Devuelve (b0, b1, pesos cuantizados)"""
+    N = len(pos)
     wq = np.clip(np.round(np.asarray(w, np.float64) * 255), 0, 255).astype(np.int32)
     wq[:, 0] += 255 - wq.sum(1)                       # que sumen 255 exacto
     assert (wq >= 0).all()
@@ -30,7 +27,17 @@ def write(src, dst, pos, nrm, tan, w, bidx, uv, faces, log=print):
     rec[:, 8:16] = np.ascontiguousarray(np.asarray(tan, np.float32).astype(np.float16)).view(np.uint8).reshape(N, 8)
     rec[:, 16:20] = wq.astype(np.uint8); rec[:, 20:24] = np.asarray(bidx).astype(np.uint8)
     rec[:, 24:28] = np.ascontiguousarray(np.asarray(uv, np.float32).astype(np.float16)).view(np.uint8).reshape(N, 4)
-    b1 = rec.tobytes(); b2 = np.ascontiguousarray(faces, '<u2').tobytes()
+    return b0, rec.tobytes(), wq
+
+def write(src, dst, pos, nrm, tan, w, bidx, uv, faces, log=print):
+    """pos (N,3) f32; nrm/tan (N,4) (tan.w = signo de la binormal); w (N,4) 0..1; bidx (N,4) indices DEL GRUPO de huesos (0..5);
+    uv (N,2); faces (M,3) indices locales"""
+    f = fmdl.Fmdl(src); d = bytearray(f.d)
+    N = len(pos); M = len(faces)
+    assert N < 65536 and faces.max() < N
+    assert f.b0[3][0] == 1, 'se espera una sola malla'
+    b0, b1, wq = streams(pos, nrm, tan, w, bidx, uv)
+    b2 = np.ascontiguousarray(faces, '<u2').tobytes()
     b2 = pad32(b2)
     buf = pad16(b0) + pad16(b1) + b2
     # tabla 14

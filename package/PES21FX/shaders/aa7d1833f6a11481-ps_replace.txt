@@ -302,7 +302,9 @@ void main(
       bool jHand = jQ > 515.5;
       float jB = jHand ? saturate((jQ - 520.0) / 7.0) : fmod(jQ, 8.0) / 7.0;
       float jK = jHand ? 1.0 : clamp(IniParams.Load(int2(166,0)).w, 0.7, 1.5);
-      float kb = (1.0 - 0.85 * jB) * jK, kf = (0.35 + 0.65 * jB) * jK;
+      // (03/11) Agustin: "el brazo esta estirado no deberian verse arrugas, al doblarse si y el codo al doblarse tambien": en el codo
+      // los dos lados aparecen con el doblez (estirado casi nada); la mano sigue como estaba (dorso con los dedos estirados)
+      float kb = (jHand ? 1.0 - 0.85 * jB : 0.08 + 0.92 * jB) * jK, kf = (jHand ? 0.35 + 0.65 * jB : 0.08 + 0.92 * jB) * jK;
       float2 jd = float2(1.0 / jvW, 1.0 / jvH);
       float4 jw = float4(pesVeins.SampleBias(g_samplerLinear_Clamp_s, v2.xy + float2(jd.x, 0.0), bBN).w,
                          pesVeins.SampleBias(g_samplerLinear_Clamp_s, v2.xy - float2(jd.x, 0.0), bBN).w,
@@ -315,7 +317,7 @@ void main(
       float l2 = dot(r2.xy, r2.xy); if (l2 > 0.94) r2.xy *= rsqrt(l2 / 0.94);
       jsCav = saturate(0.25 * dot(jh, float4(1, 1, 1, 1)) / (2.0 * 2.0) * 2.2);   // fondo del pliegue: mas oscuro
       float jl = pesVeins.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN + 5.0).w - 0.5;
-      jsLift = saturate(jl * 14.0) * jB * jK;   // doblado: la piel estirada sobre el hueso (punta del codo, nudillos) mas clara
+      jsLift = jHand ? saturate(jl * 14.0) * jB : 0.0;   // puno cerrado: la piel estirada sobre los nudillos mas clara (el codo ya no: arruga al doblar)
     }
   }
   float anatCav = 0.0;
