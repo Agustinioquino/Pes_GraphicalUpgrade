@@ -388,7 +388,9 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
     // PesGazeRot (globo) y PesRotX (parpado) un angulo positivo lleva el frente hacia ABAJO, o sea gy > 0 = mira abajo; el parpado
     // giraba -gy: subia al mirar abajo (blanco del ojo arriba del iris) y bajaba al mirar arriba (tapaba el iris). Ahora acompana:
     // el de arriba 0.80 al mirar abajo y 0.55 al mirar arriba; el de abajo baja 0.25 al mirar abajo y sube 0.10 al mirar arriba
-    float fu = up ? (gy > 0.0 ? 0.80 : 0.55) : (gy > 0.0 ? 0.25 : 0.10), fup = up ? (gyp > 0.0 ? 0.80 : 0.55) : (gyp > 0.0 ? 0.25 : 0.10);
+    // (04/11, Agustin con los ojos en circulos: "los ojos no mueven los parpados de abajo") el de abajo acompana mas: 0.25 -> 0.45 al mirar
+    // abajo y 0.10 -> 0.22 al mirar arriba (en una cara real el de abajo baja casi la mitad de lo que baja el ojo)
+    float fu = up ? (gy > 0.0 ? 0.80 : 0.55) : (gy > 0.0 ? 0.45 : 0.22), fup = up ? (gyp > 0.0 ? 0.80 : 0.55) : (gyp > 0.0 ? 0.45 : 0.22);
     float ge = (up ? geU : geL) * (1.0 - g);   // (04/11) forma del ojo con el gesto
     float a1 = A * b + gy * fu * (1.0 - g) + ge, a0 = A * bp + gyp * fup * (1.0 - g) + ge;
     float c1 = cos(a1), s1 = sin(a1), c0 = cos(a0), s0 = sin(a0);
