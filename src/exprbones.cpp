@@ -297,7 +297,7 @@ struct Skel {
     // camara lenta el juego no reescribe los huesos de la cara en todos los cuadros (16 mil lecturas con lo del mod puesto) pero la
     // cabeza si se mueve; medir el gesto contra la cabeza de ahora metia ese movimiento en el gesto y lo agrandaba a saltos
     float bHc[kND][3] = {}, bHr[kND][4] = {}; bool bHave[kND] = {}, fresh[kND] = {}; unsigned ahFrame = ~0u;
-    bool lidRq[kND] = {}, lidRt[kND] = {}, lqHave[kND] = {}, ltHave[kND] = {}; float lqHr[kND][4] = {}, ltHr[kND][4] = {}, ltHc[kND][3] = {};
+    bool nWarm[kND] = {}, lidRq[kND] = {}, lidRt[kND] = {}, lqHave[kND] = {}, ltHave[kND] = {}; float lqHr[kND][4] = {}, ltHr[kND][4] = {}, ltHc[kND][3] = {};
     // (02/11 n, Agustin: "al subir la ganancia la cara se deforma pero no en partes") el gesto se medía contra el REPOSO del skl,
     // pero la forma de cada cara (editor de caras del juego) tambien esta en los huesos: se agrandaba la forma de la cara entera.
     // Ahora el gesto se mide contra la cara NEUTRA de este jugador: promedio lento (~10 s) de cada hueso en los ejes de la cabeza
@@ -567,8 +567,12 @@ static void Release(Skel& S, int d) {
 // y se escribe en el esqueleto. Todas las mallas (cara, piezas, barba, pestanas, boca 3D) usan esos huesos: se mueven juntas.
 static void Amp(const Skel& S, int d, Xf& x) {
     if (!S.ampOn || d >= kND - 2) return;
-    const float g = S.aGain[d]; if (fabsf(g - 1.0f) < 0.005f) return;
-    if (S.nN[d] < 8) return;   // (02/11 n) todavia sin cara neutra de este jugador
+    if (S.nN[d] < 120) return;   // (02/11 n) todavia sin cara neutra de este jugador
+    // (04/11, Agustin: "al abrir el juego con las expresiones activadas" la cara hace una mueca un segundo y se arregla) con 8 cuadros
+    // la neutra todavia era la cara de la carga: se agrandaba la diferencia con una neutra mala. Ahora espera 120 cuadros (~2 s) y
+    // la ganancia entra de a poco en los 120 siguientes
+    const float ramp = std::clamp((float)(S.nN[d] - 120) / 120.0f, 0.0f, 1.0f);
+    const float g = 1.0f + (S.aGain[d] - 1.0f) * ramp; if (fabsf(g - 1.0f) < 0.005f) return;
     const float* hcU = S.bHave[d] ? S.bHc[d] : S.ahc; const float* hrU = S.bHave[d] ? S.bHr[d] : S.ahr;   // (02/11 l) cabeza de cuando el juego escribio el hueso
     float rr[3]; QRot(hrU, S.nT[d], rr);
     float e[3] = { (x.t[0] - (hcU[0] + rr[0])) * (g - 1.0f), (x.t[1] - (hcU[1] + rr[1])) * (g - 1.0f), (x.t[2] - (hcU[2] + rr[2])) * (g - 1.0f) };
@@ -612,6 +616,8 @@ static void Neutral(Skel& S, int d, const Xf& g) {
     for (int k = 0; k < 4; k++) { S.nQ[d][k] += (sg * lq[k] - S.nQ[d][k]) * a; l2 += S.nQ[d][k] * S.nQ[d][k]; }
     const float il = l2 > 1e-12f ? 1.0f / sqrtf(l2) : 1.0f; for (float& q : S.nQ[d]) q *= il;
     if (S.nN[d] < 1000000) S.nN[d]++;
+    // (04/11) los primeros 60 cuadros de cada jugador (carga, la cara todavia acomodandose) no cuentan: el promedio arranca de nuevo
+    if (S.nN[d] == 60 && !S.nWarm[d]) { S.nWarm[d] = true; S.nN[d] = 0; }
 }
 static bool Base(Skel& S, int d, Xf& x) { if (!ReadBase(S, d, x)) return false; Amp(S, d, x); return true; }
 // gira la transformacion de un hueso alrededor de su propia posicion: q nuevo = r * q base (r en el espacio del modelo)
@@ -753,7 +759,7 @@ static float Smile(Skel& S, const Xf& hc, const float* hrInv) {
         const float v[3] = { x.t[0] - hc.t[0], x.t[1] - hc.t[1], x.t[2] - hc.t[2] }; float r[3]; QRot(hrInv, v, r);
         const Xf& R = S.rest[d]; const Xf& H = S.rest[D_HEAD];
         // (02/11 p) contra la cara NEUTRA de este jugador (la forma del editor de caras corre la comisura respecto del reposo)
-        const bool nn = S.nN[d] >= 8;
+        const bool nn = S.nN[d] >= 120;   // (04/11) misma espera que el amplificador
         const float rx = nn ? S.nT[d][0] : R.t[0] - H.t[0], ry = nn ? S.nT[d][1] : R.t[1] - H.t[1];
         const float dy = r[1] - ry, dx = (r[0] - rx) * (e == 0 ? 1.0f : -1.0f);
         best = (std::max)(best, std::clamp((dy + 0.5f * dx - 0.0012f) / 0.0045f, 0.0f, 1.0f));   // zona muerta 1.2 mm: la cara quieta del juego no es exacto el reposo
