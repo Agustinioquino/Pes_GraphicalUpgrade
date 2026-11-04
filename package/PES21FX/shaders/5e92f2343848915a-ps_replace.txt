@@ -71,6 +71,7 @@ Texture2D<float4> g_tex_mesh : register(t15);
 #define cmp -
 Texture2D<float4> PESTurfN : register(t17);   // PES21 pasto v3: relieve propio del cesped (mosaico)
 Texture2D<float4> PESWearMap : register(t18);   // PES21 pasto v3: desgaste en vivo (recurso pes_wear)
+Texture2D<float4> PESFlatMap : register(t19);   // (27/10 n) pasto aplastado (pes_flat: R pisadas, G rastro de la pelota)
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 #include "pes_grass.hlsli"   // PES21 pasto v3 (19/10): patrones de corte, desgaste y zonas (compartido con las hojas)
@@ -406,6 +407,12 @@ void main(
       c = lerp(c, dirt, wr.y);
       o0.xyz = saturate(c);
       o2.y = saturate(o2.y * (1.0 - wr.y * 0.6 - wr.x * 0.25));   // tierra y pasto seco: mate
+      // (27/10 n) tanda 11, w329: rastro de la pelota (pes_flat.y, dura z329 s) y pisadas (x, la mitad) en el suelo: el pasto tumbado muestra el
+      // enves, mas claro y palido, y brilla un poco mas (hojas acostadas). Asi el recorrido de la pelota se ve tambien de lejos, no solo en las hojas 3D
+      { float4 P329 = IniParams.Load(int2(329,0));
+        if (P329.w > 0.001) { float2 f2 = PESFlatMap.Sample(g_samplerLinear_Clamp_s, v1.xy).xy;
+          float tr = saturate(max(f2.y, 0.5 * f2.x) * 1.5) * clamp(P329.w, 0.0, 2.0);
+          o0.xyz = saturate(o0.xyz * lerp(float3(1.0, 1.0, 1.0), float3(1.12, 1.08, 0.94), tr)); o2.y = saturate(o2.y + 0.08 * tr); } }
       { float3 cg = o0.xyz; float sp = o2.y, rg = o2.x; PESGroundLook(cg, sp, rg, PESGround()); o0.xyz = cg; o2.y = sp; o2.x = rg; }   // suelo humedo / seco
       if (Q7.w > 1.5 && Q7.w < 2.5) o0.xyz = float3(wr.x, wr.y, 0.0);   // depuracion: desgaste
     }

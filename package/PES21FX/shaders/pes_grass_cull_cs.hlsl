@@ -56,7 +56,8 @@ void main(uint3 id : SV_DispatchThreadID)
       Args.Store(o + 16, 0u);
       if (active) {
         Claim.Store(4 + s * 4, n);
-        if (s == 0u) { Claim.Store(76, asuint(cb2[5].y)); Claim.Store(80, asuint(cb2[20].x)); Claim.Store(84, asuint(cb2[20].y)); Claim.Store(88, asuint(cb2[20].z)); }
+        if (s == 0u) { Claim.Store(76, asuint(cb2[5].y)); Claim.Store(80, asuint(cb2[20].x)); Claim.Store(84, asuint(cb2[20].y)); Claim.Store(88, asuint(cb2[20].z));
+                       Claim.Store(92, Count.Load(76)); }   // (02/11 paso 10) celdas perdidas por ranura llena (la DLL lo muestra en 'pasto v3')
       }
     }
     return;
@@ -85,10 +86,12 @@ void main(uint3 id : SV_DispatchThreadID)
   // tarjetas que cubren la celda en pantalla
   float pc = clamp(p, 4.0, 2000.0);
   // (26/10 e) nivel 0: el ancho que se cuenta sigue la misma rampa que el VS (ancho de juego -> ancho al ras entre gPad[2].z y .w px/m)
-  float wM = (lvl == 0 && gPad[2].x > 0.0 && gPad[2].z > 1.0) ? lerp(gPad[2].x, gPad[2].y, smoothstep(gPad[2].z, max(gPad[2].w, gPad[2].z + 1.0), pc)) : gP3.x;
+  // (02/11 paso 4) ancho continuo en los 3 niveles: gPad[2] se carga una vez fuera del bucle de niveles, vale tambien en 1/2
+  float wM = (gPad[2].x > 0.0 && gPad[2].z > 1.0) ? lerp(gPad[2].x, gPad[2].y, smoothstep(gPad[2].z, max(gPad[2].w, gPad[2].z + 1.0), pc)) : gP3.x;
   float wpx = max(wM * pc, gP3.y);
   float C = clamp(gP3.z * sqrt(pc / 35.0), 0.05, 2.0);
   float cards = C * (cell * pc) * (cell * pc) / wpx;
+  float kH = 1.0;
   // con la camara baja la celda no se ve de frente: ocupa una banda de (celda * p) x (celda * p * sen(elevacion) + alto de la hoja);
   // tope de capas de hojas por pixel sobre esa banda (si no, en las repeticiones cercanas el solapamiento llegaba a 14-46x)
   {
@@ -99,15 +102,23 @@ void main(uint3 id : SV_DispatchThreadID)
     float hP0 = gPad[2].z > 1.0 ? gPad[2].z : 110.0, hP1 = gPad[2].w > hP0 ? gPad[2].w : 250.0;   // (26/10 e) misma rampa que el VS
     float hM = gP4.z * (gPad[0].w > 0.0 ? lerp(1.0, gPad[0].w, smoothstep(hP0, hP1, pc)) : 1.0);
     float hpx = max(hM * pc, 1.0);
+    // (02/11 paso 4) recorte por alto en pantalla (gPad[3].y / .z px, por defecto 1.2 / 3.0): una hoja de < 1.2 px de alto no se dibuja,
+    // entre 1.2 y 3 px se ralea en rampa; lejos queda el cesped plano de la base (PESFarTurf), que empalma con su kFar
+    float hA = gPad[3].y > 0.0 ? gPad[3].y : 1.2, hB = gPad[3].z > hA ? gPad[3].z : 3.0;
+    kH = smoothstep(hA, hB, hM * pc);
     float band = (cell * pc) * (cell * pc * sinE + hpx);
-    float capB = gP4.w * band;
+    // (02/11 tanda 15, paso 1) tope de capas por pixel mas bajo en las camaras de juego: por debajo de la rampa de cerca (gPad[0].y..z px/m)
+    // el tope manda la cuenta (a 200 px/m: 7167 tarjetas por C, ~1500 por el tope) y con Ultra eran 9.6 capas por pixel; ahora capK (gPad[3].x,
+    // 0.6 si la DLL no lo manda = 5.8 capas) y sube a 1.0 al llegar a la rampa: el primer plano al ras queda igual
+    float capK = lerp(gPad[3].x > 0.0 ? gPad[3].x : 0.6, 1.0, smoothstep(gPad[0].y, gPad[0].z, pc));
+    float capB = gP4.w * capK * band;
     // (26/10 d) piso de capas por pixel de SUELO (nivel 0, rampa de gPad[0].y a .z px/m): el tope por banda solo dejaba 6 capas
     // sobre la banda, 3-15x menos hojas por m2 que el pasto denso del juego que habia antes en esa zona
     float Dn = gPad[0].x * smoothstep(gPad[0].y, gPad[0].z, pc);
     float capF = Dn * (cell * pc) * (cell * pc) * sinE;
     cards = min(cards, max(capB, capF) / (wpx * hpx));
   }
-  cards = clamp(cards * kf, 0.0, (float)cardsMax);
+  cards = clamp(cards * kf * kH, 0.0, (float)cardsMax);
   if (cards < 0.5) return;
   // (26/10 d) fundido por ventana en el VS (las ultimas 20% de las tarjetas bajan de altura de forma escalonada): la cuenta
   // visible media queda igual a 'cards' (antes solo la ultima tarjeta era fraccionaria: al mover la camara aparecian y
@@ -119,7 +130,7 @@ void main(uint3 id : SV_DispatchThreadID)
   uint slot = (uint)(gP1.z + 0.5) + b;
   uint idx;
   Count.InterlockedAdd(slot * 4, 1u, idx);
-  if (idx >= (uint)(gP1.y + 0.5)) return;          // tope de la ranura
+  if (idx >= (uint)(gP1.y + 0.5)) { Count.InterlockedAdd(76, 1u, idx); return; }   // tope de la ranura; (02/11 paso 10) se cuenta la celda perdida
   uint rot = ((id.x * 7u + id.y * 13u) ^ (id.x * id.y)) & 3u;
   // z = escala de la celda (1 / 2 / 4) + fraccion de la ultima tarjeta * 0.5
   Inst[slot * (uint)(gP1.y + 0.5) + idx] = float4(x, z, cell / 0.5 + fr * 0.5, (float)(lim * 4u + rot));

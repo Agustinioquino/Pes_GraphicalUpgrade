@@ -119,10 +119,23 @@ void PESHairAniso(inout float3 N, inout float3 alb, float3 T, float3 V, float ji
   float c2 = dot(T2, H);
   float s2 = sqrt(saturate(1.0 - c2 * c2));
   float lit = saturate(dot(N, L) * 0.5 + 0.5);
-  alb += alb * pow(s2, 80.0) * max(HK2.x, 0.0) * lit * fade;
+  // (04/11 piel) el segundo brillo (x51) ya no se pinta en el albedo: se veia en el pelo a la sombra. Ahora lo pone la pasada del sol
+  // (a748 / b8a2 / d514 / de64 / e9c1, bloque isHair) con la sombra real
+  // alb += alb * pow(s2, 80.0) * max(HK2.x, 0.0) * lit * fade;
 }
 // === FIN PELO ===
 
+// PES21 (04/11, Agustin: "el taa en pelo sigue estando raro") la trama 8x8 con que el juego recorta los bordes del pelo es FIJA
+// en la pantalla: el TAA no la puede promediar y el borde se ve como una reja de pixeles. Con el TAA del mod prendido (w332) la
+// trama se corre 1 de 8 posiciones por cuadro (cuenta de cuadros de la camara del motor, fila 160.x): el TAA la promedia en un
+// borde suave, como el pelo con alfa. Sin la camara del motor (x161) la cuenta no avanza y queda como antes.
+float2 PesHairDitherOfs()
+{
+  if (IniParams.Load(int2(332, 0)).w < 0.5) return float2(0, 0);
+  static const float2 k[8] = { float2(0,0), float2(4,4), float2(4,0), float2(0,4), float2(2,2), float2(6,6), float2(6,2), float2(2,6) };
+  uint f = (uint)max(IniParams.Load(int2(160, 0)).x, 0.0);
+  return k[f & 7u] * 0.125;
+}
 void main(
   float4 v0 : SV_Position0,
   float4 v1 : COLOR0,
@@ -237,9 +250,10 @@ void main(
   r1.w = g_psMaterial.m_materials[0].z * r0.w;
   r1.w = r2.x * r1.w;
   o2.y = g_psMaterial.m_materials[0].y * r1.w;
-  o2.z = saturate(1 + -r2.z);
+  o2.z = IniParams.Load(int2(339,0)).w > 0.5 ? 0.98823529 : saturate(1 + -r2.z);
+  // PES21 (31/10): marca de pelo 252/255 para el contraluz de los shaders del sol (fila 339); el pelo casi nunca es metalico, asi que el valor original era ~1
   r1.w = 0.699999988 * g_psSystem.m_param.w;
-  r0.xy = float2(0.125,0.125) * r0.xy;
+  r0.xy = float2(0.125,0.125) * r0.xy + PesHairDitherOfs();
   r6.yz = g_tex_mesh.Sample(g_samplerPoint_Wrap_s, r0.xy).xw;
   r6.x = r6.z * r1.w;
   r4.y = v1.w;

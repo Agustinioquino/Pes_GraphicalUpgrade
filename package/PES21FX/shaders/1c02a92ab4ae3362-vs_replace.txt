@@ -76,7 +76,18 @@ Texture2D<float4> StereoParams : register(t125);
 #define PES_VARIANT_VS
 #include "pes_variants.hlsli"   // (26/10) variantes robusto / atletico del torso y los brazos (t127)
 #include "pes_hands.hlsli"   // (25/10) manos: cuaterniones duales + correctivas por pose (solo en los dibujos de la mano)
-#include "pes_limbs.hlsli"   // (26/10, v12.7) musculos con textura: definicion y venas segun la pose (o1.xyz)
+#include "pes_limbs.hlsli"
+// (04/11 g) TESELACION del cuerpo (facetess.cpp, pes_face_tess.hlsli con PES_TESS_BODY): peso de borde por vertice (t119, lo
+// calcula la DLL por malla: 0 en los bordes de la pieza y en los vertices duplicados) y el cbuffer de la malla (b12, el mismo
+// PESExprMesh de pes_expr.hlsli: solo se usa g_pesExprShape.y vertices / .z primer indice). La posicion en la vista + el peso
+// van en TEXCOORD12 al hull shader; sin teselacion nadie lo lee.
+cbuffer PESExprMesh : register(b12)
+{
+  uint4 g_pesExprMesh; uint4 g_pesExprLids; uint4 g_pesExprJaw; float4 g_pesExprEye[2]; uint4 g_pesExprMus;
+  uint4 g_pesExprShape;   // y vertices de la malla, z primer indice (vmin + base)
+}
+Buffer<float> g_pesTessSeam : register(t119);
+float PesTessSeam(uint vid) { uint lv = vid - g_pesExprShape.z; if (vid < g_pesExprShape.z || lv >= g_pesExprShape.y) return 0; return g_pesTessSeam[lv]; }   // (26/10, v12.7) musculos con textura: definicion y venas segun la pose (o1.xyz)
 
 
 void main(
@@ -94,12 +105,14 @@ void main(
   out float4 o0 : SV_Position0,
   out float4 o1 : COLOR0,
   out float2 o2 : TEXCOORD0,
-  out float4 p2 : TEXCOORD9,
+  out float2 p2 : TEXCOORD9,
   out float4 o3 : TEXCOORD4,
   out float4 o4 : TEXCOORD5,
   out float4 o5 : TEXCOORD6,
   out float4 o6 : TEXCOORD7,
-  out float4 o7 : TEXCOORD8)
+  out float4 o7 : TEXCOORD8,
+  out float4 pR : TEXCOORD10,   // (27/10 j) posicion de reposo (x, y, z), w = 1 (cuerpo)
+  out float4 pV : TEXCOORD12)   // (04/11 g) teselacion: xyz posicion en la vista, w peso de borde (0 sin DLL / sin malla leida)
 {
   float4 r0,r1,r2,r3,r4,r5,r6;
   uint4 bitmask, uiDest;
@@ -113,6 +126,10 @@ void main(
   int se = PesSkinNearest(PesSkinPoint(g_vsObject.m_world, g_vsObject.m_viewWorld, g_vsScene.m_view, sb0, sb0b, skW));
   float3 mP = v0.xyz, mN = v1.xyz, mT = v3.xyz;
   PesVariantMorph(vid, PesVariantT(se), mP, mN, mT);
+  PesTorsoInset(mP, mN, v0.xyz, PesCharOrigin(g_vsObject.m_viewWorld, g_vsScene.m_view));   // (27/10) torso bajo la camiseta ajustada (x320)
+  PesTorsoRegrow(mP, mN, v0.xyz, PesCharOrigin(g_vsObject.m_viewWorld, g_vsScene.m_view));   // (01/11) sin camiseta: torso de tamano original (fila 349)
+  PesTorsoTight(mP, mN, v0.xyz, PesCharOrigin(g_vsObject.m_viewWorld, g_vsScene.m_view));   // (01/11) camiseta ajustada: el torso se mete x351 mm (fila 351)
+  PesNeckSink(mP, mN, v0.xyz, PesCharOrigin(g_vsObject.m_viewWorld, g_vsScene.m_view));   // (02/11) cuello completo de la cara: el torso se hunde debajo (z352)
   float4 mP4 = float4(mP, v0.w);
   float3 hP, hN, hT, hPP; float hDbg;
   bool handDone = (r0.x != 0) && PesHandSkin(vid, mP, mN, mT, v4, v5, hP, hN, hT, hPP, hDbg);
@@ -162,11 +179,20 @@ void main(
     r4.xyz = mP;
     r2.xyz = mP;
   }
+  if (!handDone && skW) {   // (02/11 b) muneca: devuelve el volumen que el skinning lineal pierde cuando el antebrazo gira
+    float twA = PesArmTwistPush(vid, v4, v5, true), twB = PesArmTwistPush(vid, v4, v5, false);
+    float mb = PesArmBulge(vid, v0.xyz);   // (02/11 c) el vientre del musculo que trabaja se levanta
+    float3 mi = PesArmInertia(vid, v0.xyz, r4.xyz - r2.xyz);   // (02/11 e) la carne se queda un poco atras al moverse rapido
+    twA += mb; twB += mb;
+    if (twA != 0.0 || twB != 0.0) { float3 twN = normalize(r5.xyz); r4.xyz += twA * twN; r2.xyz += twB * twN; }
+    r4.xyz += mi;
+  }
   r4.w = v0.w;
   r0.x = dot(r4.xyzw, g_vsObject.m_viewWorld._m00_m10_m20_m30);
   r0.y = dot(r4.xyzw, g_vsObject.m_viewWorld._m01_m11_m21_m31);
   r0.z = dot(r4.xyzw, g_vsObject.m_viewWorld._m02_m12_m22_m32);
   r0.w = dot(r4.xyzw, g_vsObject.m_viewWorld._m03_m13_m23_m33);
+  pV = float4(r0.xyz, PesTessSeam(vid));   // (04/11 g) teselacion: posicion en la vista antes de proyectar
   r3.x = dot(r0.xyzw, g_vsScene.m_projection._m00_m10_m20_m30);
   r3.y = dot(r0.xyzw, g_vsScene.m_projection._m01_m11_m21_m31);
   o0.z = dot(r0.xyzw, g_vsScene.m_projection._m02_m12_m22_m32);
@@ -209,13 +235,13 @@ void main(
   o1.w = g_vsObject.m_useWeightCount.w;
   {   // (26/10, v12.7) musculos con textura (pes_limbs.hlsli): en los brazos, piernas y manos de TorsoBody el PS de la piel recibe
       // en o1.xyz cuanto marcar el relieve muscular y las venas (z = 7: marca; ese PS no usa el color del vertice)
-    float lbD = 0.0, lbV = 0.0;
-    if (PesLimbOut(handDone, vid, v0.xyz, lbD, lbV)) o1.xyz = float3(lbD, lbV, 7.0);
+    float lbD = 0.0, lbV = 0.0, lbA = 0.0;
+    if (PesLimbOut(handDone, vid, v0.xyz, lbD, lbV, lbA)) o1.xyz = float3(lbD, lbV, 7.0 + lbA / 1200.0);   // (02/11) z = 7 + acciones / 1200
   }
   o7.xy = r3.xy;
   o2.xy = v6.xy;
   p2.x = r3.w;
-  p2.zw = v0.yx;   // (24/10 e) posicion de reposo (y, x) del vertice: el PS mide el color del cuello con esto
+  pR = float4(v0.xyz, 1.0);   // (27/10 j) posicion de reposo del vertice en TEXCOORD10 (antes en p2.zw: TEXCOORD9 float4 corria los PS originales de kits)
   {   // ---- PES21 (24/10): resaltado del musculo elegido (x174 pulso, y174 capsulas, z174 todo el cuerpo; 175 + 2k = A y radio,
       // 176 + 2k = B): 1 adentro de la capsula, baja suave hasta 0 en el borde
     float4 HL = IniParams.Load(int2(174,0));
