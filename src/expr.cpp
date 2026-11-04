@@ -47,7 +47,7 @@ struct FaceMesh {
     int seamEye = 0;   // (04/11 h) vertices del borde de la abertura del ojo (peso 2: redondeo propio, fila 366)
     bool body = false;   // (04/11 g) piel del cuerpo (VS 1c02a92a): solo pesos de borde para la teselacion, sin nada de cara
     UINT cbv[28] = {}; std::vector<float> xferPs; uint64_t xferIb = 0; int xferUsed = 0; bool xferGate = false; ID3D11Buffer* cbNoShape = nullptr; ID3D11Buffer* cbTeeth = nullptr;
-    bool beard = false, beardSrc = false; int geoId = 0, teethHits = 0; bool teethOn = false; ID3D11Buffer* idBuf = nullptr; std::vector<float> beardPs; int beardTries = 0; UINT seqAt = 0; std::vector<int> beardUsed; int beardRebinds = 0;   // (04/11 e) seqAt: orden del ultimo dibujo (barba: para elegir la piel dibujada junto a ella)   // (04/11 c) barba: malla del pelo enlazada a la piel / piel que le pasa su paleta   // (04/11 c) lo que lleva el cbuffer y, si espera formas pasadas de la piel, sus vertices
+    bool beard = false, beardSrc = false; int geoId = 0, teethHits = 0; bool teethOn = false; ID3D11Buffer* idBuf = nullptr; std::vector<float> beardPs; int beardTries = 0; UINT seqAt = 0; std::vector<int> beardUsed; int beardRebinds = 0; bool beardOjo = false;   // (04/11 e) seqAt: orden del ultimo dibujo (barba: para elegir la piel dibujada junto a ella)   // (04/11 c) barba: malla del pelo enlazada a la piel / piel que le pasa su paleta   // (04/11 c) lo que lleva el cbuffer y, si espera formas pasadas de la piel, sus vertices
 };
 std::mutex s_mx;
 std::unordered_map<uint64_t, FaceMesh*> s_meshes;
@@ -556,7 +556,7 @@ bool BeardBind(FaceMesh* m, const std::vector<float>& ps) {   // con s_mx tomado
     int nMark = 0; for (auto& kv : s_meshes) if (kv.second->geoId && std::find(used.begin(), used.end(), kv.second->geoId) != used.end()) { kv.second->beardSrc = true; nMark++; }
     const UINT cv[28] = { (UINT)off4, m->nv, m->vmin, 1u };
     m->cb = MakeCBRaw(cv);   // (el cbuffer viejo de un re-enlace no se libera: otro hilo puede tenerlo en la mano)
-    m->beardUsed = used;
+    m->beardUsed = used; m->beardOjo = !recent;   // (04/11 l) enlazada sin piel dibujada junto: se reintenta
     char ug[96]; int uk = 0; ug[0] = 0; for (size_t i = 0; i < used.size() && uk < 80; i++) uk += snprintf(ug + uk, sizeof ug - uk, "%s%d", i ? "," : "", used[i]);
     static int nLogB = 0;
     if (nLogB < 80 && ++nLogB) Log("expresiones: barba %d (%u vertices) enlazada a la piel de la cara (%d piezas: geometrias %s, %d mallas de la tabla, %s, %d de %u vertices a menos de 25 mm, muestra %d / %d a menos de 12 mm, %.1f mm de promedio)", m->id, m->nv, (int)used.size(), ug, nMark, recent ? "piel dibujada junto a la barba" : "OJO: ninguna piel dibujada cerca, la mas cercana", nOk, m->nv, gc, ns, gd * 1000.0);
@@ -1196,7 +1196,10 @@ void ExprPresent() {
                 if (!b->beard || b->state != 3 || b->beardPs.empty() || b->beardUsed.empty() || s_frame - b->lastFrame > 4 || b->beardRebinds >= 10 || nr >= 2) continue;
                 bool live = false;
                 for (int g : b->beardUsed) { auto it = s_geoDrawn.find(g); if (it != s_geoDrawn.end() && s_frame - it->second.frame <= 120) { live = true; break; } }
-                if (live) continue;
+                // (04/11 l, log 11:27: las barbas 3D de Messi 106 / 107 quedaron en pieles de la escena anterior, "OJO: ninguna piel
+                // dibujada cerca", y como esas pieles se seguian dibujando en otro lado nunca se re-enlazaban) la que se enlazo sin piel
+                // dibujada junto tambien se vuelve a enlazar
+                if (live && !b->beardOjo) continue;
                 nr++; b->beardRebinds++;
                 Log("expresiones: barba %d: su piel no se dibuja hace mas de 2 s, se vuelve a enlazar (vez %d)", b->id, b->beardRebinds);
                 BeardBind(b, b->beardPs);
