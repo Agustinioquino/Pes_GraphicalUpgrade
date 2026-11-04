@@ -69,10 +69,22 @@ void PesBeardFollow(uint vid, float3 rest, inout float3 pos, inout float3 prev)
   uint sBest = (uint)(g_pesBeardPool[64 * 200 + (src & 255u)].x + 0.5);
   if (sBest >= 64) return;
   if ((uint)(g_pesBeardPool[sBest * 200].x + 0.5) != src) return;
+  // (04/11 n, videos de Agustin 16:09: con la boca por huesos (x350 2) la barba baja MAS que el menton y los pelos de los costados se
+  // estiran) la barba 3D esta pesada en los huesos de la cara (skf_jaw, labios...): con la boca por huesos el juego ya la abre por su
+  // propio skinning y aca se sumaba otra vez el gesto de la piel. Ahora se le quita lo que su skinning ya la corrio respecto de la
+  // cabeza (hw - ws0) antes de sumar el de la piel: el resultado es el de la piel una sola vez. Una barba pesada solo en la cabeza
+  // tiene hw = ws0 y queda como antes
+  float3 corr = 0, corrq = 0;
   {
-    float3 hp0 = PesBeardBoneP(sBest, 1, hd, P);
-    float3 ws0 = float3(dot(float4(hp0, 1.0), g_pesBeardPool[sBest * 200 + 193]), dot(float4(hp0, 1.0), g_pesBeardPool[sBest * 200 + 194]), dot(float4(hp0, 1.0), g_pesBeardPool[sBest * 200 + 195]));
+    float3 hp0 = PesBeardBoneP(sBest, 1, hd, P), hq0 = PesBeardBoneP(sBest, 97, hd, P);
+    float4 V0 = g_pesBeardPool[sBest * 200 + 193], V1 = g_pesBeardPool[sBest * 200 + 194], V2 = g_pesBeardPool[sBest * 200 + 195];
+    float3 ws0 = float3(dot(float4(hp0, 1.0), V0), dot(float4(hp0, 1.0), V1), dot(float4(hp0, 1.0), V2));
+    float3 wq0 = float3(dot(float4(hq0, 1.0), V0), dot(float4(hq0, 1.0), V1), dot(float4(hq0, 1.0), V2));
     if (length(ws0 - hw) > 0.04) return;
+    float3 hwq = float3(dot(float4(prev, 1.0), g_vsObject.m_world._m00_m10_m20_m30), dot(float4(prev, 1.0), g_vsObject.m_world._m01_m11_m21_m31), dot(float4(prev, 1.0), g_vsObject.m_world._m02_m12_m22_m32));
+    float3 c = (ws0 - hw) * fs, cq = (wq0 - hwq) * fs;
+    corr = (C0 * c.x + C1 * c.y + C2 * c.z) * is2; corrq = (C0 * cq.x + C1 * cq.y + C2 * cq.z) * is2;
+    if (dot(corrq, corrq) > 0.0016) corrq = corr;   // el cuadro anterior de otro lugar del pozo: mismo arreglo que el actual
   }
   {
     uint s = sBest;
@@ -137,7 +149,7 @@ void PesBeardFollow(uint vid, float3 rest, inout float3 pos, inout float3 prev)
     if (dot(dO, dO) > 0.0025 || dot(dOq, dOq) > 0.0025) return;   // tope 5 cm (algo no cuadra; la boca abierta del todo corre el menton ~3 cm)
     // (04/11 k) prueba w365 = 1: la barba que SI recibe el enlace sube 1 cm (se ve enseguida que pedazos siguen a la piel y cuales no)
     if (IniParams.Load(int2(365, 0)).w > 0.5) { dO += C1 * (0.01 * is2); dOq += C1 * (0.01 * is2); }
-    pos += dO; prev += dOq;
+    pos += dO + corr; prev += dOq + corrq;
     return;
   }
 }
