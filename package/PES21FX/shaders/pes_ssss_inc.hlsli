@@ -177,8 +177,8 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   // (04/11) presets de clima para comparar con capturas (pedido de Agustin). skyK / gndK = relleno de cielo y suelo (x sol),
   // shMul = cuanto oscurece la sombra trazada, specMul = brillo (piel mojada con lluvia), tower2 = segunda torre con sombra
   float skyK = 0.16, gndK = 0.05, shMul = 1.0, specMul = 1.0; bool tower2 = false;
-  if (preset == 5)      { az = 20;  el = 70; inten = 0.35; warm = 0.50; keep = 0.60; skyK = 0.55; gndK = 0.08; shMul = 0.30; }   // nublado: cielo cubierto, luz de arriba casi sin sombra
-  else if (preset == 6) { az = 20;  el = 70; inten = 0.25; warm = 0.35; keep = 0.50; skyK = 0.45; gndK = 0.05; shMul = 0.25; specMul = 1.8; }   // lluvia: cubierto, frio, piel mojada
+  if (preset == 5)      { az = 20;  el = 70; inten = 0.28; warm = 0.45; keep = 0.75; skyK = 0.70; gndK = 0.08; shMul = 0.15; }   // nublado: cielo cubierto, luz de arriba casi sin sombra (04/11 b: mas plana, en la captura se parecia al dia)
+  else if (preset == 6) { az = 20;  el = 70; inten = 0.20; warm = 0.30; keep = 0.62; skyK = 0.60; gndK = 0.04; shMul = 0.10; specMul = 2.5; }   // lluvia: cubierto, frio, piel mojada
   else if (preset == 7) { az = 30;  el = 78; inten = 1.25; warm = 0.58; keep = 0.50; }   // mediodia: sol casi vertical (cuencas de los ojos oscuras)
   else if (preset == 8) { az = 165; el = 10; inten = 1.00; warm = 0.95; keep = 0.45; }   // atardecer a contraluz: sol bajo detras del jugador
   else if (preset == 9) { az = -45; el = 35; inten = 0.70; warm = 0.15; keep = 0.35; tower2 = true; }   // noche con dos torres opuestas (dos sombras)
