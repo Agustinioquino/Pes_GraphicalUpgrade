@@ -282,15 +282,19 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     float3 painted = tBrow.SampleLevel(sLin, uv, 0).rgb;   // (04/11 d) el color de los pelos pintados de esa zona (no la piel de al lado)
     float3 cR = (hb && pesHairRoot.w > 0.5) ? pesHairRoot.xyz : painted;
     float3 cT = (hb && pesHairTip.w > 0.5) ? pesHairTip.xyz : painted * float3(1.25, 1.18, 1.1);   // punta apenas mas clara
+    // (04/11 o, Agustin: "el color poco natural aunque permita seleccionar el color") el color elegido era plano: ahora conserva la
+    // variacion de la ceja pintada (cada pelo mas claro / oscuro que el promedio de su zona) y cada hebra su tono
+    float lumP = dot(painted, float3(0.2126, 0.7152, 0.0722)), lumZ = dot(tBrow.SampleLevel(sLin, uv, 3).rgb, float3(0.2126, 0.7152, 0.0722));
+    float vari = clamp(lumP / max(lumZ, 1e-3), 0.65, 1.35) * lerp(0.88, 1.1, frac(r2 * 13.7));
     { // (04/11 o, Agustin: "falta el color para las hebras normales que se aplique a todas") fila 373: color de las hebras de TODOS
       // los jugadores (x mezcla con el color pintado, yzw rgb); el color propio del jugador (367) va encima
       float4 G = IniParams.Load(int2(373, 0));
       float kg = saturate(G.x);
-      if (kg > 0.001) { cR = lerp(cR, saturate(G.yzw), kg); cT = lerp(cT, saturate(G.yzw) * float3(1.25, 1.18, 1.1), kg); }
+      if (kg > 0.001) { cR = lerp(cR, saturate(G.yzw) * vari, kg); cT = lerp(cT, saturate(G.yzw) * vari * float3(1.12, 1.08, 1.04), kg); }
     }
     if (hb && pesBrowCol.w > 0.001) {   // (04/11 i) color elegido para este jugador (menu Cejas con hebras)
       float km = saturate(pesBrowCol.w);
-      cR = lerp(cR, pesBrowCol.rgb, km); cT = lerp(cT, pesBrowCol.rgb * float3(1.25, 1.18, 1.1), km);
+      cR = lerp(cR, pesBrowCol.rgb * vari, km); cT = lerp(cT, pesBrowCol.rgb * vari * float3(1.12, 1.08, 1.04), km);
     }
     // (04/11 j, Agustin: "necesitan un sombreado entre pelos mejor") sombra entre pelos: la raiz queda tapada por los vecinos (mas
     // oscura donde la ceja es tupida = contorno alto del mapa) y cada pelo con un tono apenas distinto (se ven capas)
