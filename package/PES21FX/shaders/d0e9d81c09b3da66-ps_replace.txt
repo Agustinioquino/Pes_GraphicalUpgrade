@@ -84,6 +84,8 @@ float3 PESSunColor() {
   return res;
 }
 // === FIN SOL ===
+#include "pes_skinlight.hlsli"   // (03/11) modelo de piel compacto (la piel igual en todos los modos)
+
 void main(
   float4 v0 : TEXCOORD0,
   float4 v1 : TEXCOORD1,
@@ -99,6 +101,8 @@ void main(
   r0.xy = v1.xy / v1.ww;
   r1.xyzw = g_NormalTexture.Sample(g_samplerPoint_Wrap_s, r0.xy).xyzw;
   r2.xyzw = g_SpecularTexture.Sample(g_samplerPoint_Wrap_s, r0.xy).zxyw;
+  float skTag = r2.x, skRough = r2.y, skSpecI = r2.z;   // (03/11) para la piel
+  float2 skPP = (v0.xy / v0.ww - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy;
   r1.xyw = float3(1023,1023,3) * r1.xyw;
   r1.xyw = (uint3)r1.xyw;
   r0.z = (uint)r1.x << 1;
@@ -120,6 +124,7 @@ void main(
   r0.z = r1.z * 1023 + 0.5;
   r0.z = (uint)r0.z;
   r0.w = (int)r0.z & 15;
+  int skMat = (int)r0.w;
   r1.x = cmp((int)r0.w == 1);
   if (r1.x != 0) {
     r4.x = 0;
@@ -144,6 +149,7 @@ void main(
   r0.yz = g_psScene.m_projectionParam.xy * r0.yz;
   r0.x = -g_psScene.m_projectionParam.w + r0.x;
   r6.z = g_psScene.m_projectionParam.z / r0.x;
+  float skZ = r6.z;   // (03/11) distancia para la piel
   r6.xy = r6.zz * r0.yz;
   r0.x = dot(r6.xyz, r6.xyz);
   r0.x = rsqrt(r0.x);
@@ -167,6 +173,8 @@ void main(
     }
   }
   r3.w = -r3.z;
+  float3 skN = normalize(r3.xyw);   // (03/11) normal para la piel (r3.x se pisa mas abajo)
+  float skCurv = PesSkCurv(skN, skZ);   // (04/11) curvatura para la piel de lejos (fuera de los if: usa derivadas)
   r0.w = dot(g_psLight.m_lightDir0.xyz, r3.xyw);
   r1.x = dot(-r0.xyz, r3.xyw);
   r2.x = r1.x + r1.x;
@@ -187,8 +195,19 @@ void main(
   r2.w = r2.w * r5.y + r0.w;
   r3.x = r5.y * r5.x;
   r2.w = saturate(max(r3.x, r2.w));
+  float skNL = r0.w, skTF = r3.x;
   r0.w = saturate(r0.w);
   o0.xyz = r2.www * r1.yzw;
+  bool skOn = PesSkIsSkin(skMat, r5.y, skTag);
+  float3 skV = -normalize(float3(skPP, 1)), skL = normalize(g_psLight.m_lightDir0.xyz);
+  if (skOn) {   // (03/11) piel
+    float3 skTr = PesSkTrans(skN, skV, skL, r5.y);
+    // (04/11 b) sin pasada de sombras (editor, menus) no hay grosor medido: se estima por la forma (curvatura + mapa de SSS) y la
+    // luz cruza orejas, nariz y dedos segun su ancho real, solo con la piel de espaldas a la luz
+    float4 skP64 = IniParams.Load(int2(64, 0));
+    if (skP64.x > 0.5 && skP64.z > 0.0) skTr = max(skTr, PesSkTransThick(PesSkThickCurv(r5.y, skCurv), skN, skL, skNL, r5.y));
+    o0.xyz = PesSkDiffuse(skNL, r5.y, skTF, skZ, skCurv) * r1.yzw + skTr * r1.yzw;
+  }
   r3.xyz = r7.xyz * r2.zzz;
   r6.x = dot(r0.xyz, g_psLight.m_lightDir0.xyz);
   r0.x = g_lut1.Sample(g_samplerLinear_Clamp_s, r6.xy).x;
@@ -213,6 +232,7 @@ void main(
   r0.x = 0.25 * r0.x;
   r0.xyz = r0.xxx * r1.yzw;
   r0.xyz = r0.xyz * r3.xyz;
+  if (skOn) r0.xyz = PesSkSpec(r0.xyz, skN, skV, skL, skRough, skSpecI, r1.yzw, 1.0);   // (03/11) brillo de piel
   o1.xyz = min(float3(10000,10000,10000), r0.xyz);
   o0.w = 1;
   o1.w = 1;

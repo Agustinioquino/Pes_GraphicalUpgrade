@@ -87,6 +87,8 @@ void main(
   bool haveL = dot(Lv, Lv) > 1e-6;
   float3 sunW = float3(0, 1, 0);
   if (haveL) { Lv = normalize(Lv); sunW = normalize(float3(dot(Lv, vX), dot(Lv, vY), dot(Lv, vZ))); if (sunW.y < 0.0) sunW = -sunW; }
+  // (26/10) el sol del cielo no gira con la luz de cada toma de la repeticion: disco, resplandor y nubes con el sol estable
+  if (haveL) sunW = PESSunStable(sunW);
   bool sunny = IniParams.Load(int2(114, 0)).w > 0.5;
   // (x159, de dia) el brillo del cielo alrededor del sol sale del sol real, no de la direccion fija del archivo del cielo:
   // el resplandor queda donde esta el disco y de donde vienen las sombras

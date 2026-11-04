@@ -120,7 +120,9 @@ void PESHairAniso(inout float3 N, inout float3 alb, float3 T, float3 V, float ji
   float c2 = dot(T2, H);
   float s2 = sqrt(saturate(1.0 - c2 * c2));
   float lit = saturate(dot(N, L) * 0.5 + 0.5);
-  alb += alb * pow(s2, 80.0) * max(HK2.x, 0.0) * lit * fade;
+  // (04/11 piel) el segundo brillo (x51) ya no se pinta en el albedo: se veia en el pelo a la sombra. Ahora lo pone la pasada del sol
+  // (a748 / b8a2 / d514 / de64 / e9c1, bloque isHair) con la sombra real
+  // alb += alb * pow(s2, 80.0) * max(HK2.x, 0.0) * lit * fade;
 }
 // === FIN PELO ===
 
@@ -256,7 +258,8 @@ void main(
   r0.x = r0.x * r4.y + 0.271276593;
   r0.x = r0.x * r4.y + 0.271276593;
   o2.x = r0.x * r4.y + 0.150000006;
-  o2.z = saturate(1 + -r4.z);
+  o2.z = IniParams.Load(int2(339,0)).w > 0.5 ? 0.98823529 : saturate(1 + -r4.z);
+  // PES21 (31/10): marca de pelo 252/255 para el contraluz de los shaders del sol (fila 339); el pelo casi nunca es metalico, asi que el valor original era ~1
   o2.w = g_psMaterial.m_materials[0].x;
   r0.xyzw = v7.xyzw / v8.xxyy;
   r0.xyzw = r0.xyzw * float4(0.5,0.5,0.5,0.5) + float4(0.5,0.5,0.5,0.5);
