@@ -289,6 +289,8 @@ void FaceGenPresent(); void FaceGenClear(); void FaceGenReloadShaders(); int Fac
 // (04/11) caras en alta desde PES21FX\caras_hd (caras_hd.cpp): volcado de originales, texturas grandes para t0..t3 de la piel
 void CarasHdNewFace(ID3D11DeviceContext* c, const std::string& id, ID3D11ShaderResourceView* const in[4]);
 bool CarasHdGet(const std::string& id, ID3D11ShaderResourceView* out[4]); void CarasHdPresent();
+void CarasHdHair(ID3D11DeviceContext* c, uint64_t psHash, ID3D11ShaderResourceView* out[4]); void CarasHdClearKeys();   // (04/11) pelo y barba: texturas grandes por slot
+std::string HashFaceTexture(ID3D11DeviceContext* c, ID3D11Resource* res);   // facegen.cpp: huella de una textura (mip <= 64 px)
 // inspector visual (inspect.cpp)
 extern std::atomic<bool> g_inspectOn; extern std::atomic<int> g_inspectSel;
 extern std::atomic<bool> g_autoDumpAny; void InspectAutoDump(ID3D11DeviceContext* c, const ShaderEntry* ps);   // volcado automatico de texturas (clases con volcar = 1)

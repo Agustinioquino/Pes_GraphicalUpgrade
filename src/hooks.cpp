@@ -1244,6 +1244,11 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         if (!s_firstRule.exchange(true)) Log("primer dibujo con regla");
     }
     if (ps && ps->rule) RunRule(c, ps, d);
+    // (04/11) pelo y barba en alta (caras_hd.cpp): PS del pelo c75f6047, barba 02f1d510, composicion 4a848614, sombra 213f9f12.
+    // Solo cambia un slot si tiene la misma textura del juego que se volco (nunca la boca 63fab773, que no esta en la lista)
+    if (ps && (ps->hash == 0xc75f6047d5817df9ULL || ps->hash == 0x02f1d51037669342ULL || ps->hash == 0x4a8486141c44a44dULL || ps->hash == 0x213f9f126b6af9c4ULL)) {
+        ID3D11ShaderResourceView* hd[4]; CarasHdHair(c, ps->hash, hd);
+        for (int i = 0; i < 4; i++) if (hd[i]) { Remember(c, d, true, true, i); c->PSSetShaderResources(i, 1, &hd[i]); } }
     if (ps && ps->hash == 0x63fab7735eee149cULL) MouthCheck(c, ps);   // (03/11) la boca tiene sus 4 texturas del mod? (log 'recursos por dibujo')
     // (04/11) boca propia por jugador (bocajug.cpp): misma malla, vertices del perfil de caras.ini (boca = ...) para la boca de esa cara
     if (ps && ps->hash == 0x63fab7735eee149cULL && t_drawKind == 1 && !d.lod.count) {
