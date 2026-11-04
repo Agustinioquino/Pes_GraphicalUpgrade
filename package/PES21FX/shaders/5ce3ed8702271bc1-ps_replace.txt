@@ -416,10 +416,10 @@ void main(
       // frente / sobre las cejas, parpados (arruguitas), labios y cuello; y94 ya no cambia el tamano. Mezcla con la normal de la cara
       // por RNM (como UE5 / HDRP) y con el signo del marco tangente del juego verificado en cada pixel
       float4 guide = pesFacePores.Sample(g_samplerLinear_Clamp_s, v2.xy);    // R densidad, G tamano (grandes), B zona T, A arruguitas
-      float4 guide2 = pesFacePores2.Sample(g_samplerLinear_Clamp_s, v2.xy);  // R frente, G sobre las cejas, B cuello
+      float4 guide2 = pesFacePores2.Sample(g_samplerLinear_Clamp_s, v2.xy);  // R frente, G sobre las cejas, B cuello, A = 1 - labios (v6: los dos labios)
       float4 pesFZp = pesZones.Sample(g_samplerLinear_Clamp_s, v2.xy);       // G labios, A piel
       PesPores pp = PesTriPores5(pesSkinMicro, pesSkinLarge, pesSkinFhead, pesSkinCrepe, pesSkinLips, pesSkinNeck, g_samplerAnisotropic_Clamp_s,
-                                 pesPM, pesDPx, pesDPy, pesDUx, pesDUy, float4(guide.g, guide.a, pesFZp.g, guide2.b), guide2.rg, pesHasR);
+                                 pesPM, pesDPx, pesDPy, pesDUx, pesDUy, float4(guide.g, guide.a, 1.0 - guide2.a, guide2.b), guide2.rg, pesHasR);
       float near = pp.near;
       if (near > 0.001) {
         pesTZone = guide.b;
@@ -429,7 +429,7 @@ void main(
           float4 FBe = pesFaceB.Sample(g_samplerLinear_Clamp_s, v2.xy);
           if (P68e.x > 0.5 && FBe.a > 0.5) { float4 FAe = pesFaceA.Sample(g_samplerLinear_Clamp_s, v2.xy); skinM *= 1.0 - saturate(FAe.a * 1.5); }
           skinM *= lerp(0.5, 1.0, pesFZp.a); }
-        float wPore = saturate(1.0 - guide.a - pesFZp.g - guide2.b);         // parte de poros (el resto: arruguitas / labios / cuello)
+        float wPore = saturate(guide2.a - guide.a - guide2.b);         // parte de poros (el resto: arruguitas / labios / cuello)
         float dens = lerp(0.8, 0.25 + 1.0 * guide.r, wPore);                 // arruguitas, labios y cuello con fuerza propia
         float str = clamp(P94.x, 0.0, 2.0) * near * 1.1 * skinM * dens;
         float2 pesTS = PesTanSigns(v4.xyz, v5.xyz, v3.xyz, pesDUx, pesDUy);
@@ -439,7 +439,7 @@ void main(
         // (04/11) el fondo del poro / surco apenas mas oscuro y CALIDO (sangre y sombra bajo la piel), no gris; lo que mas se nota
         // es el brillo cortado (mas abajo)
         float aoW = lerp(0.5, saturate(guide.r * (0.6 + 0.4 * guide.g)), wPore);
-        pesPoreOcc = 1.0 - pesPoreC * aoW * saturate(P94.x) * float3(0.20, 0.32, 0.34);
+        pesPoreOcc = 1.0 - pesPoreC * aoW * saturate(P94.x) * 0.10;   // (04/11 v6) gris y suave: el poro se ve por la luz y el brillo, no pintado de color
         if (P94.x >= 1.995) pesMicroDbg = float3(pp.dbg, near);   // diagnostico: con Intensidad al tope: rojo = poros, verde = arruguitas, azul = fundido
         pesMicroVar = pp.var * saturate(P94.x * 0.7) * skinM;
       } } }

@@ -11,7 +11,9 @@
 #   textures\pes_face_pores2.dds R peso de la FRENTE (pes_skin_forehead: poros finos densos, surcos horizontales)
 #                                G sobre las cejas y entrecejo (piel mas gruesa: frente + poros mas grandes)
 #                                B peso del CUELLO (pes_skin_neck: pliegues horizontales, cuadriculado, foliculos de barba)
-#                                A sin uso (1)
+#                                A = 1 - LABIOS (04/11 v6): bermellon de arriba y de abajo medidos sobre la textura de Messi (arriba
+#                                  v 0.584..0.616, abajo 0.626..0.656, u 0.435..0.570); la G de pes_face_zones solo tapaba el de
+#                                  arriba y el de abajo quedaba sin relieve. Se guarda invertido: la textura vieja (A = 1) = sin labios
 import numpy as np, struct, sys, os
 from scipy.ndimage import gaussian_filter
 N = 1024
@@ -56,8 +58,10 @@ dens = np.clip(dens * (1 + 0.15 * blot), 0, 1)
 fh = np.clip(np.maximum(forehead, 0.6 * temples) * (1 - crepe), 0, 1)
 br = np.clip(brow * (1 - crepe), 0, 1)
 nk = np.clip(neck * (1 - chin), 0, 1)
+lipM = np.maximum(ell(0.502, 0.6015, 0.068, 0.0172, 0.12), ell(0.502, 0.6405, 0.064, 0.0165, 0.12))
+lipM = np.clip(lipM * (1 - 0.85 * np.exp(-((yy - 0.621) / 0.0035) ** 2)), 0, 1)   # la comisura / linea de la boca afuera
 img1 = gaussian_filter(np.stack([dens, size, tzone, crepe], -1), (6, 6, 0))
-img2 = gaussian_filter(np.stack([fh, br, nk, np.ones_like(fh)], -1), (6, 6, 0))
+img2 = np.concatenate([gaussian_filter(np.stack([fh, br, nk], -1), (6, 6, 0)), gaussian_filter(1 - lipM, 3)[..., None]], -1)
 
 def write_dds(path, img):
     mips = []; cur = img.astype(np.float32)
