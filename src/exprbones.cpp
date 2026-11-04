@@ -836,9 +836,12 @@ void ExprBonesFrame(const void* skel) {
     // hablar: la mandibula sube y baja con un ritmo de silabas irregular (dos ondas que no se repiten juntas), por personaje distinto
     float talkO = 0.0f, talkRound = 0.0f;
     if (pTalk > 0.001f) {
-        const float t = g_cfg.live[157][0] + (float)(((uintptr_t)skel >> 6) & 63) * 0.37f;
+        // (04/11, Agustin: "el de hablar va muy rapido") z354 = velocidad del habla (1 = la de antes, ~4 silabas por segundo;
+        // 0 o sin poner = 0.55, mas pausado y con mas tiempo con la boca quieta entre frases)
+        const float sp = g_cfg.live[354][2] > 0.01f ? std::clamp(g_cfg.live[354][2], 0.2f, 1.5f) : 0.55f;
+        const float t = (g_cfg.live[157][0] + (float)(((uintptr_t)skel >> 6) & 63) * 0.37f) * sp;
         const float w = 0.6f * sinf(t * 6.2831853f * 4.1f) + 0.4f * sinf(t * 6.2831853f * 2.3f + 1.3f);
-        const float env = 0.55f + 0.45f * sinf(t * 6.2831853f * 0.37f);   // frases: a veces habla mas, a veces menos
+        const float env = (std::max)(0.0f, 0.40f + 0.60f * sinf(t * 6.2831853f * 0.37f));   // frases: a veces habla mas, a veces menos, con pausas
         talkO = pTalk * 0.30f * (std::max)(w, 0.0f) * env;
         talkRound = pTalk * sinf(t * 6.2831853f * 1.7f + 0.6f) * env;   // labios que se redondean (o / u) y se estiran (e / i)
     }
