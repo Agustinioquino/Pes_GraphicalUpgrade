@@ -62,19 +62,18 @@ void PesBeardFollow(uint vid, float3 rest, inout float3 pos, inout float3 prev)
   float3 hw = float3(dot(float4(pos, 1.0), g_vsObject.m_world._m00_m10_m20_m30), dot(float4(pos, 1.0), g_vsObject.m_world._m01_m11_m21_m31), dot(float4(pos, 1.0), g_vsObject.m_world._m02_m12_m22_m32));
   float3 C0 = g_vsObject.m_world._m00_m10_m20, C1 = g_vsObject.m_world._m01_m11_m21, C2 = g_vsObject.m_world._m02_m12_m22;
   float is2 = 1.0 / max(dot(C0, C0), 1e-8);
-  // (04/11 k, Agustin: "la barba sigue igual" con la barba 3D de Messi enlazada) la barba 3D cuelga de sus propios huesos (skeleton
-  // hair): la punta de los pelos queda a mas de 1.5 cm de donde la cabeza de la piel pone ese punto y se descartaba entera. Ahora se
-  // elige el lugar del pozo de esa piel MAS CERCANO (el mismo jugador) y se acepta hasta 6 cm (otro jugador esta mucho mas lejos)
-  uint sBest = 64; float dBest = 0.06;
-  [loop] for (uint s0 = 0; s0 < 64; s0++) {
-    float4 H0 = g_pesBeardPool[s0 * 200];
-    if ((uint)(H0.x + 0.5) != src) continue;
-    float3 hp0 = PesBeardBoneP(s0, 1, hd, P);
-    float3 ws0 = float3(dot(float4(hp0, 1.0), g_pesBeardPool[s0 * 200 + 193]), dot(float4(hp0, 1.0), g_pesBeardPool[s0 * 200 + 194]), dot(float4(hp0, 1.0), g_pesBeardPool[s0 * 200 + 195]));
-    float dd = length(ws0 - hw);
-    if (dd < dBest) { dBest = dd; sBest = s0; }
-  }
+  // (04/11 l, Agustin: "se buguea y rompe la barba") TODA la barba usa el mismo lugar del pozo: el ultimo que copio la DLL de esa piel
+  // (directorio al final del pozo). Antes cada vertice buscaba el suyo entre 64 copias de cuadros distintos y la barba se rompia.
+  // Se acepta si la cabeza de esa piel pone el punto a menos de 4 cm de la barba (la barba 3D cuelga de sus propios huesos);
+  // con una DLL vieja (sin directorio) o otra cara, nada
+  uint sBest = (uint)(g_pesBeardPool[64 * 200 + (src & 255u)].x + 0.5);
   if (sBest >= 64) return;
+  if ((uint)(g_pesBeardPool[sBest * 200].x + 0.5) != src) return;
+  {
+    float3 hp0 = PesBeardBoneP(sBest, 1, hd, P);
+    float3 ws0 = float3(dot(float4(hp0, 1.0), g_pesBeardPool[sBest * 200 + 193]), dot(float4(hp0, 1.0), g_pesBeardPool[sBest * 200 + 194]), dot(float4(hp0, 1.0), g_pesBeardPool[sBest * 200 + 195]));
+    if (length(ws0 - hw) > 0.04) return;
+  }
   {
     uint s = sBest;
     float4 H = g_pesBeardPool[s * 200];
@@ -135,7 +134,7 @@ void PesBeardFollow(uint vid, float3 rest, inout float3 pos, inout float3 prev)
     float3 dw = float3(dot(d, W0.xyz), dot(d, W1.xyz), dot(d, W2.xyz));
     float3 dwq = float3(dot(dq, W0.xyz), dot(dq, W1.xyz), dot(dq, W2.xyz));
     float3 dO = (C0 * dw.x + C1 * dw.y + C2 * dw.z) * is2, dOq = (C0 * dwq.x + C1 * dwq.y + C2 * dwq.z) * is2;
-    if (dot(dO, dO) > 0.0036 || dot(dOq, dOq) > 0.0036) return;   // tope 6 cm (algo no cuadra; la boca abierta del todo corre el menton ~3 cm)
+    if (dot(dO, dO) > 0.0025 || dot(dOq, dOq) > 0.0025) return;   // tope 5 cm (algo no cuadra; la boca abierta del todo corre el menton ~3 cm)
     // (04/11 k) prueba w365 = 1: la barba que SI recibe el enlace sube 1 cm (se ve enseguida que pedazos siguen a la piel y cuales no)
     if (IniParams.Load(int2(365, 0)).w > 0.5) { dO += C1 * (0.01 * is2); dOq += C1 * (0.01 * is2); }
     pos += dO; prev += dOq;

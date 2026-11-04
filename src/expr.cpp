@@ -436,6 +436,11 @@ int s_poolFail[4] = {};   // sin pozo, sin id, sin b5/b6, b5/b6 fuera de rango
 std::vector<float> s_beardData; ID3D11Buffer* s_beardBuf = nullptr; ID3D11ShaderResourceView* s_beardSrv = nullptr;
 ID3D11Buffer* s_pool = nullptr; ID3D11ShaderResourceView* s_poolSrv = nullptr; UINT s_poolAt = 0;
 constexpr UINT kPoolSlots = 64, kSlotF4 = 200, kBeardF4 = 9;
+// (04/11 l, Agustin: "se buguea y rompe la barba") el VS de la barba elegia, vertice por vertice, cualquier lugar del pozo con esa piel
+// (64 copias de distintos cuadros / pasadas): vertices vecinos tomaban paletas de cuadros distintos y la barba se rompia. Ahora al
+// final del pozo hay un directorio (256 float4, por geometria & 255): x = el ULTIMO lugar copiado de esa piel; toda la barba usa ese
+constexpr UINT kPoolDir = 256;
+ID3D11Buffer* s_slotBuf[kPoolSlots] = {};
 int s_beardCopies = 0, s_beardDraws = 0;
 // (04/11 e, arranque 07:44: "0 paletas copiadas" con 27 mallas marcadas y 0 fallas = ninguna piel marcada se dibuja) que pieles de cara se
 // dibujan de verdad (geometria, vertices) contra las que usa la barba, para ver por que no coinciden
@@ -521,7 +526,7 @@ bool BeardBind(FaceMesh* m, const std::vector<float>& ps) {   // con s_mx tomado
         // (04/11 k, Agustin: "la barba no sigue el menton y se deforma al abrir la boca") la barba 3D tiene pelos largos: los que
         // quedaban a mas de 8 mm de la piel seguian menos y a 25 mm nada (13 % de la barba de Messi), y la barba se estiraba. Ahora
         // siguen enteros hasta 30 mm y se apagan recien a 60 mm
-        const float fade = dn <= 0.030f ? 1.0f : dn >= 0.060f ? 0.0f : 1.0f - (dn - 0.030f) / 0.030f;
+        const float fade = dn <= 0.020f ? 1.0f : dn >= 0.045f ? 0.0f : 1.0f - (dn - 0.020f) / 0.025f;   // (04/11 l) 20 / 45 mm
         if (fade <= 0.0f) continue;
         float bw[32] = {}, ws = 0;
         float sh[kShapeN][3] = {};
@@ -867,10 +872,10 @@ static void LidCapture(ID3D11DeviceContext* c, FaceMesh* m);   // (02/11 h) abaj
 // (04/11 c) barba: la paleta (b6, actual + anterior) y el m_world (b5) de esta piel a un lugar del pozo, con su id y su cabeza adelante
 static void BeardPoolCopy(ID3D11DeviceContext* c, FaceMesh* m) {   // con s_mx tomado
     if (!s_pool) {
-        D3D11_BUFFER_DESC d{}; d.ByteWidth = kPoolSlots * kSlotF4 * 16; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-        std::vector<float> z((size_t)kPoolSlots * kSlotF4 * 4, 0.0f); D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = z.data();
+        D3D11_BUFFER_DESC d{}; d.ByteWidth = (kPoolSlots * kSlotF4 + kPoolDir) * 16; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        std::vector<float> z((size_t)(kPoolSlots * kSlotF4 + kPoolDir) * 4, 0.0f); for (UINT i = 0; i < kPoolDir; i++) z[((size_t)kPoolSlots * kSlotF4 + i) * 4] = 99.0f; D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = z.data();
         if (FAILED(g_dev.dev->CreateBuffer(&d, &sd, &s_pool))) { s_pool = nullptr; s_poolFail[0]++; return; }
-        D3D11_SHADER_RESOURCE_VIEW_DESC v{}; v.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; v.ViewDimension = D3D11_SRV_DIMENSION_BUFFER; v.Buffer.NumElements = kPoolSlots * kSlotF4;
+        D3D11_SHADER_RESOURCE_VIEW_DESC v{}; v.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; v.ViewDimension = D3D11_SRV_DIMENSION_BUFFER; v.Buffer.NumElements = kPoolSlots * kSlotF4 + kPoolDir;
         if (FAILED(g_dev.dev->CreateShaderResourceView(s_pool, &v, &s_poolSrv))) { s_poolSrv = nullptr; }
     }
     if (!s_poolSrv) { s_poolFail[0]++; return; }
@@ -897,6 +902,13 @@ static void BeardPoolCopy(ID3D11DeviceContext* c, FaceMesh* m) {   // con s_mx t
             D3D11_BOX x5 = { a5, 0, 0, a5 + 64, 1, 1 }; c->CopySubresourceRegion(s_pool, 0, base + 193 * 16, 0, 0, b5, 0, &x5);
             D3D11_BOX xh = { 0, 0, 0, 16, 1, 1 }; c->CopySubresourceRegion(s_pool, 0, base, 0, 0, m->idBuf, 0, &xh);
             D3D11_BOX xj = { 16, 0, 0, 32, 1, 1 }; c->CopySubresourceRegion(s_pool, 0, base + 197 * 16, 0, 0, m->idBuf, 0, &xj);   // (04/11 j)
+            if (!s_slotBuf[slot]) {   // (04/11 l) directorio: este lugar es el ultimo de esta piel
+                const float sv[4] = { (float)slot, 0.0f, 0.0f, 0.0f };
+                D3D11_BUFFER_DESC sb{}; sb.ByteWidth = 16; sb.Usage = D3D11_USAGE_IMMUTABLE; sb.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+                D3D11_SUBRESOURCE_DATA ss{}; ss.pSysMem = sv;
+                if (FAILED(g_dev.dev->CreateBuffer(&sb, &ss, &s_slotBuf[slot]))) s_slotBuf[slot] = nullptr;
+            }
+            if (s_slotBuf[slot]) { D3D11_BOX xd = { 0, 0, 0, 16, 1, 1 }; c->CopySubresourceRegion(s_pool, 0, (kPoolSlots * kSlotF4 + ((UINT)m->geoId & (kPoolDir - 1))) * 16, 0, 0, s_slotBuf[slot], 0, &xd); }
             s_beardCopies++;
         } else s_poolFail[3]++;
     } else s_poolFail[2]++;
