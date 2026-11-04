@@ -1,8 +1,9 @@
 // PES 2021 - Luz diferida de FOCO / PUNTO con brillo GGX (sin sombra)  [hash c33576f12dd818bf]
 // (04/11) Igual que 68d58aa8 mas el especular del juego (GGX con la tabla de Fresnel g_lut1 y luz de esfera). Sin reemplazo
-// hasta hoy: la piel recibia la difusa comun (borde ancho, gris) y el brillo de material comun en las luces de estudio del
-// editor y los focos del partido. Ahora la piel usa pes_skinlight (terminador suave, contraluz, brillo de piel y lobulo fino).
-// Lo que no es piel sale identico al original. Base: traduccion a mano del ensamblador del catalogo (145 instrucciones).
+// hasta hoy: la piel recibia la difusa y el brillo comunes en las luces de estudio del editor y los focos del partido. Ahora la
+// piel usa pes_skinlight (terminador suave, contraluz, brillo de piel y lobulo fino). Lo demas, identico.
+// Base: tools/asm2hlsl.py sobre el ensamblador del catalogo del mod (traduccion mecanica, identica al juego), con los nombres de
+// los cbuffers del juego. Agustin (03/11): "la piel en general en todos los menus y modos".
 
 cbuffer cPSScene : register(b2)
 {
@@ -63,92 +64,181 @@ Texture2D<float4> g_MaterialTexture : register(t10);
 #define cmp -
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
+uint4 PESBfi(uint4 w, uint4 o, uint4 ins, uint4 b) { uint4 m = (w >= 32u) ? 0xffffffffu : (((1u << w) - 1u) << o); return ((ins << o) & m) | (b & ~m); }
 #include "pes_common.hlsli"
 float3 PESSunColor() { return g_psLight.m_lightSourceColor.xyz; }   // para pes_skinlight: el tinte del brillo sigue al color del foco
 #include "pes_skinlight.hlsli"
 
 void main(
-  float4 v0 : TEXCOORD0,
-  float4 v1 : TEXCOORD1,
-  float4 v2 : SV_Position0,
+  float4 i_texcoord0 : TEXCOORD0,
+  float4 i_texcoord1 : TEXCOORD1,
+  float4 i_pos : SV_Position0,
   out float4 o0 : SV_Target0,
   out float4 o1 : SV_Target1,
   out float4 o2 : SV_Target2)
 {
-  float2 uv = v1.xy / v1.ww;
-  float4 nt = g_NormalTexture.Sample(g_samplerPoint_Wrap_s, uv);
-  float4 st = g_SpecularTexture.Sample(g_samplerPoint_Wrap_s, uv);   // z = marca de piel / F0, x = aspereza, y = intensidad, w = material
-  uint3 q = (uint3)(nt.xyw * float3(1023, 1023, 3));
-  uint ux = (q.x << 1) | (q.z >> 1);
-  uint uy = (q.y << 1) | (q.z & 1);
-  float2 e = float2((float)ux, (float)uy) * asfloat(0x3a801002) - 1.0;
-  float3 n;
-  n.z = 1.0 - abs(e.x) - abs(e.y);
-  float2 sg = float2(e.x >= 0 ? 1.0 : -1.0, e.y >= 0 ? 1.0 : -1.0);
-  n.xy = n.z >= 0 ? e : float2((1.0 - abs(e.y)) * sg.x, (1.0 - abs(e.x)) * sg.y);
-  n = n * rsqrt(dot(n, n));
-  uint mv = (uint)(nt.z * 1023 + 0.5);
-  int mat = (int)(mv & 15);
-  float trans = 0, matU = 0;
-  if (mat == 1) { trans = 0; matU = 0; }
-  else if (mat == 3) { trans = (float)(mv >> 4) * asfloat(0x3c820821); matU = 0; }
-  else { trans = (float)(mv >> 4) * asfloat(0x3c820821); matU = st.w; }
-  float d = g_DepthTexture.Sample(g_samplerPoint_Wrap_s, uv).x;
-  float2 pp = (v0.xy / v0.ww - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy;
-  float3 P; P.z = g_psScene.m_projectionParam.z / (d - g_psScene.m_projectionParam.w); P.xy = pp * P.z;
-  float3 Ve = P * rsqrt(dot(P, P));            // de la camara al pixel (= -V)
-  float3 Lv = g_psLight.m_lightSourcePos.xyz - P;
-  float dist2 = dot(Lv, Lv), invD = rsqrt(dist2);
-  float dist = max(dist2 * invD, g_psMaterial.m_materials[7].x);
-  float3 L = Lv * invD;
-  float att = invD * invD - dist2 * g_psLight.m_lightSourceParam1.w;
-  att = min(att, g_psMaterial.m_materials[7].w);
-  float cone = exp2(log2(saturate((dot(g_psLight.m_lightSourceDir.xyz, -L) - g_psLight.m_lightSourceParam2.x) * g_psLight.m_lightSourceParam2.y)) * g_psLight.m_lightSourceParam2.z);
-  att = max(att, 0);
-  float3 col = cone * (att * g_psLight.m_lightSourceColor.xyz) * g_psScene.m_exposure.z;
-  float srcR = saturate(g_psLight.m_lightSourceColor.w / dist * 0.9);   // radio aparente de la luz (luz de esfera)
-  float f0 = 0, floorK = 0; float3 specC = 1;
-  if (mat == 1) { f0 = st.z * 0.96 + 0.04; specC = float3(1, 1, 1); floorK = 0; trans = 0; }
-  else if (mat == 3) { f0 = st.z * 0.96 + 0.04; specC = float3(0.9, 1, 0.8); floorK = 1; }
-  else {
-    f0 = g_MaterialTexture.SampleLevel(g_samplerPoint_Clamp_s, float2(matU, 0.75), 0).x;
-    float4 m9 = g_MaterialTexture.SampleLevel(g_samplerPoint_Clamp_s, float2(matU, 0.25), 0);
-    specC = m9.xyz; floorK = m9.w;
+  float4 r0, r1, r2, r3, r4, r5, r6, r7, r8, r9;
+  float4 v0 = 0;
+  v0.xyzw = i_texcoord0;
+  float4 v1 = 0;
+  v1.xyzw = i_texcoord1;
+  float4 v2 = 0;
+  v2.xyzw = i_pos;
+  r0.xy = ((v1.xyxx / v1.wwww)).xy;
+  r1.xyzw = ((g_NormalTexture.Sample(g_samplerPoint_Wrap_s, (r0.xyxx).xy)).xyzw).xyzw;
+  r2.xyzw = ((g_SpecularTexture.Sample(g_samplerPoint_Wrap_s, (r0.xyxx).xy)).zxyw).xyzw;
+  float skTag = r2.x, skRough = r2.y, skSpecI = r2.z;   // (04/11) piel
+  r1.xyw = ((r1.xyxw * float4(asfloat(0x447fc000U), asfloat(0x447fc000U), 0.0, asfloat(0x40400000U)))).xyw;
+  r1.xyw = (float4(uint4(r1.xyxw))).xyw;
+  r0.z = (float4((int4(r1.xxxx) << (uint4(1U, 1U, 1U, 1U) & 31)))).z;
+  r0.w = (float4((uint4(int4(r1.wwww)) >> (uint4(1U, 1U, 1U, 1U) & 31)))).w;
+  r0.z = (float4(0.0, 0.0, (float)((int)r0.w | (int)r0.z), 0.0)).z;
+  r0.w = (float4(PESBfi(uint4(31U, 31U, 31U, 31U), uint4(1U, 1U, 1U, 1U), uint4(int4(r1.yyyy)), uint4(int4(r1.wwww))))).w;
+  r1.xy = (float4(uint4(int4(r0.zwzz)))).xy;
+  r0.zw = ((r1.xxxy * float4(0.0, 0.0, asfloat(0x3a801002U), asfloat(0x3a801002U)) + float4(0.0, 0.0, asfloat(0xbf800000U), asfloat(0xbf800000U)))).zw;
+  r1.xyw = ((-(abs(r0.zwzz)) + float4(asfloat(0x3f800000U), asfloat(0x3f800000U), 0.0, asfloat(0x3f800000U)))).xyw;
+  r3.z = ((-(abs(r0.wwww)) + r1.xxxx)).z;
+  r1.x = (((r3.zzzz >= float4(0.0, 0.0, 0.0, 0.0)) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).x;
+  r4.xy = (((r0.zwzz >= float4(0.0, 0.0, 0.0, 0.0)) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).xy;
+  r4.xy = (((r4.xyxx != 0) ? float4(asfloat(0x3f800000U), asfloat(0x3f800000U), 0.0, 0.0) : float4(asfloat(0xbf800000U), asfloat(0xbf800000U), 0.0, 0.0))).xy;
+  r1.yw = ((r1.yyyw * r4.xxxy)).yw;
+  r3.xy = (((r1.xxxx != 0) ? r0.zwzz : r1.ywyy)).xy;
+  r0.z = ((dot((r3.xyzx).xyz, (r3.xyzx).xyz)).xxxx).z;
+  r0.z = (rsqrt(r0.zzzz)).z;
+  r3.xyz = ((r0.zzzz * r3.xyzx)).xyz;
+  r0.z = ((r1.zzzz * float4(asfloat(0x447fc000U), asfloat(0x447fc000U), asfloat(0x447fc000U), asfloat(0x447fc000U)) + float4(asfloat(0x3f000000U), asfloat(0x3f000000U), asfloat(0x3f000000U), asfloat(0x3f000000U)))).z;
+  r0.z = (float4(uint4(r0.zzzz))).z;
+  r0.w = (float4(0.0, 0.0, 0.0, (float)((int)r0.z & 15))).w;
+  int skMat = (int)r0.w;
+  r1.x = (((int4(r0.wwww) == int4(1, 1, 1, 1)) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).x;
+  if ((r1.xxxx).x != 0) {
+    r4.x = (float4(0.0, 0.0, 0.0, 0.0)).x;
+    r5.y = (float4(0.0, 0.0, 0.0, 0.0)).y;
+  } else {
+    r0.z = (float4((uint4(int4(r0.zzzz)) >> (uint4(4U, 4U, 4U, 4U) & 31)))).z;
+    r1.y = (((int4(r0.wwww) == int4(3, 3, 3, 3)) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).y;
+    if ((r1.yyyy).x != 0) {
+      r1.y = (float4(uint4(int4(r0.zzzz)))).y;
+      r5.y = ((r1.yyyy * float4(asfloat(0x3c820821U), asfloat(0x3c820821U), asfloat(0x3c820821U), asfloat(0x3c820821U)))).y;
+      r4.x = (float4(0.0, 0.0, 0.0, 0.0)).x;
+    } else {
+      r0.z = (float4(uint4(int4(r0.zzzz)))).z;
+      r5.y = ((r0.zzzz * float4(asfloat(0x3c820821U), asfloat(0x3c820821U), asfloat(0x3c820821U), asfloat(0x3c820821U)))).y;
+      r2.x = (float4(0.0, 0.0, 0.0, 0.0)).x;
+      r4.x = (r2.wwww).x;
+    }
   }
-  float3 nn = float3(n.x, n.y, -n.z);
-  float nl = dot(L, nn);
-  float nv = dot(-Ve, nn);
-  float3 Rn = nn * -(nv + nv) - Ve;             // = -reflejo
-  float3 c2r = -L * 1.0 - Rn;                   // del centro de la luz al rayo reflejado
-  float3 Lr = min(srcR / sqrt(dot(c2r, c2r)), 1.0) * c2r + L;
-  float3 H = Lr * rsqrt(dot(Lr, Lr)) - Ve;
-  H = H * rsqrt(dot(H, H));
-  float nh = saturate(dot(H, nn));
-  float dGame = saturate(max(floorK * trans, (1 - nl * nl) * trans + nl));
-  float nlS = saturate(nl);
-  float3 diff = col * dGame;
-  float3 specI = st.y * specC;
-  float F = g_lut1.Sample(g_samplerLinear_Clamp_s, float2(dot(H, L), f0)).x;
-  float nvS = saturate(nv);
-  float al = max(st.x, 0.02); al = al * al;
-  float k = al * 0.5;
-  float dd = nh * nh * (al * al - 1) + 1; dd = dd * dd;
-  float D = al * al / dd;
-  float vis = 1.0 / ((nlS * (1 - k) + k) * (nvS * (1 - k) + k));
-  float sp = F * D * vis * nlS * 0.25;
-  float3 spec = col * sp * specI;
-  // piel (pes_skinlight): curvatura fuera de los if (usa derivadas)
-  float3 skN = normalize(nn);
-  float skCurv = PesSkCurv(skN, P.z);
-  bool skOn = PesSkIsSkin(mat, trans, st.z);
-  if (skOn) {
-    diff = (PesSkDiffuse(nl, trans, floorK * trans, P.z, skCurv) + PesSkTrans(skN, -Ve, L, trans)) * col;
-    spec = PesSkSpec(spec, skN, -Ve, L, st.x, st.y, col, 1.0);
+  r0.x = ((g_DepthTexture.Sample(g_samplerPoint_Wrap_s, (r0.xyxx).xy)).xyzw).x;
+  r0.yz = ((v0.xxyx / v0.wwww)).yz;
+  r0.yz = ((r0.yyzy + -(g_psScene.m_cameraCenterOffset.xxyx))).yz;
+  r0.yz = ((r0.yyzy * g_psScene.m_projectionParam.xxyx)).yz;
+  r0.x = ((r0.xxxx + -(g_psScene.m_projectionParam.wwww))).x;
+  r6.z = ((g_psScene.m_projectionParam.zzzz / r0.xxxx)).z;
+  r6.xy = ((r0.yzyy * r6.zzzz)).xy;
+  float skZ = r6.z;
+  r0.x = ((dot((r6.xyzx).xyz, (r6.xyzx).xyz)).xxxx).x;
+  r0.x = (rsqrt(r0.xxxx)).x;
+  r0.xyz = ((r0.xxxx * r6.xyzx)).xyz;
+  float3 skV = -r0.xyz;
+  r1.yzw = ((-(r6.xxyz) + g_psLight.m_lightSourcePos.xxyz)).yzw;
+  r2.w = ((dot((r1.yzwy).xyz, (r1.yzwy).xyz)).xxxx).w;
+  r4.w = (rsqrt(r2.wwww)).w;
+  r5.z = ((r2.wwww * r4.wwww)).z;
+  r5.z = (max(r5.zzzz, g_psMaterial.m_materials[7].xxxx)).z;
+  r6.xyz = ((r1.yzwy * r4.wwww)).xyz;
+  float3 skL = r6.xyz;
+  r2.w = ((r2.wwww * g_psLight.m_lightSourceParam1.wwww)).w;
+  r2.w = ((r4.wwww * r4.wwww + -(r2.wwww))).w;
+  r2.w = (min(r2.wwww, g_psMaterial.m_materials[7].wwww)).w;
+  r5.w = ((dot((g_psLight.m_lightSourceDir.xyzx).xyz, (-(r6.xyzx)).xyz)).xxxx).w;
+  r5.w = ((r5.wwww + -(g_psLight.m_lightSourceParam2.xxxx))).w;
+  r5.w = (saturate((r5.wwww * g_psLight.m_lightSourceParam2.yyyy))).w;
+  r5.w = (log2(r5.wwww)).w;
+  r5.w = ((r5.wwww * g_psLight.m_lightSourceParam2.zzzz)).w;
+  r5.w = (exp2(r5.wwww)).w;
+  r2.w = (max(r2.wwww, float4(0.0, 0.0, 0.0, 0.0))).w;
+  r7.xyz = ((r2.wwww * g_psLight.m_lightSourceColor.xyzx)).xyz;
+  r7.xyz = ((r5.wwww * r7.xyzx)).xyz;
+  r7.xyz = ((r7.xyzx * g_psScene.m_exposure.zzzz)).xyz;
+  r2.w = ((g_psLight.m_lightSourceColor.wwww / r5.zzzz)).w;
+  r2.w = (saturate((r2.wwww * float4(asfloat(0x3f666666U), asfloat(0x3f666666U), asfloat(0x3f666666U), asfloat(0x3f666666U))))).w;
+  if ((r1.xxxx).x != 0) {
+    r8.y = ((r2.xxxx * float4(asfloat(0x3f75c28fU), asfloat(0x3f75c28fU), asfloat(0x3f75c28fU), asfloat(0x3f75c28fU)) + float4(asfloat(0x3d23d70aU), asfloat(0x3d23d70aU), asfloat(0x3d23d70aU), asfloat(0x3d23d70aU)))).y;
+    r9.xyz = (float4(asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U), 0.0)).xyz;
+    r5.xy = (float4(0.0, 0.0, 0.0, 0.0)).xy;
+  } else {
+    r0.w = (((int4(r0.wwww) == int4(3, 3, 3, 3)) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).w;
+    if ((r0.wwww).x != 0) {
+      r8.y = ((r2.xxxx * float4(asfloat(0x3f75c28fU), asfloat(0x3f75c28fU), asfloat(0x3f75c28fU), asfloat(0x3f75c28fU)) + float4(asfloat(0x3d23d70aU), asfloat(0x3d23d70aU), asfloat(0x3d23d70aU), asfloat(0x3d23d70aU)))).y;
+      r9.xyz = (float4(asfloat(0x3f666666U), asfloat(0x3f800000U), asfloat(0x3f4ccccdU), 0.0)).xyz;
+      r5.x = (float4(asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U))).x;
+    } else {
+      r4.yz = (float4(0.0, asfloat(0x3f400000U), asfloat(0x3e800000U), 0.0)).yz;
+      r8.y = ((g_MaterialTexture.SampleLevel(g_samplerPoint_Clamp_s, (r4.xyxx).xy, (float4(0.0, 0.0, 0.0, 0.0)).x)).yxzw).y;
+      r9.xyzw = ((g_MaterialTexture.SampleLevel(g_samplerPoint_Clamp_s, (r4.xzxx).xy, (float4(0.0, 0.0, 0.0, 0.0)).x)).xyzw).xyzw;
+      r5.x = (r9.wwww).x;
+    }
   }
-  o0.xyz = diff * g_psLight.m_lightSourceParam3.y;
-  o1.xyz = min(spec * g_psLight.m_lightSourceParam3.x, 10000.0.xxx);
-  o0.w = 1;
-  o1.w = 1;
-  o2.xyzw = float4(1, 1, 1, 1);
+  r3.w = (-(r3.zzzz)).w;
+  float3 skN = normalize(r3.xyw);
+  float skCurv = PesSkCurv(skN, skZ);   // fuera de los if: usa derivadas
+  bool skOn = PesSkIsSkin(skMat, r5.y, skTag);
+  float skTF = r5.x * r5.y;
+  r0.w = ((dot((r6.xyzx).xyz, (r3.xywx).xyz)).xxxx).w;
+  float skNL = r0.w;
+  r1.x = ((dot((-(r0.xyzx)).xyz, (r3.xywx).xyz)).xxxx).x;
+  r2.x = ((r1.xxxx + r1.xxxx)).x;
+  r4.xyz = ((r3.xywx * -(r2.xxxx) + -(r0.xyzx))).xyz;
+  r1.yzw = ((-(r1.yyzw) * r4.wwww + -(r4.xxyz))).yzw;
+  r2.x = ((dot((r1.yzwy).xyz, (r1.yzwy).xyz)).xxxx).x;
+  r2.x = (sqrt(r2.xxxx)).x;
+  r2.x = ((r2.wwww / r2.xxxx)).x;
+  r2.x = (min(r2.xxxx, float4(asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U)))).x;
+  r1.yzw = ((r2.xxxx * r1.yyzw + r6.xxyz)).yzw;
+  r2.x = ((dot((r1.yzwy).xyz, (r1.yzwy).xyz)).xxxx).x;
+  r2.x = (rsqrt(r2.xxxx)).x;
+  r0.xyz = ((r1.yzwy * r2.xxxx + -(r0.xyzx))).xyz;
+  r1.y = ((dot((r0.xyzx).xyz, (r0.xyzx).xyz)).xxxx).y;
+  r1.y = (rsqrt(r1.yyyy)).y;
+  r0.xyz = ((r0.xyzx * r1.yyyy)).xyz;
+  r1.y = (saturate((dot((r0.xyzx).xyz, (r3.xywx).xyz)).xxxx)).y;
+  r1.z = ((-(r0.wwww) * r0.wwww + float4(asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U)))).z;
+  r1.z = ((r1.zzzz * r5.yyyy + r0.wwww)).z;
+  r1.w = ((r5.xxxx * r5.yyyy)).w;
+  r1.z = (saturate(max(r1.wwww, r1.zzzz))).z;
+  r0.w = (saturate(r0.wwww)).w;
+  r3.xyz = ((r7.xyzx * r1.zzzz)).xyz;
+  if (skOn) r3.xyz = (PesSkDiffuse(skNL, r5.y, skTF, skZ, skCurv) + PesSkTrans(skN, skV, skL, r5.y)) * r7.xyz;   // (04/11) piel
+  r2.xzw = ((r2.zzzz * r9.xxyz)).xzw;
+  r8.x = ((dot((r0.xyzx).xyz, (r6.xyzx).xyz)).xxxx).x;
+  r0.x = ((g_lut1.Sample(g_samplerLinear_Clamp_s, (r8.xyxx).xy)).xyzw).x;
+  r1.x = (saturate(r1.xxxx)).x;
+  r0.y = (max(r2.yyyy, float4(asfloat(0x3ca3d70aU), asfloat(0x3ca3d70aU), asfloat(0x3ca3d70aU), asfloat(0x3ca3d70aU)))).y;
+  r0.y = ((r0.yyyy * r0.yyyy)).y;
+  r0.z = ((r0.yyyy * float4(asfloat(0x3f000000U), asfloat(0x3f000000U), asfloat(0x3f000000U), asfloat(0x3f000000U)))).z;
+  r1.z = ((r0.yyyy * r0.yyyy)).z;
+  r1.y = ((r1.yyyy * r1.yyyy)).y;
+  r1.w = ((r0.yyyy * r0.yyyy + float4(asfloat(0xbf800000U), asfloat(0xbf800000U), asfloat(0xbf800000U), asfloat(0xbf800000U)))).w;
+  r1.y = ((r1.yyyy * r1.wwww + float4(asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U)))).y;
+  r1.y = ((r1.yyyy * r1.yyyy)).y;
+  r1.y = ((r1.zzzz / r1.yyyy)).y;
+  r0.y = ((-(r0.yyyy) * float4(asfloat(0x3f000000U), asfloat(0x3f000000U), asfloat(0x3f000000U), asfloat(0x3f000000U)) + float4(asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U)))).y;
+  r1.z = ((r0.wwww * r0.yyyy + r0.zzzz)).z;
+  r0.y = ((r1.xxxx * r0.yyyy + r0.zzzz)).y;
+  r0.y = ((r0.yyyy * r1.zzzz)).y;
+  r0.y = ((float4(asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U)) / r0.yyyy)).y;
+  r0.x = ((r0.xxxx * r1.yyyy)).x;
+  r0.x = ((r0.yyyy * r0.xxxx)).x;
+  r0.x = ((r0.wwww * r0.xxxx)).x;
+  r0.x = ((r0.xxxx * float4(asfloat(0x3e800000U), asfloat(0x3e800000U), asfloat(0x3e800000U), asfloat(0x3e800000U)))).x;
+  r0.xyz = ((r7.xyzx * r0.xxxx)).xyz;
+  r0.xyz = ((r2.xzwx * r0.xyzx)).xyz;
+  if (skOn) r0.xyz = PesSkSpec(r0.xyz, skN, skV, skL, skRough, skSpecI, r7.xyz, 1.0);   // (04/11) brillo de piel
+  o0.xyz = ((r3.xyzx * g_psLight.m_lightSourceParam3.yyyy)).xyz;
+  r0.xyz = ((r0.xyzx * g_psLight.m_lightSourceParam3.xxxx)).xyz;
+  o1.xyz = (min(r0.xyzx, float4(asfloat(0x461c4000U), asfloat(0x461c4000U), asfloat(0x461c4000U), 0.0))).xyz;
+  o0.w = (float4(asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U))).w;
+  o1.w = (float4(asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U))).w;
+  o2.xyzw = (float4(asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U))).xyzw;
   return;
 }

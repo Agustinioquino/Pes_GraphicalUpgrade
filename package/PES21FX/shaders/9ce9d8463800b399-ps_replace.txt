@@ -1,8 +1,9 @@
 // PES 2021 - Luz diferida de FOCO / PUNTO con brillo GGX y SOMBRA (12 muestras PCF de t3 con ruido animado)  [hash 9ce9d8463800b399]
 // (04/11) Igual que c33576f1 mas la sombra del foco. Sin reemplazo hasta hoy: la piel recibia la difusa y el brillo comunes en
-// los focos con sombra (editor / partido de noche). Ahora la piel usa pes_skinlight (terminador suave, contraluz, brillo de piel);
-// la sombra del foco se aplica igual que en el original (despues, a la difusa y al brillo). Lo que no es piel sale identico.
-// Base: tools/asm2hlsl.py sobre el ensamblador del catalogo (227 instrucciones), con los nombres de los cbuffers del juego.
+// los focos con sombra. Ahora la piel usa pes_skinlight; la sombra del foco se aplica igual que en el original (despues, a la
+// difusa y al brillo). Lo demas, identico.
+// Base: tools/asm2hlsl.py sobre el ensamblador del catalogo del mod (traduccion mecanica, identica al juego), con los nombres de
+// los cbuffers del juego. Agustin (03/11): "la piel en general en todos los menus y modos".
 
 cbuffer cPSSystem : register(b0)
 {
@@ -101,7 +102,7 @@ void main(
   r0.zw = ((v1.xxxy / v1.wwww)).zw;
   r1.xyzw = ((g_NormalTexture.Sample(g_samplerPoint_Wrap_s, (r0.zwzz).xy)).xyzw).xyzw;
   r2.xyzw = ((g_SpecularTexture.Sample(g_samplerPoint_Wrap_s, (r0.zwzz).xy)).zxyw).xyzw;
-  float skTag = r2.x, skRough = r2.y, skSpecI = r2.z;   // (04/11) piel: marca, aspereza, intensidad
+  float skTag = r2.x, skRough = r2.y, skSpecI = r2.z;   // (04/11) piel
   r1.xyw = ((r1.xyxw * float4(asfloat(0x447fc000U), asfloat(0x447fc000U), 0.0, asfloat(0x40400000U)))).xyw;
   r1.xyw = (float4(uint4(r1.xyxw))).xyw;
   r1.x = (float4((int4(r1.xxxx) << (uint4(1U, 1U, 1U, 1U) & 31)))).x;
@@ -270,7 +271,7 @@ void main(
   }
   r3.w = (-(r3.zzzz)).w;
   float3 skN = normalize(r3.xyw);
-  float skCurv = PesSkCurv(skN, skZ);   // (04/11) fuera de los if: usa derivadas
+  float skCurv = PesSkCurv(skN, skZ);   // fuera de los if: usa derivadas
   bool skOn = PesSkIsSkin(skMat, r5.y, skTag);
   float3 skV = -r7.xyz, skL = r9.xyz;
   float skTF = r5.x * r5.y;
