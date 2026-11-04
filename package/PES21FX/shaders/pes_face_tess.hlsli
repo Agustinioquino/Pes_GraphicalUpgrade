@@ -204,6 +204,7 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
   if (dl > tope) d *= tope / max(dl, 1e-6);
   // (04/11 c) relieve desde la quinta textura (fila 359): por la normal interpolada, mm
   float4 R = IniParams.Load(int2(359, 0));   // x fuerza, y hundir surcos (mm), z levantar relieve (mm), w mip
+  bool tilt = false; float3 tiltN = 0, tiltT = 0, tiltB = 0;   // (04/11 d) relieve en la luz
   if (R.x > 0.001 && T.x > 0.5) {
 #if PES_TESS_V455
     float2 uv = PES_LERP3(o2).zw;   // ce188: UV de la cara en TEXCOORD0.zw
@@ -224,6 +225,30 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
       if (hmm < 0.0) hmm *= mouthK;
       float3 Nn = normalize(b.x * N0 + b.y * N1 + b.z * N2);
       d += Nn * (clamp(hmm * R.x, -3.0, 3.0) * 0.001 * seam * fade);
+      // (04/11 d, Agustin: "no hace nada") RELIEVE EN LA LUZ (w360): un corrimiento de 1 mm casi no cambia la imagen de frente
+      // porque la luz sale de la normal, no de la posicion. Aca la normal (y con ella la tangente y la bitangente que arman el
+      // marco del normal map en el PS) se inclina con la pendiente de la altura, asi el relieve tambien se ve en el sombreado.
+      float relL = IniParams.Load(int2(360, 0)).w;
+      if (abs(relL) > 0.001) {
+        float e = 2.0 / 1024.0;
+        float4 FBu = pesFaceB.SampleLevel(pesTessSamp, uv + float2(e, 0), lod), FAu = pesFaceA.SampleLevel(pesTessSamp, uv + float2(e, 0), lod);
+        float4 FBv = pesFaceB.SampleLevel(pesTessSamp, uv + float2(0, e), lod), FAv = pesFaceA.SampleLevel(pesTessSamp, uv + float2(0, e), lod);
+        float hu = max(R.z, 0.0) * (FBu.b + saturate(FAu.g * 2.0 - 1.0)) - max(R.y, 0.0) * FAu.r;
+        float hv = max(R.z, 0.0) * (FBv.b + saturate(FAv.g * 2.0 - 1.0)) - max(R.y, 0.0) * FAv.r;
+        // pendiente: mm de altura por mm de piel (una unidad de UV ~ 250 mm de cara)
+        float2 g = float2(hu - hmm, hv - hmm) / (e * 250.0) * R.x * relL * seam * fade;
+        float3 Tn = normalize(b.x * p[0].o4.xyz + b.y * p[1].o4.xyz + b.z * p[2].o4.xyz);
+        float3 Bn = normalize(b.x * p[0].o5.xyz + b.y * p[1].o5.xyz + b.z * p[2].o5.xyz);
+        float3 Nt = normalize(Nn - Tn * g.x - Bn * g.y);
+        // el marco entero gira con la normal (Rodrigues): tangente y bitangente siguen perpendiculares a ella
+        float3 ax = cross(Nn, Nt); float sa = length(ax), ca = dot(Nn, Nt);
+        if (sa > 1e-5) {
+          ax /= sa;
+          tiltT = Tn * ca + cross(ax, Tn) * sa + ax * dot(ax, Tn) * (1.0 - ca);
+          tiltB = Bn * ca + cross(ax, Bn) * sa + ax * dot(ax, Bn) * (1.0 - ca);
+          tiltN = Nt; tilt = true;
+        }
+      }
     }
   }
   // (04/11 d) PRUEBA (fila 360.x): infla la piel 1 cm por la normal, sin tope ni distancia, para ver sin duda que la teselacion
@@ -242,6 +267,7 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
   o.o4 = PES_LERP3(o4);
   o.o5 = PES_LERP3(o5);
   o.o6 = PES_LERP3(o6); o.o6.w = p[0].o6.w;   // tono de piel por jugador (1000 + entrada): igual en los tres
+  if (tilt) { o.o4.xyz = tiltT; o.o5.xyz = tiltB; o.o6.xyz = tiltN; }   // (04/11 d) relieve en la luz (la bitangente ya trae el signo del VS)
   o.o7 = PES_LERP3(o7); o.o7.xy = clip.xy;
 #if PES_TESS_V455
   o.o8 = PES_LERP3(o8); o.o8.x = clip.w;
