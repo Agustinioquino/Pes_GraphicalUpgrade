@@ -76,16 +76,30 @@ float3 DecodeN(float2 uv) {   // normal del G-buffer (octaedro 10/10 + 2 bits), 
   return n;
 }
 
-// sombra trazada en pantalla (12 pasos hacia la luz; la de contacto de la pasada de luz, sin shadow map)
+// sombra trazada en pantalla (la de contacto de la pasada de luz, sin shadow map).
+// (04/11 piel) Agustin: "las sombras tienen baja calidad". Antes: 12 pasos fijos, corte en el primer paso que pegaba (borde en
+// escalones de un paso entero) y el mismo ruido todos los cuadros (el TAA no lo podia promediar: borde granulado y quieto).
+// Ahora: 24 pasos, el borde se refina con 4 bisecciones entre el ultimo paso libre y el que pego (borde exacto), el ruido cambia
+// cada cuadro (el TAA lo promedia en un borde suave y estable) y la luz tiene tamano (cono de ~1.2 grados como un foco de estudio
+// grande; el sol real es 0.27 grados): penumbra que se abre con la distancia al que tapa, como en la realidad
 float PesTraceShadow(float3 Pv, float3 L, float rawNL, float zC, float zSgn, float zA, float2 uv, float2 pxy, float shK) {
   if (shK <= 0.001 || rawNL <= 0.02) return 1.0;
-  float ign = frac(52.9829189 * frac(dot(pxy, float2(0.06711056, 0.00583715))));
+  float fr = floor(frac(m_timeParam.x * 0.25) * 4096.0);   // cambia cada cuadro (si el reloj corre)
+  float2 px = pxy + 5.588238 * fr;
+  float ign = frac(52.9829189 * frac(dot(px, float2(0.06711056, 0.00583715))));
+  float ign2 = frac(52.9829189 * frac(dot(px + 37.0, float2(0.00583715, 0.06711056))));
+  { // penumbra: la direccion de la luz se mueve dentro de un cono chico (radio ~0.021 rad)
+    float3 up = abs(L.y) < 0.95 ? float3(0, 1, 0) : float3(1, 0, 0);
+    float3 ta = normalize(cross(up, L)), tb = cross(L, ta);
+    float ang = 6.2831853 * ign2, rr = sqrt(frac(ign + 0.618034)) * 0.021;
+    L = normalize(L + (ta * cos(ang) + tb * sin(ang)) * rr);
+  }
   float csLen = 0.45;
   float bias = (0.008 + 0.0018 * zA) * (0.6 + 0.4 / max(rawNL, 0.12));
   float3 Q = Pv + L * bias;
-  float occ = 0;
-  [loop] for (int ci = 0; ci < 12; ci++) {
-    float f = (ci + ign) / 12.0;
+  float occ = 0, tPrev = 0;
+  [loop] for (int ci = 0; ci < 24; ci++) {
+    float f = (ci + ign) / 24.0;
     float t = f * f * csLen;
     float3 R = Q + L * t;
     float RzA = R.z * zSgn;
@@ -97,9 +111,19 @@ float PesTraceShadow(float3 Pv, float3 L, float rawNL, float zC, float zSgn, flo
     float dz = (R.z - zS) * zSgn;
     float thick = 0.10 + 0.25 * t + 0.0015 * RzA;
     if (dz > 0.003 + 0.0008 * RzA && dz < thick && (zC - zS) * zSgn > 0.03 + 0.002 * zA) {
-      occ = (1.0 - 0.5 * f) * saturate(dz / (0.35 * thick));
+      // biseccion: el punto exacto donde el rayo entra detras de la superficie (borde de la sombra sin escalones)
+      float ta0 = tPrev, ta1 = t, dzH = dz;
+      [unroll] for (int bi = 0; bi < 4; bi++) {
+        float tm = 0.5 * (ta0 + ta1); float3 Rm = Q + L * tm;
+        float2 sm = Rm.xy / (Rm.z * m_projectionParam.xy) + m_cameraCenterOffset.xy;
+        float dzm = (Rm.z - LinZ(sm * float2(0.5, -0.5) + 0.5)) * zSgn;
+        if (dzm > 0.003 + 0.0008 * Rm.z * zSgn) { ta1 = tm; dzH = dzm; } else ta0 = tm;
+      }
+      float fh = sqrt(saturate(ta1 / csLen));
+      occ = (1.0 - 0.5 * fh) * saturate(dzH / (0.2 * thick) + 0.35);
       break;
     }
+    tPrev = t;
   }
   float2 eM = saturate(min(uv, 1.0 - uv) * 10.0);
   return 1.0 - saturate(occ * saturate(shK) * eM.x * eM.y);
