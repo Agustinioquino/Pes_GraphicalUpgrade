@@ -241,6 +241,8 @@ void main(
     // al sol) quedan mas oscuros, con la misma fuerza de la cavidad (x17)
     float mNL = dot(r2.xyz, mLv);
     float mShape = lerp(1.0, lerp(0.45, 1.0, smoothstep(-0.25, 0.45, mNL)), saturate(mCavity * 1.2) * (mTeeth + 0.6 * mTissue));
+    mShape = 1.0;   // (04/11 b) Agustin: 'la boca sigue recibiendo la luz de forma rara': la luz del juego ya usa la normal; esta sombra
+                    // por N.L (de cuando los dientes eran planos) la duplicaba y oscurecia medio diente segun el sol
     // oclusion de la cavidad: la luz casi no entra al fondo de la boca
     float occ = 1.0 - mCavity * (0.25 * mTeeth + 0.45 * mTissue + 0.75 * mDeep) * mSunK;
     r0.xyz *= occ * mShape;
@@ -296,15 +298,16 @@ void main(
       { float tz = mTongueZ * mTissue * saturate(Q98.x);
         float lumT = dot(r0.xyz, float3(0.3, 0.59, 0.11));
         float pap = 0.9 + 0.2 * frac(sin(dot(floor(v2.xy * 900.0), float2(12.9898, 78.233))) * 43758.5453);
+        pap = 1.0;   // (04/11 b) la textura v20 ya trae papilas reales: sin el ruido en cuadraditos
         float3 tongue = lerp(r0.xyz, float3(0.95, 0.42, 0.45) * lumT * 2.0 * pap, 0.5);
         r0.xyz = lerp(r0.xyz, tongue, tz); }
     }
     // (04/11) Agustin: 'en la vista original los dientes se ven mucho mas realistas, el shader les cambia los colores demasiado'.
     // Desde la boca v20 la textura ya trae el color real del diente (esmalte, dentina, muelas): los dientes vuelven al TONO de la
     // textura y de todo lo anterior queda solo cuanta luz reciben (cavidad, sol, labio, encia, entre dientes, fondo). Sin marfil,
-    // sin dentina amarilla, sin borde azul: solo mas claro u oscuro. Encias y lengua siguen igual.
+    // sin dentina amarilla, sin borde azul: solo mas claro u oscuro. (04/11 b) Igual para encias, lengua y fondo.
     { float la = dot(mAlb, float3(0.3, 0.59, 0.11)), lr = dot(r0.xyz, float3(0.3, 0.59, 0.11));
-      r0.xyz = lerp(r0.xyz, mAlb * (lr / max(la, 1e-4)), mTeeth); }
+      r0.xyz = lerp(r0.xyz, mAlb * (lr / max(la, 1e-4)), saturate(mTeeth + mTissue + mDeep)); }   // (04/11 b) encias y lengua tambien: la textura v20 ya trae su color
   }
   r0.xyz = r0.xyz * r0.www + r3.xyz;
   r3.xyz = max(float3(9.99999975e-006,9.99999975e-006,9.99999975e-006), r0.xyz);
@@ -398,14 +401,16 @@ void main(
       // (27/10 h) la rugosidad minima sube con la varianza geometrica de la normal (bordes y dientes chicos): sin esto el brillo
       // fino del esmalte caia en 1-2 pixeles que titilaban al mover la camara (aliasing especular)
       float rAA = saturate(sqrt(mGeoVar) * 1.5);
-      o2.x = lerp(o2.x, max(0.25 + rAA, min(max(o2.x, 0.25), 0.30 + rAA)), en);   // (31/10) 0.25..0.30 codificado = rugosidad 0.28..0.4: esmalte satinado
-      o2.x = lerp(o2.x, max(0.13 + rAA, min(o2.x, 0.22 + rAA)), mTissue * saturate(Q96.z) * 0.8);
+      // (04/11 b) 'pierde detalle en la textura': el srm v20 trae la rugosidad del esmalte (corona/cuello) y de encia/lengua;
+      // antes se apretaba a un rango fijo y quedaba todo igual. Ahora solo un minimo (anti-titileo) y el resto lo decide el srm
+      o2.x = lerp(o2.x, max(o2.x, 0.20 + rAA), en);
+      o2.x = lerp(o2.x, max(o2.x, 0.13 + rAA), mTissue * saturate(Q96.z) * 0.8);
       o2.x = max(0.13, o2.x);
       // translucidez del esmalte al G-buffer (la luz de piel la usa): borde incisal translucido
       o1.z = max(o1.z, 0.000977517106 * ((uint)(saturate(mEnamelT) * 63 + 0.5) << 4));
       // v3: lengua mojada (brillo ancho) y saliva: pelicula brillante en la linea de encia y entre dientes
       { float tz = mTongueZ * mTissue * saturate(Q98.x);
-        o2.x = lerp(o2.x, max(0.13 + rAA, min(o2.x, 0.19 + rAA)), tz);
+        o2.x = lerp(o2.x, max(o2.x, 0.13 + rAA), tz);
         o2.y = saturate(o2.y + 0.08 * tz);
         float sal = saturate(Q98.w) * (mGumLine + 0.5 * mRows * mTissue);
         o2.x = lerp(o2.x, max(0.13 + rAA, min(o2.x, 0.15 + rAA)), sal);
