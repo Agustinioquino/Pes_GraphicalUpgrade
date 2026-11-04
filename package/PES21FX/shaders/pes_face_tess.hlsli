@@ -30,6 +30,9 @@
 #ifndef PES_TESS_BODY
 #define PES_TESS_BODY 0
 #endif
+#ifndef PES_TESS_ATLAS
+#define PES_TESS_ATLAS 0
+#endif
 
 Texture1D<float4> IniParams : register(t120);
 
@@ -226,6 +229,34 @@ cbuffer cVSScene : register(b2)
 
 #define PES_LERP3(F) (b.x * p[0].F + b.y * p[1].F + b.z * p[2].F)
 
+#if PES_TESS_ATLAS
+// (04/11 piel) variante del DS para el ATLAS de sombra / grosor de las cabezas (headshadow.cpp, t30): la DLL repite el dibujo de
+// la cara teselada (mismo VS y HS, mismos factores) sin PS sobre el atlas, con la caja de cada cabeza en b12 (mundo -> atlas, mismo
+// formato que el b2 de la repeticion de la pasada de sombras). La posicion teselada esta en la vista de la camara: se lleva al mundo
+// con la vista que sale de m_projectionView y m_projection de ESTE cuadro (VV = P^-1 PV, la misma cuenta de headshadow.cpp: P de
+// la forma x' = P0 x + P2 z + P3, y' = P5 y + P6 z + P7, w' = z).
+cbuffer PESAtlasBox : register(b12)
+{
+  float4x4 g_pesAtlasPV;   // mundo -> recorte del cuadrante del atlas
+}
+float4 PesAtlasClip(float3 pv)
+{
+  float4x4 PV = g_vsScene.m_projectionView, P = g_vsScene.m_projection;
+  float4 cw = float4(PV[0][3], PV[1][3], PV[2][3], PV[3][3]);                       // fila w (= z de la vista)
+  float4 cx = (float4(PV[0][0], PV[1][0], PV[2][0], PV[3][0]) - P[2][0] * cw - float4(0, 0, 0, P[3][0])) / (abs(P[0][0]) > 1e-6 ? P[0][0] : 1e-6);
+  float4 cy = (float4(PV[0][1], PV[1][1], PV[2][1], PV[3][1]) - P[2][1] * cw - float4(0, 0, 0, P[3][1])) / (abs(P[1][1]) > 1e-6 ? P[1][1] : 1e-6);
+  float3x3 R = float3x3(cx.xyz, cy.xyz, cw.xyz);
+  float3 q = pv - float3(cx.w, cy.w, cw.w);
+  // inversa por la adjunta (R puede ser un reflejo: determinante negativo)
+  float3 c0 = cross(R[1], R[2]), c1 = cross(R[2], R[0]), c2 = cross(R[0], R[1]);
+  float det = dot(R[0], c0); det = abs(det) > 1e-8 ? det : 1e-8;
+  float3 w = (c0 * q.x + c1 * q.y + c2 * q.z) / det;
+  float4 c = mul(float4(w, 1.0), g_pesAtlasPV);
+  c.z += 9.99999975e-005 * c.w;   // el mismo sesgo que el VS de la pasada de sombras del juego (81b5930d: o0.z + 1e-4)
+  return c;
+}
+#endif
+
 // (04/11 c) quinta textura de la cara (la misma del PS de la piel, la DLL la copia al DS)
 Texture2D<float4> pesFaceA : register(t23);
 Texture2D<float4> pesFaceB : register(t24);
@@ -324,7 +355,11 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
   if (IniParams.Load(int2(360, 0)).x > 0.5) d += normalize(b.x * N0 + b.y * N1 + b.z * N2) * (0.01 * min(seam, seamR));
   float3 pv = pl + d;
 
+#if PES_TESS_ATLAS
+  float4 clip = PesAtlasClip(pv);   // (04/11 piel) cara teselada en el atlas de las cabezas
+#else
   float4 clip = mul(float4(pv, 1.0), g_vsScene.m_projection);
+#endif
   o.o0 = clip;
   o.o1 = PES_LERP3(o1); o.o1.w = p[0].o1.w;
   o.o2 = PES_LERP3(o2);

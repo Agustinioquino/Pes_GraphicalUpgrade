@@ -40,7 +40,7 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   // con cintas de ~1 px el descarte tiene que ser suave: solo el borde exterior y la punta
   if (P75.z < 0.5 && edge < 0.08 + 0.35 * t * t) discard;
   // color: la raiz mas oscura, la punta un poco mas clara y calida
-  float3 col = lerp(i.col, i.col2, t) * (0.85 + 0.25 * t);   // (04/11 b) antes 0.55 en la raiz: salian negras como alambre
+  float3 col = lerp(i.col, i.col2, t);   // (04/11 d) el color del mapa de la ceja tal cual (antes se oscurecia / aclaraba aca)   // (04/11 b) antes 0.55 en la raiz: salian negras como alambre
   if (P75.z > 0.5) col = float3(1, 0, 1);   // diagnosticos 1 y 3: magenta
   o0 = float4(saturate(col), 1.0);
   // normal + translucidez (hebra: 0.15) empaquetadas como en el shader de cara

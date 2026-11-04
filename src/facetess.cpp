@@ -17,6 +17,7 @@ static std::mutex s_mx;
 static bool s_tried = false;
 static ID3D11HullShader* s_hs[3][2] = {};     // [variante del VS: 0 cabeza, 1 cara animada, 2 cuerpo][orientacion: 0 cw, 1 ccw]
 static ID3D11DomainShader* s_ds[3] = {};
+static ID3D11DomainShader* s_dsAtlas[2] = {};   // (04/11 piel) cara teselada en el atlas de las cabezas (headshadow.cpp)
 static std::map<uint64_t, ID3D11Buffer*> s_vpCB;   // cbuffer b13 del HS por tamano de viewport (inmutables, pocos)
 static std::atomic<int> s_draws{0}, s_skipTopo{0}, s_noShader{0}, s_skipFar{0}, s_drawsBody{0};
 static std::atomic<int> s_lastVpW{0}, s_lastVpH{0};
@@ -35,6 +36,10 @@ static void Ensure() {
         for (int w = 0; w < 2; w++) if (ID3DBlob* b = CompileNamedShader(hs[v][w], "hs_5_0")) { if (SUCCEEDED(g_dev.dev->CreateHullShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_hs[v][w]))) ok++; b->Release(); }
         if (ID3DBlob* b = CompileNamedShader(ds[v], "ds_5_0")) { if (SUCCEEDED(g_dev.dev->CreateDomainShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_ds[v]))) ok++; b->Release(); }
     }
+    const wchar_t* dsA[2] = { L"pes_face_tess_a_atlas_ds.hlsl", L"pes_face_tess_b_atlas_ds.hlsl" };
+    int okA = 0;
+    for (int v = 0; v < 2; v++) if (ID3DBlob* b = CompileNamedShader(dsA[v], "ds_5_0")) { if (SUCCEEDED(g_dev.dev->CreateDomainShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_dsAtlas[v]))) okA++; b->Release(); }
+    Log("teselacion de caras: DS del atlas de las cabezas %d de 2", okA);
     if (!s_samp) { D3D11_SAMPLER_DESC sd{}; sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR; sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP; sd.MaxLOD = D3D11_FLOAT32_MAX; g_dev.dev->CreateSamplerState(&sd, &s_samp); }
     Log("teselacion de caras: shaders %d de 9 %s (6 de la cara + 3 del cuerpo)", ok, ok == 9 ? "listos" : "(faltan: ver errores de compilacion)");
 }
@@ -44,6 +49,7 @@ void FaceTessReloadShaders() {
     // los objetos viejos no se liberan: un dibujo de otro hilo puede tenerlos puestos en este momento (igual que los reemplazos)
     for (auto& a : s_hs) for (auto& h : a) h = nullptr;
     for (auto& d : s_ds) d = nullptr;
+    for (auto& d : s_dsAtlas) d = nullptr;
     s_tried = false;
 }
 
@@ -58,6 +64,11 @@ static ID3D11Buffer* VpCB(float w, float h) {
     D3D11_SUBRESOURCE_DATA s{}; s.pSysMem = v;
     ID3D11Buffer* b = nullptr; if (FAILED(g_dev.dev->CreateBuffer(&d, &s, &b))) return nullptr;
     s_vpCB[key] = b; return b;
+}
+
+ID3D11DomainShader* FaceTessAtlasDS(int v) {
+    if (v < 0 || v > 1) return nullptr;
+    std::lock_guard<std::mutex> lk(s_mx); Ensure(); return s_dsAtlas[v];
 }
 
 bool FaceTessBegin(ID3D11DeviceContext* c, uint64_t vsHash, ID3D11ShaderResourceView* seam, ID3D11ShaderResourceView* params, FaceTessScope& s) {
@@ -94,7 +105,7 @@ bool FaceTessBegin(ID3D11DeviceContext* c, uint64_t vsHash, ID3D11ShaderResource
       if (fab[0] && fab[1]) { c->DSSetShaderResources(23, 2, fab); if (s_samp) c->DSSetSamplers(0, 1, &s_samp); s.relief = true; s_relief.fetch_add(1, std::memory_order_relaxed); }
       for (auto* v : fab) if (v) v->Release(); }
     c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
-    s.on = true; s.topo = topo;
+    s.on = true; s.topo = topo; s.v = v;
     (v == 2 ? s_drawsBody : s_draws).fetch_add(1, std::memory_order_relaxed);
     return true;
 }
