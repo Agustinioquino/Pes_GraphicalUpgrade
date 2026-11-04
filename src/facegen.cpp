@@ -419,6 +419,7 @@ struct BrowSaved {
     ID3D11DepthStencilState* dss = nullptr; UINT ref = 0;
     ID3D11Buffer* gsCB[12] = {}; ID3D11ShaderResourceView* gsT0 = nullptr; ID3D11ShaderResourceView* gsT26 = nullptr; ID3D11ShaderResourceView* gsT27 = nullptr; ID3D11ShaderResourceView* gsT120 = nullptr;
     ID3D11SamplerState* gsS0 = nullptr; ID3D11Buffer* psCB11 = nullptr; ID3D11ShaderResourceView* psT120 = nullptr;
+    ID3D11ShaderResourceView* gsT23[2] = {}; ID3D11ShaderResourceView* gsT121 = nullptr;   // (04/11 e) relieve + aviso de teselacion
 };
 static thread_local BrowSaved t_bs;
 bool BrowWanted(const FaceGenExtra& ex, uint64_t vsHash) {
@@ -439,6 +440,7 @@ bool BrowStrandsBegin(ID3D11DeviceContext* c, const FaceGenExtra* ex, uint64_t v
     c->IAGetPrimitiveTopology(&s.topo); c->RSGetState(&s.rs); c->OMGetDepthStencilState(&s.dss, &s.ref);
     c->GSGetConstantBuffers(0, 12, s.gsCB); c->GSGetShaderResources(0, 1, &s.gsT0); c->GSGetShaderResources(26, 1, &s.gsT26); c->GSGetShaderResources(27, 1, &s.gsT27); c->GSGetShaderResources(120, 1, &s.gsT120);
     c->GSGetSamplers(0, 1, &s.gsS0); c->PSGetConstantBuffers(11, 1, &s.psCB11); c->PSGetShaderResources(120, 1, &s.psT120);
+    c->GSGetShaderResources(23, 2, s.gsT23); c->GSGetShaderResources(121, 1, &s.gsT121);
     // profundidad: la cara se dibuja con "igual" (pre-pasada) y eso descartaria todas las hebras -> "menor o igual"
     // (o "mayor o igual" si el juego usa profundidad invertida), escribiendo profundidad
     D3D11_DEPTH_STENCIL_DESC dd{};
@@ -474,6 +476,15 @@ bool BrowStrandsBegin(ID3D11DeviceContext* c, const FaceGenExtra* ex, uint64_t v
     ID3D11ShaderResourceView* bm = ex->browMap; c->GSSetShaderResources(27, 1, &bm);
     ID3D11ShaderResourceView* prm = g_dev.paramSRV; c->GSSetShaderResources(120, 1, &prm); c->PSSetShaderResources(120, 1, &prm);
     c->GSSetSamplers(0, 1, &s_samp);
+    // (04/11 e, Agustin: "las cejas no salen desde el modelo del rostro o se ven separadas") si este dibujo de la cara esta teselado
+    // (hay DS puesto), el GS repite el corrimiento del DS en la raiz: t121 = parametros (solo como aviso "teselado"), t23 / t24 =
+    // las texturas del relieve que la teselacion le dio al DS. Sin teselacion t121 queda vacio y la raiz va sobre el triangulo.
+    {
+        ID3D11ShaderResourceView* rel[2] = {}; ID3D11ShaderResourceView* on = nullptr;
+        if (s.ds) { c->DSGetShaderResources(23, 2, rel); on = g_dev.paramSRV; }
+        c->GSSetShaderResources(23, 2, rel); c->GSSetShaderResources(121, 1, &on);
+        for (auto* r : rel) if (r) r->Release();
+    }
     c->RSSetState(s_browRS);   // sin culling (cintas vistas de ambos lados)
     if (useDSS) c->OMSetDepthStencilState(useDSS, s.ref);
     s_stDraw++;
@@ -486,6 +497,8 @@ void BrowStrandsEnd(ID3D11DeviceContext* c) {
     c->IASetPrimitiveTopology(s.topo); c->RSSetState(s.rs); c->OMSetDepthStencilState(s.dss, s.ref);
     c->GSSetConstantBuffers(0, 12, s.gsCB); c->GSSetShaderResources(0, 1, &s.gsT0); c->GSSetShaderResources(26, 1, &s.gsT26); c->GSSetShaderResources(27, 1, &s.gsT27); c->GSSetShaderResources(120, 1, &s.gsT120);
     c->GSSetSamplers(0, 1, &s.gsS0); c->PSSetConstantBuffers(11, 1, &s.psCB11); c->PSSetShaderResources(120, 1, &s.psT120);
+    c->GSSetShaderResources(23, 2, s.gsT23); c->GSSetShaderResources(121, 1, &s.gsT121);
+    for (auto* r : s.gsT23) if (r) r->Release(); if (s.gsT121) s.gsT121->Release();
     if (s.vs) s.vs->Release(); if (s.ps) s.ps->Release(); if (s.gs) s.gs->Release(); if (s.hs) s.hs->Release(); if (s.ds) s.ds->Release();
     if (s.rs) s.rs->Release(); if (s.dss) s.dss->Release();
     for (auto* b : s.gsCB) if (b) b->Release();
