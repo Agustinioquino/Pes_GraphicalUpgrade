@@ -74,11 +74,17 @@ def radius_at(rb, th):
 # Partes (angulo th alrededor de la muneca: 0 = centro de la palma, +pi/2 = lado del pulgar, -pi/2 = menique).
 # Abajo (palma), como en la foto: la trenza termina del lado del menique en una funda negra con un aro dorado y una
 # punta de cuero suelta; de ahi un cordon de cuero fino cruza la palma hasta el nudo del lado del pulgar.
-TH_SLEEVE = (-0.50, -0.26)        # funda negra
-TH_CORD = (-0.30, 0.86)           # cordon de cuero
-TH_KNOT = (0.66, 0.95)            # nudo
-TH_BRAID = (0.90, 2 * np.pi - 0.46)
-TH_RING = -0.22
+# Orden desde la punta de la trenza (lado menique) como en la foto: vuelta de cuero (de ahi sale la punta suelta hacia la mano),
+# aro dorado, funda negra de nylon que se afina, mechon deshilachado, cordon de cuero chato que cruza la palma, nudo negro
+# con mechones crema y una lengueta de cuero chata que entra en la otra punta de la trenza.
+TH_WRAP = (-0.50, -0.445)          # vuelta de cuero
+TH_RING = (-0.447, -0.425)        # aro dorado
+TH_SLEEVE = (-0.42, -0.12)        # funda negra
+TH_TUFT = (-0.16, -0.07)          # mechon deshilachado al final de la funda
+TH_CORD = (-0.10, 0.62)           # cordon de cuero
+TH_KNOT = (0.55, 0.78)            # nudo
+TH_TAB = (0.74, 0.99)             # lengueta de cuero
+TH_BRAID = (0.95, 2 * np.pi - 0.46)
 # zonas de la textura (u0, v0, u1, v1): arriba la trenza, abajo cuero / funda / nudo / dorado
 UV_BRAID = (0.0, 0.0, 1.0, 0.5)
 UV_CORD = (0.0, 0.5, 0.5, 1.0)
@@ -134,13 +140,13 @@ def finish(part, rect, s, t):
     part['flip'] = flip
     return part
 
-def band(X, th0, th1, nu, nv, hw, ht, lift, rect, p=0.55, taper=0.0):
+def band(X, th0, th1, nu, nv, hw, ht, lift, rect, p=0.55, taper=0.0, smin=0.82):
     """tira alrededor de la muneca de th0 a th1: seccion superelipse (hw a lo largo del brazo, ht radial)"""
     th = np.linspace(th0, th1, nu + 1); ph = np.linspace(0, 2 * np.pi, nv + 1)
     TH_, PH_ = np.meshgrid(th, ph, indexing='ij')
     sc = np.ones_like(TH_)
     if taper:
-        f = np.minimum(TH_ - th0, th1 - TH_) / taper; sc = 0.82 + 0.18 * np.clip(f, 0, 1)
+        f = np.minimum(TH_ - th0, th1 - TH_) / taper; sc = smin + (1 - smin) * np.sqrt(np.clip(f, 0, 1))
     R0 = X.skin(TH_) + GAP + ht + lift
     a = hw * sc * se(np.cos(PH_), p); rr = R0 + ht * sc * se(np.sin(PH_), p)
     P = X.c + X.radial(TH_) * rr[..., None] + X.ax * a[..., None]
@@ -150,54 +156,67 @@ def band(X, th0, th1, nu, nv, hw, ht, lift, rect, p=0.55, taper=0.0):
     part['len'] = float(np.mean(X.skin(th)) * (th1 - th0))
     return finish(part, rect, s_, t_)
 
-def tube(path, rad, nv, rect, cap_end=False, lumpy=None):
-    """tubo redondo a lo largo de path (n, 3) con radio rad (n,)"""
+def tube(path, rad, nv, rect, cap_end=False, lumpy=None, nref=None, flat=1.0):
+    """tubo a lo largo de path (n, 3) con radio rad (n,); nref = direccion "afuera" de la seccion (se aplasta con flat)"""
     n = len(path)
     Tg = np.gradient(path, axis=0); Tg /= np.linalg.norm(Tg, axis=1, keepdims=True)
-    ref = np.array([0.3, 0.9, 0.2]); B = np.cross(Tg, ref); B /= np.linalg.norm(B, axis=1, keepdims=True)
-    Nn = np.cross(B, Tg)
+    if nref is None: nref = np.cross(np.cross(Tg, np.array([0.3, 0.9, 0.2])), Tg)
+    Nn = nref - Tg * (nref * Tg).sum(1, keepdims=True); Nn /= np.linalg.norm(Nn, axis=1, keepdims=True)
+    B = np.cross(Tg, Nn)
     ph = np.linspace(0, 2 * np.pi, nv + 1)
     R = rad[:, None] * np.ones((1, nv + 1))
     if lumpy is not None: R = R * lumpy
     if cap_end: R[-1] = 0
-    P = path[:, None, :] + (np.cos(ph)[None, :, None] * Nn[:, None, :] + np.sin(ph)[None, :, None] * B[:, None, :]) * R[..., None]
+    P = path[:, None, :] + (np.cos(ph)[None, :, None] * Nn[:, None, :] * flat + np.sin(ph)[None, :, None] * B[:, None, :]) * R[..., None]
     part = grid_part(P, path, (None, None))
     s_ = np.repeat(np.linspace(0, 1, n)[:, None], nv + 1, 1); t_ = np.repeat(ph[None, :] / (2 * np.pi), n, 0)
     return finish(part, rect, s_, t_)
 
+def blob(X, th0, th1, n, rmax, rect, seed, lift=0.0):
+    """bola irregular (nudo / mechon) a lo largo de la muneca"""
+    th = np.linspace(th0, th1, n)
+    f = (th - th0) / (th1 - th0)
+    rk = 0.0004 + rmax * np.sin(np.pi * np.clip(f, 0, 1)) ** 0.55
+    path = X.c + X.radial(th) * (X.skin(th) + GAP + rk * 0.85 + lift)[:, None]
+    rng = np.random.default_rng(seed)
+    lump = 1 + 0.16 * np.sin(np.linspace(0, 6 * np.pi, 17) + seed)[None, :] * np.sin(np.linspace(0, 9, n))[:, None] \
+        + 0.10 * rng.standard_normal((n, 17))
+    lump[:, -1] = lump[:, 0]
+    return tube(path, rk, 16, rect, lumpy=lump, nref=X.radial(th))
+
 def build_mesh(c, ax, e1, e2, rb):
     X = Ctx(c, ax, e1, e2, rb)
     parts = []
-    braid = band(X, TH_BRAID[0], TH_BRAID[1], 150, NV, HALF_W, HALF_T, 0.0, UV_BRAID)
+    braid = band(X, TH_BRAID[0], TH_BRAID[1], 150, NV, HALF_W, HALF_T, 0.0, UV_BRAID, taper=0.05, smin=0.35)   # puntas redondeadas
     parts.append(braid)
-    parts.append(band(X, TH_SLEEVE[0], TH_SLEEVE[1], 14, NV, HALF_W + 0.0007, HALF_T + 0.0007, 0.0, UV_SLEEVE, p=0.5, taper=0.06))
-    # cordon de cuero: mas cerca de la piel, 1.1 mm de radio, con una leve curva hacia la mano en el medio
+    hw, ht = HALF_W, HALF_T
+    # vuelta de cuero sobre la punta de la trenza, aro dorado y funda negra que se afina hacia el cordon
+    parts.append(band(X, TH_WRAP[0], TH_WRAP[1], 8, NV, hw + 0.0012, ht + 0.0012, 0.0, UV_CORD, p=0.6))
+    parts.append(band(X, TH_RING[0], TH_RING[1], 4, NV, hw + 0.0009, ht + 0.0009, 0.0, UV_GOLD, p=0.6))
+    th = np.linspace(TH_SLEEVE[0], TH_SLEEVE[1], 21); ph = np.linspace(0, 2 * np.pi, NV + 1)
+    TH_, PH_ = np.meshgrid(th, ph, indexing='ij')
+    f = (TH_ - TH_SLEEVE[0]) / (TH_SLEEVE[1] - TH_SLEEVE[0])
+    sw = (hw + 0.0006) * (1 - 0.45 * f ** 1.3); st = (ht + 0.0006) * (1 - 0.35 * f ** 1.3)
+    R0 = X.skin(TH_) + GAP + st
+    P = X.c + X.radial(TH_) * (R0 + st * se(np.sin(PH_), 0.6))[..., None] + X.ax * (sw * se(np.cos(PH_), 0.6))[..., None]
+    C = X.c + X.radial(th) * (X.skin(th) + GAP + st[:, 0])[:, None]
+    parts.append(finish(grid_part(P, C, (None, None)), UV_SLEEVE, f, PH_ / (2 * np.pi)))
+    parts.append(blob(X, TH_TUFT[0], TH_TUFT[1], 14, 0.0026, UV_KNOT, 3))
+    # punta suelta: sale de la vuelta de cuero (borde del lado de la mano) y se levanta hacia la mano (16 mm)
+    t = np.linspace(0, 1, 30)
+    th0 = -0.465; base = X.c + X.radial(th0) * (X.skin(th0) + GAP + 1.6 * ht) + X.ax * (hw + 0.0008)
+    path = base[None, :] + X.ax[None, :] * (0.0150 * t)[:, None] + X.radial(th0)[None, :] * (0.0050 * t ** 1.4)[:, None] \
+        - X.tangent(th0)[None, :] * (0.0030 * t ** 1.2)[:, None]
+    parts.append(tube(path, 0.0011 * (1 - 0.15 * t), 12, UV_CORD, cap_end=True, nref=np.repeat(X.radial(th0)[None], 30, 0), flat=0.75))
+    # cordon de cuero chato (1.7 x 1.1 mm) que cruza la palma, apenas curvado hacia la mano
     th = np.linspace(TH_CORD[0], TH_CORD[1], 64)
     sag = np.sin(np.pi * (th - TH_CORD[0]) / (TH_CORD[1] - TH_CORD[0]))
-    rc = 0.0011
-    path = X.c + X.radial(th) * (X.skin(th) + GAP * 0.6 + rc)[:, None] + X.ax * (0.0012 * sag)[:, None]
-    parts.append(tube(path, np.full(len(th), rc), 12, UV_CORD))
-    # nudo: bola irregular sobre el cordon, del lado del pulgar
-    th = np.linspace(TH_KNOT[0], TH_KNOT[1], 22)
-    f = (th - TH_KNOT[0]) / (TH_KNOT[1] - TH_KNOT[0])
-    rk = 0.0012 + 0.0024 * np.sin(np.pi * np.clip(f, 0, 1)) ** 0.6
-    path = X.c + X.radial(th) * (X.skin(th) + GAP + rk * 0.9)[:, None]
-    rng = np.random.default_rng(7)
-    lump = 1 + 0.18 * np.sin(np.linspace(0, 6 * np.pi, 17))[None, :] * np.sin(np.linspace(0, 9, 22))[:, None] + 0.06 * rng.standard_normal((22, 17))
-    lump[:, -1] = lump[:, 0]
-    parts.append(tube(path, rk, 16, UV_KNOT, lumpy=lump))
-    # punta suelta del cuero: sale de la funda hacia la mano, despegandose de la piel (13 mm)
-    t = np.linspace(0, 1, 26)
-    th0 = -0.36; base = X.c + X.radial(th0) * (X.skin(th0) + GAP + 2 * HALF_T + 0.0004)
-    path = base[None, :] + X.ax[None, :] * (0.0125 * t)[:, None] + X.radial(th0)[None, :] * (0.0035 * t ** 1.6)[:, None] \
-        + X.tangent(th0)[None, :] * (0.0015 * t)[:, None]
-    parts.append(tube(path, 0.0010 * (1 - 0.25 * t), 12, UV_CORD, cap_end=True))
-    # aro dorado alrededor del cordon, junto a la funda
-    cr = X.c + X.radial(TH_RING) * (X.skin(TH_RING) + GAP * 0.6 + rc)
-    tg = X.tangent(TH_RING); n1 = X.radial(TH_RING); n2 = np.cross(tg, n1)
-    ph = np.linspace(0, 2 * np.pi, 25)
-    ring = cr + (np.cos(ph)[:, None] * n1 + np.sin(ph)[:, None] * n2) * 0.0016
-    parts.append(tube(ring, np.full(25, 0.00045), 8, UV_GOLD))
+    rc = 0.00085
+    path = X.c + X.radial(th) * (X.skin(th) + GAP * 0.5 + rc * 0.7)[:, None] + X.ax * (0.0010 * sag)[:, None]
+    parts.append(tube(path, np.full(len(th), rc), 12, UV_CORD, nref=X.radial(th), flat=0.65))
+    # nudo negro con mechones crema y lengueta de cuero chata hasta la trenza
+    parts.append(blob(X, TH_KNOT[0], TH_KNOT[1], 22, 0.0030, UV_KNOT, 7))
+    parts.append(band(X, TH_TAB[0], TH_TAB[1], 14, 12, 0.0019, 0.0006, 0.0003, UV_CORD, p=0.7))
     # junta todo
     P = []; N = []; T = []; U = []; V = []; Fc = []; off = 0
     for q in parts:
@@ -330,8 +349,8 @@ def braid_tex(flipv, Lc):
     nz = (nz + np.roll(nz, 1, 0) + np.roll(nz, -1, 0) + np.roll(nz, 1, 1) + np.roll(nz, -1, 1)) / 5 * 1.6
     H = H + 0.03 * nz
     # color (sRGB 0..1)
-    dark = np.array([52, 30, 14]) / 255; dark_hi = np.array([86, 52, 26]) / 255; crev = np.array([14, 6, 3]) / 255
-    cream = np.array([206, 168, 128]) / 255; caramel = np.array([142, 98, 58]) / 255
+    dark = np.array([72, 36, 24]) / 255; dark_hi = np.array([116, 62, 42]) / 255; crev = np.array([20, 9, 5]) / 255
+    cream = np.array([226, 208, 178]) / 255; caramel = np.array([186, 136, 76]) / 255
     cord_col = crev + (dark - crev) * np.clip(ridge * 1.4, 0, 1)[..., None] + (dark_hi - dark) * (ridge ** 4 * fib)[..., None]
     ovc = np.where(col_id[..., None] > 0.5, caramel, cream)
     ov_col = ovc * (0.62 + 0.38 * best_h[..., None] ** 0.5) * (0.92 + 0.08 * ov_fib[..., None])
@@ -357,21 +376,25 @@ def zone_tex(kind, w, h, rng):
     nz = rng.standard_normal((h, w)); nz = (nz + np.roll(nz, 1, 0) + np.roll(nz, -1, 0) + np.roll(nz, 1, 1) + np.roll(nz, -1, 1)) / 5 * 1.6
     if kind == 'cord':        # cuero marron rojizo, liso con poros finos y un poco de brillo
         Hh = 0.04 * nz + 0.03 * np.sin(2 * np.pi * (U * 40 + V * 3))
-        base = np.array([96, 42, 30]) / 255
+        base = np.array([112, 48, 40]) / 255
         col = base * (1 + 0.10 * nz[..., None]) * (0.85 + 0.15 * np.sin(np.pi * V)[..., None])
         spec = 0.55 + 0.1 * nz; rough = 0.48 - 0.05 * nz; amp = 0.3
     elif kind == 'sleeve':    # cinta negra enrollada (vueltas diagonales) con pelusa marron en los bordes
-        q = U * 9 + V * 1.5; fq = q - np.floor(q)
-        Hh = np.sin(np.pi * fq) ** 0.8 + 0.05 * nz
-        col = np.array([20, 20, 22]) / 255 * (0.6 + 0.6 * Hh[..., None])
+        wv = np.sin(2 * np.pi * U * 90) * np.sin(2 * np.pi * V * 70)     # tejido fino de nylon
+        q = U * 2.5 + V * 0.8; fq = q - np.floor(q)                       # pliegues suaves de la cinta
+        Hh = 0.25 * wv + 0.35 * np.sin(np.pi * fq) + 0.05 * nz
+        col = np.array([34, 35, 38]) / 255 * (0.75 + 0.35 * Hh[..., None])
         edge = np.clip((np.abs(U - 0.5) - 0.40) * 12, 0, 1)
         col = col * (1 - edge[..., None]) + np.array([70, 45, 30]) / 255 * edge[..., None] * (0.7 + 0.3 * nz[..., None])
         spec = 0.45 + 0.25 * Hh; rough = 0.62 - 0.15 * Hh; amp = 0.6
     elif kind == 'knot':      # nudo: cordon oscuro con mechones crema
         q = U * 6 + V * 4; q2 = U * 4 - V * 5
         Hh = 0.5 * np.sin(np.pi * (q - np.floor(q))) + 0.5 * np.sin(np.pi * (q2 - np.floor(q2))) + 0.08 * nz
-        tuft = (np.sin(2 * np.pi * (U * 3.3 + 0.3)) * np.sin(2 * np.pi * (V * 2.2)) + 0.25 * nz) > 0.55
-        col = np.where(tuft[..., None], np.array([205, 185, 160]) / 255, np.array([38, 22, 14]) / 255) * (0.7 + 0.4 * Hh[..., None])
+        tv = np.sin(2 * np.pi * (U * 2.3 + 0.3)) * np.sin(2 * np.pi * (V * 2.0)) + 0.35 * nz
+        tuft = tv > 0.45; brn = (tv > 0.15) & ~tuft
+        col = np.where(tuft[..., None], np.array([222, 206, 182]) / 255,
+                       np.where(brn[..., None], np.array([92, 50, 34]) / 255, np.array([26, 20, 18]) / 255))
+        col = col * (0.7 + 0.4 * Hh[..., None])
         spec = 0.35 + 0.2 * Hh; rough = 0.80 - 0.15 * Hh; amp = 0.8
     else:                     # dorado
         Hh = 0.02 * nz
