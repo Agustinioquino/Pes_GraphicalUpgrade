@@ -522,13 +522,11 @@ static bool ReadBase(Skel& S, int d, Xf& x) {
     // y saltaba al cuadro siguiente. Ahora esa base se lleva a la cabeza de este cuadro (lo que se guarda sigue siendo lo del juego)
     if (d >= D_LID_TL && d <= D_LID_BR && S.wHave[d] && !S.fresh[d] && S.bHave[d] && S.ahFrame == s_frame.load(std::memory_order_relaxed)) {
         float ic[4], D[4]; QConj(S.bHr[d], ic); QMul(S.ahr, ic, D);
-        if (D[3] < 0.9990f && D[3] > -0.9990f && fabsf(D[3]) > 0.94f) {   // entre 0.08 y 40 grados de giro de la cabeza: si no, se deja
+        if (fabsf(D[3]) > 0.94f) {   // hasta 40 grados de giro de la cabeza (mas = lectura rara o cambio de cara: se deja)
             float nq[4]; QMul(D, x.q, nq); memcpy(x.q, nq, sizeof nq);
             const float v[3] = { x.t[0] - S.bHc[d][0], x.t[1] - S.bHc[d][1], x.t[2] - S.bHc[d][2] }; float r[3]; QRot(D, v, r);
             for (int k = 0; k < 3; k++) x.t[k] = S.ahc[k] + r[k];
             s_lidHeadFix.fetch_add(1, std::memory_order_relaxed);
-        } else if (fabsf(S.ahc[0] - S.bHc[d][0]) + fabsf(S.ahc[1] - S.bHc[d][1]) + fabsf(S.ahc[2] - S.bHc[d][2]) < 0.05f) {
-            for (int k = 0; k < 3; k++) x.t[k] += S.ahc[k] - S.bHc[d][k];   // sin giro: solo lo que se corrio la cabeza
         }
     }
     return true;
