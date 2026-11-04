@@ -7,6 +7,8 @@ La DLL (caras_hd.cpp) las carga sola: 2048 para todas las caras, 4096 para las c
 
 Como reescala cada una:
   bsm (color de la piel, face_bsm): IA (4xNomos8kDAT por defecto). El alfa va aparte, sin IA (Lanczos + borde nitido).
+  pelo y barba (ids que empiezan con 'p', mismas 4 texturas): color con la IA; el ALFA tambien pasa por la IA pero solo
+             aporta el borde fino de cada mechon: la cobertura (el promedio) queda la del original, el pelo no engorda ni se afina.
   srm / trm: son datos, no fotos. Lanczos para los valores + solo el borde fino de la IA canal por canal, asi el promedio
              de cada zona queda igual al original (no cambia el brillo / la translucidez, solo se afila).
   nrm (normal): sin IA. Lanczos + renormalizar en cada mip (el detalle fino lo ponen los poros del mod).
@@ -14,6 +16,7 @@ Nunca toca la boca: solo lee los archivos de originales\\ (texturas de la piel d
 
 Uso (con el juego cerrado si se usa la GPU):
   python caras_hd.py "D:\\SteamLibrary\\steamapps\\common\\eFootball PES 2021\\PES21FX\\caras_hd" --modelo 4xNomos8kDAT.pth
+  (--solo acepta varios ids separados por coma, p.ej. --solo 966b8f46d9e7,p1234abcd5678)
   opciones: --solo <id> (una cara), --rehacer (pisar las ya hechas), --sin-ia (todo Lanczos, para comparar), --tile 256
 Necesita: pip install numpy pillow etcpak texture2ddecoder  (+ torch y spandrel para la IA; con CUDA va en segundos)
 """
@@ -250,7 +253,9 @@ def process(root, fid, ia, rehacer):
         t = time.time()
         x = a.astype(np.float32) / 255
         if kind == 'bsm':
-            big = np.concatenate([up_rgb(x[..., :3], 4096, ia), up_alpha(x[..., 3:], 4096)], -1)
+            # pelo / barba (id 'p...'): el alfa son los mechones -> tambien con la IA, pero conservando la cobertura de Lanczos
+            alpha = up_data(x[..., 3:], 4096, ia) if fid.startswith('p') else up_alpha(x[..., 3:], 4096)
+            big = np.concatenate([up_rgb(x[..., :3], 4096, ia), alpha], -1)
         elif kind == 'nrm':
             big = lanczos(x, 4096)
         else:
@@ -274,7 +279,7 @@ def main():
     od = os.path.join(o.carpeta, 'originales')
     ids = sorted({f.split('_')[0] for f in os.listdir(od) if f.endswith('.dds')})
     if o.solo:
-        ids = [i for i in ids if i == o.solo]
+        ids = [i for i in ids if i in o.solo.split(',')]
     print('%d caras en %s' % (len(ids), od))
     ia = None if o.sin_ia else Ia(o.modelo, o.tile)
     for i in ids:
