@@ -109,6 +109,8 @@ PesTessConst PesTessPatch(InputPatch<PesTessVS, 3> p)
   if (dmin > U.x) ok = false;
   // los tres con peso 0 (triangulo entero en una costura): se queda como esta
   if (p[0].pV.w + p[1].pV.w + p[2].pV.w <= 0.0) ok = false;
+  // (04/11 f) los tres puntos por debajo del collar del torso (reposo y < 1.53): nada que dividir (el DS apaga todo ahi)
+  if (max(p[0].pR.y, max(p[1].pR.y, p[2].pR.y)) < 1.53) ok = false;
   if (ok) {
     float2 s0 = p[0].o0.xy / p[0].o0.w * 0.5 * g_pesTessVp.xy;
     float2 s1 = p[1].o0.xy / p[1].o0.w * 0.5 * g_pesTessVp.xy;
@@ -212,6 +214,11 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
             + b.y * (pl - dot(pl - P1, N1) * N1)
             + b.z * (pl - dot(pl - P2, N2) * N2);
   float seam = saturate(b.x * p[0].pV.w + b.y * p[1].pV.w + b.z * p[2].pV.w);   // 0 en las costuras / bordes de la pieza
+  // (04/11 f, Agustin: "en el cuello a veces lo rompe, que se desactive en la parte baja del cuello cerca del collar") el anillo
+  // del collar del torso esta en y 1.51..1.56 del reposo (pes_collar.hlsli); de ahi hasta z360 cm mas arriba (defecto 6, hasta la
+  // base del menton en 1.58) el corrimiento, el relieve y la inclinacion de la normal se apagan en rampa; el torso no se tesela.
+  { float nh = clamp(IniParams.Load(int2(360, 0)).z, 0.0, 15.0) * 0.01;
+    seam *= smoothstep(1.53, 1.53 + max(nh, 0.01), PES_LERP3(pR).y); }
   float dist = length(pl);
   float fade = 1.0 - smoothstep(U.x - max(U.y, 0.01), U.x, dist);
   float3 d = (pp - pl) * (saturate(T.y) * seam * fade * (T.x > 0.5 ? 1.0 : 0.0));
