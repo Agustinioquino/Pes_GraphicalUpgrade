@@ -166,6 +166,9 @@ static const PoseOff kPose[] = {
     {  9, { 0,  0.0010f, 0 },            {  0.0004f,  0.0008f, 0 },        { 0, 0, 0 } },                    // lip_t_l
     { 10, { 0,  0.0008f, 0 },            { 0, 0.0004f, 0 },                { 0, 0, 0 } },                    // lip_t_c
     { 11, { 0,  0.0010f, 0 },            { -0.0004f,  0.0008f, 0 },        { 0, 0, 0 } },                    // lip_t_r
+    {  3, { 0, 0.0006f, 0.0003f },       { 0, 0, 0 },                      { 0, -0.0005f, 0 } },             // lip_b_c: enojo = labios apretados
+    {  4, { 0, 0.0008f, 0.0003f },       { 0, 0, 0 },                      { 0, -0.0006f, 0 } },             // doublechin: enojo = menton tenso
+    { 13, { 0, 0.0008f, -0.0002f },      { 0, 0.0004f, 0 },                { 0, 0, 0 } },                    // nose: enojo arruga la nariz
     { 14, {  0.0003f, 0.0010f, 0 },      {  0.0003f,  0.0006f, 0 },        { 0, 0, 0 } },                    // nosewing_l
     { 15, { -0.0003f, 0.0010f, 0 },      { -0.0003f,  0.0006f, 0 },        { 0, 0, 0 } },                    // nosewing_r
     { 16, {  0.0002f, 0.0008f, 0 },      {  0.0005f,  0.0010f, -0.0004f }, { 0, 0, 0 } },                    // nasolabialfold_t_l
@@ -181,6 +184,10 @@ static void PoseOf(int d, float ang, float smi, float sur, float* o) {
     for (const PoseOff& p : kPose) if (p.d == d) { for (int k = 0; k < 3; k++) o[k] = p.a[k] * ang + p.s[k] * smi + p.u[k] * sur; return; }
 }
 static float s_poseSmile = 0.0f;   // para Secondary (mejillas)
+// (04/11, Agustin: "que la sonrisa mueva toda la cara, asi como tambien en el enojado y demas") los sliders de gestos tambien para
+// Secondary (pomulos 18/19 y bajo-ojo 20/21): enojo, asombro, grito, puchero; y el perfil de la cara de este cuadro
+static float s_poseG[6] = {};   // 0 neutra (z356), 1 enojo, 2 sonrisa, 3 asombro, 4 grito, 5 puchero
+static const void* s_poseProf = nullptr;
 // (04/11, Agustin: "para messi una expresion de gritar custom ... para una mayor similitud a la vida real"; "la cara neutra me gusta
 // la del juego pero si puedes modificarla poco") GESTOS NUEVOS (fila 356: x grito, y puchero) y PERFILES POR CARA (PES21FX\caras.ini):
 // por jugador (id de face\real\<id> o parte del nombre) corrimientos propios por hueso para la neutra (z356 dosifica, 0 = la del juego)
@@ -199,6 +206,7 @@ static const PoseOff2 kPose2[] = {
     {  9, {  0.0005f,  0.0020f, 0 },          { 0,  0.0003f,  0.0008f } },          // lip_t_l: grito = labio de arriba sube (dientes)
     { 10, { 0,  0.0018f, 0 },                 { 0,  0.0003f,  0.0008f } },          // lip_t_c
     { 11, { -0.0005f,  0.0020f, 0 },          { 0,  0.0003f,  0.0008f } },          // lip_t_r
+    { 13, { 0, 0.0010f, -0.0002f },           { 0, 0, 0 } },                        // nose: grito arruga la nariz
     { 14, {  0.0004f,  0.0012f, 0 },          { 0, 0, 0 } },                        // nosewing_l
     { 15, { -0.0004f,  0.0012f, 0 },          { 0, 0, 0 } },                        // nosewing_r
     { 16, {  0.0005f,  0.0012f, 0 },          { 0, 0, 0 } },                        // nasolabialfold_t_l
@@ -214,7 +222,8 @@ static const char* const kPgName[PG_N] = { "neutra", "enojo", "sonrisa", "asombr
 struct FaceProf { char sec[48] = {}; uint32_t id = 0; char name[48] = {}; float off[PG_N][kND][3] = {}; bool has[PG_N] = {}; int nVals = 0; };
 static std::vector<FaceProf> s_prof; static unsigned s_profGen = 0; static FILETIME s_profTime = {}; static bool s_profHave = false;
 static unsigned s_profCheck = 0xffffffffu;
-static bool ProfBoneOk(int d) { return (d >= 1 && d <= 17) || (d >= 26 && d <= 30); }
+static bool ProfBoneOk(int d) { return (d >= 1 && d <= 17) || (d >= 26 && d <= 30); }   // los aplica el lazo de la boca
+static bool ProfBoneSec(int d) { return d >= 18 && d <= 21; }                           // los aplica Secondary (pomulos, bajo-ojo)
 static void ProfTrim(char*& a) { while (*a == ' ' || *a == '\t') a++; char* e = a + strlen(a); while (e > a && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r' || e[-1] == '\n')) *--e = 0; }
 static void ProfLoad() {   // con s_mx tomado
     const std::wstring path = g_cfg.baseDir + L"caras.ini";
@@ -237,7 +246,7 @@ static void ProfLoad() {   // con s_mx tomado
         int g = -1; for (int i = 0; i < PG_N; i++) if (!_stricmp(k, kPgName[i])) g = i;
         int d = -1; for (int i = 0; i < kND; i++) if (!_stricmp(bn, kDef[i].name) || !_stricmp(bn, kDef[i].name + (strncmp(kDef[i].name, "skf_", 4) ? 0 : 4))) d = i;
         float x = 0, y = 0, z = 0;
-        if (g < 0 || d < 0 || !ProfBoneOk(d) || sscanf(v, "%f %f %f", &x, &y, &z) != 3) { bad++; if (bad <= 6) Log("caras: linea %d no valida: %s.%s", lineNo, k, bn); continue; }
+        if (g < 0 || d < 0 || !(ProfBoneOk(d) || ProfBoneSec(d)) || sscanf(v, "%f %f %f", &x, &y, &z) != 3) { bad++; if (bad <= 6) Log("caras: linea %d no valida: %s.%s", lineNo, k, bn); continue; }
         x = std::clamp(x, -4.0f, 4.0f); y = std::clamp(y, -4.0f, 4.0f); z = std::clamp(z, -4.0f, 4.0f);   // tope 4 mm por hueso
         cur->off[g][d][0] = x * 0.001f; cur->off[g][d][1] = y * 0.001f; cur->off[g][d][2] = z * 0.001f; cur->has[g] = true; cur->nVals++;
     }
@@ -662,7 +671,9 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
             gp = std::clamp(gp / (float)ne, -0.45f, 0.45f);
             S.eyeP = S.eyePHave ? S.eyeP + (gp - S.eyeP) * 0.5f : gp; S.eyePHave = true;   // medio cuadro de suavizado: sin temblor
         }
-        const float gy = g[1] + (S.eyePHave ? S.eyeP : 0.0f);
+        // (04/11, video de Agustin: "los parpados no acompanan") la mirada del mod (Gaze, la misma cuenta que PesGaze del shader)
+        // tiene + = mira ABAJO; la del juego (eyeP) + = arriba: se sumaban con signos distintos y el parpado iba al reves de la mirada del mod
+        const float gy = -g[1] + (S.eyePHave ? S.eyeP : 0.0f);
         // de arriba: el parpadeo lo baja 0.64 rad (igual que el shader) y acompana la mirada vertical casi entera (como en una cara
         // real: mirar abajo baja el parpado con el ojo, mirar arriba lo sube)
         // (02/11 d) con la sonrisa (sm) el ojo se achina: el de arriba baja un poco y el de abajo sube (sonrisa "de verdad")
@@ -710,6 +721,20 @@ static void Secondary(Skel& S, const float* hr, float sm, float open) {
         // (02/11 p, Agustin: "los sliders de musculos que no sean de hueso real no afectan") 348.y surco nasolabial POR HUESOS: con la
         // sonrisa el hueso del surco sube, va un poco afuera y atras = el pliegue entre la nariz y la comisura se marca
         { 16,  0.0004f, 0.0012f, -0.0008f, 2 }, { 17, -0.0004f, 0.0012f, -0.0008f, 2 },
+        // (04/11, Agustin: "le falta mas naturalidad a la sonrisa") sonrisa de verdad (Duchenne): con el slider Sonrisa (355.y,
+        // fijo, no medido: no titila) el pomulo sube mas y el bajo-ojo (orbicularisoculi_b) sube y se adelanta = ojo achinado
+        { 18,  0.0008f, 0.0022f, 0.0008f, 3 }, { 19, -0.0008f, 0.0022f, 0.0008f, 3 },
+        { 20,  0.0003f, 0.0016f, 0.0006f, 3 }, { 21, -0.0003f, 0.0016f, 0.0006f, 3 },
+        // (04/11) los demas gestos tambien mueven pomulos y bajo-ojo: k 4 enojo (ojo apretado, pomulo tenso), 5 asombro (ojo abierto,
+        // pomulo abajo), 6 grito (como una sonrisa fuerte), 7 puchero (pomulo abajo, bajo-ojo un poco arriba: cara triste)
+        { 18,  0.0003f,  0.0008f, 0.0003f, 4 }, { 19, -0.0003f,  0.0008f, 0.0003f, 4 },
+        { 20,  0.0002f,  0.0012f, 0.0004f, 4 }, { 21, -0.0002f,  0.0012f, 0.0004f, 4 },
+        { 18, 0, -0.0005f, 0, 5 },              { 19, 0, -0.0005f, 0, 5 },
+        { 20, 0, -0.0007f, -0.0002f, 5 },       { 21, 0, -0.0007f, -0.0002f, 5 },
+        { 18,  0.0010f,  0.0020f, 0.0006f, 6 }, { 19, -0.0010f,  0.0020f, 0.0006f, 6 },
+        { 20,  0.0003f,  0.0014f, 0.0005f, 6 }, { 21, -0.0003f,  0.0014f, 0.0005f, 6 },
+        { 18, 0, -0.0006f, 0, 7 },              { 19, 0, -0.0006f, 0, 7 },
+        { 20, 0,  0.0004f, 0, 7 },              { 21, 0,  0.0004f, 0, 7 },
         // (02/11 g, Agustin: "parpadean mucho abajo de los ojos") el bajo-ojo (orbicularisoculi_b) ya no sube con la sonrisa: la
         // sonrisa medida en la comisura cambia de un cuadro a otro al hablar / abrir la boca y el bajo-ojo titilaba
         // (02/11 g, Agustin: "los parpados ya no vibran solos pero si cuando la boca se abre") las cejas y el entrecejo que subian
@@ -718,14 +743,35 @@ static void Secondary(Skel& S, const float* hr, float sm, float open) {
     };
     const float ks = std::clamp(g_cfg.live[348][0], 0.0f, 2.0f) * (std::max)(sm, s_poseSmile), ko = std::clamp(g_cfg.live[348][2], 0.0f, 2.0f) * open;
     const float kn = std::clamp(g_cfg.live[348][1], 0.0f, 2.0f) * (std::max)(sm, s_poseSmile);
+    // varias filas pueden mover el mismo hueso (pomulo: medido + slider): se suman y se escribe una vez por hueso
+    float acc[kND][3] = {}; bool use[kND] = {};
     for (const Off& f : kOff) {
         if (!S.cur[f.d]) continue;
-        const float a = f.k == 0 ? ks : f.k == 2 ? kn : ko;
-        if (a <= 0.001f) { Release(S, f.d); continue; }
-        Xf x; if (!Base(S, f.d, x)) continue;
+        const float a = f.k == 0 ? ks : f.k == 2 ? kn : f.k == 3 ? s_poseSmile : f.k == 4 ? s_poseG[1] : f.k == 5 ? s_poseG[3] : f.k == 6 ? s_poseG[4] : f.k == 7 ? s_poseG[5] : ko;
+        if (a <= 0.001f) continue;
+        acc[f.d][0] += f.x * a; acc[f.d][1] += f.y * a; acc[f.d][2] += f.z * a; use[f.d] = true;
+    }
+    if (const FaceProf* PF = (const FaceProf*)s_poseProf) {   // (04/11) perfil de la cara: pomulos y bajo-ojo por gesto
+        for (int d = 18; d <= 21; d++) {
+            if (!S.cur[d]) continue;
+            for (int g = 0; g < PG_N; g++) if (PF->has[g] && s_poseG[g] > 0.001f) {
+                const float* o = PF->off[g][d];
+                if (fabsf(o[0]) + fabsf(o[1]) + fabsf(o[2]) < 1e-7f) continue;
+                for (int k = 0; k < 3; k++) acc[d][k] += o[k] * s_poseG[g];
+                use[d] = true;
+            }
+        }
+    }
+    bool done[kND] = {};
+    for (const Off& f : kOff) {
+        const int d = f.d;
+        if (!S.cur[d] || done[d]) continue;   // el mismo hueso en dos filas: una sola escritura
+        done[d] = true;
+        if (!use[d]) { Release(S, d); continue; }
+        Xf x; if (!Base(S, d, x)) continue;
         float nt[3] = { x.t[0], x.t[1], x.t[2] };
-        { const float hv[3] = { f.x * a, f.y * a, f.z * a }; float mv[3]; QRot(hr, hv, mv); for (int k = 0; k < 3; k++) nt[k] += mv[k]; }
-        if (!WriteBone(S, f.d, x, x.q, nt)) s_badWrite.fetch_add(1, std::memory_order_relaxed);
+        { float mv[3]; QRot(hr, acc[d], mv); for (int k = 0; k < 3; k++) nt[k] += mv[k]; }
+        if (!WriteBone(S, d, x, x.q, nt)) s_badWrite.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -836,13 +882,16 @@ void ExprBonesFrame(const void* skel) {
     // hablar: la mandibula sube y baja con un ritmo de silabas irregular (dos ondas que no se repiten juntas), por personaje distinto
     float talkO = 0.0f, talkRound = 0.0f;
     if (pTalk > 0.001f) {
-        const float t = g_cfg.live[157][0] + (float)(((uintptr_t)skel >> 6) & 63) * 0.37f;
+        // (04/11, Agustin: "el de hablar va muy rapido") z354 = velocidad del habla (1 = la de antes, ~4 silabas por segundo;
+        // 0 o sin poner = 0.55, mas pausado y con mas tiempo con la boca quieta entre frases)
+        const float sp = g_cfg.live[354][2] > 0.01f ? std::clamp(g_cfg.live[354][2], 0.2f, 1.5f) : 0.55f;
+        const float t = (g_cfg.live[157][0] + (float)(((uintptr_t)skel >> 6) & 63) * 0.37f) * sp;
         const float w = 0.6f * sinf(t * 6.2831853f * 4.1f) + 0.4f * sinf(t * 6.2831853f * 2.3f + 1.3f);
-        const float env = 0.55f + 0.45f * sinf(t * 6.2831853f * 0.37f);   // frases: a veces habla mas, a veces menos
+        const float env = (std::max)(0.0f, 0.40f + 0.60f * sinf(t * 6.2831853f * 0.37f));   // frases: a veces habla mas, a veces menos, con pausas
         talkO = pTalk * 0.30f * (std::max)(w, 0.0f) * env;
         talkRound = pTalk * sinf(t * 6.2831853f * 1.7f + 0.6f) * env;   // labios que se redondean (o / u) y se estiran (e / i)
     }
-    const float o = (std::max)((std::max)(std::clamp(g_cfg.live[347][0], 0.0f, 1.0f), 0.45f * tongueOut), (std::min)(1.0f, 0.40f * pSur + 0.85f * pGri + talkO));
+    const float o = (std::max)((std::max)(std::clamp(g_cfg.live[347][0], 0.0f, 1.0f), 0.45f * tongueOut), (std::min)(1.0f, 0.40f * pSur + 0.85f * pGri + 0.12f * pSmi + talkO));   // (04/11) la sonrisa abre un poco la boca
     bool poseOn = pAng > 0.001f || pSmi > 0.001f || pSur > 0.001f || pGri > 0.001f || pPuc > 0.001f || fabsf(talkRound) > 0.001f;
     std::lock_guard<std::mutex> lk(s_mx);
     if (s_profCheck == 0xffffffffu || fr - s_profCheck >= 300) { s_profCheck = fr; ProfLoad(); }   // caras.ini: al arrancar y cada ~10 s si cambio
@@ -863,6 +912,7 @@ void ExprBonesFrame(const void* skel) {
     ProfResolve(*S, fr);
     const FaceProf* PF = profOn && S->prof >= 0 && S->prof < (int)s_prof.size() ? &s_prof[S->prof] : nullptr;
     if (PF && pNeu > 0.001f && PF->has[PG_NEUTRA]) poseOn = true;
+    s_poseG[0] = pNeu; s_poseG[1] = pAng; s_poseG[2] = pSmi; s_poseG[3] = pSur; s_poseG[4] = pGri; s_poseG[5] = pPuc; s_poseProf = PF;
     if (FreeCamActive() && g_cfg.live[346][0] > 0.5f) PublishHead(*S);   // (02/11) camara libre "seguir la cara"
     float deg = 0.0f; if (JawAngle(*S, jc, &deg)) { S->angMin = (std::min)(S->angMin, deg); S->angMax = (std::max)(S->angMax, deg); S->angN++; }
     // (03/11, Agustin: con x340 = 0 "no cambia nada") al apagar, lo ultimo escrito quedaba puesto: el juego no reescribe todos los
