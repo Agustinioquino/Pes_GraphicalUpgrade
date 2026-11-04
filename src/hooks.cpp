@@ -1170,11 +1170,22 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
             if (shw) { Remember(c, d, true, true, 31); c->PSSetShaderResources(31, 1, &shw); }      // (04/11) arrugas esculpidas de la sonrisa (PS de la cara)
             // (04/11 b) teselacion de la cara en primeros planos (facetess.cpp): solo piel de la cara (nunca la boca, los ojos ni las
             // pestanas: expr.cpp no les da pesos de borde), con DrawIndexed y el PS de la cara con reemplazo (los parametros t120 del dibujo)
+            { const ShaderEntry* fp = Ctx(c).ps; const bool skin = fp && (fp->hash == 0x5ce3ed8702271bc1ULL || fp->hash == 0xce188ae110354aeaULL);
+              if (skin && t_drawKind == 1 && !seam) FaceTessNote(0); }   // (04/11 d) registro: piel de la cara sin teselar
             if (seam && t_drawKind == 1 && Ctx(c).ps && Ctx(c).ps->hash != 0x63fab7735eee149cULL) {
                 ID3D11ShaderResourceView* prm = nullptr; c->VSGetShaderResources(120, 1, &prm);
+                if (!prm) FaceTessNote(1);
                 if (prm) { if (FaceTessBegin(c, hash, seam, prm, d.tess)) { Remember(c, d, false, true, 119); c->VSSetShaderResources(119, 1, &seam); } prm->Release(); }
             }
             if (hc && FreeCamWantsHead()) ExprCaptureHead(c, hc, hd);   // (1/11) camara libre "seguir la cara": matriz de sk_head de este dibujo
+            break; }
+        case RuleAction::Beard: {   // (04/11 c) barba que sigue los huesos de la cara (expr.cpp BeardForDraw, pes_beard.hlsli)
+            if (ps) break;
+            ID3D11Buffer* b = nullptr; ID3D11ShaderResourceView* pl = nullptr; ID3D11ShaderResourceView* bd = nullptr;
+            if (BeardForDraw(c, t_drawKind == 1 ? t_drawVerts : 0, t_drawStart, t_drawBase, &b, &pl, &bd) && b) {
+                Remember(c, d, false, false, a.slot); c->VSSetConstantBuffers(a.slot, 1, &b);
+                if (pl && bd) { Remember(c, d, false, true, 116); c->VSSetShaderResources(116, 1, &pl); Remember(c, d, false, true, 117); c->VSSetShaderResources(117, 1, &bd); }
+            }
             break; }
         case RuleAction::SetParam: break;   // ya resuelto con la textura de parametros alternativa
         }
