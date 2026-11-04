@@ -22,13 +22,19 @@ bool PesSkIsSkin(int matType, float trans, float skinTag) {
 
 // difusa: terminador suave por canal (el rojo entra un poco mas en la sombra); con la SSSS (w95) el borde queda angosto porque
 // la difusion de verdad la hace esa pasada en milimetros
-float3 PesSkDiffuse(float rawNdotL, float trans, float transFloor) {
+// zView = distancia en metros: de cerca la SSSS resuelve la difusion (borde angosto); de lejos (menos de un pixel de SSSS) queda
+// la piel pre-integrada entera, como en las 7 grandes
+float3 PesSkDiffuse(float rawNdotL, float trans, float transFloor, float zView) {
   bool uni = IniParams.Load(int2(95,0)).w > 0.5;
   float4 P3 = IniParams.Load(int2(3,0));
   float wd = uni ? 1.5 : (P3.x > 0 ? P3.x : 1.0);
   float3 w = saturate(trans) * wd * float3(1.0, 0.6, 0.45);
   w = min(w * 0.12, float3(0.22, 0.11, 0.07));
-  if (uni) w *= 0.55;
+  if (uni) {
+    float mpp = max(abs(zView) * abs(g_psScene.m_projectionParam.x) * 2.0 / max(g_psScene.m_viewportSize.x, 1.0), 1e-6);
+    float rPx = 0.006 * max(IniParams.Load(int2(95,0)).x, 0.3) / mpp;
+    w *= 1.0 - 0.45 * saturate((rPx - 1.0) / 5.0);
+  }
   float3 d = saturate(PesSkSoftTerm(rawNdotL, w));
   return max(d, min(transFloor, 0.03).xxx);
 }

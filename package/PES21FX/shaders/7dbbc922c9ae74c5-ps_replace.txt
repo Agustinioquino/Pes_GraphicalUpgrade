@@ -144,6 +144,7 @@ void main(
   r4.zw = g_psScene.m_projectionParam.xy * r4.zw;
   r0.z = -g_psScene.m_projectionParam.w + r0.z;
   r5.z = g_psScene.m_projectionParam.z / r0.z;
+  float skZ = r5.z;   // (03/11) distancia para la piel
   r5.xy = r5.zz * r4.zw;
   r6.xyzw = g_psObject.m_localParam[1].xyzw * r5.yyyy;
   r6.xyzw = r5.xxxx * g_psObject.m_localParam[0].xyzw + r6.xyzw;
@@ -248,7 +249,7 @@ void main(
   r3.xyz = r3.xxx * r1.xyw;
   bool skOn = PesSkIsSkin(skMat, r4.y, skTag);
   float3 skV = -normalize(float3(skPP, 1)), skL = normalize(g_psLight.m_lightDir0.xyz);
-  if (skOn) r3.xyz = PesSkDiffuse(skNL, r4.y, skTF) * r1.xyw;   // (03/11) piel
+  if (skOn) r3.xyz = PesSkDiffuse(skNL, r4.y, skTF, skZ) * r1.xyw;   // (03/11) piel
   r4.xyz = r8.xyz * r2.zzz;
   r5.x = dot(r0.xyz, g_psLight.m_lightDir0.xyz);
   r0.x = g_lut1.Sample(g_samplerLinear_Clamp_s, r5.xy).x;
