@@ -223,6 +223,8 @@ void main(
   bool  wrHi      = wrOn && P15.x > 0.5;
   float wrWeight  = 0;     // peso final de arrugas (para el sombreado de pliegues)
   float wrFold    = 0;     // 0..1: cuanto "surco" hay en este pixel
+  float wrRidgeF  = 0;     // (04/11 h) 0..1: cresta fina entre arrugas (piel estirada)
+  float shFold = 0, shRidge = 0;   // (04/11 h) surco / cresta de las arrugas esculpidas de la sonrisa
   float4 P16 = IniParams.Load(int2(16,0));
   bool  exOn      = wrOn && P16.w > 0.5;
   float exBlood   = max(P16.x, 0.0);
@@ -358,6 +360,7 @@ void main(
     float divY = (wc.y - wd.y) * 2.0;
     float wdiv = divX + wrYSign * divY;
     wrFold = saturate(-wdiv * 4.0) * wrWeight;
+    wrRidgeF = saturate(wdiv * 4.0) * wrWeight;
     if (exOn) {
       // misma deteccion con un radio 4 veces mayor -> zonas suaves, no lineas
       float2 wdu2 = wdu * 4.0, wdv2 = wdv * 4.0;
@@ -385,6 +388,14 @@ void main(
       float4 shT = pesShapeWr.Sample(g_samplerAnisotropic_Clamp_s, v2.xy);
       float2 shN = lerp(shT.xy, shT.zw, saturate((G5w.y - 1.0) * 2.0)) * 2.0 - 1.0;
       r1.xy += shN * shW; r1.xyz = normalize(r1.xyz);
+      // (04/11 h, Agustin: "mas detalle de srm y trm en las expresiones asi como en el nrm") divergencia de la normal esculpida:
+      // donde las normales miran hacia adentro hay surco, hacia afuera cresta. Lo usan brillo / rugosidad / translucidez mas abajo
+      float sdx = 1.5 / shTw, sdy = 1.5 / shTh, sbl = saturate((G5w.y - 1.0) * 2.0);
+      float4 sa = pesShapeWr.Sample(g_samplerAnisotropic_Clamp_s, v2.xy + float2(sdx, 0)), sb = pesShapeWr.Sample(g_samplerAnisotropic_Clamp_s, v2.xy - float2(sdx, 0));
+      float4 sc = pesShapeWr.Sample(g_samplerAnisotropic_Clamp_s, v2.xy + float2(0, sdy)), sd = pesShapeWr.Sample(g_samplerAnisotropic_Clamp_s, v2.xy - float2(0, sdy));
+      float sdiv = (lerp(sa.x, sa.z, sbl) - lerp(sb.x, sb.z, sbl)) * 2.0 + wrYSign * (lerp(sc.y, sc.w, sbl) - lerp(sd.y, sd.w, sbl)) * 2.0;
+      shFold  = saturate(-sdiv * 3.0) * shW;
+      shRidge = saturate( sdiv * 3.0) * shW;
     } }
   // === PES21 (19/10) micro normal de poros: mosaico fino sobre la normal del juego, solo de cerca.
   // x94 intensidad, y94 escala (repeticiones sobre la cara), w94 on/off
@@ -673,6 +684,19 @@ void main(
     r0.z *= (1.0 + 0.25 * exRidgeZ * exGloss);                                // especular
     r1.w *= (1.0 - 0.35 * exFoldZ * exTrans) * (1.0 + 0.2 * exRidgeZ * exTrans); // translucidez
   }
+  // (04/11 h, Agustin: "mas detalle de srm y trm en las expresiones asi como en el nrm") cada arruga fina y esculpida tambien
+  // cambia brillo (SRM) y translucidez (TRM), no solo la normal: en el fondo del surco la piel brilla menos (oclusion del
+  // especular), es mas aspera y deja pasar menos luz (piel apretada); en la cresta estirada la piel es mas lisa, brilla un poco
+  // mas y el SSS se ve un poco mas. y365 = cuanto (0 = como antes). Nada en los labios ni en la boca (regla de Agustin).
+  { float srmK = enhance ? clamp(IniParams.Load(int2(365, 0)).y, 0.0, 2.0) : 0.0;
+    srmK *= 1.0 - saturate(2.0 * FZ.g);
+    float fF = saturate((wrOn ? wrFold * max(wrCrease, 0.5) : 0.0) + shFold) * srmK;
+    float fR = saturate((wrOn ? wrRidgeF : 0.0) + shRidge) * srmK;
+    if (fF + fR > 0.001) {
+      r0.z *= (1.0 - 0.45 * saturate(fF)) * (1.0 + 0.15 * fR);
+      r0.w  = saturate(r0.w + 0.18 * fF - 0.10 * fR);
+      r1.w *= (1.0 - 0.30 * saturate(fF)) * (1.0 + 0.12 * fR);
+    } }
   // 2) Especular: la piel real refleja ~2.8% (F0 0.028). El valor del juego
   //    suele quedar alto -> efecto plastico. Se escala de forma controlada.
   r0.z = saturate(r0.z * specScale);
