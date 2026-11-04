@@ -430,16 +430,16 @@ bool BeardBind(FaceMesh* m, const std::vector<float>& ps) {   // con s_mx tomado
     }
     const int ns = (int)((m->nv + stp - 1) / stp);
     // grupos (buffers de piel) dibujados hace poco: el mas cercano en el orden de dibujo a la barba; si ninguno, el de mas cobertura
-    std::map<uint64_t, UINT> nearIb;   // ib -> distancia en el orden de dibujo
+    std::map<uint64_t, UINT> nearDraw;   // ib -> distancia en el orden de dibujo
     for (const BeardSrc& S : s_bsrc) {
         auto g = s_geoDrawn.find(S.id); if (g == s_geoDrawn.end() || s_frame - g->second.frame > 4) continue;
         const UINT dq = g->second.seq > m->seqAt ? g->second.seq - m->seqAt : m->seqAt - g->second.seq;
-        auto it = nearIb.find(S.ib); if (it == nearIb.end() || dq < it->second) nearIb[S.ib] = dq;
+        auto it = nearDraw.find(S.ib); if (it == nearDraw.end() || dq < it->second) nearDraw[S.ib] = dq;
     }
     uint64_t gib = 0; int gc = 0; double gd = 1e9; UINT gq = 0xffffffffu; bool recent = false;
     for (auto& kv : cov) {
         if (kv.second * 2 < ns) continue;
-        auto nq = nearIb.find(kv.first); if (nq == nearIb.end()) continue;
+        auto nq = nearDraw.find(kv.first); if (nq == nearDraw.end()) continue;
         const double md = dsum[kv.first] / kv.second;
         if (nq->second < gq || (nq->second == gq && md < gd)) { gib = kv.first; gc = kv.second; gd = md; gq = nq->second; recent = true; }
     }
