@@ -1162,6 +1162,14 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
             if (shw) { Remember(c, d, true, true, 31); c->PSSetShaderResources(31, 1, &shw); }      // (04/11) arrugas esculpidas de la sonrisa (PS de la cara)
             if (hc && FreeCamWantsHead()) ExprCaptureHead(c, hc, hd);   // (1/11) camara libre "seguir la cara": matriz de sk_head de este dibujo
             break; }
+        case RuleAction::Beard: {   // (04/11 c) barba que sigue los huesos de la cara (expr.cpp BeardForDraw, pes_beard.hlsli)
+            if (ps) break;
+            ID3D11Buffer* b = nullptr; ID3D11ShaderResourceView* pl = nullptr; ID3D11ShaderResourceView* bd = nullptr;
+            if (BeardForDraw(c, t_drawKind == 1 ? t_drawVerts : 0, t_drawStart, t_drawBase, &b, &pl, &bd) && b) {
+                Remember(c, d, false, false, a.slot); c->VSSetConstantBuffers(a.slot, 1, &b);
+                if (pl && bd) { Remember(c, d, false, true, 116); c->VSSetShaderResources(116, 1, &pl); Remember(c, d, false, true, 117); c->VSSetShaderResources(117, 1, &bd); }
+            }
+            break; }
         case RuleAction::SetParam: break;   // ya resuelto con la textura de parametros alternativa
         }
     }

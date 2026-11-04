@@ -112,7 +112,7 @@ struct MenuGroup {
 
 // ---------------------------------------------------------------- reglas por shader (lo que eran [ShaderOverride])
 struct RuleAction {
-    enum Kind { CopyCB, RefSRV, BindCB, BindSRV, SetParam, EventTurf, FaceGen, Expr } kind;   // FaceGen: slot = mapa A, idx = mapa B
+    enum Kind { CopyCB, RefSRV, BindCB, BindSRV, SetParam, EventTurf, FaceGen, Expr, Beard } kind;   // FaceGen: slot = mapa A, idx = mapa B
     int slot = 0;
     std::string name;          // recurso con nombre, o "file:ruta.dds"
     int idx = 0, comp = 0;     // SetParam
@@ -372,6 +372,8 @@ void BodySimSeen();                                // el simulador del mod de ro
 void BodyReloadShaders();
 struct InputElemInfo { std::string sem; UINT idx, fmt, slot, off; };
 bool InputLayoutInfo(ID3D11InputLayout* il, std::vector<InputElemInfo>& out);
+// (04/11 c) barba que sigue los huesos de la cara (regla "beard = <slot>" en el VS del pelo 2f1af485): cbuffer de la malla + paleta de las pieles (t116) + enlace por vertice (t117)
+bool BeardForDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, ID3D11Buffer** cb, ID3D11ShaderResourceView** pool, ID3D11ShaderResourceView** bind);
 ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, const float** headCentroid = nullptr, int* headIdx = nullptr, ID3D11ShaderResourceView** shapeSrv = nullptr, ID3D11ShaderResourceView** shapeWr = nullptr);   // shapeWr: arrugas de la sonrisa esculpidas (PS t31)   // (04/11) shapeSrv: formas esculpidas de la malla (VS t118)
 void ExprCaptureHead(ID3D11DeviceContext* c, const float* hc, int head);   // (1/11) copia la matriz de sk_head del dibujo en curso (b6)
 bool ExprHeadWorld(float out[3], double* age);                            // (1/11) ultima posicion de la cabeza en el mundo   // (31/10) expresiones: cbuffer de la malla de cara (cabeza en la paleta) para el VS
