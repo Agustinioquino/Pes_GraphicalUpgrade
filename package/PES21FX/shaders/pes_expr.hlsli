@@ -68,6 +68,9 @@ float3 PesShapeDelta(uint vid)
 // A 1.0: 6 % mas ancho y 0.7 mm abajo; a 1.5: 8 % y 1.0 mm
 float3 PesTeethSmile(float3 rest, float2 uv)
 {
+  // (04/11 j, Agustin: "el problema con la sonrisa es que se muevan los dientes, manten su posicion con messi") apagado: los
+  // dientes quedan donde los pone el juego tambien con la sonrisa (el resto de la funcion queda por si se vuelve a pedir)
+  return 0;
   if (g_pesExprMesh.w != 1 || g_pesExprShape.x != 1) return 0;
   float4 G5 = IniParams.Load(int2(355, 0)), G6 = IniParams.Load(int2(356, 0));
   if (G6.w < 0.5) return 0;

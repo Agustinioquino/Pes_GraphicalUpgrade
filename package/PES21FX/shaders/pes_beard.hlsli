@@ -96,6 +96,30 @@ void PesBeardFollow(uint vid, float3 rest, inout float3 pos, inout float3 prev)
         }
       }
     }
+    {   // (04/11 j, captura de Agustin: con la boca abierta los pelos de abajo quedaban sobre los dientes) "Abrir la boca" del mod (347.x,
+        // pes_expr.hlsli PesJawApply) gira la piel de abajo en el VS de la cara: la barba hace el mismo giro con las mascaras de esa
+        // piel (pozo fila 0 .zw = huesos enteros, fila 197 .xy = a la mitad). Con la boca por huesos (350.y >= 1) ya viene en la paleta
+      float o = clamp(IniParams.Load(int2(347, 0)).x, -0.25, 1.0);
+      float4 R = IniParams.Load(int2(350, 0));
+      if (abs(o) >= 0.001 && !(R.x > 0.5 && R.y > 0.5)) {
+        float4 JH = g_pesBeardPool[s * 200 + 197];
+        uint full = (uint)(H.z + 0.5) | ((uint)(H.w + 0.5) << 16), half_ = (uint)(JH.x + 0.5) | ((uint)(JH.y + 0.5) << 16);
+        if ((full | half_) != 0u) {
+          float A = 0.40 * o;
+          float3 q = Pd.xyz - float3(0.0, 1.6369, 0.0795);
+          [unroll] for (uint k = 0; k < 4; k++) {
+            uint j = (uint)(BI[k] + 0.5);
+            if (BW[k] <= 0.0 || j > 31) continue;
+            float f = (full & (1u << j)) != 0u ? 1.0 : ((half_ & (1u << j)) != 0u ? 0.5 : 0.0);
+            if (f <= 0.0) continue;
+            float c2 = cos(A * f), s2 = sin(A * f);
+            float3 dh = float3(0.0, q.y * c2 - q.z * s2, q.y * s2 + q.z * c2) - float3(0.0, q.y, q.z);
+            d  += BW[k] * PesBeardBoneP(s, 1,  j, float4(dh, 0.0));
+            dq += BW[k] * PesBeardBoneP(s, 97, j, float4(dh, 0.0));
+          }
+        }
+      }
+    }
     // del objeto de la piel al mundo y del mundo al objeto del pelo (m_world = giro * escala pareja)
     float3 dw = float3(dot(d, W0.xyz), dot(d, W1.xyz), dot(d, W2.xyz));
     float3 dwq = float3(dot(dq, W0.xyz), dot(dq, W1.xyz), dot(dq, W2.xyz));
