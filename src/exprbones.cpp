@@ -303,6 +303,8 @@ struct Skel {
     // Ahora el gesto se mide contra la cara NEUTRA de este jugador: promedio lento (~10 s) de cada hueso en los ejes de la cabeza
     float nT[kND][3] = {}, nQ[kND][4] = {}; int nN[kND] = {};
     float eyeP = 0.0f; bool eyePHave = false;   // (02/11 o) mirada vertical del JUEGO (hueso del ojo), suavizada
+    float eyePT = 0.0f, lidSm = 0.0f; bool lidSmHave = false;   // (04/11) objetivo con histeresis de eyeP y sonrisa medida suavizada para los parpados
+    float lidU = 0.0f, lidL = 0.0f; bool lidHave = false;        // (04/11) angulos de los parpados del cuadro anterior (limite de velocidad)
     float seed = 0.37f; bool seedHave = false; float seedCand = -1.0f; int seedCandN = 0;   // (02/11 c) semilla de la mirada, la misma que el VS del globo (PesExprSeed)
     // (02/11 e) sk_head del esqueleto del CUERPO (175 huesos) para la camara: el sk_head del esqueleto de la cara tiene la
     // transformacion actual en (0, 0, 0) (no es espacio del modelo: log 12:46 PC), el del cuerpo si lo es
@@ -670,7 +672,16 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
         }
         if (ne) {
             gp = std::clamp(gp / (float)ne, -0.45f, 0.45f);
-            S.eyeP = S.eyePHave ? S.eyeP + (gp - S.eyeP) * 0.5f : gp; S.eyePHave = true;   // medio cuadro de suavizado: sin temblor
+            // (04/11, Agustin: "vibran" los parpados, las pestanas y la sombra del ojo, todo lo que va con los huesos de los parpados)
+            // la mirada del juego se mide con el hueso del ojo contra la cabeza de ESTE momento, y el juego pone el ojo en otro punto
+            // del cuadro: con la cabeza en movimiento la medida temblaba ~1 grado de un cuadro a otro y el parpado la seguia 0.8 veces.
+            // Ahora: el objetivo solo cambia si la mirada se corre mas de 1.2 grados (histeresis: los saltos de la mirada del juego
+            // pasan, el temblor no) y el parpado llega a el con un suavizado de ~8 cuadros
+            if (!S.eyePHave) { S.eyePT = S.eyeP = gp; S.eyePHave = true; }
+            else {
+                if (fabsf(gp - S.eyePT) > 0.021f) S.eyePT = gp - copysignf(0.021f, gp - S.eyePT);
+                S.eyeP += (S.eyePT - S.eyeP) * 0.12f;
+            }
         }
         // (04/11, video de Agustin: "los parpados no acompanan") la mirada del mod (Gaze, la misma cuenta que PesGaze del shader)
         // tiene + = mira ABAJO; la del juego (eyeP) + = arriba: se sumaban con signos distintos y el parpado iba al reves de la mirada del mod
@@ -678,9 +689,19 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
         // de arriba: el parpadeo lo baja 0.64 rad (igual que el shader) y acompana la mirada vertical casi entera (como en una cara
         // real: mirar abajo baja el parpado con el ojo, mirar arriba lo sube)
         // (02/11 d) con la sonrisa (sm) el ojo se achina: el de arriba baja un poco y el de abajo sube (sonrisa "de verdad")
-        const float up = (std::min)(0.64f * b - gy * (gy < 0.0f ? 0.80f : 0.55f) + 0.06f * sm, 0.66f);   // tope: cerrado, sin pasarse del ojo
+        // (04/11) la sonrisa medida en la comisura salta de un cuadro a otro al hablar: para los parpados va suavizada (~10 cuadros)
+        S.lidSm = S.lidSmHave ? S.lidSm + (sm - S.lidSm) * 0.10f : sm; S.lidSmHave = true;
+        const float smL = S.lidSm;
+        float up = (std::min)(0.64f * b - gy * (gy < 0.0f ? 0.80f : 0.55f) + 0.06f * smL, 0.66f);   // tope: cerrado, sin pasarse del ojo
         // de abajo: sube un poco al parpadear, baja con la mirada abajo y sube apenas con la mirada arriba
-        const float lo = std::clamp(-0.12f * b - gy * (gy < 0.0f ? 0.35f : 0.15f) - 0.16f * sm, -0.22f, 0.18f);
+        float lo = std::clamp(-0.12f * b - gy * (gy < 0.0f ? 0.35f : 0.15f) - 0.16f * smL, -0.22f, 0.18f);
+        // (04/11) limite de velocidad fuera del parpadeo: un cambio chico de un cuadro a otro (temblor de la medida) se frena;
+        // el parpadeo (b) y los saltos grandes pasan enteros
+        if (S.lidHave && b < 0.02f) {
+            auto lim = [](float prev, float now) { const float d = now - prev; return fabsf(d) < 0.004f ? prev + d * 0.35f : now; };
+            up = lim(S.lidU, up); lo = lim(S.lidL, lo);
+        }
+        S.lidU = up; S.lidL = lo; S.lidHave = true;
         float qu[4], ql[4]; AxisAngle(ax, up, qu); AxisAngle(ax, lo, ql);
         const int ds[4] = { D_LID_TL, D_LID_TR, D_LID_BL, D_LID_BR };
         for (int i = 0; i < 4; i++) {

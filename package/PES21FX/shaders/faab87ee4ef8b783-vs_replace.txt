@@ -76,6 +76,7 @@ void main(
   float4 v6 : TEXCOORD1,
   float4 v7 : TEXCOORD2,
   float2 v8 : TEXCOORD3,
+  uint pesVid : SV_VertexID,   // (04/11) gestos esculpidos por vertice (pes_expr.hlsli PesShapeDelta)
   out float4 o0 : SV_Position0,
   out float4 o1 : COLOR0,
   out float2 o2 : TEXCOORD0,
@@ -94,6 +95,7 @@ void main(
 
   float3 v0r = v0.xyz;   // (27/10 d) reposo (los poros y el collar del PS lo siguen usando)
   v0.xyz += PesCollarSink(v0r, v1.xyz);   // (27/10 d) base del cuello hundida bajo el torso (y323)
+  v0.xyz += PesShapeDelta(pesVid);   // (04/11) gestos esculpidos (formas\<huella>.bin), antes del skinning: los huesos los llevan
   // (02/11, Agustin: "sacar la lengua no funciona, antes funcionaba") el hueso de la lengua = el de MAS PESO del vertice, no el
   // primero (si la boca nueva guarda la cabeza primero con peso chico, la lengua se tomaba como cabeza y no se movia)
   uint tgJ = v3.x; float tgW = v4.x;
