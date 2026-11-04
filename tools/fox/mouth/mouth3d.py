@@ -47,7 +47,7 @@ REAL_W = {True: [8.6, 6.6, 7.6, 7.0, 6.6], False: [5.3, 5.8, 6.9, 7.0, 7.1, 8.5]
 PROFILE = os.environ.get('MOUTH_PROFILE', '')
 PROF = {
     '': dict(ext_up={'IC': -0.1, 'I': -0.8, 'C': -0.3}, corner_ic=(0.02, 0.08), corner_i_up=(0.04, 0.14), lat_back=0.0, canine=0.30),
-    'messi': dict(ext_up={'IC': 0.3, 'I': -0.3, 'C': -0.6}, corner_ic=(0.05, 0.12), corner_i_up=(0.08, 0.18), lat_back=0.0, canine=0.18),   # (04/11 b) Agustin 'no me convencen': su sonrisa actual (fotos): parejos, anchos, borde en arco suave, caninos romos
+    'messi': dict(ext_up={'IC': -1.1, 'I': -1.5, 'C': -1.4}, corner_ic=(0.05, 0.12), corner_i_up=(0.08, 0.18), lat_back=0.0, canine=0.18),   # (04/11 b) Agustin 'no me convencen': su sonrisa actual (fotos): parejos, anchos, borde en arco suave, caninos romos
 }[PROFILE]
 if PROFILE == 'messi': REAL_W = {True: [8.8, 7.0, 7.9, 7.2, 6.8], False: REAL_W[False]}
 
