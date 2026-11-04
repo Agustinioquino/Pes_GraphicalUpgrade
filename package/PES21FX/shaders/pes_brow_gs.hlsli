@@ -10,8 +10,8 @@
 // El archivo se incluye desde pes_brow_a_gs.hlsl (VS de la cabeza faab87ee) y pes_brow_b_gs.hlsl (VS de la cara animada
 // 455eb97b): la entrada del GS tiene que ser IGUAL a la salida de cada VS (mismo orden de semanticas).
 #define PES_SEG 4
-#define PES_PER_INST 5      // hebras por instancia del GS: 5 x 10 vertices x 20 escalares = 1000 (tope 1024)
-#define PES_INST 12         // instancias del GS por triangulo -> hasta 60 hebras por triangulo
+#define PES_PER_INST 4      // hebras por instancia del GS: 4 x 10 vertices x 23 escalares = 920 (tope 1024; 04/11 e + tangente)
+#define PES_INST 15         // instancias del GS por triangulo -> hasta 60 hebras por triangulo (igual que antes)
 cbuffer cVSScene : register(b2)
 {
   float4 m_projectionView[4];
@@ -94,6 +94,7 @@ struct GSOut {   // igual que la entrada de pes_brow_ps.hlsl
   float2 motion : TEXCOORD3;
   float3 viewV : TEXCOORD4;
   float3 col2 : TEXCOORD5;
+  float3 tanV : TEXCOORD6;     // (04/11 e) direccion de la hebra en la vista: brillo en banda (Kajiya-Kay) como el pelo de la cabeza
 };
 
 uint PesHash(uint v) { uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
@@ -260,6 +261,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
       float pxV = 2.0 * abs(p.z) / (max(abs(m_projection[1].y), 1e-4) * vpH);   // un pixel en la vista a esta distancia
       wid = max(wid, pxV * (P75.z > 0.5 ? 1.25 : 0.45));                         // nunca menos de ~1 px de ancho total
       float3 V = normalize(-p);
+      float3 tanR = normalize(dd + n * lift * (0.35 * 3.14159 * cos(t * 3.14159) + 0.1));
       float3 sideV = normalize(cross(dd, V) + 1e-6);
       [unroll] for (int s = -1; s <= 1; s += 2) {
         GSOut o;
@@ -277,6 +279,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
         o.tw = float2(t, side);
         o.motion = motion;
         o.viewV = V;
+        o.tanV = tanR;
         outS.Append(o);
       }
     }

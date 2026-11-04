@@ -20,6 +20,49 @@ cbuffer PESHair : register(b11)
   float4 pesHairMisc;   // x = 1 enlazado, y = 1 mapa de pelo propio del usuario
 }
 Texture1D<float4> IniParams : register(t120);
+// (04/11 e) la escena del PS (la deja enlazada el dibujo de la cara; misma que usa el pelo 02f1d510): matriz de la vista para la luz
+cbuffer cPSScene : register(b2)
+{
+  struct
+  {
+    float4x4 m_projectionView;
+    float4x4 m_projection;
+    float4x4 m_view;
+    float4x4 m_shadowProjection;
+    float4x4 m_shadowProjection2;
+    float4 m_eyepos;
+    float4 m_projectionParam;
+    float4 m_viewportSize;
+    float4 m_exposure;
+    float4 m_fogParam[3];
+    float4 m_fogColor;
+    float4 m_cameraCenterOffset;
+    float4 m_shadowMapResolutions;
+  } g_psScene : packoffset(c0);
+}
+// (04/11 e, Agustin: "que la luz la tome bien el pelo de hebras de la ceja") MISMO modelo de luz que el pelo de la cabeza
+// (02f1d510 PESHairAniso, filas 50 / 51): la normal se lleva hacia la que refleja el sol hacia la camara para ESTA hebra ->
+// el GGX de la pasada diferida da la banda de brillo del pelo (Kajiya-Kay) en vez de un punto; y la marca 252/255 hace que
+// el sol le sume la luz envolvente, el segundo brillo (TRT, fila 51) con la sombra real y el contraluz (fila 339)
+float3 PesBrowAniso(float3 N, float3 T, float3 V, float t)
+{
+  float4 HK = IniParams.Load(int2(50,0));
+  float4 HK2 = IniParams.Load(int2(51,0));
+  if (HK.w < 0.5) return N;
+  float3 L = g_psSystem.m_dominantLightDir.xyz;
+  if (HK.z < 0.5) L = float3(dot(L, g_psScene.m_view._m00_m10_m20), dot(L, g_psScene.m_view._m01_m11_m21), dot(L, g_psScene.m_view._m02_m12_m22));
+  if (dot(L, L) < 0.25) return N;   // escena o luz sin enlazar: normal de antes
+  L = normalize(L);
+  float3 H = normalize(L + V);
+  T = normalize(T);
+  float sh1 = HK.y + (t - 0.5) * HK2.y;
+  float3 T1 = normalize(T + N * sh1);
+  float3 Nk = H - T1 * dot(H, T1);
+  float nkl = length(Nk);
+  Nk = nkl > 1e-4 ? Nk / nkl : N;
+  if (dot(Nk, V) < 0.05) Nk = N;
+  return normalize(lerp(N, Nk, saturate(HK.x) * 0.7));   // un poco menos que en la cabeza: la ceja es corta y va pegada a la piel
+}
 
 struct VSOut {
   float4 pos : SV_Position;
@@ -29,6 +72,7 @@ struct VSOut {
   float2 motion : TEXCOORD3;
   float3 viewV : TEXCOORD4;
   float3 col2 : TEXCOORD5;
+  float3 tanV : TEXCOORD6;
 };
 
 void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out float4 o2 : SV_Target2, out float4 o3 : SV_Target3, out float4 o4 : SV_Target4)
@@ -45,6 +89,7 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   o0 = float4(saturate(col), 1.0);
   // normal + translucidez (hebra: 0.15) empaquetadas como en el shader de cara
   float3 n = normalize(i.nrmV);
+  n = PesBrowAniso(n, i.tanV, normalize(i.viewV), t);
   // (04/11) la luz pasa por el pelo: translucidez alta (la punta mas que la raiz) + marca de PELO 252/255 (o2.z, abajo) para
   // que las pasadas del sol le apliquen el contraluz del pelo (fila 339), como el pelo de la cabeza
   float trans = lerp(0.45, 0.8, t);   // (04/11 e) un poco mas de luz atravesando el pelo (la raiz tambien es fina)
