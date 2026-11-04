@@ -89,6 +89,16 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   // a la luz: el pelo de la ceja se ve con volumen y brillo arriba, sin la raiz negra de la v1 (0.55)
   col *= lerp(0.9, 1.0, saturate(t * 2.5));   // (04/11 e) 0.82 -> 0.9: con el color nuevo ya no hace falta oscurecer tanto
   if (P75.z > 0.5) col = float3(1, 0, 1);   // diagnosticos 1 y 3: magenta
+  // (04/11 j, Agustin: "la luz al cambiar el color no es realista, no traspasa de frente") un pelo no es una superficie opaca: la luz
+  // entra, se dispersa entre las hebras y sale con el color del pelo (dispersion multiple). En el G-buffer eso equivale a un albedo
+  // mas claro y saturado que el color "pintado" (col^0.8, saturacion x1.15): con luz de frente la ceja toma el tono del pelo
+  // (castano, colorado) en vez de quedar como plastico oscuro; el contraluz y el brillo siguen en la pasada del sol (marca de pelo)
+  if (P75.z < 0.5) {
+    float3 cs = saturate(col);
+    float3 ms = pow(cs + 1e-4, 0.8);
+    float ml = dot(ms, float3(0.2126, 0.7152, 0.0722));
+    col = max(ml + (ms - ml) * 1.15, 0.0);
+  }
   o0 = float4(saturate(col), 1.0);
   // normal + translucidez (hebra: 0.15) empaquetadas como en el shader de cara
   float3 n = normalize(i.nrmV);
