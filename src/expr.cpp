@@ -46,7 +46,7 @@ struct FaceMesh {
     ID3D11Buffer* seamBuf = nullptr; ID3D11ShaderResourceView* seamSrv = nullptr; int seamN = 0;   // (04/11 b) teselacion (facetess.cpp): peso de borde por vertice (t119), solo piel de la cara; seamN = vertices con peso 0
     bool body = false;   // (04/11 g) piel del cuerpo (VS 1c02a92a): solo pesos de borde para la teselacion, sin nada de cara
     UINT cbv[28] = {}; std::vector<float> xferPs; uint64_t xferIb = 0; int xferUsed = 0; bool xferGate = false; ID3D11Buffer* cbNoShape = nullptr; ID3D11Buffer* cbTeeth = nullptr;
-    bool beard = false, beardSrc = false; int geoId = 0, teethHits = 0; bool teethOn = false; ID3D11Buffer* idBuf = nullptr; std::vector<float> beardPs; int beardTries = 0;   // (04/11 c) barba: malla del pelo enlazada a la piel / piel que le pasa su paleta   // (04/11 c) lo que lleva el cbuffer y, si espera formas pasadas de la piel, sus vertices
+    bool beard = false, beardSrc = false; int geoId = 0, teethHits = 0; bool teethOn = false; ID3D11Buffer* idBuf = nullptr; std::vector<float> beardPs; int beardTries = 0; UINT seqAt = 0; std::vector<int> beardUsed; int beardRebinds = 0;   // (04/11 e) seqAt: orden del ultimo dibujo (barba: para elegir la piel dibujada junto a ella)   // (04/11 c) barba: malla del pelo enlazada a la piel / piel que le pasa su paleta   // (04/11 c) lo que lleva el cbuffer y, si espera formas pasadas de la piel, sus vertices
 };
 std::mutex s_mx;
 std::unordered_map<uint64_t, FaceMesh*> s_meshes;
@@ -379,11 +379,19 @@ std::vector<BeardSrc> s_bsrc; size_t s_bsrcBytes = 0;
 // barba quedaba enlazada a una que no se dibujaba
 std::map<uint64_t, int> s_geoIds; std::vector<int> s_geoUsed;
 int GeoId(uint64_t ib, UINT vmin, UINT nv) { const uint64_t k = Fnv(Fnv(Fnv(0xcbf29ce484222325ULL, ib), vmin), nv); auto it = s_geoIds.find(k); if (it != s_geoIds.end()) return it->second; const int id = (int)s_geoIds.size() + 1; s_geoIds[k] = id; return id; }
+// (04/11 e, log 07:44: "0 paletas" con 27 mallas marcadas) la barba se enlazaba a la piel MAS CERCANA en el espacio del modelo, y todas las caras
+// leidas (otros jugadores, pantallas anteriores) estan en el mismo lugar: quedaba pegada a una piel que ya no se dibuja. Ahora se elige entre las
+// pieles dibujadas en los ultimos cuadros, la mas cercana en el orden de dibujo a la barba (el mismo jugador dibuja la cara y el pelo juntos)
+struct GeoDrawn { UINT frame = 0, seq = 0; }; std::map<int, GeoDrawn> s_geoDrawn;
 int s_poolFail[4] = {};   // sin pozo, sin id, sin b5/b6, b5/b6 fuera de rango
 std::vector<float> s_beardData; ID3D11Buffer* s_beardBuf = nullptr; ID3D11ShaderResourceView* s_beardSrv = nullptr;
 ID3D11Buffer* s_pool = nullptr; ID3D11ShaderResourceView* s_poolSrv = nullptr; UINT s_poolAt = 0;
 constexpr UINT kPoolSlots = 64, kSlotF4 = 200, kBeardF4 = 9;
 int s_beardCopies = 0, s_beardDraws = 0;
+// (04/11 e, arranque 07:44: "0 paletas copiadas" con 27 mallas marcadas y 0 fallas = ninguna piel marcada se dibuja) que pieles de cara se
+// dibujan de verdad (geometria, vertices) contra las que usa la barba, para ver por que no coinciden
+struct GeoSeen { int geo, id; UINT nv; int n; bool mk; };
+GeoSeen s_geoSeen[16]; int s_geoSeenN = 0, s_skinNoGeo = 0, s_skinNoGeoNv = 0;
 bool BeardUpload() {
     if (s_beardData.empty() || !g_dev.dev) return false;
     D3D11_BUFFER_DESC d{}; d.ByteWidth = (UINT)(s_beardData.size() * 4); d.Usage = D3D11_USAGE_IMMUTABLE; d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
@@ -403,6 +411,7 @@ void BeardKeepSrc(FaceMesh* m, const std::vector<float>& ps, const std::vector<u
     BeardSrc b; b.id = m->geoId; b.ib = (uint64_t)m->ib; b.nv = m->nv; b.head = m->head; b.shapeOff = m->xferGate ? -1 : m->shapeOff;
     b.p = ps; b.w = wv; b.j.resize(iv.size()); for (size_t i = 0; i < iv.size(); i++) b.j[i] = (uint8_t)(std::min)(iv[i], 31u);
     s_bsrcBytes += by; s_bsrc.push_back(std::move(b));
+    static int nl = 0; if (nl++ < 60) Log("expresiones: piel para la barba: malla %d, geometria %d (%u vertices, primer vertice %u, cabeza %d%s)", m->id, m->geoId, m->nv, m->vmin, m->head, m->shapeOff >= 0 ? ", con formas" : "");
 }
 bool BeardBind(FaceMesh* m, const std::vector<float>& ps) {   // con s_mx tomado
     if (s_bsrc.empty() || m->nv == 0) return false;
@@ -419,9 +428,22 @@ bool BeardBind(FaceMesh* m, const std::vector<float>& ps) {   // con s_mx tomado
         }
         for (auto& kv : best) { const float d = sqrtf(kv.second); if (d < 0.012f) { cov[kv.first]++; dsum[kv.first] += d; } }
     }
-    uint64_t gib = 0; int gc = 0; double gd = 1e9;
-    for (auto& kv : cov) { const double md = dsum[kv.first] / kv.second; if (kv.second > gc || (kv.second == gc && md < gd)) { gib = kv.first; gc = kv.second; gd = md; } }
     const int ns = (int)((m->nv + stp - 1) / stp);
+    // grupos (buffers de piel) dibujados hace poco: el mas cercano en el orden de dibujo a la barba; si ninguno, el de mas cobertura
+    std::map<uint64_t, UINT> nearDraw;   // ib -> distancia en el orden de dibujo
+    for (const BeardSrc& S : s_bsrc) {
+        auto g = s_geoDrawn.find(S.id); if (g == s_geoDrawn.end() || s_frame - g->second.frame > 4) continue;
+        const UINT dq = g->second.seq > m->seqAt ? g->second.seq - m->seqAt : m->seqAt - g->second.seq;
+        auto it = nearDraw.find(S.ib); if (it == nearDraw.end() || dq < it->second) nearDraw[S.ib] = dq;
+    }
+    uint64_t gib = 0; int gc = 0; double gd = 1e9; UINT gq = 0xffffffffu; bool recent = false;
+    for (auto& kv : cov) {
+        if (kv.second * 2 < ns) continue;
+        auto nq = nearDraw.find(kv.first); if (nq == nearDraw.end()) continue;
+        const double md = dsum[kv.first] / kv.second;
+        if (nq->second < gq || (nq->second == gq && md < gd)) { gib = kv.first; gc = kv.second; gd = md; gq = nq->second; recent = true; }
+    }
+    if (!recent) for (auto& kv : cov) { const double md = dsum[kv.first] / kv.second; if (kv.second > gc || (kv.second == gc && md < gd)) { gib = kv.first; gc = kv.second; gd = md; } }
     if (gc * 2 < ns) {   // (04/11 d, Agustin: "el head shield del pelo no se mueve con los huesos") que malla del pelo no se enlaza y por que
         if (m->beardTries == 0 || m->beardTries == 14) Log("expresiones: pelo %d (%u vertices) sin enlazar a la piel (intento %d): muestra %d / %d a menos de 12 mm (hace falta la mitad)", m->id, m->nv, m->beardTries + 1, gc, ns);
         return false;
@@ -475,8 +497,10 @@ bool BeardBind(FaceMesh* m, const std::vector<float>& ps) {   // con s_mx tomado
     for (int g : used) if (std::find(s_geoUsed.begin(), s_geoUsed.end(), g) == s_geoUsed.end()) s_geoUsed.push_back(g);
     int nMark = 0; for (auto& kv : s_meshes) if (kv.second->geoId && std::find(used.begin(), used.end(), kv.second->geoId) != used.end()) { kv.second->beardSrc = true; nMark++; }
     const UINT cv[28] = { (UINT)off4, m->nv, m->vmin, 1u };
-    m->cb = MakeCBRaw(cv);
-    Log("expresiones: barba %d (%u vertices) enlazada a la piel de la cara (%d piezas, %d mallas de la tabla, %d de %u vertices a menos de 25 mm, muestra %d / %d a menos de 12 mm, %.1f mm de promedio)", m->id, m->nv, (int)used.size(), nMark, nOk, m->nv, gc, ns, gd * 1000.0);
+    m->cb = MakeCBRaw(cv);   // (el cbuffer viejo de un re-enlace no se libera: otro hilo puede tenerlo en la mano)
+    m->beardUsed = used;
+    char ug[96]; int uk = 0; ug[0] = 0; for (size_t i = 0; i < used.size() && uk < 80; i++) uk += snprintf(ug + uk, sizeof ug - uk, "%s%d", i ? "," : "", used[i]);
+    Log("expresiones: barba %d (%u vertices) enlazada a la piel de la cara (%d piezas: geometrias %s, %d mallas de la tabla, %s, %d de %u vertices a menos de 25 mm, muestra %d / %d a menos de 12 mm, %.1f mm de promedio)", m->id, m->nv, (int)used.size(), ug, nMark, recent ? "piel dibujada junto a la barba" : "OJO: ninguna piel dibujada cerca, la mas cercana", nOk, m->nv, gc, ns, gd * 1000.0);
     return m->cb != nullptr;
 }
 
@@ -587,7 +611,7 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
         if (mx < 0 || mx > 31) { Reject(m, "indices de hueso fuera de la paleta de 32"); return; }
         if (m->beard) {   // (04/11 c) malla del VS del pelo: se enlaza a la piel de la cara (si todavia no se leyo la piel, se reintenta)
             ReleaseIA(m);
-            if (BeardBind(m, ps)) { m->state = 3; return; }
+            if (BeardBind(m, ps)) { m->state = 3; m->beardPs = std::move(ps); return; }   // (04/11 e) los vertices quedan para re-enlazar
             m->beardPs = std::move(ps); m->state = 5; m->why = "pelo sin piel de cara cerca (todavia)"; return;
         }
         // (01/11) pestanas / parpados (mallas de 1-2 cm de alto): arriba gana el parpado superior (peso 1); ahi sk_head es el
@@ -851,11 +875,17 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
     auto it = s_meshes.find(key);
     if (it != s_meshes.end()) {
         rel(); FaceMesh* m = it->second; m->lastFrame = s_frame;
-        if (m->beard) { if (m->state == 3 && m->cb) { s_beardDraws++; return m->cb; } return nullptr; }
+        if (m->beard) { m->seqAt = s_drawSeq; if (m->state == 3 && m->cb) { s_beardDraws++; return m->cb; } return nullptr; }
         if (m->state == 3 && m->cb) {
             s_binds++;
             if (m->beardSrc) BeardPoolCopy(c, m);
+            if (m->head <= 31 && m->cbv[3] == 0 && m->nv >= 300) {   // (04/11 e) piel de cara dibujada (registro de la barba)
+                if (!m->geoId) { s_skinNoGeo++; s_skinNoGeoNv = (int)m->nv; }
+                else { int i = 0; for (; i < s_geoSeenN; i++) if (s_geoSeen[i].geo == m->geoId) { s_geoSeen[i].n++; break; }
+                       if (i == s_geoSeenN && s_geoSeenN < 16) s_geoSeen[s_geoSeenN++] = { m->geoId, m->id, m->nv, 1, m->beardSrc }; }
+            }
             const UINT seq = ++s_drawSeq;
+            if (m->geoId) { GeoDrawn& gdn = s_geoDrawn[m->geoId]; gdn.frame = s_frame; gdn.seq = seq; }   // (04/11 e) piel dibujada ahora
             if (m->shapeOff >= 0 && !m->xferGate) {   // piel con formas propias: las mallas pegadas de antes en este cuadro quedan habilitadas
                 s_packSeq = seq; s_packFrame = s_frame;
                 for (const GateE& g : s_gateRing) if (g.id && g.seq + 16 >= seq && g.seq <= seq) s_gateOk[s_gateOkAt++ % 32] = { g.id, s_frame };   // seq del ok = cuadro
@@ -909,7 +939,7 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
             s_meshes.clear(); s_pending.clear();
         }
     }
-    FaceMesh* m = new FaceMesh(); m->id = s_nextId++; m->lastFrame = s_frame; m->beard = t_beardDraw;
+    FaceMesh* m = new FaceMesh(); m->id = s_nextId++; m->lastFrame = s_frame; m->beard = t_beardDraw; m->seqAt = s_drawSeq;
     m->dump = !body && s_frame < s_dumpUntil.load(std::memory_order_relaxed);
     m->body = body;
     m->ib = ib; m->ibFmt = ibFmt; m->ibOff = ibOff; m->start = start; m->count = count; m->base = base;
@@ -1074,12 +1104,28 @@ void ExprPresent() {
                 FaceMesh* b = kv.second;
                 if (b->state != 5 || b->beardPs.empty() || s_frame - b->lastFrame > 120 || n >= 2) continue;
                 n++;
-                if (BeardBind(b, b->beardPs)) { b->state = 3; b->beardPs.clear(); b->beardPs.shrink_to_fit(); }
+                if (BeardBind(b, b->beardPs)) b->state = 3;
                 else if (++b->beardTries >= 15) { b->state = 4; b->why = "pelo: no hay piel de cara debajo"; b->beardPs.clear(); b->beardPs.shrink_to_fit(); }
+            }
+            // (04/11 e) barba enlazada a una piel que ya no se dibuja (otro jugador, otra pantalla) mientras la barba si: se vuelve a enlazar
+            // a la piel que se dibuja ahora (hasta 10 veces por barba)
+            int nr = 0;
+            for (auto& kv : s_meshes) {
+                FaceMesh* b = kv.second;
+                if (!b->beard || b->state != 3 || b->beardPs.empty() || b->beardUsed.empty() || s_frame - b->lastFrame > 4 || b->beardRebinds >= 10 || nr >= 2) continue;
+                bool live = false;
+                for (int g : b->beardUsed) { auto it = s_geoDrawn.find(g); if (it != s_geoDrawn.end() && s_frame - it->second.frame <= 120) { live = true; break; } }
+                if (live) continue;
+                nr++; b->beardRebinds++;
+                Log("expresiones: barba %d: su piel no se dibuja hace mas de 2 s, se vuelve a enlazar (vez %d)", b->id, b->beardRebinds);
+                BeardBind(b, b->beardPs);
             }
         }
         if (s_beardDraws || s_beardCopies) { static UINT lastB = 0; if (s_frame - lastB >= 3600) { lastB = s_frame; int nSrc = 0; for (auto& kv : s_meshes) if (kv.second->beardSrc) nSrc++;
-            Log("expresiones: barba por huesos: %d dibujos de barba, %d paletas de piel copiadas (~60 s; %d mallas de piel marcadas, %d geometrias; fallas: pozo %d, id %d, b5/b6 %d, rango %d)", s_beardDraws, s_beardCopies, nSrc, (int)s_geoUsed.size(), s_poolFail[0], s_poolFail[1], s_poolFail[2], s_poolFail[3]); s_beardDraws = s_beardCopies = 0; for (int& f : s_poolFail) f = 0; } }
+            Log("expresiones: barba por huesos: %d dibujos de barba, %d paletas de piel copiadas (~60 s; %d mallas de piel marcadas, %d geometrias; fallas: pozo %d, id %d, b5/b6 %d, rango %d)", s_beardDraws, s_beardCopies, nSrc, (int)s_geoUsed.size(), s_poolFail[0], s_poolFail[1], s_poolFail[2], s_poolFail[3]); char gl[400]; int gk = 0; gl[0] = 0; for (int i = 0; i < s_geoSeenN && gk < 360; i++) gk += snprintf(gl + gk, sizeof gl - gk, " %d(%u v, malla %d, %d%s)", s_geoSeen[i].geo, s_geoSeen[i].nv, s_geoSeen[i].id, s_geoSeen[i].n, s_geoSeen[i].mk ? ", marcada" : "");
+            Log("expresiones: barba por huesos: pieles de cara dibujadas por geometria:%s; sin geometria %d dibujos (ultima %d v); geometrias de la barba: %d", gl[0] ? gl : " ninguna", s_skinNoGeo, s_skinNoGeoNv, (int)s_geoUsed.size());
+            s_geoSeenN = 0; s_skinNoGeo = 0;
+            s_beardDraws = s_beardCopies = 0; for (int& f : s_poolFail) f = 0; } }
     }
     static int frames = 0;
     if (++frames >= 3600) {
