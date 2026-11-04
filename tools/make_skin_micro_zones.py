@@ -41,6 +41,9 @@ def write_dds(path, img):
     while True:
         mips.append(cur)
         if cur.shape[0] <= 1: break
+        # (v6) filtro gaussiano antes de bajar a la mitad (no solo caja 2x2): con la caja un poro de ~1 texel quedaba como un punto
+        # blanco / negro suelto segun cayera en el borde del texel (granito, "baja calidad" a la distancia del editor)
+        if cur.shape[0] >= 8: cur = gaussian_filter(cur, (0.75, 0.75, 0), mode='wrap')
         cur = (cur[0::2, 0::2] + cur[1::2, 0::2] + cur[0::2, 1::2] + cur[1::2, 1::2]) * 0.25
         # la normal promediada NO se renormaliza: su largo < 1 es la varianza (Toksvig) que el shader convierte en rugosidad
     hdr = struct.pack('<4sI I I I I I I 11I', b'DDS ', 124, 0x1 | 0x2 | 0x4 | 0x1000 | 0x20000 | 0x8, img.shape[0], img.shape[1], img.shape[1] * 4, 0, len(mips), *([0] * 11))
@@ -174,22 +177,24 @@ results = {}
 rng = np.random.default_rng(51)
 fur = voronoi_furrows(rng, 0.5, 0.022)
 fur *= np.clip(low_noise(rng, 0.35) * 0.9 + 0.4, 0, 1)                # surcos cortados (no barro seco)
-h = -0.012 * fur + surface(rng, 0.0012)
-hp, cp, n1 = pore_set(rng, 110, 0.75, 0.06, 0.32, 0.035, 0.125, (0.6, 0.95), 1.4, wall=3.2, rim=0.06)
+meso = voronoi_furrows(rng, 1.0, 0.085) * np.clip(low_noise(rng, 0.9) * 0.5 + 0.75, 0, 1)   # (v6) red gruesa: se ve a 0.15 mm/px
+h = -0.012 * fur - 0.036 * meso + surface(rng, 0.0012)
+hp, cp, n1 = pore_set(rng, 110, 0.75, 0.06, 0.32, 0.035, 0.125, (0.6, 0.95), 1.4, wall=3.2, collar=0.22, rim=0.04)
 hf, cf, n1f = pore_set(rng, 260, 0.38, 0.02, 0.2, 0.014, 0.03, (0.5, 0.8), 1.15, wall=2.2)
 h = np.minimum(np.minimum(h, hp), hf)
-cav = np.clip(np.maximum(cp, cf * 0.6) + fur * 0.15, 0, 1)
+cav = np.clip(np.maximum(cp, cf * 0.6) + fur * 0.15 + meso * 0.2, 0, 1)
 results['pes_skin_pores_round.dds'] = to_normal(h, cav)
 print('mejillas: poros', n1, 'foliculos', n1f)
 
 # ------------------------------------------------------------------ 2) nariz / barbilla: poros sebaceos grandes, embudo suave
 rng = np.random.default_rng(52)
 fur = voronoi_furrows(rng, 0.7, 0.025) * np.clip(low_noise(rng, 0.5) * 0.8 + 0.3, 0, 1)
-h = -0.006 * fur + surface(rng, 0.0008)                                # piel grasa y tensa: surcos flojos, mas lisa entre poros
+meso = voronoi_furrows(rng, 1.2, 0.08) * np.clip(low_noise(rng, 1.0) * 0.5 + 0.7, 0, 1)
+h = -0.006 * fur - 0.016 * meso + surface(rng, 0.0008)                 # piel grasa y tensa: surcos flojos, mas lisa entre poros
 hp, cp, n2 = pore_set(rng, 200, 0.5, 0.095, 0.4, 0.05, 0.2, (0.5, 0.85), 1.5, wall=3.6, collar=0.35)
 hf, cf, n2f = pore_set(rng, 120, 0.45, 0.025, 0.2, 0.016, 0.035, (0.5, 0.8), 1.1, wall=2.2)
 h = np.minimum(np.minimum(h, hp), hf)
-cav = np.clip(np.maximum(cp, cf * 0.5) + fur * 0.1, 0, 1)
+cav = np.clip(np.maximum(cp, cf * 0.5) + fur * 0.1 + meso * 0.15, 0, 1)
 results['pes_skin_pores_large.dds'] = to_normal(h, cav)
 print('nariz: poros', n2)
 
@@ -201,10 +206,11 @@ for f0, k in ((0.9, 1.0), (1.5, 0.5)):                                 # lineas 
     b = band_noise(rng, f0, 0.35, theta=np.pi / 2, ang_bw=0.18)        # frecuencia vertical = lineas HORIZONTALES
     seg = np.clip(low_noise(rng, 1.2) * 0.9 + 0.35, 0, 1)
     lines = np.maximum(lines, line_dist(b, 0.03, soft=True) * seg * k)
-h = -0.010 * fur - 0.008 * lines + surface(rng, 0.001)
+meso = voronoi_furrows(rng, 1.0, 0.08, stretch=2.4) * np.clip(low_noise(rng, 1.0) * 0.5 + 0.75, 0, 1)
+h = -0.010 * fur - 0.030 * meso - 0.010 * lines + surface(rng, 0.001)
 hp, cp, n3 = pore_set(rng, 190, 0.55, 0.045, 0.3, 0.025, 0.08, (0.6, 0.95), 1.25, wall=3.0, rim=0.05)
 h = np.minimum(h, hp)
-cav = np.clip(cp + fur * 0.15 + lines * 0.12, 0, 1)
+cav = np.clip(cp + fur * 0.15 + meso * 0.2 + lines * 0.12, 0, 1)
 results['pes_skin_forehead.dds'] = to_normal(h, cav)
 print('frente: poros', n3)
 
@@ -225,12 +231,12 @@ print('parpados: foliculos', n4)
 # ------------------------------------------------------------------ 5) labios (piel de afuera): estrias verticales
 rng = np.random.default_rng(55)
 l = np.zeros((N, N), np.float32)
-for f0, k in ((1.6, 1.0), (2.6, 0.55)):
+for f0, k in ((0.65, 1.0), (1.1, 0.5)):   # (v6) estrias cada ~0.8 mm y ~0.45 mm (2 cruces por cero por periodo)
     b = band_noise(rng, f0, 0.3, theta=0.0, ang_bw=0.12)              # frecuencia horizontal = lineas VERTICALES
-    seg = np.clip(low_noise(rng, 1.6) * 0.8 + 0.45, 0, 1)
-    l = np.maximum(l, line_dist(b, 0.03 / k ** 0.5, soft=True) * seg * k)
+    seg = np.clip(low_noise(rng, 1.6) * 0.35 + 0.8, 0, 1)            # (v6) parejas en todo el labio
+    l = np.maximum(l, line_dist(b, 0.06 / k ** 0.5, soft=True) * seg * k)
 crack = line_dist(band_noise(rng, 1.2, 0.5, theta=np.pi / 2, ang_bw=0.4), 0.01) * np.clip(low_noise(rng, 0.7) * 0.8 - 0.1, 0, 1)
-h = -0.03 * l - 0.008 * crack + surface(rng, 0.0008)
+h = -0.04 * l - 0.008 * crack + surface(rng, 0.0008)
 cav = np.clip(l * 0.7 + crack * 0.3, 0, 1)
 results['pes_skin_lips.dds'] = to_normal(h, cav)
 print('labios: ok')
