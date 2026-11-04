@@ -43,6 +43,7 @@ struct FaceMesh {
     UINT lastFrame = 0;   // (01/11) ultimo cuadro en que se dibujo (para echar las mallas viejas sin vaciar toda la tabla)
     int lids[4] = { -1, -1, -1, -1 }; UINT lidCap = 0;   // (02/11 h) parpados en la paleta y ultimo cuadro en que se leyo la paleta
     int shapeOff = -1; uint32_t huella = 0; ID3D11ShaderResourceView* shapeWr = nullptr;   // (04/11) gestos esculpidos (formas\<huella>.bin): primer float4 de esta malla en s_shapeData
+    UINT cbv[28] = {}; std::vector<float> xferPs; uint64_t xferIb = 0;   // (04/11 c) lo que lleva el cbuffer y, si espera formas pasadas de la piel, sus vertices
 };
 std::mutex s_mx;
 std::unordered_map<uint64_t, FaceMesh*> s_meshes;
@@ -109,7 +110,7 @@ bool ReadW(const uint8_t* p, DXGI_FORMAT f, float o[4]) {
     default: return false;
     }
 }
-ID3D11Buffer* MakeCB(UINT head, UINT maxIdx, UINT id, UINT mouth = 0, const int* lids = nullptr, UINT jawFull = 0, UINT jawHalf = 0, UINT lipTop = 99, UINT lipUp = 0, const float* eyes = nullptr, const int* mus = nullptr, const UINT* shape = nullptr) {
+ID3D11Buffer* MakeCB(UINT head, UINT maxIdx, UINT id, UINT mouth = 0, const int* lids = nullptr, UINT jawFull = 0, UINT jawHalf = 0, UINT lipTop = 99, UINT lipUp = 0, const float* eyes = nullptr, const int* mus = nullptr, const UINT* shape = nullptr, UINT* keep = nullptr) {
     if (!g_dev.dev) return nullptr;
     // 48 bytes de uint4 + 2 float4: centros de los ojos (x y z radio) izquierdo (+x, hueso 0) y derecho (hueso 1), para la mirada
     // + uint4 musculos virtuales (01/11 i): comisura izq / der, ceja interna izq / der (99 = no hay)
@@ -119,9 +120,16 @@ ID3D11Buffer* MakeCB(UINT head, UINT maxIdx, UINT id, UINT mouth = 0, const int*
     if (lids) for (int i = 0; i < 4; i++) v[4 + i] = lids[i] >= 0 ? (UINT)lids[i] : 99u;
     if (eyes) memcpy(v + 12, eyes, 32);
     if (mus) for (int i = 0; i < 4; i++) v[20 + i] = mus[i] >= 0 ? (UINT)mus[i] : 99u;
+    if (keep) memcpy(keep, v, sizeof v);
     D3D11_BUFFER_DESC d{}; d.ByteWidth = 112; d.Usage = D3D11_USAGE_IMMUTABLE; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     D3D11_SUBRESOURCE_DATA s{}; s.pSysMem = v;
     ID3D11Buffer* b = nullptr; return SUCCEEDED(g_dev.dev->CreateBuffer(&d, &s, &b)) ? b : nullptr;
+}
+ID3D11Buffer* MakeCBRaw(const UINT* v) {
+    if (!g_dev.dev) return nullptr;
+    D3D11_BUFFER_DESC d{}; d.ByteWidth = 112; d.Usage = D3D11_USAGE_IMMUTABLE; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = v;
+    ID3D11Buffer* b = nullptr; return SUCCEEDED(g_dev.dev->CreateBuffer(&d, &sd, &b)) ? b : nullptr;
 }
 ID3D11Buffer* Staging(UINT bytes) {
     D3D11_BUFFER_DESC d{}; d.ByteWidth = (bytes + 15) & ~15u; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
@@ -160,9 +168,76 @@ std::unordered_map<uint32_t, ShapePack> s_shapes;
 std::vector<float> s_shapeData;
 ID3D11Buffer* s_shapeBuf = nullptr; ID3D11ShaderResourceView* s_shapeSrv = nullptr;
 constexpr UINT kShapeN = 5;
-int ShapeFind(uint32_t hu, UINT nv) {   // con s_mx tomado
+// (04/11 c, Agustin: "con la sonrisa no se mueven todas las partes del ojo y modelos") las pestanas, la sombra del ojo y las demas
+// mallas de la cara que no tienen formas propias se quedaban quietas mientras la piel se movia: ahora toman la forma de la piel mas
+// cercana (vertices de la piel que tienen formas, a menos de 1.5 cm; se apaga entre 6 y 15 mm). La boca y el globo del ojo no.
+// Solo mallas del MISMO modelo que esa piel (mismo buffer de indices): todas las caras estan en el mismo lugar del espacio del
+// modelo y las pestanas de otro jugador tomarian la forma de Messi
+struct ShapeSrc { std::vector<float> p; size_t off4 = 0; UINT nv = 0; uint32_t hu = 0; uint64_t ib = 0; };   // ib: buffer de indices de la ultima vez que se vio esa piel
+std::vector<ShapeSrc> s_src;
+bool ShapeUpload() {   // con s_mx tomado: rehace el buffer con todo s_shapeData (la vista vieja NO se libera, ver abajo)
+    D3D11_BUFFER_DESC bd{}; bd.ByteWidth = (UINT)(s_shapeData.size() * 4); bd.Usage = D3D11_USAGE_IMMUTABLE; bd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = s_shapeData.data();
+    ID3D11Buffer* b = nullptr; ID3D11ShaderResourceView* v = nullptr;
+    if (SUCCEEDED(g_dev.dev->CreateBuffer(&bd, &sd, &b))) {
+        D3D11_SHADER_RESOURCE_VIEW_DESC vd{}; vd.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; vd.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+        vd.Buffer.FirstElement = 0; vd.Buffer.NumElements = (UINT)(s_shapeData.size() / 4);
+        if (FAILED(g_dev.dev->CreateShaderResourceView(b, &vd, &v))) { b->Release(); b = nullptr; }
+    }
+    if (!v) return false;
+    s_shapeBuf = b; s_shapeSrv = v; return true;
+}
+// formas de una malla sin paquete propio, sacadas de la piel cercana; -1 si no hay piel con formas cerca
+int ShapeXfer(FaceMesh* m, const float* ps, uint64_t ib) {   // con s_mx tomado
+    if (m->nv > 20000) return -1;
+    bool same = false; for (const ShapeSrc& S : s_src) if (S.ib == ib) same = true;
+    if (!same) return -1;
+    std::vector<float> d((size_t)m->nv * kShapeN * 4, 0.0f);
+    int nCerca = 0; float mx = 0.0f;
+    for (UINT v = 0; v < m->nv; v++) {
+        const float* P = ps + (size_t)v * 3;
+        struct Nb { float d2; const ShapeSrc* s; UINT i; } nb[4]; int nn = 0;
+        for (const ShapeSrc& S : s_src) if (S.ib == ib) for (UINT i = 0; i < S.nv; i++) {
+            const float* Q = &S.p[(size_t)i * 3];
+            const float dx = P[0] - Q[0], dy = P[1] - Q[1], dz = P[2] - Q[2], d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 > 0.015f * 0.015f) continue;
+            if (nn < 4) nb[nn++] = { d2, &S, i };
+            else { int w = 0; for (int k = 1; k < 4; k++) if (nb[k].d2 > nb[w].d2) w = k; if (d2 < nb[w].d2) nb[w] = { d2, &S, i }; }
+        }
+        if (!nn) continue;
+        float dmin = 1e9f; for (int k = 0; k < nn; k++) dmin = (std::min)(dmin, nb[k].d2); dmin = sqrtf(dmin);
+        const float t = std::clamp((dmin - 0.006f) / 0.009f, 0.0f, 1.0f), fall = 1.0f - t * t * (3.0f - 2.0f * t);
+        if (fall <= 0.0f) continue;
+        float ws = 0.0f, w[4];
+        for (int k = 0; k < nn; k++) { const float e = nb[k].d2 + 1e-8f; w[k] = 1.0f / (e * e); ws += w[k]; }   // 1/d^4: gana la mas cercana
+        for (UINT g = 0; g < kShapeN; g++) for (int c = 0; c < 3; c++) {
+            float a = 0.0f;
+            for (int k = 0; k < nn; k++) a += w[k] * s_shapeData[((nb[k].s->off4 + (size_t)nb[k].i * kShapeN + g) * 4) + c];
+            d[((size_t)v * kShapeN + g) * 4 + c] = a / ws * fall;
+        }
+        nCerca++;
+        const float* q = &d[(size_t)v * kShapeN * 4]; mx = (std::max)(mx, sqrtf(q[0] * q[0] + q[1] * q[1] + q[2] * q[2]));
+    }
+    if (nCerca == 0 || mx < 1e-4f) return -1;
+    const size_t off4 = s_shapeData.size() / 4;
+    s_shapeData.insert(s_shapeData.end(), d.begin(), d.end());
+    if (!ShapeUpload()) { s_shapeData.resize(off4 * 4); return -1; }
+    Log("expresiones: formas pasadas de la piel a la malla %d (%08X, %u vertices, %d cerca de la piel; sonrisa maximo %.1f mm)", m->id, m->huella, m->nv, nCerca, mx * 1000);
+    return (int)off4;
+}
+void ShapeXferPending() {   // con s_mx tomado: llego piel con formas nueva, las mallas que esperaban la toman
+    for (auto& kv : s_meshes) {
+        FaceMesh* m = kv.second;
+        if (m->state != 3 || m->xferPs.empty()) continue;
+        const int off = ShapeXfer(m, m->xferPs.data(), m->xferIb);
+        if (off < 0) continue;
+        UINT v[28]; memcpy(v, m->cbv, sizeof v); v[24] = (UINT)off; v[25] = m->nv; v[26] = m->vmin; v[27] = kShapeN;
+        if (ID3D11Buffer* b = MakeCBRaw(v)) { memcpy(m->cbv, v, sizeof v); m->cb = b; m->shapeOff = off; }   // el cbuffer viejo no se libera (otro hilo lo puede estar por enlazar)
+    }
+}
+int ShapeFind(uint32_t hu, UINT nv, const float* ps, uint64_t ib) {   // con s_mx tomado
     ShapePack& sp = s_shapes[hu];
-    if (sp.tried) return sp.nv == nv ? sp.off : -1;
+    if (sp.tried) { if (sp.nv == nv && sp.off >= 0) for (ShapeSrc& S : s_src) if (S.hu == hu) S.ib = ib; return sp.nv == nv ? sp.off : -1; }
     // (las arrugas de la malla quedan en sp.wr; ExprShapeWr las da)
     sp.tried = true;
     wchar_t nm[64]; swprintf(nm, 64, L"formas\\%08X.bin", hu);
@@ -182,19 +257,11 @@ int ShapeFind(uint32_t hu, UINT nv) {   // con s_mx tomado
     }
     const size_t off4 = s_shapeData.size() / 4;
     s_shapeData.insert(s_shapeData.end(), d.begin(), d.end());
-    D3D11_BUFFER_DESC bd{}; bd.ByteWidth = (UINT)(s_shapeData.size() * 4); bd.Usage = D3D11_USAGE_IMMUTABLE; bd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-    D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = s_shapeData.data();
-    ID3D11Buffer* b = nullptr; ID3D11ShaderResourceView* v = nullptr;
-    if (SUCCEEDED(g_dev.dev->CreateBuffer(&bd, &sd, &b))) {
-        D3D11_SHADER_RESOURCE_VIEW_DESC vd{}; vd.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; vd.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
-        vd.Buffer.FirstElement = 0; vd.Buffer.NumElements = (UINT)(s_shapeData.size() / 4);
-        if (FAILED(g_dev.dev->CreateShaderResourceView(b, &vd, &v))) { b->Release(); b = nullptr; }
-    }
-    if (!v) { s_shapeData.resize(off4 * 4); Log("expresiones: formas %08X: no se pudo crear el buffer", hu); return -1; }
     // la vista vieja NO se libera: un dibujo de otro hilo puede tenerla en la mano entre ExprBufferForDraw y VSSetShaderResources
     // (solo pasa al cargar un paquete nuevo: unos pocos KB)
-    s_shapeBuf = b; s_shapeSrv = v;
+    if (!ShapeUpload()) { s_shapeData.resize(off4 * 4); Log("expresiones: formas %08X: no se pudo crear el buffer", hu); return -1; }
     sp.off = (int)off4; sp.nv = nv;
+    { ShapeSrc src; src.p.assign(ps, ps + (size_t)nv * 3); src.off4 = off4; src.nv = nv; src.hu = hu; src.ib = ib; s_src.push_back(std::move(src)); }
     if (hd[3]) {   // (04/11) arrugas esculpidas de la sonrisa de esta cara: normal map en las uv de la cara (wrinkle_dds.py)
         auto it = s_shapeWr.find(hd[3]);
         if (it == s_shapeWr.end()) {
@@ -467,16 +534,25 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
             }
         }
         m->huella = Huella(m, ps);
-        m->shapeOff = (hd <= 31 && !eye && !mouth) ? ShapeFind(m->huella, m->nv) : -1;
+        const uint64_t ibKey = (uint64_t)m->ib;
+        m->shapeOff = (hd <= 31 && !eye && !mouth) ? ShapeFind(m->huella, m->nv, ps.data(), ibKey) : -1;
         if (m->shapeOff >= 0) m->shapeWr = s_shapes[m->huella].wr;
+        else if (hd <= 31 && !eye && !mouth) {   // (04/11 c) sin formas propias: las de la piel cercana del mismo modelo (ahora o cuando llegue)
+            m->shapeOff = ShapeXfer(m, ps.data(), ibKey);
+            // se guardan los vertices por si llega otro pedazo de esa piel despues (la cara viene en 3 pedazos): solo mallas chicas,
+            // con tope total de ~24 MB
+            static size_t kept = 0;
+            if (m->nv <= 20000 && kept + ps.size() * 4 < (24u << 20)) { m->xferPs = ps; m->xferIb = ibKey; kept += ps.size() * 4; }
+        }
         const UINT shp[4] = { m->shapeOff >= 0 ? (UINT)m->shapeOff : 0u, m->nv, m->vmin, m->shapeOff >= 0 ? kShapeN : 0u };
-        m->cb = MakeCB((UINT)m->head, (UINT)mx, (UINT)m->id, eye ? 2u : (mouth ? 1u : 0u), lids, jawFull, jawHalf, lipTop, lipUp, eye ? eyes : nullptr, mus, shp);
+        m->cb = MakeCB((UINT)m->head, (UINT)mx, (UINT)m->id, eye ? 2u : (mouth ? 1u : 0u), lids, jawFull, jawHalf, lipTop, lipUp, eye ? eyes : nullptr, mus, shp, m->cbv);
         for (int i = 0; i < 4; i++) m->lids[i] = lids[i];
         if (m->dump && hd <= 31 && !eye && !mouth && m->nv >= 200) DumpObj(m, ps, uvs, iv, wv, ylo, yhi);
         m->tri.clear(); m->tri.shrink_to_fit();
         ReleaseIA(m);
         if (!m->cb) { m->state = 4; m->why = "sin cbuffer"; s_hist[3]++; return; }
         m->state = 3; s_hist[m->head <= 1 ? m->head : m->head > 31 ? 3 : 2]++;
+        if (m->shapeOff >= 0 && m->xferPs.empty()) ShapeXferPending();   // (04/11 c) llego un pedazo de piel con formas: las mallas de ese modelo la toman
         static int n = 0;
         if (n++ < 80) {   // uso de cada hueso de la paleta (peso total / peso en la parte alta) para comparar con face_rig.py
             char l[1400]; int k = snprintf(l, sizeof l, "expresiones: malla de cara %d (%u indices, %u vertices, alto %.3f..%.3f m): hueso maximo %d -> cabeza en la paleta %d%s, parpados %d %d / %d %d, boca abajo %08X mitad %08X labio %u arriba %08X comisuras %d %d cejas %d %d%s%s |",
