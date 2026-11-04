@@ -232,6 +232,13 @@ static void DrawGroup(MenuGroup& g, int gid) {
                     }
                     ImGui::EndCombo();
                 }
+            } else if (!isExt && sl.fmt == "color" && sl.comp <= 1) {
+                // (04/11 n, Agustin: "el selector de color no es muy preciso") formato "color": un selector de color (rueda + valores)
+                // sobre esta componente y las dos siguientes (rojo / verde / azul) en vez de tres sliders
+                float* rgb = &g_cfg.live[sl.idx][sl.comp];
+                for (int k = 0; k < 3; k++) rgb[k] = rgb[k] < 0.f ? 0.f : rgb[k] > 1.f ? 1.f : rgb[k];
+                ImGui::ColorEdit3("##col", rgb, ImGuiColorEditFlags_PickerHueWheel | ImGuiColorEditFlags_DisplayRGB | ImGuiColorEditFlags_Float);
+                if (ImGui::IsItemHovered() && !ImGui::IsItemActive()) ImGui::SetTooltip("%s", TRS("Clic en el cuadro de color: rueda de color; Ctrl+clic en un numero para escribirlo"));
             } else {
                 // (31/10) AlwaysClamp: el valor escrito con Ctrl+clic tambien queda dentro del rango del slider
                 // (x318 "Claridad del ojo" se guardaba en -1.17 / 2.61 con rango 0..1); ademas se recorta lo que
@@ -242,7 +249,7 @@ static void DrawGroup(MenuGroup& g, int gid) {
             }
             ImGui::SameLine();
             float saved = isExt ? (g_cfg.clothLoaded.count(sl.ext) ? g_cfg.clothLoaded[sl.ext] : sl.def) : g_cfg.base[sl.idx][sl.comp];
-            if (ImGui::SmallButton("<")) val = saved;
+            if (ImGui::SmallButton("<")) { val = saved; if (!isExt && sl.fmt == "color" && sl.comp <= 1) for (int k = 1; k < 3; k++) g_cfg.live[sl.idx][sl.comp + k] = g_cfg.base[sl.idx][sl.comp + k]; }
             if (ImGui::IsItemHovered()) ImGui::SetTooltip(TRS(isExt ? "Volver al valor que tenia cloth.ini (%.4g); fabrica: %.4g" : "Volver al valor guardado (%.3f)"), saved, sl.def);
             if (isExt && val != before) { g_cfg.clothDirty = true; g_cfg.clothChangeT = Now(); }
             ImGui::PopID();

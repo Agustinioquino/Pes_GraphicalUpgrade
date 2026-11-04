@@ -109,7 +109,8 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
     float3 L = g_psSystem.m_dominantLightDir.xyz;
     if (IniParams.Load(int2(50,0)).z < 0.5) L = float3(dot(L, g_psScene.m_view._m00_m10_m20), dot(L, g_psScene.m_view._m01_m11_m21), dot(L, g_psScene.m_view._m02_m12_m22));
     if (dot(L, L) > 0.25) {
-      float kb = smoothstep(0.05, 0.75, dot(-normalize(L), normalize(i.viewV))) * saturate(pesBrowBack.w);
+      // (04/11 n, Agustin: "esta al reves") m_dominantLightDir apunta hacia donde VA la luz: contraluz = luz y camara del mismo lado de L
+      float kb = smoothstep(0.05, 0.75, dot(normalize(L), normalize(i.viewV))) * saturate(pesBrowBack.w);
       float3 cb = saturate(pesBrowBack.rgb) * lerp(1.0, 1.15, t);   // la punta deja pasar mas luz
       col = lerp(col, cb, kb);
     }
