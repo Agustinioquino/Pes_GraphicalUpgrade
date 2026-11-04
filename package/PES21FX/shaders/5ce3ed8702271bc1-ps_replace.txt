@@ -80,6 +80,10 @@ Texture2D<float4> pesSeedMap  : register(t26);
 Texture2D<float4> pesSkinMicro : register(t27);   // (04/11 poros v4) poros redondos (pes_skin_pores_round.dds)
 Texture2D<float4> pesSkinCrepe : register(t37);   // (04/11) arruguitas cruzadas (pes_skin_crepe.dds)
 Texture2D<float4> pesSkinLips  : register(t38);   // (04/11) estrias de los labios (pes_skin_lips.dds)
+Texture2D<float4> pesSkinLarge : register(t39);   // (04/11 poros v5) poros grandes de nariz y menton (pes_skin_pores_large.dds)
+Texture2D<float4> pesSkinFhead : register(t40);   // (04/11 poros v5) frente y sobre las cejas (pes_skin_forehead.dds)
+Texture2D<float4> pesSkinNeck  : register(t41);   // (04/11 poros v5) cuello (pes_skin_neck.dds)
+Texture2D<float4> pesFacePores2 : register(t42);  // (04/11 poros v5) guia 2: R frente, G sobre las cejas, B cuello (pes_face_pores2.dds)
 Texture2D<float4> pesTorsoTex  : register(t29);   // PES21 (27/10) torso_N_bsm de TorsoBody del tono del jugador (brazos.cpp; pes_collar.hlsli)
 Texture2D<float4> pesFacePores : register(t28);   // PES21 (19/10 b) guia de poros por zona (textures\pes_face_pores.dds): R densidad, G tamano, B zona T (brillo), A oclusion   // PES21 (19/10) micro normal de poros en mosaico (textures\pes_skin_micro_n.dds), A = poro   // PES21 (18/10) semillas de cejas por celda (salida C del generador)
 RWStructuredBuffer<PesSeed> pesSeeds : register(u5);   // PES21 (18/10) semillas animadas de este dibujo (las lee pes_brow_vs)
@@ -404,12 +408,14 @@ void main(
   float3 pesDPx = ddx(pesPM), pesDPy = ddy(pesPM);
   float2 pesDUx = ddx(v2.xy), pesDUy = ddy(v2.xy);
   { if (enhance && P94.w > 0.5) {
-      // (04/11 poros v4) tres micro relieves por zona (pes_pores.hlsli PesTriPoresZ): poros redondos de tamano segun la zona,
-      // arruguitas cruzadas en parpados / ojeras / patas de gallo (guia A) y estrias verticales en los labios (mapa de zonas G)
-      float tileM = PES_PORE_TILE_MM_Z * 0.001 * 7.0 / max(P94.y, 1.0);   // un mosaico = 20 mm de piel con y94 = 7 (tamano real)
-      float4 guide = pesFacePores.Sample(g_samplerLinear_Clamp_s, v2.xy);   // R densidad, G tamano, B zona T, A arruguitas
+      // (04/11 poros v5) seis micro relieves por zona a TAMANO REAL fijo (pes_pores.hlsli PesTriPores5): mejillas, nariz / menton,
+      // frente / sobre las cejas, parpados (arruguitas), labios y cuello; y94 ya no cambia el tamano. Mezcla con la normal de la cara
+      // por RNM (como UE5 / HDRP) y con el signo del marco tangente del juego verificado en cada pixel
+      float4 guide = pesFacePores.Sample(g_samplerLinear_Clamp_s, v2.xy);    // R densidad, G tamano (grandes), B zona T, A arruguitas
+      float4 guide2 = pesFacePores2.Sample(g_samplerLinear_Clamp_s, v2.xy);  // R frente, G sobre las cejas, B cuello
       float4 pesFZp = pesZones.Sample(g_samplerLinear_Clamp_s, v2.xy);       // G labios, A piel
-      PesPores pp = PesTriPoresZ(pesSkinMicro, pesSkinCrepe, pesSkinLips, g_samplerAnisotropic_Clamp_s, pesPM, pesDPx, pesDPy, pesDUx, pesDUy, tileM, float3(guide.g, guide.a, pesFZp.g), pesHasR);
+      PesPores pp = PesTriPores5(pesSkinMicro, pesSkinLarge, pesSkinFhead, pesSkinCrepe, pesSkinLips, pesSkinNeck, g_samplerAnisotropic_Clamp_s,
+                                 pesPM, pesDPx, pesDPy, pesDUx, pesDUy, float4(guide.g, guide.a, pesFZp.g, guide2.b), guide2.rg, pesHasR);
       float near = pp.near;
       if (near > 0.001) {
         pesTZone = guide.b;
@@ -419,11 +425,11 @@ void main(
           float4 FBe = pesFaceB.Sample(g_samplerLinear_Clamp_s, v2.xy);
           if (P68e.x > 0.5 && FBe.a > 0.5) { float4 FAe = pesFaceA.Sample(g_samplerLinear_Clamp_s, v2.xy); skinM *= 1.0 - saturate(FAe.a * 1.5); }
           skinM *= lerp(0.5, 1.0, pesFZp.a); }
-        float wPore = saturate(1.0 - guide.a - pesFZp.g);                    // parte de poros redondos (el resto: arruguitas / labios)
-        float dens = lerp(0.8, 0.25 + 1.0 * guide.r, wPore);                 // arruguitas y labios con fuerza propia (ahi la densidad de poros es baja)
+        float wPore = saturate(1.0 - guide.a - pesFZp.g - guide2.b);         // parte de poros (el resto: arruguitas / labios / cuello)
+        float dens = lerp(0.8, 0.25 + 1.0 * guide.r, wPore);                 // arruguitas, labios y cuello con fuerza propia
         float str = clamp(P94.x, 0.0, 2.0) * near * 1.1 * skinM * dens;
-        r1.xy += pp.dT * str;   // en el espacio tangente del normal map (se pasa a vista mas abajo)
-        r1.xyz = normalize(r1.xyz);
+        float2 pesTS = PesTanSigns(v4.xyz, v5.xyz, v3.xyz, pesDUx, pesDUy);
+        r1.xyz = PesRNM(normalize(r1.xyz), normalize(float3(pp.dT * pesTS * str, 1.0)));   // en el espacio tangente del normal map
         pesPoreA = pp.a * near * lerp(0.5, 0.3 + guide.r, wPore);
         pesPoreC = pesPoreA * pp.close;   // hueco del poro solo en primer plano real (ver pes_pores.hlsli)
         // (04/11) el fondo del poro / surco apenas mas oscuro y CALIDO (sangre y sombra bajo la piel), no gris; lo que mas se nota

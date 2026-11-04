@@ -95,15 +95,24 @@ float PesTriVarZ(Texture2D<float4> t, SamplerState smp, float3 q, float3 qx, flo
   return saturate((1.0 - (wgt.x * lX + wgt.y * lY + wgt.z * lZ)) * 8.0);
 }
 
-// z: x tamano 0..1, y peso de arruguitas, z peso de labios; tileM: metros por mosaico (20 mm con y94 = 17.6)
-PesPores PesTriPoresZ(Texture2D<float4> tR, Texture2D<float4> tC, Texture2D<float4> tL, SamplerState smp, float3 pM, float3 dPx, float3 dPy,
-                      float2 dUx, float2 dUy, float tileM, float3 z, bool hasR) {
+// ==================================================================================================================================
+// (04/11) POROS v5. Agustin: "haz estos normales de mayor calidad con diferencias un sombreado suave o duro, ademas ten en cuenta los
+// diferentes poros de la piel, cerca de los ojos, sobre las cejas, en la frente y en el cuello"; "el tamano consideralo vos sabiendo
+// como es el tamano de los poros en rostros reales, que el tamano no cambie con la distancia"; "me gusta el enfoque moderno".
+//  - TAMANO REAL FIJO: un mosaico = 20 mm de piel siempre (ya no depende de y94 ni de la zona): cada zona tiene su textura con los
+//    poros del tamano real de esa zona (tools/make_skin_micro_zones.py): tR mejillas / resto, tG nariz y menton (grandes), tF frente
+//    (y sobre las cejas, mezclada con tG), tC parpados / ojeras / patas de gallo, tL labios, tN cuello. Con la distancia el mip
+//    promedia el relieve (no lo agranda) y lo que ya no se ve pasa a rugosidad (Toksvig), como en UE5 / HDRP.
+//  - zA: x tamano (0 mejilla .. 1 nariz), y arruguitas, z labios, w cuello; zB: x frente, y sobre las cejas
+PesPores PesTriPores5(Texture2D<float4> tR, Texture2D<float4> tG, Texture2D<float4> tF, Texture2D<float4> tC, Texture2D<float4> tL,
+                      Texture2D<float4> tN, SamplerState smp, float3 pM, float3 dPx, float3 dPy, float2 dUx, float2 dUy,
+                      float4 zA, float2 zB, bool hasR) {
   PesPores o; o.dT = 0; o.a = 0; o.var = 0; o.dbg = 0; o.near = 0; o.close = 0;
   if (!hasR) return o;
-  float pxM = sqrt(length(dPx) * length(dPy));
-  float mmPx = pxM / (tileM / PES_PORE_TILE_MM_Z);   // mm de piel (del mosaico) por pixel
+  const float tileM = PES_PORE_TILE_MM_Z * 0.001;
+  float mmPx = sqrt(length(dPx) * length(dPy)) * 1000.0;   // mm de piel por pixel
   o.near = saturate((2.0 - mmPx) / 1.2);    // el relieve se funde con el pixel mas grande que ~2 mm (el mip ya promedia antes)
-  o.close = saturate((0.25 - mmPx) / 0.15);  // hueco del poro visible solo con varios pixeles por poro (pixel <= 0.1 mm)
+  o.close = saturate((0.4 - mmPx) / 0.25);  // hueco oscuro del poro solo con el poro de 2 o mas pixeles (pixel <= 0.15 mm)
   if (o.near <= 0.001) return o;
   float det = dUx.x * dUy.y - dUx.y * dUy.x; det = abs(det) < 1e-12 ? 1e-12 : det;
   float3 dpdu = (dPx * dUy.y - dPy * dUx.y) / det, dpdv = (dPy * dUx.x - dPx * dUy.x) / det;
@@ -111,24 +120,47 @@ PesPores PesTriPoresZ(Texture2D<float4> tR, Texture2D<float4> tC, Texture2D<floa
   float3 tM = normalize(dpdu), bM = normalize(dpdv - tM * dot(dpdv, tM));
   float3 wgt = pow(abs(nM), 4.0); wgt /= max(wgt.x + wgt.y + wgt.z, 1e-6);
   float3 q = pM / tileM, qx = dPx / tileM, qy = dPy / tileM;
-  float wL = saturate(z.z), wC = saturate(z.y) * (1.0 - wL), wR = saturate(1.0 - wL - wC);
+  // pesos por zona (suman 1): labios > cuello > arruguitas > frente / cejas > poros (grandes o de mejilla)
+  float rem = 1.0;
+  float wL = saturate(zA.z);                         rem -= wL;
+  float wN = saturate(zA.w) * rem;                   rem -= wN;
+  float wC = saturate(zA.y) * rem;                   rem -= wC;
+  float wF = saturate(zB.x + 0.5 * zB.y) * rem;      rem -= wF;
+  float wG = saturate(zA.x + 0.5 * zB.y) * rem;
+  float wR = max(rem - wG, 0.0);
   float4 acc = 0; float var = 0;
-  [branch] if (wR > 0.01) {
-    // tres escalas: cada pixel mezcla las dos vecinas segun el tamano de la zona (sin estirar el dibujo)
-    float sz = saturate(z.x) * 2.0;
-    float sA = sz < 1.0 ? 0.6 : 1.0, sB = sz < 1.0 ? 1.0 : 1.7, k = frac(min(sz, 1.999));
-    float4 a = PesTriTapZ(tR, smp, q, qx, qy, wgt, sA, sz < 1.0 ? 0.0 : 0.23);
-    float4 b = PesTriTapZ(tR, smp, q, qx, qy, wgt, sB, sz < 1.0 ? 0.23 : 0.61);
-    acc += lerp(a, b, k) * wR;
-    var += PesTriVarZ(tR, smp, q, qx, qy, wgt, 1.0) * wR;
-  }
-  [branch] if (wC > 0.01) { acc += PesTriTapZ(tC, smp, q, qx, qy, wgt, 1.0, 0.11) * wC; var += PesTriVarZ(tC, smp, q, qx, qy, wgt, 1.0) * wC * 0.6; }
-  [branch] if (wL > 0.01) { acc += PesTriTapZ(tL, smp, q, qx, qy, wgt, 1.0, 0.37) * wL; }
+  [branch] if (wR > 0.02) { acc += PesTriTapZ(tR, smp, q, qx, qy, wgt, 1.0, 0.0)  * wR; var += PesTriVarZ(tR, smp, q, qx, qy, wgt, 1.0) * wR; }
+  [branch] if (wG > 0.02) { acc += PesTriTapZ(tG, smp, q, qx, qy, wgt, 1.0, 0.23) * wG; var += PesTriVarZ(tG, smp, q, qx, qy, wgt, 1.0) * wG; }
+  [branch] if (wF > 0.02) { acc += PesTriTapZ(tF, smp, q, qx, qy, wgt, 1.0, 0.61) * wF; var += PesTriVarZ(tF, smp, q, qx, qy, wgt, 1.0) * wF; }
+  [branch] if (wC > 0.02) { acc += PesTriTapZ(tC, smp, q, qx, qy, wgt, 1.0, 0.11) * wC; var += PesTriVarZ(tC, smp, q, qx, qy, wgt, 1.0) * wC * 0.6; }
+  [branch] if (wL > 0.02) { acc += PesTriTapZ(tL, smp, q, qx, qy, wgt, 1.0, 0.37) * wL; }
+  [branch] if (wN > 0.02) { acc += PesTriTapZ(tN, smp, q, qx, qy, wgt, 1.0, 0.83) * wN; var += PesTriVarZ(tN, smp, q, qx, qy, wgt, 1.0) * wN * 0.8; }
   float3 dNm = acc.xyz - nM * dot(acc.xyz, nM);
   o.dT = float2(dot(dNm, tM), dot(dNm, bM));
   o.a = acc.w;
   o.var = var;
-  o.dbg = float2(wR, wC);
+  o.dbg = float2(wR + wG + wF, wC + wN);
   return o;
+}
+
+// Signo del marco tangente del juego (T, B del VS, en la vista) respecto de dp/du y dp/dv: la perturbacion de los poros se calcula
+// contra dp/du y dp/dv; si el modelo trae la bitangente al reves (convencion de verde del normal map), el relieve de los poros quedaba
+// espejado en vertical (el hueco iluminado del lado de la luz, se veia como granito). Se mira hacia donde se mueve en la PANTALLA un
+// paso a lo largo de T (y de B) y se compara con hacia donde crece u (y v) en la pantalla (derivadas de la UV): sin profundidad ni
+// matrices. v3 = direccion de la vista del pixel (cualquier signo y largo); vista con x a la derecha e y hacia arriba.
+float2 PesTanSigns(float3 T, float3 B, float3 v3, float2 dUx, float2 dUy) {
+  float iz = 1.0 / (abs(v3.z) > 1e-4 ? v3.z : 1e-4);
+  float2 mT = float2(T.x - v3.x * T.z * iz, -(T.y - v3.y * T.z * iz));
+  float2 mB = float2(B.x - v3.x * B.z * iz, -(B.y - v3.y * B.z * iz));
+  float sT = dot(mT, float2(dUx.x, dUy.x)), sB = dot(mB, float2(dUx.y, dUy.y));
+  return float2(sT < 0.0 ? -1.0 : 1.0, sB < 0.0 ? -1.0 : 1.0);
+}
+
+// Mezcla de normales RNM (Barre-Brisebois / Hill 2012, la de UE5 y HDRP para el detalle): el relieve del poro se REORIENTA sobre la
+// normal de la cara en vez de sumarle la pendiente. Antes (suma + normalizar) en las zonas inclinadas del normal map (aletas de la
+// nariz, parpados, menton, arrugas) el poro se aplanaba y perdia fuerza. n1 base, n2 detalle, los dos en el espacio tangente.
+float3 PesRNM(float3 n1, float3 n2) {
+  float3 t = n1 + float3(0.0, 0.0, 1.0), u = n2 * float3(-1.0, -1.0, 1.0);
+  return normalize(t * (dot(t, u) / max(t.z, 1e-4)) - u);
 }
 #endif
