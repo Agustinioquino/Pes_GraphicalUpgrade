@@ -347,6 +347,7 @@ void FaceGenPresent() {
                 // 18/10 pelo: identidad de la cara, tipo de pelo (PES21FX_hair.ini) y mapa de pelo propio (PES21FX\hair\<id>.dds)
                 { ID3D11Resource* res = nullptr; r.in[1]->GetResource(&res);
                   if (res) { e.id = HashFaceTexture(c, res); res->Release(); } }
+                if (!e.id.empty()) CarasHdNewFace(c, e.id, r.in);   // (04/11) caras en alta: volcar originales / buscar las reescaladas
                 if (!e.id.empty()) {
                     ID3D11ShaderResourceView* usrv = LoadUserHairMap(e.id);
                     if (usrv) { if (e.c) e.c->Release(); e.c = usrv; e.userMap = true; }
