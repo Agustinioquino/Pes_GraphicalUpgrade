@@ -143,13 +143,44 @@ static const float kOpen[][3] = {
     { 0, 0, 0 },                       // doublechin
     { -0.0030f, -0.0004f,  0.0010f },  // lip_s_l: la comisura se junta 3 mm
     {  0.0030f, -0.0004f,  0.0010f },  // lip_s_r
-    { -0.0010f,  0.0f,     0.0f },     // cheek_s_l
-    {  0.0010f,  0.0f,     0.0f },     // cheek_s_r
-    { -0.0008f,  0.0f,     0.0004f },  // lip_t_l
-    {  0.0f,     0.0f,     0.0005f },  // lip_t_c
-    {  0.0008f,  0.0f,     0.0004f },  // lip_t_r
+    { -0.0010f, -0.0012f,  0.0f },     // cheek_s_l: la mejilla de abajo se estira hacia abajo
+    {  0.0010f, -0.0012f,  0.0f },     // cheek_s_r
+    // (04/11, Agustin: "es poco realista la forma de la boca al abrirse") el labio de arriba sube un poco y se despega de los dientes
+    { -0.0008f,  0.0008f,  0.0004f },  // lip_t_l
+    {  0.0f,     0.0010f,  0.0005f },  // lip_t_c
+    {  0.0008f,  0.0008f,  0.0004f },  // lip_t_r
 };
 static const float* OpenOf(int d) { static const float z[3] = { 0, 0, 0 }; return d < (int)(sizeof(kOpen) / sizeof(kOpen[0])) ? kOpen[d] : z; }
+// (03/11, Agustin: "deberias crear un slider para enojo, sonreir, asombrado, hablar") GESTOS DEL MOD por huesos (fila 355: x enojo,
+// y sonrisa, z asombro, w hablar). Corrimiento de cada hueso en metros, ejes de la cabeza (x a la izquierda del jugador, y arriba,
+// z adelante), por 1.0 de slider. Las mejillas (18/19) de la sonrisa las pone Secondary (x348). El asombro y el habla abren ademas
+// la mandibula (como "Abrir la boca")
+struct PoseOff { int d; float a[3], s[3], u[3]; };   // a = enojo, s = sonrisa, u = asombro
+static const PoseOff kPose[] = {
+    {  1, { 0, 0, 0 },                   {  0.0010f, -0.0004f, 0 },        { 0, 0, 0 } },                    // lip_b_l
+    {  2, { 0, 0, 0 },                   { -0.0010f, -0.0004f, 0 },        { 0, 0, 0 } },                    // lip_b_r
+    {  5, {  0.0004f, -0.0022f, 0 },     {  0.0030f,  0.0030f, -0.0010f }, { -0.0015f, 0, 0.0005f } },       // lip_s_l: comisura
+    {  6, { -0.0004f, -0.0022f, 0 },     { -0.0030f,  0.0030f, -0.0010f }, {  0.0015f, 0, 0.0005f } },       // lip_s_r
+    {  7, { 0, -0.0006f, 0 },            {  0.0010f,  0.0015f, 0 },        { 0, 0, 0 } },                    // cheek_s_l
+    {  8, { 0, -0.0006f, 0 },            { -0.0010f,  0.0015f, 0 },        { 0, 0, 0 } },                    // cheek_s_r
+    {  9, { 0,  0.0010f, 0 },            {  0.0004f,  0.0008f, 0 },        { 0, 0, 0 } },                    // lip_t_l
+    { 10, { 0,  0.0008f, 0 },            { 0, 0.0004f, 0 },                { 0, 0, 0 } },                    // lip_t_c
+    { 11, { 0,  0.0010f, 0 },            { -0.0004f,  0.0008f, 0 },        { 0, 0, 0 } },                    // lip_t_r
+    { 14, {  0.0003f, 0.0010f, 0 },      {  0.0003f,  0.0006f, 0 },        { 0, 0, 0 } },                    // nosewing_l
+    { 15, { -0.0003f, 0.0010f, 0 },      { -0.0003f,  0.0006f, 0 },        { 0, 0, 0 } },                    // nosewing_r
+    { 16, {  0.0002f, 0.0008f, 0 },      {  0.0005f,  0.0010f, -0.0004f }, { 0, 0, 0 } },                    // nasolabialfold_t_l
+    { 17, { -0.0002f, 0.0008f, 0 },      { -0.0005f,  0.0010f, -0.0004f }, { 0, 0, 0 } },                    // nasolabialfold_t_r
+    { 26, { -0.0020f, -0.0030f, 0.0005f }, { 0, 0, 0 },                    {  0.0003f, 0.0040f, 0 } },       // brow_i_l: ceno abajo y al medio
+    { 27, {  0.0020f, -0.0030f, 0.0005f }, { 0, 0, 0 },                    { -0.0003f, 0.0040f, 0 } },       // brow_i_r
+    { 28, { 0, -0.0012f, 0 },            { 0, 0, 0 },                      { 0, 0.0035f, 0 } },              // brow_o_l
+    { 29, { 0, -0.0012f, 0 },            { 0, 0, 0 },                      { 0, 0.0035f, 0 } },              // brow_o_r
+    { 30, { 0, -0.0020f, -0.0004f },     { 0, 0, 0 },                      { 0, 0.0020f, 0 } },              // glabella
+};
+static void PoseOf(int d, float ang, float smi, float sur, float* o) {
+    o[0] = o[1] = o[2] = 0.0f;
+    for (const PoseOff& p : kPose) if (p.d == d) { for (int k = 0; k < 3; k++) o[k] = p.a[k] * ang + p.s[k] * smi + p.u[k] * sur; return; }
+}
+static float s_poseSmile = 0.0f;   // para Secondary (mejillas)
 static const float* TeethOf(int d) { static const float z[3] = { 0, 0, 0 }; return d < (int)(sizeof(kTeeth) / sizeof(kTeeth[0])) ? kTeeth[d] : z; }
 enum { D_JAW = 0, D_LIPS_L = 5, D_LID_TL = 22, D_LID_TR = 23, D_LID_BL = 24, D_LID_BR = 25, D_BROW_IL = 26, D_EYE_L = 31, D_EYE_R = 32, D_HEAD = kND - 2 };
 
@@ -607,8 +638,8 @@ static void Secondary(Skel& S, const float* hr, float sm, float open) {
         // con la boca abierta se sacan: el juego los reescribe despues (como los parpados) y ademas el shader del parpadeo mide la
         // ceja para saber si la cara esta animada -> con 1.4 mm de mas el parpadeo se prendia y apagaba = parpados vibrando
     };
-    const float ks = std::clamp(g_cfg.live[348][0], 0.0f, 2.0f) * sm, ko = std::clamp(g_cfg.live[348][2], 0.0f, 2.0f) * open;
-    const float kn = std::clamp(g_cfg.live[348][1], 0.0f, 2.0f) * sm;
+    const float ks = std::clamp(g_cfg.live[348][0], 0.0f, 2.0f) * (std::max)(sm, s_poseSmile), ko = std::clamp(g_cfg.live[348][2], 0.0f, 2.0f) * open;
+    const float kn = std::clamp(g_cfg.live[348][1], 0.0f, 2.0f) * (std::max)(sm, s_poseSmile);
     for (const Off& f : kOff) {
         if (!S.cur[f.d]) continue;
         const float a = f.k == 0 ? ks : f.k == 2 ? kn : ko;
@@ -701,7 +732,20 @@ void ExprBonesFrame(const void* skel) {
     // (03/11, Agustin: "en las animaciones del juego ahora las barbas tambien se ven mal") con x347 negativo (-0.25 en su ini) la
     // DLL cerraba la mandibula de la cara en CADA cuadro, tambien en las animaciones del juego, y la malla de la barba no recibe
     // ese giro (sus huesos salen de otro lado): quedaba delante de la boca. Por huesos ya no se cierra: 0 o mas
-    const float o = (std::max)(std::clamp(g_cfg.live[347][0], 0.0f, 1.0f), 0.45f * tongueOut);
+    const float* PZ = g_cfg.live[355];
+    const float pAng = std::clamp(PZ[0], 0.0f, 1.5f), pSmi = std::clamp(PZ[1], 0.0f, 1.5f), pSur = std::clamp(PZ[2], 0.0f, 1.5f), pTalk = std::clamp(PZ[3], 0.0f, 1.5f);
+    s_poseSmile = pSmi;
+    // hablar: la mandibula sube y baja con un ritmo de silabas irregular (dos ondas que no se repiten juntas), por personaje distinto
+    float talkO = 0.0f, talkRound = 0.0f;
+    if (pTalk > 0.001f) {
+        const float t = g_cfg.live[157][0] + (float)(((uintptr_t)skel >> 6) & 63) * 0.37f;
+        const float w = 0.6f * sinf(t * 6.2831853f * 4.1f) + 0.4f * sinf(t * 6.2831853f * 2.3f + 1.3f);
+        const float env = 0.55f + 0.45f * sinf(t * 6.2831853f * 0.37f);   // frases: a veces habla mas, a veces menos
+        talkO = pTalk * 0.30f * (std::max)(w, 0.0f) * env;
+        talkRound = pTalk * sinf(t * 6.2831853f * 1.7f + 0.6f) * env;   // labios que se redondean (o / u) y se estiran (e / i)
+    }
+    const float o = (std::max)((std::max)(std::clamp(g_cfg.live[347][0], 0.0f, 1.0f), 0.45f * tongueOut), (std::min)(1.0f, 0.40f * pSur + talkO));
+    const bool poseOn = pAng > 0.001f || pSmi > 0.001f || pSur > 0.001f || fabsf(talkRound) > 0.001f;
     std::lock_guard<std::mutex> lk(s_mx);
     Skel* S = Get(skel);
     S->lastFrame = fr;
@@ -759,7 +803,7 @@ void ExprBonesFrame(const void* skel) {
     if (g_cfg.live[350][0] > 1.5f) EyesFrame(*S, hc, hr, sm);
     else for (int d = D_LID_TL; d <= D_LID_BR; d++) Release(*S, d);
     Secondary(*S, hr, sm, openAll);
-    if (fabsf(o) < 0.001f && teeth < 0.001f) { for (int d = 0; d < 18; d++) if (S->wHave[d]) Release(*S, d); return; }   // slider en 0: la boca vuelve a la del juego
+    if (fabsf(o) < 0.001f && teeth < 0.001f && !poseOn) { for (int d = 0; d < 18; d++) if (S->wHave[d]) Release(*S, d); for (int d = 26; d <= 30; d++) if (S->wHave[d]) Release(*S, d); return; }   // slider en 0: la boca vuelve a la del juego
     static const float X[3] = { 1.0f, 0.0f, 0.0f }; float ax[3]; QRot(hr, X, ax);
     float ln = sqrtf(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]); if (ln < 0.5f) return; for (float& v : ax) v /= ln;
     const float P[3] = { jc.t[0], jc.t[1], jc.t[2] };
@@ -770,9 +814,14 @@ void ExprBonesFrame(const void* skel) {
         if (!S->cur[d]) continue;
         const float* tv = TeethOf(d); const float* ov = OpenOf(d);
         const float op = (std::max)(o, 0.0f);
-        const float mvv0[3] = { tv[0] * teeth + ov[0] * op, tv[1] * teeth + ov[1] * op, tv[2] * teeth + ov[2] * op };
+        float po[3]; PoseOf(d, pAng, pSmi, pSur, po);
+        // (04/11) la mandibula real no gira en el lugar: al abrir, el condilo se desliza adelante y abajo (articulacion
+        // temporomandibular): los huesos que siguen a la mandibula bajan y van adelante un poco con la apertura del mod
+        if (kDef[d].jaw > 0.0f && op > 0.0f) { po[1] -= 0.0010f * op * kDef[d].jaw; po[2] += 0.0022f * op * kDef[d].jaw; }
+        if (d == 5 || d == 6) po[0] += (d == 5 ? -1.0f : 1.0f) * 0.0012f * talkRound;   // hablar: comisuras adentro / afuera
+        const float mvv0[3] = { tv[0] * teeth + ov[0] * op + po[0], tv[1] * teeth + ov[1] * op + po[1], tv[2] * teeth + ov[2] * op + po[2] };
         const bool rot = kDef[d].jaw > 0.0f && fabsf(A) > 1e-5f, mv = fabsf(mvv0[0]) + fabsf(mvv0[1]) + fabsf(mvv0[2]) > 1e-6f;
-        if (!rot && !mv) { if (d < 18 && S->wHave[d]) Release(*S, d); continue; }   // 18.. = gestos secundarios / parpados (otro dueno)
+        if (!rot && !mv) { if ((d < 18 || (d >= 26 && d <= 30)) && S->wHave[d]) Release(*S, d); continue; }   // 18.. = gestos secundarios / parpados (otro dueno)
         Xf x; if (!Base(*S, d, x)) continue;
         float nq[4] = { x.q[0], x.q[1], x.q[2], x.q[3] }, nt[3] = { x.t[0], x.t[1], x.t[2] };
         if (rot) {
