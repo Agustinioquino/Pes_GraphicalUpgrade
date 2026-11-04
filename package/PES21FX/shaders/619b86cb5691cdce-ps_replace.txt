@@ -279,6 +279,26 @@ void main(
       }
     }
   }
+  // (04/11 piel, punto 3 del SSS real) normal suavizada de la piel para el rojo (dispersion de la luz de ambiente, fila 259; ver
+  // NskR mas abajo), calculada ANTES del SSGI y del rebote del pasto: esas dos luces tambien entran y viajan bajo la piel (antes
+  // solo la luz de cielo y el rebote de 744 usaban la normal por canal; el SSGI y el rebote del pasto quedaban con el detalle duro)
+  float3 pesNskR0 = 0; bool pesNskOk = false;
+  { float zs0 = PESLinZ(uvC);
+    if (skinC && zs0 > 0.1 && zs0 < 60.0 && IniParams.Load(int2(259,0)).x >= 0.0) {
+      float3 n0 = PESDecN(uvC); n0.z = -n0.z;
+      float pxmN = 1.0 / max(2.0 * abs(g_psScene.m_projectionParam.x) * zs0 * g_psSystem.m_renderBuffer.z, 1e-5);
+      float rN = clamp(0.006 * pxmN, 1.0, 16.0);
+      float3 nA = n0; float nWt = 1.0;
+      [unroll] for (int ni = 0; ni < 8; ni++) {
+        float angN = ni * 0.78539816 + 0.3927;
+        float2 uvN = uvC + float2(cos(angN), sin(angN)) * rN * g_psSystem.m_renderBuffer.zw;
+        float okN = (abs(inGBufferMaterial.SampleLevel(g_samplerPoint_Clamp_s, uvN, 0).z - 0.98039) < 0.003 && abs(PESLinZ(uvN) - zs0) < 0.006 + 0.002 * zs0) ? 1.0 : 0.0;
+        float3 nN = PESDecN(uvN); nN.z = -nN.z;
+        okN *= saturate((dot(nN, n0) - 0.5) * 2.0);   // (02/11 b) sin mezclar a traves de un borde (mandibula sobre el cuello, parpado, aleta)
+        nA += nN * okN; nWt += okN;
+      }
+      pesNskR0 = normalize(nA / nWt + 1e-6); pesNskOk = true;
+    } }
   // === PES21 iluminacion global en pantalla (SSGI): un rebote de luz difusa en tiempo real ===
   float3 giDbg = 0;
   {
@@ -304,6 +324,9 @@ void main(
       int kR = (int)clamp(Q336.y, 0.0, 2.0);
       float2 tcg = uvC * float2(Wg, Hg) - 0.5; float2 fg = frac(tcg); float2 b0g = (floor(tcg) + 0.5) * txg;
       float3 accU = 0; float wU = 0; float3 nearU = 0; float bestU = 1e9;
+      // (04/11 piel) segunda suma para la piel: pesos por normal contra la normal suavizada y mas permisivos, y mas tolerancia en
+      // profundidad -> el rebote se difunde bajo la piel (rojo mucho, verde a medias, azul casi nada), sin cruzar bordes reales
+      float3 NcgR = float3(pesNskR0.xy, -pesNskR0.z); float3 accR = 0; float wR = 0;
       float sig = 0.6 + 0.7 * kR;
       [loop] for (int gy = -kR; gy <= kR + 1; gy++) [loop] for (int gx = -kR; gx <= kR + 1; gx++) {
         float2 uvT = b0g + float2(gx, gy) * txg;
@@ -311,12 +334,15 @@ void main(
         float dzg = abs(sg.w - zg);
         float2 dd = float2(gx, gy) - fg;
         float ws = kR == 0 ? (gx ? fg.x : 1.0 - fg.x) * (gy ? fg.y : 1.0 - fg.y) : exp(-dot(dd, dd) / (2.0 * sig * sig));
-        float wn = nPow > 0.0 ? pow(saturate(dot(PESDecN(uvT), Ncg)), nPow) : 1.0;
+        float3 nT = PESDecN(uvT);
+        float wn = nPow > 0.0 ? pow(saturate(dot(nT, Ncg)), nPow) : 1.0;
         float wb = ws * wn * exp(-dzg / (0.03 * zg + 0.02));
         accU += sg.rgb * wb; wU += wb;
+        if (pesNskOk) { float wbR = ws * pow(saturate(dot(nT, NcgR)), 1.0 + nPow * 0.3) * exp(-dzg / (0.045 * zg + 0.03)); accR += sg.rgb * wbR; wR += wbR; }
         if (dzg < bestU) { bestU = dzg; nearU = sg.rgb; }
       }
       float3 ind = (wU > 1e-4 ? accU / wU : nearU) * giK * saturate((zMaxG - zg) / (zMaxG / 3.0));
+      if (pesNskOk && wR > 1e-4) ind = lerp(ind, accR / wR * giK * saturate((zMaxG - zg) / (zMaxG / 3.0)), float3(0.85, 0.5, 0.2));   // (04/11 piel)
       { float sat = Q336.w > 0.0 ? Q336.w : 1.0; float lg = dot(ind, float3(0.2126, 0.7152, 0.0722)); ind = max(lerp(lg.xxx, ind, sat), 0.0); }
       if (skinC) ind *= 1.0 - 0.5 * saturate(IniParams.Load(int2(124,0)).x);
       if (skinC) ind *= Q337.x > 0.0 ? Q337.x : 1.0;
@@ -373,6 +399,8 @@ void main(
       if (dot(Ld, upV) < 0) upV = -upV;                          // el sol (o las torres) siempre estan arriba
       float3 Nb = PESDecN(uvC); Nb.z = -Nb.z;
       float fGround = saturate(0.5 - 0.5 * dot(Nb, upV));         // abajo = 1, costado = 0.5, arriba = 0
+      float3 fGround3 = fGround.xxx;   // (04/11 piel) el rebote del pasto tambien se difunde bajo la piel: rojo con la normal suavizada
+      if (pesNskOk) { float3 nGb = normalize(pesNskR0 + Nb); fGround3 = saturate(0.5 - 0.5 * float3(dot(pesNskR0, upV), dot(nGb, upV), dot(Nb, upV))); }
       float sunUp = saturate(dot(Ld, upV));
       float3 sunC = max(pLc_color.xyz, 0.0) * g_psScene.m_exposure.zzz;
       float3 turf = lerp(float3(0.20, 0.20, 0.20), float3(0.14, 0.24, 0.07), saturate(BG.y));
@@ -438,7 +466,7 @@ void main(
           }
         }
       }
-      r2.xyz += sunC * sunUp * turf * shadeB * skyTint * fGround * max(BG.x, 0.0) * saturate((120.0 - zb) / 40.0) * PESAmbGain();
+      r2.xyz += sunC * sunUp * turf * shadeB * skyTint * fGround3 * max(BG.x, 0.0) * saturate((120.0 - zb) / 40.0) * PESAmbGain();
     }
   }
   // === PES21 luz de cielo (17/10): ambiente hemisferico. Lo que mira hacia arriba recibe un poco de azul del cielo,
@@ -465,20 +493,7 @@ void main(
       // llega mas lejos, asi que para el rojo los poros, pliegues finos y el borde de las formas se borran (normal promedio de un
       // anillo de ~8 mm del mundo) y el azul ve la normal de detalle (Jimenez/Activision: normales por canal). La luz de ambiente
       // deja de verse plana y gris: el color rojizo sale en las transiciones como en una piel real a la sombra.
-      if (skinC && zsk < 60.0 && IniParams.Load(int2(259,0)).x >= 0.0) {
-        float pxmN = 1.0 / max(2.0 * abs(g_psScene.m_projectionParam.x) * zsk * g_psSystem.m_renderBuffer.z, 1e-5);
-        float rN = clamp(0.006 * pxmN, 1.0, 16.0);
-        float3 nA = Nsk; float nWt = 1.0;
-        [unroll] for (int ni = 0; ni < 8; ni++) {
-          float angN = ni * 0.78539816 + 0.3927;
-          float2 uvN = uvC + float2(cos(angN), sin(angN)) * rN * g_psSystem.m_renderBuffer.zw;
-          float okN = (abs(inGBufferMaterial.SampleLevel(g_samplerPoint_Clamp_s, uvN, 0).z - 0.98039) < 0.003 && abs(PESLinZ(uvN) - zsk) < 0.006 + 0.002 * zsk) ? 1.0 : 0.0;
-          float3 nN = PESDecN(uvN); nN.z = -nN.z;
-          okN *= saturate((dot(nN, Nsk) - 0.5) * 2.0);   // (02/11 b) sin mezclar a traves de un borde (mandibula sobre el cuello, parpado, aleta)
-          nA += nN * okN; nWt += okN;
-        }
-        NskR = normalize(nA / nWt + 1e-6);
-      }
+      if (pesNskOk) NskR = pesNskR0;   // (04/11 piel) la misma normal del anillo, calculada antes del SSGI (ver pesNskR0)
       float2 sC = uvC * float2(2, -2) + float2(-1, 1);
       Vsk = normalize(float3((sC - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zsk, zsk));
       if (SKY.w > 0.5 && tyC != 1 && tyC != 3) {
