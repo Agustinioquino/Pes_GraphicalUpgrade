@@ -160,9 +160,10 @@ void main(
   float irisR = length(irisD) / irisRad;
   // pupila: w91 < 1 la achica, > 1 la agranda (se remapea el radio dentro del iris; el borde del iris no se mueve)
   // pupila reactiva (y93 on/off, z93 cuanto): con sol pleno se contrae, de noche se dilata (x93 = brillo adaptado, lo pone la DLL)
-  float4 P93 = IniParams.Load(int2(93,0));
-  float pupAuto = (P93.y > 0.5) ? lerp(1.0, lerp(1.4, 0.72, saturate(P93.x)), saturate(P93.z)) : 1.0;
-  { float pup = clamp(P91.w * pupAuto, 0.55, 1.7); float rIn = 0.36 * pup;
+  // (04/11, Agustin: "se tiene que respetar el tamano de la pupila original") la pupila ya no se agranda ni se achica: el detalle
+  // del iris estiraba su borde oscuro hacia afuera (en el editor la pupila reactiva la dilataba x1.4) y la pupila y el iris se veian
+  // mas grandes que con Ver original. w91 / y93 / z93 quedan sin efecto (fuera del menu)
+  { float pup = 1.0; float rIn = 0.36 * pup;
     irisR = irisR < rIn ? irisR / pup : lerp(0.36, 1.0, (irisR - rIn) / max(1.0 - rIn, 1e-3)) ; }
   float irisTh = atan2(irisD.y, irisD.x) * 0.15915494 + 0.5;
   float irisVt = saturate((irisR - 0.36) / 0.64);                    // 0 = borde de la pupila, 1 = borde del iris
