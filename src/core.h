@@ -117,6 +117,7 @@ struct RuleAction {
     std::string name;          // recurso con nombre, o "file:ruta.dds"
     int idx = 0, comp = 0;     // SetParam
     float value = 0; std::string var;
+    UINT onlyIdx = 0, skipIdx = 0;   // (04/11) srv: solo / salvo el dibujo con esa cantidad de indices (boca propia de un jugador)
 };
 struct Rule { uint64_t hash = 0; uint64_t vsCond = 0; std::vector<RuleAction> actions; bool hasParamOverride = false; int paramSet = -1; };   // vsCond: [rule <ps> vs <vs>] (20/10)
 

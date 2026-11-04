@@ -1116,6 +1116,7 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
             if (b) { Remember(c, d, ps, false, a.slot); if (ps) c->PSSetConstantBuffers(a.slot, 1, &b); else c->VSSetConstantBuffers(a.slot, 1, &b); }
             break; }
         case RuleAction::BindSRV: {
+            if ((a.onlyIdx && t_drawVerts != a.onlyIdx) || (a.skipIdx && t_drawVerts == a.skipIdx)) break;   // (04/11) boca propia por jugador
             ID3D11ShaderResourceView* v = nullptr;
             if (a.name.rfind("file:", 0) == 0) v = FileTexture(a.name);
             else { std::lock_guard<std::mutex> lk(s_namedMutex); auto it = s_named.find(a.name); if (it != s_named.end()) v = it->second.srv; }
