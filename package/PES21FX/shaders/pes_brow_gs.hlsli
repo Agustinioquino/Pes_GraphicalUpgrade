@@ -11,7 +11,7 @@
 // 455eb97b): la entrada del GS tiene que ser IGUAL a la salida de cada VS (mismo orden de semanticas).
 #define PES_SEG 4
 #define PES_PER_INST 4      // hebras por instancia del GS: 4 x 10 vertices x 23 escalares = 920 (tope 1024; 04/11 e + tangente)
-#define PES_INST 15         // instancias del GS por triangulo -> hasta 60 hebras por triangulo (igual que antes)
+#define PES_INST 24         // instancias del GS por triangulo -> hasta 96 hebras por triangulo ((04/11 i) mas lugar para "cantidad")
 cbuffer cVSScene : register(b2)
 {
   float4 m_projectionView[4];
@@ -36,6 +36,7 @@ cbuffer PESHair : register(b11)
   float4 pesHairTip;    // color punta rgb, w = 1 si esta definido
   float4 pesHairBrow;   // ceja: grosor, densidad, elevacion, largo (multiplicadores)
   float4 pesHairMisc;   // x = 1 enlazado, y = 1 mapa de pelo propio del usuario
+  float4 pesBrowCol;    // (04/11 i) color de ceja del jugador (fila 367 / [cejas_cara]): rgb, w = mezcla con el color pintado
 }
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> tFace : register(t0);      // difusa de la cara (la misma del dibujo)
@@ -208,8 +209,11 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     float4 m = tHairMap.SampleLevel(sLin, uv, 0);
     if (m.a < 0.97) continue;                      // fuera de la zona de ceja (0.9 = cuero cabelludo, 0 = nada)
     float ph = PesPaintedHair(uv);
-    if (ph < 0.35) continue;                                 // fuera de la ceja pintada
-    if (rk >= keepBase * saturate(m.r) * saturate(ph * 1.5)) continue;   // densidad del mapa y de la pintura
+    // (04/11 i, Agustin: "la cantidad tiene que agregar mas pelo donde falta") con cantidad > 1 la hebra tambien nace en la parte
+    // rala / clara de la ceja pintada (umbral del contorno mas bajo) y alli con la misma densidad que en lo tupido: rellena huecos
+    float fill = hb ? saturate((pesHairBrow.y - 1.0) * 0.6) : 0.0;
+    if (ph < lerp(0.35, 0.12, fill)) continue;               // fuera de la ceja pintada
+    if (rk >= keepBase * saturate(m.r + fill) * saturate(ph * 1.5 + fill * 1.5)) continue;   // densidad del mapa y de la pintura
     float3 root = P0 * b.x + P1 * b.y + P2 * b.z;
     float3 n = normalize(v[0].nrm.xyz * b.x + v[1].nrm.xyz * b.y + v[2].nrm.xyz * b.z);
     // direccion del peinado: angulo del mapa (B) en el plano UV, llevado a 3D y apoyado sobre la piel
@@ -242,6 +246,10 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     float3 painted = tBrow.SampleLevel(sLin, uv, 0).rgb;   // (04/11 d) el color de los pelos pintados de esa zona (no la piel de al lado)
     float3 cR = (hb && pesHairRoot.w > 0.5) ? pesHairRoot.xyz : painted;
     float3 cT = (hb && pesHairTip.w > 0.5) ? pesHairTip.xyz : painted * float3(1.25, 1.18, 1.1);   // punta apenas mas clara
+    if (hb && pesBrowCol.w > 0.001) {   // (04/11 i) color elegido para este jugador (menu Cejas con hebras)
+      float km = saturate(pesBrowCol.w);
+      cR = lerp(cR, pesBrowCol.rgb, km); cT = lerp(cT, pesBrowCol.rgb * float3(1.25, 1.18, 1.1), km);
+    }
     // vectores de movimiento de la raiz (misma cuenta que el PS de la cara: actual - anterior en UV de pantalla)
     float4 cp = v[0].clipCP * b.x + v[1].clipCP * b.y + v[2].clipCP * b.z;
     float2 ww = v[0].ww * b.x + v[1].ww * b.y + v[2].ww * b.z;
