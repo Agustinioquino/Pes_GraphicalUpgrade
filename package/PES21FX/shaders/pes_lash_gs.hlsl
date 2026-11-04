@@ -102,7 +102,8 @@ void main(triangle LashV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     float3 b = float3(1.0 - r0 - r1, r0, r1);
     float2 uv = uv0 * b.x + uv1 * b.y + uv2 * b.z;
     float a0 = LA(uv);
-    if (a0 < 0.5) continue;                                    // solo sobre una pestana pintada
+    // (04/11 j, Agustin: "le faltan las pestanas de abajo") las de abajo estan pintadas mas finas y claras en la tira: umbral 0.5 -> 0.25
+    if (a0 < 0.25) continue;                                   // solo sobre una pestana pintada
     // orientacion del trazo: tensor de estructura del alfa en 3 x 3 (el trazo va perpendicular al gradiente)
     float jxx = 0, jxy = 0, jyy = 0;
     [unroll] for (int y = -1; y <= 1; y++) [unroll] for (int x = -1; x <= 1; x++) {
@@ -115,12 +116,13 @@ void main(triangle LashV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     float2 dirT = float2(cos(th0), sin(th0));                 // a lo largo del trazo (en texeles)
     // largo del trazo hacia cada lado (hasta que el alfa se corta) y punta = el lado que se afina (menos alfa en el mip 3)
     float sP = 0, sN = 0;
-    [loop] for (int i = 1; i <= 48; i++) { if (LA(uv + dirT * tx * (float)i) < 0.25) break; sP = (float)i; }
-    [loop] for (int j = 1; j <= 48; j++) { if (LA(uv - dirT * tx * (float)j) < 0.25) break; sN = (float)j; }
+    [loop] for (int i = 1; i <= 48; i++) { if (LA(uv + dirT * tx * (float)i) < 0.12) break; sP = (float)i; }
+    [loop] for (int j = 1; j <= 48; j++) { if (LA(uv - dirT * tx * (float)j) < 0.12) break; sN = (float)j; }
     float aP = tLash.SampleLevel(sLin, uv + dirT * tx * max(sP, 2.0), 3).a, aN = tLash.SampleLevel(sLin, uv - dirT * tx * max(sN, 2.0), 3).a;
     float sgn = aP <= aN ? 1.0 : -1.0;                        // hacia la punta
     float steps = sgn > 0 ? sP : sN;
-    if (steps < 2.0) continue;
+    if (steps < 1.0) continue;
+    steps = max(steps, 3.0);                                   // las cortas de abajo: al menos 3 texeles
     float2 dUV = dirT * tx * sgn;                              // un texel hacia la punta
     float3 d = dPdu * dUV.x + dPdv * dUV.y;
     float mPerTex = length(d);
