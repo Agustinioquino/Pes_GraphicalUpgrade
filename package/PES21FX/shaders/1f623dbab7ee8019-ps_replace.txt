@@ -222,8 +222,10 @@ void main(
   r1.yzw = PESSunColor() * g_psScene.m_exposure.zzz;
   r7.xyzw = float4(0,0.699999988,0.606217802,-0.349999994) / g_psScene.m_shadowMapResolutions.xxxx;
   r6.w = 1;
-  r8.x = dot(r6.xyzw, g_psScene.m_shadowProjection._m00_m10_m20_m30);
-  r8.y = dot(r6.xyzw, g_psScene.m_shadowProjection._m01_m11_m21_m31);
+  // PES21 (02/11) w337 "Sombra alineada" tambien en esta variante (faltaba: con w337 = 1 la sombra que leia este PS seguia girando)
+  float4 pesAl = float4(PESShadowAlign(r6.xyz, g_psScene.m_view, IniParams.Load(int2(337,0)).w), 1.0);
+  r8.x = dot(pesAl, g_psScene.m_shadowProjection._m00_m10_m20_m30);
+  r8.y = dot(pesAl, g_psScene.m_shadowProjection._m01_m11_m21_m31);
   r2.w = -g_psScene.m_shadowProjection2._m31 + r6.z;
   r2.w = r2.w * g_psScene.m_shadowProjection2._m32 + 1;
   r2.w = max(1, r2.w);
@@ -496,7 +498,7 @@ void main(
     float3 hsP = float3((hsS - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * hsZ, hsZ);
     float hsZs = hsZ < 0.0 ? -1.0 : 1.0;   // (27/10 d) a la vista de la proyeccion (z positiva hacia adelante), como la DLL
     hsP *= float3((g_psScene.m_projectionParam.x < 0.0 ? -1.0 : 1.0) * hsZs, (g_psScene.m_projectionParam.y < 0.0 ? -1.0 : 1.0) * hsZs, hsZs);
-    r6.xyz *= PESHeadShadowAt(hsP, rawNdotL, g_samplerLinear_Clamp_s); }
+    r6.xyz = PESHeadShadowMix(r6.xyz, hsP, rawNdotL, g_samplerLinear_Clamp_s); }   // (02/11) dentro de la caja de la cabeza manda el atlas
   float3 shadowRGB = r6.xyz;
   shadowScalar = saturate(r6.x);
   if (isSkin) {

@@ -207,7 +207,7 @@ void main(
   // === PES21 (19/10) SOL LIBRE (experimentar): x101 on, y101 azimut (grados), z101 elevacion (grados), w101 intensidad,
   // x102 calidez (0 = color del juego, 1 = naranja atardecer). Mueve la direccion y el color del sol que ve ESTA pasada de luz;
   // las sombras siguen siendo las del sol real del juego (el shadow map lo arma el motor).
-  float4 pesLDir = g_psLight.m_lightDir0; float4 pesLCol = g_psLight.m_lightColor0; bool pesFreeSun = false;
+  float4 pesLDir = g_psLight.m_lightDir0; float4 pesLCol = g_psLight.m_lightColor0; bool pesFreeSun = false; bool pesShMis = IniParams.Load(int2(258,0)).x > 0.5;   // (02/11) shadow map sin alinear con la luz (sol_parche 1 y sombra_parche 0): no medir grosor con el
   { float4 SF = IniParams.Load(int2(101,0));
     if (SF.x > 0.5) { pesFreeSun = true;
       float az = radians(SF.y), el = radians(SF.z);
@@ -308,6 +308,22 @@ void main(
   r2.w = -g_psScene.m_shadowProjection2._m33 * r2.w;
   r8.xyz = r3.xyw * r2.www + r6.xyz;
   r8.z = g_psScene.m_shadowProjection2._m33 + r8.z;
+  // (02/11) z314: sombra "al pie" sobre el pasto (matType 3). El pixel de la hoja se proyecta al suelo antes de muestrear el shadow
+  // map (como el rebote en 619b): la hoja recibe la misma sombra que el suelo bajo ella. Antes se evaluaba a la altura de cada hoja
+  // con su normal y sus derivadas y la sombra del botin / pelota salia "peinada", recortada hoja por hoja (captura 02/11 10:06)
+  float4 TS3 = IniParams.Load(int2(314,0)); bool pesFoot = false; float3 pesFootP = r6.xyz;
+  if (matType == 3 && TS3.z > 0.5) {
+    float3 upF = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
+    if (dot(pesLDir.xyz, upF) < 0.0) upF = -upF;                        // el sol siempre arriba
+    float pesHP = g_psScene.m_eyepos.y + dot(r6.xyz, upF);               // altura sobre la cancha (m)
+    if (pesHP > 0.004 && pesHP < 0.25) {                                 // (02/11 c) solo alturas de hoja (antes 0.6)
+      pesFoot = true;
+      pesFootP = r6.xyz - (pesHP - 0.01) * upF;                          // 1 cm sobre el suelo
+      float nU = saturate(dot(normalize(pesLDir.xyz), upF));
+      r8.xyz = pesFootP + upF * (-g_psScene.m_shadowProjection2._m33 * (1.0 - nU) * (1.0 - nU));   // sesgo del motor con la normal del suelo
+      r8.z += g_psScene.m_shadowProjection2._m33;
+    }
+  }
   r2.w = dot(r0.yx, float2(17,0.100000001));
   r2.w = g_psSystem.m_timeParam.z + r2.w;
   r2.w = sin(r2.w);
@@ -400,6 +416,9 @@ void main(
   { float2 duvdx = ddx(pesShUV), duvdy = ddy(pesShUV); float dzdx = ddx(pesShRef), dzdy = ddy(pesShRef);
     float detR = duvdx.x * duvdy.y - duvdx.y * duvdy.x;
     if (abs(detR) > 1e-14) pesDzduv = float2(duvdy.y * dzdx - duvdx.y * dzdy, -duvdy.x * dzdx + duvdx.x * dzdy) / detR; }
+  // (02/11 b) al pie el plano receptor SI vale: los pies de todas las hojas estan sobre el plano de la cancha, asi que las derivadas
+  // entre pixeles vecinos dan justo el plano del suelo. Sin el (primera version) el filtro se hacia sombra a si mismo en el borde de
+  // la sombra del estadio y quedaba una franja punteada de hojas sueltas al sol / en sombra (captura de Agustin 10:24 PC, camara TV)
   // === PES21 sol dinamico (17/10): el Daylight Engine mueve el sol cada cuadro y lo deja bajo. Con el sol rasante
   // el shadow map hace acne (rayas en pasto y cara) y el borde repta al moverse. x53 sesgo de plano receptor (crece
   // solo donde la superficie es rasante a la luz, y mas con el sol bajo), y53 radio minimo del filtro en texeles
@@ -456,7 +475,7 @@ void main(
   float4 P34 = IniParams.Load(int2(34,0));
   bool pesSSSS = IniParams.Load(int2(95,0)).w > 0.5;   // 19/10: dispersion unificada (SSSS) prendida -> las difusiones viejas de la piel se apagan solas
   float pesShScale = (P34.w > 0.5 && !pesSSSS && matType == 0 && abs(skinTag - 0.98039) < 0.003) ? max(P34.x, 1.0) : 1.0;
-  r0.x = PESShadowFilter(pesShUV, pesShRef, pesShCas, v2.xy, r0.x, pesShScale, pesDzduv);   // PES21 sombras v2 + plano receptor
+  r0.x = PESShadowFilter(pesShUV, pesShRef, pesShCas, pesFoot ? float2(0.0, 0.0) : v2.xy, r0.x, pesShScale, pesDzduv);   // (02/11 c) al pie: giro fijo del filtro (el giro por pixel salia como puntos de hojas sueltas en la penumbra: el TAA no los junta en hojas finas)   // PES21 sombras v2 + plano receptor
   // PES21 fusion de cascadas (18/10): en la franja del borde de la cascada se mezcla con la siguiente (sin salto de nitidez). y87 = ancho
   { float4 PHb = IniParams.Load(int2(87,0)); float4 SHb = IniParams.Load(int2(20,0));
     if (PHb.y > 0.001 && SHb.y > 0.5 && pesShCas > -0.5 && pesShCas < 1.5) {
@@ -507,9 +526,13 @@ void main(
   r0.x = saturate(-g_psLight.m_lightSourceParam1.w + r0.x);
   r0.y = cmp(r10.x == -1.000000);
   r0.x = r0.y ? 1 : r0.x;
-  r7.xyzw = g_psObject.m_localParam[1].xyzw * r6.yyyy;
-  r7.xyzw = r6.xxxx * g_psObject.m_localParam[0].xyzw + r7.xyzw;
-  r7.xyzw = r6.zzzz * g_psObject.m_localParam[2].xyzw + r7.xyzw;
+  // (02/11) sombra del techo (t4) tambien al pie de la hoja (pesFootP = r6 fuera del pasto)
+  // (02/11 d) w337 "Sombra alineada": la proyeccion del techo (b5 m_localParam) sale de la misma camara torcida que el shadow map,
+  // asi que se corrige igual (videos de Agustin 13:17 PC: la sombra del techo se corria con la camara aunque w337 = 1)
+  float3 pesRoofP = PESShadowAlign(pesFootP, g_psScene.m_view, IniParams.Load(int2(337,0)).w);
+  r7.xyzw = g_psObject.m_localParam[1].xyzw * pesRoofP.yyyy;
+  r7.xyzw = pesRoofP.xxxx * g_psObject.m_localParam[0].xyzw + r7.xyzw;
+  r7.xyzw = pesRoofP.zzzz * g_psObject.m_localParam[2].xyzw + r7.xyzw;
   r7.xyzw = g_psObject.m_localParam[3].xyzw + r7.xyzw;
   r7.xyz = r7.xyz / r7.www;
   r8.xy = float2(0.5,0.5) * r7.xy;
@@ -535,8 +558,14 @@ void main(
   r5.zw = float2(0.5,0) + r8.xw;
   r1.x = g_ShadowAlphaMask.Sample(g_samplerLinear_Clamp_s, r5.zw).x;
   r0.y = r1.x * r0.y;
-  r1.x = 1 + -g_psObject.m_localParam[4].x;
-  r0.y = r0.y * r1.x + g_psObject.m_localParam[4].x;
+  // (02/11) w334: sombra del techo mas marcada solo sobre el cesped (el piso del juego + el ambiente la dejaban lavada); -1 = roja
+  float kRoof = IniParams.Load(int2(334,0)).w;
+  float flR = g_psObject.m_localParam[4].x;
+  if (matType == 3 && kRoof > 0.001) flR *= 1.0 - saturate(kRoof);
+  r1.x = 1 + -flR;
+  r0.y = r0.y * r1.x + flR;
+  // (02/11 b) sin el realce pow(): con w334 0.5 la sombra del techo quedaba casi negra en los primeros planos (captura 10:25 PC)
+  float pesRoofT = r0.y;
   r0.x = min(r0.x, r0.y);
   r0.y = g_WorldShadowMask.Sample(g_samplerPoint_Clamp_s, r0.zw).x;
   r0.xyzw = min(r0.xxxx, r0.yyyy);
@@ -591,7 +620,9 @@ void main(
   r3.xyz = r2.xxx * r7.xyz;
   // (27/10) el sol sobre el pasto (313, pes_sunturf.hlsli): solo cancha y hojas (tipo 3)
   float4 pesPG = IniParams.Load(int2(313,0)); bool pesTurf = matType == 3 && pesPG.w > 0.5;
-  if (pesTurf) r3.xyz = PESTurfDiffuse(r7.xyz, rawNdotL, r2.x, pesPG, trans);
+  if (pesTurf) { float3 upT = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));   // arriba (cancha) en vista
+    float upNL = dot(upT, normalize(pesLDir.xyz)); if (dot(upT, normalize(pesLDir.xyz)) < -0.2 && pesPG.w > 1.0) upNL = -upNL;   // (03/11) como el rebote: el sol siempre arriba
+    r3.xyz = PESTurfDiffuse(r7.xyz, rawNdotL, r2.x, pesPG, trans, upNL); }
   // PES21 (18/10): curvatura en pantalla (cuanto gira la normal por metro); fuera de los if para poder usar derivadas
   float pesCurv = 0.0;
   { float3 nC = normalize(r3.xyw);
@@ -739,7 +770,7 @@ void main(
     float3 hsP = float3((hsS - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * hsZ, hsZ);
     float hsZs = hsZ < 0.0 ? -1.0 : 1.0;   // (27/10 d) a la vista de la proyeccion (z positiva hacia adelante), como la DLL
     hsP *= float3((g_psScene.m_projectionParam.x < 0.0 ? -1.0 : 1.0) * hsZs, (g_psScene.m_projectionParam.y < 0.0 ? -1.0 : 1.0) * hsZs, hsZs);
-    r0.xyz *= PESHeadShadowAt(hsP, rawNdotL, g_samplerLinear_Clamp_s); }
+    r0.xyz = PESHeadShadowMix(r0.xyz, hsP, rawNdotL, g_samplerLinear_Clamp_s); }   // (02/11) dentro de la caja de la cabeza manda el atlas
   float3 shadowRGB = r0.xyz;
   shadowScalar = saturate(r0.x);
   if (isSkin) {
@@ -753,6 +784,8 @@ void main(
     shadowRGB = lerp(sh.xxx, shC, saturate(saturate(trans * 2.0) * sssBleed));
   }
   o0.xyz = r3.xyz * shadowRGB;
+  if (matType == 3 && TS3.z > 1.5) o0.xyz = pesFoot ? float3(2, 0, 0) : float3(0, 2, 0);   // (02/11) z314 = 2: rojo = hojas al pie, verde = suelo
+  if (matType == 3 && kRoof < -0.5) o0.xyz = lerp(float3(3, 0, 0), o0.xyz, saturate(pesRoofT));   // (02/11) w334 = -1: techo en rojo
   // === PES21 tela v2 (Claude, 16/10): iluminacion de tela para los kits ===
   // Los kits se reconocen por su id de material en el G-buffer (96 -> indice 6; lo escriben solo los 4 shaders de kits
   // y el de arbitros). x26 brillo de tela (sheen), y26 luz envolvente, z26 rugosidad del sheen, w26 on/off [Ctrl+Alt+Shift+F11... ver pes_mod.ini]
@@ -820,7 +853,7 @@ void main(
           // maximo en cm, z338 cuanto queda del termino viejo (toda la cara de frente), w338 on (0 = como antes).
           float4 KT = IniParams.Load(int2(338,0));
           float transK = backK * (0.5 + 0.5 * fwdK) * thinK;
-          if (KT.w > 0.5 && pesShCas > -0.5 && g_psScene.m_shadowMapResolutions.x > 1.0 && !pesFreeSun) {
+          if (KT.w > 0.5 && pesShCas > -0.5 && g_psScene.m_shadowMapResolutions.x > 1.0 && !pesFreeSun && !pesShMis) {
             float casK = pesShCas < 0.5 ? 1.0 : (pesShCas < 1.5 ? g_psScene.m_shadowProjection2._m03 : g_psScene.m_shadowProjection2._m13);
             float rpmK = max(length(g_psScene.m_shadowProjection._m02_m12_m22) * abs(g_psScene.m_shadowProjection2._m30) * abs(casK), 1e-5);
             float resK = g_psScene.m_shadowMapResolutions.x;
@@ -838,9 +871,13 @@ void main(
             float backSM = saturate(0.3 + dot(-nK, LK)) * (1.0 - saturate(nlK * 3.0));
             float3 Tc = float3(1.0, 0.92, 0.85);                                    // la tela de punto deja pasar un poco mas el rojo
             transK = max(Tk * backSM * 1.4, transK * saturate(KT.z)) ;
-            o0.xyz += lightK * transK * KA.y * 0.35 * Tc;
+            // (02/11) a contraluz (sol de frente a la camara) el traspaso sumado sin tope quemaba la camiseta: el tonemap lleva lo
+            // muy brillante al blanco y los kits claros (amarillo) perdian su color. Ahora se satura suave: como mucho la mitad de
+            // la luz directa del sol, asi el color del kit (que pone el albedo en la composicion) se sigue viendo.
+            float tAddK = transK * KA.y * 0.35;
+            o0.xyz += lightK * (tAddK / (1.0 + 2.0 * tAddK)) * Tc;
           } else
-          o0.xyz += lightK * transK * KA.y * 0.35;
+          o0.xyz += lightK * (transK * KA.y * 0.35 / (1.0 + 2.0 * transK * KA.y * 0.35));
         } }
       // diagnostico: w26 = 2 pinta de magenta todo lo que se detecta como kit
       if (KC.w > 1.5) { o0.xyz = float3(1.0, 0.0, 1.0) * dot(lightK, float3(0.3, 0.3, 0.3)); r1.yzw = 0; }
@@ -865,7 +902,7 @@ void main(
       float fwdH = pow(saturate(dot(VH, -LH)), 2.0);
       float thinH = 0.35 + 0.65 * saturate(trans * 1.6);
       float transH = backH * (0.4 + 0.6 * fwdH) * thinH * 0.5;                  // direccional (sin grosor)
-      if (pesShCas > -0.5 && g_psScene.m_shadowMapResolutions.x > 1.0 && !pesFreeSun) {
+      if (pesShCas > -0.5 && g_psScene.m_shadowMapResolutions.x > 1.0 && !pesFreeSun && !pesShMis) {
         float casH = pesShCas < 0.5 ? 1.0 : (pesShCas < 1.5 ? g_psScene.m_shadowProjection2._m03 : g_psScene.m_shadowProjection2._m13);
         float rpmH = max(length(g_psScene.m_shadowProjection._m02_m12_m22) * abs(g_psScene.m_shadowProjection2._m30) * abs(casH), 1e-5);
         float resH = g_psScene.m_shadowMapResolutions.x;
@@ -918,7 +955,7 @@ void main(
     transm = PESTransColor(transm, IniParams.Load(int2(34,0)).z);   // (25/10) z34 color de la contraluz
     // PES21 transmision por shadow map (18/10, Jimenez 2010): el grosor real que atraviesa la luz = distancia entre lo
     // que ve el sol (shadow map) y este pixel. Orejas y nariz se encienden solo cuando el sol esta realmente detras.
-    if (P64.x > 0.5 && P64.z > 0.0 && pesShCas > -0.5 && g_psScene.m_shadowMapResolutions.x > 1.0 && !pesFreeSun) {   // sol libre: el shadow map es del sol real, no sirve para medir grosor
+    if (P64.x > 0.5 && P64.z > 0.0 && pesShCas > -0.5 && g_psScene.m_shadowMapResolutions.x > 1.0 && !pesFreeSun && !pesShMis) {   // sol libre: el shadow map es del sol real, no sirve para medir grosor
       tookSM = true;
       float casS = pesShCas < 0.5 ? 1.0 : (pesShCas < 1.5 ? g_psScene.m_shadowProjection2._m03 : g_psScene.m_shadowProjection2._m13);
       float refPerM = max(length(g_psScene.m_shadowProjection._m02_m12_m22) * abs(g_psScene.m_shadowProjection2._m30) * abs(casS), 1e-5);

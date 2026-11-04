@@ -26,7 +26,7 @@ void ScanRefsInto(uintptr_t base, uintptr_t end, const char* dllName);   // quie
 extern void* g_overlayOldProc;
 
 // ---------------------------------------------------------------- parametros (lo que en 3DMigoto era IniParams)
-constexpr int kParamCount = 340;           // float4 x 336 -> t120 en los shaders (IniParams.Load(int2(i,0))). (20/10: era 128 y los parametros 128+ se perdian; 25/10: 256 -> 320, la ropa contra el cuerpo usa 256 / 257; 27/10: 320 -> 336: la fila 320 (torso bajo la camiseta) quedaba fuera y el ini la descartaba)
+constexpr int kParamCount = 356;           // float4 x 348 -> t120 en los shaders (IniParams.Load(int2(i,0))). (20/10: era 128 y los parametros 128+ se perdian; 25/10: 256 -> 320, la ropa contra el cuerpo usa 256 / 257; 27/10: 320 -> 336: la fila 320 (torso bajo la camiseta) quedaba fuera y el ini la descartaba; 31/10: 340 -> 344 (expresiones 340 / 341); 01/11: 344 -> 346: 343 camara lenta, 344 / 345 camara libre; 01/11 b: 346 -> 347: 346 seguir la cara; 347 -> 348: 347 abrir la boca / nariz; 348 -> 349: 348 musculos virtuales; 01/11 c: 349 -> 351: 349 torso, 350 boca por huesos; 351 torso bajo la camiseta ajustada; 352 mangas mas pegadas al brazo; 353 viento por partido; 03/11: 354 -> 355: 354 ojos en circulos (expresiones); 355 -> 356: 355 gestos enojo / sonrisa / asombro / hablar)
 // (26/10) filas de t120 ocupadas por tablas que escribe la DLL en cada cuadro (no usarlas para el ini): 194..254 tonos de piel por
 // jugador (skintone.cpp), 257 cuadro de la ropa contra el cuerpo (cuerpo.cpp). 300..304 son de las manos (manos.cpp + pes_hands.hlsli; 303 = manos relajadas, 304 = unas de los jugadores con textura propia, pes_nailfix.hlsli en el PS aa7d1833; v12.6).
 // 260..263 son de la musculatura (musculo.cpp: grupos de la v7 y musculos vivos).
@@ -54,6 +54,12 @@ constexpr int kParamCount = 340;           // float4 x 336 -> t120 en los shader
 // 336 = SSGI calidad (31/10: x muestras cercanas 8..16, y limpieza 0..2 = filtro espacial que respeta bordes al subir de resolucion, z nitidez por normales 0..4, w saturacion del rebote 0..2).
 // 337 = SSGI (31/10: x cuanto recibe la piel 0..2, y distancia maxima m (0 = 90), z resolucion completa (ssgi.cpp), w sombra del sol alineada por shader (PESShadowAlign en pes_common.hlsli: p' = R^T R^T p antes de m_shadowProjection; prueba sin DLL de sombra_parche 1)).
 // 338 = traspaso de luz en los kits con el grosor real del shadow map (31/10, 5 PS del sol: x densidad 1/m, y grosor maximo cm, z resto del modo viejo, w on).
+// 340 = expresiones faciales (31/10, expr.cpp + pes_expr.hlsli en los VS faab87ee / 455eb97b: x prendido, y ganancia general (1 = juego), z tope del agregado en cm, w cuanto se suma de los gestos grandes (mandibula abierta) 0..1).
+// 342 = lengua de la boca 3D (01/11, pes_expr.hlsli PesTongue en faab87ee; expr.cpp marca la malla de la boca: x fuerza, y movimiento vivo, z velocidad; w parpadeo del mod 0..1, PesBlink con los parpados que expr.cpp encuentra por malla).
+// 347 = abrir la boca (01/11, pes_expr.hlsli PesJawApply en faab87ee / 455eb97b): x apertura extra -0.25..1 (1 = boca abierta del todo, negativo = cierra un poco); y nariz con la boca 0..1; z labio de arriba (gesto extra 0..1.5); w mirada viva 0..2 (VS del ojo 69758ab9 gira el globo, PesGaze; el parpado acompana)
+// 348 = musculos virtuales (01/11, pes_expr.hlsli PesMuscleApply): x mejilla que se infla al sonreir, y surco nasolabial, z ceno (entrecejo) 0..2; expr.cpp pasa comisuras y cejas internas en b12; w arrugas por compresion real (PS 5ce3ed87 / ce188ae1: jacobiano del gesto, TEXCOORD11 del VS) 0..2.
+//       expr.cpp marca por malla los huesos de abajo (mandibula, labio de abajo, papada) y las comisuras (la mitad).
+// 341 = expresiones por zona (31/10: x frente y cejas, y ojos y parpados, z mejillas y nariz, w boca y labios; 1 = la ganancia general sola).
 // 339 = pelo a contraluz (31/10, 5 PS del sol; los PS del pelo 02f1d510 / c75f6047 marcan g_SpecularTexture.z = 252/255: x fuerza, y densidad 1/m, z grosor maximo cm, w on).
 // 328 = matas y variedad de las hojas del mod (27/10 m, tanda 10: VS 498b / PS 18af: x matas, y variedad por hoja, z oclusion entre matas; grass.cpp: w capas por pixel cerca, 0 = 6).
 // 324 = tono de piel del cuerpo por jugador (27/10, personajes.cpp: PES21FX\tonos_piel.txt; x prendido, y desplazamiento en HumanData, z bit, w volcado al log).
@@ -106,7 +112,7 @@ struct MenuGroup {
 
 // ---------------------------------------------------------------- reglas por shader (lo que eran [ShaderOverride])
 struct RuleAction {
-    enum Kind { CopyCB, RefSRV, BindCB, BindSRV, SetParam, EventTurf, FaceGen } kind;   // FaceGen: slot = mapa A, idx = mapa B
+    enum Kind { CopyCB, RefSRV, BindCB, BindSRV, SetParam, EventTurf, FaceGen, Expr } kind;   // FaceGen: slot = mapa A, idx = mapa B
     int slot = 0;
     std::string name;          // recurso con nombre, o "file:ruta.dds"
     int idx = 0, comp = 0;     // SetParam
@@ -189,6 +195,7 @@ bool ReadPreset(const std::wstring& path, PresetFile& out);
 bool ApplyPresetFile(const std::string& file);
 void ClearPreset();
 void ScanPresets(std::vector<PresetFile>& out);
+void MatchWind(const MatchInfo& m, unsigned long long seed);   // (02/11) viento por partido (fila 353) -> cloth.ini, con g_cfgMutex tomado
 void PollMatch();                               // cada ~1 s: match.ini -> preset del estadio
 bool SavePresetForMatch(const std::string& name, const std::string& author, bool onlyThisTime, std::string& outFile);
 bool DeletePresetFile(const std::string& file);
@@ -229,7 +236,7 @@ void CatalogProbeGrass();
 extern std::atomic<bool> g_recordOn;
 void CatalogRecord(bool on);                     // "Grabar partido": volcados periodicos numerados en catalog\rec                        // "Volcar pasto": mide las parcelas de pasto de un cuadro
 // pasto extendido (grass.cpp)
-void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, const ShaderEntry* ps, UINT count, UINT start, INT base);
+void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, const ShaderEntry* ps, UINT count, UINT start, INT base); bool GrassSkipGameDraw(); void GrassClearSkip();   // (2/11) x178: omitir el dibujo del pasto del juego
 void GrassOnBaseDraw(ID3D11DeviceContext* c);    // (25/10) v3: al terminar la base de la cancha (PS 5e92 / c956)
 void GrassDiagState(ID3D11DeviceContext* c, uint64_t psHash);   // (26/10 f) log del stencil de las pasadas del sol y de la base de la cancha
 // (26/10 g) pasto del juego en el G-buffer con los estados de las hojas del mod (w290): se ponen antes del dibujo y se devuelven despues
@@ -249,7 +256,7 @@ struct ShaderBind { const ShaderEntry* vs = nullptr; ID3D11VertexShader* vsObj =
 ShaderBind BindShadersRaw(ID3D11DeviceContext* c, const ShaderBind& b);
 extern thread_local bool t_sparseGrass;
 extern int g_grassPatchesLastFrame;
-struct GrassDbg { int calls = 0, emits = 0, patches = 0, sparse = 0, sparseLast = 0; int ring[3] = {0, 0, 0}; UINT lod = 0, rtW = 0, cb2off = 0; bool cam = false; float ex = 0, ez = 0; const char* why = nullptr; };
+struct GrassDbg { int calls = 0, emits = 0, patches = 0, sparse = 0, sparseLast = 0, lost = 0; int ring[3] = {0, 0, 0}; UINT lod = 0, rtW = 0, cb2off = 0; bool cam = false; float ex = 0, ez = 0; const char* why = nullptr; };
 extern GrassDbg g_grassDbg;
 extern UINT g_bbW, g_bbH;                       // tamano del back buffer (lo fija Present)
 void CatalogGrassDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, UINT count, UINT start, INT base);                           // proximo cuadro: volcar los cbuffers de composicion y luz del sol
@@ -309,7 +316,7 @@ std::string DescribeInputLayout(ID3D11InputLayout* il);   // elementos de un inp
 extern std::atomic<int> g_matchGen;                                        // sube en cada partido nuevo (reloj del cesped)
 void PitchWearNotePlayer(ID3D11DeviceContext* c); void PitchWearPresent(); void PitchWearReloadShaders();   // desgaste de la cancha en vivo
 void PitchClipsDraw(ID3D11DeviceContext* c, int frame);
-void PitchBallNote(ID3D11DeviceContext* c, int frame);   // (20/10) capsula de la pelota del VS del pasto -> pasto aplastado   // recortes de pasto volando (desde el dibujo del pasto)
+void PitchBallNote(ID3D11DeviceContext* c, int frame); ID3D11Buffer* PitchBallDrawNote(ID3D11DeviceContext* c, UINT verts); bool PitchClipDrawActive();   // (2/11) dibujo de los recortes en curso (atlas pes_debris en t8/t9)   // (2/11) dibujo de la pelota (aadffecf): b12 con las manchas o nullptr   // (20/10) capsula de la pelota del VS del pasto -> pasto aplastado   // recortes de pasto volando (desde el dibujo del pasto)
 // (20/10) LOD de caras (lod.cpp): diagnostico (x118) y LOD0 forzado por sustitucion de geometria (y118)
 struct LodIA {
     ID3D11Buffer* vb[4] = {}; UINT stride[4] = {}, offset[4] = {};
@@ -328,15 +335,29 @@ extern thread_local LodIA t_grassSub;   // (20/10) pasto v4: malla propia para e
 void GrassDenseReset();
 void ExeDumpPresent();
 void ExePatchInstall();
+void ShadowCasterLogPresent();   // (02/11) hooks.cpp: b2 de la pasada de sombras (cascada cercana) al log
 void ExePatchPresent();   // (20/10) LOD de modelos (x142) cada segundo
+void SolRelojPresent();   // (02/11) registro de hora del dia / sol / sunLux del motor, solo lectura (solreloj.cpp)
 void GrassDistPresent();  // (26/10) busca el recorte de distancia del pasto 3D del juego ya descifrado (grassdist.cpp)
 // (23/10) camara del motor (camhook.cpp): cortes de camara del juego (CameraSystem 0x14198d3b0) y reinicios del TAA del juego
 int PresentNo();                                  // numero de cuadro (sube en cada Present)
 void CamHookPresent();                            // ganchos (primer Present), 160 = cuadros desde el corte / cortes / TAA / ok
+// (31/10) camara libre (freecam.cpp): pisa el parametro de la camara del motor desde el gancho de camhook.cpp; 344 (ini) / 345 (DLL)
+void FreeCamApply(unsigned char* param);
+void FreeCamPresent();
+void FreeCamWheel(int delta);
+bool FreeCamWantsHead();   // (1/11) camara libre prendida con "seguir la cara": hace falta la cabeza (expr.cpp)   // (1/11) rueda del mouse (WM_MOUSEWHEEL / raw input) -> zoom   // (1/11) gancho a la camara del visor del editor (primer Present) + log
+bool FreeCamActive();
+bool FreeCamBlocksKeys();                         // x344 = 1: el juego no ve el teclado mientras la camara libre esta prendida
+// (31/10) camara lenta (tiempo.cpp): gancho al reloj de juego del motor (0x14035dcb0), 343 (ini: x velocidad, y prendida; DLL: z, w)
+void TiempoPresent();
+bool TiempoHooked();
+float TiempoFactor();   // (1/11) velocidad pedida por el menu (1 = apagada) para el aviso en pantalla
 bool CamCutSince(int& seen);                      // true una vez por cada corte nuevo (cada consumidor guarda su 'seen'); x161 = 1
 int CamLastCutFrame();
 bool EngineCamera(float pos[3], float tgt[3], int* frame);   // ultima camara aplicada por el motor (sin atraso)
 ID3D11ShaderResourceView* MuscleClothSRV();     // (25/10) zonas de la musculatura para la fisica de la ropa (t121 del simulador)
+ID3D11ShaderResourceView* MuscleEffortSRV();    // (02/11) esfuerzo por jugador para las venas (t123 del VS de la piel)
 // (25/10) la ropa choca con el cuerpo real (cuerpo.cpp): piel del cuerpo deformada por personaje para el simulador (t122..t124)
 void BodyOnDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, int kind = 0);   // en cada dibujo de la piel del cuerpo (VS 1c02a92a); kind 1 = camiseta (medicion, 327.w)
 ID3D11ShaderResourceView* TorsoNeedSRV();   // (31/10) mapa "torso bajo la camiseta" preciso (t124 del VS de la piel y de su sombra)
@@ -350,7 +371,13 @@ void BodyNoteClothDispatch(ID3D11DeviceContext* c, UINT groups);    // en el Dis
 void BodySimSeen();                                // el simulador del mod de ropa se uso en este cuadro
 void BodyReloadShaders();
 struct InputElemInfo { std::string sem; UINT idx, fmt, slot, off; };
-bool InputLayoutInfo(ID3D11InputLayout* il, std::vector<InputElemInfo>& out);   // hooks.cpp: elementos anotados al crearse el layout
+bool InputLayoutInfo(ID3D11InputLayout* il, std::vector<InputElemInfo>& out);
+ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, const float** headCentroid = nullptr, int* headIdx = nullptr);
+void ExprCaptureHead(ID3D11DeviceContext* c, const float* hc, int head);   // (1/11) copia la matriz de sk_head del dibujo en curso (b6)
+bool ExprHeadWorld(float out[3], double* age);                            // (1/11) ultima posicion de la cabeza en el mundo   // (31/10) expresiones: cbuffer de la malla de cara (cabeza en la paleta) para el VS
+void ExprPresent();                                // (31/10) expresiones: lectura de las mallas de cara nuevas, log
+void ExprBonesFrame(const void* skel);             // (01/11) exprbones.cpp: en el Eval del cuello (musculo.cpp), gira la mandibula del esqueleto (350)
+void ExprBonesPresent();                           // (01/11) exprbones.cpp: estado para el shader (350.y) y resumen   // hooks.cpp: elementos anotados al crearse el layout
 void MuscleHookPresent();                         // (23/10) musculatura (musculo.cpp): huesos de musculo del juego x 164..171 (v5: 32 clases)
 void MuscleDrawPlayerPanel();                     // (24/10) tarjeta "Musculatura por jugador" (ImGui; la llama DrawGroup con g_cfgMutex tomado)
 bool MusclePhysiqueActive();                      // (24/10) el menu Fisico del juego (Editar > Jugadores) esta en pantalla
@@ -388,6 +415,8 @@ void SkinToneSet(uint32_t id, const char* name, int tono, int matiz, uint32_t rg
 extern std::atomic<bool> g_skinMeasure;             // (24/10 e) medir el color del cuello del cuerpo y de la cara (menu Fisico)
 void SkinMeasureReport(const uint32_t* body, const uint32_t* face, uint32_t yMinInv, uint32_t yMax, uint32_t faceN);
 bool CharNodeWorldPos(void* node, float out[3]);   // (26/10) posicion en el mundo de un SceneCharacterNode (skintone.cpp)
+bool CharNodeToWorld(void* node, const float p[3], float out[3], bool point);   // (02/11) modelo -> mundo con la matriz del nodo (skintone.cpp)
+bool ExprFaceFrame(const float* camPos, const float* camFwd, const void** lock, float c[3], float fw[3], float up[3], double* age);   // (02/11) cara en el mundo desde el esqueleto (exprbones.cpp)
 void SkinTonePresent();                           // guardado diferido + tabla de jugadores con tono propio (194..254)
 bool SkinToneParams(int gameIdx, const SkinToneProf& q, float k, float out[3], float outBody[3]);   // (24/10 c) (kL, m0, m1) en Oklab para pes_skintone.hlsli
 int SkinToneGame(uint32_t id);                    // color de piel del juego guardado para ese jugador (0 = no se sabe)
@@ -431,11 +460,11 @@ void LightMeterAfterComposition(ID3D11DeviceContext* c); void LightMeterPresent(
 void AutoCapturePresent(ID3D11Texture2D* frame);   // hooks.cpp
 // (27/10 c) sombra propia de la cabeza (headshadow.cpp): atlas de sombras de alta resolucion de las cabezas mas cercanas
 void HeadShadowPresent(); int HeadShadowSlots(); ID3D11ShaderResourceView* HeadShadowSRV(); ID3D11DepthStencilView* HeadShadowDSV();
-ID3D11Buffer* HeadShadowCB(int i); void HeadShadowViewport(int i, D3D11_VIEWPORT& vp); bool HeadShadowIsGameShadow(ID3D11DepthStencilView* v);
+ID3D11Buffer* HeadShadowCB(int i); void HeadShadowViewport(int i, D3D11_VIEWPORT& vp); bool HeadShadowIsGameShadow(ID3D11DepthStencilView* v); bool HeadShadowIsGameRes(ID3D11DepthStencilView* v);
 bool HeadShadowIsNearCascade(ID3D11DeviceContext* c, ID3D11DepthStencilView* gameDSV, int kind); ID3D11DepthStencilView* HeadShadowBind(UINT n, ID3D11RenderTargetView* const* rt, ID3D11DepthStencilView* dsv); void HeadShadowOnClear(ID3D11DeviceContext* c, ID3D11DepthStencilView* v, float depth);
 void HeadShadowRelease(); extern std::atomic<int> g_headShadowReplays; ID3D11RasterizerState* HeadShadowNoCullRS(ID3D11RasterizerState* orig);
 ID3D11Resource* NamedSRVResource(const std::string& name);   // hooks.cpp: recurso detras de un SRV guardado por regla (sin referencia)
-ID3D11ShaderResourceView* SSSSBeforeComposition(ID3D11DeviceContext* c); ID3D11ShaderResourceView* SSSSSpecSRV(); void SSSSReloadShaders(); extern std::atomic<int> g_ssssDraws;   // ssss.cpp
+ID3D11ShaderResourceView* SSSSBeforeComposition(ID3D11DeviceContext* c); ID3D11ShaderResourceView* SSSSSpecSRV(); void SSSSReloadShaders(); double SSSSEditorLightAge(); void SSSSRenderSize(unsigned& w, unsigned& h); extern std::atomic<int> g_ssssDraws;   // ssss.cpp
 // prueba automatica del menu (menutest.cpp)
 void MenuTestPresent(IDXGISwapChain* sc);
 void MenuTestStart(); void MenuTestStop(); bool MenuTestActive();
@@ -464,9 +493,11 @@ void RingPresent(IDXGISwapChain* sc);               // (24/10 e) el aro sobre la
 ID3D11ShaderResourceView* HandDataFor(uint64_t vsHash, UINT indexCount, UINT start, INT base);   // (25/10) manos.cpp: datos por vertice de la mano (t126 del VS)
 ID3D11ShaderResourceView* LimbDataFor(uint64_t vsHash, UINT indexCount, UINT start, INT base, bool* isArm);   // (26/10, v12.7) manos.cpp: brazos y piernas (t126 del VS)
 ID3D11ShaderResourceView* VeinTexture();   // (26/10, v12.7) manos.cpp: venas de brazos y manos (t29 del PS)
+ID3D11ShaderResourceView* ArmAnatTexture(int which);   // (02/11) grupos musculares del brazo: 0 = pendientes (t26), 1 = cavidad (t30), 2 = grupo por texel (t36)
 // (27/10) brazos.cpp: brazos, manos y muslos de TorsoBody para las caras reales (la cara trae arm_bsm / thigh_bsm de 2048):
 // textura de TorsoBody del tono del jugador para t0 del PS en ese dibujo (nullptr = dejar la del juego); Present lee las huellas
 ID3D11ShaderResourceView* ArmsTextureFor(ID3D11DeviceContext* c, uint64_t vsHash, UINT indexCount);
+int ArmsModTextureKind(ID3D11ShaderResourceView* v);   // (03/11) 0 = no es del mod; 1 arm, 2 thigh, 3 torso, 4 referencia
 void ArmsPresent();
 int CharSkinToneFor(uint32_t id);   // (27/10) tono 1..6 de PES21FX\tonos_piel.txt (0 = no esta), fila 324
 ID3D11ShaderResourceView* ArmsTorsoTextureForFace();   // (27/10) torso_N para t29 de los PS de la cara (cuello, pes_collar.hlsli, fila 322)
@@ -482,6 +513,7 @@ bool TiltTexturesFor(uint64_t vsHash, UINT indexCount, ID3D11ShaderResourceView*
 float MuscleVariantT(uint32_t id, bool* own);   // (26/10) musculo.cpp: variante del jugador (-1 robusto .. 1 atletico; propia o la general)
 extern std::atomic<bool> g_menuOpen;
 extern std::atomic<bool> g_blockGameKeys;   // (31/10) keyblock.cpp: el juego no ve el teclado mientras esta prendido
+extern std::atomic<bool> g_menuTyping;      // (31/10) overlay.cpp: hay un campo de texto del menu activo (la camara libre no lee W A S D)
 void KeyBlockInstall();
 extern std::atomic<int> g_replacedCount, g_failedCount;
 extern std::vector<std::string> g_compileErrors;

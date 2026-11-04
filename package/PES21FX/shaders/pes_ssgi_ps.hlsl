@@ -45,7 +45,11 @@ float2 UVofV(float3 P) {
 }
 float3 ToWorldDir(float3 v) { return float3(dot(v, float3(c[8].x, c[9].x, c[10].x)), dot(v, float3(c[8].y, c[9].y, c[10].y)), dot(v, float3(c[8].z, c[9].z, c[10].z))); }
 
-float3 SampleV2(float2 uv, float2 uvS, float3 Pc, float3 Nc, float areaPx, bool skipTurf) {
+// (01/11) devuelve rgb = luz x factor de forma, a = factor de forma (para no pasar del 100 % del hemisferio al sumar)
+// (02/11 b) tope del factor de forma de una muestra: 0.35 cerca; menor en el anillo lejano de los pixeles lejanos (camara alejada),
+// donde 4 muestras con areas enormes caian en carteles o reflectores y salian puntos que vibraban (Agustin: "pasa cuando la camara se aleja")
+static float g_ffCap = 0.35;
+float4 SampleV2(float2 uv, float2 uvS, float3 Pc, float3 Nc, float areaPx, bool skipTurf) {
   if (any(uvS < 0.0) || any(uvS > 1.0)) return 0.0;
   float dS = inDepth.SampleLevel(sPoint, uvS, 0).x;
   if (dS < 1e-6) return 0.0;                                        // cielo: lo pone la luz de cielo (x47)
@@ -77,16 +81,20 @@ float3 SampleV2(float2 uv, float2 uvS, float3 Pc, float3 Nc, float areaPx, bool 
   float area = areaPx * mpp * mpp / cosV;
   float ff = cosC * cosS * area / (3.14159265 * max(dist2, 0.04));
   float3 Ls = inAlb.SampleLevel(sPoint, uvS, 0).xyz * inDif.SampleLevel(sPoint, uvS, 0).xyz;
-  return Ls * min(ff, 0.35);                                        // una sola muestra nunca aporta mas de un tercio
+  ff = min(ff, g_ffCap);                                               // una sola muestra nunca aporta mas de un tercio
+  return float4(Ls * ff, ff);
 }
 
 float4 mainV2(float4 pos, float2 uv, float z0, float Rg, float fr0, float rot, float pxm) {
   float4 P315 = IniParams.Load(int2(315, 0)), P42 = IniParams.Load(int2(42, 0));
   float3 Pc = PosV(uv, z0);
   float3 Nc = DecN(uv);
+  // (01/11) superficies finas de dos caras (red del arco, carteles, pelo): el G-buffer trae la normal de la cara de atras
+  // (mirando hacia el fondo) y el pixel recibia la luz de todo lo que tiene detras -> red casi blanca. Se da vuelta hacia la camara.
+  if (dot(Nc, -normalize(Pc)) < -0.2) Nc = -Nc;
   bool skipTurf = P42.w > 0.5;
   float rPx = min(Rg * pxm, 320.0);
-  float3 acc = 0;
+  float4 acc = 0;
   if (rPx >= 3.0) {
     // (31/10) x336 = muestras cercanas por cuadro (8 = como antes, hasta 16: menos ruido y mas definido)
     float x336 = IniParams.Load(int2(336, 0)).x;
@@ -103,7 +111,8 @@ float4 mainV2(float4 pos, float2 uv, float z0, float Rg, float fr0, float rot, f
     float rIn = Rg * pxm, rOut = min(Rg * kFar * pxm, 640.0);
     if (rOut > rIn + 4.0) {
       float aFar = 3.14159265 * (rOut * rOut - rIn * rIn) / 4.0;
-      float3 accF = 0;
+      float4 accF = 0;
+      g_ffCap = lerp(0.08, 0.2, saturate(rPx / 24.0));   // (02/11 c) tope 0.2 en el anillo lejano (antes 0.35)
       [unroll] for (int j = 0; j < 4; j++) {
         float u = frac((j + 0.5) / 4.0 + fr0 * 0.61);
         float rr = sqrt(rIn * rIn + u * (rOut * rOut - rIn * rIn));
@@ -113,10 +122,29 @@ float4 mainV2(float4 pos, float2 uv, float z0, float Rg, float fr0, float rot, f
       acc += accF * (P315.z > 0 ? P315.z : 1.0);
     }
   }
-  return float4(acc, z0);
+  // (01/11) conservacion de energia: los factores de forma de todo el hemisferio suman 1 como maximo. En pantalla las muestras
+  // del fondo (lejos y grandes) se solapan vistas desde el pixel y la suma pasaba de 2 (la red saturaba a blanco).
+  acc.rgb /= max(acc.a, 1.0);
+  return float4(acc.rgb, z0);
 }
 
-float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
+// (02/11) "Completa" sin pagar 4 veces (Agustin: la caida de FPS es el rebote; "que mantenga la calidad pero se renderice de una
+// forma mejor, para ahorrar rendimiento y evitar el ruido"). Con z337 = 1 y una DLL que lo soporta (155.z = 1 + fase) este paso
+// corre a media resolucion (costo de "Media") pero cada pixel calcula un pixel EXACTO de la resolucion completa, uno distinto de
+// cada bloque de 2x2 en cada cuadro (fase 0..3). El paso 2 (pes_ssgi_tp_ps) lo reconstruye a resolucion completa con la
+// profundidad de cada pixel y lo acumula en el tiempo: a los 4 cuadros cada pixel tiene su propio valor (definicion de Completa).
+static const int2 kSSGIPhase[4] = { int2(0, 0), int2(1, 1), int2(1, 0), int2(0, 1) };
+
+float4 main(float4 pos : SV_Position, float2 uvIn : TEXCOORD0) : SV_Target0 {
+  float2 uv = uvIn;
+  float ph155 = IniParams.Load(int2(155, 0)).z;
+  if (ph155 > 0.5) {
+    float FW, FH; inDepth.GetDimensions(FW, FH);
+    float2 pf = floor(pos.xy) * 2.0 + kSSGIPhase[((int)(ph155 + 0.5) - 1) & 3] + 0.5;
+    pf = min(pf, float2(FW, FH) - 0.5);
+    uv = pf / float2(FW, FH);
+    pos.xy = pf;                                                // el patron de giro de las muestras, por pixel de la resolucion completa
+  }
   float d0 = inDepth.SampleLevel(sPoint, uv, 0).x;
   if (d0 < 1e-6) return 0.0;                                    // cielo
   float z0 = LinZ(uv);

@@ -97,6 +97,8 @@ float3 PESSunColor() {
   return res;
 }
 // === FIN SOL ===
+#include "pes_skinlight.hlsli"   // (03/11) modelo de piel compacto (la piel igual en todos los modos)
+
 void main(
   float4 v0 : TEXCOORD0,
   float4 v1 : TEXCOORD1,
@@ -112,9 +114,12 @@ void main(
   r0.xy = v1.xy / v1.ww;
   r1.xyzw = g_NormalTexture.Sample(g_samplerPoint_Wrap_s, r0.xy).xyzw;
   r2.xyzw = g_SpecularTexture.Sample(g_samplerPoint_Wrap_s, r0.xy).zxyw;
+  float skTag = r2.x, skRough = r2.y, skSpecI = r2.z;   // (03/11) para la piel
+  float2 skPP = (v0.xy / v0.ww - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy;
   r0.z = r1.z * 1023 + 0.5;
   r0.z = (uint)r0.z;
   r0.w = (int)r0.z & 15;
+  int skMat = (int)r0.w;
   r1.z = cmp((int)r0.w == 1);
   if (r1.z != 0) {
     r3.x = 0;
@@ -139,6 +144,7 @@ void main(
   r4.zw = g_psScene.m_projectionParam.xy * r4.zw;
   r0.z = -g_psScene.m_projectionParam.w + r0.z;
   r5.z = g_psScene.m_projectionParam.z / r0.z;
+  float skZ = r5.z;   // (03/11) distancia para la piel
   r5.xy = r5.zz * r4.zw;
   r6.xyzw = g_psObject.m_localParam[1].xyzw * r5.yyyy;
   r6.xyzw = r5.xxxx * g_psObject.m_localParam[0].xyzw + r6.xyzw;
@@ -217,6 +223,7 @@ void main(
     }
   }
   r7.w = -r7.z;
+  float3 skN = normalize(r7.xyw);   // (03/11) normal para la piel
   r0.w = dot(g_psLight.m_lightDir0.xyz, r7.xyw);
   r1.z = dot(-r0.xyz, r7.xyw);
   r2.x = r1.z + r1.z;
@@ -237,8 +244,12 @@ void main(
   r3.x = r3.x * r4.y + r0.w;
   r3.y = r4.y * r4.x;
   r3.x = saturate(max(r3.x, r3.y));
+  float skNL = r0.w, skTF = r3.y;
   r0.w = saturate(r0.w);
   r3.xyz = r3.xxx * r1.xyw;
+  bool skOn = PesSkIsSkin(skMat, r4.y, skTag);
+  float3 skV = -normalize(float3(skPP, 1)), skL = normalize(g_psLight.m_lightDir0.xyz);
+  if (skOn) r3.xyz = PesSkDiffuse(skNL, r4.y, skTF, skZ) * r1.xyw;   // (03/11) piel
   r4.xyz = r8.xyz * r2.zzz;
   r5.x = dot(r0.xyz, g_psLight.m_lightDir0.xyz);
   r0.x = g_lut1.Sample(g_samplerLinear_Clamp_s, r5.xy).x;
@@ -265,6 +276,10 @@ void main(
   r0.xyz = r0.xyz * r4.xyz;
   o0.xyz = r3.xyz * r6.xyz;
   r0.xyz = r0.xyz * r2.www;
+  if (skOn) {   // (03/11) contraluz (entra aunque el frente este en sombra) y brillo de piel
+    o0.xyz += PesSkTrans(skN, skV, skL, r4.y) * r1.xyw * lerp(0.25, 1.0, saturate(r6.x));
+    r0.xyz = PesSkSpec(r0.xyz, skN, skV, skL, skRough, skSpecI, r1.xyw, saturate(r2.w));
+  }
   o1.xyz = min(float3(10000,10000,10000), r0.xyz);
   o0.w = 1;
   o1.w = 1;

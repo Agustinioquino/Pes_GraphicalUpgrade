@@ -71,24 +71,34 @@ float4 PESBicubic(Texture2D<float4> tex, float2 uv, float2 hi)
 // los jugadores). 48 muestras en espiral de Vogel dentro del radio de cada pixel; cada muestra solo cuenta si su propio
 // circulo de confusion llega hasta el pixel (dispersion como recoleccion): el jugador enfocado (radio 0) nunca se mezcla
 // con el fondo -> bordes limpios, y las luces fuertes del estadio forman discos de bokeh porque la imagen es HDR.
-float3 PESBokehFar(float2 uv, float4 c0, float maxPx, float boost) {
+// (02/11) bokeh v2: con 48 muestras fijas el disco quedaba con huecos (a 12 px de radio una muestra cada ~3 px, a 4K cada
+// ~6 px): el fondo mostraba el dibujo de la espiral y las luces fuertes salian como puntos sueltos que titilaban.
+// Ahora: cantidad de muestras segun el radio de cada pixel (32..160, una cada ~2.5 px), cada lectura cae entre 4 texeles
+// (el filtro lineal promedia 2x2: el disco se cubre entero), la espiral gira distinto en cada pixel (ruido fino en vez de
+// anillos) y cada muestra pesa 1/(1+brillo/4): las luces siguen formando discos pero sin puntos sueltos que titilan;
+// z137 realza las luces fuertes igual que antes.
+float3 PESBokehFar(float2 uv, float2 pos, float4 c0, float maxPx, float boost) {
   float R0 = saturate((c0.w - 0.5) * 2.0) * maxPx;
   if (R0 < 0.6) return c0.xyz;
   float2 px = g_psSystem.m_renderBuffer.zw;
-  float3 acc = c0.xyz; float wsum = 1.0;
-  [loop] for (int k = 0; k < 48; k++) {
-    float r = sqrt((k + 0.5) / 48.0) * R0;
-    float a = k * 2.39996323;
-    float2 o = float2(cos(a), sin(a)) * r;
+  int n = (int)clamp(ceil(R0 * R0 * 0.5), 32.0, 160.0);
+  float rot = 6.2831853 * frac(52.9829189 * frac(dot(pos, float2(0.06711056, 0.00583715))));   // ruido de gradiente intercalado
+  float3 col0 = min(c0.xyz, 64.0);
+  float w0 = 1.0 / (1.0 + 0.25 * dot(col0, float3(0.2126, 0.7152, 0.0722)));
+  float3 acc = col0 * w0; float wsum = w0;
+  [loop] for (int k = 0; k < n; k++) {
+    float r = sqrt((k + 0.5) / n) * R0;
+    float a = k * 2.39996323 + rot;
+    float2 o = float2(cos(a), sin(a)) * r + 0.5;              // +0.5 px: la lectura lineal promedia 2x2 texeles
     float4 sm = inImage.SampleLevel(g_samplerLinear_Clamp_s, saturate(uv + o * px), 0);
     float Rs = saturate((sm.w - 0.5) * 2.0) * maxPx;
     float w = saturate(Rs - r + 1.0);
     float3 col = min(sm.xyz, 64.0);
     float l = dot(col, float3(0.2126, 0.7152, 0.0722));
-    w *= 1.0 + boost * saturate(l - 1.0);                       // z137: realza los discos de las luces fuertes
+    w *= (1.0 + boost * saturate(l - 1.0)) / (1.0 + 0.25 * l);   // z137 realce de luces; 1/(1+l/4): sin puntos que titilan
     acc += col * w; wsum += w;
   }
-  return acc / wsum;
+  return acc / max(wsum, 1e-5);
 }
 
 void main(
@@ -130,7 +140,7 @@ void main(
   if (BK.x > 0.5) {
     float maxPx = clamp(BK.y > 0.5 ? BK.y : 12.0, 2.0, 32.0) * (1.0 / max(g_psSystem.m_renderBuffer.w * 1080.0, 1e-3));
     float2 uvF = g_psSystem.m_renderBuffer.zw * v0.xy;
-    float3 g = PESBokehFar(uvF, inImage.SampleLevel(g_samplerPoint_Clamp_s, uvF, 0), maxPx, max(BK.z, 0.0));
+    float3 g = PESBokehFar(uvF, v0.xy, inImage.SampleLevel(g_samplerPoint_Clamp_s, uvF, 0), maxPx, max(BK.z, 0.0));
     r1.xyz = g; r2.yzw = g;
   }
   r3.x = dot(float3(0.212599993,0.715200007,0.0722000003), r2.yzw);

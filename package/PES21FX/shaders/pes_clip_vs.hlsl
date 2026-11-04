@@ -16,27 +16,34 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID)
 {
   VSOut o;
   float4 p = PESClips[iid * 2], v = PESClips[iid * 2 + 1];
+  // (2/11) v.w = giro + 10 * tipo (0 manojo arrancado, 1 terron de tierra, 2 polvo, 3 pedazo de hoja): bandas del atlas de particulas
+  // textures\pes_debris.dds que la DLL enlaza en t8 / t9 solo en este dibujo
+  float kind = clamp(floor(v.w / 10.0 + 0.001), 0.0, 3.0); float rot = v.w - kind * 10.0;
+  bool lump = kind == 1.0 || kind == 2.0;
   uint k = vid % 6;
   float cx = (k == 1 || k == 4 || k == 5) ? 1.0 : 0.0, cy = (k == 2 || k == 3 || k == 5) ? 1.0 : 0.0;
   // eje de la hoja: su velocidad (si vuela) girando sobre si misma; ancho perpendicular a la camara
   float3 eye = cb2[20].xyz; float3 toCam = normalize(eye - p.xyz);
   float3 axis = normalize(v.xyz + float3(0.0, 0.3, 0.0) + 1e-3);
   float3 side = normalize(cross(axis, toCam) + 1e-4);
-  float cr = cos(v.w), sr = sin(v.w);
+  float cr = cos(rot), sr = sin(rot);
   float3 axisR = normalize(axis * cr + cross(side, axis) * sr);   // giro alrededor del ancho
-  float len = max(p.w, 0.002), wid = len * 0.22;
+  float len = max(p.w, 0.002), wid = len * (lump ? 1.0 : 0.22);   // terrones y polvo: tarjeta cuadrada
   float3 world = p.xyz + side * ((cx - 0.5) * wid) + axisR * (cy * len);
   float4 wp = float4(world, 1.0);
   float4 vp = float4(dot(wp, cb2[8]), dot(wp, cb2[9]), dot(wp, cb2[10]), dot(wp, cb2[11]));
   float4 cp = float4(dot(vp, cb2[4]), dot(vp, cb2[5]), dot(vp, cb2[6]), dot(vp, cb2[7]));
   o.o0 = cp;
-  // franja angosta del manojo del atlas (banda 1, hoja central)
-  o.o1 = float4(0.46 + cx * 0.08, 0.85 - cy * 0.6, 1.0, 0.55);
+  // tarjeta entera de la banda del tipo (raiz abajo, v = 1)
+  o.o1 = float4(cx, 1.0 - cy, 1.0, lump ? 0.9 : 0.55);
   o.o2 = float4(world, 0.0);
   // color: la base de la cancha en ese punto (misma cuenta que el VS del pasto: mosaico 32 x 24)
   float2 puv = world.xz * cb4[1].xy + cb4[1].zw;
   float4 b = g_tex_base.SampleLevel(g_samplerLinear_Wrap_s, puv * float2(32.0, 24.0), 2.0);
   float3 col = saturate(b.xyz * float3(0.92, 1.0, 0.85));
+  float lum = dot(b.xyz, float3(0.3, 0.59, 0.11));
+  if (kind == 1.0) col = float3(0.34, 0.25, 0.15) * (0.7 + 0.9 * lum);        // tierra: marron, con la claridad del suelo
+  else if (kind == 2.0) col = float3(0.55, 0.48, 0.36) * (0.8 + 0.8 * lum);   // polvo: tierra clara
   o.o3 = float4(col, 0.6);
   // normal: mezcla de "arriba" y hacia la camara (pedacito suelto, se ilumina parejo)
   float3 nW = normalize(float3(0.0, 1.0, 0.0) * 0.6 + toCam * 0.5);
@@ -44,6 +51,6 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID)
   o.o5 = float4(0.3, 0.3, 0.0, 0.0);
   o.o6 = float4(cp.xy, dot(wp, cb2[16]), dot(wp, cb2[17]));
   o.o7 = float2(cp.w, dot(wp, cb2[19]));
-  o.o8 = float4(0.0, 0.0, 1.0, 2.0);   // sin seco / pelado, alto 1, banda 1 del atlas
+  o.o8 = float4(kind == 1.0 ? 1.0 : 0.0, 0.0, frac(iid * 0.618), 1.0 + kind);   // pelado si es tierra, al azar por particula, banda = tipo (atlas de particulas)
   return o;
 }

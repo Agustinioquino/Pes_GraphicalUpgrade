@@ -70,8 +70,8 @@ float2 PESWear(float2 pm, float2 wxz, float wear, float areas, float bald, float
   if (LW.w > 0.5 && live > 0.001) {
     float n4 = PESGnoise(wxz * 2.1 + 4.4);                       // el pisoteo no es parejo
     float lv = saturate(PESWearLiveCurve(live) * (0.8 + 0.4 * n4));
-    col = saturate(col + lv * 0.9 * wearK);
-    bare = max(bare, smoothstep(0.55 / wearK, 1.0, lv) * saturate(LW.z));
+    col = saturate(col + lv * 0.6 * wearK);   // (02/11 paso 6) 0.9 -> 0.6: con live ~0.1 ya habia 70 % de paja
+    bare = max(bare, smoothstep(0.7 / wearK, 1.0, lv) * saturate(LW.z));   // (02/11 paso 6) pelado desde mas desgaste (antes 0.55)
   }
   return float2(col, bare);
 }
