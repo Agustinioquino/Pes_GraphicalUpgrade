@@ -354,22 +354,35 @@ void main(
   // matas, lado al sol) como un factor relativo a su color plano. 0 = como antes, 1 = todo el color del suelo
   // (04/11) el suelo se lee en la raiz de la hoja (v7.zw del VS): en el pixel de la hoja la copia de RT0 tiene lo que esta DETRAS (botin,
   // pelota, piernas) y la hoja delante de un botin tomaba su color: parecia transparente. La raiz esta en el suelo, delante del jugador
-  int2 pesGndPx = int2(v0.xy);
-  if (all(abs(v7.zw) < 1.0)) {
-    float2 rb = g_psSystem.m_renderBuffer.xy;
-    if (rb.x < 1.0) { uint bw, bh; PESBaseRT0.GetDimensions(bw, bh); rb = float2(bw, bh); }
-    pesGndPx = int2(clamp((v7.zw * float2(0.5, -0.5) + 0.5) * rb, 0.0, rb - 1.0));
+  // (04/11 b) dos muestras del suelo: la de la raiz y la del pixel. La raiz puede quedar TAPADA por el botin (hojas detras del botin cuyas
+  // puntas asoman por encima: tomaban el color del botin, pinches rosas / blancos) y el pixel puede tener el botin DETRAS (hoja delante: se
+  // veia transparente). Se usa la que mas se parece al color plano de la propia hoja (las dos son suelo cuando no hay nadie: misma eleccion
+  // que antes, con preferencia por la raiz)
+  float3 pesGnd = 0;
+  if (pesFB && v5.w < 0.5) {
+    float3 gP = PESBaseRT0.Load(int3(v0.xy, 0)).xyz, gR = gP;
+    if (all(abs(v7.zw) < 1.0)) {
+      float2 rb = g_psSystem.m_renderBuffer.xy;
+      if (rb.x < 1.0) { uint bw, bh; PESBaseRT0.GetDimensions(bw, bh); rb = float2(bw, bh); }
+      gR = PESBaseRT0.Load(int3(int2(clamp((v7.zw * float2(0.5, -0.5) + 0.5) * rb, 0.0, rb - 1.0)), 0)).xyz;
+    }
+    float3 fc = saturate(v1.zzz * v3.xyz);
+    { float3 cg = fc; PESGrassColorGrade(cg); fc = saturate(cg); }
+    // distancia de tono (sin el brillo: sol / sombra no cuentan) + algo de brillo (botin blanco vs pasto)
+    float3 fn = fc / max(dot(fc, float3(1,1,1)), 0.03), rn = gR / max(dot(gR, float3(1,1,1)), 0.03), pn = gP / max(dot(gP, float3(1,1,1)), 0.03);
+    float lf = dot(fc, float3(0.333,0.333,0.333)), dR = dot(rn - fn, rn - fn) + 0.05 * abs(dot(gR, float3(0.333,0.333,0.333)) - lf), dP = dot(pn - fn, pn - fn) + 0.05 * abs(dot(gP, float3(0.333,0.333,0.333)) - lf);
+    pesGnd = (dR <= dP * 1.5 + 0.002) ? gR : gP;
   }
   float4 P330 = IniParams.Load(int2(330,0));
   if (pesFB && v5.w < 0.5 && !pesFar && P330.y > 0.001) {
-    float3 gnd = PESBaseRT0.Load(int3(pesGndPx, 0)).xyz;
+    float3 gnd = pesGnd;
     float3 flatC = saturate(v1.zzz * v3.xyz);
     { float3 cg = flatC; PESGrassColorGrade(cg); flatC = saturate(cg); }
     float3 rel = clamp(o0.xyz / max(flatC, 0.02), 0.0, 1.6);
     o0.xyz = lerp(o0.xyz, saturate(gnd * rel), saturate(P330.y));
   }
   float pesCfB = (pesPaintF > 0.001 && P299.z > 0.5) ? lerp(pesCf, pesCf * pesCfN, pesPaintF) : pesCf;
-  if (pesFB && v5.w < 0.5) o0.xyz = lerp(PESBaseRT0.Load(int3(pesGndPx, 0)).xyz, o0.xyz, pesCfB);
+  if (pesFB && v5.w < 0.5) o0.xyz = lerp(pesGnd, o0.xyz, pesCfB);
   // (27/10 m) tanda 10, z328: oclusion entre matas. v8.y la manda el VS por hoja (0.5..1): las matas bajas, los bordes de cada mata y las hojas
   // cortas reciben menos luz que las altas que asoman; mas en la raiz que en la punta. Va DESPUES de la mezcla con el suelo para que a media
   // distancia (30-110 px/m), donde la hoja ya toma el color del suelo, el pasto siga leyendose como matas de 12 cm (claras / oscuras,
