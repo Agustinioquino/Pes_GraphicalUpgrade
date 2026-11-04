@@ -42,6 +42,15 @@ Texture2D<float4> tFace : register(t0);      // difusa de la cara (la misma del 
 Texture2D<float4> tHairMap : register(t26);  // mapa de pelo de esta cara
 Texture2D<float4> tBrow : register(t27);     // (04/11 d) mapa de la ceja: rgb color de sus pelos, a contorno
 SamplerState sLin : register(s0);
+// (04/11 e, Agustin: "las cejas no salen desde el modelo del rostro o se ven separadas") con la teselacion de la cara la piel
+// que se VE es la del DS (pes_face_tess.hlsli: redondeo de Phong + relieve de la quinta textura), no la del triangulo plano.
+// Antes la raiz subia un valor FIJO (z358 * 0.6 + z359 mm ~ 1.4 mm) por la normal: donde la piel teselada casi no sube (la
+// frente, la ceja) las hebras quedaban flotando ~2 mm. Ahora el GS repite el MISMO corrimiento del DS en el punto de la raiz.
+// La DLL pone t121 = parametros SOLO si ese dibujo de la cara esta teselado (si no, queda vacio y Load da 0), y t23 / t24 =
+// las texturas del relieve del DS.
+Texture1D<float4> TessOn : register(t121);
+Texture2D<float4> pesFaceA : register(t23);
+Texture2D<float4> pesFaceB : register(t24);
 
 #ifdef PES_BROW_VS_B
 struct FaceV {   // salida del VS 455eb97b (cara animada)
@@ -109,6 +118,44 @@ float2 PesBrowDirUV(float2 uv) {
   return normalize(d);
 }
 
+// copia del corrimiento de pes_face_tess.hlsli (main del DS) en las baricentricas b del triangulo; uvT = UV que usa el DS
+float3 PesTessDisp(FaceV v[3], float3 b, float2 uvT)
+{
+  if (TessOn.Load(int2(357, 0)).x < 0.5) return float3(0, 0, 0);
+  float4 T = IniParams.Load(int2(357, 0)), U = IniParams.Load(int2(358, 0));
+  float3 P0 = v[0].pV.xyz, P1 = v[1].pV.xyz, P2 = v[2].pV.xyz;
+  float3 N0 = normalize(v[0].nrm.xyz), N1 = normalize(v[1].nrm.xyz), N2 = normalize(v[2].nrm.xyz);
+  float3 pl = b.x * P0 + b.y * P1 + b.z * P2;
+  float3 pp = b.x * (pl - dot(pl - P0, N0) * N0) + b.y * (pl - dot(pl - P1, N1) * N1) + b.z * (pl - dot(pl - P2, N2) * N2);
+  float4 EB = IniParams.Load(int2(366, 0));
+  float3 wv = float3(v[0].pV.w, v[1].pV.w, v[2].pV.w);
+  float3 isEye = step(1.5, wv);
+  float3 wPh = lerp(saturate(wv), saturate(EB.xxx), isEye);
+  float eyeMix = dot(b, isEye);
+  float seam = saturate(dot(b, wPh));
+  float seamR = saturate(dot(b, wv * (1.0 - isEye)));
+  { float nh = clamp(IniParams.Load(int2(360, 0)).z, 0.0, 15.0) * 0.01;
+    float ry = b.x * v[0].pR.y + b.y * v[1].pR.y + b.z * v[2].pR.y;
+    seam *= smoothstep(1.53, 1.53 + max(nh, 0.01), ry); }
+  float fade = 1.0 - smoothstep(U.x - max(U.y, 0.01), U.x, length(pl));
+  float3 d = (pp - pl) * (saturate(T.y) * seam * fade * (T.x > 0.5 ? 1.0 : 0.0));
+  float dl = length(d), tope = lerp(max(U.z, 0.0), clamp(EB.y, 0.0, max(U.z, 0.0)), saturate(eyeMix * 2.0)) * 0.001;
+  if (dl > tope) d *= tope / max(dl, 1e-6);
+  float4 R = IniParams.Load(int2(359, 0));
+  if (R.x > 0.001 && T.x > 0.5) {
+    float lod = clamp(R.w, 0.0, 6.0);
+    float4 FB = pesFaceB.SampleLevel(sLin, uvT, lod);
+    if (FB.a > 0.5) {
+      float4 FA = pesFaceA.SampleLevel(sLin, uvT, lod);
+      float hmm = max(R.z, 0.0) * (FB.b + saturate(FA.g * 2.0 - 1.0)) - max(R.y, 0.0) * FA.r;   // (la ceja esta lejos de la boca)
+      float3 Nn = normalize(b.x * N0 + b.y * N1 + b.z * N2);
+      d += Nn * (clamp(hmm * R.x, -3.0, 3.0) * 0.001 * min(seam, seamR) * fade);
+    }
+  }
+  if (IniParams.Load(int2(360, 0)).x > 0.5) d += normalize(b.x * N0 + b.y * N1 + b.z * N2) * (0.01 * min(seam, seamR));
+  return d;
+}
+
 float4 ProjV(float3 p) {
   float4 h = float4(p, 1);
   return float4(dot(h, m_projection[0]), dot(h, m_projection[1]), dot(h, m_projection[2]), dot(h, m_projection[3]));
@@ -148,7 +195,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
   float keepBase = saturate(uvArea * dens / (float)(PES_INST * PES_PER_INST));
   float mLen = hb ? max(pesHairBrow.w, 0.05) : 1.0, mWid = hb ? max(pesHairBrow.x, 0.05) : 1.0, mLift = hb ? pesHairBrow.z : 1.0;
   float curl = hb ? saturate(pesHairA.y) : 0.1;
-  float lift = clamp(P75.x * mLift, 0.0, 1.5) * 0.35;   // (04/11) pegadas a la piel: la v1 se levantaba demasiado
+  float lift = clamp(P75.x * mLift, 0.0, 1.5) * 0.2;    // (04/11 e) aun mas acostadas: la raiz no se despega de la piel   // (04/11) pegadas a la piel: la v1 se levantaba demasiado
   float flip = P75.w < -0.5 ? -1.0 : 1.0;
 
   [loop] for (uint k = 0; k < PES_PER_INST; k++) {
@@ -177,9 +224,12 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     float3 dd = normalize(d * cos(ga) + bt * sin(ga));
     // apenas fuera de la piel; con la teselacion de la cara prendida (x357) la piel redondeada puede subir hasta z358 mm (tope del
     // corrimiento) + z359 mm (relieve hacia afuera): la raiz sube lo mismo para que la piel no tape las hebras de cerca
-    float4 P357 = IniParams.Load(int2(357,0)), P358 = IniParams.Load(int2(358,0)), P359 = IniParams.Load(int2(359,0));
-    float tessLift = P357.x > 0.5 ? (max(P358.z, 0.0) * 0.6 + max(P359.z, 0.0)) * 0.001 : 0.0;
-    root += n * (0.0004 + tessLift);
+#ifdef PES_BROW_VS_B
+    float2 uvT = (v[0].uv4.zw * b.x + v[1].uv4.zw * b.y + v[2].uv4.zw * b.z);   // el DS de 455eb lee la UV en TEXCOORD0.zw
+#else
+    float2 uvT = uv;
+#endif
+    root += PesTessDisp(v, b, uvT) + n * 0.00015;   // (04/11 e) sobre la piel teselada real + 0.15 mm (antes 0.4 mm + 1.4 mm fijos)
     float len = max(P74.z, 0.1) * 0.01 * mLen * (0.55 + 0.45 * m.g) * (0.8 + 0.4 * r3) * 0.8;
     // la hebra no sale de la ceja pintada: si la punta (o la mitad) cae en piel, se acorta
     {
