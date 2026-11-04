@@ -40,13 +40,14 @@ NECK_N = float(os.environ.get('NECK_N', '0.78'))           # (03/11 v19c) ancho 
 LO_OVERBITE = float(os.environ.get('LO_OVERBITE', '2.2'))   # (03/11) mm que los de abajo suben detras de los de arriba (sobremordida)
 LO_OVERJET = float(os.environ.get('LO_OVERJET', '1.0'))     # (03/11) mm que los de abajo van detras (resalte)
 # anchos mesiodistales reales (mm), del centro hacia atras: arriba IC, I, C, P1, P2; abajo I1, I2, C, P1, P2, M
-REAL_W = {True: [8.6, 6.6, 7.6, 7.0, 6.6], False: [5.3, 5.8, 6.9, 7.0, 7.1, 8.5]}
+REAL_W = {True: [8.1, 6.8, 7.7, 7.1, 6.7],   # (04/11) Agustin 'reducir el tamano de las paletas en la boca normal': centrales 8.6 -> 8.1 mm
+          False: [5.3, 5.8, 6.9, 7.0, 7.1, 8.5]}
 # (04/11) perfiles por jugador (Agustin: 'una boca especifica para Messi', fotos de su sonrisa): MOUTH_PROFILE=messi
 # centrales de arriba grandes y cuadrados, laterales angostos, mas cortos y un poco hacia atras (escalon marcado),
 # caninos con punta; abajo igual que la comun (casi no se ve)
 PROFILE = os.environ.get('MOUTH_PROFILE', '')
 PROF = {
-    '': dict(ext_up={'IC': -0.1, 'I': -0.8, 'C': -0.3}, corner_ic=(0.02, 0.08), corner_i_up=(0.04, 0.14), lat_back=0.0, canine=0.30),
+    '': dict(ext_up={'IC': -0.8, 'I': -0.8, 'C': -0.3}, corner_ic=(0.02, 0.08), corner_i_up=(0.04, 0.14), lat_back=0.0, canine=0.30),
     'messi': dict(ext_up={'IC': -1.1, 'I': -1.5, 'C': -1.4}, corner_ic=(0.05, 0.12), corner_i_up=(0.08, 0.18), lat_back=0.0, canine=0.18),   # (04/11 b) Agustin 'no me convencen': su sonrisa actual (fotos): parejos, anchos, borde en arco suave, caninos romos
 }[PROFILE]
 if PROFILE == 'messi': REAL_W = {True: [8.8, 7.0, 7.9, 7.2, 6.8], False: REAL_W[False]}
@@ -104,10 +105,12 @@ def real_bounds(M, r, pk, up, log=print):
 
 BS_UP = float(os.environ.get('BS_UP', '0.0'))   # (02/11 v17b) donde sale de la encia el diente de arriba (fraccion del alto)
 FOLD_S = float(os.environ.get('FOLD_S', '0.35'))   # (02/11 c) mm detras de la encia donde queda la tira recogida
+CHEEK = int(os.environ.get('CHEEK', '1'))   # (04/11) paredes de la mejilla a los costados (Agustin: 'que no se note que esta abierto')
 THROAT = int(os.environ.get('THROAT', '1'))   # (02/11) fondo de la garganta nuevo (throat.py) en lugar de la pared plana de Konami
 SINK = float(os.environ.get('SINK_MM', '2.0' if int(os.environ.get('REAL_TEETH', '1')) else '1.5')) * MM   # (03/11 v19c) 2 mm: la encia abraza el cuello   # (01/11 d) 0.7 -> 1.5 mm: el cuello se mete bien detras de la encia (no asoma por arriba)
 PATCH = int(os.environ.get('PATCH', '1'))
 MOLARS = int(os.environ.get('MOLARS', '2'))   # (02/11) muelas 3D por lado y por arcada, detras del ultimo premolar (Agustin: 'que las muelas sean 3d')
+MOL_DROP_LO = float(os.environ.get('MOL_DROP_LO', '0.8'))   # (04/11) mm que bajan las muelas de abajo (Agustin)
 MOL_AIR = float(os.environ.get('MOL_AIR', '0.3')); MOL_S0_UP = float(os.environ.get('MOL_S0_UP', '0.4')); MOL_S0_LO = float(os.environ.get('MOL_S0_LO', '0.4'))   # (04/11) donde arranca la 1a muela detras del ultimo premolar (mm por la encia; negativo = mas adelante)
 MOLAR_L = [float(x) for x in os.environ.get('MOLAR_L', '10.0,9.0').split(',')]   # largo mesio-distal (mm) de cada muela
 UV_W, UV_V0, UV_V1 = 0.55, 0.15, 0.90   # (01/11 e) el borde translucido de la textura (0.62-0.92) cae adentro   # (01/11 d) parte del diente pintado que usa el diente 3D
@@ -600,7 +603,8 @@ def build(src_fmdl, texdir, log=print):
                         dd = Pstrip_lo - cc[None]
                         foot_m = (np.abs(dd @ t) < 0.5 * Lk) & (np.abs(dd @ bd) < 0.5 * Wb)
                         cc[1] = (np.percentile(Pstrip_lo[foot_m, 1], 50) if foot_m.sum() >= 4 else mid[1]) - 0.4 * MM
-                        lo_tips[(side, k)] = cc[1] + Hc + tipz
+                        lo_tips[(side, k)] = cc[1] + Hc + tipz   # (la de arriba se apoya donde estaba antes de bajarla: no baja con ella)
+                        cc[1] -= MOL_DROP_LO * MM   # (04/11) Agustin: 'bajar un poco las muelas de abajo'
                     else:
                         # (02/11 g) 'la mordida como la de Konami': arriba y abajo NO se cruzan al cerrar; las cuspides de arriba
                         # quedan 0.2 mm sobre las de abajo de la misma muela, un poco hacia el carrillo
@@ -655,6 +659,50 @@ def build(src_fmdl, texdir, log=print):
         hit = (UVc[:, 0] > 0.279) & (UVc[:, 0] < 0.5) & (UVc[:, 1] >= 0.66) & (UVc[:, 1] <= 1.0)
         UVc = UVc.copy(); UVc[hit, 0] = 0.279
         parts.append((Pc, UVc, Fc, Wc, 'resto'))
+    # ---- (04/11) Agustin: 'ampliar los laterales del modelo que no son dientes para que no se note que esta abierto'. A los
+    # costados, entre la tira de arriba (cabeza) y la de abajo (mandibula), no habia nada: con la boca abierta se veia el fondo
+    # negro por el costado. Una pared de mejilla por lado (la mucosa del carrillo), un poco por fuera de las dos tiras, desde la
+    # altura del premolar hasta el fondo (donde empieza la garganta); arriba pesa en sk_head y abajo en skf_jaw, asi se estira al
+    # abrir como una mejilla. Textura: la mucosa pintada de la garganta (throat.UV_BOX), solo su parte clara.
+    if CHEEK:
+        import throat as _th
+        tiras = [q[0] for q in parts if q[4] == 'tira']
+        Pu, Pl = tiras[0], tiras[1]
+        NZ, NY = 9, 5
+        u0, u1, v0, v1 = _th.UV_BOX
+        nadd = 0
+        for side in (-1, 1):
+            zs = np.linspace(0.152, 0.120, NZ)
+            cols = []
+            for z in zs:
+                def outer(Q):
+                    s_ = (np.abs(Q[:, 2] - z) < 2.5 * MM) & (np.sign(Q[:, 0]) == side)
+                    if not s_.any(): return None
+                    q = Q[s_]; xo = np.abs(q[:, 0]).max(); edge = q[np.abs(q[:, 0]) > xo - 2.0 * MM]
+                    return xo, float(np.median(edge[:, 1]))
+                a, b = outer(Pu), outer(Pl)
+                if a is None or b is None: cols = None; break
+                cols.append((max(a[0], b[0]) + 1.0 * MM, a[1], b[1]))
+            if cols is None: log('  mejilla lado %+d: sin tiras a esa altura, no se agrega' % side); continue
+            P = np.zeros((NY, NZ, 3)); UV = np.zeros((NY, NZ, 2)); Wc_ = np.zeros((NY, NZ, len(names)))
+            for j, (z, (xo, yt, yb)) in enumerate(zip(zs, cols)):
+                for i in range(NY):
+                    t_ = i / (NY - 1)
+                    bulge = 0.8 * MM * np.sin(np.pi * t_)            # la mejilla se abomba un poco hacia afuera al medio
+                    P[i, j] = (side * (xo + bulge), yt + (yb - yt) * t_, z)
+                    UV[i, j] = (u0 + (u1 - u0) * (0.15 + 0.7 * j / (NZ - 1)), v0 + (v1 - v0) * (0.10 + 0.35 * t_))
+                    Wc_[i, j, names.index('sk_head')] = 1 - t_; Wc_[i, j, names.index('skf_jaw')] = t_
+            Fq = []
+            for i in range(NY - 1):
+                for j in range(NZ - 1):
+                    a_, b_, c_, d_ = i * NZ + j, i * NZ + j + 1, (i + 1) * NZ + j, (i + 1) * NZ + j + 1
+                    Fq += [(a_, b_, c_), (b_, d_, c_)]
+            Fq = np.array(Fq); Pf = P.reshape(-1, 3)
+            # la cara visible mira hacia adentro (-side en x); con la convencion de Fox (normal = -cruz) el cruz va hacia +side
+            cr = np.cross(Pf[Fq[:, 1]] - Pf[Fq[:, 0]], Pf[Fq[:, 2]] - Pf[Fq[:, 0]])
+            if (cr[:, 0] * side).mean() < 0: Fq = Fq[:, [0, 2, 1]]
+            parts.append((Pf, UV.reshape(-1, 2), Fq, Wc_.reshape(-1, len(names)), 'mejilla')); nadd += len(Fq)
+        log('  mejillas: %d triangulos (paredes a los costados, de la cabeza a la mandibula)' % nadd)
     # ---- (02/11) fondo de la garganta: velo del paladar, pilares, pared de la faringe y uvula (Agustin: 'mejorar el fondo de la
     # garganta, realista, unos pocos vertices mas no hay drama'). La textura la pinta make_oral.py en throat.UV_BOX / UVULA_BOX
     if THROAT:
