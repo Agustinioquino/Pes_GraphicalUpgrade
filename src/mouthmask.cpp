@@ -9,6 +9,7 @@
 #include <d3d11.h>
 #include <mutex>
 #include <atomic>
+#include <vector>
 
 namespace fx {
 
@@ -21,8 +22,13 @@ static std::atomic<bool> s_dirty{false};
 static std::atomic<int> s_draws{0}, s_fail{0};
 static double s_logT = 0;
 
+// (05/11) cierre 17:41 (CFG al liberar un objeto D3D11 que apuntaba a otro ya destruido): por las dudas, la mascara NUNCA libera nada
+// mientras el juego corre. Lo viejo (textura de otro tamano, PS antes de recargar) queda guardado aca y no se suelta: otro hilo o una
+// command list pueden tenerlo enlazado. Son pocos objetos (cambio de resolucion / F10), no pesa.
+static std::vector<IUnknown*> s_retired;
+static void Retire(IUnknown* o) { if (o) s_retired.push_back(o); }
 static void ReleaseTex() {
-    if (s_srv) s_srv->Release(); if (s_rtv) s_rtv->Release(); if (s_tex) s_tex->Release();
+    Retire(s_srv); Retire(s_rtv); Retire(s_tex);
     s_srv = nullptr; s_rtv = nullptr; s_tex = nullptr; s_w = s_h = 0;
 }
 
@@ -95,7 +101,7 @@ void MouthMaskPresent() {
 
 void MouthMaskReloadShaders() {
     std::lock_guard<std::mutex> lk(s_mx);
-    if (s_ps) s_ps->Release(); s_ps = nullptr; s_psTried = false;
+    Retire(s_ps); s_ps = nullptr; s_psTried = false;
 }
 
 }   // namespace fx
