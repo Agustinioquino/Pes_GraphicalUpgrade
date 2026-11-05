@@ -9,7 +9,6 @@
 #include <d3d11.h>
 #include <mutex>
 #include <atomic>
-#include <vector>
 
 namespace fx {
 
@@ -22,15 +21,8 @@ static std::atomic<bool> s_dirty{false};
 static std::atomic<int> s_draws{0}, s_fail{0};
 static double s_logT = 0;
 
-// (05/11) cierre 17:41 (CFG al liberar el juego un objeto D3D11 que apuntaba a otro ya destruido): MouthMaskBegin / MouthMaskSRV
-// devuelven punteros sin AddRef que otro hilo enlaza despues de soltar el mutex. Lo que se suelta (textura al cambiar de tamano,
-// PS al recargar shaders) ya no se libera en el acto: queda retirado 8 Present y lo libera MouthMaskPresent (contexto inmediato).
-// Enlazado una vez, el contexto (o la command list) guarda su propia referencia, asi que 8 cuadros sobran.
-struct Retired { IUnknown* p; unsigned frame; };
-static std::vector<Retired> s_retired; static unsigned s_frame = 0;
-static void Retire(IUnknown* p) { if (p) s_retired.push_back({ p, s_frame }); }   // con s_mx tomado
 static void ReleaseTex() {
-    Retire(s_srv); Retire(s_rtv); Retire(s_tex);
+    if (s_srv) s_srv->Release(); if (s_rtv) s_rtv->Release(); if (s_tex) s_tex->Release();
     s_srv = nullptr; s_rtv = nullptr; s_tex = nullptr; s_w = s_h = 0;
 }
 
@@ -89,15 +81,6 @@ ID3D11ShaderResourceView* MouthMaskSRV() {
 
 // Present (contexto inmediato): limpiar para el cuadro siguiente y registro cada 30 s
 void MouthMaskPresent() {
-    {
-        std::lock_guard<std::mutex> lk(s_mx);
-        s_frame++;
-        if (!s_retired.empty()) {
-            size_t k = 0;
-            for (auto& r : s_retired) { if (s_frame - r.frame >= 8) r.p->Release(); else s_retired[k++] = r; }
-            s_retired.resize(k);
-        }
-    }
     if (s_dirty.exchange(false) && g_dev.imm) {
         std::lock_guard<std::mutex> lk(s_mx);
         if (s_rtv) { const float z[4] = { 0, 0, 0, 0 }; g_dev.imm->ClearRenderTargetView(s_rtv, z); }
@@ -112,7 +95,7 @@ void MouthMaskPresent() {
 
 void MouthMaskReloadShaders() {
     std::lock_guard<std::mutex> lk(s_mx);
-    Retire(s_ps); s_ps = nullptr; s_psTried = false;   // (05/11) retirado, no liberado: otro hilo puede estar por enlazarlo
+    if (s_ps) s_ps->Release(); s_ps = nullptr; s_psTried = false;
 }
 
 }   // namespace fx
