@@ -89,7 +89,7 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   float3 col = lerp(i.col, i.col2, t);   // (04/11 d) el color del mapa de la ceja tal cual (antes se oscurecia / aclaraba aca)   // (04/11 b) antes 0.55 en la raiz: salian negras como alambre
   // (04/11 e, referencia eFootball de Agustin) la raiz queda entre los pelos de al lado y la piel (oclusion suave), la punta sale
   // a la luz: el pelo de la ceja se ve con volumen y brillo arriba, sin la raiz negra de la v1 (0.55)
-  col *= lerp(0.9, 1.0, saturate(t * 2.5));   // (04/11 e) 0.82 -> 0.9: con el color nuevo ya no hace falta oscurecer tanto
+  col *= lerp(0.95, 1.0, saturate(t * 2.5));   // (04/11 e) 0.82 -> 0.9: con el color nuevo ya no hace falta oscurecer tanto
   if (P75.z > 0.5) col = float3(1, 0, 1);   // diagnosticos 1 y 3: magenta
   // (04/11 j, Agustin: "la luz al cambiar el color no es realista, no traspasa de frente") un pelo no es una superficie opaca: la luz
   // entra, se dispersa entre las hebras y sale con el color del pelo (dispersion multiple). En el G-buffer eso equivale a un albedo
@@ -99,9 +99,9 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
     float3 cs = saturate(col);
     // (04/11 o, Agustin: "no me gusta como pasa la luz ni el color poco natural") mucho mas suave: el realce anterior (^0.8, sat x1.15)
     // sumado al de browmap dejaba las cejas naranjas y como iluminadas desde adentro
-    float3 ms = pow(cs + 1e-4, 0.95);
+    float3 ms = pow(cs + 1e-4, 0.85);   // (05/11) mas claras con luz de frente, sin subir la saturacion (no vuelve el naranja)
     float ml = dot(ms, float3(0.2126, 0.7152, 0.0722));
-    col = max(ml + (ms - ml) * 0.95, 0.0);
+    col = max(ml + (ms - ml) * 1.0, 0.0);
   }
   // (04/11 l, Agustin: "me gustaria poder cambiar el color frente a la luz o normal y a contraluz") con la luz detras de la ceja
   // (mirando hacia el sol) el pelo deja pasar la luz y se ve de otro tono: el color elegido para el contraluz entra segun cuanto

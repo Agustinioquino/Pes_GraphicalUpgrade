@@ -146,7 +146,7 @@ void main(triangle LashV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     float widB = 0.00004 * mWid;                               // ~0.08 mm de ancho total en la raiz
     float4 tc = tLash.SampleLevel(sLin, uv, 0);
     float3 cR = tc.rgb, cT = tc.rgb * float3(1.15, 1.1, 1.05);
-    { float layer = lerp(0.75, 1.05, frac(r3 * 5.71 + r2 * 2.13)); cR *= 0.72 * layer; cT *= layer; }   // (04/11 j) sombra entre pelos: raiz tapada + capas
+    { float layer = lerp(0.85, 1.05, frac(r3 * 5.71 + r2 * 2.13)); cR *= 0.85 * layer; cT *= layer; }   // (04/11 j) sombra entre pelos: raiz tapada + capas
     float4 cp = v[0].clipCP * b.x + v[1].clipCP * b.y + v[2].clipCP * b.z;
     float2 ww = v[0].ww * b.x + v[1].ww * b.y + v[2].ww * b.z;
     float4 q = cp / ww.xxyy;

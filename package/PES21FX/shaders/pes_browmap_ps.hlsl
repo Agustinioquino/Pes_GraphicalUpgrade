@@ -37,7 +37,7 @@ void BrowMap(float2 uv, float2 texel, out float4 o3) {
   float3 hc = wsum > 1e-3 ? acc / wsum : tDiffuse.SampleLevel(sLin, uv, 0.0).rgb * 0.8;
   hc = lerp(hc, accAll / 25.0, 0.3);
   float hl = LumF(hc);
-  hc = max(hl + (hc - hl) * 1.1, 0.0) * 1.05;   // (04/11 o) antes x1.35 / x1.15: tono demasiado naranja
+  hc = max(hl + (hc - hl) * 1.1, 0.0) * 1.15;   // (05/11) brillo de vuelta a x1.15 (se veian muy oscuras de frente)   // (04/11 o) antes x1.35 / x1.15: tono demasiado naranja
   o3 = float4(hc, mask);
 }
 void main(float4 pos : SV_Position, float2 uv : TEXCOORD0, out float4 o0 : SV_Target0)
