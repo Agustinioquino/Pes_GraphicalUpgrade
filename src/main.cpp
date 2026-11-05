@@ -12,13 +12,47 @@ namespace fx {
 static FILE* g_log = nullptr;
 static std::mutex g_logMutex;
 
+// (27/10) registro del sol: archivo propio por partida (PES21FX\registro_sol\sol_AAAAMMDD_HHMMSS.txt) que el juego no pisa. Recibe
+// las lineas del sol y la luz del log ("luz del sol", "cielo:", "sol:", "luz:") y las de SunLog (estado por segundo, ajustes)
+static FILE* g_sunLog = nullptr; static bool g_sunLogTried = false;
+static FILE* SunLogFile() {
+    if (g_sunLog || g_sunLogTried || g_cfg.baseDir.empty()) return g_sunLog;
+    g_sunLogTried = true;
+    std::wstring d = g_cfg.baseDir + L"registro_sol\\"; CreateDirectoryW(d.c_str(), nullptr);
+    SYSTEMTIME st; GetLocalTime(&st); wchar_t n[64];
+    swprintf(n, 64, L"sol_%04d%02d%02d_%02d%02d%02d.txt", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    g_sunLog = _wfopen((d + n).c_str(), L"w");
+    if (g_sunLog) fputs(
+        "Registro del sol y la luz de PES21FX (un archivo por partida; el juego no lo borra).\n"
+        "Vectores (x, y, z) en el mundo: y = altura (altura en grados = arcoseno de y), x / z = plano de la cancha. Rumbos en grados.\n"
+        "estado: una linea por segundo con la luz del juego en mundo, el sol del archivo del cielo, la diferencia entre los dos (0-5 = coinciden),\n"
+        "        la camara, el color del sol (rgb e intensidad), la exposicion y las pasadas del sol que corrieron en ese cuadro.\n"
+        "ajuste: un valor del menu / ini que cambio (fila y componente, antes -> ahora). Al empezar se anotan los ajustes del sol y las sombras.\n"
+        "El resto son las lineas del sol del PES21FX.log, copiadas con la misma hora.\n\n", g_sunLog);
+    return g_sunLog;
+}
+static bool SunLine(const char* m) {
+    return !strncmp(m, "luz del sol", 11) || !strncmp(m, "cielo:", 6) || !strncmp(m, "sol:", 4) || !strncmp(m, "luz:", 4) || !strncmp(m, "  llena el cbuffer", 18);
+}
+static void WriteLine(FILE* f, const SYSTEMTIME& st, const char* m) {
+    fprintf(f, "[%02d:%02d:%02d.%03d] %s\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, m); fflush(f);
+}
+
 void Log(const char* fmt, ...) {
     std::lock_guard<std::mutex> lk(g_logMutex);
     if (!g_log) return;
     SYSTEMTIME st; GetLocalTime(&st);
-    fprintf(g_log, "[%02d:%02d:%02d.%03d] ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
-    va_list ap; va_start(ap, fmt); vfprintf(g_log, fmt, ap); va_end(ap);
-    fputc('\n', g_log); fflush(g_log);
+    char buf[8192]; va_list ap; va_start(ap, fmt); vsnprintf(buf, sizeof(buf), fmt, ap); va_end(ap);
+    WriteLine(g_log, st, buf);
+    if (SunLine(buf)) if (FILE* f = SunLogFile()) WriteLine(f, st, buf);
+}
+// solo al registro del sol
+void SunLog(const char* fmt, ...) {
+    std::lock_guard<std::mutex> lk(g_logMutex);
+    FILE* f = SunLogFile(); if (!f) return;
+    SYSTEMTIME st; GetLocalTime(&st);
+    char buf[8192]; va_list ap; va_start(ap, fmt); vsnprintf(buf, sizeof(buf), fmt, ap); va_end(ap);
+    WriteLine(f, st, buf);
 }
 
 // (26/10) para escribir bloques largos de una vez (memwatch.cpp): LogLock devuelve el archivo con el log tomado
@@ -289,6 +323,9 @@ static int InitMod() {
     std::wstring wb = exe; wb = wb.substr(0, wb.find_last_of(L"\\/") + 1) + L"PES21FX\\";
     fx::g_cfg.baseDir = wb;
     CreateDirectoryW(wb.c_str(), nullptr);
+    // (05/11) el log de la sesion anterior se conserva como PES21FX.anterior.log: si el juego se cerro y se volvio a abrir,
+    // el informe del cierre no se pierde (cierre del 05/11 17:41: el log se piso al reabrir)
+    MoveFileExW((wb + L"PES21FX.log").c_str(), (wb + L"PES21FX.anterior.log").c_str(), MOVEFILE_REPLACE_EXISTING);
     fx::g_log = _wfopen((wb + L"PES21FX.log").c_str(), L"w");
     fx::Log("PES21 FX 0.2 (d3d11.dll) - carpeta: %ls", wb.c_str());
     AddVectoredExceptionHandler(1, fx::Vectored);

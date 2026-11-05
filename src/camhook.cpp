@@ -70,6 +70,7 @@ static bool UseCuts() { return g_cfg.live[161][0] > 0.5f; }
 static uintptr_t __fastcall hk_Cam(void* param, uintptr_t reset) {
     const unsigned char* b = (const unsigned char*)param;
     if (b) {
+        FreeCamApply((unsigned char*)param);   // (31/10) camara libre: pisa posicion / objetivo / arriba / campo de vision si esta prendida
         int f = PresentNo();
         bool cont = b[0x48] != 0, rs = (reset & 0xff) != 0;
         s_applies++;
