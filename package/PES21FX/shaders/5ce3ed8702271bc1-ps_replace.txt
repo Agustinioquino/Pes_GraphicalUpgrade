@@ -244,6 +244,7 @@ void main(
   float wrFold    = 0;     // 0..1: cuanto "surco" hay en este pixel
   float wrRidgeF  = 0;     // (04/11 h) 0..1: cresta fina entre arrugas (piel estirada)
   float shFold = 0, shRidge = 0;   // (04/11 h) surco / cresta de las arrugas esculpidas de la sonrisa
+  float wrFoldW = 0, shFoldW = 0;  // (05/11) los mismos surcos medidos 4 veces mas ancho: zonas suaves para la luz de frente
   float4 P16 = IniParams.Load(int2(16,0));
   bool  exOn      = wrOn && P16.w > 0.5;
   float exBlood   = max(P16.x, 0.0);
@@ -380,16 +381,17 @@ void main(
     float wdiv = divX + wrYSign * divY;
     wrFold = saturate(-wdiv * 4.0) * wrWeight;
     wrRidgeF = saturate(wdiv * 4.0) * wrWeight;
-    if (exOn) {
-      // misma deteccion con un radio 4 veces mayor -> zonas suaves, no lineas
+    {
+      // misma deteccion con un radio 4 veces mayor -> zonas suaves, no lineas (05/11: siempre, la usa tambien el surco con luz de frente)
       float2 wdu2 = wdu * 4.0, wdv2 = wdv * 4.0;
       float4 za = wrHi ? pesWrinkleN.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy + wdu2, wrLod + 1) : g_tex_normal_animation.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy + wdu2, wrLod + 1);
       float4 zb = wrHi ? pesWrinkleN.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy - wdu2, wrLod + 1) : g_tex_normal_animation.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy - wdu2, wrLod + 1);
       float4 zc = wrHi ? pesWrinkleN.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy + wdv2, wrLod + 1) : g_tex_normal_animation.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy + wdv2, wrLod + 1);
       float4 zd = wrHi ? pesWrinkleN.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy - wdv2, wrLod + 1) : g_tex_normal_animation.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy - wdv2, wrLod + 1);
       float zdiv = (za.x * za.w - zb.x * zb.w) * 0.5 + wrYSign * (zc.y - zd.y) * 0.5;
-      exFoldZ  = saturate(-zdiv * 2.0) * wrWeight;
-      exRidgeZ = saturate( zdiv * 2.0) * wrWeight;
+      wrFoldW  = saturate(-zdiv * 2.0) * wrWeight;
+      exFoldZ  = exOn ? wrFoldW : 0.0;
+      exRidgeZ = exOn ? saturate( zdiv * 2.0) * wrWeight : 0.0;
     }
   }
   r2.xyz = float3(-1,-1,-1) + r3.xyz;
@@ -418,6 +420,11 @@ void main(
       float4 sc = pesShapeWr.Sample(g_samplerAnisotropic_Clamp_s, v2.xy + float2(0, sdy)), sd = pesShapeWr.Sample(g_samplerAnisotropic_Clamp_s, v2.xy - float2(0, sdy));
       float sdiv = (lerp(sa.x, sa.z, sbl) - lerp(sb.x, sb.z, sbl)) * 2.0 + wrYSign * (lerp(sc.y, sc.w, sbl) - lerp(sd.y, sd.w, sbl)) * 2.0;
       shFold  = saturate(-sdiv * 3.0) * shW;
+      { float wx = sdx * 4.0, wy = sdy * 4.0;   // (05/11) ancho, como wrFoldW
+        float4 ta = pesShapeWr.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy + float2(wx, 0), 2), tb = pesShapeWr.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy - float2(wx, 0), 2);
+        float4 tc = pesShapeWr.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy + float2(0, wy), 2), td = pesShapeWr.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy - float2(0, wy), 2);
+        float tdiv = (lerp(ta.x, ta.z, sbl) - lerp(tb.x, tb.z, sbl)) * 0.5 + wrYSign * (lerp(tc.y, tc.w, sbl) - lerp(td.y, td.w, sbl)) * 0.5;
+        shFoldW = saturate(-tdiv * 2.0) * shW; }
       shRidge = saturate( sdiv * 3.0) * shW;
     } }
   // === PES21 (19/10) micro normal de poros: mosaico fino sobre la normal del juego, solo de cerca.
@@ -731,16 +738,17 @@ void main(
       r0.w  = saturate(r0.w + 0.18 * fF - 0.10 * fR);
       r1.w *= (1.0 - 0.30 * saturate(fF)) * (1.0 + 0.12 * fR);
     }
-    // (04/11 m, Agustin: "el normal se plasma de mejor manera al estar contra luz que al estar iluminado de frente") con la luz de
-    // frente el relieve de una normal casi no cambia N.L y la arruga desaparece; en la piel real el fondo del surco igual se ve mas
-    // oscuro porque le llega menos luz de todos lados (oclusion). Oclusion propia del surco (fina y esculpida), sin depender de la
-    // luz, por el relieve z365: a 1.5 el fondo del surco recibe ~30 % menos difusa. Nada en los labios ni la boca
-    float aoK = enhance ? saturate(wrRelief / 1.5) * (1.0 - saturate(2.0 * FZ.g)) : 0.0;
-    float fAO = saturate((wrOn ? wrFold * 1.5 : 0.0) + shFold * 1.5) * aoK;
-    if (fAO > 0.001) {
-      r2.xyz *= 1.0 - 0.30 * fAO;
-      r0.z   *= 1.0 - 0.35 * fAO;
-    } }
+    // (05/11, Agustin: "no se ve realista, antes a contraluz se veia mas real, ahora con la luz de frente se ve feo") la oclusion
+    // propia del surco (04/11 m) se saco: con la luz de frente marcaba las arrugas como lineas negras.
+    // (05/11, Agustin: "me gustaria que con la luz a favor tambien se vean bien las arrugas") con la luz de frente un surco real no
+    // se ve negro: se ve un poco mas rojo y apagado (la sangre se junta en el pliegue y le llega menos luz rebotada) en una zona
+    // ancha y suave. Se usa el surco medido ancho (no la linea fina, que era ruidosa), por y365
+    float fW = smoothstep(0.05, 0.6, saturate((wrOn ? wrFoldW : 0.0) + shFoldW)) * srmK;
+    if (fW > 0.001) {
+      r2.xyz *= lerp(float3(1.0, 1.0, 1.0), float3(0.95, 0.87, 0.86), fW);
+      r0.z   *= 1.0 - 0.20 * fW;
+    }
+  }
   // 2) Especular: la piel real refleja ~2.8% (F0 0.028). El valor del juego
   //    suele quedar alto -> efecto plastico. Se escala de forma controlada.
   r0.z = saturate(r0.z * specScale);

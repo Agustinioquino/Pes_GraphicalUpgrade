@@ -727,9 +727,18 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
         S.lidSm = S.lidSmHave ? S.lidSm + (sm - S.lidSm) * 0.10f : sm; S.lidSmHave = true;
         const float smL = S.lidSm;
         // (04/11, Agustin: "el parpadeo hace que se muevan bastante") parpadeo mas suave: arriba 0.64 -> 0.58, abajo 0.12 -> 0.07
-        float up = (std::min)(0.58f * b - gy * (gy < 0.0f ? 0.80f : 0.55f) + 0.06f * smL, 0.66f);   // tope: cerrado, sin pasarse del ojo
+        // (05/11, Agustin: "a la sonrisa le falta achicar los ojos un poco mas") con los parpados por huesos (350.y = 2) el shader no
+        // mueve los parpados (PesBlinkApply sale antes) y la forma del ojo de los gestos del mod (Sonrisa, Enojo, Asombro, Grito,
+        // Puchero) se perdia: solo quedaba la sonrisa medida en la comisura. Ahora tambien aca, las mismas cuentas que el shader con
+        // la sonrisa un ~30 % mas fuerte (a 1.0 el de arriba baja 0.20 rad y el de abajo sube 0.21; pasando 1.0, risa)
+        const float* G5 = g_cfg.live[355]; const float* G6 = g_cfg.live[356];
+        const float gAng = std::clamp(G5[0], 0.0f, 1.5f), gSmi = std::clamp(G5[1], 0.0f, 1.5f), gSur = std::clamp(G5[2], 0.0f, 1.5f);
+        const float gGri = std::clamp(G6[0], 0.0f, 1.5f), gPuc = std::clamp(G6[1], 0.0f, 1.5f), gBig = (std::max)(gSmi - 1.0f, 0.0f);
+        const float geU = 0.20f * gSmi + 0.30f * gBig + 0.14f * gAng - 0.20f * gSur + 0.10f * gGri + 0.05f * gPuc;   // > 0 baja el de arriba
+        const float geL = -(0.21f * gSmi + 0.26f * gBig + 0.06f * gAng + 0.10f * gGri) + 0.04f * gSur;            // < 0 sube el de abajo
+        float up = (std::min)(0.58f * b - gy * (gy < 0.0f ? 0.80f : 0.55f) + 0.06f * smL + geU, 0.66f);   // tope: cerrado, sin pasarse del ojo
         // de abajo: sube un poco al parpadear, baja con la mirada abajo y sube apenas con la mirada arriba
-        float lo = std::clamp(-0.07f * b - gy * (gy < 0.0f ? 0.35f : 0.15f) - 0.16f * smL, -0.22f, 0.18f);
+        float lo = std::clamp(-0.07f * b - gy * (gy < 0.0f ? 0.35f : 0.15f) - 0.16f * smL + geL, -0.45f, 0.18f);
         // (04/11) limite de velocidad fuera del parpadeo: un cambio chico de un cuadro a otro (temblor de la medida) se frena;
         // el parpadeo (b) y los saltos grandes pasan enteros
         if (S.lidHave && b < 0.02f) {
