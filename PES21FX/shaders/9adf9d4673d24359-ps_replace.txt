@@ -1,0 +1,230 @@
+// PES 2021 - cielo del estadio (domo) [hash 9adf9d4673d24359] - PES21 FX (21/10)
+// El shader del juego: atmosfera con una tabla de dispersion precalculada (t3) + una capa de nubes pintadas (t0) pegada a
+// la malla del domo + niebla (t12). Traducido a mano del ensamblador (mismas cuentas). PES21 FX le agrega:
+//  - el SOL dentro del cielo (antes lo dibujaba el tonemap encima de la imagen, con una copia del cbuffer de luz que a veces
+//    llegaba con un cuadro de atraso: al girar la camara el sol "se movia con ella"). Aca usa la luz y la camara de ESTE
+//    dibujo, queda detras del estadio y el bloom del juego le hace el brillo.
+//  - las NUBES VOLUMETRICAS dentro del cielo, en lugar de las nubes pintadas. Antes el rayo salia del origen (sin la
+//    posicion de la camara): la capa viajaba con la camara cuando esta se desplazaba. Ahora sale del ojo, en el mundo,
+//    igual que la sombra de nubes de la cancha: nubes y sombras quedan quietas en el mundo.
+// x159 = 1 activa todo esto (el tonemap deja de dibujar el sol y las nubes cuando ve que este cielo se dibujo: w159).
+// y159 = 1: de dia, el resplandor del cielo alrededor del sol se calcula con el sol real (no con la direccion fija del
+// archivo del cielo del estadio). w159 lo escribe la DLL.
+
+cbuffer cPSSystem : register(b0)
+{
+  struct { float4 m_param; float4 m_renderInfo; float4 m_renderBuffer; float4 m_dominantLightDir; float4 m_timeParam; } g_psSystem : packoffset(c0);
+}
+cbuffer cPSScene : register(b2)
+{
+  struct
+  {
+    float4x4 m_projectionView;
+    float4x4 m_projection;
+    float4x4 m_view;
+    float4x4 m_shadowProjection;
+    float4x4 m_shadowProjection2;
+    float4 m_eyepos;
+    float4 m_projectionParam;
+    float4 m_viewportSize;
+    float4 m_exposure;
+    float4 m_fogParam[3];
+    float4 m_fogColor;
+    float4 m_cameraCenterOffset;
+    float4 m_shadowMapResolutions;
+  } g_psScene : packoffset(c0);
+}
+cbuffer cPSLight : register(b3)
+{
+  struct
+  {
+    float4 m_lightDir0;
+    float4 m_lightColor0;
+    float4 m_lightColor1;
+    float4 m_lightSourcePos;
+    float4 m_lightSourceColor;
+    float4 m_lightSourceDir;
+    float4 m_lightSourceParam1;
+    float4 m_lightSourceParam2;
+    float4 m_lightSourceParam3;
+    float4 m_lightPos0;
+    float4 m_lightParam2;
+  } g_psLight : packoffset(c0);
+}
+cbuffer cPSMaterial : register(b4)
+{
+  struct { float4 m_materials[8]; } g_psMaterial : packoffset(c0);
+}
+SamplerState inCloudSampler_s : register(s0);
+SamplerState g_samplerPoint_Wrap_s : register(s8);
+SamplerState g_samplerLinear_Wrap_s : register(s10);
+SamplerState g_samplerLinear_Clamp_s : register(s11);
+Texture2D<float4> inCloudTexture : register(t0);
+Texture2D<float4> inInscattering : register(t3);
+Texture2D<float4> inMesh : register(t4);
+Texture2D<float4> inFogVolume : register(t12);
+Texture1D<float4> IniParams : register(t120);
+#include "pes_common.hlsli"
+
+void main(
+  float2 v0 : TEXCOORD0,
+  float2 w0 : TEXCOORD4,
+  float4 v1 : TEXCOORD2,
+  float3 v2 : TEXCOORD3,
+  float4 v3 : SV_Position0,
+  out float4 o0 : SV_Target0)
+{
+  float4 M0 = g_psMaterial.m_materials[0], M1 = g_psMaterial.m_materials[1], M2 = g_psMaterial.m_materials[2];
+  float4 M3 = g_psMaterial.m_materials[3], M4 = g_psMaterial.m_materials[4], M7 = g_psMaterial.m_materials[7];
+  float expo = g_psScene.m_exposure.z;
+  float4 Q159 = IniParams.Load(int2(159, 0));
+  bool own = Q159.x > 0.5;
+  // sol real (el de la luz y las sombras de este cuadro), en el mundo
+  float3 vX = float3(g_psScene.m_view._m00, g_psScene.m_view._m01, g_psScene.m_view._m02);
+  float3 vY = float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12);
+  float3 vZ = float3(g_psScene.m_view._m20, g_psScene.m_view._m21, g_psScene.m_view._m22);
+  float3 Lv = g_psLight.m_lightDir0.xyz;
+  bool haveL = dot(Lv, Lv) > 1e-6;
+  float3 sunW = float3(0, 1, 0);
+  if (haveL) { Lv = normalize(Lv); sunW = normalize(float3(dot(Lv, vX), dot(Lv, vY), dot(Lv, vZ))); if (sunW.y < 0.0) sunW = -sunW; }
+  // (26/10) el sol del cielo no gira con la luz de cada toma de la repeticion: disco, resplandor y nubes con el sol estable
+  if (haveL) sunW = PESSunStable(sunW);
+  bool sunny = IniParams.Load(int2(114, 0)).w > 0.5;
+  // (x159, de dia) el brillo del cielo alrededor del sol sale del sol real, no de la direccion fija del archivo del cielo:
+  // el resplandor queda donde esta el disco y de donde vienen las sombras
+  float3 skySun = (own && haveL && sunny && Q159.y > 0.5) ? sunW : M3.xyz;
+
+  // ---------------- atmosfera del juego (tabla de dispersion: Rayleigh + Mie segun la altura del sol del cielo)
+  float uS = (atan(max(skySun.y, -0.1975) * 5.349624) * 0.909091 + 0.74) * 0.484375 + 0.015625;
+  float3 dir = normalize(v1.xyz - g_psScene.m_eyepos.xyz * 0.001);    // direccion de vista en el mundo
+  float dY = max(dir.y, 0.0);
+  float mu = dot(float3(dir.x, dY, dir.z), skySun);
+  float muK = (mu + 1.0) * 3.5;
+  float muF = floor(muK);
+  float muT = muK - muF;
+  float uA = (uS + muF + 1.0) * 0.125, uB = (uS + muF) * 0.125;
+  float hY = dY * 6360.009766;
+  float dTop = sqrt(hY * hY + 766671.9375) - hY;                        // km hasta el tope de la atmosfera
+  float cDen = dY * 0.2 + 0.8;
+  float2 vv = (dTop * 0.000555 + float2(0.503906, 1.503906)) * 0.25;
+  float4 sAw = inInscattering.Sample(g_samplerLinear_Clamp_s, float2(uA, vv.y));
+  float4 sAz = inInscattering.Sample(g_samplerLinear_Clamp_s, float2(uA, vv.x));
+  float4 sBw = inInscattering.Sample(g_samplerLinear_Clamp_s, float2(uB, vv.y));
+  float4 sBz = inInscattering.Sample(g_samplerLinear_Clamp_s, float2(uB, vv.x));
+  float4 ins = lerp(lerp(sBz, sAz, muT), lerp(sBw, sAw, muT), 0.519896);
+  float rIns = max(ins.x, 0.0001);
+  ins = max(ins, 0.0);
+  float3 mie = ins.w * ins.xyz / rIns * (M0.x / M0.xyz);
+  float gM = M2.x;
+  float phM = (1.0 - gM * gM) * 0.079577 / ((1.0 - gM * mu) * (1.0 - gM * mu));
+  float3 tv = (phM * mie * 0.2 + length(ins.xyz) * 0.8) * M4.y * 0.1;
+  float phR = (mu * mu + 1.0) * 0.059683;
+  float3 sky = max(mie * phM + (ins.xyz * phR * (1.0 - M4.y) + tv), 0.0);
+  sky *= expo * M3.w;
+  float3 skyA = expo * M7.x * float3(0.003284, 0.004110, 0.006240) + sky;   // cielo despejado
+
+  // ---------------- nubes pintadas del juego (pegadas a la malla del domo)
+  float gS = M1.y;
+  float kS = (1.0 - gS * mu); kS *= kS;
+  float phS = (1.0 - gS * gS) * 0.079577 / kS;
+  phS = (phS * phS + phS) * (M1.w * 0.5);
+  float3 sunE = expo * g_psLight.m_lightColor0.xyz;
+  float3 cloudC = M4.z * sunE + (sunE * phS + skyA);
+  float3 ct = inCloudTexture.Sample(inCloudSampler_s, (v0.xy + float2(M4.w, M1.x)) * M2.z).xyz;
+  float Tp = exp(-(dot(v2.xyz, ct) / cDen) * M1.z);
+  float op = 1.0 - Tp;
+  float op2 = op * op;
+  float keep = 1.0 - op * op2;
+  float3 col = skyA * keep + (op2 * (Tp * 0.95 + 0.05) * cloudC) * (op2 * op);   // (el termino de luz del juego que multiplica por 0 se omite)
+
+  // ---------------- PES21 FX: sol y nubes volumetricas dentro del cielo
+  if (own) {
+    PESCloudParams CP = PESCloudLoad(g_psSystem.m_timeParam.z);
+    bool vol = CP.on > 0.5;
+    float3 base = vol ? skyA : col;                       // con nubes volumetricas, sin las pintadas
+    float3 colN = max(g_psLight.m_lightColor0.xyz, 0.0); colN /= max(dot(colN, float3(0.2126, 0.7152, 0.0722)), 1e-3);   // color del sol, luminancia 1
+    // sol: disco de 0.53 grados con limbo + destello de camara + bruma (x37 tamano, y37 intensidad, w37 on; 130 sol fisico)
+    float4 SN = IniParams.Load(int2(37, 0)), SP = IniParams.Load(int2(130, 0));
+    if (SN.w > 0.5 && haveL && sunny && sunW.y > -0.02) {
+      float cS = dot(dir, sunW);
+      float ang = sqrt(max(2.0 * (1.0 - cS), 0.0));                                 // distancia angular (rad)
+      float aaA = 2.0 * abs(g_psScene.m_projectionParam.y) / max(g_psSystem.m_renderInfo.y, 1.0);   // un pixel en radianes
+      float3 add = 0;
+      if (SP.x > 0.5) {
+        float radA = 0.004625 * max(SN.x, 0.1);                                      // 0.265 grados
+        float u = saturate(ang / radA);
+        float limb = 1.0 - saturate(SP.y) * 0.6 * (1.0 - sqrt(max(1.0 - u * u, 0.0)));
+        float disk = (1.0 - smoothstep(radA - aaA, radA + aaA, ang)) * limb;
+        float psf = (0.35 / pow(1.0 + ang / radA, 2.2)) * saturate(SP.z);
+        float haze = exp(-ang / (radA * 22.0)) * 0.12 * saturate(SP.w);
+        add = colN * (disk * 14.0 + psf * 1.5 + haze * 0.6);                         // el bloom del juego agrega el resto
+      } else {
+        float radS = 0.019 * max(SN.x, 0.1);
+        float diskS = 1.0 - smoothstep(radS * 0.8, radS, ang);
+        float glowS = exp(-ang / (radS * 2.5)) * 0.7 + exp(-ang / (radS * 14.0)) * 0.18;
+        add = colN * (diskS * 10.0 + glowS * 1.2);
+      }
+      base += add * saturate(SN.y) * saturate((sunW.y + 0.02) / 0.04);
+    }
+    // nubes volumetricas: rayo desde la camara (mundo), misma capa que la sombra de nubes de la cancha
+    if (vol && haveL && dir.y > 0.015) {
+      float4 Q85 = IniParams.Load(int2(85, 0));
+      float3 eyeW = g_psScene.m_eyepos.xyz;
+      float t0 = max(CP.hBase - eyeW.y, 1.0) / dir.y, t1 = max(CP.hBase + CP.thick - eyeW.y, 2.0) / dir.y;
+      t1 = min(t1, 45000.0);
+      int steps = (int)clamp(Q85.w > 0 ? Q85.w : 24.0, 8.0, 48.0);
+      float dt = (t1 - t0) / steps;
+      float jit = frac(52.9829189 * frac(dot(v3.xy, float2(0.06711056, 0.00583715))) + frac(g_psSystem.m_timeParam.z * 7.31));
+      float3 ambC = base;
+      float muC = dot(dir, sunW);
+      float g1 = 0.65, g2 = -0.25;
+      float ph = lerp(0.0597 * (1.0 - g1 * g1) / pow(1.0 + g1 * g1 - 2.0 * g1 * muC, 1.5), 0.0597 * (1.0 - g2 * g2) / pow(1.0 + g2 * g2 - 2.0 * g2 * muC, 1.5), 0.3) * 4.0;
+      float T = 1.0; float3 C = 0.0;
+      float sunK = Q85.x > 0 ? Q85.x : 1.0, ambK = Q85.y > 0 ? Q85.y : 1.0;
+      float sigma = 0.006 * dt;
+      [loop] for (int i = 0; i < steps && T > 0.02; i++) {
+        float3 pW = eyeW + dir * (t0 + (i + jit) * dt);
+        float d = PESCloudDensity(pW, CP, 4);
+        if (d < 0.002) continue;
+        float dl = 0.0;
+        [unroll] for (int k = 1; k <= 3; k++) dl += PESCloudDensity(pW + sunW * (k * k * 90.0), CP, 3);
+        float Tsun = exp(-dl * 0.55);
+        float powder = 1.0 - exp(-d * 2.0);
+        float hN = saturate((pW.y - CP.hBase) / CP.thick);
+        float3 amb = ambC * lerp(0.18, 0.95, hN) * ambK;
+        float3 S = colN * Tsun * ph * 2.4 * sunK * lerp(0.5, 1.0, powder) + amb;
+        float a = 1.0 - exp(-d * sigma);
+        C += T * S * a; T *= 1.0 - a;
+      }
+      float hz = saturate((dir.y - 0.015) / 0.12);                                   // las lejanas se funden con el horizonte
+      base = base * lerp(1.0, T, hz) + lerp(ambC * (1.0 - T), C, hz);
+    }
+    col = base;
+  }
+
+  // ---------------- niebla del juego (volumen en pantalla) y tramado
+  float4 F1 = g_psScene.m_fogParam[1], F2 = g_psScene.m_fogParam[2];
+  float sl = clamp(log(w0.y) * F2.y + F2.z, 0.0, F2.w);
+  float sl1 = clamp(sl + 1.0, 0.0, F2.w);
+  float s0 = floor(sl), s1 = floor(sl1);
+  float fr = sl - s0;
+  float2 q = float2(s0, s1) * 0.03125;
+  float2 qa = frac(abs(q));
+  float2 qf = float2(q.x >= -q.x ? qa.x : -qa.x, q.y >= -q.y ? qa.y : -qa.y);
+  float2 qi = floor(q);
+  float4 r3f = float4(qf.x * F1.z, qi.x, qf.y * F1.z, qi.y);
+  float4 r1f = float4(32.0, F1.w, 32.0, F1.w);
+  float2 pp = v3.xy - 0.5;
+  float2 suv = pp / g_psSystem.m_renderInfo.xy;
+  float2 dn = inMesh.Sample(g_samplerPoint_Wrap_s, frac(pp * 0.125)).xw;
+  float2 ndc = suv * float2(2.0, -2.0) + float2(-1.0, 1.0);
+  float fx = 0.014648 * ndc.x + 0.015625, fy = F1.x * ndc.y + F1.y;
+  float4 fuv = r1f * r3f + float4(fx, fy, fx, fy);
+  float4 fB = inFogVolume.Sample(g_samplerLinear_Wrap_s, fuv.zw);
+  float4 fA = inFogVolume.Sample(g_samplerLinear_Wrap_s, fuv.xy);
+  float4 fog = fA * (1.0 - fr) + fB * fr;
+  fog += dn.y * 0.007812;
+  col = col * fog.w + fog.xyz;
+  o0.xyz = dn.x * 0.007812 + col;
+  o0.w = 1.0;
+}
