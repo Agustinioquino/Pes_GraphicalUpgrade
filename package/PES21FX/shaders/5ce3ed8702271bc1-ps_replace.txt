@@ -727,7 +727,7 @@ void main(
     float fF = saturate((wrOn ? wrFold * max(wrCrease, 0.5) : 0.0) + shFold) * srmK;
     float fR = saturate((wrOn ? wrRidgeF : 0.0) + shRidge) * srmK;
     if (fF + fR > 0.001) {
-      r0.z *= (1.0 - 0.45 * saturate(fF)) * (1.0 + 0.15 * fR);
+      r0.z *= (1.0 - 0.30 * saturate(fF)) * (1.0 + 0.15 * fR);   // (05/11) -45 % -> -30 %: sumado a la oclusion quedaba negro
       r0.w  = saturate(r0.w + 0.18 * fF - 0.10 * fR);
       r1.w *= (1.0 - 0.30 * saturate(fF)) * (1.0 + 0.12 * fR);
     }
@@ -736,10 +736,13 @@ void main(
     // oscuro porque le llega menos luz de todos lados (oclusion). Oclusion propia del surco (fina y esculpida), sin depender de la
     // luz, por el relieve z365: a 1.5 el fondo del surco recibe ~30 % menos difusa. Nada en los labios ni la boca
     float aoK = enhance ? saturate(wrRelief / 1.5) * (1.0 - saturate(2.0 * FZ.g)) : 0.0;
-    float fAO = saturate((wrOn ? wrFold * 1.5 : 0.0) + shFold * 1.5) * aoK;
+    // (05/11, Agustin con Enojo 1.5: "ahora las arrugas se ven mal", lineas negras como mugre en ojos, entrecejo y cachetes) la
+    // divergencia de la normal es ruidosa y con gestos fuertes se sumaba entera: ahora solo cuenta el surco claro (smoothstep), y
+    // la mitad de oscuridad (difusa -12 %, especular -15 % a z365 1.5)
+    float fAO = smoothstep(0.25, 1.0, saturate((wrOn ? wrFold * 1.5 : 0.0) + shFold * 1.5)) * aoK;
     if (fAO > 0.001) {
-      r2.xyz *= 1.0 - 0.30 * fAO;
-      r0.z   *= 1.0 - 0.35 * fAO;
+      r2.xyz *= 1.0 - 0.12 * fAO;
+      r0.z   *= 1.0 - 0.15 * fAO;
     } }
   // 2) Especular: la piel real refleja ~2.8% (F0 0.028). El valor del juego
   //    suele quedar alto -> efecto plastico. Se escala de forma controlada.
