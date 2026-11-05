@@ -323,6 +323,9 @@ static int InitMod() {
     std::wstring wb = exe; wb = wb.substr(0, wb.find_last_of(L"\\/") + 1) + L"PES21FX\\";
     fx::g_cfg.baseDir = wb;
     CreateDirectoryW(wb.c_str(), nullptr);
+    // (05/11) el log de la sesion anterior se conserva como PES21FX.anterior.log: si el juego se cerro y se volvio a abrir,
+    // el informe del cierre no se pierde (cierre del 05/11 17:41: el log se piso al reabrir)
+    MoveFileExW((wb + L"PES21FX.log").c_str(), (wb + L"PES21FX.anterior.log").c_str(), MOVEFILE_REPLACE_EXISTING);
     fx::g_log = _wfopen((wb + L"PES21FX.log").c_str(), L"w");
     fx::Log("PES21 FX 0.2 (d3d11.dll) - carpeta: %ls", wb.c_str());
     AddVectoredExceptionHandler(1, fx::Vectored);
