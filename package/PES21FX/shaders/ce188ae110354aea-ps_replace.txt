@@ -745,10 +745,11 @@ void main(
     // (05/11, Agustin: "me gustaria que con la luz a favor tambien se vean bien las arrugas") con la luz de frente un surco real no
     // se ve negro: se ve un poco mas rojo y apagado (la sangre se junta en el pliegue y le llega menos luz rebotada) en una zona
     // ancha y suave. Se usa el surco medido ancho (no la linea fina, que era ruidosa), por y365
-    float fW = smoothstep(0.05, 0.6, saturate((wrOn ? wrFoldW : 0.0) + shFoldW)) * srmK;
+    float fW = smoothstep(0.03, 0.45, saturate((wrOn ? wrFoldW : 0.0) + shFoldW)) * srmK;
     if (fW > 0.001) {
-      r2.xyz *= lerp(float3(1.0, 1.0, 1.0), float3(0.95, 0.87, 0.86), fW);
-      r0.z   *= 1.0 - 0.20 * fW;
+      // (06/11, Agustin: "se ven un poco mejor pero no tanto como deberian") mas fuerte: 0.95/0.87/0.86 -> 0.91/0.79/0.77, brillo -32 %
+      r2.xyz *= lerp(float3(1.0, 1.0, 1.0), float3(0.91, 0.79, 0.77), fW);
+      r0.z   *= 1.0 - 0.32 * fW;
     }
   }
   // 2) Especular: la piel real refleja ~2.8% (F0 0.028). El valor del juego
