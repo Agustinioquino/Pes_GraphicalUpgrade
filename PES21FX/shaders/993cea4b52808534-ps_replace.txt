@@ -1,0 +1,99 @@
+// PES 2021 - DOF: radio de desenfoque (CoC) [hash 993cea4b52808534] - DOF v2 (x41..w41)
+// ---- Created with 3Dmigoto v1.3.16 on Thu Oct 08 21:08:15 2026
+
+cbuffer cPSScene : register(b2)
+{
+
+  struct
+  {
+    float4x4 m_projectionView;
+    float4x4 m_projection;
+    float4x4 m_view;
+    float4x4 m_shadowProjection;
+    float4x4 m_shadowProjection2;
+    float4 m_eyepos;
+    float4 m_projectionParam;
+    float4 m_viewportSize;
+    float4 m_exposure;
+    float4 m_fogParam[3];
+    float4 m_fogColor;
+    float4 m_cameraCenterOffset;
+    float4 m_shadowMapResolutions;
+  } g_psScene : packoffset(c0);
+
+}
+
+cbuffer cPSObject : register(b5)
+{
+
+  struct
+  {
+    float4x4 m_viewWorld;
+    float4x4 m_world;
+    float4 m_useWeightCount;
+    float4 m_localParam[9];
+  } g_psObject : packoffset(c0);
+
+}
+
+cbuffer cPSSystem : register(b0)
+{
+
+  struct
+  {
+    float4 m_param;
+    float4 m_renderInfo;
+    float4 m_renderBuffer;
+    float4 m_dominantLightDir;
+    float4 m_timeParam;
+  } g_psSystem : packoffset(c0);
+
+}
+
+SamplerState g_samplerPoint_Clamp_s : register(s9);
+Texture2D<float4> inColorTexture : register(t0);
+Texture2D<float4> inDepthTexture : register(t2);
+
+
+// 3Dmigoto declarations
+#define cmp -
+Texture1D<float4> IniParams : register(t120);
+Texture2D<float4> StereoParams : register(t125);
+
+
+void main(
+  float4 v0 : SV_Position0,
+  out float4 o0 : SV_Target0)
+{
+  float4 r0;
+  uint4 bitmask, uiDest;
+  float4 fDest;
+
+  r0.xy = g_psSystem.m_renderBuffer.zw * v0.xy;
+  r0.z = inDepthTexture.SampleLevel(g_samplerPoint_Clamp_s, r0.xy, 0).x;
+  r0.xyw = inColorTexture.SampleLevel(g_samplerPoint_Clamp_s, r0.xy, 0).xyz;
+  r0.xyw = min(float3(0,0,0), -r0.xyw);
+  o0.xyz = -r0.xyw;
+  r0.x = -g_psScene.m_projectionParam.w + r0.z;
+  r0.x = g_psScene.m_projectionParam.z / r0.x;
+  r0.y = g_psObject.m_localParam[1].x + r0.x;
+  r0.y = -g_psObject.m_localParam[0].x + r0.y;
+  r0.y = r0.y / r0.x;
+  r0.y = min(0, r0.y);
+  r0.z = -g_psObject.m_localParam[1].y + r0.x;
+  r0.z = -g_psObject.m_localParam[0].x + r0.z;
+  r0.x = r0.z / r0.x;
+  r0.x = max(r0.x, r0.y);
+  r0.y = cmp(r0.x < 0);
+  r0.z = g_psObject.m_localParam[0].z * r0.x;
+  r0.x = r0.y ? r0.z : r0.x;
+  r0.x = g_psObject.m_localParam[0].w * r0.x;
+  // PES21 DOF v2 (16/10): x41 escala el desenfoque del fondo (1 = original, <1 = el plano medio queda mas nitido),
+  // y41 curva (>1 = el fondo cercano casi nitido y el lejano igual de borroso). w41 on/off [Alt+Shift+8]
+  { float4 DF = IniParams.Load(int2(41,0));
+    if (DF.w > 0.5 && r0.x > 0) r0.x = pow(saturate(r0.x), max(DF.y, 0.5)) * max(DF.x, 0.0); }
+  r0.x = max(-1, r0.x);
+  r0.x = min(1, r0.x);
+  o0.w = r0.x * 0.5 + 0.5;
+  return;
+}
