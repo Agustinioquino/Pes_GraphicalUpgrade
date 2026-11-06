@@ -53,7 +53,7 @@ struct GSOut {   // igual que la entrada de pes_brow_ps.hlsl
   float4 pos : SV_Position;
   float3 nrmV : TEXCOORD0;
   float3 col : TEXCOORD1;
-  float2 tw : TEXCOORD2;
+  float3 tw : TEXCOORD2;       // z = (06/11) cobertura real del pixel
   float2 motion : TEXCOORD3;
   float3 viewV : TEXCOORD4;
   float3 col2 : TEXCOORD5;
@@ -165,7 +165,9 @@ void main(triangle LashV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
       float3 p = root + d * len * t + n * len * curl * t * t;  // se curva hacia afuera hacia la punta
       float wid = widB * (1.0 - 0.8 * t);
       float pxV = 2.0 * abs(p.z) / (max(abs(m_projection[1].y), 1e-4) * vpH);
-      wid = max(wid, pxV * (P75.z > 0.5 ? 1.25 : 0.4));
+      float wReal = wid;                                       // (06/11) pelo fino: cobertura en el PS en vez de engordar a 1 px
+      wid = max(wid, pxV * (P75.z > 0.5 ? 1.25 : 0.6));
+      float cov = P75.z > 0.5 ? 1.0 : saturate(wReal / max(wid, 1e-9));
 #ifdef PES_SHADOW
       { float hgt = abs(dot(p - root, n)) + len * 0.15 * t;                      // la tira esta separada del parpado: sombra corrida
         p = p - Ls * (hgt / max(nl, 0.25)); wid = wid * 1.8 + hgt * 0.05; }
@@ -179,7 +181,7 @@ void main(triangle LashV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
         o.pos = ProjV(p + sideV * wid * side);
         o.nrmV = normalize(n + bt * side * 0.6);
         o.col = cR; o.col2 = cT;
-        o.tw = float2(t, side);
+        o.tw = float3(t, side, cov);
         o.motion = motion;
         o.viewV = V;
         o.tanV = tanR;
