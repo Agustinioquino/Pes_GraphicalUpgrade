@@ -244,7 +244,7 @@ void main(
   float wrFold    = 0;     // 0..1: cuanto "surco" hay en este pixel
   float wrRidgeF  = 0;     // (04/11 h) 0..1: cresta fina entre arrugas (piel estirada)
   float shFold = 0, shRidge = 0;   // (04/11 h) surco / cresta de las arrugas esculpidas de la sonrisa
-  float wrFoldW = 0, shFoldW = 0;  // (05/11) los mismos surcos medidos 4 veces mas ancho: zonas suaves para la luz de frente
+  float wrFoldW = 0, shFoldW = 0, wrRidgeW = 0;  // (05/11) los mismos surcos medidos 4 veces mas ancho: zonas suaves para la luz de frente
   float4 P16 = IniParams.Load(int2(16,0));
   bool  exOn      = wrOn && P16.w > 0.5;
   float exBlood   = max(P16.x, 0.0);
@@ -391,7 +391,8 @@ void main(
       float zdiv = (za.x * za.w - zb.x * zb.w) * 0.5 + wrYSign * (zc.y - zd.y) * 0.5;
       wrFoldW  = saturate(-zdiv * 2.0) * wrWeight;
       exFoldZ  = exOn ? wrFoldW : 0.0;
-      exRidgeZ = exOn ? saturate( zdiv * 2.0) * wrWeight : 0.0;
+      wrRidgeW = saturate( zdiv * 2.0) * wrWeight;
+      exRidgeZ = exOn ? wrRidgeW : 0.0;
     }
   }
   r2.xyz = float3(-1,-1,-1) + r3.xyz;
@@ -749,6 +750,11 @@ void main(
       r2.xyz *= lerp(float3(1.0, 1.0, 1.0), float3(0.91, 0.79, 0.77), fW);
       r0.z   *= 1.0 - 0.32 * fW;
     }
+    // (06/11, Agustin: "podes jugar con el sss tambien?") LUZ DENTRO DE LA PIEL por la forma de la arruga, en zonas anchas: en el
+    // pliegue la piel esta apretada (mas gruesa, entra menos luz: translucidez -45 %) y en la cresta estirada es mas fina y deja pasar
+    // mas (+35 %), asi a contraluz las crestas brillan rojizas y los surcos quedan oscuros. Por y365, nada en labios
+    float fRW = smoothstep(0.03, 0.45, wrOn ? wrRidgeW : 0.0) * srmK;
+    if (fW + fRW > 0.001) r1.w = saturate(r1.w * (1.0 - 0.45 * saturate(fW)) * (1.0 + 0.35 * saturate(fRW)));
   }
   // 2) Especular: la piel real refleja ~2.8% (F0 0.028). El valor del juego
   //    suele quedar alto -> efecto plastico. Se escala de forma controlada.
