@@ -923,6 +923,22 @@ void main(
       float msVis = saturate(abs(dot(normalize(r1.xyz), Lv)) + 2.0 * msAo * msAo - 1.0);
       o0.xyz *= lerp(1.0, msVis, 0.85);
     } }
+  // (06/11, Agustin: "las arrugas en la vida real tienen peso, volumen, profundidad en las sombras, cambian la iluminacion") SOMBRA
+  // PROPIA DEL SURCO segun de donde venga la luz (la misma cuenta de la micro sombra de los poros, Chan 2018, con la profundidad del
+  // surco de la arruga fina, la ancha y la esculpida): con la luz rasante (de costado, de arriba) el fondo del pliegue queda tapado
+  // por sus paredes y se oscurece hondo; de frente casi no cambia (ahi manda el tono rojizo del surco). Profundidad por el relieve
+  // z365 (1.5 = 0.85). Nada en labios / boca (FZ.g)
+  if (enhance) {
+    float wrDepth = saturate((wrOn ? max(wrFold, wrFoldW) : 0.0) + max(shFold, shFoldW)) * (1.0 - saturate(2.0 * FZ.g));
+    float zK = saturate(clamp(IniParams.Load(int2(365, 0)).z, 0.0, 3.0) / 1.5) * 0.85;
+    float3 Lw = g_psSystem.m_dominantLightDir.xyz;
+    float vOk = dot(g_psScene.m_view._m00_m10_m20, g_psScene.m_view._m00_m10_m20);
+    if (wrDepth * zK > 0.001 && vOk > 0.25 && dot(Lw, Lw) > 0.25) {
+      float3 Lv = normalize(float3(dot(Lw, g_psScene.m_view._m00_m10_m20), dot(Lw, g_psScene.m_view._m01_m11_m21), dot(Lw, g_psScene.m_view._m02_m12_m22)));
+      float wAo = 1.0 - wrDepth * zK;
+      float wVis = saturate(abs(dot(normalize(r1.xyz), Lv)) + 2.0 * wAo * wAo - 1.0);
+      o0.xyz *= lerp(1.0, wVis, 0.9);
+    } }
   // ---- empaquetado normal octaedrica + translucidez ----
   r0.x = r1.w * 63 + 0.5;
   r0.y = abs(r1.x) + abs(r1.y);
