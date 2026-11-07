@@ -319,6 +319,15 @@ static bool LoadConfigLocked() {
     // (07/11) fila 384 = parches de sombras desde el menu (Diagnostico): si esta en el ini manda sobre [Motor]; si no, refleja [Motor]
     if (c.info[384][0].defined) c.motorSunFix = c.base[384][0] > 0.5f; else c.base[384][0] = c.live[384][0] = c.motorSunFix ? 1.0f : 0.0f;
     if (c.info[384][1].defined) c.motorShadowFix = std::clamp((int)(c.base[384][1] + 0.5f), 0, 4); else c.base[384][1] = c.live[384][1] = (float)c.motorShadowFix;
+    // (07/11) z384 = selector unico del menu: 0 ninguno, 1 solo sol, 2 solo sombras (sombra_parche 1), 3 los dos; si esta manda sobre x/y
+    if (c.info[384][2].defined) {
+        int m = std::clamp((int)(c.base[384][2] + 0.5f), 0, 3);
+        c.motorSunFix = (m & 1) != 0;
+        if (m & 2) { if (c.motorShadowFix == 0) c.motorShadowFix = 1; } else c.motorShadowFix = 0;
+        c.base[384][0] = c.live[384][0] = c.motorSunFix ? 1.0f : 0.0f;
+        c.base[384][1] = c.live[384][1] = (float)c.motorShadowFix;
+        c.base[384][2] = c.live[384][2] = (float)m;
+    } else c.base[384][2] = c.live[384][2] = (float)((c.motorSunFix ? 1 : 0) + (c.motorShadowFix != 0 ? 2 : 0));
     LoadMenuLang();
     PublicLimitConfig(c);   // (07/11) version publica: funciones reservadas fuera del menu y fijas (no hace nada en la normal)
     return true;
