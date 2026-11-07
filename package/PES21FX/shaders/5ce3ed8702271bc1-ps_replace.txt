@@ -97,6 +97,7 @@ Texture2D<float4> pesFaceA    : register(t23);   // PES21 (18/10) quinta textura
 Texture2D<float4> pesFaceB    : register(t24);   //   R poros, G zona de brillo, B convexidad grande, A = 1 si existe
 struct PesSeed { float4 posV; float4 nrmV; float4 dirV; float4 col; };
 Texture2D<float4> pesSeedMap  : register(t26);
+Texture2D<float4> pesBrowMap  : register(t44);   // (07/11) mapa de la ceja de esta cara (facegen, pes_browmap_ps): A = ceja pintada; para borrarla bajo las hebras
 Texture2D<float4> pesSkinMicro : register(t27);   // (04/11 poros v4) poros redondos (pes_skin_pores_round.dds)
 Texture2D<float4> pesSkinCrepe : register(t37);   // (04/11) arruguitas cruzadas (pes_skin_crepe.dds)
 Texture2D<float4> pesSkinLips  : register(t38);   // (04/11) estrias de los labios (pes_skin_lips.dds)
@@ -632,6 +633,30 @@ void main(
   r1.w = g_tex_diffuse.CalculateLevelOfDetail(g_samplerAnisotropic_Clamp_s, v2.xy);
   r1.w = clamp(r1.w + faceBD, 0, 5);
   r2.xyz = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy, r1.w).xyz;
+  // (07/11, Agustin: "borrar la textura plana de las cejas y reemplazarlas por las cejas en hebras") de cerca, donde las hebras se
+  // dibujan, la ceja PINTADA se borra del albedo y se rellena con la piel de alrededor (la mas clara de 8 puntos a ~1.2 cm, mip 3,
+  // como el mapa de la ceja de pes_browmap_ps) mezclada con el promedio local; de lejos (sin hebras) la pintura vuelve sola, con el
+  // mismo corte de distancia que el GS (y75). x382 = cuanto se borra (0 = como siempre), y382 = corrimiento del corte en mips
+  { float4 PE = IniParams.Load(int2(382, 0));
+    if (fgOk && PE.x > 0.001 && IniParams.Load(int2(74, 0)).x > 0.5) {
+      float4 bm = pesBrowMap.SampleLevel(g_samplerLinear_Clamp_s, v2.xy, 0);
+      if (bm.a > 0.02) {
+        float twB, thB; g_tex_diffuse.GetDimensions(twB, thB);
+        float texelM = 0.3 / max(twB, 1.0);                                    // ~30 cm de cabeza por vuelta de textura
+        float pxM = max(IniParams.Load(int2(75, 0)).y, 0.5) / 934.0;          // pixel en el borde de la distancia de las hebras (pes_brow_gs)
+        float lodCut = log2(max(pxM / texelM, 1.0)) - 0.5 + PE.y;
+        float nearB = saturate(lodCut - r1.w + 0.5);                          // 1 = de cerca (hay hebras), 0 = lejos
+        float kB = saturate(bm.a * 1.4) * saturate(PE.x) * nearB;
+        if (kB > 0.001) {
+          float3 skB = 0; float slB = -1;
+          [unroll] for (int qB = 0; qB < 8; qB++) { float aB2 = qB * 0.785398;
+            float3 cB = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy + float2(cos(aB2) * 0.034, sin(aB2) * 0.026), 3.0).xyz;
+            float lB = dot(cB, float3(0.2126, 0.7152, 0.0722)); if (lB > slB) { slB = lB; skB = cB; } }
+          float3 skinB = lerp(g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy, 4.0).xyz, skB, 0.75);
+          r2.xyz = lerp(r2.xyz, skinB, kB);
+        }
+      }
+    } }
   // (27/10) marcas de la piel (y124): lunares, pecas, manchas y venitas que ya estan pintadas en la textura de la cara se
   // pierden (la textura es chica y se ve lavada). Se realza el detalle fino del albedo: la luminancia de este punto contra el
   // promedio de su zona (2.5 niveles de mip mas arriba), solo en la piel (no en barba ni pelo pintados) y solo de cerca.

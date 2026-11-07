@@ -1168,6 +1168,7 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
                 const ShaderEntry* bvs = Ctx(c).vs;
                 if (t_drawKind == 1 && bvs && bvs->repl && !g_cfg.bypass && BrowWanted(ex, bvs->hash)) {
                     Remember(c, d, true, true, 26); c->PSSetShaderResources(26, 1, &ex.seedMap);
+                    if (ex.browMap) { Remember(c, d, true, true, 44); c->PSSetShaderResources(44, 1, &ex.browMap); }   // (07/11) borrar la ceja pintada bajo las hebras (fila 382)
                     d.brow = ex; d.brow.browVS = bvs->hash; d.brow.browCount = t_drawVerts; d.brow.browStart = t_drawStart; d.brow.browBase = t_drawBase;
                 }
             }
