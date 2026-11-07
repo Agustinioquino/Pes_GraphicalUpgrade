@@ -70,6 +70,9 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
 //   (07/11 c) x378 tamano de la luz (grados: 0.27 sol, 5 = ventana / softbox: sombra blanda) | y378 calidad de la sombra (0 rapida 12
 //   pasos, 1 normal 24, 2 alta 48) | z378 rebote del suelo | w378 reflector (rebote de pared del lado opuesto, sin sombra) | x379
 //   color del reflector (0 blanco, 1 plateado, 2 dorado) | y379 alcance de la sombra (m) | z379 brillo de la luz (x especular)
+//   (07/11 d, banco de pruebas) w379 vista de prueba (0 normal, 1 solo luz directa, 2 solo rebote / relleno, 3 solo sombra trazada,
+//   4 N.L en falso color, 5 mascara de piel) | x380 exposicion (EV, x2^EV sobre la luz de prueba) | y380 segunda luz libre (fuerza)
+//   | z380 su rumbo | w380 su altura
 struct PreOut { float4 c : SV_Target0; float4 s : SV_Target1; };
 
 float3 DecodeN(float2 uv) {   // normal del G-buffer (octaedro 10/10 + 2 bits), igual que en la pasada de luz 1f623
@@ -281,6 +284,8 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   float zSgn = zC < 0.0 ? -1.0 : 1.0, zA = abs(zC);
   float4 E4 = IniParams.Load(int2(376, 0)), E5 = IniParams.Load(int2(377, 0));
   float4 E6 = IniParams.Load(int2(378, 0)), E7 = IniParams.Load(int2(379, 0));
+  float4 E8 = IniParams.Load(int2(380, 0));
+  int dbgView = (int)(E7.w + 0.5);
   g_shRad = radians(E6.x > 0.0 ? E6.x : 0.27) * 0.5 + 1e-4;   // (07/11 c) radio = la mitad del diametro angular
   g_shSteps = E6.y > 1.5 ? 48 : (E6.y > 0.5 ? 24 : 12);
   g_shLen = clamp(E7.y > 0.0 ? E7.y : 0.45, 0.1, 2.0);
@@ -409,6 +414,13 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   float3 dif = 0, spec = 0;
   float sh = geo ? PesTraceShadow(Pv, L, dot(n, L), zC, zSgn, zA, uv, pos.xy, shK) : 1.0;
   if (geo) PesOneLight(L, lcol, sh, n, V, skin, rough, trans, thickM, silK, legacy, dif, spec);
+  // (07/11 d) segunda luz libre en Manual (otra torre, un flash o un contraluz): rumbo / altura propios, misma calidez, con sombra
+  if (geo && preset == 0 && E8.y > 0.001) {
+    float3 L2f = PesDirL(E8.z, E8.w, zSgn);
+    float sh2f = PesTraceShadow(Pv, L2f, dot(n, L2f), zC, zSgn, zA, uv, pos.xy + 43.0, shK);
+    PesOneLight(L2f, sunC * E8.y, sh2f, n, V, skin, rough, trans, thickM, silK, legacy, dif, spec);
+  }
+  float3 difDirect = dif, specDirect = spec;   // (07/11 d) para las vistas de prueba: lo de arriba es luz directa; lo que sigue, rebote / relleno
   if (!geo) { dif = 0; spec = 0; }
   else if (studio) {
     float fillK = E3.y, rimK = E3.z;
@@ -451,6 +463,20 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   }
   // (07/11) luz volumetrica (bruma + haces hacia la luz), tambien sobre el fondo del editor
   float3 vol = PesVolumetric(uv, pos.xy, Pv, zA, geo, zSgn, Lw, spot, Pl, sunC, E4.w, E5.y > 0 ? E5.y : 0.5);
+  // (07/11 d) vistas de prueba (w379): aislar cada parte para juzgarla sola. Se pintan sobre gris neutro, sin la luz de estudio
+  if (dbgView > 0) {
+    float3 outc = 0; float3 outs = 0;
+    if (dbgView == 1) { outc = difDirect; outs = specDirect; }
+    else if (dbgView == 2) { outc = dif - difDirect; outs = spec - specDirect; }
+    else if (dbgView == 3) { outc = geo ? sh.xxx * S * 0.5 : 0.0; }
+    else if (dbgView == 4) { float nl = dot(n, L); outc = geo ? (nl >= 0 ? lerp(float3(0.1, 0.1, 0.5), float3(1, 1, 0.2), nl) : lerp(float3(0.1, 0.1, 0.5), float3(0.6, 0, 0), -nl)) * S * 0.5 : 0.0; }
+        else if (dbgView == 5) { outc = (geo ? (skin ? float3(0.2, 0.9, 0.2) : float3(0.25, 0.25, 0.25)) : 0.0) * S * 0.5; if (legacy && skin) outc = float3(0.9, 0.2, 0.2) * S * 0.5; }
+    if (!geo) outc = S * 0.06;   // fondo gris neutro
+    o.c = float4(outc + (dbgView <= 2 ? vol : 0.0), 1); o.s = float4(outs, 1);
+    return o;
+  }
+  float ev = exp2(clamp(E8.x, -4.0, 4.0));   // (07/11 d) exposicion de la luz de prueba
+  dif *= ev; spec *= ev; vol *= ev;
   o.c = float4(c0 * (geo ? saturate(keep) : 1.0) + dif + vol, 1);
   if (E7.z > 0.0) specMul *= E7.z;   // (07/11 c) brillo de la luz en el manual
   o.s = float4(s0 * (geo ? saturate(keep) : 1.0) + spec * specMul, 1);
