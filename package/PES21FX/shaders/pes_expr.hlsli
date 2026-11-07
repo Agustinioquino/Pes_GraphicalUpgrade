@@ -353,8 +353,9 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
   // (risa: a 1.5 el de arriba baja ~+0.13 rad y el de abajo sube ~+0.11 rad mas que antes)
   float gBig = max(gSmi - 1.0, 0.0);
   // (06/11, Agustin: "la sonrisa de messi cierra demasiado los ojos") vuelve a como estaba (con los parpados por huesos manda exprbones.cpp)
-  float geU = 0.15 * gSmi + 0.26 * gBig + 0.14 * gAng - 0.20 * gSur + 0.10 * gGri + 0.05 * gPuc;   // > 0 baja el de arriba
-  float geL = -(0.16 * gSmi + 0.22 * gBig + 0.06 * gAng + 0.10 * gGri) + 0.04 * gSur;            // < 0 sube el de abajo
+  // (07/11, Agustin: "baja el achinado") sonrisa y enojo ~40 % menos
+  float geU = 0.09 * gSmi + 0.14 * gBig + 0.08 * gAng - 0.20 * gSur + 0.10 * gGri + 0.05 * gPuc;   // > 0 baja el de arriba
+  float geL = -(0.09 * gSmi + 0.12 * gBig + 0.03 * gAng + 0.10 * gGri) + 0.04 * gSur;            // < 0 sube el de abajo
   bool ges = abs(geU) > 0.001 || abs(geL) > 0.001;
   if (amt <= 0.0 && !ges) return;
   // (02/11) con 350.y = 2 la DLL parpadea girando los huesos de los parpados (exprbones.cpp): todas las mallas juntas

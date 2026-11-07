@@ -761,11 +761,12 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
         const float gGri = std::clamp(G6[0], 0.0f, 1.5f), gPuc = std::clamp(G6[1], 0.0f, 1.5f), gBig = (std::max)(gSmi - 1.0f, 0.0f);
         // (06/11, Agustin: "la sonrisa de messi cierra demasiado los ojos, un poco menos") la sonrisa a la mitad de lo que era (la cara
         // esculpida de Messi ya achina el ojo por su forma)
-        const float geU = 0.10f * gSmi + 0.15f * gBig + 0.14f * gAng - 0.20f * gSur + 0.10f * gGri + 0.05f * gPuc;   // > 0 baja el de arriba
-        const float geL = -(0.11f * gSmi + 0.13f * gBig + 0.06f * gAng + 0.10f * gGri) + 0.04f * gSur;            // < 0 sube el de abajo
-        float up = (std::min)(0.58f * b - gy * (gy < 0.0f ? 0.80f : 0.55f) + 0.06f * smL + geU, 0.66f);   // tope: cerrado, sin pasarse del ojo
+        // (07/11, Agustin: "baja el achinado") sonrisa y enojo otra vez ~40 % menos (a 1.2 los ojos quedaban casi cerrados)
+        const float geU = 0.06f * gSmi + 0.08f * gBig + 0.08f * gAng - 0.20f * gSur + 0.10f * gGri + 0.05f * gPuc;   // > 0 baja el de arriba
+        const float geL = -(0.06f * gSmi + 0.07f * gBig + 0.03f * gAng + 0.10f * gGri) + 0.04f * gSur;            // < 0 sube el de abajo
+        float up = (std::min)(0.58f * b - gy * (gy < 0.0f ? 0.80f : 0.55f) + 0.04f * smL + geU, 0.66f);   // tope: cerrado, sin pasarse del ojo
         // de abajo: sube un poco al parpadear, baja con la mirada abajo y sube apenas con la mirada arriba
-        float lo = std::clamp(-0.07f * b - gy * (gy < 0.0f ? 0.35f : 0.15f) - 0.16f * smL + geL, -0.45f, 0.18f);
+        float lo = std::clamp(-0.07f * b - gy * (gy < 0.0f ? 0.35f : 0.15f) - 0.10f * smL + geL, -0.45f, 0.18f);
         if (s_ganiLidOn) { up = (std::min)(up + s_ganiLid[0], 0.66f); lo = std::clamp(lo + s_ganiLid[1], -0.45f, 0.18f); }   // (07/11) parpados del clip .gani
         // (04/11) limite de velocidad fuera del parpadeo: un cambio chico de un cuadro a otro (temblor de la medida) se frena;
         // el parpadeo (b) y los saltos grandes pasan enteros
@@ -818,11 +819,11 @@ static void Secondary(Skel& S, const float* hr, float sm, float open) {
         // (04/11, Agustin: "le falta mas naturalidad a la sonrisa") sonrisa de verdad (Duchenne): con el slider Sonrisa (355.y,
         // fijo, no medido: no titila) el pomulo sube mas y el bajo-ojo (orbicularisoculi_b) sube y se adelanta = ojo achinado
         { 18,  0.0008f, 0.0022f, 0.0008f, 3 }, { 19, -0.0008f, 0.0022f, 0.0008f, 3 },
-        { 20,  0.0003f, 0.0016f, 0.0006f, 3 }, { 21, -0.0003f, 0.0016f, 0.0006f, 3 },
+        { 20,  0.0002f, 0.0009f, 0.0004f, 3 }, { 21, -0.0002f, 0.0009f, 0.0004f, 3 },   // (07/11) bajo-ojo 1.6 -> 0.9 mm: menos achinado
         // (04/11) los demas gestos tambien mueven pomulos y bajo-ojo: k 4 enojo (ojo apretado, pomulo tenso), 5 asombro (ojo abierto,
         // pomulo abajo), 6 grito (como una sonrisa fuerte), 7 puchero (pomulo abajo, bajo-ojo un poco arriba: cara triste)
         { 18,  0.0003f,  0.0008f, 0.0003f, 4 }, { 19, -0.0003f,  0.0008f, 0.0003f, 4 },
-        { 20,  0.0002f,  0.0012f, 0.0004f, 4 }, { 21, -0.0002f,  0.0012f, 0.0004f, 4 },
+        { 20,  0.0001f,  0.0007f, 0.0002f, 4 }, { 21, -0.0001f,  0.0007f, 0.0002f, 4 },   // (07/11) enojo: bajo-ojo 1.2 -> 0.7 mm
         { 18, 0, -0.0005f, 0, 5 },              { 19, 0, -0.0005f, 0, 5 },
         { 20, 0, -0.0007f, -0.0002f, 5 },       { 21, 0, -0.0007f, -0.0002f, 5 },
         { 18,  0.0010f,  0.0020f, 0.0006f, 6 }, { 19, -0.0010f,  0.0020f, 0.0006f, 6 },
