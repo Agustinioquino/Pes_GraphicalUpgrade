@@ -28,6 +28,7 @@ PARAMS = {   # filas de parametros (mismos valores que fija public.cpp + prefere
     'y347': '0', 'z347': '0', 'w347': '0',        # nariz con la boca, labio de arriba, mirada viva
     'x348': '0', 'y348': '0', 'z348': '0', 'w348': '0',   # musculos de la cara
     'x350': '0',                                  # abrir la boca: por shader (sin girar huesos)
+    'y263': '0',                                  # respiracion
     'z352': '0',                                  # cuello: el paquete lleva TorsoBody_cuello 1.16 (corta la cara); el hundido z352 es para 1.19
 }
 HIDDEN = {'GITemporal', 'Volumetric', 'FaceTess', 'ExprShow', 'ExprGani', 'CamaraLibre', 'CamaraLenta', 'TorsoOriginal',
