@@ -350,7 +350,12 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
   float3 wPh = lerp(saturate(wv), saturate(EB.xxx), isEye);
   float eyeMix = dot(b, isEye);
   float seam = saturate(dot(b, wPh));   // 0 en las costuras / bordes de la pieza
-  float seamR = saturate(dot(b, wv * (1.0 - isEye)));
+  // (07/11) peso 1.25 = costura de textura suave (las dos copias con la misma normal y huesos, expr.cpp SeamWeights): se redondea
+  // con Phong pero sin nada que lea la textura (relieve, arrugas), porque cada lado de la costura tiene otras uv
+  float3 isSoft = step(1.1, wv) - isEye;
+  wPh *= 1.0 - isSoft * (1.0 - saturate(IniParams.Load(int2(375, 0)).x));   // x375 = 0: las costuras de textura vuelven a quedar fijas
+  seam = saturate(dot(b, wPh));
+  float seamR = saturate(dot(b, saturate(wv) * (1.0 - isEye - isSoft)));
   // (04/11 f, Agustin: "en el cuello a veces lo rompe, que se desactive en la parte baja del cuello cerca del collar") el anillo
   // del collar del torso esta en y 1.51..1.56 del reposo (pes_collar.hlsli); de ahi hasta z360 cm mas arriba (defecto 6, hasta la
   // base del menton en 1.58) el corrimiento, el relieve y la inclinacion de la normal se apagan en rampa; el torso no se tesela.

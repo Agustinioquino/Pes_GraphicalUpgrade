@@ -151,7 +151,12 @@ float3 PesTessDisp(FaceV v[3], float3 b, float2 uvT)
   float3 wPh = lerp(saturate(wv), saturate(EB.xxx), isEye);
   float eyeMix = dot(b, isEye);
   float seam = saturate(dot(b, wPh));
-  float seamR = saturate(dot(b, wv * (1.0 - isEye)));
+  // (07/11) peso 1.25 = costura de textura suave (las dos copias con la misma normal y huesos, expr.cpp SeamWeights): se redondea
+  // con Phong pero sin nada que lea la textura (relieve, arrugas), porque cada lado de la costura tiene otras uv
+  float3 isSoft = step(1.1, wv) - isEye;
+  wPh *= 1.0 - isSoft * (1.0 - saturate(IniParams.Load(int2(375, 0)).x));   // x375 = 0: las costuras de textura vuelven a quedar fijas
+  seam = saturate(dot(b, wPh));
+  float seamR = saturate(dot(b, saturate(wv) * (1.0 - isEye - isSoft)));
   { float nh = clamp(IniParams.Load(int2(360, 0)).z, 0.0, 15.0) * 0.01;
     float ry = b.x * v[0].pR.y + b.y * v[1].pR.y + b.z * v[2].pR.y;
     seam *= smoothstep(1.53, 1.53 + max(nh, 0.01), ry); }
