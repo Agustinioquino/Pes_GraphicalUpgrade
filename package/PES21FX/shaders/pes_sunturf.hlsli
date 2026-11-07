@@ -29,7 +29,9 @@ float3 PESTurfSunView(float3 Lv, float4x4 Mv)
 float3 PESTurfDiffuse(float3 sunC, float rawNdotL, float wrapD, float4 PG, float trans, float upNL)
 {
   float dirD = saturate(lerp(rawNdotL, upNL, saturate(PG.w - 1.0)));   // (03/11) manto: hacia la normal de la cancha
-  float through = max(saturate(wrapD) - dirD, 0.0);
+  // (06/11, Agustin: "el cesped sigue sin reaccionar a la luz del sol de forma que traspase la luz") la luz que atraviesa la hoja se
+  // mide con la N.L propia de la hoja: antes se restaba la directa ya mezclada con el manto (w313 1.7) y la translucidez quedaba en ~0
+  float through = max(saturate(wrapD) - saturate(rawNdotL), 0.0);
   float3 leaf = lerp(float3(1.0, 1.0, 1.0), float3(1.0, 0.96, 0.72), saturate(PG.y) * saturate((trans - 0.15) / 0.25));   // (27/10) la mitad: el pasto al sol salia lima
   float4 SW = IniParams.Load(int2(111, 0));
   float sunUp = dot(SW.xyz, SW.xyz) > 0.5 ? SW.y : 1.0;
@@ -98,10 +100,13 @@ float3 PESTurfTransmit(float3 sunC, float2 sC, float2 uvC, Texture2D<float4> dT,
   float VL = dot(V, L);                                  // 1 = mirando hacia el sol
   float ph = saturate(0.5 + 0.5 * VL);
   float p2 = ph * ph, p4 = p2 * p2;
-  float lobe = lerp(p2 * 0.55, p4 * p4 * 1.6 + p4 * 0.35, nearQ);   // de lejos ancho y bajo; de cerca nucleo fino (ph^8) + halo
-  float back = lerp(0.6, saturate(0.35 - 0.75 * rawNdotL), nearQ);   // de cerca solo la cara del lado de la sombra; de lejos la normal es la de la cancha
+  // (06/11) de lejos el contraluz quedaba en ~5-10 % del sol (lobulo p2 * 0.55, translucidez al cuadrado): en la camara de juego el
+  // pasto no se encendia mirando hacia el sol. De lejos: lobulo mas alto con nucleo hacia el sol y la translucidez lineal
+  float lobe = lerp(p2 * 0.9 + p4 * p2 * 0.6, p4 * p4 * 1.6 + p4 * 0.35, nearQ);   // de lejos ancho + nucleo (ph^6); de cerca nucleo fino (ph^8) + halo
+  float back = lerp(0.75, saturate(0.35 - 0.75 * rawNdotL), nearQ);   // de cerca solo la cara del lado de la sombra; de lejos la normal es la de la cancha
   float tr = saturate((trans - 0.1) / 0.6);              // pintadas (~0.1) nada; verdes 0.4-1.0
+  float trK = lerp(tr, tr * tr, nearQ);                  // (06/11) de lejos lineal (una hoja verde 0.4 -> 0.5 en vez de 0.25)
   float3 tint = lerp(float3(1.0, 1.0, 1.0), float3(1.10, 1.0, 0.42), saturate(PG.y));   // clorofila: amarillo verdoso (y313)
-  float amt = k * lerp(saturate(P330.w), 1.0, nearQ) * tr * tr * back * lobe;
+  float amt = k * lerp(saturate(P330.w), 1.0, nearQ) * trK * back * lobe;
   return sunC * tint * amt;
 }
