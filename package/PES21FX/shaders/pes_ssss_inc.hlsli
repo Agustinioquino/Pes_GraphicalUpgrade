@@ -67,6 +67,9 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
 //   x319 icono de las luces en pantalla (DLL, overlay.cpp) | y319 relleno del estudio | z319 recorte del estudio
 //   (07/11, Agustin: angulo, sol o foco, volumetrica en el manual) x376 tipo (0 sol lejano, 1 foco) | y376 distancia del foco al
 //   jugador (m) | z376 apertura del cono (grados) | w376 luz volumetrica (fuerza) | x377 cielo en el manual | y377 densidad de la bruma
+//   (07/11 c) x378 tamano de la luz (grados: 0.27 sol, 5 = ventana / softbox: sombra blanda) | y378 calidad de la sombra (0 rapida 12
+//   pasos, 1 normal 24, 2 alta 48) | z378 rebote del suelo | w378 reflector (rebote de pared del lado opuesto, sin sombra) | x379
+//   color del reflector (0 blanco, 1 plateado, 2 dorado) | y379 alcance de la sombra (m) | z379 brillo de la luz (x especular)
 struct PreOut { float4 c : SV_Target0; float4 s : SV_Target1; };
 
 float3 DecodeN(float2 uv) {   // normal del G-buffer (octaedro 10/10 + 2 bits), igual que en la pasada de luz 1f623
@@ -85,6 +88,10 @@ float3 DecodeN(float2 uv) {   // normal del G-buffer (octaedro 10/10 + 2 bits), 
 // Ahora: 24 pasos, el borde se refina con 4 bisecciones entre el ultimo paso libre y el que pego (borde exacto), el ruido cambia
 // cada cuadro (el TAA lo promedia en un borde suave y estable) y la luz tiene tamano (cono de ~1.2 grados como un foco de estudio
 // grande; el sol real es 0.27 grados): penumbra que se abre con la distancia al que tapa, como en la realidad
+// (07/11 c, Agustin: "cambiar la calidad de la luz, pruebas del rebote") tamano de la luz (radio de la penumbra, rad; el sol
+// 0.0047), pasos de la traza (calidad) y alcance (m): los fija main desde la fila 378 / 379 antes de trazar
+static float g_shRad = 0.0047, g_shLen = 0.45;
+static int g_shSteps = 24;
 float PesTraceShadow(float3 Pv, float3 L, float rawNL, float zC, float zSgn, float zA, float2 uv, float2 pxy, float shK) {
   if (shK <= 0.001 || rawNL <= 0.02) return 1.0;
   float fr = floor(frac(m_timeParam.x * 0.25) * 4096.0);   // cambia cada cuadro (si el reloj corre)
@@ -96,15 +103,15 @@ float PesTraceShadow(float3 Pv, float3 L, float rawNL, float zC, float zSgn, flo
   { // penumbra: la direccion de la luz se mueve dentro de un cono chico (radio ~0.0047 rad, el sol)
     float3 up = abs(L.y) < 0.95 ? float3(0, 1, 0) : float3(1, 0, 0);
     float3 ta = normalize(cross(up, L)), tb = cross(L, ta);
-    float ang = 6.2831853 * ign2, rr = sqrt(frac(ign + 0.618034)) * 0.0047;
+    float ang = 6.2831853 * ign2, rr = sqrt(frac(ign + 0.618034)) * g_shRad;
     L = normalize(L + (ta * cos(ang) + tb * sin(ang)) * rr);
   }
-  float csLen = 0.45;
+  float csLen = g_shLen;
   float bias = (0.008 + 0.0018 * zA) * (0.6 + 0.4 / max(rawNL, 0.12));
   float3 Q = Pv + L * bias;
   float occ = 0, tPrev = 0;
-  [loop] for (int ci = 0; ci < 24; ci++) {
-    float f = (ci + ign) / 24.0;
+  [loop] for (int ci = 0; ci < g_shSteps; ci++) {
+    float f = (ci + ign) / (float)g_shSteps;
     float t = f * f * csLen;
     float3 R = Q + L * t;
     float RzA = R.z * zSgn;
@@ -273,6 +280,10 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   float zC = LinZ(uv);
   float zSgn = zC < 0.0 ? -1.0 : 1.0, zA = abs(zC);
   float4 E4 = IniParams.Load(int2(376, 0)), E5 = IniParams.Load(int2(377, 0));
+  float4 E6 = IniParams.Load(int2(378, 0)), E7 = IniParams.Load(int2(379, 0));
+  g_shRad = radians(E6.x > 0.0 ? E6.x : 0.27) * 0.5 + 1e-4;   // (07/11 c) radio = la mitad del diametro angular
+  g_shSteps = E6.y > 1.5 ? 48 : (E6.y > 0.5 ? 24 : 12);
+  g_shLen = clamp(E7.y > 0.0 ? E7.y : 0.45, 0.1, 2.0);
   bool geo = !(zA < 0.1 || zA > 60.0);   // fondo del editor, sin geometria: solo recibe la luz volumetrica
   if (!geo) { float zc = LinZ(float2(0.5, 0.5)); zSgn = (abs(zc) >= 0.1 && abs(zc) <= 60.0) ? (zc < 0.0 ? -1.0 : 1.0) : (m_projectionParam.z < 0.0 ? -1.0 : 1.0); zA = 4.0; zC = zA * zSgn; }
   // --- preset o manual ---
@@ -296,6 +307,7 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   // jugador: se suma al rumbo del preset (0 = el del preset)
   if (preset != 0 && preset != 4) az += E.z;
   if (preset == 0 && E5.x > 0.0) skyK = E5.x;   // (07/11) cielo en el manual
+  if (preset == 0 && E6.z > 0.0) gndK = E6.z * 0.05 / 0.5;   // (07/11 c) rebote del suelo en el manual (0.5 = como los presets)
   shK *= shMul;
   bool studio = preset == 4;
   // --- referencia de intensidad: la irradiancia de estudio mas alta sobre la piel, suavizada en el tiempo (pasada 0, t6) ---
@@ -422,11 +434,25 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
     float3 gndC = float3(1.00, 0.72, 0.50) * (S * inten) * gndK;
     if (preset == 5 || preset == 6) skyC = float3(0.80, 0.85, 0.95) * (S * inten) * skyK;   // cielo cubierto: gris, no azul
     float up = n.y * 0.5 + 0.5;   // normal en vista: y arriba
+    // (07/11 c) el rebote del suelo depende de cuanto sol le llega al suelo (sol alto = mas rebote)
+    if (preset == 0) gndC *= saturate(sin(radians(max(el, 0.0))) * 1.6 + 0.1);
     dif += skyC * up + gndC * (1.0 - up);
+    // (07/11 c) reflector: una pared / pantalla del lado opuesto a la luz, baja, que devuelve parte de la luz sin sombra (como el
+    // reflector de un fotografo). Color: blanco (el de la luz), plateado (mas frio y brillante), dorado (calido)
+    if (preset == 0 && E6.w > 0.001) {
+      float azR = (az >= 0 ? -1.0 : 1.0) * clamp(180.0 - abs(az), 20.0, 160.0) * 0.5;
+      int rc = (int)(E7.x + 0.5);
+      float3 rcol = rc == 1 ? float3(0.90, 0.96, 1.10) : (rc == 2 ? float3(1.15, 0.90, 0.60) : float3(1, 1, 1));
+      float3 LR = PesDirL(azR, 10.0, zSgn);
+      float3 dR = 0, sR = 0;
+      PesOneLight(LR, sunC * rcol * (E6.w * 0.5), 1.0, n, V, skin, rough, trans, thickM, silK, legacy, dR, sR);
+      dif += dR; spec += sR * (rc == 1 ? 1.0 : 0.4);
+    }
   }
   // (07/11) luz volumetrica (bruma + haces hacia la luz), tambien sobre el fondo del editor
   float3 vol = PesVolumetric(uv, pos.xy, Pv, zA, geo, zSgn, Lw, spot, Pl, sunC, E4.w, E5.y > 0 ? E5.y : 0.5);
   o.c = float4(c0 * (geo ? saturate(keep) : 1.0) + dif + vol, 1);
+  if (E7.z > 0.0) specMul *= E7.z;   // (07/11 c) brillo de la luz en el manual
   o.s = float4(s0 * (geo ? saturate(keep) : 1.0) + spec * specMul, 1);
   return o;
 }
