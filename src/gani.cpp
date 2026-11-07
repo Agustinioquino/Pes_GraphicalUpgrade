@@ -16,7 +16,7 @@
 //   3..30 un hueso con giro + posicion (los 4 parpados solo giro), 31 NMdriverB (57, 58). Aca va fijo (kAskBones / kChanBone).
 //
 // Los clips se leen de PES21FX\anim\face\*.gani y de las carpetas listadas en PES21FX\anim\face\carpetas.txt (una por linea, la
-// del Dream Patch). Son archivos de Konami: no van al repo, se leen de donde estan. Fila 375 (ini): x = numero de clip (0 = ninguno,
+// del Dream Patch: ...\livecpk\root\common\anime\FoxAnim\Face\), con dos niveles de subcarpetas (Animations\Add, Animations\Base). Son archivos de Konami: no van al repo, se leen de donde estan. Fila 375 (ini): x = numero de clip (0 = ninguno,
 // 1.. en orden alfabetico; el nombre se escribe en el registro al cambiar), y = peso, z = velocidad, w = 0 bucle / 1 una vez.
 // exprbones.cpp (ExprBonesFrame) pide la pose del clip en el reloj del juego y la escribe en los huesos.
 #include "core.h"
@@ -145,6 +145,21 @@ static void Scan() {   // con s_mx tomado
                 if (l.empty() || l[0] == ';' || l[0] == '#') continue;
                 std::wstring w; int n = MultiByteToWideChar(CP_UTF8, 0, l.c_str(), (int)l.size(), nullptr, 0); if (n <= 0) continue; w.resize(n); MultiByteToWideChar(CP_UTF8, 0, l.c_str(), (int)l.size(), &w[0], n);
                 if (w.back() != L'\\' && w.back() != L'/') w += L'\\'; dirs.push_back(w); } }
+    }
+    {   // (07/11) un nivel de subcarpetas: en el Dream Patch los clips estan en Face\Animations\Add y Face\Animations\Base
+        std::vector<std::wstring> sub;
+        for (const std::wstring& d : dirs) {
+            WIN32_FIND_DATAW fd; HANDLE h = FindFirstFileW((d + L"*").c_str(), &fd); if (h == INVALID_HANDLE_VALUE) continue;
+            do {
+                if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || fd.cFileName[0] == L'.') continue;
+                const std::wstring s1 = d + fd.cFileName + L"\\"; sub.push_back(s1);
+                WIN32_FIND_DATAW fd2; HANDLE h2 = FindFirstFileW((s1 + L"*").c_str(), &fd2); if (h2 == INVALID_HANDLE_VALUE) continue;
+                do { if ((fd2.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && fd2.cFileName[0] != L'.') sub.push_back(s1 + fd2.cFileName + L"\\"); } while (FindNextFileW(h2, &fd2));
+                FindClose(h2);
+            } while (FindNextFileW(h, &fd));
+            FindClose(h);
+        }
+        for (const std::wstring& s1 : sub) dirs.push_back(s1);
     }
     for (const std::wstring& d : dirs) {
         WIN32_FIND_DATAW fd; HANDLE h = FindFirstFileW((d + L"*.gani").c_str(), &fd); if (h == INVALID_HANDLE_VALUE) continue;
