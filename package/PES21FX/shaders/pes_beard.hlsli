@@ -75,7 +75,24 @@ void PesBeardFollow(uint vid, float3 rest, inout float3 pos, inout float3 prev)
   // cabeza (hw - ws0) antes de sumar el de la piel: el resultado es el de la piel una sola vez. Una barba pesada solo en la cabeza
   // tiene hw = ws0 y queda como antes
   float3 corr = 0, corrq = 0;
+  // (06/11, Agustin: "la barba sigue temblando al mover la camara o adelantar el paso del tiempo") la comparacion en el MUNDO usaba la
+  // m_world de la piel (copiada cuando se dibujo la piel, a veces el cuadro anterior si la barba se dibuja antes): al girar el jugador
+  // con la camara del editor la cabeza quedaba corrida varios cm, el chequeo de 4 cm entraba y salia y la barba temblaba. Ahora, si la
+  // barba y la piel estan en el mismo espacio del objeto (lo normal: es el mismo jugador), todo se hace ahi sin m_world; y si el lugar
+  // del pozo es del cuadro anterior (la cabeza de la piel cae mas cerca de prev que de pos) se compara contra prev, asi lo que se
+  // mueve entre cuadros es solo el movimiento propio de la barba (sin saltos)
+  bool objSp = false, lagS = false;
   {
+    float3 hpA = PesBeardBoneP(sBest, 1, hd, P), hqA = PesBeardBoneP(sBest, 97, hd, P);
+    float eC = length(hpA - pos), eP = length(hpA - prev);
+    if (min(eC, eP) < 0.04) {
+      objSp = true; lagS = eP < eC;
+      corr = (hpA - (lagS ? prev : pos)) * fs;
+      corrq = lagS ? corr : (hqA - prev) * fs;
+      if (dot(corrq, corrq) > 0.0016) corrq = corr;
+    }
+  }
+  if (!objSp) {
     float3 hp0 = PesBeardBoneP(sBest, 1, hd, P), hq0 = PesBeardBoneP(sBest, 97, hd, P);
     float4 V0 = g_pesBeardPool[sBest * 200 + 193], V1 = g_pesBeardPool[sBest * 200 + 194], V2 = g_pesBeardPool[sBest * 200 + 195];
     float3 ws0 = float3(dot(float4(hp0, 1.0), V0), dot(float4(hp0, 1.0), V1), dot(float4(hp0, 1.0), V2));
@@ -146,6 +163,7 @@ void PesBeardFollow(uint vid, float3 rest, inout float3 pos, inout float3 prev)
     float3 dw = float3(dot(d, W0.xyz), dot(d, W1.xyz), dot(d, W2.xyz));
     float3 dwq = float3(dot(dq, W0.xyz), dot(dq, W1.xyz), dot(dq, W2.xyz));
     float3 dO = (C0 * dw.x + C1 * dw.y + C2 * dw.z) * is2, dOq = (C0 * dwq.x + C1 * dwq.y + C2 * dwq.z) * is2;
+    if (objSp) { dO = d; dOq = lagS ? d : dq; }   // (06/11) mismo espacio: sin pasar por el mundo
     if (dot(dO, dO) > 0.0025 || dot(dOq, dOq) > 0.0025) return;   // tope 5 cm (algo no cuadra; la boca abierta del todo corre el menton ~3 cm)
     // (04/11 k) prueba w365 = 1: la barba que SI recibe el enlace sube 1 cm (se ve enseguida que pedazos siguen a la piel y cuales no)
     if (IniParams.Load(int2(365, 0)).w > 0.5) { dO += C1 * (0.01 * is2); dOq += C1 * (0.01 * is2); }
