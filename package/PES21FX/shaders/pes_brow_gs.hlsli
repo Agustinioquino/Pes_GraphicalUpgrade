@@ -215,12 +215,13 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
   float3 dPdv = (e2 * d1.x - e1 * d2.x) / det;
   // hebras esperadas en este triangulo: densidad por unidad de area UV (y74 = 2 -> ~450 por ceja con el mapa tipico)
   bool hb = pesHairMisc.x > 0.5;
-  float dens = clamp(P74.y, 0.25, 3.0) * 40000.0 *   // (06/11, Agustin: "se ven poco pobladas") 25000 -> 40000
+  float dens = clamp(P74.y, 0.25, 3.0) * 70000.0 *   // (07/11 b, Agustin: "falta cantidad") 40000 -> 70000
+                   // (06/11, Agustin: "se ven poco pobladas") 25000 -> 40000
                  (hb ? max(pesHairBrow.y, 0.05) : 1.0);
   float keepBase = saturate(uvArea * dens / (float)(PES_INST * PES_PER_INST));
   float mLen = hb ? max(pesHairBrow.w, 0.05) : 1.0, mWid = hb ? max(pesHairBrow.x, 0.05) : 1.0, mLift = hb ? pesHairBrow.z : 1.0;
   float curl = hb ? saturate(pesHairA.y) : 0.1;
-  float lift = clamp(P75.x * mLift, 0.0, 1.5) * 0.2;    // (04/11 e) aun mas acostadas: la raiz no se despega de la piel   // (04/11) pegadas a la piel: la v1 se levantaba demasiado
+  float lift = clamp(P75.x * mLift, 0.0, 1.5) * 0.28;   // (07/11 b) un poco mas levantadas: mas nivel 3D    // (04/11 e) aun mas acostadas: la raiz no se despega de la piel   // (04/11) pegadas a la piel: la v1 se levantaba demasiado
   float flip = P75.w < -0.5 ? -1.0 : 1.0;
 
   [loop] for (uint k = 0; k < PES_PER_INST; k++) {
@@ -241,7 +242,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     float fill = hb ? saturate((pesHairBrow.y - 1.0) * 0.6) : 0.0;
     // (04/11 l, Agustin: "no me gusta la cantidad de pelo y como respeta la textura") la densidad sigue la pintura: tupido donde la
     // ceja pintada es oscura y llena, ralo en el borde claro (antes casi pareja en toda la ceja)
-    bool born = ph >= lerp(0.35, 0.12, fill) && rk < keepBase * saturate(m.r + fill) * saturate((ph - 0.3) * 2.2 + fill * 1.5) * lerp(0.35, 1.5, strk);
+    bool born = ph >= lerp(0.35, 0.12, fill) && rk < keepBase * saturate(m.r + fill + 0.3) * saturate((ph - 0.2) * 2.5 + fill * 1.5) * lerp(0.5, 1.4, strk);   // (07/11 b) umbrales mas blandos: mas pelo
     // (04/11 l, Agustin: "permitirme cargar 400 hebras mas por jugador") x370 = hebras EXTRA en total (las dos cejas, ~0.016 de area UV
     // cada una): nacen sobre todo donde la ceja pintada es rala (rellenan huecos), nunca fuera de la ceja pintada
     float pX = hb ? uvArea * max(pesBrowX.x, 0.0) * 31.0 / (float)(PES_INST * PES_PER_INST) * saturate(1.3 - ph) * 1.6 : 0.0;
@@ -298,7 +299,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
       float lenUV = len / max(mPerUV, 1e-5);
       if (PesPaintedHair(uv + dirUV * lenUV) < 0.2) len *= (PesPaintedHair(uv + dirUV * lenUV * 0.5) < 0.2) ? 0.55 : 0.85;   // (07/11, referencia eFootball de Agustin) el borde de la ceja queda deshilachado: los pelos pasan un poco la pintura
     }
-    float widB = max(P74.w, 0.05) * 0.001 * mWid * 0.25;   // (04/11 b) mas finas: 0.35 -> ~0.09 mm de ancho real
+    float widB = max(P74.w, 0.05) * 0.001 * mWid * 0.32;   // (07/11 b) 0.25 -> 0.32: con la normal de tubo cada pelo se lee como cilindro   // (04/11 b) mas finas: 0.35 -> ~0.09 mm de ancho real
     // color: el de la ceja pintada en ese punto (raiz) y la punta un poco mas clara, o el del tipo de pelo
     float3 painted = tBrow.SampleLevel(sLin, uv, 0).rgb;   // (04/11 d) el color de los pelos pintados de esa zona (no la piel de al lado)
     float3 cR = (hb && pesHairRoot.w > 0.5) ? pesHairRoot.xyz : painted;
@@ -328,7 +329,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     // Las capas de abajo quedan tapadas (mas oscuras) y las de arriba toman la luz: volumen y profundidad reales, con sombra de
     // contacto mas larga para las de arriba (PES_SHADOW usa la altura real)
     float lay = frac(r0 * 5.17 + r1 * 3.71 + r3 * 1.93);
-    float stackH = lay * lay * 0.0013 * saturate(ph * 1.6) * max(mLift, 0.3);
+    float stackH = lay * lay * 0.0022 * saturate(ph * 1.6) * max(mLift, 0.3);   // (07/11 b) 1.3 -> 2.2 mm: mas profundidad entre capas
     { float occ = lerp(0.96, 0.8, saturate(ph * 1.2)) * lerp(lerp(0.72, 1.04, lay), 1.0, 1.0 - saturate(ph * 1.6));   // abajo tapado, arriba a la luz   // (05/11, Agustin: "se ven muy oscuras con la luz de frente") antes 0.88..0.62
       float layer = lerp(0.88, 1.08, frac(r3 * 7.31 + rk * 3.17));
       cR *= occ * layer; cT *= layer; }
@@ -362,7 +363,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
       // (06/11, Agustin: "no se ve como un hair strand de un motor moderno") la hebra fina ya no se engorda a 1 px: se dibuja de 1.2 px
       // y el PS descarta pixeles al azar segun la cobertura real (ancho real / dibujado); el TAA lo promedia -> pelo fino y suave
       float wReal = wid;
-      wid = max(wid, pxV * (P75.z > 0.5 ? 1.25 : 0.6));
+      wid = max(wid, pxV * (P75.z > 0.5 ? 1.25 : 0.9));   // (07/11 b, Agustin: "el TAA las desenfoca") 0.6 -> 0.9 px: menos tramado
       float cov = P75.z > 0.5 ? 1.0 : saturate(wReal / max(wid, 1e-9));
 #ifdef PES_SHADOW
       float hgt = max(dot(p - root, n), 0.0);                                    // altura sobre la piel
@@ -382,7 +383,8 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
         // toma la misma luz y sombra que la cara, de cerca cada pelo tiene volumen; la punta levantada se inclina un poco hacia
         // donde apunta el pelo
         float3 sideS = normalize(cross(n, dd));
-        float3 nH = normalize(n + sideS * side * lerp(0.75, 0.45, lay) + dd * (lift * 0.6 * t));   // (07/11) abajo mas redondeada (sombra propia), arriba mas plana a la luz
+        // (07/11 b, Agustin: "faltan normales") el GS manda la normal del EJE del pelo; el PS arma la normal de TUBO con el lado (tw.y)
+        float3 nH = normalize(n * lerp(1.0, 0.8, lay) + dd * (lift * 0.6 * t));
         o.nrmV = nH;
         o.col = cR; o.col2 = cT;
         o.tw = float3(t, side, clamp(cov, 0.02, 0.98) + 2.0 * floor(frac(r2 * 7.77 + r3 * 3.33) * 8.0));   // (07/11) z = cobertura + 2 x (0..7) tono de brillo de la hebra
