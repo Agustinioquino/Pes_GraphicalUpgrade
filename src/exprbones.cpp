@@ -274,6 +274,7 @@ static const float* TeethOf(int d) { static const float z[3] = { 0, 0, 0 }; retu
 enum { D_JAW = 0, D_LIPS_L = 5, D_LID_TL = 22, D_LID_TR = 23, D_LID_BL = 24, D_LID_BR = 25, D_BROW_IL = 26, D_EYE_L = 31, D_EYE_R = 32, D_HEAD = kND - 2 };
 
 struct Skel {
+    float clockT = -1.0f, clockK = 1.0f;   // (06/11) reloj del juego del ultimo cuadro de los parpados y cuadros de 60 Hz que pasaron
     const void* skel = nullptr; const char* bones = nullptr; int n = 0;   // esqueleto del cuerpo (clave) y su arreglo
     const void* face = nullptr; const char* fbones = nullptr; int fn = 0;  // (02/11) esqueleto de la CARA: nodo + 0xA0 (49 huesos)
     void* cur[kND] = {};      // puntero a la transformacion actual de cada hueso reconocido (null = no esta)
@@ -658,6 +659,15 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
     // la animacion facial del juego (habla, festeja): sin parpadeo del mod (la animacion trae el suyo)
     const float anim = (std::max)(HeadSpaceMove(S, D_LIPS_L, hc, hrInv), HeadSpaceMove(S, D_BROW_IL, hc, hrInv));
     const float t = g_cfg.live[157][0];
+    // (06/11, Agustin: "la barba sigue temblando asi como la boca al mover la camara o adelantar el paso del tiempo, estas animaciones
+    // deberian estar ligadas al game clock") los suavizados de los parpados iban por cuadro dibujado: con otro ritmo de cuadros o con
+    // el tiempo del juego acelerado / frenado / en pausa no acompanaban. Ahora cuentan cuadros de 60 Hz del RELOJ DEL JUEGO (157.x)
+    {
+        const float dt = S.clockT < 0.0f ? 1.0f / 60.0f : t - S.clockT;
+        S.clockK = std::clamp(dt * 60.0f, 0.0f, 6.0f);   // en pausa 0: no cambia nada; un salto grande cuenta como 6 cuadros
+        S.clockT = t;
+    }
+    auto ease = [&](float a) { return 1.0f - powf(1.0f - a, S.clockK); };
     {
         const float* H = g_cfg.live[194];
         float wp[3];
@@ -714,7 +724,7 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
             if (!S.eyePHave) { S.eyePT = S.eyeP = gp; S.eyePHave = true; }
             else {
                 if (fabsf(gp - S.eyePT) > 0.021f) S.eyePT = gp - copysignf(0.021f, gp - S.eyePT);
-                S.eyeP += (S.eyePT - S.eyeP) * 0.12f;
+                S.eyeP += (S.eyePT - S.eyeP) * ease(0.12f);
             }
         }
         // (04/11, video de Agustin: "los parpados no acompanan") la mirada del mod (Gaze, la misma cuenta que PesGaze del shader)
@@ -724,7 +734,7 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
         // real: mirar abajo baja el parpado con el ojo, mirar arriba lo sube)
         // (02/11 d) con la sonrisa (sm) el ojo se achina: el de arriba baja un poco y el de abajo sube (sonrisa "de verdad")
         // (04/11) la sonrisa medida en la comisura salta de un cuadro a otro al hablar: para los parpados va suavizada (~10 cuadros)
-        S.lidSm = S.lidSmHave ? S.lidSm + (sm - S.lidSm) * 0.10f : sm; S.lidSmHave = true;
+        S.lidSm = S.lidSmHave ? S.lidSm + (sm - S.lidSm) * ease(0.10f) : sm; S.lidSmHave = true;
         const float smL = S.lidSm;
         // (04/11, Agustin: "el parpadeo hace que se muevan bastante") parpadeo mas suave: arriba 0.64 -> 0.58, abajo 0.12 -> 0.07
         // (05/11, Agustin: "a la sonrisa le falta achicar los ojos un poco mas") con los parpados por huesos (350.y = 2) el shader no
@@ -734,15 +744,17 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
         const float* G5 = g_cfg.live[355]; const float* G6 = g_cfg.live[356];
         const float gAng = std::clamp(G5[0], 0.0f, 1.5f), gSmi = std::clamp(G5[1], 0.0f, 1.5f), gSur = std::clamp(G5[2], 0.0f, 1.5f);
         const float gGri = std::clamp(G6[0], 0.0f, 1.5f), gPuc = std::clamp(G6[1], 0.0f, 1.5f), gBig = (std::max)(gSmi - 1.0f, 0.0f);
-        const float geU = 0.20f * gSmi + 0.30f * gBig + 0.14f * gAng - 0.20f * gSur + 0.10f * gGri + 0.05f * gPuc;   // > 0 baja el de arriba
-        const float geL = -(0.21f * gSmi + 0.26f * gBig + 0.06f * gAng + 0.10f * gGri) + 0.04f * gSur;            // < 0 sube el de abajo
+        // (06/11, Agustin: "la sonrisa de messi cierra demasiado los ojos, un poco menos") la sonrisa a la mitad de lo que era (la cara
+        // esculpida de Messi ya achina el ojo por su forma)
+        const float geU = 0.10f * gSmi + 0.15f * gBig + 0.14f * gAng - 0.20f * gSur + 0.10f * gGri + 0.05f * gPuc;   // > 0 baja el de arriba
+        const float geL = -(0.11f * gSmi + 0.13f * gBig + 0.06f * gAng + 0.10f * gGri) + 0.04f * gSur;            // < 0 sube el de abajo
         float up = (std::min)(0.58f * b - gy * (gy < 0.0f ? 0.80f : 0.55f) + 0.06f * smL + geU, 0.66f);   // tope: cerrado, sin pasarse del ojo
         // de abajo: sube un poco al parpadear, baja con la mirada abajo y sube apenas con la mirada arriba
         float lo = std::clamp(-0.07f * b - gy * (gy < 0.0f ? 0.35f : 0.15f) - 0.16f * smL + geL, -0.45f, 0.18f);
         // (04/11) limite de velocidad fuera del parpadeo: un cambio chico de un cuadro a otro (temblor de la medida) se frena;
         // el parpadeo (b) y los saltos grandes pasan enteros
         if (S.lidHave && b < 0.02f) {
-            auto lim = [](float prev, float now) { const float d = now - prev; return fabsf(d) < 0.004f ? prev + d * 0.35f : now; };
+            const float kl = ease(0.35f); auto lim = [kl](float prev, float now) { const float d = now - prev; return fabsf(d) < 0.004f ? prev + d * kl : now; };
             up = lim(S.lidU, up); lo = lim(S.lidL, lo);
         }
         S.lidU = up; S.lidL = lo; S.lidHave = true;
