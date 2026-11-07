@@ -296,7 +296,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     // la hebra no sale de la ceja pintada: si la punta (o la mitad) cae en piel, se acorta
     {
       float lenUV = len / max(mPerUV, 1e-5);
-      if (PesPaintedHair(uv + dirUV * lenUV) < 0.2) len *= (PesPaintedHair(uv + dirUV * lenUV * 0.5) < 0.2) ? 0.4 : 0.65;
+      if (PesPaintedHair(uv + dirUV * lenUV) < 0.2) len *= (PesPaintedHair(uv + dirUV * lenUV * 0.5) < 0.2) ? 0.55 : 0.85;   // (07/11, referencia eFootball de Agustin) el borde de la ceja queda deshilachado: los pelos pasan un poco la pintura
     }
     float widB = max(P74.w, 0.05) * 0.001 * mWid * 0.25;   // (04/11 b) mas finas: 0.35 -> ~0.09 mm de ancho real
     // color: el de la ceja pintada en ese punto (raiz) y la punta un poco mas clara, o el del tipo de pelo
@@ -317,9 +317,19 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
       float km = saturate(pesBrowCol.w);
       cR = lerp(cR, pesBrowCol.rgb * vari, km); cT = lerp(cT, pesBrowCol.rgb * vari * float3(1.12, 1.08, 1.04), km);
     }
+    // (07/11, referencia eFootball de Agustin: Messi al sol) las puntas son mas claras y calidas (pelo aclarado por el sol) y algunas
+    // hebras sueltas mucho mas: al sol la ceja "chispea" pelo por pelo en vez de ser una mancha pareja
+    cT *= float3(1.08, 1.04, 0.98) * (frac(r3 * 11.3 + rk * 5.1) < 0.28 ? 1.25 : 1.0);
     // (04/11 j, Agustin: "necesitan un sombreado entre pelos mejor") sombra entre pelos: la raiz queda tapada por los vecinos (mas
     // oscura donde la ceja es tupida = contorno alto del mapa) y cada pelo con un tono apenas distinto (se ven capas)
-    { float occ = lerp(0.96, 0.8, saturate(ph * 1.2));   // (05/11, Agustin: "se ven muy oscuras con la luz de frente") antes 0.88..0.62
+    // (07/11, Agustin: "que tenga geometria y profundidad 3d real") CAPAS: hasta ahora todas las hebras iban a la misma altura sobre
+    // la piel (ceja plana). Cada pelo tiene su capa (0 = pegado a la piel .. 1 = arriba de todo); donde la ceja es tupida las capas
+    // de arriba cabalgan sobre las de abajo hasta ~1.3 mm (la raiz sigue naciendo en el poro: la altura entra a lo largo del pelo).
+    // Las capas de abajo quedan tapadas (mas oscuras) y las de arriba toman la luz: volumen y profundidad reales, con sombra de
+    // contacto mas larga para las de arriba (PES_SHADOW usa la altura real)
+    float lay = frac(r0 * 5.17 + r1 * 3.71 + r3 * 1.93);
+    float stackH = lay * lay * 0.0013 * saturate(ph * 1.6) * max(mLift, 0.3);
+    { float occ = lerp(0.96, 0.8, saturate(ph * 1.2)) * lerp(lerp(0.72, 1.04, lay), 1.0, 1.0 - saturate(ph * 1.6));   // abajo tapado, arriba a la luz   // (05/11, Agustin: "se ven muy oscuras con la luz de frente") antes 0.88..0.62
       float layer = lerp(0.88, 1.08, frac(r3 * 7.31 + rk * 3.17));
       cR *= occ * layer; cT *= layer; }
     // vectores de movimiento de la raiz (misma cuenta que el PS de la cara: actual - anterior en UV de pantalla)
@@ -346,6 +356,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
       float3 p = root + n * emerge + dd * len * t + n * len * lift * (0.35 * sin(t * 3.14159) + 0.1 * t) + bt * len * curl * 0.5 * sin(t * 6.2831853 + r3 * 6.2831853) * t;
       p += n * clamp(0.5 * kap * (len * t) * (len * t), -0.25 * len, 0.6 * len);   // (04/11 l) sigue el pliegue de la piel
       p += bt * clamp(clat, -0.3 * len, 0.3 * len) * 0.55 * t * t;                    // (07/11) mechon: la punta va hacia sus vecinos
+      p += n * stackH * smoothstep(0.0, 0.45, t);                                       // (07/11) capa: sube sobre las de abajo
       float wid = widB * (1.0 - 0.85 * t);
       float pxV = 2.0 * abs(p.z) / (max(abs(m_projection[1].y), 1e-4) * vpH);   // un pixel en la vista a esta distancia
       // (06/11, Agustin: "no se ve como un hair strand de un motor moderno") la hebra fina ya no se engorda a 1 px: se dibuja de 1.2 px
@@ -371,7 +382,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
         // toma la misma luz y sombra que la cara, de cerca cada pelo tiene volumen; la punta levantada se inclina un poco hacia
         // donde apunta el pelo
         float3 sideS = normalize(cross(n, dd));
-        float3 nH = normalize(n + sideS * side * 0.55 + dd * (lift * 0.6 * t));
+        float3 nH = normalize(n + sideS * side * lerp(0.75, 0.45, lay) + dd * (lift * 0.6 * t));   // (07/11) abajo mas redondeada (sombra propia), arriba mas plana a la luz
         o.nrmV = nH;
         o.col = cR; o.col2 = cT;
         o.tw = float3(t, side, clamp(cov, 0.02, 0.98) + 2.0 * floor(frac(r2 * 7.77 + r3 * 3.33) * 8.0));   // (07/11) z = cobertura + 2 x (0..7) tono de brillo de la hebra
