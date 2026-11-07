@@ -39,6 +39,8 @@ const Limit kLimits[] = {
     { 70, 3, false, 0 }, { 78, 0, false, 0 }, { 79, 0, false, 0 }, { 80, 1, false, 0 }, { 255, 2, false, 0 }, { 256, 0, false, 0 },
     { 352, 3, false, 0 }, { 353, 3, false, 0 },
     // Viento del pelo y arrugas de la ropa "desde la fisica": dependen del cloth-mod (no es de este paquete)
+    // Vista de diagnostico (w12): ninguna
+    { 12, 3, false, 0 },
     { 24, -1, false, 0 }, { 25, 0, false, 0 }, { 23, 0, false, 0 }, { 23, 1, false, 0 }, { 69, -1, false, 0 }, { 80, 0, false, 0 },
 };
 // grupos del menu que no van (id = nombre de la seccion sin "Menu")

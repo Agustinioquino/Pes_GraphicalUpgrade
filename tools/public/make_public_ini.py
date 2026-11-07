@@ -29,6 +29,7 @@ PARAMS = {   # filas de parametros (mismos valores que fija public.cpp + prefere
     'x348': '0', 'y348': '0', 'z348': '0', 'w348': '0',   # musculos de la cara
     'x350': '0',                                  # abrir la boca: por shader (sin girar huesos)
     'y263': '0',                                  # respiracion
+    'w12': '0',                                   # vista de diagnostico: ninguna (la plantilla traia -3)
     'w24': '0', 'w69': '0', 'x80': '0',           # viento del pelo y arrugas desde la fisica de la ropa (cloth-mod): fuera
     'z352': '0',                                  # cuello: el paquete lleva TorsoBody_cuello 1.16 (corta la cara); el hundido z352 es para 1.19
 }
