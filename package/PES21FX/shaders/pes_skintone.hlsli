@@ -106,6 +106,23 @@ float PesTorsoMaskA(float3 v, float a0, float a1) {
   return (1.0 - arm) * (1.0 - neck) * PesSS(0.86, 0.90, p.y) * (1.0 - PesSS(1.561, 1.569, p.y));
 }
 float PesTorsoMask(float3 v) { return PesTorsoMaskA(v, -0.004, 0.004); }
+// (07/11) y320 = 4 "pecho y espalda": Agustin no quiere deformaciones en las uniones de brazos y piernas ni en el torso que queda
+// sobre el short, pero tampoco que el pecho o la espalda atraviesen la camiseta (normal y ajustada). Solo se mete lo que mira
+// adelante o atras (normal del cuerpo con |z| grande; los costados y la axila no), lejos de las costuras: se suelta en los ultimos
+// 9 cm del torso antes del hombro (llega a 0 a 3.5 cm), en los ultimos 6 cm antes del anillo del cuello (0 a 2.5 cm; el cuello lo
+// hunde z352) y debajo de 1.12 m (0 en 1.02 m: la cintura y lo que asoma sobre el short quedan enteros)
+float PesTorsoChestBack(float3 v, float3 n) {
+  float3 p = float3(abs(v.x), v.y, v.z);
+  n *= rsqrt(max(dot(n, n), 1e-8));
+  float fb = PesSS(0.35, 0.75, abs(n.z));
+  float arm = PesArmPart(v, -0.09, -0.035);
+  const float3 cN = float3(0.0, 1.5223, 0.0552), nN = float3(0.0, 0.8564, 0.5163), e2 = float3(0.0, 0.5163, -0.8564);
+  float3 qn = p - cN; float sN = dot(qn, nN); float3 wn = qn - sN * nN;
+  float lw = max(length(wn), 1e-5); float ct = dot(wn, e2) / lw;
+  float hN = 0.00037 - 0.00183 * ct - 0.01279 * (2.0 * ct * ct - 1.0);
+  float neck = PesSS(-0.06, -0.025, sN - hN) * (1.0 - PesSS(0.10, 0.12, p.x));
+  return fb * (1.0 - arm) * (1.0 - neck) * PesSS(1.02, 1.12, p.y) * (1.0 - PesSS(1.561, 1.569, p.y));
+}
 // (27/10) torso bajo la camiseta (fila 320): el torso de TorsoBody (y mas con la musculatura / esculpido) es mas grueso que el cuerpo para
 // el que el juego hizo las camisetas ajustadas: en el menu del jugador y en partido asomaba por la tela en el escote, el costado y la axila
 // (parches de piel sin sombrear). x320 mm que se mete el torso hacia adentro por su normal (fuera del cuello y los brazos, con la misma
@@ -187,6 +204,7 @@ float PesArmKeep(float3 rest) {
   float4 T = IniParams.Load(int2(320, 0));
   if (T.w < 0.5) return 0.0;
   if (T.y > 0.5 && T.y < 1.5) return PesArmPart(rest, 0.03, 0.08);   // junto a la costura el torso esta achicado (axila 14 mm): sin escalon
+  if (T.y > 3.5) return 0.0;   // (07/11) pecho y espalda: el brazo no se toca
   if (T.y > 2.5) return PesArmPart(rest, 0.08, 0.14);
   return 0.0;
 }
@@ -206,7 +224,8 @@ void PesTorsoTight(inout float3 mP, float3 mN, float3 rest, float3 org) {
   float4 K = IniParams.Load(int2(351, 0));
   if (K.w < 0.5 || K.x <= 0.0) return;
   if (PesCharShirtType(org) < 3.5) return;
-  float mm = min(K.x, 15.0) * PesTorsoInsetSmooth(rest) * (1.0 - PesArmRestore(rest));
+  float4 T = IniParams.Load(int2(320, 0));   // (07/11) con y320 = 4 la ajustada se mete solo en pecho y espalda (sin tocar uniones)
+  float mm = min(K.x, 15.0) * (T.y > 3.5 ? PesTorsoChestBack(rest, mN) : PesTorsoInsetSmooth(rest)) * (1.0 - PesArmRestore(rest));
   if (mm <= 0.0) return;
   mP -= mN * rsqrt(max(dot(mN, mN), 1e-8)) * (mm * 0.001);
 }
@@ -221,7 +240,7 @@ void PesTorsoInset(inout float3 mP, float3 mN, float3 rest, float3 org) {
   // (02/11) y320 = 3: torso, espalda y hombros (Agustin: con "solo el torso" el hombro asomaba por la remera)
   // (02/11 d) "solo el torso": pecho y espalda enteros, pero se suelta en los 4.5 cm del torso junto a la costura del hombro y la axila
   // (con x320 9 mm quedaba un escalon: el brazo mas grueso que el torso en la union; Agustin: lo que atraviesa es pecho y espalda)
-  if (T.x > 0.0) base = T.x * ((T.y > 0.5 && T.y < 1.5) ? PesTorsoMask(rest) * (1.0 - PesArmPart(rest, -0.05, -0.005)) : (T.y > 2.5 ? PesTorsoMaskA(rest, 0.08, 0.14) : PesTorsoInsetSmooth(rest)));
+  if (T.x > 0.0) base = T.x * (T.y > 3.5 ? PesTorsoChestBack(rest, mN) : (T.y > 0.5 && T.y < 1.5) ? PesTorsoMask(rest) * (1.0 - PesArmPart(rest, -0.05, -0.005)) : (T.y > 2.5 ? PesTorsoMaskA(rest, 0.08, 0.14) : PesTorsoInsetSmooth(rest)));
   mm = base;
   if (T.y > 1.5 && T.y < 2.5 && g_torsoNeed.Load(PES_NEED_NX * PES_NEED_NY * PES_NEED_NZ) > 0.5) {
     float need = PesTorsoNeed(rest);
