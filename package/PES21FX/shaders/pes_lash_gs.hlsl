@@ -140,7 +140,10 @@ void main(triangle LashV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     float3 n = normalize(v[0].nrm * b.x + v[1].nrm * b.y + v[2].nrm * b.z);
     d = normalize(d - n * dot(d, n));
     float3 root = P0 * b.x + P1 * b.y + P2 * b.z;
-    if (dot(n, -root) < 0.0) n = -n;                           // la curva va hacia afuera (lado que mira a la camara)
+    // (07/11, Agustin: "tienen que seguir las pestanas normales del juego y no oclusar los ojos") antes la normal se daba vuelta hacia
+    // la camara y la hebra se curvaba hacia ella: de frente caia delante del ojo. Ahora la hebra queda SOBRE la tira del juego (su
+    // plano, con la normal de la malla) y apenas se arquea: tapa solo lo que tapa la pestana pintada
+    float3 nL = dot(n, -root) < 0.0 ? -n : n;                  // normal para la luz: del lado de la camara (si no, sale negra)
     float len = steps * mPerTex * mLen * (0.9 + 0.2 * r3);
     float3 bt = normalize(cross(n, d));
     float widB = 0.00004 * mWid;                               // ~0.08 mm de ancho total en la raiz
@@ -153,7 +156,7 @@ void main(triangle LashV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     q = q * 0.5 + 0.5;
     q = q.zwxy * float4(1, -1, 1, -1) + float4(0, 1, 0, 1);
     float2 motion = q.zw - q.xy;
-    float curl = 0.22 + 0.1 * r2;
+    float curl = 0.04 + 0.03 * r2;                             // (07/11) antes 0.22..0.32 hacia la camara
 #ifdef PES_SHADOW
     // (04/11 k) sombra de la pestana sobre el parpado / el ojo: la pestana proyectada siguiendo la luz al plano de la tira
     float3 Ls = PesShadowL(root.z);
@@ -169,7 +172,7 @@ void main(triangle LashV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
       wid = max(wid, pxV * (P75.z > 0.5 ? 1.25 : 0.6));
       float cov = P75.z > 0.5 ? 1.0 : saturate(wReal / max(wid, 1e-9));
 #ifdef PES_SHADOW
-      { float hgt = abs(dot(p - root, n)) + len * 0.15 * t;                      // la tira esta separada del parpado: sombra corrida
+      { float hgt = abs(dot(p - root, n)) + len * 0.04 * t;                      // la tira esta separada del parpado: sombra corrida
         p = p - Ls * (hgt / max(nl, 0.25)); wid = wid * 1.8 + hgt * 0.05; }
 #endif
       float3 V = normalize(-p);
@@ -179,9 +182,13 @@ void main(triangle LashV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
         GSOut o;
         float side = (float)s;
         o.pos = ProjV(p + sideV * wid * side);
-        o.nrmV = normalize(n + bt * side * 0.6);
+        o.nrmV = normalize(nL + bt * side * 0.6);
         o.col = cR; o.col2 = cT;
+#ifdef PES_SHADOW
+        o.tw = float3(t, side, 0.3);                           // (07/11) sombra suave: no oscurece el ojo
+#else
         o.tw = float3(t, side, cov);
+#endif
         o.motion = motion;
         o.viewV = V;
         o.tanV = tanR;
