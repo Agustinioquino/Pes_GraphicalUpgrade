@@ -1023,13 +1023,13 @@ void ExprBonesFrame(const void* skel) {
     ProfResolve(*S, fr);
     const FaceProf* PF = profOn && S->prof >= 0 && S->prof < (int)s_prof.size() ? &s_prof[S->prof] : nullptr;
     if (PF && pNeu > 0.001f && PF->has[PG_NEUTRA]) poseOn = true;
-    // (07/11, Agustin: "me gustaria que al jugar leas los ganis") clip .gani de la cara (fila 382, gani.cpp): la pose del clip en el
+    // (07/11, Agustin: "me gustaria que al jugar leas los ganis") clip .gani de la cara (fila 383, gani.cpp): la pose del clip en el
     // RELOJ DEL JUEGO desde que arranco en este personaje; x = clip, y = peso, z = velocidad, w = 0 bucle / 1 una vez
     GaniPose GP; bool ganiOn = false; float gW = 0.0f;
     {
         if (!s_defToAskOk) DefToAsk();
-        const int gc = (int)(g_cfg.live[382][0] + 0.5f); gW = std::clamp(g_cfg.live[382][1], 0.0f, 1.5f);
-        const float gSp = g_cfg.live[382][2] > 0.01f ? std::clamp(g_cfg.live[382][2], 0.1f, 4.0f) : 1.0f; const bool gLoop = g_cfg.live[382][3] < 0.5f;
+        const int gc = (int)(g_cfg.live[383][0] + 0.5f); gW = std::clamp(g_cfg.live[383][1], 0.0f, 1.5f);
+        const float gSp = g_cfg.live[383][2] > 0.01f ? std::clamp(g_cfg.live[383][2], 0.1f, 4.0f) : 1.0f; const bool gLoop = g_cfg.live[383][3] < 0.5f;
         const float gt = g_cfg.live[157][0];
         if (gc > 0 && gW > 0.001f) {
             if (S->ganiClip != gc || gt < S->ganiT0) { S->ganiClip = gc; S->ganiT0 = gt; }
