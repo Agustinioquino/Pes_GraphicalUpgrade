@@ -525,7 +525,10 @@ void main(
         float aoSky = lerp(1.0, saturate(inOcclusion.SampleLevel(g_samplerLinear_Clamp_s, uvC, 0).x), 0.7 * saturate(SKY.z));
         float3 fSk3 = fSky.xxx;
         if (skinC) { float3 nG = normalize(NskR + Nsk); fSk3 = saturate(0.5 + 0.5 * float3(dot(NskR, upV), dot(nG, upV), dot(Nsk, upV))); }   // (02/11) rojo con la normal suavizada
-        r2.xyz += lum * tint * fSk3 * fSk3 * max(SKY.x, 0.0) * 0.12 * day * aoSky * saturate((400.0 - zsk) / 120.0) * PESAmbGain();
+        // (07/11) y109: hemisferio coseno. Una superficie de costado recibe la MITAD del cielo, no un cuarto (fSky^2 apagaba el lado
+        // en sombra de los jugadores: 'cuando estan en la sombra no se ve casi nada'). 0 = como antes, 1 = fisico.
+        float3 fSkW = lerp(fSk3 * fSk3, fSk3, saturate(IniParams.Load(int2(109,0)).y));
+        r2.xyz += lum * tint * fSkW * max(SKY.x, 0.0) * 0.12 * day * aoSky * saturate((400.0 - zsk) / 120.0) * PESAmbGain();
       }
     }
   }
@@ -560,6 +563,17 @@ void main(
       }
     }
   }
+  // === PES21 (07/11) color en la sombra (z109): a la sombra del sol el juego deja una luz gris y plana ('todo muy opaco'). La luz
+  // real de una sombra de dia es cielo + rebote, con color propio: se sube la saturacion solo en lo que el shadow map marca a la
+  // sombra, de dia con sol (de noche las torres no), conservando la luminancia. 0 = apagado, 0.25 = suave, 0.5 = marcado.
+  { float4 SF9c = IniParams.Load(int2(109,0));
+    if (cmpOn && SF9c.z > 0.001 && zsk > 0.1 && zsk < 400.0 && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {
+      float3 scS = max(pLc_color.xyz, 0.0);
+      float kSunS = saturate((scS.r / max(scS.b, 1e-4) - 0.85) * 4.0);
+      float shS = 1.0 - saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
+      float lS = dot(r2.xyz, float3(0.2126, 0.7152, 0.0722));
+      r2.xyz = max(lerp(lS.xxx, r2.xyz, 1.0 + saturate(SF9c.z) * shS * kSunS), 0.0);
+    } }
   // === PES21 pasto a contraluz (18/10): con el sol de frente a la camara las hojas dejan pasar la luz y se encienden
   // amarillo-verdosas (como en TV al atardecer). Pasto 3D y base de la cancha (tipo 3). y57 fuerza, w57 on/off
   {
