@@ -144,9 +144,9 @@ void main(triangle LashV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     // la camara y la hebra se curvaba hacia ella: de frente caia delante del ojo. Ahora la hebra queda SOBRE la tira del juego (su
     // plano, con la normal de la malla) y apenas se arquea: tapa solo lo que tapa la pestana pintada
     float3 nL = dot(n, -root) < 0.0 ? -n : n;                  // normal para la luz: del lado de la camara (si no, sale negra)
-    float len = steps * mPerTex * mLen * (0.9 + 0.2 * r3);
+    float len = steps * mPerTex * mLen * (0.85 + 0.2 * r3);   // (07/11) un poco mas cortas: no pasan la pestana pintada
     float3 bt = normalize(cross(n, d));
-    float widB = 0.00004 * mWid;                               // ~0.08 mm de ancho total en la raiz
+    float widB = 0.000032 * mWid;   // (07/11, referencia eFootball) mas finas                               // ~0.08 mm de ancho total en la raiz
     float4 tc = tLash.SampleLevel(sLin, uv, 0);
     float3 cR = tc.rgb, cT = tc.rgb * float3(1.15, 1.1, 1.05);
     { float layer = lerp(0.85, 1.05, frac(r3 * 5.71 + r2 * 2.13)); cR *= 0.85 * layer; cT *= layer; }   // (04/11 j) sombra entre pelos: raiz tapada + capas

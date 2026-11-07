@@ -291,7 +291,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     // la hebra no sale de la ceja pintada: si la punta (o la mitad) cae en piel, se acorta
     {
       float lenUV = len / max(mPerUV, 1e-5);
-      if (PesPaintedHair(uv + dirUV * lenUV) < 0.2) len *= (PesPaintedHair(uv + dirUV * lenUV * 0.5) < 0.2) ? 0.4 : 0.65;
+      if (PesPaintedHair(uv + dirUV * lenUV) < 0.2) len *= (PesPaintedHair(uv + dirUV * lenUV * 0.5) < 0.2) ? 0.55 : 0.85;   // (07/11, referencia eFootball de Agustin) el borde de la ceja queda deshilachado: los pelos pasan un poco la pintura
     }
     float widB = max(P74.w, 0.05) * 0.001 * mWid * 0.25;   // (04/11 b) mas finas: 0.35 -> ~0.09 mm de ancho real
     // color: el de la ceja pintada en ese punto (raiz) y la punta un poco mas clara, o el del tipo de pelo
@@ -312,6 +312,9 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
       float km = saturate(pesBrowCol.w);
       cR = lerp(cR, pesBrowCol.rgb * vari, km); cT = lerp(cT, pesBrowCol.rgb * vari * float3(1.12, 1.08, 1.04), km);
     }
+    // (07/11, referencia eFootball de Agustin: Messi al sol) las puntas son mas claras y calidas (pelo aclarado por el sol) y algunas
+    // hebras sueltas mucho mas: al sol la ceja "chispea" pelo por pelo en vez de ser una mancha pareja
+    cT *= float3(1.08, 1.04, 0.98) * (frac(r3 * 11.3 + rk * 5.1) < 0.28 ? 1.25 : 1.0);
     // (04/11 j, Agustin: "necesitan un sombreado entre pelos mejor") sombra entre pelos: la raiz queda tapada por los vecinos (mas
     // oscura donde la ceja es tupida = contorno alto del mapa) y cada pelo con un tono apenas distinto (se ven capas)
     { float occ = lerp(0.96, 0.8, saturate(ph * 1.2));   // (05/11, Agustin: "se ven muy oscuras con la luz de frente") antes 0.88..0.62
