@@ -190,6 +190,61 @@ ID3D11DomainShader* FaceTessAtlasDS(int v) {
     std::lock_guard<std::mutex> lk(s_mx); Ensure(); return s_dsAtlas[v];
 }
 
+// ---------------------------------------------------------------- (07/11) MEDIDOR DE GPU de la teselacion
+// Agustin: "que se mejore el detalle y que no consuma todo el rendimiento". Hasta 4 dibujos teselados por cuadro llevan consultas:
+// marca de tiempo antes y despues del dibujo (con la repeticion en el atlas de las cabezas) y estadisticas del pipeline (triangulos que
+// entran al HS y triangulos que salen del DS). Se graban en el contexto del dibujo (diferido o no) y se leen en el inmediato al menos 3
+// Presents despues, sin esperar. Resumen cada 60 s: ms por dibujo, ms por cuadro estimado (por dibujos por cuadro) y cuanto multiplica
+// los triangulos, por separado cara y cuerpo. Todo-o-nada al crear (como el medidor del pasto, sin End sobre consultas nulas).
+static const int kTessTimers = 16;
+struct TessTimer { ID3D11Query* dis = nullptr; ID3D11Query* t0 = nullptr; ID3D11Query* t1 = nullptr; ID3D11Query* ps = nullptr; std::atomic<int> tag{-1}; int kind = 0; };
+static TessTimer s_tt[kTessTimers];
+static std::atomic<int> s_ttState{0}, s_ttFrame{0}, s_ttClaimFrame{-1}, s_ttClaimN{0};
+static std::mutex s_ttMx;
+static double s_ttMs[2] = {}, s_ttMsMax[2] = {}; static unsigned long long s_ttIn[2] = {}, s_ttOut[2] = {}; static int s_ttN[2] = {}, s_ttDisj = 0, s_ttLost = 0;
+static bool TessTimersReady() {
+    const int st = s_ttState.load(); if (st) return st == 1;
+    std::lock_guard<std::mutex> lk(s_ttMx);
+    if (s_ttState.load()) return s_ttState.load() == 1;
+    bool ok = g_dev.dev != nullptr; D3D11_QUERY_DESC qd = {};
+    for (auto& t : s_tt) { if (!ok) break;
+        qd.Query = D3D11_QUERY_TIMESTAMP_DISJOINT; if (FAILED(g_dev.dev->CreateQuery(&qd, &t.dis))) { t.dis = nullptr; ok = false; break; }
+        qd.Query = D3D11_QUERY_TIMESTAMP; if (FAILED(g_dev.dev->CreateQuery(&qd, &t.t0))) { t.t0 = nullptr; ok = false; break; }
+        if (FAILED(g_dev.dev->CreateQuery(&qd, &t.t1))) { t.t1 = nullptr; ok = false; break; }
+        qd.Query = D3D11_QUERY_PIPELINE_STATISTICS; if (FAILED(g_dev.dev->CreateQuery(&qd, &t.ps))) { t.ps = nullptr; ok = false; break; }
+    }
+    if (!ok) { for (auto& t : s_tt) { for (ID3D11Query** q : { &t.dis, &t.t0, &t.t1, &t.ps }) { if (*q) (*q)->Release(); *q = nullptr; } }
+               Log("teselacion GPU: no se pudieron crear las consultas (sin medidor)"); }
+    s_ttState.store(ok ? 1 : 2);
+    return ok;
+}
+static int TessTimerClaim(int kind) {
+    if (!TessTimersReady()) return -1;
+    const int f = s_ttFrame.load(std::memory_order_relaxed);
+    int cf = s_ttClaimFrame.load(); if (cf != f && s_ttClaimFrame.compare_exchange_strong(cf, f)) s_ttClaimN.store(0);
+    if (s_ttClaimN.fetch_add(1) >= 4) return -1;
+    for (int i = 0; i < kTessTimers; i++) { int e = -1; TessTimer& t = s_tt[i];
+        if (t.tag.compare_exchange_strong(e, -2)) {   // -2 = grabando
+            if (!t.dis || !t.t0 || !t.t1 || !t.ps) { t.tag = -1; return -1; }
+            t.kind = kind; return i; } }
+    return -1;
+}
+static void TessTimersRead() {   // contexto inmediato, en Present
+    const int f = s_ttFrame.load(std::memory_order_relaxed);
+    for (auto& t : s_tt) { const int tg = t.tag.load(); if (tg < 0 || tg > f - 3) continue;
+        if (f - tg > 90) { t.tag = -1; s_ttLost++; continue; }   // lista diferida que nunca se ejecuto
+        D3D11_QUERY_DATA_TIMESTAMP_DISJOINT d = {};
+        if (g_dev.imm->GetData(t.dis, &d, sizeof d, D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK) continue;
+        UINT64 a = 0, b = 0; D3D11_QUERY_DATA_PIPELINE_STATISTICS ps = {};
+        if (g_dev.imm->GetData(t.t0, &a, 8, D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK || g_dev.imm->GetData(t.t1, &b, 8, D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK
+            || g_dev.imm->GetData(t.ps, &ps, sizeof ps, D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK) continue;
+        const int k = t.kind; t.tag = -1;
+        if (d.Disjoint || !d.Frequency) { s_ttDisj++; continue; }
+        const double ms = b >= a ? (double)(b - a) * 1000.0 / (double)d.Frequency : 0.0;
+        s_ttMs[k] += ms; if (ms > s_ttMsMax[k]) s_ttMsMax[k] = ms; s_ttIn[k] += ps.HSInvocations; s_ttOut[k] += ps.CInvocations; s_ttN[k]++;
+    }
+}
+
 bool FaceTessBegin(ID3D11DeviceContext* c, uint64_t vsHash, ID3D11ShaderResourceView* seam, ID3D11ShaderResourceView* params, FaceTessScope& s, const std::string& faceId) {
     if (!seam || !params || !g_dev.dev) return false;
     const int v = vsHash == kVsHead ? 0 : vsHash == kVsFace ? 1 : vsHash == kVsBody ? 2 : -1;
@@ -246,6 +301,8 @@ bool FaceTessBegin(ID3D11DeviceContext* c, uint64_t vsHash, ID3D11ShaderResource
     }
     c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
     s.on = true; s.topo = topo; s.v = v;
+    s.tm = TessTimerClaim(v == 2 ? 1 : 0);
+    if (s.tm >= 0) { TessTimer& t = s_tt[s.tm]; c->Begin(t.dis); c->End(t.t0); c->Begin(t.ps); }
     (v == 2 ? s_drawsBody : s_draws).fetch_add(1, std::memory_order_relaxed);
     return true;
 }
@@ -253,6 +310,8 @@ bool FaceTessBegin(ID3D11DeviceContext* c, uint64_t vsHash, ID3D11ShaderResource
 void FaceTessEnd(ID3D11DeviceContext* c, FaceTessScope& s) {
     if (!s.on) return;
     s.on = false;
+    if (s.tm >= 0 && s.tm < kTessTimers) { TessTimer& t = s_tt[s.tm]; c->End(t.ps); c->End(t.t1); c->End(t.dis); t.tag.store(s_ttFrame.load(std::memory_order_relaxed)); }
+    s.tm = -1;
     c->IASetPrimitiveTopology(s.topo);
     c->HSSetShader(nullptr, nullptr, 0); c->DSSetShader(nullptr, nullptr, 0);
     ID3D11Buffer* nb = nullptr; ID3D11ShaderResourceView* nv = nullptr;
@@ -268,9 +327,22 @@ void FaceTessEnd(ID3D11DeviceContext* c, FaceTessScope& s) {
 
 void FaceTessPresent() {
     TessPlayerPresent();   // (04/11 m)
+    s_ttFrame.fetch_add(1, std::memory_order_relaxed);
+    if (s_ttState.load() == 1 && g_dev.imm) TessTimersRead();
     static int frames = 0;
     if (++frames < 3600) return;
     frames = 0;
+    {   // (07/11) medidor de GPU
+        const char* nm[2] = { "cara", "cuerpo" }; char l[512]; int k = 0;
+        const double dpf[2] = { s_draws.load() / 3600.0, s_drawsBody.load() / 3600.0 };   // dibujos teselados por cuadro (antes de vaciar los contadores abajo)
+        for (int i = 0; i < 2; i++) { if (!s_ttN[i]) continue;
+            const double avg = s_ttMs[i] / s_ttN[i];
+            k += snprintf(l + k, sizeof l - k, "%s %.3f ms por dibujo (max %.3f, %d muestras) x %.1f dibujos por cuadro = ~%.2f ms por cuadro, triangulos x%.1f (%.0f -> %.0f por dibujo); ",
+                nm[i], avg, s_ttMsMax[i], s_ttN[i], dpf[i], avg * dpf[i], s_ttIn[i] ? (double)s_ttOut[i] / (double)s_ttIn[i] : 0.0, (double)s_ttIn[i] / s_ttN[i], (double)s_ttOut[i] / s_ttN[i]);
+            s_ttMs[i] = s_ttMsMax[i] = 0; s_ttIn[i] = s_ttOut[i] = 0; s_ttN[i] = 0; }
+        if (k || s_ttDisj || s_ttLost) Log("teselacion GPU (60 s): %s%d sin dato (disjoint), %d perdidas", k ? l : "", s_ttDisj, s_ttLost);
+        s_ttDisj = s_ttLost = 0;
+    }
     { const int pb = s_pBound.exchange(0), po = s_pOff.exchange(0); size_t ns; { std::lock_guard<std::mutex> lk(s_pmx); ns = s_pSaved.size(); }
       if (pb || po || ns) Log("teselacion por jugador: %d caras guardadas; en 60 s %d dibujos con valores propios, %d sin teselar (apagada para ese jugador)", (int)ns, pb, po); }
     const int d = s_draws.exchange(0), st = s_skipTopo.exchange(0), ns = s_noShader.exchange(0), rl = s_relief.exchange(0), db = s_drawsBody.exchange(0);

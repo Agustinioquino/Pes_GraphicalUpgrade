@@ -32,7 +32,8 @@ struct FaceMesh {
     int id = 0, state = 0, tries = 0;   // 0 copiar indices, 1 leer indices / copiar vertices, 2 leer vertices, 3 listo, 4 descartada
     ID3D11Buffer* ib = nullptr; DXGI_FORMAT ibFmt = DXGI_FORMAT_UNKNOWN; UINT ibOff = 0, start = 0, count = 0; INT base = 0;
     ID3D11Buffer* vb[4] = {}; UINT stride[4] = {}, off[4] = {};
-    Elem pos, idx, wgt, uv;   // (04/11) uv: TEXCOORD0, solo para el volcado
+    Elem pos, idx, wgt, uv, nrm;   // (07/11) nrm: NORMAL0, para suavizar las costuras de textura (SeamWeights)
+      // (04/11) uv: TEXCOORD0, solo para el volcado
     bool dump = false; std::vector<uint32_t> tri;   // (04/11) volcar esta malla a OBJ (w354 = 1) y sus indices (relativos a vmin)
     ID3D11Buffer* stIB = nullptr; ID3D11Buffer* stVB[4] = {};
     UINT vmin = 0, nv = 0;
@@ -44,6 +45,7 @@ struct FaceMesh {
     int lids[4] = { -1, -1, -1, -1 }; UINT lidCap = 0;   // (02/11 h) parpados en la paleta y ultimo cuadro en que se leyo la paleta
     int shapeOff = -1; uint32_t huella = 0; ID3D11ShaderResourceView* shapeWr = nullptr;   // (04/11) gestos esculpidos (formas\<huella>.bin): primer float4 de esta malla en s_shapeData
     ID3D11Buffer* seamBuf = nullptr; ID3D11ShaderResourceView* seamSrv = nullptr; int seamN = 0;   // (04/11 b) teselacion (facetess.cpp): peso de borde por vertice (t119), solo piel de la cara; seamN = vertices con peso 0
+    int seamSoft = -1;   // (07/11) vertices de costuras de textura que ahora se redondean (-1 = sin normales leidas)
     int seamEye = 0;   // (04/11 h) vertices del borde de la abertura del ojo (peso 2: redondeo propio, fila 366)
     bool body = false;   // (04/11 g) piel del cuerpo (VS 1c02a92a): solo pesos de borde para la teselacion, sin nada de cara
     UINT cbv[28] = {}; std::vector<float> xferPs; uint64_t xferIb = 0; int xferUsed = 0; bool xferGate = false; ID3D11Buffer* cbNoShape = nullptr; ID3D11Buffer* cbTeeth = nullptr;
@@ -172,33 +174,85 @@ void FreeMesh(FaceMesh* m) {   // (04/11 b) todo lo de una malla que sale de la 
 // (04/11 h, Agustin: "se nota el bajo nivel poligonal en el lagrimal") eyeTag: en la cara, los vertices del BORDE de la pieza que caen
 // en la abertura del ojo (reposo |x| 1.0..5.0 cm, y 1.680..1.715, z > 0.10) y que no son duplicados de otra pieza llevan 2.0 en vez de 0:
 // el shader (fila 366) los deja redondear con su propio tope (lagrimal y contorno de los parpados)
-void SeamWeights(const std::vector<uint32_t>& tri, UINT vmin, UINT nv, const std::vector<float>& ps, std::vector<float>& w, int* nSeam, bool eyeTag = false, int* nEye = nullptr) {
+bool ReadNrm(const uint8_t* p, DXGI_FORMAT f, float o[4]) {   // (07/11) solo para comparar normales entre vertices de la misma malla
+    o[0] = o[1] = o[2] = 0.0f; o[3] = 1.0f;
+    switch (f) {
+    case DXGI_FORMAT_R32G32B32A32_FLOAT: memcpy(o, p, 16); return true;
+    case DXGI_FORMAT_R32G32B32_FLOAT: memcpy(o, p, 12); return true;
+    case DXGI_FORMAT_R16G16B16A16_FLOAT: for (int i = 0; i < 4; i++) { uint16_t h; memcpy(&h, p + 2 * i, 2); o[i] = Half(h); } return true;
+    case DXGI_FORMAT_R16G16B16A16_SNORM: for (int i = 0; i < 4; i++) { int16_t h; memcpy(&h, p + 2 * i, 2); o[i] = (std::max)(h / 32767.0f, -1.0f); } return true;
+    case DXGI_FORMAT_R16G16B16A16_UNORM: for (int i = 0; i < 4; i++) { uint16_t h; memcpy(&h, p + 2 * i, 2); o[i] = h / 65535.0f * 2.0f - 1.0f; } return true;
+    case DXGI_FORMAT_R8G8B8A8_SNORM: for (int i = 0; i < 4; i++) o[i] = (std::max)((int8_t)p[i] / 127.0f, -1.0f); return true;
+    case DXGI_FORMAT_R8G8B8A8_UNORM: for (int i = 0; i < 4; i++) o[i] = p[i] / 255.0f * 2.0f - 1.0f; return true;
+    case DXGI_FORMAT_B8G8R8A8_UNORM: o[0] = p[2] / 255.0f * 2.0f - 1.0f; o[1] = p[1] / 255.0f * 2.0f - 1.0f; o[2] = p[0] / 255.0f * 2.0f - 1.0f; return true;
+    case DXGI_FORMAT_R10G10B10A2_UNORM: { uint32_t u; memcpy(&u, p, 4); o[0] = (u & 1023) / 1023.0f * 2.0f - 1.0f; o[1] = ((u >> 10) & 1023) / 1023.0f * 2.0f - 1.0f; o[2] = ((u >> 20) & 1023) / 1023.0f * 2.0f - 1.0f; return true; }
+    default: return false;
+    }
+}
+// PESOS DE BORDE de la teselacion (t119): 0 = el vertice no se corre (borde de la pieza), 1 = se redondea, 1.25 = costura de textura suave
+// (redondeo sin relieve), 2 = borde del ojo (fila 366).
+// (07/11, Agustin: "no en todas las caras se ve bien") antes todo vertice duplicado (costura de textura: misma posicion, otra uv) iba a
+// 0, y como las dos copias tienen indices distintos sus aristas contaban como borde: cada costura de uv quedaba recta y facetada a lo
+// largo de la cara. Ahora las aristas se cuentan por POSICION (grupo de copias) y un grupo cuyas copias tienen la misma normal y los
+// mismos huesos (nrm / iv / wv) se redondea: el punto de Phong de una arista solo depende de sus dos extremos (posicion + normal), asi
+// que los dos lados de la costura caen en el mismo lugar y no se abre. Los grupos con normales distintas (arista dura) y los bordes de
+// verdad (arista con un solo triangulo: union con otra pieza, abertura del ojo, cuello) siguen en 0. Sin normales: como antes.
+void SeamWeights(const std::vector<uint32_t>& tri, UINT vmin, UINT nv, const std::vector<float>& ps, std::vector<float>& w, int* nSeam, bool eyeTag = false, int* nEye = nullptr,
+                 const float* nrm = nullptr, const uint32_t* iv = nullptr, const float* wv = nullptr, int* nSoft = nullptr) {
     w.assign(nv, 1.0f);
+    // grupos por posicion a 0.05 mm (gid = primer vertice del grupo)
+    std::vector<uint32_t> gid(nv), gsz(nv, 0); std::vector<uint8_t> hard(nv, 0);
+    {
+        std::unordered_map<uint64_t, uint32_t> pos; pos.reserve(nv);
+        for (UINT v = 0; v < nv; v++) {
+            const float* P = &ps[(size_t)v * 3];
+            const int64_t qx = (int64_t)llroundf(P[0] * 20000.0f), qy = (int64_t)llroundf(P[1] * 20000.0f), qz = (int64_t)llroundf(P[2] * 20000.0f);
+            uint64_t h = 0xcbf29ce484222325ULL; h = Fnv(h, (uint64_t)qx); h = Fnv(h, (uint64_t)qy); h = Fnv(h, (uint64_t)qz);
+            auto it = pos.find(h);
+            if (it == pos.end()) { pos[h] = v; gid[v] = v; }
+            else {
+                const uint32_t r = it->second; gid[v] = r;
+                bool same = nrm && iv && wv;
+                if (same) {
+                    const float* a = &nrm[(size_t)r * 3]; const float* b = &nrm[(size_t)v * 3];
+                    const float la = sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]), lb = sqrtf(b[0] * b[0] + b[1] * b[1] + b[2] * b[2]);
+                    same = la > 1e-4f && lb > 1e-4f && (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (la * lb) > 0.9995f;   // ~1.8 grados
+                    for (int k = 0; same && k < 4; k++) {
+                        const float wa = wv[(size_t)r * 4 + k], wb = wv[(size_t)v * 4 + k];
+                        if (fabsf(wa - wb) > 0.01f || (wa > 0.004f && iv[(size_t)r * 4 + k] != iv[(size_t)v * 4 + k])) same = false;
+                    }
+                }
+                if (!same) hard[r] = 1;
+            }
+            gsz[gid[v]]++;
+        }
+    }
+    // aristas por grupo: la costura de uv (dos copias de cada extremo) cuenta dos triangulos, no es borde
     std::unordered_map<uint64_t, int> edges; edges.reserve(tri.size());
     for (size_t t = 0; t + 2 < tri.size(); t += 3) {
         const uint32_t a = tri[t] - vmin, b = tri[t + 1] - vmin, c = tri[t + 2] - vmin;
-        if (a >= nv || b >= nv || c >= nv || a == b || b == c || a == c) continue;
+        if (a >= nv || b >= nv || c >= nv) continue;
+        const uint32_t ga = gid[a], gb = gid[b], gc = gid[c];
+        if (ga == gb || gb == gc || ga == gc) continue;
         auto E = [&](uint32_t x, uint32_t y) { if (x > y) std::swap(x, y); edges[((uint64_t)x << 32) | y]++; };
-        E(a, b); E(b, c); E(c, a);
+        E(ga, gb); E(gb, gc); E(gc, ga);
     }
-    std::vector<uint8_t> border(eyeTag ? nv : 0);
-    for (auto& kv : edges) if (kv.second == 1) { w[(UINT)(kv.first >> 32)] = 0; w[(UINT)(kv.first & 0xffffffffu)] = 0; if (eyeTag) { border[(UINT)(kv.first >> 32)] = 1; border[(UINT)(kv.first & 0xffffffffu)] = 1; } }
-    std::vector<uint8_t> dup(eyeTag ? nv : 0);
-    std::unordered_map<uint64_t, uint32_t> pos; pos.reserve(nv);
-    for (UINT v = 0; v < nv; v++) {   // posicion a 0.05 mm
-        const float* P = &ps[(size_t)v * 3];
-        const int64_t qx = (int64_t)llroundf(P[0] * 20000.0f), qy = (int64_t)llroundf(P[1] * 20000.0f), qz = (int64_t)llroundf(P[2] * 20000.0f);
-        uint64_t h = 0xcbf29ce484222325ULL; h = Fnv(h, (uint64_t)qx); h = Fnv(h, (uint64_t)qy); h = Fnv(h, (uint64_t)qz);
-        auto it = pos.find(h);
-        if (it == pos.end()) pos[h] = v; else { w[v] = 0; w[it->second] = 0; if (eyeTag) { dup[v] = 1; dup[it->second] = 1; } }
+    std::vector<uint8_t> border(nv, 0);
+    for (auto& kv : edges) if (kv.second == 1) { border[(UINT)(kv.first >> 32)] = 1; border[(UINT)(kv.first & 0xffffffffu)] = 1; }
+    int ne = 0, ns = 0;
+    for (UINT v = 0; v < nv; v++) {
+        const uint32_t g = gid[v];
+        if (border[g] || hard[g]) { w[v] = 0; continue; }
+        if (gsz[g] > 1) { w[v] = 1.25f; ns++; }   // costura suave (pes_face_tess.hlsli: Phong si, relieve no)
     }
-    int ne = 0;
-    if (eyeTag) for (UINT v = 0; v < nv; v++) {
-        if (!border[v] || dup[v]) continue;
+    if (eyeTag) for (UINT v = 0; v < nv; v++) {   // borde de la abertura del ojo (sin copias): peso 2
+        const uint32_t g = gid[v];
+        if (!border[g] || hard[g] || gsz[g] > 1) continue;
         const float* P = &ps[(size_t)v * 3]; const float ax = fabsf(P[0]);
         if (ax >= 0.010f && ax <= 0.050f && P[1] >= 1.680f && P[1] <= 1.715f && P[2] > 0.10f) { w[v] = 2.0f; ne++; }
     }
     if (nEye) *nEye = ne;
+    if (nSoft) *nSoft = nrm ? ns : -1;
     int n = 0; for (float f : w) if (f == 0) n++;
     if (nSeam) *nSeam = n;
 }
@@ -594,13 +648,14 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
         if (hi < lo) { Reject(m, "sin indices"); return; }
         m->vmin = lo; m->nv = hi - lo + 1;
         if (m->nv > 65536) { Reject(m, "demasiados vertices"); return; }
-        for (int s : { m->pos.slot, m->idx.slot, m->wgt.slot, m->dump ? m->uv.slot : -1 }) {
+        for (int s : { m->pos.slot, m->idx.slot, m->wgt.slot, m->nrm.slot, m->dump ? m->uv.slot : -1 }) {
             if (s < 0 || !m->vb[s] || m->stVB[s]) continue;
             D3D11_BUFFER_DESC d; m->vb[s]->GetDesc(&d);
             UINT used = 1;
             if (m->pos.slot == s) used = (std::max)(used, m->pos.off + FmtBytes(m->pos.fmt));
             if (m->idx.slot == s) used = (std::max)(used, m->idx.off + FmtBytes(m->idx.fmt));
             if (m->wgt.slot == s) used = (std::max)(used, m->wgt.off + FmtBytes(m->wgt.fmt));
+            if (m->nrm.slot == s) used = (std::max)(used, m->nrm.off + FmtBytes(m->nrm.fmt));
             if (m->dump && m->uv.slot == s) used = (std::max)(used, m->uv.off + FmtBytes(m->uv.fmt));
             used = (std::min)(used, m->stride[s] ? m->stride[s] : 1u);
             const UINT64 a = (UINT64)m->off[s] + (UINT64)((INT64)m->base + lo) * m->stride[s], b = a + (UINT64)(m->nv - 1) * m->stride[s] + used;
@@ -653,13 +708,20 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
             uvs.resize((size_t)m->nv * 2);
             for (UINT v = 0; v < m->nv; v++) ReadUV((const uint8_t*)mp[m->uv.slot].pData + (size_t)v * m->stride[m->uv.slot] + m->uv.off, m->uv.fmt, &uvs[(size_t)v * 2]);
         }
+        // (07/11) normales del modelo: las costuras de textura con la misma normal y los mismos huesos se redondean igual de los dos lados
+        std::vector<float> nrv;
+        if (ok && m->nrm.slot >= 0 && mapped[m->nrm.slot]) {
+            nrv.resize((size_t)m->nv * 3);
+            for (UINT v = 0; v < m->nv; v++) { float q[4]; if (!ReadNrm((const uint8_t*)mp[m->nrm.slot].pData + (size_t)v * m->stride[m->nrm.slot] + m->nrm.off, m->nrm.fmt, q)) { nrv.clear(); break; }
+                memcpy(&nrv[(size_t)v * 3], q, 12); }
+        }
         for (int s = 0; s < 4; s++) if (mapped[s]) imm->Unmap(m->stVB[s], 0);
         if (!ok) { Reject(m, "formato de posicion, huesos o pesos desconocido"); return; }
         if (m->body) {
             // (04/11 g, Agustin: "teselacion a las manos, brazos y piernas") PIEL DEL CUERPO: solo los pesos de borde (bordes de la pieza y
             // vertices duplicados = 0) en t119 y el cbuffer con vertices / primer indice (g_pesExprShape.y / .z, con el base del dibujo);
             // nada de cabeza, parpados ni formas. La paleta del cuerpo puede pasar de 32 huesos: no importa aca.
-            std::vector<float> w; SeamWeights(m->tri, m->vmin, m->nv, ps, w, &m->seamN);
+            std::vector<float> w; SeamWeights(m->tri, m->vmin, m->nv, ps, w, &m->seamN, false, nullptr, nrv.empty() ? nullptr : nrv.data(), iv.data(), wv.data(), &m->seamSoft);
             D3D11_BUFFER_DESC bd{}; bd.ByteWidth = (UINT)(w.size() * 4); bd.Usage = D3D11_USAGE_IMMUTABLE; bd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
             D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = w.data();
             if (SUCCEEDED(g_dev.dev->CreateBuffer(&bd, &sd, &m->seamBuf))) {
@@ -673,7 +735,7 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
             if (!m->cb || !m->seamSrv) { m->state = 4; m->why = m->cb ? "sin pesos de borde" : "sin cbuffer"; s_hist[3]++; return; }
             m->state = 3;
             static int nb = 0;
-            if (nb < 80) { nb++; Log("teselacion del cuerpo: malla %d: %u vertices, %u triangulos, alto %.2f..%.2f m, ancho %.2f m: teselable (%d vertices de borde)", m->id, m->nv, m->count / 3, ylo, yhi, xhi - xlo, m->seamN); }
+            if (nb < 80) { nb++; Log("teselacion del cuerpo: malla %d: %u vertices, %u triangulos, alto %.2f..%.2f m, ancho %.2f m: teselable (%d vertices de borde, %d en costuras suaves)", m->id, m->nv, m->count / 3, ylo, yhi, xhi - xlo, m->seamN, m->seamSoft); }
             return;
         }
         if (mx < 0 || mx > 31) { Reject(m, "indices de hueso fuera de la paleta de 32"); return; }
@@ -844,7 +906,7 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
         // (04/11 b) teselacion de la cara (facetess.cpp): solo la piel de la cara (no boca, no ojo, no pestanas / parpados finos,
         // no piezas chicas): pesos de borde por vertice en un Buffer<float> (t119 del VS)
         if (hd <= 31 && !eye && !mouth && !thin && m->nv >= 200 && g_dev.dev) {
-            std::vector<float> w; SeamWeights(m->tri, m->vmin, m->nv, ps, w, &m->seamN, true, &m->seamEye);
+            std::vector<float> w; SeamWeights(m->tri, m->vmin, m->nv, ps, w, &m->seamN, true, &m->seamEye, nrv.empty() ? nullptr : nrv.data(), iv.data(), wv.data(), &m->seamSoft);
             D3D11_BUFFER_DESC bd{}; bd.ByteWidth = (UINT)(w.size() * 4); bd.Usage = D3D11_USAGE_IMMUTABLE; bd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
             D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = w.data();
             if (SUCCEEDED(g_dev.dev->CreateBuffer(&bd, &sd, &m->seamBuf))) {
@@ -861,7 +923,7 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
         if (n++ < 80) {   // uso de cada hueso de la paleta (peso total / peso en la parte alta) para comparar con face_rig.py
             char l[1400]; int k = snprintf(l, sizeof l, "expresiones: malla de cara %d (%u indices, %u vertices, alto %.3f..%.3f m): hueso maximo %d -> cabeza en la paleta %d%s, parpados %d %d / %d %d, boca abajo %08X mitad %08X labio %u arriba %08X comisuras %d %d cejas %d %d%s%s |",
                                            m->id, m->count, m->nv, ylo, yhi, mx, m->head, m->head > 31 ? " (no es cara)" : thin ? " (fina: por vertices)" : mouth ? " (boca: lengua)" : "", lids[0], lids[1], lids[2], lids[3], jawFull, jawHalf, lipTop, lipUp, mus[0], mus[1], mus[2], mus[3], eye ? " (OJO)" : "", (!whole && !mouth && !eye && hd <= 31) ? " (pieza: sin boca/nariz/musculos)" : "");
-            if (m->seamSrv) k += snprintf(l + k, sizeof l - k, " teselable (%d vertices de borde, %d en el borde del ojo)", m->seamN, m->seamEye);
+            if (m->seamSrv) k += snprintf(l + k, sizeof l - k, " teselable (%d vertices de borde, %d en el borde del ojo, %d en costuras suaves)", m->seamN, m->seamEye, m->seamSoft);
             if (eye) k += snprintf(l + k, sizeof l - k, " ojos: izq (%.4f %.4f %.4f) r %.4f, der (%.4f %.4f %.4f) r %.4f", eyes[0], eyes[1], eyes[2], eyes[3], eyes[4], eyes[5], eyes[6], eyes[7]);
             for (int b = 0; b <= mx && k < (int)sizeof l - 24; b++) if (all[b] > 0) k += snprintf(l + k, sizeof l - k, " %d:%.0f/%.0f", b, all[b], top[b]);
             Log("%s", l);
@@ -1046,6 +1108,7 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
             if (e.idx == 0 && !_stricmp(e.sem.c_str(), "POSITION")) t = &m->pos;
             else if (e.idx == 0 && !_stricmp(e.sem.c_str(), "BLENDINDICES")) t = &m->idx;
             else if (e.idx == 0 && !_stricmp(e.sem.c_str(), "BLENDWEIGHT")) t = &m->wgt;
+            else if (e.idx == 0 && !_stricmp(e.sem.c_str(), "NORMAL")) t = &m->nrm;
             else if (e.idx == 0 && !_stricmp(e.sem.c_str(), "TEXCOORD")) t = &m->uv;
             if (t && e.slot < 4) { t->slot = (int)e.slot; t->off = o; t->fmt = (DXGI_FORMAT)e.fmt; }
         }
