@@ -1,0 +1,3 @@
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\facegen.cpp(173,71): error C2065: 'kVSLash': undeclared identifier [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\facegen.cpp(173,108): error C2065: 'kVSFaceAnim': undeclared identifier [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\facegen.cpp(173,127): error C7732: expected an expression before ']' [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
