@@ -65,6 +65,8 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
 //   180 = contraluz) | w297 altura (grados) | x298 intensidad (veces la luz de estudio sobre la piel) | y298 calidez (0 azul
 //   .. 1 naranja) | z298 luz de estudio que queda | w298 sombra trazada (0 = sin sombra)
 //   x319 icono de las luces en pantalla (DLL, overlay.cpp) | y319 relleno del estudio | z319 recorte del estudio
+//   (07/11, Agustin: angulo, sol o foco, volumetrica en el manual) x376 tipo (0 sol lejano, 1 foco) | y376 distancia del foco al
+//   jugador (m) | z376 apertura del cono (grados) | w376 luz volumetrica (fuerza) | x377 cielo en el manual | y377 densidad de la bruma
 struct PreOut { float4 c : SV_Target0; float4 s : SV_Target1; };
 
 float3 DecodeN(float2 uv) {   // normal del G-buffer (octaedro 10/10 + 2 bits), igual que en la pasada de luz 1f623
@@ -130,6 +132,45 @@ float PesTraceShadow(float3 Pv, float3 L, float rawNL, float zC, float zSgn, flo
   }
   float2 eM = saturate(min(uv, 1.0 - uv) * 10.0);
   return 1.0 - saturate(occ * saturate(shK) * eM.x * eM.y);
+}
+
+// (07/11) LUZ VOLUMETRICA de la luz de prueba (fila 376 w, 377 y): no hay shadow map en el editor, asi que se hace en pantalla:
+//  (a) bruma: lo que el aire entre la camara y la superficie dispersa hacia el ojo (Henyey-Greenstein g = 0.55, mas fuerte
+//      mirando hacia la luz), con la densidad y377 y el largo del rayo hasta la superficie (o 4 m en el fondo del editor);
+//  (b) haces: marcha de 16 pasos desde el pixel hacia la posicion de la luz en pantalla (sol lejano o foco) contando cuanto
+//      del camino esta libre de geometria (Mitchell 2007): el jugador tapa la luz y deja rayos alrededor de la silueta.
+//      Si la luz queda detras de la camara no hay haces (solo bruma). El ruido cambia por cuadro y lo promedia el TAA.
+float3 PesVolumetric(float2 uv, float2 pxy, float3 Pv, float zA, bool geo, float zSgn, float3 Lw, bool spot, float3 Pl, float3 col, float strength, float dens) {
+  if (strength <= 0.001) return 0.0;
+  float3 rayD = normalize(Pv);
+  float3 toL = spot ? normalize(Pl - Pv) : Lw;
+  float g = 0.55, cosT = dot(rayD, toL);
+  float phase = (1.0 - g * g) / (12.566 * pow(max(1.0 + g * g - 2.0 * g * cosT, 1e-3), 1.5));
+  float len = geo ? min(length(Pv), 12.0) : 4.0;
+  float d = max(dens, 0.0) * 0.35;
+  float haze = (1.0 - exp(-d * len)) * phase * 0.9;
+  // haces en pantalla
+  float shafts = 0.0;
+  float3 P = spot ? Pl : Lw * 50.0;
+  if (P.z * zSgn > 0.2) {
+    float2 sL = P.xy / (P.z * m_projectionParam.xy) + m_cameraCenterOffset.xy;
+    float2 uvL = sL * float2(0.5, -0.5) + 0.5;
+    float fr = floor(frac(m_timeParam.x * 0.25) * 4096.0);
+    float ign = frac(52.9829189 * frac(dot(pxy + 5.588238 * fr, float2(0.06711056, 0.00583715))));
+    float2 stp = (uvL - uv) / 16.0;
+    float acc = 0.0, wsum = 0.0, w = 1.0;
+    [unroll] for (int i = 0; i < 16; i++) {
+      float2 uvS = uv + stp * (i + ign);
+      float free = 1.0;
+      if (all(uvS >= 0.0) && all(uvS <= 1.0)) { float zS = LinZ(uvS) * zSgn; if (zS >= 0.1 && zS <= 60.0 && (!spot || zS < P.z * zSgn)) free = 0.0; }
+      acc += free * w; wsum += w; w *= 0.90;
+    }
+    float occ = acc / max(wsum, 1e-3);
+    // cerca del centro de la luz los haces son mas fuertes; de lejos en pantalla se desvanecen
+    float dl = length((uvL - uv) * float2(1.0, 0.5625));
+    shafts = occ * phase * (0.6 + 1.2 * exp(-dl * 3.0)) * (1.0 - exp(-d * (geo ? len : 6.0)));
+  }
+  return col * (haze + shafts) * strength * 0.45;
 }
 
 float3 PesTint(float warm) {   // azul frio .. naranja, luminancia 1
@@ -231,7 +272,9 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   if (E.x < 0.5 || !noSun) return o;
   float zC = LinZ(uv);
   float zSgn = zC < 0.0 ? -1.0 : 1.0, zA = abs(zC);
-  if (zA < 0.1 || zA > 60.0) return o;   // fondo del editor, sin geometria
+  float4 E4 = IniParams.Load(int2(376, 0)), E5 = IniParams.Load(int2(377, 0));
+  bool geo = !(zA < 0.1 || zA > 60.0);   // fondo del editor, sin geometria: solo recibe la luz volumetrica
+  if (!geo) { float zc = LinZ(float2(0.5, 0.5)); zSgn = (abs(zc) >= 0.1 && abs(zc) <= 60.0) ? (zc < 0.0 ? -1.0 : 1.0) : (m_projectionParam.z < 0.0 ? -1.0 : 1.0); zA = 4.0; zC = zA * zSgn; }
   // --- preset o manual ---
   // (01/11) 4 = estudio: luz principal con los sliders manuales (rumbo, altura, intensidad, calidez, sombra) + relleno del
   // lado opuesto (y319, sin sombra, apenas frio) + recorte desde atras (z319, contorno del pelo, orejas y mandibula), sin
@@ -252,6 +295,7 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   // (04/11 q, Agustin: "en el preset del dia por que no me permites rotar el sol") en los presets el Rumbo gira el sol alrededor del
   // jugador: se suma al rumbo del preset (0 = el del preset)
   if (preset != 0 && preset != 4) az += E.z;
+  if (preset == 0 && E5.x > 0.0) skyK = E5.x;   // (07/11) cielo en el manual
   shK *= shMul;
   bool studio = preset == 4;
   // --- referencia de intensidad: la irradiancia de estudio mas alta sobre la piel, suavizada en el tiempo (pasada 0, t6) ---
@@ -264,7 +308,21 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   float3 Pv = float3(pp * zC, zC);
   float3 V = -normalize(float3(pp, 1));
   float3 n = DecodeN(uv);
-  float3 L = PesDirL(az, el, zSgn);
+  float3 Lw = PesDirL(az, el, zSgn), L = Lw;
+  // (07/11) foco en el manual: una luz con posicion a y376 m del jugador (el punto del centro de la pantalla) en la direccion del
+  // rumbo / altura, cono de z376 grados con borde suave y caida con el cuadrado de la distancia (1 en el jugador)
+  bool spot = preset == 0 && E4.x > 0.5;
+  float3 Pl = 0.0, lcol = sunC;
+  if (spot) {
+    float zCen = LinZ(float2(0.5, 0.5)), zCA = abs(zCen);
+    float3 Pc = (zCA >= 0.1 && zCA <= 60.0) ? float3(-m_cameraCenterOffset.xy * m_projectionParam.xy * zCen, zCen) : float3(0, 0, 1.5 * zSgn);
+    float distL = clamp(E4.y > 0 ? E4.y : 2.0, 0.3, 10.0), ap = clamp(E4.z > 0 ? E4.z : 45.0, 5.0, 150.0);
+    Pl = Pc + Lw * distL;
+    float3 dv = Pl - Pv; float d2 = max(dot(dv, dv), 1e-4);
+    L = dv * rsqrt(d2);
+    float ca = cos(radians(ap * 0.5)), cone = smoothstep(ca, lerp(ca, 1.0, 0.35), dot(-L, Lw));
+    lcol = sunC * cone * saturate(distL * distL / d2);
+  }
   bool skin = IsSkin(uv);
   float4 mat = inMat.SampleLevel(sPoint, uv, 0);
   float rough = clamp(mat.x, 0.08, 1.0);
@@ -337,9 +395,10 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
     }
   }
   float3 dif = 0, spec = 0;
-  float sh = PesTraceShadow(Pv, L, dot(n, L), zC, zSgn, zA, uv, pos.xy, shK);
-  PesOneLight(L, sunC, sh, n, V, skin, rough, trans, thickM, silK, legacy, dif, spec);
-  if (studio) {
+  float sh = geo ? PesTraceShadow(Pv, L, dot(n, L), zC, zSgn, zA, uv, pos.xy, shK) : 1.0;
+  if (geo) PesOneLight(L, lcol, sh, n, V, skin, rough, trans, thickM, silK, legacy, dif, spec);
+  if (!geo) { dif = 0; spec = 0; }
+  else if (studio) {
     float fillK = E3.y, rimK = E3.z;
     if (fillK > 0.001) {   // relleno: del otro lado de la camara, bajo, un poco frio, sin sombra
       float azF = (az >= 0 ? -1.0 : 1.0) * clamp(90.0 - abs(az) * 0.5, 25.0, 70.0);
@@ -365,8 +424,10 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
     float up = n.y * 0.5 + 0.5;   // normal en vista: y arriba
     dif += skyC * up + gndC * (1.0 - up);
   }
-  o.c = float4(c0 * saturate(keep) + dif, 1);
-  o.s = float4(s0 * saturate(keep) + spec * specMul, 1);
+  // (07/11) luz volumetrica (bruma + haces hacia la luz), tambien sobre el fondo del editor
+  float3 vol = PesVolumetric(uv, pos.xy, Pv, zA, geo, zSgn, Lw, spot, Pl, sunC, E4.w, E5.y > 0 ? E5.y : 0.5);
+  o.c = float4(c0 * (geo ? saturate(keep) : 1.0) + dif + vol, 1);
+  o.s = float4(s0 * (geo ? saturate(keep) : 1.0) + spec * specMul, 1);
   return o;
 }
 #else
