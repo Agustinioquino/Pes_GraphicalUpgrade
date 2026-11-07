@@ -23,6 +23,25 @@ std::vector<std::string> g_compileErrors;
 std::mutex g_errMutex;
 
 // ---------------------------------------------------------------- hash igual al de 3DMigoto (FNV-1 de 64 bits, base cero)
+// (07/11) PS de la camiseta: 0 / 1 / 2 = 7e64 / a41e / c7ae (los de siempre); + 8 = variante sin SV_IsFrontFace (de lejos o
+// del arbitro, sin confirmar: se anota la primera vez que se dibuja). -1 = no es camiseta
+static int ShirtPSKind(uint64_t h) {
+    switch (h) {
+    case 0x7e647d9c43b453f9ULL: return 0;
+    case 0xa41e7343f874154fULL: return 1;
+    case 0xc7ae89b63e889007ULL: return 2;
+    case 0xad33f4525eda9dbaULL: return 8 + 0;
+    case 0xc4ab9c1533939fedULL: return 8 + 1;
+    case 0xbb02fed5bcfdd140ULL: return 8 + 2;
+    default: return -1;
+    }
+}
+static void ShirtPSNoteNew(uint64_t h, UINT verts) {
+    static std::atomic<int> seen[3];
+    const int k = h == 0xad33f4525eda9dbaULL ? 0 : h == 0xc4ab9c1533939fedULL ? 1 : 2;
+    if (seen[k].fetch_add(1) == 0) Log("torso bajo la camiseta: camiseta con el PS %016llx (variante de lejos / arbitro), %u indices", (unsigned long long)h, verts);
+}
+
 static uint64_t Fnv64(const void* data, size_t len) {
     const uint8_t* p = (const uint8_t*)data; uint64_t h = 0;
     for (size_t i = 0; i < len; i++) { h *= 0x100000001b3ULL; h ^= p[i]; }
@@ -1345,9 +1364,13 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     }
     // (27/10 c) hay camisetas en escena (PS de la camiseta 7e64 / a41e / c7ae): el torso se mete bajo la tela (fila 320, z la pone
     // la DLL en Present); sin camiseta (menu Apariencia / Fisico, tecla 4 de Sider) el torso queda entero, sin escalon en la costura
-    if (ps && (ps->hash == 0x7e647d9c43b453f9ULL || ps->hash == 0xa41e7343f874154fULL || ps->hash == 0xc7ae89b63e889007ULL)) {
+    // (07/11) Agustin: de lejos el torso atraviesa la camiseta. El catalogo tiene otras 3 variantes del G-buffer del kit con las
+    // mismas texturas (patron + marking / badge) pero sin SV_IsFrontFace (no se dibujaron en la captura del menu): candidatas a la
+    // camiseta de lejos / del arbitro. Sin ellas el personaje no entra en la lista y su torso queda entero (sin x320).
+    if (const int sk = ps ? ShirtPSKind(ps->hash) : -1; sk >= 0) {
         g_shirtSeen.store(true, std::memory_order_relaxed);
-        TorsoShirtNote(c, (ps->hash == 0x7e647d9c43b453f9ULL ? 0 : ps->hash == 0xa41e7343f874154fULL ? 1 : 2) | ((t_drawVerts == 7284 || t_drawVerts == 6006 || t_drawVerts == 7512 || t_drawVerts == 5550) ? 4 : 0));   // (01/11) +4 = camiseta ajustada (indices de [shirt_tight] detect de cloth.ini)   // (31/10 b) camiseta por jugador
+        if (sk >= 8) ShirtPSNoteNew(ps->hash, t_drawVerts);
+        TorsoShirtNote(c, (sk & 3) | ((t_drawVerts == 7284 || t_drawVerts == 6006 || t_drawVerts == 7512 || t_drawVerts == 5550) ? 4 : 0));   // (01/11) +4 = camiseta ajustada (indices de [shirt_tight] detect de cloth.ini)   // (31/10 b) camiseta por jugador
     }
     // 19/10: SSS separable en pantalla antes de la composicion: la irradiancia (t9) llega ya difundida sobre la piel
     if (ps && (ps->hash == 0x619b86cb5691cdceULL || ps->hash == 0xf807e74d5b900a15ULL) && ps->repl) {
@@ -1606,7 +1629,7 @@ template<int V> static void STDMETHODCALLTYPE hk_DrawIdx(ID3D11DeviceContext* c,
       if (g_grassProbeOn) CatalogGrassDraw(c, gvs, a, b, d);
       if (gvs && gvs->hash == 0x498b30bad256e8edULL) GrassOnDraw(c, gvs, cg.ps, a, b, d); else GrassClearSkip();   // (2/11 b) la omision x178 es solo de ESTE dibujo
       if (gvs && gvs->hash == 0x1c02a92ab4ae3362ULL) BodyOnDraw(c, a, b, d);   // (25/10) piel del cuerpo -> la ropa choca con ella (es fisica: no depende de "Ver original")
-      else if (cg.ps && (cg.ps->hash == 0x7e647d9c43b453f9ULL || cg.ps->hash == 0xa41e7343f874154fULL || cg.ps->hash == 0xc7ae89b63e889007ULL) && g_cfg.live[327][3] > 0.5f) BodyOnDraw(c, a, b, d, 1);   // (27/10 d) camiseta: medicion contra el torso
+      else if (cg.ps && ShirtPSKind(cg.ps->hash) >= 0 && g_cfg.live[327][3] > 0.5f) BodyOnDraw(c, a, b, d, 1);   // (27/10 d) camiseta: medicion contra el torso
       if (g_autoDumpAny) InspectAutoDump(c, cg.ps); }
     t_drawStart = b; t_drawBase = d;
     GrassStScope gst; GrassGameStates(c, gst);   // (26/10 g) solo el pasto del juego del G-buffer (lo marca GrassOnDraw)
