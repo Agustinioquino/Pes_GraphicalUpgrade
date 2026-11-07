@@ -38,11 +38,14 @@ const Limit kLimits[] = {
     // Ropa con fisica (cloth-mod): fuera, como en los paquetes anteriores
     { 70, 3, false, 0 }, { 78, 0, false, 0 }, { 79, 0, false, 0 }, { 80, 1, false, 0 }, { 255, 2, false, 0 }, { 256, 0, false, 0 },
     { 352, 3, false, 0 }, { 353, 3, false, 0 },
+    // Viento del pelo y arrugas de la ropa "desde la fisica": dependen del cloth-mod (no es de este paquete)
+    { 24, -1, false, 0 }, { 25, 0, false, 0 }, { 23, 0, false, 0 }, { 23, 1, false, 0 }, { 69, -1, false, 0 }, { 80, 0, false, 0 },
 };
 // grupos del menu que no van (id = nombre de la seccion sin "Menu")
 const char* const kHiddenGroups[] = {
     "GITemporal", "Volumetric", "FaceTess", "ExprShow", "ExprGani", "CamaraLibre", "CamaraLenta", "TorsoOriginal",
     "PerfMeter", "DebugView", "DiagHooks",
+    "HairWind", "KitWrinkles",
 };
 
 bool Fixed(int idx, int comp) {

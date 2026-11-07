@@ -29,10 +29,11 @@ PARAMS = {   # filas de parametros (mismos valores que fija public.cpp + prefere
     'x348': '0', 'y348': '0', 'z348': '0', 'w348': '0',   # musculos de la cara
     'x350': '0',                                  # abrir la boca: por shader (sin girar huesos)
     'y263': '0',                                  # respiracion
+    'w24': '0', 'w69': '0', 'x80': '0',           # viento del pelo y arrugas desde la fisica de la ropa (cloth-mod): fuera
     'z352': '0',                                  # cuello: el paquete lleva TorsoBody_cuello 1.16 (corta la cara); el hundido z352 es para 1.19
 }
 HIDDEN = {'GITemporal', 'Volumetric', 'FaceTess', 'ExprShow', 'ExprGani', 'CamaraLibre', 'CamaraLenta', 'TorsoOriginal',
-          'PerfMeter', 'DebugView', 'DiagHooks'}
+          'PerfMeter', 'DebugView', 'DiagHooks', 'HairWind', 'KitWrinkles'}
 
 
 def make_ini():
