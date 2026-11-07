@@ -128,6 +128,7 @@ static void LogCrash(EXCEPTION_POINTERS* ep, const char* kind) {
             }
         }
     }
+    if (!strcmp(kind, "CIERRE DEL JUEGO")) GpuMeterCrashInfo(g_log, ep);   // (07/11) ultimas destrucciones de recursos D3D11 (gpumeter.cpp)
     MemCrashInfo(g_log, ep);   // (26/10) mapa de memoria, quien la toco, dlmalloc y el final de sider.log (memwatch.cpp)
     fflush(g_log);
     if (locked) g_logMutex.unlock();

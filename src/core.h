@@ -489,7 +489,7 @@ bool MouthMaskOn(); ID3D11RenderTargetView* MouthMaskBegin(ID3D11RenderTargetVie
 ID3D11ShaderResourceView* MouthMaskSRV(); void MouthMaskPresent(); void MouthMaskReloadShaders();
 // (07/11) medidor de VRAM y de costo en la GPU (gpumeter.cpp)
 enum { kGzSSSS, kGzGTAO, kGzSSGI, kGzLightMeter, kGzBody, kGzPitchWear, kGzGrass, kGzFaceGen, kGzCarasHd, kGzRing, kGzFrameCopy, kGzOverlay, kGzGlass, kGpuZoneN };
-void GpuMeterHookDevice(ID3D11Device* d); void GpuMeterPresent(); std::string GpuMeterSummary();
+void GpuMeterHookDevice(ID3D11Device* d); void GpuMeterPresent(); std::string GpuMeterSummary(); void GpuMeterCrashInfo(FILE* f, EXCEPTION_POINTERS* ep);
 int GpuZoneBegin(ID3D11DeviceContext* c, int zone); void GpuZoneEnd(ID3D11DeviceContext* c, int idx);
 struct GpuZoneScope { ID3D11DeviceContext* c; int i; GpuZoneScope(ID3D11DeviceContext* c_, int z) : c(c_), i(GpuZoneBegin(c_, z)) {} ~GpuZoneScope() { GpuZoneEnd(c, i); } };
 void HeadShadowPresent(); int HeadShadowSlots(); bool HeadShadowBodyOn(); ID3D11ShaderResourceView* HeadShadowSRV(); ID3D11DepthStencilView* HeadShadowDSV();

@@ -63,8 +63,8 @@ static uint64_t TexBytes(DXGI_FORMAT f, UINT w, UINT h, UINT d, UINT mips, UINT 
 }
 
 // ---------------------------------------------------------------- registro de recursos vivos
-enum { kCatTex, kCatRT, kCatUAV, kCatMesh, kCatCB, kCatBuf, kCatStaging, kCatN };
-static const char* const kCatName[kCatN] = { "texturas", "targets", "UAV", "mallas", "cbuffers", "buffers", "staging (RAM)" };
+enum { kCatTex, kCatRT, kCatUAV, kCatMesh, kCatCB, kCatBuf, kCatStaging, kCatView, kCatN };
+static const char* const kCatName[kCatN] = { "texturas", "targets", "UAV", "mallas", "cbuffers", "buffers", "staging (RAM)", "vistas" };
 static int Cat(bool tex, UINT bind, D3D11_USAGE usage) {
     if (usage == D3D11_USAGE_STAGING) return kCatStaging;
     if (bind & (D3D11_BIND_RENDER_TARGET | D3D11_BIND_DEPTH_STENCIL)) return kCatRT;
@@ -75,14 +75,15 @@ static int Cat(bool tex, UINT bind, D3D11_USAGE usage) {
     return kCatBuf;
 }
 enum { kOwnGame, kOwnOther, kOwnMod };
-struct LiveRes { uint64_t bytes; int cat; int owner; int otherIdx; uintptr_t frames[4]; };
+struct LiveRes { uint64_t bytes; int cat; int owner; int otherIdx; uintptr_t frames[4]; void* parent; int frame; };
 // a proposito sin destruir (new y nunca delete): el juego libera recursos despues del final de la DLL al salir
 static std::mutex* s_mx = new std::mutex;
 static std::unordered_map<void*, LiveRes>* s_live = new std::unordered_map<void*, LiveRes>;
 static std::vector<std::string>* s_otherNames = new std::vector<std::string>;
+static std::unordered_map<void*, int>* s_viewsOf = new std::unordered_map<void*, int>;   // recurso -> vistas vivas que lo usan
 static std::unordered_map<uintptr_t, int>* s_retCache = new std::unordered_map<uintptr_t, int>;   // direccion de retorno -> dueno
 static uintptr_t s_modB = 0, s_modE = 0, s_exeB = 0, s_exeE = 0;
-static std::atomic<bool> s_on{false};
+static std::atomic<bool> s_on{false}; static std::atomic<int> s_frameNo{0};
 static std::atomic<uint64_t> s_created{0}, s_destroyed{0}, s_noNotify{0};
 
 static void ImageRange(HMODULE m, uintptr_t& b, uintptr_t& e) {
@@ -113,13 +114,36 @@ static int OwnerOf(uintptr_t ret, int& otherIdx) {   // sin s_mx tomado (GetModu
     if (idx >= 0) { otherIdx = idx; return kOwnOther; }
     return kOwnGame;
 }
+// (07/11, pedido del hilo del cesped) anillo con las ultimas 128 destrucciones, para el informe de un cierre: puntero, tipo,
+// tamano, quien lo creo, cuadro, hilo y la pila de quien lo libero. Y aviso si se destruye un recurso que todavia tiene vistas
+// vivas (una vista guarda una referencia al recurso: si el recurso muere antes, alguien hizo un Release de mas).
+struct DeadRec { void* p; uint64_t bytes; int cat, owner, frameMade, frameDead, liveViews; DWORD tid; uintptr_t made; uintptr_t st[8]; };
+static const int kDead = 128;
+static DeadRec* s_dead = new DeadRec[kDead](); static std::atomic<unsigned> s_deadN{0};
+static std::atomic<int> s_orphanEvents{0};
 static void WINAPI OnDestroyed(void* p) {
-    std::lock_guard<std::mutex> lk(*s_mx);
-    if (s_live->erase(p)) s_destroyed.fetch_add(1, std::memory_order_relaxed);
+    LiveRes lr{}; bool had = false; int views = 0;
+    {   std::lock_guard<std::mutex> lk(*s_mx);
+        auto it = s_live->find(p);
+        if (it != s_live->end()) { lr = it->second; had = true; s_live->erase(it); s_destroyed.fetch_add(1, std::memory_order_relaxed); }
+        auto v = s_viewsOf->find(p); if (v != s_viewsOf->end()) { views = v->second; s_viewsOf->erase(v); }
+        if (had && lr.cat == kCatView && lr.parent) { auto w = s_viewsOf->find(lr.parent); if (w != s_viewsOf->end() && --w->second <= 0) s_viewsOf->erase(w); }
+    }
+    if (!had) return;
+    const unsigned slot = s_deadN.fetch_add(1, std::memory_order_relaxed) % kDead;
+    DeadRec& d = s_dead[slot];
+    d.p = p; d.bytes = lr.bytes; d.cat = lr.cat; d.owner = lr.owner; d.frameMade = lr.frame; d.frameDead = s_frameNo.load(std::memory_order_relaxed);
+    d.liveViews = views; d.tid = GetCurrentThreadId(); d.made = lr.frames[0];
+    void* fr[8] = {}; USHORT n = RtlCaptureStackBackTrace(1, 8, fr, nullptr);
+    for (int i = 0; i < 8; i++) d.st[i] = i < n ? (uintptr_t)fr[i] : 0;
+    if (views > 0 && s_orphanEvents.fetch_add(1) < 20)
+        Log("medidor: ALERTA recurso %p (%s, %.1f KB, creado por %s) destruido con %d vista(s) viva(s): posible Release de mas (si sale en cada liberacion normal, es el orden del runtime y no sirve). Pila: %s | %s | %s | %s",
+            p, kCatName[lr.cat], double(lr.bytes) / 1024.0, lr.owner == kOwnMod ? "el mod" : lr.owner == kOwnOther ? "otra DLL" : "el juego", views,
+            ModOff((void*)d.st[0]).c_str(), ModOff((void*)d.st[1]).c_str(), ModOff((void*)d.st[2]).c_str(), ModOff((void*)d.st[3]).c_str());
 }
-static void Track(ID3D11DeviceChild* r, uint64_t bytes, int cat, uintptr_t ret) {
+static void Track(ID3D11DeviceChild* r, uint64_t bytes, int cat, uintptr_t ret, void* parent = nullptr) {
     if (!r || !s_on.load(std::memory_order_relaxed)) return;
-    LiveRes lr{}; lr.bytes = bytes; lr.cat = cat;
+    LiveRes lr{}; lr.bytes = bytes; lr.cat = cat; lr.parent = parent; lr.frame = s_frameNo.load(std::memory_order_relaxed);
     lr.owner = OwnerOf(ret, lr.otherIdx);
     if (lr.owner == kOwnMod) {   // pila: quien pidio el recurso (ret) y las siguientes direcciones dentro del mod
         void* fr[16] = {}; USHORT n = RtlCaptureStackBackTrace(0, 16, fr, nullptr); int k = 0;
@@ -129,7 +153,10 @@ static void Track(ID3D11DeviceChild* r, uint64_t bytes, int cat, uintptr_t ret) 
     }
     ID3DDestructionNotifier* dn = nullptr;
     if (FAILED(r->QueryInterface(__uuidof(ID3DDestructionNotifier), (void**)&dn)) || !dn) { s_noNotify.fetch_add(1, std::memory_order_relaxed); return; }
-    { std::lock_guard<std::mutex> lk(*s_mx); (*s_live)[(void*)r] = lr; }
+    {   std::lock_guard<std::mutex> lk(*s_mx);
+        auto ex = s_live->find((void*)r);
+        if (ex != s_live->end() && ex->second.cat == kCatView && ex->second.parent) { auto w = s_viewsOf->find(ex->second.parent); if (w != s_viewsOf->end() && --w->second <= 0) s_viewsOf->erase(w); }   // direccion reusada sin aviso
+        (*s_live)[(void*)r] = lr; if (cat == kCatView && parent) (*s_viewsOf)[parent]++; }
     UINT id = 0;
     if (FAILED(dn->RegisterDestructionCallback(&OnDestroyed, (void*)r, &id))) {
         std::lock_guard<std::mutex> lk(*s_mx); s_live->erase((void*)r); s_noNotify.fetch_add(1, std::memory_order_relaxed);
@@ -141,6 +168,11 @@ using PFN_CBuf = HRESULT(STDMETHODCALLTYPE*)(ID3D11Device*, const D3D11_BUFFER_D
 using PFN_CT1 = HRESULT(STDMETHODCALLTYPE*)(ID3D11Device*, const D3D11_TEXTURE1D_DESC*, const D3D11_SUBRESOURCE_DATA*, ID3D11Texture1D**);
 using PFN_CT2 = HRESULT(STDMETHODCALLTYPE*)(ID3D11Device*, const D3D11_TEXTURE2D_DESC*, const D3D11_SUBRESOURCE_DATA*, ID3D11Texture2D**);
 using PFN_CT3 = HRESULT(STDMETHODCALLTYPE*)(ID3D11Device*, const D3D11_TEXTURE3D_DESC*, const D3D11_SUBRESOURCE_DATA*, ID3D11Texture3D**);
+using PFN_SRV = HRESULT(STDMETHODCALLTYPE*)(ID3D11Device*, ID3D11Resource*, const D3D11_SHADER_RESOURCE_VIEW_DESC*, ID3D11ShaderResourceView**);
+using PFN_UAV = HRESULT(STDMETHODCALLTYPE*)(ID3D11Device*, ID3D11Resource*, const D3D11_UNORDERED_ACCESS_VIEW_DESC*, ID3D11UnorderedAccessView**);
+using PFN_RTV = HRESULT(STDMETHODCALLTYPE*)(ID3D11Device*, ID3D11Resource*, const D3D11_RENDER_TARGET_VIEW_DESC*, ID3D11RenderTargetView**);
+using PFN_DSV = HRESULT(STDMETHODCALLTYPE*)(ID3D11Device*, ID3D11Resource*, const D3D11_DEPTH_STENCIL_VIEW_DESC*, ID3D11DepthStencilView**);
+static PFN_SRV o_SRV = nullptr; static PFN_UAV o_UAV = nullptr; static PFN_RTV o_RTV = nullptr; static PFN_DSV o_DSV = nullptr;
 static PFN_CBuf o_CBuf = nullptr; static PFN_CT1 o_CT1 = nullptr; static PFN_CT2 o_CT2 = nullptr; static PFN_CT3 o_CT3 = nullptr;
 
 static HRESULT STDMETHODCALLTYPE hk_CBuf(ID3D11Device* d, const D3D11_BUFFER_DESC* desc, const D3D11_SUBRESOURCE_DATA* init, ID3D11Buffer** out) {
@@ -168,6 +200,22 @@ static HRESULT STDMETHODCALLTYPE hk_CT3(ID3D11Device* d, const D3D11_TEXTURE3D_D
     return hr;
 }
 
+static HRESULT STDMETHODCALLTYPE hk_SRV(ID3D11Device* d, ID3D11Resource* r, const D3D11_SHADER_RESOURCE_VIEW_DESC* desc, ID3D11ShaderResourceView** out) {
+    uintptr_t ret = (uintptr_t)_ReturnAddress(); HRESULT hr = o_SRV(d, r, desc, out);
+    if (SUCCEEDED(hr) && out && *out) Track(*out, 0, kCatView, ret, r); return hr;
+}
+static HRESULT STDMETHODCALLTYPE hk_UAV(ID3D11Device* d, ID3D11Resource* r, const D3D11_UNORDERED_ACCESS_VIEW_DESC* desc, ID3D11UnorderedAccessView** out) {
+    uintptr_t ret = (uintptr_t)_ReturnAddress(); HRESULT hr = o_UAV(d, r, desc, out);
+    if (SUCCEEDED(hr) && out && *out) Track(*out, 0, kCatView, ret, r); return hr;
+}
+static HRESULT STDMETHODCALLTYPE hk_RTV(ID3D11Device* d, ID3D11Resource* r, const D3D11_RENDER_TARGET_VIEW_DESC* desc, ID3D11RenderTargetView** out) {
+    uintptr_t ret = (uintptr_t)_ReturnAddress(); HRESULT hr = o_RTV(d, r, desc, out);
+    if (SUCCEEDED(hr) && out && *out) Track(*out, 0, kCatView, ret, r); return hr;
+}
+static HRESULT STDMETHODCALLTYPE hk_DSV(ID3D11Device* d, ID3D11Resource* r, const D3D11_DEPTH_STENCIL_VIEW_DESC* desc, ID3D11DepthStencilView** out) {
+    uintptr_t ret = (uintptr_t)_ReturnAddress(); HRESULT hr = o_DSV(d, r, desc, out);
+    if (SUCCEEDED(hr) && out && *out) Track(*out, 0, kCatView, ret, r); return hr;
+}
 static bool HookOne(void* target, void* detour, void** orig, const char* name) {
     if (!target) return false;
     MH_STATUS s = MH_CreateHook(target, detour, orig);
@@ -187,8 +235,15 @@ void GpuMeterHookDevice(ID3D11Device* d) {   // desde HookDevice (una vez, antes
     n += HookOne(vt[4], (void*)&hk_CT1, (void**)&o_CT1, "CreateTexture1D");
     n += HookOne(vt[5], (void*)&hk_CT2, (void**)&o_CT2, "CreateTexture2D");
     n += HookOne(vt[6], (void*)&hk_CT3, (void**)&o_CT3, "CreateTexture3D");
+    int nv = 0;
+    if (n == 4) {   // vistas: solo para el anillo de destrucciones y la alerta de Release de mas (no ocupan VRAM propia)
+        nv += HookOne(vt[7], (void*)&hk_SRV, (void**)&o_SRV, "CreateShaderResourceView");
+        nv += HookOne(vt[8], (void*)&hk_UAV, (void**)&o_UAV, "CreateUnorderedAccessView");
+        nv += HookOne(vt[9], (void*)&hk_RTV, (void**)&o_RTV, "CreateRenderTargetView");
+        nv += HookOne(vt[10], (void*)&hk_DSV, (void**)&o_DSV, "CreateDepthStencilView");
+    }
     s_on.store(n == 4);
-    Log("medidor: %d de 4 creadores de recursos enganchados (memoria por dueno %s)", n, n == 4 ? "prendida" : "apagada");
+    Log("medidor: %d de 4 creadores de recursos y %d de 4 de vistas enganchados (memoria por dueno %s)", n, nv, n == 4 ? "prendida" : "apagada");
 }
 
 // ---------------------------------------------------------------- mapa del enlazador (d3d11.map) para nombrar archivos del mod
@@ -333,6 +388,7 @@ std::string GpuMeterSummary() { return s_summary; }
 
 void GpuMeterPresent() {
     if (!g_cfg.meterOn || !g_dev.imm) return;
+    s_frameNo.fetch_add(1, std::memory_order_relaxed);
     const bool want = g_cfg.live[375][0] > 0.5f;
     static bool wasOn = false;
     if (want != wasOn) { wasOn = want; Log("medidor: %s (x375)", want ? "prendido" : "apagado"); if (!want) s_summary.clear(); }
@@ -361,8 +417,8 @@ void GpuMeterPresent() {
         std::lock_guard<std::mutex> lk(*s_mx);
         for (auto& kv : *s_live) { const LiveRes& r = kv.second;
             own[r.owner][r.cat] += r.bytes; cnt[r.owner]++;
-            if (r.owner == kOwnMod && r.cat != kCatStaging) { bool vl = false; std::string k = ModKey(r, vl); modBy[k] += r.bytes; modCnt[k]++; if (vl) loaderBytes += r.bytes; }
-            if (r.owner == kOwnOther && r.cat != kCatStaging && r.otherIdx >= 0 && r.otherIdx < (int)s_otherNames->size()) otherBy[(*s_otherNames)[r.otherIdx]] += r.bytes; }
+            if (r.owner == kOwnMod && r.cat != kCatStaging && r.cat != kCatView) { bool vl = false; std::string k = ModKey(r, vl); modBy[k] += r.bytes; modCnt[k]++; if (vl) loaderBytes += r.bytes; }
+            if (r.owner == kOwnOther && r.cat != kCatStaging && r.cat != kCatView && r.otherIdx >= 0 && r.otherIdx < (int)s_otherNames->size()) otherBy[(*s_otherNames)[r.otherIdx]] += r.bytes; }
     }
     auto vramOf = [&](int o) { uint64_t s = 0; for (int c = 0; c < kCatN; c++) if (c != kCatStaging) s += own[o][c]; return s; };
     const uint64_t vGame = vramOf(kOwnGame), vOther = vramOf(kOwnOther), vMod = vramOf(kOwnMod);
@@ -410,6 +466,35 @@ void GpuMeterPresent() {
     for (int z = 0; z < kGpuZoneN; z++) { s_zSum[z] = 0; s_zMax[z] = 0; }
     s_fSum = s_fMax = 0; s_fN = 0; s_cpuSum = s_cpuMax = 0; s_cpuN = 0; s_zLost = s_zDisjoint = s_zBusy = 0;
     if (s_noNotify.load()) { Log("medidor:   %llu recursos sin aviso de destruccion (no se cuentan)", (unsigned long long)s_noNotify.load()); }
+}
+
+// (07/11) informe en un cierre (con el log tomado: escribe directo en el archivo)
+static const char* OwnName(int o) { return o == kOwnMod ? "mod" : o == kOwnOther ? "otra DLL" : "juego"; }
+void GpuMeterCrashInfo(FILE* f, EXCEPTION_POINTERS* ep) {
+    if (!f || !s_on.load()) return;
+    const unsigned total = s_deadN.load(); const unsigned n = (std::min)(total, (unsigned)kDead);
+    fprintf(f, "    medidor: ultimas %u destrucciones de recursos / vistas (de %u; cuadro actual %d; Release de mas detectados: %d), la mas nueva primero:\n",
+            n, total, s_frameNo.load(), s_orphanEvents.load());
+    uintptr_t regs[8] = {};
+    if (ep && ep->ContextRecord) { CONTEXT* c = ep->ContextRecord; regs[0] = c->Rcx; regs[1] = c->Rdx; regs[2] = c->Rbx; regs[3] = c->Rsi; regs[4] = c->Rdi; regs[5] = c->Rax; regs[6] = c->R8; }
+    if (ep && ep->ExceptionRecord && ep->ExceptionRecord->NumberParameters >= 2) regs[7] = (uintptr_t)ep->ExceptionRecord->ExceptionInformation[1];
+    static const char* const rn[8] = { "RCX", "RDX", "RBX", "RSI", "RDI", "RAX", "R8", "direccion" };
+    for (unsigned k = 0; k < n; k++) {
+        const DeadRec& d = s_dead[(total - 1 - k) % kDead];
+        std::string hit;
+        for (int r = 0; r < 8; r++) if (regs[r] && regs[r] >= (uintptr_t)d.p && regs[r] < (uintptr_t)d.p + 0x200) { hit += " <- "; hit += rn[r]; }
+        fprintf(f, "      %p %s %.1f KB, de %s (creado en %s, cuadro %d), destruido en el cuadro %d hilo %lu%s%s\n", d.p, kCatName[d.cat], double(d.bytes) / 1024.0,
+                OwnName(d.owner), d.made ? ModOff((void*)d.made).c_str() : "?", d.frameMade, d.frameDead, d.tid,
+                d.liveViews > 0 ? " CON VISTAS VIVAS" : "", hit.empty() ? "" : (hit + " (registro del cierre)").c_str());
+        fprintf(f, "        liberado por:");
+        for (int i = 0; i < 8 && d.st[i]; i++) fprintf(f, " %s", ModOff((void*)d.st[i]).c_str());
+        fprintf(f, "\n");
+    }
+    // registros del cierre que apuntan a un recurso o vista que el medidor conoce vivo
+    std::unique_lock<std::mutex> lk(*s_mx, std::try_to_lock);
+    if (lk.owns_lock()) for (int r = 0; r < 8; r++) if (regs[r]) { auto it = s_live->find((void*)regs[r]);
+        if (it != s_live->end()) fprintf(f, "    medidor: %s = %p es un %s vivo de %s (creado en %s, cuadro %d)\n", rn[r], (void*)regs[r], kCatName[it->second.cat], OwnName(it->second.owner),
+                                         it->second.frames[0] ? ModOff((void*)it->second.frames[0]).c_str() : "?", it->second.frame); }
 }
 
 } // namespace fx
