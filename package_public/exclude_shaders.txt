@@ -1,0 +1,12 @@
+# shaders que NO entran a shaders.pak en la version publica (patrones de nombre, uno por linea)
+# rebote de luz SSGI (no va en esta version)
+pes_ssgi_*.hlsl
+# teselacion de la cara (reservada)
+pes_face_tess_*.hlsl
+# pestanas con hebras (reservada)
+pes_lash_gs.hlsl
+pes_lashsh_gs.hlsl
+# inspector (herramienta de desarrollo)
+pes_insp_ps.hlsl
+# boca: la version publica no toca la boca del juego (pendiente de Agustin; regla de la boca intocable)
+63fab7735eee149c-ps_replace.txt

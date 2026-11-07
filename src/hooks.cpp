@@ -61,8 +61,24 @@ std::wstring ShaderPath(uint64_t hash, const char* type) {
 
 static std::set<std::pair<uint64_t, char>> s_available;   // shaders que tenemos en la carpeta
 
+#ifdef PES21FX_PUBLIC
+// (07/11) version publica: shaders compilados y cifrados en PES21FX\shaders.pak (shaderpak.cpp); no se lee ningun HLSL
+bool PakGet(int kind, uint64_t id, char type, std::string& out);
+bool PakGetNamed(const wchar_t* file, std::string& out);
+void PakListReplacements(std::vector<std::pair<uint64_t, char>>& out);
+static ID3DBlob* BlobFrom(const std::string& bin) {
+    ID3DBlob* b = nullptr;
+    if (!s_createBlob || bin.empty() || FAILED(s_createBlob(bin.size(), &b)) || !b) return nullptr;
+    memcpy(b->GetBufferPointer(), bin.data(), bin.size()); return b;
+}
+#endif
+
 static void ScanShaderFolder() {
     s_available.clear();
+#ifdef PES21FX_PUBLIC
+    { std::vector<std::pair<uint64_t, char>> v; PakListReplacements(v); for (auto& e : v) s_available.insert(e);
+      Log("shaders propios en el paquete: %d", (int)s_available.size()); return; }
+#endif
     WIN32_FIND_DATAW fd;
     HANDLE h = FindFirstFileW((g_cfg.baseDir + L"shaders\\*_replace.txt").c_str(), &fd);
     if (h == INVALID_HANDLE_VALUE) { Log("no hay shaders en la carpeta shaders"); return; }
@@ -118,6 +134,9 @@ static uint64_t IncludesHash() {
 }
 
 static ID3DBlob* CompileFile(uint64_t hash, const char* type, const char* profile) {
+#ifdef PES21FX_PUBLIC
+    { (void)profile; std::string bin; if (!PakGet(1, hash, type[0], bin)) return nullptr; return BlobFrom(bin); }
+#endif
     if (!s_compile) return nullptr;
     std::string src;
     std::wstring path = ShaderPath(hash, type);
@@ -154,6 +173,9 @@ static ID3DBlob* CompileFile(uint64_t hash, const char* type, const char* profil
 
 // shaders propios por nombre (generadores): shaders\<file>, con #include y cache como los demas
 ID3DBlob* CompileNamedShader(const wchar_t* file, const char* profile) {
+#ifdef PES21FX_PUBLIC
+    { (void)profile; std::string bin; if (!PakGetNamed(file, bin)) { Log("shader propio no incluido (%d)", (int)wcslen(file)); return nullptr; } return BlobFrom(bin); }
+#endif
     if (!s_compile) return nullptr;
     std::string src;
     if (!ReadFileA(g_cfg.baseDir + L"shaders\\" + file, src)) { Log("shader %ls: no encontrado", file); return nullptr; }
@@ -491,6 +513,7 @@ static void UploadParams() {
     std::vector<Ov> ovs;
     {
         std::lock_guard<std::mutex> lk(g_cfgMutex);
+        PublicClampLive(g_cfg.live);   // (07/11) version publica: lo reservado no se prende ni con teclas ni a mano
         memcpy(p, g_cfg.live, sizeof(p));
         if (p[139][0] > 0.5f) p[104][0] = 1.0f;   // (20/10) pasto v5: necesita el pasto v3 (x104) prendido en la GPU
         p[258][0] = (g_cfg.motorPatch && g_cfg.motorSunFix && g_cfg.motorShadowFix == 0) ? 1.0f : 0.0f;   // (02/11) x258: la luz esta corregida y el shadow map no (los shaders del sol no miden grosor con el)
@@ -2062,6 +2085,9 @@ static void HookSwapChain(IDXGISwapChain* sc) {
 
 // cada ~1 s se mira si algun shader cambio en disco (fecha y cantidad); si cambio, se recompila solo ese cambio
 void WatchShaderFolder() {
+#ifdef PES21FX_PUBLIC
+    return;   // version publica: no hay fuentes que vigilar
+#endif
     static double next = 0; static ULONGLONG lastSig = 0;
     double t = Now(); if (t < next) return; next = t + 1.0;
     WIN32_FIND_DATAW fd; ULONGLONG sig = 0; int n = 0;

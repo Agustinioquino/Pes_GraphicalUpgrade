@@ -965,6 +965,12 @@ static void DrawMenu() {
     if (ImGui::Button(s_iconsOk ? Ico(kIcoX).c_str() : "X", ImVec2(36 * UIK(), 0))) g_menuOpen = false;
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Cerrar (Insert)"));
     ImGui::Spacing();
+    if (const char* pn = PublicNotice()) {   // (07/11) version publica limitada: aviso fijo arriba del menu
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.80f, 0.40f, 1));
+        ImGui::PushTextWrapPos(0.0f); ImGui::TextUnformatted(pn); ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
+        ImGui::Spacing();
+    }
 
     // --- barra de arriba: guardar, deshacer, rehacer, descartar, ver original, recargar, buscar ---
     {

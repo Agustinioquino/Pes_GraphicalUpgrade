@@ -316,7 +316,11 @@ static bool LoadConfigLocked() {
     for (auto& kv : c.pairRules) nr += (int)kv.second.actions.size();
     Log("config: %d teclas, %d reglas (%d acciones); shaders=%d reglas=%d menu=%d", (int)c.keys.size(), (int)c.rules.size(), nr,
         (int)c.optReplace, (int)c.optRules, (int)c.optOverlay);
+    // (07/11) fila 384 = parches de sombras desde el menu (Diagnostico): si esta en el ini manda sobre [Motor]; si no, refleja [Motor]
+    if (c.info[384][0].defined) c.motorSunFix = c.base[384][0] > 0.5f; else c.base[384][0] = c.live[384][0] = c.motorSunFix ? 1.0f : 0.0f;
+    if (c.info[384][1].defined) c.motorShadowFix = std::clamp((int)(c.base[384][1] + 0.5f), 0, 4); else c.base[384][1] = c.live[384][1] = (float)c.motorShadowFix;
     LoadMenuLang();
+    PublicLimitConfig(c);   // (07/11) version publica: funciones reservadas fuera del menu y fijas (no hace nada en la normal)
     return true;
 }
 

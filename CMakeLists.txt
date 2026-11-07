@@ -49,7 +49,7 @@ add_library(PES21FX SHARED
   src/grass.cpp
   src/menutest.cpp
   src/facegen.cpp
-  src/inspect.cpp src/ssss.cpp src/headshadow.cpp src/pitchwear.cpp src/lod.cpp src/lightmeter.cpp src/gtao.cpp src/ssgi.cpp src/exedump.cpp src/asyncshot.cpp src/exepatch.cpp src/camhook.cpp src/musculo.cpp src/musculo_ui.cpp src/personajes.cpp src/fisico.cpp src/codewatch.cpp src/memwatch.cpp src/skintone.cpp src/glass.cpp src/ring.cpp src/cuerpo.cpp src/manos.cpp src/sunwatch.cpp src/solreloj.cpp src/grassdist.cpp src/brazos.cpp src/inflate.cpp src/keyblock.cpp src/expr.cpp src/exprbones.cpp src/facetess.cpp src/bocajug.cpp src/tiempo.cpp src/freecam.cpp src/caras_hd.cpp src/mouthmask.cpp src/gpumeter.cpp src/gani.cpp
+  src/inspect.cpp src/ssss.cpp src/headshadow.cpp src/pitchwear.cpp src/lod.cpp src/lightmeter.cpp src/gtao.cpp src/ssgi.cpp src/exedump.cpp src/asyncshot.cpp src/exepatch.cpp src/camhook.cpp src/musculo.cpp src/musculo_ui.cpp src/personajes.cpp src/fisico.cpp src/codewatch.cpp src/memwatch.cpp src/skintone.cpp src/glass.cpp src/ring.cpp src/cuerpo.cpp src/manos.cpp src/sunwatch.cpp src/solreloj.cpp src/grassdist.cpp src/brazos.cpp src/inflate.cpp src/keyblock.cpp src/expr.cpp src/exprbones.cpp src/facetess.cpp src/bocajug.cpp src/tiempo.cpp src/freecam.cpp src/caras_hd.cpp src/mouthmask.cpp src/gpumeter.cpp src/gani.cpp src/public.cpp src/shaderpak.cpp
   ${imgui_SOURCE_DIR}/imgui.cpp
   ${imgui_SOURCE_DIR}/imgui_draw.cpp
   ${imgui_SOURCE_DIR}/imgui_tables.cpp
@@ -64,7 +64,22 @@ target_include_directories(PES21FX PRIVATE src ${imgui_SOURCE_DIR} ${imgui_SOURC
 target_compile_definitions(PES21FX PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 target_link_libraries(PES21FX PRIVATE minhook dxgi dxguid ole32 uuid windowscodecs)
 set_target_properties(PES21FX PROPERTIES OUTPUT_NAME "d3d11" PREFIX "")
-# (07/11) mapa del enlazador (d3d11.map, junto a la DLL): el medidor de VRAM lo lee para nombrar el archivo del mod que creo cada recurso
-if(MSVC)
-  target_link_options(PES21FX PRIVATE "/MAP")
+# (07/11) version publica limitada: shaders solo compilados y cifrados (PES21FX\shaders.pak), funciones reservadas fijas.
+# La clave del paquete entra mezclada con la mascara de shaderpak.cpp (la genera la CI, workflow public.yml).
+option(PES21FX_PUBLIC "Version publica limitada (shaders.pak, sin HLSL)" OFF)
+set(PES21FX_PAK_K0 "0x0ULL" CACHE STRING "clave del paquete (mezclada), parte 1")
+set(PES21FX_PAK_K1 "0x0ULL" CACHE STRING "clave del paquete (mezclada), parte 2")
+if(PES21FX_PUBLIC)
+  target_compile_definitions(PES21FX PRIVATE PES21FX_PUBLIC=1 PES21FX_PAK_K0=${PES21FX_PAK_K0} PES21FX_PAK_K1=${PES21FX_PAK_K1})
+  if(MSVC)
+    target_link_options(PES21FX PRIVATE "/DEBUG:NONE" "/OPT:REF" "/OPT:ICF")   # sin PDB ni mapa
+  endif()
+else()
+  # (07/11) mapa del enlazador (d3d11.map, junto a la DLL): el medidor de VRAM lo lee para nombrar el archivo del mod que creo cada recurso
+  if(MSVC)
+    target_link_options(PES21FX PRIVATE "/MAP")
+  endif()
 endif()
+
+# armador de shaders.pak (lo usa la CI de la version publica)
+add_executable(pakbuild tools/pakbuild/pakbuild.cpp)

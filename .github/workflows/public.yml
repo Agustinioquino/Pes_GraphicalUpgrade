@@ -1,0 +1,95 @@
+name: public
+
+# (07/11) version publica limitada: DLL con PES21FX_PUBLIC + shaders compilados y cifrados en PES21FX\shaders.pak.
+# Nunca publica HLSL: el paquete sale sin la carpeta shaders. Se lanza a mano (workflow_dispatch) sobre la rama que se quiera.
+on:
+  workflow_dispatch:
+  push:
+    branches: ['claude/project-thread-d5597d']
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clave del paquete
+        shell: pwsh
+        run: |
+          $py = @'
+          import secrets
+          k0 = secrets.randbits(64); k1 = secrets.randbits(64)
+          m0 = 0x6a09e667f3bcc908; m1 = 0xbb67ae8584caa73b   # mascara de shaderpak.cpp
+          print(f"PAK_KEY={k0:016x}{k1:016x}")
+          print(f"PAK_K0=0x{k0 ^ m0:016x}ULL")
+          print(f"PAK_K1=0x{k1 ^ m1:016x}ULL")
+          '@
+          python -c $py | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Configurar
+        run: cmake -S . -B build -A x64 -DPES21FX_PUBLIC=ON "-DPES21FX_PAK_K0=${{ env.PAK_K0 }}" "-DPES21FX_PAK_K1=${{ env.PAK_K1 }}"
+
+      - name: Compilar
+        shell: pwsh
+        run: |
+          cmake --build build --config Release --parallel 2>&1 | Tee-Object -FilePath build.log
+          if ($LASTEXITCODE -ne 0) { Select-String -Path build.log -Pattern "error" | ForEach-Object { $_.Line }; exit 1 }
+
+      - name: Compilar shaders y armar shaders.pak
+        shell: pwsh
+        run: |
+          $fxc = Get-ChildItem "C:/Program Files (x86)/Windows Kits/10/bin/*/x64/fxc.exe" | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $fxc) { Write-Host "fxc no encontrado"; exit 1 }
+          # fuentes = package/PES21FX/shaders con package_public/shaders_override encima (solo en la CI, no se publican)
+          New-Item -ItemType Directory -Force -Path src_sh, cso | Out-Null
+          Copy-Item package/PES21FX/shaders/* src_sh/
+          if (Test-Path package_public/shaders_override) { Copy-Item package_public/shaders_override/* src_sh/ -Force }
+          $excl = Get-Content package_public/exclude_shaders.txt | Where-Object { $_ -and -not $_.StartsWith('#') }
+          $bad = 0; $n = 0
+          Get-ChildItem src_sh/*_replace.txt, src_sh/*.hlsl | ForEach-Object {
+            $name = $_.Name
+            foreach ($p in $excl) { if ($name -like $p) { Write-Host "fuera: $name"; return } }
+            $n++
+            $t = if ($name -match '-ps_|_ps\.hlsl') { 'ps_5_0' } elseif ($name -match '-vs_|_vs\.hlsl') { 'vs_5_0' } elseif ($name -match '_gs\.hlsl') { 'gs_5_0' } elseif ($name -match '_hs\.hlsl') { 'hs_5_0' } elseif ($name -match '_ds\.hlsl') { 'ds_5_0' } else { 'cs_5_0' }
+            $r = & $fxc.FullName /nologo /O3 /Qstrip_reflect /Qstrip_debug /Qstrip_priv /T $t /E main /I src_sh /Fo ("cso/" + $name + ".cso") $_.FullName 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) { $bad++; Write-Host "==== $name`n$r" }
+          }
+          Write-Host "shaders: $n, con errores: $bad"
+          if ($bad -gt 0) { exit 1 }
+          New-Item -ItemType Directory -Force -Path dist/PES21FX | Out-Null
+          & build/Release/pakbuild.exe dist/PES21FX/shaders.pak $env:PAK_KEY cso
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Armar el paquete
+        shell: pwsh
+        run: |
+          $out = "dist/PES21FX"
+          Copy-Item -Recurse package/PES21FX/* $out -Exclude shaders
+          if (Test-Path $out/shaders) { Remove-Item -Recurse -Force $out/shaders }
+          if (Test-Path package_public/PES21FX) { Copy-Item -Recurse -Force package_public/PES21FX/* $out }
+          Copy-Item build/Release/d3d11.dll dist/
+          Copy-Item -Recurse package/sider dist/sider
+          # control: ningun fuente de shader en el paquete
+          $src = Get-ChildItem -Recurse dist -Include *.hlsl, *.hlsli, *_replace.txt
+          if ($src) { $src | ForEach-Object { Write-Host "FUENTE EN EL PAQUETE: $($_.FullName)" }; exit 1 }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PES21FX_public
+          path: dist/
+
+      - name: Publicar en la rama build-public
+        shell: pwsh
+        run: |
+          cd dist
+          git init -q
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          $dest = 'build-public-' + $env:GITHUB_REF_NAME
+          git checkout -q -b $dest
+          git add -A
+          git commit -q -m "public $env:GITHUB_SHA"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" $dest
