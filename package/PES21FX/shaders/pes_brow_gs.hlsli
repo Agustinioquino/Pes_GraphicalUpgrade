@@ -144,7 +144,7 @@ float3 PesTessDisp(FaceV v[3], float3 b, float2 uvT)
   float3 P0 = v[0].pV.xyz, P1 = v[1].pV.xyz, P2 = v[2].pV.xyz;
   float3 N0 = normalize(v[0].nrm.xyz), N1 = normalize(v[1].nrm.xyz), N2 = normalize(v[2].nrm.xyz);
   float3 pl = b.x * P0 + b.y * P1 + b.z * P2;
-  float3 pp = b.x * (pl - dot(pl - P0, N0) * N0) + b.y * (pl - dot(pl - P1, N1) * N1) + b.z * (pl - dot(pl - P2, N2) * N2);
+  float3 pp = PesTessSmooth(P0, P1, P2, N0, N1, N2, b, IniParams.Load(int2(375, 0)).y);   // (07/11) igual que el DS de la cara (Phong o PN)
   float4 EB = IniParams.Load(int2(366, 0));
   float3 wv = float3(v[0].pV.w, v[1].pV.w, v[2].pV.w);
   float3 isEye = step(1.5, wv);

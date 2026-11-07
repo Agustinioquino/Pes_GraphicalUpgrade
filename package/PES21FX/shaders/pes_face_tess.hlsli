@@ -162,6 +162,17 @@ PesTessConst PesTessPatch(InputPatch<PesTessVS, 3> p)
     f[0] = clamp(length(s1 - s2) / px * mul3.x, 1.0, min(16.0, fmax * mul3.x));
     f[1] = clamp(length(s2 - s0) / px * mul3.y, 1.0, min(16.0, fmax * mul3.y));
     f[2] = clamp(length(s0 - s1) / px * mul3.z, 1.0, min(16.0, fmax * mul3.z));
+    // (07/11, Agustin: "que no consuma todo el rendimiento") ARISTAS DE ESPALDAS: si los dos extremos de una arista miran para el otro
+    // lado de la camara (normal contra el vector a la camara < -0.3: nuca, detras de las orejas, la cara del otro lado de la cabeza) esa
+    // arista no se parte. Se decide por arista con sus dos extremos, igual en los dos triangulos que la comparten: sin grietas.
+    // z375 = 0 apaga este recorte.
+    if (IniParams.Load(int2(375, 0)).z > 0.5) {
+      float3 aw = float3(dot(normalize(p[0].o6.xyz), -normalize(p[0].pV.xyz)), dot(normalize(p[1].o6.xyz), -normalize(p[1].pV.xyz)), dot(normalize(p[2].o6.xyz), -normalize(p[2].pV.xyz)));
+      bool3 bk = aw < -0.3;
+      if (bk.y && bk.z) f[0] = 1.0;
+      if (bk.z && bk.x) f[1] = 1.0;
+      if (bk.x && bk.y) f[2] = 1.0;
+    }
     // fuera de pantalla (los tres puntos del mismo lado): sin division (nada que ver)
     float2 lo = min(min(s0, s1), s2), hi = max(max(s0, s1), s2);
     float2 hv = 0.5 * g_pesTessVp.xy + 2.0;
@@ -339,9 +350,7 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
   float3 P0 = p[0].pV.xyz, P1 = p[1].pV.xyz, P2 = p[2].pV.xyz;
   float3 N0 = normalize(p[0].o6.xyz), N1 = normalize(p[1].o6.xyz), N2 = normalize(p[2].o6.xyz);
   float3 pl = b.x * P0 + b.y * P1 + b.z * P2;
-  float3 pp = b.x * (pl - dot(pl - P0, N0) * N0)
-            + b.y * (pl - dot(pl - P1, N1) * N1)
-            + b.z * (pl - dot(pl - P2, N2) * N2);
+  float3 pp = PesTessSmooth(P0, P1, P2, N0, N1, N2, b, IniParams.Load(int2(375, 0)).y);   // (07/11) Phong o PN (y375)
   // (04/11 h, Agustin: "se nota el bajo nivel poligonal en el lagrimal") peso 2 = borde de la abertura del ojo (la DLL lo marca solo en
   // la cara): redondea con x366 (0..1) y su propio tope y366 mm; el relieve no entra ahi (seamR)
   float4 EB = IniParams.Load(int2(366, 0));
