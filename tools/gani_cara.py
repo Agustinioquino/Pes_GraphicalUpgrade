@@ -5,6 +5,8 @@
 #   GANI : u32 sig, u32 nodeOff (0x20), u32 size ... cabecera del movimiento en nodeOff + 0x70: u32 grupos, u32 canales,
 #          u32 timebase, u32 cuadros, u32 unk, grupos x u32 offset (relativo a la cabecera). Grupo: u32 hash, u8 nCanales, 3 pad,
 #          nCanales x (u32 offset relativo a la entrada, i16 indiceCanal, u8 flags, i8 bits).
+#   Los hashes de los grupos NO son nombres de huesos (son los mismos en cuerpo y cara); el hueso sale del .frig (mapa_canales).
+#   Posiciones en CENTIMETROS y rotaciones locales respecto del reposo del .ask (cara: ejes de skf_head, x arriba, y atras, z derecha).
 #   canal: bits 12 / 20 (rotacion): por clave 3 fracciones de `bits`, 3 signos, paso de 8 bits (la ultima sin paso);
 #          bits 16 (posicion): 3 half + i8 paso.  rotacion: frac0 = angulo (x pi/2 = medio angulo), frac1/2 = eje L1 (3o = 1-a-b).
 # Uso: gani_cara.py clip.gani [--ask face_anim_skel.ask] [--frig face_skel.frig] [--mtar eye_anime_file0.mtar] [--json salida.json]
@@ -78,13 +80,40 @@ def quat(frac, signos):
     return [-x if signos[0] else x, -y if signos[1] else y, -z if signos[2] else z, math.cos(h)]
 
 def leer_ask(d):
-    ver, count = struct.unpack('<ii', d[:8]); huesos = []; p = 8
+    """.ask version 2 (cara): u32 version, u32 n, 12 B cero, luego n registros de 28 B desde 0x14: i32 offset del nombre (relativo
+    al registro), i32 padre, float3 posicion LOCAL en metros (ejes del hueso padre: en la cara x = arriba, y = atras, z = derecha
+    del jugador), 2 x u32 (0). Sin rotacion: el reposo de animacion es identidad. Version 1 (cuerpo, pes-gani): 44 B con rotacion."""
+    ver, count = struct.unpack('<ii', d[:8]); huesos = []
+    if ver == 2:
+        p = 0x14
+        for i in range(count):
+            name_off, parent, px, py, pz = struct.unpack('<iifff', d[p:p + 20])
+            s = p + name_off; nombre = d[s:d.index(b'\0', s)].decode('ascii', 'replace')
+            huesos.append({'nombre': nombre, 'padre': parent, 'pos': [px, py, pz], 'rot': [0.0, 0.0, 0.0, 1.0]}); p += 28
+        return {'version': ver, 'huesos': huesos}
+    p = 8
     for i in range(count):
         name_off, parent = struct.unpack('<ii', d[p + 4:p + 12])
         pos = struct.unpack('<4f', d[p + 12:p + 28]); rot = struct.unpack('<4f', d[p + 28:p + 44])
         s = p + 4 + name_off; nombre = d[s:d.index(b'\0', s)].decode('ascii', 'replace')
         huesos.append({'nombre': nombre, 'padre': parent, 'pos': list(pos[:3]), 'rot': list(rot)}); p += 44
     return {'version': ver, 'huesos': huesos}
+
+def mapa_canales(unidades, canales):
+    """{indiceCanal: ('rot'|'pos', indice de hueso en el .ask, -1 = raiz)}: los canales de rotacion de una unidad van a sus huesos en
+    orden; los de posicion al primer hueso. En la cara (face_skel.frig, 32 unidades / 59 canales): unidad 0 raiz (rot + pos),
+    1 skf_head (tipo 7), 2 skf_jaw (tipo 4, solo rot), 3..30 un hueso con rot + pos (tipo 5) o solo rot (tipo 4: parpados), 31 NMdriverB."""
+    kinds = {c['indice']: ('pos' if c['bits'] == 16 else 'rot') for c in canales}; out = {}
+    for u in unidades:
+        chs = range(u['ch0'], u['ch0'] + u['ncanales'])
+        rots = [c for c in chs if kinds.get(c) == 'rot']; poss = [c for c in chs if kinds.get(c) == 'pos']
+        if u['nhuesos'] == 0:
+            for c in rots: out[c] = ('rot', -1)
+            for c in poss: out[c] = ('pos', -1)
+            continue
+        for c, b in zip(rots, u['huesos']): out[c] = ('rot', b)
+        for c in poss: out[c] = ('pos', u['huesos'][0])
+    return out
 
 def leer_frig(d):
     h = struct.unpack('<8I', d[:32]); n_units, n_chan = h[3], h[4]
@@ -127,6 +156,8 @@ def main():
         g = open(clip, 'rb').read(); G = leer_gani(g); salida['gani'] = {k: v for k, v in G.items() if k != 'canales'}
         print('%s: sig %08X node_off %d size %d, %d grupos, %d canales, timebase %d, %d cuadros, unk %d' % (os.path.basename(clip), G['sig'], G['node_off'], G['size'], G['grupos'], G['ncanales'], G['timebase'], G['cuadros'], G['unk']))
         pistas = []
+        cm = mapa_canales(salida['frig']['unidades'], G['canales']) if 'frig' in salida else {}
+        nombresAsk = [b['nombre'] for b in salida['ask']['huesos']] if 'ask' in salida else []
         for c in G['canales']:
             data = g[c['off']:c['off'] + c['size']]
             if c['bits'] == 16:
@@ -139,6 +170,8 @@ def main():
                     prev = q; vals.append([f] + [round(x, 6) for x in q])
                 tipo = 'rot'
             nombre = NOMBRES.get(c['grupo'], '%08X' % c['grupo'])
+            if c['indice'] in cm:
+                k_, b_ = cm[c['indice']]; nombre = 'RAIZ' if b_ < 0 else (nombresAsk[b_] if b_ < len(nombresAsk) else 'hueso%d' % b_)
             pistas.append({'indice': c['indice'], 'grupo': nombre, 'flags': c['flags'], 'bits': c['bits'], 'tipo': tipo, 'claves': vals, 'bytes': c['size']})
             print('  canal %3d grupo %-26s flags %d bits %2d %s %4d B, %3d claves, ultima en %d' % (c['indice'], nombre, c['flags'], c['bits'], tipo, c['size'], len(vals), vals[-1][0] if vals else -1))
             for v in vals[:3]: print('      ', v)
