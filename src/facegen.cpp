@@ -170,7 +170,6 @@ static void EnsureBrowShaders() {
     Log("cejas: hebras v2 (pegadas a la malla de la cara): PS %s, GS cabeza %s, GS cara animada %s", s_browPS ? "si" : "NO", s_browGS[0] ? "si" : "NO", s_browGS[1] ? "si" : "NO (ver errores)");
 }
 bool BrowReady() { return s_browPS && (s_browGS[0] || s_browGS[1]); }
-ID3D11GeometryShader* BrowAtlasGS(uint64_t vsHash) { return vsHash == kVSLash ? nullptr : s_atGS[vsHash == kVSFaceAnim ? 1 : 0]; }   // (07/11 c)
 
 void FaceGenClear() {
     CarasHdClearKeys();   // (04/11 b) pelo en alta: las direcciones de las texturas se reutilizan en el partido nuevo
@@ -453,6 +452,7 @@ int FaceGenExportHair(std::string& status) {
 // v1 (18/10) usaba semillas que el PS de la cara escribia cada cuadro en un UAV: solo nacian donde la cara tenia pixeles
 // (aparecian y desaparecian con la distancia) y en el editor salian cintas gigantes; por eso estaba solo en partido.
 static constexpr uint64_t kVSHead = 0xfaab87ee4ef8b783ULL, kVSFaceAnim = 0x455eb97bc2c3a958ULL, kVSLash = 0x66917213728b4dc9ULL;
+ID3D11GeometryShader* BrowAtlasGS(uint64_t vsHash) { return vsHash == kVSLash ? nullptr : s_atGS[vsHash == kVSFaceAnim ? 1 : 0]; }   // (07/11 c) hebras en el atlas de sombra
 struct BrowSaved {
     ID3D11VertexShader* vs = nullptr; ID3D11PixelShader* ps = nullptr; ID3D11GeometryShader* gs = nullptr; ID3D11HullShader* hs = nullptr; ID3D11DomainShader* ds = nullptr;
     D3D11_PRIMITIVE_TOPOLOGY topo = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED; ID3D11RasterizerState* rs = nullptr;
