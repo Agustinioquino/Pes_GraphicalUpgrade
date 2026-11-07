@@ -48,7 +48,7 @@ cbuffer cPSScene : register(b2)
 // el GGX de la pasada diferida da la banda de brillo del pelo (Kajiya-Kay) en vez de un punto; y la marca 252/255 hace que
 // el sol le sume la luz envolvente, el segundo brillo (TRT, fila 51) con la sombra real y el contraluz (fila 339)
 #include "pes_brow_light.hlsli"
-float3 PesBrowAniso(float3 N, float3 T, float3 V, float t)
+float3 PesBrowAniso(float3 N, float3 T, float3 V, float t, float shJ)
 {
   float4 HK = IniParams.Load(int2(50,0));
   float4 HK2 = IniParams.Load(int2(51,0));
@@ -57,7 +57,7 @@ float3 PesBrowAniso(float3 N, float3 T, float3 V, float t)
   if (dot(L, L) < 0.25) return N;   // escena o luz sin enlazar: normal de antes
   float3 H = normalize(L + V);
   T = normalize(T);
-  float sh1 = HK.y + (t - 0.5) * HK2.y;
+  float sh1 = HK.y + (t - 0.5) * HK2.y + shJ;   // (07/11) cada hebra con su propio corrimiento: el brillo no es una linea pareja
   float3 T1 = normalize(T + N * sh1);
   float3 Nk = H - T1 * dot(H, T1);
   float nkl = length(Nk);
@@ -81,6 +81,8 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
 {
   float4 P75 = IniParams.Load(int2(75,0));
   float t = i.tw.x;
+  // (07/11) tw.z = cobertura + 2 x tono de la hebra (0..7, igual en toda la hebra)
+  float sK = floor(i.tw.z * 0.5), covZ = i.tw.z - 2.0 * sK, sJ = sK / 7.0;
   // borde de la cinta transparente por descarte (sin alpha blend en el G-buffer): perfil redondeado
   float edge = 1.0 - abs(i.tw.y);
   // con cintas de ~1 px el descarte tiene que ser suave: solo el borde exterior y la punta
@@ -90,7 +92,7 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   // la punta afinada; el TAA lo promedia -> hebras finas, translucidas en la punta y sin escalones, como el pelo de UE / Frostbite
   if (P75.z < 0.5) {
     // la ceja tiene muchos pelos superpuestos por pixel: la cobertura se escala x3 con piso 0.4 (si no, de lejos casi desaparece)
-    float covP = clamp(i.tw.z * 3.0, 0.4, 1.0) * lerp(1.0, 0.45, t * t);
+    float covP = clamp(covZ * 3.0, 0.4, 1.0) * lerp(1.0, 0.45, t * t);
     float ign = frac(52.9829189 * frac(dot(i.pos.xy, float2(0.06711056, 0.00583715))) + frac(g_psSystem.m_timeParam.z * 7.31));
     if (ign > covP) discard;
   }
@@ -127,7 +129,7 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   o0 = float4(saturate(col), 1.0);
   // normal + translucidez (hebra: 0.15) empaquetadas como en el shader de cara
   float3 n = normalize(i.nrmV);
-  n = PesBrowAniso(n, i.tanV, normalize(i.viewV), t);
+  n = PesBrowAniso(n, i.tanV, normalize(i.viewV), t, (sJ - 0.5) * 0.16);
   // (04/11) la luz pasa por el pelo: translucidez alta (la punta mas que la raiz) + marca de PELO 252/255 (o2.z, abajo) para
   // que las pasadas del sol le apliquen el contraluz del pelo (fila 339), como el pelo de la cabeza
   float trans = lerp(0.18, 0.4, t);   // (04/11 o) menos luz atravesando: la ceja ya no brilla como pelo fino de la cabeza a contraluz   // (04/11 e) un poco mas de luz atravesando el pelo (la raiz tambien es fina)
@@ -150,11 +152,11 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   // blanco en banda que se corre hacia la raiz y se mueve con la camara / el sol (normal de Kajiya-Kay de arriba + GGX mas liso),
   // TRT = segundo brillo con el color del pelo y TT = contraluz (pasada del sol, marca de pelo), dispersion multiple (albedo de
   // abajo) y sombra entre pelos (GS). Antes el GGX era tan rugoso que la banda no se veia y solo cambiaba el color
-  float rough = 0.4;
+  float rough = lerp(0.34, 0.46, sJ);   // (07/11) rugosidad propia de cada hebra (antes 0.4 todas)
   float rc = rough * 0.0361702144 + 0.0904255286;
   rc = rc * rough + 0.180851057; rc = rc * rough + 0.271276593; rc = rc * rough + 0.271276593;
   o2.x = rc * rough + 0.150000006;
-  o2.y = 0.32 * (pesHairMisc.x > 0.5 ? saturate(pesHairB.z) / 0.6 : 1.0);   // brillo del tipo de pelo (0.6 = natural)
+  o2.y = 0.32 * lerp(0.65, 1.35, frac(sJ * 5.3)) * lerp(0.75, 1.0, t) * (pesHairMisc.x > 0.5 ? saturate(pesHairB.z) / 0.6 : 1.0);   // (07/11) brillo distinto por hebra (unas brillan mas), la raiz tapada brilla menos   // brillo del tipo de pelo (0.6 = natural)
   o2.z = IniParams.Load(int2(339,0)).w > 0.5 ? 0.98823529 : 1.0;   // (04/11) pelo a contraluz; sin eso como antes (ni piel ni kit)
   o2.w = g_psMaterial.m_materials[0].x;
   o3.xy = g_psSystem.m_renderBuffer.xy * i.motion;

@@ -268,6 +268,15 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     }
     float ga = (r2 - 0.5) * 0.14;                   // giro individual de +-4 grados (06/11: antes +-8, se despeinaban de la textura)
     float3 dd = normalize(d * cos(ga) + bt * sin(ga));
+    // (07/11, Agustin: "tenemos que seguir mejorando") MECHONES: en una ceja real los pelos vecinos se juntan en las puntas (grasa
+    // de la piel, peinado). Celdas de ~2 mm en UV: la punta de cada hebra se corre hacia el centro de su celda a lo ancho del pelo
+    float clat;
+    { float cs = 0.007;
+      float2 cid = floor(uv / cs);
+      uint ch = PesHash((uint)(cid.x + 4096.0) * 73856093u ^ (uint)(cid.y + 4096.0) * 19349663u);
+      float2 cc = (cid + 0.5 + (float2((float)(ch & 255u), (float)((ch >> 8) & 255u)) / 255.0 - 0.5) * 0.6) * cs;
+      float2 dU = cc - uv;
+      clat = dot(dPdu * dU.x + dPdv * dU.y, bt); }
     // apenas fuera de la piel; con la teselacion de la cara prendida (x357) la piel redondeada puede subir hasta z358 mm (tope del
     // corrimiento) + z359 mm (relieve hacia afuera): la raiz sube lo mismo para que la piel no tape las hebras de cerca
 #ifdef PES_BROW_VS_B
@@ -331,6 +340,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
       float emerge = -0.0003 + 0.00045 * saturate(t * 4.0);
       float3 p = root + n * emerge + dd * len * t + n * len * lift * (0.35 * sin(t * 3.14159) + 0.1 * t) + bt * len * curl * 0.5 * sin(t * 6.2831853 + r3 * 6.2831853) * t;
       p += n * clamp(0.5 * kap * (len * t) * (len * t), -0.25 * len, 0.6 * len);   // (04/11 l) sigue el pliegue de la piel
+      p += bt * clamp(clat, -0.3 * len, 0.3 * len) * 0.55 * t * t;                    // (07/11) mechon: la punta va hacia sus vecinos
       float wid = widB * (1.0 - 0.85 * t);
       float pxV = 2.0 * abs(p.z) / (max(abs(m_projection[1].y), 1e-4) * vpH);   // un pixel en la vista a esta distancia
       // (06/11, Agustin: "no se ve como un hair strand de un motor moderno") la hebra fina ya no se engorda a 1 px: se dibuja de 1.2 px
@@ -359,7 +369,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
         float3 nH = normalize(n + sideS * side * 0.55 + dd * (lift * 0.6 * t));
         o.nrmV = nH;
         o.col = cR; o.col2 = cT;
-        o.tw = float3(t, side, cov);
+        o.tw = float3(t, side, clamp(cov, 0.02, 0.98) + 2.0 * floor(frac(r2 * 7.77 + r3 * 3.33) * 8.0));   // (07/11) z = cobertura + 2 x (0..7) tono de brillo de la hebra
         o.motion = motion;
         o.viewV = V;
         o.tanV = tanR;

@@ -19,7 +19,7 @@ float4 main(VSOut i) : SV_Target0
   if (IniParams.Load(int2(75, 0)).z > 0.5) return float4(1, 1, 1, 1);
   float t = i.tw.x;
   float edge = saturate(1.0 - abs(i.tw.y));
-  float k = 0.42 * smoothstep(0.0, 0.85, edge) * (1.0 - 0.55 * t) * lerp(0.45, 1.0, saturate(i.tw.z * 2.0));   // (06/11) hebra fina = sombra mas suave   // mas fuerte cerca de la raiz (el pelo esta pegado a la piel)
+  float k = 0.42 * smoothstep(0.0, 0.85, edge) * (1.0 - 0.55 * t) * lerp(0.45, 1.0, saturate((i.tw.z - 2.0 * floor(i.tw.z * 0.5)) * 2.0));   // (06/11) hebra fina = sombra mas suave   // mas fuerte cerca de la raiz (el pelo esta pegado a la piel)
   float m = 1.0 - k;
   return float4(m, m, m, 1.0);
 }
