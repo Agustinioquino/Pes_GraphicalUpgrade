@@ -16,7 +16,7 @@
 //   3..30 un hueso con giro + posicion (los 4 parpados solo giro), 31 NMdriverB (57, 58). Aca va fijo (kAskBones / kChanBone).
 //
 // Los clips se leen de PES21FX\anim\face\*.gani y de las carpetas listadas en PES21FX\anim\face\carpetas.txt (una por linea, la
-// del Dream Patch: ...\livecpk\root\common\anime\FoxAnim\Face\), con dos niveles de subcarpetas (Animations\Add, Animations\Base). Son archivos de Konami: no van al repo, se leen de donde estan. Fila 375 (ini): x = numero de clip (0 = ninguno,
+// del Dream Patch: ...\livecpk\root\common\anime\FoxAnim\Face\), con dos niveles de subcarpetas (Animations\Add, Animations\Base). Son archivos de Konami: no van al repo, se leen de donde estan. Fila 382 (ini): x = numero de clip (0 = ninguno,
 // 1.. en orden alfabetico; el nombre se escribe en el registro al cambiar), y = peso, z = velocidad, w = 0 bucle / 1 una vez.
 // exprbones.cpp (ExprBonesFrame) pide la pose del clip en el reloj del juego y la escribe en los huesos.
 #include "core.h"
@@ -229,7 +229,7 @@ void GaniPresent() {
     static unsigned fr = 0; fr++;
     if (fr % 600 != 0) return;   // cada ~10 s: carpetas nuevas / clips nuevos
     std::lock_guard<std::mutex> lk(s_mx);
-    if (g_cfg.live[375][0] > 0.5f || !s_scanned) { const unsigned prev = (unsigned)s_clips.size(); Scan(); s_lastScan = fr; (void)prev; }
+    if (g_cfg.live[382][0] > 0.5f || !s_scanned) { const unsigned prev = (unsigned)s_clips.size(); Scan(); s_lastScan = fr; (void)prev; }
     const int smp = s_samples.exchange(0), bad = s_badFiles.exchange(0);
     if (smp || bad) Log("gani: %d poses en 10 s%s", smp, bad ? " (archivos ilegibles, ver arriba)" : "");
 }
