@@ -22,6 +22,12 @@ PARAMS = {   # filas de parametros (mismos valores que fija public.cpp + prefere
     'w70': '0', 'x78': '0', 'x79': '0', 'y80': '0', 'z255': '0', 'x256': '0', 'w352': '0', 'w353': '0',
     'x377': '0', 'w377': '0', 'y378': '0', 'w379': '0', 'x380': '0', 'w380': '0', 'x381': '0', 'y381': '0',
     'x384': '1', 'y384': '0', 'z384': '1',
+    # (07/11 Agustin) el paquete arranca sin animaciones de la cara ni pasto en toda la cancha (el usuario los prende en el menu)
+    'w58': '0',                                   # Pasto en toda la cancha
+    'x340': '0', 'x342': '0', 'y342': '0', 'w342': '0',   # expresiones mas marcadas, lengua, parpadeo
+    'y347': '0', 'z347': '0', 'w347': '0',        # nariz con la boca, labio de arriba, mirada viva
+    'x348': '0', 'y348': '0', 'z348': '0', 'w348': '0',   # musculos de la cara
+    'x350': '0',                                  # abrir la boca: por shader (sin girar huesos)
     'z352': '0',                                  # cuello: el paquete lleva TorsoBody_cuello 1.16 (corta la cara); el hundido z352 es para 1.19
 }
 HIDDEN = {'GITemporal', 'Volumetric', 'FaceTess', 'ExprShow', 'ExprGani', 'CamaraLibre', 'CamaraLenta', 'TorsoOriginal',
