@@ -70,7 +70,7 @@ struct VSOut {
   float4 pos : SV_Position;
   float3 nrmV : TEXCOORD0;
   float3 col : TEXCOORD1;
-  float2 tw : TEXCOORD2;
+  float3 tw : TEXCOORD2;       // z = (06/11) cobertura real del pixel
   float2 motion : TEXCOORD3;
   float3 viewV : TEXCOORD4;
   float3 col2 : TEXCOORD5;
@@ -85,6 +85,15 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   float edge = 1.0 - abs(i.tw.y);
   // con cintas de ~1 px el descarte tiene que ser suave: solo el borde exterior y la punta
   if (P75.z < 0.5 && edge < 0.08 + 0.35 * t * t) discard;
+  // (06/11, Agustin: "no se ve como un hair strand de un motor mas moderno") cobertura estocastica: la hebra mas fina que un pixel
+  // se dibuja en 1.2 px y aca se descarta al azar (ruido de gradiente entrelazado que cambia cada cuadro) segun su cobertura real y
+  // la punta afinada; el TAA lo promedia -> hebras finas, translucidas en la punta y sin escalones, como el pelo de UE / Frostbite
+  if (P75.z < 0.5) {
+    // la ceja tiene muchos pelos superpuestos por pixel: la cobertura se escala x3 con piso 0.4 (si no, de lejos casi desaparece)
+    float covP = clamp(i.tw.z * 3.0, 0.4, 1.0) * lerp(1.0, 0.45, t * t);
+    float ign = frac(52.9829189 * frac(dot(i.pos.xy, float2(0.06711056, 0.00583715))) + frac(g_psSystem.m_timeParam.z * 7.31));
+    if (ign > covP) discard;
+  }
   // color: la raiz mas oscura, la punta un poco mas clara y calida
   float3 col = lerp(i.col, i.col2, t);   // (04/11 d) el color del mapa de la ceja tal cual (antes se oscurecia / aclaraba aca)   // (04/11 b) antes 0.55 en la raiz: salian negras como alambre
   // (04/11 e, referencia eFootball de Agustin) la raiz queda entre los pelos de al lado y la piel (oclusion suave), la punta sale

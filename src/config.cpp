@@ -983,7 +983,7 @@ bool LoadHairConfig() {
             h.faces[k] = Lower(v);
         } else if (sec == "cejas_cara") {   // (04/11) id = cantidad, largo
             std::vector<float> f = ParseFloats(v);
-            if (!f.empty()) { std::vector<float> b = { 1.f, 1.f, 0.f, 0.35f, 0.2f, 0.12f, 0.f, 0.55f, 0.3f, 0.15f, 0.f, 1.f, 1.f }; for (size_t i = 0; i < f.size() && i < b.size(); i++) b[i] = f[i]; h.browFace[k] = b; }   // (04/11 i) + mezcla, r, g, b; (04/11 l) + contraluz, hebras extra
+            if (!f.empty()) { std::vector<float> b = { 1.f, 1.f, 0.f, 0.35f, 0.2f, 0.12f, 0.f, 0.55f, 0.3f, 0.15f, 0.f, 1.f, 1.f, 0.f }; for (size_t i = 0; i < f.size() && i < b.size(); i++) b[i] = f[i]; h.browFace[k] = b; }   // (04/11 i) + mezcla, r, g, b; (04/11 l) + contraluz, hebras extra
         } else if (sec == "teselacion_cara") {   // (04/11 m) id = teselar, densidad, suavidad, tope, relieve, surcos, formas, relieve en la luz
             std::vector<float> f = ParseFloats(v);
             if (!f.empty()) tessFace[k] = f;
