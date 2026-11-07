@@ -187,7 +187,7 @@ void main(triangle LashV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
 #ifdef PES_SHADOW
         o.tw = float3(t, side, 0.3);                           // (07/11) sombra suave: no oscurece el ojo
 #else
-        o.tw = float3(t, side, cov);
+        o.tw = float3(t, side, clamp(cov, 0.02, 0.98) + 2.0 * floor(frac(r2 * 7.77 + r3 * 3.33) * 8.0));   // (07/11) z = cobertura + 2 x (0..7) tono de brillo
 #endif
         o.motion = motion;
         o.viewV = V;
