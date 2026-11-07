@@ -105,6 +105,7 @@ struct MenuGroup {
     std::string id;                      // (27/10) nombre de la seccion del ini sin "Menu" (clave de PES21FX_menu_en.ini)
     std::string titleEn, descEn, sectionEn;   // (27/10) textos en ingles; vacios = se usa el espanol
     int tIdx = -1, tComp = 0;            // parametro del interruptor (w46, etc.); -1 = sin interruptor
+    float tLast = 0;                     // (07/11) valor que tenia el interruptor al apagarlo (w313 = 1.7 'manto' se recupera al prenderlo)
     std::vector<MenuSlider> sliders;
     std::vector<MenuButton> buttons;
     std::string special;                 // (24/10) tarjeta dibujada por el codigo: "musculatura_jugador"

@@ -405,7 +405,7 @@ static void DrawGroup(MenuGroup& g, int gid) {
     ImGui::SameLine();
     if (s_fontBold) ImGui::PushFont(s_fontBold);
     const std::string gTitle = Utf8(LS(g.title, g.titleEn)), gDesc = LS(g.desc, g.descEn);
-    if (hasT) { if (ImGui::Checkbox(gTitle.c_str(), &on)) { float b = g_cfg.base[g.tIdx][g.tComp]; g_cfg.live[g.tIdx][g.tComp] = on ? (b > 0.5f ? b : 1.0f) : 0.0f; } }
+    if (hasT) { if (ImGui::Checkbox(gTitle.c_str(), &on)) { float b = g_cfg.base[g.tIdx][g.tComp], &v = g_cfg.live[g.tIdx][g.tComp]; if (!on) { g.tLast = v; v = 0.0f; } else v = g.tLast > 0.5f ? g.tLast : (b > 0.5f ? b : 1.0f); } }   // (07/11) al prender vuelve el valor que tenia (1.7 = manto), no 1
     else ImGui::TextUnformatted(gTitle.c_str());
     if (s_fontBold) ImGui::PopFont();
     if (changed) {   // (04/11 n) aviso de cambios sin guardar en la tarjeta
