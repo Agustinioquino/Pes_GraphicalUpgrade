@@ -396,6 +396,7 @@ void main(
     }
   }
   r2.xyz = float3(-1,-1,-1) + r3.xyz;
+  float2 pesWrN = r2.xy;   // (07/11) direccion de la arruga en el espacio tangente (la normal se inclina a traves del surco): la usan los poros
   // (04/11 i, Agustin: "el nrm de arrugas no es muy notorio junto a sus texturas") z365 = relieve de las arrugas (normal del gesto
   // y esculpida) por encima del detalle de la textura de la cara; 1 = como antes
   float wrRelief = enhance ? clamp(IniParams.Load(int2(365, 0)).z, 0.0, 3.0) : 1.0;
@@ -446,8 +447,28 @@ void main(
       float4 guide = pesFacePores.Sample(g_samplerLinear_Clamp_s, v2.xy);    // R densidad, G tamano (grandes), B zona T, A arruguitas
       float4 guide2 = pesFacePores2.Sample(g_samplerLinear_Clamp_s, v2.xy);  // R frente, G sobre las cejas, B cuello, A = 1 - labios (v6: los dos labios)
       float4 pesFZp = pesZones.Sample(g_samplerLinear_Clamp_s, v2.xy);       // G labios, A piel
+      // (07/11, Agustin: "las arrugas ... manejan un sistema de poros distintas") POROS QUE ACOMPANAN LA ARRUGA (por y365): en el surco
+      // la piel se junta y los poros se aprietan a traves de la arruga (se alargan a lo largo de ella) y se hunden mas; en la cresta
+      // la piel se estira: los poros se abren a traves, mas chatos y lisos. La posicion de reposo que muestrea el mosaico se comprime
+      // o estira a lo largo de la direccion de la arruga (dp/du, dp/dv del reposo). Nada en los labios (FZ.g)
+      float3 pesPMw = pesPM, pesDPxw = pesDPx, pesDPyw = pesDPy; float pesWrF = 0.0, pesWrR = 0.0;
+      { float pwK = enhance ? saturate(clamp(IniParams.Load(int2(365, 0)).y, 0.0, 2.0)) : 0.0;
+        float lipK = 1.0 - saturate(2.0 * pesFZp.g);
+        pesWrF = saturate((wrOn ? max(wrFold, wrFoldW) : 0.0) + max(shFold, shFoldW)) * pwK * lipK;
+        pesWrR = saturate((wrOn ? max(wrRidgeF, wrRidgeW) : 0.0) + shRidge) * pwK * lipK;
+        float wnl = length(pesWrN);
+        if (pesWrF + pesWrR > 0.01 && wnl > 0.02) {
+          float det = pesDUx.x * pesDUy.y - pesDUx.y * pesDUy.x; det = abs(det) < 1e-12 ? 1e-12 : det;
+          float3 dpdu = (pesDPx * pesDUy.y - pesDPy * pesDUx.y) / det, dpdv = (pesDPy * pesDUx.x - pesDPx * pesDUy.x) / det;
+          float3 across = dpdu * pesWrN.x + dpdv * (pesWrN.y * wrYSign); float al = length(across);
+          if (al > 1e-9) { across /= al;
+            float k = 0.55 * pesWrF - 0.35 * pesWrR;   // + aprieta (el mosaico se ve mas chico a traves), - estira
+            pesPMw  += across * dot(pesPM,  across) * k;
+            pesDPxw += across * dot(pesDPx, across) * k;
+            pesDPyw += across * dot(pesDPy, across) * k; }
+        } }
       PesPores pp = PesTriPores5(pesSkinMicro, pesSkinLarge, pesSkinFhead, pesSkinCrepe, pesSkinLips, pesSkinNeck, g_samplerAnisotropic_Clamp_s,
-                                 pesPM, pesDPx, pesDPy, pesDUx, pesDUy, float4(guide.g, guide.a, 1.0 - guide2.a, guide2.b), guide2.rg, pesHasR);
+                                 pesPMw, pesDPxw, pesDPyw, pesDUx, pesDUy, float4(guide.g, guide.a, 1.0 - guide2.a, guide2.b), guide2.rg, pesHasR);
       float near = pp.near;
       pesLipW = 1.0 - guide2.a;   // (v6) los dos labios
       if (near > 0.001) {
@@ -461,16 +482,18 @@ void main(
         float wPore = saturate(guide2.a - guide.a - guide2.b);         // parte de poros (el resto: arruguitas / labios / cuello)
         float dens = lerp(0.8, 0.25 + 1.0 * guide.r, wPore);                 // arruguitas, labios y cuello con fuerza propia
         float str = clamp(P94.x, 0.0, 2.0) * near * 1.1 * skinM * dens;
+        str *= 1.0 + 0.45 * pesWrF - 0.5 * pesWrR;   // (07/11) poros mas marcados en el surco, mas chatos en la cresta estirada
         float2 pesTS = PesTanSigns(v4.xyz, v5.xyz, v3.xyz, pesDUx, pesDUy);
         r1.xyz = PesRNM(normalize(r1.xyz), normalize(float3(pp.dT * pesTS * str, 1.0)));   // en el espacio tangente del normal map
         pesPoreA = pp.a * near * lerp(0.5, 0.3 + guide.r, wPore);
+        pesPoreA *= 1.0 + 0.3 * pesWrF - 0.4 * pesWrR;   // (07/11) idem para el hueco y el brillo cortado
         pesPoreC = pesPoreA * pp.close;   // hueco del poro solo en primer plano real (ver pes_pores.hlsli)
         // (04/11) el fondo del poro / surco apenas mas oscuro y CALIDO (sangre y sombra bajo la piel), no gris; lo que mas se nota
         // es el brillo cortado (mas abajo)
         float aoW = lerp(0.5, saturate(guide.r * (0.6 + 0.4 * guide.g)), wPore);
         pesPoreOcc = 1.0 - pesPoreC * aoW * saturate(P94.x) * 0.10;   // (04/11 v6) gris y suave: el poro se ve por la luz y el brillo, no pintado de color
         if (P94.x >= 1.995) pesMicroDbg = float3(pp.dbg, near);   // diagnostico: con Intensidad al tope: rojo = poros, verde = arruguitas, azul = fundido
-        pesMicroVar = pp.var * saturate(P94.x * 0.7) * skinM;
+        pesMicroVar = pp.var * saturate(P94.x * 0.7) * skinM * (1.0 + 0.35 * pesWrF - 0.45 * pesWrR);   // (07/11) la cresta estirada queda mas lisa (menos rugosidad extra)
       } } }
   // 16/10: oclusion de cavidades a partir del normal map (pliegues de la oreja, arco de la ceja, aletas de la nariz):
   // donde la normal se inclina mucho la superficie esta dentro de un hueco y le llega menos luz. x35 fuerza, w35 on/off
