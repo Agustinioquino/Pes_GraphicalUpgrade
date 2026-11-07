@@ -111,6 +111,20 @@ static const BoneDef kDef[] = {
     { "sk_neck",                 0.0000f, 1.5321f, 0.0335f, 0.0f },
 };
 static const int kND = (int)(sizeof(kDef) / sizeof(kDef[0]));
+// (07/11) clips .gani (gani.cpp): hueso del .ask -> kDef, por nombre; y lo que el clip aporta a Secondary (pomulos / bajo-ojo) y a
+// EyesFrame (parpados), que escriben esos huesos por su cuenta
+static int s_defToAsk[64]; static bool s_defToAskOk = false;
+static void DefToAsk() { for (int d = 0; d < kND; d++) { s_defToAsk[d] = -1; for (int b = 0; b < 31; b++) { const char* n = GaniAskBone(b); if (n && strcmp(n, kDef[d].name) == 0) { s_defToAsk[d] = b; break; } } } s_defToAskOk = true; }
+static float s_ganiSec[4][3]; static bool s_ganiSecOn = false;   // 18..21, ejes de la cabeza (m)
+static float s_ganiLid[2]; static bool s_ganiLidOn = false;      // parpado de arriba / abajo: giro extra (rad, + = cierra el de arriba / baja el de abajo)
+static void GaniQToHead(const float* q, float* o) { o[0] = -q[2]; o[1] = q[0]; o[2] = -q[1]; o[3] = q[3]; }   // ejes del .ask (x arriba, y atras, z derecha) -> cabeza (x izquierda, y arriba, z adelante)
+static void GaniPToHead(const float* p, float* o) { o[0] = -p[2] * 0.01f; o[1] = p[0] * 0.01f; o[2] = -p[1] * 0.01f; }   // cm -> m
+static void QScale(const float* q, float w, float* o) {   // giro por w (eje-angulo)
+    const float s = sqrtf(q[0] * q[0] + q[1] * q[1] + q[2] * q[2]);
+    if (s < 1e-6f) { o[0] = o[1] = o[2] = 0; o[3] = 1; return; }
+    const float h = atan2f(s, q[3]) * w, k = sinf(h) / s; o[0] = q[0] * k; o[1] = q[1] * k; o[2] = q[2] * k; o[3] = cosf(h);
+}
+static float GaniAngZ(const float* q) { return 2.0f * atan2f(q[2], q[3]); }   // giro alrededor del eje z del .ask (derecha): el que abre la mandibula y los parpados
 // (02/11) "mostrar los dientes" (350.w = 1): corrimiento de cada hueso en metros, ejes de la cabeza (x izquierda del jugador)
 static const float kTeeth[][3] = {
     { 0, 0, 0 },                    // skf_jaw
@@ -274,6 +288,7 @@ static const float* TeethOf(int d) { static const float z[3] = { 0, 0, 0 }; retu
 enum { D_JAW = 0, D_LIPS_L = 5, D_LID_TL = 22, D_LID_TR = 23, D_LID_BL = 24, D_LID_BR = 25, D_BROW_IL = 26, D_EYE_L = 31, D_EYE_R = 32, D_HEAD = kND - 2 };
 
 struct Skel {
+    int ganiClip = 0; float ganiT0 = 0.0f;   // (07/11) clip .gani en curso y reloj del juego en que arranco
     float clockT = -1.0f, clockK = 1.0f;   // (06/11) reloj del juego del ultimo cuadro de los parpados y cuadros de 60 Hz que pasaron
     const void* skel = nullptr; const char* bones = nullptr; int n = 0;   // esqueleto del cuerpo (clave) y su arreglo
     const void* face = nullptr; const char* fbones = nullptr; int fn = 0;  // (02/11) esqueleto de la CARA: nodo + 0xA0 (49 huesos)
@@ -751,6 +766,7 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
         float up = (std::min)(0.58f * b - gy * (gy < 0.0f ? 0.80f : 0.55f) + 0.06f * smL + geU, 0.66f);   // tope: cerrado, sin pasarse del ojo
         // de abajo: sube un poco al parpadear, baja con la mirada abajo y sube apenas con la mirada arriba
         float lo = std::clamp(-0.07f * b - gy * (gy < 0.0f ? 0.35f : 0.15f) - 0.16f * smL + geL, -0.45f, 0.18f);
+        if (s_ganiLidOn) { up = (std::min)(up + s_ganiLid[0], 0.66f); lo = std::clamp(lo + s_ganiLid[1], -0.45f, 0.18f); }   // (07/11) parpados del clip .gani
         // (04/11) limite de velocidad fuera del parpadeo: un cambio chico de un cuadro a otro (temblor de la medida) se frena;
         // el parpadeo (b) y los saltos grandes pasan enteros
         if (S.lidHave && b < 0.02f) {
@@ -828,6 +844,10 @@ static void Secondary(Skel& S, const float* hr, float sm, float open) {
         const float a = f.k == 0 ? ks : f.k == 2 ? kn : f.k == 3 ? s_poseSmile : f.k == 4 ? s_poseG[1] : f.k == 5 ? s_poseG[3] : f.k == 6 ? s_poseG[4] : f.k == 7 ? s_poseG[5] : ko;
         if (a <= 0.001f) continue;
         acc[f.d][0] += f.x * a; acc[f.d][1] += f.y * a; acc[f.d][2] += f.z * a; use[f.d] = true;
+    }
+    if (s_ganiSecOn) for (int d = 18; d <= 21; d++) {   // (07/11) clip .gani
+        if (!S.cur[d]) continue; const float* o = s_ganiSec[d - 18]; if (fabsf(o[0]) + fabsf(o[1]) + fabsf(o[2]) < 1e-7f) continue;
+        for (int k = 0; k < 3; k++) acc[d][k] += o[k]; use[d] = true;
     }
     if (const FaceProf* PF = (const FaceProf*)s_poseProf) {   // (04/11) perfil de la cara: pomulos y bajo-ojo por gesto
         for (int d = 18; d <= 21; d++) {
@@ -1003,6 +1023,30 @@ void ExprBonesFrame(const void* skel) {
     ProfResolve(*S, fr);
     const FaceProf* PF = profOn && S->prof >= 0 && S->prof < (int)s_prof.size() ? &s_prof[S->prof] : nullptr;
     if (PF && pNeu > 0.001f && PF->has[PG_NEUTRA]) poseOn = true;
+    // (07/11, Agustin: "me gustaria que al jugar leas los ganis") clip .gani de la cara (fila 383, gani.cpp): la pose del clip en el
+    // RELOJ DEL JUEGO desde que arranco en este personaje; x = clip, y = peso, z = velocidad, w = 0 bucle / 1 una vez
+    GaniPose GP; bool ganiOn = false; float gW = 0.0f;
+    {
+        if (!s_defToAskOk) DefToAsk();
+        const int gc = (int)(g_cfg.live[383][0] + 0.5f); gW = std::clamp(g_cfg.live[383][1], 0.0f, 1.5f);
+        const float gSp = g_cfg.live[383][2] > 0.01f ? std::clamp(g_cfg.live[383][2], 0.1f, 4.0f) : 1.0f; const bool gLoop = g_cfg.live[383][3] < 0.5f;
+        const float gt = g_cfg.live[157][0];
+        if (gc > 0 && gW > 0.001f) {
+            if (S->ganiClip != gc || gt < S->ganiT0) { S->ganiClip = gc; S->ganiT0 = gt; }
+            bool done = false; ganiOn = GaniSample(gc, (gt - S->ganiT0) * gSp, gLoop, GP, &done);
+        } else S->ganiClip = 0;
+    }
+    if (ganiOn) poseOn = true;
+    s_ganiSecOn = false; s_ganiLidOn = false;
+    if (ganiOn) {
+        for (int d = 18; d <= 21; d++) { const int ab = s_defToAsk[d]; float ph[3] = {}; if (ab >= 0 && GP.has[ab]) GaniPToHead(GP.p[ab], ph); for (int k = 0; k < 3; k++) s_ganiSec[d - 18][k] = ph[k] * gW; }
+        s_ganiSecOn = true;
+        // parpados: en el clip van absolutos (base_normal: arriba 25 grados = abierto, abajo -5); el delta contra eso entra en EyesFrame
+        float at = 0, ab2 = 0; int nt = 0, nb = 0;
+        for (int b = 14; b <= 15; b++) if (GP.has[b]) { at += GaniAngZ(GP.q[b]); nt++; }
+        for (int b = 16; b <= 17; b++) if (GP.has[b]) { ab2 += GaniAngZ(GP.q[b]); nb++; }
+        if (nt || nb) { s_ganiLid[0] = nt ? -(at / nt - 0.43633f) * gW : 0.0f; s_ganiLid[1] = nb ? -(ab2 / nb + 0.08727f) * gW : 0.0f; s_ganiLidOn = true; }
+    }
     s_poseG[0] = pNeu; s_poseG[1] = pAng; s_poseG[2] = pSmi; s_poseG[3] = pSur; s_poseG[4] = pGri; s_poseG[5] = pPuc; s_poseProf = PF;
     if (FreeCamActive() && g_cfg.live[346][0] > 0.5f) PublishHead(*S);   // (02/11) camara libre "seguir la cara"
     float deg = 0.0f; if (JawAngle(*S, jc, &deg)) { S->angMin = (std::min)(S->angMin, deg); S->angMax = (std::max)(S->angMax, deg); S->angN++; }
@@ -1056,6 +1100,7 @@ void ExprBonesFrame(const void* skel) {
     float ln = sqrtf(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]); if (ln < 0.5f) return; for (float& v : ax) v /= ln;
     const float P[3] = { jc.t[0], jc.t[1], jc.t[2] };
     float A = 0.40f * o;
+    if (ganiOn && GP.has[1]) A += -GaniAngZ(GP.q[1]) * gW;   // (07/11) mandibula del clip (giro sobre z del .ask = -x de la cabeza)
     // (03/11) tope de la mandibula: lo del juego + lo del mod no pasa de 35 grados (la barba y la cara no dan para mas)
     {   // (04/11 e) mordida: soltar abre la mandibula; apretar la cierra solo lo que el juego la tenga abierta (los dientes no se pasan)
         const float bite = std::clamp(g_cfg.live[361][1], -1.5f, 1.5f);
@@ -1110,9 +1155,17 @@ void ExprBonesFrame(const void* skel) {
             }
             if (d >= 26 && d <= 29) { const float side = isL ? (std::max)(xB[7], 0.0f) : (std::max)(-xB[7], 0.0f); po[1] += 0.0045f * side; }   // una ceja
         }
+        // (07/11) clip .gani: corrimiento (cm -> m, ejes de la cabeza) y giro local del hueso, por el peso; pomulos / bajo-ojo (18..21) los
+        // lleva Secondary y los parpados (22..25) EyesFrame; la mandibula ya entro en A
+        float gq[4] = { 0, 0, 0, 1 }; bool grot = false;
+        if (ganiOn && d != D_JAW && (d < 18 || (d >= 26 && d <= 30))) { const int ab = s_defToAsk[d]; if (ab >= 0 && GP.has[ab]) {
+            float ph[3]; GaniPToHead(GP.p[ab], ph); for (int k = 0; k < 3; k++) po[k] += ph[k] * gW;
+            float qh[4], qs[4]; GaniQToHead(GP.q[ab], qh); QScale(qh, gW, qs);
+            if (qs[3] < 0.999999f) { float r1[4]; QMul(hr, qs, r1); QMul(r1, hrInv, gq); grot = true; }
+        } }
         const float mvv0[3] = { tv[0] * teeth + ov[0] * op + po[0], tv[1] * teeth + ov[1] * op + po[1], tv[2] * teeth + ov[2] * op + po[2] };
         const bool rot = kDef[d].jaw > 0.0f && fabsf(A) > 1e-5f, mv = fabsf(mvv0[0]) + fabsf(mvv0[1]) + fabsf(mvv0[2]) > 1e-6f;
-        if (!rot && !mv) { if ((d < 18 || (d >= 26 && d <= 30)) && S->wHave[d]) Release(*S, d); continue; }   // 18.. = gestos secundarios / parpados (otro dueno)
+        if (!rot && !mv && !grot) { if ((d < 18 || (d >= 26 && d <= 30)) && S->wHave[d]) Release(*S, d); continue; }   // 18.. = gestos secundarios / parpados (otro dueno)
         Xf x; if (!Base(*S, d, x)) continue;
         float nq[4] = { x.q[0], x.q[1], x.q[2], x.q[3] }, nt[3] = { x.t[0], x.t[1], x.t[2] };
         if (rot) {
@@ -1122,6 +1175,7 @@ void ExprBonesFrame(const void* skel) {
             QRot(qr, v, rv); QMul(qr, x.q, nq);
             nt[0] = P[0] + rv[0]; nt[1] = P[1] + rv[1]; nt[2] = P[2] + rv[2];
         }
+        if (grot) { float q2[4]; QMul(gq, nq, q2); memcpy(nq, q2, sizeof q2); }   // (07/11) giro del clip, en el lugar
         if (mv) {   // corrimiento en los ejes de la cabeza (x a la izquierda del jugador, y arriba, z adelante) -> modelo
             const float hv[3] = { mvv0[0], mvv0[1], mvv0[2] }; float mvv[3];
             QRot(hr, hv, mvv);
@@ -1210,6 +1264,7 @@ static void Dump(const Skel& S) {
 
 // Present (hilo de render): estado para el shader (350.y) y resumen al log
 void ExprBonesPresent() {
+    GaniPresent();   // (07/11) clips .gani de la cara
     const unsigned fr = s_frame.fetch_add(1) + 1;
     const bool active = fr - s_lastActive.load(std::memory_order_relaxed) < 120;
     const bool eyesOn = fr - s_lastEyes.load(std::memory_order_relaxed) < 120;
