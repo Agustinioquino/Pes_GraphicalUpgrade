@@ -1570,6 +1570,49 @@ template<int V> static void MouthMaskReplay(ID3D11DeviceContext* c, DrawScope& d
 }
 // (04/11) cejas con hebras v2: el mismo DrawIndexed de la cara otra vez, con el GS de hebras (facegen.cpp), ANTES de devolver el
 // estado (huesos, gestos, expresiones y render targets de la cara siguen enlazados). Llama la funcion original (sin hooks).
+// (07/11 c, Agustin: "la luz no la afecta de manera correcta, no tiene el volumen exacto ni la dimensionalidad 3d") HEBRAS EN EL ATLAS
+// de sombra de las cabezas (headshadow.cpp, t30): como TessAtlas, apenas dibujadas las hebras en el G-buffer se repite el mismo
+// dibujo sin PS sobre el atlas con el GS de atlas (pes_browat_*_gs: cinta mirando al sol, posicion en la caja de cada cabeza, b12).
+// La pasada del sol (pes_headshadow.hlsli, PCSS) lee ese atlas para la piel de la cara y para las hebras mismas: cada pelo da sombra
+// a los de abajo y a la piel desde donde viene el sol de verdad. z382 = 0 lo apaga. Solo si el atlas ya se limpio en este cuadro.
+template<int V> static void BrowAtlas(ID3D11DeviceContext* c, DrawScope& ds) {
+    if (g_cfg.live[309][0] < 0.5f || g_cfg.live[382][2] < 0.5f) return;
+    const int n = HeadShadowSlots(); ID3D11DepthStencilView* dsv = HeadShadowDSV();
+    if (n <= 0 || !dsv || !HeadShadowClearedThisFrame()) return;
+    ID3D11GeometryShader* ags = BrowAtlasGS(ds.brow.browVS); if (!ags) return;
+    ID3D11RenderTargetView* rt[8] = {}; ID3D11DepthStencilView* oldDsv = nullptr; c->OMGetRenderTargets(8, rt, &oldDsv);
+    UINT nrt = 0; for (UINT i = 0; i < 8; i++) if (rt[i]) nrt = i + 1;
+    ID3D11PixelShader* oldPS = nullptr; c->PSGetShader(&oldPS, nullptr, nullptr);
+    ID3D11GeometryShader* oldGS = nullptr; c->GSGetShader(&oldGS, nullptr, nullptr);
+    ID3D11Buffer* oldB12 = nullptr; c->GSGetConstantBuffers(12, 1, &oldB12);
+    D3D11_VIEWPORT vps[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]; UINT nvp = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE; c->RSGetViewports(&nvp, vps);
+    D3D11_RECT scs[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]; UINT nsc = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE; c->RSGetScissorRects(&nsc, scs);
+    ID3D11RasterizerState* oldRS = nullptr; c->RSGetState(&oldRS);
+    ID3D11DepthStencilState* oldDSS = nullptr; UINT oldRef = 0; c->OMGetDepthStencilState(&oldDSS, &oldRef);
+    o_OMSetRT[V](c, 0, nullptr, dsv);
+    o_SetPS[V](c, nullptr, nullptr, 0);   // sin PS: solo profundidad
+    c->GSSetShader(ags, nullptr, 0);
+    // sin culling (cintas de ambos lados): el RS de la pasada de sombras del juego lleva el sesgo del juego; el de las hebras no
+    if (ID3D11RasterizerState* rs = HeadShadowAtlasRS(oldRS)) c->RSSetState(rs);
+    if (ID3D11DepthStencilState* dss = HeadShadowAtlasDSS()) c->OMSetDepthStencilState(dss, 0);
+    static std::atomic<int> s_logged{0};
+    if (s_logged.fetch_add(1) < 1) Log("cejas: hebras en el atlas de sombra (%d cabezas, VS %s)", n, ds.brow.browVS == 0x455eb97bc2c3a958ULL ? "455eb97b" : "faab87ee");
+    for (int i = 0; i < n; i++) {
+        ID3D11Buffer* cb = HeadShadowCB(i); if (!cb) continue;
+        D3D11_VIEWPORT vp; HeadShadowViewport(i, vp);
+        D3D11_RECT rc{ (LONG)vp.TopLeftX, (LONG)vp.TopLeftY, (LONG)(vp.TopLeftX + vp.Width), (LONG)(vp.TopLeftY + vp.Height) };
+        c->RSSetViewports(1, &vp); c->RSSetScissorRects(1, &rc);
+        c->GSSetConstantBuffers(12, 1, &cb);
+        if (ds.lod.count) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.brow.browCount, ds.brow.browStart, ds.brow.browBase);
+    }
+    o_OMSetRT[V](c, nrt, rt, oldDsv);
+    o_SetPS[V](c, oldPS, nullptr, 0);
+    c->GSSetShader(oldGS, nullptr, 0); c->GSSetConstantBuffers(12, 1, &oldB12);
+    if (nvp) c->RSSetViewports(nvp, vps); if (nsc) c->RSSetScissorRects(nsc, scs);
+    c->RSSetState(oldRS); c->OMSetDepthStencilState(oldDSS, oldRef);
+    for (auto* r : rt) if (r) r->Release(); if (oldDsv) oldDsv->Release(); if (oldPS) oldPS->Release(); if (oldGS) oldGS->Release(); if (oldB12) oldB12->Release();
+    if (oldRS) oldRS->Release(); if (oldDSS) oldDSS->Release();
+}
 template<int V> static void BrowStrands(ID3D11DeviceContext* c, DrawScope& ds) {
     if (!BrowStrandsBegin(c, &ds.brow, ds.brow.browVS)) return;
     if (BrowShadowOn(c)) {   // (04/11 k) sombra de contacto de los pelos sobre la piel (antes de las hebras: ellas no se oscurecen)
@@ -1577,6 +1620,7 @@ template<int V> static void BrowStrands(ID3D11DeviceContext* c, DrawScope& ds) {
         BrowShadowOff(c);
     }
     if (ds.lod.count) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.brow.browCount, ds.brow.browStart, ds.brow.browBase);
+    BrowAtlas<V>(c, ds);   // (07/11 c) con el estado de las hebras aun puesto (GS: b2 / b10 / b11, t0 / t23 / t24 / t26 / t27 / t120 / t121)
     BrowStrandsEnd(c);
 }
 // (04/11 piel) CARA TESELADA EN EL ATLAS de las cabezas (headshadow.cpp, t30: sombra propia de la cabeza y grosor de la piel). La

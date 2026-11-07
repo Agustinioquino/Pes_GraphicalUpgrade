@@ -184,6 +184,41 @@ float4 ProjV(float3 p) {
   float4 h = float4(p, 1);
   return float4(dot(h, m_projection[0]), dot(h, m_projection[1]), dot(h, m_projection[2]), dot(h, m_projection[3]));
 }
+#ifdef PES_ATLAS
+// (07/11 c, Agustin: "la luz no la afecta de manera correcta, no tiene el volumen exacto") modo ATLAS (pes_browat_*_gs): las hebras se
+// dibujan tambien en el atlas de sombra de las cabezas (headshadow.cpp, t30: la sombra propia de la cara y de las hebras en la pasada
+// del sol). Cada pelo tapa a los de abajo y a la piel desde el sol: sombra REAL entre hebras (antes solo la sombra de contacto plana).
+// Misma cuenta que el DS del atlas (pes_face_tess.hlsli PesAtlasClip): posicion de la vista -> mundo (VV = P^-1 PV) -> caja (b12)
+cbuffer PESAtlasBox : register(b12) { float4x4 g_pesAtlasPV; }
+void PesAtlasBasis(out float4 cx, out float4 cy, out float4 cw) {
+  float4 PV0 = m_projectionView[0], PV1 = m_projectionView[1], PV2 = m_projectionView[2], PV3 = m_projectionView[3];
+  float4 P0 = m_projection[0], P2 = m_projection[2], P3 = m_projection[3], P1 = m_projection[1];
+  cw = float4(PV0.w, PV1.w, PV2.w, PV3.w);
+  cx = (float4(PV0.x, PV1.x, PV2.x, PV3.x) - P2.x * cw - float4(0, 0, 0, P3.x)) / (abs(P0.x) > 1e-6 ? P0.x : 1e-6);
+  cy = (float4(PV0.y, PV1.y, PV2.y, PV3.y) - P2.y * cw - float4(0, 0, 0, P3.y)) / (abs(P1.y) > 1e-6 ? P1.y : 1e-6);
+}
+float4 PesAtlasClip(float3 pv) {
+  float4 cx, cy, cw; PesAtlasBasis(cx, cy, cw);
+  float3x3 R = float3x3(cx.xyz, cy.xyz, cw.xyz);
+  float3 q = pv - float3(cx.w, cy.w, cw.w);
+  float3 c0 = cross(R[1], R[2]), c1 = cross(R[2], R[0]), c2 = cross(R[0], R[1]);
+  float det = dot(R[0], c0); det = abs(det) > 1e-8 ? det : 1e-8;
+  float3 w = (c0 * q.x + c1 * q.y + c2 * q.z) / det;
+  float4 c = mul(float4(w, 1.0), g_pesAtlasPV);
+  c.z += 9.99999975e-005 * c.w;
+  return c;
+}
+// direccion del sol (eje de profundidad de la caja, columna 2 en memoria) llevada a la vista: la cinta de cada pelo mira al sol
+float3 PesAtlasLightV() {
+  float4 cx, cy, cw; PesAtlasBasis(cx, cy, cw);
+  float3 Lw = normalize(float3(g_pesAtlasPV[0][2], g_pesAtlasPV[1][2], g_pesAtlasPV[2][2]) + 1e-6);
+  return normalize(float3(dot(cx.xyz, Lw), dot(cy.xyz, Lw), dot(cw.xyz, Lw)));
+}
+float PesAtlasTexelM() {   // tamano de un texel del atlas en metros (columna 0 = R / mitad de la caja; cuadrante de 1024 px)
+  float invHalf = max(length(float3(g_pesAtlasPV[0][0], g_pesAtlasPV[1][0], g_pesAtlasPV[2][0])), 1e-4);
+  return 2.0 / (invHalf * 1024.0);
+}
+#endif
 
 [instance(PES_INST)]
 [maxvertexcount(PES_PER_INST * (PES_SEG + 1) * 2)]
@@ -370,13 +405,22 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
       p = p - Ls * (hgt / max(nl, 0.25)) + n * 0.00005;                          // al plano de la piel, siguiendo la luz
       wid = wid * 1.6 + hgt * 0.04;                                              // penumbra que se abre con la altura
 #endif
+#ifdef PES_ATLAS
+      float3 V = PesAtlasLightV();                                              // (07/11 c) la cinta mira al sol
+      wid = max(wid, PesAtlasTexelM() * 0.55);                                  // y no mas fina que medio texel del atlas
+#else
       float3 V = normalize(-p);
+#endif
       float3 tanR = normalize(dd + n * lift * (0.35 * 3.14159 * cos(t * 3.14159) + 0.1));
       float3 sideV = normalize(cross(dd, V) + 1e-6);
       [unroll] for (int s = -1; s <= 1; s += 2) {
         GSOut o;
         float side = (float)s;
+#ifdef PES_ATLAS
+        o.pos = PesAtlasClip(p + sideV * wid * side);
+#else
         o.pos = ProjV(p + sideV * wid * side);
+#endif
         // (04/11 e, Agustin: "que la luz la tome bien el pelo de la ceja") antes la normal miraba a la CAMARA (V * 0.6): con el sol
         // de costado la hebra se iluminaba distinto que la piel de abajo (alambre oscuro o brillante). Ahora es la normal de la piel
         // redondeada solo hacia los costados de la hebra (perpendicular a su direccion, en el plano de la piel): de lejos la ceja
