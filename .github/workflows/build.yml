@@ -89,6 +89,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $out | Out-Null
           Copy-Item -Recurse package/PES21FX/* $out
           Copy-Item build/Release/d3d11.dll dist/
+          if (Test-Path build/Release/d3d11.map) { Copy-Item build/Release/d3d11.map dist/ }   # (07/11) para el medidor de VRAM por archivo
           Copy-Item package/LEEME.txt dist/
           Copy-Item -Recurse package/sider dist/sider
           if (Test-Path shadercheck.txt) { Copy-Item shadercheck.txt dist/ }

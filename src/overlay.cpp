@@ -791,6 +791,8 @@ static void DrawSectionExtras(const std::string& sname) {
         ImGui::Spacing();
     }
     if (sname.rfind("Ilumin", 0) == 0) { ImGui::TextDisabled("%s", LightMeterSummary().c_str()); ImGui::Spacing(); }
+    if (sname.rfind("Diagn", 0) == 0 || sname.rfind("Debug", 0) == 0) { const std::string gm = GpuMeterSummary();   // (07/11) medidor de VRAM y de ms de GPU (x375)
+        if (!gm.empty()) { ImGui::TextWrapped("%s", gm.c_str()); ImGui::Spacing(); } }
     if (sname.rfind("Cancha", 0) == 0) { ImGui::TextDisabled(TRS("Pasto: parcelas lejanas del juego escaladas: %d en 3 s. Extendido: %d parcelas/cuadro (anillos %d/%d/%d), variante %u idx, camara %s (%.0f, %.0f), estado: %s"), g_grassDbg.sparseLast, g_grassDbg.patches, g_grassDbg.ring[0], g_grassDbg.ring[1], g_grassDbg.ring[2], g_grassDbg.lod, g_grassDbg.cam ? "ok" : "no", g_grassDbg.ex, g_grassDbg.ez, g_grassDbg.why ? g_grassDbg.why : "-"); ImGui::Spacing(); }
 }
 static void SectionLabel(const MenuGroup& g) {
