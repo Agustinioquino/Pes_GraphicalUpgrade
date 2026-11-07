@@ -265,6 +265,71 @@ Texture2D<float4> pesFaceA : register(t23);
 Texture2D<float4> pesFaceB : register(t24);
 SamplerState pesTessSamp : register(s0);
 
+#if !PES_TESS_BODY
+// (07/11, Agustin: "las arrugas en la vida real tienen peso, volumen ... deforman partes del modelo") VOLUMEN DE LAS ARRUGAS: la DLL
+// copia al DS lo que el PS de la piel usa para las arrugas (b4 pesos por zona del motor, t5 / t6 normal y mascara del juego,
+// t20 / t21 las nuestras, t31 las esculpidas de la sonrisa). Con el mismo peso que el PS y el surco medido ancho (wrFoldW), la piel
+// se hunde z366 mm en el surco y sube w366 mm en la cresta: cambia la silueta y la sombra, no solo la luz. Sin nada enlazado = 0.
+cbuffer cPSMaterialT : register(b4) { float4 g_tMat[8]; }
+Texture2D<float4> tWrAnimN : register(t5);
+Texture2D<float4> tWrMaskG : register(t6);
+Texture2D<float4> tWrN     : register(t20);
+Texture2D<float4> tWrM     : register(t21);
+Texture2D<float4> tShapeWr : register(t31);
+float4 PesTessWrSampN(bool hi, float2 uv, float l) { return hi ? tWrN.SampleLevel(pesTessSamp, uv, l) : tWrAnimN.SampleLevel(pesTessSamp, uv, l); }
+// devuelve (surco, cresta) 0..1 con el peso del gesto
+float2 PesTessWrinkle(float2 uv)
+{
+  float4 P13 = IniParams.Load(int2(13, 0));
+  if (P13.w < 0.5) return 0;
+  float4 P7 = IniParams.Load(int2(7, 0)), P14 = IniParams.Load(int2(14, 0)), P15 = IniParams.Load(int2(15, 0));
+  bool hi = P15.x > 0.5;
+  float ys = P15.w > 0 ? 1.0 : -1.0;
+  // peso por zona, igual que el PS (5ce3 / ce188 "arrugas animadas")
+  float4 mT = hi ? tWrM.SampleLevel(pesTessSamp, uv * float2(1, 0.5), 0) : tWrMaskG.SampleLevel(pesTessSamp, uv * float2(1, 0.5), 0);
+  float4 mB = hi ? tWrM.SampleLevel(pesTessSamp, uv * float2(1, 0.5) + float2(0, 0.5), 0) : tWrMaskG.SampleLevel(pesTessSamp, uv * float2(1, 0.5) + float2(0, 0.5), 0);
+  float4 wz = float4(P14.x > 0 ? P14.x : 1.0, P14.y > 0 ? P14.y : 1.0, P14.z > 0 ? P14.z : 1.0, P14.w > 0 ? P14.w : 1.0);
+  float4 wTop = g_tMat[3];
+  float4 wBot = float4(uv.x < 0.5 ? g_tMat[0].y : g_tMat[4].x, g_tMat[4].yzw);
+  float smile = sqrt(saturate(max(g_tMat[0].y, g_tMat[4].x)) * saturate(wTop.w));
+  wTop *= float4(wz.x, wz.x, wz.y, wz.z * (1.0 + max(P13.z, 0.0) * smile));
+  wBot.x *= wz.w;
+  float4 XE = IniParams.Load(int2(340, 0)), XZ = IniParams.Load(int2(341, 0));
+  if (XE.x > 0.5) { float g = max(XE.y, 0.0);
+    wTop *= float4(g * XZ.x, g * XZ.x, g * XZ.x, 1.0 + (g - 1.0) * (XZ.y + XZ.z) * 0.5);
+    wBot.x *= 1.0 + (g - 1.0) * XZ.w; }
+  wBot += saturate(IniParams.Load(int2(347, 0)).x) * float4(0.35, 0.60, 0.60, 0.30);
+  float w = saturate(dot(wTop, mT) + dot(wBot, mB));
+  float dead = saturate(P15.y);
+  w = saturate((w - dead) / max(1.0 - dead, 0.05));
+  w = saturate(w * (P7.x > 0 ? P7.x : 1.0));
+  w = 1.0 - pow(1.0 - w, 1.0 + max(P13.x, 0.0));
+  float2 r = 0;
+  if (w > 0.002) {
+    uint tw = 0, th = 0; if (hi) tWrN.GetDimensions(tw, th); else tWrAnimN.GetDimensions(tw, th);
+    if (tw > 1) {
+      // el surco ancho del PS (wrFoldW: 6 texeles, un mip mas suave)
+      float2 du = float2(6.0 / tw, 0), dv = float2(0, 6.0 / th); float l = 1.0;
+      float4 a = PesTessWrSampN(hi, uv + du, l), b = PesTessWrSampN(hi, uv - du, l), c = PesTessWrSampN(hi, uv + dv, l), d = PesTessWrSampN(hi, uv - dv, l);
+      float z = (a.x * a.w - b.x * b.w) * 0.5 + ys * (c.y - d.y) * 0.5;
+      r = float2(saturate(-z * 2.0), saturate(z * 2.0)) * w;
+    }
+  }
+  // esculpidas de la sonrisa (Messi): slider Sonrisa 355.y con Perfiles por cara 356.w; de 1 a 1.5 pasa a las grandes (BA)
+  { float4 G5 = IniParams.Load(int2(355, 0)), G6 = IniParams.Load(int2(356, 0));
+    float shW = G6.w > 0.5 ? saturate(G5.y) : 0.0;
+    uint sw = 0, sh = 0; tShapeWr.GetDimensions(sw, sh);
+    if (shW > 0.001 && sw > 1) {
+      float bl = saturate((G5.y - 1.0) * 2.0), wx = 6.0 / sw, wy = 6.0 / sh;
+      float4 a = tShapeWr.SampleLevel(pesTessSamp, uv + float2(wx, 0), 2), b = tShapeWr.SampleLevel(pesTessSamp, uv - float2(wx, 0), 2);
+      float4 c = tShapeWr.SampleLevel(pesTessSamp, uv + float2(0, wy), 2), d = tShapeWr.SampleLevel(pesTessSamp, uv - float2(0, wy), 2);
+      float z = (lerp(a.x, a.z, bl) - lerp(b.x, b.z, bl)) * 0.5 + ys * (lerp(c.y, c.w, bl) - lerp(d.y, d.w, bl)) * 0.5;
+      r = saturate(r + float2(saturate(-z * 2.0), saturate(z * 2.0)) * shW);
+    } }
+  return r;
+}
+#endif
+
 [domain("tri")]
 PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<PesTessCP, 3> p)
 {
@@ -354,6 +419,21 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
         }
       }
     }
+  }
+  // (07/11) volumen de las arrugas del gesto (z366 surco, w366 cresta, mm): la boca y los labios no se tocan (regla de Agustin)
+  if (T.x > 0.5 && (EB.z > 0.001 || EB.w > 0.001)) {
+#if PES_TESS_V455
+    float2 uvW = PES_LERP3(o2).zw;
+#else
+    float2 uvW = PES_LERP3(o2).xy;
+#endif
+    float2 fr = PesTessWrinkle(uvW);
+    float3 r0 = PES_LERP3(pR).xyz;
+    float2 me = float2(r0.x / 0.034, (r0.y - 1.6285) / 0.016);
+    float mouthK = r0.z < 0.09 ? 1.0 : smoothstep(1.0, 1.6, length(me));
+    float hW = (clamp(EB.w, 0.0, 2.0) * fr.y - clamp(EB.z, 0.0, 2.0) * fr.x) * mouthK;
+    float3 Nn = normalize(b.x * N0 + b.y * N1 + b.z * N2);
+    d += Nn * (hW * 0.001 * min(seam, seamR) * fade);
   }
 #endif   // !PES_TESS_BODY (relieve solo en la cara)
   // (04/11 d) PRUEBA (fila 360.x): infla la piel 1 cm por la normal, sin tope ni distancia, para ver sin duda que la teselacion

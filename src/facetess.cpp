@@ -27,6 +27,7 @@ static std::map<uint64_t, ID3D11Buffer*> s_vpCB;   // cbuffer b13 del HS por tam
 static std::atomic<int> s_draws{0}, s_skipTopo{0}, s_noShader{0}, s_skipFar{0}, s_drawsBody{0};
 static std::atomic<int> s_lastVpW{0}, s_lastVpH{0};
 static std::atomic<int> s_relief{0};
+static std::atomic<int> s_wrinkle{0};   // (07/11) dibujos con el volumen de las arrugas enlazado al DS
 static std::atomic<int> s_noSeam{0}, s_noPrm{0}, s_off{0};   // (04/11 d) dibujos de piel de la cara que NO se teselaron y por que
 void FaceTessNote(int why) { (why == 0 ? s_noSeam : why == 1 ? s_noPrm : s_off).fetch_add(1, std::memory_order_relaxed); }   // (04/11 c) dibujos con la quinta textura en el DS (relieve)
 static ID3D11SamplerState* s_samp = nullptr;
@@ -227,6 +228,22 @@ bool FaceTessBegin(ID3D11DeviceContext* c, uint64_t vsHash, ID3D11ShaderResource
     if (v < 2) { ID3D11ShaderResourceView* fab[2] = {}; c->PSGetShaderResources(23, 2, fab);   // (04/11 g) el cuerpo no tiene quinta textura: sin relieve
       if (fab[0] && fab[1]) { c->DSSetShaderResources(23, 2, fab); if (s_samp) c->DSSetSamplers(0, 1, &s_samp); s.relief = true; s_relief.fetch_add(1, std::memory_order_relaxed); }
       for (auto* v : fab) if (v) v->Release(); }
+    // (07/11) volumen de las arrugas (z366 / w366): lo que el PS de la piel usa para las arrugas, tambien al DS: b4 (pesos por zona
+    // del motor, con su ventana si la tiene), t5 / t6 (normal y mascara del juego), t20 / t21 (las nuestras), t31 (esculpidas)
+    if (v < 2 && (g_cfg.live[366][2] > 0.001f || g_cfg.live[366][3] > 0.001f)) {
+      ID3D11ShaderResourceView* w2[2] = {}; c->PSGetShaderResources(5, 2, w2); c->DSSetShaderResources(5, 2, w2); for (auto* x : w2) if (x) x->Release();
+      ID3D11ShaderResourceView* w3[2] = {}; c->PSGetShaderResources(20, 2, w3); c->DSSetShaderResources(20, 2, w3); for (auto* x : w3) if (x) x->Release();
+      ID3D11ShaderResourceView* w4 = nullptr; c->PSGetShaderResources(31, 1, &w4); c->DSSetShaderResources(31, 1, &w4); if (w4) w4->Release();
+      ID3D11Buffer* b4 = nullptr; UINT f4 = 0, n4 = 0; ID3D11DeviceContext1* c4 = nullptr;
+      if (SUCCEEDED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c4)) && c4) {
+        c4->PSGetConstantBuffers1(4, 1, &b4, &f4, &n4);
+        if (b4) { D3D11_BUFFER_DESC bd; b4->GetDesc(&bd); const bool win = n4 && (f4 > 0 || n4 * 16 < bd.ByteWidth);
+                  if (win) c4->DSSetConstantBuffers1(4, 1, &b4, &f4, &n4); else c4->DSSetConstantBuffers(4, 1, &b4); }
+        c4->Release();
+      } else { c->PSGetConstantBuffers(4, 1, &b4); if (b4) c->DSSetConstantBuffers(4, 1, &b4); }
+      if (b4) { b4->Release(); s_wrinkle.fetch_add(1, std::memory_order_relaxed); }
+      if (!s_samp) { /* sin sampler propio el DS lee con el de defecto */ } else c->DSSetSamplers(0, 1, &s_samp);
+    }
     c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
     s.on = true; s.topo = topo; s.v = v;
     (v == 2 ? s_drawsBody : s_draws).fetch_add(1, std::memory_order_relaxed);
@@ -243,6 +260,10 @@ void FaceTessEnd(ID3D11DeviceContext* c, FaceTessScope& s) {
     c->HSSetConstantBuffers(10, 1, &nb); c->DSSetConstantBuffers(10, 1, &nb);
     c->HSSetShaderResources(120, 1, &nv); c->DSSetShaderResources(120, 1, &nv);
     if (s.relief) { ID3D11ShaderResourceView* n2[2] = {}; ID3D11SamplerState* ns = nullptr; c->DSSetShaderResources(23, 2, n2); c->DSSetSamplers(0, 1, &ns); s.relief = false; }
+    if (s.v >= 0 && s.v < 2) {   // (07/11) volumen de las arrugas: se suelta siempre (si no se enlazo, poner nulos no cuesta nada)
+      ID3D11ShaderResourceView* z2[2] = {}; c->DSSetShaderResources(5, 2, z2); c->DSSetShaderResources(20, 2, z2); c->DSSetShaderResources(31, 1, z2);
+      c->DSSetConstantBuffers(4, 1, &nb); ID3D11SamplerState* ns = nullptr; c->DSSetSamplers(0, 1, &ns);
+    }
 }
 
 void FaceTessPresent() {
@@ -253,6 +274,7 @@ void FaceTessPresent() {
     { const int pb = s_pBound.exchange(0), po = s_pOff.exchange(0); size_t ns; { std::lock_guard<std::mutex> lk(s_pmx); ns = s_pSaved.size(); }
       if (pb || po || ns) Log("teselacion por jugador: %d caras guardadas; en 60 s %d dibujos con valores propios, %d sin teselar (apagada para ese jugador)", (int)ns, pb, po); }
     const int d = s_draws.exchange(0), st = s_skipTopo.exchange(0), ns = s_noShader.exchange(0), rl = s_relief.exchange(0), db = s_drawsBody.exchange(0);
+    { const int wr = s_wrinkle.exchange(0); if (wr) Log("volumen de las arrugas: %d dibujos con pesos y mascaras en el DS en 60 s (surco %.2f mm, cresta %.2f mm)", wr, g_cfg.live[366][2], g_cfg.live[366][3]); }
     const int nsm = s_noSeam.exchange(0), npr = s_noPrm.exchange(0), off = s_off.exchange(0);
     if (nsm || npr || off) Log("teselacion de caras: dibujos de piel de la cara SIN teselar en 60 s: %d sin pesos de borde (malla en lectura / no teselable), %d sin parametros t120, %d con la tarjeta apagada", nsm, npr, off);
     if (!d && !st && !ns && !db) return;
