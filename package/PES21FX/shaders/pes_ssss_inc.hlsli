@@ -65,14 +65,14 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
 //   180 = contraluz) | w297 altura (grados) | x298 intensidad (veces la luz de estudio sobre la piel) | y298 calidez (0 azul
 //   .. 1 naranja) | z298 luz de estudio que queda | w298 sombra trazada (0 = sin sombra)
 //   x319 icono de las luces en pantalla (DLL, overlay.cpp) | y319 relleno del estudio | z319 recorte del estudio
-//   (07/11, Agustin: angulo, sol o foco, volumetrica en el manual) x376 tipo (0 sol lejano, 1 foco) | y376 distancia del foco al
-//   jugador (m) | z376 apertura del cono (grados) | w376 luz volumetrica (fuerza) | x377 cielo en el manual | y377 densidad de la bruma
-//   (07/11 c) x378 tamano de la luz (grados: 0.27 sol, 5 = ventana / softbox: sombra blanda) | y378 calidad de la sombra (0 rapida 12
-//   pasos, 1 normal 24, 2 alta 48) | z378 rebote del suelo | w378 reflector (rebote de pared del lado opuesto, sin sombra) | x379
-//   color del reflector (0 blanco, 1 plateado, 2 dorado) | y379 alcance de la sombra (m) | z379 brillo de la luz (x especular)
-//   (07/11 d, banco de pruebas) w379 vista de prueba (0 normal, 1 solo luz directa, 2 solo rebote / relleno, 3 solo sombra trazada,
-//   4 N.L en falso color, 5 mascara de piel) | x380 exposicion (EV, x2^EV sobre la luz de prueba) | y380 segunda luz libre (fuerza)
-//   | z380 su rumbo | w380 su altura
+//   (07/11, Agustin: angulo, sol o foco, volumetrica en el manual) x377 tipo (0 sol lejano, 1 foco) | y377 distancia del foco al
+//   jugador (m) | z377 apertura del cono (grados) | w377 luz volumetrica (fuerza) | x378 cielo en el manual | y378 densidad de la bruma
+//   (07/11 c) x379 tamano de la luz (grados: 0.27 sol, 5 = ventana / softbox: sombra blanda) | y379 calidad de la sombra (0 rapida 12
+//   pasos, 1 normal 24, 2 alta 48) | z379 rebote del suelo | w379 reflector (rebote de pared del lado opuesto, sin sombra) | x380
+//   color del reflector (0 blanco, 1 plateado, 2 dorado) | y380 alcance de la sombra (m) | z380 brillo de la luz (x especular)
+//   (07/11 d, banco de pruebas) w380 vista de prueba (0 normal, 1 solo luz directa, 2 solo rebote / relleno, 3 solo sombra trazada,
+//   4 N.L en falso color, 5 mascara de piel) | x381 exposicion (EV, x2^EV sobre la luz de prueba) | y381 segunda luz libre (fuerza)
+//   | z381 su rumbo | w381 su altura
 struct PreOut { float4 c : SV_Target0; float4 s : SV_Target1; };
 
 float3 DecodeN(float2 uv) {   // normal del G-buffer (octaedro 10/10 + 2 bits), igual que en la pasada de luz 1f623
@@ -92,7 +92,7 @@ float3 DecodeN(float2 uv) {   // normal del G-buffer (octaedro 10/10 + 2 bits), 
 // cada cuadro (el TAA lo promedia en un borde suave y estable) y la luz tiene tamano (cono de ~1.2 grados como un foco de estudio
 // grande; el sol real es 0.27 grados): penumbra que se abre con la distancia al que tapa, como en la realidad
 // (07/11 c, Agustin: "cambiar la calidad de la luz, pruebas del rebote") tamano de la luz (radio de la penumbra, rad; el sol
-// 0.0047), pasos de la traza (calidad) y alcance (m): los fija main desde la fila 378 / 379 antes de trazar
+// 0.0047), pasos de la traza (calidad) y alcance (m): los fija main desde la fila 379 / 379 antes de trazar
 static float g_shRad = 0.0047, g_shLen = 0.45;
 static int g_shSteps = 24;
 float PesTraceShadow(float3 Pv, float3 L, float rawNL, float zC, float zSgn, float zA, float2 uv, float2 pxy, float shK) {
@@ -144,9 +144,9 @@ float PesTraceShadow(float3 Pv, float3 L, float rawNL, float zC, float zSgn, flo
   return 1.0 - saturate(occ * saturate(shK) * eM.x * eM.y);
 }
 
-// (07/11) LUZ VOLUMETRICA de la luz de prueba (fila 376 w, 377 y): no hay shadow map en el editor, asi que se hace en pantalla:
+// (07/11) LUZ VOLUMETRICA de la luz de prueba (fila 377 w, 377 y): no hay shadow map en el editor, asi que se hace en pantalla:
 //  (a) bruma: lo que el aire entre la camara y la superficie dispersa hacia el ojo (Henyey-Greenstein g = 0.55, mas fuerte
-//      mirando hacia la luz), con la densidad y377 y el largo del rayo hasta la superficie (o 4 m en el fondo del editor);
+//      mirando hacia la luz), con la densidad y378 y el largo del rayo hasta la superficie (o 4 m en el fondo del editor);
 //  (b) haces: marcha de 16 pasos desde el pixel hacia la posicion de la luz en pantalla (sol lejano o foco) contando cuanto
 //      del camino esta libre de geometria (Mitchell 2007): el jugador tapa la luz y deja rayos alrededor de la silueta.
 //      Si la luz queda detras de la camara no hay haces (solo bruma). El ruido cambia por cuadro y lo promedia el TAA.
@@ -282,9 +282,9 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   if (E.x < 0.5 || !noSun) return o;
   float zC = LinZ(uv);
   float zSgn = zC < 0.0 ? -1.0 : 1.0, zA = abs(zC);
-  float4 E4 = IniParams.Load(int2(376, 0)), E5 = IniParams.Load(int2(377, 0));
-  float4 E6 = IniParams.Load(int2(378, 0)), E7 = IniParams.Load(int2(379, 0));
-  float4 E8 = IniParams.Load(int2(380, 0));
+  float4 E4 = IniParams.Load(int2(377, 0)), E5 = IniParams.Load(int2(378, 0));
+  float4 E6 = IniParams.Load(int2(379, 0)), E7 = IniParams.Load(int2(380, 0));
+  float4 E8 = IniParams.Load(int2(381, 0));
   int dbgView = (int)(E7.w + 0.5);
   g_shRad = radians(E6.x > 0.0 ? E6.x : 0.27) * 0.5 + 1e-4;   // (07/11 c) radio = la mitad del diametro angular
   g_shSteps = E6.y > 1.5 ? 48 : (E6.y > 0.5 ? 24 : 12);
@@ -326,8 +326,8 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   float3 V = -normalize(float3(pp, 1));
   float3 n = DecodeN(uv);
   float3 Lw = PesDirL(az, el, zSgn), L = Lw;
-  // (07/11) foco en el manual: una luz con posicion a y376 m del jugador (el punto del centro de la pantalla) en la direccion del
-  // rumbo / altura, cono de z376 grados con borde suave y caida con el cuadrado de la distancia (1 en el jugador)
+  // (07/11) foco en el manual: una luz con posicion a y377 m del jugador (el punto del centro de la pantalla) en la direccion del
+  // rumbo / altura, cono de z377 grados con borde suave y caida con el cuadrado de la distancia (1 en el jugador)
   bool spot = preset == 0 && E4.x > 0.5;
   float3 Pl = 0.0, lcol = sunC;
   if (spot) {
@@ -463,7 +463,7 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   }
   // (07/11) luz volumetrica (bruma + haces hacia la luz), tambien sobre el fondo del editor
   float3 vol = PesVolumetric(uv, pos.xy, Pv, zA, geo, zSgn, Lw, spot, Pl, sunC, E4.w, E5.y > 0 ? E5.y : 0.5);
-  // (07/11 d) vistas de prueba (w379): aislar cada parte para juzgarla sola. Se pintan sobre gris neutro, sin la luz de estudio
+  // (07/11 d) vistas de prueba (w380): aislar cada parte para juzgarla sola. Se pintan sobre gris neutro, sin la luz de estudio
   if (dbgView > 0) {
     float3 outc = 0; float3 outs = 0;
     if (dbgView == 1) { outc = difDirect; outs = specDirect; }
