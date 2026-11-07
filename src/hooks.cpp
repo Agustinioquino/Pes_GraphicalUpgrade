@@ -1351,18 +1351,20 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     }
     // 19/10: SSS separable en pantalla antes de la composicion: la irradiancia (t9) llega ya difundida sobre la piel
     if (ps && (ps->hash == 0x619b86cb5691cdceULL || ps->hash == 0xf807e74d5b900a15ULL) && ps->repl) {
-        if (ID3D11ShaderResourceView* v = SSSSBeforeComposition(c)) { Remember(c, d, true, true, 9); c->PSSetShaderResources(9, 1, &v);
+        int gz_ = GpuZoneBegin(c, kGzSSSS); ID3D11ShaderResourceView* v0_ = SSSSBeforeComposition(c); GpuZoneEnd(c, gz_);
+        if (ID3D11ShaderResourceView* v = v0_) { Remember(c, d, true, true, 9); c->PSSetShaderResources(9, 1, &v);
             if (ID3D11ShaderResourceView* sp = SSSSSpecSRV()) { Remember(c, d, true, true, 10); c->PSSetShaderResources(10, 1, &sp); } }   // (27/10 b) brillo con la luz de prueba del editor
     }
     // 20/10: GTAO (HBAO actual) para la luz global y la composicion: t27 (se calcula una vez por cuadro)
     if (ps && (ps->hash == 0x619b86cb5691cdceULL || ps->hash == 0xfda6da09737592b1ULL) && ps->repl) {
-        ID3D11ShaderResourceView* v = GTAOBeforeComposition(c, s_presentNo.load());
+        int gz_ = GpuZoneBegin(c, kGzGTAO); ID3D11ShaderResourceView* v = GTAOBeforeComposition(c, s_presentNo.load()); GpuZoneEnd(c, gz_);
         if (!v && g_cfg.live[132][0] > 0.5f) v = GTAONeutralSRV();   // (24/10 g) escena sin GTAO (editor): sin oclusion, no 0
         if (v) { Remember(c, d, true, true, 27); c->PSSetShaderResources(27, 1, &v); }
     }
     // 21/10: SSGI temporal para la composicion: t26 (media resolucion, acumulado en el tiempo)
     if (ps && ps->hash == 0x619b86cb5691cdceULL && ps->repl) {
-        if (ID3D11ShaderResourceView* v = SSGIBeforeComposition(c, s_presentNo.load())) { Remember(c, d, true, true, 26); c->PSSetShaderResources(26, 1, &v); }
+        int gz_ = GpuZoneBegin(c, kGzSSGI); ID3D11ShaderResourceView* v0_ = SSGIBeforeComposition(c, s_presentNo.load()); GpuZoneEnd(c, gz_);
+        if (ID3D11ShaderResourceView* v = v0_) { Remember(c, d, true, true, 26); c->PSSetShaderResources(26, 1, &v); }
     }
     // (27/10) 323: ocultar la camiseta interior (inner / inner_cap / inner_glove de common_package.fpk: 9990 / 9714 / 8640 indices,
     // y el cuello alto highneck: 960). El modulo SinCamiseta no las puede tapar (vienen dentro del fpk que el juego carga una vez):
@@ -1426,7 +1428,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if ((kind) == 1 && t_grassSub.count) { if (!ds.lod.count) ds.lod = t_grassSub; else t_grassSub.Release(); t_grassSub = LodIA(); } \
     if (!ds.skip) { call; } if (ds.restorePS) { c->PSSetShader(ds.restorePS, nullptr, 0); ds.restorePS->Release(); } if (ds.glass.on) GlassAfterDraw(c, ds.glass); if (ds.ring.on) RingAfterDraw(c, ds.ring); \
     if (ds.ring.overlay && !ds.skip) { RingOverlayBegin(c, ds.ring); call; RingOverlayEnd(c, ds.ring); } \
-    if (g_meterHook) { CtxState& cm_ = Ctx(c); if (cm_.ps && cm_.ps->hash == 0x619b86cb5691cdceULL) LightMeterAfterComposition(c); } \
+    if (g_meterHook) { CtxState& cm_ = Ctx(c); if (cm_.ps && cm_.ps->hash == 0x619b86cb5691cdceULL) { int gz_ = GpuZoneBegin(c, kGzLightMeter); LightMeterAfterComposition(c); GpuZoneEnd(c, gz_); } } \
     if (g_inspectOn) { CtxState& ci_ = Ctx(c); if (InspectBegin(c, ci_.ps, ci_.vs, kind, verts, inst)) { call; InspectEnd(c); } } \
     if (ds.mouth && !ds.skip) MouthMaskReplay<V>(c, ds); \
     if (ds.brow.browVS && !ds.skip) BrowStrands<V>(c, ds); if (ds.tess.on && !ds.skip && (kind) == 1) TessAtlas<V>(c, ds); if (ds.tess.on) FaceTessEnd(c, ds.tess); if (r) Restore(c, ds); if (ds.lod.count) ds.lod.Release();
@@ -1717,6 +1719,7 @@ static void HookDevice(ID3D11Device* d) {
         Hook(vt[15], (void*)&hk_CreatePS, (void**)&o_CreatePS, "CreatePixelShader");
         Hook(vt[18], (void*)&hk_CreateCS, (void**)&o_CreateCS, "CreateComputeShader");
         Hook(vt[27], (void*)&hk_CreateDC, (void**)&o_CreateDC, "CreateDeferredContext");
+        GpuMeterHookDevice(d);   // (07/11) medidor de VRAM por dueno (CreateBuffer / CreateTexture*)
         ID3D11DeviceContext* imm = nullptr; d->GetImmediateContext(&imm);
         if (imm) { HookContextV<0>(imm); imm->Release(); }
         ID3D11DeviceContext* dc = nullptr;
@@ -1952,6 +1955,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
             if (g_dev.imm) { g_dev.imm->UpdateSubresource(r.buf, 0, nullptr, zeros.data(), 0, 0); r.cleared = true; }
         }
     }
+    GpuMeterPresent();  // (07/11) medidor de VRAM y de ms de GPU: lectura de consultas, marca del cuadro, log cada 10 s
     SunPassPresent();   // (25/10) variantes de la luz del sol: log de cambios
     LightTraceSummary();   // (27/10) quien llena el cbuffer de la luz
     UpdateTimeParams();
@@ -1963,11 +1967,11 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     CharTrackPresent();    // (24/10) personajes: que jugador es cada esqueleto (ganchos en el primer Present, log)
     SkinDiagPresent();     // (24/10) tono de piel: diagnostico de los dibujos de personajes (w184)
     SkinTonePresent();     // (24/10) tono de piel por jugador: guardado y vista previa en el menu Fisico
-    GlassPresent();        // (24/10) vidrio de los menus: lectura de lo anotado por el PS y plan de copias del fondo
+    { GpuZoneScope gz_(g_dev.imm, kGzGlass); GlassPresent(); }        // (24/10) vidrio de los menus: lectura de lo anotado por el PS y plan de copias del fondo
     MuscleHookPresent();   // (23/10) musculatura: ganchos a los huesos de musculo del motor (primer Present)
     ExprPresent();         // (31/10) expresiones faciales: mallas de cara nuevas (cabeza en la paleta)
     FaceTessPresent();     // (04/11 b) teselacion de la cara: resumen
-    BodyPresent();         // (25/10) la ropa contra el cuerpo real: mallas de piel nuevas, cuadro nuevo
+    { GpuZoneScope gz_(g_dev.imm, kGzBody); BodyPresent(); }         // (25/10) la ropa contra el cuerpo real: mallas de piel nuevas, cuadro nuevo
     MouthMaskPresent();    // (04/11 boca) mascara del interior de la boca: limpiar para el cuadro siguiente
     ArmsPresent();         // (27/10) brazos de TorsoBody para las caras reales: huellas de los torsos del juego, claves del cuadro
     { static unsigned s_noShirt = 1000; s_noShirt = g_shirtSeen.exchange(false) ? 0 : (std::min)(s_noShirt + 1, 1000u);   // (27/10 c) fila 320.z: camisetas en los ultimos 30 Present
@@ -1987,18 +1991,18 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     ExeDumpPresent();
     ExePatchPresent();
     GrassDistPresent();
-    PitchWearPresent();
-    GrassPresent();
-    FaceGenPresent();
-    CarasHdPresent();
+    { GpuZoneScope gz_(g_dev.imm, kGzPitchWear); PitchWearPresent(); }
+    { GpuZoneScope gz_(g_dev.imm, kGzGrass); GrassPresent(); }
+    { GpuZoneScope gz_(g_dev.imm, kGzFaceGen); FaceGenPresent(); }
+    { GpuZoneScope gz_(g_dev.imm, kGzCarasHd); CarasHdPresent(); }
     InspectPresent();
-    FrameCopyPresent(sc);   // antes del menu, para que el menu no se refleje en los ojos
+    { GpuZoneScope gz_(g_dev.imm, kGzFrameCopy); FrameCopyPresent(sc); }   // antes del menu, para que el menu no se refleje en los ojos
     AsyncShotPresent();
-    RingPresent(sc);       // (24/10 e) aro del musculo sobre la imagen final (antes de las capturas y del menu)
+    { GpuZoneScope gz_(g_dev.imm, kGzRing); RingPresent(sc); }       // (24/10 e) aro del musculo sobre la imagen final (antes de las capturas y del menu)
     AutoCapturePresent(s_frameTex);
     FisicoCapturePresent(s_frameTex);   // (26/10 c) paginas del menu Fisico
     MenuTestPresent(sc);
-    OverlayPresent(sc);
+    { GpuZoneScope gz_(g_dev.imm, kGzOverlay); OverlayPresent(sc); }
     return o_Present(sc, sync, flags);
 }
 void OverlayResize();

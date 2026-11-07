@@ -165,8 +165,8 @@ PesTessConst PesTessPatch(InputPatch<PesTessVS, 3> p)
     // (07/11, Agustin: "que no consuma todo el rendimiento") ARISTAS DE ESPALDAS: si los dos extremos de una arista miran para el otro
     // lado de la camara (normal contra el vector a la camara < -0.3: nuca, detras de las orejas, la cara del otro lado de la cabeza) esa
     // arista no se parte. Se decide por arista con sus dos extremos, igual en los dos triangulos que la comparten: sin grietas.
-    // z375 = 0 apaga este recorte.
-    if (IniParams.Load(int2(375, 0)).z > 0.5) {
+    // z376 = 0 apaga este recorte.
+    if (IniParams.Load(int2(376, 0)).z > 0.5) {
       float3 aw = float3(dot(normalize(p[0].o6.xyz), -normalize(p[0].pV.xyz)), dot(normalize(p[1].o6.xyz), -normalize(p[1].pV.xyz)), dot(normalize(p[2].o6.xyz), -normalize(p[2].pV.xyz)));
       bool3 bk = aw < -0.3;
       if (bk.y && bk.z) f[0] = 1.0;
@@ -350,7 +350,7 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
   float3 P0 = p[0].pV.xyz, P1 = p[1].pV.xyz, P2 = p[2].pV.xyz;
   float3 N0 = normalize(p[0].o6.xyz), N1 = normalize(p[1].o6.xyz), N2 = normalize(p[2].o6.xyz);
   float3 pl = b.x * P0 + b.y * P1 + b.z * P2;
-  float3 pp = PesTessSmooth(P0, P1, P2, N0, N1, N2, b, IniParams.Load(int2(375, 0)).y);   // (07/11) Phong o PN (y375)
+  float3 pp = PesTessSmooth(P0, P1, P2, N0, N1, N2, b, IniParams.Load(int2(376, 0)).y);   // (07/11) Phong o PN (y376)
   // (04/11 h, Agustin: "se nota el bajo nivel poligonal en el lagrimal") peso 2 = borde de la abertura del ojo (la DLL lo marca solo en
   // la cara): redondea con x366 (0..1) y su propio tope y366 mm; el relieve no entra ahi (seamR)
   float4 EB = IniParams.Load(int2(366, 0));
@@ -362,7 +362,7 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
   // (07/11) peso 1.25 = costura de textura suave (las dos copias con la misma normal y huesos, expr.cpp SeamWeights): se redondea
   // con Phong pero sin nada que lea la textura (relieve, arrugas), porque cada lado de la costura tiene otras uv
   float3 isSoft = step(1.1, wv) - isEye;
-  wPh *= 1.0 - isSoft * (1.0 - saturate(IniParams.Load(int2(375, 0)).x));   // x375 = 0: las costuras de textura vuelven a quedar fijas
+  wPh *= 1.0 - isSoft * (1.0 - saturate(IniParams.Load(int2(376, 0)).x));   // x376 = 0: las costuras de textura vuelven a quedar fijas
   seam = saturate(dot(b, wPh));
   float seamR = saturate(dot(b, saturate(wv) * (1.0 - isEye - isSoft)));
   // (04/11 f, Agustin: "en el cuello a veces lo rompe, que se desactive en la parte baja del cuello cerca del collar") el anillo

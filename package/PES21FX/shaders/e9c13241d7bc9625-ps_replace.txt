@@ -144,14 +144,17 @@ float PESShadowFilter(float2 uv, float ref, float cas, float2 pix, float orig, f
   float2 p = pix;
   if (SQ.w > 0.5) p += frac(g_psSystem.m_timeParam.z * 61.8034) * 97.0;
   float rot = 6.2831853 * frac(52.9829189 * frac(dot(p, float2(0.06711056, 0.00583715))));
-  float radius = max(max(SH.z, g_pesDynMinR), 0.5) * rscale;
+  // (07/11) w109: la penumbra se mide en texeles de un mapa de 2048, sea cual sea la resolucion real (con sombra_resolucion
+  // 5120 la misma cuenta en texeles daba una sombra 2.5x mas dura: 'las sombras son muy duras')
+  float rsN = IniParams.Load(int2(109,0)).w > 0.5 ? max(res, 1.0) / 2048.0 : 1.0;
+  float radius = max(max(SH.z * rsN, g_pesDynMinR), 0.5) * rscale;
   // PES21 sombras fisicas (18/10): x87 sesgo por plano receptor | z87 penumbra fisica por tamano del sol | w87 tope del ajuste (x0.001 por texel)
   float4 PH = IniParams.Load(int2(87,0));
   float limT = (PH.w > 0.0 ? PH.w : 10.0) * 0.001;
   bool rpb = PH.x > 0.5;
   float casS = cas < 0.5 ? 1.0 : (cas < 1.5 ? g_psScene.m_shadowProjection2._m03 : g_psScene.m_shadowProjection2._m13);
   if (SH.y > 1.5) {
-    float searchR = max(SQ.z, 1.0);
+    float searchR = max(SQ.z * rsN, 1.0);
     float bsum = 0, bcnt = 0;
     [unroll] for (int j = 0; j < 8; j++) {
       float rj = sqrt((j + 0.5) / 8.0);
@@ -173,8 +176,8 @@ float PESShadowFilter(float2 uv, float ref, float cas, float2 pix, float orig, f
       float texPerM = length(g_psScene.m_shadowProjection._m00_m10_m20) * abs(casS) * res * 0.5;
       float distM = avgB / refPerM;
       float penTex = distM * tan(radians(P64s.y > 1.0 ? P64s.y : 0.53)) * texPerM * (SQ.x > 0 ? SQ.x / 200.0 : 1.0);   // x21 = 200 -> 1:1 fisico
-      radius = clamp(penTex, max(0.5, g_pesDynMinR), max(SQ.y, 1.0));
-    } else radius = clamp(avgB * SQ.x, max(0.5, g_pesDynMinR), max(SQ.y, 1.0));
+      radius = clamp(penTex, max(0.5, g_pesDynMinR), max(SQ.y * rsN, 1.0));
+    } else radius = clamp(avgB * SQ.x * rsN, max(0.5, g_pesDynMinR), max(SQ.y * rsN, 1.0));
   }
   float sum = 0;
   [unroll] for (int i = 0; i < 16; i++) {
