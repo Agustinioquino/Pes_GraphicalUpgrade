@@ -27,10 +27,13 @@ jobs:
           print(f"PAK_K0=0x{k0 ^ m0:016x}ULL")
           print(f"PAK_K1=0x{k1 ^ m1:016x}ULL")
           '@
-          python -c $py | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          $lines = python -c $py
+          foreach ($l in $lines) { $v = $l.Split('=', 2)[1]; Write-Host "::add-mask::$v" }   # la clave no queda en el registro de la CI
+          $lines | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
       - name: Configurar
-        run: cmake -S . -B build -A x64 -DPES21FX_PUBLIC=ON "-DPES21FX_PAK_K0=${{ env.PAK_K0 }}" "-DPES21FX_PAK_K1=${{ env.PAK_K1 }}"
+        shell: pwsh
+        run: cmake -S . -B build -A x64 -DPES21FX_PUBLIC=ON "-DPES21FX_PAK_K0=$env:PAK_K0" "-DPES21FX_PAK_K1=$env:PAK_K1"
 
       - name: Compilar
         shell: pwsh

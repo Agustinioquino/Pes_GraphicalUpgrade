@@ -387,6 +387,7 @@ void LoadMenuLang() {
                     for (auto& o : opts) { size_t e = o.rfind('='); if (e != std::string::npos && kl == "choice") o = Trim(o.substr(0, e)); }
                     if (!opts.empty() && opts.back().empty()) opts.pop_back();
                     if (opts.size() == sl.options.size()) sl.optionsEn = opts;
+                    else if (opts.size() > sl.options.size() && !sl.options.empty()) { opts.resize(sl.options.size()); sl.optionsEn = opts; }   // (07/11) version publica: selector recortado
                 }
                 break;
             }

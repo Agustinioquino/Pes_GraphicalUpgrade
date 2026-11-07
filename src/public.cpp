@@ -67,6 +67,11 @@ void PublicLimitConfig(Config& c) {
     // diagnosticos y herramientas de desarrollo: apagados siempre
     c.autoCap = false; c.exeDump = false; c.memWatch = false; c.optDump = false; c.lightTrace = false;
     c.meterOn = false; c.sunWatch = false; c.grassDumpDebugP = false;
+    // teclas que tocan algo reservado (camara libre, camara lenta...): fuera, para que ni un cuadro lo prendan
+    c.keys.erase(std::remove_if(c.keys.begin(), c.keys.end(), [](const KeyBind& k) {
+        for (auto& a : k.assigns) if (Fixed(a.idx, a.comp)) return true;
+        return false;
+    }), c.keys.end());
     auto& gs = c.groups;
     gs.erase(std::remove_if(gs.begin(), gs.end(), [](const MenuGroup& g) {
         if (g.section.rfind("Ropa", 0) == 0) return true;

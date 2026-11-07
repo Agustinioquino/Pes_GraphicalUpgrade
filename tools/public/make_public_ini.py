@@ -22,6 +22,7 @@ PARAMS = {   # filas de parametros (mismos valores que fija public.cpp + prefere
     'w70': '0', 'x78': '0', 'x79': '0', 'y80': '0', 'z255': '0', 'x256': '0', 'w352': '0', 'w353': '0',
     'x377': '0', 'w377': '0', 'y378': '0', 'w379': '0', 'x380': '0', 'w380': '0', 'x381': '0', 'y381': '0',
     'x384': '1', 'y384': '0',
+    'z352': '0',                                  # cuello: el paquete lleva TorsoBody_cuello 1.16 (corta la cara); el hundido z352 es para 1.19
 }
 HIDDEN = {'GITemporal', 'Volumetric', 'FaceTess', 'ExprShow', 'ExprGani', 'CamaraLibre', 'CamaraLenta', 'TorsoOriginal',
           'PerfMeter', 'DebugView', 'DiagHooks'}
