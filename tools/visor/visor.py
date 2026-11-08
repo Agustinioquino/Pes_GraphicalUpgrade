@@ -182,6 +182,9 @@ def api_buscar(ruta, patron, limite=500):
 import re
 INDICE = {'estado': 'sin armar', 'hechos': 0, 'total': 0}
 RE_CARA = re.compile(r'model/character/face/real/(\d+)/face\.fpk$', re.I)
+RE_FAN = re.compile(r'audience|crowd|supporter|spectator|hincha|kanshu|(^|[/_])fans?([_./]|$)', re.I)
+SS_MARCAS = ('stadium-server', 'stadium_server', 'stadiumserver')
+RE_ST = re.compile(r'/(st\d{3}[a-z0-9_]*)/', re.I)
 
 def _entradas_paquete(path):
     if path.lower().endswith('.cpk'):
@@ -220,11 +223,26 @@ def armar_indice():
                     print('indice: no se pudo leer', p, e)
             try: json.dump({'firma': firma, 'tabla': tabla}, open(cache, 'w', encoding='utf-8'))
             except Exception as e: print('indice: no se pudo guardar', e)
-        caras, cuerpos, extras, texturas = {}, [], [], {}
+        caras, cuerpos, extras, texturas, estadios, aficionados = {}, [], [], {}, {}, []
         def anotar(ruta, nombre):
             low = nombre.lower().replace('\\', '/')
             m = RE_CARA.search(low)
             if m: caras[m.group(1)] = ruta; return
+            if low.endswith(('.fmdl', '.fpk')) and any(m in low for m in SS_MARCAS):   # Stadium Server (Sider)
+                segs = ruta.replace('\\', '/').split('/'); i0 = next(i for i, s in enumerate(segs) if s.lower() in SS_MARCAS) + 1
+                resto = segs[i0:-1]; j = next((i for i, s in enumerate(resto) if s.lower() in ('common', 'asset', 'assets', 'model', 'bg')), len(resto))
+                nombre = resto[j - 1] if j >= 1 else (resto[0] if resto else 'stadium-server')
+                estadios.setdefault('SS · ' + nombre, {})[low.rsplit('/', 1)[-1]] = ruta
+                return
+            if low.endswith(('.fmdl', '.fpk')) and RE_FAN.search(low.rsplit('/', 1)[-1]) and '/bg/' not in low and not RE_ST.search(low):
+                aficionados.append(ruta); return
+            if low.endswith(('.fmdl', '.fpk')) and ('/bg/' in low or 'stadium' in low or RE_ST.search(low)):
+                s = RE_ST.search(low)
+                if s: clave = s.group(1)
+                elif '/bg/' in low: clave = low.split('/bg/', 1)[1].split('/', 1)[0]
+                else: clave = low.split('stadium', 1)[1].strip('/_').split('/', 1)[0] or 'stadium'
+                estadios.setdefault(clave, {})[low.rsplit('/', 1)[-1]] = ruta   # lo ultimo (suelto) pisa
+                return
             if low.endswith('common_package.fpk') and 'model/character' in low: cuerpos.append(ruta); return
             if low.endswith(('.ftex', '.dds')):
                 texturas.setdefault(low.rsplit('/', 1)[-1], []).append(ruta); return
@@ -235,9 +253,9 @@ def armar_indice():
         for p, ns in tabla.items():
             for n in ns: anotar(p + '!' + n.replace('\\', '/').strip('/'), n)
         for p in sueltos: anotar(p, p)   # despues: lo suelto pisa
-        INDICE.update({'estado': 'listo', 'caras': caras, 'cuerpos': cuerpos, 'extras': extras[:20000], 'texturas': texturas,
+        INDICE.update({'estado': 'listo', 'caras': caras, 'cuerpos': cuerpos, 'extras': extras[:20000], 'texturas': texturas, 'estadios': {k: list(d.values()) for k, d in estadios.items()}, 'aficionados': aficionados,
                        'hechos': INDICE.get('total', 0)})
-        print('indice: %d caras, %d cuerpos, %d modelos sueltos, %d nombres de textura' % (len(caras), len(cuerpos), len(extras), len(texturas)))
+        print('indice: %d caras, %d cuerpos, %d modelos sueltos, %d nombres de textura' % (len(caras), len(cuerpos), len(extras), len(texturas)), '| estadios:', len(estadios))
     except Exception as e:
         import traceback; traceback.print_exc(); INDICE['estado'] = 'error: %s' % e
 
@@ -245,7 +263,26 @@ def api_personajes():
     if INDICE['estado'] != 'listo':
         return {'estado': INDICE['estado'], 'hechos': INDICE.get('hechos', 0), 'total': INDICE.get('total', 0)}
     return {'estado': 'listo', 'caras': sorted(INDICE['caras'].items(), key=lambda x: int(x[0])), 'cuerpos': INDICE['cuerpos'],
-            'extras': INDICE['extras']}
+            'extras': INDICE['extras'], 'aficionados': INDICE['aficionados'][:2000], 'raices': ARGS.raiz, 'estadios': sorted(([k, len(x)] for k, x in INDICE['estadios'].items()), key=lambda e: e[0])}
+
+def raices_guardadas():
+    try: return [r for r in json.load(open(os.path.join(ARGS.trabajo, 'raices.json'), encoding='utf-8')) if os.path.isdir(r)]
+    except Exception: return []
+
+def api_raiz(ruta):
+    ruta = ruta.strip().strip('"')
+    if not ruta or not os.path.isdir(ruta): raise Err(400, 'no es una carpeta: ' + ruta)
+    if ruta not in ARGS.raiz:
+        ARGS.raiz.append(ruta); ROOTS.append(norm(ruta))
+        json.dump([r for r in ARGS.raiz], open(os.path.join(ARGS.trabajo, 'raices.json'), 'w', encoding='utf-8'))
+    if INDICE['estado'] == 'listo' or INDICE['estado'].startswith('error'):
+        INDICE.update({'estado': 'sin armar', 'hechos': 0, 'total': 0}); threading.Thread(target=armar_indice, daemon=True).start()
+    return {'raices': ARGS.raiz}
+
+def api_estadio(clave):
+    if INDICE['estado'] != 'listo': raise Err(503, 'indice sin armar')
+    if clave not in INDICE['estadios']: raise Err(404, 'no hay estadio ' + clave)
+    return {'clave': clave, 'archivos': INDICE['estadios'][clave]}
 
 def api_paquete_modelos(ruta):
     """los .fmdl dentro de un fpk (face.fpk, common_package.fpk)"""
@@ -459,6 +496,7 @@ class H(BaseHTTPRequestHandler):
             n = int(self.headers.get('Content-Length') or 0)
             if n <= 0 or n > 64 << 20: raise Err(400, 'tamano')
             body = self.rfile.read(n)
+            if p == '/api/raiz': return self._send(200, api_raiz(body.decode('utf-8', 'replace')))
             if p == '/api/captura':   # imagen del visor 3D (data URL png) -> <trabajo>\capturas
                 import base64
                 head, _, dat = body.partition(b',')
@@ -481,6 +519,7 @@ class H(BaseHTTPRequestHandler):
             if p == '/api/buscar': return self._send(200, api_buscar(ruta, q.get('q', ''), int(q.get('n', 500))))
             if p == '/api/fmdl': return self._send(200, api_fmdl(ruta))
             if p == '/api/personajes': return self._send(200, api_personajes())
+            if p == '/api/estadio': return self._send(200, api_estadio(q.get('clave', '')))
             if p == '/api/paquete_modelos': return self._send(200, api_paquete_modelos(ruta))
             if p == '/api/textura': return self._send(200, api_textura(q.get('modelo', ''), q.get('nombre', '')))
             if p == '/api/ftex': return self._send(200, api_ftex_info(ruta))
@@ -526,6 +565,7 @@ def main():
     if FROZEN:   # el exe no tiene consola: lo que imprime va a <trabajo>\visor.log
         sys.stdout = sys.stderr = open(os.path.join(ARGS.trabajo, 'visor.log'), 'a', buffering=1, encoding='utf-8', errors='replace')
         print('--- visor.exe', time.strftime('%Y-%m-%d %H:%M:%S'), sys.argv[1:])
+    ARGS.raiz += [r for r in raices_guardadas() if r not in ARGS.raiz]
     ROOTS = [norm(ARGS.juego), norm(ARGS.trabajo), norm(os.path.dirname(TOOLS))] + [norm(r) for r in ARGS.raiz]
     srv = ThreadingHTTPServer(('127.0.0.1', ARGS.puerto), H)
     threading.Thread(target=armar_indice, daemon=True).start()   # caras / cuerpos / texturas del juego
