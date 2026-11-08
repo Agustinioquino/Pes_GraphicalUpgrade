@@ -63,8 +63,10 @@ float PesHandH(float3 p, float curl, out float crease) {
     }
     // surcos entre los metacarpianos (entre tendones), mas hondos con los dedos estirados
     float cw = cm / PLR_HW;
-    float between = PesLrG((cw - 0.43) / 0.16) + PesLrG((cw + 0.25) / 0.16) + PesLrG((cw + 0.82) / 0.16);
-    h -= 0.00022 * ext * between * PesLrWin(sm, 0.035, 0.095) * dors;
+    // (08/11 n, Agustin: "el normal de la mano marca mucho esta parte", captura: lineas oscuras finas entre los tendones del dorso)
+    // mas anchos y menos hondos: un valle suave entre los huesos, no un corte
+    float between = PesLrG((cw - 0.43) / 0.24) + PesLrG((cw + 0.25) / 0.24) + PesLrG((cw + 0.82) / 0.24);
+    h -= 0.00011 * ext * between * PesLrWin(sm, 0.035, 0.095) * dors;
     // punta del cubito
     h += 0.00110 * PesLrG(length(p - PLR_ULNA) / 0.0065);
     // pliegues de la muneca en la palma (dos lineas a lo ancho), un poco mas hondos con la mano cerrada
