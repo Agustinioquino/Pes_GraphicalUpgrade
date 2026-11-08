@@ -1,6 +1,6 @@
-PES21 FX - entorno visual (08/11)
+Pes Explorer NEM - entorno visual de PES21 FX (08/11)
 
-0) PES21FX_Visor.exe (lo arma la CI, carpeta visor\ del paquete de la rama build): doble clic y listo, sin Python.
+0) PesExplorerNEM.exe (lo arma la CI, carpeta visor\ del paquete de la rama build): doble clic y listo, sin Python.
    Acepta los mismos argumentos (--juego, --trabajo, --puerto). Sus mensajes van a B:\VisualPes21\visor.log.
 1) visor.bat  -> lo mismo desde el repo, APLICACION de escritorio (ventana propia, pywebview / WebView2; con --sin-ventana queda solo el servidor en
    http://127.0.0.1:21020/ para el navegador). Visor de archivos + escena 3D + panel. Lee el juego en

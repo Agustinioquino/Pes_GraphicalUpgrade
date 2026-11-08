@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# PES21 FX (08/11) - VISOR: servidor local (solo 127.0.0.1) que abre los archivos del juego para la pagina static\index.html:
+# PES21 FX (08/11) - PES EXPLORER NEM (visor): servidor local (solo 127.0.0.1) que abre los archivos del juego para la pagina static\index.html:
 # carpetas y .cpk / .fpk (navegacion y extraccion perezosa), .fmdl (mallas + huesos en 3D), .ftex / .dds (texturas y sus canales),
 # .gani / .ask / .frig (curvas de la cara), .ini / .lua / .log (texto) y StrCode32. Reusa tools\cpk_extract.py, tools\ftex.py,
 # tools\fox\fmdl.py, tools\fox\fpk_edit.py, tools\gani_cara.py y tools\foxhash.py. No escribe en la carpeta del juego: lo que
@@ -14,7 +14,7 @@
 import os, sys, io, json, struct, base64, hashlib, argparse, threading, time, mimetypes, urllib.parse, math
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-FROZEN = getattr(sys, 'frozen', False)   # PES21FX_Visor.exe (PyInstaller, CI): static\ y los modulos de tools\ van dentro del exe
+FROZEN = getattr(sys, 'frozen', False)   # PesExplorerNEM.exe (PyInstaller, CI): static\ y los modulos de tools\ van dentro del exe
 HERE = sys._MEIPASS if FROZEN else os.path.dirname(os.path.abspath(__file__))
 TOOLS = os.path.dirname(HERE)
 sys.path.insert(0, TOOLS); sys.path.insert(0, os.path.join(TOOLS, 'fox'))
@@ -387,7 +387,7 @@ def main():
             while True: time.sleep(3600)
         except KeyboardInterrupt: pass
         return
-    w = webview.create_window('PES21 FX Visor', url, width=1500, height=940, min_size=(1000, 650), background_color='#0f1115')
+    w = webview.create_window('Pes Explorer NEM', url, width=1500, height=940, min_size=(1000, 650), background_color='#0f1115')
     webview.start(private_mode=False, storage_path=os.path.join(ARGS.trabajo, 'app'))
     srv.shutdown()
 

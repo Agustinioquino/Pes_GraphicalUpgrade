@@ -3,82 +3,151 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PES21 FX Visor</title>
+<title>Pes Explorer NEM</title><link rel="icon" href="nem512.png">
 <style>
-:root{--bg:#0f1115;--panel:#171a21;--line:#262b36;--text:#e6e8ee;--dim:#8d94a5;--acc:#4fc3f7;--acc2:#ffb74d;--ok:#66bb6a;--bad:#ef5350}
+:root{--bg:#070a0a;--bg2:#0d1512;--panel:rgba(16,28,22,.55);--panel2:rgba(22,38,30,.7);--line:rgba(212,175,55,.22);--line2:rgba(212,175,55,.45);--text:#eef3ee;--dim:#9fb0a4;--gold:#d9b84a;--gold2:#f3dc8a;--green:#2fcf7a;--green2:#7cf0ae;--ok:#3ddc84;--bad:#ef5350;--acc:var(--gold);--acc2:var(--green2);--r:14px}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,Segoe UI,Roboto,sans-serif;display:flex;height:100vh;overflow:hidden}
-nav{width:200px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:10px 0;flex-shrink:0}
-nav h1{font-size:15px;margin:4px 16px 12px;color:var(--acc)}
-nav button{background:none;border:0;color:var(--text);text-align:left;padding:9px 16px;cursor:pointer;font-size:14px;border-left:3px solid transparent}
-nav button:hover{background:#1f2430}
-nav button.on{border-left-color:var(--acc);background:#1c2230}
-nav .est{margin-top:auto;padding:10px 16px;font-size:12px;color:var(--dim)}
-nav .est b{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--bad);margin-right:6px}
-nav .est b.ok{background:var(--ok)}
-main{flex:1;display:flex;flex-direction:column;min-width:0}
-section{display:none;flex:1;min-height:0;overflow:auto;padding:16px}
+html,body{height:100%}
+body{margin:0;color:var(--text);font:14px/1.45 "Segoe UI Variable","Segoe UI",system-ui,Roboto,sans-serif;display:flex;height:100vh;overflow:hidden;
+  background:radial-gradient(1200px 700px at 15% -10%,rgba(47,207,122,.18),transparent 60%),radial-gradient(900px 600px at 100% 100%,rgba(217,184,74,.16),transparent 55%),radial-gradient(700px 500px at 60% 40%,rgba(32,90,60,.25),transparent 60%),linear-gradient(160deg,#0b100e,#06090a 60%,#0a0d10)}
+body::before{content:"";position:fixed;inset:0;background:url(nem512.png) center/min(70vh,70vw) no-repeat;opacity:.06;filter:blur(2px) saturate(1.3);pointer-events:none}
+.glass{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);backdrop-filter:blur(18px) saturate(1.5);-webkit-backdrop-filter:blur(18px) saturate(1.5);box-shadow:0 10px 40px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.08)}
+nav{width:232px;display:flex;flex-direction:column;padding:14px 10px;flex-shrink:0;margin:12px 0 12px 12px;background:linear-gradient(180deg,rgba(20,34,26,.75),rgba(10,16,14,.75));border:1px solid var(--line);border-radius:var(--r);backdrop-filter:blur(20px) saturate(1.4);box-shadow:0 10px 40px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.08)}
+nav .marca{display:flex;align-items:center;gap:10px;padding:4px 8px 14px;border-bottom:1px solid var(--line);margin-bottom:8px}
+nav .marca img{width:54px;height:54px;border-radius:50%;box-shadow:0 0 18px rgba(217,184,74,.45),0 0 40px rgba(47,207,122,.25)}
+nav h1{font-size:15px;margin:0;line-height:1.15;background:linear-gradient(90deg,var(--gold2),var(--gold) 45%,var(--green2));-webkit-background-clip:text;background-clip:text;color:transparent;letter-spacing:.02em}
+nav h1 small{display:block;font-size:10px;letter-spacing:.2em;color:var(--dim);-webkit-text-fill-color:var(--dim);text-transform:uppercase;font-weight:500;margin-top:2px}
+nav button{background:none;border:1px solid transparent;color:var(--text);text-align:left;padding:9px 12px;cursor:pointer;font-size:14px;border-radius:10px;margin:2px 0;display:flex;gap:8px;align-items:center;transition:background .15s,border-color .15s,transform .1s}
+nav button:hover{background:rgba(255,255,255,.05);border-color:var(--line)}
+nav button.on{background:linear-gradient(90deg,rgba(217,184,74,.22),rgba(47,207,122,.12));border-color:var(--line2);box-shadow:inset 0 0 0 1px rgba(255,255,255,.04),0 4px 16px rgba(217,184,74,.12)}
+nav button.on::before{content:"";width:3px;height:18px;border-radius:2px;background:linear-gradient(var(--gold2),var(--green));margin-left:-6px}
+nav .est{margin-top:auto;padding:12px 10px 4px;font-size:12px;color:var(--dim);border-top:1px solid var(--line)}
+nav .est div{display:flex;align-items:center;gap:7px;padding:3px 0}
+nav .est b{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--bad);box-shadow:0 0 8px var(--bad)}
+nav .est b.ok{background:var(--ok);box-shadow:0 0 10px var(--ok)}
+main{flex:1;display:flex;flex-direction:column;min-width:0;padding:12px}
+section{display:none;flex:1;min-height:0;overflow:auto;padding:4px 4px 8px}
 section.on{display:flex;flex-direction:column}
 .fila{display:flex;gap:12px;min-height:0;flex:1}
 .col{display:flex;flex-direction:column;gap:8px;min-width:0}
-.caja{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px}
-.caja h3{margin:0 0 8px;font-size:13px;color:var(--dim);text-transform:uppercase;letter-spacing:.04em}
-input,select{background:#0c0e12;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:inherit}
-input[type=range]{padding:0;width:100%}
-button.b{background:#232936;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px 10px;cursor:pointer;font:inherit}
-button.b:hover{background:#2c3444}
-button.b.p{background:var(--acc);color:#07202a;border-color:var(--acc);font-weight:600}
+.caja{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:12px;backdrop-filter:blur(16px) saturate(1.4);-webkit-backdrop-filter:blur(16px) saturate(1.4);box-shadow:0 8px 30px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.07)}
+.caja h3{margin:0 0 8px;font-size:12px;color:var(--gold);text-transform:uppercase;letter-spacing:.14em;font-weight:600}
+input,select{background:rgba(0,0,0,.35);color:var(--text);border:1px solid var(--line);border-radius:9px;padding:7px 10px;font:inherit;outline:none;transition:border-color .15s,box-shadow .15s}
+input:focus,select:focus{border-color:var(--gold);box-shadow:0 0 0 3px rgba(217,184,74,.15)}
+input[type=range]{padding:0;width:100%;accent-color:var(--gold);background:none;border:0;box-shadow:none}
+button.b{background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,.02));color:var(--text);border:1px solid var(--line);border-radius:9px;padding:7px 12px;cursor:pointer;font:inherit;transition:all .15s;backdrop-filter:blur(8px)}
+button.b:hover{border-color:var(--line2);background:rgba(217,184,74,.12);transform:translateY(-1px)}
+button.b.p{background:linear-gradient(135deg,var(--gold2),var(--gold) 60%,#b8923a);color:#1c1606;border-color:rgba(255,255,255,.3);font-weight:700;box-shadow:0 4px 18px rgba(217,184,74,.35)}
+button.b.p:hover{filter:brightness(1.08)}
 .lista{overflow:auto;flex:1;min-height:0}
-.item{padding:5px 8px;border-radius:5px;cursor:pointer;display:flex;gap:8px;align-items:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.item:hover{background:#1f2430}
-.item.sel{background:#223044}
+.item{padding:6px 10px;border-radius:9px;cursor:pointer;display:flex;gap:8px;align-items:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border:1px solid transparent;transition:background .12s}
+.item:hover{background:rgba(255,255,255,.05);border-color:var(--line)}
+.item.sel{background:linear-gradient(90deg,rgba(47,207,122,.2),rgba(217,184,74,.1));border-color:var(--line2)}
 .item .t{color:var(--dim);font-size:12px;margin-left:auto}
-.tag{font-size:11px;padding:1px 6px;border-radius:10px;background:#263040;color:var(--acc)}
-.tag.modelo{background:#2b3a2b;color:#9ccc65}.tag.textura{background:#3a2b3a;color:#ce93d8}.tag.animacion{background:#3a352b;color:var(--acc2)}.tag.paquete{background:#2b333a;color:#90caf9}
+.tag{font-size:11px;padding:1px 8px;border-radius:10px;background:rgba(217,184,74,.15);color:var(--gold2);border:1px solid rgba(217,184,74,.25)}
+.tag.modelo{background:rgba(47,207,122,.15);color:var(--green2);border-color:rgba(47,207,122,.3)}.tag.textura{background:rgba(206,147,216,.15);color:#e2b6f0;border-color:rgba(206,147,216,.3)}.tag.animacion{background:rgba(255,183,77,.15);color:#ffd08a;border-color:rgba(255,183,77,.3)}.tag.paquete{background:rgba(144,202,249,.15);color:#b5dcff;border-color:rgba(144,202,249,.3)}
 .ruta{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:var(--dim);word-break:break-all}
-canvas.tres{width:100%;height:100%;display:block;border-radius:8px;background:#0a0c10}
+canvas.tres{width:100%;height:100%;display:block;border-radius:var(--r);background:radial-gradient(circle at 50% 30%,#13211a,#05080a 70%);border:1px solid var(--line);box-shadow:0 8px 30px rgba(0,0,0,.4)}
 pre{margin:0;white-space:pre-wrap;word-break:break-word;font:12px/1.4 ui-monospace,Consolas,monospace}
-.slider{display:grid;grid-template-columns:1fr 70px;gap:6px 10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}
+.slider{display:grid;grid-template-columns:1fr auto;gap:6px 10px;align-items:center;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.05)}
 .slider label{font-size:13px}
-.slider .v{font-family:ui-monospace,Consolas,monospace;font-size:12px;text-align:right;color:var(--acc)}
+.slider .v{font-family:ui-monospace,Consolas,monospace;font-size:12px;text-align:right;color:var(--green2)}
 .slider small{grid-column:1/3;color:var(--dim);font-size:11px}
-.grupo{margin-bottom:10px}
-.grupo h4{margin:0;padding:8px 10px;background:#1c2230;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:8px;font-size:13px}
-.grupo h4 .sec{color:var(--dim);font-weight:400;font-size:11px;margin-left:auto}
-.grupo .cuerpo{display:none;padding:4px 10px}
+.grupo{margin-bottom:10px;border:1px solid var(--line);border-radius:12px;background:var(--panel);backdrop-filter:blur(14px);overflow:hidden}
+.grupo h4{margin:0;padding:10px 12px;background:linear-gradient(90deg,rgba(217,184,74,.1),transparent);cursor:pointer;display:flex;align-items:center;gap:10px;font-size:13px;font-weight:600}
+.grupo h4 .sec{color:var(--dim);font-weight:400;font-size:11px;margin-left:auto;letter-spacing:.08em;text-transform:uppercase}
+.grupo .cuerpo{display:none;padding:6px 12px 10px}
 .grupo.abierto .cuerpo{display:block}
-.sw{width:34px;height:18px;border-radius:9px;background:#3a3f4b;position:relative;cursor:pointer;flex-shrink:0}
-.sw::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#ccc;transition:left .15s}
-.sw.on{background:var(--ok)}.sw.on::after{left:18px}
-.tuto{background:linear-gradient(135deg,#1b2a3a,#171a21);border:1px solid #2a3b50;border-radius:10px;padding:14px 16px;margin-bottom:12px}
-.tuto h2{margin:0 0 6px;font-size:16px;color:var(--acc)}
+.sw{width:36px;height:20px;border-radius:10px;background:rgba(255,255,255,.12);position:relative;cursor:pointer;flex-shrink:0;border:1px solid var(--line);transition:background .2s}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#ddd;transition:left .15s,background .2s}
+.sw.on{background:linear-gradient(90deg,var(--green),#1f9c5c);box-shadow:0 0 12px rgba(47,207,122,.5)}.sw.on::after{left:18px;background:#fff}
+.tuto{position:relative;background:linear-gradient(135deg,rgba(47,207,122,.14),rgba(217,184,74,.1) 60%,rgba(255,255,255,.03));border:1px solid var(--line2);border-radius:var(--r);padding:16px 18px;margin-bottom:12px;backdrop-filter:blur(18px) saturate(1.5);box-shadow:0 10px 40px rgba(0,0,0,.4),inset 0 1px 0 rgba(255,255,255,.1)}
+.tuto h2{margin:0 0 6px;font-size:17px;background:linear-gradient(90deg,var(--gold2),var(--gold));-webkit-background-clip:text;background-clip:text;color:transparent}
 .tuto ol,.tuto ul{margin:6px 0 0 18px;padding:0}
 .tuto li{margin:3px 0}
+.tuto code{background:rgba(0,0,0,.35);padding:1px 5px;border-radius:5px;color:var(--green2)}
 .tuto .cerrar{float:right;color:var(--dim);cursor:pointer;font-size:12px}
-.tarjetas{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}
-.tarjeta{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;cursor:pointer}
-.tarjeta:hover{border-color:var(--acc)}
+.hero{display:flex;gap:22px;align-items:center}
+.hero img{width:150px;height:150px;border-radius:50%;flex-shrink:0;box-shadow:0 0 30px rgba(217,184,74,.4),0 0 70px rgba(47,207,122,.25);animation:flotar 6s ease-in-out infinite}
+@keyframes flotar{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+.hero h2{font-size:26px}
+.tarjetas{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
+.tarjeta{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:14px;cursor:pointer;backdrop-filter:blur(14px);transition:transform .15s,border-color .15s,box-shadow .15s;position:relative;overflow:hidden;text-decoration:none;color:inherit}
+.tarjeta::after{content:"";position:absolute;inset:-40% -40% auto auto;width:140px;height:140px;border-radius:50%;background:radial-gradient(circle,rgba(217,184,74,.25),transparent 70%);pointer-events:none}
+.tarjeta:hover{transform:translateY(-3px);border-color:var(--gold);box-shadow:0 12px 40px rgba(217,184,74,.18)}
 .tarjeta h3{margin:0 0 4px;font-size:14px;color:var(--text);text-transform:none;letter-spacing:0}
 .tarjeta p{margin:0;color:var(--dim);font-size:12px}
-.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:12px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;font-size:12px}
 .kv b{color:var(--dim);font-weight:400}
-.aviso{background:#3a2a1a;border:1px solid #5a3a1a;color:#ffcc80;border-radius:8px;padding:8px 10px;font-size:13px}
+.aviso{background:rgba(217,184,74,.1);border:1px solid var(--line2);color:var(--gold2);border-radius:12px;padding:10px 12px;font-size:13px;backdrop-filter:blur(10px)}
 .ok{color:var(--ok)}.bad{color:var(--bad)}
-#toast{position:fixed;bottom:14px;right:14px;background:#263040;border:1px solid var(--acc);color:var(--text);padding:8px 12px;border-radius:8px;display:none;max-width:420px;font-size:13px}
-.barra{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+#toast{position:fixed;bottom:16px;right:16px;background:rgba(20,34,26,.85);border:1px solid var(--gold);color:var(--text);padding:10px 14px;border-radius:12px;display:none;max-width:420px;font-size:13px;backdrop-filter:blur(16px);box-shadow:0 10px 40px rgba(0,0,0,.5)}
+.barra{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
 .barra input[type=text],.barra input[type=search]{flex:1;min-width:160px}
-.curvas{width:100%;height:220px;background:#0a0c10;border-radius:8px}
+.curvas{width:100%;height:220px;background:rgba(0,0,0,.4);border-radius:12px;border:1px solid var(--line)}
 .chk{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--dim)}
+.chk input{accent-color:var(--green)}
 .mini{font-size:12px;color:var(--dim)}
-img.tex{max-width:100%;image-rendering:pixelated;background:repeating-conic-gradient(#222 0 25%,#111 0 50%) 0 0/16px 16px;border-radius:6px}
-.pose{display:flex;gap:6px;align-items:center;padding:4px 0;border-bottom:1px solid var(--line);font-size:12px}
+img.tex{max-width:100%;image-rendering:pixelated;background:repeating-conic-gradient(#1b2420 0 25%,#0d1210 0 50%) 0 0/16px 16px;border-radius:10px;border:1px solid var(--line)}
+.pose{display:flex;gap:6px;align-items:center;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:12px}
 .pose span{flex:1}
-@media (max-width:900px){nav{width:56px}nav h1,nav button span,nav .est{display:none}nav button{text-align:center;padding:10px 0}.fila{flex-direction:column}}
+::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:rgba(217,184,74,.25);border-radius:10px;border:2px solid transparent;background-clip:padding-box}::-webkit-scrollbar-thumb:hover{background:rgba(217,184,74,.45);background-clip:padding-box}
+@media (max-width:900px){nav{width:64px}nav h1,nav button span,nav .est,nav .marca h1{display:none}nav .marca{justify-content:center;padding-bottom:8px}nav .marca img{width:40px;height:40px}nav button{justify-content:center;padding:10px 0}.fila{flex-direction:column}.hero{flex-direction:column;text-align:center}}
+
+/* ---- modos: Simple (por defecto) y Motor (editor de motor de juego) ---- */
+nav .modos{display:flex;gap:4px;padding:0 4px 10px;border-bottom:1px solid var(--line);margin-bottom:6px}
+nav .modos button{flex:1;justify-content:center;padding:6px 4px;font-size:12px;margin:0;border:1px solid var(--line);background:rgba(0,0,0,.25)}
+nav .modos button.on{background:linear-gradient(135deg,rgba(217,184,74,.3),rgba(47,207,122,.15));border-color:var(--gold)}
+nav .modos button.on::before{display:none}
+.av{display:none!important}
+#estadoMotor{display:none;gap:18px;padding:5px 12px;font:11px/1.4 ui-monospace,Consolas,monospace;color:var(--dim);border:1px solid var(--line);border-radius:8px;margin-top:8px;background:rgba(0,0,0,.45)}
+#estadoMotor span:last-child{margin-left:auto;color:var(--gold);letter-spacing:.2em}
+body.motor .av{display:revert!important}
+body.motor nav .av{display:flex!important}
+body.motor .tarjeta.av{display:block!important}
+body.motor .chk.av{display:flex!important}
+body.motor .col.av{display:flex!important}
+body.motor #estadoMotor{display:flex!important}
+body.motor{--bg:#0b0c0e;--panel:rgba(24,26,30,.82);--line:rgba(255,255,255,.09);--line2:rgba(217,184,74,.5);--r:6px;--text:#e4e6ea;--dim:#8e949e;font-size:13px;
+  background:linear-gradient(180deg,#121417,#0a0b0d)}
+body.motor::before{opacity:.03}
+body.motor nav{background:#15171b;backdrop-filter:none;box-shadow:none;margin:0;border-radius:0;border:0;border-right:1px solid var(--line);width:210px;padding:10px 6px}
+body.motor main{padding:0 8px 8px}
+body.motor .caja,body.motor .grupo,body.motor .tuto,body.motor .tarjeta{backdrop-filter:none;box-shadow:none;border-radius:6px}
+body.motor .caja{background:#1a1d22;padding:8px 10px}
+body.motor .caja h3{font-size:11px;letter-spacing:.1em;color:#b9bfc9;background:#22262c;margin:-8px -10px 8px;padding:5px 10px;border-bottom:1px solid var(--line);border-radius:6px 6px 0 0}
+body.motor .tuto{background:#1f2227;border-left:3px solid var(--gold);padding:10px 14px}
+body.motor .tuto h2{font-size:14px;-webkit-text-fill-color:var(--gold2);color:var(--gold2)}
+body.motor .hero img{width:72px;height:72px;animation:none;box-shadow:none}
+body.motor .hero h2{font-size:18px}
+body.motor .tarjeta{background:#1a1d22}body.motor .tarjeta::after{display:none}
+body.motor .tarjeta:hover{transform:none;border-color:var(--gold);box-shadow:none}
+body.motor input,body.motor select{background:#0e1013;border-radius:4px;padding:4px 8px;font-size:12px}
+body.motor button.b{border-radius:4px;padding:4px 10px;font-size:12px;background:#262a31;backdrop-filter:none}
+body.motor button.b:hover{transform:none;background:#30353e}
+body.motor button.b.p{background:var(--gold);box-shadow:none}
+body.motor nav button{border-radius:4px;padding:6px 10px;font-size:13px}
+body.motor nav button.on{background:#2a2e36;border-color:var(--line);box-shadow:none}
+body.motor .item{border-radius:3px;padding:3px 8px;font-size:12px}
+body.motor .slider{padding:4px 0;grid-template-columns:1fr 90px}
+body.motor .slider label{font-size:12px}
+body.motor .slider .v{color:var(--gold2)}
+body.motor .grupo{margin-bottom:4px;background:#1a1d22}
+body.motor .grupo h4{padding:6px 10px;font-size:12px;background:#22262c}
+body.motor .grupo .cuerpo{padding:4px 10px 6px}
+body.motor canvas.tres{border-radius:4px;background:radial-gradient(circle at 50% 30%,#1c2024,#0a0b0d 70%)}
+body.motor .tag{border-radius:3px}
+body.motor pre{font-size:11px}
+body.motor .mini{font-size:11px}
+body.motor .tuto li{margin:1px 0}
+body.motor nav .marca img{width:40px;height:40px;box-shadow:none}
+body.motor nav h1{font-size:13px}
 </style>
 </head>
 <body>
 <nav>
-  <h1>PES21 FX Visor</h1>
+  <div class="marca"><img src="nem512.png" alt="NEM"><h1>Pes Explorer<small>NEM · PES21 FX</small></h1></div>
+  <div class="modos"><button data-modo="simple" class="on">✦ Simple</button><button data-modo="motor">⚙ Motor</button></div>
   <button data-s="inicio" class="on">🏠 <span>Inicio</span></button>
   <button data-s="archivos">📁 <span>Archivos</span></button>
   <button data-s="modelo">🧊 <span>Escena 3D</span></button>
@@ -87,7 +156,7 @@ img.tex{max-width:100%;image-rendering:pixelated;background:repeating-conic-grad
   <button data-s="panel">🎛 <span>Panel en vivo</span></button>
   <button data-s="camara">🎥 <span>Cámara</span></button>
   <button data-s="log">📜 <span>Log</span></button>
-  <button data-s="hash">#️⃣ <span>Hashes</span></button>
+  <button data-s="hash" class="av">#️⃣ <span>Hashes</span></button>
   <button data-s="ayuda">❓ <span>Ayuda</span></button>
   <div class="est"><div><b id="eVisor"></b>Visor de archivos</div><div><b id="ePanel"></b>Juego (panel en vivo)</div></div>
 </nav>
@@ -95,14 +164,17 @@ img.tex{max-width:100%;image-rendering:pixelated;background:repeating-conic-grad
 
 <!-- ============================ INICIO ============================ -->
 <section id="s-inicio" class="on">
-  <div class="tuto">
-    <h2>Bienvenido al entorno visual de PES21 FX</h2>
+  <div class="tuto hero">
+    <img src="nem512.png" alt="NEM">
+    <div>
+    <h2>Pes Explorer NEM</h2>
     <p>Acá podés mirar los archivos del juego (modelos, texturas, animaciones, paquetes), armar una escena 3D para probar cosas y, con el juego abierto, mover cualquier valor del mod, la cámara libre y sacar capturas sin pasar por el menú Insert.</p>
     <ol>
       <li><b>Visor de archivos</b> (luz verde a la izquierda): tiene que estar corriendo <code>visor.bat</code> (o <code>python tools\visor\visor.py</code>). Lee el juego en <code>D:\...\eFootball PES 2021</code> y guarda lo que extrae en <code>B:\VisualPes21</code>. Nunca escribe en la carpeta del juego.</li>
       <li><b>Juego (panel en vivo)</b>: se prende sola cuando el juego está abierto con la DLL nueva (<code>panel_puerto = 21021</code> en PES21FX.ini). Sin el juego abierto, las secciones Panel, Cámara y Log quedan en espera.</li>
       <li>Cada sección tiene arriba una tarjeta de <b>tutorial</b> con lo que se puede hacer. Se puede cerrar y volver a abrir desde Ayuda.</li>
     </ol>
+    </div>
   </div>
   <div class="tarjetas">
     <div class="tarjeta" data-ir="archivos"><h3>📁 Archivos</h3><p>Navegar la carpeta del juego, abrir los .cpk y .fpk como carpetas, buscar por nombre y extraer lo que haga falta.</p></div>
@@ -112,7 +184,7 @@ img.tex{max-width:100%;image-rendering:pixelated;background:repeating-conic-grad
     <div class="tarjeta" data-ir="panel"><h3>🎛 Panel en vivo</h3><p>Con el juego abierto: todas las tarjetas del menú con sus sliders, buscar cualquier fila del ini, A/B al instante, guardar y recargar.</p></div>
     <div class="tarjeta" data-ir="camara"><h3>🎥 Cámara</h3><p>Ver dónde está la cámara del juego, poner la cámara libre en una pose exacta, guardar poses con nombre y sacar capturas.</p></div>
     <div class="tarjeta" data-ir="log"><h3>📜 Log</h3><p>PES21FX.log en vivo con filtro por palabra (sol, pasto, camara, cierre...).</p></div>
-    <div class="tarjeta" data-ir="hash"><h3>#️⃣ Hashes</h3><p>StrCode32 de Fox Engine: nombre de hueso ↔ hash, para leer los volcados de la DLL y los .frig / .mtar.</p></div>
+    <div class="tarjeta av" data-ir="hash"><h3>#️⃣ Hashes</h3><p>StrCode32 de Fox Engine: nombre de hueso ↔ hash, para leer los volcados de la DLL y los .frig / .mtar.</p></div>
   </div>
   <p class="mini" id="infoVisor" style="margin-top:14px"></p>
 </section>
@@ -168,7 +240,7 @@ img.tex{max-width:100%;image-rendering:pixelated;background:repeating-conic-grad
       <div class="barra" style="margin-top:6px">
         <label class="chk"><input type="checkbox" id="cAlambre"> Alambre</label>
         <label class="chk"><input type="checkbox" id="cHuesos"> Huesos</label>
-        <label class="chk"><input type="checkbox" id="cNormales"> Normales</label>
+        <label class="chk av"><input type="checkbox" id="cNormales"> Normales</label>
         <label class="chk"><input type="checkbox" id="cPiso" checked> Piso</label>
         <label class="chk"><input type="checkbox" id="cSombras" checked> Sombras</label>
       </div>
@@ -176,8 +248,8 @@ img.tex{max-width:100%;image-rendering:pixelated;background:repeating-conic-grad
       <div id="mModelos" class="mini">Ninguno.</div>
       <h3 style="margin-top:10px">Mallas</h3>
       <div id="mMallas" class="mini"></div>
-      <h3 style="margin-top:10px">Texturas del modelo</h3>
-      <div id="mTexturas" class="mini"></div>
+      <h3 style="margin-top:10px" class="av">Texturas del modelo</h3>
+      <div id="mTexturas" class="mini av"></div>
       <h3 style="margin-top:10px">Huesos <span class="mini" id="mNHuesos"></span></h3>
       <input type="search" id="mHuesoBuscar" placeholder="filtrar huesos (skf_, sk_jaw...)" style="width:100%;margin-bottom:4px">
       <div id="mHuesos" class="mini" style="max-height:260px;overflow:auto"></div>
@@ -250,7 +322,7 @@ img.tex{max-width:100%;image-rendering:pixelated;background:repeating-conic-grad
   </div>
   <div class="fila">
     <div class="col lista" style="flex:1" id="pGrupos"></div>
-    <div class="col caja" style="width:320px;flex-shrink:0">
+    <div class="col caja av" style="width:320px;flex-shrink:0">
       <h3>Cualquier fila</h3>
       <div class="barra"><input type="text" id="pFila" placeholder="x344" style="width:80px"><input type="text" id="pValor" placeholder="valor" style="width:90px"><button class="b" id="pPoner">Poner</button></div>
       <div id="pFilaInfo" class="mini"></div>
@@ -311,7 +383,7 @@ img.tex{max-width:100%;image-rendering:pixelated;background:repeating-conic-grad
 
 <!-- ============================ AYUDA ============================ -->
 <section id="s-ayuda">
-  <div class="tuto"><h2>Ayuda y posibilidades</h2>
+  <div class="tuto"><h2>Ayuda y posibilidades · Pes Explorer NEM</h2>
     <p>Qué se puede hacer con este entorno, de lo más simple a lo más fino:</p>
     <ol>
       <li><b>Mirar un modelo del juego</b>: Archivos → dt10/dt13 cpk → buscar <code>.fmdl</code> → clic. Ver sus texturas, huesos y qué vértices mueve cada hueso.</li>
@@ -326,6 +398,7 @@ img.tex{max-width:100%;image-rendering:pixelated;background:repeating-conic-grad
   </div>
   <div class="caja"><h3>Conexiones</h3><div class="kv" id="ayConex"></div></div>
 </section>
+<div id="estadoMotor" class="av"><span id="emVisor">visor —</span><span id="emJuego">juego —</span><span id="emCuadro">cuadro —</span><span id="emBB">—</span><span id="emPartido">—</span><span id="emCam">cam —</span><span id="emModo">MOTOR</span></div>
 </main>
 <div id="toast"></div>
 
@@ -345,6 +418,9 @@ const enc = encodeURIComponent;
 function ir(s) { $$('nav button').forEach(b => b.classList.toggle('on', b.dataset.s === s)); $$('section').forEach(x => x.classList.toggle('on', x.id === 's-' + s)); localStorage.setItem('seccion', s); if (s === 'modelo') setTimeout(redimensionar, 10); }
 $$('nav button').forEach(b => b.onclick = () => ir(b.dataset.s));
 $$('.tarjeta[data-ir]').forEach(t => t.onclick = () => ir(t.dataset.ir));
+// modo Simple / Motor (Agustin 08/11: "un estilo simple y un estilo de motor de juego avanzado")
+function modo(m) { document.body.classList.toggle('motor', m === 'motor'); $$('nav .modos button').forEach(b => b.classList.toggle('on', b.dataset.modo === m)); localStorage.setItem('modo', m); if (m !== 'motor' && $('#s-hash').classList.contains('on')) ir('inicio'); setTimeout(redimensionar, 10); }
+$$('nav .modos button').forEach(b => b.onclick = () => modo(b.dataset.modo));
 // tutoriales que se cierran y se recuerdan
 const tutosCerrados = JSON.parse(localStorage.getItem('tutos') || '{}');
 $$('.tuto[data-t]').forEach(t => { if (tutosCerrados[t.dataset.t]) t.style.display = 'none'; t.querySelector('.cerrar').onclick = () => { t.style.display = 'none'; tutosCerrados[t.dataset.t] = 1; localStorage.setItem('tutos', JSON.stringify(tutosCerrados)); }; });
@@ -355,6 +431,8 @@ async function estado() {
   try { const i = await vis('/api/info'); visorOk = true; $('#infoVisor').textContent = `Juego: ${i.juego} · Trabajo: ${i.trabajo} · Pillow: ${i.pillow ? 'sí' : 'NO (pip install pillow)'}`; $('#ayConex').innerHTML = `<b>Visor</b><span class="ok">${VISOR || location.origin}</span><b>Juego</b><span>${i.juego}</span><b>Trabajo</b><span>${i.trabajo}</span><b>Panel</b><span id="ayPanel"></span>`; } catch (e) { visorOk = false; }
   try { const p = await pan('/api/ping'); panelOk = true; window.pingInfo = p; $('#pEspera').style.display = 'none'; const t = `${PANEL || location.origin} · cuadro ${p.frame} · ${p.match.known ? 'partido estadio ' + p.match.stadium : 'sin partido'} · ${p.bypass ? 'ORIGINAL' : 'mod'}`; $('#pEstado').textContent = t; const ap = $('#ayPanel'); if (ap) ap.textContent = t; ap && ap.classList.add('ok'); } catch (e) { panelOk = false; $('#pEspera').style.display = ''; }
   $('#eVisor').classList.toggle('ok', visorOk); $('#ePanel').classList.toggle('ok', panelOk);
+  { const p = window.pingInfo; $('#emVisor').textContent = 'visor ' + (visorOk ? 'OK' : 'sin conexión'); $('#emJuego').textContent = 'juego ' + (panelOk ? (p && p.bypass ? 'ORIGINAL' : 'mod') : 'cerrado');
+    if (p && panelOk) { $('#emCuadro').textContent = 'cuadro ' + p.frame; $('#emBB').textContent = p.bb[0] + 'x' + p.bb[1]; $('#emPartido').textContent = p.match.known ? `estadio ${p.match.stadium} · ${p.match.timeofday === 1 ? 'noche' : 'día'} · ${p.match.weather === 1 ? 'lluvia' : 'despejado'}` : 'sin partido'; $('#emCam').textContent = 'cam libre ' + (p.freecam ? 'ON' : 'off'); } }
   if (panelOk && !panelCargado) cargarPanel();
 }
 setInterval(estado, 3000);
@@ -375,7 +453,7 @@ const icono = t => ({ modelo: '🧊', textura: '🖼', imagen: '🖼', animacion
 function abrir(a, el) {
   $$('#aLista .item.sel').forEach(x => x.classList.remove('sel')); el && el.classList.add('sel');
   $('#aDetalle').innerHTML = `<div class="ruta">${a.ruta}</div><div style="margin:6px 0">${fmtTam(a.tam)} · ${a.tipo || 'desconocido'}</div>
-    <div class="barra"><button class="b" id="dAbrir">Abrir</button><button class="b" id="dExtraer">Extraer</button><button class="b" id="dHex">Hex</button><button class="b" id="dTex">Usar como textura</button></div><div id="dExtra" class="mini"></div>`;
+    <div class="barra"><button class="b" id="dAbrir">Abrir</button><button class="b" id="dExtraer">Extraer</button><button class="b av" id="dHex">Hex</button><button class="b" id="dTex">Usar como textura</button></div><div id="dExtra" class="mini"></div>`;
   $('#dAbrir').onclick = () => abrirEn(a);
   $('#dExtraer').onclick = async () => { try { const r = await vis('/api/extraer?ruta=' + enc(a.ruta)); $('#dExtra').innerHTML = `Extraído en:<div class="ruta">${r.ruta}</div>`; } catch (e) { toast(e.message, true); } };
   $('#dHex').onclick = async () => { try { const r = await vis('/api/hex?ruta=' + enc(a.ruta) + '&n=512'); $('#dExtra').innerHTML = '<pre>' + hexdump(r.hex) + '</pre>'; } catch (e) { toast(e.message, true); } };
@@ -591,7 +669,7 @@ $('#hCalcular').onclick = async () => { try { const r = await vis('/api/hash?nom
 $('#hNombres').onkeydown = e => { if (e.key === 'Enter') $('#hCalcular').onclick(); };
 
 // ---------------------------------------------------------------- arranque
-initTres(); estado(); ir(localStorage.getItem('seccion') || 'inicio'); listar(localStorage.getItem('ruta') || '');
+modo(localStorage.getItem('modo') || 'simple'); initTres(); estado(); ir(localStorage.getItem('seccion') || 'inicio'); listar(localStorage.getItem('ruta') || '');
 </script>
 </body>
 </html>
