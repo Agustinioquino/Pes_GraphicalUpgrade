@@ -2021,6 +2021,9 @@ static void DrawEditorLightIcons() {
     else if (preset == 7) { az = 30; el = 78; warm = 0.58f; }    // mediodia
     else if (preset == 8) { az = 165; el = 10; warm = 0.95f; }   // atardecer a contraluz
     else if (preset == 9) { az = -45; el = 35; warm = 0.15f; }   // noche con dos torres
+    else if (preset == 10) { az = 170; el = 20; warm = 0.80f; }  // (08/11) sol cercano a contraluz
+    else if (preset == 11) { az = -35; el = 45; warm = 0.12f; }  // (08/11) foco de estadio cercano
+    else if (preset == 12) { az = 55; el = 30; warm = 0.55f; }   // (08/11) una luz fuerte y la otra apagada
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     // centro: la cara (alto medido en skintone.cpp, fila 192 z/w en pixeles del cuadro) o el centro de la pantalla
     ImVec2 c(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.42f);

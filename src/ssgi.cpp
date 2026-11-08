@@ -17,9 +17,10 @@ static ID3D11Buffer* s_prev = nullptr; static bool s_prevOk = false;
 static ID3D11SamplerState* s_sampP = nullptr; static ID3D11SamplerState* s_sampL = nullptr;
 static ID3D11RasterizerState* s_rs = nullptr; static ID3D11DepthStencilState* s_dss = nullptr; static ID3D11BlendState* s_bs = nullptr;
 static std::atomic<int> s_lastFrame{-1}; static ID3D11ShaderResourceView* s_last = nullptr;
+static std::atomic<int> s_edFullFrame{-100};   // (08/11 0qtsss) ultimo cuadro del editor a resolucion completa
 static int s_ping = 0; static std::atomic<int> s_ranFrame{-100}; static int s_counter = 0;
 // (01/11) Agustin: 'el SSGI no hace ningun cambio'. Registro cada 30 s: cuantas veces corrio y por que no (motivo de cada salida)
-static std::atomic<int> s_nRan{0}, s_nCalls{0}, s_why[8] = {};   // 0 sin shaders, 1 faltan texturas, 2 tamano, 3 msaa/targets, 4 sin cbuffer, 5 cbuffer chico, 6 prev
+static std::atomic<int> s_nRan{0}, s_nCalls{0}, s_nEd{0}, s_why[8] = {};   // 0 sin shaders, 1 faltan texturas, 2 tamano, 3 msaa/targets, 4 sin cbuffer, 5 cbuffer chico, 6 prev
 static double s_logT = 0; static int s_logs = 0;
 // (02/11) medidor de GPU del SSGI (pedido del hilo del sol para el antes/despues de la Completa barata): consultas de tiempo alrededor
 // de los 2 Draw (paso 1 trazado, paso 2 acumulacion/reconstruccion), como el "pasto GPU"; se leen en Present 3 cuadros despues sin esperar
@@ -105,6 +106,7 @@ void SSGIPresent(int presentNo) {
     // (02/11) z337 = 1 ("Completa"): se calcula a media resolucion un pixel exacto de cada 2x2 (fase que rota) y se reconstruye
     // a resolucion completa en el paso 2: definicion de Completa con el costo de Media. 155.z = 1 + fase (0 = modo viejo)
     p[2] = (g_cfg.live[337][2] > 0.5f) ? (float)(1 + (s_counter & 3)) : 0.0f;
+    if (presentNo - s_edFullFrame.load() <= 2) p[2] = 0.0f;   // (08/11 0qtsss) editor a resolucion completa: sin reconstruccion
     SsgiTimersRead(presentNo);
     double t = Now();
     if (s_logs < 40 && t - s_logT >= 30.0) { s_logT = t; s_logs++;
@@ -113,14 +115,16 @@ void SSGIPresent(int presentNo) {
                 s_tmN, s_tmN ? s_tmSum[0] / s_tmN : 0.0, s_tmMax[0], s_tmN ? s_tmSum[1] / s_tmN : 0.0, s_tmMax[1], s_tmN ? (s_tmSum[0] + s_tmSum[1]) / s_tmN : 0.0,
                 g_cfg.live[337][2] > 0.5f ? (g_cfg.live[155][2] > 0.5f ? "Completa reconstruida" : "Completa") : "Media", s_hw, s_hh, s_w, s_h, s_tmDisjoint, s_tmLost);
             s_tmSum[0] = s_tmSum[1] = s_tmMax[0] = s_tmMax[1] = 0; s_tmN = s_tmLost = s_tmDisjoint = 0; }
-        Log("SSGI (30 s): prendido %d, corrio %d de %d llamadas de la composicion%s | no corrio: sin shaders %d, faltan texturas %d, tamano %d, msaa/targets %d, sin cbuffer %d, cbuffer chico %d, prev %d | fuerza w153 %.2f, z337 %.0f (%ux%u)",
-            g_cfg.live[153][0] > 0.5f ? 1 : 0, s_nRan.exchange(0), s_nCalls.exchange(0), (s_vs && s_ps && s_tp) ? "" : " (SHADERS SIN COMPILAR: ver errores de pes_ssgi)",
+        Log("SSGI (30 s): prendido %d, corrio %d de %d llamadas de la composicion (%d en el editor)%s | no corrio: sin shaders %d, faltan texturas %d, tamano %d, msaa/targets %d, sin cbuffer %d, cbuffer chico %d, prev %d | fuerza w153 %.2f, z337 %.0f (%ux%u)",
+            g_cfg.live[153][0] > 0.5f ? 1 : 0, s_nRan.exchange(0), s_nCalls.exchange(0), s_nEd.exchange(0), (s_vs && s_ps && s_tp) ? "" : " (SHADERS SIN COMPILAR: ver errores de pes_ssgi)",
             s_why[0].exchange(0), s_why[1].exchange(0), s_why[2].exchange(0), s_why[3].exchange(0), s_why[4].exchange(0), s_why[5].exchange(0), s_why[6].exchange(0),
             g_cfg.live[153][3], g_cfg.live[337][2], s_w, s_h); }
 }
 
 // En BeforeDraw de la composicion (619b): calcula y devuelve el SSGI acumulado para t26 (null si esta apagado o fallo)
-ID3D11ShaderResourceView* SSGIBeforeComposition(ID3D11DeviceContext* c, int frame) {
+// (08/11 0qtsss) editor = composicion del editor (f807, fila 411): con y411 a resolucion completa sin reconstruccion (SSGIPresent
+// deja 155.z = 0 mientras el editor es lo ultimo que corrio, para que los shaders del SSGI no lean una fase de reconstruccion)
+ID3D11ShaderResourceView* SSGIBeforeComposition(ID3D11DeviceContext* c, int frame, bool editor) {
     if (!g_dev.dev || g_cfg.live[153][0] < 0.5f) return nullptr;
     if (s_lastFrame.load() == frame && s_last) return s_last;
     s_nCalls++;
@@ -135,7 +139,8 @@ ID3D11ShaderResourceView* SSGIBeforeComposition(ID3D11DeviceContext* c, int fram
     // (31/10) z337 = 1: a resolucion completa (mas definido, ~4x el costo)
     // (02/11) con 155.z > 0 (reconstruccion) el paso 1 va a media y la historia a completa
     bool recon = g_cfg.live[155][2] > 0.5f;
-    UINT dv = g_cfg.live[337][2] > 0.5f ? 1u : 2u;
+    const bool edFull = editor && g_cfg.live[411][1] > 0.5f;
+    UINT dv = (g_cfg.live[337][2] > 0.5f || edFull) ? 1u : 2u;
     UINT fw = (td.Width + dv - 1) / dv, fh = (td.Height + dv - 1) / dv;
     UINT hw = recon ? (td.Width + 1) / 2 : fw, hh = recon ? (td.Height + 1) / 2 : fh;
     if (td.SampleDesc.Count != 1 || !EnsureTargets(fw, fh, hw, hh)) { s_why[3]++; rel(); return nullptr; }
@@ -204,7 +209,8 @@ ID3D11ShaderResourceView* SSGIBeforeComposition(ID3D11DeviceContext* c, int fram
     c->PSSetConstantBuffers(3, 1, &o3); if (o3) o3->Release();
     c->PSSetConstantBuffers(2, 1, &scb); scb->Release(); if (sys) { c->PSSetConstantBuffers(0, 1, &sys); sys->Release(); }
     rel();
-    s_lastFrame = frame; s_last = s_srv[hNew]; s_ranFrame = frame; s_nRan++;
+    s_lastFrame = frame; s_last = s_srv[hNew]; s_ranFrame = frame; s_nRan++; if (editor) s_nEd++;
+    s_edFullFrame = edFull ? frame : -100;
     return s_srv[hNew];
 }
 

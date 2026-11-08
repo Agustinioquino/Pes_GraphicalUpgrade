@@ -1422,8 +1422,12 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         if (v) { Remember(c, d, true, true, 27); c->PSSetShaderResources(27, 1, &v); }
     }
     // 21/10: SSGI temporal para la composicion: t26 (media resolucion, acumulado en el tiempo)
-    if (ps && ps->hash == 0x619b86cb5691cdceULL && ps->repl) {
-        int gz_ = GpuZoneBegin(c, kGzSSGI); ID3D11ShaderResourceView* v0_ = SSGIBeforeComposition(c, s_presentNo.load()); GpuZoneEnd(c, gz_);
+    // (08/11 0qtsss, Agustin: "el ssgi en el modo editar deberia cargar por completo") tambien la composicion del editor (f807) con x411
+    const bool ssgiEd_ = ps && ps->hash == 0xf807e74d5b900a15ULL && g_cfg.live[411][0] > 0.5f;
+    // REGLA FIJA de la boca: la composicion del editor recibe la mascara del interior de la boca (t43) y ahi deja todo como antes
+    if (ssgiEd_ && ps->repl) if (ID3D11ShaderResourceView* mm = MouthMaskSRV()) { Remember(c, d, true, true, 43); c->PSSetShaderResources(43, 1, &mm); }
+    if (ps && (ps->hash == 0x619b86cb5691cdceULL || ssgiEd_) && ps->repl) {
+        int gz_ = GpuZoneBegin(c, kGzSSGI); ID3D11ShaderResourceView* v0_ = SSGIBeforeComposition(c, s_presentNo.load(), ssgiEd_); GpuZoneEnd(c, gz_);
         if (ID3D11ShaderResourceView* v = v0_) { Remember(c, d, true, true, 26); c->PSSetShaderResources(26, 1, &v); }
     }
     // (27/10) 323: ocultar la camiseta interior (inner / inner_cap / inner_glove de common_package.fpk: 9990 / 9714 / 8640 indices,
