@@ -526,6 +526,7 @@ static bool JawAngle(const Skel& S, const Xf& jc, float* deg) {
 // por personaje (el nodo), asi que cada jugador mira y parpadea a su ritmo. Cuando esto corre, 350.y = 2 y el shader no gira
 // ni el globo ni los parpados (no se suma dos veces).
 static float Frac(float x) { return x - floorf(x); }
+static float SStep(float a, float b, float x);   // definida mas abajo (la usan AnimT / TalkWords)
 // (08/11, Agustin: "puedes hacer que calcule por cada fotograma? aunque el gameclock este en cero como pasa en el menu de apariencia")
 // RELOJ DE LAS ANIMACIONES de la cara: avanza en cada cuadro. Si el reloj del juego (fila 157, config.cpp) avanzo desde el cuadro
 // anterior se toma ese paso (asi la camara lenta de las repeticiones frena tambien los gestos); si esta quieto o en cero (editor,
