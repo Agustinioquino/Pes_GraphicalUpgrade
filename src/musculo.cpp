@@ -563,6 +563,7 @@ static void MuscleClothPresent(const Fac* fac, bool on, const MzOwn* own, int nO
 static void EffortPresent();   // (02/11) venas por esfuerzo (mas abajo)   // (25/10) tabla para la fisica de la ropa (mas abajo)
 static float s_slotTv[kCharSlots] = {};   // (26/10) variante de los personajes con valores propios (para la ropa)
 // (26/10 b) respiracion por personaje (en Present): agitacion por la velocidad del nodo, fase y amplitud
+static void LegMoments(float dt);   // (08/11) apoyo / empuje / frenada / patada / salto / caida por pierna (mas abajo)
 static void UpdateDynamics() {
     const double t = Now();
     static double tPrev = 0; const float dt = tPrev > 0 ? (float)std::clamp(t - tPrev, 0.0, 0.1) : 0.0f; tPrev = t;
@@ -597,7 +598,6 @@ static void UpdateDynamics() {
         d.ex = 0.0f; d.breath = kb * 0.0025f * sinf(6.2831853f * 0.22f * s_dynT + 1.7f * (float)i);
     }
 }
-static void LegMoments(float dt);   // (08/11) apoyo / empuje / frenada / patada / salto / caida por pierna (mas abajo)
 static void UpdateFactors() {
     float L[kPRows][4]; GeneralRows(L);   // 164..171, 162 y (26/10) 260..262
     const bool on = L[0][0] > 0.5f && !s_compare.load(), ropa = g_cfg.live[166][1] > 0.5f, trans = g_cfg.live[170][2] > 0.5f, vec = g_cfg.live[255][0] > 0.5f;
