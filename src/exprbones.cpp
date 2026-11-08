@@ -289,6 +289,7 @@ enum { D_JAW = 0, D_LIPS_L = 5, D_LID_TL = 22, D_LID_TR = 23, D_LID_BL = 24, D_L
 
 struct Skel {
     int ganiClip = 0; float ganiT0 = 0.0f;   // (07/11) clip .gani en curso y reloj del juego en que arranco
+    float secT = -1.0f, secSm = 0.0f, secOpen = 0.0f; bool secHave = false;   // (08/11) sonrisa y boca abierta MEDIDAS, suavizadas con el reloj del juego
     float clockT = -1.0f, clockK = 1.0f;   // (06/11) reloj del juego del ultimo cuadro de los parpados y cuadros de 60 Hz que pasaron
     const void* skel = nullptr; const char* bones = nullptr; int n = 0;   // esqueleto del cuerpo (clave) y su arreglo
     const void* face = nullptr; const char* fbones = nullptr; int fn = 0;  // (02/11) esqueleto de la CARA: nodo + 0xA0 (49 huesos)
@@ -1117,7 +1118,21 @@ void ExprBonesFrame(const void* skel) {
     // medir con la lectura de la paleta por malla, expr.cpp "parpados por malla", si el giro llega igual a todas las mallas)
     if (g_cfg.live[350][0] > 1.5f) EyesFrame(*S, hc, hr, sm);
     else for (int d = D_LID_TL; d <= D_LID_BR; d++) Release(*S, d);
-    Secondary(*S, hr, sm, openAll);
+    // (08/11, Agustin: "en partidos tambien vibra cuando el jugador deberia estar expresandose") la sonrisa medida en la comisura y la
+    // boca abierta medida en la mandibula cambian de un cuadro a otro (el juego anima la cara a 30 cuadros con claves ralas y la cabeza
+    // se mueve): pomulos, surco y bajo-ojo las seguian crudas. Ahora pasan por un suavizado de ~6 cuadros de 60 Hz del RELOJ DEL JUEGO y
+    // un margen de 0.02 (el temblor no pasa; los gestos de verdad si)
+    float smS = sm, openS = openAll;
+    {
+        const float t = g_cfg.live[157][0];
+        const float k = S->secT < 0.0f ? 1.0f : std::clamp((t - S->secT) * 60.0f, 0.0f, 6.0f); S->secT = t;
+        const float a = 1.0f - powf(1.0f - 0.16f, k);
+        if (!S->secHave) { S->secSm = sm; S->secOpen = openAll; S->secHave = true; }
+        auto step = [a](float prev, float now) { const float d = now - prev; return fabsf(d) < 0.02f ? prev + d * a * 0.5f : prev + d * a; };
+        S->secSm = step(S->secSm, sm); S->secOpen = step(S->secOpen, openAll);
+        smS = S->secSm; openS = S->secOpen;
+    }
+    Secondary(*S, hr, smS, openS);
     if (fabsf(o) < 0.001f && teeth < 0.001f && !poseOn) { for (int d = 0; d < 18; d++) if (S->wHave[d]) Release(*S, d); for (int d = 26; d <= 30; d++) if (S->wHave[d]) Release(*S, d); return; }   // slider en 0: la boca vuelve a la del juego
     static const float X[3] = { 1.0f, 0.0f, 0.0f }; float ax[3]; QRot(hr, X, ax);
     float ln = sqrtf(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]); if (ln < 0.5f) return; for (float& v : ax) v /= ln;
