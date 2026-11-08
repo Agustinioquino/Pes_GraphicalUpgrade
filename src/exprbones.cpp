@@ -355,6 +355,7 @@ struct Skel {
     int btw = -1; float btwT0 = 0.0f, btwNext = -1.0f; int btwN = 0;
     float spP[3] = {}; float spT = -1.0f, speed = 0.0f, stillT = 0.0f; bool spHave = false;
     float sl[16] = {}; bool slHave = false; float slT = -1.0f;   // (08/11) sliders de gestos suavizados (w395 Transicion)
+    int tkPhrase = -1; float tkT0 = 0.0f, tkDur = 0.0f, tkPause = 0.0f, tkCh[7] = {}, tkT = -1.0f; unsigned tkN = 0; int tkLast = -1;   // (08/11) hablar por palabras: frase en curso, canales suavizados
     float effort = 0.0f, brPh = 0.0f, anT = -1.0f;                 // (08/11) esfuerzo por velocidad (sube ~1 s, baja ~4 s), fase de la respiracion
    // (08/11) velocidad del jugador (cabeza en el mundo, m/s) y cuanto lleva quieto
     uint32_t pid = 0; bool pKnown = false; int prof = -1; unsigned profGen = 0xffffffffu; unsigned profFrame = 0; bool profLogged = false;
@@ -543,6 +544,130 @@ static float AnimT() {
         animT += adv; if (animT > 100000.0) animT -= 100000.0;
     }
     return (float)animT;
+}
+
+// (08/11, Agustin: "para el hablar agrega mas opciones de por ejemplo pronunciar palabras, interpola mejor las animaciones") HABLAR POR
+// PALABRAS (w396 = 1). Cada frase se pasa a fonemas y cada fonema a un VISEMA (forma de la boca): A (abierta), E (media, ancha),
+// I (cerrada, ancha), O (redonda), U (trompa), M (b / p / m: labios juntos), F (f / v: labio de abajo contra los dientes), T (resto de
+// consonantes: lengua, boca algo abierta), K (k / g / j / q: mas abierta atras). Cada visema fija 6 canales: mandibula, redondez (- ancha
+// .. + redonda), labio de arriba (sube), labio de abajo (baja; - sube contra los dientes), labios adelante, labios apretados. Entre fonemas
+// la boca no salta: cada canal va del visema anterior al nuevo con una curva suave (coarticulacion: las consonantes ya anticipan la vocal
+// que sigue) y despues pasa por un filtro de ~25 ms. Las frases salen de PES21FX\anim\hablar.txt (una por linea, acentos marcan la silaba
+// tonica; si no esta, lista propia de cancha). Entre frases hay pausas de 0.6 a 2.5 s, y la silaba tonica levanta un poco las cejas.
+enum { V_REST = 0, V_A, V_E, V_I, V_O, V_U, V_M, V_F, V_T, V_K, V_N };
+static const float kVis[V_N][6] = {   // mandibula, redondez, labio arriba, labio abajo, adelante, apretados
+    { 0.00f,  0.00f, 0.00f,  0.00f, 0.00f, 0.00f },   // reposo
+    { 0.90f, -0.10f, 0.35f,  0.55f, 0.00f, 0.00f },   // a
+    { 0.45f, -0.60f, 0.30f,  0.30f, 0.00f, 0.00f },   // e
+    { 0.22f, -0.90f, 0.20f,  0.15f, 0.00f, 0.00f },   // i
+    { 0.60f,  0.70f, 0.20f,  0.35f, 0.55f, 0.00f },   // o
+    { 0.30f,  1.00f, 0.10f,  0.10f, 1.00f, 0.00f },   // u
+    { 0.04f,  0.15f, 0.00f,  0.00f, 0.05f, 1.00f },   // m b p
+    { 0.18f,  0.10f, 0.15f, -0.45f, 0.00f, 0.30f },   // f v
+    { 0.30f, -0.20f, 0.15f,  0.20f, 0.00f, 0.00f },   // t d n l s r
+    { 0.38f,  0.00f, 0.10f,  0.25f, 0.00f, 0.00f },   // k g j q
+};
+struct Pho { uint8_t vis; float dur; bool stress; };   // dur en unidades (vocal 1)
+struct Phrase { std::vector<Pho> ph; float units = 0.0f; };
+static std::vector<Phrase> s_phr; static bool s_phrLoaded = false; static unsigned s_phrFrame = 0;
+static const char* kFrasesCancha[] = {
+    "dale dale", "aca aca", "pasala", "vamos vamos", "arbitro!", "solo solo", "atras atras", "cuidado", "bien ahi", "no no no",
+    "la mia", "tiempo tiempo", "arriba arriba", "cambio", "sali sali", "cubrime", "al medio", "dame dame", "eh eh eh", "vamos muchachos",
+    "tranquilo", "cerra cerra", "marca marca", "fue falta", "mano mano", "tuya tuya", "corre corre", "hombre hombre", "afuera", "que pasa",
+};
+static void PhraseParse(const char* txt, Phrase& P) {
+    // minusculas y acentos (UTF-8 o ANSI) -> vocal tonica; '!' / '?' no cuentan
+    std::vector<std::pair<char, bool>> L;   // letra, tonica marcada
+    for (const unsigned char* p = (const unsigned char*)txt; *p; p++) {
+        unsigned char c = *p; char v = 0; bool st = false;
+        if (c == 0xC3 && p[1]) { unsigned char d = p[1]; p++;
+            switch (d) { case 0xA1: case 0x81: v = 'a'; st = true; break; case 0xA9: case 0x89: v = 'e'; st = true; break; case 0xAD: case 0x8D: v = 'i'; st = true; break;
+                         case 0xB3: case 0x93: v = 'o'; st = true; break; case 0xBA: case 0x9A: case 0xBC: v = 'u'; st = true; break; case 0xB1: case 0x91: v = 'n'; break; default: v = 0; } }
+        else if (c == 0xE1 || c == 0xC1) { v = 'a'; st = true; } else if (c == 0xE9 || c == 0xC9) { v = 'e'; st = true; } else if (c == 0xED || c == 0xCD) { v = 'i'; st = true; }
+        else if (c == 0xF3 || c == 0xD3) { v = 'o'; st = true; } else if (c == 0xFA || c == 0xDA || c == 0xFC) { v = 'u'; st = true; } else if (c == 0xF1 || c == 0xD1) v = 'n';
+        else if (c >= 'A' && c <= 'Z') v = (char)(c + 32); else if (c >= 'a' && c <= 'z') v = (char)c; else if (c == ' ' || c == ',' || c == '.') v = ' ';
+        else continue;
+        if (v) L.push_back({ v, st });
+    }
+    // por palabra: si ninguna vocal lleva acento, tonica = penultima vocal si termina en vocal / n / s, si no la ultima
+    size_t i = 0;
+    while (i < L.size()) {
+        if (L[i].first == ' ') { P.ph.push_back({ V_REST, 1.2f, false }); i++; continue; }
+        size_t j = i; while (j < L.size() && L[j].first != ' ') j++;
+        bool marked = false; std::vector<size_t> vow;
+        for (size_t k = i; k < j; k++) { if (strchr("aeiou", L[k].first)) { vow.push_back(k); if (L[k].second) marked = true; } }
+        if (!marked && !vow.empty()) { const char last = L[j - 1].first; const bool llana = strchr("aeiouns", last) != nullptr; L[vow.size() >= 2 && llana ? vow[vow.size() - 2] : vow.back()].second = true; }
+        for (size_t k = i; k < j; k++) {
+            const char c = L[k].first; uint8_t v = V_T; float d = 0.5f;
+            switch (c) { case 'a': v = V_A; d = 1.0f; break; case 'e': v = V_E; d = 1.0f; break; case 'i': case 'y': v = V_I; d = 0.9f; break; case 'o': v = V_O; d = 1.0f; break; case 'u': v = V_U; d = 0.9f; break;
+                         case 'm': case 'b': case 'p': v = V_M; d = 0.6f; break; case 'f': case 'v': v = V_F; d = 0.6f; break; case 'k': case 'g': case 'j': case 'q': case 'c': case 'x': v = V_K; d = 0.5f; break;
+                         case 'h': continue; default: v = V_T; d = 0.5f; }
+            if (L[k].second) d *= 1.45f;
+            P.ph.push_back({ v, d, L[k].second });
+        }
+        i = j;
+    }
+    P.units = 0.0f; for (const Pho& p : P.ph) P.units += p.dur;
+}
+static void PhrasesLoad() {   // con s_mx tomado; relee cada ~10 s si el archivo cambia de tamano
+    const unsigned fr = s_frame.load(std::memory_order_relaxed);
+    if (s_phrLoaded && fr - s_phrFrame < 600) return;
+    s_phrFrame = fr;
+    static size_t lastSize = (size_t)-1; std::vector<uint8_t> t; size_t sz = 0;
+    { HANDLE h = CreateFileW((g_cfg.baseDir + L"anim\\hablar.txt").c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+      if (h != INVALID_HANDLE_VALUE) { LARGE_INTEGER q{}; if (GetFileSizeEx(h, &q) && q.QuadPart > 0 && q.QuadPart < (1 << 20)) { t.resize((size_t)q.QuadPart); DWORD rd = 0; if (!ReadFile(h, t.data(), (DWORD)t.size(), &rd, nullptr) || rd != t.size()) t.clear(); sz = t.size(); } CloseHandle(h); } }
+    if (s_phrLoaded && sz == lastSize) return;
+    lastSize = sz; s_phr.clear();
+    if (!t.empty()) {
+        t.push_back('\n'); std::string line;
+        for (uint8_t c : t) {
+            if (c == '\n' || c == '\r') { size_t a = line.find_first_not_of(" \t"); if (a != std::string::npos && line[a] != '#' && line[a] != ';') { Phrase P; PhraseParse(line.c_str() + a, P); if (P.units > 0.5f) s_phr.push_back(P); } line.clear(); }
+            else if (!(c == 0xEF || c == 0xBB || c == 0xBF) || !line.empty()) line.push_back((char)c);
+        }
+    }
+    const bool own = !s_phr.empty();
+    if (!own) for (const char* f : kFrasesCancha) { Phrase P; PhraseParse(f, P); if (P.units > 0.5f) s_phr.push_back(P); }
+    if (s_logs < 400) { s_logs++; Log("hablar: %d frases %s", (int)s_phr.size(), own ? "de PES21FX\\anim\\hablar.txt" : "propias (sin anim\\hablar.txt)"); }
+    s_phrLoaded = true;
+}
+// canales de la boca en este cuadro para este personaje: out[0..5] = los 6 del visema, out[6] = acento (silaba tonica). sp = velocidad
+// (z354, 0.55 = pausado). Devuelve false si esta en pausa entre frases (boca en reposo)
+static bool TalkWords(Skel& S, float tNow, float sp, float out[7]) {
+    PhrasesLoad();
+    const float unit = 0.095f * 0.55f / (std::max)(sp, 0.2f);   // s por vocal: 0.095 pausado (~3.5 silabas/s), 0.052 a 1.0
+    auto rnd = [&](float n) { return Frac(sinf(n * 12.9898f + (float)(S.pid % 9973u) * 0.731f + (float)(((uintptr_t)S.skel >> 6) & 63) * 0.173f) * 43758.5453f); };
+    float target[6] = {}, acc = 0.0f; bool talking = false;
+    if (!s_phr.empty()) {
+        if (S.tkPhrase < 0 || tNow < S.tkT0 || tNow > S.tkT0 + S.tkDur + S.tkPause) {
+            int pick = (int)(rnd((float)S.tkN + 0.37f) * (float)s_phr.size()); if (pick >= (int)s_phr.size()) pick = (int)s_phr.size() - 1;
+            if (pick == S.tkLast && s_phr.size() > 1) pick = (pick + 1) % (int)s_phr.size();
+            S.tkLast = S.tkPhrase = pick; S.tkT0 = tNow; S.tkDur = s_phr[pick].units * unit; S.tkPause = 0.6f + 1.9f * rnd((float)S.tkN + 0.81f); S.tkN++;
+        }
+        const Phrase& P = s_phr[S.tkPhrase];
+        const float u = (tNow - S.tkT0) / unit;   // posicion en unidades
+        if (u < P.units) {
+            talking = true;
+            float a = 0.0f; int k = 0; for (; k < (int)P.ph.size(); k++) { if (u < a + P.ph[k].dur) break; a += P.ph[k].dur; }
+            if (k >= (int)P.ph.size()) k = (int)P.ph.size() - 1;
+            const Pho& cur = P.ph[k]; const uint8_t prev = k > 0 ? P.ph[k - 1].vis : V_REST; const uint8_t next = k + 1 < (int)P.ph.size() ? P.ph[k + 1].vis : V_REST;
+            // destino del fonema: el visema propio; una consonante anticipa un 35 % la vocal que sigue (coarticulacion)
+            float dst[6]; const bool cons = cur.vis >= V_M; const float ant = cons && next >= V_A && next <= V_U ? 0.35f : 0.0f;
+            for (int c = 0; c < 6; c++) dst[c] = kVis[cur.vis][c] * (1.0f - ant) + kVis[next][c] * ant;
+            // transicion: del fonema anterior al actual en el primer 60 % de su duracion, con curva suave
+            const float f = SStep(0.0f, 0.6f, (u - a) / (std::max)(cur.dur, 0.05f));
+            for (int c = 0; c < 6; c++) target[c] = kVis[prev][c] + (dst[c] - kVis[prev][c]) * f;
+            // apretados (m / b / p) solo se ven si tambien se cierra la mandibula
+            target[5] *= 1.0f - std::clamp(target[0] * 2.0f, 0.0f, 1.0f);
+            acc = cur.stress ? SStep(0.0f, 0.3f, (u - a) / (std::max)(cur.dur, 0.05f)) * (1.0f - SStep(0.7f, 1.0f, (u - a) / (std::max)(cur.dur, 0.05f))) : 0.0f;
+        }
+    }
+    // filtro de ~25 ms por canal (quita el escalon de la curva y suaviza el reposo entre frases)
+    const float dt = S.tkT < 0.0f || tNow < S.tkT ? 1.0f : (std::min)(tNow - S.tkT, 0.25f); S.tkT = tNow;
+    const float kf = 1.0f - expf(-dt / 0.025f);
+    for (int c = 0; c < 6; c++) S.tkCh[c] += (target[c] - S.tkCh[c]) * kf;
+    S.tkCh[6] += (acc - S.tkCh[6]) * (1.0f - expf(-dt / 0.06f));
+    memcpy(out, S.tkCh, sizeof S.tkCh);
+    return talking;
 }
 static float SStep(float a, float b, float x) { float t = std::clamp((x - a) / (b - a), 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); }
 static void GazeHash2(float n, float seed, float* o) {
@@ -1162,19 +1287,25 @@ static void FrameBody(const void* skel) {
     const float pAng = S->sl[0], pSmi = S->sl[1], pSur = S->sl[2], pTalk = S->sl[3], pGri = S->sl[4], pPuc = S->sl[5], pNeu = S->sl[6];
     s_poseSmile = pSmi;
     // hablar: la mandibula sube y baja con un ritmo de silabas irregular (dos ondas que no se repiten juntas), por personaje distinto
-    float talkO = 0.0f, talkRound = 0.0f, talkLip = 0.0f;
+    float talkO = 0.0f, talkRound = 0.0f, talkLip = 0.0f, talkLow = 0.0f, talkProt = 0.0f, talkPress = 0.0f, talkAcc = 0.0f;
     if (pTalk > 0.001f) {
         // (04/11, Agustin: "el de hablar va muy rapido") z354 = velocidad del habla (1 = la de antes, ~4 silabas por segundo;
         // 0 o sin poner = 0.55, mas pausado y con mas tiempo con la boca quieta entre frases)
         const float sp = g_cfg.live[354][2] > 0.01f ? std::clamp(g_cfg.live[354][2], 0.2f, 1.5f) : 0.55f;
-        const float t = (tNow + (float)(((uintptr_t)skel >> 6) & 63) * 0.37f) * sp;
-        const float w = 0.6f * sinf(t * 6.2831853f * 4.1f) + 0.4f * sinf(t * 6.2831853f * 2.3f + 1.3f);
-        const float env = (std::max)(0.0f, 0.40f + 0.60f * sinf(t * 6.2831853f * 0.37f));   // frases: a veces habla mas, a veces menos, con pausas
-        talkO = pTalk * 0.30f * (std::max)(w, 0.0f) * env;
-        talkRound = pTalk * sinf(t * 6.2831853f * 1.7f + 0.6f) * env;   // labios que se redondean (o / u) y se estiran (e / i)
-        // (08/11, Agustin: "ajusta las presentes para presentar movimientos mas realistas") al hablar no se mueve solo la mandibula: el
-        // labio de arriba sube y el de abajo baja con cada silaba (consonantes labiales: se juntan en los valles de la onda)
-        talkLip = pTalk * (std::max)(w + 0.15f, 0.0f) * env;
+        if (g_cfg.live[396][3] > 0.5f) {   // (08/11) w396 = 1: por PALABRAS (visemas, frases de anim\hablar.txt)
+            float ch[7]; TalkWords(*S, tNow, sp, ch);
+            talkO = pTalk * 0.30f * ch[0]; talkRound = pTalk * ch[1]; talkLip = pTalk * ch[2]; talkLow = pTalk * ch[3];
+            talkProt = pTalk * ch[4]; talkPress = pTalk * ch[5]; talkAcc = pTalk * ch[6];
+        } else {   // silabas: dos ondas que no se repiten juntas, por personaje distinto
+            const float t = (tNow + (float)(((uintptr_t)skel >> 6) & 63) * 0.37f) * sp;
+            const float w = 0.6f * sinf(t * 6.2831853f * 4.1f) + 0.4f * sinf(t * 6.2831853f * 2.3f + 1.3f);
+            const float env = (std::max)(0.0f, 0.40f + 0.60f * sinf(t * 6.2831853f * 0.37f));   // frases: a veces habla mas, a veces menos, con pausas
+            talkO = pTalk * 0.30f * (std::max)(w, 0.0f) * env;
+            talkRound = pTalk * sinf(t * 6.2831853f * 1.7f + 0.6f) * env;   // labios que se redondean (o / u) y se estiran (e / i)
+            // (08/11, Agustin: "ajusta las presentes para presentar movimientos mas realistas") al hablar no se mueve solo la mandibula: el
+            // labio de arriba sube y el de abajo baja con cada silaba (consonantes labiales: se juntan en los valles de la onda)
+            talkLip = pTalk * (std::max)(w + 0.15f, 0.0f) * env; talkLow = talkLip * 0.83f;
+        }
     }
     const float o = (std::max)((std::max)(std::clamp(g_cfg.live[347][0], 0.0f, 1.0f), 0.45f * tongueOut), (std::min)(1.0f, 0.40f * pSur + 0.85f * pGri + talkO + 0.60f * (std::max)(0.0f, pSmi - 1.0f)));   // (04/11 b, Agustin: "la sonrisa con los dientes cerrados") la sonrisa ya no abre la mandibula (antes 0.12): los labios se separan, los dientes quedan juntos; (04/11 c) pasando 1.0 la sonrisa grande abre la boca (1.5 = 0.30, como en la foto de Messi riendo)
     // (04/11 d) filas 361 / 362, por huesos, de -1.5 a 1.5 (0 = nada): x361 cejas, y361 mordida, z361 mandibula de costado, w361 media
@@ -1182,7 +1313,7 @@ static void FrameBody(const void* skel) {
     float xB[8]; for (int i = 0; i < 8; i++) xB[i] = S->sl[7 + i];
     const float xAng = S->sl[15];
     bool xOn = fabsf(xAng) > 0.001f; for (float v : xB) if (fabsf(v) > 0.001f) xOn = true;
-    bool poseOn = pAng > 0.001f || pSmi > 0.001f || pSur > 0.001f || pGri > 0.001f || pPuc > 0.001f || fabsf(talkRound) > 0.001f || xOn;
+    bool poseOn = pAng > 0.001f || pSmi > 0.001f || pSur > 0.001f || pGri > 0.001f || pPuc > 0.001f || fabsf(talkRound) > 0.001f || pTalk > 0.001f || xOn;
     // (08/11, Agustin: "hincharse las mejillas, soplar y entrecerrar un poco los ojos podria ser una animacion cuando el jugador esta
     // quieto o a punto de correr") velocidad del jugador: la cabeza del cuerpo en el mundo (CharNodeToWorld), suavizada con el reloj
     bool arranco = false;
@@ -1453,7 +1584,7 @@ static void FrameBody(const void* skel) {
         // (04/11) la mandibula real no gira en el lugar: al abrir, el condilo se desliza adelante y abajo (articulacion
         // temporomandibular): los huesos que siguen a la mandibula bajan y van adelante un poco con la apertura del mod
         if (kDef[d].jaw > 0.0f && op > 0.0f) { po[1] -= 0.0010f * op * kDef[d].jaw; po[2] += 0.0022f * op * kDef[d].jaw; }
-        if (d == 5 || d == 6) po[0] += (d == 5 ? -1.0f : 1.0f) * 0.0012f * talkRound;   // hablar: comisuras adentro / afuera
+        if (d == 5 || d == 6) po[0] += (d == 5 ? -1.0f : 1.0f) * 0.0016f * talkRound;   // hablar: comisuras adentro (redonda) / afuera (ancha)
         if (xOn) {   // (04/11 d) filas 361 / 362 (ejes de la cabeza: x a la izquierda del jugador, y arriba, z adelante; metros por 1.0)
             const bool isL = d <= 11 ? (d % 2) == 1 : (d % 2) == 0;   // izquierdos: lip_b_l 1, lip_s_l 5, cheek_s_l 7, lip_t_l 9, nosewing_l 14, nasolabial_l 16, ..., brow_i_l 26, brow_o_l 28
             const float sl = isL ? 1.0f : -1.0f;
@@ -1488,8 +1619,15 @@ static void FrameBody(const void* skel) {
             if (d >= 26 && d <= 29) { const float side = isL ? (std::max)(xB[7], 0.0f) : (std::max)(-xB[7], 0.0f); po[1] += 0.0045f * side; }   // una ceja
         }
         if (d == 9 || d == 10 || d == 11) po[1] += 0.0012f * talkLip;   // (08/11) hablar: labio de arriba sube
-        if (d == 1 || d == 2 || d == 3) po[1] -= 0.0010f * talkLip;      // y el de abajo baja con cada silaba
+        if (d == 1 || d == 2 || d == 3) po[1] -= 0.0012f * talkLow;      // y el de abajo baja (f / v: sube contra los dientes)
         if (d == 12) po[1] += 0.0004f * talkLip;
+        if (talkProt > 0.001f || talkPress > 0.001f || talkAcc > 0.001f) {   // (08/11) hablar por palabras
+            if (d == 1 || d == 2 || d == 3 || d == 5 || d == 6 || d == 9 || d == 10 || d == 11 || d == 12) po[2] += 0.0022f * talkProt;   // o / u: labios adelante
+            if (d == 9 || d == 10 || d == 11) po[1] -= 0.0007f * talkPress;   // m / b / p: labios uno contra otro
+            if (d == 1 || d == 2 || d == 3) po[1] += 0.0007f * talkPress;
+            if (d == 5 || d == 6) po[0] -= (d == 5 ? 1.0f : -1.0f) * 0.0004f * talkPress;
+            if (d >= 26 && d <= 29) po[1] += 0.0009f * talkAcc;              // silaba tonica: cejas apenas arriba
+        }
         if (nLive) {   // (08/11) animaciones realistas (filas 395 / 396): ejes de la cabeza, metros
             const bool isL = d <= 11 ? (d % 2) == 1 : (d % 2) == 0; const float sl = isL ? 1.0f : -1.0f;
             const float spd = S->spHave ? S->speed : 0.0f, mouthBr = brAmp * breath * SStep(1.5f, 6.0f, spd);
