@@ -2064,6 +2064,8 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     UpdateTimeParams();
     SSGIPresent(s_presentNo.load());
     LightMeterPresent();
+    RastroPresent();    // (08/11 i) rastro del motor: ganchos en el primer Present (rastro = 1)
+    { static ULONGLONG t = 0; ULONGLONG n = GetTickCount64(); if (n - t > 10000) { t = n; RastroFlush(false); } }
     CamHookPresent();   // (23/10) camara del motor: ganchos (primer Present), cortes de camara -> 160, log
     TiempoPresent();    // (31/10) camara lenta: ganchos (visor del editor / reloj del partido, primer Present), 343.w, log
     CmdListGuardPresent();
