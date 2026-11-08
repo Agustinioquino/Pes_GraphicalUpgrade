@@ -361,12 +361,30 @@ def main():
     ap.add_argument('--puerto', type=int, default=21020)
     ap.add_argument('--panel', type=int, default=21021, help='puerto del panel en vivo de la DLL (panel_puerto del ini)')
     ap.add_argument('--verboso', action='store_true')
+    ap.add_argument('--sin-ventana', action='store_true', help='solo el servidor (abrir la pagina en el navegador)')
     ARGS = ap.parse_args()
     os.makedirs(os.path.join(ARGS.trabajo, 'cache'), exist_ok=True)
     ROOTS = [norm(ARGS.juego), norm(ARGS.trabajo), norm(os.path.dirname(TOOLS))] + [norm(r) for r in ARGS.raiz]
     srv = ThreadingHTTPServer(('127.0.0.1', ARGS.puerto), H)
-    print('visor: http://127.0.0.1:%d/   juego: %s   trabajo: %s   panel en vivo: http://127.0.0.1:%d/' % (ARGS.puerto, ARGS.juego, ARGS.trabajo, ARGS.panel))
-    try: srv.serve_forever()
-    except KeyboardInterrupt: pass
+    url = 'http://127.0.0.1:%d/' % ARGS.puerto
+    print('visor: %s   juego: %s   trabajo: %s   panel en vivo: http://127.0.0.1:%d/' % (url, ARGS.juego, ARGS.trabajo, ARGS.panel))
+    if ARGS.sin_ventana:
+        try: srv.serve_forever()
+        except KeyboardInterrupt: pass
+        return
+    # (08/11, Agustin: "como aplicacion y no como una pagina") ventana propia con pywebview (WebView2 de Windows): el servidor
+    # corre en un hilo y la app es la ventana; al cerrarla se apaga todo. Sin pywebview: navegador.
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        import webview
+    except ImportError:
+        print('sin pywebview (pip install pywebview): se abre en el navegador'); import webbrowser; webbrowser.open(url)
+        try:
+            while True: time.sleep(3600)
+        except KeyboardInterrupt: pass
+        return
+    w = webview.create_window('PES21 FX Visor', url, width=1500, height=940, min_size=(1000, 650), background_color='#0f1115')
+    webview.start(private_mode=False, storage_path=os.path.join(ARGS.trabajo, 'app'))
+    srv.shutdown()
 
 if __name__ == '__main__': main()
