@@ -457,7 +457,10 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
       float dGr = IniParams.Load(int2(172, 0)).x; dGr = dGr > 0.01 ? clamp(dGr, 0.0, 3.0) : 1.0;
       // (08/11 k) solo hacia AFUERA: manos y brazos tienen una prepasada de profundidad sin teselar (VS c6ef0c75); un surco metido hacia
       // adentro fallaria la prueba de profundidad y dejaria un agujero. Los surcos se marcan en la luz (PS aa7d1833, PesLimbRelief).
-      float hm = clamp((hh + hb) * clamp(rW, 0.0, 2.0) * dGr, 0.0, 0.0025);
+      // (08/11 m, Agustin: "no veo diferencias ni estando extremadamente cerca") las alturas de pes_limb_relief son las anatomicas
+      // reales (0.3..1.8 mm): con 20 cm de brazo en pantalla eso es menos de un pixel. w376 = 1 ahora las lleva x4 (nudillos ~3 mm,
+      // gemelo ~7 mm, separaciones del brazo ~3 mm) con tope 1 cm; el PS sube la luz del relieve en la misma medida.
+      float hm = clamp((hh + hb) * 4.0 * clamp(rW, 0.0, 3.0) * dGr, 0.0, 0.010);
       float3 Nr = normalize(b.x * N0 + b.y * N1 + b.z * N2);
       d += Nr * (hm * min(seam, seamR) * fade);
       { float dn = dot(d, Nr); if (dn < 0.0) d -= Nr * dn; }   // el redondeo tampoco mete nada hacia adentro
@@ -584,7 +587,7 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
   if (IniParams.Load(int2(360, 0)).x > 1.5) {
     // (08/11 l) escala por duplicacion (antes lineal 1..16: x1..x3.9 salia todo azul y el cuerpo, x5-x6 de promedio, no pasaba
     // del celeste): x1 azul, x2 celeste, x4 verde, x8 naranja, x16 rojo
-    float lv = round(saturate(log2(max(k.i, 1.0)) / 4.0) * 5.0), mv = saturate(length(d) / 0.0025);
+    float lv = round(saturate(log2(max(k.i, 1.0)) / 4.0) * 5.0), mv = saturate(length(d) / 0.006);
     o.pR.w = 2.0 + lv + 0.9 * mv;
   }
 #endif

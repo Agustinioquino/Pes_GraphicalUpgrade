@@ -336,7 +336,8 @@ void main(
     int lrK = !lbOn ? 0 : (lrQ > 515.5 && lrQ < 527.5) ? 1 : (lrQ > 527.5 && lrQ < 599.5) ? 2 : 0;
     if (lrK > 0) {
       float dGl = IniParams.Load(int2(172,0)).x; dGl = dGl > 0.01 ? clamp(dGl, 0.0, 3.0) : 1.0;
-      float lrGain = clamp(P305.y / 0.7, 0.0, 2.0) * dGl;
+      // (08/11 m) con el relieve del cuerpo en la teselacion (w376, x4 de la altura real) la luz sigue a la forma: hasta x3
+      float lrGain = clamp(P305.y / 0.7, 0.0, 2.0) * dGl * (1.0 + 2.0 * saturate(IniParams.Load(int2(376,0)).w));
       float la = lrK == 1 ? saturate((lrQ - 520.0) / 7.0) : fmod(lrQ - 528.0, 8.0) / 7.0;
       // (08/11) pierna: tension de cada grupo (pes_limbs.hlsli PesLegAct) en v1.y = 2 + (cuadriceps + 8 isquios + 64 gemelo) / 1024
       float na = round((v1.y - 2.0) * 1024.0);
@@ -368,7 +369,7 @@ void main(
                            saturate((1.0 - acF) * acE * 0.9 + 0.25 * acE),     // triceps
                            saturate(0.75 * acE + 0.3 * acF));                 // antebrazo
       float gK = 0.45 + 1.1 * dot(gW, gAct) + 0.45 * (1.0 - saturate(dot(gW, float4(1, 1, 1, 1))));   // tono base 0.45 (codo y bordes: fijo)
-      float aK = saturate(0.55 * dG) * gK * (1.0 + 0.5 * vrWa - 0.6 * vrWr);
+      float aK = saturate(0.55 * dG) * gK * (1.0 + 0.5 * vrWa - 0.6 * vrWr) * (1.0 + 1.2 * saturate(IniParams.Load(int2(376,0)).w));   // (08/11 m) como el relieve teselado
       r2.xy += aK * pesArmAnatN.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN).xy;
       float l2 = dot(r2.xy, r2.xy); if (l2 > 0.94) r2.xy *= rsqrt(l2 / 0.94);
       anatCav = saturate(aK) * (1.0 - pesArmAnatC.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN).x);

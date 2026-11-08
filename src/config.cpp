@@ -554,6 +554,7 @@ static const DebugParam kDebugParams[] = {
     { 140, 3, 0.5f, 0.0f, "Tono de piel: mapa", "Piel", kV1, 1 },
     { 147, 1, 0.5f, 0.0f, "Borde de la mascara de la cara", "Piel", kV1, 1 },
     { 322, 3, 0.5f, 0.0f, "Franja de la union cuello / cuerpo", "Piel", kV1, 1 },
+    { 360, 0, 0.5f, 0.0f, "Teselacion: inflar cara y cuerpo / ver teselacion del cuerpo", "Piel", kV27, 2 },
 };
 static const int kDebugN = (int)(sizeof(kDebugParams) / sizeof(kDebugParams[0]));
 int DebugParamCount() { return kDebugN; }
