@@ -144,15 +144,15 @@ void main(
     }
   }
   r3.w = inShadow.Sample(g_samplerPoint_Clamp_s, r0.xy).x;
-  // (08/11, Agustin: "revisa como sombrea el juego original tambien para mejorarlo") SOMBRA DE CONTACTO (w384).
+  // (08/11, Agustin: "revisa como sombrea el juego original tambien para mejorarlo") SOMBRA DE CONTACTO (w387).
   // El juego resuelve la sombra del sol en una textura de pantalla (t14) a partir de su shadow map de 3 cascadas: la cascada
   // de cerca cubre varios metros, asi que un pixel del mapa mide centimetros y, con el margen que hace falta para que una
   // superficie no se sombree a si misma, lo chico y pegado NO proyecta sombra: la nariz y el labio de arriba no sombrean la
   // cara, la ceja no sombrea el parpado, los dedos no se sombrean entre si, el pelo no apoya sobre la frente y el pie queda
   // despegado del pasto ("peter-panning"). Aca se traza, en el propio buffer de profundidad, un rayo corto hacia el sol
-  // (w384 cm): si en ese tramo hay algo delante, el pixel entra en sombra. Se MULTIPLICA a la sombra del juego (1 = al sol),
+  // (w387 cm): si en ese tramo hay algo delante, el pixel entra en sombra. Se MULTIPLICA a la sombra del juego (1 = al sol),
   // asi que solo puede agregar sombra, nunca quitarla, y solo de cerca (menos de 15 m), que es donde se ve
-  { float4 CSn = IniParams.Load(int2(384, 0));
+  { float4 CSn = IniParams.Load(int2(387, 0));
     float3 LdC = pLc_dir.xyz;
     if (cmpOn && CSn.w > 0.001 && dot(LdC, LdC) > 1e-6 && r3.w > 0.01) {
       float zcC = PESLinZ(uvC);
