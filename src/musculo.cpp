@@ -136,6 +136,9 @@ struct DynState {
     float chQ[4], chR[4];                                // pecho: cuaternion ahora y en reposo
     volatile unsigned char upOk[2], foOk[2], thOk[2], shOk[2], chOk;
     float breath, ex, phase, pos[3]; bool posOk;         // respiracion (m, con signo), agitacion 0..1, fase, ultima posicion
+    // (08/11) momentos de la pierna (LegMoments): velocidad y aceleracion del personaje en el piso, velocidad vertical, rodilla
+    // (flexion, velocidad suavizada, maximo reciente para la patada), tension de cada grupo (x cuadriceps, y isquios, z gemelo)
+    float spd, acc, vy, kf[2], kv[2], kWind[2], kWindT[2], land, act[2][3]; int mom[2];
 };
 static const int kDynFb = 64;   // esqueletos que no se sabe de que personaje son (por puntero)
 static DynState s_dyn[kCharSlots + kDynFb];
@@ -572,8 +575,14 @@ static void UpdateDynamics() {
         float target = 0.0f;
         if (ok && d.posOk && dt > 0.0f) {
             const float dx = pos[0] - d.pos[0], dz = pos[2] - d.pos[2], v = sqrtf(dx * dx + dz * dz) / dt;
-            if (v < 15.0f) target = std::clamp(kag * (v - 1.5f) / 6.0f, 0.0f, 1.0f);   // mas de 15 m/s: corte o teletransporte
-        }
+            if (v < 15.0f) {   // mas de 15 m/s: corte o teletransporte
+                target = std::clamp(kag * (v - 1.5f) / 6.0f, 0.0f, 1.0f);
+                // (08/11) para los momentos de la pierna: velocidad (suavizada 0.1 s), aceleracion (0.15 s) y velocidad vertical
+                const float sp0 = d.spd; d.spd += (v - d.spd) * (1.0f - expf(-dt / 0.10f));
+                d.acc += (std::clamp((d.spd - sp0) / dt, -20.0f, 20.0f) - d.acc) * (1.0f - expf(-dt / 0.15f));
+                d.vy += (std::clamp((pos[1] - d.pos[1]) / dt, -10.0f, 10.0f) - d.vy) * (1.0f - expf(-dt / 0.08f));
+            }
+        } else if (!ok) { d.spd = d.acc = d.vy = 0.0f; }
         d.posOk = ok; if (ok) memcpy(d.pos, pos, sizeof pos);
         if (!ok) target = 0.0f;
         const float tau = target > d.ex ? 3.0f : 14.0f;   // se agita rapido y se calma despacio
@@ -582,11 +591,13 @@ static void UpdateDynamics() {
         d.phase = fmodf(d.phase + 6.2831853f * (0.22f + 0.50f * d.ex) * dt, 6.2831853f);   // 13 a 43 respiraciones por minuto
         d.breath = kb * (0.0025f + 0.0045f * d.ex) * sinf(d.phase);
     }
+    LegMoments(dt);
     for (int i = 0; i < kDynFb; i++) {   // sin personaje conocido: respiracion tranquila
         DynState& d = s_dyn[kCharSlots + i];
         d.ex = 0.0f; d.breath = kb * 0.0025f * sinf(6.2831853f * 0.22f * s_dynT + 1.7f * (float)i);
     }
 }
+static void LegMoments(float dt);   // (08/11) apoyo / empuje / frenada / patada / salto / caida por pierna (mas abajo)
 static void UpdateFactors() {
     float L[kPRows][4]; GeneralRows(L);   // 164..171, 162 y (26/10) 260..262
     const bool on = L[0][0] > 0.5f && !s_compare.load(), ropa = g_cfg.live[166][1] > 0.5f, trans = g_cfg.live[170][2] > 0.5f, vec = g_cfg.live[255][0] > 0.5f;
@@ -698,7 +709,9 @@ static int s_mzZones = 0, s_mzOwnLog = -1; static float s_mzMax = 0.0f;
 ID3D11ShaderResourceView* MuscleClothSRV() { return s_mzSRV.load(std::memory_order_acquire); }
 // (02/11) esfuerzo por jugador para las venas (t123 del VS de la piel 1c02a92a, pes_limbs.hlsli): [0] = (personajes, on, 0, 0);
 // [1 + i] = (posicion del personaje, la misma que la tabla de tonos (NodePos) / agitacion 0..1). El VS elige el mas cercano en el piso.
-static const int kEffRows = 1 + kCharSlots;
+// (08/11) [1 + kCharSlots + 2 n + lado] = tension de la pierna (x cuadriceps, y isquios, z gemelo, w momento 0..8) del personaje n
+// (el mismo orden que las filas de posicion; lado 0 = izquierda = +X); cabecera z = 1 si las trae.
+static const int kEffRows = 1 + 3 * kCharSlots;
 static std::atomic<ID3D11ShaderResourceView*> s_effSRV{nullptr};
 static ID3D11Buffer* s_effBuf = nullptr; static ID3D11Device* s_effDev = nullptr;
 static float s_effData[kEffRows][4] = {}; static bool s_effSent = false; static double s_effLog = 0;
@@ -725,11 +738,12 @@ static void EffortPresent() {
         for (int i = 0; i < kCharSlots && n < kCharSlots; i++) {
             const DynState& ds = s_dyn[i];
             if (!s_slotAlive[i] || !ds.posOk) continue;
+            for (int sd = 0; sd < 2; sd++) { float* g = d[1 + kCharSlots + 2 * n + sd]; for (int c = 0; c < 3; c++) g[c] = std::clamp(ds.act[sd][c], 0.0f, 1.0f); g[3] = (float)ds.mom[sd]; }
             float* e = d[1 + n++]; e[0] = ds.pos[0]; e[1] = ds.pos[1]; e[2] = ds.pos[2]; e[3] = std::clamp(ds.ex, 0.0f, 1.0f);
             mx = (std::max)(mx, e[3]); sum += e[3];
         }
     }
-    d[0][0] = (float)n; d[0][1] = n > 0 ? 1.0f : 0.0f;
+    d[0][0] = (float)n; d[0][1] = n > 0 ? 1.0f : 0.0f; d[0][2] = n > 0 ? 1.0f : 0.0f;
     if (s_effSent && !memcmp(d, s_effData, sizeof d)) return;
     D3D11_MAPPED_SUBRESOURCE m{};
     if (FAILED(imm->Map(s_effBuf, 0, D3D11_MAP_WRITE_DISCARD, 0, &m))) return;
@@ -933,6 +947,62 @@ static float ArmRaise(const DynState& d, int sd) {   // el brazo se aleja del co
     QRotInv(d.chQ, d.upX[sd], ln); QRotInv(d.chR, d.upR[sd], lr); QRotInv(d.chR, down, dn);
     return std::clamp((AngleOf(ln, dn) - AngleOf(lr, dn)) / 1.4f, 0.0f, 1.0f);
 }
+// (08/11, Agustin: "deberias ... hacer que el dll busque esos momentos especificos") MOMENTOS DE LA PIERNA, una vez por cuadro y por
+// personaje conocido. Con la rodilla (flexion medida en los huesos, su velocidad) y el movimiento del personaje (velocidad,
+// aceleracion en el piso, velocidad vertical) se reconoce que esta haciendo cada pierna y que grupo trabaja:
+//   1 apoyo    corriendo, rodilla 15..40 grados y casi quieta          -> cuadriceps (aguanta el peso) y gemelo
+//   2 empuje   corriendo, la rodilla se estira con la pierna abajo      -> cuadriceps, gemelo al maximo (despegue)
+//   3 vuelo    rodilla doblada estirandose rapido (final del vuelo)     -> isquios frenan la canilla
+//   4 frenada  el personaje desacelera fuerte                           -> cuadriceps (excentrico) e isquios
+//   5 arranque el personaje acelera fuerte                              -> cuadriceps y gemelo
+//   6 patada   rodilla cargada (> 55 %) que se estira muy rapido        -> cuadriceps al maximo, despues isquios frenan
+//   7 salto    sube rapido                                              -> gemelo y cuadriceps
+//   8 caida    venia bajando y frena de golpe (aterrizaje)              -> cuadriceps
+// La tension sube rapido (50 ms) y baja despacio (0.3 s). Va a los huesos del muslo y la pantorrilla (DynAdd) y a la tabla t123
+// de los shaders (pes_limbs.hlsli PesLegActDll): el bulto, el relieve, la aspereza (SRM) y la translucidez (TRM) de cada grupo.
+static const char* const kMomName[] = { "quieta", "apoyo", "empuje", "vuelo", "frenada", "arranque", "patada", "salto", "caida" };
+static std::atomic<unsigned> s_momCnt[9];
+static float KneeFlex(const DynState& d, int sd);
+static void LegMoments(float dt) {
+    if (dt <= 0.0f) return;
+    for (int i = 0; i < kCharSlots; i++) {
+        DynState& d = s_dyn[i];
+        if (!s_slotAlive[i] || !d.posOk) { memset(d.act, 0, sizeof d.act); d.mom[0] = d.mom[1] = 0; continue; }
+        const float run = std::clamp((d.spd - 1.5f) / 4.5f, 0.0f, 1.0f);
+        const float brake = std::clamp((-d.acc - 2.5f) / 5.0f, 0.0f, 1.0f), accel = std::clamp((d.acc - 2.5f) / 5.0f, 0.0f, 1.0f);
+        const float jump = std::clamp((d.vy - 1.0f) / 2.0f, 0.0f, 1.0f);
+        // aterrizaje: venia cayendo (< -1.5 m/s) y la velocidad vertical se corta
+        if (d.vy < -1.5f) d.land = 1.0f; else if (d.land > 0.5f && d.vy > -0.4f) d.land = 0.45f; else d.land = (std::max)(0.0f, d.land - dt / 0.35f);
+        const float landK = d.land < 0.5f ? std::clamp(d.land / 0.45f, 0.0f, 1.0f) : 0.0f;
+        for (int sd = 0; sd < 2; sd++) {
+            const bool ok = d.thOk[sd] && d.shOk[sd];
+            const float k = ok ? KneeFlex(d, sd) : 0.0f;
+            const float kvRaw = ok ? std::clamp((k - d.kf[sd]) / dt, -30.0f, 30.0f) : 0.0f;   // 1/s: + dobla, - estira
+            d.kf[sd] = k; d.kv[sd] += (kvRaw - d.kv[sd]) * (1.0f - expf(-dt / 0.04f));
+            const float kv = d.kv[sd];
+            if (k > d.kWind[sd] || d.kWindT[sd] <= 0.0f) { d.kWind[sd] = k; d.kWindT[sd] = 0.45f; } else d.kWindT[sd] -= dt;   // rodilla cargada reciente
+            const float ext = std::clamp(-kv / 4.0f, 0.0f, 1.0f), stz = (k - 0.22f) / 0.16f, band = expf(-stz * stz);
+            float m[9] = {};
+            m[1] = run * band * (1.0f - std::clamp(fabsf(kv) / 3.0f, 0.0f, 1.0f));
+            m[2] = run * ext * (k < 0.5f ? 1.0f : 0.3f);
+            m[3] = std::clamp(-kv / 3.0f, 0.0f, 1.0f) * std::clamp((k - 0.35f) / 0.25f, 0.0f, 1.0f);
+            m[4] = brake * std::clamp(0.4f + k, 0.0f, 1.0f);
+            m[5] = accel;
+            m[6] = std::clamp((-kv - 5.0f) / 4.0f, 0.0f, 1.0f) * std::clamp((d.kWind[sd] - 0.55f) / 0.2f, 0.0f, 1.0f);
+            m[7] = jump; m[8] = landK;
+            float qa = 0.10f + 0.10f * d.ex, ha = 0.08f + 0.08f * d.ex, ca = 0.12f + 0.10f * d.ex;   // tono base (mas con agitacion)
+            qa = (std::max)({ qa, 0.65f * m[1], 0.85f * m[2], 0.80f * m[4], 0.70f * m[5], 1.00f * m[6], 0.60f * m[7], 0.95f * m[8] });
+            ha = (std::max)({ ha, 0.85f * m[3], 0.55f * m[4], 0.45f * m[6] + 0.5f * m[3], 0.35f * m[5] });
+            ca = (std::max)({ ca, 0.45f * m[1], 1.00f * m[2], 0.80f * m[5], 0.95f * m[7], 0.50f * m[8] });
+            const float tgt[3] = { std::clamp(qa, 0.0f, 1.0f), std::clamp(ha, 0.0f, 1.0f), std::clamp(ca, 0.0f, 1.0f) };
+            for (int g = 0; g < 3; g++) { const float tau = tgt[g] > d.act[sd][g] ? 0.05f : 0.30f; d.act[sd][g] += (tgt[g] - d.act[sd][g]) * (1.0f - expf(-dt / tau)); }
+            int best = 0; float bv = 0.35f;
+            for (int q = 1; q < 9; q++) if (m[q] > bv) { bv = m[q]; best = q; }
+            if (best != d.mom[sd] && best) s_momCnt[best].fetch_add(1, std::memory_order_relaxed);
+            d.mom[sd] = best;
+        }
+    }
+}
 static int s_iArm = -2, s_iFore = -1, s_iThigh = -1, s_iKnee = -1, s_iPect = -1;
 static void DynFindClasses() {
     if (s_iArm != -2) return;
@@ -971,9 +1041,13 @@ static void DynAdd(int i, void* self, const float* a2, const void* skel, int slo
     case M_FORE: if (kc > 0.0f) fc.e += kc * 0.04f * ElbowFlex(d, sd); break;
     case M_DELT: if (kc > 0.0f) fc.e += kc * 0.07f * ArmRaise(d, sd); break;
     case M_TRAP: if (kc > 0.0f) Push(fc, 0.0f, 1.0f, 0.0f, 0.006f * kc, ArmRaise(d, sd)); Push(fc, 0.0f, 1.0f, 0.0f, 0.5f * b * ex, 1.0f); break;
-    case M_THIGH: if (kc > 0.0f) { const float k = KneeFlex(d, sd); fc.e += kc * 0.035f * k; fc.t[2] -= kThighR * 0.5f * kc * 0.07f * k; } break;   // isquios atras
-    case M_HEM: if (kc > 0.0f && s_ropaOn) { const float k = KneeFlex(d, sd); fc.e += 0.7f * kc * 0.035f * k; fc.t[2] -= 0.8f * kThighR * 0.5f * kc * 0.07f * k; } break;
-    case M_CALF: if (kc > 0.0f) fc.e += kc * 0.03f * KneeFlex(d, sd); break;
+    // (08/11) muslo y pantorrilla por la TENSION de su grupo (LegMoments: apoyo, empuje, frenada, patada...), no solo por la rodilla
+    // doblada (asi el muslo se hinchaba justo cuando el cuadriceps esta flojo). El cuadriceps corre el muslo hacia adelante, los isquios atras.
+    case M_THIGH: if (kc > 0.0f) { const float k = KneeFlex(d, sd), qa = d.act[sd][0], ha = d.act[sd][1];
+        fc.e += kc * (0.010f * k + 0.040f * (std::max)(qa, ha)); fc.t[2] += kThighR * 0.5f * kc * (0.05f * qa - 0.06f * ha - 0.02f * k); } break;
+    case M_HEM: if (kc > 0.0f && s_ropaOn) { const float k = KneeFlex(d, sd), qa = d.act[sd][0], ha = d.act[sd][1];
+        fc.e += 0.7f * kc * (0.010f * k + 0.040f * (std::max)(qa, ha)); fc.t[2] += 0.8f * kThighR * 0.5f * kc * (0.05f * qa - 0.06f * ha - 0.02f * k); } break;
+    case M_CALF: if (kc > 0.0f) fc.e += kc * (0.010f * KneeFlex(d, sd) + 0.045f * d.act[sd][2]); break;
     case M_PECT: Push(fc, 0.10f, 0.35f, 1.0f, b, 1.0f); break;            // respiracion: el pecho sube y sale
     case M_CLAV: Push(fc, 0.0f, 1.0f, 0.6f, 0.8f * b, 1.0f); break;
     case M_RIB: Push(fc, 1.0f, 0.0f, 0.2f, 0.5f * b, 1.0f); break;       // las costillas se abren
@@ -1132,6 +1206,11 @@ void MuscleHookPresent() {
             Log("musculatura viva (contraccion %.2f, respiracion %.2f): %u huesos medidos, %u sin transformacion actual | %s: codo %.0f/%.0f %%, rodilla %.0f/%.0f %%, brazo afuera %.0f/%.0f %% (izq/der), agitacion %.0f %%, respiracion %.1f mm",
                 s_dynK[0], s_dynK[1], ms, mf, s_slotInfo[k].name[0] ? s_slotInfo[k].name : "personaje", 100.0f * ElbowFlex(d, 0), 100.0f * ElbowFlex(d, 1),
                 100.0f * KneeFlex(d, 0), 100.0f * KneeFlex(d, 1), 100.0f * ArmRaise(d, 0), 100.0f * ArmRaise(d, 1), 100.0f * d.ex, 1000.0f * d.breath);
+            unsigned c[9]; for (int q = 1; q < 9; q++) c[q] = s_momCnt[q].exchange(0);
+            Log("piernas (30 s): momentos apoyo %u empuje %u vuelo %u frenada %u arranque %u patada %u salto %u caida %u | %s %.1f m/s acel %.1f: izq %s (cuadriceps %.0f isquios %.0f gemelo %.0f %%), der %s (%.0f %.0f %.0f %%)",
+                c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8], s_slotInfo[k].name[0] ? s_slotInfo[k].name : "personaje", d.spd, d.acc,
+                kMomName[std::clamp(d.mom[0], 0, 8)], 100.0f * d.act[0][0], 100.0f * d.act[0][1], 100.0f * d.act[0][2],
+                kMomName[std::clamp(d.mom[1], 0, 8)], 100.0f * d.act[1][0], 100.0f * d.act[1][1], 100.0f * d.act[1][2]);
         } else Log("musculatura viva (contraccion %.2f, respiracion %.2f): %u huesos medidos, %u sin transformacion actual, ningun personaje conocido medido", s_dynK[0], s_dynK[1], ms, mf);
     }
     {
