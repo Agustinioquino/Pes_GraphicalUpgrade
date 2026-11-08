@@ -32,7 +32,7 @@ namespace fx {
 static bool s_on = false;
 // (08/11 e) zoom minimo: los 3 congelamientos del 08/11 fueron reinicios de la placa (TDR, nvlddmkm 153) con la camara libre a
 // zoom 0.10-0.26 (campo de vision 0.02-0.09 rad): la cara llena la pantalla y la placa pasa los 2 s que Windows tolera.
-static const float kZoomMin = 0.15f;
+static const float kZoomMin = 0.05f;   // (08/11 e) Agustin no quiere zoom minimo: queda el de siempre
 static float s_zoomTarget = 1.0f; static std::atomic<int> s_wheel{0};
 static float s_fovBase = 0.0f, s_fovWritten = -1.0f;   // fov del juego sin zoom / ultimo fov escrito
 // "seguir la cara" (x346). (1/11) v1: la camara orbitaba alrededor de la cabeza sacada de la matriz de sk_head del dibujo de la
@@ -173,7 +173,7 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     // campo de vision que se va a ver (vertical, radianes): el del juego x zoom
     float fovNow = (s_fovBase > 0.0f ? s_fovBase : (fov && *fov == *fov && *fov > 0.0f ? *fov : 0.8f)) * std::clamp(g_cfg.live[344][2], kZoomMin, 3.0f);
     if (fovNow > 3.2f) fovNow *= 0.0174533f;   // en grados (camara del partido)
-    fovNow = std::clamp(fovNow, 0.10f, 2.5f);
+    fovNow = std::clamp(fovNow, 0.01f, 2.5f);
     const float tanHalf = tanf(0.5f * fovNow);
     if (follow && (!s_follow || mode != s_followMode)) {   // entrar (o cambiar de modo)
         if (s_follow && s_followMode == 1) s_fixHalf = std::clamp(s_dist * tanHalf, 0.05f, 2.0f);

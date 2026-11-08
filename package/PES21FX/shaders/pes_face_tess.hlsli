@@ -110,10 +110,6 @@ void PesTessParams(out float4 T, out float4 U)
   T.x = B.x; T.z = B.y; U.x = B.z; U.z = B.w;
 #else
   PesTessApplyPlayer(T, U);   // (04/11 m) teselacion por jugador
-  // (08/11 e) camara libre con zoom fuerte (w345 = campo de vision aplicado, en radianes; -1 = apagada): por debajo de 0.35 rad la
-  // cara llena la pantalla y la geometria se dispara (reinicios de la placa, TDR): la densidad y el tope bajan con el zoom
-  float fovFree = IniParams.Load(int2(345, 0)).w;
-  if (fovFree > 0.0 && fovFree < 0.35) { float kz = saturate(fovFree / 0.35); T.z *= kz; T.w = max(1.0, T.w * kz); }
 #endif
 }
 
