@@ -150,6 +150,7 @@ float PesTraceShadow(float3 Pv, float3 L, float rawNL, float zC, float zSgn, flo
 //  (b) haces: marcha de 16 pasos desde el pixel hacia la posicion de la luz en pantalla (sol lejano o foco) contando cuanto
 //      del camino esta libre de geometria (Mitchell 2007): el jugador tapa la luz y deja rayos alrededor de la silueta.
 //      Si la luz queda detras de la camara no hay haces (solo bruma). El ruido cambia por cuadro y lo promedia el TAA.
+static float g_volG = -1.0;   // (08/11 0qtsss) fase de la luz volumetrica del partido (z335) cuando el editor la copia; -1 = y385
 float3 PesVolumetric(float2 uv, float2 pxy, float3 Pv, float zA, bool geo, float zSgn, float3 Lw, bool spot, float3 Pl, float3 col, float strength, float dens) {
   if (strength <= 0.001) return 0.0;
   float3 rayD = normalize(Pv);
@@ -159,7 +160,7 @@ float3 PesVolumetric(float2 uv, float2 pxy, float3 Pv, float zA, bool geo, float
   // ~2 % de la luz y, con la luz detras de la camara (rumbo 0..90), casi nada: no se veia. Ahora la fase va normalizada (1 = aire
   // parejo), g sale de y385 (direccionalidad), la bruma llega a w385 m y los haces tienen su propia fuerza (x385)
   float4 V9 = IniParams.Load(int2(385, 0));
-  float g = clamp(V9.y > 0.0 ? V9.y : 0.35, 0.0, 0.9), cosT = dot(rayD, toL);
+  float g = clamp(g_volG >= 0.0 ? g_volG : (V9.y > 0.0 ? V9.y : 0.35), 0.0, 0.9), cosT = dot(rayD, toL);
   float phase = (1.0 - g * g) / pow(max(1.0 + g * g - 2.0 * g * cosT, 1e-3), 1.5);   // 1 = isotropo
   float reach = clamp(V9.w > 0.0 ? V9.w : 6.0, 0.5, 40.0);
   float len = geo ? min(length(Pv), reach) : reach;
@@ -577,7 +578,11 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
     }
   }
   // (07/11) luz volumetrica (bruma + haces hacia la luz), tambien sobre el fondo del editor
-  float3 vol = PesVolumetric(uv, pos.xy, Pv, zA, geo, zSgn, Lw, spot, Pl, sunC, E4.w, E5.y > 0 ? E5.y : 0.5);
+  // (08/11 0qtsss, Agustin: "que la luz volumetrica agregue niebla o rayos de sol como en el partido") con la volumetrica del editor
+  // en 0 (w377) y la del partido prendida (x335), los presets la copian: fuerza de x335 (0.6 -> 0.9), direccionalidad de z335
+  float volS = E4.w;
+  { float4 VLm = IniParams.Load(int2(335, 0)); if (volS <= 0.001 && preset != 0 && VLm.x > 0.0) { volS = clamp(VLm.x * 1.5, 0.0, 4.0); g_volG = clamp(VLm.z, 0.0, 0.9); } }
+  float3 vol = PesVolumetric(uv, pos.xy, Pv, zA, geo, zSgn, Lw, spot, Pl, sunC, volS, E5.y > 0 ? E5.y : 0.5);
   // (07/11 d) vistas de prueba (w380): aislar cada parte para juzgarla sola. Se pintan sobre gris neutro, sin la luz de estudio
   if (dbgView > 0) {
     float3 outc = 0; float3 outs = 0;
