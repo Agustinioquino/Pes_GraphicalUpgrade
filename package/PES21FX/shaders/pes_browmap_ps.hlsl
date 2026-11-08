@@ -17,10 +17,12 @@ void BrowMap(float2 uv, float2 texel, out float4 o3) {
   float zone = max(Ell(uv, float2(0.395, 0.312), float2(0.13, 0.05), 0.35), Ell(uv, float2(0.605, 0.312), float2(0.13, 0.05), 0.35));
   zone *= smoothstep(0.365, 0.345, uv.y);
   if (zone < 0.01) return;
-  float sk = 0;
+  float sk = 0; float3 skC = 0;
   [unroll] for (int k = 0; k < 8; k++) {
     float a = k * 0.785398;
-    sk = max(sk, LumF(tDiffuse.SampleLevel(sLin, uv + float2(cos(a) * 0.034, sin(a) * 0.026), 3.0).rgb));
+    float3 cN = tDiffuse.SampleLevel(sLin, uv + float2(cos(a) * 0.034, sin(a) * 0.026), 3.0).rgb;
+    float lN = LumF(cN);
+    if (lN > sk) { sk = lN; skC = cN; }   // (08/11 v) tambien el COLOR de la piel de alrededor (para separarlo del pelo)
   }
   sk = max(sk, 0.01);
   float l1 = LumF(tDiffuse.SampleLevel(sLin, uv, 1.0).rgb);
@@ -28,16 +30,21 @@ void BrowMap(float2 uv, float2 texel, out float4 o3) {
   // color (04/11 e, Agustin: "el color es lo que falla", salian casi negras): antes pesaba al CUADRADO lo oscuro -> ganaba solo el
   // texel mas negro. Ahora: promedio de los texeles de pelo (peso suave, no al cuadrado) mezclado con el promedio de la zona, y
   // se le devuelve el tono (saturacion x1.35) y algo de luz: el pelo de la ceja es castano / rubio translucido, no negro
-  float3 acc = 0, accAll = 0; float wsum = 0;
+  // (08/11 v, Agustin: "no me gusta el color que toma de la textura") el texel de la ceja pintada es una MEZCLA de pelo y piel (la
+  // pintura es semitransparente y en mip 0 el pelo no llena el texel): el promedio de antes (+30 % de la zona) le pasaba el rosado /
+  // naranja de la piel a las hebras. Ahora se separa: texel = a * pelo + (1 - a) * piel (piel = la mas clara de alrededor, con su
+  // color) -> pelo = (texel - (1 - a) * piel) / a, y pesa mas donde el pelo cubre mas (a alto)
+  float3 acc = 0; float wsum = 0;
   [unroll] for (int y = -2; y <= 2; y++) [unroll] for (int x = -2; x <= 2; x++) {
     float3 c = tDiffuse.SampleLevel(sLin, uv + float2(x, y) * texel * 2.0, 0.0).rgb;
-    float w = smoothstep(0.85, 0.55, LumF(c) / sk);
-    acc += c * w; wsum += w; accAll += c;
+    float al = saturate((1.0 - LumF(c) / sk) / 0.55);          // cobertura del pelo en ese texel (55 % mas oscuro = todo pelo)
+    float3 hcK = max((c - (1.0 - al) * skC) / max(al, 0.25), 0.0);
+    float w = al * al;
+    acc += hcK * w; wsum += w;
   }
   float3 hc = wsum > 1e-3 ? acc / wsum : tDiffuse.SampleLevel(sLin, uv, 0.0).rgb * 0.8;
-  hc = lerp(hc, accAll / 25.0, 0.3);
   float hl = LumF(hc);
-  hc = max(hl + (hc - hl) * 1.1, 0.0) * 1.15;   // (05/11) brillo de vuelta a x1.15 (se veian muy oscuras de frente)   // (04/11 o) antes x1.35 / x1.15: tono demasiado naranja
+  hc = max(hl + (hc - hl) * 0.95, 0.0) * 1.1;   // (08/11 v) sin realce de saturacion: el tono real del pelo ya no trae la piel
   o3 = float4(hc, mask);
 }
 void main(float4 pos : SV_Position, float2 uv : TEXCOORD0, out float4 o0 : SV_Target0)

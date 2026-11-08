@@ -335,6 +335,18 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
       if (PesPaintedHair(uv + dirUV * lenUV) < 0.2) len *= (PesPaintedHair(uv + dirUV * lenUV * 0.5) < 0.2) ? 0.55 : 0.85;   // (07/11, referencia eFootball de Agustin) el borde de la ceja queda deshilachado: los pelos pasan un poco la pintura
     }
     float widB = max(P74.w, 0.05) * 0.001 * mWid * 0.32;   // (07/11 b) 0.25 -> 0.32: con la normal de tubo cada pelo se lee como cilindro   // (04/11 b) mas finas: 0.35 -> ~0.09 mm de ancho real
+#ifndef PES_ATLAS
+    // (08/11 v, Agustin: "no me gusta su definicion con el antialiasing") LOD POR HEBRA en vez de tramado por pixel: una hebra mas fina
+    // que un pixel se dibujaba a 0.9 px y el PS borraba pixeles con un tramado fijo en PANTALLA; al moverse la cara el tramado no la
+    // acompanaba y el TAA lo promediaba a una mancha borrosa. Ahora se descarta la hebra ENTERA (hash propio, estable entre cuadros)
+    // con la probabilidad de su cobertura real y las que quedan se dibujan opacas y nitidas (como el LOD de pelo de UE / Frostbite).
+    // La sombra de contacto (PES_SHADOW) usa el mismo hash: sombrean exactamente las hebras que se ven
+    if (P75.z < 0.5) {
+      float pxR = 2.0 * abs(root.z) / (max(abs(m_projection[1].y), 1e-4) * vpH);
+      float pk = clamp(widB / max(pxR * 0.9, 1e-9) * 1.6, 0.4, 1.0);
+      if (frac(r1 * 31.71 + r3 * 17.33 + re * 5.97) > pk) continue;
+    }
+#endif
 #ifdef PES_ATLAS
     // (08/11, Agustin: "las sombras siguen mal") el texel del atlas mide ~1.8 mm (caja de 1.8 m en 1024 px) y cada pelo (~0.17 mm) se
     // dibujaba de ~1 mm: la ceja tapaba el sol como una placa solida (mancha negra en la piel y en las hebras de abajo). Ahora solo
@@ -345,7 +357,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     // color: el de la ceja pintada en ese punto (raiz) y la punta un poco mas clara, o el del tipo de pelo
     float3 painted = tBrow.SampleLevel(sLin, uv, 0).rgb;   // (04/11 d) el color de los pelos pintados de esa zona (no la piel de al lado)
     float3 cR = (hb && pesHairRoot.w > 0.5) ? pesHairRoot.xyz : painted;
-    float3 cT = (hb && pesHairTip.w > 0.5) ? pesHairTip.xyz : painted * float3(1.25, 1.18, 1.1);   // punta apenas mas clara
+    float3 cT = (hb && pesHairTip.w > 0.5) ? pesHairTip.xyz : painted * float3(1.12, 1.08, 1.04);   // punta apenas mas clara (08/11 v: antes x1.25 y otro x1.35 abajo: puntas naranjas / lavadas)
     // (04/11 o, Agustin: "el color poco natural aunque permita seleccionar el color") el color elegido era plano: ahora conserva la
     // variacion de la ceja pintada (cada pelo mas claro / oscuro que el promedio de su zona) y cada hebra su tono
     float lumP = dot(painted, float3(0.2126, 0.7152, 0.0722)), lumZ = dot(tBrow.SampleLevel(sLin, uv, 3).rgb, float3(0.2126, 0.7152, 0.0722));
@@ -362,7 +374,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     }
     // (07/11, referencia eFootball de Agustin: Messi al sol) las puntas son mas claras y calidas (pelo aclarado por el sol) y algunas
     // hebras sueltas mucho mas: al sol la ceja "chispea" pelo por pelo en vez de ser una mancha pareja
-    cT *= float3(1.08, 1.04, 0.98) * (frac(r3 * 11.3 + rk * 5.1) < 0.28 ? 1.25 : 1.0);
+    cT *= float3(1.04, 1.02, 0.99) * (frac(r3 * 11.3 + rk * 5.1) < 0.15 ? 1.15 : 1.0);   // (08/11 v) mas sutil
     // (04/11 j, Agustin: "necesitan un sombreado entre pelos mejor") sombra entre pelos: la raiz queda tapada por los vecinos (mas
     // oscura donde la ceja es tupida = contorno alto del mapa) y cada pelo con un tono apenas distinto (se ven capas)
     // (07/11, Agustin: "que tenga geometria y profundidad 3d real") CAPAS: hasta ahora todas las hebras iban a la misma altura sobre
@@ -372,7 +384,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     // contacto mas larga para las de arriba (PES_SHADOW usa la altura real)
     float lay = frac(r0 * 5.17 + r1 * 3.71 + r3 * 1.93);
     float stackH = lay * lay * 0.0022 * saturate(ph * 1.6) * max(mLift, 0.3);   // (07/11 b) 1.3 -> 2.2 mm: mas profundidad entre capas
-    { float occ = lerp(0.96, 0.8, saturate(ph * 1.2)) * lerp(lerp(0.72, 1.04, lay), 1.0, 1.0 - saturate(ph * 1.6));   // abajo tapado, arriba a la luz   // (05/11, Agustin: "se ven muy oscuras con la luz de frente") antes 0.88..0.62
+    { float occ = lerp(0.96, 0.8, saturate(ph * 1.2)) * lerp(lerp(0.86, 1.02, lay), 1.0, 1.0 - saturate(ph * 1.6));   // abajo tapado, arriba a la luz   // (05/11, Agustin: "se ven muy oscuras con la luz de frente") antes 0.88..0.62
       float layer = lerp(0.88, 1.08, frac(r3 * 7.31 + rk * 3.17));
       cR *= occ * layer; cT *= layer; }
     // vectores de movimiento de la raiz (misma cuenta que el PS de la cara: actual - anterior en UV de pantalla)
@@ -408,7 +420,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
 #ifndef PES_ATLAS
       wid = max(wid, pxV * (P75.z > 0.5 ? 1.25 : 0.9));   // (07/11 b, Agustin: "el TAA las desenfoca") 0.6 -> 0.9 px: menos tramado
 #endif
-      float cov = P75.z > 0.5 ? 1.0 : saturate(wReal / max(wid, 1e-9));
+      float cov = P75.z > 0.5 ? 1.0 : saturate(wReal / max(pxV * 1.5, 1e-9));   // (08/11 v) z = RESOLUCION de la hebra (1 = 1.5 px o mas de ancho real): el PS ya no trama, la usa para normal / brillo / borde
 #ifdef PES_SHADOW
       float hgt = max(dot(p - root, n), 0.0);                                    // altura sobre la piel
       p = p - Ls * (hgt / max(nl, 0.25)) + n * 0.00005;                          // al plano de la piel, siguiendo la luz
