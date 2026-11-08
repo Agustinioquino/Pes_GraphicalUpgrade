@@ -1431,7 +1431,10 @@ static void SlotPresent(ID3D11DeviceContext* imm) {
                             // 4 de 27 en las demas: pares como 17>0 o 7>4 que no eran) un emparejado real da un error chico (0.00..0.05 en los
                             // de la mandibula); con 0.25 entraban huesos equivocados y cada pieza movia partes distintas (uniones rotas). Tope 0.10:
                             // lo dudoso queda sin gesto (la pieza sigue al juego) en vez de mover lo que no es
-                            if (bd >= 0 && best < 0.10f && second > 2.0f * best) { slot[j] = (uint8_t)bd; matched++; worst = (std::max)(worst, best); }
+                            // (08/11 h, log de d1ec707: 0 mallas emparejadas / 1845, 27069 dudosos: con 0.10 tampoco entraban los pares BUENOS, que en el log de
+                            // las 15:43 daban 0.09..0.145; los falsos 0.21..0.25) tope 0.20 por defecto, [PES21FX] expr_paleta_error para probar sin recompilar
+                            const float tope = g_cfg.optExprPaletteErr > 0.001f ? g_cfg.optExprPaletteErr : 0.20f;
+                            if (bd >= 0 && best < tope && second > 2.0f * best) { slot[j] = (uint8_t)bd; matched++; worst = (std::max)(worst, best); }
                             else if (bd >= 0 && best < 0.25f) s_slotAmb++;
                         }
                         float err[32]; int alt[32]; float altE[32]; for (int j = 0; j < 32; j++) { err[j] = 1e9f; alt[j] = -1; altE[j] = 1e9f; }

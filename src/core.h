@@ -181,6 +181,7 @@ struct Config {
     int optHangSec = 20;   // (08/11 c) [PES21FX] congelado_seg: segundos sin cuadros = congelamiento -> volcado (main.cpp vigia); 0 apagado
     int optCrashDump = 1;   // (08/11) [PES21FX] crash_dump: 0 sin volcado, 1 minidump con datos, 2 memoria completa (main.cpp)
     bool optExprPalette = true;
+    float optExprPaletteErr = 0.20f;   // (08/11 h) [PES21FX] expr_paleta_error: error maximo de pose para que un lugar de la paleta tome un hueso (buenos 0.09..0.15, falsos 0.21..0.25)
     bool optExprBlindaje = false;   // (08/11 g) [PES21FX] expr_paleta_blindaje: 1 = reglas nuevas del emparejado (parpados solo en lugares de parpado, uno a uno, doble lectura, geometria, tope 40 grados / 2 cm); 0 = emparejado simple del mediodia (cbb4a21), el que Agustin vio bien   // (08/11) [PES21FX] expr_paleta: 1 = los gestos por huesos van a la paleta del VS (sin escribir el esqueleto); 0 = como antes
     int memFix = 1; bool memWatch = true;     // (26/10) [PES21FX] memoria_arreglo (0/1 = retener, 2 = liberar entero) / memoria_vigilar (memwatch.cpp)
     bool grassScan = true, grassNoCull = true, grassDumpDebugP = true;   // (26/10) [Motor] pasto_buscar / pasto_sin_recorte / volcar_debugp: distancia del pasto 3D del juego (grassdist.cpp)
