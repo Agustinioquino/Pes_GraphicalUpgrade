@@ -14,6 +14,7 @@
 //  - CUERPO (08/11 c): PesCrowdFaceBuf[2 * persona + 1] = capa de brazos / salto encima de la animacion (PesCrowdBody).
 //    La cara esta en PesCrowdFaceBuf[2 * persona].
 //  - SIN CAMISETA / REVOLEO (08/11 d): body.w + 10 = sin camiseta (PesCrowdShirtless), body.w = +-2 = revolea con ese brazo.
+//  - REMERA EN LA MANO (08/11 e): PesCrowdShirtInHand, con los colores del kit del hincha.
 //  - fila 394: x on (0 = como el juego) | y fuerza de la boca | z fuerza de las cejas | w animo (CPU)
 StructuredBuffer<float4> PesCrowdFaceBuf : register(t30);
 
@@ -147,10 +148,88 @@ void PesCrowdShirtless(inout uint4 vUV, float3 P, uint4 vIdx, float4 vW, uint cl
     if (s > 0.5) vUV.xy = asuint(kPesCheekUV[cls]);
 }
 
-void PesCrowdFace(inout uint4 vPos, inout uint4 vNrm, inout uint4 vTan, uint4 vCol, uint persona, uint4 vIdx, uint4 vWgt, inout uint4 vUV)
+// (08/11 e) REMERA EN LA MANO (tools/crowd/remera_mano.py): grilla de vertices pegada a la mano (peso 255 al hueso 6 / 10),
+// escondida por el juego (COLOR.x = 200..203 -> bit 24 de la mascara de partes). COLOR: x = 200 + lado (0 izq, 1 der)
+// + 2 * clase, y = s (agarre 0 .. punta 255), z = t (ancho), w = 255 cara de atras. La UV es la del pecho del mismo modelo:
+// el PS la pinta con la mascara + paleta / atlas del hincha = los colores del kit de su equipo.
+// Se abre solo en los hinchas sin camiseta: cuelga de la mano, o vuela girando cuando la revolea (body.w = +-2).
+// Devuelve true si el vertice es de la remera (ya resuelto: visible o escondido).
+bool PesCrowdShirtInHand(inout uint4 vPos, inout uint4 vNrm, inout uint4 vTan, inout uint4 vCol, uint persona, float mk)
+{
+    if (mk < 199.5 || mk > 203.5) return false;
+    float4 col = asfloat(vCol);
+    uint code = (uint)(mk + 0.5) - 200u;
+    uint side = code & 1u, cls = code >> 1;
+    if (asfloat(cb5[8].x) == 0.0) return true;
+    float4 prm = IniParams.Load(int2(394, 0));
+    if (prm.x <= 0.0) return true;
+    uint n = 0, st = 0; PesCrowdFaceBuf.GetDimensions(n, st);
+    if (2u * persona + 1u >= n) return true;
+    float4 body = PesCrowdFaceBuf[2u * persona + 1u];
+    if (body.w <= 5.0) return true;                                  // con camiseta puesta: no hay remera en la mano
+    body.w -= 10.0;
+    bool spin = side == 0u ? body.w > 1.5 : body.w < -1.5;
+    bool other = side == 0u ? body.w < -1.5 : body.w > 1.5;
+    if (other) return true;                                          // la revolea con la otra mano
+    if (!spin && (side == 0u) != (body.w > 0.5)) return true;        // colgando: una sola mano (der salvo w > 0.5)
+    uint base = (t0[persona].v[8] & 255u) * 34u;
+    uint hb = side == 0u ? 6u : 10u, ub = side == 0u ? 4u : 8u;
+    float sx = side == 0u ? 1.0 : -1.0;
+    // agarre y hombro en la pose final (animacion del juego + capa de brazos del mod)
+    float3 G = float3(0.6027 * sx, 1.0819, 0.2499), U = float3(0.195 * sx, 1.467, 0.033);
+    float3 Nd = 0, Td = 0;
+    float3 Gb = G, Ub = U;
+    if (body.x > 0.0 || body.z != 0.0) {
+        PesCrowdBody(Gb, Nd, Td, uint4(hb, 0, 0, 0), float4(1, 0, 0, 0), persona, body);
+        PesCrowdBody(Ub, Nd, Td, uint4(ub, 0, 0, 0), float4(1, 0, 0, 0), persona, body);
+    }
+    float3x4 Mh = PesCrowdMat(base, hb);
+    float3 Hf = mul(Mh, float4(Gb, 1.0));
+    float3 Uf = mul(PesCrowdMat(base, ub), float4(Ub, 1.0));
+    const float3 up = float3(0.0, 1.0, 0.0);
+    float s = col.y, t = col.z;
+    float3 dir;
+    float flut;
+    if (spin) {
+        float3 rad = Hf - Uf; rad.y = 0.0;
+        rad = dot(rad, rad) > 1e-4 ? normalize(rad) : float3(sx, 0.0, 0.0);
+        float3 tang = cross(up, rad) * (side == 0u ? 1.0 : -1.0);   // hacia donde gira la mano
+        dir = normalize(rad * 0.85 - tang * 0.6 - up * 0.12);        // la tela va atras del giro, casi horizontal
+        flut = 0.10;
+    } else {
+        dir = normalize(float3(0.06 * sx, -1.0, 0.12));               // cuelga
+        flut = 0.04;
+    }
+    float3 across = normalize(cross(dir, abs(dir.y) > 0.9 ? float3(0.0, 0.0, 1.0) : up));
+    float3 nrm = normalize(cross(across, dir));
+    float L = 0.62;
+    float w = lerp(0.05, 0.36, smoothstep(0.0, 0.35, s));            // agarre finito, despues el ancho de la remera
+    // tela tipo bandera / banderin del juez de linea: ondas que corren del agarre a la punta (body.y = fase en [0, 2pi),
+    // solo multiplos enteros para que no salte al envolver), la amplitud crece hacia la punta libre y una segunda onda
+    // mas corta tuerce el borde. La normal se inclina con la pendiente de la onda (brillo que corre por la tela).
+    float ph = (float)(persona % 64u) * 0.61;
+    float a1 = 3.0 * body.y - 7.0 * s + 0.9 * t + ph, a2 = 5.0 * body.y - 12.0 * s + 2.6 * t + 2.0 * ph;
+    float amp = flut * pow(s, 1.3);
+    float wave = amp * (sin(a1) + 0.35 * sin(a2));
+    float dwds = flut * (1.3 * pow(max(s, 1e-3), 0.3) * (sin(a1) + 0.35 * sin(a2)) + pow(s, 1.3) * (-7.0 * cos(a1) - 4.2 * cos(a2)));
+    float3 X = Hf + dir * (L * s) + across * ((t - 0.5) * w) + nrm * wave - up * (spin ? 0.05 * s * s : 0.0);
+    nrm = normalize(nrm - dir * (dwds / L));
+    float3x3 M3 = (float3x3)Mh;
+    float3x3 Mi = PesInv3(M3);
+    float3 P = mul(Mi, X - float3(Mh[0].w, Mh[1].w, Mh[2].w));
+    float3 nW = col.w > 0.5 ? -nrm : nrm;
+    vPos.xyz = asuint(P);
+    vNrm.xyz = asuint(normalize(mul(Mi, nW)));
+    vTan.xyz = asuint(normalize(mul(Mi, dir)));
+    vCol.x = asuint((6.0 + (float)cls) / 255.0);                     // visible (marca de cuerpo, como el resto del hincha)
+    return true;
+}
+
+void PesCrowdFace(inout uint4 vPos, inout uint4 vNrm, inout uint4 vTan, inout uint4 vCol, uint persona, uint4 vIdx, uint4 vWgt, inout uint4 vUV)
 {
     float4 col = asfloat(vCol);
     float mk = col.x * 255.0;
+    if (PesCrowdShirtInHand(vPos, vNrm, vTan, vCol, persona, mk)) return;
     if (mk < 5.5 || mk > 7.5) return;
     uint cls = mk > 6.5 ? 1u : 0u;
     float4 prm = IniParams.Load(int2(394, 0));
