@@ -1672,7 +1672,7 @@ template<int V> static void BrowStrands(ID3D11DeviceContext* c, DrawScope& ds) {
       if (ds.lod.count) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.brow.browCount, ds.brow.browStart, ds.brow.browBase);
       BrowV3Strands(c);
       if (g_cfg.live[402][0] > 0.5f) {   // (08/11 y) la barba sigue con las hebras de antes (el GS viejo con x416 salta las cejas)
-        bool so = BrowSOOn(c);
+        bool so = !HairCovThisFrame() && BrowSOOn(c);   // (08/11 z) con cobertura real la pasada usa mezcla alfa: la barba (ya en el G-buffer) no entra
         if (ds.lod.count) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.brow.browCount, ds.brow.browStart, ds.brow.browBase);
         if (so) BrowSOOff(c); }
     } else
