@@ -165,6 +165,7 @@ static bool LoadConfigLocked() {
             else if (kl == "memoria_vigilar") c.memWatch = atoi(v.c_str()) != 0;
             else if (kl == "sol_vigilar") c.sunWatch = atoi(v.c_str()) != 0;
             else if (kl == "medidor") c.meterOn = atoi(v.c_str()) != 0;
+            else if (kl == "panel_puerto") c.panelPort = std::clamp(atoi(v.c_str()), 0, 65535);
             else if (kl == "luz_rastrear") c.lightTrace = atoi(v.c_str()) != 0;
             continue;
         }

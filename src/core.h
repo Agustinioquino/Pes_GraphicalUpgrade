@@ -173,6 +173,7 @@ struct Config {
     bool grassScan = true, grassNoCull = true, grassDumpDebugP = true;   // (26/10) [Motor] pasto_buscar / pasto_sin_recorte / volcar_debugp: distancia del pasto 3D del juego (grassdist.cpp)
     bool lightTrace = true;                   // (27/10) [PES21FX] luz_rastrear: pila de quien llena el cbuffer de la luz del sol (hooks.cpp)
     bool meterOn = true;                      // (07/11) [PES21FX] medidor: VRAM por dueno y ms de GPU por efecto (gpumeter.cpp)
+    int panelPort = 21021;                    // (08/11) [PES21FX] panel_puerto: servidor local del panel en vivo (panel.cpp), 0 = apagado
     bool sunWatch = true;                     // (26/10) [PES21FX] sol_vigilar: quien escribe el sol de las repeticiones (sunwatch.cpp)
 };
 extern Config g_cfg;
@@ -490,6 +491,10 @@ ID3D11ShaderResourceView* GTAOBeforeComposition(ID3D11DeviceContext* c, int fram
 ID3D11ShaderResourceView* SSGIBeforeComposition(ID3D11DeviceContext* c, int frame); void SSGIReloadShaders(); void SSGIPresent(int presentNo);   // (21/10) SSGI temporal (ssgi.cpp) -> t26
 void LightMeterAfterComposition(ID3D11DeviceContext* c); void LightMeterPresent(); void LightMeterReloadShaders(); std::string LightMeterSummary();   // posicion de la camara (m_eyepos del SceneCB, config.cpp, 2 cuadros de atraso)
 void AutoCapturePresent(ID3D11Texture2D* frame);   // hooks.cpp
+// (08/11) panel en vivo (panel.cpp): HTTP solo en 127.0.0.1 para la pagina tools\visor; camara libre y camara del juego para el panel
+void PanelStart(int port); void PanelPresent(ID3D11Texture2D* frame);
+void FreeCamSetPose(const float* pos, float yaw, float pitch); bool FreeCamGetPose(float* pos, float* yaw, float* pitch);
+bool CamHookLast(float* pos, float* tgt, int* id, int* frame);   // camhook.cpp: ultima camara aplicada por el CameraSystem
 // (27/10 c) sombra propia de la cabeza (headshadow.cpp): atlas de sombras de alta resolucion de las cabezas mas cercanas
 // (04/11 boca) mascara del interior de la boca (mouthmask.cpp): la luz de la piel no cambia la boca
 bool MouthMaskOn(); ID3D11RenderTargetView* MouthMaskBegin(ID3D11RenderTargetView* rt0, ID3D11DepthStencilState* gameDSS, ID3D11PixelShader** ps, ID3D11DepthStencilState** dss);

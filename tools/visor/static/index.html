@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PES21 FX Visor</title>
+<style>
+:root{--bg:#0f1115;--panel:#171a21;--line:#262b36;--text:#e6e8ee;--dim:#8d94a5;--acc:#4fc3f7;--acc2:#ffb74d;--ok:#66bb6a;--bad:#ef5350}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,Segoe UI,Roboto,sans-serif;display:flex;height:100vh;overflow:hidden}
+nav{width:200px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:10px 0;flex-shrink:0}
+nav h1{font-size:15px;margin:4px 16px 12px;color:var(--acc)}
+nav button{background:none;border:0;color:var(--text);text-align:left;padding:9px 16px;cursor:pointer;font-size:14px;border-left:3px solid transparent}
+nav button:hover{background:#1f2430}
+nav button.on{border-left-color:var(--acc);background:#1c2230}
+nav .est{margin-top:auto;padding:10px 16px;font-size:12px;color:var(--dim)}
+nav .est b{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--bad);margin-right:6px}
+nav .est b.ok{background:var(--ok)}
+main{flex:1;display:flex;flex-direction:column;min-width:0}
+section{display:none;flex:1;min-height:0;overflow:auto;padding:16px}
+section.on{display:flex;flex-direction:column}
+.fila{display:flex;gap:12px;min-height:0;flex:1}
+.col{display:flex;flex-direction:column;gap:8px;min-width:0}
+.caja{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px}
+.caja h3{margin:0 0 8px;font-size:13px;color:var(--dim);text-transform:uppercase;letter-spacing:.04em}
+input,select{background:#0c0e12;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:inherit}
+input[type=range]{padding:0;width:100%}
+button.b{background:#232936;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px 10px;cursor:pointer;font:inherit}
+button.b:hover{background:#2c3444}
+button.b.p{background:var(--acc);color:#07202a;border-color:var(--acc);font-weight:600}
+.lista{overflow:auto;flex:1;min-height:0}
+.item{padding:5px 8px;border-radius:5px;cursor:pointer;display:flex;gap:8px;align-items:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.item:hover{background:#1f2430}
+.item.sel{background:#223044}
+.item .t{color:var(--dim);font-size:12px;margin-left:auto}
+.tag{font-size:11px;padding:1px 6px;border-radius:10px;background:#263040;color:var(--acc)}
+.tag.modelo{background:#2b3a2b;color:#9ccc65}.tag.textura{background:#3a2b3a;color:#ce93d8}.tag.animacion{background:#3a352b;color:var(--acc2)}.tag.paquete{background:#2b333a;color:#90caf9}
+.ruta{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:var(--dim);word-break:break-all}
+canvas.tres{width:100%;height:100%;display:block;border-radius:8px;background:#0a0c10}
+pre{margin:0;white-space:pre-wrap;word-break:break-word;font:12px/1.4 ui-monospace,Consolas,monospace}
+.slider{display:grid;grid-template-columns:1fr 70px;gap:6px 10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}
+.slider label{font-size:13px}
+.slider .v{font-family:ui-monospace,Consolas,monospace;font-size:12px;text-align:right;color:var(--acc)}
+.slider small{grid-column:1/3;color:var(--dim);font-size:11px}
+.grupo{margin-bottom:10px}
+.grupo h4{margin:0;padding:8px 10px;background:#1c2230;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:8px;font-size:13px}
+.grupo h4 .sec{color:var(--dim);font-weight:400;font-size:11px;margin-left:auto}
+.grupo .cuerpo{display:none;padding:4px 10px}
+.grupo.abierto .cuerpo{display:block}
+.sw{width:34px;height:18px;border-radius:9px;background:#3a3f4b;position:relative;cursor:pointer;flex-shrink:0}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#ccc;transition:left .15s}
+.sw.on{background:var(--ok)}.sw.on::after{left:18px}
+.tuto{background:linear-gradient(135deg,#1b2a3a,#171a21);border:1px solid #2a3b50;border-radius:10px;padding:14px 16px;margin-bottom:12px}
+.tuto h2{margin:0 0 6px;font-size:16px;color:var(--acc)}
+.tuto ol,.tuto ul{margin:6px 0 0 18px;padding:0}
+.tuto li{margin:3px 0}
+.tuto .cerrar{float:right;color:var(--dim);cursor:pointer;font-size:12px}
+.tarjetas{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}
+.tarjeta{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;cursor:pointer}
+.tarjeta:hover{border-color:var(--acc)}
+.tarjeta h3{margin:0 0 4px;font-size:14px;color:var(--text);text-transform:none;letter-spacing:0}
+.tarjeta p{margin:0;color:var(--dim);font-size:12px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:12px}
+.kv b{color:var(--dim);font-weight:400}
+.aviso{background:#3a2a1a;border:1px solid #5a3a1a;color:#ffcc80;border-radius:8px;padding:8px 10px;font-size:13px}
+.ok{color:var(--ok)}.bad{color:var(--bad)}
+#toast{position:fixed;bottom:14px;right:14px;background:#263040;border:1px solid var(--acc);color:var(--text);padding:8px 12px;border-radius:8px;display:none;max-width:420px;font-size:13px}
+.barra{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+.barra input[type=text],.barra input[type=search]{flex:1;min-width:160px}
+.curvas{width:100%;height:220px;background:#0a0c10;border-radius:8px}
+.chk{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--dim)}
+.mini{font-size:12px;color:var(--dim)}
+img.tex{max-width:100%;image-rendering:pixelated;background:repeating-conic-gradient(#222 0 25%,#111 0 50%) 0 0/16px 16px;border-radius:6px}
+.pose{display:flex;gap:6px;align-items:center;padding:4px 0;border-bottom:1px solid var(--line);font-size:12px}
+.pose span{flex:1}
+@media (max-width:900px){nav{width:56px}nav h1,nav button span,nav .est{display:none}nav button{text-align:center;padding:10px 0}.fila{flex-direction:column}}
+</style>
+</head>
+<body>
+<nav>
+  <h1>PES21 FX Visor</h1>
+  <button data-s="inicio" class="on">🏠 <span>Inicio</span></button>
+  <button data-s="archivos">📁 <span>Archivos</span></button>
+  <button data-s="modelo">🧊 <span>Escena 3D</span></button>
+  <button data-s="textura">🖼 <span>Texturas</span></button>
+  <button data-s="anim">🎞 <span>Animaciones</span></button>
+  <button data-s="panel">🎛 <span>Panel en vivo</span></button>
+  <button data-s="camara">🎥 <span>Cámara</span></button>
+  <button data-s="log">📜 <span>Log</span></button>
+  <button data-s="hash">#️⃣ <span>Hashes</span></button>
+  <button data-s="ayuda">❓ <span>Ayuda</span></button>
+  <div class="est"><div><b id="eVisor"></b>Visor de archivos</div><div><b id="ePanel"></b>Juego (panel en vivo)</div></div>
+</nav>
+<main>
+
+<!-- ============================ INICIO ============================ -->
+<section id="s-inicio" class="on">
+  <div class="tuto">
+    <h2>Bienvenido al entorno visual de PES21 FX</h2>
+    <p>Acá podés mirar los archivos del juego (modelos, texturas, animaciones, paquetes), armar una escena 3D para probar cosas y, con el juego abierto, mover cualquier valor del mod, la cámara libre y sacar capturas sin pasar por el menú Insert.</p>
+    <ol>
+      <li><b>Visor de archivos</b> (luz verde a la izquierda): tiene que estar corriendo <code>visor.bat</code> (o <code>python tools\visor\visor.py</code>). Lee el juego en <code>D:\...\eFootball PES 2021</code> y guarda lo que extrae en <code>B:\VisualPes21</code>. Nunca escribe en la carpeta del juego.</li>
+      <li><b>Juego (panel en vivo)</b>: se prende sola cuando el juego está abierto con la DLL nueva (<code>panel_puerto = 21021</code> en PES21FX.ini). Sin el juego abierto, las secciones Panel, Cámara y Log quedan en espera.</li>
+      <li>Cada sección tiene arriba una tarjeta de <b>tutorial</b> con lo que se puede hacer. Se puede cerrar y volver a abrir desde Ayuda.</li>
+    </ol>
+  </div>
+  <div class="tarjetas">
+    <div class="tarjeta" data-ir="archivos"><h3>📁 Archivos</h3><p>Navegar la carpeta del juego, abrir los .cpk y .fpk como carpetas, buscar por nombre y extraer lo que haga falta.</p></div>
+    <div class="tarjeta" data-ir="modelo"><h3>🧊 Escena 3D</h3><p>Cargar un .fmdl (cara, cuerpo, pelota, botín), verlo con texturas, huesos y pesos, mover la luz y la cámara, comparar con otro modelo.</p></div>
+    <div class="tarjeta" data-ir="textura"><h3>🖼 Texturas</h3><p>Ver .ftex / .dds con cada canal por separado (R G B A), las mips, y el mapa de normales reconstruido.</p></div>
+    <div class="tarjeta" data-ir="anim"><h3>🎞 Animaciones</h3><p>Abrir un .gani de la cara con su .ask / .frig y ver las curvas de cada hueso cuadro a cuadro.</p></div>
+    <div class="tarjeta" data-ir="panel"><h3>🎛 Panel en vivo</h3><p>Con el juego abierto: todas las tarjetas del menú con sus sliders, buscar cualquier fila del ini, A/B al instante, guardar y recargar.</p></div>
+    <div class="tarjeta" data-ir="camara"><h3>🎥 Cámara</h3><p>Ver dónde está la cámara del juego, poner la cámara libre en una pose exacta, guardar poses con nombre y sacar capturas.</p></div>
+    <div class="tarjeta" data-ir="log"><h3>📜 Log</h3><p>PES21FX.log en vivo con filtro por palabra (sol, pasto, camara, cierre...).</p></div>
+    <div class="tarjeta" data-ir="hash"><h3>#️⃣ Hashes</h3><p>StrCode32 de Fox Engine: nombre de hueso ↔ hash, para leer los volcados de la DLL y los .frig / .mtar.</p></div>
+  </div>
+  <p class="mini" id="infoVisor" style="margin-top:14px"></p>
+</section>
+
+<!-- ============================ ARCHIVOS ============================ -->
+<section id="s-archivos">
+  <div class="tuto" data-t="archivos"><span class="cerrar">cerrar ✕</span><h2>Archivos del juego</h2>
+    <ul><li>Hacé clic en una carpeta para entrar; <b>⬆</b> para subir. Un <b>.cpk</b> o <b>.fpk</b> se abre como si fuera una carpeta (la primera vez tarda unos segundos: lee la tabla).</li>
+    <li><b>Buscar</b> dentro de un cpk: escribí parte del nombre (ej. <code>face_skel</code>, <code>.gani</code>, <code>ball</code>) y Enter.</li>
+    <li>Un clic en un archivo lo abre en la sección que corresponde (modelo, textura, animación, texto). <b>Extraer</b> lo copia a <code>B:\VisualPes21\cache\</code> y muestra la ruta.</li>
+    <li>Los más útiles: <code>Data\dt13_all.cpk</code> (caras, rigs, .gani de la cara), <code>Data\dt12_g4.cpk</code> (animaciones de escenas), <code>Data\dt10_*.cpk</code> (modelos y texturas), <code>PES21FX\</code> (el mod).</li></ul>
+  </div>
+  <div class="barra">
+    <button class="b" id="aUp">⬆ Subir</button>
+    <input type="text" id="aRuta" placeholder="ruta (o archivo.cpk!carpeta/dentro)">
+    <button class="b" id="aIr">Ir</button>
+    <input type="search" id="aBuscar" placeholder="buscar dentro del cpk / fpk...">
+  </div>
+  <div class="fila">
+    <div class="col caja" style="flex:1"><div class="lista" id="aLista"></div></div>
+    <div class="col caja" style="width:340px;flex-shrink:0"><h3>Detalle</h3><div id="aDetalle" class="mini">Elegí un archivo.</div></div>
+  </div>
+</section>
+
+<!-- ============================ ESCENA 3D ============================ -->
+<section id="s-modelo">
+  <div class="tuto" data-t="modelo"><span class="cerrar">cerrar ✕</span><h2>Escena 3D</h2>
+    <ul><li>Cargá un <b>.fmdl</b> desde Archivos (o pegá la ruta abajo). Se puede sumar más de un modelo a la escena (cara + cuerpo + pelota) y mover cada uno.</li>
+    <li><b>Botón izquierdo</b> gira, <b>rueda</b> acerca, <b>botón derecho</b> desplaza. <b>Encuadrar</b> centra el modelo.</li>
+    <li>Luz: los presets <b>Día / Tarde / Noche / Estudio</b> imitan la luz de prueba del editor (filas 297 / 298 del ini). Movés el sol con los sliders de altura y rumbo.</li>
+    <li>Texturas: el .fmdl dice qué texturas usa (lista "Texturas del modelo"). Si están en el mismo cpk, se cargan solas; si no, elegí una desde Archivos con el botón "Usar como textura".</li>
+    <li><b>Huesos</b> dibuja el esqueleto; al elegir un hueso se pintan de color los vértices que pesa (sirve para las expresiones y la boca por huesos). <b>Alambre</b> muestra la malla.</li>
+    <li>Recordá la regla fija: nada de esto modifica archivos del juego; es solo para mirar y probar.</li></ul>
+  </div>
+  <div class="barra">
+    <input type="text" id="mRuta" placeholder="ruta del .fmdl (disco o cpk!entrada)">
+    <button class="b p" id="mCargar">Cargar</button>
+    <button class="b" id="mSumar">Sumar a la escena</button>
+    <button class="b" id="mLimpiar">Vaciar escena</button>
+    <button class="b" id="mEncuadrar">Encuadrar</button>
+  </div>
+  <div class="fila">
+    <div class="col" style="flex:1;min-height:420px"><canvas class="tres" id="tres"></canvas></div>
+    <div class="col caja lista" style="width:330px;flex-shrink:0">
+      <h3>Luz y vista</h3>
+      <div class="barra"><button class="b" data-luz="dia">☀ Día</button><button class="b" data-luz="tarde">🌇 Tarde</button><button class="b" data-luz="noche">🌙 Noche</button><button class="b" data-luz="estudio">💡 Estudio</button></div>
+      <div class="slider"><label>Altura del sol</label><span class="v" id="vElev">45°</span><input type="range" id="lElev" min="-10" max="90" value="45"></div>
+      <div class="slider"><label>Rumbo del sol</label><span class="v" id="vAz">135°</span><input type="range" id="lAz" min="0" max="360" value="135"></div>
+      <div class="slider"><label>Intensidad del sol</label><span class="v" id="vSol">3.0</span><input type="range" id="lSol" min="0" max="8" step="0.1" value="3"></div>
+      <div class="slider"><label>Luz del cielo</label><span class="v" id="vCielo">0.6</span><input type="range" id="lCielo" min="0" max="3" step="0.05" value="0.6"></div>
+      <div class="slider"><label>Exposición</label><span class="v" id="vExp">1.0</span><input type="range" id="lExp" min="0.1" max="4" step="0.05" value="1"></div>
+      <div class="slider"><label>Campo de visión</label><span class="v" id="vFov">35°</span><input type="range" id="lFov" min="5" max="90" value="35"></div>
+      <div class="barra" style="margin-top:6px">
+        <label class="chk"><input type="checkbox" id="cAlambre"> Alambre</label>
+        <label class="chk"><input type="checkbox" id="cHuesos"> Huesos</label>
+        <label class="chk"><input type="checkbox" id="cNormales"> Normales</label>
+        <label class="chk"><input type="checkbox" id="cPiso" checked> Piso</label>
+        <label class="chk"><input type="checkbox" id="cSombras" checked> Sombras</label>
+      </div>
+      <h3 style="margin-top:10px">Modelos en la escena</h3>
+      <div id="mModelos" class="mini">Ninguno.</div>
+      <h3 style="margin-top:10px">Mallas</h3>
+      <div id="mMallas" class="mini"></div>
+      <h3 style="margin-top:10px">Texturas del modelo</h3>
+      <div id="mTexturas" class="mini"></div>
+      <h3 style="margin-top:10px">Huesos <span class="mini" id="mNHuesos"></span></h3>
+      <input type="search" id="mHuesoBuscar" placeholder="filtrar huesos (skf_, sk_jaw...)" style="width:100%;margin-bottom:4px">
+      <div id="mHuesos" class="mini" style="max-height:260px;overflow:auto"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ TEXTURAS ============================ -->
+<section id="s-textura">
+  <div class="tuto" data-t="textura"><span class="cerrar">cerrar ✕</span><h2>Texturas</h2>
+    <ul><li>Abrí un <b>.ftex</b> o <b>.dds</b> desde Archivos. Se decodifica en la PC (DXT1 / DXT5 / RGBA8) y se muestra en PNG.</li>
+    <li><b>Canales</b>: en las texturas de Fox el alfa de la <i>_bsm</i> suele ser brillo / rugosidad, la <i>_nrm</i> es el relieve (verde invertido respecto de lo habitual: por eso está el modo "Normal").</li>
+    <li><b>Mip</b>: cada nivel más chico. Sirve para ver qué pierde el juego de lejos.</li>
+    <li>"Usar en la escena 3D" la aplica al modelo cargado (color, o normales).</li></ul>
+  </div>
+  <div class="barra">
+    <input type="text" id="tRuta" placeholder="ruta del .ftex / .dds / .png">
+    <button class="b p" id="tCargar">Abrir</button>
+    <select id="tCanal"><option value="rgb">Color (RGB)</option><option value="r">Rojo</option><option value="g">Verde</option><option value="b">Azul</option><option value="a">Alfa</option><option value="normal">Normal (reconstruida)</option></select>
+    <select id="tMip"><option value="0">mip 0</option></select>
+    <button class="b" id="tUsarColor">Usar en la escena 3D (color)</button>
+    <button class="b" id="tUsarNormal">Usar (normales)</button>
+  </div>
+  <div class="fila">
+    <div class="col caja" style="flex:1;align-items:center;justify-content:center;overflow:auto"><img class="tex" id="tImg" alt=""></div>
+    <div class="col caja" style="width:300px;flex-shrink:0"><h3>Datos</h3><div id="tInfo" class="kv"></div></div>
+  </div>
+</section>
+
+<!-- ============================ ANIMACIONES ============================ -->
+<section id="s-anim">
+  <div class="tuto" data-t="anim"><span class="cerrar">cerrar ✕</span><h2>Animaciones de la cara (.gani)</h2>
+    <ul><li>Abrí un <b>.gani</b>. Para ponerle nombre a cada canal hacen falta el <b>.frig</b> (mapa de canales → huesos) y el <b>.ask</b> (nombres): los de la cara están en <code>dt13_all.cpk</code> (face_skel.frig, face_anim_skel.ask) y la página los recuerda.</li>
+    <li>Cada fila es un hueso: <b>rot</b> (cuaternión) o <b>pos</b> (centímetros). Clic en una fila para ver sus curvas; la barra de tiempo recorre los cuadros.</li>
+    <li>Lo que ve la DLL (fila 383, lector .gani) sale de estos mismos datos.</li></ul>
+  </div>
+  <div class="barra">
+    <input type="text" id="gRuta" placeholder="ruta del .gani">
+    <button class="b p" id="gCargar">Abrir</button>
+    <input type="text" id="gAsk" placeholder="ruta del .ask (opcional)" style="max-width:260px">
+    <input type="text" id="gFrig" placeholder="ruta del .frig (opcional)" style="max-width:260px">
+  </div>
+  <div class="fila">
+    <div class="col caja" style="width:380px;flex-shrink:0"><h3>Canales <span class="mini" id="gResumen"></span></h3><div class="lista" id="gCanales"></div></div>
+    <div class="col" style="flex:1">
+      <div class="caja"><h3 id="gTitulo">Curvas</h3><canvas class="curvas" id="gCurvas"></canvas>
+        <div class="slider"><label>Cuadro</label><span class="v" id="vCuadro">0</span><input type="range" id="gCuadro" min="0" max="0" value="0"></div>
+        <pre id="gValores"></pre></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ PANEL EN VIVO ============================ -->
+<section id="s-panel">
+  <div class="tuto" data-t="panel"><span class="cerrar">cerrar ✕</span><h2>Panel en vivo</h2>
+    <ul><li>Necesita el juego abierto con la DLL que tiene el panel. Las tarjetas son las mismas del menú Insert, con el mismo rango. Cada movimiento se aplica <b>al instante</b> (no se guarda hasta que toques <b>Guardar</b>).</li>
+    <li><b>Buscar</b> encuentra una tarjeta, un slider o una fila del ini (ej. <code>x344</code>, <code>cejas</code>, <code>sol</code>). En "Cualquier fila" podés escribir un valor exacto para una fila que no está en ningún slider.</li>
+    <li><b>A/B</b>: el botón "Ver original" apaga el mod entero (bypass) mientras lo tengas apretado. El interruptor de cada tarjeta apaga solo esa mejora.</li>
+    <li><b>Recargar config</b> vuelve a leer PES21FX.ini y los shaders (lo mismo que F10). <b>Guardar</b> escribe los valores vivos en el ini (como Guardar del menú).</li>
+    <li>Regla fija: ninguna de estas filas toca el interior de la boca ni su modelo; eso está fuera del panel.</li></ul>
+  </div>
+  <div id="pEspera" class="aviso">Esperando al juego en http://127.0.0.1:21021 ... Abrí el juego con la DLL del panel (panel_puerto = 21021 en PES21FX.ini).</div>
+  <div class="barra">
+    <input type="search" id="pBuscar" placeholder="buscar tarjeta, slider o fila (x344, cejas, sol...)">
+    <button class="b" id="pOriginal" title="mantener apretado">👁 Ver original (mantener)</button>
+    <button class="b" id="pRecargar">↻ Recargar config</button>
+    <button class="b" id="pShaders">↻ Shaders</button>
+    <button class="b p" id="pGuardar">💾 Guardar en el ini</button>
+    <span class="mini" id="pEstado"></span>
+  </div>
+  <div class="fila">
+    <div class="col lista" style="flex:1" id="pGrupos"></div>
+    <div class="col caja" style="width:320px;flex-shrink:0">
+      <h3>Cualquier fila</h3>
+      <div class="barra"><input type="text" id="pFila" placeholder="x344" style="width:80px"><input type="text" id="pValor" placeholder="valor" style="width:90px"><button class="b" id="pPoner">Poner</button></div>
+      <div id="pFilaInfo" class="mini"></div>
+      <h3 style="margin-top:12px">Cambios de esta sesión</h3>
+      <div id="pCambios" class="mini">Ninguno.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ CAMARA ============================ -->
+<section id="s-camara">
+  <div class="tuto" data-t="camara"><span class="cerrar">cerrar ✕</span><h2>Cámara</h2>
+    <ul><li>Arriba se ve la <b>cámara del juego</b> (la última que aplicó el motor en el partido) y la <b>cámara libre</b> del mod (fila 344).</li>
+    <li><b>Poner pose</b> prende la cámara libre (modo 2: el juego sigue viendo el teclado) y la deja exactamente en esa posición y giro. <b>Tomar del juego</b> copia la cámara actual a los campos.</li>
+    <li><b>Guardar pose</b> la recuerda con nombre en este navegador: sirve para repetir la misma toma en pruebas A/B (misma cara, misma luz, distinto valor).</li>
+    <li><b>Capturar</b> guarda el cuadro final en <code>PES21FX\capturas\panel\</code> y lo muestra abajo. Capturar + cambiar un valor + capturar = comparación directa.</li>
+    <li>El zoom y la velocidad son los sliders de la fila 344 (también están en el Panel).</li></ul>
+  </div>
+  <div class="fila">
+    <div class="col" style="width:380px;flex-shrink:0">
+      <div class="caja"><h3>Cámara del juego</h3><div class="kv" id="cJuego"></div></div>
+      <div class="caja"><h3>Cámara libre</h3><div class="kv" id="cLibre"></div>
+        <div class="barra" style="margin-top:8px"><button class="b" id="cPrender">Prender</button><button class="b" id="cApagar">Apagar</button><button class="b" id="cTomar">Tomar del juego</button></div>
+        <div class="barra"><input type="text" id="cX" placeholder="x" style="width:70px"><input type="text" id="cY" placeholder="y" style="width:70px"><input type="text" id="cZ" placeholder="z" style="width:70px"><input type="text" id="cYaw" placeholder="giro°" style="width:70px"><input type="text" id="cPitch" placeholder="alto°" style="width:70px"></div>
+        <div class="barra"><button class="b p" id="cPoner">Poner pose</button><input type="text" id="cNombre" placeholder="nombre de la pose" style="width:150px"><button class="b" id="cGuardarPose">Guardar pose</button></div>
+        <div class="slider"><label>Zoom (z344)</label><span class="v" id="vZoom">1</span><input type="range" id="cZoom" min="0.05" max="3" step="0.01" value="1"></div>
+        <div class="slider"><label>Velocidad m/s (y344)</label><span class="v" id="vVel">2</span><input type="range" id="cVel" min="0.05" max="20" step="0.05" value="2"></div>
+      </div>
+      <div class="caja"><h3>Poses guardadas</h3><div id="cPoses" class="mini">Ninguna.</div></div>
+    </div>
+    <div class="col" style="flex:1">
+      <div class="caja"><h3>Capturas</h3>
+        <div class="barra"><input type="text" id="cCapNombre" placeholder="nombre (opcional)"><button class="b p" id="cCapturar">📷 Capturar</button><button class="b" id="cCapLista">↻</button></div>
+        <div id="cCaps" class="tarjetas"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ LOG ============================ -->
+<section id="s-log">
+  <div class="tuto" data-t="log"><span class="cerrar">cerrar ✕</span><h2>Log del mod</h2>
+    <ul><li>PES21FX.log en vivo (se actualiza cada 2 s). El filtro deja solo las líneas con esa palabra: <code>sol</code>, <code>camara libre</code>, <code>pasto</code>, <code>medidor</code>, <code>CIERRE</code>.</li>
+    <li>Si el juego está cerrado, podés abrir cualquier log desde Archivos (PES21FX\PES21FX.anterior.log, logs_guardados\...).</li></ul>
+  </div>
+  <div class="barra"><input type="search" id="lFiltro" placeholder="filtrar líneas..."><label class="chk"><input type="checkbox" id="lSeguir" checked> Seguir el final</label><button class="b" id="lLimpiar">Vaciar vista</button><span class="mini" id="lEstado"></span></div>
+  <div class="caja lista" style="flex:1"><pre id="lTexto"></pre></div>
+</section>
+
+<!-- ============================ HASHES ============================ -->
+<section id="s-hash">
+  <div class="tuto" data-t="hash"><span class="cerrar">cerrar ✕</span><h2>StrCode32 (Fox Engine)</h2>
+    <ul><li>Escribí uno o varios nombres (<code>skf_jaw sk_head</code>) y te da el hash que usa el motor. Al revés: pegá un hash en hexadecimal y, si es un hueso conocido, dice cuál.</li></ul>
+  </div>
+  <div class="barra"><input type="text" id="hNombres" placeholder="nombres o hashes separados por espacio"><button class="b p" id="hCalcular">Calcular</button></div>
+  <div class="caja"><pre id="hSalida"></pre></div>
+</section>
+
+<!-- ============================ AYUDA ============================ -->
+<section id="s-ayuda">
+  <div class="tuto"><h2>Ayuda y posibilidades</h2>
+    <p>Qué se puede hacer con este entorno, de lo más simple a lo más fino:</p>
+    <ol>
+      <li><b>Mirar un modelo del juego</b>: Archivos → dt10/dt13 cpk → buscar <code>.fmdl</code> → clic. Ver sus texturas, huesos y qué vértices mueve cada hueso.</li>
+      <li><b>Comparar dos texturas</b> (por ejemplo la piel original contra la del mod en <code>PES21FX\textures</code>): abrirlas en Texturas y mirar canal por canal.</li>
+      <li><b>Entender una expresión</b>: Animaciones → un .gani de la cara con face_skel.frig y face_anim_skel.ask → curvas de skf_jaw, párpados, cejas.</li>
+      <li><b>Probar valores con el juego abierto</b>: Panel en vivo → buscar la tarjeta → mover → mirar el juego → Guardar si gusta. "Ver original" para A/B.</li>
+      <li><b>Repetir la misma toma</b>: Cámara → guardar una pose → cambiar valores → Capturar cada vez. Las capturas quedan en PES21FX\capturas\panel\.</li>
+      <li><b>Seguir un problema</b>: Log con filtro, y Hashes para traducir los huesos que aparecen en los volcados.</li>
+    </ol>
+    <p>Límites: el visor es de solo lectura sobre el juego. El panel en vivo solo cambia valores del ini en memoria (lo que ya podía el menú Insert). Nada modifica la boca ni los archivos del juego. Para instalar una DLL nueva sigue haciendo falta cerrar el juego y hacer backup.</p>
+    <button class="b" id="ayTutos">Volver a mostrar todos los tutoriales</button>
+  </div>
+  <div class="caja"><h3>Conexiones</h3><div class="kv" id="ayConex"></div></div>
+</section>
+</main>
+<div id="toast"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+// ---------------------------------------------------------------- base
+const VISOR = location.port === '21020' ? '' : 'http://127.0.0.1:21020';
+const PANEL = location.port === '21021' ? '' : 'http://127.0.0.1:21021';
+const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+let visorOk = false, panelOk = false;
+function toast(t, mal) { const e = $('#toast'); e.textContent = t; e.style.borderColor = mal ? 'var(--bad)' : 'var(--acc)'; e.style.display = 'block'; clearTimeout(e._t); e._t = setTimeout(() => e.style.display = 'none', 3500); }
+async function jget(base, path) { const r = await fetch(base + path); const j = await r.json().catch(() => ({ error: 'respuesta no JSON' })); if (!r.ok || j.error) throw new Error(j.error || r.status); return j; }
+async function jpost(path, body) { const r = await fetch(PANEL + path, { method: 'POST', body: body || '' }); return r.json().catch(() => ({})); }
+const vis = p => jget(VISOR, p), pan = p => jget(PANEL, p);
+const enc = encodeURIComponent;
+function ir(s) { $$('nav button').forEach(b => b.classList.toggle('on', b.dataset.s === s)); $$('section').forEach(x => x.classList.toggle('on', x.id === 's-' + s)); localStorage.setItem('seccion', s); if (s === 'modelo') setTimeout(redimensionar, 10); }
+$$('nav button').forEach(b => b.onclick = () => ir(b.dataset.s));
+$$('.tarjeta[data-ir]').forEach(t => t.onclick = () => ir(t.dataset.ir));
+// tutoriales que se cierran y se recuerdan
+const tutosCerrados = JSON.parse(localStorage.getItem('tutos') || '{}');
+$$('.tuto[data-t]').forEach(t => { if (tutosCerrados[t.dataset.t]) t.style.display = 'none'; t.querySelector('.cerrar').onclick = () => { t.style.display = 'none'; tutosCerrados[t.dataset.t] = 1; localStorage.setItem('tutos', JSON.stringify(tutosCerrados)); }; });
+$('#ayTutos').onclick = () => { localStorage.removeItem('tutos'); $$('.tuto[data-t]').forEach(t => t.style.display = ''); toast('Tutoriales visibles de nuevo'); };
+const fmtTam = n => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n > 1024 ? (n / 1024).toFixed(0) + ' KB' : n + ' B';
+
+async function estado() {
+  try { const i = await vis('/api/info'); visorOk = true; $('#infoVisor').textContent = `Juego: ${i.juego} · Trabajo: ${i.trabajo} · Pillow: ${i.pillow ? 'sí' : 'NO (pip install pillow)'}`; $('#ayConex').innerHTML = `<b>Visor</b><span class="ok">${VISOR || location.origin}</span><b>Juego</b><span>${i.juego}</span><b>Trabajo</b><span>${i.trabajo}</span><b>Panel</b><span id="ayPanel"></span>`; } catch (e) { visorOk = false; }
+  try { const p = await pan('/api/ping'); panelOk = true; window.pingInfo = p; $('#pEspera').style.display = 'none'; const t = `${PANEL || location.origin} · cuadro ${p.frame} · ${p.match.known ? 'partido estadio ' + p.match.stadium : 'sin partido'} · ${p.bypass ? 'ORIGINAL' : 'mod'}`; $('#pEstado').textContent = t; const ap = $('#ayPanel'); if (ap) ap.textContent = t; ap && ap.classList.add('ok'); } catch (e) { panelOk = false; $('#pEspera').style.display = ''; }
+  $('#eVisor').classList.toggle('ok', visorOk); $('#ePanel').classList.toggle('ok', panelOk);
+  if (panelOk && !panelCargado) cargarPanel();
+}
+setInterval(estado, 3000);
+
+// ---------------------------------------------------------------- archivos
+let aActual = '';
+async function listar(ruta) {
+  try {
+    const d = await vis('/api/ls?ruta=' + enc(ruta)); aActual = d.ruta; $('#aRuta').value = d.ruta; localStorage.setItem('ruta', d.ruta);
+    const L = $('#aLista'); L.innerHTML = '';
+    if (d.archivo) L.insertAdjacentHTML('beforeend', `<div class="mini" style="padding:4px 8px">${d.archivo} · ${d.total} entradas</div>`);
+    for (const c of d.carpetas) { const e = document.createElement('div'); e.className = 'item'; e.innerHTML = `📁 <span>${c.nombre}</span>${c.n ? `<span class="t">${c.n}</span>` : ''}`; e.onclick = () => listar(c.ruta); L.appendChild(e); }
+    for (const a of d.archivos) { const e = document.createElement('div'); e.className = 'item'; e.innerHTML = `${icono(a.tipo)} <span>${a.nombre}</span>${a.tipo ? `<span class="tag ${a.tipo}">${a.tipo}</span>` : ''}<span class="t">${fmtTam(a.tam)}</span>`; e.onclick = () => abrir(a, e); L.appendChild(e); }
+    if (!d.carpetas.length && !d.archivos.length) L.innerHTML = '<div class="mini" style="padding:8px">Vacío.</div>';
+  } catch (e) { toast('No se pudo listar: ' + e.message, true); }
+}
+const icono = t => ({ modelo: '🧊', textura: '🖼', imagen: '🖼', animacion: '🎞', esqueleto: '🦴', paquete: '📦', texto: '📄', material: '🎨' }[t] || '▫');
+function abrir(a, el) {
+  $$('#aLista .item.sel').forEach(x => x.classList.remove('sel')); el && el.classList.add('sel');
+  $('#aDetalle').innerHTML = `<div class="ruta">${a.ruta}</div><div style="margin:6px 0">${fmtTam(a.tam)} · ${a.tipo || 'desconocido'}</div>
+    <div class="barra"><button class="b" id="dAbrir">Abrir</button><button class="b" id="dExtraer">Extraer</button><button class="b" id="dHex">Hex</button><button class="b" id="dTex">Usar como textura</button></div><div id="dExtra" class="mini"></div>`;
+  $('#dAbrir').onclick = () => abrirEn(a);
+  $('#dExtraer').onclick = async () => { try { const r = await vis('/api/extraer?ruta=' + enc(a.ruta)); $('#dExtra').innerHTML = `Extraído en:<div class="ruta">${r.ruta}</div>`; } catch (e) { toast(e.message, true); } };
+  $('#dHex').onclick = async () => { try { const r = await vis('/api/hex?ruta=' + enc(a.ruta) + '&n=512'); $('#dExtra').innerHTML = '<pre>' + hexdump(r.hex) + '</pre>'; } catch (e) { toast(e.message, true); } };
+  $('#dTex').onclick = () => { $('#tRuta').value = a.ruta; ir('textura'); cargarTextura(); };
+  if (a.tipo === 'paquete') listar(a.ruta);
+}
+function hexdump(h) { let o = ''; for (let i = 0; i < h.length; i += 32) { const row = h.slice(i, i + 32); let asc = ''; for (let k = 0; k < row.length; k += 2) { const c = parseInt(row.slice(k, k + 2), 16); asc += c >= 32 && c < 127 ? String.fromCharCode(c) : '.'; } o += (i / 2).toString(16).padStart(6, '0') + '  ' + row.replace(/(..)/g, '$1 ') + ' ' + asc + '\n'; } return o; }
+function abrirEn(a) {
+  const t = a.tipo, r = a.ruta;
+  if (t === 'modelo') { $('#mRuta').value = r; ir('modelo'); cargarModelo(r, false); }
+  else if (t === 'textura' || t === 'imagen') { $('#tRuta').value = r; ir('textura'); cargarTextura(); }
+  else if (t === 'animacion' && r.toLowerCase().endsWith('.gani')) { $('#gRuta').value = r; ir('anim'); cargarGani(); }
+  else if (t === 'esqueleto') { if (r.toLowerCase().endsWith('.ask')) $('#gAsk').value = r; else $('#gFrig').value = r; localStorage.setItem('ask', $('#gAsk').value); localStorage.setItem('frig', $('#gFrig').value); toast('Esqueleto anotado para las animaciones'); ir('anim'); }
+  else if (t === 'paquete') listar(r);
+  else if (t === 'texto' || !t) { vis('/api/texto?ruta=' + enc(r) + '&cola=1').then(d => { $('#lTexto').textContent = d.texto; $('#lEstado').textContent = r + (d.recortado ? ' (recortado)' : ''); logFijo = true; ir('log'); }).catch(e => toast(e.message, true)); }
+}
+$('#aIr').onclick = () => listar($('#aRuta').value);
+$('#aRuta').onkeydown = e => { if (e.key === 'Enter') listar($('#aRuta').value); };
+$('#aUp').onclick = () => { let r = aActual; if (!r) return; if (r.includes('!')) { const [a, s] = r.split('!'); const p = s.replace(/\\/g, '/').replace(/\/$/, ''); r = p.includes('/') ? a + '!' + p.slice(0, p.lastIndexOf('/')) : (p ? a : a.replace(/[\\/][^\\/]+$/, '')); } else r = r.replace(/[\\/][^\\/]+[\\/]?$/, ''); listar(r.length < 3 ? '' : r); };
+$('#aBuscar').onkeydown = async e => {
+  if (e.key !== 'Enter') return; const q = $('#aBuscar').value.trim(); if (!q) return;
+  const arch = aActual.split('!')[0]; if (!/\.(cpk|fpk|fpkd)$/i.test(arch)) return toast('Entrá primero a un .cpk o .fpk', true);
+  try { const d = await vis('/api/buscar?ruta=' + enc(arch) + '&q=' + enc(q)); const L = $('#aLista'); L.innerHTML = `<div class="mini" style="padding:4px 8px">${d.n} resultados para "${q}" en ${arch}</div>`;
+    for (const a of d.archivos) { const el = document.createElement('div'); el.className = 'item'; el.innerHTML = `${icono(a.tipo)} <span>${a.ruta.split('!')[1]}</span>${a.tipo ? `<span class="tag ${a.tipo}">${a.tipo}</span>` : ''}<span class="t">${fmtTam(a.tam)}</span>`; el.onclick = () => abrir(a, el); L.appendChild(el); } } catch (e) { toast(e.message, true); }
+};
+
+// ---------------------------------------------------------------- escena 3D
+let renderer, scene, camera, controls, sol, cielo, piso, modelos = [], modeloSel = null, huesoSel = -1;
+function initTres() {
+  if (typeof THREE === 'undefined' || !THREE.OrbitControls) { $('#tres').parentElement.innerHTML = '<div class="aviso">No se pudo cargar three.js (sin internet o bloqueado). La escena 3D necesita conexión la primera vez; el resto del visor funciona igual.</div>'; return; }
+  const cv = $('#tres'); renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true }); renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.outputEncoding = THREE.sRGBEncoding; renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1;
+  scene = new THREE.Scene(); scene.background = new THREE.Color(0x0a0c10);
+  camera = new THREE.PerspectiveCamera(35, 1, 0.01, 200); camera.position.set(0.8, 1.6, 2.2);
+  controls = new THREE.OrbitControls(camera, cv); controls.target.set(0, 1.2, 0); controls.enableDamping = true;
+  sol = new THREE.DirectionalLight(0xffffff, 3); sol.castShadow = true; sol.shadow.mapSize.set(2048, 2048); sol.shadow.camera.near = 0.1; sol.shadow.camera.far = 20; sol.shadow.bias = -0.0005;
+  for (const k of ['left', 'bottom']) sol.shadow.camera[k] = -3; for (const k of ['right', 'top']) sol.shadow.camera[k] = 3; scene.add(sol); scene.add(sol.target);
+  cielo = new THREE.HemisphereLight(0x9ec5ff, 0x3a3326, 0.6); scene.add(cielo);
+  piso = new THREE.Mesh(new THREE.CircleGeometry(6, 48), new THREE.MeshStandardMaterial({ color: 0x2e5a2a, roughness: 0.95 })); piso.rotation.x = -Math.PI / 2; piso.receiveShadow = true; scene.add(piso);
+  scene.add(new THREE.GridHelper(6, 12, 0x334, 0x223));
+  aplicarLuz(); redimensionar(); (function loop() { requestAnimationFrame(loop); controls.update(); if ($('#s-modelo').classList.contains('on')) renderer.render(scene, camera); })();
+  new ResizeObserver(redimensionar).observe(cv.parentElement);
+}
+function redimensionar() { if (!renderer) return; const p = $('#tres').parentElement; const w = p.clientWidth, h = Math.max(300, p.clientHeight); renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); }
+function aplicarLuz() {
+  if (!renderer) return;
+  const el = +$('#lElev').value, az = +$('#lAz').value, I = +$('#lSol').value, C = +$('#lCielo').value, E = +$('#lExp').value, F = +$('#lFov').value;
+  $('#vElev').textContent = el + '°'; $('#vAz').textContent = az + '°'; $('#vSol').textContent = I.toFixed(1); $('#vCielo').textContent = C.toFixed(2); $('#vExp').textContent = E.toFixed(2); $('#vFov').textContent = F + '°';
+  const e = el * Math.PI / 180, a = az * Math.PI / 180; sol.position.set(Math.cos(e) * Math.sin(a) * 8, Math.sin(e) * 8, Math.cos(e) * Math.cos(a) * 8); sol.intensity = I; cielo.intensity = C;
+  const calidez = Math.max(0, 1 - Math.max(0, el) / 30); sol.color.setRGB(1, 1 - 0.35 * calidez, 1 - 0.65 * calidez); if (el < 0) sol.intensity = 0;
+  renderer.toneMappingExposure = E; camera.fov = F; camera.updateProjectionMatrix(); piso.visible = $('#cPiso').checked; renderer.shadowMap.enabled = $('#cSombras').checked; sol.castShadow = $('#cSombras').checked;
+  for (const m of modelos) m.grupo.traverse(o => { if (o.isMesh && o.userData.malla) { o.material.wireframe = $('#cAlambre').checked; o.castShadow = o.receiveShadow = true; } }); for (const m of modelos) { if (m.esqueleto) m.esqueleto.visible = $('#cHuesos').checked; if (m.normales) m.normales.visible = $('#cNormales').checked; }
+}
+$$('#s-modelo input').forEach(i => i.oninput = aplicarLuz);
+const PRESETS = { dia: [55, 140, 3.2, 0.7, 1.0, 0x9ec5ff], tarde: [12, 250, 2.6, 0.35, 1.1, 0xffb080], noche: [-5, 0, 0, 0.9, 1.4, 0x5577aa], estudio: [35, 30, 1.6, 1.2, 1.0, 0xffffff] };
+$$('[data-luz]').forEach(b => b.onclick = () => { const p = PRESETS[b.dataset.luz]; $('#lElev').value = p[0]; $('#lAz').value = p[1]; $('#lSol').value = p[2]; $('#lCielo').value = p[3]; $('#lExp').value = p[4]; cielo.color.setHex(p[5]); scene.background = new THREE.Color(b.dataset.luz === 'noche' ? 0x05070c : b.dataset.luz === 'tarde' ? 0x1a1210 : 0x0a0c10); aplicarLuz(); });
+const b64f32 = s => new Float32Array(Uint8Array.from(atob(s), c => c.charCodeAt(0)).buffer), b64u32 = s => new Uint32Array(Uint8Array.from(atob(s), c => c.charCodeAt(0)).buffer), b64u16 = s => new Uint16Array(Uint8Array.from(atob(s), c => c.charCodeAt(0)).buffer);
+async function cargarModelo(ruta, sumar) {
+  if (!renderer) return toast('La escena 3D no está disponible (three.js no cargó)', true);
+  ruta = ruta || $('#mRuta').value; if (!ruta) return; toast('Cargando ' + ruta.split(/[\\/!]/).pop() + '...');
+  try {
+    const d = await vis('/api/fmdl?ruta=' + enc(ruta)); if (!sumar) vaciarEscena();
+    const grupo = new THREE.Group(); const M = { ruta, datos: d, grupo, mallas: [], texturas: {} };
+    for (const m of d.mallas) {
+      const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(b64f32(m.pos), 3));
+      if (m.nrm) g.setAttribute('normal', new THREE.BufferAttribute(b64f32(m.nrm), 3)); if (m.uv) { const uv = b64f32(m.uv); for (let i = 1; i < uv.length; i += 2) uv[i] = 1 - uv[i]; g.setAttribute('uv', new THREE.BufferAttribute(uv, 2)); }
+      if (m.caras) g.setIndex(new THREE.BufferAttribute(b64u32(m.caras), 1)); if (!m.nrm) g.computeVertexNormals();
+      const col = new Float32Array(m.nvert * 3).fill(1); g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      const mat = new THREE.MeshStandardMaterial({ color: 0xc9b8a6, roughness: 0.65, metalness: 0, vertexColors: true, side: THREE.DoubleSide });
+      const mesh = new THREE.Mesh(g, mat); mesh.castShadow = mesh.receiveShadow = true; mesh.userData.malla = m; if (m.pesos) { mesh.userData.pesos = b64f32(m.pesos); mesh.userData.huesos = b64u16(m.huesos); }
+      grupo.add(mesh); M.mallas.push(mesh);
+    }
+    // esqueleto: huesos en mundo (fila 'mundo' xyz) unidos al padre
+    if (d.huesos.length) { const pts = []; for (const b of d.huesos) if (b.padre >= 0 && b.padre < d.huesos.length) { const p = d.huesos[b.padre]; pts.push(b.mundo[0], b.mundo[1], b.mundo[2], p.mundo[0], p.mundo[1], p.mundo[2]); }
+      const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pts), 3)); const lines = new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: 0xffb74d, depthTest: false })); lines.renderOrder = 10;
+      const pg = new THREE.BufferGeometry(); pg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(d.huesos.flatMap(b => b.mundo.slice(0, 3))), 3)); const puntos = new THREE.Points(pg, new THREE.PointsMaterial({ color: 0x4fc3f7, size: 0.012, depthTest: false })); puntos.renderOrder = 11;
+      M.esqueleto = new THREE.Group(); M.esqueleto.add(lines, puntos); M.esqueleto.visible = $('#cHuesos').checked; grupo.add(M.esqueleto); }
+    scene.add(grupo); modelos.push(M); modeloSel = M; aplicarLuz(); pintarModelos(); pintarMallas(); pintarTexturas(); pintarHuesos(''); if (!sumar) encuadrar();
+    // texturas en el mismo paquete: intentar cargar la de color automaticamente
+    autoTexturas(M);
+    toast(`${d.mallas.length} mallas, ${d.huesos.length} huesos`);
+  } catch (e) { toast('No se pudo cargar: ' + e.message, true); }
+}
+function vaciarEscena() { for (const m of modelos) scene.remove(m.grupo); modelos = []; modeloSel = null; pintarModelos(); $('#mMallas').innerHTML = ''; $('#mTexturas').innerHTML = ''; $('#mHuesos').innerHTML = ''; $('#mNHuesos').textContent = ''; }
+function encuadrar() { if (!modelos.length) return; const box = new THREE.Box3(); for (const m of modelos) box.expandByObject(m.grupo); const c = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3()).length() || 1; controls.target.copy(c); camera.position.copy(c).add(new THREE.Vector3(0.3, 0.15, 1).normalize().multiplyScalar(s * 1.3)); camera.near = s / 500; camera.far = s * 50; camera.updateProjectionMatrix(); }
+function pintarModelos() { const e = $('#mModelos'); if (!modelos.length) return e.textContent = 'Ninguno.'; e.innerHTML = modelos.map((m, i) => `<div class="item ${m === modeloSel ? 'sel' : ''}" data-i="${i}">🧊 <span>${m.ruta.split(/[\\/!]/).pop()}</span><span class="t">${m.mallas.length} mallas</span></div>
+    <div class="barra" style="margin:0 0 6px 8px"><label class="mini">x</label><input type="number" step="0.05" value="${m.grupo.position.x}" data-mv="${i},x" style="width:64px"><label class="mini">y</label><input type="number" step="0.05" value="${m.grupo.position.y}" data-mv="${i},y" style="width:64px"><label class="mini">z</label><input type="number" step="0.05" value="${m.grupo.position.z}" data-mv="${i},z" style="width:64px"><button class="b" data-quitar="${i}">✕</button></div>`).join('');
+  e.querySelectorAll('.item').forEach(x => x.onclick = () => { modeloSel = modelos[+x.dataset.i]; pintarModelos(); pintarMallas(); pintarTexturas(); pintarHuesos($('#mHuesoBuscar').value); });
+  e.querySelectorAll('[data-mv]').forEach(x => x.oninput = () => { const [i, k] = x.dataset.mv.split(','); modelos[+i].grupo.position[k] = +x.value; });
+  e.querySelectorAll('[data-quitar]').forEach(x => x.onclick = () => { const m = modelos[+x.dataset.quitar]; scene.remove(m.grupo); modelos.splice(+x.dataset.quitar, 1); modeloSel = modelos[0] || null; pintarModelos(); pintarMallas(); pintarTexturas(); pintarHuesos(''); }); }
+function pintarMallas() { const e = $('#mMallas'); if (!modeloSel) return e.innerHTML = ''; e.innerHTML = modeloSel.mallas.map((mesh, i) => { const m = mesh.userData.malla; const mat = modeloSel.datos.materiales[m.mat]; return `<label class="chk"><input type="checkbox" checked data-malla="${i}"> malla ${m.i} · ${m.nvert} v · ${m.ncaras || 0} caras · grupo ${m.grupo}${mat ? ' · ' + mat.nombre : ''}</label>`; }).join(''); e.querySelectorAll('[data-malla]').forEach(c => c.onchange = () => modeloSel.mallas[+c.dataset.malla].visible = c.checked); }
+function pintarTexturas() { const e = $('#mTexturas'); if (!modeloSel) return e.innerHTML = ''; const d = modeloSel.datos; const mats = d.materiales.filter(m => m.texturas && m.texturas.length); e.innerHTML = (mats.length ? mats.map(m => `<div><b>${m.nombre}</b> <span class="mini">${m.tipo}</span>${m.texturas.map(t => `<div class="ruta" style="padding-left:8px">${t.slot}: ${t.textura}</div>`).join('')}</div>`).join('') : d.texturas.map(t => `<div class="ruta">${t}</div>`).join('')) || 'El modelo no declara texturas.'; }
+function pintarHuesos(filtro) { const e = $('#mHuesos'); if (!modeloSel) return e.innerHTML = ''; const H = modeloSel.datos.huesos; $('#mNHuesos').textContent = `(${H.length})`; const f = (filtro || '').toLowerCase(); e.innerHTML = H.map((b, i) => (!f || b.nombre.toLowerCase().includes(f)) ? `<div class="item ${i === huesoSel ? 'sel' : ''}" data-h="${i}"><span>${i} ${b.nombre}</span><span class="t">padre ${b.padre}</span></div>` : '').join(''); e.querySelectorAll('[data-h]').forEach(x => x.onclick = () => { huesoSel = +x.dataset.h === huesoSel ? -1 : +x.dataset.h; pintarPesos(); pintarHuesos(filtro); }); }
+$('#mHuesoBuscar').oninput = () => pintarHuesos($('#mHuesoBuscar').value);
+function pintarPesos() { if (!modeloSel) return; for (const mesh of modeloSel.mallas) { const col = mesh.geometry.getAttribute('color'); const n = col.count; const w = mesh.userData.pesos, h = mesh.userData.huesos; for (let v = 0; v < n; v++) { let p = 0; if (huesoSel >= 0 && w) for (let k = 0; k < 4; k++) if (h[v * 4 + k] === huesoSel) p += w[v * 4 + k]; col.setXYZ(v, 1, 1 - p * 0.9, 1 - p); } col.needsUpdate = true; } }
+async function autoTexturas(M) {
+  const ruta = M.ruta; if (!ruta.includes('!')) return; const arch = ruta.split('!')[0]; const nombres = []; for (const m of M.datos.materiales) for (const t of (m.texturas || [])) nombres.push(t.textura); for (const t of M.datos.texturas) nombres.push(t);
+  const color = nombres.find(n => /_bsm|_alb|_col|_dif/i.test(n)) || nombres.find(n => /\.ftex$/i.test(n)); if (!color) return;
+  try { const base = color.replace(/^\/+/, '').split('/').pop().replace(/\.(ftex|dds|tga|png)$/i, ''); const b = await vis('/api/buscar?ruta=' + enc(arch) + '&q=' + enc(base) + '&n=5'); const hit = b.archivos.find(a => /\.ftex$/i.test(a.nombre)); if (hit) aplicarTexturaEscena(hit.ruta, 'map'); } catch (e) { }
+}
+function aplicarTexturaEscena(ruta, slot) { if (!modeloSel) return toast('Cargá primero un modelo', true); const url = VISOR + '/api/png?ruta=' + enc(ruta) + '&canal=rgb'; new THREE.TextureLoader().load(url, tex => { tex.encoding = slot === 'map' ? THREE.sRGBEncoding : THREE.LinearEncoding; tex.flipY = true; tex.wrapS = tex.wrapT = THREE.RepeatWrapping; for (const mesh of modeloSel.mallas) { mesh.material[slot] = tex; if (slot === 'map') mesh.material.color.set(0xffffff); mesh.material.needsUpdate = true; } toast('Textura aplicada: ' + ruta.split(/[\\/!]/).pop()); }, undefined, () => toast('No se pudo cargar la textura', true)); }
+$('#mCargar').onclick = () => cargarModelo($('#mRuta').value, false); $('#mSumar').onclick = () => cargarModelo($('#mRuta').value, true); $('#mLimpiar').onclick = vaciarEscena; $('#mEncuadrar').onclick = encuadrar;
+
+// ---------------------------------------------------------------- texturas
+async function cargarTextura() {
+  const r = $('#tRuta').value; if (!r) return; const canal = $('#tCanal').value, mip = $('#tMip').value;
+  try { const i = await vis('/api/ftex?ruta=' + enc(r)); const sel = $('#tMip'); const n = i.mips || 1; if (sel.options.length !== n) { sel.innerHTML = ''; for (let k = 0; k < n; k++) sel.add(new Option(`mip ${k} (${Math.max(1, i.ancho >> k)}x${Math.max(1, i.alto >> k)})`, k)); }
+    $('#tInfo').innerHTML = Object.entries(i).filter(([k]) => k !== 'cabecera').map(([k, v]) => `<b>${k}</b><span>${v}</span>`).join('') + `<b>ruta</b><span class="ruta">${r}</span>`;
+    $('#tImg').src = VISOR + '/api/png?ruta=' + enc(r) + '&canal=' + canal + '&mip=' + mip + '&_=' + Date.now(); } catch (e) { toast(e.message, true); }
+}
+$('#tCargar').onclick = cargarTextura; $('#tCanal').onchange = cargarTextura; $('#tMip').onchange = cargarTextura;
+$('#tUsarColor').onclick = () => { aplicarTexturaEscena($('#tRuta').value, 'map'); ir('modelo'); }; $('#tUsarNormal').onclick = () => { aplicarTexturaEscena($('#tRuta').value, 'normalMap'); ir('modelo'); };
+
+// ---------------------------------------------------------------- animaciones
+let gani = null, gCanalSel = 0;
+async function cargarGani() {
+  const r = $('#gRuta').value; if (!r) return; const ask = $('#gAsk').value, frig = $('#gFrig').value; localStorage.setItem('ask', ask); localStorage.setItem('frig', frig);
+  try { gani = await vis('/api/gani?ruta=' + enc(r) + '&ask=' + enc(ask) + '&frig=' + enc(frig)); const G = gani.gani; $('#gResumen').textContent = `${G.cuadros} cuadros · ${G.ncanales} canales · timebase ${G.timebase}`; $('#gCuadro').max = Math.max(0, G.cuadros - 1); $('#gCuadro').value = 0;
+    $('#gCanales').innerHTML = gani.pistas.map((p, i) => `<div class="item ${i === gCanalSel ? 'sel' : ''}" data-c="${i}"><span>${p.indice} ${p.nombre}</span><span class="tag">${p.tipo}</span><span class="t">${p.claves.length} claves</span></div>`).join('');
+    $$('#gCanales [data-c]').forEach(x => x.onclick = () => { gCanalSel = +x.dataset.c; $$('#gCanales .item').forEach(y => y.classList.toggle('sel', +y.dataset.c === gCanalSel)); dibujarCurvas(); }); gCanalSel = 0; dibujarCurvas(); } catch (e) { toast(e.message, true); }
+}
+function dibujarCurvas() {
+  if (!gani) return; const p = gani.pistas[gCanalSel]; if (!p) return; const cv = $('#gCurvas'); const W = cv.width = cv.clientWidth * devicePixelRatio, H = cv.height = cv.clientHeight * devicePixelRatio; const ctx = cv.getContext('2d'); ctx.clearRect(0, 0, W, H);
+  const N = Math.max(1, gani.gani.cuadros - 1); const comps = p.tipo === 'pos' ? 3 : 4; const cols = ['#ef5350', '#66bb6a', '#4fc3f7', '#ffb74d']; let mn = Infinity, mx = -Infinity; for (const k of p.claves) for (let c = 1; c <= comps; c++) { mn = Math.min(mn, k[c]); mx = Math.max(mx, k[c]); } if (!(mx > mn)) { mx = mn + 1; } const pad = 24 * devicePixelRatio;
+  const X = f => pad + (W - 2 * pad) * f / N, Y = v => H - pad - (H - 2 * pad) * (v - mn) / (mx - mn);
+  ctx.strokeStyle = '#262b36'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(pad, Y(0)); ctx.lineTo(W - pad, Y(0)); ctx.stroke(); ctx.fillStyle = '#8d94a5'; ctx.font = `${11 * devicePixelRatio}px monospace`; ctx.fillText(mx.toFixed(3), 2, pad); ctx.fillText(mn.toFixed(3), 2, H - pad + 10 * devicePixelRatio);
+  for (let c = 1; c <= comps; c++) { ctx.strokeStyle = cols[c - 1]; ctx.lineWidth = 1.5 * devicePixelRatio; ctx.beginPath(); p.claves.forEach((k, i) => { const x = X(k[0]), y = Y(k[c]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke(); }
+  const f = +$('#gCuadro').value; ctx.strokeStyle = '#fff'; ctx.beginPath(); ctx.moveTo(X(f), pad); ctx.lineTo(X(f), H - pad); ctx.stroke();
+  $('#gTitulo').textContent = `Curvas: ${p.nombre} (${p.tipo}, ${p.bits} bits, ${p.bytes} B)`; $('#vCuadro').textContent = f;
+  let k = p.claves[0]; for (const q of p.claves) if (q[0] <= f) k = q; $('#gValores').textContent = k ? (p.tipo === 'pos' ? `cuadro ${k[0]}: x ${k[1]} y ${k[2]} z ${k[3]} (cm)` : `cuadro ${k[0]}: quat x ${k[1]} y ${k[2]} z ${k[3]} w ${k[4]} → ${quatGrados(k)}`) : '';
+}
+function quatGrados(k) { const [x, y, z, w] = [k[1], k[2], k[3], k[4]]; const ang = 2 * Math.acos(Math.min(1, Math.abs(w))) * 180 / Math.PI; const s = Math.sqrt(Math.max(1e-12, 1 - w * w)); return `${ang.toFixed(2)}° alrededor de (${(x / s).toFixed(2)}, ${(y / s).toFixed(2)}, ${(z / s).toFixed(2)})`; }
+$('#gCargar').onclick = cargarGani; $('#gCuadro').oninput = dibujarCurvas; $('#gAsk').value = localStorage.getItem('ask') || ''; $('#gFrig').value = localStorage.getItem('frig') || '';
+
+// ---------------------------------------------------------------- panel en vivo
+let panelCargado = false, menu = null, params = null, cambios = {}, setCola = {}, setTimer = null;
+function enviarSet(i, c, v) { setCola[i + ' ' + c] = `${i} ${c} ${v}`; cambios[`${'xyzw'[c]}${i}`] = v; clearTimeout(setTimer); setTimer = setTimeout(async () => { const body = Object.values(setCola).join('\n'); setCola = {}; await jpost('/api/set', body); pintarCambios(); }, 40); if (params) params.live[i][c] = v; }
+function pintarCambios() { const ks = Object.keys(cambios); $('#pCambios').innerHTML = ks.length ? ks.map(k => `<div>${k} = ${+(+cambios[k]).toFixed(4)}</div>`).join('') : 'Ninguno.'; }
+async function cargarPanel() {
+  try { menu = await pan('/api/menu'); params = await pan('/api/params'); panelCargado = true; pintarGrupos(''); } catch (e) { }
+}
+function pintarGrupos(filtro) {
+  const f = (filtro || '').toLowerCase(); const E = $('#pGrupos'); E.innerHTML = '';
+  for (const g of menu.groups) {
+    const hay = !f || g.title.toLowerCase().includes(f) || g.section.toLowerCase().includes(f) || g.sliders.some(s => s.label.toLowerCase().includes(f) || `${'xyzw'[s.c]}${s.i}` === f);
+    if (!hay) continue;
+    const div = document.createElement('div'); div.className = 'grupo' + (f ? ' abierto' : ''); const on = g.t[0] >= 0 ? params.live[g.t[0]][g.t[1]] > 0.5 : null;
+    div.innerHTML = `<h4>${g.t[0] >= 0 ? `<span class="sw ${on ? 'on' : ''}" title="${'xyzw'[g.t[1]]}${g.t[0]}"></span>` : ''}<span>${g.title}</span><span class="sec">${g.section}</span></h4><div class="cuerpo"><div class="mini" style="margin:4px 0 6px">${g.desc || ''}</div></div>`;
+    const cuerpo = div.querySelector('.cuerpo'); div.querySelector('h4').onclick = e => { if (e.target.classList.contains('sw')) return; div.classList.toggle('abierto'); };
+    const sw = div.querySelector('.sw'); if (sw) sw.onclick = () => { const v = sw.classList.toggle('on') ? 1 : 0; enviarSet(g.t[0], g.t[1], v); };
+    for (const s of g.sliders) {
+      if (f && !(g.title.toLowerCase().includes(f) || s.label.toLowerCase().includes(f) || `${'xyzw'[s.c]}${s.i}` === f)) continue;
+      const clave = s.ext ? s.ext : `${'xyzw'[s.c]}${s.i}`; let val = s.ext ? s.value : params.live[s.i][s.c];
+      const row = document.createElement('div'); row.className = 'slider';
+      if (s.options && s.options.length) {
+        const vals = s.optVals && s.optVals.length ? s.optVals : s.options.map((_, i) => i); let idx = vals.findIndex(v => Math.abs(v - val) < 1e-4); if (idx < 0) idx = 0;
+        row.innerHTML = `<label title="${clave}">${s.label}</label><span class="v">${clave}</span><select style="grid-column:1/3">${s.options.map((o, i) => `<option value="${vals[i]}" ${i === idx ? 'selected' : ''}>${o}</option>`).join('')}</select>${s.help ? `<small>${s.help}</small>` : ''}`;
+        row.querySelector('select').onchange = e => s.ext ? enviarExt(s.ext, +e.target.value) : enviarSet(s.i, s.c, +e.target.value);
+      } else {
+        const step = (s.hi - s.lo) > 20 ? 1 : (s.hi - s.lo) > 2 ? 0.01 : 0.001;
+        row.innerHTML = `<label title="${clave}">${s.label}</label><span class="v">${fmtV(val, s.fmt)} <span class="mini">${clave}</span></span><input type="range" min="${s.lo}" max="${s.hi}" step="${step}" value="${val}" style="grid-column:1/3">${s.help ? `<small>${s.help}</small>` : ''}`;
+        const inp = row.querySelector('input'), vv = row.querySelector('.v'); inp.oninput = () => { vv.innerHTML = `${fmtV(+inp.value, s.fmt)} <span class="mini">${clave}</span>`; s.ext ? enviarExt(s.ext, +inp.value) : enviarSet(s.i, s.c, +inp.value); }; inp.ondblclick = () => { const b = params.base[s.i] ? params.base[s.i][s.c] : s.def; inp.value = b; inp.oninput(); };
+      }
+      cuerpo.appendChild(row);
+    }
+    E.appendChild(div);
+  }
+  if (!E.children.length) E.innerHTML = '<div class="mini">Sin resultados. Probá en "Cualquier fila" de la derecha.</div>';
+}
+function enviarExt(k, v) { setCola['ext ' + k] = `ext ${k} ${v}`; cambios[k] = v; clearTimeout(setTimer); setTimer = setTimeout(async () => { await jpost('/api/set', Object.values(setCola).join('\n')); setCola = {}; pintarCambios(); }, 40); }
+function fmtV(v, fmt) { const m = /%\.(\d)f/.exec(fmt || ''); return m ? (+v).toFixed(+m[1]) : (+v).toFixed(2); }
+$('#pBuscar').oninput = () => menu && pintarGrupos($('#pBuscar').value);
+$('#pOriginal').onpointerdown = () => jpost('/api/bypass?on=1'); $('#pOriginal').onpointerup = $('#pOriginal').onpointerleave = () => panelOk && jpost('/api/bypass?on=0');
+$('#pRecargar').onclick = async () => { await jpost('/api/reload'); toast('Config y shaders recargados'); cambios = {}; pintarCambios(); setTimeout(cargarPanel, 800); };
+$('#pShaders').onclick = async () => { await jpost('/api/shaders'); toast('Shaders recargados'); };
+$('#pGuardar').onclick = async () => { const r = await jpost('/api/save'); toast(r.ok ? 'Guardado en PES21FX.ini' : 'No se pudo guardar', !r.ok); if (r.ok) { cambios = {}; pintarCambios(); } };
+function parseFila(t) { const m = /^([xyzw])(\d+)$/i.exec(t.trim()); return m ? [+m[2], 'xyzw'.indexOf(m[1].toLowerCase())] : null; }
+$('#pFila').oninput = () => { const p = parseFila($('#pFila').value); if (!p || !params) return $('#pFilaInfo').textContent = ''; const [i, c] = p; const com = params.comment[`${'xyzw'[c]}${i}`] || ''; $('#pFilaInfo').innerHTML = `<div>vivo: <b>${params.live[i] ? params.live[i][c] : '?'}</b> · ini: ${params.base[i] ? params.base[i][c] : '?'}</div><div>${com}</div>`; };
+$('#pPoner').onclick = () => { const p = parseFila($('#pFila').value); const v = parseFloat($('#pValor').value); if (!p || isNaN(v)) return toast('Fila como x344 y un valor', true); enviarSet(p[0], p[1], v); toast(`${$('#pFila').value} = ${v}`); };
+
+// ---------------------------------------------------------------- camara
+async function refrescarCam() {
+  if (!panelOk || !$('#s-camara').classList.contains('on')) return;
+  try { const c = await pan('/api/cam'); const g = c.game, f = c.free; $('#cJuego').innerHTML = g.ok ? `<b>posición</b><span>${g.pos.map(v => v.toFixed(2)).join(', ')}</span><b>mira a</b><span>${g.tgt.map(v => v.toFixed(2)).join(', ')}</span><b>cámara id</b><span>${g.id}</span><b>cuadro</b><span>${g.frame}</span>` : '<span class="mini">Todavía no pasó ninguna cámara de partido (en el editor no pasa por acá).</span>';
+    $('#cLibre').innerHTML = `<b>estado</b><span class="${f.on ? 'ok' : ''}">${f.on ? 'prendida' : 'apagada'}</span><b>posición</b><span>${f.pos.map(v => v.toFixed(2)).join(', ')}</span><b>giro / alto</b><span>${f.yaw.toFixed(1)}° / ${f.pitch.toFixed(1)}°</span><b>zoom</b><span>${f.zoom}</span><b>campo de visión</b><span>${f.fov}</span>`;
+    if (document.activeElement !== $('#cZoom')) { $('#cZoom').value = f.zoom; $('#vZoom').textContent = (+f.zoom).toFixed(2); } if (document.activeElement !== $('#cVel')) { $('#cVel').value = f.speed; $('#vVel').textContent = (+f.speed).toFixed(2); } window.camUlt = c; } catch (e) { }
+}
+setInterval(refrescarCam, 700);
+$('#cPrender').onclick = () => enviarSet(344, 0, 2); $('#cApagar').onclick = () => enviarSet(344, 0, 0);
+$('#cTomar').onclick = () => { const c = window.camUlt; if (!c) return; const src = c.free.on ? c.free : null; if (src) { $('#cX').value = src.pos[0].toFixed(3); $('#cY').value = src.pos[1].toFixed(3); $('#cZ').value = src.pos[2].toFixed(3); $('#cYaw').value = src.yaw.toFixed(1); $('#cPitch').value = src.pitch.toFixed(1); } else if (c.game.ok) { const p = c.game.pos, t = c.game.tgt; const d = [t[0] - p[0], t[1] - p[1], t[2] - p[2]]; const l = Math.hypot(...d) || 1; $('#cX').value = p[0].toFixed(3); $('#cY').value = p[1].toFixed(3); $('#cZ').value = p[2].toFixed(3); $('#cYaw').value = (Math.atan2(d[0], d[2]) * 180 / Math.PI).toFixed(1); $('#cPitch').value = (Math.asin(d[1] / l) * 180 / Math.PI).toFixed(1); } };
+$('#cPoner').onclick = () => ponerPose([+$('#cX').value, +$('#cY').value, +$('#cZ').value, +$('#cYaw').value, +$('#cPitch').value]);
+function ponerPose(p) { if (p.some(isNaN)) return toast('Completá x y z giro alto', true); jpost(`/api/cam?x=${p[0]}&y=${p[1]}&z=${p[2]}&yaw=${p[3]}&pitch=${p[4]}`).then(() => toast('Cámara libre puesta')); }
+const poses = JSON.parse(localStorage.getItem('poses') || '[]');
+function pintarPoses() { const e = $('#cPoses'); e.innerHTML = poses.length ? poses.map((p, i) => `<div class="pose"><span><b>${p.n}</b> · ${p.v.slice(0, 3).map(v => v.toFixed(2)).join(', ')} · ${p.v[3].toFixed(0)}° / ${p.v[4].toFixed(0)}°</span><button class="b" data-ir-pose="${i}">Ir</button><button class="b" data-del-pose="${i}">✕</button></div>`).join('') : 'Ninguna.'; e.querySelectorAll('[data-ir-pose]').forEach(b => b.onclick = () => ponerPose(poses[+b.dataset.irPose].v)); e.querySelectorAll('[data-del-pose]').forEach(b => b.onclick = () => { poses.splice(+b.dataset.delPose, 1); localStorage.setItem('poses', JSON.stringify(poses)); pintarPoses(); }); }
+$('#cGuardarPose').onclick = () => { const v = [+$('#cX').value, +$('#cY').value, +$('#cZ').value, +$('#cYaw').value, +$('#cPitch').value]; if (v.some(isNaN)) return toast('Primero completá la pose (o Tomar del juego)', true); poses.push({ n: $('#cNombre').value || 'pose ' + (poses.length + 1), v }); localStorage.setItem('poses', JSON.stringify(poses)); pintarPoses(); };
+pintarPoses();
+$('#cZoom').oninput = () => { $('#vZoom').textContent = (+$('#cZoom').value).toFixed(2); enviarSet(344, 2, +$('#cZoom').value); }; $('#cVel').oninput = () => { $('#vVel').textContent = (+$('#cVel').value).toFixed(2); enviarSet(344, 1, +$('#cVel').value); };
+async function listarCaps() { try { const r = await pan('/api/shots'); $('#cCaps').innerHTML = r.files.slice(-24).reverse().map(f => `<a class="tarjeta" href="${PANEL}/capturas/${f}" target="_blank"><img src="${PANEL}/capturas/${f}" style="width:100%;border-radius:6px"><p>${f}</p></a>`).join('') || '<span class="mini">Sin capturas todavía.</span>'; } catch (e) { } }
+$('#cCapturar').onclick = async () => { const r = await jpost('/api/shot?name=' + enc($('#cCapNombre').value)); toast('Captura: ' + (r.file || '?')); setTimeout(listarCaps, 1200); }; $('#cCapLista').onclick = listarCaps;
+
+// ---------------------------------------------------------------- log
+let logDesde = 0, logFijo = false, logTexto = '';
+async function tirarLog() {
+  if (!panelOk || logFijo || !$('#s-log').classList.contains('on')) return;
+  try { const r = await fetch(PANEL + '/api/log?from=' + logDesde); if (!r.ok) return; const total = +r.headers.get('X-Log-Size'); const t = await r.text(); if (total < logDesde) { logTexto = ''; logDesde = 0; } logTexto += t; logDesde = total; if (logTexto.length > 3e6) logTexto = logTexto.slice(-2e6); pintarLog(); $('#lEstado').textContent = `PES21FX.log · ${fmtTam(total)}`; } catch (e) { }
+}
+function pintarLog() { const f = $('#lFiltro').value.toLowerCase(); const pre = $('#lTexto'); pre.textContent = f ? logTexto.split('\n').filter(l => l.toLowerCase().includes(f)).join('\n') : logTexto; if ($('#lSeguir').checked) pre.parentElement.scrollTop = pre.parentElement.scrollHeight; }
+setInterval(tirarLog, 2000); $('#lFiltro').oninput = pintarLog; $('#lLimpiar').onclick = () => { logTexto = ''; logFijo = false; pintarLog(); };
+$$('nav button')[7].addEventListener('click', () => { logFijo = false; });
+
+// ---------------------------------------------------------------- hashes
+$('#hCalcular').onclick = async () => { try { const r = await vis('/api/hash?nombre=' + enc($('#hNombres').value)); const con = r.conocidos; delete r.conocidos; let o = ''; for (const [n, h] of Object.entries(r)) { if (/^[0-9a-f]{6,8}$/i.test(n)) { const k = n.toUpperCase().padStart(8, '0'); o += `${k} → ${con[k] || '(no es un hueso conocido)'}\n`; } else o += `${n} → ${h}\n`; } $('#hSalida').textContent = o || 'Nada.'; } catch (e) { toast(e.message, true); } };
+$('#hNombres').onkeydown = e => { if (e.key === 'Enter') $('#hCalcular').onclick(); };
+
+// ---------------------------------------------------------------- arranque
+initTres(); estado(); ir(localStorage.getItem('seccion') || 'inicio'); listar(localStorage.getItem('ruta') || '');
+</script>
+</body>
+</html>
