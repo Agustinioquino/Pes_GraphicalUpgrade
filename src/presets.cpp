@@ -167,6 +167,7 @@ void PollMatch() {
     bool changed = m.stadium != g_cfg.match.stadium || m.timeofday != g_cfg.match.timeofday;
     g_cfg.match = m;
     if (!m.known) return;
+    MatchWind(m, w);   // (02/11) viento de este partido (hora, clima, estacion y azar) -> cloth.ini
     if (changed) g_cfg.presetManual = false;
     if (g_cfg.presetManual) return;
     std::string f = m.stadium >= 0 ? PresetNameFor(m.stadium, m.timeofday) : "";
