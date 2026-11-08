@@ -243,7 +243,7 @@ float2 PesArLine(float t, float th, float ta, float tha, float tb, float thb, fl
 float PesArB(float t, float th, float t0, float th0, float st, float sth) { return PesArG((t - t0) / st) * PesArG(PesLrDth(th, th0) / sth); }
 // altura (m) del detalle muscular del brazo, + = bulto (sin pose: las separaciones de base)
 // (08/11 l) el apagado del relieve del brazo en el hombro y la muneca (igual que en PesArmH)
-float PesArmKeep(float3 p) { float t, th; PesArmFrame(p, t, th); return PesArSS(-0.005, 0.02, t) * (1.0 - PesArSS(0.41, 0.43, t)); }
+float PesArmReliefKeep(float3 p) { float t, th; PesArmFrame(p, t, th); return PesArSS(-0.005, 0.02, t) * (1.0 - PesArSS(0.41, 0.43, t)); }
 
 float PesArmH(float3 p) {
     float t, th; PesArmFrame(p, t, th);

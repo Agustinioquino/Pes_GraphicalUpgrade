@@ -446,7 +446,7 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
       // los surcos quedan en 0 (no entran) y todo lo demas sale; se ve el mismo dibujo que en la luz, siempre hacia afuera. La base se
       // apaga igual que el relieve en los bordes de cada malla (hombro / muneca / tobillo / short), sin escalon con la pieza de al lado.
       float hb = 0.0;
-      if (q < 511.5) { hh = PesArmH(pm); hb = 0.0008 * PesArmKeep(pm); }
+      if (q < 511.5) { hh = PesArmH(pm); hb = 0.0008 * PesArmReliefKeep(pm); }
       else if (q > 515.5 && q < 527.5) { hh = PesHandH(pm, saturate((q - 520.0) / 7.0), crz); hb = 0.0003 * PesHandFade(pm); }
       else if (q > 527.5 && q < 599.5) {   // tension por grupo en o1.y = 2 + (cuadriceps + 8 isquios + 64 gemelo) / 1024
         float na = round((p[0].o1.y - 2.0) * 1024.0);
