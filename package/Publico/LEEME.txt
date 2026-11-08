@@ -1,0 +1,2 @@
+Publico mejorado (solo texturas, sin DLL). Copiar la carpeta Asset a una raiz de livecpk de Sider (cpk.root). Generado con tools/crowd/mejorar_publico.py.
+Atlas de caras 2048x4096 (x2, nitidez suave), normal 2048, srm 1024, paletas de ropa con mas color. Si falla o no gusta: borrar la carpeta Asset de ese livecpk.
