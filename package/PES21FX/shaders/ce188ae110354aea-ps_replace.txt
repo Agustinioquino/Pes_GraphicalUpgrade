@@ -411,7 +411,9 @@ void main(
   // y esculpida) por encima del detalle de la textura de la cara; 1 = como antes
   float wrRelief = enhance ? clamp(IniParams.Load(int2(365, 0)).z, 0.0, 3.0) : 1.0;
   if (wrRelief <= 0.0) wrRelief = 1.0;
-  r1.xyz = r2.xyz * (r0.zzz * wrRelief) + r1.xyz;
+  // (08/11, Agustin: "la luz en las arrugas parece al reves") el relieve inclina la normal de la arruga (xy) y recalcula z; antes se
+  // multiplicaba (x, y, z - 1) entero: con z365 alto z quedaba negativo y la normal se daba vuelta (surco iluminado como cresta)
+  { float3 wn = float3(r2.xy * wrRelief, max(1.0 + r2.z, 0.05)); wn = normalize(wn); r1.xyz = (wn - float3(0, 0, 1)) * r0.zzz + r1.xyz; }
   r0.z = dot(r1.xyz, r1.xyz);
   r0.z = rsqrt(r0.z);
   r1.xyz = r1.xyz * r0.zzz;
@@ -995,9 +997,9 @@ void main(
     float vOk = dot(g_psScene.m_view._m00_m10_m20, g_psScene.m_view._m00_m10_m20);
     if (wrDepth * zK > 0.001 && vOk > 0.25 && dot(Lw, Lw) > 0.25) {
       float3 Lv = normalize(float3(dot(Lw, g_psScene.m_view._m00_m10_m20), dot(Lw, g_psScene.m_view._m01_m11_m21), dot(Lw, g_psScene.m_view._m02_m12_m22)));
-      float wAo = 1.0 - wrDepth * zK;
+      float wAo = 1.0 - 0.5 * wrDepth * zK;   // (08/11, Agustin: "se ven feas") oclusion 0.57..1: con 0.15 el surco entero quedaba negro
       float wVis = saturate(abs(dot(normalize(r1.xyz), Lv)) + 2.0 * wAo * wAo - 1.0);
-      o0.xyz *= lerp(1.0, wVis, 0.9);
+      o0.xyz *= lerp(1.0, wVis, 0.6);
     } }
   // ---- empaquetado normal octaedrica + translucidez ----
   r0.x = r1.w * 63 + 0.5;
