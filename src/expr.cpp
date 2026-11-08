@@ -1477,6 +1477,7 @@ static void SlotPresent(ID3D11DeviceContext* imm) {
 // tabla para el VS (t115): [0] = (personajes, 0, 0, 0), [1] = (reposo de sk_head, 0); por personaje 1 + 33 x 6 float4:
 // (cabeza en el mundo, 1 = valida) y por hueso 3 float4 de la diferencia de este cuadro + 3 del anterior (fila k = imagen del eje k, w = traslacion)
 namespace {
+constexpr int kRowZonas = 421;   // (08/11 d) filas 421 / 422: x350 = 3 'Por huesos: control total' (ganancia por zona y topes)
 static std::atomic<int> s_bdClamp{0};   // (08/11 b) huesos recortados por el tope
 constexpr int kBdStride = 1 + kExprBones * 6, kBdChars = 32, kBdF4 = 2 + kBdChars * kBdStride;
 ID3D11Buffer* s_bdBuf = nullptr; ID3D11ShaderResourceView* s_bdSrv = nullptr; bool s_bdAny = false;
@@ -1514,6 +1515,18 @@ static void DeltaUpload(ID3D11DeviceContext* imm) {
                 Aff N, B, BI, Dm; AffQ(b.nq, b.nt, N); AffQ(b.bq, b.bt, B);
                 // (08/11 b) tope por hueso: el gesto del mod nunca corre un hueso de la cara mas de 40 grados ni 2 cm de lo que dejo el juego
                 // (si algo sale de rango -lectura rara, cara nueva- se recorta en vez de tirar la piel)
+                // (08/11 d, Agustin: "se podria crear otra mas extensiva y con mayor control?") x350 = 3 "Por huesos: control total": la
+                // diferencia de cada hueso (giro eje-angulo y corrimiento) se escala por zona (fila 421: x mandibula, y labios y comisuras,
+                // z parpados y ojeras, w cejas y frente; fila 422: x mejillas y nariz, y todo junto) y el tope sale de la fila 422 (z grados,
+                // w mm). Con los otros modos: ganancia 1 y tope 40 grados / 2 cm
+                const bool full = g_cfg.live[350][0] > 2.5f;
+                float g = 1.0f, kMax = 0.70f, kMaxT = 0.02f;
+                if (full) {
+                    const float* A = g_cfg.live[kRowZonas]; const float* Bz = g_cfg.live[kRowZonas + 1];
+                    const float zg = (d == 0) ? A[0] : (d <= 6 || (d >= 9 && d <= 12)) ? A[1] : (d >= 20 && d <= 25) ? A[2] : (d >= 26 && d <= 30) ? A[3] : Bz[0];
+                    g = std::clamp(zg, 0.0f, 2.0f) * std::clamp(Bz[1], 0.0f, 2.0f);
+                    kMax = std::clamp(Bz[2], 5.0f, 90.0f) / 57.29578f; kMaxT = std::clamp(Bz[3], 1.0f, 50.0f) * 0.001f;
+                }
                 float nq2[4] = { b.nq[0], b.nq[1], b.nq[2], b.nq[3] }, nt2[3] = { b.nt[0], b.nt[1], b.nt[2] };
                 {   float dq[4], bc[4] = { -b.bq[0], -b.bq[1], -b.bq[2], b.bq[3] };
                     dq[3] = nq2[3] * bc[3] - nq2[0] * bc[0] - nq2[1] * bc[1] - nq2[2] * bc[2];
@@ -1521,17 +1534,18 @@ static void DeltaUpload(ID3D11DeviceContext* imm) {
                     dq[1] = nq2[3] * bc[1] - nq2[0] * bc[2] + nq2[1] * bc[3] + nq2[2] * bc[0];
                     dq[2] = nq2[3] * bc[2] + nq2[0] * bc[1] - nq2[1] * bc[0] + nq2[2] * bc[3];
                     if (dq[3] < 0) for (float& v : dq) v = -v;
-                    const float sn = sqrtf(dq[0] * dq[0] + dq[1] * dq[1] + dq[2] * dq[2]), ang = 2.0f * atan2f(sn, dq[3]), kMax = 0.70f;
-                    if (ang > kMax && sn > 1e-6f) {   // n = recorte(dq) * b
-                        const float h = 0.5f * kMax, k = sinf(h) / sn, e[4] = { dq[0] * k, dq[1] * k, dq[2] * k, cosf(h) };
+                    const float sn = sqrtf(dq[0] * dq[0] + dq[1] * dq[1] + dq[2] * dq[2]), ang = 2.0f * atan2f(sn, dq[3]);
+                    float tgt = ang * g; if (tgt > kMax) { tgt = kMax; s_bdClamp++; }
+                    if (sn > 1e-6f && fabsf(tgt - ang) > 1e-6f) {   // n = dq escalado * b
+                        const float h = 0.5f * tgt, k = sinf(h) / sn, e[4] = { dq[0] * k, dq[1] * k, dq[2] * k, cosf(h) };
                         nq2[3] = e[3] * b.bq[3] - e[0] * b.bq[0] - e[1] * b.bq[1] - e[2] * b.bq[2];
                         nq2[0] = e[3] * b.bq[0] + e[0] * b.bq[3] + e[1] * b.bq[2] - e[2] * b.bq[1];
                         nq2[1] = e[3] * b.bq[1] - e[0] * b.bq[2] + e[1] * b.bq[3] + e[2] * b.bq[0];
                         nq2[2] = e[3] * b.bq[2] + e[0] * b.bq[1] - e[1] * b.bq[0] + e[2] * b.bq[3];
-                        s_bdClamp++;
                     }
-                    const float dx = nt2[0] - b.bt[0], dy = nt2[1] - b.bt[1], dz = nt2[2] - b.bt[2], dl = sqrtf(dx * dx + dy * dy + dz * dz);
-                    if (dl > 0.02f) { const float k = 0.02f / dl; nt2[0] = b.bt[0] + dx * k; nt2[1] = b.bt[1] + dy * k; nt2[2] = b.bt[2] + dz * k; s_bdClamp++; }
+                    float dx = (nt2[0] - b.bt[0]) * g, dy = (nt2[1] - b.bt[1]) * g, dz = (nt2[2] - b.bt[2]) * g; const float dl = sqrtf(dx * dx + dy * dy + dz * dz);
+                    if (dl > kMaxT) { const float k = kMaxT / dl; dx *= k; dy *= k; dz *= k; s_bdClamp++; }
+                    nt2[0] = b.bt[0] + dx; nt2[1] = b.bt[1] + dy; nt2[2] = b.bt[2] + dz;
                 }
                 AffQ(nq2, nt2, N);
                 if (AffInv(B, BI)) { AffMul(N, BI, Dm); if (wOk) { Aff t1; AffMul(W, Dm, t1); AffMul(t1, WI, Dw); } else Dw = Dm; cur.has[d] = true; moved++; }
