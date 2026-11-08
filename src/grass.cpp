@@ -768,18 +768,73 @@ void GrassPresent() {
 // ese dibujo); si no, se pone el guardado y se devuelve el del contexto al terminar.
 // Devuelve true si los dibujos quedaron grabados (la grabacion ya lleva su emision).
 static thread_local bool t_editor = false;   // (08/11 c) emision en el editor (x393): sin estados de la base, alcance y393
+// (08/11 d, Agustin: "no puedes cargar sin haber cargado un partido antes?") ESTADO PROPIO para el editor: sin partido visto no hay
+// estado del pasto del juego (shaders, texturas de la cancha, cbuffers), asi que se arma uno equivalente una sola vez: los shaders del
+// pasto del catalogo (los reemplazos del mod, 498b30 / 18afff: las reglas de t7 / t8 / t9 y t120 se aplican igual en BeforeDraw), un
+// input layout propio sobre el VS del mod (POSITION0 slot 0, TEXCOORD0 slot 3 half2, igual que la malla propia), texturas de 1x1
+// (cancha verde, sin mascara ni desgaste, sin sombra plana, normal plana), cbuffers con valores de cancha (uv de la cancha = raiz /
+// 105 x 68 + 0.5, pelota lejos), muestreadores lineales, mezcla por defecto, profundidad segun como limpia el juego (0 o 1) sin
+// stencil y sin recorte de caras. Se usa solo si no hay estado capturado; cuando se vio un partido, se usa el real.
+static GrassState s_edSt; static std::mutex s_edMx; static bool s_edTried = false; static ID3D11Buffer* s_edPsCb = nullptr;
+static ID3D11ShaderResourceView* Tex1x1(float r, float g, float b, float a) {
+    D3D11_TEXTURE2D_DESC d = {}; d.Width = d.Height = 1; d.MipLevels = d.ArraySize = 1; d.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; d.SampleDesc.Count = 1; d.Usage = D3D11_USAGE_IMMUTABLE; d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    float px[4] = { r, g, b, a }; D3D11_SUBRESOURCE_DATA sd = { px, 16, 16 };
+    ID3D11Texture2D* t = nullptr; ID3D11ShaderResourceView* v = nullptr;
+    if (SUCCEEDED(g_dev.dev->CreateTexture2D(&d, &sd, &t)) && t) { g_dev.dev->CreateShaderResourceView(t, nullptr, &v); t->Release(); }
+    return v;
+}
+static bool BuildEditorState() {
+    std::lock_guard<std::mutex> lk(s_edMx);
+    if (s_edSt.valid) return true;
+    if (s_edTried) return false;
+    s_edTried = true;
+    const ShaderEntry* ve = FindShaderByHash(kGrassVS); const ShaderEntry* pe = FindShaderByHash(kGrassPS);
+    if (!ve || !ve->repl || !pe || !pe->repl) { Log("pasto en el editor: el catalogo todavia no tiene los shaders del pasto (498b30 / 18afff) con reemplazo: sin estado propio"); s_edTried = false; return false; }
+    GrassState g; g.vsE = ve; g.psE = pe;
+    ve->repl->QueryInterface(__uuidof(ID3D11VertexShader), (void**)&g.vs); pe->repl->QueryInterface(__uuidof(ID3D11PixelShader), (void**)&g.ps);
+    if (ID3DBlob* b = CompileNamedShader(L"498b30bad256e8ed-vs_replace.txt", "vs_5_0")) {
+        D3D11_INPUT_ELEMENT_DESC el[2] = { { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 }, { "TEXCOORD", 0, DXGI_FORMAT_R16G16_FLOAT, 3, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 } };
+        g_dev.dev->CreateInputLayout(el, 2, b->GetBufferPointer(), b->GetBufferSize(), &g.il); b->Release();
+    }
+    g.topo = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    auto cbuf = [](const float* v, UINT bytes) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = bytes; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER; D3D11_SUBRESOURCE_DATA sd = { v, 0, 0 }; ID3D11Buffer* nb = nullptr; g_dev.dev->CreateBuffer(&d, &sd, &nb); return nb; };
+    float c0[12] = { 0, 0, 0, 0,  1, 1, 0, 0,  0, 0, 1, 1 };                                   // cb0[1].xy * cb0[2].zw = escala de la sombra plana (1)
+    float c4[20] = { 0, 0, 0, 0,  1.0f / 105.0f, 1.0f / 68.0f, 0.5f, 0.5f,  0, 0, 1, 1,  999, 0, 999, 0,  999, 0, 999, 0 };   // uv de la cancha, pelota lejos
+    float p0[20] = {}; p0[8] = 1920; p0[9] = 1080;                                              // m_renderBuffer.xy (se actualiza al emitir)
+    g.vsCb0 = cbuf(c0, sizeof c0); g.vsCb4 = cbuf(c4, sizeof c4); g.psCb0 = cbuf(p0, sizeof p0); s_edPsCb = g.psCb0; if (s_edPsCb) s_edPsCb->AddRef();
+    g.vsSrv[0] = Tex1x1(0.22f, 0.40f, 0.10f, 1); g.vsSrv[1] = Tex1x1(0, 0, 0, 0); g.vsSrv[2] = Tex1x1(0.5f, 0.5f, 0.5f, 1); g.vsSrv[3] = Tex1x1(0.5f, 0.5f, 0.5f, 1);
+    g.vsSrv[4] = Tex1x1(0.22f, 0.40f, 0.10f, 1); g.vsSrv[5] = Tex1x1(0, 0, 0, 0); g.vsSrv[6] = Tex1x1(0.5f, 0.5f, 1.0f, 1);
+    g.psSrv = Tex1x1(0.25f, 0.45f, 0.12f, 1);
+    D3D11_SAMPLER_DESC smp = {}; smp.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR; smp.AddressU = smp.AddressV = smp.AddressW = D3D11_TEXTURE_ADDRESS_WRAP; smp.MaxLOD = D3D11_FLOAT32_MAX;
+    g_dev.dev->CreateSamplerState(&smp, &g.vsSmp[0]); smp.AddressU = smp.AddressV = smp.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP; g_dev.dev->CreateSamplerState(&smp, &g.vsSmp[1]);
+    if (g.vsSmp[0]) { g.psSmp = g.vsSmp[0]; g.psSmp->AddRef(); }
+    D3D11_DEPTH_STENCIL_DESC dd = {}; dd.DepthEnable = TRUE; dd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+    dd.DepthFunc = g_depthClearZero.load() > g_depthClearOne.load() ? D3D11_COMPARISON_GREATER_EQUAL : D3D11_COMPARISON_LESS_EQUAL;   // profundidad invertida si el juego limpia a 0
+    g_dev.dev->CreateDepthStencilState(&dd, &g.dss);
+    D3D11_RASTERIZER_DESC rd = {}; rd.FillMode = D3D11_FILL_SOLID; rd.CullMode = D3D11_CULL_NONE; rd.DepthClipEnable = TRUE; g_dev.dev->CreateRasterizerState(&rd, &g.rs);
+    const bool ok = g.vs && g.ps && g.il && g.vsCb0 && g.vsCb4 && g.psCb0 && g.vsSrv[0] && g.vsSmp[0] && g.vsSmp[1] && g.dss && g.rs;
+    Log("pasto en el editor: estado propio %s (VS %p PS %p layout %p, profundidad %s)", ok ? "listo" : "INCOMPLETO: no se dibuja", (void*)g.vs, (void*)g.ps, (void*)g.il, dd.DepthFunc == D3D11_COMPARISON_GREATER_EQUAL ? "invertida" : "normal");
+    if (!ok) { g.Release(); return false; }
+    g.valid = true; s_edSt = g; return true;
+}
 static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend = nullptr) {
     struct InEmit { bool sv; InEmit() : sv(t_inEmit) { t_inEmit = true; } ~InEmit() { t_inEmit = sv; } } inEmit_;
     const float* p58 = g_cfg.live[58]; const float* p59 = g_cfg.live[59];
     EnsureBuffers();
     if (!s_cb) { Why("sin buffers propios"); return false; }
     if (!EnsureGPU()) { Why("sin recursos de GPU para el pasto (ver Errores)"); return false; }
-    if (s_lodCount.load() == 0xffffffff) { Why("todavia sin variante de malla"); return false; }
+    if (s_lodCount.load() == 0xffffffff && !t_editor) { Why("todavia sin variante de malla"); return false; }   // (08/11 d) el editor usa la malla propia
     GrassState st;
     if (!bound) {
-        std::lock_guard<std::mutex> lk(s_stMx);
-        if (!s_state.valid) { Why("todavia no se vio el pasto del juego (sin estado para emitir desde la base)"); return false; }
-        st = s_state; st.AddRefAll();
+        bool have; { std::lock_guard<std::mutex> lk(s_stMx); have = s_state.valid; if (have) { st = s_state; st.AddRefAll(); } }
+        if (!have && t_editor && BuildEditorState()) {   // (08/11 d) editor sin partido visto: estado propio
+            std::lock_guard<std::mutex> lk(s_edMx); st = s_edSt; st.AddRefAll(); have = true;
+            ID3D11RenderTargetView* r0 = nullptr; c->OMGetRenderTargets(1, &r0, nullptr);   // m_renderBuffer.xy = tamano del target del visor
+            if (r0) { ID3D11Resource* res = nullptr; r0->GetResource(&res); r0->Release(); ID3D11Texture2D* t = nullptr;
+                if (res && SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t)) && t) { D3D11_TEXTURE2D_DESC d; t->GetDesc(&d); float p0[20] = {}; p0[8] = (float)d.Width; p0[9] = (float)d.Height; c->UpdateSubresource(s_edPsCb, 0, nullptr, p0, 0, 0); t->Release(); }
+                if (res) res->Release(); }
+        }
+        if (!have) { Why("todavia no se vio el pasto del juego (sin estado para emitir desde la base)"); return false; }
     }
     g_grassDbg.emits++; if (bound) s_emitGame++; else s_emitBase++;
     bool emitted = false;
@@ -1034,7 +1089,7 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
 // (08/11 c) PASTO EN EL EDITOR (experimento, Agustin 08:02 / 10:05): x393 = 1 dibuja el pasto del mod alrededor del jugador en el
 // modo editar (y los menus 3D sin sol), para juzgar la luz de prueba sobre el cesped. Se emite una vez por cuadro despues del
 // dibujo de la cara en el G-buffer del visor (el estado del juego ya esta devuelto), con la camara del visor (cb2 del VS) y el
-// estado del pasto guardado al ver un partido en la sesion (s_state): sin eso se anota una vez y no se dibuja. El jugador del
+// estado del pasto guardado al ver un partido en la sesion (s_state) o, sin partido previo, el estado propio (BuildEditorState). El jugador del
 // editor esta en el origen (los focos del fox2 apuntan al eje), igual que el centro de la cancha, asi que el pasto queda a sus pies.
 // Nunca se guarda prendido (kDebugParams, config.cpp).
 static int RtvCount(ID3D11DeviceContext* c);
@@ -1045,12 +1100,10 @@ void GrassEditorAfterFace(ID3D11DeviceContext* c) {
     if (RtvCount(c) < 2) return;   // solo el G-buffer del visor (la cara tambien se dibuja en prepasadas)
     const int f = s_frame.load();
     int prev = s_edFrame.load(); if (prev == f || !s_edFrame.compare_exchange_strong(prev, f)) return;   // una por cuadro
-    bool have; { std::lock_guard<std::mutex> lk(s_stMx); have = s_state.valid; }
-    if (!have) { if (s_edLog.fetch_add(1) < 1) Log("pasto en el editor: todavia no se vio el pasto del juego en esta sesion (hace falta ver un partido o una repeticion antes de entrar al editor): no se dibuja"); return; }
     t_editor = true;
     const bool ok = GrassEmit(c, false);
     t_editor = false;
-    if (ok) { if (s_edOk.fetch_add(1) < 1) Log("pasto en el editor: emitiendo alrededor del jugador (alcance %.0f m, estado del pasto de hace %d cuadros)", g_cfg.live[393][1], f - s_capPres.load()); }
+    if (ok) { if (s_edOk.fetch_add(1) < 1) { bool real; { std::lock_guard<std::mutex> lk(s_stMx); real = s_state.valid; } Log("pasto en el editor: emitiendo alrededor del jugador (alcance %.0f m, %s)", g_cfg.live[393][1], real ? "con el pasto visto en el partido" : "con el estado propio: sin partido previo"); } }
     else if (s_edLog.fetch_add(1) < 3) Log("pasto en el editor: no se pudo emitir: %s", g_grassDbg.why ? g_grassDbg.why : "?");
 }
 
