@@ -1417,7 +1417,21 @@ static void SlotPresent(ID3D11DeviceContext* imm) {
                         //  - los PARPADOS solo van en los lugares que la geometria de esta malla marco como parpado (lids, mismo lado y
                         //    arriba / abajo): tienen el mismo pivote que el ojo y entre ellos, y el emparejado por matriz los puede cruzar;
                         //  - cada hueso en un solo lugar (el de menor error); los demas quedan sin gesto
+                        // (08/11 g, Agustin: "los parpados no reaccionan al movimiento como antes, al igual que la barba") el emparejado SIMPLE del
+                        // mediodia (cbb4a21), el que se vio bien: cada lugar toma el hueso de pose mas parecida si el segundo queda lejos. Las reglas
+                        // de la tarde (5ab438b..f312ab1: parpados solo en lugares de parpado, uno a uno, doble lectura, geometria) quedan detras de
+                        // expr_paleta_blindaje = 1 para probarlas aparte
+                        const bool blind = g_cfg.optExprBlindaje;
+                        if (!blind) for (int j = 0; j <= L.maxIdx; j++) {
+                            if (j == L.head) continue;
+                            Aff Mj, A; AffFromPalette(r + j * 12, Mj); AffMul(MhI, Mj, A);
+                            float best = 1e9f, second = 1e9f; int bd = -1;
+                            for (int d = 0; d < kExprBones; d++) { if (!kOk[d]) continue; const float e = AffDist(A, K[d]); if (e < best) { second = best; best = e; bd = d; } else if (e < second) second = e; }
+                            if (bd >= 0 && best < 0.25f && second > 2.0f * best) { slot[j] = (uint8_t)bd; matched++; worst = (std::max)(worst, best); }
+                            else if (bd >= 0 && best < 0.25f) s_slotAmb++;
+                        }
                         float err[32]; int alt[32]; float altE[32]; for (int j = 0; j < 32; j++) { err[j] = 1e9f; alt[j] = -1; altE[j] = 1e9f; }
+                        if (blind) {
                         // (08/11 f) la MANDIBULA (skf_jaw) esta muy atras (z 8 cm): el centro de sus vertices (menton, quijada) queda mas cerca
                         // de la papada o los labios de abajo. Su lugar es el que mas vertices tiene en la parte baja del medio de la cara (face_rig:
                         // jaw 312 vertices, el siguiente 151)
@@ -1472,6 +1486,7 @@ static void SlotPresent(ID3D11DeviceContext* imm) {
                             if (!used) { slot[j] = (uint8_t)alt[j]; err[j] = altE[j]; alt[j] = -1; } else slot[j] = 255;
                             break; }
                         for (int j = 0; j < 32; j++) if (slot[j] != 255) { matched++; worst = (std::max)(worst, err[j]); }
+                        }   // blind
                     }
                 }
             }
@@ -1480,7 +1495,7 @@ static void SlotPresent(ID3D11DeviceContext* imm) {
             { std::lock_guard<std::mutex> lm(s_mx); for (auto& kv : s_meshes) if (kv.second->id == L.id) { m = kv.second; break; }
               bool confirmed = false;
               if (m && matched >= 3 && !m->slotsOk) {
-                  confirmed = m->slotPendOk && memcmp(m->slotPend, slot, sizeof slot) == 0;
+                  confirmed = !g_cfg.optExprBlindaje || (m->slotPendOk && memcmp(m->slotPend, slot, sizeof slot) == 0);   // (08/11 g) doble lectura solo con blindaje
                   memcpy(m->slotPend, slot, sizeof slot); m->slotPendOk = true;
                   if (!confirmed) m->slotCap = s_frame - 30;   // la segunda lectura enseguida (~15 cuadros)
               }
@@ -1574,6 +1589,7 @@ static void DeltaUpload(ID3D11DeviceContext* imm) {
 int ExprZoneScale(int d, const float* bq, const float* bt, float* nq2, float* nt2) {
     int clip = 0;   // 1 = giro recortado, 2 = corrimiento recortado
     const bool full = g_cfg.live[350][0] > 2.5f;
+    if (!full && !g_cfg.optExprBlindaje) return 0;   // (08/11 g) sin control total ni blindaje: como al mediodia, sin tope ni ganancia
     float g = 1.0f, kMax = 0.70f, kMaxT = 0.02f;
     if (full) {
         const float* A = g_cfg.live[kRowZonas]; const float* Bz = g_cfg.live[kRowZonas + 1];
