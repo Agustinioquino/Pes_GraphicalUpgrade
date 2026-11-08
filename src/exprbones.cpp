@@ -1458,7 +1458,11 @@ static void FrameBody(const void* skel) {
                 float x0[3], v0[3]; for (int c = 0; c < 3; c++) { x0[c] = S->gB.p[b][c] - T.p[b][c]; v0[c] = (S->gB.p[b][c] - S->gPrev.p[b][c]) * idt; }
                 float cq[4], dq[4], r0[3]; QConj(T.q[b], cq); QMul(S->gB.q[b], cq, dq); QLog(dq, r0);
                 float cp[4], vq[4], rv[3]; QConj(S->gPrev.q[b], cp); QMul(S->gB.q[b], cp, vq); QLog(vq, rv); for (float& v : rv) v *= idt;
-                for (int c = 0; c < 3; c++) { InertStart(S->gI[b][c], x0[c], std::clamp(v0[c], -0.5f, 0.5f), tau); InertStart(S->gI[b][3 + c], r0[c], std::clamp(rv[c], -20.0f, 20.0f), tau); }
+                // (08/11 h, Agustin: "quizas el metodo de transicion no es el correcto, enfocate en uno mas seguro, transicion suave") sin
+                // velocidad heredada: la diferencia se apaga con el mismo polinomio pero arrancando quieta (ease-out puro): no puede
+                // pasarse ni rebotar aunque la velocidad medida venga rara (dt variable, hueso leido con lo del mod puesto)
+                (void)v0; (void)rv;
+                for (int c = 0; c < 3; c++) { InertStart(S->gI[b][c], x0[c], 0.0f, tau); InertStart(S->gI[b][3 + c], r0[c], 0.0f, tau); }
             }
             S->gIT0 = gt2;
         }
