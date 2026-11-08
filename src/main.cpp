@@ -324,11 +324,11 @@ static PFN_MDWD s_mdwd = nullptr;
 struct FxMdExc { DWORD ThreadId; EXCEPTION_POINTERS* ExceptionPointers; BOOL ClientPointers; };
 #pragma pack(pop)
 static_assert(sizeof(FxMdExc) == 16 && offsetof(FxMdExc, ExceptionPointers) == 4, "MINIDUMP_EXCEPTION_INFORMATION");
-struct DumpJob { HANDLE file; FxMdExc exc; int type; BOOL ok; DWORD err; };
+struct DumpJob { HANDLE file; FxMdExc exc; int type; BOOL ok; DWORD err; bool hasExc = true; };
 static DWORD WINAPI DumpThread(LPVOID p) {
     auto* j = (DumpJob*)p;
     __try {
-        j->ok = s_mdwd(GetCurrentProcess(), GetCurrentProcessId(), j->file, j->type, &j->exc, nullptr, nullptr);
+        j->ok = s_mdwd(GetCurrentProcess(), GetCurrentProcessId(), j->file, j->type, j->hasExc ? &j->exc : nullptr, nullptr, nullptr);
         j->err = j->ok ? 0 : GetLastError();
     } __except (EXCEPTION_EXECUTE_HANDLER) { j->ok = FALSE; j->err = 0xE0000000u | (GetExceptionCode() & 0xFFFFFF); }   // que el volcado nunca tire el cierre
     return 0;
@@ -347,15 +347,14 @@ static void PruneCrashDirs(const std::wstring& root, int keep) {
         RemoveDirectoryW(d.c_str());
     }
 }
-static void WriteCrashDump(EXCEPTION_POINTERS* ep) {
-    static std::atomic<int> once{0};
-    if (once++ || g_cfg.optCrashDump <= 0 || g_cfg.baseDir.empty()) return;
+// (08/11 c) hang = true: congelamiento detectado por el vigia (sin Present); carpeta <fecha>_congelado, sin excepcion
+static void WriteDumpTo(EXCEPTION_POINTERS* ep, bool hang) {
     std::wstring root = g_cfg.baseDir + L"cierres\\"; CreateDirectoryW(root.c_str(), nullptr);
     PruneCrashDirs(root, 7);
-    SYSTEMTIME st; GetLocalTime(&st); wchar_t n[32];
-    swprintf(n, 32, L"%04d%02d%02d_%02d%02d%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    SYSTEMTIME st; GetLocalTime(&st); wchar_t n[48];
+    swprintf(n, 48, L"%04d%02d%02d_%02d%02d%02d%ls", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, hang ? L"_congelado" : L"");
     std::wstring dir = root + n + L"\\"; CreateDirectoryW(dir.c_str(), nullptr);
-    if (g_log) fprintf(g_log, "    volcado del cierre: PES21FX\\cierres\\%ls\\\n", n);
+    if (g_log) fprintf(g_log, "    volcado del %s: PES21FX\\cierres\\%ls\\\n", hang ? "congelamiento" : "cierre", n);
     // primero los archivos de texto (si el volcado falla, quedan igual); al final se vuelve a copiar el log con las lineas del volcado
     auto copyAll = [&]() {
         if (g_log) fflush(g_log);
@@ -367,13 +366,14 @@ static void WriteCrashDump(EXCEPTION_POINTERS* ep) {
     };
     copyAll();
     if (s_mdwd) {
-        HANDLE h = CreateFileW((dir + L"cierre.dmp").c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        HANDLE h = CreateFileW((dir + (hang ? L"congelado.dmp" : L"cierre.dmp")).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (h != INVALID_HANDLE_VALUE) {
             // MiniDumpWithDataSegs 0x1 | WithFullMemory 0x2 | WithHandleData 0x4 | WithUnloadedModules 0x20 | WithIndirectlyReferencedMemory 0x40
             // | WithPrivateReadWriteMemory 0x200 | WithFullMemoryInfo 0x800 | WithThreadInfo 0x1000
             int type = 0x1 | 0x4 | 0x20 | 0x40 | 0x800 | 0x1000;
             type |= g_cfg.optCrashDump >= 2 ? 0x2 : 0x200;
             DumpJob j{ h, { GetCurrentThreadId(), ep, FALSE }, type, FALSE, 0 };
+            j.hasExc = ep != nullptr;
             HANDLE t = CreateThread(nullptr, 0, DumpThread, &j, 0, nullptr);
             if (t) { WaitForSingleObject(t, 120000); CloseHandle(t); } else DumpThread(&j);
             LARGE_INTEGER sz{}; GetFileSizeEx(h, &sz); CloseHandle(h);
@@ -382,6 +382,47 @@ static void WriteCrashDump(EXCEPTION_POINTERS* ep) {
         } else if (g_log) fprintf(g_log, "    cierre.dmp: no se pudo crear (error %lu)\n", GetLastError());
     } else if (g_log) fprintf(g_log, "    cierre.dmp: dbghelp.dll no disponible\n");
     copyAll();
+}
+
+static void WriteCrashDump(EXCEPTION_POINTERS* ep) {
+    static std::atomic<int> once{0};
+    if (once++ || g_cfg.optCrashDump <= 0 || g_cfg.baseDir.empty()) return;
+    WriteDumpTo(ep, false);
+}
+
+// ---------------------------------------------------------------- (08/11 c) vigia de congelamientos
+// Cuelgues del editor 07:54 / 09:08: el juego quedo congelado sin cerrarse y el volcado hubo que sacarlo a mano. Un hilo mira el
+// numero de cuadro (Present): si no avanza en [PES21FX] congelado_seg segundos (0 = apagado) con la ventana del juego sin
+// minimizar, anota en el log que hilos del juego estan vivos y escribe PES21FX\cierres\<fecha>_congelado\ (congelado.dmp con el
+// nivel de crash_dump + logs + ini). Una vez por sesion; si el juego vuelve a dibujar se anota cuanto duro.
+static BOOL CALLBACK FindGameWnd(HWND w, LPARAM lp) {
+    DWORD pid = 0; GetWindowThreadProcessId(w, &pid);
+    if (pid == GetCurrentProcessId() && IsWindowVisible(w) && !GetWindow(w, GW_OWNER)) { *(HWND*)lp = w; return FALSE; }
+    return TRUE;
+}
+static DWORD WINAPI HangWatch(LPVOID) {
+    int last = -1; ULONGLONG since = GetTickCount64(); bool dumped = false, reported = false;
+    for (;;) {
+        Sleep(1000);
+        const int secs = g_cfg.optHangSec;
+        const int n = PresentNo();
+        const ULONGLONG now = GetTickCount64();
+        if (n != last) {
+            if (reported && last > 0) Log("vigia: el juego volvio a dibujar despues de %.1f s congelado", (now - since) / 1000.0);
+            last = n; since = now; reported = false; continue;
+        }
+        if (secs <= 0 || n < 300) continue;   // apagado, o todavia arrancando (pantallas de carga)
+        HWND w = nullptr; EnumWindows(FindGameWnd, (LPARAM)&w);
+        if (!w || IsIconic(w)) { since = now; continue; }   // minimizado: no dibuja y esta bien
+        if (reported || now - since < (ULONGLONG)secs * 1000) continue;
+        reported = true;
+        Log("CONGELADO: sin cuadros nuevos desde hace %d s (ultimo cuadro %d)%s", secs, n, dumped ? " - ya se guardo un volcado en esta sesion" : "");
+        if (!dumped && g_cfg.optCrashDump > 0 && !g_cfg.baseDir.empty()) { dumped = true; WriteDumpTo(nullptr, true); Log("vigia: volcado del congelamiento listo: ya se puede cerrar el juego"); }
+    }
+}
+void StartHangWatch() {
+    if (HANDLE t = CreateThread(nullptr, 0, HangWatch, nullptr, 0, nullptr)) CloseHandle(t);
+    Log("vigia de congelamientos: %d s sin cuadros -> volcado en PES21FX\\cierres\\<fecha>_congelado\\", g_cfg.optHangSec);
 }
 
 static LPTOP_LEVEL_EXCEPTION_FILTER s_prevFilter = nullptr;
@@ -427,6 +468,7 @@ static int InitMod() {
     if (!fx::g_cfg.optHooks) { fx::Log("hooks = 0: el mod queda cargado pero sin ganchos (prueba)"); return 2; }
     if (!fx::InstallHooks()) { fx::Log("ERROR: no se pudieron instalar los ganchos de D3D11"); return 0; }
     fx::Log("ganchos instalados");
+    fx::StartHangWatch();   // (08/11 c) congelamientos: volcado automatico
     fx::PanelStart(fx::g_cfg.panelPort);   // (08/11) panel en vivo: HTTP en 127.0.0.1 (panel.cpp)
     fx::MemWatchStart();   // (26/10) liberador de memoria del juego + VirtualProtect/VirtualFree (memwatch.cpp)
     if (fx::DiagOn(2)) fx::CodeWatchStart();

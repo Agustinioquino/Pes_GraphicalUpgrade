@@ -170,6 +170,7 @@ static bool LoadConfigLocked() {
             else if (kl == "export_hooks") c.optExports = atoi(v.c_str()) != 0;
             else if (kl == "orphan_fix") c.optOrphan = atoi(v.c_str()) != 0;
             else if (kl == "crash_dump") c.optCrashDump = atoi(v.c_str());
+            else if (kl == "congelado_seg") c.optHangSec = atoi(v.c_str());
             else if (kl == "dump_switcher") c.optDump = atoi(v.c_str()) != 0;
             else if (kl == "memoria_arreglo") c.memFix = atoi(v.c_str());
             else if (kl == "memoria_vigilar") c.memWatch = atoi(v.c_str()) != 0;

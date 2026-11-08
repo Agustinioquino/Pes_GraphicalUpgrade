@@ -15,6 +15,7 @@
 #include <MinHook.h>
 #include <windows.h>
 #include <atomic>
+#include <intrin.h>
 
 namespace fx {
 
@@ -36,6 +37,11 @@ typedef void (*FreeFn)(long long);
 static BeginFn o_begin; static FinishFn o_finish; static GetFn o_get; static FreeFn o_free;
 
 
+// (08/11 c) quien empezo a grabar cada entrada (para saber quien deja el lock tomado): tabla chica por direccion de la entrada
+struct Owner { long long node; DWORD tid; ULONGLONG t; void* ret; };
+static Owner s_own[1024];
+static Owner* OwnerSlot(long long node) { return &s_own[(node >> 5) & 1023]; }
+
 static void Acquire(long long node, const char* who) {
     volatile long* lk = (volatile long*)(node + 0x18);
     if (InterlockedExchangeAdd(lk, 1) == 0) return;
@@ -47,8 +53,13 @@ static void Acquire(long long node, const char* who) {
             QueryPerformanceCounter(&t);
             if ((double)(t.QuadPart - t0.QuadPart) / (double)f.QuadPart > kMaxWait) {
                 int n = ++s_forced;
-                if (n <= 20) Log("listas del juego: %s: la entrada %p (serie %08x) tenia el lock tomado hace mas de %.0f s (lista %p): se toma igual (antes el juego quedaba congelado) [%d]",
-                    who, (void*)node, *(unsigned*)(node + 0xc), kMaxWait, *(void**)(node + 0x10), n);
+                if (n <= 20) {
+                    const Owner o = *OwnerSlot(node);
+                    Log("listas del juego: %s: la entrada %p (serie %08x) tenia el lock tomado hace mas de %.0f s (lista %p): se toma igual (antes el juego quedaba congelado) [%d]",
+                        who, (void*)node, *(unsigned*)(node + 0xc), kMaxWait, *(void**)(node + 0x10), n);
+                    if (o.node == node) Log("    la empezo a grabar el hilo %lu hace %.1f s desde PES2021+0x%llx (y nunca llego a FinishCommandList)", o.tid, (GetTickCount64() - o.t) / 1000.0, (unsigned long long)((uintptr_t)o.ret - 0x140000000ull));
+                    else Log("    no se vio quien la empezo a grabar");
+                }
                 InterlockedExchange(lk, 1);
                 return;
             }
@@ -59,6 +70,7 @@ static void ReleaseLk(long long node) { InterlockedExchange((volatile long*)(nod
 
 static long long hk_begin(long long node) {   // = FUN_141ff6560: toma el lock (lo deja tomado) y suelta la lista vieja
     Acquire(node, "empezar a grabar");
+    *OwnerSlot(node) = Owner{ node, GetCurrentThreadId(), GetTickCount64(), _ReturnAddress() };
     IUnknown* l = *(IUnknown**)(node + 0x10);
     if (l) { l->Release(); *(void**)(node + 0x10) = nullptr; }
     return 0;
