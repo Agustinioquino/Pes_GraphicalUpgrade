@@ -108,11 +108,12 @@ static void Gesture(uint32_t i, double t, float mood, float* out) {   // out[0..
         out[2] += (eb * (2.0f - asym) - out[2]) * k;
     }
     // (08/11 c) capa de cuerpo: x cuanto levanta / agita los brazos, y fase del agitado, z salto (m), w brazo (-1 der, 0 ambos, 1 izq)
-    float bx = 0, by = 0, bz = 0, bw = 0;
+    float bx = 0, bz = 0, bw = 0;
+    double by = 0;   // fase en double: se manda envuelta en [0, 2pi) (en float, con el reloj grande, saltaba)
     float hb = Hash01(i * 613u + 41u);
     float side = hb < 0.6f ? 0.0f : (hb < 0.8f ? 1.0f : -1.0f);
     if (mood > 1.0f && Hash01(g * 977u + 5u) < 0.35f) {          // tribuna caliente: algunos bloques cantan con los brazos
-        bx = 0.35f * sing * (mood - 1.0f); by = (float)(kTau * (t * gTempo * 0.5)) + kTau * gPhase; bw = side;
+        bx = 0.35f * sing * (mood - 1.0f); by = kTau * (t * gTempo * 0.5) + kTau * gPhase; bw = side;
     }
     if (ev) {
         float age = (float)(t - s_evT.load(std::memory_order_relaxed));
@@ -120,12 +121,12 @@ static void Gesture(uint32_t i, double t, float mood, float* out) {   // out[0..
         float env = age < 0 ? 0.0f : Smooth(0.0f, 0.35f, age - 0.7f * my) * (1.0f - Smooth(dur * 0.55f, dur, age));
         if (ev == kEvGol && Hash01(g * 53u + s_evSeed.load(std::memory_order_relaxed)) < 0.68f) {
             float f = 1.8f + 0.6f * Hash01(i * 131u + 3u);
-            bx = env * (0.8f + 0.2f * hb); by = (float)(kTau * (t * (2.5 + 1.5 * my))); bw = side;
+            bx = env * (0.8f + 0.2f * hb); by = kTau * (t * (2.5 + 1.5 * my)); bw = side;
             bz = env * (0.04f + 0.04f * my) * fabsf(sinf((float)(3.14159265 * t * f) + kTau * my));
         } else if ((ev == kEvFalta || ev == kEvOffside) && Hash01(i * 31u + 7u) < 0.4f) {
-            bx = 0.55f * env; by = (float)(kTau * t * 5.5) + kTau * my; bw = hb < 0.5f ? 1.0f : -1.0f;      // puno arriba
+            bx = 0.55f * env; by = kTau * t * 5.5 + kTau * my; bw = hb < 0.5f ? 1.0f : -1.0f;      // puno arriba
         } else if (ev == kEvCorner && Hash01(i * 19u + 3u) < 0.3f) {
-            bx = 0.3f * env; by = (float)(kTau * t * 1.2); bw = 0.0f;
+            bx = 0.3f * env; by = kTau * t * 1.2; bw = 0.0f;
         }
     }
     // (08/11 d) SIN CAMISETA (hinchada sudamericana): con el correr del partido, el animo y los goles, cada vez mas hinchas de
@@ -138,10 +139,10 @@ static void Gesture(uint32_t i, double t, float mood, float* out) {   // out[0..
     if (shirtless && Hash01(i * 37u + 9u) < 0.45f) {
         bool goalNow = ev == kEvGol && (float)(t - s_evT.load(std::memory_order_relaxed)) < 11.0f;
         float swing = goalNow ? 1.0f : (hot ? Smooth(0.45f, 0.7f, sing) : 0.0f);
-        if (swing > 0.01f) { bx = swing; by = (float)(kTau * t * (1.4 + 0.9 * my)); bw = hb < 0.7f ? -2.0f : 2.0f; }   // la mayoria con la derecha
+        if (swing > 0.01f) { bx = swing; by = kTau * t * (1.4 + 0.9 * my); bw = hb < 0.7f ? -2.0f : 2.0f; }   // la mayoria con la derecha
     }
-    if (shirtless) bw += 10.0f;
-    out[4] = bx; out[5] = by; out[6] = bz; out[7] = bw;
+    if (shirtless) { bw += 10.0f; if (bx <= 0.0f) by = kTau * t * (0.7 + 0.5 * my); }   // remera en la mano: ondea igual
+    out[4] = bx; out[5] = (float)fmod(by, (double)kTau); out[6] = bz; out[7] = bw;
 }
 
 // (08/11 b) lo llama rastro.cpp al final de cada tick del partido (solo lectura de MatchInfo): detecta gol, falta, offside y
