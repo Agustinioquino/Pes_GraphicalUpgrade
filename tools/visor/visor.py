@@ -105,13 +105,37 @@ def api_ls(ruta):
         except OSError: pass
     return {'ruta': ruta, 'carpetas': carpetas, 'archivos': archivos}
 
+# (08/11) categorias por extension (Fox Engine / PES 2021 / mod). La pagina tiene un filtro por categoria con icono y color.
+CATEGORIAS = {
+    'modelo': ('.fmdl', '.fv2', '.fcnp', '.frdv', '.fmdlb'),
+    'textura': ('.ftex', '.ftexs', '.dds', '.tga'),
+    'imagen': ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp'),
+    'animacion': ('.gani', '.mtar', '.mtard', '.evf', '.sand', '.mog', '.gpfp'),
+    'esqueleto': ('.ask', '.frig', '.gskl', '.skl', '.fsk'),
+    'material': ('.fmtt', '.fmtr', '.mtl', '.fsml'),
+    'escena': ('.fox2', '.fsd', '.lba', '.fdes', '.fstb', '.fsop', '.frl', '.frld'),
+    'fisica': ('.clo', '.fclo', '.geom', '.ph', '.phsd', '.tgt', '.bnd', '.pftxs_ph', '.fcol'),
+    'efecto': ('.vfxlb', '.vfx', '.fxp', '.parts', '.fpd', '.vfxdb'),
+    'shader': ('.hlsl', '.hlsli', '.fx', '.fxo', '.cso', '.fsfx'),
+    'script': ('.lua', '.fsm', '.py', '.bat', '.ps1'),
+    'audio': ('.sbp', '.awb', '.acb', '.wem', '.bnk', '.ogg', '.wav', '.mp3', '.sab'),
+    'video': ('.usm', '.bik', '.mp4', '.webm'),
+    'paquete': ('.cpk', '.fpk', '.fpkd', '.pftxs', '.zip', '.7z', '.rar'),
+    'texto': ('.ini', '.txt', '.md', '.json', '.xml', '.cfg', '.csv', '.log', '.yaml', '.yml'),
+    'idioma': ('.lng', '.lng2', '.subp', '.msg'),
+    'interfaz': ('.uia', '.uif', '.uilb', '.uigb', '.ttf', '.otf', '.ffnt'),
+    'datos': ('.bin', '.dat', '.db', '.sav', '.dmp', '.map'),
+    'programa': ('.dll', '.exe', '.asi', '.sys'),
+}
+_EXT = {e: c for c, es in CATEGORIAS.items() for e in es}
+
 def tipo_de(n):
     n = n.lower()
-    for ext, t in (('.fmdl', 'modelo'), ('.ftex', 'textura'), ('.dds', 'textura'), ('.png', 'imagen'), ('.jpg', 'imagen'), ('.gani', 'animacion'), ('.mtar', 'animacion'),
-                   ('.ask', 'esqueleto'), ('.frig', 'esqueleto'), ('.cpk', 'paquete'), ('.fpk', 'paquete'), ('.fpkd', 'paquete'), ('.ini', 'texto'), ('.lua', 'texto'),
-                   ('.log', 'texto'), ('.txt', 'texto'), ('.hlsl', 'texto'), ('.hlsli', 'texto'), ('.md', 'texto'), ('.json', 'texto'), ('.fmtr', 'material'), ('.fox2', 'fox2')):
-        if n.endswith(ext): return t
-    return ''
+    p = n.rfind('.')
+    if p < 0: return ''
+    t = _EXT.get(n[p:], '')
+    if not t and (n.endswith('.bak') or '.bak-' in n or '.antes' in n): t = 'respaldo'
+    return t
 
 def api_ls_archivo(ruta):
     """lista el contenido de un cpk / fpk como arbol virtual (un nivel por pedido)"""
@@ -317,6 +341,27 @@ class H(BaseHTTPRequestHandler):
         self.send_header('Cache-Control', 'no-store'); self.send_header('Access-Control-Allow-Origin', 'http://127.0.0.1:%d' % ARGS.panel)
         for k, v in (extra or {}).items(): self.send_header(k, v)
         self.end_headers(); self.wfile.write(body)
+    def do_POST(self):
+        try:
+            p = urllib.parse.urlsplit(self.path).path
+            org = self.headers.get('Origin')
+            if org and org not in ('http://127.0.0.1:%d' % ARGS.puerto, 'http://localhost:%d' % ARGS.puerto, 'null'): raise Err(403, 'origen')
+            n = int(self.headers.get('Content-Length') or 0)
+            if n <= 0 or n > 64 << 20: raise Err(400, 'tamano')
+            body = self.rfile.read(n)
+            if p == '/api/captura':   # imagen del visor 3D (data URL png) -> <trabajo>\capturas
+                import base64
+                head, _, dat = body.partition(b',')
+                if not head.startswith(b'data:image/png;base64'): raise Err(400, 'se espera png')
+                d = os.path.join(ARGS.trabajo, 'capturas'); os.makedirs(d, exist_ok=True)
+                fp = os.path.join(d, time.strftime('escena_%Y%m%d_%H%M%S.png'))
+                open(fp, 'wb').write(base64.b64decode(dat))
+                return self._send(200, {'ruta': fp})
+            raise Err(404, 'no existe')
+        except Err as e:
+            self._send(e.code, {'error': e.msg})
+        except Exception as e:
+            self._send(500, {'error': '%s: %s' % (type(e).__name__, e)})
     def do_GET(self):
         try:
             u = urllib.parse.urlsplit(self.path); q = {k: v[0] for k, v in urllib.parse.parse_qs(u.query).items()}

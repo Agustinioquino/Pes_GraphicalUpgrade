@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pes Explorer NEM</title><link rel="icon" href="nem512.png">
+<title>Pes Explorer NEM</title><link rel="stylesheet" href="fonts/fonts.css"><link rel="icon" href="nem512.png">
 <style>
 :root{--bg:#070a0a;--bg2:#0d1512;--panel:rgba(16,28,22,.55);--panel2:rgba(22,38,30,.7);--line:rgba(212,175,55,.22);--line2:rgba(212,175,55,.45);--text:#eef3ee;--dim:#9fb0a4;--gold:#d9b84a;--gold2:#f3dc8a;--green:#2fcf7a;--green2:#7cf0ae;--ok:#3ddc84;--bad:#ef5350;--acc:var(--gold);--acc2:var(--green2);--r:14px}
 *{box-sizing:border-box}
@@ -94,6 +94,75 @@ img.tex{max-width:100%;image-rendering:pixelated;background:repeating-conic-grad
 ::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:rgba(217,184,74,.25);border-radius:10px;border:2px solid transparent;background-clip:padding-box}::-webkit-scrollbar-thumb:hover{background:rgba(217,184,74,.45);background-clip:padding-box}
 @media (max-width:900px){nav{width:64px}nav h1,nav button span,nav .est,nav .marca h1{display:none}nav .marca{justify-content:center;padding-bottom:8px}nav .marca img{width:40px;height:40px}nav button{justify-content:center;padding:10px 0}.fila{flex-direction:column}.hero{flex-direction:column;text-align:center}}
 
+/* ---- (08/11 b) "mas pro": fuente deportiva tipo PES (Saira Condensed para titulos y numeros, Barlow para texto), vidrio mas
+   marcado, fondo vivo y animaciones (respetando 'reducir movimiento' de Windows) ---- */
+:root{--fd:'Saira Condensed','Bahnschrift SemiCondensed','Arial Narrow',sans-serif;--ft:'Barlow','Segoe UI',system-ui,sans-serif}
+body{font-family:var(--ft);letter-spacing:.005em}
+h1,h2,h3,h4,nav button,button.b,.tag,.slider .v,.item .t,#estadoMotor,nav .modos button,.kv b{font-family:var(--fd)}
+nav h1{font-size:19px;font-weight:800;font-style:italic;text-transform:uppercase;letter-spacing:.04em}
+nav h1 small{font-style:normal;font-weight:600;letter-spacing:.28em}
+nav button{font-size:15px;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+.tuto h2,.hero h2{font-family:var(--fd);font-weight:800;font-style:italic;text-transform:uppercase;letter-spacing:.03em}
+.hero h2{font-size:34px}
+.caja h3{font-family:var(--fd);font-size:13px;font-weight:700;letter-spacing:.16em}
+.tarjeta h3{font-family:var(--fd);font-size:17px;font-weight:700;text-transform:uppercase;letter-spacing:.03em}
+button.b{font-weight:600;letter-spacing:.05em;text-transform:uppercase;font-size:13px}
+.grupo h4{font-family:var(--fd);font-size:15px;letter-spacing:.03em;text-transform:uppercase}
+.slider .v{font-size:14px;font-weight:600}
+/* fondo vivo: dos luces (verde y dorada) que se mueven despacio detras del vidrio */
+body::after{content:"";position:fixed;inset:-20%;pointer-events:none;z-index:-1;
+  background:radial-gradient(40% 35% at 20% 30%,rgba(47,207,122,.22),transparent 70%),radial-gradient(35% 30% at 80% 70%,rgba(217,184,74,.2),transparent 70%),radial-gradient(30% 25% at 60% 10%,rgba(60,140,255,.08),transparent 70%);
+  animation:luces 22s ease-in-out infinite alternate;filter:blur(20px)}
+@keyframes luces{0%{transform:translate(0,0) rotate(0)}50%{transform:translate(4%,-3%) rotate(6deg)}100%{transform:translate(-4%,3%) rotate(-5deg)}}
+/* vidrio con brillo de borde y reflejo */
+.caja,.grupo,.tarjeta,.tuto,nav{position:relative;background-clip:padding-box}
+.caja::before,.grupo::before,.tuto::before,nav::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  background:linear-gradient(135deg,rgba(255,255,255,.13),rgba(255,255,255,0) 35%,rgba(255,255,255,0) 65%,rgba(217,184,74,.08));mix-blend-mode:screen}
+.caja,.grupo,.tarjeta{backdrop-filter:blur(26px) saturate(1.7);-webkit-backdrop-filter:blur(26px) saturate(1.7)}
+/* entrada de cada seccion */
+section.on{animation:entrar .38s cubic-bezier(.2,.8,.2,1)}
+@keyframes entrar{from{opacity:0;transform:translateY(10px) scale(.995);filter:blur(3px)}to{opacity:1;transform:none;filter:none}}
+section.on .tarjeta,section.on .grupo,section.on .caja{animation:subir .5s cubic-bezier(.2,.8,.2,1) both}
+section.on .tarjetas .tarjeta:nth-child(2){animation-delay:.04s}section.on .tarjetas .tarjeta:nth-child(3){animation-delay:.08s}section.on .tarjetas .tarjeta:nth-child(4){animation-delay:.12s}
+section.on .tarjetas .tarjeta:nth-child(5){animation-delay:.16s}section.on .tarjetas .tarjeta:nth-child(6){animation-delay:.2s}section.on .tarjetas .tarjeta:nth-child(7){animation-delay:.24s}section.on .tarjetas .tarjeta:nth-child(8){animation-delay:.28s}
+@keyframes subir{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+/* reflejo que cruza al pasar el mouse */
+.tarjeta,button.b,nav button{overflow:hidden}
+.tarjeta>*,button.b>*{position:relative}
+.tarjeta::before,button.b::before{content:"";position:absolute;top:0;left:-60%;width:40%;height:100%;pointer-events:none;
+  background:linear-gradient(100deg,transparent,rgba(255,255,255,.22),transparent);transform:skewX(-20deg);transition:left .6s ease}
+.tarjeta:hover::before,button.b:hover::before{left:130%}
+.tarjeta .ico{font-size:26px;display:inline-block;margin-bottom:6px;filter:drop-shadow(0 4px 10px rgba(217,184,74,.35));transition:transform .3s}
+.tarjeta:hover .ico{transform:scale(1.15) rotate(-6deg)}
+/* boton activo de la barra: brillo que respira */
+nav button.on{animation:respira 3.2s ease-in-out infinite}
+@keyframes respira{0%,100%{box-shadow:0 4px 16px rgba(217,184,74,.12),inset 0 0 0 1px rgba(255,255,255,.04)}50%{box-shadow:0 4px 24px rgba(217,184,74,.32),inset 0 0 0 1px rgba(255,255,255,.08)}}
+nav .marca img{transition:transform .6s cubic-bezier(.2,.8,.2,1)}nav .marca:hover img{transform:rotate(-8deg) scale(1.06)}
+/* lista: aparicion escalonada */
+.lista .item{animation:item .3s ease both}
+@keyframes item{from{opacity:0;transform:translateX(-6px)}to{opacity:1;transform:none}}
+/* luces de estado con pulso */
+nav .est b.ok{animation:pulso 2s ease-in-out infinite}
+@keyframes pulso{0%,100%{box-shadow:0 0 6px var(--ok)}50%{box-shadow:0 0 14px var(--ok),0 0 2px #fff}}
+/* switches y sliders mas pro */
+input[type=range]{height:22px}
+.sw{transition:background .25s,box-shadow .25s}.sw::after{transition:left .25s cubic-bezier(.2,.8,.2,1.3),background .2s}
+#toast{animation:toast .3s cubic-bezier(.2,.8,.2,1)}@keyframes toast{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+/* chips de categorias del explorador */
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:4px 11px;border-radius:20px;font:600 13px/1.3 var(--fd);letter-spacing:.04em;text-transform:uppercase;cursor:pointer;
+  border:1px solid var(--line);background:rgba(255,255,255,.04);color:var(--dim);transition:all .18s;backdrop-filter:blur(10px)}
+.chip:hover{color:var(--text);border-color:var(--c,var(--gold));transform:translateY(-1px)}
+.chip.on{color:#fff;border-color:var(--c,var(--gold));background:color-mix(in srgb,var(--c,var(--gold)) 28%,transparent);box-shadow:0 0 16px color-mix(in srgb,var(--c,var(--gold)) 35%,transparent)}
+.chip .n{opacity:.7;font-weight:500}
+.tag{font-family:var(--fd);text-transform:uppercase;letter-spacing:.05em;color:var(--c,var(--gold2));border-color:color-mix(in srgb,var(--c,var(--gold)) 45%,transparent);background:color-mix(in srgb,var(--c,var(--gold)) 16%,transparent)}
+.item .ic{width:22px;text-align:center;flex-shrink:0}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+body.motor::after{opacity:.35}
+body.motor section.on{animation-duration:.18s}
+body.motor nav button.on{animation:none}
+body.motor h1,body.motor .tuto h2{font-style:normal}
+
 /* ---- modos: Simple (por defecto) y Motor (editor de motor de juego) ---- */
 nav .modos{display:flex;gap:4px;padding:0 4px 10px;border-bottom:1px solid var(--line);margin-bottom:6px}
 nav .modos button{flex:1;justify-content:center;padding:6px 4px;font-size:12px;margin:0;border:1px solid var(--line);background:rgba(0,0,0,.25)}
@@ -107,6 +176,8 @@ body.motor nav .av{display:flex!important}
 body.motor .tarjeta.av{display:block!important}
 body.motor .chk.av{display:flex!important}
 body.motor .col.av{display:flex!important}
+body.motor .slider.av{display:grid!important}
+body:not(.motor) #edInspector{display:none}
 body.motor #estadoMotor{display:flex!important}
 body.motor{--bg:#0b0c0e;--panel:rgba(24,26,30,.82);--line:rgba(255,255,255,.09);--line2:rgba(217,184,74,.5);--r:6px;--text:#e4e6ea;--dim:#8e949e;font-size:13px;
   background:linear-gradient(180deg,#121417,#0a0b0d)}
@@ -142,6 +213,38 @@ body.motor .mini{font-size:11px}
 body.motor .tuto li{margin:1px 0}
 body.motor nav .marca img{width:40px;height:40px;box-shadow:none}
 body.motor nav h1{font-size:13px}
+
+/* ---------- editor 3D ---------- */
+.editor{display:grid;grid-template-columns:1fr 330px;gap:10px;flex:1;min-height:0}
+.ed-izq{display:none}
+.ed-centro{display:flex;flex-direction:column;gap:8px;min-width:0;min-height:0}
+.ed-tool{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.grupoB{display:flex;gap:4px;align-items:center}
+.ed-vista{position:relative;flex:1;min-height:360px}
+.ed-vista canvas.tres{position:absolute;inset:0}
+.ed-stats,.ed-hud{position:absolute;pointer-events:none;font:11px/1.35 ui-monospace,Consolas,monospace;color:#dfe7df;background:rgba(5,8,10,.55);border:1px solid var(--line);border-radius:6px;padding:5px 8px;white-space:pre;backdrop-filter:blur(6px)}
+.ed-stats{top:8px;left:8px}.ed-hud{bottom:8px;left:8px}.ed-hud:empty,.ed-stats:empty{display:none}
+.ed-consola{display:none}
+.ed-consola pre{height:110px;overflow:auto;margin:0}
+.ed-der{overflow:auto}
+.tabs{display:none;gap:2px;margin:-2px 0 8px}
+.tab{flex:1;background:transparent;border:1px solid var(--line);color:var(--dim);padding:5px 6px;border-radius:4px;cursor:pointer;font:inherit;font-size:12px}
+.tab.on{background:#2a2e36;color:var(--gold2);border-color:var(--line2)}
+.campos{display:grid;grid-template-columns:repeat(3,1fr);gap:4px 6px;margin:6px 0}
+.campos .campo{display:flex;flex-direction:column;gap:2px;font-size:11px;color:var(--dim);margin:0}
+.campos input{width:100%;min-width:0;padding:3px 5px}
+.campo{display:grid;grid-template-columns:110px 1fr 44px;gap:6px;align-items:center;font-size:12px;margin:3px 0}
+body.motor button.b.t.on{background:var(--gold);color:#111}
+button.b.t{min-width:30px;padding:4px 8px}button.b.t.on{background:var(--gold);color:#111}
+.nodo{padding:2px 6px;border-radius:3px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px}
+.nodo:hover{background:rgba(255,255,255,.06)}.nodo.on{background:rgba(217,184,74,.22);color:var(--gold2)}
+body.motor .editor{grid-template-columns:220px 1fr 340px;gap:6px}
+body.motor .ed-izq{display:flex}
+body.motor .ed-consola{display:block}
+body.motor .tabs{display:flex!important}
+body.motor .ed-der [data-panel]{display:none}body.motor .ed-der [data-panel].on{display:block}
+body.motor #s-modelo .tuto{display:none}
+@media (max-width:1100px){.editor,body.motor .editor{grid-template-columns:1fr}.ed-izq{display:none!important}}
 </style>
 </head>
 <body>
@@ -177,14 +280,14 @@ body.motor nav h1{font-size:13px}
     </div>
   </div>
   <div class="tarjetas">
-    <div class="tarjeta" data-ir="archivos"><h3>📁 Archivos</h3><p>Navegar la carpeta del juego, abrir los .cpk y .fpk como carpetas, buscar por nombre y extraer lo que haga falta.</p></div>
-    <div class="tarjeta" data-ir="modelo"><h3>🧊 Escena 3D</h3><p>Cargar un .fmdl (cara, cuerpo, pelota, botín), verlo con texturas, huesos y pesos, mover la luz y la cámara, comparar con otro modelo.</p></div>
-    <div class="tarjeta" data-ir="textura"><h3>🖼 Texturas</h3><p>Ver .ftex / .dds con cada canal por separado (R G B A), las mips, y el mapa de normales reconstruido.</p></div>
-    <div class="tarjeta" data-ir="anim"><h3>🎞 Animaciones</h3><p>Abrir un .gani de la cara con su .ask / .frig y ver las curvas de cada hueso cuadro a cuadro.</p></div>
-    <div class="tarjeta" data-ir="panel"><h3>🎛 Panel en vivo</h3><p>Con el juego abierto: todas las tarjetas del menú con sus sliders, buscar cualquier fila del ini, A/B al instante, guardar y recargar.</p></div>
-    <div class="tarjeta" data-ir="camara"><h3>🎥 Cámara</h3><p>Ver dónde está la cámara del juego, poner la cámara libre en una pose exacta, guardar poses con nombre y sacar capturas.</p></div>
-    <div class="tarjeta" data-ir="log"><h3>📜 Log</h3><p>PES21FX.log en vivo con filtro por palabra (sol, pasto, camara, cierre...).</p></div>
-    <div class="tarjeta av" data-ir="hash"><h3>#️⃣ Hashes</h3><p>StrCode32 de Fox Engine: nombre de hueso ↔ hash, para leer los volcados de la DLL y los .frig / .mtar.</p></div>
+    <div class="tarjeta" data-ir="archivos"><span class="ico">📁</span><h3>Archivos</h3><p>Navegar la carpeta del juego, abrir los .cpk y .fpk como carpetas, buscar por nombre y extraer lo que haga falta.</p></div>
+    <div class="tarjeta" data-ir="modelo"><span class="ico">🧊</span><h3>Escena 3D</h3><p>Cargar un .fmdl (cara, cuerpo, pelota, botín), verlo con texturas, huesos y pesos, mover la luz y la cámara, comparar con otro modelo.</p></div>
+    <div class="tarjeta" data-ir="textura"><span class="ico">🖼</span><h3>Texturas</h3><p>Ver .ftex / .dds con cada canal por separado (R G B A), las mips, y el mapa de normales reconstruido.</p></div>
+    <div class="tarjeta" data-ir="anim"><span class="ico">🎞</span><h3>Animaciones</h3><p>Abrir un .gani de la cara con su .ask / .frig y ver las curvas de cada hueso cuadro a cuadro.</p></div>
+    <div class="tarjeta" data-ir="panel"><span class="ico">🎛</span><h3>Panel en vivo</h3><p>Con el juego abierto: todas las tarjetas del menú con sus sliders, buscar cualquier fila del ini, A/B al instante, guardar y recargar.</p></div>
+    <div class="tarjeta" data-ir="camara"><span class="ico">🎥</span><h3>Cámara</h3><p>Ver dónde está la cámara del juego, poner la cámara libre en una pose exacta, guardar poses con nombre y sacar capturas.</p></div>
+    <div class="tarjeta" data-ir="log"><span class="ico">📜</span><h3>Log</h3><p>PES21FX.log en vivo con filtro por palabra (sol, pasto, camara, cierre...).</p></div>
+    <div class="tarjeta av" data-ir="hash"><span class="ico">#️⃣</span><h3>Hashes</h3><p>StrCode32 de Fox Engine: nombre de hueso ↔ hash, para leer los volcados de la DLL y los .frig / .mtar.</p></div>
   </div>
   <p class="mini" id="infoVisor" style="margin-top:14px"></p>
 </section>
@@ -203,6 +306,7 @@ body.motor nav h1{font-size:13px}
     <button class="b" id="aIr">Ir</button>
     <input type="search" id="aBuscar" placeholder="buscar dentro del cpk / fpk...">
   </div>
+  <div class="chips" id="aChips"></div>
   <div class="fila">
     <div class="col caja" style="flex:1"><div class="lista" id="aLista"></div></div>
     <div class="col caja" style="width:340px;flex-shrink:0"><h3>Detalle</h3><div id="aDetalle" class="mini">Elegí un archivo.</div></div>
@@ -212,52 +316,92 @@ body.motor nav h1{font-size:13px}
 <!-- ============================ ESCENA 3D ============================ -->
 <section id="s-modelo">
   <div class="tuto" data-t="modelo"><span class="cerrar">cerrar ✕</span><h2>Escena 3D</h2>
-    <ul><li>Cargá un <b>.fmdl</b> desde Archivos (o pegá la ruta abajo). Se puede sumar más de un modelo a la escena (cara + cuerpo + pelota) y mover cada uno.</li>
-    <li><b>Botón izquierdo</b> gira, <b>rueda</b> acerca, <b>botón derecho</b> desplaza. <b>Encuadrar</b> centra el modelo.</li>
-    <li>Luz: los presets <b>Día / Tarde / Noche / Estudio</b> imitan la luz de prueba del editor (filas 297 / 298 del ini). Movés el sol con los sliders de altura y rumbo.</li>
-    <li>Texturas: el .fmdl dice qué texturas usa (lista "Texturas del modelo"). Si están en el mismo cpk, se cargan solas; si no, elegí una desde Archivos con el botón "Usar como textura".</li>
-    <li><b>Huesos</b> dibuja el esqueleto; al elegir un hueso se pintan de color los vértices que pesa (sirve para las expresiones y la boca por huesos). <b>Alambre</b> muestra la malla.</li>
-    <li>Recordá la regla fija: nada de esto modifica archivos del juego; es solo para mirar y probar.</li></ul>
+    <ul><li>Cargá un <b>.fmdl</b> desde Archivos (o pegá la ruta abajo). Se puede sumar más de un modelo (cara + cuerpo + pelota). Sin modelo, la escena trae un <b>maniquí</b> y una pelota para probar la luz.</li>
+    <li><b>Botón izquierdo</b> gira, <b>rueda</b> acerca, <b>botón derecho</b> desplaza. <b>Encuadrar</b> (o tecla F) centra lo elegido.</li>
+    <li>Luz tipo PES: cielo físico, sol con sombras, cancha con el corte del césped y focos de noche. Presets <b>Partido día / Tarde / Noche con focos / Nublado / Estudio</b>. Con el juego abierto, <b>Luz del juego</b> copia la dirección del sol y el color del cielo del partido (filas 111 / 312 / 150).</li>
+    <li>En el modo <b>⚙ Motor</b> la escena se vuelve un editor: jerarquía a la izquierda, inspector a la derecha, gizmo para mover / rotar / escalar (teclas W / E / R), vistas (iluminado, sin luz, arcilla, normales, UV, pesos), cámaras (TV, cercana, frente, lado, arriba), estadísticas y consola.</li>
+    <li>Nada de esto modifica archivos del juego.</li></ul>
   </div>
   <div class="barra">
     <input type="text" id="mRuta" placeholder="ruta del .fmdl (disco o cpk!entrada)">
     <button class="b p" id="mCargar">Cargar</button>
     <button class="b" id="mSumar">Sumar a la escena</button>
-    <button class="b" id="mLimpiar">Vaciar escena</button>
+    <button class="b" id="mLimpiar">Vaciar</button>
     <button class="b" id="mEncuadrar">Encuadrar</button>
   </div>
-  <div class="fila">
-    <div class="col" style="flex:1;min-height:420px"><canvas class="tres" id="tres"></canvas></div>
-    <div class="col caja lista" style="width:330px;flex-shrink:0">
-      <h3>Luz y vista</h3>
-      <div class="barra"><button class="b" data-luz="dia">☀ Día</button><button class="b" data-luz="tarde">🌇 Tarde</button><button class="b" data-luz="noche">🌙 Noche</button><button class="b" data-luz="estudio">💡 Estudio</button></div>
-      <div class="slider"><label>Altura del sol</label><span class="v" id="vElev">45°</span><input type="range" id="lElev" min="-10" max="90" value="45"></div>
-      <div class="slider"><label>Rumbo del sol</label><span class="v" id="vAz">135°</span><input type="range" id="lAz" min="0" max="360" value="135"></div>
-      <div class="slider"><label>Intensidad del sol</label><span class="v" id="vSol">3.0</span><input type="range" id="lSol" min="0" max="8" step="0.1" value="3"></div>
-      <div class="slider"><label>Luz del cielo</label><span class="v" id="vCielo">0.6</span><input type="range" id="lCielo" min="0" max="3" step="0.05" value="0.6"></div>
-      <div class="slider"><label>Exposición</label><span class="v" id="vExp">1.0</span><input type="range" id="lExp" min="0.1" max="4" step="0.05" value="1"></div>
-      <div class="slider"><label>Campo de visión</label><span class="v" id="vFov">35°</span><input type="range" id="lFov" min="5" max="90" value="35"></div>
-      <div class="barra" style="margin-top:6px">
-        <label class="chk"><input type="checkbox" id="cAlambre"> Alambre</label>
-        <label class="chk"><input type="checkbox" id="cHuesos"> Huesos</label>
-        <label class="chk av"><input type="checkbox" id="cNormales"> Normales</label>
-        <label class="chk"><input type="checkbox" id="cPiso" checked> Piso</label>
-        <label class="chk"><input type="checkbox" id="cSombras" checked> Sombras</label>
+  <div class="editor">
+    <!-- jerarquia (solo Motor) -->
+    <div class="col caja av ed-izq">
+      <h3>Jerarquía</h3>
+      <div class="lista" id="edArbol"></div>
+      <h3 style="margin-top:8px">Recientes</h3>
+      <div class="lista" id="edRecientes" style="max-height:160px;flex:none"></div>
+    </div>
+    <!-- visor -->
+    <div class="ed-centro">
+      <div class="ed-tool">
+        <div class="grupoB av"><button class="b t on" data-gz="select" title="Elegir (Q)">⬚</button><button class="b t" data-gz="translate" title="Mover (W)">✥</button><button class="b t" data-gz="rotate" title="Rotar (E)">⟳</button><button class="b t" data-gz="scale" title="Escalar (R)">⤢</button></div>
+        <div class="grupoB"><select id="edVista" title="Modo de vista"><option value="lit">Iluminado</option><option value="unlit">Sin luz</option><option value="clay">Arcilla (solo luz)</option><option value="wire">Alambre</option><option value="normal" class="av">Normales</option><option value="uv" class="av">UV</option><option value="pesos">Pesos de hueso</option></select></div>
+        <div class="grupoB"><select id="edCam" title="Cámara"><option value="libre">Cámara libre</option><option value="tv">Cámara TV</option><option value="cerca">Cámara cercana</option><option value="frente">Frente</option><option value="lado">Lado</option><option value="arriba">Arriba</option></select></div>
+        <div class="grupoB"><button class="b" data-luz="dia">☀ Día</button><button class="b" data-luz="tarde">🌇 Tarde</button><button class="b" data-luz="noche">🏟 Noche</button><button class="b" data-luz="nublado">☁ Nublado</button><button class="b" data-luz="estudio">💡 Estudio</button></div>
+        <div class="grupoB" style="margin-left:auto"><label class="chk"><input type="checkbox" id="edLuzJuego"> Luz del juego</label><button class="b" id="edCaptura" title="Guardar la imagen del visor en B:\VisualPes21\capturas">📷</button></div>
       </div>
-      <h3 style="margin-top:10px">Modelos en la escena</h3>
-      <div id="mModelos" class="mini">Ninguno.</div>
-      <h3 style="margin-top:10px">Mallas</h3>
-      <div id="mMallas" class="mini"></div>
-      <h3 style="margin-top:10px" class="av">Texturas del modelo</h3>
-      <div id="mTexturas" class="mini av"></div>
-      <h3 style="margin-top:10px">Huesos <span class="mini" id="mNHuesos"></span></h3>
-      <input type="search" id="mHuesoBuscar" placeholder="filtrar huesos (skf_, sk_jaw...)" style="width:100%;margin-bottom:4px">
-      <div id="mHuesos" class="mini" style="max-height:260px;overflow:auto"></div>
+      <div class="ed-vista">
+        <canvas class="tres" id="tres"></canvas>
+        <div class="ed-stats av" id="edStats"></div>
+        <div class="ed-hud" id="edHud"></div>
+      </div>
+      <div class="caja av ed-consola"><h3>Consola</h3><pre id="edConsola"></pre></div>
+    </div>
+    <!-- inspector / luz -->
+    <div class="col caja lista ed-der">
+      <div class="tabs av"><button class="tab on" data-tab="entorno">Entorno</button><button class="tab" data-tab="objeto">Objeto</button><button class="tab" data-tab="huesos">Huesos</button></div>
+      <div data-panel="entorno">
+        <h3>Sol</h3>
+        <div class="slider"><label>Altura</label><span class="v" id="vElev">45°</span><input type="range" id="lElev" min="-12" max="90" step="0.5" value="45"></div>
+        <div class="slider"><label>Rumbo</label><span class="v" id="vAz">135°</span><input type="range" id="lAz" min="0" max="360" value="135"></div>
+        <div class="slider"><label>Intensidad</label><span class="v" id="vSol">3.0</span><input type="range" id="lSol" min="0" max="10" step="0.1" value="3"></div>
+        <div class="slider av"><label>Temperatura (0 = automática)</label><span class="v" id="vTemp">auto</span><input type="range" id="lTemp" min="0" max="9000" step="100" value="0"></div>
+        <div class="slider av"><label>Suavidad de la sombra</label><span class="v" id="vSuave">2</span><input type="range" id="lSuave" min="0" max="8" step="0.5" value="2"></div>
+        <div class="slider av"><label>Resolución de la sombra</label><span class="v" id="vSomRes">2048</span><input type="range" id="lSomRes" min="9" max="12" step="1" value="11"></div>
+        <h3 style="margin-top:8px">Cielo y ambiente</h3>
+        <div class="slider"><label>Luz del cielo (reflejos)</label><span class="v" id="vCielo">1.0</span><input type="range" id="lCielo" min="0" max="3" step="0.05" value="1"></div>
+        <div class="slider av"><label>Turbidez</label><span class="v" id="vTurb">4</span><input type="range" id="lTurb" min="1" max="20" step="0.1" value="4"></div>
+        <div class="slider av"><label>Rayleigh</label><span class="v" id="vRay">1.5</span><input type="range" id="lRay" min="0" max="4" step="0.05" value="1.5"></div>
+        <div class="slider av"><label>Bruma (niebla)</label><span class="v" id="vNiebla">0.004</span><input type="range" id="lNiebla" min="0" max="0.03" step="0.001" value="0.004"></div>
+        <div class="slider av"><label>Focos del estadio</label><span class="v" id="vFocos">0</span><input type="range" id="lFocos" min="0" max="12" step="0.1" value="0"></div>
+        <h3 style="margin-top:8px">Cámara e imagen</h3>
+        <div class="slider"><label>Exposición</label><span class="v" id="vExp">1.0</span><input type="range" id="lExp" min="0.1" max="3" step="0.02" value="1"></div>
+        <div class="slider"><label>Campo de visión</label><span class="v" id="vFov">35°</span><input type="range" id="lFov" min="5" max="90" value="35"></div>
+        <div class="barra" style="margin-top:6px">
+          <label class="chk"><input type="checkbox" id="cHuesos"> Huesos</label>
+          <label class="chk"><input type="checkbox" id="cPiso" checked> Cancha</label>
+          <label class="chk"><input type="checkbox" id="cSombras" checked> Sombras</label>
+          <label class="chk"><input type="checkbox" id="cManiqui" checked> Maniquí</label>
+          <label class="chk av"><input type="checkbox" id="cGrilla"> Grilla</label>
+          <label class="chk av"><input type="checkbox" id="cEjes"> Ejes</label>
+          <label class="chk av"><input type="checkbox" id="cNormales"> Normales (líneas)</label>
+          <label class="chk" style="display:none"><input type="checkbox" id="cAlambre"> Alambre</label>
+        </div>
+        <h3 style="margin-top:8px">Modelos en la escena</h3>
+        <div id="mModelos" class="mini">Ninguno.</div>
+      </div>
+      <div data-panel="objeto" class="av-panel">
+        <div id="edInspector" class="mini">Elegí algo en la jerarquía o hacé clic en el visor.</div>
+        <h3 style="margin-top:8px">Mallas</h3>
+        <div id="mMallas" class="mini"></div>
+        <h3 style="margin-top:10px">Texturas del modelo</h3>
+        <div id="mTexturas" class="mini"></div>
+      </div>
+      <div data-panel="huesos" class="av-panel">
+        <h3>Huesos <span class="mini" id="mNHuesos"></span></h3>
+        <input type="search" id="mHuesoBuscar" placeholder="filtrar huesos (skf_, sk_jaw...)" style="width:100%;margin-bottom:4px">
+        <div id="mHuesos" class="mini" style="max-height:420px;overflow:auto"></div>
+      </div>
     </div>
   </div>
 </section>
 
-<!-- ============================ TEXTURAS ============================ -->
 <section id="s-textura">
   <div class="tuto" data-t="textura"><span class="cerrar">cerrar ✕</span><h2>Texturas</h2>
     <ul><li>Abrí un <b>.ftex</b> o <b>.dds</b> desde Archivos. Se decodifica en la PC (DXT1 / DXT5 / RGBA8) y se muestra en PNG.</li>
@@ -402,8 +546,10 @@ body.motor nav h1{font-size:13px}
 </main>
 <div id="toast"></div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="lib/three.min.js"></script>
+<script src="lib/OrbitControls.js"></script>
+<script src="lib/TransformControls.js"></script>
+<script src="lib/Sky.js"></script>
 <script>
 // ---------------------------------------------------------------- base
 const VISOR = location.port === '21020' ? '' : 'http://127.0.0.1:21020';
@@ -439,20 +585,40 @@ setInterval(estado, 3000);
 
 // ---------------------------------------------------------------- archivos
 let aActual = '';
+// (08/11 b) categorias de archivo: icono, nombre y color (las mismas claves que CATEGORIAS de visor.py)
+const CATS = { modelo: ['🧊', 'Modelos', '#7cf0ae'], textura: ['🖼', 'Texturas', '#e2b6f0'], imagen: ['📷', 'Imágenes', '#f5a3c7'], animacion: ['🎞', 'Animación', '#ffc56b'],
+  esqueleto: ['🦴', 'Esqueletos', '#f0e6c8'], material: ['🎨', 'Materiales', '#ff9f80'], escena: ['🏟', 'Escenas Fox', '#6fd3ff'], fisica: ['🧵', 'Física / ropa', '#9fe8d4'],
+  efecto: ['✨', 'Efectos', '#ffe66b'], shader: ['🔆', 'Shaders', '#b0f06b'], script: ['📜', 'Scripts', '#8fb8ff'], audio: ['🔊', 'Audio', '#ff8fa3'], video: ['🎬', 'Video', '#c39bff'],
+  paquete: ['📦', 'Paquetes', '#b5dcff'], texto: ['📄', 'Texto / config', '#d6dde3'], idioma: ['🌐', 'Idiomas', '#a3e4ff'], interfaz: ['🖥', 'Interfaz / fuentes', '#ffd1a3'],
+  datos: ['💾', 'Datos', '#c7c7c7'], programa: ['⚙', 'Programas', '#ff7a7a'], respaldo: ['🗄', 'Respaldos', '#9aa0a6'], '': ['▫', 'Otros', '#8e949e'] };
+const icono = t => (CATS[t] || CATS[''])[0];
+let aDatos = null, aFiltro = localStorage.getItem('filtro') || '';
+function tagHtml(t) { const c = CATS[t] || CATS['']; return t ? `<span class="tag" style="--c:${c[2]}">${c[1]}</span>` : ''; }
+function filaArchivo(a, nombre) { const e = document.createElement('div'); e.className = 'item'; e.innerHTML = `<span class="ic">${icono(a.tipo)}</span><span>${nombre || a.nombre}</span>${tagHtml(a.tipo)}<span class="t">${fmtTam(a.tam)}</span>`; e.onclick = () => abrir(a, e); return e; }
+function pintarChips(archivos) {
+  const n = {}; for (const a of archivos) n[a.tipo] = (n[a.tipo] || 0) + 1;
+  const ks = Object.keys(CATS).filter(k => n[k]); if (aFiltro && !n[aFiltro]) aFiltro = '';
+  $('#aChips').innerHTML = `<span class="chip ${aFiltro ? '' : 'on'}" data-f="">Todo <span class="n">${archivos.length}</span></span>` + ks.map(k => `<span class="chip ${aFiltro === k ? 'on' : ''}" data-f="${k}" style="--c:${CATS[k][2]}">${CATS[k][0]} ${CATS[k][1]} <span class="n">${n[k]}</span></span>`).join('');
+  $$('#aChips .chip').forEach(c => c.onclick = () => { aFiltro = c.dataset.f; localStorage.setItem('filtro', aFiltro); pintarLista(); });
+}
+function pintarLista() {
+  const d = aDatos; if (!d) return; const L = $('#aLista'); L.innerHTML = '';
+  const arch = d.archivos || []; pintarChips(arch);
+  if (d.archivo) L.insertAdjacentHTML('beforeend', `<div class="mini" style="padding:4px 8px">${d.archivo} · ${d.total} entradas</div>`);
+  if (d.busqueda) L.insertAdjacentHTML('beforeend', `<div class="mini" style="padding:4px 8px">${d.n} resultados para "${d.busqueda}"</div>`);
+  for (const c of d.carpetas || []) { const e = document.createElement('div'); e.className = 'item'; e.innerHTML = `<span class="ic">📁</span><span>${c.nombre}</span>${c.n ? `<span class="t">${c.n}</span>` : ''}`; e.onclick = () => listar(c.ruta); L.appendChild(e); }
+  let i = 0; for (const a of arch) { if (aFiltro && a.tipo !== aFiltro) continue; const e = filaArchivo(a, d.busqueda ? a.ruta.split('!')[1] : null); if (i < 40) e.style.animationDelay = (i * 12) + 'ms'; else e.style.animation = 'none'; i++; L.appendChild(e); }
+  if (!L.querySelector('.item')) L.insertAdjacentHTML('beforeend', '<div class="mini" style="padding:8px">Vacío.</div>');
+}
 async function listar(ruta) {
   try {
     const d = await vis('/api/ls?ruta=' + enc(ruta)); aActual = d.ruta; $('#aRuta').value = d.ruta; localStorage.setItem('ruta', d.ruta);
-    const L = $('#aLista'); L.innerHTML = '';
-    if (d.archivo) L.insertAdjacentHTML('beforeend', `<div class="mini" style="padding:4px 8px">${d.archivo} · ${d.total} entradas</div>`);
-    for (const c of d.carpetas) { const e = document.createElement('div'); e.className = 'item'; e.innerHTML = `📁 <span>${c.nombre}</span>${c.n ? `<span class="t">${c.n}</span>` : ''}`; e.onclick = () => listar(c.ruta); L.appendChild(e); }
-    for (const a of d.archivos) { const e = document.createElement('div'); e.className = 'item'; e.innerHTML = `${icono(a.tipo)} <span>${a.nombre}</span>${a.tipo ? `<span class="tag ${a.tipo}">${a.tipo}</span>` : ''}<span class="t">${fmtTam(a.tam)}</span>`; e.onclick = () => abrir(a, e); L.appendChild(e); }
-    if (!d.carpetas.length && !d.archivos.length) L.innerHTML = '<div class="mini" style="padding:8px">Vacío.</div>';
+    aDatos = d; pintarLista();
   } catch (e) { toast('No se pudo listar: ' + e.message, true); }
 }
-const icono = t => ({ modelo: '🧊', textura: '🖼', imagen: '🖼', animacion: '🎞', esqueleto: '🦴', paquete: '📦', texto: '📄', material: '🎨' }[t] || '▫');
 function abrir(a, el) {
   $$('#aLista .item.sel').forEach(x => x.classList.remove('sel')); el && el.classList.add('sel');
-  $('#aDetalle').innerHTML = `<div class="ruta">${a.ruta}</div><div style="margin:6px 0">${fmtTam(a.tam)} · ${a.tipo || 'desconocido'}</div>
+  $('#aDetalle').innerHTML = `<div class="ruta">${a.ruta}</div><div style="margin:6px 0;display:flex;gap:8px;align-items:center"><span style="font-size:22px">${icono(a.tipo)}</span>${tagHtml(a.tipo) || '<span class="tag">otro</span>'}<span class="mini">${fmtTam(a.tam)}</span></div>
     <div class="barra"><button class="b" id="dAbrir">Abrir</button><button class="b" id="dExtraer">Extraer</button><button class="b av" id="dHex">Hex</button><button class="b" id="dTex">Usar como textura</button></div><div id="dExtra" class="mini"></div>`;
   $('#dAbrir').onclick = () => abrirEn(a);
   $('#dExtraer').onclick = async () => { try { const r = await vis('/api/extraer?ruta=' + enc(a.ruta)); $('#dExtra').innerHTML = `Extraído en:<div class="ruta">${r.ruta}</div>`; } catch (e) { toast(e.message, true); } };
@@ -468,7 +634,7 @@ function abrirEn(a) {
   else if (t === 'animacion' && r.toLowerCase().endsWith('.gani')) { $('#gRuta').value = r; ir('anim'); cargarGani(); }
   else if (t === 'esqueleto') { if (r.toLowerCase().endsWith('.ask')) $('#gAsk').value = r; else $('#gFrig').value = r; localStorage.setItem('ask', $('#gAsk').value); localStorage.setItem('frig', $('#gFrig').value); toast('Esqueleto anotado para las animaciones'); ir('anim'); }
   else if (t === 'paquete') listar(r);
-  else if (t === 'texto' || !t) { vis('/api/texto?ruta=' + enc(r) + '&cola=1').then(d => { $('#lTexto').textContent = d.texto; $('#lEstado').textContent = r + (d.recortado ? ' (recortado)' : ''); logFijo = true; ir('log'); }).catch(e => toast(e.message, true)); }
+  else if (['texto', 'script', 'shader', 'idioma', 'escena', 'material', ''].includes(t) || !t) { vis('/api/texto?ruta=' + enc(r) + '&cola=1').then(d => { $('#lTexto').textContent = d.texto; $('#lEstado').textContent = r + (d.recortado ? ' (recortado)' : ''); logFijo = true; ir('log'); }).catch(e => toast(e.message, true)); }
 }
 $('#aIr').onclick = () => listar($('#aRuta').value);
 $('#aRuta').onkeydown = e => { if (e.key === 'Enter') listar($('#aRuta').value); };
@@ -476,44 +642,187 @@ $('#aUp').onclick = () => { let r = aActual; if (!r) return; if (r.includes('!')
 $('#aBuscar').onkeydown = async e => {
   if (e.key !== 'Enter') return; const q = $('#aBuscar').value.trim(); if (!q) return;
   const arch = aActual.split('!')[0]; if (!/\.(cpk|fpk|fpkd)$/i.test(arch)) return toast('Entrá primero a un .cpk o .fpk', true);
-  try { const d = await vis('/api/buscar?ruta=' + enc(arch) + '&q=' + enc(q)); const L = $('#aLista'); L.innerHTML = `<div class="mini" style="padding:4px 8px">${d.n} resultados para "${q}" en ${arch}</div>`;
-    for (const a of d.archivos) { const el = document.createElement('div'); el.className = 'item'; el.innerHTML = `${icono(a.tipo)} <span>${a.ruta.split('!')[1]}</span>${a.tipo ? `<span class="tag ${a.tipo}">${a.tipo}</span>` : ''}<span class="t">${fmtTam(a.tam)}</span>`; el.onclick = () => abrir(a, el); L.appendChild(el); } } catch (e) { toast(e.message, true); }
+  try { const d = await vis('/api/buscar?ruta=' + enc(arch) + '&q=' + enc(q)); aDatos = { carpetas: [], archivos: d.archivos, busqueda: q, n: d.n }; pintarLista(); } catch (e) { toast(e.message, true); }
 };
 
-// ---------------------------------------------------------------- escena 3D
+// ---------------------------------------------------------------- escena 3D (08/11 c: luz tipo PES + editor del modo Motor)
+// Cielo fisico (Sky de three.js, Preetham) que tambien ilumina por reflejos (PMREM), sol direccional con sombras suaves que siguen
+// al modelo, cancha de 105 x 68 con el corte del cesped y las lineas, focos del estadio de noche, bruma y tonemap ACES.
 let renderer, scene, camera, controls, sol, cielo, piso, modelos = [], modeloSel = null, huesoSel = -1;
+let sky, skyEnvScene, pmrem, envRT = null, envSucio = true, focos = [], maniqui = null, gizmo = null, seleccion = null, grilla, ejes;
+let vista = 'lit', fpsN = 0, fpsT = performance.now(), fps = 0;
+const consola = []; function clog(t) { const h = new Date().toTimeString().slice(0, 8); consola.push(`[${h}] ${t}`); if (consola.length > 200) consola.shift(); const e = $('#edConsola'); if (e) { e.textContent = consola.join('\n'); e.parentElement.scrollTop = 1e9; } }
+const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+function kelvin(k) { // aproximacion de Tanner Helland: temperatura de color -> RGB 0..1
+  k /= 100; let r, g, b;
+  if (k <= 66) { r = 255; g = 99.47 * Math.log(k) - 161.12; b = k <= 19 ? 0 : 138.52 * Math.log(k - 10) - 305.04; } else { r = 329.7 * Math.pow(k - 60, -0.1332); g = 288.12 * Math.pow(k - 60, -0.0755); b = 255; }
+  const c = v => Math.min(1, Math.max(0, v / 255)); return [c(r), c(g), c(b)];
+}
+function texturaCancha() {
+  // 105 x 68 m en una textura de 2048 x 1366 (la cancha ocupa 120 x 80 m con el borde): rayas de corte cada 5.25 m, grano y lineas
+  const W = 2048, H = 1366, k = W / 120, cv = document.createElement('canvas'); cv.width = W; cv.height = H; const g = cv.getContext('2d');
+  g.fillStyle = '#2f6a2a'; g.fillRect(0, 0, W, H);
+  for (let i = -12; i < 12; i++) { g.fillStyle = i % 2 ? 'rgba(255,255,255,.035)' : 'rgba(0,0,0,.05)'; g.fillRect(W / 2 + i * 5.25 * k, 0, 5.25 * k, H); }
+  const img = g.getImageData(0, 0, W, H), d = img.data; for (let i = 0; i < d.length; i += 4) { const n = (Math.random() - 0.5) * 22; d[i] += n * 0.6; d[i + 1] += n; d[i + 2] += n * 0.4; } g.putImageData(img, 0, 0);
+  const X = x => W / 2 + x * k, Y = y => H / 2 + y * k; g.strokeStyle = 'rgba(245,245,240,.92)'; g.lineWidth = 0.12 * k;
+  g.strokeRect(X(-52.5), Y(-34), 105 * k, 68 * k); g.beginPath(); g.moveTo(X(0), Y(-34)); g.lineTo(X(0), Y(34)); g.stroke();
+  g.beginPath(); g.arc(X(0), Y(0), 9.15 * k, 0, Math.PI * 2); g.stroke(); g.fillStyle = 'rgba(245,245,240,.92)'; g.beginPath(); g.arc(X(0), Y(0), 0.2 * k, 0, Math.PI * 2); g.fill();
+  for (const s of [-1, 1]) { const x0 = 52.5 * s; g.strokeRect(Math.min(X(x0), X(x0 - 16.5 * s)), Y(-20.16), 16.5 * k, 40.32 * k); g.strokeRect(Math.min(X(x0), X(x0 - 5.5 * s)), Y(-9.16), 5.5 * k, 18.32 * k);
+    g.beginPath(); g.arc(X(x0 - 11 * s), Y(0), 0.2 * k, 0, Math.PI * 2); g.fill(); g.beginPath(); const a = Math.acos(5.5 / 9.15); g.arc(X(x0 - 11 * s), Y(0), 9.15 * k, s > 0 ? Math.PI - a : -a, s > 0 ? Math.PI + a : a); g.stroke(); }
+  const t = new THREE.CanvasTexture(cv); t.encoding = THREE.sRGBEncoding; t.anisotropy = 8; return t;
+}
+function texturaGrano() { const cv = document.createElement('canvas'); cv.width = cv.height = 256; const g = cv.getContext('2d'); const im = g.createImageData(256, 256); for (let i = 0; i < im.data.length; i += 4) { const v = 110 + Math.random() * 146; im.data[i] = im.data[i + 1] = im.data[i + 2] = v; im.data[i + 3] = 255; } g.putImageData(im, 0, 0); const t = new THREE.CanvasTexture(cv); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(220, 150); return t; }
+let texUV = null; function texturaUV() { if (texUV) return texUV; const cv = document.createElement('canvas'); cv.width = cv.height = 512; const g = cv.getContext('2d'); for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) { g.fillStyle = `hsl(${(x * 45 + y * 20) % 360},70%,${(x + y) % 2 ? 55 : 35}%)`; g.fillRect(x * 64, y * 64, 64, 64); g.fillStyle = '#fff'; g.font = '16px monospace'; g.fillText(`${x},${y}`, x * 64 + 6, y * 64 + 20); } texUV = new THREE.CanvasTexture(cv); return texUV; }
+function crearManiqui() {
+  // maniqui de 1.80 m y pelota de 22 cm: para mirar la luz sin cargar ningun archivo
+  const G = new THREE.Group(); G.name = 'Maniquí de prueba'; const piel = new THREE.MeshStandardMaterial({ color: 0xc89f86, roughness: 0.55 }), ropa = new THREE.MeshStandardMaterial({ color: 0x1f7a4a, roughness: 0.8 }), shorts = new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.85 });
+  const cap = (r, l, m, x, y, z, rz = 0) => { const g = new THREE.Mesh(new THREE.CylinderGeometry(r, r, l, 20), m); g.position.set(x, y, z); g.rotation.z = rz; const a = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 12), m), b = a.clone(); a.position.y = l / 2; b.position.y = -l / 2; g.add(a, b); G.add(g); return g; };
+  const cab = new THREE.Mesh(new THREE.SphereGeometry(0.11, 32, 24), piel); cab.scale.set(0.9, 1.1, 1); cab.position.set(0, 1.66, 0); G.add(cab);
+  cap(0.05, 0.08, piel, 0, 1.5, 0); const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.15, 0.55, 24), ropa); torso.position.set(0, 1.2, 0); torso.scale.z = 0.62; G.add(torso);
+  const cad = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.17, 0.2, 24), shorts); cad.position.set(0, 0.88, 0); cad.scale.z = 0.7; G.add(cad);
+  for (const s of [-1, 1]) { cap(0.045, 0.26, ropa, 0.24 * s, 1.28, 0, 0.12 * s); cap(0.038, 0.26, piel, 0.27 * s, 0.98, 0.02, 0.05 * s); cap(0.07, 0.36, piel, 0.09 * s, 0.62, 0); cap(0.05, 0.36, piel, 0.09 * s, 0.24, 0); const bot = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.07, 0.27), new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.4, metalness: 0.1 })); bot.position.set(0.09 * s, 0.035, 0.05); G.add(bot); }
+  const pel = new THREE.Mesh(new THREE.IcosahedronGeometry(0.11, 3), new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.35, flatShading: false })); pel.position.set(0.45, 0.11, 0.35); pel.name = 'Pelota'; G.add(pel);
+  G.traverse(o => { if (o.isMesh) { o.castShadow = o.receiveShadow = true; o.userData.maniqui = true; } }); return G;
+}
 function initTres() {
-  if (typeof THREE === 'undefined' || !THREE.OrbitControls) { $('#tres').parentElement.innerHTML = '<div class="aviso">No se pudo cargar three.js (sin internet o bloqueado). La escena 3D necesita conexión la primera vez; el resto del visor funciona igual.</div>'; return; }
-  const cv = $('#tres'); renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true }); renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  renderer.outputEncoding = THREE.sRGBEncoding; renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1;
-  scene = new THREE.Scene(); scene.background = new THREE.Color(0x0a0c10);
-  camera = new THREE.PerspectiveCamera(35, 1, 0.01, 200); camera.position.set(0.8, 1.6, 2.2);
-  controls = new THREE.OrbitControls(camera, cv); controls.target.set(0, 1.2, 0); controls.enableDamping = true;
-  sol = new THREE.DirectionalLight(0xffffff, 3); sol.castShadow = true; sol.shadow.mapSize.set(2048, 2048); sol.shadow.camera.near = 0.1; sol.shadow.camera.far = 20; sol.shadow.bias = -0.0005;
-  for (const k of ['left', 'bottom']) sol.shadow.camera[k] = -3; for (const k of ['right', 'top']) sol.shadow.camera[k] = 3; scene.add(sol); scene.add(sol.target);
-  cielo = new THREE.HemisphereLight(0x9ec5ff, 0x3a3326, 0.6); scene.add(cielo);
-  piso = new THREE.Mesh(new THREE.CircleGeometry(6, 48), new THREE.MeshStandardMaterial({ color: 0x2e5a2a, roughness: 0.95 })); piso.rotation.x = -Math.PI / 2; piso.receiveShadow = true; scene.add(piso);
-  scene.add(new THREE.GridHelper(6, 12, 0x334, 0x223));
-  aplicarLuz(); redimensionar(); (function loop() { requestAnimationFrame(loop); controls.update(); if ($('#s-modelo').classList.contains('on')) renderer.render(scene, camera); })();
+  if (typeof THREE === 'undefined' || !THREE.OrbitControls || !THREE.Sky) { $('#tres').parentElement.innerHTML = '<div class="aviso">No se pudo cargar three.js (lib\\three.min.js). La escena 3D no está disponible; el resto del visor funciona igual.</div>'; return; }
+  const cv = $('#tres'); renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' }); renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap; renderer.outputEncoding = THREE.sRGBEncoding; renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.physicallyCorrectLights = false;
+  scene = new THREE.Scene(); camera = new THREE.PerspectiveCamera(35, 1, 0.02, 3000); camera.position.set(1.6, 1.55, 3.2);
+  controls = new THREE.OrbitControls(camera, cv); controls.target.set(0, 1.0, 0); controls.enableDamping = true; controls.dampingFactor = 0.08; controls.maxDistance = 400;
+  // cielo: uno para el fondo y otro (mismo material) para la luz del entorno
+  sky = new THREE.Sky(); sky.scale.setScalar(1500); scene.add(sky); skyEnvScene = new THREE.Scene(); const sky2 = new THREE.Sky(); sky2.material = sky.material; sky2.scale.setScalar(50); skyEnvScene.add(sky2);
+  pmrem = new THREE.PMREMGenerator(renderer);
+  sol = new THREE.DirectionalLight(0xffffff, 3); sol.castShadow = true; sol.shadow.mapSize.set(2048, 2048); sol.shadow.bias = -0.0004; sol.shadow.normalBias = 0.02; scene.add(sol); scene.add(sol.target);
+  cielo = new THREE.HemisphereLight(0xbfd8ff, 0x3b4a2a, 0.25); scene.add(cielo);
+  piso = new THREE.Mesh(new THREE.PlaneGeometry(120, 80), new THREE.MeshStandardMaterial({ map: texturaCancha(), roughnessMap: texturaGrano(), roughness: 1, metalness: 0, envMapIntensity: 0.6 }));
+  piso.rotation.x = -Math.PI / 2; piso.receiveShadow = true; piso.name = 'Cancha'; scene.add(piso);
+  // focos del estadio: 4 torres en las esquinas
+  for (const [x, z] of [[-58, -44], [58, -44], [-58, 44], [58, 44]]) { const f = new THREE.SpotLight(0xfff4e0, 0, 220, 0.42, 0.55, 1.2); f.position.set(x, 38, z); f.target.position.set(0, 0, 0); f.castShadow = focos.length < 2; f.shadow.mapSize.set(1024, 1024); f.shadow.bias = -0.0005; scene.add(f, f.target); focos.push(f); }
+  grilla = new THREE.GridHelper(20, 40, 0x666655, 0x333333); grilla.position.y = 0.002; grilla.visible = false; scene.add(grilla); ejes = new THREE.AxesHelper(1.5); ejes.visible = false; scene.add(ejes);
+  maniqui = crearManiqui(); scene.add(maniqui);
+  if (THREE.TransformControls) { gizmo = new THREE.TransformControls(camera, cv); gizmo.addEventListener('dragging-changed', e => controls.enabled = !e.value); gizmo.addEventListener('objectChange', () => pintarInspector()); scene.add(gizmo); }
+  // elegir con clic (sin arrastrar)
+  let down = null; cv.addEventListener('pointerdown', e => down = [e.clientX, e.clientY]);
+  cv.addEventListener('pointerup', e => { if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4 || (gizmo && gizmo.dragging)) return; const r = cv.getBoundingClientRect(); const m = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1); const rc = new THREE.Raycaster(); rc.setFromCamera(m, camera);
+    const objs = []; for (const M of modelos) objs.push(...M.mallas.filter(x => x.visible)); if (maniqui.visible) maniqui.traverse(o => o.isMesh && objs.push(o)); const hit = rc.intersectObjects(objs, false)[0];
+    if (!hit) return elegir(null); const M = modelos.find(M => M.mallas.includes(hit.object)); elegir(M ? { tipo: 'modelo', M, malla: hit.object } : { tipo: 'maniqui' }); });
+  addEventListener('keydown', e => { if (!$('#s-modelo').classList.contains('on') || /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) return; const k = e.key.toLowerCase();
+    if (k === 'f') encuadrar(); else if (document.body.classList.contains('motor') && ({ q: 'select', w: 'translate', e: 'rotate', r: 'scale' })[k]) modoGizmo(({ q: 'select', w: 'translate', e: 'rotate', r: 'scale' })[k]); });
+  aplicarLuz(); redimensionar(); pintarArbol(); clog('escena lista (three.js r' + THREE.REVISION + ')');
+  (function loop() { requestAnimationFrame(loop); if (!$('#s-modelo').classList.contains('on')) return; controls.update(); if (envSucio) regenerarEntorno(); renderer.render(scene, camera); fpsN++; const t = performance.now(); if (t - fpsT > 500) { fps = fpsN * 1000 / (t - fpsT); fpsN = 0; fpsT = t; pintarStats(); } })();
   new ResizeObserver(redimensionar).observe(cv.parentElement);
 }
+function regenerarEntorno() { envSucio = false; if (envRT) envRT.dispose(); envRT = pmrem.fromScene(skyEnvScene); scene.environment = envRT.texture; }
 function redimensionar() { if (!renderer) return; const p = $('#tres').parentElement; const w = p.clientWidth, h = Math.max(300, p.clientHeight); renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); }
+function cajaEscena() { const box = new THREE.Box3(); if (seleccion && seleccion.M) box.expandByObject(seleccion.M.grupo); else { for (const M of modelos) if (M.grupo.visible) box.expandByObject(M.grupo); if (box.isEmpty() && maniqui.visible) box.expandByObject(maniqui); } if (box.isEmpty()) box.set(new THREE.Vector3(-1, 0, -1), new THREE.Vector3(1, 2, 1)); return box; }
 function aplicarLuz() {
   if (!renderer) return;
-  const el = +$('#lElev').value, az = +$('#lAz').value, I = +$('#lSol').value, C = +$('#lCielo').value, E = +$('#lExp').value, F = +$('#lFov').value;
-  $('#vElev').textContent = el + '°'; $('#vAz').textContent = az + '°'; $('#vSol').textContent = I.toFixed(1); $('#vCielo').textContent = C.toFixed(2); $('#vExp').textContent = E.toFixed(2); $('#vFov').textContent = F + '°';
-  const e = el * Math.PI / 180, a = az * Math.PI / 180; sol.position.set(Math.cos(e) * Math.sin(a) * 8, Math.sin(e) * 8, Math.cos(e) * Math.cos(a) * 8); sol.intensity = I; cielo.intensity = C;
-  const calidez = Math.max(0, 1 - Math.max(0, el) / 30); sol.color.setRGB(1, 1 - 0.35 * calidez, 1 - 0.65 * calidez); if (el < 0) sol.intensity = 0;
-  renderer.toneMappingExposure = E; camera.fov = F; camera.updateProjectionMatrix(); piso.visible = $('#cPiso').checked; renderer.shadowMap.enabled = $('#cSombras').checked; sol.castShadow = $('#cSombras').checked;
-  for (const m of modelos) m.grupo.traverse(o => { if (o.isMesh && o.userData.malla) { o.material.wireframe = $('#cAlambre').checked; o.castShadow = o.receiveShadow = true; } }); for (const m of modelos) { if (m.esqueleto) m.esqueleto.visible = $('#cHuesos').checked; if (m.normales) m.normales.visible = $('#cNormales').checked; }
+  const v = id => +$('#' + id).value;
+  const el = v('lElev'), az = v('lAz'), I = v('lSol'), C = v('lCielo'), E = v('lExp'), F = v('lFov'), T = v('lTemp'), su = v('lSuave'), sr = 1 << v('lSomRes'), tu = v('lTurb'), ra = v('lRay'), ni = v('lNiebla'), fo = v('lFocos');
+  const txt = (id, s) => { const e = $('#' + id); if (e) e.textContent = s; };
+  txt('vElev', el + '°'); txt('vAz', az + '°'); txt('vSol', I.toFixed(1)); txt('vCielo', C.toFixed(2)); txt('vExp', E.toFixed(2)); txt('vFov', F + '°'); txt('vTemp', T ? T + ' K' : 'auto'); txt('vSuave', su); txt('vSomRes', sr); txt('vTurb', tu); txt('vRay', ra); txt('vNiebla', ni); txt('vFocos', fo);
+  const e = el * Math.PI / 180, a = az * Math.PI / 180, dir = new THREE.Vector3(Math.cos(e) * Math.sin(a), Math.sin(e), Math.cos(e) * Math.cos(a));
+  const u = sky.material.uniforms; u.sunPosition.value.copy(dir); u.turbidity.value = tu; u.rayleigh.value = ra; u.mieCoefficient.value = 0.004; u.mieDirectionalG.value = 0.82;
+  const dia = smooth(-4, 6, el); sky.visible = dia > 0.02;
+  scene.background = sky.visible ? null : new THREE.Color(0x05080d);
+  const k = T || (2300 + 3500 * smooth(0, 35, el)); const [r, g, b] = kelvin(k); sol.color.setRGB(r, g, b); sol.intensity = I * dia;
+  // sombras: siguen al modelo; el tamano del mapa y la suavidad
+  const box = cajaEscena(), cen = box.getCenter(new THREE.Vector3()), rad = Math.max(1.2, box.getSize(new THREE.Vector3()).length() * 0.75);
+  sol.target.position.copy(cen); sol.position.copy(cen).addScaledVector(dir, rad * 4); const sc = sol.shadow.camera; sc.left = sc.bottom = -rad; sc.right = sc.top = rad; sc.near = 0.1; sc.far = rad * 8; sc.updateProjectionMatrix();
+  if (sol.shadow.mapSize.x !== sr) { sol.shadow.mapSize.set(sr, sr); if (sol.shadow.map) { sol.shadow.map.dispose(); sol.shadow.map = null; } } sol.shadow.radius = su;
+  cielo.intensity = C * (0.08 + 0.25 * dia); cielo.color.setRGB(0.75, 0.85, 1); scene.fog = ni > 0 ? new THREE.FogExp2(sky.visible ? 0xa9bfd6 : 0x0a0e14, ni) : null; if (scene.fog && sky.visible) scene.fog.color.setRGB(0.62 + 0.2 * (1 - dia), 0.72, 0.84);
+  for (const f of focos) f.intensity = fo; renderer.toneMappingExposure = E * (sky.visible ? 0.55 : 0.32);
+  scene.traverse(o => { if (o.isMesh && o.material && 'envMapIntensity' in o.material) o.material.envMapIntensity = o === piso ? 0.6 * C : C; });
+  camera.fov = F; camera.updateProjectionMatrix(); piso.visible = $('#cPiso').checked; const somb = $('#cSombras').checked; renderer.shadowMap.enabled = somb; sol.castShadow = somb;
+  maniqui.visible = $('#cManiqui').checked; grilla.visible = $('#cGrilla').checked; ejes.visible = $('#cEjes').checked;
+  for (const m of modelos) { if (m.esqueleto) m.esqueleto.visible = $('#cHuesos').checked; if (m.normales) m.normales.visible = $('#cNormales').checked; else if ($('#cNormales').checked) crearNormales(m); }
+  envSucio = true; $('#edHud').textContent = `${luzActual} · sol ${el.toFixed(0)}° / ${az.toFixed(0)}° · ${Math.round(k)} K`;
 }
-$$('#s-modelo input').forEach(i => i.oninput = aplicarLuz);
-const PRESETS = { dia: [55, 140, 3.2, 0.7, 1.0, 0x9ec5ff], tarde: [12, 250, 2.6, 0.35, 1.1, 0xffb080], noche: [-5, 0, 0, 0.9, 1.4, 0x5577aa], estudio: [35, 30, 1.6, 1.2, 1.0, 0xffffff] };
-$$('[data-luz]').forEach(b => b.onclick = () => { const p = PRESETS[b.dataset.luz]; $('#lElev').value = p[0]; $('#lAz').value = p[1]; $('#lSol').value = p[2]; $('#lCielo').value = p[3]; $('#lExp').value = p[4]; cielo.color.setHex(p[5]); scene.background = new THREE.Color(b.dataset.luz === 'noche' ? 0x05070c : b.dataset.luz === 'tarde' ? 0x1a1210 : 0x0a0c10); aplicarLuz(); });
+let luzActual = 'Partido día';
+function crearNormales(M) { const pts = []; for (const mesh of M.mallas) { const p = mesh.geometry.getAttribute('position'), n = mesh.geometry.getAttribute('normal'); if (!n) continue; const step = Math.max(1, Math.floor(p.count / 4000)); for (let i = 0; i < p.count; i += step) { pts.push(p.getX(i), p.getY(i), p.getZ(i), p.getX(i) + n.getX(i) * 0.015, p.getY(i) + n.getY(i) * 0.015, p.getZ(i) + n.getZ(i) * 0.015); } } const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3)); M.normales = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x66ccff })); M.grupo.add(M.normales); }
+$$('#s-modelo .ed-der input').forEach(i => i.addEventListener('input', aplicarLuz));
+// presets de luz: altura, rumbo, sol, cielo, exposicion, turbidez, rayleigh, niebla, focos, temperatura
+const PRESETS = { dia: ['Partido día', 52, 150, 3.2, 1.0, 1.0, 3.2, 1.4, 0.003, 0, 0], tarde: ['Tarde', 9, 250, 3.0, 0.8, 1.05, 6, 2.2, 0.006, 0, 0], noche: ['Noche con focos', -8, 0, 0, 0.25, 1.0, 2, 1, 0.008, 5, 0],
+  nublado: ['Nublado', 35, 120, 0.9, 1.8, 1.25, 18, 3.5, 0.01, 0, 6800], estudio: ['Estudio (luz de prueba del editor)', 35, 30, 2.2, 1.4, 1.0, 2, 1, 0, 0, 5600] };
+$$('[data-luz]').forEach(b => b.onclick = () => { const p = PRESETS[b.dataset.luz]; luzActual = p[0]; ['lElev', 'lAz', 'lSol', 'lCielo', 'lExp', 'lTurb', 'lRay', 'lNiebla', 'lFocos', 'lTemp'].forEach((id, i) => $('#' + id).value = p[i + 1]); $('#edLuzJuego').checked = false; aplicarLuz(); clog('luz: ' + luzActual); });
+// luz del juego en vivo: direccion del sol (fila 312 si es estable, si no 111) y si hay sol (114.w)
+setInterval(async () => {
+  if (!renderer || !$('#edLuzJuego').checked || !panelOk || !$('#s-modelo').classList.contains('on')) return;
+  try { const p = await pan('/api/params'); const L = p.live; const s = L[312][3] > 0.5 ? L[312] : L[111]; const n = Math.hypot(s[0], s[1], s[2]); if (n < 1e-4) return;
+    const x = s[0] / n, y = s[1] / n, z = s[2] / n; $('#lElev').value = (Math.asin(Math.max(-1, Math.min(1, y))) * 180 / Math.PI).toFixed(1); let az = Math.atan2(x, z) * 180 / Math.PI; if (az < 0) az += 360; $('#lAz').value = az.toFixed(0);
+    luzActual = 'Luz del juego' + (L[114][3] > 0.5 ? '' : ' (sin sol)'); aplicarLuz(); } catch (e) { }
+}, 1000);
+$('#edLuzJuego').onchange = () => { if ($('#edLuzJuego').checked && !panelOk) { toast('Abrí el juego con la DLL del panel para copiar su luz', true); $('#edLuzJuego').checked = false; } else clog('luz del juego: ' + ($('#edLuzJuego').checked ? 'siguiendo' : 'apagada')); };
+// vistas (materiales) y camaras
+function materialVista(mesh) {
+  const lit = mesh.userData.matLit || (mesh.userData.matLit = mesh.material); const map = lit.map || null; const vc = !!lit.vertexColors;
+  switch (vista) { case 'unlit': return new THREE.MeshBasicMaterial({ map, color: map ? 0xffffff : lit.color, vertexColors: vc, side: THREE.DoubleSide });
+    case 'clay': return new THREE.MeshStandardMaterial({ color: 0xbdbdbd, roughness: 0.7, side: THREE.DoubleSide });
+    case 'wire': { const m = lit.clone(); m.wireframe = true; return m; }
+    case 'normal': return new THREE.MeshNormalMaterial({ side: THREE.DoubleSide });
+    case 'uv': return new THREE.MeshBasicMaterial({ map: texturaUV(), side: THREE.DoubleSide });
+    case 'pesos': return new THREE.MeshBasicMaterial({ toneMapped: false, vertexColors: !!mesh.geometry.getAttribute('color'), color: mesh.geometry.getAttribute('color') ? 0xffffff : 0x666666, side: THREE.DoubleSide });
+    default: return lit; }
+}
+function aplicarVista() { const todos = []; for (const M of modelos) todos.push(...M.mallas); maniqui.traverse(o => o.isMesh && todos.push(o)); for (const m of todos) { const nuevo = materialVista(m); if (m.material !== m.userData.matLit && m.material !== nuevo) m.material.dispose && m.material !== m.userData.matLit && m.material.dispose(); m.material = nuevo; }
+  if (vista === 'pesos' && huesoSel < 0) toast('Elegí un hueso en la pestaña Huesos para ver sus pesos'); pintarPesos(); aplicarLuz(); clog('vista: ' + vista); }
+$('#edVista').onchange = () => { vista = $('#edVista').value; aplicarVista(); };
+$('#cAlambre').onchange = () => { vista = $('#cAlambre').checked ? 'wire' : 'lit'; $('#edVista').value = vista; aplicarVista(); };
+function camara(tipo) {
+  const box = cajaEscena(), c = box.getCenter(new THREE.Vector3()), s = Math.max(0.5, box.getSize(new THREE.Vector3()).length());
+  const pos = { tv: [c.x - 2, 18, c.z + 42], cerca: [c.x + s * 0.5, c.y + s * 0.1, c.z + s * 0.9], frente: [c.x, c.y, c.z + s * 1.6], lado: [c.x + s * 1.6, c.y, c.z], arriba: [c.x, c.y + s * 2, c.z + 0.001] }[tipo];
+  if (!pos) return; camera.position.set(...pos); controls.target.copy(c); if (tipo === 'tv') { $('#lFov').value = 14; } else if (tipo === 'cerca') { $('#lFov').value = 28; } aplicarLuz(); clog('cámara: ' + tipo);
+}
+$('#edCam').onchange = () => { camara($('#edCam').value); };
+function modoGizmo(m) { $$('[data-gz]').forEach(b => b.classList.toggle('on', b.dataset.gz === m)); if (!gizmo) return; if (m === 'select') { gizmo.detach(); } else { gizmo.setMode(m); const o = objetoSel(); if (o) gizmo.attach(o); } }
+$$('[data-gz]').forEach(b => b.onclick = () => modoGizmo(b.dataset.gz));
+function objetoSel() { return seleccion ? (seleccion.tipo === 'modelo' ? seleccion.M.grupo : seleccion.tipo === 'maniqui' ? maniqui : null) : null; }
+function elegir(sel) {
+  seleccion = sel; if (sel && sel.M) { modeloSel = sel.M; pintarModelos(); pintarMallas(); pintarTexturas(); pintarHuesos($('#mHuesoBuscar').value); }
+  const gm = $$('[data-gz]').find(b => b.classList.contains('on')); if (gizmo) { const o = objetoSel(); if (o && gm && gm.dataset.gz !== 'select') gizmo.attach(o); else gizmo.detach(); }
+  pintarArbol(); pintarInspector(); if (sel && document.body.classList.contains('motor')) tab('objeto');
+}
+function tab(t) { $$('.ed-der .tab').forEach(b => b.classList.toggle('on', b.dataset.tab === t)); $$('.ed-der [data-panel]').forEach(p => p.classList.toggle('on', p.dataset.panel === t)); }
+$$('.ed-der .tab').forEach(b => b.onclick = () => tab(b.dataset.tab)); tab('entorno');
+function pintarArbol() {
+  const e = $('#edArbol'); if (!e) return; const it = (sel, ico, txt, extra, ind = 0) => `<div class="item ${sel ? 'sel' : ''}" ${extra} style="padding-left:${8 + ind * 14}px"><span class="ic">${ico}</span><span>${txt}</span></div>`;
+  let h = `<div class="mini" style="padding:2px 8px">ENTORNO</div>` + it(seleccion && seleccion.tipo === 'sol', '☀', 'Sol', 'data-arb="sol"') + it(seleccion && seleccion.tipo === 'cielo', '🌤', 'Cielo / ambiente', 'data-arb="cielo"') + it(seleccion && seleccion.tipo === 'cancha', '🟩', 'Cancha 105 × 68', 'data-arb="cancha"') + it(seleccion && seleccion.tipo === 'focos', '🏟', 'Focos del estadio (4)', 'data-arb="focos"') + it(seleccion && seleccion.tipo === 'camara', '🎥', 'Cámara', 'data-arb="camara"');
+  h += `<div class="mini" style="padding:6px 8px 2px">OBJETOS</div>` + it(seleccion && seleccion.tipo === 'maniqui', '🧍', 'Maniquí + pelota', 'data-arb="maniqui"');
+  modelos.forEach((M, i) => { h += it(seleccion && seleccion.M === M && !seleccion.malla, '🧊', M.ruta.split(/[\\/!]/).pop(), `data-arb="m${i}"`); M.mallas.forEach((mesh, j) => { h += it(seleccion && seleccion.malla === mesh, mesh.visible ? '▸' : '▹', `malla ${mesh.userData.malla.i} · ${mesh.userData.malla.nvert} v`, `data-arb="m${i}.${j}"`, 1); }); });
+  e.innerHTML = h; e.querySelectorAll('[data-arb]').forEach(x => x.onclick = () => { const a = x.dataset.arb; if (a[0] === 'm' && a !== 'maniqui') { const [i, j] = a.slice(1).split('.'); const M = modelos[+i]; elegir({ tipo: 'modelo', M, malla: j !== undefined ? M.mallas[+j] : null }); } else elegir({ tipo: a }); });
+  const r = $('#edRecientes'); if (r) { const rec = JSON.parse(localStorage.getItem('recientes') || '[]'); r.innerHTML = rec.map(x => `<div class="item" data-rec="${x.replace(/"/g, '&quot;')}"><span class="ic">🧊</span><span>${x.split(/[\\/!]/).pop()}</span></div>`).join('') || '<span class="mini">Ninguno.</span>'; r.querySelectorAll('[data-rec]').forEach(x => x.onclick = () => { $('#mRuta').value = x.dataset.rec; cargarModelo(x.dataset.rec, true); }); }
+}
+function campo(lbl, id, val, step = 0.01) { return `<label class="campo"><span>${lbl}</span><input type="number" step="${step}" id="${id}" value="${(+val).toFixed(3)}"></label>`; }
+function pintarInspector() {
+  const e = $('#edInspector'); if (!e) return; const s = seleccion; if (!s) { e.innerHTML = 'Elegí algo en la jerarquía o hacé clic en el visor.'; return; }
+  if (s.tipo === 'sol' || s.tipo === 'cielo' || s.tipo === 'focos') { e.innerHTML = `<b>${{ sol: 'Sol', cielo: 'Cielo / ambiente', focos: 'Focos del estadio' }[s.tipo]}</b><p>Sus valores están en la pestaña <b>Entorno</b>.</p>`; tab('entorno'); return; }
+  if (s.tipo === 'cancha') { e.innerHTML = `<b>Cancha</b><div class="kv"><b>tamaño</b><span>105 × 68 m (120 × 80 con el borde)</span><b>corte</b><span>rayas de 5.25 m</span></div>` + `<div class="slider"><label>Rugosidad</label><span class="v">${piso.material.roughness.toFixed(2)}</span><input type="range" min="0.3" max="1" step="0.01" value="${piso.material.roughness}" id="inRug"></div>`; $('#inRug').oninput = ev => { piso.material.roughness = +ev.target.value; pintarInspector(); }; return; }
+  if (s.tipo === 'camara') { const p = camera.position, t = controls.target; e.innerHTML = `<b>Cámara</b><div class="campos">${campo('pos x', 'icx', p.x)}${campo('pos y', 'icy', p.y)}${campo('pos z', 'icz', p.z)}${campo('mira x', 'itx', t.x)}${campo('mira y', 'ity', t.y)}${campo('mira z', 'itz', t.z)}</div><div class="kv"><b>campo de visión</b><span>${camera.fov}°</span><b>cerca / lejos</b><span>${camera.near} / ${camera.far}</span></div>`;
+    ['icx', 'icy', 'icz', 'itx', 'ity', 'itz'].forEach(id => $('#' + id).oninput = () => { camera.position.set(+$('#icx').value, +$('#icy').value, +$('#icz').value); controls.target.set(+$('#itx').value, +$('#ity').value, +$('#itz').value); }); return; }
+  const o = objetoSel(); if (!o) return; const P = o.position, R = o.rotation, S = o.scale; const nombre = s.tipo === 'maniqui' ? 'Maniquí de prueba' : s.M.ruta.split(/[\\/!]/).pop();
+  let h = `<b>${nombre}</b><div class="mini">Transformación</div><div class="campos">${campo('pos x', 'ipx', P.x)}${campo('pos y', 'ipy', P.y)}${campo('pos z', 'ipz', P.z)}${campo('rot x°', 'irx', R.x * 57.2958, 1)}${campo('rot y°', 'iry', R.y * 57.2958, 1)}${campo('rot z°', 'irz', R.z * 57.2958, 1)}${campo('escala', 'isc', S.x)}</div>`;
+  const mesh = s.malla || (s.M && s.M.mallas[0]); const mat = mesh && (mesh.userData.matLit || mesh.material);
+  if (mat && mat.isMeshStandardMaterial) { const m = s.malla ? s.M.datos.materiales[s.malla.userData.malla.mat] : null; h += `<div class="mini" style="margin-top:8px">Material${s.malla ? '' : ' (todas las mallas)'}${m ? ' · ' + m.nombre + ' (' + m.tipo + ')' : ''}</div>
+    <div class="slider"><label>Rugosidad</label><span class="v">${mat.roughness.toFixed(2)}</span><input type="range" min="0" max="1" step="0.01" value="${mat.roughness}" data-mp="roughness"></div>
+    <div class="slider"><label>Metal</label><span class="v">${mat.metalness.toFixed(2)}</span><input type="range" min="0" max="1" step="0.01" value="${mat.metalness}" data-mp="metalness"></div>
+    <div class="slider"><label>Reflejos del cielo</label><span class="v">${(mat.envMapIntensity || 1).toFixed(2)}</span><input type="range" min="0" max="3" step="0.01" value="${mat.envMapIntensity || 1}" data-mp="envMapIntensity"></div>
+    <div class="slider"><label>Relieve (normal map)</label><span class="v">${mat.normalScale ? mat.normalScale.x.toFixed(2) : '1.00'}</span><input type="range" min="0" max="3" step="0.01" value="${mat.normalScale ? mat.normalScale.x : 1}" data-mp="normalScale"></div>
+    <label class="campo"><span>color</span><input type="color" value="#${mat.color.getHexString()}" data-mp="color"></label>`; }
+  e.innerHTML = h;
+  const tr = () => { o.position.set(+$('#ipx').value, +$('#ipy').value, +$('#ipz').value); o.rotation.set($('#irx').value / 57.2958, $('#iry').value / 57.2958, $('#irz').value / 57.2958); o.scale.setScalar(+$('#isc').value || 1); };
+  ['ipx', 'ipy', 'ipz', 'irx', 'iry', 'irz', 'isc'].forEach(id => $('#' + id).oninput = tr);
+  e.querySelectorAll('[data-mp]').forEach(inp => inp.oninput = () => { const k = inp.dataset.mp; const mallas = s.malla ? [s.malla] : s.M ? s.M.mallas : []; if (s.tipo === 'maniqui') maniqui.traverse(x => x.isMesh && mallas.push(x));
+    for (const me of mallas) { const mt = me.userData.matLit || me.material; if (!mt.isMeshStandardMaterial) continue; if (k === 'color') mt.color.set(inp.value); else if (k === 'normalScale') mt.normalScale.set(+inp.value, +inp.value); else mt[k] = +inp.value; mt.needsUpdate = true; }
+    const v = inp.parentElement.querySelector('.v'); if (v) v.textContent = (+inp.value).toFixed(2); });
+}
+function pintarStats() { const e = $('#edStats'); if (!e || !document.body.classList.contains('motor')) return; const i = renderer.info.render; e.innerHTML = `<b>${fps.toFixed(0)}</b> fps · ${(i.triangles / 1000).toFixed(1)}k tris · ${i.calls} dibujos · ${renderer.domElement.width}×${renderer.domElement.height} · sombra ${sol.shadow.mapSize.x}`; }
+$('#edCaptura').onclick = async () => { if (!renderer) return; renderer.render(scene, camera); const url = renderer.domElement.toDataURL('image/png');
+  try { const r = await fetch(VISOR + '/api/captura', { method: 'POST', body: url }); const j = await r.json(); if (j.ruta) { toast('Captura guardada: ' + j.ruta); clog('captura: ' + j.ruta); } else throw new Error(j.error); } catch (e) { const a = document.createElement('a'); a.href = url; a.download = 'escena_' + Date.now() + '.png'; a.click(); } };
 const b64f32 = s => new Float32Array(Uint8Array.from(atob(s), c => c.charCodeAt(0)).buffer), b64u32 = s => new Uint32Array(Uint8Array.from(atob(s), c => c.charCodeAt(0)).buffer), b64u16 = s => new Uint16Array(Uint8Array.from(atob(s), c => c.charCodeAt(0)).buffer);
 async function cargarModelo(ruta, sumar) {
   if (!renderer) return toast('La escena 3D no está disponible (three.js no cargó)', true);
-  ruta = ruta || $('#mRuta').value; if (!ruta) return; toast('Cargando ' + ruta.split(/[\\/!]/).pop() + '...');
+  ruta = ruta || $('#mRuta').value; if (!ruta) return; toast('Cargando ' + ruta.split(/[\\/!]/).pop() + '...'); clog('cargando ' + ruta);
   try {
     const d = await vis('/api/fmdl?ruta=' + enc(ruta)); if (!sumar) vaciarEscena();
     const grupo = new THREE.Group(); const M = { ruta, datos: d, grupo, mallas: [], texturas: {} };
@@ -522,39 +831,37 @@ async function cargarModelo(ruta, sumar) {
       if (m.nrm) g.setAttribute('normal', new THREE.BufferAttribute(b64f32(m.nrm), 3)); if (m.uv) { const uv = b64f32(m.uv); for (let i = 1; i < uv.length; i += 2) uv[i] = 1 - uv[i]; g.setAttribute('uv', new THREE.BufferAttribute(uv, 2)); }
       if (m.caras) g.setIndex(new THREE.BufferAttribute(b64u32(m.caras), 1)); if (!m.nrm) g.computeVertexNormals();
       const col = new Float32Array(m.nvert * 3).fill(1); g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-      const mat = new THREE.MeshStandardMaterial({ color: 0xc9b8a6, roughness: 0.65, metalness: 0, vertexColors: true, side: THREE.DoubleSide });
-      const mesh = new THREE.Mesh(g, mat); mesh.castShadow = mesh.receiveShadow = true; mesh.userData.malla = m; if (m.pesos) { mesh.userData.pesos = b64f32(m.pesos); mesh.userData.huesos = b64u16(m.huesos); }
+      const mat = new THREE.MeshStandardMaterial({ color: 0xc9b8a6, roughness: 0.6, metalness: 0, vertexColors: true, side: THREE.DoubleSide });
+      const mesh = new THREE.Mesh(g, mat); mesh.castShadow = mesh.receiveShadow = true; mesh.userData.malla = m; mesh.userData.matLit = mat; if (m.pesos) { mesh.userData.pesos = b64f32(m.pesos); mesh.userData.huesos = b64u16(m.huesos); }
       grupo.add(mesh); M.mallas.push(mesh);
     }
-    // esqueleto: huesos en mundo (fila 'mundo' xyz) unidos al padre
     if (d.huesos.length) { const pts = []; for (const b of d.huesos) if (b.padre >= 0 && b.padre < d.huesos.length) { const p = d.huesos[b.padre]; pts.push(b.mundo[0], b.mundo[1], b.mundo[2], p.mundo[0], p.mundo[1], p.mundo[2]); }
       const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pts), 3)); const lines = new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: 0xffb74d, depthTest: false })); lines.renderOrder = 10;
       const pg = new THREE.BufferGeometry(); pg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(d.huesos.flatMap(b => b.mundo.slice(0, 3))), 3)); const puntos = new THREE.Points(pg, new THREE.PointsMaterial({ color: 0x4fc3f7, size: 0.012, depthTest: false })); puntos.renderOrder = 11;
       M.esqueleto = new THREE.Group(); M.esqueleto.add(lines, puntos); M.esqueleto.visible = $('#cHuesos').checked; grupo.add(M.esqueleto); }
-    scene.add(grupo); modelos.push(M); modeloSel = M; aplicarLuz(); pintarModelos(); pintarMallas(); pintarTexturas(); pintarHuesos(''); if (!sumar) encuadrar();
-    // texturas en el mismo paquete: intentar cargar la de color automaticamente
+    scene.add(grupo); modelos.push(M); modeloSel = M; if (!sumar) { $('#cManiqui').checked = false; }
+    const rec = JSON.parse(localStorage.getItem('recientes') || '[]').filter(x => x !== ruta); rec.unshift(ruta); localStorage.setItem('recientes', JSON.stringify(rec.slice(0, 12)));
+    if (vista !== 'lit') aplicarVista(); aplicarLuz(); pintarModelos(); pintarMallas(); pintarTexturas(); pintarHuesos(''); elegir({ tipo: 'modelo', M }); if (!sumar) encuadrar();
     autoTexturas(M);
-    toast(`${d.mallas.length} mallas, ${d.huesos.length} huesos`);
-  } catch (e) { toast('No se pudo cargar: ' + e.message, true); }
+    toast(`${d.mallas.length} mallas, ${d.huesos.length} huesos`); clog(`${ruta.split(/[\\/!]/).pop()}: ${d.mallas.length} mallas, ${d.huesos.length} huesos, ${d.mallas.reduce((a, m) => a + m.nvert, 0)} vértices`);
+  } catch (e) { toast('No se pudo cargar: ' + e.message, true); clog('ERROR ' + e.message); }
 }
-function vaciarEscena() { for (const m of modelos) scene.remove(m.grupo); modelos = []; modeloSel = null; pintarModelos(); $('#mMallas').innerHTML = ''; $('#mTexturas').innerHTML = ''; $('#mHuesos').innerHTML = ''; $('#mNHuesos').textContent = ''; }
-function encuadrar() { if (!modelos.length) return; const box = new THREE.Box3(); for (const m of modelos) box.expandByObject(m.grupo); const c = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3()).length() || 1; controls.target.copy(c); camera.position.copy(c).add(new THREE.Vector3(0.3, 0.15, 1).normalize().multiplyScalar(s * 1.3)); camera.near = s / 500; camera.far = s * 50; camera.updateProjectionMatrix(); }
-function pintarModelos() { const e = $('#mModelos'); if (!modelos.length) return e.textContent = 'Ninguno.'; e.innerHTML = modelos.map((m, i) => `<div class="item ${m === modeloSel ? 'sel' : ''}" data-i="${i}">🧊 <span>${m.ruta.split(/[\\/!]/).pop()}</span><span class="t">${m.mallas.length} mallas</span></div>
-    <div class="barra" style="margin:0 0 6px 8px"><label class="mini">x</label><input type="number" step="0.05" value="${m.grupo.position.x}" data-mv="${i},x" style="width:64px"><label class="mini">y</label><input type="number" step="0.05" value="${m.grupo.position.y}" data-mv="${i},y" style="width:64px"><label class="mini">z</label><input type="number" step="0.05" value="${m.grupo.position.z}" data-mv="${i},z" style="width:64px"><button class="b" data-quitar="${i}">✕</button></div>`).join('');
-  e.querySelectorAll('.item').forEach(x => x.onclick = () => { modeloSel = modelos[+x.dataset.i]; pintarModelos(); pintarMallas(); pintarTexturas(); pintarHuesos($('#mHuesoBuscar').value); });
-  e.querySelectorAll('[data-mv]').forEach(x => x.oninput = () => { const [i, k] = x.dataset.mv.split(','); modelos[+i].grupo.position[k] = +x.value; });
-  e.querySelectorAll('[data-quitar]').forEach(x => x.onclick = () => { const m = modelos[+x.dataset.quitar]; scene.remove(m.grupo); modelos.splice(+x.dataset.quitar, 1); modeloSel = modelos[0] || null; pintarModelos(); pintarMallas(); pintarTexturas(); pintarHuesos(''); }); }
-function pintarMallas() { const e = $('#mMallas'); if (!modeloSel) return e.innerHTML = ''; e.innerHTML = modeloSel.mallas.map((mesh, i) => { const m = mesh.userData.malla; const mat = modeloSel.datos.materiales[m.mat]; return `<label class="chk"><input type="checkbox" checked data-malla="${i}"> malla ${m.i} · ${m.nvert} v · ${m.ncaras || 0} caras · grupo ${m.grupo}${mat ? ' · ' + mat.nombre : ''}</label>`; }).join(''); e.querySelectorAll('[data-malla]').forEach(c => c.onchange = () => modeloSel.mallas[+c.dataset.malla].visible = c.checked); }
+function vaciarEscena() { if (gizmo) gizmo.detach(); for (const m of modelos) scene.remove(m.grupo); modelos = []; modeloSel = null; seleccion = null; pintarModelos(); $('#mMallas').innerHTML = ''; $('#mTexturas').innerHTML = ''; $('#mHuesos').innerHTML = ''; $('#mNHuesos').textContent = ''; pintarArbol(); pintarInspector(); }
+function encuadrar() { if (!renderer) return; const box = cajaEscena(); const c = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3()).length() || 1; controls.target.copy(c); const d = camera.position.clone().sub(c).normalize(); if (d.lengthSq() < 0.5) d.set(0.3, 0.15, 1).normalize(); camera.position.copy(c).addScaledVector(d, s * 1.3); camera.near = Math.max(0.005, s / 400); camera.updateProjectionMatrix(); aplicarLuz(); }
+function pintarModelos() { const e = $('#mModelos'); if (!modelos.length) return e.textContent = 'Ninguno (está el maniquí de prueba).'; e.innerHTML = modelos.map((m, i) => `<div class="item ${m === modeloSel ? 'sel' : ''}" data-i="${i}"><span class="ic">🧊</span><span>${m.ruta.split(/[\\/!]/).pop()}</span><span class="t">${m.mallas.length} mallas</span><button class="b" data-quitar="${i}" style="padding:2px 8px">✕</button></div>`).join('');
+  e.querySelectorAll('.item').forEach(x => x.onclick = ev => { if (ev.target.dataset.quitar !== undefined) return; elegir({ tipo: 'modelo', M: modelos[+x.dataset.i] }); });
+  e.querySelectorAll('[data-quitar]').forEach(x => x.onclick = () => { const m = modelos[+x.dataset.quitar]; if (gizmo) gizmo.detach(); scene.remove(m.grupo); modelos.splice(+x.dataset.quitar, 1); modeloSel = modelos[0] || null; seleccion = null; pintarModelos(); pintarMallas(); pintarTexturas(); pintarHuesos(''); pintarArbol(); pintarInspector(); }); }
+function pintarMallas() { const e = $('#mMallas'); if (!modeloSel) return e.innerHTML = ''; e.innerHTML = modeloSel.mallas.map((mesh, i) => { const m = mesh.userData.malla; const mat = modeloSel.datos.materiales[m.mat]; return `<label class="chk"><input type="checkbox" ${mesh.visible ? 'checked' : ''} data-malla="${i}"> malla ${m.i} · ${m.nvert} v · ${m.ncaras || 0} caras · grupo ${m.grupo}${mat ? ' · ' + mat.nombre : ''}</label>`; }).join(''); e.querySelectorAll('[data-malla]').forEach(c => c.onchange = () => { modeloSel.mallas[+c.dataset.malla].visible = c.checked; pintarArbol(); }); }
 function pintarTexturas() { const e = $('#mTexturas'); if (!modeloSel) return e.innerHTML = ''; const d = modeloSel.datos; const mats = d.materiales.filter(m => m.texturas && m.texturas.length); e.innerHTML = (mats.length ? mats.map(m => `<div><b>${m.nombre}</b> <span class="mini">${m.tipo}</span>${m.texturas.map(t => `<div class="ruta" style="padding-left:8px">${t.slot}: ${t.textura}</div>`).join('')}</div>`).join('') : d.texturas.map(t => `<div class="ruta">${t}</div>`).join('')) || 'El modelo no declara texturas.'; }
-function pintarHuesos(filtro) { const e = $('#mHuesos'); if (!modeloSel) return e.innerHTML = ''; const H = modeloSel.datos.huesos; $('#mNHuesos').textContent = `(${H.length})`; const f = (filtro || '').toLowerCase(); e.innerHTML = H.map((b, i) => (!f || b.nombre.toLowerCase().includes(f)) ? `<div class="item ${i === huesoSel ? 'sel' : ''}" data-h="${i}"><span>${i} ${b.nombre}</span><span class="t">padre ${b.padre}</span></div>` : '').join(''); e.querySelectorAll('[data-h]').forEach(x => x.onclick = () => { huesoSel = +x.dataset.h === huesoSel ? -1 : +x.dataset.h; pintarPesos(); pintarHuesos(filtro); }); }
+function pintarHuesos(filtro) { const e = $('#mHuesos'); if (!modeloSel) return e.innerHTML = ''; const H = modeloSel.datos.huesos; $('#mNHuesos').textContent = `(${H.length})`; const f = (filtro || '').toLowerCase(); e.innerHTML = H.map((b, i) => (!f || b.nombre.toLowerCase().includes(f)) ? `<div class="item ${i === huesoSel ? 'sel' : ''}" data-h="${i}"><span>${i} ${b.nombre}</span><span class="t">padre ${b.padre}</span></div>` : '').join(''); e.querySelectorAll('[data-h]').forEach(x => x.onclick = () => { huesoSel = +x.dataset.h === huesoSel ? -1 : +x.dataset.h; if (huesoSel >= 0 && vista !== 'pesos') { vista = 'pesos'; $('#edVista').value = 'pesos'; aplicarVista(); } pintarPesos(); pintarHuesos(filtro); }); }
 $('#mHuesoBuscar').oninput = () => pintarHuesos($('#mHuesoBuscar').value);
-function pintarPesos() { if (!modeloSel) return; for (const mesh of modeloSel.mallas) { const col = mesh.geometry.getAttribute('color'); const n = col.count; const w = mesh.userData.pesos, h = mesh.userData.huesos; for (let v = 0; v < n; v++) { let p = 0; if (huesoSel >= 0 && w) for (let k = 0; k < 4; k++) if (h[v * 4 + k] === huesoSel) p += w[v * 4 + k]; col.setXYZ(v, 1, 1 - p * 0.9, 1 - p); } col.needsUpdate = true; } }
+function pintarPesos() { if (!modeloSel) return; const ver = vista === 'pesos'; for (const mesh of modeloSel.mallas) { const col = mesh.geometry.getAttribute('color'); const n = col.count; const w = mesh.userData.pesos, h = mesh.userData.huesos; for (let v = 0; v < n; v++) { let p = 0; if (ver && huesoSel >= 0 && w) for (let k = 0; k < 4; k++) if (h[v * 4 + k] === huesoSel) p += w[v * 4 + k]; if (ver) col.setXYZ(v, 0.15 + 0.85 * p, 0.25 + 0.5 * (1 - Math.abs(p - 0.5) * 2), 0.9 * (1 - p)); else col.setXYZ(v, 1, 1, 1); } col.needsUpdate = true; } }
 async function autoTexturas(M) {
   const ruta = M.ruta; if (!ruta.includes('!')) return; const arch = ruta.split('!')[0]; const nombres = []; for (const m of M.datos.materiales) for (const t of (m.texturas || [])) nombres.push(t.textura); for (const t of M.datos.texturas) nombres.push(t);
   const color = nombres.find(n => /_bsm|_alb|_col|_dif/i.test(n)) || nombres.find(n => /\.ftex$/i.test(n)); if (!color) return;
   try { const base = color.replace(/^\/+/, '').split('/').pop().replace(/\.(ftex|dds|tga|png)$/i, ''); const b = await vis('/api/buscar?ruta=' + enc(arch) + '&q=' + enc(base) + '&n=5'); const hit = b.archivos.find(a => /\.ftex$/i.test(a.nombre)); if (hit) aplicarTexturaEscena(hit.ruta, 'map'); } catch (e) { }
 }
-function aplicarTexturaEscena(ruta, slot) { if (!modeloSel) return toast('Cargá primero un modelo', true); const url = VISOR + '/api/png?ruta=' + enc(ruta) + '&canal=rgb'; new THREE.TextureLoader().load(url, tex => { tex.encoding = slot === 'map' ? THREE.sRGBEncoding : THREE.LinearEncoding; tex.flipY = true; tex.wrapS = tex.wrapT = THREE.RepeatWrapping; for (const mesh of modeloSel.mallas) { mesh.material[slot] = tex; if (slot === 'map') mesh.material.color.set(0xffffff); mesh.material.needsUpdate = true; } toast('Textura aplicada: ' + ruta.split(/[\\/!]/).pop()); }, undefined, () => toast('No se pudo cargar la textura', true)); }
+function aplicarTexturaEscena(ruta, slot) { if (!modeloSel) return toast('Cargá primero un modelo', true); const url = VISOR + '/api/png?ruta=' + enc(ruta) + '&canal=rgb'; new THREE.TextureLoader().load(url, tex => { tex.encoding = slot === 'map' ? THREE.sRGBEncoding : THREE.LinearEncoding; tex.flipY = true; tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.anisotropy = 8; for (const mesh of modeloSel.mallas) { const m = mesh.userData.matLit || mesh.material; m[slot] = tex; if (slot === 'map') m.color.set(0xffffff); m.needsUpdate = true; } if (vista !== 'lit') aplicarVista(); toast('Textura aplicada: ' + ruta.split(/[\\/!]/).pop()); clog('textura ' + slot + ': ' + ruta); }, undefined, () => toast('No se pudo cargar la textura', true)); }
 $('#mCargar').onclick = () => cargarModelo($('#mRuta').value, false); $('#mSumar').onclick = () => cargarModelo($('#mRuta').value, true); $('#mLimpiar').onclick = vaciarEscena; $('#mEncuadrar').onclick = encuadrar;
 
 // ---------------------------------------------------------------- texturas
