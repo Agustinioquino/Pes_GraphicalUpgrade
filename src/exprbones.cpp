@@ -171,6 +171,8 @@ static void QLog(const float* q, float* v) {   // cuaternion unitario -> vector 
 static void QExp(const float* v, float* q) {
     const float a = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
     if (a < 1e-7f) { q[0] = v[0] * 0.5f; q[1] = v[1] * 0.5f; q[2] = v[2] * 0.5f; q[3] = 1.0f; return; }
+    const float k = sinf(0.5f * a) / a; q[0] = v[0] * k; q[1] = v[1] * k; q[2] = v[2] * k; q[3] = cosf(0.5f * a);
+}
 static float GaniAngZ(const float* q) { return 2.0f * atan2f(q[2], q[3]); }   // giro alrededor del eje z del .ask (derecha): el que abre la mandibula y los parpados
 // (02/11) "mostrar los dientes" (350.w = 1): corrimiento de cada hueso en metros, ejes de la cabeza (x izquierda del jugador)
 static const float kTeeth[][3] = {
