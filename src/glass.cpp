@@ -372,9 +372,9 @@ ID3D11ShaderResourceView* EditorBgFor(ID3D11DeviceContext* c, uint64_t ps) {
     const int mode = (int)(g_cfg.live[424][0] + 0.5f);
     if (ps != kUiPS || mode <= 0 || !g_dev.dev) return nullptr;
     s_bgNUi.fetch_add(1, std::memory_order_relaxed); EditorBgDiagTick(mode);
-    const double t = s_edCompT.load(std::memory_order_relaxed);
-    if (t < 0 || Now() - t > 0.5) { s_bgNNoComp.fetch_add(1, std::memory_order_relaxed); return nullptr; }   // fuera del visor del editor: nada
-    if (s_bgSceneSeen.load(std::memory_order_relaxed)) { s_bgNAfter.fetch_add(1, std::memory_order_relaxed); return nullptr; }  // despues de la escena: paneles del menu, no se tocan
+    // (08/11 kd63zh) en la PC de Agustin la composicion f807 no pasa NUNCA por BeforeDraw en el editor (log 04e625e: 0 composiciones
+    // f807 en 15 s, 350693 dibujos del menu descartados). El visor del editor se reconoce ahora por el mismo menu: un dibujo de
+    // 55a003da que lee en t8 una textura render target grande (la imagen del jugador). Se mira primero t8 y luego la ventana de 0.5 s.
     ID3D11ShaderResourceView* t8 = nullptr; c->PSGetShaderResources(8, 1, &t8);
     if (!t8) { s_bgNNoT8.fetch_add(1, std::memory_order_relaxed); return nullptr; }
     D3D11_TEXTURE2D_DESC d{}; bool ok = false;
@@ -382,7 +382,18 @@ ID3D11ShaderResourceView* EditorBgFor(ID3D11DeviceContext* c, uint64_t ps) {
       if (r) { ID3D11Texture2D* t2 = nullptr; r->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t2); r->Release(); if (t2) { t2->GetDesc(&d); ok = true; t2->Release(); } } }
     t8->Release();
     if (!ok) return nullptr;
-    if (d.BindFlags & D3D11_BIND_RENDER_TARGET) { s_bgNRt.fetch_add(1, std::memory_order_relaxed); s_bgSceneSeen.store(true, std::memory_order_relaxed); return nullptr; }   // la imagen del jugador
+    if (d.BindFlags & D3D11_BIND_RENDER_TARGET) {   // la imagen del jugador: el visor del editor esta en pantalla
+        s_bgNRt.fetch_add(1, std::memory_order_relaxed); s_bgSceneSeen.store(true, std::memory_order_relaxed);
+        if (d.Width >= 512 && d.Height >= 512) {
+            static std::atomic<int> nv{ 0 };
+            if (nv.fetch_add(1) < 4) Log("fondo del editor: visor del editor reconocido por la imagen del jugador %ux%u (formato %d)", d.Width, d.Height, (int)d.Format);
+            s_edCompT.store(Now(), std::memory_order_relaxed);
+        }
+        return nullptr;
+    }
+    const double t = s_edCompT.load(std::memory_order_relaxed);
+    if (t < 0 || Now() - t > 0.5) { s_bgNNoComp.fetch_add(1, std::memory_order_relaxed); return nullptr; }   // fuera del visor del editor: nada
+    if (s_bgSceneSeen.load(std::memory_order_relaxed)) { s_bgNAfter.fetch_add(1, std::memory_order_relaxed); return nullptr; }  // despues de la escena: paneles del menu, no se tocan
     const float ar = d.Height ? (float)d.Width / (float)d.Height : 0.0f;
     const bool big = d.Width >= 1024 && ar > 1.45f && ar < 1.95f;      // fondo de pantalla completa (los atlas del menu son cuadrados o 2:1)
     if (s_bgDiag.fetch_add(1) < 12) Log("fondo del editor: dibujo del menu antes de la escena con textura %ux%u -> %s", d.Width, d.Height, big ? "fondo (se cambia)" : "se deja");
