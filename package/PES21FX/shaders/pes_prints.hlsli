@@ -22,7 +22,7 @@
 //    fino). El tejido del kit lo empuja (algodon pesado y jacquard -> cosido; poliester liso -> impreso) y en los kits
 //    de algodon pesado (retro) numero y nombre son fieltro cosido en vez de vinilo.
 // Parametros (fila 38): x38 altura del canto, y38 bordado (relieve interior + hilo), z38 cuanto aplana la trama,
-// w38 on/off [Alt+Shift+5]. Todo apagado lejos (kit chico en pantalla) y sin luz del sol (pesFine), como antes.
+// w38 on/off [Alt+Shift+5]. Apagado lejos (kit chico en pantalla); sin luz del sol (editor) va todo menos el hilo fino.
 // Las lecturas van con SampleGrad (gradientes calculados afuera del if) para poder ir dentro del if de w38.
 
 float PesPrLum(float3 c) { return dot(c, float3(0.299, 0.587, 0.114)); }
@@ -147,7 +147,7 @@ float PesPrTeamCrest(float res)
 
 // n = normal de tangente (xy perturbacion, z), cav = oclusion del kit. su / sv = signo de la tangente / binormal
 // respecto de +u / +v (medido afuera del if). pesPrint = mascara del original (max de los dos alfas).
-void PesPrintRelief(float2 uv, float2 dxu, float2 dyu, float su, float sv, float4 PR, float pesPrint,
+void PesPrintRelief(float2 uv, float2 dxu, float2 dyu, float su, float sv, float4 PR, float pesPrint, bool fine,
                     inout float3 n, inout float cav)
 {
   float W, H;
@@ -181,7 +181,7 @@ void PesPrintRelief(float2 uv, float2 dxu, float2 dyu, float su, float sv, float
   float k = saturate(PR.x / 1.5) * 1.5 * 0.9 * farFade;     // x38 = 1 -> canto de ~30 grados
   float2 tilt = -g * float2(su, sv) * k;
   // puntadas: solo en lo bordado (y los parches), lineas de 1 texel en diagonal, de cerca (sin aliasing)
-  float nearS = saturate((0.6 - fp) / 0.3);
+  float nearS = fine ? saturate((0.6 - fp) / 0.3) : 0.0;   // sin sol (editor) el hilo fino se vuelve ruido: solo con sol
 #if defined(PES_PRINT_BADGE)
   float embMask = max(am * emb, ad * e);
 #else

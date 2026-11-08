@@ -301,7 +301,8 @@ void main(
     pesSu = dot(dPdu, v4.xyz) >= 0 ? 1 : -1;
     pesSv = dot(dPdv, v5.xyz) >= 0 ? 1 : -1; }
   { float4 PR = IniParams.Load(int2(38,0));
-    if (PR.w > 0.5 && pesFine) PesPrintRelief(v2.xy, dxu, dyu, pesSu, pesSv, PR, pesPrint, r0.xyz, pesKitCav); }
+    // (08/11) tambien sin sol (editor, menus 3D): el canto y las capas son de escala gruesa; el hilo fino solo con sol
+    if (PR.w > 0.5) PesPrintRelief(v2.xy, dxu, dyu, pesSu, pesSv, PR, pesPrint, pesFine, r0.xyz, pesKitCav); }
   // PES21 tejido next-gen (17/10): punto de la tela en alta frecuencia sobre la trama del juego.
   // x45 escala (sobre la trama), y45 fuerza del relieve, z45 oclusion entre puntos, w45 on/off [Alt+Shift+N]
   float4 KN = IniParams.Load(int2(45,0));
