@@ -978,6 +978,10 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         // cuesta). 100 o mas (el ini trae 120) o 0 = toda la cancha, como antes
         { const float zr = g_cfg.live[58][2]; cull[35] = (zr > 1.0f && zr < 100.0f) ? std::clamp(zr, 5.0f, 100.0f) : 0.0f; }
         if (t_editor) { const float er = g_cfg.live[393][1]; cull[35] = er >= 1.0f ? std::clamp(er, 3.0f, 60.0f) : 8.0f; }   // (08/11 c) editor: solo alrededor del jugador
+        // (08/11 i, Agustin: "el pasto no carga en el modo editar") con la camara libre (zoom x0.26, campo de vision 0.024 rad) cada celda
+        // pasa de 1000 px/m (T0, donde empieza el pasto del juego) y el nivel 0 no emitia nada: en el editor no hay pasto del juego, asi
+        // que el nivel 0 va sin tope; y el alcance se mide desde el jugador (origen), no desde la camara, que con zoom queda a 15-40 m
+        if (t_editor) cull[36] = 1.0f;
         // (26/10 d) reclamo del cuadro: la primera emision que la GPU ejecuta despues del Present se queda con el cuadro (Count[18] = 1);
         // las demas pasan por las celdas sin anotar nada y dibujan 0 instancias
         GpuTimer* tm = (p58[3] > 0.5f && TimersReady()) ? TimerClaim(s_frame.load()) : nullptr;   // (1/11) medidor de GPU (solo con el registro prendido)
@@ -985,7 +989,8 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         cull[0] = 4.0f; c->UpdateSubresource(s_cullCb, 0, nullptr, cull, 0, 0); c->Dispatch(1, 1, 1);
         for (int i = 0; i < 3; i++) {
             UINT gw = (UINT)ceilf(2.0f * halfL / L[i].cell), gh = (UINT)ceilf(2.0f * halfW / L[i].cell);
-            cull[0] = (float)i; cull[1] = L[i].cell; cull[2] = i == 2 ? loFar : T[i + 1]; cull[3] = T[i];   // nivel 2: sin limite inferior (toda la cancha) salvo con cesped lejano en la base
+            cull[0] = (float)i; cull[1] = L[i].cell; cull[2] = i == 2 ? loFar : T[i + 1]; cull[3] = T[i];
+            if (t_editor && i == 0) cull[3] = 0.0f;   // (08/11 i) editor: nivel 0 sin tope (ver arriba)   // nivel 2: sin limite inferior (toda la cancha) salvo con cesped lejano en la base
             cull[6] = (float)(i * kBins); cull[7] = (float)gw; cull[8] = (float)gh;
             cull[12] = wEff0;   // ancho de la hoja en metros; (2/11 paso 10) el mismo en los 3 niveles (antes x1.6 x2 y x2 x4 por la celda: cintas a media distancia)
             cull[15] = (float)mIpc[i];

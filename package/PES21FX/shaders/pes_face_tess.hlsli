@@ -96,6 +96,7 @@ struct PesTessConst
 {
   float e[3] : SV_TessFactor;
   float i : SV_InsideTessFactor;
+  float zs : PESZOOM;   // (08/11 i) factor de la distancia por el zoom (1 = sin zoom); el DS lo usa en el fundido por distancia
 };
 
 // (04/11) fuera del bloque del hull shader: el domain shader tambien la usa (sin esto los DS no compilaban)
@@ -137,6 +138,23 @@ PesTessConst PesTessPatch(InputPatch<PesTessVS, 3> p)
   float f[3] = { 1.0, 1.0, 1.0 };
   bool ok = T.x > 0.5 && p[0].o0.w > 0.01 && p[1].o0.w > 0.01 && p[2].o0.w > 0.01;
   float dmin = min(length(p[0].pV.xyz), min(length(p[1].pV.xyz), length(p[2].pV.xyz)));
+  // (08/11 i, Agustin: "la teselacion no se aplica en el cuerpo") con la camara libre con zoom (campo de vision 0.024 rad) la camara
+  // queda a 15-40 m y la distancia maxima (z364 15 m, x358 27 m) y el detalle del cuerpo de cerca (1.2..2.2 m) nunca entraban, aunque
+  // el jugador llene la pantalla. La distancia se corrige por el zoom: focal en px medida en el propio triangulo (largo en pantalla x
+  // profundidad / largo en el mundo, el mayor de las 3 aristas; de costado da menos = no se exagera) contra una focal de referencia
+  // de 6 (campo de vision ~19 grados, una camara de transmision cerrada). Sin zoom o con camaras abiertas zs = 1: nada cambia.
+  float zs = 1.0;
+  {
+    float2 q0 = p[0].o0.xy / max(p[0].o0.w, 0.01) * 0.5 * g_pesTessVp.xy, q1 = p[1].o0.xy / max(p[1].o0.w, 0.01) * 0.5 * g_pesTessVp.xy, q2 = p[2].o0.xy / max(p[2].o0.w, 0.01) * 0.5 * g_pesTessVp.xy;
+    float3 lv = float3(length(p[1].pV.xyz - p[2].pV.xyz), length(p[2].pV.xyz - p[0].pV.xyz), length(p[0].pV.xyz - p[1].pV.xyz));
+    float3 ls = float3(length(q1 - q2), length(q2 - q0), length(q0 - q1));
+    float3 wz = float3(p[1].o0.w + p[2].o0.w, p[2].o0.w + p[0].o0.w, p[0].o0.w + p[1].o0.w) * 0.5;
+    float3 fe = (lv > 1e-5) ? ls * wz / max(lv, 1e-5) : 0.0;
+    float fpx = max(fe.x, max(fe.y, fe.z)), fref = 3.0 * max(g_pesTessVp.y, 1.0);
+    if (fpx > fref) zs = fref / fpx;
+  }
+  k.zs = zs;
+  dmin *= zs;
   // mas lejos que la distancia maxima: nada que dividir (el DS tampoco corre nada)
   if (dmin > U.x) ok = false;
   // los tres con peso 0 (triangulo entero en una costura): se queda como esta
@@ -174,7 +192,7 @@ PesTessConst PesTessPatch(InputPatch<PesTessVS, 3> p)
       float rW = IniParams.Load(int2(376, 0)).w;
       float c0z = p[0].o1.z;
       if (rW > 0.001 && IniParams.Load(int2(305, 0)).x > 0.5 && c0z > 6.5 && c0z < 7.5 && round((c0z - 7.0) * 1200.0) < 599.5) {
-        float3 dv = float3(length(p[0].pV.xyz), length(p[1].pV.xyz), length(p[2].pV.xyz));
+        float3 dv = float3(length(p[0].pV.xyz), length(p[1].pV.xyz), length(p[2].pV.xyz)) * zs;   // (08/11 i) con el zoom
         float3 ed = float3(min(dv.y, dv.z), min(dv.z, dv.x), min(dv.x, dv.y));
         float3 nk = 1.0 - smoothstep(1.2, 2.2, ed);
         float3 lw = float3(length(p[1].pV.xyz - p[2].pV.xyz), length(p[2].pV.xyz - p[0].pV.xyz), length(p[0].pV.xyz - p[1].pV.xyz));
@@ -400,7 +418,7 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
   // y bajo el cuello de la cara (z352 / x351), un redondeo hacia afuera los haria asomar
   seam *= 1.0 - smoothstep(1.40, 1.47, PES_LERP3(pR).y);
 #endif
-  float dist = length(pl);
+  float dist = length(pl) * k.zs;   // (08/11 i) distancia corregida por el zoom (HS)
   float fade = 1.0 - smoothstep(U.x - max(U.y, 0.01), U.x, dist);
   float3 d = (pp - pl) * (saturate(T.y) * seam * fade * (T.x > 0.5 ? 1.0 : 0.0));
   float dl = length(d), tope = lerp(max(U.z, 0.0), clamp(EB.y, 0.0, max(U.z, 0.0)), saturate(eyeMix * 2.0)) * 0.001;
