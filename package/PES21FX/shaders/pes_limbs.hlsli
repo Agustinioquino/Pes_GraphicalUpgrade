@@ -65,6 +65,27 @@ float3 PesLegActMix(bool left, float3 shAct) {
     float3 da = saturate(g_effort[1 + 64 + 2 * bi + (left ? 0 : 1)].xyz);
     return saturate(max(da, 0.5 * shAct));
 }
+// (08/11 b) tension del brazo de la DLL (musculo.cpp ArmMoments: balanceo, empuje, arriba, lanzamiento, puno, caida, arranque):
+// fila 1 + 192 + 2 n + lado de t123 = (biceps, triceps, deltoides, antebrazo). Sin la tabla (DLL vieja) -> -1 (PesArmBulge usa la pose).
+float4 PesArmActDll(bool left) {
+    uint ne = 0, st = 0; g_effort.GetDimensions(ne, st);
+    if (ne < 1 + 5 * 64) return -1.0;
+    float4 H = g_effort[0];
+    if (H.y < 0.5 || H.w < 0.5) return -1.0;
+    bool skE = g_vsObject.m_useWeightCount.x != 0;
+    float3 b0 = float3(g_vsBone.m_boneMatrices[0]._m30, g_vsBone.m_boneMatrices[0]._m31, g_vsBone.m_boneMatrices[0]._m32);
+    float3 b0b = float3(g_vsPrevBone.m_boneMatrices[0]._m30, g_vsPrevBone.m_boneMatrices[0]._m31, g_vsPrevBone.m_boneMatrices[0]._m32);
+    float3 wp = PesSkinPoint(g_vsObject.m_world, g_vsObject.m_viewWorld, g_vsScene.m_view, b0, b0b, skE);
+    int n = min((int)(H.x + 0.5), 64);
+    float bd = 1.96; int bi = -1;
+    [loop] for (int i = 0; i < n; i++) {
+        float2 dd = wp.xz - g_effort[1 + i].xz;
+        float d2 = dot(dd, dd);
+        if (d2 < bd) { bd = d2; bi = i; }
+    }
+    if (bi < 0) return -1.0;
+    return saturate(g_effort[1 + 192 + 2 * bi + (left ? 0 : 1)]);
+}
 // (02/11 b) muneca fina con la palma hacia adelante (Agustin, captura muneca_fina_20261102_1433). La v1 (cuaterniones duales en
 // los huesos de giro) rompio los brazos: dsk_forearm* / dsk_wrist tienen ESCALA. Esta v2 deja el skinning del juego tal cual y
 // solo empuja la piel hacia afuera lo que el lineal pierde al mezclar rotaciones distintas: con los cuaterniones de esos huesos
@@ -139,12 +160,18 @@ float PesArmBulge(uint vid, float3 rest) {
     // furia = esfuerzo alto (agitacion del jugador) con el brazo trabajando: el puno no llega al dibujo del brazo (la paleta del
     // brazo no tiene los dedos), asi que se mide por el esfuerzo y la pose
     float fury = smoothstep(0.25, 0.8, eff) * saturate(0.4 + 0.6 * max(fl, up));
+    // (08/11 b) con la DLL nueva la tension de cada grupo sale de los momentos (PesArmActDll); sin ella, como antes (pose + esfuerzo)
+    float4 da = PesArmActDll(left); bool dOk = da.x >= 0.0;
+    float kBi = dOk ? saturate(0.5 * fl + 0.7 * da.x) : fl * (0.75 + 0.25 * eff);
+    float kFx = dOk ? da.w : max(eff, fury);
+    float kTr = dOk ? da.y : max((1.0 - fl) * eff, 0.6 * fury);
+    float kDe = dOk ? max(0.6 * up, da.z) : max(up, fury);
     float gB = PesBulge(rp, float3(0.3305, 1.3058, 0.0668), ax, 0.040, 0.032);
-    float b = (0.0055 * fl * (0.75 + 0.25 * eff) * gB + 0.0018 * fl) * saturate(2.0 * Wv.x);                                         // biceps: pico + mas ancho
+    float b = (0.0055 * kBi * gB + 0.0018 * fl) * saturate(2.0 * Wv.x);                                         // biceps: pico + mas ancho
     b += (0.0030 * fl * PesBulge(rp, float3(0.4473, 1.2628, 0.0608), ax, 0.035, 0.025) + 0.0012 * fl) * saturate(2.0 * Wv.y);         // antebrazo: braquiorradial + mas ancho
-    b += 0.0030 * max(eff, fury) * saturate(2.0 * Wv.y) * PesBulge(rp, float3(0.4194, 1.2052, 0.0586), ax, 0.040, 0.022);             // flexores (apretar)
-    b += 0.0028 * max((1.0 - fl) * eff, 0.6 * fury) * PesBulge(rp, float3(0.3295, 1.3274, -0.0145), ax, 0.038, 0.024);                // triceps
-    b += 0.0030 * max(up, fury) * PesBulge(rp, float3(0.3168, 1.3769, 0.0157), ax, 0.032, 0.032);                                     // deltoides (brazo arriba o furia)
+    b += 0.0030 * kFx * saturate(2.0 * Wv.y) * PesBulge(rp, float3(0.4194, 1.2052, 0.0586), ax, 0.040, 0.022);             // flexores (apretar)
+    b += 0.0028 * kTr * PesBulge(rp, float3(0.3295, 1.3274, -0.0145), ax, 0.038, 0.024);                // triceps
+    b += 0.0030 * kDe * PesBulge(rp, float3(0.3168, 1.3769, 0.0157), ax, 0.032, 0.032);                                     // deltoides (brazo arriba o furia)
     // (02/11 f, Agustin: "al doblarse el antebrazo hacia el biceps el codo deberia notarse mas") el olecranon (la punta del codo)
     // sobresale con la flexion (la piel se estira sobre el hueso) y el pliegue de adentro del codo se hunde un poco
     // slider "Codos" (kE, arriba): tambien cuanto crece al doblar
