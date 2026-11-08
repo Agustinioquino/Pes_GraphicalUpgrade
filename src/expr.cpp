@@ -1412,7 +1412,7 @@ static void SlotPresent(ID3D11DeviceContext* imm) {
                         //  - los PARPADOS solo van en los lugares que la geometria de esta malla marco como parpado (lids, mismo lado y
                         //    arriba / abajo): tienen el mismo pivote que el ojo y entre ellos, y el emparejado por matriz los puede cruzar;
                         //  - cada hueso en un solo lugar (el de menor error); los demas quedan sin gesto
-                        float err[32]; for (int j = 0; j < 32; j++) err[j] = 1e9f;
+                        float err[32]; int alt[32]; float altE[32]; for (int j = 0; j < 32; j++) { err[j] = 1e9f; alt[j] = -1; altE[j] = 1e9f; }
                         for (int j = 0; j <= L.maxIdx; j++) {
                             if (j == L.head) continue;
                             Aff Mj, A; AffFromPalette(r + j * 12, Mj); AffMul(MhI, Mj, A);
@@ -1431,10 +1431,14 @@ static void SlotPresent(ID3D11DeviceContext* imm) {
                             // la boca 3D o la barba se movian distinto en la union. Si los dos candidatos son el mismo lugar para el juego (sus poses
                             // coinciden), se toma el mejor igual
                             const bool twin = sd2 >= 0 && kOk[sd2] && AffDist(K[bd], K[sd2]) < 0.06f;
-                            if (bd >= 0 && (okLid || (best < 0.25f && (second > 2.0f * best || twin)))) { slot[j] = (uint8_t)bd; err[j] = best; }
+                            if (bd >= 0 && (okLid || (best < 0.25f && (second > 2.0f * best || twin)))) { slot[j] = (uint8_t)bd; err[j] = best; if (twin) { alt[j] = sd2; altE[j] = second; } }
                             else if (bd >= 0 && best < 0.25f) s_slotAmb++;
                         }
-                        for (int j = 0; j < 32; j++) if (slot[j] != 255) for (int k = 0; k < 32; k++) if (k != j && slot[k] == slot[j] && err[k] <= err[j]) { slot[j] = 255; break; }
+                        for (int j = 0; j < 32; j++) if (slot[j] != 255) for (int k = 0; k < 32; k++) if (k != j && slot[k] == slot[j] && err[k] <= err[j]) {
+                            // el gemelo pierde su primer hueso: toma el segundo si nadie lo usa
+                            bool used = alt[j] < 0; for (int q = 0; q < 32 && !used; q++) if (slot[q] == alt[j]) used = true;
+                            if (!used) { slot[j] = (uint8_t)alt[j]; err[j] = altE[j]; alt[j] = -1; } else slot[j] = 255;
+                            break; }
                         for (int j = 0; j < 32; j++) if (slot[j] != 255) { matched++; worst = (std::max)(worst, err[j]); }
                     }
                 }
