@@ -30,12 +30,17 @@
 
 namespace fx {
 
-static const char* kTexName[4] = { "bsm", "nrm", "srm", "trm" };   // t0 difusa (face_bsm), t1 normal, t2 srm, t3 trm (translucent)
+// (08/11 o) quinta textura "hgt": altura de la piel integrada desde la normal (tools/caras_hd.py), para el desplazamiento de la
+// teselacion (facetess.cpp la enlaza al DS en t25); no existe en el juego (sin volcado ni formato original)
+constexpr int kTexN = 5;
+static const char* kTexName[kTexN] = { "bsm", "nrm", "srm", "trm", "hgt" };   // t0 difusa (face_bsm), t1 normal, t2 srm, t3 trm (translucent)
 
 struct HdTex { ID3D11ShaderResourceView* srv = nullptr; UINT size = 0; };
 struct HdFace {
-    HdTex t2k[4], t4k[4];
-    bool has2k[4] = {}, has4k[4] = {};        // archivos presentes en la carpeta
+    HdTex t2k[kTexN], t4k[kTexN];
+    bool has2k[kTexN] = {}, has4k[kTexN] = {};        // archivos presentes en la carpeta
+    bool Any2k() const { for (bool b : has2k) if (b) return true; return false; }
+    bool Any4k() const { for (bool b : has4k) if (b) return true; return false; }
     bool want4k = false, loading = false, tried2k = false, tried4k = false;
     DXGI_FORMAT orig[4] = {};                 // formato de la vista original (para avisar si el archivo no coincide en sRGB)
     UINT origW = 0;
@@ -102,7 +107,7 @@ static bool s_threadOn = false;
 // editor, cara de E. Martinez): el hilo de carga creaba las texturas en el dispositivo mientras el hilo de dibujo del juego liberaba
 // sus listas de comandos. Ahora el hilo solo lee los archivos a memoria; las texturas se crean en el Present (hilo de dibujo),
 // una cara por cuadro.
-struct ReadyJob { std::string id; bool big; std::vector<uint8_t> data[4]; };
+struct ReadyJob { std::string id; bool big; std::vector<uint8_t> data[kTexN]; };
 static std::deque<ReadyJob> s_ready;   // con s_mx
 static bool ReadFileAll(const std::wstring& path, std::vector<uint8_t>& out) {
     out.clear();
@@ -129,11 +134,11 @@ static void Worker() {
     for (;;) {
         LoadJob j;
         { std::unique_lock<std::mutex> lk(s_mx); s_cv.wait(lk, [] { return !s_jobs.empty(); }); j = s_jobs.front(); s_jobs.pop_front(); }
-        bool want[4] = {};
+        bool want[kTexN] = {};
         { std::lock_guard<std::mutex> lk(s_mx); auto it = s_faces.find(j.id); if (it == s_faces.end()) continue;
-          for (int i = 0; i < 4; i++) want[i] = j.big ? it->second.has4k[i] : it->second.has2k[i]; }
+          for (int i = 0; i < kTexN; i++) want[i] = j.big ? it->second.has4k[i] : it->second.has2k[i]; }
         ReadyJob r; r.id = j.id; r.big = j.big;
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < kTexN; i++) {
             if (!want[i]) continue;
             std::wstring p = Dir() + W(j.id) + L"_" + W(kTexName[i]) + (j.big ? L"_4k.dds" : L"_2k.dds");
             if (!ReadFileAll(p, r.data[i])) Log("caras hd: no se pudo leer %ls", p.c_str());
@@ -149,8 +154,8 @@ static void CreateReady() {
     auto it = s_faces.find(r.id);
     if (it == s_faces.end()) return;
     HdFace& f = it->second;
-    HdTex t[4]; int n = 0;
-    for (int i = 0; i < 4; i++) {
+    HdTex t[kTexN]; int n = 0;
+    for (int i = 0; i < kTexN; i++) {
         if (r.data[i].empty()) continue;
         char what[96]; snprintf(what, sizeof what, "%s_%s_%s", r.id.c_str(), kTexName[i], r.big ? "4k" : "2k");
         t[i].srv = LoadOne(r.data[i], what, &t[i].size);
@@ -158,12 +163,12 @@ static void CreateReady() {
         n++;
         D3D11_SHADER_RESOURCE_VIEW_DESC vd; t[i].srv->GetDesc(&vd);
         auto srgb = [](DXGI_FORMAT x) { return x == DXGI_FORMAT_BC1_UNORM_SRGB || x == DXGI_FORMAT_BC2_UNORM_SRGB || x == DXGI_FORMAT_BC3_UNORM_SRGB || x == DXGI_FORMAT_BC7_UNORM_SRGB || x == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB || x == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB; };
-        if (f.orig[i] && srgb(f.orig[i]) != srgb(vd.Format)) Log("caras hd: OJO %s_%s: el juego la lee %s y el archivo es %s (colores cambiados); revisar tools/caras_hd.py", r.id.c_str(), kTexName[i], srgb(f.orig[i]) ? "sRGB" : "lineal", srgb(vd.Format) ? "sRGB" : "lineal");
+        if (i < 4 && f.orig[i] && srgb(f.orig[i]) != srgb(vd.Format)) Log("caras hd: OJO %s_%s: el juego la lee %s y el archivo es %s (colores cambiados); revisar tools/caras_hd.py", r.id.c_str(), kTexName[i], srgb(f.orig[i]) ? "sRGB" : "lineal", srgb(vd.Format) ? "sRGB" : "lineal");
     }
     f.loading = false;
     HdTex* dst = r.big ? f.t4k : f.t2k;
-    for (int i = 0; i < 4; i++) { if (dst[i].srv) s_grave.push_back({ s_frame, dst[i].srv }); dst[i] = t[i]; }
-    Log("caras hd: cara %s a %s: %d de 4 texturas cargadas (bsm %u, nrm %u, srm %u, trm %u px)", r.id.c_str(), r.big ? "4096" : "2048", n, t[0].size, t[1].size, t[2].size, t[3].size);
+    for (int i = 0; i < kTexN; i++) { if (dst[i].srv) s_grave.push_back({ s_frame, dst[i].srv }); dst[i] = t[i]; }
+    Log("caras hd: cara %s a %s: %d texturas cargadas (bsm %u, nrm %u, srm %u, trm %u, altura %u px)", r.id.c_str(), r.big ? "4096" : "2048", n, t[0].size, t[1].size, t[2].size, t[3].size, t[4].size);
 }
 static void Queue(const std::string& id, bool big) {   // con s_mx tomado
     if (!s_threadOn) { s_threadOn = true; std::thread(Worker).detach(); }
@@ -171,7 +176,7 @@ static void Queue(const std::string& id, bool big) {   // con s_mx tomado
     s_cv.notify_one();
 }
 static void Scan(const std::string& id, HdFace& f) {   // que archivos hay para esta cara
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < kTexN; i++) {
         std::wstring b = Dir() + W(id) + L"_" + W(kTexName[i]);
         f.has2k[i] = Exists(b + L"_2k.dds"); f.has4k[i] = Exists(b + L"_4k.dds");
     }
@@ -204,7 +209,7 @@ void CarasHdNewFace(ID3D11DeviceContext* c, const std::string& id, ID3D11ShaderR
         f.origW = w0;
         Scan(id, f);
         doDump = s_dump && s_dumped.insert(id).second;
-        bool any2k = f.has2k[0] || f.has2k[1] || f.has2k[2] || f.has2k[3];
+        bool any2k = f.Any2k();
         if (s_on && any2k && !f.tried2k && !f.loading) {   // (08/11 h) activo = 0: no se carga nada (se cargaba la trm_2k de Messi antes del cierre 08:19)
          f.tried2k = true; f.loading = true; Queue(id, false); }
     }
@@ -250,6 +255,15 @@ bool CarasHdGet(const std::string& id, ID3D11ShaderResourceView* out[4]) {
     }
     if (any) { s_stBind++; if (big) s_stBind4k++; } else s_stMiss++;
     return any;
+}
+
+// (08/11 o) altura de la piel de esta cara (t25 del DS, facetess.cpp) o null; la cara ya paso por CarasHdGet en este dibujo
+ID3D11ShaderResourceView* CarasHdHeight(const std::string& id) {
+    if (!s_on || id.empty()) return nullptr;
+    std::lock_guard<std::mutex> lk(s_mx);
+    auto it = s_faces.find(id); if (it == s_faces.end()) return nullptr;
+    HdFace& f = it->second;
+    return (f.want4k && f.t4k[4].srv) ? f.t4k[4].srv : f.t2k[4].srv;
 }
 
 // ---------------------------------------------------------------- (04/11 b) pelo y barba (hooks.cpp, cualquier contexto)
@@ -325,7 +339,7 @@ void CarasHdPresent() {
     CreateReady();   // (08/11 g) las texturas se crean aca, en el hilo de dibujo
     // cada 10 s: caras sin archivos reescalados -> volver a mirar la carpeta (tools/caras_hd.py corrido con el juego abierto)
     if (t > scanNext) { scanNext = t + 10.0;
-        for (auto& kv : s_faces) { HdFace& f = kv.second; bool any = false; for (int i = 0; i < 4; i++) any |= f.has2k[i] || f.has4k[i];
+        for (auto& kv : s_faces) { HdFace& f = kv.second; bool any = false; for (int i = 0; i < kTexN; i++) any |= f.has2k[i] || f.has4k[i];
             if (!any) { Scan(kv.first, f); f.tried2k = false; f.tried4k = false; } } }
     // primer plano: pocas caras distintas en este cuadro -> esas piden 4096
     bool close = !s_frameIds.empty() && (int)s_frameIds.size() <= s_near.load();
@@ -340,7 +354,7 @@ void CarasHdPresent() {
     for (auto& cd : cand) { int& n = cd.second[0] == 'p' ? nh : nf; if (n < s_max4k.load()) { n++; keep.insert(cd.second); } }
     for (auto& kv : s_faces) {
         HdFace& f = kv.second; bool w = keep.count(kv.first) > 0;
-        bool any4k = f.has4k[0] || f.has4k[1] || f.has4k[2] || f.has4k[3];
+        bool any4k = f.Any4k();
         if (s_on && w && any4k && !f.tried4k && !f.loading) { f.tried4k = true; f.loading = true; Queue(kv.first, true); }
         if (!w && f.tried4k && !f.loading) {   // soltar la 4096 (la vista se libera mas tarde: puede estar en una lista diferida)
             for (auto& x : f.t4k) if (x.srv) { s_grave.push_back({ s_frame, x.srv }); x = HdTex(); }
@@ -352,7 +366,7 @@ void CarasHdPresent() {
             for (auto& x : f.t2k) if (x.srv) { s_grave.push_back({ s_frame, x.srv }); x = HdTex(); }
             f.tried2k = false;
         }
-        if (s_on && !f.tried2k && !f.loading && s_frame - f.lastFrame <= 2 && (f.has2k[0] || f.has2k[1] || f.has2k[2] || f.has2k[3])) { f.tried2k = true; f.loading = true; Queue(kv.first, false); }
+        if (s_on && !f.tried2k && !f.loading && s_frame - f.lastFrame <= 2 && f.Any2k()) { f.tried2k = true; f.loading = true; Queue(kv.first, false); }
     }
     // liberar lo soltado hace mas de 240 cuadros
     size_t k = 0;
