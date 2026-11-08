@@ -14,6 +14,8 @@
 // Fila 394: x on | y fuerza de la boca | z fuerza de las cejas | w animo (0 tranquilo .. 1 normal .. 2 cancha que canta todo)
 // (08/11 b) Reacciones: el VS lee la animacion del cuerpo de cada hincha (festejo, lamento, protesta, aplauso) y cambia la
 // cara; la CPU le pasa en w el pulso del grito propio de cada uno.
+// (08/11 b) Eventos del partido (lo decompilado: MatchInfo, rastro.cpp lo lee al final del tick): gol = 68 % de los bloques
+// festeja y el resto se lamenta, falta / offside = protestan, corner = expectativa. Cada hincha arranca con su demora.
 #include "core.h"
 #include <thread>
 #include <atomic>
@@ -34,6 +36,10 @@ static std::atomic<double> s_time{0.0};
 static std::atomic<float> s_mood{1.0f};
 static std::atomic<int> s_uploads{0};
 static double s_lastLog = 0;
+enum { kEvGol = 1, kEvFalta = 2, kEvOffside = 3, kEvCorner = 4 };
+static std::atomic<int> s_evKind{0};                      // ultimo evento del partido (PublicoMatchTick)
+static std::atomic<double> s_evT{-1000.0};
+static std::atomic<uint32_t> s_evSeed{0};
 
 static inline float Hash01(uint32_t x) {
     x ^= x >> 16; x *= 0x7feb352dU; x ^= x >> 15; x *= 0x846ca68bU; x ^= x >> 16;
@@ -77,6 +83,51 @@ static void Gesture(uint32_t i, double t, float mood, float* out) {
     float sh = 0.5f + 0.5f * sinf((float)(kTau * (t * shF + my * 5.3)));
     float shGate = Smooth(0.25f, 0.6f, 0.5f + 0.5f * sinf((float)(kTau * (t * 0.45 + my * 2.7))));
     out[3] = sh * sh * (0.35f + 0.65f * shGate);
+    // (08/11 b) eventos del partido (MatchInfo, leido al final del tick): toda la tribuna reacciona, cada uno con su demora
+    int ev = s_evKind.load(std::memory_order_relaxed);
+    if (ev) {
+        float age = (float)(t - s_evT.load(std::memory_order_relaxed));
+        float dur = ev == kEvGol ? 12.0f : ev == kEvCorner ? 4.0f : 5.0f;
+        float env = Smooth(0.0f, 0.35f, age - 0.7f * my) * (1.0f - Smooth(dur * 0.55f, dur, age));
+        if (age < 0) env = 0;
+        float ej = out[0], eb = 0.5f * (out[1] + out[2]), take = 1.0f;
+        if (ev == kEvGol) {
+            if (Hash01(g * 53u + s_evSeed.load(std::memory_order_relaxed)) < 0.68f) { ej = 0.30f + 0.12f * out[3]; eb = 0.010f + 0.003f * out[3]; }   // festejo
+            else { ej = 0.17f + 0.03f * out[3]; eb = 0.013f; }                                                                                         // lamento
+        } else if (ev == kEvFalta || ev == kEvOffside) {
+            take = Hash01(i * 31u + 7u) < 0.65f ? 1.0f : 0.0f;                                                                                       // protestan
+            ej = 0.07f + 0.22f * out[3]; eb = -0.004f;
+        } else if (ev == kEvCorner) {
+            ej = 0.06f + 0.10f * pulse; eb = 0.006f;                                                                                                   // expectativa
+        }
+        float k = env * take;
+        out[0] += (ej - out[0]) * k;
+        out[1] += (eb * asym - out[1]) * k;
+        out[2] += (eb * (2.0f - asym) - out[2]) * k;
+    }
+}
+
+// (08/11 b) lo llama rastro.cpp al final de cada tick del partido (solo lectura de MatchInfo): detecta gol, falta, offside y
+// corner por los cambios de la reanudacion (+0x1554: 3 corner, 7 saque del medio) y del tipo de falta (+0x1588: 1 offside,
+// 2..4 falta). Un saque del medio despues de mas de 15 s de la misma fase = gol (el del arranque de cada tiempo no cuenta).
+void PublicoMatchTick(int tick, int phase, int type, int restart, int foul) {
+    static int pPhase = -999, pRestart = -1, pFoul = 0; static double phaseT = 0;
+    double now = fmod(std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(), 100000.0);
+    if (phase != pPhase) { pPhase = phase; phaseT = now; pRestart = restart; pFoul = foul; return; }
+    int ev = 0;
+    if (restart != pRestart) {
+        if (restart == 7 && now - phaseT > 15.0) ev = kEvGol;
+        else if (restart == 3) ev = kEvCorner;
+    }
+    if (!ev && foul != pFoul && foul >= 1 && foul <= 4) ev = foul == 1 ? kEvOffside : kEvFalta;
+    pRestart = restart; pFoul = foul;
+    if (!ev) return;
+    // un gol no lo pisa una falta / corner de los segundos siguientes
+    if (s_evKind.load() == kEvGol && now - s_evT.load() < 10.0 && ev != kEvGol) return;
+    s_evSeed = (uint32_t)tick * 2654435761u;
+    s_evT = now; s_evKind = ev;
+    static const char* const kN[] = { "", "gol", "falta", "offside", "corner" };
+    Log("publico: evento %s (tick %d, fase %d, tipo %d, reanudacion %d, falta %d)", kN[ev], tick, phase, type, restart, foul);
 }
 
 static void Worker() {

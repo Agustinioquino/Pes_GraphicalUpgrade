@@ -195,10 +195,25 @@ void Snapshot() {
     s_snaps.fetch_add(1, std::memory_order_relaxed);
 }
 
+// (08/11, hilo del publico) eventos del partido para los gestos de la tribuna: fase, tipo, reanudacion y falta de MatchInfo
+// (ver rastro-partido: +0x1168 fase, +0x116c 1 juego / 2 detenida / 3 reanudando, +0x1554 reanudacion, +0x1588 tipo de falta)
+std::atomic<bool> s_ev{false}, s_relHooked{false};
+void EventTick() {
+    const uintptr_t reg = RdPtr(kRegGlobal);
+    if (!reg) return;
+    const uintptr_t mi = RdPtr(reg + 0x270);
+    if (!mi) return;
+    int v[5] = { -1, -1, -1, -1, -1 };
+    Rd((const void*)(mi + 0x1198), &v[0], 4); Rd((const void*)(mi + 0x1168), &v[1], 4); Rd((const void*)(mi + 0x116c), &v[2], 4);
+    Rd((const void*)(mi + 0x1554), &v[3], 4); Rd((const void*)(mi + 0x1588), &v[4], 4);
+    PublicoMatchTick(v[0], v[1], v[2], v[3], v[4]);
+}
+
 void hk_rel(void* view) {
     const uintptr_t ra = (uintptr_t)_ReturnAddress();
-    if (s_on.load(std::memory_order_relaxed) && ra > kTickEndLo && ra < kTickEndHi) {
-        __try { Snapshot(); } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    if (ra > kTickEndLo && ra < kTickEndHi) {
+        if (s_on.load(std::memory_order_relaxed)) { __try { Snapshot(); } __except (EXCEPTION_EXECUTE_HANDLER) {} }
+        if (s_ev.load(std::memory_order_relaxed)) { __try { EventTick(); } __except (EXCEPTION_EXECUTE_HANDLER) {} }
     }
     o_rel(view);
 }
@@ -353,7 +368,8 @@ void RastroPresent() {
     WriteFormat();
     bool logOk = false, relOk = false;
     if (SigAt(kLogStub, kLogSig, sizeof kLogSig) && MH_CreateHook((void*)kLogStub, (void*)&hk_log, (void**)&o_log) == MH_OK && MH_EnableHook((void*)kLogStub) == MH_OK) logOk = true;
-    if (SigAt(kRegRelease, kRelSig, sizeof kRelSig) && MH_CreateHook((void*)kRegRelease, (void*)&hk_rel, (void**)&o_rel) == MH_OK && MH_EnableHook((void*)kRegRelease) == MH_OK) relOk = true;
+    if (!s_relHooked.load() && SigAt(kRegRelease, kRelSig, sizeof kRelSig) && MH_CreateHook((void*)kRegRelease, (void*)&hk_rel, (void**)&o_rel) == MH_OK && MH_EnableHook((void*)kRegRelease) == MH_OK) s_relHooked = true;
+    relOk = s_relHooked.load();
     bool mcOk = false;
     if (g_cfg.rastroFalta && SigAt(kMcVf19, kMcSig, sizeof kMcSig)) {
         s_falta = _wfopen((s_dir + L"falta.log").c_str(), L"wb");
@@ -365,6 +381,20 @@ void RastroPresent() {
     Log("rastro: registro de depuracion del juego %s, foto del partido %s, vigia de faltas %s -> PES21FX\\rastro\\%ls\\ (tope %llu MB)",
         logOk ? "enganchado" : "NO (firma distinta)", relOk ? "enganchada" : "NO (firma distinta)",
         !g_cfg.rastroFalta ? "apagado" : mcOk ? "enganchado" : "NO (firma distinta)", name, (unsigned long long)(s_cap >> 20));
+}
+
+// (08/11) solo el gancho del final del tick, para los eventos del partido que usan los gestos del publico (fila 394), aunque
+// el rastro este apagado. Solo lectura de MatchInfo. Se llama en cada Present despues de RastroPresent.
+void RastroEventosPresent() {
+    static bool tried = false;
+    if (tried || g_cfg.live[394][0] <= 0.0f) return;
+    tried = true;
+    HMODULE mod = GetModuleHandleW(nullptr);
+    auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
+    if ((uintptr_t)mod != 0x140000000ull || nt->FileHeader.TimeDateStamp != kStamp) { Log("publico: exe distinto (sello %08X): sin eventos del partido", (unsigned)nt->FileHeader.TimeDateStamp); return; }
+    if (!s_relHooked.load() && SigAt(kRegRelease, kRelSig, sizeof kRelSig) && MH_CreateHook((void*)kRegRelease, (void*)&hk_rel, (void**)&o_rel) == MH_OK && MH_EnableHook((void*)kRegRelease) == MH_OK) s_relHooked = true;
+    s_ev = s_relHooked.load();
+    Log("publico: eventos del partido (gol, falta, offside, corner) %s", s_ev.load() ? "enganchados al final del tick" : "NO (firma distinta)");
 }
 
 // resumen cada tanto (lo llama el medidor de 10 s) y vaciado al cerrar
