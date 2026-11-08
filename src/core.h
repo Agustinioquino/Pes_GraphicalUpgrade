@@ -211,6 +211,7 @@ bool DeletePresetFile(const std::string& file);
 // ---------------------------------------------------------------- d3d
 bool InstallHooks();
 void OnDeviceCreated(ID3D11Device* d);
+void NoteDeviceFlags(UINT flags, bool ok);   // (08/11 g) banderas con que el juego pidio el dispositivo (al log en el primer Present)
 void ReloadShaders();
 void WatchShaderFolder();                      // recarga sola los shaders que cambian en disco
 std::wstring ShaderPath(uint64_t hash, const char* type);   // shaders\<hash>-ps_replace.txt

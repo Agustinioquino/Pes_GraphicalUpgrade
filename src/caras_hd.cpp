@@ -98,11 +98,28 @@ static std::deque<LoadJob> s_jobs;
 static std::condition_variable s_cv;
 static bool s_threadOn = false;
 
-static ID3D11ShaderResourceView* LoadOne(const std::wstring& path, UINT* size) {
+// (08/11 g) cierres en CCommandList::LUCDeferDeletion (PES2021+0x1ff674a) justo al terminar de cargar una cara a 4096 (05:12 PC,
+// editor, cara de E. Martinez): el hilo de carga creaba las texturas en el dispositivo mientras el hilo de dibujo del juego liberaba
+// sus listas de comandos. Ahora el hilo solo lee los archivos a memoria; las texturas se crean en el Present (hilo de dibujo),
+// una cara por cuadro.
+struct ReadyJob { std::string id; bool big; std::vector<uint8_t> data[4]; };
+static std::deque<ReadyJob> s_ready;   // con s_mx
+static bool ReadFileAll(const std::wstring& path, std::vector<uint8_t>& out) {
+    out.clear();
+    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    LARGE_INTEGER sz{}; bool ok = GetFileSizeEx(h, &sz) && sz.QuadPart > 128 && sz.QuadPart < (1ll << 30);
+    if (ok) { out.resize((size_t)sz.QuadPart); DWORD rd = 0; size_t at = 0;
+        while (ok && at < out.size()) { DWORD want = (DWORD)(std::min)(out.size() - at, (size_t)(64u << 20)); ok = ReadFile(h, out.data() + at, want, &rd, nullptr) && rd > 0; at += rd; } }
+    CloseHandle(h);
+    if (!ok) out.clear();
+    return ok;
+}
+static ID3D11ShaderResourceView* LoadOne(const std::vector<uint8_t>& data, const char* what, UINT* size) {
     ID3D11Resource* res = nullptr; ID3D11ShaderResourceView* srv = nullptr;
-    HRESULT hr = DirectX::CreateDDSTextureFromFileEx(g_dev.dev, path.c_str(), 0, D3D11_USAGE_IMMUTABLE, D3D11_BIND_SHADER_RESOURCE, 0, 0,
-                                                     DirectX::DDS_LOADER_DEFAULT, &res, &srv);
-    if (FAILED(hr)) { Log("caras hd: no se pudo cargar %ls (0x%08x)", path.c_str(), (unsigned)hr); return nullptr; }
+    HRESULT hr = DirectX::CreateDDSTextureFromMemoryEx(g_dev.dev, data.data(), data.size(), 0, D3D11_USAGE_IMMUTABLE, D3D11_BIND_SHADER_RESOURCE, 0, 0,
+                                                       DirectX::DDS_LOADER_DEFAULT, &res, &srv);
+    if (FAILED(hr)) { Log("caras hd: no se pudo crear %s (0x%08x)", what, (unsigned)hr); return nullptr; }
     if (res) { D3D11_RESOURCE_DIMENSION dim; res->GetType(&dim);
         if (dim == D3D11_RESOURCE_DIMENSION_TEXTURE2D) { D3D11_TEXTURE2D_DESC d; ((ID3D11Texture2D*)res)->GetDesc(&d); *size = d.Width; }
         res->Release(); }
@@ -112,29 +129,41 @@ static void Worker() {
     for (;;) {
         LoadJob j;
         { std::unique_lock<std::mutex> lk(s_mx); s_cv.wait(lk, [] { return !s_jobs.empty(); }); j = s_jobs.front(); s_jobs.pop_front(); }
-        if (!g_dev.dev) continue;
-        HdTex t[4]; DXGI_FORMAT orig[4] = {}; bool want[4] = {};
+        bool want[4] = {};
         { std::lock_guard<std::mutex> lk(s_mx); auto it = s_faces.find(j.id); if (it == s_faces.end()) continue;
-          for (int i = 0; i < 4; i++) { want[i] = j.big ? it->second.has4k[i] : it->second.has2k[i]; orig[i] = it->second.orig[i]; } }
-        int n = 0;
+          for (int i = 0; i < 4; i++) want[i] = j.big ? it->second.has4k[i] : it->second.has2k[i]; }
+        ReadyJob r; r.id = j.id; r.big = j.big;
         for (int i = 0; i < 4; i++) {
             if (!want[i]) continue;
             std::wstring p = Dir() + W(j.id) + L"_" + W(kTexName[i]) + (j.big ? L"_4k.dds" : L"_2k.dds");
-            t[i].srv = LoadOne(p, &t[i].size);
-            if (t[i].srv) { n++;
-                D3D11_SHADER_RESOURCE_VIEW_DESC vd; t[i].srv->GetDesc(&vd);
-                auto srgb = [](DXGI_FORMAT f) { return f == DXGI_FORMAT_BC1_UNORM_SRGB || f == DXGI_FORMAT_BC2_UNORM_SRGB || f == DXGI_FORMAT_BC3_UNORM_SRGB || f == DXGI_FORMAT_BC7_UNORM_SRGB || f == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB || f == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB; };
-                if (orig[i] && srgb(orig[i]) != srgb(vd.Format)) Log("caras hd: OJO %s_%s: el juego la lee %s y el archivo es %s (colores cambiados); revisar tools/caras_hd.py", j.id.c_str(), kTexName[i], srgb(orig[i]) ? "sRGB" : "lineal", srgb(vd.Format) ? "sRGB" : "lineal");
-            }
+            if (!ReadFileAll(p, r.data[i])) Log("caras hd: no se pudo leer %ls", p.c_str());
         }
         std::lock_guard<std::mutex> lk(s_mx);
-        auto it = s_faces.find(j.id);
-        if (it == s_faces.end()) { for (auto& x : t) if (x.srv) s_grave.push_back({ s_frame, x.srv }); continue; }
-        HdFace& f = it->second; f.loading = false;
-        HdTex* dst = j.big ? f.t4k : f.t2k;
-        for (int i = 0; i < 4; i++) { if (dst[i].srv) s_grave.push_back({ s_frame, dst[i].srv }); dst[i] = t[i]; }
-        Log("caras hd: cara %s a %s: %d de 4 texturas cargadas (bsm %u, nrm %u, srm %u, trm %u px)", j.id.c_str(), j.big ? "4096" : "2048", n, t[0].size, t[1].size, t[2].size, t[3].size);
+        s_ready.push_back(std::move(r));
     }
+}
+// en el Present, con s_mx tomado: crea las texturas de UNA cara leida
+static void CreateReady() {
+    if (s_ready.empty() || !g_dev.dev) return;
+    ReadyJob r = std::move(s_ready.front()); s_ready.pop_front();
+    auto it = s_faces.find(r.id);
+    if (it == s_faces.end()) return;
+    HdFace& f = it->second;
+    HdTex t[4]; int n = 0;
+    for (int i = 0; i < 4; i++) {
+        if (r.data[i].empty()) continue;
+        char what[96]; snprintf(what, sizeof what, "%s_%s_%s", r.id.c_str(), kTexName[i], r.big ? "4k" : "2k");
+        t[i].srv = LoadOne(r.data[i], what, &t[i].size);
+        if (!t[i].srv) continue;
+        n++;
+        D3D11_SHADER_RESOURCE_VIEW_DESC vd; t[i].srv->GetDesc(&vd);
+        auto srgb = [](DXGI_FORMAT x) { return x == DXGI_FORMAT_BC1_UNORM_SRGB || x == DXGI_FORMAT_BC2_UNORM_SRGB || x == DXGI_FORMAT_BC3_UNORM_SRGB || x == DXGI_FORMAT_BC7_UNORM_SRGB || x == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB || x == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB; };
+        if (f.orig[i] && srgb(f.orig[i]) != srgb(vd.Format)) Log("caras hd: OJO %s_%s: el juego la lee %s y el archivo es %s (colores cambiados); revisar tools/caras_hd.py", r.id.c_str(), kTexName[i], srgb(f.orig[i]) ? "sRGB" : "lineal", srgb(vd.Format) ? "sRGB" : "lineal");
+    }
+    f.loading = false;
+    HdTex* dst = r.big ? f.t4k : f.t2k;
+    for (int i = 0; i < 4; i++) { if (dst[i].srv) s_grave.push_back({ s_frame, dst[i].srv }); dst[i] = t[i]; }
+    Log("caras hd: cara %s a %s: %d de 4 texturas cargadas (bsm %u, nrm %u, srm %u, trm %u px)", r.id.c_str(), r.big ? "4096" : "2048", n, t[0].size, t[1].size, t[2].size, t[3].size);
 }
 static void Queue(const std::string& id, bool big) {   // con s_mx tomado
     if (!s_threadOn) { s_threadOn = true; std::thread(Worker).detach(); }
@@ -289,6 +318,7 @@ void CarasHdPresent() {
     static double scanNext = 0;
     std::lock_guard<std::mutex> lk(s_mx);
     s_frame++;
+    CreateReady();   // (08/11 g) las texturas se crean aca, en el hilo de dibujo
     // cada 10 s: caras sin archivos reescalados -> volver a mirar la carpeta (tools/caras_hd.py corrido con el juego abierto)
     if (t > scanNext) { scanNext = t + 10.0;
         for (auto& kv : s_faces) { HdFace& f = kv.second; bool any = false; for (int i = 0; i < 4; i++) any |= f.has2k[i] || f.has4k[i];

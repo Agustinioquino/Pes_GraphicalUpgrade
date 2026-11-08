@@ -2185,6 +2185,12 @@ bool InstallHooks() {
 
 // llamado por nuestro D3D11CreateDevice (somos el d3d11.dll de la carpeta del juego)
 void OnDeviceCreated(ID3D11Device* d) { if (d) HookDevice(d); }
+static std::atomic<UINT> s_devFlags{0xffffffffu};
+void NoteDeviceFlags(UINT flags, bool ok) {
+    s_devFlags.store(flags);
+    Log("dispositivo D3D11: el juego lo pidio con banderas 0x%x%s%s", flags,
+        (flags & D3D11_CREATE_DEVICE_SINGLETHREADED) ? " (SINGLETHREADED: se quita, el mod crea texturas desde otros hilos)" : " (multihilo)", ok ? "" : " - FALLO");
+}
 
 // ---------------------------------------------------------------- diagnostico: referencias a una DLL que se descarga
 static bool Readable(uintptr_t p, size_t n) {
