@@ -20,6 +20,7 @@ namespace fx {
 static const int kMaxPlayers = 48, kStages = 3;
 static ID3D11Buffer* s_stage[kStages] = {}; static int s_stageFrame[kStages] = { -1, -1, -1 }; static std::atomic<int> s_stageW{0};
 static std::atomic<int> s_count{0};          // dibujos anotados en el cuadro actual
+static std::atomic<int> s_noteCalls{0}, s_noteOk{0}, s_noteShort{0}, s_noteNoStage{0}; static int s_posBad = 0, s_posZero = 0, s_posOk = 0, s_rowPick[4] = {};   // (08/11 z) diagnostico
 static int s_frame = 0;
 static ID3D11Texture2D* s_tex = nullptr; static ID3D11RenderTargetView* s_rtv = nullptr; static ID3D11ShaderResourceView* s_srv = nullptr;
 static ID3D11VertexShader* s_vs = nullptr; static ID3D11PixelShader* s_ps = nullptr; static bool s_tried = false;
@@ -196,7 +197,7 @@ void PitchClipsReloadShaders() { if (s_clipVS) { s_clipVS->Release(); s_clipVS =
 static void EnsureRes() {
     if (!g_dev.dev) return;
     for (int i = 0; i < kStages; i++) if (!s_stage[i]) {
-        D3D11_BUFFER_DESC d = {}; d.ByteWidth = kMaxPlayers * 16; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        D3D11_BUFFER_DESC d = {}; d.ByteWidth = kMaxPlayers * 128; d.Usage = D3D11_USAGE_STAGING;   // (08/11 z) 8 filas de b5 por dibujo d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
         g_dev.dev->CreateBuffer(&d, nullptr, &s_stage[i]);
     }
     if (!s_tex) {
@@ -426,14 +427,18 @@ void PitchWearReloadShaders() { if (s_vs) { s_vs->Release(); s_vs = nullptr; } i
 // en el dibujo del short / medias: copiar la traslacion de m_world (b5 del VS, fila 3 = bytes 112..127) al staging del cuadro
 void PitchWearNotePlayer(ID3D11DeviceContext* c) {
     if (!g_dev.dev || g_cfg.live[115][3] < 0.5f) return;
-    int w = s_stageW.load(); if (!s_stage[w]) return;
+    s_noteCalls++;
+    int w = s_stageW.load(); if (!s_stage[w]) { s_noteNoStage++; return; }
     int i = s_count.fetch_add(1); if (i >= kMaxPlayers) return;
     ID3D11Buffer* cb = nullptr; UINT first = 0, num = 0; ID3D11DeviceContext1* c1 = nullptr;
     if (SUCCEEDED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) && c1) { c1->VSGetConstantBuffers1(5, 1, &cb, &first, &num); c1->Release(); }
     else c->VSGetConstantBuffers(5, 1, &cb);
     if (!cb) return;
-    D3D11_BUFFER_DESC d; cb->GetDesc(&d); UINT off = first * 16 + 112;
-    if (d.ByteWidth >= off + 16) { D3D11_BOX bx = { off, 0, 0, off + 16, 1, 1 }; c->CopySubresourceRegion(s_stage[w], 0, (UINT)i * 16, 0, 0, cb, 0, &bx); }
+    D3D11_BUFFER_DESC d; cb->GetDesc(&d); UINT off = first * 16;
+    // (08/11 z) se copian las 8 primeras filas de b5 (128 B) y en Present se elige la que parece una posicion de la cancha (fila 7, fila 3 o la
+    // columna w de las filas 4..6, como con la pelota): antes solo la fila 7 y, segun la malla / el mod de kits, la posicion caia fuera de rango
+    if (d.ByteWidth >= off + 128) { D3D11_BOX bx = { off, 0, 0, off + 128, 1, 1 }; c->CopySubresourceRegion(s_stage[w], 0, (UINT)i * 128, 0, 0, cb, 0, &bx); s_noteOk++; }
+    else s_noteShort++;
     cb->Release();
 }
 
@@ -506,6 +511,11 @@ void PitchWearPresent() {
     PitchFlatPresent();   // (20/10) pasto aplastado temporal (jugadores + pelota)
     BallDrawPresent();    // (2/11) reconocer el dibujo de la pelota y publicar sus manchas
     const float* P = g_cfg.live[115];
+    // (08/11 z, Agustin: "no se aprecian las huellas ni el desgaste") diagnostico cada 15 s: en su partido no hubo ni una pisada en el log
+    { static double nextD = 0.0; double tn = Now(); if (tn >= nextD && g_cfg.live[58][3] > 0.5f) { nextD = tn + 15.0;
+        Log("desgaste en vivo (15 s): dibujos de short 5529 %d (anotados %d, b5 corto %d, sin staging %d) | posiciones: validas %d (fila 7 %d, fila 3 %d, columna w %d), fuera de rango %d, en cero %d | jugadores seguidos %d, recortes vivos %d | x115 %.2f w115 %.0f x136 %.0f x389 %.0f",
+            s_noteCalls.exchange(0), s_noteOk.exchange(0), s_noteShort.exchange(0), s_noteNoStage.exchange(0), s_posOk, s_rowPick[0], s_rowPick[1], s_rowPick[2], s_posBad, s_posZero, (int)s_pl.size(), (int)s_clips.size(), P[0], P[3], g_cfg.live[136][0], g_cfg.live[389][0]);
+        s_posOk = s_posBad = s_posZero = 0; s_rowPick[0] = s_rowPick[1] = s_rowPick[2] = 0; } }
     if (P[3] < 0.5f) { s_count = 0; return; }
     EnsureRes(); if (!s_tex || !s_cb) return;
     // partido nuevo: borrar
@@ -522,9 +532,13 @@ void PitchWearPresent() {
     D3D11_MAPPED_SUBRESOURCE m; if (FAILED(g_dev.imm->Map(s_stage[rd], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) return;
     const float* q = (const float*)m.pData; int cnt = 0; float pos[kMaxPlayers][2];
     for (int i = 0; i < kMaxPlayers && cnt < kMaxPlayers; i++) {
-        float x = q[i * 4 + 0], y = q[i * 4 + 1], z = q[i * 4 + 2];
-        if (!(fabsf(x) < 80.f && fabsf(z) < 50.f && fabsf(y) < 5.f)) continue;
-        if (fabsf(x) < 0.01f && fabsf(z) < 0.01f) continue;
+        // (08/11 z) candidatos de posicion dentro de las 8 filas copiadas: fila 7 (xyz), fila 3 (xyz), columna w de las filas 4..6
+        const float* r = q + i * 32; float x = 0, y = 0, z = 0; int pick = -1;
+        const float cand[3][3] = { { r[28], r[29], r[30] }, { r[12], r[13], r[14] }, { r[19], r[23], r[27] } };
+        for (int k = 0; k < 3 && pick < 0; k++) { float cx = cand[k][0], cy = cand[k][1], cz = cand[k][2];
+            if (fabsf(cx) < 80.f && fabsf(cz) < 50.f && fabsf(cy) < 5.f && !(fabsf(cx) < 0.01f && fabsf(cz) < 0.01f)) { x = cx; y = cy; z = cz; pick = k; } }
+        if (pick < 0) { if (fabsf(r[28]) < 0.01f && fabsf(r[30]) < 0.01f) s_posZero++; else s_posBad++; continue; }
+        s_rowPick[pick]++; s_posOk++;
         bool dup = false; for (int k = 0; k < cnt; k++) if (fabsf(pos[k][0] - x) < 0.05f && fabsf(pos[k][1] - z) < 0.05f) { dup = true; break; }
         if (dup) continue;
         pos[cnt][0] = x; pos[cnt][1] = z; cnt++;

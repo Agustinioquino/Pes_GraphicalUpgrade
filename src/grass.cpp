@@ -134,6 +134,7 @@ static inline uint16_t F16(float v) {   // float -> half (sin NaN/inf)
     return (uint16_t)(sgn | (e << 10) | (m >> 13));
 }
 static std::atomic<float> s_adapt{1.0f};   // (27/10 o) densidad adaptativa por FPS (fila 333)
+static float s_adaptV[2] = { 1.0f, 1.0f };  // (08/11 z) densidad adaptativa guardada por vista: [0] lejos (x333 / y333), [1] cerca (x410 / y410)
 static float Halton(int i, int b) { float f = 1.0f, r = 0.0f; while (i > 0) { f /= b; r += f * (i % b); i /= b; } return r; }
 static void DenseRelease() { auto rel = [](DenseLevel& L) { if (L.pos) L.pos->Release(); if (L.uv) L.uv->Release(); if (L.ib) L.ib->Release(); L = DenseLevel(); }; for (auto& L : s_dense) rel(L); for (auto& L : s_denseExt) rel(L); s_denseBuilt = false; }
 static void BuildDense(float curv) {
@@ -737,7 +738,14 @@ void GrassPresent() {
     { static double lastT = -1.0; static float ema = 0.0f; static double nextAdj = 0.0, nextLogA = 0.0; double tn = Now();
       if (lastT >= 0.0) { float dt = (float)std::clamp(tn - lastT, 0.0005, 0.5); ema = ema <= 0.0f ? dt : ema + (dt - ema) * 0.1f; }
       lastT = tn;
-      float target = g_cfg.live[333][0], floorA = g_cfg.live[333][1] > 0.05f ? std::clamp(g_cfg.live[333][1], 0.2f, 1.0f) : 0.4f;
+      // (08/11 z, Agustin: "fps objetivo en vistas cercanas") vista cercana = el nivel 0 (hojas de cerca) tiene mas parcelas que los otros dos
+      // juntos (primeros planos, repeticiones de cerca); ahi mandan x410 / y410 si estan (0 = los generales). Cada vista guarda su densidad
+      const bool nearV = g_grassDbg.ring[0] > g_grassDbg.ring[1] + g_grassDbg.ring[2] && g_grassDbg.ring[0] > 0;
+      const bool useN = nearV && g_cfg.live[410][0] >= 20.0f;
+      float target = useN ? g_cfg.live[410][0] : g_cfg.live[333][0];
+      float floorA = useN ? (g_cfg.live[410][1] > 0.05f ? std::clamp(g_cfg.live[410][1], 0.2f, 1.0f) : 0.6f)
+                          : (g_cfg.live[333][1] > 0.05f ? std::clamp(g_cfg.live[333][1], 0.2f, 1.0f) : 0.4f);
+      { static bool lastNear = false; if (useN != lastNear) { lastNear = useN; s_adapt = s_adaptV[useN ? 1 : 0]; } }
       // (08/11 y, Agustin: "esas opciones no optimizan nada") con Calidad Ultra (x61 = 4) la adaptativa quedaba apagada sin avisar: el log no
       // tenia ninguna linea "pasto adaptativo" y mover x333 no cambiaba nada. Ahora vale en todas las calidades (x333 < 20 = apagada) y se anota
       if (target < 20.0f) { s_adapt = 1.0f; nextAdj = 0.0;
@@ -746,8 +754,8 @@ void GrassPresent() {
           float fps = 1.0f / ema; float a = s_adapt.load();
           if (fps < target * 0.97f) a = (std::max)(floorA, a * 0.93f);
           else if (fps > target * 1.10f) a = (std::min)(1.0f, a * 1.06f);   // (27/10 q) 1.03 -> 1.06: volvia al 100 % en 15 s, ahora en 8
-          s_adapt = a;
-          if (tn >= nextLogA && g_cfg.live[58][3] > 0.5f) { nextLogA = tn + 10.0; Log("pasto adaptativo: FPS %.0f (objetivo %.0f) -> densidad x%.2f en los 3 niveles (minimo %.2f, calidad %d)", fps, target, a, floorA, (int)(g_cfg.live[61][0] + 0.5f)); } } }
+          s_adapt = a; s_adaptV[useN ? 1 : 0] = a;
+          if (tn >= nextLogA && g_cfg.live[58][3] > 0.5f) { nextLogA = tn + 10.0; Log("pasto adaptativo (%s): FPS %.0f (objetivo %.0f) -> densidad x%.2f en los 3 niveles (minimo %.2f, calidad %d, parcelas %d/%d/%d)", useN ? "vista cercana, fila 410" : "general, fila 333", fps, target, a, floorA, (int)(g_cfg.live[61][0] + 0.5f), g_grassDbg.ring[0], g_grassDbg.ring[1], g_grassDbg.ring[2]); } } }
     if (s_vbState.load() == 1 && s_vbStage && g_dev.imm) {
         D3D11_MAPPED_SUBRESOURCE m;
         if (SUCCEEDED(g_dev.imm->Map(s_vbStage, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) {
