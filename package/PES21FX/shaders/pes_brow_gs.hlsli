@@ -9,9 +9,9 @@
 // w75 = -1 invierte la direccion | y77 = 1 tambien fuera del partido (editor, presentaciones)
 // El archivo se incluye desde pes_brow_a_gs.hlsl (VS de la cabeza faab87ee) y pes_brow_b_gs.hlsl (VS de la cara animada
 // 455eb97b): la entrada del GS tiene que ser IGUAL a la salida de cada VS (mismo orden de semanticas).
-#define PES_SEG 4
-#define PES_PER_INST 4      // hebras por instancia del GS: 4 x 10 vertices x 23 escalares = 920 (tope 1024; 04/11 e + tangente)
-#define PES_INST 24         // instancias del GS por triangulo -> hasta 96 hebras por triangulo ((04/11 i) mas lugar para "cantidad")
+#define PES_SEG 5           // (08/11, Agustin: "mejora la calidad") 4 -> 5 segmentos: curva y punta afinada mas suaves de cerca
+#define PES_PER_INST 3      // hebras por instancia del GS: 3 x 12 vertices x 24 escalares = 864 (tope 1024)
+#define PES_INST 32         // instancias del GS por triangulo -> 96 hebras por triangulo, igual que antes (24 x 4)
 cbuffer cVSScene : register(b2)
 {
   float4 m_projectionView[4];
@@ -440,7 +440,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
         float3 nH = normalize(n * lerp(1.0, 0.8, lay) + dd * (lift * 0.6 * t));
         o.nrmV = nH;
         o.col = cR; o.col2 = cT;
-        o.tw = float3(t, side, clamp(cov, 0.02, 0.98) + 2.0 * floor(frac(r2 * 7.77 + r3 * 3.33) * 8.0));   // (07/11) z = cobertura + 2 x (0..7) tono de brillo de la hebra
+        o.tw = float3(t, side, clamp(cov, 0.02, 0.98) + 2.0 * (floor(frac(r2 * 7.77 + r3 * 3.33) * 8.0) + 8.0 * floor(lay * 3.999)));   // (08/11) + 16 x capa (0..3) para la sombra entre capas del PS   // (07/11) z = cobertura + 2 x (0..7) tono de brillo de la hebra
         o.motion = motion;
         o.viewV = V;
         o.tanV = tanR;
