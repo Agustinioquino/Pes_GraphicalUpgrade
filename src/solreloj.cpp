@@ -25,6 +25,7 @@ static bool Readable(const void* p, size_t n) {
 struct AtmoSnap { short dt[6]; float lat, lon, north; int gmt; float sun[4], lux, moonLux, skyScale, fin, finMoon; unsigned flags; unsigned long long id; };
 
 static bool s_checked = false, s_ok = false; static double s_next = 0; static int s_lines = 0, s_quiet = 0;
+SolClock g_solClock;   // (08/11 ac) lo lee config.cpp cada cuadro
 static AtmoSnap s_last[4] = {}; static int s_lastN = -1; static unsigned s_lastSec = 0xffffffffu;
 
 void SolRelojPresent() {
@@ -38,7 +39,8 @@ void SolRelojPresent() {
             && Readable((void*)kAtmoManagerPtr, 8) && Readable((void*)kTodLightPtr, 8);
         Log("hora del sol: registro %s (exe %08X)", s_ok ? "activo: atmosfera y reloj del motor cada 10 s" : "no disponible (exe distinto)", (unsigned)nt->FileHeader.TimeDateStamp);
     }
-    if (!s_ok || s_lines >= 600) return;
+    if (!s_ok) return;
+    const bool canLog = s_lines < 600;   // (08/11 ac) despues de 600 lineas se sigue leyendo (g_solClock) pero no se escribe mas
     bool due = t >= s_next;
 
     // reloj del interpolador de luz por hora (TODLight): segundos del dia que el motor usa para mezclar los bloques _day/_night
@@ -65,7 +67,15 @@ void SolRelojPresent() {
         if (s.dt[3] != l.dt[3] || s.dt[4] != l.dt[4] || s.dt[0] != l.dt[0] || s.dt[1] != l.dt[1] || s.dt[2] != l.dt[2]
             || fabsf(s.lux - l.lux) > 1.0f || fabsf(s.skyScale - l.skyScale) > 0.001f || fabsf(s.lat - l.lat) > 0.01f || fabsf(s.lon - l.lon) > 0.01f || s.id != l.id) changed = true;
     }
-    if (!due && !changed && !secChanged) return;
+    // (08/11 ac) publicar para el pasto (config.cpp -> fila 415): hora del dia, altura real del sol, si sube o baja y sunLux de la primera atmosfera viva
+    { g_solClock.valid = false;
+      for (int i = 0; i < n; i++) { const AtmoSnap& s = cur[i]; if (s.dt[0] == 0 && s.lux == 0.0f && s.lat == 0.0f) continue;
+          float len = sqrtf(s.sun[0] * s.sun[0] + s.sun[1] * s.sun[1] + s.sun[2] * s.sun[2]); if (len < 1e-6f) continue;
+          g_solClock.alt = asinf((std::max)(-1.0f, (std::min)(1.0f, -s.sun[1] / len))) * 57.2958f;
+          g_solClock.rising = s.sun[3] >= 0.0f ? 1.0f : -1.0f; g_solClock.lux = s.lux;
+          g_solClock.hour = sec != 0xfffffffeu ? (float)sec / 3600.0f : (float)s.dt[3] + (float)s.dt[4] / 60.0f;
+          g_solClock.valid = true; break; } }
+    if (!canLog || (!due && !changed && !secChanged)) return;
     // sin cambios: cada 10 s las primeras 6 veces, despues una linea por minuto (la primera version dejaba de escribir)
     if (!changed && !secChanged) s_quiet++; else s_quiet = 0;
     s_next = t + (s_quiet > 6 ? 60.0 : 10.0);

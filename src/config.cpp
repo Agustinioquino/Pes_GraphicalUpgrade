@@ -950,6 +950,12 @@ void UpdateTimeParams() {
           // fuerza del sol para el pasto (0..1), la escribe la DLL cada cuadro (no va en el ini): despejado (sin lluvia), de dia, sol real
           // (luz calida y fuerte), segun la altura del sol (0 hasta 22 grados, 1 desde 45: solo hora pico, nada al atardecer) y la estacion (verano 1, invierno 0.7, otra 0.85). La usan 619b (x414 pintado), 18afff (w413 transmision, puntas x409)
           { float elev = p[111][3];
+            // (08/11 ac) si el reloj del sol del motor esta (solreloj.cpp): altura real del sol (no la de la luz medida, que gira en las
+            // repeticiones), hora del dia, si sube (amanecer) o baja (atardecer) y sunLux (con nubes el motor baja el lux). Fila 415 (DLL)
+            const bool clk = g_solClock.valid; float luxK = 1.f, lowSun = 0.f;
+            if (clk) { elev = g_solClock.alt; luxK = std::clamp((g_solClock.lux - 15000.f) / 35000.f, 0.f, 1.f);
+                p[415][0] = g_solClock.hour; p[415][1] = g_solClock.alt; p[415][2] = g_solClock.rising; }
+            else { p[415][0] = -1.f; p[415][1] = elev; p[415][2] = 0.f; }
             // (08/11 ac, Agustin: "cerca del atardecer o una hora sin hora pico no deberia tener ese efecto") solo hora pico: 0 hasta 22 grados
             // de altura del sol (atardecer / manana temprano), rampa hasta 1 a los 45 grados (mediodia de verano ~70)
             float hK = std::clamp((elev - 22.f) / 23.f, 0.f, 1.f);
@@ -957,10 +963,15 @@ void UpdateTimeParams() {
             float clear = (known && g_cfg.match.weather == 1) ? 0.08f : 1.f;
             float dayK = (known && g_cfg.match.timeofday == 1) ? 0.f : 1.f;
             float seas = !known ? 0.9f : (g_cfg.match.season == 0 ? 1.f : g_cfg.match.season == 1 ? 0.7f : 0.85f);
-            float pw = (sunny ? 1.f : 0.f) * clear * dayK * seas * std::clamp(hK, 0.f, 1.f);
+            float pw = (sunny ? 1.f : 0.f) * clear * dayK * seas * std::clamp(hK, 0.f, 1.f) * luxK;
             static float sm = 0.f; sm += (pw - sm) * 0.02f;   // ~1 s de suavizado: sin saltos al cambiar de toma
             p[414][3] = sm;
-            static double nl = 0.0; if (t >= nl) { nl = t + 60.0; Log("pasto: fuerza del sol %.2f (sol a %.1f grados, luz %.0f, %s, %s, %s, %s)", sm, elev, lum112, sunny ? "sol real" : "sin sol",
+            // (08/11 ac, Agustin: "al atardecer el cielo se pinta de otro color ... al igual si es amanecer no es lo mismo") sol bajo: entre 2 y
+            // 20 grados (maximo a 8), despejado y de dia: el pasto toma el tono de esa luz (naranja al atardecer, rosado / frio al amanecer) y
+            // la transmision es menor. w415 (0..1); z415 dice si sube o baja
+            lowSun = (sunny ? 1.f : 0.f) * clear * dayK * luxK * std::clamp((elev - 2.f) / 6.f, 0.f, 1.f) * std::clamp((20.f - elev) / 8.f, 0.f, 1.f);
+            static float smL = 0.f; smL += (lowSun - smL) * 0.02f; p[415][3] = smL;
+            static double nl = 0.0; if (t >= nl) { nl = t + 60.0; Log("pasto: fuerza del sol %.2f, sol bajo %.2f (sol a %.1f grados%s, luz %.0f, hora %.2f, %s, %s, %s, %s, %s)", sm, smL, elev, clk ? " (reloj del motor)" : "", lum112, p[415][0], clk ? (g_solClock.rising > 0 ? "sube" : "baja") : "sube/baja ?", sunny ? "sol real" : "sin sol",
                 known ? (g_cfg.match.weather == 1 ? "lluvia" : "despejado") : "clima ?", known ? (g_cfg.match.timeofday == 1 ? "noche" : "dia") : "hora ?",
                 known ? (g_cfg.match.season == 0 ? "verano" : g_cfg.match.season == 1 ? "invierno" : "otra estacion") : "estacion ?"); } }
       }

@@ -311,6 +311,8 @@ void main(
     // invierno x1.4 (rocio / escarcha de la manana), lluvia = humedo. Vale para la transpiracion (x329) y el rocio fino (x334)
     float2 pesGnd2 = PESGround();
     float dewK = (1.0 + 0.8 * pesGnd2.x) * (1.0 - 0.85 * pesGnd2.y) * (abs(IniParams.Load(int2(114,0)).z - 1.0) < 0.5 ? 1.4 : 1.0);
+    { float4 P415 = IniParams.Load(int2(415,0));   // (08/11 ac) amanecer (reloj del sol de la DLL: sol subiendo y antes de las 10): rocio fuerte, x1.6
+      if (P415.z > 0.5 && P415.x >= 0.0 && P415.x < 10.0) dewK *= 1.6; }
     float4 P329 = IniParams.Load(int2(329,0));
     if (pxA > 0.0 && P329.x > 0.001 && !pesFar) {   // (27/10 p) tambien en las parcelas del juego de muy cerca
       float dew = step(saturate(1.0 - 0.12 * dewK), frac(pesHvR * 11.7 + 0.29)) * smoothstep(0.45, 1.0, relH) * clamp(P329.x, 0.0, 2.0) * pesCf * (1.0 - pesPaintF) * sparkK * min(dewK, 1.5);   // (08/11 ac) mas hojas con gota cuando esta humedo   // (2/11) solo hojas que miden
