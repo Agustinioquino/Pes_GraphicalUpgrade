@@ -151,7 +151,7 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
     n = normalize(n * cos(a) + sideS * sin(a)); }
   // (08/11 v) w382 > 0: PASADA PROPIA DEL PELO (pes_hairfwd_ps) hace el brillo, el contraluz y la sombra con la tangente. Aca queda
   // solo la luz difusa: normal de la piel (sin doblar hacia el brillo), poco especular y sin la marca de pelo (no se suma dos veces)
-  bool fwd = IniParams.Load(int2(382, 0)).w > 0.001 && pesHairMisc.x > 0.5;
+  bool fwd = IniParams.Load(int2(382, 0)).w > 0.001 && IniParams.Load(int2(406, 0)).w > 0.5 && pesHairMisc.x > 0.5;   // (08/11 y) w406 (DLL) = la pasada propia dibujo de verdad
   if (!fwd) n = PesBrowAniso(n, i.tanV, normalize(i.viewV), t, (sJ - 0.5) * 0.16, res);
   // (04/11) la luz pasa por el pelo: translucidez alta (la punta mas que la raiz) + marca de PELO 252/255 (o2.z, abajo) para
   // que las pasadas del sol le apliquen el contraluz del pelo (fila 339), como el pelo de la cabeza

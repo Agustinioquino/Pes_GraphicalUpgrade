@@ -682,6 +682,15 @@ void main(
           float3 skinB = lerp(g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy, 4.0).xyz, skB, 0.75);
           r2.xyz = lerp(r2.xyz, skinB, kB);
         }
+        // (08/11 y, Agustin: "el color de todas las cejas no cambia el color de todo") la pintura que queda bajo las hebras (lo que no
+        // se borra, y de lejos) toma tambien el color elegido para las hebras de todos (fila 373: x mezcla, yzw rgb), con el tono
+        // de cada trazo (claro / oscuro contra su zona): antes cambiaban solo las hebras y la ceja pintada seguia negra debajo
+        { float4 G3 = IniParams.Load(int2(373, 0));
+          float kC = saturate(G3.x) * saturate(bm.a * 1.4) * (1.0 - saturate(kB));
+          if (kC > 0.001) {
+            float lP = dot(r2.xyz, float3(0.2126, 0.7152, 0.0722)), lZ = dot(g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy, 3.0).xyz, float3(0.2126, 0.7152, 0.0722));
+            r2.xyz = lerp(r2.xyz, saturate(G3.yzw) * clamp(lP / max(lZ, 1e-3), 0.6, 1.4), kC);
+          } }
       }
     } }
   // (27/10) marcas de la piel (y124): lunares, pecas, manchas y venitas que ya estan pintadas en la textura de la cara se
