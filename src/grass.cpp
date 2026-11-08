@@ -1124,8 +1124,9 @@ static std::atomic<int> s_edFrame{-1}, s_edLog{0}, s_edOk{0};
 void GrassEditorAfterFace(ID3D11DeviceContext* c) {
     if (g_cfg.bypass || !g_dev.dev || g_cfg.live[393][0] < 0.5f) return;
     if (g_cfg.live[255][3] < 0.5f || g_cfg.live[44][3] > 0.5f) return;   // misma condicion que la luz de prueba: escena de menu sin el sol del partido
-    if (RtvCount(c) < 2) return;   // solo el G-buffer del visor (la cara tambien se dibuja en prepasadas)
     const int f = s_frame.load();
+    if (s_edFrame.load() == f) return;   // (08/11 j) ya emitido este cuadro: barato, antes de mirar los targets (ahora se llama tambien por el cuerpo)
+    if (RtvCount(c) < 2) return;   // solo el G-buffer del visor (la cara tambien se dibuja en prepasadas)
     int prev = s_edFrame.load(); if (prev == f || !s_edFrame.compare_exchange_strong(prev, f)) return;   // una por cuadro
     t_editor = true;
     const bool ok = GrassEmit(c, false);

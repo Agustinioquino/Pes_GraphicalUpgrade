@@ -1721,7 +1721,10 @@ template<int V> static void STDMETHODCALLTYPE hk_DrawIdx(ID3D11DeviceContext* c,
     { CtxState& ch_ = Ctx(c); if (ch_.gameShadow) ShadowCasterProbe(c); if (ch_.shadowDSV && !ds.skip) HeadShadowReplay<V>(c, ch_.shadowDSV, 1, [&] { o_DrawIdx[V](c, a, b, d); }); }   // (27/10 c) sombra de la cabeza
     // (25/10) pasto v3: al terminar la base de la cancha (PS 5e92 / c956, existe en todas las camaras) se emite el pasto del mod
     { CtxState& cb_ = Ctx(c); if (cb_.ps && (cb_.ps->hash == 0x5e92f2343848915aULL || cb_.ps->hash == 0xc9564b9b155f0a49ULL)) GrassOnBaseDraw(c); }
-    if (!ds.faceId.empty()) GrassEditorAfterFace(c); }   // (08/11 c) x393: pasto del mod en el editor, despues de la cara (estado ya devuelto)
+    // (08/11 c) x393: pasto del mod en el editor, despues de la cara (estado ya devuelto). (08/11 j, Agustin: "el pasto parpadea")
+    // tambien tras la piel del cuerpo (VS 1c02a92a): si un cuadro no dibuja la cara en el G-buffer (cerca de las piernas, cara fuera
+    // de cuadro o en otra pasada) el pasto no se emitia ese cuadro y parpadeaba; el primero de los dos por cuadro emite.
+    { CtxState& ce_ = Ctx(c); if (!ds.faceId.empty() || (ce_.vs && ce_.vs->hash == 0x1c02a92ab4ae3362ULL)) GrassEditorAfterFace(c); } }
 template<int V> static void STDMETHODCALLTYPE hk_Draw(ID3D11DeviceContext* c, UINT a, UINT b) { GRASS_FLUSH(c) FX_DRAW(a, 0, 1, o_Draw[V](c, a, b))
     { CtxState& ch_ = Ctx(c); if (ch_.gameShadow) ShadowCasterProbe(c); if (ch_.shadowDSV && !ds.skip) HeadShadowReplay<V>(c, ch_.shadowDSV, 0, [&] { o_Draw[V](c, a, b); }); } }
 // (25/10) dibujo indirecto (pasto v3): pasa por BeforeDraw como cualquier dibujo (reglas, t120); vertices e instancias desconocidos
