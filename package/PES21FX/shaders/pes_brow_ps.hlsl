@@ -92,8 +92,11 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   // la punta afinada; el TAA lo promedia -> hebras finas, translucidas en la punta y sin escalones, como el pelo de UE / Frostbite
   if (P75.z < 0.5) {
     // la ceja tiene muchos pelos superpuestos por pixel: la cobertura se escala x3 con piso 0.4 (si no, de lejos casi desaparece)
-    float covP = clamp(covZ * 3.0, 0.4, 1.0) * lerp(1.0, 0.45, t * t);
-    float ign = frac(52.9829189 * frac(dot(i.pos.xy, float2(0.06711056, 0.00583715))) + frac(g_psSystem.m_timeParam.z * 7.31));
+    // (07/11 b, Agustin: "el TAA las desenfoca mucho") el tramado ya NO cambia por cuadro: con ruido por cuadro el TAA veia cada hebra
+    // aparecer y desaparecer y la promediaba a una mancha. Tramado fijo en pantalla (estable) y piso de cobertura 0.6: la hebra queda
+    // nitida; solo la punta y el pelo mas fino que medio pixel se tramen
+    float covP = clamp(covZ * 3.0, 0.6, 1.0) * lerp(1.0, 0.55, t * t);
+    float ign = frac(52.9829189 * frac(dot(i.pos.xy, float2(0.06711056, 0.00583715))));
     if (ign > covP) discard;
   }
   // color: la raiz mas oscura, la punta un poco mas clara y calida
@@ -129,6 +132,12 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   o0 = float4(saturate(col), 1.0);
   // normal + translucidez (hebra: 0.15) empaquetadas como en el shader de cara
   float3 n = normalize(i.nrmV);
+  { // (07/11 b, Agustin: "faltan normales") normal de TUBO: el pelo es un cilindro; la normal gira alrededor del eje segun el lado
+    // del pixel (tw.y = -1..1): centro mira a la camara / la piel, los bordes hacia los costados -> cada hebra con volumen propio
+    float3 ax = normalize(i.tanV);
+    float3 sideS = normalize(cross(n, ax) + 1e-6);
+    float a = i.tw.y * 1.25;
+    n = normalize(n * cos(a) + sideS * sin(a)); }
   n = PesBrowAniso(n, i.tanV, normalize(i.viewV), t, (sJ - 0.5) * 0.16);
   // (04/11) la luz pasa por el pelo: translucidez alta (la punta mas que la raiz) + marca de PELO 252/255 (o2.z, abajo) para
   // que las pasadas del sol le apliquen el contraluz del pelo (fila 339), como el pelo de la cabeza

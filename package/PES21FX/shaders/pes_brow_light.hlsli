@@ -25,6 +25,10 @@ float3 PesBrowLightDir(float3 c0, float3 c1, float3 c2, float3 dom, float vz)
   float zSgn = vz < 0.0 ? -1.0 : 1.0;
   float ca = cos(radians(az)), sa = sin(radians(az)), ce = cos(radians(el)), se = sin(radians(el));
   float3 Ltest = float3(ce * sa, se, -ce * ca * zSgn);                       // = PesDirL de pes_ssss_inc (ya en la vista)
+  if (IniParams.Load(int2(378, 0)).z > 0.5) {                                // (08/11) z378 luz fija al mundo, igual que pes_ssss_inc
+    float3 W = float3(ce * sa, se, ce * ca), Lv0 = float3(dot(W, c0), dot(W, c1), dot(W, c2));
+    if (dot(Lv0, Lv0) > 0.25) Ltest = Lv0;
+  }
   bool sky = !noSun && S.w > 0.5 && S.y > 0.0;
   float3 Lw = sky ? S.xyz : -dom;                                            // sol del cielo (hacia el sol) o la dominante dada vuelta
   bool inView = !sky && IniParams.Load(int2(50, 0)).z > 0.5;                 // z50 = 1: la dominante ya viene en la vista

@@ -137,6 +137,7 @@ static void ReleaseEntry(FaceEntry& e) {
 // (04/11) v2: GS sobre la malla de la cara (pes_brow_a_gs = VS faab87ee, pes_brow_b_gs = VS 455eb97b) + el mismo PS de la v1
 static ID3D11VertexShader* s_browVS = nullptr; static ID3D11PixelShader* s_browPS = nullptr; static bool s_browTried = false; static ID3D11RasterizerState* s_browRS = nullptr;
 static ID3D11GeometryShader* s_browGS[2] = {};
+static ID3D11GeometryShader* s_atGS[2] = {};   // (07/11 c) hebras en el atlas de sombra de las cabezas (pes_browat_*_gs.hlsl, PES_ATLAS)
 static ID3D11GeometryShader* s_lashGS = nullptr;
 // (04/11 k, Agustin: "no solo brillo, luz real") SOMBRA DE CONTACTO de cada pelo sobre la piel de abajo, con la direccion real
 // del sol / luz principal: antes de las hebras se repite el GS en modo sombra (la hebra proyectada sobre el plano de la piel
@@ -160,6 +161,9 @@ static void EnsureBrowShaders() {
           for (int i = 1; i < 8; i++) bd.RenderTarget[i].RenderTargetWriteMask = 0;
           g_dev.dev->CreateBlendState(&bd, &s_shBlend); }
       Log("hebras: sombra de contacto sobre la piel: GS %s %s %s, PS %s", s_shGS[0] ? "si" : "NO", s_shGS[1] ? "si" : "NO", s_shGS[2] ? "si" : "NO", s_shPS ? "si" : "NO"); }
+    { const wchar_t* atf[2] = { L"pes_browat_a_gs.hlsl", L"pes_browat_b_gs.hlsl" };
+      for (int i = 0; i < 2; i++) if (ID3DBlob* gb = CompileNamedShader(atf[i], "gs_5_0")) { g_dev.dev->CreateGeometryShader(gb->GetBufferPointer(), gb->GetBufferSize(), nullptr, &s_atGS[i]); gb->Release(); }
+      Log("cejas: hebras en el atlas de sombra de las cabezas: GS %s %s", s_atGS[0] ? "si" : "NO", s_atGS[1] ? "si" : "NO"); }
     if (ID3DBlob* lb = CompileNamedShader(L"pes_lash_gs.hlsl", "gs_5_0")) { g_dev.dev->CreateGeometryShader(lb->GetBufferPointer(), lb->GetBufferSize(), nullptr, &s_lashGS); lb->Release(); }
     Log("pestanas: hebras (sobre la tira de pestanas): GS %s", s_lashGS ? "si" : "NO (ver errores)");
     if (!s_browRS) { D3D11_RASTERIZER_DESC rd{}; rd.FillMode = D3D11_FILL_SOLID; rd.CullMode = D3D11_CULL_NONE; rd.DepthClipEnable = TRUE; g_dev.dev->CreateRasterizerState(&rd, &s_browRS); }
@@ -184,6 +188,7 @@ void FaceGenReloadShaders() {
     if (s_browVS) { s_browVS->Release(); s_browVS = nullptr; }
     if (s_browPS) { s_browPS->Release(); s_browPS = nullptr; }
     for (auto*& g : s_browGS) if (g) { g->Release(); g = nullptr; }
+    for (auto*& g : s_atGS) if (g) { g->Release(); g = nullptr; }
     if (s_lashGS) { s_lashGS->Release(); s_lashGS = nullptr; }
     for (auto*& g : s_shGS) if (g) { g->Release(); g = nullptr; }
     if (s_shPS) { s_shPS->Release(); s_shPS = nullptr; }
@@ -447,6 +452,7 @@ int FaceGenExportHair(std::string& status) {
 // v1 (18/10) usaba semillas que el PS de la cara escribia cada cuadro en un UAV: solo nacian donde la cara tenia pixeles
 // (aparecian y desaparecian con la distancia) y en el editor salian cintas gigantes; por eso estaba solo en partido.
 static constexpr uint64_t kVSHead = 0xfaab87ee4ef8b783ULL, kVSFaceAnim = 0x455eb97bc2c3a958ULL, kVSLash = 0x66917213728b4dc9ULL;
+ID3D11GeometryShader* BrowAtlasGS(uint64_t vsHash) { return vsHash == kVSLash ? nullptr : s_atGS[vsHash == kVSFaceAnim ? 1 : 0]; }   // (07/11 c) hebras en el atlas de sombra
 struct BrowSaved {
     ID3D11VertexShader* vs = nullptr; ID3D11PixelShader* ps = nullptr; ID3D11GeometryShader* gs = nullptr; ID3D11HullShader* hs = nullptr; ID3D11DomainShader* ds = nullptr;
     D3D11_PRIMITIVE_TOPOLOGY topo = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED; ID3D11RasterizerState* rs = nullptr;

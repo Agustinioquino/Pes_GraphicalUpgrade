@@ -169,7 +169,7 @@ void main(triangle LashV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
       float wid = widB * (1.0 - 0.8 * t);
       float pxV = 2.0 * abs(p.z) / (max(abs(m_projection[1].y), 1e-4) * vpH);
       float wReal = wid;                                       // (06/11) pelo fino: cobertura en el PS en vez de engordar a 1 px
-      wid = max(wid, pxV * (P75.z > 0.5 ? 1.25 : 0.6));
+      wid = max(wid, pxV * (P75.z > 0.5 ? 1.25 : 0.9));   // (07/11 b) menos tramado con el TAA
       float cov = P75.z > 0.5 ? 1.0 : saturate(wReal / max(wid, 1e-9));
 #ifdef PES_SHADOW
       { float hgt = abs(dot(p - root, n)) + len * 0.04 * t;                      // la tira esta separada del parpado: sombra corrida
@@ -182,7 +182,7 @@ void main(triangle LashV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
         GSOut o;
         float side = (float)s;
         o.pos = ProjV(p + sideV * wid * side);
-        o.nrmV = normalize(nL + bt * side * 0.6);
+        o.nrmV = nL;   // (07/11 b) normal del eje; el PS arma el tubo
         o.col = cR; o.col2 = cT;
 #ifdef PES_SHADOW
         o.tw = float3(t, side, 0.3);                           // (07/11) sombra suave: no oscurece el ojo
