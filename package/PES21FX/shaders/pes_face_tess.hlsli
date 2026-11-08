@@ -528,7 +528,9 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
 #endif   // !PES_TESS_BODY (relieve solo en la cara)
   // (04/11 d) PRUEBA (fila 360.x): infla la piel 1 cm por la normal, sin tope ni distancia, para ver sin duda que la teselacion
   // llega a la imagen (los bordes de cada pieza quedan fijos). Solo para probar: volver a "No".
-  if (IniParams.Load(int2(360, 0)).x > 0.5) d += normalize(b.x * N0 + b.y * N1 + b.z * N2) * (0.01 * min(seam, seamR));
+  // (08/11 k) x360 = 2: VISTA DE PRUEBA del cuerpo (colores en el PS de la piel, sin inflar)
+  { float x360 = IniParams.Load(int2(360, 0)).x;
+    if (x360 > 0.5 && x360 < 1.5) d += normalize(b.x * N0 + b.y * N1 + b.z * N2) * (0.01 * min(seam, seamR)); }
   float3 pv = pl + d;
 
 #if PES_TESS_ATLAS
@@ -569,6 +571,14 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
   }
 #endif
   o.pR = PES_LERP3(pR); o.pR.w = p[0].pR.w;
+#if PES_TESS_BODY
+  // (08/11 k, Agustin: "quieres agregar una vista debug del cuerpo?") x360 = 2: el PS aa7d1833 pinta la piel del cuerpo por cuanto se
+  // tesela y cuanto se movio: pR.w = 2 + nivel del factor interior (0..5, igual en todo el parche) + corrimiento / 1.5 mm (0..0.9)
+  if (IniParams.Load(int2(360, 0)).x > 1.5) {
+    float lv = round(saturate((k.i - 1.0) / 15.0) * 5.0), mv = saturate(length(d) / 0.0015);
+    o.pR.w = 2.0 + lv + 0.9 * mv;
+  }
+#endif
 #if !PES_TESS_BODY
   o.pD = PES_LERP3(pD); o.pD.w = p[0].pD.w;
 #endif
