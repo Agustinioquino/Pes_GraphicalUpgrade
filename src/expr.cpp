@@ -954,6 +954,7 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
 
 // en cada dibujo con la regla "expr = <slot>" (VS de la cabeza / cara): cbuffer de la malla para el VS (null = no enlazar)
 static void LidCapture(ID3D11DeviceContext* c, FaceMesh* m);   // (02/11 h) abajo
+static void WrinkleCapture(ID3D11DeviceContext* c, FaceMesh* m);   // (08/11) pesos de arrugas del juego, abajo
 static void SlotCapture(ID3D11DeviceContext* c, FaceMesh* m); static void SlotPresent(ID3D11DeviceContext* imm); static void DeltaUpload(ID3D11DeviceContext* imm);   // (08/11) gestos en la paleta, abajo
 // (04/11 c) barba: la paleta (b6, actual + anterior) y el m_world (b5) de esta piel a un lugar del pozo, con su id y su cabeza adelante
 static void BeardPoolCopy(ID3D11DeviceContext* c, FaceMesh* m) {   // con s_mx tomado
