@@ -303,7 +303,7 @@ extern std::atomic<int> g_depthClearZero, g_depthClearOne;
 bool FaceGenLookup(ID3D11DeviceContext* c, ID3D11ShaderResourceView** outA, ID3D11ShaderResourceView** outB, FaceGenExtra* ex);
 // (04/11) cejas con hebras v2: repetir el dibujo de la cara con el GS de hebras (facegen.cpp; el dibujo lo hace hooks.cpp)
 ID3D11GeometryShader* BrowAtlasGS(uint64_t vsHash);   // (07/11 c) GS de las hebras para el atlas de sombra de las cabezas (nullptr = no compilo / pestanas)
-bool BrowSOOn(ID3D11DeviceContext* c); void BrowSOOff(ID3D11DeviceContext* c); void HairFwdAfterComposition(ID3D11DeviceContext* c); bool HairFwdActive();   // (08/11 v) pasada propia del pelo
+bool BrowV3Roots(ID3D11DeviceContext* c, uint64_t vsHash); void BrowV3Strands(ID3D11DeviceContext* c); bool BrowSOOn(ID3D11DeviceContext* c); void BrowSOOff(ID3D11DeviceContext* c); void HairFwdAfterComposition(ID3D11DeviceContext* c); bool HairFwdActive();   // (08/11 v) pasada propia del pelo
 bool BrowWanted(const FaceGenExtra& ex, uint64_t vsHash); bool LashWanted(uint64_t vsHash, uint64_t psHash); bool BrowShadowOn(ID3D11DeviceContext* c); void BrowShadowOff(ID3D11DeviceContext* c); bool BrowStrandsBegin(ID3D11DeviceContext* c, const FaceGenExtra* ex, uint64_t vsHash); void BrowStrandsEnd(ID3D11DeviceContext* c);
 void FaceGenPresent(); void FaceGenClear(); void FaceGenReloadShaders(); int FaceGenCount();
 // (04/11) caras en alta desde PES21FX\caras_hd (caras_hd.cpp): volcado de originales, texturas grandes para t0..t3 de la piel

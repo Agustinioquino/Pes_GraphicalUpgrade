@@ -1661,6 +1661,14 @@ template<int V> static void BrowStrands(ID3D11DeviceContext* c, DrawScope& ds) {
         if (ds.lod.count) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.brow.browCount, ds.brow.browStart, ds.brow.browBase);
         BrowShadowOff(c);
     }
+    if (BrowV3Roots(c, ds.brow.browVS)) {   // (08/11 y) hebras v3: raices y despues cada hebra con hasta 16 segmentos
+      if (ds.lod.count) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.brow.browCount, ds.brow.browStart, ds.brow.browBase);
+      BrowV3Strands(c);
+      if (g_cfg.live[402][0] > 0.5f) {   // (08/11 y) la barba sigue con las hebras de antes (el GS viejo con x416 salta las cejas)
+        bool so = BrowSOOn(c);
+        if (ds.lod.count) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.brow.browCount, ds.brow.browStart, ds.brow.browBase);
+        if (so) BrowSOOff(c); }
+    } else
     { bool so = BrowSOOn(c);   // (08/11 v) las hebras tambien a la salida de flujo (pasada propia del pelo tras la composicion)
       if (ds.lod.count) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.brow.browCount, ds.brow.browStart, ds.brow.browBase);
       if (so) BrowSOOff(c); }

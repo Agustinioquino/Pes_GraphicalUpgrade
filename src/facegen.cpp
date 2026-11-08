@@ -22,6 +22,7 @@
 #include <set>
 #include <map>
 #include <fstream>
+#include <iterator>
 
 namespace fx {
 
@@ -157,12 +158,22 @@ static std::atomic<int> s_hfSoFrame2{-1}, s_hfStreamed2{0};
 static std::atomic<int> s_hfFrame{0}, s_hfSoFrame{-1}, s_hfStreamed{0}, s_hfDraws{0};
 static std::atomic<unsigned> s_compW{0}, s_compH{0};
 static constexpr UINT kHfStride = 108;          // 27 floats: igual a GSOut de pes_brow_gs.hlsli
-static constexpr UINT kHfBytes = 64u << 20;     // 64 MB (~20000 hebras); si se llena, el resto no entra en la pasada (sigue en el G-buffer)
+static constexpr UINT kHfBytes = 160u << 20;    // (08/11 y) 64 -> 160 MB: con las hebras v3 (16 segmentos de cerca) cada hebra ocupa ~3x; si se llena, el resto no entra en la pasada (sigue en el G-buffer)
 static const D3D11_SO_DECLARATION_ENTRY kHfSO[] = {
     { 0, "SV_POSITION", 0, 0, 4, 0 }, { 0, "TEXCOORD", 0, 0, 3, 0 }, { 0, "TEXCOORD", 1, 0, 3, 0 }, { 0, "TEXCOORD", 2, 0, 3, 0 },
     { 0, "TEXCOORD", 3, 0, 2, 0 }, { 0, "TEXCOORD", 4, 0, 3, 0 }, { 0, "TEXCOORD", 5, 0, 3, 0 }, { 0, "TEXCOORD", 6, 0, 3, 0 },
     { 0, "TEXCOORD", 7, 0, 3, 0 } };
 static std::atomic<double> s_hfLastDraw{-10.0};
+// (08/11 y, Agustin: "creo que estamos planteando mal la geometria de las hebras" -> "si, rehacer por pasos") HEBRAS v3 (x416): el GS
+// de la cara deja solo la raiz de cada hebra (pes_brow_roots_*_gs, 8 float4) en s_v3Roots; despues un GS por hebra (pes_strand_gs) la
+// arma con hasta 16 segmentos (DrawAuto sobre las raices). Mismo PS, misma pasada propia (s_v3GSso escribe en s_hfSO)
+static ID3D11GeometryShader* s_v3RootGS[2] = {}; static ID3D11GeometryShader* s_v3GS = nullptr; static ID3D11GeometryShader* s_v3GSso = nullptr;
+static ID3D11VertexShader* s_v3VS = nullptr; static ID3D11InputLayout* s_v3IL = nullptr; static ID3D11Buffer* s_v3Roots = nullptr;
+static constexpr UINT kV3Stride = 128;            // 8 float4 (RootOut de pes_brow_gs.hlsli)
+static constexpr UINT kV3Bytes = 8u << 20;        // 65536 raices por dibujo de cara
+static const D3D11_SO_DECLARATION_ENTRY kV3SO[] = {
+    { 0, "TEXCOORD", 0, 0, 4, 0 }, { 0, "TEXCOORD", 1, 0, 4, 0 }, { 0, "TEXCOORD", 2, 0, 4, 0 }, { 0, "TEXCOORD", 3, 0, 4, 0 },
+    { 0, "TEXCOORD", 4, 0, 4, 0 }, { 0, "TEXCOORD", 5, 0, 4, 0 }, { 0, "TEXCOORD", 6, 0, 4, 0 }, { 0, "TEXCOORD", 7, 0, 4, 0 } };
 // (08/11 y) la pasada propia dibujo hace menos de medio segundo: recien ahi las cejas le dejan el brillo y la sombra (si no, en el
 // editor sin composicion 619b salian negras y planas: sin brillo propio ni sombra de contacto)
 bool HairFwdActive() { return Now() - s_hfLastDraw.load() < 0.5; }
@@ -223,6 +234,26 @@ static void EnsureBrowShaders() {
         if (FAILED(hso)) { s_browGSso[i] = nullptr; Log("cejas: pasada propia del pelo: salida de flujo GS %d fallo (0x%08X)", i, (unsigned)hso); }
         gb->Release(); }
     EnsureHairFwd();
+    {   // (08/11 y) hebras v3
+        const wchar_t* rf[2] = { L"pes_brow_roots_a_gs.hlsl", L"pes_brow_roots_b_gs.hlsl" };
+        for (int i = 0; i < 2; i++) if (ID3DBlob* gb = CompileNamedShader(rf[i], "gs_5_0")) { UINT st = kV3Stride;
+            if (FAILED(g_dev.dev->CreateGeometryShaderWithStreamOutput(gb->GetBufferPointer(), gb->GetBufferSize(), kV3SO, 8, &st, 1, D3D11_SO_NO_RASTERIZED_STREAM, nullptr, &s_v3RootGS[i]))) s_v3RootGS[i] = nullptr;
+            gb->Release(); }
+        if (ID3DBlob* gb = CompileNamedShader(L"pes_strand_gs.hlsl", "gs_5_0")) {
+            g_dev.dev->CreateGeometryShader(gb->GetBufferPointer(), gb->GetBufferSize(), nullptr, &s_v3GS);
+            UINT st = kHfStride; if (FAILED(g_dev.dev->CreateGeometryShaderWithStreamOutput(gb->GetBufferPointer(), gb->GetBufferSize(), kHfSO, 9, &st, 1, 0, nullptr, &s_v3GSso))) s_v3GSso = nullptr;
+            gb->Release(); }
+        if (ID3DBlob* vb = CompileNamedShader(L"pes_strand_vs.hlsl", "vs_5_0")) {
+            g_dev.dev->CreateVertexShader(vb->GetBufferPointer(), vb->GetBufferSize(), nullptr, &s_v3VS);
+            D3D11_INPUT_ELEMENT_DESC ie[8];
+            for (UINT k = 0; k < 8; k++) ie[k] = { "TEXCOORD", k, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 16 * k, D3D11_INPUT_PER_VERTEX_DATA, 0 };
+            g_dev.dev->CreateInputLayout(ie, 8, vb->GetBufferPointer(), vb->GetBufferSize(), &s_v3IL);
+            vb->Release(); }
+        if (!s_v3Roots) { D3D11_BUFFER_DESC bd{}; bd.ByteWidth = kV3Bytes; bd.Usage = D3D11_USAGE_DEFAULT; bd.BindFlags = D3D11_BIND_STREAM_OUTPUT | D3D11_BIND_VERTEX_BUFFER;
+            if (FAILED(g_dev.dev->CreateBuffer(&bd, nullptr, &s_v3Roots))) s_v3Roots = nullptr; }
+        Log("cejas: hebras v3 (x416): raices GS %s %s, GS por hebra %s (flujo %s), VS %s, IL %s, buffer %s", s_v3RootGS[0] ? "si" : "NO", s_v3RootGS[1] ? "si" : "NO",
+            s_v3GS ? "si" : "NO", s_v3GSso ? "si" : "NO", s_v3VS ? "si" : "NO", s_v3IL ? "si" : "NO", s_v3Roots ? "si" : "NO");
+    }
     Log("cejas: pasada propia del pelo (w382): flujo %s %s, buffer %s, VS %s, PS %s", s_browGSso[0] ? "si" : "NO", s_browGSso[1] ? "si" : "NO", s_hfSO ? "si" : "NO", (s_hfVS && s_hfIL) ? "si" : "NO", s_hfPS ? "si" : "NO");
     { const wchar_t* shf[3] = { L"pes_browsh_a_gs.hlsl", L"pes_browsh_b_gs.hlsl", L"pes_lashsh_gs.hlsl" };
       for (int i = 0; i < 3; i++) if (ID3DBlob* gb = CompileNamedShader(shf[i], "gs_5_0")) { g_dev.dev->CreateGeometryShader(gb->GetBufferPointer(), gb->GetBufferSize(), nullptr, &s_shGS[i]);
@@ -342,6 +373,63 @@ static bool MakeTarget(UINT w, UINT h, ID3D11Texture2D** tex, ID3D11RenderTarget
     return true;
 }
 
+// (08/11 y, Agustin: "que estos datos de hebras por jugador se guarden junto con la cara para ahorrar trabajo al cargar" y "asegurate
+// de que se guarden correctamente") CACHE EN DISCO de los mapas de cada cara (A / B quinta textura, C mapa de pelo, D mapa de la ceja):
+// PES21FX\hebras\<cara>_<version>_<a|b|c|d>.dds. La version es la huella de los dos shaders que los generan (pes_facegen_ps,
+// pes_browmap_ps): si cambia un shader, los archivos viejos se ignoran solos y se vuelven a generar. Se guardan en un .tmp, se revisa
+// el archivo escrito (cabecera DDS, ancho, alto y tamano) y recien ahi se renombra al nombre final; al cargar se revisa que las medidas
+// coincidan con la cara. z416 = 1 usa la cache (0 = siempre generar)
+static std::wstring FaceCacheVersion() {
+    static std::wstring v; static bool done = false;
+    if (done) return v; done = true;
+    uint64_t h = 1469598103934665603ull;
+    for (const wchar_t* f : { L"pes_facegen_ps.hlsl", L"pes_browmap_ps.hlsl" }) { std::string src;
+        { std::ifstream in(g_cfg.baseDir + L"shaders\\" + f, std::ios::binary); if (!in) { v.clear(); return v; } src.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()); }
+        for (unsigned char ch : src) { h ^= ch; h *= 1099511628211ull; } }
+    wchar_t b[20]; swprintf(b, 20, L"%08x", (unsigned)(h ^ (h >> 32))); v = b; return v;
+}
+static std::wstring FaceCachePath(const std::string& id, wchar_t k) {
+    return g_cfg.baseDir + L"hebras\\" + std::wstring(id.begin(), id.end()) + L"_" + FaceCacheVersion() + L"_" + k + L".dds";
+}
+static bool FaceCacheCheckFile(const std::wstring& p, UINT w, UINT h) {   // cabecera DDS + medidas + tamano completo del mip 0
+    FILE* f = _wfopen(p.c_str(), L"rb"); if (!f) return false;
+    uint32_t hd[32] = {}; size_t n = fread(hd, 4, 32, f); fseek(f, 0, SEEK_END); long sz = ftell(f); fclose(f);
+    return n == 32 && hd[0] == 0x20534444u && hd[3] == h && hd[4] == w && sz >= (long)(128 + (size_t)w * h * 4);
+}
+static bool FaceCacheLoad(ID3D11DeviceContext* c, const std::string& id, UINT w, UINT h, FaceEntry& e) {
+    if (id.empty() || g_cfg.live[416][2] < 0.5f || FaceCacheVersion().empty()) return false;
+    const wchar_t ks[4] = { L'a', L'b', L'c', L'd' }; const UINT ws[4] = { w, w, w, std::max(w / 2, 64u) }, hs[4] = { h, h, h, std::max(h / 2, 64u) };
+    ID3D11ShaderResourceView* v[4] = {};
+    bool ok = true;
+    for (int i = 0; i < 4 && ok; i++) {
+        std::wstring p = FaceCachePath(id, ks[i]);
+        if (!FaceCacheCheckFile(p, ws[i], hs[i])) { ok = false; break; }
+        ID3D11Resource* r = nullptr;
+        if (FAILED(DirectX::CreateDDSTextureFromFile(g_dev.dev, c, p.c_str(), &r, &v[i])) || !v[i]) { ok = false; if (r) r->Release(); break; }
+        D3D11_TEXTURE2D_DESC d{}; ((ID3D11Texture2D*)r)->GetDesc(&d); r->Release();
+        if (d.Width != ws[i] || d.Height != hs[i] || d.MipLevels < 2) ok = false;   // sin mips no sirve (las hebras leen mips 3..5)
+    }
+    if (!ok) { for (auto* x : v) if (x) x->Release(); return false; }
+    e.a = v[0]; e.b = v[1]; e.c = v[2]; e.d = v[3];
+    return true;
+}
+static void FaceCacheSave(ID3D11DeviceContext* c, const FaceEntry& e) {
+    if (e.id.empty() || g_cfg.live[416][2] < 0.5f || FaceCacheVersion().empty() || !e.a || !e.b || !e.c || !e.d) return;
+    CreateDirectoryW((g_cfg.baseDir + L"hebras").c_str(), nullptr);
+    const wchar_t ks[4] = { L'a', L'b', L'c', L'd' }; ID3D11ShaderResourceView* v[4] = { e.a, e.b, e.c, e.d };
+    int good = 0;
+    for (int i = 0; i < 4; i++) {
+        ID3D11Resource* r = nullptr; v[i]->GetResource(&r); if (!r) continue;
+        D3D11_TEXTURE2D_DESC d{}; ((ID3D11Texture2D*)r)->GetDesc(&d);
+        std::wstring fin = FaceCachePath(e.id, ks[i]), tmp = fin + L".tmp";
+        HRESULT hr = DirectX::SaveDDSTextureToFile(c, r, tmp.c_str()); r->Release();
+        if (SUCCEEDED(hr) && FaceCacheCheckFile(tmp, d.Width, d.Height) && MoveFileExW(tmp.c_str(), fin.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) good++;
+        else { DeleteFileW(tmp.c_str()); Log("hebras: cara %s: el mapa %c NO se guardo bien (0x%08X): se vuelve a generar la proxima vez", e.id.c_str(), (char)ks[i], (unsigned)hr); }
+    }
+    if (good < 4) for (int i = 0; i < 4; i++) DeleteFileW(FaceCachePath(e.id, ks[i]).c_str());   // todo o nada: nunca una cara a medias
+    else Log("hebras: cara %s: 4 mapas guardados y verificados en PES21FX\\hebras (version %ls)", e.id.c_str(), FaceCacheVersion().c_str());
+}
+
 // en Present, contexto inmediato: genera hasta 2 caras por cuadro
 static std::atomic<int> s_browFaces{0};   // caras con hebras dibujadas en este cuadro (x77 = maximo por pantalla)
 void FaceGenPresent() {
@@ -379,6 +467,27 @@ void FaceGenPresent() {
                     Log("cejas: jugador actual = cara %s (cantidad %.2f, largo %.2f, color %.2f: %.2f %.2f %.2f, contraluz %.2f: %.2f %.2f %.2f, extra %.0f, elevacion %.2f, grosor %.2f, distancia %.2f mm)", nc.c_str(), v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12], v[13]); }
                 last = cur6(); } }
         cur = s_browCur; }
+      // (08/11 y, Agustin: "en el modo editar que se vuelque solo si pasan unos 5 segundos") fuera del partido, la misma cara sola en
+      // pantalla 5 s seguidos -> su mapa de pelo se escribe en hair\auto\<id>.png (una vez por cara y sesion; no pisa uno ya volcado).
+      // w416 = 1 prende el volcado automatico
+      { static std::string held; static double since = 0.0; static std::set<std::string> dumped;
+        double tn = Now();
+        if (cur.empty() || g_cfg.live[93][3] > 0.5f || g_cfg.live[416][3] < 0.5f) { held.clear(); }
+        else if (cur != held) { held = cur; since = tn; }
+        else if (tn - since >= 5.0 && !dumped.count(cur)) {
+            dumped.insert(cur);
+            std::wstring dir = g_cfg.baseDir + L"hair"; CreateDirectoryW(dir.c_str(), nullptr); dir += L"\\auto"; CreateDirectoryW(dir.c_str(), nullptr);
+            std::wstring path = dir + L"\\" + Widen(cur) + L".png";
+            if (FileExists(path)) Log("pelo: cara %s: hair\\auto\\%s.png ya existe (no se pisa)", cur.c_str(), cur.c_str());
+            else { std::lock_guard<std::mutex> lk(s_mx);
+                for (auto& kv : s_cache) { FaceEntry& fe = kv.second; if (fe.id != cur || !fe.c || fe.userMap) continue;
+                    ID3D11Resource* res = nullptr; fe.c->GetResource(&res); if (!res) break;
+                    EnsureCom();
+                    HRESULT hr = DirectX::SaveWICTextureToFile(g_dev.imm, res, GUID_ContainerFormatPng, path.c_str(), nullptr, nullptr, false);
+                    res->Release();
+                    Log("pelo: cara %s vista 5 s en el editor: mapa de pelo volcado a hair\\auto\\%s.png (%s)", cur.c_str(), cur.c_str(), SUCCEEDED(hr) ? "ok" : "FALLO");
+                    break; } }
+        } }
       BrowVals now = cur6();
       if (!cur.empty() && now != last && now[0] > 0.f && now[1] > 0.f) {
           last = now;
@@ -416,7 +525,9 @@ void FaceGenPresent() {
         FaceEntry e;
         if (ok) {
             ID3D11Texture2D *ta = nullptr, *tb = nullptr, *tc = nullptr, *td = nullptr; ID3D11RenderTargetView *ra = nullptr, *rb = nullptr, *rc = nullptr, *rd = nullptr;
-            if (MakeTarget(r.w, r.h, &ta, &ra, &e.a) && MakeTarget(r.w, r.h, &tb, &rb, &e.b) && MakeTarget(r.w, r.h, &tc, &rc, &e.c)) {
+            std::string preId; { ID3D11Resource* res = nullptr; r.in[1]->GetResource(&res); if (res) { preId = HashFaceTexture(c, res); res->Release(); } }
+            const bool loaded = FaceCacheLoad(c, preId, r.w, r.h, e);   // (08/11 y) mapas ya guardados de esta cara
+            if (loaded || (MakeTarget(r.w, r.h, &ta, &ra, &e.a) && MakeTarget(r.w, r.h, &tb, &rb, &e.b) && MakeTarget(r.w, r.h, &tc, &rc, &e.c))) {
                 // buffer de semillas de cejas (lo escribe el shader de cara en cada dibujo, lo lee el dibujo de hebras)
                 D3D11_BUFFER_DESC bd{}; bd.ByteWidth = kSeedCount * kSeedBytes; bd.Usage = D3D11_USAGE_DEFAULT;
                 bd.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE; bd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED; bd.StructureByteStride = kSeedBytes;
@@ -433,6 +544,7 @@ void FaceGenPresent() {
                       D3D11_UNORDERED_ACCESS_VIEW_DESC au{}; au.Format = DXGI_FORMAT_R32_TYPELESS; au.ViewDimension = D3D11_UAV_DIMENSION_BUFFER; au.Buffer.NumElements = 4; au.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
                       g_dev.dev->CreateUnorderedAccessView(e.args, &au, &e.argsUAV);
                   } }
+                if (!loaded) {
                 ID3D11RenderTargetView* rts[3] = { ra, rb, rc };
                 c->OMSetRenderTargets(3, rts, nullptr);
                 D3D11_VIEWPORT vp{ 0, 0, (float)r.w, (float)r.h, 0, 1 }; c->RSSetViewports(1, &vp);
@@ -452,11 +564,13 @@ void FaceGenPresent() {
                     ID3D11RenderTargetView* none1 = nullptr; c->OMSetRenderTargets(1, &none1, nullptr);
                     c->GenerateMips(e.d);
                 }
+                }   // !loaded
                 s_generated++;
                 e.w = r.w; e.h = r.h;
                 // 18/10 pelo: identidad de la cara, tipo de pelo (PES21FX_hair.ini) y mapa de pelo propio (PES21FX\hair\<id>.dds)
-                { ID3D11Resource* res = nullptr; r.in[1]->GetResource(&res);
-                  if (res) { e.id = HashFaceTexture(c, res); res->Release(); } }
+                e.id = preId;
+                if (loaded) Log("hebras: cara %s: mapas cargados de PES21FX\\hebras (sin generar)", e.id.c_str());
+                else FaceCacheSave(c, e);   // (08/11 y) antes del mapa propio del usuario: se guarda el generado
                 if (!e.id.empty()) CarasHdNewFace(c, e.id, r.in);   // (04/11) caras en alta: volcar originales / buscar las reescaladas
                 if (!e.id.empty()) {
                     ID3D11ShaderResourceView* usrv = LoadUserHairMap(e.id);
@@ -677,11 +791,45 @@ void BrowStrandsEnd(ID3D11DeviceContext* c) {
     s = BrowSaved();
 }
 
+// (08/11 y) hebras v3: 1) el dibujo de la cara solo deja las raices (sin rasterizar); 2) DrawAuto de las raices con el GS por hebra
+bool BrowV3Roots(ID3D11DeviceContext* c, uint64_t vsHash) {
+    BrowSaved& s = t_bs;
+    if (g_cfg.live[416][0] < 0.5f || vsHash == kVSLash || !s.strandGS) return false;
+    ID3D11GeometryShader* rg = s_v3RootGS[vsHash == kVSFaceAnim ? 1 : 0];
+    if (!rg || !s_v3GS || !s_v3VS || !s_v3IL || !s_v3Roots) return false;
+    c->GSSetShader(rg, nullptr, 0);
+    UINT off = 0; c->SOSetTargets(1, &s_v3Roots, &off);
+    { static std::atomic<int> lg{0}; if (lg.fetch_add(1) < 2) Log("cejas: hebras v3: primer dibujo de raices (VS %s)", vsHash == kVSFaceAnim ? "455eb97b" : "faab87ee"); }
+    return true;
+}
+void BrowV3Strands(ID3D11DeviceContext* c) {
+    BrowSaved& s = t_bs;
+    { ID3D11Buffer* nb = nullptr; UINT o = 0; c->SOSetTargets(1, &nb, &o); }
+    ID3D11InputLayout* oIL = nullptr; c->IAGetInputLayout(&oIL);
+    ID3D11Buffer* oVB = nullptr; UINT oStr = 0, oOff = 0; c->IAGetVertexBuffers(0, 1, &oVB, &oStr, &oOff);
+    D3D11_PRIMITIVE_TOPOLOGY oTopo; c->IAGetPrimitiveTopology(&oTopo);
+    ID3D11VertexShader* oVS = nullptr; c->VSGetShader(&oVS, nullptr, nullptr);
+    ID3D11GeometryShader* keep = s.strandGS;
+    c->IASetInputLayout(s_v3IL); UINT st = kV3Stride, of = 0; c->IASetVertexBuffers(0, 1, &s_v3Roots, &st, &of);
+    c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
+    c->VSSetShader(s_v3VS, nullptr, 0);
+    c->PSSetShader(s_browPS, nullptr, 0);
+    bool so = false;
+    if (HairFwdWanted() && s_v3GSso) { s.strandGS = s_v3GSso; so = BrowSOOn(c); }
+    c->GSSetShader(so ? s_v3GSso : s_v3GS, nullptr, 0);
+    c->DrawAuto();
+    if (so) BrowSOOff(c);
+    s.strandGS = keep;
+    c->IASetInputLayout(oIL); c->IASetVertexBuffers(0, 1, &oVB, &oStr, &oOff); c->IASetPrimitiveTopology(oTopo);
+    c->VSSetShader(oVS, nullptr, 0); c->GSSetShader(keep, nullptr, 0);
+    if (oIL) oIL->Release(); if (oVB) oVB->Release(); if (oVS) oVS->Release();
+    { static std::atomic<int> lg{0}; if (lg.fetch_add(1) < 2) Log("cejas: hebras v3: primer dibujo de hebras (pasada propia %s)", so ? "si" : "no"); }
+}
 // (08/11 v) salida de flujo de las hebras: solo alrededor del dibujo de las hebras (no de la sombra de contacto ni del atlas) y solo en
 // la vista principal (mismo tamano que la composicion del cuadro anterior: no las miniaturas ni los reflejos)
 bool BrowSOOn(ID3D11DeviceContext* c) {
     BrowSaved& s = t_bs;
-    if (!HairFwdWanted() || !s_hfSO || !s.strandGS || (s.strandGS != s_browGSso[0] && s.strandGS != s_browGSso[1])) return false;
+    if (!HairFwdWanted() || !s_hfSO || !s.strandGS || (s.strandGS != s_browGSso[0] && s.strandGS != s_browGSso[1] && s.strandGS != s_v3GSso)) return false;
     D3D11_VIEWPORT vp{}; UINT n = 1; c->RSGetViewports(&n, &vp);
     unsigned cw = s_compW.load(), ch = s_compH.load();
     // (08/11 w) tolerancia del 3 % (el editor puede dibujar la cara con un viewport apenas distinto al de la composicion)
