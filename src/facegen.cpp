@@ -467,6 +467,27 @@ void FaceGenPresent() {
                     Log("cejas: jugador actual = cara %s (cantidad %.2f, largo %.2f, color %.2f: %.2f %.2f %.2f, contraluz %.2f: %.2f %.2f %.2f, extra %.0f, elevacion %.2f, grosor %.2f, distancia %.2f mm)", nc.c_str(), v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12], v[13]); }
                 last = cur6(); } }
         cur = s_browCur; }
+      // (08/11 y, Agustin: "en el modo editar que se vuelque solo si pasan unos 5 segundos") fuera del partido, la misma cara sola en
+      // pantalla 5 s seguidos -> su mapa de pelo se escribe en hair\auto\<id>.png (una vez por cara y sesion; no pisa uno ya volcado).
+      // w416 = 1 prende el volcado automatico
+      { static std::string held; static double since = 0.0; static std::set<std::string> dumped;
+        double tn = Now();
+        if (cur.empty() || g_cfg.live[93][3] > 0.5f || g_cfg.live[416][3] < 0.5f) { held.clear(); }
+        else if (cur != held) { held = cur; since = tn; }
+        else if (tn - since >= 5.0 && !dumped.count(cur)) {
+            dumped.insert(cur);
+            std::wstring dir = g_cfg.baseDir + L"hair"; CreateDirectoryW(dir.c_str(), nullptr); dir += L"\\auto"; CreateDirectoryW(dir.c_str(), nullptr);
+            std::wstring path = dir + L"\\" + Widen(cur) + L".png";
+            if (FileExists(path)) Log("pelo: cara %s: hair\\auto\\%s.png ya existe (no se pisa)", cur.c_str(), cur.c_str());
+            else { std::lock_guard<std::mutex> lk(s_mx);
+                for (auto& kv : s_cache) { FaceEntry& fe = kv.second; if (fe.id != cur || !fe.c || fe.userMap) continue;
+                    ID3D11Resource* res = nullptr; fe.c->GetResource(&res); if (!res) break;
+                    EnsureCom();
+                    HRESULT hr = DirectX::SaveWICTextureToFile(g_dev.imm, res, GUID_ContainerFormatPng, path.c_str(), nullptr, nullptr, false);
+                    res->Release();
+                    Log("pelo: cara %s vista 5 s en el editor: mapa de pelo volcado a hair\\auto\\%s.png (%s)", cur.c_str(), cur.c_str(), SUCCEEDED(hr) ? "ok" : "FALLO");
+                    break; } }
+        } }
       BrowVals now = cur6();
       if (!cur.empty() && now != last && now[0] > 0.f && now[1] > 0.f) {
           last = now;
