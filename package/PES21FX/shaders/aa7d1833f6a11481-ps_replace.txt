@@ -90,6 +90,7 @@ Texture2D<float4> StereoParams : register(t125);
 #include "pes_pores.hlsli"   // (27/10 c) poros triplanares sobre la posicion de reposo
 #include "pes_variants.hlsli"   // (26/10) variantes robusto / atletico (valor del jugador)
 #include "pes_nailfix.hlsli"   // (26/10, v12.6) unas de los jugadores con textura de brazo propia (x304)
+#include "pes_limb_relief.hlsli"   // (08/11) relieve 3D de manos y piernas
 #ifdef PES_HL_ACC
 RWByteAddressBuffer gHlAcc : register(u5);   // por marca y lado: suma x, suma y, pixeles (4 x 16 bytes)
 #endif
@@ -304,7 +305,7 @@ void main(
     uint jvW = 0, jvH = 0; pesVeins.GetDimensions(jvW, jvH);
     if (lbOn && jvW > 0) {
       float jQ = round((v1.z - 7.0) * 1200.0);
-      bool jHand = jQ > 515.5;
+      bool jHand = jQ > 515.5 && jQ < 527.5;   // (08/11) 528.. = piernas (pes_limb_relief.hlsli)
       float jB = jHand ? saturate((jQ - 520.0) / 7.0) : fmod(jQ, 8.0) / 7.0;
       float jK = jHand ? 1.0 : clamp(IniParams.Load(int2(166,0)).w, 0.7, 1.5);
       // (03/11) Agustin: "el brazo esta estirado no deberian verse arrugas, al doblarse si y el codo al doblarse tambien": en el codo
@@ -323,6 +324,22 @@ void main(
       jsCav = saturate(0.25 * dot(jh, float4(1, 1, 1, 1)) / (2.0 * 2.0) * 2.2);   // fondo del pliegue: mas oscuro
       float jl = pesVeins.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN + 5.0).w - 0.5;
       jsLift = jHand ? saturate(jl * 14.0) * jB : 0.0;   // puno cerrado: la piel estirada sobre los nudillos mas clara (el codo ya no: arruga al doblar)
+    }
+  }
+  float lrCav = 0.0, lrCr = 0.0;
+  {   // (08/11, Agustin: "mejora las manos mas que nada y los brazos, asi como los muslos") relieve 3D de manos y piernas sobre la
+      // posicion de reposo (pes_limb_relief.hlsli): tendones, nudillos, cubito y pliegues de la muneca; cuadriceps, rodilla, gemelos
+      // y pliegues de la rodilla segun la pose. El VS manda la mano en 520 + cierre (0..7) y la pierna en 528 + rodilla (0..7) +
+      // 8 x esfuerzo (0..7). Fuerza y305 (0.7 = 1) por la definicion general x172.
+    float lrQ = round((v1.z - 7.0) * 1200.0);
+    int lrK = !lbOn ? 0 : (lrQ > 515.5 && lrQ < 527.5) ? 1 : (lrQ > 527.5 && lrQ < 599.5) ? 2 : 0;
+    if (lrK > 0) {
+      float dGl = IniParams.Load(int2(172,0)).x; dGl = dGl > 0.01 ? clamp(dGl, 0.0, 3.0) : 1.0;
+      float lrGain = clamp(P305.y / 0.7, 0.0, 2.0) * dGl;
+      float la = lrK == 1 ? saturate((lrQ - 520.0) / 7.0) : fmod(lrQ - 528.0, 8.0) / 7.0;
+      float lb = lrK == 1 ? 0.0 : saturate(floor((lrQ - 528.0) / 8.0) / 7.0);
+      float2 lc = PesLimbRelief(lrK, pR.xyz, la, lb, hpDPx, hpDPy, hpDUx, hpDUy, lrGain, r2.xy);
+      lrCav = lc.x; lrCr = lc.y;
     }
   }
   float anatCav = 0.0;
@@ -511,6 +528,8 @@ void main(
   if (jsCav > 0.001) r2.yzw *= lerp(float3(1.0, 1.0, 1.0), float3(0.84, 0.80, 0.80), jsCav * 0.6);   // (02/11 g) pliegue de la articulacion
   if (jsLift > 0.001) r2.yzw = lerp(r2.yzw, r2.yzw * float3(1.06, 1.04, 1.05), saturate(jsLift));    // (02/11 g) piel estirada sobre el hueso
   if (anatCav > 0.001) r2.yzw *= lerp(float3(1.0, 1.0, 1.0), float3(0.90, 0.86, 0.85), anatCav * 0.7);   // (02/11) surco entre musculos: un poco mas oscuro y calido   // (26/10, v12.7) la vena: un poco mas oscura y fria
+  if (lrCav > 0.001) r2.yzw *= lerp(float3(1.0, 1.0, 1.0), float3(0.90, 0.86, 0.85), lrCav * 0.6);   // (08/11) surcos de manos y piernas
+  if (lrCr > 0.001) r2.yzw *= lerp(float3(1.0, 1.0, 1.0), float3(0.84, 0.80, 0.80), lrCr * 0.5);    // (08/11) fondo de los pliegues de la muneca / rodilla
   if (vrWr > 0.001 && vrTm > 0.001 && v2.y < 0.5) {   // (26/10) estrias del robusto: un poco mas claras (blanquecinas)
     uint vsW = 0, vsH = 0; pesVarStr.GetDimensions(vsW, vsH);
     if (vsW > 0) {
