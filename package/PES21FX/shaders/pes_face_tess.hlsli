@@ -39,8 +39,8 @@ Texture1D<float4> IniParams : register(t120);
 #if PES_TESS_BODY
 #include "pes_limb_relief.hlsli"   // (08/11) relieve de manos, brazos y piernas (w376): alturas en 3D sobre el reposo
 // (08/11 n, Agustin: "agrega opciones de teselacion para las manos ... por partes tambien ... en especial en los dedos") opciones POR
-// PARTE del cuerpo, multiplicadores sobre lo general (fila 364 / y357 / w376): 416 manos, 418 brazos, 419 piernas (x teselar 1/0,
-// y densidad, z relieve, w redondeo); 417 dedos dentro de la mano (x densidad, y redondeo, z forma 0 Phong .. 1 curva cubica PN,
+// PARTE del cuerpo, multiplicadores sobre lo general (fila 364 / y357 / w376): 417 manos, 419 brazos, 420 piernas (x teselar 1/0,
+// y densidad, z relieve, w redondeo); 418 dedos dentro de la mano (x densidad, y redondeo, z forma 0 Phong .. 1 curva cubica PN,
 // w relieve de nudillos y pliegues). La parte sale del codigo del miembro (o1.z = 7 + accion / 1200, pes_limbs.hlsli: igual en todo
 // el dibujo); los dedos por la posicion de reposo (marco de la mano de pes_limb_relief), por arista con sus dos extremos: sin grietas.
 // Fila sin valores (ini viejo) = todo 1 (dedos: forma 0).
@@ -53,13 +53,13 @@ int PesBodyPart(float c0z)
 float4 PesBodyPartOpt(int part)
 {
   if (part == 0) return float4(1.0, 1.0, 1.0, 1.0);
-  float4 v = IniParams.Load(int2(part == 1 ? 416 : (part == 2 ? 418 : 419), 0));
+  float4 v = IniParams.Load(int2(part == 1 ? 417 : (part == 2 ? 419 : 420), 0));
   if (dot(abs(v), float4(1, 1, 1, 1)) < 1e-4) return float4(1.0, 1.0, 1.0, 1.0);
   return float4(v.x, clamp(v.y, 0.0, 4.0), clamp(v.z, 0.0, 3.0), clamp(v.w, 0.0, 3.0));
 }
 float4 PesFingerOpt()
 {
-  float4 v = IniParams.Load(int2(417, 0));
+  float4 v = IniParams.Load(int2(418, 0));
   if (dot(abs(v), float4(1, 1, 1, 1)) < 1e-4) return float4(1.0, 1.0, 0.0, 1.0);
   return float4(clamp(v.x, 0.0, 4.0), clamp(v.y, 0.0, 3.0), saturate(v.z), clamp(v.w, 0.0, 3.0));
 }
@@ -186,7 +186,7 @@ PesTessConst PesTessPatch(InputPatch<PesTessVS, 3> p)
 #if PES_TESS_BODY
   int bPart = PesBodyPart(p[0].o1.z);
   float4 bOpt = PesBodyPartOpt(bPart);
-  if (bOpt.x < 0.5) ok = false;   // (08/11 n) esta parte apagada (416 / 418 / 419 .x = 0)
+  if (bOpt.x < 0.5) ok = false;   // (08/11 n) esta parte apagada (417 / 419 / 420 .x = 0)
 #endif
   // (04/11 f) los tres puntos por debajo del collar del torso (reposo y < 1.53): nada que dividir (el DS apaga todo ahi)
 #if !PES_TESS_BODY
@@ -234,7 +234,7 @@ PesTessConst PesTessPatch(InputPatch<PesTessVS, 3> p)
         f[2] = max(f[2], lerp(1.0, fr.z, nk.z));
       }
     }
-    {   // (08/11 n) densidad por parte (416 / 418 / 419 .y) y de los dedos (417.x, cada arista con el mayor de sus dos extremos)
+    {   // (08/11 n) densidad por parte (417 / 419 / 420 .y) y de los dedos (418.x, cada arista con el mayor de sus dos extremos)
       float3 dm = float3(bOpt.y, bOpt.y, bOpt.y);
       if (bPart == 1) {
         float fx = PesFingerOpt().x;
@@ -439,7 +439,7 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
   // (08/11 k, Agustin: "se ven costuras en la union de las munecas y en otras partes") en el cuerpo siempre Phong: el PN (y376 = 1)
   // empuja hacia afuera el anillo de al lado del borde de cada pieza (mano / antebrazo, pierna / media), que queda fijo, y la union
   // se ve como un pliegue. El PN sigue para la cara.
-  // (08/11 n) opciones por parte: en los dedos la forma puede pasar a la curva cubica (417.z; adentro de la mano, lejos de los bordes)
+  // (08/11 n) opciones por parte: en los dedos la forma puede pasar a la curva cubica (418.z; adentro de la mano, lejos de los bordes)
   int bPart = PesBodyPart(p[0].o1.z);
   float4 bOpt = PesBodyPartOpt(bPart), fOpt = PesFingerOpt();
   float fkD = bPart == 1 ? PesFingerK(PES_LERP3(pR).xyz) : 0.0;
@@ -475,7 +475,7 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
   float dist = length(pl) * k.zs;   // (08/11 i) distancia corregida por el zoom (HS)
   float fade = 1.0 - smoothstep(U.x - max(U.y, 0.01), U.x, dist);
 #if PES_TESS_BODY
-  // (08/11 n) redondeo por parte (416 / 418 / 419 .w) y de los dedos (417.y): hasta 1.25 (un poco mas que Phong entero)
+  // (08/11 n) redondeo por parte (417 / 419 / 420 .w) y de los dedos (418.y): hasta 1.25 (un poco mas que Phong entero)
   float rk = bOpt.w * lerp(1.0, fOpt.y, fkD);
   float3 d = (pp - pl) * (min(saturate(T.y) * rk, 1.25) * seam * fade * (T.x > 0.5 ? 1.0 : 0.0));
 #else

@@ -337,9 +337,9 @@ void main(
     if (lrK > 0) {
       float dGl = IniParams.Load(int2(172,0)).x; dGl = dGl > 0.01 ? clamp(dGl, 0.0, 3.0) : 1.0;
       // (08/11 m) con el relieve del cuerpo en la teselacion (w376, x4 de la altura real) la luz sigue a la forma: hasta x3
-      // (08/11 n) en la mano solo x1.5 (con x3 los surcos del dorso salian como cortes oscuros) y por el relieve de la mano z416
+      // (08/11 n) en la mano solo x1.5 (con x3 los surcos del dorso salian como cortes oscuros) y por el relieve de la mano z417
       float lrW = saturate(IniParams.Load(int2(376,0)).w);
-      float4 hO = IniParams.Load(int2(416,0)); float hRel = dot(abs(hO), float4(1,1,1,1)) < 1e-4 ? 1.0 : clamp(hO.z, 0.0, 3.0);
+      float4 hO = IniParams.Load(int2(417,0)); float hRel = dot(abs(hO), float4(1,1,1,1)) < 1e-4 ? 1.0 : clamp(hO.z, 0.0, 3.0);
       float lrGain = clamp(P305.y / 0.7, 0.0, 2.0) * dGl * (lrK == 1 ? (1.0 + 0.5 * lrW) * hRel : (1.0 + 2.0 * lrW));
       float la = lrK == 1 ? saturate((lrQ - 520.0) / 7.0) : fmod(lrQ - 528.0, 8.0) / 7.0;
       // (08/11) pierna: tension de cada grupo (pes_limbs.hlsli PesLegAct) en v1.y = 2 + (cuadriceps + 8 isquios + 64 gemelo) / 1024
