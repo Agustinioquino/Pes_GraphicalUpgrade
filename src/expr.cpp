@@ -1478,7 +1478,7 @@ static void SlotPresent(ID3D11DeviceContext* imm) {
 // (cabeza en el mundo, 1 = valida) y por hueso 3 float4 de la diferencia de este cuadro + 3 del anterior (fila k = imagen del eje k, w = traslacion)
 namespace {
 constexpr int kRowZonas = 421;   // (08/11 d) filas 421 / 422: x350 = 3 'Por huesos: control total' (ganancia por zona y topes)
-static std::atomic<int> s_bdClamp{0};   // (08/11 b) huesos recortados por el tope
+static std::atomic<int> s_bdClamp{0}, s_bdClampR{0};   // (08/11 b) huesos recortados por el tope
 constexpr int kBdStride = 1 + kExprBones * 6, kBdChars = 32, kBdF4 = 2 + kBdChars * kBdStride;
 ID3D11Buffer* s_bdBuf = nullptr; ID3D11ShaderResourceView* s_bdSrv = nullptr; bool s_bdAny = false;
 struct PrevD { unsigned frame = 0; float D[kExprBones][12]; bool has[kExprBones]; };
@@ -1520,7 +1520,7 @@ static void DeltaUpload(ID3D11DeviceContext* imm) {
                 // z parpados y ojeras, w cejas y frente; fila 422: x mejillas y nariz, y todo junto) y el tope sale de la fila 422 (z grados,
                 // w mm). Con los otros modos: ganancia 1 y tope 40 grados / 2 cm
                 float nq2[4] = { b.nq[0], b.nq[1], b.nq[2], b.nq[3] }, nt2[3] = { b.nt[0], b.nt[1], b.nt[2] };
-                if (ExprZoneScale(d, b.bq, b.bt, nq2, nt2)) s_bdClamp++;
+                { const int cz = ExprZoneScale(d, b.bq, b.bt, nq2, nt2); if (cz & 1) s_bdClampR++; if (cz & 2) s_bdClamp++; }
                 AffQ(nq2, nt2, N);
                 if (AffInv(B, BI)) { AffMul(N, BI, Dm); if (wOk) { Aff t1; AffMul(W, Dm, t1); AffMul(t1, WI, Dw); } else Dw = Dm; cur.has[d] = true; moved++; }
             }
@@ -1534,13 +1534,13 @@ static void DeltaUpload(ID3D11DeviceContext* imm) {
     D3D11_MAPPED_SUBRESOURCE mp;
     if (SUCCEEDED(imm->Map(s_bdBuf, 0, D3D11_MAP_WRITE_DISCARD, 0, &mp))) { memcpy(mp.pData, f.data(), f.size() * sizeof(float)); imm->Unmap(s_bdBuf, 0); s_bdAny = true; s_bdUploads++; s_bdCharsN = np; s_bdMoved = moved; }
     static UINT lastLog = 0;
-    if (s_frame - lastLog >= 1800 && s_slotLogs < 400) { lastLog = s_frame; Log("paleta: %d personajes publicados, %d huesos con gesto este cuadro, mallas emparejadas %d / sin emparejar %d, lugares dudosos %d, huesos recortados por el tope %d", np, moved, s_slotOk.load(), s_slotFail.load(), s_slotAmb.load(), s_bdClamp.exchange(0)); }
+    if (s_frame - lastLog >= 1800 && s_slotLogs < 400) { lastLog = s_frame; Log("paleta: %d personajes publicados, %d huesos con gesto este cuadro, mallas emparejadas %d / sin emparejar %d, lugares dudosos %d, huesos recortados por el tope: giro %d / corrimiento %d [x350 %.0f]", np, moved, s_slotOk.load(), s_slotFail.load(), s_slotAmb.load(), s_bdClampR.exchange(0), s_bdClamp.exchange(0), g_cfg.live[350][0]); }
 }
 // (08/11 d) ganancia por zona y topes por hueso del gesto del mod (x350 = 3 "control total": filas 421 / 422; otros modos: ganancia 1,
 // tope 40 grados / 2 cm). Cambia n (giro nq / posicion nt) para que la diferencia con la base del juego b quede escalada y recortada.
-// Devuelve true si algo se recorto por el tope. La usan la paleta (DeltaUpload) y la escritura directa al esqueleto (expr_paleta = 0)
-bool ExprZoneScale(int d, const float* bq, const float* bt, float* nq2, float* nt2) {
-    bool clip = false;
+// Devuelve 1 si se recorto el giro, 2 el corrimiento (3 ambos). La usan la paleta (DeltaUpload) y la escritura directa al esqueleto (expr_paleta = 0)
+int ExprZoneScale(int d, const float* bq, const float* bt, float* nq2, float* nt2) {
+    int clip = 0;   // 1 = giro recortado, 2 = corrimiento recortado
     const bool full = g_cfg.live[350][0] > 2.5f;
     float g = 1.0f, kMax = 0.70f, kMaxT = 0.02f;
     if (full) {
@@ -1556,7 +1556,7 @@ bool ExprZoneScale(int d, const float* bq, const float* bt, float* nq2, float* n
     dq[2] = nq2[3] * bc[2] + nq2[0] * bc[1] - nq2[1] * bc[0] + nq2[2] * bc[3];
     if (dq[3] < 0) for (float& v : dq) v = -v;
     const float sn = sqrtf(dq[0] * dq[0] + dq[1] * dq[1] + dq[2] * dq[2]), ang = 2.0f * atan2f(sn, dq[3]);
-    float tgt = ang * g; if (tgt > kMax) { tgt = kMax; clip = true; }
+    float tgt = ang * g; if (tgt > kMax) { tgt = kMax; clip |= 1; }
     if (sn > 1e-6f && fabsf(tgt - ang) > 1e-6f) {   // n = dq escalado * b
         const float h = 0.5f * tgt, k = sinf(h) / sn, e[4] = { dq[0] * k, dq[1] * k, dq[2] * k, cosf(h) };
         nq2[3] = e[3] * bq[3] - e[0] * bq[0] - e[1] * bq[1] - e[2] * bq[2];
@@ -1565,7 +1565,11 @@ bool ExprZoneScale(int d, const float* bq, const float* bt, float* nq2, float* n
         nq2[2] = e[3] * bq[2] + e[0] * bq[1] - e[1] * bq[0] + e[2] * bq[3];
     }
     float dx = (nt2[0] - bt[0]) * g, dy = (nt2[1] - bt[1]) * g, dz = (nt2[2] - bt[2]) * g; const float dl = sqrtf(dx * dx + dy * dy + dz * dz);
-    if (dl > kMaxT) { const float k = kMaxT / dl; dx *= k; dy *= k; dz *= k; clip = true; }
+    // (08/11 f) el tope de corrimiento cuenta aparte lo que el hueso se corre por girar alrededor de otro punto: los labios, el menton y
+    // la papada giran con la mandibula (pivote a 6..12 cm) y al abrir la boca 20 grados se corren ~3 cm sin que nada este mal. El log
+    // de fc4255a mostraba 146..426 huesos recortados cada 30 s con x350 = 2 (tope 2 cm): eran esos. Brazo de palanca maximo 12 cm
+    const float kMaxTr = kMaxT + 0.12f * (std::min)(tgt, kMax);
+    if (dl > kMaxTr) { const float k = kMaxTr / dl; dx *= k; dy *= k; dz *= k; clip |= 2; }
     nt2[0] = bt[0] + dx; nt2[1] = bt[1] + dy; nt2[2] = bt[2] + dz;
     return clip;
 }
