@@ -1,0 +1,44 @@
+
+==== 244144d8b2ef94ca-vs_replace.txt
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\244144d8b2ef94ca-vs_replace.txt(19,17): error X1500: syntax error : unexpected token ')'
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\244144d8b2ef94ca-vs_replace.txt(19,19-20): error X1500: syntax error : unexpected token 'O0'
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\244144d8b2ef94ca-vs_replace.txt(264,3-11): error X3004: undeclared identifier 'PES_OUT'
+
+compilation failed; no code produced
+
+==== 37b31aa5bf052258-vs_replace.txt
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\37b31aa5bf052258-vs_replace.txt(21,17): error X1500: syntax error : unexpected token ')'
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\37b31aa5bf052258-vs_replace.txt(21,19-20): error X1500: syntax error : unexpected token 'O0'
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\37b31aa5bf052258-vs_replace.txt(495,3-11): error X3004: undeclared identifier 'PES_OUT'
+
+compilation failed; no code produced
+
+==== 3d8a52c2004d58bb-vs_replace.txt
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\3d8a52c2004d58bb-vs_replace.txt(17,17): error X1500: syntax error : unexpected token ')'
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\3d8a52c2004d58bb-vs_replace.txt(17,19-20): error X1500: syntax error : unexpected token 'O0'
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\3d8a52c2004d58bb-vs_replace.txt(266,3-11): error X3004: undeclared identifier 'PES_OUT'
+
+compilation failed; no code produced
+
+==== 82f14de823c94c87-vs_replace.txt
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\82f14de823c94c87-vs_replace.txt(17,17): error X1500: syntax error : unexpected token ')'
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\82f14de823c94c87-vs_replace.txt(17,19-20): error X1500: syntax error : unexpected token 'O0'
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\82f14de823c94c87-vs_replace.txt(292,3-11): error X3004: undeclared identifier 'PES_OUT'
+
+compilation failed; no code produced
+
+==== 8b0ba18c8024bbb1-vs_replace.txt
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\8b0ba18c8024bbb1-vs_replace.txt(19,17): error X1500: syntax error : unexpected token ')'
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\8b0ba18c8024bbb1-vs_replace.txt(19,19-20): error X1500: syntax error : unexpected token 'O0'
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\8b0ba18c8024bbb1-vs_replace.txt(325,3-11): error X3004: undeclared identifier 'PES_OUT'
+
+compilation failed; no code produced
+
+==== ec39a17a68dcbac3-vs_replace.txt
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\ec39a17a68dcbac3-vs_replace.txt(21,17): error X1500: syntax error : unexpected token ')'
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\ec39a17a68dcbac3-vs_replace.txt(21,19-20): error X1500: syntax error : unexpected token 'O0'
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\ec39a17a68dcbac3-vs_replace.txt(526,3-11): error X3004: undeclared identifier 'PES_OUT'
+
+compilation failed; no code produced
+
+shaders: 149, con errores: 6 (fxc: C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\fxc.exe)
