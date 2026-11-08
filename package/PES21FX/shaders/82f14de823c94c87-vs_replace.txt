@@ -14,7 +14,7 @@ uint PESBfi(uint w, uint o, uint ins, uint b) { w &= 31u; o &= 31u; uint m = (((
 Texture1D<float4> IniParams : register(t120);
 #include "pes_crowd_face.hlsli"
 
-#define PES_OUT() O0 = asfloat(o0.xyzw); O1 = asfloat(o1.xyzw); O2 = asfloat(o2.xyzw); O3 = asfloat(o3.xyzw); O4 = asfloat(o4.xyz); O5 = asfloat(o5.xyz); O6 = asfloat(o6.xyz); O7 = asfloat(o7.xyzw); O8 = asfloat(o8.xyzw); O9 = asfloat(o9.xyzw);
+#define PES_OUT O0 = asfloat(o0.xyzw); O1 = asfloat(o1.xyzw); O2 = asfloat(o2.xyzw); O3 = asfloat(o3.xyzw); O4 = asfloat(o4.xyz); O5 = asfloat(o5.xyz); O6 = asfloat(o6.xyz); O7 = asfloat(o7.xyzw); O8 = asfloat(o8.xyzw); O9 = asfloat(o9.xyzw);
 void main(
   float4 i_position0 : POSITION0,
   float4 i_normal0 : NORMAL0,
@@ -289,5 +289,5 @@ void main(
   r1.w = 1065353216u;
   { uint4 _t = o7; _t.x = r1.w; _t.y = r1.w; _t.z = r1.w; _t.w = r1.z; o7 = _t; }
   { uint4 _t = o8; _t.x = r1.w; _t.y = r1.w; _t.z = r1.w; _t.w = r1.y; o8 = _t; }
-  PES_OUT(); return;
+  PES_OUT return;
 }

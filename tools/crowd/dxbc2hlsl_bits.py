@@ -195,7 +195,7 @@ class Tr:
         elif op0 == 'endif':
             self.ind -= 1; self.emit('}')
         elif op0 == 'ret':
-            self.emit('PES_OUT(); return;')
+            self.emit('PES_OUT return;')
         else:
             raise SystemExit('instruccion no soportada: ' + line)
 
@@ -280,7 +280,7 @@ def main():
     outw = ['O%s = asfloat(o%s.%s);' % (reg, reg, mask) for (name, idx, mask, reg, sv, fmt) in outs]
     nout = max(int(x[3]) for x in outs) + 1
     body = []
-    body.append('#define PES_OUT() %s' % ' '.join(outw))
+    body.append('#define PES_OUT %s' % ' '.join(outw))
     body.append('void main(\n  ' + ',\n  '.join(params) + ')')
     body.append('{')
     body.append('  uint4 %s;' % ', '.join('r%d = 0' % k for k in range(max(t.temps, 1))))
@@ -292,7 +292,7 @@ def main():
         body.append('  uint pesIdx = t%d[(uint)asfloat(cb5[9].x) + v%d.x].v[0];' % (ti, vreg['SV_InstanceID']))
         body.append('  %s(v%d, v%d, v%d, v%d, pesIdx);' % (fn, vreg['POSITION'], vreg['NORMAL'], vreg['TANGENT'], vreg['COLOR']))
     body += t.body
-    if not body[-1].strip().endswith('return;'): body.append('  PES_OUT();')
+    if not body[-1].strip().endswith('return;'): body.append('  PES_OUT')
     body.append('}')
     open(a[2], 'w').write('\n'.join(h + [''] + body) + '\n')
     print(a[2], len(t.body), 'lineas')
