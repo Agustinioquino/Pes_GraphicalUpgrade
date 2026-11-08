@@ -328,6 +328,10 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     // ralo (halo de pelos sueltos alrededor de la ceja): ahora siguen la forma de la ceja pintada como las demas (mas donde es tupida)
     // y van en las capas de arriba, con la direccion y el mechon de sus vecinas: suman volumen dentro de la ceja, no pelusa afuera
     pX = hb ? uvArea * max(pesBrowX.x, 0.0) * 31.0 / (float)(PES_INST * PES_PER_INST) * saturate(ph * 1.4) * 1.3 : 0.0;
+    // (08/11 y, Agustin: "no me gusta como se aplican las hebras extras") seguian formando una capa de arriba aparte (volumen hinchado,
+    // mas cortas): ahora nacen solo SOBRE los trazos pintados (como las del mapa, strk alto), en las mismas capas y con el mismo largo
+    // que sus vecinas y mas finas: suman densidad dentro de cada trazo sin engordar la ceja
+    pX *= saturate((strk - 0.45) * 4.0) * 1.6;
     bool extra = ph >= 0.25 && re < pX;
     if (!isB && !born && !extra) continue;
     bool isX = extra && !born;
@@ -392,13 +396,14 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
         float lenUV = len / max(mPerUV, 1e-5);
         if (PesPaintedHair(uv + dirUV * lenUV) < 0.2) len *= (PesPaintedHair(uv + dirUV * lenUV * 0.5) < 0.2) ? 0.55 : 0.85;   // (07/11, referencia eFootball de Agustin) el borde de la ceja queda deshilachado: los pelos pasan un poco la pintura
       }
-    if (isX) len *= 0.85; }
+    }
     float widB = isB ? max(BR.w, 0.05) * 0.001 * 0.3 : max(P74.w, 0.05) * 0.001 * mWid * 0.32 * clamp(HO.x, 0.2, 3.0);
     // (08/11 w, Agustin: "el problema es el grosor... un tick para respetar el grosor de la textura real o bajar el grosor sin perder
     // longitud ni cantidad") x403 = 1: el ancho de cada pelo sale del trazo pintado (trazo marcado y tupido = pelo grueso, trazo
     // suave / ralo = pelo fino, 0.55..1.25 del grosor elegido). Y el grosor ya no decide cuantas hebras quedan ni su largo (abajo)
     float widRef = (isB ? 0.25 : 0.35) * 0.001 * 0.32;   // grosor de referencia: el LOD cuenta hebras con este, no con el elegido
-    if (!isB && IniParams.Load(int2(403, 0)).x > 0.5) widB *= lerp(0.55, 1.25, saturate(strk * 0.6 + ph * 0.6));   // (07/11 b) 0.25 -> 0.32: con la normal de tubo cada pelo se lee como cilindro   // (04/11 b) mas finas: 0.35 -> ~0.09 mm de ancho real
+    if (!isB && IniParams.Load(int2(403, 0)).x > 0.5) widB *= lerp(0.5, 1.0, saturate(strk * 0.6 + ph * 0.6));   // (08/11 y, Agustin: "no me gusta el grosor") nunca mas grueso que el elegido (antes hasta x1.25)
+    if (isX) widB *= 0.75;   // (08/11 y) las extra mas finas   // (07/11 b) 0.25 -> 0.32: con la normal de tubo cada pelo se lee como cilindro   // (04/11 b) mas finas: 0.35 -> ~0.09 mm de ancho real
 #ifndef PES_ATLAS
     // (08/11 v, Agustin: "no me gusta su definicion con el antialiasing") LOD POR HEBRA en vez de tramado por pixel: una hebra mas fina
     // que un pixel se dibujaba a 0.9 px y el PS borraba pixeles con un tramado fijo en PANTALLA; al moverse la cara el tramado no la
@@ -449,7 +454,6 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     // Las capas de abajo quedan tapadas (mas oscuras) y las de arriba toman la luz: volumen y profundidad reales, con sombra de
     // contacto mas larga para las de arriba (PES_SHADOW usa la altura real)
     float lay = frac(r0 * 5.17 + r1 * 3.71 + r3 * 1.93);
-    if (isX) lay = 0.6 + 0.4 * lay;   // (08/11 w) las extra arriba: volumen
     float stackH = (isB ? 0.25 : 1.0) * lay * lay * 0.0012 * saturate(ph * 1.6) * max(mLift, 0.3);   // (08/11 w, Agustin: "se separan de la cara") 2.2 -> 1.2 mm   // (07/11 b) 1.3 -> 2.2 mm: mas profundidad entre capas
     { float occ = lerp(0.96, 0.8, saturate(ph * 1.2)) * lerp(lerp(0.86, 1.02, lay), 1.0, 1.0 - saturate(ph * 1.6));   // abajo tapado, arriba a la luz   // (05/11, Agustin: "se ven muy oscuras con la luz de frente") antes 0.88..0.62
       float layer = lerp(0.88, 1.08, frac(r3 * 7.31 + rk * 3.17));
@@ -500,7 +504,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
       // y el PS descarta pixeles al azar segun la cobertura real (ancho real / dibujado); el TAA lo promedia -> pelo fino y suave
       float wReal = wid;
 #ifndef PES_ATLAS
-      wid = max(wid, pxV * (P75.z > 0.5 ? 1.25 : lerp(0.6, 0.9, saturate(widB / widRef))));   // (08/11 w) grosor bajo = linea mas fina en pantalla   // (07/11 b, Agustin: "el TAA las desenfoca") 0.6 -> 0.9 px: menos tramado
+      wid = max(wid, pxV * (P75.z > 0.5 ? 1.25 : lerp(0.45, 0.8, saturate(widB / widRef))));   // (08/11 w) grosor bajo = linea mas fina en pantalla   // (07/11 b, Agustin: "el TAA las desenfoca") 0.6 -> 0.9 px: menos tramado
 #endif
       float cov = P75.z > 0.5 ? 1.0 : saturate(wReal / max(pxV * 1.5, 1e-9));   // (08/11 v) z = RESOLUCION de la hebra (1 = 1.5 px o mas de ancho real): el PS ya no trama, la usa para normal / brillo / borde
 #ifdef PES_SHADOW
