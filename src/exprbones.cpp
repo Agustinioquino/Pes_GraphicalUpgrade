@@ -785,8 +785,8 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
         // de abajo: sube un poco al parpadear, baja con la mirada abajo y sube apenas con la mirada arriba
         float lo = std::clamp(-0.07f * b - gy * (gy < 0.0f ? 0.35f : 0.15f) - 0.10f * smL + geL, -0.45f, 0.18f);
         if (s_ganiLidOn) { up = (std::min)(up + s_ganiLid[0], 0.66f); lo = std::clamp(lo + s_ganiLid[1], -0.45f, 0.18f); }   // (07/11) parpados del clip .gani
-        {   // (08/11, Agustin: "un slider para cerrar y abrir los ojos") x388: + cierra (1 = cerrados), - abre de mas (-1 = bien abiertos)
-            const float ec = std::clamp(g_cfg.live[388][0], -1.0f, 1.0f);
+        {   // (08/11, Agustin: "un slider para cerrar y abrir los ojos") x391: + cierra (1 = cerrados), - abre de mas (-1 = bien abiertos)
+            const float ec = std::clamp(g_cfg.live[391][0], -1.0f, 1.0f);
             if (ec > 0.0f) { up = up + (0.62f - up) * ec; lo = lo + (-0.07f - lo) * ec; }
             else if (ec < 0.0f) { up = up + 0.22f * ec; lo = lo - 0.10f * ec; }
             up = (std::min)(up, 0.66f); lo = std::clamp(lo, -0.45f, 0.18f);
