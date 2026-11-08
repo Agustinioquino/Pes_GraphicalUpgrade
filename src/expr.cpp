@@ -47,7 +47,8 @@ struct FaceMesh {
     // (08/11) gestos en la paleta: hueso kDef (exprbones.cpp) de cada lugar de la paleta de esta malla (255 = ninguno), leido una vez de
     // la paleta real (b6) y emparejado con los huesos del personaje; slotCap = ultimo cuadro en que se pidio la lectura
     uint8_t slotBone[32]; bool slotsOk = false; UINT slotCap = 0; int slotTries = 0;
-    FaceMesh() { memset(slotBone, 255, sizeof slotBone); }
+    uint8_t slotPend[32]; bool slotPendOk = false;   // (08/11 b) tabla de la lectura anterior: se acepta solo si dos lecturas seguidas dan la misma
+    FaceMesh() { memset(slotBone, 255, sizeof slotBone); memset(slotPend, 255, sizeof slotPend); }
     int shapeOff = -1; uint32_t huella = 0; ID3D11ShaderResourceView* shapeWr = nullptr;   // (04/11) gestos esculpidos (formas\<huella>.bin): primer float4 de esta malla en s_shapeData
     ID3D11Buffer* seamBuf = nullptr; ID3D11ShaderResourceView* seamSrv = nullptr; int seamN = 0;   // (04/11 b) teselacion (facetess.cpp): peso de borde por vertice (t119), solo piel de la cara; seamN = vertices con peso 0
     int seamSoft = -1;   // (07/11) vertices de costuras de textura que ahora se redondean (-1 = sin normales leidas)
@@ -1352,7 +1353,8 @@ static int PoseFor(const ExprCharPose* ps, int n, const float* hw) {
     if (best >= 0) return best;
     return (n == 1 && nWild == 1) ? wild : -1;
 }
-struct SlotCap { ID3D11Buffer* st = nullptr; int id = 0, head = 0, maxIdx = 31; UINT frame = 0; int tries = 0; };
+constexpr int D_LID_TL_ = 22, D_LID_BR_ = 25, D_EYE_L_ = 31, D_EYE_R_ = 32;   // kDef de exprbones.cpp (parpados 22..25: arriba izq, arriba der, abajo izq, abajo der; ojos 31 / 32)
+struct SlotCap { ID3D11Buffer* st = nullptr; int id = 0, head = 0, maxIdx = 31; UINT frame = 0; int tries = 0; int lids[4] = { -1, -1, -1, -1 }; };
 std::mutex s_scmx; std::vector<SlotCap> s_scaps; int s_slotLogs = 0; std::atomic<int> s_slotOk{0}, s_slotFail{0};
 }
 static void SlotCapture(ID3D11DeviceContext* c, FaceMesh* m) {   // con s_mx tomado: copia la paleta entera (32 x float4x3) a lectura
@@ -1367,6 +1369,7 @@ static void SlotCapture(ID3D11DeviceContext* c, FaceMesh* m) {   // con s_mx tom
     if (ID3D11Buffer* st = Staging(len)) {
         D3D11_BOX bx = { a, 0, 0, a + len, 1, 1 }; c->CopySubresourceRegion(st, 0, 0, 0, 0, b, 0, &bx);
         SlotCap L; L.st = st; L.id = m->id; L.head = m->head; L.maxIdx = m->maxIdx < 0 ? 31 : (std::min)(m->maxIdx, 31); L.frame = s_frame;
+        for (int i = 0; i < 4; i++) L.lids[i] = m->lids[i];
         std::lock_guard<std::mutex> lk(s_scmx); if (s_scaps.size() < 64) s_scaps.push_back(L); else st->Release();
     }
     b->Release();
@@ -1403,20 +1406,43 @@ static void SlotPresent(ID3D11DeviceContext* imm) {
                             Aff B, R, RI; AffQ(b.bq, b.bt, B); AffQ(b.rq, b.rt, R); if (!AffInv(R, RI)) continue;
                             Aff t1, t2; AffMul(HI, B, t1); AffMul(t1, RI, t2); AffMul(Bh, t2, K[d]); kOk[d] = true;   // Bind_h H^-1 B_d Bind_d^-1
                         }
+                        // (08/11 b, Agustin: con la camara libre muy cerca un ojo quedaba cerrado y hundido, "es por los huesos") reglas
+                        // para que un lugar nunca tome el hueso equivocado:
+                        //  - los globos de los ojos (skf_eye) no se emparejan en la piel: su giro es la mirada, no un gesto de la piel;
+                        //  - los PARPADOS solo van en los lugares que la geometria de esta malla marco como parpado (lids, mismo lado y
+                        //    arriba / abajo): tienen el mismo pivote que el ojo y entre ellos, y el emparejado por matriz los puede cruzar;
+                        //  - cada hueso en un solo lugar (el de menor error); los demas quedan sin gesto
+                        float err[32]; for (int j = 0; j < 32; j++) err[j] = 1e9f;
                         for (int j = 0; j <= L.maxIdx; j++) {
                             if (j == L.head) continue;
                             Aff Mj, A; AffFromPalette(r + j * 12, Mj); AffMul(MhI, Mj, A);
+                            int lidQ = -1; for (int q = 0; q < 4; q++) if (L.lids[q] == j) lidQ = q;
                             float best = 1e9f, second = 1e9f; int bd = -1;
-                            for (int d = 0; d < kExprBones; d++) { if (!kOk[d]) continue; const float e = AffDist(A, K[d]); if (e < best) { second = best; best = e; bd = d; } else if (e < second) second = e; }
-                            if (bd >= 0 && best < 0.25f && second > 2.0f * best) { slot[j] = (uint8_t)bd; matched++; worst = (std::max)(worst, best); }
+                            for (int d = 0; d < kExprBones; d++) {
+                                if (!kOk[d] || d == D_EYE_L_ || d == D_EYE_R_) continue;
+                                const bool isLid = d >= D_LID_TL_ && d <= D_LID_BR_;
+                                if (isLid != (lidQ >= 0)) continue;   // lugar de parpado <-> hueso de parpado
+                                if (isLid && d != D_LID_TL_ + (lidQ & 1) + 2 * (lidQ >> 1)) continue;   // lids = { arriba izq, arriba der, abajo izq, abajo der }
+                                const float e = AffDist(A, K[d]); if (e < best) { second = best; best = e; bd = d; } else if (e < second) second = e;
+                            }
+                            const bool okLid = lidQ >= 0 && bd >= 0 && best < 0.25f;   // el parpado ya viene elegido por la geometria
+                            if (bd >= 0 && (okLid || (best < 0.25f && second > 2.0f * best))) { slot[j] = (uint8_t)bd; err[j] = best; }
                         }
+                        for (int j = 0; j < 32; j++) if (slot[j] != 255) for (int k = 0; k < 32; k++) if (k != j && slot[k] == slot[j] && err[k] <= err[j]) { slot[j] = 255; break; }
+                        for (int j = 0; j < 32; j++) if (slot[j] != 255) { matched++; worst = (std::max)(worst, err[j]); }
                     }
                 }
             }
             imm->Unmap(L.st, 0);
             FaceMesh* m = nullptr;
             { std::lock_guard<std::mutex> lm(s_mx); for (auto& kv : s_meshes) if (kv.second->id == L.id) { m = kv.second; break; }
+              bool confirmed = false;
               if (m && matched >= 3 && !m->slotsOk) {
+                  confirmed = m->slotPendOk && memcmp(m->slotPend, slot, sizeof slot) == 0;
+                  memcpy(m->slotPend, slot, sizeof slot); m->slotPendOk = true;
+                  if (!confirmed) m->slotCap = s_frame - 30;   // la segunda lectura enseguida (~15 cuadros)
+              }
+              if (m && confirmed) {
                   memcpy(m->slotBone, slot, sizeof slot); m->slotsOk = true;
                   for (int j = 0; j < 32; j++) { UINT& u = m->cbv[28 + j / 4]; u &= ~(0xFFu << ((j & 3) * 8)); u |= (UINT)slot[j] << ((j & 3) * 8); }
                   // cbuffers nuevos con la tabla (los viejos no se liberan: otro hilo puede tenerlos en la mano)
@@ -1425,7 +1451,7 @@ static void SlotPresent(ID3D11DeviceContext* imm) {
                   if (m->cbTeeth) { UINT z[kCbU]; memcpy(z, m->cbv, sizeof z); z[24] = 1; z[25] = 0; z[26] = 0; z[27] = 0; if (ID3D11Buffer* nb = MakeCBRaw(z)) m->cbTeeth = nb; }
                   m->idBuf = nullptr;   // la barba: se rearma con la tabla en la proxima copia al pozo
                   s_slotOk++;
-              } else if (m) s_slotFail++;
+              } else if (m && matched < 3) s_slotFail++;
             }
             if (s_slotLogs < 120) {
                 s_slotLogs++;
@@ -1441,6 +1467,7 @@ static void SlotPresent(ID3D11DeviceContext* imm) {
 // tabla para el VS (t115): [0] = (personajes, 0, 0, 0), [1] = (reposo de sk_head, 0); por personaje 1 + 33 x 6 float4:
 // (cabeza en el mundo, 1 = valida) y por hueso 3 float4 de la diferencia de este cuadro + 3 del anterior (fila k = imagen del eje k, w = traslacion)
 namespace {
+static std::atomic<int> s_bdClamp{0};   // (08/11 b) huesos recortados por el tope
 constexpr int kBdStride = 1 + kExprBones * 6, kBdChars = 32, kBdF4 = 2 + kBdChars * kBdStride;
 ID3D11Buffer* s_bdBuf = nullptr; ID3D11ShaderResourceView* s_bdSrv = nullptr; bool s_bdAny = false;
 struct PrevD { unsigned frame = 0; float D[kExprBones][12]; bool has[kExprBones]; };
@@ -1475,6 +1502,28 @@ static void DeltaUpload(ID3D11DeviceContext* imm) {
             const ExprCharPose::Bone& b = P.b[d];
             if (b.has && b.moved) {
                 Aff N, B, BI, Dm; AffQ(b.nq, b.nt, N); AffQ(b.bq, b.bt, B);
+                // (08/11 b) tope por hueso: el gesto del mod nunca corre un hueso de la cara mas de 40 grados ni 2 cm de lo que dejo el juego
+                // (si algo sale de rango -lectura rara, cara nueva- se recorta en vez de tirar la piel)
+                float nq2[4] = { b.nq[0], b.nq[1], b.nq[2], b.nq[3] }, nt2[3] = { b.nt[0], b.nt[1], b.nt[2] };
+                {   float dq[4], bc[4] = { -b.bq[0], -b.bq[1], -b.bq[2], b.bq[3] };
+                    dq[3] = nq2[3] * bc[3] - nq2[0] * bc[0] - nq2[1] * bc[1] - nq2[2] * bc[2];
+                    dq[0] = nq2[3] * bc[0] + nq2[0] * bc[3] + nq2[1] * bc[2] - nq2[2] * bc[1];
+                    dq[1] = nq2[3] * bc[1] - nq2[0] * bc[2] + nq2[1] * bc[3] + nq2[2] * bc[0];
+                    dq[2] = nq2[3] * bc[2] + nq2[0] * bc[1] - nq2[1] * bc[0] + nq2[2] * bc[3];
+                    if (dq[3] < 0) for (float& v : dq) v = -v;
+                    const float sn = sqrtf(dq[0] * dq[0] + dq[1] * dq[1] + dq[2] * dq[2]), ang = 2.0f * atan2f(sn, dq[3]), kMax = 0.70f;
+                    if (ang > kMax && sn > 1e-6f) {   // n = recorte(dq) * b
+                        const float h = 0.5f * kMax, k = sinf(h) / sn, e[4] = { dq[0] * k, dq[1] * k, dq[2] * k, cosf(h) };
+                        nq2[3] = e[3] * b.bq[3] - e[0] * b.bq[0] - e[1] * b.bq[1] - e[2] * b.bq[2];
+                        nq2[0] = e[3] * b.bq[0] + e[0] * b.bq[3] + e[1] * b.bq[2] - e[2] * b.bq[1];
+                        nq2[1] = e[3] * b.bq[1] - e[0] * b.bq[2] + e[1] * b.bq[3] + e[2] * b.bq[0];
+                        nq2[2] = e[3] * b.bq[2] + e[0] * b.bq[1] - e[1] * b.bq[0] + e[2] * b.bq[3];
+                        s_bdClamp++;
+                    }
+                    const float dx = nt2[0] - b.bt[0], dy = nt2[1] - b.bt[1], dz = nt2[2] - b.bt[2], dl = sqrtf(dx * dx + dy * dy + dz * dz);
+                    if (dl > 0.02f) { const float k = 0.02f / dl; nt2[0] = b.bt[0] + dx * k; nt2[1] = b.bt[1] + dy * k; nt2[2] = b.bt[2] + dz * k; s_bdClamp++; }
+                }
+                AffQ(nq2, nt2, N);
                 if (AffInv(B, BI)) { AffMul(N, BI, Dm); if (wOk) { Aff t1; AffMul(W, Dm, t1); AffMul(t1, WI, Dw); } else Dw = Dm; cur.has[d] = true; moved++; }
             }
             PackAff(Dw, o);
@@ -1487,7 +1536,7 @@ static void DeltaUpload(ID3D11DeviceContext* imm) {
     D3D11_MAPPED_SUBRESOURCE mp;
     if (SUCCEEDED(imm->Map(s_bdBuf, 0, D3D11_MAP_WRITE_DISCARD, 0, &mp))) { memcpy(mp.pData, f.data(), f.size() * sizeof(float)); imm->Unmap(s_bdBuf, 0); s_bdAny = true; s_bdUploads++; s_bdCharsN = np; s_bdMoved = moved; }
     static UINT lastLog = 0;
-    if (s_frame - lastLog >= 1800 && s_slotLogs < 400) { lastLog = s_frame; Log("paleta: %d personajes publicados, %d huesos con gesto este cuadro, mallas emparejadas %d / sin emparejar %d", np, moved, s_slotOk.load(), s_slotFail.load()); }
+    if (s_frame - lastLog >= 1800 && s_slotLogs < 400) { lastLog = s_frame; Log("paleta: %d personajes publicados, %d huesos con gesto este cuadro, mallas emparejadas %d / sin emparejar %d, huesos recortados por el tope %d", np, moved, s_slotOk.load(), s_slotFail.load(), s_bdClamp.exchange(0)); }
 }
 ID3D11ShaderResourceView* ExprBoneDeltaSrv() { return (g_cfg.optExprPalette && s_bdAny) ? s_bdSrv : nullptr; }
 
