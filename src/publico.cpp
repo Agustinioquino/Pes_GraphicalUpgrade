@@ -8,7 +8,7 @@
 //    PesCrowdFace (shaders/pes_crowd_face.hlsli) antes del skinning: la mandibula gira y las cejas suben como huesos hijos
 //    del cuello; despues el juego aplica su animacion y el giro de la cabeza de cada hincha.
 //  - CPU (este archivo): un hilo propio calcula el gesto de cada hincha (hasta kMax) en un buffer float4 (x giro de la
-//    mandibula en rad, y / z subida de las cejas en m) y el Present lo sube a la GPU (recurso "pes_crowdface", t30 por regla).
+//    mandibula en rad, y / z subida de las cejas en m) y el Present lo sube a la GPU (recurso "pes_crowdface"; la DLL lo pone en t30 de los 6 VS, PublicoSRVFor).
 //    El indice es el del juego en instanceBuf: cada hincha tiene siempre el suyo, asi que cada uno tiene ritmo propio.
 //
 // Fila 394: x on | y fuerza de la boca | z fuerza de las cejas | w animo (0 tranquilo .. 1 normal .. 2 cancha que canta todo)
@@ -100,10 +100,20 @@ static void Ensure() {
     D3D11_SHADER_RESOURCE_VIEW_DESC v = {};
     v.Format = DXGI_FORMAT_UNKNOWN; v.ViewDimension = D3D11_SRV_DIMENSION_BUFFER; v.Buffer.FirstElement = 0; v.Buffer.NumElements = kMax;
     if (FAILED(g_dev.dev->CreateShaderResourceView(s_buf, &v, &s_srv))) { s_failed = true; Log("publico: no se pudo crear la vista del buffer"); return; }
-    NamedSetSRV("pes_crowdface", s_srv);
+    NamedSetSRV("pes_crowdface", s_srv);   // nombre para el inspector; el enlace lo hace PublicoSRVFor desde hooks.cpp
     s_run = true;
     std::thread(Worker).detach();   // sin join: vive hasta que se cierra el juego (un std::thread estatico unido al salir termina el proceso)
     Log("publico: gestos de %u hinchas en un hilo de la CPU (recurso pes_crowdface, t30 en los VS del publico)", kMax);
+}
+
+// la DLL pone el buffer en t30 de los 6 VS del publico (no se usa PES21FX_rules.ini, que no se toca)
+ID3D11ShaderResourceView* PublicoSRVFor(uint64_t h) {
+    if (!s_srv || g_cfg.live[394][0] <= 0.0f) return nullptr;
+    switch (h) {
+    case 0x244144d8b2ef94caULL: case 0x37b31aa5bf052258ULL: case 0x3d8a52c2004d58bbULL:
+    case 0x82f14de823c94c87ULL: case 0x8b0ba18c8024bbb1ULL: case 0xec39a17a68dcbac3ULL: return s_srv;
+    default: return nullptr;
+    }
 }
 
 void PublicoPresent() {

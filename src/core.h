@@ -339,7 +339,7 @@ ID3DBlob* CompileSourceShader(const char* name, const char* src, const char* pro
 void NamedSetSRV(const std::string& name, ID3D11ShaderResourceView* v);
 std::string DescribeInputLayout(ID3D11InputLayout* il);   // elementos de un input layout anotado al crearse   // publica un SRV como recurso con nombre (srv = N nombre en las reglas)
 extern std::atomic<int> g_matchGen;                                        // sube en cada partido nuevo (reloj del cesped)
-void PublicoPresent();   // (08/11) gestos del publico: hilo de la CPU + buffer pes_crowdface (publico.cpp, fila 394)
+void PublicoPresent(); ID3D11ShaderResourceView* PublicoSRVFor(uint64_t vsHash);   // (08/11) gestos del publico: hilo de la CPU + buffer pes_crowdface (publico.cpp, fila 394)
 void PitchWearNotePlayer(ID3D11DeviceContext* c); void PitchWearPresent(); void PitchWearReloadShaders();   // desgaste de la cancha en vivo
 void PitchClipsDraw(ID3D11DeviceContext* c, int frame);
 void PitchBallNote(ID3D11DeviceContext* c, int frame); ID3D11Buffer* PitchBallDrawNote(ID3D11DeviceContext* c, UINT verts); bool PitchClipDrawActive();   // (2/11) dibujo de los recortes en curso (atlas pes_debris en t8/t9)   // (2/11) dibujo de la pelota (aadffecf): b12 con las manchas o nullptr   // (20/10) capsula de la pelota del VS del pasto -> pasto aplastado   // recortes de pasto volando (desde el dibujo del pasto)
