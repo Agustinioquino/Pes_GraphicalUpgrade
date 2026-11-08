@@ -503,21 +503,10 @@ bool BrowStrandsBegin(ID3D11DeviceContext* c, const FaceGenExtra* ex, uint64_t v
     dd.DepthEnable = TRUE; dd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
     dd.DepthFunc = reversed ? D3D11_COMPARISON_GREATER_EQUAL : D3D11_COMPARISON_LESS_EQUAL;
     ID3D11DepthStencilState* useDSS = nullptr;
-    {
-        static std::mutex mx; std::lock_guard<std::mutex> lk(mx);
-        static ID3D11DepthStencilState* cacheDSS[4] = {}; static D3D11_DEPTH_STENCIL_DESC cacheDesc[4] = {}; static bool cacheOk[4] = {};
-        int ci = reversed ? 1 : 0;
-        if (!cacheOk[ci] || memcmp(&cacheDesc[ci], &dd, sizeof(dd)) != 0) {
-            if (cacheDSS[ci]) { cacheDSS[ci]->Release(); cacheDSS[ci] = nullptr; }
-            g_dev.dev->CreateDepthStencilState(&dd, &cacheDSS[ci]); cacheDesc[ci] = dd; cacheOk[ci] = true;
-        }
-        useDSS = cacheDSS[ci];
+    {   // (08/11) cache por descripcion (statecache.cpp): antes se soltaba y se recreaba cada vez que el stencil del juego cambiaba entre caras
+        useDSS = CachedDSS(dd);
         D3D11_DEPTH_STENCIL_DESC dn = dd; dn.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;   // (04/11 k) sombra: prueba sin escribir
-        if (!cacheOk[ci + 2] || memcmp(&cacheDesc[ci + 2], &dn, sizeof(dn)) != 0) {
-            if (cacheDSS[ci + 2]) { cacheDSS[ci + 2]->Release(); cacheDSS[ci + 2] = nullptr; }
-            g_dev.dev->CreateDepthStencilState(&dn, &cacheDSS[ci + 2]); cacheDesc[ci + 2] = dn; cacheOk[ci + 2] = true;
-        }
-        t_bs.shadowDSS = cacheDSS[ci + 2];
+        t_bs.shadowDSS = CachedDSS(dn);
     }
     static std::atomic<int> s_logged{0};
     static std::atomic<int> s_lashLogged{0};

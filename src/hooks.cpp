@@ -620,7 +620,7 @@ template<int V> static void STDMETHODCALLTYPE hk_ClearState(ID3D11DeviceContext*
 // motor, asi que se va por el otro lado: el b3 de las pasadas del sol es LightCB; cada Map / UpdateSubresource de ese
 // buffer anota la pila de llamadas del exe (hasta 10 marcos) y, al Unmap, lo que se escribio en m_lightDir0. Cada 30 s el
 // log resume las pilas distintas ("luz: llena el cbuffer ...") para buscar la funcion en el volcado del exe (tools/re).
-// [PES21FX] luz_rastrear = 0 lo apaga. Hasta 64 pilas por segundo (por si el buffer es un anillo compartido).
+// [PES21FX] luz_rastrear = 1 lo prende ((08/11) apagado por defecto: la investigacion termino en sol_parche y costaba CPU en cada Map). Hasta 64 pilas por segundo (por si el buffer es un anillo compartido).
 using PFN_Map = HRESULT(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, UINT, D3D11_MAP, UINT, D3D11_MAPPED_SUBRESOURCE*);
 using PFN_Unmap = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, UINT);
 using PFN_UpdSub = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, UINT, const D3D11_BOX*, const void*, UINT, UINT);
@@ -2069,6 +2069,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     CamHookPresent();   // (23/10) camara del motor: ganchos (primer Present), cortes de camara -> 160, log
     TiempoPresent();    // (31/10) camara lenta: ganchos (visor del editor / reloj del partido, primer Present), 343.w, log
     CmdListGuardPresent();
+    StateCachePresent();   // (08/11) estados del mod por descripcion (statecache.cpp)
     RelWatchPresent();   // (08/11 g) quien suelta la ultima referencia de cada estado (cierre 11:19 en LUCDeferDeletion)   // (08/11) locks de las listas de comandos del juego con tope de espera (cuelgues del editor)
     FreeCamPresent();   // (1/11) camara libre: gancho a la camara del visor del editor (primer Present), log
     CharTrackPresent();    // (24/10) personajes: que jugador es cada esqueleto (ganchos en el primer Present, log)

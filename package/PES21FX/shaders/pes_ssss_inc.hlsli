@@ -538,7 +538,9 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   float3 c0 = inLight.SampleLevel(sPoint, uv, 0).xyz;
   if (P.w < 0.5 || !IsSkin(uv)) return float4(c0, 1);
   float z0 = LinZ(uv);
-  float2 rb = abs(float2(ddx(uv.x), ddy(uv.y)));   // tamano de un pixel en uv
+  // (08/11 SSSS) tamano de un pixel en uv desde el tamano real de la textura: ddx/ddy despues del 'return' de arriba (pixeles que no
+  // son piel en el mismo cuadrito de 2x2: pestanas, cejas, borde de la cara) es indefinido y cambiaba el ancho del disco al mover la camara
+  float2 rb; { uint lw, lh; inLight.GetDimensions(lw, lh); rb = 1.0 / float2(max(lw, 1u), max(lh, 1u)); }
   float pxm = 1.0 / max(2.0 * abs(m_projectionParam.x) * z0 * m_renderBuffer.z, 1e-5);   // pixeles por metro (como la composicion)
   // diagnostico: x95 >= 2.95 pinta la piel: verde = pasa por aca, con el ancho en pixeles como brillo
   if (P.x >= 2.95) return float4(0, saturate(6.0 * 0.001 * pxm / 40.0), 0, 1);
@@ -555,10 +557,16 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   float3 dmm = float3(lerp(1.0, 0.62, mel), lerp(0.42, 0.36, mel), lerp(0.26, 0.24, mel)) * widthScale;
   float mmToPx = 0.001 * pxm;
   if (dmm.r * 3.0 * mmToPx < 0.6) return float4(c0, 1);   // de lejos lo resuelve la piel pre-integrada de la pasada de luz
+  // (08/11 SSSS) entre 0.6 y 1.6 px el disco entra de a poco: antes se prendia de golpe y la cara cambiaba al acercar / alejar la camara
+  float nearK = smoothstep(0.6, 1.6, dmm.r * 3.0 * mmToPx);
   // plano de la superficie: pendiente de la profundidad por pixel (del lado mas suave, para no tomar un borde)
-  float zxp = LinZ(uv + float2(rb.x, 0)) - z0, zxn = z0 - LinZ(uv - float2(rb.x, 0));
-  float zyp = LinZ(uv + float2(0, rb.y)) - z0, zyn = z0 - LinZ(uv - float2(0, rb.y));
+  // (08/11 SSSS) un vecino que no es piel (pestana, ceja, pelo) no da la pendiente: en los cuencos de los ojos la tomaba de la pestana
+  float2 uxp = uv + float2(rb.x, 0), uxn = uv - float2(rb.x, 0), uyp = uv + float2(0, rb.y), uyn = uv - float2(0, rb.y);
+  float zxp = LinZ(uxp) - z0, zxn = z0 - LinZ(uxn);
+  float zyp = LinZ(uyp) - z0, zyn = z0 - LinZ(uyn);
+  if (!IsSkin(uxp)) zxp = 1e6; if (!IsSkin(uxn)) zxn = 1e6; if (!IsSkin(uyp)) zyp = 1e6; if (!IsSkin(uyn)) zyn = 1e6;
   float2 slope = float2(abs(zxp) < abs(zxn) ? zxp : zxn, abs(zyp) < abs(zyn) ? zyp : zyn);
+  slope = (abs(slope) > 1e5) ? 0.0 : slope;
   float tolK = P.z > 0.0 ? P.z : 1.0;
   // rotacion por pixel y por cuadro (ruido de gradiente intercalado, Jimenez 2014)
   // (27/10 g) 24 muestras (antes 16) y el giro por cuadro solo si x331 > 0.5 (sin TAA el giro por cuadro era grano que titila)
@@ -585,6 +593,6 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   // el pixel central entra con el peso de una muestra media: sin vecinos validos (borde) queda como estaba
   acc += c0; wsum += 1.0;
   float3 blurred = acc / wsum;
-  return float4(lerp(c0, blurred, saturate(P.y)), 1);
+  return float4(lerp(c0, blurred, saturate(P.y) * nearK), 1);
 }
 #endif

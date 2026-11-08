@@ -236,7 +236,10 @@ bool CarasHdGet(const std::string& id, ID3D11ShaderResourceView* out[4]) {
     for (int i = 0; i < 4; i++) out[i] = nullptr;
     if (!s_on || id.empty()) return false;
     std::lock_guard<std::mutex> lk(s_mx);
-    s_frameIds.insert(id);
+    // (08/11) la misma cara se dibuja varias veces seguidas por cuadro (pasadas, LOD): solo la primera vez por hilo y cuadro
+    // entra al conjunto (antes una insercion de string en un std::set por cada dibujo de piel, con el candado tomado)
+    { static thread_local std::string t_lastId; static thread_local int t_lastFrame = -1;
+      if (t_lastFrame != s_frame || t_lastId != id) { s_frameIds.insert(id); t_lastId = id; t_lastFrame = s_frame; } }
     auto it = s_faces.find(id); if (it == s_faces.end()) return false;
     HdFace& f = it->second; f.lastFrame = s_frame;
     bool any = false, big = false;

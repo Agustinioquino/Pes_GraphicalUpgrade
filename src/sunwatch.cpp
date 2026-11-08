@@ -11,7 +11,7 @@
 //  3) en hasta 4 seguidores se pone un punto de parada de escritura por hardware (DR0-DR3, en todos los hilos) por 60 s:
 //     cada escritura anota RIP (modulo + offset), las direcciones de retorno del exe que haya en la pila y el valor nuevo.
 //     El log queda con "sol: escribe ..." para buscar esa funcion en el volcado del exe (tools/re).
-// [PES21FX] sol_vigilar = 0 lo apaga.
+// [PES21FX] sol_vigilar = 1 lo prende ((08/11) apagado por defecto: suspendia los hilos del juego para poner puntos de parada).
 #include "core.h"
 #include <tlhelp32.h>
 #include <algorithm>

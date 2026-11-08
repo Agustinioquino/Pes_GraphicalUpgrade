@@ -863,6 +863,14 @@ static float SideFor(const MusCls& C, void* self, const Xf* rb, const Xf* rt, co
     *src = 6; return SideOfCur(self, a2);
 }
 
+// (08/11) reposo del hueso / destino y lado: se leen UNA vez por Eval y los usan DynAdd y Apply (antes cada uno los leia por su cuenta)
+struct EvalCtx { Xf rb{}, rt{}; void* bone = nullptr; void* targ = nullptr; bool okB = false, okT = false, have = false; float side = 1.0f; int src = 0; };
+static void EvalRead(int i, void* self, const float* a2, EvalCtx& e) {
+    if (e.have) return; e.have = true;
+    e.okB = ReadPtr((const char*)self + 0x58, e.bone) && ReadXf((const char*)e.bone + 0x40, e.rb);
+    e.okT = ReadPtr((const char*)self + 0x60, e.targ) && ReadXf((const char*)e.targ + 0x40, e.rt);
+    e.side = SideFor(s_cls[i], self, e.okB ? &e.rb : nullptr, e.okT ? &e.rt : nullptr, a2, &e.src);
+}
 // diagnostico: una vez por clase y lado (reposo del hueso y del destino, base, ancla en ejes del hueso)
 struct DiagRec { int cls, side, src; bool okB, okT; Xf rb, rt; float baseQ[4], baseT[3], u[3], predErr; };
 static const int kDiagMax = 2 * 40;
@@ -893,13 +901,10 @@ static void Diag(int i, void* self, float side, int src, bool okB, const Xf& rb,
 }
 
 static bool Idle(const Fac& f) { return f.e == 0.0f && f.t[0] == 0.0f && f.t[1] == 0.0f && f.t[2] == 0.0f; }
-static void Apply(int i, void* self, const float* a2, float* out, const Fac fc, bool diag) {
+static void Apply(int i, void* self, const float* a2, float* out, const Fac fc, bool diag, EvalCtx& e) {
     const MusCls& C = s_cls[i];
-    Xf rb{}, rt{}; void* bone = nullptr; void* targ = nullptr;
-    bool okB = ReadPtr((const char*)self + 0x58, bone) && ReadXf((const char*)bone + 0x40, rb);
-    bool okT = ReadPtr((const char*)self + 0x60, targ) && ReadXf((const char*)targ + 0x40, rt);
-    int src = 0;
-    float side = SideFor(C, self, okB ? &rb : nullptr, okT ? &rt : nullptr, a2, &src);
+    EvalRead(i, self, a2, e);
+    const Xf& rb = e.rb; const Xf& rt = e.rt; const bool okB = e.okB, okT = e.okT; const int src = e.src; const float side = e.side;
     float u[3] = {};
     if (okB) {   // ancla en los ejes del hueso: u = R_reposo^-1 (ancla - pivote_reposo) / escala_reposo
         float a[3] = { C.ax * side - rb.t[0], C.ay - rb.t[1], C.az - rb.t[2] };
@@ -1061,15 +1066,12 @@ static void DynFindClasses() {
     s_iFore = find("antebrazo"); s_iThigh = find("muslo"); s_iKnee = find("rodilla"); s_iPect = find("pectoral"); s_iArm = find("brazo");
 }
 static std::atomic<unsigned> s_dynMeas{0}, s_dynMeasFail{0};
-static void DynAdd(int i, void* self, const float* a2, const void* skel, int slot, Fac& fc) {
+static void DynAdd(int i, void* self, const float* a2, const void* skel, int slot, Fac& fc, EvalCtx& e) {
     DynFindClasses();
     const MusCls& C = s_cls[i];
     DynState& d = s_dyn[DynIndex(slot, skel)];
-    Xf rb{}, rt{}; void* bone = nullptr; void* targ = nullptr;
-    const bool okB = ReadPtr((const char*)self + 0x58, bone) && ReadXf((const char*)bone + 0x40, rb);
-    const bool okT = ReadPtr((const char*)self + 0x60, targ) && ReadXf((const char*)targ + 0x40, rt);
-    int src = 0;
-    const float side = SideFor(C, self, okB ? &rb : nullptr, okT ? &rt : nullptr, a2, &src);
+    EvalRead(i, self, a2, e);
+    const Xf& rt = e.rt; void* targ = e.targ; const bool okT = e.okT; const float side = e.side;
     const int sd = side > 0.0f ? 0 : 1;
     // medicion: el destino de estas restricciones es el hueso principal del miembro (o el pecho)
     if (okT && (i == s_iArm || i == s_iFore || i == s_iThigh || i == s_iKnee || i == s_iPect)) {
@@ -1128,10 +1130,11 @@ template<int I> static void __fastcall hk_Eval(void* self, void* a2, float* out)
         if ((nc & 255) == 0) (slot >= 0 ? s_skHit : s_skMiss).fetch_add(1, std::memory_order_relaxed);
         if (own && slot >= 0 && s_slotUse[slot].load(std::memory_order_acquire)) fc = s_slotFac[slot][mus];
     }
-    if (dyn) DynAdd(I, self, (const float*)a2, skel, slot, fc);   // (26/10 b) contraccion y respiracion
+    EvalCtx ec;   // (08/11) reposo y lado leidos una sola vez
+    if (dyn) DynAdd(I, self, (const float*)a2, skel, slot, fc, ec);   // (26/10 b) contraccion y respiracion
     bool diag = s_diagCnt[I].load(std::memory_order_relaxed) < (s_cls[I].side == 0 ? 1 : 2);
     if (!diag && (!s_on || Idle(fc))) return;
-    Apply(I, self, (const float*)a2, out, fc, diag);
+    Apply(I, self, (const float*)a2, out, fc, diag, ec);
 }
 template<int... Is> struct HookList { static void* const v[sizeof...(Is)]; };
 template<int... Is> void* const HookList<Is...>::v[sizeof...(Is)] = { (void*)&hk_Eval<Is>... };

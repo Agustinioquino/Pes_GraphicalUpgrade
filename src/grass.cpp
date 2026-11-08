@@ -250,15 +250,11 @@ struct PreDss { ID3D11DepthStencilState *src = nullptr, *out = nullptr; }; stati
 static ID3D11DepthStencilState* PrepassDSS2(ID3D11DepthStencilState* cur) {   // devuelve con referencia (o nullptr = usar el mismo)
     if (!g_dev.dev) return nullptr;
     std::lock_guard<std::mutex> lk(s_preMx);
-    for (auto& e : s_preD) if (e.out && e.src == cur) { e.out->AddRef(); return e.out; }
     D3D11_DEPTH_STENCIL_DESC d = {};
     if (cur) cur->GetDesc(&d); else { d.DepthEnable = TRUE; d.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL; d.DepthFunc = D3D11_COMPARISON_LESS; d.StencilReadMask = d.StencilWriteMask = 0xff; }
     if (d.DepthFunc == D3D11_COMPARISON_LESS) d.DepthFunc = D3D11_COMPARISON_LESS_EQUAL; else if (d.DepthFunc == D3D11_COMPARISON_GREATER) d.DepthFunc = D3D11_COMPARISON_GREATER_EQUAL; else return nullptr;
-    ID3D11DepthStencilState* n = nullptr;
-    if (FAILED(g_dev.dev->CreateDepthStencilState(&d, &n)) || !n) return nullptr;
-    PreDss& e = s_preD[s_preNext]; s_preNext = (s_preNext + 1) & 3;
-    if (e.out) e.out->Release(); if (e.src) e.src->Release();
-    e.out = n; e.src = cur; if (cur) cur->AddRef();
+    // (08/11) cache por descripcion (statecache.cpp): antes un anillo de 4 que soltaba y recreaba estados por dibujo
+    ID3D11DepthStencilState* n = CachedDSS(d); if (!n) return nullptr;
     n->AddRef(); return n;
 }
 static ID3D11Buffer* s_cullCb = nullptr;
@@ -473,15 +469,10 @@ static ID3D11DepthStencilState* BladeDSS(ID3D11DepthStencilState* g, ID3D11Depth
     if (!g_dev.dev) return nullptr;
     std::lock_guard<std::mutex> lk(s_bsMx);
     if (s_hyDev != g_dev.dev) { HyDropLocked(); s_hyDev = g_dev.dev; }
-    for (auto& e : s_hyD) if (e.out && e.g == g && e.b == b) { e.out->AddRef(); return e.out; }
     D3D11_DEPTH_STENCIL_DESC dg = DssDesc(g), db = DssDesc(b);
     dg.StencilEnable = db.StencilEnable; dg.StencilReadMask = db.StencilReadMask; dg.StencilWriteMask = db.StencilWriteMask;
     dg.FrontFace = db.FrontFace; dg.BackFace = db.BackFace;
-    ID3D11DepthStencilState* n = nullptr;
-    if (FAILED(g_dev.dev->CreateDepthStencilState(&dg, &n)) || !n) return nullptr;
-    HyDss& e = s_hyD[s_hyDNext]; s_hyDNext = (s_hyDNext + 1) & 3;
-    if (e.out) e.out->Release(); if (e.g) e.g->Release(); if (e.b) e.b->Release();
-    e.out = n; e.g = g; e.b = b; if (g) g->AddRef(); if (b) b->AddRef();   // la referencia evita que otro objeto en la misma direccion engane al cache
+    ID3D11DepthStencilState* n = CachedDSS(dg); if (!n) return nullptr;   // (08/11) cache por descripcion (statecache.cpp)
     n->AddRef(); return n;
 }
 // mezcla de las hojas: mode 1 = sin escribir RT4, 2 = RT0 sin su alfa (el PS mezcla con la copia del suelo); devuelve con referencia
@@ -489,7 +480,6 @@ static ID3D11BlendState* BladeBlend(ID3D11BlendState* src, int mode) {
     if (!mode || !g_dev.dev) return nullptr;
     std::lock_guard<std::mutex> lk(s_bsMx);
     if (s_hyDev != g_dev.dev) { HyDropLocked(); s_hyDev = g_dev.dev; }
-    for (auto& e : s_hyBl) if (e.out && e.src == src && e.mode == mode) { e.out->AddRef(); return e.out; }
     D3D11_BLEND_DESC d = {};
     if (src) src->GetDesc(&d);
     else for (auto& r : d.RenderTarget) { r.SrcBlend = r.SrcBlendAlpha = D3D11_BLEND_ONE; r.DestBlend = r.DestBlendAlpha = D3D11_BLEND_ZERO; r.BlendOp = r.BlendOpAlpha = D3D11_BLEND_OP_ADD; r.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL; }
@@ -497,11 +487,7 @@ static ID3D11BlendState* BladeBlend(ID3D11BlendState* src, int mode) {
     if (mode & 1) d.RenderTarget[4].RenderTargetWriteMask = 0;
     if (mode & 2) { auto& r = d.RenderTarget[0]; r.BlendEnable = FALSE;   // (26/10 g) el PS ya mezcla con la copia del suelo (t10); el alfa de RT0 queda el de la base
         r.RenderTargetWriteMask &= (D3D11_COLOR_WRITE_ENABLE_RED | D3D11_COLOR_WRITE_ENABLE_GREEN | D3D11_COLOR_WRITE_ENABLE_BLUE); }
-    ID3D11BlendState* n = nullptr;
-    if (FAILED(g_dev.dev->CreateBlendState(&d, &n)) || !n) return nullptr;
-    HyBs& e = s_hyBl[s_hyBNext]; s_hyBNext = (s_hyBNext + 1) & 3;
-    if (e.out) e.out->Release(); if (e.src) e.src->Release();
-    e.out = n; e.src = src; if (src) src->AddRef(); e.mode = mode;
+    ID3D11BlendState* n = CachedBlend(d); if (!n) return nullptr;   // (08/11) cache por descripcion (statecache.cpp)
     n->AddRef(); return n;
 }
 // (26/10 g) copia del RT0 puesto (el suelo ya dibujado) a una textura propia; devuelve su vista con referencia o null
@@ -940,11 +926,8 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         ShaderBind b; b.vs = st.vsE; b.vsObj = st.vs; b.ps = st.psE; b.psObj = st.ps; oldSh = BindShadersRaw(c, b);
         WriteState(c, st);
         if (t_editor) {   // (08/11 c) editor: el stencil del pasto del juego marca la cancha; en el visor no existe -> solo profundidad
-            static ID3D11DepthStencilState* edDss = nullptr; static ID3D11DepthStencilState* edSrc = nullptr; static std::mutex edMx;
-            std::lock_guard<std::mutex> lk(edMx);
-            if (!edDss || edSrc != st.dss) { if (edDss) edDss->Release(); edDss = nullptr; edSrc = st.dss;
-                D3D11_DEPTH_STENCIL_DESC d = DssDesc(st.dss); d.StencilEnable = FALSE; g_dev.dev->CreateDepthStencilState(&d, &edDss); }
-            if (edDss) c->OMSetDepthStencilState(edDss, 0);
+            D3D11_DEPTH_STENCIL_DESC d = DssDesc(st.dss); d.StencilEnable = FALSE;   // (08/11) cache por descripcion: no se suelta nunca
+            if (ID3D11DepthStencilState* edDss = CachedDSS(d)) c->OMSetDepthStencilState(edDss, 0);
         }
     }
     ID3D11Buffer* oldCb5 = nullptr; UINT oldF5 = 0, oldN5 = 0;

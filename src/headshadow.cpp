@@ -215,19 +215,15 @@ bool HeadShadowBodyOn() { return s_body && s_count > 0; }   // (04/11 piel) cuad
 // (27/10 f) estado de rasterizado para la repeticion: el del juego pero SIN descarte de caras. La caja propia puede tener la
 // orientacion opuesta a la matriz de sombras del juego y entonces el descarte dejaba solo las caras de atras (sombra de la cara
 // opuesta: manchas). Con las dos caras se queda la mas cercana al sol, como corresponde. Cache por estado original.
-static std::map<ID3D11RasterizerState*, ID3D11RasterizerState*> s_rsNoCull;
 static std::mutex s_rsNoCullMx;   // (08/11 h) se llama desde los dibujos de cualquier contexto (hilos del juego): el mapa sin lock podia romper el heap
 static std::atomic<ID3D11RasterizerState*> s_lastShadowRS{nullptr};   // (04/11 piel) el ultimo de la repeticion (pasada de sombras)
 static ID3D11RasterizerState* NoCullRS(ID3D11RasterizerState* orig) {
-    std::lock_guard<std::mutex> lk(s_rsNoCullMx);
-    auto it = s_rsNoCull.find(orig); if (it != s_rsNoCull.end()) return it->second;
+    // (08/11) por descripcion (statecache.cpp), sin guardar punteros del juego: el mapa retenia cada estado del juego para siempre
     if (!g_dev.dev) return nullptr;
     D3D11_RASTERIZER_DESC rd{};
     if (orig) orig->GetDesc(&rd); else { rd.FillMode = D3D11_FILL_SOLID; rd.CullMode = D3D11_CULL_BACK; rd.DepthClipEnable = TRUE; }
     rd.CullMode = D3D11_CULL_NONE;
-    ID3D11RasterizerState* rs = nullptr; g_dev.dev->CreateRasterizerState(&rd, &rs);
-    if (orig) orig->AddRef();   // la clave se retiene para que el puntero no se reutilice con otro estado
-    s_rsNoCull[orig] = rs; return rs;
+    return CachedRS(rd);
 }
 ID3D11RasterizerState* HeadShadowNoCullRS(ID3D11RasterizerState* orig) {
     ID3D11RasterizerState* r = NoCullRS(orig);

@@ -178,10 +178,10 @@ struct Config {
     int optCrashDump = 1;   // (08/11) [PES21FX] crash_dump: 0 sin volcado, 1 minidump con datos, 2 memoria completa (main.cpp)
     int memFix = 1; bool memWatch = true;     // (26/10) [PES21FX] memoria_arreglo (0/1 = retener, 2 = liberar entero) / memoria_vigilar (memwatch.cpp)
     bool grassScan = true, grassNoCull = true, grassDumpDebugP = true;   // (26/10) [Motor] pasto_buscar / pasto_sin_recorte / volcar_debugp: distancia del pasto 3D del juego (grassdist.cpp)
-    bool lightTrace = true;                   // (27/10) [PES21FX] luz_rastrear: pila de quien llena el cbuffer de la luz del sol (hooks.cpp)
+    bool lightTrace = false;                  // (27/10) [PES21FX] luz_rastrear: pila de quien llena el cbuffer de la luz del sol (hooks.cpp)
     bool meterOn = true;                      // (07/11) [PES21FX] medidor: VRAM por dueno y ms de GPU por efecto (gpumeter.cpp)
     int panelPort = 21021;                    // (08/11) [PES21FX] panel_puerto: servidor local del panel en vivo (panel.cpp), 0 = apagado
-    bool sunWatch = true;                     // (26/10) [PES21FX] sol_vigilar: quien escribe el sol de las repeticiones (sunwatch.cpp)
+    bool sunWatch = false;                    // (26/10) [PES21FX] sol_vigilar: quien escribe el sol de las repeticiones (sunwatch.cpp)
 };
 extern Config g_cfg;
 extern std::mutex g_cfgMutex;
@@ -372,6 +372,11 @@ void StartHangWatch();   // (08/11 c) vigia de congelamientos (main.cpp)
 void OnDeviceLost(unsigned reason);   // (08/11 e) placa reiniciada (TDR): aviso y cierre ordenado (main.cpp)
 // (08/11 e) liberar un recurso nuestro que pudo quedar grabado en una lista diferida del juego: se suelta a los 30 s (hooks.cpp)
 void DeferRelease(IUnknown* p);
+// (08/11) statecache.cpp: estados del mod por descripcion, prestados (no hacer Release), nunca se sueltan
+ID3D11DepthStencilState* CachedDSS(const D3D11_DEPTH_STENCIL_DESC& d);
+ID3D11BlendState* CachedBlend(const D3D11_BLEND_DESC& d);
+ID3D11RasterizerState* CachedRS(const D3D11_RASTERIZER_DESC& d);
+void StateCachePresent();
 void CamHookPresent();                            // ganchos (primer Present), 160 = cuadros desde el corte / cortes / TAA / ok
 // (31/10) camara libre (freecam.cpp): pisa el parametro de la camara del motor desde el gancho de camhook.cpp; 344 (ini) / 345 (DLL)
 void FreeCamApply(unsigned char* param);
