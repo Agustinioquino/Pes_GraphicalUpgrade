@@ -523,6 +523,27 @@ static bool JawAngle(const Skel& S, const Xf& jc, float* deg) {
 // por personaje (el nodo), asi que cada jugador mira y parpadea a su ritmo. Cuando esto corre, 350.y = 2 y el shader no gira
 // ni el globo ni los parpados (no se suma dos veces).
 static float Frac(float x) { return x - floorf(x); }
+// (08/11, Agustin: "puedes hacer que calcule por cada fotograma? aunque el gameclock este en cero como pasa en el menu de apariencia")
+// RELOJ DE LAS ANIMACIONES de la cara: avanza en cada cuadro. Si el reloj del juego (fila 157, config.cpp) avanzo desde el cuadro
+// anterior se toma ese paso (asi la camara lenta de las repeticiones frena tambien los gestos); si esta quieto o en cero (editor,
+// menu de apariencia, presentacion) se toma el reloj real, con tope de 1/15 s por cuadro. Hablar, vida, respiracion, transicion,
+// parpadeo, gestos propios y clips .gani usan este reloj, nunca el del juego directo.
+static float AnimT() {
+    static std::mutex mx; static double animT = 0.0, lastGame = -1.0, lastReal = -1.0; static unsigned fr = 0xffffffffu;
+    std::lock_guard<std::mutex> lk(mx);
+    const unsigned now = s_frame.load(std::memory_order_relaxed);
+    if (now != fr) {
+        fr = now;
+        LARGE_INTEGER c, f; QueryPerformanceCounter(&c); QueryPerformanceFrequency(&f);
+        const double real = (double)c.QuadPart / (double)(f.QuadPart ? f.QuadPart : 1);
+        const double game = (double)g_cfg.live[157][0];
+        double dG = lastGame < 0.0 ? 0.0 : game - lastGame, dR = lastReal < 0.0 ? 0.0 : real - lastReal;
+        lastGame = game; lastReal = real;
+        double adv = (dG > 1e-5 && dG < 0.5) ? dG : std::clamp(dR, 0.0, 1.0 / 15.0);
+        animT += adv; if (animT > 100000.0) animT -= 100000.0;
+    }
+    return (float)animT;
+}
 static float SStep(float a, float b, float x) { float t = std::clamp((x - a) / (b - a), 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); }
 static void GazeHash2(float n, float seed, float* o) {
     o[0] = Frac(sinf((n + seed * 17.3f) * 12.9898f) * 43758.5453f);
@@ -742,7 +763,7 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
     // que dejo el juego (lo que el juego haga con el ojo se pisa entero, sin realimentacion)
     // la animacion facial del juego (habla, festeja): sin parpadeo del mod (la animacion trae el suyo)
     const float anim = (std::max)(HeadSpaceMove(S, D_LIPS_L, hc, hrInv), HeadSpaceMove(S, D_BROW_IL, hc, hrInv));
-    const float t = g_cfg.live[157][0];
+    const float t = AnimT();
     // (06/11, Agustin: "la barba sigue temblando asi como la boca al mover la camara o adelantar el paso del tiempo, estas animaciones
     // deberian estar ligadas al game clock") los suavizados de los parpados iban por cuadro dibujado: con otro ritmo de cuadros o con
     // el tiempo del juego acelerado / frenado / en pausa no acompanaban. Ahora cuentan cuadros de 60 Hz del RELOJ DEL JUEGO (157.x)
@@ -1129,7 +1150,7 @@ static void FrameBody(const void* skel) {
     s_lastActive.store(fr, std::memory_order_relaxed);
     ProfResolve(*S, fr);
     const FaceProf* PF = profOn && S->prof >= 0 && S->prof < (int)s_prof.size() ? &s_prof[S->prof] : nullptr;
-    const float tNow = g_cfg.live[157][0];
+    const float tNow = AnimT();
     // (08/11) w395 TRANSICION: los sliders de gestos no saltan: van al valor nuevo con una constante de 0.25 s x w395 (0 = como antes)
     {
         const float tr = std::clamp(g_cfg.live[395][3], 0.0f, 3.0f);
@@ -1225,7 +1246,7 @@ static void FrameBody(const void* skel) {
         if (!s_defToAskOk) DefToAsk();
         const int gc = (int)(g_cfg.live[383][0] + 0.5f); gW = std::clamp(g_cfg.live[383][1], 0.0f, 1.5f);
         const float gSp = g_cfg.live[383][2] > 0.01f ? std::clamp(g_cfg.live[383][2], 0.1f, 4.0f) : 1.0f; const bool gLoop = g_cfg.live[383][3] < 0.5f;
-        const float gt = g_cfg.live[157][0];
+        const float gt = AnimT();
         if (gc > 0 && gW > 0.001f) {
             if (S->ganiClip != gc || gt < S->ganiT0) { S->ganiClip = gc; S->ganiT0 = gt; }
             bool done = false; ganiOn = GaniSample(gc, (gt - S->ganiT0) * gSp, gLoop, GP, &done);
@@ -1299,7 +1320,7 @@ static void FrameBody(const void* skel) {
         if (GaniGestGet(S->pid, S->ggGen, S->gg)) { S->btw = -1; for (float& w : S->ggW) w = 0.0f; }
         const int NG = (std::min)((int)S->gg.size(), 16);
         if (NG > 0) {
-            const float t = g_cfg.live[157][0];
+            const float t = AnimT();
             const float kf = S->ggT < 0.0f ? 1.0f : std::clamp((t - S->ggT) * 60.0f, 0.0f, 6.0f); S->ggT = t;
             const float ea = 1.0f - powf(1.0f - 0.12f, kf);
             float C[kND][3] = {}; bool cOk[kND] = {};
@@ -1394,7 +1415,7 @@ static void FrameBody(const void* skel) {
     // un margen de 0.02 (el temblor no pasa; los gestos de verdad si)
     float smS = sm, openS = openAll;
     {
-        const float t = g_cfg.live[157][0];
+        const float t = AnimT();
         const float k = S->secT < 0.0f ? 1.0f : std::clamp((t - S->secT) * 60.0f, 0.0f, 6.0f); S->secT = t;
         const float a = 1.0f - powf(1.0f - 0.16f, k);
         if (!S->secHave) { S->secSm = sm; S->secOpen = openAll; S->secHave = true; }
