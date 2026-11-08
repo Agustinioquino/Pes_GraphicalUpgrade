@@ -42,6 +42,29 @@ float PesLimbEffort() {
     }
     return ex;
 }
+// (08/11) tension de la pierna que reconoce la DLL (musculo.cpp LegMoments: apoyo, empuje, vuelo, frenada, arranque, patada, salto,
+// caida) para el personaje mas cercano: fila 1 + 64 + 2 n + lado de t123 (lado 0 = izquierda = +X). Sin la tabla (DLL vieja) -> la del
+// shader sola (PesLegAct). Con la tabla: la de la DLL manda y la del shader (velocidad de la rodilla cuadro a cuadro) solo la completa.
+float3 PesLegActMix(bool left, float3 shAct) {
+    uint ne = 0, st = 0; g_effort.GetDimensions(ne, st);
+    if (ne < 2) return shAct;
+    float4 H = g_effort[0];
+    if (H.y < 0.5 || H.z < 0.5 || ne < 1 + 3 * 64) return shAct;
+    bool skE = g_vsObject.m_useWeightCount.x != 0;
+    float3 b0 = float3(g_vsBone.m_boneMatrices[0]._m30, g_vsBone.m_boneMatrices[0]._m31, g_vsBone.m_boneMatrices[0]._m32);
+    float3 b0b = float3(g_vsPrevBone.m_boneMatrices[0]._m30, g_vsPrevBone.m_boneMatrices[0]._m31, g_vsPrevBone.m_boneMatrices[0]._m32);
+    float3 wp = PesSkinPoint(g_vsObject.m_world, g_vsObject.m_viewWorld, g_vsScene.m_view, b0, b0b, skE);
+    int n = min((int)(H.x + 0.5), 64);
+    float bd = 1.96; int bi = -1;
+    [loop] for (int i = 0; i < n; i++) {
+        float2 dd = wp.xz - g_effort[1 + i].xz;
+        float d2 = dot(dd, dd);
+        if (d2 < bd) { bd = d2; bi = i; }
+    }
+    if (bi < 0) return shAct;
+    float3 da = saturate(g_effort[1 + 64 + 2 * bi + (left ? 0 : 1)].xyz);
+    return saturate(max(da, 0.5 * shAct));
+}
 // (02/11 b) muneca fina con la palma hacia adelante (Agustin, captura muneca_fina_20261102_1433). La v1 (cuaterniones duales en
 // los huesos de giro) rompio los brazos: dsk_forearm* / dsk_wrist tienen ESCALA. Esta v2 deja el skinning del juego tal cual y
 // solo empuja la piel hacia afuera lo que el lineal pierde al mezclar rotaciones distintas: con los cuaterniones de esos huesos
@@ -221,7 +244,7 @@ float PesLegBulge(uint vid, float3 rest) {
     float4 Wv = g_handData.Load(int3(vid, 1, 0)); // x isquios, y pantorrilla, z cuadriceps
     float s, th; PesLegST(float3(abs(rest.x), rest.y, rest.z), s, th);
     float fl = smoothstep(0.12, 0.9, flex);
-    float3 act = PesLegAct(flex, PesLimbFlexB(false, S, Xu, Xl), eff);   // (08/11) tension por grupo (con la velocidad de la rodilla)
+    float3 act = PesLegActMix(left, PesLegAct(flex, PesLimbFlexB(false, S, Xu, Xl), eff));   // (08/11) tension por grupo (momentos de la DLL + velocidad de la rodilla)
     float qa = act.x;
     float b = 0.0;
     b += (0.0042 * qa + 0.0010 * fl) * saturate(2.0 * Wv.z) * PesLegGauss(s, th, 0.075, -55.0, 0.030, 26.0);   // vasto interno (la gota)
@@ -275,7 +298,7 @@ bool PesLimbOut(bool handDone, uint vid, float3 rest, out float defB, out float 
         // la tension de cada grupo (PesLegAct) en y = 2 + (cuadriceps + 8 isquios + 64 gemelo) / 1024 (0..7 cada uno; el PS no le
         // aplica venas a la pierna). La definicion general del musculo (x) sigue a la tension de su grupo.
         float effL = saturate(PesLimbEffort());
-        float3 act = PesLegAct(flex, PesLimbFlexB(false, S, Xu, Xl), effL);
+        float3 act = PesLegActMix(left, PesLegAct(flex, PesLimbFlexB(false, S, Xu, Xl), effL));
         defB = saturate(Wv.x * max(act.y, 0.6 * flex) + Wv.y * max(act.z, 0.6 * flex) + Wv.z * max(act.x, 0.4 * flex)) * max(L5.y, 0.0);
         actCode = 528.0 + round(saturate(flex) * 7.0) + 8.0 * round(effL * 7.0);
         veinB = 2.0 + (round(act.x * 7.0) + 8.0 * round(act.y * 7.0) + 64.0 * round(act.z * 7.0)) / 1024.0;
