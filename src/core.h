@@ -170,6 +170,7 @@ struct Config {
     bool autoCap = false; float autoCapSec = 20.0f; int autoCapMax = 150; bool autoCapAB = false; bool exeDump = true; bool motorPatch = true; bool motorSunFix = true; int motorShadowFix = 1; int motorShadowRes = 0; float motorCascadeScale = 0.0f;   // [Motor]: parches en memoria (exepatch.cpp)   // exe_dump: volcado del exe desempaquetado (una vez por version)   // auto_captura_ab: pares A (todo) / B (un grupo del menu apagado 3 cuadros)
     int aniso = 16; float mipBias = 0.0f;   // 20/10: filtrado anisotropico forzado (1 = el del juego) y sesgo de mip global ([PES21FX] aniso, mip_bias)   // 19/10: captura automatica en partido ([PES21FX] auto_captura, auto_captura_seg, auto_captura_max)
     bool optReplace = true, optRules = true, optOverlay = true, optPin = false, optHooks = true, optDxgi = true, optPresent = true, optCtx = true, optExports = true, optOrphan = true, optDump = false;
+    bool relWatch = true;   // (08/11 g) [PES21FX] vigia_estados: anillo de los Release que dejan un estado D3D11 en 0 (relwatch.cpp); 0 = no engancha
     int optHangSec = 20;   // (08/11 c) [PES21FX] congelado_seg: segundos sin cuadros = congelamiento -> volcado (main.cpp vigia); 0 apagado
     int optCrashDump = 1;   // (08/11) [PES21FX] crash_dump: 0 sin volcado, 1 minidump con datos, 2 memoria completa (main.cpp)
     int memFix = 1; bool memWatch = true;     // (26/10) [PES21FX] memoria_arreglo (0/1 = retener, 2 = liberar entero) / memoria_vigilar (memwatch.cpp)
@@ -374,6 +375,8 @@ void FreeCamApply(unsigned char* param);
 void FreeCamPresent();
 // (08/11) guardia de los locks de la tabla de listas de comandos del juego (cmdlistguard.cpp): cuelgues del editor 07:54 / 09:08
 void CmdListGuardPresent();
+// (08/11 g) vigia de liberaciones de estados D3D11 (relwatch.cpp): cierres en LUCDeferDeletion con un estado ya liberado
+void RelWatchPresent();
 void FreeCamWheel(int delta);
 bool FreeCamWantsHead();   // (1/11) camara libre prendida con "seguir la cara": hace falta la cabeza (expr.cpp)   // (1/11) rueda del mouse (WM_MOUSEWHEEL / raw input) -> zoom   // (1/11) gancho a la camara del visor del editor (primer Present) + log
 bool FreeCamActive();
