@@ -1478,39 +1478,6 @@ static void SlotPresent(ID3D11DeviceContext* imm) {
 // (cabeza en el mundo, 1 = valida) y por hueso 3 float4 de la diferencia de este cuadro + 3 del anterior (fila k = imagen del eje k, w = traslacion)
 namespace {
 constexpr int kRowZonas = 421;   // (08/11 d) filas 421 / 422: x350 = 3 'Por huesos: control total' (ganancia por zona y topes)
-// (08/11 d) ganancia por zona y topes por hueso del gesto del mod (x350 = 3 "control total": filas 421 / 422; otros modos: ganancia 1,
-// tope 40 grados / 2 cm). Cambia n (giro nq / posicion nt) para que la diferencia con la base del juego b quede escalada y recortada.
-// Devuelve true si algo se recorto por el tope. La usan la paleta (DeltaUpload) y la escritura directa al esqueleto (expr_paleta = 0)
-bool ExprZoneScale(int d, const float* bq, const float* bt, float* nq2, float* nt2) {
-    bool clip = false;
-    const bool full = g_cfg.live[350][0] > 2.5f;
-    float g = 1.0f, kMax = 0.70f, kMaxT = 0.02f;
-    if (full) {
-        const float* A = g_cfg.live[kRowZonas]; const float* Bz = g_cfg.live[kRowZonas + 1];
-        const float zg = (d == 0) ? A[0] : (d <= 6 || (d >= 9 && d <= 12)) ? A[1] : (d >= 20 && d <= 25) ? A[2] : (d >= 26 && d <= 30) ? A[3] : Bz[0];
-        g = std::clamp(zg, 0.0f, 2.0f) * std::clamp(Bz[1], 0.0f, 2.0f);
-        kMax = std::clamp(Bz[2], 5.0f, 90.0f) / 57.29578f; kMaxT = std::clamp(Bz[3], 1.0f, 50.0f) * 0.001f;
-    }
-    float dq[4], bc[4] = { -bq[0], -bq[1], -bq[2], bq[3] };
-    dq[3] = nq2[3] * bc[3] - nq2[0] * bc[0] - nq2[1] * bc[1] - nq2[2] * bc[2];
-    dq[0] = nq2[3] * bc[0] + nq2[0] * bc[3] + nq2[1] * bc[2] - nq2[2] * bc[1];
-    dq[1] = nq2[3] * bc[1] - nq2[0] * bc[2] + nq2[1] * bc[3] + nq2[2] * bc[0];
-    dq[2] = nq2[3] * bc[2] + nq2[0] * bc[1] - nq2[1] * bc[0] + nq2[2] * bc[3];
-    if (dq[3] < 0) for (float& v : dq) v = -v;
-    const float sn = sqrtf(dq[0] * dq[0] + dq[1] * dq[1] + dq[2] * dq[2]), ang = 2.0f * atan2f(sn, dq[3]);
-    float tgt = ang * g; if (tgt > kMax) { tgt = kMax; clip = true; }
-    if (sn > 1e-6f && fabsf(tgt - ang) > 1e-6f) {   // n = dq escalado * b
-        const float h = 0.5f * tgt, k = sinf(h) / sn, e[4] = { dq[0] * k, dq[1] * k, dq[2] * k, cosf(h) };
-        nq2[3] = e[3] * bq[3] - e[0] * bq[0] - e[1] * bq[1] - e[2] * bq[2];
-        nq2[0] = e[3] * bq[0] + e[0] * bq[3] + e[1] * bq[2] - e[2] * bq[1];
-        nq2[1] = e[3] * bq[1] - e[0] * bq[2] + e[1] * bq[3] + e[2] * bq[0];
-        nq2[2] = e[3] * bq[2] + e[0] * bq[1] - e[1] * bq[0] + e[2] * bq[3];
-    }
-    float dx = (nt2[0] - bt[0]) * g, dy = (nt2[1] - bt[1]) * g, dz = (nt2[2] - bt[2]) * g; const float dl = sqrtf(dx * dx + dy * dy + dz * dz);
-    if (dl > kMaxT) { const float k = kMaxT / dl; dx *= k; dy *= k; dz *= k; clip = true; }
-    nt2[0] = bt[0] + dx; nt2[1] = bt[1] + dy; nt2[2] = bt[2] + dz;
-    return clip;
-}
 static std::atomic<int> s_bdClamp{0};   // (08/11 b) huesos recortados por el tope
 constexpr int kBdStride = 1 + kExprBones * 6, kBdChars = 32, kBdF4 = 2 + kBdChars * kBdStride;
 ID3D11Buffer* s_bdBuf = nullptr; ID3D11ShaderResourceView* s_bdSrv = nullptr; bool s_bdAny = false;
@@ -1568,6 +1535,39 @@ static void DeltaUpload(ID3D11DeviceContext* imm) {
     if (SUCCEEDED(imm->Map(s_bdBuf, 0, D3D11_MAP_WRITE_DISCARD, 0, &mp))) { memcpy(mp.pData, f.data(), f.size() * sizeof(float)); imm->Unmap(s_bdBuf, 0); s_bdAny = true; s_bdUploads++; s_bdCharsN = np; s_bdMoved = moved; }
     static UINT lastLog = 0;
     if (s_frame - lastLog >= 1800 && s_slotLogs < 400) { lastLog = s_frame; Log("paleta: %d personajes publicados, %d huesos con gesto este cuadro, mallas emparejadas %d / sin emparejar %d, lugares dudosos %d, huesos recortados por el tope %d", np, moved, s_slotOk.load(), s_slotFail.load(), s_slotAmb.load(), s_bdClamp.exchange(0)); }
+}
+// (08/11 d) ganancia por zona y topes por hueso del gesto del mod (x350 = 3 "control total": filas 421 / 422; otros modos: ganancia 1,
+// tope 40 grados / 2 cm). Cambia n (giro nq / posicion nt) para que la diferencia con la base del juego b quede escalada y recortada.
+// Devuelve true si algo se recorto por el tope. La usan la paleta (DeltaUpload) y la escritura directa al esqueleto (expr_paleta = 0)
+bool ExprZoneScale(int d, const float* bq, const float* bt, float* nq2, float* nt2) {
+    bool clip = false;
+    const bool full = g_cfg.live[350][0] > 2.5f;
+    float g = 1.0f, kMax = 0.70f, kMaxT = 0.02f;
+    if (full) {
+        const float* A = g_cfg.live[kRowZonas]; const float* Bz = g_cfg.live[kRowZonas + 1];
+        const float zg = (d == 0) ? A[0] : (d <= 6 || (d >= 9 && d <= 12)) ? A[1] : (d >= 20 && d <= 25) ? A[2] : (d >= 26 && d <= 30) ? A[3] : Bz[0];
+        g = std::clamp(zg, 0.0f, 2.0f) * std::clamp(Bz[1], 0.0f, 2.0f);
+        kMax = std::clamp(Bz[2], 5.0f, 90.0f) / 57.29578f; kMaxT = std::clamp(Bz[3], 1.0f, 50.0f) * 0.001f;
+    }
+    float dq[4], bc[4] = { -bq[0], -bq[1], -bq[2], bq[3] };
+    dq[3] = nq2[3] * bc[3] - nq2[0] * bc[0] - nq2[1] * bc[1] - nq2[2] * bc[2];
+    dq[0] = nq2[3] * bc[0] + nq2[0] * bc[3] + nq2[1] * bc[2] - nq2[2] * bc[1];
+    dq[1] = nq2[3] * bc[1] - nq2[0] * bc[2] + nq2[1] * bc[3] + nq2[2] * bc[0];
+    dq[2] = nq2[3] * bc[2] + nq2[0] * bc[1] - nq2[1] * bc[0] + nq2[2] * bc[3];
+    if (dq[3] < 0) for (float& v : dq) v = -v;
+    const float sn = sqrtf(dq[0] * dq[0] + dq[1] * dq[1] + dq[2] * dq[2]), ang = 2.0f * atan2f(sn, dq[3]);
+    float tgt = ang * g; if (tgt > kMax) { tgt = kMax; clip = true; }
+    if (sn > 1e-6f && fabsf(tgt - ang) > 1e-6f) {   // n = dq escalado * b
+        const float h = 0.5f * tgt, k = sinf(h) / sn, e[4] = { dq[0] * k, dq[1] * k, dq[2] * k, cosf(h) };
+        nq2[3] = e[3] * bq[3] - e[0] * bq[0] - e[1] * bq[1] - e[2] * bq[2];
+        nq2[0] = e[3] * bq[0] + e[0] * bq[3] + e[1] * bq[2] - e[2] * bq[1];
+        nq2[1] = e[3] * bq[1] - e[0] * bq[2] + e[1] * bq[3] + e[2] * bq[0];
+        nq2[2] = e[3] * bq[2] + e[0] * bq[1] - e[1] * bq[0] + e[2] * bq[3];
+    }
+    float dx = (nt2[0] - bt[0]) * g, dy = (nt2[1] - bt[1]) * g, dz = (nt2[2] - bt[2]) * g; const float dl = sqrtf(dx * dx + dy * dy + dz * dz);
+    if (dl > kMaxT) { const float k = kMaxT / dl; dx *= k; dy *= k; dz *= k; clip = true; }
+    nt2[0] = bt[0] + dx; nt2[1] = bt[1] + dy; nt2[2] = bt[2] + dz;
+    return clip;
 }
 ID3D11ShaderResourceView* ExprBoneDeltaSrv() { return (g_cfg.optExprPalette && s_bdAny) ? s_bdSrv : nullptr; }
 

@@ -814,7 +814,6 @@ static bool ReadBase(Skel& S, int d, Xf& x) {
     return true;
 }
 // escribe q / t nuevos y recuerda la base de la que salieron
-bool ExprZoneScale(int d, const float* bq, const float* bt, float* nq, float* nt);   // expr.cpp (filas 421 / 422)
 static bool PaletteMode(int d) { return g_cfg.optExprPalette && d < D_NECKB; }   // (08/11) huesos de la cara: a la paleta, no al esqueleto
 static bool WriteBone(Skel& S, int d, const Xf& base, const float* nq, const float* nt) {
     if (PaletteMode(d)) {   // (08/11, Agustin: "todo sigue vibrando") no se toca el esqueleto: se anota y se publica al final del cuadro
