@@ -335,6 +335,13 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
       if (PesPaintedHair(uv + dirUV * lenUV) < 0.2) len *= (PesPaintedHair(uv + dirUV * lenUV * 0.5) < 0.2) ? 0.55 : 0.85;   // (07/11, referencia eFootball de Agustin) el borde de la ceja queda deshilachado: los pelos pasan un poco la pintura
     }
     float widB = max(P74.w, 0.05) * 0.001 * mWid * 0.32;   // (07/11 b) 0.25 -> 0.32: con la normal de tubo cada pelo se lee como cilindro   // (04/11 b) mas finas: 0.35 -> ~0.09 mm de ancho real
+#ifdef PES_ATLAS
+    // (08/11, Agustin: "las sombras siguen mal") el texel del atlas mide ~1.8 mm (caja de 1.8 m en 1024 px) y cada pelo (~0.17 mm) se
+    // dibujaba de ~1 mm: la ceja tapaba el sol como una placa solida (mancha negra en la piel y en las hebras de abajo). Ahora solo
+    // entra al atlas la fraccion de pelos que da la cobertura real (ancho real / ancho dibujado): el PCF promedia y la sombra de la
+    // ceja sobre la piel y entre capas queda con la opacidad de los pelos de verdad
+    if (frac(r0 * 17.31 + r1 * 7.13 + rk * 3.7) > saturate(widB * 1.4 / (PesAtlasTexelM() * 1.1))) continue;
+#endif
     // color: el de la ceja pintada en ese punto (raiz) y la punta un poco mas clara, o el del tipo de pelo
     float3 painted = tBrow.SampleLevel(sLin, uv, 0).rgb;   // (04/11 d) el color de los pelos pintados de esa zona (no la piel de al lado)
     float3 cR = (hb && pesHairRoot.w > 0.5) ? pesHairRoot.xyz : painted;
@@ -398,7 +405,9 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
       // (06/11, Agustin: "no se ve como un hair strand de un motor moderno") la hebra fina ya no se engorda a 1 px: se dibuja de 1.2 px
       // y el PS descarta pixeles al azar segun la cobertura real (ancho real / dibujado); el TAA lo promedia -> pelo fino y suave
       float wReal = wid;
+#ifndef PES_ATLAS
       wid = max(wid, pxV * (P75.z > 0.5 ? 1.25 : 0.9));   // (07/11 b, Agustin: "el TAA las desenfoca") 0.6 -> 0.9 px: menos tramado
+#endif
       float cov = P75.z > 0.5 ? 1.0 : saturate(wReal / max(wid, 1e-9));
 #ifdef PES_SHADOW
       float hgt = max(dot(p - root, n), 0.0);                                    // altura sobre la piel
