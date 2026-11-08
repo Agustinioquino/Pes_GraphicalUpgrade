@@ -1,5 +1,7 @@
 // PES21 FX - punto de entrada. Sider llama a PES21FX_Init(carpeta) desde PES21FX.lua (LuaJIT FFI).
 #include "core.h"
+#include <algorithm>
+#include <vector>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -305,9 +307,74 @@ static void PinGameDlls() {
     }
 }
 
+// ---------------------------------------------------------------- (08/11) volcado propio del cierre
+// Agustin: "agrandar el log ... algo asi como un crash dump". Al cerrarse el juego queda en PES21FX\cierres\ una carpeta por
+// cierre (AAAAMMDD_HHMMSS) con: cierre.dmp (minidump con la memoria de datos del proceso, la de los hilos, los handles y los modulos
+// descargados: se abre con WinDbg o Visual Studio y deja ver el objeto liberado), PES21FX.log y sider.log copiados en ese momento
+// (al reabrir el juego se pisan) y el ini del momento. Se guardan los ultimos 8 cierres. [PES21FX] crash_dump = 0 lo apaga,
+// 1 = minidump con datos (unos cientos de MB), 2 = memoria completa (varios GB).
+// dbghelp se carga al arrancar (cargar una DLL dentro del cierre puede trabarse con el candado del cargador). El volcado lo escribe
+// otro hilo (MiniDumpWriteDump desde el hilo que se cae no ve bien su propia pila).
+using PFN_MDWD = BOOL(WINAPI*)(HANDLE, DWORD, HANDLE, int, const void*, const void*, const void*);
+static PFN_MDWD s_mdwd = nullptr;
+struct FxMdExc { DWORD ThreadId; EXCEPTION_POINTERS* ExceptionPointers; BOOL ClientPointers; };
+struct DumpJob { HANDLE file; FxMdExc exc; int type; BOOL ok; DWORD err; };
+static DWORD WINAPI DumpThread(LPVOID p) {
+    auto* j = (DumpJob*)p;
+    j->ok = s_mdwd(GetCurrentProcess(), GetCurrentProcessId(), j->file, j->type, &j->exc, nullptr, nullptr);
+    j->err = j->ok ? 0 : GetLastError();
+    return 0;
+}
+static void PruneCrashDirs(const std::wstring& root, int keep) {
+    std::vector<std::wstring> v; WIN32_FIND_DATAW fd;
+    HANDLE f = FindFirstFileW((root + L"2*").c_str(), &fd);
+    if (f == INVALID_HANDLE_VALUE) return;
+    do { if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) v.push_back(fd.cFileName); } while (FindNextFileW(f, &fd));
+    FindClose(f);
+    std::sort(v.begin(), v.end());
+    for (size_t i = 0; i + keep < v.size(); i++) {
+        std::wstring d = root + v[i] + L"\\";
+        HANDLE g = FindFirstFileW((d + L"*").c_str(), &fd);
+        if (g != INVALID_HANDLE_VALUE) { do { if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) DeleteFileW((d + fd.cFileName).c_str()); } while (FindNextFileW(g, &fd)); FindClose(g); }
+        RemoveDirectoryW(d.c_str());
+    }
+}
+static void WriteCrashDump(EXCEPTION_POINTERS* ep) {
+    static std::atomic<int> once{0};
+    if (once++ || g_cfg.optCrashDump <= 0 || g_cfg.baseDir.empty()) return;
+    std::wstring root = g_cfg.baseDir + L"cierres\\"; CreateDirectoryW(root.c_str(), nullptr);
+    PruneCrashDirs(root, 7);
+    SYSTEMTIME st; GetLocalTime(&st); wchar_t n[32];
+    swprintf(n, 32, L"%04d%02d%02d_%02d%02d%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    std::wstring dir = root + n + L"\\"; CreateDirectoryW(dir.c_str(), nullptr);
+    if (g_log) fprintf(g_log, "    volcado del cierre: PES21FX\\cierres\\%ls\\\n", n);
+    if (s_mdwd) {
+        HANDLE h = CreateFileW((dir + L"cierre.dmp").c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (h != INVALID_HANDLE_VALUE) {
+            // MiniDumpWithDataSegs 0x1 | WithFullMemory 0x2 | WithHandleData 0x4 | WithUnloadedModules 0x20 | WithIndirectlyReferencedMemory 0x40
+            // | WithPrivateReadWriteMemory 0x200 | WithFullMemoryInfo 0x800 | WithThreadInfo 0x1000
+            int type = 0x1 | 0x4 | 0x20 | 0x40 | 0x800 | 0x1000;
+            type |= g_cfg.optCrashDump >= 2 ? 0x2 : 0x200;
+            DumpJob j{ h, { GetCurrentThreadId(), ep, FALSE }, type, FALSE, 0 };
+            HANDLE t = CreateThread(nullptr, 0, DumpThread, &j, 0, nullptr);
+            if (t) { WaitForSingleObject(t, 120000); CloseHandle(t); } else DumpThread(&j);
+            LARGE_INTEGER sz{}; GetFileSizeEx(h, &sz); CloseHandle(h);
+            if (g_log) fprintf(g_log, "    cierre.dmp: %s (%.1f MB%s)\n", j.ok ? "escrito" : "FALLO", sz.QuadPart / 1048576.0, j.ok ? "" : ", ver error");
+            if (!j.ok && g_log) fprintf(g_log, "    MiniDumpWriteDump error %lu\n", j.err);
+        } else if (g_log) fprintf(g_log, "    cierre.dmp: no se pudo crear (error %lu)\n", GetLastError());
+    } else if (g_log) fprintf(g_log, "    cierre.dmp: dbghelp.dll no disponible\n");
+    if (g_log) fflush(g_log);
+    CopyFileW((g_cfg.baseDir + L"PES21FX.log").c_str(), (dir + L"PES21FX.log").c_str(), FALSE);
+    CopyFileW((g_cfg.baseDir + L"PES21FX.ini").c_str(), (dir + L"PES21FX.ini").c_str(), FALSE);
+    wchar_t exe[MAX_PATH]; GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    std::wstring gdir = exe; gdir = gdir.substr(0, gdir.find_last_of(L"\\/") + 1);
+    CopyFileW((gdir + L"sider.log").c_str(), (dir + L"sider.log").c_str(), FALSE);
+}
+
 static LPTOP_LEVEL_EXCEPTION_FILTER s_prevFilter = nullptr;
 static LONG WINAPI Unhandled(EXCEPTION_POINTERS* ep) {
     LogCrash(ep, "CIERRE DEL JUEGO");
+    WriteCrashDump(ep);
     return s_prevFilter ? s_prevFilter(ep) : EXCEPTION_CONTINUE_SEARCH;
 }
 
@@ -331,6 +398,8 @@ static int InitMod() {
     fx::Log("PES21 FX 0.2 (d3d11.dll) - carpeta: %ls", wb.c_str());
     AddVectoredExceptionHandler(1, fx::Vectored);
     fx::s_prevFilter = SetUnhandledExceptionFilter(fx::Unhandled);
+    if (HMODULE dh = LoadLibraryW(L"dbghelp.dll")) fx::s_mdwd = (fx::PFN_MDWD)GetProcAddress(dh, "MiniDumpWriteDump");
+    fx::Log("volcado de cierres: %s", fx::s_mdwd ? "listo (PES21FX\\cierres\\)" : "dbghelp.dll no disponible");
     fx::WatchDlls();
     HMODULE nv = LoadLibraryW(L"nvapi64.dll");   // 3DMigoto la dejaba cargada; hacemos lo mismo
     fx::Log("nvapi64.dll: %s", nv ? "cargada y retenida" : "no esta (placa no NVIDIA?)");
