@@ -304,6 +304,10 @@ struct Skel {
     int idx[kND] = {};        // indice del hueso en el arreglo del esqueleto
     const char* src[kND] = {};   // (02/11) arreglo de donde salio (cara o cuerpo): para revalidar cada cuadro
     const void* node = nullptr;  // (02/11) SceneCharacterNode con el que se armo
+    // (08/11 f) huella de los bloques al armar: vtable del nodo / de los dos esqueletos y los primeros 32 bytes del hueso 0 de cada
+    // arreglo. dlmalloc pisa los primeros 16 bytes de un bloque liberado con sus punteros de lista: si algo de esto cambio, el bloque
+    // ya no es del juego y NO se escribe (los cierres +0x1ff674a / cuelgue +0x1ff668e del editor podian ser huesos escritos ahi)
+    uint64_t vtNode = 0, vtFace = 0, vtSkel = 0, b0Face[4] = {}, b0Body[4] = {};
     Xf rest[kND] = {};
     int found = 0, jawFound = 0;
     unsigned lastFrame = 0; int rebuilds = 0; bool logged = false;
@@ -423,6 +427,11 @@ static bool Build(Skel& S, const void* skel) {
     if (node && ReadPtr((const char*)node + 0xA0, face) && face != skel && LooksSkel(face, &S.fbones, &S.fn)) { S.face = face; Match(S, S.fbones, S.fn); }
     else { S.face = nullptr; S.fbones = nullptr; S.fn = 0; }
     Match(S, S.bones, S.n);
+    if (S.node) SafeCopy(&S.vtNode, S.node, 8);
+    if (S.face) SafeCopy(&S.vtFace, S.face, 8);
+    SafeCopy(&S.vtSkel, S.skel, 8);
+    if (S.fbones) SafeCopy(S.b0Face, S.fbones, sizeof S.b0Face);
+    if (S.bones) SafeCopy(S.b0Body, S.bones, sizeof S.b0Body);
     for (int b = 0; b < S.n && !S.bHead; b++) {   // sk_head del cuerpo (hash FF3D8D77 o nombre)
         const char* bone = S.bones + (size_t)b * 0xc0;
         uint32_t hs = 0; char nm[64];
@@ -456,6 +465,14 @@ static bool StillValid(const Skel& S) {
     bool ok = false;
     for (int i = 0; i < kCharSlots; i++) if (alive[i] && ci[i].skel == S.skel && ci[i].node == S.node) { ok = true; break; }
     if (!ok) return false;
+    {   // (08/11 f) bloques todavia vivos (ver vtNode)
+        uint64_t v = 0, b[4] = {};
+        if (!SafeCopy(&v, S.node, 8) || v != S.vtNode) return false;
+        if (!SafeCopy(&v, S.face, 8) || v != S.vtFace) return false;
+        if (!SafeCopy(&v, S.skel, 8) || v != S.vtSkel) return false;
+        if (!SafeCopy(b, S.fbones, sizeof b) || memcmp(b, S.b0Face, sizeof b)) return false;
+        if (!SafeCopy(b, S.bones, sizeof b) || memcmp(b, S.b0Body, sizeof b)) return false;
+    }
     void* face = nullptr; if (!ReadPtr((const char*)S.node + 0xA0, face) || face != S.face) return false;
     void* arr = nullptr; int n = 0;
     if (!ReadPtr((const char*)S.face + 0x28, arr) || (const char*)arr != S.fbones || !SafeCopy(&n, (const char*)S.face + 0x30, 4) || n != S.fn) return false;
