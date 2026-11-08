@@ -802,6 +802,11 @@ template<int V> static void STDMETHODCALLTYPE hk_ExecCL(ID3D11DeviceContext* c, 
 template<int V> static HRESULT STDMETHODCALLTYPE hk_FinishCL(ID3D11DeviceContext* c, BOOL r, ID3D11CommandList** l) {
     GrassBaseFlush(c, 3, 0);   // (26/10 g) la base pendiente se emite dentro de esta lista
     HRESULT hr = o_FinishCL[V](c, r, l);
+    if (FAILED(hr)) {   // (08/11) un FinishCommandList fallido dejaba el lock de la entrada del juego tomado (cuelgues del editor)
+        static std::atomic<int> nf{0};
+        if (nf++ < 20) { ID3D11Device* d = nullptr; c->GetDevice(&d); HRESULT rr = d ? d->GetDeviceRemovedReason() : S_OK; if (d) d->Release();
+            Log("FinishCommandList fallo: hr 0x%08x (contexto %p, dispositivo 0x%08x)", (unsigned)hr, (void*)c, (unsigned)rr); }
+    }
     if (SUCCEEDED(hr) && l && *l) BodyOnFinish(c, *l);
     GrassOnFinishCL(c, (SUCCEEDED(hr) && l) ? *l : nullptr);   // (26/10 d) pasto: la grabacion termino (siempre, aunque falle)
     return hr;
@@ -2047,6 +2052,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     LightMeterPresent();
     CamHookPresent();   // (23/10) camara del motor: ganchos (primer Present), cortes de camara -> 160, log
     TiempoPresent();    // (31/10) camara lenta: ganchos (visor del editor / reloj del partido, primer Present), 343.w, log
+    CmdListGuardPresent();   // (08/11) locks de las listas de comandos del juego con tope de espera (cuelgues del editor)
     FreeCamPresent();   // (1/11) camara libre: gancho a la camara del visor del editor (primer Present), log
     CharTrackPresent();    // (24/10) personajes: que jugador es cada esqueleto (ganchos en el primer Present, log)
     SkinDiagPresent();     // (24/10) tono de piel: diagnostico de los dibujos de personajes (w184)

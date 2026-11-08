@@ -366,6 +366,8 @@ void CamHookPresent();                            // ganchos (primer Present), 1
 // (31/10) camara libre (freecam.cpp): pisa el parametro de la camara del motor desde el gancho de camhook.cpp; 344 (ini) / 345 (DLL)
 void FreeCamApply(unsigned char* param);
 void FreeCamPresent();
+// (08/11) guardia de los locks de la tabla de listas de comandos del juego (cmdlistguard.cpp): cuelgues del editor 07:54 / 09:08
+void CmdListGuardPresent();
 void FreeCamWheel(int delta);
 bool FreeCamWantsHead();   // (1/11) camara libre prendida con "seguir la cara": hace falta la cabeza (expr.cpp)   // (1/11) rueda del mouse (WM_MOUSEWHEEL / raw input) -> zoom   // (1/11) gancho a la camara del visor del editor (primer Present) + log
 bool FreeCamActive();
