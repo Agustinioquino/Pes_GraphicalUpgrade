@@ -767,6 +767,7 @@ void GrassPresent() {
 // emite el pasto del mod en este cuadro. bound = el estado del dibujo de pasto del juego ya esta puesto (se llama desde
 // ese dibujo); si no, se pone el guardado y se devuelve el del contexto al terminar.
 // Devuelve true si los dibujos quedaron grabados (la grabacion ya lleva su emision).
+static thread_local bool t_editor = false;   // (08/11 c) emision en el editor (x393): sin estados de la base, alcance y393
 static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend = nullptr) {
     struct InEmit { bool sv; InEmit() : sv(t_inEmit) { t_inEmit = true; } ~InEmit() { t_inEmit = sv; } } inEmit_;
     const float* p58 = g_cfg.live[58]; const float* p59 = g_cfg.live[59];
@@ -844,6 +845,13 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         ReadState(c, prev);
         ShaderBind b; b.vs = st.vsE; b.vsObj = st.vs; b.ps = st.psE; b.psObj = st.ps; oldSh = BindShadersRaw(c, b);
         WriteState(c, st);
+        if (t_editor) {   // (08/11 c) editor: el stencil del pasto del juego marca la cancha; en el visor no existe -> solo profundidad
+            static ID3D11DepthStencilState* edDss = nullptr; static ID3D11DepthStencilState* edSrc = nullptr; static std::mutex edMx;
+            std::lock_guard<std::mutex> lk(edMx);
+            if (!edDss || edSrc != st.dss) { if (edDss) edDss->Release(); edDss = nullptr; edSrc = st.dss;
+                D3D11_DEPTH_STENCIL_DESC d = DssDesc(st.dss); d.StencilEnable = FALSE; g_dev.dev->CreateDepthStencilState(&d, &edDss); }
+            if (edDss) c->OMSetDepthStencilState(edDss, 0);
+        }
     }
     ID3D11Buffer* oldCb5 = nullptr; UINT oldF5 = 0, oldN5 = 0;
     if (c1) c1->VSGetConstantBuffers1(5, 1, &oldCb5, &oldF5, &oldN5); else c->VSGetConstantBuffers(5, 1, &oldCb5);
@@ -892,6 +900,7 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         // (08/11) gPad[3].w: z58 alcance del pasto del mod en metros (Agustin: el pasto de cerca del mod sin el de toda la cancha, que
         // cuesta). 100 o mas (el ini trae 120) o 0 = toda la cancha, como antes
         { const float zr = g_cfg.live[58][2]; cull[35] = (zr > 1.0f && zr < 100.0f) ? std::clamp(zr, 5.0f, 100.0f) : 0.0f; }
+        if (t_editor) { const float er = g_cfg.live[393][1]; cull[35] = er >= 1.0f ? std::clamp(er, 3.0f, 60.0f) : 8.0f; }   // (08/11 c) editor: solo alrededor del jugador
         // (26/10 d) reclamo del cuadro: la primera emision que la GPU ejecuta despues del Present se queda con el cuadro (Count[18] = 1);
         // las demas pasan por las celdas sin anotar nada y dibujan 0 instancias
         GpuTimer* tm = (p58[3] > 0.5f && TimersReady()) ? TimerClaim(s_frame.load()) : nullptr;   // (1/11) medidor de GPU (solo con el registro prendido)
@@ -923,7 +932,7 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         ID3D11DepthStencilState* svDss = nullptr; UINT svSref = 0; c->OMGetDepthStencilState(&svDss, &svSref);
         ID3D11BlendState* svBs = nullptr; float svBf[4] = {}; UINT svBm = 0xffffffff; c->OMGetBlendState(&svBs, svBf, &svBm);
         bool stRoute = false, farBl = false; int bmSet = 0;
-        if (g_cfg.live[290][0] > 0.5f) {
+        if (g_cfg.live[290][0] > 0.5f && !t_editor) {
             ID3D11DepthStencilState* bD = nullptr; UINT bR = 0; bool have = false;
             if (!bound) { bD = pend ? pend->dss : prev.dss; bR = pend ? pend->sref : prev.sref; if (bD) bD->AddRef(); have = true; }   // el estado de la base (guardado si la emision es diferida)
             else { std::lock_guard<std::mutex> lk(s_bsMx); if (s_baseDssOk && s_hyDev == g_dev.dev) { bD = s_baseDss; bR = s_baseSref; if (bD) bD->AddRef(); have = true; } }
@@ -931,7 +940,7 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
             if (bD) bD->Release();
         }
         ID3D11ShaderResourceView* snap = nullptr; ID3D11ShaderResourceView* oldT10 = nullptr; bool t10Set = false;
-        { int bm = 0; const bool baseUnder = !bound || RecHas(c, &GRec::base);   // sin la base dibujada antes no hay suelo con que mezclar ni luz en RT4
+        { int bm = 0; const bool baseUnder = !t_editor && (!bound || RecHas(c, &GRec::base));   // (08/11 c) editor: sin RT4 ni copia del suelo (no hay cancha)   // sin la base dibujada antes no hay suelo con que mezclar ni luz en RT4
           if (g_cfg.live[290][1] > 0.5f && baseUnder) bm |= 1;
           if (g_cfg.live[291][0] > 0.5f && baseUnder && (snap = SnapshotRT0(c)) != nullptr) bm |= 2;   // (26/10 g) sin la copia del suelo no hay mezcla
           if (bm) if (ID3D11BlendState* nb = BladeBlend(svBs, bm)) { c->OMSetBlendState(nb, svBf, svBm); nb->Release(); farBl = (bm & 2) != 0; bmSet = bm; }
@@ -1020,6 +1029,29 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
     }
     if (c1) c1->Release();
     return emitted;
+}
+
+// (08/11 c) PASTO EN EL EDITOR (experimento, Agustin 08:02 / 10:05): x393 = 1 dibuja el pasto del mod alrededor del jugador en el
+// modo editar (y los menus 3D sin sol), para juzgar la luz de prueba sobre el cesped. Se emite una vez por cuadro despues del
+// dibujo de la cara en el G-buffer del visor (el estado del juego ya esta devuelto), con la camara del visor (cb2 del VS) y el
+// estado del pasto guardado al ver un partido en la sesion (s_state): sin eso se anota una vez y no se dibuja. El jugador del
+// editor esta en el origen (los focos del fox2 apuntan al eje), igual que el centro de la cancha, asi que el pasto queda a sus pies.
+// Nunca se guarda prendido (kDebugParams, config.cpp).
+static int RtvCount(ID3D11DeviceContext* c);
+static std::atomic<int> s_edFrame{-1}, s_edLog{0}, s_edOk{0};
+void GrassEditorAfterFace(ID3D11DeviceContext* c) {
+    if (g_cfg.bypass || !g_dev.dev || g_cfg.live[393][0] < 0.5f) return;
+    if (g_cfg.live[255][3] < 0.5f || g_cfg.live[44][3] > 0.5f) return;   // misma condicion que la luz de prueba: escena de menu sin el sol del partido
+    if (RtvCount(c) < 2) return;   // solo el G-buffer del visor (la cara tambien se dibuja en prepasadas)
+    const int f = s_frame.load();
+    int prev = s_edFrame.load(); if (prev == f || !s_edFrame.compare_exchange_strong(prev, f)) return;   // una por cuadro
+    bool have; { std::lock_guard<std::mutex> lk(s_stMx); have = s_state.valid; }
+    if (!have) { if (s_edLog.fetch_add(1) < 1) Log("pasto en el editor: todavia no se vio el pasto del juego en esta sesion (hace falta ver un partido o una repeticion antes de entrar al editor): no se dibuja"); return; }
+    t_editor = true;
+    const bool ok = GrassEmit(c, false);
+    t_editor = false;
+    if (ok) { if (s_edOk.fetch_add(1) < 1) Log("pasto en el editor: emitiendo alrededor del jugador (alcance %.0f m, estado del pasto de hace %d cuadros)", g_cfg.live[393][1], f - s_capPres.load()); }
+    else if (s_edLog.fetch_add(1) < 3) Log("pasto en el editor: no se pudo emitir: %s", g_grassDbg.why ? g_grassDbg.why : "?");
 }
 
 // cuantos render targets hay puestos (el G-buffer tiene varios; una prepasada de profundidad, 0 o 1)
