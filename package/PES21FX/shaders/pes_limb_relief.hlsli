@@ -172,4 +172,67 @@ float2 PesLimbRelief(int kind, float3 pr, float a, float b, float3 dPx, float3 d
     float l2 = dot(nxy, nxy); if (l2 > 0.94) nxy *= rsqrt(l2 / 0.94);
     return float2(saturate(-h0 / 0.0012) * gain * fade, saturate(c0 / 0.0004) * gain * fade);
 }
+
+// ------------------------------------------------------------------------------------------------------------------ brazo
+// (08/11) la misma altura que hornea tools/fox/torso/arm_anatomy.py height() en pes_arm_anat_c.dds, pero en 3D: el DS del cuerpo la
+// usa para desplazar de verdad la superficie teselada (el PS sigue usando la textura de 2048). Marco del brazo = torso_variants.py
+// arm_frame (brazo izquierdo; la derecha es el espejo): t a lo largo del brazo desde el hombro, th alrededor, con el centro corrido
+// por _ARM_O1 / _ARM_O2 cada 2 cm. g(u) = exp(-u^2 / 2) como en python.
+static const float3 PLR_AS = float3(0.2631, 1.3704, 0.0195);
+static const float3 PLR_AW = float3(0.5956, 1.1029, 0.0494);
+static const float PLR_O1[23] = { 31, 31, 29, 19, 9, 19, 10, 13, 11, 13, 14, 19, 34, 46, 51, 77, 93, 116, 133, 154, 160, 153, 153 };
+static const float PLR_O2[23] = { 3, 3, 1, -10, -22, 18, 13, 37, 54, 52, 37, 17, 7, 0, -3, -11, -15, -25, -23, -32, -57, -74, -74 };
+// surcos: (prof mm, t a, th a, t b) + (th b, ancho m)
+static const float4 PLR_GA[15] = {
+    float4(0.55, 0.000, -150, 0.075), float4(0.55, 0.000, 150, 0.075), float4(0.45, 0.070, -128, 0.095), float4(0.45, 0.070, 128, 0.095),
+    float4(0.35, 0.050, -85, 0.135),  float4(0.50, 0.040, -130, 0.160), float4(0.50, 0.030, -45, 0.150),  float4(0.45, 0.020, 112, 0.110),
+    float4(0.40, 0.110, 140, 0.150),  float4(0.40, 0.110, 60, 0.150),   float4(0.45, 0.195, -125, 0.330), float4(0.40, 0.200, -70, 0.330),
+    float4(0.35, 0.210, -15, 0.340),  float4(0.40, 0.210, 160, 0.340),  float4(0.35, 0.220, 110, 0.350) };
+static const float2 PLR_GB[15] = {
+    float2(-128, 0.0035), float2(128, 0.0035), float2(175, 0.0040), float2(175, 0.0040), float2(-88, 0.0030), float2(-118, 0.0045),
+    float2(-40, 0.0045), float2(100, 0.0040), float2(90, 0.0045), float2(90, 0.0045), float2(-105, 0.0045), float2(-60, 0.0050),
+    float2(-25, 0.0050), float2(140, 0.0045), float2(100, 0.0050) };
+static const float3 PLR_TD[5] = { float3(0.30, -55, 0.0022), float3(0.35, -35, 0.0020), float3(0.22, -18, 0.0018), float3(0.20, 130, 0.0024), float3(0.18, 150, 0.0022) };
+
+float PesArG(float u) { return exp(-0.5 * u * u); }
+float PesArSS(float a, float b, float x) { float t = saturate((x - a) / (b - a)); return t * t * (3.0 - 2.0 * t); }
+void PesArmFrame(float3 p, out float t, out float th) {
+    float3 a = normalize(PLR_AW - PLR_AS);
+    float3 e1 = normalize(cross(a, float3(0, 0, 1))), e2 = cross(a, e1);
+    t = dot(p - PLR_AS, a);
+    float fi = clamp(t / 0.02, 0.0, 22.0); int i0 = (int)floor(fi); int i1 = min(i0 + 1, 22); float fr = fi - i0;
+    float o1 = lerp(PLR_O1[i0], PLR_O1[i1], fr) * 1e-4, o2 = lerp(PLR_O2[i0], PLR_O2[i1], fr) * 1e-4;
+    float3 d = p - PLR_AS - t * a - o1 * e1 - o2 * e2;
+    th = degrees(atan2(dot(d, e2), dot(d, e1)));
+}
+// distancia (m) a un segmento en el desarrollo del brazo (radio ~4.5 cm): (k = g(d / w), u = posicion 0..1)
+float2 PesArLine(float t, float th, float ta, float tha, float tb, float thb, float w) {
+    const float rr = 45.0e-3 * 3.14159265 / 180.0;
+    float x = t, y = PesLrDth(th, tha) * rr;
+    float bx = tb - ta, by = PesLrDth(thb, tha) * rr;
+    float u = saturate(((x - ta) * bx + y * by) / (bx * bx + by * by));
+    float d = length(float2(x - (ta + u * bx), y - u * by));
+    return float2(PesArG(d / w), u);
+}
+float PesArB(float t, float th, float t0, float th0, float st, float sth) { return PesArG((t - t0) / st) * PesArG(PesLrDth(th, th0) / sth); }
+// altura (m) del detalle muscular del brazo, + = bulto (sin pose: las separaciones de base)
+float PesArmH(float3 p) {
+    float t, th; PesArmFrame(p, t, th);
+    float keep = PesArSS(-0.005, 0.02, t) * (1.0 - PesArSS(0.41, 0.43, t));   // nada en la costura del hombro ni en la mano
+    if (keep <= 0.0) return 0.0;
+    float h = 0.0;
+    [unroll] for (int i = 0; i < 15; i++) {
+        float4 A = PLR_GA[i]; float2 B = PLR_GB[i];
+        float2 ku = PesArLine(t, th, A.y, A.z, A.w, B.x, 2.4 * B.y);
+        h -= 1e-3 * 1.4 * A.x * ku.x * PesArSS(0.0, 0.2, ku.y) * (1.0 - PesArSS(0.8, 1.0, ku.y));
+    }
+    [unroll] for (int j = 0; j < 5; j++) {
+        float3 T = PLR_TD[j];
+        h += 1e-3 * T.x * PesArLine(t, th, 0.330, T.y, 0.425, T.y, T.z).x * PesArSS(0.33, 0.37, t);
+    }
+    h += 1e-3 * 0.35 * PesArB(t, th, 0.092, -100, 0.022, 14) + 1e-3 * 0.35 * PesArB(t, th, 0.088, -70, 0.022, 14);    // 2 cabezas del biceps
+    h += 1e-3 * 0.30 * (PesArB(t, th, 0.035, -160, 0.022, 14) + PesArB(t, th, 0.035, 175, 0.022, 14) + PesArB(t, th, 0.035, 140, 0.022, 14));   // deltoides
+    h += 1e-3 * 0.30 * PesArB(t, th, 0.240, -138, 0.035, 12);                                                            // braquiorradial
+    return h * keep;
+}
 #endif
