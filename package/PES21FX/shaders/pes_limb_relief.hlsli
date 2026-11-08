@@ -67,8 +67,13 @@ float PesHandH(float3 p, float curl, out float crease) {
     // pliegues de la muneca en la palma (dos lineas a lo ancho), un poco mas hondos con la mano cerrada
     float wl = PesLrG((sm + 0.004) / 0.0006) + 0.8 * PesLrG((sm - 0.006) / 0.0006);
     float cr = 0.00030 * (0.6 + 0.4 * curl) * wl * palm * PesLrG(cw / 1.2);
-    crease = cr;
-    return h - cr;
+    // (08/11 j, Agustin: "se ven costuras en la union de las munecas") la punta del cubito (sm ~ +2.5 mm) y los pliegues de la muneca
+    // (sm -4 / +6 mm) caian justo en el borde de la malla de la mano: del lado del antebrazo (otra malla) no hay nada, y el bulto o el
+    // surco cortado en seco se veia como una costura (luz en el PS, desplazamiento en el DS). Todo el relieve de la mano se apaga hacia
+    // la muneca: nada antes de 2 mm, completo desde 1.4 cm.
+    float fH = smoothstep(0.002, 0.014, sm);
+    crease = cr * fH;
+    return (h - cr) * fH;
 }
 
 // ------------------------------------------------------------------------------------------------------------------ pierna
