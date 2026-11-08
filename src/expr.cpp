@@ -738,6 +738,23 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
             // vertices duplicados = 0) en t119 y el cbuffer con vertices / primer indice (g_pesExprShape.y / .z, con el base del dibujo);
             // nada de cabeza, parpados ni formas. La paleta del cuerpo puede pasar de 32 huesos: no importa aca.
             std::vector<float> w; SeamWeights(m->tri, m->vmin, m->nv, ps, w, &m->seamN, false, nullptr, nrv.empty() ? nullptr : nrv.data(), iv.data(), wv.data(), &m->seamSoft);
+            // (08/11 r, Agustin: "esas uniones tienen que ser perfectas ... en las uniones del rostro no se ven") UNIONES DEL CUERPO: el borde
+            // de cada pieza (muneca con la mano, tobillo con la media, hombro) queda fijo, pero el anillo de al lado se redondeaba entero y la
+            // union se veia como un pliegue. Como en la cara (que se apaga de a poco hacia el cuello), el peso sube en rampa desde el borde:
+            // 0 en el borde, entero a 2.5 cm (distancia en el reposo al vertice de borde mas cercano). Las dos piezas quedan quietas en la union.
+            {
+                std::vector<UINT> bv; for (UINT v = 0; v < m->nv; v++) if (w[v] == 0.0f) bv.push_back(v);
+                const float R = 0.025f; int nr = 0;
+                if (!bv.empty() && (uint64_t)bv.size() * m->nv < 80000000ull) for (UINT v = 0; v < m->nv; v++) {
+                    if (w[v] == 0.0f) continue;
+                    const float* P = &ps[(size_t)v * 3]; float d2 = R * R;
+                    for (UINT b : bv) { const float* Q = &ps[(size_t)b * 3]; const float dx = P[0] - Q[0], dy = P[1] - Q[1], dz = P[2] - Q[2]; const float e = dx * dx + dy * dy + dz * dz; if (e < d2) d2 = e; }
+                    if (d2 >= R * R) continue;
+                    const float t = sqrtf(d2) / R, k = t * t * (3.0f - 2.0f * t);
+                    w[v] = (std::max)(k, 0.001f) * (w[v] > 1.0f ? 1.0f : w[v]); nr++;
+                }
+                static int nl = 0; if (nl++ < 40) Log("teselacion del cuerpo: malla %d: %d vertices en la rampa de 2.5 cm de los bordes (union sin pliegue)", m->id, nr);
+            }
             D3D11_BUFFER_DESC bd{}; bd.ByteWidth = (UINT)(w.size() * 4); bd.Usage = D3D11_USAGE_IMMUTABLE; bd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
             D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = w.data();
             if (SUCCEEDED(g_dev.dev->CreateBuffer(&bd, &sd, &m->seamBuf))) {
