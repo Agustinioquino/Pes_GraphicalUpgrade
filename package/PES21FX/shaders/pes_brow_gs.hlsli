@@ -141,6 +141,21 @@ float2 PesBrowDirUV(float2 uv) {
 // (0.5, 0.595); la barba cubre mejillas bajas, bigote, menton y mandibula. Los labios quedan SIEMPRE fuera (con margen): la boca
 // no se toca
 float PesEllB(float2 uv, float2 c, float2 r) { return saturate((1.0 - length((uv - c) / r)) * 3.0); }
+// (08/11 y, Agustin: "la barba no detecta bien de donde sale") antes se comparaba cada punto con la piel a 0.03 de UV: dentro de una
+// barba tupida los vecinos tambien son barba y el centro no salia (solo el borde), y las sombras pintadas (fosas nasales, pliegue
+// del menton) si salian. Ahora la referencia es la PIEL LIMPIA de la misma cara (frente, pomulos y dorso de la nariz, la mas clara)
+// y la barba es lo bastante mas oscuro que eso; fosas nasales y labios siempre fuera
+float PesBeardSkinRef() {
+  return max(max(PesLum(float2(0.5, 0.20), 4.0), PesLum(float2(0.5, 0.44), 4.0)),
+             max(PesLum(float2(0.33, 0.46), 4.0), PesLum(float2(0.67, 0.46), 4.0)));
+}
+float PesBeardAmt(float2 uv, float skRef) {
+  float zB = PesEllB(uv, float2(0.5, 0.70), float2(0.31, 0.23));
+  if (length((uv - float2(0.5, 0.595)) / float2(0.105, 0.05)) < 1.0) return 0.0;   // labios + margen: nunca
+  if (length((uv - float2(0.5, 0.515)) / float2(0.075, 0.03)) < 1.0) return 0.0;   // fosas nasales
+  float d = 1.0 - PesLum(uv, 1.0) / max(skRef, 0.01);
+  return saturate((d - 0.22) * 3.0) * zB;
+}
 float2 PesBeardDirUV(float2 uv) {
   float sx = uv.x < 0.5 ? -1.0 : 1.0, ax = abs(uv.x - 0.5);
   float2 d = float2(sx * (0.15 + 0.6 * saturate(ax * 3.0)), 1.0);                   // hacia abajo y afuera en las mejillas
@@ -273,6 +288,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
                    // (06/11, Agustin: "se ven poco pobladas") 25000 -> 40000
                  (hb ? max(pesHairBrow.y, 0.05) : 1.0);
   float keepBase = saturate(uvArea * dens / (float)(PES_INST * PES_PER_INST));
+  float skRefB = beardTri ? PesBeardSkinRef() : 0.01;   // (08/11 y) piel limpia de la cara (una vez por triangulo)
   float keepBeard = saturate(uvArea * clamp(BR.y, 0.1, 4.0) * 30000.0 / (float)(PES_INST * PES_PER_INST));
   float mLen = hb ? max(pesHairBrow.w, 0.05) : 1.0, mWid = hb ? max(pesHairBrow.x, 0.05) : 1.0, mLift = hb ? pesHairBrow.z : 1.0;
   float curl = hb ? saturate(pesHairA.y) : 0.1;
@@ -289,10 +305,8 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     bool isB = beardTri && uv.y > 0.46;
     float bDark = 0.0, skB = 0.01;
     if (isB) {
-      float zB = PesEllB(uv, float2(0.5, 0.70), float2(0.31, 0.23));
-      float lipX = length((uv - float2(0.5, 0.595)) / float2(0.105, 0.05)) < 1.0 ? 1.0 : 0.0;   // labios + margen: nunca
-      skB = max(max(PesLum(uv + float2(0.03, 0), 3.0), PesLum(uv - float2(0.03, 0), 3.0)), max(PesLum(uv + float2(0, 0.03), 3.0), PesLum(uv - float2(0, 0.03), 3.0)));
-      bDark = saturate((1.0 - PesLum(uv, 0.5) / max(skB, 0.01) - 0.1) * 3.0) * zB * (1.0 - lipX);
+      skB = skRefB;
+      bDark = PesBeardAmt(uv, skB);
       if (bDark < 0.05 || rk >= keepBeard * bDark) continue;
     }
     else if (m.a < 0.97) continue;                      // fuera de la zona de ceja (0.9 = cuero cabelludo, 0 = nada)
@@ -364,7 +378,13 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     // (06/11, Agustin: "una opcion para alejarlas del modelo o acercarlas") w370 del jugador = distancia a la piel en mm (+ afuera, - adentro)
     if (hb) root += n * clamp(pesBrowX.y, -2.0, 3.0) * 0.001;   // (04/11 e) sobre la piel teselada real (antes 0.4 mm + 1.4 mm fijos por la normal)
     float len;
-    if (isB) len = clamp(BR.z, 1.0, 25.0) * 0.001 * (0.7 + 0.6 * r3) * (0.6 + 0.4 * bDark);
+    if (isB) {
+      len = clamp(BR.z, 1.0, 25.0) * 0.001 * (0.8 + 0.4 * r3) * (0.6 + 0.4 * bDark);
+      // (08/11 y, Agustin: "deberian seguir los pelos su largo") la hebra no pasa el borde de la barba pintada (como las cejas): si la
+      // punta o la mitad caen en piel limpia se acorta, y de cerca se acuesta sobre la piel siguiendo la cara (abajo, kap / liftS)
+      float lenUV = len / max(mPerUV, 1e-5);
+      if (PesBeardAmt(uv + dirUV * lenUV, skB) < 0.05) len *= (PesBeardAmt(uv + dirUV * lenUV * 0.5, skB) < 0.05) ? 0.4 : 0.7;
+    }
     else {
       len = max(P74.z, 0.1) * 0.01 * mLen * (0.55 + 0.45 * m.g) * max(1.0 + 0.4 * (r3 - 0.5) * clamp(HV.y, 0.0, 2.5), 0.3) * 0.8;
       // la hebra no sale de la ceja pintada: si la punta (o la mitad) cae en piel, se acorta
