@@ -448,9 +448,12 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
         hh = PesLegH(pm, fmod(q - 528.0, 8.0) / 7.0, saturate(act), crz);
       }
       float dGr = IniParams.Load(int2(172, 0)).x; dGr = dGr > 0.01 ? clamp(dGr, 0.0, 3.0) : 1.0;
-      float hm = clamp(hh * clamp(rW, 0.0, 2.0) * dGr, -0.0015, 0.0015);
+      // (08/11 k) solo hacia AFUERA: manos y brazos tienen una prepasada de profundidad sin teselar (VS c6ef0c75); un surco metido hacia
+      // adentro fallaria la prueba de profundidad y dejaria un agujero. Los surcos se marcan en la luz (PS aa7d1833, PesLimbRelief).
+      float hm = clamp(hh * clamp(rW, 0.0, 2.0) * dGr, 0.0, 0.0015);
       float3 Nr = normalize(b.x * N0 + b.y * N1 + b.z * N2);
       d += Nr * (hm * min(seam, seamR) * fade);
+      { float dn = dot(d, Nr); if (dn < 0.0) d -= Nr * dn; }   // el redondeo tampoco mete nada hacia adentro
     }
   }
 #endif
