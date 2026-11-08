@@ -656,6 +656,40 @@ void main(
       }
     }
   }
+  // === PES21 (08/11 ab, Agustin con 5 fotos: "que la luz fuerte del sol despejado pinte el pasto") fila 414. Con sol fuerte y despejado la
+  // hoja ENTERA que esta al sol (no solo la punta) se va a verde amarillo saturado y brillante; de costado y a contraluz la luz la atraviesa
+  // (translucidez del G-buffer trC) y se enciende; la sombra queda verde honda (eso ya lo hace 296). Se aplica despues de la sombra del sol
+  // (inShadow) asi que lo que esta en sombra no se pinta. x414 cuanto pinta, y414 saturacion, z414 hoja encendida de costado / contraluz.
+  {
+    float4 PS4 = IniParams.Load(int2(414,0));
+    if (geoOk && PS4.x > 0.001 && tyC == 3 && zsk < 300.0 && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {
+      float3 sc = max(pLc_color.xyz, 0.0);
+      float day = saturate((sc.r / max(sc.b, 1e-4) - 0.85) * 4.0);
+      if (day > 0.01) {
+        float3 Ld = normalize(pLc_dir.xyz);
+        float3 upV = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
+        if (dot(Ld, upV) < 0) upV = -upV;
+        float sunUp = saturate(dot(Ld, upV));
+        float shG = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
+        float strong = saturate(0.35 + 1.3 * sunUp) * day;                 // sol alto y despejado: pinta mas; sol muy bajo: mas calido que saturado
+        float lit = shG * strong * clamp(PS4.x, 0.0, 2.0) * saturate((300.0 - zsk) / 120.0);
+        if (lit > 0.001) {
+          float3 c = r2.xyz;
+          float lum = dot(c, float3(0.2126, 0.7152, 0.0722));
+          float3 warm = lerp(float3(1.10, 1.16, 0.62), float3(1.20, 1.10, 0.55), 1.0 - sunUp);   // verde amarillo; con sol bajo mas dorado
+          c *= lerp(float3(1.0, 1.0, 1.0), warm, saturate(0.55 * lit));
+          float lum2 = dot(c, float3(0.2126, 0.7152, 0.0722));
+          c = max(lerp(lum2.xxx, c, 1.0 + 0.45 * clamp(PS4.y, 0.0, 2.0) * saturate(lit)), 0.0);
+          c *= (lum / max(lum2, 1e-5)) * (1.0 + 0.22 * saturate(lit));      // conserva el brillo y lo sube un poco: luz fuerte
+          r2.xyz = c;
+          float fwd = saturate(dot(Ld, Vsk)), side = saturate(1.0 - abs(dot(Ld, Vsk)));
+          float3 sunC = sc * g_psScene.m_exposure.zzz;
+          float glow = (0.55 * pow(fwd, 2.0) + 0.30 * side) * lerp(0.6, 1.4, saturate(trC)) * clamp(PS4.z, 0.0, 2.0);
+          r2.xyz += sunC * glow * lit * 0.10 * float3(0.80, 1.0, 0.30);
+        }
+      }
+    }
+  }
   // === PES21 (25/10 b) brillo del cesped al sol (x134 brillo, y134 apertura): cuticula cerosa de las hojas. Mirando hacia el
   // sol en angulo rasante la cancha se aclara y blanquea (TV por la tarde). Normal del G-buffer (hojas y base), Fresnel
   // rasante, sin brillo en la sombra. Solo con sol (luz calida), no con torres.
