@@ -172,7 +172,8 @@ struct Config {
     bool optReplace = true, optRules = true, optOverlay = true, optPin = false, optHooks = true, optDxgi = true, optPresent = true, optCtx = true, optExports = true, optOrphan = true, optDump = false;
     bool relWatch = true;   // (08/11 g) [PES21FX] vigia_estados: anillo de los Release que dejan un estado D3D11 en 0 (relwatch.cpp); 0 = no engancha
     bool coverOn = false; int coverDelay = 30;   // (08/11 h) [PES21FX] cobertura / cobertura_demora: medidor de que funciones del exe corren (cobertura.cpp)
-    bool rastroOn = false; int rastroMaxMb = 2000, rastroFps = 2;   // (08/11 i) [PES21FX] rastro / rastro_max_mb / rastro_fotos: registro de depuracion del juego + fotos del partido (rastro.cpp)
+    bool rastroOn = false; int rastroMaxMb = 2000, rastroFps = 2; bool rastroFalta = true;   // (08/11 j) rastro_faltas: vigia de escritura del registro de faltas (quien marca el offside)
+      // (08/11 i) [PES21FX] rastro / rastro_max_mb / rastro_fotos: registro de depuracion del juego + fotos del partido (rastro.cpp)
     int optHangSec = 20;   // (08/11 c) [PES21FX] congelado_seg: segundos sin cuadros = congelamiento -> volcado (main.cpp vigia); 0 apagado
     int optCrashDump = 1;   // (08/11) [PES21FX] crash_dump: 0 sin volcado, 1 minidump con datos, 2 memoria completa (main.cpp)
     int memFix = 1; bool memWatch = true;     // (26/10) [PES21FX] memoria_arreglo (0/1 = retener, 2 = liberar entero) / memoria_vigilar (memwatch.cpp)

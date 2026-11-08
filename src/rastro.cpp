@@ -28,8 +28,11 @@
 #include <cstring>
 #include <intrin.h>
 #include <string>
+#include <tlhelp32.h>
 
 namespace fx {
+
+std::string ModOff(void* p);
 
 namespace {
 const unsigned kStamp = 0x62787C6A;
@@ -46,7 +49,7 @@ using RelFn = void(*)(void*);
 LogFn o_log = nullptr; RelFn o_rel = nullptr;
 std::atomic<bool> s_on{false}, s_tried{false};
 std::atomic<uint64_t> s_bytes{0}; uint64_t s_cap = 2000ull << 20;
-std::atomic<unsigned> s_msgs{0}, s_drop{0}, s_snaps{0};
+std::atomic<unsigned> s_msgs{0}, s_drop{0}, s_snaps{0}, s_skip{0};
 std::atomic<int> s_tick{-1};
 SRWLOCK s_lk = SRWLOCK_INIT;
 FILE* s_log = nullptr; FILE* s_bin = nullptr; FILE* s_csv = nullptr;
@@ -85,6 +88,8 @@ void hk_log(void* self, const char* fmt, ...) {
     int n = Fmt(msg, sizeof msg, fmt, ap);
     va_end(ap);
     if (n < 0) { snprintf(msg, sizeof msg, "(no se pudo formatear) %.200s", fmt); n = (int)strlen(msg); }
+    // (08/11 j) el 87 % del primer rastro era "[GetMoveMode] (old)moveMode=ERROR" (dos por jugador y tick): se cuenta y no se escribe
+    if (n > 13 && memcmp(msg, "[GetMoveMode]", 13) == 0 && strstr(msg, "=ERROR")) { s_skip.fetch_add(1, std::memory_order_relaxed); return; }
     if (n >= (int)sizeof msg) n = (int)sizeof msg - 1;
     while (n > 0 && (msg[n - 1] == '\n' || msg[n - 1] == '\r')) msg[--n] = 0;
     for (int i = 0; i < n; i++) if (msg[i] == '\n' || msg[i] == '\r') msg[i] = ' ';
@@ -143,6 +148,9 @@ const Blk kBlks[] = {
     { "PlayerMove", 0x1dd8, 26, 0x0, 0x400 },
     { "DemoPlayerInfo", 0x21e8, 26, 0x0, 0x200 },
     { "PlayerInfo", 0x25f8, 22, 0x0, 0x800 },
+    // (08/11 j) el objeto ENTERO de cada jugador (AnimeInfo, PlayerMove, PlayerInfo y DemoPlayerInfo son vistas de el, paso 0x3F40
+    // entre jugadores): la estamina no estaba en las ventanas de arriba
+    { "JugadorEntero", 0x19c8, 22, 0x0, 0x3f40 },
 };
 
 uint32_t RecSize() {
@@ -195,6 +203,114 @@ void hk_rel(void* view) {
     o_rel(view);
 }
 
+// ---- (08/11 j) vigia del registro de faltas: quien escribe "offside". El registro de la ultima falta vive en match::MatchControl
+// (+0x2940, se copia cada tick a MatchInfo+0x1584): +0x2944 tipo (0 nada, 1 OFFSIDE, 2 contacto, 3 piscinazo, 4 mano), +0x294c
+// infractor; +0x2930 = motivo de la detencion (MatchInfo+0x1574, 5 = falta). En el exe no hay ninguna escritura directa a esos
+// campos (se escriben por un puntero, o desde codigo protegido), asi que se ponen puntos de parada de ESCRITURA por hardware
+// (DR0-DR2, en todos los hilos) y cada escritura que cambia el valor anota la instruccion que escribio y las direcciones de
+// retorno de la pila -> falta.log. Solo mira: no cambia nada. Se engancha MatchControl::vf19 (0x1404228d0, una vez por tick)
+// para saber donde esta el objeto.
+const uintptr_t kMcVf19 = 0x1404228d0ull;
+const unsigned char kMcSig[16] = { 0x48,0x8b,0xc4,0x48,0x89,0x50,0x10,0x55,0x53,0x56,0x57,0x41,0x56,0x48,0x8b,0xec };
+const uint32_t kWatchOff[3] = { 0x2944, 0x294c, 0x2930 };
+const char* const kWatchName[3] = { "tipo_falta(MI+0x1588)", "infractor(MI+0x1590)", "motivo_detencion(MI+0x1574)" };
+using Vf19Fn = void(*)(void*, void*);
+Vf19Fn o_vf19 = nullptr;
+std::atomic<uintptr_t> s_mc{0}, s_armedMc{0};
+struct FaltaHit { uint32_t ms; int tick; int slot; uint32_t val; uint32_t tid; uintptr_t rip; uintptr_t ret[12]; };
+const int kFaltaN = 4096;
+FaltaHit s_fh[kFaltaN];
+std::atomic<int> s_fhN{0}; int s_fhDone = 0;
+uint32_t s_fhLast[3] = { 0xffffffffu, 0xffffffffu, 0xffffffffu }; uintptr_t s_fhLastRip[3] = {};
+std::atomic<unsigned> s_fhAll{0};
+FILE* s_falta = nullptr;
+
+bool LooksLikeRet(uintptr_t v) {
+    if (v < 0x140001000ull || v >= kRdLo) return false;
+    unsigned char b[7] = {};
+    if (!Rd((const void*)(v - 7), b, 7)) return false;
+    return b[2] == 0xe8 /* call rel32 */ || (b[1] == 0xff && b[2] == 0x15) /* call [rip+x] */ || (b[4] == 0xff && (b[5] & 0x38) == 0x10) /* call reg/[reg+d8] */ ||
+           (b[5] == 0xff && (b[6] & 0x38) == 0x10) || (b[3] == 0xff && (b[4] & 0x38) == 0x10) || (b[0] == 0xff && (b[1] & 0x38) == 0x10);
+}
+
+LONG CALLBACK FaltaVeh(EXCEPTION_POINTERS* ep) {
+    if (ep->ExceptionRecord->ExceptionCode != EXCEPTION_SINGLE_STEP) return EXCEPTION_CONTINUE_SEARCH;
+    CONTEXT* cx = ep->ContextRecord;
+    const uintptr_t mc = s_armedMc.load(std::memory_order_relaxed);
+    if (!mc || !(cx->Dr6 & 7) || cx->Dr0 != mc + kWatchOff[0]) return EXCEPTION_CONTINUE_SEARCH;
+    const int slot = (cx->Dr6 & 1) ? 0 : (cx->Dr6 & 2) ? 1 : 2;
+    cx->Dr6 = 0;
+    s_fhAll.fetch_add(1, std::memory_order_relaxed);
+    uint32_t v = 0; Rd((const void*)(mc + kWatchOff[slot]), &v, 4);
+    if (v == s_fhLast[slot] && (uintptr_t)cx->Rip == s_fhLastRip[slot]) return EXCEPTION_CONTINUE_EXECUTION;   // misma escritura de siempre
+    s_fhLast[slot] = v; s_fhLastRip[slot] = (uintptr_t)cx->Rip;
+    const int i = s_fhN.fetch_add(1, std::memory_order_relaxed);
+    if (i < kFaltaN) {
+        FaltaHit& h = s_fh[i]; memset(&h, 0, sizeof h);
+        h.ms = (uint32_t)GetTickCount(); h.tick = s_tick.load(std::memory_order_relaxed); h.slot = slot; h.val = v; h.tid = GetCurrentThreadId(); h.rip = (uintptr_t)cx->Rip;
+        const uintptr_t* sp = (const uintptr_t*)cx->Rsp; int k = 0;
+        for (int j = 0; j < 512 && k < 12; j++) { uintptr_t r = 0; if (!Rd(sp + j, &r, 8)) break; if (LooksLikeRet(r)) h.ret[k++] = r; }
+    }
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+
+// pone los puntos de parada en todos los hilos del proceso menos este (corre en un hilo propio)
+DWORD WINAPI FaltaArm(void* arg) {
+    const uintptr_t mc = (uintptr_t)arg;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE) return 0;
+    THREADENTRY32 te{}; te.dwSize = sizeof te;
+    const DWORD me = GetCurrentThreadId(), pid = GetCurrentProcessId(); int done = 0, tot = 0;
+    for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
+        if (te.th32OwnerProcessID != pid || te.th32ThreadID == me) continue;
+        tot++;
+        HANDLE th = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, te.th32ThreadID);
+        if (!th) continue;
+        if (SuspendThread(th) != (DWORD)-1) {
+            CONTEXT c{}; c.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+            if (GetThreadContext(th, &c)) {
+                DWORD64 d7 = c.Dr7;
+                for (int s = 0; s < 3; s++) {
+                    d7 &= ~((DWORD64)3 << (2 * s)); d7 &= ~((DWORD64)0xF << (16 + 4 * s));
+                    d7 |= ((DWORD64)1 << (2 * s)) | ((DWORD64)1 << (16 + 4 * s)) | ((DWORD64)3 << (18 + 4 * s));   // local, escritura, 4 bytes
+                }
+                c.Dr0 = mc + kWatchOff[0]; c.Dr1 = mc + kWatchOff[1]; c.Dr2 = mc + kWatchOff[2]; c.Dr7 = d7;
+                if (SetThreadContext(th, &c)) done++;
+            }
+            ResumeThread(th);
+        }
+        CloseHandle(th);
+    }
+    CloseHandle(snap);
+    static int s_logs = 0;
+    if (s_logs++ < 6) Log("rastro: vigia de faltas en MatchControl %p: %d de %d hilos", (void*)mc, done, tot);
+    return 0;
+}
+
+void FaltaRequestArm(uintptr_t mc) {
+    s_armedMc.store(mc, std::memory_order_relaxed);
+    for (int s = 0; s < 3; s++) { s_fhLast[s] = 0xffffffffu; s_fhLastRip[s] = 0; }
+    if (HANDLE t = CreateThread(nullptr, 0, FaltaArm, (void*)mc, 0, nullptr)) CloseHandle(t);
+}
+
+void hk_vf19(void* self, void* a2) {
+    const uintptr_t me = (uintptr_t)self;
+    if (me && s_mc.load(std::memory_order_relaxed) != me && !(me & 3)) { s_mc.store(me, std::memory_order_relaxed); FaltaRequestArm(me); }
+    o_vf19(self, a2);
+}
+
+void FaltaFlush() {
+    if (!s_falta) return;
+    const int n = s_fhN.load() < kFaltaN ? s_fhN.load() : kFaltaN;
+    for (; s_fhDone < n; s_fhDone++) {
+        const FaltaHit& h = s_fh[s_fhDone];
+        fprintf(s_falta, "%u\t%d\t%s\t%u\t%u\t%s", h.ms, h.tick, kWatchName[h.slot], h.val, h.tid, ModOff((void*)h.rip).c_str());
+        for (int k = 0; k < 12 && h.ret[k]; k++) fprintf(s_falta, "%s%s", k ? " < " : "\t", ModOff((void*)h.ret[k]).c_str());
+        fputs("\n", s_falta);
+    }
+    fflush(s_falta);
+}
+
 bool SigAt(uintptr_t a, const unsigned char* s, size_t n) {
     unsigned char b[32] = {};
     return n <= sizeof b && Rd((const void*)a, b, n) && memcmp(b, s, n) == 0;
@@ -238,9 +354,17 @@ void RastroPresent() {
     bool logOk = false, relOk = false;
     if (SigAt(kLogStub, kLogSig, sizeof kLogSig) && MH_CreateHook((void*)kLogStub, (void*)&hk_log, (void**)&o_log) == MH_OK && MH_EnableHook((void*)kLogStub) == MH_OK) logOk = true;
     if (SigAt(kRegRelease, kRelSig, sizeof kRelSig) && MH_CreateHook((void*)kRegRelease, (void*)&hk_rel, (void**)&o_rel) == MH_OK && MH_EnableHook((void*)kRegRelease) == MH_OK) relOk = true;
+    bool mcOk = false;
+    if (g_cfg.rastroFalta && SigAt(kMcVf19, kMcSig, sizeof kMcSig)) {
+        s_falta = _wfopen((s_dir + L"falta.log").c_str(), L"wb");
+        if (s_falta) fputs("ms\ttick\tcampo\tvalor_nuevo\thilo\tinstruccion_que_escribe\tretornos (de adentro hacia afuera)\n", s_falta);
+        AddVectoredExceptionHandler(1, FaltaVeh);
+        mcOk = MH_CreateHook((void*)kMcVf19, (void*)&hk_vf19, (void**)&o_vf19) == MH_OK && MH_EnableHook((void*)kMcVf19) == MH_OK;
+    }
     s_on = logOk || relOk;
-    Log("rastro: registro de depuracion del juego %s, foto del partido %s -> PES21FX\\rastro\\%ls\\ (tope %llu MB)",
-        logOk ? "enganchado" : "NO (firma distinta)", relOk ? "enganchada" : "NO (firma distinta)", name, (unsigned long long)(s_cap >> 20));
+    Log("rastro: registro de depuracion del juego %s, foto del partido %s, vigia de faltas %s -> PES21FX\\rastro\\%ls\\ (tope %llu MB)",
+        logOk ? "enganchado" : "NO (firma distinta)", relOk ? "enganchada" : "NO (firma distinta)",
+        !g_cfg.rastroFalta ? "apagado" : mcOk ? "enganchado" : "NO (firma distinta)", name, (unsigned long long)(s_cap >> 20));
 }
 
 // resumen cada tanto (lo llama el medidor de 10 s) y vaciado al cerrar
@@ -248,11 +372,13 @@ void RastroFlush(bool final) {
     if (!s_on.load()) return;
     AcquireSRWLockExclusive(&s_lk);
     if (s_log) fflush(s_log); if (s_bin) fflush(s_bin); if (s_csv) fflush(s_csv);
+    FaltaFlush();
+    if (!final) { const uintptr_t mc = s_mc.load(); if (mc) { static ULONGLONG t = 0; ULONGLONG n = GetTickCount64(); if (n - t > 30000) { t = n; FaltaRequestArm(mc); } } }   // hilos nuevos
     ReleaseSRWLockExclusive(&s_lk);
     static unsigned lastMsgs = 0;
     const unsigned m = s_msgs.load();
-    if (final || m != lastMsgs) Log("rastro: %u mensajes del juego, %u fotos del partido, %.1f MB, %u descartados por el tope%s",
-        m, s_snaps.load(), s_bytes.load() / 1048576.0, s_drop.load(), final ? " (final)" : "");
+    if (final || m != lastMsgs) Log("rastro: %u mensajes del juego (%u GetMoveMode ERROR sin escribir), %u fotos del partido, %.1f MB, %u descartados por el tope, faltas: %u escrituras / %d distintas%s",
+        m, s_skip.load(), s_snaps.load(), s_bytes.load() / 1048576.0, s_drop.load(), s_fhAll.load(), s_fhN.load(), final ? " (final)" : "");
     lastMsgs = m;
 }
 
