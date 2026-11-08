@@ -145,8 +145,11 @@ float PesLegH(float3 p, float flex, float3 act, out float crease) {
     float sf = s + 0.0008 * sin(radians(th) * 7.0);
     float fr = pow(max(0.0, cos(6.2831853 * sf / 0.0035)), 5.0) * PesLrG((s - 0.035) / 0.014) * PesLrG(th / 35.0);
     float cf = 0.00015 * (1.0 - 0.85 * flex) * fr;                                           // adelante: piel floja estirada
-    crease = cb + cf;
-    return h - crease;
+    // (08/11 j) en los bordes de la malla (tobillo con la media / el botin, arriba con el short) se apaga: un surco cortado en seco se ve
+    // como costura
+    float fE = smoothstep(-0.201, -0.166, s) * (1.0 - smoothstep(0.259, 0.294, s));
+    crease = (cb + cf) * fE;
+    return (h - cb - cf) * fE;
 }
 
 // (08/11) cuanto del musculo TENSO hay en este punto (0..1): la piel sobre el musculo que trabaja queda tirante: algo mas de brillo,
