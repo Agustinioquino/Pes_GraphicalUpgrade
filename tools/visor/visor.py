@@ -14,7 +14,8 @@
 import os, sys, io, json, struct, base64, hashlib, argparse, threading, time, mimetypes, urllib.parse, math
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+FROZEN = getattr(sys, 'frozen', False)   # PES21FX_Visor.exe (PyInstaller, CI): static\ y los modulos de tools\ van dentro del exe
+HERE = sys._MEIPASS if FROZEN else os.path.dirname(os.path.abspath(__file__))
 TOOLS = os.path.dirname(HERE)
 sys.path.insert(0, TOOLS); sys.path.insert(0, os.path.join(TOOLS, 'fox'))
 import cpk_extract, ftex as ftexmod, fpk_edit, foxhash, gani_cara
@@ -364,6 +365,9 @@ def main():
     ap.add_argument('--sin-ventana', action='store_true', help='solo el servidor (abrir la pagina en el navegador)')
     ARGS = ap.parse_args()
     os.makedirs(os.path.join(ARGS.trabajo, 'cache'), exist_ok=True)
+    if FROZEN:   # el exe no tiene consola: lo que imprime va a <trabajo>\visor.log
+        sys.stdout = sys.stderr = open(os.path.join(ARGS.trabajo, 'visor.log'), 'a', buffering=1, encoding='utf-8', errors='replace')
+        print('--- visor.exe', time.strftime('%Y-%m-%d %H:%M:%S'), sys.argv[1:])
     ROOTS = [norm(ARGS.juego), norm(ARGS.trabajo), norm(os.path.dirname(TOOLS))] + [norm(r) for r in ARGS.raiz]
     srv = ThreadingHTTPServer(('127.0.0.1', ARGS.puerto), H)
     url = 'http://127.0.0.1:%d/' % ARGS.puerto
