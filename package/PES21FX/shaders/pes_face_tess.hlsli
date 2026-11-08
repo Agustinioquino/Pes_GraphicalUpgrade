@@ -546,9 +546,11 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
       // teselada por la normal, tope 1.5 mm, w376 x la definicion general x172. Bordes de la pieza quietos (seam), se apaga con la distancia.
     float rW = IniParams.Load(int2(376, 0)).w;
     float c0z = p[0].o1.z;
-    if (rW > 0.001 && T.x > 0.5 && IniParams.Load(int2(305, 0)).x > 0.5 && ((c0z > 6.5 && c0z < 7.5) || (bGeo && bPart > 0))) {
-      // (08/11 q) sin codigo: brazo q 0, mano abierta q 516, pierna q 528 (tension por defecto 0.3: o1.y fuera de rango)
-      float q = bGeo ? (bPart == 1 ? 516.0 : (bPart == 3 ? 528.0 : 0.0)) : round((c0z - 7.0) * 1200.0);
+    // (08/11 r, Agustin con 08099d3: "la teselacion deforma las uniones con las manos, asi como con las piernas") el relieve anatomico
+    // (y su base) esta medido sobre TorsoBody: sus rampas de borde (muneca, hombro, tobillo) no caen donde terminan las mallas propias
+    // del jugador y la piel subia hasta el borde de la pieza. En las mallas propias solo hay teselacion y redondeo (sin relieve).
+    if (rW > 0.001 && T.x > 0.5 && IniParams.Load(int2(305, 0)).x > 0.5 && c0z > 6.5 && c0z < 7.5) {
+      float q = round((c0z - 7.0) * 1200.0);
       float3 r0 = PES_LERP3(pR).xyz; float3 pm = float3(abs(r0.x), r0.y, r0.z);
       float hh = 0.0, crz = 0.0;
       // (08/11 l, captura de Agustin con la vista de prueba: brazo y mano casi sin amarillo) los surcos (entre musculos del brazo
