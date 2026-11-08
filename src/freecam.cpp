@@ -57,6 +57,7 @@ static std::atomic<int> s_headFrames{0};
 // (02/11) la captura de b6 (expr.cpp ExprCaptureHead) ya no se usa: daba la cabeza casi en cero
 bool FreeCamWantsHead() { return false; }
 static float s_pos[3] = {}, s_yaw = 0, s_pitch = 0;
+static void PoseApplyPending();
 static double s_t = 0;
 static POINT s_mouse{}; static bool s_mouseWas = false;
 static std::atomic<int> s_applies{0}, s_editorCalls{0}, s_editorApplied{0};
@@ -98,6 +99,7 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
         s_logged = 0;
     }
     if (strcmp(origen, s_origen) != 0) { s_origen = origen; }
+    PoseApplyPending();   // (08/11) pose pedida por el panel en vivo
     // --- entrada (tiempo real) ---
     double t = Now(); float dt = (float)std::clamp(t - s_t, 0.0, 0.1); s_t = t;
     const bool front = GameInFront();
@@ -324,6 +326,24 @@ void FreeCamPresent() {
     const int c = s_editorCalls.load() - s_c0, a = s_editorApplied.load() - s_a0;
     if (c > 0 || a > 0) Log("camara libre (30 s): camara del visor del editor %d veces (%d con la camara libre), %s", c, a, FreeCamActive() ? "prendida" : "apagada");
     s_t0 = t; s_c0 = s_editorCalls.load(); s_a0 = s_editorApplied.load();
+}
+
+// (08/11) panel en vivo (panel.cpp): poner / leer la pose de la camara libre desde la pagina. Se prende la camara libre si no
+// lo estaba (x344 = 2: el juego sigue viendo el teclado) y se sale del modo seguir la cara.
+static std::mutex s_poseMx; static bool s_poseWant = false; static float s_posePos[3]; static float s_poseYaw = 0, s_posePitch = 0;
+void FreeCamSetPose(const float* pos, float yaw, float pitch) {
+    std::lock_guard<std::mutex> lk(s_poseMx);
+    memcpy(s_posePos, pos, 12); s_poseYaw = yaw; s_posePitch = pitch; s_poseWant = true;
+    if (!FreeCamActive()) g_cfg.live[344][0] = 2.0f;
+}
+bool FreeCamGetPose(float* pos, float* yaw, float* pitch) { memcpy(pos, s_pos, 12); *yaw = s_yaw; *pitch = s_pitch; return s_on; }
+// se llama desde Update (hilo de render) despues de TakeFromGame al prender
+static void PoseApplyPending() {
+    std::lock_guard<std::mutex> lk(s_poseMx);
+    if (!s_poseWant) return;
+    s_poseWant = false; memcpy(s_pos, s_posePos, 12); s_yaw = s_poseYaw; s_pitch = std::clamp(s_posePitch, -1.55f, 1.55f);
+    if (s_follow) { s_follow = false; s_lockNode = nullptr; s_headSeen = false; }
+    Log("camara libre: pose puesta desde el panel (%.2f, %.2f, %.2f) giro %.0f / %.0f", s_pos[0], s_pos[1], s_pos[2], s_yaw * 57.2958f, s_pitch * 57.2958f);
 }
 
 } // namespace fx

@@ -427,6 +427,7 @@ static int InitMod() {
     if (!fx::g_cfg.optHooks) { fx::Log("hooks = 0: el mod queda cargado pero sin ganchos (prueba)"); return 2; }
     if (!fx::InstallHooks()) { fx::Log("ERROR: no se pudieron instalar los ganchos de D3D11"); return 0; }
     fx::Log("ganchos instalados");
+    fx::PanelStart(fx::g_cfg.panelPort);   // (08/11) panel en vivo: HTTP en 127.0.0.1 (panel.cpp)
     fx::MemWatchStart();   // (26/10) liberador de memoria del juego + VirtualProtect/VirtualFree (memwatch.cpp)
     if (fx::DiagOn(2)) fx::CodeWatchStart();
     else fx::Log("codigo: vigilancia del codigo del juego apagada (z173 = 0)");

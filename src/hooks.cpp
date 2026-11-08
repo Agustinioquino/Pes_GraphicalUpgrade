@@ -2068,6 +2068,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     AsyncShotPresent();
     { GpuZoneScope gz_(g_dev.imm, kGzRing); RingPresent(sc); }       // (24/10 e) aro del musculo sobre la imagen final (antes de las capturas y del menu)
     AutoCapturePresent(s_frameTex);
+    PanelPresent(s_frameTex);   // (08/11) panel en vivo: recargas pedidas por HTTP y capturas (panel.cpp)
     FisicoCapturePresent(s_frameTex);   // (26/10 c) paginas del menu Fisico
     MenuTestPresent(sc);
     { GpuZoneScope gz_(g_dev.imm, kGzOverlay); OverlayPresent(sc); }

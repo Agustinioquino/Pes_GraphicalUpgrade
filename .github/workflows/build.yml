@@ -82,6 +82,23 @@ jobs:
           git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" $dest
           exit 1
 
+      # (08/11) PesExplorerNEM.exe: la app de escritorio del entorno visual (tools/visor) empaquetada con PyInstaller
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Armar el visor (exe)
+        id: visor
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          python -m pip install --quiet pyinstaller numpy pillow pywebview
+          python -m PyInstaller --noconfirm --onefile --windowed --name PesExplorerNEM --icon ../tools/visor/nem.ico --distpath distvisor --workpath buildvisor --specpath buildvisor `
+            --paths tools --paths tools/fox --add-data "../tools/visor/static;static" `
+            --hidden-import cpk_extract --hidden-import ftex --hidden-import fpk_edit --hidden-import foxhash --hidden-import gani_cara --hidden-import fmdl `
+            --collect-all webview tools/visor/visor.py
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Get-Item distvisor/PesExplorerNEM.exe | Select-Object Name, Length
+
       - name: Armar el paquete
         shell: pwsh
         run: |
@@ -93,6 +110,7 @@ jobs:
           Copy-Item package/LEEME.txt dist/
           Copy-Item -Recurse package/sider dist/sider
           if (Test-Path shadercheck.txt) { Copy-Item shadercheck.txt dist/ }
+          if (Test-Path distvisor/PesExplorerNEM.exe) { New-Item -ItemType Directory -Force -Path dist/visor | Out-Null; Copy-Item distvisor/PesExplorerNEM.exe dist/visor/; Copy-Item tools/visor/LEEME.txt dist/visor/ }   # (08/11) app del entorno visual
           if (Test-Path shaderasm) { Copy-Item -Recurse shaderasm dist/shaderasm }   # desensamblado de cada reemplazo (firmas y codigo, para comparar con el original)
 
       - uses: actions/upload-artifact@v4
