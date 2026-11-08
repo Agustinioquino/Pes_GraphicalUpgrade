@@ -2100,6 +2100,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     ExePatchPresent();
     GrassDistPresent();
     { GpuZoneScope gz_(g_dev.imm, kGzPitchWear); PitchWearPresent(); }
+    PublicoPresent();   // (08/11) gestos del publico: sube el buffer que calcula el hilo de la CPU (fila 394)
     { GpuZoneScope gz_(g_dev.imm, kGzGrass); GrassPresent(); }
     { GpuZoneScope gz_(g_dev.imm, kGzFaceGen); FaceGenPresent(); }
     { GpuZoneScope gz_(g_dev.imm, kGzCarasHd); CarasHdPresent(); }
