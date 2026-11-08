@@ -55,6 +55,12 @@ struct FaceMesh {
     ID3D11Buffer* cbTess = nullptr;   // (08/11) cbuffer neutro (sin expresiones) para teselar con x340 = 0
     bool body = false;   // (04/11 g) piel del cuerpo (VS 1c02a92a): solo pesos de borde para la teselacion, sin nada de cara
     UINT cbv[kCbU] = {}; std::vector<float> xferPs; uint64_t xferIb = 0; int xferUsed = 0; bool xferGate = false; ID3D11Buffer* cbNoShape = nullptr; ID3D11Buffer* cbTeeth = nullptr;
+    // (08/11, Agustin: "con esto puedes mejorar las arrugas tambien") PESOS DE ARRUGAS DEL JUEGO suavizados: cada cuadro se copia el
+    // cbuffer de material del PS de esta piel (b4, m_materials[0].y / [3] / [4] = pesos por zona que manda el motor segun la pose), en el
+    // Present se lee la copia lista (1-3 cuadros atras) y se la sigue con el mismo resorte que los huesos (fila 397.x); el resultado va al
+    // PS en b12 (PESWrSmooth) y el shader lo mezcla por z397. Asi las arrugas no saltan a 30 cuadros cuando la cara ya va suave
+    ID3D11Buffer* wrSt[3] = {}; int wrStFrame[3] = { -1, -1, -1 }; int wrStI = 0; UINT wrCapFrame = 0; int wrReadFrame = -1;
+    float wrW[9] = {}, wrV[9] = {}; bool wrHave = false; double wrT = 0; ID3D11Buffer* wrCb = nullptr;
     bool beard = false, beardSrc = false; int geoId = 0, teethHits = 0; bool teethOn = false; ID3D11Buffer* idBuf = nullptr; std::vector<float> beardPs; int beardTries = 0; UINT seqAt = 0; std::vector<int> beardUsed; int beardRebinds = 0; bool beardOjo = false;   // (04/11 e) seqAt: orden del ultimo dibujo (barba: para elegir la piel dibujada junto a ella)   // (04/11 c) barba: malla del pelo enlazada a la piel / piel que le pasa su paleta   // (04/11 c) lo que lleva el cbuffer y, si espera formas pasadas de la piel, sus vertices
 };
 std::mutex s_mx;
@@ -171,6 +177,7 @@ std::atomic<UINT> s_dumpUntil{0};
 void FreeMesh(FaceMesh* m) {   // (04/11 b) todo lo de una malla que sale de la tabla
     ReleaseIA(m); if (m->cb) m->cb->Release(); if (m->cbTess) m->cbTess->Release();
     if (m->seamSrv) m->seamSrv->Release(); if (m->seamBuf) m->seamBuf->Release();
+    for (auto* b : m->wrSt) if (b) b->Release(); if (m->wrCb) m->wrCb->Release();   // (08/11) pesos de arrugas
     if (m->cbNoShape) m->cbNoShape->Release(); if (m->cbTeeth) m->cbTeeth->Release(); if (m->idBuf) m->idBuf->Release();   // (04/11 c) cbuffers sin formas / de los dientes y id de la barba
     delete m;
 }
@@ -1005,7 +1012,7 @@ bool BeardForDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, ID3D
     *cb = b; *pool = s_poolSrv; *bind = s_beardSrv;
     return s_poolSrv && s_beardSrv;
 }
-ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, const float** headCentroid, int* headIdx, ID3D11ShaderResourceView** shapeSrv, ID3D11ShaderResourceView** shapeWr, ID3D11ShaderResourceView** tessSeam, bool body) {
+ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, const float** headCentroid, int* headIdx, ID3D11ShaderResourceView** shapeSrv, ID3D11ShaderResourceView** shapeWr, ID3D11ShaderResourceView** tessSeam, bool body, ID3D11Buffer** wrCb, bool skinPs) {
     if (headCentroid) *headCentroid = nullptr;
     if (tessSeam) *tessSeam = nullptr;
     if (shapeSrv) *shapeSrv = nullptr;
@@ -1078,6 +1085,7 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
             if (tessSeam && m->seamSrv) *tessSeam = m->seamSrv;   // (04/11 b) piel de la cara: se puede teselar
             if (m->head <= 31 && (m->lids[0] >= 0 || m->lids[1] >= 0) && s_frame - m->lidCap >= 120) { m->lidCap = s_frame; LidCapture(c, m); }
             if (m->head <= 31 && !m->slotsOk && m->slotTries < 40 && g_cfg.optExprPalette && s_frame - m->slotCap >= 45) { m->slotCap = s_frame; m->slotTries++; SlotCapture(c, m); }   // (08/11)
+            if (wrCb && skinPs && m->head <= 31 && m->nv >= 300 && g_cfg.live[397][2] > 0.0f) { WrinkleCapture(c, m); if (m->wrHave && m->wrCb) *wrCb = m->wrCb; }   // (08/11) pesos de arrugas suavizados
             if (headCentroid && m->hcOk && m->nv >= 300) { *headCentroid = m->hc; if (headIdx) *headIdx = m->head; } return m->cb; }
         if (m->state == 4) s_bindsDisc++; else s_bindsWait++;
         s_bindsNone++; return s_none;
@@ -1151,6 +1159,60 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
 namespace {
 struct LidCap { ID3D11Buffer* st = nullptr; int id = 0, nv = 0, head = 0, lids[4] = {}; UINT frame = 0; int tries = 0; };
 std::mutex s_lmx; std::vector<LidCap> s_lcaps; int s_lidLogs = 0; double s_lidLogT = 0;
+}
+// ---- (08/11) pesos de arrugas del juego suavizados (ver FaceMesh::wrSt) ----
+static void WrinkleCapture(ID3D11DeviceContext* c, FaceMesh* m) {   // con s_mx tomado; en el dibujo de la piel (PS 5ce3 / ce188)
+    if (m->wrCapFrame == s_frame) return; m->wrCapFrame = s_frame;
+    ID3D11DeviceContext1* c1 = nullptr;
+    if (FAILED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) || !c1) return;
+    ID3D11Buffer* b = nullptr; UINT first = 0, num = 0;
+    c1->PSGetConstantBuffers1(4, 1, &b, &first, &num); c1->Release();
+    if (!b) return;
+    D3D11_BUFFER_DESC d; b->GetDesc(&d);
+    const UINT a = first * 16, len = 8 * 16;   // m_materials[8]
+    if (a + len <= d.ByteWidth) {
+        const int j = m->wrStI % 3;
+        if (!m->wrSt[j]) m->wrSt[j] = Staging(len);
+        if (m->wrSt[j]) { D3D11_BOX bx = { a, 0, 0, a + len, 1, 1 }; c->CopySubresourceRegion(m->wrSt[j], 0, 0, 0, 0, b, 0, &bx); m->wrStFrame[j] = (int)s_frame; m->wrStI++; }
+    }
+    b->Release();
+}
+static int s_wrLogs = 0; static double s_wrLogT = 0;
+static void WrinklePresent(ID3D11DeviceContext* imm) {   // con s_mx tomado (Present)
+    const bool on = g_cfg.live[397][2] > 0.0f;
+    const float x = g_cfg.live[397][0]; const float tau = x > 0.0f ? 0.10f * x : 0.05f;   // mismo tiempo que los huesos (397.x); sin suavizado de huesos, 50 ms
+    const double now = Now(); int nUp = 0;
+    for (auto& kv : s_meshes) {
+        FaceMesh* m = kv.second;
+        if (m->wrStI == 0) continue;
+        if (!on || s_frame - m->lastFrame > 120) { if (m->wrHave && s_frame - m->lastFrame > 600) m->wrHave = false; continue; }
+        // la copia mas nueva que ya este lista y sea posterior a la leida
+        float f[32]; bool got = false;
+        for (int k = 1; k <= 3 && !got; k++) {
+            const int j = (m->wrStI - k + 3 * 1024) % 3;
+            if (!m->wrSt[j] || m->wrStFrame[j] < 0 || m->wrStFrame[j] <= m->wrReadFrame) break;
+            D3D11_MAPPED_SUBRESOURCE mp;
+            if (SUCCEEDED(imm->Map(m->wrSt[j], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mp))) { memcpy(f, mp.pData, sizeof f); imm->Unmap(m->wrSt[j], 0); m->wrReadFrame = m->wrStFrame[j]; got = true; }
+        }
+        if (!got) continue;
+        const float tgt[9] = { f[1], f[12], f[13], f[14], f[15], f[16], f[17], f[18], f[19] };   // [0].y, [3].xyzw, [4].xyzw
+        bool bad = false; for (float v : tgt) if (!(v == v) || fabsf(v) > 64.0f) bad = true;
+        if (bad) continue;
+        float dt = (float)(now - m->wrT); m->wrT = now;
+        if (!m->wrHave || dt > 1.0f || dt <= 0.0f) { memcpy(m->wrW, tgt, sizeof tgt); memset(m->wrV, 0, sizeof m->wrV); m->wrHave = true; }
+        else {
+            if (dt > 1.0f / 15.0f) dt = 1.0f / 15.0f;
+            // resorte criticamente amortiguado (SmoothDamp), igual que Damp() de exprbones.cpp
+            const float om = 2.0f / (tau > 0.001f ? tau : 0.001f), xx = om * dt, e = 1.0f / (1.0f + xx + 0.48f * xx * xx + 0.235f * xx * xx * xx);
+            for (int i = 0; i < 9; i++) { const float ch = m->wrW[i] - tgt[i], tmp = (m->wrV[i] + om * ch) * dt; m->wrV[i] = (m->wrV[i] - om * tmp) * e; m->wrW[i] = tgt[i] + (ch + tmp) * e; }
+        }
+        if (!m->wrCb) { D3D11_BUFFER_DESC d{}; d.ByteWidth = 48; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER; if (FAILED(g_dev.dev->CreateBuffer(&d, nullptr, &m->wrCb))) { m->wrCb = nullptr; continue; } }
+        const float up[12] = { m->wrW[0], 1.0f, tau, 0.0f, m->wrW[1], m->wrW[2], m->wrW[3], m->wrW[4], m->wrW[5], m->wrW[6], m->wrW[7], m->wrW[8] };
+        imm->UpdateSubresource(m->wrCb, 0, nullptr, up, 0, 0); nUp++;
+        if (s_wrLogs < 6 && now - s_wrLogT > 10.0) { s_wrLogT = now; s_wrLogs++;
+            Log("arrugas: malla %d pesos del juego (0.y %.2f | 3 %.2f %.2f %.2f %.2f | 4 %.2f %.2f %.2f %.2f) suavizados tau %.3f s", m->id, tgt[0], tgt[1], tgt[2], tgt[3], tgt[4], tgt[5], tgt[6], tgt[7], tgt[8], tau); }
+    }
+    (void)nUp;
 }
 static void LidCapture(ID3D11DeviceContext* c, FaceMesh* m) {   // con s_mx tomado
     if (s_lidLogs >= 400) return;
@@ -1456,6 +1518,7 @@ void ExprPresent() {
     {   // con el candado tomado: los dibujos (otros hilos) leen state / cb y pueden vaciar la tabla. Los Map son DO_NOT_WAIT.
         std::lock_guard<std::mutex> lk(s_mx);
         s_frame++;
+        WrinklePresent(imm);   // (08/11) pesos de arrugas del juego suavizados
         RetiredPresent();   // (04/11 i)
         {   // (04/11) volcado de las mallas de la cara: w354 sube de 0 a 1 -> se vacia la tabla y las que se vuelvan a dibujar en ~10 s se vuelcan
             static bool was = false; const bool now = g_cfg.live[354][3] > 0.5f;

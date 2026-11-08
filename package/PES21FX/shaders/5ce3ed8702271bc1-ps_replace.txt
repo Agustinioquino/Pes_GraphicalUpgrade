@@ -119,6 +119,14 @@ cbuffer PESHair : register(b11)
   float4 pesHairBrow;   // ceja: grosor, densidad, elevacion, largo (multiplicadores)
   float4 pesHairMisc;   // x = 1 enlazado, y = 1 mapa de pelo propio del usuario
 }
+// (08/11, Agustin: "con esto puedes mejorar las arrugas tambien") pesos de arrugas del JUEGO (b4 m_materials[0].y / [3] / [4]) suavizados por la
+// DLL (expr.cpp WrinklePresent: lee el b4 de esta piel cada cuadro y lo sigue con el mismo resorte que los huesos, fila 397.x); sin DLL todo es 0.
+cbuffer PESWrSmooth : register(b12)
+{
+  float4 pesWrS0;   // x = m_materials[0].y suavizado, y = 1 si hay dato, z = tau (s)
+  float4 pesWrS3;   // m_materials[3] suavizado (frente, sienes, entrecejo, ojos)
+  float4 pesWrS4;   // m_materials[4] suavizado (boca der, mandibula der / izq, cuello)
+}
 Texture2D<float4> pesZones    : register(t25);   // PES21 (18/10) zonas de la cara: R sudor, G labios, B cuello, A piel (textures\pes_face_zones.dds)
 
 // 3Dmigoto declarations
@@ -317,6 +325,9 @@ void main(
   //   mitad inferior: boca (lado izq/der), mandibula der/izq, cuello -> r1.x, m_materials[4].yzw
   float4 wTop = g_psMaterial.m_materials[3].xyzw;
   float4 wBot = float4(r1.x, g_psMaterial.m_materials[4].yzw);
+  // (08/11) z397 = cuanto siguen las arrugas los pesos suavizados por la DLL (1 = del todo): el juego los cambia a 30 cuadros y de golpe
+  { float pesWrK = saturate(IniParams.Load(int2(397, 0)).z) * (pesWrS0.y > 0.5 ? 1.0 : 0.0);
+    if (pesWrK > 0.0) { wTop = lerp(wTop, pesWrS3, pesWrK); wBot = lerp(wBot, float4(v2.x < 0.5 ? pesWrS0.x : pesWrS4.x, pesWrS4.yzw), pesWrK); } }
   if (wrOn) {
     // sonrisa real: boca y ojos activos a la vez -> mas patas de gallo
     float smile = sqrt(saturate(max(g_psMaterial.m_materials[0].y, g_psMaterial.m_materials[4].x)) * saturate(wTop.w));

@@ -1206,7 +1206,9 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
             // solo DrawIndexed (con otro tipo de dibujo count 0 -> cbuffer "sin dato")
             const float* hc = nullptr; int hd = -1;
             ID3D11ShaderResourceView* shp = nullptr; ID3D11ShaderResourceView* shw = nullptr; ID3D11ShaderResourceView* seam = nullptr;
-            if (ID3D11Buffer* b = ExprBufferForDraw(c, t_drawKind == 1 ? t_drawVerts : 0, t_drawStart, t_drawBase, &hc, &hd, &shp, &shw, &seam)) { Remember(c, d, false, false, a.slot); c->VSSetConstantBuffers(a.slot, 1, &b); }
+            ID3D11Buffer* wrb = nullptr; const ShaderEntry* fp0 = Ctx(c).ps; const bool skinPs0 = fp0 && fp0->repl && (fp0->hash == 0x5ce3ed8702271bc1ULL || fp0->hash == 0xce188ae110354aeaULL);
+            if (ID3D11Buffer* b = ExprBufferForDraw(c, t_drawKind == 1 ? t_drawVerts : 0, t_drawStart, t_drawBase, &hc, &hd, &shp, &shw, &seam, false, &wrb, skinPs0)) { Remember(c, d, false, false, a.slot); c->VSSetConstantBuffers(a.slot, 1, &b); }
+            if (wrb) { Remember(c, d, true, false, 12); c->PSSetConstantBuffers(12, 1, &wrb); }   // (08/11) pesos de arrugas del juego suavizados (PS b12 PESWrSmooth)
             if (shp) { Remember(c, d, false, true, 118); c->VSSetShaderResources(118, 1, &shp); }   // (04/11) gestos esculpidos de esta malla
             if (ID3D11ShaderResourceView* bd = ExprBoneDeltaSrv()) { Remember(c, d, false, true, 115); c->VSSetShaderResources(115, 1, &bd); }   // (08/11) gestos en la paleta (t115)
             if (shw) { Remember(c, d, true, true, 31); c->PSSetShaderResources(31, 1, &shw); }      // (04/11) arrugas esculpidas de la sonrisa (PS de la cara)
