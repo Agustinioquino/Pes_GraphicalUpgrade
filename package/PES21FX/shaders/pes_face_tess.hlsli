@@ -63,6 +63,22 @@ float4 PesFingerOpt()
   if (dot(abs(v), float4(1, 1, 1, 1)) < 1e-4) return float4(1.0, 1.0, 0.0, 1.0);
   return float4(clamp(v.x, 0.0, 4.0), clamp(v.y, 0.0, 3.0), saturate(v.z), clamp(v.w, 0.0, 3.0));
 }
+// (08/11 q, Agustin: "el modelo contiene un arm fmdl custom asi como unas piernas ... verifica el metodo de aplicar teselacion") el
+// codigo del miembro (o1.z) solo existe en las mallas de TorsoBody que la DLL reconoce por su cantidad de indices (manos.cpp kLimbs,
+// x302): un brazo / piernas propios de un jugador (Messi: arm.fmdl, thigh_middle, socks del Dream Patch por el hook del global model)
+// no lo tienen y quedaban en la parte 0: sin densidad por parte, sin el partido fino de ~1.8 mm y sin relieve (solo un Phong de
+// 1.5 mm, invisible). Sin codigo, la parte sale de la POSICION DE REPOSO de cada punto (mismo esqueleto en pose A que TorsoBody):
+// mano = mas alla de la muneca por el eje de la mano, pierna = debajo de la cadera, brazo = afuera del hombro; torso / cuello = 0.
+// En el HS cada arista decide con sus dos extremos y en el DS con la posicion interpolada: igual a los dos lados, sin grietas.
+bool PesHasLimbCode(float c0z) { return c0z > 6.5 && c0z < 7.5; }
+int PesBodyPartGeo(float3 r)
+{
+  float3 pm = float3(abs(r.x), r.y, r.z);
+  if (pm.x > 0.45 && dot(pm - PLR_W, PLR_A) > -0.004) return 1;
+  if (pm.y < 0.88) return 3;
+  if (pm.x > 0.21 && pm.y > 0.95) return 2;
+  return 0;
+}
 // 1 en los dedos (desde los nudillos, ~10 cm de la muneca por el eje de la mano; el pulgar por el costado), 0 en el dorso / palma
 float PesFingerK(float3 r)
 {
@@ -186,7 +202,10 @@ PesTessConst PesTessPatch(InputPatch<PesTessVS, 3> p)
 #if PES_TESS_BODY
   int bPart = PesBodyPart(p[0].o1.z);
   float4 bOpt = PesBodyPartOpt(bPart);
-  if (bOpt.x < 0.5) ok = false;   // (08/11 n) esta parte apagada (417 / 419 / 420 .x = 0)
+  const bool bGeo = !PesHasLimbCode(p[0].o1.z);   // (08/11 q) malla propia del jugador: parte por punto
+  int3 gP = int3(PesBodyPartGeo(p[0].pR.xyz), PesBodyPartGeo(p[1].pR.xyz), PesBodyPartGeo(p[2].pR.xyz));
+  float4 gO0 = PesBodyPartOpt(gP.x), gO1 = PesBodyPartOpt(gP.y), gO2 = PesBodyPartOpt(gP.z);
+  if (!bGeo && bOpt.x < 0.5) ok = false;   // (08/11 n) esta parte apagada (417 / 419 / 420 .x = 0)
 #endif
   // (04/11 f) los tres puntos por debajo del collar del torso (reposo y < 1.53): nada que dividir (el DS apaga todo ahi)
 #if !PES_TESS_BODY
@@ -220,12 +239,17 @@ PesTessConst PesTessPatch(InputPatch<PesTessVS, 3> p)
     {
       float rW = IniParams.Load(int2(376, 0)).w;
       float c0z = p[0].o1.z;
-      if (rW > 0.001 && IniParams.Load(int2(305, 0)).x > 0.5 && c0z > 6.5 && c0z < 7.5 && round((c0z - 7.0) * 1200.0) < 599.5) {
+      const bool geoLimb = bGeo && (gP.x + gP.y + gP.z) > 0;
+      if (rW > 0.001 && IniParams.Load(int2(305, 0)).x > 0.5 && ((c0z > 6.5 && c0z < 7.5 && round((c0z - 7.0) * 1200.0) < 599.5) || geoLimb)) {
         // (08/11 i, Agustin: "la teselacion de cuerpo no funciona ... hace rato") antes solo a menos de 1.2..2.2 m de la camara: en el
         // editor (camara a 2.5-4 m) y en los primeros planos del partido casi nunca entraba (log: x1.0). Ahora por PANTALLA: cada arista
         // se parte hasta ~1.8 mm en el mundo o hasta 1.5 px en pantalla (lo que de menos partes); queda la distancia maxima z364
         // (corregida por el zoom). Por arista con sus dos extremos (largo en el mundo y en pantalla): sin grietas.
         float3 nk = 1.0;
+        if (bGeo) {   // (08/11 q) por arista: alguno de sus dos extremos en mano / brazo / pierna con esa parte prendida
+          float3 gk = float3(gP.x > 0 && gO0.x > 0.5, gP.y > 0 && gO1.x > 0.5, gP.z > 0 && gO2.x > 0.5);
+          nk = float3(max(gk.y, gk.z), max(gk.z, gk.x), max(gk.x, gk.y));
+        }
         float3 lw = float3(length(p[1].pV.xyz - p[2].pV.xyz), length(p[2].pV.xyz - p[0].pV.xyz), length(p[0].pV.xyz - p[1].pV.xyz));
         float3 ls = float3(length(s1 - s2), length(s2 - s0), length(s0 - s1));
         float3 fr = clamp(min(lw / 0.0018, ls / 1.5), 1.0, fmax);
@@ -240,6 +264,12 @@ PesTessConst PesTessPatch(InputPatch<PesTessVS, 3> p)
         float fx = PesFingerOpt().x;
         float3 fk = float3(PesFingerK(p[0].pR.xyz), PesFingerK(p[1].pR.xyz), PesFingerK(p[2].pR.xyz));
         dm *= lerp(float3(1.0, 1.0, 1.0), float3(fx, fx, fx), float3(max(fk.y, fk.z), max(fk.z, fk.x), max(fk.x, fk.y)));
+      }
+      if (bGeo) {   // (08/11 q) densidad por punto (parte apagada = 0) y por arista el mayor de sus dos extremos (0 en los dos = 1, entera)
+        float fx = PesFingerOpt().x;
+        float3 dv = float3(gO0.x > 0.5 ? gO0.y : 0.0, gO1.x > 0.5 ? gO1.y : 0.0, gO2.x > 0.5 ? gO2.y : 0.0);
+        dv *= lerp(float3(1.0, 1.0, 1.0), float3(fx, fx, fx), float3(gP.x == 1 ? PesFingerK(p[0].pR.xyz) : 0.0, gP.y == 1 ? PesFingerK(p[1].pR.xyz) : 0.0, gP.z == 1 ? PesFingerK(p[2].pR.xyz) : 0.0));
+        dm = float3(max(dv.y, dv.z), max(dv.z, dv.x), max(dv.x, dv.y));
       }
       f[0] = clamp(f[0] * dm.x, 1.0, 16.0);
       f[1] = clamp(f[1] * dm.y, 1.0, 16.0);
@@ -460,7 +490,10 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
   // se ve como un pliegue. El PN sigue para la cara.
   // (08/11 n) opciones por parte: en los dedos la forma puede pasar a la curva cubica (418.z; adentro de la mano, lejos de los bordes)
   int bPart = PesBodyPart(p[0].o1.z);
+  const bool bGeo = !PesHasLimbCode(p[0].o1.z);   // (08/11 q) malla propia del jugador: parte por la posicion de reposo de este punto
+  if (bGeo) bPart = PesBodyPartGeo(PES_LERP3(pR).xyz);
   float4 bOpt = PesBodyPartOpt(bPart), fOpt = PesFingerOpt();
+  if (bGeo && bOpt.x < 0.5) bOpt = float4(0.0, 0.0, 0.0, 0.0);   // parte apagada: sin redondeo ni relieve
   float fkD = bPart == 1 ? PesFingerK(PES_LERP3(pR).xyz) : 0.0;
   float3 pp = PesTessSmooth(P0, P1, P2, N0, N1, N2, b, fOpt.z * fkD);
 #else
@@ -513,8 +546,9 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
       // teselada por la normal, tope 1.5 mm, w376 x la definicion general x172. Bordes de la pieza quietos (seam), se apaga con la distancia.
     float rW = IniParams.Load(int2(376, 0)).w;
     float c0z = p[0].o1.z;
-    if (rW > 0.001 && T.x > 0.5 && IniParams.Load(int2(305, 0)).x > 0.5 && c0z > 6.5 && c0z < 7.5) {
-      float q = round((c0z - 7.0) * 1200.0);
+    if (rW > 0.001 && T.x > 0.5 && IniParams.Load(int2(305, 0)).x > 0.5 && ((c0z > 6.5 && c0z < 7.5) || (bGeo && bPart > 0))) {
+      // (08/11 q) sin codigo: brazo q 0, mano abierta q 516, pierna q 528 (tension por defecto 0.3: o1.y fuera de rango)
+      float q = bGeo ? (bPart == 1 ? 516.0 : (bPart == 3 ? 528.0 : 0.0)) : round((c0z - 7.0) * 1200.0);
       float3 r0 = PES_LERP3(pR).xyz; float3 pm = float3(abs(r0.x), r0.y, r0.z);
       float hh = 0.0, crz = 0.0;
       // (08/11 l, captura de Agustin con la vista de prueba: brazo y mano casi sin amarillo) los surcos (entre musculos del brazo
