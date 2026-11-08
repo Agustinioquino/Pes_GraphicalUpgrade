@@ -294,7 +294,10 @@ void main(
   // (08/11 y) y407 humedad: hoja mojada = albedo mas oscuro y saturado (la pelicula de agua quita la dispersion de la superficie), mas brillo y
   // menos rugosidad, mas en la mitad alta de la hoja (donde queda el agua). x407 = 1 artificial: fibra lisa con brillo propio parejo
   if (pesV3 && !pesFar) {
-    float wet = saturate(P407.y) * (1.0 - pesPaintF);
+    // (08/11 y, Agustin: "pintarse por la lluvia") con lluvia en el partido (114.x = 1, lo publica la DLL desde el clima) la hoja se moja sola
+    // (al menos 0.85) aunque el slider este bajo; con cancha seca manda y407
+    float wetBase = saturate(P407.y); { float w114 = IniParams.Load(int2(114,0)).x; if (w114 > 0.5 && w114 < 1.5) wetBase = max(wetBase, 0.85); }
+    float wet = wetBase * (1.0 - pesPaintF);
     if (wet > 0.001) {
       float3 cw = o0.xyz; float lw = dot(cw, float3(0.2126, 0.7152, 0.0722));
       cw = lerp(lw.xxx, cw, 1.0 + 0.30 * wet) * (1.0 - 0.20 * wet);
