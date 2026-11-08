@@ -147,6 +147,8 @@ static ID3D11GeometryShader* s_lashGS = nullptr;
 // cobertura real con mezcla aditiva, sombra del estadio + atlas + grosor real). w382 = fuerza (0 = apagada)
 static ID3D11GeometryShader* s_browGSso[2] = {};
 static ID3D11Buffer* s_hfSO = nullptr; static ID3D11VertexShader* s_hfVS = nullptr; static ID3D11PixelShader* s_hfPS = nullptr;
+// (08/11 z) cobertura real: PS con mezcla alfa (pes_hairfwdc_ps) y GS v3 que solo escribe al flujo (sin G-buffer)
+static ID3D11PixelShader* s_hfcPS = nullptr; static ID3D11BlendState* s_hfcBlend = nullptr; static std::atomic<int> s_hfCovFrame{-1}; static std::atomic<int> s_hfT9{1};   // t9 = luz difusa de la composicion (la usa la cobertura)
 static ID3D11InputLayout* s_hfIL = nullptr; static ID3D11Buffer* s_hfCB = nullptr; static ID3D11BlendState* s_hfBlend = nullptr;
 static ID3D11DepthStencilState* s_hfDSS = nullptr; static ID3D11SamplerState* s_hfSamp = nullptr;
 // (08/11 v, Agustin: "mejorar la sombra que plasma el pelo") la SOMBRA DE CONTACTO de las cejas tambien pasa a despues de la luz: antes
@@ -168,7 +170,7 @@ static std::atomic<double> s_hfLastDraw{-10.0};
 // (08/11 y, Agustin: "creo que estamos planteando mal la geometria de las hebras" -> "si, rehacer por pasos") HEBRAS v3 (x416): el GS
 // de la cara deja solo la raiz de cada hebra (pes_brow_roots_*_gs, 8 float4) en s_v3Roots; despues un GS por hebra (pes_strand_gs) la
 // arma con hasta 16 segmentos (DrawAuto sobre las raices). Mismo PS, misma pasada propia (s_v3GSso escribe en s_hfSO)
-static ID3D11GeometryShader* s_v3RootGS[2] = {}; static ID3D11GeometryShader* s_v3GS = nullptr; static ID3D11GeometryShader* s_v3GSso = nullptr;
+static ID3D11GeometryShader* s_v3RootGS[2] = {}; static ID3D11GeometryShader* s_v3GS = nullptr; static ID3D11GeometryShader* s_v3GSso = nullptr; static ID3D11GeometryShader* s_v3GSsoOnly = nullptr;
 static ID3D11VertexShader* s_v3VS = nullptr; static ID3D11InputLayout* s_v3IL = nullptr; static ID3D11Buffer* s_v3Roots = nullptr;
 static constexpr UINT kV3Stride = 128;            // 8 float4 (RootOut de pes_brow_gs.hlsli)
 static constexpr UINT kV3Bytes = 8u << 20;        // 65536 raices por dibujo de cara
@@ -178,6 +180,7 @@ static const D3D11_SO_DECLARATION_ENTRY kV3SO[] = {
 // (08/11 y) la pasada propia dibujo hace menos de medio segundo: recien ahi las cejas le dejan el brillo y la sombra (si no, en el
 // editor sin composicion 619b salian negras y planas: sin brillo propio ni sombra de contacto)
 bool HairFwdActive() { return Now() - s_hfLastDraw.load() < 0.5; }
+bool HairCovThisFrame() { return s_hfCovFrame.load() == s_hfFrame.load(); }   // (08/11 z) las cejas v3 van solo a la pasada propia este cuadro
 static bool HairFwdWanted() { return g_cfg.live[382][3] > 0.001f && g_cfg.live[74][0] > 0.5f; }
 static void EnsureHairFwd() {
     if (!g_dev.dev) return;
@@ -209,6 +212,12 @@ static void EnsureHairFwd() {
         if (FAILED(g_dev.dev->CreateInputLayout(il, 9, b->GetBufferPointer(), b->GetBufferSize(), &s_hfIL))) s_hfIL = nullptr;
         b->Release(); }
     if (!s_hfPS) if (ID3DBlob* b = CompileNamedShader(L"pes_hairfwd_ps.hlsl", "ps_5_0")) { g_dev.dev->CreatePixelShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_hfPS); b->Release(); }
+    if (!s_hfcPS) if (ID3DBlob* b = CompileNamedShader(L"pes_hairfwdc_ps.hlsl", "ps_5_0")) { g_dev.dev->CreatePixelShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_hfcPS); b->Release(); }
+    if (!s_hfcBlend) { D3D11_BLEND_DESC bd{}; bd.RenderTarget[0].BlendEnable = TRUE;   // (08/11 z) alfa = cobertura real de la hebra
+        bd.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA; bd.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA; bd.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+        bd.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ZERO; bd.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ONE; bd.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_RED | D3D11_COLOR_WRITE_ENABLE_GREEN | D3D11_COLOR_WRITE_ENABLE_BLUE;
+        g_dev.dev->CreateBlendState(&bd, &s_hfcBlend); }
     if (!s_hsPS) if (ID3DBlob* b = CompileNamedShader(L"pes_hairsh_ps.hlsl", "ps_5_0")) { g_dev.dev->CreatePixelShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_hsPS); b->Release(); }
     if (!s_hfSO2) { D3D11_BUFFER_DESC bd{}; bd.ByteWidth = kHfBytes / 2; bd.Usage = D3D11_USAGE_DEFAULT; bd.BindFlags = D3D11_BIND_STREAM_OUTPUT | D3D11_BIND_VERTEX_BUFFER;
         if (FAILED(g_dev.dev->CreateBuffer(&bd, nullptr, &s_hfSO2))) s_hfSO2 = nullptr; }
@@ -243,6 +252,7 @@ static void EnsureBrowShaders() {
         if (ID3DBlob* gb = CompileNamedShader(L"pes_strand_gs.hlsl", "gs_5_0")) {
             g_dev.dev->CreateGeometryShader(gb->GetBufferPointer(), gb->GetBufferSize(), nullptr, &s_v3GS);
             UINT st = kHfStride; if (FAILED(g_dev.dev->CreateGeometryShaderWithStreamOutput(gb->GetBufferPointer(), gb->GetBufferSize(), kHfSO, 9, &st, 1, 0, nullptr, &s_v3GSso))) s_v3GSso = nullptr;
+            if (FAILED(g_dev.dev->CreateGeometryShaderWithStreamOutput(gb->GetBufferPointer(), gb->GetBufferSize(), kHfSO, 9, &st, 1, D3D11_SO_NO_RASTERIZED_STREAM, nullptr, &s_v3GSsoOnly))) s_v3GSsoOnly = nullptr;
             gb->Release(); }
         if (ID3DBlob* vb = CompileNamedShader(L"pes_strand_vs.hlsl", "vs_5_0")) {
             g_dev.dev->CreateVertexShader(vb->GetBufferPointer(), vb->GetBufferSize(), nullptr, &s_v3VS);
@@ -298,7 +308,7 @@ void FaceGenReloadShaders() {
     for (auto*& g : s_browGSso) if (g) { g->Release(); g = nullptr; }
     for (auto*& g : s_shGSso) if (g) { g->Release(); g = nullptr; }
     if (s_hsPS) { s_hsPS->Release(); s_hsPS = nullptr; } s_hfStreamed2 = 0;
-    if (s_hfVS) { s_hfVS->Release(); s_hfVS = nullptr; } if (s_hfPS) { s_hfPS->Release(); s_hfPS = nullptr; } if (s_hfIL) { s_hfIL->Release(); s_hfIL = nullptr; }
+    if (s_hfVS) { s_hfVS->Release(); s_hfVS = nullptr; } if (s_hfPS) { s_hfPS->Release(); s_hfPS = nullptr; } if (s_hfcPS) { s_hfcPS->Release(); s_hfcPS = nullptr; } if (s_hfIL) { s_hfIL->Release(); s_hfIL = nullptr; }
     s_hfStreamed = 0;
     for (auto*& g : s_atGS) if (g) { g->Release(); g = nullptr; }
     if (s_lashGS) { s_lashGS->Release(); s_lashGS = nullptr; }
@@ -817,7 +827,11 @@ void BrowV3Strands(ID3D11DeviceContext* c) {
     c->PSSetShader(s_browPS, nullptr, 0);
     bool so = false;
     if (HairFwdWanted() && s_v3GSso) { s.strandGS = s_v3GSso; so = BrowSOOn(c); }
-    c->GSSetShader(so ? s_v3GSso : s_v3GS, nullptr, 0);
+    // (08/11 z) cobertura real: si la pasada propia viene dibujando (y tiene su PS alfa), las hebras van SOLO al flujo (no al G-buffer)
+    const bool cov = so && s_v3GSsoOnly && s_hfcPS && s_hfcBlend && s_hfT9.load() && HairFwdActive();
+    if (cov) s_hfCovFrame.store(s_hfFrame.load());
+    c->GSSetShader(cov ? s_v3GSsoOnly : (so ? s_v3GSso : s_v3GS), nullptr, 0);
+    { static std::atomic<int> lg{0}; if (cov && lg.fetch_add(1) < 1) Log("cejas: hebras v3 con cobertura real (solo en la pasada propia, mezcla alfa)"); }
     c->DrawAuto();
     if (so) BrowSOOff(c);
     s.strandGS = keep;
@@ -863,7 +877,10 @@ void HairFwdAfterComposition(ID3D11DeviceContext* c) {
     bool st1 = s_hfStreamed.exchange(0) != 0;
     bool go = W > 64 && HairFwdWanted() && (st1 || sh2) && s_hfVS && s_hfPS && s_hfIL && s_hfSO && s_hfCB && s_hfBlend && s_hfDSS && s_hfSamp && s_browRS;
     ID3D11ShaderResourceView* dep = nullptr; ID3D11ShaderResourceView* shm = nullptr;
-    if (go) { c->PSGetShaderResources(11, 1, &dep); c->PSGetShaderResources(14, 1, &shm); go = dep && shm; }
+    if (go) { c->PSGetShaderResources(11, 1, &dep); c->PSGetShaderResources(14, 1, &shm); go = dep && shm;
+        ID3D11ShaderResourceView* t9 = nullptr; c->PSGetShaderResources(9, 1, &t9); s_hfT9.store(t9 ? 1 : 0);   // sin t9 la cobertura se apaga sola
+        { static std::atomic<int> lg{0}; if (!t9 && lg.fetch_add(1) < 1) Log("cejas: cobertura real sin luz difusa (t9) en la composicion: vuelve al G-buffer"); }
+        if (t9) t9->Release(); }
     if (go) {
         // guardar
         ID3D11InputLayout* oIL = nullptr; c->IAGetInputLayout(&oIL);
@@ -900,7 +917,10 @@ void HairFwdAfterComposition(ID3D11DeviceContext* c) {
             UINT z = 0; c->SOSetTargets(1, &s_hfSO2, &z); ID3D11Buffer* nb = nullptr; c->SOSetTargets(1, &nb, &z);
             c->IASetVertexBuffers(0, 1, &s_hfSO, &st, &of); c->PSSetShader(s_hfPS, nullptr, 0); c->OMSetBlendState(s_hfBlend, bf, 0xffffffff);
         }
-        if (st1) c->DrawAuto();   // 2) las hebras con su luz de pelo (suma)
+        if (st1) {   // 2) las hebras con su luz de pelo (suma; o con cobertura real y mezcla alfa si este cuadro van solo aca)
+            const bool cov = s_hfCovFrame.load() == s_hfFrame.load() && s_hfcPS && s_hfcBlend;
+            if (cov) { c->PSSetShader(s_hfcPS, nullptr, 0); c->OMSetBlendState(s_hfcBlend, bf, 0xffffffff); }
+            c->DrawAuto(); }
         s_hfDraws++; s_hfLastDraw.store(Now());
         { static std::atomic<int> lg{0}; if (lg.fetch_add(1) < 1) Log("cejas: pasada propia del pelo: primer dibujo (%ux%u)", W, H); }
         // vaciar la salida de flujo para el cuadro siguiente
