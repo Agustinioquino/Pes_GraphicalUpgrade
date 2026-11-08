@@ -82,7 +82,8 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   float4 P75 = IniParams.Load(int2(75,0));
   float t = i.tw.x;
   // (07/11) tw.z = cobertura + 2 x tono de la hebra (0..7, igual en toda la hebra)
-  float sK = floor(i.tw.z * 0.5), covZ = i.tw.z - 2.0 * sK, sJ = sK / 7.0;
+  float sK = floor(i.tw.z * 0.5), covZ = i.tw.z - 2.0 * sK;
+  float sL = floor(sK / 8.0), sJ = (sK - 8.0 * sL) / 7.0, layQ = sL / 3.0;   // (08/11) tono 0..7 + capa 0..3 (pestanas: capa 0)
   // borde de la cinta transparente por descarte (sin alpha blend en el G-buffer): perfil redondeado
   float edge = 1.0 - abs(i.tw.y);
   // con cintas de ~1 px el descarte tiene que ser suave: solo el borde exterior y la punta
@@ -127,6 +128,19 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
       float kb = smoothstep(0.05, 0.75, dot(-L, normalize(i.viewV))) * saturate(pesBrowBack.w);
       float3 cb = saturate(pesBrowBack.rgb) * lerp(1.0, 1.15, t);   // la punta deja pasar mas luz
       col = lerp(col, cb, kb);
+    }
+  }
+  // (08/11, Agustin: "no tiene el volumen exacto") sombra ENTRE CAPAS segun la luz real: la luz cruza las capas de arriba para llegar a
+  // las de abajo; cuanto mas rasante el sol sobre la piel, mas pelo atraviesa (Beer-Lambert). Las de arriba y las puntas levantadas
+  // quedan a la luz, las de abajo y las raices mas oscuras: la ceja se lee como un volumen de pelos y no como una calcomania.
+  // Solo cejas (b11 enlazado); las pestanas y los diagnosticos quedan igual. El atlas da la sombra grande (frente, nariz, otras capas)
+  if (P75.z < 0.5 && pesHairMisc.x > 0.5) {
+    float3 Lb = PesBrowLightDir(g_psScene.m_view._m00_m10_m20, g_psScene.m_view._m01_m11_m21, g_psScene.m_view._m02_m12_m22, g_psSystem.m_dominantLightDir.xyz, -i.viewV.z);
+    if (dot(Lb, Lb) > 0.25) {
+      float nlS = dot(normalize(i.nrmV), Lb);
+      float dep = (1.0 - layQ) * (1.0 - 0.6 * t);                       // pelo por encima: capa de abajo y raiz = mas
+      float Tl = exp(-0.55 * dep / max(nlS, 0.18));
+      col *= lerp(1.0, Tl, 0.55 * saturate(nlS * 4.0 + 0.6));           // de espaldas al sol ya lo pone la sombra normal
     }
   }
   o0 = float4(saturate(col), 1.0);
