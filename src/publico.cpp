@@ -25,7 +25,7 @@
 
 namespace fx {
 
-static constexpr UINT kMax = 32768;                       // hinchas con gesto propio (512 KB por cuadro)
+static constexpr UINT kMax = 32768;                       // hinchas con gesto propio (2 float4 c/u: cara + cuerpo, 1 MB por cuadro)
 static ID3D11Buffer* s_buf = nullptr;
 static ID3D11ShaderResourceView* s_srv = nullptr;
 static bool s_failed = false;
@@ -49,7 +49,7 @@ static inline float Smooth(float a, float b, float x) { float t = (x - a) / (b -
 
 // gesto de un hincha en el tiempo t (s). Grupos de 48 indices seguidos cantan juntos (el juego arma las tribunas por bloques),
 // cada uno con su tempo; dentro del grupo cada hincha tiene su desfase y su "ganas" que cambian lento.
-static void Gesture(uint32_t i, double t, float mood, float* out) {
+static void Gesture(uint32_t i, double t, float mood, float* out) {   // out[0..3] cara, out[4..7] cuerpo (PesCrowdBody)
     const float kTau = 6.2831853f;
     uint32_t g = i / 48u;
     float gTempo = 1.1f + 0.9f * Hash01(g * 7919u + 1);           // golpes por segundo del canto de ese bloque
@@ -105,6 +105,28 @@ static void Gesture(uint32_t i, double t, float mood, float* out) {
         out[1] += (eb * asym - out[1]) * k;
         out[2] += (eb * (2.0f - asym) - out[2]) * k;
     }
+    // (08/11 c) capa de cuerpo: x cuanto levanta / agita los brazos, y fase del agitado, z salto (m), w brazo (-1 der, 0 ambos, 1 izq)
+    float bx = 0, by = 0, bz = 0, bw = 0;
+    float hb = Hash01(i * 613u + 41u);
+    float side = hb < 0.6f ? 0.0f : (hb < 0.8f ? 1.0f : -1.0f);
+    if (mood > 1.0f && Hash01(g * 977u + 5u) < 0.35f) {          // tribuna caliente: algunos bloques cantan con los brazos
+        bx = 0.35f * sing * (mood - 1.0f); by = (float)(kTau * (t * gTempo * 0.5)) + kTau * gPhase; bw = side;
+    }
+    if (ev) {
+        float age = (float)(t - s_evT.load(std::memory_order_relaxed));
+        float dur = ev == kEvGol ? 12.0f : ev == kEvCorner ? 4.0f : 5.0f;
+        float env = age < 0 ? 0.0f : Smooth(0.0f, 0.35f, age - 0.7f * my) * (1.0f - Smooth(dur * 0.55f, dur, age));
+        if (ev == kEvGol && Hash01(g * 53u + s_evSeed.load(std::memory_order_relaxed)) < 0.68f) {
+            float f = 1.8f + 0.6f * Hash01(i * 131u + 3u);
+            bx = env * (0.8f + 0.2f * hb); by = (float)(kTau * (t * (2.5 + 1.5 * my))); bw = side;
+            bz = env * (0.04f + 0.04f * my) * fabsf(sinf((float)(3.14159265 * t * f) + kTau * my));
+        } else if ((ev == kEvFalta || ev == kEvOffside) && Hash01(i * 31u + 7u) < 0.4f) {
+            bx = 0.55f * env; by = (float)(kTau * t * 5.5) + kTau * my; bw = hb < 0.5f ? 1.0f : -1.0f;      // puno arriba
+        } else if (ev == kEvCorner && Hash01(i * 19u + 3u) < 0.3f) {
+            bx = 0.3f * env; by = (float)(kTau * t * 1.2); bw = 0.0f;
+        }
+    }
+    out[4] = bx; out[5] = by; out[6] = bz; out[7] = bw;
 }
 
 // (08/11 b) lo llama rastro.cpp al final de cada tick del partido (solo lectura de MatchInfo): detecta gol, falta, offside y
@@ -131,7 +153,7 @@ void PublicoMatchTick(int tick, int phase, int type, int restart, int foul) {
 }
 
 static void Worker() {
-    for (auto& b : s_bank) b.assign(kMax * 4, 0.0f);
+    for (auto& b : s_bank) b.assign(kMax * 8, 0.0f);
     int last = -1; double lastT = -1;
     while (s_run.load()) {
         double t = s_time.load();
@@ -141,7 +163,7 @@ static void Worker() {
         if (s_ready.load() == b) b = 1 - b;           // no pisar el banco que espera subirse
         float mood = s_mood.load();
         float* d = s_bank[b].data();
-        for (uint32_t i = 0; i < kMax; i++) Gesture(i, t, mood, d + 4 * i);
+        for (uint32_t i = 0; i < kMax; i++) Gesture(i, t, mood, d + 8 * i);
         s_ready = b; last = b;
     }
 }
@@ -149,13 +171,13 @@ static void Worker() {
 static void Ensure() {
     if (s_buf || s_failed || !g_dev.dev) return;
     D3D11_BUFFER_DESC d = {};
-    d.ByteWidth = kMax * 16; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    d.ByteWidth = kMax * 32; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
     d.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED; d.StructureByteStride = 16;
-    std::vector<float> zero(kMax * 4, 0.0f);
+    std::vector<float> zero(kMax * 8, 0.0f);
     D3D11_SUBRESOURCE_DATA init = { zero.data(), 0, 0 };
     if (FAILED(g_dev.dev->CreateBuffer(&d, &init, &s_buf))) { s_failed = true; Log("publico: no se pudo crear el buffer de gestos"); return; }
     D3D11_SHADER_RESOURCE_VIEW_DESC v = {};
-    v.Format = DXGI_FORMAT_UNKNOWN; v.ViewDimension = D3D11_SRV_DIMENSION_BUFFER; v.Buffer.FirstElement = 0; v.Buffer.NumElements = kMax;
+    v.Format = DXGI_FORMAT_UNKNOWN; v.ViewDimension = D3D11_SRV_DIMENSION_BUFFER; v.Buffer.FirstElement = 0; v.Buffer.NumElements = kMax * 2;
     if (FAILED(g_dev.dev->CreateShaderResourceView(s_buf, &v, &s_srv))) { s_failed = true; Log("publico: no se pudo crear la vista del buffer"); return; }
     NamedSetSRV("pes_crowdface", s_srv);   // nombre para el inspector; el enlace lo hace PublicoSRVFor desde hooks.cpp
     s_run = true;

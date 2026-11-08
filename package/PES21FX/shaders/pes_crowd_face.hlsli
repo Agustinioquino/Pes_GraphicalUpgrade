@@ -4,13 +4,15 @@
 // por persona, animacion), igual que un hueso hijo del cuello.
 //  - pesos: COLOR del vertice (tools/crowd/pesos_cara.py): x = 6/255 marca, y = mandibula, z = ceja izq, w = ceja der.
 //    Los modelos del juego traen x = 5/255: no se mueven.
-//  - estado de cada hincha: PesCrowdFaceBuf[persona] (publico.cpp, hilo de la CPU): x = giro de la mandibula (rad),
+//  - estado de cada hincha: PesCrowdFaceBuf[2 * persona] (publico.cpp, hilo de la CPU): x = giro de la mandibula (rad),
 //    y / z = subida de la ceja izq / der (m), w = pulso del grito propio (0..1). persona = indice del juego en instanceBuf.
 //  - REACCIONES (08/11 b, pedido de Agustin: "mas de una animacion, con las animaciones que ya hacen como disparador"):
 //    se lee la pose del cuerpo que el juego le esta poniendo a ese hincha (animeInstanceBuf t2, huesos de au00.skl) y se
 //    elige la cara: brazos arriba / salto = festejo (boca bien abierta, cejas arriba), manos en la cabeza = lamento (boca
 //    abierta, cejas muy arriba), brazo adelante a la altura de la cara = protesta (grita al ritmo, ceno fruncido),
 //    aplauso (manos juntas adelante) = canta al ritmo de las palmas; sin disparador queda el canto / charla de la CPU.
+//  - CUERPO (08/11 c): PesCrowdFaceBuf[2 * persona + 1] = capa de brazos / salto encima de la animacion (PesCrowdBody).
+//    La cara esta en PesCrowdFaceBuf[2 * persona].
 //  - fila 394: x on (0 = como el juego) | y fuerza de la boca | z fuerza de las cejas | w animo (CPU)
 StructuredBuffer<float4> PesCrowdFaceBuf : register(t30);
 
@@ -60,17 +62,90 @@ float4 PesCrowdReaction(uint persona, float shout)
     return float4(jaw / wsum, brow / wsum, 0.0, saturate(wsum));
 }
 
-void PesCrowdFace(inout uint4 vPos, inout uint4 vNrm, inout uint4 vTan, uint4 vCol, uint persona)
+// matriz de skinning de un hueso como float3x4 (filas)
+float3x4 PesCrowdMat(uint base, uint i)
+{
+    PESS2_48 m = t2[base + i];
+    return float3x4(asfloat(uint4(m.v[0], m.v[1], m.v[2], m.v[3])), asfloat(uint4(m.v[4], m.v[5], m.v[6], m.v[7])),
+                    asfloat(uint4(m.v[8], m.v[9], m.v[10], m.v[11])));
+}
+
+float3x3 PesInv3(float3x3 m)
+{
+    float3 a = m[0], b = m[1], c = m[2];
+    float3 r0 = cross(b, c), r1 = cross(c, a), r2 = cross(a, b);
+    float det = dot(a, r0);
+    if (abs(det) < 1e-8) return float3x3(1, 0, 0, 0, 1, 0, 0, 0, 1);
+    return transpose(float3x3(r0, r1, r2)) / det;
+}
+
+float3 PesRotAxis(float3 v, float3 k, float ang)
+{
+    float s, c; sincos(ang, s, c);
+    return v * c + cross(k, v) * s + k * dot(k, v) * (1.0 - c);
+}
+
+// (08/11 c) capa de cuerpo encima de la animacion del juego: brazos que se agitan / levantan y saltos (festejo de gol,
+// protesta con el puno, tribuna que canta). Se aplica en la pose de reposo como el desplazamiento que, despues del skinning
+// del juego, da el movimiento pedido en la pose animada: p' = p + M^-1 d (M = matriz de skinning mezclada del vertice).
+//  body (PesCrowdFaceBuf[2 * persona + 1], CPU): x cuanto levanta / agita (0..1), y fase del agitado (rad),
+//  z salto (m), w brazo (-1 solo der, 0 los dos, 1 solo izq)
+void PesCrowdBody(inout float3 P, inout float3 N, inout float3 T, uint4 vIdx, float4 vW, uint persona, float4 body)
+{
+    if (asfloat(cb5[8].x) == 0.0) return;
+    uint base = (t0[persona].v[8] & 255u) * 34u;
+    float3x4 M = PesCrowdMat(base, vIdx.x) * vW.x + PesCrowdMat(base, vIdx.y) * vW.y + PesCrowdMat(base, vIdx.z) * vW.z + PesCrowdMat(base, vIdx.w) * vW.w;
+    float3 X = mul(M, float4(P, 1.0));
+    float3 sl = PesCrowdBone(base, 3u, float3(0.105, 1.467, 0.033)), sr = PesCrowdBone(base, 7u, float3(-0.105, 1.467, 0.033));
+    float3 ul = PesCrowdBone(base, 4u, float3(0.195, 1.467, 0.033)), ur = PesCrowdBone(base, 8u, float3(-0.195, 1.467, 0.033));
+    float3 hl = PesCrowdBone(base, 6u, float3(0.600, 1.090, 0.250)), hr = PesCrowdBone(base, 10u, float3(-0.600, 1.090, 0.250));
+    float3 fwd = normalize(cross(sl - sr, float3(0.0, 1.0, 0.0)) + float3(0.0, 0.0, 1e-4));
+    // peso de cada brazo en este vertice (hombro a medias)
+    float aL = 0.0, aR = 0.0;
+    [unroll] for (int k = 0; k < 4; k++) {
+        uint bi = vIdx[k]; float w = vW[k];
+        aL += (bi >= 4u && bi <= 6u) ? w : (bi == 3u ? 0.5 * w : 0.0);
+        aR += (bi >= 8u && bi <= 10u) ? w : (bi == 7u ? 0.5 * w : 0.0);
+    }
+    float gL = saturate(1.0 + body.w), gR = saturate(1.0 - body.w);
+    // cuanto falta para tener el brazo arriba (si la animacion ya lo levanta, se suma poco)
+    float upL = saturate((hl.y - ul.y) / 0.45), upR = saturate((hr.y - ur.y) / 0.45);
+    float wave = 0.22 * sin(body.y);
+    float angL = body.x * gL * ((1.0 - upL) * 1.25 + wave);
+    float angR = body.x * gR * ((1.0 - upR) * 1.25 - wave);
+    float3 d = float3(0.0, body.z, 0.0);
+    float3 nW = N, tW = T;
+    float3x3 M3 = (float3x3)M;
+    if (aL > 0.0 && angL != 0.0) { float3 Xr = ul + PesRotAxis(X - ul, fwd, angL); d += (Xr - X) * aL; }
+    if (aR > 0.0 && angR != 0.0) { float3 Xr = ur + PesRotAxis(X - ur, fwd, -angR); d += (Xr - X) * aR; }
+    if (dot(d, d) <= 0.0) return;
+    float3x3 Mi = PesInv3(M3);
+    P += mul(Mi, d);
+    float ang = angL * aL - angR * aR;    // giro medio de este vertice (normales y tangentes)
+    if (ang != 0.0) {
+        N = mul(Mi, PesRotAxis(mul(M3, N), fwd, ang));
+        T = mul(Mi, PesRotAxis(mul(M3, T), fwd, ang));
+    }
+}
+
+void PesCrowdFace(inout uint4 vPos, inout uint4 vNrm, inout uint4 vTan, uint4 vCol, uint persona, uint4 vIdx, uint4 vWgt)
 {
     float4 col = asfloat(vCol);
     if (abs(col.x * 255.0 - 6.0) > 0.5) return;
-    float wj = col.y, wl = col.z, wr = col.w;
-    if (wj + wl + wr <= 0.0) return;
     float4 prm = IniParams.Load(int2(394, 0));
     if (prm.x <= 0.0) return;
     uint n = 0, st = 0; PesCrowdFaceBuf.GetDimensions(n, st);
-    if (persona >= n) return;
-    float4 g = PesCrowdFaceBuf[persona];
+    if (2u * persona + 1u >= n) return;
+    float4 body = PesCrowdFaceBuf[2u * persona + 1u];
+    float wj = col.y, wl = col.z, wr = col.w;
+    if (wj + wl + wr <= 0.0) {
+        if (body.x <= 0.0 && body.z == 0.0) return;
+        float3 P0 = asfloat(vPos.xyz), N0 = asfloat(vNrm.xyz), T0 = asfloat(vTan.xyz);
+        PesCrowdBody(P0, N0, T0, vIdx, asfloat(vWgt), persona, body);
+        vPos.xyz = asuint(P0); vNrm.xyz = asuint(N0); vTan.xyz = asuint(T0);
+        return;
+    }
+    float4 g = PesCrowdFaceBuf[2u * persona];
     // reaccion a la animacion del cuerpo: reemplaza al canto / charla segun cuanto dispara
     float4 r = PesCrowdReaction(persona, saturate(g.w));
     float jawA = lerp(g.x, r.x, r.w);
@@ -88,5 +163,6 @@ void PesCrowdFace(inout uint4 vPos, inout uint4 vNrm, inout uint4 vTan, uint4 vC
     // cejas: traslacion arriba (y un poco adelante, siguiendo la frente)
     float b = clamp(browL * prm.z, -0.006, 0.015) * wl + clamp(browR * prm.z, -0.006, 0.015) * wr;
     P += float3(0.0, b, 0.25 * b);
+    if (body.x > 0.0 || body.z != 0.0) PesCrowdBody(P, N, T, vIdx, asfloat(vWgt), persona, body);
     vPos.xyz = asuint(P); vNrm.xyz = asuint(N); vTan.xyz = asuint(T);
 }
