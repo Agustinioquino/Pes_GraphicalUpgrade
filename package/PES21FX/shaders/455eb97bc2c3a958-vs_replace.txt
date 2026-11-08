@@ -149,6 +149,7 @@ void main(
     r2.x = dot(v0.xyzw, r2.xyzw);
     r2.y = dot(v0.xyzw, r3.xyzw);
     r2.z = dot(v0.xyzw, r0.xyzw);
+    PesBoneDeltaApply(v0, v3, v4, v1.xyz, v2.xyz, r4.xyz, r2.xyz, r5.xyz, r1.xyz);   // (08/11) gestos por huesos en la paleta (t115, sin escribir el esqueleto)
     // (31/10) expresiones faciales mas marcadas (pes_expr.hlsli, filas 340 / 341; cabeza de la paleta por malla: expr.cpp, b12)
     PesExprApply(v0, v0r, v3, v4, v1.xyz, v2.xyz, r4.xyz, r2.xyz, r5.xyz, r1.xyz);
     float3 pesPreBlink = r4.xyz;

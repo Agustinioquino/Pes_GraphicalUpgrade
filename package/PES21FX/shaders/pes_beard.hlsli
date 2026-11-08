@@ -2,7 +2,7 @@
 // HUESOS DE LA CARA, en el VS del pelo (2f1af485). Incluir DESPUES de cVSObject (g_vsObject) e IniParams.
 // La DLL (expr.cpp, regla "beard = 13") enlaza cada vertice de la barba a la piel de la cara que tiene debajo (4 vertices mas
 // cercanos: sus huesos, pesos y formas esculpidas, t117) y en cada dibujo de esa piel copia su paleta (cuadro actual y anterior) y su
-// m_world al pozo (t116, 64 lugares de 200 float4: 0 = id de la piel y su cabeza, 1..96 huesos, 97..192 los del cuadro anterior,
+// m_world al pozo (t116, 64 lugares de 208 float4 (08/11; antes 200): 0 = id de la piel y su cabeza, 1..96 huesos, 97..192 los del cuadro anterior,
 // 193..196 m_world). Aca se busca el lugar de esa piel cuya cabeza cae donde esta la barba (el mismo jugador, a menos de 1.5 cm) y
 // se le suma al vertice lo que los huesos de la cara (mandibula, labios, comisuras, sonrisa) corren ese punto respecto de la cabeza.
 // Sin enlace (b13 en 0) o sin piel encontrada queda exacto como el juego.
@@ -14,11 +14,35 @@ cbuffer PESBeard : register(b13)
 }
 Buffer<float4> g_pesBeardPool : register(t116);
 Buffer<float4> g_pesBeardBind : register(t117);
-
+#include "pes_bonedelta.hlsli"   // (08/11) gestos en la paleta (t115)
+// (08/11) 200 -> 208 float4 por lugar del pozo: 200..203 = hueso kDef de cada lugar de la paleta de la piel (2 por float: a + 256 b)
+#define PES_POOL_F4 208
+static int g_pesBeardCi = -1;   // personaje de la piel elegida (PesBeardFollow lo pone; -1 = sin gestos en la paleta)
+uint PesBeardSlotBone(uint s, uint j)
+{
+  float v = g_pesBeardPool[s * PES_POOL_F4 + 200 + (j >> 3)][(j >> 1) & 3];
+  uint u = (uint)(v + 0.5);
+  return (j & 1) ? (u >> 8) & 255u : u & 255u;
+}
+float3 PesBeardBonePRaw(uint s, uint row0, uint j, float4 P)
+{
+  uint b = s * PES_POOL_F4 + row0 + min(j, 31u) * 3;
+  return float3(dot(P, g_pesBeardPool[b]), dot(P, g_pesBeardPool[b + 1]), dot(P, g_pesBeardPool[b + 2]));
+}
+// punto de la piel movido por su hueso j, CON la diferencia del mod para ese hueso (gestos en la paleta): la barba sigue a la piel tal
+// como la dibuja el VS de la cara (PesBoneDeltaApply)
 float3 PesBeardBoneP(uint s, uint row0, uint j, float4 P)
 {
-  uint b = s * 200 + row0 + min(j, 31u) * 3;
-  return float3(dot(P, g_pesBeardPool[b]), dot(P, g_pesBeardPool[b + 1]), dot(P, g_pesBeardPool[b + 2]));
+  float3 q = PesBeardBonePRaw(s, row0, j, P);
+  if (g_pesBeardCi >= 0) { uint bone = PesBeardSlotBone(s, min(j, 31u)); if (bone < PES_BD_BONES) q = PesBoneDeltaP(g_pesBeardCi, bone, q, row0 >= 97); }
+  return q;
+}
+// el personaje de la piel del lugar s del pozo: su cabeza (reposo de sk_head por la matriz de la cabeza) contra la tabla de t115
+int PesBeardChar(uint s, uint hd)
+{
+  if (g_pesBoneD[0].x < 0.5) return -1;
+  float3 hw = PesBeardBonePRaw(s, 1, hd, float4(g_pesBoneD[1].xyz, 1.0));
+  return PesBoneChar(hw);
 }
 
 // (04/11 i, Agustin: "la barba sigue desconectada al expresar", captura de Messi: el bigote y las comisuras quedan atras de la piel)
@@ -66,9 +90,10 @@ void PesBeardFollow(uint vid, float3 rest, inout float3 pos, inout float3 prev)
   // (directorio al final del pozo). Antes cada vertice buscaba el suyo entre 64 copias de cuadros distintos y la barba se rompia.
   // Se acepta si la cabeza de esa piel pone el punto a menos de 4 cm de la barba (la barba 3D cuelga de sus propios huesos);
   // con una DLL vieja (sin directorio) o otra cara, nada
-  uint sBest = (uint)(g_pesBeardPool[64 * 200 + (src & 255u)].x + 0.5);
+  uint sBest = (uint)(g_pesBeardPool[64 * PES_POOL_F4 + (src & 255u)].x + 0.5);
   if (sBest >= 64) return;
-  if ((uint)(g_pesBeardPool[sBest * 200].x + 0.5) != src) return;
+  if ((uint)(g_pesBeardPool[sBest * PES_POOL_F4].x + 0.5) != src) return;
+  g_pesBeardCi = PesBeardChar(sBest, hd);   // (08/11) gestos en la paleta: el personaje de esta piel
   // (04/11 n, videos de Agustin 16:09: con la boca por huesos (x350 2) la barba baja MAS que el menton y los pelos de los costados se
   // estiran) la barba 3D esta pesada en los huesos de la cara (skf_jaw, labios...): con la boca por huesos el juego ya la abre por su
   // propio skinning y aca se sumaba otra vez el gesto de la piel. Ahora se le quita lo que su skinning ya la corrio respecto de la
@@ -94,7 +119,7 @@ void PesBeardFollow(uint vid, float3 rest, inout float3 pos, inout float3 prev)
   }
   if (!objSp) {
     float3 hp0 = PesBeardBoneP(sBest, 1, hd, P), hq0 = PesBeardBoneP(sBest, 97, hd, P);
-    float4 V0 = g_pesBeardPool[sBest * 200 + 193], V1 = g_pesBeardPool[sBest * 200 + 194], V2 = g_pesBeardPool[sBest * 200 + 195];
+    float4 V0 = g_pesBeardPool[sBest * PES_POOL_F4 + 193], V1 = g_pesBeardPool[sBest * PES_POOL_F4 + 194], V2 = g_pesBeardPool[sBest * PES_POOL_F4 + 195];
     float3 ws0 = float3(dot(float4(hp0, 1.0), V0), dot(float4(hp0, 1.0), V1), dot(float4(hp0, 1.0), V2));
     float3 wq0 = float3(dot(float4(hq0, 1.0), V0), dot(float4(hq0, 1.0), V1), dot(float4(hq0, 1.0), V2));
     if (length(ws0 - hw) > 0.04) return;
@@ -105,8 +130,8 @@ void PesBeardFollow(uint vid, float3 rest, inout float3 pos, inout float3 prev)
   }
   {
     uint s = sBest;
-    float4 H = g_pesBeardPool[s * 200];
-    float4 W0 = g_pesBeardPool[s * 200 + 193], W1 = g_pesBeardPool[s * 200 + 194], W2 = g_pesBeardPool[s * 200 + 195];
+    float4 H = g_pesBeardPool[s * PES_POOL_F4];
+    float4 W0 = g_pesBeardPool[s * PES_POOL_F4 + 193], W1 = g_pesBeardPool[s * PES_POOL_F4 + 194], W2 = g_pesBeardPool[s * PES_POOL_F4 + 195];
     float3 hp = PesBeardBoneP(s, 1, hd, P);
     float3 d = -fs * hp, dq = -fs * PesBeardBoneP(s, 97, hd, P);
     [unroll] for (uint k = 0; k < 4; k++) if (BW[k] > 0.0) {
@@ -141,7 +166,7 @@ void PesBeardFollow(uint vid, float3 rest, inout float3 pos, inout float3 prev)
       float o = clamp(IniParams.Load(int2(347, 0)).x, -0.25, 1.0);
       float4 R = IniParams.Load(int2(350, 0));
       if (abs(o) >= 0.001 && !(R.x > 0.5 && R.y > 0.5)) {
-        float4 JH = g_pesBeardPool[s * 200 + 197];
+        float4 JH = g_pesBeardPool[s * PES_POOL_F4 + 197];
         uint full = (uint)(H.z + 0.5) | ((uint)(H.w + 0.5) << 16), half_ = (uint)(JH.x + 0.5) | ((uint)(JH.y + 0.5) << 16);
         if ((full | half_) != 0u) {
           float A = 0.40 * o;

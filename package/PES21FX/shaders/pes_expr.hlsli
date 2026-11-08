@@ -24,6 +24,35 @@ cbuffer PESExprMesh : register(b12)
   float4 g_pesExprEye[2];
   uint4 g_pesExprMus;    // (01/11 i) musculos virtuales: x comisura izq (+x), y comisura der, z ceja interna izq, w ceja interna der (99 = no hay)
   uint4 g_pesExprShape;  // (04/11) gestos esculpidos: x primer float4 de la malla en g_pesShapes, y vertices, z primer indice (vmin), w formas (0 = no hay)
+  uint4 g_pesExprSlots[2];   // (08/11) hueso kDef (exprbones.cpp) de cada lugar de la paleta, 4 por uint (byte 255 = ninguno): gestos en la paleta
+}
+#include "pes_bonedelta.hlsli"
+uint PesSlotBone(uint j) { uint v = g_pesExprSlots[j >> 4][(j >> 2) & 3]; return (v >> ((j & 3) * 8)) & 255u; }
+// (08/11, Agustin: "todo sigue vibrando") GESTOS EN LA PALETA: a lo que cada influencia del skinning ya calculo (M_j p) se le aplica la
+// diferencia que la DLL quiere para ese hueso (t115, por personaje), pesada como el skinning: es exactamente lo que daba escribir el hueso
+// en el esqueleto, pero el juego ya no puede reescribirlo a medias. Tambien en el cuadro anterior (vectores de movimiento) y en
+// normal / tangente. Sin tabla (DLL vieja o expr_paleta = 0) no hace nada.
+void PesBoneDeltaApply(float4 p, uint4 I, float4 W, float3 n, float3 t, inout float3 pos, inout float3 prev, inout float3 nrm, inout float3 tng)
+{
+  uint head = g_pesExprMesh.x;
+  if (head > 31 || g_pesBoneD[0].x < 0.5) return;
+  if (g_pesExprSlots[0].x == 0xFFFFFFFFu && g_pesExprSlots[0].y == 0xFFFFFFFFu && g_pesExprSlots[1].x == 0xFFFFFFFFu && g_pesExprSlots[1].y == 0xFFFFFFFFu) return;   // sin emparejar todavia
+  float3 hw = mul(float4(g_pesBoneD[1].xyz, 1.0), g_vsBone.m_boneMatrices[head]);
+  int ci = PesBoneChar(hw);
+  if (ci < 0) return;
+  [unroll] for (int k = 0; k < 4; k++) {
+    uint j = I[k]; float w = W[k];
+    if (w <= 0.0 || j > 31) continue;
+    uint bone = PesSlotBone(j);
+    if (bone >= PES_BD_BONES) continue;
+    float4x3 M = g_vsBone.m_boneMatrices[j], Pm = g_vsPrevBone.m_boneMatrices[j];
+    float3 q = mul(p, M), qp = mul(p, Pm);
+    pos  += w * (PesBoneDeltaP(ci, bone, q, false) - q);
+    prev += w * (PesBoneDeltaP(ci, bone, qp, true) - qp);
+    float3 nj = mul(n, (float3x3)M), tj = mul(t, (float3x3)M);
+    nrm += w * (PesBoneDeltaV(ci, bone, nj, false) - nj);
+    tng += w * (PesBoneDeltaV(ci, bone, tj, false) - tj);
+  }
 }
 
 // (04/11, Agustin: gestos "esculpidos para Messi") GESTOS ESCULPIDOS POR VERTICE: la DLL carga PES21FX\formas\<huella>.bin por
