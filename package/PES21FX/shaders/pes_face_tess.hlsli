@@ -36,6 +36,9 @@
 
 Texture1D<float4> IniParams : register(t120);
 #include "pes_face_tess_player.hlsli"   // (04/11 m) multiplicadores por jugador (b10)
+#if PES_TESS_BODY
+#include "pes_limb_relief.hlsli"   // (08/11) relieve de manos, brazos y piernas (w376): alturas en 3D sobre el reposo
+#endif
 
 // lo que sale del VS (y entra al HS), en el orden del VS
 struct PesTessVS
@@ -162,6 +165,26 @@ PesTessConst PesTessPatch(InputPatch<PesTessVS, 3> p)
     f[0] = clamp(length(s1 - s2) / px * mul3.x, 1.0, min(16.0, fmax * mul3.x));
     f[1] = clamp(length(s2 - s0) / px * mul3.y, 1.0, min(16.0, fmax * mul3.y));
     f[2] = clamp(length(s0 - s1) / px * mul3.z, 1.0, min(16.0, fmax * mul3.z));
+#if PES_TESS_BODY
+    // (08/11, Agustin: "teselacion a los brazos y manos, piernas") con el relieve del cuerpo (w376) prendido, de cerca (< 1.2..2.2 m)
+    // cada arista de mano / brazo / pierna se parte hasta tener ~1.8 mm en el mundo: el detalle (tendones de 1.3 mm, surcos de 3-5 mm)
+    // no entra en la malla del juego (aristas de 3-8 mm). Por arista con sus dos extremos: sin grietas. El codigo del miembro
+    // (o1.z = 7 + accion / 1200, pes_limbs.hlsli) es el mismo en todo el dibujo.
+    {
+      float rW = IniParams.Load(int2(376, 0)).w;
+      float c0z = p[0].o1.z;
+      if (rW > 0.001 && IniParams.Load(int2(305, 0)).x > 0.5 && c0z > 6.5 && c0z < 7.5 && round((c0z - 7.0) * 1200.0) < 599.5) {
+        float3 dv = float3(length(p[0].pV.xyz), length(p[1].pV.xyz), length(p[2].pV.xyz));
+        float3 ed = float3(min(dv.y, dv.z), min(dv.z, dv.x), min(dv.x, dv.y));
+        float3 nk = 1.0 - smoothstep(1.2, 2.2, ed);
+        float3 lw = float3(length(p[1].pV.xyz - p[2].pV.xyz), length(p[2].pV.xyz - p[0].pV.xyz), length(p[0].pV.xyz - p[1].pV.xyz));
+        float3 fr = clamp(lw / 0.0018, 1.0, fmax);
+        f[0] = max(f[0], lerp(1.0, fr.x, nk.x));
+        f[1] = max(f[1], lerp(1.0, fr.y, nk.y));
+        f[2] = max(f[2], lerp(1.0, fr.z, nk.z));
+      }
+    }
+#endif
     // (07/11, Agustin: "que no consuma todo el rendimiento") ARISTAS DE ESPALDAS: si los dos extremos de una arista miran para el otro
     // lado de la camara (normal contra el vector a la camara < -0.3: nuca, detras de las orejas, la cara del otro lado de la cabeza) esa
     // arista no se parte. Se decide por arista con sus dos extremos, igual en los dos triangulos que la comparten: sin grietas.
@@ -382,6 +405,30 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
   float3 d = (pp - pl) * (saturate(T.y) * seam * fade * (T.x > 0.5 ? 1.0 : 0.0));
   float dl = length(d), tope = lerp(max(U.z, 0.0), clamp(EB.y, 0.0, max(U.z, 0.0)), saturate(eyeMix * 2.0)) * 0.001;
   if (dl > tope) d *= tope / max(dl, 1e-6);
+#if PES_TESS_BODY
+  {   // (08/11, Agustin: "teselacion a los brazos y manos, piernas ... sin mucha deformacion") RELIEVE DEL CUERPO: la altura del detalle
+      // anatomico (pes_limb_relief.hlsli: mano PesHandH, brazo PesArmH = la de pes_arm_anat_c, pierna PesLegH) desplaza la superficie
+      // teselada por la normal, tope 1.5 mm, w376 x la definicion general x172. Bordes de la pieza quietos (seam), se apaga con la distancia.
+    float rW = IniParams.Load(int2(376, 0)).w;
+    float c0z = p[0].o1.z;
+    if (rW > 0.001 && T.x > 0.5 && IniParams.Load(int2(305, 0)).x > 0.5 && c0z > 6.5 && c0z < 7.5) {
+      float q = round((c0z - 7.0) * 1200.0);
+      float3 r0 = PES_LERP3(pR).xyz; float3 pm = float3(abs(r0.x), r0.y, r0.z);
+      float hh = 0.0, crz = 0.0;
+      if (q < 511.5) hh = PesArmH(pm);
+      else if (q > 515.5 && q < 527.5) hh = PesHandH(pm, saturate((q - 520.0) / 7.0), crz);
+      else if (q > 527.5 && q < 599.5) {   // tension por grupo en o1.y = 2 + (cuadriceps + 8 isquios + 64 gemelo) / 1024
+        float na = round((p[0].o1.y - 2.0) * 1024.0);
+        float3 act = (p[0].o1.y > 1.99 && p[0].o1.y < 2.6) ? float3(fmod(na, 8.0), fmod(floor(na / 8.0), 8.0), floor(na / 64.0)) / 7.0 : float3(0.3, 0.3, 0.3);
+        hh = PesLegH(pm, fmod(q - 528.0, 8.0) / 7.0, saturate(act), crz);
+      }
+      float dGr = IniParams.Load(int2(172, 0)).x; dGr = dGr > 0.01 ? clamp(dGr, 0.0, 3.0) : 1.0;
+      float hm = clamp(hh * clamp(rW, 0.0, 2.0) * dGr, -0.0015, 0.0015);
+      float3 Nr = normalize(b.x * N0 + b.y * N1 + b.z * N2);
+      d += Nr * (hm * min(seam, seamR) * fade);
+    }
+  }
+#endif
   // (04/11 c) relieve desde la quinta textura (fila 359): por la normal interpolada, mm
   float4 R = IniParams.Load(int2(359, 0));   // x fuerza, y hundir surcos (mm), z levantar relieve (mm), w mip
 #if !PES_TESS_BODY
