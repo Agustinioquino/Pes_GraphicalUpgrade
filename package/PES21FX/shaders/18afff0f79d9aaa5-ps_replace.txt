@@ -78,6 +78,10 @@ void main(
   float4 P295 = IniParams.Load(int2(295,0));
   float pesPaintF = pesV3 ? saturate(-v5.w) : 0.0;
   float kC = pesV3 ? clamp(P295.y, 0.0, 2.0) : 0.0;
+  // (08/11 y) fila 407: x407 = 1 cesped artificial (color parejo: un tercio de la variacion por hoja, fibra lisa y brillante), y407 humedad
+  float4 P407 = IniParams.Load(int2(407,0));
+  bool pesArt = P407.x > 0.5;
+  if (pesArt) kC *= 0.35;
   float kT = pesV3 ? clamp(P295.z, 0.0, 2.0) : 0.0;
   float sC = 0.9 + 0.3 * kC;   // pendiente de la claridad del atlas (R): 0.9 = como antes
   // (27/10 j) puntas al sol y variacion por hoja solo donde la hoja ya mide en pantalla: rampa por encima del limite del color propio (z291)
@@ -219,7 +223,14 @@ void main(
       // albedo: el sol la enciende donde da y en la sombra queda apagada (el contraste sol / sombra lo pone la pasada del sol). Despues de x29
       // para que la correccion del amarillo no la deshaga. Las hojas pintadas no
       float tz = smoothstep(0.45, 1.0, relH) * kT * pesCfN * (1.0 - pesPaintF);
-      c *= lerp(float3(1.0, 1.0, 1.0), float3(1.16, 1.15, 0.98), tz);   // (27/10 k) 1.26/1.22/0.92 -> menos lima: con el sol dorado (z313) salia fluorescente
+      // (08/11 y, Agustin: "aun no veo como el pasto tine sus puntas con el sol") punta mas clara y calida (dorada, no lima: mas rojo que verde
+      // y menos azul): con 1.16 / 1.15 / 0.98 no se notaba. Tramo mas largo (desde el 35 % de la hoja) y no en el artificial (fibra pareja)
+      tz = smoothstep(0.35, 1.0, relH) * kT * pesCfN * (1.0 - pesPaintF) * (pesArt ? 0.3 : 1.0);
+      // x409 color de las puntas: 0 = el de antes (casi neutro), 1 = dorado, 2 = muy calido; y409 largo del tramo encendido (1 = 65 % de la hoja)
+      float4 P409 = IniParams.Load(int2(409,0));
+      float tW = P409.x > 0.001 ? clamp(P409.x, 0.0, 2.0) : 1.0;
+      if (P409.y > 0.001) tz = smoothstep(saturate(1.0 - 0.65 * clamp(P409.y, 0.2, 1.5)), 1.0, relH) * kT * pesCfN * (1.0 - pesPaintF) * (pesArt ? 0.3 : 1.0);
+      c *= lerp(float3(1.0, 1.0, 1.0), lerp(float3(1.16, 1.15, 0.98), float3(1.34, 1.24, 0.86), tW), tz);
     }
     o0.xyz = saturate(c);
   }
@@ -274,6 +285,20 @@ void main(
         pesDrop = drop;
       }
     }
+  }
+  // (08/11 y) y407 humedad: hoja mojada = albedo mas oscuro y saturado (la pelicula de agua quita la dispersion de la superficie), mas brillo y
+  // menos rugosidad, mas en la mitad alta de la hoja (donde queda el agua). x407 = 1 artificial: fibra lisa con brillo propio parejo
+  if (pesV3 && !pesFar) {
+    float wet = saturate(P407.y) * (1.0 - pesPaintF);
+    if (wet > 0.001) {
+      float3 cw = o0.xyz; float lw = dot(cw, float3(0.2126, 0.7152, 0.0722));
+      cw = lerp(lw.xxx, cw, 1.0 + 0.30 * wet) * (1.0 - 0.20 * wet);
+      o0.xyz = saturate(cw);
+      float wt = wet * (0.55 + 0.45 * smoothstep(0.3, 1.0, relH));
+      o2.y = saturate(o2.y + 0.35 * wt);
+      o2.x = lerp(o2.x, 0.14, 0.65 * wt);
+    }
+    if (pesArt) { o2.y = saturate(o2.y + 0.12 * (1.0 - pesPaintF)); o2.x = lerp(o2.x, 0.30, 0.5); }
   }
   r0.x = dot(v4.xyz, v4.xyz);
   r0.x = rsqrt(r0.x);

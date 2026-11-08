@@ -35,9 +35,20 @@ cbuffer PESTurfMatC : register(b6) { float4 pTM[8]; }
 // camara quieta el TAA del juego solo ve el movimiento que le dice el vector de velocidad (o6.zw / o7.y): antes se calculaba con la
 // MISMA posicion (solo camara), asi que las hojas se movian con el viento pero el TAA las creia quietas y las promediaba (borroso).
 float2 PESGrassWindV5(float2 pesRoot, float2 wd, float2 wc, float hb, float tw, float W, out float gustOut) {
+  // (08/11 y, Agustin: "el movimiento del viento no siempre es igual") x408 rachas y calmas en el tiempo: el viento de toda la cancha sube y
+  // baja lento (calmas de varios segundos, rachas que llegan) y las rachas pegan mas fuerte; y408 la direccion oscila hasta +- y408 grados
+  // (lento, y distinta en cada zona de la cancha). 0 / 0 = como antes. Todo depende solo del tiempo y la posicion (igual en los dos llamados)
+  float4 P408 = IniParams.Load(int2(408, 0));
+  float kG = clamp(P408.x, 0.0, 2.0);
+  if (kG > 0.001) {
+    float e1 = PESGnoise(float2(tw * 0.09, 3.7)) * 2.0 - 1.0, e2 = PESGnoise(float2(tw * 0.31 + dot(pesRoot, wd) * 0.015, 8.1)) * 2.0 - 1.0;
+    W *= max(1.0 + kG * (0.55 * e1 + 0.30 * e2), 0.12);
+  }
+  float dA = radians(clamp(P408.y, 0.0, 60.0)) * (PESGnoise(float2(tw * 0.06, 1.3) + pesRoot * 0.012) * 2.0 - 1.0);
+  if (abs(dA) > 1e-4) { float cA = cos(dA), sA = sin(dA); wd = float2(cA * wd.x - sA * wd.y, sA * wd.x + cA * wd.y); wc = float2(-wd.y, wd.x); }
   float2 q = pesRoot - wd * tw * 3.0;
   float g = PESGnoise(q * 0.08) * 0.6 + PESGnoise(float2(dot(q, wd) * 0.30, dot(q, wc) * 0.07) + 5.1) * 0.4;
-  float gust = smoothstep(0.30, 0.85, g);
+  float gust = smoothstep(0.30 - 0.08 * saturate(kG), 0.85, g) * (1.0 + 0.35 * kG * saturate(g - 0.6));
   float fl = sin(tw * (7.0 + 5.0 * hb) + hb * 6.2832);
   float sw = sin(tw * (1.6 + 0.8 * hb) + hb * 3.1 + dot(pesRoot, wd) * 0.9);
   gustOut = gust * W;
@@ -218,15 +229,30 @@ void main(
   float pesYaw = pesHv;   // (04/11) giro de la hoja para la luz por hoja del PS (z334): sin matas, al azar
   if (pesV3 && pesIsExt && pesCard >= 0) {
     float kM = clamp(P328.x, 0.0, 2.0), kV = clamp(P328.y, 0.0, 2.0);
+    // (08/11 y) fila 407: x407 = 1 cesped artificial (parejo: casi sin matas ni variedad por hoja); z407 variedad de matas: zonas de matas
+    // chicas (6 cm, mas bajas) y grandes (24 cm, mas altas) mezcladas con las de 12 cm, y mas diferencia de alto entre matas
+    float4 P407 = IniParams.Load(int2(407, 0));
+    bool pesArt = P407.x > 0.5;
+    float kSz = pesArt ? 0.0 : saturate(P407.z * 0.5) * 2.0;
+    if (pesArt) { kM *= 0.15; kV *= 0.3; }
     if (kM > 0.001) {
-      const float cl = 0.12;
+      // w408: tamano de la mata en cm (0 = 12 cm, como antes)
+      float cl0 = IniParams.Load(int2(408, 0)).w > 0.5 ? clamp(IniParams.Load(int2(408, 0)).w, 4.0, 30.0) * 0.01 : 0.12;
+      float cl = cl0, hOff = 0.0;
+      if (kSz > 0.001) {
+        float rg = PESGh21(floor(pesRoot / (6.0 * cl0)) * 0.211 + 0.17);   // zona de 6 matas (multiplo de 1/2, 1 y 2 matas: no se cortan en el medio)
+        float kS = saturate(kSz);
+        if (rg < 0.35 * kS) { cl = 0.5 * cl0; hOff = -0.12 * kS; }
+        else if (rg > 1.0 - 0.30 * kS) { cl = 2.0 * cl0; hOff = 0.15 * kS; }
+      }
       float2 cid = floor(pesRoot / cl);
       float2 jit = float2(PESGh21(cid * 0.173 + 0.29), PESGh21(cid * 0.311 + 0.71)) - 0.5;
       float2 ctr = (cid + 0.5 + jit * 0.5) * cl;
       float hc = PESGh21(cid * 0.137 + 0.43);                       // alto de la mata
       float2 dv = pesRoot - ctr; float dl = length(dv);
       float edge = saturate(dl / (0.7 * cl));                       // 0 centro de la mata, 1 borde
-      float hf = lerp(1.0, (0.72 + 0.56 * hc) * (1.0 - 0.30 * edge), saturate(kM));
+      float spr = 0.56 * (1.0 + 0.6 * saturate(kSz * 0.5));       // (08/11 y) z407: mas diferencia de alto entre matas
+      float hf = lerp(1.0, (1.0 - 0.5 * spr + hOff + spr * hc) * (1.0 - 0.30 * edge), saturate(kM));
       pesHmul *= hf;
       pesClumpLean += (dl > 1e-4 ? dv / dl : float2(0.0, 0.0)) * 0.45 * edge * kM;
       pesClumpAO = lerp(1.0, 0.62 + 0.38 * hc, 0.6) * lerp(1.0, 0.80, edge);   // 0.62..1: las matas bajas y los bordes reciben menos luz

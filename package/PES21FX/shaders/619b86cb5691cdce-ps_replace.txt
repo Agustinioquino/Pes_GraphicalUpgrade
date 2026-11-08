@@ -452,6 +452,7 @@ void main(
       // partido (158.xyz, casi fijo).
       float shadeB = 1.0; float3 skyTint = float3(1, 1, 1);
       float4 TB = IniParams.Load(int2(158,0));
+      float lowK = 0.0;   // (08/11 y) w407: lo que esta a ras del suelo (pelota, botines) recibe el rebote mas fuerte y mas verde
       if (BG.z > 0.0 && fGround > 0.02) {
         if (TB.y > 0.01) turf = lerp(turf, TB.xyz * 1.35, saturate(BG.z));
         float resS = g_psScene.m_shadowMapResolutions.x;
@@ -459,6 +460,7 @@ void main(
         float2 sCb = uvC * float2(2, -2) + float2(-1, 1);
         float3 Pcb = float3((sCb - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zb, zb);
         float hP = g_psScene.m_eyepos.y + dot(Pcb, upV);                    // altura del pixel sobre la cancha (m)
+        lowK = saturate((0.50 - hP) / 0.38) * step(-0.3, hP);              // 1 hasta 12 cm, 0 desde 50 cm (la pelota mide 22 cm)
         if (resS > 1.0 && smW > 1.0 && smH > 2.5 * smW && hP > -0.3 && hP < 6.0) {
           float3 Fb = Pcb - hP * upV;                                        // pie del pixel sobre la cancha
           float3 t1 = cross(upV, float3(0, 0, 1)); if (dot(t1, t1) < 1e-3) t1 = cross(upV, float3(1, 0, 0));
@@ -505,6 +507,10 @@ void main(
           }
         }
       }
+      // (08/11 y, Agustin: "como esto afecta a la pelota por abajo") w407: cerca del suelo el pasto al sol ocupa casi toda la mitad de abajo
+      // del cielo que ve el objeto (la pelota, los botines): rebote hasta 2.5x y con el verde del cesped (sin desaturar); 0 = como antes
+      { float kL = lowK * clamp(IniParams.Load(int2(407,0)).w, 0.0, 2.0);
+        if (kL > 0.001) { float3 tg = TB.y > 0.01 ? TB.xyz * 1.35 : float3(0.14, 0.24, 0.07); turf = lerp(turf, tg, saturate(0.7 * kL)) * (1.0 + 0.75 * kL); } }
       r2.xyz += sunC * sunUp * turf * shadeB * skyTint * fGround3 * max(BG.x, 0.0) * saturate((120.0 - zb) / 40.0) * PESAmbGain();
     }
   }
