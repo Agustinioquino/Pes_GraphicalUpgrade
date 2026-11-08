@@ -1260,6 +1260,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (g_skinDiagArmed.load(std::memory_order_relaxed)) SkinDiagDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0, t_drawVerts);   // (24/10) skintone.cpp
     if (g_toneChkArmed.load(std::memory_order_relaxed)) SkinToneCheckDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0);   // (24/10 c) punto de los dibujos de piel
     if (UiHideShouldSkip(c, ps ? ps->hash : 0)) { d.skip = true; return d.n > 0; }   // (08/11 e) x392: menus del juego ocultos (sin vidrio ni aro)
+    if (ID3D11ShaderResourceView* bg_ = EditorBgFor(c, ps ? ps->hash : 0)) { Remember(c, d, true, true, 8); c->PSSetShaderResources(8, 1, &bg_); }   // (08/11 qk2yxa) x424: fondo del visor del editor negro / imagen propia
     GlassBeforeDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0, t_drawVerts, d.glass);   // (24/10) vidrio de los menus: GS + PS propios (se devuelven en FX_DRAW)
     RingBeforeDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0, d.ring);   // (24/10 c) aro del musculo: variante de la piel / dibujo extra encima del jugador
     // 19/10: PS sin registrar (lo creo otra DLL, p.ej. cloth-mod): si el ini lo declara "como = <hash>", se trata como ese shader
@@ -1423,6 +1424,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     }
     // 21/10: SSGI temporal para la composicion: t26 (media resolucion, acumulado en el tiempo)
     // (08/11 0qtsss, Agustin: "el ssgi en el modo editar deberia cargar por completo") tambien la composicion del editor (f807) con x411
+    if (ps && ps->hash == 0xf807e74d5b900a15ULL) EditorBgNoteComposition();   // (08/11 qk2yxa) el visor del editor esta en pantalla (fondo x424)
     const bool ssgiEd_ = ps && ps->hash == 0xf807e74d5b900a15ULL && g_cfg.live[411][0] > 0.5f;
     // REGLA FIJA de la boca: la composicion del editor recibe la mascara del interior de la boca (t43) y ahi deja todo como antes
     if (ssgiEd_ && ps->repl) if (ID3D11ShaderResourceView* mm = MouthMaskSRV()) { Remember(c, d, true, true, 43); c->PSSetShaderResources(43, 1, &mm); }
@@ -2091,6 +2093,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     CharTrackPresent();    // (24/10) personajes: que jugador es cada esqueleto (ganchos en el primer Present, log)
     SkinDiagPresent();     // (24/10) tono de piel: diagnostico de los dibujos de personajes (w184)
     SkinTonePresent();     // (24/10) tono de piel por jugador: guardado y vista previa en el menu Fisico
+    EditorBgPresent();   // (08/11 qk2yxa) x424: cuadro nuevo, el fondo vuelve a ir antes de la escena
     { GpuZoneScope gz_(g_dev.imm, kGzGlass); GlassPresent(); }        // (24/10) vidrio de los menus: lectura de lo anotado por el PS y plan de copias del fondo
     MuscleHookPresent();   // (23/10) musculatura: ganchos a los huesos de musculo del motor (primer Present)
     ExprPresent();         // (31/10) expresiones faciales: mallas de cara nuevas (cabeza en la paleta)

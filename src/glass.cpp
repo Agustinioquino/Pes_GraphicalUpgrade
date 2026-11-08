@@ -17,6 +17,11 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <cmath>
+#include <mutex>
+#include <string>
+#include <DDSTextureLoader.h>
+#include <WICTextureLoader.h>
 
 namespace fx {
 
@@ -294,6 +299,85 @@ void GlassPresent() {
     for (int i = 0; i < 6 && i < p.draws && n < 140; i++) n += snprintf(tex + n, sizeof tex - n, " %ux%u", p.tw[i], p.th[i]);
     Log("vidrio: pasada del menu de %d dibujos, %d con nuestro shader, copia del fondo antes del #%d | texturas de los primeros:%s | %d copias desde el inicio",
         p.draws, p.bound, p.snapAt, tex, g_glassSnaps.load());
+}
+
+} // namespace fx
+
+namespace fx {
+
+// (08/11 qk2yxa) FONDO DEL VISOR DEL EDITOR (fila 424). Agustin: "reemplazar el fondo del modo edicion por una imagen propia, o
+// mejor un fondo negro". El fondo (la textura azul de Dream Patch) es un dibujo del PS del menu 55a003da con una textura de
+// archivo grande y apaisada (16:9 / 16:10), dibujado ANTES de la imagen del jugador (el mismo PS con un render target). Mientras
+// corre la composicion del editor (PS f807, ultimo medio segundo) se cambia su t8 por negro (x424 = 1) o por la imagen de
+// PES21FX\fondos\ (x424 = 2: fondo.png / fondo.jpg / fondo.dds; sin imagen queda negro). Lo dibujado despues de la escena
+// (paneles, textos) no se toca nunca, asi que el menu sigue encima igual. y/z/w424 libres.
+static std::atomic<double> s_edCompT{ -1.0 };
+static std::atomic<bool> s_bgSceneSeen{ false };
+static std::mutex s_bgMx;
+static ID3D11ShaderResourceView* s_bgBlack = nullptr;
+static ID3D11ShaderResourceView* s_bgImg = nullptr;
+static bool s_bgImgTried = false;
+static std::atomic<int> s_bgSwaps{ 0 }, s_bgDiag{ 0 };
+void EditorBgNoteComposition() { s_edCompT.store(Now(), std::memory_order_relaxed); }
+void EditorBgPresent() { s_bgSceneSeen.store(false, std::memory_order_relaxed); }
+
+static ID3D11ShaderResourceView* SolidSRV(uint32_t rgba) {
+    D3D11_TEXTURE2D_DESC td{}; td.Width = td.Height = 1; td.MipLevels = td.ArraySize = 1; td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_IMMUTABLE; td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    D3D11_SUBRESOURCE_DATA sd{ &rgba, 4, 4 }; ID3D11Texture2D* t = nullptr; ID3D11ShaderResourceView* v = nullptr;
+    if (SUCCEEDED(g_dev.dev->CreateTexture2D(&td, &sd, &t))) { g_dev.dev->CreateShaderResourceView(t, nullptr, &v); t->Release(); }
+    return v;
+}
+
+// imagen del usuario: se carga una vez (y de nuevo al volver a elegir "imagen propia" en el menu)
+static ID3D11ShaderResourceView* LoadUserBg() {
+    if (s_bgImgTried) return s_bgImg;
+    if (s_bgImg) { s_bgImg->Release(); s_bgImg = nullptr; }
+    s_bgImgTried = true;
+    static const wchar_t* kNames[] = { L"fondos\\fondo.png", L"fondos\\fondo.jpg", L"fondos\\fondo.jpeg", L"fondos\\fondo.bmp", L"fondos\\fondo.dds" };
+    for (const wchar_t* n : kNames) {
+        const std::wstring p = g_cfg.baseDir + n;
+        if (GetFileAttributesW(p.c_str()) == INVALID_FILE_ATTRIBUTES) continue;
+        ID3D11ShaderResourceView* v = nullptr; HRESULT hr;
+        const bool dds = _wcsicmp(n + wcslen(n) - 4, L".dds") == 0;
+        if (dds) hr = DirectX::CreateDDSTextureFromFile(g_dev.dev, p.c_str(), nullptr, &v);
+        else { EnsureComInit(); hr = DirectX::CreateWICTextureFromFileEx(g_dev.dev, nullptr, p.c_str(), 0, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE, 0, 0, DirectX::WIC_LOADER_IGNORE_SRGB | DirectX::WIC_LOADER_FORCE_RGBA32, nullptr, &v); }
+        if (FAILED(hr) || !v) { Log("fondo del editor: no se pudo cargar PES21FX\\%ls (0x%08x)", n, (unsigned)hr); if (v) v->Release(); continue; }
+        { ID3D11Resource* r = nullptr; v->GetResource(&r); ID3D11Texture2D* t2 = nullptr; D3D11_TEXTURE2D_DESC d{};
+          if (r) { r->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t2); r->Release(); } if (t2) { t2->GetDesc(&d); t2->Release(); }
+          Log("fondo del editor: imagen PES21FX\\%ls cargada (%ux%u)", n, d.Width, d.Height); }
+        s_bgImg = v; return v;
+    }
+    Log("fondo del editor: no hay imagen en PES21FX\\fondos\\ (fondo.png / .jpg / .dds): se usa negro");
+    return nullptr;
+}
+
+ID3D11ShaderResourceView* EditorBgFor(ID3D11DeviceContext* c, uint64_t ps) {
+    const int mode = (int)(g_cfg.live[424][0] + 0.5f);
+    if (ps != kUiPS || mode <= 0 || !g_dev.dev) return nullptr;
+    const double t = s_edCompT.load(std::memory_order_relaxed);
+    if (t < 0 || Now() - t > 0.5) return nullptr;                      // fuera del visor del editor: nada
+    if (s_bgSceneSeen.load(std::memory_order_relaxed)) return nullptr;  // despues de la escena: paneles del menu, no se tocan
+    ID3D11ShaderResourceView* t8 = nullptr; c->PSGetShaderResources(8, 1, &t8);
+    if (!t8) return nullptr;
+    D3D11_TEXTURE2D_DESC d{}; bool ok = false;
+    { ID3D11Resource* r = nullptr; t8->GetResource(&r);
+      if (r) { ID3D11Texture2D* t2 = nullptr; r->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t2); r->Release(); if (t2) { t2->GetDesc(&d); ok = true; t2->Release(); } } }
+    t8->Release();
+    if (!ok) return nullptr;
+    if (d.BindFlags & D3D11_BIND_RENDER_TARGET) { s_bgSceneSeen.store(true, std::memory_order_relaxed); return nullptr; }   // la imagen del jugador
+    const float ar = d.Height ? (float)d.Width / (float)d.Height : 0.0f;
+    const bool big = d.Width >= 1024 && ar > 1.45f && ar < 1.95f;      // fondo de pantalla completa (los atlas del menu son cuadrados o 2:1)
+    if (s_bgDiag.fetch_add(1) < 12) Log("fondo del editor: dibujo del menu antes de la escena con textura %ux%u -> %s", d.Width, d.Height, big ? "fondo (se cambia)" : "se deja");
+    if (!big) return nullptr;
+    std::lock_guard<std::mutex> lk(s_bgMx);
+    ID3D11ShaderResourceView* v = nullptr;
+    if (mode >= 2) v = LoadUserBg();
+    else if (s_bgImgTried) { s_bgImgTried = false; }                   // al volver a "imagen propia" se relee el archivo
+    if (!v) { if (!s_bgBlack) s_bgBlack = SolidSRV(0xff000000u); v = s_bgBlack; }
+    const int n = s_bgSwaps.fetch_add(1);
+    if (n == 0 || n == 20000) Log("fondo del editor (x424 = %d): fondo %ux%u cambiado por %s (%d veces)", mode, d.Width, d.Height, v == s_bgBlack ? "negro" : "la imagen propia", n + 1);
+    return v;
 }
 
 } // namespace fx
