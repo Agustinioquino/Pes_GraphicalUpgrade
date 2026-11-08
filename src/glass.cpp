@@ -77,8 +77,10 @@ void GlassReloadShaders() {
 
 static bool EnsureTargets(const D3D11_TEXTURE2D_DESC& rd) {
     if (s_snap && s_w == rd.Width && s_h == rd.Height && s_fmt == rd.Format) return true;
-    RelT(s_snapSRV); RelT(s_snap);
-    for (int i = 0; i < 5; i++) { RelT(s_lvSRV[i]); RelT(s_lvRTV[i]); RelT(s_lv[i]); }
+    // (08/11 e) las copias pudieron quedar enlazadas en una lista diferida del juego: se sueltan a los 30 s
+    auto drop = [](auto*& p) { if (p) { DeferRelease(p); p = nullptr; } };
+    drop(s_snapSRV); drop(s_snap);
+    for (int i = 0; i < 5; i++) { drop(s_lvSRV[i]); drop(s_lvRTV[i]); drop(s_lv[i]); }
     s_haveSnap = false;
     D3D11_TEXTURE2D_DESC td{}; td.Width = rd.Width; td.Height = rd.Height; td.MipLevels = 1; td.ArraySize = 1; td.Format = rd.Format;
     td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
@@ -256,6 +258,28 @@ void GlassAfterDraw(ID3D11DeviceContext* c, GlassScope& g) {
     c->PSSetSamplers(15, 1, &g.samp); if (g.samp) g.samp->Release();
     c->PSSetConstantBuffers(13, 1, &g.cb); if (g.cb) g.cb->Release();
     g = GlassScope();
+}
+
+// (08/11 e) "Ocultar los menus del juego" (x392, Alt+Shift+M, boton del ojo tachado arriba en el menu Insert): Agustin pidio ver
+// el visor del editor (Apariencia, Movimiento) sin los paneles del juego encima. Los menus del juego son dibujos del PS 55a003da
+// con texturas de archivo (paneles, letras, iconos, fondos); la imagen del jugador / la escena 3D es el mismo PS pero con una
+// textura que es un render target (el juego la dibujo este cuadro). Se saltan los dibujos de 55a003da cuya textura t8 no es
+// render target (o no hay textura). Nunca se guarda prendido (kDebugParams): al reiniciar arranca mostrando los menus.
+std::atomic<int> g_uiHidden{0};
+bool UiHideShouldSkip(ID3D11DeviceContext* c, uint64_t ps) {
+    if (ps != kUiPS || g_cfg.live[392][0] < 0.5f) return false;
+    bool rt = false;
+    ID3D11ShaderResourceView* t8 = nullptr; c->PSGetShaderResources(8, 1, &t8);
+    if (t8) {
+        ID3D11Resource* r = nullptr; t8->GetResource(&r);
+        if (r) { ID3D11Texture2D* t2 = nullptr; r->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t2); r->Release();
+            if (t2) { D3D11_TEXTURE2D_DESC d; t2->GetDesc(&d); rt = (d.BindFlags & D3D11_BIND_RENDER_TARGET) != 0; t2->Release(); } }
+        t8->Release();
+    }
+    if (rt) return false;
+    const int n = g_uiHidden.fetch_add(1);
+    if (n == 0 || n == 5000) Log("menus del juego ocultos (x392): dibujo del menu salteado (%d hasta ahora); la escena (render target) se sigue dibujando", n + 1);
+    return true;
 }
 
 // en Present: (w191) cada 20 s, como fue la ultima pasada del menu
