@@ -61,7 +61,7 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
 // irradiancia (t9) y el brillo (t10) con los mismos datos que usa la pasada de luz real (normal, rugosidad y translucidez
 // del G-buffer), una sombra trazada en pantalla (la nariz sobre la mejilla, el menton sobre el cuello) y se atenua la luz
 // de estudio para que la sombra se vea. Solo donde no hubo sol hace poco (w44 = 0) y en escena de menu sin cancha (w255 = 1).
-//   x297 prendido | y297 preset (0 manual, 1 dia, 2 tarde, 3 noche, 4 estudio, 5 nublado, 6 lluvia, 7 mediodia, 8 contraluz, 9 noche 2 torres) | z297 rumbo (grados; 0 = desde la camara, 90 = derecha,
+//   x297 prendido | y297 preset (0 manual, 1 dia, 2 tarde, 3 noche, 4 estudio, 5 nublado, 6 lluvia, 7 mediodia, 8 contraluz, 9 noche 2 torres, 10 sol cercano a contraluz, 11 foco de estadio cercano, 12 una luz fuerte y la otra apagada) | z297 rumbo (grados; 0 = desde la camara, 90 = derecha,
 //   180 = contraluz) | w297 altura (grados) | x298 intensidad (veces la luz de estudio sobre la piel) | y298 calidez (0 azul
 //   .. 1 naranja) | z298 luz de estudio que queda | w298 sombra trazada (0 = sin sombra)
 //   x319 icono de las luces en pantalla (DLL, overlay.cpp) | y319 relleno del estudio | z319 recorte del estudio
@@ -336,6 +336,14 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   else if (preset == 7) { az = 30;  el = 78; inten = 1.25; warm = 0.58; keep = 0.50; }   // mediodia: sol casi vertical (cuencas de los ojos oscuras)
   else if (preset == 8) { az = 165; el = 10; inten = 1.00; warm = 0.95; keep = 0.45; }   // atardecer a contraluz: sol bajo detras del jugador
   else if (preset == 9) { az = -45; el = 35; inten = 0.70; warm = 0.15; keep = 0.35; tower2 = true; }   // noche con dos torres opuestas (dos sombras)
+  // (08/11, Agustin: "mas opciones de luz, como un sol cercano para los contraluz, un foco de estadio cercano, una fuente de luz
+  // fuerte y otra apagada") 10 = sol cercano a contraluz (foco calido a 3 m detras del jugador: borde encendido y caida real),
+  // 11 = foco de estadio cercano (torre blanca fria a 5 m, alta, cono de 40 grados), 12 = una luz fuerte y la otra apagada
+  // (una sola luz dura, sin relleno de cielo ni suelo y casi sin la luz de estudio del juego: lado en sombra casi negro)
+  float pSpotD = 0.0, pSpotA = 0.0;
+  if (preset == 10)      { az = 170; el = 20; inten = 1.60; warm = 0.80; keep = 0.35; skyK = 0.08; gndK = 0.05; pSpotD = 3.0; pSpotA = 70.0; }
+  else if (preset == 11) { az = -35; el = 45; inten = 1.40; warm = 0.12; keep = 0.30; skyK = 0.04; gndK = 0.03; pSpotD = 5.0; pSpotA = 40.0; }
+  else if (preset == 12) { az = 55;  el = 30; inten = 1.80; warm = 0.55; keep = 0.04; skyK = 0.0;  gndK = 0.0; }
   // (04/11 q, Agustin: "en el preset del dia por que no me permites rotar el sol") en los presets el Rumbo gira el sol alrededor del
   // jugador: se suma al rumbo del preset (0 = el del preset)
   if (preset != 0 && preset != 4) az += E.z;
@@ -357,12 +365,12 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   float3 Lw = PesDirL(az, el, zSgn), L = Lw;
   // (07/11) foco en el manual: una luz con posicion a y377 m del jugador (el punto del centro de la pantalla) en la direccion del
   // rumbo / altura, cono de z377 grados con borde suave y caida con el cuadrado de la distancia (1 en el jugador)
-  bool spot = preset == 0 && E4.x > 0.5;
+  bool spot = (preset == 0 && E4.x > 0.5) || pSpotD > 0.0;
   float3 Pl = 0.0, lcol = sunC;
   if (spot) {
     float zCen = LinZ(float2(0.5, 0.5)), zCA = abs(zCen);
     float3 Pc = (zCA >= 0.1 && zCA <= 60.0) ? float3(-m_cameraCenterOffset.xy * m_projectionParam.xy * zCen, zCen) : float3(0, 0, 1.5 * zSgn);
-    float distL = clamp(E4.y > 0 ? E4.y : 2.0, 0.3, 12.0), ap = clamp(E4.z > 0 ? E4.z : 45.0, 5.0, 170.0);
+    float distL = clamp(pSpotD > 0.0 ? pSpotD : (E4.y > 0 ? E4.y : 2.0), 0.3, 12.0), ap = clamp(pSpotA > 0.0 ? pSpotA : (E4.z > 0 ? E4.z : 45.0), 5.0, 170.0);
     Pl = Pc + Lw * distL;
     // (08/11) a prueba de NaN: el punto puede caer encima del foco (d = 0) o la profundidad del centro venir rara al cambiar de tipo
     float3 dv = Pl - Pv; float d2 = dot(dv, dv);
