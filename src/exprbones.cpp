@@ -823,6 +823,9 @@ static bool WriteBone(Skel& S, int d, const Xf& base, const float* nq, const flo
         return true;
     }
     float out[7] = { nq[0], nq[1], nq[2], nq[3], nt[0], nt[1], nt[2] };
+    // (08/11 e, Agustin: "asegurate de que los sliders funcionen") sin paleta (expr_paleta = 0) los sliders de 'control total'
+    // (filas 421 / 422) y el tope por hueso tambien valen al escribir el esqueleto: mismas cuentas que la paleta
+    if (d < D_NECKB) ExprZoneScale(d, S.gq[d], S.gt[d], out, out + 4);
     if (!SafeCopy((char*)S.cur[d] + 16, out, 28)) return false;
     Xf chk; if (ReadXf(S.cur[d], chk)) { memcpy(S.wq[d], chk.q, sizeof chk.q[0] * 4); memcpy(S.wt[d], chk.t, sizeof chk.t[0] * 3); }
     else { memcpy(S.wq[d], nq, 4 * sizeof(float)); memcpy(S.wt[d], nt, 3 * sizeof(float)); }
@@ -1642,6 +1645,7 @@ static void FrameBody(const void* skel) {
     }
     Secondary(*S, hr, smS, openS);
     Neck(*S, 0.90f * pGri + 0.35f * pAng + 0.45f * (std::max)(xB[1], 0.0f) + (std::max)(0.0f, openS - 0.6f) + 0.40f * eff + 0.15f * nConc, openS);
+    if (g_cfg.live[397][0] > 0.001f) poseOn = true;   // (08/11 e) x397 suaviza los gestos del juego aunque no haya gestos propios
     if (fabsf(o) < 0.001f && teeth < 0.001f && !poseOn) { for (int d = 0; d < 18; d++) if (S->wHave[d]) Release(*S, d); for (int d = 26; d <= 30; d++) if (S->wHave[d]) Release(*S, d); return; }   // slider en 0: la boca vuelve a la del juego
     static const float X[3] = { 1.0f, 0.0f, 0.0f }; float ax[3]; QRot(hr, X, ax);
     float ln = sqrtf(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]); if (ln < 0.5f) return; for (float& v : ax) v /= ln;
