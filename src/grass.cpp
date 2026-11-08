@@ -13,6 +13,8 @@
 //   del pasto del juego (px/m, 0 = modo por distancia); z63 mitad del alto de pantalla (px)
 #include "core.h"
 #include <d3d11_1.h>
+#include <DDSTextureLoader.h>
+#include <ScreenGrab.h>
 #include <atomic>
 #include <cmath>
 #include <vector>
@@ -705,7 +707,30 @@ void GrassFrameBoundary(UINT flags) {
     g_grassPatchesLastFrame = s_lastCount;
 }
 
+// (08/11 f) la primera vez por sesion que hay estado real del pasto (partido), se guardan sus texturas de la cancha para el editor
+static void GrassSaveStadium() {
+    static bool done = false;
+    if (done || !g_dev.imm || g_cfg.baseDir.empty()) return;
+    ID3D11ShaderResourceView* v[8] = {};
+    { std::lock_guard<std::mutex> lk(s_stMx); if (!s_state.valid) return;
+      for (int i = 0; i < 7; i++) { v[i] = s_state.vsSrv[i]; if (v[i]) v[i]->AddRef(); }
+      v[7] = s_state.psSrv; if (v[7]) v[7]->AddRef(); }
+    done = true;
+    std::wstring dir = g_cfg.baseDir + L"textures\\"; CreateDirectoryW(dir.c_str(), nullptr); dir += L"pasto_editor\\"; CreateDirectoryW(dir.c_str(), nullptr);
+    int ok = 0, fail = 0;
+    for (int i = 0; i < 8; i++) {
+        if (!v[i]) continue;
+        ID3D11Resource* r = nullptr; v[i]->GetResource(&r);
+        if (r) { wchar_t nm[16]; if (i < 7) swprintf(nm, 16, L"vs%d.dds", i); else wcscpy_s(nm, L"ps.dds");
+            if (SUCCEEDED(DirectX::SaveDDSTextureToFile(g_dev.imm, r, (dir + nm).c_str()))) ok++; else fail++;
+            r->Release(); }
+        v[i]->Release();
+    }
+    Log("pasto en el editor: texturas de la cancha de este partido guardadas (%d, %d fallaron) en PES21FX\\textures\\pasto_editor: el editor las usa desde la proxima sesion", ok, fail);
+}
+
 void GrassPresent() {
+    GrassSaveStadium();
     float T[4]; Thresholds(T);
     // (27/10 o) densidad adaptativa (fila 333): la DLL mide el tiempo entre Presents y, si los FPS quedan por debajo del objetivo x333,
     // baja la densidad del pasto del mod (C base y piso de capas) hasta el minimo y333; cuando sobran FPS la vuelve a subir despacio.
@@ -802,9 +827,21 @@ static bool BuildEditorState() {
     float c4[20] = { 0, 0, 0, 0,  1.0f / 105.0f, 1.0f / 68.0f, 0.5f, 0.5f,  0, 0, 1, 1,  999, 0, 999, 0,  999, 0, 999, 0 };   // uv de la cancha, pelota lejos
     float p0[20] = {}; p0[8] = 1920; p0[9] = 1080;                                              // m_renderBuffer.xy (se actualiza al emitir)
     g.vsCb0 = cbuf(c0, sizeof c0); g.vsCb4 = cbuf(c4, sizeof c4); g.psCb0 = cbuf(p0, sizeof p0); s_edPsCb = g.psCb0; if (s_edPsCb) s_edPsCb->AddRef();
-    g.vsSrv[0] = Tex1x1(0.22f, 0.40f, 0.10f, 1); g.vsSrv[1] = Tex1x1(0, 0, 0, 0); g.vsSrv[2] = Tex1x1(0.5f, 0.5f, 0.5f, 1); g.vsSrv[3] = Tex1x1(0.5f, 0.5f, 0.5f, 1);
-    g.vsSrv[4] = Tex1x1(0.22f, 0.40f, 0.10f, 1); g.vsSrv[5] = Tex1x1(0, 0, 0, 0); g.vsSrv[6] = Tex1x1(0.5f, 0.5f, 1.0f, 1);
-    g.psSrv = Tex1x1(0.25f, 0.45f, 0.12f, 1);
+    // (08/11 f, Agustin: "podrias hacer que cargue de algun estadio?") texturas reales de la cancha guardadas del ultimo partido visto
+    // (GrassSaveStadium: PES21FX\textures\pasto_editor\vs0..vs6.dds, ps.dds); si no hay, las de 1x1
+    int fromFile = 0;
+    auto load = [&](const wchar_t* name) -> ID3D11ShaderResourceView* {
+        std::wstring path = g_cfg.baseDir + L"textures\\pasto_editor\\" + name;
+        if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) return nullptr;
+        ID3D11ShaderResourceView* v = nullptr;
+        if (SUCCEEDED(DirectX::CreateDDSTextureFromFile(g_dev.dev, path.c_str(), nullptr, &v)) && v) { fromFile++; return v; }
+        return nullptr;
+    };
+    const float k1[7][4] = { { 0.22f, 0.40f, 0.10f, 1 }, { 0, 0, 0, 0 }, { 0.5f, 0.5f, 0.5f, 1 }, { 0.5f, 0.5f, 0.5f, 1 }, { 0.22f, 0.40f, 0.10f, 1 }, { 0, 0, 0, 0 }, { 0.5f, 0.5f, 1.0f, 1 } };
+    for (int i = 0; i < 7; i++) { wchar_t nm[16]; swprintf(nm, 16, L"vs%d.dds", i);
+        g.vsSrv[i] = load(nm); if (!g.vsSrv[i]) g.vsSrv[i] = Tex1x1(k1[i][0], k1[i][1], k1[i][2], k1[i][3]); }
+    g.psSrv = load(L"ps.dds"); if (!g.psSrv) g.psSrv = Tex1x1(0.25f, 0.45f, 0.12f, 1);
+    Log("pasto en el editor: estado propio con %d de 8 texturas de la cancha del ultimo partido (PES21FX\\textures\\pasto_editor)%s", fromFile, fromFile ? "" : "; sin partido guardado: color fijo");
     D3D11_SAMPLER_DESC smp = {}; smp.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR; smp.AddressU = smp.AddressV = smp.AddressW = D3D11_TEXTURE_ADDRESS_WRAP; smp.MaxLOD = D3D11_FLOAT32_MAX;
     g_dev.dev->CreateSamplerState(&smp, &g.vsSmp[0]); smp.AddressU = smp.AddressV = smp.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP; g_dev.dev->CreateSamplerState(&smp, &g.vsSmp[1]);
     if (g.vsSmp[0]) { g.psSmp = g.vsSmp[0]; g.psSmp->AddRef(); }
