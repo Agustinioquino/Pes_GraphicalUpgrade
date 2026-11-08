@@ -290,7 +290,7 @@ def main():
     if pro and fn:
         ti = resname['instanceIndexBuf']
         body.append('  uint pesIdx = t%d[(uint)asfloat(cb5[9].x) + v%d.x].v[0];' % (ti, vreg['SV_InstanceID']))
-        body.append('  %s(v%d, v%d, v%d, v%d, pesIdx);' % (fn, vreg['POSITION'], vreg['NORMAL'], vreg['TANGENT'], vreg['COLOR']))
+        body.append('  %s(v%d, v%d, v%d, v%d, pesIdx, v%d, v%d);' % (fn, vreg['POSITION'], vreg['NORMAL'], vreg['TANGENT'], vreg['COLOR'], vreg['BLENDINDICES'], vreg['BLENDWEIGHT']))
     body += t.body
     if not body[-1].strip().endswith('return;'): body.append('  PES_OUT')
     body.append('}')
