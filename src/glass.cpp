@@ -318,6 +318,8 @@ static ID3D11ShaderResourceView* s_bgBlack = nullptr;
 static ID3D11ShaderResourceView* s_bgImg = nullptr;
 static bool s_bgImgTried = false;
 static std::atomic<int> s_bgSwaps{ 0 }, s_bgDiag{ 0 };
+static std::atomic<uintptr_t> s_bgKnown[4];   // (08/11 kd63zh b) texturas ya reconocidas como fondo
+static std::atomic<int> s_bgKnownN{ 0 };
 void EditorBgNoteCompositionCount();
 void EditorBgNoteComposition() { s_edCompT.store(Now(), std::memory_order_relaxed); EditorBgNoteCompositionCount(); }
 static void EditorBgDiagTick(int mode);
@@ -377,9 +379,9 @@ ID3D11ShaderResourceView* EditorBgFor(ID3D11DeviceContext* c, uint64_t ps) {
     // 55a003da que lee en t8 una textura render target grande (la imagen del jugador). Se mira primero t8 y luego la ventana de 0.5 s.
     ID3D11ShaderResourceView* t8 = nullptr; c->PSGetShaderResources(8, 1, &t8);
     if (!t8) { s_bgNNoT8.fetch_add(1, std::memory_order_relaxed); return nullptr; }
-    D3D11_TEXTURE2D_DESC d{}; bool ok = false;
+    D3D11_TEXTURE2D_DESC d{}; bool ok = false; uintptr_t resId = 0;
     { ID3D11Resource* r = nullptr; t8->GetResource(&r);
-      if (r) { ID3D11Texture2D* t2 = nullptr; r->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t2); r->Release(); if (t2) { t2->GetDesc(&d); ok = true; t2->Release(); } } }
+      if (r) { resId = (uintptr_t)r; ID3D11Texture2D* t2 = nullptr; r->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t2); r->Release(); if (t2) { t2->GetDesc(&d); ok = true; t2->Release(); } } }
     t8->Release();
     if (!ok) return nullptr;
     if (d.BindFlags & D3D11_BIND_RENDER_TARGET) {   // la imagen del jugador: el visor del editor esta en pantalla
@@ -393,11 +395,17 @@ ID3D11ShaderResourceView* EditorBgFor(ID3D11DeviceContext* c, uint64_t ps) {
     }
     const double t = s_edCompT.load(std::memory_order_relaxed);
     if (t < 0 || Now() - t > 0.5) { s_bgNNoComp.fetch_add(1, std::memory_order_relaxed); return nullptr; }   // fuera del visor del editor: nada
-    if (s_bgSceneSeen.load(std::memory_order_relaxed)) { s_bgNAfter.fetch_add(1, std::memory_order_relaxed); return nullptr; }  // despues de la escena: paneles del menu, no se tocan
+    // (08/11 kd63zh b) el fondo parpadeaba (log d1ec707: 15606 cambiados, 131421 "despues de la escena"): en muchos cuadros el
+    // mismo fondo se dibuja despues de la imagen del jugador. La textura que ya se reconocio como fondo se cambia siempre,
+    // aunque venga despues; lo demas dibujado despues de la escena (paneles, textos) sigue sin tocarse.
+    bool known = false;
+    for (int i = 0; i < 4; i++) if (resId && s_bgKnown[i].load(std::memory_order_relaxed) == resId) known = true;
+    if (!known && s_bgSceneSeen.load(std::memory_order_relaxed)) { s_bgNAfter.fetch_add(1, std::memory_order_relaxed); return nullptr; }  // despues de la escena: paneles del menu, no se tocan
     const float ar = d.Height ? (float)d.Width / (float)d.Height : 0.0f;
     const bool big = d.Width >= 1024 && ar > 1.45f && ar < 1.95f;      // fondo de pantalla completa (los atlas del menu son cuadrados o 2:1)
     if (s_bgDiag.fetch_add(1) < 12) Log("fondo del editor: dibujo del menu antes de la escena con textura %ux%u -> %s", d.Width, d.Height, big ? "fondo (se cambia)" : "se deja");
     if (!big) { s_bgNSmall.fetch_add(1, std::memory_order_relaxed); return nullptr; }
+    if (!known && resId) { const int k = s_bgKnownN.fetch_add(1) & 3; s_bgKnown[k].store(resId, std::memory_order_relaxed); }   // se recuerda la textura del fondo (solo el puntero, sin AddRef)
     std::lock_guard<std::mutex> lk(s_bgMx);
     ID3D11ShaderResourceView* v = nullptr;
     if (mode >= 2) v = LoadUserBg();
