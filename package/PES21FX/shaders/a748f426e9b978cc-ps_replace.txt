@@ -885,7 +885,10 @@ void main(
         float maxH = (HT.z > 0.1 ? HT.z : 12.0) * 0.01;
         float Th = exp(-thickH * densH) * (1.0 - smoothstep(maxH * 0.6, maxH, thickH));
         float backSMh = saturate(0.3 + dot(-nH, LH)) * (1.0 - saturate(rawNdotL * 3.0));
-        transH = max(Th * backSMh * (0.6 + 0.4 * fwdH) * 1.6, transH * 0.25);
+        // (08/11 v, Agustin: "cuando el pelo esta en un estadio completamente en sombra no tiene que iluminarse") si lo que tapa el sol
+        // esta mas lejos que el grosor maximo del pelo (tribuna, techo, otro jugador) no pasa luz: antes quedaba 25 % del contraluz
+        float ownH = 1.0 - smoothstep(maxH * 0.6, maxH, thickH);
+        transH = max(Th * backSMh * (0.6 + 0.4 * fwdH) * 1.6, transH * 0.25 * ownH);
       }
       float3 Tch = float3(1.0, 0.86, 0.70);                                       // la luz que pasa entre las hebras sale calida
       o0.xyz += lightH * transH * HT.x * 0.45 * Tch;

@@ -17,16 +17,29 @@ void BrowMap(float2 uv, float2 texel, out float4 o3) {
   float zone = max(Ell(uv, float2(0.395, 0.312), float2(0.13, 0.05), 0.35), Ell(uv, float2(0.605, 0.312), float2(0.13, 0.05), 0.35));
   zone *= smoothstep(0.365, 0.345, uv.y);
   if (zone < 0.01) return;
-  float sk = 0; float3 skC = 0;
+  float sk = 0; float3 skC = 0; float aSk = 1.0;
   [unroll] for (int k = 0; k < 8; k++) {
     float a = k * 0.785398;
-    float3 cN = tDiffuse.SampleLevel(sLin, uv + float2(cos(a) * 0.034, sin(a) * 0.026), 3.0).rgb;
+    float4 cN4 = tDiffuse.SampleLevel(sLin, uv + float2(cos(a) * 0.034, sin(a) * 0.026), 3.0);
+    float3 cN = cN4.rgb;
     float lN = LumF(cN);
-    if (lN > sk) { sk = lN; skC = cN; }   // (08/11 v) tambien el COLOR de la piel de alrededor (para separarlo del pelo)
+    if (lN > sk) { sk = lN; skC = cN; aSk = cN4.a; }   // (08/11 v) y el alfa de la piel   // (08/11 v) tambien el COLOR de la piel de alrededor (para separarlo del pelo)
   }
   sk = max(sk, 0.01);
-  float l1 = LumF(tDiffuse.SampleLevel(sLin, uv, 1.0).rgb);
+  float4 t1 = tDiffuse.SampleLevel(sLin, uv, 1.0);
+  float l1 = LumF(t1.rgb);
   float mask = smoothstep(0.80, 0.58, l1 / sk) * zone;
+  // (08/11 v, Agustin: "tenes la textura y su alfa detecta las partes de pelo") el ALFA de face_bsm_alp marca el pelo pintado: donde
+  // el alfa se aparta del de la piel de alrededor, eso es pelo. Si la cara trae ese alfa (difiere en la zona), manda el alfa
+  // (contorno exacto, sin confundir piel oscura / sombras pintadas con pelo); si el alfa es parejo, queda la oscuridad como antes
+  float aD = abs(t1.a - aSk);
+  float aMax = aD;
+  [unroll] for (int j = 0; j < 4; j++) {
+    float2 o = float2(j < 2 ? (j == 0 ? 0.02 : -0.02) : 0.0, j >= 2 ? (j == 2 ? 0.008 : -0.008) : 0.0);
+    aMax = max(aMax, abs(tDiffuse.SampleLevel(sLin, uv + o, 1.0).a - aSk));
+  }
+  float useA = smoothstep(0.08, 0.2, aMax);   // la cara trae mascara de pelo en el alfa
+  mask = lerp(mask, smoothstep(0.06, 0.35, aD) * zone, useA);
   // color (04/11 e, Agustin: "el color es lo que falla", salian casi negras): antes pesaba al CUADRADO lo oscuro -> ganaba solo el
   // texel mas negro. Ahora: promedio de los texeles de pelo (peso suave, no al cuadrado) mezclado con el promedio de la zona, y
   // se le devuelve el tono (saturacion x1.35) y algo de luz: el pelo de la ceja es castano / rubio translucido, no negro
@@ -36,8 +49,10 @@ void BrowMap(float2 uv, float2 texel, out float4 o3) {
   // color) -> pelo = (texel - (1 - a) * piel) / a, y pesa mas donde el pelo cubre mas (a alto)
   float3 acc = 0; float wsum = 0;
   [unroll] for (int y = -2; y <= 2; y++) [unroll] for (int x = -2; x <= 2; x++) {
-    float3 c = tDiffuse.SampleLevel(sLin, uv + float2(x, y) * texel * 2.0, 0.0).rgb;
+    float4 c4 = tDiffuse.SampleLevel(sLin, uv + float2(x, y) * texel * 2.0, 0.0);
+    float3 c = c4.rgb;
     float al = saturate((1.0 - LumF(c) / sk) / 0.55);          // cobertura del pelo en ese texel (55 % mas oscuro = todo pelo)
+    al = lerp(al, saturate(abs(c4.a - aSk) / 0.6), useA);      // (08/11 v) con mascara en el alfa, la cobertura la da el alfa
     float3 hcK = max((c - (1.0 - al) * skC) / max(al, 0.25), 0.0);
     float w = al * al;
     acc += hcK * w; wsum += w;
