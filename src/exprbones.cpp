@@ -132,6 +132,45 @@ static void QScale(const float* q, float w, float* o) {   // giro por w (eje-ang
     if (s < 1e-6f) { o[0] = o[1] = o[2] = 0; o[3] = 1; return; }
     const float h = atan2f(s, q[3]) * w, k = sinf(h) / s; o[0] = q[0] * k; o[1] = q[1] * k; o[2] = q[2] * k; o[3] = cosf(h);
 }
+// (08/11, Agustin: "utiliza un metodo seguro, practico y avanzado de transicion") dos herramientas, las dos acotadas (nunca se disparan):
+// RESORTE CRITICAMENTE AMORTIGUADO (SmoothDamp, Unity / Game Programming Gems 4): sigue un valor con velocidad continua, sin rebote, con
+// tiempo de respuesta tau; mejor que el filtro exponencial porque arranca y frena suave (C1) y no se queda atras tanto con el mismo tau.
+static void Damp(float& x, float& v, float target, float tau, float dt) {
+    const float w = 2.0f / (std::max)(tau, 1e-3f), xw = w * dt;
+    const float e = 1.0f / (1.0f + xw + 0.48f * xw * xw + 0.235f * xw * xw * xw);
+    const float ch = x - target, tmp = (v + w * ch) * dt;
+    v = (v - w * tmp) * e; x = target + (ch + tmp) * e;
+}
+// INERTIALIZACION (Bollo, GDC 2018; Unreal / Ubisoft For Honor): en una transicion no se mezclan dos poses durante un rato, se toma la
+// DIFERENCIA entre lo que se venia mostrando (con su velocidad) y la pose nueva, y esa diferencia se apaga con un polinomio de grado 5
+// que llega exactamente a cero con velocidad y aceleracion cero en t1 (sin rebote; si la velocidad va al reves del salto, t1 se acorta
+// para que no se pase). Asi el clip nuevo se reproduce entero desde el primer cuadro y solo se "hereda" el impulso del anterior.
+struct Inert { float x0 = 0, v0 = 0, a0 = 0, A = 0, B = 0, C = 0, t1 = 0; };
+static void InertStart(Inert& I, float x0, float v0, float t1) {
+    if (fabsf(x0) < 1e-9f && fabsf(v0) < 1e-9f) { I = Inert(); return; }
+    if (v0 * x0 < 0.0f) t1 = (std::min)(t1, -5.0f * x0 / v0);   // la velocidad ya va hacia el destino: no pasarse
+    t1 = (std::max)(t1, 1e-3f);
+    const float t2 = t1 * t1, t3 = t2 * t1, t4 = t3 * t1, t5 = t4 * t1;
+    const float a0 = (-8.0f * v0 * t1 - 20.0f * x0) / t2;
+    I.x0 = x0; I.v0 = v0; I.a0 = a0; I.t1 = t1;
+    I.A = -(a0 * t2 + 6.0f * v0 * t1 + 12.0f * x0) / (2.0f * t5);
+    I.B = (3.0f * a0 * t2 + 16.0f * v0 * t1 + 30.0f * x0) / (2.0f * t4);
+    I.C = -(3.0f * a0 * t2 + 12.0f * v0 * t1 + 20.0f * x0) / (2.0f * t3);
+}
+static float InertEval(const Inert& I, float t) {
+    if (t >= I.t1 || I.t1 <= 0.0f) return 0.0f;
+    const float t2 = t * t, t3 = t2 * t;
+    return I.A * t3 * t2 + I.B * t2 * t2 + I.C * t3 + 0.5f * I.a0 * t2 + I.v0 * t + I.x0;
+}
+static void QLog(const float* q, float* v) {   // cuaternion unitario -> vector eje x angulo (rad)
+    float w = q[3]; const float s2 = q[0] * q[0] + q[1] * q[1] + q[2] * q[2]; const float s = sqrtf(s2);
+    float sg = 1.0f; if (w < 0.0f) { w = -w; sg = -1.0f; }
+    if (s < 1e-7f) { v[0] = v[1] = v[2] = 0.0f; return; }
+    const float ang = 2.0f * atan2f(s, w), k = sg * ang / s; v[0] = q[0] * k; v[1] = q[1] * k; v[2] = q[2] * k;
+}
+static void QExp(const float* v, float* q) {
+    const float a = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    if (a < 1e-7f) { q[0] = v[0] * 0.5f; q[1] = v[1] * 0.5f; q[2] = v[2] * 0.5f; q[3] = 1.0f; return; }
 static float GaniAngZ(const float* q) { return 2.0f * atan2f(q[2], q[3]); }   // giro alrededor del eje z del .ask (derecha): el que abre la mandibula y los parpados
 // (02/11) "mostrar los dientes" (350.w = 1): corrimiento de cada hueso en metros, ejes de la cabeza (x izquierda del jugador)
 static const float kTeeth[][3] = {
@@ -355,8 +394,10 @@ struct Skel {
     int btw = -1; float btwT0 = 0.0f, btwNext = -1.0f; int btwN = 0;
     float spP[3] = {}; float spT = -1.0f, speed = 0.0f, stillT = 0.0f; bool spHave = false;
     float sl[16] = {}; bool slHave = false; float slT = -1.0f;   // (08/11) sliders de gestos suavizados (w395 Transicion)
-    GaniPose gB = {}; bool gBHave = false; float gBT = -1.0f;                         // (08/11) clip .gani mezclado (y397: entrada / salida / cruce entre clips)
-    float gsL[kND][3] = {}; bool gsHave[kND] = {}; float gsDeg = 0.0f; bool gsDegHave = false; float gsT = -1.0f;   // (08/11) gestos del juego suavizados (x397), ejes de la cabeza
+    GaniPose gB = {}; bool gBHave = false; float gBT = -1.0f;                         // (08/11) clip .gani mostrado (y397: inertializacion en entrada / salida / cruce / vuelta del bucle)
+    GaniPose gPrev = {}; float gPrevDt = 0.0f; Inert gI[31][6]; float gIT0 = -1.0f; int gLastClip = -1; bool gLastOn = false; float gLastF = 0.0f;
+    float gsL[kND][3] = {}, gsV[kND][3] = {}; bool gsHave[kND] = {}; float gsDeg = 0.0f, gsDegV = 0.0f; bool gsDegHave = false; float gsT = -1.0f;   // (08/11) gestos del juego suavizados (x397, resorte), ejes de la cabeza
+    float slV[16] = {};   // velocidad del resorte de los sliders (w395)
     int tkPhrase = -1; float tkT0 = 0.0f, tkDur = 0.0f, tkPause = 0.0f, tkCh[7] = {}, tkT = -1.0f; unsigned tkN = 0; int tkLast = -1;   // (08/11) hablar por palabras: frase en curso, canales suavizados
     float effort = 0.0f, brPh = 0.0f, anT = -1.0f;                 // (08/11) esfuerzo por velocidad (sube ~1 s, baja ~4 s), fase de la respiracion
    // (08/11) velocidad del jugador (cabeza en el mundo, m/s) y cuanto lleva quieto
@@ -527,6 +568,8 @@ static bool JawAngle(const Skel& S, const Xf& jc, float* deg) {
 // ni el globo ni los parpados (no se suma dos veces).
 static float Frac(float x) { return x - floorf(x); }
 static float SStep(float a, float b, float x);   // definida mas abajo (la usan AnimT / TalkWords)
+    const float k = sinf(0.5f * a) / a; q[0] = v[0] * k; q[1] = v[1] * k; q[2] = v[2] * k; q[3] = cosf(0.5f * a);
+}
 // (08/11, Agustin: "puedes hacer que calcule por cada fotograma? aunque el gameclock este en cero como pasa en el menu de apariencia")
 // RELOJ DE LAS ANIMACIONES de la cara: avanza en cada cuadro. Si el reloj del juego (fila 157, config.cpp) avanzo desde el cuadro
 // anterior se toma ese paso (asi la camara lenta de las repeticiones frena tambien los gestos); si esta quieto o en cero (editor,
@@ -1283,8 +1326,8 @@ static void FrameBody(const void* skel) {
     {
         const float tr = std::clamp(g_cfg.live[395][3], 0.0f, 3.0f);
         const float dt = S->slT < 0.0f || tNow < S->slT ? 1.0f : (std::min)(tNow - S->slT, 0.5f); S->slT = tNow;
-        const float k = (!S->slHave || tr < 0.001f) ? 1.0f : 1.0f - expf(-dt / (0.25f * tr));
-        for (int i = 0; i < 16; i++) S->sl[i] += (slR[i] - S->sl[i]) * k;
+        if (!S->slHave || tr < 0.001f) { for (int i = 0; i < 16; i++) { S->sl[i] = slR[i]; S->slV[i] = 0.0f; } }
+        else for (int i = 0; i < 16; i++) Damp(S->sl[i], S->slV[i], slR[i], 0.25f * tr, dt);   // resorte critico: arranca y frena suave
         S->slHave = true;
     }
     const float pAng = S->sl[0], pSmi = S->sl[1], pSur = S->sl[2], pTalk = S->sl[3], pGri = S->sl[4], pPuc = S->sl[5], pNeu = S->sl[6];
@@ -1376,39 +1419,54 @@ static void FrameBody(const void* skel) {
     // (07/11, Agustin: "me gustaria que al jugar leas los ganis") clip .gani de la cara (fila 383, gani.cpp): la pose del clip en el
     // RELOJ DEL JUEGO desde que arranco en este personaje; x = clip, y = peso, z = velocidad, w = 0 bucle / 1 una vez
     GaniPose GP; bool ganiOn = false; float gW = 0.0f;
+    int gc = 0; float gF = 0.0f;
     {
         if (!s_defToAskOk) DefToAsk();
-        const int gc = (int)(g_cfg.live[383][0] + 0.5f); gW = std::clamp(g_cfg.live[383][1], 0.0f, 1.5f);
+        gc = (int)(g_cfg.live[383][0] + 0.5f); gW = std::clamp(g_cfg.live[383][1], 0.0f, 1.5f);
         const float gSp = g_cfg.live[383][2] > 0.01f ? std::clamp(g_cfg.live[383][2], 0.1f, 4.0f) : 1.0f; const bool gLoop = g_cfg.live[383][3] < 0.5f;
         const float gt = AnimT();
         if (gc > 0 && gW > 0.001f) {
             if (S->ganiClip != gc || gt < S->ganiT0) { S->ganiClip = gc; S->ganiT0 = gt; }
             bool done = false; ganiOn = GaniSample(gc, (gt - S->ganiT0) * gSp, gLoop, GP, &done);
-        } else S->ganiClip = 0;
+            if (ganiOn) { gF = (gt - S->ganiT0) * gSp * 30.0f; if (gLoop && GP.frames > 0) gF = fmodf((std::max)(gF, 0.0f), (float)GP.frames); }
+        } else { S->ganiClip = 0; gc = 0; }
     }
-    // (08/11, Agustin: "transiciones en los gani se puede?") el clip no entra ni sale de golpe ni salta al cambiar de clip o al dar la
-    // vuelta el bucle: la pose del clip (ya pesada por y383) se mezcla cuadro a cuadro con la anterior, constante y397 s (0.15; 0 = de golpe).
-    // Mientras queda resto de la mezcla el clip sigue mandando (los gestos propios esperan a que termine de salir)
+    // (08/11, Agustin: "transiciones en los gani se puede?", "un metodo seguro, practico y avanzado") INERTIALIZACION del clip: en cada
+    // transicion (clip que empieza, termina, cambia, o bucle que da la vuelta) se toma la diferencia entre la pose mostrada (y su velocidad)
+    // y la pose nueva, por hueso (3 de posicion + 3 de giro como eje x angulo), y se apaga con el polinomio de grado 5 en y397 s (0.15;
+    // 0 = de golpe). El clip nuevo corre entero desde su primer cuadro; mientras queda diferencia el clip sigue mandando (los gestos
+    // propios esperan). Pose nueva = clip x peso y383, o reposo si no hay clip
     {
         const float tau = std::clamp(g_cfg.live[397][1], 0.0f, 2.0f);
-        const float gt2 = AnimT(); const float dtb = S->gBT < 0.0f || gt2 < S->gBT ? 1.0f : (std::min)(gt2 - S->gBT, 0.25f); S->gBT = gt2;
-        const float k = (!S->gBHave || tau < 0.001f) ? 1.0f : 1.0f - expf(-dtb / tau);
-        bool any = false;
-        for (int b = 0; b < 31; b++) {
-            float tq[4] = { 0, 0, 0, 1 }, tp[3] = { 0, 0, 0 };
-            if (ganiOn && GP.has[b]) { QScale(GP.q[b], gW, tq); for (int c = 0; c < 3; c++) tp[c] = GP.p[b][c] * gW; }
-            float* bq = S->gB.q[b]; float* bp = S->gB.p[b];
-            if (!S->gBHave) { memcpy(bq, tq, sizeof tq); memcpy(bp, tp, sizeof tp); }
-            else {
-                if (bq[0] * tq[0] + bq[1] * tq[1] + bq[2] * tq[2] + bq[3] * tq[3] < 0.0f) for (float& v : tq) v = -v;
-                float l2 = 0.0f; for (int c = 0; c < 4; c++) { bq[c] += (tq[c] - bq[c]) * k; l2 += bq[c] * bq[c]; }
-                const float il = l2 > 1e-12f ? 1.0f / sqrtf(l2) : 1.0f; for (int c = 0; c < 4; c++) bq[c] *= il;
-                for (int c = 0; c < 3; c++) bp[c] += (tp[c] - bp[c]) * k;
+        const float gt2 = AnimT(); const float dtb = S->gBT < 0.0f || gt2 < S->gBT ? 1.0f / 60.0f : std::clamp(gt2 - S->gBT, 1e-4f, 0.25f); S->gBT = gt2;
+        GaniPose T = {};   // pose nueva
+        for (int b = 0; b < 31; b++) { T.q[b][3] = 1.0f; if (ganiOn && GP.has[b]) { QScale(GP.q[b], gW, T.q[b]); for (int c = 0; c < 3; c++) T.p[b][c] = GP.p[b][c] * gW; T.has[b] = true; } }
+        T.frames = ganiOn ? GP.frames : 1;
+        const bool trans = S->gBHave && tau >= 0.001f && (gc != S->gLastClip || ganiOn != S->gLastOn || (ganiOn && gF + 0.5f < S->gLastF));
+        if (trans) {
+            // velocidad de lo mostrado: (mostrado - anterior) / dt del cuadro anterior
+            const float idt = S->gPrevDt > 1e-5f ? 1.0f / S->gPrevDt : 0.0f;
+            for (int b = 0; b < 31; b++) {
+                float x0[3], v0[3]; for (int c = 0; c < 3; c++) { x0[c] = S->gB.p[b][c] - T.p[b][c]; v0[c] = (S->gB.p[b][c] - S->gPrev.p[b][c]) * idt; }
+                float cq[4], dq[4], r0[3]; QConj(T.q[b], cq); QMul(S->gB.q[b], cq, dq); QLog(dq, r0);
+                float cp[4], vq[4], rv[3]; QConj(S->gPrev.q[b], cp); QMul(S->gB.q[b], cp, vq); QLog(vq, rv); for (float& v : rv) v *= idt;
+                for (int c = 0; c < 3; c++) { InertStart(S->gI[b][c], x0[c], std::clamp(v0[c], -0.5f, 0.5f), tau); InertStart(S->gI[b][3 + c], r0[c], std::clamp(rv[c], -20.0f, 20.0f), tau); }
             }
-            const bool live = fabsf(bp[0]) + fabsf(bp[1]) + fabsf(bp[2]) > 2e-4f || bq[3] < 0.9999995f;   // 0.002 mm / ~0.1 grado
-            S->gB.has[b] = live || (ganiOn && GP.has[b]); if (live) any = true;
+            S->gIT0 = gt2;
         }
-        S->gB.frames = ganiOn ? GP.frames : 1; S->gBHave = true;
+        S->gLastClip = gc; S->gLastOn = ganiOn; S->gLastF = gF;
+        S->gPrev = S->gB; S->gPrevDt = dtb;
+        bool any = false; const float ti = S->gIT0 < 0.0f ? 1e9f : gt2 - S->gIT0;
+        for (int b = 0; b < 31; b++) {
+            float off[3], rof[3]; bool rest = false;
+            for (int c = 0; c < 3; c++) { off[c] = InertEval(S->gI[b][c], ti); rof[c] = InertEval(S->gI[b][3 + c], ti); if (fabsf(off[c]) > 1e-6f || fabsf(rof[c]) > 1e-5f) rest = true; }
+            for (int c = 0; c < 3; c++) S->gB.p[b][c] = T.p[b][c] + off[c];
+            if (rest) { float eq[4]; QExp(rof, eq); QMul(eq, T.q[b], S->gB.q[b]); } else memcpy(S->gB.q[b], T.q[b], sizeof T.q[b]);
+            const bool live = T.has[b] || fabsf(S->gB.p[b][0]) + fabsf(S->gB.p[b][1]) + fabsf(S->gB.p[b][2]) > 2e-4f || S->gB.q[b][3] < 0.9999995f;
+            S->gB.has[b] = live; if (live) any = true;
+        }
+        S->gB.frames = T.frames;
+        if (!S->gBHave) { S->gPrev = S->gB; S->gBHave = true; }
         if (tau >= 0.001f) { ganiOn = any; if (any) { GP = S->gB; gW = 1.0f; } }
     }
     if (ganiOn) poseOn = true;
@@ -1602,11 +1660,12 @@ static void FrameBody(const void* skel) {
     // juego (claves a 30 cuadros, cambios de clip de golpe); la DLL no puede cambiar esa mezcla, pero si seguir la pose del juego
     // con un retraso corto (0.10 s x x397) en los ejes de la cabeza y sumar la diferencia como gesto del mod: los saltos entre
     // claves y entre clips se redondean sin que la cara se quede atras cuando la cabeza gira. Mandibula: el angulo del juego suavizado
-    float gsK = 0.0f; const float gsAmt = std::clamp(g_cfg.live[397][0], 0.0f, 3.0f);
+    float gsK = 0.0f, gsDt = 1.0f / 60.0f; const float gsAmt = std::clamp(g_cfg.live[397][0], 0.0f, 3.0f);
     if (gsAmt > 0.001f) {
         const float dtg = S->gsT < 0.0f || tNow < S->gsT ? 1.0f : (std::min)(tNow - S->gsT, 0.25f); S->gsT = tNow;
         gsK = 1.0f - expf(-dtg / (0.10f * gsAmt));
-        if (!S->gsDegHave) { S->gsDeg = deg; S->gsDegHave = true; } else S->gsDeg += (deg - S->gsDeg) * gsK;
+        if (!S->gsDegHave) { S->gsDeg = deg; S->gsDegV = 0.0f; S->gsDegHave = true; } else Damp(S->gsDeg, S->gsDegV, deg, 0.10f * gsAmt, dtg);
+        gsDt = dtg;
         A += (S->gsDeg - deg) / 57.29578f;
     } else { S->gsDegHave = false; for (bool& h : S->gsHave) h = false; }
     if (A > 0.0f) A = (std::min)(A, (std::max)(0.0f, (35.0f - deg) / 57.29578f));    // (02/11, Agustin: "esta al reves") con el signo negativo la boca se cerraba al subir el slider: en el cuaternion del motor el menton baja con el angulo positivo
@@ -1713,8 +1772,8 @@ static void FrameBody(const void* skel) {
             xOk = Base(*S, d, x);
             if (xOk) {
                 const float v[3] = { x.t[0] - hc.t[0], x.t[1] - hc.t[1], x.t[2] - hc.t[2] }; float L[3]; QRot(hrInv, v, L);
-                if (!S->gsHave[d]) { memcpy(S->gsL[d], L, sizeof L); S->gsHave[d] = true; }
-                else for (int k = 0; k < 3; k++) { S->gsL[d][k] += (L[k] - S->gsL[d][k]) * gsK; const float e = S->gsL[d][k] - L[k]; po[k] += fabsf(e) < 0.02f ? e : 0.0f; }   // > 2 cm = cambio de cara / jugador: no se suma
+                if (!S->gsHave[d]) { memcpy(S->gsL[d], L, sizeof L); memset(S->gsV[d], 0, sizeof S->gsV[d]); S->gsHave[d] = true; }
+                else for (int k = 0; k < 3; k++) { Damp(S->gsL[d][k], S->gsV[d][k], L[k], 0.10f * gsAmt, gsDt); const float e = S->gsL[d][k] - L[k]; if (fabsf(e) < 0.02f) po[k] += e; else { S->gsL[d][k] = L[k]; S->gsV[d][k] = 0.0f; } }   // > 2 cm = cambio de cara / jugador: se reengancha
             }
         }
         const float mvv0[3] = { tv[0] * teeth + ov[0] * op + po[0], tv[1] * teeth + ov[1] * op + po[1], tv[2] * teeth + ov[2] * op + po[2] };
