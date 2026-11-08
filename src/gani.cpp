@@ -91,7 +91,7 @@ static void DecPos(const uint8_t* d, size_t n, std::vector<PosKey>& out) {
         PosKey k; k.f = f; for (int i = 0; i < 3; i++) { uint16_t h; memcpy(&h, d + p + 2 * i, 2); k.p[i] = Half(h); }
         out.push_back(k); p += 6;
         if (p >= n) break;
-        const int8_t st = (int8_t)d[p]; p++; if (st <= 0) break; f += (float)st;
+        const uint8_t st = d[p]; p++; if (st == 0) break; f += (float)st;   // (08/11) paso sin signo (pain_brwtrb...: 159 = 0x9F); con int8 se perdia la clave final
     }
 }
 static bool Parse(const std::vector<uint8_t>& g, Clip& c) {
