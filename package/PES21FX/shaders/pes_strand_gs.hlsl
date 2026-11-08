@@ -36,8 +36,10 @@ void main(point RootOut v[1], inout TriangleStream<GSOut> outS)
     float wReal = wid;
     // cobertura real (w406 = la DLL dibuja la pasada propia con mezcla): cinta de 1.5 px y alfa = ancho real / dibujado, asi el
     // grosor (x403, x404, y404) cambia lo que se ve aunque la hebra sea mas fina que un pixel
+    // (08/11 z2, Agustin: "las cejas ni se ven") el ancho fisico solo daba alfa ~0.05 (las cejas del juego tienen muchas menos hebras que
+    // una real): opacidad base 0.85 con el grosor de referencia, escalada por el grosor elegido y la punta; de muy cerca, el ancho real
     wid = max(wid, pxV * (P75.z > 0.5 ? 1.25 : (covM ? 0.75 : lerp(0.45, 0.8, saturate(widB / widRef)))));
-    float cov = P75.z > 0.5 ? 1.0 : (covM ? saturate(wReal / max(wid, 1e-9)) : saturate(wReal / max(pxV * 1.5, 1e-9)));
+    float cov = P75.z > 0.5 ? 1.0 : (covM ? saturate(max(wReal / max(wid, 1e-9), 0.85 * wReal / widRef)) : saturate(wReal / max(pxV * 1.5, 1e-9)));
     float3 V = normalize(-p);
     float3 tanR = normalize(dd + n * liftS * (0.35 * 3.14159 * cos(t * 3.14159) + 0.1));
     float3 sideV = normalize(cross(tanR, V) + 1e-6);   // (v3) el costado sigue la tangente real (antes la direccion de la raiz)
