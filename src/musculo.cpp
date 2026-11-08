@@ -139,6 +139,9 @@ struct DynState {
     // (08/11) momentos de la pierna (LegMoments): velocidad y aceleracion del personaje en el piso, velocidad vertical, rodilla
     // (flexion, velocidad suavizada, maximo reciente para la patada), tension de cada grupo (x cuadriceps, y isquios, z gemelo)
     float spd, acc, vy, kf[2], kv[2], kWind[2], kWindT[2], land, act[2][3]; int mom[2];
+    // (08/11 b) momentos del brazo (ArmMoments): codo (flexion, velocidad), brazo afuera (cuanto, velocidad, maximo reciente) y la
+    // tension de cada grupo (x biceps, y triceps, z deltoides, w antebrazo)
+    float ef[2], ev[2], ar[2], rv[2], rWind[2], rWindT[2], aact[2][4]; int amom[2];
 };
 static const int kDynFb = 64;   // esqueletos que no se sabe de que personaje son (por puntero)
 static DynState s_dyn[kCharSlots + kDynFb];
@@ -711,7 +714,8 @@ ID3D11ShaderResourceView* MuscleClothSRV() { return s_mzSRV.load(std::memory_ord
 // [1 + i] = (posicion del personaje, la misma que la tabla de tonos (NodePos) / agitacion 0..1). El VS elige el mas cercano en el piso.
 // (08/11) [1 + kCharSlots + 2 n + lado] = tension de la pierna (x cuadriceps, y isquios, z gemelo, w momento 0..8) del personaje n
 // (el mismo orden que las filas de posicion; lado 0 = izquierda = +X); cabecera z = 1 si las trae.
-static const int kEffRows = 1 + 3 * kCharSlots;
+// (08/11 b) [1 + 3 kCharSlots + 2 n + lado] = tension del brazo (x biceps, y triceps, z deltoides, w antebrazo); cabecera w = 1 si las trae.
+static const int kEffRows = 1 + 5 * kCharSlots;
 static std::atomic<ID3D11ShaderResourceView*> s_effSRV{nullptr};
 static ID3D11Buffer* s_effBuf = nullptr; static ID3D11Device* s_effDev = nullptr;
 static float s_effData[kEffRows][4] = {}; static bool s_effSent = false; static double s_effLog = 0;
@@ -738,12 +742,13 @@ static void EffortPresent() {
         for (int i = 0; i < kCharSlots && n < kCharSlots; i++) {
             const DynState& ds = s_dyn[i];
             if (!s_slotAlive[i] || !ds.posOk) continue;
+            for (int sd = 0; sd < 2; sd++) { float* g = d[1 + 3 * kCharSlots + 2 * n + sd]; for (int c = 0; c < 4; c++) g[c] = std::clamp(ds.aact[sd][c], 0.0f, 1.0f); }
             for (int sd = 0; sd < 2; sd++) { float* g = d[1 + kCharSlots + 2 * n + sd]; for (int c = 0; c < 3; c++) g[c] = std::clamp(ds.act[sd][c], 0.0f, 1.0f); g[3] = (float)ds.mom[sd]; }
             float* e = d[1 + n++]; e[0] = ds.pos[0]; e[1] = ds.pos[1]; e[2] = ds.pos[2]; e[3] = std::clamp(ds.ex, 0.0f, 1.0f);
             mx = (std::max)(mx, e[3]); sum += e[3];
         }
     }
-    d[0][0] = (float)n; d[0][1] = n > 0 ? 1.0f : 0.0f; d[0][2] = n > 0 ? 1.0f : 0.0f;
+    d[0][0] = (float)n; d[0][1] = n > 0 ? 1.0f : 0.0f; d[0][2] = n > 0 ? 1.0f : 0.0f; d[0][3] = n > 0 ? 1.0f : 0.0f;
     if (s_effSent && !memcmp(d, s_effData, sizeof d)) return;
     D3D11_MAPPED_SUBRESOURCE m{};
     if (FAILED(imm->Map(s_effBuf, 0, D3D11_MAP_WRITE_DISCARD, 0, &m))) return;
@@ -963,17 +968,63 @@ static float ArmRaise(const DynState& d, int sd) {   // el brazo se aleja del co
 static const char* const kMomName[] = { "quieta", "apoyo", "empuje", "vuelo", "frenada", "arranque", "patada", "salto", "caida" };
 static std::atomic<unsigned> s_momCnt[9];
 static float KneeFlex(const DynState& d, int sd);
+// (08/11 b, Agustin: "que lo haga con los brazos") MOMENTOS DEL BRAZO, igual que la pierna:
+//   1 balanceo   corriendo, el codo ~90 grados va y viene                 -> biceps sostiene, triceps al estirar
+//   2 empuje     brazo adelante/afuera que se estira con fuerza (forcejeo, -> triceps, deltoides, antebrazo
+//                aguantar al rival, cubrir la pelota)
+//   3 arriba     brazo levantado (cabezazo, salto, festejo, reclamo)       -> deltoides, triceps si esta estirado
+//   4 lanzamiento brazo arriba que baja rapido con el codo estirandose     -> triceps y deltoides al maximo (saque de banda, arquero)
+//   5 puno       el codo se dobla muy rapido (festejo, furia)              -> biceps y antebrazo al maximo
+//   6 caida      aterrizaje o caida con el brazo estirado                  -> triceps y deltoides
+//   7 arranque   aceleracion fuerte (los brazos tiran)                     -> biceps y deltoides
+static const char* const kArmMomName[] = { "quieto", "balanceo", "empuje", "arriba", "lanzamiento", "puno", "caida", "arranque" };
+static std::atomic<unsigned> s_armMomCnt[8];
+static float ElbowFlex(const DynState& d, int sd);
+static float ArmRaise(const DynState& d, int sd);
+static void ArmMoments(DynState& d, float dt, float run, float accel, float landK) {
+    for (int sd = 0; sd < 2; sd++) {
+        const bool ok = d.upOk[sd] && d.foOk[sd];
+        const float e = ok ? ElbowFlex(d, sd) : 0.0f, r = ok ? ArmRaise(d, sd) : 0.0f;
+        const float evRaw = ok ? std::clamp((e - d.ef[sd]) / dt, -30.0f, 30.0f) : 0.0f, rvRaw = ok ? std::clamp((r - d.ar[sd]) / dt, -30.0f, 30.0f) : 0.0f;
+        d.ef[sd] = e; d.ar[sd] = r;
+        d.ev[sd] += (evRaw - d.ev[sd]) * (1.0f - expf(-dt / 0.04f));
+        d.rv[sd] += (rvRaw - d.rv[sd]) * (1.0f - expf(-dt / 0.04f));
+        const float ev = d.ev[sd], rv = d.rv[sd];
+        if (r > d.rWind[sd] || d.rWindT[sd] <= 0.0f) { d.rWind[sd] = r; d.rWindT[sd] = 0.5f; } else d.rWindT[sd] -= dt;   // brazo arriba reciente
+        float m[8] = {};
+        m[1] = run * std::clamp((e - 0.25f) / 0.35f, 0.0f, 1.0f) * (1.0f - std::clamp((r - 0.5f) / 0.3f, 0.0f, 1.0f));
+        m[2] = std::clamp((r - 0.2f) / 0.3f, 0.0f, 1.0f) * std::clamp((-ev - 1.5f) / 3.0f, 0.0f, 1.0f) * std::clamp(0.4f + d.ex + (1.0f - run), 0.0f, 1.0f);
+        m[3] = std::clamp((r - 0.55f) / 0.3f, 0.0f, 1.0f);
+        m[4] = std::clamp((d.rWind[sd] - 0.65f) / 0.2f, 0.0f, 1.0f) * std::clamp((-rv - 2.5f) / 3.0f, 0.0f, 1.0f) * std::clamp(0.3f + std::clamp(-ev / 3.0f, 0.0f, 1.0f), 0.0f, 1.0f);
+        m[5] = std::clamp((ev - 4.0f) / 4.0f, 0.0f, 1.0f) * std::clamp(0.3f + d.ex + r, 0.0f, 1.0f);
+        m[6] = landK * std::clamp(1.0f - e * 1.5f, 0.0f, 1.0f);
+        m[7] = accel;
+        const float bal = m[1];
+        float bi = 0.08f + 0.08f * d.ex, tr = 0.06f + 0.06f * d.ex, de = 0.06f + 0.06f * d.ex, fo = 0.08f + 0.10f * d.ex;   // tono base
+        bi = (std::max)({ bi, 0.45f * bal + 0.25f * bal * std::clamp(ev / 3.0f, 0.0f, 1.0f), 0.30f * m[2], 1.00f * m[5], 0.60f * m[7] });
+        tr = (std::max)({ tr, 0.40f * bal * std::clamp(-ev / 3.0f, 0.0f, 1.0f), 0.90f * m[2], 0.55f * m[3] * (1.0f - e), 1.00f * m[4], 0.85f * m[6] });
+        de = (std::max)({ de, 0.30f * bal, 0.70f * m[2], 0.80f * m[3], 0.95f * m[4], 0.70f * m[6], 0.55f * m[7] });
+        fo = (std::max)({ fo, 0.25f * bal, 0.75f * m[2], 0.50f * m[4], 0.90f * m[5], 0.55f * m[6] });
+        const float tgt[4] = { std::clamp(bi, 0.0f, 1.0f), std::clamp(tr, 0.0f, 1.0f), std::clamp(de, 0.0f, 1.0f), std::clamp(fo, 0.0f, 1.0f) };
+        for (int g = 0; g < 4; g++) { const float tau = tgt[g] > d.aact[sd][g] ? 0.05f : 0.30f; d.aact[sd][g] += (tgt[g] - d.aact[sd][g]) * (1.0f - expf(-dt / tau)); }
+        int best = 0; float bv = 0.35f;
+        for (int q = 1; q < 8; q++) if (m[q] > bv) { bv = m[q]; best = q; }
+        if (best != d.amom[sd] && best) s_armMomCnt[best].fetch_add(1, std::memory_order_relaxed);
+        d.amom[sd] = best;
+    }
+}
 static void LegMoments(float dt) {
     if (dt <= 0.0f) return;
     for (int i = 0; i < kCharSlots; i++) {
         DynState& d = s_dyn[i];
-        if (!s_slotAlive[i] || !d.posOk) { memset(d.act, 0, sizeof d.act); d.mom[0] = d.mom[1] = 0; continue; }
+        if (!s_slotAlive[i] || !d.posOk) { memset(d.act, 0, sizeof d.act); memset(d.aact, 0, sizeof d.aact); d.mom[0] = d.mom[1] = d.amom[0] = d.amom[1] = 0; continue; }
         const float run = std::clamp((d.spd - 1.5f) / 4.5f, 0.0f, 1.0f);
         const float brake = std::clamp((-d.acc - 2.5f) / 5.0f, 0.0f, 1.0f), accel = std::clamp((d.acc - 2.5f) / 5.0f, 0.0f, 1.0f);
         const float jump = std::clamp((d.vy - 1.0f) / 2.0f, 0.0f, 1.0f);
         // aterrizaje: venia cayendo (< -1.5 m/s) y la velocidad vertical se corta
         if (d.vy < -1.5f) d.land = 1.0f; else if (d.land > 0.5f && d.vy > -0.4f) d.land = 0.45f; else d.land = (std::max)(0.0f, d.land - dt / 0.35f);
         const float landK = d.land < 0.5f ? std::clamp(d.land / 0.45f, 0.0f, 1.0f) : 0.0f;
+        ArmMoments(d, dt, run, accel, landK);
         for (int sd = 0; sd < 2; sd++) {
             const bool ok = d.thOk[sd] && d.shOk[sd];
             const float k = ok ? KneeFlex(d, sd) : 0.0f;
@@ -1036,11 +1087,14 @@ static void DynAdd(int i, void* self, const float* a2, const void* skel, int slo
     }
     const float kc = s_dynK[0], b = d.breath, ex = d.ex;
     switch (C.mus) {
-    case M_ARM: if (kc > 0.0f) { const float g = kc * 0.08f * ElbowFlex(d, sd); fc.e += g; fc.t[2] += kArmR * 0.5f * g; } break;   // biceps adelante
-    case M_SLEEVE: if (kc > 0.0f && s_ropaOn) { const float g = s_sleeveK * kc * 0.08f * ElbowFlex(d, sd); fc.e += g; fc.t[2] += kArmR * 0.5f * g; } break;
-    case M_FORE: if (kc > 0.0f) fc.e += kc * 0.04f * ElbowFlex(d, sd); break;
-    case M_DELT: if (kc > 0.0f) fc.e += kc * 0.07f * ArmRaise(d, sd); break;
-    case M_TRAP: if (kc > 0.0f) Push(fc, 0.0f, 1.0f, 0.0f, 0.006f * kc, ArmRaise(d, sd)); Push(fc, 0.0f, 1.0f, 0.0f, 0.5f * b * ex, 1.0f); break;
+    // (08/11 b) brazo por la TENSION de cada grupo (ArmMoments): biceps adelante, triceps atras; antes solo el angulo del codo
+    case M_ARM: if (kc > 0.0f) { const float bi = d.aact[sd][0], tr = d.aact[sd][1], fl = ElbowFlex(d, sd);
+        fc.e += kc * (0.020f * fl + 0.065f * (std::max)(bi, 0.8f * tr)); fc.t[2] += kArmR * 0.5f * kc * (0.07f * bi + 0.015f * fl - 0.045f * tr); } break;
+    case M_SLEEVE: if (kc > 0.0f && s_ropaOn) { const float bi = d.aact[sd][0], tr = d.aact[sd][1], fl = ElbowFlex(d, sd);
+        fc.e += s_sleeveK * kc * (0.020f * fl + 0.065f * (std::max)(bi, 0.8f * tr)); fc.t[2] += s_sleeveK * kArmR * 0.5f * kc * (0.07f * bi + 0.015f * fl - 0.045f * tr); } break;
+    case M_FORE: if (kc > 0.0f) fc.e += kc * (0.010f * ElbowFlex(d, sd) + 0.045f * d.aact[sd][3]); break;
+    case M_DELT: if (kc > 0.0f) fc.e += kc * (0.020f * ArmRaise(d, sd) + 0.060f * d.aact[sd][2]); break;
+    case M_TRAP: if (kc > 0.0f) Push(fc, 0.0f, 1.0f, 0.0f, 0.006f * kc, (std::max)(ArmRaise(d, sd), d.aact[sd][2])); Push(fc, 0.0f, 1.0f, 0.0f, 0.5f * b * ex, 1.0f); break;
     // (08/11) muslo y pantorrilla por la TENSION de su grupo (LegMoments: apoyo, empuje, frenada, patada...), no solo por la rodilla
     // doblada (asi el muslo se hinchaba justo cuando el cuadriceps esta flojo). El cuadriceps corre el muslo hacia adelante, los isquios atras.
     case M_THIGH: if (kc > 0.0f) { const float k = KneeFlex(d, sd), qa = d.act[sd][0], ha = d.act[sd][1];
@@ -1211,6 +1265,11 @@ void MuscleHookPresent() {
                 c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8], s_slotInfo[k].name[0] ? s_slotInfo[k].name : "personaje", d.spd, d.acc,
                 kMomName[std::clamp(d.mom[0], 0, 8)], 100.0f * d.act[0][0], 100.0f * d.act[0][1], 100.0f * d.act[0][2],
                 kMomName[std::clamp(d.mom[1], 0, 8)], 100.0f * d.act[1][0], 100.0f * d.act[1][1], 100.0f * d.act[1][2]);
+            unsigned a[8]; for (int q = 1; q < 8; q++) a[q] = s_armMomCnt[q].exchange(0);
+            Log("brazos (30 s): momentos balanceo %u empuje %u arriba %u lanzamiento %u puno %u caida %u arranque %u | izq %s (biceps %.0f triceps %.0f deltoides %.0f antebrazo %.0f %%), der %s (%.0f %.0f %.0f %.0f %%)",
+                a[1], a[2], a[3], a[4], a[5], a[6], a[7],
+                kArmMomName[std::clamp(d.amom[0], 0, 7)], 100.0f * d.aact[0][0], 100.0f * d.aact[0][1], 100.0f * d.aact[0][2], 100.0f * d.aact[0][3],
+                kArmMomName[std::clamp(d.amom[1], 0, 7)], 100.0f * d.aact[1][0], 100.0f * d.aact[1][1], 100.0f * d.aact[1][2], 100.0f * d.aact[1][3]);
         } else Log("musculatura viva (contraccion %.2f, respiracion %.2f): %u huesos medidos, %u sin transformacion actual, ningun personaje conocido medido", s_dynK[0], s_dynK[1], ms, mf);
     }
     {
