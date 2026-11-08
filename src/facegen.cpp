@@ -162,6 +162,10 @@ static const D3D11_SO_DECLARATION_ENTRY kHfSO[] = {
     { 0, "SV_POSITION", 0, 0, 4, 0 }, { 0, "TEXCOORD", 0, 0, 3, 0 }, { 0, "TEXCOORD", 1, 0, 3, 0 }, { 0, "TEXCOORD", 2, 0, 3, 0 },
     { 0, "TEXCOORD", 3, 0, 2, 0 }, { 0, "TEXCOORD", 4, 0, 3, 0 }, { 0, "TEXCOORD", 5, 0, 3, 0 }, { 0, "TEXCOORD", 6, 0, 3, 0 },
     { 0, "TEXCOORD", 7, 0, 3, 0 } };
+static std::atomic<double> s_hfLastDraw{-10.0};
+// (08/11 y) la pasada propia dibujo hace menos de medio segundo: recien ahi las cejas le dejan el brillo y la sombra (si no, en el
+// editor sin composicion 619b salian negras y planas: sin brillo propio ni sombra de contacto)
+bool HairFwdActive() { return Now() - s_hfLastDraw.load() < 0.5; }
 static bool HairFwdWanted() { return g_cfg.live[382][3] > 0.001f && g_cfg.live[74][0] > 0.5f; }
 static void EnsureHairFwd() {
     if (!g_dev.dev) return;
@@ -619,7 +623,7 @@ bool BrowStrandsBegin(ID3D11DeviceContext* c, const FaceGenExtra* ex, uint64_t v
     if (useDSS) c->OMSetDepthStencilState(useDSS, s.ref);
     s.strandDSS = useDSS; s.strandGS = gs;
     s.shadowGS = s_shGS[lash ? 2 : (vsHash == kVSFaceAnim ? 1 : 0)];
-    if (!lash && HairFwdWanted() && s_hfSO2 && s_hsPS && s_shGSso[vsHash == kVSFaceAnim ? 1 : 0]) { s.shadowGS = s_shGSso[vsHash == kVSFaceAnim ? 1 : 0]; s.shadowFwd = true; }   // (08/11 v)
+    if (!lash && HairFwdWanted() && HairFwdActive() && s_hfSO2 && s_hsPS && s_shGSso[vsHash == kVSFaceAnim ? 1 : 0]) { s.shadowGS = s_shGSso[vsHash == kVSFaceAnim ? 1 : 0]; s.shadowFwd = true; }   // (08/11 v)
     c->OMGetBlendState(&s.blend, s.blendF, &s.blendM);
     s_stDraw++;
     if (!lash && !ex->id.empty()) { std::lock_guard<std::mutex> lk(s_browMx); s_browSeen.insert(ex->id); }
@@ -742,7 +746,7 @@ void HairFwdAfterComposition(ID3D11DeviceContext* c) {
             c->IASetVertexBuffers(0, 1, &s_hfSO, &st, &of); c->PSSetShader(s_hfPS, nullptr, 0); c->OMSetBlendState(s_hfBlend, bf, 0xffffffff);
         }
         if (st1) c->DrawAuto();   // 2) las hebras con su luz de pelo (suma)
-        s_hfDraws++;
+        s_hfDraws++; s_hfLastDraw.store(Now());
         { static std::atomic<int> lg{0}; if (lg.fetch_add(1) < 1) Log("cejas: pasada propia del pelo: primer dibujo (%ux%u)", W, H); }
         // vaciar la salida de flujo para el cuadro siguiente
         { UINT z = 0; c->SOSetTargets(1, &s_hfSO, &z); ID3D11Buffer* nb = nullptr; c->SOSetTargets(1, &nb, &z); }

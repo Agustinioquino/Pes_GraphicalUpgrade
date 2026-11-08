@@ -427,14 +427,15 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     float lumP = dot(painted, float3(0.2126, 0.7152, 0.0722)), lumZ = dot(tBrow.SampleLevel(sLin, uv, 3).rgb, float3(0.2126, 0.7152, 0.0722));
     float vari = clamp(lumP / max(lumZ, 1e-3), 0.65, 1.35) * lerp(0.88, 1.1, frac(r2 * 13.7));
     vari = max(1.0 + (vari - 1.0) * clamp(HV.z, 0.0, 3.0), 0.3);   // (08/11 x) z405 variacion de color
+    float kSel = 0.0;   // (08/11 y) cuanto manda un color elegido (373 / 367): el tope de brillo de la piel no lo apaga
     { // (04/11 o, Agustin: "falta el color para las hebras normales que se aplique a todas") fila 373: color de las hebras de TODOS
       // los jugadores (x mezcla con el color pintado, yzw rgb); el color propio del jugador (367) va encima
       float4 G = IniParams.Load(int2(373, 0));
-      float kg = saturate(G.x);
+      float kg = saturate(G.x); kSel = kg;
       if (kg > 0.001) { cR = lerp(cR, saturate(G.yzw) * vari, kg); cT = lerp(cT, saturate(G.yzw) * vari * float3(1.12, 1.08, 1.04), kg); }
     }
     if (hb && pesBrowCol.w > 0.001) {   // (04/11 i) color elegido para este jugador (menu Cejas con hebras)
-      float km = saturate(pesBrowCol.w);
+      float km = saturate(pesBrowCol.w); kSel = max(kSel, km);
       cR = lerp(cR, pesBrowCol.rgb * vari, km); cT = lerp(cT, pesBrowCol.rgb * vari * float3(1.12, 1.08, 1.04), km);
     }
     // (07/11, referencia eFootball de Agustin: Messi al sol) las puntas son mas claras y calidas (pelo aclarado por el sol) y algunas
@@ -464,7 +465,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     float liftS = (isB ? 0.1 : lift) * clamp(HO.z, 0.0, 3.0);   // (08/11 x) z404 curvatura
     // (08/11 v, Agustin: "el color de las cejas nunca tiene que ser el color de la piel") tope final, despues de los colores elegidos,
     // las puntas y las capas: ni la raiz ni la punta pasan el 60 % del brillo de la piel de la zona (mip 5 de la cara)
-    { float skL = PesLum(uv, 5.0), capL = 0.7 * max(skL, 0.02);   // (08/11 w) 0.6 -> 0.7
+    { float skL = PesLum(uv, 5.0), capL = 0.7 * max(skL, 0.02) * (1.0 + 2.0 * (isB ? 0.0 : kSel));   // (08/11 w) 0.6 -> 0.7
       float lR = dot(cR, float3(0.2126, 0.7152, 0.0722)), lT = dot(cT, float3(0.2126, 0.7152, 0.0722));
       if (lR > capL) cR *= capL / max(lR, 1e-4);
       if (lT > capL) cT *= capL / max(lT, 1e-4); }

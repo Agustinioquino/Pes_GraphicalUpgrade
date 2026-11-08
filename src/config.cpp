@@ -825,6 +825,7 @@ void UpdateTimeParams() {
     double t = Now();
     if (s_matchStart < -1e8) s_matchStart = t;
     auto& p = g_cfg.live;
+    p[406][3] = HairFwdActive() ? 1.f : 0.f;   // (08/11 y) w406 = la pasada propia del pelo dibujo hace < 0.5 s (la lee pes_brow_ps)
     // minutos reales de partido (sudor). (24/10 g) fuera del partido (menus, editor: sin cancha hace 15 s) vale 0: antes seguia
     // contando desde que se abrio el juego y en el editor la camiseta y la piel salian transpiradas
     p[10][0] = (t - s_lastTurf) < 15.0 ? float((t - s_matchStart) / 60.0) : 0.0f;
