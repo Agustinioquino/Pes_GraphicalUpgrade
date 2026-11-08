@@ -738,13 +738,16 @@ void GrassPresent() {
       if (lastT >= 0.0) { float dt = (float)std::clamp(tn - lastT, 0.0005, 0.5); ema = ema <= 0.0f ? dt : ema + (dt - ema) * 0.1f; }
       lastT = tn;
       float target = g_cfg.live[333][0], floorA = g_cfg.live[333][1] > 0.05f ? std::clamp(g_cfg.live[333][1], 0.2f, 1.0f) : 0.4f;
-      if (target < 20.0f || (int)(g_cfg.live[61][0] + 0.5f) >= 4) { s_adapt = 1.0f; nextAdj = 0.0; }   // (27/10 q) apagada o Calidad Ultra
+      // (08/11 y, Agustin: "esas opciones no optimizan nada") con Calidad Ultra (x61 = 4) la adaptativa quedaba apagada sin avisar: el log no
+      // tenia ninguna linea "pasto adaptativo" y mover x333 no cambiaba nada. Ahora vale en todas las calidades (x333 < 20 = apagada) y se anota
+      if (target < 20.0f) { s_adapt = 1.0f; nextAdj = 0.0;
+          if (tn >= nextLogA && g_cfg.live[58][3] > 0.5f) { nextLogA = tn + 30.0; Log("pasto adaptativo: apagado (x333 = %.0f; hace falta 20 o mas)", target); } }
       else if (tn >= nextAdj && ema > 0.0f) { nextAdj = tn + 0.5;
           float fps = 1.0f / ema; float a = s_adapt.load();
           if (fps < target * 0.97f) a = (std::max)(floorA, a * 0.93f);
           else if (fps > target * 1.10f) a = (std::min)(1.0f, a * 1.06f);   // (27/10 q) 1.03 -> 1.06: volvia al 100 % en 15 s, ahora en 8
           s_adapt = a;
-          if (tn >= nextLogA && g_cfg.live[58][3] > 0.5f) { nextLogA = tn + 10.0; Log("pasto adaptativo: FPS %.0f (objetivo %.0f) -> densidad x%.2f (minimo %.2f)", fps, target, a, floorA); } } }
+          if (tn >= nextLogA && g_cfg.live[58][3] > 0.5f) { nextLogA = tn + 10.0; Log("pasto adaptativo: FPS %.0f (objetivo %.0f) -> densidad x%.2f en los 3 niveles (minimo %.2f, calidad %d)", fps, target, a, floorA, (int)(g_cfg.live[61][0] + 0.5f)); } } }
     if (s_vbState.load() == 1 && s_vbStage && g_dev.imm) {
         D3D11_MAPPED_SUBRESOURCE m;
         if (SUCCEEDED(g_dev.imm->Map(s_vbStage, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) {
@@ -898,7 +901,7 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
     // ancho minimo de la hoja en pixeles (hojas de menos de ~1.4 px titilan). Densidad (x58) multiplica C.
     static const float cMul[5] = { 0.6f, 1.0f, 1.4f, 1.8f, 2.4f }, minPxQ[5] = { 1.8f, 1.5f, 1.3f, 1.2f, 1.4f };   // (1/11) Ultra 1.0 -> 1.4: las hojas de 1 px titilaban de lejos (Agustin)
     float dens = g_cfg.live[58][0] > 0.05f ? std::clamp(g_cfg.live[58][0], 0.3f, 2.0f) : 1.0f;
-    if (!ultra) dens *= s_adapt.load();   // (27/10 o) densidad adaptativa por FPS (fila 333, GrassPresent); Ultra la ignora
+    dens *= s_adapt.load();   // (27/10 o) densidad adaptativa por FPS (fila 333, GrassPresent); (08/11 y) tambien en Ultra
     // (27/10 9c) x325: ancho minimo en px a mano (0 = el de la calidad). Con la camara quieta el TAA del juego promedia las hojas de
     // ~1.2 px con el suelo y el pasto se vuelve liso; moviendo, la historia se descarta y vuelven nitidas: hojas de 2 px no se pierden
     const float cBase = 0.30f * cMul[q] * dens, minPx = g_cfg.live[325][0] > 0.5f ? std::clamp(g_cfg.live[325][0], 1.f, 4.f) : minPxQ[q];
