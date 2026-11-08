@@ -334,7 +334,8 @@ struct Skel {
     float nT[kND][3] = {}, nQ[kND][4] = {}; int nN[kND] = {};
     float eyeP = 0.0f; bool eyePHave = false;   // (02/11 o) mirada vertical del JUEGO (hueso del ojo), suavizada
     float eyePT = 0.0f, lidSm = 0.0f; bool lidSmHave = false;   // (04/11) objetivo con histeresis de eyeP y sonrisa medida suavizada para los parpados
-    float eyeY = 0.0f, eyeYT = 0.0f, lidX = 0.0f; bool eyeYHave = false, lidXHave = false;   // (08/11) mirada de costado del juego (suavizada, con histeresis) y giro de costado de los parpados
+    float eyeY = 0.0f, eyeYT = 0.0f, lidX = 0.0f; bool eyeYHave = false, lidXHave = false;
+    float animM = 0.0f, animG = 1.0f; bool animHave = false, animGHave = false;   // (08/11) animacion medida con histeresis y compuerta del parpadeo suavizada   // (08/11) mirada de costado del juego (suavizada, con histeresis) y giro de costado de los parpados
     float lidU = 0.0f, lidL = 0.0f; bool lidHave = false;        // (04/11) angulos de los parpados del cuadro anterior (limite de velocidad)
     float seed = 0.37f; bool seedHave = false; float seedCand = -1.0f; int seedCandN = 0;   // (02/11 c) semilla de la mirada, la misma que el VS del globo (PesExprSeed)
     // (02/11 e) sk_head del esqueleto del CUERPO (175 huesos) para la camara: el sk_head del esqueleto de la cara tiene la
@@ -735,7 +736,16 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
     }
     const float seed = S.seed;
     float g[2]; Gaze(t, seed, amp, g);
-    const float b = BlinkCurve(t, seed) * blinkAmt * (1.0f - SStep(0.0008f, 0.0015f, anim));
+    // (08/11, Agustin: "evitar parpadeos o vibraciones raras") la animacion medida (comisura / ceja contra la cabeza) anda cerca del
+    // umbral en las animaciones del juego: con la banda angosta de antes (0.8..1.5 mm, cruda) el parpadeo del mod se cortaba a la mitad
+    // o titilaba. Ahora banda 0.8..3 mm (como el shader) con histeresis de 0.3 mm y suavizado de ~6 cuadros del reloj del juego
+    {
+        if (!S.animHave) { S.animM = anim; S.animHave = true; }
+        else if (fabsf(anim - S.animM) > 0.0003f) S.animM = anim - copysignf(0.0003f, anim - S.animM);
+        const float gate = 1.0f - SStep(0.0008f, 0.0030f, S.animM);
+        S.animG = S.animGHave ? S.animG + (gate - S.animG) * ease(0.16f) : gate; S.animGHave = true;
+    }
+    const float b = BlinkCurve(t, seed) * blinkAmt * S.animG;
     static const float X[3] = { 1.0f, 0.0f, 0.0f }, Y[3] = { 0.0f, 1.0f, 0.0f };
     float ax[3], ay[3]; QRot(hr, X, ax); QRot(hr, Y, ay);
     // angulo positivo alrededor del eje X de la cabeza = el frente baja (como el menton con la boca: 3e57f2e)
