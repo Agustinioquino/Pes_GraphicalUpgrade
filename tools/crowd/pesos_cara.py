@@ -3,13 +3,17 @@
 uso: pesos_cara.py <audi_model.fpk> <salida.fpk> [carpeta_vista]
 
 Los pesos van en el COLOR del vertice (u8 x4), que los VS del publico del juego no leen salvo x (marca de vertice oculto:
-x = 255 lo esconde). Se escribe:  x = 6 (marca "modelo con cara"; el juego trae 5),  y = mandibula,  z = ceja izq,  w = ceja der.
+x = 255 lo esconde). Se escribe:  x = 6 o 7 (marca "modelo con cara" y clase de UV del cachete, ver abajo; el juego trae 5),  y = mandibula,  z = ceja izq,  w = ceja der.
 Los VS del mod (shaders/pes_crowd_face.hlsli) solo mueven vertices con x = 6; con la DLL apagada o con shaders del juego
 el modelo se ve igual que antes (los pesos no se usan). Los vertices ocultos (x = 255) no se tocan.
 Huesos (pose de reposo, metros del modelo; todas las figuras comparten au00.skl, cuello en y 1.532):
   mandibula = giro sobre X con pivote (0, 1.650, 0.060): pesa lo que esta debajo de la linea de la boca y adelante
   cejas     = traslacion hacia arriba: banda de la ceja (y ~1.704) con caida suave hacia la frente
-La linea de la boca de los modelos "_mouthOpen" esta mas abajo (1.622 contra 1.633)."""
+La linea de la boca de los modelos "_mouthOpen" esta mas abajo (1.622 contra 1.633).
+(08/11 c) Sin camiseta: el VS pinta torso y brazos con la piel de la cara del propio hincha poniendo en esos vertices la UV
+del cachete. Hay dos disposiciones de UV en los 14 modelos: x = 6 -> cachete en KCHEEK[0], x = 7 -> KCHEEK[1]
+(las mismas constantes estan en pes_crowd_face.hlsli)."""
+KCHEEK = [(0.745, 0.392), (0.805, 0.293)]
 import sys, os, struct
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -36,6 +40,13 @@ def weights(P, mouth_y):
     right = band * ss(0.0, 0.014, -x)
     return jaw, left, right
 
+def cheek_class(P, UV):
+    sel = (np.abs(P[:, 0] - 0.045) < 0.03) & (np.abs(P[:, 1] - 1.645) < 0.03) & (P[:, 2] > 0.07)
+    if not sel.any(): return 0, None
+    c = UV[sel].mean(0)
+    d = [np.hypot(c[0] - k[0], c[1] - k[1]) for k in KCHEEK]
+    return int(np.argmin(d)), c
+
 def paint_fmdl(blob, mouth_y, tmp):
     open(tmp, 'wb').write(blob)
     F = Fmdl(tmp); d = bytearray(blob)
@@ -50,11 +61,13 @@ def paint_fmdl(blob, mouth_y, tmp):
         if not vcol: stats.append('malla %d sin color' % mi); continue
         vcol = vcol[0]
         P = decode(vpos, get_attr(M, vpos))
+        vuv = [vf for vf in M['vfs'] if vf['usage'] == 8][0]
+        if mi == 0: cls, cuv = cheek_class(P, decode(vuv, get_attr(M, vuv)))
         col = decode(vcol, get_attr(M, vcol)).astype(np.int64)
         jaw, l, r = weights(P, mouth_y)
         hidden = col[:, 0] == 255
         new = col.copy()
-        new[~hidden, 0] = 6
+        new[~hidden, 0] = 6 + cls
         new[~hidden, 1] = np.rint(jaw[~hidden] * 255)
         new[~hidden, 2] = np.rint(l[~hidden] * 255)
         new[~hidden, 3] = np.rint(r[~hidden] * 255)
@@ -63,7 +76,7 @@ def paint_fmdl(blob, mouth_y, tmp):
         for v in range(M['nvert']):
             o = a + v * st['stride'] + vcol['voff']
             d[o:o + 4] = bytes(int(c) for c in new[v])
-        stats.append('malla %d: %d vert, boca %d, ceja izq %d, ceja der %d' % (mi, M['nvert'], (jaw > 0.05).sum(), (l > 0.05).sum(), (r > 0.05).sum()))
+        stats.append('malla %d (clase %d, cachete %s): %d vert, boca %d, ceja izq %d, ceja der %d' % (mi, cls, None if cuv is None else tuple(np.round(cuv, 3)), M['nvert'], (jaw > 0.05).sum(), (l > 0.05).sum(), (r > 0.05).sum()))
     return bytes(d), stats
 
 def main():

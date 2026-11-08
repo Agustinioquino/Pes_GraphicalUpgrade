@@ -40,6 +40,8 @@ enum { kEvGol = 1, kEvFalta = 2, kEvOffside = 3, kEvCorner = 4 };
 static std::atomic<int> s_evKind{0};                      // ultimo evento del partido (PublicoMatchTick)
 static std::atomic<double> s_evT{-1000.0};
 static std::atomic<uint32_t> s_evSeed{0};
+static std::atomic<float> s_playSec{0.0f};               // (08/11 d) segundos con la pelota en juego en este partido
+static std::atomic<int> s_goals{0};                       // goles de este partido
 
 static inline float Hash01(uint32_t x) {
     x ^= x >> 16; x *= 0x7feb352dU; x ^= x >> 15; x *= 0x846ca68bU; x ^= x >> 16;
@@ -126,6 +128,19 @@ static void Gesture(uint32_t i, double t, float mood, float* out) {   // out[0..
             bx = 0.3f * env; by = (float)(kTau * t * 1.2); bw = 0.0f;
         }
     }
+    // (08/11 d) SIN CAMISETA (hinchada sudamericana): con el correr del partido, el animo y los goles, cada vez mas hinchas de
+    // los bloques calientes se sacan la remera; parte de ellos la revolea (brazo arriba girando) cuando cantan o en el gol.
+    float ms = mood - 0.5f; ms = ms < 0 ? 0 : (ms > 1.5f ? 1.0f : ms / 1.5f);
+    int goals = s_goals.load(std::memory_order_relaxed); goals = goals > 3 ? 3 : goals;
+    float share = ms * (0.06f + 0.30f * Smooth(0.0f, 600.0f, s_playSec.load(std::memory_order_relaxed)) + 0.08f * goals);
+    bool hot = Hash01(g * 977u + 5u) < 0.35f;
+    bool shirtless = Hash01(i * 7919u + 101u) < share * (hot ? 2.2f : 0.35f);
+    if (shirtless && Hash01(i * 37u + 9u) < 0.45f) {
+        bool goalNow = ev == kEvGol && (float)(t - s_evT.load(std::memory_order_relaxed)) < 11.0f;
+        float swing = goalNow ? 1.0f : (hot ? Smooth(0.45f, 0.7f, sing) : 0.0f);
+        if (swing > 0.01f) { bx = swing; by = (float)(kTau * t * (1.4 + 0.9 * my)); bw = hb < 0.7f ? -2.0f : 2.0f; }   // la mayoria con la derecha
+    }
+    if (shirtless) bw += 10.0f;
     out[4] = bx; out[5] = by; out[6] = bz; out[7] = bw;
 }
 
@@ -135,6 +150,11 @@ static void Gesture(uint32_t i, double t, float mood, float* out) {   // out[0..
 void PublicoMatchTick(int tick, int phase, int type, int restart, int foul) {
     static int pPhase = -999, pRestart = -1, pFoul = 0; static double phaseT = 0;
     double now = fmod(std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(), 100000.0);
+    // tiempo de juego del partido (para la hinchada sin camiseta); un tick que vuelve muy atras = partido nuevo
+    static int pTick = -1; static double pNow = 0;
+    if (tick < pTick - 2000 || pTick < 0) { s_playSec = 0.0f; s_goals = 0; }
+    if (type == 1 && pTick >= 0) { double dt = now - pNow; if (dt > 0 && dt < 0.5) s_playSec = s_playSec.load() + (float)dt; }
+    pTick = tick; pNow = now;
     if (phase != pPhase) { pPhase = phase; phaseT = now; pRestart = restart; pFoul = foul; return; }
     int ev = 0;
     if (restart != pRestart) {
@@ -148,8 +168,9 @@ void PublicoMatchTick(int tick, int phase, int type, int restart, int foul) {
     if (s_evKind.load() == kEvGol && now - s_evT.load() < 10.0 && ev != kEvGol) return;
     s_evSeed = (uint32_t)tick * 2654435761u;
     s_evT = now; s_evKind = ev;
+    if (ev == kEvGol) s_goals++;
     static const char* const kN[] = { "", "gol", "falta", "offside", "corner" };
-    Log("publico: evento %s (tick %d, fase %d, tipo %d, reanudacion %d, falta %d)", kN[ev], tick, phase, type, restart, foul);
+    Log("publico: evento %s (tick %d, fase %d, tipo %d, reanudacion %d, falta %d, %.0f s de juego, %d goles)", kN[ev], tick, phase, type, restart, foul, s_playSec.load(), s_goals.load());
 }
 
 static void Worker() {
