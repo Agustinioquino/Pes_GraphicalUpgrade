@@ -538,6 +538,8 @@ struct GlassScope { bool on = false; ID3D11PixelShader* ps = nullptr; ID3D11Shad
                     ID3D11ShaderResourceView* gsT8 = nullptr; ID3D11ShaderResourceView* gsT21 = nullptr; ID3D11ShaderResourceView* gsT120 = nullptr; ID3D11SamplerState* gsS0 = nullptr; };
 bool GlassBeforeDraw(ID3D11DeviceContext* c, uint64_t ps, uint64_t vs, UINT verts, GlassScope& g);
 void GlassAfterDraw(ID3D11DeviceContext* c, GlassScope& g);
+bool UiHideShouldSkip(ID3D11DeviceContext* c, uint64_t ps);   // (08/11 e) x392: menus del juego ocultos (glass.cpp)
+extern std::atomic<int> g_uiHidden;
 void GlassPresent(); void GlassReloadShaders();
 extern std::atomic<int> g_glassDraws, g_glassSnaps;
 // (24/10 c) aro y punto blanco del musculo elegido como capa de interfaz (ring.cpp): variante de la piel que junta las marcas

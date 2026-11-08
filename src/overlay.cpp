@@ -241,7 +241,7 @@ enum : unsigned {
     kIcoFace = 0xf118, kIcoHand = 0xf256, kIcoHair = 0xf0c4, kIcoDrop = 0xf043, kIcoBody = 0xf183, kIcoShirt = 0xf553, kIcoWind = 0xf72e,
     kIcoCamera = 0xf030, kIcoPad = 0xf11b, kIcoDiag = 0xf0f1, kIcoLayers = 0xf5fd, kIcoStar = 0xf005, kIcoPen = 0xf304, kIcoHistory = 0xf1da,
     kIcoSliders = 0xf1de, kIcoTools = 0xf7d9, kIcoGear = 0xf013, kIcoWarn = 0xf071, kIcoSave = 0xf0c7, kIcoUndo = 0xf2ea, kIcoRedo = 0xf2f9,
-    kIcoRevert = 0xf0e2, kIcoEye = 0xf06e, kIcoReload = 0xf021, kIcoSearch = 0xf002, kIcoX = 0xf00d, kIcoCompress = 0xf066, kIcoExpand = 0xf065,
+    kIcoRevert = 0xf0e2, kIcoEye = 0xf06e, kIcoEyeSlash = 0xf070, kIcoReload = 0xf021, kIcoSearch = 0xf002, kIcoX = 0xf00d, kIcoCompress = 0xf066, kIcoExpand = 0xf065,
     kIcoFilter = 0xf0b0, kIcoDot = 0xf111, kIcoHelp = 0xf059, kIcoDown = 0xf078, kIcoRight = 0xf054, kIcoKeys = 0xf11c, kIcoMuscle = 0xf44b,
 };
 // categoria (0 escena, 1 jugadores, 2 otros), orden dentro de ella e icono de cada seccion (la clave es la seccion en espanol)
@@ -1681,6 +1681,18 @@ static void DrawMenu() {
             ImGui::PopStyleColor();
         } else ImGui::Checkbox(TRS("Ver original"), &g_cfg.bypass);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS(g_cfg.bypass ? "Viendo el juego SIN el mod: clic para volver" : "Ver el juego sin el mod, para comparar"));
+        ImGui::SameLine();
+        {   // (08/11 e) Agustin: "un boton que apague los menus para tener la vista completa (Apariencia, Movimiento)": x392, nunca se guarda
+            const bool hid = g_cfg.live[392][0] > 0.5f;
+            ImGui::PushStyleColor(ImGuiCol_Button, hid ? ImVec4(0.75f, 0.45f, 0.15f, 1) : ImGui::GetStyleColorVec4(ImGuiCol_Button));
+            if (ImGui::Button((s_rail || s_slim ? (s_iconsOk ? Ico(kIcoEyeSlash) : std::string("[M]")) + "##menus" : IcoL(kIcoEyeSlash, TRS("Menus"))).c_str())) {
+                g_cfg.live[392][0] = hid ? 0.0f : 1.0f;
+                for (auto& k : g_cfg.keys) if (k.name == "PESHideMenus") k.active = !hid;   // la tecla Alt+Shift+M queda en el mismo estado
+                Log("menu: menus del juego %s (x392)", hid ? "visibles" : "ocultos");
+            }
+            ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS(hid ? "Menus del juego OCULTOS (Alt+Shift+M): clic para verlos de nuevo" : "Ocultar los menus del juego para ver el visor completo (Apariencia, Movimiento). Alt+Shift+M. No se guarda."));
+        }
         ImGui::SameLine();
         if (ImGui::Button(s_iconsOk ? (Ico(kIcoReload) + "###recargar").c_str() : TRS("Recargar"))) ImGui::OpenPopup("recargar_pop");
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Recargar shaders o la configuracion"));
