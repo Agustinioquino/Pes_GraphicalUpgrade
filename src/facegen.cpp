@@ -22,6 +22,7 @@
 #include <set>
 #include <map>
 #include <fstream>
+#include <iterator>
 
 namespace fx {
 
@@ -372,6 +373,63 @@ static bool MakeTarget(UINT w, UINT h, ID3D11Texture2D** tex, ID3D11RenderTarget
     return true;
 }
 
+// (08/11 y, Agustin: "que estos datos de hebras por jugador se guarden junto con la cara para ahorrar trabajo al cargar" y "asegurate
+// de que se guarden correctamente") CACHE EN DISCO de los mapas de cada cara (A / B quinta textura, C mapa de pelo, D mapa de la ceja):
+// PES21FX\hebras\<cara>_<version>_<a|b|c|d>.dds. La version es la huella de los dos shaders que los generan (pes_facegen_ps,
+// pes_browmap_ps): si cambia un shader, los archivos viejos se ignoran solos y se vuelven a generar. Se guardan en un .tmp, se revisa
+// el archivo escrito (cabecera DDS, ancho, alto y tamano) y recien ahi se renombra al nombre final; al cargar se revisa que las medidas
+// coincidan con la cara. z416 = 1 usa la cache (0 = siempre generar)
+static std::wstring FaceCacheVersion() {
+    static std::wstring v; static bool done = false;
+    if (done) return v; done = true;
+    uint64_t h = 1469598103934665603ull;
+    for (const wchar_t* f : { L"pes_facegen_ps.hlsl", L"pes_browmap_ps.hlsl" }) { std::string src;
+        { std::ifstream in(g_cfg.baseDir + L"shaders\\" + f, std::ios::binary); if (!in) { v.clear(); return v; } src.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()); }
+        for (unsigned char ch : src) { h ^= ch; h *= 1099511628211ull; } }
+    wchar_t b[20]; swprintf(b, 20, L"%08x", (unsigned)(h ^ (h >> 32))); v = b; return v;
+}
+static std::wstring FaceCachePath(const std::string& id, wchar_t k) {
+    return g_cfg.baseDir + L"hebras\\" + std::wstring(id.begin(), id.end()) + L"_" + FaceCacheVersion() + L"_" + k + L".dds";
+}
+static bool FaceCacheCheckFile(const std::wstring& p, UINT w, UINT h) {   // cabecera DDS + medidas + tamano completo del mip 0
+    FILE* f = _wfopen(p.c_str(), L"rb"); if (!f) return false;
+    uint32_t hd[32] = {}; size_t n = fread(hd, 4, 32, f); fseek(f, 0, SEEK_END); long sz = ftell(f); fclose(f);
+    return n == 32 && hd[0] == 0x20534444u && hd[3] == h && hd[4] == w && sz >= (long)(128 + (size_t)w * h * 4);
+}
+static bool FaceCacheLoad(ID3D11DeviceContext* c, const std::string& id, UINT w, UINT h, FaceEntry& e) {
+    if (id.empty() || g_cfg.live[416][2] < 0.5f || FaceCacheVersion().empty()) return false;
+    const wchar_t ks[4] = { L'a', L'b', L'c', L'd' }; const UINT ws[4] = { w, w, w, std::max(w / 2, 64u) }, hs[4] = { h, h, h, std::max(h / 2, 64u) };
+    ID3D11ShaderResourceView* v[4] = {};
+    bool ok = true;
+    for (int i = 0; i < 4 && ok; i++) {
+        std::wstring p = FaceCachePath(id, ks[i]);
+        if (!FaceCacheCheckFile(p, ws[i], hs[i])) { ok = false; break; }
+        ID3D11Resource* r = nullptr;
+        if (FAILED(DirectX::CreateDDSTextureFromFile(g_dev.dev, c, p.c_str(), &r, &v[i])) || !v[i]) { ok = false; if (r) r->Release(); break; }
+        D3D11_TEXTURE2D_DESC d{}; ((ID3D11Texture2D*)r)->GetDesc(&d); r->Release();
+        if (d.Width != ws[i] || d.Height != hs[i] || d.MipLevels < 2) ok = false;   // sin mips no sirve (las hebras leen mips 3..5)
+    }
+    if (!ok) { for (auto* x : v) if (x) x->Release(); return false; }
+    e.a = v[0]; e.b = v[1]; e.c = v[2]; e.d = v[3];
+    return true;
+}
+static void FaceCacheSave(ID3D11DeviceContext* c, const FaceEntry& e) {
+    if (e.id.empty() || g_cfg.live[416][2] < 0.5f || FaceCacheVersion().empty() || !e.a || !e.b || !e.c || !e.d) return;
+    CreateDirectoryW((g_cfg.baseDir + L"hebras").c_str(), nullptr);
+    const wchar_t ks[4] = { L'a', L'b', L'c', L'd' }; ID3D11ShaderResourceView* v[4] = { e.a, e.b, e.c, e.d };
+    int good = 0;
+    for (int i = 0; i < 4; i++) {
+        ID3D11Resource* r = nullptr; v[i]->GetResource(&r); if (!r) continue;
+        D3D11_TEXTURE2D_DESC d{}; ((ID3D11Texture2D*)r)->GetDesc(&d);
+        std::wstring fin = FaceCachePath(e.id, ks[i]), tmp = fin + L".tmp";
+        HRESULT hr = DirectX::SaveDDSTextureToFile(c, r, tmp.c_str()); r->Release();
+        if (SUCCEEDED(hr) && FaceCacheCheckFile(tmp, d.Width, d.Height) && MoveFileExW(tmp.c_str(), fin.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) good++;
+        else { DeleteFileW(tmp.c_str()); Log("hebras: cara %s: el mapa %c NO se guardo bien (0x%08X): se vuelve a generar la proxima vez", e.id.c_str(), (char)ks[i], (unsigned)hr); }
+    }
+    if (good < 4) for (int i = 0; i < 4; i++) DeleteFileW(FaceCachePath(e.id, ks[i]).c_str());   // todo o nada: nunca una cara a medias
+    else Log("hebras: cara %s: 4 mapas guardados y verificados en PES21FX\\hebras (version %ls)", e.id.c_str(), FaceCacheVersion().c_str());
+}
+
 // en Present, contexto inmediato: genera hasta 2 caras por cuadro
 static std::atomic<int> s_browFaces{0};   // caras con hebras dibujadas en este cuadro (x77 = maximo por pantalla)
 void FaceGenPresent() {
@@ -446,7 +504,9 @@ void FaceGenPresent() {
         FaceEntry e;
         if (ok) {
             ID3D11Texture2D *ta = nullptr, *tb = nullptr, *tc = nullptr, *td = nullptr; ID3D11RenderTargetView *ra = nullptr, *rb = nullptr, *rc = nullptr, *rd = nullptr;
-            if (MakeTarget(r.w, r.h, &ta, &ra, &e.a) && MakeTarget(r.w, r.h, &tb, &rb, &e.b) && MakeTarget(r.w, r.h, &tc, &rc, &e.c)) {
+            std::string preId; { ID3D11Resource* res = nullptr; r.in[1]->GetResource(&res); if (res) { preId = HashFaceTexture(c, res); res->Release(); } }
+            const bool loaded = FaceCacheLoad(c, preId, r.w, r.h, e);   // (08/11 y) mapas ya guardados de esta cara
+            if (loaded || (MakeTarget(r.w, r.h, &ta, &ra, &e.a) && MakeTarget(r.w, r.h, &tb, &rb, &e.b) && MakeTarget(r.w, r.h, &tc, &rc, &e.c))) {
                 // buffer de semillas de cejas (lo escribe el shader de cara en cada dibujo, lo lee el dibujo de hebras)
                 D3D11_BUFFER_DESC bd{}; bd.ByteWidth = kSeedCount * kSeedBytes; bd.Usage = D3D11_USAGE_DEFAULT;
                 bd.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE; bd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED; bd.StructureByteStride = kSeedBytes;
@@ -463,6 +523,7 @@ void FaceGenPresent() {
                       D3D11_UNORDERED_ACCESS_VIEW_DESC au{}; au.Format = DXGI_FORMAT_R32_TYPELESS; au.ViewDimension = D3D11_UAV_DIMENSION_BUFFER; au.Buffer.NumElements = 4; au.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
                       g_dev.dev->CreateUnorderedAccessView(e.args, &au, &e.argsUAV);
                   } }
+                if (!loaded) {
                 ID3D11RenderTargetView* rts[3] = { ra, rb, rc };
                 c->OMSetRenderTargets(3, rts, nullptr);
                 D3D11_VIEWPORT vp{ 0, 0, (float)r.w, (float)r.h, 0, 1 }; c->RSSetViewports(1, &vp);
@@ -482,11 +543,13 @@ void FaceGenPresent() {
                     ID3D11RenderTargetView* none1 = nullptr; c->OMSetRenderTargets(1, &none1, nullptr);
                     c->GenerateMips(e.d);
                 }
+                }   // !loaded
                 s_generated++;
                 e.w = r.w; e.h = r.h;
                 // 18/10 pelo: identidad de la cara, tipo de pelo (PES21FX_hair.ini) y mapa de pelo propio (PES21FX\hair\<id>.dds)
-                { ID3D11Resource* res = nullptr; r.in[1]->GetResource(&res);
-                  if (res) { e.id = HashFaceTexture(c, res); res->Release(); } }
+                e.id = preId;
+                if (loaded) Log("hebras: cara %s: mapas cargados de PES21FX\\hebras (sin generar)", e.id.c_str());
+                else FaceCacheSave(c, e);   // (08/11 y) antes del mapa propio del usuario: se guarda el generado
                 if (!e.id.empty()) CarasHdNewFace(c, e.id, r.in);   // (04/11) caras en alta: volcar originales / buscar las reescaladas
                 if (!e.id.empty()) {
                     ID3D11ShaderResourceView* usrv = LoadUserHairMap(e.id);
