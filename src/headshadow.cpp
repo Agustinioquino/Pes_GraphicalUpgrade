@@ -216,8 +216,10 @@ bool HeadShadowBodyOn() { return s_body && s_count > 0; }   // (04/11 piel) cuad
 // orientacion opuesta a la matriz de sombras del juego y entonces el descarte dejaba solo las caras de atras (sombra de la cara
 // opuesta: manchas). Con las dos caras se queda la mas cercana al sol, como corresponde. Cache por estado original.
 static std::map<ID3D11RasterizerState*, ID3D11RasterizerState*> s_rsNoCull;
+static std::mutex s_rsNoCullMx;   // (08/11 h) se llama desde los dibujos de cualquier contexto (hilos del juego): el mapa sin lock podia romper el heap
 static std::atomic<ID3D11RasterizerState*> s_lastShadowRS{nullptr};   // (04/11 piel) el ultimo de la repeticion (pasada de sombras)
 static ID3D11RasterizerState* NoCullRS(ID3D11RasterizerState* orig) {
+    std::lock_guard<std::mutex> lk(s_rsNoCullMx);
     auto it = s_rsNoCull.find(orig); if (it != s_rsNoCull.end()) return it->second;
     if (!g_dev.dev) return nullptr;
     D3D11_RASTERIZER_DESC rd{};

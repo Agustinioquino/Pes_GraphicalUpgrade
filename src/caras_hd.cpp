@@ -205,7 +205,8 @@ void CarasHdNewFace(ID3D11DeviceContext* c, const std::string& id, ID3D11ShaderR
         Scan(id, f);
         doDump = s_dump && s_dumped.insert(id).second;
         bool any2k = f.has2k[0] || f.has2k[1] || f.has2k[2] || f.has2k[3];
-        if (any2k && !f.tried2k && !f.loading) { f.tried2k = true; f.loading = true; Queue(id, false); }
+        if (s_on && any2k && !f.tried2k && !f.loading) {   // (08/11 h) activo = 0: no se carga nada (se cargaba la trm_2k de Messi antes del cierre 08:19)
+         f.tried2k = true; f.loading = true; Queue(id, false); }
     }
     if (!doDump) return;
     std::wstring od = Dir(); CreateDirectoryW(od.c_str(), nullptr); od += L"originales\\"; CreateDirectoryW(od.c_str(), nullptr);
@@ -337,7 +338,7 @@ void CarasHdPresent() {
     for (auto& kv : s_faces) {
         HdFace& f = kv.second; bool w = keep.count(kv.first) > 0;
         bool any4k = f.has4k[0] || f.has4k[1] || f.has4k[2] || f.has4k[3];
-        if (w && any4k && !f.tried4k && !f.loading) { f.tried4k = true; f.loading = true; Queue(kv.first, true); }
+        if (s_on && w && any4k && !f.tried4k && !f.loading) { f.tried4k = true; f.loading = true; Queue(kv.first, true); }
         if (!w && f.tried4k && !f.loading) {   // soltar la 4096 (la vista se libera mas tarde: puede estar en una lista diferida)
             for (auto& x : f.t4k) if (x.srv) { s_grave.push_back({ s_frame, x.srv }); x = HdTex(); }
             f.tried4k = false;
@@ -348,7 +349,7 @@ void CarasHdPresent() {
             for (auto& x : f.t2k) if (x.srv) { s_grave.push_back({ s_frame, x.srv }); x = HdTex(); }
             f.tried2k = false;
         }
-        if (!f.tried2k && !f.loading && s_frame - f.lastFrame <= 2 && (f.has2k[0] || f.has2k[1] || f.has2k[2] || f.has2k[3])) { f.tried2k = true; f.loading = true; Queue(kv.first, false); }
+        if (s_on && !f.tried2k && !f.loading && s_frame - f.lastFrame <= 2 && (f.has2k[0] || f.has2k[1] || f.has2k[2] || f.has2k[3])) { f.tried2k = true; f.loading = true; Queue(kv.first, false); }
     }
     // liberar lo soltado hace mas de 240 cuadros
     size_t k = 0;

@@ -26,20 +26,29 @@ static std::atomic<long long> s_zeroMod{0}, s_zeroExe{0}, s_zeroOther{0};
 static uintptr_t s_modLo = 0, s_modHi = 0;
 static const uintptr_t kExeLo = 0x140000000ull, kExeHi = 0x146000000ull;
 static void* s_modSites[40] = {}; static std::atomic<int> s_modSiteN{0};
+// (08/11 h) vtables publicas de los 4 tipos de estado: el Release enganchado es el mismo para todos los objetos D3D11 (ICF de
+// CContainedObject::Release), asi que se separan los estados del resto (texturas, vistas, buffers, listas) por su vtable
+static void* s_stVt[4] = {};
+static std::atomic<long long> s_stMod[4], s_stExe{0}, s_stOther{0};
 
 static inline void Note(IUnknown* p, void* vt, void* ret) {
     long i = InterlockedIncrement(&g_relRing.next) - 1;
     RelRec& e = g_relRing.r[(unsigned)i % 16384u];
     e.obj = p; e.vtbl = vt; e.ret = ret; e.tid = GetCurrentThreadId(); e.ms = GetTickCount();
     uintptr_t r = (uintptr_t)ret;
-    if (r >= s_modLo && r < s_modHi) {
+    int kind = -1; for (int k = 0; k < 4; k++) if (vt && vt == s_stVt[k]) { kind = k; break; }
+    const bool fromMod = r >= s_modLo && r < s_modHi;
+    if (kind >= 0) { if (fromMod) s_stMod[kind]++; else if (r >= kExeLo && r < kExeHi) s_stExe++; else s_stOther++; }
+    if (fromMod) {
         s_zeroMod++;
+        if (kind < 0) return;   // sitios del log: solo estados
         int n = s_modSiteN.load(std::memory_order_relaxed);
         for (int k = 0; k < n && k < 40; k++) if (s_modSites[k] == ret) return;
         if (n < 40 && s_modSiteN.compare_exchange_strong(n, n + 1)) {
             s_modSites[n] = ret;
-            Log("vigia estados: el mod solto la ultima referencia de un estado en d3d11.dll(mod)+0x%llx (objeto %p, vtable %p) [sitio %d]",
-                (unsigned long long)(r - s_modLo), (void*)p, vt, n + 1);
+            static const char* kN[4] = { "blend", "profundidad", "rasterizador", "sampler" };
+            Log("vigia estados: el mod solto la ultima referencia de un estado (%s) en d3d11.dll(mod)+0x%llx (objeto %p) [sitio %d]",
+                kN[kind], (unsigned long long)(r - s_modLo), (void*)p, n + 1);
         }
     } else if (r >= kExeLo && r < kExeHi) s_zeroExe++;
     else s_zeroOther++;
@@ -60,8 +69,9 @@ void RelWatchPresent() {
     if (s_tried) {
         double t = Now();
         if (s_relTarget[0] && t > next) { next = t + 30.0;
-            Log("vigia estados (30 s): estados que llegaron a 0 referencias: %lld desde el mod, %lld desde el juego, %lld desde otros modulos (anillo %ld)",
-                s_zeroMod.exchange(0), s_zeroExe.exchange(0), s_zeroOther.exchange(0), g_relRing.next); }
+            long long b = s_stMod[0].exchange(0), d = s_stMod[1].exchange(0), rs = s_stMod[2].exchange(0), sm = s_stMod[3].exchange(0);
+            Log("vigia estados (30 s): ESTADOS a 0 referencias: desde el mod %lld (blend %lld, profundidad %lld, rasterizador %lld, sampler %lld), desde el juego %lld, otros %lld | todos los objetos D3D11: mod %lld, juego %lld, otros %lld (anillo %ld)",
+                b + d + rs + sm, b, d, rs, sm, s_stExe.exchange(0), s_stOther.exchange(0), s_zeroMod.exchange(0), s_zeroExe.exchange(0), s_zeroOther.exchange(0), g_relRing.next); }
         return;
     }
     s_tried = true;
@@ -87,6 +97,7 @@ void RelWatchPresent() {
     int hooked = 0; char tgt[200] = ""; size_t tl = 0;
     for (int k = 0; k < 4; k++) {
         if (!o[k]) continue;
+        s_stVt[k] = VT(o[k]);
         void* f = VT(o[k])[2];
         bool dup = false; for (int j = 0; j < k; j++) if (s_relTarget[j] == f) dup = true;
         if (!dup && MH_CreateHook(f, kHk[k], (void**)&o_rel[k]) == MH_OK && MH_EnableHook(f) == MH_OK) { s_relTarget[k] = f; hooked++; }
