@@ -704,7 +704,7 @@ static void CardGlow() {
     if (h < 0.01f) return;
     ImDrawList* dl = w->DrawList; const ImVec2 a = w->Pos, b(w->Pos.x + w->Size.x, w->Pos.y + w->Size.y);
     const float rr = ImGui::GetStyle().FrameRounding;
-    dl->PushClipRect(a, b, false);
+    dl->PushClipRect(a, b, true);   // (08/11 e) intersecta con el recorte de la pagina: con la tarjeta medio fuera de la vista el filo y el reflejo se dibujaban encima del titulo
     dl->AddRectFilledMultiColor(ImVec2(a.x + 2, a.y + 1), ImVec2(b.x - 2, a.y + std::min(36.0f * UIK(), w->Size.y * 0.5f)), IM_COL32(255, 255, 255, (int)(14 * h)), IM_COL32(255, 255, 255, (int)(14 * h)), IM_COL32(255, 255, 255, 0), IM_COL32(255, 255, 255, 0));
     dl->AddRect(ImVec2(a.x + 0.5f, a.y + 0.5f), ImVec2(b.x - 0.5f, b.y - 0.5f), ImGui::GetColorU32(ImVec4(0.45f, 0.92f, 0.66f, 0.38f * h)), rr, 0, 1.2f);
     dl->PopClipRect();

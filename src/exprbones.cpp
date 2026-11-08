@@ -981,6 +981,11 @@ static void PublishHead(const Skel& S) {
     }
 }
 // la cara a seguir: la del personaje fijado (*lock) si sigue al dia; si no, la que esta mas al centro de la vista de la camara
+bool ExprFaceAny() {   // (08/11 e) hay alguna cara con dato fresco (< 0.5 s): la usa la camara libre para saber si la recarga termino
+    std::lock_guard<std::mutex> lk(s_hpMx); const double now = Now();
+    for (int i = 0; i < 8; i++) if (s_hp[i].node && now - s_hp[i].t < 0.5) return true;
+    return false;
+}
 bool ExprFaceFrame(const float* camPos, const float* camFwd, const void** lock, float c[3], float fw[3], float up[3], double* age) {
     std::lock_guard<std::mutex> lk(s_hpMx);
     const double now = Now();

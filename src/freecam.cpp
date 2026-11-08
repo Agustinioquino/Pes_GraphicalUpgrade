@@ -65,6 +65,13 @@ static int s_logged = 0;
 static const char* s_origen = "";
 
 bool FreeCamActive() { return g_cfg.live[344][0] > 0.5f; }
+static double s_headLostT = -1.0;   // (08/11 e) cuando se perdio el dato de la cabeza siguiendo la cara (-1 = no)
+static bool FreeCamHeadLost() {   // se pidio seguir la cara, se estaba siguiendo y el dato se corto: se suelta hasta que vuelva
+    if (s_headLostT < 0.0) return false;
+    if (g_cfg.live[346][0] < 0.5f) { s_headLostT = -1.0; return false; }
+    if (ExprFaceAny()) { s_headLostT = -1.0; return false; }
+    return true;
+}
 bool FreeCamBlocksKeys() { const float v = g_cfg.live[344][0]; return v > 0.5f && v < 1.5f; }
 
 static bool Key(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
@@ -180,7 +187,7 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
             mode == 1 ? "fija al rostro" : "orbitando la cabeza", s_head[0], s_head[1], s_head[2], F[0], F[1], F[2], s_dist);
     } else if (!follow && s_follow) {
         if (s_followMode == 1) s_fixHalf = std::clamp(s_dist * tanHalf, 0.05f, 2.0f);
-        s_follow = false; s_lockNode = nullptr; s_headSeen = false;
+        s_follow = false; s_lockNode = nullptr; s_headSeen = false; if (wantFollow) s_headLostT = Now();
         Log("camara libre: deja de seguir la cara%s", wantFollow ? " (sin dato de la cabeza: el personaje tiene que verse y la boca por huesos tiene que reconocer su cara)" : "");
     }
     s_upOut[0] = 0.0f; s_upOut[1] = 1.0f; s_upOut[2] = 0.0f;
@@ -286,8 +293,25 @@ static void hk_SetCam(void* rt, unsigned char* cam) {
         if (s_haveOrig) { memcpy(cam + 0x10, s_orig, sizeof s_orig); Log("camara libre: camara del visor restaurada a la original"); }
         s_restore = false; s_haveOrig = false;
     }
+    // (08/11 e) cuelgue de Agustin (07:54 UTC, volcado cuelgue_20261108_0755): con la camara libre siguiendo la cara, el editor recargo
+    // al jugador (edit_idle_loop_face.gani) y el hilo de dibujo del juego quedo esperando su lista de comandos para siempre; los
+    // cierres de las 21:22 / 21:43 del 07/11 fueron en el mismo momento. Hasta saber la causa exacta: (1) la camara propia se escribe
+    // solo en el render target del visor (el primero que llega al prender), no en los que el juego arma al recargar el modelo; (2) si
+    // se sigue la cara y el dato de la cabeza se pierde (= recarga), la camara del juego pasa sin tocar hasta que la cara vuelva.
+    static void* s_rtMain = nullptr; static double s_rtMainT = 0.0;
+    if (!FreeCamActive()) s_rtMain = nullptr;
+    if (rt == s_rtMain) s_rtMainT = Now();
+    else if (s_rtMain && Now() - s_rtMainT > 1.0 && !FreeCamHeadLost()) { Log("camara libre: el visor cambio de render target (%p -> %p)", s_rtMain, rt); s_rtMain = rt; s_rtMainT = Now(); }   // el visor viejo ya no dibuja: se adopta el nuevo
+    if (cam && FreeCamActive() && s_on && s_rtMain && rt != s_rtMain) {
+        static int n = 0; if (n++ < 10) Log("camara libre: otro render target del editor (%p, el visor es %p): se deja la camara del juego", rt, s_rtMain);
+        o_setCam(rt, cam); return;
+    }
+    if (cam && FreeCamActive() && s_on && FreeCamHeadLost()) {
+        static double t = 0; if (Now() - t > 5.0) { t = Now(); Log("camara libre: sin la cara (recarga del jugador?): la camara del juego pasa sin tocar"); }
+        o_setCam(rt, cam); return;
+    }
     if (cam && FreeCamActive()) {
-        if (!s_on) { memcpy(s_orig, cam + 0x10, sizeof s_orig); s_haveOrig = true; s_restore = true; }
+        if (!s_on) { memcpy(s_orig, cam + 0x10, sizeof s_orig); s_haveOrig = true; s_restore = true; s_rtMain = rt; s_rtMainT = Now(); }
         float* pos = (float*)(cam + 0x10); float* tgt = (float*)(cam + 0x1c); float* up = (float*)(cam + 0x28); float* fov = (float*)(cam + 0x40);
         int proj; memcpy(&proj, cam + 0x3c, 4);
         float extra[3]; memcpy(&extra[0], cam + 0x34, 4); memcpy(&extra[1], cam + 0x38, 4); memcpy(&extra[2], cam + 0x44, 4);
