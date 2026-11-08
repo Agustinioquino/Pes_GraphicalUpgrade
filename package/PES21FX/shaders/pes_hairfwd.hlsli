@@ -31,6 +31,7 @@ cbuffer PESHairFwd : register(b5)
 {
   float4 hfLight;   // rgb = color de la luz principal del cuadro (LightCB), w = fuerza (w382)
   float4 hfInfo;    // x = 1 profundidad invertida, yz = tamano del render, w = 1 hay luz del juego
+  float4 hfMix;     // (08/11 z3) x = modo mixto (x425), y = borde en px (y425), z = opacidad del borde (z425)
 }
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> tDepth : register(t11);    // profundidad de la escena (la de la composicion)
@@ -57,6 +58,9 @@ struct VSOut {
   float3 col2 : TEXCOORD5;
   float3 tanV : TEXCOORD6;
   float3 posV : TEXCOORD7;
+#ifdef PES_HF_COV
+  float2 fr : TEXCOORD8;     // (08/11 z3) modo mixto: x = medio ancho del nucleo en px, y = borde agregado en px (pes_hairfwd_vs)
+#endif
 };
 
 static const float PI = 3.14159265;
@@ -158,12 +162,18 @@ float4 main(VSOut i) : SV_Target0
 #ifdef PES_HF_COV
   float2 uvG = i.pos.xy / max(hfInfo.yz, 1.0);
   float3 irr = tLightD.SampleLevel(sPt, uvG, 0).xyz;
+  // (08/11 z3) MODO MIXTO: la hebra ya esta en el G-buffer (pegada, con la luz del juego); aca va su BORDE semitransparente afuera del
+  // nucleo y el brillo de pelo encima. Salida premultiplicada (la DLL mezcla ONE / INV_SRC_ALPHA): el brillo suma entero en el nucleo
+  float tipF = 1.0 - t * t * t * t;
+  float tot = max(i.fr.x + i.fr.y, 1e-3), dpx = abs(i.tw.y) * tot;
+  float outF = i.fr.y > 1e-3 ? saturate((dpx - i.fr.x) / i.fr.y) : 1.0;          // 0 en el nucleo .. 1 en el borde de afuera
+  float soft = lerp(1.5, 0.6, saturate(IniParams.Load(int2(406, 0)).z / 3.0));    // z406 borde redondeado: mas = borde mas suave
+  float fringe = pow(saturate(1.0 - outF), soft);
+  float thick = saturate(0.45 + res);                                              // grosor elegido (x403 / x404 / y404): borde mas lleno
+  float aD = (dpx <= i.fr.x ? 0.3 : clamp(hfMix.z, 0.0, 1.0) * fringe * thick) * tipF * saturate(gain);
   float3 dif = alb * irr * lerp(1.0, layT, 0.5) * lerp(0.8, 1.0, layQ);
-  float3 spc = hasL ? S * lc * saturate(dot(N, L) * 0.5 + 0.75) : 0.0;
-  // z406 borde redondeado: 0 = borde duro, 1 = como antes, 3 = muy suave
-  float eK = lerp(8.0, 1.2, saturate(IniParams.Load(int2(406, 0)).z / 3.0));
-  float a = saturate(max(res, 0.02) / 0.98) * saturate(edge * eK + 0.25) * (1.0 - t * t * t * t) * saturate(gain);
-  return float4(max(dif + spc, 0.0), a);
+  float3 spc = hasL ? S * lc * saturate(dot(N, L) * 0.5 + 0.75) * gain * saturate(max(res * 1.667, 0.3)) * tipF * saturate(1.0 - outF) : 0.0;   // = brillo de antes en el nucleo
+  return float4(max(dif * aD + spc, 0.0), aD);
 #else
   float3 o = S * lc * gain * cov * saturate(dot(N, L) * 0.5 + 0.75);
   return float4(max(o, 0.0), 0.0);
