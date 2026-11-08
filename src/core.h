@@ -364,6 +364,9 @@ bool LodNoteFace(ID3D11DeviceContext* c, ID3D11Resource* key, ID3D11Resource* t0
 bool LodNoteAnyDraw(ID3D11DeviceContext* c, uint64_t vsHash, uint64_t psHash, UINT count, UINT start, INT base, LodIA* out);
 // (04/11) bocajug.cpp: boca propia por jugador (vertices del perfil de caras.ini en el dibujo de la boca de su cara)
 bool BocaJugDraw(ID3D11DeviceContext* c, uint64_t face, UINT count, UINT start, LodIA& L, ID3D11ShaderResourceView** bsm); void BocaJugLog(); void BocaJugReset();
+// (08/11 p) cara con mas poligonos (caramalla.cpp): volcado de la malla de la piel de la cara y dibujo con la malla subdividida
+bool CaraMallaDraw(ID3D11DeviceContext* c, const std::string& id, UINT count, UINT start, INT base, LodIA* out, ID3D11ShaderResourceView** par);
+bool CaraMallaAnyDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, LodIA* out); void CaraMallaPresent(); extern std::atomic<bool> g_caraMallaAny;
 void LodBind(ID3D11DeviceContext* c, const LodIA& L, LodIA& sv); void LodRestore(ID3D11DeviceContext* c, LodIA& sv, const LodIA& L); void LodPresent();
 extern float g_eyePos[4]; extern bool g_eyeValid;
 extern thread_local LodIA t_grassSub;   // (20/10) pasto v4: malla propia para el dibujo de pasto en curso (la llena GrassOnDraw, la consume hk_DrawIdx)

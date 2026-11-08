@@ -65,17 +65,29 @@ Buffer<float4> g_pesShapes : register(t118);
 // dibujos de piel de la cara que se teselan): 0 = vertice en el borde de la pieza o duplicado (costura), 1 = interior. El VS lo
 // saca en TEXCOORD12.w; sin buffer enlazado vale 0 (nada se mueve).
 Buffer<float> g_pesTessSeam : register(t119);
+// (08/11 p, Agustin: "una subdivision suave de la cara de messi") CARA CON MAS POLIGONOS (caramalla.cpp): la DLL dibuja la malla
+// subdividida en lugar de la del juego; los vertices viejos quedan con su mismo indice y los nuevos van despues (lv >= vertices de la
+// malla original). Cada vertice nuevo trae en t114 sus dos vertices de origen (los extremos de la arista que lo creo, locales):
+// los gestos esculpidos y el peso de borde de la teselacion los toman de ellos. Sin malla HD (t114 vacio) no cambia nada.
+Buffer<uint2> g_pesHdPar : register(t114);
+bool PesHdParent(uint lv, out uint2 pa)
+{
+  pa = uint2(0, 0);
+  uint n = 0; g_pesHdPar.GetDimensions(n);
+  uint k = lv - g_pesExprShape.y;
+  if (lv < g_pesExprShape.y || k >= n) return false;
+  pa = g_pesHdPar[k];
+  return pa.x < g_pesExprShape.y && pa.y < g_pesExprShape.y;
+}
 float PesTessSeam(uint vid)
 {
   uint lv = vid - g_pesExprShape.z;
-  if (vid < g_pesExprShape.z || lv >= g_pesExprShape.y) return 0;
+  if (vid < g_pesExprShape.z) return 0;
+  if (lv >= g_pesExprShape.y) { uint2 pa; return PesHdParent(lv, pa) ? min(g_pesTessSeam[pa.x], g_pesTessSeam[pa.y]) : 0; }
   return g_pesTessSeam[lv];
 }
-float3 PesShapeDelta(uint vid)
+float3 PesShapeDelta1(uint lv)
 {
-  if (g_pesExprShape.w == 0) return 0;
-  uint lv = vid - g_pesExprShape.z;
-  if (vid < g_pesExprShape.z || lv >= g_pesExprShape.y) return 0;
   float4 G5 = IniParams.Load(int2(355, 0)), G6 = IniParams.Load(int2(356, 0));
   if (G6.w < 0.5) return 0;
   // (04/11 c, Agustin: messi6 "la sonrisa mayor ... como la sonrisa mas alta") Sonrisa 0..1 = la forma de siempre; de 1 a 1.5 pasa
@@ -87,6 +99,14 @@ float3 PesShapeDelta(uint vid)
   float3 d = 0;
   [unroll] for (uint k = 0; k < 6; k++) if (k < nS && w[k] > 0.001) d += g_pesShapes[b + k].xyz * w[k];
   return d;
+}
+float3 PesShapeDelta(uint vid)
+{
+  if (g_pesExprShape.w == 0) return 0;
+  uint lv = vid - g_pesExprShape.z;
+  if (vid < g_pesExprShape.z) return 0;
+  if (lv >= g_pesExprShape.y) { uint2 pa; return PesHdParent(lv, pa) ? 0.5 * (PesShapeDelta1(pa.x) + PesShapeDelta1(pa.y)) : 0; }
+  return PesShapeDelta1(lv);
 }
 
 // (04/11 c, Agustin: "en la sonrisa deberias estirar los dientes horizontalmente un poco asi como bajar los dientes un poco"; con su
