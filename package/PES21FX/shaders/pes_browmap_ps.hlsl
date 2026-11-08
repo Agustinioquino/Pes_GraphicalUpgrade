@@ -42,9 +42,17 @@ void BrowMap(float2 uv, float2 texel, out float4 o3) {
     float w = al * al;
     acc += hcK * w; wsum += w;
   }
-  float3 hc = wsum > 1e-3 ? acc / wsum : tDiffuse.SampleLevel(sLin, uv, 0.0).rgb * 0.8;
+  // sin pelo pintado alrededor: castano oscuro sacado de la piel (antes el texel x0.8 = color de piel)
+  float3 hc = wsum > 1e-3 ? acc / wsum : skC * float3(0.42, 0.33, 0.27);
   float hl = LumF(hc);
   hc = max(hl + (hc - hl) * 0.95, 0.0) * 1.1;   // (08/11 v) sin realce de saturacion: el tono real del pelo ya no trae la piel
+  // (08/11 v, Agustin: "el color de las cejas nunca tiene que ser el color de la piel") tope: la ceja queda al menos 45 % mas oscura
+  // que la piel de alrededor y, si el tono se parece al de la piel, se lleva hacia el castano del pelo
+  { float hl2 = LumF(hc), cap = 0.55 * sk;
+    if (hl2 > cap) hc *= cap / max(hl2, 1e-4);
+    float3 sN = skC / max(LumF(skC), 1e-4), hN = hc / max(LumF(hc), 1e-4);
+    float same = 1.0 - saturate(length(hN - sN) * 4.0);
+    hc = lerp(hc, LumF(hc) * float3(1.18, 0.95, 0.78), same * 0.6); }
   o3 = float4(hc, mask);
 }
 void main(float4 pos : SV_Position, float2 uv : TEXCOORD0, out float4 o0 : SV_Target0)
