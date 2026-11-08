@@ -16,6 +16,7 @@ void main(point RootOut v[1], inout TriangleStream<GSOut> outS)
   if (len <= 0.0 || root.z < 0.05) return;
   float4 P75 = IniParams.Load(int2(75, 0));
   float4 HO = IniParams.Load(int2(404, 0)), HV = IniParams.Load(int2(405, 0));
+  const bool covM = IniParams.Load(int2(406, 0)).w > 0.5 && P75.z <= 0.5;
   float vpH = m_viewportSize.y > 16.0 ? m_viewportSize.y : 1080.0;
   float pxR = 2.0 * abs(root.z) / (max(abs(m_projection[1].y), 1e-4) * vpH);
   // segmentos: uno cada ~3 px de largo en pantalla (4..16); y416 = tope (16 por defecto)
@@ -33,8 +34,10 @@ void main(point RootOut v[1], inout TriangleStream<GSOut> outS)
     float wid = widB * lerp(1.0, tip, smoothstep(0.3, 1.0, t));
     float pxV = 2.0 * abs(p.z) / (max(abs(m_projection[1].y), 1e-4) * vpH);
     float wReal = wid;
-    wid = max(wid, pxV * (P75.z > 0.5 ? 1.25 : lerp(0.45, 0.8, saturate(widB / widRef))));
-    float cov = P75.z > 0.5 ? 1.0 : saturate(wReal / max(pxV * 1.5, 1e-9));
+    // cobertura real (w406 = la DLL dibuja la pasada propia con mezcla): cinta de 1.5 px y alfa = ancho real / dibujado, asi el
+    // grosor (x403, x404, y404) cambia lo que se ve aunque la hebra sea mas fina que un pixel
+    wid = max(wid, pxV * (P75.z > 0.5 ? 1.25 : (covM ? 0.75 : lerp(0.45, 0.8, saturate(widB / widRef)))));
+    float cov = P75.z > 0.5 ? 1.0 : (covM ? saturate(wReal / max(wid, 1e-9)) : saturate(wReal / max(pxV * 1.5, 1e-9)));
     float3 V = normalize(-p);
     float3 tanR = normalize(dd + n * liftS * (0.35 * 3.14159 * cos(t * 3.14159) + 0.1));
     float3 sideV = normalize(cross(tanR, V) + 1e-6);   // (v3) el costado sigue la tangente real (antes la direccion de la raiz)
