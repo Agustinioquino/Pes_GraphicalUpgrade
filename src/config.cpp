@@ -946,6 +946,22 @@ void UpdateTimeParams() {
           g_eyePos[0] = S[80]; g_eyePos[1] = S[81]; g_eyePos[2] = S[82]; g_eyePos[3] = 1; g_eyeValid = true;   // (20/10) para el LOD de caras
           bool sunny = (cr / std::max(cb, 1e-4f)) > 1.06f && lum112 > 600.0f;         // luz calida y fuerte = sol (de noche: torres frias)
           p[114][3] = sunny ? 1.0f : 0.0f;
+          // (08/11 ab, Agustin: "esto solo deberia pasar en las canchas despejadas ... de dia, hora pico de la luz del sol, verano") w414 =
+          // fuerza del sol para el pasto (0..1), la escribe la DLL cada cuadro (no va en el ini): despejado (sin lluvia), de dia, sol real
+          // (luz calida y fuerte), segun la altura del sol (maximo de 45 grados para arriba; con el sol bajo queda un 45 % para el contraluz
+          // dorado) y la estacion (verano 1, invierno 0.7, otra 0.85). La usan 619b (x414 pintado), 18afff (w413 transmision, puntas x409)
+          { float elev = p[111][3];
+            float hK = elev <= 3.f ? 0.f : elev < 12.f ? 0.45f * (elev - 3.f) / 9.f : 0.45f + 0.55f * std::clamp((elev - 12.f) / 33.f, 0.f, 1.f);
+            bool known = g_cfg.match.known;
+            float clear = (known && g_cfg.match.weather == 1) ? 0.08f : 1.f;
+            float dayK = (known && g_cfg.match.timeofday == 1) ? 0.f : 1.f;
+            float seas = !known ? 0.9f : (g_cfg.match.season == 0 ? 1.f : g_cfg.match.season == 1 ? 0.7f : 0.85f);
+            float pw = (sunny ? 1.f : 0.f) * clear * dayK * seas * std::clamp(hK, 0.f, 1.f);
+            static float sm = 0.f; sm += (pw - sm) * 0.02f;   // ~1 s de suavizado: sin saltos al cambiar de toma
+            p[414][3] = sm;
+            static double nl = 0.0; if (t >= nl) { nl = t + 60.0; Log("pasto: fuerza del sol %.2f (sol a %.1f grados, %s, %s, %s, %s)", sm, elev, sunny ? "sol real" : "sin sol",
+                known ? (g_cfg.match.weather == 1 ? "lluvia" : "despejado") : "clima ?", known ? (g_cfg.match.timeofday == 1 ? "noche" : "dia") : "hora ?",
+                known ? (g_cfg.match.season == 0 ? "verano" : g_cfg.match.season == 1 ? "invierno" : "otra estacion") : "estacion ?"); } }
       }
       int ground = 0; if (g_cfg.match.known && g_cfg.match.weather == 1) ground = 1;
       p[114][0] = (float)ground; p[114][2] = g_cfg.match.known ? (float)g_cfg.match.season : -1.0f; }

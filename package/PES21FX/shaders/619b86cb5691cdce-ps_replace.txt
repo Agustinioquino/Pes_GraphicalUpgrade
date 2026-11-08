@@ -672,6 +672,7 @@ void main(
         float sunUp = saturate(dot(Ld, upV));
         float shG = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
         float strong = saturate(0.35 + 1.3 * sunUp) * day;                 // sol alto y despejado: pinta mas; sol muy bajo: mas calido que saturado
+        strong *= saturate(PS4.w);   // (08/11 ab) w414 = fuerza del sol de la DLL: despejado, de dia, altura del sol y estacion (0 con lluvia / de noche)
         float lit = shG * strong * clamp(PS4.x, 0.0, 2.0) * saturate((300.0 - zsk) / 120.0);
         if (lit > 0.001) {
           float3 c = r2.xyz;
