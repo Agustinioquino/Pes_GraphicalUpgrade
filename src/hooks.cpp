@@ -1004,7 +1004,7 @@ template<int V> static void STDMETHODCALLTYPE hk_SetCS(ID3D11DeviceContext* c, I
 // lo que una regla enlaza se devuelve a como estaba despues del dibujo (como "post ps-t20 = ..." en 3DMigoto)
 struct Saved { bool ps; bool srv; int slot; IUnknown* prev; };
 static const int kSavedMax = 64;   // (02/11) 24 -> 64: con los grupos del brazo (t26/t30/t36/t123) los dibujos del brazo pasaban de 24 y lo enlazado despues no se devolvia (se filtraba al dibujo siguiente: la boca tomaba texturas ajenas)
-struct DrawScope { Saved s[kSavedMax]; int n = 0; FaceGenExtra brow; std::string faceId; bool skip = false; ID3D11PixelShader* restorePS = nullptr; LodIA lod; GlassScope glass; RingScope ring; FaceTessScope tess; bool mouth = false; UINT mCnt = 0, mStart = 0; INT mBase = 0; };   // tess: teselacion de la cara (facetess.cpp)   // glass: vidrio de los menus (glass.cpp)   // lod.count > 0: dibujar con la geometria de LOD0 (lod.cpp)
+struct DrawScope { Saved s[kSavedMax]; int n = 0; FaceGenExtra brow; std::string faceId; bool skip = false; ID3D11PixelShader* restorePS = nullptr; LodIA lod; GlassScope glass; RingScope ring; FaceTessScope tess; bool hdMesh = false; bool mouth = false; UINT mCnt = 0, mStart = 0; INT mBase = 0; };   // tess: teselacion de la cara (facetess.cpp)   // glass: vidrio de los menus (glass.cpp)   // lod.count > 0: dibujar con la geometria de LOD0 (lod.cpp)
 
 static void Remember(ID3D11DeviceContext* c, DrawScope& d, bool ps, bool srv, int slot) {
     if (d.n >= kSavedMax) {   // (26/10 d) 12 -> 24, (02/11) -> 64: lo que no entra no se devolveria
@@ -1207,6 +1207,12 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
             const float* hc = nullptr; int hd = -1;
             ID3D11ShaderResourceView* shp = nullptr; ID3D11ShaderResourceView* shw = nullptr; ID3D11ShaderResourceView* seam = nullptr;
             ID3D11Buffer* wrb = nullptr; const ShaderEntry* fp0 = Ctx(c).ps; const bool skinPs0 = fp0 && fp0->repl && (fp0->hash == 0x5ce3ed8702271bc1ULL || fp0->hash == 0xce188ae110354aeaULL);
+            // (08/11 p) cara con mas poligonos (caramalla.cpp): volcado de la piel de la cara / dibujo con la malla subdividida (nunca la boca)
+            if (t_drawKind == 1 && !d.lod.count && !(fp0 && fp0->hash == 0x63fab7735eee149cULL) && ((skinPs0 && !d.faceId.empty()) || g_caraMallaAny.load(std::memory_order_relaxed))) {
+                LodIA L; ID3D11ShaderResourceView* hp = nullptr;
+                if (CaraMallaDraw(c, skinPs0 ? d.faceId : std::string(), t_drawVerts, t_drawStart, t_drawBase, &L, &hp)) {
+                    d.lod = L; d.hdMesh = true; if (hp) { Remember(c, d, false, true, 114); c->VSSetShaderResources(114, 1, &hp); } }
+            }
             if (ID3D11Buffer* b = ExprBufferForDraw(c, t_drawKind == 1 ? t_drawVerts : 0, t_drawStart, t_drawBase, &hc, &hd, &shp, &shw, &seam, false, &wrb, skinPs0)) { Remember(c, d, false, false, a.slot); c->VSSetConstantBuffers(a.slot, 1, &b); }
             if (wrb) { Remember(c, d, true, false, 12); c->PSSetConstantBuffers(12, 1, &wrb); }   // (08/11) pesos de arrugas del juego suavizados (PS b12 PESWrSmooth)
             if (shp) { Remember(c, d, false, true, 118); c->VSSetShaderResources(118, 1, &shp); }   // (04/11) gestos esculpidos de esta malla
@@ -1491,6 +1497,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
 }
 #define FX_DRAW(verts, kind, inst, call) if (g_catalogHook) { CtxState& cs_ = Ctx(c); CatalogDraw(c, cs_.vs, cs_.ps, verts, kind, inst); } t_drawVerts = (UINT)(verts); t_drawKind = (kind); DrawScope ds; bool r = BeforeDraw(c, ds); \
     if ((kind) == 1 && g_lodAny) { if (!t_lodNoted && !ds.lod.count) { CtxState& cl_ = Ctx(c); LodNoteAnyDraw(c, cl_.vs ? cl_.vs->hash : 0, cl_.ps ? cl_.ps->hash : 0, verts, t_drawStart, t_drawBase, &ds.lod); } t_lodNoted = false; } \
+    if ((kind) == 1 && !ds.lod.count && g_caraMallaAny.load(std::memory_order_relaxed) && CaraMallaAnyDraw(c, verts, t_drawStart, t_drawBase, &ds.lod)) ds.hdMesh = true; \
     if ((kind) == 1 && t_grassSub.count) { if (!ds.lod.count) ds.lod = t_grassSub; else t_grassSub.Release(); t_grassSub = LodIA(); } \
     if (!ds.skip) { call; } if (ds.restorePS) { c->PSSetShader(ds.restorePS, nullptr, 0); ds.restorePS->Release(); } if (ds.glass.on) GlassAfterDraw(c, ds.glass); if (ds.ring.on) RingAfterDraw(c, ds.ring); \
     if (ds.ring.overlay && !ds.skip) { RingOverlayBegin(c, ds.ring); call; RingOverlayEnd(c, ds.ring); } \
@@ -1645,7 +1652,7 @@ template<int V> static void BrowAtlas(ID3D11DeviceContext* c, DrawScope& ds) {
         D3D11_RECT rc{ (LONG)vp.TopLeftX, (LONG)vp.TopLeftY, (LONG)(vp.TopLeftX + vp.Width), (LONG)(vp.TopLeftY + vp.Height) };
         c->RSSetViewports(1, &vp); c->RSSetScissorRects(1, &rc);
         c->GSSetConstantBuffers(12, 1, &cb);
-        if (ds.lod.count) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.brow.browCount, ds.brow.browStart, ds.brow.browBase);
+        if (ds.lod.count && !ds.hdMesh) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.brow.browCount, ds.brow.browStart, ds.brow.browBase);
     }
     o_OMSetRT[V](c, nrt, rt, oldDsv);
     o_SetPS[V](c, oldPS, nullptr, 0);
@@ -1658,7 +1665,7 @@ template<int V> static void BrowAtlas(ID3D11DeviceContext* c, DrawScope& ds) {
 template<int V> static void BrowStrands(ID3D11DeviceContext* c, DrawScope& ds) {
     if (!BrowStrandsBegin(c, &ds.brow, ds.brow.browVS)) return;
     if (BrowShadowOn(c)) {   // (04/11 k) sombra de contacto de los pelos sobre la piel (antes de las hebras: ellas no se oscurecen)
-        if (ds.lod.count) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.brow.browCount, ds.brow.browStart, ds.brow.browBase);
+        if (ds.lod.count && !ds.hdMesh) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.brow.browCount, ds.brow.browStart, ds.brow.browBase);
         BrowShadowOff(c);
     }
     if (BrowV3Roots(c, ds.brow.browVS)) {   // (08/11 y) hebras v3: raices y despues cada hebra con hasta 16 segmentos
@@ -1670,7 +1677,7 @@ template<int V> static void BrowStrands(ID3D11DeviceContext* c, DrawScope& ds) {
         if (so) BrowSOOff(c); }
     } else
     { bool so = BrowSOOn(c);   // (08/11 v) las hebras tambien a la salida de flujo (pasada propia del pelo tras la composicion)
-      if (ds.lod.count) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.brow.browCount, ds.brow.browStart, ds.brow.browBase);
+      if (ds.lod.count && !ds.hdMesh) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.brow.browCount, ds.brow.browStart, ds.brow.browBase);
       if (so) BrowSOOff(c); }
     BrowAtlas<V>(c, ds);   // (07/11 c) con el estado de las hebras aun puesto (GS: b2 / b10 / b11, t0 / t23 / t24 / t26 / t27 / t120 / t121)
     BrowStrandsEnd(c);
@@ -2130,7 +2137,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     PublicoPresent();   // (08/11) gestos del publico: sube el buffer que calcula el hilo de la CPU (fila 394)
     { GpuZoneScope gz_(g_dev.imm, kGzGrass); GrassPresent(); }
     { GpuZoneScope gz_(g_dev.imm, kGzFaceGen); FaceGenPresent(); }
-    { GpuZoneScope gz_(g_dev.imm, kGzCarasHd); CarasHdPresent(); }
+    { GpuZoneScope gz_(g_dev.imm, kGzCarasHd); CarasHdPresent(); CaraMallaPresent(); }   // (08/11 p) cara con mas poligonos
     InspectPresent();
     { GpuZoneScope gz_(g_dev.imm, kGzFrameCopy); FrameCopyPresent(sc); }   // antes del menu, para que el menu no se refleje en los ojos
     AsyncShotPresent();
