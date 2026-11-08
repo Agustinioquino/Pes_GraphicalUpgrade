@@ -3,7 +3,12 @@
 sin tocar los valores que ya tiene el de la PC (los de Agustin) y respetando su codificacion (bytes
 tal cual, cp1252) y su fin de linea (CRLF o LF).
 
-    python tools/ini_merge.py <ini del repo> <ini de la PC> [--excluir w414 x415 ...] [--simular]
+    python tools/ini_merge.py <ini del repo> <ini de la PC> [--excluir w414 x415 ...] [--simular] [--menus]
+
+--menus: ademas, las lineas de menu (choice / slider / toggle ...) que YA existen en la PC pero cambiaron de texto
+en el repo (otra lista de opciones, otra ayuda, otro rango) se reemplazan por la del repo. No llevan valores del
+usuario (los valores viven en las claves "x350 = ..."), asi que es seguro; vale para el menu es dentro de PES21FX.ini
+y para PES21FX_menu_en / _pt.ini.
 
 Regla: una linea "clave = valor" del repo que no existe en la PC (misma seccion) se inserta justo
 despues de la ultima linea del repo anterior a ella que SI esta en la PC, junto con los comentarios
@@ -50,6 +55,7 @@ def fin_de_seccion(lineas, i):
 def main():
     args = sys.argv[1:]
     simular = "--simular" in args
+    menus = "--menus" in args
     excluir = set()
     if "--excluir" in args:
         k = args.index("--excluir"); excluir = set(a.encode() for a in args[k + 1:] if not a.startswith("--")); args = args[:k]
@@ -60,6 +66,7 @@ def main():
     idx_pc = indexar(pc)
     # recorrer el repo por secciones, acumulando comentarios previos
     sec = b""; pend = []; ultimo_pc = None; inserciones = []  # (pos_pc, [lineas])
+    reemplazos = []  # (pos_pc, linea nueva, nombre)
     secciones_pc = {m.group(1): i for i, l in enumerate(pc) for m in [RE_SEC.match(l)] if m}
     for l in repo:
         m = RE_SEC.match(l)
@@ -72,7 +79,10 @@ def main():
         k = clave(l, sec)
         if k is None: pend = []; continue
         if k in idx_pc:
-            ultimo_pc = idx_pc[k]; pend = []; continue
+            ultimo_pc = idx_pc[k]; pend = []
+            if menus and not k[1].startswith(b"kv:") and pc[idx_pc[k]].strip() != l.strip():
+                reemplazos.append((idx_pc[k], l, k[1]))
+            continue
         nombre = k[1].split(b":", 1)[1]
         if nombre in excluir: pend = []; continue
         if sec not in secciones_pc:
@@ -82,18 +92,19 @@ def main():
         pend = []
     # aplicar de atras hacia adelante para no mover indices; las que van tras la misma linea conservan el orden
     salida = list(pc)
-    for pos, lineas, nombre in sorted(inserciones, key=lambda t: t[0], reverse=True):
-        pass
+    for pos, l, nombre in reemplazos:
+        salida[pos] = l
+        print("~ %s reemplazada (linea %d de la PC)" % (nombre.decode("latin1"), pos + 1))
     por_pos = {}
     for pos, lineas, nombre in inserciones: por_pos.setdefault(pos, []).extend(lineas)
     for pos in sorted(por_pos, reverse=True):
         salida[pos + 1:pos + 1] = por_pos[pos]
     for pos, lineas, nombre in inserciones:
         print("+ %s (%d lineas, tras la linea %d de la PC)" % (nombre.decode("latin1"), len(lineas), pos + 1))
-    if not inserciones: print("nada que agregar")
+    if not inserciones and not reemplazos: print("nada que agregar")
     nuevo = eol.join(salida) + eol
     print("CRC32 antes %08X (%d B) -> despues %08X (%d B)" % (zlib.crc32(pc_b), len(pc_b), zlib.crc32(nuevo), len(nuevo)))
-    if not simular and inserciones:
+    if not simular and (inserciones or reemplazos):
         open(pc_p, "wb").write(nuevo); print("escrito", pc_p)
 
 if __name__ == "__main__":
