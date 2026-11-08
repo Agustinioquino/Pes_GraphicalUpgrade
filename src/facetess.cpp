@@ -285,8 +285,8 @@ bool FaceTessBegin(ID3D11DeviceContext* c, uint64_t vsHash, ID3D11ShaderResource
     if (v < 2) { ID3D11ShaderResourceView* fab[2] = {}; c->PSGetShaderResources(23, 2, fab);   // (04/11 g) el cuerpo no tiene quinta textura: sin relieve
       if (fab[0] && fab[1]) { c->DSSetShaderResources(23, 2, fab); if (s_samp) c->DSSetSamplers(0, 1, &s_samp); s.relief = true; s_relief.fetch_add(1, std::memory_order_relaxed); }
       for (auto* v : fab) if (v) v->Release();
-      // (08/11 o) desplazamiento desde la altura HD (caras_hd <id>_hgt_4k.dds, fila 421): al DS en t25 con el sampler s0
-      if (g_cfg.live[421][0] > 0.001f) { ID3D11ShaderResourceView* hg = CarasHdHeight(faceId);
+      // (08/11 o) desplazamiento desde la altura HD (caras_hd <id>_hgt_4k.dds, fila 423): al DS en t25 con el sampler s0
+      if (g_cfg.live[423][0] > 0.001f) { ID3D11ShaderResourceView* hg = CarasHdHeight(faceId);
         if (hg) { c->DSSetShaderResources(25, 1, &hg); if (s_samp && !s.relief) c->DSSetSamplers(0, 1, &s_samp); s.height = true; s_height.fetch_add(1, std::memory_order_relaxed); } } }
     // (07/11) volumen de las arrugas (z366 / w366): lo que el PS de la piel usa para las arrugas, tambien al DS: b4 (pesos por zona
     // del motor, con su ventana si la tiene), t5 / t6 (normal y mascara del juego), t20 / t21 (las nuestras), t31 (esculpidas)
@@ -352,7 +352,7 @@ void FaceTessPresent() {
     { const int pb = s_pBound.exchange(0), po = s_pOff.exchange(0); size_t ns; { std::lock_guard<std::mutex> lk(s_pmx); ns = s_pSaved.size(); }
       if (pb || po || ns) Log("teselacion por jugador: %d caras guardadas; en 60 s %d dibujos con valores propios, %d sin teselar (apagada para ese jugador)", (int)ns, pb, po); }
     const int d = s_draws.exchange(0), st = s_skipTopo.exchange(0), ns = s_noShader.exchange(0), rl = s_relief.exchange(0), db = s_drawsBody.exchange(0);
-    { const int hg = s_height.exchange(0); if (hg) Log("desplazamiento HD de la cara: %d dibujos con la altura (caras_hd hgt) en el DS en 60 s (fuerza %.2f, detalle %.1f, tope %.1f mm, en la luz %.2f)", hg, g_cfg.live[421][0], g_cfg.live[421][1], g_cfg.live[421][2], g_cfg.live[421][3]); }
+    { const int hg = s_height.exchange(0); if (hg) Log("desplazamiento HD de la cara: %d dibujos con la altura (caras_hd hgt) en el DS en 60 s (fuerza %.2f, detalle %.1f, tope %.1f mm, en la luz %.2f)", hg, g_cfg.live[423][0], g_cfg.live[423][1], g_cfg.live[423][2], g_cfg.live[423][3]); }
     { const int wr = s_wrinkle.exchange(0); if (wr) Log("volumen de las arrugas: %d dibujos con pesos y mascaras en el DS en 60 s (surco %.2f mm, cresta %.2f mm)", wr, g_cfg.live[366][2], g_cfg.live[366][3]); }
     const int nsm = s_noSeam.exchange(0), npr = s_noPrm.exchange(0), off = s_off.exchange(0);
     if (nsm || npr || off) Log("teselacion de caras: dibujos de piel de la cara SIN teselar en 60 s: %d sin pesos de borde (malla en lectura / no teselable), %d sin parametros t120, %d con la tarjeta apagada", nsm, npr, off);

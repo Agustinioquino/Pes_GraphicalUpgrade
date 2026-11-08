@@ -363,7 +363,7 @@ SamplerState pesTessSamp : register(s0);
 #if !PES_TESS_BODY
 // (08/11 o, Agustin: "mejorar la cantidad de poligonos de las caras ... otra tecnica ademas de la teselacion") ALTURA HD de la piel:
 // tools/caras_hd.py integra la normal de 4096 de cada cara en un mapa de altura (<id>_hgt_4k.dds, 1 canal, 0.5 = plano, +-2 mm;
-// solo el detalle de menos de ~6 mm). La DLL (facetess.cpp) lo enlaza en t25 cuando esa cara lo tiene; fila 421: x fuerza, y detalle
+// solo el detalle de menos de ~6 mm). La DLL (facetess.cpp) lo enlaza en t25 cuando esa cara lo tiene; fila 423: x fuerza, y detalle
 // (mip), z tope mm, w relieve en la luz. Sin textura (GetDimensions = 0) no hace nada.
 Texture2D<float> pesFaceH : register(t25);
 // inclina el marco (N, T, B) con la pendiente g (altura por unidad de superficie, en T y en B): Rodrigues, T y B siguen perpendiculares
@@ -597,10 +597,11 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
       }
     }
   }
-  // (08/11 o) DESPLAZAMIENTO desde la altura HD (t25, fila 421): la piel sube y baja con el relieve real de la textura de 4096
-  // (poros grandes, pliegues de la nariz, bordes de los labios, cicatrices) en mm; la boca por dentro solo sube (regla de Agustin);
-  // bordes de la pieza quietos (seam), se apaga con la distancia; y la luz sigue a la forma (w421) como el relieve de la quinta textura.
-  { float4 HD = IniParams.Load(int2(421, 0));
+  // (08/11 o) DESPLAZAMIENTO desde la altura HD (t25, fila 423): la piel sube y baja con el relieve real de la textura de 4096
+  // (poros grandes, pliegues de la nariz, cicatrices) en mm; en la ZONA DE LA BOCA (labios y alrededor, reposo |x| < 5.4 cm,
+  // y 1.6285 +- 2.6 cm, donde dibuja la boca 3D) vale 0 en los dos sentidos (regla de Agustin: la boca no se toca, sin excepciones);
+  // bordes de la pieza quietos (seam), se apaga con la distancia; y la luz sigue a la forma (w423) como el relieve de la quinta textura.
+  { float4 HD = IniParams.Load(int2(423, 0));
     uint hw = 0, hh = 0; pesFaceH.GetDimensions(hw, hh);
     if (HD.x > 0.001 && T.x > 0.5 && hw > 1) {
 #if PES_TESS_V455
@@ -612,11 +613,10 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
       float hmmH = (pesFaceH.SampleLevel(pesTessSamp, uvH, lodH) - 0.5) * 4.0 * HD.x;   // mm (+-2 mm en el archivo)
       float3 r0 = PES_LERP3(pR).xyz;
       float2 me = float2(r0.x / 0.034, (r0.y - 1.6285) / 0.016);
-      float mouthK = r0.z < 0.09 ? 1.0 : smoothstep(1.0, 1.6, length(me));
-      if (hmmH < 0.0) hmmH *= mouthK;
+      float mouthK = r0.z < 0.09 ? 1.0 : smoothstep(1.0, 1.6, length(me));   // 0 en la boca y los labios, 1 desde ~1.6 veces la abertura
       float topeH = clamp(HD.z, 0.0, 10.0);
       hmmH = clamp(hmmH, -topeH, topeH);
-      float kH = min(seam, seamR) * fade;
+      float kH = min(seam, seamR) * fade * mouthK;
       float3 NnH = normalize(b.x * N0 + b.y * N1 + b.z * N2);
       d += NnH * (hmmH * 0.001 * kH);
       float relH = max(HD.w, 0.0) * kH;
