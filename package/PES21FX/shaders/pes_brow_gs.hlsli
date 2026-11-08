@@ -285,6 +285,11 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
   float4 HO = IniParams.Load(int2(404, 0)), HV = IniParams.Load(int2(405, 0));
   bool browTri = !(hi.x < 0.24 || lo.x > 0.76 || hi.y < 0.25 || lo.y > 0.38);
   bool beardTri = BR.x > 0.5 && !(hi.x < 0.18 || lo.x > 0.82 || hi.y < 0.5 || lo.y > 0.9);
+#ifdef PES_ROOTS
+  beardTri = false;   // (08/11 y, Agustin: "por ahora no lo lleves a la barba") hebras v3 solo para las cejas
+#elif !defined(PES_SHADOW) && !defined(PES_ATLAS)
+  if (IniParams.Load(int2(416, 0)).x > 0.5) browTri = false;   // con v3 este GS dibuja solo la barba (las cejas van por pes_strand_gs)
+#endif
   if (!browTri && !beardTri) return;
   // 2) tamano en pantalla (y75 = distancia maxima a zoom normal, medida en pixeles por metro como la v1)
   float3 P0 = v[0].pV.xyz, P1 = v[1].pV.xyz, P2 = v[2].pV.xyz;
