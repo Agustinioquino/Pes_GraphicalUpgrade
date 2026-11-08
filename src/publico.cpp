@@ -12,6 +12,8 @@
 //    El indice es el del juego en instanceBuf: cada hincha tiene siempre el suyo, asi que cada uno tiene ritmo propio.
 //
 // Fila 394: x on | y fuerza de la boca | z fuerza de las cejas | w animo (0 tranquilo .. 1 normal .. 2 cancha que canta todo)
+// (08/11 b) Reacciones: el VS lee la animacion del cuerpo de cada hincha (festejo, lamento, protesta, aplauso) y cambia la
+// cara; la CPU le pasa en w el pulso del grito propio de cada uno.
 #include "core.h"
 #include <thread>
 #include <atomic>
@@ -70,7 +72,11 @@ static void Gesture(uint32_t i, double t, float mood, float* out) {
     out[0] = jaw * (0.7f + 0.6f * mood * 0.5f);
     out[1] = (lift + evt) * asym;
     out[2] = (lift + evt) * (2.0f - asym);
-    out[3] = sing;
+    // pulso del grito propio (lo usan las reacciones del VS: festejo / protesta): golpes de 2.2..4 por segundo, irregulares
+    float shF = 2.2f + 1.8f * Hash01(i * 211u + 29u);
+    float sh = 0.5f + 0.5f * sinf((float)(kTau * (t * shF + my * 5.3)));
+    float shGate = Smooth(0.25f, 0.6f, 0.5f + 0.5f * sinf((float)(kTau * (t * 0.45 + my * 2.7))));
+    out[3] = sh * sh * (0.35f + 0.65f * shGate);
 }
 
 static void Worker() {
