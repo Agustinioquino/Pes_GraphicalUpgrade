@@ -120,6 +120,7 @@ cbuffer PESTessView : register(b13)
 {
   float4 g_pesTessVp;   // x ancho, y alto del viewport en pixeles (lo pone la DLL)
 }
+cbuffer cHSScene : register(b2) { float4 hsCb2[8]; }   // (08/11 i) escena del juego (proyeccion en [4..7]); la DLL la enlaza al HS
 
 
 // (04/11 e) 1 dentro de la zona de la oreja (posicion de reposo en el marco de la cabeza), 0 en el resto de la cara; bordes suaves
@@ -139,20 +140,11 @@ PesTessConst PesTessPatch(InputPatch<PesTessVS, 3> p)
   bool ok = T.x > 0.5 && p[0].o0.w > 0.01 && p[1].o0.w > 0.01 && p[2].o0.w > 0.01;
   float dmin = min(length(p[0].pV.xyz), min(length(p[1].pV.xyz), length(p[2].pV.xyz)));
   // (08/11 i, Agustin: "la teselacion no se aplica en el cuerpo") con la camara libre con zoom (campo de vision 0.024 rad) la camara
-  // queda a 15-40 m y la distancia maxima (z364 15 m, x358 27 m) y el detalle del cuerpo de cerca (1.2..2.2 m) nunca entraban, aunque
-  // el jugador llene la pantalla. La distancia se corrige por el zoom: focal en px medida en el propio triangulo (largo en pantalla x
-  // profundidad / largo en el mundo, el mayor de las 3 aristas; de costado da menos = no se exagera) contra una focal de referencia
-  // de 6 (campo de vision ~19 grados, una camara de transmision cerrada). Sin zoom o con camaras abiertas zs = 1: nada cambia.
+  // queda a 15-40 m y la distancia maxima (z364 15 m, x358 27 m) nunca entraba, aunque el jugador llene la pantalla. La distancia se
+  // corrige por el zoom: P11 de la proyeccion del juego (b2, la DLL lo enlaza tambien al HS) contra 6 (campo de vision ~19 grados,
+  // una camara de transmision cerrada). Igual para todo el dibujo (sin grietas). Sin zoom o sin b2 (P11 = 0): zs = 1, nada cambia.
   float zs = 1.0;
-  {
-    float2 q0 = p[0].o0.xy / max(p[0].o0.w, 0.01) * 0.5 * g_pesTessVp.xy, q1 = p[1].o0.xy / max(p[1].o0.w, 0.01) * 0.5 * g_pesTessVp.xy, q2 = p[2].o0.xy / max(p[2].o0.w, 0.01) * 0.5 * g_pesTessVp.xy;
-    float3 lv = float3(length(p[1].pV.xyz - p[2].pV.xyz), length(p[2].pV.xyz - p[0].pV.xyz), length(p[0].pV.xyz - p[1].pV.xyz));
-    float3 ls = float3(length(q1 - q2), length(q2 - q0), length(q0 - q1));
-    float3 wz = float3(p[1].o0.w + p[2].o0.w, p[2].o0.w + p[0].o0.w, p[0].o0.w + p[1].o0.w) * 0.5;
-    float3 fe = (lv > 1e-5) ? ls * wz / max(lv, 1e-5) : 0.0;
-    float fpx = max(fe.x, max(fe.y, fe.z)), fref = 3.0 * max(g_pesTessVp.y, 1.0);
-    if (fpx > fref) zs = fref / fpx;
-  }
+  { float p11 = abs(hsCb2[5].y); if (p11 > 6.0) zs = 6.0 / p11; }
   k.zs = zs;
   dmin *= zs;
   // mas lejos que la distancia maxima: nada que dividir (el DS tampoco corre nada)
@@ -192,11 +184,14 @@ PesTessConst PesTessPatch(InputPatch<PesTessVS, 3> p)
       float rW = IniParams.Load(int2(376, 0)).w;
       float c0z = p[0].o1.z;
       if (rW > 0.001 && IniParams.Load(int2(305, 0)).x > 0.5 && c0z > 6.5 && c0z < 7.5 && round((c0z - 7.0) * 1200.0) < 599.5) {
-        float3 dv = float3(length(p[0].pV.xyz), length(p[1].pV.xyz), length(p[2].pV.xyz)) * zs;   // (08/11 i) con el zoom
-        float3 ed = float3(min(dv.y, dv.z), min(dv.z, dv.x), min(dv.x, dv.y));
-        float3 nk = 1.0 - smoothstep(1.2, 2.2, ed);
+        // (08/11 i, Agustin: "la teselacion de cuerpo no funciona ... hace rato") antes solo a menos de 1.2..2.2 m de la camara: en el
+        // editor (camara a 2.5-4 m) y en los primeros planos del partido casi nunca entraba (log: x1.0). Ahora por PANTALLA: cada arista
+        // se parte hasta ~1.8 mm en el mundo o hasta 1.5 px en pantalla (lo que de menos partes); queda la distancia maxima z364
+        // (corregida por el zoom). Por arista con sus dos extremos (largo en el mundo y en pantalla): sin grietas.
+        float3 nk = 1.0;
         float3 lw = float3(length(p[1].pV.xyz - p[2].pV.xyz), length(p[2].pV.xyz - p[0].pV.xyz), length(p[0].pV.xyz - p[1].pV.xyz));
-        float3 fr = clamp(lw / 0.0018, 1.0, fmax);
+        float3 ls = float3(length(s1 - s2), length(s2 - s0), length(s0 - s1));
+        float3 fr = clamp(min(lw / 0.0018, ls / 1.5), 1.0, fmax);
         f[0] = max(f[0], lerp(1.0, fr.x, nk.x));
         f[1] = max(f[1], lerp(1.0, fr.y, nk.y));
         f[2] = max(f[2], lerp(1.0, fr.z, nk.z));
