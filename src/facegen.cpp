@@ -163,6 +163,7 @@ static const D3D11_SO_DECLARATION_ENTRY kHfSO[] = {
     { 0, "SV_POSITION", 0, 0, 4, 0 }, { 0, "TEXCOORD", 0, 0, 3, 0 }, { 0, "TEXCOORD", 1, 0, 3, 0 }, { 0, "TEXCOORD", 2, 0, 3, 0 },
     { 0, "TEXCOORD", 3, 0, 2, 0 }, { 0, "TEXCOORD", 4, 0, 3, 0 }, { 0, "TEXCOORD", 5, 0, 3, 0 }, { 0, "TEXCOORD", 6, 0, 3, 0 },
     { 0, "TEXCOORD", 7, 0, 3, 0 } };
+static bool VpInsideComp(const D3D11_VIEWPORT& vp, unsigned cw, unsigned ch);
 static std::atomic<double> s_hfLastDraw{-10.0};
 // (08/11 y, Agustin: "creo que estamos planteando mal la geometria de las hebras" -> "si, rehacer por pasos") HEBRAS v3 (x416): el GS
 // de la cara deja solo la raiz de cada hebra (pes_brow_roots_*_gs, 8 float4) en s_v3Roots; despues un GS por hebra (pes_strand_gs) la
@@ -757,7 +758,7 @@ bool BrowShadowOn(ID3D11DeviceContext* c) {
     if (s.shadowFwd) {   // (08/11 v) vista principal: solo a la salida de flujo (sin PS: el G-buffer no se toca); si no, como antes
         D3D11_VIEWPORT vp{}; UINT n = 1; c->RSGetViewports(&n, &vp);
         unsigned cw = s_compW.load(), ch = s_compH.load();
-        if (n && cw && fabsf(vp.Width - (float)cw) <= 0.03f * cw && fabsf(vp.Height - (float)ch) <= 0.03f * ch) {
+        if (n && VpInsideComp(vp, cw, ch)) {
             int f = s_hfFrame.load();
             UINT off = (s_hfSoFrame2.exchange(f) != f) ? 0u : (UINT)-1;
             c->SOSetTargets(1, &s_hfSO2, &off);
@@ -825,6 +826,12 @@ void BrowV3Strands(ID3D11DeviceContext* c) {
     if (oIL) oIL->Release(); if (oVB) oVB->Release(); if (oVS) oVS->Release();
     { static std::atomic<int> lg{0}; if (lg.fetch_add(1) < 2) Log("cejas: hebras v3: primer dibujo de hebras (pasada propia %s)", so ? "si" : "no"); }
 }
+// vista principal: viewport dentro de la composicion y de al menos 40 % de su ancho y alto (no miniaturas ni reflejos)
+static bool VpInsideComp(const D3D11_VIEWPORT& vp, unsigned cw, unsigned ch) {
+    if (!cw || !ch) return false;
+    return vp.TopLeftX >= -1.f && vp.TopLeftY >= -1.f && vp.TopLeftX + vp.Width <= cw * 1.03f && vp.TopLeftY + vp.Height <= ch * 1.03f
+        && vp.Width >= 0.4f * cw && vp.Height >= 0.4f * ch;
+}
 // (08/11 v) salida de flujo de las hebras: solo alrededor del dibujo de las hebras (no de la sombra de contacto ni del atlas) y solo en
 // la vista principal (mismo tamano que la composicion del cuadro anterior: no las miniaturas ni los reflejos)
 bool BrowSOOn(ID3D11DeviceContext* c) {
@@ -833,7 +840,7 @@ bool BrowSOOn(ID3D11DeviceContext* c) {
     D3D11_VIEWPORT vp{}; UINT n = 1; c->RSGetViewports(&n, &vp);
     unsigned cw = s_compW.load(), ch = s_compH.load();
     // (08/11 w) tolerancia del 3 % (el editor puede dibujar la cara con un viewport apenas distinto al de la composicion)
-    bool okVp = n && cw && fabsf(vp.Width - (float)cw) <= 0.03f * cw && fabsf(vp.Height - (float)ch) <= 0.03f * ch;
+    bool okVp = n && VpInsideComp(vp, cw, ch);   // (08/11 z) el visor del editor es un viewport parcial dentro de la composicion (1650x1440 en 2560x1440)
     { static std::atomic<int> lg{0}; if (lg.fetch_add(1) < 3) Log("cejas: pasada propia: dibujo de hebras con viewport %.0fx%.0f, composicion %ux%u -> %s", n ? vp.Width : 0.f, n ? vp.Height : 0.f, cw, ch, okVp ? "a la salida de flujo" : "NO (otra vista)"); }
     if (!okVp) return false;
     int f = s_hfFrame.load();
