@@ -9,6 +9,7 @@
 #include <imgui_impl_win32.h>
 #include <DDSTextureLoader.h>
 #include <psapi.h>
+#include <cstring>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -503,6 +504,44 @@ static float HoverAnim(ImGuiID id, bool on, float speed = 9.0f) {
     return Ease(*v);
 }
 static ImVec4 Mix(const ImVec4& a, const ImVec4& b, float t) { return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t); }
+// (08/11 d) iconos de vidrio (Agustin: "cambia los iconos por unos mas glass"): brillo difuso detras, sombra corrida 1 px,
+// degrade vertical (blanco arriba -> color abajo, como un caramelo de vidrio) y un reflejo fino en la mitad de arriba
+static void GlassIcon(ImDrawList* dl, ImVec2 pos, const char* ic, ImVec4 col, float glow = 0.0f, float fs = 0.0f) {
+    if (!ic || !*ic) return;
+    ImFont* f = ImGui::GetFont(); if (fs <= 0.0f) fs = ImGui::GetFontSize();
+    const ImVec2 sz = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, ic);
+    const ImVec2 c(pos.x + sz.x * 0.5f, pos.y + sz.y * 0.5f);
+    const float a = col.w * ImGui::GetStyle().Alpha;
+    if (glow > 0.01f) for (int k = 3; k >= 1; k--) dl->AddCircleFilled(c, sz.y * (0.30f + 0.17f * k), ImGui::GetColorU32(ImVec4(col.x, col.y, col.z, 0.05f * glow * (4 - k))), 24);
+    dl->AddText(f, fs, ImVec2(pos.x, pos.y + 1.2f * UIK()), IM_COL32(0, 0, 0, (int)(120 * a)), ic);
+    const int v0 = dl->VtxBuffer.Size;
+    dl->AddText(f, fs, pos, IM_COL32(255, 255, 255, (int)(255 * a)), ic);
+    const ImVec4 top = Mix(col, ImVec4(1, 1, 1, 1), 0.62f), bot = ImVec4(col.x * 0.82f, col.y * 0.82f, col.z * 0.86f, 1);
+    ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, v0, dl->VtxBuffer.Size, ImVec2(pos.x, pos.y + sz.y * 0.08f), ImVec2(pos.x, pos.y + sz.y * 0.92f), ImGui::GetColorU32(ImVec4(top.x, top.y, top.z, 1)), ImGui::GetColorU32(ImVec4(bot.x, bot.y, bot.z, 1)));
+    // reflejo: el mismo glifo, blanco y muy suave, solo la mitad de arriba
+    dl->PushClipRect(ImVec2(pos.x - 2, pos.y), ImVec2(pos.x + sz.x + 2, pos.y + sz.y * 0.42f), true);
+    dl->AddText(f, fs, ImVec2(pos.x, pos.y - 0.6f * UIK()), IM_COL32(255, 255, 255, (int)(70 * a)), ic);
+    dl->PopClipRect();
+}
+// boton de vidrio con un icono: fondo translucido con reflejo arriba y filo de luz; se ilumina al pasar el mouse y late al apretarlo
+static bool GlassIconButton(const char* id, unsigned ico, bool on, const char* tip, ImVec2 size = ImVec2(0, 0), ImVec4 col = ImVec4(0.40f, 0.90f, 0.62f, 1)) {
+    if (size.x <= 0) size.x = ImGui::GetFrameHeight() * 1.25f; if (size.y <= 0) size.y = ImGui::GetFrameHeight();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const bool r = ImGui::InvisibleButton(id, size);
+    const bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
+    const float ha = HoverAnim(ImGui::GetItemID(), hov, 11.0f), pa = HoverAnim(ImGui::GetItemID() + 7, act, 18.0f), oa = HoverAnim(ImGui::GetItemID() + 13, on, 8.0f);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 b(p.x + size.x, p.y + size.y); const float rr = 7.0f * UIK();
+    const ImVec4 base = Mix(ImVec4(1, 1, 1, 0.07f), ImVec4(col.x, col.y, col.z, 0.30f), oa);
+    dl->AddRectFilled(p, b, ImGui::GetColorU32(ImVec4(base.x, base.y, base.z, base.w + 0.06f * ha + 0.06f * pa)), rr);
+    dl->AddRectFilledMultiColor(ImVec2(p.x + 1, p.y + 1), ImVec2(b.x - 1, p.y + size.y * 0.5f), IM_COL32(255, 255, 255, (int)(26 + 20 * ha)), IM_COL32(255, 255, 255, (int)(26 + 20 * ha)), IM_COL32(255, 255, 255, 0), IM_COL32(255, 255, 255, 0));
+    dl->AddRect(p, b, IM_COL32(255, 255, 255, (int)(40 + 50 * ha)), rr, 0, 1.0f);
+    const std::string ic = Ico(ico); const float fs = ImGui::GetFontSize() * (1.0f + 0.06f * ha - 0.06f * pa);
+    const ImVec2 is = ImGui::GetFont()->CalcTextSizeA(fs, FLT_MAX, 0.0f, ic.c_str());
+    GlassIcon(dl, ImVec2(p.x + (size.x - is.x) * 0.5f, p.y + (size.y - is.y) * 0.5f), ic.c_str(), on ? col : Mix(ImVec4(0.80f, 0.84f, 0.90f, 1), col, ha * 0.6f), ha + oa, fs);
+    if (hov && tip) ImGui::SetTooltip("%s", tip);
+    return r;
+}
 // el fondo de vidrio de una ventana: imagen desenfocada, tinte, reflejo arriba, filo de luz y sombra afuera
 static void GlassBackdrop(ImVec2 a, ImVec2 b, float rounding, float alpha) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -581,10 +620,21 @@ static bool PrettySlider(float* v, float lo, float hi, const char* fmt, float wi
         ImGui::PushStyleColor(ImGuiCol_SliderGrab, z); ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, z); ImGui::PushStyleColor(ImGuiCol_Text, z);
     }
     ImGui::SetNextItemWidth(trackW);
-    ImGui::SliderFloat("##trk", v, lo, hi, fmt, ImGuiSliderFlags_AlwaysClamp);
+    // (08/11 d) Agustin: "un slider mas responsivo y con un diseno mas glass". El numero se escribe en la cajita de al lado, asi que
+    // el doble clic ya no abre la escritura (NoInput): vuelve a lo guardado. Rueda del mouse = ajuste fino (1% del rango; Shift 0.1%,
+    // Ctrl 5%), flechas con el mouse encima igual. Mientras se arrastra, el valor flota sobre la perilla.
+    ImGui::SliderFloat("##trk", v, lo, hi, fmt, ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput);
     if (!typing) ImGui::PopStyleColor(6);
     const bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
     const bool rclick = ImGui::IsItemClicked(ImGuiMouseButton_Right);
+    {   ImGuiIO& io = ImGui::GetIO();
+        const float span = hi - lo, step = span * (io.KeyShift ? 0.001f : io.KeyCtrl ? 0.05f : 0.01f);
+        float d = 0.0f;
+        if (hov) { ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY); d += io.MouseWheel * step; }
+        if (hov && !act) { if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) d += step; if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) d -= step; }
+        if (d != 0.0f) *v = std::clamp(*v + d, std::min(lo, hi), std::max(lo, hi));
+        if (hov && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) { *v = savedV; ImGui::ClearActiveID(); }
+    }
     if (hov && !act && tip) ImGui::SetTooltip("%s", tip);
     if (!typing) {
         ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -592,17 +642,47 @@ static bool PrettySlider(float* v, float lo, float hi, const char* fmt, float wi
         const float gs = std::min(st.GrabMinSize, b.x - a.x - 4.0f);
         const float x0 = a.x + 2.0f + gs * 0.5f, x1 = b.x - 2.0f - gs * 0.5f, cy = std::round((a.y + b.y) * 0.5f);
         auto px = [&](float x) { const float t = hi != lo ? std::clamp((x - lo) / (hi - lo), 0.0f, 1.0f) : 0.0f; return x0 + t * (x1 - x0); };
-        const float th = std::max(4.0f, 5.0f * UIK()), kx = px(*v);
-        const float ha = HoverAnim(sid, hov || act, 10.0f), aa = HoverAnim(sid + 1, act, 12.0f);   // (08/11) animado
-        const ImVec4 fill = changed ? ImVec4(0.95f, 0.78f, 0.33f, 1) : ImVec4(0.20f, 0.72f, 0.46f, 1);
-        dl->AddRectFilled(ImVec2(x0, cy - th * 0.5f), ImVec2(x1, cy + th * 0.5f), ImGui::GetColorU32(Mix(ImVec4(0.25f, 0.28f, 0.34f, GlassSRV() ? 0.85f : 1.0f), ImVec4(0.32f, 0.35f, 0.42f, 1), ha)), th * 0.5f);
-        if (kx > x0 + 0.5f) dl->AddRectFilled(ImVec2(x0, cy - th * 0.5f), ImVec2(kx, cy + th * 0.5f), ImGui::GetColorU32(fill), th * 0.5f);
-        if (changed) { const float sx = px(savedV); dl->AddRectFilled(ImVec2(sx - 1.0f, cy - th * 1.3f), ImVec2(sx + 1.0f, cy + th * 1.3f), ImGui::GetColorU32(ImVec4(0.80f, 0.83f, 0.88f, 0.85f)), 1.0f); }
-        const float r = (7.5f + 1.0f * ha + 0.6f * aa) * UIK();
-        if (ha > 0.01f) dl->AddCircleFilled(ImVec2(kx, cy), r + 5.0f * UIK() * ha, ImGui::GetColorU32(ImVec4(fill.x, fill.y, fill.z, 0.18f * ha)), 24);   // halo
-        dl->AddCircleFilled(ImVec2(kx, cy + 1.0f), r + 1.0f, ImGui::GetColorU32(ImVec4(0, 0, 0, 0.45f)), 24);
-        dl->AddCircleFilled(ImVec2(kx, cy), r, ImGui::GetColorU32(ImVec4(0.96f, 0.97f, 0.98f, 1)), 24);
-        dl->AddCircleFilled(ImVec2(kx, cy), r * 0.42f, ImGui::GetColorU32(fill), 16);
+        const float ha = HoverAnim(sid, hov || act, 10.0f), aa = HoverAnim(sid + 1, act, 12.0f);
+        const float th = std::max(5.0f, (5.5f + 1.5f * ha) * UIK());
+        // la perilla sigue al valor: al arrastrar al instante; si el valor salta (clic en el riel, rueda, deshacer) se desliza en ~60 ms
+        float* kxS = ImGui::GetStateStorage()->GetFloatRef(sid + 2, -1e9f);
+        const float kxT = px(*v);
+        if (act || *kxS < -1e8f || fabsf(*kxS - kxT) < 0.5f) *kxS = kxT;
+        else *kxS += (kxT - *kxS) * (1.0f - expf(-ImGui::GetIO().DeltaTime * 38.0f));
+        const float kx = *kxS;
+        const ImVec4 fill = changed ? ImVec4(0.98f, 0.80f, 0.35f, 1) : ImVec4(0.26f, 0.84f, 0.56f, 1);
+        // riel de vidrio: hundido (sombra arriba, luz abajo), translucido
+        dl->AddRectFilled(ImVec2(x0, cy - th * 0.5f), ImVec2(x1, cy + th * 0.5f), ImGui::GetColorU32(ImVec4(0.0f, 0.0f, 0.0f, 0.30f + 0.08f * ha)), th * 0.5f);
+        dl->AddRectFilled(ImVec2(x0, cy - th * 0.5f), ImVec2(x1, cy + th * 0.5f), ImGui::GetColorU32(ImVec4(1, 1, 1, 0.06f + 0.05f * ha)), th * 0.5f);
+        dl->AddLine(ImVec2(x0 + th * 0.5f, cy - th * 0.5f + 0.5f), ImVec2(x1 - th * 0.5f, cy - th * 0.5f + 0.5f), IM_COL32(0, 0, 0, 90), 1.0f);
+        dl->AddLine(ImVec2(x0 + th * 0.5f, cy + th * 0.5f), ImVec2(x1 - th * 0.5f, cy + th * 0.5f), IM_COL32(255, 255, 255, 34), 1.0f);
+        if (kx > x0 + 0.5f) {   // relleno con degrade (mas oscuro al principio, brillante en la punta) y su brillo
+            const int v0 = dl->VtxBuffer.Size;
+            dl->AddRectFilled(ImVec2(x0, cy - th * 0.5f), ImVec2(kx, cy + th * 0.5f), IM_COL32_WHITE, th * 0.5f);
+            ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, v0, dl->VtxBuffer.Size, ImVec2(x0, cy), ImVec2(std::max(kx, x0 + 1.0f), cy),
+                ImGui::GetColorU32(ImVec4(fill.x * 0.45f, fill.y * 0.55f, fill.z * 0.60f, 1)), ImGui::GetColorU32(fill));
+            dl->AddRectFilled(ImVec2(x0 + 1.0f, cy - th * 0.5f + 1.0f), ImVec2(kx - 1.0f, cy - 0.5f), IM_COL32(255, 255, 255, 46), th * 0.5f, ImDrawFlags_RoundCornersTop);
+        }
+        if (changed) { const float sx = px(savedV); dl->AddRectFilled(ImVec2(sx - 1.0f, cy - th * 1.3f), ImVec2(sx + 1.0f, cy + th * 1.3f), ImGui::GetColorU32(ImVec4(0.85f, 0.88f, 0.93f, 0.80f)), 1.0f); }
+        // perilla de vidrio: halo del color, sombra, cuerpo translucido, reflejo arriba y filo de luz
+        const float r = (8.0f + 1.5f * ha + 1.0f * aa) * UIK();
+        if (ha > 0.01f) for (int k = 3; k >= 1; k--) dl->AddCircleFilled(ImVec2(kx, cy), r + 2.5f * UIK() * k * ha, ImGui::GetColorU32(ImVec4(fill.x, fill.y, fill.z, 0.07f * ha)), 28);
+        dl->AddCircleFilled(ImVec2(kx, cy + 1.5f * UIK()), r + 0.5f, IM_COL32(0, 0, 0, 90), 28);
+        dl->AddCircleFilled(ImVec2(kx, cy), r, ImGui::GetColorU32(Mix(ImVec4(0.86f, 0.90f, 0.95f, 0.55f), ImVec4(0.94f, 0.97f, 1.0f, 0.75f), ha)), 28);
+        dl->AddCircleFilled(ImVec2(kx, cy), r * 0.55f, ImGui::GetColorU32(ImVec4(fill.x, fill.y, fill.z, 0.85f)), 20);
+        dl->PathArcTo(ImVec2(kx, cy), r * 0.70f, 3.14159f * 1.10f, 3.14159f * 1.90f, 14);
+        dl->PathStroke(IM_COL32(255, 255, 255, 200), 0, std::max(1.2f, 1.6f * UIK()));
+        dl->AddCircle(ImVec2(kx, cy), r, IM_COL32(255, 255, 255, (int)(110 + 90 * ha)), 28, 1.0f);
+        if (act) {   // el valor flota sobre la perilla mientras se arrastra
+            char vb[48]; snprintf(vb, sizeof vb, fmt, *v);
+            const ImVec2 ts = ImGui::CalcTextSize(vb); const float pw = ts.x + 14.0f * UIK(), ph = ts.y + 6.0f * UIK();
+            const ImVec2 bp(std::round(kx - pw * 0.5f), std::round(cy - r - ph - 6.0f * UIK() * aa));
+            ImDrawList* fg = ImGui::GetForegroundDrawList();
+            fg->AddRectFilled(ImVec2(bp.x, bp.y + 2), ImVec2(bp.x + pw, bp.y + ph + 2), IM_COL32(0, 0, 0, (int)(90 * aa)), ph * 0.5f);
+            fg->AddRectFilled(bp, ImVec2(bp.x + pw, bp.y + ph), ImGui::GetColorU32(ImVec4(0.12f, 0.15f, 0.20f, 0.92f * aa)), ph * 0.5f);
+            fg->AddRect(bp, ImVec2(bp.x + pw, bp.y + ph), ImGui::GetColorU32(ImVec4(fill.x, fill.y, fill.z, 0.8f * aa)), ph * 0.5f, 0, 1.0f);
+            fg->AddText(ImVec2(bp.x + 7.0f * UIK(), bp.y + 3.0f * UIK()), ImGui::GetColorU32(ImVec4(1, 1, 1, aa)), vb);
+        }
     }
     ImGui::SameLine(0, st.ItemSpacing.x);
     ImGui::SetNextItemWidth(valW);
@@ -614,6 +694,20 @@ static bool PrettySlider(float* v, float lo, float hi, const char* fmt, float wi
     ImGui::PopStyleColor();
     if (ImGui::IsItemHovered() && !ImGui::IsItemActive()) ImGui::SetTooltip("%s", TRS("Clic para escribir el valor"));
     return rclick || ImGui::IsItemClicked(ImGuiMouseButton_Right);
+}
+
+// (08/11 d) la tarjeta bajo el mouse se ilumina suave: filo de luz verde y un reflejo arriba (aparece y se va en ~0.15 s)
+static void CardGlow() {
+    ImGuiWindow* w = ImGui::GetCurrentWindow();
+    const bool hv = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+    const float h = HoverAnim(w->ID + 5, hv, 7.0f);
+    if (h < 0.01f) return;
+    ImDrawList* dl = w->DrawList; const ImVec2 a = w->Pos, b(w->Pos.x + w->Size.x, w->Pos.y + w->Size.y);
+    const float rr = ImGui::GetStyle().FrameRounding;
+    dl->PushClipRect(a, b, false);
+    dl->AddRectFilledMultiColor(ImVec2(a.x + 2, a.y + 1), ImVec2(b.x - 2, a.y + std::min(36.0f * UIK(), w->Size.y * 0.5f)), IM_COL32(255, 255, 255, (int)(14 * h)), IM_COL32(255, 255, 255, (int)(14 * h)), IM_COL32(255, 255, 255, 0), IM_COL32(255, 255, 255, 0));
+    dl->AddRect(ImVec2(a.x + 0.5f, a.y + 0.5f), ImVec2(b.x - 0.5f, b.y - 0.5f), ImGui::GetColorU32(ImVec4(0.45f, 0.92f, 0.66f, 0.38f * h)), rr, 0, 1.2f);
+    dl->PopClipRect();
 }
 
 static void DrawGroup(MenuGroup& g, int gid) {
@@ -670,7 +764,7 @@ static void DrawGroup(MenuGroup& g, int gid) {
       if (!changed) ImGui::PopStyleColor();
       ImGui::PopStyleColor();
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", TRS("Volver todo el grupo a lo guardado")); }
-    if (col) { if (!gDesc.empty()) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.52f, 0.56f, 1)); ImGui::TextUnformatted(Utf8(gDesc.substr(0, 90) + (gDesc.size() > 90 ? "..." : "")).c_str()); ImGui::PopStyleColor(); } ImGui::PopStyleColor(3); ImGui::EndChild(); ImGui::Spacing(); ImGui::PopID(); return; }
+    if (col) { if (!gDesc.empty()) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.52f, 0.56f, 1)); ImGui::TextUnformatted(Utf8(gDesc.substr(0, 90) + (gDesc.size() > 90 ? "..." : "")).c_str()); ImGui::PopStyleColor(); } ImGui::PopStyleColor(3); CardGlow(); ImGui::EndChild(); ImGui::Spacing(); ImGui::PopID(); return; }
     // (08/11) al desplegar, el contenido aparece suave (0.22 s)
     float openA = 1.0f;
     { auto it = s_cardOpenT.find(g.title); if (it != s_cardOpenT.end()) { const float t = (float)(Now() - it->second) / 0.22f; if (t >= 1.0f) s_cardOpenT.erase(it); else openA = Ease(t); } }
@@ -767,7 +861,7 @@ static void DrawGroup(MenuGroup& g, int gid) {
                 if (!isExt && (val < sl.lo || val > sl.hi)) { float cl = val < sl.lo ? sl.lo : sl.hi; Log("menu: %c%d = %g fuera del rango %g..%g del slider '%s': recortado a %g", "xyzw"[sl.comp], sl.idx, val, sl.lo, sl.hi, sl.label.c_str(), cl); val = cl; }
                 char tipb[300];   // (08/11) el rango del slider en el aviso
                 { char a[40], b[40]; snprintf(a, sizeof a, sl.fmt.c_str(), sl.lo); snprintf(b, sizeof b, sl.fmt.c_str(), sl.hi);
-                  snprintf(tipb, sizeof tipb, TRS("Va de %s a %s. Arrastra o toca el numero para escribirlo. Clic derecho: volver a lo guardado."), a, b); }
+                  snprintf(tipb, sizeof tipb, TRS("Va de %s a %s. Arrastra, o la rueda del mouse para el ajuste fino (Shift: mas fino). Doble clic o clic derecho: volver a lo guardado. Toca el numero para escribirlo."), a, b); }
                 openCtx = PrettySlider(&val, sl.lo, sl.hi, sl.fmt.c_str(), itemW, slChanged, savedV, tipb);
             }
             if (openCtx) ImGui::OpenPopup("ctx");
@@ -831,6 +925,7 @@ static void DrawGroup(MenuGroup& g, int gid) {
         ImGui::NewLine();
     }
     ImGui::PopStyleColor(3);
+    CardGlow();
     ImGui::EndChild();
     ImGui::Spacing();
     ImGui::PopID();
@@ -1039,9 +1134,9 @@ static void NavItem(const std::string& key, unsigned ico, const std::string& lab
     }
     const float fs = ImGui::GetFontSize(), ty = p.y + (h - fs) * 0.5f, pad = 8.0f * UIK();
     if (s_rail) {   // (08/11) barra angosta: el icono centrado, el nombre en el aviso
-        const ImU32 cI = ImGui::GetColorU32(sel ? ImVec4(0.40f, 0.90f, 0.62f, 1) : ImVec4(0.72f, 0.76f, 0.82f, 1));
+        const float hv = HoverAnim(ImGui::GetItemID() + 3, ImGui::IsItemHovered() || sel, 10.0f);
         const std::string ic = Ico(ico); const ImVec2 is = ImGui::CalcTextSize(ic.c_str());
-        dl->AddText(ImVec2(p.x + (w - is.x) * 0.5f, p.y + (hh - fs) * 0.5f), cI, ic.c_str());
+        GlassIcon(dl, ImVec2(p.x + (w - is.x) * 0.5f, p.y + (hh - fs) * 0.5f - 1.5f * UIK() * hv), ic.c_str(), sel ? ImVec4(0.40f, 0.90f, 0.62f, 1) : Mix(ImVec4(0.72f, 0.76f, 0.82f, 1), ImVec4(0.85f, 0.95f, 0.90f, 1), hv), sel ? 1.0f : hv * 0.6f);   // (08/11 d) vidrio, sube un poco al pasar el mouse
         if (dot) dl->AddCircleFilled(ImVec2(p.x + w - 6.0f * UIK(), p.y + 6.0f * UIK()), 3.5f * UIK(), IM_COL32(242, 204, 89, 255));
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s%s%s", label.c_str(), right.empty() ? "" : "  ", right.c_str());
         ImGui::PopID();
@@ -1052,7 +1147,8 @@ static void NavItem(const std::string& key, unsigned ico, const std::string& lab
     const ImU32 cIco = ImGui::GetColorU32(sel ? ImVec4(0.40f, 0.90f, 0.62f, 1) : ImVec4(0.55f, 0.60f, 0.66f, 1));
     const ImVec2 rs = right.empty() ? ImVec2(0, 0) : ImGui::CalcTextSize(right.c_str());
     float x = p.x + pad;
-    if (s_iconsOk && ico) { const std::string ic = Ico(ico); dl->AddText(ImVec2(x, ty), cIco, ic.c_str()); x += fs * 1.55f; }
+    if (s_iconsOk && ico) { const std::string ic = Ico(ico); const float hv = HoverAnim(ImGui::GetItemID() + 3, ImGui::IsItemHovered(), 10.0f);
+        GlassIcon(dl, ImVec2(x + 2.0f * UIK() * hv, ty), ic.c_str(), sel ? ImVec4(0.40f, 0.90f, 0.62f, 1) : Mix(ImVec4(0.55f, 0.60f, 0.66f, 1), ImVec4(0.80f, 0.90f, 0.86f, 1), hv), sel ? 0.9f : 0.0f); (void)cIco; x += fs * 1.55f; }   // (08/11 d) iconos de vidrio
     const float xr = p.x + w - pad - rs.x - (dot ? 12.0f * UIK() : 0.0f);
     const ImVec4 clip(x, p.y, std::max(x, xr - 4.0f * UIK()), p.y + h);
     dl->AddText(ImGui::GetFont(), fs, ImVec2(x, ty), cText, label.c_str(), nullptr, 0.0f, &clip);
@@ -1061,13 +1157,7 @@ static void NavItem(const std::string& key, unsigned ico, const std::string& lab
     ImGui::PopID();
 }
 // barra de cada pagina de tarjetas: solo activos, contraer / expandir. (08/11) Con iconos va a la derecha del titulo.
-static bool IconToggle(const char* id, unsigned ico, bool on, const char* tip) {
-    ImGui::PushStyleColor(ImGuiCol_Button, on ? ImVec4(0.16f, 0.45f, 0.31f, 1) : ImVec4(0.16f, 0.18f, 0.22f, 1));
-    const bool r = ImGui::Button((Ico(ico) + "##" + id).c_str(), ImVec2(ImGui::GetFrameHeight() * 1.25f, 0));
-    ImGui::PopStyleColor();
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
-    return r;
-}
+static bool IconToggle(const char* id, unsigned ico, bool on, const char* tip) { return GlassIconButton(id, ico, on, tip); }   // (08/11 d) de vidrio
 static float CardsToolbarW() { return s_iconsOk ? ImGui::GetFrameHeight() * 1.25f * 3 + ImGui::GetStyle().ItemSpacing.x * 2 : 0.0f; }
 static void CardsToolbar() {
     if (s_iconsOk) {
@@ -1084,7 +1174,10 @@ static void CardsToolbar() {
 static void PageTitle(unsigned ico, const std::string& title, const char* sub = nullptr, bool tools = false) {
     const float y0 = ImGui::GetCursorPosY();
     if (s_fontBig) ImGui::PushFont(s_fontBig);
-    if (s_iconsOk && ico) { ImGui::TextColored(ImVec4(0.40f, 0.90f, 0.62f, 1), "%s", Ico(ico).c_str()); ImGui::SameLine(); }
+    if (s_iconsOk && ico) {   // (08/11 d) icono de vidrio con brillo
+        const std::string ic = Ico(ico); const ImVec2 is = ImGui::CalcTextSize(ic.c_str());
+        GlassIcon(ImGui::GetWindowDrawList(), ImGui::GetCursorScreenPos(), ic.c_str(), ImVec4(0.40f, 0.90f, 0.62f, 1), 0.8f);
+        ImGui::Dummy(is); ImGui::SameLine(); }
     const float tw = tools ? CardsToolbarW() : 0.0f;
     ImGui::PushTextWrapPos(ImGui::GetContentRegionMax().x - (tw > 0 ? tw + 8.0f * UIK() : 0.0f));
     ImGui::TextWrapped("%s", title.c_str());
@@ -1425,6 +1518,17 @@ static void DrawSettingsPage() {
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Mas bajo = se ve el juego a traves del fondo del menu."));
     }
     ImGui::Spacing();
+    {   // (08/11 d) guardado automatico
+        row(TRS("Guardado automatico"));
+        ImGui::SetNextItemWidth(330 * UIK());
+        const char* opts[3] = { TRS("Apagado (con Guardar o Ctrl+S)"), TRS("Al terminar de tocar (1 s)"), TRS("Cada 10 s si hubo cambios") };
+        if (ImGui::BeginCombo("##autog", opts[std::clamp(g_cfg.menuAutoSave, 0, 2)])) {
+            for (int k = 0; k < 3; k++) if (ImGui::Selectable(opts[k], g_cfg.menuAutoSave == k)) { g_cfg.menuAutoSave = k; SaveOption("menu_autoguardar", std::to_string(k)); }
+            ImGui::EndCombo();
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Guarda solo los cambios del menu en PES21FX.ini. Deshacer (Ctrl+Z) sigue andando. La camara libre y las vistas de depuracion nunca se guardan prendidas."));
+    }
+    ImGui::Spacing();
     if (ImGui::Checkbox(TRS("Vidrio: el juego desenfocado detras del menu"), &g_cfg.menuGlass)) SaveOption("menu_vidrio", g_cfg.menuGlass ? "1" : "0");
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Estilo vidrio (como Apple o Windows Aero). Apagado: fondo liso. 'Opacidad del menu' regula cuanto se oscurece el vidrio para leer mejor."));
     if (ImGui::Checkbox(TRS("Letra deportiva (Saira, estilo PES 6)"), &g_cfg.menuFont)) { SaveOption("menu_letra", g_cfg.menuFont ? "1" : "0"); s_fontsH = -1.0f; }
@@ -1497,6 +1601,21 @@ static void DrawMenu() {
     int nChanged = 0, nErr = 0;
     { std::lock_guard<std::mutex> lk(g_cfgMutex); for (auto& g : g_cfg.groups) nChanged += GroupChanged(g) ? 1 : 0; }
     { std::lock_guard<std::mutex> lk2(g_errMutex); nErr = (int)g_compileErrors.size(); }
+    // (08/11 d) guardado automatico (Agustin: "da una opcion de guardado automatico"): cuando los valores dejan de cambiar 1 s (o 10 s)
+    // y no se esta arrastrando nada, se guarda solo; tambien al cerrar el menu. La firma ignora la camara libre (x344) y las vistas de
+    // depuracion, que SaveConfigValues igual nunca deja prendidas: asi no se guarda una y otra vez por ellas.
+    static bool s_autoSaving = false;
+    if (g_cfg.menuAutoSave > 0 && !MenuTestActive()) {
+        static uint64_t s_sig = 0, s_savedSig = 0; static double s_sigT = 0;
+        uint64_t h = 1469598103934665603ull;
+        {   std::lock_guard<std::mutex> lk(g_cfgMutex);
+            for (int i = 0; i < kParamCount; i++) for (int c = 0; c < 4; c++) {
+                if ((i == 344 && c == 0) || FindDebugParam(i, c)) continue;
+                uint32_t u; memcpy(&u, &g_cfg.live[i][c], 4); h = (h ^ u) * 1099511628211ull; } }
+        if (h != s_sig) { s_sig = h; s_sigT = Now(); }
+        const double wait = g_cfg.menuAutoSave == 1 ? 1.0 : 10.0;
+        if (nChanged > 0 && h != s_savedSig && !ImGui::IsAnyItemActive() && (Now() - s_sigT > wait || closing)) { s_saveReq = true; s_autoSaving = true; s_savedSig = h; }
+    }
 
     // --- cabecera: logo + nombre + estado de los shaders, X a la derecha ---
     const float headY = ImGui::GetCursorPosY();
@@ -1744,7 +1863,7 @@ static void DrawMenu() {
     ImGui::PopStyleVar();   // fundido de la ventana
 
     // acciones que no pueden correr con g_cfgMutex tomado
-    if (s_saveReq) { s_saveReq = false; s_status = TRS(SaveConfigValues() ? "Guardado en PES21FX.ini" : "No se pudo guardar"); }
+    if (s_saveReq) { s_saveReq = false; const bool ok = SaveConfigValues(); s_status = TRS(ok ? (s_autoSaving ? "Guardado automatico en PES21FX.ini" : "Guardado en PES21FX.ini") : "No se pudo guardar"); s_autoSaving = false; }
     if (s_reportReq) { s_reportReq = false; s_status = MakeReport(); }   // (08/11)
     if (s_toolReq) {
         const int a = s_toolReq; s_toolReq = 0;

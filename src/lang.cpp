@@ -7,6 +7,14 @@
 namespace fx {
 
 static const char* const kEn[][2] = {
+    // (08/11 d) iconos y slider de vidrio, guardado automatico
+    { "Va de %s a %s. Arrastra, o la rueda del mouse para el ajuste fino (Shift: mas fino). Doble clic o clic derecho: volver a lo guardado. Toca el numero para escribirlo.", "From %s to %s. Drag, or use the mouse wheel for fine tuning (Shift: finer). Double click or right click: back to the saved value. Click the number to type it." },
+    { "Guardado automatico", "Auto save" },
+    { "Apagado (con Guardar o Ctrl+S)", "Off (with Save or Ctrl+S)" },
+    { "Al terminar de tocar (1 s)", "When you stop touching (1 s)" },
+    { "Cada 10 s si hubo cambios", "Every 10 s if something changed" },
+    { "Guarda solo los cambios del menu en PES21FX.ini. Deshacer (Ctrl+Z) sigue andando. La camara libre y las vistas de depuracion nunca se guardan prendidas.", "Saves the menu changes to PES21FX.ini by itself. Undo (Ctrl+Z) still works. The free camera and the debug views are never saved on." },
+    { "Guardado automatico en PES21FX.ini", "Auto saved to PES21FX.ini" },
     // (08/11 c) depuracion y prueba automatica v2
     { "Vistas de depuracion", "Debug views" },
     { "Cascadas del sol en colores, solo la sombra, rebote, piel, pasto, cejas, boca... estan en \"Vista de diagnostico\" (abajo) y en cada tarjeta. Ninguna se guarda prendida: al reiniciar el juego arrancan apagadas.", "Sun cascades in colors, shadow only, bounce, skin, grass, brows, mouth... are in \"Diagnostic view\" (below) and in each card. None is saved on: they start off when the game restarts." },
@@ -506,6 +514,14 @@ static const char* const kEn[][2] = {
 
 // (27/10) portugues: mismo orden que kEn
 static const char* const kPt[][2] = {
+    // (08/11 d) iconos y slider de vidrio, guardado automatico
+    { "Va de %s a %s. Arrastra, o la rueda del mouse para el ajuste fino (Shift: mas fino). Doble clic o clic derecho: volver a lo guardado. Toca el numero para escribirlo.", "Vai de %s a %s. Arraste, ou use a roda do mouse para o ajuste fino (Shift: mais fino). Duplo clique ou clique direito: voltar ao salvo. Clique no n\303\272mero para digit\303\241-lo." },
+    { "Guardado automatico", "Salvamento autom\303\241tico" },
+    { "Apagado (con Guardar o Ctrl+S)", "Desligado (com Salvar ou Ctrl+S)" },
+    { "Al terminar de tocar (1 s)", "Ao terminar de mexer (1 s)" },
+    { "Cada 10 s si hubo cambios", "A cada 10 s se houve mudan\303\247as" },
+    { "Guarda solo los cambios del menu en PES21FX.ini. Deshacer (Ctrl+Z) sigue andando. La camara libre y las vistas de depuracion nunca se guardan prendidas.", "Salva sozinho as mudan\303\247as do menu no PES21FX.ini. Desfazer (Ctrl+Z) continua funcionando. A c\303\242mera livre e as vistas de depura\303\247\303\243o nunca ficam salvas ligadas." },
+    { "Guardado automatico en PES21FX.ini", "Salvo automaticamente no PES21FX.ini" },
     // (08/11 c) depuracion y prueba automatica v2
     { "Vistas de depuracion", "Vistas de depura\303\247\303\243o" },
     { "Cascadas del sol en colores, solo la sombra, rebote, piel, pasto, cejas, boca... estan en \"Vista de diagnostico\" (abajo) y en cada tarjeta. Ninguna se guarda prendida: al reiniciar el juego arrancan apagadas.", "Cascatas do sol em cores, s\303\263 a sombra, rebote, pele, grama, sobrancelhas, boca... est\303\243o em \"Vista de diagn\303\263stico\" (abaixo) e em cada cart\303\243o. Nenhuma fica salva ligada: ao reiniciar o jogo come\303\247am desligadas." },
