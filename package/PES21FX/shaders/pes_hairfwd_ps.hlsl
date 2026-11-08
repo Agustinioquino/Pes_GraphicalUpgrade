@@ -59,6 +59,7 @@ float HairF(float c) { const float F0 = 0.04652; return F0 + (1.0 - F0) * pow(1.
 // luz, V = hacia la camara. visR = sombra para R / TRT (luz de frente), visTT = transmision para TT (luz de atras)
 float3 HairBSDF(float3 alb, float rough, float3 L, float3 V, float3 T, float visR, float visTT, float shiftJ)
 {
+  float4 HB = IniParams.Load(int2(406, 0));   // (08/11 x) x406 brillo primario (R), y406 brillo secundario (TRT)
   float shift = 0.035 + shiftJ;
   float a0 = -2.0 * shift, a1 = shift, a2 = 4.0 * shift;
   float r2 = rough * rough;
@@ -75,7 +76,7 @@ float3 HairBSDF(float3 alb, float rough, float3 L, float3 V, float3 T, float vis
   { float Mp = HairG(B0 * sqrt(2.0) * cHalf, sL + sV - a0);
     float Np = 0.25 * cHalf;
     float Fp = HairF(sqrt(saturate(0.5 + 0.5 * VoL)));
-    S += Mp * Np * Fp * visR; }
+    S += Mp * Np * Fp * visR * clamp(HB.x, 0.0, 3.0); }
   // TT: atraviesa la fibra (contraluz con el color del pelo)
   { float Mp = HairG(B1, sL + sV - a1);
     float np = 1.19 / cD + 0.36 * cD, a = 1.0 / np;
@@ -91,7 +92,7 @@ float3 HairBSDF(float3 alb, float rough, float3 L, float3 V, float3 T, float vis
     float Fp = (1.0 - f) * (1.0 - f) * f;
     float3 Tp = pow(max(alb, 1e-3), 0.8 / cD);
     float Np = exp(17.0 * cPhi - 16.78);
-    S += Mp * Np * Fp * Tp * visR; }
+    S += Mp * Np * Fp * Tp * visR * clamp(HB.y, 0.0, 3.0); }
   return S;
 }
 

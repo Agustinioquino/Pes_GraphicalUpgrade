@@ -245,6 +245,9 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
   //    (arcos de pes_facegen_ps.hlsl: centros 0.395 / 0.605, y 0.312, radios 0.105 x 0.030, con margen)
   float2 lo = min(uv0, min(uv1, uv2)), hi = max(uv0, max(uv1, uv2));
   float4 BR = IniParams.Load(int2(402, 0));   // (08/11 w) barba con hebras
+  // (08/11 x, Agustin: "mas opciones para las hebras") 404: x grosor de raiz, y grosor de punta (fraccion de la raiz), z curvatura,
+  // w desorden | 405: x mechones, y variacion de largo, z variacion de color, w sombra entre hebras (1 = como antes en todo)
+  float4 HO = IniParams.Load(int2(404, 0)), HV = IniParams.Load(int2(405, 0));
   bool browTri = !(hi.x < 0.24 || lo.x > 0.76 || hi.y < 0.25 || lo.y > 0.38);
   bool beardTri = BR.x > 0.5 && !(hi.x < 0.18 || lo.x > 0.82 || hi.y < 0.5 || lo.y > 0.9);
   if (!browTri && !beardTri) return;
@@ -339,7 +342,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
       kap = clamp(-dot(dNds, d), -60.0, 400.0);   // 1/m: > 0 la piel sube delante del pelo (pliegue)
       kap = kap > 0.0 ? kap : kap * 0.5;
     }
-    float ga = (r2 - 0.5) * 0.14;                   // giro individual de +-4 grados (06/11: antes +-8, se despeinaban de la textura)
+    float ga = (r2 - 0.5) * 0.14 * clamp(HO.w, 0.0, 4.0);                   // giro individual de +-4 grados (06/11: antes +-8, se despeinaban de la textura)
     float3 dd = normalize(d * cos(ga) + bt * sin(ga));
     // (07/11, Agustin: "tenemos que seguir mejorando") MECHONES: en una ceja real los pelos vecinos se juntan en las puntas (grasa
     // de la piel, peinado). Celdas de ~2 mm en UV: la punta de cada hebra se corre hacia el centro de su celda a lo ancho del pelo
@@ -363,14 +366,14 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     float len;
     if (isB) len = clamp(BR.z, 1.0, 25.0) * 0.001 * (0.7 + 0.6 * r3) * (0.6 + 0.4 * bDark);
     else {
-      len = max(P74.z, 0.1) * 0.01 * mLen * (0.55 + 0.45 * m.g) * (0.8 + 0.4 * r3) * 0.8;
+      len = max(P74.z, 0.1) * 0.01 * mLen * (0.55 + 0.45 * m.g) * max(1.0 + 0.4 * (r3 - 0.5) * clamp(HV.y, 0.0, 2.5), 0.3) * 0.8;
       // la hebra no sale de la ceja pintada: si la punta (o la mitad) cae en piel, se acorta
       {
         float lenUV = len / max(mPerUV, 1e-5);
         if (PesPaintedHair(uv + dirUV * lenUV) < 0.2) len *= (PesPaintedHair(uv + dirUV * lenUV * 0.5) < 0.2) ? 0.55 : 0.85;   // (07/11, referencia eFootball de Agustin) el borde de la ceja queda deshilachado: los pelos pasan un poco la pintura
       }
     if (isX) len *= 0.85; }
-    float widB = isB ? max(BR.w, 0.05) * 0.001 * 0.3 : max(P74.w, 0.05) * 0.001 * mWid * 0.32;
+    float widB = isB ? max(BR.w, 0.05) * 0.001 * 0.3 : max(P74.w, 0.05) * 0.001 * mWid * 0.32 * clamp(HO.x, 0.2, 3.0);
     // (08/11 w, Agustin: "el problema es el grosor... un tick para respetar el grosor de la textura real o bajar el grosor sin perder
     // longitud ni cantidad") x403 = 1: el ancho de cada pelo sale del trazo pintado (trazo marcado y tupido = pelo grueso, trazo
     // suave / ralo = pelo fino, 0.55..1.25 del grosor elegido). Y el grosor ya no decide cuantas hebras quedan ni su largo (abajo)
@@ -403,6 +406,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     // variacion de la ceja pintada (cada pelo mas claro / oscuro que el promedio de su zona) y cada hebra su tono
     float lumP = dot(painted, float3(0.2126, 0.7152, 0.0722)), lumZ = dot(tBrow.SampleLevel(sLin, uv, 3).rgb, float3(0.2126, 0.7152, 0.0722));
     float vari = clamp(lumP / max(lumZ, 1e-3), 0.65, 1.35) * lerp(0.88, 1.1, frac(r2 * 13.7));
+    vari = max(1.0 + (vari - 1.0) * clamp(HV.z, 0.0, 3.0), 0.3);   // (08/11 x) z405 variacion de color
     { // (04/11 o, Agustin: "falta el color para las hebras normales que se aplique a todas") fila 373: color de las hebras de TODOS
       // los jugadores (x mezcla con el color pintado, yzw rgb); el color propio del jugador (367) va encima
       float4 G = IniParams.Load(int2(373, 0));
@@ -428,6 +432,8 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     float stackH = (isB ? 0.25 : 1.0) * lay * lay * 0.0012 * saturate(ph * 1.6) * max(mLift, 0.3);   // (08/11 w, Agustin: "se separan de la cara") 2.2 -> 1.2 mm   // (07/11 b) 1.3 -> 2.2 mm: mas profundidad entre capas
     { float occ = lerp(0.96, 0.8, saturate(ph * 1.2)) * lerp(lerp(0.86, 1.02, lay), 1.0, 1.0 - saturate(ph * 1.6));   // abajo tapado, arriba a la luz   // (05/11, Agustin: "se ven muy oscuras con la luz de frente") antes 0.88..0.62
       float layer = lerp(0.88, 1.08, frac(r3 * 7.31 + rk * 3.17));
+      float kv = clamp(HV.z, 0.0, 3.0), ks = clamp(HV.w, 0.0, 3.0);   // (08/11 x) z405 tono por hebra, w405 sombra entre hebras
+      occ = max(1.0 - (1.0 - occ) * ks, 0.2); layer = max(1.0 + (layer - 1.0) * kv, 0.5);
       cR *= occ * layer; cT *= layer; }
     if (isB) {   // (08/11 w) barba: el color pintado en ese punto, siempre mas oscuro que la piel de alrededor
       float3 pB = tFace.SampleLevel(sLin, uv, 0.5).rgb;
@@ -435,7 +441,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
       if (lB > capB) pB *= capB / max(lB, 1e-4);
       float vb = lerp(0.85, 1.1, frac(r2 * 13.7));
       cR = pB * 0.9 * vb; cT = pB * 1.08 * vb; }
-    float liftS = isB ? 0.1 : lift;
+    float liftS = (isB ? 0.1 : lift) * clamp(HO.z, 0.0, 3.0);   // (08/11 x) z404 curvatura
     // (08/11 v, Agustin: "el color de las cejas nunca tiene que ser el color de la piel") tope final, despues de los colores elegidos,
     // las puntas y las capas: ni la raiz ni la punta pasan el 60 % del brillo de la piel de la zona (mip 5 de la cara)
     { float skL = PesLum(uv, 5.0), capL = 0.7 * max(skL, 0.02);   // (08/11 w) 0.6 -> 0.7
@@ -463,11 +469,11 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
       // nace 0.3 mm DENTRO de la piel y atraviesa la superficie en el primer cuarto de la hebra: la piel tapa el arranque y el
       // pelo se ve salir del poro, sin borde ni separacion
       float emerge = -0.0003 + 0.00045 * saturate(t * 4.0);
-      float3 p = root + n * emerge + dd * len * t + n * len * liftS * (0.35 * sin(t * 3.14159) + 0.1 * t) + bt * len * curl * 0.5 * sin(t * 6.2831853 + r3 * 6.2831853) * t;
+      float3 p = root + n * emerge + dd * len * t + n * len * liftS * (0.35 * sin(t * 3.14159) + 0.1 * t) + bt * len * curl * clamp(HO.z, 0.0, 3.0) * 0.5 * sin(t * 6.2831853 + r3 * 6.2831853) * t;
       p += n * clamp(0.5 * kap * (len * t) * (len * t), -0.25 * len, 0.6 * len);   // (04/11 l) sigue el pliegue de la piel
-      p += bt * clamp(clat, -0.3 * len, 0.3 * len) * 0.55 * t * t;                    // (07/11) mechon: la punta va hacia sus vecinos
+      p += bt * clamp(clat, -0.3 * len, 0.3 * len) * 0.55 * clamp(HV.x, 0.0, 2.5) * t * t;                    // (07/11) mechon: la punta va hacia sus vecinos
       p += n * stackH * smoothstep(0.0, 0.45, t);                                       // (07/11) capa: sube sobre las de abajo
-      float wid = widB * (1.0 - 0.85 * t);
+      float wid = widB * (1.0 - (1.0 - clamp(HO.y, 0.02, 1.0)) * t);   // (08/11 x) y404 grosor de punta (0.15 = como antes)
       float pxV = 2.0 * abs(p.z) / (max(abs(m_projection[1].y), 1e-4) * vpH);   // un pixel en la vista a esta distancia
       // (06/11, Agustin: "no se ve como un hair strand de un motor moderno") la hebra fina ya no se engorda a 1 px: se dibuja de 1.2 px
       // y el PS descarta pixeles al azar segun la cobertura real (ancho real / dibujado); el TAA lo promedia -> pelo fino y suave

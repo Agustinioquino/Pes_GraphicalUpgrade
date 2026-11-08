@@ -93,7 +93,8 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   float hs = frac(sK * 0.6180339);   // hash propio de la hebra (constante en toda la hebra)
   // borde redondeado solo cuando la hebra es ancha en pantalla (de cerca); a ~1 px el descarte del borde solo hacia escalones
   float edge = 1.0 - abs(i.tw.y);
-  if (P75.z < 0.5 && edge < (0.08 + 0.35 * t * t) * smoothstep(0.55, 0.95, res)) discard;
+  // (08/11 x) z406 borde redondeado de cerca (0 = cinta plana, 1 = como antes, 2 = tubo mas fino y redondo)
+  if (P75.z < 0.5 && edge < (0.08 + 0.35 * t * t) * clamp(IniParams.Load(int2(406, 0)).z, 0.0, 2.0) * smoothstep(0.55, 0.95, res)) discard;
   // punta: largo visible distinto por hebra (corte estable, sin ruido entre cuadros) cuando la hebra no se puede afinar
   // (08/11 w) sin corte de punta: con el grosor bajo las hebras perdian largo
   // color: la raiz mas oscura, la punta un poco mas clara y calida
@@ -179,6 +180,7 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   rc = rc * rough + 0.180851057; rc = rc * rough + 0.271276593; rc = rc * rough + 0.271276593;
   o2.x = rc * rough + 0.150000006;
   o2.y = 0.32 * lerp(0.65, 1.35, frac(sJ * 5.3)) * lerp(0.75, 1.0, t) * (pesHairMisc.x > 0.5 ? saturate(pesHairB.z) / 0.6 : 1.0);   // (07/11) brillo distinto por hebra (unas brillan mas), la raiz tapada brilla menos   // brillo del tipo de pelo (0.6 = natural)
+  o2.y *= clamp(IniParams.Load(int2(406, 0)).x, 0.0, 3.0);   // (08/11 x) x406 brillo primario
   if (fwd) o2.y *= 0.7;   // (08/11 w) la luz de la escena tiene que seguir viendose en las cejas (antes x0.25 = sin brillo)
   o2.z = IniParams.Load(int2(339,0)).w > 0.5 ? 0.98823529 : 1.0;   // (08/11 w) marca de pelo siempre: el sol le da la luz envolvente   // (04/11) pelo a contraluz; sin eso como antes (ni piel ni kit)
   o2.w = g_psMaterial.m_materials[0].x;
