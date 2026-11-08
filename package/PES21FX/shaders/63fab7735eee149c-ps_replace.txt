@@ -278,6 +278,28 @@ void main(
       mLipShadow = saturate(Q96.w) * (mUpper * (1.0 - 0.75 * mIncisal) * 0.55 * smoothstep(-0.2, 0.7, mLv.y)
                                     + mLower * 0.35 * smoothstep(0.2, -0.7, mLv.y) + 0.06 * mRows) * lerp(1.0, mSunK, 0.5);
       r0.xyz *= 1.0 - mLipShadow;
+      // (08/11, Agustin: "sombras de dientes tambien") SOMBRA POR LA FORMA DE LA MALLA (fila 385). Los dientes de la boca 3D
+      // tienen hueco real entre vecinos, cuello y encia, pero el PS no tenia ninguna sombra que siguiera esa forma: las de antes
+      // eran fijas por zona del atlas (cavidad, linea de encia, garganta) o pintadas con el mapa de normales (apagadas el 04/11
+      // porque ensuciaban de gris). Aca se mide la CURVATURA de la malla en el propio pixel (cuanto gira la normal geometrica
+      // por milimetro de superficie, con las derivadas de pantalla) y se oscurece solo lo CONCAVO: el hueco entre dos dientes
+      // vecinos, el cuello donde el diente entra en la encia, el surco de las muelas y el encuentro de la lengua con el piso de
+      // la boca. Lo convexo (la cara del diente, el lomo de la lengua) no cambia. Es oclusion del ambiente (multiplica el albedo
+      // y el reflejo, no la luz directa del sol: con el sol de frente se afloja como los demas, por mSunK)
+      { float4 Q385 = IniParams.Load(int2(385, 0));
+        if (Q385.x > 0.5) {
+          float3 nG = normalize(v6.xyz);              // normal GEOMETRICA (sin el mapa de normales: la forma, no el relieve pintado)
+          float3 Pv = v3.xyz;                          // posicion respecto de la camara (metros)
+          float3 dnx = ddx(nG), dny = ddy(nG), dpx = ddx(Pv), dpy = ddy(Pv);
+          float dp2 = dot(dpx, dpx) + dot(dpy, dpy);
+          float curv = dp2 > 1e-12 ? -(dot(dnx, dpx) + dot(dny, dpy)) / dp2 : 0.0;   // 1/m; negativo = convexo, positivo = concavo
+          float rMm = Q385.y > 0.1 ? Q385.y : 6.0;     // radio de referencia: con ese radio concavo la sombra llega a 1
+          float aoC = saturate(max(curv, 0.0) * rMm * 0.001);
+          aoC *= aoC * (3.0 - 2.0 * aoC);              // rodilla suave: el ruido de un pixel no pinta rayas
+          float kC = (Q385.z > 0 ? Q385.z : 0.5) * aoC * (mTeeth + 0.8 * mTissue + 0.5 * mDeep) * lerp(1.0, mSunK, 0.5);
+          r0.xyz *= 1.0 - saturate(kC);
+          r3.xyz *= 1.0 - saturate(kC * 0.7);          // el reflejo del ambiente tampoco llega al fondo del hueco
+        } }
       // --- v3 ---
       // sombra entre dientes (espacio interproximal): donde la normal del mapa se inclina de costado dentro de las filas
       { float3 nm = g_tex_normal.SampleBias(g_sampler_normal_s, v2.xy, 1.0).xyw; float nx = abs(nm.x * nm.z * 2.0 - 1.0);
