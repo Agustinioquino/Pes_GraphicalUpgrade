@@ -170,6 +170,7 @@ static bool LoadConfigLocked() {
             else if (kl == "export_hooks") c.optExports = atoi(v.c_str()) != 0;
             else if (kl == "orphan_fix") c.optOrphan = atoi(v.c_str()) != 0;
             else if (kl == "crash_dump") c.optCrashDump = atoi(v.c_str());
+            else if (kl == "expr_paleta") c.optExprPalette = atoi(v.c_str()) != 0;
             else if (kl == "congelado_seg") c.optHangSec = atoi(v.c_str());
             else if (kl == "vigia_estados") c.relWatch = atoi(v.c_str()) != 0;
             else if (kl == "cobertura") c.coverOn = atoi(v.c_str()) != 0;

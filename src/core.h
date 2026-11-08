@@ -176,6 +176,7 @@ struct Config {
       // (08/11 i) [PES21FX] rastro / rastro_max_mb / rastro_fotos: registro de depuracion del juego + fotos del partido (rastro.cpp)
     int optHangSec = 20;   // (08/11 c) [PES21FX] congelado_seg: segundos sin cuadros = congelamiento -> volcado (main.cpp vigia); 0 apagado
     int optCrashDump = 1;   // (08/11) [PES21FX] crash_dump: 0 sin volcado, 1 minidump con datos, 2 memoria completa (main.cpp)
+    bool optExprPalette = true;   // (08/11) [PES21FX] expr_paleta: 1 = los gestos por huesos van a la paleta del VS (sin escribir el esqueleto); 0 = como antes
     int memFix = 1; bool memWatch = true;     // (26/10) [PES21FX] memoria_arreglo (0/1 = retener, 2 = liberar entero) / memoria_vigilar (memwatch.cpp)
     bool grassScan = true, grassNoCull = true, grassDumpDebugP = true;   // (26/10) [Motor] pasto_buscar / pasto_sin_recorte / volcar_debugp: distancia del pasto 3D del juego (grassdist.cpp)
     bool lightTrace = false;                  // (27/10) [PES21FX] luz_rastrear: pila de quien llena el cbuffer de la luz del sol (hooks.cpp)
@@ -439,7 +440,23 @@ struct GaniGest { char name[32]; int clip; int frames; bool between; int kind; b
     float dP[31][3]; float dZ[31]; float rP[31][3]; float rZ[31]; };
 bool GaniGestGet(uint32_t pid, unsigned& gen, std::vector<GaniGest>& out);   // copia si cambio (gen)
 bool GaniGestSample(uint32_t pid, int clip, float t, float P[31][3], float Z[31]);
-int GaniCount(); const char* GaniName(int clip); const char* GaniAskBone(int b); void GaniPresent();   // hooks.cpp: elementos anotados al crearse el layout
+int GaniCount(); const char* GaniName(int clip); const char* GaniAskBone(int b); void GaniPresent();
+// (08/11, Agustin: "todo sigue vibrando") GESTOS EN LA PALETA (exprbones.cpp -> expr.cpp -> pes_expr.hlsli). La DLL ya NO escribe los huesos
+// de la cara en el esqueleto del juego (el juego los reescribia a veces despues del Eval del cuello y la paleta del dibujo alternaba
+// entre lo del juego y lo del mod: eso era la vibracion). Por personaje y cuadro publica lo que el juego dejo en cada hueso (base), lo
+// que el mod quiere (nuevo) y el reposo; expr.cpp sube la diferencia (en el mundo) al VS (t115) y el VS la aplica a cada influencia
+// del skinning (PesBoneDeltaApply): el mismo resultado que escribir el hueso, pero sin pelear con el juego. [PES21FX] expr_paleta = 0
+// vuelve a escribir el esqueleto como antes.
+constexpr int kExprBones = 33;   // kDef[0..32] de exprbones.cpp (mandibula..ojos); dsk_* / sk_head / sk_neck siguen por el esqueleto
+struct ExprCharPose {
+    bool ok = false; unsigned frame = 0; uint32_t pid = 0; const void* skel = nullptr;
+    bool worldOk = false; float W[12] = {};   // modelo -> mundo del nodo (CharNodeMatrix)
+    float headT[3] = {}, headQ[4] = {}, headRestT[3] = {}, headRestQ[4] = {};   // sk_head actual y de reposo (espacio del modelo)
+    struct Bone { bool has = false, moved = false; float bq[4] = {}, bt[3] = {}, nq[4] = {}, nt[3] = {}, rq[4] = {}, rt[3] = {}; } b[kExprBones];   // base (juego) / nuevo (mod) / reposo
+};
+int ExprBonesPoses(ExprCharPose* out, int max);   // copia de los personajes publicados en los ultimos cuadros (expr.cpp, Present)
+ID3D11ShaderResourceView* ExprBoneDeltaSrv();   // (08/11) t115: tabla de diferencias por personaje para el VS (nullptr = nada)
+   // hooks.cpp: elementos anotados al crearse el layout
 void MuscleHookPresent();                         // (23/10) musculatura (musculo.cpp): huesos de musculo del juego x 164..171 (v5: 32 clases)
 void MuscleDrawPlayerPanel();                     // (24/10) tarjeta "Musculatura por jugador" (ImGui; la llama DrawGroup con g_cfgMutex tomado)
 bool MusclePhysiqueActive();                      // (24/10) el menu Fisico del juego (Editar > Jugadores) esta en pantalla
@@ -478,6 +495,7 @@ extern std::atomic<bool> g_skinMeasure;             // (24/10 e) medir el color 
 void SkinMeasureReport(const uint32_t* body, const uint32_t* face, uint32_t yMinInv, uint32_t yMax, uint32_t faceN);
 bool CharNodeWorldPos(void* node, float out[3]);   // (26/10) posicion en el mundo de un SceneCharacterNode (skintone.cpp)
 bool CharNodeToWorld(void* node, const float p[3], float out[3], bool point);   // (02/11) modelo -> mundo con la matriz del nodo (skintone.cpp)
+bool CharNodeMatrix(void* node, float out[12]);   // (08/11) la matriz entera modelo -> mundo del nodo, 3x4 fila mayor: mundo[r] = out[r*4+0..2] . p + out[r*4+3]
 bool ExprFaceAny(); bool ExprFaceFrame(const float* camPos, const float* camFwd, const void** lock, float c[3], float fw[3], float up[3], double* age);   // (02/11) cara en el mundo desde el esqueleto (exprbones.cpp)
 void SkinTonePresent();                           // guardado diferido + tabla de jugadores con tono propio (194..254)
 bool SkinToneParams(int gameIdx, const SkinToneProf& q, float k, float out[3], float outBody[3]);   // (24/10 c) (kL, m0, m1) en Oklab para pes_skintone.hlsli

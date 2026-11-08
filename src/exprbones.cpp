@@ -321,6 +321,9 @@ struct Skel {
     // (lo que dejo el juego) y lo escrito; si al cuadro siguiente se lee lo escrito (el juego no reescribio, o el Eval del
     // cuello paso dos veces en el mismo cuadro) se parte de la base guardada y no se gira dos veces
     float wq[kND][4] = {}, wt[kND][3] = {}, bq[kND][4] = {}, bt[kND][3] = {}; bool wHave[kND] = {};
+    // (08/11) gestos en la paleta (expr_paleta): lo que el mod QUIERE en cada hueso este cuadro (no se escribe en el esqueleto; se publica
+    // en `pub` y el VS lo aplica, ver ExprCharPose en core.h)
+    float dq[kND][4] = {}, dt[kND][3] = {}; bool dHave[kND] = {}; unsigned dFrame[kND] = {}; ExprCharPose pub;
     int reused = 0;
     // (02/11 i) amplificador POR HUESOS: base del juego leida este cuadro (lo que se guarda como base al escribir), cuadro de la
     // ultima escritura y la cabeza del cuadro para medir el gesto (actual - cabeza rigida)
@@ -615,7 +618,14 @@ static bool ReadBase(Skel& S, int d, Xf& x) {
     return true;
 }
 // escribe q / t nuevos y recuerda la base de la que salieron
+static bool PaletteMode(int d) { return g_cfg.optExprPalette && d < D_NECKB; }   // (08/11) huesos de la cara: a la paleta, no al esqueleto
 static bool WriteBone(Skel& S, int d, const Xf& base, const float* nq, const float* nt) {
+    if (PaletteMode(d)) {   // (08/11, Agustin: "todo sigue vibrando") no se toca el esqueleto: se anota y se publica al final del cuadro
+        memcpy(S.dq[d], nq, 4 * sizeof(float)); memcpy(S.dt[d], nt, 3 * sizeof(float)); S.dHave[d] = true; S.dFrame[d] = s_frame.load(std::memory_order_relaxed);
+        memcpy(S.bq[d], S.gq[d], sizeof S.bq[d]); memcpy(S.bt[d], S.gt[d], sizeof S.bt[d]);   // la base del juego de este cuadro (ReadBase)
+        S.wHave[d] = false; S.wFrame[d] = S.dFrame[d]; (void)base;
+        return true;
+    }
     float out[7] = { nq[0], nq[1], nq[2], nq[3], nt[0], nt[1], nt[2] };
     if (!SafeCopy((char*)S.cur[d] + 16, out, 28)) return false;
     Xf chk; if (ReadXf(S.cur[d], chk)) { memcpy(S.wq[d], chk.q, sizeof chk.q[0] * 4); memcpy(S.wt[d], chk.t, sizeof chk.t[0] * 3); }
@@ -630,6 +640,7 @@ static bool WriteBone(Skel& S, int d, const Xf& base, const float* nq, const flo
 // gestos secundarios reescribian cada cuadro pomulos, cejas y bajo-ojo aunque el corrimiento fuera 0; con 1cbce0f la boca 3D
 // se rompia con la boca por huesos y volvia con "Por shader", con 0 giros de mandibula escritos)
 static void Release(Skel& S, int d) {
+    if (PaletteMode(d)) { if (!(S.dHave[d] && S.dFrame[d] == s_frame.load(std::memory_order_relaxed))) S.dHave[d] = false; return; }   // (08/11) nada escrito: nada que devolver
     if (S.wFrame[d] == s_frame.load(std::memory_order_relaxed) && S.wHave[d]) return;   // (02/11 i) ya escrito este cuadro (amplificador)
     if (!S.wHave[d] || !S.cur[d]) { S.wHave[d] = false; return; }
     Xf x; if (ReadBase(S, d, x)) { float out[7] = { x.q[0], x.q[1], x.q[2], x.q[3], x.t[0], x.t[1], x.t[2] }; SafeCopy((char*)S.cur[d] + 16, out, 28); }
@@ -1074,7 +1085,7 @@ static void Neck(Skel& S, float tension, float open) {
         if (WriteBone(S, d, x, x.q, nt)) s_neckW.fetch_add(1, std::memory_order_relaxed); else s_badWrite.fetch_add(1, std::memory_order_relaxed);
     }
 }
-void ExprBonesFrame(const void* skel) {
+static void FrameBody(const void* skel) {
     if (!skel) return;
     s_calls.fetch_add(1, std::memory_order_relaxed);
     const unsigned fr = s_frame.load(std::memory_order_relaxed);
@@ -1506,6 +1517,39 @@ static void Dump(const Skel& S) {
     Log("%s", l);
 }
 
+// (08/11) GESTOS EN LA PALETA: al final del cuadro de este personaje se publica, por hueso de la cara, lo que dejo el juego (base), lo
+// que el mod quiere (nuevo: lo anotado por WriteBone este cuadro; si no, igual a la base) y el reposo, mas la cabeza y la matriz del nodo.
+// expr.cpp lo lee en el Present (ExprBonesPoses) y lo sube al VS. Si las expresiones estan apagadas no hay nada anotado: diferencia 0.
+static void Publish(Skel& S, unsigned fr) {
+    ExprCharPose& P = S.pub; P = ExprCharPose();
+    if (!g_cfg.optExprPalette || !S.cur[D_HEAD]) return;
+    Xf hc; if (!ReadXf(S.cur[D_HEAD], hc)) return;
+    P.frame = fr; P.pid = S.pKnown ? S.pid : 0; P.skel = S.skel;
+    memcpy(P.headT, hc.t, sizeof P.headT); memcpy(P.headQ, hc.q, sizeof P.headQ); memcpy(P.headRestT, S.rest[D_HEAD].t, sizeof P.headRestT); memcpy(P.headRestQ, S.rest[D_HEAD].q, sizeof P.headRestQ);
+    P.worldOk = S.node && CharNodeMatrix(const_cast<void*>(S.node), P.W);
+    for (int d = 0; d < kExprBones && d < kND; d++) {
+        if (!S.cur[d]) continue;
+        ExprCharPose::Bone& b = P.b[d];
+        const bool mv = S.dHave[d] && S.dFrame[d] == fr;
+        if (mv) { memcpy(b.bq, S.bq[d], sizeof b.bq); memcpy(b.bt, S.bt[d], sizeof b.bt); memcpy(b.nq, S.dq[d], sizeof b.nq); memcpy(b.nt, S.dt[d], sizeof b.nt); }
+        else { Xf x; if (!ReadXf(S.cur[d], x)) continue; memcpy(b.bq, x.q, sizeof b.bq); memcpy(b.bt, x.t, sizeof b.bt); memcpy(b.nq, x.q, sizeof b.nq); memcpy(b.nt, x.t, sizeof b.nt); }
+        memcpy(b.rq, S.rest[d].q, sizeof b.rq); memcpy(b.rt, S.rest[d].t, sizeof b.rt);
+        b.has = true; b.moved = mv;
+    }
+    P.ok = true;
+}
+void ExprBonesFrame(const void* skel) {
+    FrameBody(skel);
+    if (!skel || !g_cfg.optExprPalette) return;
+    std::lock_guard<std::mutex> lk(s_mx);
+    for (int i = 0; i < s_nSk; i++) if (s_sk[i].skel == skel) { if (s_sk[i].jawFound) Publish(s_sk[i], s_frame.load(std::memory_order_relaxed)); else s_sk[i].pub.ok = false; break; }
+}
+int ExprBonesPoses(ExprCharPose* out, int max) {
+    std::lock_guard<std::mutex> lk(s_mx);
+    const unsigned fr = s_frame.load(std::memory_order_relaxed); int n = 0;
+    for (int i = 0; i < s_nSk && n < max; i++) { const ExprCharPose& P = s_sk[i].pub; if (P.ok && fr - P.frame <= 10) out[n++] = P; }
+    return n;
+}
 // Present (hilo de render): estado para el shader (350.y) y resumen al log
 void ExprBonesPresent() {
     GaniPresent();   // (07/11) clips .gani de la cara
