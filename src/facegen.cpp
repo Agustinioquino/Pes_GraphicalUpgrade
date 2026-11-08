@@ -157,12 +157,22 @@ static std::atomic<int> s_hfSoFrame2{-1}, s_hfStreamed2{0};
 static std::atomic<int> s_hfFrame{0}, s_hfSoFrame{-1}, s_hfStreamed{0}, s_hfDraws{0};
 static std::atomic<unsigned> s_compW{0}, s_compH{0};
 static constexpr UINT kHfStride = 108;          // 27 floats: igual a GSOut de pes_brow_gs.hlsli
-static constexpr UINT kHfBytes = 64u << 20;     // 64 MB (~20000 hebras); si se llena, el resto no entra en la pasada (sigue en el G-buffer)
+static constexpr UINT kHfBytes = 160u << 20;    // (08/11 y) 64 -> 160 MB: con las hebras v3 (16 segmentos de cerca) cada hebra ocupa ~3x; si se llena, el resto no entra en la pasada (sigue en el G-buffer)
 static const D3D11_SO_DECLARATION_ENTRY kHfSO[] = {
     { 0, "SV_POSITION", 0, 0, 4, 0 }, { 0, "TEXCOORD", 0, 0, 3, 0 }, { 0, "TEXCOORD", 1, 0, 3, 0 }, { 0, "TEXCOORD", 2, 0, 3, 0 },
     { 0, "TEXCOORD", 3, 0, 2, 0 }, { 0, "TEXCOORD", 4, 0, 3, 0 }, { 0, "TEXCOORD", 5, 0, 3, 0 }, { 0, "TEXCOORD", 6, 0, 3, 0 },
     { 0, "TEXCOORD", 7, 0, 3, 0 } };
 static std::atomic<double> s_hfLastDraw{-10.0};
+// (08/11 y, Agustin: "creo que estamos planteando mal la geometria de las hebras" -> "si, rehacer por pasos") HEBRAS v3 (x416): el GS
+// de la cara deja solo la raiz de cada hebra (pes_brow_roots_*_gs, 8 float4) en s_v3Roots; despues un GS por hebra (pes_strand_gs) la
+// arma con hasta 16 segmentos (DrawAuto sobre las raices). Mismo PS, misma pasada propia (s_v3GSso escribe en s_hfSO)
+static ID3D11GeometryShader* s_v3RootGS[2] = {}; static ID3D11GeometryShader* s_v3GS = nullptr; static ID3D11GeometryShader* s_v3GSso = nullptr;
+static ID3D11VertexShader* s_v3VS = nullptr; static ID3D11InputLayout* s_v3IL = nullptr; static ID3D11Buffer* s_v3Roots = nullptr;
+static constexpr UINT kV3Stride = 128;            // 8 float4 (RootOut de pes_brow_gs.hlsli)
+static constexpr UINT kV3Bytes = 8u << 20;        // 65536 raices por dibujo de cara
+static const D3D11_SO_DECLARATION_ENTRY kV3SO[] = {
+    { 0, "TEXCOORD", 0, 0, 4, 0 }, { 0, "TEXCOORD", 1, 0, 4, 0 }, { 0, "TEXCOORD", 2, 0, 4, 0 }, { 0, "TEXCOORD", 3, 0, 4, 0 },
+    { 0, "TEXCOORD", 4, 0, 4, 0 }, { 0, "TEXCOORD", 5, 0, 4, 0 }, { 0, "TEXCOORD", 6, 0, 4, 0 }, { 0, "TEXCOORD", 7, 0, 4, 0 } };
 // (08/11 y) la pasada propia dibujo hace menos de medio segundo: recien ahi las cejas le dejan el brillo y la sombra (si no, en el
 // editor sin composicion 619b salian negras y planas: sin brillo propio ni sombra de contacto)
 bool HairFwdActive() { return Now() - s_hfLastDraw.load() < 0.5; }
@@ -223,6 +233,26 @@ static void EnsureBrowShaders() {
         if (FAILED(hso)) { s_browGSso[i] = nullptr; Log("cejas: pasada propia del pelo: salida de flujo GS %d fallo (0x%08X)", i, (unsigned)hso); }
         gb->Release(); }
     EnsureHairFwd();
+    {   // (08/11 y) hebras v3
+        const wchar_t* rf[2] = { L"pes_brow_roots_a_gs.hlsl", L"pes_brow_roots_b_gs.hlsl" };
+        for (int i = 0; i < 2; i++) if (ID3DBlob* gb = CompileNamedShader(rf[i], "gs_5_0")) { UINT st = kV3Stride;
+            if (FAILED(g_dev.dev->CreateGeometryShaderWithStreamOutput(gb->GetBufferPointer(), gb->GetBufferSize(), kV3SO, 8, &st, 1, D3D11_SO_NO_RASTERIZED_STREAM, nullptr, &s_v3RootGS[i]))) s_v3RootGS[i] = nullptr;
+            gb->Release(); }
+        if (ID3DBlob* gb = CompileNamedShader(L"pes_strand_gs.hlsl", "gs_5_0")) {
+            g_dev.dev->CreateGeometryShader(gb->GetBufferPointer(), gb->GetBufferSize(), nullptr, &s_v3GS);
+            UINT st = kHfStride; if (FAILED(g_dev.dev->CreateGeometryShaderWithStreamOutput(gb->GetBufferPointer(), gb->GetBufferSize(), kHfSO, 9, &st, 1, 0, nullptr, &s_v3GSso))) s_v3GSso = nullptr;
+            gb->Release(); }
+        if (ID3DBlob* vb = CompileNamedShader(L"pes_strand_vs.hlsl", "vs_5_0")) {
+            g_dev.dev->CreateVertexShader(vb->GetBufferPointer(), vb->GetBufferSize(), nullptr, &s_v3VS);
+            D3D11_INPUT_ELEMENT_DESC ie[8];
+            for (UINT k = 0; k < 8; k++) ie[k] = { "TEXCOORD", k, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 16 * k, D3D11_INPUT_PER_VERTEX_DATA, 0 };
+            g_dev.dev->CreateInputLayout(ie, 8, vb->GetBufferPointer(), vb->GetBufferSize(), &s_v3IL);
+            vb->Release(); }
+        if (!s_v3Roots) { D3D11_BUFFER_DESC bd{}; bd.ByteWidth = kV3Bytes; bd.Usage = D3D11_USAGE_DEFAULT; bd.BindFlags = D3D11_BIND_STREAM_OUTPUT | D3D11_BIND_VERTEX_BUFFER;
+            if (FAILED(g_dev.dev->CreateBuffer(&bd, nullptr, &s_v3Roots))) s_v3Roots = nullptr; }
+        Log("cejas: hebras v3 (x416): raices GS %s %s, GS por hebra %s (flujo %s), VS %s, IL %s, buffer %s", s_v3RootGS[0] ? "si" : "NO", s_v3RootGS[1] ? "si" : "NO",
+            s_v3GS ? "si" : "NO", s_v3GSso ? "si" : "NO", s_v3VS ? "si" : "NO", s_v3IL ? "si" : "NO", s_v3Roots ? "si" : "NO");
+    }
     Log("cejas: pasada propia del pelo (w382): flujo %s %s, buffer %s, VS %s, PS %s", s_browGSso[0] ? "si" : "NO", s_browGSso[1] ? "si" : "NO", s_hfSO ? "si" : "NO", (s_hfVS && s_hfIL) ? "si" : "NO", s_hfPS ? "si" : "NO");
     { const wchar_t* shf[3] = { L"pes_browsh_a_gs.hlsl", L"pes_browsh_b_gs.hlsl", L"pes_lashsh_gs.hlsl" };
       for (int i = 0; i < 3; i++) if (ID3DBlob* gb = CompileNamedShader(shf[i], "gs_5_0")) { g_dev.dev->CreateGeometryShader(gb->GetBufferPointer(), gb->GetBufferSize(), nullptr, &s_shGS[i]);
@@ -677,11 +707,45 @@ void BrowStrandsEnd(ID3D11DeviceContext* c) {
     s = BrowSaved();
 }
 
+// (08/11 y) hebras v3: 1) el dibujo de la cara solo deja las raices (sin rasterizar); 2) DrawAuto de las raices con el GS por hebra
+bool BrowV3Roots(ID3D11DeviceContext* c, uint64_t vsHash) {
+    BrowSaved& s = t_bs;
+    if (g_cfg.live[416][0] < 0.5f || vsHash == kVSLash || !s.strandGS) return false;
+    ID3D11GeometryShader* rg = s_v3RootGS[vsHash == kVSFaceAnim ? 1 : 0];
+    if (!rg || !s_v3GS || !s_v3VS || !s_v3IL || !s_v3Roots) return false;
+    c->GSSetShader(rg, nullptr, 0);
+    UINT off = 0; c->SOSetTargets(1, &s_v3Roots, &off);
+    { static std::atomic<int> lg{0}; if (lg.fetch_add(1) < 2) Log("cejas: hebras v3: primer dibujo de raices (VS %s)", vsHash == kVSFaceAnim ? "455eb97b" : "faab87ee"); }
+    return true;
+}
+void BrowV3Strands(ID3D11DeviceContext* c) {
+    BrowSaved& s = t_bs;
+    { ID3D11Buffer* nb = nullptr; UINT o = 0; c->SOSetTargets(1, &nb, &o); }
+    ID3D11InputLayout* oIL = nullptr; c->IAGetInputLayout(&oIL);
+    ID3D11Buffer* oVB = nullptr; UINT oStr = 0, oOff = 0; c->IAGetVertexBuffers(0, 1, &oVB, &oStr, &oOff);
+    D3D11_PRIMITIVE_TOPOLOGY oTopo; c->IAGetPrimitiveTopology(&oTopo);
+    ID3D11VertexShader* oVS = nullptr; c->VSGetShader(&oVS, nullptr, nullptr);
+    ID3D11GeometryShader* keep = s.strandGS;
+    c->IASetInputLayout(s_v3IL); UINT st = kV3Stride, of = 0; c->IASetVertexBuffers(0, 1, &s_v3Roots, &st, &of);
+    c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
+    c->VSSetShader(s_v3VS, nullptr, 0);
+    c->PSSetShader(s_browPS, nullptr, 0);
+    bool so = false;
+    if (HairFwdWanted() && s_v3GSso) { s.strandGS = s_v3GSso; so = BrowSOOn(c); }
+    c->GSSetShader(so ? s_v3GSso : s_v3GS, nullptr, 0);
+    c->DrawAuto();
+    if (so) BrowSOOff(c);
+    s.strandGS = keep;
+    c->IASetInputLayout(oIL); c->IASetVertexBuffers(0, 1, &oVB, &oStr, &oOff); c->IASetPrimitiveTopology(oTopo);
+    c->VSSetShader(oVS, nullptr, 0); c->GSSetShader(keep, nullptr, 0);
+    if (oIL) oIL->Release(); if (oVB) oVB->Release(); if (oVS) oVS->Release();
+    { static std::atomic<int> lg{0}; if (lg.fetch_add(1) < 2) Log("cejas: hebras v3: primer dibujo de hebras (pasada propia %s)", so ? "si" : "no"); }
+}
 // (08/11 v) salida de flujo de las hebras: solo alrededor del dibujo de las hebras (no de la sombra de contacto ni del atlas) y solo en
 // la vista principal (mismo tamano que la composicion del cuadro anterior: no las miniaturas ni los reflejos)
 bool BrowSOOn(ID3D11DeviceContext* c) {
     BrowSaved& s = t_bs;
-    if (!HairFwdWanted() || !s_hfSO || !s.strandGS || (s.strandGS != s_browGSso[0] && s.strandGS != s_browGSso[1])) return false;
+    if (!HairFwdWanted() || !s_hfSO || !s.strandGS || (s.strandGS != s_browGSso[0] && s.strandGS != s_browGSso[1] && s.strandGS != s_v3GSso)) return false;
     D3D11_VIEWPORT vp{}; UINT n = 1; c->RSGetViewports(&n, &vp);
     unsigned cw = s_compW.load(), ch = s_compH.load();
     // (08/11 w) tolerancia del 3 % (el editor puede dibujar la cara con un viewport apenas distinto al de la composicion)

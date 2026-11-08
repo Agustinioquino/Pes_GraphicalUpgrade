@@ -248,9 +248,29 @@ float PesAtlasTexelM() {   // tamano de un texel del atlas en metros (columna 0 
 }
 #endif
 
+// (08/11 y, Agustin: "creo que estamos planteando mal la geometria de las hebras" -> "si, rehacer por pasos") HEBRAS v3 (x416): el
+// GS de la cara ya no arma las cintas (tope de 1024 escalares por llamada = 5 segmentos): deja solo la RAIZ de cada hebra (un punto,
+// 8 float4) en una salida de flujo (pes_brow_roots_*_gs, PES_ROOTS) y un segundo GS (pes_strand_gs, PES_STRAND) arma cada hebra
+// sola con hasta 16 segmentos (DrawAuto sobre las raices): curvas y puntas suaves de cerca, el mismo PS y la misma pasada propia
+struct RootOut {
+  float4 r0 : TEXCOORD0;   // raiz (vista), -
+  float4 r1 : TEXCOORD1;   // direccion apoyada en la piel, largo
+  float4 r2 : TEXCOORD2;   // normal de la piel, ancho
+  float4 r3 : TEXCOORD3;   // costado, elevacion (liftS)
+  float4 r4 : TEXCOORD4;   // color raiz, rizo
+  float4 r5 : TEXCOORD5;   // color punta, r3 (fase del rizo)
+  float4 r6 : TEXCOORD6;   // movimiento, curvatura de la piel (kap), mechon (clat)
+  float4 r7 : TEXCOORD7;   // capa (stackH), codigo tono / capa, ancho de referencia, lay
+};
+#ifndef PES_STRAND
 [instance(PES_INST)]
+#ifdef PES_ROOTS
+[maxvertexcount(PES_PER_INST)]
+void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInstanceID, inout PointStream<RootOut> outS)
+#else
 [maxvertexcount(PES_PER_INST * (PES_SEG + 1) * 2)]
 void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInstanceID, inout TriangleStream<GSOut> outS)
+#endif
 {
   float4 P74 = IniParams.Load(int2(74,0));
   float4 P75 = IniParams.Load(int2(75,0));
@@ -487,6 +507,13 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     float nl = dot(Ls, n);
     if (nl < 0.08) continue;
 #endif
+#ifdef PES_ROOTS
+    { RootOut ro;
+      ro.r0 = float4(root, 0.0); ro.r1 = float4(dd, len); ro.r2 = float4(n, widB); ro.r3 = float4(bt, liftS);
+      ro.r4 = float4(cR, curl); ro.r5 = float4(cT, r3); ro.r6 = float4(motion, kap, clat);
+      ro.r7 = float4(stackH, 2.0 * (floor(frac(r2 * 7.77 + r3 * 3.33) * 8.0) + 8.0 * floor(lay * 3.999)), widRef, lay);
+      outS.Append(ro); }
+#else
     [unroll] for (uint ring = 0; ring <= PES_SEG; ring++) {
       float t = (float)ring / (float)PES_SEG;
       // sale levantada y se acuesta hacia la punta (pelo de ceja real); el rizo la tuerce en el plano de la piel
@@ -547,5 +574,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
       }
     }
     outS.RestartStrip();
+#endif
   }
 }
+#endif   // PES_STRAND
