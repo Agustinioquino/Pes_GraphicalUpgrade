@@ -245,6 +245,36 @@ body.motor .tabs{display:flex!important}
 body.motor .ed-der [data-panel]{display:none}body.motor .ed-der [data-panel].on{display:block}
 body.motor #s-modelo .tuto{display:none}
 @media (max-width:1100px){.editor,body.motor .editor{grid-template-columns:1fr}.ed-izq{display:none!important}}
+
+/* ---------- sliders con estilo ---------- */
+input[type=range]{-webkit-appearance:none;appearance:none;height:22px;background:transparent;cursor:pointer;--p:50%}
+input[type=range]:focus{outline:none}
+input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:6px;border:1px solid rgba(255,255,255,.07);
+  background:linear-gradient(90deg,var(--green) 0%,var(--gold) var(--p),rgba(255,255,255,.07) var(--p));
+  box-shadow:inset 0 1px 3px rgba(0,0,0,.55),0 0 12px rgba(47,207,122,.12)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;margin-top:-7px;border-radius:50%;
+  background:radial-gradient(circle at 35% 30%,#fffbe8,var(--gold2) 35%,var(--gold) 70%,#9a7a25);border:2px solid rgba(10,14,12,.85);
+  box-shadow:0 0 0 3px rgba(217,184,74,.18),0 3px 10px rgba(0,0,0,.6);transition:transform .15s,box-shadow .2s}
+input[type=range]:hover::-webkit-slider-thumb{transform:scale(1.15);box-shadow:0 0 0 5px rgba(217,184,74,.22),0 0 18px rgba(243,220,138,.55)}
+input[type=range]:active::-webkit-slider-thumb{transform:scale(1.25);box-shadow:0 0 0 7px rgba(47,207,122,.25),0 0 22px rgba(124,240,174,.7)}
+input[type=range]::-moz-range-track{height:6px;border-radius:6px;background:rgba(255,255,255,.07)}
+input[type=range]::-moz-range-progress{height:6px;border-radius:6px;background:linear-gradient(90deg,var(--green),var(--gold))}
+input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;background:var(--gold2);border:2px solid #0a0e0c}
+.slider .v{justify-self:end;min-width:46px;padding:1px 8px;border-radius:999px;background:rgba(217,184,74,.12);border:1px solid rgba(217,184,74,.3);
+  color:var(--gold2)!important;text-align:center;box-shadow:inset 0 1px 0 rgba(255,255,255,.08);transition:background .2s}
+.slider:hover .v{background:rgba(217,184,74,.22)}
+.slider{transition:background .2s;border-radius:8px}
+.slider:hover{background:linear-gradient(90deg,rgba(47,207,122,.05),transparent)}
+.slider input[type=range]{grid-column:1/-1}
+body.motor input[type=range]::-webkit-slider-runnable-track{height:4px;border-radius:2px;box-shadow:inset 0 1px 2px rgba(0,0,0,.6)}
+body.motor input[type=range]::-webkit-slider-thumb{width:12px;height:12px;margin-top:-5px;border-radius:3px;background:linear-gradient(#f6e4a0,var(--gold));border:1px solid #111;box-shadow:0 1px 4px rgba(0,0,0,.6)}
+body.motor input[type=range]:hover::-webkit-slider-thumb{transform:scale(1.2);box-shadow:0 0 10px rgba(243,220,138,.5)}
+body.motor .slider .v{border-radius:3px;padding:0 6px;min-width:40px;font-size:11px}
+body.motor .slider:hover{background:rgba(255,255,255,.03)}
+/* ---------- jugador ---------- */
+.jugbar{align-items:center;padding:6px 10px;border-radius:12px;background:linear-gradient(90deg,rgba(47,207,122,.12),rgba(217,184,74,.08));border:1px solid var(--line)}
+.jugtit{font-family:var(--fd);font-weight:700;letter-spacing:.04em;color:var(--gold2);text-transform:uppercase;font-size:13px}
+body.motor .jugbar{border-radius:4px;background:#1a1d22;padding:4px 8px}
 </style>
 </head>
 <body>
@@ -316,7 +346,8 @@ body.motor #s-modelo .tuto{display:none}
 <!-- ============================ ESCENA 3D ============================ -->
 <section id="s-modelo">
   <div class="tuto" data-t="modelo"><span class="cerrar">cerrar ✕</span><h2>Escena 3D</h2>
-    <ul><li>Cargá un <b>.fmdl</b> desde Archivos (o pegá la ruta abajo). Se puede sumar más de un modelo (cara + cuerpo + pelota). Sin modelo, la escena trae un <b>maniquí</b> y una pelota para probar la luz.</li>
+    <ul><li><b>Jugador del juego</b>: elegí el id de una cara (o 🎲) y la escena arma el jugador con los modelos de Konami: cara y pelo de su <code>face.fpk</code>, cuerpo de <code>common_package.fpk</code> y sus texturas. Las piezas del cuerpo se prenden y apagan en Entorno.</li>
+    <li>Cargá un <b>.fmdl</b> desde Archivos (o pegá la ruta abajo). Se puede sumar más de un modelo (cara + cuerpo + pelota). Sin modelo, la escena trae un <b>maniquí</b> y una pelota para probar la luz.</li>
     <li><b>Botón izquierdo</b> gira, <b>rueda</b> acerca, <b>botón derecho</b> desplaza. <b>Encuadrar</b> (o tecla F) centra lo elegido.</li>
     <li>Luz tipo PES: cielo físico, sol con sombras, cancha con el corte del césped y focos de noche. Presets <b>Partido día / Tarde / Noche con focos / Nublado / Estudio</b>. Con el juego abierto, <b>Luz del juego</b> copia la dirección del sol y el color del cielo del partido (filas 111 / 312 / 150).</li>
     <li>En el modo <b>⚙ Motor</b> la escena se vuelve un editor: jerarquía a la izquierda, inspector a la derecha, gizmo para mover / rotar / escalar (teclas W / E / R), vistas (iluminado, sin luz, arcilla, normales, UV, pesos), cámaras (TV, cercana, frente, lado, arriba), estadísticas y consola.</li>
@@ -328,6 +359,17 @@ body.motor #s-modelo .tuto{display:none}
     <button class="b" id="mSumar">Sumar a la escena</button>
     <button class="b" id="mLimpiar">Vaciar</button>
     <button class="b" id="mEncuadrar">Encuadrar</button>
+  </div>
+  <div class="barra jugbar">
+    <span class="jugtit">⚽ Jugador del juego</span>
+    <input type="search" id="jId" list="jLista" placeholder="id de la cara (ej. 7511)" style="width:190px">
+    <datalist id="jLista"></datalist>
+    <button class="b p" id="jPoner">Poner jugador</button>
+    <button class="b" id="jAzar" title="Otro jugador al azar">🎲</button>
+    <label class="chk"><input type="checkbox" id="jCuerpo" checked> Cuerpo</label>
+    <label class="chk"><input type="checkbox" id="jPelo" checked> Pelo</label>
+    <label class="chk"><input type="checkbox" id="jTex" checked> Texturas</label>
+    <span class="mini" id="jEstado">buscando caras y cuerpos en los .cpk…</span>
   </div>
   <div class="editor">
     <!-- jerarquia (solo Motor) -->
@@ -383,6 +425,8 @@ body.motor #s-modelo .tuto{display:none}
           <label class="chk av"><input type="checkbox" id="cNormales"> Normales (líneas)</label>
           <label class="chk" style="display:none"><input type="checkbox" id="cAlambre"> Alambre</label>
         </div>
+        <h3 style="margin-top:8px">Piezas del cuerpo <span class="mini">(common_package.fpk)</span></h3>
+        <div id="jPiezas" class="mini">Se llenan al poner un jugador.</div>
         <h3 style="margin-top:8px">Modelos en la escena</h3>
         <div id="mModelos" class="mini">Ninguno.</div>
       </div>
@@ -820,9 +864,9 @@ function pintarStats() { const e = $('#edStats'); if (!e || !document.body.class
 $('#edCaptura').onclick = async () => { if (!renderer) return; renderer.render(scene, camera); const url = renderer.domElement.toDataURL('image/png');
   try { const r = await fetch(VISOR + '/api/captura', { method: 'POST', body: url }); const j = await r.json(); if (j.ruta) { toast('Captura guardada: ' + j.ruta); clog('captura: ' + j.ruta); } else throw new Error(j.error); } catch (e) { const a = document.createElement('a'); a.href = url; a.download = 'escena_' + Date.now() + '.png'; a.click(); } };
 const b64f32 = s => new Float32Array(Uint8Array.from(atob(s), c => c.charCodeAt(0)).buffer), b64u32 = s => new Uint32Array(Uint8Array.from(atob(s), c => c.charCodeAt(0)).buffer), b64u16 = s => new Uint16Array(Uint8Array.from(atob(s), c => c.charCodeAt(0)).buffer);
-async function cargarModelo(ruta, sumar) {
+async function cargarModelo(ruta, sumar, callado) {
   if (!renderer) return toast('La escena 3D no está disponible (three.js no cargó)', true);
-  ruta = ruta || $('#mRuta').value; if (!ruta) return; toast('Cargando ' + ruta.split(/[\\/!]/).pop() + '...'); clog('cargando ' + ruta);
+  ruta = ruta || $('#mRuta').value; if (!ruta) return; if (!callado) toast('Cargando ' + ruta.split(/[\\/!]/).pop() + '...'); clog('cargando ' + ruta);
   try {
     const d = await vis('/api/fmdl?ruta=' + enc(ruta)); if (!sumar) vaciarEscena();
     const grupo = new THREE.Group(); const M = { ruta, datos: d, grupo, mallas: [], texturas: {} };
@@ -841,9 +885,9 @@ async function cargarModelo(ruta, sumar) {
       M.esqueleto = new THREE.Group(); M.esqueleto.add(lines, puntos); M.esqueleto.visible = $('#cHuesos').checked; grupo.add(M.esqueleto); }
     scene.add(grupo); modelos.push(M); modeloSel = M; if (!sumar) { $('#cManiqui').checked = false; }
     const rec = JSON.parse(localStorage.getItem('recientes') || '[]').filter(x => x !== ruta); rec.unshift(ruta); localStorage.setItem('recientes', JSON.stringify(rec.slice(0, 12)));
-    if (vista !== 'lit') aplicarVista(); aplicarLuz(); pintarModelos(); pintarMallas(); pintarTexturas(); pintarHuesos(''); elegir({ tipo: 'modelo', M }); if (!sumar) encuadrar();
-    autoTexturas(M);
-    toast(`${d.mallas.length} mallas, ${d.huesos.length} huesos`); clog(`${ruta.split(/[\\/!]/).pop()}: ${d.mallas.length} mallas, ${d.huesos.length} huesos, ${d.mallas.reduce((a, m) => a + m.nvert, 0)} vértices`);
+    if (vista !== 'lit') aplicarVista(); aplicarLuz(); pintarModelos(); pintarMallas(); pintarTexturas(); pintarHuesos(''); elegir({ tipo: 'modelo', M }); if (!sumar && !callado) encuadrar();
+    texturasPorMaterial(M).then(n => { if (!n && !callado) autoTexturas(M); });
+    if (!callado) toast(`${d.mallas.length} mallas, ${d.huesos.length} huesos`); clog(`${ruta.split(/[\\/!]/).pop()}: ${d.mallas.length} mallas, ${d.huesos.length} huesos, ${d.mallas.reduce((a, m) => a + m.nvert, 0)} vértices`);
   } catch (e) { toast('No se pudo cargar: ' + e.message, true); clog('ERROR ' + e.message); }
 }
 function vaciarEscena() { if (gizmo) gizmo.detach(); for (const m of modelos) scene.remove(m.grupo); modelos = []; modeloSel = null; seleccion = null; pintarModelos(); $('#mMallas').innerHTML = ''; $('#mTexturas').innerHTML = ''; $('#mHuesos').innerHTML = ''; $('#mNHuesos').textContent = ''; pintarArbol(); pintarInspector(); }
@@ -863,6 +907,68 @@ async function autoTexturas(M) {
 }
 function aplicarTexturaEscena(ruta, slot) { if (!modeloSel) return toast('Cargá primero un modelo', true); const url = VISOR + '/api/png?ruta=' + enc(ruta) + '&canal=rgb'; new THREE.TextureLoader().load(url, tex => { tex.encoding = slot === 'map' ? THREE.sRGBEncoding : THREE.LinearEncoding; tex.flipY = true; tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.anisotropy = 8; for (const mesh of modeloSel.mallas) { const m = mesh.userData.matLit || mesh.material; m[slot] = tex; if (slot === 'map') m.color.set(0xffffff); m.needsUpdate = true; } if (vista !== 'lit') aplicarVista(); toast('Textura aplicada: ' + ruta.split(/[\\/!]/).pop()); clog('textura ' + slot + ': ' + ruta); }, undefined, () => toast('No se pudo cargar la textura', true)); }
 $('#mCargar').onclick = () => cargarModelo($('#mRuta').value, false); $('#mSumar').onclick = () => cargarModelo($('#mRuta').value, true); $('#mLimpiar').onclick = vaciarEscena; $('#mEncuadrar').onclick = encuadrar;
+
+
+// ---------------------------------------------------------------- jugadores del juego (modelos de Konami)
+let PERS = null, texCache = {};
+async function cargarPersonajes() {
+  try { const r = await vis('/api/personajes');
+    if (r.estado !== 'listo') { $('#jEstado').textContent = r.total ? `leyendo los .cpk del juego (${r.hechos} de ${r.total})…` : r.estado; return setTimeout(cargarPersonajes, 1500); }
+    PERS = r; PERS.mapa = Object.fromEntries(r.caras);
+    $('#jLista').innerHTML = r.caras.map(([id]) => `<option value="${id}">`).join('');
+    $('#jEstado').textContent = `${r.caras.length} caras reales · ${r.cuerpos.length ? 'cuerpo del juego' : 'sin common_package.fpk'}`;
+    clog(`juego: ${r.caras.length} caras, ${r.cuerpos.length} paquetes de cuerpo, ${r.extras.length} modelos sueltos`);
+    // en vez del maniqui: el ultimo jugador usado (o uno al azar)
+    if (!modelos.length && r.caras.length) { const ult = localStorage.getItem('jugador'); ponerJugador(ult && PERS.mapa[ult] ? ult : r.caras[Math.floor(Math.random() * r.caras.length)][0]); }
+  } catch (e) { $('#jEstado').textContent = 'sin índice del juego (' + e.message + ')'; }
+}
+const familia = n => { n = n.toLowerCase().replace(/\.fmdl$/, '').replace(/(_\d+)+$/, ''); return n.startsWith('pants') ? 'pants' : n; };
+function piezasPorDefecto(lista) {
+  const guard = JSON.parse(localStorage.getItem('piezas') || 'null'); if (guard) return lista.filter(m => guard.includes(m.nombre));
+  const vistas = new Set(); return lista.filter(m => { const f = familia(m.nombre); if (vistas.has(f)) return false; vistas.add(f); return true; });
+}
+async function ponerJugador(id) {
+  if (!renderer) return; if (!PERS) return toast('Todavía estoy leyendo los .cpk del juego', true);
+  id = String(id || $('#jId').value).trim(); const cara = PERS.mapa[id]; if (!cara) return toast('No hay cara con id ' + id, true);
+  $('#jId').value = id; localStorage.setItem('jugador', id); vaciarEscena(); $('#cManiqui').checked = false; aplicarLuz();
+  clog('jugador ' + id + ': ' + cara); $('#jEstado').textContent = 'armando jugador ' + id + '…';
+  try {
+    const fc = await vis('/api/paquete_modelos?ruta=' + enc(cara));
+    for (const m of fc.modelos) { const n = m.nombre.toLowerCase(); if (n.startsWith('oral')) continue; if (n.includes('hair') && !$('#jPelo').checked) continue; await cargarModelo(m.ruta, true, true); }
+    if ($('#jCuerpo').checked && PERS.cuerpos.length) {
+      const cp = await vis('/api/paquete_modelos?ruta=' + enc(PERS.cuerpos[PERS.cuerpos.length - 1])); const elegidas = piezasPorDefecto(cp.modelos);
+      $('#jPiezas').innerHTML = cp.modelos.map(m => `<label class="chk"><input type="checkbox" data-pieza="${m.nombre}" ${elegidas.includes(m) ? 'checked' : ''}> ${m.nombre}</label>`).join('');
+      $$('#jPiezas [data-pieza]').forEach(c => c.onchange = () => { const sel = $$('#jPiezas [data-pieza]').filter(x => x.checked).map(x => x.dataset.pieza); localStorage.setItem('piezas', JSON.stringify(sel)); const M = modelos.find(M => M.ruta.endsWith('!' + c.dataset.pieza) || M.ruta.endsWith('/' + c.dataset.pieza)); if (M) { M.grupo.visible = c.checked; pintarArbol(); } else if (c.checked) { const m = cp.modelos.find(x => x.nombre === c.dataset.pieza); cargarModelo(m.ruta, true, true); } });
+      for (const m of elegidas) await cargarModelo(m.ruta, true, true);
+    }
+    const pel = PERS.extras.find(x => x.tipo === 'pelota'); if (pel) { await cargarModelo(pel.ruta, true, true); const P = modelos[modelos.length - 1]; const b = new THREE.Box3().setFromObject(P.grupo); const c = b.getCenter(new THREE.Vector3()); P.grupo.position.set(0.35 - c.x, -b.min.y, 0.25 - c.z); }
+    modeloSel = modelos[0] || null; pintarModelos(); pintarMallas(); pintarTexturas(); pintarHuesos(''); pintarArbol(); if (modelos[0]) elegir({ tipo: 'modelo', M: modelos[0] }); encuadrarJugador();
+    $('#jEstado').textContent = `jugador ${id} · ${modelos.length} modelos`; toast('Jugador ' + id + ' en la escena');
+  } catch (e) { toast('No se pudo armar el jugador: ' + e.message, true); clog('ERROR jugador ' + e.message); }
+}
+function encuadrarJugador() { const box = new THREE.Box3(); for (const M of modelos) if (!/ball/i.test(M.ruta)) box.expandByObject(M.grupo); if (box.isEmpty()) return encuadrar(); const c = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3()); controls.target.copy(c); camera.position.set(c.x + s.y * 0.55, c.y + s.y * 0.1, c.z + s.y * 2.3); camera.near = 0.01; camera.updateProjectionMatrix(); controls.update(); aplicarLuz(); }
+$('#jPoner').onclick = () => ponerJugador(); $('#jId').onkeydown = e => { if (e.key === 'Enter') ponerJugador(); };
+$('#jAzar').onclick = () => { if (PERS && PERS.caras.length) ponerJugador(PERS.caras[Math.floor(Math.random() * PERS.caras.length)][0]); };
+// texturas por material (color con alfa, normales, srm) buscadas en el mismo fpk / cpk o en todo el juego
+function texDe(ruta, canal, srgb) { const k = ruta + '|' + canal; if (texCache[k]) return texCache[k]; texCache[k] = new Promise((ok, no) => new THREE.TextureLoader().load(VISOR + '/api/png?ruta=' + enc(ruta) + '&canal=' + canal, t => { t.encoding = srgb ? THREE.sRGBEncoding : THREE.LinearEncoding; t.flipY = true; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 8; ok(t); }, undefined, no)); return texCache[k]; }
+async function texturasPorMaterial(M) {
+  if (!$('#jTex').checked) return 0; let n = 0; const busc = {};
+  const hallar = nombre => busc[nombre] || (busc[nombre] = vis('/api/textura?modelo=' + enc(M.ruta) + '&nombre=' + enc(nombre)).then(r => r.ruta).catch(() => null));
+  for (const mesh of M.mallas) {
+    const mat = M.datos.materiales[mesh.userData.malla.mat]; if (!mat || !mat.texturas) continue; const L = mesh.userData.matLit;
+    const pick = (re1, re2) => (mat.texturas.find(t => re1.test(t.slot)) || mat.texturas.find(t => re2.test(t.textura)) || {}).textura;
+    const col = pick(/base|albedo|diffuse|color/i, /_(bsm|alb|col|dif|bs)\b|_bsm/i), nrm = pick(/normal|nrm/i, /_nrm/i), srm = pick(/srm|specular|rough/i, /_srm/i);
+    const pelo = /hair|lash|brow|alp|alpha/i.test((mat.nombre || '') + (mat.tipo || '') + (col || ''));
+    try {
+      if (col) { const r = await hallar(col); if (r) { L.map = await texDe(r, pelo ? 'rgba' : 'rgb', true); L.color.set(0xffffff); if (pelo) { L.alphaTest = 0.35; L.transparent = false; } n++; } }
+      if (nrm) { const r = await hallar(nrm); if (r) { L.normalMap = await texDe(r, 'normal', false); n++; } }
+      if (srm) { const r = await hallar(srm); if (r) { L.roughnessMap = await texDe(r, 'rgb', false); L.roughness = 1; n++; } }
+      L.needsUpdate = true;
+    } catch (e) { }
+  }
+  if (n) { if (vista !== 'lit') aplicarVista(); clog(`${M.ruta.split(/[\\/!]/).pop()}: ${n} texturas`); }
+  return n;
+}
 
 // ---------------------------------------------------------------- texturas
 async function cargarTextura() {
@@ -976,7 +1082,9 @@ $('#hCalcular').onclick = async () => { try { const r = await vis('/api/hash?nom
 $('#hNombres').onkeydown = e => { if (e.key === 'Enter') $('#hCalcular').onclick(); };
 
 // ---------------------------------------------------------------- arranque
-modo(localStorage.getItem('modo') || 'simple'); initTres(); estado(); ir(localStorage.getItem('seccion') || 'inicio'); listar(localStorage.getItem('ruta') || '');
+function rellenoRangos() { for (const r of document.querySelectorAll('input[type=range]')) { const mn = +r.min || 0, mx = r.max === '' ? 100 : +r.max; const p = mx > mn ? (r.value - mn) / (mx - mn) * 100 : 0; const s = p.toFixed(1) + '%'; if (r.style.getPropertyValue('--p') !== s) r.style.setProperty('--p', s); } }
+document.addEventListener('input', e => { if (e.target.type === 'range') rellenoRangos(); }); setInterval(rellenoRangos, 300);
+modo(localStorage.getItem('modo') || 'simple'); initTres(); cargarPersonajes(); estado(); ir(localStorage.getItem('seccion') || 'inicio'); listar(localStorage.getItem('ruta') || '');
 </script>
 </body>
 </html>

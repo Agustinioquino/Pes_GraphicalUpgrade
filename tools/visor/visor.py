@@ -53,13 +53,19 @@ def abrir_cpk(path):
         CPK_CACHE[norm(path)] = (f, files, by)
         return CPK_CACHE[norm(path)]
 
+PAQ = ('.cpk', '.fpk', '.fpkd')
+def arch_de(ruta):
+    """el paquete de una ruta virtual: 'a.cpk!x/face.fpk' es un paquete entero; 'a.cpk!x/y' esta dentro de a.cpk"""
+    if '!' not in ruta or ruta.lower().endswith(PAQ): return ruta
+    return ruta[:ruta.rfind('!')]
+
 def resolver(ruta):
     """ruta del disco o 'archivo!entrada' -> ruta real de un archivo del disco (extrae a la cache si hace falta)"""
     if '!' not in ruta:
         if not dentro(ruta): raise Err(403, 'fuera de las carpetas permitidas: ' + ruta)
         if not os.path.isfile(ruta): raise Err(404, 'no existe: ' + ruta)
         return ruta
-    arch, entrada = ruta.split('!', 1)
+    arch, entrada = ruta[:ruta.rfind('!')], ruta[ruta.rfind('!') + 1:]
     arch = resolver(arch)
     entrada = entrada.replace('\\', '/').strip('/')
     if '..' in entrada.split('/'): raise Err(400, 'entrada invalida')
@@ -139,7 +145,7 @@ def tipo_de(n):
 
 def api_ls_archivo(ruta):
     """lista el contenido de un cpk / fpk como arbol virtual (un nivel por pedido)"""
-    arch, sub = (ruta.split('!', 1) + [''])[:2]
+    arch = arch_de(ruta); sub = ruta[len(arch) + 1:]
     sub = sub.replace('\\', '/').strip('/')
     arch_real = resolver(arch)
     low = arch_real.lower()
@@ -165,13 +171,115 @@ def api_ls_archivo(ruta):
             'archivos': sorted(archivos, key=lambda a: a['nombre'].lower())}
 
 def api_buscar(ruta, patron, limite=500):
-    arch_real = resolver(ruta.split('!')[0]); pat = patron.lower()
+    arch = arch_de(ruta); arch_real = resolver(arch); pat = patron.lower()
     if arch_real.lower().endswith('.cpk'):
         f, files, by = abrir_cpk(arch_real); src = [(e[0], e[3] or e[2]) for e in files]
     else:
         fp = fpk_edit.read(open(arch_real, 'rb').read()); src = [(n, len(b)) for n, b, _ in fp['ents']]
-    out = [{'nombre': n.rsplit('/', 1)[-1], 'ruta': ruta.split('!')[0] + '!' + n, 'tam': s, 'tipo': tipo_de(n)} for n, s in src if pat in n.lower()]
+    out = [{'nombre': n.rsplit('/', 1)[-1], 'ruta': arch + '!' + n.replace('\\', '/').strip('/'), 'tam': s, 'tipo': tipo_de(n)} for n, s in src if pat in n.lower()]
     return {'n': len(out), 'archivos': out[:limite]}
+
+import re
+INDICE = {'estado': 'sin armar', 'hechos': 0, 'total': 0}
+RE_CARA = re.compile(r'model/character/face/real/(\d+)/face\.fpk$', re.I)
+
+def _entradas_paquete(path):
+    if path.lower().endswith('.cpk'):
+        f, files, by = abrir_cpk(path); return [e[0] for e in files]
+    return []
+
+def armar_indice():
+    """recorre la carpeta del juego (y las --raiz): .cpk (solo su tabla) y archivos sueltos (livecpk de Sider).
+    Cache en <trabajo>/cache/indice.json (se rehace si cambia algun cpk). Lo suelto pisa a los cpk, como en el juego."""
+    try:
+        INDICE['estado'] = 'buscando paquetes'
+        cpks, sueltos = [], []
+        for raiz in [ARGS.juego] + ARGS.raiz:
+            for d, ds, fs in os.walk(raiz):
+                if norm(d).startswith(norm(ARGS.trabajo)): ds[:] = []; continue
+                for n in fs:
+                    p = os.path.join(d, n); low = n.lower()
+                    if low.endswith('.cpk'): cpks.append(p)
+                    elif low.endswith(('.fpk', '.fmdl', '.ftex', '.dds')):
+                        sueltos.append(p.replace('\\', '/'))
+        cpks.sort(key=lambda p: os.path.basename(p).lower())
+        firma = [[p, os.path.getsize(p), int(os.path.getmtime(p))] for p in cpks]
+        cache = os.path.join(ARGS.trabajo, 'cache', 'indice.json')
+        tabla = None
+        try:
+            c = json.load(open(cache, encoding='utf-8'))
+            if c.get('firma') == firma: tabla = c['tabla']
+        except Exception: pass
+        if tabla is None:
+            tabla = {}; INDICE['total'] = len(cpks)
+            for i, p in enumerate(cpks):
+                INDICE['estado'] = 'leyendo ' + os.path.basename(p); INDICE['hechos'] = i
+                try:
+                    tabla[p] = [n for n in _entradas_paquete(p) if n.lower().endswith(('.fpk', '.fmdl', '.ftex', '.dds'))]
+                except Exception as e:
+                    print('indice: no se pudo leer', p, e)
+            try: json.dump({'firma': firma, 'tabla': tabla}, open(cache, 'w', encoding='utf-8'))
+            except Exception as e: print('indice: no se pudo guardar', e)
+        caras, cuerpos, extras, texturas = {}, [], [], {}
+        def anotar(ruta, nombre):
+            low = nombre.lower().replace('\\', '/')
+            m = RE_CARA.search(low)
+            if m: caras[m.group(1)] = ruta; return
+            if low.endswith('common_package.fpk') and 'model/character' in low: cuerpos.append(ruta); return
+            if low.endswith(('.ftex', '.dds')):
+                texturas.setdefault(low.rsplit('/', 1)[-1], []).append(ruta); return
+            if low.endswith('.fmdl') and ('model/character/' in low or 'model/ball' in low):
+                tipo = 'pelota' if 'model/ball' in low else 'uniforme' if '/uniform/' in low else 'botines' if '/boots/' in low else \
+                       'guantes' if '/glove' in low else 'cuerpo' if '/body/' in low else 'otro'
+                if '/face/' not in low: extras.append({'ruta': ruta, 'nombre': low.rsplit('/', 1)[-1], 'tipo': tipo})
+        for p, ns in tabla.items():
+            for n in ns: anotar(p + '!' + n.replace('\\', '/').strip('/'), n)
+        for p in sueltos: anotar(p, p)   # despues: lo suelto pisa
+        INDICE.update({'estado': 'listo', 'caras': caras, 'cuerpos': cuerpos, 'extras': extras[:20000], 'texturas': texturas,
+                       'hechos': INDICE.get('total', 0)})
+        print('indice: %d caras, %d cuerpos, %d modelos sueltos, %d nombres de textura' % (len(caras), len(cuerpos), len(extras), len(texturas)))
+    except Exception as e:
+        import traceback; traceback.print_exc(); INDICE['estado'] = 'error: %s' % e
+
+def api_personajes():
+    if INDICE['estado'] != 'listo':
+        return {'estado': INDICE['estado'], 'hechos': INDICE.get('hechos', 0), 'total': INDICE.get('total', 0)}
+    return {'estado': 'listo', 'caras': sorted(INDICE['caras'].items(), key=lambda x: int(x[0])), 'cuerpos': INDICE['cuerpos'],
+            'extras': INDICE['extras']}
+
+def api_paquete_modelos(ruta):
+    """los .fmdl dentro de un fpk (face.fpk, common_package.fpk)"""
+    real = resolver(ruta)
+    fp = fpk_edit.read(open(real, 'rb').read())
+    out = [{'nombre': n.replace('\\', '/').rsplit('/', 1)[-1], 'ruta': ruta + '!' + n.replace('\\', '/').strip('/'), 'tam': len(b)}
+           for n, b, _ in fp['ents'] if n.lower().endswith('.fmdl')]
+    return {'ruta': ruta, 'modelos': out}
+
+def api_textura(modelo, nombre):
+    """busca la textura que pide un fmdl: primero junto al modelo (mismo fpk / cpk), despues en todo el indice por nombre.
+    Si hay varias, gana la que comparte mas carpeta con el modelo."""
+    base = nombre.replace('\\', '/').rsplit('/', 1)[-1].lower()
+    if not base: raise Err(400, 'sin nombre')
+    stem = base.rsplit('.', 1)[0]
+    cands = []
+    for ext in ('.ftex', '.dds'):
+        cands += INDICE.get('texturas', {}).get(stem + ext, [])
+    paq = arch_de(modelo)
+    while paq.lower().endswith(PAQ):
+        try:
+            b = api_buscar(paq, stem, 50)['archivos']
+            cands += [a['ruta'] for a in b if a['nombre'].lower().rsplit('.', 1)[0] == stem and a['nombre'].lower().endswith(('.ftex', '.dds'))]
+        except Exception: pass
+        if '!' not in paq: break
+        paq = arch_de(paq[:paq.rfind('!')])
+    if not cands: raise Err(404, 'no encontrada: ' + base)
+    ref = modelo.replace('\\', '/').lower()
+    def comun(r):
+        r = r.replace('\\', '/').lower(); k = 0
+        while k < min(len(r), len(ref)) and r[k] == ref[k]: k += 1
+        return k
+    cands = list(dict.fromkeys(cands))
+    return {'ruta': max(cands, key=comun), 'candidatos': len(cands)}
 
 def b64(a, dtype):
     return base64.b64encode(np.ascontiguousarray(a.astype(dtype)).tobytes()).decode('ascii')
@@ -256,6 +364,8 @@ def ftex_a_png(real, mip=0, canal='rgb'):
         ch = img.getchannel({'r': 'R', 'g': 'G', 'b': 'B', 'a': 'A'}[canal]); img = Image.merge('RGB', (ch, ch, ch))
     elif canal == 'rgb':
         img = img.convert('RGB')
+    elif canal == 'rgba':   # color con alfa (pelo, pestanas)
+        pass
     elif canal == 'normal':   # mapa de normales con el verde al derecho y el azul reconstruido
         a = np.asarray(img).astype(np.float32) / 255.0
         x = a[:, :, 0] * 2 - 1; y = a[:, :, 1] * 2 - 1; z = np.sqrt(np.clip(1 - x * x - y * y, 0, 1))
@@ -370,6 +480,9 @@ class H(BaseHTTPRequestHandler):
             if p == '/api/ls': return self._send(200, api_ls(ruta))
             if p == '/api/buscar': return self._send(200, api_buscar(ruta, q.get('q', ''), int(q.get('n', 500))))
             if p == '/api/fmdl': return self._send(200, api_fmdl(ruta))
+            if p == '/api/personajes': return self._send(200, api_personajes())
+            if p == '/api/paquete_modelos': return self._send(200, api_paquete_modelos(ruta))
+            if p == '/api/textura': return self._send(200, api_textura(q.get('modelo', ''), q.get('nombre', '')))
             if p == '/api/ftex': return self._send(200, api_ftex_info(ruta))
             if p == '/api/png':
                 png, info = ftex_a_png(resolver(ruta), int(q.get('mip', 0)), q.get('canal', 'rgb'))
@@ -415,6 +528,7 @@ def main():
         print('--- visor.exe', time.strftime('%Y-%m-%d %H:%M:%S'), sys.argv[1:])
     ROOTS = [norm(ARGS.juego), norm(ARGS.trabajo), norm(os.path.dirname(TOOLS))] + [norm(r) for r in ARGS.raiz]
     srv = ThreadingHTTPServer(('127.0.0.1', ARGS.puerto), H)
+    threading.Thread(target=armar_indice, daemon=True).start()   # caras / cuerpos / texturas del juego
     url = 'http://127.0.0.1:%d/' % ARGS.puerto
     print('visor: %s   juego: %s   trabajo: %s   panel en vivo: http://127.0.0.1:%d/' % (url, ARGS.juego, ARGS.trabajo, ARGS.panel))
     if ARGS.sin_ventana:
