@@ -32,10 +32,25 @@ uint PesSlotBone(uint j) { uint v = g_pesExprSlots[j >> 4][(j >> 2) & 3]; return
 // diferencia que la DLL quiere para ese hueso (t115, por personaje), pesada como el skinning: es exactamente lo que daba escribir el hueso
 // en el esqueleto, pero el juego ya no puede reescribirlo a medias. Tambien en el cuadro anterior (vectores de movimiento) y en
 // normal / tangente. Sin tabla (DLL vieja o expr_paleta = 0) no hace nada.
-void PesBoneDeltaApply(float4 p, uint4 I, float4 W, float3 n, float3 t, inout float3 pos, inout float3 prev, inout float3 nrm, inout float3 tng)
+Buffer<float> g_pesTessSeam : register(t119);   // (abajo) peso de borde por vertice de la teselacion: 0 = borde de la pieza
+// (08/11 g, Agustin: "sin romper las uniones", "arregla los problemas de union") la cara HD viene en piezas (1379 / 704 / 353 vertices)
+// y cada pieza empareja la paleta por su cuenta: si un hueso entra en una pieza y no en la vecina, la diferencia abre una grieta en el
+// borde. En los vertices que la DLL marco como borde de la pieza (t119 = 0) la diferencia no se aplica: el borde queda donde lo deja el
+// juego en las dos piezas y el gesto entra desde el vertice siguiente. Sin buffer de borde (barba, boca, piezas finas) no cambia nada
+float PesBoneDeltaEdge(uint vid)
+{
+  uint n = 0; g_pesTessSeam.GetDimensions(n);
+  if (n == 0 || vid < g_pesExprShape.z) return 1.0;
+  uint lv = vid - g_pesExprShape.z;
+  if (lv >= g_pesExprShape.y) return 1.0;   // vertice nuevo de la malla HD: su borde lo decide PesTessSeam al teselar
+  if (lv >= n) return 1.0;
+  return g_pesTessSeam[lv] < 0.5 ? 0.0 : 1.0;
+}
+void PesBoneDeltaApply(float4 p, uint4 I, float4 W, float3 n, float3 t, inout float3 pos, inout float3 prev, inout float3 nrm, inout float3 tng, uint vid)
 {
   uint head = g_pesExprMesh.x;
   if (head > 31 || g_pesBoneD[0].x < 0.5) return;
+  float edge = PesBoneDeltaEdge(vid); if (edge <= 0.0) return;
   if (g_pesExprSlots[0].x == 0xFFFFFFFFu && g_pesExprSlots[0].y == 0xFFFFFFFFu && g_pesExprSlots[1].x == 0xFFFFFFFFu && g_pesExprSlots[1].y == 0xFFFFFFFFu) return;   // sin emparejar todavia
   float3 hw = mul(float4(g_pesBoneD[1].xyz, 1.0), g_vsBone.m_boneMatrices[head]);
   int ci = PesBoneChar(hw);
@@ -64,7 +79,6 @@ Buffer<float4> g_pesShapes : register(t118);
 // (04/11) TESELACION DE LA CARA (pes_face_tess.hlsli, facetess.cpp): peso de borde por vertice que calcula la DLL (t119, solo en los
 // dibujos de piel de la cara que se teselan): 0 = vertice en el borde de la pieza o duplicado (costura), 1 = interior. El VS lo
 // saca en TEXCOORD12.w; sin buffer enlazado vale 0 (nada se mueve).
-Buffer<float> g_pesTessSeam : register(t119);
 // (08/11 p, Agustin: "una subdivision suave de la cara de messi") CARA CON MAS POLIGONOS (caramalla.cpp): la DLL dibuja la malla
 // subdividida en lugar de la del juego; los vertices viejos quedan con su mismo indice y los nuevos van despues (lv >= vertices de la
 // malla original). Cada vertice nuevo trae en t114 sus dos vertices de origen (los extremos de la arista que lo creo, locales):

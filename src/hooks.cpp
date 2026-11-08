@@ -1225,8 +1225,12 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
             if (seam && t_drawKind == 1 && Ctx(c).ps && Ctx(c).ps->hash != 0x63fab7735eee149cULL) {
                 ID3D11ShaderResourceView* prm = nullptr; c->VSGetShaderResources(120, 1, &prm);
                 if (!prm) FaceTessNote(1);
-                if (prm) { if (FaceTessBegin(c, hash, seam, prm, d.tess, d.faceId)) { Remember(c, d, false, true, 119); c->VSSetShaderResources(119, 1, &seam);
+                bool tessOn = false;
+                if (prm) { if (FaceTessBegin(c, hash, seam, prm, d.tess, d.faceId)) { tessOn = true; Remember(c, d, false, true, 119); c->VSSetShaderResources(119, 1, &seam);
                     d.tess.cnt = t_drawVerts; d.tess.start = t_drawStart; d.tess.base = t_drawBase; } prm->Release(); }
+                // (08/11 g) sin teselar tambien: el VS lee el peso de borde (t119) para no aplicar los gestos de la paleta en el borde de la
+                // pieza (pes_expr.hlsli PesBoneDeltaEdge: las uniones entre piezas de la cara no se abren)
+                if (!tessOn) { Remember(c, d, false, true, 119); c->VSSetShaderResources(119, 1, &seam); }
             }
             if (hc && FreeCamWantsHead()) ExprCaptureHead(c, hc, hd);   // (1/11) camara libre "seguir la cara": matriz de sk_head de este dibujo
             break; }
