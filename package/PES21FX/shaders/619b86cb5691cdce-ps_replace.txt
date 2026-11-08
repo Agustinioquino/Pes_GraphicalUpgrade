@@ -144,6 +144,45 @@ void main(
     }
   }
   r3.w = inShadow.Sample(g_samplerPoint_Clamp_s, r0.xy).x;
+  // (08/11, Agustin: "revisa como sombrea el juego original tambien para mejorarlo") SOMBRA DE CONTACTO (w384).
+  // El juego resuelve la sombra del sol en una textura de pantalla (t14) a partir de su shadow map de 3 cascadas: la cascada
+  // de cerca cubre varios metros, asi que un pixel del mapa mide centimetros y, con el margen que hace falta para que una
+  // superficie no se sombree a si misma, lo chico y pegado NO proyecta sombra: la nariz y el labio de arriba no sombrean la
+  // cara, la ceja no sombrea el parpado, los dedos no se sombrean entre si, el pelo no apoya sobre la frente y el pie queda
+  // despegado del pasto ("peter-panning"). Aca se traza, en el propio buffer de profundidad, un rayo corto hacia el sol
+  // (w384 cm): si en ese tramo hay algo delante, el pixel entra en sombra. Se MULTIPLICA a la sombra del juego (1 = al sol),
+  // asi que solo puede agregar sombra, nunca quitarla, y solo de cerca (menos de 15 m), que es donde se ve
+  { float4 CSn = IniParams.Load(int2(384, 0));
+    float3 LdC = pLc_dir.xyz;
+    if (cmpOn && CSn.w > 0.001 && dot(LdC, LdC) > 1e-6 && r3.w > 0.01) {
+      float zcC = PESLinZ(uvC);
+      if (zcC > 0.05 && zcC < 15.0) {
+        LdC = normalize(LdC);
+        float3 NcC = PESDecN(uvC); NcC.z = -NcC.z;
+        float ndC = dot(NcC, LdC);
+        if (ndC > 0.02) {                                     // lo que mira lejos del sol ya esta en sombra por N.L
+          float2 sCc = uvC * float2(2, -2) + float2(-1, 1);
+          float3 PvC = float3((sCc - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zcC, zcC);
+          float lenC = clamp(CSn.w * 0.01, 0.01, 1.0);
+          float hitC = 0.0;
+          [unroll] for (int ci = 0; ci < 8; ci++) {
+            float tC = (ci + 0.6) / 8.0; tC = tC * tC;         // mas muestras cerca del pixel
+            float3 Q = PvC + LdC * (tC * lenC);
+            if (Q.z < 0.06) break;
+            float2 sQ = Q.xy / (g_psScene.m_projectionParam.xy * Q.z) + g_psScene.m_cameraCenterOffset.xy;
+            float2 uvQ = (sQ + float2(1, -1)) * float2(0.5, -0.5);
+            if (any(uvQ < 0.0) || any(uvQ > 1.0)) break;
+            float zQ = PESLinZ(uvQ);
+            if (zQ < 0.05 || zQ > 300.0) continue;
+            float dQ = Q.z - zQ;                               // > 0 = hay algo delante del rayo
+            float biasC = 0.0015 + 0.004 * zcC * tC + 0.01 * tC * lenC * saturate(1.0 - ndC);
+            float thickC = 0.06 + 0.5 * lenC;                  // mas alla de eso es otra superficie, no lo que tapa
+            if (dQ > biasC && dQ < thickC) hitC = max(hitC, 1.0 - tC * 0.35);   // lo mas pegado tapa mas
+          }
+          r3.w *= 1.0 - hitC * saturate((15.0 - zcC) / 5.0);
+        }
+      }
+    } }
   if (r5.w != 0) {
     r4.z = r0.z * r0.z;
     r4.z = rsqrt(r4.z);
