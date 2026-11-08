@@ -355,6 +355,8 @@ struct Skel {
     int btw = -1; float btwT0 = 0.0f, btwNext = -1.0f; int btwN = 0;
     float spP[3] = {}; float spT = -1.0f, speed = 0.0f, stillT = 0.0f; bool spHave = false;
     float sl[16] = {}; bool slHave = false; float slT = -1.0f;   // (08/11) sliders de gestos suavizados (w395 Transicion)
+    GaniPose gB = {}; bool gBHave = false; float gBT = -1.0f;                         // (08/11) clip .gani mezclado (y397: entrada / salida / cruce entre clips)
+    float gsL[kND][3] = {}; bool gsHave[kND] = {}; float gsDeg = 0.0f; bool gsDegHave = false; float gsT = -1.0f;   // (08/11) gestos del juego suavizados (x397), ejes de la cabeza
     int tkPhrase = -1; float tkT0 = 0.0f, tkDur = 0.0f, tkPause = 0.0f, tkCh[7] = {}, tkT = -1.0f; unsigned tkN = 0; int tkLast = -1;   // (08/11) hablar por palabras: frase en curso, canales suavizados
     float effort = 0.0f, brPh = 0.0f, anT = -1.0f;                 // (08/11) esfuerzo por velocidad (sube ~1 s, baja ~4 s), fase de la respiracion
    // (08/11) velocidad del jugador (cabeza en el mundo, m/s) y cuanto lleva quieto
@@ -1383,6 +1385,31 @@ static void FrameBody(const void* skel) {
             bool done = false; ganiOn = GaniSample(gc, (gt - S->ganiT0) * gSp, gLoop, GP, &done);
         } else S->ganiClip = 0;
     }
+    // (08/11, Agustin: "transiciones en los gani se puede?") el clip no entra ni sale de golpe ni salta al cambiar de clip o al dar la
+    // vuelta el bucle: la pose del clip (ya pesada por y383) se mezcla cuadro a cuadro con la anterior, constante y397 s (0.15; 0 = de golpe).
+    // Mientras queda resto de la mezcla el clip sigue mandando (los gestos propios esperan a que termine de salir)
+    {
+        const float tau = std::clamp(g_cfg.live[397][1], 0.0f, 2.0f);
+        const float gt2 = AnimT(); const float dtb = S->gBT < 0.0f || gt2 < S->gBT ? 1.0f : (std::min)(gt2 - S->gBT, 0.25f); S->gBT = gt2;
+        const float k = (!S->gBHave || tau < 0.001f) ? 1.0f : 1.0f - expf(-dtb / tau);
+        bool any = false;
+        for (int b = 0; b < 31; b++) {
+            float tq[4] = { 0, 0, 0, 1 }, tp[3] = { 0, 0, 0 };
+            if (ganiOn && GP.has[b]) { QScale(GP.q[b], gW, tq); for (int c = 0; c < 3; c++) tp[c] = GP.p[b][c] * gW; }
+            float* bq = S->gB.q[b]; float* bp = S->gB.p[b];
+            if (!S->gBHave) { memcpy(bq, tq, sizeof tq); memcpy(bp, tp, sizeof tp); }
+            else {
+                if (bq[0] * tq[0] + bq[1] * tq[1] + bq[2] * tq[2] + bq[3] * tq[3] < 0.0f) for (float& v : tq) v = -v;
+                float l2 = 0.0f; for (int c = 0; c < 4; c++) { bq[c] += (tq[c] - bq[c]) * k; l2 += bq[c] * bq[c]; }
+                const float il = l2 > 1e-12f ? 1.0f / sqrtf(l2) : 1.0f; for (int c = 0; c < 4; c++) bq[c] *= il;
+                for (int c = 0; c < 3; c++) bp[c] += (tp[c] - bp[c]) * k;
+            }
+            const bool live = fabsf(bp[0]) + fabsf(bp[1]) + fabsf(bp[2]) > 2e-4f || bq[3] < 0.9999995f;   // 0.002 mm / ~0.1 grado
+            S->gB.has[b] = live || (ganiOn && GP.has[b]); if (live) any = true;
+        }
+        S->gB.frames = ganiOn ? GP.frames : 1; S->gBHave = true;
+        if (tau >= 0.001f) { ganiOn = any; if (any) { GP = S->gB; gW = 1.0f; } }
+    }
     if (ganiOn) poseOn = true;
     s_ganiSecOn = false; s_ganiLidOn = false;
     if (ganiOn) {
@@ -1570,6 +1597,17 @@ static void FrameBody(const void* skel) {
         if (bite < 0.0f) A += 0.045f * -bite;
         else if (bite > 0.0f) A -= (std::min)(0.045f * bite, (std::max)(0.0f, deg / 57.29578f + (std::max)(A, 0.0f)));
     }
+    // (08/11, Agustin: "los gani del juego tambien?") SUAVIZADO DE LOS GESTOS DEL JUEGO (x397): los clips del juego los mezcla el
+    // juego (claves a 30 cuadros, cambios de clip de golpe); la DLL no puede cambiar esa mezcla, pero si seguir la pose del juego
+    // con un retraso corto (0.10 s x x397) en los ejes de la cabeza y sumar la diferencia como gesto del mod: los saltos entre
+    // claves y entre clips se redondean sin que la cara se quede atras cuando la cabeza gira. Mandibula: el angulo del juego suavizado
+    float gsK = 0.0f; const float gsAmt = std::clamp(g_cfg.live[397][0], 0.0f, 3.0f);
+    if (gsAmt > 0.001f) {
+        const float dtg = S->gsT < 0.0f || tNow < S->gsT ? 1.0f : (std::min)(tNow - S->gsT, 0.25f); S->gsT = tNow;
+        gsK = 1.0f - expf(-dtg / (0.10f * gsAmt));
+        if (!S->gsDegHave) { S->gsDeg = deg; S->gsDegHave = true; } else S->gsDeg += (deg - S->gsDeg) * gsK;
+        A += (S->gsDeg - deg) / 57.29578f;
+    } else { S->gsDegHave = false; for (bool& h : S->gsHave) h = false; }
     if (A > 0.0f) A = (std::min)(A, (std::max)(0.0f, (35.0f - deg) / 57.29578f));    // (02/11, Agustin: "esta al reves") con el signo negativo la boca se cerraba al subir el slider: en el cuaternion del motor el menton baja con el angulo positivo
     for (int d = 0; d < kND; d++) {
         if (!S->cur[d]) continue;
@@ -1669,10 +1707,19 @@ static void FrameBody(const void* skel) {
             float qh[4], qs[4]; GaniQToHead(GP.q[ab], qh); QScale(qh, gW, qs);
             if (qs[3] < 0.999999f) { float r1[4]; QMul(hr, qs, r1); QMul(r1, hrInv, gq); grot = true; }
         } }
+        Xf x; bool xOk = false;
+        if (gsK > 0.0f && d != D_JAW && (d < 18 || (d >= 26 && d <= 30))) {   // (08/11) x397: la posicion del juego de este hueso, suavizada
+            xOk = Base(*S, d, x);
+            if (xOk) {
+                const float v[3] = { x.t[0] - hc.t[0], x.t[1] - hc.t[1], x.t[2] - hc.t[2] }; float L[3]; QRot(hrInv, v, L);
+                if (!S->gsHave[d]) { memcpy(S->gsL[d], L, sizeof L); S->gsHave[d] = true; }
+                else for (int k = 0; k < 3; k++) { S->gsL[d][k] += (L[k] - S->gsL[d][k]) * gsK; const float e = S->gsL[d][k] - L[k]; po[k] += fabsf(e) < 0.02f ? e : 0.0f; }   // > 2 cm = cambio de cara / jugador: no se suma
+            }
+        }
         const float mvv0[3] = { tv[0] * teeth + ov[0] * op + po[0], tv[1] * teeth + ov[1] * op + po[1], tv[2] * teeth + ov[2] * op + po[2] };
         const bool rot = kDef[d].jaw > 0.0f && fabsf(A) > 1e-5f, mv = fabsf(mvv0[0]) + fabsf(mvv0[1]) + fabsf(mvv0[2]) > 1e-6f;
         if (!rot && !mv && !grot) { if ((d < 18 || (d >= 26 && d <= 30)) && S->wHave[d]) Release(*S, d); continue; }   // 18.. = gestos secundarios / parpados (otro dueno)
-        Xf x; if (!Base(*S, d, x)) continue;
+        if (!xOk && !Base(*S, d, x)) continue;
         float nq[4] = { x.q[0], x.q[1], x.q[2], x.q[3] }, nt[3] = { x.t[0], x.t[1], x.t[2] };
         if (rot) {
             const float h = 0.5f * A * kDef[d].jaw, sn = sinf(h);
