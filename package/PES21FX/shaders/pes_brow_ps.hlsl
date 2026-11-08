@@ -148,10 +148,13 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
     float3 sideS = normalize(cross(n, ax) + 1e-6);
     float a = i.tw.y * 1.25 * res;   // (08/11 v) a ~1 px el tubo es ruido de normales (centellea con el TAA): se aplana
     n = normalize(n * cos(a) + sideS * sin(a)); }
-  n = PesBrowAniso(n, i.tanV, normalize(i.viewV), t, (sJ - 0.5) * 0.16, res);
+  // (08/11 v) w382 > 0: PASADA PROPIA DEL PELO (pes_hairfwd_ps) hace el brillo, el contraluz y la sombra con la tangente. Aca queda
+  // solo la luz difusa: normal de la piel (sin doblar hacia el brillo), poco especular y sin la marca de pelo (no se suma dos veces)
+  bool fwd = IniParams.Load(int2(382, 0)).w > 0.001 && pesHairMisc.x > 0.5;
+  if (!fwd) n = PesBrowAniso(n, i.tanV, normalize(i.viewV), t, (sJ - 0.5) * 0.16, res);
   // (04/11) la luz pasa por el pelo: translucidez alta (la punta mas que la raiz) + marca de PELO 252/255 (o2.z, abajo) para
   // que las pasadas del sol le apliquen el contraluz del pelo (fila 339), como el pelo de la cabeza
-  float trans = lerp(0.18, 0.4, t);   // (04/11 o) menos luz atravesando: la ceja ya no brilla como pelo fino de la cabeza a contraluz   // (04/11 e) un poco mas de luz atravesando el pelo (la raiz tambien es fina)
+  float trans = fwd ? 0.1 : lerp(0.18, 0.4, t);   // (04/11 o) menos luz atravesando: la ceja ya no brilla como pelo fino de la cabeza a contraluz   // (04/11 e) un poco mas de luz atravesando el pelo (la raiz tambien es fina)
   float3 r1 = n; float r1w = trans;
   float4 r0;
   r0.x = r1w * 63 + 0.5;
@@ -176,7 +179,8 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   rc = rc * rough + 0.180851057; rc = rc * rough + 0.271276593; rc = rc * rough + 0.271276593;
   o2.x = rc * rough + 0.150000006;
   o2.y = 0.32 * lerp(0.65, 1.35, frac(sJ * 5.3)) * lerp(0.75, 1.0, t) * (pesHairMisc.x > 0.5 ? saturate(pesHairB.z) / 0.6 : 1.0);   // (07/11) brillo distinto por hebra (unas brillan mas), la raiz tapada brilla menos   // brillo del tipo de pelo (0.6 = natural)
-  o2.z = IniParams.Load(int2(339,0)).w > 0.5 ? 0.98823529 : 1.0;   // (04/11) pelo a contraluz; sin eso como antes (ni piel ni kit)
+  if (fwd) o2.y *= 0.25;
+  o2.z = (IniParams.Load(int2(339,0)).w > 0.5 && !fwd) ? 0.98823529 : 1.0;   // (04/11) pelo a contraluz; sin eso como antes (ni piel ni kit)
   o2.w = g_psMaterial.m_materials[0].x;
   o3.xy = g_psSystem.m_renderBuffer.xy * i.motion;
   o3.zw = 0;

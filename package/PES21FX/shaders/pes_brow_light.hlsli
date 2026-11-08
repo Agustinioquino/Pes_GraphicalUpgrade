@@ -1,3 +1,5 @@
+#ifndef PES_BROW_LIGHT_HLSLI
+#define PES_BROW_LIGHT_HLSLI
 // PES21 FX - (04/11 o, Agustin: "anda mas a fondo con la luz y las sombras, la luz a contraluz, con los giros de la luz del sol y de
 // la luz en general") direccion HACIA la luz que de verdad ilumina las hebras, en el espacio de la vista. Antes las hebras usaban
 // m_dominantLightDir del G-buffer, que (1) apunta hacia donde VA la luz, no hacia la luz (el brillo, la sombra de contacto y el
@@ -43,3 +45,5 @@ float3 PesBrowLightDir(float3 c0, float3 c1, float3 c2, float3 dom, float vz)
   float l2 = dot(L, L);
   return l2 > 0.25 ? L * rsqrt(l2) : float3(0, 0, 0);
 }
+
+#endif

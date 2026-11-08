@@ -111,6 +111,7 @@ struct GSOut {   // igual que la entrada de pes_brow_ps.hlsl
   float3 viewV : TEXCOORD4;
   float3 col2 : TEXCOORD5;
   float3 tanV : TEXCOORD6;     // (04/11 e) direccion de la hebra en la vista: brillo en banda (Kajiya-Kay) como el pelo de la cabeza
+  float3 posV : TEXCOORD7;     // (08/11 v) posicion en la vista: la pasada propia del pelo (pes_hairfwd, salida de flujo) la usa con el atlas
 };
 
 uint PesHash(uint v) { uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
@@ -462,6 +463,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
         o.motion = motion;
         o.viewV = V;
         o.tanV = tanR;
+        o.posV = p;
         outS.Append(o);
       }
     }
