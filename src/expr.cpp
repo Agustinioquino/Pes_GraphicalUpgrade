@@ -1355,7 +1355,7 @@ static int PoseFor(const ExprCharPose* ps, int n, const float* hw) {
 }
 constexpr int D_LID_TL_ = 22, D_LID_BR_ = 25, D_EYE_L_ = 31, D_EYE_R_ = 32;   // kDef de exprbones.cpp (parpados 22..25: arriba izq, arriba der, abajo izq, abajo der; ojos 31 / 32)
 struct SlotCap { ID3D11Buffer* st = nullptr; int id = 0, head = 0, maxIdx = 31; UINT frame = 0; int tries = 0; int lids[4] = { -1, -1, -1, -1 }; };
-std::mutex s_scmx; std::vector<SlotCap> s_scaps; int s_slotLogs = 0; std::atomic<int> s_slotOk{0}, s_slotFail{0};
+std::mutex s_scmx; std::vector<SlotCap> s_scaps; int s_slotLogs = 0; std::atomic<int> s_slotOk{0}, s_slotFail{0}, s_slotAmb{0};
 }
 static void SlotCapture(ID3D11DeviceContext* c, FaceMesh* m) {   // con s_mx tomado: copia la paleta entera (32 x float4x3) a lectura
     ID3D11DeviceContext1* c1 = nullptr;
@@ -1417,16 +1417,22 @@ static void SlotPresent(ID3D11DeviceContext* imm) {
                             if (j == L.head) continue;
                             Aff Mj, A; AffFromPalette(r + j * 12, Mj); AffMul(MhI, Mj, A);
                             int lidQ = -1; for (int q = 0; q < 4; q++) if (L.lids[q] == j) lidQ = q;
-                            float best = 1e9f, second = 1e9f; int bd = -1;
+                            float best = 1e9f, second = 1e9f; int bd = -1, sd2 = -1;
                             for (int d = 0; d < kExprBones; d++) {
                                 if (!kOk[d] || d == D_EYE_L_ || d == D_EYE_R_) continue;
                                 const bool isLid = d >= D_LID_TL_ && d <= D_LID_BR_;
                                 if (isLid != (lidQ >= 0)) continue;   // lugar de parpado <-> hueso de parpado
                                 if (isLid && d != D_LID_TL_ + (lidQ & 1) + 2 * (lidQ >> 1)) continue;   // lids = { arriba izq, arriba der, abajo izq, abajo der }
-                                const float e = AffDist(A, K[d]); if (e < best) { second = best; best = e; bd = d; } else if (e < second) second = e;
+                                const float e = AffDist(A, K[d]); if (e < best) { second = best; sd2 = bd; best = e; bd = d; } else if (e < second) { second = e; sd2 = d; }
                             }
                             const bool okLid = lidQ >= 0 && bd >= 0 && best < 0.25f;   // el parpado ya viene elegido por la geometria
-                            if (bd >= 0 && (okLid || (best < 0.25f && second > 2.0f * best))) { slot[j] = (uint8_t)bd; err[j] = best; }
+                            // (08/11 c, Agustin: "vibra cerca de la boca tambien": rayas en las comisuras) dos huesos con la misma pose (skf_lip_t_c /
+                            // skf_lip_volume, que el juego mueve juntos) dejaban el lugar SIN emparejar en unas mallas y emparejado en otras: la piel y
+                            // la boca 3D o la barba se movian distinto en la union. Si los dos candidatos son el mismo lugar para el juego (sus poses
+                            // coinciden), se toma el mejor igual
+                            const bool twin = sd2 >= 0 && kOk[sd2] && AffDist(K[bd], K[sd2]) < 0.06f;
+                            if (bd >= 0 && (okLid || (best < 0.25f && (second > 2.0f * best || twin)))) { slot[j] = (uint8_t)bd; err[j] = best; }
+                            else if (bd >= 0 && best < 0.25f) s_slotAmb++;
                         }
                         for (int j = 0; j < 32; j++) if (slot[j] != 255) for (int k = 0; k < 32; k++) if (k != j && slot[k] == slot[j] && err[k] <= err[j]) { slot[j] = 255; break; }
                         for (int j = 0; j < 32; j++) if (slot[j] != 255) { matched++; worst = (std::max)(worst, err[j]); }
@@ -1536,7 +1542,7 @@ static void DeltaUpload(ID3D11DeviceContext* imm) {
     D3D11_MAPPED_SUBRESOURCE mp;
     if (SUCCEEDED(imm->Map(s_bdBuf, 0, D3D11_MAP_WRITE_DISCARD, 0, &mp))) { memcpy(mp.pData, f.data(), f.size() * sizeof(float)); imm->Unmap(s_bdBuf, 0); s_bdAny = true; s_bdUploads++; s_bdCharsN = np; s_bdMoved = moved; }
     static UINT lastLog = 0;
-    if (s_frame - lastLog >= 1800 && s_slotLogs < 400) { lastLog = s_frame; Log("paleta: %d personajes publicados, %d huesos con gesto este cuadro, mallas emparejadas %d / sin emparejar %d, huesos recortados por el tope %d", np, moved, s_slotOk.load(), s_slotFail.load(), s_bdClamp.exchange(0)); }
+    if (s_frame - lastLog >= 1800 && s_slotLogs < 400) { lastLog = s_frame; Log("paleta: %d personajes publicados, %d huesos con gesto este cuadro, mallas emparejadas %d / sin emparejar %d, lugares dudosos %d, huesos recortados por el tope %d", np, moved, s_slotOk.load(), s_slotFail.load(), s_slotAmb.load(), s_bdClamp.exchange(0)); }
 }
 ID3D11ShaderResourceView* ExprBoneDeltaSrv() { return (g_cfg.optExprPalette && s_bdAny) ? s_bdSrv : nullptr; }
 
