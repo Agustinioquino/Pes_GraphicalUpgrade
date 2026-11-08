@@ -366,7 +366,9 @@ static void WriteDumpTo(EXCEPTION_POINTERS* ep, bool hang) {
     };
     copyAll();
     if (s_mdwd) {
-        HANDLE h = CreateFileW((dir + (hang ? L"congelado.dmp" : L"cierre.dmp")).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        // (08/11 e) GENERIC_READ tambien: dbghelp relee el archivo para escribir el directorio de streams; solo con escritura fallaba con
+            // 0x80070057 y quedaba un .dmp de 0.7 MB "sin informacion del sistema" (cierres 07:11 y 10:11)
+            HANDLE h = CreateFileW((dir + (hang ? L"congelado.dmp" : L"cierre.dmp")).c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (h != INVALID_HANDLE_VALUE) {
             // MiniDumpWithDataSegs 0x1 | WithFullMemory 0x2 | WithHandleData 0x4 | WithUnloadedModules 0x20 | WithIndirectlyReferencedMemory 0x40
             // | WithPrivateReadWriteMemory 0x200 | WithFullMemoryInfo 0x800 | WithThreadInfo 0x1000
@@ -382,6 +384,28 @@ static void WriteDumpTo(EXCEPTION_POINTERS* ep, bool hang) {
         } else if (g_log) fprintf(g_log, "    cierre.dmp: no se pudo crear (error %lu)\n", GetLastError());
     } else if (g_log) fprintf(g_log, "    cierre.dmp: dbghelp.dll no disponible\n");
     copyAll();
+}
+
+// ---------------------------------------------------------------- (08/11 e) placa de video reiniciada (TDR)
+// Los 3 congelamientos del 08/11 (04:54, 06:08, 07:25 PC) fueron DXGI_ERROR_DEVICE_HUNG: el driver de NVIDIA reinicio la placa
+// (evento nvlddmkm 153) y el juego quedo con la ultima imagen, sin poder recrear su dispositivo. En vez de dejarlo congelado se
+// anota la causa, se copian los registros y se avisa con un cuadro; al aceptar se cierra el juego. Una sola vez por sesion.
+static DWORD WINAPI DeviceLostThread(LPVOID p) {
+    const unsigned reason = (unsigned)(uintptr_t)p;
+    wchar_t msg[600];
+    swprintf(msg, 600, L"PES21 FX: la placa de video se reinici\u00f3 (TDR, c\u00f3digo 0x%08X).\n\nWindows le da a la placa unos 2 segundos por dibujo; se pas\u00f3 y el driver la reinici\u00f3. El juego perdi\u00f3 lo que ten\u00eda cargado en la placa y no puede seguir.\n\nLos registros quedaron en PES21FX\\cierres. Aceptar cierra el juego.", reason);
+    MessageBoxW(nullptr, msg, L"PES21 FX", MB_OK | MB_ICONERROR | MB_TOPMOST | MB_SETFOREGROUND);
+    if (g_log) { fprintf(g_log, "placa reiniciada: aviso aceptado, cerrando el juego\n"); fflush(g_log); }
+    TerminateProcess(GetCurrentProcess(), 0x887A0006u);
+    return 0;
+}
+void OnDeviceLost(unsigned reason) {
+    static std::atomic<int> once{0};
+    if (once++) return;
+    Log("PLACA DE VIDEO REINICIADA (TDR): dispositivo perdido, motivo 0x%08x (0x887A0006 = GPU colgada, 0x887A0005 = quitado, 0x887A0007 = reset). El juego no puede seguir; aviso en pantalla.", reason);
+    if (g_cfg.optCrashDump > 0 && !g_cfg.baseDir.empty()) WriteDumpTo(nullptr, true);
+    HANDLE t = CreateThread(nullptr, 0, DeviceLostThread, (LPVOID)(uintptr_t)reason, 0, nullptr);
+    if (t) CloseHandle(t);
 }
 
 static void WriteCrashDump(EXCEPTION_POINTERS* ep) {

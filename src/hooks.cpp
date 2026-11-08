@@ -207,6 +207,13 @@ static std::unordered_map<void*, void*> s_replToObj;         // 19/10: nuestro s
 static std::shared_mutex s_shMutex;
 static std::vector<IUnknown*> s_deferredRelease;
 static std::mutex s_releaseMutex;
+// (08/11 e) cierres en CCommandList::LUCDeferDeletion (siempre la entrada 6 de la tabla de listas del juego, en el editor): una lista
+// grabada por el juego guarda punteros a todo lo que se enlazo en ella (nuestros shaders, vistas, buffers) y les baja el uso al
+// liberarse. En el editor esas listas viven mucho (el visor no se vuelve a grabar cada cuadro), asi que soltar un recurso nuestro
+// "al cuadro siguiente" o "a los 240 cuadros" puede dejarle a la lista un puntero muerto. Todo lo nuestro se suelta a los 30 s.
+struct Aged { IUnknown* p; double t; };
+static std::vector<Aged> s_aged;
+void DeferRelease(IUnknown* p) { if (!p) return; std::lock_guard<std::mutex> lk(s_releaseMutex); s_aged.push_back({ p, Now() }); }
 
 std::vector<const ShaderEntry*> AllShaders() {
     std::shared_lock<std::shared_mutex> lk(s_shMutex);
@@ -805,7 +812,8 @@ template<int V> static HRESULT STDMETHODCALLTYPE hk_FinishCL(ID3D11DeviceContext
     if (FAILED(hr)) {   // (08/11) un FinishCommandList fallido dejaba el lock de la entrada del juego tomado (cuelgues del editor)
         static std::atomic<int> nf{0};
         if (nf++ < 20) { ID3D11Device* d = nullptr; c->GetDevice(&d); HRESULT rr = d ? d->GetDeviceRemovedReason() : S_OK; if (d) d->Release();
-            Log("FinishCommandList fallo: hr 0x%08x (contexto %p, dispositivo 0x%08x)", (unsigned)hr, (void*)c, (unsigned)rr); }
+            Log("FinishCommandList fallo: hr 0x%08x (contexto %p, dispositivo 0x%08x)", (unsigned)hr, (void*)c, (unsigned)rr);
+            if (FAILED(rr)) OnDeviceLost((unsigned)rr); }   // (08/11 e) placa reiniciada (TDR): aviso y cierre ordenado
     }
     if (SUCCEEDED(hr) && l && *l) BodyOnFinish(c, *l);
     GrassOnFinishCL(c, (SUCCEEDED(hr) && l) ? *l : nullptr);   // (26/10 d) pasto: la grabacion termino (siempre, aunque falle)
@@ -2011,8 +2019,12 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     if (first) { first = false; Log("primer Present (%d shaders propios activos)", g_replacedCount.load()); }
     {   // liberar shaders viejos de una recarga anterior
         std::lock_guard<std::mutex> lk(s_releaseMutex);
-        for (auto* p : s_deferredRelease) p->Release();
+        const double now = Now();
+        for (auto* p : s_deferredRelease) s_aged.push_back({ p, now });
         s_deferredRelease.clear();
+        size_t k = 0;
+        for (auto& a : s_aged) { if (now - a.t > 30.0) a.p->Release(); else s_aged[k++] = a; }
+        s_aged.resize(k);
     }
     DXGI_SWAP_CHAIN_DESC sd; sc->GetDesc(&sd);
     g_bbW = sd.BufferDesc.Width; g_bbH = sd.BufferDesc.Height;
@@ -2096,7 +2108,12 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     FisicoCapturePresent(s_frameTex);   // (26/10 c) paginas del menu Fisico
     MenuTestPresent(sc, s_frameTex);   // (08/11) prueba automatica v2: mide, fotografia y escribe PES21FX/diagnostico/<fecha>/ (OJO: nunca terminar un comentario // con barra invertida: continua la linea y se come la siguiente)
     { GpuZoneScope gz_(g_dev.imm, kGzOverlay); OverlayPresent(sc); }
-    return o_Present(sc, sync, flags);
+    HRESULT hrP = o_Present(sc, sync, flags);
+    if (hrP == DXGI_ERROR_DEVICE_REMOVED || hrP == DXGI_ERROR_DEVICE_RESET) {   // (08/11 e) placa reiniciada (TDR)
+        ID3D11Device* d = g_dev.dev; HRESULT rr = d ? d->GetDeviceRemovedReason() : hrP;
+        OnDeviceLost((unsigned)(FAILED(rr) ? rr : hrP));
+    }
+    return hrP;
 }
 void OverlayResize();
 static HRESULT STDMETHODCALLTYPE hk_Resize(IDXGISwapChain* sc, UINT n, UINT w, UINT h, DXGI_FORMAT f, UINT fl) {

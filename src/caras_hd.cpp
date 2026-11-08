@@ -352,7 +352,7 @@ void CarasHdPresent() {
     }
     // liberar lo soltado hace mas de 240 cuadros
     size_t k = 0;
-    for (auto& g : s_grave) { if (s_frame - g.first > 240) g.second->Release(); else s_grave[k++] = g; }
+    for (auto& g : s_grave) { if (s_frame - g.first > 240) DeferRelease(g.second); else s_grave[k++] = g; }   // (08/11 e) + 30 s (listas del editor)
     s_grave.resize(k);
     if (t > logNext) { logNext = t + 15.0;
         int n2 = 0, n4 = 0; for (auto& kv : s_faces) { if (kv.second.t2k[0].srv || kv.second.t2k[2].srv) n2++; if (kv.second.t4k[0].srv || kv.second.t4k[2].srv) n4++; }

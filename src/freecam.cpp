@@ -30,6 +30,9 @@
 namespace fx {
 
 static bool s_on = false;
+// (08/11 e) zoom minimo: los 3 congelamientos del 08/11 fueron reinicios de la placa (TDR, nvlddmkm 153) con la camara libre a
+// zoom 0.10-0.26 (campo de vision 0.02-0.09 rad): la cara llena la pantalla y la placa pasa los 2 s que Windows tolera.
+static const float kZoomMin = 0.15f;
 static float s_zoomTarget = 1.0f; static std::atomic<int> s_wheel{0};
 static float s_fovBase = 0.0f, s_fovWritten = -1.0f;   // fov del juego sin zoom / ultimo fov escrito
 // "seguir la cara" (x346). (1/11) v1: la camara orbitaba alrededor de la cabeza sacada de la matriz de sk_head del dibujo de la
@@ -95,12 +98,12 @@ static void TakeFromGame(const float* pos, const float* tgt) {
 // Devuelve false si la camara libre esta apagada (no toca nada).
 static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, const char* origen, const float* extra) {
     if (!FreeCamActive()) {
-        if (s_on) { s_on = false; s_follow = false; s_headSeen = false; s_lockNode = nullptr; Log("camara libre: apagada"); }
+        if (s_on) { s_on = false; s_follow = false; s_headSeen = false; s_lockNode = nullptr; g_cfg.live[345][3] = -1.0f; Log("camara libre: apagada"); }
         return false;
     }
     if (!s_on) {
         TakeFromGame(pos, tgt);
-        s_on = true; s_zoomTarget = std::clamp(g_cfg.live[344][2], 0.05f, 3.0f); s_wheel = 0; s_fovWritten = -1.0f;
+        s_on = true; s_zoomTarget = std::clamp(g_cfg.live[344][2], kZoomMin, 3.0f); s_wheel = 0; s_fovWritten = -1.0f;
         Log("camara libre: prendida (%s) en (%.2f, %.2f, %.2f) giro %.0f / %.0f grados; objetivo (%.2f, %.2f, %.2f), arriba (%.2f, %.2f, %.2f), proyeccion %d, campo de vision %.4f, cerca / lejos / aspecto %.3f / %.1f / %.3f",
             origen, pos[0], pos[1], pos[2], s_yaw * 57.2958f, s_pitch * 57.2958f, tgt[0], tgt[1], tgt[2], up[0], up[1], up[2], proj, *fov, extra[0], extra[1], extra[2]);
         s_logged = 0;
@@ -131,13 +134,13 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     {
         const int wheel = s_wheel.exchange(0);
         if (wheel != 0 && front) s_zoomTarget *= powf(0.92f, (float)wheel / 120.0f);   // cada muesca: 8 % mas cerca (o mas lejos)
-        s_zoomTarget = std::clamp(s_zoomTarget, 0.05f, 3.0f);
+        s_zoomTarget = std::clamp(s_zoomTarget, kZoomMin, 3.0f);
         float z = g_cfg.live[344][2];
         if (fabsf(z - s_zoomTarget) > 1e-4f) z += (s_zoomTarget - z) * std::clamp(6.0f * dt, 0.0f, 1.0f);   // ~1/6 s para llegar
         else { z = s_zoomTarget; }
         // si el usuario movio el slider del menu, el objetivo lo sigue
-        if (g_menuOpen.load()) s_zoomTarget = z = std::clamp(g_cfg.live[344][2], 0.05f, 3.0f);
-        g_cfg.live[344][2] = std::clamp(z, 0.05f, 3.0f);
+        if (g_menuOpen.load()) s_zoomTarget = z = std::clamp(g_cfg.live[344][2], kZoomMin, 3.0f);
+        g_cfg.live[344][2] = std::clamp(z, kZoomMin, 3.0f);
     }
     // mouse: gira con el boton derecho apretado (no mientras el menu del mod esta abierto: ahi el mouse es del menu)
     POINT m; GetCursorPos(&m);
@@ -168,9 +171,9 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
       R[0] = U[1] * F[2] - U[2] * F[1]; R[1] = U[2] * F[0] - U[0] * F[2]; R[2] = U[0] * F[1] - U[1] * F[0]; }
     const bool follow = haveHead || (wantFollow && s_headSeen && t - s_headT < 1.5);   // cortes cortos del dato: se queda donde esta
     // campo de vision que se va a ver (vertical, radianes): el del juego x zoom
-    float fovNow = (s_fovBase > 0.0f ? s_fovBase : (fov && *fov == *fov && *fov > 0.0f ? *fov : 0.8f)) * std::clamp(g_cfg.live[344][2], 0.05f, 3.0f);
+    float fovNow = (s_fovBase > 0.0f ? s_fovBase : (fov && *fov == *fov && *fov > 0.0f ? *fov : 0.8f)) * std::clamp(g_cfg.live[344][2], kZoomMin, 3.0f);
     if (fovNow > 3.2f) fovNow *= 0.0174533f;   // en grados (camara del partido)
-    fovNow = std::clamp(fovNow, 0.01f, 2.5f);
+    fovNow = std::clamp(fovNow, 0.10f, 2.5f);
     const float tanHalf = tanf(0.5f * fovNow);
     if (follow && (!s_follow || mode != s_followMode)) {   // entrar (o cambiar de modo)
         if (s_follow && s_followMode == 1) s_fixHalf = std::clamp(s_dist * tanHalf, 0.05f, 2.0f);
@@ -243,7 +246,7 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     up[0] = s_upOut[0]; up[1] = s_upOut[1]; up[2] = s_upOut[2];
     float fovApplied = -1.0f;
     if (proj == 0) {
-        const float z = std::clamp(g_cfg.live[344][2], 0.05f, 3.0f);
+        const float z = std::clamp(g_cfg.live[344][2], kZoomMin, 3.0f);
         // El visor del editor NO reescribe su CameraImpl cada cuadro (solo con entrada del pad): multiplicar en el lugar
         // acumulaba el zoom cuadro a cuadro (fov 0.364 -> 0.092 en el log de Agustin). Se guarda el fov base del juego y
         // se escribe base x zoom; si el valor que llega no es el que escribimos, es que el juego lo cambio: nuevo base.

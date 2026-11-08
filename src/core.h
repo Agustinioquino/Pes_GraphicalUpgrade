@@ -365,6 +365,9 @@ void GrassDistPresent();  // (26/10) busca el recorte de distancia del pasto 3D 
 // (23/10) camara del motor (camhook.cpp): cortes de camara del juego (CameraSystem 0x14198d3b0) y reinicios del TAA del juego
 int PresentNo();
 void StartHangWatch();   // (08/11 c) vigia de congelamientos (main.cpp)
+void OnDeviceLost(unsigned reason);   // (08/11 e) placa reiniciada (TDR): aviso y cierre ordenado (main.cpp)
+// (08/11 e) liberar un recurso nuestro que pudo quedar grabado en una lista diferida del juego: se suelta a los 30 s (hooks.cpp)
+void DeferRelease(IUnknown* p);
 void CamHookPresent();                            // ganchos (primer Present), 160 = cuadros desde el corte / cortes / TAA / ok
 // (31/10) camara libre (freecam.cpp): pisa el parametro de la camara del motor desde el gancho de camhook.cpp; 344 (ini) / 345 (DLL)
 void FreeCamApply(unsigned char* param);

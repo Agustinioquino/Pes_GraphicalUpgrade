@@ -77,8 +77,10 @@ void GlassReloadShaders() {
 
 static bool EnsureTargets(const D3D11_TEXTURE2D_DESC& rd) {
     if (s_snap && s_w == rd.Width && s_h == rd.Height && s_fmt == rd.Format) return true;
-    RelT(s_snapSRV); RelT(s_snap);
-    for (int i = 0; i < 5; i++) { RelT(s_lvSRV[i]); RelT(s_lvRTV[i]); RelT(s_lv[i]); }
+    // (08/11 e) las copias pudieron quedar enlazadas en una lista diferida del juego: se sueltan a los 30 s
+    auto drop = [](auto*& p) { if (p) { DeferRelease(p); p = nullptr; } };
+    drop(s_snapSRV); drop(s_snap);
+    for (int i = 0; i < 5; i++) { drop(s_lvSRV[i]); drop(s_lvRTV[i]); drop(s_lv[i]); }
     s_haveSnap = false;
     D3D11_TEXTURE2D_DESC td{}; td.Width = rd.Width; td.Height = rd.Height; td.MipLevels = 1; td.ArraySize = 1; td.Format = rd.Format;
     td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
