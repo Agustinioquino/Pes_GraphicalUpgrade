@@ -413,7 +413,10 @@ void main(
   if (wrRelief <= 0.0) wrRelief = 1.0;
   // (08/11, Agustin: "la luz en las arrugas parece al reves") el relieve inclina la normal de la arruga (xy) y recalcula z; antes se
   // multiplicaba (x, y, z - 1) entero: con z365 alto z quedaba negativo y la normal se daba vuelta (surco iluminado como cresta)
-  { float3 wn = float3(r2.xy * wrRelief, max(1.0 + r2.z, 0.05)); wn = normalize(wn); r1.xyz = (wn - float3(0, 0, 1)) * r0.zzz + r1.xyz; }
+  // (08/11, Agustin: "como se plasma en barbas") se guarda lo que la arruga inclina la normal (gesto + esculpida) para sacarlo
+  // despues donde la textura pinta barba / bigote (fhMask, mas abajo): sobre pelo pintado el surco se veia como una raja a traves de la barba
+  float3 wrDN = (float3(r2.xy * wrRelief, max(1.0 + r2.z, 0.05)) / length(float3(r2.xy * wrRelief, max(1.0 + r2.z, 0.05))) - float3(0, 0, 1)) * r0.zzz;
+  r1.xyz += wrDN;
   r0.z = dot(r1.xyz, r1.xyz);
   r0.z = rsqrt(r0.z);
   r1.xyz = r1.xyz * r0.zzz;
@@ -426,7 +429,7 @@ void main(
       // (04/11 c) RG = arrugas de la sonrisa, BA = las de la sonrisa grande (messi6 de Agustin): de 1 a 1.5 pasa a las grandes
       float4 shT = pesShapeWr.Sample(g_samplerAnisotropic_Clamp_s, v2.xy);
       float2 shN = lerp(shT.xy, shT.zw, saturate((G5w.y - 1.0) * 2.0)) * 2.0 - 1.0;
-      r1.xy += shN * shW * wrRelief; r1.xyz = normalize(r1.xyz);
+      r1.xy += shN * shW * wrRelief; wrDN.xy += shN * shW * wrRelief; r1.xyz = normalize(r1.xyz);
       // (04/11 h, Agustin: "mas detalle de srm y trm en las expresiones asi como en el nrm") divergencia de la normal esculpida:
       // donde las normales miran hacia adentro hay surco, hacia afuera cresta. Lo usan brillo / rugosidad / translucidez mas abajo
       float sdx = 1.5 / shTw, sdy = 1.5 / shTh, sbl = saturate((G5w.y - 1.0) * 2.0);
@@ -583,6 +586,11 @@ void main(
   // brillo ni translucidez). Mip 3 (8x8 texeles, ~8 mm) = transicion suave; el resto de la quinta textura sigue fino.
   if (fgOk) fhMask = max(fhMask, saturate(pesFaceA.SampleBias(g_samplerLinear_Clamp_s, v2.xy, 3.0).a * 1.15) * saturate(P68.w));
   fhMask *= 1.0 - lipM;   // PES21 zonas: los labios no son barba
+  // (08/11) barba / bigote PINTADOS: las arrugas casi no se ven a traves del pelo: se quita el 75 % de la inclinacion de la normal
+  // que metieron las arrugas y se bajan igual los surcos / crestas (brillo, SSS, sombra del surco). Las barbas 3D (pes_beard) no
+  // pasan por aca: siguen la piel con el gesto por la DLL (pozo t116 + diferencia de huesos t115)
+  if (fhMask > 0.001) { float fhK = 1.0 - 0.75 * fhMask; r1.xyz = normalize(r1.xyz - wrDN * (1.0 - fhK));
+    wrFold *= fhK; wrFoldW *= fhK; wrRidgeF *= fhK; wrRidgeW *= fhK; shFold *= fhK; shFoldW *= fhK; shRidge *= fhK; }
   float poreAmt = 0;
   if (enhance) {
     // poros y microrrelieve de la piel (se apaga a distancia para no titilar)
