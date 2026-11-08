@@ -70,6 +70,7 @@ static bool UseCuts() { return g_cfg.live[161][0] > 0.5f; }
 static uintptr_t __fastcall hk_Cam(void* param, uintptr_t reset) {
     const unsigned char* b = (const unsigned char*)param;
     if (b) {
+        FreeCamApply((unsigned char*)param);   // (31/10) camara libre: pisa posicion / objetivo / arriba / campo de vision si esta prendida
         int f = PresentNo();
         bool cont = b[0x48] != 0, rs = (reset & 0xff) != 0;
         s_applies++;
@@ -223,6 +224,13 @@ void CamHookPresent() {
         g_cutUse[0].load(), g_cutUse[1].load(), g_cutUse[2].load(), UseCuts() ? "" : " (x161 = 0: no se usan)",
         pos[0], pos[1], pos[2], tgt[0], tgt[1], tgt[2], have ? "" : " (sin datos)");
     s_t = t; s_c0 = s_cuts.load(); s_a0 = s_aaResets.load(); s_ap0 = s_applies.load(); s_aac0 = s_aaCalls.load(); s_f0 = now; s_maxStreak = 0;
+}
+
+// (08/11) panel en vivo: ultima camara del CameraSystem
+bool CamHookLast(float* pos, float* tgt, int* id, int* frame) {
+    std::lock_guard<std::mutex> lk(s_camMx);
+    if (s_camFrame < 0) return false;
+    memcpy(pos, s_pos, 12); memcpy(tgt, s_tgt, 12); *id = s_camId; *frame = s_camFrame; return true;
 }
 
 } // namespace fx

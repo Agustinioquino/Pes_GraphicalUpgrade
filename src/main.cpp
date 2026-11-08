@@ -1,5 +1,8 @@
 // PES21 FX - punto de entrada. Sider llama a PES21FX_Init(carpeta) desde PES21FX.lua (LuaJIT FFI).
 #include "core.h"
+#include <algorithm>
+#include <vector>
+#include <cstddef>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -12,13 +15,47 @@ namespace fx {
 static FILE* g_log = nullptr;
 static std::mutex g_logMutex;
 
+// (27/10) registro del sol: archivo propio por partida (PES21FX\registro_sol\sol_AAAAMMDD_HHMMSS.txt) que el juego no pisa. Recibe
+// las lineas del sol y la luz del log ("luz del sol", "cielo:", "sol:", "luz:") y las de SunLog (estado por segundo, ajustes)
+static FILE* g_sunLog = nullptr; static bool g_sunLogTried = false;
+static FILE* SunLogFile() {
+    if (g_sunLog || g_sunLogTried || g_cfg.baseDir.empty()) return g_sunLog;
+    g_sunLogTried = true;
+    std::wstring d = g_cfg.baseDir + L"registro_sol\\"; CreateDirectoryW(d.c_str(), nullptr);
+    SYSTEMTIME st; GetLocalTime(&st); wchar_t n[64];
+    swprintf(n, 64, L"sol_%04d%02d%02d_%02d%02d%02d.txt", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    g_sunLog = _wfopen((d + n).c_str(), L"w");
+    if (g_sunLog) fputs(
+        "Registro del sol y la luz de PES21FX (un archivo por partida; el juego no lo borra).\n"
+        "Vectores (x, y, z) en el mundo: y = altura (altura en grados = arcoseno de y), x / z = plano de la cancha. Rumbos en grados.\n"
+        "estado: una linea por segundo con la luz del juego en mundo, el sol del archivo del cielo, la diferencia entre los dos (0-5 = coinciden),\n"
+        "        la camara, el color del sol (rgb e intensidad), la exposicion y las pasadas del sol que corrieron en ese cuadro.\n"
+        "ajuste: un valor del menu / ini que cambio (fila y componente, antes -> ahora). Al empezar se anotan los ajustes del sol y las sombras.\n"
+        "El resto son las lineas del sol del PES21FX.log, copiadas con la misma hora.\n\n", g_sunLog);
+    return g_sunLog;
+}
+static bool SunLine(const char* m) {
+    return !strncmp(m, "luz del sol", 11) || !strncmp(m, "cielo:", 6) || !strncmp(m, "sol:", 4) || !strncmp(m, "luz:", 4) || !strncmp(m, "  llena el cbuffer", 18);
+}
+static void WriteLine(FILE* f, const SYSTEMTIME& st, const char* m) {
+    fprintf(f, "[%02d:%02d:%02d.%03d] %s\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, m); fflush(f);
+}
+
 void Log(const char* fmt, ...) {
     std::lock_guard<std::mutex> lk(g_logMutex);
     if (!g_log) return;
     SYSTEMTIME st; GetLocalTime(&st);
-    fprintf(g_log, "[%02d:%02d:%02d.%03d] ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
-    va_list ap; va_start(ap, fmt); vfprintf(g_log, fmt, ap); va_end(ap);
-    fputc('\n', g_log); fflush(g_log);
+    char buf[8192]; va_list ap; va_start(ap, fmt); vsnprintf(buf, sizeof(buf), fmt, ap); va_end(ap);
+    WriteLine(g_log, st, buf);
+    if (SunLine(buf)) if (FILE* f = SunLogFile()) WriteLine(f, st, buf);
+}
+// solo al registro del sol
+void SunLog(const char* fmt, ...) {
+    std::lock_guard<std::mutex> lk(g_logMutex);
+    FILE* f = SunLogFile(); if (!f) return;
+    SYSTEMTIME st; GetLocalTime(&st);
+    char buf[8192]; va_list ap; va_start(ap, fmt); vsnprintf(buf, sizeof(buf), fmt, ap); va_end(ap);
+    WriteLine(f, st, buf);
 }
 
 // (26/10) para escribir bloques largos de una vez (memwatch.cpp): LogLock devuelve el archivo con el log tomado
@@ -94,6 +131,7 @@ static void LogCrash(EXCEPTION_POINTERS* ep, const char* kind) {
             }
         }
     }
+    if (!strcmp(kind, "CIERRE DEL JUEGO")) GpuMeterCrashInfo(g_log, ep);   // (07/11) ultimas destrucciones de recursos D3D11 (gpumeter.cpp)
     MemCrashInfo(g_log, ep);   // (26/10) mapa de memoria, quien la toco, dlmalloc y el final de sider.log (memwatch.cpp)
     fflush(g_log);
     if (locked) g_logMutex.unlock();
@@ -270,9 +308,86 @@ static void PinGameDlls() {
     }
 }
 
+// ---------------------------------------------------------------- (08/11) volcado propio del cierre
+// Agustin: "agrandar el log ... algo asi como un crash dump". Al cerrarse el juego queda en PES21FX\cierres\ una carpeta por
+// cierre (AAAAMMDD_HHMMSS) con: cierre.dmp (minidump con la memoria de datos del proceso, la de los hilos, los handles y los modulos
+// descargados: se abre con WinDbg o Visual Studio y deja ver el objeto liberado), PES21FX.log y sider.log copiados en ese momento
+// (al reabrir el juego se pisan) y el ini del momento. Se guardan los ultimos 8 cierres. [PES21FX] crash_dump = 0 lo apaga,
+// 1 = minidump con datos (unos cientos de MB), 2 = memoria completa (varios GB).
+// dbghelp se carga al arrancar (cargar una DLL dentro del cierre puede trabarse con el candado del cargador). El volcado lo escribe
+// otro hilo (MiniDumpWriteDump desde el hilo que se cae no ve bien su propia pila).
+using PFN_MDWD = BOOL(WINAPI*)(HANDLE, DWORD, HANDLE, int, const void*, const void*, const void*);
+static PFN_MDWD s_mdwd = nullptr;
+// (08/11 b) MINIDUMP_EXCEPTION_INFORMATION en dbghelp.h esta empaquetada a 4 bytes (pshpack4): ExceptionPointers va en +4, no en +8.
+// Con el alineado normal dbgcore leia basura como puntero y se caia dentro del volcado (cierre 08/11 21:43: 0 bytes, sin logs)
+#pragma pack(push, 4)
+struct FxMdExc { DWORD ThreadId; EXCEPTION_POINTERS* ExceptionPointers; BOOL ClientPointers; };
+#pragma pack(pop)
+static_assert(sizeof(FxMdExc) == 16 && offsetof(FxMdExc, ExceptionPointers) == 4, "MINIDUMP_EXCEPTION_INFORMATION");
+struct DumpJob { HANDLE file; FxMdExc exc; int type; BOOL ok; DWORD err; };
+static DWORD WINAPI DumpThread(LPVOID p) {
+    auto* j = (DumpJob*)p;
+    __try {
+        j->ok = s_mdwd(GetCurrentProcess(), GetCurrentProcessId(), j->file, j->type, &j->exc, nullptr, nullptr);
+        j->err = j->ok ? 0 : GetLastError();
+    } __except (EXCEPTION_EXECUTE_HANDLER) { j->ok = FALSE; j->err = 0xE0000000u | (GetExceptionCode() & 0xFFFFFF); }   // que el volcado nunca tire el cierre
+    return 0;
+}
+static void PruneCrashDirs(const std::wstring& root, int keep) {
+    std::vector<std::wstring> v; WIN32_FIND_DATAW fd;
+    HANDLE f = FindFirstFileW((root + L"2*").c_str(), &fd);
+    if (f == INVALID_HANDLE_VALUE) return;
+    do { if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) v.push_back(fd.cFileName); } while (FindNextFileW(f, &fd));
+    FindClose(f);
+    std::sort(v.begin(), v.end());
+    for (size_t i = 0; i + keep < v.size(); i++) {
+        std::wstring d = root + v[i] + L"\\";
+        HANDLE g = FindFirstFileW((d + L"*").c_str(), &fd);
+        if (g != INVALID_HANDLE_VALUE) { do { if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) DeleteFileW((d + fd.cFileName).c_str()); } while (FindNextFileW(g, &fd)); FindClose(g); }
+        RemoveDirectoryW(d.c_str());
+    }
+}
+static void WriteCrashDump(EXCEPTION_POINTERS* ep) {
+    static std::atomic<int> once{0};
+    if (once++ || g_cfg.optCrashDump <= 0 || g_cfg.baseDir.empty()) return;
+    std::wstring root = g_cfg.baseDir + L"cierres\\"; CreateDirectoryW(root.c_str(), nullptr);
+    PruneCrashDirs(root, 7);
+    SYSTEMTIME st; GetLocalTime(&st); wchar_t n[32];
+    swprintf(n, 32, L"%04d%02d%02d_%02d%02d%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    std::wstring dir = root + n + L"\\"; CreateDirectoryW(dir.c_str(), nullptr);
+    if (g_log) fprintf(g_log, "    volcado del cierre: PES21FX\\cierres\\%ls\\\n", n);
+    // primero los archivos de texto (si el volcado falla, quedan igual); al final se vuelve a copiar el log con las lineas del volcado
+    auto copyAll = [&]() {
+        if (g_log) fflush(g_log);
+        CopyFileW((g_cfg.baseDir + L"PES21FX.log").c_str(), (dir + L"PES21FX.log").c_str(), FALSE);
+        CopyFileW((g_cfg.baseDir + L"PES21FX.ini").c_str(), (dir + L"PES21FX.ini").c_str(), FALSE);
+        wchar_t exe[MAX_PATH]; GetModuleFileNameW(nullptr, exe, MAX_PATH);
+        std::wstring gdir = exe; gdir = gdir.substr(0, gdir.find_last_of(L"\\/") + 1);
+        CopyFileW((gdir + L"sider.log").c_str(), (dir + L"sider.log").c_str(), FALSE);
+    };
+    copyAll();
+    if (s_mdwd) {
+        HANDLE h = CreateFileW((dir + L"cierre.dmp").c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (h != INVALID_HANDLE_VALUE) {
+            // MiniDumpWithDataSegs 0x1 | WithFullMemory 0x2 | WithHandleData 0x4 | WithUnloadedModules 0x20 | WithIndirectlyReferencedMemory 0x40
+            // | WithPrivateReadWriteMemory 0x200 | WithFullMemoryInfo 0x800 | WithThreadInfo 0x1000
+            int type = 0x1 | 0x4 | 0x20 | 0x40 | 0x800 | 0x1000;
+            type |= g_cfg.optCrashDump >= 2 ? 0x2 : 0x200;
+            DumpJob j{ h, { GetCurrentThreadId(), ep, FALSE }, type, FALSE, 0 };
+            HANDLE t = CreateThread(nullptr, 0, DumpThread, &j, 0, nullptr);
+            if (t) { WaitForSingleObject(t, 120000); CloseHandle(t); } else DumpThread(&j);
+            LARGE_INTEGER sz{}; GetFileSizeEx(h, &sz); CloseHandle(h);
+            if (g_log) fprintf(g_log, "    cierre.dmp: %s (%.1f MB%s)\n", j.ok ? "escrito" : "FALLO", sz.QuadPart / 1048576.0, j.ok ? "" : ", ver error");
+            if (!j.ok && g_log) fprintf(g_log, "    MiniDumpWriteDump error %lu\n", j.err);
+        } else if (g_log) fprintf(g_log, "    cierre.dmp: no se pudo crear (error %lu)\n", GetLastError());
+    } else if (g_log) fprintf(g_log, "    cierre.dmp: dbghelp.dll no disponible\n");
+    copyAll();
+}
+
 static LPTOP_LEVEL_EXCEPTION_FILTER s_prevFilter = nullptr;
 static LONG WINAPI Unhandled(EXCEPTION_POINTERS* ep) {
     LogCrash(ep, "CIERRE DEL JUEGO");
+    WriteCrashDump(ep);
     return s_prevFilter ? s_prevFilter(ep) : EXCEPTION_CONTINUE_SEARCH;
 }
 
@@ -289,10 +404,15 @@ static int InitMod() {
     std::wstring wb = exe; wb = wb.substr(0, wb.find_last_of(L"\\/") + 1) + L"PES21FX\\";
     fx::g_cfg.baseDir = wb;
     CreateDirectoryW(wb.c_str(), nullptr);
+    // (05/11) el log de la sesion anterior se conserva como PES21FX.anterior.log: si el juego se cerro y se volvio a abrir,
+    // el informe del cierre no se pierde (cierre del 05/11 17:41: el log se piso al reabrir)
+    MoveFileExW((wb + L"PES21FX.log").c_str(), (wb + L"PES21FX.anterior.log").c_str(), MOVEFILE_REPLACE_EXISTING);
     fx::g_log = _wfopen((wb + L"PES21FX.log").c_str(), L"w");
     fx::Log("PES21 FX 0.2 (d3d11.dll) - carpeta: %ls", wb.c_str());
     AddVectoredExceptionHandler(1, fx::Vectored);
     fx::s_prevFilter = SetUnhandledExceptionFilter(fx::Unhandled);
+    if (HMODULE dh = LoadLibraryW(L"dbghelp.dll")) fx::s_mdwd = (fx::PFN_MDWD)GetProcAddress(dh, "MiniDumpWriteDump");
+    fx::Log("volcado de cierres: %s", fx::s_mdwd ? "listo (PES21FX\\cierres\\)" : "dbghelp.dll no disponible");
     fx::WatchDlls();
     HMODULE nv = LoadLibraryW(L"nvapi64.dll");   // 3DMigoto la dejaba cargada; hacemos lo mismo
     fx::Log("nvapi64.dll: %s", nv ? "cargada y retenida" : "no esta (placa no NVIDIA?)");
@@ -307,6 +427,7 @@ static int InitMod() {
     if (!fx::g_cfg.optHooks) { fx::Log("hooks = 0: el mod queda cargado pero sin ganchos (prueba)"); return 2; }
     if (!fx::InstallHooks()) { fx::Log("ERROR: no se pudieron instalar los ganchos de D3D11"); return 0; }
     fx::Log("ganchos instalados");
+    fx::PanelStart(fx::g_cfg.panelPort);   // (08/11) panel en vivo: HTTP en 127.0.0.1 (panel.cpp)
     fx::MemWatchStart();   // (26/10) liberador de memoria del juego + VirtualProtect/VirtualFree (memwatch.cpp)
     if (fx::DiagOn(2)) fx::CodeWatchStart();
     else fx::Log("codigo: vigilancia del codigo del juego apagada (z173 = 0)");
