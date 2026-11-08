@@ -159,11 +159,15 @@ void main(
   float4 fDest;
   float4 HP = IniParams.Load(int2(33,0));
   float hBias = HP.w > 0.5 ? HP.x : 0.0;
+  // (08/11) tope de resolucion compartido con la cara (z32, px; 0 = sin tope): una textura de 4096 no se lee por encima de 2048
+  float hCap = IniParams.Load(int2(32,0)).z, capHD = 0.0, capHN = 0.0;
+  { uint cW, cH, cL; g_tex_diffuse.GetDimensions(0, cW, cH, cL); capHD = hCap > 1.0 ? max(0.0, log2((float)max(cW, cH) / hCap)) : 0.0; g_tex_normal.GetDimensions(0, cW, cH, cL); capHN = hCap > 1.0 ? max(0.0, log2((float)max(cW, cH) / hCap)) : 0.0; }
+  float hBiasN = max(hBias, capHN - g_tex_normal.CalculateLevelOfDetail(g_sampler_normal_s, v2.xy));
   float4 pesStR = PESStrand(g_tex_diffuse, v2.xy, HP);   // fuera de un if: usa derivadas (fwidth)
   float4 pesSt = HP.w > 0.5 ? pesStR : float4(1, 0, 0, 1);
 
   r0.x = g_tex_diffuse.CalculateLevelOfDetail(g_samplerLinear_Clamp_s, v2.xy);
-  r0.x = clamp(r0.x + hBias, 0, 5);
+  r0.x = clamp(r0.x + hBias, capHD, max(5.0, capHD));
   r0.x = g_tex_diffuse.SampleLevel(g_samplerLinear_Clamp_s, v2.xy, r0.x).w;
   // (04/11 l, Agustin: "el headshell tiene su alfa abajo que hace clipping en las cejas") con las cejas en hebras (x74) el borde casi
   // transparente del headshell (alfa < 0.25) ya no tapa con su tramado las hebras de la ceja que se dibujaron antes
@@ -197,7 +201,7 @@ void main(
   r0.w = dot(v5.xyz, v5.xyz);
   r0.w = rsqrt(r0.w);
   r3.xyz = v5.xyz * r0.www;
-  r4.xyz = g_tex_normal.SampleBias(g_sampler_normal_s, v2.xy, hBias).xyw;
+  r4.xyz = g_tex_normal.SampleBias(g_sampler_normal_s, v2.xy, hBiasN).xyw;
   r4.x = r4.x * r4.z;
   r4.xy = r4.xy * float2(2,2) + float2(-1,-1);
   r3.xyz = r4.yyy * r3.xyz;
