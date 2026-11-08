@@ -95,7 +95,7 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   float edge = 1.0 - abs(i.tw.y);
   if (P75.z < 0.5 && edge < (0.08 + 0.35 * t * t) * smoothstep(0.55, 0.95, res)) discard;
   // punta: largo visible distinto por hebra (corte estable, sin ruido entre cuadros) cuando la hebra no se puede afinar
-  if (P75.z < 0.5 && t > 1.0 - 0.22 * hs * (1.0 - res)) discard;
+  // (08/11 w) sin corte de punta: con el grosor bajo las hebras perdian largo
   // color: la raiz mas oscura, la punta un poco mas clara y calida
   float3 col = lerp(i.col, i.col2, t);   // (04/11 d) el color del mapa de la ceja tal cual (antes se oscurecia / aclaraba aca)   // (04/11 b) antes 0.55 en la raiz: salian negras como alambre
   // (04/11 e, referencia eFootball de Agustin) la raiz queda entre los pelos de al lado y la piel (oclusion suave), la punta sale
