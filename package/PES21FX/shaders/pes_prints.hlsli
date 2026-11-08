@@ -126,13 +126,13 @@ float PesPrEmbroidery(float2 uv, float2 dx, float2 dy, float res, float kType)
   return (retro ? saturate(0.75 + e) : saturate((e - 0.6) * 2.5)) * c.w;
 }
 
-// (08/11 d) escudo del equipo segun la lista (PES21FX_escudos.txt -> Sider -> DLL, filas 397..400): de cual de los dos
+// (08/11 d) escudo del equipo segun la lista (PES21FX_escudos.txt -> Sider -> DLL, filas 398..401): de cual de los dos
 // equipos es este kit se decide por el color del cuerpo de la camiseta (pecho y espalda, mip grueso) contra el color 1 / 2
 // del kit elegido de cada uno. Devuelve 0 sin dato (o DLL vieja), 1 impreso, 2 bordado.
 float PesPrTeamCrest(float res)
 {
-  float4 H1 = IniParams.Load(int2(397, 0)), A1 = IniParams.Load(int2(398, 0));
-  float4 H2 = IniParams.Load(int2(399, 0)), A2 = IniParams.Load(int2(400, 0));
+  float4 H1 = IniParams.Load(int2(398, 0)), A1 = IniParams.Load(int2(399, 0));
+  float4 H2 = IniParams.Load(int2(400, 0)), A2 = IniParams.Load(int2(401, 0));
   if (H1.w < 0.5 && A1.w < 0.5) return 0;
   if (abs(H1.w - A1.w) < 0.5) return H1.w;           // los dos iguales: no hace falta saber cual es
   if (H1.x < 0 || A1.x < 0) return 0;                // sin colores no se puede elegir

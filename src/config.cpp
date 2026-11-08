@@ -833,16 +833,16 @@ void UpdateTimeParams() {
     p[93][3] = (t - s_lastTurf) < 15.0 ? 1.0f : 0.0f; // 19/10: en partido (tolerante): primeros planos sin cancha a la vista siguen contando
     p[255][3] = (t - s_lastTurf) < 15.0 ? 0.0f : 1.0f; // (25/10) escena de menu (editor, presentacion): la fisica de la ropa no recibe empujes por movimiento
     p[257][0] = (float)PresentNo();                     // (25/10) numero de cuadro: el cuerpo real (cuerpo.cpp) y la fisica de la ropa lo comparan
-    // (08/11) escudos por equipo -> PS de la camiseta (pes_prints.hlsli). 397 / 398 = local / visitante: xyz color 1 de la
+    // (08/11) escudos por equipo -> PS de la camiseta (pes_prints.hlsli). 398 / 399 = local / visitante: xyz color 1 de la
     // camiseta en lineal, w = escudo + 1 (0 sin dato, 1 impreso, 2 bordado; 0 tambien = DLL vieja que no llena la fila);
-    // 399 / 400 = color 2. No estan en el ini: no se guardan.
+    // 400 / 401 = color 2. No estan en el ini: no se guardan.
     { const MatchInfo& m = g_cfg.match;
       auto lin = [](float c) { return c < 0.0f ? -1.0f : powf(c, 2.2f); };
       const float* cs[4] = { m.homeC1, m.awayC1, m.homeC2, m.awayC2 };
-      for (int i = 0; i < 4; i++) for (int j = 0; j < 3; j++) p[397 + i][j] = m.known ? lin(cs[i][j]) : -1.0f;
-      p[397][3] = (m.known && m.homeCrest >= 0) ? float(m.homeCrest + 1) : 0.0f;
-      p[398][3] = (m.known && m.awayCrest >= 0) ? float(m.awayCrest + 1) : 0.0f;
-      p[399][3] = p[400][3] = 0.0f; }
+      for (int i = 0; i < 4; i++) for (int j = 0; j < 3; j++) p[398 + i][j] = m.known ? lin(cs[i][j]) : -1.0f;
+      p[398][3] = (m.known && m.homeCrest >= 0) ? float(m.homeCrest + 1) : 0.0f;
+      p[399][3] = (m.known && m.awayCrest >= 0) ? float(m.awayCrest + 1) : 0.0f;
+      p[400][3] = p[401][3] = 0.0f; }
     // (21/10) reloj de las nubes (157): las nubes y sus sombras avanzan con el reloj del JUEGO, no con el reloj real: la
     // pausa las congela y la camara lenta de las repeticiones las frena (como la ropa y el pelo). El reloj sale de
     // cPSSystem.m_timeParam.x de la composicion (regla copy_cb = 0 SysCB en PES21FX_rules.ini). Se acumulan solo los
