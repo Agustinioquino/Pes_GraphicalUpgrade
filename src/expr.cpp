@@ -1427,7 +1427,11 @@ static void SlotPresent(ID3D11DeviceContext* imm) {
                             Aff Mj, A; AffFromPalette(r + j * 12, Mj); AffMul(MhI, Mj, A);
                             float best = 1e9f, second = 1e9f; int bd = -1;
                             for (int d = 0; d < kExprBones; d++) { if (!kOk[d]) continue; const float e = AffDist(A, K[d]); if (e < best) { second = best; best = e; bd = d; } else if (e < second) second = e; }
-                            if (bd >= 0 && best < 0.25f && second > 2.0f * best) { slot[j] = (uint8_t)bd; matched++; worst = (std::max)(worst, best); }
+                            // (08/11 g, log 15:43: 15 lugares "emparejados" con error 0.241, justo bajo el tope de 0.25, en cada malla de 30 lugares, y
+                            // 4 de 27 en las demas: pares como 17>0 o 7>4 que no eran) un emparejado real da un error chico (0.00..0.05 en los
+                            // de la mandibula); con 0.25 entraban huesos equivocados y cada pieza movia partes distintas (uniones rotas). Tope 0.10:
+                            // lo dudoso queda sin gesto (la pieza sigue al juego) en vez de mover lo que no es
+                            if (bd >= 0 && best < 0.10f && second > 2.0f * best) { slot[j] = (uint8_t)bd; matched++; worst = (std::max)(worst, best); }
                             else if (bd >= 0 && best < 0.25f) s_slotAmb++;
                         }
                         float err[32]; int alt[32]; float altE[32]; for (int j = 0; j < 32; j++) { err[j] = 1e9f; alt[j] = -1; altE[j] = 1e9f; }
