@@ -171,6 +171,8 @@ static bool LoadConfigLocked() {
             else if (kl == "orphan_fix") c.optOrphan = atoi(v.c_str()) != 0;
             else if (kl == "crash_dump") c.optCrashDump = atoi(v.c_str());
             else if (kl == "congelado_seg") c.optHangSec = atoi(v.c_str());
+            else if (kl == "cobertura") c.coverOn = atoi(v.c_str()) != 0;
+            else if (kl == "cobertura_demora") c.coverDelay = std::clamp(atoi(v.c_str()), 5, 600);
             else if (kl == "dump_switcher") c.optDump = atoi(v.c_str()) != 0;
             else if (kl == "memoria_arreglo") c.memFix = atoi(v.c_str());
             else if (kl == "memoria_vigilar") c.memWatch = atoi(v.c_str()) != 0;
@@ -663,6 +665,7 @@ void PollKeys(bool focused) {
             if (!k.run.empty()) {
                 if (Lower(k.run).find("resetsweat") != std::string::npos) s_matchStart = Now();
                 if (Lower(k.run).find("reloadconfig") != std::string::npos) reload = true;
+                if (Lower(k.run).find("coberturafase") != std::string::npos) CoverNextPhase();   // (08/11 h) corte de fase del medidor
             }
             switch (k.type) {
             case KeyBind::Toggle: k.active = !k.active; ApplyAssign(k, k.active, -1); break;
