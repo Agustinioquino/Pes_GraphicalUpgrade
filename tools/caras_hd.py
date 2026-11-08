@@ -12,6 +12,9 @@ Como reescala cada una:
   srm / trm: son datos, no fotos. Lanczos para los valores + solo el borde fino de la IA canal por canal, asi el promedio
              de cada zona queda igual al original (no cambia el brillo / la translucidez, solo se afila).
   nrm (normal): sin IA. Lanczos + renormalizar en cada mip (el detalle fino lo ponen los poros del mod).
+  hgt (ALTURA, nueva 08/11): se integra desde la normal de 4096 (Frankot-Chellappa por FFT): un mapa de 1 canal con el relieve
+             real de la piel en mm (0.5 = plano, +-2 mm a los extremos; solo el detalle de menos de ~6 mm: las formas grandes
+             ya estan en la malla). La teselacion de la cara (pes_face_tess.hlsli, fila 421) desplaza la piel con el.
 Nunca toca la boca: solo lee los archivos de originales\\ (texturas de la piel de la cara que volco la DLL).
 
 Uso (con el juego cerrado si se usa la GPU):
@@ -196,6 +199,30 @@ def normalize_nrm(n, fmt):
     return n
 
 
+def height_from_normal(n, fmt, ys, texel_mm, hp_mm=6.0, hmax_mm=2.0):
+    """n float32 SxSx4 normal 0..1 (ya renormalizada) -> altura SxSx4 0..1 en R (0.5 = plano, +-hmax_mm a los extremos).
+    Integra las pendientes (Frankot-Chellappa, FFT) y saca lo mas grande que hp_mm (eso ya lo tiene la malla)."""
+    v = n[..., :3].astype(np.float32) * 2 - 1
+    if fmt == 'BC5':
+        v[..., 2] = np.sqrt(np.clip(1 - v[..., 0] ** 2 - v[..., 1] ** 2, 0, 1))
+    nz = np.maximum(v[..., 2], 0.2)
+    p = -v[..., 0] / nz            # dh/du (altura por texel)
+    q = -ys * v[..., 1] / nz       # dh/dv (ys = sentido del verde de las normales del juego: w15 del ini, -1)
+    h, w = p.shape
+    fu = np.fft.fftfreq(w).astype(np.float32)[None, :] * 2 * np.pi
+    fv = np.fft.fftfreq(h).astype(np.float32)[:, None] * 2 * np.pi
+    P = np.fft.fft2(p); Q = np.fft.fft2(q)
+    den = fu ** 2 + fv ** 2; den[0, 0] = 1.0
+    H = (-1j * fu * P - 1j * fv * Q) / den
+    H[0, 0] = 0
+    z = np.real(np.fft.ifft2(H)).astype(np.float32) * texel_mm   # mm
+    r = hp_mm / texel_mm / 2.355                                  # sigma del paso alto (ancho a media altura = hp_mm)
+    low = blur(z[..., None], max(r, 1.0))[..., 0]
+    z -= low
+    out = np.clip(z / (2 * hmax_mm) + 0.5, 0, 1).astype(np.float32)
+    return np.repeat(out[..., None], 4, -1)
+
+
 def mips_of(img, kind, fmt):
     """img float32 SxSx4 -> lista uint8 RGBA hasta 1x1 (normal renormalizada en cada nivel)"""
     out = []
@@ -213,6 +240,8 @@ def mips_of(img, kind, fmt):
 
 
 def out_format(kind, fmt, srgb):
+    if kind == 'hgt':
+        return 80   # BC4 (1 canal, lineal)
     if kind == 'nrm':
         return {'BC5': 83, 'BC4': 80, 'BC1': 98, 'BC3': 77}.get(fmt, 98)   # canales de la normal como el original (BC3 = DXT5nm)
     if fmt == 'BC4':
@@ -234,14 +263,16 @@ def view_srgb(info_path, slot):
     return None
 
 
-def process(root, fid, ia, rehacer):
+def process(root, fid, ia, rehacer, ny=-1.0):
     od = os.path.join(root, 'originales')
     info = os.path.join(od, fid + '_info.txt')
-    for slot, kind in enumerate(('bsm', 'nrm', 'srm', 'trm')):
-        src = os.path.join(od, '%s_%s.dds' % (fid, kind))
-        if not os.path.exists(src):
+    for slot, kind in enumerate(('bsm', 'nrm', 'srm', 'trm', 'hgt')):
+        src = os.path.join(od, '%s_%s.dds' % (fid, 'nrm' if kind == 'hgt' else kind))
+        if not os.path.exists(src) or (kind == 'hgt' and fid.startswith('p')):   # la altura solo de la piel de la cara (no del pelo)
             continue
         a, fmt, srgb = read_dds(src)
+        if kind == 'hgt':
+            slot = 1
         vs = view_srgb(info, slot)
         if vs is not None:
             srgb = vs
@@ -259,6 +290,8 @@ def process(root, fid, ia, rehacer):
             big = np.concatenate([up_rgb(x[..., :3], dims(4096), ia), alpha], -1)
         elif kind == 'nrm':
             big = lanczos(x, dims(4096))
+        elif kind == 'hgt':
+            big = height_from_normal(normalize_nrm(lanczos(x, dims(4096)), fmt), fmt, ny, 250.0 / 4096)   # la cara mide ~250 mm en la textura
         else:
             big = up_data(x, dims(4096), ia)
         dx = out_format(kind, fmt, srgb)
@@ -276,6 +309,7 @@ def main():
     ap.add_argument('--solo')
     ap.add_argument('--rehacer', action='store_true')
     ap.add_argument('--tile', type=int, default=256)
+    ap.add_argument('--ny', type=float, default=-1.0, help='sentido del verde de las normales al integrar la altura (-1 = como w15 del ini)')
     o = ap.parse_args()
     od = os.path.join(o.carpeta, 'originales')
     ids = sorted({f.split('_')[0] for f in os.listdir(od) if f.endswith('.dds')})
@@ -285,7 +319,7 @@ def main():
     ia = None if o.sin_ia else Ia(o.modelo, o.tile)
     for i in ids:
         print('cara', i)
-        process(o.carpeta, i, ia, o.rehacer)
+        process(o.carpeta, i, ia, o.rehacer, o.ny)
 
 
 if __name__ == '__main__':

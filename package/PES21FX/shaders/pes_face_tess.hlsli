@@ -360,6 +360,25 @@ float4 PesAtlasClip(float3 pv)
 Texture2D<float4> pesFaceA : register(t23);
 Texture2D<float4> pesFaceB : register(t24);
 SamplerState pesTessSamp : register(s0);
+#if !PES_TESS_BODY
+// (08/11 o, Agustin: "mejorar la cantidad de poligonos de las caras ... otra tecnica ademas de la teselacion") ALTURA HD de la piel:
+// tools/caras_hd.py integra la normal de 4096 de cada cara en un mapa de altura (<id>_hgt_4k.dds, 1 canal, 0.5 = plano, +-2 mm;
+// solo el detalle de menos de ~6 mm). La DLL (facetess.cpp) lo enlaza en t25 cuando esa cara lo tiene; fila 421: x fuerza, y detalle
+// (mip), z tope mm, w relieve en la luz. Sin textura (GetDimensions = 0) no hace nada.
+Texture2D<float> pesFaceH : register(t25);
+// inclina el marco (N, T, B) con la pendiente g (altura por unidad de superficie, en T y en B): Rodrigues, T y B siguen perpendiculares
+void PesTessTilt(inout float3 N, inout float3 T, inout float3 B, float2 g, inout bool on)
+{
+  float3 Nt = normalize(N - T * g.x - B * g.y);
+  float3 ax = cross(N, Nt); float sa = length(ax), ca = dot(N, Nt);
+  if (sa > 1e-5) {
+    ax /= sa;
+    T = T * ca + cross(ax, T) * sa + ax * dot(ax, T) * (1.0 - ca);
+    B = B * ca + cross(ax, B) * sa + ax * dot(ax, B) * (1.0 - ca);
+    N = Nt; on = true;
+  }
+}
+#endif
 
 #if !PES_TESS_BODY
 // (07/11, Agustin: "las arrugas en la vida real tienen peso, volumen ... deforman partes del modelo") VOLUMEN DE LAS ARRUGAS: la DLL
@@ -578,6 +597,38 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
       }
     }
   }
+  // (08/11 o) DESPLAZAMIENTO desde la altura HD (t25, fila 421): la piel sube y baja con el relieve real de la textura de 4096
+  // (poros grandes, pliegues de la nariz, bordes de los labios, cicatrices) en mm; la boca por dentro solo sube (regla de Agustin);
+  // bordes de la pieza quietos (seam), se apaga con la distancia; y la luz sigue a la forma (w421) como el relieve de la quinta textura.
+  { float4 HD = IniParams.Load(int2(421, 0));
+    uint hw = 0, hh = 0; pesFaceH.GetDimensions(hw, hh);
+    if (HD.x > 0.001 && T.x > 0.5 && hw > 1) {
+#if PES_TESS_V455
+      float2 uvH = PES_LERP3(o2).zw;
+#else
+      float2 uvH = PES_LERP3(o2).xy;
+#endif
+      float lodH = clamp(HD.y, 0.0, 6.0);
+      float hmmH = (pesFaceH.SampleLevel(pesTessSamp, uvH, lodH) - 0.5) * 4.0 * HD.x;   // mm (+-2 mm en el archivo)
+      float3 r0 = PES_LERP3(pR).xyz;
+      float2 me = float2(r0.x / 0.034, (r0.y - 1.6285) / 0.016);
+      float mouthK = r0.z < 0.09 ? 1.0 : smoothstep(1.0, 1.6, length(me));
+      if (hmmH < 0.0) hmmH *= mouthK;
+      float topeH = clamp(HD.z, 0.0, 10.0);
+      hmmH = clamp(hmmH, -topeH, topeH);
+      float kH = min(seam, seamR) * fade;
+      float3 NnH = normalize(b.x * N0 + b.y * N1 + b.z * N2);
+      d += NnH * (hmmH * 0.001 * kH);
+      float relH = max(HD.w, 0.0) * kH;
+      if (relH > 0.001) {
+        float eH = 2.0 / max((float)hw, 256.0);
+        float hu = (pesFaceH.SampleLevel(pesTessSamp, uvH + float2(eH, 0), lodH) - 0.5) * 4.0 * HD.x;
+        float hv = (pesFaceH.SampleLevel(pesTessSamp, uvH + float2(0, eH), lodH) - 0.5) * 4.0 * HD.x;
+        float2 gH = (float2(hu, hv) - hmmH) / (eH * 250.0) * relH;   // mm por mm (una unidad de UV ~ 250 mm)
+        if (!tilt) { tiltN = NnH; tiltT = normalize(b.x * p[0].o4.xyz + b.y * p[1].o4.xyz + b.z * p[2].o4.xyz); tiltB = normalize(b.x * p[0].o5.xyz + b.y * p[1].o5.xyz + b.z * p[2].o5.xyz); }
+        PesTessTilt(tiltN, tiltT, tiltB, gH, tilt);
+      }
+    } }
   // (07/11) volumen de las arrugas del gesto (z366 surco, w366 cresta, mm): la boca y los labios no se tocan (regla de Agustin)
   if (T.x > 0.5 && (EB.z > 0.001 || EB.w > 0.001)) {
 #if PES_TESS_V455
