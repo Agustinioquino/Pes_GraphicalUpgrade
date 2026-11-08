@@ -1325,6 +1325,8 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         if (!hv) hv = LimbDataFor(vs->hash, t_drawVerts, t_drawStart, t_drawBase, &arm);   // (26/10, v12.7) brazos y piernas
         if (hv) { Remember(c, d, false, true, 126); c->VSSetShaderResources(126, 1, &hv); }
         // (31/10) torso bajo la camiseta preciso: mapa de lo que asoma (cuerpo.cpp) en t124 del VS de la piel y de su sombra
+        // (08/11) gestos del publico: buffer pes_crowdface en t30 de los 6 VS del publico (sin tocar PES21FX_rules.ini)
+        if (ID3D11ShaderResourceView* cf = PublicoSRVFor(vs->hash)) { Remember(c, d, false, true, 30); c->VSSetShaderResources(30, 1, &cf); }
         if (vs->hash == 0x1c02a92ab4ae3362ULL || vs->hash == 0xc6ef0c7519ec95a5ULL) if (ID3D11ShaderResourceView* nv = TorsoNeedSRV()) { Remember(c, d, false, true, 124); c->VSSetShaderResources(124, 1, &nv); }
         if (arm && vs->hash == 0x1c02a92ab4ae3362ULL) {   // (02/11) grupos musculares del brazo
             if (ID3D11ShaderResourceView* an = ArmAnatTexture(0)) { Remember(c, d, true, true, 26); c->PSSetShaderResources(26, 1, &an); }
@@ -2102,6 +2104,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     ExePatchPresent();
     GrassDistPresent();
     { GpuZoneScope gz_(g_dev.imm, kGzPitchWear); PitchWearPresent(); }
+    PublicoPresent();   // (08/11) gestos del publico: sube el buffer que calcula el hilo de la CPU (fila 394)
     { GpuZoneScope gz_(g_dev.imm, kGzGrass); GrassPresent(); }
     { GpuZoneScope gz_(g_dev.imm, kGzFaceGen); FaceGenPresent(); }
     { GpuZoneScope gz_(g_dev.imm, kGzCarasHd); CarasHdPresent(); }

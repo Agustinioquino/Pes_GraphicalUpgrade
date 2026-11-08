@@ -96,6 +96,7 @@ struct PesTessConst
 {
   float e[3] : SV_TessFactor;
   float i : SV_InsideTessFactor;
+  float zs : PESZOOM;   // (08/11 i) factor de la distancia por el zoom (1 = sin zoom); el DS lo usa en el fundido por distancia
 };
 
 // (04/11) fuera del bloque del hull shader: el domain shader tambien la usa (sin esto los DS no compilaban)
@@ -119,6 +120,7 @@ cbuffer PESTessView : register(b13)
 {
   float4 g_pesTessVp;   // x ancho, y alto del viewport en pixeles (lo pone la DLL)
 }
+cbuffer cHSScene : register(b2) { float4 hsCb2[8]; }   // (08/11 i) escena del juego (proyeccion en [4..7]); la DLL la enlaza al HS
 
 
 // (04/11 e) 1 dentro de la zona de la oreja (posicion de reposo en el marco de la cabeza), 0 en el resto de la cara; bordes suaves
@@ -137,6 +139,14 @@ PesTessConst PesTessPatch(InputPatch<PesTessVS, 3> p)
   float f[3] = { 1.0, 1.0, 1.0 };
   bool ok = T.x > 0.5 && p[0].o0.w > 0.01 && p[1].o0.w > 0.01 && p[2].o0.w > 0.01;
   float dmin = min(length(p[0].pV.xyz), min(length(p[1].pV.xyz), length(p[2].pV.xyz)));
+  // (08/11 i, Agustin: "la teselacion no se aplica en el cuerpo") con la camara libre con zoom (campo de vision 0.024 rad) la camara
+  // queda a 15-40 m y la distancia maxima (z364 15 m, x358 27 m) nunca entraba, aunque el jugador llene la pantalla. La distancia se
+  // corrige por el zoom: P11 de la proyeccion del juego (b2, la DLL lo enlaza tambien al HS) contra 6 (campo de vision ~19 grados,
+  // una camara de transmision cerrada). Igual para todo el dibujo (sin grietas). Sin zoom o sin b2 (P11 = 0): zs = 1, nada cambia.
+  float zs = 1.0;
+  { float p11 = abs(hsCb2[5].y); if (p11 > 6.0) zs = 6.0 / p11; }
+  k.zs = zs;
+  dmin *= zs;
   // mas lejos que la distancia maxima: nada que dividir (el DS tampoco corre nada)
   if (dmin > U.x) ok = false;
   // los tres con peso 0 (triangulo entero en una costura): se queda como esta
@@ -174,11 +184,14 @@ PesTessConst PesTessPatch(InputPatch<PesTessVS, 3> p)
       float rW = IniParams.Load(int2(376, 0)).w;
       float c0z = p[0].o1.z;
       if (rW > 0.001 && IniParams.Load(int2(305, 0)).x > 0.5 && c0z > 6.5 && c0z < 7.5 && round((c0z - 7.0) * 1200.0) < 599.5) {
-        float3 dv = float3(length(p[0].pV.xyz), length(p[1].pV.xyz), length(p[2].pV.xyz));
-        float3 ed = float3(min(dv.y, dv.z), min(dv.z, dv.x), min(dv.x, dv.y));
-        float3 nk = 1.0 - smoothstep(1.2, 2.2, ed);
+        // (08/11 i, Agustin: "la teselacion de cuerpo no funciona ... hace rato") antes solo a menos de 1.2..2.2 m de la camara: en el
+        // editor (camara a 2.5-4 m) y en los primeros planos del partido casi nunca entraba (log: x1.0). Ahora por PANTALLA: cada arista
+        // se parte hasta ~1.8 mm en el mundo o hasta 1.5 px en pantalla (lo que de menos partes); queda la distancia maxima z364
+        // (corregida por el zoom). Por arista con sus dos extremos (largo en el mundo y en pantalla): sin grietas.
+        float3 nk = 1.0;
         float3 lw = float3(length(p[1].pV.xyz - p[2].pV.xyz), length(p[2].pV.xyz - p[0].pV.xyz), length(p[0].pV.xyz - p[1].pV.xyz));
-        float3 fr = clamp(lw / 0.0018, 1.0, fmax);
+        float3 ls = float3(length(s1 - s2), length(s2 - s0), length(s0 - s1));
+        float3 fr = clamp(min(lw / 0.0018, ls / 1.5), 1.0, fmax);
         f[0] = max(f[0], lerp(1.0, fr.x, nk.x));
         f[1] = max(f[1], lerp(1.0, fr.y, nk.y));
         f[2] = max(f[2], lerp(1.0, fr.z, nk.z));
@@ -374,7 +387,14 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
   float3 P0 = p[0].pV.xyz, P1 = p[1].pV.xyz, P2 = p[2].pV.xyz;
   float3 N0 = normalize(p[0].o6.xyz), N1 = normalize(p[1].o6.xyz), N2 = normalize(p[2].o6.xyz);
   float3 pl = b.x * P0 + b.y * P1 + b.z * P2;
+#if PES_TESS_BODY
+  // (08/11 k, Agustin: "se ven costuras en la union de las munecas y en otras partes") en el cuerpo siempre Phong: el PN (y376 = 1)
+  // empuja hacia afuera el anillo de al lado del borde de cada pieza (mano / antebrazo, pierna / media), que queda fijo, y la union
+  // se ve como un pliegue. El PN sigue para la cara.
+  float3 pp = PesTessSmooth(P0, P1, P2, N0, N1, N2, b, 0.0);
+#else
   float3 pp = PesTessSmooth(P0, P1, P2, N0, N1, N2, b, IniParams.Load(int2(376, 0)).y);   // (07/11) Phong o PN (y376)
+#endif
   // (04/11 h, Agustin: "se nota el bajo nivel poligonal en el lagrimal") peso 2 = borde de la abertura del ojo (la DLL lo marca solo en
   // la cara): redondea con x366 (0..1) y su propio tope y366 mm; el relieve no entra ahi (seamR)
   float4 EB = IniParams.Load(int2(366, 0));
@@ -400,10 +420,15 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
   // y bajo el cuello de la cara (z352 / x351), un redondeo hacia afuera los haria asomar
   seam *= 1.0 - smoothstep(1.40, 1.47, PES_LERP3(pR).y);
 #endif
-  float dist = length(pl);
+  float dist = length(pl) * k.zs;   // (08/11 i) distancia corregida por el zoom (HS)
   float fade = 1.0 - smoothstep(U.x - max(U.y, 0.01), U.x, dist);
   float3 d = (pp - pl) * (saturate(T.y) * seam * fade * (T.x > 0.5 ? 1.0 : 0.0));
   float dl = length(d), tope = lerp(max(U.z, 0.0), clamp(EB.y, 0.0, max(U.z, 0.0)), saturate(eyeMix * 2.0)) * 0.001;
+#if PES_TESS_BODY
+  // (08/11 k) tope del redondeo del cuerpo 1.5 mm aunque w364 diga mas (el ini tiene 3.4): mas que eso deja el pliegue en la union
+  // con la pieza de al lado (el borde no se mueve)
+  tope = min(tope, 0.0015);
+#endif
   if (dl > tope) d *= tope / max(dl, 1e-6);
 #if PES_TESS_BODY
   {   // (08/11, Agustin: "teselacion a los brazos y manos, piernas ... sin mucha deformacion") RELIEVE DEL CUERPO: la altura del detalle
@@ -423,9 +448,12 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
         hh = PesLegH(pm, fmod(q - 528.0, 8.0) / 7.0, saturate(act), crz);
       }
       float dGr = IniParams.Load(int2(172, 0)).x; dGr = dGr > 0.01 ? clamp(dGr, 0.0, 3.0) : 1.0;
-      float hm = clamp(hh * clamp(rW, 0.0, 2.0) * dGr, -0.0015, 0.0015);
+      // (08/11 k) solo hacia AFUERA: manos y brazos tienen una prepasada de profundidad sin teselar (VS c6ef0c75); un surco metido hacia
+      // adentro fallaria la prueba de profundidad y dejaria un agujero. Los surcos se marcan en la luz (PS aa7d1833, PesLimbRelief).
+      float hm = clamp(hh * clamp(rW, 0.0, 2.0) * dGr, 0.0, 0.0015);
       float3 Nr = normalize(b.x * N0 + b.y * N1 + b.z * N2);
       d += Nr * (hm * min(seam, seamR) * fade);
+      { float dn = dot(d, Nr); if (dn < 0.0) d -= Nr * dn; }   // el redondeo tampoco mete nada hacia adentro
     }
   }
 #endif

@@ -67,8 +67,13 @@ float PesHandH(float3 p, float curl, out float crease) {
     // pliegues de la muneca en la palma (dos lineas a lo ancho), un poco mas hondos con la mano cerrada
     float wl = PesLrG((sm + 0.004) / 0.0006) + 0.8 * PesLrG((sm - 0.006) / 0.0006);
     float cr = 0.00030 * (0.6 + 0.4 * curl) * wl * palm * PesLrG(cw / 1.2);
-    crease = cr;
-    return h - cr;
+    // (08/11 j, Agustin: "se ven costuras en la union de las munecas") la punta del cubito (sm ~ +2.5 mm) y los pliegues de la muneca
+    // (sm -4 / +6 mm) caian justo en el borde de la malla de la mano: del lado del antebrazo (otra malla) no hay nada, y el bulto o el
+    // surco cortado en seco se veia como una costura (luz en el PS, desplazamiento en el DS). Todo el relieve de la mano se apaga hacia
+    // la muneca: nada antes de 2 mm, completo desde 1.4 cm.
+    float fH = smoothstep(0.002, 0.014, sm);
+    crease = cr * fH;
+    return (h - cr) * fH;
 }
 
 // ------------------------------------------------------------------------------------------------------------------ pierna
@@ -140,8 +145,11 @@ float PesLegH(float3 p, float flex, float3 act, out float crease) {
     float sf = s + 0.0008 * sin(radians(th) * 7.0);
     float fr = pow(max(0.0, cos(6.2831853 * sf / 0.0035)), 5.0) * PesLrG((s - 0.035) / 0.014) * PesLrG(th / 35.0);
     float cf = 0.00015 * (1.0 - 0.85 * flex) * fr;                                           // adelante: piel floja estirada
-    crease = cb + cf;
-    return h - crease;
+    // (08/11 j) en los bordes de la malla (tobillo con la media / el botin, arriba con el short) se apaga: un surco cortado en seco se ve
+    // como costura
+    float fE = smoothstep(-0.201, -0.166, s) * (1.0 - smoothstep(0.259, 0.294, s));
+    crease = (cb + cf) * fE;
+    return (h - cb - cf) * fE;
 }
 
 // (08/11) cuanto del musculo TENSO hay en este punto (0..1): la piel sobre el musculo que trabaja queda tirante: algo mas de brillo,

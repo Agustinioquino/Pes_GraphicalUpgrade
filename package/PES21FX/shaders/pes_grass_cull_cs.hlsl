@@ -100,7 +100,9 @@ void main(uint3 id : SV_DispatchThreadID)
     // (08/11, Agustin: "reemplazar el pasto ... por este de cerca y eliminar el otro que consume mucho") z58 = alcance del pasto del mod
     // en metros desde la camara (gPad[3].w; 0 = toda la cancha): mas alla no se emiten hojas y la base pone el cesped lejano
     float Dm = gPad[3].w;
-    if (Dm > 1.0) { if (dist > Dm + rad) return; kD = 1.0 - smoothstep(Dm * 0.7, Dm, dist); }
+    // (08/11 i) gPad[4].x = 1 (editor): el alcance se mide desde el jugador (origen), no desde la camara
+    float dR = gPad[4].x > 0.5 ? length(float2(x, z)) : dist;
+    if (Dm > 1.0) { if (dR > Dm + rad) return; kD = 1.0 - smoothstep(Dm * 0.7, Dm, dR); }
     float sinE = clamp(abs(eye.y) / dist, 0.03, 1.0);
     // (26/10 d) alto de la hoja cerca de la camara (el VS funde de x59 al alto cercano entre 110 y 250 px/m, igual que aca)
     float hP0 = gPad[2].z > 1.0 ? gPad[2].z : 110.0, hP1 = gPad[2].w > hP0 ? gPad[2].w : 250.0;   // (26/10 e) misma rampa que el VS

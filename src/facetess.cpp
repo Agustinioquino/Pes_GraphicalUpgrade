@@ -270,9 +270,10 @@ bool FaceTessBegin(ID3D11DeviceContext* c, uint64_t vsHash, ID3D11ShaderResource
         c1->VSGetConstantBuffers1(2, 1, &b2, &first, &num);
         // (04/11 d) ventana solo si es real (VSSetConstantBuffers comun devuelve 0 / 4096: como en hooks.cpp RefCB)
         if (b2) { D3D11_BUFFER_DESC bd; b2->GetDesc(&bd); const bool win = num && (first > 0 || num * 16 < bd.ByteWidth);
-                  if (win) c1->DSSetConstantBuffers1(2, 1, &b2, &first, &num); else c1->DSSetConstantBuffers(2, 1, &b2); }
+                  if (win) { c1->DSSetConstantBuffers1(2, 1, &b2, &first, &num); c1->HSSetConstantBuffers1(2, 1, &b2, &first, &num); }
+                  else { c1->DSSetConstantBuffers(2, 1, &b2); c1->HSSetConstantBuffers(2, 1, &b2); } }   // (08/11 i) el HS lee P11 (zoom)
         c1->Release();
-    } else { c->VSGetConstantBuffers(2, 1, &b2); if (b2) c->DSSetConstantBuffers(2, 1, &b2); }
+    } else { c->VSGetConstantBuffers(2, 1, &b2); if (b2) { c->DSSetConstantBuffers(2, 1, &b2); c->HSSetConstantBuffers(2, 1, &b2); } }
     if (b2) b2->Release();
     c->HSSetShader(hs, nullptr, 0); c->DSSetShader(ds, nullptr, 0);
     c->HSSetConstantBuffers(13, 1, &vb);
@@ -315,7 +316,7 @@ void FaceTessEnd(ID3D11DeviceContext* c, FaceTessScope& s) {
     c->IASetPrimitiveTopology(s.topo);
     c->HSSetShader(nullptr, nullptr, 0); c->DSSetShader(nullptr, nullptr, 0);
     ID3D11Buffer* nb = nullptr; ID3D11ShaderResourceView* nv = nullptr;
-    c->HSSetConstantBuffers(13, 1, &nb); c->DSSetConstantBuffers(2, 1, &nb);
+    c->HSSetConstantBuffers(13, 1, &nb); c->DSSetConstantBuffers(2, 1, &nb); c->HSSetConstantBuffers(2, 1, &nb);
     c->HSSetConstantBuffers(10, 1, &nb); c->DSSetConstantBuffers(10, 1, &nb);
     c->HSSetShaderResources(120, 1, &nv); c->DSSetShaderResources(120, 1, &nv);
     if (s.relief) { ID3D11ShaderResourceView* n2[2] = {}; ID3D11SamplerState* ns = nullptr; c->DSSetShaderResources(23, 2, n2); c->DSSetSamplers(0, 1, &ns); s.relief = false; }
