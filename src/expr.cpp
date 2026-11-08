@@ -1327,9 +1327,12 @@ static void AffMul(const Aff& a, const Aff& b, Aff& o) {   // o = a * b (primero
     o = r;
 }
 static void AffPoint(const Aff& a, const float* p, float* o) { for (int i = 0; i < 3; i++) o[i] = a.A[i][0] * p[0] + a.A[i][1] * p[1] + a.A[i][2] * p[2] + a.t[i]; }
-static void AffFromPalette(const float* r, Aff& o) {   // float4x3 del VS (fila k = imagen del eje k, fila 3 = traslacion) -> columna
-    for (int k = 0; k < 3; k++) for (int i = 0; i < 3; i++) o.A[i][k] = r[k * 4 + i];
-    for (int i = 0; i < 3; i++) o.t[i] = r[3 * 4 + i];
+// (08/11, log del editor: "mallas emparejadas 0 / sin emparejar 3277") el float4x3 del VS va empaquetado por COLUMNAS: cada hueso son
+// 3 registros (48 bytes) y el registro k es la columna k de la matriz (_m0k _m1k _m2k _m3k, asi lo lee el VS: dot con (p, 1)), o sea
+// la fila k de la matriz de columna: out_k = A[k][0..2] . p + t[k]. Antes se leia traspuesta y la traslacion salia del registro 3,
+// que es el primero del hueso SIGUIENTE: ninguna malla podia emparejar y los gestos por paleta no llegaban a nada
+static void AffFromPalette(const float* r, Aff& o) {
+    for (int k = 0; k < 3; k++) { for (int i = 0; i < 3; i++) o.A[k][i] = r[k * 4 + i]; o.t[k] = r[k * 4 + 3]; }
 }
 static void AffFromW(const float* W, Aff& o) { for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) o.A[i][j] = W[i * 4 + j]; o.t[i] = W[i * 4 + 3]; } }
 static float AffDist(const Aff& a, const Aff& b) {
