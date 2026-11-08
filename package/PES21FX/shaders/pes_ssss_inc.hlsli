@@ -153,7 +153,8 @@ float PesTraceShadow(float3 Pv, float3 L, float rawNL, float zC, float zSgn, flo
 float3 PesVolumetric(float2 uv, float2 pxy, float3 Pv, float zA, bool geo, float zSgn, float3 Lw, bool spot, float3 Pl, float3 col, float strength, float dens) {
   if (strength <= 0.001) return 0.0;
   float3 rayD = normalize(Pv);
-  float3 toL = spot ? normalize(Pl - Pv) : Lw;
+  float3 dvL = Pl - Pv; float dL2 = dot(dvL, dvL);
+  float3 toL = (spot && dL2 > 1e-6) ? dvL * rsqrt(dL2) : Lw;   // (08/11) sin normalize de un vector nulo
   float g = 0.55, cosT = dot(rayD, toL);
   float phase = (1.0 - g * g) / (12.566 * pow(max(1.0 + g * g - 2.0 * g * cosT, 1e-3), 1.5));
   float len = geo ? min(length(Pv), 12.0) : 4.0;
@@ -188,9 +189,19 @@ float3 PesTint(float warm) {   // azul frio .. naranja, luminancia 1
   return t / max(Lum(t), 1e-4);
 }
 
+// (08/11, Agustin: "al rotar no cambia la luz") z378 = 1: la luz queda fija en el MUNDO (rumbo medido en la cancha, altura sobre el
+// suelo real); al girar la camara alrededor de la cara la luz se queda donde estaba. 0 = como antes, pegada a la camara. El mundo
+// pasa a la vista con las columnas de m_view (igual que la luz real en pes_brow_light.hlsli)
+static bool g_lightWorld = false;
 float3 PesDirL(float az, float el, float zSgn) {   // rumbo 0 = de frente (hacia la camara), 90 = desde la derecha
   float ca = cos(radians(az)), sa = sin(radians(az)), ce = cos(radians(el)), se = sin(radians(el));
-  return normalize(float3(ce * sa, se, -ce * ca * zSgn));
+  float3 Lc = float3(ce * sa, se, -ce * ca * zSgn);
+  if (g_lightWorld) {
+    float3 W = float3(ce * sa, se, ce * ca);
+    float3 Lv = float3(dot(W, m_view._m00_m10_m20), dot(W, m_view._m01_m11_m21), dot(W, m_view._m02_m12_m22));
+    if (dot(Lv, Lv) > 0.25) Lc = Lv;   // m_view vacio (sin escena): queda la de la camara
+  }
+  return normalize(Lc);
 }
 
 // (04/11 nariz) transmitancia de la piel (perfil de Jimenez, d en mm) y su color (z34): copia de PESSkinTransmittance /
@@ -286,6 +297,7 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   float4 E6 = IniParams.Load(int2(379, 0)), E7 = IniParams.Load(int2(380, 0));
   float4 E8 = IniParams.Load(int2(381, 0));
   int dbgView = (int)(E7.w + 0.5);
+  g_lightWorld = E5.z > 0.5;
   g_shRad = radians(E6.x > 0.0 ? E6.x : 0.27) * 0.5 + 1e-4;   // (07/11 c) radio = la mitad del diametro angular
   g_shSteps = E6.y > 1.5 ? 48 : (E6.y > 0.5 ? 24 : 12);
   g_shLen = clamp(E7.y > 0.0 ? E7.y : 0.45, 0.1, 2.0);
@@ -335,10 +347,12 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
     float3 Pc = (zCA >= 0.1 && zCA <= 60.0) ? float3(-m_cameraCenterOffset.xy * m_projectionParam.xy * zCen, zCen) : float3(0, 0, 1.5 * zSgn);
     float distL = clamp(E4.y > 0 ? E4.y : 2.0, 0.3, 10.0), ap = clamp(E4.z > 0 ? E4.z : 45.0, 5.0, 150.0);
     Pl = Pc + Lw * distL;
-    float3 dv = Pl - Pv; float d2 = max(dot(dv, dv), 1e-4);
-    L = dv * rsqrt(d2);
+    // (08/11) a prueba de NaN: el punto puede caer encima del foco (d = 0) o la profundidad del centro venir rara al cambiar de tipo
+    float3 dv = Pl - Pv; float d2 = dot(dv, dv);
+    L = (d2 > 1e-4 && d2 < 1e6) ? dv * rsqrt(d2) : Lw;
+    d2 = clamp(d2, 0.01, 1e6);
     float ca = cos(radians(ap * 0.5)), cone = smoothstep(ca, lerp(ca, 1.0, 0.35), dot(-L, Lw));
-    lcol = sunC * cone * saturate(distL * distL / d2);
+    lcol = sunC * cone * min(distL * distL / d2, 1.0);
   }
   bool skin = IsSkin(uv);
   float4 mat = inMat.SampleLevel(sPoint, uv, 0);
@@ -480,6 +494,10 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   o.c = float4(c0 * (geo ? saturate(keep) : 1.0) + dif + vol, 1);
   if (E7.z > 0.0) specMul *= E7.z;   // (07/11 c) brillo de la luz en el manual
   o.s = float4(s0 * (geo ? saturate(keep) : 1.0) + spec * specMul, 1);
+  // (08/11) un NaN / infinito aca lo arrastra el TAA a toda la cara cuadro tras cuadro: se queda la luz del juego
+  if (any(isnan(o.c.xyz)) || any(isinf(o.c.xyz))) o.c = float4(c0, 1);
+  if (any(isnan(o.s.xyz)) || any(isinf(o.s.xyz))) o.s = float4(s0, 1);
+  o.c.xyz = min(o.c.xyz, 65000.0); o.s.xyz = min(o.s.xyz, 65000.0);
   return o;
 }
 #else
