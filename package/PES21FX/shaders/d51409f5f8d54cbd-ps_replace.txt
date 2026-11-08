@@ -867,8 +867,24 @@ void main(
         float maxH = (HT.z > 0.1 ? HT.z : 12.0) * 0.01;
         float Th = exp(-thickH * densH) * (1.0 - smoothstep(maxH * 0.6, maxH, thickH));
         float backSMh = saturate(0.3 + dot(-nH, LH)) * (1.0 - saturate(rawNdotL * 3.0));
-        transH = max(Th * backSMh * (0.6 + 0.4 * fwdH) * 1.6, transH * 0.25);
+        // (08/11 v, Agustin: "cuando el pelo esta en un estadio completamente en sombra no tiene que iluminarse") si lo que tapa el sol
+        // esta mas lejos que el grosor maximo del pelo (tribuna, techo, otro jugador) no pasa luz: antes quedaba 25 % del contraluz
+        float ownH = 1.0 - smoothstep(maxH * 0.6, maxH, thickH);
+        transH = max(Th * backSMh * (0.6 + 0.4 * fwdH) * 1.6, transH * 0.25 * ownH);
       }
+      // (08/11 v, Agustin: "mejorar como la luz atraviesa el pelo en hebras") GROSOR REAL DEL PELO con el atlas de las cabezas (t30), que
+      // desde el 07/11 tiene dibujadas tambien las hebras de las cejas: distancia entre el primer pelo que ve el sol y este pixel.
+      // Transmision Beer-Lambert por fibras (300 / m: 2 mm de ceja deja pasar ~55 %, 1 cm ~5 %, el craneo nada) con lobulo
+      // hacia adelante (TT de Marschner: la luz sale casi en la direccion en que entro). Con el shadow map del juego el texel es de
+      // varios cm y no ve las hebras; el atlas mide ~2 mm. Fuera del atlas queda lo de antes
+      { float hIn = 0.0; float hThk = PESSkinThickAtlas(pesHsP, g_samplerPoint_Clamp_s, hIn);
+        if (hIn > 0.0 && !pesFreeSun) {
+          float sigH = 300.0 * (1.2 - 0.5 * saturate(trans * 1.6));                  // pelo mas fino (trans alto) = menos fibras
+          float TA = exp(-max(hThk - 0.002, 0.0) * sigH) * (1.0 - smoothstep(0.03, 0.06, hThk));
+          float fwdA = pow(saturate(dot(VH, -LH)), 4.0);                             // lobulo TT angosto
+          float backA = saturate(0.25 + dot(-nH, LH));
+          transH = lerp(transH, TA * (0.25 + 0.75 * fwdA) * (0.5 + 0.5 * backA) * 1.4, hIn);
+        } }
       float3 Tch = float3(1.0, 0.86, 0.70);                                       // la luz que pasa entre las hebras sale calida
       o0.xyz += lightH * transH * HT.x * 0.45 * Tch;
     }

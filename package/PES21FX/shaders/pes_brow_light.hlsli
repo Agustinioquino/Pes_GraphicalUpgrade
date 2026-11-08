@@ -1,3 +1,5 @@
+#ifndef PES_BROW_LIGHT_HLSLI
+#define PES_BROW_LIGHT_HLSLI
 // PES21 FX - (04/11 o, Agustin: "anda mas a fondo con la luz y las sombras, la luz a contraluz, con los giros de la luz del sol y de
 // la luz en general") direccion HACIA la luz que de verdad ilumina las hebras, en el espacio de la vista. Antes las hebras usaban
 // m_dominantLightDir del G-buffer, que (1) apunta hacia donde VA la luz, no hacia la luz (el brillo, la sombra de contacto y el
@@ -29,11 +31,19 @@ float3 PesBrowLightDir(float3 c0, float3 c1, float3 c2, float3 dom, float vz)
     float3 W = float3(ce * sa, se, ce * ca), Lv0 = float3(dot(W, c0), dot(W, c1), dot(W, c2));
     if (dot(Lv0, Lv0) > 0.25) Ltest = Lv0;
   }
-  bool sky = !noSun && S.w > 0.5 && S.y > 0.0;
-  float3 Lw = sky ? S.xyz : -dom;                                            // sol del cielo (hacia el sol) o la dominante dada vuelta
-  bool inView = !sky && IniParams.Load(int2(50, 0)).z > 0.5;                 // z50 = 1: la dominante ya viene en la vista
+  // (08/11 v, Agustin: "al cambiar las camaras no detectan correctamente de donde proviene la luz") el motor GIRA la luz en cada toma
+  // (repeticiones, presentaciones, camaras del editor) y la piel se ilumina con esa luz del cuadro; las hebras usaban el sol ESTABLE
+  // del cielo (312) o la dominante del G-buffer, que no siguen ese giro: brillo, sombra de contacto y contraluz del lado equivocado.
+  // Ahora primero la luz REAL del cuadro (fila 111: LightCB de la pasada de luz llevada al mundo por la DLL, la misma que usa el pasto)
+  float4 R = IniParams.Load(int2(111, 0));
+  bool real = dot(R.xyz, R.xyz) > 0.5;
+  bool sky = !real && !noSun && S.w > 0.5 && S.y > 0.0;
+  float3 Lw = real ? R.xyz : (sky ? S.xyz : -dom);                           // luz real del cuadro, sol del cielo o la dominante dada vuelta
+  bool inView = !real && !sky && IniParams.Load(int2(50, 0)).z > 0.5;        // z50 = 1: la dominante ya viene en la vista
   float3 Lv = inView ? Lw : float3(dot(Lw, c0), dot(Lw, c1), dot(Lw, c2));
   float3 L = (E.x > 0.5 && noSun) ? Ltest : Lv;
   float l2 = dot(L, L);
   return l2 > 0.25 ? L * rsqrt(l2) : float3(0, 0, 0);
 }
+
+#endif

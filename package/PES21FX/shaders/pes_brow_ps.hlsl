@@ -48,7 +48,7 @@ cbuffer cPSScene : register(b2)
 // el GGX de la pasada diferida da la banda de brillo del pelo (Kajiya-Kay) en vez de un punto; y la marca 252/255 hace que
 // el sol le sume la luz envolvente, el segundo brillo (TRT, fila 51) con la sombra real y el contraluz (fila 339)
 #include "pes_brow_light.hlsli"
-float3 PesBrowAniso(float3 N, float3 T, float3 V, float t, float shJ)
+float3 PesBrowAniso(float3 N, float3 T, float3 V, float t, float shJ, float res)
 {
   float4 HK = IniParams.Load(int2(50,0));
   float4 HK2 = IniParams.Load(int2(51,0));
@@ -63,7 +63,10 @@ float3 PesBrowAniso(float3 N, float3 T, float3 V, float t, float shJ)
   float nkl = length(Nk);
   Nk = nkl > 1e-4 ? Nk / nkl : N;
   if (dot(Nk, V) < 0.05) Nk = N;
-  return normalize(lerp(N, Nk, saturate(HK.x) * 0.9));   // (04/11 j) la banda de brillo (R de Marschner) tiene que verse y moverse a lo largo del pelo
+  // (08/11 v, Agustin: "no me gusta como toma color en la luz") con 0.9 la normal casi entera miraba al medio camino luz-camara: la
+  // difusa quedaba siempre alta (ceja plana, como iluminada desde adentro, sin terminador). Ahora 0.35..0.75 segun la resolucion
+  // de la hebra: de cerca la banda de brillo, de lejos la ceja sombrea como la piel de abajo
+  return normalize(lerp(N, Nk, saturate(HK.x) * lerp(0.35, 0.75, res)));   // (04/11 j) la banda de brillo (R de Marschner) tiene que verse y moverse a lo largo del pelo
 }
 
 struct VSOut {
@@ -84,22 +87,15 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   // (07/11) tw.z = cobertura + 2 x tono de la hebra (0..7, igual en toda la hebra)
   float sK = floor(i.tw.z * 0.5), covZ = i.tw.z - 2.0 * sK;
   float sL = floor(sK / 8.0), sJ = (sK - 8.0 * sL) / 7.0, layQ = sL / 3.0;   // (08/11) tono 0..7 + capa 0..3 (pestanas: capa 0)
-  // borde de la cinta transparente por descarte (sin alpha blend en el G-buffer): perfil redondeado
+  // (08/11 v, Agustin: "su definicion con el antialiasing") SIN tramado por pixel: el GS ya descarta hebras enteras (LOD estable)
+  // y las que llegan son opacas. tw.z (covZ) es ahora la RESOLUCION de la hebra (1 = 1.5 px o mas de ancho real, 0 = mucho mas fina)
+  float res = saturate(covZ);
+  float hs = frac(sK * 0.6180339);   // hash propio de la hebra (constante en toda la hebra)
+  // borde redondeado solo cuando la hebra es ancha en pantalla (de cerca); a ~1 px el descarte del borde solo hacia escalones
   float edge = 1.0 - abs(i.tw.y);
-  // con cintas de ~1 px el descarte tiene que ser suave: solo el borde exterior y la punta
-  if (P75.z < 0.5 && edge < 0.08 + 0.35 * t * t) discard;
-  // (06/11, Agustin: "no se ve como un hair strand de un motor mas moderno") cobertura estocastica: la hebra mas fina que un pixel
-  // se dibuja en 1.2 px y aca se descarta al azar (ruido de gradiente entrelazado que cambia cada cuadro) segun su cobertura real y
-  // la punta afinada; el TAA lo promedia -> hebras finas, translucidas en la punta y sin escalones, como el pelo de UE / Frostbite
-  if (P75.z < 0.5) {
-    // la ceja tiene muchos pelos superpuestos por pixel: la cobertura se escala x3 con piso 0.4 (si no, de lejos casi desaparece)
-    // (07/11 b, Agustin: "el TAA las desenfoca mucho") el tramado ya NO cambia por cuadro: con ruido por cuadro el TAA veia cada hebra
-    // aparecer y desaparecer y la promediaba a una mancha. Tramado fijo en pantalla (estable) y piso de cobertura 0.6: la hebra queda
-    // nitida; solo la punta y el pelo mas fino que medio pixel se tramen
-    float covP = clamp(covZ * 3.0, 0.6, 1.0) * lerp(1.0, 0.55, t * t);
-    float ign = frac(52.9829189 * frac(dot(i.pos.xy, float2(0.06711056, 0.00583715))));
-    if (ign > covP) discard;
-  }
+  if (P75.z < 0.5 && edge < (0.08 + 0.35 * t * t) * smoothstep(0.55, 0.95, res)) discard;
+  // punta: largo visible distinto por hebra (corte estable, sin ruido entre cuadros) cuando la hebra no se puede afinar
+  if (P75.z < 0.5 && t > 1.0 - 0.22 * hs * (1.0 - res)) discard;
   // color: la raiz mas oscura, la punta un poco mas clara y calida
   float3 col = lerp(i.col, i.col2, t);   // (04/11 d) el color del mapa de la ceja tal cual (antes se oscurecia / aclaraba aca)   // (04/11 b) antes 0.55 en la raiz: salian negras como alambre
   // (04/11 e, referencia eFootball de Agustin) la raiz queda entre los pelos de al lado y la piel (oclusion suave), la punta sale
@@ -139,8 +135,8 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
     if (dot(Lb, Lb) > 0.25) {
       float nlS = dot(normalize(i.nrmV), Lb);
       float dep = (1.0 - layQ) * (1.0 - 0.6 * t);                       // pelo por encima: capa de abajo y raiz = mas
-      float Tl = exp(-0.55 * dep / max(nlS, 0.18));
-      col *= lerp(1.0, Tl, 0.55 * saturate(nlS * 4.0 + 0.6));           // de espaldas al sol ya lo pone la sombra normal
+      float Tl = exp(-0.4 * dep / max(nlS, 0.22));   // (08/11 v) 0.55 -> 0.4: con el atlas y la oclusion del GS se oscurecia tres veces
+      col *= lerp(1.0, Tl, 0.45 * saturate(nlS * 4.0 + 0.6));           // de espaldas al sol ya lo pone la sombra normal
     }
   }
   o0 = float4(saturate(col), 1.0);
@@ -150,12 +146,15 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
     // del pixel (tw.y = -1..1): centro mira a la camara / la piel, los bordes hacia los costados -> cada hebra con volumen propio
     float3 ax = normalize(i.tanV);
     float3 sideS = normalize(cross(n, ax) + 1e-6);
-    float a = i.tw.y * 1.25;
+    float a = i.tw.y * 1.25 * res;   // (08/11 v) a ~1 px el tubo es ruido de normales (centellea con el TAA): se aplana
     n = normalize(n * cos(a) + sideS * sin(a)); }
-  n = PesBrowAniso(n, i.tanV, normalize(i.viewV), t, (sJ - 0.5) * 0.16);
+  // (08/11 v) w382 > 0: PASADA PROPIA DEL PELO (pes_hairfwd_ps) hace el brillo, el contraluz y la sombra con la tangente. Aca queda
+  // solo la luz difusa: normal de la piel (sin doblar hacia el brillo), poco especular y sin la marca de pelo (no se suma dos veces)
+  bool fwd = IniParams.Load(int2(382, 0)).w > 0.001 && pesHairMisc.x > 0.5;
+  if (!fwd) n = PesBrowAniso(n, i.tanV, normalize(i.viewV), t, (sJ - 0.5) * 0.16, res);
   // (04/11) la luz pasa por el pelo: translucidez alta (la punta mas que la raiz) + marca de PELO 252/255 (o2.z, abajo) para
   // que las pasadas del sol le apliquen el contraluz del pelo (fila 339), como el pelo de la cabeza
-  float trans = lerp(0.18, 0.4, t);   // (04/11 o) menos luz atravesando: la ceja ya no brilla como pelo fino de la cabeza a contraluz   // (04/11 e) un poco mas de luz atravesando el pelo (la raiz tambien es fina)
+  float trans = fwd ? 0.1 : lerp(0.18, 0.4, t);   // (04/11 o) menos luz atravesando: la ceja ya no brilla como pelo fino de la cabeza a contraluz   // (04/11 e) un poco mas de luz atravesando el pelo (la raiz tambien es fina)
   float3 r1 = n; float r1w = trans;
   float4 r0;
   r0.x = r1w * 63 + 0.5;
@@ -175,12 +174,13 @@ void main(VSOut i, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1, out f
   // blanco en banda que se corre hacia la raiz y se mueve con la camara / el sol (normal de Kajiya-Kay de arriba + GGX mas liso),
   // TRT = segundo brillo con el color del pelo y TT = contraluz (pasada del sol, marca de pelo), dispersion multiple (albedo de
   // abajo) y sombra entre pelos (GS). Antes el GGX era tan rugoso que la banda no se veia y solo cambiaba el color
-  float rough = lerp(0.34, 0.46, sJ);   // (07/11) rugosidad propia de cada hebra (antes 0.4 todas)
+  float rough = lerp(0.34, 0.46, sJ) + 0.14 * (1.0 - res);   // (08/11 v) hebra mas fina que el pixel = varios pelos promediados: brillo mas ancho, sin chispazos que el TAA no resuelve   // (07/11) rugosidad propia de cada hebra (antes 0.4 todas)
   float rc = rough * 0.0361702144 + 0.0904255286;
   rc = rc * rough + 0.180851057; rc = rc * rough + 0.271276593; rc = rc * rough + 0.271276593;
   o2.x = rc * rough + 0.150000006;
   o2.y = 0.32 * lerp(0.65, 1.35, frac(sJ * 5.3)) * lerp(0.75, 1.0, t) * (pesHairMisc.x > 0.5 ? saturate(pesHairB.z) / 0.6 : 1.0);   // (07/11) brillo distinto por hebra (unas brillan mas), la raiz tapada brilla menos   // brillo del tipo de pelo (0.6 = natural)
-  o2.z = IniParams.Load(int2(339,0)).w > 0.5 ? 0.98823529 : 1.0;   // (04/11) pelo a contraluz; sin eso como antes (ni piel ni kit)
+  if (fwd) o2.y *= 0.25;
+  o2.z = (IniParams.Load(int2(339,0)).w > 0.5 && !fwd) ? 0.98823529 : 1.0;   // (04/11) pelo a contraluz; sin eso como antes (ni piel ni kit)
   o2.w = g_psMaterial.m_materials[0].x;
   o3.xy = g_psSystem.m_renderBuffer.xy * i.motion;
   o3.zw = 0;
