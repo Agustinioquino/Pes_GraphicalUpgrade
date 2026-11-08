@@ -176,6 +176,7 @@ void main(
   float4 P305 = IniParams.Load(int2(305,0));
   bool lbOn = P305.x > 0.5 && v1.z > 6.5 && v1.z < 7.5;
   float lbDef = lbOn ? clamp(v1.x, 0.0, 2.0) : 0.0, lbVein = lbOn ? clamp(v1.y, 0.0, 2.0) : 0.0, lbVM = 0.0;
+  { float lbQ = round((v1.z - 7.0) * 1200.0); if (lbQ > 527.5) lbVein = 0.0; }   // (08/11) pierna: v1.y = tension por grupo, no venas
   // (26/10) variante robusto / atletico del jugador: vrT (-1..1), cuanto de torso (VS) y de brazo (posicion de reposo en pR.xy (TEXCOORD10):
   // a mas de 20 cm del centro y arriba de la cadera; manos incluidas); x285 = (prendido, texturas, definicion)
   bool vrBody = v3.w > 1.999 && v3.w < 3.001;
@@ -326,7 +327,7 @@ void main(
       jsLift = jHand ? saturate(jl * 14.0) * jB : 0.0;   // puno cerrado: la piel estirada sobre los nudillos mas clara (el codo ya no: arruga al doblar)
     }
   }
-  float lrCav = 0.0, lrCr = 0.0;
+  float lrCav = 0.0, lrCr = 0.0, lrTense = 0.0;
   {   // (08/11, Agustin: "mejora las manos mas que nada y los brazos, asi como los muslos") relieve 3D de manos y piernas sobre la
       // posicion de reposo (pes_limb_relief.hlsli): tendones, nudillos, cubito y pliegues de la muneca; cuadriceps, rodilla, gemelos
       // y pliegues de la rodilla segun la pose. El VS manda la mano en 520 + cierre (0..7) y la pierna en 528 + rodilla (0..7) +
@@ -337,9 +338,12 @@ void main(
       float dGl = IniParams.Load(int2(172,0)).x; dGl = dGl > 0.01 ? clamp(dGl, 0.0, 3.0) : 1.0;
       float lrGain = clamp(P305.y / 0.7, 0.0, 2.0) * dGl;
       float la = lrK == 1 ? saturate((lrQ - 520.0) / 7.0) : fmod(lrQ - 528.0, 8.0) / 7.0;
-      float lb = lrK == 1 ? 0.0 : saturate(floor((lrQ - 528.0) / 8.0) / 7.0);
-      float2 lc = PesLimbRelief(lrK, pR.xyz, la, lb, hpDPx, hpDPy, hpDUx, hpDUy, lrGain, r2.xy);
+      // (08/11) pierna: tension de cada grupo (pes_limbs.hlsli PesLegAct) en v1.y = 2 + (cuadriceps + 8 isquios + 64 gemelo) / 1024
+      float na = round((v1.y - 2.0) * 1024.0);
+      float3 lact = (lrK == 2 && v1.y > 1.99 && v1.y < 2.6) ? saturate(float3(fmod(na, 8.0), fmod(floor(na / 8.0), 8.0), floor(na / 64.0)) / 7.0) : float3(0.3, 0.3, 0.3);
+      float2 lc = PesLimbRelief(lrK, pR.xyz, la, lact, hpDPx, hpDPy, hpDUx, hpDUy, lrGain, r2.xy);
       lrCav = lc.x; lrCr = lc.y;
+      if (lrK == 2) lrTense = PesLegTense(float3(abs(pR.x), pR.y, pR.z), lact) * saturate(lrGain);
     }
   }
   float anatCav = 0.0;
@@ -368,6 +372,7 @@ void main(
       r2.xy += aK * pesArmAnatN.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN).xy;
       float l2 = dot(r2.xy, r2.xy); if (l2 > 0.94) r2.xy *= rsqrt(l2 / 0.94);
       anatCav = saturate(aK) * (1.0 - pesArmAnatC.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN).x);
+      lrTense = max(lrTense, saturate((gK - 0.45) / 1.1) * saturate(0.55 * dG));   // (08/11) brazo: el grupo que trabaja (srm / trm)
     }
   }
   if (hpK > 0.001 && P94h.w > 0.5) {   // (20/10) micro normal de poros, mismo mosaico en reposo que la cara: sigue sin costura
@@ -676,7 +681,7 @@ void main(
   r0.xy = (uint2)r0.xy >> int2(1,1);
   r0.xyw = (uint3)r0.xyz;
   o1.xyw = float3(0.000977517106,0.000977517106,0.333333343) * r0.xyw;
-  r0.x = hpTrans;
+  r0.x = hpTrans * lerp(1.0, 0.78, lrTense);   // (08/11) sobre el musculo tenso pasa menos luz (trm)
   r0.x = r0.x * 63 + 0.5;
   r0.x = (uint)r0.x;
   r0.x = (uint)r0.x << 4;
@@ -702,6 +707,10 @@ void main(
     float rK = (rv > 0.5 && rv < 1.5 && (bodyOn || headPiece)) ? saturate(IniParams.Load(int2(12,0)).z) * 0.85 : 0.0;
     r0.x = lerp(r0.x, r0.x * 0.45, rK);
     o2.y = lerp(o2.y, max(o2.y, 0.5), rK * 0.8); }
+  if (lrTense > 0.001) {   // (08/11) musculo tenso (brazos / piernas): la piel queda tirante: menos rugosa y algo mas de brillo
+    r0.x *= lerp(1.0, 0.84, lrTense);
+    o2.y = saturate(o2.y * lerp(1.0, 1.15, lrTense));
+  }
   { float aaA = r0.x * r0.x; aaA = aaA * aaA; r0.x = sqrt(sqrt(saturate(aaA + aaVb))); }   // AA especular (02/11)
   r0.y = r0.x * 0.0361702144 + 0.0904255286;
   r0.y = r0.y * r0.x + 0.180851057;

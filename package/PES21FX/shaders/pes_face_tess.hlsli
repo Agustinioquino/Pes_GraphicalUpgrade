@@ -417,7 +417,11 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
       float hh = 0.0, crz = 0.0;
       if (q < 511.5) hh = PesArmH(pm);
       else if (q > 515.5 && q < 527.5) hh = PesHandH(pm, saturate((q - 520.0) / 7.0), crz);
-      else if (q > 527.5 && q < 599.5) hh = PesLegH(pm, fmod(q - 528.0, 8.0) / 7.0, saturate(floor((q - 528.0) / 8.0) / 7.0), crz);
+      else if (q > 527.5 && q < 599.5) {   // tension por grupo en o1.y = 2 + (cuadriceps + 8 isquios + 64 gemelo) / 1024
+        float na = round((p[0].o1.y - 2.0) * 1024.0);
+        float3 act = (p[0].o1.y > 1.99 && p[0].o1.y < 2.6) ? float3(fmod(na, 8.0), fmod(floor(na / 8.0), 8.0), floor(na / 64.0)) / 7.0 : float3(0.3, 0.3, 0.3);
+        hh = PesLegH(pm, fmod(q - 528.0, 8.0) / 7.0, saturate(act), crz);
+      }
       float dGr = IniParams.Load(int2(172, 0)).x; dGr = dGr > 0.01 ? clamp(dGr, 0.0, 3.0) : 1.0;
       float hm = clamp(hh * clamp(rW, 0.0, 2.0) * dGr, -0.0015, 0.0015);
       float3 Nr = normalize(b.x * N0 + b.y * N1 + b.z * N2);

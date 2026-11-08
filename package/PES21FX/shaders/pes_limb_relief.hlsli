@@ -90,13 +90,15 @@ void PesLegFrame(float3 p, out float s, out float th) {
     th = degrees(atan2(dot(r, lt), dot(r, fw)));
 }
 
-// flex 0..1 rodilla doblada, eff 0..1 esfuerzo del jugador; crease = pliegues de la pose (para oscurecer el fondo)
-float PesLegH(float3 p, float flex, float eff, out float crease) {
+// flex 0..1 rodilla doblada, act = tension de cada grupo (pes_limbs.hlsli PesLegAct: x cuadriceps, y isquios, z gemelo);
+// crease = pliegues de la pose (para oscurecer el fondo)
+float PesLegH(float3 p, float flex, float3 act, out float crease) {
     crease = 0.0;
     float s, th; PesLegFrame(p, s, th);
-    float kq = 0.55 + 0.45 * eff + 0.25 * (1.0 - flex);   // cuadriceps: esfuerzo y pierna estirada
-    float kh = 0.55 + 0.45 * flex + 0.20 * eff;           // isquios: rodilla doblada
-    float kc = 0.55 + 0.60 * eff;                         // gemelos: esfuerzo
+    // (08/11) cada grupo se marca con su tension (al correr, saltar, patear: la velocidad de la rodilla y el esfuerzo), tono base 0.55
+    float kq = 0.55 + 0.95 * act.x;   // cuadriceps
+    float kh = 0.55 + 0.95 * act.y;   // isquios
+    float kc = 0.55 + 0.95 * act.z;   // gemelos
     float h = 0.0, q = 0.0;
     // cuadriceps
     q += 0.0016 * PesLrG((s - 0.075) / 0.030) * PesLrG(PesLrDth(th, -55.0) / 24.0);          // vasto interno (la gota)
@@ -142,8 +144,18 @@ float PesLegH(float3 p, float flex, float eff, out float crease) {
     return h - crease;
 }
 
+// (08/11) cuanto del musculo TENSO hay en este punto (0..1): la piel sobre el musculo que trabaja queda tirante: algo mas de brillo,
+// menos rugosa y menos translucida (el PS lo aplica a srm / trm)
+float PesLegTense(float3 p, float3 act) {
+    float s, th; PesLegFrame(p, s, th);
+    float mq = PesLrWin(s, 0.02, 0.32) * PesLrG(PesLrDth(th, 5.0) / 75.0);
+    float mh = PesLrWin(s, 0.03, 0.30) * PesLrG(PesLrDth(th, 180.0) / 55.0);
+    float mc = PesLrWin(s, -0.24, -0.03) * PesLrG(PesLrDth(th, 180.0) / 65.0);
+    return saturate(act.x * mq + act.y * mh + act.z * mc);
+}
+
 // kind 1 mano, 2 pierna; a, b = (cierre del puno, 0) o (rodilla, esfuerzo). Suma la pendiente a nxy y devuelve (cavidad, pliegue)
-float2 PesLimbRelief(int kind, float3 pr, float a, float b, float3 dPx, float3 dPy, float2 dUx, float2 dUy, float gain, inout float2 nxy) {
+float2 PesLimbRelief(int kind, float3 pr, float a, float3 act, float3 dPx, float3 dPy, float2 dUx, float2 dUy, float gain, inout float2 nxy) {
     float pix = max(length(dPx), length(dPy));
     float fade = 1.0 - smoothstep(0.0012, 0.0030, pix);
     if (fade <= 0.0 || gain <= 0.0) return 0;
@@ -163,9 +175,9 @@ float2 PesLimbRelief(int kind, float3 pr, float a, float b, float3 dPx, float3 d
         hu = (PesHandH(p + e * eu, a, c1) - PesHandH(p - e * eu, a, c2)) / (2.0 * e);
         hv = (PesHandH(p + e * ev, a, c3) - PesHandH(p - e * ev, a, c4)) / (2.0 * e);
     } else {
-        h0 = PesLegH(p, a, b, c0);
-        hu = (PesLegH(p + e * eu, a, b, c1) - PesLegH(p - e * eu, a, b, c2)) / (2.0 * e);
-        hv = (PesLegH(p + e * ev, a, b, c3) - PesLegH(p - e * ev, a, b, c4)) / (2.0 * e);
+        h0 = PesLegH(p, a, act, c0);
+        hu = (PesLegH(p + e * eu, a, act, c1) - PesLegH(p - e * eu, a, act, c2)) / (2.0 * e);
+        hv = (PesLegH(p + e * ev, a, act, c3) - PesLegH(p - e * ev, a, act, c4)) / (2.0 * e);
     }
     float k = 2.2 * gain * fade;
     nxy += clamp(float2(-hu, hv) * k, -0.45, 0.45);

@@ -183,6 +183,27 @@ float PesLegGauss(float s, float th, float s0, float th0, float ss_, float sth) 
     float a = (s - s0) / ss_, b = dth / sth;
     return exp(-a * a - b * b);
 }
+// (08/11, Agustin: "mejora el metodo de plasmar los musculos tensados en las piernas al correr o realizar acciones") TENSION DE CADA
+// GRUPO de la pierna 0..1: x cuadriceps, y isquios, z gemelo. Antes solo pesaba el angulo de la rodilla y el esfuerzo sostenido; ahora
+// tambien la VELOCIDAD de la rodilla (cuadro actual contra el anterior, g_vsPrevBone): en la carrera el cuadriceps trabaja al apoyar y
+// estirar la rodilla con carga, los isquios frenan la pierna al final del vuelo (rodilla que se estira rapido estando doblada) y la
+// doblan, y el gemelo empuja al despegar (rodilla que se estira con esfuerzo). Parado, sin esfuerzo, todo queda en su tono base.
+float PesLimbFlexB(bool cur, float4 S, float3 Xu, float3 Xl) {
+    float3 xu = normalize(mul(PesBoneR(PesBone(cur, (int)round(S.x))), Xu));
+    float3 xl = normalize(mul(PesBoneR(PesBone(cur, (int)round(S.y))), Xl));
+    return saturate((acos(clamp(dot(xu, xl), -1.0, 1.0)) - S.w) * S.z);
+}
+float3 PesLegAct(float flex, float flexPrev, float eff) {
+    float sp = (flex - flexPrev) / 0.08;              // + doblando, - estirando (~0.08 por cuadro en la carrera)
+    float ext = saturate(-sp), bend = saturate(sp);
+    float fl = smoothstep(0.12, 0.9, flex);
+    float stz = (flex - 0.22) / 0.16;
+    float stance = exp(-stz * stz);   // apoyo: rodilla un poco doblada (15..40 grados)
+    float qa = saturate(0.20 * eff + eff * (0.45 * stance + 0.45 * ext * (0.4 + 0.6 * fl)) + 0.15 * fl);
+    float ha = saturate(0.15 * eff + eff * (0.55 * ext * fl + 0.35 * bend) + 0.35 * fl * (0.4 + 0.6 * eff));
+    float ca = saturate(0.30 * eff + eff * 0.60 * ext * (1.0 - 0.5 * fl) + 0.20 * eff * stance);
+    return float3(qa, ha, ca);
+}
 float PesLegBulge(uint vid, float3 rest) {
     float4 L5 = IniParams.Load(int2(305, 0)), M3 = IniParams.Load(int2(263, 0));
     float kc = clamp(M3.x, 0.0, 2.0);
@@ -200,15 +221,15 @@ float PesLegBulge(uint vid, float3 rest) {
     float4 Wv = g_handData.Load(int3(vid, 1, 0)); // x isquios, y pantorrilla, z cuadriceps
     float s, th; PesLegST(float3(abs(rest.x), rest.y, rest.z), s, th);
     float fl = smoothstep(0.12, 0.9, flex);
-    // el cuadriceps trabaja estirando la rodilla: con esfuerzo, y mas con la rodilla todavia doblada (empuje de la zancada)
-    float qa = saturate(0.35 * eff + 0.75 * eff * fl + 0.15 * fl);
+    float3 act = PesLegAct(flex, PesLimbFlexB(false, S, Xu, Xl), eff);   // (08/11) tension por grupo (con la velocidad de la rodilla)
+    float qa = act.x;
     float b = 0.0;
     b += (0.0042 * qa + 0.0010 * fl) * saturate(2.0 * Wv.z) * PesLegGauss(s, th, 0.075, -55.0, 0.030, 26.0);   // vasto interno (la gota)
     b += (0.0030 * qa + 0.0008 * fl) * saturate(2.0 * Wv.z) * PesLegGauss(s, th, 0.160, 70.0, 0.055, 30.0);    // vasto externo
     b += 0.0026 * qa * saturate(2.0 * Wv.z) * PesLegGauss(s, th, 0.200, 0.0, 0.065, 20.0);                     // recto anterior
-    b += (0.0034 * fl + 0.0014 * eff) * saturate(2.0 * Wv.x) * PesLegGauss(s, th, 0.150, 180.0, 0.060, 40.0);   // isquios (doblar)
-    b += (0.0040 * max(eff, 0.55 * fl)) * saturate(2.0 * Wv.y) * PesLegGauss(s, th, -0.125, -150.0, 0.045, 26.0);   // gemelo interno
-    b += (0.0028 * max(eff, 0.55 * fl)) * saturate(2.0 * Wv.y) * PesLegGauss(s, th, -0.100, 148.0, 0.040, 22.0);               // gemelo externo
+    b += (0.0030 * act.y + 0.0012 * fl) * saturate(2.0 * Wv.x) * PesLegGauss(s, th, 0.150, 180.0, 0.060, 40.0);   // isquios
+    b += 0.0040 * act.z * saturate(2.0 * Wv.y) * PesLegGauss(s, th, -0.125, -150.0, 0.045, 26.0);   // gemelo interno
+    b += 0.0028 * act.z * saturate(2.0 * Wv.y) * PesLegGauss(s, th, -0.100, 148.0, 0.040, 22.0);               // gemelo externo
     b += 0.0016 * fl * PesLegGauss(s, th, -0.030, 0.0, 0.016, 12.0);                                           // tendon de la rodilla al doblar
     b -= 0.0020 * fl * PesLegGauss(s, th, 0.010, 180.0, 0.022, 30.0);                                          // hueco de atras: se cierra
     return clamp(b, -0.0030, 0.0070) * kc;
@@ -250,10 +271,15 @@ bool PesLimbOut(bool handDone, uint vid, float3 rest, out float defB, out float 
         veinB = Wv.w * (eff < 0.0 ? 0.5 * pose : smoothstep(0.2, 0.85, eff) * (0.55 + 0.45 * pose));
         actCode = round(saturate(flex) * 7.0) + 8.0 * round(up * 7.0) + 64.0 * round(saturate(max(eff, 0.0)) * 7.0);
     } else {          // pierna: isquios, pantorrilla y (menos) cuadriceps con la rodilla
-        defB = saturate(Wv.x * flex + Wv.y * flex + Wv.z * 0.6 * flex);
-        // (08/11) relieve 3D de la pierna en el PS (pes_limb_relief.hlsli): 528 + rodilla (0..7) + 8 x esfuerzo (0..7)
-        float effL = PesLimbEffort();
-        actCode = 528.0 + round(saturate(flex) * 7.0) + 8.0 * round(saturate(max(effL, 0.0)) * 7.0);
+        // (08/11) relieve 3D de la pierna en el PS / DS (pes_limb_relief.hlsli): 528 + rodilla (0..7) + 8 x esfuerzo (0..7) en z;
+        // la tension de cada grupo (PesLegAct) en y = 2 + (cuadriceps + 8 isquios + 64 gemelo) / 1024 (0..7 cada uno; el PS no le
+        // aplica venas a la pierna). La definicion general del musculo (x) sigue a la tension de su grupo.
+        float effL = saturate(PesLimbEffort());
+        float3 act = PesLegAct(flex, PesLimbFlexB(false, S, Xu, Xl), effL);
+        defB = saturate(Wv.x * max(act.y, 0.6 * flex) + Wv.y * max(act.z, 0.6 * flex) + Wv.z * max(act.x, 0.4 * flex)) * max(L5.y, 0.0);
+        actCode = 528.0 + round(saturate(flex) * 7.0) + 8.0 * round(effL * 7.0);
+        veinB = 2.0 + (round(act.x * 7.0) + 8.0 * round(act.y * 7.0) + 64.0 * round(act.z * 7.0)) / 1024.0;
+        return true;
     }
     defB *= max(L5.y, 0.0); veinB *= max(L5.z, 0.0);
     return true;
