@@ -20,7 +20,7 @@ namespace fx {
 static const int kMaxPlayers = 48, kStages = 3;
 static ID3D11Buffer* s_stage[kStages] = {}; static int s_stageFrame[kStages] = { -1, -1, -1 }; static std::atomic<int> s_stageW{0};
 static std::atomic<int> s_count{0};          // dibujos anotados en el cuadro actual
-static std::atomic<int> s_noteCalls{0}, s_noteOk{0}, s_noteShort{0}, s_noteNoStage{0}; static int s_posBad = 0, s_posZero = 0, s_posOk = 0, s_rowPick[4] = {};   // (08/11 z) diagnostico
+static std::atomic<int> s_noteCalls{0}, s_noteOk{0}, s_noteShort{0}, s_noteNoStage{0}, s_noteBone{0}, s_boneShort{0}, s_boneNone{0}; static int s_posBad = 0, s_posZero = 0, s_posOk = 0, s_rowPick[4] = {}; static ID3D11Buffer* s_zeroBuf = nullptr;   // (08/11 aa) s_zeroBuf: 64 B en cero para limpiar el hueso del slot cuando el dibujo no tiene b6   // (08/11 z) diagnostico
 static int s_frame = 0;
 static ID3D11Texture2D* s_tex = nullptr; static ID3D11RenderTargetView* s_rtv = nullptr; static ID3D11ShaderResourceView* s_srv = nullptr;
 static ID3D11VertexShader* s_vs = nullptr; static ID3D11PixelShader* s_ps = nullptr; static bool s_tried = false;
@@ -197,9 +197,10 @@ void PitchClipsReloadShaders() { if (s_clipVS) { s_clipVS->Release(); s_clipVS =
 static void EnsureRes() {
     if (!g_dev.dev) return;
     for (int i = 0; i < kStages; i++) if (!s_stage[i]) {
-        D3D11_BUFFER_DESC d = {}; d.ByteWidth = kMaxPlayers * 128; d.Usage = D3D11_USAGE_STAGING;   // (08/11 z) 8 filas de b5 por dibujo d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        D3D11_BUFFER_DESC d = {}; d.ByteWidth = kMaxPlayers * 192; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;   // (08/11 z) 8 filas de b5 por dibujo + (08/11 aa) 64 B del hueso 0 de b6. OJO (08/11 aa): desde 4c92e60 el CPUAccessFlags habia quedado dentro del comentario -> el Map fallaba y NINGUNA posicion se leia (por eso los jugadores no disparaban nada)
         g_dev.dev->CreateBuffer(&d, nullptr, &s_stage[i]);
     }
+    if (!s_zeroBuf) { float z[16] = {}; D3D11_BUFFER_DESC d = {}; d.ByteWidth = 64; d.Usage = D3D11_USAGE_IMMUTABLE; d.BindFlags = D3D11_BIND_SHADER_RESOURCE; D3D11_SUBRESOURCE_DATA sd = { z, 0, 0 }; g_dev.dev->CreateBuffer(&d, &sd, &s_zeroBuf); }
     if (!s_tex) {
         D3D11_TEXTURE2D_DESC td{}; td.Width = 1024; td.Height = 512; td.MipLevels = 1; td.ArraySize = 1; td.Format = DXGI_FORMAT_R16_UNORM; td.SampleDesc.Count = 1;
         td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
@@ -437,9 +438,21 @@ void PitchWearNotePlayer(ID3D11DeviceContext* c) {
     D3D11_BUFFER_DESC d; cb->GetDesc(&d); UINT off = first * 16;
     // (08/11 z) se copian las 8 primeras filas de b5 (128 B) y en Present se elige la que parece una posicion de la cancha (fila 7, fila 3 o la
     // columna w de las filas 4..6, como con la pelota): antes solo la fila 7 y, segun la malla / el mod de kits, la posicion caia fuera de rango
-    if (d.ByteWidth >= off + 128) { D3D11_BOX bx = { off, 0, 0, off + 128, 1, 1 }; c->CopySubresourceRegion(s_stage[w], 0, (UINT)i * 128, 0, 0, cb, 0, &bx); s_noteOk++; }
+    if (d.ByteWidth >= off + 128) { D3D11_BOX bx = { off, 0, 0, off + 128, 1, 1 }; c->CopySubresourceRegion(s_stage[w], 0, (UINT)i * 192, 0, 0, cb, 0, &bx); s_noteOk++; }
     else s_noteShort++;
     cb->Release();
+    // (08/11 aa, Agustin: "los jugadores no disparan nada") el cuerpo va con esqueleto (VSBones b6, float4x3 m_boneMatrices[32]): si m_world
+    // (b5) es la identidad la posicion del jugador esta en el hueso 0 (pelvis). Se copian sus 3 registros (48 B; la traslacion es la columna w,
+    // como lee sb0 el VS del cuerpo 1c02) y en Present se calcula m_world * hueso0. Si no hay b6 (malla rigida) quedan los candidatos de b5.
+    { ID3D11Buffer* bb = nullptr; UINT f6 = 0, n6 = 0; ID3D11DeviceContext1* c1b = nullptr;
+      if (SUCCEEDED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1b)) && c1b) { c1b->VSGetConstantBuffers1(6, 1, &bb, &f6, &n6); c1b->Release(); }
+      else c->VSGetConstantBuffers(6, 1, &bb);
+      D3D11_BOX bz = { 0, 0, 0, 64, 1, 1 };
+      if (bb) { D3D11_BUFFER_DESC d6; bb->GetDesc(&d6); UINT o6 = f6 * 16;
+          if (d6.ByteWidth >= o6 + 48) { D3D11_BOX b6 = { o6, 0, 0, o6 + 48, 1, 1 }; c->CopySubresourceRegion(s_stage[w], 0, (UINT)i * 192 + 128, 0, 0, bb, 0, &b6); s_noteBone++; }
+          else s_boneShort++;
+          bb->Release(); }
+      else { s_boneNone++; if (s_zeroBuf) c->CopySubresourceRegion(s_stage[w], 0, (UINT)i * 192 + 128, 0, 0, s_zeroBuf, 0, &bz); } }
 }
 
 // (2/11) desde BeforeDraw, en cada dibujo del PS de botines / pelota (aadffecf): anota la traslacion de su m_world (b5 fila 3) con el
@@ -513,9 +526,9 @@ void PitchWearPresent() {
     const float* P = g_cfg.live[115];
     // (08/11 z, Agustin: "no se aprecian las huellas ni el desgaste") diagnostico cada 15 s: en su partido no hubo ni una pisada en el log
     { static double nextD = 0.0; double tn = Now(); if (tn >= nextD && g_cfg.live[58][3] > 0.5f) { nextD = tn + 15.0;
-        Log("desgaste en vivo (15 s): dibujos de short 5529 %d (anotados %d, b5 corto %d, sin staging %d) | posiciones: validas %d (fila 7 %d, fila 3 %d, columna w %d), fuera de rango %d, en cero %d | jugadores seguidos %d, recortes vivos %d | x115 %.2f w115 %.0f x136 %.0f x389 %.0f",
-            s_noteCalls.exchange(0), s_noteOk.exchange(0), s_noteShort.exchange(0), s_noteNoStage.exchange(0), s_posOk, s_rowPick[0], s_rowPick[1], s_rowPick[2], s_posBad, s_posZero, (int)s_pl.size(), (int)s_clips.size(), P[0], P[3], g_cfg.live[136][0], g_cfg.live[389][0]);
-        s_posOk = s_posBad = s_posZero = 0; s_rowPick[0] = s_rowPick[1] = s_rowPick[2] = 0; } }
+        Log("desgaste en vivo (15 s): dibujos de short 5529 %d (anotados %d, b5 corto %d, sin staging %d; hueso 0 de b6 %d, b6 corto %d, sin b6 %d) | posiciones: validas %d (hueso 0 %d, fila 7 %d, fila 3 %d, columna w %d), fuera de rango %d, en cero %d | jugadores seguidos %d, recortes vivos %d | x115 %.2f w115 %.0f x136 %.0f x389 %.0f",
+            s_noteCalls.exchange(0), s_noteOk.exchange(0), s_noteShort.exchange(0), s_noteNoStage.exchange(0), s_noteBone.exchange(0), s_boneShort.exchange(0), s_boneNone.exchange(0), s_posOk, s_rowPick[0], s_rowPick[1], s_rowPick[2], s_rowPick[3], s_posBad, s_posZero, (int)s_pl.size(), (int)s_clips.size(), P[0], P[3], g_cfg.live[136][0], g_cfg.live[389][0]);
+        s_posOk = s_posBad = s_posZero = 0; s_rowPick[0] = s_rowPick[1] = s_rowPick[2] = s_rowPick[3] = 0; } }
     if (P[3] < 0.5f) { s_count = 0; return; }
     EnsureRes(); if (!s_tex || !s_cb) return;
     // partido nuevo: borrar
@@ -533,12 +546,17 @@ void PitchWearPresent() {
     const float* q = (const float*)m.pData; int cnt = 0; float pos[kMaxPlayers][2];
     for (int i = 0; i < kMaxPlayers && cnt < kMaxPlayers; i++) {
         // (08/11 z) candidatos de posicion dentro de las 8 filas copiadas: fila 7 (xyz), fila 3 (xyz), columna w de las filas 4..6
-        const float* r = q + i * 32; float x = 0, y = 0, z = 0; int pick = -1;
-        const float cand[3][3] = { { r[28], r[29], r[30] }, { r[12], r[13], r[14] }, { r[19], r[23], r[27] } };
-        for (int k = 0; k < 3 && pick < 0; k++) { float cx = cand[k][0], cy = cand[k][1], cz = cand[k][2];
+        const float* r = q + i * 48; float x = 0, y = 0, z = 0; int pick = -1;
+        // (08/11 aa) primero m_world (b5 c4..c7, filas r[16..31]) * hueso 0 (b6: traslacion en la columna w de sus 3 registros, r[32+3], r[32+7], r[32+11]):
+        // vale tanto si m_world es la identidad (todo en los huesos) como si el hueso es local al jugador
+        const float* B = r + 32; float bx = B[3], by = B[7], bz = B[11]; bool hasB = fabsf(bx) + fabsf(by) + fabsf(bz) > 1e-4f && fabsf(bx) < 200.f && fabsf(by) < 200.f && fabsf(bz) < 200.f;
+        float hx = 0, hy = 0, hz = 0;
+        if (hasB) { hx = bx * r[16] + by * r[20] + bz * r[24] + r[28]; hy = bx * r[17] + by * r[21] + bz * r[25] + r[29]; hz = bx * r[18] + by * r[22] + bz * r[26] + r[30]; }
+        const float cand[4][3] = { { hx, hy, hz }, { r[28], r[29], r[30] }, { r[12], r[13], r[14] }, { r[19], r[23], r[27] } };
+        for (int k = (hasB ? 0 : 1); k < 4 && pick < 0; k++) { float cx = cand[k][0], cy = cand[k][1], cz = cand[k][2];
             if (fabsf(cx) < 80.f && fabsf(cz) < 50.f && fabsf(cy) < 5.f && !(fabsf(cx) < 0.01f && fabsf(cz) < 0.01f)) { x = cx; y = cy; z = cz; pick = k; } }
         if (pick < 0) { if (fabsf(r[28]) < 0.01f && fabsf(r[30]) < 0.01f) s_posZero++; else s_posBad++; continue; }
-        s_rowPick[pick]++; s_posOk++;
+        s_rowPick[pick]++; s_posOk++;   // (08/11 aa) 0 = hueso 0, 1 = fila 7, 2 = fila 3, 3 = columna w
         bool dup = false; for (int k = 0; k < cnt; k++) if (fabsf(pos[k][0] - x) < 0.05f && fabsf(pos[k][1] - z) < 0.05f) { dup = true; break; }
         if (dup) continue;
         pos[cnt][0] = x; pos[cnt][1] = z; cnt++;

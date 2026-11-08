@@ -357,7 +357,21 @@ void main(
       #undef PESFL
       float kF = saturate(fl0) * clamp(Q39.z, 0.0, 2.0);
       float lg = length(gF);
-      pesLean += (lg > 1e-4 ? -gF / lg : float2(0.0, 0.0)) * 1.2 * kF;   // se abren hacia afuera del rastro
+      float2 dOut = (lg > 1e-4 ? -gF / lg : float2(0.0, 0.0));
+      // (08/11 aa, Agustin: "pasto saltando por la reaccion de los jugadores") REBOTE: el mapa se apaga solo (exp), asi que mientras fl0 baja la
+      // hoja se endereza; sobre ese camino se suma un vaiven amortiguado (2 oscilaciones mientras se levanta, fase al azar por tarjeta) y un
+      // pequeno salto hacia arriba del tramo medio del rastro: las hojas no vuelven rectas como un resorte lento sino que tiemblan. x413 cuanto.
+      float4 P413 = IniParams.Load(int2(413, 0));
+      float kReb = clamp(P413.x, 0.0, 2.0);
+      if (kReb > 0.001 && pesIsExt) {
+        float hbR = (pesCard >= 0) ? PESGh21(float2((float)pesCard * 0.0191 + pesExtOrg.x * 0.43, pesExtOrg.y * 0.67 + (float)pesRot * 0.23) + 0.59) : 0.5;
+        float ph = saturate(fl0) * 12.566 + hbR * 6.2832;             // 2 vueltas a lo largo de la recuperacion
+        float env = saturate(fl0) * (1.0 - saturate(fl0)) * 4.0;      // 0 al tocar fondo y 0 al terminar: maximo a mitad de camino
+        pesLean += dOut * sin(ph) * 0.6 * env * kReb;
+        float2 dSide = float2(-dOut.y, dOut.x);
+        pesLean += dSide * cos(ph * 0.5 + hbR) * 0.25 * env * kReb;   // tambien de costado: no se mueven todas en el mismo plano
+      }
+      pesLean += dOut * 1.2 * kF;   // se abren hacia afuera del rastro
     }
   }
   // --- posicion en el mundo y doblado por jugador / pelota ---

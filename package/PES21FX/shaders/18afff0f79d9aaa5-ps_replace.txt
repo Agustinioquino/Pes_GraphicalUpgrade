@@ -83,6 +83,7 @@ void main(
   bool pesArt = P407.x > 0.5;
   if (pesArt) kC *= 0.35;
   float kT = pesV3 ? clamp(P295.z, 0.0, 2.0) : 0.0;
+  float pesTxGb = 0.0;   // (08/11 aa) w413: transmision con el sol calculada en las puntas, va tambien a la translucidez del G-buffer
   float sC = 0.9 + 0.3 * kC;   // pendiente de la claridad del atlas (R): 0.9 = como antes
   // (27/10 j) puntas al sol y variacion por hoja solo donde la hoja ya mide en pantalla: rampa por encima del limite del color propio (z291)
   // hasta 2.2x. Antes entraban de golpe en z291 y en el limite de nivel (100-110 px/m) se veia una fila de puntitos encendidos
@@ -199,6 +200,26 @@ void main(
     float sunUpC = saturate(PESSunWorld().y);
     // (26/10 e) 0.4 -> 0.25: la raiz quedaba negra cerca. (27/10 h) y295: + 0.10 por punto de contraste (0.35 natural): bases mas oscuras, como en la foto
     float aoC = lerp(1.0 - saturate((0.25 + 0.10 * kC + 0.07 * kS * nearF) * kRoot) * saturate(Q6.y) * lerp(0.85, 1.15 - 0.45 * sunUpC, pesDayK), 1.0, smoothstep(0.0, 0.85, relH));   // (2/11) z325   // (27/10 p) z334: raiz mas oscura de cerca. (04/11) 0.15 -> 0.07: de cerca la cancha quedaba ~8 % mas oscura que a media distancia
+    // (08/11 aa) z413 SOMBRA ENTRE HOJAS por tipo. Natural: la sombra de la raiz depende del lado del sol (la cara de la hoja que mira al sol
+    // se aclara desde mas abajo, la de atras queda en sombra hasta mas arriba) y de la oclusion propia del atlas (G) multiplicada por la
+    // densidad de la mata (donde hay mas hojas juntas, menos luz llega abajo). Artificial: fibras parejas sobre relleno de caucho oscuro
+    // (raiz mas oscura y neutra, borde de la sombra mas corto y mas duro). Solo de cerca (pesCf) y de dia; 0 = como antes.
+    float4 P413 = IniParams.Load(int2(413,0));
+    float kSh = clamp(P413.z, 0.0, 2.0);
+    if (kSh > 0.001) {
+      float3 Sd = PESSunSky();
+      float side = saturate(0.5 + 0.5 * dot(normalize(float3(pesN.x * 2.0 - 1.0, 0.0, pesN.y * 2.0 - 1.0) + 1e-4), normalize(float3(Sd.x, 0.0, Sd.z) + 1e-4)));
+      float dens = saturate((1.0 - r0.y) * 2.0);   // oclusion entre hojas ya calculada (r0.y: 1 = nada tapada) -> 0..1
+      if (pesArt) {
+        float shA = lerp(1.0 - 0.30 * kSh * (0.5 + 0.5 * dens), 1.0, smoothstep(0.0, 0.40, relH));
+        r1.xyz *= lerp(1.0, shA * float3(0.97, 0.98, 1.0), pesCf);
+      } else {
+        float up = lerp(0.95, 0.55, side);    // de espaldas al sol la sombra sube mas
+        float shN = lerp(1.0 - (0.18 + 0.14 * dens) * kSh * lerp(0.7, 1.0 + 0.3 * (1.0 - sunUpC), pesDayK), 1.0, smoothstep(0.0, up, relH));
+        float3 tint = lerp(float3(0.94, 1.0, 0.97), float3(1.0, 1.0, 1.0), shN);   // la sombra entre hojas es verde azulada (rebote de las hojas vecinas), no gris
+        r1.xyz *= lerp(1.0, shN * tint, pesCf);
+      }
+    }
     r1.xyz *= lerp(1.0, aoC, pesCf);   // (26/10 f) lejos sin la sombra raiz -> punta (de lejos solo pasan el alfa los texeles de la raiz)
   }
   o0.xyz = v1.zzz * r1.xyz;
@@ -235,6 +256,22 @@ void main(
       float4 P409 = IniParams.Load(int2(409,0));
       float tW = P409.x > 0.001 ? clamp(P409.x, 0.0, 2.0) : 1.0;
       if (P409.y > 0.001) tz = smoothstep(saturate(1.0 - 0.65 * clamp(P409.y, 0.2, 1.5)), 1.0, relH) * kT * pesCfN * (1.0 - pesPaintF) * (pesArt ? 0.3 : 1.0);
+      // (08/11 aa) w413 TRANSMISION CON EL SOL: "verse traspasado por la luz al ser fuerte". La punta se enciende segun la fuerza del sol
+      // (dia despejado, sol alto; con lluvia / nublado casi nada) y segun si la hoja esta a contraluz respecto de la luz dominante: desde
+      // atras la luz atraviesa la hoja (mas en la fina: A del atlas) y la punta sale amarillo verdosa; de frente apenas. Natural completo,
+      // artificial solo un 35 % (la fibra es opaca y pareja). 0 = como antes.
+      float4 P413t = IniParams.Load(int2(413,0));
+      float kTx = clamp(P413t.w, 0.0, 2.0);
+      if (kTx > 0.001) {
+        float3 Sd = PESSunSky();
+        float sunK = saturate(Sd.y * 1.6) * pesDayK * (1.0 - 0.8 * PESGround().x);
+        float3 Ld = g_psSystem.m_dominantLightDir.xyz; float lv = length(Ld); Ld = lv > 1e-3 ? Ld / lv : Sd;
+        float back = saturate(0.5 - 0.5 * dot(normalize(float3(pesN.x * 2.0 - 1.0, pesN.z, pesN.y * 2.0 - 1.0) + 1e-4), Ld));   // la normal de la hoja mira lejos de la luz = contraluz
+        float thin = saturate(1.3 - 0.9 * pesN.w);
+        float tx = smoothstep(0.3, 1.0, relH) * sunK * (0.35 + 0.65 * back) * thin * kTx * pesCfN * (1.0 - pesPaintF) * (pesArt ? 0.35 : 1.0);
+        c = lerp(c, c * float3(1.22, 1.30, 0.80) + float3(0.04, 0.06, 0.0), saturate(tx * 0.8));
+        pesTxGb = saturate(tx);
+      }
       c *= lerp(float3(1.0, 1.0, 1.0), lerp(float3(1.16, 1.15, 0.98), float3(1.34, 1.24, 0.86), tW), tz);
     }
     o0.xyz = saturate(c);
@@ -325,7 +362,8 @@ void main(
   float pesTr = v1.w;
   if (pesV3 && !pesFar) pesTr = lerp(v1.w, saturate(v1.w * (1.35 - 0.8 * pesN.w)), pesCf);   // puntas finas mas translucidas (A = grosor); lejos sin variar
   // (27/10 h) z295: la punta deja pasar mas luz a contraluz (y57 lee esto del G-buffer); la pintura tapa
-  if (pesV3) pesTr = saturate(pesTr * (1.0 + 0.35 * smoothstep(0.45, 1.0, relH) * kT * pesCfN) * (1.0 - 0.85 * pesPaintF));   // (27/10 i) pintura: casi opaca (salia lima a contraluz)
+  if (pesV3) pesTr = saturate(pesTr * (1.0 + 0.35 * smoothstep(0.45, 1.0, relH) * kT * pesCfN) * (1.0 - 0.85 * pesPaintF));
+  if (pesV3) pesTr = saturate(pesTr + 0.30 * pesTxGb);   // (08/11 aa) w413: la pasada del sol tambien la enciende mas a contraluz   // (27/10 i) pintura: casi opaca (salia lima a contraluz)
   // (27/10 n) tanda 11, x329: la punta deja pasar mas luz (translucidez al G-buffer, la lee la pasada del sol): hojas encendidas a contraluz
   if (pesV3 && v4.w > 0.0) { float4 P329t = IniParams.Load(int2(329,0)); pesTr = saturate(pesTr * (1.0 + 0.6 * clamp(P329t.x, 0.0, 2.0) * smoothstep(0.3, 1.0, relH) * pesCfN * (1.0 - pesPaintF))); }
   // (04/11) de cerca cada hoja con su translucidez (unas finas que se encienden a contraluz, otras gruesas): mismo promedio
