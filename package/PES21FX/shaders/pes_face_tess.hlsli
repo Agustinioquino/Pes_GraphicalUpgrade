@@ -440,17 +440,24 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
       float q = round((c0z - 7.0) * 1200.0);
       float3 r0 = PES_LERP3(pR).xyz; float3 pm = float3(abs(r0.x), r0.y, r0.z);
       float hh = 0.0, crz = 0.0;
-      if (q < 511.5) hh = PesArmH(pm);
-      else if (q > 515.5 && q < 527.5) hh = PesHandH(pm, saturate((q - 520.0) / 7.0), crz);
+      // (08/11 l, captura de Agustin con la vista de prueba: brazo y mano casi sin amarillo) los surcos (entre musculos del brazo
+      // 0.5..0.8 mm, entre metacarpianos, separaciones de la pierna) son la mayor parte del relieve y el tope >= 0 los borraba: el brazo
+      // de arriba no se movia nada. Ahora la piel sube una BASE (lo mas hondo de los surcos de esa pieza) y el relieve se suma encima:
+      // los surcos quedan en 0 (no entran) y todo lo demas sale; se ve el mismo dibujo que en la luz, siempre hacia afuera. La base se
+      // apaga igual que el relieve en los bordes de cada malla (hombro / muneca / tobillo / short), sin escalon con la pieza de al lado.
+      float hb = 0.0;
+      if (q < 511.5) { hh = PesArmH(pm); hb = 0.0008 * PesArmKeep(pm); }
+      else if (q > 515.5 && q < 527.5) { hh = PesHandH(pm, saturate((q - 520.0) / 7.0), crz); hb = 0.0003 * PesHandFade(pm); }
       else if (q > 527.5 && q < 599.5) {   // tension por grupo en o1.y = 2 + (cuadriceps + 8 isquios + 64 gemelo) / 1024
         float na = round((p[0].o1.y - 2.0) * 1024.0);
         float3 act = (p[0].o1.y > 1.99 && p[0].o1.y < 2.6) ? float3(fmod(na, 8.0), fmod(floor(na / 8.0), 8.0), floor(na / 64.0)) / 7.0 : float3(0.3, 0.3, 0.3);
         hh = PesLegH(pm, fmod(q - 528.0, 8.0) / 7.0, saturate(act), crz);
+        hb = 0.0006 * PesLegFade(pm);
       }
       float dGr = IniParams.Load(int2(172, 0)).x; dGr = dGr > 0.01 ? clamp(dGr, 0.0, 3.0) : 1.0;
       // (08/11 k) solo hacia AFUERA: manos y brazos tienen una prepasada de profundidad sin teselar (VS c6ef0c75); un surco metido hacia
       // adentro fallaria la prueba de profundidad y dejaria un agujero. Los surcos se marcan en la luz (PS aa7d1833, PesLimbRelief).
-      float hm = clamp(hh * clamp(rW, 0.0, 2.0) * dGr, 0.0, 0.0015);
+      float hm = clamp((hh + hb) * clamp(rW, 0.0, 2.0) * dGr, 0.0, 0.0025);
       float3 Nr = normalize(b.x * N0 + b.y * N1 + b.z * N2);
       d += Nr * (hm * min(seam, seamR) * fade);
       { float dn = dot(d, Nr); if (dn < 0.0) d -= Nr * dn; }   // el redondeo tampoco mete nada hacia adentro
@@ -575,7 +582,9 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
   // (08/11 k, Agustin: "quieres agregar una vista debug del cuerpo?") x360 = 2: el PS aa7d1833 pinta la piel del cuerpo por cuanto se
   // tesela y cuanto se movio: pR.w = 2 + nivel del factor interior (0..5, igual en todo el parche) + corrimiento / 1.5 mm (0..0.9)
   if (IniParams.Load(int2(360, 0)).x > 1.5) {
-    float lv = round(saturate((k.i - 1.0) / 15.0) * 5.0), mv = saturate(length(d) / 0.0015);
+    // (08/11 l) escala por duplicacion (antes lineal 1..16: x1..x3.9 salia todo azul y el cuerpo, x5-x6 de promedio, no pasaba
+    // del celeste): x1 azul, x2 celeste, x4 verde, x8 naranja, x16 rojo
+    float lv = round(saturate(log2(max(k.i, 1.0)) / 4.0) * 5.0), mv = saturate(length(d) / 0.0025);
     o.pR.w = 2.0 + lv + 0.9 * mv;
   }
 #endif

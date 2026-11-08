@@ -36,6 +36,9 @@ static const float3 PLR_PIP[4] = { float3(0.6868, 0.9752, 0.1113), float3(0.6966
 static const float  PLR_CK[4] = { 0.858, 0.0, -0.505, -1.142 };   // posicion de cada nudillo a lo ancho (en Hw)
 static const float3 PLR_ULNA = float3(0.6126, 1.0870, 0.0387);    // punta del cubito (vertice dorsal mas saliente del lado del menique)
 
+// (08/11 l) cuanto del relieve de la mano llega a este punto (el mismo apagado hacia la muneca que PesHandH): para la base del DS
+float PesHandFade(float3 p) { return smoothstep(0.002, 0.014, dot(p - PLR_W, PLR_A)); }
+
 float PesHandH(float3 p, float curl, out float crease) {
     crease = 0.0;
     float3 q = p - PLR_W;
@@ -97,6 +100,9 @@ void PesLegFrame(float3 p, out float s, out float th) {
 
 // flex 0..1 rodilla doblada, act = tension de cada grupo (pes_limbs.hlsli PesLegAct: x cuadriceps, y isquios, z gemelo);
 // crease = pliegues de la pose (para oscurecer el fondo)
+// (08/11 l) el apagado del relieve de la pierna en los bordes de la malla (igual que en PesLegH)
+float PesLegFade(float3 p) { float s, th; PesLegFrame(p, s, th); return smoothstep(-0.201, -0.166, s) * (1.0 - smoothstep(0.259, 0.294, s)); }
+
 float PesLegH(float3 p, float flex, float3 act, out float crease) {
     crease = 0.0;
     float s, th; PesLegFrame(p, s, th);
@@ -236,6 +242,9 @@ float2 PesArLine(float t, float th, float ta, float tha, float tb, float thb, fl
 }
 float PesArB(float t, float th, float t0, float th0, float st, float sth) { return PesArG((t - t0) / st) * PesArG(PesLrDth(th, th0) / sth); }
 // altura (m) del detalle muscular del brazo, + = bulto (sin pose: las separaciones de base)
+// (08/11 l) el apagado del relieve del brazo en el hombro y la muneca (igual que en PesArmH)
+float PesArmKeep(float3 p) { float t, th; PesArmFrame(p, t, th); return PesArSS(-0.005, 0.02, t) * (1.0 - PesArSS(0.41, 0.43, t)); }
+
 float PesArmH(float3 p) {
     float t, th; PesArmFrame(p, t, th);
     float keep = PesArSS(-0.005, 0.02, t) * (1.0 - PesArSS(0.41, 0.43, t));   // nada en la costura del hombro ni en la mano
