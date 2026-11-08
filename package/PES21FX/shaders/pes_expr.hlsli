@@ -356,6 +356,9 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
   // (07/11, Agustin: "baja el achinado") sonrisa y enojo ~40 % menos
   float geU = 0.09 * gSmi + 0.14 * gBig + 0.08 * gAng - 0.20 * gSur + 0.10 * gGri + 0.05 * gPuc;   // > 0 baja el de arriba
   float geL = -(0.09 * gSmi + 0.12 * gBig + 0.03 * gAng + 0.10 * gGri) + 0.04 * gSur;            // < 0 sube el de abajo
+  // (08/11, Agustin: "un slider para cerrar y abrir los ojos") x388: + cierra (1 = cerrados), - abre de mas
+  { float ec = clamp(IniParams.Load(int2(388, 0)).x, -1.0, 1.0);
+    geU += ec > 0.0 ? 0.62 * ec : 0.22 * ec; geL += ec > 0.0 ? -0.07 * ec : -0.10 * ec; }
   bool ges = abs(geU) > 0.001 || abs(geL) > 0.001;
   if (amt <= 0.0 && !ges) return;
   // (02/11) con 350.y = 2 la DLL parpadea girando los huesos de los parpados (exprbones.cpp): todas las mallas juntas
