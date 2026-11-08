@@ -67,8 +67,8 @@ def claves_pos(data):
         v = [half(struct.unpack('<H', data[p + 2 * i:p + 2 * i + 2])[0]) for i in range(3)]
         out.append((f, v)); p += 6
         if p >= len(data): break
-        st = struct.unpack('b', data[p:p + 1])[0]; p += 1
-        if st <= 0: break
+        st = data[p]; p += 1   # (08/11) paso SIN signo (u8): 159 = 0x9F; con signo se cortaban las claves despues de un paso >= 128
+        if st == 0: break
         f += st
     return out
 
