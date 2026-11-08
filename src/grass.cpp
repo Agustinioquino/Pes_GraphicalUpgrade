@@ -712,7 +712,19 @@ static void GrassSaveStadium() {
             r->Release(); }
         v[i]->Release();
     }
-    Log("pasto en el editor: texturas de la cancha de este partido guardadas (%d, %d fallaron) en PES21FX\\textures\\pasto_editor: el editor las usa desde la proxima sesion", ok, fail);
+    // (08/11 j, Agustin: "que el pasto del editor sea el de alto detalle que se carga de cerca") tambien los cbuffers del pasto del
+    // partido (VS b0 64 B, VS b4 80 B, PS b0 80 B: escala de la sombra plana, uv de la cancha, color / parametros del PS) en cb.bin,
+    // para que el editor dibuje con los mismos valores que el pasto de cerca del partido y no con los del estado propio
+    { ID3D11Buffer* src[3] = { s_cpVs0, s_cpVs4, s_cpPs0 }; const UINT sz[3] = { 64, 80, 80 }; unsigned char all[224] = {}; UINT at = 0; bool good = true;
+      for (int i = 0; i < 3 && good; i++) {
+          if (!src[i]) { good = false; break; }
+          D3D11_BUFFER_DESC bd = {}; bd.ByteWidth = sz[i]; bd.Usage = D3D11_USAGE_STAGING; bd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+          ID3D11Buffer* stg = nullptr; if (FAILED(g_dev.dev->CreateBuffer(&bd, nullptr, &stg)) || !stg) { good = false; break; }
+          D3D11_BOX bx = { 0, 0, 0, sz[i], 1, 1 }; g_dev.imm->CopySubresourceRegion(stg, 0, 0, 0, 0, src[i], 0, &bx);
+          D3D11_MAPPED_SUBRESOURCE ms = {}; if (SUCCEEDED(g_dev.imm->Map(stg, 0, D3D11_MAP_READ, 0, &ms))) { memcpy(all + at, ms.pData, sz[i]); g_dev.imm->Unmap(stg, 0); } else good = false;
+          stg->Release(); at += sz[i]; }
+      if (good) { FILE* f = nullptr; if (_wfopen_s(&f, (dir + L"cb.bin").c_str(), L"wb") == 0 && f) { fwrite(all, 1, sizeof all, f); fclose(f); ok++; } else fail++; } }
+    Log("pasto en el editor: texturas y cbuffers de la cancha de este partido guardados (%d, %d fallaron) en PES21FX\\textures\\pasto_editor: el editor los usa desde la proxima sesion", ok, fail);
 }
 
 void GrassPresent() {
@@ -786,7 +798,7 @@ static thread_local bool t_editor = false;   // (08/11 c) emision en el editor (
 // (cancha verde, sin mascara ni desgaste, sin sombra plana, normal plana), cbuffers con valores de cancha (uv de la cancha = raiz /
 // 105 x 68 + 0.5, pelota lejos), muestreadores lineales, mezcla por defecto, profundidad segun como limpia el juego (0 o 1) sin
 // stencil y sin recorte de caras. Se usa solo si no hay estado capturado; cuando se vio un partido, se usa el real.
-static GrassState s_edSt; static std::mutex s_edMx; static bool s_edTried = false; static ID3D11Buffer* s_edPsCb = nullptr;
+static GrassState s_edSt; static std::mutex s_edMx; static bool s_edTried = false; static ID3D11Buffer* s_edPsCb = nullptr; static float s_edP0[20] = {};   // (08/11 j) copia del PS b0 del editor (cb.bin o propio)
 static ID3D11ShaderResourceView* Tex1x1(float r, float g, float b, float a) {
     D3D11_TEXTURE2D_DESC d = {}; d.Width = d.Height = 1; d.MipLevels = d.ArraySize = 1; d.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; d.SampleDesc.Count = 1; d.Usage = D3D11_USAGE_IMMUTABLE; d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
     float px[4] = { r, g, b, a }; D3D11_SUBRESOURCE_DATA sd = { px, 16, 16 };
@@ -812,7 +824,16 @@ static bool BuildEditorState() {
     float c0[12] = { 0, 0, 0, 0,  1, 1, 0, 0,  0, 0, 1, 1 };                                   // cb0[1].xy * cb0[2].zw = escala de la sombra plana (1)
     float c4[20] = { 0, 0, 0, 0,  1.0f / 105.0f, 1.0f / 68.0f, 0.5f, 0.5f,  0, 0, 1, 1,  999, 0, 999, 0,  999, 0, 999, 0 };   // uv de la cancha, pelota lejos
     float p0[20] = {}; p0[8] = 1920; p0[9] = 1080;                                              // m_renderBuffer.xy (se actualiza al emitir)
-    g.vsCb0 = cbuf(c0, sizeof c0); g.vsCb4 = cbuf(c4, sizeof c4); g.psCb0 = cbuf(p0, sizeof p0); s_edPsCb = g.psCb0; if (s_edPsCb) s_edPsCb->AddRef();
+    // (08/11 j) cbuffers del pasto del ultimo partido (cb.bin, GrassSaveStadium): los mismos valores que el pasto de cerca del partido;
+    // la pelota se manda lejos (no hay pelota en el editor) y m_renderBuffer.xy se actualiza al emitir
+    bool cbFile = false;
+    { unsigned char all[224] = {}; FILE* f = nullptr;
+      if (_wfopen_s(&f, (g_cfg.baseDir + L"textures\\pasto_editor\\cb.bin").c_str(), L"rb") == 0 && f) { cbFile = fread(all, 1, sizeof all, f) == sizeof all; fclose(f); }
+      if (cbFile) { float v0[16], v4[20]; memcpy(v0, all, 64); memcpy(v4, all + 64, 80); memcpy(s_edP0, all + 144, 80);
+          v4[12] = 999; v4[14] = 999; v4[16] = 999; v4[18] = 999;
+          g.vsCb0 = cbuf(v0, 64); g.vsCb4 = cbuf(v4, 80); g.psCb0 = cbuf(s_edP0, 80); } }
+    if (!cbFile) { memcpy(s_edP0, p0, sizeof p0); g.vsCb0 = cbuf(c0, sizeof c0); g.vsCb4 = cbuf(c4, sizeof c4); g.psCb0 = cbuf(p0, sizeof p0); }
+    s_edPsCb = g.psCb0; if (s_edPsCb) s_edPsCb->AddRef();
     // (08/11 f, Agustin: "podrias hacer que cargue de algun estadio?") texturas reales de la cancha guardadas del ultimo partido visto
     // (GrassSaveStadium: PES21FX\textures\pasto_editor\vs0..vs6.dds, ps.dds); si no hay, las de 1x1
     int fromFile = 0;
@@ -829,7 +850,7 @@ static bool BuildEditorState() {
     for (int i = 0; i < 7; i++) { wchar_t nm[16]; swprintf(nm, 16, L"vs%d.dds", i);
         g.vsSrv[i] = load(nm); if (!g.vsSrv[i]) g.vsSrv[i] = Tex1x1(k1[i][0], k1[i][1], k1[i][2], k1[i][3]); }
     g.psSrv = load(L"ps.dds"); if (!g.psSrv) g.psSrv = Tex1x1(0.25f, 0.45f, 0.12f, 1);
-    Log("pasto en el editor: estado propio con %d de 8 texturas de la cancha del ultimo partido (PES21FX\\textures\\pasto_editor)%s", fromFile, fromFile ? "" : "; sin partido guardado: color fijo");
+    Log("pasto en el editor: estado propio con %d de 8 texturas de la cancha del ultimo partido (PES21FX\\textures\\pasto_editor)%s, cbuffers %s", fromFile, fromFile ? "" : "; sin partido guardado: color fijo", cbFile ? "del partido (cb.bin)" : "propios (sin cb.bin: ver un partido)");
     D3D11_SAMPLER_DESC smp = {}; smp.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR; smp.AddressU = smp.AddressV = smp.AddressW = D3D11_TEXTURE_ADDRESS_WRAP; smp.MaxLOD = D3D11_FLOAT32_MAX;
     g_dev.dev->CreateSamplerState(&smp, &g.vsSmp[0]); smp.AddressU = smp.AddressV = smp.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP; g_dev.dev->CreateSamplerState(&smp, &g.vsSmp[1]);
     if (g.vsSmp[0]) { g.psSmp = g.vsSmp[0]; g.psSmp->AddRef(); }
@@ -856,7 +877,7 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
             std::lock_guard<std::mutex> lk(s_edMx); st = s_edSt; st.AddRefAll(); have = true;
             ID3D11RenderTargetView* r0 = nullptr; c->OMGetRenderTargets(1, &r0, nullptr);   // m_renderBuffer.xy = tamano del target del visor
             if (r0) { ID3D11Resource* res = nullptr; r0->GetResource(&res); r0->Release(); ID3D11Texture2D* t = nullptr;
-                if (res && SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t)) && t) { D3D11_TEXTURE2D_DESC d; t->GetDesc(&d); float p0[20] = {}; p0[8] = (float)d.Width; p0[9] = (float)d.Height; c->UpdateSubresource(s_edPsCb, 0, nullptr, p0, 0, 0); t->Release(); }
+                if (res && SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t)) && t) { D3D11_TEXTURE2D_DESC d; t->GetDesc(&d); float p0[20]; memcpy(p0, s_edP0, sizeof p0); p0[8] = (float)d.Width; p0[9] = (float)d.Height; c->UpdateSubresource(s_edPsCb, 0, nullptr, p0, 0, 0); t->Release(); }
                 if (res) res->Release(); }
         }
         if (!have) { Why("todavia no se vio el pasto del juego (sin estado para emitir desde la base)"); return false; }
