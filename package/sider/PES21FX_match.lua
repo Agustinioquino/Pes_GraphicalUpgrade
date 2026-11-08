@@ -43,6 +43,38 @@ local function ffi_write(path, text)
     return true
 end
 
+-- (08/11) escudos por equipo: modules\PES21FX_escudos.txt ("id_equipo, 0|1  ; nombre": 1 = bordado, 0 = impreso /
+-- termoaplicado). Se lee una vez al iniciar (en los eventos del partido io.open puede fallar). Sin dato = el shader estima.
+local crest = {}
+local function load_crests(ctx)
+    local sd = ctx and ctx.sider_dir and tostring(ctx.sider_dir) or ""
+    if sd ~= "" and sd:sub(-1) ~= "\\" and sd:sub(-1) ~= "/" then sd = sd .. "\\" end
+    local f = io.open(sd .. "modules\\PES21FX_escudos.txt", "rb")
+    if not f then f = io.open("modules\\PES21FX_escudos.txt", "rb") end
+    if not f then log("PES21FX_match: sin PES21FX_escudos.txt (los escudos se estiman por la textura)"); return end
+    local n = 0
+    for line in f:lines() do
+        local id, v = line:match("^%s*(%d+)%s*,%s*([01])")
+        if id then crest[tonumber(id)] = tonumber(v); n = n + 1 end
+    end
+    f:close()
+    log(string.format("PES21FX_match: %d equipos con escudo bordado / impreso", n))
+end
+
+-- colores de la camiseta elegida (kitserver): "#rrggbb" o "" si no hay
+local function kit_colors(ctx, side)
+    if type(ctx.kits) ~= "table" or type(ctx.kits.get_current_kit_id) ~= "function" or type(ctx.kits.get) ~= "function" then return "", "" end
+    local team = side == 0 and ctx.home_team or ctx.away_team
+    if team == nil then return "", "" end
+    local kid = ctx.kits.get_current_kit_id(side)
+    if kid == nil then return "", "" end
+    local cfg = ctx.kits.get(team, kid)
+    if type(cfg) ~= "table" then return "", "" end
+    local c1 = cfg.ShirtColor1 or cfg.UniColor_Color1 or ""
+    local c2 = cfg.ShirtColor2 or cfg.UniColor_Color2 or ""
+    return tostring(c1), tostring(c2)
+end
+
 local function num(v, def)
     local n = tonumber(v)
     if n == nil then return def end
@@ -62,9 +94,14 @@ local function write_match(ctx, o)
     if weather >= 0 then keep.weather = weather end
     if season >= 0 then keep.season = season end
     local tid      = num(ctx.tournament_id, -1)
+    local home, away = num(ctx.home_team, -1), num(ctx.away_team, -1)
+    local h1, h2 = kit_colors(ctx, 0)
+    local a1, a2 = kit_colors(ctx, 1)
     local text = string.format(
-        "[Match]\r\nstadium = %d\r\ntimeofday = %d\r\nweather = %d\r\nseason = %d\r\ntournament = %d\r\nhome = %d\r\naway = %d\r\n",
-        stadium, tod, weather, season, tid, num(ctx.home_team, -1), num(ctx.away_team, -1))
+        "[Match]\r\nstadium = %d\r\ntimeofday = %d\r\nweather = %d\r\nseason = %d\r\ntournament = %d\r\nhome = %d\r\naway = %d\r\n" ..
+        "home_crest = %d\r\naway_crest = %d\r\nhome_color1 = %s\r\nhome_color2 = %s\r\naway_color1 = %s\r\naway_color2 = %s\r\n",
+        stadium, tod, weather, season, tid, home, away,
+        crest[home] or -1, crest[away] or -1, h1, h2, a1, a2)
     if text == last then return end
     -- Sider solo deja escribir dentro de su propia carpeta: se escribe ahi (PES21FX_match.ini) y el mod la busca
     -- (busca la carpeta que tenga sider.ini al lado del juego). Las otras rutas quedan por si alguna version lo permite.
@@ -112,7 +149,14 @@ function m.after_set_conditions(ctx)
     write_match(ctx, nil)
 end
 
+function m.set_kits(ctx)
+    write_match(ctx, nil)   -- (08/11) colores de la camiseta elegida
+    return nil
+end
+
 function m.init(ctx)
+    load_crests(ctx)
+    ctx.register("set_kits", m.set_kits)
     ctx.register("set_stadium", m.set_stadium)
     ctx.register("set_conditions", m.set_conditions)
     ctx.register("after_set_conditions", m.after_set_conditions)

@@ -139,6 +139,68 @@ static ID3D11VertexShader* s_browVS = nullptr; static ID3D11PixelShader* s_browP
 static ID3D11GeometryShader* s_browGS[2] = {};
 static ID3D11GeometryShader* s_atGS[2] = {};   // (07/11 c) hebras en el atlas de sombra de las cabezas (pes_browat_*_gs.hlsl, PES_ATLAS)
 static ID3D11GeometryShader* s_lashGS = nullptr;
+// (08/11 v, Agustin: "como se plasman los pelos de hebras en juegos modernos" / "todos los puntos") PASADA PROPIA DEL PELO: el GS de las
+// hebras, al dibujarse en el G-buffer, deja tambien sus vertices en una salida de flujo (stream output); despues de la composicion
+// diferida se vuelven a dibujar desde ahi (DrawAuto) con su propio sombreado de pelo (pes_hairfwd_ps: Marschner con la tangente,
+// cobertura real con mezcla aditiva, sombra del estadio + atlas + grosor real). w382 = fuerza (0 = apagada)
+static ID3D11GeometryShader* s_browGSso[2] = {};
+static ID3D11Buffer* s_hfSO = nullptr; static ID3D11VertexShader* s_hfVS = nullptr; static ID3D11PixelShader* s_hfPS = nullptr;
+static ID3D11InputLayout* s_hfIL = nullptr; static ID3D11Buffer* s_hfCB = nullptr; static ID3D11BlendState* s_hfBlend = nullptr;
+static ID3D11DepthStencilState* s_hfDSS = nullptr; static ID3D11SamplerState* s_hfSamp = nullptr;
+// (08/11 v, Agustin: "mejorar la sombra que plasma el pelo") la SOMBRA DE CONTACTO de las cejas tambien pasa a despues de la luz: antes
+// multiplicaba el albedo en el G-buffer (oscurecia tambien la luz del cielo y en un estadio a la sombra igual marcaba la ceja sobre la
+// piel). Ahora el GS de sombra deja la hebra proyectada en otra salida de flujo y tras la composicion se multiplica la imagen solo donde
+// el sol llega de verdad (mascara del juego t14) y segun cuanta luz directa hay (pes_hairsh_ps)
+static ID3D11GeometryShader* s_shGSso[2] = {}; static ID3D11Buffer* s_hfSO2 = nullptr; static ID3D11PixelShader* s_hsPS = nullptr; static ID3D11BlendState* s_hsBlend = nullptr;
+static std::atomic<int> s_hfSoFrame2{-1}, s_hfStreamed2{0};
+static std::atomic<int> s_hfFrame{0}, s_hfSoFrame{-1}, s_hfStreamed{0}, s_hfDraws{0};
+static std::atomic<unsigned> s_compW{0}, s_compH{0};
+static constexpr UINT kHfStride = 108;          // 27 floats: igual a GSOut de pes_brow_gs.hlsli
+static constexpr UINT kHfBytes = 64u << 20;     // 64 MB (~20000 hebras); si se llena, el resto no entra en la pasada (sigue en el G-buffer)
+static const D3D11_SO_DECLARATION_ENTRY kHfSO[] = {
+    { 0, "SV_POSITION", 0, 0, 4, 0 }, { 0, "TEXCOORD", 0, 0, 3, 0 }, { 0, "TEXCOORD", 1, 0, 3, 0 }, { 0, "TEXCOORD", 2, 0, 3, 0 },
+    { 0, "TEXCOORD", 3, 0, 2, 0 }, { 0, "TEXCOORD", 4, 0, 3, 0 }, { 0, "TEXCOORD", 5, 0, 3, 0 }, { 0, "TEXCOORD", 6, 0, 3, 0 },
+    { 0, "TEXCOORD", 7, 0, 3, 0 } };
+static bool HairFwdWanted() { return g_cfg.live[382][3] > 0.001f && g_cfg.live[74][0] > 0.5f; }
+static void EnsureHairFwd() {
+    if (!g_dev.dev) return;
+    if (!s_hfSO) { D3D11_BUFFER_DESC bd{}; bd.ByteWidth = kHfBytes; bd.Usage = D3D11_USAGE_DEFAULT; bd.BindFlags = D3D11_BIND_STREAM_OUTPUT | D3D11_BIND_VERTEX_BUFFER;
+        if (FAILED(g_dev.dev->CreateBuffer(&bd, nullptr, &s_hfSO))) s_hfSO = nullptr; }
+    if (!s_hfCB) { D3D11_BUFFER_DESC bd{}; bd.ByteWidth = 32; bd.Usage = D3D11_USAGE_DEFAULT; bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        if (FAILED(g_dev.dev->CreateBuffer(&bd, nullptr, &s_hfCB))) s_hfCB = nullptr; }
+    if (!s_hfBlend) { D3D11_BLEND_DESC bd{}; bd.RenderTarget[0].BlendEnable = TRUE;
+        bd.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE; bd.RenderTarget[0].DestBlend = D3D11_BLEND_ONE; bd.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+        bd.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ZERO; bd.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ONE; bd.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_RED | D3D11_COLOR_WRITE_ENABLE_GREEN | D3D11_COLOR_WRITE_ENABLE_BLUE;
+        g_dev.dev->CreateBlendState(&bd, &s_hfBlend); }
+    if (!s_hfDSS) { D3D11_DEPTH_STENCIL_DESC dd{}; dd.DepthEnable = FALSE; dd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO; dd.DepthFunc = D3D11_COMPARISON_ALWAYS; dd.StencilEnable = FALSE;
+        g_dev.dev->CreateDepthStencilState(&dd, &s_hfDSS); }
+    if (!s_hfSamp) { D3D11_SAMPLER_DESC sd{}; sd.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT; sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP; sd.MaxLOD = D3D11_FLOAT32_MAX;
+        g_dev.dev->CreateSamplerState(&sd, &s_hfSamp); }
+    if (!s_hfVS) if (ID3DBlob* b = CompileNamedShader(L"pes_hairfwd_vs.hlsl", "vs_5_0")) {
+        g_dev.dev->CreateVertexShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_hfVS);
+        const D3D11_INPUT_ELEMENT_DESC il[] = {
+            { "POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+            { "TEXCOORD", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 16, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+            { "TEXCOORD", 1, DXGI_FORMAT_R32G32B32_FLOAT, 0, 28, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+            { "TEXCOORD", 2, DXGI_FORMAT_R32G32B32_FLOAT, 0, 40, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+            { "TEXCOORD", 3, DXGI_FORMAT_R32G32_FLOAT, 0, 52, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+            { "TEXCOORD", 4, DXGI_FORMAT_R32G32B32_FLOAT, 0, 60, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+            { "TEXCOORD", 5, DXGI_FORMAT_R32G32B32_FLOAT, 0, 72, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+            { "TEXCOORD", 6, DXGI_FORMAT_R32G32B32_FLOAT, 0, 84, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+            { "TEXCOORD", 7, DXGI_FORMAT_R32G32B32_FLOAT, 0, 96, D3D11_INPUT_PER_VERTEX_DATA, 0 } };
+        if (FAILED(g_dev.dev->CreateInputLayout(il, 9, b->GetBufferPointer(), b->GetBufferSize(), &s_hfIL))) s_hfIL = nullptr;
+        b->Release(); }
+    if (!s_hfPS) if (ID3DBlob* b = CompileNamedShader(L"pes_hairfwd_ps.hlsl", "ps_5_0")) { g_dev.dev->CreatePixelShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_hfPS); b->Release(); }
+    if (!s_hsPS) if (ID3DBlob* b = CompileNamedShader(L"pes_hairsh_ps.hlsl", "ps_5_0")) { g_dev.dev->CreatePixelShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_hsPS); b->Release(); }
+    if (!s_hfSO2) { D3D11_BUFFER_DESC bd{}; bd.ByteWidth = kHfBytes / 2; bd.Usage = D3D11_USAGE_DEFAULT; bd.BindFlags = D3D11_BIND_STREAM_OUTPUT | D3D11_BIND_VERTEX_BUFFER;
+        if (FAILED(g_dev.dev->CreateBuffer(&bd, nullptr, &s_hfSO2))) s_hfSO2 = nullptr; }
+    if (!s_hsBlend) { D3D11_BLEND_DESC bd{}; bd.RenderTarget[0].BlendEnable = TRUE;   // multiplicativa: destino x color del PS
+        bd.RenderTarget[0].SrcBlend = D3D11_BLEND_ZERO; bd.RenderTarget[0].DestBlend = D3D11_BLEND_SRC_COLOR; bd.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+        bd.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ZERO; bd.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ONE; bd.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_RED | D3D11_COLOR_WRITE_ENABLE_GREEN | D3D11_COLOR_WRITE_ENABLE_BLUE;
+        g_dev.dev->CreateBlendState(&bd, &s_hsBlend); }
+}
 // (04/11 k, Agustin: "no solo brillo, luz real") SOMBRA DE CONTACTO de cada pelo sobre la piel de abajo, con la direccion real
 // del sol / luz principal: antes de las hebras se repite el GS en modo sombra (la hebra proyectada sobre el plano de la piel
 // siguiendo la luz) con un PS que multiplica el albedo del G-buffer (solo RT0, mezcla multiplicativa, sin escribir profundidad)
@@ -150,9 +212,17 @@ static void EnsureBrowShaders() {
     ID3DBlob* pb = CompileNamedShader(L"pes_brow_ps.hlsl", "ps_5_0");
     if (pb) { g_dev.dev->CreatePixelShader(pb->GetBufferPointer(), pb->GetBufferSize(), nullptr, &s_browPS); pb->Release(); }
     const wchar_t* gsf[2] = { L"pes_brow_a_gs.hlsl", L"pes_brow_b_gs.hlsl" };
-    for (int i = 0; i < 2; i++) if (ID3DBlob* gb = CompileNamedShader(gsf[i], "gs_5_0")) { g_dev.dev->CreateGeometryShader(gb->GetBufferPointer(), gb->GetBufferSize(), nullptr, &s_browGS[i]); gb->Release(); }
+    for (int i = 0; i < 2; i++) if (ID3DBlob* gb = CompileNamedShader(gsf[i], "gs_5_0")) { g_dev.dev->CreateGeometryShader(gb->GetBufferPointer(), gb->GetBufferSize(), nullptr, &s_browGS[i]);
+        UINT st = kHfStride;   // (08/11 v) la misma hebra con salida de flujo para la pasada propia del pelo (se rasteriza igual, flujo 0)
+        HRESULT hso = g_dev.dev->CreateGeometryShaderWithStreamOutput(gb->GetBufferPointer(), gb->GetBufferSize(), kHfSO, 9, &st, 1, 0, nullptr, &s_browGSso[i]);
+        if (FAILED(hso)) { s_browGSso[i] = nullptr; Log("cejas: pasada propia del pelo: salida de flujo GS %d fallo (0x%08X)", i, (unsigned)hso); }
+        gb->Release(); }
+    EnsureHairFwd();
+    Log("cejas: pasada propia del pelo (w382): flujo %s %s, buffer %s, VS %s, PS %s", s_browGSso[0] ? "si" : "NO", s_browGSso[1] ? "si" : "NO", s_hfSO ? "si" : "NO", (s_hfVS && s_hfIL) ? "si" : "NO", s_hfPS ? "si" : "NO");
     { const wchar_t* shf[3] = { L"pes_browsh_a_gs.hlsl", L"pes_browsh_b_gs.hlsl", L"pes_lashsh_gs.hlsl" };
-      for (int i = 0; i < 3; i++) if (ID3DBlob* gb = CompileNamedShader(shf[i], "gs_5_0")) { g_dev.dev->CreateGeometryShader(gb->GetBufferPointer(), gb->GetBufferSize(), nullptr, &s_shGS[i]); gb->Release(); }
+      for (int i = 0; i < 3; i++) if (ID3DBlob* gb = CompileNamedShader(shf[i], "gs_5_0")) { g_dev.dev->CreateGeometryShader(gb->GetBufferPointer(), gb->GetBufferSize(), nullptr, &s_shGS[i]);
+          if (i < 2) { UINT st = kHfStride; if (FAILED(g_dev.dev->CreateGeometryShaderWithStreamOutput(gb->GetBufferPointer(), gb->GetBufferSize(), kHfSO, 9, &st, 1, 0, nullptr, &s_shGSso[i]))) s_shGSso[i] = nullptr; }   // (08/11 v)
+          gb->Release(); }
       if (ID3DBlob* sb = CompileNamedShader(L"pes_browsh_ps.hlsl", "ps_5_0")) { g_dev.dev->CreatePixelShader(sb->GetBufferPointer(), sb->GetBufferSize(), nullptr, &s_shPS); sb->Release(); }
       if (!s_shBlend) { D3D11_BLEND_DESC bd{}; bd.IndependentBlendEnable = TRUE;
           bd.RenderTarget[0].BlendEnable = TRUE; bd.RenderTarget[0].SrcBlend = D3D11_BLEND_ZERO; bd.RenderTarget[0].DestBlend = D3D11_BLEND_SRC_COLOR; bd.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
@@ -188,6 +258,11 @@ void FaceGenReloadShaders() {
     if (s_browVS) { s_browVS->Release(); s_browVS = nullptr; }
     if (s_browPS) { s_browPS->Release(); s_browPS = nullptr; }
     for (auto*& g : s_browGS) if (g) { g->Release(); g = nullptr; }
+    for (auto*& g : s_browGSso) if (g) { g->Release(); g = nullptr; }
+    for (auto*& g : s_shGSso) if (g) { g->Release(); g = nullptr; }
+    if (s_hsPS) { s_hsPS->Release(); s_hsPS = nullptr; } s_hfStreamed2 = 0;
+    if (s_hfVS) { s_hfVS->Release(); s_hfVS = nullptr; } if (s_hfPS) { s_hfPS->Release(); s_hfPS = nullptr; } if (s_hfIL) { s_hfIL->Release(); s_hfIL = nullptr; }
+    s_hfStreamed = 0;
     for (auto*& g : s_atGS) if (g) { g->Release(); g = nullptr; }
     if (s_lashGS) { s_lashGS->Release(); s_lashGS = nullptr; }
     for (auto*& g : s_shGS) if (g) { g->Release(); g = nullptr; }
@@ -266,6 +341,8 @@ static bool MakeTarget(UINT w, UINT h, ID3D11Texture2D** tex, ID3D11RenderTarget
 static std::atomic<int> s_browFaces{0};   // caras con hebras dibujadas en este cuadro (x77 = maximo por pantalla)
 void FaceGenPresent() {
     s_browFaces.store(0);
+    s_hfFrame.fetch_add(1);
+    { static double hfNext = 0; double t = Now(); if (t > hfNext) { hfNext = t + 10.0; int d = s_hfDraws.exchange(0); if (d > 0) Log("cejas: pasada propia del pelo: %d dibujos en 10 s", d); } }
     { double t = Now(); if (t > s_stNext) { s_stNext = t + 10.0;
         if (s_stLook.load() > 0 || g_stFaceDraws.load() > 0) Log("facegen: 10 s: %d consultas, %d con texturas, %d pendientes, %d sin t1, %d en cache, %d dibujos de hebras | PS cara: %d dibujos, %d con regla, %d con t23, %d con t26, %d diferidos", s_stLook.load(), s_stHit.load(), s_stPend.load(), s_stNoIn.load(), (int)s_cache.size(), s_stDraw.load(), g_stFaceDraws.load(), g_stFaceRule.load(), g_stFaceT23.load(), g_stFaceT26.load(), g_stFaceCtxDef.load());
         s_stLook = 0; s_stHit = 0; s_stPend = 0; s_stNoIn = 0; s_stDraw = 0; g_stFaceDraws = 0; g_stFaceRule = 0; g_stFaceT23 = 0; g_stFaceT26 = 0; g_stFaceCtxDef = 0; } }
@@ -461,6 +538,7 @@ struct BrowSaved {
     ID3D11SamplerState* gsS0 = nullptr; ID3D11Buffer* psCB11 = nullptr; ID3D11ShaderResourceView* psT120 = nullptr;
     ID3D11ShaderResourceView* gsT23[2] = {}; ID3D11ShaderResourceView* gsT121 = nullptr;   // (04/11 e) relieve + aviso de teselacion
     ID3D11BlendState* blend = nullptr; float blendF[4] = {}; UINT blendM = 0xffffffff;   // (04/11 k) pasada de sombra
+    bool shadowFwd = false, shadowSO = false;   // (08/11 v) sombra de contacto a la salida de flujo (se aplica tras la composicion)
     ID3D11DepthStencilState* strandDSS = nullptr; ID3D11DepthStencilState* shadowDSS = nullptr; ID3D11GeometryShader* strandGS = nullptr; ID3D11GeometryShader* shadowGS = nullptr;   // no se liberan (cache / globales)
 };
 static thread_local BrowSaved t_bs;
@@ -482,6 +560,7 @@ bool BrowStrandsBegin(ID3D11DeviceContext* c, const FaceGenExtra* ex, uint64_t v
     if (!s_browPS || !s_browRS) return false;
     if (!lash && (!ex || !ex->seedMap || !ex->browMap)) return false;
     ID3D11GeometryShader* gs = lash ? s_lashGS : s_browGS[vsHash == kVSFaceAnim ? 1 : 0];
+    if (!lash && HairFwdWanted() && s_browGSso[vsHash == kVSFaceAnim ? 1 : 0] && s_hfSO) gs = s_browGSso[vsHash == kVSFaceAnim ? 1 : 0];   // (08/11 v)
     if (!gs) return false;
     int maxFaces = (int)g_cfg.live[77][0]; if (maxFaces < 1) maxFaces = 22;
     if (!lash && s_browFaces.fetch_add(1) >= maxFaces) return false;   // tope de caras por cuadro (rendimiento)
@@ -539,6 +618,7 @@ bool BrowStrandsBegin(ID3D11DeviceContext* c, const FaceGenExtra* ex, uint64_t v
     if (useDSS) c->OMSetDepthStencilState(useDSS, s.ref);
     s.strandDSS = useDSS; s.strandGS = gs;
     s.shadowGS = s_shGS[lash ? 2 : (vsHash == kVSFaceAnim ? 1 : 0)];
+    if (!lash && HairFwdWanted() && s_hfSO2 && s_hsPS && s_shGSso[vsHash == kVSFaceAnim ? 1 : 0]) { s.shadowGS = s_shGSso[vsHash == kVSFaceAnim ? 1 : 0]; s.shadowFwd = true; }   // (08/11 v)
     c->OMGetBlendState(&s.blend, s.blendF, &s.blendM);
     s_stDraw++;
     if (!lash && !ex->id.empty()) { std::lock_guard<std::mutex> lk(s_browMx); s_browSeen.insert(ex->id); }
@@ -554,10 +634,23 @@ bool BrowShadowOn(ID3D11DeviceContext* c) {
     c->GSSetShader(s.shadowGS, nullptr, 0); c->PSSetShader(s_shPS, nullptr, 0);
     float bf[4] = { 1, 1, 1, 1 }; c->OMSetBlendState(s_shBlend, bf, 0xffffffff);
     c->OMSetDepthStencilState(s.shadowDSS, s.ref);
+    s.shadowSO = false;
+    if (s.shadowFwd) {   // (08/11 v) vista principal: solo a la salida de flujo (sin PS: el G-buffer no se toca); si no, como antes
+        D3D11_VIEWPORT vp{}; UINT n = 1; c->RSGetViewports(&n, &vp);
+        unsigned cw = s_compW.load(), ch = s_compH.load();
+        if (n && cw && (unsigned)(vp.Width + 0.5f) == cw && (unsigned)(vp.Height + 0.5f) == ch) {
+            int f = s_hfFrame.load();
+            UINT off = (s_hfSoFrame2.exchange(f) != f) ? 0u : (UINT)-1;
+            c->SOSetTargets(1, &s_hfSO2, &off);
+            c->PSSetShader(nullptr, nullptr, 0);
+            s.shadowSO = true; s_hfStreamed2.store(1);
+        }
+    }
     return true;
 }
 void BrowShadowOff(ID3D11DeviceContext* c) {
     BrowSaved& s = t_bs;
+    if (s.shadowSO) { ID3D11Buffer* nb = nullptr; UINT o = 0; c->SOSetTargets(1, &nb, &o); s.shadowSO = false; }
     c->GSSetShader(s.strandGS, nullptr, 0); c->PSSetShader(s_browPS, nullptr, 0);
     c->OMSetBlendState(s.blend, s.blendF, s.blendM);
     if (s.strandDSS) c->OMSetDepthStencilState(s.strandDSS, s.ref);
@@ -577,6 +670,89 @@ void BrowStrandsEnd(ID3D11DeviceContext* c) {
     if (s.gsT0) s.gsT0->Release(); if (s.gsT26) s.gsT26->Release(); if (s.gsT27) s.gsT27->Release(); if (s.gsT120) s.gsT120->Release(); if (s.gsS0) s.gsS0->Release();
     if (s.psCB11) s.psCB11->Release(); if (s.psT120) s.psT120->Release();
     s = BrowSaved();
+}
+
+// (08/11 v) salida de flujo de las hebras: solo alrededor del dibujo de las hebras (no de la sombra de contacto ni del atlas) y solo en
+// la vista principal (mismo tamano que la composicion del cuadro anterior: no las miniaturas ni los reflejos)
+bool BrowSOOn(ID3D11DeviceContext* c) {
+    BrowSaved& s = t_bs;
+    if (!HairFwdWanted() || !s_hfSO || !s.strandGS || (s.strandGS != s_browGSso[0] && s.strandGS != s_browGSso[1])) return false;
+    D3D11_VIEWPORT vp{}; UINT n = 1; c->RSGetViewports(&n, &vp);
+    unsigned cw = s_compW.load(), ch = s_compH.load();
+    if (!n || !cw || (unsigned)(vp.Width + 0.5f) != cw || (unsigned)(vp.Height + 0.5f) != ch) return false;
+    int f = s_hfFrame.load();
+    UINT off = (s_hfSoFrame.exchange(f) != f) ? 0u : (UINT)-1;   // la primera cara del cuadro vacia el buffer, las demas agregan
+    c->SOSetTargets(1, &s_hfSO, &off);
+    s_hfStreamed.store(1);
+    return true;
+}
+void BrowSOOff(ID3D11DeviceContext* c) { ID3D11Buffer* nb = nullptr; UINT o = 0; c->SOSetTargets(1, &nb, &o); }
+// (08/11 v) PASADA PROPIA DEL PELO: apenas termina la composicion diferida (PS 619b86cb, RT0 = imagen HDR, t11 profundidad, t14 mascara de
+// sombra del sol, b2 escena), antes del TAA y del postprocesado
+void HairFwdAfterComposition(ID3D11DeviceContext* c) {
+    ID3D11RenderTargetView* rt[8] = {}; ID3D11DepthStencilView* dsv = nullptr; c->OMGetRenderTargets(8, rt, &dsv);
+    UINT W = 0, H = 0;
+    if (rt[0]) { ID3D11Resource* r = nullptr; rt[0]->GetResource(&r);
+        if (r) { ID3D11Texture2D* t = nullptr; if (SUCCEEDED(r->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t)) && t) { D3D11_TEXTURE2D_DESC d; t->GetDesc(&d); W = d.Width; H = d.Height; t->Release(); } r->Release(); } }
+    if (W > 64 && H > 64) { s_compW.store(W); s_compH.store(H); }
+    bool sh2 = s_hfStreamed2.exchange(0) != 0;
+    bool st1 = s_hfStreamed.exchange(0) != 0;
+    bool go = W > 64 && HairFwdWanted() && (st1 || sh2) && s_hfVS && s_hfPS && s_hfIL && s_hfSO && s_hfCB && s_hfBlend && s_hfDSS && s_hfSamp && s_browRS;
+    ID3D11ShaderResourceView* dep = nullptr; ID3D11ShaderResourceView* shm = nullptr;
+    if (go) { c->PSGetShaderResources(11, 1, &dep); c->PSGetShaderResources(14, 1, &shm); go = dep && shm; }
+    if (go) {
+        // guardar
+        ID3D11InputLayout* oIL = nullptr; c->IAGetInputLayout(&oIL);
+        D3D11_PRIMITIVE_TOPOLOGY oTopo; c->IAGetPrimitiveTopology(&oTopo);
+        ID3D11Buffer* oVB = nullptr; UINT oStr = 0, oOff = 0; c->IAGetVertexBuffers(0, 1, &oVB, &oStr, &oOff);
+        ID3D11VertexShader* oVS = nullptr; ID3D11PixelShader* oPS = nullptr; ID3D11GeometryShader* oGS = nullptr; ID3D11HullShader* oHS = nullptr; ID3D11DomainShader* oDS = nullptr;
+        c->VSGetShader(&oVS, nullptr, nullptr); c->PSGetShader(&oPS, nullptr, nullptr); c->GSGetShader(&oGS, nullptr, nullptr); c->HSGetShader(&oHS, nullptr, nullptr); c->DSGetShader(&oDS, nullptr, nullptr);
+        ID3D11ShaderResourceView* oT30 = nullptr; ID3D11ShaderResourceView* oT120 = nullptr; c->PSGetShaderResources(30, 1, &oT30); c->PSGetShaderResources(120, 1, &oT120);
+        ID3D11Buffer* oB5 = nullptr; c->PSGetConstantBuffers(5, 1, &oB5);
+        ID3D11SamplerState* oS15 = nullptr; c->PSGetSamplers(15, 1, &oS15);
+        ID3D11BlendState* oBl = nullptr; float oBf[4]; UINT oBm = 0; c->OMGetBlendState(&oBl, oBf, &oBm);
+        ID3D11DepthStencilState* oDss = nullptr; UINT oRef = 0; c->OMGetDepthStencilState(&oDss, &oRef);
+        ID3D11RasterizerState* oRS = nullptr; c->RSGetState(&oRS);
+        // constantes: color de la luz del cuadro (LightCB), fuerza, profundidad invertida, tamano
+        float cb[8] = { 1.f, 1.f, 1.f, g_cfg.live[382][3], 0.f, (float)W, (float)H, 0.f };
+        { std::vector<float> L; if (NamedCBRead("LightCB", L) && L.size() >= 8) { cb[0] = L[4]; cb[1] = L[5]; cb[2] = L[6]; cb[7] = 1.f; } }
+        cb[4] = g_depthClearZero.load() > g_depthClearOne.load() ? 1.f : 0.f;
+        c->UpdateSubresource(s_hfCB, 0, nullptr, cb, 0, 0);
+        // dibujar
+        c->OMSetRenderTargets(1, &rt[0], nullptr);
+        c->IASetInputLayout(s_hfIL); c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        UINT st = kHfStride, of = 0; c->IASetVertexBuffers(0, 1, &s_hfSO, &st, &of);
+        c->VSSetShader(s_hfVS, nullptr, 0); c->GSSetShader(nullptr, nullptr, 0); c->HSSetShader(nullptr, nullptr, 0); c->DSSetShader(nullptr, nullptr, 0);
+        c->PSSetShader(s_hfPS, nullptr, 0);
+        { ID3D11ShaderResourceView* hs = HeadShadowSRV(); c->PSSetShaderResources(30, 1, &hs); }
+        { ID3D11ShaderResourceView* prm = g_dev.paramSRV; c->PSSetShaderResources(120, 1, &prm); }
+        c->PSSetConstantBuffers(5, 1, &s_hfCB); c->PSSetSamplers(15, 1, &s_hfSamp);
+        float bf[4] = { 0, 0, 0, 0 }; c->OMSetBlendState(s_hfBlend, bf, 0xffffffff);
+        c->OMSetDepthStencilState(s_hfDSS, 0); c->RSSetState(s_browRS);
+        if (sh2 && s_hsPS && s_hsBlend && s_hfSO2) {   // 1) sombra de contacto de los pelos sobre la piel (multiplica, solo luz directa)
+            c->IASetVertexBuffers(0, 1, &s_hfSO2, &st, &of);
+            c->PSSetShader(s_hsPS, nullptr, 0); c->OMSetBlendState(s_hsBlend, bf, 0xffffffff);
+            c->DrawAuto();
+            UINT z = 0; c->SOSetTargets(1, &s_hfSO2, &z); ID3D11Buffer* nb = nullptr; c->SOSetTargets(1, &nb, &z);
+            c->IASetVertexBuffers(0, 1, &s_hfSO, &st, &of); c->PSSetShader(s_hfPS, nullptr, 0); c->OMSetBlendState(s_hfBlend, bf, 0xffffffff);
+        }
+        if (st1) c->DrawAuto();   // 2) las hebras con su luz de pelo (suma)
+        s_hfDraws++;
+        { static std::atomic<int> lg{0}; if (lg.fetch_add(1) < 1) Log("cejas: pasada propia del pelo: primer dibujo (%ux%u)", W, H); }
+        // vaciar la salida de flujo para el cuadro siguiente
+        { UINT z = 0; c->SOSetTargets(1, &s_hfSO, &z); ID3D11Buffer* nb = nullptr; c->SOSetTargets(1, &nb, &z); }
+        // devolver
+        c->OMSetRenderTargets(8, rt, dsv);
+        c->IASetInputLayout(oIL); c->IASetPrimitiveTopology(oTopo); c->IASetVertexBuffers(0, 1, &oVB, &oStr, &oOff);
+        c->VSSetShader(oVS, nullptr, 0); c->PSSetShader(oPS, nullptr, 0); c->GSSetShader(oGS, nullptr, 0); c->HSSetShader(oHS, nullptr, 0); c->DSSetShader(oDS, nullptr, 0);
+        c->PSSetShaderResources(30, 1, &oT30); c->PSSetShaderResources(120, 1, &oT120); c->PSSetConstantBuffers(5, 1, &oB5); c->PSSetSamplers(15, 1, &oS15);
+        c->OMSetBlendState(oBl, oBf, oBm); c->OMSetDepthStencilState(oDss, oRef); c->RSSetState(oRS);
+        if (oIL) oIL->Release(); if (oVB) oVB->Release(); if (oVS) oVS->Release(); if (oPS) oPS->Release(); if (oGS) oGS->Release(); if (oHS) oHS->Release(); if (oDS) oDS->Release();
+        if (oT30) oT30->Release(); if (oT120) oT120->Release(); if (oB5) oB5->Release(); if (oS15) oS15->Release();
+        if (oBl) oBl->Release(); if (oDss) oDss->Release(); if (oRS) oRS->Release();
+    }
+    if (dep) dep->Release(); if (shm) shm->Release();
+    for (auto* r : rt) if (r) r->Release(); if (dsv) dsv->Release();
 }
 
 // (04/11) "Guardar cejas de este jugador": escribe [cejas_cara] <id> = cantidad, largo en PES21FX_hair.ini (reemplaza la linea si ya estaba)

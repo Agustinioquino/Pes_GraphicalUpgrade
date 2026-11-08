@@ -49,7 +49,7 @@ void main(
   v6.xy = asuint(i_texcoord0);
   v7.x = i_sv_instanceid0;
   uint pesIdx = t1[(uint)asfloat(cb5[9].x) + v7.x].v[0];
-  PesCrowdFace(v0, v1, v3, v2, pesIdx);
+  PesCrowdFace(v0, v1, v3, v2, pesIdx, v4, v5, v6);
   r0.x = (uint)asfloat(cb5[9].x);
   r0.x = (r0.x + v7.x);
   { uint4 _t = r0; _t.x = t1[r0.x].v[0]; r0 = _t; }

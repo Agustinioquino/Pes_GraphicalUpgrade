@@ -12,6 +12,10 @@
 //    El indice es el del juego en instanceBuf: cada hincha tiene siempre el suyo, asi que cada uno tiene ritmo propio.
 //
 // Fila 394: x on | y fuerza de la boca | z fuerza de las cejas | w animo (0 tranquilo .. 1 normal .. 2 cancha que canta todo)
+// (08/11 b) Reacciones: el VS lee la animacion del cuerpo de cada hincha (festejo, lamento, protesta, aplauso) y cambia la
+// cara; la CPU le pasa en w el pulso del grito propio de cada uno.
+// (08/11 b) Eventos del partido (lo decompilado: MatchInfo, rastro.cpp lo lee al final del tick): gol = 68 % de los bloques
+// festeja y el resto se lamenta, falta / offside = protestan, corner = expectativa. Cada hincha arranca con su demora.
 #include "core.h"
 #include <thread>
 #include <atomic>
@@ -21,7 +25,7 @@
 
 namespace fx {
 
-static constexpr UINT kMax = 32768;                       // hinchas con gesto propio (512 KB por cuadro)
+static constexpr UINT kMax = 32768;                       // hinchas con gesto propio (2 float4 c/u: cara + cuerpo, 1 MB por cuadro)
 static ID3D11Buffer* s_buf = nullptr;
 static ID3D11ShaderResourceView* s_srv = nullptr;
 static bool s_failed = false;
@@ -32,6 +36,12 @@ static std::atomic<double> s_time{0.0};
 static std::atomic<float> s_mood{1.0f};
 static std::atomic<int> s_uploads{0};
 static double s_lastLog = 0;
+enum { kEvGol = 1, kEvFalta = 2, kEvOffside = 3, kEvCorner = 4 };
+static std::atomic<int> s_evKind{0};                      // ultimo evento del partido (PublicoMatchTick)
+static std::atomic<double> s_evT{-1000.0};
+static std::atomic<uint32_t> s_evSeed{0};
+static std::atomic<float> s_playSec{0.0f};               // (08/11 d) segundos con la pelota en juego en este partido
+static std::atomic<int> s_goals{0};                       // goles de este partido
 
 static inline float Hash01(uint32_t x) {
     x ^= x >> 16; x *= 0x7feb352dU; x ^= x >> 15; x *= 0x846ca68bU; x ^= x >> 16;
@@ -41,7 +51,7 @@ static inline float Smooth(float a, float b, float x) { float t = (x - a) / (b -
 
 // gesto de un hincha en el tiempo t (s). Grupos de 48 indices seguidos cantan juntos (el juego arma las tribunas por bloques),
 // cada uno con su tempo; dentro del grupo cada hincha tiene su desfase y su "ganas" que cambian lento.
-static void Gesture(uint32_t i, double t, float mood, float* out) {
+static void Gesture(uint32_t i, double t, float mood, float* out) {   // out[0..3] cara, out[4..7] cuerpo (PesCrowdBody)
     const float kTau = 6.2831853f;
     uint32_t g = i / 48u;
     float gTempo = 1.1f + 0.9f * Hash01(g * 7919u + 1);           // golpes por segundo del canto de ese bloque
@@ -70,11 +80,101 @@ static void Gesture(uint32_t i, double t, float mood, float* out) {
     out[0] = jaw * (0.7f + 0.6f * mood * 0.5f);
     out[1] = (lift + evt) * asym;
     out[2] = (lift + evt) * (2.0f - asym);
-    out[3] = sing;
+    // pulso del grito propio (lo usan las reacciones del VS: festejo / protesta): golpes de 2.2..4 por segundo, irregulares
+    float shF = 2.2f + 1.8f * Hash01(i * 211u + 29u);
+    float sh = 0.5f + 0.5f * sinf((float)(kTau * (t * shF + my * 5.3)));
+    float shGate = Smooth(0.25f, 0.6f, 0.5f + 0.5f * sinf((float)(kTau * (t * 0.45 + my * 2.7))));
+    out[3] = sh * sh * (0.35f + 0.65f * shGate);
+    // (08/11 b) eventos del partido (MatchInfo, leido al final del tick): toda la tribuna reacciona, cada uno con su demora
+    int ev = s_evKind.load(std::memory_order_relaxed);
+    if (ev) {
+        float age = (float)(t - s_evT.load(std::memory_order_relaxed));
+        float dur = ev == kEvGol ? 12.0f : ev == kEvCorner ? 4.0f : 5.0f;
+        float env = Smooth(0.0f, 0.35f, age - 0.7f * my) * (1.0f - Smooth(dur * 0.55f, dur, age));
+        if (age < 0) env = 0;
+        float ej = out[0], eb = 0.5f * (out[1] + out[2]), take = 1.0f;
+        if (ev == kEvGol) {
+            if (Hash01(g * 53u + s_evSeed.load(std::memory_order_relaxed)) < 0.68f) { ej = 0.30f + 0.12f * out[3]; eb = 0.010f + 0.003f * out[3]; }   // festejo
+            else { ej = 0.17f + 0.03f * out[3]; eb = 0.013f; }                                                                                         // lamento
+        } else if (ev == kEvFalta || ev == kEvOffside) {
+            take = Hash01(i * 31u + 7u) < 0.65f ? 1.0f : 0.0f;                                                                                       // protestan
+            ej = 0.07f + 0.22f * out[3]; eb = -0.004f;
+        } else if (ev == kEvCorner) {
+            ej = 0.06f + 0.10f * pulse; eb = 0.006f;                                                                                                   // expectativa
+        }
+        float k = env * take;
+        out[0] += (ej - out[0]) * k;
+        out[1] += (eb * asym - out[1]) * k;
+        out[2] += (eb * (2.0f - asym) - out[2]) * k;
+    }
+    // (08/11 c) capa de cuerpo: x cuanto levanta / agita los brazos, y fase del agitado, z salto (m), w brazo (-1 der, 0 ambos, 1 izq)
+    float bx = 0, by = 0, bz = 0, bw = 0;
+    float hb = Hash01(i * 613u + 41u);
+    float side = hb < 0.6f ? 0.0f : (hb < 0.8f ? 1.0f : -1.0f);
+    if (mood > 1.0f && Hash01(g * 977u + 5u) < 0.35f) {          // tribuna caliente: algunos bloques cantan con los brazos
+        bx = 0.35f * sing * (mood - 1.0f); by = (float)(kTau * (t * gTempo * 0.5)) + kTau * gPhase; bw = side;
+    }
+    if (ev) {
+        float age = (float)(t - s_evT.load(std::memory_order_relaxed));
+        float dur = ev == kEvGol ? 12.0f : ev == kEvCorner ? 4.0f : 5.0f;
+        float env = age < 0 ? 0.0f : Smooth(0.0f, 0.35f, age - 0.7f * my) * (1.0f - Smooth(dur * 0.55f, dur, age));
+        if (ev == kEvGol && Hash01(g * 53u + s_evSeed.load(std::memory_order_relaxed)) < 0.68f) {
+            float f = 1.8f + 0.6f * Hash01(i * 131u + 3u);
+            bx = env * (0.8f + 0.2f * hb); by = (float)(kTau * (t * (2.5 + 1.5 * my))); bw = side;
+            bz = env * (0.04f + 0.04f * my) * fabsf(sinf((float)(3.14159265 * t * f) + kTau * my));
+        } else if ((ev == kEvFalta || ev == kEvOffside) && Hash01(i * 31u + 7u) < 0.4f) {
+            bx = 0.55f * env; by = (float)(kTau * t * 5.5) + kTau * my; bw = hb < 0.5f ? 1.0f : -1.0f;      // puno arriba
+        } else if (ev == kEvCorner && Hash01(i * 19u + 3u) < 0.3f) {
+            bx = 0.3f * env; by = (float)(kTau * t * 1.2); bw = 0.0f;
+        }
+    }
+    // (08/11 d) SIN CAMISETA (hinchada sudamericana): con el correr del partido, el animo y los goles, cada vez mas hinchas de
+    // los bloques calientes se sacan la remera; parte de ellos la revolea (brazo arriba girando) cuando cantan o en el gol.
+    float ms = mood - 0.5f; ms = ms < 0 ? 0 : (ms > 1.5f ? 1.0f : ms / 1.5f);
+    int goals = s_goals.load(std::memory_order_relaxed); goals = goals > 3 ? 3 : goals;
+    float share = ms * (0.06f + 0.30f * Smooth(0.0f, 600.0f, s_playSec.load(std::memory_order_relaxed)) + 0.08f * goals);
+    bool hot = Hash01(g * 977u + 5u) < 0.35f;
+    bool shirtless = Hash01(i * 7919u + 101u) < share * (hot ? 2.2f : 0.35f);
+    if (shirtless && Hash01(i * 37u + 9u) < 0.45f) {
+        bool goalNow = ev == kEvGol && (float)(t - s_evT.load(std::memory_order_relaxed)) < 11.0f;
+        float swing = goalNow ? 1.0f : (hot ? Smooth(0.45f, 0.7f, sing) : 0.0f);
+        if (swing > 0.01f) { bx = swing; by = (float)(kTau * t * (1.4 + 0.9 * my)); bw = hb < 0.7f ? -2.0f : 2.0f; }   // la mayoria con la derecha
+    }
+    if (shirtless) bw += 10.0f;
+    out[4] = bx; out[5] = by; out[6] = bz; out[7] = bw;
+}
+
+// (08/11 b) lo llama rastro.cpp al final de cada tick del partido (solo lectura de MatchInfo): detecta gol, falta, offside y
+// corner por los cambios de la reanudacion (+0x1554: 3 corner, 7 saque del medio) y del tipo de falta (+0x1588: 1 offside,
+// 2..4 falta). Un saque del medio despues de mas de 15 s de la misma fase = gol (el del arranque de cada tiempo no cuenta).
+void PublicoMatchTick(int tick, int phase, int type, int restart, int foul) {
+    static int pPhase = -999, pRestart = -1, pFoul = 0; static double phaseT = 0;
+    double now = fmod(std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(), 100000.0);
+    // tiempo de juego del partido (para la hinchada sin camiseta); un tick que vuelve muy atras = partido nuevo
+    static int pTick = -1; static double pNow = 0;
+    if (tick < pTick - 2000 || pTick < 0) { s_playSec = 0.0f; s_goals = 0; }
+    if (type == 1 && pTick >= 0) { double dt = now - pNow; if (dt > 0 && dt < 0.5) s_playSec = s_playSec.load() + (float)dt; }
+    pTick = tick; pNow = now;
+    if (phase != pPhase) { pPhase = phase; phaseT = now; pRestart = restart; pFoul = foul; return; }
+    int ev = 0;
+    if (restart != pRestart) {
+        if (restart == 7 && now - phaseT > 15.0) ev = kEvGol;
+        else if (restart == 3) ev = kEvCorner;
+    }
+    if (!ev && foul != pFoul && foul >= 1 && foul <= 4) ev = foul == 1 ? kEvOffside : kEvFalta;
+    pRestart = restart; pFoul = foul;
+    if (!ev) return;
+    // un gol no lo pisa una falta / corner de los segundos siguientes
+    if (s_evKind.load() == kEvGol && now - s_evT.load() < 10.0 && ev != kEvGol) return;
+    s_evSeed = (uint32_t)tick * 2654435761u;
+    s_evT = now; s_evKind = ev;
+    if (ev == kEvGol) s_goals++;
+    static const char* const kN[] = { "", "gol", "falta", "offside", "corner" };
+    Log("publico: evento %s (tick %d, fase %d, tipo %d, reanudacion %d, falta %d, %.0f s de juego, %d goles)", kN[ev], tick, phase, type, restart, foul, s_playSec.load(), s_goals.load());
 }
 
 static void Worker() {
-    for (auto& b : s_bank) b.assign(kMax * 4, 0.0f);
+    for (auto& b : s_bank) b.assign(kMax * 8, 0.0f);
     int last = -1; double lastT = -1;
     while (s_run.load()) {
         double t = s_time.load();
@@ -84,7 +184,7 @@ static void Worker() {
         if (s_ready.load() == b) b = 1 - b;           // no pisar el banco que espera subirse
         float mood = s_mood.load();
         float* d = s_bank[b].data();
-        for (uint32_t i = 0; i < kMax; i++) Gesture(i, t, mood, d + 4 * i);
+        for (uint32_t i = 0; i < kMax; i++) Gesture(i, t, mood, d + 8 * i);
         s_ready = b; last = b;
     }
 }
@@ -92,13 +192,13 @@ static void Worker() {
 static void Ensure() {
     if (s_buf || s_failed || !g_dev.dev) return;
     D3D11_BUFFER_DESC d = {};
-    d.ByteWidth = kMax * 16; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    d.ByteWidth = kMax * 32; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
     d.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED; d.StructureByteStride = 16;
-    std::vector<float> zero(kMax * 4, 0.0f);
+    std::vector<float> zero(kMax * 8, 0.0f);
     D3D11_SUBRESOURCE_DATA init = { zero.data(), 0, 0 };
     if (FAILED(g_dev.dev->CreateBuffer(&d, &init, &s_buf))) { s_failed = true; Log("publico: no se pudo crear el buffer de gestos"); return; }
     D3D11_SHADER_RESOURCE_VIEW_DESC v = {};
-    v.Format = DXGI_FORMAT_UNKNOWN; v.ViewDimension = D3D11_SRV_DIMENSION_BUFFER; v.Buffer.FirstElement = 0; v.Buffer.NumElements = kMax;
+    v.Format = DXGI_FORMAT_UNKNOWN; v.ViewDimension = D3D11_SRV_DIMENSION_BUFFER; v.Buffer.FirstElement = 0; v.Buffer.NumElements = kMax * 2;
     if (FAILED(g_dev.dev->CreateShaderResourceView(s_buf, &v, &s_srv))) { s_failed = true; Log("publico: no se pudo crear la vista del buffer"); return; }
     NamedSetSRV("pes_crowdface", s_srv);   // nombre para el inspector; el enlace lo hace PublicoSRVFor desde hooks.cpp
     s_run = true;

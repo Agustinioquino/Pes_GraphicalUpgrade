@@ -17,27 +17,57 @@ void BrowMap(float2 uv, float2 texel, out float4 o3) {
   float zone = max(Ell(uv, float2(0.395, 0.312), float2(0.13, 0.05), 0.35), Ell(uv, float2(0.605, 0.312), float2(0.13, 0.05), 0.35));
   zone *= smoothstep(0.365, 0.345, uv.y);
   if (zone < 0.01) return;
-  float sk = 0;
+  float sk = 0; float3 skC = 0; float aSk = 1.0;
   [unroll] for (int k = 0; k < 8; k++) {
     float a = k * 0.785398;
-    sk = max(sk, LumF(tDiffuse.SampleLevel(sLin, uv + float2(cos(a) * 0.034, sin(a) * 0.026), 3.0).rgb));
+    float4 cN4 = tDiffuse.SampleLevel(sLin, uv + float2(cos(a) * 0.034, sin(a) * 0.026), 3.0);
+    float3 cN = cN4.rgb;
+    float lN = LumF(cN);
+    if (lN > sk) { sk = lN; skC = cN; aSk = cN4.a; }   // (08/11 v) y el alfa de la piel   // (08/11 v) tambien el COLOR de la piel de alrededor (para separarlo del pelo)
   }
   sk = max(sk, 0.01);
-  float l1 = LumF(tDiffuse.SampleLevel(sLin, uv, 1.0).rgb);
+  float4 t1 = tDiffuse.SampleLevel(sLin, uv, 1.0);
+  float l1 = LumF(t1.rgb);
   float mask = smoothstep(0.80, 0.58, l1 / sk) * zone;
+  // (08/11 v, Agustin: "tenes la textura y su alfa detecta las partes de pelo") el ALFA de face_bsm_alp marca el pelo pintado: donde
+  // el alfa se aparta del de la piel de alrededor, eso es pelo. Si la cara trae ese alfa (difiere en la zona), manda el alfa
+  // (contorno exacto, sin confundir piel oscura / sombras pintadas con pelo); si el alfa es parejo, queda la oscuridad como antes
+  float aD = abs(t1.a - aSk);
+  float aMax = aD;
+  [unroll] for (int j = 0; j < 4; j++) {
+    float2 o = float2(j < 2 ? (j == 0 ? 0.02 : -0.02) : 0.0, j >= 2 ? (j == 2 ? 0.008 : -0.008) : 0.0);
+    aMax = max(aMax, abs(tDiffuse.SampleLevel(sLin, uv + o, 1.0).a - aSk));
+  }
+  float useA = smoothstep(0.08, 0.2, aMax);   // la cara trae mascara de pelo en el alfa
+  mask = lerp(mask, smoothstep(0.06, 0.35, aD) * zone, useA);
   // color (04/11 e, Agustin: "el color es lo que falla", salian casi negras): antes pesaba al CUADRADO lo oscuro -> ganaba solo el
   // texel mas negro. Ahora: promedio de los texeles de pelo (peso suave, no al cuadrado) mezclado con el promedio de la zona, y
   // se le devuelve el tono (saturacion x1.35) y algo de luz: el pelo de la ceja es castano / rubio translucido, no negro
-  float3 acc = 0, accAll = 0; float wsum = 0;
+  // (08/11 v, Agustin: "no me gusta el color que toma de la textura") el texel de la ceja pintada es una MEZCLA de pelo y piel (la
+  // pintura es semitransparente y en mip 0 el pelo no llena el texel): el promedio de antes (+30 % de la zona) le pasaba el rosado /
+  // naranja de la piel a las hebras. Ahora se separa: texel = a * pelo + (1 - a) * piel (piel = la mas clara de alrededor, con su
+  // color) -> pelo = (texel - (1 - a) * piel) / a, y pesa mas donde el pelo cubre mas (a alto)
+  float3 acc = 0; float wsum = 0;
   [unroll] for (int y = -2; y <= 2; y++) [unroll] for (int x = -2; x <= 2; x++) {
-    float3 c = tDiffuse.SampleLevel(sLin, uv + float2(x, y) * texel * 2.0, 0.0).rgb;
-    float w = smoothstep(0.85, 0.55, LumF(c) / sk);
-    acc += c * w; wsum += w; accAll += c;
+    float4 c4 = tDiffuse.SampleLevel(sLin, uv + float2(x, y) * texel * 2.0, 0.0);
+    float3 c = c4.rgb;
+    float al = saturate((1.0 - LumF(c) / sk) / 0.55);          // cobertura del pelo en ese texel (55 % mas oscuro = todo pelo)
+    al = lerp(al, saturate(abs(c4.a - aSk) / 0.6), useA);      // (08/11 v) con mascara en el alfa, la cobertura la da el alfa
+    float3 hcK = max((c - (1.0 - al) * skC) / max(al, 0.25), 0.0);
+    float w = al * al;
+    acc += hcK * w; wsum += w;
   }
-  float3 hc = wsum > 1e-3 ? acc / wsum : tDiffuse.SampleLevel(sLin, uv, 0.0).rgb * 0.8;
-  hc = lerp(hc, accAll / 25.0, 0.3);
+  // sin pelo pintado alrededor: castano oscuro sacado de la piel (antes el texel x0.8 = color de piel)
+  float3 hc = wsum > 1e-3 ? acc / wsum : skC * float3(0.42, 0.33, 0.27);
   float hl = LumF(hc);
-  hc = max(hl + (hc - hl) * 1.1, 0.0) * 1.15;   // (05/11) brillo de vuelta a x1.15 (se veian muy oscuras de frente)   // (04/11 o) antes x1.35 / x1.15: tono demasiado naranja
+  hc = max(hl + (hc - hl) * 0.95, 0.0) * 1.1;   // (08/11 v) sin realce de saturacion: el tono real del pelo ya no trae la piel
+  // (08/11 v, Agustin: "el color de las cejas nunca tiene que ser el color de la piel") tope: la ceja queda al menos 45 % mas oscura
+  // que la piel de alrededor y, si el tono se parece al de la piel, se lleva hacia el castano del pelo
+  { float hl2 = LumF(hc), cap = 0.55 * sk;
+    if (hl2 > cap) hc *= cap / max(hl2, 1e-4);
+    float3 sN = skC / max(LumF(skC), 1e-4), hN = hc / max(LumF(hc), 1e-4);
+    float same = 1.0 - saturate(length(hN - sN) * 4.0);
+    hc = lerp(hc, LumF(hc) * float3(1.18, 0.95, 0.78), same * 0.6); }
   o3 = float4(hc, mask);
 }
 void main(float4 pos : SV_Position, float2 uv : TEXCOORD0, out float4 o0 : SV_Target0)

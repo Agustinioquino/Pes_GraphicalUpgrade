@@ -4,3 +4,4 @@ Modelos: Asset/model/bg/common/audi/#Win/audi_model.fpk = los 14 au*.fmdl con la
 mismo esqueleto/UV/materiales; LOD media y lejana sin cambios. Generado con tools/crowd/subdividir_publico.py. Si baja el FPS en partidos con estadio lleno: borrar solo ese .fpk.
 (08/11 b) audi_model.fpk lleva ademas los pesos de 3 huesos de la cara (mandibula, cejas) en el COLOR del vertice (tools/crowd/pesos_cara.py):
 los mueve la DLL (publico.cpp, fila 394) con los VS del publico del mod. Sin la DLL los modelos se ven igual que sin pesos (quietos).
+(08/11 d) COLOR.x = 6 o 7 segun donde esta el cachete en la UV del modelo (hinchas sin camiseta: el VS pinta el torso con la piel de la cara).
