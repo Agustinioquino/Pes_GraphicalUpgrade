@@ -387,7 +387,14 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
   float3 P0 = p[0].pV.xyz, P1 = p[1].pV.xyz, P2 = p[2].pV.xyz;
   float3 N0 = normalize(p[0].o6.xyz), N1 = normalize(p[1].o6.xyz), N2 = normalize(p[2].o6.xyz);
   float3 pl = b.x * P0 + b.y * P1 + b.z * P2;
+#if PES_TESS_BODY
+  // (08/11 k, Agustin: "se ven costuras en la union de las munecas y en otras partes") en el cuerpo siempre Phong: el PN (y376 = 1)
+  // empuja hacia afuera el anillo de al lado del borde de cada pieza (mano / antebrazo, pierna / media), que queda fijo, y la union
+  // se ve como un pliegue. El PN sigue para la cara.
+  float3 pp = PesTessSmooth(P0, P1, P2, N0, N1, N2, b, 0.0);
+#else
   float3 pp = PesTessSmooth(P0, P1, P2, N0, N1, N2, b, IniParams.Load(int2(376, 0)).y);   // (07/11) Phong o PN (y376)
+#endif
   // (04/11 h, Agustin: "se nota el bajo nivel poligonal en el lagrimal") peso 2 = borde de la abertura del ojo (la DLL lo marca solo en
   // la cara): redondea con x366 (0..1) y su propio tope y366 mm; el relieve no entra ahi (seamR)
   float4 EB = IniParams.Load(int2(366, 0));
@@ -417,6 +424,11 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
   float fade = 1.0 - smoothstep(U.x - max(U.y, 0.01), U.x, dist);
   float3 d = (pp - pl) * (saturate(T.y) * seam * fade * (T.x > 0.5 ? 1.0 : 0.0));
   float dl = length(d), tope = lerp(max(U.z, 0.0), clamp(EB.y, 0.0, max(U.z, 0.0)), saturate(eyeMix * 2.0)) * 0.001;
+#if PES_TESS_BODY
+  // (08/11 k) tope del redondeo del cuerpo 1.5 mm aunque w364 diga mas (el ini tiene 3.4): mas que eso deja el pliegue en la union
+  // con la pieza de al lado (el borde no se mueve)
+  tope = min(tope, 0.0015);
+#endif
   if (dl > tope) d *= tope / max(dl, 1e-6);
 #if PES_TESS_BODY
   {   // (08/11, Agustin: "teselacion a los brazos y manos, piernas ... sin mucha deformacion") RELIEVE DEL CUERPO: la altura del detalle
