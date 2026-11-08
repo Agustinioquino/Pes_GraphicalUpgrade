@@ -1906,6 +1906,20 @@ int ExprBonesPoses(ExprCharPose* out, int max) {
     std::lock_guard<std::mutex> lk(s_mx);
     const unsigned fr = s_frame.load(std::memory_order_relaxed); int n = 0;
     for (int i = 0; i < s_nSk && n < max; i++) { const ExprCharPose& P = s_sk[i].pub; if (P.ok && fr - P.frame <= 10) out[n++] = P; }
+    // (08/11 c, Agustin: un ojo hundido en cuadros alternos al acercar la camara) dos esqueletos publicados con la cabeza en el mismo
+    // lugar (el editor arma otra instancia del mismo jugador, o una vieja que todavia no vencio): el VS elegia uno u otro segun el cuadro y
+    // las diferencias no eran las mismas. Si dos cabezas estan a menos de 3 cm queda solo la publicada mas nueva
+    auto headW = [](const ExprCharPose& P, float* o) { if (!P.worldOk) return false; for (int k = 0; k < 3; k++) o[k] = P.W[k * 4 + 0] * P.headT[0] + P.W[k * 4 + 1] * P.headT[1] + P.W[k * 4 + 2] * P.headT[2] + P.W[k * 4 + 3]; return true; };
+    for (int i = 0; i < n; i++) {
+        float a[3]; if (!headW(out[i], a)) continue;
+        for (int j = i + 1; j < n; j++) {
+            float b[3]; if (!headW(out[j], b)) continue;
+            const float d2 = (a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]);
+            if (d2 > 0.03f * 0.03f) continue;
+            if ((int)(out[j].frame - out[i].frame) > 0) out[i] = out[j];   // queda la mas nueva en i
+            out[j] = out[--n]; j--; headW(out[i], a);
+        }
+    }
     return n;
 }
 // Present (hilo de render): estado para el shader (350.y) y resumen al log
