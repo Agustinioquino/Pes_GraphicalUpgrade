@@ -306,27 +306,32 @@ void main(
     // (27/10 n) tanda 11, x329 "transpiracion": en la foto de Agustin algunas hojas sueltas tienen un brillo humedo puntual (rocio / riego) en la
     // punta, chispas con el sol de frente. Una de cada ~8 hojas del mod (al azar por hoja, v8.z) lleva en la punta mas brillo y menos rugosidad;
     // solo cerca (pesCf) y no en las pintadas
+    // (08/11 ac, Agustin: "el rocio deberia ser mas notorio ... seco / normal / humedo deberian cambiar el aspecto, como la lluvia o el invierno")
+    // estado del suelo (110 manual, 114 automatico: lluvia) y estacion (114.z: 1 invierno): humedo x1.8 gotas (mas grandes y claras), seco x0.15,
+    // invierno x1.4 (rocio / escarcha de la manana), lluvia = humedo. Vale para la transpiracion (x329) y el rocio fino (x334)
+    float2 pesGnd2 = PESGround();
+    float dewK = (1.0 + 0.8 * pesGnd2.x) * (1.0 - 0.85 * pesGnd2.y) * (abs(IniParams.Load(int2(114,0)).z - 1.0) < 0.5 ? 1.4 : 1.0);
     float4 P329 = IniParams.Load(int2(329,0));
     if (pxA > 0.0 && P329.x > 0.001 && !pesFar) {   // (27/10 p) tambien en las parcelas del juego de muy cerca
-      float dew = step(0.88, frac(pesHvR * 11.7 + 0.29)) * smoothstep(0.45, 1.0, relH) * clamp(P329.x, 0.0, 2.0) * pesCf * (1.0 - pesPaintF) * sparkK;   // (2/11) solo hojas que miden
+      float dew = step(saturate(1.0 - 0.12 * dewK), frac(pesHvR * 11.7 + 0.29)) * smoothstep(0.45, 1.0, relH) * clamp(P329.x, 0.0, 2.0) * pesCf * (1.0 - pesPaintF) * sparkK * min(dewK, 1.5);   // (08/11 ac) mas hojas con gota cuando esta humedo   // (2/11) solo hojas que miden
       o2.y = saturate(o2.y + 0.45 * dew);
       o2.x = lerp(o2.x, 0.12, saturate(dew));
     }
     // (27/10 p) tanda 12, x334 rocio fino de cerca: en ~1 de cada 3 hojas, gotas chicas y nitidas repartidas a lo largo de la hoja (no solo en la
     // punta): muy lisas y brillantes (chispas con el sol de frente), un poco mas claras (reflejan cielo) y dejan pasar luz a contraluz
     if (nearF > 0.001 && P334.x > 0.001 && pesPaintF < 0.5) {
-      float kD = clamp(P334.x, 0.0, 2.0);
+      float kD = clamp(P334.x, 0.0, 2.0) * dewK;   // (08/11 ac) humedo: mas hojas con gotas; seco: casi ninguna
       float hB = frac(pesHvR * 17.3 + 0.41);
       if (hB < 0.33 * kD) {
         float seg = floor(relH * 5.0);                                       // 5 tramos por hoja, cada uno con (o sin) su gota
         float hS = PESGh21(float2(pesHvR * 31.7 + seg * 0.173, seg * 0.311 + pesHvR * 7.1));
         float2 ctr = float2(0.25 + 0.5 * frac(hS * 7.7), (seg + 0.25 + 0.5 * frac(hS * 3.3)) / 5.0);
         float2 d = (float2(saturate(v1.x), relH) - ctr) * float2(1.0, 2.2);  // gota algo alargada a lo largo de la hoja
-        float r = 0.11 * (0.7 + 0.6 * frac(hS * 13.1));
+        float r = 0.11 * (0.7 + 0.6 * frac(hS * 13.1)) * (1.0 + 0.35 * pesGnd2.x);   // (08/11 ac) gotas mas grandes con la cancha humeda
         float drop = (hS < 0.55 ? smoothstep(r, r * 0.55, length(d)) : 0.0) * nearF * (1.0 - pesPaintF) * sparkK;   // (2/11) solo hojas que miden
         o2.y = saturate(o2.y + 0.6 * drop);
         o2.x = lerp(o2.x, 0.06, drop);
-        o0.xyz = saturate(o0.xyz * (1.0 + 0.10 * drop));
+        o0.xyz = saturate(o0.xyz * (1.0 + (0.10 + 0.08 * pesGnd2.x) * drop));   // (08/11 ac) la gota refleja mas cielo cuando hay mucha agua
         pesDrop = drop;
       }
     }
