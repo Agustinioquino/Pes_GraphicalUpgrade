@@ -349,6 +349,7 @@ struct Skel {
     // (08/11) gestos propios del jugador (gani.cpp): copia de la lista, peso suavizado de cada uno y el gesto "entre_" en curso
     std::vector<GaniGest> gg; unsigned ggGen = 0; uint32_t ggPid = 0; float ggW[16] = {}; float ggT = -1.0f; unsigned ggLog = 0;
     int btw = -1; float btwT0 = 0.0f, btwNext = -1.0f; int btwN = 0;
+    float spP[3] = {}; float spT = -1.0f, speed = 0.0f, stillT = 0.0f; bool spHave = false;   // (08/11) velocidad del jugador (cabeza en el mundo, m/s) y cuanto lleva quieto
     uint32_t pid = 0; bool pKnown = false; int prof = -1; unsigned profGen = 0xffffffffu; unsigned profFrame = 0; bool profLogged = false;
 };
 static const int kMaxSkel = 48;
@@ -1262,9 +1263,33 @@ void ExprBonesFrame(const void* skel) {
                 for (int b = 0; b < 31; b++) { for (int k = 0; k < 3; k++) P[b][k] += w * g.dP[b][k]; Z[b] += w * g.dZ[b]; }
                 any = true;
             }
-            {   // "entre_": uno cada tanto con la cara quieta
+            // (08/11, Agustin: "hincharse las mejillas, soplar y entrecerrar un poco los ojos podria ser una animacion cuando el jugador esta
+            // quieto o a punto de correr") velocidad del jugador: la cabeza del cuerpo en el mundo (CharNodeToWorld), suavizada con el reloj
+            bool arranco = false;
+            if (S->node && S->bHead && t >= 0.0f) {
+                Xf bh; float w[3];
+                if (ReadXf(S->bHead, bh) && CharNodeToWorld(const_cast<void*>(S->node), bh.t, w, true)) {
+                    if (S->spHave && t > S->spT + 0.0005f && t - S->spT < 0.5f) {
+                        const float dt = t - S->spT, dx = w[0] - S->spP[0], dz = w[2] - S->spP[2];
+                        const float v = sqrtf(dx * dx + dz * dz) / dt, before = S->speed;
+                        S->speed += ((std::min)(v, 12.0f) - S->speed) * (1.0f - expf(-dt / 0.25f));
+                        if (S->speed < 0.5f) S->stillT += dt; else if (S->speed > 1.0f) { if (before <= 1.0f && S->stillT > 1.0f) arranco = true; S->stillT = 0.0f; }
+                    }
+                    if (!S->spHave || t != S->spT) { memcpy(S->spP, w, sizeof w); S->spT = t; S->spHave = true; }
+                }
+            }
+            {   // "entre_" / "quieto_" / "corriendo_": uno cada tanto con la cara quieta; "arranque_": enseguida al arrancar a correr
                 auto rnd = [&](float n) { return Frac(sinf(n * 12.9898f + (float)(S->pid % 9973u) * 0.731f) * 43758.5453f); };
-                int nb = 0; for (int i = 0; i < NG; i++) if (S->gg[i].between) nb++;
+                auto ok = [&](int k) { return k == 1 || (k == 2 && S->spHave && S->stillT > 1.5f) || (k == 4 && S->spHave && S->speed > 3.5f); };
+                int nb = 0; for (int i = 0; i < NG; i++) if (S->gg[i].between && ok(S->gg[i].kind)) nb++;
+                if (arranco) {
+                    int na = 0; for (int i = 0; i < NG; i++) if (S->gg[i].kind == 3) na++;
+                    if (na > 0) {
+                        int pick = (int)(rnd((float)S->btwN + 0.75f) * na); if (pick >= na) pick = na - 1;
+                        for (int i = 0; i < NG; i++) if (S->gg[i].kind == 3 && pick-- == 0) { S->btw = i; break; }
+                        S->btwT0 = t; S->btwN++;
+                    }
+                }
                 if (S->btw >= 0 && S->btw < NG) {
                     const GaniGest& g = S->gg[S->btw]; const float tt = t - S->btwT0, dur = (std::max)(g.frames / 30.0f, 0.5f);
                     if (tt < 0.0f || tt > dur) { S->btw = -1; S->btwNext = t + 4.0f + 8.0f * rnd((float)S->btwN); }
@@ -1280,7 +1305,7 @@ void ExprBonesFrame(const void* skel) {
                     if (S->btwNext < 0.0f || S->btwNext > t + 30.0f) S->btwNext = t + 3.0f + 6.0f * rnd(0.5f);
                     if (t >= S->btwNext) {
                         int pick = (int)(rnd((float)S->btwN + 0.25f) * nb); if (pick >= nb) pick = nb - 1;
-                        for (int i = 0; i < NG; i++) if (S->gg[i].between && pick-- == 0) { S->btw = i; break; }
+                        for (int i = 0; i < NG; i++) if (S->gg[i].between && ok(S->gg[i].kind) && pick-- == 0) { S->btw = i; break; }
                         S->btwT0 = t; S->btwN++;
                     }
                 }

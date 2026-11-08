@@ -206,6 +206,51 @@ def hablar(rig, segundos=6.0, fps=30):
         if all(max(abs(a - b) for a, b in zip(vals[0], x)) < 1e-6 for x in vals): pistas[ix] = [pistas[ix][0]]
     return GE.escribir(rig.base_bytes, pistas, N, base=cr)
 
+def animado(rig, N, fn, paso=2):
+    """clip animado de N cuadros: fn(f) -> (mv, A, up, lo) en los ejes de la DLL; base_normal + eso en cada clave"""
+    G, cr = GE.leer_crudo(rig.base_bytes); pistas = {}
+    inv = {v: k for k, v in rig.canal.items()}
+    for f in list(range(0, N, paso)) + [N]:
+        rel = rig.pistas_de(*fn(f))
+        for ix, (kind, bs, keys) in cr.items():
+            if ix not in inv: continue
+            v = rel.get(inv[ix])
+            if kind == 'pos':
+                p = [GC.half(x) for x in keys[0][1]]; val = tuple(p[i] + (v[i] if v else 0.0) for i in range(3))
+            else:
+                q = GC.quat([x / float(1 << bs) for x in keys[0][1]], keys[0][2]); val = qmul(v, q) if v else q
+            pistas.setdefault(ix, []).append((f, val))
+    for ix in list(pistas):
+        vals = [v for _, v in pistas[ix]]
+        if all(max(abs(a - b) for a, b in zip(vals[0], x)) < 1e-6 for x in vals): pistas[ix] = [pistas[ix][0]]
+    return GE.escribir(rig.base_bytes, pistas, N, base=cr)
+
+def _env(f, N, ent=8, sal=10):   # entra y sale suave (cuadros)
+    a = min(1.0, f / float(ent)); b = min(1.0, (N - f) / float(sal)); x = max(0.0, min(a, b)); return x * x * (3 - 2 * x)
+
+def _mv(d):   # {d: (x, y, z) mm, ejes de la cabeza} -> m
+    return {k: [c * 0.001 for c in v] for k, v in d.items()}
+
+def entre_respirar(f, N=150):   # dos respiraciones por la nariz: alas de la nariz afuera, labios apenas separados
+    r = 0.5 - 0.5 * math.cos(2 * math.pi * f / 75.0); e = _env(f, N, 15, 15) * r
+    mv = _mv({14: (0.6, 0.2, 0.1), 15: (-0.6, 0.2, 0.1), 13: (0, 0.15, 0), 7: (0.2, -0.1, 0), 8: (-0.2, -0.1, 0)})
+    return {k: [c * e for c in v] for k, v in mv.items()}, math.radians(1.2) * e, 0.0, 0.0
+
+def quieto_cachetes(f, N=54):   # infla los cachetes con la boca cerrada y suelta el aire
+    e = _env(f, N, 10, 14)
+    mv = _mv({18: (2.0, 0.3, 1.2), 19: (-2.0, 0.3, 1.2), 7: (3.0, 0.0, 1.5), 8: (-3.0, 0.0, 1.5), 16: (1.0, 0, 0.4), 17: (-1.0, 0, 0.4),
+              5: (-0.8, 0, 0.8), 6: (0.8, 0, 0.8), 9: (0, -0.6, 0.6), 10: (0, -0.6, 0.8), 11: (0, -0.6, 0.6), 1: (0, 0.6, 0.6), 2: (0, 0.6, 0.6), 3: (0, 0.6, 0.8)})
+    return {k: [c * e for c in v] for k, v in mv.items()}, 0.0, 0.04 * e, -0.03 * e
+
+def arranque_soplar(f, N=40):   # sopla con los labios en o, cachetes un poco inflados y ojos entrecerrados
+    e = _env(f, N, 6, 14)
+    mv = _mv({5: (-3.5, 0, 2.0), 6: (3.5, 0, 2.0), 1: (-0.8, 0.4, 2.2), 2: (0.8, 0.4, 2.2), 3: (0, 0.5, 2.5), 9: (-0.6, -0.3, 2.2), 10: (0, -0.3, 2.5), 11: (0.6, -0.3, 2.2),
+              18: (1.2, 0.4, 0.8), 19: (-1.2, 0.4, 0.8), 7: (1.5, 0, 0.8), 8: (-1.5, 0, 0.8), 20: (0.2, 0.7, 0.3), 21: (-0.2, 0.7, 0.3),
+              26: (-0.8, -1.0, 0.2), 27: (0.8, -1.0, 0.2), 30: (0, -0.6, 0)})
+    return {k: [c * e for c in v] for k, v in mv.items()}, math.radians(2.0) * e, 0.10 * e, -0.06 * e
+
+ENTRE = {'entre_respirar': (entre_respirar, 150), 'quieto_cachetes': (quieto_cachetes, 54), 'arranque_soplar': (arranque_soplar, 40)}
+
 GESTOS = {   # nombre del archivo -> sliders (los de la tarjeta de gestos del menu, a 1.0)
     'zfx_enojo': dict(ang=1.0), 'zfx_sonrisa': dict(smi=1.0), 'zfx_risa': dict(smi=1.4), 'zfx_asombro': dict(sur=1.0),
     'zfx_grito': dict(gri=1.0), 'zfx_puchero': dict(puc=1.0), 'zfx_abrir_boca': dict(abrir=1.0), 'zfx_dientes': dict(dientes=1.0),
@@ -221,6 +266,11 @@ def main():
             open(os.path.join(a[2], n + '.gani'), 'wb').write(b)
             print('%-22s %5d B  mandibula %5.1f grados, parpado arriba %+5.1f, abajo %+5.1f' % (n, len(b), math.degrees(A), -math.degrees(up), -math.degrees(lo)))
         b = hablar(rig); open(os.path.join(a[2], 'zfx_hablar.gani'), 'wb').write(b); print('%-22s %5d B  bucle 6 s' % ('zfx_hablar', len(b)))
+        return
+    if len(a) == 3 and a[0] == '--entre':   # gestos "entre medio" de ejemplo (van en PES21FX\anim\face\todos\)
+        rig = Rig(a[1]); os.makedirs(a[2], exist_ok=True)
+        for n, (fn, N) in ENTRE.items():
+            b = animado(rig, N, lambda f: fn(f, N)); open(os.path.join(a[2], n + '.gani'), 'wb').write(b); print('%-22s %5d B  %.1f s' % (n, len(b), N / 30.0))
         return
     if len(a) == 6 and a[0] == '--sumar':
         _, carpeta, gesto, peso, ent, sal = a

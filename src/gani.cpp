@@ -232,7 +232,8 @@ const char* GaniAskBone(int b) { return b >= 0 && b < kAskN ? kAskBones[b] : nul
 //   <gesto> se empareja con un clip del juego por PES21FX\anim\face\gestos.txt ("sonrisa = smil_soft", una por linea; sin archivo o sin
 //   linea valen los de kDefRef): cuando el juego hace ese gesto (se mide en los huesos, exprbones.cpp) la DLL suma la diferencia entre
 //   el clip propio y el del juego, en la medida en que el juego lo este haciendo. Los archivos que empiezan con "entre_" (respirar,
-//   inflar los cachetes, ...) se reproducen una vez cada tanto, al azar, con la cara quieta, sumados a lo que haga el juego.
+//   inflar los cachetes, ...) se reproducen una vez cada tanto, al azar, con la cara quieta, sumados a lo que haga el juego; "quieto_" solo
+//   con el jugador parado, "arranque_" al arrancar a correr despues de estar quieto (soplar, entrecerrar los ojos), "corriendo_" corriendo.
 //   Todo por nombre de archivo: agregar jugadores o gestos = agregar archivos (y una linea en gestos.txt si el gesto es nuevo).
 namespace {
 struct DefRef { const char* gest; const char* clip; };
@@ -295,7 +296,12 @@ static void BuildSet(PSet& S) {   // con s_mx tomado
     for (size_t i = 0; i < S.clips.size(); i++) {
         Clip& c = S.clips[i]; Load(c); if (!c.ok) continue;
         GaniGest g{}; strncpy_s(g.name, c.name.c_str(), _TRUNCATE); g.clip = (int)i; g.frames = c.frames;
-        g.between = _strnicmp(c.name.c_str(), "entre_", 6) == 0;
+        {   // prefijos de los gestos "entre medio" y cuando se disparan (exprbones.cpp): entre_ con la cara quieta, quieto_ con el jugador
+            // parado, arranque_ al empezar a correr despues de estar quieto, corriendo_ mientras corre
+            static const struct { const char* p; int k; } kPre[] = { { "entre_", 1 }, { "quieto_", 2 }, { "arranque_", 3 }, { "corriendo_", 4 } };
+            for (const auto& x : kPre) if (_strnicmp(c.name.c_str(), x.p, strlen(x.p)) == 0) { g.kind = x.k; break; }
+            g.between = g.kind > 0;
+        }
         float OP[kAskN][3], OZ[kAskN]; PoseAt(c, 0.5f * (float)c.frames, OP, OZ);
         float RP[kAskN][3], RZ[kAskN]; memcpy(RP, BP, sizeof RP); memcpy(RZ, BZ, sizeof RZ);
         if (!g.between) for (const auto& m : s_refMap) if (_stricmp(m.first.c_str(), c.name.c_str()) == 0) {
