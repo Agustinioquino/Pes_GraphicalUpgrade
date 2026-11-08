@@ -495,7 +495,9 @@ static int InitMod() {
     fx::StartHangWatch();   // (08/11 c) congelamientos: volcado automatico
     fx::PanelStart(fx::g_cfg.panelPort);   // (08/11) panel en vivo: HTTP en 127.0.0.1 (panel.cpp)
     fx::MemWatchStart();   // (26/10) liberador de memoria del juego + VirtualProtect/VirtualFree (memwatch.cpp)
-    if (fx::DiagOn(2)) fx::CodeWatchStart();
+    fx::CoverStart();   // (08/11 h) medidor de cobertura del codigo (cobertura = 1 en el ini)
+    if (fx::g_cfg.coverOn) fx::Log("codigo: vigilancia del codigo apagada mientras se mide la cobertura");
+    else if (fx::DiagOn(2)) fx::CodeWatchStart();
     else fx::Log("codigo: vigilancia del codigo del juego apagada (z173 = 0)");
     return 2;
 }
@@ -507,6 +509,7 @@ extern "C" __declspec(dllexport) int PES21FX_Init(const char*) { return InitMod(
 BOOL APIENTRY DllMain(HMODULE h, DWORD reason, LPVOID reserved) {
     if (reason == DLL_PROCESS_ATTACH) { s_self = h; DisableThreadLibraryCalls(h); fx_LoadRealD3D11(); }
     if (reason == DLL_PROCESS_DETACH && fx::g_log) {   // el juego se esta cerrando "normalmente" (ExitProcess)
+        fx::CoverFlush();   // (08/11 h) ultimo volcado de la cobertura
         fprintf(fx::g_log, "--- fin del proceso (%s)\n", reserved ? "el juego salio" : "DLL descargada");
         fflush(fx::g_log);
     }
