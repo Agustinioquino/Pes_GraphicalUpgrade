@@ -510,6 +510,7 @@ BOOL APIENTRY DllMain(HMODULE h, DWORD reason, LPVOID reserved) {
     if (reason == DLL_PROCESS_ATTACH) { s_self = h; DisableThreadLibraryCalls(h); fx_LoadRealD3D11(); }
     if (reason == DLL_PROCESS_DETACH && fx::g_log) {   // el juego se esta cerrando "normalmente" (ExitProcess)
         fx::CoverFlush();   // (08/11 h) ultimo volcado de la cobertura
+        fx::RastroFlush(true);   // (08/11 i) rastro del motor
         fprintf(fx::g_log, "--- fin del proceso (%s)\n", reserved ? "el juego salio" : "DLL descargada");
         fflush(fx::g_log);
     }

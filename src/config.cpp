@@ -172,6 +172,9 @@ static bool LoadConfigLocked() {
             else if (kl == "crash_dump") c.optCrashDump = atoi(v.c_str());
             else if (kl == "congelado_seg") c.optHangSec = atoi(v.c_str());
             else if (kl == "cobertura") c.coverOn = atoi(v.c_str()) != 0;
+            else if (kl == "rastro") c.rastroOn = atoi(v.c_str()) != 0;
+            else if (kl == "rastro_max_mb") c.rastroMaxMb = std::clamp(atoi(v.c_str()), 10, 100000);
+            else if (kl == "rastro_fotos") c.rastroFps = std::clamp(atoi(v.c_str()), 1, 54);
             else if (kl == "cobertura_demora") c.coverDelay = std::clamp(atoi(v.c_str()), 5, 600);
             else if (kl == "dump_switcher") c.optDump = atoi(v.c_str()) != 0;
             else if (kl == "memoria_arreglo") c.memFix = atoi(v.c_str());
