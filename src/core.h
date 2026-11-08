@@ -433,6 +433,11 @@ void ExprBonesPresent();                           // (01/11) exprbones.cpp: est
 // .ask: x arriba, y atras, z derecha) y posicion en cm; sin clip = false
 struct GaniPose { bool has[31]; float q[31][4]; float p[31][3]; int frames; };
 bool GaniSample(int clip, float t, bool loop, GaniPose& out, bool* done);
+// (08/11) gestos propios por jugador (gani.cpp): PES21FX\anim\face\<id>\*.gani y todos\*.gani. dP / dZ = clip propio menos el del juego
+// (cm en ejes del .ask / giro z en rad), rP / rZ = el del juego menos base_normal (para medir cuanto lo hace el juego); between = entre_*
+struct GaniGest { char name[32]; int clip; int frames; bool between; bool hasRef; float dP[31][3]; float dZ[31]; float rP[31][3]; float rZ[31]; };
+bool GaniGestGet(uint32_t pid, unsigned& gen, std::vector<GaniGest>& out);   // copia si cambio (gen)
+bool GaniGestSample(uint32_t pid, int clip, float t, float P[31][3], float Z[31]);
 int GaniCount(); const char* GaniName(int clip); const char* GaniAskBone(int b); void GaniPresent();   // hooks.cpp: elementos anotados al crearse el layout
 void MuscleHookPresent();                         // (23/10) musculatura (musculo.cpp): huesos de musculo del juego x 164..171 (v5: 32 clases)
 void MuscleDrawPlayerPanel();                     // (24/10) tarjeta "Musculatura por jugador" (ImGui; la llama DrawGroup con g_cfgMutex tomado)

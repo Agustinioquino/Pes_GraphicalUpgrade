@@ -346,6 +346,9 @@ struct Skel {
     // transformacion actual en (0, 0, 0) (no es espacio del modelo: log 12:46 PC), el del cuerpo si lo es
     void* bHead = nullptr; int bHeadIdx = -1; Xf bHeadRest = {};
     // (04/11) perfil por cara: jugador de este esqueleto (personajes.cpp) y perfil de caras.ini (-1 = ninguno)
+    // (08/11) gestos propios del jugador (gani.cpp): copia de la lista, peso suavizado de cada uno y el gesto "entre_" en curso
+    std::vector<GaniGest> gg; unsigned ggGen = 0; uint32_t ggPid = 0; float ggW[16] = {}; float ggT = -1.0f; unsigned ggLog = 0;
+    int btw = -1; float btwT0 = 0.0f, btwNext = -1.0f; int btwN = 0;
     uint32_t pid = 0; bool pKnown = false; int prof = -1; unsigned profGen = 0xffffffffu; unsigned profFrame = 0; bool profLogged = false;
 };
 static const int kMaxSkel = 48;
@@ -1203,6 +1206,96 @@ void ExprBonesFrame(const void* skel) {
     // escribir despues del juego
     // (02/11 h, Agustin: "quiero que se usen los por huesos, pero que sea perfecto") 350.x = 2: parpados por HUESOS tambien (para
     // medir con la lectura de la paleta por malla, expr.cpp "parpados por malla", si el giro llega igual a todas las mallas)
+    // (08/11, Agustin: "como aplicamos expresiones custom para cada jugador", "que tambien se muestren al expresarse en partido o en
+    // animaciones", "gestos que se reproduzcan entre medio como el jugador respirando e hinchando las mejillas") GESTOS PROPIOS DEL
+    // JUGADOR (gani.cpp: PES21FX\anim\face\<id>\ y todos\). Cuanto esta haciendo el juego cada gesto se MIDE en los huesos: lo que se
+    // corrio cada hueso contra la cara neutra de este jugador (ejes de la cabeza) proyectado sobre lo que mueve el clip del juego de ese
+    // gesto (gestos.txt), mas la mandibula. Con ese peso se suma la diferencia entre el clip propio y el del juego: la sonrisa del juego
+    // se vuelve la sonrisa propia, en partido, festejos y escenas, sin pisar ningun clip. En el editor (cara quieta) cuentan los sliders
+    // de gestos del mod con el mismo nombre. Los "entre_" se reproducen una vez cada 4..12 s, al azar, con la cara quieta.
+    if (!ganiOn && S->pKnown) {
+        if (S->ggPid != S->pid) { S->ggPid = S->pid; S->ggGen = 0; S->gg.clear(); S->btw = -1; S->btwNext = -1.0f; S->ggLog = 0; for (float& w : S->ggW) w = 0.0f; }
+        if (GaniGestGet(S->pid, S->ggGen, S->gg)) { S->btw = -1; for (float& w : S->ggW) w = 0.0f; }
+        const int NG = (std::min)((int)S->gg.size(), 16);
+        if (NG > 0) {
+            const float t = g_cfg.live[157][0];
+            const float kf = S->ggT < 0.0f ? 1.0f : std::clamp((t - S->ggT) * 60.0f, 0.0f, 6.0f); S->ggT = t;
+            const float ea = 1.0f - powf(1.0f - 0.12f, kf);
+            float C[kND][3] = {}; bool cOk[kND] = {};
+            for (int d = 5; d <= 30; d++) {
+                if (d == 12 || (d >= 22 && d <= 25) || !S->cur[d] || S->nN[d] < 120) continue;
+                Xf x; if (!ReadBase(*S, d, x)) continue;
+                const float v[3] = { x.t[0] - hc.t[0], x.t[1] - hc.t[1], x.t[2] - hc.t[2] }; float r[3]; QRot(hrInv, v, r);
+                for (int k = 0; k < 3; k++) C[d][k] = r[k] - S->nT[d][k];
+                cOk[d] = true;
+            }
+            const float jawNow = deg / 57.29578f;
+            float wr[16] = {}, sum = 0.0f;
+            for (int i = 0; i < NG; i++) {
+                const GaniGest& g = S->gg[i]; if (g.between || !g.hasRef) continue;
+                float dot = 0.0f, rr = 0.0f;
+                for (int d = 5; d <= 30; d++) {
+                    if (!cOk[d]) continue; const int ab = s_defToAsk[d]; if (ab < 0) continue;
+                    float rh[3]; GaniPToHead(g.rP[ab], rh);
+                    for (int k = 0; k < 3; k++) { dot += C[d][k] * rh[k]; rr += rh[k] * rh[k]; }
+                }
+                const float rj = -g.rZ[1]; dot += 0.0004f * jawNow * rj; rr += 0.0004f * rj * rj;   // mandibula: 2 cm por radian
+                if (rr < 1e-8f) continue;
+                const float w = std::clamp((std::clamp(dot / rr, 0.0f, 1.0f) - 0.15f) / 0.70f, 0.0f, 1.0f);   // zona muerta: la cara quieta no dispara
+                wr[i] = w; sum += w;
+            }
+            if (sum > 1.0f) for (int i = 0; i < NG; i++) wr[i] /= sum;
+            for (int i = 0; i < NG; i++) {   // sliders de gestos del mod (editor): el gesto propio del mismo nombre
+                const char* n = S->gg[i].name; float sl = 0.0f;
+                if (!_stricmp(n, "sonrisa")) sl = (std::min)(pSmi, 1.0f); else if (!_stricmp(n, "risa")) sl = (std::max)(0.0f, pSmi - 1.0f) * 2.0f;
+                else if (!_stricmp(n, "enojo")) sl = pAng; else if (!_stricmp(n, "asombro")) sl = pSur; else if (!_stricmp(n, "grito")) sl = pGri; else if (!_stricmp(n, "puchero")) sl = pPuc;
+                wr[i] = (std::max)(wr[i], std::clamp(sl, 0.0f, 1.0f));
+            }
+            float total = 0.0f;
+            for (int i = 0; i < NG; i++) {
+                S->ggW[i] += (wr[i] - S->ggW[i]) * ea; total += S->ggW[i];
+                if (S->ggW[i] > 0.5f && !(S->ggLog & (1u << i)) && s_logs < 400) { S->ggLog |= 1u << i; s_logs++; Log("gani: jugador %u hace '%s' (peso %.2f): gesto propio", S->pid, S->gg[i].name, S->ggW[i]); }
+            }
+            float P[31][3] = {}, Z[31] = {}; bool any = false;
+            for (int i = 0; i < NG; i++) {
+                const float w = S->ggW[i]; const GaniGest& g = S->gg[i]; if (g.between || w < 0.002f) continue;
+                for (int b = 0; b < 31; b++) { for (int k = 0; k < 3; k++) P[b][k] += w * g.dP[b][k]; Z[b] += w * g.dZ[b]; }
+                any = true;
+            }
+            {   // "entre_": uno cada tanto con la cara quieta
+                auto rnd = [&](float n) { return Frac(sinf(n * 12.9898f + (float)(S->pid % 9973u) * 0.731f) * 43758.5453f); };
+                int nb = 0; for (int i = 0; i < NG; i++) if (S->gg[i].between) nb++;
+                if (S->btw >= 0 && S->btw < NG) {
+                    const GaniGest& g = S->gg[S->btw]; const float tt = t - S->btwT0, dur = (std::max)(g.frames / 30.0f, 0.5f);
+                    if (tt < 0.0f || tt > dur) { S->btw = -1; S->btwNext = t + 4.0f + 8.0f * rnd((float)S->btwN); }
+                    else {
+                        float BP[31][3], BZ[31];
+                        if (GaniGestSample(S->pid, g.clip, tt, BP, BZ)) {
+                            const float fade = SStep(0.0f, 0.3f, tt) * (1.0f - SStep(dur - 0.3f, dur, tt)) * (1.0f - std::clamp(total * 3.0f, 0.0f, 1.0f));
+                            for (int b = 0; b < 31; b++) { for (int k = 0; k < 3; k++) P[b][k] += fade * BP[b][k]; Z[b] += fade * BZ[b]; }
+                            any = true;
+                        }
+                    }
+                } else if (nb > 0 && total < 0.08f && t >= 0.0f) {
+                    if (S->btwNext < 0.0f || S->btwNext > t + 30.0f) S->btwNext = t + 3.0f + 6.0f * rnd(0.5f);
+                    if (t >= S->btwNext) {
+                        int pick = (int)(rnd((float)S->btwN + 0.25f) * nb); if (pick >= nb) pick = nb - 1;
+                        for (int i = 0; i < NG; i++) if (S->gg[i].between && pick-- == 0) { S->btw = i; break; }
+                        S->btwT0 = t; S->btwN++;
+                    }
+                }
+            }
+            if (any) {
+                Z[1] = std::clamp(Z[1], -0.33f, 0.33f);   // la mandibula del gesto propio no pasa de 19 grados (la boca, regla fija)
+                for (int b = 0; b < 31; b++) { GP.has[b] = true; memcpy(GP.p[b], P[b], sizeof P[b]); GP.q[b][0] = GP.q[b][1] = GP.q[b][2] = 0.0f; GP.q[b][3] = 1.0f; }
+                GP.q[1][2] = sinf(0.5f * Z[1]); GP.q[1][3] = cosf(0.5f * Z[1]); GP.frames = 1;
+                ganiOn = true; gW = 1.0f; poseOn = true;
+                for (int d = 18; d <= 21; d++) { const int ab = s_defToAsk[d]; float ph[3] = {}; if (ab >= 0) GaniPToHead(P[ab], ph); for (int k = 0; k < 3; k++) s_ganiSec[d - 18][k] = ph[k]; }
+                s_ganiSecOn = true;
+                s_ganiLid[0] = -0.5f * (Z[14] + Z[15]); s_ganiLid[1] = -0.5f * (Z[16] + Z[17]); s_ganiLidOn = true;
+            }
+        }
+    }
     if (g_cfg.live[350][0] > 1.5f) EyesFrame(*S, hc, hr, sm);
     else for (int d = D_LID_TL; d <= D_LID_BR; d++) Release(*S, d);
     // (08/11, Agustin: "en partidos tambien vibra cuando el jugador deberia estar expresandose") la sonrisa medida en la comisura y la

@@ -225,11 +225,122 @@ bool GaniSample(int clip, float t, bool loop, GaniPose& out, bool* done) {
 }
 const char* GaniAskBone(int b) { return b >= 0 && b < kAskN ? kAskBones[b] : nullptr; }
 
+// ---- (08/11, Agustin: "como aplicamos expresiones custom para cada jugador", "que tambien se muestren al expresarse en partido o en
+// animaciones", "si despues quiero agregar mas jugadores o expresiones deberia funcionar", "gestos que se reproduzcan entre medio como
+// el jugador respirando e hinchando las mejillas") GESTOS PROPIOS POR JUGADOR ----
+//   PES21FX\anim\face\<id del jugador>\<gesto>.gani  y  PES21FX\anim\face\todos\<gesto>.gani (para cualquiera; el del jugador gana).
+//   <gesto> se empareja con un clip del juego por PES21FX\anim\face\gestos.txt ("sonrisa = smil_soft", una por linea; sin archivo o sin
+//   linea valen los de kDefRef): cuando el juego hace ese gesto (se mide en los huesos, exprbones.cpp) la DLL suma la diferencia entre
+//   el clip propio y el del juego, en la medida en que el juego lo este haciendo. Los archivos que empiezan con "entre_" (respirar,
+//   inflar los cachetes, ...) se reproducen una vez cada tanto, al azar, con la cara quieta, sumados a lo que haga el juego.
+//   Todo por nombre de archivo: agregar jugadores o gestos = agregar archivos (y una linea en gestos.txt si el gesto es nuevo).
+namespace {
+struct DefRef { const char* gest; const char* clip; };
+const DefRef kDefRef[] = {
+    { "sonrisa", "smil_soft" }, { "risa", "smil_mho" }, { "enojo", "angr_brwnit_soft" }, { "asombro", "supris_brwup_mho_eyo_hard" },
+    { "grito", "base_goal_hoe" }, { "puchero", "pow_brwnit_puck_hard" }, { "dolor", "pain_brwtrb_shut_eyhc_hard" },
+    { "preocupado", "neut_brwtrb_lorol" }, { "neutra", "neut" },
+};
+struct PSet { uint32_t pid = 0; unsigned gen = 0; unsigned scanned = 0; std::vector<Clip> clips; std::vector<GaniGest> info; };
+std::vector<PSet> s_psets; unsigned s_psetGen = 1;
+std::vector<std::pair<std::string, std::string>> s_refMap; bool s_refLoaded = false;
+static void LoadRefMap() {   // con s_mx tomado
+    s_refLoaded = true; s_refMap.clear();
+    for (const DefRef& d : kDefRef) s_refMap.push_back({ d.gest, d.clip });
+    std::vector<uint8_t> t; if (!LeerArchivo(g_cfg.baseDir + L"anim\\face\\gestos.txt", t)) return;
+    std::string s(t.begin(), t.end()); size_t p = 0; int n = 0;
+    while (p < s.size()) {
+        size_t e = s.find('\n', p); if (e == std::string::npos) e = s.size(); std::string l = s.substr(p, e - p); p = e + 1;
+        const size_t c = l.find_first_of(";#"); if (c != std::string::npos) l.resize(c);
+        const size_t eq = l.find('='); if (eq == std::string::npos) continue;
+        auto trim = [](std::string x) { while (!x.empty() && (x.back() == ' ' || x.back() == '\t' || x.back() == '\r')) x.pop_back(); size_t b = 0; while (b < x.size() && (x[b] == ' ' || x[b] == '\t')) b++; x = x.substr(b);
+            if (x.size() > 5 && _stricmp(x.c_str() + x.size() - 5, ".gani") == 0) x.resize(x.size() - 5); return x; };
+        const std::string g = trim(l.substr(0, eq)), r = trim(l.substr(eq + 1)); if (g.empty() || r.empty()) continue;
+        bool found = false; for (auto& m : s_refMap) if (_stricmp(m.first.c_str(), g.c_str()) == 0) { m.second = r; found = true; }
+        if (!found) s_refMap.push_back({ g, r }); n++;
+    }
+    Log("gani: gestos.txt %d lineas", n);
+}
+static Clip* FindClip(const char* name) {   // clip del juego por nombre (lista de Scan)
+    for (Clip& c : s_clips) if (_stricmp(c.name.c_str(), name) == 0) { if (!c.loaded) Load(c); return c.ok ? &c : nullptr; }
+    return nullptr;
+}
+static void PoseAt(const Clip& c, float f, float P[kAskN][3], float Z[kAskN]) {   // posiciones (cm) y giro z (rad) de cada hueso
+    for (int b = 0; b < kAskN; b++) { float q[4], p[3]; Sample(c.tr[b].rot, f, q); Sample(c.tr[b].pos, f, p); memcpy(P[b], p, 12); Z[b] = 2.0f * atan2f(q[2], q[3]); }
+}
+static void BasePose(float P[kAskN][3], float Z[kAskN]) {
+    if (Clip* b = FindClip("base_normal")) { PoseAt(*b, 0.0f, P, Z); return; }
+    memset(P, 0, sizeof(float) * kAskN * 3); memset(Z, 0, sizeof(float) * kAskN); Z[14] = Z[15] = 0.43633f; Z[16] = Z[17] = -0.08727f;
+}
+static void ListDir(const std::wstring& d, std::vector<Clip>& out) {
+    WIN32_FIND_DATAW fd; HANDLE h = FindFirstFileW((d + L"*.gani").c_str(), &fd); if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        std::wstring wn = fd.cFileName; std::string n; int k = WideCharToMultiByte(CP_UTF8, 0, wn.c_str(), -1, nullptr, 0, nullptr, nullptr); if (k <= 0) continue; n.resize(k - 1); WideCharToMultiByte(CP_UTF8, 0, wn.c_str(), -1, &n[0], k, nullptr, nullptr);
+        if (n.size() > 5) n.resize(n.size() - 5);
+        bool dup = false; for (const Clip& c : out) if (_stricmp(c.name.c_str(), n.c_str()) == 0) { dup = true; break; } if (dup) continue;   // el del jugador va primero y gana
+        Clip c; c.name = n; c.path = d + wn; out.push_back(std::move(c));
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+}
+static void BuildSet(PSet& S) {   // con s_mx tomado
+    if (!s_scanned) Scan(); if (!s_refLoaded) LoadRefMap();
+    const std::wstring base = g_cfg.baseDir + L"anim\\face\\";
+    std::vector<Clip> cl; ListDir(base + std::to_wstring(S.pid) + L"\\", cl); const size_t nOwn = cl.size(); ListDir(base + L"todos\\", cl);
+    std::string sig; for (const Clip& c : cl) sig += c.name + "|";
+    std::string old; for (const Clip& c : S.clips) old += c.name + "|";
+    if (S.gen && sig == old) return;
+    S.clips = std::move(cl); S.info.clear(); S.gen = ++s_psetGen;
+    float BP[kAskN][3], BZ[kAskN]; BasePose(BP, BZ);
+    for (size_t i = 0; i < S.clips.size(); i++) {
+        Clip& c = S.clips[i]; Load(c); if (!c.ok) continue;
+        GaniGest g{}; strncpy_s(g.name, c.name.c_str(), _TRUNCATE); g.clip = (int)i; g.frames = c.frames;
+        g.between = _strnicmp(c.name.c_str(), "entre_", 6) == 0;
+        float OP[kAskN][3], OZ[kAskN]; PoseAt(c, 0.5f * (float)c.frames, OP, OZ);
+        float RP[kAskN][3], RZ[kAskN]; memcpy(RP, BP, sizeof RP); memcpy(RZ, BZ, sizeof RZ);
+        if (!g.between) for (const auto& m : s_refMap) if (_stricmp(m.first.c_str(), c.name.c_str()) == 0) {
+            if (Clip* r = FindClip(m.second.c_str())) { PoseAt(*r, 0.5f * (float)r->frames, RP, RZ); g.hasRef = true; }
+            else Log("gani: gesto '%s' -> clip del juego '%s' no encontrado (carpetas.txt / gestos.txt)", c.name.c_str(), m.second.c_str());
+            break;
+        }
+        for (int b = 0; b < kAskN; b++) {
+            for (int k = 0; k < 3; k++) { g.dP[b][k] = OP[b][k] - RP[b][k]; g.rP[b][k] = RP[b][k] - BP[b][k]; }
+            g.dZ[b] = OZ[b] - RZ[b]; g.rZ[b] = RZ[b] - BZ[b];
+        }
+        if (!g.between && !g.hasRef) Log("gani: gesto '%s' sin clip del juego para comparar: solo con los sliders de gestos", c.name.c_str());
+        S.info.push_back(g);
+    }
+    Log("gani: jugador %u: %d gestos propios (%d de la carpeta del jugador, resto de todos\\)", S.pid, (int)S.info.size(), (int)nOwn);
+}
+}   // namespace
+
+bool GaniGestGet(uint32_t pid, unsigned& gen, std::vector<GaniGest>& out) {
+    std::lock_guard<std::mutex> lk(s_mx);
+    PSet* S = nullptr; for (PSet& p : s_psets) if (p.pid == pid) { S = &p; break; }
+    if (!S) { if (s_psets.size() > 64) s_psets.erase(s_psets.begin()); s_psets.push_back(PSet{}); S = &s_psets.back(); S->pid = pid; BuildSet(*S); }
+    if (gen == S->gen) return false;
+    gen = S->gen; out = S->info; return true;
+}
+// pose de un gesto "entre_" en el segundo t (sin bucle) menos base_normal: posiciones cm y giro z (rad)
+bool GaniGestSample(uint32_t pid, int clip, float t, float P[31][3], float Z[31]) {
+    std::lock_guard<std::mutex> lk(s_mx);
+    for (PSet& S : s_psets) if (S.pid == pid) {
+        if (clip < 0 || clip >= (int)S.clips.size() || !S.clips[clip].ok) return false;
+        const Clip& c = S.clips[clip]; const float f = (std::min)(t * 30.0f, (float)c.frames);
+        float BP[kAskN][3], BZ[kAskN]; BasePose(BP, BZ); PoseAt(c, f, P, Z);
+        for (int b = 0; b < kAskN; b++) { for (int k = 0; k < 3; k++) P[b][k] -= BP[b][k]; Z[b] -= BZ[b]; }
+        s_samples.fetch_add(1, std::memory_order_relaxed);
+        return true;
+    }
+    return false;
+}
+
 void GaniPresent() {
     static unsigned fr = 0; fr++;
     if (fr % 600 != 0) return;   // cada ~10 s: carpetas nuevas / clips nuevos
     std::lock_guard<std::mutex> lk(s_mx);
     if (g_cfg.live[383][0] > 0.5f || !s_scanned) { const unsigned prev = (unsigned)s_clips.size(); Scan(); s_lastScan = fr; (void)prev; }
+    if (fr % 1800 == 0) { LoadRefMap(); for (PSet& p : s_psets) BuildSet(p); }   // (08/11) cada ~30 s: gestos de jugadores nuevos / gestos.txt
     const int smp = s_samples.exchange(0), bad = s_badFiles.exchange(0);
     if (smp || bad) Log("gani: %d poses en 10 s%s", smp, bad ? " (archivos ilegibles, ver arriba)" : "");
 }
