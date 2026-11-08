@@ -355,7 +355,7 @@ struct Skel {
     int btw = -1; float btwT0 = 0.0f, btwNext = -1.0f; int btwN = 0;
     float spP[3] = {}; float spT = -1.0f, speed = 0.0f, stillT = 0.0f; bool spHave = false;
     float sl[16] = {}; bool slHave = false; float slT = -1.0f;   // (08/11) sliders de gestos suavizados (w395 Transicion)
-    float effort = 0.0f, brPh = 0.0f, nT = -1.0f;                 // (08/11) esfuerzo por velocidad (sube ~1 s, baja ~4 s), fase de la respiracion
+    float effort = 0.0f, brPh = 0.0f, anT = -1.0f;                 // (08/11) esfuerzo por velocidad (sube ~1 s, baja ~4 s), fase de la respiracion
    // (08/11) velocidad del jugador (cabeza en el mundo, m/s) y cuanto lleva quieto
     uint32_t pid = 0; bool pKnown = false; int prof = -1; unsigned profGen = 0xffffffffu; unsigned profFrame = 0; bool profLogged = false;
 };
@@ -1193,7 +1193,7 @@ static void FrameBody(const void* skel) {
     const float nExpr = g_cfg.live[396][2] > 0.01f ? std::clamp(g_cfg.live[396][2], 0.1f, 2.0f) : 1.0f;
     float eff = 0.0f, breath = 0.0f, brAmp = 0.0f, lifeBrow = 0.0f, lifeLipX = 0.0f, lifeLipY = 0.0f, lifeNose = 0.0f, lifeLid = 0.0f;
     {
-        const float dt = S->nT < 0.0f || tNow < S->nT ? 0.0f : (std::min)(tNow - S->nT, 0.5f); S->nT = tNow;
+        const float dt = S->anT < 0.0f || tNow < S->anT ? 0.0f : (std::min)(tNow - S->anT, 0.5f); S->anT = tNow;
         const float spd = S->spHave ? S->speed : 0.0f;
         const float target = SStep(2.5f, 7.0f, spd);
         S->effort += (target - S->effort) * (1.0f - expf(-dt / (target > S->effort ? 1.0f : 4.0f)));
