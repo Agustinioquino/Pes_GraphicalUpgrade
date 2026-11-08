@@ -32,6 +32,7 @@ struct MenuTestState {
     float noise = 0;
     int sIdx = -1, sComp = 0; float sSaved = 0;
     Meas base0, cur; double cpu0T = 0, gpu0 = 0; int gpu0N = 0; double z0[kGpuZoneN] = {};
+    Meas ref; bool refDone = false, refOk = false;   // (08/11 h) referencia medida justo antes de cada grupo
     std::vector<MenuTestResult> results;
     std::vector<std::string> views;   // fotos de las vistas de depuracion
     std::string status;
@@ -180,7 +181,7 @@ static void MeasEnd(int frames) {
     s_t.cur.gn = gn - s_t.gpu0N; s_t.cur.gpuMs = s_t.cur.gn > 0 ? (g - s_t.gpu0) / s_t.cur.gn : 0;
     for (int k = 0; k < kGpuZoneN; k++) s_t.cur.zone[k] = frames ? (z[k] - s_t.z0[k]) / frames : 0;
 }
-static const int kSettle = 14, kMeasure = 30;
+static const int kSettle = 20, kMeasure = 30;   // (08/11 h) asentar 14 -> 20: recompilacion / recarga tras el cambio
 
 void MenuTestPresent(IDXGISwapChain* sc, ID3D11Texture2D* frame) {
     if (!s_t.active) return;
@@ -191,7 +192,10 @@ void MenuTestPresent(IDXGISwapChain* sc, ID3D11Texture2D* frame) {
     Step& sp = s_t.steps[s_t.si];
     char b[200];
     switch (s_t.phase) {
-    case 0:   // aplicar
+    case 0:   // (08/11 h) referencia justo antes de cada grupo: el cuadro se va aliviando durante la prueba (la base del principio
+              // daba +2 a +3 ms a TODOS los grupos del editor); el costo se mide contra lo que cuesta AHORA con el grupo prendido
+        if (sp.kind == 1 && g_cfg.groups[sp.gi].tIdx >= 0 && !s_t.refDone) { MeasBegin(); s_t.refDone = true; s_t.phase = 5; s_t.wait = kMeasure; return; }
+        s_t.refDone = false;
         if (sp.kind == 1) { if (!Apply(sp.gi)) { MenuTestResult r; r.group = sp.label; r.section = sp.section; r.state = 2; s_t.results.push_back(r); s_t.skipped++; s_t.si++; return; } }
         else if (sp.kind == 2) { s_t.sIdx = sp.idx; s_t.sComp = sp.comp; s_t.sSaved = g_cfg.live[sp.idx][sp.comp]; g_cfg.live[sp.idx][sp.comp] = sp.val; }
         snprintf(b, sizeof b, "Probando %d/%d: %s", (int)s_t.si + 1, (int)s_t.steps.size(), sp.label.c_str()); s_t.status = b;
@@ -213,13 +217,17 @@ void MenuTestPresent(IDXGISwapChain* sc, ID3D11Texture2D* frame) {
             MenuTestResult r; r.group = sp.label; r.section = sp.section; r.shot = W2A(nm); r.diff = Diff(s_t.base, cap);
             const float thr = (std::max)(0.0025f, s_t.noise * 3.0f);
             r.state = r.diff > thr ? 1 : 0; if (r.state) s_t.changed++; s_t.tested++;
-            if (s_t.cur.n) { r.cpuSave = (float)(s_t.base0.cpuMs - s_t.cur.cpuMs); r.gpuSave = (float)(s_t.base0.gpuMs - s_t.cur.gpuMs);
-                for (int k = 0; k < kGpuZoneN; k++) r.zoneSave[k] = (float)(s_t.base0.zone[k] - s_t.cur.zone[k]); }
+            if (s_t.cur.n) { const Meas& R = s_t.refOk ? s_t.ref : s_t.base0;   // (08/11 h) contra la referencia de este grupo
+                r.cpuSave = (float)(R.cpuMs - s_t.cur.cpuMs); r.gpuSave = (float)(R.gpuMs - s_t.cur.gpuMs);
+                for (int k = 0; k < kGpuZoneN; k++) r.zoneSave[k] = (float)(R.zone[k] - s_t.cur.zone[k]); }
+            s_t.refOk = false;
             s_t.results.push_back(r);
         } else s_t.views.push_back(sp.label + " = " + std::to_string((int)sp.val) + " -> capturas\\" + W2A(nm));
         s_t.phase = 4; return; }
     case 4:
         Restore(); s_t.si++; s_t.phase = 0; s_t.wait = 6; return;
+    case 5:   // fin de la referencia del grupo
+        MeasEnd(kMeasure); s_t.ref = s_t.cur; s_t.refOk = true; s_t.phase = 0; return;
     }
 }
 
