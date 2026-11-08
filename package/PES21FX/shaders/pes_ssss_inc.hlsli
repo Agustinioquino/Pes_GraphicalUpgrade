@@ -150,6 +150,7 @@ float PesTraceShadow(float3 Pv, float3 L, float rawNL, float zC, float zSgn, flo
 //  (b) haces: marcha de 16 pasos desde el pixel hacia la posicion de la luz en pantalla (sol lejano o foco) contando cuanto
 //      del camino esta libre de geometria (Mitchell 2007): el jugador tapa la luz y deja rayos alrededor de la silueta.
 //      Si la luz queda detras de la camara no hay haces (solo bruma). El ruido cambia por cuadro y lo promedia el TAA.
+static float g_volG = -1.0;   // (08/11 0qtsss) fase de la luz volumetrica del partido (z335) cuando el editor la copia; -1 = y385
 float3 PesVolumetric(float2 uv, float2 pxy, float3 Pv, float zA, bool geo, float zSgn, float3 Lw, bool spot, float3 Pl, float3 col, float strength, float dens) {
   if (strength <= 0.001) return 0.0;
   float3 rayD = normalize(Pv);
@@ -159,7 +160,7 @@ float3 PesVolumetric(float2 uv, float2 pxy, float3 Pv, float zA, bool geo, float
   // ~2 % de la luz y, con la luz detras de la camara (rumbo 0..90), casi nada: no se veia. Ahora la fase va normalizada (1 = aire
   // parejo), g sale de y385 (direccionalidad), la bruma llega a w385 m y los haces tienen su propia fuerza (x385)
   float4 V9 = IniParams.Load(int2(385, 0));
-  float g = clamp(V9.y > 0.0 ? V9.y : 0.35, 0.0, 0.9), cosT = dot(rayD, toL);
+  float g = clamp(g_volG >= 0.0 ? g_volG : (V9.y > 0.0 ? V9.y : 0.35), 0.0, 0.9), cosT = dot(rayD, toL);
   float phase = (1.0 - g * g) / pow(max(1.0 + g * g - 2.0 * g * cosT, 1e-3), 1.5);   // 1 = isotropo
   float reach = clamp(V9.w > 0.0 ? V9.w : 6.0, 0.5, 40.0);
   float len = geo ? min(length(Pv), reach) : reach;
@@ -248,7 +249,69 @@ float3 PesSsTransColor(float3 T, float k) {
 // G-buffer no hay nada que la distinga de la cara, asi que los pixeles de piel EN UNA CAVIDAD (rodeados de superficie mas cerca de
 // la camara en 7 de 8 direcciones, hasta 4 cm: lengua y garganta detras de labios y dientes; tambien las fosas nasales) siguen con
 // la formula de antes, identica (legacy = true). thickM no se usa en ese caso
+// (08/11 0qtsss, Agustin: "quiero probar bien a fondo el sss, que el modo editar reaccione igual con el preset de dia como lo haria
+// en partido, asi como de noche") w411 = 1: en la piel (no en la boca ni cavidades: legacy) la luz de prueba usa el MISMO modelo que
+// las pasadas del sol del partido (pes_skinlight.hlsli: PesSkDiffuse / PesSkTrans / PesSkTransThick / PesSkSpec, filas 3, 5, 34,
+// 62, 64, 76, 95, 103): terminador pre-integrado por canal con la curvatura, contraluz direccional + por grosor (la mayor) y lobulo
+// fino de la piel por zona. Los sliders de SSS del partido cambian lo mismo aca. g_skCurv / g_skMpp los pone main()
+static float g_skCurv = 0.0, g_skMpp = 1e-3;
+float3 PesMtSoftTerm(float nl, float3 w) {
+  w = max(w, 1e-3);
+  float3 x = nl.xxx;
+  float3 s = (x + w) * (x + w) / (4.0 * w);
+  return x >= w ? x : (x > -w ? s : 0.0);
+}
+void PesOneLightMatch(float3 L, float3 col, float sh, float3 n, float3 V, float rough, float trans, float thickM, float silK, inout float3 dif, inout float3 spec) {
+  float rawNL = dot(n, L);
+  float4 P3 = IniParams.Load(int2(3, 0)), P5 = IniParams.Load(int2(5, 0)), P34 = IniParams.Load(int2(34, 0)), P64 = IniParams.Load(int2(64, 0));
+  float4 P76 = IniParams.Load(int2(76, 0)), P95 = IniParams.Load(int2(95, 0)), Q103 = IniParams.Load(int2(103, 0));
+  // difusa (PesSkDiffuse)
+  bool uni = P95.w > 0.5;
+  float wd = uni ? 1.5 : (P3.x > 0 ? P3.x : 1.0);
+  float3 w = saturate(trans) * wd * float3(1.0, 0.6, 0.45);
+  { float4 Q62 = IniParams.Load(int2(62, 0)); if (Q62.x > 0.5 && Q62.w > 0.0) w *= lerp(1.0, 0.45 + 1.4 * g_skCurv, saturate(Q62.w)); }
+  w = min(w * 0.12, float3(0.22, 0.11, 0.07));
+  if (uni) { float rPx = 0.006 * max(P95.x, 0.3) / max(g_skMpp, 1e-6); w *= 1.0 - 0.45 * saturate((rPx - 1.0) / 5.0); }
+  float3 d = saturate(PesMtSoftTerm(rawNL, w));
+  float shT = lerp(1.0, sh, smoothstep(0.02, 0.12, rawNL));   // la sombra trazada solo existe con N.L > 0.02: sin escalon
+  dif += col * d * shT;
+  // contraluz (PesSkTrans direccional y PesSkTransThick por grosor, la mayor de las dos, como d0e9 / 7dbbc)
+  float thin = saturate(trans * 1.6);
+  float3 Lt = normalize(L + n * 0.3);
+  float3 tr;
+  if (P34.w > 0.5) {
+    float fwd = pow(saturate(dot(V, -Lt)), 4.0);
+    float back = saturate(dot(-n, L));
+    float3 sigT = float3(1.0, 3.6, 6.5) * (P34.y > 0 ? P34.y : 1.0);
+    float3 Tr = exp(-(1.15 - thin) * sigT) * thin;
+    float thinGate = lerp(smoothstep(0.45, 0.85, thin), 1.0, saturate(P76.y));
+    tr = PesSsTransColor(Tr * fwd * (0.6 + 0.4 * back) * thinGate * P5.x * 1.6 * (P76.x > 0.0 ? P76.x : 1.0), P34.z);
+  } else tr = PesSsTransColor(thin * smoothstep(0.45, 0.85, thin) * pow(saturate(dot(V, -Lt)), 3.0) * float3(1.0, 0.24, 0.10) * P5.x, P34.z);
+  if (P64.x > 0.5 && P64.z > 0.0) {
+    float dens = (P64.w > 0 ? P64.w : 30.0) * (1.25 - thin);
+    float3 Tt = PesSsTransColor(PesSsTransmit(thickM * dens), P34.z);
+    float backL = smoothstep(0.0, 0.35, dot(L, -n)) * (1.0 - saturate(rawNL * 3.0)) * lerp(0.35, 1.0, smoothstep(0.25, 0.75, thin));
+    tr = max(tr, Tt * backL * P64.z * 0.8 * silK);   // silK: sin atlas de grosor en el editor, solo cerca de una silueta (entrecejo 04/11)
+  }
+  dif += col * tr;
+  // brillo (PesSkSpec): el lobulo ancho hace de brillo del juego (x w3, Fresnel de piel fila 103) + lobulo fino por zona (y5, w5)
+  float3 H = normalize(L + V);
+  float nl = saturate(rawNL), nh = saturate(dot(n, H)), nv = saturate(dot(n, V)), vh = saturate(dot(V, H));
+  float F = 0.028 + 0.972 * pow(1 - vh, 5);
+  float a2 = rough * rough; a2 *= a2;
+  float dd = nh * nh * (a2 - 1) + 1;
+  float D = a2 / (3.14159 * dd * dd);
+  float k = (rough + 1) * (rough + 1) / 8.0;
+  float G = (nv / (nv * (1 - k) + k)) * (nl / (nl * (1 - k) + k));
+  float3 sp = col * (D * F * G / max(4.0 * nv * nl, 1e-3)) * nl * sh * (P3.w > 0 ? P3.w : 1.0);
+  if (Q103.w > 0.5) { float rim = pow(1.0 - nv, 4.0); sp *= lerp(1.0, lerp(0.55, 1.7, rim), saturate(Q103.y)) * (Q103.z > 0 ? Q103.z : 1.0); }
+  float rS = lerp(0.18, clamp(rough * 0.45, 0.12, 0.32), saturate(P5.w)); float a2s = rS * rS; a2s *= a2s;
+  float dds = nh * nh * (a2s - 1) + 1;
+  sp += col * (a2s / (3.14159 * dds * dds)) * F * nl * 0.25 * P5.y * sh;
+  spec += sp;
+}
 void PesOneLight(float3 L, float3 col, float sh, float3 n, float3 V, bool skin, float rough, float trans, float thickM, float silK, bool legacy, inout float3 dif, inout float3 spec) {
+  if (skin && !legacy && IniParams.Load(int2(411, 0)).w > 0.5) { PesOneLightMatch(L, col, sh, n, V, rough, trans, thickM, silK, dif, spec); return; }
   float rawNL = dot(n, L);
   // --- difusa: Lambert con un borde apenas envuelto en la piel (el resto lo hace el disco de Burley de la pasada 2) ---
   float wrap = skin ? 0.03 : 0.0;
@@ -435,6 +498,7 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
       if (dl > 0.002) curv = max(curv, 0.02 * max(dot(nA - nB, pA - pB), 0.0) / (dl * dl));   // solo convexo
     }
     curv = saturate(curv);
+    g_skCurv = curv; g_skMpp = mpp;   // (08/11 0qtsss) para la piel como en el partido (w411)
     float thinT = saturate(trans * 1.6);
     thickM = clamp(0.02 / max(curv, 0.15) * lerp(1.2, 0.35, smoothstep(0.45, 0.9, thinT)), 0.004, 0.08);
     // cercania a una silueta: fondo (5 cm o mas por detras, o sin geometria) a 4..16 mm en alguna de 8 direcciones
@@ -514,7 +578,11 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
     }
   }
   // (07/11) luz volumetrica (bruma + haces hacia la luz), tambien sobre el fondo del editor
-  float3 vol = PesVolumetric(uv, pos.xy, Pv, zA, geo, zSgn, Lw, spot, Pl, sunC, E4.w, E5.y > 0 ? E5.y : 0.5);
+  // (08/11 0qtsss, Agustin: "que la luz volumetrica agregue niebla o rayos de sol como en el partido") con la volumetrica del editor
+  // en 0 (w377) y la del partido prendida (x335), los presets la copian: fuerza de x335 (0.6 -> 0.9), direccionalidad de z335
+  float volS = E4.w;
+  { float4 VLm = IniParams.Load(int2(335, 0)); if (volS <= 0.001 && preset != 0 && VLm.x > 0.0) { volS = clamp(VLm.x * 1.5, 0.0, 4.0); g_volG = clamp(VLm.z, 0.0, 0.9); } }
+  float3 vol = PesVolumetric(uv, pos.xy, Pv, zA, geo, zSgn, Lw, spot, Pl, sunC, volS, E5.y > 0 ? E5.y : 0.5);
   // (07/11 d) vistas de prueba (w380): aislar cada parte para juzgarla sola. Se pintan sobre gris neutro, sin la luz de estudio
   if (dbgView > 0) {
     float3 outc = 0; float3 outs = 0;
