@@ -224,6 +224,9 @@ void main(
   float4 P32 = IniParams.Load(int2(32,0));
   float faceBD = P32.w > 0.5 ? P32.x : 0.0;
   float faceBN = P32.w > 0.5 ? P32.y : 0.0;
+  // (08/11, Agustin: "que lo maximo sean texturas en 2k") z32 = tope de resolucion de las texturas de la cara en px (0 = sin tope).
+  // Devuelve el mip minimo para que una textura de 4096 nunca se lea por encima de 2048 (las de 2048 o menos no cambian).
+  float faceCap = P32.z;
   float tmin = IniParams.Load(int2(10,0)).x;   // minutos reales de partido (los calcula d3dx.ini)
   float sweatProg = saturate((tmin - P9.x) / max(P9.y - P9.x, 0.1));
   bool  enhance      = P0.w > 0.5;
@@ -352,6 +355,7 @@ void main(
   wrWeight = r0.z;
 
   // ---- normal de detalle + normal de animacion ----
+  { uint cW, cH, cL; g_tex_normal.GetDimensions(0, cW, cH, cL); float capN = faceCap > 1.0 ? max(0.0, log2((float)max(cW, cH) / faceCap)) : 0.0; faceBN = max(faceBN, capN - g_tex_normal.CalculateLevelOfDetail(g_samplerAnisotropic_Clamp_s, v2.xy)); }
   r1.xyz = g_tex_normal.SampleBias(g_samplerAnisotropic_Clamp_s, v2.xy, faceBN).xyw;
   r1.x = r1.x * r1.z;
   r1.xy = r1.xy * float2(2,2) + float2(-1,-1);
@@ -630,10 +634,12 @@ void main(
   r1.xyz = r1.xwz * r0.zzz;
 
   // ---- especular / brillo / albedo / suciedad ----
-  r0.zw = g_tex_srm.SampleBias(g_sampler_srm_s, v2.xy, faceBD).xy;
+  float faceBS = faceBD, capD = 0.0;
+  { uint cW, cH, cL; g_tex_srm.GetDimensions(0, cW, cH, cL); float capS = faceCap > 1.0 ? max(0.0, log2((float)max(cW, cH) / faceCap)) : 0.0; faceBS = max(faceBD, capS - g_tex_srm.CalculateLevelOfDetail(g_sampler_srm_s, v2.xy)); g_tex_diffuse.GetDimensions(0, cW, cH, cL); capD = faceCap > 1.0 ? max(0.0, log2((float)max(cW, cH) / faceCap)) : 0.0; }
+  r0.zw = g_tex_srm.SampleBias(g_sampler_srm_s, v2.xy, faceBS).xy;
   float pesSpec0 = r0.z, pesSrmY = r0.w;   // (20/10) valores del juego, para el borde de las genericas
   r1.w = g_tex_diffuse.CalculateLevelOfDetail(g_samplerAnisotropic_Clamp_s, uvD);
-  r1.w = clamp(r1.w + faceBD, 0, 5);
+  r1.w = clamp(r1.w + faceBD, capD, max(5.0, capD));
   r2.xyz = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, uvD, r1.w).xyz;
   // (07/11, Agustin: "borrar la textura plana de las cejas y reemplazarlas por las cejas en hebras") de cerca, donde las hebras se
   // dibujan, la ceja PINTADA se borra del albedo y se rellena con la piel de alrededor (la mas clara de 8 puntos a ~1.2 cm, mip 3,
