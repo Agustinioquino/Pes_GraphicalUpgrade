@@ -2086,7 +2086,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     AutoCapturePresent(s_frameTex);
     PanelPresent(s_frameTex);   // (08/11) panel en vivo: recargas pedidas por HTTP y capturas (panel.cpp)
     FisicoCapturePresent(s_frameTex);   // (26/10 c) paginas del menu Fisico
-    MenuTestPresent(sc);
+    MenuTestPresent(sc, s_frameTex);   // (08/11) prueba automatica v2: mide, fotografia y escribe PES21FX\diagnostico\
     { GpuZoneScope gz_(g_dev.imm, kGzOverlay); OverlayPresent(sc); }
     return o_Present(sc, sync, flags);
 }

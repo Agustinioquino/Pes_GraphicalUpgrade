@@ -1174,6 +1174,7 @@ static std::string DiagText() {
     for (auto& x : s_diag) { t += lv[std::clamp(x.level, 0, 2)]; t += x.text; t += "\r\n"; }
     return t;
 }
+std::string DiagReportText() { std::lock_guard<std::mutex> lk(g_cfgMutex); DiagRun(); return DiagText(); }   // (08/11) para la prueba automatica
 static std::string MakeReport() {   // sin g_cfgMutex
     SYSTEMTIME st; GetLocalTime(&st); wchar_t n[32];
     swprintf(n, 32, L"%04d%02d%02d_%02d%02d%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
@@ -1233,23 +1234,44 @@ static void DrawSectionExtras(const std::string& sname) {
     if (sname.rfind("Ropa", 0) == 0 && !g_cfg.clothStatus.empty()) { ImGui::TextDisabled("%s", g_cfg.clothStatus.c_str()); ImGui::Spacing(); }
     if (sname.rfind("Diagn", 0) == 0) {
         DrawDiagPanel();
-        ImGui::TextWrapped("%s", TRS("Prueba automatica: toca cada grupo del menu (su interruptor o su primer deslizador), espera unos cuadros y mide si la imagen cambia. Pausa una repeticion con jugadores de cerca antes de correrla; tarda unos 30 segundos."));
-        if (!MenuTestActive()) { if (ImGui::Button(TRS("Probar todo el menu"), ImVec2(180 * UIK(), 0))) MenuTestStart(); }
-        else { if (ImGui::Button(TRS("Cancelar"), ImVec2(180 * UIK(), 0))) MenuTestStop(); }
-        ImGui::SameLine(); ImGui::TextUnformatted(Utf8(MenuTestStatus()).c_str());
+        // (08/11) depuracion: las vistas prendidas y un boton para apagarlas todas (nunca se guardan prendidas)
+        {   const int nOn = DebugActiveCount();
+            if (s_fontBold) ImGui::PushFont(s_fontBold);
+            ImGui::TextUnformatted(IcoL(kIcoLayers, TRS("Vistas de depuracion")).c_str());
+            if (s_fontBold) ImGui::PopFont();
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::TextWrapped("%s", TRS("Cascadas del sol en colores, solo la sombra, rebote, piel, pasto, cejas, boca... estan en \"Vista de diagnostico\" (abajo) y en cada tarjeta. Ninguna se guarda prendida: al reiniciar el juego arrancan apagadas."));
+            ImGui::PopStyleColor();
+            if (nOn) {
+                for (int i = 0; i < DebugParamCount(); i++) { const DebugParam& d = DebugParamAt(i); const float v = g_cfg.live[d.idx][d.comp];
+                    if (DebugIsOn(d, v)) ImGui::TextColored(ImVec4(0.95f, 0.80f, 0.35f, 1), TRS("prendida: %s (%c%d = %g)"), TRS(d.name), "xyzw"[d.comp], d.idx, v); }
+                if (ImGui::Button(IcoL(kIcoX, TRS("Apagar todo el debug")).c_str())) DebugAllOff();
+            } else ImGui::TextColored(ImVec4(0.45f, 0.88f, 0.55f, 1), "%s", TRS("Ninguna vista de depuracion prendida"));
+            ImGui::Spacing();
+        }
+        if (s_fontBold) ImGui::PushFont(s_fontBold);
+        ImGui::TextUnformatted(IcoL(kIcoDiag, TRS("Prueba automatica")).c_str());
+        if (s_fontBold) ImGui::PopFont();
+        ImGui::TextWrapped("%s", TRS("Apaga un momento cada efecto prendido, mide cuantos ms cuesta (CPU y placa), si cambia la imagen y saca una foto; despues prende una por una las vistas de depuracion y las fotografia. Al final deja todo como estaba (no guarda nada en el ini) y escribe PES21FX\\diagnostico\\<fecha>\\ con resumen.txt, informe.json y las fotos, para que Claude lo lea. Con la camara quieta (repeticion en pausa o el editor); tarda 2 a 4 minutos. Esc la corta."));
+        if (!MenuTestActive()) { if (ImGui::Button(IcoL(kIcoDiag, TRS("Empezar la prueba")).c_str(), ImVec2(0, 0))) MenuTestStart(); }
+        else { if (ImGui::Button(IcoL(kIcoX, TRS("Cancelar")).c_str(), ImVec2(0, 0))) MenuTestStop();
+               ImGui::SameLine(); ImGui::ProgressBar(MenuTestProgress(), ImVec2(std::max(120.0f * UIK(), ImGui::GetContentRegionAvail().x), 0)); }
+        ImGui::PushTextWrapPos(0); ImGui::TextUnformatted(Utf8(MenuTestStatus()).c_str()); ImGui::PopTextWrapPos();
         size_t nres = MenuTestResults();
-        if (nres) {
+        if (nres && !MenuTestActive()) {
             ImGui::TextDisabled(TRS("ruido de la escena: %.4f (si es alto, la camara se movio: pausa y repeti)"), MenuTestNoise());
-            if (ImGui::BeginTable("mt", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+            if (ImGui::BeginTable("mt", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY, ImVec2(0, 260.0f * UIK()))) {
                 for (size_t i = 0; i < nres; i++) {
-                    std::string grp, sec; float df; int st;
-                    if (!MenuTestResult_(i, grp, sec, df, st)) break;
+                    std::string grp, sec; float df, cpu, gpu; int st;
+                    if (!MenuTestResult_(i, grp, sec, df, st, cpu, gpu)) break;
+                    if (st >= 2) continue;
                     ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted(Utf8(sec).c_str());
                     ImGui::TableSetColumnIndex(1); ImGui::TextUnformatted(Utf8(grp).c_str());
                     ImGui::TableSetColumnIndex(2);
                     if (st == 1) ImGui::TextColored(ImVec4(0.45f, 0.9f, 0.45f, 1), TRS("cambia la imagen (%.4f)"), df);
-                    else if (st == 0) ImGui::TextColored(ImVec4(0.95f, 0.5f, 0.4f, 1), TRS("sin efecto en esta escena (%.4f)"), df);
-                    else ImGui::TextDisabled("%s", TRS("no se prueba (ropa)"));
+                    else ImGui::TextColored(ImVec4(0.95f, 0.5f, 0.4f, 1), TRS("sin efecto en esta escena (%.4f)"), df);
+                    ImGui::TableSetColumnIndex(3);
+                    if (cpu != 0 || gpu != 0) ImGui::TextDisabled(TRS("cuesta %.2f ms CPU / %.2f ms placa"), cpu, gpu);
                 }
                 ImGui::EndTable();
             }

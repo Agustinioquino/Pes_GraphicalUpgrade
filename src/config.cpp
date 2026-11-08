@@ -118,6 +118,7 @@ static bool LoadConfigLocked() {
             int idx, comp;
             if (ParseParamName(k, idx, comp)) {
                 c.base[idx][comp] = (idx == 344 && comp == 0) ? 0.0f : (float)atof(v.c_str());   // (08/11) la camara libre arranca siempre apagada
+                if (const DebugParam* dp = FindDebugParam(idx, comp)) if (DebugIsOn(*dp, c.base[idx][comp])) c.base[idx][comp] = dp->safe;   // (08/11) y el debug tambien
                 c.info[idx][comp].defined = true;
                 c.info[idx][comp].comment = comment;
             }
@@ -524,7 +525,39 @@ void MatchWind(const MatchInfo& m, unsigned long long seed) {
         m.season == 1 ? "invierno" : m.season == 0 ? "verano" : "estacion ?", k, ang * 57.2958f, c.clothVals["sim.wind_x"], c.clothVals["sim.wind_z"], c.clothVals["sim.wind_y"], c.clothVals["sim.wind_gust"]);
 }
 
+// (08/11) vistas de depuracion: Agustin: "opciones de diagnostico y debug de opciones avanzadas, sombras, efectos". Se juntan aca
+// para que (1) nunca se guarden ni arranquen prendidas, (2) "Apagar todo el debug" las apague de una y (3) la prueba automatica
+// fotografie cada vista. minOn = desde que valor (absoluto) es depuracion; safe = valor al apagarla (z314: 2 = depuracion, 1 = normal prendido)
+static const float kV12[] = { 2, 3, 4, 5, 6, 7, -3 }, kV380[] = { 1, 2, 3, 4, 5 }, kV107[] = { 1, 2, 3, 4 }, kV75[] = { 1, 2 }, kV27[] = { 1, 2 }, kV1[] = { 1 }, kV2[] = { 2 };
+static const DebugParam kDebugParams[] = {
+    { 12, 3, 0.5f, 0.0f, "Vista de diagnostico (rebote, sol y piel, contacto, nubes, cascadas, sombra, resolucion)", "Diagnostico", kV12, 7 },
+    { 380, 3, 0.5f, 0.0f, "Vista de prueba de la luz del editor", "Editor", kV380, 5 },
+    { 18, 2, 0.5f, 0.0f, "Zonas de la boca (dientes / encia / cavidad)", "Boca", kV1, 1 },
+    { 27, 2, 0.5f, 0.0f, "Transpiracion: zonas / UV", "Piel", kV27, 2 },
+    { 80, 0, 0.5f, 0.0f, "Arrugas de la ropa: compresion", "Ropa", kV1, 1 },
+    { 75, 2, 0.5f, 0.0f, "Cejas: hebras / semillas", "Cejas", kV75, 2 },
+    { 107, 3, 0.5f, 0.0f, "Cancha: UV / desgaste / normal / lejos-cerca", "Pasto", kV107, 4 },
+    { 59, 2, 0.5f, 0.0f, "Pasto del mod en magenta", "Pasto", kV1, 1 },
+    { 314, 2, 1.5f, 1.0f, "Sombra pegada al suelo: hojas / suelo", "Pasto", kV2, 1 },
+    { 120, 3, 0.5f, 0.0f, "Reflejos de la cancha mojada: plano", "Pasto", kV1, 1 },
+    { 140, 3, 0.5f, 0.0f, "Tono de piel: mapa", "Piel", kV1, 1 },
+    { 147, 1, 0.5f, 0.0f, "Borde de la mascara de la cara", "Piel", kV1, 1 },
+    { 322, 3, 0.5f, 0.0f, "Franja de la union cuello / cuerpo", "Piel", kV1, 1 },
+};
+static const int kDebugN = (int)(sizeof(kDebugParams) / sizeof(kDebugParams[0]));
+int DebugParamCount() { return kDebugN; }
+const DebugParam& DebugParamAt(int i) { return kDebugParams[std::clamp(i, 0, kDebugN - 1)]; }
+const DebugParam* FindDebugParam(int idx, int comp) { for (auto& d : kDebugParams) if (d.idx == idx && d.comp == comp) return &d; return nullptr; }
+bool DebugIsOn(const DebugParam& d, float v) { return fabsf(v) >= d.minOn; }
+int DebugActiveCount() { int n = 0; for (auto& d : kDebugParams) if (DebugIsOn(d, g_cfg.live[d.idx][d.comp])) n++; return n; }
+void DebugAllOff() {
+    int n = 0; for (auto& d : kDebugParams) if (DebugIsOn(d, g_cfg.live[d.idx][d.comp])) { g_cfg.live[d.idx][d.comp] = d.safe; n++; }
+    for (auto& kb : g_cfg.keys) kb.active = false, kb.cycleIdx = -1;   // los atajos de diagnostico (Ctrl+Shift+F3...) tambien
+    Log("menu: apagar todo el debug (%d vistas apagadas)", n);
+}
+
 bool SaveConfigValues() {
+    if (MenuTestActive()) { Log("guardar: no se guarda durante la prueba automatica (los valores de prueba no deben quedar en el ini)"); return false; }
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     std::vector<std::string> lines;
     if (!ReadLines(IniPath(), lines)) return false;
@@ -552,6 +585,8 @@ bool SaveConfigValues() {
         // (08/11) Agustin: "la camara libre nunca la dejes prendida al cerrar el juego": x344 se guarda siempre en 0 (apagada);
         // lo que se este usando en este momento sigue prendido hasta cerrar
         if (idx == 344 && comp == 0) { raw = k + " = 0"; g_cfg.base[idx][comp] = 0.0f; continue; }
+        if (const DebugParam* dp = FindDebugParam(idx, comp)) if (DebugIsOn(*dp, g_cfg.live[idx][comp])) {   // (08/11) las vistas de depuracion tampoco
+            snprintf(buf, sizeof(buf), "%g", dp->safe); raw = k + " = " + buf; g_cfg.base[idx][comp] = dp->safe; continue; }
         raw = k + " = " + buf;
         g_cfg.base[idx][comp] = g_cfg.live[idx][comp];
     }

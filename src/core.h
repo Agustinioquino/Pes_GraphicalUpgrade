@@ -514,10 +514,17 @@ void HeadShadowRelease(); extern std::atomic<int> g_headShadowReplays; ID3D11Ras
 ID3D11Resource* NamedSRVResource(const std::string& name);   // hooks.cpp: recurso detras de un SRV guardado por regla (sin referencia)
 ID3D11ShaderResourceView* SSSSBeforeComposition(ID3D11DeviceContext* c); ID3D11ShaderResourceView* SSSSSpecSRV(); void SSSSReloadShaders(); double SSSSEditorLightAge(); void SSSSRenderSize(unsigned& w, unsigned& h); extern std::atomic<int> g_ssssDraws;   // ssss.cpp
 // prueba automatica del menu (menutest.cpp)
-void MenuTestPresent(IDXGISwapChain* sc);
+void MenuTestPresent(IDXGISwapChain* sc, ID3D11Texture2D* frame);
 void MenuTestStart(); void MenuTestStop(); bool MenuTestActive();
 int MenuTestCount(int what); float MenuTestNoise(); const std::string& MenuTestStatus();
-size_t MenuTestResults(); bool MenuTestResult_(size_t i, std::string& group, std::string& section, float& diff, int& state);
+size_t MenuTestResults(); bool MenuTestResult_(size_t i, std::string& group, std::string& section, float& diff, int& state, float& cpuMs, float& gpuMs);
+float MenuTestProgress(); const std::wstring& MenuTestDir();
+std::string DiagReportText();   // (08/11) la revision automatica del menu en texto (overlay.cpp; toma g_cfgMutex)
+// (08/11) vistas de depuracion (config.cpp): nunca se guardan prendidas ni arrancan prendidas (como la camara libre);
+// "Apagar todo el debug" las vuelve a su valor normal. views = valores que la prueba automatica fotografia uno por uno
+struct DebugParam { int idx, comp; float minOn, safe; const char* name; const char* section; const float* views; int nViews; };
+int DebugParamCount(); const DebugParam& DebugParamAt(int i); const DebugParam* FindDebugParam(int idx, int comp);
+bool DebugIsOn(const DebugParam& d, float v); int DebugActiveCount(); void DebugAllOff();   // con g_cfgMutex tomado
 LRESULT OverlayWndProc(HWND, UINT, WPARAM, LPARAM, bool& handled);
 // (24/10) vidrio de los menus del juego, estilo Liquid Glass (glass.cpp): GS + PS propios para los dibujos del menu (55a003da),
 // copia desenfocada del fondo antes de los paneles; 189..192 opciones. v2 (24/10 c): el GS decide por triangulo, sin buffer

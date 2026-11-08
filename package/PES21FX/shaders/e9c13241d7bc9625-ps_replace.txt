@@ -1077,6 +1077,10 @@ void main(
   if (dbgT && abs(skinTag - 0.98039) < 0.003 && !tookSM) { o0.xyz = isSkin ? float3(4.0, 0.0, 4.0) : float3(0.0, 4.0, 4.0); r1.xyz = 0; }
   // diagnostico w12 = 4: la escena en gris y las sombras de contacto en rojo (mas rojo = mas oscura)
   if (dbgC) { o0.xyz = lerp(o0.xyz, float3(10.0, 0.0, 0.0), saturate((1.0 - csDbg) * 3.0)); r1.xyz = 0; }   // 18/10 d: rojo donde hay sombra de contacto (el gris no se veia: esta salida es irradiancia, el color lo pone el albedo despues)
+  // (08/11) diagnostico w12 = 6: cascadas del sol en colores (rojo = cerca, verde = media, azul = lejos, gris = fuera); mas oscuro = en sombra
+  if (dbgW12 > 5.5 && dbgW12 < 6.5) { float3 pesCc = pesShCas < -0.5 ? float3(0.3, 0.3, 0.3) : (pesShCas < 0.5 ? float3(1.0, 0.15, 0.15) : (pesShCas < 1.5 ? float3(0.15, 1.0, 0.15) : float3(0.2, 0.4, 1.0))); o0.xyz = pesCc * (0.25 + 0.75 * shadowScalar) * 4.0; r1.xyz = 0; }
+  // (08/11) w12 = 7: solo la sombra del sol (blanco = al sol, negro = en sombra), sin color ni luz
+  if (dbgW12 > 6.5 && dbgW12 < 7.5) { o0.xyz = shadowScalar.xxx * 4.0; r1.xyz = 0; }
   o1.xyz = min(float3(10000,10000,10000), r1.xyz);
   o0.w = 1;
   o1.w = 1;

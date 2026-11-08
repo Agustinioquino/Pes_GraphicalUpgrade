@@ -7,6 +7,16 @@
 namespace fx {
 
 static const char* const kEn[][2] = {
+    // (08/11 c) depuracion y prueba automatica v2
+    { "Vistas de depuracion", "Debug views" },
+    { "Cascadas del sol en colores, solo la sombra, rebote, piel, pasto, cejas, boca... estan en \"Vista de diagnostico\" (abajo) y en cada tarjeta. Ninguna se guarda prendida: al reiniciar el juego arrancan apagadas.", "Sun cascades in colors, shadow only, bounce, skin, grass, brows, mouth... are in \"Diagnostic view\" (below) and in each card. None is saved on: they start off when the game restarts." },
+    { "prendida: %s (%c%d = %g)", "on: %s (%c%d = %g)" },
+    { "Apagar todo el debug", "Turn all debug off" },
+    { "Ninguna vista de depuracion prendida", "No debug view on" },
+    { "Prueba automatica", "Automatic test" },
+    { "Apaga un momento cada efecto prendido, mide cuantos ms cuesta (CPU y placa), si cambia la imagen y saca una foto; despues prende una por una las vistas de depuracion y las fotografia. Al final deja todo como estaba (no guarda nada en el ini) y escribe PES21FX\\diagnostico\\<fecha>\\ con resumen.txt, informe.json y las fotos, para que Claude lo lea. Con la camara quieta (repeticion en pausa o el editor); tarda 2 a 4 minutos. Esc la corta.", "Turns each enabled effect off for a moment, measures how many ms it costs (CPU and GPU), whether the image changes and takes a photo; then turns the debug views on one by one and photographs them. At the end it leaves everything as it was (nothing is saved to the ini) and writes PES21FX\\diagnostico\\<date>\\ with resumen.txt, informe.json and the photos, for Claude to read. Keep the camera still (paused replay or the editor); it takes 2 to 4 minutes. Esc stops it." },
+    { "Empezar la prueba", "Start the test" },
+    { "cuesta %.2f ms CPU / %.2f ms placa", "costs %.2f ms CPU / %.2f ms GPU" },
     // (08/11 b) vidrio, letra, diagnostico automatico
     { "Vidrio: el juego desenfocado detras del menu", "Glass: the game blurred behind the menu" },
     { "Estilo vidrio (como Apple o Windows Aero). Apagado: fondo liso. 'Opacidad del menu' regula cuanto se oscurece el vidrio para leer mejor.", "Glass style (like Apple or Windows Aero). Off: plain background. 'Menu opacity' sets how much the glass is darkened for reading." },
@@ -496,6 +506,16 @@ static const char* const kEn[][2] = {
 
 // (27/10) portugues: mismo orden que kEn
 static const char* const kPt[][2] = {
+    // (08/11 c) depuracion y prueba automatica v2
+    { "Vistas de depuracion", "Vistas de depura\303\247\303\243o" },
+    { "Cascadas del sol en colores, solo la sombra, rebote, piel, pasto, cejas, boca... estan en \"Vista de diagnostico\" (abajo) y en cada tarjeta. Ninguna se guarda prendida: al reiniciar el juego arrancan apagadas.", "Cascatas do sol em cores, s\303\263 a sombra, rebote, pele, grama, sobrancelhas, boca... est\303\243o em \"Vista de diagn\303\263stico\" (abaixo) e em cada cart\303\243o. Nenhuma fica salva ligada: ao reiniciar o jogo come\303\247am desligadas." },
+    { "prendida: %s (%c%d = %g)", "ligada: %s (%c%d = %g)" },
+    { "Apagar todo el debug", "Desligar todo o debug" },
+    { "Ninguna vista de depuracion prendida", "Nenhuma vista de depura\303\247\303\243o ligada" },
+    { "Prueba automatica", "Teste autom\303\241tico" },
+    { "Apaga un momento cada efecto prendido, mide cuantos ms cuesta (CPU y placa), si cambia la imagen y saca una foto; despues prende una por una las vistas de depuracion y las fotografia. Al final deja todo como estaba (no guarda nada en el ini) y escribe PES21FX\\diagnostico\\<fecha>\\ con resumen.txt, informe.json y las fotos, para que Claude lo lea. Con la camara quieta (repeticion en pausa o el editor); tarda 2 a 4 minutos. Esc la corta.", "Desliga por um momento cada efeito ligado, mede quantos ms custa (CPU e placa), se a imagem muda e tira uma foto; depois liga uma por uma as vistas de depura\303\247\303\243o e as fotografa. No fim deixa tudo como estava (n\303\243o salva nada no ini) e escreve PES21FX\\diagnostico\\<data>\\ com resumen.txt, informe.json e as fotos, para o Claude ler. Com a c\303\242mera parada (replay pausado ou o editor); leva 2 a 4 minutos. Esc interrompe." },
+    { "Empezar la prueba", "Come\303\247ar o teste" },
+    { "cuesta %.2f ms CPU / %.2f ms placa", "custa %.2f ms CPU / %.2f ms placa" },
     // (08/11 b) vidrio, letra, diagnostico automatico
     { "Vidrio: el juego desenfocado detras del menu", "Vidro: o jogo desfocado atr\303\241s do menu" },
     { "Estilo vidrio (como Apple o Windows Aero). Apagado: fondo liso. 'Opacidad del menu' regula cuanto se oscurece el vidrio para leer mejor.", "Estilo vidro (como Apple ou Windows Aero). Desligado: fundo liso. 'Opacidade do menu' regula quanto o vidro escurece para ler melhor." },

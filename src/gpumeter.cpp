@@ -309,6 +309,7 @@ static double s_zSum[kGpuZoneN] = {}, s_zMax[kGpuZoneN] = {}; static int s_zLost
 struct FrameQ { ID3D11Query* dis = nullptr; ID3D11Query* ts = nullptr; int frame = -1; bool open = false; bool read = false; };
 static const int kFrameQ = 8; static FrameQ s_fq[kFrameQ];
 static double s_fSum = 0, s_fMax = 0; static int s_fN = 0;
+static double s_fTot = 0, s_zTot[kGpuZoneN] = {}; static int s_fTotN = 0;   // (08/11) acumulados que no se reinician (prueba automatica)
 static double s_cpuSum = 0, s_cpuMax = 0; static int s_cpuN = 0; static double s_lastPresentT = 0;
 static int s_frame = 0;
 static std::atomic<bool> s_want{false};   // x375 (menu)
@@ -349,7 +350,7 @@ static void ReadZones() {   // contexto inmediato
         const int zone = z.zone; z.tag = -1;
         if (d.Disjoint || !d.Frequency) { s_zDisjoint++; continue; }
         double ms = b >= a ? double(b - a) * 1000.0 / double(d.Frequency) : 0.0;
-        s_zSum[zone] += ms; if (ms > s_zMax[zone]) s_zMax[zone] = ms; }
+        s_zSum[zone] += ms; s_zTot[zone] += ms; if (ms > s_zMax[zone]) s_zMax[zone] = ms; }
 }
 static void FrameStamp() {   // al empezar Present: marca de tiempo del cuadro (la diferencia con la anterior = cuadro en la GPU)
     FrameQ& cur = s_fq[s_frame % kFrameQ]; FrameQ& prev = s_fq[(s_frame + kFrameQ - 1) % kFrameQ];
@@ -360,7 +361,7 @@ static void FrameStamp() {   // al empezar Present: marca de tiempo del cuadro (
         D3D11_QUERY_DATA_TIMESTAMP_DISJOINT d = {}; UINT64 ta = 0, tb = 0;
         if (g_dev.imm->GetData(a.dis, &d, sizeof d, D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK) continue;
         if (g_dev.imm->GetData(a.ts, &ta, 8, D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK || g_dev.imm->GetData(b.ts, &tb, 8, D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK) continue;
-        if (!d.Disjoint && d.Frequency && tb >= ta) { double ms = double(tb - ta) * 1000.0 / double(d.Frequency); s_fSum += ms; if (ms > s_fMax) s_fMax = ms; s_fN++; }
+        if (!d.Disjoint && d.Frequency && tb >= ta) { double ms = double(tb - ta) * 1000.0 / double(d.Frequency); s_fSum += ms; s_fTot += ms; s_fTotN++; if (ms > s_fMax) s_fMax = ms; s_fN++; }
         a.read = true;
     }
     if (cur.frame >= 0 && cur.open) { g_dev.imm->End(cur.dis); cur.open = false; }   // (no deberia pasar: 8 cuadros de atraso)
@@ -385,6 +386,7 @@ static IDXGIAdapter3* Adapter3() {
 static double MB(uint64_t b) { return double(b) / (1024.0 * 1024.0); }
 static std::string s_summary;
 std::string GpuMeterSummary() { return s_summary; }
+void GpuMeterTotals(double& frameMs, int& frames, double* zoneMs) { frameMs = s_fTot; frames = s_fTotN; for (int z = 0; z < kGpuZoneN; z++) zoneMs[z] = s_zTot[z]; }
 
 void GpuMeterPresent() {
     if (!g_cfg.meterOn || !g_dev.imm) return;

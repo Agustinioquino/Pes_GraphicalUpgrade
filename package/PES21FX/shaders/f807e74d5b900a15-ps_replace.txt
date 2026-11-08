@@ -448,7 +448,7 @@ void main(
       if (P89.z > 0.5) c89 += pow(nv, 24.0) * 0.08 * lv;
       o0.xyz = c89;
     } }
-  if (IniParams.Load(int2(12,0)).w > 1.5) o0.xyz = giDbg * 3.0;   // w12 = 2: ver solo el rebote de luz
+  { float dbgE = IniParams.Load(int2(12,0)).w; if (dbgE > 1.5 && dbgE < 2.5) o0.xyz = giDbg * 3.0; }   // w12 = 2: ver solo el rebote de luz (08/11: solo 2, las vistas 6 y 7 son del sol)
   if (IniParams.Load(int2(12,0)).w < -0.5) {   // PES21 debug: bits de m_shadowMapResolutions y m_exposure en la esquina
     int bx = (int)(v0.x / 24.0), by = (int)((v0.y - 300.0) / 24.0);
     if (v0.y >= 300.0 && by < 8 && bx < 32) {
