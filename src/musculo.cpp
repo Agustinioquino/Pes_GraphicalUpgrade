@@ -1094,7 +1094,9 @@ static void DynAdd(int i, void* self, const float* a2, const void* skel, int slo
         fc.e += kc * (0.020f * fl + 0.065f * (std::max)(bi, 0.8f * tr)); fc.t[2] += kArmR * 0.5f * kc * (0.07f * bi + 0.015f * fl - 0.045f * tr); } break;
     case M_SLEEVE: if (kc > 0.0f && s_ropaOn) { const float bi = d.aact[sd][0], tr = d.aact[sd][1], fl = ElbowFlex(d, sd);
         fc.e += s_sleeveK * kc * (0.020f * fl + 0.065f * (std::max)(bi, 0.8f * tr)); fc.t[2] += s_sleeveK * kArmR * 0.5f * kc * (0.07f * bi + 0.015f * fl - 0.045f * tr); } break;
-    case M_FORE: if (kc > 0.0f) fc.e += kc * (0.010f * ElbowFlex(d, sd) + 0.045f * d.aact[sd][3]); break;
+    // (08/11 j, costuras en la muneca / el tobillo) antebrazo y pantorrilla con el mismo tope que antes de los momentos (4 % y 3 %): el
+    // hueso del antebrazo tambien pesa cerca de la muneca y la mano (otra malla) no lo sigue
+    case M_FORE: if (kc > 0.0f) fc.e += kc * (0.010f * ElbowFlex(d, sd) + 0.030f * d.aact[sd][3]); break;
     case M_DELT: if (kc > 0.0f) fc.e += kc * (0.020f * ArmRaise(d, sd) + 0.060f * d.aact[sd][2]); break;
     case M_TRAP: if (kc > 0.0f) Push(fc, 0.0f, 1.0f, 0.0f, 0.006f * kc, (std::max)(ArmRaise(d, sd), d.aact[sd][2])); Push(fc, 0.0f, 1.0f, 0.0f, 0.5f * b * ex, 1.0f); break;
     // (08/11) muslo y pantorrilla por la TENSION de su grupo (LegMoments: apoyo, empuje, frenada, patada...), no solo por la rodilla
@@ -1103,7 +1105,7 @@ static void DynAdd(int i, void* self, const float* a2, const void* skel, int slo
         fc.e += kc * (0.010f * k + 0.040f * (std::max)(qa, ha)); fc.t[2] += kThighR * 0.5f * kc * (0.05f * qa - 0.06f * ha - 0.02f * k); } break;
     case M_HEM: if (kc > 0.0f && s_ropaOn) { const float k = KneeFlex(d, sd), qa = d.act[sd][0], ha = d.act[sd][1];
         fc.e += 0.7f * kc * (0.010f * k + 0.040f * (std::max)(qa, ha)); fc.t[2] += 0.8f * kThighR * 0.5f * kc * (0.05f * qa - 0.06f * ha - 0.02f * k); } break;
-    case M_CALF: if (kc > 0.0f) fc.e += kc * (0.010f * KneeFlex(d, sd) + 0.045f * d.act[sd][2]); break;
+    case M_CALF: if (kc > 0.0f) fc.e += kc * (0.008f * KneeFlex(d, sd) + 0.022f * d.act[sd][2]); break;
     case M_PECT: Push(fc, 0.10f, 0.35f, 1.0f, b, 1.0f); break;            // respiracion: el pecho sube y sale
     case M_CLAV: Push(fc, 0.0f, 1.0f, 0.6f, 0.8f * b, 1.0f); break;
     case M_RIB: Push(fc, 1.0f, 0.0f, 0.2f, 0.5f * b, 1.0f); break;       // las costillas se abren

@@ -177,7 +177,10 @@ float PesArmBulge(uint vid, float3 rest) {
     // slider "Codos" (kE, arriba): tambien cuanto crece al doblar
     b += 0.0084 * fl * kE * kE * PesBulge(rp, float3(0.3982, 1.2654, -0.0085), ax, 0.020, 0.016);   // punta del codo: crece hacia atras (02/11 g: x1.4, Agustin)
     b -= 0.0015 * fl * PesBulge(rp, float3(0.3857, 1.2718, 0.0567), ax, 0.014, 0.012);    // pliegue del codo
-    return min(b, 0.0095) * kc + bS;   // tope 9.5 mm con x263 = 1 (el doble con 2; era 7, sino el codo x1.4 no entraba)
+    // (08/11 j, Agustin: "se ven costuras en la union de las munecas") nada del empuje llega al borde con la mano: la mano es otra malla
+    // y no lo recibe, asi que cualquier milimetro en el borde del antebrazo abria la union. Se apaga de 4.5 a 1.2 cm de la muneca.
+    float fW = smoothstep(0.012, 0.045, -dot(rp - float3(0.5958, 1.0782, 0.063), ax));
+    return (min(b, 0.0095) * kc + bS) * fW;   // tope 9.5 mm con x263 = 1 (el doble con 2; era 7, sino el codo x1.4 no entraba)
 }
 
 // (02/11 e) Agustin: "que la deformacion tenga un poco de inercia". La carne del brazo (vientres del biceps, triceps y antebrazo)
@@ -282,7 +285,9 @@ float PesLegBulge(uint vid, float3 rest) {
     b += 0.0028 * act.z * saturate(2.0 * Wv.y) * PesLegGauss(s, th, -0.100, 148.0, 0.040, 22.0);               // gemelo externo
     b += 0.0016 * fl * PesLegGauss(s, th, -0.030, 0.0, 0.016, 12.0);                                           // tendon de la rodilla al doblar
     b -= 0.0020 * fl * PesLegGauss(s, th, 0.010, 180.0, 0.022, 30.0);                                          // hueco de atras: se cierra
-    return clamp(b, -0.0030, 0.0070) * kc;
+    // (08/11 j) igual en los bordes de la pierna (tobillo con la media / el botin, arriba con el short): se apaga a 1.5..5 cm del borde
+    float fE = smoothstep(-0.201, -0.166, s) * (1.0 - smoothstep(0.259, 0.294, s));
+    return clamp(b, -0.0030, 0.0070) * kc * fE;
 }
 
 // (02/11) actCode: lo que hace el brazo para los grupos musculares del PS (doblez del codo, brazo arriba, esfuerzo; 0..7 cada uno),
