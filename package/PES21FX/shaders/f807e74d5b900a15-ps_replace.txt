@@ -61,6 +61,7 @@ Texture2D<float4> inDepth : register(t11);
 Texture2D<float4> inFogVolume : register(t12);
 Texture2D<float4> inOcclusion : register(t13);
 Texture2D<float4> inShadow : register(t14);
+Texture2D<float4> PESGtao : register(t27);   // PES21 (08/11): GTAO de la DLL (1 = sin oclusion), como en 619b; sin enlazar = sin efecto
 
 
 // 3Dmigoto declarations
@@ -121,6 +122,41 @@ void main(
     }
   }
   r0.w = inShadow.Sample(g_samplerPoint_Clamp_s, r0.xy).x;
+  // (08/11 b) SOMBRA DE CONTACTO del sol (w387), la misma de la composicion del partido (619b): esta composicion es la del
+  // editor y ahi no corria, asi que lo chico y pegado (labio sobre los dientes, nariz, ceja, dedos) seguia sin sombra. La
+  // direccion del sol sale de m_dominantLightDir (mundo -> vista, como el PS de la boca). Solo agrega sombra
+  { float4 CSn = IniParams.Load(int2(387, 0));
+    float3 LwC = g_psSystem.m_dominantLightDir.xyz;
+    if (cmpOn && CSn.w > 0.001 && dot(LwC, LwC) > 1e-6 && r0.w > 0.01) {
+      float zcC = PESLinZ(uvC);
+      if (zcC > 0.05 && zcC < 15.0) {
+        float3 LdC = normalize(float3(dot(LwC, g_psScene.m_view._m00_m10_m20), dot(LwC, g_psScene.m_view._m01_m11_m21), dot(LwC, g_psScene.m_view._m02_m12_m22)) + 1e-6);
+        LdC.z = -LdC.z;                                       // a la convencion de la posicion (z hacia adelante)
+        float3 NcC = PESDecN(uvC); NcC.z = -NcC.z;
+        float ndC = dot(NcC, LdC);
+        if (ndC > 0.02) {
+          float2 sCc = uvC * float2(2, -2) + float2(-1, 1);
+          float3 PvC = float3((sCc - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zcC, zcC);
+          float lenC = clamp(CSn.w * 0.01, 0.01, 1.0);
+          float hitC = 0.0;
+          [unroll] for (int ci = 0; ci < 8; ci++) {
+            float tC = (ci + 0.6) / 8.0; tC = tC * tC;
+            float3 Q = PvC + LdC * (tC * lenC);
+            if (Q.z < 0.06) break;
+            float2 sQ = Q.xy / (g_psScene.m_projectionParam.xy * Q.z) + g_psScene.m_cameraCenterOffset.xy;
+            float2 uvQ = (sQ + float2(1, -1)) * float2(0.5, -0.5);
+            if (any(uvQ < 0.0) || any(uvQ > 1.0)) break;
+            float zQ = PESLinZ(uvQ);
+            if (zQ < 0.05 || zQ > 300.0) continue;
+            float dQ = Q.z - zQ;
+            float biasC = 0.0015 + 0.004 * zcC * tC + 0.01 * tC * lenC * saturate(1.0 - ndC);
+            float thickC = 0.06 + 0.5 * lenC;
+            if (dQ > biasC && dQ < thickC) hitC = max(hitC, 1.0 - tC * 0.35);
+          }
+          r0.w *= 1.0 - hitC * saturate((15.0 - zcC) / 5.0);
+        }
+      }
+    } }
   if (r5.w != 0) {
     r2.w = r0.z * r0.z;
     r2.w = rsqrt(r2.w);
@@ -286,6 +322,12 @@ void main(
     }
   }
   r0.x = inOcclusion.Sample(g_samplerLinear_Clamp_s, r0.xy).x;
+  { // (08/11 b) GTAO de la DLL tambien en el editor (antes solo en el partido), mezclado con el SSAO del juego como en 619b (y132).
+    // Trae la oclusion de corto alcance (fila 387): rendija de los labios, fondo de la boca, hueco entre dientes, fosas nasales
+    float4 GT = IniParams.Load(int2(132,0));
+    uint gtW = 0, gtH = 0; PESGtao.GetDimensions(gtW, gtH);
+    if (GT.x > 0.5 && gtW > 0) { float g = PESGtao.SampleLevel(g_samplerLinear_Clamp_s, uvC, 0).x; r0.x = lerp(r0.x, min(r0.x * 0.35 + 0.65, g), saturate(GT.y)); }
+  }
   float3 occRGB = r0.xxx;
   if (skinC) {
     // la luz ambiente del estadio es gris/verdosa: en la piel se calienta un poco

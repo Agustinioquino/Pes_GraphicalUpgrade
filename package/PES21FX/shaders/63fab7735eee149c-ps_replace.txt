@@ -236,6 +236,19 @@ void main(
     float3 mLv = normalize(float3(dot(mLw, g_psScene.m_view._m00_m10_m20), dot(mLw, g_psScene.m_view._m01_m11_m21), dot(mLw, g_psScene.m_view._m02_m12_m22)) + float3(1e-5, 2e-5, 1e-5));
     float mSunIn = smoothstep(0.0, 0.6, dot(r2.xyz, mLv)) * (1.0 - 0.6 * mDeep);
     float mSunK = 1.0 - 0.7 * mSunIn;   // multiplica cada oscurecimiento fijo
+    // (08/11 b, Agustin: "mejora la sombra plasmada por la luz, la oclusion del fondo y las muelas, la sombra del frente, la
+    // lengua y demas") PROFUNDIDAD DENTRO DE LA BOCA (w388; 0 = como antes). mSunK afloja cada oscurecimiento fijo donde la
+    // normal de la boca mira al sol, pero lo que esta DETRAS de los labios (muelas, dientes de los costados, fondo de la
+    // lengua, garganta) no recibe el sol aunque lo mire: los labios y los dientes de adelante se lo tapan. Con eso el fondo se
+    // aclaraba con el sol de frente y la boca quedaba plana. Ahora cuanto mas al fondo, menos se afloja (0 incisivos .. 1
+    // garganta, por las zonas del atlas de la boca v20)
+    float4 Q388b = IniParams.Load(int2(388, 0));
+    float mDepK = saturate(Q388b.w);
+    float mMolarZ = smoothstep(0.893, 0.903, v2.x) * smoothstep(0.626, 0.636, v2.y) * smoothstep(0.732, 0.722, v2.y);
+    float mSideT = mRows * smoothstep(0.12, 0.34, abs(v2.x - 0.5));                    // premolares y dientes de los costados
+    float mTongueB = mTongueZ * saturate((0.99 - v2.y) / 0.32);                       // la lengua hacia la raiz (v alto = punta)
+    float mDpt = saturate(max(max(0.85 * mMolarZ, 0.6 * mSideT), max(mThroatZ, max(mTongueB, 0.9 * mDeep))));
+    mSunK = lerp(mSunK, 1.0, mDpt * mDepK);
     // (31/10 b) sombra del sol por forma (Agustin: "se aclaran pero no tienen sombra del sol"): el shadow map es muy grueso para
     // la boca y la luz de ambiente del juego aplana los dientes; los que miran lejos de la luz (fondo del arco, el lado opuesto
     // al sol) quedan mas oscuros, con la misma fuerza de la cavidad (x17)
@@ -321,6 +334,14 @@ void main(
         float mBackT = mRows * mTeeth * smoothstep(0.17, 0.31, abs(v2.x - 0.5)) * (1.0 - mMolar);
         float deepM = (0.55 * mMolar + 0.35 * mBackT) * saturate(Q98.z);
         r0.xyz *= 1.0 - deepM * lerp(1.0, mSunK, 0.35); }   // (04/11 h) muelas y dientes de atras: oclusion entera otra vez
+      // (08/11 b) SOMBRA DEL FRENTE: los incisivos de abajo quedan detras del borde de los de arriba (sobremordida); con la luz
+      // de arriba el borde de los de abajo recibe su sombra. Y el reflejo del cielo no llega al fondo de la boca ni a la raiz
+      // de la lengua (el juego lo suma entero: el fondo brillaba como si estuviera afuera)
+      if (mDepK > 0.0) {
+        float overB = mLower * mTeeth * smoothstep(0.35, 0.9, mIncisal) * smoothstep(-0.3, 0.6, mLv.y) * (1.0 - mSideT);
+        r0.xyz *= 1.0 - 0.28 * mDepK * overB * lerp(1.0, mSunK, 0.5);
+        r3.xyz *= 1.0 - 0.75 * mDepK * mDpt;
+      }
       // lengua: rosa-rojo humedo con mas saturacion, papilas (ruido fino) y sin el gris del original
       { float tz = mTongueZ * mTissue * saturate(Q98.x);
         float lumT = dot(r0.xyz, float3(0.3, 0.59, 0.11));
