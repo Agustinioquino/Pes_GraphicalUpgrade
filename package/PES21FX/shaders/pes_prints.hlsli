@@ -119,8 +119,30 @@ float PesPrEmbroidery(float2 uv, float2 dx, float2 dy, float res, float kType)
   // un borde de color da desvio en 1-2 sondas; el hilo en todas: pedir desvio parejo (el minimo de los pares)
   float pairs = min(abs(l1 - l4), abs(l2 - l3));
   float e = smoothstep(0.02, 0.07, dev) * smoothstep(0.015, 0.05, pairs + dev * 0.5);
-  float kb = (kType > 4.5 && kType < 6.5) ? 0.35 : (kType > 2.5 && kType < 3.5 ? -0.25 : 0.0);   // 5 algodon, 6 jacquard / 3 poliester
-  return saturate(e + kb) * c.w;
+  // (08/11 c) sin dato del equipo: en el juego el jugador usa la version de PARTIDO del kit, y en los kits modernos esa version
+  // lleva escudo y marca termoaplicados / de silicona; el bordado queda para algodon pesado y jacquard (retro). Tejido
+  // moderno: solo cuenta como bordado un hilo muy claro en la textura; retro: bordado salvo logo claramente plano.
+  bool retro = (kType > 4.5 && kType < 6.5);   // 5 algodon pesado, 6 jacquard
+  return (retro ? saturate(0.75 + e) : saturate((e - 0.6) * 2.5)) * c.w;
+}
+
+// (08/11 d) escudo del equipo segun la lista (PES21FX_escudos.txt -> Sider -> DLL, filas 395..398): de cual de los dos
+// equipos es este kit se decide por el color del cuerpo de la camiseta (pecho y espalda, mip grueso) contra el color 1 / 2
+// del kit elegido de cada uno. Devuelve 0 sin dato (o DLL vieja), 1 impreso, 2 bordado.
+float PesPrTeamCrest(float res)
+{
+  float4 H1 = IniParams.Load(int2(395, 0)), A1 = IniParams.Load(int2(396, 0));
+  float4 H2 = IniParams.Load(int2(397, 0)), A2 = IniParams.Load(int2(398, 0));
+  if (H1.w < 0.5 && A1.w < 0.5) return 0;
+  if (abs(H1.w - A1.w) < 0.5) return H1.w;           // los dos iguales: no hace falta saber cual es
+  if (H1.x < 0 || A1.x < 0) return 0;                // sin colores no se puede elegir
+  float lod = max(log2(res) - 4.0, 0.0);             // ~16 x 16 texeles por muestra
+  float3 s1 = g_tex_diffuse.SampleLevel(g_sampler_diffuse_s, float2(0.25, 0.30), lod).rgb;
+  float3 s2 = g_tex_diffuse.SampleLevel(g_sampler_diffuse_s, float2(0.75, 0.30), lod).rgb;
+  float3 h2 = H2.x >= 0 ? H2.xyz : H1.xyz, a2 = A2.x >= 0 ? A2.xyz : A1.xyz;
+  float dh = min(min(length(s1 - H1.xyz), length(s1 - h2)), min(length(s2 - H1.xyz), length(s2 - h2)));
+  float da = min(min(length(s1 - A1.xyz), length(s1 - a2)), min(length(s2 - A1.xyz), length(s2 - a2)));
+  return dh <= da ? H1.w : A1.w;
 }
 
 // n = normal de tangente (xy perturbacion, z), cav = oclusion del kit. su / sv = signo de la tangente / binormal
@@ -144,7 +166,11 @@ void PesPrintRelief(float2 uv, float2 dxu, float2 dyu, float su, float sv, float
   g4 = min(g4, g_tex_diffuse.SampleGrad(g_sampler_diffuse_s, uv + float2(0, s), dxu, dyu).w);
   g4 = min(g4, g_tex_diffuse.SampleGrad(g_sampler_diffuse_s, uv - float2(0, s), dxu, dyu).w);
   float guard = 1.0 - 0.8 * smoothstep(0.9, 0.99, g4);
-  float e = PesPrEmbroidery(uv, dxu, dyu, res, kType) * guard * emb;
+  float e = PesPrEmbroidery(uv, dxu, dyu, res, kType);
+  float tc = PesPrTeamCrest(res);                           // lista por equipo: manda sobre la estimacion
+  if (tc > 1.5) e = max(e, 0.85) * g_tex_diffuse.SampleGrad(g_sampler_diffuse_s, uv, dxu, dyu).w;
+  else if (tc > 0.5) e = 0.0;
+  e *= guard * emb;
   // alturas en el centro y a un paso de 1.25 texeles en u y en v (diferencias hacia adelante)
   float st = 1.25 / res;
   float am, ad, am1, ad1, am2, ad2;
