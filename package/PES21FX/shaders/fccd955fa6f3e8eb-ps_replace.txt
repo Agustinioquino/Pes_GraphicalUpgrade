@@ -350,6 +350,17 @@ void main(
         white = lerp(white, white * float3(1.0, 0.94, 0.92), smoothstep(1.8, 3.0, irisR) * 0.6);
         base = lerp(base, white * 1.12, eyeClr * scleraM);
       } }
+    // (08/11, Agustin: "los ojos un poco mas claros y respetando la luz") w318 LUZ EN EL OJO: el ojo se aclara segun cuanta luz dominante
+    // le llega (N.L de la cornea: de frente a la luz hasta +38 % en el iris y +20 % en lo blanco a 1.0; de espaldas solo un piso del 8 / 5 %),
+    // asi un ojo en sombra sigue oscuro y el que mira a la luz se abre. 0 = nada
+    { float eyeLit = clamp(IniParams.Load(int2(318,0)).w, 0.0, 2.0);
+      if (eyeLit > 0.001) {
+        float3 Lw2 = g_psSystem.m_dominantLightDir.xyz;
+        float3 Lv2 = normalize(float3(dot(Lw2, g_psScene.m_view._m00_m10_m20), dot(Lw2, g_psScene.m_view._m01_m11_m21), dot(Lw2, g_psScene.m_view._m02_m12_m22)) + float3(1e-5, 2e-5, 1e-5));
+        float ndl = saturate(dot(Lv2, eyeNc));
+        float irisK = saturate(irisIn), sclK = saturate(1.0 - irisIn);
+        base *= 1.0 + eyeLit * (irisK * (0.08 + 0.30 * ndl) + sclK * (0.05 + 0.15 * ndl));
+      } }
     // (04/11, Agustin: "les hace falta una mayor naturalidad a los modelos eye") z318 BORDES DEL OJO: (1) el anillo del limbo se
     // oscurece al mirar el ojo de costado (la cornea es mas gruesa en el borde y el limbo queda en sombra); (2) venitas muy finas
     // en la esclerotica, solo lejos del iris y apagadas donde serian mas chicas que un pixel; (3) sombra suave hacia los
