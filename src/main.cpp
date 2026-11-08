@@ -2,6 +2,7 @@
 #include "core.h"
 #include <algorithm>
 #include <vector>
+#include <cstddef>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -317,12 +318,19 @@ static void PinGameDlls() {
 // otro hilo (MiniDumpWriteDump desde el hilo que se cae no ve bien su propia pila).
 using PFN_MDWD = BOOL(WINAPI*)(HANDLE, DWORD, HANDLE, int, const void*, const void*, const void*);
 static PFN_MDWD s_mdwd = nullptr;
+// (08/11 b) MINIDUMP_EXCEPTION_INFORMATION en dbghelp.h esta empaquetada a 4 bytes (pshpack4): ExceptionPointers va en +4, no en +8.
+// Con el alineado normal dbgcore leia basura como puntero y se caia dentro del volcado (cierre 08/11 21:43: 0 bytes, sin logs)
+#pragma pack(push, 4)
 struct FxMdExc { DWORD ThreadId; EXCEPTION_POINTERS* ExceptionPointers; BOOL ClientPointers; };
+#pragma pack(pop)
+static_assert(sizeof(FxMdExc) == 16 && offsetof(FxMdExc, ExceptionPointers) == 4, "MINIDUMP_EXCEPTION_INFORMATION");
 struct DumpJob { HANDLE file; FxMdExc exc; int type; BOOL ok; DWORD err; };
 static DWORD WINAPI DumpThread(LPVOID p) {
     auto* j = (DumpJob*)p;
-    j->ok = s_mdwd(GetCurrentProcess(), GetCurrentProcessId(), j->file, j->type, &j->exc, nullptr, nullptr);
-    j->err = j->ok ? 0 : GetLastError();
+    __try {
+        j->ok = s_mdwd(GetCurrentProcess(), GetCurrentProcessId(), j->file, j->type, &j->exc, nullptr, nullptr);
+        j->err = j->ok ? 0 : GetLastError();
+    } __except (EXCEPTION_EXECUTE_HANDLER) { j->ok = FALSE; j->err = 0xE0000000u | (GetExceptionCode() & 0xFFFFFF); }   // que el volcado nunca tire el cierre
     return 0;
 }
 static void PruneCrashDirs(const std::wstring& root, int keep) {
@@ -348,6 +356,16 @@ static void WriteCrashDump(EXCEPTION_POINTERS* ep) {
     swprintf(n, 32, L"%04d%02d%02d_%02d%02d%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
     std::wstring dir = root + n + L"\\"; CreateDirectoryW(dir.c_str(), nullptr);
     if (g_log) fprintf(g_log, "    volcado del cierre: PES21FX\\cierres\\%ls\\\n", n);
+    // primero los archivos de texto (si el volcado falla, quedan igual); al final se vuelve a copiar el log con las lineas del volcado
+    auto copyAll = [&]() {
+        if (g_log) fflush(g_log);
+        CopyFileW((g_cfg.baseDir + L"PES21FX.log").c_str(), (dir + L"PES21FX.log").c_str(), FALSE);
+        CopyFileW((g_cfg.baseDir + L"PES21FX.ini").c_str(), (dir + L"PES21FX.ini").c_str(), FALSE);
+        wchar_t exe[MAX_PATH]; GetModuleFileNameW(nullptr, exe, MAX_PATH);
+        std::wstring gdir = exe; gdir = gdir.substr(0, gdir.find_last_of(L"\\/") + 1);
+        CopyFileW((gdir + L"sider.log").c_str(), (dir + L"sider.log").c_str(), FALSE);
+    };
+    copyAll();
     if (s_mdwd) {
         HANDLE h = CreateFileW((dir + L"cierre.dmp").c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (h != INVALID_HANDLE_VALUE) {
@@ -363,12 +381,7 @@ static void WriteCrashDump(EXCEPTION_POINTERS* ep) {
             if (!j.ok && g_log) fprintf(g_log, "    MiniDumpWriteDump error %lu\n", j.err);
         } else if (g_log) fprintf(g_log, "    cierre.dmp: no se pudo crear (error %lu)\n", GetLastError());
     } else if (g_log) fprintf(g_log, "    cierre.dmp: dbghelp.dll no disponible\n");
-    if (g_log) fflush(g_log);
-    CopyFileW((g_cfg.baseDir + L"PES21FX.log").c_str(), (dir + L"PES21FX.log").c_str(), FALSE);
-    CopyFileW((g_cfg.baseDir + L"PES21FX.ini").c_str(), (dir + L"PES21FX.ini").c_str(), FALSE);
-    wchar_t exe[MAX_PATH]; GetModuleFileNameW(nullptr, exe, MAX_PATH);
-    std::wstring gdir = exe; gdir = gdir.substr(0, gdir.find_last_of(L"\\/") + 1);
-    CopyFileW((gdir + L"sider.log").c_str(), (dir + L"sider.log").c_str(), FALSE);
+    copyAll();
 }
 
 static LPTOP_LEVEL_EXCEPTION_FILTER s_prevFilter = nullptr;
