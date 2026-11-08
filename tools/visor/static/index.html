@@ -275,6 +275,34 @@ body.motor .slider:hover{background:rgba(255,255,255,.03)}
 .jugbar{align-items:center;padding:6px 10px;border-radius:12px;background:linear-gradient(90deg,rgba(47,207,122,.12),rgba(217,184,74,.08));border:1px solid var(--line)}
 .jugtit{font-family:var(--fd);font-weight:700;letter-spacing:.04em;color:var(--gold2);text-transform:uppercase;font-size:13px}
 body.motor .jugbar{border-radius:4px;background:#1a1d22;padding:4px 8px}
+
+/* ---------- diseno movible: divisores, lados y menu compacto ---------- */
+nav{width:var(--navW,232px)}
+body.motor nav{width:var(--navW,210px)}
+.editor{grid-template-columns:1fr var(--derW,330px)}
+body.motor .editor{grid-template-columns:var(--izqW,220px) 1fr var(--derW,340px)}
+.ed-consola pre{height:var(--consH,110px)}
+body.invertido .editor{grid-template-columns:var(--derW,330px) 1fr}
+body.motor.invertido .editor{grid-template-columns:var(--derW,340px) 1fr var(--izqW,220px)}
+body.invertido .ed-der{order:-1}body.invertido .ed-izq{order:5}
+body.nav-der{flex-direction:row-reverse}
+body.nav-der nav{margin:12px 12px 12px 0}body.motor.nav-der nav{margin:0;border-right:0;border-left:1px solid var(--line)}
+.split{position:absolute;z-index:30;background:transparent;transition:background .15s}
+.split.v{top:0;bottom:0;width:9px;cursor:col-resize}.split.h{left:0;right:0;height:9px;cursor:row-resize;top:-5px}
+.split.der{right:-6px}.split.izq{left:-6px}
+.split:hover,.split.arr{background:linear-gradient(90deg,transparent 3px,rgba(217,184,74,.7) 3px,rgba(217,184,74,.7) 6px,transparent 6px)}
+.split.h:hover,.split.h.arr{background:linear-gradient(180deg,transparent 3px,rgba(217,184,74,.7) 3px,rgba(217,184,74,.7) 6px,transparent 6px)}
+body.arrastrando{cursor:col-resize;user-select:none}body.arrastrando.fila-res{cursor:row-resize}
+body.arrastrando canvas{pointer-events:none}
+.ed-consola{position:relative}
+.diseno{display:flex;gap:4px;justify-content:center;padding:6px 0 2px;border-top:1px solid var(--line);margin-top:6px}
+.diseno button{background:rgba(255,255,255,.04);border:1px solid var(--line);color:var(--dim);border-radius:8px;padding:4px 7px;cursor:pointer;font-size:13px}
+.diseno button:hover{color:var(--gold2);border-color:var(--line2)}
+.diseno button.on{color:#111;background:var(--gold)}
+body.compacto nav{width:64px!important}
+body.compacto nav h1,body.compacto nav button span,body.compacto nav .est,body.compacto nav .marca h1,body.compacto nav .modos{display:none}
+body.compacto nav .marca{justify-content:center}body.compacto nav button{justify-content:center;padding:10px 0}
+body.compacto .diseno{flex-direction:column;align-items:center}
 </style>
 </head>
 <body>
@@ -990,7 +1018,13 @@ let cargandoEstadio = 0;
 async function cargarEstadio() {
   const k = $('#eSel').value; quitarEstadio(); localStorage.setItem('estadio', k); if (!k) return;
   const tok = ++cargandoEstadio; const est = await vis('/api/estadio?clave=' + enc(k)); const lista = [];
-  for (const r of est.archivos) { if (/\.fmdl$/i.test(r)) lista.push(r); else { try { const p = await vis('/api/paquete_modelos?ruta=' + enc(r)); lista.push(...p.modelos.map(m => m.ruta)); } catch (e) { clog('estadio: no se abrió ' + r); } } if (tok !== cargandoEstadio) return; }
+  // como el PES Stadium Exporter: <stid>.fpk (principal) + una variante _df/_dr/_nf/_nr segun la hora; scarecrow/staff van por fox2 (todavia no)
+  const noche = +$('#lElev').value < 0, lluvia = /nublado/i.test(luzActual), varK = '_' + (noche ? 'n' : 'd') + (lluvia ? 'r' : 'f');
+  let encript = 0; const base = r => r.split(/[\\/!]/).pop().toLowerCase();
+  const usar = est.archivos.filter(r => { const n = base(r); if (/^(scarecrow|staff)_/.test(n)) return false; if (/^cheer_/.test(n)) return $('#eFans').checked; const v = n.match(/_(df|dr|nf|nr)\.fpk$/); return !v || '_' + v[1] === varK; });
+  for (const r of usar) { if (/\.fmdl$/i.test(r)) lista.push(r); else { try { const p = await vis('/api/paquete_modelos?ruta=' + enc(r)); lista.push(...p.modelos.map(m => m.ruta)); } catch (e) { if (/no es un fpk/.test(e.message)) encript++; clog('estadio: no se abrió ' + r + ' (' + e.message + ')'); } } if (tok !== cargandoEstadio) return; }
+  if (encript) toast(encript + ' paquetes de este estadio están encriptados: no se pueden ver', true);
+  clog('estadio ' + k + ': variante ' + varK);
   const esFan = r => /audience|crowd|supporter|spectator|hincha|kanshu|(^|[\/_])fans?([_.\/]|$)/i.test(r.split(/[\\/!]/).pop());
   let fans = lista.filter(esFan); const resto = lista.filter(r => !esFan(r)); lista.length = 0; lista.push(...resto);
   if ($('#eFans').checked) { if (!fans.length && PERS.aficionados && PERS.aficionados.length) { for (const r of PERS.aficionados.slice(0, 40)) { if (/\.fmdl$/i.test(r)) fans.push(r); else { try { const p = await vis('/api/paquete_modelos?ruta=' + enc(r)); fans.push(...p.modelos.map(m => m.ruta)); } catch (e) { } } } clog('estadio sin público propio: uso ' + fans.length + ' modelos de público generales'); } lista.push(...fans); clog('aficionados: ' + fans.length + ' modelos'); }
@@ -1003,6 +1037,33 @@ $('#eFans').onchange = () => { for (const M of modelos) if (M.fan) M.grupo.visib
 $('#eCarpeta').onclick = async () => { const r = prompt('Carpeta a sumar (por ejemplo la del Stadium Server):', 'D:\\Sider\\content\\stadium-server'); if (!r) return;
   try { const res = await fetch(VISOR + '/api/raiz', { method: 'POST', body: r }); const j = await res.json(); if (j.error) throw new Error(j.error); toast('Carpeta sumada; rearmo el índice'); PERS = null; $('#jEstado').textContent = 'rearmando índice…'; autoJugador = false; setTimeout(cargarPersonajes, 800); } catch (e) { toast('No se pudo: ' + e.message, true); } };
 $('#eCargar').onclick = cargarEstadio; $('#eQuitar').onclick = () => { cargandoEstadio++; $('#eSel').value = ''; quitarEstadio(); localStorage.setItem('estadio', ''); };
+
+
+// ---------------------------------------------------------------- diseno movible (se guarda en este equipo)
+const DIS_DEF = { navW: 0, izqW: 0, derW: 0, consH: 0, navDer: false, invertido: false, compacto: false };
+let DIS = Object.assign({}, DIS_DEF); try { Object.assign(DIS, JSON.parse(localStorage.getItem('diseno') || '{}')); } catch (e) { }
+function aplicarDiseno() { const b = document.body; for (const k of ['navW', 'izqW', 'derW', 'consH']) { if (DIS[k]) b.style.setProperty('--' + k, DIS[k] + 'px'); else b.style.removeProperty('--' + k); }
+  b.classList.toggle('nav-der', !!DIS.navDer); b.classList.toggle('invertido', !!DIS.invertido); b.classList.toggle('compacto', !!DIS.compacto);
+  $$('.diseno [data-d]').forEach(x => x.classList.toggle('on', !!DIS[x.dataset.d])); try { localStorage.setItem('diseno', JSON.stringify(DIS)); } catch (e) { }
+  if (typeof renderer !== 'undefined' && renderer) window.dispatchEvent(new Event('resize')); }
+function divisor(cont, clave, tipo, signo, min, max) {   // signo: +1 si crece hacia la derecha/abajo
+  const d = document.createElement('div'); d.className = 'split ' + tipo; d.title = 'Arrastrá para cambiar el tamaño (doble clic: restablecer)'; cont.appendChild(d);
+  const lado = () => { if (tipo === 'h') return; const der = clave === 'navW' ? !DIS.navDer : clave === 'izqW' ? !DIS.invertido : DIS.invertido; d.classList.toggle('der', der); d.classList.toggle('izq', !der); return der ? 1 : -1; };
+  lado(); new MutationObserver(lado).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+  d.addEventListener('pointerdown', e => { e.preventDefault(); d.setPointerCapture(e.pointerId); const r = cont.getBoundingClientRect(); const v0 = tipo === 'h' ? r.height : r.width, p0 = tipo === 'h' ? e.clientY : e.clientX; const s = tipo === 'h' ? -1 : lado();
+    d.classList.add('arr'); document.body.classList.add('arrastrando'); if (tipo === 'h') document.body.classList.add('fila-res');
+    const mov = ev => { const dv = ((tipo === 'h' ? ev.clientY : ev.clientX) - p0) * s; DIS[clave] = Math.round(Math.max(min, Math.min(max, v0 + dv - (tipo === 'h' ? 36 : 0)))); aplicarDiseno(); };
+    const fin = () => { d.classList.remove('arr'); document.body.classList.remove('arrastrando', 'fila-res'); d.removeEventListener('pointermove', mov); d.removeEventListener('pointerup', fin); };
+    d.addEventListener('pointermove', mov); d.addEventListener('pointerup', fin); });
+  d.addEventListener('dblclick', () => { DIS[clave] = 0; aplicarDiseno(); });
+}
+divisor($('nav'), 'navW', 'v', 1, 150, 420);
+divisor($('.ed-izq'), 'izqW', 'v', 1, 150, 520);
+divisor($('.ed-der'), 'derW', 'v', -1, 240, 640);
+divisor($('.ed-consola'), 'consH', 'h', -1, 40, 500);
+$('nav').insertAdjacentHTML('beforeend', `<div class="diseno" title="Diseño de la ventana"><button data-d="compacto" title="Menú compacto (solo iconos)">◧</button><button data-d="navDer" title="Menú a la derecha / izquierda">⇆</button><button data-d="invertido" title="Cambiar de lado la jerarquía y el inspector">⇄</button><button data-d="reset" title="Restablecer el diseño">↺</button></div>`);
+$$('.diseno button').forEach(x => x.onclick = () => { const k = x.dataset.d; if (k === 'reset') DIS = Object.assign({}, DIS_DEF); else DIS[k] = !DIS[k]; aplicarDiseno(); toast(k === 'reset' ? 'Diseño restablecido' : 'Diseño guardado'); });
+aplicarDiseno();
 
 // ---------------------------------------------------------------- texturas
 async function cargarTextura() {
