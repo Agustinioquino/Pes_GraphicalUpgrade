@@ -28,6 +28,7 @@ namespace fx {
 
 namespace {
 struct Elem { int slot = -1; UINT off = 0; DXGI_FORMAT fmt = DXGI_FORMAT_UNKNOWN; };
+constexpr UINT kCbU = 36;   // (08/11) uints del cbuffer b12 (PESExprMesh): 28 + 8 (hueso de cada lugar de la paleta, 4 por uint)
 struct FaceMesh {
     int id = 0, state = 0, tries = 0;   // 0 copiar indices, 1 leer indices / copiar vertices, 2 leer vertices, 3 listo, 4 descartada
     ID3D11Buffer* ib = nullptr; DXGI_FORMAT ibFmt = DXGI_FORMAT_UNKNOWN; UINT ibOff = 0, start = 0, count = 0; INT base = 0;
@@ -43,13 +44,17 @@ struct FaceMesh {
     float hc[3] = {}; bool hcOk = false;   // (1/11) centro de la cara en espacio del modelo (vertices que pesan en sk_head): para "seguir la cara"
     UINT lastFrame = 0;   // (01/11) ultimo cuadro en que se dibujo (para echar las mallas viejas sin vaciar toda la tabla)
     int lids[4] = { -1, -1, -1, -1 }; UINT lidCap = 0;   // (02/11 h) parpados en la paleta y ultimo cuadro en que se leyo la paleta
+    // (08/11) gestos en la paleta: hueso kDef (exprbones.cpp) de cada lugar de la paleta de esta malla (255 = ninguno), leido una vez de
+    // la paleta real (b6) y emparejado con los huesos del personaje; slotCap = ultimo cuadro en que se pidio la lectura
+    uint8_t slotBone[32]; bool slotsOk = false; UINT slotCap = 0; int slotTries = 0;
+    FaceMesh() { memset(slotBone, 255, sizeof slotBone); }
     int shapeOff = -1; uint32_t huella = 0; ID3D11ShaderResourceView* shapeWr = nullptr;   // (04/11) gestos esculpidos (formas\<huella>.bin): primer float4 de esta malla en s_shapeData
     ID3D11Buffer* seamBuf = nullptr; ID3D11ShaderResourceView* seamSrv = nullptr; int seamN = 0;   // (04/11 b) teselacion (facetess.cpp): peso de borde por vertice (t119), solo piel de la cara; seamN = vertices con peso 0
     int seamSoft = -1;   // (07/11) vertices de costuras de textura que ahora se redondean (-1 = sin normales leidas)
     int seamEye = 0;   // (04/11 h) vertices del borde de la abertura del ojo (peso 2: redondeo propio, fila 366)
     ID3D11Buffer* cbTess = nullptr;   // (08/11) cbuffer neutro (sin expresiones) para teselar con x340 = 0
     bool body = false;   // (04/11 g) piel del cuerpo (VS 1c02a92a): solo pesos de borde para la teselacion, sin nada de cara
-    UINT cbv[28] = {}; std::vector<float> xferPs; uint64_t xferIb = 0; int xferUsed = 0; bool xferGate = false; ID3D11Buffer* cbNoShape = nullptr; ID3D11Buffer* cbTeeth = nullptr;
+    UINT cbv[kCbU] = {}; std::vector<float> xferPs; uint64_t xferIb = 0; int xferUsed = 0; bool xferGate = false; ID3D11Buffer* cbNoShape = nullptr; ID3D11Buffer* cbTeeth = nullptr;
     bool beard = false, beardSrc = false; int geoId = 0, teethHits = 0; bool teethOn = false; ID3D11Buffer* idBuf = nullptr; std::vector<float> beardPs; int beardTries = 0; UINT seqAt = 0; std::vector<int> beardUsed; int beardRebinds = 0; bool beardOjo = false;   // (04/11 e) seqAt: orden del ultimo dibujo (barba: para elegir la piel dibujada junto a ella)   // (04/11 c) barba: malla del pelo enlazada a la piel / piel que le pasa su paleta   // (04/11 c) lo que lleva el cbuffer y, si espera formas pasadas de la piel, sus vertices
 };
 std::mutex s_mx;
@@ -124,19 +129,20 @@ ID3D11Buffer* MakeCB(UINT head, UINT maxIdx, UINT id, UINT mouth = 0, const int*
     // 48 bytes de uint4 + 2 float4: centros de los ojos (x y z radio) izquierdo (+x, hueso 0) y derecho (hueso 1), para la mirada
     // + uint4 musculos virtuales (01/11 i): comisura izq / der, ceja interna izq / der (99 = no hay)
     // + (04/11) uint4 gestos esculpidos: x primer float4 de la malla en el buffer de formas (t118), y vertices, z primer indice (vmin), w formas (0 = no hay)
-    UINT v[28] = { head, maxIdx, id, mouth, 99, 99, 99, 99, jawFull, jawHalf, lipTop, lipUp, 0, 0, 0, 0, 0, 0, 0, 0, 99, 99, 99, 99, 0, 0, 0, 0 };
+    UINT v[kCbU] = { head, maxIdx, id, mouth, 99, 99, 99, 99, jawFull, jawHalf, lipTop, lipUp, 0, 0, 0, 0, 0, 0, 0, 0, 99, 99, 99, 99, 0, 0, 0, 0 };
+    for (UINT i = 28; i < kCbU; i++) v[i] = 0xFFFFFFFFu;   // (08/11) sin huesos emparejados todavia
     if (shape) for (int i = 0; i < 4; i++) v[24 + i] = shape[i];
     if (lids) for (int i = 0; i < 4; i++) v[4 + i] = lids[i] >= 0 ? (UINT)lids[i] : 99u;
     if (eyes) memcpy(v + 12, eyes, 32);
     if (mus) for (int i = 0; i < 4; i++) v[20 + i] = mus[i] >= 0 ? (UINT)mus[i] : 99u;
     if (keep) memcpy(keep, v, sizeof v);
-    D3D11_BUFFER_DESC d{}; d.ByteWidth = 112; d.Usage = D3D11_USAGE_IMMUTABLE; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    D3D11_BUFFER_DESC d{}; d.ByteWidth = kCbU * 4; d.Usage = D3D11_USAGE_IMMUTABLE; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     D3D11_SUBRESOURCE_DATA s{}; s.pSysMem = v;
     ID3D11Buffer* b = nullptr; return SUCCEEDED(g_dev.dev->CreateBuffer(&d, &s, &b)) ? b : nullptr;
 }
 ID3D11Buffer* MakeCBRaw(const UINT* v) {
     if (!g_dev.dev) return nullptr;
-    D3D11_BUFFER_DESC d{}; d.ByteWidth = 112; d.Usage = D3D11_USAGE_IMMUTABLE; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    D3D11_BUFFER_DESC d{}; d.ByteWidth = kCbU * 4; d.Usage = D3D11_USAGE_IMMUTABLE; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = v;
     ID3D11Buffer* b = nullptr; return SUCCEEDED(g_dev.dev->CreateBuffer(&d, &sd, &b)) ? b : nullptr;
 }
@@ -381,9 +387,9 @@ int ShapeXfer(FaceMesh* m, const float* ps, uint64_t ib) {   // con s_mx tomado
 }
 // cbuffer con las formas pasadas (y, si van solo junto a su piel, el mismo sin formas para cuando no)
 void ShapeXferCB(FaceMesh* m, int off) {
-    UINT v[28]; memcpy(v, m->cbv, sizeof v); v[24] = (UINT)off; v[25] = m->nv; v[26] = m->vmin; v[27] = kShapeN;
+    UINT v[kCbU]; memcpy(v, m->cbv, sizeof v); v[24] = (UINT)off; v[25] = m->nv; v[26] = m->vmin; v[27] = kShapeN;
     ID3D11Buffer* b = MakeCBRaw(v); if (!b) return;
-    if (m->xferGate && !m->cbNoShape) { UINT z[28]; memcpy(z, m->cbv, sizeof z); z[27] = 0; m->cbNoShape = MakeCBRaw(z); if (!m->cbNoShape) { b->Release(); return; } }
+    if (m->xferGate && !m->cbNoShape) { UINT z[kCbU]; memcpy(z, m->cbv, sizeof z); z[27] = 0; m->cbNoShape = MakeCBRaw(z); if (!m->cbNoShape) { b->Release(); return; } }
     memcpy(m->cbv, v, sizeof v); m->cb = b; m->shapeOff = off;   // el cbuffer viejo no se libera (otro hilo lo puede estar por enlazar)
 }
 void ShapeXferPending() {   // con s_mx tomado: llego piel con formas nueva, las mallas que esperaban la toman
@@ -490,7 +496,7 @@ struct GeoDrawn { UINT frame = 0, seq = 0; }; std::map<int, GeoDrawn> s_geoDrawn
 int s_poolFail[4] = {};   // sin pozo, sin id, sin b5/b6, b5/b6 fuera de rango
 std::vector<float> s_beardData; ID3D11Buffer* s_beardBuf = nullptr; ID3D11ShaderResourceView* s_beardSrv = nullptr;
 ID3D11Buffer* s_pool = nullptr; ID3D11ShaderResourceView* s_poolSrv = nullptr; UINT s_poolAt = 0;
-constexpr UINT kPoolSlots = 64, kSlotF4 = 200, kBeardF4 = 9;
+constexpr UINT kPoolSlots = 64, kSlotF4 = 208, kBeardF4 = 9;   // (08/11) 200 -> 208: 200..203 hueso kDef de cada lugar de la paleta de la piel (pes_beard.hlsli)
 // (04/11 l, Agustin: "se buguea y rompe la barba") el VS de la barba elegia, vertice por vertice, cualquier lugar del pozo con esa piel
 // (64 copias de distintos cuadros / pasadas): vertices vecinos tomaban paletas de cuadros distintos y la barba se rompia. Ahora al
 // final del pozo hay un directorio (256 float4, por geometria & 255): x = el ULTIMO lugar copiado de esa piel; toda la barba usa ese
@@ -618,7 +624,7 @@ bool BeardBind(FaceMesh* m, const std::vector<float>& ps) {   // con s_mx tomado
     const size_t off4 = (size_t)o4;
     for (int g : used) if (std::find(s_geoUsed.begin(), s_geoUsed.end(), g) == s_geoUsed.end()) s_geoUsed.push_back(g);
     int nMark = 0; for (auto& kv : s_meshes) if (kv.second->geoId && std::find(used.begin(), used.end(), kv.second->geoId) != used.end()) { kv.second->beardSrc = true; nMark++; }
-    const UINT cv[28] = { (UINT)off4, m->nv, m->vmin, 1u };
+    UINT cv[kCbU] = { (UINT)off4, m->nv, m->vmin, 1u }; for (UINT i = 28; i < kCbU; i++) cv[i] = 0xFFFFFFFFu;
     m->cb = MakeCBRaw(cv);   // (el cbuffer viejo de un re-enlace no se libera: otro hilo puede tenerlo en la mano)
     m->beardUsed = used; m->beardOjo = !recent;   // (04/11 l) enlazada sin piel dibujada junto: se reintenta
     char ug[96]; int uk = 0; ug[0] = 0; for (size_t i = 0; i < used.size() && uk < 80; i++) uk += snprintf(ug + uk, sizeof ug - uk, "%s%d", i ? "," : "", used[i]);
@@ -901,7 +907,7 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
         if (hd <= 31 && !eye && !mouth && !thin && m->nv >= 300 && m->nv <= 20000) BeardKeepSrc(m, ps, iv, wv, (jawFull | jawHalf) != 0u);   // (04/11 c) piel de cara: la barba se enlaza a ella
         const UINT shp[4] = { m->shapeOff >= 0 ? (UINT)m->shapeOff : 0u, m->nv, m->vmin, m->shapeOff >= 0 ? kShapeN : 0u };
         m->cb = MakeCB((UINT)m->head, (UINT)mx, (UINT)m->id, eye ? 2u : (mouth ? 1u : 0u), lids, jawFull, jawHalf, lipTop, lipUp, eye ? eyes : nullptr, mus, shp, m->cbv);
-        if (m->cb && m->xferGate && m->shapeOff >= 0) { UINT z[28]; memcpy(z, m->cbv, sizeof z); z[27] = 0; m->cbNoShape = MakeCBRaw(z); }
+        if (m->cb && m->xferGate && m->shapeOff >= 0) { UINT z[kCbU]; memcpy(z, m->cbv, sizeof z); z[27] = 0; m->cbNoShape = MakeCBRaw(z); }
         for (int i = 0; i < 4; i++) m->lids[i] = lids[i];
         if (m->dump && hd <= 31 && !eye && !mouth && m->nv >= 200) DumpObj(m, ps, uvs, iv, wv, ylo, yhi);
         // (04/11 b) teselacion de la cara (facetess.cpp): solo la piel de la cara (no boca, no ojo, no pestanas / parpados finos,
@@ -941,6 +947,7 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
 
 // en cada dibujo con la regla "expr = <slot>" (VS de la cabeza / cara): cbuffer de la malla para el VS (null = no enlazar)
 static void LidCapture(ID3D11DeviceContext* c, FaceMesh* m);   // (02/11 h) abajo
+static void SlotCapture(ID3D11DeviceContext* c, FaceMesh* m); static void SlotPresent(ID3D11DeviceContext* imm); static void DeltaUpload(ID3D11DeviceContext* imm);   // (08/11) gestos en la paleta, abajo
 // (04/11 c) barba: la paleta (b6, actual + anterior) y el m_world (b5) de esta piel a un lugar del pozo, con su id y su cabeza adelante
 static void BeardPoolCopy(ID3D11DeviceContext* c, FaceMesh* m) {   // con s_mx tomado
     if (!s_pool) {
@@ -955,8 +962,9 @@ static void BeardPoolCopy(ID3D11DeviceContext* c, FaceMesh* m) {   // con s_mx t
         // (04/11 j, captura de Agustin: pelos de la barba sobre los dientes con la boca abierta) tambien las mascaras de "abrir la boca"
         // de esta piel (huesos de abajo enteros / comisuras a la mitad, b12 g_pesExprJaw.xy) partidas en 16 bits: la barba gira igual
         const UINT jf = m->cbv[8], jh = m->cbv[9];
-        const float h[8] = { (float)m->geoId, (float)m->head, (float)(jf & 0xFFFFu), (float)(jf >> 16), (float)(jh & 0xFFFFu), (float)(jh >> 16), 0.0f, 0.0f };
-        D3D11_BUFFER_DESC d{}; d.ByteWidth = 32; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        float h[24] = { (float)m->geoId, (float)m->head, (float)(jf & 0xFFFFu), (float)(jf >> 16), (float)(jh & 0xFFFFu), (float)(jh >> 16), 0.0f, 0.0f };
+        for (int i = 0; i < 16; i++) h[8 + i] = (float)(m->slotsOk ? m->slotBone[2 * i] + 256 * m->slotBone[2 * i + 1] : 255 + 256 * 255);   // (08/11) 2 lugares por float
+        D3D11_BUFFER_DESC d{}; d.ByteWidth = 96; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
         D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = h;
         if (FAILED(g_dev.dev->CreateBuffer(&d, &sd, &m->idBuf))) { m->idBuf = nullptr; s_poolFail[1]++; return; }
     }
@@ -974,6 +982,7 @@ static void BeardPoolCopy(ID3D11DeviceContext* c, FaceMesh* m) {   // con s_mx t
             D3D11_BOX x5 = { a5, 0, 0, a5 + 64, 1, 1 }; c->CopySubresourceRegion(s_pool, 0, base + 193 * 16, 0, 0, b5, 0, &x5);
             D3D11_BOX xh = { 0, 0, 0, 16, 1, 1 }; c->CopySubresourceRegion(s_pool, 0, base, 0, 0, m->idBuf, 0, &xh);
             D3D11_BOX xj = { 16, 0, 0, 32, 1, 1 }; c->CopySubresourceRegion(s_pool, 0, base + 197 * 16, 0, 0, m->idBuf, 0, &xj);   // (04/11 j)
+            D3D11_BOX xs = { 32, 0, 0, 96, 1, 1 }; c->CopySubresourceRegion(s_pool, 0, base + 200 * 16, 0, 0, m->idBuf, 0, &xs);   // (08/11) huesos de la paleta
             if (!s_slotBuf[slot]) {   // (04/11 l) directorio: este lugar es el ultimo de esta piel
                 const float sv[4] = { (float)slot, 0.0f, 0.0f, 0.0f };
                 D3D11_BUFFER_DESC sb{}; sb.ByteWidth = 16; sb.Usage = D3D11_USAGE_IMMUTABLE; sb.BindFlags = D3D11_BIND_SHADER_RESOURCE;
@@ -1062,12 +1071,13 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
             // (una pasada con los dientes corridos y otra sin): ahora, despues de 8 veces junto a su piel, esa boca queda marcada
             if (m->cbv[3] == 1 && !m->teethOn && s_packFrame == s_frame && seq - s_packSeq <= 4 && ++m->teethHits >= 8) m->teethOn = true;
             if (m->cbv[3] == 1 && m->teethOn) {
-                if (!m->cbTeeth) { UINT z[28]; memcpy(z, m->cbv, sizeof z); z[24] = 1; z[25] = 0; z[26] = 0; z[27] = 0; m->cbTeeth = MakeCBRaw(z); }
+                if (!m->cbTeeth) { UINT z[kCbU]; memcpy(z, m->cbv, sizeof z); z[24] = 1; z[25] = 0; z[26] = 0; z[27] = 0; m->cbTeeth = MakeCBRaw(z); }
                 if (m->cbTeeth) { s_teethOn++; if (headCentroid && m->hcOk && m->nv >= 300) { *headCentroid = m->hc; if (headIdx) *headIdx = m->head; } return m->cbTeeth; }
             }
             if (shapeSrv && m->shapeOff >= 0 && s_shapeSrv) { *shapeSrv = s_shapeSrv; s_shapeDraws++; if (shapeWr) *shapeWr = m->shapeWr; }
             if (tessSeam && m->seamSrv) *tessSeam = m->seamSrv;   // (04/11 b) piel de la cara: se puede teselar
             if (m->head <= 31 && (m->lids[0] >= 0 || m->lids[1] >= 0) && s_frame - m->lidCap >= 120) { m->lidCap = s_frame; LidCapture(c, m); }
+            if (m->head <= 31 && !m->slotsOk && m->slotTries < 40 && g_cfg.optExprPalette && s_frame - m->slotCap >= 45) { m->slotCap = s_frame; m->slotTries++; SlotCapture(c, m); }   // (08/11)
             if (headCentroid && m->hcOk && m->nv >= 300) { *headCentroid = m->hc; if (headIdx) *headIdx = m->head; } return m->cb; }
         if (m->state == 4) s_bindsDisc++; else s_bindsWait++;
         s_bindsNone++; return s_none;
@@ -1219,6 +1229,202 @@ bool ExprHeadWorld(float out[3], double* age) {
     if (s_headT == 0) return false;
     memcpy(out, s_headPos, 12); if (age) *age = Now() - s_headT; return true;
 }
+
+// ---- (08/11, Agustin: "todo sigue vibrando") GESTOS EN LA PALETA ----
+// exprbones.cpp ya no escribe los huesos de la cara: publica por personaje la base del juego, lo nuevo y el reposo (ExprCharPose). Aca:
+//  1) por malla, UNA vez, se lee la paleta real (b6) y se empareja cada lugar con un hueso del personaje: la matriz del lugar j relativa a
+//     la de la cabeza (Mh^-1 Mj) tiene que ser Bind_h H^-1 B_d Bind_d^-1 para el hueso d (reposo y pose del esqueleto, espacio del modelo);
+//     el personaje se elige por la posicion de la cabeza en el mundo. El resultado va al cbuffer b12 (g_pesExprSlots) y al pozo de la barba;
+//  2) cada cuadro se sube a t115 la diferencia nuevo x base^-1 de cada hueso, llevada al mundo con la matriz del nodo (y la del cuadro
+//     anterior para los vectores de movimiento). El VS la aplica a cada influencia (pes_expr.hlsli PesBoneDeltaApply).
+namespace {
+struct Aff { float A[3][3]; float t[3]; };   // columna: out = A p + t
+static void AffQ(const float* q, const float* t, Aff& o) {
+    const float x = q[0], y = q[1], z = q[2], w = q[3];
+    o.A[0][0] = 1 - 2 * (y * y + z * z); o.A[0][1] = 2 * (x * y - z * w);     o.A[0][2] = 2 * (x * z + y * w);
+    o.A[1][0] = 2 * (x * y + z * w);     o.A[1][1] = 1 - 2 * (x * x + z * z); o.A[1][2] = 2 * (y * z - x * w);
+    o.A[2][0] = 2 * (x * z - y * w);     o.A[2][1] = 2 * (y * z + x * w);     o.A[2][2] = 1 - 2 * (x * x + y * y);
+    for (int k = 0; k < 3; k++) o.t[k] = t[k];
+}
+static void AffIdentity(Aff& o) { memset(&o, 0, sizeof o); o.A[0][0] = o.A[1][1] = o.A[2][2] = 1.0f; }
+static bool AffInv(const Aff& a, Aff& o) {
+    const float (*m)[3] = a.A;
+    const float det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+    if (fabsf(det) < 1e-12f) return false;
+    const float id = 1.0f / det;
+    o.A[0][0] = (m[1][1] * m[2][2] - m[1][2] * m[2][1]) * id; o.A[0][1] = (m[0][2] * m[2][1] - m[0][1] * m[2][2]) * id; o.A[0][2] = (m[0][1] * m[1][2] - m[0][2] * m[1][1]) * id;
+    o.A[1][0] = (m[1][2] * m[2][0] - m[1][0] * m[2][2]) * id; o.A[1][1] = (m[0][0] * m[2][2] - m[0][2] * m[2][0]) * id; o.A[1][2] = (m[0][2] * m[1][0] - m[0][0] * m[1][2]) * id;
+    o.A[2][0] = (m[1][0] * m[2][1] - m[1][1] * m[2][0]) * id; o.A[2][1] = (m[0][1] * m[2][0] - m[0][0] * m[2][1]) * id; o.A[2][2] = (m[0][0] * m[1][1] - m[0][1] * m[1][0]) * id;
+    for (int i = 0; i < 3; i++) o.t[i] = -(o.A[i][0] * a.t[0] + o.A[i][1] * a.t[1] + o.A[i][2] * a.t[2]);
+    return true;
+}
+static void AffMul(const Aff& a, const Aff& b, Aff& o) {   // o = a * b (primero b)
+    Aff r;
+    for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) r.A[i][j] = a.A[i][0] * b.A[0][j] + a.A[i][1] * b.A[1][j] + a.A[i][2] * b.A[2][j]; r.t[i] = a.A[i][0] * b.t[0] + a.A[i][1] * b.t[1] + a.A[i][2] * b.t[2] + a.t[i]; }
+    o = r;
+}
+static void AffPoint(const Aff& a, const float* p, float* o) { for (int i = 0; i < 3; i++) o[i] = a.A[i][0] * p[0] + a.A[i][1] * p[1] + a.A[i][2] * p[2] + a.t[i]; }
+static void AffFromPalette(const float* r, Aff& o) {   // float4x3 del VS (fila k = imagen del eje k, fila 3 = traslacion) -> columna
+    for (int k = 0; k < 3; k++) for (int i = 0; i < 3; i++) o.A[i][k] = r[k * 4 + i];
+    for (int i = 0; i < 3; i++) o.t[i] = r[3 * 4 + i];
+}
+static void AffFromW(const float* W, Aff& o) { for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) o.A[i][j] = W[i * 4 + j]; o.t[i] = W[i * 4 + 3]; } }
+static float AffDist(const Aff& a, const Aff& b) {
+    float e = 0; for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) e += fabsf(a.A[i][j] - b.A[i][j]); e += 20.0f * fabsf(a.t[i] - b.t[i]); }
+    return e;
+}
+static bool PoseHeadWorld(const ExprCharPose& P, float* o) { if (!P.worldOk) return false; Aff W; AffFromW(P.W, W); AffPoint(W, P.headT, o); return true; }
+// el personaje de esta paleta: cabeza de la paleta en el mundo contra la cabeza publicada de cada personaje (a menos de 1 m el mas cerca;
+// sin matriz de nodo, solo si es el unico)
+static int PoseFor(const ExprCharPose* ps, int n, const float* hw) {
+    int best = -1, wild = -1, nWild = 0; float bd = 1.0f;
+    for (int i = 0; i < n; i++) {
+        float h[3]; if (!PoseHeadWorld(ps[i], h)) { wild = i; nWild++; continue; }
+        const float d = sqrtf((h[0] - hw[0]) * (h[0] - hw[0]) + (h[1] - hw[1]) * (h[1] - hw[1]) + (h[2] - hw[2]) * (h[2] - hw[2]));
+        if (d < bd) { bd = d; best = i; }
+    }
+    if (best >= 0) return best;
+    return (n == 1 && nWild == 1) ? wild : -1;
+}
+struct SlotCap { ID3D11Buffer* st = nullptr; int id = 0, head = 0, maxIdx = 31; UINT frame = 0; int tries = 0; };
+std::mutex s_scmx; std::vector<SlotCap> s_scaps; int s_slotLogs = 0; std::atomic<int> s_slotOk{0}, s_slotFail{0};
+}
+static void SlotCapture(ID3D11DeviceContext* c, FaceMesh* m) {   // con s_mx tomado: copia la paleta entera (32 x float4x3) a lectura
+    ID3D11DeviceContext1* c1 = nullptr;
+    if (FAILED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) || !c1) return;
+    ID3D11Buffer* b = nullptr; UINT first = 0, num = 0;
+    c1->VSGetConstantBuffers1(6, 1, &b, &first, &num); c1->Release();
+    if (!b) return;
+    D3D11_BUFFER_DESC d; b->GetDesc(&d);
+    const UINT a = first * 16, len = 32 * 48;
+    if (a + len > d.ByteWidth) { b->Release(); return; }
+    if (ID3D11Buffer* st = Staging(len)) {
+        D3D11_BOX bx = { a, 0, 0, a + len, 1, 1 }; c->CopySubresourceRegion(st, 0, 0, 0, 0, b, 0, &bx);
+        SlotCap L; L.st = st; L.id = m->id; L.head = m->head; L.maxIdx = m->maxIdx < 0 ? 31 : (std::min)(m->maxIdx, 31); L.frame = s_frame;
+        std::lock_guard<std::mutex> lk(s_scmx); if (s_scaps.size() < 64) s_scaps.push_back(L); else st->Release();
+    }
+    b->Release();
+}
+static void SlotPresent(ID3D11DeviceContext* imm) {
+    // sin s_scmx mientras se toma s_mx (SlotCapture toma s_scmx con s_mx tomado: el orden inverso trabaria): se saca la lista, se procesa y
+    // lo que sigue en la GPU vuelve a la lista
+    std::vector<SlotCap> caps; { std::lock_guard<std::mutex> lk(s_scmx); caps.swap(s_scaps); }
+    if (caps.empty()) return;
+    std::vector<SlotCap> again;
+    ExprCharPose ps[32]; int np = -1;
+    for (size_t i = 0; i < caps.size(); i++) {
+        SlotCap& L = caps[i];
+        D3D11_MAPPED_SUBRESOURCE mp; HRESULT hr = imm->Map(L.st, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mp);
+        if (hr == DXGI_ERROR_WAS_STILL_DRAWING && ++L.tries < 60) { again.push_back(L); continue; }
+        if (SUCCEEDED(hr)) {
+            if (np < 0) np = ExprBonesPoses(ps, 32);
+            const float* r = (const float*)mp.pData;
+            uint8_t slot[32]; memset(slot, 255, sizeof slot); int matched = 0, who = -1; float worst = 0;
+            if (np > 0 && L.head >= 0 && L.head <= 31) {
+                Aff Mh; AffFromPalette(r + L.head * 12, Mh); Aff MhI;
+                float hw[3];
+                if (AffInv(Mh, MhI)) {
+                    AffPoint(Mh, ps[0].headRestT, hw);
+                    who = PoseFor(ps, np, hw);
+                }
+                if (who >= 0) {
+                    const ExprCharPose& P = ps[who];
+                    Aff K[kExprBones]; bool kOk[kExprBones] = {};
+                    Aff Bh, BhI, H, HI; AffQ(P.headRestQ, P.headRestT, Bh); AffQ(P.headQ, P.headT, H);
+                    if (AffInv(H, HI) && AffInv(Bh, BhI)) {
+                        for (int d = 0; d < kExprBones; d++) {
+                            const ExprCharPose::Bone& b = P.b[d]; if (!b.has) continue;
+                            Aff B, R, RI; AffQ(b.bq, b.bt, B); AffQ(b.rq, b.rt, R); if (!AffInv(R, RI)) continue;
+                            Aff t1, t2; AffMul(HI, B, t1); AffMul(t1, RI, t2); AffMul(Bh, t2, K[d]); kOk[d] = true;   // Bind_h H^-1 B_d Bind_d^-1
+                        }
+                        for (int j = 0; j <= L.maxIdx; j++) {
+                            if (j == L.head) continue;
+                            Aff Mj, A; AffFromPalette(r + j * 12, Mj); AffMul(MhI, Mj, A);
+                            float best = 1e9f, second = 1e9f; int bd = -1;
+                            for (int d = 0; d < kExprBones; d++) { if (!kOk[d]) continue; const float e = AffDist(A, K[d]); if (e < best) { second = best; best = e; bd = d; } else if (e < second) second = e; }
+                            if (bd >= 0 && best < 0.25f && second > 2.0f * best) { slot[j] = (uint8_t)bd; matched++; worst = (std::max)(worst, best); }
+                        }
+                    }
+                }
+            }
+            imm->Unmap(L.st, 0);
+            FaceMesh* m = nullptr;
+            { std::lock_guard<std::mutex> lm(s_mx); for (auto& kv : s_meshes) if (kv.second->id == L.id) { m = kv.second; break; }
+              if (m && matched >= 3 && !m->slotsOk) {
+                  memcpy(m->slotBone, slot, sizeof slot); m->slotsOk = true;
+                  for (int j = 0; j < 32; j++) { UINT& u = m->cbv[28 + j / 4]; u &= ~(0xFFu << ((j & 3) * 8)); u |= (UINT)slot[j] << ((j & 3) * 8); }
+                  // cbuffers nuevos con la tabla (los viejos no se liberan: otro hilo puede tenerlos en la mano)
+                  if (ID3D11Buffer* nb = MakeCBRaw(m->cbv)) m->cb = nb;
+                  if (m->cbNoShape) { UINT z[kCbU]; memcpy(z, m->cbv, sizeof z); z[27] = 0; if (ID3D11Buffer* nb = MakeCBRaw(z)) m->cbNoShape = nb; }
+                  if (m->cbTeeth) { UINT z[kCbU]; memcpy(z, m->cbv, sizeof z); z[24] = 1; z[25] = 0; z[26] = 0; z[27] = 0; if (ID3D11Buffer* nb = MakeCBRaw(z)) m->cbTeeth = nb; }
+                  m->idBuf = nullptr;   // la barba: se rearma con la tabla en la proxima copia al pozo
+                  s_slotOk++;
+              } else if (m) s_slotFail++;
+            }
+            if (s_slotLogs < 120) {
+                s_slotLogs++;
+                char line[900]; int n = snprintf(line, sizeof line, "paleta: malla %d (cabeza %d, %d lugares): personaje %s, %d lugares emparejados (peor %.3f):", L.id, L.head, L.maxIdx + 1, who >= 0 ? "si" : (np > 0 ? "NO (cabeza lejos)" : "ninguno publicado"), matched, worst);
+                for (int j = 0; j <= L.maxIdx && n < (int)sizeof line - 12; j++) if (slot[j] != 255) n += snprintf(line + n, sizeof line - n, " %d>%d", j, slot[j]);
+                Log("%s", line);
+            }
+        }
+        L.st->Release();
+    }
+    if (!again.empty()) { std::lock_guard<std::mutex> lk(s_scmx); for (const SlotCap& L : again) if (s_scaps.size() < 64) s_scaps.push_back(L); else L.st->Release(); }
+}
+// tabla para el VS (t115): [0] = (personajes, 0, 0, 0), [1] = (reposo de sk_head, 0); por personaje 1 + 33 x 6 float4:
+// (cabeza en el mundo, 1 = valida) y por hueso 3 float4 de la diferencia de este cuadro + 3 del anterior (fila k = imagen del eje k, w = traslacion)
+namespace {
+constexpr int kBdStride = 1 + kExprBones * 6, kBdChars = 32, kBdF4 = 2 + kBdChars * kBdStride;
+ID3D11Buffer* s_bdBuf = nullptr; ID3D11ShaderResourceView* s_bdSrv = nullptr; bool s_bdAny = false;
+struct PrevD { unsigned frame = 0; float D[kExprBones][12]; bool has[kExprBones]; };
+std::unordered_map<const void*, PrevD> s_prevD;
+std::atomic<int> s_bdUploads{0}, s_bdCharsN{0}, s_bdMoved{0};
+static void PackAff(const Aff& a, float* o) {   // 3 float4: fila k = columna k de A (imagen del eje k) + traslacion en w
+    for (int k = 0; k < 3; k++) { o[k * 4 + 0] = a.A[0][k]; o[k * 4 + 1] = a.A[1][k]; o[k * 4 + 2] = a.A[2][k]; o[k * 4 + 3] = a.t[k]; }
+}
+}
+static void DeltaUpload(ID3D11DeviceContext* imm) {
+    if (!g_dev.dev || !g_cfg.optExprPalette) return;
+    if (!s_bdBuf) {
+        D3D11_BUFFER_DESC d{}; d.ByteWidth = kBdF4 * 16; d.Usage = D3D11_USAGE_DYNAMIC; d.BindFlags = D3D11_BIND_SHADER_RESOURCE; d.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        if (FAILED(g_dev.dev->CreateBuffer(&d, nullptr, &s_bdBuf))) { s_bdBuf = nullptr; return; }
+        D3D11_SHADER_RESOURCE_VIEW_DESC v{}; v.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; v.ViewDimension = D3D11_SRV_DIMENSION_BUFFER; v.Buffer.NumElements = kBdF4;
+        if (FAILED(g_dev.dev->CreateShaderResourceView(s_bdBuf, &v, &s_bdSrv))) { s_bdSrv = nullptr; s_bdBuf->Release(); s_bdBuf = nullptr; return; }
+    }
+    ExprCharPose ps[kBdChars]; const int np = ExprBonesPoses(ps, kBdChars);
+    static std::vector<float> f; f.assign((size_t)kBdF4 * 4, 0.0f);
+    f[0] = (float)np;
+    if (np > 0) for (int k = 0; k < 3; k++) f[4 + k] = ps[0].headRestT[k];
+    int moved = 0;
+    for (int i = 0; i < np; i++) {
+        const ExprCharPose& P = ps[i]; float* base = f.data() + (size_t)(2 + i * kBdStride) * 4;
+        float hw[3]; const bool hv = PoseHeadWorld(P, hw);
+        base[0] = hv ? hw[0] : 0; base[1] = hv ? hw[1] : 0; base[2] = hv ? hw[2] : 0; base[3] = hv ? 1.0f : 0.0f;
+        Aff W, WI; bool wOk = false; if (P.worldOk) { AffFromW(P.W, W); wOk = AffInv(W, WI); }
+        PrevD& pv = s_prevD[P.skel]; const bool pvOk = pv.frame + 1 == P.frame || pv.frame == P.frame;   // el cuadro anterior de este personaje (si no, la de ahora)
+        PrevD cur; cur.frame = P.frame;
+        for (int d = 0; d < kExprBones; d++) {
+            float* o = base + 4 + d * 24; Aff Dw; AffIdentity(Dw); cur.has[d] = false;
+            const ExprCharPose::Bone& b = P.b[d];
+            if (b.has && b.moved) {
+                Aff N, B, BI, Dm; AffQ(b.nq, b.nt, N); AffQ(b.bq, b.bt, B);
+                if (AffInv(B, BI)) { AffMul(N, BI, Dm); if (wOk) { Aff t1; AffMul(W, Dm, t1); AffMul(t1, WI, Dw); } else Dw = Dm; cur.has[d] = true; moved++; }
+            }
+            PackAff(Dw, o);
+            if (pvOk && pv.has[d]) memcpy(o + 12, pv.D[d], 12 * sizeof(float)); else memcpy(o + 12, o, 12 * sizeof(float));
+            memcpy(cur.D[d], o, 12 * sizeof(float));
+        }
+        pv = cur;
+    }
+    if (s_prevD.size() > 256) s_prevD.clear();
+    D3D11_MAPPED_SUBRESOURCE mp;
+    if (SUCCEEDED(imm->Map(s_bdBuf, 0, D3D11_MAP_WRITE_DISCARD, 0, &mp))) { memcpy(mp.pData, f.data(), f.size() * sizeof(float)); imm->Unmap(s_bdBuf, 0); s_bdAny = true; s_bdUploads++; s_bdCharsN = np; s_bdMoved = moved; }
+    static UINT lastLog = 0;
+    if (s_frame - lastLog >= 1800 && s_slotLogs < 400) { lastLog = s_frame; Log("paleta: %d personajes publicados, %d huesos con gesto este cuadro, mallas emparejadas %d / sin emparejar %d", np, moved, s_slotOk.load(), s_slotFail.load()); }
+}
+ID3D11ShaderResourceView* ExprBoneDeltaSrv() { return (g_cfg.optExprPalette && s_bdAny) ? s_bdSrv : nullptr; }
+
 static void HeadPresent(ID3D11DeviceContext* imm) {
     s_hcapThisFrame = false;
     std::lock_guard<std::mutex> lk(s_hmx);
@@ -1245,6 +1451,8 @@ void ExprPresent() {
     HeadPresent(imm);
     LidPresent(imm);   // (02/11 h)
     ExprBonesPresent();   // (01/11) boca por huesos: estado para el shader y resumen
+    SlotPresent(imm);   // (08/11) gestos en la paleta: emparejar lugares de la paleta con huesos
+    DeltaUpload(imm);   // (08/11) y subir las diferencias de este cuadro al VS (t115)
     {   // con el candado tomado: los dibujos (otros hilos) leen state / cb y pueden vaciar la tabla. Los Map son DO_NOT_WAIT.
         std::lock_guard<std::mutex> lk(s_mx);
         s_frame++;

@@ -1,10 +1,14 @@
-# Normal map de arrugas horneado en Blender (OpenGL, Y+) -> DDS R8G8_UNORM con mips para el PS de la cara (DirectX: Y invertida).
-#   python3 wrinkle_dds.py entrada.png salida.dds [tamano=1024] [--sin-invertir] [--grande sonrisa_grande.png]
+# Normal map de arrugas horneado en Blender (OpenGL, Y+) -> DDS R8G8_UNORM con mips para el PS de la cara.
+#   python3 wrinkle_dds.py entrada.png salida.dds [tamano=1024] [--invertir] [--grande sonrisa_grande.png]
+# (08/11, Agustin: "la luz en las arrugas parece al reves") el mapa de arrugas del juego (y el de las caras) es OpenGL: Y+ hacia arriba
+# (medido en pes_wrinkle_normal_2048: en las arrugas diagonales la divergencia en y va al reves que en x, correlacion -0.71). Antes el
+# script invertia Y por defecto ("DirectX") y las arrugas esculpidas de Messi salian con la luz al reves. Ahora Y queda TAL CUAL;
+# --invertir solo si el horneado vino en DirectX. grupo_7511_sonrisa.dds se corrigio invirtiendo G y A (CRC 6B5BBB33).
 # (04/11 c) con --grande sale R8G8B8A8_UNORM: RG = la sonrisa, BA = la sonrisa grande (el PS pasa de una a otra de 1 a 1.5 del slider)
 import sys,struct,numpy as np
 from PIL import Image
 src,dst=sys.argv[1],sys.argv[2];size=int(sys.argv[3]) if len(sys.argv)>3 and sys.argv[3].isdigit() else 1024
-flip='--sin-invertir' not in sys.argv
+flip='--invertir' in sys.argv
 def load(fn):
     im=Image.open(fn).convert('RGB').resize((size,size),Image.LANCZOS)
     a=np.asarray(im).astype(np.float32)/255.0*2-1

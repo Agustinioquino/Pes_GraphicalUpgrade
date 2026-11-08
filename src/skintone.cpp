@@ -293,6 +293,21 @@ bool CharNodeToWorld(void* node, const float p[3], float out[3], bool point) {
     }
     return true;
 }
+// (08/11) la matriz entera del nodo (modelo -> mundo), 3x4 fila mayor; si la parte de giro no tiene pinta de giro, queda la identidad
+// con la traslacion (como CharNodeToWorld)
+bool CharNodeMatrix(void* node, float out[12]) {
+    float m[16]; if (!NodeMat(node, m)) return false;
+    const int L = s_nodeLayout.load();
+    auto at = [&](int r, int c) { return L == 0 ? m[4 * r + c] : m[4 * c + r]; };
+    bool rotOk = true;
+    for (int r = 0; r < 3; r++) { float l = sqrtf(at(r, 0) * at(r, 0) + at(r, 1) * at(r, 1) + at(r, 2) * at(r, 2)); if (!(l > 0.5f && l < 2.0f)) rotOk = false; }
+    for (int c = 0; c < 3; c++) {
+        for (int r = 0; r < 3; r++) out[c * 4 + r] = rotOk ? at(r, c) : (r == c ? 1.0f : 0.0f);
+        const float t = at(3, c); if (!(t == t) || fabsf(t) > 2000.0f) return false;
+        out[c * 4 + 3] = t;
+    }
+    return true;
+}
 static void ToneCheckPresent(const CharInfo* ci, const bool* alive);   // abajo
 static double s_tabLog = 0;
 // (24/10 e) medicion "cuerpo como la cara": ring.cpp acumula en el menu Fisico el color de la base del cuello del cuerpo

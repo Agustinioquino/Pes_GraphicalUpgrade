@@ -1208,6 +1208,7 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
             ID3D11ShaderResourceView* shp = nullptr; ID3D11ShaderResourceView* shw = nullptr; ID3D11ShaderResourceView* seam = nullptr;
             if (ID3D11Buffer* b = ExprBufferForDraw(c, t_drawKind == 1 ? t_drawVerts : 0, t_drawStart, t_drawBase, &hc, &hd, &shp, &shw, &seam)) { Remember(c, d, false, false, a.slot); c->VSSetConstantBuffers(a.slot, 1, &b); }
             if (shp) { Remember(c, d, false, true, 118); c->VSSetShaderResources(118, 1, &shp); }   // (04/11) gestos esculpidos de esta malla
+            if (ID3D11ShaderResourceView* bd = ExprBoneDeltaSrv()) { Remember(c, d, false, true, 115); c->VSSetShaderResources(115, 1, &bd); }   // (08/11) gestos en la paleta (t115)
             if (shw) { Remember(c, d, true, true, 31); c->PSSetShaderResources(31, 1, &shw); }      // (04/11) arrugas esculpidas de la sonrisa (PS de la cara)
             // (04/11 b) teselacion de la cara en primeros planos (facetess.cpp): solo piel de la cara (nunca la boca, los ojos ni las
             // pestanas: expr.cpp no les da pesos de borde), con DrawIndexed y el PS de la cara con reemplazo (los parametros t120 del dibujo)
@@ -1227,6 +1228,7 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
             if (BeardForDraw(c, t_drawKind == 1 ? t_drawVerts : 0, t_drawStart, t_drawBase, &b, &pl, &bd) && b) {
                 Remember(c, d, false, false, a.slot); c->VSSetConstantBuffers(a.slot, 1, &b);
                 if (pl && bd) { Remember(c, d, false, true, 116); c->VSSetShaderResources(116, 1, &pl); Remember(c, d, false, true, 117); c->VSSetShaderResources(117, 1, &bd); }
+                if (ID3D11ShaderResourceView* dv = ExprBoneDeltaSrv()) { Remember(c, d, false, true, 115); c->VSSetShaderResources(115, 1, &dv); }   // (08/11) gestos en la paleta (t115)
             }
             break; }
         case RuleAction::SetParam: break;   // ya resuelto con la textura de parametros alternativa
