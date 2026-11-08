@@ -334,6 +334,7 @@ struct Skel {
     float nT[kND][3] = {}, nQ[kND][4] = {}; int nN[kND] = {};
     float eyeP = 0.0f; bool eyePHave = false;   // (02/11 o) mirada vertical del JUEGO (hueso del ojo), suavizada
     float eyePT = 0.0f, lidSm = 0.0f; bool lidSmHave = false;   // (04/11) objetivo con histeresis de eyeP y sonrisa medida suavizada para los parpados
+    float eyeY = 0.0f, eyeYT = 0.0f, lidX = 0.0f; bool eyeYHave = false, lidXHave = false;   // (08/11) mirada de costado del juego (suavizada, con histeresis) y giro de costado de los parpados
     float lidU = 0.0f, lidL = 0.0f; bool lidHave = false;        // (04/11) angulos de los parpados del cuadro anterior (limite de velocidad)
     float seed = 0.37f; bool seedHave = false; float seedCand = -1.0f; int seedCandN = 0;   // (02/11 c) semilla de la mirada, la misma que el VS del globo (PesExprSeed)
     // (02/11 e) sk_head del esqueleto del CUERPO (175 huesos) para la camara: el sk_head del esqueleto de la cara tiene la
@@ -523,12 +524,18 @@ static void Gaze(float t, float seed, float amp, float* g) {
     g[1] += sinf(tt * 0.51f + seed * 2.0f) * 0.0015f + sinf(tt * 1.13f + seed * 0.7f) * 0.0008f;
     g[0] *= amp; g[1] *= amp;
 }
+// (08/11, Agustin: "perfecciona los parpados") parpadeo irregular como el de una persona: ranuras de 4 s, en ~30 % no parpadea (los
+// intervalos quedan de 0.5 a ~11 s, ~5.5 s de promedio, como antes) y en ~15 % parpadea dos veces seguidas (0.38 s); cada parpadeo
+// cierra un poco distinto (85..100 %). Cierra en 0.08 s, queda 0.04, abre en 0.18. MISMA cuenta en pes_expr.hlsli (PesBlinkCurve)
+static float BlinkShape(float x) { if (x < 0.0f || x > 0.30f) return 0.0f; return x < 0.08f ? SStep(0.0f, 0.08f, x) : (x < 0.12f ? 1.0f : 1.0f - SStep(0.12f, 0.30f, x)); }
 static float BlinkCurve(float t, float seed) {
-    const float per = 5.5f, tt = t + seed * 37.3f, n = floorf(tt / per);
+    const float per = 4.0f, tt = t + seed * 37.3f, n = floorf(tt / per);
     const float h = Frac(sinf((n + seed * 13.1f) * 12.9898f) * 43758.5453f);
-    const float x = tt - (n * per + h * (per - 0.4f));
-    if (x < 0.0f || x > 0.30f) return 0.0f;
-    return x < 0.08f ? SStep(0.0f, 0.08f, x) : (x < 0.12f ? 1.0f : 1.0f - SStep(0.12f, 0.30f, x));
+    const float h2 = Frac(sinf((n + seed * 7.7f) * 78.233f) * 43758.5453f);
+    if (h2 < 0.30f) return 0.0f;
+    const float x = tt - (n * per + h * (per - 0.9f));
+    float b = BlinkShape(x); if (h2 > 0.85f) b = (std::max)(b, BlinkShape(x - 0.38f));
+    return b * (0.85f + 0.15f * Frac(h * 7.31f));
 }
 // transformacion actual del hueso SIN el giro del mod: si el cuaternion sigue siendo el que escribimos el cuadro anterior (el
 // juego no lo reescribio), se le saca ese giro
@@ -746,13 +753,13 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
         // (02/11 o, Agustin: "los ojos al moverse no mueven del todo realista el contorno de los parpados") los parpados seguian
         // solo la mirada del mod (PesGaze), no la del JUEGO (el hueso del ojo que mira la pelota / al companero): se suma el giro
         // vertical del globo del juego respecto de la cabeza (frente del ojo en los ejes de la cabeza; + = mira arriba)
-        float gp = 0.0f; int ne = 0;
+        float gp = 0.0f, gyw = 0.0f; int ne = 0;
         for (int e = 0; e < 2; e++) {
             const int d = D_EYE_L + e; if (!S.cur[d]) continue;
             Xf ex; if (!ReadXf(S.cur[d], ex)) continue;
             float rq[4], c[4], rel[4]; QMul(hr, S.rest[d].q, rq); QConj(rq, c); QMul(ex.q, c, rel);   // giro del ojo sobre el reposo llevado por la cabeza
             static const float Z[3] = { 0.0f, 0.0f, 1.0f }; float fz[3], fw[3], fl[3]; QRot(hr, Z, fz); QRot(rel, fz, fw); QRot(hrInv, fw, fl);
-            if (fl[2] > 0.2f) { gp += atan2f(fl[1], fl[2]); ne++; }
+            if (fl[2] > 0.2f) { gp += atan2f(fl[1], fl[2]); gyw += atan2f(fl[0], fl[2]); ne++; }
         }
         if (ne) {
             gp = std::clamp(gp / (float)ne, -0.45f, 0.45f);
@@ -765,6 +772,13 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
             else {
                 if (fabsf(gp - S.eyePT) > 0.021f) S.eyePT = gp - copysignf(0.021f, gp - S.eyePT);
                 S.eyeP += (S.eyePT - S.eyeP) * ease(0.12f);
+            }
+            // (08/11) lo mismo para la mirada de COSTADO (giro alrededor del eje y de la cabeza; + = hacia su izquierda)
+            const float yw = std::clamp(gyw / (float)ne, -0.6f, 0.6f);
+            if (!S.eyeYHave) { S.eyeYT = S.eyeY = yw; S.eyeYHave = true; }
+            else {
+                if (fabsf(yw - S.eyeYT) > 0.021f) S.eyeYT = yw - copysignf(0.021f, yw - S.eyeYT);
+                S.eyeY += (S.eyeYT - S.eyeY) * ease(0.12f);
             }
         }
         // (04/11, video de Agustin: "los parpados no acompanan") la mirada del mod (Gaze, la misma cuenta que PesGaze del shader)
@@ -806,7 +820,13 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
             up = lim(S.lidU, up); lo = lim(S.lidL, lo);
         }
         S.lidU = up; S.lidL = lo; S.lidHave = true;
-        float qu[4], ql[4]; AxisAngle(ax, up, qu); AxisAngle(ax, lo, ql);
+        // (08/11, Agustin: "perfecciona los parpados") en una cara real el contorno de los parpados acompana tambien la mirada de COSTADO:
+        // el pliegue se corre con la cornea (el de arriba ~12 %, el de abajo ~8 % del giro del ojo). Antes solo seguian la vertical
+        const float gx = g[0] + (S.eyeYHave ? S.eyeY : 0.0f);
+        S.lidX = S.lidXHave ? S.lidX + (gx - S.lidX) * ease(0.25f) : gx; S.lidXHave = true;
+        float qu[4], ql[4];
+        { float a1[4], a2[4]; AxisAngle(ax, up, a1); AxisAngle(ay, 0.12f * S.lidX, a2); QMul(a2, a1, qu); }
+        { float a1[4], a2[4]; AxisAngle(ax, lo, a1); AxisAngle(ay, 0.08f * S.lidX, a2); QMul(a2, a1, ql); }
         const int ds[4] = { D_LID_TL, D_LID_TR, D_LID_BL, D_LID_BR };
         for (int i = 0; i < 4; i++) {
             if (!S.cur[ds[i]]) continue;

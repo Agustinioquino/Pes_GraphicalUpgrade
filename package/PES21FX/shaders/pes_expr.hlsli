@@ -327,15 +327,25 @@ float3 PesGazeEye(float3 rest, float3 center, float t, float seed)
 // reposo alrededor del centro del ojo (x +-0.028, y 1.6968, z 0.138; eje x): el de arriba baja, el de abajo sube un poco; los
 // pesos del rig hacen el fundido (como el parpadeo del juego). Si el juego ya esta cerrando ese parpado, el del mod se aparta.
 // 342.w = cierre (0 = sin parpadeo del mod, 1 = cierra entero).
+// (08/11) parpadeo irregular, MISMA cuenta que BlinkCurve de exprbones.cpp: ranuras de 4 s, ~30 % sin parpadeo, ~15 % doble (0.38 s),
+// cierre 85..100 %
+float PesBlinkShape(float x)
+{
+  if (x < 0.0 || x > 0.30) return 0.0;
+  return x < 0.08 ? smoothstep(0.0, 0.08, x) : (x < 0.12 ? 1.0 : 1.0 - smoothstep(0.12, 0.30, x));
+}
 float PesBlinkCurve(float t, float seed)
 {
-  const float per = 5.5;   // (01/11 d) antes 4: un parpadeo cada 5.5 s en promedio
+  const float per = 4.0;
   float tt = t + seed * 37.3;
   float n = floor(tt / per);
   float h = frac(sin((n + seed * 13.1) * 12.9898) * 43758.5453);
-  float x = tt - (n * per + h * (per - 0.4));
-  if (x < 0.0 || x > 0.30) return 0.0;
-  return x < 0.08 ? smoothstep(0.0, 0.08, x) : (x < 0.12 ? 1.0 : 1.0 - smoothstep(0.12, 0.30, x));
+  float h2 = frac(sin((n + seed * 7.7) * 78.233) * 43758.5453);
+  if (h2 < 0.30) return 0.0;
+  float x = tt - (n * per + h * (per - 0.9));
+  float b = PesBlinkShape(x);
+  if (h2 > 0.85) b = max(b, PesBlinkShape(x - 0.38));
+  return b * (0.85 + 0.15 * frac(h * 7.31));
 }
 float3 PesRotX(float3 q, float c, float s) { return float3(q.x, q.y * c - q.z * s, q.y * s + q.z * c); }
 
