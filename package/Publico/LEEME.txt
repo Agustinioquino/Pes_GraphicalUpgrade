@@ -1,0 +1,6 @@
+Publico mejorado (solo texturas, sin DLL). Copiar la carpeta Asset a una raiz de livecpk de Sider (cpk.root). Generado con tools/crowd/mejorar_publico.py.
+Atlas de caras 2048x4096 (x2, nitidez suave), normal 2048, srm 1024, paletas de ropa con mas color. Si falla o no gusta: borrar la carpeta Asset de ese livecpk.
+Modelos: Asset/model/bg/common/audi/#Win/audi_model.fpk = los 14 au*.fmdl con la LOD cercana subdividida (x4 triangulos, suavizado 0.6),
+mismo esqueleto/UV/materiales; LOD media y lejana sin cambios. Generado con tools/crowd/subdividir_publico.py. Si baja el FPS en partidos con estadio lleno: borrar solo ese .fpk.
+(08/11 b) audi_model.fpk lleva ademas los pesos de 3 huesos de la cara (mandibula, cejas) en el COLOR del vertice (tools/crowd/pesos_cara.py):
+los mueve la DLL (publico.cpp, fila 394) con los VS del publico del mod. Sin la DLL los modelos se ven igual que sin pesos (quietos).
