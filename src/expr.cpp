@@ -887,9 +887,11 @@ void Step(ID3D11DeviceContext* imm, FaceMesh* m) {
         }
         // (01/11 l, Agustin: "algunas caras se cortan en la nariz y cerca de la barbilla, en caras convertidas") los efectos que
         // mueven la piel por zona (abrir la boca, labio de arriba, nariz, musculos) solo valen en una malla que es la cara ENTERA
-        // (alto >= 15 cm, ancho >= 12 cm, >= 1500 vertices): en una cara partida en piezas (nariz o menton aparte) cada pieza
+        // (alto >= 15 cm, ancho >= 12 cm, >= 500 vertices): en una cara partida en piezas (nariz o menton aparte) cada pieza
         // tendria otros huesos marcados y se abre un corte entre ellas. La boca 3D (lengua) y el parpadeo no entran aqui.
-        const bool whole = !mouth && !eye && (yhi - ylo) >= 0.15f && (xhi - xlo) >= 0.12f && m->nv >= 1500;
+        // (08/11 f, log de fc4255a: la cara HD de Messi es una malla de 1379 vertices, alto 1.385..1.808 m, y salia como "pieza": con
+        // "Por shader" la boca no abria) el tope de vertices baja de 1500 a 500: las piezas de nariz / menton ya quedan fuera por el alto
+        const bool whole = !mouth && !eye && (yhi - ylo) >= 0.15f && (xhi - xlo) >= 0.12f && m->nv >= 500;
         if (!whole) { jawFull = 0; jawHalf = 0; lipTop = 99; lipUp = 0; for (int i = 0; i < 4; i++) mus[i] = -1; }
         m->maxIdx = mx; m->head = hd;
         {   // (1/11) centro de la cara: promedio de los vertices que pesan >= 0.9 en sk_head (si no hay, >= 0.5; si no, el 25 % de arriba)
