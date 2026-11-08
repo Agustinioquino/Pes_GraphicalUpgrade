@@ -384,13 +384,13 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     // Las capas de abajo quedan tapadas (mas oscuras) y las de arriba toman la luz: volumen y profundidad reales, con sombra de
     // contacto mas larga para las de arriba (PES_SHADOW usa la altura real)
     float lay = frac(r0 * 5.17 + r1 * 3.71 + r3 * 1.93);
-    float stackH = lay * lay * 0.0022 * saturate(ph * 1.6) * max(mLift, 0.3);   // (07/11 b) 1.3 -> 2.2 mm: mas profundidad entre capas
+    float stackH = lay * lay * 0.0012 * saturate(ph * 1.6) * max(mLift, 0.3);   // (08/11 w, Agustin: "se separan de la cara") 2.2 -> 1.2 mm   // (07/11 b) 1.3 -> 2.2 mm: mas profundidad entre capas
     { float occ = lerp(0.96, 0.8, saturate(ph * 1.2)) * lerp(lerp(0.86, 1.02, lay), 1.0, 1.0 - saturate(ph * 1.6));   // abajo tapado, arriba a la luz   // (05/11, Agustin: "se ven muy oscuras con la luz de frente") antes 0.88..0.62
       float layer = lerp(0.88, 1.08, frac(r3 * 7.31 + rk * 3.17));
       cR *= occ * layer; cT *= layer; }
     // (08/11 v, Agustin: "el color de las cejas nunca tiene que ser el color de la piel") tope final, despues de los colores elegidos,
     // las puntas y las capas: ni la raiz ni la punta pasan el 60 % del brillo de la piel de la zona (mip 5 de la cara)
-    { float skL = PesLum(uv, 5.0), capL = 0.6 * max(skL, 0.02);
+    { float skL = PesLum(uv, 5.0), capL = 0.7 * max(skL, 0.02);   // (08/11 w) 0.6 -> 0.7
       float lR = dot(cR, float3(0.2126, 0.7152, 0.0722)), lT = dot(cT, float3(0.2126, 0.7152, 0.0722));
       if (lR > capL) cR *= capL / max(lR, 1e-4);
       if (lT > capL) cT *= capL / max(lT, 1e-4); }

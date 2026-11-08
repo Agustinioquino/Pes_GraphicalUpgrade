@@ -11,6 +11,7 @@
 #include <mutex>
 #include <algorithm>
 #include <cstring>
+#include <cmath>
 #include <string>
 #include <DDSTextureLoader.h>
 #include <ScreenGrab.h>
@@ -638,7 +639,7 @@ bool BrowShadowOn(ID3D11DeviceContext* c) {
     if (s.shadowFwd) {   // (08/11 v) vista principal: solo a la salida de flujo (sin PS: el G-buffer no se toca); si no, como antes
         D3D11_VIEWPORT vp{}; UINT n = 1; c->RSGetViewports(&n, &vp);
         unsigned cw = s_compW.load(), ch = s_compH.load();
-        if (n && cw && (unsigned)(vp.Width + 0.5f) == cw && (unsigned)(vp.Height + 0.5f) == ch) {
+        if (n && cw && fabsf(vp.Width - (float)cw) <= 0.03f * cw && fabsf(vp.Height - (float)ch) <= 0.03f * ch) {
             int f = s_hfFrame.load();
             UINT off = (s_hfSoFrame2.exchange(f) != f) ? 0u : (UINT)-1;
             c->SOSetTargets(1, &s_hfSO2, &off);
@@ -679,7 +680,10 @@ bool BrowSOOn(ID3D11DeviceContext* c) {
     if (!HairFwdWanted() || !s_hfSO || !s.strandGS || (s.strandGS != s_browGSso[0] && s.strandGS != s_browGSso[1])) return false;
     D3D11_VIEWPORT vp{}; UINT n = 1; c->RSGetViewports(&n, &vp);
     unsigned cw = s_compW.load(), ch = s_compH.load();
-    if (!n || !cw || (unsigned)(vp.Width + 0.5f) != cw || (unsigned)(vp.Height + 0.5f) != ch) return false;
+    // (08/11 w) tolerancia del 3 % (el editor puede dibujar la cara con un viewport apenas distinto al de la composicion)
+    bool okVp = n && cw && fabsf(vp.Width - (float)cw) <= 0.03f * cw && fabsf(vp.Height - (float)ch) <= 0.03f * ch;
+    { static std::atomic<int> lg{0}; if (lg.fetch_add(1) < 3) Log("cejas: pasada propia: dibujo de hebras con viewport %.0fx%.0f, composicion %ux%u -> %s", n ? vp.Width : 0.f, n ? vp.Height : 0.f, cw, ch, okVp ? "a la salida de flujo" : "NO (otra vista)"); }
+    if (!okVp) return false;
     int f = s_hfFrame.load();
     UINT off = (s_hfSoFrame.exchange(f) != f) ? 0u : (UINT)-1;   // la primera cara del cuadro vacia el buffer, las demas agregan
     c->SOSetTargets(1, &s_hfSO, &off);
@@ -695,6 +699,7 @@ void HairFwdAfterComposition(ID3D11DeviceContext* c) {
     if (rt[0]) { ID3D11Resource* r = nullptr; rt[0]->GetResource(&r);
         if (r) { ID3D11Texture2D* t = nullptr; if (SUCCEEDED(r->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t)) && t) { D3D11_TEXTURE2D_DESC d; t->GetDesc(&d); W = d.Width; H = d.Height; t->Release(); } r->Release(); } }
     if (W > 64 && H > 64) { s_compW.store(W); s_compH.store(H); }
+    { static std::atomic<int> lg{0}; if (lg.fetch_add(1) < 2) Log("cejas: pasada propia: composicion %ux%u, w382 %.2f, hebras en el flujo %d, VS %d PS %d IL %d", W, H, g_cfg.live[382][3], s_hfStreamed.load(), s_hfVS ? 1 : 0, s_hfPS ? 1 : 0, s_hfIL ? 1 : 0); }
     bool sh2 = s_hfStreamed2.exchange(0) != 0;
     bool st1 = s_hfStreamed.exchange(0) != 0;
     bool go = W > 64 && HairFwdWanted() && (st1 || sh2) && s_hfVS && s_hfPS && s_hfIL && s_hfSO && s_hfCB && s_hfBlend && s_hfDSS && s_hfSamp && s_browRS;

@@ -39,7 +39,9 @@ void BrowMap(float2 uv, float2 texel, out float4 o3) {
     aMax = max(aMax, abs(tDiffuse.SampleLevel(sLin, uv + o, 1.0).a - aSk));
   }
   float useA = smoothstep(0.08, 0.2, aMax);   // la cara trae mascara de pelo en el alfa
-  mask = lerp(mask, smoothstep(0.06, 0.35, aD) * zone, useA);
+  // (08/11 w, capturas de Agustin 15:20: pelos fuera de la ceja) el alfa de face_bsm_alp NO es una mascara de pelo fiable (en Messi
+  // marcaba mucho mas que la ceja): el contorno vuelve a salir solo de la oscuridad de la pintura
+  useA = 0.0;
   // color (04/11 e, Agustin: "el color es lo que falla", salian casi negras): antes pesaba al CUADRADO lo oscuro -> ganaba solo el
   // texel mas negro. Ahora: promedio de los texeles de pelo (peso suave, no al cuadrado) mezclado con el promedio de la zona, y
   // se le devuelve el tono (saturacion x1.35) y algo de luz: el pelo de la ceja es castano / rubio translucido, no negro
@@ -59,6 +61,15 @@ void BrowMap(float2 uv, float2 texel, out float4 o3) {
   }
   // sin pelo pintado alrededor: castano oscuro sacado de la piel (antes el texel x0.8 = color de piel)
   float3 hc = wsum > 1e-3 ? acc / wsum : skC * float3(0.42, 0.33, 0.27);
+  // (08/11 w, Agustin: cejas casi negras) la separacion pelo / piel pesada al cuadrado se quedaba con el trazo mas negro: mitad
+  // separacion, mitad el promedio de los texeles de pelo de antes, y nunca por debajo del 35 % del brillo de la piel
+  { float3 accP = 0; float wP = 0;
+    [unroll] for (int y2 = -2; y2 <= 2; y2++) [unroll] for (int x2 = -2; x2 <= 2; x2++) {
+      float3 c = tDiffuse.SampleLevel(sLin, uv + float2(x2, y2) * texel * 2.0, 0.0).rgb;
+      float w = smoothstep(0.85, 0.55, LumF(c) / sk); accP += c * w; wP += w; }
+    if (wP > 1e-3) hc = lerp(hc, accP / wP, 0.5);
+    float hlF = LumF(hc), flo = 0.35 * sk;
+    if (hlF < flo) hc = hc * (flo / max(hlF, 1e-3)) * 0.7 + skC * float3(0.36, 0.27, 0.2) * 0.3 * (flo / max(LumF(skC * float3(0.36, 0.27, 0.2)), 1e-3)); }
   float hl = LumF(hc);
   hc = max(hl + (hc - hl) * 0.95, 0.0) * 1.1;   // (08/11 v) sin realce de saturacion: el tono real del pelo ya no trae la piel
   // (08/11 v, Agustin: "el color de las cejas nunca tiene que ser el color de la piel") tope: la ceja queda al menos 45 % mas oscura
