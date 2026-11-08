@@ -467,7 +467,7 @@ struct ExprCharPose {
     struct Bone { bool has = false, moved = false; float bq[4] = {}, bt[3] = {}, nq[4] = {}, nt[3] = {}, rq[4] = {}, rt[3] = {}; } b[kExprBones];   // base (juego) / nuevo (mod) / reposo
 };
 int ExprBonesPoses(ExprCharPose* out, int max);   // copia de los personajes publicados en los ultimos cuadros (expr.cpp, Present)
-bool ExprZoneScale(int d, const float* bq, const float* bt, float* nq, float* nt);   // (08/11 e) ganancia por zona y tope por hueso (filas 421 / 422), expr.cpp
+int ExprZoneScale(int d, const float* bq, const float* bt, float* nq, float* nt);   // (08/11 e) ganancia por zona y tope por hueso (filas 421 / 422), expr.cpp
 ID3D11ShaderResourceView* ExprBoneDeltaSrv();   // (08/11) t115: tabla de diferencias por personaje para el VS (nullptr = nada)
    // hooks.cpp: elementos anotados al crearse el layout
 void MuscleHookPresent();                         // (23/10) musculatura (musculo.cpp): huesos de musculo del juego x 164..171 (v5: 32 clases)
