@@ -889,6 +889,9 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         cull[32] = g_cfg.live[333][2] > 0.05f ? std::clamp(g_cfg.live[333][2], 0.3f, 1.0f) : 0.6f;
         cull[33] = g_cfg.live[333][3] > 0.05f ? std::clamp(g_cfg.live[333][3], 0.5f, 6.0f) : 1.2f;
         cull[34] = cull[33] * 2.5f;
+        // (08/11) gPad[3].w: z58 alcance del pasto del mod en metros (Agustin: el pasto de cerca del mod sin el de toda la cancha, que
+        // cuesta). 100 o mas (el ini trae 120) o 0 = toda la cancha, como antes
+        { const float zr = g_cfg.live[58][2]; cull[35] = (zr > 1.0f && zr < 100.0f) ? std::clamp(zr, 5.0f, 100.0f) : 0.0f; }
         // (26/10 d) reclamo del cuadro: la primera emision que la GPU ejecuta despues del Present se queda con el cuadro (Count[18] = 1);
         // las demas pasan por las celdas sin anotar nada y dibujan 0 instancias
         GpuTimer* tm = (p58[3] > 0.5f && TimersReady()) ? TimerClaim(s_frame.load()) : nullptr;   // (1/11) medidor de GPU (solo con el registro prendido)

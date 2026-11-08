@@ -153,12 +153,18 @@ float PesTraceShadow(float3 Pv, float3 L, float rawNL, float zC, float zSgn, flo
 float3 PesVolumetric(float2 uv, float2 pxy, float3 Pv, float zA, bool geo, float zSgn, float3 Lw, bool spot, float3 Pl, float3 col, float strength, float dens) {
   if (strength <= 0.001) return 0.0;
   float3 rayD = normalize(Pv);
-  float3 toL = spot ? normalize(Pl - Pv) : Lw;
-  float g = 0.55, cosT = dot(rayD, toL);
-  float phase = (1.0 - g * g) / (12.566 * pow(max(1.0 + g * g - 2.0 * g * cosT, 1e-3), 1.5));
-  float len = geo ? min(length(Pv), 12.0) : 4.0;
+  float3 dvL = Pl - Pv; float dL2 = dot(dvL, dvL);
+  float3 toL = (spot && dL2 > 1e-6) ? dvL * rsqrt(dL2) : Lw;   // (08/11) sin normalize de un vector nulo
+  // (08/11, Agustin: "la luz volumetrica no funciona") antes la fase de Henyey-Greenstein con g 0.55 sin normalizar dejaba la bruma en
+  // ~2 % de la luz y, con la luz detras de la camara (rumbo 0..90), casi nada: no se veia. Ahora la fase va normalizada (1 = aire
+  // parejo), g sale de y385 (direccionalidad), la bruma llega a w385 m y los haces tienen su propia fuerza (x385)
+  float4 V9 = IniParams.Load(int2(385, 0));
+  float g = clamp(V9.y > 0.0 ? V9.y : 0.35, 0.0, 0.9), cosT = dot(rayD, toL);
+  float phase = (1.0 - g * g) / pow(max(1.0 + g * g - 2.0 * g * cosT, 1e-3), 1.5);   // 1 = isotropo
+  float reach = clamp(V9.w > 0.0 ? V9.w : 6.0, 0.5, 40.0);
+  float len = geo ? min(length(Pv), reach) : reach;
   float d = max(dens, 0.0) * 0.35;
-  float haze = (1.0 - exp(-d * len)) * phase * 0.9;
+  float haze = (1.0 - exp(-d * len)) * phase * 0.30;
   // haces en pantalla
   float shafts = 0.0;
   float3 P = spot ? Pl : Lw * 50.0;
@@ -178,19 +184,40 @@ float3 PesVolumetric(float2 uv, float2 pxy, float3 Pv, float zA, bool geo, float
     float occ = acc / max(wsum, 1e-3);
     // cerca del centro de la luz los haces son mas fuertes; de lejos en pantalla se desvanecen
     float dl = length((uvL - uv) * float2(1.0, 0.5625));
-    shafts = occ * phase * (0.6 + 1.2 * exp(-dl * 3.0)) * (1.0 - exp(-d * (geo ? len : 6.0)));
+    shafts = occ * phase * (0.6 + 1.2 * exp(-dl * 3.0)) * (1.0 - exp(-d * (geo ? len : reach))) * 0.35 * (V9.x > 0.0 ? V9.x : 1.0);
   }
-  return col * (haze + shafts) * strength * 0.45;
+  // z385 color de la bruma: 0 = el de la luz, 1 = aire frio azulado (noche, humo de estadio)
+  float3 hc = lerp(col, Lum(col) * float3(0.70, 0.82, 1.10), saturate(V9.z));
+  return hc * haze * strength + col * shafts * strength;
 }
 
+// (08/11) color por temperatura en kelvin (aprox. de Tanner Helland), luminancia 1: 1800 vela, 3200 lampara, 5600 sol / flash, 9000 sombra
+float3 PesKelvin(float K) {
+  float t = clamp(K, 1000.0, 15000.0) / 100.0;
+  float r = t <= 66.0 ? 1.0 : saturate(1.2929 * pow(t - 60.0, -0.1332));
+  float gg = t <= 66.0 ? saturate(0.3901 * log(t) - 0.6318) : saturate(1.1298 * pow(t - 60.0, -0.0755));
+  float b = t >= 66.0 ? 1.0 : (t <= 19.0 ? 0.0 : saturate(0.5432 * log(t - 10.0) - 1.1962));
+  float3 c = float3(r, gg, b);
+  return c / max(Lum(c), 1e-4);
+}
 float3 PesTint(float warm) {   // azul frio .. naranja, luminancia 1
   float3 t = lerp(float3(0.80, 0.88, 1.00), float3(1.00, 0.62, 0.32), saturate(warm));
   return t / max(Lum(t), 1e-4);
 }
 
+// (08/11, Agustin: "al rotar no cambia la luz") z378 = 1: la luz queda fija en el MUNDO (rumbo medido en la cancha, altura sobre el
+// suelo real); al girar la camara alrededor de la cara la luz se queda donde estaba. 0 = como antes, pegada a la camara. El mundo
+// pasa a la vista con las columnas de m_view (igual que la luz real en pes_brow_light.hlsli)
+static bool g_lightWorld = false;
 float3 PesDirL(float az, float el, float zSgn) {   // rumbo 0 = de frente (hacia la camara), 90 = desde la derecha
   float ca = cos(radians(az)), sa = sin(radians(az)), ce = cos(radians(el)), se = sin(radians(el));
-  return normalize(float3(ce * sa, se, -ce * ca * zSgn));
+  float3 Lc = float3(ce * sa, se, -ce * ca * zSgn);
+  if (g_lightWorld) {
+    float3 W = float3(ce * sa, se, ce * ca);
+    float3 Lv = float3(dot(W, m_view._m00_m10_m20), dot(W, m_view._m01_m11_m21), dot(W, m_view._m02_m12_m22));
+    if (dot(Lv, Lv) > 0.25) Lc = Lv;   // m_view vacio (sin escena): queda la de la camara
+  }
+  return normalize(Lc);
 }
 
 // (04/11 nariz) transmitancia de la piel (perfil de Jimenez, d en mm) y su color (z34): copia de PESSkinTransmittance /
@@ -286,6 +313,7 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   float4 E6 = IniParams.Load(int2(379, 0)), E7 = IniParams.Load(int2(380, 0));
   float4 E8 = IniParams.Load(int2(381, 0));
   int dbgView = (int)(E7.w + 0.5);
+  g_lightWorld = E5.z > 0.5;
   g_shRad = radians(E6.x > 0.0 ? E6.x : 0.27) * 0.5 + 1e-4;   // (07/11 c) radio = la mitad del diametro angular
   g_shSteps = E6.y > 1.5 ? 48 : (E6.y > 0.5 ? 24 : 12);
   g_shLen = clamp(E7.y > 0.0 ? E7.y : 0.45, 0.1, 2.0);
@@ -318,7 +346,8 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   // --- referencia de intensidad: la irradiancia de estudio mas alta sobre la piel, suavizada en el tiempo (pasada 0, t6) ---
   float S = inRef.Load(int3(0, 0, 0)).x;
   if (S <= 1e-6) return o;
-  float3 sunC = PesTint(warm) * (S * inten);
+  float4 E9 = IniParams.Load(int2(386, 0));   // (08/11) x386 kelvin de la principal, y386 de la segunda (0 = calidez), z386 recorte, w386 relleno (manual)
+  float3 sunC = (preset == 0 && E9.x >= 1000.0 ? PesKelvin(E9.x) : PesTint(warm)) * (S * inten);
   // --- geometria en vista, como la pasada de luz 1f623 (posicion desde la profundidad, normal del G-buffer) ---
   float2 sC = uv * float2(2, -2) + float2(-1, 1);
   float2 pp = (sC - m_cameraCenterOffset.xy) * m_projectionParam.xy;
@@ -333,12 +362,14 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   if (spot) {
     float zCen = LinZ(float2(0.5, 0.5)), zCA = abs(zCen);
     float3 Pc = (zCA >= 0.1 && zCA <= 60.0) ? float3(-m_cameraCenterOffset.xy * m_projectionParam.xy * zCen, zCen) : float3(0, 0, 1.5 * zSgn);
-    float distL = clamp(E4.y > 0 ? E4.y : 2.0, 0.3, 10.0), ap = clamp(E4.z > 0 ? E4.z : 45.0, 5.0, 150.0);
+    float distL = clamp(E4.y > 0 ? E4.y : 2.0, 0.3, 12.0), ap = clamp(E4.z > 0 ? E4.z : 45.0, 5.0, 170.0);
     Pl = Pc + Lw * distL;
-    float3 dv = Pl - Pv; float d2 = max(dot(dv, dv), 1e-4);
-    L = dv * rsqrt(d2);
+    // (08/11) a prueba de NaN: el punto puede caer encima del foco (d = 0) o la profundidad del centro venir rara al cambiar de tipo
+    float3 dv = Pl - Pv; float d2 = dot(dv, dv);
+    L = (d2 > 1e-4 && d2 < 1e6) ? dv * rsqrt(d2) : Lw;
+    d2 = clamp(d2, 0.01, 1e6);
     float ca = cos(radians(ap * 0.5)), cone = smoothstep(ca, lerp(ca, 1.0, 0.35), dot(-L, Lw));
-    lcol = sunC * cone * saturate(distL * distL / d2);
+    lcol = sunC * cone * min(distL * distL / d2, 1.0);
   }
   bool skin = IsSkin(uv);
   float4 mat = inMat.SampleLevel(sPoint, uv, 0);
@@ -418,7 +449,8 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   if (geo && preset == 0 && E8.y > 0.001) {
     float3 L2f = PesDirL(E8.z, E8.w, zSgn);
     float sh2f = PesTraceShadow(Pv, L2f, dot(n, L2f), zC, zSgn, zA, uv, pos.xy + 43.0, shK);
-    PesOneLight(L2f, sunC * E8.y, sh2f, n, V, skin, rough, trans, thickM, silK, legacy, dif, spec);
+    float3 c2f = E9.y >= 1000.0 ? PesKelvin(E9.y) * (S * inten) : sunC;
+    PesOneLight(L2f, c2f * E8.y, sh2f, n, V, skin, rough, trans, thickM, silK, legacy, dif, spec);
   }
   float3 difDirect = dif, specDirect = spec;   // (07/11 d) para las vistas de prueba: lo de arriba es luz directa; lo que sigue, rebote / relleno
   if (!geo) { dif = 0; spec = 0; }
@@ -439,6 +471,18 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
       float3 L2 = PesDirL(az + 180.0, el, zSgn);
       float sh2 = PesTraceShadow(Pv, L2, dot(n, L2), zC, zSgn, zA, uv, pos.xy + 29.0, shK);
       PesOneLight(L2, sunC * 0.7, sh2, n, V, skin, rough, trans, thickM, silK, legacy, dif, spec);
+    }
+    // (08/11, Agustin: "las opciones de luz deberian ser mas extensas") en Manual tambien relleno (w386, del otro lado de la camara,
+    // sin sombra) y recorte (z386, desde atras del mismo lado que la principal, con sombra), como en el preset Estudio
+    if (preset == 0 && E9.w > 0.001) {
+      float azF = (az >= 0 ? -1.0 : 1.0) * clamp(90.0 - abs(az) * 0.5, 25.0, 70.0);
+      PesOneLight(PesDirL(azF, 8.0, zSgn), PesTint(saturate(warm - 0.2)) * (S * inten * E9.w), 1.0, n, V, skin, rough, trans, thickM, silK, legacy, dif, spec);
+    }
+    if (preset == 0 && E9.z > 0.001) {
+      float azR = (az >= 0 ? 1.0 : -1.0) * 150.0;
+      float3 LR = PesDirL(azR, 35.0, zSgn);
+      float shR = PesTraceShadow(Pv, LR, dot(n, LR), zC, zSgn, zA, uv, pos.xy + 23.0, shK);
+      PesOneLight(LR, PesTint(0.45) * (S * inten * E9.z), shR, n, V, skin, rough, trans, thickM, silK, legacy, dif, spec);
     }
     // (27/10 g) relleno de cielo: el lado en sombra no queda gris plano; luz difusa del cielo (azulada, de arriba) y un poco de
     // rebote del suelo (calido, de abajo), proporcional al sol. El cielo es mas azul cuanto mas calido (bajo) esta el sol.
@@ -475,11 +519,15 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
     o.c = float4(outc + (dbgView <= 2 ? vol : 0.0), 1); o.s = float4(outs, 1);
     return o;
   }
-  float ev = exp2(clamp(E8.x, -4.0, 4.0));   // (07/11 d) exposicion de la luz de prueba
+  float ev = exp2(clamp(E8.x, -6.0, 6.0));   // (07/11 d) exposicion de la luz de prueba
   dif *= ev; spec *= ev; vol *= ev;
   o.c = float4(c0 * (geo ? saturate(keep) : 1.0) + dif + vol, 1);
   if (E7.z > 0.0) specMul *= E7.z;   // (07/11 c) brillo de la luz en el manual
   o.s = float4(s0 * (geo ? saturate(keep) : 1.0) + spec * specMul, 1);
+  // (08/11) un NaN / infinito aca lo arrastra el TAA a toda la cara cuadro tras cuadro: se queda la luz del juego
+  if (any(isnan(o.c.xyz)) || any(isinf(o.c.xyz))) o.c = float4(c0, 1);
+  if (any(isnan(o.s.xyz)) || any(isinf(o.s.xyz))) o.s = float4(s0, 1);
+  o.c.xyz = min(o.c.xyz, 65000.0); o.s.xyz = min(o.s.xyz, 65000.0);
   return o;
 }
 #else

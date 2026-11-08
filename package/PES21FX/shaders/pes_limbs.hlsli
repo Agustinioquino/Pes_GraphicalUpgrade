@@ -194,6 +194,9 @@ bool PesLimbOut(bool handDone, uint vid, float3 rest, out float defB, out float 
         actCode = round(saturate(flex) * 7.0) + 8.0 * round(up * 7.0) + 64.0 * round(saturate(max(eff, 0.0)) * 7.0);
     } else {          // pierna: isquios, pantorrilla y (menos) cuadriceps con la rodilla
         defB = saturate(Wv.x * flex + Wv.y * flex + Wv.z * 0.6 * flex);
+        // (08/11) relieve 3D de la pierna en el PS (pes_limb_relief.hlsli): 528 + rodilla (0..7) + 8 x esfuerzo (0..7)
+        float effL = PesLimbEffort();
+        actCode = 528.0 + round(saturate(flex) * 7.0) + 8.0 * round(saturate(max(effL, 0.0)) * 7.0);
     }
     defB *= max(L5.y, 0.0); veinB *= max(L5.z, 0.0);
     return true;

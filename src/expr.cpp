@@ -47,6 +47,7 @@ struct FaceMesh {
     ID3D11Buffer* seamBuf = nullptr; ID3D11ShaderResourceView* seamSrv = nullptr; int seamN = 0;   // (04/11 b) teselacion (facetess.cpp): peso de borde por vertice (t119), solo piel de la cara; seamN = vertices con peso 0
     int seamSoft = -1;   // (07/11) vertices de costuras de textura que ahora se redondean (-1 = sin normales leidas)
     int seamEye = 0;   // (04/11 h) vertices del borde de la abertura del ojo (peso 2: redondeo propio, fila 366)
+    ID3D11Buffer* cbTess = nullptr;   // (08/11) cbuffer neutro (sin expresiones) para teselar con x340 = 0
     bool body = false;   // (04/11 g) piel del cuerpo (VS 1c02a92a): solo pesos de borde para la teselacion, sin nada de cara
     UINT cbv[28] = {}; std::vector<float> xferPs; uint64_t xferIb = 0; int xferUsed = 0; bool xferGate = false; ID3D11Buffer* cbNoShape = nullptr; ID3D11Buffer* cbTeeth = nullptr;
     bool beard = false, beardSrc = false; int geoId = 0, teethHits = 0; bool teethOn = false; ID3D11Buffer* idBuf = nullptr; std::vector<float> beardPs; int beardTries = 0; UINT seqAt = 0; std::vector<int> beardUsed; int beardRebinds = 0; bool beardOjo = false;   // (04/11 e) seqAt: orden del ultimo dibujo (barba: para elegir la piel dibujada junto a ella)   // (04/11 c) barba: malla del pelo enlazada a la piel / piel que le pasa su paleta   // (04/11 c) lo que lleva el cbuffer y, si espera formas pasadas de la piel, sus vertices
@@ -162,7 +163,7 @@ void Reject(FaceMesh* m, const char* why) {
 // Sirve para esculpir en Blender las formas de cada gesto (blendshapes) sobre la malla exacta.
 std::atomic<UINT> s_dumpUntil{0};
 void FreeMesh(FaceMesh* m) {   // (04/11 b) todo lo de una malla que sale de la tabla
-    ReleaseIA(m); if (m->cb) m->cb->Release();
+    ReleaseIA(m); if (m->cb) m->cb->Release(); if (m->cbTess) m->cbTess->Release();
     if (m->seamSrv) m->seamSrv->Release(); if (m->seamBuf) m->seamBuf->Release();
     if (m->cbNoShape) m->cbNoShape->Release(); if (m->cbTeeth) m->cbTeeth->Release(); if (m->idBuf) m->idBuf->Release();   // (04/11 c) cbuffers sin formas / de los dientes y id de la barba
     delete m;
@@ -1002,7 +1003,10 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
     if (shapeWr) *shapeWr = nullptr;
     if (!g_dev.dev) return nullptr;
     if (!s_none) { std::lock_guard<std::mutex> lk(s_mx); if (!s_none) s_none = MakeCB(99, 0, 0); }
-    if ((!body && g_cfg.live[340][0] < 0.5f) || count < 3) { s_bindsNone++; return s_none; }   // (04/11 g) el cuerpo no depende de las expresiones
+    // (08/11, Agustin: "la teselacion se aplica bien, no con las expresiones") con las expresiones apagadas (x340 = 0) la piel de la cara
+    // igual se lee y se tesela: cbuffer neutro (cabeza 99, sin formas) con vertices / primer indice para los pesos de borde
+    const bool exprOff = !body && g_cfg.live[340][0] < 0.5f;
+    if (count < 3) { s_bindsNone++; return s_none; }   // (04/11 g) el cuerpo no depende de las expresiones
     ID3D11Buffer* ib = nullptr; DXGI_FORMAT ibFmt = DXGI_FORMAT_UNKNOWN; UINT ibOff = 0; c->IAGetIndexBuffer(&ib, &ibFmt, &ibOff);
     ID3D11Buffer* vb[4] = {}; UINT stride[4] = {}, off[4] = {}; c->IAGetVertexBuffers(0, 4, vb, stride, off);
     ID3D11InputLayout* il = nullptr; c->IAGetInputLayout(&il);
@@ -1016,7 +1020,14 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
     auto it = s_meshes.find(key);
     if (it != s_meshes.end()) {
         rel(); FaceMesh* m = it->second; m->lastFrame = s_frame;
-        if (m->beard) { m->seqAt = s_drawSeq; if (m->state == 3 && m->cb) { s_beardDraws++; return m->cb; } return nullptr; }
+        if (m->beard) { m->seqAt = s_drawSeq; if (exprOff) return s_none; if (m->state == 3 && m->cb) { s_beardDraws++; return m->cb; } return nullptr; }
+        if (exprOff) {
+            if (m->state == 3 && m->seamSrv && tessSeam) {
+                if (!m->cbTess) { const UINT shp[4] = { 0u, m->nv, m->vmin, 0u }; m->cbTess = MakeCB(99, (UINT)(m->maxIdx < 0 ? 0 : m->maxIdx), (UINT)m->id, 0, nullptr, 0, 0, 99, 0, nullptr, nullptr, shp); }
+                if (m->cbTess) { *tessSeam = m->seamSrv; return m->cbTess; }
+            }
+            s_bindsNone++; return s_none;
+        }
         if (m->state == 3 && m->cb) {
             s_binds++;
             if (m->beardSrc) BeardPoolCopy(c, m);
@@ -1038,7 +1049,9 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
                 // (04/11 d) como la boca: despues de 8 veces junto a su piel queda habilitada (si no, iba y venia entre pasadas: vibraba)
                 if (ok && !m->teethOn && ++m->teethHits >= 8) m->teethOn = true;
                 if (m->teethOn) ok = true;
-                if (!ok) { s_gateOff++; if (m->head <= 31 && (m->lids[0] >= 0 || m->lids[1] >= 0) && s_frame - m->lidCap >= 120) { m->lidCap = s_frame; LidCapture(c, m); } return m->cbNoShape ? m->cbNoShape : s_none; }
+                // (08/11, Agustin: "la teselacion se aplica bien, no con las expresiones") la malla pegada a una piel con formas, cuando se
+                // dibuja sin sus formas (lejos de su piel en el orden), tambien se tesela: los pesos de borde no dependen de las formas
+                if (!ok) { s_gateOff++; if (tessSeam && m->seamSrv) *tessSeam = m->seamSrv; if (m->head <= 31 && (m->lids[0] >= 0 || m->lids[1] >= 0) && s_frame - m->lidCap >= 120) { m->lidCap = s_frame; LidCapture(c, m); } return m->cbNoShape ? m->cbNoShape : s_none; }
                 s_gateOn++;
             }
             // (04/11 c, Agustin: "en la sonrisa deberias estirar los dientes horizontalmente un poco asi como bajar los dientes un

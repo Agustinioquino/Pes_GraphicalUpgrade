@@ -310,6 +310,12 @@ static void UndoCollect() {
     }
     if (titles.size() > 3) st.what += " (+" + std::to_string(titles.size() - 3) + ")";
     if (st.what.empty()) st.what = TRS("valores");
+    // (08/11) cada cambio hecho en el menu queda en el log: si el juego se cierra, el informe del cierre muestra que se toco
+    // justo antes (cierre del 08/11 al pasar la luz del editor a Foco: el log no lo decia)
+    for (auto& c : st.cells) {
+        if (c.ext.empty()) Log("menu: %c%d %g -> %g (%s)", "xyzw"[c.comp & 3], c.idx, c.from, c.to, st.what.c_str());
+        else Log("menu: %s %g -> %g (%s)", c.ext.c_str(), c.from, c.to, st.what.c_str());
+    }
     s_undo.push_back(std::move(st)); s_redo.clear();
     if (s_undo.size() > 200) s_undo.erase(s_undo.begin());
 }
@@ -1363,7 +1369,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
     if (!g_menuOpen) { g_blockGameKeys = FreeCamBlocksKeys(); g_menuTyping = false; }   // (31/10) con la camara libre el juego tampoco ve el teclado
     const bool camFree = FreeCamActive(); const float camSlow = TiempoFactor();   // (1/11) aviso en pantalla
     const bool camHud = !g_menuOpen && (camFree || camSlow != 1.0f);
-    const bool lightIcons = g_cfg.live[319][0] > 0.5f && g_cfg.live[297][0] > 0.5f && SSSSEditorLightAge() < 0.5;   // (1/11) iconos de la luz del editor
+    const bool lightIcons = g_cfg.live[319][0] > 0.5f && g_cfg.live[297][0] > 0.5f && g_cfg.live[378][2] < 0.5f && SSSSEditorLightAge() < 0.5;   // (08/11) con la luz fija al mundo (z378) el icono (relativo a la camara) mentiria: no se dibuja   // (1/11) iconos de la luz del editor
     const bool sunCompass = g_cfg.live[175][0] > 0.5f && g_cfg.live[93][3] > 0.5f;   // (2/11) brujula del sol, solo en partido
     if (!g_menuOpen && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass) return;
     if (!s_rtv) {

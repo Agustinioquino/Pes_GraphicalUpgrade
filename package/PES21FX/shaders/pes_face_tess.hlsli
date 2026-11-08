@@ -168,10 +168,11 @@ PesTessConst PesTessPatch(InputPatch<PesTessVS, 3> p)
     // z376 = 0 apaga este recorte.
     if (IniParams.Load(int2(376, 0)).z > 0.5) {
       float3 aw = float3(dot(normalize(p[0].o6.xyz), -normalize(p[0].pV.xyz)), dot(normalize(p[1].o6.xyz), -normalize(p[1].pV.xyz)), dot(normalize(p[2].o6.xyz), -normalize(p[2].pV.xyz)));
-      bool3 bk = aw < -0.3;
-      if (bk.y && bk.z) f[0] = 1.0;
-      if (bk.z && bk.x) f[1] = 1.0;
-      if (bk.x && bk.y) f[2] = 1.0;
+      // (07/11 b) en rampa (no de golpe): cuando la cabeza gira la arista pasa de partida a entera de a poco, sin saltos (vibraba)
+      float3 kf = smoothstep(-0.55, -0.15, float3(max(aw.y, aw.z), max(aw.z, aw.x), max(aw.x, aw.y)));
+      f[0] = lerp(1.0, f[0], kf.x);
+      f[1] = lerp(1.0, f[1], kf.y);
+      f[2] = lerp(1.0, f[2], kf.z);
     }
     // fuera de pantalla (los tres puntos del mismo lado): sin division (nada que ver)
     float2 lo = min(min(s0, s1), s2), hi = max(max(s0, s1), s2);

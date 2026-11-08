@@ -184,6 +184,41 @@ float4 ProjV(float3 p) {
   float4 h = float4(p, 1);
   return float4(dot(h, m_projection[0]), dot(h, m_projection[1]), dot(h, m_projection[2]), dot(h, m_projection[3]));
 }
+#ifdef PES_ATLAS
+// (07/11 c, Agustin: "la luz no la afecta de manera correcta, no tiene el volumen exacto") modo ATLAS (pes_browat_*_gs): las hebras se
+// dibujan tambien en el atlas de sombra de las cabezas (headshadow.cpp, t30: la sombra propia de la cara y de las hebras en la pasada
+// del sol). Cada pelo tapa a los de abajo y a la piel desde el sol: sombra REAL entre hebras (antes solo la sombra de contacto plana).
+// Misma cuenta que el DS del atlas (pes_face_tess.hlsli PesAtlasClip): posicion de la vista -> mundo (VV = P^-1 PV) -> caja (b12)
+cbuffer PESAtlasBox : register(b12) { float4x4 g_pesAtlasPV; }
+void PesAtlasBasis(out float4 cx, out float4 cy, out float4 cw) {
+  float4 PV0 = m_projectionView[0], PV1 = m_projectionView[1], PV2 = m_projectionView[2], PV3 = m_projectionView[3];
+  float4 P0 = m_projection[0], P2 = m_projection[2], P3 = m_projection[3], P1 = m_projection[1];
+  cw = float4(PV0.w, PV1.w, PV2.w, PV3.w);
+  cx = (float4(PV0.x, PV1.x, PV2.x, PV3.x) - P2.x * cw - float4(0, 0, 0, P3.x)) / (abs(P0.x) > 1e-6 ? P0.x : 1e-6);
+  cy = (float4(PV0.y, PV1.y, PV2.y, PV3.y) - P2.y * cw - float4(0, 0, 0, P3.y)) / (abs(P1.y) > 1e-6 ? P1.y : 1e-6);
+}
+float4 PesAtlasClip(float3 pv) {
+  float4 cx, cy, cw; PesAtlasBasis(cx, cy, cw);
+  float3x3 R = float3x3(cx.xyz, cy.xyz, cw.xyz);
+  float3 q = pv - float3(cx.w, cy.w, cw.w);
+  float3 c0 = cross(R[1], R[2]), c1 = cross(R[2], R[0]), c2 = cross(R[0], R[1]);
+  float det = dot(R[0], c0); det = abs(det) > 1e-8 ? det : 1e-8;
+  float3 w = (c0 * q.x + c1 * q.y + c2 * q.z) / det;
+  float4 c = mul(float4(w, 1.0), g_pesAtlasPV);
+  c.z += 9.99999975e-005 * c.w;
+  return c;
+}
+// direccion del sol (eje de profundidad de la caja, columna 2 en memoria) llevada a la vista: la cinta de cada pelo mira al sol
+float3 PesAtlasLightV() {
+  float4 cx, cy, cw; PesAtlasBasis(cx, cy, cw);
+  float3 Lw = normalize(float3(g_pesAtlasPV[0][2], g_pesAtlasPV[1][2], g_pesAtlasPV[2][2]) + 1e-6);
+  return normalize(float3(dot(cx.xyz, Lw), dot(cy.xyz, Lw), dot(cw.xyz, Lw)));
+}
+float PesAtlasTexelM() {   // tamano de un texel del atlas en metros (columna 0 = R / mitad de la caja; cuadrante de 1024 px)
+  float invHalf = max(length(float3(g_pesAtlasPV[0][0], g_pesAtlasPV[1][0], g_pesAtlasPV[2][0])), 1e-4);
+  return 2.0 / (invHalf * 1024.0);
+}
+#endif
 
 [instance(PES_INST)]
 [maxvertexcount(PES_PER_INST * (PES_SEG + 1) * 2)]
@@ -215,12 +250,13 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
   float3 dPdv = (e2 * d1.x - e1 * d2.x) / det;
   // hebras esperadas en este triangulo: densidad por unidad de area UV (y74 = 2 -> ~450 por ceja con el mapa tipico)
   bool hb = pesHairMisc.x > 0.5;
-  float dens = clamp(P74.y, 0.25, 3.0) * 40000.0 *   // (06/11, Agustin: "se ven poco pobladas") 25000 -> 40000
+  float dens = clamp(P74.y, 0.25, 3.0) * 70000.0 *   // (07/11 b, Agustin: "falta cantidad") 40000 -> 70000
+                   // (06/11, Agustin: "se ven poco pobladas") 25000 -> 40000
                  (hb ? max(pesHairBrow.y, 0.05) : 1.0);
   float keepBase = saturate(uvArea * dens / (float)(PES_INST * PES_PER_INST));
   float mLen = hb ? max(pesHairBrow.w, 0.05) : 1.0, mWid = hb ? max(pesHairBrow.x, 0.05) : 1.0, mLift = hb ? pesHairBrow.z : 1.0;
   float curl = hb ? saturate(pesHairA.y) : 0.1;
-  float lift = clamp(P75.x * mLift, 0.0, 1.5) * 0.2;    // (04/11 e) aun mas acostadas: la raiz no se despega de la piel   // (04/11) pegadas a la piel: la v1 se levantaba demasiado
+  float lift = clamp(P75.x * mLift, 0.0, 1.5) * 0.28;   // (07/11 b) un poco mas levantadas: mas nivel 3D    // (04/11 e) aun mas acostadas: la raiz no se despega de la piel   // (04/11) pegadas a la piel: la v1 se levantaba demasiado
   float flip = P75.w < -0.5 ? -1.0 : 1.0;
 
   [loop] for (uint k = 0; k < PES_PER_INST; k++) {
@@ -241,7 +277,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     float fill = hb ? saturate((pesHairBrow.y - 1.0) * 0.6) : 0.0;
     // (04/11 l, Agustin: "no me gusta la cantidad de pelo y como respeta la textura") la densidad sigue la pintura: tupido donde la
     // ceja pintada es oscura y llena, ralo en el borde claro (antes casi pareja en toda la ceja)
-    bool born = ph >= lerp(0.35, 0.12, fill) && rk < keepBase * saturate(m.r + fill) * saturate((ph - 0.3) * 2.2 + fill * 1.5) * lerp(0.35, 1.5, strk);
+    bool born = ph >= lerp(0.35, 0.12, fill) && rk < keepBase * saturate(m.r + fill + 0.3) * saturate((ph - 0.2) * 2.5 + fill * 1.5) * lerp(0.5, 1.4, strk);   // (07/11 b) umbrales mas blandos: mas pelo
     // (04/11 l, Agustin: "permitirme cargar 400 hebras mas por jugador") x370 = hebras EXTRA en total (las dos cejas, ~0.016 de area UV
     // cada una): nacen sobre todo donde la ceja pintada es rala (rellenan huecos), nunca fuera de la ceja pintada
     float pX = hb ? uvArea * max(pesBrowX.x, 0.0) * 31.0 / (float)(PES_INST * PES_PER_INST) * saturate(1.3 - ph) * 1.6 : 0.0;
@@ -298,7 +334,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
       float lenUV = len / max(mPerUV, 1e-5);
       if (PesPaintedHair(uv + dirUV * lenUV) < 0.2) len *= (PesPaintedHair(uv + dirUV * lenUV * 0.5) < 0.2) ? 0.55 : 0.85;   // (07/11, referencia eFootball de Agustin) el borde de la ceja queda deshilachado: los pelos pasan un poco la pintura
     }
-    float widB = max(P74.w, 0.05) * 0.001 * mWid * 0.25;   // (04/11 b) mas finas: 0.35 -> ~0.09 mm de ancho real
+    float widB = max(P74.w, 0.05) * 0.001 * mWid * 0.32;   // (07/11 b) 0.25 -> 0.32: con la normal de tubo cada pelo se lee como cilindro   // (04/11 b) mas finas: 0.35 -> ~0.09 mm de ancho real
     // color: el de la ceja pintada en ese punto (raiz) y la punta un poco mas clara, o el del tipo de pelo
     float3 painted = tBrow.SampleLevel(sLin, uv, 0).rgb;   // (04/11 d) el color de los pelos pintados de esa zona (no la piel de al lado)
     float3 cR = (hb && pesHairRoot.w > 0.5) ? pesHairRoot.xyz : painted;
@@ -328,7 +364,7 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     // Las capas de abajo quedan tapadas (mas oscuras) y las de arriba toman la luz: volumen y profundidad reales, con sombra de
     // contacto mas larga para las de arriba (PES_SHADOW usa la altura real)
     float lay = frac(r0 * 5.17 + r1 * 3.71 + r3 * 1.93);
-    float stackH = lay * lay * 0.0013 * saturate(ph * 1.6) * max(mLift, 0.3);
+    float stackH = lay * lay * 0.0022 * saturate(ph * 1.6) * max(mLift, 0.3);   // (07/11 b) 1.3 -> 2.2 mm: mas profundidad entre capas
     { float occ = lerp(0.96, 0.8, saturate(ph * 1.2)) * lerp(lerp(0.72, 1.04, lay), 1.0, 1.0 - saturate(ph * 1.6));   // abajo tapado, arriba a la luz   // (05/11, Agustin: "se ven muy oscuras con la luz de frente") antes 0.88..0.62
       float layer = lerp(0.88, 1.08, frac(r3 * 7.31 + rk * 3.17));
       cR *= occ * layer; cT *= layer; }
@@ -362,27 +398,37 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
       // (06/11, Agustin: "no se ve como un hair strand de un motor moderno") la hebra fina ya no se engorda a 1 px: se dibuja de 1.2 px
       // y el PS descarta pixeles al azar segun la cobertura real (ancho real / dibujado); el TAA lo promedia -> pelo fino y suave
       float wReal = wid;
-      wid = max(wid, pxV * (P75.z > 0.5 ? 1.25 : 0.6));
+      wid = max(wid, pxV * (P75.z > 0.5 ? 1.25 : 0.9));   // (07/11 b, Agustin: "el TAA las desenfoca") 0.6 -> 0.9 px: menos tramado
       float cov = P75.z > 0.5 ? 1.0 : saturate(wReal / max(wid, 1e-9));
 #ifdef PES_SHADOW
       float hgt = max(dot(p - root, n), 0.0);                                    // altura sobre la piel
       p = p - Ls * (hgt / max(nl, 0.25)) + n * 0.00005;                          // al plano de la piel, siguiendo la luz
       wid = wid * 1.6 + hgt * 0.04;                                              // penumbra que se abre con la altura
 #endif
+#ifdef PES_ATLAS
+      float3 V = PesAtlasLightV();                                              // (07/11 c) la cinta mira al sol
+      wid = max(wid, PesAtlasTexelM() * 0.55);                                  // y no mas fina que medio texel del atlas
+#else
       float3 V = normalize(-p);
+#endif
       float3 tanR = normalize(dd + n * lift * (0.35 * 3.14159 * cos(t * 3.14159) + 0.1));
       float3 sideV = normalize(cross(dd, V) + 1e-6);
       [unroll] for (int s = -1; s <= 1; s += 2) {
         GSOut o;
         float side = (float)s;
+#ifdef PES_ATLAS
+        o.pos = PesAtlasClip(p + sideV * wid * side);
+#else
         o.pos = ProjV(p + sideV * wid * side);
+#endif
         // (04/11 e, Agustin: "que la luz la tome bien el pelo de la ceja") antes la normal miraba a la CAMARA (V * 0.6): con el sol
         // de costado la hebra se iluminaba distinto que la piel de abajo (alambre oscuro o brillante). Ahora es la normal de la piel
         // redondeada solo hacia los costados de la hebra (perpendicular a su direccion, en el plano de la piel): de lejos la ceja
         // toma la misma luz y sombra que la cara, de cerca cada pelo tiene volumen; la punta levantada se inclina un poco hacia
         // donde apunta el pelo
         float3 sideS = normalize(cross(n, dd));
-        float3 nH = normalize(n + sideS * side * lerp(0.75, 0.45, lay) + dd * (lift * 0.6 * t));   // (07/11) abajo mas redondeada (sombra propia), arriba mas plana a la luz
+        // (07/11 b, Agustin: "faltan normales") el GS manda la normal del EJE del pelo; el PS arma la normal de TUBO con el lado (tw.y)
+        float3 nH = normalize(n * lerp(1.0, 0.8, lay) + dd * (lift * 0.6 * t));
         o.nrmV = nH;
         o.col = cR; o.col2 = cT;
         o.tw = float3(t, side, clamp(cov, 0.02, 0.98) + 2.0 * floor(frac(r2 * 7.77 + r3 * 3.33) * 8.0));   // (07/11) z = cobertura + 2 x (0..7) tono de brillo de la hebra
