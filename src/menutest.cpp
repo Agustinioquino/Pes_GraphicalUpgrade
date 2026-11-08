@@ -5,7 +5,7 @@
 //      la diferencia de ms con la base = lo que cuesta ese efecto; la diferencia de imagen = si hace algo en esta escena.
 //      Los grupos sin interruptor cambian su primer deslizador (solo imagen). Ropa, camara y diagnostico no se tocan.
 //   3) cada vista de depuracion (cascadas, sombra sola, rebote, piel, pasto...) se prende un momento y se fotografia
-//   4) se vuelve todo a como estaba y se escribe PES21FX\diagnostico\<fecha>\ resumen.txt + informe.json + capturas\
+//   4) se vuelve todo a como estaba y se escribe PES21FX\diagnostico\<fecha>\ resumen.txt + informe.json + capturas/
 // No se guarda nada en el ini (SaveConfigValues se niega mientras corre). Esc o "Cancelar" la cortan (el informe parcial queda).
 #include "core.h"
 #include <d3d11_1.h>
