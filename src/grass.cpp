@@ -832,6 +832,8 @@ static bool BuildEditorState() {
     int fromFile = 0;
     auto load = [&](const wchar_t* name) -> ID3D11ShaderResourceView* {
         std::wstring path = g_cfg.baseDir + L"textures\\pasto_editor\\" + name;
+        { std::wstring hd = path.substr(0, path.size() - 4) + L"_hd.dds";   // (08/11 h) version mejorada (no la pisa GrassSaveStadium)
+          if (GetFileAttributesW(hd.c_str()) != INVALID_FILE_ATTRIBUTES) path = hd; }
         if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) return nullptr;
         ID3D11ShaderResourceView* v = nullptr;
         if (SUCCEEDED(DirectX::CreateDDSTextureFromFile(g_dev.dev, path.c_str(), nullptr, &v)) && v) { fromFile++; return v; }
