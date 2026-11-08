@@ -173,8 +173,8 @@ float PESShadowFilter(float2 uv, float ref, float cas, float2 pix, float orig, f
       float texPerM = length(g_psScene.m_shadowProjection._m00_m10_m20) * abs(casS) * res * 0.5;
       float distM = avgB / refPerM;
       float penTex = distM * tan(radians(P64s.y > 1.0 ? P64s.y : 0.53)) * texPerM * (SQ.x > 0 ? SQ.x / 200.0 : 1.0);   // x21 = 200 -> 1:1 fisico
-      radius = clamp(penTex, max(0.5, g_pesDynMinR), max(SQ.y * rsN, 1.0));
-    } else radius = clamp(avgB * SQ.x * rsN, max(0.5, g_pesDynMinR), max(SQ.y * rsN, 1.0));
+      radius = clamp(penTex * rscale, max(0.5, g_pesDynMinR), max(SQ.y * rsN, 1.0) * rscale);   // (08/11) x34 (rscale) tambien en PCSS: antes se perdia
+    } else radius = clamp(avgB * SQ.x * rsN * rscale, max(0.5, g_pesDynMinR), max(SQ.y * rsN, 1.0) * rscale);
   }
   float sum = 0;
   [unroll] for (int i = 0; i < 16; i++) {
@@ -394,6 +394,9 @@ void main(
   r9.xyzw = r12.xzxz + r9.xyzw;
   float2 pesShUV = r9.zw; float pesShCas = r11.x; float pesShRef = r0.w;   // PES21 sombras v2
   float pesShRefBase = pesShRef;
+  // (08/11) las muestras del filtro original del juego solo se toman cuando PESShadowFilter las devuelve tal cual (filtro apagado,
+  // fuera de las cascadas o sin mapa); con el filtro v2 / PCSS eran 8 lecturas del shadow map por pixel tiradas a la basura
+  bool pesOrigTaps = IniParams.Load(int2(20,0)).y < 0.5 || pesShCas < -0.5 || g_psScene.m_shadowMapResolutions.x < 1.0;
   // PES21 sombras fisicas (18/10): gradiente de la profundidad de sombra respecto de las UV del shadow map (plano receptor, Isidoro 2006)
   float2 pesDzduv = 0.0;
   { float2 duvdx = ddx(pesShUV), duvdy = ddy(pesShUV); float dzdx = ddx(pesShRef), dzdy = ddy(pesShRef);
@@ -427,30 +430,32 @@ void main(
       float4 kf = float4(g_SpecularTexture.SampleLevel(g_samplerPoint_Wrap_s, uvG + float2(kt.x, kt.y) * 3, 0).z, g_SpecularTexture.SampleLevel(g_samplerPoint_Wrap_s, uvG - float2(kt.x, kt.y) * 3, 0).z,
                          g_SpecularTexture.SampleLevel(g_samplerPoint_Wrap_s, uvG + float2(kt.x, -kt.y) * 3, 0).z, g_SpecularTexture.SampleLevel(g_samplerPoint_Wrap_s, uvG - float2(kt.x, -kt.y) * 3, 0).z);
       if (all(abs(kn - 0.9607843) < 0.002) && all(abs(kf - 0.9607843) < 0.002)) pesShRef += KB.x; } }
-  r10.xyzw = r10.xyzw * float4(0.5,0.5,0.5,0.5) + float4(0.25,0.25,-0.75,-0.75);
-  r12.xz = float2(1,1) / g_psScene.m_shadowMapResolutions.xx;
-  r12.yw = float2(1,1) / r0.zz;
-  r13.xyzw = r12.xyzw * r10.xyzw;
-  r14.xyzw = r10.xyzy * r12.xyzy + r9.zwzw;
-  r0.x = g_ShadowTexture.SampleCmp(g_samplerComparisonLess_Linear_Clmap_s, r14.xy, r0.w).x;
-  r0.y = g_ShadowTexture.SampleCmp(g_samplerComparisonLess_Linear_Clmap_s, r14.zw, r0.w).x;
-  r0.x = r0.x + r0.y;
-  r10.xyzw = r10.xwzw * r12.xwzw + r9.zwzw;
-  r0.y = g_ShadowTexture.SampleCmp(g_samplerComparisonLess_Linear_Clmap_s, r10.xy, r0.w).x;
-  r0.x = r0.x + r0.y;
-  r0.y = g_ShadowTexture.SampleCmp(g_samplerComparisonLess_Linear_Clmap_s, r10.zw, r0.w).x;
-  r0.x = r0.x + r0.y;
-  r10.xyzw = r13.xyzy * float4(2,2,2,2) + r9.zwzw;
-  r0.y = g_ShadowTexture.SampleCmp(g_samplerComparisonLess_Linear_Clmap_s, r10.xy, r0.w).x;
-  r0.x = r0.x + r0.y;
-  r0.y = g_ShadowTexture.SampleCmp(g_samplerComparisonLess_Linear_Clmap_s, r10.zw, r0.w).x;
-  r0.x = r0.x + r0.y;
-  r9.xyzw = r13.xwzw * float4(2,2,2,2) + r9.xyzw;
-  r0.y = g_ShadowTexture.SampleCmp(g_samplerComparisonLess_Linear_Clmap_s, r9.xy, r0.w).x;
-  r0.x = r0.x + r0.y;
-  r0.y = g_ShadowTexture.SampleCmp(g_samplerComparisonLess_Linear_Clmap_s, r9.zw, r0.w).x;
-  r0.x = r0.x + r0.y;
-  r0.x = -r0.x * 0.125 + 1;
+  [branch] if (pesOrigTaps) {
+    r10.xyzw = r10.xyzw * float4(0.5,0.5,0.5,0.5) + float4(0.25,0.25,-0.75,-0.75);
+    r12.xz = float2(1,1) / g_psScene.m_shadowMapResolutions.xx;
+    r12.yw = float2(1,1) / r0.zz;
+    r13.xyzw = r12.xyzw * r10.xyzw;
+    r14.xyzw = r10.xyzy * r12.xyzy + r9.zwzw;
+    r0.x = g_ShadowTexture.SampleCmpLevelZero(g_samplerComparisonLess_Linear_Clmap_s, r14.xy, r0.w).x;
+    r0.y = g_ShadowTexture.SampleCmpLevelZero(g_samplerComparisonLess_Linear_Clmap_s, r14.zw, r0.w).x;
+    r0.x = r0.x + r0.y;
+    r10.xyzw = r10.xwzw * r12.xwzw + r9.zwzw;
+    r0.y = g_ShadowTexture.SampleCmpLevelZero(g_samplerComparisonLess_Linear_Clmap_s, r10.xy, r0.w).x;
+    r0.x = r0.x + r0.y;
+    r0.y = g_ShadowTexture.SampleCmpLevelZero(g_samplerComparisonLess_Linear_Clmap_s, r10.zw, r0.w).x;
+    r0.x = r0.x + r0.y;
+    r10.xyzw = r13.xyzy * float4(2,2,2,2) + r9.zwzw;
+    r0.y = g_ShadowTexture.SampleCmpLevelZero(g_samplerComparisonLess_Linear_Clmap_s, r10.xy, r0.w).x;
+    r0.x = r0.x + r0.y;
+    r0.y = g_ShadowTexture.SampleCmpLevelZero(g_samplerComparisonLess_Linear_Clmap_s, r10.zw, r0.w).x;
+    r0.x = r0.x + r0.y;
+    r9.xyzw = r13.xwzw * float4(2,2,2,2) + r9.xyzw;
+    r0.y = g_ShadowTexture.SampleCmpLevelZero(g_samplerComparisonLess_Linear_Clmap_s, r9.xy, r0.w).x;
+    r0.x = r0.x + r0.y;
+    r0.y = g_ShadowTexture.SampleCmpLevelZero(g_samplerComparisonLess_Linear_Clmap_s, r9.zw, r0.w).x;
+    r0.x = r0.x + r0.y;
+    r0.x = -r0.x * 0.125 + 1;
+  } else r0.x = 1.0;   // (08/11) sin muestras originales: PESShadowFilter no usa 'orig'
   // PES21 piel (16/10): sobre la cara el borde de la sombra del sol se filtra mas ancho (x34) -> sin escalones
   float4 P34 = IniParams.Load(int2(34,0));
   bool pesSSSS = IniParams.Load(int2(95,0)).w > 0.5;   // 19/10: dispersion unificada (SSSS) prendida -> las difusiones viejas de la piel se apagan solas
