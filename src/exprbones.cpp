@@ -570,8 +570,6 @@ static bool JawAngle(const Skel& S, const Xf& jc, float* deg) {
 // ni el globo ni los parpados (no se suma dos veces).
 static float Frac(float x) { return x - floorf(x); }
 static float SStep(float a, float b, float x);   // definida mas abajo (la usan AnimT / TalkWords)
-    const float k = sinf(0.5f * a) / a; q[0] = v[0] * k; q[1] = v[1] * k; q[2] = v[2] * k; q[3] = cosf(0.5f * a);
-}
 // (08/11, Agustin: "puedes hacer que calcule por cada fotograma? aunque el gameclock este en cero como pasa en el menu de apariencia")
 // RELOJ DE LAS ANIMACIONES de la cara: avanza en cada cuadro. Si el reloj del juego (fila 157, config.cpp) avanzo desde el cuadro
 // anterior se toma ese paso (asi la camara lenta de las repeticiones frena tambien los gestos); si esta quieto o en cero (editor,
