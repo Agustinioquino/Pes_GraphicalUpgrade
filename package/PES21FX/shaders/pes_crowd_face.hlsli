@@ -13,6 +13,7 @@
 //    aplauso (manos juntas adelante) = canta al ritmo de las palmas; sin disparador queda el canto / charla de la CPU.
 //  - CUERPO (08/11 c): PesCrowdFaceBuf[2 * persona + 1] = capa de brazos / salto encima de la animacion (PesCrowdBody).
 //    La cara esta en PesCrowdFaceBuf[2 * persona].
+//  - SIN CAMISETA / REVOLEO (08/11 d): body.w + 10 = sin camiseta (PesCrowdShirtless), body.w = +-2 = revolea con ese brazo.
 //  - fila 394: x on (0 = como el juego) | y fuerza de la boca | z fuerza de las cejas | w animo (CPU)
 StructuredBuffer<float4> PesCrowdFaceBuf : register(t30);
 
@@ -107,17 +108,21 @@ void PesCrowdBody(inout float3 P, inout float3 N, inout float3 T, uint4 vIdx, fl
         aL += (bi >= 4u && bi <= 6u) ? w : (bi == 3u ? 0.5 * w : 0.0);
         aR += (bi >= 8u && bi <= 10u) ? w : (bi == 7u ? 0.5 * w : 0.0);
     }
-    float gL = saturate(1.0 + body.w), gR = saturate(1.0 - body.w);
+    // (08/11 d) revoleo: w = +-2 -> ese brazo bien arriba y la mano girando en circulo sobre la cabeza (camiseta revoleada)
+    float spinL = body.w > 1.5 ? 1.0 : 0.0, spinR = body.w < -1.5 ? 1.0 : 0.0;
+    float sideW = clamp(body.w, -1.0, 1.0);
+    float gL = saturate(1.0 + sideW), gR = saturate(1.0 - sideW);
     // cuanto falta para tener el brazo arriba (si la animacion ya lo levanta, se suma poco)
     float upL = saturate((hl.y - ul.y) / 0.45), upR = saturate((hr.y - ur.y) / 0.45);
     float wave = 0.22 * sin(body.y);
-    float angL = body.x * gL * ((1.0 - upL) * 1.25 + wave);
-    float angR = body.x * gR * ((1.0 - upR) * 1.25 - wave);
+    float angL = body.x * gL * ((1.0 - upL) * (spinL > 0.0 ? 1.9 : 1.25) + wave * (1.0 - spinL));
+    float angR = body.x * gR * ((1.0 - upR) * (spinR > 0.0 ? 1.9 : 1.25) - wave * (1.0 - spinR));
     float3 d = float3(0.0, body.z, 0.0);
     float3 nW = N, tW = T;
     float3x3 M3 = (float3x3)M;
-    if (aL > 0.0 && angL != 0.0) { float3 Xr = ul + PesRotAxis(X - ul, fwd, angL); d += (Xr - X) * aL; }
-    if (aR > 0.0 && angR != 0.0) { float3 Xr = ur + PesRotAxis(X - ur, fwd, -angR); d += (Xr - X) * aR; }
+    const float3 upAx = float3(0.0, 1.0, 0.0);
+    if (aL > 0.0 && angL != 0.0) { float3 Xr = ul + PesRotAxis(X - ul, fwd, angL); if (spinL > 0.0) Xr = ul + PesRotAxis(Xr - ul, upAx, body.y); d += (Xr - X) * aL; }
+    if (aR > 0.0 && angR != 0.0) { float3 Xr = ur + PesRotAxis(X - ur, fwd, -angR); if (spinR > 0.0) Xr = ur + PesRotAxis(Xr - ur, upAx, -body.y); d += (Xr - X) * aR; }
     if (dot(d, d) <= 0.0) return;
     float3x3 Mi = PesInv3(M3);
     P += mul(Mi, d);
@@ -128,15 +133,32 @@ void PesCrowdBody(inout float3 P, inout float3 N, inout float3 T, uint4 vIdx, fl
     }
 }
 
-void PesCrowdFace(inout uint4 vPos, inout uint4 vNrm, inout uint4 vTan, uint4 vCol, uint persona, uint4 vIdx, uint4 vWgt)
+// (08/11 d) SIN CAMISETA: los vertices de la remera (pecho, hombros, brazos y la panza arriba de la cintura) toman la UV
+// del cachete del mismo hincha, asi el juego los pinta con la piel de su propia cara (atlas o paleta, lo que use ese hincha).
+// La UV del cachete depende de la disposicion del modelo: COLOR.x = 6 -> clase 0, 7 -> clase 1 (tools/crowd/pesos_cara.py).
+static const float2 kPesCheekUV[2] = { float2(0.745, 0.392), float2(0.805, 0.293) };
+void PesCrowdShirtless(inout uint4 vUV, float3 P, uint4 vIdx, float4 vW, uint cls)
+{
+    float s = 0.0;
+    [unroll] for (int k = 0; k < 4; k++) {
+        uint bi = vIdx[k];
+        s += (bi == 1u || bi == 3u || bi == 4u || bi == 5u || bi == 7u || bi == 8u || bi == 9u) ? vW[k] : (bi == 0u ? vW[k] * smoothstep(1.08, 1.16, P.y) : 0.0);
+    }
+    if (s > 0.5) vUV.xy = asuint(kPesCheekUV[cls]);
+}
+
+void PesCrowdFace(inout uint4 vPos, inout uint4 vNrm, inout uint4 vTan, uint4 vCol, uint persona, uint4 vIdx, uint4 vWgt, inout uint4 vUV)
 {
     float4 col = asfloat(vCol);
-    if (abs(col.x * 255.0 - 6.0) > 0.5) return;
+    float mk = col.x * 255.0;
+    if (mk < 5.5 || mk > 7.5) return;
+    uint cls = mk > 6.5 ? 1u : 0u;
     float4 prm = IniParams.Load(int2(394, 0));
     if (prm.x <= 0.0) return;
     uint n = 0, st = 0; PesCrowdFaceBuf.GetDimensions(n, st);
     if (2u * persona + 1u >= n) return;
     float4 body = PesCrowdFaceBuf[2u * persona + 1u];
+    if (body.w > 5.0) { body.w -= 10.0; PesCrowdShirtless(vUV, asfloat(vPos.xyz), vIdx, asfloat(vWgt), cls); }   // w + 10 = sin camiseta
     float wj = col.y, wl = col.z, wr = col.w;
     if (wj + wl + wr <= 0.0) {
         if (body.x <= 0.0 && body.z == 0.0) return;
