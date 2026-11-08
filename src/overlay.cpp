@@ -50,11 +50,11 @@ static void BuildFonts(float H) {
         const std::string path = dir + "textures\\pes_icons.ttf";
         s_iconsOk = GetFileAttributesW((g_cfg.baseDir + L"textures\\pes_icons.ttf").c_str()) != INVALID_FILE_ATTRIBUTES;
         if (s_iconsOk) {
-            ImFont* fonts[2] = { io.Fonts->Fonts.Size ? io.Fonts->Fonts[0] : nullptr, s_fontBold };
+            ImFont* fonts[3] = { io.Fonts->Fonts.Size ? io.Fonts->Fonts[0] : nullptr, s_fontBold, s_fontBig };   // (08/11) + la grande: el icono del titulo de la pagina salia como '?'
             for (ImFont* f : fonts) {
                 if (!f) continue;
                 ImFontConfig ic; ic.MergeMode = true; ic.PixelSnapH = true; ic.DstFont = f;
-                const float px = std::round(16.0f * k);
+                const float px = std::round((f == s_fontBig ? 22.0f : 16.0f) * k);
                 ic.GlyphMinAdvanceX = px * 1.15f; ic.GlyphOffset = ImVec2(0, std::round(1.0f * k));
                 if (!io.Fonts->AddFontFromFileTTF(path.c_str(), px, &ic, kIcoRanges)) s_iconsOk = false;
             }
@@ -171,6 +171,13 @@ static int s_collapseAll = 0;                     // 1 = contraer todo, 2 = expa
 static std::set<std::string> s_descOpen;          // (04/11 n) grupos con la descripcion completa ("mas")
 static std::string s_sel;                         // (04/11 n) pagina de la barra lateral: "sec:<seccion>", "fav", "chg", "rec", "presets", "tools", "settings", "errors"
 static std::vector<std::string> s_recent;         // (04/11 n) titulos de los ultimos grupos tocados, el mas nuevo primero
+// (08/11) menu adaptable (Agustin: "mejora un poco el menu, mas simple y con las opciones mas detalladas, un mejor diseno responsivo"):
+// el ancho de la ventana decide si la barra lateral va con nombres o solo iconos, si los botones de arriba llevan texto y si las
+// tarjetas van en una o dos columnas. La ventana tiene 3 tamanos (boton al lado de la X): ventana, pantalla grande y panel a la derecha.
+static bool s_rail = false;                       // barra lateral solo con iconos (ventana angosta)
+static bool s_slim = false;                       // botones de arriba solo con iconos (ventana muy angosta)
+static int s_winReq = -1;                         // 0 ventana, 1 grande, 2 panel a la derecha: se aplica al proximo Begin
+static std::set<std::string> s_moreOpen;          // tarjetas largas con "mas opciones" desplegado
 static std::string LowerU(std::string x) { for (auto& ch : x) ch = (char)tolower((unsigned char)ch); return x; }
 static bool IsFav(const std::string& title) { return (g_cfg.favorites.find("|" + title + "|") != std::string::npos); }
 static void SetFav(const std::string& title, bool on) {
@@ -328,15 +335,52 @@ static void RevertAll() {
     }
 }
 
+// (08/11) texto recortado con "..." al ancho dado (respeta los caracteres UTF-8)
+static std::string FitText(const std::string& t, float maxW) {
+    if (maxW <= 0.0f || ImGui::CalcTextSize(t.c_str()).x <= maxW) return t;
+    std::string s = t;
+    while (!s.empty() && ImGui::CalcTextSize((s + "...").c_str()).x > maxW) {
+        while (!s.empty() && ((unsigned char)s.back() & 0xC0) == 0x80) s.pop_back();
+        if (!s.empty()) s.pop_back();
+    }
+    while (!s.empty() && s.back() == ' ') s.pop_back();
+    return s + "...";
+}
 // descripcion corta: la primera oracion (o ~110 letras); el resto con "mas"
 static std::string ShortDesc(const std::string& d, bool& cut) {
     cut = false;
     size_t p = d.find(". ");
+    // (08/11) "p.ej. " / "aprox. " no terminan la oracion
+    while (p != std::string::npos && ((p >= 4 && d.compare(p - 4, 4, "p.ej") == 0) || (p >= 5 && d.compare(p - 5, 5, "aprox") == 0) || (p >= 3 && d.compare(p - 3, 3, "e.g") == 0) || (p >= 3 && d.compare(p - 3, 3, "i.e") == 0))) p = d.find(". ", p + 2);
     if (p != std::string::npos && p + 1 <= 150 && p + 2 < d.size()) { cut = true; return d.substr(0, p + 1); }
     if (d.size() <= 150) return d;
     size_t s = d.rfind(' ', 110); if (s == std::string::npos || s < 60) s = 110;
     cut = true; return d.substr(0, s) + "...";
 }
+
+// (08/11) explicacion de la opcion elegida en un selector: busca en la ayuda "<opcion> = ..." u "<opcion>: ..." (empezando la frase o
+// despues de ';' ',' '.') y corta en el proximo ';' o fin de oracion. "Nublado = cielo cubierto, luz de arriba" -> "cielo cubierto, luz de arriba"
+static std::string OptionExplain(const std::string& help, const std::string& opt) {
+    if (help.empty() || opt.empty()) return "";
+    const std::string h = LowerU(help), o = LowerU(opt);
+    for (size_t p = h.find(o); p != std::string::npos; p = h.find(o, p + 1)) {
+        if (p > 0 && !strchr(" ;.,(", h[p - 1])) continue;
+        size_t q = p + o.size();
+        while (q < h.size() && h[q] == ' ') q++;
+        if (q >= h.size() || (h[q] != '=' && h[q] != ':')) continue;
+        size_t a = q + 1; while (a < help.size() && help[a] == ' ') a++;
+        size_t e = help.size();
+        for (size_t k = a; k < help.size(); k++) if (help[k] == ';' || (help[k] == '.' && (k + 1 == help.size() || help[k + 1] == ' '))) { e = k; break; }
+        if (e > a) return help.substr(a, e - a);
+    }
+    return "";
+}
+static int CurOption(const MenuSlider& sl, float val) {
+    int cur = (int)(val + 0.5f); cur = std::clamp(cur, 0, (int)sl.options.size() - 1);
+    if (!sl.optVals.empty()) { cur = 0; for (int oi = 1; oi < (int)sl.optVals.size(); oi++) if (fabsf(sl.optVals[oi] - val) < fabsf(sl.optVals[cur] - val)) cur = oi; }
+    return cur;
+}
+static constexpr int kMoreAfter = 6;   // (08/11) tarjetas con mas controles: los primeros 5 a la vista, el resto con "mas opciones"
 
 // (04/11 n) slider nuevo (Agustin: "mejora el diseno de los sliders"): barra fina con relleno, perilla redonda, marca del valor guardado
 // y el numero en una cajita aparte que se toca para escribirlo. Por debajo sigue el SliderFloat de ImGui (arrastre, Ctrl+clic, teclado),
@@ -410,10 +454,14 @@ static void DrawGroup(MenuGroup& g, int gid) {
     ImGui::PopStyleColor();
     ImGui::SameLine();
     if (s_fontBold) ImGui::PushFont(s_fontBold);
-    const std::string gTitle = Utf8(LS(g.title, g.titleEn)), gDesc = LS(g.desc, g.descEn);
+    const std::string gTitleFull = Utf8(LS(g.title, g.titleEn)), gDesc = LS(g.desc, g.descEn);
+    // (08/11) titulo recortado con "..." si no entra (ventana angosta): no pisa la estrella ni el aviso de cambios
+    const float titleMax = availW - rightW - (ImGui::GetCursorPosX() - ImGui::GetCursorStartPos().x) - (hasT ? ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x : 0.0f) - (changed ? 26.0f * UIK() : 0.0f);
+    const std::string gTitle = FitText(gTitleFull, titleMax) + "###tit";
     if (hasT) { if (ImGui::Checkbox(gTitle.c_str(), &on)) { float b = g_cfg.base[g.tIdx][g.tComp], &v = g_cfg.live[g.tIdx][g.tComp]; if (!on) { g.tLast = v; v = 0.0f; } else v = g.tLast > 0.5f ? g.tLast : (b > 0.5f ? b : 1.0f); } }   // (07/11) al prender vuelve el valor que tenia (1.7 = manto), no 1
-    else ImGui::TextUnformatted(gTitle.c_str());
+    else ImGui::TextUnformatted(gTitle.substr(0, gTitle.size() - 6).c_str());
     if (s_fontBold) ImGui::PopFont();
+    if (gTitle.size() - 6 != gTitleFull.size() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", gTitleFull.c_str());
     if (changed) {   // (04/11 n) aviso de cambios sin guardar en la tarjeta
         ImGui::SameLine(); ImGui::TextColored(ImVec4(0.95f, 0.80f, 0.35f, 1), "%s", s_iconsOk ? Ico(kIcoDot).c_str() : "*");
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Cambiado sin guardar (Ctrl+S guarda, Ctrl+Z deshace)"));
@@ -421,16 +469,20 @@ static void DrawGroup(MenuGroup& g, int gid) {
     ImGui::EndGroup();
     ImGui::SameLine(std::max(availW - rightW, ImGui::GetCursorPosX()));
     { bool fav = IsFav(g.title);
+      // (08/11) mas simple: la estrella se ve si es favorita o con el mouse encima de la tarjeta; restablecer solo si hay cambios
+      const bool cardHov = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
       ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
       if (fav) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.78f, 0.3f, 1));
-      else if (s_iconsOk) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.42f, 0.45f, 0.50f, 1));
+      else if (s_iconsOk) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.42f, 0.45f, 0.50f, cardHov ? 1.0f : 0.0f));
       if (ImGui::SmallButton(s_iconsOk ? (Ico(kIcoStar) + "##fav").c_str() : (fav ? "* fav" : "+ fav"))) SetFav(g.title, !fav);
       if (fav || s_iconsOk) ImGui::PopStyleColor();
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS(fav ? "Quitar de Favoritos" : "Agregar a Favoritos"));
       ImGui::SameLine();
+      if (!changed) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0, 0, 0, 0));
       ImGui::BeginDisabled(!changed);
       if (ImGui::SmallButton(s_iconsOk ? (Ico(kIcoRevert) + "##rst").c_str() : "<<")) { for (auto& sl : g.sliders) SlRevert(sl); if (hasT) g_cfg.live[g.tIdx][g.tComp] = g_cfg.base[g.tIdx][g.tComp]; }
       ImGui::EndDisabled();
+      if (!changed) ImGui::PopStyleColor();
       ImGui::PopStyleColor();
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", TRS("Volver todo el grupo a lo guardado")); }
     if (col) { if (!gDesc.empty()) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.52f, 0.56f, 1)); ImGui::TextUnformatted(Utf8(gDesc.substr(0, 90) + (gDesc.size() > 90 ? "..." : "")).c_str()); ImGui::PopStyleColor(); } ImGui::PopStyleColor(3); ImGui::EndChild(); ImGui::Spacing(); ImGui::PopID(); return; }
@@ -459,7 +511,14 @@ static void DrawGroup(MenuGroup& g, int gid) {
         const bool wide = w > 520.0f * UIK();
         const float labelW = wide ? std::clamp(w * 0.38f, 160.0f * UIK(), 300.0f * UIK()) : 0.0f;
         const float resetW = ImGui::GetFrameHeight() * 1.1f;
+        // (08/11) tarjetas largas (Luz de prueba 30 controles, Teselacion 37): los primeros a la vista y el resto con "mas opciones".
+        // Con la busqueda, en Cambiados o con [PES21FX] menu_avanzado = 1 se ven todos; un control cambiado sin guardar siempre se ve.
+        const bool searching = s_search[0] != 0;
+        const bool allOpen = searching || g_cfg.menuAdvanced || s_sel == "chg" || s_moreOpen.count(g.title) || (int)g.sliders.size() <= kMoreAfter;
+        int nHidden = 0, slN = 0;
         for (auto& sl : g.sliders) {
+            const bool hiddenSl = !allOpen && slN++ >= kMoreAfter - 1 && !(sl.ext.empty() && SlChanged(sl));
+            if (hiddenSl) { nHidden++; continue; }
             ImGui::PushID(&sl);
             bool isExt = !sl.ext.empty();
             if (isExt && !g_cfg.clothFound) { ImGui::PopID(); continue; }
@@ -484,7 +543,7 @@ static void DrawGroup(MenuGroup& g, int gid) {
                 if (wide) ImGui::PopTextWrapPos();
                 if (slChanged) ImGui::PopStyleColor();
                 if ((!help.empty() || slChanged) && ImGui::IsItemHovered()) helpTip();
-                if (!help.empty() && !wide) { ImGui::SameLine(); ImGui::TextDisabled("(?)"); if (ImGui::IsItemHovered()) helpTip(); }
+                if (!help.empty() && !wide && g_cfg.menuHelp == 0) { ImGui::SameLine(); ImGui::TextDisabled("(?)"); if (ImGui::IsItemHovered()) helpTip(); }
                 if (wide) ImGui::SameLine(x0 + labelW);
             }
             const float itemW = std::max(60.0f * UIK(), (wide ? w - labelW : w) - resetW - ImGui::GetStyle().ItemSpacing.x);
@@ -492,13 +551,14 @@ static void DrawGroup(MenuGroup& g, int gid) {
             bool openCtx = false;
             if (!sl.options.empty()) {
                 const auto& opts = (g_cfg.lang != 0 && sl.optionsEn.size() == sl.options.size()) ? sl.optionsEn : sl.options;
-                int cur = (int)(val + 0.5f); if (cur < 0) cur = 0; if (cur >= (int)sl.options.size()) cur = (int)sl.options.size() - 1;
-                if (!sl.optVals.empty()) { cur = 0; for (int oi = 1; oi < (int)sl.optVals.size(); oi++) if (fabsf(sl.optVals[oi] - val) < fabsf(sl.optVals[cur] - val)) cur = oi; }
+                const int cur = CurOption(sl, val);
                 std::string prev = Utf8(opts[cur]);
                 if (ImGui::BeginCombo("##c", prev.c_str())) {
+                    const std::string& hlp = LS(sl.help, sl.helpEn);
                     for (int oi = 0; oi < (int)sl.options.size(); oi++) {
                         bool sel = oi == cur;
                         if (ImGui::Selectable(Utf8(opts[oi]).c_str(), sel)) val = sl.optVals.empty() ? (float)oi : sl.optVals[oi];
+                        if (ImGui::IsItemHovered()) { const std::string ex = OptionExplain(hlp, opts[oi]); if (!ex.empty()) { ImGui::BeginTooltip(); ImGui::PushTextWrapPos(380 * UIK()); ImGui::TextUnformatted(Utf8(ex).c_str()); ImGui::PopTextWrapPos(); ImGui::EndTooltip(); } }   // (08/11) que hace cada opcion
                         if (sel) ImGui::SetItemDefaultFocus();
                     }
                     ImGui::EndCombo();
@@ -516,7 +576,10 @@ static void DrawGroup(MenuGroup& g, int gid) {
                 // (x318 "Claridad del ojo" se guardaba en -1.17 / 2.61 con rango 0..1); ademas se recorta lo que
                 // venga de afuera (teclas, Avanzado) para que el ini nunca guarde un valor fuera del rango
                 if (!isExt && (val < sl.lo || val > sl.hi)) { float cl = val < sl.lo ? sl.lo : sl.hi; Log("menu: %c%d = %g fuera del rango %g..%g del slider '%s': recortado a %g", "xyzw"[sl.comp], sl.idx, val, sl.lo, sl.hi, sl.label.c_str(), cl); val = cl; }
-                openCtx = PrettySlider(&val, sl.lo, sl.hi, sl.fmt.c_str(), itemW, slChanged, savedV, TRS("Arrastra o usa la cajita del numero. Clic derecho: volver a lo guardado o al de fabrica"));
+                char tipb[300];   // (08/11) el rango del slider en el aviso
+                { char a[40], b[40]; snprintf(a, sizeof a, sl.fmt.c_str(), sl.lo); snprintf(b, sizeof b, sl.fmt.c_str(), sl.hi);
+                  snprintf(tipb, sizeof tipb, TRS("Va de %s a %s. Arrastra o toca el numero para escribirlo. Clic derecho: volver a lo guardado."), a, b); }
+                openCtx = PrettySlider(&val, sl.lo, sl.hi, sl.fmt.c_str(), itemW, slChanged, savedV, tipb);
             }
             if (openCtx) ImGui::OpenPopup("ctx");
             if (ImGui::BeginPopup("ctx")) {   // (04/11 n) clic derecho sobre el slider
@@ -531,10 +594,39 @@ static void DrawGroup(MenuGroup& g, int gid) {
                 ImGui::PopStyleColor();
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip(TRS(isExt ? "Volver al valor que tenia cloth.ini (%.4g); fabrica: %.4g" : "Volver al valor guardado (%.3f)"), savedV, sl.def);
             } else ImGui::Dummy(ImVec2(resetW, ImGui::GetFrameHeight()));
+            if (g_cfg.menuHelp > 0) {   // (08/11) explicacion debajo de cada opcion (Ajustes: breve / completa / solo con el mouse)
+                std::string line; bool cut = false;
+                const std::string& hlp = LS(sl.help, sl.helpEn);
+                if (!sl.options.empty() && g_cfg.menuHelp == 1) {   // selector: lo que hace la opcion elegida
+                    const auto& opts = (g_cfg.lang != 0 && sl.optionsEn.size() == sl.options.size()) ? sl.optionsEn : sl.options;
+                    const std::string& o = opts[CurOption(sl, val)];
+                    const std::string ex = OptionExplain(hlp, o);
+                    if (!ex.empty()) { line = o + ": " + ex; cut = line.size() < hlp.size(); }
+                }
+                if (line.empty() && !hlp.empty()) line = g_cfg.menuHelp >= 2 ? hlp : ShortDesc(hlp, cut);
+                if (!line.empty()) {
+                    ImGui::SetWindowFontScale(0.88f);
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.53f, 0.57f, 0.63f, 1));
+                    ImGui::PushTextWrapPos(ImGui::GetContentRegionMax().x - resetW);
+                    ImGui::TextUnformatted(Utf8(line).c_str());
+                    ImGui::PopTextWrapPos(); ImGui::PopStyleColor();
+                    ImGui::SetWindowFontScale(1.0f);
+                    if ((cut || slChanged) && ImGui::IsItemHovered()) helpTip();
+                    ImGui::Dummy(ImVec2(0, 3.0f * UIK()));
+                }
+            }
             if (isExt && val != before) { g_cfg.clothDirty = true; g_cfg.clothChangeT = Now(); }
             ImGui::PopID();
         }
         ImGui::EndDisabled();
+        if (nHidden > 0 || (!searching && !g_cfg.menuAdvanced && s_moreOpen.count(g.title))) {   // (08/11) "mas opciones" / "menos opciones"
+            const bool isOpen = nHidden == 0;
+            char mb[96]; snprintf(mb, sizeof mb, isOpen ? TRS("Menos opciones") : TRS("%d opciones mas"), nHidden);
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0)); ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.78f, 0.56f, 1));
+            if (ImGui::SmallButton(IcoL(isOpen ? kIcoDown : kIcoRight, mb).c_str())) { if (isOpen) s_moreOpen.erase(g.title); else s_moreOpen.insert(g.title); }
+            ImGui::PopStyleColor(2);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS(isOpen ? "Volver a ver solo las principales" : "Los ajustes finos de esta mejora (en Ajustes se pueden ver siempre)"));
+        }
     }
     if (g.special == "musculatura_jugador") { ImGui::Spacing(); MuscleDrawPlayerPanel(); }
     if (!g.buttons.empty()) {
@@ -726,6 +818,13 @@ static void SelectPage(const std::string& key) {
     s_sel = key; g_cfg.menuSection = key; SaveOption("menu_seccion", key);
 }
 static void NavHeader(const char* txt) {
+    if (s_rail) {   // (08/11) solo iconos: una rayita en lugar del titulo
+        ImGui::Dummy(ImVec2(0, 3.0f * UIK()));
+        const ImVec2 p = ImGui::GetCursorScreenPos(); const float w = ImGui::GetContentRegionAvail().x;
+        ImGui::GetWindowDrawList()->AddLine(ImVec2(p.x + w * 0.2f, p.y), ImVec2(p.x + w * 0.8f, p.y), IM_COL32(70, 76, 88, 255), 1.0f);
+        ImGui::Dummy(ImVec2(0, 4.0f * UIK()));
+        return;
+    }
     ImGui::Dummy(ImVec2(0, 4.0f * UIK()));
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.47f, 0.50f, 0.56f, 1));
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.0f * UIK());
@@ -739,10 +838,20 @@ static void NavItem(const std::string& key, unsigned ico, const std::string& lab
     const float w = ImGui::GetContentRegionAvail().x, h = ImGui::GetFrameHeight();
     ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.15f, 0.33f, 0.25f, 1));
     ImGui::PushStyleColor(ImGuiCol_HeaderHovered, sel ? ImVec4(0.17f, 0.37f, 0.28f, 1) : ImVec4(0.15f, 0.17f, 0.21f, 1));
-    if (ImGui::Selectable("##nav", sel, ImGuiSelectableFlags_None, ImVec2(w, h))) SelectPage(key);
+    const float hh = s_rail ? h * 1.25f : h;
+    if (ImGui::Selectable("##nav", sel, ImGuiSelectableFlags_None, ImVec2(w, hh))) SelectPage(key);
     ImGui::PopStyleColor(2);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float fs = ImGui::GetFontSize(), ty = p.y + (h - fs) * 0.5f, pad = 8.0f * UIK();
+    if (s_rail) {   // (08/11) barra angosta: el icono centrado, el nombre en el aviso
+        const ImU32 cI = ImGui::GetColorU32(sel ? ImVec4(0.40f, 0.90f, 0.62f, 1) : ImVec4(0.72f, 0.76f, 0.82f, 1));
+        const std::string ic = Ico(ico); const ImVec2 is = ImGui::CalcTextSize(ic.c_str());
+        dl->AddText(ImVec2(p.x + (w - is.x) * 0.5f, p.y + (hh - fs) * 0.5f), cI, ic.c_str());
+        if (dot) dl->AddCircleFilled(ImVec2(p.x + w - 6.0f * UIK(), p.y + 6.0f * UIK()), 3.5f * UIK(), IM_COL32(242, 204, 89, 255));
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s%s%s", label.c_str(), right.empty() ? "" : "  ", right.c_str());
+        ImGui::PopID();
+        return;
+    }
     const ImU32 cText = ImGui::GetColorU32(sel ? ImVec4(1, 1, 1, 1) : ImVec4(0.86f, 0.88f, 0.91f, 1));
     const ImU32 cDim = ImGui::GetColorU32(ImGuiCol_TextDisabled);
     const ImU32 cIco = ImGui::GetColorU32(sel ? ImVec4(0.40f, 0.90f, 0.62f, 1) : ImVec4(0.55f, 0.60f, 0.66f, 1));
@@ -756,19 +865,41 @@ static void NavItem(const std::string& key, unsigned ico, const std::string& lab
     if (!right.empty()) dl->AddText(ImVec2(p.x + w - pad - rs.x, ty), cDim, right.c_str());
     ImGui::PopID();
 }
-static void PageTitle(unsigned ico, const std::string& title, const char* sub = nullptr) {
+// barra de cada pagina de tarjetas: solo activos, contraer / expandir. (08/11) Con iconos va a la derecha del titulo.
+static bool IconToggle(const char* id, unsigned ico, bool on, const char* tip) {
+    ImGui::PushStyleColor(ImGuiCol_Button, on ? ImVec4(0.16f, 0.45f, 0.31f, 1) : ImVec4(0.16f, 0.18f, 0.22f, 1));
+    const bool r = ImGui::Button((Ico(ico) + "##" + id).c_str(), ImVec2(ImGui::GetFrameHeight() * 1.25f, 0));
+    ImGui::PopStyleColor();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+    return r;
+}
+static float CardsToolbarW() { return s_iconsOk ? ImGui::GetFrameHeight() * 1.25f * 3 + ImGui::GetStyle().ItemSpacing.x * 2 : 0.0f; }
+static void CardsToolbar() {
+    if (s_iconsOk) {
+        if (IconToggle("solo", kIcoFilter, s_onlyActive, TRS("Solo activos: mostrar solo los grupos con el interruptor prendido"))) s_onlyActive = !s_onlyActive;
+        ImGui::SameLine(); if (IconToggle("cont", kIcoCompress, false, TRS("Contraer todo"))) s_collapseAll = 1;
+        ImGui::SameLine(); if (IconToggle("exp", kIcoExpand, false, TRS("Expandir todo"))) s_collapseAll = 2;
+        return;
+    }
+    ImGui::Checkbox(TRS("Solo activos"), &s_onlyActive);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Mostrar solo los grupos con el interruptor prendido"));
+    ImGui::SameLine(); if (ImGui::SmallButton(TRS("Contraer todo"))) s_collapseAll = 1;
+    ImGui::SameLine(); if (ImGui::SmallButton(TRS("Expandir todo"))) s_collapseAll = 2;
+}
+static void PageTitle(unsigned ico, const std::string& title, const char* sub = nullptr, bool tools = false) {
+    const float y0 = ImGui::GetCursorPosY();
     if (s_fontBig) ImGui::PushFont(s_fontBig);
     if (s_iconsOk && ico) { ImGui::TextColored(ImVec4(0.40f, 0.90f, 0.62f, 1), "%s", Ico(ico).c_str()); ImGui::SameLine(); }
-    ImGui::TextUnformatted(title.c_str());
+    const float tw = tools ? CardsToolbarW() : 0.0f;
+    ImGui::PushTextWrapPos(ImGui::GetContentRegionMax().x - (tw > 0 ? tw + 8.0f * UIK() : 0.0f));
+    ImGui::TextWrapped("%s", title.c_str());
+    ImGui::PopTextWrapPos();
     if (s_fontBig) ImGui::PopFont();
+    const float y1 = ImGui::GetCursorPosY();
+    if (tools && s_iconsOk) { ImGui::SetCursorPos(ImVec2(ImGui::GetContentRegionMax().x - tw, y0)); CardsToolbar(); ImGui::SetCursorPosY(y1); }
     if (sub) { ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled)); ImGui::TextWrapped("%s", sub); ImGui::PopStyleColor(); }
-}
-// barra de cada pagina de tarjetas: solo activos, contraer / expandir
-static void CardsToolbar() {
-    ImGui::Checkbox(IcoL(kIcoFilter, TRS("Solo activos")).c_str(), &s_onlyActive);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Mostrar solo los grupos con el interruptor prendido"));
-    ImGui::SameLine(); if (ImGui::SmallButton(IcoL(kIcoCompress, TRS("Contraer todo")).c_str())) s_collapseAll = 1;
-    ImGui::SameLine(); if (ImGui::SmallButton(IcoL(kIcoExpand, TRS("Expandir todo")).c_str())) s_collapseAll = 2;
+    if (tools && !s_iconsOk) CardsToolbar();
+    ImGui::Dummy(ImVec2(0, 2.0f * UIK()));
 }
 static void DrawSectionExtras(const std::string& sname) {
     if (sname.rfind("Ropa", 0) == 0 && !g_cfg.clothStatus.empty()) { ImGui::TextDisabled("%s", g_cfg.clothStatus.c_str()); ImGui::Spacing(); }
@@ -807,6 +938,26 @@ static void SectionLabel(const MenuGroup& g) {
     ImGui::TextDisabled("%s", (s_iconsOk ? Ico(ico) + "  " + s : s).c_str());
 }
 static void EmptyState(const char* txt) { ImGui::Dummy(ImVec2(0, 20.0f * UIK())); ImGui::TextDisabled("%s", txt); }
+// (08/11) tarjetas en una o dos columnas: dos si la pagina es ancha (Ajustes: menu_columnas). Reparto alternado (izquierda, derecha,
+// izquierda...) para que abrir o cerrar una tarjeta no mueva las demas de columna. Con 'labels' se pone el nombre de la seccion arriba
+// de cada tarjeta cuando cambia (paginas que mezclan secciones).
+static void DrawCards(const std::vector<int>& ids, bool labels) {
+    const float W = ImGui::GetContentRegionAvail().x;
+    const bool two = g_cfg.menuCols && W >= 1000.0f * UIK() && ids.size() > 1;
+    const int nc = two ? 2 : 1;
+    const float gap = ImGui::GetStyle().ItemSpacing.x * 1.5f, cw = two ? (W - gap) * 0.5f : W;
+    for (int c = 0; c < nc; c++) {
+        if (c) ImGui::SameLine(0, gap);
+        if (two) ImGui::BeginChild(c ? "colR" : "colL", ImVec2(cw, 0), ImGuiChildFlags_AutoResizeY, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+        std::string lastSec;
+        for (size_t i = c; i < ids.size(); i += nc) {
+            MenuGroup& g = g_cfg.groups[ids[i]];
+            if (labels && SecKey(g) != lastSec) { SectionLabel(g); lastSec = SecKey(g); }
+            DrawGroup(g, ids[i]);
+        }
+        if (two) ImGui::EndChild();
+    }
+}
 
 static void DrawToolsPage() {
     PageTitle(kIcoTools, TRS("Herramientas"), TRS("Para ver que hace el mod y pasarle datos a Claude; no hacen falta para jugar."));
@@ -906,6 +1057,26 @@ static void DrawSettingsPage() {
         if (ImGui::IsItemDeactivatedAfterEdit()) { char b[32]; snprintf(b, sizeof(b), "%.2f", g_cfg.uiScale); SaveOption("ui_scale", b); }
     }
     ImGui::Spacing();
+    {   // (08/11) explicacion debajo de cada opcion
+        const char* kHelp[3] = { TRS("Solo al pasar el mouse"), TRS("Breve, debajo de cada opcion"), TRS("Completa, debajo de cada opcion") };
+        int hm = std::clamp(g_cfg.menuHelp, 0, 2);
+        row(TRS("Explicacion de cada opcion"));
+        ImGui::SetNextItemWidth(330 * UIK());
+        if (ImGui::Combo("##ayuda", &hm, kHelp, 3)) { g_cfg.menuHelp = hm; SaveOption("menu_ayuda", std::to_string(hm)); }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Breve: una linea gris debajo de cada slider con lo que hace (en los selectores, lo que hace la opcion elegida). Completa: el texto entero."));
+    }
+    {   // (08/11) transparencia
+        row(TRS("Opacidad del menu"));
+        ImGui::SetNextItemWidth(200 * UIK());
+        float a = g_cfg.menuAlpha;
+        if (ImGui::SliderFloat("##alfa", &a, 0.5f, 1.0f, "%.2f")) g_cfg.menuAlpha = a;
+        if (ImGui::IsItemDeactivatedAfterEdit()) { char b[32]; snprintf(b, sizeof(b), "%.2f", g_cfg.menuAlpha); SaveOption("menu_opacidad", b); }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Mas bajo = se ve el juego a traves del fondo del menu."));
+    }
+    ImGui::Spacing();
+    if (ImGui::Checkbox(TRS("Todas las opciones a la vista en las tarjetas largas"), &g_cfg.menuAdvanced)) SaveOption("menu_avanzado", g_cfg.menuAdvanced ? "1" : "0");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip(TRS("Apagado: las tarjetas con mas de %d controles muestran los principales y el resto con 'opciones mas'."), kMoreAfter);
+    if (ImGui::Checkbox(TRS("Dos columnas de tarjetas si la ventana es ancha"), &g_cfg.menuCols)) SaveOption("menu_columnas", g_cfg.menuCols ? "1" : "0");
     if (ImGui::Checkbox(TRS("Tarjetas contraidas al abrir (compacto)"), &g_cfg.compact)) { SaveOption("compacto", g_cfg.compact ? "1" : "0"); s_collapseAll = g_cfg.compact ? 1 : 2; }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Abrir los grupos contraidos (solo el titulo y el interruptor); + para desplegar uno"));
     if (ImGui::Checkbox(TRS("Tutoriales al principio de cada seccion"), &g_cfg.tutorials)) { SaveOption("tutorials", g_cfg.tutorials ? "1" : "0"); if (g_cfg.tutorials) s_tutDone.clear(); }
@@ -929,11 +1100,26 @@ static void DrawSettingsPage() {
 static void DrawMenu() {
     ImGuiIO& io = ImGui::GetIO();
     const ImVec2 ds = io.DisplaySize;
-    ImGui::SetNextWindowSize(ImVec2(std::min(920 * UIK(), ds.x * 0.9f), std::min(800 * UIK(), ds.y * 0.88f)), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(420 * UIK(), 300 * UIK()), ImVec2(ds.x * 0.97f, ds.y * 0.95f));   // (04/11) nunca mas grande que la pantalla
-    ImGui::SetNextWindowPos(ImVec2(40, 60), ImGuiCond_FirstUseEver);
+    // (08/11) tres tamanos (boton al lado de la X, se guarda en [PES21FX] menu_tamano): 0 ventana, 1 casi toda la pantalla,
+    // 2 panel a la derecha de todo el alto (en el editor deja la cara del jugador a la vista)
+    if (s_winReq < 0) s_winReq = std::clamp(g_cfg.menuSize, 0, 2);
+    const ImVec2 winDef(std::min(1080 * UIK(), ds.x * 0.9f), std::min(820 * UIK(), ds.y * 0.88f));
+    if (s_winReq >= 0) {
+        const ImGuiCond cnd = s_winReq == 0 ? ImGuiCond_Appearing : ImGuiCond_Always;
+        if (s_winReq == 0) { ImGui::SetNextWindowSize(winDef, cnd); ImGui::SetNextWindowPos(ImVec2(40, 60), cnd); }
+        else if (s_winReq == 1) { ImGui::SetNextWindowSize(ImVec2(ds.x * 0.94f, ds.y * 0.92f), cnd); ImGui::SetNextWindowPos(ImVec2(ds.x * 0.03f, ds.y * 0.04f), cnd); }
+        else { const float pw = std::clamp(ds.x * 0.34f, 440.0f * UIK(), 720.0f * UIK()); ImGui::SetNextWindowSize(ImVec2(pw, ds.y * 0.94f), cnd); ImGui::SetNextWindowPos(ImVec2(ds.x - pw - ds.x * 0.01f, ds.y * 0.03f), cnd); }
+        s_winReq = -2;
+    }
+    ImGui::SetNextWindowSizeConstraints(ImVec2(400 * UIK(), 300 * UIK()), ImVec2(ds.x * 0.97f, ds.y * 0.95f));   // (04/11) nunca mas grande que la pantalla
+    ImGui::SetNextWindowBgAlpha(std::clamp(g_cfg.menuAlpha, 0.5f, 1.0f));   // (08/11) Ajustes: transparencia del menu
     bool open = true;
     ImGui::Begin("##pes21fx", &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
+    {   // (08/11) segun el ancho: barra lateral con nombres o solo iconos, botones con texto o solo iconos
+        const float cw = ImGui::GetContentRegionAvail().x;
+        s_rail = s_iconsOk && cw < 840.0f * UIK();
+        s_slim = s_iconsOk && cw < 640.0f * UIK();
+    }
     if (!open) g_menuOpen = false;
     // (04/11 n) casillas, selectores y el buscador fuera de las tarjetas: un tono mas claro que el fondo de la ventana
     ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.16f, 0.18f, 0.22f, 1)); ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.20f, 0.23f, 0.28f, 1));
@@ -953,7 +1139,7 @@ static void DrawMenu() {
 
     // --- cabecera: logo + nombre + estado de los shaders, X a la derecha ---
     const float headY = ImGui::GetCursorPosY();
-    if (s_logo) { const float h = 58.0f * UIK(); ImGui::Image((ImTextureID)(intptr_t)s_logo, ImVec2(h * s_logoAspect, h)); ImGui::SameLine(); }
+    if (s_logo) { const float h = ImGui::GetTextLineHeightWithSpacing() * 2.0f; ImGui::Image((ImTextureID)(intptr_t)s_logo, ImVec2(h * s_logoAspect, h)); ImGui::SameLine(); }
     ImGui::BeginGroup();
     if (s_fontBold) ImGui::PushFont(s_fontBold);
     ImGui::TextColored(ImVec4(0.85f, 0.68f, 0.28f, 1), "%s", s_logo ? "FX  0.2" : "PES21 FX  0.2");
@@ -961,23 +1147,34 @@ static void DrawMenu() {
     {
         const int rep = g_replacedCount.load(), fail = g_failedCount.load();
         ImGui::PushStyleColor(ImGuiCol_Text, fail ? ImVec4(0.95f, 0.55f, 0.35f, 1) : ImVec4(0.45f, 0.85f, 0.55f, 1));
-        ImGui::Text(TRS("%s  %d shaders propios activos"), fail ? "!" : "OK", rep);
+        if (s_slim) ImGui::Text("%s  %d", fail ? "!" : "OK", rep); else ImGui::Text(TRS("%s  %d shaders propios activos"), fail ? "!" : "OK", rep);
         ImGui::PopStyleColor();
         if (fail) { ImGui::SameLine(); ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.35f, 1), TRS("   %d con error (ver Errores)"), fail); if (ImGui::IsItemClicked()) SelectPage("errors"); }
     }
     ImGui::EndGroup();
-    ImGui::SameLine(ImGui::GetWindowWidth() - 54.0f * UIK());
-    ImGui::SetCursorPosY(headY);
-    if (ImGui::Button(s_iconsOk ? Ico(kIcoX).c_str() : "X", ImVec2(36 * UIK(), 0))) g_menuOpen = false;
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Cerrar (Insert)"));
+    {   // (08/11) tamano de la ventana + cerrar, arriba a la derecha
+        const float bw = 36 * UIK(), sp = ImGui::GetStyle().ItemSpacing.x;
+        ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - bw * 2 - sp);
+        ImGui::SetCursorPosY(headY);
+        static const unsigned kSzIco[3] = { kIcoCompress, kIcoExpand, kIcoLayers };   // icono del tamano al que pasa el boton
+        const int cur = std::clamp(g_cfg.menuSize, 0, 2);
+        if (ImGui::Button(s_iconsOk ? (Ico(kSzIco[(cur + 1) % 3]) + "##tam").c_str() : "[ ]", ImVec2(bw, 0))) {
+            g_cfg.menuSize = (cur + 1) % 3; s_winReq = g_cfg.menuSize; SaveOption("menu_tamano", std::to_string(g_cfg.menuSize));
+        }
+        static const char* const kSzTip[3] = { "Pantalla grande", "Panel a la derecha (deja la cara a la vista)", "Ventana" };
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip(TRS("Tamano del menu: %s"), TRS(kSzTip[cur]));
+        ImGui::SameLine(0, sp);
+        if (ImGui::Button(s_iconsOk ? Ico(kIcoX).c_str() : "X", ImVec2(bw, 0))) g_menuOpen = false;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Cerrar (Insert)"));
+    }
     ImGui::Spacing();
 
     // --- barra de arriba: guardar, deshacer, rehacer, descartar, ver original, recargar, buscar ---
     {
         const bool dirty = nChanged > 0;
         if (dirty) { ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.52f, 0.34f, 1)); ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.62f, 0.41f, 1)); }
-        std::string sv = IcoL(kIcoSave, TRS("Guardar"));
-        if (dirty) sv += " (" + std::to_string(nChanged) + ")";
+        std::string sv = s_slim ? Ico(kIcoSave) : IcoL(kIcoSave, TRS("Guardar"));
+        if (dirty) sv += s_slim ? " " + std::to_string(nChanged) : " (" + std::to_string(nChanged) + ")";
         if (ImGui::Button((sv + "###guardar").c_str())) s_saveReq = true;
         if (dirty) ImGui::PopStyleColor(2);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip(dirty ? TRS("Guardar en PES21FX.ini (Ctrl+S). %d grupos con cambios sin guardar.") : TRS("Guardar en PES21FX.ini (Ctrl+S). No hay cambios sin guardar."), nChanged);
@@ -993,21 +1190,26 @@ static void DrawMenu() {
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) { if (s_redo.empty()) ImGui::SetTooltip("%s", TRS("Rehacer (Ctrl+Y): no hay nada para rehacer")); else ImGui::SetTooltip(TRS("Rehacer (Ctrl+Y): %s"), s_redo.back().what.c_str()); }
         ImGui::SameLine();
         ImGui::BeginDisabled(!dirty);
-        if (ImGui::Button(IcoL(kIcoRevert, TRS("Descartar")).c_str())) s_revertAllReq = true;
+        if (ImGui::Button((s_rail ? Ico(kIcoRevert) + "##desc" : IcoL(kIcoRevert, TRS("Descartar"))).c_str())) s_revertAllReq = true;
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", TRS("Volver todo el menu a lo guardado en PES21FX.ini (se puede deshacer con Ctrl+Z)"));
         ImGui::SameLine();
-        ImGui::Checkbox(IcoL(kIcoEye, TRS("Ver original")).c_str(), &g_cfg.bypass);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Ver el juego sin el mod, para comparar"));
+        if (s_iconsOk) {   // (08/11) boton que queda marcado mientras se ve el juego original
+            ImGui::PushStyleColor(ImGuiCol_Button, g_cfg.bypass ? ImVec4(0.75f, 0.45f, 0.15f, 1) : ImGui::GetStyleColorVec4(ImGuiCol_Button));
+            if (ImGui::Button((s_rail ? Ico(kIcoEye) + "##orig" : IcoL(kIcoEye, TRS("Original"))).c_str())) g_cfg.bypass = !g_cfg.bypass;
+            ImGui::PopStyleColor();
+        } else ImGui::Checkbox(TRS("Ver original"), &g_cfg.bypass);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS(g_cfg.bypass ? "Viendo el juego SIN el mod: clic para volver" : "Ver el juego sin el mod, para comparar"));
         ImGui::SameLine();
-        if (ImGui::Button((IcoL(kIcoReload, TRS("Recargar")) + "###recargar").c_str())) ImGui::OpenPopup("recargar_pop");
+        if (ImGui::Button(s_iconsOk ? (Ico(kIcoReload) + "###recargar").c_str() : TRS("Recargar"))) ImGui::OpenPopup("recargar_pop");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Recargar shaders o la configuracion"));
         if (ImGui::BeginPopup("recargar_pop")) {
             if (ImGui::MenuItem(TRS("Recargar shaders"))) { ReloadShaders(); s_status = TRS("Shaders recargados"); }
             if (ImGui::MenuItem(TRS("Recargar config"))) { LoadConfig(); ReloadShaders(); UndoClear(); s_status = TRS("Configuracion recargada"); }
             ImGui::TextDisabled("%s", TRS("Recargar config vuelve a leer PES21FX.ini (se pierde lo no guardado)"));
             ImGui::EndPopup();
         }
-        ImGui::SameLine();
+        if (ImGui::GetContentRegionAvail().x - ImGui::GetItemRectMax().x + ImGui::GetWindowPos().x > 210.0f * UIK()) ImGui::SameLine();   // (08/11) si no entra, el buscador baja a su propia fila
         if (s_focusSearch) { ImGui::SetKeyboardFocusHere(); s_focusSearch = false; }
         ImGui::SetNextItemWidth(std::max(140.0f * UIK(), ImGui::GetContentRegionAvail().x - (s_search[0] ? ImGui::GetFrameHeight() + 6.0f * UIK() : 0.0f)));
         ImGui::InputTextWithHint("##buscar", IcoL(kIcoSearch, TRS("Buscar opcion (Ctrl+F)")).c_str(), s_search, sizeof(s_search));
@@ -1044,11 +1246,13 @@ static void DrawMenu() {
         }
 
         // --- barra lateral ---
-        const float navW = std::clamp(ImGui::GetContentRegionAvail().x * 0.28f, 205.0f * UIK(), 290.0f * UIK());
+        const float navW = s_rail ? ImGui::GetFrameHeight() * 2.1f : std::clamp(ImGui::GetContentRegionAvail().x * 0.24f, 200.0f * UIK(), 270.0f * UIK());
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.09f, 0.10f, 0.12f, 1));
         ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f * UIK());
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 2.0f * UIK()));
-        ImGui::BeginChild("nav", ImVec2(navW, -footH), ImGuiChildFlags_AlwaysUseWindowPadding);
+        if (s_rail) ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(3.0f * UIK(), 6.0f * UIK()));
+        ImGui::BeginChild("nav", ImVec2(navW, -footH), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoScrollbar);
+        if (s_rail) ImGui::PopStyleVar();
         NavHeader(TRS("INICIO"));
         NavItem("fav", kIcoStar, TRS("Favoritos"), nFav ? std::to_string(nFav) : "", false);
         NavItem("chg", kIcoPen, TRS("Cambiados"), nChanged ? std::to_string(nChanged) : "", nChanged > 0);
@@ -1057,8 +1261,7 @@ static void DrawMenu() {
         int lastCat = -1;
         for (auto& s : secs) {
             if (s.cat != lastCat) { NavHeader(kCat[s.cat]); lastCat = s.cat; }
-            NavItem("sec:" + s.key, s.ico, s.shown, std::to_string(s.active) + "/" + std::to_string(s.total), s.changed);
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip(TRS("%d de %d grupos prendidos"), s.active, s.total);
+            NavItem("sec:" + s.key, s.ico, s.shown, "", s.changed);   // (08/11) mas simple: sin el conteo (esta en el titulo de la pagina)
         }
         NavHeader(TRS("SISTEMA"));
         NavItem("presets", kIcoSliders, TRS("Presets por estadio"), g_cfg.presetActive.file.empty() ? "" : "ON", false);
@@ -1076,38 +1279,29 @@ static void DrawMenu() {
         if (!q.empty()) {
             int n = 0; for (auto& g : g_cfg.groups) if (GroupMatches(g, q)) n++;
             char sub[128]; snprintf(sub, sizeof sub, TRS("%d grupos coinciden (Esc para limpiar)"), n);
-            PageTitle(kIcoSearch, std::string(TRS("Resultados")) + ": \"" + s_search + "\"", sub);
-            CardsToolbar();
+            PageTitle(kIcoSearch, std::string(TRS("Resultados")) + ": \"" + s_search + "\"", sub, true);
             ImGui::BeginChild("cards_res", ImVec2(0, 0), ImGuiChildFlags_None);
-            int gid = 0; std::string lastSec;
-            for (auto& g : g_cfg.groups) {
-                if (GroupMatches(g, q) && (!s_onlyActive || GroupActive(g))) { if (SecKey(g) != lastSec) { SectionLabel(g); lastSec = SecKey(g); } DrawGroup(g, gid); }
-                gid++;
-            }
+            std::vector<int> ids;
+            for (int gid = 0; gid < (int)g_cfg.groups.size(); gid++) { const MenuGroup& g = g_cfg.groups[gid]; if (GroupMatches(g, q) && (!s_onlyActive || GroupActive(g))) ids.push_back(gid); }
+            DrawCards(ids, true);
             if (!n) EmptyState(TRS("Nada coincide. Proba con otra palabra (busca en titulos, descripciones y sliders)."));
             ImGui::EndChild();
         } else if (s_sel == "fav" || s_sel == "chg" || s_sel == "rec") {
             const bool fav = s_sel == "fav", chg = s_sel == "chg";
-            if (fav) PageTitle(kIcoStar, TRS("Favoritos"), TRS("Tus tarjetas marcadas con la estrella, de todas las secciones."));
-            else if (chg) PageTitle(kIcoPen, TRS("Cambiados"), TRS("Tarjetas con valores distintos de lo guardado. Guardar (Ctrl+S) los deja fijos; Descartar los vuelve atras."));
-            else PageTitle(kIcoHistory, TRS("Recientes"), TRS("Lo ultimo que tocaste en esta sesion, lo mas nuevo arriba."));
-            CardsToolbar();
-            if (!fav && !chg && !s_recent.empty()) { ImGui::SameLine(); if (ImGui::SmallButton(TRS("Borrar la lista"))) s_recent.clear(); }
+            if (fav) PageTitle(kIcoStar, TRS("Favoritos"), TRS("Tus tarjetas marcadas con la estrella, de todas las secciones."), true);
+            else if (chg) PageTitle(kIcoPen, TRS("Cambiados"), TRS("Tarjetas con valores distintos de lo guardado. Guardar (Ctrl+S) los deja fijos; Descartar los vuelve atras."), true);
+            else PageTitle(kIcoHistory, TRS("Recientes"), TRS("Lo ultimo que tocaste en esta sesion, lo mas nuevo arriba."), true);
+            if (!fav && !chg && !s_recent.empty()) { if (ImGui::SmallButton(TRS("Borrar la lista"))) s_recent.clear(); }
             ImGui::BeginChild(("cards_" + s_sel).c_str(), ImVec2(0, 0), ImGuiChildFlags_None);
-            int n = 0;
+            std::vector<int> ids;
             if (fav || chg) {
-                int gid = 0;
-                for (auto& g : g_cfg.groups) {
-                    if ((fav ? IsFav(g.title) : GroupChanged(g)) && (!s_onlyActive || GroupActive(g))) { SectionLabel(g); DrawGroup(g, gid); n++; }
-                    gid++;
-                }
+                for (int gid = 0; gid < (int)g_cfg.groups.size(); gid++) { const MenuGroup& g = g_cfg.groups[gid]; if ((fav ? IsFav(g.title) : GroupChanged(g)) && (!s_onlyActive || GroupActive(g))) ids.push_back(gid); }
             } else {
-                const std::vector<std::string> rec = s_recent;   // DrawGroup puede tocar s_recent (no, pero por las dudas)
-                for (auto& t : rec) {
-                    int gid = 0;
-                    for (auto& g : g_cfg.groups) { if (g.title == t) { if (!s_onlyActive || GroupActive(g)) { SectionLabel(g); DrawGroup(g, gid); n++; } break; } gid++; }
-                }
+                for (auto& t : s_recent)
+                    for (int gid = 0; gid < (int)g_cfg.groups.size(); gid++) if (g_cfg.groups[gid].title == t) { if (!s_onlyActive || GroupActive(g_cfg.groups[gid])) ids.push_back(gid); break; }
             }
+            const int n = (int)ids.size();
+            DrawCards(ids, true);
             if (!n) EmptyState(fav ? TRS("Todavia no hay favoritos: toca la estrella de una tarjeta para tenerla a mano aca.")
                              : chg ? TRS("No hay cambios sin guardar.") : TRS("Todavia no tocaste nada en esta sesion."));
             ImGui::EndChild();
@@ -1115,13 +1309,13 @@ static void DrawMenu() {
             const std::string sname = s_sel.substr(4);
             const Sec* s = nullptr; for (auto& x : secs) if (x.key == sname) s = &x;
             char sub[96]; snprintf(sub, sizeof sub, TRS("%d de %d grupos prendidos"), s ? s->active : 0, s ? s->total : 0);
-            PageTitle(s ? s->ico : kIcoLayers, s ? s->shown : Utf8(sname), sub);
-            CardsToolbar();
+            PageTitle(s ? s->ico : kIcoLayers, s ? s->shown : Utf8(sname), sub, true);
             ImGui::BeginChild(("cards_" + s_sel).c_str(), ImVec2(0, 0), ImGuiChildFlags_None);
             DrawTutorial(sname, s ? s->shown : sname);
             DrawSectionExtras(sname);
-            int gid = 0;
-            for (auto& g : g_cfg.groups) { if (SecKey(g) == sname && (!s_onlyActive || GroupActive(g))) DrawGroup(g, gid); gid++; }
+            std::vector<int> ids;
+            for (int gid = 0; gid < (int)g_cfg.groups.size(); gid++) { const MenuGroup& g = g_cfg.groups[gid]; if (SecKey(g) == sname && (!s_onlyActive || GroupActive(g))) ids.push_back(gid); }
+            DrawCards(ids, false);
             ImGui::EndChild();
         } else if (s_sel == "presets") {
             PageTitle(kIcoSliders, TRS("Presets por estadio"));

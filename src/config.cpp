@@ -117,7 +117,7 @@ static bool LoadConfigLocked() {
             }
             int idx, comp;
             if (ParseParamName(k, idx, comp)) {
-                c.base[idx][comp] = (float)atof(v.c_str());
+                c.base[idx][comp] = (idx == 344 && comp == 0) ? 0.0f : (float)atof(v.c_str());   // (08/11) la camara libre arranca siempre apagada
                 c.info[idx][comp].defined = true;
                 c.info[idx][comp].comment = comment;
             }
@@ -142,6 +142,11 @@ static bool LoadConfigLocked() {
             else if (kl == "menu_seccion") c.menuSection = v;
             else if (kl == "ui_scale") c.uiScale = std::clamp((float)atof(v.c_str()), 0.7f, 2.0f);
             else if (kl == "compacto") c.compact = atoi(v.c_str()) != 0;
+            else if (kl == "menu_ayuda") c.menuHelp = std::clamp(atoi(v.c_str()), 0, 2);          // (08/11) explicacion de cada opcion: 0 con el mouse, 1 breve, 2 completa
+            else if (kl == "menu_avanzado") c.menuAdvanced = atoi(v.c_str()) != 0;                // (08/11) todas las opciones de las tarjetas largas a la vista
+            else if (kl == "menu_columnas") c.menuCols = atoi(v.c_str()) != 0;                    // (08/11) dos columnas de tarjetas en ventanas anchas
+            else if (kl == "menu_tamano") c.menuSize = std::clamp(atoi(v.c_str()), 0, 2);          // (08/11) 0 ventana, 1 grande, 2 panel a la derecha
+            else if (kl == "menu_opacidad") c.menuAlpha = std::clamp((float)atof(v.c_str()), 0.5f, 1.0f);
             else if (kl == "language" || kl == "idioma") { const std::string lv = Lower(v); c.lang = (lv == "en" || lv == "english" || v == "1") ? 1 : (lv == "pt" || lv == "portugues" || lv == "portuguese" || v == "2") ? 2 : 0; }
             else if (kl == "auto_captura") c.autoCap = atoi(v.c_str()) != 0;
             else if (kl == "auto_captura_seg") c.autoCapSec = std::clamp((float)atof(v.c_str()), 3.0f, 600.0f);
@@ -542,6 +547,9 @@ bool SaveConfigValues() {
             if (v < sl.lo || v > sl.hi) { float cl = v < sl.lo ? sl.lo : sl.hi; Log("guardar: %s = %g fuera del rango %g..%g del slider '%s': guardado %g", k.c_str(), v, sl.lo, sl.hi, sl.label.c_str(), cl); v = cl; }
         }
         char buf[64]; snprintf(buf, sizeof(buf), "%g", g_cfg.live[idx][comp]);
+        // (08/11) Agustin: "la camara libre nunca la dejes prendida al cerrar el juego": x344 se guarda siempre en 0 (apagada);
+        // lo que se este usando en este momento sigue prendido hasta cerrar
+        if (idx == 344 && comp == 0) { raw = k + " = 0"; g_cfg.base[idx][comp] = 0.0f; continue; }
         raw = k + " = " + buf;
         g_cfg.base[idx][comp] = g_cfg.live[idx][comp];
     }

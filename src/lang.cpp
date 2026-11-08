@@ -7,6 +7,30 @@
 namespace fx {
 
 static const char* const kEn[][2] = {
+    // (08/11) menu adaptable, explicaciones, 'mas opciones'
+    { "Menos opciones", "Fewer options" },
+    { "%d opciones mas", "%d more options" },
+    { "Volver a ver solo las principales", "Show only the main ones again" },
+    { "Los ajustes finos de esta mejora (en Ajustes se pueden ver siempre)", "The fine settings of this feature (Settings can show them always)" },
+    { "Va de %s a %s. Arrastra o toca el numero para escribirlo. Clic derecho: volver a lo guardado.", "Goes from %s to %s. Drag, or click the number to type it. Right click: back to the saved value." },
+    { "Solo activos: mostrar solo los grupos con el interruptor prendido", "Active only: show only the groups that are switched on" },
+    { "Pantalla grande", "Large screen" },
+    { "Panel a la derecha (deja la cara a la vista)", "Panel on the right (keeps the face visible)" },
+    { "Ventana", "Window" },
+    { "Tamano del menu: %s", "Menu size: %s" },
+    { "Original", "Original" },
+    { "Viendo el juego SIN el mod: clic para volver", "Viewing the game WITHOUT the mod: click to go back" },
+    { "Recargar shaders o la configuracion", "Reload shaders or the configuration" },
+    { "Solo al pasar el mouse", "Only on mouse hover" },
+    { "Breve, debajo de cada opcion", "Short, under each option" },
+    { "Completa, debajo de cada opcion", "Full, under each option" },
+    { "Explicacion de cada opcion", "Explanation of each option" },
+    { "Breve: una linea gris debajo de cada slider con lo que hace (en los selectores, lo que hace la opcion elegida). Completa: el texto entero.", "Short: a grey line under each slider with what it does (for selectors, what the chosen option does). Full: the whole text." },
+    { "Opacidad del menu", "Menu opacity" },
+    { "Mas bajo = se ve el juego a traves del fondo del menu.", "Lower = the game shows through the menu background." },
+    { "Todas las opciones a la vista en las tarjetas largas", "All options visible in long cards" },
+    { "Apagado: las tarjetas con mas de %d controles muestran los principales y el resto con 'opciones mas'.", "Off: cards with more than %d controls show the main ones and the rest under 'more options'." },
+    { "Dos columnas de tarjetas si la ventana es ancha", "Two columns of cards when the window is wide" },
     // (04/11 n) menu nuevo: barra lateral, deshacer / rehacer, ajustes
     { "Arrastra o usa la cajita del numero. Clic derecho: volver a lo guardado o al de fabrica", "Drag, or use the number box. Right click: back to the saved or factory value" },
     { "Clic para escribir el valor", "Click to type the value" },
@@ -446,6 +470,30 @@ static const char* const kEn[][2] = {
 
 // (27/10) portugues: mismo orden que kEn
 static const char* const kPt[][2] = {
+    // (08/11) menu adaptable, explicaciones, 'mas opciones'
+    { "Menos opciones", "Menos op\303\247\303\265es" },
+    { "%d opciones mas", "Mais %d op\303\247\303\265es" },
+    { "Volver a ver solo las principales", "Ver s\303\263 as principais" },
+    { "Los ajustes finos de esta mejora (en Ajustes se pueden ver siempre)", "Os ajustes finos desta melhoria (em Ajustes d\303\241 para ver sempre)" },
+    { "Va de %s a %s. Arrastra o toca el numero para escribirlo. Clic derecho: volver a lo guardado.", "Vai de %s a %s. Arraste ou clique no n\303\272mero para digitar. Clique direito: voltar ao salvo." },
+    { "Solo activos: mostrar solo los grupos con el interruptor prendido", "S\303\263 ativos: mostrar s\303\263 os grupos ligados" },
+    { "Pantalla grande", "Tela grande" },
+    { "Panel a la derecha (deja la cara a la vista)", "Painel \303\240 direita (deixa o rosto \303\240 vista)" },
+    { "Ventana", "Janela" },
+    { "Tamano del menu: %s", "Tamanho do menu: %s" },
+    { "Original", "Original" },
+    { "Viendo el juego SIN el mod: clic para volver", "Vendo o jogo SEM o mod: clique para voltar" },
+    { "Recargar shaders o la configuracion", "Recarregar shaders ou a configura\303\247\303\243o" },
+    { "Solo al pasar el mouse", "S\303\263 ao passar o mouse" },
+    { "Breve, debajo de cada opcion", "Curta, embaixo de cada op\303\247\303\243o" },
+    { "Completa, debajo de cada opcion", "Completa, embaixo de cada op\303\247\303\243o" },
+    { "Explicacion de cada opcion", "Explica\303\247\303\243o de cada op\303\247\303\243o" },
+    { "Breve: una linea gris debajo de cada slider con lo que hace (en los selectores, lo que hace la opcion elegida). Completa: el texto entero.", "Curta: uma linha cinza embaixo de cada slider com o que ele faz (nos seletores, o que faz a op\303\247\303\243o escolhida). Completa: o texto inteiro." },
+    { "Opacidad del menu", "Opacidade do menu" },
+    { "Mas bajo = se ve el juego a traves del fondo del menu.", "Mais baixo = o jogo aparece atr\303\241s do fundo do menu." },
+    { "Todas las opciones a la vista en las tarjetas largas", "Todas as op\303\247\303\265es \303\240 vista nos cart\303\265es longos" },
+    { "Apagado: las tarjetas con mas de %d controles muestran los principales y el resto con 'opciones mas'.", "Desligado: cart\303\265es com mais de %d controles mostram os principais e o resto em 'mais op\303\247\303\265es'." },
+    { "Dos columnas de tarjetas si la ventana es ancha", "Duas colunas de cart\303\265es se a janela for larga" },
     // (04/11 n) menu nuevo
     { "Arrastra o usa la cajita del numero. Clic derecho: volver a lo guardado o al de fabrica", "Arraste ou use a caixinha do n\303\272mero. Clique direito: voltar ao salvo ou ao de f\303\241brica" },
     { "Clic para escribir el valor", "Clique para digitar o valor" },
