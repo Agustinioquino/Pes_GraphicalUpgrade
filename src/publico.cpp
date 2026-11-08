@@ -19,6 +19,8 @@
 #include <cmath>
 #include <chrono>
 
+namespace fx {
+
 static constexpr UINT kMax = 32768;                       // hinchas con gesto propio (512 KB por cuadro)
 static ID3D11Buffer* s_buf = nullptr;
 static ID3D11ShaderResourceView* s_srv = nullptr;
@@ -120,3 +122,5 @@ void PublicoPresent() {
         Log("publico: %d subidas del buffer de gestos en 30 s (boca %.2f, cejas %.2f, animo %.2f)", s_uploads.exchange(0), g_cfg.live[394][1], g_cfg.live[394][2], g_cfg.live[394][3]);
     }
 }
+
+}  // namespace fx
