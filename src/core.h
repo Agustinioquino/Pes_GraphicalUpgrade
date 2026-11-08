@@ -164,7 +164,7 @@ struct Config {
     std::string menuSection;                   // (04/11 n) ultima pagina del menu ([PES21FX] menu_seccion: sec:<seccion>, fav, chg, rec, presets, tools, settings)
     float uiScale = 1.0f;                      // 19/10: tamano del menu ([PES21FX] ui_scale)
     bool compact = false;                      // 19/10: grupos contraidos por defecto ([PES21FX] compacto)
-    int menuHelp = 1; bool menuAdvanced = false, menuCols = true; int menuSize = 0; float menuAlpha = 0.97f;   // (08/11) [PES21FX] menu_ayuda / menu_avanzado / menu_columnas / menu_tamano / menu_opacidad (overlay.cpp)
+    int menuHelp = 1; bool menuAdvanced = false, menuCols = true; int menuSize = 0; float menuAlpha = 0.85f; bool menuGlass = true, menuFont = true;   // (08/11) [PES21FX] menu_ayuda / menu_avanzado / menu_columnas / menu_tamano / menu_opacidad / menu_vidrio / menu_letra (overlay.cpp)
     int blockKeys = 1;                         // (31/10) teclas del juego con el menu: 0 nunca se bloquean, 1 al escribir en un campo, 2 con el menu abierto ([PES21FX] bloquear_teclado)
     int lang = 0;                              // (27/10) idioma del menu: 0 espanol, 1 ingles ([PES21FX] language = es / en)
     bool autoCap = false; float autoCapSec = 20.0f; int autoCapMax = 150; bool autoCapAB = false; bool exeDump = true; bool motorPatch = true; bool motorSunFix = true; int motorShadowFix = 1; int motorShadowRes = 0; float motorCascadeScale = 0.0f;   // [Motor]: parches en memoria (exepatch.cpp)   // exe_dump: volcado del exe desempaquetado (una vez por version)   // auto_captura_ab: pares A (todo) / B (un grupo del menu apagado 3 cuadros)
@@ -327,7 +327,8 @@ int FaceGenExportHair(std::string& status);
 std::string BrowSaveCurrent();                 // (04/11) guarda cantidad / largo de cejas (z77 / w77) del jugador solo en pantalla en [cejas_cara]   // vuelca hair\\auto\\<id>.dds de cada cara generada (plantillas para editar)
 bool LoadHairConfig();                         // PES21FX_hair.ini
 const HairType* HairTypeFor(const std::string& id, std::string* outName);
-ID3DBlob* CompileNamedShader(const wchar_t* file, const char* profile);   // shaders\<file> con #include
+ID3DBlob* CompileNamedShader(const wchar_t* file, const char* profile);
+ID3DBlob* CompileSourceShader(const char* name, const char* src, const char* profile);   // (08/11) shader en el codigo (vidrio del menu)   // shaders\<file> con #include
 void NamedSetSRV(const std::string& name, ID3D11ShaderResourceView* v);
 std::string DescribeInputLayout(ID3D11InputLayout* il);   // elementos de un input layout anotado al crearse   // publica un SRV como recurso con nombre (srv = N nombre en las reglas)
 extern std::atomic<int> g_matchGen;                                        // sube en cada partido nuevo (reloj del cesped)

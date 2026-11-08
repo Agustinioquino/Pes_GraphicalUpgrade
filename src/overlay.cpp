@@ -8,6 +8,7 @@
 #include <imgui_impl_dx11.h>
 #include <imgui_impl_win32.h>
 #include <DDSTextureLoader.h>
+#include <psapi.h>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -39,9 +40,21 @@ static void BuildFonts(float H) {
     ImGuiIO& io = ImGui::GetIO();
     const float k = std::clamp(H / 1080.0f, 0.75f, 3.0f) * kFontUp;
     io.Fonts->Clear();
-    if (!io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", std::round(19.0f * k), nullptr, io.Fonts->GetGlyphRangesDefault())) io.Fonts->AddFontDefault();
-    s_fontBig = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeuib.ttf", std::round(26.0f * k), nullptr, io.Fonts->GetGlyphRangesDefault());
-    s_fontBold = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeuib.ttf", std::round(19.0f * k), nullptr, io.Fonts->GetGlyphRangesDefault());
+    {   // (08/11) letra del menu: Saira Semi Condensed (OFL, textures\pes_ui*.ttf), condensada y deportiva como la de PES 6
+        // (Agustin: "cambia la fuente por una mas estetica y similar a la del pes 6"); si no esta, Segoe UI como antes
+        int len = WideCharToMultiByte(CP_UTF8, 0, g_cfg.baseDir.c_str(), -1, nullptr, 0, nullptr, nullptr);
+        std::string dir(len > 0 ? len - 1 : 0, '\0');
+        if (len > 1) WideCharToMultiByte(CP_UTF8, 0, g_cfg.baseDir.c_str(), -1, &dir[0], len, nullptr, nullptr);
+        const bool ui = g_cfg.menuFont && GetFileAttributesW((g_cfg.baseDir + L"textures\\pes_ui.ttf").c_str()) != INVALID_FILE_ATTRIBUTES
+                     && GetFileAttributesW((g_cfg.baseDir + L"textures\\pes_ui_bold.ttf").c_str()) != INVALID_FILE_ATTRIBUTES;
+        const std::string reg = ui ? dir + "textures\\pes_ui.ttf" : std::string("C:\\Windows\\Fonts\\segoeui.ttf");
+        const std::string bold = ui ? dir + "textures\\pes_ui_bold.ttf" : std::string("C:\\Windows\\Fonts\\segoeuib.ttf");
+        const float up = ui ? 1.12f : 1.0f;   // Saira es un poco mas chica a igual tamano
+        if (!io.Fonts->AddFontFromFileTTF(reg.c_str(), std::round(19.0f * k * up), nullptr, io.Fonts->GetGlyphRangesDefault())) io.Fonts->AddFontDefault();
+        s_fontBig = io.Fonts->AddFontFromFileTTF(bold.c_str(), std::round(27.0f * k * up), nullptr, io.Fonts->GetGlyphRangesDefault());
+        s_fontBold = io.Fonts->AddFontFromFileTTF(bold.c_str(), std::round((ui ? 20.5f : 19.0f) * k * up), nullptr, io.Fonts->GetGlyphRangesDefault());
+        Log("menu: letra %s", ui ? "Saira Semi Condensed (textures\\pes_ui.ttf)" : "Segoe UI");
+    }
     {   // (04/11 n) iconos del menu (Font Awesome Free, recortado): se mezclan en la letra normal y en la negrita
         static const ImWchar kIcoRanges[] = { 0xe000, 0xf8ff, 0 };
         int len = WideCharToMultiByte(CP_UTF8, 0, g_cfg.baseDir.c_str(), -1, nullptr, 0, nullptr, nullptr);
@@ -358,6 +371,176 @@ static std::string ShortDesc(const std::string& d, bool& cut) {
     cut = true; return d.substr(0, s) + "...";
 }
 
+// --- (08/11) vidrio del menu (Agustin: "un estilo como el nuevo glass de Apple o Windows Aero") ---
+// Antes de dibujar el menu se copia la imagen del juego y se desenfoca (Kawase doble: 1/2, 1/4, 1/8, 1/16 y de vuelta a 1/4, con un
+// poco mas de saturacion como el vidrio de Apple). El fondo de la ventana es esa imagen en su lugar exacto, con un tinte oscuro para
+// que se lea, un reflejo arriba, un filo de luz en el borde y una sombra difusa afuera. Solo corre con el menu abierto.
+// [PES21FX] menu_vidrio = 0 vuelve al fondo liso.
+static const char* kGlassVS =
+    "struct O { float4 p : SV_Position; float2 uv : TEXCOORD0; };\n"
+    "O main(uint id : SV_VertexID) { O o; float2 t = float2((id << 1) & 2, id & 2); o.p = float4(t * float2(2, -2) + float2(-1, 1), 0, 1); o.uv = t; return o; }\n";
+static const char* kGlassDown =
+    "Texture2D<float4> s0 : register(t0); SamplerState L : register(s0);\n"
+    "float4 main(float4 p : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {\n"
+    "  float w, h; s0.GetDimensions(w, h); float2 d = 1.0 / float2(w, h);\n"
+    "  float3 c = s0.SampleLevel(L, uv, 0).rgb * 4.0;\n"
+    "  c += s0.SampleLevel(L, uv + float2(-d.x, -d.y), 0).rgb; c += s0.SampleLevel(L, uv + float2(d.x, -d.y), 0).rgb;\n"
+    "  c += s0.SampleLevel(L, uv + float2(-d.x, d.y), 0).rgb;  c += s0.SampleLevel(L, uv + float2(d.x, d.y), 0).rgb;\n"
+    "  return float4(c * 0.125, 1); }\n";
+static const char* kGlassUp =
+    "Texture2D<float4> s0 : register(t0); SamplerState L : register(s0);\n"
+    "float4 main(float4 p : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {\n"
+    "  float w, h; s0.GetDimensions(w, h); float2 d = 1.0 / float2(w, h);\n"
+    "  float3 c = s0.SampleLevel(L, uv + float2(-2 * d.x, 0), 0).rgb + s0.SampleLevel(L, uv + float2(2 * d.x, 0), 0).rgb;\n"
+    "  c += s0.SampleLevel(L, uv + float2(0, -2 * d.y), 0).rgb + s0.SampleLevel(L, uv + float2(0, 2 * d.y), 0).rgb;\n"
+    "  c += (s0.SampleLevel(L, uv + float2(-d.x, -d.y), 0).rgb + s0.SampleLevel(L, uv + float2(d.x, -d.y), 0).rgb\n"
+    "      + s0.SampleLevel(L, uv + float2(-d.x, d.y), 0).rgb + s0.SampleLevel(L, uv + float2(d.x, d.y), 0).rgb) * 2.0;\n"
+    "  c /= 12.0; float l = dot(c, float3(0.299, 0.587, 0.114)); c = max(0, lerp(l.xxx, c, 1.12));\n"
+    "  return float4(c, 1); }\n";
+static ID3D11VertexShader* s_gVS = nullptr; static ID3D11PixelShader *s_gDown = nullptr, *s_gUp = nullptr;
+static ID3D11SamplerState* s_gSamp = nullptr; static ID3D11RasterizerState* s_gRS = nullptr; static ID3D11DepthStencilState* s_gDSS = nullptr; static ID3D11BlendState* s_gBS = nullptr;
+static ID3D11Texture2D* s_gSnap = nullptr; static ID3D11ShaderResourceView* s_gSnapSRV = nullptr;
+static constexpr int kGLv = 6;   // 1/2, 1/4, 1/8, 1/16 (bajada), 1/8, 1/4 (subida: la que se usa)
+static ID3D11Texture2D* s_gLv[kGLv] = {}; static ID3D11RenderTargetView* s_gLvRTV[kGLv] = {}; static ID3D11ShaderResourceView* s_gLvSRV[kGLv] = {};
+static UINT s_gW = 0, s_gH = 0; static DXGI_FORMAT s_gFmt = DXGI_FORMAT_UNKNOWN; static bool s_gTried = false, s_gReady = false;
+template<class T> static void GRel(T*& p) { if (p) { p->Release(); p = nullptr; } }
+static DXGI_FORMAT TypedFmt(DXGI_FORMAT f) {
+    switch (f) {
+    case DXGI_FORMAT_R8G8B8A8_TYPELESS: return DXGI_FORMAT_R8G8B8A8_UNORM; case DXGI_FORMAT_B8G8R8A8_TYPELESS: return DXGI_FORMAT_B8G8R8A8_UNORM;
+    case DXGI_FORMAT_R10G10B10A2_TYPELESS: return DXGI_FORMAT_R10G10B10A2_UNORM; case DXGI_FORMAT_R16G16B16A16_TYPELESS: return DXGI_FORMAT_R16G16B16A16_FLOAT;
+    case DXGI_FORMAT_B8G8R8X8_TYPELESS: return DXGI_FORMAT_B8G8R8X8_UNORM; default: return f; }
+}
+static bool GlassEnsure(ID3D11Texture2D* bb) {
+    if (!g_cfg.menuGlass || !bb || !g_dev.dev) return false;
+    ID3D11Device* d = g_dev.dev;
+    if (!s_gTried) {
+        s_gTried = true;
+        if (ID3DBlob* b = CompileSourceShader("pes_menu_glass_vs", kGlassVS, "vs_5_0")) { d->CreateVertexShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_gVS); b->Release(); }
+        if (ID3DBlob* b = CompileSourceShader("pes_menu_glass_down", kGlassDown, "ps_5_0")) { d->CreatePixelShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_gDown); b->Release(); }
+        if (ID3DBlob* b = CompileSourceShader("pes_menu_glass_up", kGlassUp, "ps_5_0")) { d->CreatePixelShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_gUp); b->Release(); }
+        D3D11_SAMPLER_DESC sd{}; sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR; sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP; sd.MaxLOD = D3D11_FLOAT32_MAX; d->CreateSamplerState(&sd, &s_gSamp);
+        D3D11_RASTERIZER_DESC rd{}; rd.FillMode = D3D11_FILL_SOLID; rd.CullMode = D3D11_CULL_NONE; rd.DepthClipEnable = TRUE; d->CreateRasterizerState(&rd, &s_gRS);
+        D3D11_DEPTH_STENCIL_DESC dd{}; dd.DepthEnable = FALSE; d->CreateDepthStencilState(&dd, &s_gDSS);
+        D3D11_BLEND_DESC bd{}; bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL; d->CreateBlendState(&bd, &s_gBS);
+        Log("menu: vidrio %s", (s_gVS && s_gDown && s_gUp) ? "listo (desenfoque del juego detras del menu)" : "NO compilo: fondo liso");
+    }
+    if (!s_gVS || !s_gDown || !s_gUp || !s_gSamp) return false;
+    D3D11_TEXTURE2D_DESC bd; bb->GetDesc(&bd);
+    if (s_gSnap && s_gW == bd.Width && s_gH == bd.Height && s_gFmt == bd.Format) return s_gReady;
+    GRel(s_gSnapSRV); GRel(s_gSnap); for (int i = 0; i < kGLv; i++) { GRel(s_gLvSRV[i]); GRel(s_gLvRTV[i]); GRel(s_gLv[i]); }
+    s_gReady = false; s_gW = bd.Width; s_gH = bd.Height; s_gFmt = bd.Format;
+    D3D11_TEXTURE2D_DESC td{}; td.Width = bd.Width; td.Height = bd.Height; td.MipLevels = 1; td.ArraySize = 1; td.Format = bd.Format; td.SampleDesc.Count = 1;
+    td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    if (FAILED(d->CreateTexture2D(&td, nullptr, &s_gSnap))) return false;
+    D3D11_SHADER_RESOURCE_VIEW_DESC sv{}; sv.Format = TypedFmt(bd.Format); sv.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D; sv.Texture2D.MipLevels = 1;
+    if (FAILED(d->CreateShaderResourceView(s_gSnap, &sv, &s_gSnapSRV))) return false;
+    static const UINT kDiv[kGLv] = { 2, 4, 8, 16, 8, 4 };
+    for (int i = 0; i < kGLv; i++) {
+        D3D11_TEXTURE2D_DESC ld = td; ld.Width = (std::max)(1u, bd.Width / kDiv[i]); ld.Height = (std::max)(1u, bd.Height / kDiv[i]);
+        ld.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; ld.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        if (FAILED(d->CreateTexture2D(&ld, nullptr, &s_gLv[i])) || FAILED(d->CreateRenderTargetView(s_gLv[i], nullptr, &s_gLvRTV[i])) || FAILED(d->CreateShaderResourceView(s_gLv[i], nullptr, &s_gLvSRV[i]))) return false;
+    }
+    s_gReady = true;
+    Log("menu: vidrio %ux%u (formato %d)", bd.Width, bd.Height, (int)bd.Format);
+    return true;
+}
+static ID3D11ShaderResourceView* GlassSRV() { return (g_cfg.menuGlass && s_gReady) ? s_gLvSRV[kGLv - 1] : nullptr; }
+// copia y desenfoque (en el contexto inmediato, en el Present, antes de dibujar el menu); guarda y devuelve el estado que toca
+static void GlassBlur(ID3D11Texture2D* bb) {
+    if (!s_gReady || !bb) return;
+    ID3D11DeviceContext* c = g_dev.imm;
+    ID3D11RenderTargetView* oRT[8] = {}; ID3D11DepthStencilView* oDS = nullptr; c->OMGetRenderTargets(8, oRT, &oDS);
+    UINT nvp = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE; D3D11_VIEWPORT ovp[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]; c->RSGetViewports(&nvp, ovp);
+    ID3D11VertexShader* oVS = nullptr; ID3D11PixelShader* oPS = nullptr; ID3D11GeometryShader* oGS = nullptr; ID3D11HullShader* oHS = nullptr; ID3D11DomainShader* oDSh = nullptr;
+    c->VSGetShader(&oVS, nullptr, nullptr); c->PSGetShader(&oPS, nullptr, nullptr); c->GSGetShader(&oGS, nullptr, nullptr); c->HSGetShader(&oHS, nullptr, nullptr); c->DSGetShader(&oDSh, nullptr, nullptr);
+    ID3D11InputLayout* oIL = nullptr; c->IAGetInputLayout(&oIL); D3D11_PRIMITIVE_TOPOLOGY oTopo; c->IAGetPrimitiveTopology(&oTopo);
+    ID3D11RasterizerState* oRS = nullptr; c->RSGetState(&oRS);
+    ID3D11DepthStencilState* oDSS = nullptr; UINT oRef = 0; c->OMGetDepthStencilState(&oDSS, &oRef);
+    ID3D11BlendState* oBS = nullptr; float oBF[4]; UINT oSM = 0; c->OMGetBlendState(&oBS, oBF, &oSM);
+    ID3D11SamplerState* oS0 = nullptr; c->PSGetSamplers(0, 1, &oS0);
+    ID3D11ShaderResourceView* oT0 = nullptr; c->PSGetShaderResources(0, 1, &oT0);
+
+    D3D11_TEXTURE2D_DESC bd; bb->GetDesc(&bd);
+    if (bd.SampleDesc.Count > 1) c->ResolveSubresource(s_gSnap, 0, bb, 0, TypedFmt(bd.Format)); else c->CopyResource(s_gSnap, bb);
+    c->VSSetShader(s_gVS, nullptr, 0); c->GSSetShader(nullptr, nullptr, 0); c->HSSetShader(nullptr, nullptr, 0); c->DSSetShader(nullptr, nullptr, 0);
+    c->IASetInputLayout(nullptr); c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    c->RSSetState(s_gRS); c->OMSetDepthStencilState(s_gDSS, 0); float bf[4] = {}; c->OMSetBlendState(s_gBS, bf, 0xffffffff);
+    c->PSSetSamplers(0, 1, &s_gSamp);
+    auto pass = [&](ID3D11PixelShader* ps, ID3D11ShaderResourceView* src, int dst) {
+        ID3D11ShaderResourceView* nul = nullptr; c->PSSetShaderResources(0, 1, &nul);
+        c->OMSetRenderTargets(1, &s_gLvRTV[dst], nullptr);
+        D3D11_TEXTURE2D_DESC ld; s_gLv[dst]->GetDesc(&ld);
+        D3D11_VIEWPORT vp{ 0, 0, (float)ld.Width, (float)ld.Height, 0, 1 }; c->RSSetViewports(1, &vp);
+        c->PSSetShaderResources(0, 1, &src); c->PSSetShader(ps, nullptr, 0); c->Draw(3, 0);
+    };
+    pass(s_gDown, s_gSnapSRV, 0); pass(s_gDown, s_gLvSRV[0], 1); pass(s_gDown, s_gLvSRV[1], 2); pass(s_gDown, s_gLvSRV[2], 3);
+    pass(s_gUp, s_gLvSRV[3], 4); pass(s_gUp, s_gLvSRV[4], 5);
+    { ID3D11ShaderResourceView* nul = nullptr; c->PSSetShaderResources(0, 1, &nul); }
+
+    c->OMSetRenderTargets(8, oRT, oDS); for (auto* r : oRT) if (r) r->Release(); if (oDS) oDS->Release();
+    c->RSSetViewports(nvp, ovp);
+    c->VSSetShader(oVS, nullptr, 0); c->PSSetShader(oPS, nullptr, 0); c->GSSetShader(oGS, nullptr, 0); c->HSSetShader(oHS, nullptr, 0); c->DSSetShader(oDSh, nullptr, 0);
+    if (oVS) oVS->Release(); if (oPS) oPS->Release(); if (oGS) oGS->Release(); if (oHS) oHS->Release(); if (oDSh) oDSh->Release();
+    c->IASetInputLayout(oIL); if (oIL) oIL->Release(); c->IASetPrimitiveTopology(oTopo);
+    c->RSSetState(oRS); if (oRS) oRS->Release();
+    c->OMSetDepthStencilState(oDSS, oRef); if (oDSS) oDSS->Release();
+    c->OMSetBlendState(oBS, oBF, oSM); if (oBS) oBS->Release();
+    c->PSSetSamplers(0, 1, &oS0); if (oS0) oS0->Release();
+    c->PSSetShaderResources(0, 1, &oT0); if (oT0) oT0->Release();
+}
+// --- (08/11) animaciones del menu: todo con curvas suaves (sale rapido y frena), por tiempo real ---
+static float Ease(float t) { t = std::clamp(t, 0.0f, 1.0f); return 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t); }
+static float s_menuVis = 0.0f;             // 0 cerrado .. 1 abierto (aparece y se desvanece)
+static double s_pageT = -10.0;             // cuando cambio la pagina (la nueva entra deslizandose)
+static std::string s_pageShown;
+static std::map<std::string, double> s_cardOpenT;   // cuando se desplego cada tarjeta (el contenido aparece)
+static float s_navY = -1.0f, s_navH = 0.0f, s_navTgtY = -1.0f; // barra lateral: el resaltado de la pagina elegida se desliza
+// animacion por elemento (pasar el mouse): sube hacia 1 o baja hacia 0 en ~0.12 s
+static float HoverAnim(ImGuiID id, bool on, float speed = 9.0f) {
+    float* v = ImGui::GetStateStorage()->GetFloatRef(id, 0.0f);
+    const float dt = ImGui::GetIO().DeltaTime;
+    *v = on ? std::min(1.0f, *v + dt * speed) : std::max(0.0f, *v - dt * speed);
+    return Ease(*v);
+}
+static ImVec4 Mix(const ImVec4& a, const ImVec4& b, float t) { return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t); }
+// el fondo de vidrio de una ventana: imagen desenfocada, tinte, reflejo arriba, filo de luz y sombra afuera
+static void GlassBackdrop(ImVec2 a, ImVec2 b, float rounding, float alpha) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    {   // sombra difusa afuera (detras de la ventana)
+        ImDrawList* bg = ImGui::GetBackgroundDrawList();
+        const float s = 3.0f * UIK();
+        for (int i = 1; i <= 8; i++) { const float k = 1.0f - i / 9.0f; bg->AddRect(ImVec2(a.x - i * s, a.y - i * s + 4 * UIK()), ImVec2(b.x + i * s, b.y + i * s + 6 * UIK()), IM_COL32(0, 0, 0, (int)(70 * k * k * alpha)), rounding + i * s, 0, s * 1.2f); }
+    }
+    ImGui::PushClipRect(a, b, false);
+    if (ID3D11ShaderResourceView* srv = GlassSRV()) {
+        dl->AddImageRounded((ImTextureID)(intptr_t)srv, a, b, ImVec2(a.x / ds.x, a.y / ds.y), ImVec2(b.x / ds.x, b.y / ds.y), IM_COL32(255, 255, 255, (int)(255 * alpha)), rounding);
+        const float tint = std::clamp(g_cfg.menuAlpha, 0.5f, 1.0f);   // Opacidad del menu: cuanto oscurece el vidrio (lectura)
+        dl->AddRectFilled(a, b, IM_COL32(12, 15, 21, (int)(255 * alpha * (0.30f + 0.50f * (tint - 0.5f) / 0.5f))), rounding);
+    } else dl->AddRectFilled(a, b, IM_COL32(18, 20, 26, (int)(255 * alpha * std::clamp(g_cfg.menuAlpha, 0.5f, 1.0f))), rounding);
+    {   // reflejo de arriba: luz suave que se apaga hacia abajo
+        const float h = std::min(140.0f * UIK(), (b.y - a.y) * 0.35f), y0 = a.y + rounding * 0.6f;
+        dl->AddRectFilled(ImVec2(a.x, a.y), ImVec2(b.x, y0), IM_COL32(255, 255, 255, (int)(16 * alpha)), rounding, ImDrawFlags_RoundCornersTop);
+        dl->AddRectFilledMultiColor(ImVec2(a.x, y0), ImVec2(b.x, y0 + h), IM_COL32(255, 255, 255, (int)(16 * alpha)), IM_COL32(255, 255, 255, (int)(16 * alpha)), IM_COL32(255, 255, 255, 0), IM_COL32(255, 255, 255, 0));
+    }
+    // filo de luz: todo el borde fino y mas fuerte arriba a la izquierda (como el vidrio grueso)
+    dl->AddRect(ImVec2(a.x + 0.5f, a.y + 0.5f), ImVec2(b.x - 0.5f, b.y - 0.5f), IM_COL32(255, 255, 255, (int)(34 * alpha)), rounding, 0, 1.0f);
+    {
+        const float r = rounding, PI = 3.14159265f;
+        dl->PathArcTo(ImVec2(a.x + r, a.y + r), r - 0.5f, PI, PI * 1.5f, 10);
+        dl->PathLineTo(ImVec2(a.x + (b.x - a.x) * 0.45f, a.y + 0.5f));
+        dl->PathStroke(IM_COL32(255, 255, 255, (int)(110 * alpha)), 0, 1.4f * UIK());
+        dl->PathArcTo(ImVec2(a.x + r, a.y + r), r - 0.5f, PI * 0.75f, PI, 6);
+        dl->PathLineTo(ImVec2(a.x + 0.5f, a.y + r + (b.y - a.y) * 0.18f));
+        dl->PathStroke(IM_COL32(255, 255, 255, (int)(60 * alpha)), 0, 1.2f * UIK());
+        dl->PathArcTo(ImVec2(b.x - r, b.y - r), r - 0.5f, 0.0f, PI * 0.5f, 10);
+        dl->PathStroke(IM_COL32(255, 255, 255, (int)(40 * alpha)), 0, 1.0f);
+    }
+    ImGui::PopClipRect();
+}
+// tono de los paneles de adentro: con vidrio dejan ver el fondo (un poco mas claros, translucidos), sin vidrio como antes
+static ImVec4 PanelCol(const ImVec4& solid, float glassA) { return GlassSRV() ? ImVec4(solid.x + 0.05f, solid.y + 0.06f, solid.z + 0.08f, glassA) : solid; }
+
 // (08/11) explicacion de la opcion elegida en un selector: busca en la ayuda "<opcion> = ..." u "<opcion>: ..." (empezando la frase o
 // despues de ';' ',' '.') y corta en el proximo ';' o fin de oracion. "Nublado = cielo cubierto, luz de arriba" -> "cielo cubierto, luz de arriba"
 static std::string OptionExplain(const std::string& help, const std::string& opt) {
@@ -410,11 +593,13 @@ static bool PrettySlider(float* v, float lo, float hi, const char* fmt, float wi
         const float x0 = a.x + 2.0f + gs * 0.5f, x1 = b.x - 2.0f - gs * 0.5f, cy = std::round((a.y + b.y) * 0.5f);
         auto px = [&](float x) { const float t = hi != lo ? std::clamp((x - lo) / (hi - lo), 0.0f, 1.0f) : 0.0f; return x0 + t * (x1 - x0); };
         const float th = std::max(4.0f, 5.0f * UIK()), kx = px(*v);
+        const float ha = HoverAnim(sid, hov || act, 10.0f), aa = HoverAnim(sid + 1, act, 12.0f);   // (08/11) animado
         const ImVec4 fill = changed ? ImVec4(0.95f, 0.78f, 0.33f, 1) : ImVec4(0.20f, 0.72f, 0.46f, 1);
-        dl->AddRectFilled(ImVec2(x0, cy - th * 0.5f), ImVec2(x1, cy + th * 0.5f), ImGui::GetColorU32(hov || act ? ImVec4(0.30f, 0.33f, 0.40f, 1) : ImVec4(0.25f, 0.28f, 0.34f, 1)), th * 0.5f);
+        dl->AddRectFilled(ImVec2(x0, cy - th * 0.5f), ImVec2(x1, cy + th * 0.5f), ImGui::GetColorU32(Mix(ImVec4(0.25f, 0.28f, 0.34f, GlassSRV() ? 0.85f : 1.0f), ImVec4(0.32f, 0.35f, 0.42f, 1), ha)), th * 0.5f);
         if (kx > x0 + 0.5f) dl->AddRectFilled(ImVec2(x0, cy - th * 0.5f), ImVec2(kx, cy + th * 0.5f), ImGui::GetColorU32(fill), th * 0.5f);
         if (changed) { const float sx = px(savedV); dl->AddRectFilled(ImVec2(sx - 1.0f, cy - th * 1.3f), ImVec2(sx + 1.0f, cy + th * 1.3f), ImGui::GetColorU32(ImVec4(0.80f, 0.83f, 0.88f, 0.85f)), 1.0f); }
-        const float r = (act ? 9.0f : hov ? 8.5f : 7.5f) * UIK();
+        const float r = (7.5f + 1.0f * ha + 0.6f * aa) * UIK();
+        if (ha > 0.01f) dl->AddCircleFilled(ImVec2(kx, cy), r + 5.0f * UIK() * ha, ImGui::GetColorU32(ImVec4(fill.x, fill.y, fill.z, 0.18f * ha)), 24);   // halo
         dl->AddCircleFilled(ImVec2(kx, cy + 1.0f), r + 1.0f, ImGui::GetColorU32(ImVec4(0, 0, 0, 0.45f)), 24);
         dl->AddCircleFilled(ImVec2(kx, cy), r, ImGui::GetColorU32(ImVec4(0.96f, 0.97f, 0.98f, 1)), 24);
         dl->AddCircleFilled(ImVec2(kx, cy), r * 0.42f, ImGui::GetColorU32(fill), 16);
@@ -433,11 +618,11 @@ static bool PrettySlider(float* v, float lo, float hi, const char* fmt, float wi
 
 static void DrawGroup(MenuGroup& g, int gid) {
     ImGui::PushID(1000 + gid);
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.11f, 0.12f, 0.15f, 1));   // fondo de la tarjeta
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, PanelCol(ImVec4(0.11f, 0.12f, 0.15f, 1), 0.50f));   // fondo de la tarjeta ((08/11) con vidrio, translucido)
     ImGui::BeginChild("card", ImVec2(0 * UIK(), 0), ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_FrameStyle);
     ImGui::PopStyleColor();
     // (04/11 n) dentro de la tarjeta los sliders, casillas y selectores van un tono mas claro (antes eran del mismo color que la tarjeta)
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.18f, 0.20f, 0.25f, 1)); ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.22f, 0.25f, 0.30f, 1));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, PanelCol(ImVec4(0.18f, 0.20f, 0.25f, 1), 0.80f)); ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, PanelCol(ImVec4(0.22f, 0.25f, 0.30f, 1), 0.88f));
     ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.24f, 0.27f, 0.33f, 1));
     bool hasT = g.tIdx >= 0;
     bool on = hasT ? (g_cfg.live[g.tIdx][g.tComp] > 0.5f) : true;
@@ -449,7 +634,7 @@ static void DrawGroup(MenuGroup& g, int gid) {
     float rightW = (s_iconsOk ? 64.0f : 96.0f) * UIK();
     ImGui::BeginGroup();
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-    if (ImGui::SmallButton(s_iconsOk ? (Ico(col ? kIcoRight : kIcoDown) + "##cx").c_str() : (col ? "+" : "-"))) col = !col;
+    if (ImGui::SmallButton(s_iconsOk ? (Ico(col ? kIcoRight : kIcoDown) + "##cx").c_str() : (col ? "+" : "-"))) { col = !col; if (!col) s_cardOpenT[g.title] = Now(); }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS(col ? "Expandir" : "Contraer"));
     ImGui::PopStyleColor();
     ImGui::SameLine();
@@ -486,6 +671,10 @@ static void DrawGroup(MenuGroup& g, int gid) {
       ImGui::PopStyleColor();
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", TRS("Volver todo el grupo a lo guardado")); }
     if (col) { if (!gDesc.empty()) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.52f, 0.56f, 1)); ImGui::TextUnformatted(Utf8(gDesc.substr(0, 90) + (gDesc.size() > 90 ? "..." : "")).c_str()); ImGui::PopStyleColor(); } ImGui::PopStyleColor(3); ImGui::EndChild(); ImGui::Spacing(); ImGui::PopID(); return; }
+    // (08/11) al desplegar, el contenido aparece suave (0.22 s)
+    float openA = 1.0f;
+    { auto it = s_cardOpenT.find(g.title); if (it != s_cardOpenT.end()) { const float t = (float)(Now() - it->second) / 0.22f; if (t >= 1.0f) s_cardOpenT.erase(it); else openA = Ease(t); } }
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * (0.15f + 0.85f * openA));
     if (!gDesc.empty()) {   // (04/11 n) descripcion corta; clic para leerla entera
         const bool open = s_descOpen.count(g.title) != 0;
         bool cut = false; const std::string sd = open ? gDesc : ShortDesc(gDesc, cut);
@@ -623,11 +812,12 @@ static void DrawGroup(MenuGroup& g, int gid) {
             const bool isOpen = nHidden == 0;
             char mb[96]; snprintf(mb, sizeof mb, isOpen ? TRS("Menos opciones") : TRS("%d opciones mas"), nHidden);
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0)); ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.78f, 0.56f, 1));
-            if (ImGui::SmallButton(IcoL(isOpen ? kIcoDown : kIcoRight, mb).c_str())) { if (isOpen) s_moreOpen.erase(g.title); else s_moreOpen.insert(g.title); }
+            if (ImGui::SmallButton(IcoL(isOpen ? kIcoDown : kIcoRight, mb).c_str())) { if (isOpen) s_moreOpen.erase(g.title); else { s_moreOpen.insert(g.title); s_cardOpenT[g.title] = Now(); } }
             ImGui::PopStyleColor(2);
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS(isOpen ? "Volver a ver solo las principales" : "Los ajustes finos de esta mejora (en Ajustes se pueden ver siempre)"));
         }
     }
+    ImGui::PopStyleVar();   // aparicion del contenido
     if (g.special == "musculatura_jugador") { ImGui::Spacing(); MuscleDrawPlayerPanel(); }
     if (!g.buttons.empty()) {
         ImGui::Spacing();
@@ -836,12 +1026,17 @@ static void NavItem(const std::string& key, unsigned ico, const std::string& lab
     ImGui::PushID(key.c_str());
     const ImVec2 p = ImGui::GetCursorScreenPos();
     const float w = ImGui::GetContentRegionAvail().x, h = ImGui::GetFrameHeight();
-    ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.15f, 0.33f, 0.25f, 1));
-    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, sel ? ImVec4(0.17f, 0.37f, 0.28f, 1) : ImVec4(0.15f, 0.17f, 0.21f, 1));
+    // (08/11) el fondo de la pagina elegida lo dibuja DrawMenu y se desliza de un item a otro; el de pasar el mouse aparece suave
+    ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0, 0, 0, 0)); ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0, 0, 0, 0)); ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0, 0, 0, 0));
     const float hh = s_rail ? h * 1.25f : h;
-    if (ImGui::Selectable("##nav", sel, ImGuiSelectableFlags_None, ImVec2(w, hh))) SelectPage(key);
-    ImGui::PopStyleColor(2);
+    if (ImGui::Selectable("##nav", false, ImGuiSelectableFlags_None, ImVec2(w, hh))) SelectPage(key);
+    ImGui::PopStyleColor(3);
     ImDrawList* dl = ImGui::GetWindowDrawList();
+    {
+        const float ha = HoverAnim(ImGui::GetItemID(), ImGui::IsItemHovered() && !sel);
+        if (ha > 0.01f) dl->AddRectFilled(p, ImVec2(p.x + w, p.y + hh), ImGui::GetColorU32(ImVec4(1, 1, 1, 0.07f * ha)), 6.0f * UIK());
+        if (sel) { s_navTgtY = p.y - ImGui::GetWindowPos().y + ImGui::GetScrollY(); s_navH = hh; }
+    }
     const float fs = ImGui::GetFontSize(), ty = p.y + (h - fs) * 0.5f, pad = 8.0f * UIK();
     if (s_rail) {   // (08/11) barra angosta: el icono centrado, el nombre en el aviso
         const ImU32 cI = ImGui::GetColorU32(sel ? ImVec4(0.40f, 0.90f, 0.62f, 1) : ImVec4(0.72f, 0.76f, 0.82f, 1));
@@ -901,9 +1096,143 @@ static void PageTitle(unsigned ico, const std::string& title, const char* sub = 
     if (tools && !s_iconsOk) CardsToolbar();
     ImGui::Dummy(ImVec2(0, 2.0f * UIK()));
 }
+// --- (08/11) diagnostico automatico (Agustin: "agrega mas opciones de diagnostico automatico") ---
+// 1) rendimiento en vivo: cuadros por segundo, el 1% mas lento y tirones (cuadros de mas de 50 ms), medido en cada Present;
+// 2) revision: shaders, archivos del menu, valores del ini fuera de rango o sin fila, camara libre guardada prendida, el pasto
+//    del mod, otras DLL de la carpeta del juego enganchadas al proceso (Cloth Mod, ReShade...) y la memoria de la placa;
+// 3) "Generar informe": una carpeta PES21FX\informes\<fecha>\ con el log, el ini, sider.log, cloth.log, el ultimo cierre y
+//    resumen.txt con todo lo de arriba, para mandar de una.
+static float s_ft[3600]; static int s_ftN = 0, s_ftI = 0;   // tiempos de cuadro (ms), los ultimos ~60 s
+static double s_ftLast = 0;
+static void FrameTimeTick() {
+    const double t = Now();
+    if (s_ftLast > 0) { const float ms = (float)((t - s_ftLast) * 1000.0); if (ms > 0 && ms < 5000) { s_ft[s_ftI] = ms; s_ftI = (s_ftI + 1) % 3600; if (s_ftN < 3600) s_ftN++; } }
+    s_ftLast = t;
+}
+struct PerfStats { float fpsNow = 0, fpsAvg = 0, low1 = 0, worst = 0; int stutters = 0, n = 0; };
+static PerfStats PerfNow() {
+    PerfStats p; if (s_ftN < 10) return p;
+    std::vector<float> v; v.reserve(s_ftN); double sum = 0, sumNow = 0; int nNow = 0;
+    for (int k = 0; k < s_ftN; k++) { const float ms = s_ft[(s_ftI - 1 - k + 3600) % 3600]; v.push_back(ms); sum += ms; if (k < 30) { sumNow += ms; nNow++; } if (ms > 50.0f) p.stutters++; }
+    std::sort(v.begin(), v.end());
+    const size_t i99 = std::min(v.size() - 1, (size_t)(v.size() * 0.99));
+    p.n = (int)v.size(); p.fpsAvg = (float)(1000.0 * v.size() / sum); p.fpsNow = nNow ? (float)(1000.0 * nNow / sumNow) : 0; p.low1 = 1000.0f / v[i99]; p.worst = v.back();
+    return p;
+}
+struct DiagItem { int level; std::string text; };   // 0 ok, 1 aviso, 2 problema
+static std::vector<DiagItem> s_diag; static double s_diagT = -10;
+static std::wstring GameDir() { wchar_t exe[MAX_PATH]; GetModuleFileNameW(nullptr, exe, MAX_PATH); std::wstring d = exe; return d.substr(0, d.find_last_of(L"\\/") + 1); }
+static std::string W2U(const std::wstring& w) { int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, nullptr, 0, nullptr, nullptr); std::string o(n > 0 ? n - 1 : 0, '\0'); if (n > 1) WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, &o[0], n, nullptr, nullptr); return o; }
+static bool FileExists(const std::wstring& p) { return GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES; }
+static void DiagRun() {   // con g_cfgMutex tomado
+    std::vector<DiagItem> d; char b[512];
+    {   const int rep = g_replacedCount.load(), fail = g_failedCount.load(); int nErr; { std::lock_guard<std::mutex> lk(g_errMutex); nErr = (int)g_compileErrors.size(); }
+        snprintf(b, sizeof b, TRS("Shaders propios: %d activos, %d con error de compilacion"), rep, std::max(fail, nErr)); d.push_back({ (fail || nErr) ? 2 : 0, b }); }
+    {   const wchar_t* files[] = { L"textures\\pes_icons.ttf", L"textures\\pes_ui.ttf", L"textures\\pes_ui_bold.ttf", L"PES21FX_menu_en.ini", L"PES21FX_menu_pt.ini", L"PES21FX_rules.ini" };
+        std::string miss; for (auto f : files) if (!FileExists(g_cfg.baseDir + f)) { if (!miss.empty()) miss += ", "; miss += W2U(f); }
+        if (miss.empty()) d.push_back({ 0, TRS("Archivos del menu: completos") }); else { snprintf(b, sizeof b, TRS("Faltan archivos: %s"), miss.c_str()); d.push_back({ 1, b }); } }
+    {   int out = 0, undef = 0; std::string ex, exU;
+        for (auto& g : g_cfg.groups) for (auto& sl : g.sliders) {
+            if (!sl.ext.empty() || !sl.optVals.empty() || !sl.options.empty()) continue;
+            const float v = g_cfg.base[sl.idx][sl.comp]; char nm[16]; snprintf(nm, sizeof nm, "%c%d", "xyzw"[sl.comp], sl.idx);
+            if (!g_cfg.info[sl.idx][sl.comp].defined) { if (undef++ < 3) exU += std::string(exU.empty() ? "" : ", ") + nm; continue; }
+            if (v < std::min(sl.lo, sl.hi) - 1e-4f || v > std::max(sl.lo, sl.hi) + 1e-4f) { if (out++ < 3) ex += std::string(ex.empty() ? "" : ", ") + nm; }
+        }
+        if (!out) d.push_back({ 0, TRS("Valores del ini dentro del rango de sus sliders") });
+        else { snprintf(b, sizeof b, TRS("%d valores del ini fuera del rango de su slider (%s...): al guardar se recortan"), out, ex.c_str()); d.push_back({ 1, b }); }
+        if (undef) { snprintf(b, sizeof b, TRS("%d sliders sin su fila en el ini (%s...): usan 0 hasta que se guarden"), undef, exU.c_str()); d.push_back({ 1, b }); } }
+    {   std::vector<std::string> sus; std::string others;
+        const std::wstring gd = GameDir(); std::wstring gl = gd; for (auto& ch : gl) ch = (wchar_t)towlower(ch);
+        HMODULE mods[1024]; DWORD need = 0;
+        if (K32EnumProcessModules(GetCurrentProcess(), mods, sizeof(mods), &need)) {
+            HMODULE self = nullptr; GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)&DiagRun, &self);
+            for (int i = 0; i < (int)(need / sizeof(HMODULE)) && i < 1024; i++) {
+                if (mods[i] == self || mods[i] == GetModuleHandleW(nullptr)) continue;
+                wchar_t path[MAX_PATH]; if (!GetModuleFileNameW(mods[i], path, MAX_PATH)) continue;
+                std::wstring lp = path; for (auto& ch : lp) ch = (wchar_t)towlower(ch);
+                if (lp.rfind(gl, 0) != 0) continue;   // solo las de la carpeta del juego (las de Windows no)
+                const std::string nm = W2U(lp.substr(gl.size()));
+                if (!others.empty()) others += ", "; others += nm;
+                if (nm.find("dsound") != std::string::npos || nm.find("reshade") != std::string::npos || nm.find("dxgi") != std::string::npos || nm.find("d3d") != std::string::npos || nm.find("specialk") != std::string::npos) sus.push_back(nm);
+            }
+        }
+        if (!sus.empty()) { std::string l; for (auto& x : sus) l += (l.empty() ? "" : ", ") + x; snprintf(b, sizeof b, TRS("Otros mods de graficos enganchados: %s. Si hay cierres, probar sin ellos (el Cloth Mod con F5 apagado en el editor)."), l.c_str()); d.push_back({ 1, b }); }
+        if (!others.empty()) { snprintf(b, sizeof b, TRS("DLL de la carpeta del juego cargadas: %s"), others.substr(0, 380).c_str()); d.push_back({ 0, b }); } }
+    if (g_cfg.base[344][0] > 0.5f) d.push_back({ 1, TRS("La camara libre estaba guardada prendida en el ini (ahora arranca apagada siempre)") });
+    else d.push_back({ 0, TRS("Camara libre: arranca apagada") });
+    if (g_grassDbg.why && g_grassDbg.patches == 0 && g_cfg.live[93][3] > 0.5f) { snprintf(b, sizeof b, TRS("Pasto del mod sin dibujar en el partido: %s"), g_grassDbg.why); d.push_back({ 1, b }); }
+    {   const PerfStats p = PerfNow();
+        if (p.n >= 60) {
+            snprintf(b, sizeof b, TRS("Rendimiento: %.0f cuadros/s de promedio, el 1%% mas lento a %.0f, %d tirones (>50 ms) en %.0f s"), p.fpsAvg, p.low1, p.stutters, p.n / std::max(1.0f, p.fpsAvg));
+            d.push_back({ (p.stutters > 5 || p.low1 < p.fpsAvg * 0.5f) ? 1 : 0, b });
+        } }
+    {   const std::string gm = GpuMeterSummary(); if (!gm.empty()) d.push_back({ 0, gm.substr(0, 400) }); }
+    s_diag.swap(d); s_diagT = Now();
+}
+static std::string DiagText() {
+    std::string t; const char* lv[3] = { "OK     ", "AVISO  ", "PROBLEMA " };
+    for (auto& x : s_diag) { t += lv[std::clamp(x.level, 0, 2)]; t += x.text; t += "\r\n"; }
+    return t;
+}
+static std::string MakeReport() {   // sin g_cfgMutex
+    SYSTEMTIME st; GetLocalTime(&st); wchar_t n[32];
+    swprintf(n, 32, L"%04d%02d%02d_%02d%02d%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    const std::wstring root = g_cfg.baseDir + L"informes\\"; CreateDirectoryW(root.c_str(), nullptr);
+    const std::wstring dir = root + n + L"\\"; if (!CreateDirectoryW(dir.c_str(), nullptr)) return TRS("No se pudo crear la carpeta del informe");
+    int nf = 0;
+    auto cp = [&](const std::wstring& from, const wchar_t* to) { if (CopyFileW(from.c_str(), (dir + to).c_str(), FALSE)) nf++; };
+    cp(g_cfg.baseDir + L"PES21FX.log", L"PES21FX.log"); cp(g_cfg.baseDir + L"PES21FX.anterior.log", L"PES21FX.anterior.log");
+    cp(g_cfg.baseDir + L"PES21FX.ini", L"PES21FX.ini"); cp(GameDir() + L"sider.log", L"sider.log");
+    if (!g_cfg.clothPath.empty()) { std::wstring cd = g_cfg.clothPath.substr(0, g_cfg.clothPath.find_last_of(L"\\/") + 1); cp(cd + L"cloth.log", L"cloth.log"); cp(g_cfg.clothPath, L"cloth.ini"); }
+    {   // el ultimo cierre (sin el .dmp, que pesa cientos de MB)
+        std::vector<std::wstring> v; WIN32_FIND_DATAW fd; const std::wstring cr = g_cfg.baseDir + L"cierres\\";
+        HANDLE f = FindFirstFileW((cr + L"2*").c_str(), &fd);
+        if (f != INVALID_HANDLE_VALUE) { do { if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) v.push_back(fd.cFileName); } while (FindNextFileW(f, &fd)); FindClose(f); }
+        if (!v.empty()) { std::sort(v.begin(), v.end()); const std::wstring last = cr + v.back() + L"\\";
+            cp(last + L"PES21FX.log", L"ultimo_cierre_PES21FX.log"); cp(last + L"sider.log", L"ultimo_cierre_sider.log"); }
+    }
+    std::string sum;
+    { std::lock_guard<std::mutex> lk(g_cfgMutex); DiagRun(); sum = DiagText(); }
+    sum += "\r\n" + LightMeterSummary() + "\r\n";
+    { std::lock_guard<std::mutex> lk2(g_errMutex); for (auto& e : g_compileErrors) sum += "error de shader: " + e + "\r\n"; }
+    if (FILE* fp = _wfopen((dir + L"resumen.txt").c_str(), L"wb")) { fwrite(sum.data(), 1, sum.size(), fp); fclose(fp); nf++; }
+    Log("informe: PES21FX\\informes\\%ls\\ (%d archivos)", n, nf);
+    char b[200]; snprintf(b, sizeof b, TRS("Informe en PES21FX\\informes\\%ls (%d archivos)"), n, nf); return b;
+}
+static bool s_reportReq = false;
+static void DrawDiagPanel() {   // con g_cfgMutex tomado
+    if (Now() - s_diagT > 2.0) DiagRun();
+    const PerfStats p = PerfNow();
+    if (s_fontBold) ImGui::PushFont(s_fontBold);
+    ImGui::TextUnformatted(IcoL(kIcoDiag, TRS("Revision automatica")).c_str());
+    if (s_fontBold) ImGui::PopFont();
+    if (p.n >= 10) {   // medidor en vivo
+        ImGui::TextColored(p.fpsNow >= 55 ? ImVec4(0.45f, 0.88f, 0.55f, 1) : p.fpsNow >= 40 ? ImVec4(0.95f, 0.80f, 0.35f, 1) : ImVec4(0.95f, 0.50f, 0.40f, 1), TRS("%.0f cuadros/s ahora"), p.fpsNow);
+        ImGui::SameLine(); ImGui::TextDisabled(TRS("   promedio %.0f   1%% mas lento %.0f   peor cuadro %.0f ms   tirones %d"), p.fpsAvg, p.low1, p.worst, p.stutters);
+        // grafico de los ultimos ~4 s
+        const int n = std::min(s_ftN, 240); float vals[240];
+        for (int k = 0; k < n; k++) vals[k] = s_ft[(s_ftI - n + k + 3600) % 3600];
+        ImGui::PushStyleColor(ImGuiCol_PlotLines, ImVec4(0.35f, 0.85f, 0.58f, 1)); ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0, 0, 0, 0.25f));
+        ImGui::PlotLines("##ft", vals, n, 0, nullptr, 0.0f, 50.0f, ImVec2(ImGui::GetContentRegionAvail().x, 46.0f * UIK()));
+        ImGui::PopStyleColor(2);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Tiempo de cada cuadro (ms) de los ultimos segundos: abajo es mejor; 16.7 = 60 cuadros/s, picos = tirones"));
+    }
+    for (auto& x : s_diag) {
+        const ImVec4 c = x.level == 0 ? ImVec4(0.45f, 0.88f, 0.55f, 1) : x.level == 1 ? ImVec4(0.95f, 0.80f, 0.35f, 1) : ImVec4(0.95f, 0.50f, 0.40f, 1);
+        ImGui::TextColored(c, "%s", s_iconsOk ? Ico(x.level == 0 ? kIcoDot : kIcoWarn).c_str() : (x.level == 0 ? "OK" : "!"));
+        ImGui::SameLine(); ImGui::PushTextWrapPos(0); ImGui::TextUnformatted(Utf8(x.text).c_str()); ImGui::PopTextWrapPos();
+    }
+    ImGui::Spacing();
+    if (ImGui::Button(IcoL(kIcoSave, TRS("Generar informe")).c_str())) s_reportReq = true;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Junta en PES21FX\\informes\\<fecha> el log, el ini, sider.log, cloth.log, el ultimo cierre y un resumen de esta revision, para mandarlo de una."));
+    ImGui::SameLine(); if (ImGui::Button(IcoL(kIcoReload, TRS("Revisar de nuevo")).c_str())) s_diagT = -10;
+    ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+}
+
 static void DrawSectionExtras(const std::string& sname) {
     if (sname.rfind("Ropa", 0) == 0 && !g_cfg.clothStatus.empty()) { ImGui::TextDisabled("%s", g_cfg.clothStatus.c_str()); ImGui::Spacing(); }
     if (sname.rfind("Diagn", 0) == 0) {
+        DrawDiagPanel();
         ImGui::TextWrapped("%s", TRS("Prueba automatica: toca cada grupo del menu (su interruptor o su primer deslizador), espera unos cuadros y mide si la imagen cambia. Pausa una repeticion con jugadores de cerca antes de correrla; tarda unos 30 segundos."));
         if (!MenuTestActive()) { if (ImGui::Button(TRS("Probar todo el menu"), ImVec2(180 * UIK(), 0))) MenuTestStart(); }
         else { if (ImGui::Button(TRS("Cancelar"), ImVec2(180 * UIK(), 0))) MenuTestStop(); }
@@ -1074,6 +1403,10 @@ static void DrawSettingsPage() {
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Mas bajo = se ve el juego a traves del fondo del menu."));
     }
     ImGui::Spacing();
+    if (ImGui::Checkbox(TRS("Vidrio: el juego desenfocado detras del menu"), &g_cfg.menuGlass)) SaveOption("menu_vidrio", g_cfg.menuGlass ? "1" : "0");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Estilo vidrio (como Apple o Windows Aero). Apagado: fondo liso. 'Opacidad del menu' regula cuanto se oscurece el vidrio para leer mejor."));
+    if (ImGui::Checkbox(TRS("Letra deportiva (Saira, estilo PES 6)"), &g_cfg.menuFont)) { SaveOption("menu_letra", g_cfg.menuFont ? "1" : "0"); s_fontsH = -1.0f; }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Apagado: Segoe UI, la letra de Windows."));
     if (ImGui::Checkbox(TRS("Todas las opciones a la vista en las tarjetas largas"), &g_cfg.menuAdvanced)) SaveOption("menu_avanzado", g_cfg.menuAdvanced ? "1" : "0");
     if (ImGui::IsItemHovered()) ImGui::SetTooltip(TRS("Apagado: las tarjetas con mas de %d controles muestran los principales y el resto con 'opciones mas'."), kMoreAfter);
     if (ImGui::Checkbox(TRS("Dos columnas de tarjetas si la ventana es ancha"), &g_cfg.menuCols)) SaveOption("menu_columnas", g_cfg.menuCols ? "1" : "0");
@@ -1112,9 +1445,15 @@ static void DrawMenu() {
         s_winReq = -2;
     }
     ImGui::SetNextWindowSizeConstraints(ImVec2(400 * UIK(), 300 * UIK()), ImVec2(ds.x * 0.97f, ds.y * 0.95f));   // (04/11) nunca mas grande que la pantalla
-    ImGui::SetNextWindowBgAlpha(std::clamp(g_cfg.menuAlpha, 0.5f, 1.0f));   // (08/11) Ajustes: transparencia del menu
+    const bool glass = GlassSRV() != nullptr;
+    ImGui::SetNextWindowBgAlpha(glass ? 0.0f : std::clamp(g_cfg.menuAlpha, 0.5f, 1.0f));   // (08/11) Ajustes: transparencia del menu; con vidrio el fondo lo dibuja GlassBackdrop
     bool open = true;
-    ImGui::Begin("##pes21fx", &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
+    const float vis = Ease(s_menuVis); const bool closing = !g_menuOpen;   // (08/11) aparece / se desvanece
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, vis);
+    if (glass) ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 16.0f * UIK());
+    ImGui::Begin("##pes21fx", &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar | (closing ? ImGuiWindowFlags_NoInputs : 0));
+    if (glass) ImGui::PopStyleVar();
+    if (glass) GlassBackdrop(ImGui::GetWindowPos(), ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowSize().x, ImGui::GetWindowPos().y + ImGui::GetWindowSize().y), 16.0f * UIK(), vis);
     {   // (08/11) segun el ancho: barra lateral con nombres o solo iconos, botones con texto o solo iconos
         const float cw = ImGui::GetContentRegionAvail().x;
         s_rail = s_iconsOk && cw < 840.0f * UIK();
@@ -1122,12 +1461,12 @@ static void DrawMenu() {
     }
     if (!open) g_menuOpen = false;
     // (04/11 n) casillas, selectores y el buscador fuera de las tarjetas: un tono mas claro que el fondo de la ventana
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.16f, 0.18f, 0.22f, 1)); ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.20f, 0.23f, 0.28f, 1));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, PanelCol(ImVec4(0.16f, 0.18f, 0.22f, 1), 0.70f)); ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, PanelCol(ImVec4(0.20f, 0.23f, 0.28f, 1), 0.82f));
 
     // --- atajos de teclado (04/11 n) ---
-    const bool typing = io.WantTextInput, busy = ImGui::IsAnyItemActive();
-    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) s_saveReq = true;
-    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_F, false)) s_focusSearch = true;
+    const bool typing = io.WantTextInput || closing, busy = ImGui::IsAnyItemActive();
+    if (!closing && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) s_saveReq = true;
+    if (!closing && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_F, false)) s_focusSearch = true;
     if (!typing && !busy && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z)) s_undoReq = io.KeyShift ? 2 : 1;
     if (!typing && !busy && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y)) s_undoReq = 2;
     if (s_search[0] && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) s_search[0] = 0;
@@ -1172,7 +1511,8 @@ static void DrawMenu() {
     // --- barra de arriba: guardar, deshacer, rehacer, descartar, ver original, recargar, buscar ---
     {
         const bool dirty = nChanged > 0;
-        if (dirty) { ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.52f, 0.34f, 1)); ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.62f, 0.41f, 1)); }
+        if (dirty) { const float pu = 0.5f + 0.5f * sinf((float)Now() * 3.2f);   // (08/11) late suave mientras hay cambios sin guardar
+            ImGui::PushStyleColor(ImGuiCol_Button, Mix(ImVec4(0.14f, 0.48f, 0.31f, 1), ImVec4(0.20f, 0.60f, 0.40f, 1), pu)); ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.22f, 0.66f, 0.44f, 1)); }
         std::string sv = s_slim ? Ico(kIcoSave) : IcoL(kIcoSave, TRS("Guardar"));
         if (dirty) sv += s_slim ? " " + std::to_string(nChanged) : " (" + std::to_string(nChanged) + ")";
         if (ImGui::Button((sv + "###guardar").c_str())) s_saveReq = true;
@@ -1247,12 +1587,15 @@ static void DrawMenu() {
 
         // --- barra lateral ---
         const float navW = s_rail ? ImGui::GetFrameHeight() * 2.1f : std::clamp(ImGui::GetContentRegionAvail().x * 0.24f, 200.0f * UIK(), 270.0f * UIK());
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.09f, 0.10f, 0.12f, 1));
-        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f * UIK());
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, glass ? ImVec4(0.0f, 0.0f, 0.0f, 0.22f) : ImVec4(0.09f, 0.10f, 0.12f, 1));
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10.0f * UIK());
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 2.0f * UIK()));
         if (s_rail) ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(3.0f * UIK(), 6.0f * UIK()));
         ImGui::BeginChild("nav", ImVec2(navW, -footH), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoScrollbar);
         if (s_rail) ImGui::PopStyleVar();
+        ImDrawList* navDL = ImGui::GetWindowDrawList();
+        navDL->ChannelsSplit(2); navDL->ChannelsSetCurrent(1);   // 0 = resaltado (debajo), 1 = items
+        s_navTgtY = -1.0f;
         NavHeader(TRS("INICIO"));
         NavItem("fav", kIcoStar, TRS("Favoritos"), nFav ? std::to_string(nFav) : "", false);
         NavItem("chg", kIcoPen, TRS("Cambiados"), nChanged ? std::to_string(nChanged) : "", nChanged > 0);
@@ -1268,6 +1611,18 @@ static void DrawMenu() {
         NavItem("tools", kIcoTools, TRS("Herramientas"), g_catalogActive || g_recordOn ? "REC" : "", false);
         NavItem("settings", kIcoGear, TRS("Ajustes"), "", false);
         if (nErr) NavItem("errors", kIcoWarn, TRS("Errores"), std::to_string(nErr), true);
+        {   // (08/11) el resaltado de la pagina elegida va hacia su item (~0.15 s)
+            navDL->ChannelsSetCurrent(0);
+            if (s_navTgtY >= 0.0f) {
+                if (s_navY < 0.0f) s_navY = s_navTgtY;
+                s_navY += (s_navTgtY - s_navY) * std::min(1.0f, io.DeltaTime * 16.0f);
+                const ImVec2 wp = ImGui::GetWindowPos(); const float y = wp.y + s_navY - ImGui::GetScrollY();
+                const float x0 = wp.x + ImGui::GetStyle().WindowPadding.x * (s_rail ? 1.0f : 1.0f), x1 = wp.x + ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x;
+                navDL->AddRectFilled(ImVec2(x0, y), ImVec2(x1, y + s_navH), ImGui::GetColorU32(glass ? ImVec4(0.20f, 0.62f, 0.42f, 0.30f) : ImVec4(0.15f, 0.33f, 0.25f, 1)), 7.0f * UIK());
+                navDL->AddRectFilled(ImVec2(x0, y + s_navH * 0.22f), ImVec2(x0 + 3.0f * UIK(), y + s_navH * 0.78f), IM_COL32(102, 230, 158, 255), 2.0f * UIK());
+            }
+            navDL->ChannelsMerge();
+        }
         ImGui::EndChild();
         ImGui::PopStyleVar(2);
         ImGui::PopStyleColor();
@@ -1276,6 +1631,13 @@ static void DrawMenu() {
         // --- pagina ---
         ImGui::BeginChild("page", ImVec2(0, -footH), ImGuiChildFlags_None);
         const std::string q = LowerU(s_search);
+        {   // (08/11) al cambiar de pagina la nueva aparece y entra deslizandose desde la derecha (0.2 s)
+            const std::string pk = q.empty() ? s_sel : std::string("q");
+            if (pk != s_pageShown) { s_pageShown = pk; s_pageT = Now(); }
+        }
+        const float pe = Ease((float)(Now() - s_pageT) / 0.20f), pIn = (1.0f - pe) * 18.0f * UIK();
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * (0.2f + 0.8f * pe));
+        if (pIn > 0.5f) ImGui::Indent(pIn);
         if (!q.empty()) {
             int n = 0; for (auto& g : g_cfg.groups) if (GroupMatches(g, q)) n++;
             char sub[128]; snprintf(sub, sizeof sub, TRS("%d grupos coinciden (Esc para limpiar)"), n);
@@ -1338,6 +1700,8 @@ static void DrawMenu() {
             for (auto& e : g_compileErrors) ImGui::TextWrapped("%s", e.c_str());
             ImGui::EndChild();
         }
+        if (pIn > 0.5f) ImGui::Unindent(pIn);
+        ImGui::PopStyleVar();
         ImGui::EndChild();
         UndoCollect();
     }
@@ -1355,9 +1719,11 @@ static void DrawMenu() {
     }
     ImGui::PopStyleColor(2);
     ImGui::End();
+    ImGui::PopStyleVar();   // fundido de la ventana
 
     // acciones que no pueden correr con g_cfgMutex tomado
     if (s_saveReq) { s_saveReq = false; s_status = TRS(SaveConfigValues() ? "Guardado en PES21FX.ini" : "No se pudo guardar"); }
+    if (s_reportReq) { s_reportReq = false; s_status = MakeReport(); }   // (08/11)
     if (s_toolReq) {
         const int a = s_toolReq; s_toolReq = 0;
         if (a == 1) CatalogStart();
@@ -1565,13 +1931,25 @@ void OverlayPresent(IDXGISwapChain* sc) {
     const bool camHud = !g_menuOpen && (camFree || camSlow != 1.0f);
     const bool lightIcons = g_cfg.live[319][0] > 0.5f && g_cfg.live[297][0] > 0.5f && g_cfg.live[378][2] < 0.5f && SSSSEditorLightAge() < 0.5;   // (08/11) con la luz fija al mundo (z378) el icono (relativo a la camara) mentiria: no se dibuja   // (1/11) iconos de la luz del editor
     const bool sunCompass = g_cfg.live[175][0] > 0.5f && g_cfg.live[93][3] > 0.5f;   // (2/11) brujula del sol, solo en partido
-    if (!g_menuOpen && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass) return;
+    {   // (08/11) el menu aparece y se desvanece en ~0.16 s
+        static double s_visT = 0; const double tn = Now(); const float dt = (float)std::clamp(tn - s_visT, 0.0, 0.1); s_visT = tn;
+        s_menuVis = g_menuOpen ? std::min(1.0f, s_menuVis + dt / 0.16f) : std::max(0.0f, s_menuVis - dt / 0.13f);
+    }
+    const bool menuShown = g_menuOpen || s_menuVis > 0.0f;
+    FrameTimeTick();   // (08/11) diagnostico: tiempo de cada cuadro
+    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass) return;
     if (!s_rtv) {
         ID3D11Texture2D* bb = nullptr;
         if (FAILED(sc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb)) || !bb) return;
         g_dev.dev->CreateRenderTargetView(bb, nullptr, &s_rtv);
         bb->Release();
         if (!s_rtv) return;
+    }
+    ID3D11Texture2D* glassBB = nullptr;   // (08/11) vidrio: la imagen del juego de este cuadro, antes del menu
+    if (menuShown && g_cfg.menuGlass) {
+        ID3D11Resource* r = nullptr; s_rtv->GetResource(&r);
+        if (r) { r->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&glassBB); r->Release(); }
+        if (glassBB && !GlassEnsure(glassBB)) { glassBB->Release(); glassBB = nullptr; }
     }
     {   // (04/11) resolucion cambiada: letras y espacios de nuevo (la textura de las fuentes se rehace en el NewFrame)
         DXGI_SWAP_CHAIN_DESC dd;
@@ -1584,7 +1962,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
     ImGui::GetIO().MouseDrawCursor = g_menuOpen.load();
-    if (g_menuOpen) { if (fis && !s_fullMenu) DrawPhysiqueWindow(); else DrawMenu(); }
+    if (menuShown) { if (fis && !s_fullMenu && g_menuOpen) DrawPhysiqueWindow(); else if (!fis || s_fullMenu) DrawMenu(); }
     else if (hint) DrawPhysiqueHint();
     if (camHud) DrawCamaraHud(camFree, camSlow);
     if (lightIcons) DrawEditorLightIcons();
@@ -1627,6 +2005,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
         if (g_cfg.clothDirty && Now() - g_cfg.clothChangeT > 0.4) SaveCloth();
     }
     ImGui::Render();
+    if (glassBB) { GlassBlur(glassBB); glassBB->Release(); }
     ID3D11RenderTargetView* oldRT[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
     ID3D11DepthStencilView* oldDS = nullptr;
     g_dev.imm->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, oldRT, &oldDS);

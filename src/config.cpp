@@ -147,6 +147,8 @@ static bool LoadConfigLocked() {
             else if (kl == "menu_columnas") c.menuCols = atoi(v.c_str()) != 0;                    // (08/11) dos columnas de tarjetas en ventanas anchas
             else if (kl == "menu_tamano") c.menuSize = std::clamp(atoi(v.c_str()), 0, 2);          // (08/11) 0 ventana, 1 grande, 2 panel a la derecha
             else if (kl == "menu_opacidad") c.menuAlpha = std::clamp((float)atof(v.c_str()), 0.5f, 1.0f);
+            else if (kl == "menu_vidrio") c.menuGlass = atoi(v.c_str()) != 0;                     // (08/11) fondo de vidrio (juego desenfocado)
+            else if (kl == "menu_letra") c.menuFont = atoi(v.c_str()) != 0;                       // (08/11) letra Saira (textures\pes_ui.ttf)
             else if (kl == "language" || kl == "idioma") { const std::string lv = Lower(v); c.lang = (lv == "en" || lv == "english" || v == "1") ? 1 : (lv == "pt" || lv == "portugues" || lv == "portuguese" || v == "2") ? 2 : 0; }
             else if (kl == "auto_captura") c.autoCap = atoi(v.c_str()) != 0;
             else if (kl == "auto_captura_seg") c.autoCapSec = std::clamp((float)atof(v.c_str()), 3.0f, 600.0f);

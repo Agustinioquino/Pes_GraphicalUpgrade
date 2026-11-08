@@ -153,6 +153,21 @@ static ID3DBlob* CompileFile(uint64_t hash, const char* type, const char* profil
 }
 
 // shaders propios por nombre (generadores): shaders\<file>, con #include y cache como los demas
+// (08/11) shader escrito en el codigo (vidrio del menu): sin archivo ni cache
+ID3DBlob* CompileSourceShader(const char* name, const char* src, const char* profile) {
+    if (!s_compile || !src) return nullptr;
+    ID3DBlob *code = nullptr, *err = nullptr;
+    HRESULT hr = s_compile(src, strlen(src), name, nullptr, nullptr, "main", profile, D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &err);
+    if (FAILED(hr)) {
+        std::string e = err ? std::string((const char*)err->GetBufferPointer(), err->GetBufferSize()) : "error desconocido";
+        Log("ERROR compilando %s:\n%s", name, e.c_str());
+        { std::lock_guard<std::mutex> lk(g_errMutex); g_compileErrors.push_back(std::string(name) + ": " + e.substr(0, 300)); }
+        if (err) err->Release(); if (code) code->Release();
+        return nullptr;
+    }
+    if (err) err->Release();
+    return code;
+}
 ID3DBlob* CompileNamedShader(const wchar_t* file, const char* profile) {
     if (!s_compile) return nullptr;
     std::string src;

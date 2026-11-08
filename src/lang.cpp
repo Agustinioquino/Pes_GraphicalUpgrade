@@ -7,6 +7,32 @@
 namespace fx {
 
 static const char* const kEn[][2] = {
+    // (08/11 b) vidrio, letra, diagnostico automatico
+    { "Vidrio: el juego desenfocado detras del menu", "Glass: the game blurred behind the menu" },
+    { "Estilo vidrio (como Apple o Windows Aero). Apagado: fondo liso. 'Opacidad del menu' regula cuanto se oscurece el vidrio para leer mejor.", "Glass style (like Apple or Windows Aero). Off: plain background. 'Menu opacity' sets how much the glass is darkened for reading." },
+    { "Letra deportiva (Saira, estilo PES 6)", "Sporty font (Saira, PES 6 style)" },
+    { "Apagado: Segoe UI, la letra de Windows.", "Off: Segoe UI, the Windows font." },
+    { "Shaders propios: %d activos, %d con error de compilacion", "Own shaders: %d active, %d with compile errors" },
+    { "Archivos del menu: completos", "Menu files: complete" },
+    { "Faltan archivos: %s", "Missing files: %s" },
+    { "Valores del ini dentro del rango de sus sliders", "Ini values inside their slider ranges" },
+    { "%d valores del ini fuera del rango de su slider (%s...): al guardar se recortan", "%d ini values outside their slider range (%s...): they are clamped when saving" },
+    { "%d sliders sin su fila en el ini (%s...): usan 0 hasta que se guarden", "%d sliders without their row in the ini (%s...): they use 0 until saved" },
+    { "Otros mods de graficos enganchados: %s. Si hay cierres, probar sin ellos (el Cloth Mod con F5 apagado en el editor).", "Other graphics mods hooked: %s. If the game crashes, try without them (Cloth Mod with F5 off in the editor)." },
+    { "DLL de la carpeta del juego cargadas: %s", "DLLs loaded from the game folder: %s" },
+    { "La camara libre estaba guardada prendida en el ini (ahora arranca apagada siempre)", "Free camera was saved as on in the ini (it now always starts off)" },
+    { "Camara libre: arranca apagada", "Free camera: starts off" },
+    { "Pasto del mod sin dibujar en el partido: %s", "Mod grass not drawing in the match: %s" },
+    { "Rendimiento: %.0f cuadros/s de promedio, el 1%% mas lento a %.0f, %d tirones (>50 ms) en %.0f s", "Performance: %.0f fps average, 1%% low %.0f, %d stutters (>50 ms) in %.0f s" },
+    { "No se pudo crear la carpeta del informe", "Could not create the report folder" },
+    { "Informe en PES21FX\\informes\\%ls (%d archivos)", "Report in PES21FX\\informes\\%ls (%d files)" },
+    { "Revision automatica", "Automatic check" },
+    { "%.0f cuadros/s ahora", "%.0f fps now" },
+    { "   promedio %.0f   1%% mas lento %.0f   peor cuadro %.0f ms   tirones %d", "   average %.0f   1%% low %.0f   worst frame %.0f ms   stutters %d" },
+    { "Tiempo de cada cuadro (ms) de los ultimos segundos: abajo es mejor; 16.7 = 60 cuadros/s, picos = tirones", "Frame time (ms) of the last seconds: lower is better; 16.7 = 60 fps, spikes = stutters" },
+    { "Generar informe", "Create report" },
+    { "Junta en PES21FX\\informes\\<fecha> el log, el ini, sider.log, cloth.log, el ultimo cierre y un resumen de esta revision, para mandarlo de una.", "Collects in PES21FX\\informes\\<date> the log, the ini, sider.log, cloth.log, the last crash and a summary of this check, ready to send." },
+    { "Revisar de nuevo", "Check again" },
     // (08/11) menu adaptable, explicaciones, 'mas opciones'
     { "Menos opciones", "Fewer options" },
     { "%d opciones mas", "%d more options" },
@@ -470,6 +496,20 @@ static const char* const kEn[][2] = {
 
 // (27/10) portugues: mismo orden que kEn
 static const char* const kPt[][2] = {
+    // (08/11 b) vidrio, letra, diagnostico automatico
+    { "Vidrio: el juego desenfocado detras del menu", "Vidro: o jogo desfocado atr\303\241s do menu" },
+    { "Estilo vidrio (como Apple o Windows Aero). Apagado: fondo liso. 'Opacidad del menu' regula cuanto se oscurece el vidrio para leer mejor.", "Estilo vidro (como Apple ou Windows Aero). Desligado: fundo liso. 'Opacidade do menu' regula quanto o vidro escurece para ler melhor." },
+    { "Letra deportiva (Saira, estilo PES 6)", "Fonte esportiva (Saira, estilo PES 6)" },
+    { "Apagado: Segoe UI, la letra de Windows.", "Desligado: Segoe UI, a fonte do Windows." },
+    { "Shaders propios: %d activos, %d con error de compilacion", "Shaders pr\303\263prios: %d ativos, %d com erro de compila\303\247\303\243o" },
+    { "Archivos del menu: completos", "Arquivos do menu: completos" },
+    { "Faltan archivos: %s", "Faltam arquivos: %s" },
+    { "Valores del ini dentro del rango de sus sliders", "Valores do ini dentro da faixa dos sliders" },
+    { "Camara libre: arranca apagada", "C\303\242mera livre: come\303\247a desligada" },
+    { "Revision automatica", "Revis\303\243o autom\303\241tica" },
+    { "%.0f cuadros/s ahora", "%.0f quadros/s agora" },
+    { "Generar informe", "Gerar relat\303\263rio" },
+    { "Revisar de nuevo", "Revisar de novo" },
     // (08/11) menu adaptable, explicaciones, 'mas opciones'
     { "Menos opciones", "Menos op\303\247\303\265es" },
     { "%d opciones mas", "Mais %d op\303\247\303\265es" },
