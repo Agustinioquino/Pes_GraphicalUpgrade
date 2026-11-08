@@ -825,7 +825,12 @@ static bool WriteBone(Skel& S, int d, const Xf& base, const float* nq, const flo
     float out[7] = { nq[0], nq[1], nq[2], nq[3], nt[0], nt[1], nt[2] };
     // (08/11 e, Agustin: "asegurate de que los sliders funcionen") sin paleta (expr_paleta = 0) los sliders de 'control total'
     // (filas 421 / 422) y el tope por hueso tambien valen al escribir el esqueleto: mismas cuentas que la paleta
-    if (d < D_NECKB) ExprZoneScale(d, S.gq[d], S.gt[d], out, out + 4);
+    if (d < D_NECKB) {
+        // (08/11 g) con control total la base es la cara neutra de este jugador (toda la expresion, juego + mod); si no, lo que dejo el juego
+        if (g_cfg.live[350][0] > 2.5f && S.nN[d] >= 120 && S.cur[D_HEAD]) {
+            Xf hc; if (ReadXf(S.cur[D_HEAD], hc)) { float c[4], hr[4], zq[4], v[3], zt[3]; QConj(S.rest[D_HEAD].q, c); QMul(hc.q, c, hr); QRot(hr, S.nT[d], v); for (int k = 0; k < 3; k++) zt[k] = hc.t[k] + v[k]; QMul(hr, S.nQ[d], zq); ExprZoneScale(d, zq, zt, out, out + 4); }
+        } else ExprZoneScale(d, S.gq[d], S.gt[d], out, out + 4);
+    }
     if (!SafeCopy((char*)S.cur[d] + 16, out, 28)) return false;
     Xf chk; if (ReadXf(S.cur[d], chk)) { memcpy(S.wq[d], chk.q, sizeof chk.q[0] * 4); memcpy(S.wt[d], chk.t, sizeof chk.t[0] * 3); }
     else { memcpy(S.wq[d], nq, 4 * sizeof(float)); memcpy(S.wt[d], nt, 3 * sizeof(float)); }
@@ -1889,9 +1894,13 @@ static void Publish(Skel& S, unsigned fr) {
     P.frame = fr; P.pid = S.pKnown ? S.pid : 0; P.skel = S.skel;
     memcpy(P.headT, hc.t, sizeof P.headT); memcpy(P.headQ, hc.q, sizeof P.headQ); memcpy(P.headRestT, S.rest[D_HEAD].t, sizeof P.headRestT); memcpy(P.headRestQ, S.rest[D_HEAD].q, sizeof P.headRestQ);
     P.worldOk = S.node && CharNodeMatrix(const_cast<void*>(S.node), P.W);
+    float hr[4]; { float c[4]; QConj(S.rest[D_HEAD].q, c); QMul(hc.q, c, hr); }   // (08/11 g) cabeza actual * reposo^-1 (como Neutral)
     for (int d = 0; d < kExprBones && d < kND; d++) {
         if (!S.cur[d]) continue;
         ExprCharPose::Bone& b = P.b[d];
+        // (08/11 g, Agustin: control total sobre "toda la expresion (juego + mod)") la cara NEUTRA de este jugador (promedio lento, Neutral())
+        // llevada a la cabeza de este cuadro: expr.cpp escala la expresion entera (lo del juego + lo del mod) respecto de ella
+        if (S.nN[d] >= 120) { float v[3]; QRot(hr, S.nT[d], v); for (int k = 0; k < 3; k++) b.zt[k] = hc.t[k] + v[k]; QMul(hr, S.nQ[d], b.zq); b.hasZ = true; }
         const bool mv = S.dHave[d] && S.dFrame[d] == fr;
         if (mv) { memcpy(b.bq, S.bq[d], sizeof b.bq); memcpy(b.bt, S.bt[d], sizeof b.bt); memcpy(b.nq, S.dq[d], sizeof b.nq); memcpy(b.nt, S.dt[d], sizeof b.nt); }
         else { Xf x; if (!ReadXf(S.cur[d], x)) continue; memcpy(b.bq, x.q, sizeof b.bq); memcpy(b.bt, x.t, sizeof b.bt); memcpy(b.nq, x.q, sizeof b.nq); memcpy(b.nt, x.t, sizeof b.nt); }

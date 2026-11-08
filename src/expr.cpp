@@ -1558,7 +1558,11 @@ static void DeltaUpload(ID3D11DeviceContext* imm) {
         for (int d = 0; d < kExprBones; d++) {
             float* o = base + 4 + d * 24; Aff Dw; AffIdentity(Dw); cur.has[d] = false;
             const ExprCharPose::Bone& b = P.b[d];
-            if (b.has && b.moved) {
+            // (08/11 g, Agustin eligio "toda la expresion (juego + mod)") con control total (x350 = 3) la ganancia por zona y el tope se
+            // aplican sobre la expresion ENTERA respecto de la cara neutra de este jugador (b.zq / zt), tambien en los huesos que el mod no
+            // toco este cuadro (la animacion del juego se escala); en los otros modos, solo sobre lo que agrega el mod
+            const bool fullZ = g_cfg.live[350][0] > 2.5f && b.hasZ;
+            if (b.has && (b.moved || fullZ)) {
                 Aff N, B, BI, Dm; AffQ(b.nq, b.nt, N); AffQ(b.bq, b.bt, B);
                 // (08/11 b) tope por hueso: el gesto del mod nunca corre un hueso de la cara mas de 40 grados ni 2 cm de lo que dejo el juego
                 // (si algo sale de rango -lectura rara, cara nueva- se recorta en vez de tirar la piel)
@@ -1567,7 +1571,7 @@ static void DeltaUpload(ID3D11DeviceContext* imm) {
                 // z parpados y ojeras, w cejas y frente; fila 422: x mejillas y nariz, y todo junto) y el tope sale de la fila 422 (z grados,
                 // w mm). Con los otros modos: ganancia 1 y tope 40 grados / 2 cm
                 float nq2[4] = { b.nq[0], b.nq[1], b.nq[2], b.nq[3] }, nt2[3] = { b.nt[0], b.nt[1], b.nt[2] };
-                { const int cz = ExprZoneScale(d, b.bq, b.bt, nq2, nt2); if (cz & 1) s_bdClampR++; if (cz & 2) s_bdClamp++; }
+                { const int cz = ExprZoneScale(d, fullZ ? b.zq : b.bq, fullZ ? b.zt : b.bt, nq2, nt2); if (cz & 1) s_bdClampR++; if (cz & 2) s_bdClamp++; }
                 AffQ(nq2, nt2, N);
                 if (AffInv(B, BI)) { AffMul(N, BI, Dm); if (wOk) { Aff t1; AffMul(W, Dm, t1); AffMul(t1, WI, Dw); } else Dw = Dm; cur.has[d] = true; moved++; }
             }

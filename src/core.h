@@ -462,7 +462,7 @@ struct ExprCharPose {
     bool ok = false; unsigned frame = 0; uint32_t pid = 0; const void* skel = nullptr;
     bool worldOk = false; float W[12] = {};   // modelo -> mundo del nodo (CharNodeMatrix)
     float headT[3] = {}, headQ[4] = {}, headRestT[3] = {}, headRestQ[4] = {};   // sk_head actual y de reposo (espacio del modelo)
-    struct Bone { bool has = false, moved = false; float bq[4] = {}, bt[3] = {}, nq[4] = {}, nt[3] = {}, rq[4] = {}, rt[3] = {}; } b[kExprBones];   // base (juego) / nuevo (mod) / reposo
+    struct Bone { bool has = false, moved = false, hasZ = false; float bq[4] = {}, bt[3] = {}, nq[4] = {}, nt[3] = {}, rq[4] = {}, rt[3] = {}, zq[4] = {}, zt[3] = {}; } b[kExprBones];   // base (juego) / nuevo (mod) / reposo / (08/11 g) cara neutra de este jugador llevada a la cabeza de ahora (hasZ)
 };
 int ExprBonesPoses(ExprCharPose* out, int max);   // copia de los personajes publicados en los ultimos cuadros (expr.cpp, Present)
 int ExprZoneScale(int d, const float* bq, const float* bt, float* nq, float* nt);   // (08/11 e) ganancia por zona y tope por hueso (filas 421 / 422), expr.cpp
