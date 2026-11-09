@@ -465,16 +465,23 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
     float tlT = frac(IniParams.Load(int2(393, 0)).w / tlPer);
     float sD = sin(6.2831853 * tlT);                      // > 0 de dia
     float dayK = smoothstep(-0.10, 0.10, sD);
-    float sunEl = 75.0 * sD, sunAz = lerp(100.0, -100.0, saturate(tlT * 2.0));
-    float moonEl = 45.0 * max(-sD, 0.0), moonAz = lerp(100.0, -100.0, saturate(tlT * 2.0 - 1.0));
     float sUp = saturate(sD);
-    if (dayK > 0.5) { az = sunAz; el = max(sunEl, 2.0); } else { az = moonAz; el = max(moonEl, 2.0); }
+    // (09/11 e, Agustin: "no es suave, ni la luz recorre como si fuera un timelapse") la misma orbita que el sol real de la DLL
+    // (solluz.cpp): fija en el MUNDO (al girar la camara el sol se queda en el cielo), sale por un costado, arco hasta 65 grados
+    // al mediodia y se pone por el otro; de noche la luna hace el mismo arco. En el horizonte la fuerza baja a 0 (abajo), asi el
+    // cambio sol -> luna no salta
+    float tA = 6.2831853 * tlT, oCa = cos(tA), oSa = sin(tA);
+    float3 orb = float3(oCa, oSa * 0.9063078, oSa * 0.4226183);
+    if (oSa < 0.0) orb = -orb;
+    float orbFade = smoothstep(0.005, 0.20, orb.y);
+    az = degrees(atan2(orb.x, orb.z)); el = max(degrees(asin(saturate(orb.y))), 1.0);
     float tWarmDay = lerp(0.98, 0.55, smoothstep(0.0, 0.6, sUp));
     warm  = lerp(0.12, tWarmDay, dayK);
     inten = lerp(0.22, lerp(0.55, 1.25, smoothstep(0.0, 0.5, sUp)), dayK);
     keep  = lerp(0.18, lerp(0.40, 0.55, sUp), dayK);
     skyK  = lerp(0.10, 0.16, dayK); gndK = lerp(0.01, 0.05, dayK) * (0.3 + 0.7 * sUp);
-    pSpotD = 0.0; pSpotA = 0.0; g_lightWorld = false;
+    inten *= lerp(0.04, 1.0, orbFade);
+    pSpotD = 0.0; pSpotA = 0.0; g_lightWorld = true;
   }
   bool studio = preset == 4;
   // --- referencia de intensidad: la irradiancia de estudio mas alta sobre la piel, suavizada en el tiempo (pasada 0, t6) ---
