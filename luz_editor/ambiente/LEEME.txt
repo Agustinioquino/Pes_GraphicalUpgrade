@@ -1,0 +1,7 @@
+EditFace con atmosfera del estadio 024 (09/11/2026, editface_sol.py --modo atmosfera --atmo-luz apagada --paso-sol 1440 --hora 16)
+Destino: <Sider>\livecpk\LucesEditor\Asset\model\light\#Win\  (los dos juntos)
+  EditFace.fpkd  80240 B  CRC F0F76B86  (fox2: focos "alta" + zfx_SolEditor apagado + GrShadowSettings + TppAtmosphere st024)
+  EditFace.fpk  333200 B  CRC 06327287  (Default.rpd original + zfx_EditFace_sol.atsh/.pcsp)
+Por defecto = luz de estudio: atmosfera con sol/luna/cielo en 0 y exposicion fija -7.1 del editor.
+La DLL la prende: SolEditorAtmo(true) (lux reales + exposicion del estadio -14..-7) y SolEditorSetHora(h) mueve la hora.
+Volver atras: poner el EditFace.fpkd anterior (10F38CA0) y borrar este EditFace.fpk de LucesEditor.
