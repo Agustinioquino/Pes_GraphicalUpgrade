@@ -45,6 +45,7 @@ REAL_W = {True: [8.1, 6.8, 7.7, 7.1, 6.7],   # (04/11) Agustin 'reducir el taman
 # (04/11) perfiles por jugador (Agustin: 'una boca especifica para Messi', fotos de su sonrisa): MOUTH_PROFILE=messi
 # centrales de arriba grandes y cuadrados, laterales angostos, mas cortos y un poco hacia atras (escalon marcado),
 # caninos con punta; abajo igual que la comun (casi no se ve)
+ANAT = float(os.environ.get('MOUTH_ANAT', '1.0'))   # (09/11 e) 0 = sin detalle anatomico extra (como v21 / Messi v10)
 PROFILE = os.environ.get('MOUTH_PROFILE', '')
 PROF = {
     '': dict(ext_up={'IC': -0.5, 'I': -1.1, 'C': -0.5}, ext_p=-0.6, corner_ic=(0.04, 0.09), corner_i_up=(0.06, 0.14), lat_back=0.1, canine=0.26, ext_lo=0.8, corner_lo=(0.03, 0.06), gap_ic=0.006, gap=0.012, back_in=0.05, asym=(0.25, 0.12, 0.8, 0.10)),   # (09/11 d) Agustin 'mejora la boca generica tambien': lo aprendido con Messi (arco de la sonrisa, esquinas redondeadas, linea fina entre dientes, muelas adentro, filas que se separan al sonreir, asimetria) con dientes comunes
@@ -372,6 +373,18 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0
         dev = (0.08 * MM * np.exp(-((np.abs(cx) - 0.38) / 0.12) ** 2) * sst(0.35, 0.85, bb)) if kind in ('IC', 'I') else 0 * cx
         rot = 0.25 * MM * jit_rot * cx * sst(0.0, 0.3, bb)
         bulge = convex - dev + rot + jit_dep * sst(0.0, 0.3, bb) + lift - SINK * sst(bs, bs - 0.27, bpos)
+        if REAL_TEETH and ANAT > 0:
+            # (09/11 e) Agustin: 'la diferencia con uno profesional es como estan modelados los detalles y su tridimensionalidad, y
+            # los costados': canino con cresta vertical (eminencia), premolares con cresta vestibular, la cara de adelante que se
+            # curva hacia atras en el tercio incisal, y troneras: las esquinas se redondean hacia atras (el diente no es una placa)
+            ax = np.abs(cx)
+            anat = -0.22 * MM * sst(0.62, 1.0, ax) * sst(0.25, 0.9, bb)          # troneras / costados redondeados
+            anat = anat - 0.18 * MM * sst(0.55, 1.0, bb) ** 2                   # cara curvada hacia atras cerca del borde
+            if kind == 'C':
+                anat = anat + 0.30 * MM * np.exp(-((cx - 0.12 * mes) / 0.38) ** 2) * sst(0.1, 0.75, bb)
+            elif kind == 'P':
+                anat = anat + 0.26 * MM * np.exp(-(cx / 0.42) ** 2) * sst(0.05, 0.8, bb)
+            bulge = bulge + ANAT * anat * sst(-0.05, 0.15, bpos)
         Pf = Pf + anchor[None, :]
         front = Pf + Nf * bulge[:, None]
         # (01/11 d) la cara de atras sale con la normal PROMEDIO del diente, horizontal: con la normal de cada punto, en las muelas (donde la
@@ -556,7 +569,8 @@ def build(src_fmdl, texdir, log=print):
                 ext = ((PROF.get('ext_p', 0.0) if up else 0.0) if kind == 'P' else (PROF['ext_up'][kind] if up else PROF.get('ext_lo', LO_OVERBITE))) * MM   # (09/11) ext_p: premolares de arriba mas cortos (arco de la sonrisa)
             else:
                 ext = ((0.0 if kind == 'P' else (-0.2 if up else 1.0)) * MM if KONAMI_BITE else (EXT_UP if up else EXT_LO) + dext)
-            Pt, UVt, Ft = tooth(M, xl / 512.0, xr / 512.0, vG, vI, kind, up, ext=ext, mes=mes, tw=(tw_row[i] if REAL_TEETH else None),
+            Pt, UVt, Ft = tooth(M, xl / 512.0, xr / 512.0, vG, vI, kind, up, ext=ext, mes=mes, na=(24 if (ANAT > 0 and kind != 'P') else 20),   # (09/11 e) los poligonos de las muelas pasan a los de adelante
+                                tw=(tw_row[i] if REAL_TEETH else None),
                                 seed=nteeth, uvbox=uvbox)
             if os.environ.get('TOOTH_DBG'): log('    diente %s %d %s x %.1f y %.1f z %.1f ancho %.1f' % ('arr' if up else 'abj', i, kind, *(Pt.mean(0) * 1000), np.ptp(Pt[:, 0]) * 1000))
             wt = np.zeros((len(Pt), len(names))); wt[:, names.index('sk_head' if up else 'skf_jaw')] = 1
@@ -622,7 +636,7 @@ def build(src_fmdl, texdir, log=print):
                         cc = mid - bd * (0.5 * Wb - 2.5 * MM)
                         ytip = lo_tips.get((side, k), ybot + 0.4 * MM) + 0.2 * MM
                         cc[1] = ytip + tipz + Hc
-                    Pm, UVm, Fm = molar.geometry(cc, t, bd, up, 0.94 * Lk, Wb, Hc, 1.5 * MM, kind, seed=nmol)
+                    Pm, UVm, Fm = molar.geometry(cc, t, bd, up, 0.94 * Lk, Wb, Hc, 1.5 * MM, kind, seed=nmol, **({'na': 10, 'nb': 4} if ANAT > 0 else {}))   # (09/11 e) Agustin: 'las muelas no tienen que tener muchos poligonos, es lo que menos se ve'
                     if k == 0 and retried < 3:
                         retried += 1
                         gap = float(_KD(last).query(Pm)[0].min())

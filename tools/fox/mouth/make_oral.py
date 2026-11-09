@@ -248,6 +248,12 @@ def gum_detail(bsm, nrm, rows):
     out = bsm.copy(); out[..., :3] = np.clip(rgb * (1 - a) + col * a, 0, 1)
     # normal: hoyuelos del punteado y capilares apenas en relieve
     h = (-0.9 * pits * (0.35 + 0.65 * attached) + 0.25 * vess * mucosa) * tis
+    if TOOTH_N > 0:
+        # (09/11 e) referencia de Agustin (modelo profesional): encia mojada y lisa con el bulto de cada raiz (eminencias
+        # vestibulares, verticales sobre el centro de cada diente) y el surco entre raices; punteado mas suave
+        root = np.where(ins, np.exp(-((U - 0.5) / 0.30) ** 2), 0.0) * sst(0.0, 0.3, dm) * sst(1.0, 0.5, dm)
+        root = ndi.gaussian_filter(root.astype(np.float32), 3.0)
+        h = (-0.15 * pits * (0.35 + 0.65 * attached) + 0.10 * vess * mucosa + 3.0 * root) * tis
     hy, hx = np.gradient(ndi.gaussian_filter(h, 0.6))
     nx = nrm[..., 3] * 2 - 1; ny = nrm[..., 1] * 2 - 1
     sc = 1.6
@@ -578,6 +584,14 @@ def wet_tissue(bsm, srm, log=print):
     g = np.clip(gum_rgb * np.clip(Lgn, 0, 0.8)[..., None], 0, 1)
     hue = c / np.maximum(L, 1e-4)[..., None]
     g = np.clip((0.55 * gum_rgb + 0.45 * hue) * np.clip(Lgn, 0, 0.8)[..., None], 0, 1)
+    if TOOTH_N > 0:
+        # (09/11 e) Agustin (referencia; 'la parte de abajo, la textura'): la encia de Konami trae manchas oscuras grandes (sucias),
+        # sobre todo abajo: se empareja la luminancia de escala grande (sigma 28 px) al 65 %, conservando el detalle fino y la
+        # sombra junto al diente (escala chica)
+        Lg_ = (g * lumw).sum(-1); tw_ = ndi.gaussian_filter(tis, 28) + 1e-4
+        big = ndi.gaussian_filter(Lg_ * tis, 28) / tw_
+        tgt = float(np.median(Lg_[tis > 0.5])) if (tis > 0.5).any() else 0.5
+        g = np.clip(g * ((tgt / np.maximum(big, 1e-3)) ** 0.65)[..., None], 0, 1)
     out[..., :3] = c * (1 - tis[..., None]) + g * tis[..., None]
     # lengua: base rosada, surco central, papilas
     rng = np.random.default_rng(57)
@@ -629,12 +643,74 @@ def wet_tissue(bsm, srm, log=print):
     if TONGUE_CLEAN > 0:   # (09/11) saliva entre papilas muy lisa (reflejos chicos y nitidos), puntas de papila asperas, surco mojado
         rough_t = 0.13 + 0.20 * filS + 0.05 * funS - 0.05 * grS + 0.05 * sst(0.4, 1.0, down(tv))
     rough_g = 0.17 + 0.03 * down(ndi.gaussian_filter(rng.standard_normal((N, N)).astype(np.float32), 1.0))
+    if TOOTH_N > 0: rough_g = rough_g - 0.04   # (09/11 e) encia mas mojada (referencia)
     S[..., 1] = S[..., 1] * (1 - tS - gS) + rough_t * tS + rough_g * gS
     S[..., 0] = S[..., 0] * (1 - tS - gS) + 0.07 * (tS + gS)
     S[..., :3] = np.clip(S[..., :3], 0, 1)
     return out, S
 
 DETAIL = float(os.environ.get('MAP_DETAIL', '1.0'))   # (04/11 c) 0 = como v18
+TOOTH_N = float(os.environ.get('TOOTH_N', '1.1'))   # (09/11 e) fuerza del normal anatomico horneado de los dientes (0 = como v29)
+_ANAT = {}
+def tooth_anatomy(N, log=print):
+    """(09/11 e) Agustin: 'la diferencia con un modelo profesional es como estan modelados los detalles de los dientes y su
+    tridimensionalidad, y los costados; si necesitas bakear un normal map detallado hacelo, pero bajando la intensidad'.
+    Horneado en el espacio uv de cada diente 3D (tooth_boxes.json, sacado de la malla: la generica y la de Messi usan las mismas
+    cajas): alto en mm en funcion de cx (-1..1 a lo ancho) y bb (cuello 0 .. borde 1) con lobulos y surcos de desarrollo,
+    crestas marginales y troneras en los costados, cresta cervical, mamelones gastados en el borde, periquimatias (ondas
+    horizontales finas, mas en el cuello), cresta del canino y vestibular de los premolares, y grano del esmalte. Devuelve
+    (pendiente_x, pendiente_y, mascara) en la resolucion N para sumar al normal."""
+    import json
+    boxes = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'tooth_boxes.json')))
+    SX = np.zeros((N, N), np.float32); SY = np.zeros((N, N), np.float32); M = np.zeros((N, N), np.float32)
+    HH = np.zeros((N, N), np.float32); BB = np.full((N, N), -1.0, np.float32); AX = np.ones((N, N), np.float32); GV = np.zeros((N, N), np.float32)
+    rng = np.random.default_rng(311)
+    WMM = {'IC': 8.3, 'I': 6.6, 'C': 7.6, 'P': 7.0}
+    for bx in boxes:
+        u0, v0, u1, v1 = bx['uv']; kind, up = bx['kind'], bx['up']
+        x0, x1, y0, y1 = int(np.floor(u0 * N)), int(np.ceil(u1 * N)), int(np.floor(v0 * N)), int(np.ceil(v1 * N))
+        w, hgt = x1 - x0, y1 - y0
+        if w < 4 or hgt < 4: continue
+        yy, xx = np.mgrid[0:hgt, 0:w].astype(np.float32)
+        cx = (xx + 0.5) / w * 2 - 1
+        t = (yy + 0.5) / hgt
+        bb = -0.22 + 1.22 * (t if up else 1 - t)
+        mes = -1.0 if bx['right'] else 1.0               # lado de cx hacia el centro de la boca (u crece con x)
+        ax = np.abs(cx)
+        Wmm = WMM[kind]; Hmm = 10.5 if kind != 'P' else 8.0
+        H = np.zeros_like(cx)
+        on = sst(-0.05, 0.10, bb)                         # solo sobre la corona (bajo la encia nada)
+        if kind in ('IC', 'I'):
+            H += -0.055 * (np.exp(-((cx - 0.34) / 0.10) ** 2) + np.exp(-((cx + 0.34) / 0.10) ** 2)) * sst(0.30, 0.75, bb)   # surcos de desarrollo
+            H += 0.030 * np.cos(3 * np.pi * cx / 2) ** 2 * sst(0.82, 0.97, bb) * (1 - ax)                                     # mamelones gastados
+        if kind == 'C':
+            H += 0.07 * np.exp(-((cx - 0.12 * mes) / 0.22) ** 2) * sst(0.15, 0.85, bb)                                           # cresta del canino
+            H += -0.03 * np.exp(-((ax - 0.50) / 0.12) ** 2) * sst(0.3, 0.9, bb)
+        if kind == 'P':
+            H += 0.06 * np.exp(-(cx / 0.25) ** 2) * sst(0.1, 0.9, bb)                                                            # cresta vestibular
+            H += -0.03 * np.exp(-((ax - 0.45) / 0.12) ** 2) * sst(0.4, 1.0, bb)
+        H += 0.045 * np.exp(-((ax - 0.80) / 0.07) ** 2) * sst(0.15, 0.6, bb)                                                    # crestas marginales
+        H += -0.10 * sst(0.86, 1.0, ax)                                                                                         # troneras: el costado cae
+        H += 0.05 * np.exp(-((bb - 0.12) / 0.07) ** 2)                                                                          # cresta cervical
+        H += -0.04 * sst(0.90, 1.0, bb)                                                                                         # borde redondeado
+        ph = ndi.gaussian_filter(rng.standard_normal((hgt, w)), (2, 6)); ph /= ph.std() + 1e-6
+        per = np.sin(2 * np.pi * (bb * Hmm) / 0.42 + 0.8 * ph)
+        H += 0.010 * per * (1 - 0.7 * sst(0.2, 0.9, bb)) * (1 - 0.6 * sst(0.7, 1.0, ax))                                      # periquimatias
+        g = ndi.gaussian_filter(rng.standard_normal((hgt, w)).astype(np.float32), 0.8); g /= g.std() + 1e-6
+        H += 0.004 * g                                                                                                           # grano
+        H *= on
+        H = ndi.gaussian_filter(H, 0.5)
+        HH[y0:y1, x0:x1] = H; BB[y0:y1, x0:x1] = bb; AX[y0:y1, x0:x1] = ax
+        if kind in ('IC', 'I'):   # entre mamelones (para el trm): el esmalte del borde es mas fino entre los lobulos
+            GV[y0:y1, x0:x1] = (np.exp(-((cx - 0.34) / 0.12) ** 2) + np.exp(-((cx + 0.34) / 0.12) ** 2))
+        gy_, gx_ = np.gradient(H)
+        SX[y0:y1, x0:x1] += gx_ * (w / (2 * 0.5 * Wmm))        # mm de alto por mm a lo ancho (la caja cubre ~ el ancho del diente)
+        SY[y0:y1, x0:x1] += gy_ * (hgt / (1.22 * Hmm))
+        M[y0:y1, x0:x1] = np.maximum(M[y0:y1, x0:x1], on * sst(1.0, 0.8, ax) * sst(1.0, 0.85, bb))   # bordes fundidos (sin rectangulo)
+    log('  anatomia de dientes horneada en %d cajas (fuerza %.2f), pendiente media %.3f' % (len(boxes), TOOTH_N, float(np.hypot(SX, SY)[M > 0.5].mean())))
+    _ANAT.update(H=HH, bb=BB, ax=AX, gv=GV, M=M)
+    return SX * TOOTH_N, SY * TOOTH_N, M
+
 def detail_maps(bsm, nrm, srm, trm, rows, log=print):
     """(04/11 c) Agustin: 'aprovecha mas las texturas de normal map, srm, trm y propiedades del material'. Sobre lo que ya hay:
     NORMAL: lengua con papilas en relieve (filiformes finas + fungiformes redondas) y surco central hundido; encia con punteado
@@ -659,12 +735,16 @@ def detail_maps(bsm, nrm, srm, trm, rows, log=print):
     perik = np.sin(gy * 2 * np.pi * 420 + 1.5 * nz(10)) * 0.5
     if TONGUE_CLEAN > 0:
         pf, pu = papillae(N); fil, fun = pf, pu * (0.35 + 0.65 * sst(0.55, 0.95, np.abs(tu)) + 0.65 * sst(0.3, 0.0, (0.99 - gy) / 0.32))
-    h = tongue * (0.55 * fil + 0.9 * fun - 1.2 * groove) + tis * 0.35 * orange + teeth * (0.12 * perik + 0.10 * nz(0.9))
+    h = tongue * (0.55 * fil + 0.9 * fun - 1.2 * groove) * (0.6 if TOOTH_N > 0 else 1.0) + tis * 0.35 * orange + teeth * (0.12 * perik + 0.10 * nz(0.9))
     h = ndi.gaussian_filter(h, 0.6) * DETAIL
     hy, hx = np.gradient(h)
     nx = nrm[..., 3] * 2 - 1; ny = nrm[..., 1] * 2 - 1
     sc = 0.9
     nx2 = nx - hx * sc; ny2 = ny - hy * sc
+    if TOOTH_N > 0:   # (09/11 e) en las cajas de los dientes 3D el relieve pintado de Konami (dientes 2D) se aplana y entra la anatomia
+        ax_, ay_, am_ = tooth_anatomy(N, log)
+        keep = 1 - 0.85 * am_
+        nx2 = nx2 * keep - ax_; ny2 = ny2 * keep - ay_
     nzz = np.sqrt(np.clip(1 - nx * nx - ny * ny, 0.04, 1)); ln = np.sqrt(nx2 * nx2 + ny2 * ny2 + nzz * nzz)
     out_n = nrm.copy(); out_n[..., 3] = (nx2 / ln) * 0.5 + 0.5; out_n[..., 1] = (ny2 / ln) * 0.5 + 0.5
     # srm / trm a su resolucion
@@ -676,6 +756,13 @@ def detail_maps(bsm, nrm, srm, trm, rows, log=print):
     S = srm.copy()
     # esmalte pulido en la corona, cuello mas mate (Agustin 09/11 'reflejo real, tambien como textura')
     rough_te = 0.13 + 0.21 * (1 - sst(0.5, 0.9, core)) + 0.02 * down(nz(1.2))
+    if TOOTH_N > 0 and _ANAT:
+        # (09/11 e) Agustin 'al srm y trm dale mas detalle, no en ruido': rugosidad por la forma: crestas y lobulos pulidos,
+        # surcos y periquimatias apenas mas asperos, tercio del cuello mate, borde incisal liso; sin grano de ruido
+        Ha, BBa, AXa, Ma = (down(_ANAT[k]) for k in ('H', 'bb', 'ax', 'M'))
+        Hd = Ha - down(ndi.gaussian_filter(_ANAT['H'], 2.0))          # detalle fino (surco < 0, cresta > 0)
+        ra = 0.12 + 0.12 * sst(0.45, 0.05, BBa) - 0.03 * sst(0.8, 1.0, BBa) + 0.05 * sst(0.85, 1.0, AXa) - 2.5 * Hd
+        rough_te = rough_te * (1 - Ma) + np.clip(ra, 0.08, 0.4) * Ma
     S[..., 1] = S[..., 1] * (1 - teS) + np.clip(rough_te, 0.10, 0.6) * teS
     S[..., 0] = S[..., 0] * (1 - teS) + (0.07 + 0.03 * sst(0.5, 0.9, core)) * teS
     S[..., 1] = S[..., 1] * (1 - tS) + np.clip(S[..., 1] + (0.0 if TONGUE_CLEAN > 0 else 0.05 * filS - 0.04 * funS), 0.08 if TONGUE_CLEAN > 0 else 0.1, 0.7) * tS
@@ -685,6 +772,12 @@ def detail_maps(bsm, nrm, srm, trm, rows, log=print):
     edge = down(np.clip(ndi.gaussian_filter((teeth > 0.5).astype(np.float32), 3) * -1 + 1, 0, 1) * (teeth > 0.3))
     T[..., :3] = np.maximum(T[..., :3], (T[..., :3] * (1 + 0.35 * edge[..., None])) * teS[..., None] + T[..., :3] * (1 - teS[..., None]))
     T[..., :3] = T[..., :3] * (1 - 0.3 * gS[..., None]) + np.maximum(T[..., :3], 0.18) * 0.3 * gS[..., None]
+    if TOOTH_N > 0 and _ANAT:
+        # (09/11 e) translucidez por la forma (no ruido): borde incisal translucido (mas entre los mamelones), costados finos un
+        # poco translucidos, cuello opaco; solo se SUBE (el shader reconoce diente con trm.y > 0.3)
+        BBa, AXa, GVa, Ma = (down(_ANAT[k]) for k in ('bb', 'ax', 'gv', 'M'))
+        up_ = 1 + Ma * (0.55 * sst(0.70, 0.97, BBa) * (0.65 + 0.35 * GVa) + 0.15 * sst(0.80, 1.0, AXa) * sst(0.3, 0.8, BBa))
+        T[..., :3] = np.maximum(T[..., :3], T[..., :3] * up_[..., None])
     T[..., :3] = np.clip(T[..., :3], 0, 1)
     log('  detalle de mapas: rugosidad dientes %.2f (pulido) .. %.2f (cuello), lengua %.2f, encia %.2f; trm diente medio %.2f' % (
         float(S[..., 1][(teS > 0.5) & (down(ndi.gaussian_filter((teeth > 0.5).astype(np.float32), 6)) > 0.9)].mean()) if ((teS > 0.5)).any() else 0,
@@ -724,7 +817,7 @@ def paint_throat(bsm, nrm, srm, trm, gum_mask, log=print):
         rg = col[..., 0] - col[..., 1]
         log('  garganta: tejido para el shader %.0f%%, banda ambigua (R-G 0.11..0.13) %.2f%%' % (100 * (rg > 0.13).mean(), 100 * ((rg > 0.11) & (rg < 0.13)).mean()))
         hy, hx = np.gradient(ndi.gaussian_filter(h, (1.6, 0.6)))
-        sc = 5.0
+        sc = 3.5 if TOOTH_N > 0 else 5.0   # (09/11 e) 'no en ruido': relieve de la garganta mas suave
         nx, ny = -hx * sc, -hy * sc
         nz = np.sqrt(np.clip(1 - nx * nx - ny * ny, 0.04, 1)); ln = np.sqrt(nx * nx + ny * ny + nz * nz)
         nm = np.stack([np.ones_like(nx), (ny / ln) * 0.5 + 0.5, np.zeros_like(nx), (nx / ln) * 0.5 + 0.5], -1)
@@ -760,7 +853,7 @@ def paint_molars(bsm, nrm, srm, trm, enamel_mask, log=print):
     log('  muelas: diente para el shader %.0f%% (max > 0.45, sat < 0.26, R-G < 0.11), tejido %.1f%%' % (
         100 * ((mx > 0.45) & (sat < 0.26) & (rg < 0.11)).mean(), 100 * (rg > 0.13).mean()))
     hy, hx = np.gradient(ndi.gaussian_filter(h, 0.8))
-    sc = 0.6
+    sc = 1.0 if TOOTH_N > 0 else 0.6   # (09/11 e) referencia: muelas con surcos y cuspides bien marcados
     nx, ny = -hx * sc, -hy * sc
     nz = np.sqrt(np.clip(1 - nx * nx - ny * ny, 0.04, 1)); ln = np.sqrt(nx * nx + ny * ny + nz * nz)
     put(nrm, y0, y1, x0, x1, np.stack([np.ones_like(nx), (ny / ln) * 0.5 + 0.5, np.zeros_like(nx), (nx / ln) * 0.5 + 0.5], -1), PAD)
