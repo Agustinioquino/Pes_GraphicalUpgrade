@@ -171,6 +171,7 @@ static bool LoadConfigLocked() {
             else if (kl == "orphan_fix") c.optOrphan = atoi(v.c_str()) != 0;
             else if (kl == "crash_dump") c.optCrashDump = atoi(v.c_str());
             else if (kl == "expr_paleta") c.optExprPalette = atoi(v.c_str()) != 0;
+            else if (kl == "expr_inyeccion") c.optExprInject = atoi(v.c_str());
             else if (kl == "expr_paleta_blindaje") c.optExprBlindaje = atoi(v.c_str()) != 0;
             else if (kl == "expr_paleta_error") c.optExprPaletteErr = (float)atof(v.c_str());
             else if (kl == "congelado_seg") c.optHangSec = atoi(v.c_str());
