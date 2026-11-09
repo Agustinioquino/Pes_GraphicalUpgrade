@@ -126,6 +126,7 @@ ID3D11ShaderResourceView* SSSSBeforeComposition(ID3D11DeviceContext* c) {
     c->PSSetShaderResources(0, 6, nulls);
     c->OMSetRenderTargets(1, &s_rtv[1], nullptr);
     ID3D11ShaderResourceView* sv1[6] = { preNeeded ? s_srv[0] : light, depth, mat, nrm, in[8], nullptr }; c->PSSetShaderResources(0, 6, sv1);
+    { ID3D11ShaderResourceView* r7 = MouthMaskSRV(); c->PSSetShaderResources(7, 1, &r7); }   // (09/11) la pasada 2 tambien: no difumina la boca con los labios
     c->PSSetShader(s_psV, nullptr, 0); c->Draw(3, 0);
     c->PSSetShaderResources(0, 6, nulls); { ID3D11ShaderResourceView* n6[2] = {}; c->PSSetShaderResources(6, 2, n6); }
     if (editorLight) { s_specOut = s_srv[2]; s_edLightT.store(Now()); }
