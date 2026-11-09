@@ -1630,7 +1630,11 @@ static void FrameBody(const void* skel) {
                 wr[i] = w; sum += w;
             }
             if (sum > 1.0f) for (int i = 0; i < NG; i++) wr[i] /= sum;
-            for (int i = 0; i < NG; i++) {   // sliders de gestos del mod (editor): el gesto propio del mismo nombre
+            // (09/11, Agustin con capturas del 07/11 vs hoy: "la sonrisa de messi sigue rota, las comisuras se caen, los ojos se cierran
+            // mucho") los sliders de gestos ya NO prenden el gesto propio .gani del mismo nombre: Sonrisa 1.5 sumaba encima de su forma por
+            // huesos + perfil + forma esculpida el clip 'sonrisa' entero y el 'risa' entero (ojos cerrados, mandibula abierta hasta 19
+            // grados) = mueca de llanto. Los gestos propios siguen entrando cuando el JUEGO hace ese gesto (medido arriba) y los "entre_"
+            if (false) for (int i = 0; i < NG; i++) {   // sliders de gestos del mod (editor): el gesto propio del mismo nombre
                 const char* n = S->gg[i].name; float sl = 0.0f;
                 if (!_stricmp(n, "sonrisa")) sl = (std::min)(pSmi, 1.0f); else if (!_stricmp(n, "risa")) sl = (std::max)(0.0f, pSmi - 1.0f) * 2.0f;
                 else if (!_stricmp(n, "enojo")) sl = pAng; else if (!_stricmp(n, "asombro")) sl = pSur; else if (!_stricmp(n, "grito")) sl = pGri; else if (!_stricmp(n, "puchero")) sl = pPuc;
