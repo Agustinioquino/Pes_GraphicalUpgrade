@@ -743,6 +743,7 @@ def build(src_fmdl, texdir, log=print):
     # de adelante de abajo SUBEN enteros (rigidos, por el centro del diente) y la encia de la tira de abajo sube con ellos, asi el
     # alto de la corona y el margen de la encia quedan iguales. Pleno en los centrales, se apaga hacia el canino (que ya cruzaba).
     LIFT = float(os.environ.get('LO_LIFT', PROF.get('lift_lo', 0.0))) * MM
+    GUM_LIFT = float(os.environ.get('GUM_LIFT', '0.45'))
     if LIFT > 0:
         def lift_w(x):
             return np.exp(-(np.abs(x) / (9.0 * MM)) ** 2)   # suave a lo ancho: sin pico estirado en la encia del medio
@@ -760,7 +761,7 @@ def build(src_fmdl, texdir, log=print):
                 bv = np.unique(eu[ec == 1])
                 dB, _ = cKDTree(Pp[bv]).query(Pp)
                 wv = sst(0.0, 4.0 * MM, dB)
-                Pp[:, 1] += LIFT * lift_w(Pp[:, 0]) * wv
+                Pp[:, 1] += LIFT * GUM_LIFT * lift_w(Pp[:, 0]) * wv   # (09/11 j) Agustin: "la encia abajo esta muy subida en los primeros dientes": la encia sube menos que el diente (asoma mas corona)
         log('  mordida: %d dientes de abajo + su encia suben hasta %.1f mm' % (nl, LIFT / MM))
     # ---- juntar
     Pa, UVa, Fa, Wa, tag = [], [], [], [], []
