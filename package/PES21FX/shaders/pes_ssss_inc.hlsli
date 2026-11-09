@@ -606,7 +606,9 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   if (geo) {
     bool mouthPx = legacy;
     uint mW = 0, mH = 0; inMouth.GetDimensions(mW, mH);
-    if (mW > 0 && inMouth.Load(int3(min((uint2)pos.xy, uint2(mW - 1, mH - 1)), 0)) > 0.5) mouthPx = true;
+    // cualquier valor de la mascara cuenta (> 0): sirve con la mascara 0/1 de antes y con la de profundidad del hilo de la boca
+    // (0dlnmc f151b82); donde la cara tapa la boca tambien se deja como antes (de mas, nunca de menos)
+    if (mW > 0 && inMouth.Load(int3(min((uint2)pos.xy, uint2(mW - 1, mH - 1)), 0)) > 0.0) mouthPx = true;
     if (!mouthPx) { float wrapK = saturate(dot(n, L) * 0.5 + 0.5); keepC *= lerp(0.45, 1.0, wrapK * wrapK); }
   }
   o.c = float4(c0 * keepC + dif + vol, 1);
