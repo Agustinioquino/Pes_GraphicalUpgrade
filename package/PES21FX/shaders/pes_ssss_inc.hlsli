@@ -280,12 +280,21 @@ void PesOneLightMatch(float3 L, float3 col, float sh, float3 n, float3 V, float 
   float3 Lt = normalize(L + n * 0.3);
   float3 tr;
   if (P34.w > 0.5) {
+    // (09/11, Agustin: "a contraluz las partes con mas cartilago no son reales como actuaria la piel con la luz") tres cambios:
+    // 1) la luz que sale de una lamina fina (oreja, aleta de la nariz) es casi difusa: brilla toda la zona que recibe luz por
+    //    detras (back), no solo el punto donde se mira directo al sol (antes pow(V.-L, 4) = mancha chica que seguia a la camara);
+    //    queda lobulo hacia adelante (0.6 + 0.6 fwd: el pico mirando al sol es el de antes, el resto de la lamina brilla a la mitad);
+    // 2) color: con el grosor mas fino el exp(-(1.15 - thin) sigT) daba (0.86, 0.58, 0.38) = amarillo palido; el cartilago real
+    //    deja pasar rojo-naranja saturado (sangre): piso de 0.35 de recorrido -> (0.70, 0.28, 0.10) en lo mas fino;
+    // 3) solo cerca de una silueta (silK): una nariz vista de frente tiene el craneo detras y no puede encenderse con el sol de
+    //    atras (lo mismo que ya hacia el camino por grosor P64 desde el 04/11)
     float fwd = pow(saturate(dot(V, -Lt)), 4.0);
-    float back = saturate(dot(-n, L));
+    float back = saturate(dot(-n, L) * 0.8 + 0.2);
     float3 sigT = float3(1.0, 3.6, 6.5) * (P34.y > 0 ? P34.y : 1.0);
-    float3 Tr = exp(-(1.15 - thin) * sigT) * thin;
+    float3 Tr = exp(-(1.35 - thin) * sigT) * thin;
     float thinGate = lerp(smoothstep(0.45, 0.85, thin), 1.0, saturate(P76.y));
-    tr = PesSsTransColor(Tr * fwd * (0.6 + 0.4 * back) * thinGate * P5.x * 1.6 * (P76.x > 0.0 ? P76.x : 1.0), P34.z);
+    float exitK = back * (0.6 + 0.6 * fwd) * smoothstep(-0.05, 0.25, dot(L, -V)) * lerp(0.2, 1.0, silK);
+    tr = PesSsTransColor(Tr * exitK * thinGate * P5.x * 1.6 * (P76.x > 0.0 ? P76.x : 1.0), P34.z);
   } else tr = PesSsTransColor(thin * smoothstep(0.45, 0.85, thin) * pow(saturate(dot(V, -Lt)), 3.0) * float3(1.0, 0.24, 0.10) * P5.x, P34.z);
   if (P64.x > 0.5 && P64.z > 0.0) {
     float dens = (P64.w > 0 ? P64.w : 30.0) * (1.25 - thin);
