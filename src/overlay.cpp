@@ -2095,12 +2095,16 @@ static void DrawSkeletonView() {
     CharSnapshot(ci, alive);
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImDrawList* dl = ImGui::GetForegroundDrawList();
+    // (09/11) la escena no siempre ocupa la pantalla: en el editor y en los menus del juego el visor 3D es un rectangulo corrido
+    // (p. ej. 1650 x 1440 a la derecha). Se usa el viewport del ultimo dibujo de personaje; sin dato, la pantalla entera.
+    float rx = vp->Pos.x, ry = vp->Pos.y, rw = vp->Size.x, rh = vp->Size.y;
+    { float cv[4]; if (CharSceneViewport(cv)) { rx = vp->Pos.x + cv[0]; ry = vp->Pos.y + cv[1]; rw = cv[2]; rh = cv[3]; } }
     auto toScreen = [&](const float w[3], ImVec2& o) {
         float c[4]; for (int j = 0; j < 4; j++) c[j] = PV[4 * j] * w[0] + PV[4 * j + 1] * w[1] + PV[4 * j + 2] * w[2] + PV[4 * j + 3];
         if (c[3] <= 0.05f) return false;
         const float nx = c[0] / c[3], ny = c[1] / c[3];
         if (fabsf(nx) > 1.5f || fabsf(ny) > 1.5f) return false;
-        o = ImVec2(vp->Pos.x + (nx * 0.5f + 0.5f) * vp->Size.x, vp->Pos.y + (0.5f - 0.5f * ny) * vp->Size.y); return true;
+        o = ImVec2(rx + (nx * 0.5f + 0.5f) * rw, ry + (0.5f - 0.5f * ny) * rh); return true;
     };
     static const int kOff[4] = { 0x88, 0x90, 0x98, 0xA0 };
     static const ImU32 kCol[4] = { IM_COL32(255, 255, 255, 220), IM_COL32(90, 210, 255, 220), IM_COL32(90, 210, 255, 220), IM_COL32(255, 210, 60, 230) };
@@ -2112,13 +2116,25 @@ static void DrawSkeletonView() {
             void* rig = nullptr; if (!SkCopy(&rig, (const char*)ci[sl].node + kOff[r], 8) || !rig) continue;
             const char* arr = nullptr; int n = 0;
             if (!SkCopy(&arr, (const char*)rig + 0x28, 8) || !arr || !SkCopy(&n, (const char*)rig + 0x30, 4) || n < 2 || n > 400) continue;
-            static ImVec2 pt[400]; static bool ok[400];
+            static ImVec2 pt[400]; static bool ok[400]; static float wp[400][3];
+            // (09/11) manos y cara cuelgan de un hueso del cuerpo (rig + 0x120 = rig padre, + 0x128 = hueso de enganche): sus
+            // transformaciones estan en el espacio de ese hueso (0x1419f8820 arma sus matrices con la inversa del enganche), asi que
+            // se componen con la transformacion actual del hueso de enganche para llevarlas al espacio del modelo
+            float A[12]; bool att = false;
+            if (r > 0) { const void* prig = nullptr; const char* ab = nullptr; const void* ax = nullptr;
+                if (SkCopy(&prig, (const char*)rig + 0x120, 8) && prig && SkCopy(&ab, (const char*)rig + 0x128, 8) && ab && SkCopy(&ax, ab + 0x18, 8) && ax && SkCopy(A, ax, sizeof A)) att = true; }
             for (int b = 0; b < n; b++) {
                 ok[b] = false;
                 const char* bone = arr + (size_t)b * 0xc0; const void* cur = nullptr; float x[12];
                 if (!SkCopy(&cur, bone + 0x18, 8) || !cur || !SkCopy(x, cur, sizeof x)) continue;
-                const float* t = &x[8]; if (!(fabsf(t[0]) < 3.0f && fabsf(t[1]) < 3.0f && fabsf(t[2]) < 3.0f)) continue;
+                float t[3] = { x[8], x[9], x[10] }; if (!(fabsf(t[0]) < 3.0f && fabsf(t[1]) < 3.0f && fabsf(t[2]) < 3.0f)) continue;
+                if (att) {   // modelo = enganche.t + rot(enganche.q, enganche.s * t)
+                    const float v0 = A[0] * t[0], v1 = A[1] * t[1], v2 = A[2] * t[2], qx = A[4], qy = A[5], qz = A[6], qw = A[7];
+                    const float cx = 2.0f * (qy * v2 - qz * v1), cy = 2.0f * (qz * v0 - qx * v2), cz = 2.0f * (qx * v1 - qy * v0);
+                    t[0] = A[8] + v0 + qw * cx + (qy * cz - qz * cy); t[1] = A[9] + v1 + qw * cy + (qz * cx - qx * cz); t[2] = A[10] + v2 + qw * cz + (qx * cy - qy * cx);
+                }
                 float w[3]; for (int k = 0; k < 3; k++) w[k] = W[4 * k] * t[0] + W[4 * k + 1] * t[1] + W[4 * k + 2] * t[2] + W[4 * k + 3];
+                wp[b][0] = t[0]; wp[b][1] = t[1]; wp[b][2] = t[2];
                 ok[b] = toScreen(w, pt[b]);
             }
             for (int b = 0; b < n; b++) {
@@ -2129,7 +2145,10 @@ static void DrawSkeletonView() {
                     else if (pv >= (uint64_t)(uintptr_t)arr && pv < (uint64_t)(uintptr_t)(arr + (size_t)n * 0xc0) && ((pv - (uint64_t)(uintptr_t)arr) % 0xc0) == 0) par = (int)((pv - (uint64_t)(uintptr_t)arr) / 0xc0);
                     else { int32_t pi = (int32_t)(pv & 0xffffffffu); if (pi >= 0 && pi < n) par = pi; }
                 }
-                if (par >= 0 && par != b && ok[par]) dl->AddLine(pt[par], pt[b], kCol[r], r == 3 ? 1.0f : 1.5f);
+                if (par >= 0 && par != b && ok[par]) {   // (09/11) los huesos de deformacion (dsk_*) cuelgan lejos de su padre: esa union va tenue
+                    const float dx = wp[b][0] - wp[par][0], dy = wp[b][1] - wp[par][1], dz = wp[b][2] - wp[par][2];
+                    const bool lejos = dx * dx + dy * dy + dz * dz > 0.35f * 0.35f;
+                    dl->AddLine(pt[par], pt[b], lejos ? ((kCol[r] & 0x00ffffffu) | 0x30000000u) : kCol[r], r == 3 ? 1.0f : 1.5f); }
                 dl->AddCircleFilled(pt[b], r == 3 ? 1.8f : 2.5f, kCol[r], 8);
             }
         }
@@ -2164,7 +2183,8 @@ void OverlayPresent(IDXGISwapChain* sc) {
     }
     const bool menuShown = g_menuOpen || s_menuVis > 0.0f;
     FrameTimeTick();   // (08/11) diagnostico: tiempo de cada cuadro
-    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass) return;
+    const bool skelView = g_cfg.live[426][0] > 0.5f;   // (09/11) la vista del esqueleto se dibuja tambien con el menu cerrado
+    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView) return;
     if (!s_rtv) {
         ID3D11Texture2D* bb = nullptr;
         if (FAILED(sc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb)) || !bb) return;

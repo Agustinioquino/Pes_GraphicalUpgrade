@@ -394,6 +394,7 @@ ID3D11DepthStencilState* CachedDSS(const D3D11_DEPTH_STENCIL_DESC& d);
 ID3D11BlendState* CachedBlend(const D3D11_BLEND_DESC& d);
 ID3D11RasterizerState* CachedRS(const D3D11_RASTERIZER_DESC& d);
 void StateCachePresent();
+bool CharSceneViewport(float out[4]);             // (09/11) viewport del ultimo dibujo de cara/cuerpo (x, y, ancho, alto en pixeles del backbuffer)
 void FaceInjectPresent();                         // (09/11) gancho de las matrices del rig (0x1419f8820): diagnostico de donde se arma la cara
 // (09/11) sol real del motor en el editor (soleditor.cpp): DirectionalLight "zfx_SolEditor" del EditFace.fox2
 void SolEditorPresent();
