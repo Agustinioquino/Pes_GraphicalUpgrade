@@ -648,7 +648,7 @@ def wet_tissue(bsm, srm, log=print):
         # filiformes como puntitos claros ordenados, fungiformes rojas redondas; saburra solo leve atras
         pf, pu = papillae(N)
         pu = pu * (0.35 + 0.65 * sst(0.55, 0.95, np.abs(tu)) + 0.65 * sst(0.3, 0.0, tv))
-        Lt = 0.46 * (1 + 0.025 * low - 0.22 * groove + 0.015 * np.tanh(cell2)) * (1.04 - 0.08 * sst(0.0, 1.0, tv))
+        Lt = 0.46 * (1 + 0.025 * low - 0.04 * groove + 0.015 * np.tanh(cell2)) * (1.04 - 0.08 * sst(0.0, 1.0, tv))   # (09/11 g) Agustin: no oscurecer la linea del medio
         T = tcol / (tcol * lumw).sum() * Lt[..., None]
         coat = np.exp(-(tu / 0.40) ** 2) * sst(0.45, 0.95, tv) * 0.6
         T = T * (1 - 0.15 * coat[..., None]) + np.array([0.86, 0.74, 0.72], np.float32) * Lt[..., None] * 1.12 * 0.15 * coat[..., None]
@@ -758,7 +758,7 @@ def detail_maps(bsm, nrm, srm, trm, rows, log=print):
         if TOOTH_N > 0:
             # (09/11 f) Agustin: 'la lengua se ve muy porosa pero sin detalle marcado': menos poro fino, formas marcadas: surco
             # central claro (de la punta al fondo), fungiformes en relieve, y el cuerpo con dos lomas a los lados del surco
-            groove = np.exp(-(tuc / 0.09) ** 2) * sst(0.06, 0.30, tvc) * sst(1.0, 0.7, tvc)
+            groove = 0.5 * np.exp(-(tuc / 0.14) ** 2) * sst(0.06, 0.30, tvc) * sst(1.0, 0.7, tvc)   # (09/11 g) surco suave, ancho
             tong_x = 0.9 * np.exp(-((np.abs(tuc) - 0.35) / 0.25) ** 2) * sst(0.0, 0.4, tvc)
             fil = 0.35 * fil
     h = tongue * (0.55 * fil + 0.9 * fun - 1.2 * groove + tong_x) * (0.6 if TOOTH_N > 0 else 1.0) + tis * 0.35 * orange + teeth * (0.12 * perik + 0.10 * nz(0.9))
