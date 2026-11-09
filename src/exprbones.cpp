@@ -222,8 +222,8 @@ struct PoseOff { int d; float a[3], s[3], u[3]; };   // a = enojo, s = sonrisa, 
 static const PoseOff kPose[] = {
     {  1, { 0, 0, 0 },                   {  0.0010f, -0.0004f, 0 },        { 0, 0, 0 } },                    // lip_b_l
     {  2, { 0, 0, 0 },                   { -0.0010f, -0.0004f, 0 },        { 0, 0, 0 } },                    // lip_b_r
-    {  5, {  0.0004f, -0.0022f, 0 },     {  0.0030f,  0.0030f, -0.0010f }, { -0.0015f, 0, 0.0005f } },       // lip_s_l: comisura
-    {  6, { -0.0004f, -0.0022f, 0 },     { -0.0030f,  0.0030f, -0.0010f }, {  0.0015f, 0, 0.0005f } },       // lip_s_r
+    {  5, {  0.0004f, -0.0022f, 0 },     {  0.0030f,  0.0022f, -0.0010f }, { -0.0015f, 0, 0.0005f } },       // lip_s_l: comisura
+    {  6, { -0.0004f, -0.0022f, 0 },     { -0.0030f,  0.0022f, -0.0010f }, {  0.0015f, 0, 0.0005f } },       // lip_s_r
     {  7, { 0, -0.0006f, 0 },            {  0.0010f,  0.0015f, 0 },        { 0, 0, 0 } },                    // cheek_s_l
     {  8, { 0, -0.0006f, 0 },            { -0.0010f,  0.0015f, 0 },        { 0, 0, 0 } },                    // cheek_s_r
     {  9, { 0,  0.0010f, 0 },            {  0.0004f,  0.0008f, 0 },        { 0, 0, 0 } },                    // lip_t_l
@@ -236,18 +236,19 @@ static const PoseOff kPose[] = {
     { 15, { -0.0003f, 0.0010f, 0 },      { -0.0003f,  0.0006f, 0 },        { 0, 0, 0 } },                    // nosewing_r
     { 16, {  0.0002f, 0.0008f, 0 },      {  0.0005f,  0.0010f, -0.0004f }, { 0, 0, 0 } },                    // nasolabialfold_t_l
     { 17, { -0.0002f, 0.0008f, 0 },      { -0.0005f,  0.0010f, -0.0004f }, { 0, 0, 0 } },                    // nasolabialfold_t_r
-    { 26, { -0.0020f, -0.0030f, 0.0005f }, { 0, 0, 0 },                    {  0.0003f, 0.0040f, 0 } },       // brow_i_l: ceno abajo y al medio
-    { 27, {  0.0020f, -0.0030f, 0.0005f }, { 0, 0, 0 },                    { -0.0003f, 0.0040f, 0 } },       // brow_i_r
-    { 28, { 0, -0.0012f, 0 },            { 0, 0, 0 },                      { 0, 0.0035f, 0 } },              // brow_o_l
-    { 29, { 0, -0.0012f, 0 },            { 0, 0, 0 },                      { 0, 0.0035f, 0 } },              // brow_o_r
-    { 30, { 0, -0.0020f, -0.0004f },     { 0, 0, 0 },                      { 0, 0.0020f, 0 } },              // glabella
+    { 26, { -0.0020f, -0.0030f, 0.0005f }, {  0.0008f, 0.0014f, 0 },                    {  0.0003f, 0.0040f, 0 } },       // brow_i_l: ceno abajo y al medio
+    { 27, {  0.0020f, -0.0030f, 0.0005f }, { -0.0008f, 0.0014f, 0 },                    { -0.0003f, 0.0040f, 0 } },       // brow_i_r
+    { 28, { 0, -0.0012f, 0 },            { 0, 0.0008f, 0 },                      { 0, 0.0035f, 0 } },              // brow_o_l
+    { 29, { 0, -0.0012f, 0 },            { 0, 0.0008f, 0 },                      { 0, 0.0035f, 0 } },              // brow_o_r
+    { 30, { 0, -0.0020f, -0.0004f },     { 0, 0.0008f, 0 },                      { 0, 0.0020f, 0 } },              // glabella
 };
 static void PoseOf(int d, float ang, float smi, float sur, float* o) {
     o[0] = o[1] = o[2] = 0.0f;
     // (04/11, Agustin con una foto de Messi riendo: "al aumentar la sonrisa ... el angulo de las puntas de la sonrisa no suben tanto,
     // abre mas la boca") pasando 1.0 de Sonrisa las comisuras casi no suben mas (un cuarto); se abren a lo ancho igual y la boca se
     // abre (la mandibula, abajo en ExprBonesFrame)
-    const float smY = smi <= 1.0f ? smi : 1.0f + 0.55f * (smi - 1.0f);   // (09/11, Agustin: "la sonrisa esta rota": a 1.5 se leia como mueca) 0.25 -> 0.55
+    const float smY = smi <= 1.0f ? smi : 1.0f + 0.35f * (smi - 1.0f);   // (09/11 b, Agustin con foto real: "se suben demasiado las comisuras") 0.55 -> 0.35 y comisura 3.0 -> 2.2 mm por 1.0
+    // (09/11 b) la sonrisa sube las cejas apenas (1.4 mm el inicio, 0.8 la punta) y las separa (entrecejo 1.6 mm mas ancho a 1.0), como en la foto   // (09/11, Agustin: "la sonrisa esta rota": a 1.5 se leia como mueca) 0.25 -> 0.55
     for (const PoseOff& p : kPose) if (p.d == d) { for (int k = 0; k < 3; k++) o[k] = p.a[k] * ang + p.s[k] * ((k == 1 && (d == 5 || d == 6)) ? smY : smi) + p.u[k] * sur; return; }
 }
 static float s_poseSmile = 0.0f;   // para Secondary (mejillas)

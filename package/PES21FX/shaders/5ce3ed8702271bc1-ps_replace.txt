@@ -329,6 +329,14 @@ void main(
   { float pesWrK = saturate(IniParams.Load(int2(397, 0)).z) * (pesWrS0.y > 0.5 ? 1.0 : 0.0);
     if (pesWrK > 0.0) { wTop = lerp(wTop, pesWrS3, pesWrK); wBot = lerp(wBot, float4(v2.x < 0.5 ? pesWrS0.x : pesWrS4.x, pesWrS4.yzw), pesWrK); } }
   if (wrOn) {
+    // (09/11 b, Agustin con foto real de Messi: "faltan pliegues en la piel, arrugas ... marcar el pliegue de las mejillas") los gestos
+    // del mod se hacen con huesos y no pasan por la animacion del juego, asi que el motor no manda pesos de arrugas: se ponen por
+    // slider, con las arrugas propias de cada cara. Sonrisa: surco de la mejilla (boca, los dos lados) y patas de gallo; asombro: frente;
+    // enojo: entrecejo; grito: todo
+    { float4 G5a = IniParams.Load(int2(355, 0)), G6a = IniParams.Load(int2(356, 0));
+      float sS = saturate(G5a.y), sS2 = saturate(G5a.y - 1.0), sA = saturate(G5a.x), sU = saturate(G5a.z), sG = saturate(G6a.x);
+      wTop = max(wTop, float4(0.55 * sU + 0.50 * sG, 0.35 * sU, 0.70 * sA + 0.50 * sG, 0.50 * sS + 0.30 * sS2 + 0.30 * sG));
+      wBot.x = max(wBot.x, 0.65 * sS + 0.25 * sS2 + 0.50 * sG); }
     // sonrisa real: boca y ojos activos a la vez -> mas patas de gallo
     float smile = sqrt(saturate(max(g_psMaterial.m_materials[0].y, g_psMaterial.m_materials[4].x)) * saturate(wTop.w));
     wTop *= float4(wrZone.x, wrZone.x, wrZone.y, wrZone.z * (1.0 + wrSmile * smile));
