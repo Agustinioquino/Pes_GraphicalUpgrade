@@ -119,8 +119,14 @@ void main(
   float mEnamelT = 0, mGumLine = 0, mLipShadow = 0;
   // (19/10 c) boca v3: x98 lengua (humedad/color), y98 sombra entre dientes, z98 oscurecimiento hacia la garganta, w98 saliva
   float4 Q98 = IniParams.Load(int2(98,0));
-  float mTongueZ = smoothstep(0.64, 0.68, v2.y) * smoothstep(0.52, 0.48, v2.x);   // lengua: abajo-izquierda del atlas
-  float mThroatZ = smoothstep(0.64, 0.68, v2.y) * smoothstep(0.48, 0.52, v2.x);   // garganta / paladar: abajo-derecha
+  // (09/11, Agustin: "sobre la lengua se ve un error en la mitad, creo que es de oclusion") las zonas de lengua y garganta venian
+  // del atlas de Konami de 512 (19/10: lengua a la izquierda de u 0.5, garganta a la derecha), pero en la boca v20 la LENGUA
+  // ocupa u 0.27..0.74 (centrada en u 0.503, el surco del medio) y la garganta / paladar es otra caja, u 0.75..0.97, v 0.72..0.97
+  // (medidas de tools/fox/mouth/make_oral.py, las mismas con que se hicieron las texturas). Con el corte en u 0.5 la mitad
+  // derecha de la lengua contaba como garganta: otra oclusion, sin reflejo y sin el alivio del sol (w388) -> una linea justo
+  // en el medio de la lengua. Ahora cada zona es su caja real
+  float mTongueZ = smoothstep(0.27, 0.31, v2.x) * smoothstep(0.74, 0.70, v2.x) * smoothstep(0.64, 0.68, v2.y);   // lengua
+  float mThroatZ = smoothstep(0.75, 0.78, v2.x) * smoothstep(0.97, 0.94, v2.x) * smoothstep(0.72, 0.75, v2.y) * smoothstep(0.97, 0.94, v2.y);   // garganta / paladar
   float mRows = saturate(mUpper + mLower);
   uint4 bitmask, uiDest;
   float4 fDest;
@@ -224,7 +230,7 @@ void main(
   r3.xyz = r3.xyz * r6.xyz;
   if (mOn) {
     // reflejo del ambiente: el juego lo suma sin ocluir -> dientes que "brillan" en la oscuridad
-    r3.xyz *= lerp(mRefl, 1.0, mTeeth) * lerp(1.0, 0.35, mDeep) * (1.0 - 0.6 * mCavity * (1.0 - mTeeth));   // (04/11 c) captura de Agustin (Messi, shader vs Ver original): dientes grises y encia roja fuerte: el esmalte con su reflejo entero, como el original
+    r3.xyz *= lerp(mRefl, 1.25, mTeeth) * lerp(1.0, 0.35, mDeep) * (1.0 - 0.6 * mCavity * (1.0 - mTeeth));   // (04/11 c) captura de Agustin (Messi, shader vs Ver original): dientes grises y encia roja fuerte: el esmalte con su reflejo entero, como el original
     float3 mAlb = r0.xyz;   // (04/11) color de la textura, antes de tocar los dientes
     // dientes: menos blanco fosforescente y tono marfil natural
     // (04/11 c) captura de Agustin (Messi, shader vs Ver original): dientes grises y encia roja fuerte: sin bajar la blancura (z17); el blanco lo da la textura v20
@@ -236,6 +242,35 @@ void main(
     float3 mLv = normalize(float3(dot(mLw, g_psScene.m_view._m00_m10_m20), dot(mLw, g_psScene.m_view._m01_m11_m21), dot(mLw, g_psScene.m_view._m02_m12_m22)) + float3(1e-5, 2e-5, 1e-5));
     float mSunIn = smoothstep(0.0, 0.6, dot(r2.xyz, mLv)) * (1.0 - 0.6 * mDeep);
     float mSunK = 1.0 - 0.7 * mSunIn;   // multiplica cada oscurecimiento fijo
+    // (08/11 b, Agustin: "mejora la sombra plasmada por la luz, la oclusion del fondo y las muelas, la sombra del frente, la
+    // lengua y demas") PROFUNDIDAD DENTRO DE LA BOCA (w388; 0 = como antes). mSunK afloja cada oscurecimiento fijo donde la
+    // normal de la boca mira al sol, pero lo que esta DETRAS de los labios (muelas, dientes de los costados, fondo de la
+    // lengua, garganta) no recibe el sol aunque lo mire: los labios y los dientes de adelante se lo tapan. Con eso el fondo se
+    // aclaraba con el sol de frente y la boca quedaba plana. Ahora cuanto mas al fondo, menos se afloja (0 incisivos .. 1
+    // garganta, por las zonas del atlas de la boca v20)
+    float4 Q388b = IniParams.Load(int2(388, 0));
+    float mDepK = saturate(Q388b.w);
+    float mMolarZ = smoothstep(0.893, 0.903, v2.x) * smoothstep(0.626, 0.636, v2.y) * smoothstep(0.732, 0.722, v2.y);
+    float mSideT = mRows * smoothstep(0.12, 0.34, abs(v2.x - 0.5));                    // premolares y dientes de los costados
+    float mTongueB = mTongueZ * saturate((0.99 - v2.y) / 0.32);                       // la lengua hacia la raiz (v alto = punta)
+    float mDpt = saturate(max(max(0.85 * mMolarZ, 0.6 * mSideT), max(mThroatZ, max(mTongueB, 0.9 * mDeep))));
+    // (08/11 c, Agustin: "que la oclusion funcione con el sol y luz desde cualquier lado, con distintos tipos de luces, si esta
+    // lloviendo, en invierno y verano no es lo mismo") TIPO DE LUZ. La DLL publica en la fila 114 x = lluvia, z = estacion
+    // (1 invierno, 0 verano, -1 sin dato) y w = sol directo (luz calida y fuerte; 0 = torres de noche o cielo cubierto).
+    //  - mDir: cuanto manda UNA direccion. Sol 1; torres de noche 0.6 (varias torres: sombras mas suaves y cruzadas); lluvia o
+    //    cubierto 0.25 (la luz viene de todo el cielo: dentro de la boca casi no entra, la oclusion manda). En invierno el sol
+    //    esta mas bajo (eso ya lo trae la direccion real del sol) y es mas debil y difuso: x 0.85.
+    //  - mEnter: la luz entra a la boca solo por la abertura de los labios. Si se ve el interior es que la boca mira mas o menos a
+    //    la camara: con la luz del lado de la camara entra, con la luz detras de la cabeza no (antes la cara de un diente que
+    //    "miraba" al sol se aclaraba aunque el sol viniera de atras).
+    // El alivio de los oscurecimientos por el sol (mSunK) solo vale con luz direccional que entra por la abertura
+    float4 Q114 = IniParams.Load(int2(114, 0));
+    float mDir = Q114.x > 0.5 ? 0.25 : (Q114.w > 0.5 ? 1.0 : 0.6);
+    if (Q114.z > 0.5) mDir *= 0.85;
+    float3 mVc = normalize(v3.xyz);                                                    // hacia la camara
+    float mEnter = saturate(dot(mLv, mVc) * 1.4 + 0.2);
+    mSunK = lerp(1.0, mSunK, lerp(1.0, mDir * mEnter, mDepK));
+    mSunK = lerp(mSunK, 1.0, mDpt * mDepK);
     // (31/10 b) sombra del sol por forma (Agustin: "se aclaran pero no tienen sombra del sol"): el shadow map es muy grueso para
     // la boca y la luz de ambiente del juego aplana los dientes; los que miran lejos de la luz (fondo del arco, el lado opuesto
     // al sol) quedan mas oscuros, con la misma fuerza de la cavidad (x17)
@@ -280,6 +315,35 @@ void main(
       mLipShadow = saturate(Q96.w) * (mUpper * (1.0 - 0.75 * mIncisal) * 0.55 * smoothstep(-0.2, 0.7, mLv.y)
                                     + mLower * 0.35 * smoothstep(0.2, -0.7, mLv.y) + 0.06 * mRows) * lerp(1.0, mSunK, 0.5);
       r0.xyz *= 1.0 - mLipShadow;
+      // (08/11, Agustin: "sombras de dientes tambien") SOMBRA POR LA FORMA DE LA MALLA (fila 388). Los dientes de la boca 3D
+      // tienen hueco real entre vecinos, cuello y encia, pero el PS no tenia ninguna sombra que siguiera esa forma: las de antes
+      // eran fijas por zona del atlas (cavidad, linea de encia, garganta) o pintadas con el mapa de normales (apagadas el 04/11
+      // porque ensuciaban de gris). Aca se mide la CURVATURA de la malla en el propio pixel (cuanto gira la normal geometrica
+      // por milimetro de superficie, con las derivadas de pantalla) y se oscurece solo lo CONCAVO: el hueco entre dos dientes
+      // vecinos, el cuello donde el diente entra en la encia, el surco de las muelas y el encuentro de la lengua con el piso de
+      // la boca. Lo convexo (la cara del diente, el lomo de la lengua) no cambia. Es oclusion del ambiente (multiplica el albedo
+      // y el reflejo, no la luz directa del sol: con el sol de frente se afloja como los demas, por mSunK)
+      { float4 Q388 = IniParams.Load(int2(388, 0));
+        if (Q388.x > 0.5) {
+          float3 nG = normalize(v6.xyz);              // normal GEOMETRICA (sin el mapa de normales: la forma, no el relieve pintado)
+          // (08/11 c) OJO: v3 va de la superficie HACIA la camara (el reflejo del juego usa -normalize(v3) como rayo que llega),
+          // o sea camara - P: su derivada es -dP. Con v3 tal cual el signo de la curvatura salia al reves y se oscurecia la cara
+          // CONVEXA del diente en vez del hueco. La posicion es -v3
+          float3 Pv = -v3.xyz;                         // posicion respecto de la camara (metros)
+          float3 dnx = ddx(nG), dny = ddy(nG), dpx = ddx(Pv), dpy = ddy(Pv);
+          float dp2 = dot(dpx, dpx) + dot(dpy, dpy);
+          float curv = dp2 > 1e-12 ? -(dot(dnx, dpx) + dot(dny, dpy)) / dp2 : 0.0;   // 1/m; negativo = convexo, positivo = concavo
+          float rMm = Q388.y > 0.1 ? Q388.y : 6.0;     // radio de referencia: con ese radio concavo la sombra llega a 1
+          float aoC = saturate(max(curv, 0.0) * rMm * 0.001);
+          aoC *= aoC * (3.0 - 2.0 * aoC);              // rodilla suave: el ruido de un pixel no pinta rayas
+          // (09/11, video de Agustin: franja oscura de lado a lado... a lo LARGO del medio de la lengua) la lengua 3D tiene un surco
+          // central de 0.6 mm (mouth3d.py) muy angosto: su curvatura es alta aunque sea poco profundo, y esta medida lo pintaba
+          // como un hueco entre dientes (franja oscura de borde duro). La curvatura no sabe de profundidad: la lengua queda fuera
+          // (ya trae su oclusion horneada en la textura y la de la raiz por w388); sigue en dientes, encias y fondo
+          float kC = (Q388.z > 0 ? Q388.z : 0.5) * aoC * (mTeeth + 0.8 * mTissue + 0.5 * mDeep) * (1.0 - mTongueZ) * lerp(1.0, mSunK, 0.5);
+          r0.xyz *= 1.0 - saturate(kC);
+          r3.xyz *= 1.0 - saturate(kC * 0.7);          // el reflejo del ambiente tampoco llega al fondo del hueco
+        } }
       // --- v3 ---
       // sombra entre dientes (espacio interproximal): donde la normal del mapa se inclina de costado dentro de las filas
       { float3 nm = g_tex_normal.SampleBias(g_sampler_normal_s, v2.xy, 1.0).xyw; float nx = abs(nm.x * nm.z * 2.0 - 1.0);
@@ -299,6 +363,23 @@ void main(
         float mBackT = mRows * mTeeth * smoothstep(0.17, 0.31, abs(v2.x - 0.5)) * (1.0 - mMolar);
         float deepM = (0.55 * mMolar + 0.35 * mBackT) * saturate(Q98.z);
         r0.xyz *= 1.0 - deepM * lerp(1.0, mSunK, 0.35); }   // (04/11 h) muelas y dientes de atras: oclusion entera otra vez
+      // (08/11 b) SOMBRA DEL FRENTE: los incisivos de abajo quedan detras del borde de los de arriba (sobremordida); con la luz
+      // de arriba el borde de los de abajo recibe su sombra. Y el reflejo del cielo no llega al fondo de la boca ni a la raiz
+      // de la lengua (el juego lo suma entero: el fondo brillaba como si estuviera afuera)
+      if (mDepK > 0.0) {
+        float overB = mLower * mTeeth * smoothstep(0.35, 0.9, mIncisal) * smoothstep(-0.3, 0.6, mLv.y) * (1.0 - mSideT);
+        r0.xyz *= 1.0 - 0.28 * mDepK * overB * lerp(1.0, mSunK, 0.5);
+        r3.xyz *= 1.0 - 0.75 * mDepK * mDpt;
+        // (08/11 c) LUZ DE COSTADO: los dientes de los costados los tapa la mejilla desde afuera; la luz que viene de su mismo lado
+        // no les llega (les llega solo la que cruza la abertura desde el otro lado). La normal geometrica del diente apunta hacia la
+        // mejilla: si apunta hacia la luz (de costado, sin la parte hacia la camara), sombra de la mejilla y la comisura
+        float3 nGs = normalize(v6.xyz);
+        float3 nLat = nGs - dot(nGs, mVc) * mVc;
+        float cheekSh = mSideT * mTeeth * saturate(dot(nLat, mLv) * 2.0) * mDir;
+        r0.xyz *= 1.0 - 0.35 * mDepK * cheekSh;
+        // con luz difusa (lluvia, cubierto, noche con varias torres) el fondo recibe todavia menos: no hay una direccion que entre
+        r0.xyz *= 1.0 - 0.30 * mDepK * (1.0 - mDir) * mDpt;
+      }
       // lengua: rosa-rojo humedo con mas saturacion, papilas (ruido fino) y sin el gris del original
       { float tz = mTongueZ * mTissue * saturate(Q98.x);
         float lumT = dot(r0.xyz, float3(0.3, 0.59, 0.11));
@@ -408,7 +489,9 @@ void main(
       float rAA = saturate(sqrt(mGeoVar) * 1.5);
       // (04/11 b) 'pierde detalle en la textura': el srm v20 trae la rugosidad del esmalte (corona/cuello) y de encia/lengua;
       // antes se apretaba a un rango fijo y quedaba todo igual. Ahora solo un minimo (anti-titileo) y el resto lo decide el srm
-      o2.x = lerp(o2.x, max(o2.x, 0.20 + rAA), en);
+      // (09/11) Agustin: 'le falta un color de reflejo real': el esmalte humedo tiene reflejos blancos y nitidos (la corona);
+      // el minimo 0.20 lo dejaba satinado. Corona hasta 0.14 (+ anti-titileo), el cuello sigue lo que diga el srm
+      o2.x = lerp(o2.x, max(o2.x, lerp(0.20, 0.14, saturate(mIncisal * 1.5)) + rAA), en);
       o2.x = lerp(o2.x, max(o2.x, 0.13 + rAA), mTissue * saturate(Q96.z) * 0.8);
       o2.x = max(0.13, o2.x);
       // translucidez del esmalte al G-buffer (la luz de piel la usa): borde incisal translucido
