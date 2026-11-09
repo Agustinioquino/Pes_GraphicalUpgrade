@@ -446,6 +446,10 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   float3 Pv = float3(pp * zC, zC);
   float3 V = -normalize(float3(pp, 1));
   float3 n = DecodeN(uv);
+  // (09/11, Agustin: "una opcion que coloque un sol cercano y permita cambiar sus angulos y posicion") w378 = 1: la luz principal
+  // de CUALQUIER preset pasa a ser un sol cercano con posicion: rumbo (z297) y altura (w297) tal cual los sliders (no sumados al
+  // preset), a y377 metros del jugador con un cono de z377 grados. Color e intensidad siguen siendo los del preset
+  if (E5.w > 0.5) { az = E.z; el = E.w; pSpotD = clamp(E4.y > 0 ? E4.y : 2.0, 0.3, 12.0); pSpotA = clamp(E4.z > 0 ? E4.z : 45.0, 10.0, 170.0); }
   float3 Lw = PesDirL(az, el, zSgn), L = Lw;
   // (07/11) foco en el manual: una luz con posicion a y377 m del jugador (el punto del centro de la pantalla) en la direccion del
   // rumbo / altura, cono de z377 grados con borde suave y caida con el cuadrado de la distancia (1 en el jugador)
@@ -466,6 +470,15 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   bool skin = IsSkin(uv);
   float4 mat = inMat.SampleLevel(sPoint, uv, 0);
   float rough = clamp(mat.x, 0.08, 1.0);
+  // (09/11, Agustin: "fingir que esta lloviendo y mojar el rostro") y392 = lluvia en la cara (0..1), con cualquier preset: la
+  // pelicula de agua deja la piel lisa (brillo nitido) y mas oscura (el agua llena los poros y baja la dispersion de la
+  // superficie); fuera de la piel solo un poco mas lisa. La boca (cavidad / mascara) no se moja aca
+  float wetK = saturate(IniParams.Load(int2(392, 0)).y);
+  bool wetSkin = false;
+  { uint wW = 0, wH = 0; inMouth.GetDimensions(wW, wH);
+    bool wMouth = wW > 0 && inMouth.Load(int3(min((uint2)pos.xy, uint2(wW - 1, wH - 1)), 0)) > 0.0;
+    if (wMouth) wetK = 0.0; }
+  if (wetK > 0.0) { wetSkin = IsSkin(uv); rough = lerp(rough, wetSkin ? 0.12 : max(rough * 0.6, 0.15), wetK * (wetSkin ? 1.0 : 0.5)); }
   uint tq = (uint)(inNrm.SampleLevel(sPoint, uv, 0).z * 1023.0 + 0.5);
   float trans = (float)(tq >> 4) / 63.0;
   // (04/11 nariz) grosor por la curvatura (como PesSkThickCurv del partido, sin atlas en el editor): normales del G-buffer a ~10 mm
@@ -663,6 +676,10 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   }
   o.c = float4(c0 * keepC + dif + vol, 1);
   if (E7.z > 0.0) specMul *= E7.z;   // (07/11 c) brillo de la luz en el manual
+  if (wetK > 0.0 && geo && !legacy) {   // (09/11) lluvia: brillo de la pelicula de agua y piel apenas mas oscura
+    specMul *= 1.0 + (wetSkin ? 1.6 : 0.6) * wetK;
+    if (wetSkin) o.c.xyz *= 1.0 - 0.12 * wetK;
+  }
   // (09/11, Agustin: "mejora la iluminacion del modo editar al maximo") el brillo de la luz de estudio que queda tambien sigue a la
   // luz principal: antes el lado en sombra conservaba el 55 % del brillo de estudio y se veia plastico / mojado en la sombra.
   // Mismo factor que la difusa (la boca queda igual: keepC no cambia ahi)
