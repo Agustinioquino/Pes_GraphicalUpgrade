@@ -786,6 +786,12 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   // el pixel central entra con el peso de una muestra media: sin vecinos validos (borde) queda como estaba
   acc += c0; wsum += 1.0;
   float3 blurred = acc / wsum;
-  return float4(lerp(c0, blurred, saturate(P.y) * nearK), 1);
+  // (09/11, Agustin: "el sss puede ser mejor", con el ancho de vuelta en 1.41) la mezcla con la luz sin difundir era la misma en
+  // los tres canales: con fuerza 0.73 el rojo conservaba un 27 % de borde duro (penumbra sin el tono rojo de la piel real) y el
+  // azul se difundia igual que el rojo (poros y arrugas lavados). Ahora la fuerza va por canal como la dispersion real: el rojo
+  // casi entero (y95^0.5: borde de sombra rojizo y suave), el verde como el slider y el azul menos (y95^1.5: detalle fino)
+  float sK = saturate(P.y);
+  float3 mixK = float3(sqrt(sK), sK, sK * sqrt(sK)) * nearK;
+  return float4(lerp(c0, blurred, mixK), 1);
 }
 #endif
