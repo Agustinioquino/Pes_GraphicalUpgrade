@@ -392,6 +392,10 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   float4 E = IniParams.Load(int2(297, 0)), E2 = IniParams.Load(int2(298, 0)), E3 = IniParams.Load(int2(319, 0));
   bool noSun = IniParams.Load(int2(44, 0)).w < 0.5 && IniParams.Load(int2(255, 0)).w > 0.5;
   if (E.x < 0.5 || !noSun) return o;
+  // (09/11 d, Agustin: "el sol cercano tiene que ser un sol real del juego") z393 = 1: la DLL prendio el sol real del motor en el
+  // editor (zfx_SolEditor, w378 / w392): lo dibuja la pasada del sol del partido con sus cascadas; aca no se imita ni se baja la
+  // luz de estudio (c0 ya trae ese sol)
+  if (IniParams.Load(int2(393, 0)).z > 0.5) return o;
   float zC = LinZ(uv);
   float zSgn = zC < 0.0 ? -1.0 : 1.0, zA = abs(zC);
   float4 E4 = IniParams.Load(int2(377, 0)), E5 = IniParams.Load(int2(378, 0));
