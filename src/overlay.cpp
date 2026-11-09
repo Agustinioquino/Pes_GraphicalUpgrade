@@ -2164,7 +2164,8 @@ void OverlayPresent(IDXGISwapChain* sc) {
     }
     const bool menuShown = g_menuOpen || s_menuVis > 0.0f;
     FrameTimeTick();   // (08/11) diagnostico: tiempo de cada cuadro
-    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass) return;
+    const bool skelView = g_cfg.live[426][0] > 0.5f;   // (09/11) la vista del esqueleto se dibuja tambien con el menu cerrado
+    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView) return;
     if (!s_rtv) {
         ID3D11Texture2D* bb = nullptr;
         if (FAILED(sc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb)) || !bb) return;
