@@ -597,7 +597,19 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   }
   float ev = exp2(clamp(E8.x, -6.0, 6.0));   // (07/11 d) exposicion de la luz de prueba
   dif *= ev; spec *= ev; vol *= ev;
-  o.c = float4(c0 * (geo ? saturate(keep) : 1.0) + dif + vol, 1);
+  // (09/11, Agustin: "la luz no es muy buena, se ve todo muy plano", tambien en el modo Editar) la luz de estudio que queda (keep)
+  // es la del EditFace: frontal y pareja, y con 0.55 de ella el lado en sombra nunca bajaba de ~1.3 pasos bajo el lado iluminado.
+  // Ahora lo que queda del estudio se apaga hacia el lado contrario a la luz principal (envoltura n.L): mismo brillo del lado de la
+  // luz, el lado en sombra recibe ~45-60 % de lo de antes (contraste de retrato ~4:1 en vez de ~2.3:1) sin tocar los presets.
+  // El interior de la boca (mascara de la DLL / cavidad) queda exactamente como antes (regla de la boca).
+  float keepC = geo ? saturate(keep) : 1.0;
+  if (geo) {
+    bool mouthPx = legacy;
+    uint mW = 0, mH = 0; inMouth.GetDimensions(mW, mH);
+    if (mW > 0 && inMouth.Load(int3(min((uint2)pos.xy, uint2(mW - 1, mH - 1)), 0)) > 0.5) mouthPx = true;
+    if (!mouthPx) { float wrapK = saturate(dot(n, L) * 0.5 + 0.5); keepC *= lerp(0.45, 1.0, wrapK * wrapK); }
+  }
+  o.c = float4(c0 * keepC + dif + vol, 1);
   if (E7.z > 0.0) specMul *= E7.z;   // (07/11 c) brillo de la luz en el manual
   o.s = float4(s0 * (geo ? saturate(keep) : 1.0) + spec * specMul, 1);
   // (08/11) un NaN / infinito aca lo arrastra el TAA a toda la cara cuadro tras cuadro: se queda la luz del juego
