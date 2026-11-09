@@ -1,0 +1,2 @@
+config.obj : error LNK2019: unresolved external symbol "float fx::g_tongueTap" (?g_tongueTap@fx@@3MA) referenced in function "void __cdecl fx::UpdateTimeParams(void)" (?UpdateTimeParams@fx@@YAXXZ) [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\Release\d3d11.dll : fatal error LNK1120: 1 unresolved externals [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
