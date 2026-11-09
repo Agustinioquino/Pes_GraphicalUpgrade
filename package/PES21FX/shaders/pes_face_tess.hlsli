@@ -421,9 +421,11 @@ Texture2D<float4> tWrMaskG : register(t6);
 Texture2D<float4> tWrN     : register(t20);
 Texture2D<float4> tWrM     : register(t21);
 Texture2D<float4> tShapeWr : register(t31);
+#define PES_WRD_NO_PS 1
+#include "pes_wrdepth.hlsli"   // (09/11 g) arrugas por gesto con profundidad (x15 = 2), las mismas del PS
 float4 PesTessWrSampN(bool hi, float2 uv, float l) { return hi ? tWrN.SampleLevel(pesTessSamp, uv, l) : tWrAnimN.SampleLevel(pesTessSamp, uv, l); }
 // devuelve (surco, cresta) 0..1 con el peso del gesto
-float2 PesTessWrinkle(float2 uv)
+float2 PesTessWrinkle(float2 uv, float age)
 {
   float4 P13 = IniParams.Load(int2(13, 0));
   if (P13.w < 0.5) return 0;
@@ -453,13 +455,32 @@ float2 PesTessWrinkle(float2 uv)
     if (own) { sS *= 0.75; sS2 *= 0.75; }
     wTop = max(wTop, float4(0.75 * sU + 0.60 * sG, 0.45 * sU, 0.85 * sA + 0.60 * sG, 0.70 * sS + 0.30 * sS2 + 0.40 * sG));
     wBot.x = max(wBot.x, 0.85 * sS + 0.15 * sS2 + 0.60 * sG); }
+  // (09/11 g) x15 = 2: el volumen sale de la misma profundidad por gesto que el PS (pes_wrdepth.hlsli), con la edad del jugador:
+  // surco = fondo de la arruga ya formada (fina y profunda con el gesto entero), cresta = piel juntada entre surcos
+  float2 wrDr = 0; bool wrDon = false;
+  { uint dw = 0, dh = 0; pesWrDA.GetDimensions(dw, dh);
+    if (P15.x > 1.5 && dw > 1) {
+      float4 wa = float4(saturate(wTop.x + 0.5 * wTop.y), wTop.z, wTop.w, wBot.x);
+      float4 wb = float4(saturate(0.6 * wBot.x + 0.4 * max(wBot.y, wBot.z)), max(wBot.y, wBot.z), wBot.w, wTop.w);
+      float dz = saturate(P15.y), gn = P7.x > 0 ? P7.x : 1.0, cv = max(P13.x, 0.0);
+      wa = saturate((wa - dz) / max(1.0 - dz, 0.05) * gn); wb = saturate((wb - dz) / max(1.0 - dz, 0.05) * gn);
+      wa = 1.0 - pow(1.0 - wa, 1.0 + cv); wb = 1.0 - pow(1.0 - wb, 1.0 + cv);
+      float gain = 1.0; PesWrAge(PesWrAgeK(age, max(P15.z, 0.0)), wa, wb, gain);
+      wa = saturate(wa); wb = saturate(wb);
+      float4 pa = 1.0 + 2.5 * wa, pb = 1.0 + 2.5 * wb;
+      float4 ka = kWrDmmA * pow(wa, 0.8) * gain, kb = kWrDmmB * pow(wb, 0.8) * gain;
+      float dd = PesWrD1(pesWrDA.SampleLevel(pesTessSamp, uv, 1), pesWrDB.SampleLevel(pesTessSamp, uv, 1), pa, pb, ka, kb);
+      float dB = dot(ka, pesWrDA.SampleLevel(pesTessSamp, uv, 3)) + dot(kb, pesWrDB.SampleLevel(pesTessSamp, uv, 3));
+      wrDr = float2(saturate(dd / 0.30), 0.7 * saturate((dB - dd) / 0.10) * saturate(dB / 0.12));
+      wrDon = true;
+    } }
   float w = saturate(dot(wTop, mT) + dot(wBot, mB));
   float dead = saturate(P15.y);
   w = saturate((w - dead) / max(1.0 - dead, 0.05));
   w = saturate(w * (P7.x > 0 ? P7.x : 1.0));
   w = 1.0 - pow(1.0 - w, 1.0 + max(P13.x, 0.0));
-  float2 r = 0;
-  if (w > 0.002) {
+  float2 r = wrDr;
+  if (!wrDon && w > 0.002) {
     uint tw = 0, th = 0; if (hi) tWrN.GetDimensions(tw, th); else tWrAnimN.GetDimensions(tw, th);
     if (tw > 1) {
       // el surco ancho del PS (wrFoldW: 6 texeles, un mip mas suave)
@@ -682,7 +703,7 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
 #else
     float2 uvW = PES_LERP3(o2).xy;
 #endif
-    float2 fr = PesTessWrinkle(uvW);
+    float2 fr = PesTessWrinkle(uvW, p[0].pR.w > 10.5 && p[0].pR.w < 12.5 ? (p[0].pR.w - 11.0) * 100.0 : 0.0);   // (09/11 g) edad (pR.w = 11 + edad / 100)
     float3 r0 = PES_LERP3(pR).xyz;
     float2 me = float2(r0.x / 0.034, (r0.y - 1.6285) / 0.016);
     float mouthK = r0.z < 0.09 ? 1.0 : smoothstep(1.0, 1.6, length(me));

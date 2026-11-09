@@ -218,7 +218,7 @@ void main(
   // juego quedan EXACTAS (registros, tipos y .w sin tocar): cambiar el tamano de TEXCOORD9 corria los interpoladores de los PS
   // que lo declaran float2 (boca, pestanas, los del juego: dientes que vibraban) y escribir o4.w / o5.w dejo gris la cabeza
   // generica (sus PS originales 0cc62c9e / 068baf39 los leen). Un PS que no declara TEXCOORD10 simplemente no lo ve.
-  pR = float4(v0r.xyz, 11.0);
+  pR = float4(v0r.xyz, 11.0 + 0.01 * PesCharAge());   // (09/11 g) w = 11 + edad / 100 (arrugas por edad, pes_wrdepth.hlsli)
   o4.xyz = r1.xyz;
   o5.xyz = r4.xyz;
   o6.xyz = r2.xyz;
