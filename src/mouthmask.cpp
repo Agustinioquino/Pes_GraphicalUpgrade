@@ -4,7 +4,12 @@
 // repite el dibujo de la boca (PS 63fab773, sin cambiarlo) con un PS que escribe 1 (pes_mouthmask_ps.hlsl) sobre una textura R8 del
 // tamano del G-buffer, con la profundidad del juego (prueba sin escribir): queda 1 solo donde se VE la boca.
 // La leen la luz de prueba del editor (ssss.cpp -> t7) y las pasadas del sol d0e9 / 7dbbc (hooks.cpp -> t43). Se limpia en cada
-// Present (despues de que la usaron). Fila 374: x = 1 prendida (0 = sin mascara: esos shaders usan la formula de antes en toda la piel).
+// Present (despues de que la usaron).
+// (09/11, Agustin: "se nota que el modelo mouth se renderiza con transparencia por encima del modelo") la prueba de profundidad
+// corre cuando se dibuja la boca, y la cara se dibuja DESPUES: la cavidad que la cara tapa (mejilla, labios, bigote) quedaba marcada
+// como boca y ahi la piel usaba la formula de antes (borde y contraluz rojos) = un recuadro rojizo con la forma de la boca 3D. Ahora
+// la mascara guarda la profundidad del dibujo de la boca (R32F, SV_Position.z) y los lectores solo la aceptan si coincide con la
+// profundidad final del pixel (PesMouthVisible): donde la cara tapo la boca no cuenta. La boca no cambia. Fila 374: x = 1 prendida (0 = sin mascara: esos shaders usan la formula de antes en toda la piel).
 #include "core.h"
 #include <d3d11.h>
 #include <mutex>
@@ -51,12 +56,12 @@ ID3D11RenderTargetView* MouthMaskBegin(ID3D11RenderTargetView* rt0, ID3D11DepthS
     if (!s_ps) return nullptr;
     if (s_w != td.Width || s_h != td.Height) {
         ReleaseTex();
-        D3D11_TEXTURE2D_DESC md{}; md.Width = td.Width; md.Height = td.Height; md.MipLevels = 1; md.ArraySize = 1; md.Format = DXGI_FORMAT_R8_UNORM;
+        D3D11_TEXTURE2D_DESC md{}; md.Width = td.Width; md.Height = td.Height; md.MipLevels = 1; md.ArraySize = 1; md.Format = DXGI_FORMAT_R32_FLOAT;   // (09/11) profundidad de la boca, no 1
         md.SampleDesc.Count = 1; md.Usage = D3D11_USAGE_DEFAULT; md.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
         if (FAILED(g_dev.dev->CreateTexture2D(&md, nullptr, &s_tex)) || FAILED(g_dev.dev->CreateRenderTargetView(s_tex, nullptr, &s_rtv)) ||
             FAILED(g_dev.dev->CreateShaderResourceView(s_tex, nullptr, &s_srv))) { ReleaseTex(); s_fail++; Log("mascara de la boca: no se pudo crear la textura %ux%u", td.Width, td.Height); return nullptr; }
         s_w = td.Width; s_h = td.Height;
-        Log("mascara de la boca: textura %ux%u R8", s_w, s_h);
+        Log("mascara de la boca: textura %ux%u R32F (profundidad)", s_w, s_h);
         // nace limpia (D3D11 no garantiza ceros): se limpia en el contexto inmediato en el proximo Present; mientras, nada la lee
         s_dirty = true;
         return nullptr;

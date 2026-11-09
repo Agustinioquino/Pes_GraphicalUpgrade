@@ -99,7 +99,10 @@ void main(
   int tyC = (int)((uint)(gnZ * 1023 + 0.5) & 15);
   bool skinC = cmpOn && (tyC == 0) && (abs(gmC.z - 0.98039) < 0.003);
   bool mouthC = false;   // (08/11 0qtsss) REGLA FIJA: el interior de la boca queda como antes
-  { uint mmW = 0, mmH = 0; PESMouth.GetDimensions(mmW, mmH); if (mmW > 0) mouthC = PESMouth.Load(int3(min((uint2)v0.xy, uint2(mmW - 1, mmH - 1)), 0)) > 0.5; }
+  { uint mmW = 0, mmH = 0; PESMouth.GetDimensions(mmW, mmH); if (mmW > 0) {   // (09/11) la mascara guarda la profundidad de la boca: solo cuenta si coincide con la del pixel (donde la cara la tapo, no)
+    uint2 mmP = min((uint2)v0.xy, uint2(mmW - 1, mmH - 1));
+    float mmZ = PESMouth.Load(int3(mmP, 0)), mmD = inDepth.Load(int3(mmP, 0)).x;
+    mouthC = mmZ > 0.0 && abs(mmZ - mmD) <= 1e-6 + 2e-4 * abs(mmD); } }
 
   r0.xy = g_psSystem.m_renderBuffer.zw * v0.xy;
   r0.z = inDepth.SampleLevel(g_samplerPoint_Clamp_s, r0.xy, 0).x;

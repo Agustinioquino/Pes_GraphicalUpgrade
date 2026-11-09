@@ -1,5 +1,5 @@
 // PES21 FX (04/11) - mascara del interior de la boca (mouthmask.cpp). La DLL repite el dibujo de la boca (PS 63fab773, que NO se
-// toca) con este PS sobre una textura R8 del tamano del G-buffer: 1 donde se ve la boca (dientes, encias, lengua, garganta).
+// toca) con este PS sobre una textura R32F del tamano del G-buffer: la profundidad de la boca (09/11; antes R8 = 1) (dientes, encias, lengua, garganta).
 // La entrada es la misma que la del PS de la boca (mismo VS: la firma tiene que coincidir); solo se escribe un 1.
 // La leen la luz de prueba del editor (pes_ssss_inc.hlsli, t7) y la luz del sol d0e9 / 7dbbc (t43): donde hay boca, la formula
 // de antes, identica (regla de Agustin: el interior de la boca no cambia).
@@ -14,5 +14,7 @@ float4 main(
   float4 v6 : TEXCOORD7,
   float4 v7 : TEXCOORD8) : SV_Target0
 {
-  return float4(1, 1, 1, 1);
+  // (09/11) profundidad de la boca (no 1): el lector la compara con la profundidad final y descarta donde la cara la tapo
+  float z = max(v0.z, 1e-7);
+  return float4(z, z, z, 1);
 }

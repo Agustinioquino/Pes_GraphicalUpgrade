@@ -180,7 +180,12 @@ void main(
   { // (04/11 boca) REGLA de Agustin: el interior de la boca no cambia. Sin la mascara de la DLL (o donde marca boca) queda la
     // curvatura de antes, identica; la curvatura convexa solo se usa con la mascara presente y fuera de la boca
     uint mmW = 0, mmH = 0; pesMouthMask.GetDimensions(mmW, mmH);
-    bool mmMouth = mmW == 0 || pesMouthMask.Load(int3(min((uint2)v2.xy, uint2(mmW - 1, mmH - 1)), 0)) > 0.5;
+    bool mmMouth = mmW == 0;
+    if (!mmMouth) {   // (09/11) la mascara guarda la profundidad de la boca: solo cuenta si coincide con la del pixel (donde la cara la tapo, no)
+      uint2 mmP = min((uint2)v2.xy, uint2(mmW - 1, mmH - 1));
+      float mmZ = pesMouthMask.Load(int3(mmP, 0)), mmD = g_DepthTexture.Load(int3(mmP, 0)).x;
+      mmMouth = mmZ > 0.0 && abs(mmZ - mmD) <= 1e-6 + 2e-4 * abs(mmD);
+    }
     if (mmMouth) skCurvT = skCurv; }
   r0.w = dot(g_psLight.m_lightDir0.xyz, r3.xyw);
   r1.x = dot(-r0.xyz, r3.xyw);

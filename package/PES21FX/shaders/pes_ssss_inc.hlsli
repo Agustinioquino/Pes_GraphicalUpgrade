@@ -478,7 +478,11 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
       // (04/11 boca) con la mascara de la DLL la lengua se reconoce de verdad (tambien afuera de los labios); la prueba de cavidad
       // queda como respaldo (sin mascara, o fosas nasales)
       uint mmW = 0, mmH = 0; inMouth.GetDimensions(mmW, mmH);
-      if (mmW > 0 && inMouth.Load(int3(min((uint2)pos.xy, uint2(mmW - 1, mmH - 1)), 0)) > 0.5) legacy = true;
+      if (mmW > 0) {   // (09/11) la mascara guarda la profundidad de la boca: solo cuenta si coincide con la del pixel (donde la cara la tapo, no)
+        uint2 mmP = min((uint2)pos.xy, uint2(mmW - 1, mmH - 1));
+        float mmZ = inMouth.Load(int3(mmP, 0)), mmD = inDepth.Load(int3(mmP, 0)).x;
+        if (mmZ > 0.0 && abs(mmZ - mmD) <= 1e-6 + 2e-4 * abs(mmD)) legacy = true;
+      }
     }
     float oPx = clamp(0.010 / mpp, 1.0, 32.0);
     float curv = 0.0;
