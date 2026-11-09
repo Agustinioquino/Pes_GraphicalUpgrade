@@ -256,6 +256,8 @@ static float s_poseSmile = 0.0f;   // para Secondary (mejillas)
 // propia (perfil en caras.ini = Messi, que ademas trae su sonrisa esculpida en el shader) la sonrisa generica por huesos queda al 40 %
 // en boca/mejillas y el achinado de los ojos a la mitad: manda su escultura
 static float s_eyeSmK = 1.0f;
+// (09/11 d) toque de la lengua contra el paladar al hablar (0..1): el mayor de los personajes de este cuadro; la subida lo pone en z396
+static float s_tapAcc = 0.0f, s_tapT = -1.0f;
 // (04/11, Agustin: "que la sonrisa mueva toda la cara, asi como tambien en el enojado y demas") los sliders de gestos tambien para
 // Secondary (pomulos 18/19 y bajo-ojo 20/21): enojo, asombro, grito, puchero; y el perfil de la cara de este cuadro
 static float s_puffAll = 0.0f;   // (09/11) cachetes inflados de este esqueleto (x362 + soplido): pomulos / bajo-ojo en Secondary
@@ -407,6 +409,7 @@ struct Skel {
     GaniPose gPrev = {}; float gPrevDt = 0.0f; Inert gI[31][6]; float gIT0 = -1.0f; int gLastClip = -1; bool gLastOn = false; float gLastF = 0.0f;
     float gsL[kND][3] = {}, gsV[kND][3] = {}; bool gsHave[kND] = {}; float gsDeg = 0.0f, gsDegV = 0.0f; bool gsDegHave = false; float gsT = -1.0f;   // (08/11) gestos del juego suavizados (x397, resorte), ejes de la cabeza
     float slV[16] = {};   // velocidad del resorte de los sliders (w395)
+    float tgT = -1.0f, tgPrev = 0.0f, tgAct = 0.0f, tgTap = 0.0f;   // (09/11 d) lengua contra el paladar al hablar
     float slG[2][8] = {}, slGV[2][8] = {};   // (09/11 c) los mismos gestos por grupo: 0 cejas (llegan antes), 1 mejillas / nariz (llegan despues)
     int tkPhrase = -1; float tkT0 = 0.0f, tkDur = 0.0f, tkPause = 0.0f, tkCh[7] = {}, tkT = -1.0f; unsigned tkN = 0; int tkLast = -1;   // (08/11) hablar por palabras: frase en curso, canales suavizados
     float effort = 0.0f, brPh = 0.0f, anT = -1.0f;                 // (08/11) esfuerzo por velocidad (sube ~1 s, baja ~4 s), fase de la respiracion
@@ -1108,6 +1111,7 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
     if (wrote) { s_eyesW.fetch_add(1, std::memory_order_relaxed); s_lastEyes.store(s_frame.load(std::memory_order_relaxed), std::memory_order_relaxed); }
 }
 }   // namespace
+float g_tongueTap = 0.0f;   // (09/11 d) toque de la lengua (fuera del namespace anonimo: lo lee config.cpp)
 
 // (02/11 d, Agustin: "le falta mas naturalidad a los gestos de las expresiones") MOVIMIENTOS QUE ACOMPANAN al gesto, como en una
 // cara real (el juego mueve solo los huesos de la animacion; el resto de la cara queda quieto y se ve de goma):
@@ -1727,6 +1731,21 @@ static void FrameBody(const void* skel) {
     // se mueve): pomulos, surco y bajo-ojo las seguian crudas. Ahora pasan por un suavizado de ~6 cuadros de 60 Hz del RELOJ DEL JUEGO y
     // un margen de 0.02 (el temblor no pasa; los gestos de verdad si)
     float smS = sm, openS = openAll;
+    {   // (09/11 d, Agustin: "al hablar ... la lengua choque con el paladar") habla = slider Hablar o la mandibula del juego que abre y
+        // cierra rapido; el toque va cuando la boca esta casi cerrada, en una parte de las silabas (t, d, n, l), distinto por personaje
+        const float t = AnimT();
+        const float dtT = S->tgT < 0.0f || t <= S->tgT ? 0.0f : (std::min)(t - S->tgT, 0.25f); S->tgT = t;
+        if (dtT > 0.0f) { const float v = fabsf(openAll - S->tgPrev) / dtT; S->tgAct += (v - S->tgAct) * (std::min)(1.0f, dtT / 0.30f); }
+        S->tgPrev = openAll;
+        const float oT = (std::max)(o, openAll);
+        const float talkK = (std::max)(std::clamp(pTalk, 0.0f, 1.0f), SStep(0.15f, 0.60f, S->tgAct));
+        const float seed = (float)(((uintptr_t)S->skel >> 4) & 255u) * 0.37f;
+        const float gate = SStep(0.35f, 0.75f, 0.5f + 0.5f * sinf(6.2832f * 2.3f * t + seed) * sinf(6.2832f * 0.9f * t + 1.7f * seed));
+        const float want = talkK * (1.0f - SStep(0.06f, 0.30f, oT)) * gate;
+        S->tgTap += (want - S->tgTap) * (dtT > 0.0f ? (std::min)(1.0f, dtT / 0.05f) : 0.0f);   // ~50 ms: un toque, no un salto
+        if (t != s_tapT) { g_tongueTap = s_tapAcc; s_tapAcc = 0.0f; s_tapT = t; }
+        s_tapAcc = (std::max)(s_tapAcc, S->tgTap);
+    }
     {
         const float t = AnimT();
         const float k = S->secT < 0.0f ? 1.0f : std::clamp((t - S->secT) * 60.0f, 0.0f, 6.0f); S->secT = t;
