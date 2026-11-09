@@ -188,6 +188,7 @@ struct Config {
     bool lightTrace = false;                  // (27/10) [PES21FX] luz_rastrear: pila de quien llena el cbuffer de la luz del sol (hooks.cpp)
     bool meterOn = true;                      // (07/11) [PES21FX] medidor: VRAM por dueno y ms de GPU por efecto (gpumeter.cpp)
     int panelPort = 21021;                    // (08/11) [PES21FX] panel_puerto: servidor local del panel en vivo (panel.cpp), 0 = apagado
+    bool solEditorLog = true;                 // (09/11) [PES21FX] sol_editor_log: log del sol real del editor (soleditor.cpp)
     bool sunWatch = false;                    // (26/10) [PES21FX] sol_vigilar: quien escribe el sol de las repeticiones (sunwatch.cpp)
 };
 extern Config g_cfg;
@@ -392,6 +393,10 @@ ID3D11DepthStencilState* CachedDSS(const D3D11_DEPTH_STENCIL_DESC& d);
 ID3D11BlendState* CachedBlend(const D3D11_BLEND_DESC& d);
 ID3D11RasterizerState* CachedRS(const D3D11_RASTERIZER_DESC& d);
 void StateCachePresent();
+// (09/11) sol real del motor en el editor (soleditor.cpp): DirectionalLight "zfx_SolEditor" del EditFace.fox2
+void SolEditorPresent();
+void* SolEditorBody();   // cuerpo validado por vtable; nullptr si no hay sol en el editor o se destruyo
+bool SolEditorSet(const float dirHaciaSol[3], const float rgb[3], float kelvin, float lux, bool on);   // se aplica desde el hilo del motor
 void CamHookPresent();                            // ganchos (primer Present), 160 = cuadros desde el corte / cortes / TAA / ok
 // (31/10) camara libre (freecam.cpp): pisa el parametro de la camara del motor desde el gancho de camhook.cpp; 344 (ini) / 345 (DLL)
 void FreeCamApply(unsigned char* param);
