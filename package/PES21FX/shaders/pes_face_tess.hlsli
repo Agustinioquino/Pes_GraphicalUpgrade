@@ -444,6 +444,15 @@ float2 PesTessWrinkle(float2 uv)
     wTop *= float4(g * XZ.x, g * XZ.x, g * XZ.x, 1.0 + (g - 1.0) * (XZ.y + XZ.z) * 0.5);
     wBot.x *= 1.0 + (g - 1.0) * XZ.w; }
   wBot += saturate(IniParams.Load(int2(347, 0)).x) * float4(0.35, 0.60, 0.60, 0.30);
+  // (09/11 c, Agustin: "con la teselacion puedes hacer las arrugas mas notorias?") los gestos del mod son por huesos y el motor no
+  // manda pesos de arrugas: los mismos pesos por slider que el PS (5ce3 / ce188), asi el surco se hunde de verdad con el gesto
+  uint swM = 0, shM = 0; tShapeWr.GetDimensions(swM, shM);
+  float4 G5a = IniParams.Load(int2(355, 0)), G6a = IniParams.Load(int2(356, 0));
+  const bool own = swM > 1 && G6a.w > 0.5;   // cara con arrugas horneadas propias (Messi)
+  { float sS = saturate(G5a.y), sS2 = saturate(G5a.y - 1.0), sA = saturate(G5a.x), sU = saturate(G5a.z), sG = saturate(G6a.x);
+    if (own) { sS *= 0.75; sS2 *= 0.75; }
+    wTop = max(wTop, float4(0.75 * sU + 0.60 * sG, 0.45 * sU, 0.85 * sA + 0.60 * sG, 0.70 * sS + 0.30 * sS2 + 0.40 * sG));
+    wBot.x = max(wBot.x, 0.85 * sS + 0.15 * sS2 + 0.60 * sG); }
   float w = saturate(dot(wTop, mT) + dot(wBot, mB));
   float dead = saturate(P15.y);
   w = saturate((w - dead) / max(1.0 - dead, 0.05));
@@ -462,7 +471,7 @@ float2 PesTessWrinkle(float2 uv)
   }
   // esculpidas de la sonrisa (Messi): slider Sonrisa 355.y con Perfiles por cara 356.w; de 1 a 1.5 pasa a las grandes (BA)
   { float4 G5 = IniParams.Load(int2(355, 0)), G6 = IniParams.Load(int2(356, 0));
-    float shW = G6.w > 0.5 ? saturate(G5.y) : 0.0;
+    float shW = G6.w > 0.5 ? saturate(G5.y) * 2.0 : 0.0;   // (09/11 c) horneadas de Messi al doble, como en el PS
     uint sw = 0, sh = 0; tShapeWr.GetDimensions(sw, sh);
     if (shW > 0.001 && sw > 1) {
       float bl = saturate((G5.y - 1.0) * 2.0), wx = 6.0 / sw, wy = 6.0 / sh;
@@ -471,7 +480,8 @@ float2 PesTessWrinkle(float2 uv)
       float z = (lerp(a.x, a.z, bl) - lerp(b.x, b.z, bl)) * 0.5 + ys * (lerp(c.y, c.w, bl) - lerp(d.y, d.w, bl)) * 0.5;
       r = saturate(r + float2(saturate(-z * 2.0), saturate(z * 2.0)) * shW);
     } }
-  return r;
+  // (09/11 c, Agustin: "en el caso de messi deberias subir la intensidad un poco solo para messi") volumen x1.5 en su cara
+  return own ? r * 1.5 : r;
 }
 #endif
 
