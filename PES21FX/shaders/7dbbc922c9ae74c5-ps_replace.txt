@@ -1,0 +1,314 @@
+// PES 2021 - Luz diferida (direccional, sombra por mascara de pantalla + nubes)  [hash 7dbbc922c9ae74c5]
+// (25/10) Variante de la pasada del sol sin reemplazo: la sombra no sale del shadow map sino de la mascara ya resuelta
+// (g_WorldShadowMask t13), las nubes (t4) y g_ShadowAlphaMask (t5). Sin reemplazo el sol salia con el color crudo del
+// archivo de luz; ahora usa PESSunColor (igual que a748f426). El resto es el original decompilado.
+// Base decompilada con 3Dmigoto v1.3.16 on Thu Oct 08 21:08:18 2026
+
+cbuffer cPSScene : register(b2)
+{
+  struct
+  {
+    float4x4 m_projectionView;
+    float4x4 m_projection;
+    float4x4 m_view;
+    float4x4 m_shadowProjection;
+    float4x4 m_shadowProjection2;
+    float4 m_eyepos;
+    float4 m_projectionParam;
+    float4 m_viewportSize;
+    float4 m_exposure;
+    float4 m_fogParam[3];
+    float4 m_fogColor;
+    float4 m_cameraCenterOffset;
+    float4 m_shadowMapResolutions;
+  } g_psScene : packoffset(c0);
+}
+
+cbuffer cPSObject : register(b5)
+{
+  struct
+  {
+    float4x4 m_viewWorld;
+    float4x4 m_world;
+    float4 m_useWeightCount;
+    float4 m_localParam[9];
+  } g_psObject : packoffset(c0);
+}
+
+cbuffer cPSLight : register(b3)
+{
+  struct
+  {
+    float4 m_lightDir0;
+    float4 m_lightColor0;
+    float4 m_lightColor1;
+    float4 m_lightSourcePos;
+    float4 m_lightSourceColor;
+    float4 m_lightSourceDir;
+    float4 m_lightSourceParam1;
+    float4 m_lightSourceParam2;
+    float4 m_lightSourceParam3;
+    float4 m_lightPos0;
+    float4 m_lightParam2;
+  } g_psLight : packoffset(c0);
+}
+
+SamplerState g_samplerPoint_Wrap_s : register(s8);
+SamplerState g_samplerPoint_Clamp_s : register(s9);
+SamplerState g_samplerLinear_Clamp_s : register(s11);
+Texture2D<float4> g_NormalTexture : register(t0);
+Texture2D<float4> g_SpecularTexture : register(t1);
+Texture2D<float4> g_DepthTexture : register(t2);
+Texture2D<float4> g_CloudTexture : register(t4);
+Texture2D<float4> g_ShadowAlphaMask : register(t5);
+Texture2D<float4> g_lut1 : register(t9);
+Texture2D<float4> g_MaterialTexture : register(t10);
+Texture2D<float4> g_WorldShadowMask : register(t13);
+
+// 3Dmigoto declarations
+#define cmp -
+Texture1D<float4> IniParams : register(t120);
+Texture2D<float> pesMouthMask : register(t43);   // (04/11 boca) mascara del interior de la boca (mouthmask.cpp): 1 = boca
+Texture2D<float4> StereoParams : register(t125);
+#include "pes_common.hlsli"   // curva del dia, atmosfera
+
+// === PES21 SOL (25/10): el mismo color del sol que las variantes reemplazadas ===
+float3 PESSunColor() {
+  float3 c = g_psLight.m_lightColor0.xyz;
+  float4 S = IniParams.Load(int2(4,0));      // z4 = realismo del sol (0 = original), w4 = intensidad
+  bool sunReal = S.z > 0;
+  float3 L = normalize(g_psLight.m_lightDir0.xyz);
+  float elev = saturate(abs(dot(L, float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12))));
+  float low = 1 - smoothstep(0.10, 0.60, elev);
+  float3 tint = lerp(float3(1.0, 0.962, 0.905), float3(1.0, 0.80, 0.60), low);
+  const float3 LW = float3(0.2126, 0.7152, 0.0722);
+  float lum = dot(c, LW);
+  float warmO = c.r / max(c.b, 1e-4);
+  float k = (sunReal ? saturate(S.z) : 0.0) * saturate((warmO - 0.85) * 4.0);   // de noche (luz fria de estadio) casi no toca
+  float3 res = lerp(c, lum * tint / dot(tint, LW), k);
+  res *= (S.w > 0 ? lerp(1.0, S.w, k) : 1.0);
+  // PES21 curva del dia (18/10): intensidad y calidez del sol segun su altura (solo sol real, no torres)
+  { PESDay dy = PESDayCurve(elev, saturate((warmO - 0.85) * 4.0)); res *= dy.sun; res = PESSunTintFinal(res, dy.warm, elev, saturate((warmO - 0.85) * 4.0)); }   // (20/10) atmosfera fisica x121
+  res *= PESDaySunMul(saturate((warmO - 0.85) * 4.0));   // PES21 contraste de dia (x109)
+  // PES21 atmosfera (17/10): con el sol bajo el archivo de luz deja el sol muy apagado; y54 lo compensa (solo sol real,
+  // no luz de torres), proporcional a lo bajo que esta.
+  float4 ATM = IniParams.Load(int2(54,0));
+  if (ATM.w > 0.5) { float lowS = 1.0 - smoothstep(0.05, 0.40, elev); float kSun = saturate((warmO - 0.85) * 4.0);
+    res *= 1.0 + max(ATM.y, 0.0) * lowS * kSun; }
+  return res;
+}
+// === FIN SOL ===
+#include "pes_skinlight.hlsli"   // (03/11) modelo de piel compacto (la piel igual en todos los modos)
+#include "pes_headshadow.hlsli"  // (04/11 b) atlas de sombras de las cabezas y piernas cercanas (t30, la DLL lo ata a esta pasada)
+#include "pes_skinthick.hlsli"   // (04/11 b) grosor real de la piel con ese atlas
+
+void main(
+  float4 v0 : TEXCOORD0,
+  float4 v1 : TEXCOORD1,
+  float4 v2 : SV_Position0,
+  out float4 o0 : SV_Target0,
+  out float4 o1 : SV_Target1,
+  out float4 o2 : SV_Target2)
+{
+  float4 r0,r1,r2,r3,r4,r5,r6,r7,r8;
+  uint4 bitmask, uiDest;
+  float4 fDest;
+
+  r0.xy = v1.xy / v1.ww;
+  r1.xyzw = g_NormalTexture.Sample(g_samplerPoint_Wrap_s, r0.xy).xyzw;
+  r2.xyzw = g_SpecularTexture.Sample(g_samplerPoint_Wrap_s, r0.xy).zxyw;
+  float skTag = r2.x, skRough = r2.y, skSpecI = r2.z;   // (03/11) para la piel
+  float2 skPP = (v0.xy / v0.ww - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy;
+  r0.z = r1.z * 1023 + 0.5;
+  r0.z = (uint)r0.z;
+  r0.w = (int)r0.z & 15;
+  int skMat = (int)r0.w;
+  r1.z = cmp((int)r0.w == 1);
+  if (r1.z != 0) {
+    r3.x = 0;
+    r4.y = 0;
+  } else {
+    r0.z = (uint)r0.z >> 4;
+    r3.w = cmp((int)r0.w == 3);
+    if (r3.w != 0) {
+      r3.w = (uint)r0.z;
+      r4.y = 0.0158730168 * r3.w;
+      r3.x = 0;
+    } else {
+      r0.z = (uint)r0.z;
+      r4.y = 0.0158730168 * r0.z;
+      r2.x = 0;
+      r3.x = r2.w;
+    }
+  }
+  r0.z = g_DepthTexture.Sample(g_samplerPoint_Wrap_s, r0.xy).x;
+  r4.zw = v0.xy / v0.ww;
+  r4.zw = -g_psScene.m_cameraCenterOffset.xy + r4.zw;
+  r4.zw = g_psScene.m_projectionParam.xy * r4.zw;
+  r0.z = -g_psScene.m_projectionParam.w + r0.z;
+  r5.z = g_psScene.m_projectionParam.z / r0.z;
+  float skZ = r5.z;   // (03/11) distancia para la piel
+  r5.xy = r5.zz * r4.zw;
+  float3 skPv = float3(r5.xy, r5.z);   // (04/11 b) posicion en la vista del atlas (como pesHsP de las 5 grandes del sol)
+  { float zs = r5.z < 0.0 ? -1.0 : 1.0; skPv *= float3((g_psScene.m_projectionParam.x < 0.0 ? -1.0 : 1.0) * zs, (g_psScene.m_projectionParam.y < 0.0 ? -1.0 : 1.0) * zs, zs); }
+  r6.xyzw = g_psObject.m_localParam[1].xyzw * r5.yyyy;
+  r6.xyzw = r5.xxxx * g_psObject.m_localParam[0].xyzw + r6.xyzw;
+  r6.xyzw = r5.zzzz * g_psObject.m_localParam[2].xyzw + r6.xyzw;
+  r6.xyzw = g_psObject.m_localParam[3].xyzw + r6.xyzw;
+  r6.xyz = r6.xyz / r6.www;
+  r7.xy = float2(0.5,0.5) * r6.xy;
+  r7.zw = r7.xy * float2(1,-1) + float2(0.5,0.5);
+  r4.zw = g_CloudTexture.Sample(g_samplerLinear_Clamp_s, r7.zw).xy;
+  r0.z = g_psObject.m_localParam[4].z + r6.z;
+  r0.z = 1 + -r0.z;
+  r0.z = 28.8539009 * r0.z;
+  r0.z = exp2(r0.z);
+  r2.w = cmp(r4.z < r0.z);
+  if (r2.w != 0) {
+    r2.w = -r4.z * r4.z + r4.w;
+    r0.z = r0.z + -r4.z;
+    r0.z = r0.z * r0.z + r2.w;
+    r0.z = r2.w / r0.z;
+    r0.z = -0.00100000005 + r0.z;
+    r0.z = -g_psObject.m_localParam[4].w + r0.z;
+    r2.w = 1 + -g_psObject.m_localParam[4].w;
+    r0.z = saturate(r0.z / r2.w);
+  } else {
+    r0.z = 1;
+  }
+  r4.zw = float2(0.5,0) + r7.xw;
+  r2.w = g_ShadowAlphaMask.Sample(g_samplerLinear_Clamp_s, r4.zw).x;
+  r0.z = r2.w * r0.z;
+  r2.w = 1 + -g_psObject.m_localParam[4].x;
+  r0.z = r0.z * r2.w + g_psObject.m_localParam[4].x;
+  r0.x = g_WorldShadowMask.Sample(g_samplerPoint_Clamp_s, r0.xy).x;
+  r6.xyzw = min(r0.zzzz, r0.xxxx);
+  r0.x = cmp(r6.w < 0.00999999978);
+  if (r0.x != 0) {
+    if (-1 != 0) discard;
+  }
+  r0.xyz = float3(1023,1023,3) * r1.xyw;
+  r0.xyz = (uint3)r0.xyz;
+  r0.x = (uint)r0.x << 1;
+  r1.x = (uint)r0.z >> 1;
+  r0.x = (int)r0.x | (int)r1.x;
+  bitmask.y = ((~(-1 << 31)) << 1) & 0xffffffff;  r0.y = (((uint)r0.y << 1) & bitmask.y) | ((uint)r0.z & ~bitmask.y);
+  r1.xy = (uint2)r0.xy;
+  r0.xy = r1.xy * float2(0.00097703957,0.00097703957) + float2(-1,-1);
+  r1.xyw = float3(1,1,1) + -abs(r0.xyx);
+  r7.z = r1.x + -abs(r0.y);
+  r0.z = cmp(r7.z >= 0);
+  r4.zw = cmp(r0.xy >= float2(0,0));
+  r4.zw = r4.zw ? float2(1,1) : float2(-1,-1);
+  r1.xy = r4.zw * r1.yw;
+  r7.xy = r0.zz ? r0.xy : r1.xy;
+  r0.x = dot(r7.xyz, r7.xyz);
+  r0.x = rsqrt(r0.x);
+  r7.xyz = r7.xyz * r0.xxx;
+  r0.x = dot(r5.xyz, r5.xyz);
+  r0.x = rsqrt(r0.x);
+  r0.xyz = r5.xyz * r0.xxx;
+  r1.xyw = PESSunColor() * g_psScene.m_exposure.zzz;   // PES21 (25/10): antes g_psLight.m_lightColor0.xyz
+  r2.w = max(g_psLight.m_lightSourceParam2.x, r6.w);
+  if (r1.z != 0) {
+    r5.y = r2.x * 0.959999979 + 0.0399999991;
+    r8.xyz = float3(1,1,1);
+    r4.xy = float2(0,0);
+  } else {
+    r0.w = cmp((int)r0.w == 3);
+    if (r0.w != 0) {
+      r5.y = r2.x * 0.959999979 + 0.0399999991;
+      r8.xyz = float3(0.899999976,1,0.800000012);
+      r4.x = 1;
+    } else {
+      r3.yz = float2(0.75,0.25);
+      r5.y = g_MaterialTexture.SampleLevel(g_samplerPoint_Clamp_s, r3.xy, 0).x;
+      r8.xyzw = g_MaterialTexture.SampleLevel(g_samplerPoint_Clamp_s, r3.xz, 0).xyzw;
+      r4.x = r8.w;
+    }
+  }
+  r7.w = -r7.z;
+  float3 skN = normalize(r7.xyw);   // (03/11) normal para la piel
+  float skCurv = PesSkCurv(skN, skZ);   // (04/11) curvatura para la piel de lejos (fuera de los if: usa derivadas)
+  float skCurvT = PesSkCurvConvex(skN, float3(skPP * skZ, skZ));   // (04/11 entrecejo) solo convexa, para el grosor de la contraluz
+  { // (04/11 boca) REGLA de Agustin: el interior de la boca no cambia. Sin la mascara de la DLL (o donde marca boca) queda la
+    // curvatura de antes, identica; la curvatura convexa solo se usa con la mascara presente y fuera de la boca
+    uint mmW = 0, mmH = 0; pesMouthMask.GetDimensions(mmW, mmH);
+    bool mmMouth = mmW == 0;
+    if (!mmMouth) {   // (09/11) la mascara guarda la profundidad de la boca: solo cuenta si coincide con la del pixel (donde la cara la tapo, no)
+      uint2 mmP = min((uint2)v2.xy, uint2(mmW - 1, mmH - 1));
+      float mmZ = pesMouthMask.Load(int3(mmP, 0)), mmD = g_DepthTexture.Load(int3(mmP, 0)).x;
+      mmMouth = mmZ > 0.0 && abs(mmZ - mmD) <= 1e-6 + 2e-4 * abs(mmD);
+    }
+    if (mmMouth) skCurvT = skCurv; }
+  r0.w = dot(g_psLight.m_lightDir0.xyz, r7.xyw);
+  r1.z = dot(-r0.xyz, r7.xyw);
+  r2.x = r1.z + r1.z;
+  r3.xyz = r7.xyw * -r2.xxx + -r0.xyz;
+  r3.xyz = -g_psLight.m_lightDir0.xyz + -r3.xyz;
+  r2.x = dot(r3.xyz, r3.xyz);
+  r2.x = sqrt(r2.x);
+  r2.x = saturate(g_psLight.m_lightColor0.w / r2.x);
+  r3.xyz = r2.xxx * r3.xyz + g_psLight.m_lightDir0.xyz;
+  r2.x = dot(r3.xyz, r3.xyz);
+  r2.x = rsqrt(r2.x);
+  r0.xyz = r3.xyz * r2.xxx + -r0.xyz;
+  r2.x = dot(r0.xyz, r0.xyz);
+  r2.x = rsqrt(r2.x);
+  r0.xyz = r2.xxx * r0.xyz;
+  r2.x = saturate(dot(r0.xyz, r7.xyw));
+  r3.x = -r0.w * r0.w + 1;
+  r3.x = r3.x * r4.y + r0.w;
+  r3.y = r4.y * r4.x;
+  r3.x = saturate(max(r3.x, r3.y));
+  float skNL = r0.w, skTF = r3.y;
+  r0.w = saturate(r0.w);
+  r3.xyz = r3.xxx * r1.xyw;
+  bool skOn = PesSkIsSkin(skMat, r4.y, skTag);
+  float3 skV = -normalize(float3(skPP, 1)), skL = normalize(g_psLight.m_lightDir0.xyz);
+  if (skOn) r3.xyz = PesSkDiffuse(skNL, r4.y, skTF, skZ, skCurv) * r1.xyw;   // (03/11) piel
+  r4.xyz = r8.xyz * r2.zzz;
+  r5.x = dot(r0.xyz, g_psLight.m_lightDir0.xyz);
+  r0.x = g_lut1.Sample(g_samplerLinear_Clamp_s, r5.xy).x;
+  r1.z = saturate(r1.z);
+  r0.y = max(0.0199999996, r2.y);
+  r0.y = r0.y * r0.y;
+  r0.z = 0.5 * r0.y;
+  r2.y = r0.y * r0.y;
+  r2.x = r2.x * r2.x;
+  r2.z = r0.y * r0.y + -1;
+  r2.x = r2.x * r2.z + 1;
+  r2.x = r2.x * r2.x;
+  r2.x = r2.y / r2.x;
+  r0.y = -r0.y * 0.5 + 1;
+  r2.y = r0.w * r0.y + r0.z;
+  r0.y = r1.z * r0.y + r0.z;
+  r0.y = r2.y * r0.y;
+  r0.y = 1 / r0.y;
+  r0.x = r2.x * r0.x;
+  r0.x = r0.x * r0.y;
+  r0.x = r0.x * r0.w;
+  r0.x = 0.25 * r0.x;
+  r0.xyz = r0.xxx * r1.xyw;
+  r0.xyz = r0.xyz * r4.xyz;
+  o0.xyz = r3.xyz * r6.xyz;
+  r0.xyz = r0.xyz * r2.www;
+  if (skOn) {   // (03/11) contraluz (entra aunque el frente este en sombra) y brillo de piel
+    float3 skTrD = PesSkTrans(skN, skV, skL, r4.y) * lerp(0.25, 1.0, saturate(r6.x));
+    // (04/11 b) grosor REAL dentro de la caja del atlas (cabezas y piernas cercanas), fundido con la direccional en el borde
+    // afuera (jugadores lejanos, sin atlas): grosor estimado por la forma (curvatura + mapa de SSS)
+    float skIn = 0.0; float skThk = PESSkinThickAtlas(skPv, g_samplerPoint_Clamp_s, skIn);
+    float4 skP64 = IniParams.Load(int2(64, 0));
+    if (skP64.x > 0.5 && skP64.z > 0.0) {
+      skTrD = max(skTrD, PesSkTransThick(PesSkThickCurv(r4.y, skCurvT), skN, skL, skNL, r4.y) * lerp(0.25, 1.0, saturate(r6.x)));
+      if (skIn > 0.0) skTrD = lerp(skTrD, max(PesSkTransThick(skThk, skN, skL, skNL, r4.y), skTrD * 0.5), skIn);
+    }
+    o0.xyz += skTrD * r1.xyw;
+    r0.xyz = PesSkSpec(r0.xyz, skN, skV, skL, skRough, skSpecI, r1.xyw, saturate(r2.w));
+  }
+  o1.xyz = min(float3(10000,10000,10000), r0.xyz);
+  o0.w = 1;
+  o1.w = 1;
+  o2.xyzw = r6.xyzw;
+  return;
+}
