@@ -699,11 +699,20 @@ static bool TalkWords(Skel& S, float tNow, float sp, float out[7]) {
             if (k >= (int)P.ph.size()) k = (int)P.ph.size() - 1;
             const Pho& cur = P.ph[k]; const uint8_t prev = k > 0 ? P.ph[k - 1].vis : V_REST; const uint8_t next = k + 1 < (int)P.ph.size() ? P.ph[k + 1].vis : V_REST;
             // destino del fonema: el visema propio; una consonante anticipa un 35 % la vocal que sigue (coarticulacion)
-            float dst[6]; const bool cons = cur.vis >= V_M; const float ant = cons && next >= V_A && next <= V_U ? 0.35f : 0.0f;
+            // (09/11, Agustin: "los gestos de hablar son super roboticos") cada vocal llegaba siempre al visema entero, con el mismo tamano y
+            // cortes de 25 ms: boca de muneco. Ahora como al hablar de verdad: la silaba tonica abre entera y las atonas a 55..80 % (reducidas),
+            // cada frase tiene su fuerza (murmullo 0.65 .. grito 1.1), la frase arranca y termina suave, la consonante anticipa mas la vocal
+            // (50 %) y el filtro es mas lento en la mandibula (45 ms) que en los labios (30..40 ms)
+            const float frG = 0.65f + 0.45f * rnd((float)S.tkN + 0.53f);
+            auto ampOf = [&](int i) { if (i < 0 || i >= (int)P.ph.size()) return 0.7f; return P.ph[i].stress ? 1.0f : 0.55f + 0.25f * rnd((float)i * 1.7f + (float)S.tkN * 0.31f); };
+            const float env = SStep(0.0f, 1.2f, u) * (1.0f - SStep(P.units - 1.6f, P.units, u));
+            float dst[6]; const bool cons = cur.vis >= V_M; const float ant = cons && next >= V_A && next <= V_U ? 0.50f : 0.0f;
             for (int c = 0; c < 6; c++) dst[c] = kVis[cur.vis][c] * (1.0f - ant) + kVis[next][c] * ant;
             // transicion: del fonema anterior al actual en el primer 60 % de su duracion, con curva suave
             const float f = SStep(0.0f, 0.6f, (u - a) / (std::max)(cur.dur, 0.05f));
             for (int c = 0; c < 6; c++) target[c] = kVis[prev][c] + (dst[c] - kVis[prev][c]) * f;
+            {   const float am = (ampOf(k - 1) + (ampOf(k) - ampOf(k - 1)) * f) * frG * (0.35f + 0.65f * env);
+                for (int c = 0; c < 5; c++) target[c] *= am; }   // apretados (5) no se achica: m / b / p cierran siempre
             // apretados (m / b / p) solo se ven si tambien se cierra la mandibula
             target[5] *= 1.0f - std::clamp(target[0] * 2.0f, 0.0f, 1.0f);
             acc = cur.stress ? SStep(0.0f, 0.3f, (u - a) / (std::max)(cur.dur, 0.05f)) * (1.0f - SStep(0.7f, 1.0f, (u - a) / (std::max)(cur.dur, 0.05f))) : 0.0f;
@@ -711,8 +720,8 @@ static bool TalkWords(Skel& S, float tNow, float sp, float out[7]) {
     }
     // filtro de ~25 ms por canal (quita el escalon de la curva y suaviza el reposo entre frases)
     const float dt = S.tkT < 0.0f || tNow < S.tkT ? 1.0f : (std::min)(tNow - S.tkT, 0.25f); S.tkT = tNow;
-    const float kf = 1.0f - expf(-dt / 0.025f);
-    for (int c = 0; c < 6; c++) S.tkCh[c] += (target[c] - S.tkCh[c]) * kf;
+    static const float kTau[6] = { 0.045f, 0.035f, 0.035f, 0.035f, 0.040f, 0.030f };
+    for (int c = 0; c < 6; c++) S.tkCh[c] += (target[c] - S.tkCh[c]) * (1.0f - expf(-dt / kTau[c]));
     S.tkCh[6] += (acc - S.tkCh[6]) * (1.0f - expf(-dt / 0.06f));
     memcpy(out, S.tkCh, sizeof S.tkCh);
     return talking;
@@ -1456,7 +1465,14 @@ static void FrameBody(const void* skel) {
             lifeLid  = nVida * (std::max)(0.0f, 0.6f * ns(0.09f, 1.1f) + 0.4f * ns(0.23f, 0.4f) - 0.3f);
         }
     }
-    const bool nLive = nVida > 0.001f || brAmp > 0.001f || eff > 0.001f || nAsim > 0.001f || nConc > 0.001f;
+    float puff = 0.0f;
+    {   // (09/11) soplido al recuperar el aire (ver abajo, en los huesos): esfuerzo alto, jugador frenando, solo en la exhalacion
+        const float spd = S->spHave ? S->speed : 0.0f, ph = S->brPh;
+        const float exh = ph >= 0.40f && ph < 0.88f ? sinf(3.14159265f * (ph - 0.40f) / 0.48f) : 0.0f;
+        puff = nEsf * SStep(0.30f, 0.80f, S->effort) * (1.0f - SStep(1.5f, 3.0f, spd)) * exh;
+        if (nResp < 0.001f) puff = 0.0f;   // sin respiracion no hay soplido
+    }
+    const bool nLive = nVida > 0.001f || brAmp > 0.001f || eff > 0.001f || nAsim > 0.001f || nConc > 0.001f || puff > 0.001f;
     if (nLive) poseOn = true;
     s_extraLid[0] = 0.05f * lifeLid + 0.07f * eff + 0.08f * nConc;
     s_extraLid[1] = -(0.03f * eff + 0.04f * nConc);
@@ -1793,6 +1809,15 @@ static void FrameBody(const void* skel) {
             { const float lipBr = brAmp * breath * (0.5f + 0.5f * SStep(1.5f, 6.0f, spd)); (void)mouthBr;
               if (d == 9 || d == 10 || d == 11) po[1] += 0.0003f * lipBr;
               if (d == 1 || d == 2 || d == 3) po[1] -= 0.0005f * lipBr; }
+            // (09/11, Agustin: "le falta naturalidad, como inflar cachetes") SOPLIDO al recuperar el aire: despues de correr (esfuerzo alto) y ya
+            // frenando, en cada exhalacion los cachetes se inflan apenas, los labios se juntan adelante y las comisuras van al medio; se
+            // apaga solo cuando el esfuerzo baja (~4 s). z395 = 0 lo apaga con el esfuerzo
+            if (puff > 0.001f) {
+                if (d == 7 || d == 8) { po[0] += sl * 0.0026f * puff; po[2] += 0.0008f * puff; }
+                if (d == 16 || d == 17) po[0] += sl * 0.0012f * puff;
+                if (d == 1 || d == 2 || d == 3 || d == 9 || d == 10 || d == 11) po[2] += 0.0012f * puff;
+                if (d == 5 || d == 6) po[0] -= sl * 0.0012f * puff;
+            }
             // esfuerzo
             if (d == 26 || d == 27) { po[1] -= 0.0025f * eff; po[0] -= sl * 0.0008f * eff; }
             if (d == 28 || d == 29) po[1] -= 0.0010f * eff;
