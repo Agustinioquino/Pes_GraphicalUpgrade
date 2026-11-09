@@ -638,7 +638,10 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   }
   o.c = float4(c0 * keepC + dif + vol, 1);
   if (E7.z > 0.0) specMul *= E7.z;   // (07/11 c) brillo de la luz en el manual
-  o.s = float4(s0 * (geo ? saturate(keep) : 1.0) + spec * specMul, 1);
+  // (09/11, Agustin: "mejora la iluminacion del modo editar al maximo") el brillo de la luz de estudio que queda tambien sigue a la
+  // luz principal: antes el lado en sombra conservaba el 55 % del brillo de estudio y se veia plastico / mojado en la sombra.
+  // Mismo factor que la difusa (la boca queda igual: keepC no cambia ahi)
+  o.s = float4(s0 * keepC + spec * specMul, 1);
   // (08/11) un NaN / infinito aca lo arrastra el TAA a toda la cara cuadro tras cuadro: se queda la luz del juego
   if (any(isnan(o.c.xyz)) || any(isinf(o.c.xyz))) o.c = float4(c0, 1);
   if (any(isnan(o.s.xyz)) || any(isinf(o.s.xyz))) o.s = float4(s0, 1);
