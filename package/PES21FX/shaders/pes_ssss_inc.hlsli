@@ -147,6 +147,12 @@ float PesTraceShadow(float3 Pv, float3 L, float rawNL, float zC, float zSgn, flo
     tPrev = t;
   }
   float2 eM = saturate(min(uv, 1.0 - uv) * 10.0);
+  // (09/11, Agustin: corte duro y recto de la frente al costado de la nariz con la luz de costado) con la luz lateral el rayo de
+  // un pixel cerca del terminador pasa por detras de la frente / el puente de la nariz (convexos, mas cerca de la camara) y la
+  // traza en pantalla los cuenta como oclusor: sombra de borde de regla adentro del lado iluminado. Ahi la caida de la luz ya
+  // la da N.L (suave); la sombra trazada entra de a poco (N.L 0.02 -> 0.40) y queda entera para las sombras proyectadas de
+  // verdad (nariz sobre la mejilla, menton sobre el cuello), que caen en zonas que miran a la luz
+  occ *= smoothstep(0.02, 0.40, rawNL);
   return 1.0 - saturate(occ * saturate(shK) * eM.x * eM.y);
 }
 
