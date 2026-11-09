@@ -247,7 +247,7 @@ static void PoseOf(int d, float ang, float smi, float sur, float* o) {
     // (04/11, Agustin con una foto de Messi riendo: "al aumentar la sonrisa ... el angulo de las puntas de la sonrisa no suben tanto,
     // abre mas la boca") pasando 1.0 de Sonrisa las comisuras casi no suben mas (un cuarto); se abren a lo ancho igual y la boca se
     // abre (la mandibula, abajo en ExprBonesFrame)
-    const float smY = smi <= 1.0f ? smi : 1.0f + 0.25f * (smi - 1.0f);
+    const float smY = smi <= 1.0f ? smi : 1.0f + 0.55f * (smi - 1.0f);   // (09/11, Agustin: "la sonrisa esta rota": a 1.5 se leia como mueca) 0.25 -> 0.55
     for (const PoseOff& p : kPose) if (p.d == d) { for (int k = 0; k < 3; k++) o[k] = p.a[k] * ang + p.s[k] * ((k == 1 && (d == 5 || d == 6)) ? smY : smi) + p.u[k] * sur; return; }
 }
 static float s_poseSmile = 0.0f;   // para Secondary (mejillas)
@@ -1384,7 +1384,7 @@ static void FrameBody(const void* skel) {
             talkLip = pTalk * (std::max)(w + 0.15f, 0.0f) * env; talkLow = talkLip * 0.83f;
         }
     }
-    const float o = (std::max)((std::max)(std::clamp(g_cfg.live[347][0], 0.0f, 1.0f), 0.45f * tongueOut), (std::min)(1.0f, 0.40f * pSur + 0.85f * pGri + talkO + 0.60f * (std::max)(0.0f, pSmi - 1.0f)));   // (04/11 b, Agustin: "la sonrisa con los dientes cerrados") la sonrisa ya no abre la mandibula (antes 0.12): los labios se separan, los dientes quedan juntos; (04/11 c) pasando 1.0 la sonrisa grande abre la boca (1.5 = 0.30, como en la foto de Messi riendo)
+    const float o = (std::max)((std::max)(std::clamp(g_cfg.live[347][0], 0.0f, 1.0f), 0.45f * tongueOut), (std::min)(1.0f, 0.40f * pSur + 0.85f * pGri + talkO + 0.35f * (std::max)(0.0f, pSmi - 1.0f)));   // (09/11) risa: 0.60 -> 0.35 (a 1.5 la boca se abria tanto que se leia como grito)   // (04/11 b, Agustin: "la sonrisa con los dientes cerrados") la sonrisa ya no abre la mandibula (antes 0.12): los labios se separan, los dientes quedan juntos; (04/11 c) pasando 1.0 la sonrisa grande abre la boca (1.5 = 0.30, como en la foto de Messi riendo)
     // (04/11 d) filas 361 / 362, por huesos, de -1.5 a 1.5 (0 = nada): x361 cejas, y361 mordida, z361 mandibula de costado, w361 media
     // sonrisa; x362 cachetes, y362 beso, z362 desprecio, w362 una ceja. (04/11 f) x365 angulo de las cejas (+ sube el inicio)
     // (09/11, Agustin: "la sonrisa parece afectada por la gravedad") pasando 1.0 de Sonrisa la boca se abre con la mandibula y las
@@ -1403,13 +1403,18 @@ static void FrameBody(const void* skel) {
     if (S->node && S->bHead && tNow >= 0.0f) {
         Xf bh; float w[3];
         if (ReadXf(S->bHead, bh) && CharNodeToWorld(const_cast<void*>(S->node), bh.t, w, true)) {
-            if (S->spHave && tNow > S->spT + 0.0005f && tNow - S->spT < 0.5f) {
+            // (09/11, Agustin: "parecen siempre enojados") la velocidad se medía cuadro a cuadro: con el reloj de la animacion avanzando de a
+            // milesimas (editor, camara libre) un temblor de 1 cm de la cabeza daba 10 m/s = ESFUERZO prendido (cejas abajo y juntas, ojos
+            // entrecerrados) con el jugador quieto. Ahora se mide sobre ventanas de 0.15 s como minimo y un salto de mas de 1.5 m no cuenta
+            if (S->spHave && (tNow < S->spT || tNow - S->spT >= 0.5f)) S->spHave = false;
+            if (S->spHave && tNow >= S->spT + 0.15f) {
                 const float dt = tNow - S->spT, dx = w[0] - S->spP[0], dz = w[2] - S->spP[2];
-                const float v = sqrtf(dx * dx + dz * dz) / dt, before = S->speed;
+                const float dd = sqrtf(dx * dx + dz * dz);
+                const float v = dd > 1.5f ? S->speed : dd / dt, before = S->speed;
                 S->speed += ((std::min)(v, 12.0f) - S->speed) * (1.0f - expf(-dt / 0.25f));
                 if (S->speed < 0.5f) S->stillT += dt; else if (S->speed > 1.0f) { if (before <= 1.0f && S->stillT > 1.0f) arranco = true; S->stillT = 0.0f; }
             }
-            if (!S->spHave || tNow != S->spT) { memcpy(S->spP, w, sizeof w); S->spT = tNow; S->spHave = true; }
+            if (!S->spHave || tNow >= S->spT + 0.15f) { memcpy(S->spP, w, sizeof w); S->spT = tNow; S->spHave = true; }
         }
     }
     // (08/11, Agustin: "agrega mas sliders de animaciones con mas realismo") ANIMACIONES REALISTAS, filas 395 / 396, por huesos:
