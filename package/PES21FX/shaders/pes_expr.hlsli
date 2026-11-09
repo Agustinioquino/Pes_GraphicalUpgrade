@@ -645,9 +645,10 @@ void PesMuscleApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
     float g = exp(-(ex * ex + ey * ey + ez * ez)) * smoothstep(0.022, 0.030, xp);
     if (g > 0.01) {
       float3x3 Mh = (float3x3)g_vsBone.m_boneMatrices[hh], Mp = (float3x3)g_vsPrevBone.m_boneMatrices[hh];
-      float3 dl = mul(Mh, pos - mul(p, g_vsBone.m_boneMatrices[hh]));
-      float3 dlP = mul(Mp, prev - mul(p, g_vsPrevBone.m_boneMatrices[hh]));
-      float a = smoothstep(0.0015, 0.0045, sxp * dl.x), aP = smoothstep(0.0015, 0.0045, sxp * dlP.x);
+      // (09/11 b, captura de Agustin: recuadro rojizo en el cachete en REPOSO) se media cuanto salio el vertice respecto de la cabeza
+      // rigida, pero la forma de cada cara del editor del juego tambien vive en los huesos: en Messi la mejilla ya esta corrida en reposo
+      // y el bulto (con la normal inclinada) quedaba siempre puesto. Ahora lo manda solo el slider Inflar los cachetes (x362, positivo)
+      float a = saturate(IniParams.Load(int2(362, 0)).x), aP = a;
       float pf = 0.0050 * a * g, pfP = 0.0050 * aP * g;
       if (pf > 1e-6 || pfP > 1e-6) {
         float2 grp = pf * float2(-2.0 * ex / 0.022, -2.0 * ey / 0.024);
