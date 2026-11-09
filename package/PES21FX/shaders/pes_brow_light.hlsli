@@ -31,6 +31,25 @@ float3 PesBrowLightDir(float3 c0, float3 c1, float3 c2, float3 dom, float vz)
     float3 W = float3(ce * sa, se, ce * ca), Lv0 = float3(dot(W, c0), dot(W, c1), dot(W, c2));
     if (dot(Lv0, Lv0) > 0.25) Ltest = Lv0;
   }
+  // (09/11 g, Agustin: capturas con "Desde atras": cejas naranjas) las hebras seguian el rumbo / altura del slider aunque la piel
+  // usara la direccion rapida (z392), el sol de partido (w378) o el ciclo de dia y noche (w392): la ceja se iluminaba desde otro lado
+  // que la cara. Ahora la misma eleccion que pes_ssss_inc
+  { float4 Q = IniParams.Load(int2(392, 0));
+    int tlM = (int)(Q.w + 0.5), qd = (int)(Q.z + 0.5);
+    if (tlM >= 1 && tlM <= 4) {
+      float per = tlM == 1 ? 30.0 : (tlM == 2 ? 60.0 : (tlM == 3 ? 120.0 : 300.0));
+      float tA = 6.2831853 * frac(IniParams.Load(int2(393, 0)).w / per);
+      float3 orb = float3(cos(tA), sin(tA) * 0.9063078, sin(tA) * 0.4226183);
+      if (sin(tA) < 0.0) orb = -orb;
+      orb.y = max(orb.y, 0.017);
+      float3 Lw0 = normalize(orb), Lv0 = float3(dot(Lw0, c0), dot(Lw0, c1), dot(Lw0, c2));
+      if (dot(Lv0, Lv0) > 0.25) Ltest = Lv0;
+    } else if (IniParams.Load(int2(378, 0)).w < 0.5 && qd >= 1 && qd <= 4) {
+      float qa = qd == 1 ? 25.0 : (qd == 2 ? 90.0 : (qd == 3 ? 165.0 : 10.0)), qe = qd == 4 ? 78.0 : (qd == 3 ? 12.0 : 20.0);
+      float qca = cos(radians(qa)), qsa = sin(radians(qa)), qce = cos(radians(qe)), qse = sin(radians(qe));
+      Ltest = float3(qce * qsa, qse, -qce * qca * zSgn);
+    }
+  }
   // (08/11 v, Agustin: "al cambiar las camaras no detectan correctamente de donde proviene la luz") el motor GIRA la luz en cada toma
   // (repeticiones, presentaciones, camaras del editor) y la piel se ilumina con esa luz del cuadro; las hebras usaban el sol ESTABLE
   // del cielo (312) o la dominante del G-buffer, que no siguen ese giro: brillo, sombra de contacto y contraluz del lado equivocado.

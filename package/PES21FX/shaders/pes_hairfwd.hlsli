@@ -94,7 +94,10 @@ float3 HairBSDF(float3 alb, float rough, float3 L, float3 V, float3 T, float vis
     float h = cHalf * (1.0 + a * (0.6 - 0.8 * cPhi));
     float f = HairF(cD * sqrt(saturate(1.0 - h * h)));
     float Fp = (1.0 - f) * (1.0 - f);
-    float3 Tp = pow(max(alb, 1e-3), 0.5 * sqrt(saturate(1.0 - h * h * a * a)) / cD);
+    // (09/11 g, Agustin: cejas naranjas a contraluz) 0.5 -> 1.4: con el exponente de Karis el pelo oscuro dejaba pasar ~1/3 de la luz
+    // con su color saturado (castano -> naranja encendido); una ceja real oscura a contraluz casi no transmite: queda oscura con
+    // el borde encendido (R). El pelo claro (rubio / colorado) sigue dejando pasar luz
+    float3 Tp = pow(max(alb, 1e-3), 1.4 * sqrt(saturate(1.0 - h * h * a * a)) / cD);
     float Np = exp(-3.65 * cPhi - 3.98);
     S += Mp * Np * Fp * Tp * visTT; }
   // TRT: entra, rebota adentro y sale (segundo brillo con el color del pelo)
@@ -152,6 +155,8 @@ float4 main(VSOut i) : SV_Target0
   float visR = shP * visA;
   float TA = hIn > 0.0 ? exp(-max(thk - 0.002, 0.0) * 300.0) * (1.0 - smoothstep(0.03, 0.06, thk)) : 0.35;
   float visTT = TA * shA;
+  // (09/11 g) la luz de atras tambien cruza las capas de arriba de la ceja (antes solo la de frente): ceja tupida = poca transmision
+  { float depT = (1.0 - layQ) * (1.0 - 0.6 * i.tw.x); visTT *= exp(-1.2 * depT); }
   // capas de la ceja: las de abajo reciben menos luz (la atraviesan las de arriba)
   float dep = (1.0 - layQ) * (1.0 - 0.6 * t);
   float layT = exp(-0.4 * dep / max(abs(nl), 0.22));

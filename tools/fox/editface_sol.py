@@ -157,6 +157,15 @@ def add_atmosphere(f, a):
     f.set(tods, 'overrideDateTime', 'Bool', True)
     f.set(tods, 'dateTimeHour', 'UInt32', a.hora)
     f.set(tods, 'dateTimeMinute', 'UInt32', a.minuto)
+    if a.atmo_luz == 'apagada':
+        # 09/11 c: el editor arranca con la luz de estudio aprobada; la DLL (SolEditorAtmo) prende la atmosfera con lux reales
+        # y la exposicion del estadio, y SolEditorSetHora mueve la hora (TimeOfDaySettings -> TOD_Pump -> Sky_SetDateTime)
+        f.set(tods, 'overrideAtmosphere', 'Bool', True)
+        f.set(tods, 'sunLux', 'Float', 0.0); f.set(tods, 'moonLux', 'Float', 0.0); f.set(tods, 'skyLightSunScale', 'Float', 0.0)
+    if a.paso_sol:
+        # el estadio mueve la direccion del sol en 175 pasos por dia con 3 s de interpolacion: en un timelapse rapido salta
+        f.set(na, 'divisonNumOfDirLightSteppedMove', 'UInt32', a.paso_sol)
+        f.set(na, 'interpolateTimeInSecondOfDirLightSteppedMove', 'Float', 0.25)
     if a.exposicion == 'partido':
         for pre in ('game', 'demo'):
             f.set(tods, pre + 'ExposureCompensation', 'Float', 0.0)
@@ -180,6 +189,9 @@ def main(argv=None):
     ap.add_argument('--fpk-entrada'); ap.add_argument('--fpk-salida')
     ap.add_argument('--hora', type=int, default=16); ap.add_argument('--minuto', type=int, default=0)
     ap.add_argument('--exposicion', choices=('editor', 'partido'), default='editor')
+    ap.add_argument('--atmo-luz', choices=('apagada', 'encendida'), default='apagada',
+                    help='(atmosfera) apagada = sol/luna/cielo en 0 con la exposicion del editor hasta que la DLL la prenda')
+    ap.add_argument('--paso-sol', type=int, default=1440, help='(atmosfera) pasos por dia de la direccion del sol (estadio 175; 0 = no tocar)')
     a = ap.parse_args(argv)
 
     d = open(a.entrada, 'rb').read()
@@ -195,7 +207,7 @@ def main(argv=None):
     if a.modo == 'direccional':
         add_sun(f, a)
     else:
-        if a.exposicion == 'editor': print('aviso: con la atmosfera y la exposicion fija del editor el sol real (150000 lux) '
+        if a.exposicion == 'editor' and a.atmo_luz == 'encendida': print('aviso: con la atmosfera y la exposicion fija del editor el sol real (150000 lux) '
                                            'satura; usar --exposicion partido')
         if not (a.donante and a.donante_fpk and a.fpk_entrada and a.fpk_salida):
             raise SystemExit('--modo atmosfera necesita --donante, --donante-fpk, --fpk-entrada y --fpk-salida')

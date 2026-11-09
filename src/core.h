@@ -400,6 +400,11 @@ void FaceInjectPresent();                         // (09/11) gancho de las matri
 void SolEditorPresent();
 void* SolEditorBody();   // cuerpo validado por vtable; nullptr si no hay sol en el editor o se destruyo
 bool SolEditorSet(const float dirHaciaSol[3], const float rgb[3], float kelvin, float lux, bool on);   // se aplica desde el hilo del motor
+// (09/11 c) hora del motor y atmosfera (TimeOfDaySettings del EditFace con TppAtmosphere del estadio):
+void SolEditorSetHora(float horas);   // 0..24 (minuto entero); pone overrideDateTime; la atmosfera mueve sol, luna y cielo
+void SolEditorHoraLibre();            // vuelve a la hora del archivo
+bool SolEditorAtmo(bool on);          // on: sunLux 150000 / moonLux 1 / cielo 1 + exposicion del estadio -14..-7; off: luz 0 y
+                                      // exposicion fija del archivo (-7.1, luz de estudio). false = no hay TimeOfDaySettings del editor
 void CamHookPresent();                            // ganchos (primer Present), 160 = cuadros desde el corte / cortes / TAA / ok
 // (31/10) camara libre (freecam.cpp): pisa el parametro de la camara del motor desde el gancho de camhook.cpp; 344 (ini) / 345 (DLL)
 void FreeCamApply(unsigned char* param);

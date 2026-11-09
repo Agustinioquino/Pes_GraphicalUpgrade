@@ -311,7 +311,9 @@ void PesOneLightMatch(float3 L, float3 col, float sh, float3 n, float3 V, float 
     float back = saturate(dot(-n, L) * 0.8 + 0.2);
     float3 sigT = float3(1.0, 3.6, 6.5) * (P34.y > 0 ? P34.y : 1.0);
     float3 Tr = exp(-(1.35 - thin) * sigT) * thin;
-    float thinGate = lerp(smoothstep(0.45, 0.85, thin), 1.0, saturate(P76.y));
+    // (09/11 g, Agustin: capturas "Desde atras": la oreja casi no se enciende) 0.45..0.85 -> 0.30..0.75: la oreja entera (no solo el
+    // borde mas fino) deja pasar la luz roja; la mejilla (trm bajo) sigue sin transmitir
+    float thinGate = lerp(smoothstep(0.30, 0.75, thin), 1.0, saturate(P76.y));
     float exitK = back * (0.6 + 0.6 * fwd) * smoothstep(-0.05, 0.25, dot(L, -V)) * lerp(0.2, 1.0, silK);
     // (09/11 c, Agustin eligio "las tres": borde rojizo, poros y mas luz en orejas y nariz a contraluz) x1.6 -> x2.3
     tr = PesSsTransColor(Tr * exitK * thinGate * P5.x * 2.3 * (P76.x > 0.0 ? P76.x : 1.0), P34.z);
@@ -398,11 +400,26 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   o.c = float4(c0, 1); o.s = float4(s0, 1);
   float4 E = IniParams.Load(int2(297, 0)), E2 = IniParams.Load(int2(298, 0)), E3 = IniParams.Load(int2(319, 0));
   bool noSun = IniParams.Load(int2(44, 0)).w < 0.5 && IniParams.Load(int2(255, 0)).w > 0.5;
-  if (E.x < 0.5 || !noSun) return o;
+  if (E.x < 0.5) return o;
   // (09/11 d, Agustin: "el sol cercano tiene que ser un sol real del juego") z393 = 1: la DLL prendio el sol real del motor en el
   // editor (zfx_SolEditor, w378 / w392): lo dibuja la pasada del sol del partido con sus cascadas; aca no se imita ni se baja la
   // luz de estudio (c0 ya trae ese sol)
-  if (IniParams.Load(int2(393, 0)).z > 0.5) return o;
+  // (09/11 e, Agustin: "le falta el ambiente") con el ciclo de dia y noche (z393 = 2 + seno de la altura del sol) el ambiente va
+  // con la hora sobre TODA la luz (estudio + sol real): de noche baja a un tercio y se enfria (luna / cielo nocturno), en el
+  // amanecer y el atardecer se entibia. De dia queda tal cual: el sol real ya hace el contraste
+  { float zR = IniParams.Load(int2(393, 0)).z;
+    if (zR > 0.5) {
+      if (zR > 1.5) {
+        float sE = zR - 2.0;
+        float nightK = smoothstep(0.06, -0.20, sE);
+        float duskK = (1.0 - nightK) * (1.0 - smoothstep(0.04, 0.40, sE));
+        float3 amb = lerp(1.0.xxx, float3(1.10, 0.90, 0.72), duskK);
+        amb = lerp(amb, float3(0.26, 0.31, 0.45), nightK);
+        o.c = float4(c0 * amb, 1); o.s = float4(s0 * dot(amb, float3(0.3, 0.5, 0.2)), 1);
+      }
+      return o;
+    } }
+  if (!noSun) return o;
   float zC = LinZ(uv);
   float zSgn = zC < 0.0 ? -1.0 : 1.0, zA = abs(zC);
   float4 E4 = IniParams.Load(int2(377, 0)), E5 = IniParams.Load(int2(378, 0));
@@ -457,16 +474,23 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
     float tlT = frac(IniParams.Load(int2(393, 0)).w / tlPer);
     float sD = sin(6.2831853 * tlT);                      // > 0 de dia
     float dayK = smoothstep(-0.10, 0.10, sD);
-    float sunEl = 75.0 * sD, sunAz = lerp(100.0, -100.0, saturate(tlT * 2.0));
-    float moonEl = 45.0 * max(-sD, 0.0), moonAz = lerp(100.0, -100.0, saturate(tlT * 2.0 - 1.0));
     float sUp = saturate(sD);
-    if (dayK > 0.5) { az = sunAz; el = max(sunEl, 2.0); } else { az = moonAz; el = max(moonEl, 2.0); }
+    // (09/11 e, Agustin: "no es suave, ni la luz recorre como si fuera un timelapse") la misma orbita que el sol real de la DLL
+    // (solluz.cpp): fija en el MUNDO (al girar la camara el sol se queda en el cielo), sale por un costado, arco hasta 65 grados
+    // al mediodia y se pone por el otro; de noche la luna hace el mismo arco. En el horizonte la fuerza baja a 0 (abajo), asi el
+    // cambio sol -> luna no salta
+    float tA = 6.2831853 * tlT, oCa = cos(tA), oSa = sin(tA);
+    float3 orb = float3(oCa, oSa * 0.9063078, oSa * 0.4226183);
+    if (oSa < 0.0) orb = -orb;
+    float orbFade = smoothstep(0.005, 0.20, orb.y);
+    az = degrees(atan2(orb.x, orb.z)); el = max(degrees(asin(saturate(orb.y))), 1.0);
     float tWarmDay = lerp(0.98, 0.55, smoothstep(0.0, 0.6, sUp));
     warm  = lerp(0.12, tWarmDay, dayK);
     inten = lerp(0.22, lerp(0.55, 1.25, smoothstep(0.0, 0.5, sUp)), dayK);
     keep  = lerp(0.18, lerp(0.40, 0.55, sUp), dayK);
     skyK  = lerp(0.10, 0.16, dayK); gndK = lerp(0.01, 0.05, dayK) * (0.3 + 0.7 * sUp);
-    pSpotD = 0.0; pSpotA = 0.0; g_lightWorld = false;
+    inten *= lerp(0.04, 1.0, orbFade);
+    pSpotD = 0.0; pSpotA = 0.0; g_lightWorld = true;
   }
   bool studio = preset == 4;
   // --- referencia de intensidad: la irradiancia de estudio mas alta sobre la piel, suavizada en el tiempo (pasada 0, t6) ---
@@ -778,7 +802,14 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   // con mas melanina la epidermis absorbe y el rojo viaja menos (penumbra marron calida, no roja). Distancias d en mm.
   float alb0L = dot(inAlb.SampleLevel(sPoint, uv, 0).xyz, float3(0.2126, 0.7152, 0.0722));
   float mel = (alb0L > 0.004) ? saturate(log2(0.47 / max(alb0L, 1e-3)) / 2.85) : 0.0;
-  float3 dmm = float3(lerp(1.0, 0.62, mel), lerp(0.42, 0.36, mel), lerp(0.26, 0.24, mel)) * widthScale;
+  // (09/11 f) rojo 1.0 -> 1.5 mm (verde / azul igual): la entrada ya es irradiancia (sin textura) y el azul / verde no cambian:
+  // el rojo viaja mas (medido en piel: rojo ~2.6 veces el verde) sin lavar poros; es el que hace el borde de sombra rojizo y blando de la piel real
+  // (09/11 h, Agustin: "el sss no funciona solo como un colorado en texturas") la luz se mueve bajo la piel en los TRES canales:
+  // antes el verde (0.42 mm) y el azul (0.26) casi no viajaban y el SSS se leia solo como un tinte rojo en el borde de la sombra.
+  // Proporcion de la piel medida (Jensen 2001: rojo 3.67, verde 1.37, azul 0.68 mm de camino libre): el verde llega a la mitad del
+  // rojo y el azul a un cuarto, asi la luz ablanda de verdad el sombreado (el terminador se corre hacia la sombra, las arrugas y los
+  // poros del relieve se iluminan desde adentro) y el rojo queda solo como lo que mas lejos llega
+  float3 dmm = float3(lerp(1.5, 0.85, mel), lerp(0.75, 0.50, mel), lerp(0.40, 0.30, mel)) * widthScale;
   float mmToPx = 0.001 * pxm;
   if (dmm.r * 3.0 * mmToPx < 0.6) return float4(c0, 1);   // de lejos lo resuelve la piel pre-integrada de la pasada de luz
   // (08/11 SSSS) entre 0.6 y 1.6 px el disco entra de a poco: antes se prendia de golpe y la cara cambiaba al acercar / alejar la camara
@@ -823,7 +854,7 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   // azul se difundia igual que el rojo (poros y arrugas lavados). Ahora la fuerza va por canal como la dispersion real: el rojo
   // casi entero (y95^0.5: borde de sombra rojizo y suave), el verde como el slider y el azul menos (y95^1.5: detalle fino)
   float sK = saturate(P.y);
-  float3 mixK = float3(sqrt(sK), sK, sK * sqrt(sK)) * nearK;
+  float3 mixK = float3(sqrt(sK), sqrt(sK), sK) * nearK;   // (09/11 h) el verde difunde como el rojo (es el que da el brillo de la piel)
   return float4(lerp(c0, blurred, mixK), 1);
 }
 #endif
