@@ -257,7 +257,6 @@ static float s_poseSmile = 0.0f;   // para Secondary (mejillas)
 // en boca/mejillas y el achinado de los ojos a la mitad: manda su escultura
 static float s_eyeSmK = 1.0f;
 // (09/11 d) toque de la lengua contra el paladar al hablar (0..1): el mayor de los personajes de este cuadro; la subida lo pone en z396
-float g_tongueTap = 0.0f;
 static float s_tapAcc = 0.0f, s_tapT = -1.0f;
 // (04/11, Agustin: "que la sonrisa mueva toda la cara, asi como tambien en el enojado y demas") los sliders de gestos tambien para
 // Secondary (pomulos 18/19 y bajo-ojo 20/21): enojo, asombro, grito, puchero; y el perfil de la cara de este cuadro
@@ -1112,6 +1111,7 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
     if (wrote) { s_eyesW.fetch_add(1, std::memory_order_relaxed); s_lastEyes.store(s_frame.load(std::memory_order_relaxed), std::memory_order_relaxed); }
 }
 }   // namespace
+float g_tongueTap = 0.0f;   // (09/11 d) toque de la lengua (fuera del namespace anonimo: lo lee config.cpp)
 
 // (02/11 d, Agustin: "le falta mas naturalidad a los gestos de las expresiones") MOVIMIENTOS QUE ACOMPANAN al gesto, como en una
 // cara real (el juego mueve solo los huesos de la animacion; el resto de la cara queda quieto y se ve de goma):
