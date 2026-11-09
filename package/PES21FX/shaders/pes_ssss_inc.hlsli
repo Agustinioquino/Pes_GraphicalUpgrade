@@ -589,7 +589,32 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
     float up = n.y * 0.5 + 0.5;   // normal en vista: y arriba
     // (07/11 c) el rebote del suelo depende de cuanto sol le llega al suelo (sol alto = mas rebote)
     if (preset == 0) gndC *= saturate(sin(radians(max(el, 0.0))) * 1.6 + 0.1);
-    dif += skyC * up + gndC * (1.0 - up);
+    // (09/11, "al maximo") oclusion del cielo y del suelo: el relleno llegaba entero a las cuencas de los ojos, debajo de la nariz,
+    // debajo del menton y adentro de la oreja, y aplanaba la cara. Horizonte en 8 direcciones a 1.5 / 3.5 / 6 cm en pantalla
+    // (lo que esta por delante del pixel tapa parte del cielo); la boca (mascara t7 o cavidad) queda sin oclusion, como antes
+    {
+      float aW, aH; inNrm.GetDimensions(aW, aH);
+      float aMpp = max(2.0 * abs(m_projectionParam.x) * zA / max(aW, 1.0), 1e-6);
+      float aoS = 0.0;
+      [unroll] for (int ai = 0; ai < 8; ai++) {
+        float aa = ai * 0.78539816 + 0.39 * frac(52.9829189 * frac(dot(pos.xy, float2(0.06711056, 0.00583715))));
+        float2 ad = float2(cos(aa), sin(aa)) / float2(aW, aH);
+        float hMax = 0.0;
+        [unroll] for (int ri = 0; ri < 3; ri++) {
+          float rM = ri == 0 ? 0.015 : (ri == 1 ? 0.035 : 0.06);
+          float2 uA = uv + ad * (rM / aMpp);
+          if (any(uA < 0.0) || any(uA > 1.0)) continue;
+          float h = (zC - LinZ(uA)) * zSgn;
+          if (h > 0.0 && h < 0.15) hMax = max(hMax, h / sqrt(h * h + rM * rM));   // seno del angulo de horizonte
+        }
+        aoS += hMax;
+      }
+      float skyAO = saturate(1.0 - 0.85 * aoS / 8.0);
+      skyAO *= skyAO;
+      { uint qW = 0, qH = 0; inMouth.GetDimensions(qW, qH);   // boca intacta: interior y cavidad sin oclusion nueva
+        if (legacy || (qW > 0 && inMouth.Load(int3(min((uint2)pos.xy, uint2(qW - 1, qH - 1)), 0)) > 0.0)) skyAO = 1.0; }
+      dif += (skyC * up + gndC * (1.0 - up)) * skyAO;
+    }
     // (07/11 c) reflector: una pared / pantalla del lado opuesto a la luz, baja, que devuelve parte de la luz sin sombra (como el
     // reflector de un fotografo). Color: blanco (el de la luz), plateado (mas frio y brillante), dorado (calido)
     if (preset == 0 && E6.w > 0.001) {
