@@ -781,7 +781,9 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   // con mas melanina la epidermis absorbe y el rojo viaja menos (penumbra marron calida, no roja). Distancias d en mm.
   float alb0L = dot(inAlb.SampleLevel(sPoint, uv, 0).xyz, float3(0.2126, 0.7152, 0.0722));
   float mel = (alb0L > 0.004) ? saturate(log2(0.47 / max(alb0L, 1e-3)) / 2.85) : 0.0;
-  float3 dmm = float3(lerp(1.0, 0.62, mel), lerp(0.42, 0.36, mel), lerp(0.26, 0.24, mel)) * widthScale;
+  // (09/11 f) rojo 1.0 -> 1.5 mm (verde / azul igual): la entrada ya es irradiancia (sin textura) y el azul / verde no cambian:
+  // el rojo viaja mas (medido en piel: rojo ~2.6 veces el verde) sin lavar poros; es el que hace el borde de sombra rojizo y blando de la piel real
+  float3 dmm = float3(lerp(1.5, 0.85, mel), lerp(0.42, 0.36, mel), lerp(0.26, 0.24, mel)) * widthScale;
   float mmToPx = 0.001 * pxm;
   if (dmm.r * 3.0 * mmToPx < 0.6) return float4(c0, 1);   // de lejos lo resuelve la piel pre-integrada de la pasada de luz
   // (08/11 SSSS) entre 0.6 y 1.6 px el disco entra de a poco: antes se prendia de golpe y la cara cambiaba al acercar / alejar la camara
