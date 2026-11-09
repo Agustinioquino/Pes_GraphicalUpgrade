@@ -393,6 +393,7 @@ ID3D11DepthStencilState* CachedDSS(const D3D11_DEPTH_STENCIL_DESC& d);
 ID3D11BlendState* CachedBlend(const D3D11_BLEND_DESC& d);
 ID3D11RasterizerState* CachedRS(const D3D11_RASTERIZER_DESC& d);
 void StateCachePresent();
+bool CharSceneViewport(float out[4]);             // (09/11) viewport del ultimo dibujo de cara/cuerpo (x, y, ancho, alto en pixeles del backbuffer)
 void FaceInjectPresent();                         // (09/11) gancho de las matrices del rig (0x1419f8820): diagnostico de donde se arma la cara
 void CamHookPresent();                            // ganchos (primer Present), 160 = cuadros desde el corte / cortes / TAA / ok
 // (31/10) camara libre (freecam.cpp): pisa el parametro de la camara del motor desde el gancho de camhook.cpp; 344 (ini) / 345 (DLL)

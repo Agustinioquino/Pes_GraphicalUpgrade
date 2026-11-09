@@ -246,10 +246,18 @@ static void TessTimersRead() {   // contexto inmediato, en Present
     }
 }
 
+static std::atomic<int> s_cvX{0}, s_cvY{0}, s_cvW{0}, s_cvH{0}, s_cvF{-1000};
+bool CharSceneViewport(float out[4]) {
+    if (PresentNo() - s_cvF.load() > 30 || s_cvW.load() <= 0) return false;
+    out[0] = (float)s_cvX.load(); out[1] = (float)s_cvY.load(); out[2] = (float)s_cvW.load(); out[3] = (float)s_cvH.load(); return true;
+}
+
 bool FaceTessBegin(ID3D11DeviceContext* c, uint64_t vsHash, ID3D11ShaderResourceView* seam, ID3D11ShaderResourceView* params, FaceTessScope& s, const std::string& faceId) {
     if (!seam || !params || !g_dev.dev) return false;
     const int v = vsHash == kVsHead ? 0 : vsHash == kVsFace ? 1 : vsHash == kVsBody ? 2 : -1;
     if (v < 0) return false;
+    { D3D11_VIEWPORT cv{}; UINT cn = 1; c->RSGetViewports(&cn, &cv);   // (09/11) viewport de la escena de personajes (vista del esqueleto, overlay.cpp)
+      if (cn >= 1 && cv.Width > 64 && cv.Height > 64) { s_cvX = (int)cv.TopLeftX; s_cvY = (int)cv.TopLeftY; s_cvW = (int)cv.Width; s_cvH = (int)cv.Height; s_cvF = PresentNo(); } }
     // (04/11 m) valores propios de esta cara (y la anota para el "jugador actual" aunque la teselacion este apagada)
     bool pOff = false; ID3D11Buffer* pcb = v < 2 ? TessFaceBuffer(faceId, pOff) : nullptr;
     if (pOff) { s_pOff.fetch_add(1, std::memory_order_relaxed); return false; }
