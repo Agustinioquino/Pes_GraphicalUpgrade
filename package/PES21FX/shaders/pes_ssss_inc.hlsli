@@ -35,6 +35,13 @@ float Lum(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 // radios del perfil de Burley en unidades de d: inversa de la CDF 1 - e^-x/4 - 3e^(-x/3)/4 en u = (i + 0.5) / 8
 static const float kBurleyX[8] = { 0.1305, 0.4299, 0.7976, 1.2651, 1.8883, 2.7792, 4.2184, 7.4616 };
 
+// (09/11) pixel de la boca visible: la mascara de la DLL guarda la profundidad del dibujo de la boca y solo vale si coincide con la final
+bool PesMouthAt(float2 px, uint mw, uint mh) {
+  if (mw == 0) return false;
+  uint2 p = min((uint2)px, uint2(mw - 1, mh - 1));
+  float mz = inMouth.Load(int3(p, 0)), dz = inDepth.Load(int3(p, 0)).x;
+  return mz > 0.0 && abs(mz - dz) <= 1e-6 + 2e-4 * abs(dz);
+}
 float BurleyF(float x) { return exp(-x) + exp(-x / 3.0); }
 
 #ifdef SSSS_REF
@@ -773,6 +780,11 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   float4 P = IniParams.Load(int2(95,0));
   float3 c0 = inLight.SampleLevel(sPoint, uv, 0).xyz;
   if (P.w < 0.5 || !IsSkin(uv)) return float4(c0, 1);
+  // (09/11, captura 1744 de Agustin: borde rosado y blanco delante del labio de abajo) la boca (lengua, encias: marca de piel) entraba
+  // al disco y su luz se corria a los labios, y la de los labios a la boca. Donde la mascara (con profundidad) dice boca: ni se
+  // difumina ni da muestras. La boca queda como sin SSSS.
+  uint mmW2 = 0, mmH2 = 0; inMouth.GetDimensions(mmW2, mmH2);
+  if (PesMouthAt(pos.xy, mmW2, mmH2)) return float4(c0, 1);
   float z0 = LinZ(uv);
   // (08/11 SSSS) tamano de un pixel en uv desde el tamano real de la textura: ddx/ddy despues del 'return' de arriba (pixeles que no
   // son piel en el mismo cuadrito de 2x2: pestanas, cejas, borde de la cara) es indefinido y cambiaba el ancho del disco al mover la camara
@@ -822,6 +834,7 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
     float2 off = float2(cos(a), sin(a)) * (rmm * mmToPx);   // en pixeles
     float2 uvS = uv + off * rb;
     if (!IsSkin(uvS)) continue;
+    if (PesMouthAt(uvS / rb, mmW2, mmH2)) continue;   // (09/11) la boca no da muestras a la piel
     float zS = LinZ(uvS);
     float dzmm = abs(zS - (z0 + dot(slope, off))) * 1000.0;
     float tol = max(1.0, 0.5 * rmm) / tolK;               // la superficie puede curvarse mas lejos del centro
