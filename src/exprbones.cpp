@@ -1429,7 +1429,9 @@ static void FrameBody(const void* skel) {
         eff = nEsf * S->effort;
         const float rate = (std::min)(0.22f + 0.10f * spd, 1.0f);
         S->brPh = Frac(S->brPh + dt * rate);
-        breath = 0.5f - 0.5f * cosf(S->brPh * 6.2831853f);                     // 0 exhalado .. 1 inhalado
+        // (09/11, Agustin con video FC27 / eFootball: "a esto me referia") ciclo real: inhala en el 40 % del ciclo, exhala mas lento y queda
+        // una pausa corta al final con la boca apenas entreabierta; subida y bajada suaves (sin esquinas)
+        { const float ph = S->brPh; breath = ph < 0.40f ? SStep(0.0f, 0.40f, ph) : ph < 0.88f ? 1.0f - SStep(0.40f, 0.88f, ph) : 0.0f; }
         brAmp = nResp < 0.001f ? 0.0f : nResp * (0.45f + 0.55f * SStep(1.0f, 6.0f, spd));   // (09/11) 0 = apagada del todo
         if (nVida > 0.001f) {
             const float ph = (float)(S->pid % 9973u) * 0.0731f;
@@ -1684,7 +1686,7 @@ static void FrameBody(const void* skel) {
     const float P[3] = { jc.t[0], jc.t[1], jc.t[2] };
     float A = 0.40f * o * nExpr;
     // (08/11) respiracion por la boca corriendo y esfuerzo: la mandibula baja un poco (0.35 grados por inhalacion, hasta 3 grados de esfuerzo)
-    A += 0.05f * eff;   // (09/11, Agustin: la respiracion "mueve la boca y deberia inflar la nariz un poco") la respiracion ya no abre la mandibula
+    A += 0.05f * eff + 0.0035f * brAmp * breath * (0.5f + 0.5f * SStep(1.5f, 6.0f, S->spHave ? S->speed : 0.0f));   // (09/11 b, video FC27 / eFootball) la mandibula afloja apenas al inhalar (0.2 grados quieto, 0.4 corriendo)
     if (ganiOn && GP.has[1]) A += -GaniAngZ(GP.q[1]) * gW;   // (07/11) mandibula del clip (giro sobre z del .ask = -x de la cabeza)
     // (03/11) tope de la mandibula: lo del juego + lo del mod no pasa de 35 grados (la barba y la cara no dan para mas)
     {   // (04/11 e) mordida: soltar abre la mandibula; apretar la cierra solo lo que el juego la tenga abierta (los dientes no se pasan)
@@ -1773,7 +1775,11 @@ static void FrameBody(const void* skel) {
             // respiracion
             if (d == 14 || d == 15) { po[0] += sl * 0.0008f * brAmp * breath; po[1] += 0.0002f * brAmp * breath; }   // alas: se abren y suben apenas al inhalar
             if (d == 13) po[2] += 0.0002f * brAmp * breath;
-            (void)mouthBr;   // (09/11) la respiracion ya no separa los labios ni mueve las mejillas: solo la nariz (alas 14 / 15 y punta 13)
+            // (09/11 b, Agustin con video FC27 / eFootball: "mira las animaciones de respiracion en los dos juegos modernos") como en esos juegos:
+            // los labios se entreabren apenas al inhalar (0.3 mm arriba / 0.5 mm abajo quieto, el doble corriendo), las mejillas no
+            { const float lipBr = brAmp * breath * (0.5f + 0.5f * SStep(1.5f, 6.0f, spd)); (void)mouthBr;
+              if (d == 9 || d == 10 || d == 11) po[1] += 0.0003f * lipBr;
+              if (d == 1 || d == 2 || d == 3) po[1] -= 0.0005f * lipBr; }
             // esfuerzo
             if (d == 26 || d == 27) { po[1] -= 0.0025f * eff; po[0] -= sl * 0.0008f * eff; }
             if (d == 28 || d == 29) po[1] -= 0.0010f * eff;
