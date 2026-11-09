@@ -478,7 +478,9 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   // aire hacia el sol. Rumbo, altura y distancia siguen siendo los sliders
   bool nearSun = E5.w > 0.5;
   if (nearSun) {
-    az = E.z; el = E.w; pSpotD = clamp(E4.y > 0 ? E4.y : 3.0, 1.5, 12.0); pSpotA = 170.0;
+    // (09/11 c, Agustin: "que funcione como funciona el sol de los partidos de dia") rayos paralelos como el sol del partido: sin
+    // posicion ni distancia (la direccion es la misma en toda la cara); solo rumbo y altura
+    az = E.z; el = E.w; pSpotD = 0.0; pSpotA = 0.0;
     warm = 0.72; inten = max(inten, 1.6); keep = min(keep, 0.30); skyK = min(skyK, 0.12);
     g_shRad = radians(0.53) * 0.5;
     sunC = PesTint(warm) * (S * inten);
