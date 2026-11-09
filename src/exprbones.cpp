@@ -1403,13 +1403,18 @@ static void FrameBody(const void* skel) {
     if (S->node && S->bHead && tNow >= 0.0f) {
         Xf bh; float w[3];
         if (ReadXf(S->bHead, bh) && CharNodeToWorld(const_cast<void*>(S->node), bh.t, w, true)) {
-            if (S->spHave && tNow > S->spT + 0.0005f && tNow - S->spT < 0.5f) {
+            // (09/11, Agustin: "parecen siempre enojados") la velocidad se medía cuadro a cuadro: con el reloj de la animacion avanzando de a
+            // milesimas (editor, camara libre) un temblor de 1 cm de la cabeza daba 10 m/s = ESFUERZO prendido (cejas abajo y juntas, ojos
+            // entrecerrados) con el jugador quieto. Ahora se mide sobre ventanas de 0.15 s como minimo y un salto de mas de 1.5 m no cuenta
+            if (S->spHave && (tNow < S->spT || tNow - S->spT >= 0.5f)) S->spHave = false;
+            if (S->spHave && tNow >= S->spT + 0.15f) {
                 const float dt = tNow - S->spT, dx = w[0] - S->spP[0], dz = w[2] - S->spP[2];
-                const float v = sqrtf(dx * dx + dz * dz) / dt, before = S->speed;
+                const float dd = sqrtf(dx * dx + dz * dz);
+                const float v = dd > 1.5f ? S->speed : dd / dt, before = S->speed;
                 S->speed += ((std::min)(v, 12.0f) - S->speed) * (1.0f - expf(-dt / 0.25f));
                 if (S->speed < 0.5f) S->stillT += dt; else if (S->speed > 1.0f) { if (before <= 1.0f && S->stillT > 1.0f) arranco = true; S->stillT = 0.0f; }
             }
-            if (!S->spHave || tNow != S->spT) { memcpy(S->spP, w, sizeof w); S->spT = tNow; S->spHave = true; }
+            if (!S->spHave || tNow >= S->spT + 0.15f) { memcpy(S->spP, w, sizeof w); S->spT = tNow; S->spHave = true; }
         }
     }
     // (08/11, Agustin: "agrega mas sliders de animaciones con mas realismo") ANIMACIONES REALISTAS, filas 395 / 396, por huesos:
