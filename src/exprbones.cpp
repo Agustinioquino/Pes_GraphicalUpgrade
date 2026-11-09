@@ -863,6 +863,7 @@ static void Amp(const Skel& S, int d, Xf& x) {
     // la ganancia entra de a poco en los 120 siguientes
     const float ramp = std::clamp((float)(S.nN[d] - 120) / 120.0f, 0.0f, 1.0f);
     const float g = 1.0f + (S.aGain[d] - 1.0f) * ramp; if (fabsf(g - 1.0f) < 0.005f) return;
+    float gF = 1.0f;   // (09/11) rampa de salida cerca del limite (abajo)
     const float* hcU = S.bHave[d] ? S.bHc[d] : S.ahc; const float* hrU = S.bHave[d] ? S.bHr[d] : S.ahr;   // (02/11 l) cabeza de cuando el juego escribio el hueso
     float rr[3]; QRot(hrU, S.nT[d], rr);
     float e[3] = { (x.t[0] - (hcU[0] + rr[0])) * (g - 1.0f), (x.t[1] - (hcU[1] + rr[1])) * (g - 1.0f), (x.t[2] - (hcU[2] + rr[2])) * (g - 1.0f) };
@@ -872,6 +873,12 @@ static void Amp(const Skel& S, int d, Xf& x) {
         float q0[4], c0[4], d0[4]; QMul(hrU, S.nQ[d], q0); QConj(q0, c0); QMul(x.q, c0, d0);
         const float ang = 2.0f * acosf((std::min)(fabsf(d0[3]), 1.0f));
         if (raw > 0.025f || ang > 0.52f) { s_ampSkip.fetch_add(1, std::memory_order_relaxed); return; }
+        // (09/11, Agustin: "las cejas vibran con las expresiones marcadas") el corte era de golpe: un hueso cerca del limite (cejas
+        // levantadas, cabeza girando) se agrandaba un cuadro y al siguiente no -> vaiven. Ahora la ganancia se apaga en rampa
+        // desde 1.5 cm / 20 grados hasta el limite
+        const float fade = (1.0f - SStep(0.015f, 0.025f, raw)) * (1.0f - SStep(0.35f, 0.52f, ang));
+        for (float& v : e) v *= fade;
+        gF = fade;
     }
     {   // (02/11 m, Agustin: "las opciones de slider no cambian nada") 340.w gestos grandes: lo que el gesto pasa de 1 cm se agranda
         // solo esa fraccion (como hacia el shader), asi la boca muy abierta no se dispara
@@ -885,7 +892,7 @@ static void Amp(const Skel& S, int d, Xf& x) {
     if (dq[3] < 0) for (float& v : dq) v = -v;
     const float sn = sqrtf(dq[0] * dq[0] + dq[1] * dq[1] + dq[2] * dq[2]);
     if (sn > 1e-6f) {
-        float a = 2.0f * atan2f(sn, dq[3]) * (g - 1.0f);
+        float a = 2.0f * atan2f(sn, dq[3]) * (g - 1.0f) * gF;
         a = std::clamp(a, -0.25f, 0.25f);   // tope ~14 grados de giro extra
         const float h = 0.5f * a, k = sinf(h) / sn, eq[4] = { dq[0] * k, dq[1] * k, dq[2] * k, cosf(h) };
         float nq[4]; QMul(eq, x.q, nq); memcpy(x.q, nq, sizeof nq);
