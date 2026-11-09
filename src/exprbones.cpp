@@ -1047,7 +1047,9 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
         // mueve los parpados (PesBlinkApply sale antes) y la forma del ojo de los gestos del mod (Sonrisa, Enojo, Asombro, Grito,
         // Puchero) se perdia: solo quedaba la sonrisa medida en la comisura. Ahora tambien aca, las mismas cuentas que el shader con
         // la sonrisa un ~30 % mas fuerte (a 1.0 el de arriba baja 0.20 rad y el de abajo sube 0.21; pasando 1.0, risa)
-        const float* G5 = g_cfg.live[355]; const float* G6 = g_cfg.live[356];
+        // (09/11) los valores SUAVIZADOS de la Transicion (w395), los mismos que la boca: antes los ojos saltaban al valor nuevo
+        // mientras la boca todavia iba llegando
+        const float G5[3] = { S.sl[0], S.sl[1], S.sl[2] }, G6[2] = { S.sl[4], S.sl[5] };
         const float gAng = std::clamp(G5[0], 0.0f, 1.5f), gSmi = std::clamp(G5[1], 0.0f, 1.5f), gSur = std::clamp(G5[2], 0.0f, 1.5f);
         const float gGri = std::clamp(G6[0], 0.0f, 1.5f), gPuc = std::clamp(G6[1], 0.0f, 1.5f), gBig = (std::max)(gSmi - 1.0f, 0.0f);
         // (06/11, Agustin: "la sonrisa de messi cierra demasiado los ojos, un poco menos") la sonrisa a la mitad de lo que era (la cara
@@ -1385,6 +1387,12 @@ static void FrameBody(const void* skel) {
     const float o = (std::max)((std::max)(std::clamp(g_cfg.live[347][0], 0.0f, 1.0f), 0.45f * tongueOut), (std::min)(1.0f, 0.40f * pSur + 0.85f * pGri + talkO + 0.60f * (std::max)(0.0f, pSmi - 1.0f)));   // (04/11 b, Agustin: "la sonrisa con los dientes cerrados") la sonrisa ya no abre la mandibula (antes 0.12): los labios se separan, los dientes quedan juntos; (04/11 c) pasando 1.0 la sonrisa grande abre la boca (1.5 = 0.30, como en la foto de Messi riendo)
     // (04/11 d) filas 361 / 362, por huesos, de -1.5 a 1.5 (0 = nada): x361 cejas, y361 mordida, z361 mandibula de costado, w361 media
     // sonrisa; x362 cachetes, y362 beso, z362 desprecio, w362 una ceja. (04/11 f) x365 angulo de las cejas (+ sube el inicio)
+    // (09/11, Agustin: "la sonrisa parece afectada por la gravedad") pasando 1.0 de Sonrisa la boca se abre con la mandibula y las
+    // comisuras / mejillas de abajo (peso 0.5 en la mandibula) bajaban con ella y se juntaban (kOpen): a 1.25 las comisuras quedaban
+    // ~2 mm MAS ABAJO que a 1.0 y el labio de abajo colgaba = la sonrisa se "caia". En una risa real las comisuras las sostiene el
+    // cigomatico: la parte de la apertura que viene de la sonrisa ya no las arrastra (oSmi = lo que la sonrisa agrega a la apertura)
+    const float oRest = (std::max)((std::max)(std::clamp(g_cfg.live[347][0], 0.0f, 1.0f), 0.45f * tongueOut), (std::min)(1.0f, 0.40f * pSur + 0.85f * pGri + talkO));
+    const float oSmi = (std::max)(0.0f, o - oRest);
     float xB[8]; for (int i = 0; i < 8; i++) xB[i] = S->sl[7 + i];
     const float xAng = S->sl[15];
     bool xOn = fabsf(xAng) > 0.001f; for (float v : xB) if (fabsf(v) > 0.001f) xOn = true;
@@ -1710,7 +1718,7 @@ static void FrameBody(const void* skel) {
     for (int d = 0; d < kND; d++) {
         if (!S->cur[d]) continue;
         const float* tv = TeethOf(d); const float* ov = OpenOf(d);
-        const float op = (std::max)(o, 0.0f);
+        const float op = (std::max)(o - (d >= 5 && d <= 8 ? oSmi : 0.0f), 0.0f);   // (09/11) comisuras: la risa no las junta ni las baja
         float po[3]; PoseOf(d, pAng, pSmi, pSur, po);
         for (const PoseOff2& p : kPose2) if (p.d == d) { for (int k = 0; k < 3; k++) po[k] += p.g[k] * pGri + p.p[k] * pPuc; break; }
         if (PF && ProfBoneOk(d)) {   // (04/11) perfil de esta cara: neutra (z356) y cada gesto con su slider
@@ -1822,7 +1830,8 @@ static void FrameBody(const void* skel) {
         if (!xOk && !Base(*S, d, x)) continue;
         float nq[4] = { x.q[0], x.q[1], x.q[2], x.q[3] }, nt[3] = { x.t[0], x.t[1], x.t[2] };
         if (rot) {
-            const float h = 0.5f * A * kDef[d].jaw, sn = sinf(h);
+            const float Ad = d >= 5 && d <= 8 ? A - 0.40f * oSmi * nExpr : A;   // (09/11) comisuras y mejillas de abajo: sin la apertura de la risa
+            const float h = 0.5f * Ad * kDef[d].jaw, sn = sinf(h);
             const float qr[4] = { ax[0] * sn, ax[1] * sn, ax[2] * sn, cosf(h) };
             float v[3] = { x.t[0] - P[0], x.t[1] - P[1], x.t[2] - P[2] }, rv[3];
             QRot(qr, v, rv); QMul(qr, x.q, nq);
