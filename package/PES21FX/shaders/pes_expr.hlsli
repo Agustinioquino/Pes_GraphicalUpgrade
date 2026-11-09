@@ -46,6 +46,19 @@ float PesBoneDeltaEdge(uint vid)
   if (lv >= n) return 1.0;
   return g_pesTessSeam[lv] < 0.5 ? 0.0 : 1.0;
 }
+// (09/11 g, Agustin: "la edad tiene que importar como valor") edad del jugador de esta cara para las arrugas (pes_wrdepth.hlsli): la
+// DLL (expr.cpp DeltaUpload) la publica en t115 por personaje ([cabeza].w = 1 + edad, tambien sin paleta) y el VS la pasa al PS en
+// pR.w = 11 + edad / 100. 0 = no se sabe.
+float PesCharAge()
+{
+  uint head = g_pesExprMesh.x;
+  if (head > 31 || g_pesBoneD[0].x < 0.5) return 0.0;
+  float3 hw = mul(float4(g_pesBoneD[1].xyz, 1.0), g_vsBone.m_boneMatrices[head]);
+  int ci = PesBoneChar(hw);
+  if (ci < 0) return 0.0;
+  float w = g_pesBoneD[2 + (uint)ci * PES_BD_STRIDE].w;
+  return w > 1.5 ? clamp(w - 1.0, 0.0, 99.0) : 0.0;
+}
 void PesBoneDeltaApply(float4 p, uint4 I, float4 W, float3 n, float3 t, inout float3 pos, inout float3 prev, inout float3 nrm, inout float3 tng, uint vid)
 {
   uint head = g_pesExprMesh.x;

@@ -323,6 +323,23 @@ void CharTrackInstall() {
 
 bool CharTrackOk() { return s_okNode; }
 bool CharPlayerName(uint64_t key, char* out, size_t n) { if (!out || !n) return false; return PlayerName(key, out, n); }
+// (09/11, Agustin: "la edad tiene que importar como valor") edad del jugador (anios) de la base de datos del juego: PlayerRec_GetField
+// 0x1414cc040 campo 0x2d = registro[7] & 0x3f (u32 en +0x1c). Se lee directo del registro (sin llamar al juego) y se guarda por clave.
+// 0 = no se sabe (registro por defecto o fuera de 14..55).
+int CharPlayerAge(uint64_t key) {
+    static std::mutex mx; static std::unordered_map<uint64_t, int> cache;
+    { std::lock_guard<std::mutex> lk(mx); auto it = cache.find(key); if (it != cache.end()) return it->second; }
+    int age = 0;
+    if (void* rec = PlayerRec(key)) {
+        uint32_t id = 0, f7 = 0;
+        if (SafeCopy(&id, (char*)rec + 0x30, 4) && id == (uint32_t)(key >> 32) && SafeCopy(&f7, (char*)rec + 0x1c, 4)) {
+            const int a = (int)(f7 & 0x3f); if (a >= 14 && a <= 55) age = a;
+        }
+    }
+    std::lock_guard<std::mutex> lk(mx); if (cache.size() > 4096) cache.clear(); cache[key] = age;
+    static int nl = 0; if (nl < 40) { nl++; char nm[64]; PlayerName(key, nm, sizeof nm); Note("arrugas: edad de \"%s\" (id %u) = %d", nm, (unsigned)((key >> 32) & 0x800bffffu), age); }
+    return age;
+}
 unsigned CharTableGen() { return s_gen.load(); }
 bool CharGet(int slot, CharInfo& out) {
     if (slot < 0 || slot >= kCharSlots) return false;

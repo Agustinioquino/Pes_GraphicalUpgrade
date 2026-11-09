@@ -184,6 +184,7 @@ static bool LoadConfigLocked() {
             else if (kl == "dump_switcher") c.optDump = atoi(v.c_str()) != 0;
             else if (kl == "memoria_arreglo") c.memFix = atoi(v.c_str());
             else if (kl == "memoria_vigilar") c.memWatch = atoi(v.c_str()) != 0;
+            else if (kl == "sol_editor_log") c.solEditorLog = atoi(v.c_str()) != 0;
             else if (kl == "sol_vigilar") c.sunWatch = atoi(v.c_str()) != 0;
             else if (kl == "medidor") c.meterOn = atoi(v.c_str()) != 0;
             else if (kl == "panel_puerto") c.panelPort = std::clamp(atoi(v.c_str()), 0, 65535);

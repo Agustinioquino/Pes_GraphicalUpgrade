@@ -45,7 +45,7 @@ void SolLuzPresent() {
             el = std::max(75.0f * sD, 1.5f); az = 100.0f - 200.0f * std::clamp(tt * 2.0f, 0.0f, 1.0f);
             const float up = std::clamp(sD / 0.6f, 0.0f, 1.0f);
             kelvin = 2300.0f + (5600.0f - 2300.0f) * up;
-            lux = 2500.0f * (0.15f + 0.85f * std::min(sD / 0.35f, 1.0f));
+            lux = 1500.0f * (0.15f + 0.85f * std::min(sD / 0.35f, 1.0f));
         } else {           // noche: la luna
             el = std::max(45.0f * -sD, 1.5f); az = 100.0f - 200.0f * std::clamp(tt * 2.0f - 1.0f, 0.0f, 1.0f);
             kelvin = 4100.0f; rgb[0] = 0.996f; rgb[1] = 0.988f; rgb[2] = 0.843f;
@@ -53,7 +53,7 @@ void SolLuzPresent() {
         }
     } else {
         az = g_cfg.live[297][2]; el = std::clamp(g_cfg.live[297][3], 1.0f, 89.0f);
-        kelvin = 5200.0f; lux = 2500.0f;
+        kelvin = 5200.0f; lux = 1500.0f;
     }
     lux *= exp2f(ev);
     const float cur[6] = { az, el, kelvin, lux, rgb[2], 1 };
