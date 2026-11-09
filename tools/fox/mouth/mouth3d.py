@@ -748,7 +748,7 @@ def build(src_fmdl, texdir, log=print):
     # de adelante de abajo SUBEN enteros (rigidos, por el centro del diente) y la encia de la tira de abajo sube con ellos, asi el
     # alto de la corona y el margen de la encia quedan iguales. Pleno en los centrales, se apaga hacia el canino (que ya cruzaba).
     LIFT = float(os.environ.get('LO_LIFT', PROF.get('lift_lo', 0.0))) * MM
-    GUM_LIFT = float(os.environ.get('GUM_LIFT', '0.45'))
+    GUM_LIFT = float(os.environ.get('GUM_LIFT', '0.2'))   # (09/11 l) como Konami: dientes de abajo altos, poca encia a la vista
     if LIFT > 0:
         def lift_w(x):
             return np.exp(-(np.abs(x) / (9.0 * MM)) ** 2)   # suave a lo ancho: sin pico estirado en la encia del medio

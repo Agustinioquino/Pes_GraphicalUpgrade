@@ -482,7 +482,12 @@ def lo_gum_final(bsm, nrm, srm, rows, log=print):
     def fine(a):
         return a - np.stack([ndi.gaussian_filter(a[..., k], 1.6) for k in range(a.shape[-1])], -1)
     b2 = bsm.copy(); b2[..., :3] = np.clip(bx(bsm[..., :3]) + 0.5 * fine(bsm[..., :3]), 0, 1)
-    n2 = np.clip(bx(nrm) + 0.8 * fine(nrm), 0, 1)
+    n2 = np.clip(bx(nrm) + 0.4 * fine(nrm), 0, 1)   # (09/11 l) como Konami: encia lisa, punteado apenas
+    # (09/11 l) Agustin 'fijate como se plasma la encia en el original': en Konami la encia de abajo es una franja clara angosta
+    # pegada al diente que enseguida pasa a mucosa oscura (L .18 desde 1.5 altos); aca lo hondo quedaba claro (L .27) y en 3D
+    # se veia mucha encia rosada. Misma rampa que Konami
+    fL = np.interp(tt_, [0.0, 0.25, 0.5, 0.8, 1.2, 2.0, 3.0, 5.0], [0.9, 0.9, 0.8, 0.78, 0.8, 0.82, 0.66, 0.66]).astype(np.float32)
+    b2[..., :3] *= fL[..., None]
     bsm = bsm * (1 - m) + b2 * m; nrm = nrm * (1 - m) + n2 * m
     NS = srm.shape[0]
     ms = ndi.zoom(m[..., 0], NS / N, order=1)[..., None] if NS != N else m
