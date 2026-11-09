@@ -1387,7 +1387,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     // (27/10 c) sombra de la cabeza: el atlas propio (t30) a los 7 shaders del sol reemplazados
     if (ps && ps->repl) { int si = SunPassIndex(ps->hash); if (si >= 0 && si != 7) if (ID3D11ShaderResourceView* hs = HeadShadowSRV()) { Remember(c, d, true, true, 30); c->PSSetShaderResources(30, 1, &hs); } }
     // (04/11 boca) d0e9 / 7dbbc: mascara del interior de la boca en t43 (donde hay boca, la contraluz de antes)
-    if (ps && ps->repl && (ps->hash == 0xd0e9d81c09b3da66ULL || ps->hash == 0x7dbbc922c9ae74c5ULL)) if (ID3D11ShaderResourceView* mm = MouthMaskSRV()) { Remember(c, d, true, true, 43); c->PSSetShaderResources(43, 1, &mm); }
+    if (ps && ps->repl && (ps->hash == 0xd0e9d81c09b3da66ULL || ps->hash == 0x7dbbc922c9ae74c5ULL || ps->hash == 0x619b86cb5691cdceULL)) if (ID3D11ShaderResourceView* mm = MouthMaskSRV())   /* (09/11 hilo boca) + 619b: sombra del volumen de la boca */ { Remember(c, d, true, true, 43); c->PSSetShaderResources(43, 1, &mm); }
     // 20/10: desgaste de la cancha en vivo: la posicion de cada jugador sale del dibujo de su short / medias (b5 del VS)
     if (ps && ps->hash == 0x55297925e0c66085ULL) PitchWearNotePlayer(c);
     // (2/11) botines / pelota (aadffecf): anotar la traslacion para reconocer la pelota; en el dibujo de la pelota, b12 = manchas (fila 177)
