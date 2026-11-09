@@ -798,7 +798,7 @@ void main(
   // Pliegues de expresion: dentro del surco llega menos luz y la piel brilla menos
   if (wrOn && wrFold > 0) {
     float fold = saturate(wrFold * wrCrease);
-    r2.xyz *= (1.0 - 0.35 * fold);
+    r2.xyz *= (1.0 - 0.20 * fold);   // (09/11, Agustin: "las arrugas se ven oscuras a veces") 0.35 -> 0.20
     r0.z  *= (1.0 - 0.5 * fold);
     r0.w   = lerp(r0.w, max(r0.w, 0.6), 0.5 * fold);
   }
@@ -833,14 +833,14 @@ void main(
     float fW = smoothstep(0.03, 0.45, saturate((wrOn ? wrFoldW : 0.0) + shFoldW)) * srmK;
     if (fW > 0.001) {
       // (06/11, Agustin: "se ven un poco mejor pero no tanto como deberian") mas fuerte: 0.95/0.87/0.86 -> 0.91/0.79/0.77, brillo -32 %
-      r2.xyz *= lerp(float3(1.0, 1.0, 1.0), float3(0.91, 0.79, 0.77), fW);
+      r2.xyz *= lerp(float3(1.0, 1.0, 1.0), float3(0.94, 0.86, 0.85), fW);   // (09/11) mas claro: 0.91/0.79/0.77 -> 0.94/0.86/0.85
       r0.z   *= 1.0 - 0.32 * fW;
     }
     // (06/11, Agustin: "podes jugar con el sss tambien?") LUZ DENTRO DE LA PIEL por la forma de la arruga, en zonas anchas: en el
     // pliegue la piel esta apretada (mas gruesa, entra menos luz: translucidez -45 %) y en la cresta estirada es mas fina y deja pasar
     // mas (+35 %), asi a contraluz las crestas brillan rojizas y los surcos quedan oscuros. Por y365, nada en labios
     float fRW = smoothstep(0.03, 0.45, wrOn ? wrRidgeW : 0.0) * srmK;
-    if (fW + fRW > 0.001) r1.w = saturate(r1.w * (1.0 - 0.45 * saturate(fW)) * (1.0 + 0.35 * saturate(fRW)));
+    if (fW + fRW > 0.001) r1.w = saturate(r1.w * (1.0 - 0.30 * saturate(fW)) * (1.0 + 0.35 * saturate(fRW)));
   }
   // 2) Especular: la piel real refleja ~2.8% (F0 0.028). El valor del juego
   //    suele quedar alto -> efecto plastico. Se escala de forma controlada.
@@ -1027,7 +1027,7 @@ void main(
       float3 Lv = normalize(float3(dot(Lw, g_psScene.m_view._m00_m10_m20), dot(Lw, g_psScene.m_view._m01_m11_m21), dot(Lw, g_psScene.m_view._m02_m12_m22)));
       float wAo = 1.0 - 0.5 * wrDepth * zK;   // (08/11, Agustin: "se ven feas") oclusion 0.57..1: con 0.15 el surco entero quedaba negro
       float wVis = saturate(abs(dot(normalize(r1.xyz), Lv)) + 2.0 * wAo * wAo - 1.0);
-      o0.xyz *= lerp(1.0, wVis, 0.6);
+      o0.xyz *= lerp(1.0, max(wVis, 0.45), 0.40);   // (09/11, "se ven oscuras") con luz rasante el surco llegaba a negro (wVis 0, 60 %): ahora nunca baja de ~78 %
     } }
   // ---- empaquetado normal octaedrica + translucidez ----
   r0.x = r1.w * 63 + 0.5;
