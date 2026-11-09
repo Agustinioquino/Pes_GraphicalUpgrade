@@ -306,7 +306,8 @@ void PesOneLightMatch(float3 L, float3 col, float sh, float3 n, float3 V, float 
     float3 Tr = exp(-(1.35 - thin) * sigT) * thin;
     float thinGate = lerp(smoothstep(0.45, 0.85, thin), 1.0, saturate(P76.y));
     float exitK = back * (0.6 + 0.6 * fwd) * smoothstep(-0.05, 0.25, dot(L, -V)) * lerp(0.2, 1.0, silK);
-    tr = PesSsTransColor(Tr * exitK * thinGate * P5.x * 1.6 * (P76.x > 0.0 ? P76.x : 1.0), P34.z);
+    // (09/11 c, Agustin eligio "las tres": borde rojizo, poros y mas luz en orejas y nariz a contraluz) x1.6 -> x2.3
+    tr = PesSsTransColor(Tr * exitK * thinGate * P5.x * 2.3 * (P76.x > 0.0 ? P76.x : 1.0), P34.z);
   } else tr = PesSsTransColor(thin * smoothstep(0.45, 0.85, thin) * pow(saturate(dot(V, -Lt)), 3.0) * float3(1.0, 0.24, 0.10) * P5.x, P34.z);
   if (P64.x > 0.5 && P64.z > 0.0) {
     float dens = (P64.w > 0 ? P64.w : 30.0) * (1.25 - thin);
@@ -509,6 +510,7 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
     d2 = clamp(d2, 0.01, 1e6);
     float ca = cos(radians(ap * 0.5)), cone = smoothstep(ca, lerp(ca, 1.0, 0.35), dot(-L, Lw));
     lcol = sunC * cone * min(distL * distL / d2, 1.0);
+    if (nearSun) lcol = sunC;   // (09/11 b) un sol no cae con 1/d2 sobre la cara (eso lo hacia ver como un foco): la posicion solo da la direccion
   }
   bool skin = IsSkin(uv);
   float4 mat = inMat.SampleLevel(sPoint, uv, 0);
