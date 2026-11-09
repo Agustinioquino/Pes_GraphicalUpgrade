@@ -120,10 +120,23 @@ void PESHairAniso(inout float3 N, inout float3 alb, float3 T, float3 V, float ji
   float c2 = dot(T2, H);
   float s2 = sqrt(saturate(1.0 - c2 * c2));
   float lit = saturate(dot(N, L) * 0.5 + 0.5);
-  alb += alb * pow(s2, 80.0) * max(HK2.x, 0.0) * lit * fade;
+  // (04/11 piel) el segundo brillo (x51) ya no se pinta en el albedo: se veia en el pelo a la sombra. Ahora lo pone la pasada del sol
+  // (a748 / b8a2 / d514 / de64 / e9c1, bloque isHair) con la sombra real
+  // alb += alb * pow(s2, 80.0) * max(HK2.x, 0.0) * lit * fade;
 }
 // === FIN PELO ===
 
+// PES21 (04/11, Agustin: "el taa en pelo sigue estando raro") la trama 8x8 con que el juego recorta los bordes del pelo es FIJA
+// en la pantalla: el TAA no la puede promediar y el borde se ve como una reja de pixeles. Con el TAA del mod prendido (w332) la
+// trama se corre 1 de 8 posiciones por cuadro (cuenta de cuadros de la camara del motor, fila 160.x): el TAA la promedia en un
+// borde suave, como el pelo con alfa. Sin la camara del motor (x161) la cuenta no avanza y queda como antes.
+float2 PesHairDitherOfs()
+{
+  if (IniParams.Load(int2(332, 0)).w < 0.5) return float2(0, 0);
+  static const float2 k[8] = { float2(0,0), float2(4,4), float2(4,0), float2(0,4), float2(2,2), float2(6,6), float2(6,2), float2(2,6) };
+  uint f = (uint)max(IniParams.Load(int2(160, 0)).x, 0.0);
+  return k[f & 7u] * 0.125;
+}
 void main(
   float4 v0 : SV_Position0,
   float4 v1 : COLOR0,
@@ -146,19 +159,26 @@ void main(
   float4 fDest;
   float4 HP = IniParams.Load(int2(33,0));
   float hBias = HP.w > 0.5 ? HP.x : 0.0;
+  // (08/11) tope de resolucion compartido con la cara (z32, px; 0 = sin tope): una textura de 4096 no se lee por encima de 2048
+  float hCap = IniParams.Load(int2(32,0)).z, capHD = 0.0, capHN = 0.0;
+  { uint cW, cH, cL; g_tex_diffuse.GetDimensions(0, cW, cH, cL); capHD = hCap > 1.0 ? max(0.0, log2((float)max(cW, cH) / hCap)) : 0.0; g_tex_normal.GetDimensions(0, cW, cH, cL); capHN = hCap > 1.0 ? max(0.0, log2((float)max(cW, cH) / hCap)) : 0.0; }
+  float hBiasN = max(hBias, capHN - g_tex_normal.CalculateLevelOfDetail(g_sampler_normal_s, v2.xy));
   float4 pesStR = PESStrand(g_tex_diffuse, v2.xy, HP);   // fuera de un if: usa derivadas (fwidth)
   float4 pesSt = HP.w > 0.5 ? pesStR : float4(1, 0, 0, 1);
 
   r0.x = g_tex_diffuse.CalculateLevelOfDetail(g_samplerLinear_Clamp_s, v2.xy);
-  r0.x = clamp(r0.x + hBias, 0, 5);
+  r0.x = clamp(r0.x + hBias, capHD, max(5.0, capHD));
   r0.x = g_tex_diffuse.SampleLevel(g_samplerLinear_Clamp_s, v2.xy, r0.x).w;
+  // (04/11 l, Agustin: "el headshell tiene su alfa abajo que hace clipping en las cejas") con las cejas en hebras (x74) el borde casi
+  // transparente del headshell (alfa < 0.25) ya no tapa con su tramado las hebras de la ceja que se dibujaron antes
+  if (IniParams.Load(int2(74,0)).x > 0.5 && r0.x < 0.25) discard;
   r0.y = cmp(r0.x >= 0.980392158);
   r0.x = 0.615686297 * r0.x;
   r0.y = r0.y ? 1.000000 : 0;
   r0.x = max(r0.x, r0.y);
   r0.z = 0.699999988 * g_psSystem.m_param.w;
   r1.xy = float2(-0.5,-0.5) + v0.xy;
-  r1.xy = float2(0.125,0.125) * r1.xy;
+  r1.xy = float2(0.125,0.125) * r1.xy + PesHairDitherOfs();
   r1.yz = g_tex_mesh.Sample(g_samplerPoint_Wrap_s, r1.xy).xw;
   r1.x = r1.z * r0.z;
   r0.y = v1.w;
@@ -181,7 +201,7 @@ void main(
   r0.w = dot(v5.xyz, v5.xyz);
   r0.w = rsqrt(r0.w);
   r3.xyz = v5.xyz * r0.www;
-  r4.xyz = g_tex_normal.SampleBias(g_sampler_normal_s, v2.xy, hBias).xyw;
+  r4.xyz = g_tex_normal.SampleBias(g_sampler_normal_s, v2.xy, hBiasN).xyw;
   r4.x = r4.x * r4.z;
   r4.xy = r4.xy * float2(2,2) + float2(-1,-1);
   r3.xyz = r4.yyy * r3.xyz;

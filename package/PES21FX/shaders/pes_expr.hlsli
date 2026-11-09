@@ -23,6 +23,127 @@ cbuffer PESExprMesh : register(b12)
   // (01/11 h) ojos (VS 69758ab9): centro (xyz) y radio del globo izquierdo (+x, hueso 0 del eye.fmdl) y derecho (hueso 1); radio 0 = no hay
   float4 g_pesExprEye[2];
   uint4 g_pesExprMus;    // (01/11 i) musculos virtuales: x comisura izq (+x), y comisura der, z ceja interna izq, w ceja interna der (99 = no hay)
+  uint4 g_pesExprShape;  // (04/11) gestos esculpidos: x primer float4 de la malla en g_pesShapes, y vertices, z primer indice (vmin), w formas (0 = no hay)
+  uint4 g_pesExprSlots[2];   // (08/11) hueso kDef (exprbones.cpp) de cada lugar de la paleta, 4 por uint (byte 255 = ninguno): gestos en la paleta
+}
+#include "pes_bonedelta.hlsli"
+uint PesSlotBone(uint j) { uint v = g_pesExprSlots[j >> 4][(j >> 2) & 3]; return (v >> ((j & 3) * 8)) & 255u; }
+// (08/11, Agustin: "todo sigue vibrando") GESTOS EN LA PALETA: a lo que cada influencia del skinning ya calculo (M_j p) se le aplica la
+// diferencia que la DLL quiere para ese hueso (t115, por personaje), pesada como el skinning: es exactamente lo que daba escribir el hueso
+// en el esqueleto, pero el juego ya no puede reescribirlo a medias. Tambien en el cuadro anterior (vectores de movimiento) y en
+// normal / tangente. Sin tabla (DLL vieja o expr_paleta = 0) no hace nada.
+Buffer<float> g_pesTessSeam : register(t119);   // (abajo) peso de borde por vertice de la teselacion: 0 = borde de la pieza
+// (08/11 g, Agustin: "sin romper las uniones", "arregla los problemas de union") la cara HD viene en piezas (1379 / 704 / 353 vertices)
+// y cada pieza empareja la paleta por su cuenta: si un hueso entra en una pieza y no en la vecina, la diferencia abre una grieta en el
+// borde. En los vertices que la DLL marco como borde de la pieza (t119 = 0) la diferencia no se aplica: el borde queda donde lo deja el
+// juego en las dos piezas y el gesto entra desde el vertice siguiente. Sin buffer de borde (barba, boca, piezas finas) no cambia nada
+float PesBoneDeltaEdge(uint vid)
+{
+  uint n = 0; g_pesTessSeam.GetDimensions(n);
+  if (n == 0 || vid < g_pesExprShape.z) return 1.0;
+  uint lv = vid - g_pesExprShape.z;
+  if (lv >= g_pesExprShape.y) return 1.0;   // vertice nuevo de la malla HD: su borde lo decide PesTessSeam al teselar
+  if (lv >= n) return 1.0;
+  return g_pesTessSeam[lv] < 0.5 ? 0.0 : 1.0;
+}
+void PesBoneDeltaApply(float4 p, uint4 I, float4 W, float3 n, float3 t, inout float3 pos, inout float3 prev, inout float3 nrm, inout float3 tng, uint vid)
+{
+  uint head = g_pesExprMesh.x;
+  if (head > 31 || g_pesBoneD[0].x < 0.5) return;
+  float edge = PesBoneDeltaEdge(vid); if (edge <= 0.0) return;
+  if (g_pesExprSlots[0].x == 0xFFFFFFFFu && g_pesExprSlots[0].y == 0xFFFFFFFFu && g_pesExprSlots[1].x == 0xFFFFFFFFu && g_pesExprSlots[1].y == 0xFFFFFFFFu) return;   // sin emparejar todavia
+  float3 hw = mul(float4(g_pesBoneD[1].xyz, 1.0), g_vsBone.m_boneMatrices[head]);
+  int ci = PesBoneChar(hw);
+  if (ci < 0) return;
+  [unroll] for (int k = 0; k < 4; k++) {
+    uint j = I[k]; float w = W[k];
+    if (w <= 0.0 || j > 31) continue;
+    uint bone = PesSlotBone(j);
+    if (bone >= PES_BD_BONES) continue;
+    float4x3 M = g_vsBone.m_boneMatrices[j], Pm = g_vsPrevBone.m_boneMatrices[j];
+    float3 q = mul(p, M), qp = mul(p, Pm);
+    pos  += w * (PesBoneDeltaP(ci, bone, q, false) - q);
+    prev += w * (PesBoneDeltaP(ci, bone, qp, true) - qp);
+    float3 nj = mul(n, (float3x3)M), tj = mul(t, (float3x3)M);
+    nrm += w * (PesBoneDeltaV(ci, bone, nj, false) - nj);
+    tng += w * (PesBoneDeltaV(ci, bone, tj, false) - tj);
+  }
+}
+
+// (04/11, Agustin: gestos "esculpidos para Messi") GESTOS ESCULPIDOS POR VERTICE: la DLL carga PES21FX\formas\<huella>.bin por
+// malla (5 corrimientos por vertice, metros, espacio del modelo) y los enlaza en t118. Se suman a la posicion de reposo ANTES del
+// skinning, por el slider de cada gesto (355.y sonrisa, 356.x grito, 355.x enojo, 355.z asombro, 356.y puchero), solo con
+// "Perfiles por cara" (356.w) prendido. La boca por dentro no tiene formas (no se toca). Sin paquete (w = 0) no hace nada.
+Buffer<float4> g_pesShapes : register(t118);
+
+// (04/11) TESELACION DE LA CARA (pes_face_tess.hlsli, facetess.cpp): peso de borde por vertice que calcula la DLL (t119, solo en los
+// dibujos de piel de la cara que se teselan): 0 = vertice en el borde de la pieza o duplicado (costura), 1 = interior. El VS lo
+// saca en TEXCOORD12.w; sin buffer enlazado vale 0 (nada se mueve).
+// (08/11 p, Agustin: "una subdivision suave de la cara de messi") CARA CON MAS POLIGONOS (caramalla.cpp): la DLL dibuja la malla
+// subdividida en lugar de la del juego; los vertices viejos quedan con su mismo indice y los nuevos van despues (lv >= vertices de la
+// malla original). Cada vertice nuevo trae en t114 sus dos vertices de origen (los extremos de la arista que lo creo, locales):
+// los gestos esculpidos y el peso de borde de la teselacion los toman de ellos. Sin malla HD (t114 vacio) no cambia nada.
+Buffer<uint2> g_pesHdPar : register(t114);
+bool PesHdParent(uint lv, out uint2 pa)
+{
+  pa = uint2(0, 0);
+  uint n = 0; g_pesHdPar.GetDimensions(n);
+  uint k = lv - g_pesExprShape.y;
+  if (lv < g_pesExprShape.y || k >= n) return false;
+  pa = g_pesHdPar[k];
+  return pa.x < g_pesExprShape.y && pa.y < g_pesExprShape.y;
+}
+float PesTessSeam(uint vid)
+{
+  uint lv = vid - g_pesExprShape.z;
+  if (vid < g_pesExprShape.z) return 0;
+  if (lv >= g_pesExprShape.y) { uint2 pa; return PesHdParent(lv, pa) ? min(g_pesTessSeam[pa.x], g_pesTessSeam[pa.y]) : 0; }
+  return g_pesTessSeam[lv];
+}
+float3 PesShapeDelta1(uint lv)
+{
+  float4 G5 = IniParams.Load(int2(355, 0)), G6 = IniParams.Load(int2(356, 0));
+  if (G6.w < 0.5) return 0;
+  // (04/11 c, Agustin: messi6 "la sonrisa mayor ... como la sonrisa mas alta") Sonrisa 0..1 = la forma de siempre; de 1 a 1.5 pasa
+  // a la sonrisa grande (forma 5; un paquete viejo de 5 formas no la trae y queda la de siempre)
+  uint nS = g_pesExprShape.w;
+  float sG = nS >= 6 ? saturate((G5.y - 1.0) * 2.0) : 0.0;
+  float w[6] = { saturate(G5.y) * (1.0 - sG), saturate(G6.x), saturate(G5.x), saturate(G5.z), saturate(G6.y), sG };
+  uint b = g_pesExprShape.x + lv * nS;
+  float3 d = 0;
+  [unroll] for (uint k = 0; k < 6; k++) if (k < nS && w[k] > 0.001) d += g_pesShapes[b + k].xyz * w[k];
+  return d;
+}
+float3 PesShapeDelta(uint vid)
+{
+  if (g_pesExprShape.w == 0) return 0;
+  uint lv = vid - g_pesExprShape.z;
+  if (vid < g_pesExprShape.z) return 0;
+  if (lv >= g_pesExprShape.y) { uint2 pa; return PesHdParent(lv, pa) ? 0.5 * (PesShapeDelta1(pa.x) + PesShapeDelta1(pa.y)) : 0; }
+  return PesShapeDelta1(lv);
+}
+
+// (04/11 c, Agustin: "en la sonrisa deberias estirar los dientes horizontalmente un poco asi como bajar los dientes un poco"; con su
+// OK para tocar la boca SOLO con la sonrisa) en la boca de la cara esculpida (la DLL la marca: g_pesExprShape.x = 1 solo en la boca
+// que se dibuja junto a la piel de Messi, expr.cpp) los dientes y la encia se abren a lo ancho y bajan con el slider Sonrisa (355.y),
+// con "Perfiles por cara" (356.w). Solo dientes, encia y muelas, por la uv de la boca v20 (medida por el hilo de la boca: filas
+// v < 0.65 y u < 0.89, muelas u > 0.89 y v 0.62..0.74); la lengua, la garganta y las mejillas quedan. Sin sonrisa no cambia nada.
+// A 1.0: 6 % mas ancho y 0.7 mm abajo; a 1.5: 8 % y 1.0 mm
+float3 PesTeethSmile(float3 rest, float2 uv)
+{
+  // (04/11 j, Agustin: "el problema con la sonrisa es que se muevan los dientes, manten su posicion con messi") apagado: los
+  // dientes quedan donde los pone el juego tambien con la sonrisa (el resto de la funcion queda por si se vuelve a pedir)
+  return 0;
+  if (g_pesExprMesh.w != 1 || g_pesExprShape.x != 1) return 0;
+  float4 G5 = IniParams.Load(int2(355, 0)), G6 = IniParams.Load(int2(356, 0));
+  if (G6.w < 0.5) return 0;
+  float s = clamp(G5.y, 0.0, 1.5);
+  if (s <= 0.001) return 0;
+  float sx = s <= 1.0 ? 0.06 * s : 0.06 + 0.04 * (s - 1.0);
+  float rows = (1.0 - smoothstep(0.64, 0.66, uv.y)) * (1.0 - smoothstep(0.885, 0.895, uv.x));
+  float molar = smoothstep(0.885, 0.895, uv.x) * smoothstep(0.61, 0.63, uv.y) * (1.0 - smoothstep(0.73, 0.75, uv.y));
+  float front = max(rows, molar);
+  return float3(rest.x * sx, -0.0007 * s, 0.0) * front;
 }
 
 float PesExprZoneShare(float3 r, float4 Z)
@@ -269,15 +390,25 @@ float3 PesGazeEye(float3 rest, float3 center, float t, float seed)
 // reposo alrededor del centro del ojo (x +-0.028, y 1.6968, z 0.138; eje x): el de arriba baja, el de abajo sube un poco; los
 // pesos del rig hacen el fundido (como el parpadeo del juego). Si el juego ya esta cerrando ese parpado, el del mod se aparta.
 // 342.w = cierre (0 = sin parpadeo del mod, 1 = cierra entero).
+// (08/11) parpadeo irregular, MISMA cuenta que BlinkCurve de exprbones.cpp: ranuras de 4 s, ~30 % sin parpadeo, ~15 % doble (0.38 s),
+// cierre 85..100 %
+float PesBlinkShape(float x)
+{
+  if (x < 0.0 || x > 0.30) return 0.0;
+  return x < 0.08 ? smoothstep(0.0, 0.08, x) : (x < 0.12 ? 1.0 : 1.0 - smoothstep(0.12, 0.30, x));
+}
 float PesBlinkCurve(float t, float seed)
 {
-  const float per = 5.5;   // (01/11 d) antes 4: un parpadeo cada 5.5 s en promedio
+  const float per = 4.0;
   float tt = t + seed * 37.3;
   float n = floor(tt / per);
   float h = frac(sin((n + seed * 13.1) * 12.9898) * 43758.5453);
-  float x = tt - (n * per + h * (per - 0.4));
-  if (x < 0.0 || x > 0.30) return 0.0;
-  return x < 0.08 ? smoothstep(0.0, 0.08, x) : (x < 0.12 ? 1.0 : 1.0 - smoothstep(0.12, 0.30, x));
+  float h2 = frac(sin((n + seed * 7.7) * 78.233) * 43758.5453);
+  if (h2 < 0.30) return 0.0;
+  float x = tt - (n * per + h * (per - 0.9));
+  float b = PesBlinkShape(x);
+  if (h2 > 0.85) b = max(b, PesBlinkShape(x - 0.38));
+  return b * (0.85 + 0.15 * frac(h * 7.31));
 }
 float3 PesRotX(float3 q, float c, float s) { return float3(q.x, q.y * c - q.z * s, q.y * s + q.z * c); }
 
@@ -291,8 +422,16 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
   // del parpadeo; tambien con el parpadeo apagado
   float4 G5 = IniParams.Load(int2(355, 0)), G6 = IniParams.Load(int2(356, 0));
   float gAng = clamp(G5.x, 0.0, 1.5), gSmi = clamp(G5.y, 0.0, 1.5), gSur = clamp(G5.z, 0.0, 1.5), gGri = clamp(G6.x, 0.0, 1.5), gPuc = clamp(G6.y, 0.0, 1.5);
-  float geU = 0.15 * gSmi + 0.14 * gAng - 0.20 * gSur + 0.10 * gGri + 0.05 * gPuc;   // > 0 baja el de arriba
-  float geL = -(0.16 * gSmi + 0.06 * gAng + 0.10 * gGri) + 0.04 * gSur;            // < 0 sube el de abajo
+  // (04/11 c, Agustin: "y cierra mas los ojos con un slider alto de sonrisa") pasando 1.0 de Sonrisa el ojo se achina mucho mas
+  // (risa: a 1.5 el de arriba baja ~+0.13 rad y el de abajo sube ~+0.11 rad mas que antes)
+  float gBig = max(gSmi - 1.0, 0.0);
+  // (06/11, Agustin: "la sonrisa de messi cierra demasiado los ojos") vuelve a como estaba (con los parpados por huesos manda exprbones.cpp)
+  // (07/11, Agustin: "baja el achinado") sonrisa y enojo ~40 % menos
+  float geU = 0.09 * gSmi + 0.14 * gBig + 0.08 * gAng - 0.20 * gSur + 0.10 * gGri + 0.05 * gPuc;   // > 0 baja el de arriba
+  float geL = -(0.09 * gSmi + 0.12 * gBig + 0.03 * gAng + 0.10 * gGri) + 0.04 * gSur;            // < 0 sube el de abajo
+  // (08/11, Agustin: "un slider para cerrar y abrir los ojos") x391: + cierra (1 = cerrados), - abre de mas
+  { float ec = clamp(IniParams.Load(int2(391, 0)).x, -1.0, 1.0);
+    geU += ec > 0.0 ? 0.62 * ec : 0.22 * ec; geL += ec > 0.0 ? -0.07 * ec : -0.10 * ec; }
   bool ges = abs(geU) > 0.001 || abs(geL) > 0.001;
   if (amt <= 0.0 && !ges) return;
   // (02/11) con 350.y = 2 la DLL parpadea girando los huesos de los parpados (exprbones.cpp): todas las mallas juntas
@@ -304,17 +443,24 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
   uint head = g_pesExprMesh.x;
   // (01/11 l, Agustin: "el parpadeo en una animacion facial no deberia ocurrir") si el juego esta animando la cara (la comisura
   // o la ceja interna se movieron mas de 1.5 mm respecto de la cabeza) el parpadeo del mod se apaga (la animacion trae el suyo)
-  float anim = 0.0;
+  float anim = 0.0, animP = 0.0, amtP = amt;
   if (head <= 31) {
     float4 Pc = float4(0.0236, 1.6297, 0.1615, 1.0), Pb = float4(0.0157, 1.7129, 0.1718, 1.0);
     uint cj = g_pesExprMus.x, bj = g_pesExprMus.z;
     if (cj <= 31) anim = max(anim, length(mul(Pc, g_vsBone.m_boneMatrices[cj]) - mul(Pc, g_vsBone.m_boneMatrices[head])));
     if (bj <= 31) anim = max(anim, length(mul(Pb, g_vsBone.m_boneMatrices[bj]) - mul(Pb, g_vsBone.m_boneMatrices[head])));
+    // (04/11 i, Agustin: "los parpados todavia vibran en distintas animaciones") lo mismo con los huesos del cuadro anterior: el
+    // vector de movimiento tiene que llevar el cambio de este cuadro, si no el TAA lo ve como temblor
+    if (cj <= 31) animP = max(animP, length(mul(Pc, g_vsPrevBone.m_boneMatrices[cj]) - mul(Pc, g_vsPrevBone.m_boneMatrices[head])));
+    if (bj <= 31) animP = max(animP, length(mul(Pb, g_vsPrevBone.m_boneMatrices[bj]) - mul(Pb, g_vsPrevBone.m_boneMatrices[head])));
     // (04/11) los gestos y el retoque de la neutra del mod tambien mueven la comisura y la ceja: no son una animacion del juego,
     // asi que el umbral sube con lo que mueve el mod (si no, el parpadeo se apagaba con cualquier gesto)
     float modMv = 0.0045 * saturate(gAng + gSmi + gSur + gGri + gPuc) + (G6.w > 0.5 ? 0.0010 * saturate(G6.z) : 0.0);
-    amt *= 1.0 - smoothstep(0.0008 + modMv, 0.0015 + modMv, anim);
-    if (amt <= 0.0 && !ges) return;
+    // (04/11 i) banda mas ancha (0.8..3 mm): en las animaciones del juego la comisura anda cerca del umbral y el parpadeo del
+    // mod se prendia y apagaba de un cuadro al otro
+    amt  *= 1.0 - smoothstep(0.0008 + modMv, 0.0030 + modMv, anim);
+    amtP *= 1.0 - smoothstep(0.0008 + modMv, 0.0030 + modMv, animP);
+    if (amt <= 0.0 && amtP <= 0.0 && !ges) return;
   }
   // semilla por jugador (la misma cuenta que el tono de piel al final del VS)
   bool sk = g_vsObject.m_useWeightCount.x != 0;
@@ -324,7 +470,7 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
   float seed = se >= 0 ? (float)se * 0.6180339 : 0.37;
   float t = IniParams.Load(int2(157, 0)).x;
   float b = amt > 0.0 ? PesBlinkCurve(t, seed) * saturate(amt) : 0.0;
-  float bp = amt > 0.0 ? PesBlinkCurve(t - 1.0 / 60.0, seed) * saturate(amt) : 0.0;   // cuadro anterior (vectores de movimiento)
+  float bp = amtP > 0.0 ? PesBlinkCurve(t - 1.0 / 60.0, seed) * saturate(amtP) : 0.0;   // cuadro anterior (vectores de movimiento)
   // (01/11 h) el parpado acompana la mirada vertical (347.w): abajo baja 0.65 del angulo, arriba sube 0.35 (solo el de arriba)
   // (02/11, Agustin: "los ojos vivos es lo que rompe, no mueve el esqueleto real") el parpado ya NO sigue la mirada por shader:
   // solo se movia en las mallas donde la DLL encontro el parpado y se separaba de las pestanas / la otra malla. Vuelve cuando
@@ -346,9 +492,16 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
     bool up = (j == L.x || j == L.y), lo = (j == L.z || j == L.w);
     if (!up && !lo) continue;
     float4x3 M = g_vsBone.m_boneMatrices[j];
-    float g = 0.0;   // el juego ya cierra este parpado: punto de la orilla con el hueso contra con la cabeza
-    if (head <= 31) { float4 Q = float4(C + float3(0.0, up ? 0.008 : -0.006, 0.008), 1.0); g = saturate(length(mul(Q, M) - mul(Q, g_vsBone.m_boneMatrices[head])) / 0.006); }
-    float A = (up ? 0.64 : -0.12) * (1.0 - g);   // (02/11 k, Agustin: "no cierran del todo") 0.50 -> 0.64: el "se cierran mucho" de antes venia del parpado de abajo tomado como el de arriba (fd86e36)   // (01/11 d, Agustin: "los ojos se cierran mucho") antes 0.68 / -0.14   // orilla de arriba ~ +27 grados abierta -> ~ -12; la de abajo -22 -> ~ -14
+    float g = 0.0, gp = 0.0;   // el juego ya cierra este parpado: punto de la orilla con el hueso contra con la cabeza
+    // (04/11 i) gp: lo mismo en el cuadro anterior. Antes el cuadro anterior usaba g de este cuadro: cuando la animacion del juego
+    // movia el parpado, lo que el mod le suma cambiaba sin vector de movimiento y el TAA lo hacia temblar
+    if (head <= 31) { float4 Q = float4(C + float3(0.0, up ? 0.008 : -0.006, 0.008), 1.0);
+      // (08/11, Agustin: "mejoralo ... para evitar parpadeos o vibraciones raras") antes g crecia derecho desde 0: la correccion chica de
+      // la mirada del juego (0.5..2 mm, g 0.1..0.4, cambia cada cuadro) achicaba el parpadeo y el seguimiento de la mirada del mod en
+      // ese vaiven = temblor. Ahora hasta 1.5 mm no cuenta y entra suave hasta 5.4 mm (el juego cerrando de verdad)
+      g  = smoothstep(0.25, 0.90, length(mul(Q, M) - mul(Q, g_vsBone.m_boneMatrices[head])) / 0.006);
+      gp = smoothstep(0.25, 0.90, length(mul(Q, g_vsPrevBone.m_boneMatrices[j]) - mul(Q, g_vsPrevBone.m_boneMatrices[head])) / 0.006); }
+    float A = (up ? 0.64 : -0.12) * (1.0 - g), Ap = (up ? 0.64 : -0.12) * (1.0 - gp);   // (02/11 k, Agustin: "no cierran del todo") 0.50 -> 0.64: el "se cierran mucho" de antes venia del parpado de abajo tomado como el de arriba (fd86e36)   // (01/11 d, Agustin: "los ojos se cierran mucho") antes 0.68 / -0.14   // orilla de arriba ~ +27 grados abierta -> ~ -12; la de abajo -22 -> ~ -14
     // angulo total del parpado: parpadeo + seguimiento de la mirada (el de arriba: -gy * 0.65 si mira abajo, -gy * 0.35 arriba;
     // el de abajo sube un poco al mirar abajo). El sentido: A > 0 cierra el de arriba (baja), A < 0 el de abajo (sube).
     // (02/11, video de Agustin: ranuras azules bajo el ojo al mover la mirada) el de abajo ya no acompana la mirada: solo se
@@ -357,9 +510,15 @@ void PesBlinkApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
     // PesGazeRot (globo) y PesRotX (parpado) un angulo positivo lleva el frente hacia ABAJO, o sea gy > 0 = mira abajo; el parpado
     // giraba -gy: subia al mirar abajo (blanco del ojo arriba del iris) y bajaba al mirar arriba (tapaba el iris). Ahora acompana:
     // el de arriba 0.80 al mirar abajo y 0.55 al mirar arriba; el de abajo baja 0.25 al mirar abajo y sube 0.10 al mirar arriba
-    float fu = up ? (gy > 0.0 ? 0.80 : 0.55) : (gy > 0.0 ? 0.25 : 0.10), fup = up ? (gyp > 0.0 ? 0.80 : 0.55) : (gyp > 0.0 ? 0.25 : 0.10);
-    float ge = (up ? geU : geL) * (1.0 - g);   // (04/11) forma del ojo con el gesto
-    float a1 = A * b + gy * fu * (1.0 - g) + ge, a0 = A * bp + gyp * fup * (1.0 - g) + ge;
+    // (04/11, Agustin con los ojos en circulos: "los ojos no mueven los parpados de abajo") el de abajo acompana mas: 0.25 -> 0.45 al mirar
+    // abajo y 0.10 -> 0.22 al mirar arriba (en una cara real el de abajo baja casi la mitad de lo que baja el ojo)
+    float fu = up ? (gy > 0.0 ? 0.80 : 0.55) : (gy > 0.0 ? 0.45 : 0.22), fup = up ? (gyp > 0.0 ? 0.80 : 0.55) : (gyp > 0.0 ? 0.45 : 0.22);
+    // (04/11 d, video de Agustin: los parpados vibran "solo con la sonrisa") la forma del ojo del gesto se apagaba con (1 - g): g es
+    // lo que el juego mueve el parpado ahora, y el juego lo corrige con la mirada un poco en cada cuadro (g 0.1..0.4): con la sonrisa
+    // alta (~0.26 rad) ese vaiven pasaba entero al parpado. Ahora el gesto solo se apaga cuando el juego de verdad cierra el ojo
+    // (g > 0.55: parpadeo o animacion), el temblor chico de la mirada ya no lo mueve
+    float ge = (up ? geU : geL) * (1.0 - smoothstep(0.55, 1.0, g)), gep = (up ? geU : geL) * (1.0 - smoothstep(0.55, 1.0, gp));
+    float a1 = A * b + gy * fu * (1.0 - g) + ge, a0 = Ap * bp + gyp * fup * (1.0 - gp) + gep;
     float c1 = cos(a1), s1 = sin(a1), c0 = cos(a0), s0 = sin(a0);
     float3 d1 = PesRotX(q, c1, s1) - q, d0 = PesRotX(q, c0, s0) - q;
     pos  += w * mul(d1, (float3x3)M);
@@ -474,6 +633,32 @@ void PesMuscleApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
   if (Mu.x <= 0.0 && Mu.y <= 0.0 && Mu.z <= 0.0) return;
   uint hh = g_pesExprMesh.x;
   if (hh > 31) return;
+  // (09/11, Agustin: "los cachetes no se inflan de manera natural"; "inflar los cachetes enteros, mas exagerado, agrandando las
+  // mejillas") CACHETE INFLADO con volumen: los huesos (Inflar los cachetes x362, soplido al recuperar el aire) corren la mejilla
+  // hacia afuera, pero un hueso no hace un bulto redondo. Aca se mide cuanto salio ESTE vertice hacia afuera respecto de la cabeza
+  // rigida (skinning ya hecho: huesos del juego + mod) y se le suma un bulto redondo de hasta 5 mm que cubre el cachete entero (del
+  // pomulo a la mandibula, de la comisura a la oreja; nada a menos de 2.2 cm del medio: labios), con la normal inclinada para que la
+  // luz marque la curva. Solo la piel de la cara (VS faab87ee / 455eb97b): la boca no se toca
+  {
+    float sxp = rest.x >= 0.0 ? 1.0 : -1.0, xp = abs(rest.x);
+    float ex = (xp - 0.046) / 0.022, ey = (rest.y - 1.628) / 0.024, ez = (rest.z - 0.120) / 0.045;
+    float g = exp(-(ex * ex + ey * ey + ez * ez)) * smoothstep(0.022, 0.030, xp);
+    if (g > 0.01) {
+      float3x3 Mh = (float3x3)g_vsBone.m_boneMatrices[hh], Mp = (float3x3)g_vsPrevBone.m_boneMatrices[hh];
+      // (09/11 b, captura de Agustin: recuadro rojizo en el cachete en REPOSO) se media cuanto salio el vertice respecto de la cabeza
+      // rigida, pero la forma de cada cara del editor del juego tambien vive en los huesos: en Messi la mejilla ya esta corrida en reposo
+      // y el bulto (con la normal inclinada) quedaba siempre puesto. Ahora lo manda solo el slider Inflar los cachetes (x362, positivo)
+      float a = saturate(IniParams.Load(int2(362, 0)).x), aP = a;
+      float pf = 0.0050 * a * g, pfP = 0.0050 * aP * g;
+      if (pf > 1e-6 || pfP > 1e-6) {
+        float2 grp = pf * float2(-2.0 * ex / 0.022, -2.0 * ey / 0.024);
+        float3 np = normalize(float3(sxp * 0.85, -0.05, 0.52));
+        pos  += mul(np * pf, Mh);
+        prev += mul(np * pfP, Mp);
+        nrm  += mul(-float3(sxp * grp.x, grp.y, 0.0) * 0.6, Mh);
+      }
+    }
+  }
   float face = smoothstep(0.115, 0.145, rest.z);
   if (face <= 0.0) return;
   int sd = rest.x >= 0.0 ? 0 : 1;

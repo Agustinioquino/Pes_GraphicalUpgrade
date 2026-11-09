@@ -76,6 +76,7 @@ void main(
   float4 v6 : TEXCOORD1,
   float4 v7 : TEXCOORD2,
   float2 v8 : TEXCOORD3,
+  uint pesVid : SV_VertexID,   // (04/11) gestos esculpidos por vertice (pes_expr.hlsli PesShapeDelta)
   out float4 o0 : SV_Position0,
   out float4 o1 : COLOR0,
   out float2 o2 : TEXCOORD0,
@@ -86,7 +87,8 @@ void main(
   out float4 o6 : TEXCOORD7,
   out float4 o7 : TEXCOORD8,
   out float4 pR : TEXCOORD10,   // (27/10 j) posicion de reposo (x, y, z), w = 11
-  out float4 pD : TEXCOORD11)   // (01/11 j) gesto respecto de la cabeza rigida, en el marco de la cabeza (xyz), w = 12 (arrugas por compresion en el PS)
+  out float4 pD : TEXCOORD11,   // (01/11 j) gesto respecto de la cabeza rigida, en el marco de la cabeza (xyz), w = 12 (arrugas por compresion en el PS)
+  out float4 pV : TEXCOORD12)   // (04/11) teselacion de la cara (pes_face_tess.hlsli): xyz posicion en la vista, w peso de borde (0 = costura)
 {
   float4 r0,r1,r2,r3,r4,r5,r6;
   uint4 bitmask, uiDest;
@@ -94,6 +96,8 @@ void main(
 
   float3 v0r = v0.xyz;   // (27/10 d) reposo (los poros y el collar del PS lo siguen usando)
   v0.xyz += PesCollarSink(v0r, v1.xyz);   // (27/10 d) base del cuello hundida bajo el torso (y323)
+  v0.xyz += PesShapeDelta(pesVid);   // (04/11) gestos esculpidos (formas\<huella>.bin), antes del skinning: los huesos los llevan
+  v0.xyz += PesTeethSmile(v0r, v5.xy);   // (04/11 c) dientes con la sonrisa en la boca de la cara esculpida (pes_expr.hlsli)
   // (02/11, Agustin: "sacar la lengua no funciona, antes funcionaba") el hueso de la lengua = el de MAS PESO del vertice, no el
   // primero (si la boca nueva guarda la cabeza primero con peso chico, la lengua se tomaba como cabeza y no se movia)
   uint tgJ = v3.x; float tgW = v4.x;
@@ -142,6 +146,7 @@ void main(
     r2.x = dot(v0.xyzw, r2.xyzw);
     r2.y = dot(v0.xyzw, r3.xyzw);
     r2.z = dot(v0.xyzw, r0.xyzw);
+    PesBoneDeltaApply(v0, v3, v4, v1.xyz, v2.xyz, r4.xyz, r2.xyz, r5.xyz, r1.xyz, pesVid);   // (08/11) gestos por huesos en la paleta (t115, sin escribir el esqueleto)
     // (31/10) expresiones faciales mas marcadas (pes_expr.hlsli, filas 340 / 341; cabeza de la paleta por malla: expr.cpp, b12)
     PesExprApply(v0, v0r, v3, v4, v1.xyz, v2.xyz, r4.xyz, r2.xyz, r5.xyz, r1.xyz);
     float3 pesPreBlink = r4.xyz;
@@ -182,6 +187,7 @@ void main(
   o7.z = dot(r4.xyzw, g_vsScene.m_shadowProjection2._m00_m10_m20_m30);
   o7.w = dot(r4.xyzw, g_vsScene.m_shadowProjection2._m01_m11_m21_m31);
   p2.y = dot(r4.xyzw, g_vsScene.m_shadowProjection2._m03_m13_m23_m33);
+  pV = float4(r0.xyz, PesTessSeam(pesVid));   // (04/11) teselacion: posicion en la vista (antes de normalizar) + peso de borde (t119)
   r0.w = dot(r0.xyz, r0.xyz);
   r0.w = rsqrt(r0.w);
   r0.xyz = r0.xyz * r0.www;

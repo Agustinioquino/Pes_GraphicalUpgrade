@@ -56,7 +56,7 @@ jobs:
           "" | Set-Content shadercheck.txt
           Get-ChildItem package/PES21FX/shaders/*_replace.txt, package/PES21FX/shaders/*.hlsl, package/cloth-mod/*.hlsl, tools/asmcheck/*.hlsl | ForEach-Object {
             $n++
-            $t = if ($_.Name -match '-ps_|_ps\.hlsl') { 'ps_5_0' } elseif ($_.Name -match '-vs_|_vs\.hlsl') { 'vs_5_0' } elseif ($_.Name -match '_gs\.hlsl') { 'gs_5_0' } else { 'cs_5_0' }
+            $t = if ($_.Name -match '-ps_|_ps\.hlsl') { 'ps_5_0' } elseif ($_.Name -match '-vs_|_vs\.hlsl') { 'vs_5_0' } elseif ($_.Name -match '_gs\.hlsl') { 'gs_5_0' } elseif ($_.Name -match '_hs\.hlsl') { 'hs_5_0' } elseif ($_.Name -match '_ds\.hlsl') { 'ds_5_0' } else { 'cs_5_0' }
             New-Item -ItemType Directory -Force -Path shaderasm | Out-Null
             $r = & $fxc.FullName /nologo /T $t /E main /I package/PES21FX/shaders /Fo NUL /Fc ("shaderasm/" + $_.BaseName + ".asm") $_.FullName 2>&1 | Out-String
             if ($LASTEXITCODE -ne 0) { $bad++; Add-Content shadercheck.txt ("==== " + $_.Name + "`n" + $r) }
@@ -82,6 +82,23 @@ jobs:
           git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" $dest
           exit 1
 
+      # (08/11) PesExplorerNEM.exe: la app de escritorio del entorno visual (tools/visor) empaquetada con PyInstaller
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Armar el visor (exe)
+        id: visor
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          python -m pip install --quiet pyinstaller numpy pillow pywebview
+          python -m PyInstaller --noconfirm --onefile --windowed --name PesExplorerNEM --icon ../tools/visor/nem.ico --distpath distvisor --workpath buildvisor --specpath buildvisor `
+            --paths tools --paths tools/fox --add-data "../tools/visor/static;static" `
+            --hidden-import cpk_extract --hidden-import ftex --hidden-import fpk_edit --hidden-import foxhash --hidden-import gani_cara --hidden-import fmdl `
+            --collect-all webview tools/visor/visor.py
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Get-Item distvisor/PesExplorerNEM.exe | Select-Object Name, Length
+
       - name: Armar el paquete
         shell: pwsh
         run: |
@@ -89,9 +106,11 @@ jobs:
           New-Item -ItemType Directory -Force -Path $out | Out-Null
           Copy-Item -Recurse package/PES21FX/* $out
           Copy-Item build/Release/d3d11.dll dist/
+          if (Test-Path build/Release/d3d11.map) { Copy-Item build/Release/d3d11.map dist/ }   # (07/11) para el medidor de VRAM por archivo
           Copy-Item package/LEEME.txt dist/
           Copy-Item -Recurse package/sider dist/sider
           if (Test-Path shadercheck.txt) { Copy-Item shadercheck.txt dist/ }
+          if (Test-Path distvisor/PesExplorerNEM.exe) { New-Item -ItemType Directory -Force -Path dist/visor | Out-Null; Copy-Item distvisor/PesExplorerNEM.exe dist/visor/; Copy-Item tools/visor/LEEME.txt dist/visor/ }   # (08/11) app del entorno visual
           if (Test-Path shaderasm) { Copy-Item -Recurse shaderasm dist/shaderasm }   # desensamblado de cada reemplazo (firmas y codigo, para comparar con el original)
 
       - uses: actions/upload-artifact@v4

@@ -117,7 +117,8 @@ static bool LoadConfigLocked() {
             }
             int idx, comp;
             if (ParseParamName(k, idx, comp)) {
-                c.base[idx][comp] = (float)atof(v.c_str());
+                c.base[idx][comp] = (idx == 344 && comp == 0) ? 0.0f : (float)atof(v.c_str());   // (08/11) la camara libre arranca siempre apagada
+                if (const DebugParam* dp = FindDebugParam(idx, comp)) if (DebugIsOn(*dp, c.base[idx][comp])) c.base[idx][comp] = dp->safe;   // (08/11) y el debug tambien
                 c.info[idx][comp].defined = true;
                 c.info[idx][comp].comment = comment;
             }
@@ -139,8 +140,17 @@ static bool LoadConfigLocked() {
             else if (kl == "tutorials") c.tutorials = atoi(v.c_str()) != 0;
             else if (kl == "bloquear_teclado") c.blockKeys = std::clamp(atoi(v.c_str()), 0, 2);
             else if (kl == "favoritos") c.favorites = v;
+            else if (kl == "menu_seccion") c.menuSection = v;
             else if (kl == "ui_scale") c.uiScale = std::clamp((float)atof(v.c_str()), 0.7f, 2.0f);
             else if (kl == "compacto") c.compact = atoi(v.c_str()) != 0;
+            else if (kl == "menu_ayuda") c.menuHelp = std::clamp(atoi(v.c_str()), 0, 2);          // (08/11) explicacion de cada opcion: 0 con el mouse, 1 breve, 2 completa
+            else if (kl == "menu_avanzado") c.menuAdvanced = atoi(v.c_str()) != 0;                // (08/11) todas las opciones de las tarjetas largas a la vista
+            else if (kl == "menu_columnas") c.menuCols = atoi(v.c_str()) != 0;                    // (08/11) dos columnas de tarjetas en ventanas anchas
+            else if (kl == "menu_tamano") c.menuSize = std::clamp(atoi(v.c_str()), 0, 2);          // (08/11) 0 ventana, 1 grande, 2 panel a la derecha
+            else if (kl == "menu_opacidad") c.menuAlpha = std::clamp((float)atof(v.c_str()), 0.5f, 1.0f);
+            else if (kl == "menu_vidrio") c.menuGlass = atoi(v.c_str()) != 0;                     // (08/11) fondo de vidrio (juego desenfocado)
+            else if (kl == "menu_autoguardar") c.menuAutoSave = std::clamp(atoi(v.c_str()), 0, 2);    // (08/11) guardado automatico de los cambios del menu
+            else if (kl == "menu_letra") c.menuFont = atoi(v.c_str()) != 0;                       // (08/11) letra Saira (textures\pes_ui.ttf)
             else if (kl == "language" || kl == "idioma") { const std::string lv = Lower(v); c.lang = (lv == "en" || lv == "english" || v == "1") ? 1 : (lv == "pt" || lv == "portugues" || lv == "portuguese" || v == "2") ? 2 : 0; }
             else if (kl == "auto_captura") c.autoCap = atoi(v.c_str()) != 0;
             else if (kl == "auto_captura_seg") c.autoCapSec = std::clamp((float)atof(v.c_str()), 3.0f, 600.0f);
@@ -159,10 +169,24 @@ static bool LoadConfigLocked() {
             else if (kl == "context_hooks") c.optCtx = atoi(v.c_str()) != 0;
             else if (kl == "export_hooks") c.optExports = atoi(v.c_str()) != 0;
             else if (kl == "orphan_fix") c.optOrphan = atoi(v.c_str()) != 0;
+            else if (kl == "crash_dump") c.optCrashDump = atoi(v.c_str());
+            else if (kl == "expr_paleta") c.optExprPalette = atoi(v.c_str()) != 0;
+            else if (kl == "expr_paleta_blindaje") c.optExprBlindaje = atoi(v.c_str()) != 0;
+            else if (kl == "expr_paleta_error") c.optExprPaletteErr = (float)atof(v.c_str());
+            else if (kl == "congelado_seg") c.optHangSec = atoi(v.c_str());
+            else if (kl == "vigia_estados") c.relWatch = atoi(v.c_str()) != 0;
+            else if (kl == "cobertura") c.coverOn = atoi(v.c_str()) != 0;
+            else if (kl == "rastro") c.rastroOn = atoi(v.c_str()) != 0;
+            else if (kl == "rastro_max_mb") c.rastroMaxMb = std::clamp(atoi(v.c_str()), 10, 100000);
+            else if (kl == "rastro_fotos") c.rastroFps = std::clamp(atoi(v.c_str()), 1, 54);
+            else if (kl == "rastro_faltas") c.rastroFalta = atoi(v.c_str()) != 0;
+            else if (kl == "cobertura_demora") c.coverDelay = std::clamp(atoi(v.c_str()), 5, 600);
             else if (kl == "dump_switcher") c.optDump = atoi(v.c_str()) != 0;
             else if (kl == "memoria_arreglo") c.memFix = atoi(v.c_str());
             else if (kl == "memoria_vigilar") c.memWatch = atoi(v.c_str()) != 0;
             else if (kl == "sol_vigilar") c.sunWatch = atoi(v.c_str()) != 0;
+            else if (kl == "medidor") c.meterOn = atoi(v.c_str()) != 0;
+            else if (kl == "panel_puerto") c.panelPort = std::clamp(atoi(v.c_str()), 0, 65535);
             else if (kl == "luz_rastrear") c.lightTrace = atoi(v.c_str()) != 0;
             continue;
         }
@@ -301,7 +325,8 @@ static bool LoadConfigLocked() {
                 r->hasParamOverride = true;
             }
             else if (k == "event" && Lower(v) == "turf") a.kind = RuleAction::EventTurf;
-            else if (k == "expr") { a.kind = RuleAction::Expr; ss >> a.slot; }   // (31/10) expresiones: cbuffer de la malla de cara en el VS (expr.cpp)
+            else if (k == "expr") { a.kind = RuleAction::Expr; ss >> a.slot; }
+            else if (k == "beard") { a.kind = RuleAction::Beard; ss >> a.slot; }   // (04/11 c) barba por los huesos de la cara (expr.cpp)   // (31/10) expresiones: cbuffer de la malla de cara en el VS (expr.cpp)
             else if (k == "facegen") { a.kind = RuleAction::FaceGen; ss >> a.slot >> a.idx; if (a.idx <= 0) a.idx = a.slot + 1; }
             else continue;
             r->actions.push_back(a);
@@ -512,7 +537,42 @@ void MatchWind(const MatchInfo& m, unsigned long long seed) {
         m.season == 1 ? "invierno" : m.season == 0 ? "verano" : "estacion ?", k, ang * 57.2958f, c.clothVals["sim.wind_x"], c.clothVals["sim.wind_z"], c.clothVals["sim.wind_y"], c.clothVals["sim.wind_gust"]);
 }
 
+// (08/11) vistas de depuracion: Agustin: "opciones de diagnostico y debug de opciones avanzadas, sombras, efectos". Se juntan aca
+// para que (1) nunca se guarden ni arranquen prendidas, (2) "Apagar todo el debug" las apague de una y (3) la prueba automatica
+// fotografie cada vista. minOn = desde que valor (absoluto) es depuracion; safe = valor al apagarla (z314: 2 = depuracion, 1 = normal prendido)
+static const float kV12[] = { 2, 3, 4, 5, 6, 7, -3 }, kV380[] = { 1, 2, 3, 4, 5 }, kV107[] = { 1, 2, 3, 4 }, kV75[] = { 1, 2 }, kV27[] = { 1, 2 }, kV1[] = { 1 }, kV2[] = { 2 };
+static const DebugParam kDebugParams[] = {
+    { 12, 3, 0.5f, 0.0f, "Vista de diagnostico (rebote, sol y piel, contacto, nubes, cascadas, sombra, resolucion)", "Diagnostico", kV12, 7 },
+    { 380, 3, 0.5f, 0.0f, "Vista de prueba de la luz del editor", "Editor", kV380, 5 },
+    { 393, 0, 0.5f, 0.0f, "Pasto del mod bajo el jugador (editor, experimento)", "Editor", kV1, 1 },
+    { 392, 0, 0.5f, 0.0f, "Menus del juego ocultos (vista completa del editor)", "Editor", kV1, 1 },
+    { 18, 2, 0.5f, 0.0f, "Zonas de la boca (dientes / encia / cavidad)", "Boca", kV1, 1 },
+    { 27, 2, 0.5f, 0.0f, "Transpiracion: zonas / UV", "Piel", kV27, 2 },
+    { 80, 0, 0.5f, 0.0f, "Arrugas de la ropa: compresion", "Ropa", kV1, 1 },
+    { 75, 2, 0.5f, 0.0f, "Cejas: hebras / semillas", "Cejas", kV75, 2 },
+    { 107, 3, 0.5f, 0.0f, "Cancha: UV / desgaste / normal / lejos-cerca", "Pasto", kV107, 4 },
+    { 59, 2, 0.5f, 0.0f, "Pasto del mod en magenta", "Pasto", kV1, 1 },
+    { 314, 2, 1.5f, 1.0f, "Sombra pegada al suelo: hojas / suelo", "Pasto", kV2, 1 },
+    { 120, 3, 0.5f, 0.0f, "Reflejos de la cancha mojada: plano", "Pasto", kV1, 1 },
+    { 140, 3, 0.5f, 0.0f, "Tono de piel: mapa", "Piel", kV1, 1 },
+    { 147, 1, 0.5f, 0.0f, "Borde de la mascara de la cara", "Piel", kV1, 1 },
+    { 322, 3, 0.5f, 0.0f, "Franja de la union cuello / cuerpo", "Piel", kV1, 1 },
+    { 360, 0, 0.5f, 0.0f, "Teselacion: inflar cara y cuerpo / ver teselacion del cuerpo", "Piel", kV27, 2 },
+};
+static const int kDebugN = (int)(sizeof(kDebugParams) / sizeof(kDebugParams[0]));
+int DebugParamCount() { return kDebugN; }
+const DebugParam& DebugParamAt(int i) { return kDebugParams[std::clamp(i, 0, kDebugN - 1)]; }
+const DebugParam* FindDebugParam(int idx, int comp) { for (auto& d : kDebugParams) if (d.idx == idx && d.comp == comp) return &d; return nullptr; }
+bool DebugIsOn(const DebugParam& d, float v) { return fabsf(v) >= d.minOn; }
+int DebugActiveCount() { int n = 0; for (auto& d : kDebugParams) if (DebugIsOn(d, g_cfg.live[d.idx][d.comp])) n++; return n; }
+void DebugAllOff() {
+    int n = 0; for (auto& d : kDebugParams) if (DebugIsOn(d, g_cfg.live[d.idx][d.comp])) { g_cfg.live[d.idx][d.comp] = d.safe; n++; }
+    for (auto& kb : g_cfg.keys) kb.active = false, kb.cycleIdx = -1;   // los atajos de diagnostico (Ctrl+Shift+F3...) tambien
+    Log("menu: apagar todo el debug (%d vistas apagadas)", n);
+}
+
 bool SaveConfigValues() {
+    if (MenuTestActive()) { Log("guardar: no se guarda durante la prueba automatica (los valores de prueba no deben quedar en el ini)"); return false; }
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     std::vector<std::string> lines;
     if (!ReadLines(IniPath(), lines)) return false;
@@ -537,6 +597,11 @@ bool SaveConfigValues() {
             if (v < sl.lo || v > sl.hi) { float cl = v < sl.lo ? sl.lo : sl.hi; Log("guardar: %s = %g fuera del rango %g..%g del slider '%s': guardado %g", k.c_str(), v, sl.lo, sl.hi, sl.label.c_str(), cl); v = cl; }
         }
         char buf[64]; snprintf(buf, sizeof(buf), "%g", g_cfg.live[idx][comp]);
+        // (08/11) Agustin: "la camara libre nunca la dejes prendida al cerrar el juego": x344 se guarda siempre en 0 (apagada);
+        // lo que se este usando en este momento sigue prendido hasta cerrar
+        if (idx == 344 && comp == 0) { raw = k + " = 0"; g_cfg.base[idx][comp] = 0.0f; continue; }
+        if (const DebugParam* dp = FindDebugParam(idx, comp)) if (DebugIsOn(*dp, g_cfg.live[idx][comp])) {   // (08/11) las vistas de depuracion tampoco
+            snprintf(buf, sizeof(buf), "%g", dp->safe); raw = k + " = " + buf; g_cfg.base[idx][comp] = dp->safe; continue; }
         raw = k + " = " + buf;
         g_cfg.base[idx][comp] = g_cfg.live[idx][comp];
     }
@@ -609,6 +674,7 @@ void PollKeys(bool focused) {
             if (!k.run.empty()) {
                 if (Lower(k.run).find("resetsweat") != std::string::npos) s_matchStart = Now();
                 if (Lower(k.run).find("reloadconfig") != std::string::npos) reload = true;
+                if (Lower(k.run).find("coberturafase") != std::string::npos) CoverNextPhase();   // (08/11 h) corte de fase del medidor
             }
             switch (k.type) {
             case KeyBind::Toggle: k.active = !k.active; ApplyAssign(k, k.active, -1); break;
@@ -761,6 +827,7 @@ void UpdateTimeParams() {
     double t = Now();
     if (s_matchStart < -1e8) s_matchStart = t;
     auto& p = g_cfg.live;
+    p[406][3] = HairFwdActive() ? 1.f : 0.f;   // (08/11 y) w406 = la pasada propia del pelo dibujo hace < 0.5 s (la lee pes_brow_ps)
     // minutos reales de partido (sudor). (24/10 g) fuera del partido (menus, editor: sin cancha hace 15 s) vale 0: antes seguia
     // contando desde que se abrio el juego y en el editor la camiseta y la piel salian transpiradas
     p[10][0] = (t - s_lastTurf) < 15.0 ? float((t - s_matchStart) / 60.0) : 0.0f;
@@ -770,6 +837,16 @@ void UpdateTimeParams() {
     p[93][3] = (t - s_lastTurf) < 15.0 ? 1.0f : 0.0f; // 19/10: en partido (tolerante): primeros planos sin cancha a la vista siguen contando
     p[255][3] = (t - s_lastTurf) < 15.0 ? 0.0f : 1.0f; // (25/10) escena de menu (editor, presentacion): la fisica de la ropa no recibe empujes por movimiento
     p[257][0] = (float)PresentNo();                     // (25/10) numero de cuadro: el cuerpo real (cuerpo.cpp) y la fisica de la ropa lo comparan
+    // (08/11) escudos por equipo -> PS de la camiseta (pes_prints.hlsli). 398 / 399 = local / visitante: xyz color 1 de la
+    // camiseta en lineal, w = escudo + 1 (0 sin dato, 1 impreso, 2 bordado; 0 tambien = DLL vieja que no llena la fila);
+    // 400 / 401 = color 2. No estan en el ini: no se guardan.
+    { const MatchInfo& m = g_cfg.match;
+      auto lin = [](float c) { return c < 0.0f ? -1.0f : powf(c, 2.2f); };
+      const float* cs[4] = { m.homeC1, m.awayC1, m.homeC2, m.awayC2 };
+      for (int i = 0; i < 4; i++) for (int j = 0; j < 3; j++) p[398 + i][j] = m.known ? lin(cs[i][j]) : -1.0f;
+      p[398][3] = (m.known && m.homeCrest >= 0) ? float(m.homeCrest + 1) : 0.0f;
+      p[399][3] = (m.known && m.awayCrest >= 0) ? float(m.awayCrest + 1) : 0.0f;
+      p[400][3] = p[401][3] = 0.0f; }
     // (21/10) reloj de las nubes (157): las nubes y sus sombras avanzan con el reloj del JUEGO, no con el reloj real: la
     // pausa las congela y la camara lenta de las repeticiones las frena (como la ropa y el pelo). El reloj sale de
     // cPSSystem.m_timeParam.x de la composicion (regla copy_cb = 0 SysCB en PES21FX_rules.ini). Se acumulan solo los
@@ -872,6 +949,34 @@ void UpdateTimeParams() {
           g_eyePos[0] = S[80]; g_eyePos[1] = S[81]; g_eyePos[2] = S[82]; g_eyePos[3] = 1; g_eyeValid = true;   // (20/10) para el LOD de caras
           bool sunny = (cr / std::max(cb, 1e-4f)) > 1.06f && lum112 > 600.0f;         // luz calida y fuerte = sol (de noche: torres frias)
           p[114][3] = sunny ? 1.0f : 0.0f;
+          // (08/11 ab, Agustin: "esto solo deberia pasar en las canchas despejadas ... de dia, hora pico de la luz del sol, verano") w414 =
+          // fuerza del sol para el pasto (0..1), la escribe la DLL cada cuadro (no va en el ini): despejado (sin lluvia), de dia, sol real
+          // (luz calida y fuerte), segun la altura del sol (0 hasta 22 grados, 1 desde 45: solo hora pico, nada al atardecer) y la estacion (verano 1, invierno 0.7, otra 0.85). La usan 619b (x414 pintado), 18afff (w413 transmision, puntas x409)
+          { float elev = p[111][3];
+            // (08/11 ac) si el reloj del sol del motor esta (solreloj.cpp): altura real del sol (no la de la luz medida, que gira en las
+            // repeticiones), hora del dia, si sube (amanecer) o baja (atardecer) y sunLux (con nubes el motor baja el lux). Fila 415 (DLL)
+            const bool clk = g_solClock.valid; float luxK = 1.f, lowSun = 0.f;
+            if (clk) { elev = g_solClock.alt; luxK = std::clamp((g_solClock.lux - 15000.f) / 35000.f, 0.f, 1.f);
+                p[415][0] = g_solClock.hour; p[415][1] = g_solClock.alt; p[415][2] = g_solClock.rising; }
+            else { p[415][0] = -1.f; p[415][1] = elev; p[415][2] = 0.f; }
+            // (08/11 ac, Agustin: "cerca del atardecer o una hora sin hora pico no deberia tener ese efecto") solo hora pico: 0 hasta 22 grados
+            // de altura del sol (atardecer / manana temprano), rampa hasta 1 a los 45 grados (mediodia de verano ~70)
+            float hK = std::clamp((elev - 22.f) / 23.f, 0.f, 1.f);
+            bool known = g_cfg.match.known;
+            float clear = (known && g_cfg.match.weather == 1) ? 0.08f : 1.f;
+            float dayK = (known && g_cfg.match.timeofday == 1) ? 0.f : 1.f;
+            float seas = !known ? 0.9f : (g_cfg.match.season == 0 ? 1.f : g_cfg.match.season == 1 ? 0.7f : 0.85f);
+            float pw = (sunny ? 1.f : 0.f) * clear * dayK * seas * std::clamp(hK, 0.f, 1.f) * luxK;
+            static float sm = 0.f; sm += (pw - sm) * 0.02f;   // ~1 s de suavizado: sin saltos al cambiar de toma
+            p[414][3] = sm;
+            // (08/11 ac, Agustin: "al atardecer el cielo se pinta de otro color ... al igual si es amanecer no es lo mismo") sol bajo: entre 2 y
+            // 20 grados (maximo a 8), despejado y de dia: el pasto toma el tono de esa luz (naranja al atardecer, rosado / frio al amanecer) y
+            // la transmision es menor. w415 (0..1); z415 dice si sube o baja
+            lowSun = (sunny ? 1.f : 0.f) * clear * dayK * luxK * std::clamp((elev - 2.f) / 6.f, 0.f, 1.f) * std::clamp((20.f - elev) / 8.f, 0.f, 1.f);
+            static float smL = 0.f; smL += (lowSun - smL) * 0.02f; p[415][3] = smL;
+            static double nl = 0.0; if (t >= nl) { nl = t + 60.0; Log("pasto: fuerza del sol %.2f, sol bajo %.2f (sol a %.1f grados%s, luz %.0f, hora %.2f, %s, %s, %s, %s, %s)", sm, smL, elev, clk ? " (reloj del motor)" : "", lum112, p[415][0], clk ? (g_solClock.rising > 0 ? "sube" : "baja") : "sube/baja ?", sunny ? "sol real" : "sin sol",
+                known ? (g_cfg.match.weather == 1 ? "lluvia" : "despejado") : "clima ?", known ? (g_cfg.match.timeofday == 1 ? "noche" : "dia") : "hora ?",
+                known ? (g_cfg.match.season == 0 ? "verano" : g_cfg.match.season == 1 ? "invierno" : "otra estacion") : "estacion ?"); } }
       }
       int ground = 0; if (g_cfg.match.known && g_cfg.match.weather == 1) ground = 1;
       p[114][0] = (float)ground; p[114][2] = g_cfg.match.known ? (float)g_cfg.match.season : -1.0f; }
@@ -957,6 +1062,7 @@ bool LoadHairConfig() {
     bool ok = ReadLines(g_cfg.baseDir + L"PES21FX_hair.ini", lines);
     std::string sec;
     std::map<std::string, HairType> types;
+    std::map<std::string, std::vector<float>> tessFace;   // (04/11 m)
     if (ok) for (auto& raw : lines) {
         std::string l = Trim(raw);
         if (l.empty() || l[0] == ';' || l[0] == '#') continue;
@@ -978,6 +1084,12 @@ bool LoadHairConfig() {
             if (f.size() > 0) t.cejaGrosor = f[0]; if (f.size() > 1) t.cejaDens = f[1]; if (f.size() > 2) t.cejaElev = f[2]; if (f.size() > 3) t.cejaLargo = f[3];
         } else if (sec == "caras") {
             h.faces[k] = Lower(v);
+        } else if (sec == "cejas_cara") {   // (04/11) id = cantidad, largo
+            std::vector<float> f = ParseFloats(v);
+            if (!f.empty()) { std::vector<float> b = { 1.f, 1.f, 0.f, 0.35f, 0.2f, 0.12f, 0.f, 0.55f, 0.3f, 0.15f, 0.f, 1.f, 1.f, 0.f }; for (size_t i = 0; i < f.size() && i < b.size(); i++) b[i] = f[i]; h.browFace[k] = b; }   // (04/11 i) + mezcla, r, g, b; (04/11 l) + contraluz, hebras extra
+        } else if (sec == "teselacion_cara") {   // (04/11 m) id = teselar, densidad, suavidad, tope, relieve, surcos, formas, relieve en la luz
+            std::vector<float> f = ParseFloats(v);
+            if (!f.empty()) tessFace[k] = f;
         } else if (sec == "auto") {
             if (k == "default") h.defType = Lower(v);
         }
@@ -987,6 +1099,8 @@ bool LoadHairConfig() {
     h.loaded = ok;
     { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.hair = h; }
     FaceGenHairChanged();
+    FaceTessSetSaved(tessFace);   // (04/11 m) teselacion por jugador
+    if (!tessFace.empty()) Log("teselacion por jugador: %d caras en [teselacion_cara]", (int)tessFace.size());
     Log("pelo: %s (%d tipos, %d caras asignadas, default '%s')", ok ? "PES21FX_hair.ini leido" : "sin PES21FX_hair.ini (tipos por defecto)", (int)h.types.size(), (int)h.faces.size(), h.defType.c_str());
     return ok;
 }

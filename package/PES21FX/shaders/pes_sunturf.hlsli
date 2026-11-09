@@ -9,14 +9,29 @@
 // w313 on/off. (03/11) w313 entre 1 y 2: 'pasto como manto' (prueba): la luz directa de cada hoja usa su normal mezclada con la de
 //      la cancha (w313 - 1 = cuanto). Las hojas 3D tienen normales casi horizontales: con el sol a 39 grados recibian la mitad que
 //      el suelo y la cancha al sol quedaba a 0.64x de Ver original (cancha 9, 03/11). 1 = como antes. pass upNL = N cancha . L
+// (04/11) z330 / w330: translucidez a contraluz (PESTurfTransmit), fuerza y cuanto queda de lejos
 // Se incluye despues de declarar IniParams (lee la fila 111 para la altura del sol).
+
+// (04/11) el sol del CIELO en vista para el pasto. En repeticiones y cortes el motor gira la luz con la camara (rumbo = cielo + 2 x
+// (camara + 90), hasta 113 grados en el log del 04/11) y el brillo de las hojas, el contraluz y la sombra entre hojas la seguian (Agustin:
+// "when you rotate camera sun obligates grass"). La fila 312 (DLL) trae el sol del cielo en mundo (PESSunStable); se pasa a vista con la
+// matriz de la escena (las mismas cuentas que la sombra de las nubes). La sombra del shadow map sigue siendo la del motor
+float3 PESTurfSunView(float3 Lv, float4x4 Mv)
+{
+  float3 vX = float3(Mv._m00, Mv._m01, Mv._m02), vY = float3(Mv._m10, Mv._m11, Mv._m12), vZ = float3(Mv._m20, Mv._m21, Mv._m22);
+  float3 Lw = normalize(float3(dot(Lv, vX), dot(Lv, vY), dot(Lv, vZ)));
+  float3 Sw = PESSunStable(Lw);
+  return normalize(Sw.x * vX + Sw.y * vY + Sw.z * vZ);
+}
 
 // difusa del sol sobre el pasto: wrapD es la del motor (directa + envoltura por translucidez)
 // trans: translucidez del G-buffer (27/10: las hojas pintadas de cal llevan ~0.1 y no se tinen; las verdes 0.4-1.0)
 float3 PESTurfDiffuse(float3 sunC, float rawNdotL, float wrapD, float4 PG, float trans, float upNL)
 {
   float dirD = saturate(lerp(rawNdotL, upNL, saturate(PG.w - 1.0)));   // (03/11) manto: hacia la normal de la cancha
-  float through = max(saturate(wrapD) - dirD, 0.0);
+  // (06/11, Agustin: "el cesped sigue sin reaccionar a la luz del sol de forma que traspase la luz") la luz que atraviesa la hoja se
+  // mide con la N.L propia de la hoja: antes se restaba la directa ya mezclada con el manto (w313 1.7) y la translucidez quedaba en ~0
+  float through = max(saturate(wrapD) - saturate(rawNdotL), 0.0);
   float3 leaf = lerp(float3(1.0, 1.0, 1.0), float3(1.0, 0.96, 0.72), saturate(PG.y) * saturate((trans - 0.15) / 0.25));   // (27/10) la mitad: el pasto al sol salia lima
   float4 SW = IniParams.Load(int2(111, 0));
   float sunUp = dot(SW.xyz, SW.xyz) > 0.5 ? SW.y : 1.0;
@@ -55,5 +70,43 @@ float PESTurfMicroShadow(Texture2D<float4> dT, SamplerState sP, float2 sC, float
     if (dz > 0.5 * mpp && dz < thick) { occ = 1.0 - 0.6 * f; break; }   // hoja pegada = sombra plena, mas lejos = penumbra
   }
   float2 eM = saturate(min(uvC, 1.0 - uvC) * 10.0);
-  return 1.0 - saturate(occ * fadeT * saturate(k) * eM.x * eM.y);
+  // (04/11) antes 1 - occ * k: de cerca (fadeT = 1) el rayo choca con alguna hoja casi siempre y TODA la cancha cercana quedaba a ~0.4x
+  // (Agustin: "al acercarme mucho la camara se oscurece"). Ahora la sombra reparte la luz en vez de quitarla: la hoja tapada baja (la hoja
+  // de delante deja pasar algo, no es negra) y la que ve el sol sube un poco, asi el promedio queda como de lejos y se ve el contraste
+  float kk = fadeT * saturate(k) * eM.x * eM.y;
+  return max(1.0 + kk * (0.18 - 0.62 * occ), 0.0);
+}
+
+// (04/11) translucidez a contraluz: la luz del sol que ATRAVIESA la hoja hacia la camara (mirando hacia el sol se encienden las puntas).
+// La difusa de arriba (through) es la que pasa a la cara de atras en todas las direcciones; esto es el lobulo hacia adelante que depende de
+// donde mira la camara. De cerca (pocos mm por pixel) lobulo mas fino y fuerte, con la translucidez por hoja del G-buffer (puntas finas mas,
+// cada hoja distinta); de lejos ancho y mas suave (w330). Pedido de Agustin (04/11): "de super buena calidad de cerca y de vistas lejanas
+// un poco menos". z330 fuerza (0 = apagado, como antes), w330 cuanto queda de lejos (0..1).
+// sC / uvC / dT / sP / pp / cOff / rbX como PESTurfMicroShadow; L hacia el sol en vista; rawNdotL = N.L de la hoja (la cara que mira a la
+// camara a contraluz tiene N.L < 0)
+float3 PESTurfTransmit(float3 sunC, float2 sC, float2 uvC, Texture2D<float4> dT, SamplerState sP, float4 pp, float2 cOff, float rbX,
+                       float3 L, float rawNdotL, float trans, float4 PG)
+{
+  float4 P330 = IniParams.Load(int2(330, 0));
+  float k = clamp(P330.z, 0.0, 3.0);
+  if (k < 0.001) return float3(0.0, 0.0, 0.0);
+  float dC = dT.SampleLevel(sP, uvC, 0).x;
+  float zC = pp.z / (dC - pp.w);
+  float zA = abs(zC);
+  if (zA < 0.05) return float3(0.0, 0.0, 0.0);
+  float mpp = zA * abs(pp.x) * 2.0 / max(rbX, 1.0);
+  float nearQ = 1.0 - smoothstep(0.0045, 0.035, mpp);   // 1 = hoja de cerca (4.5 mm por pixel o menos; 04/11 llega ~1.4x mas lejos), 0 = TV y lejos
+  float3 V = normalize(float3((sC - cOff) * pp.xy * zC, zC));   // de la camara al punto, como el trazado de la sombra entre hojas
+  float VL = dot(V, L);                                  // 1 = mirando hacia el sol
+  float ph = saturate(0.5 + 0.5 * VL);
+  float p2 = ph * ph, p4 = p2 * p2;
+  // (06/11) de lejos el contraluz quedaba en ~5-10 % del sol (lobulo p2 * 0.55, translucidez al cuadrado): en la camara de juego el
+  // pasto no se encendia mirando hacia el sol. De lejos: lobulo mas alto con nucleo hacia el sol y la translucidez lineal
+  float lobe = lerp(p2 * 0.9 + p4 * p2 * 0.6, p4 * p4 * 1.6 + p4 * 0.35, nearQ);   // de lejos ancho + nucleo (ph^6); de cerca nucleo fino (ph^8) + halo
+  float back = lerp(0.75, saturate(0.35 - 0.75 * rawNdotL), nearQ);   // de cerca solo la cara del lado de la sombra; de lejos la normal es la de la cancha
+  float tr = saturate((trans - 0.1) / 0.6);              // pintadas (~0.1) nada; verdes 0.4-1.0
+  float trK = lerp(tr, tr * tr, nearQ);                  // (06/11) de lejos lineal (una hoja verde 0.4 -> 0.5 en vez de 0.25)
+  float3 tint = lerp(float3(1.0, 1.0, 1.0), float3(1.10, 1.0, 0.42), saturate(PG.y));   // clorofila: amarillo verdoso (y313)
+  float amt = k * lerp(saturate(P330.w), 1.0, nearQ) * trK * back * lobe;
+  return sunC * tint * amt;
 }

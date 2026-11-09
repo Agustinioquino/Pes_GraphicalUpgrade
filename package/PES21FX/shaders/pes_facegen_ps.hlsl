@@ -123,7 +123,29 @@ void main(float4 pos : SV_Position, float2 uv : TEXCOORD0, out float4 o0 : SV_Ta
       // direccion: hacia afuera, levemente hacia arriba (UV: -y) siguiendo el arco; ruido de +-15 grados
       float arch = (abs(cuv.x - 0.5) - 0.105) / 0.105;            // -1 en el entrecejo .. +1 en la cola
       float2 dir = normalize(float2(side, -0.45 + 0.55 * saturate(arch + 0.5)));
-      float ang = (h21(cell + 1.7) - 0.5) * 0.52;
+      // (04/11, Agustin: "que el pelo siga la forma de la textura") direccion de los trazos PINTADOS en la ceja: tensor de
+      // estructura del brillo en el mip 1 (5x5 muestras sobre la celda). El pelo corre a lo largo del trazo = perpendicular al
+      // gradiente; el tensor da la orientacion (sin sentido) y el sentido lo pone el arco (hacia afuera). Donde la pintura no
+      // tiene trazos claros (coherencia baja) queda el arco.
+      {
+        float2 tx = texel * 2.0;
+        float jxx = 0, jyy = 0, jxy = 0;
+        [unroll] for (int sy = -2; sy <= 2; sy++) [unroll] for (int sx = -2; sx <= 2; sx++) {
+          float2 q = cuv + float2(sx, sy) * tx;
+          float lx = dot(tDiffuse.SampleLevel(sLin, q + float2(tx.x, 0), 1.0).xyz - tDiffuse.SampleLevel(sLin, q - float2(tx.x, 0), 1.0).xyz, float3(0.2126, 0.7152, 0.0722));
+          float ly = dot(tDiffuse.SampleLevel(sLin, q + float2(0, tx.y), 1.0).xyz - tDiffuse.SampleLevel(sLin, q - float2(0, tx.y), 1.0).xyz, float3(0.2126, 0.7152, 0.0722));
+          jxx += lx * lx; jyy += ly * ly; jxy += lx * ly;
+        }
+        float tr = jxx + jyy;
+        float dl = sqrt((jxx - jyy) * (jxx - jyy) + 4.0 * jxy * jxy);
+        float coh = tr > 1e-6 ? dl / tr : 0.0;                         // 0 = sin direccion, 1 = trazos paralelos
+        float gAng = 0.5 * atan2(2.0 * jxy, jxx - jyy);                // angulo del gradiente dominante
+        float2 along = float2(-sin(gAng), cos(gAng));                  // a lo largo del trazo
+        if (dot(along, dir) < 0.0) along = -along;                     // sentido: el del arco (de la nariz hacia la sien)
+        float wT = smoothstep(0.25, 0.6, coh) * saturate(tr * 400.0);
+        dir = normalize(lerp(dir, along, wT * 0.85) + 1e-5);
+      }
+      float ang = (h21(cell + 1.7) - 0.5) * 0.3;
       float cs = cos(ang), sn = sin(ang);
       dir = float2(dir.x * cs - dir.y * sn, dir.x * sn + dir.y * cs);
       float len = 0.55 + 0.45 * h21(cell + 5.1);

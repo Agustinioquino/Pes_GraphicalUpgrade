@@ -116,6 +116,8 @@ void PESGroundLook(inout float3 c, inout float spec, inout float rough, float2 g
 }
 // sol en espacio mundo (lo publica la DLL en 111: xyz hacia el sol, w altura en grados); (0,1,0) si todavia no hay dato
 float3 PESSunWorld() { float4 L = IniParams.Load(int2(111, 0)); return dot(L.xyz, L.xyz) > 0.5 ? L.xyz : float3(0.0, 1.0, 0.0); }
+// (04/11) sol del cielo en mundo (fila 312 de la DLL, no gira con la camara en repeticiones); si no hay, el de la luz (111)
+float3 PESSunSky() { float4 S = IniParams.Load(int2(312, 0)); return (S.w > 0.5 && S.y > 0.0) ? normalize(S.xyz) : PESSunWorld(); }
 // (25/10) cesped lejano en la base de la cancha: donde una hoja ya no mide en pantalla (mas alla del nivel medio del pasto
 // 3D), la base toma el aspecto del cesped visto de lejos en vez de una textura plana: matas claras / oscuras de 8 y 22 cm
 // (atenuadas con el tamano del pixel para que no titilen), cobertura segun el angulo de vista (rasante = se ven las puntas,

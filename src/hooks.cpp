@@ -23,6 +23,25 @@ std::vector<std::string> g_compileErrors;
 std::mutex g_errMutex;
 
 // ---------------------------------------------------------------- hash igual al de 3DMigoto (FNV-1 de 64 bits, base cero)
+// (07/11) PS de la camiseta: 0 / 1 / 2 = 7e64 / a41e / c7ae (los de siempre); + 8 = variante sin SV_IsFrontFace (de lejos o
+// del arbitro, sin confirmar: se anota la primera vez que se dibuja). -1 = no es camiseta
+static int ShirtPSKind(uint64_t h) {
+    switch (h) {
+    case 0x7e647d9c43b453f9ULL: return 0;
+    case 0xa41e7343f874154fULL: return 1;
+    case 0xc7ae89b63e889007ULL: return 2;
+    case 0xad33f4525eda9dbaULL: return 8 + 0;
+    case 0xc4ab9c1533939fedULL: return 8 + 1;
+    case 0xbb02fed5bcfdd140ULL: return 8 + 2;
+    default: return -1;
+    }
+}
+static void ShirtPSNoteNew(uint64_t h, UINT verts) {
+    static std::atomic<int> seen[3];
+    const int k = h == 0xad33f4525eda9dbaULL ? 0 : h == 0xc4ab9c1533939fedULL ? 1 : 2;
+    if (seen[k].fetch_add(1) == 0) Log("torso bajo la camiseta: camiseta con el PS %016llx (variante de lejos / arbitro), %u indices", (unsigned long long)h, verts);
+}
+
 static uint64_t Fnv64(const void* data, size_t len) {
     const uint8_t* p = (const uint8_t*)data; uint64_t h = 0;
     for (size_t i = 0; i < len; i++) { h *= 0x100000001b3ULL; h ^= p[i]; }
@@ -134,6 +153,21 @@ static ID3DBlob* CompileFile(uint64_t hash, const char* type, const char* profil
 }
 
 // shaders propios por nombre (generadores): shaders\<file>, con #include y cache como los demas
+// (08/11) shader escrito en el codigo (vidrio del menu): sin archivo ni cache
+ID3DBlob* CompileSourceShader(const char* name, const char* src, const char* profile) {
+    if (!s_compile || !src) return nullptr;
+    ID3DBlob *code = nullptr, *err = nullptr;
+    HRESULT hr = s_compile(src, strlen(src), name, nullptr, nullptr, "main", profile, D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &err);
+    if (FAILED(hr)) {
+        std::string e = err ? std::string((const char*)err->GetBufferPointer(), err->GetBufferSize()) : "error desconocido";
+        Log("ERROR compilando %s:\n%s", name, e.c_str());
+        { std::lock_guard<std::mutex> lk(g_errMutex); g_compileErrors.push_back(std::string(name) + ": " + e.substr(0, 300)); }
+        if (err) err->Release(); if (code) code->Release();
+        return nullptr;
+    }
+    if (err) err->Release();
+    return code;
+}
 ID3DBlob* CompileNamedShader(const wchar_t* file, const char* profile) {
     if (!s_compile) return nullptr;
     std::string src;
@@ -173,6 +207,13 @@ static std::unordered_map<void*, void*> s_replToObj;         // 19/10: nuestro s
 static std::shared_mutex s_shMutex;
 static std::vector<IUnknown*> s_deferredRelease;
 static std::mutex s_releaseMutex;
+// (08/11 e) cierres en CCommandList::LUCDeferDeletion (siempre la entrada 6 de la tabla de listas del juego, en el editor): una lista
+// grabada por el juego guarda punteros a todo lo que se enlazo en ella (nuestros shaders, vistas, buffers) y les baja el uso al
+// liberarse. En el editor esas listas viven mucho (el visor no se vuelve a grabar cada cuadro), asi que soltar un recurso nuestro
+// "al cuadro siguiente" o "a los 240 cuadros" puede dejarle a la lista un puntero muerto. Todo lo nuestro se suelta a los 30 s.
+struct Aged { IUnknown* p; double t; };
+static std::vector<Aged> s_aged;
+void DeferRelease(IUnknown* p) { if (!p) return; std::lock_guard<std::mutex> lk(s_releaseMutex); s_aged.push_back({ p, Now() }); }
 
 std::vector<const ShaderEntry*> AllShaders() {
     std::shared_lock<std::shared_mutex> lk(s_shMutex);
@@ -190,7 +231,7 @@ static const ShaderEntry* FindShader(void* p) {
     std::shared_lock<std::shared_mutex> lk(s_shMutex);
     auto it = s_shaders.find(p);
     if (it != s_shaders.end()) return &it->second;
-    auto r = s_replToObj.find(p);   // es uno de nuestros reemplazos (lo volvio a enlazar BrowDrawAfterFace o un restore)
+    auto r = s_replToObj.find(p);   // es uno de nuestros reemplazos (lo volvio a enlazar un restore)
     if (r != s_replToObj.end()) { it = s_shaders.find(r->second); if (it != s_shaders.end()) return &it->second; }
     return nullptr;
 }
@@ -476,6 +517,7 @@ static void UploadParams() {
         if (p[139][0] > 0.5f) p[104][0] = 1.0f;   // (20/10) pasto v5: necesita el pasto v3 (x104) prendido en la GPU
         p[258][0] = (g_cfg.motorPatch && g_cfg.motorSunFix && g_cfg.motorShadowFix == 0) ? 1.0f : 0.0f;   // (02/11) x258: la luz esta corregida y el shadow map no (los shaders del sol no miden grosor con el)
         p[147][3] = 1.0f;   // (20/10) w147: esta DLL iguala la cabeza de las caras genericas con la cara (reglas PS + VS)
+        p[393][3] = (float)fmod(Now(), 3600.0);   // (09/11) w393: reloj en segundos (vuelve a 0 cada hora) para el ciclo de dia y noche de la luz del editor (w392)
         for (auto& kv : g_cfg.rules) {
             if (kv.second.paramSet < 0) continue;
             for (auto& a : kv.second.actions) if (a.kind == RuleAction::SetParam) {
@@ -579,7 +621,7 @@ template<int V> static void STDMETHODCALLTYPE hk_ClearState(ID3D11DeviceContext*
 // motor, asi que se va por el otro lado: el b3 de las pasadas del sol es LightCB; cada Map / UpdateSubresource de ese
 // buffer anota la pila de llamadas del exe (hasta 10 marcos) y, al Unmap, lo que se escribio en m_lightDir0. Cada 30 s el
 // log resume las pilas distintas ("luz: llena el cbuffer ...") para buscar la funcion en el volcado del exe (tools/re).
-// [PES21FX] luz_rastrear = 0 lo apaga. Hasta 64 pilas por segundo (por si el buffer es un anillo compartido).
+// [PES21FX] luz_rastrear = 1 lo prende ((08/11) apagado por defecto: la investigacion termino en sol_parche y costaba CPU en cada Map). Hasta 64 pilas por segundo (por si el buffer es un anillo compartido).
 using PFN_Map = HRESULT(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, UINT, D3D11_MAP, UINT, D3D11_MAPPED_SUBRESOURCE*);
 using PFN_Unmap = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, UINT);
 using PFN_UpdSub = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, UINT, const D3D11_BOX*, const void*, UINT, UINT);
@@ -768,6 +810,12 @@ template<int V> static void STDMETHODCALLTYPE hk_ExecCL(ID3D11DeviceContext* c, 
 template<int V> static HRESULT STDMETHODCALLTYPE hk_FinishCL(ID3D11DeviceContext* c, BOOL r, ID3D11CommandList** l) {
     GrassBaseFlush(c, 3, 0);   // (26/10 g) la base pendiente se emite dentro de esta lista
     HRESULT hr = o_FinishCL[V](c, r, l);
+    if (FAILED(hr)) {   // (08/11) un FinishCommandList fallido dejaba el lock de la entrada del juego tomado (cuelgues del editor)
+        static std::atomic<int> nf{0};
+        if (nf++ < 20) { ID3D11Device* d = nullptr; c->GetDevice(&d); HRESULT rr = d ? d->GetDeviceRemovedReason() : S_OK; if (d) d->Release();
+            Log("FinishCommandList fallo: hr 0x%08x (contexto %p, dispositivo 0x%08x)", (unsigned)hr, (void*)c, (unsigned)rr);
+            if (FAILED(rr)) OnDeviceLost((unsigned)rr); }   // (08/11 e) placa reiniciada (TDR): aviso y cierre ordenado
+    }
     if (SUCCEEDED(hr) && l && *l) BodyOnFinish(c, *l);
     GrassOnFinishCL(c, (SUCCEEDED(hr) && l) ? *l : nullptr);   // (26/10 d) pasto: la grabacion termino (siempre, aunque falle)
     return hr;
@@ -957,7 +1005,7 @@ template<int V> static void STDMETHODCALLTYPE hk_SetCS(ID3D11DeviceContext* c, I
 // lo que una regla enlaza se devuelve a como estaba despues del dibujo (como "post ps-t20 = ..." en 3DMigoto)
 struct Saved { bool ps; bool srv; int slot; IUnknown* prev; };
 static const int kSavedMax = 64;   // (02/11) 24 -> 64: con los grupos del brazo (t26/t30/t36/t123) los dibujos del brazo pasaban de 24 y lo enlazado despues no se devolvia (se filtraba al dibujo siguiente: la boca tomaba texturas ajenas)
-struct DrawScope { Saved s[kSavedMax]; int n = 0; FaceGenExtra brow; bool skip = false; ID3D11PixelShader* restorePS = nullptr; LodIA lod; GlassScope glass; RingScope ring; };   // glass: vidrio de los menus (glass.cpp)   // lod.count > 0: dibujar con la geometria de LOD0 (lod.cpp)
+struct DrawScope { Saved s[kSavedMax]; int n = 0; FaceGenExtra brow; std::string faceId; bool skip = false; ID3D11PixelShader* restorePS = nullptr; LodIA lod; GlassScope glass; RingScope ring; FaceTessScope tess; bool hdMesh = false; bool mouth = false; UINT mCnt = 0, mStart = 0; INT mBase = 0; };   // tess: teselacion de la cara (facetess.cpp)   // glass: vidrio de los menus (glass.cpp)   // lod.count > 0: dibujar con la geometria de LOD0 (lod.cpp)
 
 static void Remember(ID3D11DeviceContext* c, DrawScope& d, bool ps, bool srv, int slot) {
     if (d.n >= kSavedMax) {   // (26/10 d) 12 -> 24, (02/11) -> 64: lo que no entra no se devolveria
@@ -1133,26 +1181,24 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
             // (04/11) la boca que sigue es de esta cara (bocajug.cpp); sin identidad (cara pendiente) = 0, nunca la cara anterior
             Ctx(c).lastFace = (fgFound && !ex.id.empty()) ? strtoull(ex.id.c_str(), nullptr, 16) : 0;
             if (fgFound) {
+                d.faceId = ex.id;   // (04/11 m) teselacion por jugador: la regla de la cara (VS, Expr) corre despues de esta (PS)
                 // 19/10 c: la boca hereda este b11; se retiene con AddRef porque la entrada de cara puede liberarse (partido nuevo,
                 // recarga de tipos de pelo) antes del dibujo de la boca -> puntero colgado -> el driver se caia (nvwgf2umx 0xc0000005)
                 if (ex.hairCB) { CtxState& cs = Ctx(c); if (cs.lastHairCB != ex.hairCB) { ex.hairCB->AddRef(); if (cs.lastHairCB) cs.lastHairCB->Release(); cs.lastHairCB = ex.hairCB; } }
+                // (04/11) caras en alta (caras_hd.cpp): t0 bsm, t1 normal, t2 srm, t3 trm reescaladas, si existen en PES21FX\caras_hd
+                if (!ex.id.empty()) { ID3D11ShaderResourceView* hd[4];
+                    if (CarasHdGet(ex.id, hd)) for (int i = 0; i < 4; i++) if (hd[i]) { Remember(c, d, true, true, i); c->PSSetShaderResources(i, 1, &hd[i]); } }
                 Remember(c, d, true, true, a.slot); c->PSSetShaderResources(a.slot, 1, &fa);
                 Remember(c, d, true, true, a.idx);  c->PSSetShaderResources(a.idx, 1, &fb);
                 // 18/10 pelo: parametros del tipo de pelo de ESTA cara (PES21FX_hair.ini) en b11
                 if (ex.hairCB) { Remember(c, d, true, false, 11); c->PSSetConstantBuffers(11, 1, &ex.hairCB); }
-                // cejas con hebras: mapa de semillas en t26 y buffer de semillas (UAV 5) limpio para este dibujo
-                if (ex.seedMap && ex.seedsUAV && g_cfg.live[74][0] > 0.5f) {
+                // cejas con hebras v2 (04/11): el mapa de pelo en t26 (lo usa el diagnostico "semillas sobre la cara") y se anota este
+                // dibujo para repetirlo con el GS de hebras apenas termine (BrowStrands). Ya no se enlaza el UAV de semillas de la v1.
+                const ShaderEntry* bvs = Ctx(c).vs;
+                if (t_drawKind == 1 && bvs && bvs->repl && !g_cfg.bypass && BrowWanted(ex, bvs->hash)) {
                     Remember(c, d, true, true, 26); c->PSSetShaderResources(26, 1, &ex.seedMap);
-                    const UINT z[4] = { 0, 0, 0, 0 };
-                    if (ex.argsUAV) c->ClearUnorderedAccessViewUint(ex.argsUAV, z);   // 18/10: solo se limpia el contador (las semillas se escriben compactas)
-                    else c->ClearUnorderedAccessViewUint(ex.seedsUAV, z);
-                    // el UAV va en el slot 5 (u5): hay que enlazarlo con la cuenta real de render targets (<= 5), no con "mantener",
-                    // porque si el juego dejo 8 slots declarados la llamada se rechaza en silencio
-                    ID3D11RenderTargetView* rts[8] = {}; ID3D11DepthStencilView* dsv = nullptr; c->OMGetRenderTargets(8, rts, &dsv);
-                    UINT nrt = 0; for (UINT i = 0; i < 8; i++) if (rts[i]) nrt = i + 1;
-                    if (nrt <= 5) { ID3D11UnorderedAccessView* uavs[2] = { ex.seedsUAV, ex.argsUAV }; c->OMSetRenderTargetsAndUnorderedAccessViews(nrt, rts, dsv, 5, ex.argsUAV ? 2 : 1, uavs, nullptr); d.brow = ex; d.brow.rtCount = (int)nrt; }
-                    else { static std::atomic<bool> warned{false}; if (!warned.exchange(true)) Log("cejas: la cara se dibuja con %u render targets, no puedo enlazar el buffer de semillas", nrt); }
-                    for (auto* v : rts) if (v) v->Release(); if (dsv) dsv->Release();
+                    if (ex.browMap) { Remember(c, d, true, true, 44); c->PSSetShaderResources(44, 1, &ex.browMap); }   // (07/11) borrar la ceja pintada bajo las hebras (fila 382)
+                    d.brow = ex; d.brow.browVS = bvs->hash; d.brow.browCount = t_drawVerts; d.brow.browStart = t_drawStart; d.brow.browBase = t_drawBase;
                 }
             }
             break; }
@@ -1160,8 +1206,43 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
             if (ps) break;
             // solo DrawIndexed (con otro tipo de dibujo count 0 -> cbuffer "sin dato")
             const float* hc = nullptr; int hd = -1;
-            if (ID3D11Buffer* b = ExprBufferForDraw(c, t_drawKind == 1 ? t_drawVerts : 0, t_drawStart, t_drawBase, &hc, &hd)) { Remember(c, d, false, false, a.slot); c->VSSetConstantBuffers(a.slot, 1, &b); }
+            ID3D11ShaderResourceView* shp = nullptr; ID3D11ShaderResourceView* shw = nullptr; ID3D11ShaderResourceView* seam = nullptr;
+            ID3D11Buffer* wrb = nullptr; const ShaderEntry* fp0 = Ctx(c).ps; const bool skinPs0 = fp0 && fp0->repl && (fp0->hash == 0x5ce3ed8702271bc1ULL || fp0->hash == 0xce188ae110354aeaULL);
+            // (08/11 p) cara con mas poligonos (caramalla.cpp): volcado de la piel de la cara / dibujo con la malla subdividida (nunca la boca)
+            if (t_drawKind == 1 && !d.lod.count && !(fp0 && fp0->hash == 0x63fab7735eee149cULL) && ((skinPs0 && !d.faceId.empty()) || g_caraMallaAny.load(std::memory_order_relaxed))) {
+                LodIA L; ID3D11ShaderResourceView* hp = nullptr;
+                if (CaraMallaDraw(c, skinPs0 ? d.faceId : std::string(), t_drawVerts, t_drawStart, t_drawBase, &L, &hp)) {
+                    d.lod = L; d.hdMesh = true; if (hp) { Remember(c, d, false, true, 114); c->VSSetShaderResources(114, 1, &hp); } }
+            }
+            if (ID3D11Buffer* b = ExprBufferForDraw(c, t_drawKind == 1 ? t_drawVerts : 0, t_drawStart, t_drawBase, &hc, &hd, &shp, &shw, &seam, false, &wrb, skinPs0)) { Remember(c, d, false, false, a.slot); c->VSSetConstantBuffers(a.slot, 1, &b); }
+            if (wrb) { Remember(c, d, true, false, 12); c->PSSetConstantBuffers(12, 1, &wrb); }   // (08/11) pesos de arrugas del juego suavizados (PS b12 PESWrSmooth)
+            if (shp) { Remember(c, d, false, true, 118); c->VSSetShaderResources(118, 1, &shp); }   // (04/11) gestos esculpidos de esta malla
+            if (ID3D11ShaderResourceView* bd = ExprBoneDeltaSrv()) { Remember(c, d, false, true, 115); c->VSSetShaderResources(115, 1, &bd); }   // (08/11) gestos en la paleta (t115)
+            if (shw) { Remember(c, d, true, true, 31); c->PSSetShaderResources(31, 1, &shw); }      // (04/11) arrugas esculpidas de la sonrisa (PS de la cara)
+            // (04/11 b) teselacion de la cara en primeros planos (facetess.cpp): solo piel de la cara (nunca la boca, los ojos ni las
+            // pestanas: expr.cpp no les da pesos de borde), con DrawIndexed y el PS de la cara con reemplazo (los parametros t120 del dibujo)
+            { const ShaderEntry* fp = Ctx(c).ps; const bool skin = fp && (fp->hash == 0x5ce3ed8702271bc1ULL || fp->hash == 0xce188ae110354aeaULL);
+              if (skin && t_drawKind == 1 && !seam) FaceTessNote(0); }   // (04/11 d) registro: piel de la cara sin teselar
+            if (seam && t_drawKind == 1 && Ctx(c).ps && Ctx(c).ps->hash != 0x63fab7735eee149cULL) {
+                ID3D11ShaderResourceView* prm = nullptr; c->VSGetShaderResources(120, 1, &prm);
+                if (!prm) FaceTessNote(1);
+                bool tessOn = false;
+                if (prm) { if (FaceTessBegin(c, hash, seam, prm, d.tess, d.faceId)) { tessOn = true; Remember(c, d, false, true, 119); c->VSSetShaderResources(119, 1, &seam);
+                    d.tess.cnt = t_drawVerts; d.tess.start = t_drawStart; d.tess.base = t_drawBase; } prm->Release(); }
+                // (08/11 g) sin teselar tambien: el VS lee el peso de borde (t119) para no aplicar los gestos de la paleta en el borde de la
+                // pieza (pes_expr.hlsli PesBoneDeltaEdge: las uniones entre piezas de la cara no se abren)
+                if (!tessOn) { Remember(c, d, false, true, 119); c->VSSetShaderResources(119, 1, &seam); }
+            }
             if (hc && FreeCamWantsHead()) ExprCaptureHead(c, hc, hd);   // (1/11) camara libre "seguir la cara": matriz de sk_head de este dibujo
+            break; }
+        case RuleAction::Beard: {   // (04/11 c) barba que sigue los huesos de la cara (expr.cpp BeardForDraw, pes_beard.hlsli)
+            if (ps) break;
+            ID3D11Buffer* b = nullptr; ID3D11ShaderResourceView* pl = nullptr; ID3D11ShaderResourceView* bd = nullptr;
+            if (BeardForDraw(c, t_drawKind == 1 ? t_drawVerts : 0, t_drawStart, t_drawBase, &b, &pl, &bd) && b) {
+                Remember(c, d, false, false, a.slot); c->VSSetConstantBuffers(a.slot, 1, &b);
+                if (pl && bd) { Remember(c, d, false, true, 116); c->VSSetShaderResources(116, 1, &pl); Remember(c, d, false, true, 117); c->VSSetShaderResources(117, 1, &bd); }
+                if (ID3D11ShaderResourceView* dv = ExprBoneDeltaSrv()) { Remember(c, d, false, true, 115); c->VSSetShaderResources(115, 1, &dv); }   // (08/11) gestos en la paleta (t115)
+            }
             break; }
         case RuleAction::SetParam: break;   // ya resuelto con la textura de parametros alternativa
         }
@@ -1189,6 +1270,8 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (g_cfg.bypass) return d.n > 0;
     if (g_skinDiagArmed.load(std::memory_order_relaxed)) SkinDiagDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0, t_drawVerts);   // (24/10) skintone.cpp
     if (g_toneChkArmed.load(std::memory_order_relaxed)) SkinToneCheckDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0);   // (24/10 c) punto de los dibujos de piel
+    if (UiHideShouldSkip(c, ps ? ps->hash : 0)) { d.skip = true; return d.n > 0; }   // (08/11 e) x392: menus del juego ocultos (sin vidrio ni aro)
+    if (ID3D11ShaderResourceView* bg_ = EditorBgFor(c, ps ? ps->hash : 0)) { Remember(c, d, true, true, 8); c->PSSetShaderResources(8, 1, &bg_); }   // (08/11 qk2yxa) x424: fondo del visor del editor negro / imagen propia
     GlassBeforeDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0, t_drawVerts, d.glass);   // (24/10) vidrio de los menus: GS + PS propios (se devuelven en FX_DRAW)
     RingBeforeDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0, d.ring);   // (24/10 c) aro del musculo: variante de la piel / dibujo extra encima del jugador
     // 19/10: PS sin registrar (lo creo otra DLL, p.ej. cloth-mod): si el ini lo declara "como = <hash>", se trata como ese shader
@@ -1227,7 +1310,14 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         if (!s_firstRule.exchange(true)) Log("primer dibujo con regla");
     }
     if (ps && ps->rule) RunRule(c, ps, d);
-    if (ps && ps->hash == 0x63fab7735eee149cULL) MouthCheck(c, ps);   // (03/11) la boca tiene sus 4 texturas del mod? (log 'recursos por dibujo')
+    // (04/11) pelo y barba en alta (caras_hd.cpp): PS del pelo c75f6047, barba 02f1d510, composicion 4a848614, sombra 213f9f12.
+    // Solo cambia un slot si tiene la misma textura del juego que se volco (nunca la boca 63fab773, que no esta en la lista)
+    if (ps && (ps->hash == 0xc75f6047d5817df9ULL || ps->hash == 0x02f1d51037669342ULL || ps->hash == 0x4a8486141c44a44dULL || ps->hash == 0x213f9f126b6af9c4ULL)) {
+        ID3D11ShaderResourceView* hd[4]; CarasHdHair(c, ps->hash, hd);
+        for (int i = 0; i < 4; i++) if (hd[i]) { Remember(c, d, true, true, i); c->PSSetShaderResources(i, 1, &hd[i]); } }
+    if (ps && ps->hash == 0x63fab7735eee149cULL) MouthCheck(c, ps);
+    // (04/11 boca) mascara del interior de la boca: el mismo dibujo se repite despues con el PS de la mascara (MouthMaskReplay)
+    if (ps && ps->hash == 0x63fab7735eee149cULL && t_drawKind == 1 && MouthMaskOn()) { d.mouth = true; d.mCnt = t_drawVerts; d.mStart = t_drawStart; d.mBase = t_drawBase; }   // (03/11) la boca tiene sus 4 texturas del mod? (log 'recursos por dibujo')
     // (04/11) boca propia por jugador (bocajug.cpp): misma malla, vertices del perfil de caras.ini (boca = ...) para la boca de esa cara
     if (ps && ps->hash == 0x63fab7735eee149cULL && t_drawKind == 1 && !d.lod.count) {
         LodIA L; ID3D11ShaderResourceView* bsm = nullptr;
@@ -1249,6 +1339,8 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         if (!hv) hv = LimbDataFor(vs->hash, t_drawVerts, t_drawStart, t_drawBase, &arm);   // (26/10, v12.7) brazos y piernas
         if (hv) { Remember(c, d, false, true, 126); c->VSSetShaderResources(126, 1, &hv); }
         // (31/10) torso bajo la camiseta preciso: mapa de lo que asoma (cuerpo.cpp) en t124 del VS de la piel y de su sombra
+        // (08/11) gestos del publico: buffer pes_crowdface en t30 de los 6 VS del publico (sin tocar PES21FX_rules.ini)
+        if (ID3D11ShaderResourceView* cf = PublicoSRVFor(vs->hash)) { Remember(c, d, false, true, 30); c->VSSetShaderResources(30, 1, &cf); }
         if (vs->hash == 0x1c02a92ab4ae3362ULL || vs->hash == 0xc6ef0c7519ec95a5ULL) if (ID3D11ShaderResourceView* nv = TorsoNeedSRV()) { Remember(c, d, false, true, 124); c->VSSetShaderResources(124, 1, &nv); }
         if (arm && vs->hash == 0x1c02a92ab4ae3362ULL) {   // (02/11) grupos musculares del brazo
             if (ID3D11ShaderResourceView* an = ArmAnatTexture(0)) { Remember(c, d, true, true, 26); c->PSSetShaderResources(26, 1, &an); }
@@ -1293,31 +1385,63 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     // variacion de dientes/encias por jugador
     if (ps && ps->hash == 0x63fab7735eee149cULL && ps->repl && s.lastHairCB) { Remember(c, d, true, false, 11); c->PSSetConstantBuffers(11, 1, &s.lastHairCB); }
     // (27/10 c) sombra de la cabeza: el atlas propio (t30) a los 7 shaders del sol reemplazados
-    if (ps && ps->repl) { int si = SunPassIndex(ps->hash); if (si >= 0 && si < 7) if (ID3D11ShaderResourceView* hs = HeadShadowSRV()) { Remember(c, d, true, true, 30); c->PSSetShaderResources(30, 1, &hs); } }
+    if (ps && ps->repl) { int si = SunPassIndex(ps->hash); if (si >= 0 && si != 7) if (ID3D11ShaderResourceView* hs = HeadShadowSRV()) { Remember(c, d, true, true, 30); c->PSSetShaderResources(30, 1, &hs); } }
+    // (04/11 boca) d0e9 / 7dbbc: mascara del interior de la boca en t43 (donde hay boca, la contraluz de antes)
+    if (ps && ps->repl && (ps->hash == 0xd0e9d81c09b3da66ULL || ps->hash == 0x7dbbc922c9ae74c5ULL)) if (ID3D11ShaderResourceView* mm = MouthMaskSRV()) { Remember(c, d, true, true, 43); c->PSSetShaderResources(43, 1, &mm); }
     // 20/10: desgaste de la cancha en vivo: la posicion de cada jugador sale del dibujo de su short / medias (b5 del VS)
     if (ps && ps->hash == 0x55297925e0c66085ULL) PitchWearNotePlayer(c);
     // (2/11) botines / pelota (aadffecf): anotar la traslacion para reconocer la pelota; en el dibujo de la pelota, b12 = manchas (fila 177)
     if (ps && ps->hash == 0xaadffecf2090e4f1ULL && ps->repl) if (ID3D11Buffer* bb = PitchBallDrawNote(c, t_drawVerts)) { Remember(c, d, true, false, 12); c->PSSetConstantBuffers(12, 1, &bb); }
+    // (04/11 g, Agustin: "teselacion a las manos, brazos y piernas") piel del cuerpo (VS 1c02a92a + PS aa7d1833 reemplazado, DrawIndexed):
+    // expr.cpp lee la malla una vez (solo pesos de borde) y facetess.cpp pone el HS / DS del cuerpo; b12 = vertices / primer indice
+    // de la malla, t119 = pesos de borde (los lee el VS para TEXCOORD12). Fila 364 (361 / 362 expresiones, 363 piel).
+    if (vs && vs->hash == 0x1c02a92ab4ae3362ULL && ps && ps->hash == 0xaa7d1833f6a11481ULL && ps->repl && t_drawKind == 1 && g_cfg.live[364][0] > 0.5f) {
+        ID3D11ShaderResourceView* seam = nullptr;
+        if (ID3D11Buffer* b = ExprBufferForDraw(c, t_drawVerts, t_drawStart, t_drawBase, nullptr, nullptr, nullptr, nullptr, &seam, true)) {
+            if (seam) {
+                ID3D11ShaderResourceView* prm = nullptr; c->VSGetShaderResources(120, 1, &prm);
+                if (prm) {
+                    if (FaceTessBegin(c, vs->hash, seam, prm, d.tess)) {
+                        Remember(c, d, false, false, 12); c->VSSetConstantBuffers(12, 1, &b);
+                        Remember(c, d, false, true, 119); c->VSSetShaderResources(119, 1, &seam);
+                    }
+                    prm->Release();
+                }
+            }
+        }
+    }
     // (27/10 c) hay camisetas en escena (PS de la camiseta 7e64 / a41e / c7ae): el torso se mete bajo la tela (fila 320, z la pone
     // la DLL en Present); sin camiseta (menu Apariencia / Fisico, tecla 4 de Sider) el torso queda entero, sin escalon en la costura
-    if (ps && (ps->hash == 0x7e647d9c43b453f9ULL || ps->hash == 0xa41e7343f874154fULL || ps->hash == 0xc7ae89b63e889007ULL)) {
+    // (07/11) Agustin: de lejos el torso atraviesa la camiseta. El catalogo tiene otras 3 variantes del G-buffer del kit con las
+    // mismas texturas (patron + marking / badge) pero sin SV_IsFrontFace (no se dibujaron en la captura del menu): candidatas a la
+    // camiseta de lejos / del arbitro. Sin ellas el personaje no entra en la lista y su torso queda entero (sin x320).
+    if (const int sk = ps ? ShirtPSKind(ps->hash) : -1; sk >= 0) {
         g_shirtSeen.store(true, std::memory_order_relaxed);
-        TorsoShirtNote(c, (ps->hash == 0x7e647d9c43b453f9ULL ? 0 : ps->hash == 0xa41e7343f874154fULL ? 1 : 2) | ((t_drawVerts == 7284 || t_drawVerts == 6006 || t_drawVerts == 7512 || t_drawVerts == 5550) ? 4 : 0));   // (01/11) +4 = camiseta ajustada (indices de [shirt_tight] detect de cloth.ini)   // (31/10 b) camiseta por jugador
+        if (sk >= 8) ShirtPSNoteNew(ps->hash, t_drawVerts);
+        TorsoShirtNote(c, (sk & 3) | ((t_drawVerts == 7284 || t_drawVerts == 6006 || t_drawVerts == 7512 || t_drawVerts == 5550) ? 4 : 0));   // (01/11) +4 = camiseta ajustada (indices de [shirt_tight] detect de cloth.ini)   // (31/10 b) camiseta por jugador
     }
     // 19/10: SSS separable en pantalla antes de la composicion: la irradiancia (t9) llega ya difundida sobre la piel
     if (ps && (ps->hash == 0x619b86cb5691cdceULL || ps->hash == 0xf807e74d5b900a15ULL) && ps->repl) {
-        if (ID3D11ShaderResourceView* v = SSSSBeforeComposition(c)) { Remember(c, d, true, true, 9); c->PSSetShaderResources(9, 1, &v);
+        int gz_ = GpuZoneBegin(c, kGzSSSS); ID3D11ShaderResourceView* v0_ = SSSSBeforeComposition(c); GpuZoneEnd(c, gz_);
+        if (ID3D11ShaderResourceView* v = v0_) { Remember(c, d, true, true, 9); c->PSSetShaderResources(9, 1, &v);
             if (ID3D11ShaderResourceView* sp = SSSSSpecSRV()) { Remember(c, d, true, true, 10); c->PSSetShaderResources(10, 1, &sp); } }   // (27/10 b) brillo con la luz de prueba del editor
     }
     // 20/10: GTAO (HBAO actual) para la luz global y la composicion: t27 (se calcula una vez por cuadro)
-    if (ps && (ps->hash == 0x619b86cb5691cdceULL || ps->hash == 0xfda6da09737592b1ULL) && ps->repl) {
-        ID3D11ShaderResourceView* v = GTAOBeforeComposition(c, s_presentNo.load());
+    // (08/11 b) tambien la composicion del editor (f807): ahi no habia GTAO y la oclusion de corto alcance de la boca no se veia
+    if (ps && (ps->hash == 0x619b86cb5691cdceULL || ps->hash == 0xfda6da09737592b1ULL || ps->hash == 0xf807e74d5b900a15ULL) && ps->repl) {
+        int gz_ = GpuZoneBegin(c, kGzGTAO); ID3D11ShaderResourceView* v = GTAOBeforeComposition(c, s_presentNo.load()); GpuZoneEnd(c, gz_);
         if (!v && g_cfg.live[132][0] > 0.5f) v = GTAONeutralSRV();   // (24/10 g) escena sin GTAO (editor): sin oclusion, no 0
         if (v) { Remember(c, d, true, true, 27); c->PSSetShaderResources(27, 1, &v); }
     }
     // 21/10: SSGI temporal para la composicion: t26 (media resolucion, acumulado en el tiempo)
-    if (ps && ps->hash == 0x619b86cb5691cdceULL && ps->repl) {
-        if (ID3D11ShaderResourceView* v = SSGIBeforeComposition(c, s_presentNo.load())) { Remember(c, d, true, true, 26); c->PSSetShaderResources(26, 1, &v); }
+    // (08/11 0qtsss, Agustin: "el ssgi en el modo editar deberia cargar por completo") tambien la composicion del editor (f807) con x411
+    if (ps && ps->hash == 0xf807e74d5b900a15ULL) EditorBgNoteComposition();   // (08/11 qk2yxa) el visor del editor esta en pantalla (fondo x424)
+    const bool ssgiEd_ = ps && ps->hash == 0xf807e74d5b900a15ULL && g_cfg.live[411][0] > 0.5f;
+    // REGLA FIJA de la boca: la composicion del editor recibe la mascara del interior de la boca (t43) y ahi deja todo como antes
+    if (ssgiEd_ && ps->repl) if (ID3D11ShaderResourceView* mm = MouthMaskSRV()) { Remember(c, d, true, true, 43); c->PSSetShaderResources(43, 1, &mm); }
+    if (ps && (ps->hash == 0x619b86cb5691cdceULL || ssgiEd_) && ps->repl) {
+        int gz_ = GpuZoneBegin(c, kGzSSGI); ID3D11ShaderResourceView* v0_ = SSGIBeforeComposition(c, s_presentNo.load(), ssgiEd_); GpuZoneEnd(c, gz_);
+        if (ID3D11ShaderResourceView* v = v0_) { Remember(c, d, true, true, 26); c->PSSetShaderResources(26, 1, &v); }
     }
     // (27/10) 323: ocultar la camiseta interior (inner / inner_cap / inner_glove de common_package.fpk: 9990 / 9714 / 8640 indices,
     // y el cuello alto highneck: 960). El modulo SinCamiseta no las puede tapar (vienen dentro del fpk que el juego carga una vez):
@@ -1369,17 +1493,23 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         }
         for (auto* v : chk) if (v) v->Release();
     }
+    // (04/11 i) pestanas con hebras: la tira de pestanas (VS 66917213 / PS f0d74b9c) se repite con el GS de pestanas al terminar
+    if (t_drawKind == 1 && vs && ps && !g_cfg.bypass && !d.brow.browVS && LashWanted(vs->hash, ps->hash)) {
+        d.brow = FaceGenExtra(); d.brow.browVS = vs->hash; d.brow.browCount = t_drawVerts; d.brow.browStart = t_drawStart; d.brow.browBase = t_drawBase;
+    }
     RingFaceBind(c, d.ring);   // (24/10 e) medicion del color de la cara: u7 (despues de las cejas en u5 / u6)
     return d.n > 0;
 }
 #define FX_DRAW(verts, kind, inst, call) if (g_catalogHook) { CtxState& cs_ = Ctx(c); CatalogDraw(c, cs_.vs, cs_.ps, verts, kind, inst); } t_drawVerts = (UINT)(verts); t_drawKind = (kind); DrawScope ds; bool r = BeforeDraw(c, ds); \
     if ((kind) == 1 && g_lodAny) { if (!t_lodNoted && !ds.lod.count) { CtxState& cl_ = Ctx(c); LodNoteAnyDraw(c, cl_.vs ? cl_.vs->hash : 0, cl_.ps ? cl_.ps->hash : 0, verts, t_drawStart, t_drawBase, &ds.lod); } t_lodNoted = false; } \
+    if ((kind) == 1 && !ds.lod.count && g_caraMallaAny.load(std::memory_order_relaxed) && CaraMallaAnyDraw(c, verts, t_drawStart, t_drawBase, &ds.lod)) ds.hdMesh = true; \
     if ((kind) == 1 && t_grassSub.count) { if (!ds.lod.count) ds.lod = t_grassSub; else t_grassSub.Release(); t_grassSub = LodIA(); } \
     if (!ds.skip) { call; } if (ds.restorePS) { c->PSSetShader(ds.restorePS, nullptr, 0); ds.restorePS->Release(); } if (ds.glass.on) GlassAfterDraw(c, ds.glass); if (ds.ring.on) RingAfterDraw(c, ds.ring); \
     if (ds.ring.overlay && !ds.skip) { RingOverlayBegin(c, ds.ring); call; RingOverlayEnd(c, ds.ring); } \
-    if (g_meterHook) { CtxState& cm_ = Ctx(c); if (cm_.ps && cm_.ps->hash == 0x619b86cb5691cdceULL) LightMeterAfterComposition(c); } \
+    { CtxState& cm_ = Ctx(c); if (cm_.ps && (cm_.ps->hash == 0x619b86cb5691cdceULL || cm_.ps->hash == 0xf807e74d5b900a15ULL)) { if (!ds.skip) HairFwdAfterComposition(c); if (g_meterHook) { int gz_ = GpuZoneBegin(c, kGzLightMeter); LightMeterAfterComposition(c); GpuZoneEnd(c, gz_); } } } \
     if (g_inspectOn) { CtxState& ci_ = Ctx(c); if (InspectBegin(c, ci_.ps, ci_.vs, kind, verts, inst)) { call; InspectEnd(c); } } \
-    if (r) Restore(c, ds); if (ds.brow.seedsUAV) BrowDrawAfterFace(c, &ds.brow); if (ds.lod.count) ds.lod.Release();
+    if (ds.mouth && !ds.skip) MouthMaskReplay<V>(c, ds); \
+    if (ds.brow.browVS && !ds.skip) BrowStrands<V>(c, ds); if (ds.tess.on && !ds.skip && (kind) == 1) TessAtlas<V>(c, ds); if (ds.tess.on) FaceTessEnd(c, ds.tess); if (r) Restore(c, ds); if (ds.lod.count) ds.lod.Release();
 // (26/10 g) antes de cada dibujo que no sea de la base de la cancha: la emision pendiente del pasto del mod (ver GrassBaseFlush)
 #define GRASS_FLUSH(c) if (g_grassPendN.load(std::memory_order_relaxed) > 0) { CtxState& cf_ = Ctx(c); GrassBaseFlush(c, 0, cf_.ps ? cf_.ps->hash : 0); }
 // (27/10 c) sombra de la cabeza: el mismo dibujo de la pasada de sombras del juego (cascada mas cercana) se repite en el atlas
@@ -1449,7 +1579,9 @@ template<int V, class F> static void HeadShadowReplay(ID3D11DeviceContext* c, ID
     ID3D11RasterizerState* oldRS = nullptr; c->RSGetState(&oldRS);
     if (ID3D11RasterizerState* nc = HeadShadowNoCullRS(oldRS)) c->RSSetState(nc);   // (27/10 f) sin descarte de caras
     o_OMSetRT[V](c, 0, nullptr, dsv);
-    for (int i = 0; i < n; i++) {
+    const bool body = HeadShadowBodyOn();   // (04/11 piel) cuadrante 3: piernas del mas cercano
+    for (int i = 0; i < 4; i++) {
+        if (i >= n && !(i == 3 && body)) continue;
         ID3D11Buffer* cb = HeadShadowCB(i); if (!cb) continue;
         D3D11_VIEWPORT vp; HeadShadowViewport(i, vp);
         D3D11_RECT rc{ (LONG)vp.TopLeftX, (LONG)vp.TopLeftY, (LONG)(vp.TopLeftX + vp.Width), (LONG)(vp.TopLeftY + vp.Height) };
@@ -1457,7 +1589,7 @@ template<int V, class F> static void HeadShadowReplay(ID3D11DeviceContext* c, ID
         c->VSSetConstantBuffers(2, 1, &cb);
         draw();
     }
-    g_headShadowReplays.fetch_add(n, std::memory_order_relaxed);
+    g_headShadowReplays.fetch_add(n + (body ? 1 : 0), std::memory_order_relaxed);
     o_OMSetRT[V](c, 8, rt, oldDsv);
     c->VSSetConstantBuffers(2, 1, &oldB2);
     if (nvp) c->RSSetViewports(nvp, vps); if (nsc) c->RSSetScissorRects(nsc, scs);
@@ -1466,13 +1598,147 @@ template<int V, class F> static void HeadShadowReplay(ID3D11DeviceContext* c, ID
 }
 // (20/10) LOD0 forzado: el dibujo sale con los buffers/cuentas de la malla de mas detalle y se devuelve el estado del juego
 template<int V> static void LodDrawSub(ID3D11DeviceContext* c, DrawScope& ds) { LodIA sv; LodBind(c, ds.lod, sv); o_DrawIdx[V](c, ds.lod.count, ds.lod.start, ds.lod.base); LodRestore(c, sv, ds.lod); }
+// (04/11 boca) mascara del interior de la boca (mouthmask.cpp): el mismo DrawIndexed de la boca otra vez, con el PS de la mascara
+// sobre la textura R8, la profundidad del juego sin escribir y sin mezcla; despues vuelve todo como estaba. Funciones originales.
+template<int V> static void MouthMaskReplay(ID3D11DeviceContext* c, DrawScope& ds) {
+    ID3D11RenderTargetView* rt[8] = {}; ID3D11DepthStencilView* dsv = nullptr; c->OMGetRenderTargets(8, rt, &dsv);
+    UINT nrt = 0; for (UINT i = 0; i < 8; i++) if (rt[i]) nrt = i + 1;
+    ID3D11DepthStencilState* oldDSS = nullptr; UINT oldRef = 0; c->OMGetDepthStencilState(&oldDSS, &oldRef);
+    ID3D11PixelShader* mps = nullptr; ID3D11DepthStencilState* mdss = nullptr;
+    ID3D11RenderTargetView* mrtv = (dsv && rt[0]) ? MouthMaskBegin(rt[0], oldDSS, &mps, &mdss) : nullptr;
+    if (mrtv && mps && mdss) {
+        ID3D11PixelShader* oldPS = nullptr; c->PSGetShader(&oldPS, nullptr, nullptr);
+        ID3D11BlendState* oldBS = nullptr; float oldBF[4] = {}; UINT oldSM = 0; c->OMGetBlendState(&oldBS, oldBF, &oldSM);
+        o_OMSetRT[V](c, 1, &mrtv, dsv);
+        o_SetPS[V](c, mps, nullptr, 0);
+        c->OMSetDepthStencilState(mdss, 0);
+        c->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+        if (ds.lod.count) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.mCnt, ds.mStart, ds.mBase);
+        o_OMSetRT[V](c, nrt, rt, dsv);
+        o_SetPS[V](c, oldPS, nullptr, 0); if (oldPS) oldPS->Release();
+        c->OMSetBlendState(oldBS, oldBF, oldSM); if (oldBS) oldBS->Release();
+        c->OMSetDepthStencilState(oldDSS, oldRef);
+    }
+    if (oldDSS) oldDSS->Release();
+    for (auto* r : rt) if (r) r->Release(); if (dsv) dsv->Release();
+}
+// (04/11) cejas con hebras v2: el mismo DrawIndexed de la cara otra vez, con el GS de hebras (facegen.cpp), ANTES de devolver el
+// estado (huesos, gestos, expresiones y render targets de la cara siguen enlazados). Llama la funcion original (sin hooks).
+// (07/11 c, Agustin: "la luz no la afecta de manera correcta, no tiene el volumen exacto ni la dimensionalidad 3d") HEBRAS EN EL ATLAS
+// de sombra de las cabezas (headshadow.cpp, t30): como TessAtlas, apenas dibujadas las hebras en el G-buffer se repite el mismo
+// dibujo sin PS sobre el atlas con el GS de atlas (pes_browat_*_gs: cinta mirando al sol, posicion en la caja de cada cabeza, b12).
+// La pasada del sol (pes_headshadow.hlsli, PCSS) lee ese atlas para la piel de la cara y para las hebras mismas: cada pelo da sombra
+// a los de abajo y a la piel desde donde viene el sol de verdad. z382 = 0 lo apaga. Solo si el atlas ya se limpio en este cuadro.
+template<int V> static void BrowAtlas(ID3D11DeviceContext* c, DrawScope& ds) {
+    if (g_cfg.live[309][0] < 0.5f || g_cfg.live[382][2] < 0.5f) return;
+    const int n = HeadShadowSlots(); ID3D11DepthStencilView* dsv = HeadShadowDSV();
+    if (n <= 0 || !dsv || !HeadShadowClearedThisFrame()) return;
+    ID3D11GeometryShader* ags = BrowAtlasGS(ds.brow.browVS); if (!ags) return;
+    ID3D11RenderTargetView* rt[8] = {}; ID3D11DepthStencilView* oldDsv = nullptr; c->OMGetRenderTargets(8, rt, &oldDsv);
+    UINT nrt = 0; for (UINT i = 0; i < 8; i++) if (rt[i]) nrt = i + 1;
+    ID3D11PixelShader* oldPS = nullptr; c->PSGetShader(&oldPS, nullptr, nullptr);
+    ID3D11GeometryShader* oldGS = nullptr; c->GSGetShader(&oldGS, nullptr, nullptr);
+    ID3D11Buffer* oldB12 = nullptr; c->GSGetConstantBuffers(12, 1, &oldB12);
+    D3D11_VIEWPORT vps[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]; UINT nvp = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE; c->RSGetViewports(&nvp, vps);
+    D3D11_RECT scs[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]; UINT nsc = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE; c->RSGetScissorRects(&nsc, scs);
+    ID3D11RasterizerState* oldRS = nullptr; c->RSGetState(&oldRS);
+    ID3D11DepthStencilState* oldDSS = nullptr; UINT oldRef = 0; c->OMGetDepthStencilState(&oldDSS, &oldRef);
+    o_OMSetRT[V](c, 0, nullptr, dsv);
+    o_SetPS[V](c, nullptr, nullptr, 0);   // sin PS: solo profundidad
+    c->GSSetShader(ags, nullptr, 0);
+    // sin culling (cintas de ambos lados): el RS de la pasada de sombras del juego lleva el sesgo del juego; el de las hebras no
+    if (ID3D11RasterizerState* rs = HeadShadowAtlasRS(oldRS)) c->RSSetState(rs);
+    if (ID3D11DepthStencilState* dss = HeadShadowAtlasDSS()) c->OMSetDepthStencilState(dss, 0);
+    static std::atomic<int> s_logged{0};
+    if (s_logged.fetch_add(1) < 1) Log("cejas: hebras en el atlas de sombra (%d cabezas, VS %s)", n, ds.brow.browVS == 0x455eb97bc2c3a958ULL ? "455eb97b" : "faab87ee");
+    for (int i = 0; i < n; i++) {
+        ID3D11Buffer* cb = HeadShadowCB(i); if (!cb) continue;
+        D3D11_VIEWPORT vp; HeadShadowViewport(i, vp);
+        D3D11_RECT rc{ (LONG)vp.TopLeftX, (LONG)vp.TopLeftY, (LONG)(vp.TopLeftX + vp.Width), (LONG)(vp.TopLeftY + vp.Height) };
+        c->RSSetViewports(1, &vp); c->RSSetScissorRects(1, &rc);
+        c->GSSetConstantBuffers(12, 1, &cb);
+        if (ds.lod.count && !ds.hdMesh) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.brow.browCount, ds.brow.browStart, ds.brow.browBase);
+    }
+    o_OMSetRT[V](c, nrt, rt, oldDsv);
+    o_SetPS[V](c, oldPS, nullptr, 0);
+    c->GSSetShader(oldGS, nullptr, 0); c->GSSetConstantBuffers(12, 1, &oldB12);
+    if (nvp) c->RSSetViewports(nvp, vps); if (nsc) c->RSSetScissorRects(nsc, scs);
+    c->RSSetState(oldRS); c->OMSetDepthStencilState(oldDSS, oldRef);
+    for (auto* r : rt) if (r) r->Release(); if (oldDsv) oldDsv->Release(); if (oldPS) oldPS->Release(); if (oldGS) oldGS->Release(); if (oldB12) oldB12->Release();
+    if (oldRS) oldRS->Release(); if (oldDSS) oldDSS->Release();
+}
+template<int V> static void BrowStrands(ID3D11DeviceContext* c, DrawScope& ds) {
+    if (!BrowStrandsBegin(c, &ds.brow, ds.brow.browVS)) return;
+    if (BrowShadowOn(c)) {   // (04/11 k) sombra de contacto de los pelos sobre la piel (antes de las hebras: ellas no se oscurecen)
+        if (ds.lod.count && !ds.hdMesh) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.brow.browCount, ds.brow.browStart, ds.brow.browBase);
+        BrowShadowOff(c);
+    }
+    if (BrowV3Roots(c, ds.brow.browVS)) {   // (08/11 y) hebras v3: raices y despues cada hebra con hasta 16 segmentos
+      if (ds.lod.count) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.brow.browCount, ds.brow.browStart, ds.brow.browBase);
+      BrowV3Strands(c);
+      if (g_cfg.live[402][0] > 0.5f) {   // (08/11 y) la barba sigue con las hebras de antes (el GS viejo con x416 salta las cejas)
+        bool so = BrowSOOn(c);   // (08/11 z3) en modo mixto la barba tambien sigue en el G-buffer: entra a la pasada con su borde
+        if (ds.lod.count) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.brow.browCount, ds.brow.browStart, ds.brow.browBase);
+        if (so) BrowSOOff(c); }
+    } else
+    { bool so = BrowSOOn(c);   // (08/11 v) las hebras tambien a la salida de flujo (pasada propia del pelo tras la composicion)
+      if (ds.lod.count && !ds.hdMesh) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.brow.browCount, ds.brow.browStart, ds.brow.browBase);
+      if (so) BrowSOOff(c); }
+    BrowAtlas<V>(c, ds);   // (07/11 c) con el estado de las hebras aun puesto (GS: b2 / b10 / b11, t0 / t23 / t24 / t26 / t27 / t120 / t121)
+    BrowStrandsEnd(c);
+}
+// (04/11 piel) CARA TESELADA EN EL ATLAS de las cabezas (headshadow.cpp, t30: sombra propia de la cabeza y grosor de la piel). La
+// repeticion de la pasada de sombras del juego (HeadShadowReplay) dibuja la malla del modelo, sin teselar: la sombra de la nariz y
+// del menton y el grosor del contraluz salian de los triangulos. Aca, apenas termina el dibujo de la piel de la cara teselada en el
+// G-buffer, se repite el mismo dibujo (mismo VS, mismo HS = mismos triangulos) sin PS y sobre el atlas, con el DS del atlas
+// (pes_face_tess_*_atlas_ds.hlsl: la posicion teselada de la vista al mundo y del mundo a la caja de cada cabeza, b12). Solo si el
+// atlas ya se limpio en este cuadro (la pasada de sombras del juego va ANTES del G-buffer); si no, se saltea y queda en el registro.
+// En el atlas quedan las dos (la del modelo y la teselada) y gana la mas cercana al sol: la cara redondeada en lo convexo.
+template<int V> static void TessAtlas(ID3D11DeviceContext* c, DrawScope& ds) {
+    if (ds.tess.v < 0 || ds.tess.v > 1 || !ds.tess.cnt) return;
+    if (g_cfg.live[309][0] < 0.5f) return;
+    const int n = HeadShadowSlots(); ID3D11DepthStencilView* dsv = HeadShadowDSV();
+    if (n <= 0 || !dsv) return;
+    if (!HeadShadowClearedThisFrame()) { HeadShadowTessNote(1); return; }
+    ID3D11DomainShader* ads = FaceTessAtlasDS(ds.tess.v); if (!ads) { HeadShadowTessNote(2); return; }
+    ID3D11RenderTargetView* rt[8] = {}; ID3D11DepthStencilView* oldDsv = nullptr; c->OMGetRenderTargets(8, rt, &oldDsv);
+    UINT nrt = 0; for (UINT i = 0; i < 8; i++) if (rt[i]) nrt = i + 1;   // al devolver: solo los slots que estaban (no pisar UAVs de mas arriba)
+    ID3D11PixelShader* oldPS = nullptr; c->PSGetShader(&oldPS, nullptr, nullptr);
+    ID3D11DomainShader* oldDS = nullptr; c->DSGetShader(&oldDS, nullptr, nullptr);
+    ID3D11Buffer* oldB12 = nullptr; c->DSGetConstantBuffers(12, 1, &oldB12);
+    D3D11_VIEWPORT vps[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]; UINT nvp = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE; c->RSGetViewports(&nvp, vps);
+    D3D11_RECT scs[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]; UINT nsc = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE; c->RSGetScissorRects(&nsc, scs);
+    ID3D11RasterizerState* oldRS = nullptr; c->RSGetState(&oldRS);
+    ID3D11DepthStencilState* oldDSS = nullptr; UINT oldRef = 0; c->OMGetDepthStencilState(&oldDSS, &oldRef);
+    o_OMSetRT[V](c, 0, nullptr, dsv);
+    o_SetPS[V](c, nullptr, nullptr, 0);   // sin PS (solo profundidad): la funcion original, el registro del contexto (Ctx.ps) no cambia
+    c->DSSetShader(ads, nullptr, 0);
+    if (ID3D11RasterizerState* rs = HeadShadowAtlasRS(oldRS)) c->RSSetState(rs);
+    if (ID3D11DepthStencilState* dss = HeadShadowAtlasDSS()) c->OMSetDepthStencilState(dss, 0);
+    for (int i = 0; i < n; i++) {
+        ID3D11Buffer* cb = HeadShadowCB(i); if (!cb) continue;
+        D3D11_VIEWPORT vp; HeadShadowViewport(i, vp);
+        D3D11_RECT rc{ (LONG)vp.TopLeftX, (LONG)vp.TopLeftY, (LONG)(vp.TopLeftX + vp.Width), (LONG)(vp.TopLeftY + vp.Height) };
+        c->RSSetViewports(1, &vp); c->RSSetScissorRects(1, &rc);
+        c->DSSetConstantBuffers(12, 1, &cb);
+        if (ds.lod.count) LodDrawSub<V>(c, ds); else o_DrawIdx[V](c, ds.tess.cnt, ds.tess.start, ds.tess.base);
+        HeadShadowTessNote(0);
+    }
+    o_OMSetRT[V](c, nrt, rt, oldDsv);
+    o_SetPS[V](c, oldPS, nullptr, 0);
+    c->DSSetShader(oldDS, nullptr, 0); c->DSSetConstantBuffers(12, 1, &oldB12);
+    if (nvp) c->RSSetViewports(nvp, vps); if (nsc) c->RSSetScissorRects(nsc, scs);
+    c->RSSetState(oldRS); c->OMSetDepthStencilState(oldDSS, oldRef);
+    for (auto* r : rt) if (r) r->Release(); if (oldDsv) oldDsv->Release(); if (oldPS) oldPS->Release(); if (oldDS) oldDS->Release(); if (oldB12) oldB12->Release();
+    if (oldRS) oldRS->Release(); if (oldDSS) oldDSS->Release();
+}
 template<int V> static void STDMETHODCALLTYPE hk_DrawIdx(ID3D11DeviceContext* c, UINT a, UINT b, INT d) {
     GRASS_FLUSH(c)
     { CtxState& cg = Ctx(c); const ShaderEntry* gvs = cg.vs;
       if (g_grassProbeOn) CatalogGrassDraw(c, gvs, a, b, d);
       if (gvs && gvs->hash == 0x498b30bad256e8edULL) GrassOnDraw(c, gvs, cg.ps, a, b, d); else GrassClearSkip();   // (2/11 b) la omision x178 es solo de ESTE dibujo
       if (gvs && gvs->hash == 0x1c02a92ab4ae3362ULL) BodyOnDraw(c, a, b, d);   // (25/10) piel del cuerpo -> la ropa choca con ella (es fisica: no depende de "Ver original")
-      else if (cg.ps && (cg.ps->hash == 0x7e647d9c43b453f9ULL || cg.ps->hash == 0xa41e7343f874154fULL || cg.ps->hash == 0xc7ae89b63e889007ULL) && g_cfg.live[327][3] > 0.5f) BodyOnDraw(c, a, b, d, 1);   // (27/10 d) camiseta: medicion contra el torso
+      else if (cg.ps && ShirtPSKind(cg.ps->hash) >= 0 && g_cfg.live[327][3] > 0.5f) BodyOnDraw(c, a, b, d, 1);   // (27/10 d) camiseta: medicion contra el torso
       if (g_autoDumpAny) InspectAutoDump(c, cg.ps); }
     t_drawStart = b; t_drawBase = d;
     GrassStScope gst; GrassGameStates(c, gst);   // (26/10 g) solo el pasto del juego del G-buffer (lo marca GrassOnDraw)
@@ -1480,7 +1746,11 @@ template<int V> static void STDMETHODCALLTYPE hk_DrawIdx(ID3D11DeviceContext* c,
     GrassGameStatesRestore(c, gst);
     { CtxState& ch_ = Ctx(c); if (ch_.gameShadow) ShadowCasterProbe(c); if (ch_.shadowDSV && !ds.skip) HeadShadowReplay<V>(c, ch_.shadowDSV, 1, [&] { o_DrawIdx[V](c, a, b, d); }); }   // (27/10 c) sombra de la cabeza
     // (25/10) pasto v3: al terminar la base de la cancha (PS 5e92 / c956, existe en todas las camaras) se emite el pasto del mod
-    { CtxState& cb_ = Ctx(c); if (cb_.ps && (cb_.ps->hash == 0x5e92f2343848915aULL || cb_.ps->hash == 0xc9564b9b155f0a49ULL)) GrassOnBaseDraw(c); } }
+    { CtxState& cb_ = Ctx(c); if (cb_.ps && (cb_.ps->hash == 0x5e92f2343848915aULL || cb_.ps->hash == 0xc9564b9b155f0a49ULL)) GrassOnBaseDraw(c); }
+    // (08/11 c) x393: pasto del mod en el editor, despues de la cara (estado ya devuelto). (08/11 j, Agustin: "el pasto parpadea")
+    // tambien tras la piel del cuerpo (VS 1c02a92a): si un cuadro no dibuja la cara en el G-buffer (cerca de las piernas, cara fuera
+    // de cuadro o en otra pasada) el pasto no se emitia ese cuadro y parpadeaba; el primero de los dos por cuadro emite.
+    { CtxState& ce_ = Ctx(c); if (!ds.faceId.empty() || (ce_.vs && ce_.vs->hash == 0x1c02a92ab4ae3362ULL)) GrassEditorAfterFace(c); } }
 template<int V> static void STDMETHODCALLTYPE hk_Draw(ID3D11DeviceContext* c, UINT a, UINT b) { GRASS_FLUSH(c) FX_DRAW(a, 0, 1, o_Draw[V](c, a, b))
     { CtxState& ch_ = Ctx(c); if (ch_.gameShadow) ShadowCasterProbe(c); if (ch_.shadowDSV && !ds.skip) HeadShadowReplay<V>(c, ch_.shadowDSV, 0, [&] { o_Draw[V](c, a, b); }); } }
 // (25/10) dibujo indirecto (pasto v3): pasa por BeforeDraw como cualquier dibujo (reglas, t120); vertices e instancias desconocidos
@@ -1585,6 +1855,7 @@ static void HookDevice(ID3D11Device* d) {
         Hook(vt[15], (void*)&hk_CreatePS, (void**)&o_CreatePS, "CreatePixelShader");
         Hook(vt[18], (void*)&hk_CreateCS, (void**)&o_CreateCS, "CreateComputeShader");
         Hook(vt[27], (void*)&hk_CreateDC, (void**)&o_CreateDC, "CreateDeferredContext");
+        GpuMeterHookDevice(d);   // (07/11) medidor de VRAM por dueno (CreateBuffer / CreateTexture*)
         ID3D11DeviceContext* imm = nullptr; d->GetImmediateContext(&imm);
         if (imm) { HookContextV<0>(imm); imm->Release(); }
         ID3D11DeviceContext* dc = nullptr;
@@ -1785,8 +2056,12 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     if (first) { first = false; Log("primer Present (%d shaders propios activos)", g_replacedCount.load()); }
     {   // liberar shaders viejos de una recarga anterior
         std::lock_guard<std::mutex> lk(s_releaseMutex);
-        for (auto* p : s_deferredRelease) p->Release();
+        const double now = Now();
+        for (auto* p : s_deferredRelease) s_aged.push_back({ p, now });
         s_deferredRelease.clear();
+        size_t k = 0;
+        for (auto& a : s_aged) { if (now - a.t > 30.0) a.p->Release(); else s_aged[k++] = a; }
+        s_aged.resize(k);
     }
     DXGI_SWAP_CHAIN_DESC sd; sc->GetDesc(&sd);
     g_bbW = sd.BufferDesc.Width; g_bbH = sd.BufferDesc.Height;
@@ -1820,21 +2095,31 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
             if (g_dev.imm) { g_dev.imm->UpdateSubresource(r.buf, 0, nullptr, zeros.data(), 0, 0); r.cleared = true; }
         }
     }
+    GpuMeterPresent();  // (07/11) medidor de VRAM y de ms de GPU: lectura de consultas, marca del cuadro, log cada 10 s
     SunPassPresent();   // (25/10) variantes de la luz del sol: log de cambios
     LightTraceSummary();   // (27/10) quien llena el cbuffer de la luz
     UpdateTimeParams();
     SSGIPresent(s_presentNo.load());
     LightMeterPresent();
+    RastroPresent();    // (08/11 i) rastro del motor: ganchos en el primer Present (rastro = 1)
+    RastroEventosPresent();   // (08/11) eventos del partido para los gestos del publico (fila 394)
+    { static ULONGLONG t = 0; ULONGLONG n = GetTickCount64(); if (n - t > 10000) { t = n; RastroFlush(false); } }
     CamHookPresent();   // (23/10) camara del motor: ganchos (primer Present), cortes de camara -> 160, log
     TiempoPresent();    // (31/10) camara lenta: ganchos (visor del editor / reloj del partido, primer Present), 343.w, log
+    CmdListGuardPresent();
+    StateCachePresent();   // (08/11) estados del mod por descripcion (statecache.cpp)
+    RelWatchPresent();   // (08/11 g) quien suelta la ultima referencia de cada estado (cierre 11:19 en LUCDeferDeletion)   // (08/11) locks de las listas de comandos del juego con tope de espera (cuelgues del editor)
     FreeCamPresent();   // (1/11) camara libre: gancho a la camara del visor del editor (primer Present), log
     CharTrackPresent();    // (24/10) personajes: que jugador es cada esqueleto (ganchos en el primer Present, log)
     SkinDiagPresent();     // (24/10) tono de piel: diagnostico de los dibujos de personajes (w184)
     SkinTonePresent();     // (24/10) tono de piel por jugador: guardado y vista previa en el menu Fisico
-    GlassPresent();        // (24/10) vidrio de los menus: lectura de lo anotado por el PS y plan de copias del fondo
+    EditorBgPresent();   // (08/11 qk2yxa) x424: cuadro nuevo, el fondo vuelve a ir antes de la escena
+    { GpuZoneScope gz_(g_dev.imm, kGzGlass); GlassPresent(); }        // (24/10) vidrio de los menus: lectura de lo anotado por el PS y plan de copias del fondo
     MuscleHookPresent();   // (23/10) musculatura: ganchos a los huesos de musculo del motor (primer Present)
     ExprPresent();         // (31/10) expresiones faciales: mallas de cara nuevas (cabeza en la paleta)
-    BodyPresent();         // (25/10) la ropa contra el cuerpo real: mallas de piel nuevas, cuadro nuevo
+    FaceTessPresent();     // (04/11 b) teselacion de la cara: resumen
+    { GpuZoneScope gz_(g_dev.imm, kGzBody); BodyPresent(); }         // (25/10) la ropa contra el cuerpo real: mallas de piel nuevas, cuadro nuevo
+    MouthMaskPresent();    // (04/11 boca) mascara del interior de la boca: limpiar para el cuadro siguiente
     ArmsPresent();         // (27/10) brazos de TorsoBody para las caras reales: huellas de los torsos del juego, claves del cuadro
     { static unsigned s_noShirt = 1000; s_noShirt = g_shirtSeen.exchange(false) ? 0 : (std::min)(s_noShirt + 1, 1000u);   // (27/10 c) fila 320.z: camisetas en los ultimos 30 Present
       // (27/10 d) en el menu Fisico el jugador se ve sin camiseta: aunque haya camisetas de otros modelos, el torso va entero
@@ -1853,18 +2138,26 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     ExeDumpPresent();
     ExePatchPresent();
     GrassDistPresent();
-    PitchWearPresent();
-    GrassPresent();
-    FaceGenPresent();
+    { GpuZoneScope gz_(g_dev.imm, kGzPitchWear); PitchWearPresent(); }
+    PublicoPresent();   // (08/11) gestos del publico: sube el buffer que calcula el hilo de la CPU (fila 394)
+    { GpuZoneScope gz_(g_dev.imm, kGzGrass); GrassPresent(); }
+    { GpuZoneScope gz_(g_dev.imm, kGzFaceGen); FaceGenPresent(); }
+    { GpuZoneScope gz_(g_dev.imm, kGzCarasHd); CarasHdPresent(); CaraMallaPresent(); }   // (08/11 p) cara con mas poligonos
     InspectPresent();
-    FrameCopyPresent(sc);   // antes del menu, para que el menu no se refleje en los ojos
+    { GpuZoneScope gz_(g_dev.imm, kGzFrameCopy); FrameCopyPresent(sc); }   // antes del menu, para que el menu no se refleje en los ojos
     AsyncShotPresent();
-    RingPresent(sc);       // (24/10 e) aro del musculo sobre la imagen final (antes de las capturas y del menu)
+    { GpuZoneScope gz_(g_dev.imm, kGzRing); RingPresent(sc); }       // (24/10 e) aro del musculo sobre la imagen final (antes de las capturas y del menu)
     AutoCapturePresent(s_frameTex);
+    PanelPresent(s_frameTex);   // (08/11) panel en vivo: recargas pedidas por HTTP y capturas (panel.cpp)
     FisicoCapturePresent(s_frameTex);   // (26/10 c) paginas del menu Fisico
-    MenuTestPresent(sc);
-    OverlayPresent(sc);
-    return o_Present(sc, sync, flags);
+    MenuTestPresent(sc, s_frameTex);   // (08/11) prueba automatica v2: mide, fotografia y escribe PES21FX/diagnostico/<fecha>/ (OJO: nunca terminar un comentario // con barra invertida: continua la linea y se come la siguiente)
+    { GpuZoneScope gz_(g_dev.imm, kGzOverlay); OverlayPresent(sc); }
+    HRESULT hrP = o_Present(sc, sync, flags);
+    if (hrP == DXGI_ERROR_DEVICE_REMOVED || hrP == DXGI_ERROR_DEVICE_RESET) {   // (08/11 e) placa reiniciada (TDR)
+        ID3D11Device* d = g_dev.dev; HRESULT rr = d ? d->GetDeviceRemovedReason() : hrP;
+        OnDeviceLost((unsigned)(FAILED(rr) ? rr : hrP));
+    }
+    return hrP;
 }
 void OverlayResize();
 static HRESULT STDMETHODCALLTYPE hk_Resize(IDXGISwapChain* sc, UINT n, UINT w, UINT h, DXGI_FORMAT f, UINT fl) {
@@ -1918,9 +2211,11 @@ void ReloadShaders() {
     ScanShaderFolder();
     FaceGenReloadShaders();
     SSSSReloadShaders();
+    MouthMaskReloadShaders();
     PitchWearReloadShaders();
     LightMeterReloadShaders();
     GTAOReloadShaders();
+    FaceTessReloadShaders();
     GlassReloadShaders();
     RingReloadShaders();
     SSGIReloadShaders();
@@ -1959,6 +2254,12 @@ bool InstallHooks() {
 
 // llamado por nuestro D3D11CreateDevice (somos el d3d11.dll de la carpeta del juego)
 void OnDeviceCreated(ID3D11Device* d) { if (d) HookDevice(d); }
+static std::atomic<UINT> s_devFlags{0xffffffffu};
+void NoteDeviceFlags(UINT flags, bool ok) {
+    s_devFlags.store(flags);
+    Log("dispositivo D3D11: el juego lo pidio con banderas 0x%x%s%s", flags,
+        (flags & D3D11_CREATE_DEVICE_SINGLETHREADED) ? " (SINGLETHREADED: se quita, el mod crea texturas desde otros hilos)" : " (multihilo)", ok ? "" : " - FALLO");
+}
 
 // ---------------------------------------------------------------- diagnostico: referencias a una DLL que se descarga
 static bool Readable(uintptr_t p, size_t n) {

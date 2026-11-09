@@ -13,6 +13,8 @@
 //   del pasto del juego (px/m, 0 = modo por distancia); z63 mitad del alto de pantalla (px)
 #include "core.h"
 #include <d3d11_1.h>
+#include <DDSTextureLoader.h>
+#include <ScreenGrab.h>
 #include <atomic>
 #include <cmath>
 #include <vector>
@@ -132,6 +134,7 @@ static inline uint16_t F16(float v) {   // float -> half (sin NaN/inf)
     return (uint16_t)(sgn | (e << 10) | (m >> 13));
 }
 static std::atomic<float> s_adapt{1.0f};   // (27/10 o) densidad adaptativa por FPS (fila 333)
+static float s_adaptV[2] = { 1.0f, 1.0f };  // (08/11 z) densidad adaptativa guardada por vista: [0] lejos (x333 / y333), [1] cerca (x410 / y410)
 static float Halton(int i, int b) { float f = 1.0f, r = 0.0f; while (i > 0) { f /= b; r += f * (i % b); i /= b; } return r; }
 static void DenseRelease() { auto rel = [](DenseLevel& L) { if (L.pos) L.pos->Release(); if (L.uv) L.uv->Release(); if (L.ib) L.ib->Release(); L = DenseLevel(); }; for (auto& L : s_dense) rel(L); for (auto& L : s_denseExt) rel(L); s_denseBuilt = false; }
 static void BuildDense(float curv) {
@@ -248,15 +251,11 @@ struct PreDss { ID3D11DepthStencilState *src = nullptr, *out = nullptr; }; stati
 static ID3D11DepthStencilState* PrepassDSS2(ID3D11DepthStencilState* cur) {   // devuelve con referencia (o nullptr = usar el mismo)
     if (!g_dev.dev) return nullptr;
     std::lock_guard<std::mutex> lk(s_preMx);
-    for (auto& e : s_preD) if (e.out && e.src == cur) { e.out->AddRef(); return e.out; }
     D3D11_DEPTH_STENCIL_DESC d = {};
     if (cur) cur->GetDesc(&d); else { d.DepthEnable = TRUE; d.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL; d.DepthFunc = D3D11_COMPARISON_LESS; d.StencilReadMask = d.StencilWriteMask = 0xff; }
     if (d.DepthFunc == D3D11_COMPARISON_LESS) d.DepthFunc = D3D11_COMPARISON_LESS_EQUAL; else if (d.DepthFunc == D3D11_COMPARISON_GREATER) d.DepthFunc = D3D11_COMPARISON_GREATER_EQUAL; else return nullptr;
-    ID3D11DepthStencilState* n = nullptr;
-    if (FAILED(g_dev.dev->CreateDepthStencilState(&d, &n)) || !n) return nullptr;
-    PreDss& e = s_preD[s_preNext]; s_preNext = (s_preNext + 1) & 3;
-    if (e.out) e.out->Release(); if (e.src) e.src->Release();
-    e.out = n; e.src = cur; if (cur) cur->AddRef();
+    // (08/11) cache por descripcion (statecache.cpp): antes un anillo de 4 que soltaba y recreaba estados por dibujo
+    ID3D11DepthStencilState* n = CachedDSS(d); if (!n) return nullptr;
     n->AddRef(); return n;
 }
 static ID3D11Buffer* s_cullCb = nullptr;
@@ -471,15 +470,10 @@ static ID3D11DepthStencilState* BladeDSS(ID3D11DepthStencilState* g, ID3D11Depth
     if (!g_dev.dev) return nullptr;
     std::lock_guard<std::mutex> lk(s_bsMx);
     if (s_hyDev != g_dev.dev) { HyDropLocked(); s_hyDev = g_dev.dev; }
-    for (auto& e : s_hyD) if (e.out && e.g == g && e.b == b) { e.out->AddRef(); return e.out; }
     D3D11_DEPTH_STENCIL_DESC dg = DssDesc(g), db = DssDesc(b);
     dg.StencilEnable = db.StencilEnable; dg.StencilReadMask = db.StencilReadMask; dg.StencilWriteMask = db.StencilWriteMask;
     dg.FrontFace = db.FrontFace; dg.BackFace = db.BackFace;
-    ID3D11DepthStencilState* n = nullptr;
-    if (FAILED(g_dev.dev->CreateDepthStencilState(&dg, &n)) || !n) return nullptr;
-    HyDss& e = s_hyD[s_hyDNext]; s_hyDNext = (s_hyDNext + 1) & 3;
-    if (e.out) e.out->Release(); if (e.g) e.g->Release(); if (e.b) e.b->Release();
-    e.out = n; e.g = g; e.b = b; if (g) g->AddRef(); if (b) b->AddRef();   // la referencia evita que otro objeto en la misma direccion engane al cache
+    ID3D11DepthStencilState* n = CachedDSS(dg); if (!n) return nullptr;   // (08/11) cache por descripcion (statecache.cpp)
     n->AddRef(); return n;
 }
 // mezcla de las hojas: mode 1 = sin escribir RT4, 2 = RT0 sin su alfa (el PS mezcla con la copia del suelo); devuelve con referencia
@@ -487,7 +481,6 @@ static ID3D11BlendState* BladeBlend(ID3D11BlendState* src, int mode) {
     if (!mode || !g_dev.dev) return nullptr;
     std::lock_guard<std::mutex> lk(s_bsMx);
     if (s_hyDev != g_dev.dev) { HyDropLocked(); s_hyDev = g_dev.dev; }
-    for (auto& e : s_hyBl) if (e.out && e.src == src && e.mode == mode) { e.out->AddRef(); return e.out; }
     D3D11_BLEND_DESC d = {};
     if (src) src->GetDesc(&d);
     else for (auto& r : d.RenderTarget) { r.SrcBlend = r.SrcBlendAlpha = D3D11_BLEND_ONE; r.DestBlend = r.DestBlendAlpha = D3D11_BLEND_ZERO; r.BlendOp = r.BlendOpAlpha = D3D11_BLEND_OP_ADD; r.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL; }
@@ -495,11 +488,7 @@ static ID3D11BlendState* BladeBlend(ID3D11BlendState* src, int mode) {
     if (mode & 1) d.RenderTarget[4].RenderTargetWriteMask = 0;
     if (mode & 2) { auto& r = d.RenderTarget[0]; r.BlendEnable = FALSE;   // (26/10 g) el PS ya mezcla con la copia del suelo (t10); el alfa de RT0 queda el de la base
         r.RenderTargetWriteMask &= (D3D11_COLOR_WRITE_ENABLE_RED | D3D11_COLOR_WRITE_ENABLE_GREEN | D3D11_COLOR_WRITE_ENABLE_BLUE); }
-    ID3D11BlendState* n = nullptr;
-    if (FAILED(g_dev.dev->CreateBlendState(&d, &n)) || !n) return nullptr;
-    HyBs& e = s_hyBl[s_hyBNext]; s_hyBNext = (s_hyBNext + 1) & 3;
-    if (e.out) e.out->Release(); if (e.src) e.src->Release();
-    e.out = n; e.src = src; if (src) src->AddRef(); e.mode = mode;
+    ID3D11BlendState* n = CachedBlend(d); if (!n) return nullptr;   // (08/11) cache por descripcion (statecache.cpp)
     n->AddRef(); return n;
 }
 // (26/10 g) copia del RT0 puesto (el suelo ya dibujado) a una textura propia; devuelve su vista con referencia o null
@@ -705,7 +694,42 @@ void GrassFrameBoundary(UINT flags) {
     g_grassPatchesLastFrame = s_lastCount;
 }
 
+// (08/11 f) la primera vez por sesion que hay estado real del pasto (partido), se guardan sus texturas de la cancha para el editor
+static void GrassSaveStadium() {
+    static bool done = false;
+    if (done || !g_dev.imm || g_cfg.baseDir.empty()) return;
+    ID3D11ShaderResourceView* v[8] = {};
+    { std::lock_guard<std::mutex> lk(s_stMx); if (!s_state.valid) return;
+      for (int i = 0; i < 7; i++) { v[i] = s_state.vsSrv[i]; if (v[i]) v[i]->AddRef(); }
+      v[7] = s_state.psSrv; if (v[7]) v[7]->AddRef(); }
+    done = true;
+    std::wstring dir = g_cfg.baseDir + L"textures\\"; CreateDirectoryW(dir.c_str(), nullptr); dir += L"pasto_editor\\"; CreateDirectoryW(dir.c_str(), nullptr);
+    int ok = 0, fail = 0;
+    for (int i = 0; i < 8; i++) {
+        if (!v[i]) continue;
+        ID3D11Resource* r = nullptr; v[i]->GetResource(&r);
+        if (r) { wchar_t nm[16]; if (i < 7) swprintf(nm, 16, L"vs%d.dds", i); else wcscpy_s(nm, L"ps.dds");
+            if (SUCCEEDED(DirectX::SaveDDSTextureToFile(g_dev.imm, r, (dir + nm).c_str()))) ok++; else fail++;
+            r->Release(); }
+        v[i]->Release();
+    }
+    // (08/11 j, Agustin: "que el pasto del editor sea el de alto detalle que se carga de cerca") tambien los cbuffers del pasto del
+    // partido (VS b0 64 B, VS b4 80 B, PS b0 80 B: escala de la sombra plana, uv de la cancha, color / parametros del PS) en cb.bin,
+    // para que el editor dibuje con los mismos valores que el pasto de cerca del partido y no con los del estado propio
+    { ID3D11Buffer* src[3] = { s_cpVs0, s_cpVs4, s_cpPs0 }; const UINT sz[3] = { 64, 80, 80 }; unsigned char all[224] = {}; UINT at = 0; bool good = true;
+      for (int i = 0; i < 3 && good; i++) {
+          if (!src[i]) { good = false; break; }
+          D3D11_BUFFER_DESC bd = {}; bd.ByteWidth = sz[i]; bd.Usage = D3D11_USAGE_STAGING; bd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+          ID3D11Buffer* stg = nullptr; if (FAILED(g_dev.dev->CreateBuffer(&bd, nullptr, &stg)) || !stg) { good = false; break; }
+          D3D11_BOX bx = { 0, 0, 0, sz[i], 1, 1 }; g_dev.imm->CopySubresourceRegion(stg, 0, 0, 0, 0, src[i], 0, &bx);
+          D3D11_MAPPED_SUBRESOURCE ms = {}; if (SUCCEEDED(g_dev.imm->Map(stg, 0, D3D11_MAP_READ, 0, &ms))) { memcpy(all + at, ms.pData, sz[i]); g_dev.imm->Unmap(stg, 0); } else good = false;
+          stg->Release(); at += sz[i]; }
+      if (good) { FILE* f = nullptr; if (_wfopen_s(&f, (dir + L"cb.bin").c_str(), L"wb") == 0 && f) { fwrite(all, 1, sizeof all, f); fclose(f); ok++; } else fail++; } }
+    Log("pasto en el editor: texturas y cbuffers de la cancha de este partido guardados (%d, %d fallaron) en PES21FX\\textures\\pasto_editor: el editor los usa desde la proxima sesion", ok, fail);
+}
+
 void GrassPresent() {
+    GrassSaveStadium();
     float T[4]; Thresholds(T);
     // (27/10 o) densidad adaptativa (fila 333): la DLL mide el tiempo entre Presents y, si los FPS quedan por debajo del objetivo x333,
     // baja la densidad del pasto del mod (C base y piso de capas) hasta el minimo y333; cuando sobran FPS la vuelve a subir despacio.
@@ -714,14 +738,24 @@ void GrassPresent() {
     { static double lastT = -1.0; static float ema = 0.0f; static double nextAdj = 0.0, nextLogA = 0.0; double tn = Now();
       if (lastT >= 0.0) { float dt = (float)std::clamp(tn - lastT, 0.0005, 0.5); ema = ema <= 0.0f ? dt : ema + (dt - ema) * 0.1f; }
       lastT = tn;
-      float target = g_cfg.live[333][0], floorA = g_cfg.live[333][1] > 0.05f ? std::clamp(g_cfg.live[333][1], 0.2f, 1.0f) : 0.4f;
-      if (target < 20.0f || (int)(g_cfg.live[61][0] + 0.5f) >= 4) { s_adapt = 1.0f; nextAdj = 0.0; }   // (27/10 q) apagada o Calidad Ultra
+      // (08/11 z, Agustin: "fps objetivo en vistas cercanas") vista cercana = el nivel 0 (hojas de cerca) tiene mas parcelas que los otros dos
+      // juntos (primeros planos, repeticiones de cerca); ahi mandan x410 / y410 si estan (0 = los generales). Cada vista guarda su densidad
+      const bool nearV = g_grassDbg.ring[0] > g_grassDbg.ring[1] + g_grassDbg.ring[2] && g_grassDbg.ring[0] > 0;
+      const bool useN = nearV && g_cfg.live[410][0] >= 20.0f;
+      float target = useN ? g_cfg.live[410][0] : g_cfg.live[333][0];
+      float floorA = useN ? (g_cfg.live[410][1] > 0.05f ? std::clamp(g_cfg.live[410][1], 0.2f, 1.0f) : 0.6f)
+                          : (g_cfg.live[333][1] > 0.05f ? std::clamp(g_cfg.live[333][1], 0.2f, 1.0f) : 0.4f);
+      { static bool lastNear = false; if (useN != lastNear) { lastNear = useN; s_adapt = s_adaptV[useN ? 1 : 0]; } }
+      // (08/11 y, Agustin: "esas opciones no optimizan nada") con Calidad Ultra (x61 = 4) la adaptativa quedaba apagada sin avisar: el log no
+      // tenia ninguna linea "pasto adaptativo" y mover x333 no cambiaba nada. Ahora vale en todas las calidades (x333 < 20 = apagada) y se anota
+      if (target < 20.0f) { s_adapt = 1.0f; nextAdj = 0.0;
+          if (tn >= nextLogA && g_cfg.live[58][3] > 0.5f) { nextLogA = tn + 30.0; Log("pasto adaptativo: apagado (x333 = %.0f; hace falta 20 o mas)", target); } }
       else if (tn >= nextAdj && ema > 0.0f) { nextAdj = tn + 0.5;
           float fps = 1.0f / ema; float a = s_adapt.load();
           if (fps < target * 0.97f) a = (std::max)(floorA, a * 0.93f);
           else if (fps > target * 1.10f) a = (std::min)(1.0f, a * 1.06f);   // (27/10 q) 1.03 -> 1.06: volvia al 100 % en 15 s, ahora en 8
-          s_adapt = a;
-          if (tn >= nextLogA && g_cfg.live[58][3] > 0.5f) { nextLogA = tn + 10.0; Log("pasto adaptativo: FPS %.0f (objetivo %.0f) -> densidad x%.2f (minimo %.2f)", fps, target, a, floorA); } } }
+          s_adapt = a; s_adaptV[useN ? 1 : 0] = a;
+          if (tn >= nextLogA && g_cfg.live[58][3] > 0.5f) { nextLogA = tn + 10.0; Log("pasto adaptativo (%s): FPS %.0f (objetivo %.0f) -> densidad x%.2f en los 3 niveles (minimo %.2f, calidad %d, parcelas %d/%d/%d)", useN ? "vista cercana, fila 410" : "general, fila 333", fps, target, a, floorA, (int)(g_cfg.live[61][0] + 0.5f), g_grassDbg.ring[0], g_grassDbg.ring[1], g_grassDbg.ring[2]); } } }
     if (s_vbState.load() == 1 && s_vbStage && g_dev.imm) {
         D3D11_MAPPED_SUBRESOURCE m;
         if (SUCCEEDED(g_dev.imm->Map(s_vbStage, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) {
@@ -767,18 +801,97 @@ void GrassPresent() {
 // emite el pasto del mod en este cuadro. bound = el estado del dibujo de pasto del juego ya esta puesto (se llama desde
 // ese dibujo); si no, se pone el guardado y se devuelve el del contexto al terminar.
 // Devuelve true si los dibujos quedaron grabados (la grabacion ya lleva su emision).
+static thread_local bool t_editor = false;   // (08/11 c) emision en el editor (x393): sin estados de la base, alcance y393
+// (08/11 d, Agustin: "no puedes cargar sin haber cargado un partido antes?") ESTADO PROPIO para el editor: sin partido visto no hay
+// estado del pasto del juego (shaders, texturas de la cancha, cbuffers), asi que se arma uno equivalente una sola vez: los shaders del
+// pasto del catalogo (los reemplazos del mod, 498b30 / 18afff: las reglas de t7 / t8 / t9 y t120 se aplican igual en BeforeDraw), un
+// input layout propio sobre el VS del mod (POSITION0 slot 0, TEXCOORD0 slot 3 half2, igual que la malla propia), texturas de 1x1
+// (cancha verde, sin mascara ni desgaste, sin sombra plana, normal plana), cbuffers con valores de cancha (uv de la cancha = raiz /
+// 105 x 68 + 0.5, pelota lejos), muestreadores lineales, mezcla por defecto, profundidad segun como limpia el juego (0 o 1) sin
+// stencil y sin recorte de caras. Se usa solo si no hay estado capturado; cuando se vio un partido, se usa el real.
+static GrassState s_edSt; static std::mutex s_edMx; static bool s_edTried = false; static ID3D11Buffer* s_edPsCb = nullptr; static float s_edP0[20] = {};   // (08/11 j) copia del PS b0 del editor (cb.bin o propio)
+static ID3D11ShaderResourceView* Tex1x1(float r, float g, float b, float a) {
+    D3D11_TEXTURE2D_DESC d = {}; d.Width = d.Height = 1; d.MipLevels = d.ArraySize = 1; d.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; d.SampleDesc.Count = 1; d.Usage = D3D11_USAGE_IMMUTABLE; d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    float px[4] = { r, g, b, a }; D3D11_SUBRESOURCE_DATA sd = { px, 16, 16 };
+    ID3D11Texture2D* t = nullptr; ID3D11ShaderResourceView* v = nullptr;
+    if (SUCCEEDED(g_dev.dev->CreateTexture2D(&d, &sd, &t)) && t) { g_dev.dev->CreateShaderResourceView(t, nullptr, &v); t->Release(); }
+    return v;
+}
+static bool BuildEditorState() {
+    std::lock_guard<std::mutex> lk(s_edMx);
+    if (s_edSt.valid) return true;
+    if (s_edTried) return false;
+    s_edTried = true;
+    const ShaderEntry* ve = FindShaderByHash(kGrassVS); const ShaderEntry* pe = FindShaderByHash(kGrassPS);
+    if (!ve || !ve->repl || !pe || !pe->repl) { Log("pasto en el editor: el catalogo todavia no tiene los shaders del pasto (498b30 / 18afff) con reemplazo: sin estado propio"); s_edTried = false; return false; }
+    GrassState g; g.vsE = ve; g.psE = pe;
+    ve->repl->QueryInterface(__uuidof(ID3D11VertexShader), (void**)&g.vs); pe->repl->QueryInterface(__uuidof(ID3D11PixelShader), (void**)&g.ps);
+    if (ID3DBlob* b = CompileNamedShader(L"498b30bad256e8ed-vs_replace.txt", "vs_5_0")) {
+        D3D11_INPUT_ELEMENT_DESC el[2] = { { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 }, { "TEXCOORD", 0, DXGI_FORMAT_R16G16_FLOAT, 3, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 } };
+        g_dev.dev->CreateInputLayout(el, 2, b->GetBufferPointer(), b->GetBufferSize(), &g.il); b->Release();
+    }
+    g.topo = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    auto cbuf = [](const float* v, UINT bytes) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = bytes; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER; D3D11_SUBRESOURCE_DATA sd = { v, 0, 0 }; ID3D11Buffer* nb = nullptr; g_dev.dev->CreateBuffer(&d, &sd, &nb); return nb; };
+    float c0[12] = { 0, 0, 0, 0,  1, 1, 0, 0,  0, 0, 1, 1 };                                   // cb0[1].xy * cb0[2].zw = escala de la sombra plana (1)
+    float c4[20] = { 0, 0, 0, 0,  1.0f / 105.0f, 1.0f / 68.0f, 0.5f, 0.5f,  0, 0, 1, 1,  999, 0, 999, 0,  999, 0, 999, 0 };   // uv de la cancha, pelota lejos
+    float p0[20] = {}; p0[8] = 1920; p0[9] = 1080;                                              // m_renderBuffer.xy (se actualiza al emitir)
+    // (08/11 j) cbuffers del pasto del ultimo partido (cb.bin, GrassSaveStadium): los mismos valores que el pasto de cerca del partido;
+    // la pelota se manda lejos (no hay pelota en el editor) y m_renderBuffer.xy se actualiza al emitir
+    bool cbFile = false;
+    { unsigned char all[224] = {}; FILE* f = nullptr;
+      if (_wfopen_s(&f, (g_cfg.baseDir + L"textures\\pasto_editor\\cb.bin").c_str(), L"rb") == 0 && f) { cbFile = fread(all, 1, sizeof all, f) == sizeof all; fclose(f); }
+      if (cbFile) { float v0[16], v4[20]; memcpy(v0, all, 64); memcpy(v4, all + 64, 80); memcpy(s_edP0, all + 144, 80);
+          v4[12] = 999; v4[14] = 999; v4[16] = 999; v4[18] = 999;
+          g.vsCb0 = cbuf(v0, 64); g.vsCb4 = cbuf(v4, 80); g.psCb0 = cbuf(s_edP0, 80); } }
+    if (!cbFile) { memcpy(s_edP0, p0, sizeof p0); g.vsCb0 = cbuf(c0, sizeof c0); g.vsCb4 = cbuf(c4, sizeof c4); g.psCb0 = cbuf(p0, sizeof p0); }
+    s_edPsCb = g.psCb0; if (s_edPsCb) s_edPsCb->AddRef();
+    // (08/11 f, Agustin: "podrias hacer que cargue de algun estadio?") texturas reales de la cancha guardadas del ultimo partido visto
+    // (GrassSaveStadium: PES21FX\textures\pasto_editor\vs0..vs6.dds, ps.dds); si no hay, las de 1x1
+    int fromFile = 0;
+    auto load = [&](const wchar_t* name) -> ID3D11ShaderResourceView* {
+        std::wstring path = g_cfg.baseDir + L"textures\\pasto_editor\\" + name;
+        { std::wstring hd = path.substr(0, path.size() - 4) + L"_hd.dds";   // (08/11 h) version mejorada (no la pisa GrassSaveStadium)
+          if (GetFileAttributesW(hd.c_str()) != INVALID_FILE_ATTRIBUTES) path = hd; }
+        if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) return nullptr;
+        ID3D11ShaderResourceView* v = nullptr;
+        if (SUCCEEDED(DirectX::CreateDDSTextureFromFile(g_dev.dev, path.c_str(), nullptr, &v)) && v) { fromFile++; return v; }
+        return nullptr;
+    };
+    const float k1[7][4] = { { 0.22f, 0.40f, 0.10f, 1 }, { 0, 0, 0, 0 }, { 0.5f, 0.5f, 0.5f, 1 }, { 0.5f, 0.5f, 0.5f, 1 }, { 0.22f, 0.40f, 0.10f, 1 }, { 0, 0, 0, 0 }, { 0.5f, 0.5f, 1.0f, 1 } };
+    for (int i = 0; i < 7; i++) { wchar_t nm[16]; swprintf(nm, 16, L"vs%d.dds", i);
+        g.vsSrv[i] = load(nm); if (!g.vsSrv[i]) g.vsSrv[i] = Tex1x1(k1[i][0], k1[i][1], k1[i][2], k1[i][3]); }
+    g.psSrv = load(L"ps.dds"); if (!g.psSrv) g.psSrv = Tex1x1(0.25f, 0.45f, 0.12f, 1);
+    Log("pasto en el editor: estado propio con %d de 8 texturas de la cancha del ultimo partido (PES21FX\\textures\\pasto_editor)%s, cbuffers %s", fromFile, fromFile ? "" : "; sin partido guardado: color fijo", cbFile ? "del partido (cb.bin)" : "propios (sin cb.bin: ver un partido)");
+    D3D11_SAMPLER_DESC smp = {}; smp.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR; smp.AddressU = smp.AddressV = smp.AddressW = D3D11_TEXTURE_ADDRESS_WRAP; smp.MaxLOD = D3D11_FLOAT32_MAX;
+    g_dev.dev->CreateSamplerState(&smp, &g.vsSmp[0]); smp.AddressU = smp.AddressV = smp.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP; g_dev.dev->CreateSamplerState(&smp, &g.vsSmp[1]);
+    if (g.vsSmp[0]) { g.psSmp = g.vsSmp[0]; g.psSmp->AddRef(); }
+    D3D11_DEPTH_STENCIL_DESC dd = {}; dd.DepthEnable = TRUE; dd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+    dd.DepthFunc = g_depthClearZero.load() > g_depthClearOne.load() ? D3D11_COMPARISON_GREATER_EQUAL : D3D11_COMPARISON_LESS_EQUAL;   // profundidad invertida si el juego limpia a 0
+    g_dev.dev->CreateDepthStencilState(&dd, &g.dss);
+    D3D11_RASTERIZER_DESC rd = {}; rd.FillMode = D3D11_FILL_SOLID; rd.CullMode = D3D11_CULL_NONE; rd.DepthClipEnable = TRUE; g_dev.dev->CreateRasterizerState(&rd, &g.rs);
+    const bool ok = g.vs && g.ps && g.il && g.vsCb0 && g.vsCb4 && g.psCb0 && g.vsSrv[0] && g.vsSmp[0] && g.vsSmp[1] && g.dss && g.rs;
+    Log("pasto en el editor: estado propio %s (VS %p PS %p layout %p, profundidad %s)", ok ? "listo" : "INCOMPLETO: no se dibuja", (void*)g.vs, (void*)g.ps, (void*)g.il, dd.DepthFunc == D3D11_COMPARISON_GREATER_EQUAL ? "invertida" : "normal");
+    if (!ok) { g.Release(); return false; }
+    g.valid = true; s_edSt = g; return true;
+}
 static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend = nullptr) {
     struct InEmit { bool sv; InEmit() : sv(t_inEmit) { t_inEmit = true; } ~InEmit() { t_inEmit = sv; } } inEmit_;
     const float* p58 = g_cfg.live[58]; const float* p59 = g_cfg.live[59];
     EnsureBuffers();
     if (!s_cb) { Why("sin buffers propios"); return false; }
     if (!EnsureGPU()) { Why("sin recursos de GPU para el pasto (ver Errores)"); return false; }
-    if (s_lodCount.load() == 0xffffffff) { Why("todavia sin variante de malla"); return false; }
+    if (s_lodCount.load() == 0xffffffff && !t_editor) { Why("todavia sin variante de malla"); return false; }   // (08/11 d) el editor usa la malla propia
     GrassState st;
     if (!bound) {
-        std::lock_guard<std::mutex> lk(s_stMx);
-        if (!s_state.valid) { Why("todavia no se vio el pasto del juego (sin estado para emitir desde la base)"); return false; }
-        st = s_state; st.AddRefAll();
+        bool have; { std::lock_guard<std::mutex> lk(s_stMx); have = s_state.valid; if (have) { st = s_state; st.AddRefAll(); } }
+        if (!have && t_editor && BuildEditorState()) {   // (08/11 d) editor sin partido visto: estado propio
+            std::lock_guard<std::mutex> lk(s_edMx); st = s_edSt; st.AddRefAll(); have = true;
+            ID3D11RenderTargetView* r0 = nullptr; c->OMGetRenderTargets(1, &r0, nullptr);   // m_renderBuffer.xy = tamano del target del visor
+            if (r0) { ID3D11Resource* res = nullptr; r0->GetResource(&res); r0->Release(); ID3D11Texture2D* t = nullptr;
+                if (res && SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t)) && t) { D3D11_TEXTURE2D_DESC d; t->GetDesc(&d); float p0[20]; memcpy(p0, s_edP0, sizeof p0); p0[8] = (float)d.Width; p0[9] = (float)d.Height; c->UpdateSubresource(s_edPsCb, 0, nullptr, p0, 0, 0); t->Release(); }
+                if (res) res->Release(); }
+        }
+        if (!have) { Why("todavia no se vio el pasto del juego (sin estado para emitir desde la base)"); return false; }
     }
     g_grassDbg.emits++; if (bound) s_emitGame++; else s_emitBase++;
     bool emitted = false;
@@ -796,7 +909,7 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
     // ancho minimo de la hoja en pixeles (hojas de menos de ~1.4 px titilan). Densidad (x58) multiplica C.
     static const float cMul[5] = { 0.6f, 1.0f, 1.4f, 1.8f, 2.4f }, minPxQ[5] = { 1.8f, 1.5f, 1.3f, 1.2f, 1.4f };   // (1/11) Ultra 1.0 -> 1.4: las hojas de 1 px titilaban de lejos (Agustin)
     float dens = g_cfg.live[58][0] > 0.05f ? std::clamp(g_cfg.live[58][0], 0.3f, 2.0f) : 1.0f;
-    if (!ultra) dens *= s_adapt.load();   // (27/10 o) densidad adaptativa por FPS (fila 333, GrassPresent); Ultra la ignora
+    dens *= s_adapt.load();   // (27/10 o) densidad adaptativa por FPS (fila 333, GrassPresent); (08/11 y) tambien en Ultra
     // (27/10 9c) x325: ancho minimo en px a mano (0 = el de la calidad). Con la camara quieta el TAA del juego promedia las hojas de
     // ~1.2 px con el suelo y el pasto se vuelve liso; moviendo, la historia se descarta y vuelven nitidas: hojas de 2 px no se pierden
     const float cBase = 0.30f * cMul[q] * dens, minPx = g_cfg.live[325][0] > 0.5f ? std::clamp(g_cfg.live[325][0], 1.f, 4.f) : minPxQ[q];
@@ -844,6 +957,10 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         ReadState(c, prev);
         ShaderBind b; b.vs = st.vsE; b.vsObj = st.vs; b.ps = st.psE; b.psObj = st.ps; oldSh = BindShadersRaw(c, b);
         WriteState(c, st);
+        if (t_editor) {   // (08/11 c) editor: el stencil del pasto del juego marca la cancha; en el visor no existe -> solo profundidad
+            D3D11_DEPTH_STENCIL_DESC d = DssDesc(st.dss); d.StencilEnable = FALSE;   // (08/11) cache por descripcion: no se suelta nunca
+            if (ID3D11DepthStencilState* edDss = CachedDSS(d)) c->OMSetDepthStencilState(edDss, 0);
+        }
     }
     ID3D11Buffer* oldCb5 = nullptr; UINT oldF5 = 0, oldN5 = 0;
     if (c1) c1->VSGetConstantBuffers1(5, 1, &oldCb5, &oldF5, &oldN5); else c->VSGetConstantBuffers(5, 1, &oldCb5);
@@ -889,6 +1006,14 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         cull[32] = g_cfg.live[333][2] > 0.05f ? std::clamp(g_cfg.live[333][2], 0.3f, 1.0f) : 0.6f;
         cull[33] = g_cfg.live[333][3] > 0.05f ? std::clamp(g_cfg.live[333][3], 0.5f, 6.0f) : 1.2f;
         cull[34] = cull[33] * 2.5f;
+        // (08/11) gPad[3].w: z58 alcance del pasto del mod en metros (Agustin: el pasto de cerca del mod sin el de toda la cancha, que
+        // cuesta). 100 o mas (el ini trae 120) o 0 = toda la cancha, como antes
+        { const float zr = g_cfg.live[58][2]; cull[35] = (zr > 1.0f && zr < 100.0f) ? std::clamp(zr, 5.0f, 100.0f) : 0.0f; }
+        if (t_editor) { const float er = g_cfg.live[393][1]; cull[35] = er >= 1.0f ? std::clamp(er, 3.0f, 60.0f) : 8.0f; }   // (08/11 c) editor: solo alrededor del jugador
+        // (08/11 i, Agustin: "el pasto no carga en el modo editar") con la camara libre (zoom x0.26, campo de vision 0.024 rad) cada celda
+        // pasa de 1000 px/m (T0, donde empieza el pasto del juego) y el nivel 0 no emitia nada: en el editor no hay pasto del juego, asi
+        // que el nivel 0 va sin tope; y el alcance se mide desde el jugador (origen), no desde la camara, que con zoom queda a 15-40 m
+        if (t_editor) cull[36] = 1.0f;
         // (26/10 d) reclamo del cuadro: la primera emision que la GPU ejecuta despues del Present se queda con el cuadro (Count[18] = 1);
         // las demas pasan por las celdas sin anotar nada y dibujan 0 instancias
         GpuTimer* tm = (p58[3] > 0.5f && TimersReady()) ? TimerClaim(s_frame.load()) : nullptr;   // (1/11) medidor de GPU (solo con el registro prendido)
@@ -896,7 +1021,8 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         cull[0] = 4.0f; c->UpdateSubresource(s_cullCb, 0, nullptr, cull, 0, 0); c->Dispatch(1, 1, 1);
         for (int i = 0; i < 3; i++) {
             UINT gw = (UINT)ceilf(2.0f * halfL / L[i].cell), gh = (UINT)ceilf(2.0f * halfW / L[i].cell);
-            cull[0] = (float)i; cull[1] = L[i].cell; cull[2] = i == 2 ? loFar : T[i + 1]; cull[3] = T[i];   // nivel 2: sin limite inferior (toda la cancha) salvo con cesped lejano en la base
+            cull[0] = (float)i; cull[1] = L[i].cell; cull[2] = i == 2 ? loFar : T[i + 1]; cull[3] = T[i];
+            if (t_editor && i == 0) cull[3] = 0.0f;   // (08/11 i) editor: nivel 0 sin tope (ver arriba)   // nivel 2: sin limite inferior (toda la cancha) salvo con cesped lejano en la base
             cull[6] = (float)(i * kBins); cull[7] = (float)gw; cull[8] = (float)gh;
             cull[12] = wEff0;   // ancho de la hoja en metros; (2/11 paso 10) el mismo en los 3 niveles (antes x1.6 x2 y x2 x4 por la celda: cintas a media distancia)
             cull[15] = (float)mIpc[i];
@@ -920,7 +1046,7 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         ID3D11DepthStencilState* svDss = nullptr; UINT svSref = 0; c->OMGetDepthStencilState(&svDss, &svSref);
         ID3D11BlendState* svBs = nullptr; float svBf[4] = {}; UINT svBm = 0xffffffff; c->OMGetBlendState(&svBs, svBf, &svBm);
         bool stRoute = false, farBl = false; int bmSet = 0;
-        if (g_cfg.live[290][0] > 0.5f) {
+        if (g_cfg.live[290][0] > 0.5f && !t_editor) {
             ID3D11DepthStencilState* bD = nullptr; UINT bR = 0; bool have = false;
             if (!bound) { bD = pend ? pend->dss : prev.dss; bR = pend ? pend->sref : prev.sref; if (bD) bD->AddRef(); have = true; }   // el estado de la base (guardado si la emision es diferida)
             else { std::lock_guard<std::mutex> lk(s_bsMx); if (s_baseDssOk && s_hyDev == g_dev.dev) { bD = s_baseDss; bR = s_baseSref; if (bD) bD->AddRef(); have = true; } }
@@ -928,7 +1054,7 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
             if (bD) bD->Release();
         }
         ID3D11ShaderResourceView* snap = nullptr; ID3D11ShaderResourceView* oldT10 = nullptr; bool t10Set = false;
-        { int bm = 0; const bool baseUnder = !bound || RecHas(c, &GRec::base);   // sin la base dibujada antes no hay suelo con que mezclar ni luz en RT4
+        { int bm = 0; const bool baseUnder = !t_editor && (!bound || RecHas(c, &GRec::base));   // (08/11 c) editor: sin RT4 ni copia del suelo (no hay cancha)   // sin la base dibujada antes no hay suelo con que mezclar ni luz en RT4
           if (g_cfg.live[290][1] > 0.5f && baseUnder) bm |= 1;
           if (g_cfg.live[291][0] > 0.5f && baseUnder && (snap = SnapshotRT0(c)) != nullptr) bm |= 2;   // (26/10 g) sin la copia del suelo no hay mezcla
           if (bm) if (ID3D11BlendState* nb = BladeBlend(svBs, bm)) { c->OMSetBlendState(nb, svBf, svBm); nb->Release(); farBl = (bm & 2) != 0; bmSet = bm; }
@@ -1017,6 +1143,28 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
     }
     if (c1) c1->Release();
     return emitted;
+}
+
+// (08/11 c) PASTO EN EL EDITOR (experimento, Agustin 08:02 / 10:05): x393 = 1 dibuja el pasto del mod alrededor del jugador en el
+// modo editar (y los menus 3D sin sol), para juzgar la luz de prueba sobre el cesped. Se emite una vez por cuadro despues del
+// dibujo de la cara en el G-buffer del visor (el estado del juego ya esta devuelto), con la camara del visor (cb2 del VS) y el
+// estado del pasto guardado al ver un partido en la sesion (s_state) o, sin partido previo, el estado propio (BuildEditorState). El jugador del
+// editor esta en el origen (los focos del fox2 apuntan al eje), igual que el centro de la cancha, asi que el pasto queda a sus pies.
+// Nunca se guarda prendido (kDebugParams, config.cpp).
+static int RtvCount(ID3D11DeviceContext* c);
+static std::atomic<int> s_edFrame{-1}, s_edLog{0}, s_edOk{0};
+void GrassEditorAfterFace(ID3D11DeviceContext* c) {
+    if (g_cfg.bypass || !g_dev.dev || g_cfg.live[393][0] < 0.5f) return;
+    if (g_cfg.live[255][3] < 0.5f || g_cfg.live[44][3] > 0.5f) return;   // misma condicion que la luz de prueba: escena de menu sin el sol del partido
+    const int f = s_frame.load();
+    if (s_edFrame.load() == f) return;   // (08/11 j) ya emitido este cuadro: barato, antes de mirar los targets (ahora se llama tambien por el cuerpo)
+    if (RtvCount(c) < 2) return;   // solo el G-buffer del visor (la cara tambien se dibuja en prepasadas)
+    int prev = s_edFrame.load(); if (prev == f || !s_edFrame.compare_exchange_strong(prev, f)) return;   // una por cuadro
+    t_editor = true;
+    const bool ok = GrassEmit(c, false);
+    t_editor = false;
+    if (ok) { if (s_edOk.fetch_add(1) < 1) { bool real; { std::lock_guard<std::mutex> lk(s_stMx); real = s_state.valid; } Log("pasto en el editor: emitiendo alrededor del jugador (alcance %.0f m, %s)", g_cfg.live[393][1], real ? "con el pasto visto en el partido" : "con el estado propio: sin partido previo"); } }
+    else if (s_edLog.fetch_add(1) < 3) Log("pasto en el editor: no se pudo emitir: %s", g_grassDbg.why ? g_grassDbg.why : "?");
 }
 
 // cuantos render targets hay puestos (el G-buffer tiene varios; una prepasada de profundidad, 0 o 1)

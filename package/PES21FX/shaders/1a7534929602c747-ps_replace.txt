@@ -28,6 +28,32 @@ Texture2D<float4> t7 : register(t7);
 uint4 PESBfi(uint4 w, uint4 o, uint4 ins, uint4 b) { uint4 m = (w >= 32u) ? 0xffffffffu : (((1u << w) - 1u) << o); return ((ins << o) & m) | (b & ~m); }
 Texture1D<float4> IniParams : register(t120);
 
+// === PES21 (04/11, Agustin: "se puede mejorar el antialiasing por fuera del taa") antialiasing por bordes del cuadro ACTUAL antes de
+// mezclarlo con la historia (tipo FXAA / SMAA 1x): donde el cuadro trae un borde serruchado (pelo, contorno de la cara, hojas, lineas)
+// se promedia a lo largo del borde, asi el alfa hacia el cuadro actual ya no mete dientes de sierra en la historia.
+// Fila 331 (x = SSSS de la piel, no se toca): y331 fuerza (0 = apagado, 1 = completo), z331 contraste minimo del borde (0.05..0.3).
+// Solo corre en los pixeles de borde (el resto sale por el primer if): ~8 muestras ahi.
+float PesLumaAA(float3 c) { return dot(c, float3(0.299, 0.587, 0.114)); }
+float3 PesEdgeAA(float2 uv, float3 c, float4 P)
+{
+  float w, h; t0.GetDimensions(w, h);
+  float2 px = 1.0 / float2(w, h);
+  float3 cNW = t0.SampleLevel(s11, uv + float2(-px.x, -px.y), 0).xyz, cNE = t0.SampleLevel(s11, uv + float2(px.x, -px.y), 0).xyz;
+  float3 cSW = t0.SampleLevel(s11, uv + float2(-px.x, px.y), 0).xyz, cSE = t0.SampleLevel(s11, uv + float2(px.x, px.y), 0).xyz;
+  float lNW = PesLumaAA(cNW), lNE = PesLumaAA(cNE), lSW = PesLumaAA(cSW), lSE = PesLumaAA(cSE), lM = PesLumaAA(c);
+  float lMin = min(lM, min(min(lNW, lNE), min(lSW, lSE)));
+  float lMax = max(lM, max(max(lNW, lNE), max(lSW, lSE)));
+  if (lMax - lMin < max(clamp(P.z, 0.02, 0.5), lMax * 0.125)) return c;   // sin borde: igual que antes
+  float2 dir = float2(-((lNW + lNE) - (lSW + lSE)), (lNW + lSW) - (lNE + lSE));
+  float red = max((lNW + lNE + lSW + lSE) * 0.03125, 1.0 / 128.0);
+  dir = clamp(dir / (min(abs(dir.x), abs(dir.y)) + red), -8.0, 8.0) * px;
+  float3 a = 0.5 * (t0.SampleLevel(s11, uv + dir * (1.0 / 3.0 - 0.5), 0).xyz + t0.SampleLevel(s11, uv + dir * (2.0 / 3.0 - 0.5), 0).xyz);
+  float3 b = a * 0.5 + 0.25 * (t0.SampleLevel(s11, uv - dir * 0.5, 0).xyz + t0.SampleLevel(s11, uv + dir * 0.5, 0).xyz);
+  float lB = PesLumaAA(b);
+  float3 r = (lB < lMin || lB > lMax) ? a : b;
+  return lerp(c, r, saturate(P.y));
+}
+
 void main(
   float4 v0 : SV_Position0,
   out float4 o0 : SV_Target0,
@@ -87,6 +113,7 @@ void main(
   r5.y = ((r2.wwww * cb5[9].wwww)).y;
   r6.xyzw = ((t0.Sample(s9, (r5.xyxx).xy)).xyzw).xyzw;
   r7.xyz = ((t0.Sample(s11, (r0.xyxx).xy)).xyzw).xyz;
+  { float4 P331 = IniParams.Load(int2(331,0)); if (pesOn && P331.y > 0.0) r7.xyz = PesEdgeAA(r0.xy, r7.xyz, P331); }   // PES21 (04/11) AA por bordes
   r4.xw = ((cb5[9].zzzw * float4(asfloat(0x3f99999aU), 0.0, 0.0, asfloat(0x3ecccccdU)))).xw;
   r5.zw = ((cb5[9].zzzw * float4(0.0, 0.0, asfloat(0x3ecccccdU), asfloat(0xbf99999aU)) + r5.xxxy)).zw;
   r8.xyz = ((t0.Sample(s11, (r5.zwzz).xy)).xyzw).xyz;
@@ -298,6 +325,15 @@ void main(
     r0.x = (saturate((r1.yyyy * r0.yyyy + r0.xxxx))).x;
     // PES21 x332 / z332: piso del peso hacia el cuadro actual (la historia no acumula sin limite); mas donde hay contraste fino
     if (pesOn) r0.x = max(r0.x, saturate(clamp(P332.x, 0.0, 0.5) + clamp(P332.z, 0.0, 0.5) * saturate(pesCon * 2.0 - 0.1)));
+    if (pesOn) {
+      // PES21 (04/11) mezcla pesada por luminancia (anti-titileo, tipo Lottes/Karis): un pixel claro del cuadro actual (punta de hoja
+      // con sol, brillo del pelo, borde de la cara contra el cielo) pesa menos que uno oscuro, asi el borde serruchado del cuadro
+      // actual no "salta" encima de la historia suavizada. Con el mismo alfa da lo mismo en zonas planas.
+      float3 pesCur = r1.xzw + r9.xyz;            // cuadro actual reconstruido (r1.xzw = actual - historia)
+      float wc = r0.x / (1.0 + dot(pesCur, float3(0.2126, 0.7152, 0.0722)));
+      float wh = (1.0 - r0.x) / (1.0 + dot(r9.xyz, float3(0.2126, 0.7152, 0.0722)));
+      r1.xyz = (pesCur * wc + r9.xyz * wh) / max(wc + wh, 1e-5);
+    } else
     r1.xyz = ((r0.xxxx * r1.xzwx + r9.xyzx)).xyz;
     r7.xyz = (r17.xyzx).xyz;
     r6.w = (r0.wwww).w;

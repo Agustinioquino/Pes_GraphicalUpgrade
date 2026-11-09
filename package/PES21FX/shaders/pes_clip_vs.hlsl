@@ -18,7 +18,10 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID)
   float4 p = PESClips[iid * 2], v = PESClips[iid * 2 + 1];
   // (2/11) v.w = giro + 10 * tipo (0 manojo arrancado, 1 terron de tierra, 2 polvo, 3 pedazo de hoja): bandas del atlas de particulas
   // textures\pes_debris.dds que la DLL enlaza en t8 / t9 solo en este dibujo
-  float kind = clamp(floor(v.w / 10.0 + 0.001), 0.0, 3.0); float rot = v.w - kind * 10.0;
+  float kcode = floor(v.w / 10.0 + 0.001); float rot = v.w - kcode * 10.0;
+  // (08/11) kcode >= 5: la particula quedo ACOSTADA en el piso (pitchwear.cpp, w389 s): tarjeta tumbada sobre la cancha, girada
+  // segun su ultimo giro, un poco levantada del lado de la raiz (el manto de tierra abajo asoma)
+  bool rest = kcode >= 4.5; float kind = clamp(kcode - (rest ? 5.0 : 0.0), 0.0, 3.0);
   bool lump = kind == 1.0 || kind == 2.0;
   uint k = vid % 6;
   float cx = (k == 1 || k == 4 || k == 5) ? 1.0 : 0.0, cy = (k == 2 || k == 3 || k == 5) ? 1.0 : 0.0;
@@ -28,7 +31,8 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID)
   float3 side = normalize(cross(axis, toCam) + 1e-4);
   float cr = cos(rot), sr = sin(rot);
   float3 axisR = normalize(axis * cr + cross(side, axis) * sr);   // giro alrededor del ancho
-  float len = max(p.w, 0.002), wid = len * (lump ? 1.0 : 0.22);   // terrones y polvo: tarjeta cuadrada
+  if (rest) { axisR = normalize(float3(cr, 0.18, sr)); side = normalize(cross(axisR, float3(0.0, 1.0, 0.0))); }
+  float len = max(p.w, 0.002), wid = len * (lump ? 1.0 : (rest ? 0.55 : 0.22));   // terrones y polvo: tarjeta cuadrada; acostado: manojo abierto
   float3 world = p.xyz + side * ((cx - 0.5) * wid) + axisR * (cy * len);
   float4 wp = float4(world, 1.0);
   float4 vp = float4(dot(wp, cb2[8]), dot(wp, cb2[9]), dot(wp, cb2[10]), dot(wp, cb2[11]));
@@ -46,7 +50,7 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID)
   else if (kind == 2.0) col = float3(0.55, 0.48, 0.36) * (0.8 + 0.8 * lum);   // polvo: tierra clara
   o.o3 = float4(col, 0.6);
   // normal: mezcla de "arriba" y hacia la camara (pedacito suelto, se ilumina parejo)
-  float3 nW = normalize(float3(0.0, 1.0, 0.0) * 0.6 + toCam * 0.5);
+  float3 nW = rest ? normalize(float3(0.0, 1.0, 0.0) * 0.9 + toCam * 0.15) : normalize(float3(0.0, 1.0, 0.0) * 0.6 + toCam * 0.5);   // en el piso: recibe la luz como el suelo
   o.o4 = float4(dot(nW, cb2[8].xyz), dot(nW, cb2[9].xyz), dot(nW, cb2[10].xyz), 0.0);
   o.o5 = float4(0.3, 0.3, 0.0, 0.0);
   o.o6 = float4(cp.xy, dot(wp, cb2[16]), dot(wp, cb2[17]));

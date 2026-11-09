@@ -55,7 +55,13 @@ Texture2D<float4> g_tex_Dirty : register(t4);
 Texture2D<float4> g_tex_mesh : register(t15);
 Texture2D<float4> pesSSSMap    : register(t22);   // (20/10) solo enlazados en la cabeza de las genericas (regla de la DLL)
 Texture2D<float4> pesZones     : register(t25);
-Texture2D<float4> pesSkinMicro : register(t27);
+Texture2D<float4> pesSkinMicro : register(t27);   // (04/11 poros v4) poros redondos (pes_skin_pores_round.dds)
+Texture2D<float4> pesSkinCrepe : register(t37);   // (04/11) arruguitas cruzadas
+Texture2D<float4> pesSkinLips  : register(t38);   // (04/11) estrias de los labios
+Texture2D<float4> pesSkinLarge : register(t39);   // (04/11 poros v5) poros grandes de nariz y menton
+Texture2D<float4> pesSkinFhead : register(t40);   // (04/11 poros v5) frente y sobre las cejas
+Texture2D<float4> pesSkinNeck  : register(t41);   // (04/11 poros v5) cuello
+Texture2D<float4> pesFacePores2 : register(t42);  // (04/11 poros v5) guia 2: R frente, G sobre las cejas, B cuello
 Texture2D<float4> pesFacePores : register(t28);
 Texture2D<float4> pesArmAnatN  : register(t26);   // (02/11) separaciones de los grupos musculares del brazo (tools/fox/torso/arm_anatomy.py; la DLL la enlaza solo en los brazos)
 Texture2D<float4> pesArmAnatC  : register(t30);   // (02/11) cavidad de esos surcos (1 = nada)
@@ -84,6 +90,7 @@ Texture2D<float4> StereoParams : register(t125);
 #include "pes_pores.hlsli"   // (27/10 c) poros triplanares sobre la posicion de reposo
 #include "pes_variants.hlsli"   // (26/10) variantes robusto / atletico (valor del jugador)
 #include "pes_nailfix.hlsli"   // (26/10, v12.6) unas de los jugadores con textura de brazo propia (x304)
+#include "pes_limb_relief.hlsli"   // (08/11) relieve 3D de manos y piernas
 #ifdef PES_HL_ACC
 RWByteAddressBuffer gHlAcc : register(u5);   // por marca y lado: suma x, suma y, pixeles (4 x 16 bytes)
 #endif
@@ -139,8 +146,7 @@ void main(
   float3 hpPM = pR.xyz;
   float3 hpDPx = ddx(hpPM), hpDPy = ddy(hpPM);
   float2 hpDUx = ddx(v2.xy), hpDUy = ddy(v2.xy);
-  float hpTileM = PES_PORE_TILE_MM * 0.001 * 7.0 / max(P94h.y, 1.0);   // (31/10) 50 mm por mosaico (pes_pores.hlsli)
-  float hpPoreA = 0.0, hpPoreC = 0.0, hpMicroVar = 0.0, hpPoreOcc = 1.0, hpTZone = 0.0;
+  float hpPoreA = 0.0, hpPoreC = 0.0, hpMicroVar = 0.0, hpTZone = 0.0; float3 hpPoreOcc = 1.0;
   float2 nfDx = ddx(v2.xy), nfDy = ddy(v2.xy);   // (26/10) unas de los jugadores: derivadas fuera de las ramas
   float2 pdQ = (v2.xy - 0.5) * 11.1;              // (26/10 d) pelvis: mosaico del detalle de piel (0.40 uv por metro, 22.5 cm)
   float2 pdDx = ddx(pdQ), pdDy = ddy(pdQ);
@@ -170,6 +176,7 @@ void main(
   float4 P305 = IniParams.Load(int2(305,0));
   bool lbOn = P305.x > 0.5 && v1.z > 6.5 && v1.z < 7.5;
   float lbDef = lbOn ? clamp(v1.x, 0.0, 2.0) : 0.0, lbVein = lbOn ? clamp(v1.y, 0.0, 2.0) : 0.0, lbVM = 0.0;
+  { float lbQ = round((v1.z - 7.0) * 1200.0); if (lbQ > 527.5) lbVein = 0.0; }   // (08/11) pierna: v1.y = tension por grupo, no venas
   // (26/10) variante robusto / atletico del jugador: vrT (-1..1), cuanto de torso (VS) y de brazo (posicion de reposo en pR.xy (TEXCOORD10):
   // a mas de 20 cm del centro y arriba de la cadera; manos incluidas); x285 = (prendido, texturas, definicion)
   bool vrBody = v3.w > 1.999 && v3.w < 3.001;
@@ -299,7 +306,7 @@ void main(
     uint jvW = 0, jvH = 0; pesVeins.GetDimensions(jvW, jvH);
     if (lbOn && jvW > 0) {
       float jQ = round((v1.z - 7.0) * 1200.0);
-      bool jHand = jQ > 515.5;
+      bool jHand = jQ > 515.5 && jQ < 527.5;   // (08/11) 528.. = piernas (pes_limb_relief.hlsli)
       float jB = jHand ? saturate((jQ - 520.0) / 7.0) : fmod(jQ, 8.0) / 7.0;
       float jK = jHand ? 1.0 : clamp(IniParams.Load(int2(166,0)).w, 0.7, 1.5);
       // (03/11) Agustin: "el brazo esta estirado no deberian verse arrugas, al doblarse si y el codo al doblarse tambien": en el codo
@@ -318,6 +325,29 @@ void main(
       jsCav = saturate(0.25 * dot(jh, float4(1, 1, 1, 1)) / (2.0 * 2.0) * 2.2);   // fondo del pliegue: mas oscuro
       float jl = pesVeins.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN + 5.0).w - 0.5;
       jsLift = jHand ? saturate(jl * 14.0) * jB : 0.0;   // puno cerrado: la piel estirada sobre los nudillos mas clara (el codo ya no: arruga al doblar)
+    }
+  }
+  float lrCav = 0.0, lrCr = 0.0, lrTense = 0.0;
+  {   // (08/11, Agustin: "mejora las manos mas que nada y los brazos, asi como los muslos") relieve 3D de manos y piernas sobre la
+      // posicion de reposo (pes_limb_relief.hlsli): tendones, nudillos, cubito y pliegues de la muneca; cuadriceps, rodilla, gemelos
+      // y pliegues de la rodilla segun la pose. El VS manda la mano en 520 + cierre (0..7) y la pierna en 528 + rodilla (0..7) +
+      // 8 x esfuerzo (0..7). Fuerza y305 (0.7 = 1) por la definicion general x172.
+    float lrQ = round((v1.z - 7.0) * 1200.0);
+    int lrK = !lbOn ? 0 : (lrQ > 515.5 && lrQ < 527.5) ? 1 : (lrQ > 527.5 && lrQ < 599.5) ? 2 : 0;
+    if (lrK > 0) {
+      float dGl = IniParams.Load(int2(172,0)).x; dGl = dGl > 0.01 ? clamp(dGl, 0.0, 3.0) : 1.0;
+      // (08/11 m) con el relieve del cuerpo en la teselacion (w376, x4 de la altura real) la luz sigue a la forma: hasta x3
+      // (08/11 n) en la mano solo x1.5 (con x3 los surcos del dorso salian como cortes oscuros) y por el relieve de la mano z417
+      float lrW = saturate(IniParams.Load(int2(376,0)).w);
+      float4 hO = IniParams.Load(int2(417,0)); float hRel = dot(abs(hO), float4(1,1,1,1)) < 1e-4 ? 1.0 : clamp(hO.z, 0.0, 3.0);
+      float lrGain = clamp(P305.y / 0.7, 0.0, 2.0) * dGl * (lrK == 1 ? (1.0 + 0.5 * lrW) * hRel : (1.0 + 2.0 * lrW));
+      float la = lrK == 1 ? saturate((lrQ - 520.0) / 7.0) : fmod(lrQ - 528.0, 8.0) / 7.0;
+      // (08/11) pierna: tension de cada grupo (pes_limbs.hlsli PesLegAct) en v1.y = 2 + (cuadriceps + 8 isquios + 64 gemelo) / 1024
+      float na = round((v1.y - 2.0) * 1024.0);
+      float3 lact = (lrK == 2 && v1.y > 1.99 && v1.y < 2.6) ? saturate(float3(fmod(na, 8.0), fmod(floor(na / 8.0), 8.0), floor(na / 64.0)) / 7.0) : float3(0.3, 0.3, 0.3);
+      float2 lc = PesLimbRelief(lrK, pR.xyz, la, lact, hpDPx, hpDPy, hpDUx, hpDUy, lrGain, r2.xy);
+      lrCav = lc.x * (lrK == 1 ? 0.5 : 1.0); lrCr = lc.y;   // (08/11 n) la mano: fondo de los surcos la mitad de oscuro
+      if (lrK == 2) lrTense = PesLegTense(float3(abs(pR.x), pR.y, pR.z), lact) * saturate(lrGain);
     }
   }
   float anatCav = 0.0;
@@ -342,24 +372,32 @@ void main(
                            saturate((1.0 - acF) * acE * 0.9 + 0.25 * acE),     // triceps
                            saturate(0.75 * acE + 0.3 * acF));                 // antebrazo
       float gK = 0.45 + 1.1 * dot(gW, gAct) + 0.45 * (1.0 - saturate(dot(gW, float4(1, 1, 1, 1))));   // tono base 0.45 (codo y bordes: fijo)
-      float aK = saturate(0.55 * dG) * gK * (1.0 + 0.5 * vrWa - 0.6 * vrWr);
+      float aK = saturate(0.55 * dG) * gK * (1.0 + 0.5 * vrWa - 0.6 * vrWr) * (1.0 + 1.2 * saturate(IniParams.Load(int2(376,0)).w));   // (08/11 m) como el relieve teselado
       r2.xy += aK * pesArmAnatN.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN).xy;
       float l2 = dot(r2.xy, r2.xy); if (l2 > 0.94) r2.xy *= rsqrt(l2 / 0.94);
       anatCav = saturate(aK) * (1.0 - pesArmAnatC.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBN).x);
+      lrTense = max(lrTense, saturate((gK - 0.45) / 1.1) * saturate(0.55 * dG));   // (08/11) brazo: el grupo que trabaja (srm / trm)
     }
   }
   if (hpK > 0.001 && P94h.w > 0.5) {   // (20/10) micro normal de poros, mismo mosaico en reposo que la cara: sigue sin costura
-    float4 guide = pesFacePores.Sample(g_samplerLinear_Clamp_s, v2.xy);
-    PesPores pp = PesTriPores(pesSkinMicro, g_samplerLinear_Clamp_s, hpPM, hpDPx, hpDPy, hpDUx, hpDUy, hpTileM, guide.g, hpHasR);
+    float4 guide = pesFacePores.Sample(g_samplerLinear_Clamp_s, v2.xy);   // R densidad, G tamano, B zona T, A arruguitas
+    float4 guide2 = pesFacePores2.Sample(g_samplerLinear_Clamp_s, v2.xy);  // R frente, G sobre las cejas, B cuello, A = 1 - labios (v6: los dos labios)
+    float4 hpFZp = pesZones.Sample(g_samplerLinear_Clamp_s, v2.xy);       // G labios, A piel
+    // (04/11 poros v5) seis relieves por zona a tamano real fijo, mezcla RNM y signo del marco verificado, como la cara (pes_pores.hlsli)
+    PesPores pp = PesTriPores5(pesSkinMicro, pesSkinLarge, pesSkinFhead, pesSkinCrepe, pesSkinLips, pesSkinNeck, g_samplerLinear_Clamp_s,
+                               hpPM, hpDPx, hpDPy, hpDUx, hpDUy, float4(guide.g, guide.a, 1.0 - guide2.a, guide2.b), guide2.rg, hpHasR);
     float near = pp.near;
     if (near > 0.001) {
       hpTZone = guide.b;
-      float skinM = lerp(0.5, 1.0, pesZones.Sample(g_samplerLinear_Clamp_s, v2.xy).a);
-      float str = clamp(P94h.x, 0.0, 2.0) * near * 1.1 * skinM * (0.25 + 1.0 * guide.r) * hpK;
-      r2.xy += pp.dT * str;
-      hpPoreA = pp.a * near * (0.3 + guide.r);
-      hpPoreC = hpPoreA * pp.close;   // (31/10) hueco oscuro del poro solo en primer plano real (ver pes_pores.hlsli)
-      hpPoreOcc = 1.0 - hpPoreC * guide.a * 0.55 * saturate(P94h.x);
+      float skinM = lerp(0.5, 1.0, hpFZp.a);
+      float wPore = saturate(guide2.a - guide.a - guide2.b);
+      float str = clamp(P94h.x, 0.0, 2.0) * near * 1.1 * skinM * lerp(0.8, 0.25 + 1.0 * guide.r, wPore) * hpK;
+      float2 hpTS = PesTanSigns(v4.xyz, v5.xyz, v3.xyz, hpDUx, hpDUy);
+      float3 hpNb = PesRNM(float3(r2.xy, sqrt(saturate(1.0 - dot(r2.xy, r2.xy)))), normalize(float3(pp.dT * hpTS * str, 1.0)));
+      r2.xy = hpNb.xy;
+      hpPoreA = pp.a * near * lerp(0.5, 0.3 + guide.r, wPore);
+      hpPoreC = hpPoreA * pp.close;   // hueco del poro solo en primer plano real (ver pes_pores.hlsli)
+      hpPoreOcc = 1.0 - hpPoreC * lerp(0.5, saturate(guide.r * (0.6 + 0.4 * guide.g)), wPore) * saturate(P94h.x) * 0.10;   // (04/11 v6) gris y suave: el poro se ve por la luz y el brillo, no pintado de color
       hpMicroVar = pp.var * saturate(P94h.x * 0.7) * skinM;
     }
   }
@@ -499,6 +537,8 @@ void main(
   if (jsCav > 0.001) r2.yzw *= lerp(float3(1.0, 1.0, 1.0), float3(0.84, 0.80, 0.80), jsCav * 0.6);   // (02/11 g) pliegue de la articulacion
   if (jsLift > 0.001) r2.yzw = lerp(r2.yzw, r2.yzw * float3(1.06, 1.04, 1.05), saturate(jsLift));    // (02/11 g) piel estirada sobre el hueso
   if (anatCav > 0.001) r2.yzw *= lerp(float3(1.0, 1.0, 1.0), float3(0.90, 0.86, 0.85), anatCav * 0.7);   // (02/11) surco entre musculos: un poco mas oscuro y calido   // (26/10, v12.7) la vena: un poco mas oscura y fria
+  if (lrCav > 0.001) r2.yzw *= lerp(float3(1.0, 1.0, 1.0), float3(0.90, 0.86, 0.85), lrCav * 0.6);   // (08/11) surcos de manos y piernas
+  if (lrCr > 0.001) r2.yzw *= lerp(float3(1.0, 1.0, 1.0), float3(0.84, 0.80, 0.80), lrCr * 0.5);    // (08/11) fondo de los pliegues de la muneca / rodilla
   if (vrWr > 0.001 && vrTm > 0.001 && v2.y < 0.5) {   // (26/10) estrias del robusto: un poco mas claras (blanquecinas)
     uint vsW = 0, vsH = 0; pesVarStr.GetDimensions(vsW, vsH);
     if (vsW > 0) {
@@ -627,6 +667,18 @@ void main(
   }
   // (02/11) AA especular (Kaplanyan / Tokuyoshi): varianza de la normal final en pantalla -> rugosidad extra (abajo, al codificarla)
   float aaVb; { float3 aaN = normalize(r0.xyz); float3 aaX = ddx(aaN), aaY = ddy(aaN); aaVb = min(0.5 * (dot(aaX, aaX) + dot(aaY, aaY)), 0.18); }
+  // (08/11 k) VISTA DE PRUEBA de la teselacion del cuerpo (x360 = 2, menu Teselacion de caras > Prueba): gris = esta pieza NO se tesela;
+  // de azul (x1) a rojo (x16) = cuanto se parte cada triangulo (pR.w 2..2.9 lo pone el DS); amarillo = cuanto se movio la superficie
+  // (redondeo + relieve, hasta 1.5 mm)
+  if (IniParams.Load(int2(360, 0)).x > 1.5 && pR.w < 9.0) {
+    float tw = pR.w - 2.0;
+    if (tw < -0.5) o0.xyz = float3(0.18, 0.18, 0.18);
+    else {
+      float fN = saturate(floor(tw + 0.02) / 5.0), mv = saturate(frac(tw + 0.02) / 0.9);
+      float3 heat = fN < 0.5 ? lerp(float3(0.05, 0.15, 0.9), float3(0.1, 0.85, 0.2), fN * 2.0) : lerp(float3(0.1, 0.85, 0.2), float3(0.95, 0.1, 0.05), fN * 2.0 - 1.0);
+      o0.xyz = lerp(heat, float3(1.0, 0.95, 0.1), smoothstep(0.15, 0.8, mv));
+    }
+  }
   o0.w = 1;
   r0.w = abs(r0.x) + abs(r0.y);
   r0.w = r0.w + abs(r0.z);
@@ -645,7 +697,7 @@ void main(
   r0.xy = (uint2)r0.xy >> int2(1,1);
   r0.xyw = (uint3)r0.xyz;
   o1.xyw = float3(0.000977517106,0.000977517106,0.333333343) * r0.xyw;
-  r0.x = hpTrans;
+  r0.x = hpTrans * lerp(1.0, 0.78, lrTense);   // (08/11) sobre el musculo tenso pasa menos luz (trm)
   r0.x = r0.x * 63 + 0.5;
   r0.x = (uint)r0.x;
   r0.x = (uint)r0.x << 4;
@@ -671,6 +723,10 @@ void main(
     float rK = (rv > 0.5 && rv < 1.5 && (bodyOn || headPiece)) ? saturate(IniParams.Load(int2(12,0)).z) * 0.85 : 0.0;
     r0.x = lerp(r0.x, r0.x * 0.45, rK);
     o2.y = lerp(o2.y, max(o2.y, 0.5), rK * 0.8); }
+  if (lrTense > 0.001) {   // (08/11) musculo tenso (brazos / piernas): la piel queda tirante: menos rugosa y algo mas de brillo
+    r0.x *= lerp(1.0, 0.84, lrTense);
+    o2.y = saturate(o2.y * lerp(1.0, 1.15, lrTense));
+  }
   { float aaA = r0.x * r0.x; aaA = aaA * aaA; r0.x = sqrt(sqrt(saturate(aaA + aaVb))); }   // AA especular (02/11)
   r0.y = r0.x * 0.0361702144 + 0.0904255286;
   r0.y = r0.y * r0.x + 0.180851057;

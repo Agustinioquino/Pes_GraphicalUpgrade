@@ -49,6 +49,8 @@ Texture2D<float4> pesFolds : register(t28);   // PES21 (18/10): tile de pliegues
 #define cmp -
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
+#define PES_PRINT_BADGE
+#include "pes_prints.hlsli"   // (08/11) normal map propio de los estampados
 
 
 void main(
@@ -256,32 +258,19 @@ void main(
       r0.xy = r0.xy * max(KS.x, 0.0);
       r0.xyz = normalize(float3(r0.xy, max(r0.z, 0.001)));
     } }
-  // PES21 estampados (Claude, 16/10): nombre, numero, escudo y sponsors con relieve propio sobre la tela.
-  // Borde levantado (vinilo termoaplicado), superficie mas lisa que la trama y un grano fino propio.
-  // x38 altura del borde, y38 grano, z38 cuanto aplana la trama debajo, w38 on/off [Alt+Shift+5]
+  // PES21 estampados (08/11): normal map propio de numero, nombre, escudo, sponsor y marca (pes_prints.hlsli):
+  // alturas en el espacio de la textura (vinilo con canto / bordado por capas + hilo), no en la pantalla.
+  // x38 altura del canto, y38 bordado, z38 cuanto aplana la trama, w38 on/off [Alt+Shift+5]
   float2 dxu = ddx(v2.xy), dyu = ddy(v2.xy);   // derivadas fuera del if
-  float pmx = ddx(pesPrint), pmy = ddy(pesPrint);
+  float pesSu = 1, pesSv = 1;                  // signo de tangente / binormal respecto de +u / +v (en este triangulo)
+  { float3 pvx = -ddx(v3.xyz), pvy = -ddy(v3.xyz);
+    float dt = dxu.x * dyu.y - dxu.y * dyu.x;
+    float3 dPdu = (pvx * dyu.y - pvy * dxu.y) * sign(dt), dPdv = (pvy * dxu.x - pvx * dyu.x) * sign(dt);
+    pesSu = dot(dPdu, v4.xyz) >= 0 ? 1 : -1;
+    pesSv = dot(dPdv, v5.xyz) >= 0 ? 1 : -1; }
   { float4 PR = IniParams.Load(int2(38,0));
-    if (PR.w > 0.5 && pesFine) {
-      float m = pesPrint;
-      float mx = pmx, my = pmy;
-      float det = dxu.x * dyu.y - dxu.y * dyu.x;
-      float2 g = abs(det) > 1e-12 ? float2(mx * dyu.y - my * dxu.y, my * dxu.x - mx * dyu.x) / det : float2(0, 0);
-      float fp = max(length(dxu), length(dyu)) * 2048.0;        // texeles del kit por pixel
-      float farFade = saturate((16.0 - fp) / 8.0);               // muy lejos (kit diminuto) se apaga
-      float edge = saturate((abs(mx) + abs(my)) * 1.5);          // hay un borde de estampado en este pixel (en pantalla)
-      float2 gdir = dot(g, g) > 1e-12 ? normalize(g) : float2(0, 0);
-      float2 tilt = -gdir * edge * saturate(PR.x) * 0.55 * farFade;   // bisel del borde, visible a cualquier distancia
-      float nearP = saturate(3.0 - fp);                          // grano solo de cerca
-      float2 qc = floor(v2.xy * 1800.0);
-      float2 hn = float2(frac(sin(dot(qc, float2(12.9898, 78.233))) * 43758.5453), frac(sin(dot(qc, float2(39.346, 11.135))) * 43758.5453)) - 0.5;
-      float2 grain = hn * PR.y * 0.25 * nearP * m;
-      float flatK = 1.0 - 0.6 * m * saturate(PR.z);
-      r0.xyz = normalize(float3(r0.xy * flatK + tilt + grain, max(r0.z, 0.001)));
-      // sombra fina del vinilo sobre la tela, justo afuera del borde
-      pesKitCav *= 1.0 - 0.22 * edge * (1.0 - m) * saturate(PR.x) * farFade;
-      pesKitCav = lerp(pesKitCav, 1.0, m * 0.7);               // el estampado no se oscurece con la trama
-    } }
+    // (08/11) tambien sin sol (editor, menus 3D): el canto y las capas son de escala gruesa; el hilo fino solo con sol
+    if (PR.w > 0.5) PesPrintRelief(v2.xy, dxu, dyu, pesSu, pesSv, PR, pesPrint, pesFine, r0.xyz, pesKitCav); }
   // PES21 tejido next-gen (17/10): punto de la tela en alta frecuencia sobre la trama del juego.
   // x45 escala (sobre la trama), y45 fuerza del relieve, z45 oclusion entre puntos, w45 on/off [Alt+Shift+N]
   float4 KN = IniParams.Load(int2(45,0));

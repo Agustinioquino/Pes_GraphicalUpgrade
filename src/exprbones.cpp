@@ -107,10 +107,73 @@ static const BoneDef kDef[] = {
     { "skf_glabella",            0.0000f, 1.7038f, 0.1697f, 0.0f },
     { "skf_eye_l",               0.0315f, 1.6966f, 0.1406f, 0.0f, 0xB9CDBDE1u },   // cara 26: globo del ojo (eye.fmdl paleta [0], peso 1)
     { "skf_eye_r",              -0.0318f, 1.6968f, 0.1410f, 0.0f, 0x721A023Fu },   // cara 27
+    // (08/11, Agustin: "me gusta que toque los parpados para un resultado realista, en realidad cuantos mas huesos mejor") los 4 huesos
+    // del CUELLO que la piel de la cara y del cuello si pesan (face_rig_111320: neckback 0.58, scm 0.31, clavicle 0.64) y el mod no
+    // movia; nombres sacados del hash (tools/foxhash.py): 33 neckback, 34 scm (esternocleidomastoideo), 35 / 36 tendones del cuello
+    { "dsk_neckback",            0.0000f, 1.6204f, 0.0443f, 0.0f, 0x3AA8F459u },
+    { "dsk_scm",                 0.0000f, 1.5812f, 0.0430f, 0.0f, 0x1D27B492u },
+    { "dsk_clavicle_l",          0.0140f, 1.5000f, 0.0961f, 0.0f, 0xE9DD4049u },
+    { "dsk_clavicle_r",         -0.0140f, 1.5000f, 0.0961f, 0.0f, 0x2B429207u },
     { "sk_head",                 0.0000f, 1.6401f, 0.0543f, 0.0f },
     { "sk_neck",                 0.0000f, 1.5321f, 0.0335f, 0.0f },
 };
 static const int kND = (int)(sizeof(kDef) / sizeof(kDef[0]));
+// (07/11) clips .gani (gani.cpp): hueso del .ask -> kDef, por nombre; y lo que el clip aporta a Secondary (pomulos / bajo-ojo) y a
+// EyesFrame (parpados), que escriben esos huesos por su cuenta
+static int s_defToAsk[64]; static bool s_defToAskOk = false;
+static void DefToAsk() { for (int d = 0; d < kND; d++) { s_defToAsk[d] = -1; for (int b = 0; b < 31; b++) { const char* n = GaniAskBone(b); if (n && strcmp(n, kDef[d].name) == 0) { s_defToAsk[d] = b; break; } } } s_defToAskOk = true; }
+static float s_ganiSec[4][3]; static bool s_ganiSecOn = false;   // 18..21, ejes de la cabeza (m)
+static float s_ganiLid[2]; static bool s_ganiLidOn = false;
+static float s_extraLid[2]; static bool s_extraLidOn = false;   // (08/11) parpados de vida / esfuerzo / concentracion (filas 395 / 396), misma convencion      // parpado de arriba / abajo: giro extra (rad, + = cierra el de arriba / baja el de abajo)
+static void GaniQToHead(const float* q, float* o) { o[0] = -q[2]; o[1] = q[0]; o[2] = -q[1]; o[3] = q[3]; }   // ejes del .ask (x arriba, y atras, z derecha) -> cabeza (x izquierda, y arriba, z adelante)
+static void GaniPToHead(const float* p, float* o) { o[0] = -p[2] * 0.01f; o[1] = p[0] * 0.01f; o[2] = -p[1] * 0.01f; }   // cm -> m
+static void QScale(const float* q, float w, float* o) {   // giro por w (eje-angulo)
+    const float s = sqrtf(q[0] * q[0] + q[1] * q[1] + q[2] * q[2]);
+    if (s < 1e-6f) { o[0] = o[1] = o[2] = 0; o[3] = 1; return; }
+    const float h = atan2f(s, q[3]) * w, k = sinf(h) / s; o[0] = q[0] * k; o[1] = q[1] * k; o[2] = q[2] * k; o[3] = cosf(h);
+}
+// (08/11, Agustin: "utiliza un metodo seguro, practico y avanzado de transicion") dos herramientas, las dos acotadas (nunca se disparan):
+// RESORTE CRITICAMENTE AMORTIGUADO (SmoothDamp, Unity / Game Programming Gems 4): sigue un valor con velocidad continua, sin rebote, con
+// tiempo de respuesta tau; mejor que el filtro exponencial porque arranca y frena suave (C1) y no se queda atras tanto con el mismo tau.
+static void Damp(float& x, float& v, float target, float tau, float dt) {
+    const float w = 2.0f / (std::max)(tau, 1e-3f), xw = w * dt;
+    const float e = 1.0f / (1.0f + xw + 0.48f * xw * xw + 0.235f * xw * xw * xw);
+    const float ch = x - target, tmp = (v + w * ch) * dt;
+    v = (v - w * tmp) * e; x = target + (ch + tmp) * e;
+}
+// INERTIALIZACION (Bollo, GDC 2018; Unreal / Ubisoft For Honor): en una transicion no se mezclan dos poses durante un rato, se toma la
+// DIFERENCIA entre lo que se venia mostrando (con su velocidad) y la pose nueva, y esa diferencia se apaga con un polinomio de grado 5
+// que llega exactamente a cero con velocidad y aceleracion cero en t1 (sin rebote; si la velocidad va al reves del salto, t1 se acorta
+// para que no se pase). Asi el clip nuevo se reproduce entero desde el primer cuadro y solo se "hereda" el impulso del anterior.
+struct Inert { float x0 = 0, v0 = 0, a0 = 0, A = 0, B = 0, C = 0, t1 = 0; };
+static void InertStart(Inert& I, float x0, float v0, float t1) {
+    if (fabsf(x0) < 1e-9f && fabsf(v0) < 1e-9f) { I = Inert(); return; }
+    if (v0 * x0 < 0.0f) t1 = (std::min)(t1, -5.0f * x0 / v0);   // la velocidad ya va hacia el destino: no pasarse
+    t1 = (std::max)(t1, 1e-3f);
+    const float t2 = t1 * t1, t3 = t2 * t1, t4 = t3 * t1, t5 = t4 * t1;
+    const float a0 = (-8.0f * v0 * t1 - 20.0f * x0) / t2;
+    I.x0 = x0; I.v0 = v0; I.a0 = a0; I.t1 = t1;
+    I.A = -(a0 * t2 + 6.0f * v0 * t1 + 12.0f * x0) / (2.0f * t5);
+    I.B = (3.0f * a0 * t2 + 16.0f * v0 * t1 + 30.0f * x0) / (2.0f * t4);
+    I.C = -(3.0f * a0 * t2 + 12.0f * v0 * t1 + 20.0f * x0) / (2.0f * t3);
+}
+static float InertEval(const Inert& I, float t) {
+    if (t >= I.t1 || I.t1 <= 0.0f) return 0.0f;
+    const float t2 = t * t, t3 = t2 * t;
+    return I.A * t3 * t2 + I.B * t2 * t2 + I.C * t3 + 0.5f * I.a0 * t2 + I.v0 * t + I.x0;
+}
+static void QLog(const float* q, float* v) {   // cuaternion unitario -> vector eje x angulo (rad)
+    float w = q[3]; const float s2 = q[0] * q[0] + q[1] * q[1] + q[2] * q[2]; const float s = sqrtf(s2);
+    float sg = 1.0f; if (w < 0.0f) { w = -w; sg = -1.0f; }
+    if (s < 1e-7f) { v[0] = v[1] = v[2] = 0.0f; return; }
+    const float ang = 2.0f * atan2f(s, w), k = sg * ang / s; v[0] = q[0] * k; v[1] = q[1] * k; v[2] = q[2] * k;
+}
+static void QExp(const float* v, float* q) {
+    const float a = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    if (a < 1e-7f) { q[0] = v[0] * 0.5f; q[1] = v[1] * 0.5f; q[2] = v[2] * 0.5f; q[3] = 1.0f; return; }
+    const float k = sinf(0.5f * a) / a; q[0] = v[0] * k; q[1] = v[1] * k; q[2] = v[2] * k; q[3] = cosf(0.5f * a);
+}
+static float GaniAngZ(const float* q) { return 2.0f * atan2f(q[2], q[3]); }   // giro alrededor del eje z del .ask (derecha): el que abre la mandibula y los parpados
 // (02/11) "mostrar los dientes" (350.w = 1): corrimiento de cada hueso en metros, ejes de la cabeza (x izquierda del jugador)
 static const float kTeeth[][3] = {
     { 0, 0, 0 },                    // skf_jaw
@@ -159,33 +222,43 @@ struct PoseOff { int d; float a[3], s[3], u[3]; };   // a = enojo, s = sonrisa, 
 static const PoseOff kPose[] = {
     {  1, { 0, 0, 0 },                   {  0.0010f, -0.0004f, 0 },        { 0, 0, 0 } },                    // lip_b_l
     {  2, { 0, 0, 0 },                   { -0.0010f, -0.0004f, 0 },        { 0, 0, 0 } },                    // lip_b_r
-    {  5, {  0.0004f, -0.0022f, 0 },     {  0.0030f,  0.0030f, -0.0010f }, { -0.0015f, 0, 0.0005f } },       // lip_s_l: comisura
-    {  6, { -0.0004f, -0.0022f, 0 },     { -0.0030f,  0.0030f, -0.0010f }, {  0.0015f, 0, 0.0005f } },       // lip_s_r
-    {  7, { 0, -0.0006f, 0 },            {  0.0010f,  0.0015f, 0 },        { 0, 0, 0 } },                    // cheek_s_l
-    {  8, { 0, -0.0006f, 0 },            { -0.0010f,  0.0015f, 0 },        { 0, 0, 0 } },                    // cheek_s_r
-    {  9, { 0,  0.0010f, 0 },            {  0.0004f,  0.0008f, 0 },        { 0, 0, 0 } },                    // lip_t_l
-    { 10, { 0,  0.0008f, 0 },            { 0, 0.0004f, 0 },                { 0, 0, 0 } },                    // lip_t_c
-    { 11, { 0,  0.0010f, 0 },            { -0.0004f,  0.0008f, 0 },        { 0, 0, 0 } },                    // lip_t_r
+    {  5, {  0.0004f, -0.0022f, 0 },     {  0.0030f,  0.0022f, -0.0010f }, { -0.0015f, 0, 0.0005f } },       // lip_s_l: comisura
+    {  6, { -0.0004f, -0.0022f, 0 },     { -0.0030f,  0.0022f, -0.0010f }, {  0.0015f, 0, 0.0005f } },       // lip_s_r
+    {  7, { 0, -0.0006f, 0 },            {  0.0010f,  0.0015f, 0.0008f },  { 0, -0.0008f, 0 } },            // (09/11 c) asombro: la cara se alarga                    // cheek_s_l
+    {  8, { 0, -0.0006f, 0 },            { -0.0010f,  0.0015f, 0.0008f },  { 0, -0.0008f, 0 } },                    // cheek_s_r
+    {  9, { 0,  0.0010f, 0 },            {  0.0004f,  0.0008f, 0 },        { 0, 0.0004f, 0.0002f } },                    // lip_t_l
+    { 10, { 0,  0.0008f, 0 },            { 0, 0.0004f, 0 },                { 0, 0.0005f, 0.0002f } },                    // lip_t_c
+    { 11, { 0,  0.0010f, 0 },            { -0.0004f,  0.0008f, 0 },        { 0, 0.0004f, 0.0002f } },                    // lip_t_r
     {  3, { 0, 0.0006f, 0.0003f },       { 0, 0, 0 },                      { 0, -0.0005f, 0 } },             // lip_b_c: enojo = labios apretados
     {  4, { 0, 0.0008f, 0.0003f },       { 0, 0, 0 },                      { 0, -0.0006f, 0 } },             // doublechin: enojo = menton tenso
     { 13, { 0, 0.0008f, -0.0002f },      { 0, 0.0004f, 0 },                { 0, 0, 0 } },                    // nose: enojo arruga la nariz
-    { 14, {  0.0003f, 0.0010f, 0 },      {  0.0003f,  0.0006f, 0 },        { 0, 0, 0 } },                    // nosewing_l
-    { 15, { -0.0003f, 0.0010f, 0 },      { -0.0003f,  0.0006f, 0 },        { 0, 0, 0 } },                    // nosewing_r
-    { 16, {  0.0002f, 0.0008f, 0 },      {  0.0005f,  0.0010f, -0.0004f }, { 0, 0, 0 } },                    // nasolabialfold_t_l
-    { 17, { -0.0002f, 0.0008f, 0 },      { -0.0005f,  0.0010f, -0.0004f }, { 0, 0, 0 } },                    // nasolabialfold_t_r
-    { 26, { -0.0020f, -0.0030f, 0.0005f }, { 0, 0, 0 },                    {  0.0003f, 0.0040f, 0 } },       // brow_i_l: ceno abajo y al medio
-    { 27, {  0.0020f, -0.0030f, 0.0005f }, { 0, 0, 0 },                    { -0.0003f, 0.0040f, 0 } },       // brow_i_r
-    { 28, { 0, -0.0012f, 0 },            { 0, 0, 0 },                      { 0, 0.0035f, 0 } },              // brow_o_l
-    { 29, { 0, -0.0012f, 0 },            { 0, 0, 0 },                      { 0, 0.0035f, 0 } },              // brow_o_r
-    { 30, { 0, -0.0020f, -0.0004f },     { 0, 0, 0 },                      { 0, 0.0020f, 0 } },              // glabella
+    { 14, {  0.0006f, 0.0012f, 0 },      {  0.0003f,  0.0006f, 0 },        { 0, 0, 0 } },                    // nosewing_l
+    { 15, { -0.0006f, 0.0012f, 0 },      { -0.0003f,  0.0006f, 0 },        { 0, 0, 0 } },                    // nosewing_r
+    { 16, {  0.0004f, 0.0010f, 0 },      {  0.0005f,  0.0010f, -0.0004f }, { 0, -0.0004f, 0 } },                    // nasolabialfold_t_l
+    { 17, { -0.0004f, 0.0010f, 0 },      { -0.0005f,  0.0010f, -0.0004f }, { 0, -0.0004f, 0 } },                    // nasolabialfold_t_r
+    { 26, { -0.0020f, -0.0030f, 0.0005f }, {  0.0008f, 0.0014f, 0 },                    {  0.0003f, 0.0040f, 0 } },       // brow_i_l: ceno abajo y al medio
+    { 27, {  0.0020f, -0.0030f, 0.0005f }, { -0.0008f, 0.0014f, 0 },                    { -0.0003f, 0.0040f, 0 } },       // brow_i_r
+    { 28, { 0, -0.0012f, 0 },            { 0, 0.0008f, 0 },                      { 0, 0.0030f, 0 } },              // brow_o_l
+    { 29, { 0, -0.0012f, 0 },            { 0, 0.0008f, 0 },                      { 0, 0.0030f, 0 } },              // brow_o_r
+    { 30, { 0, -0.0020f, -0.0004f },     { 0, 0.0008f, 0 },                      { 0, 0.0020f, 0 } },              // glabella
 };
 static void PoseOf(int d, float ang, float smi, float sur, float* o) {
     o[0] = o[1] = o[2] = 0.0f;
-    for (const PoseOff& p : kPose) if (p.d == d) { for (int k = 0; k < 3; k++) o[k] = p.a[k] * ang + p.s[k] * smi + p.u[k] * sur; return; }
+    // (04/11, Agustin con una foto de Messi riendo: "al aumentar la sonrisa ... el angulo de las puntas de la sonrisa no suben tanto,
+    // abre mas la boca") pasando 1.0 de Sonrisa las comisuras casi no suben mas (un cuarto); se abren a lo ancho igual y la boca se
+    // abre (la mandibula, abajo en ExprBonesFrame)
+    const float smY = smi <= 1.0f ? smi : 1.0f + 0.35f * (smi - 1.0f);   // (09/11 b, Agustin con foto real: "se suben demasiado las comisuras") 0.55 -> 0.35 y comisura 3.0 -> 2.2 mm por 1.0
+    // (09/11 b) la sonrisa sube las cejas apenas (1.4 mm el inicio, 0.8 la punta) y las separa (entrecejo 1.6 mm mas ancho a 1.0), como en la foto   // (09/11, Agustin: "la sonrisa esta rota": a 1.5 se leia como mueca) 0.25 -> 0.55
+    for (const PoseOff& p : kPose) if (p.d == d) { for (int k = 0; k < 3; k++) o[k] = p.a[k] * ang + p.s[k] * ((k == 1 && (d == 5 || d == 6)) ? smY : smi) + p.u[k] * sur; return; }
 }
 static float s_poseSmile = 0.0f;   // para Secondary (mejillas)
+// (09/11 b, Agustin: "ten mas en cuenta el modelado que yo hice en blend shapes ... y la forma de los ojos") en una cara con sonrisa
+// propia (perfil en caras.ini = Messi, que ademas trae su sonrisa esculpida en el shader) la sonrisa generica por huesos queda al 40 %
+// en boca/mejillas y el achinado de los ojos a la mitad: manda su escultura
+static float s_eyeSmK = 1.0f;
 // (04/11, Agustin: "que la sonrisa mueva toda la cara, asi como tambien en el enojado y demas") los sliders de gestos tambien para
 // Secondary (pomulos 18/19 y bajo-ojo 20/21): enojo, asombro, grito, puchero; y el perfil de la cara de este cuadro
+static float s_puffAll = 0.0f;   // (09/11) cachetes inflados de este esqueleto (x362 + soplido): pomulos / bajo-ojo en Secondary
 static float s_poseG[6] = {};   // 0 neutra (z356), 1 enojo, 2 sonrisa, 3 asombro, 4 grito, 5 puchero
 static const void* s_poseProf = nullptr;
 // (04/11, Agustin: "para messi una expresion de gritar custom ... para una mayor similitud a la vida real"; "la cara neutra me gusta
@@ -201,14 +274,14 @@ static const PoseOff2 kPose2[] = {
     {  4, { 0, 0, 0 },                        { 0,  0.0020f,  0.0010f } },          // doublechin: menton que sube (mentoniano)
     {  5, {  0.0030f, -0.0005f, -0.0012f },   { -0.0005f, -0.0020f, 0 } },          // lip_s_l: grito = comisura afuera y atras
     {  6, { -0.0030f, -0.0005f, -0.0012f },   {  0.0005f, -0.0020f, 0 } },          // lip_s_r
-    {  7, {  0.0010f, -0.0005f, 0 },          { 0, -0.0008f, 0 } },                 // cheek_s_l
-    {  8, { -0.0010f, -0.0005f, 0 },          { 0, -0.0008f, 0 } },                 // cheek_s_r
+    {  7, {  0.0010f,  0.0006f, 0.0004f },    { 0, -0.0008f, 0 } },   // (09/11 c) grito: la mejilla sube con el pomulo                 // cheek_s_l
+    {  8, { -0.0010f,  0.0006f, 0.0004f },    { 0, -0.0008f, 0 } },                 // cheek_s_r
     {  9, {  0.0005f,  0.0020f, 0 },          { 0,  0.0003f,  0.0008f } },          // lip_t_l: grito = labio de arriba sube (dientes)
-    { 10, { 0,  0.0018f, 0 },                 { 0,  0.0003f,  0.0008f } },          // lip_t_c
+    { 10, { 0,  0.0018f, 0 },                 { 0, -0.0003f,  0.0010f } },          // lip_t_c
     { 11, { -0.0005f,  0.0020f, 0 },          { 0,  0.0003f,  0.0008f } },          // lip_t_r
     { 13, { 0, 0.0010f, -0.0002f },           { 0, 0, 0 } },                        // nose: grito arruga la nariz
-    { 14, {  0.0004f,  0.0012f, 0 },          { 0, 0, 0 } },                        // nosewing_l
-    { 15, { -0.0004f,  0.0012f, 0 },          { 0, 0, 0 } },                        // nosewing_r
+    { 14, {  0.0007f,  0.0012f, 0 },          { 0, 0, 0 } },                        // nosewing_l
+    { 15, { -0.0007f,  0.0012f, 0 },          { 0, 0, 0 } },                        // nosewing_r
     { 16, {  0.0005f,  0.0012f, 0 },          { 0, 0, 0 } },                        // nasolabialfold_t_l
     { 17, { -0.0005f,  0.0012f, 0 },          { 0, 0, 0 } },                        // nasolabialfold_t_r
     { 26, { -0.0018f,  0.0015f, 0.0004f },    { -0.0008f,  0.0030f, 0 } },          // brow_i_l: grito = juntas y arriba; puchero = triste
@@ -267,15 +340,22 @@ static int ProfFind(uint32_t id, const char* name) {
     return -1;
 }
 static const float* TeethOf(int d) { static const float z[3] = { 0, 0, 0 }; return d < (int)(sizeof(kTeeth) / sizeof(kTeeth[0])) ? kTeeth[d] : z; }
-enum { D_JAW = 0, D_LIPS_L = 5, D_LID_TL = 22, D_LID_TR = 23, D_LID_BL = 24, D_LID_BR = 25, D_BROW_IL = 26, D_EYE_L = 31, D_EYE_R = 32, D_HEAD = kND - 2 };
+enum { D_JAW = 0, D_LIPS_L = 5, D_LID_TL = 22, D_LID_TR = 23, D_LID_BL = 24, D_LID_BR = 25, D_BROW_IL = 26, D_EYE_L = 31, D_EYE_R = 32, D_NECKB = 33, D_SCM = 34, D_CLAV_L = 35, D_CLAV_R = 36, D_HEAD = kND - 2, D_NECK = kND - 1 };
 
 struct Skel {
+    int ganiClip = 0; float ganiT0 = 0.0f;   // (07/11) clip .gani en curso y reloj del juego en que arranco
+    float secT = -1.0f, secSm = 0.0f, secOpen = 0.0f; bool secHave = false;   // (08/11) sonrisa y boca abierta MEDIDAS, suavizadas con el reloj del juego
+    float clockT = -1.0f, clockK = 1.0f;   // (06/11) reloj del juego del ultimo cuadro de los parpados y cuadros de 60 Hz que pasaron
     const void* skel = nullptr; const char* bones = nullptr; int n = 0;   // esqueleto del cuerpo (clave) y su arreglo
     const void* face = nullptr; const char* fbones = nullptr; int fn = 0;  // (02/11) esqueleto de la CARA: nodo + 0xA0 (49 huesos)
     void* cur[kND] = {};      // puntero a la transformacion actual de cada hueso reconocido (null = no esta)
     int idx[kND] = {};        // indice del hueso en el arreglo del esqueleto
     const char* src[kND] = {};   // (02/11) arreglo de donde salio (cara o cuerpo): para revalidar cada cuadro
     const void* node = nullptr;  // (02/11) SceneCharacterNode con el que se armo
+    // (08/11 f) huella de los bloques al armar: vtable del nodo / de los dos esqueletos y los primeros 32 bytes del hueso 0 de cada
+    // arreglo. dlmalloc pisa los primeros 16 bytes de un bloque liberado con sus punteros de lista: si algo de esto cambio, el bloque
+    // ya no es del juego y NO se escribe (los cierres +0x1ff674a / cuelgue +0x1ff668e del editor podian ser huesos escritos ahi)
+    uint64_t vtNode = 0, vtFace = 0, vtSkel = 0, b0Face[4] = {}, b0Body[4] = {};
     Xf rest[kND] = {};
     int found = 0, jawFound = 0;
     unsigned lastFrame = 0; int rebuilds = 0; bool logged = false;
@@ -289,25 +369,48 @@ struct Skel {
     // (lo que dejo el juego) y lo escrito; si al cuadro siguiente se lee lo escrito (el juego no reescribio, o el Eval del
     // cuello paso dos veces en el mismo cuadro) se parte de la base guardada y no se gira dos veces
     float wq[kND][4] = {}, wt[kND][3] = {}, bq[kND][4] = {}, bt[kND][3] = {}; bool wHave[kND] = {};
+    // (08/11) gestos en la paleta (expr_paleta): lo que el mod QUIERE en cada hueso este cuadro (no se escribe en el esqueleto; se publica
+    // en `pub` y el VS lo aplica, ver ExprCharPose en core.h)
+    float dq[kND][4] = {}, dt[kND][3] = {}; bool dHave[kND] = {}; unsigned dFrame[kND] = {}; ExprCharPose pub;
     int reused = 0;
     // (02/11 i) amplificador POR HUESOS: base del juego leida este cuadro (lo que se guarda como base al escribir), cuadro de la
     // ultima escritura y la cabeza del cuadro para medir el gesto (actual - cabeza rigida)
     float gq[kND][4] = {}, gt[kND][3] = {}; unsigned wFrame[kND] = {};
+    float bwHr[kND][4] = {}, bwHc[kND][3] = {}; bool bwHave[kND] = {};   // (08/11) cabeza del cuadro en que se guardo la base (bq / bt)
     bool ampOn = false; float ahc[3] = {}, ahr[4] = { 0, 0, 0, 1 }, aGain[kND] = {}, aCap = 0.012f, aBig = 0.35f;
     // (02/11 l, Agustin: "vibra un poco al abrirse ... la camara lenta") cabeza del cuadro en que el JUEGO escribio cada hueso: en
     // camara lenta el juego no reescribe los huesos de la cara en todos los cuadros (16 mil lecturas con lo del mod puesto) pero la
     // cabeza si se mueve; medir el gesto contra la cabeza de ahora metia ese movimiento en el gesto y lo agrandaba a saltos
-    float bHc[kND][3] = {}, bHr[kND][4] = {}; bool bHave[kND] = {}, fresh[kND] = {};
+    float bHc[kND][3] = {}, bHr[kND][4] = {}; bool bHave[kND] = {}, fresh[kND] = {}; unsigned ahFrame = ~0u;
+    bool nWarm[kND] = {}, lidRq[kND] = {}, lidRt[kND] = {}, lqHave[kND] = {}, ltHave[kND] = {}; float lqHr[kND][4] = {}, ltHr[kND][4] = {}, ltHc[kND][3] = {};
     // (02/11 n, Agustin: "al subir la ganancia la cara se deforma pero no en partes") el gesto se medía contra el REPOSO del skl,
     // pero la forma de cada cara (editor de caras del juego) tambien esta en los huesos: se agrandaba la forma de la cara entera.
     // Ahora el gesto se mide contra la cara NEUTRA de este jugador: promedio lento (~10 s) de cada hueso en los ejes de la cabeza
     float nT[kND][3] = {}, nQ[kND][4] = {}; int nN[kND] = {};
     float eyeP = 0.0f; bool eyePHave = false;   // (02/11 o) mirada vertical del JUEGO (hueso del ojo), suavizada
+    float eyePT = 0.0f, lidSm = 0.0f; bool lidSmHave = false;   // (04/11) objetivo con histeresis de eyeP y sonrisa medida suavizada para los parpados
+    float eyeY = 0.0f, eyeYT = 0.0f, lidX = 0.0f; bool eyeYHave = false, lidXHave = false;
+    float animM = 0.0f, animG = 1.0f; bool animHave = false, animGHave = false;   // (08/11) animacion medida con histeresis y compuerta del parpadeo suavizada   // (08/11) mirada de costado del juego (suavizada, con histeresis) y giro de costado de los parpados
+    float lidU = 0.0f, lidL = 0.0f; bool lidHave = false;        // (04/11) angulos de los parpados del cuadro anterior (limite de velocidad)
     float seed = 0.37f; bool seedHave = false; float seedCand = -1.0f; int seedCandN = 0;   // (02/11 c) semilla de la mirada, la misma que el VS del globo (PesExprSeed)
     // (02/11 e) sk_head del esqueleto del CUERPO (175 huesos) para la camara: el sk_head del esqueleto de la cara tiene la
     // transformacion actual en (0, 0, 0) (no es espacio del modelo: log 12:46 PC), el del cuerpo si lo es
     void* bHead = nullptr; int bHeadIdx = -1; Xf bHeadRest = {};
     // (04/11) perfil por cara: jugador de este esqueleto (personajes.cpp) y perfil de caras.ini (-1 = ninguno)
+    // (08/11) gestos propios del jugador (gani.cpp): copia de la lista, peso suavizado de cada uno y el gesto "entre_" en curso
+    std::vector<GaniGest> gg; unsigned ggGen = 0; uint32_t ggPid = 0; float ggW[16] = {}; float ggT = -1.0f; unsigned ggLog = 0;
+    int btw = -1; float btwT0 = 0.0f, btwNext = -1.0f; int btwN = 0;
+    float spP[3] = {}; float spT = -1.0f, speed = 0.0f, stillT = 0.0f; bool spHave = false;
+    bool farOff = false;   // (09/11) lejos de la camara: sin escribir el esqueleto (z391)
+    float sl[16] = {}; bool slHave = false; float slT = -1.0f;   // (08/11) sliders de gestos suavizados (w395 Transicion)
+    GaniPose gB = {}; bool gBHave = false; float gBT = -1.0f;                         // (08/11) clip .gani mostrado (y397: inertializacion en entrada / salida / cruce / vuelta del bucle)
+    GaniPose gPrev = {}; float gPrevDt = 0.0f; Inert gI[31][6]; float gIT0 = -1.0f; int gLastClip = -1; bool gLastOn = false; float gLastF = 0.0f;
+    float gsL[kND][3] = {}, gsV[kND][3] = {}; bool gsHave[kND] = {}; float gsDeg = 0.0f, gsDegV = 0.0f; bool gsDegHave = false; float gsT = -1.0f;   // (08/11) gestos del juego suavizados (x397, resorte), ejes de la cabeza
+    float slV[16] = {};   // velocidad del resorte de los sliders (w395)
+    float slG[2][8] = {}, slGV[2][8] = {};   // (09/11 c) los mismos gestos por grupo: 0 cejas (llegan antes), 1 mejillas / nariz (llegan despues)
+    int tkPhrase = -1; float tkT0 = 0.0f, tkDur = 0.0f, tkPause = 0.0f, tkCh[7] = {}, tkT = -1.0f; unsigned tkN = 0; int tkLast = -1;   // (08/11) hablar por palabras: frase en curso, canales suavizados
+    float effort = 0.0f, brPh = 0.0f, anT = -1.0f;                 // (08/11) esfuerzo por velocidad (sube ~1 s, baja ~4 s), fase de la respiracion
+   // (08/11) velocidad del jugador (cabeza en el mundo, m/s) y cuanto lleva quieto
     uint32_t pid = 0; bool pKnown = false; int prof = -1; unsigned profGen = 0xffffffffu; unsigned profFrame = 0; bool profLogged = false;
 };
 static const int kMaxSkel = 48;
@@ -319,6 +422,10 @@ static std::atomic<unsigned> s_lastActive{0};
 static std::atomic<unsigned> s_lastEyes{0};   // (02/11) cuadro del ultimo giro de ojos / parpados por huesos
 static std::atomic<int> s_eyesW{0}, s_blinks{0};
 static std::atomic<int> s_lidAmpSkip{0};   // (04/11) parpados que el amplificador ya no toca
+static std::atomic<int> s_lidHeadFix{0}, s_lidHeadFixT{0};   // (04/11) parpados con la base llevada a la cabeza del cuadro
+static std::atomic<int> s_far{0};   // (09/11) pasos sin escribir por estar lejos de la camara (z391)
+static std::atomic<int> s_neckW{0};   // (08/11) huesos del cuello escritos (tension con grito / enojo / apretar, boca abierta)
+static std::atomic<int> s_baseHeadFix{0};   // (08/11) otros huesos con la parte no reescrita llevada a la cabeza del cuadro
 static std::atomic<int> s_ampW{0}, s_ampSkip{0};   // (02/11 i) huesos agrandados escritos (amplificador por huesos)   // cuadro del ultimo giro aplicado o esqueleto con mandibula visto
 static int s_logs = 0;
 
@@ -386,6 +493,11 @@ static bool Build(Skel& S, const void* skel) {
     if (node && ReadPtr((const char*)node + 0xA0, face) && face != skel && LooksSkel(face, &S.fbones, &S.fn)) { S.face = face; Match(S, S.fbones, S.fn); }
     else { S.face = nullptr; S.fbones = nullptr; S.fn = 0; }
     Match(S, S.bones, S.n);
+    if (S.node) SafeCopy(&S.vtNode, S.node, 8);
+    if (S.face) SafeCopy(&S.vtFace, S.face, 8);
+    SafeCopy(&S.vtSkel, S.skel, 8);
+    if (S.fbones) SafeCopy(S.b0Face, S.fbones, sizeof S.b0Face);
+    if (S.bones) SafeCopy(S.b0Body, S.bones, sizeof S.b0Body);
     for (int b = 0; b < S.n && !S.bHead; b++) {   // sk_head del cuerpo (hash FF3D8D77 o nombre)
         const char* bone = S.bones + (size_t)b * 0xc0;
         uint32_t hs = 0; char nm[64];
@@ -419,6 +531,14 @@ static bool StillValid(const Skel& S) {
     bool ok = false;
     for (int i = 0; i < kCharSlots; i++) if (alive[i] && ci[i].skel == S.skel && ci[i].node == S.node) { ok = true; break; }
     if (!ok) return false;
+    {   // (08/11 f) bloques todavia vivos (ver vtNode)
+        uint64_t v = 0, b[4] = {};
+        if (!SafeCopy(&v, S.node, 8) || v != S.vtNode) return false;
+        if (!SafeCopy(&v, S.face, 8) || v != S.vtFace) return false;
+        if (!SafeCopy(&v, S.skel, 8) || v != S.vtSkel) return false;
+        if (!SafeCopy(b, S.fbones, sizeof b) || memcmp(b, S.b0Face, sizeof b)) return false;
+        if (!SafeCopy(b, S.bones, sizeof b) || memcmp(b, S.b0Body, sizeof b)) return false;
+    }
     void* face = nullptr; if (!ReadPtr((const char*)S.node + 0xA0, face) || face != S.face) return false;
     void* arr = nullptr; int n = 0;
     if (!ReadPtr((const char*)S.face + 0x28, arr) || (const char*)arr != S.fbones || !SafeCopy(&n, (const char*)S.face + 0x30, 4) || n != S.fn) return false;
@@ -458,6 +578,161 @@ static bool JawAngle(const Skel& S, const Xf& jc, float* deg) {
 // por personaje (el nodo), asi que cada jugador mira y parpadea a su ritmo. Cuando esto corre, 350.y = 2 y el shader no gira
 // ni el globo ni los parpados (no se suma dos veces).
 static float Frac(float x) { return x - floorf(x); }
+static float SStep(float a, float b, float x);   // definida mas abajo (la usan AnimT / TalkWords)
+// (08/11, Agustin: "puedes hacer que calcule por cada fotograma? aunque el gameclock este en cero como pasa en el menu de apariencia")
+// RELOJ DE LAS ANIMACIONES de la cara: avanza en cada cuadro. Si el reloj del juego (fila 157, config.cpp) avanzo desde el cuadro
+// anterior se toma ese paso (asi la camara lenta de las repeticiones frena tambien los gestos); si esta quieto o en cero (editor,
+// menu de apariencia, presentacion) se toma el reloj real, con tope de 1/15 s por cuadro. Hablar, vida, respiracion, transicion,
+// parpadeo, gestos propios y clips .gani usan este reloj, nunca el del juego directo.
+static float AnimT() {
+    static std::mutex mx; static double animT = 0.0, lastGame = -1.0, lastReal = -1.0; static unsigned fr = 0xffffffffu;
+    std::lock_guard<std::mutex> lk(mx);
+    const unsigned now = s_frame.load(std::memory_order_relaxed);
+    if (now != fr) {
+        fr = now;
+        LARGE_INTEGER c, f; QueryPerformanceCounter(&c); QueryPerformanceFrequency(&f);
+        const double real = (double)c.QuadPart / (double)(f.QuadPart ? f.QuadPart : 1);
+        const double game = (double)g_cfg.live[157][0];
+        double dG = lastGame < 0.0 ? 0.0 : game - lastGame, dR = lastReal < 0.0 ? 0.0 : real - lastReal;
+        lastGame = game; lastReal = real;
+        double adv = (dG > 1e-5 && dG < 0.5) ? dG : std::clamp(dR, 0.0, 1.0 / 15.0);
+        animT += adv; if (animT > 100000.0) animT -= 100000.0;
+    }
+    return (float)animT;
+}
+
+// (08/11, Agustin: "para el hablar agrega mas opciones de por ejemplo pronunciar palabras, interpola mejor las animaciones") HABLAR POR
+// PALABRAS (w396 = 1). Cada frase se pasa a fonemas y cada fonema a un VISEMA (forma de la boca): A (abierta), E (media, ancha),
+// I (cerrada, ancha), O (redonda), U (trompa), M (b / p / m: labios juntos), F (f / v: labio de abajo contra los dientes), T (resto de
+// consonantes: lengua, boca algo abierta), K (k / g / j / q: mas abierta atras). Cada visema fija 6 canales: mandibula, redondez (- ancha
+// .. + redonda), labio de arriba (sube), labio de abajo (baja; - sube contra los dientes), labios adelante, labios apretados. Entre fonemas
+// la boca no salta: cada canal va del visema anterior al nuevo con una curva suave (coarticulacion: las consonantes ya anticipan la vocal
+// que sigue) y despues pasa por un filtro de ~25 ms. Las frases salen de PES21FX\anim\hablar.txt (una por linea, acentos marcan la silaba
+// tonica; si no esta, lista propia de cancha). Entre frases hay pausas de 0.6 a 2.5 s, y la silaba tonica levanta un poco las cejas.
+enum { V_REST = 0, V_A, V_E, V_I, V_O, V_U, V_M, V_F, V_T, V_K, V_N };
+static const float kVis[V_N][6] = {   // mandibula, redondez, labio arriba, labio abajo, adelante, apretados
+    { 0.00f,  0.00f, 0.00f,  0.00f, 0.00f, 0.00f },   // reposo
+    { 0.90f, -0.10f, 0.35f,  0.55f, 0.00f, 0.00f },   // a
+    { 0.45f, -0.60f, 0.30f,  0.30f, 0.00f, 0.00f },   // e
+    { 0.22f, -0.90f, 0.20f,  0.15f, 0.00f, 0.00f },   // i
+    { 0.60f,  0.70f, 0.20f,  0.35f, 0.55f, 0.00f },   // o
+    { 0.30f,  1.00f, 0.10f,  0.10f, 1.00f, 0.00f },   // u
+    { 0.04f,  0.15f, 0.00f,  0.00f, 0.05f, 1.00f },   // m b p
+    { 0.18f,  0.10f, 0.15f, -0.45f, 0.00f, 0.30f },   // f v
+    { 0.30f, -0.20f, 0.15f,  0.20f, 0.00f, 0.00f },   // t d n l s r
+    { 0.38f,  0.00f, 0.10f,  0.25f, 0.00f, 0.00f },   // k g j q
+};
+struct Pho { uint8_t vis; float dur; bool stress; };   // dur en unidades (vocal 1)
+struct Phrase { std::vector<Pho> ph; float units = 0.0f; };
+static std::vector<Phrase> s_phr; static bool s_phrLoaded = false; static unsigned s_phrFrame = 0;
+static const char* kFrasesCancha[] = {
+    "dale dale", "aca aca", "pasala", "vamos vamos", "arbitro!", "solo solo", "atras atras", "cuidado", "bien ahi", "no no no",
+    "la mia", "tiempo tiempo", "arriba arriba", "cambio", "sali sali", "cubrime", "al medio", "dame dame", "eh eh eh", "vamos muchachos",
+    "tranquilo", "cerra cerra", "marca marca", "fue falta", "mano mano", "tuya tuya", "corre corre", "hombre hombre", "afuera", "que pasa",
+};
+static void PhraseParse(const char* txt, Phrase& P) {
+    // minusculas y acentos (UTF-8 o ANSI) -> vocal tonica; '!' / '?' no cuentan
+    std::vector<std::pair<char, bool>> L;   // letra, tonica marcada
+    for (const unsigned char* p = (const unsigned char*)txt; *p; p++) {
+        unsigned char c = *p; char v = 0; bool st = false;
+        if (c == 0xC3 && p[1]) { unsigned char d = p[1]; p++;
+            switch (d) { case 0xA1: case 0x81: v = 'a'; st = true; break; case 0xA9: case 0x89: v = 'e'; st = true; break; case 0xAD: case 0x8D: v = 'i'; st = true; break;
+                         case 0xB3: case 0x93: v = 'o'; st = true; break; case 0xBA: case 0x9A: case 0xBC: v = 'u'; st = true; break; case 0xB1: case 0x91: v = 'n'; break; default: v = 0; } }
+        else if (c == 0xE1 || c == 0xC1) { v = 'a'; st = true; } else if (c == 0xE9 || c == 0xC9) { v = 'e'; st = true; } else if (c == 0xED || c == 0xCD) { v = 'i'; st = true; }
+        else if (c == 0xF3 || c == 0xD3) { v = 'o'; st = true; } else if (c == 0xFA || c == 0xDA || c == 0xFC) { v = 'u'; st = true; } else if (c == 0xF1 || c == 0xD1) v = 'n';
+        else if (c >= 'A' && c <= 'Z') v = (char)(c + 32); else if (c >= 'a' && c <= 'z') v = (char)c; else if (c == ' ' || c == ',' || c == '.') v = ' ';
+        else continue;
+        if (v) L.push_back({ v, st });
+    }
+    // por palabra: si ninguna vocal lleva acento, tonica = penultima vocal si termina en vocal / n / s, si no la ultima
+    size_t i = 0;
+    while (i < L.size()) {
+        if (L[i].first == ' ') { P.ph.push_back({ V_REST, 1.2f, false }); i++; continue; }
+        size_t j = i; while (j < L.size() && L[j].first != ' ') j++;
+        bool marked = false; std::vector<size_t> vow;
+        for (size_t k = i; k < j; k++) { if (strchr("aeiou", L[k].first)) { vow.push_back(k); if (L[k].second) marked = true; } }
+        if (!marked && !vow.empty()) { const char last = L[j - 1].first; const bool llana = strchr("aeiouns", last) != nullptr; L[vow.size() >= 2 && llana ? vow[vow.size() - 2] : vow.back()].second = true; }
+        for (size_t k = i; k < j; k++) {
+            const char c = L[k].first; uint8_t v = V_T; float d = 0.5f;
+            switch (c) { case 'a': v = V_A; d = 1.0f; break; case 'e': v = V_E; d = 1.0f; break; case 'i': case 'y': v = V_I; d = 0.9f; break; case 'o': v = V_O; d = 1.0f; break; case 'u': v = V_U; d = 0.9f; break;
+                         case 'm': case 'b': case 'p': v = V_M; d = 0.6f; break; case 'f': case 'v': v = V_F; d = 0.6f; break; case 'k': case 'g': case 'j': case 'q': case 'c': case 'x': v = V_K; d = 0.5f; break;
+                         case 'h': continue; default: v = V_T; d = 0.5f; }
+            if (L[k].second) d *= 1.45f;
+            P.ph.push_back({ v, d, L[k].second });
+        }
+        i = j;
+    }
+    P.units = 0.0f; for (const Pho& p : P.ph) P.units += p.dur;
+}
+static void PhrasesLoad() {   // con s_mx tomado; relee cada ~10 s si el archivo cambia de tamano
+    const unsigned fr = s_frame.load(std::memory_order_relaxed);
+    if (s_phrLoaded && fr - s_phrFrame < 600) return;
+    s_phrFrame = fr;
+    static size_t lastSize = (size_t)-1; std::vector<uint8_t> t; size_t sz = 0;
+    { HANDLE h = CreateFileW((g_cfg.baseDir + L"anim\\hablar.txt").c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+      if (h != INVALID_HANDLE_VALUE) { LARGE_INTEGER q{}; if (GetFileSizeEx(h, &q) && q.QuadPart > 0 && q.QuadPart < (1 << 20)) { t.resize((size_t)q.QuadPart); DWORD rd = 0; if (!ReadFile(h, t.data(), (DWORD)t.size(), &rd, nullptr) || rd != t.size()) t.clear(); sz = t.size(); } CloseHandle(h); } }
+    if (s_phrLoaded && sz == lastSize) return;
+    lastSize = sz; s_phr.clear();
+    if (!t.empty()) {
+        t.push_back('\n'); std::string line;
+        for (uint8_t c : t) {
+            if (c == '\n' || c == '\r') { size_t a = line.find_first_not_of(" \t"); if (a != std::string::npos && line[a] != '#' && line[a] != ';') { Phrase P; PhraseParse(line.c_str() + a, P); if (P.units > 0.5f) s_phr.push_back(P); } line.clear(); }
+            else if (!(c == 0xEF || c == 0xBB || c == 0xBF) || !line.empty()) line.push_back((char)c);
+        }
+    }
+    const bool own = !s_phr.empty();
+    if (!own) for (const char* f : kFrasesCancha) { Phrase P; PhraseParse(f, P); if (P.units > 0.5f) s_phr.push_back(P); }
+    if (s_logs < 400) { s_logs++; Log("hablar: %d frases %s", (int)s_phr.size(), own ? "de PES21FX\\anim\\hablar.txt" : "propias (sin anim\\hablar.txt)"); }
+    s_phrLoaded = true;
+}
+// canales de la boca en este cuadro para este personaje: out[0..5] = los 6 del visema, out[6] = acento (silaba tonica). sp = velocidad
+// (z354, 0.55 = pausado). Devuelve false si esta en pausa entre frases (boca en reposo)
+static bool TalkWords(Skel& S, float tNow, float sp, float out[7]) {
+    PhrasesLoad();
+    const float unit = 0.095f * 0.55f / (std::max)(sp, 0.2f);   // s por vocal: 0.095 pausado (~3.5 silabas/s), 0.052 a 1.0
+    auto rnd = [&](float n) { return Frac(sinf(n * 12.9898f + (float)(S.pid % 9973u) * 0.731f + (float)(((uintptr_t)S.skel >> 6) & 63) * 0.173f) * 43758.5453f); };
+    float target[6] = {}, acc = 0.0f; bool talking = false;
+    if (!s_phr.empty()) {
+        if (S.tkPhrase < 0 || tNow < S.tkT0 || tNow > S.tkT0 + S.tkDur + S.tkPause) {
+            int pick = (int)(rnd((float)S.tkN + 0.37f) * (float)s_phr.size()); if (pick >= (int)s_phr.size()) pick = (int)s_phr.size() - 1;
+            if (pick == S.tkLast && s_phr.size() > 1) pick = (pick + 1) % (int)s_phr.size();
+            S.tkLast = S.tkPhrase = pick; S.tkT0 = tNow; S.tkDur = s_phr[pick].units * unit; S.tkPause = 0.6f + 1.9f * rnd((float)S.tkN + 0.81f); S.tkN++;
+        }
+        const Phrase& P = s_phr[S.tkPhrase];
+        const float u = (tNow - S.tkT0) / unit;   // posicion en unidades
+        if (u < P.units) {
+            talking = true;
+            float a = 0.0f; int k = 0; for (; k < (int)P.ph.size(); k++) { if (u < a + P.ph[k].dur) break; a += P.ph[k].dur; }
+            if (k >= (int)P.ph.size()) k = (int)P.ph.size() - 1;
+            const Pho& cur = P.ph[k]; const uint8_t prev = k > 0 ? P.ph[k - 1].vis : V_REST; const uint8_t next = k + 1 < (int)P.ph.size() ? P.ph[k + 1].vis : V_REST;
+            // destino del fonema: el visema propio; una consonante anticipa un 35 % la vocal que sigue (coarticulacion)
+            // (09/11, Agustin: "los gestos de hablar son super roboticos") cada vocal llegaba siempre al visema entero, con el mismo tamano y
+            // cortes de 25 ms: boca de muneco. Ahora como al hablar de verdad: la silaba tonica abre entera y las atonas a 55..80 % (reducidas),
+            // cada frase tiene su fuerza (murmullo 0.65 .. grito 1.1), la frase arranca y termina suave, la consonante anticipa mas la vocal
+            // (50 %) y el filtro es mas lento en la mandibula (45 ms) que en los labios (30..40 ms)
+            const float frG = 0.65f + 0.45f * rnd((float)S.tkN + 0.53f);
+            auto ampOf = [&](int i) { if (i < 0 || i >= (int)P.ph.size()) return 0.7f; return P.ph[i].stress ? 1.0f : 0.55f + 0.25f * rnd((float)i * 1.7f + (float)S.tkN * 0.31f); };
+            const float env = SStep(0.0f, 1.2f, u) * (1.0f - SStep(P.units - 1.6f, P.units, u));
+            float dst[6]; const bool cons = cur.vis >= V_M; const float ant = cons && next >= V_A && next <= V_U ? 0.50f : 0.0f;
+            for (int c = 0; c < 6; c++) dst[c] = kVis[cur.vis][c] * (1.0f - ant) + kVis[next][c] * ant;
+            // transicion: del fonema anterior al actual en el primer 60 % de su duracion, con curva suave
+            const float f = SStep(0.0f, 0.6f, (u - a) / (std::max)(cur.dur, 0.05f));
+            for (int c = 0; c < 6; c++) target[c] = kVis[prev][c] + (dst[c] - kVis[prev][c]) * f;
+            {   const float am = (ampOf(k - 1) + (ampOf(k) - ampOf(k - 1)) * f) * frG * (0.35f + 0.65f * env);
+                for (int c = 0; c < 5; c++) target[c] *= am; }   // apretados (5) no se achica: m / b / p cierran siempre
+            // apretados (m / b / p) solo se ven si tambien se cierra la mandibula
+            target[5] *= 1.0f - std::clamp(target[0] * 2.0f, 0.0f, 1.0f);
+            acc = cur.stress ? SStep(0.0f, 0.3f, (u - a) / (std::max)(cur.dur, 0.05f)) * (1.0f - SStep(0.7f, 1.0f, (u - a) / (std::max)(cur.dur, 0.05f))) : 0.0f;
+        }
+    }
+    // filtro de ~25 ms por canal (quita el escalon de la curva y suaviza el reposo entre frases)
+    const float dt = S.tkT < 0.0f || tNow < S.tkT ? 1.0f : (std::min)(tNow - S.tkT, 0.25f); S.tkT = tNow;
+    static const float kTau[6] = { 0.045f, 0.035f, 0.035f, 0.035f, 0.040f, 0.030f };
+    for (int c = 0; c < 6; c++) S.tkCh[c] += (target[c] - S.tkCh[c]) * (1.0f - expf(-dt / kTau[c]));
+    S.tkCh[6] += (acc - S.tkCh[6]) * (1.0f - expf(-dt / 0.06f));
+    memcpy(out, S.tkCh, sizeof S.tkCh);
+    return talking;
+}
 static float SStep(float a, float b, float x) { float t = std::clamp((x - a) / (b - a), 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); }
 static void GazeHash2(float n, float seed, float* o) {
     o[0] = Frac(sinf((n + seed * 17.3f) * 12.9898f) * 43758.5453f);
@@ -488,12 +763,18 @@ static void Gaze(float t, float seed, float amp, float* g) {
     g[1] += sinf(tt * 0.51f + seed * 2.0f) * 0.0015f + sinf(tt * 1.13f + seed * 0.7f) * 0.0008f;
     g[0] *= amp; g[1] *= amp;
 }
+// (08/11, Agustin: "perfecciona los parpados") parpadeo irregular como el de una persona: ranuras de 4 s, en ~30 % no parpadea (los
+// intervalos quedan de 0.5 a ~11 s, ~5.5 s de promedio, como antes) y en ~15 % parpadea dos veces seguidas (0.38 s); cada parpadeo
+// cierra un poco distinto (85..100 %). Cierra en 0.08 s, queda 0.04, abre en 0.18. MISMA cuenta en pes_expr.hlsli (PesBlinkCurve)
+static float BlinkShape(float x) { if (x < 0.0f || x > 0.30f) return 0.0f; return x < 0.08f ? SStep(0.0f, 0.08f, x) : (x < 0.12f ? 1.0f : 1.0f - SStep(0.12f, 0.30f, x)); }
 static float BlinkCurve(float t, float seed) {
-    const float per = 5.5f, tt = t + seed * 37.3f, n = floorf(tt / per);
+    const float per = 4.0f, tt = t + seed * 37.3f, n = floorf(tt / per);
     const float h = Frac(sinf((n + seed * 13.1f) * 12.9898f) * 43758.5453f);
-    const float x = tt - (n * per + h * (per - 0.4f));
-    if (x < 0.0f || x > 0.30f) return 0.0f;
-    return x < 0.08f ? SStep(0.0f, 0.08f, x) : (x < 0.12f ? 1.0f : 1.0f - SStep(0.12f, 0.30f, x));
+    const float h2 = Frac(sinf((n + seed * 7.7f) * 78.233f) * 43758.5453f);
+    if (h2 < 0.30f) return 0.0f;
+    const float x = tt - (n * per + h * (per - 0.9f));
+    float b = BlinkShape(x); if (h2 > 0.85f) b = (std::max)(b, BlinkShape(x - 0.38f));
+    return b * (0.85f + 0.15f * Frac(h * 7.31f));
 }
 // transformacion actual del hueso SIN el giro del mod: si el cuaternion sigue siendo el que escribimos el cuadro anterior (el
 // juego no lo reescribio), se le saca ese giro
@@ -511,19 +792,66 @@ static bool ReadBase(Skel& S, int d, Xf& x) {
         if (dq < 2e-6f) { memcpy(x.q, S.bq[d], sizeof S.bq[d]); hit = hq = true; }
         if (dt < 1e-7f + 1e-6f * (fabsf(u[0]) + fabsf(u[1]) + fabsf(u[2]))) { memcpy(x.t, S.bt[d], sizeof S.bt[d]); hit = ht = true; }
         if (hit) S.reused++;
+        // (08/11, Agustin: "los parpados y partes de la boca [vibran] al mover la camara ... debe ser constante asi como ocurre cuando
+        // se carga un .gani") la parte que el juego NO reescribio (giro o posicion) se tomaba de la base guardada TAL CUAL, con la cabeza
+        // del cuadro en que se guardo; con la camara moviendose la cabeza gira (mira a la camara) y esa parte quedaba un cuadro atras y
+        // saltaba al siguiente. Ahora se lleva a la cabeza de este cuadro, como ya se hacia con los parpados (abajo)
+        if (hit && !(d >= D_LID_TL && d <= D_LID_BR) && d < D_NECKB && S.bwHave[d] && S.ahFrame == s_frame.load(std::memory_order_relaxed)) {
+            float ic[4], D[4]; QConj(S.bwHr[d], ic); QMul(S.ahr, ic, D);
+            if (fabsf(D[3]) > 0.94f && fabsf(D[3]) < 0.9999999f) {
+                if (hq) { float nq[4]; QMul(D, x.q, nq); memcpy(x.q, nq, sizeof nq); }
+                if (ht) { const float v[3] = { x.t[0] - S.bwHc[d][0], x.t[1] - S.bwHc[d][1], x.t[2] - S.bwHc[d][2] }; float r[3]; QRot(D, v, r); for (int k = 0; k < 3; k++) x.t[k] = S.ahc[k] + r[k]; }
+                s_baseHeadFix.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+        S.lidRq[d] = hq; S.lidRt[d] = ht;
         S.fresh[d] = !(hq && ht);   // el juego escribio algo nuevo en este hueso
-    } else S.fresh[d] = true;
+    } else { S.fresh[d] = true; S.lidRq[d] = S.lidRt[d] = false; }
     memcpy(S.gq[d], x.q, sizeof S.gq[d]); memcpy(S.gt[d], x.t, sizeof S.gt[d]);
+    // (04/11, Agustin: los parpados "siguen vibrando al hacer animaciones, por eso en partido se nota") el juego no reescribe los
+    // parpados en todos los cuadros: en los que no, la base guardada es la del cuadro en que los escribio, con la cabeza de ESE
+    // momento, y el giro del parpado se arma con la cabeza de ahora: con la cabeza en movimiento el parpado quedaba un cuadro atras
+    // y saltaba al cuadro siguiente. Ahora esa base se lleva a la cabeza de este cuadro (lo que se guarda sigue siendo lo del juego)
+    // (04/11, log 04:58 PC: "llevados a la cabeza 0") el juego nunca deja el parpado entero sin tocar: reescribe el giro O la
+    // posicion. Entonces cada parte se lleva por separado, con la cabeza del ultimo cuadro en que el juego escribio ESA parte
+    if (d >= D_LID_TL && d <= D_LID_BR && S.ahFrame == s_frame.load(std::memory_order_relaxed)) {
+        const bool rq = S.wHave[d] && S.lidRq[d], rt = S.wHave[d] && S.lidRt[d];
+        if (rq && S.lqHave[d]) {
+            float ic[4], D[4]; QConj(S.lqHr[d], ic); QMul(S.ahr, ic, D);
+            if (fabsf(D[3]) > 0.94f) { float nq[4]; QMul(D, x.q, nq); memcpy(x.q, nq, sizeof nq); s_lidHeadFix.fetch_add(1, std::memory_order_relaxed); }
+        } else if (!rq) { memcpy(S.lqHr[d], S.ahr, sizeof S.lqHr[d]); S.lqHave[d] = true; }
+        if (rt && S.ltHave[d]) {
+            float ic[4], D[4]; QConj(S.ltHr[d], ic); QMul(S.ahr, ic, D);
+            if (fabsf(D[3]) > 0.94f) {
+                const float v[3] = { x.t[0] - S.ltHc[d][0], x.t[1] - S.ltHc[d][1], x.t[2] - S.ltHc[d][2] }; float r[3]; QRot(D, v, r);
+                for (int k = 0; k < 3; k++) x.t[k] = S.ahc[k] + r[k];
+                s_lidHeadFixT.fetch_add(1, std::memory_order_relaxed);
+            }
+        } else if (!rt) { memcpy(S.ltHr[d], S.ahr, sizeof S.ltHr[d]); memcpy(S.ltHc[d], S.ahc, sizeof S.ltHc[d]); S.ltHave[d] = true; }
+    }
     return true;
 }
 // escribe q / t nuevos y recuerda la base de la que salieron
+static bool PaletteMode(int d) { return g_cfg.optExprPalette && d < D_NECKB; }   // (08/11) huesos de la cara: a la paleta, no al esqueleto
 static bool WriteBone(Skel& S, int d, const Xf& base, const float* nq, const float* nt) {
+    if (PaletteMode(d)) {   // (08/11, Agustin: "todo sigue vibrando") no se toca el esqueleto: se anota y se publica al final del cuadro
+        memcpy(S.dq[d], nq, 4 * sizeof(float)); memcpy(S.dt[d], nt, 3 * sizeof(float)); S.dHave[d] = true; S.dFrame[d] = s_frame.load(std::memory_order_relaxed);
+        memcpy(S.bq[d], S.gq[d], sizeof S.bq[d]); memcpy(S.bt[d], S.gt[d], sizeof S.bt[d]);   // la base del juego de este cuadro (ReadBase)
+        S.wHave[d] = false; S.wFrame[d] = S.dFrame[d]; (void)base;
+        return true;
+    }
     float out[7] = { nq[0], nq[1], nq[2], nq[3], nt[0], nt[1], nt[2] };
+    // (09/11, Agustin: "al alejar la camara todo vibra", log 06:33 con x350 = 3 y expr_paleta = 0: parpados saltando 40 grados, 26000 huesos
+    // por resumen leidos con lo del mod puesto) al escribir el ESQUELETO ya no se escala nada por zona (ExprZoneScale, filas 421 / 422): esa
+    // cuenta tomaba como base lo que dejo el juego, que en los jugadores lejanos (cara animada a menos cuadros) era lo nuestro del cuadro
+    // anterior, y lo volvia a escalar: realimentacion. El 'control total' queda solo para la paleta (expr_paleta = 1); con x350 = 3 el
+    // esqueleto se comporta como "Por huesos + parpados" (2)
     if (!SafeCopy((char*)S.cur[d] + 16, out, 28)) return false;
     Xf chk; if (ReadXf(S.cur[d], chk)) { memcpy(S.wq[d], chk.q, sizeof chk.q[0] * 4); memcpy(S.wt[d], chk.t, sizeof chk.t[0] * 3); }
     else { memcpy(S.wq[d], nq, 4 * sizeof(float)); memcpy(S.wt[d], nt, 3 * sizeof(float)); }
     (void)base;   // (02/11 i) la base que se guarda es SIEMPRE la del juego (ReadBase de este cuadro), no la amplificada
     memcpy(S.bq[d], S.gq[d], sizeof S.bq[d]); memcpy(S.bt[d], S.gt[d], sizeof S.bt[d]); S.wHave[d] = true;
+    if (S.ahFrame == s_frame.load(std::memory_order_relaxed)) { memcpy(S.bwHr[d], S.ahr, sizeof S.bwHr[d]); memcpy(S.bwHc[d], S.ahc, sizeof S.bwHc[d]); S.bwHave[d] = true; } else S.bwHave[d] = false;
     S.wFrame[d] = s_frame.load(std::memory_order_relaxed);
     return true;
 }
@@ -531,6 +859,7 @@ static bool WriteBone(Skel& S, int d, const Xf& base, const float* nq, const flo
 // gestos secundarios reescribian cada cuadro pomulos, cejas y bajo-ojo aunque el corrimiento fuera 0; con 1cbce0f la boca 3D
 // se rompia con la boca por huesos y volvia con "Por shader", con 0 giros de mandibula escritos)
 static void Release(Skel& S, int d) {
+    if (PaletteMode(d)) { if (!(S.dHave[d] && S.dFrame[d] == s_frame.load(std::memory_order_relaxed))) S.dHave[d] = false; return; }   // (08/11) nada escrito: nada que devolver
     if (S.wFrame[d] == s_frame.load(std::memory_order_relaxed) && S.wHave[d]) return;   // (02/11 i) ya escrito este cuadro (amplificador)
     if (!S.wHave[d] || !S.cur[d]) { S.wHave[d] = false; return; }
     Xf x; if (ReadBase(S, d, x)) { float out[7] = { x.q[0], x.q[1], x.q[2], x.q[3], x.t[0], x.t[1], x.t[2] }; SafeCopy((char*)S.cur[d] + 16, out, 28); }
@@ -542,8 +871,14 @@ static void Release(Skel& S, int d) {
 // y se escribe en el esqueleto. Todas las mallas (cara, piezas, barba, pestanas, boca 3D) usan esos huesos: se mueven juntas.
 static void Amp(const Skel& S, int d, Xf& x) {
     if (!S.ampOn || d >= kND - 2) return;
-    const float g = S.aGain[d]; if (fabsf(g - 1.0f) < 0.005f) return;
-    if (S.nN[d] < 8) return;   // (02/11 n) todavia sin cara neutra de este jugador
+    if (d >= D_LID_TL && d <= D_LID_BR) return;   // (08/11) los parpados nunca se agrandan (tambien via Base() en EyesFrame): el gesto medido del parpado salta entre lo del juego y lo corregido
+    if (S.nN[d] < 120) return;   // (02/11 n) todavia sin cara neutra de este jugador
+    // (04/11, Agustin: "al abrir el juego con las expresiones activadas" la cara hace una mueca un segundo y se arregla) con 8 cuadros
+    // la neutra todavia era la cara de la carga: se agrandaba la diferencia con una neutra mala. Ahora espera 120 cuadros (~2 s) y
+    // la ganancia entra de a poco en los 120 siguientes
+    const float ramp = std::clamp((float)(S.nN[d] - 120) / 120.0f, 0.0f, 1.0f);
+    const float g = 1.0f + (S.aGain[d] - 1.0f) * ramp; if (fabsf(g - 1.0f) < 0.005f) return;
+    float gF = 1.0f;   // (09/11) rampa de salida cerca del limite (abajo)
     const float* hcU = S.bHave[d] ? S.bHc[d] : S.ahc; const float* hrU = S.bHave[d] ? S.bHr[d] : S.ahr;   // (02/11 l) cabeza de cuando el juego escribio el hueso
     float rr[3]; QRot(hrU, S.nT[d], rr);
     float e[3] = { (x.t[0] - (hcU[0] + rr[0])) * (g - 1.0f), (x.t[1] - (hcU[1] + rr[1])) * (g - 1.0f), (x.t[2] - (hcU[2] + rr[2])) * (g - 1.0f) };
@@ -553,6 +888,12 @@ static void Amp(const Skel& S, int d, Xf& x) {
         float q0[4], c0[4], d0[4]; QMul(hrU, S.nQ[d], q0); QConj(q0, c0); QMul(x.q, c0, d0);
         const float ang = 2.0f * acosf((std::min)(fabsf(d0[3]), 1.0f));
         if (raw > 0.025f || ang > 0.52f) { s_ampSkip.fetch_add(1, std::memory_order_relaxed); return; }
+        // (09/11, Agustin: "las cejas vibran con las expresiones marcadas") el corte era de golpe: un hueso cerca del limite (cejas
+        // levantadas, cabeza girando) se agrandaba un cuadro y al siguiente no -> vaiven. Ahora la ganancia se apaga en rampa
+        // desde 1.5 cm / 20 grados hasta el limite
+        const float fade = (1.0f - SStep(0.015f, 0.025f, raw)) * (1.0f - SStep(0.35f, 0.52f, ang));
+        for (float& v : e) v *= fade;
+        gF = fade;
     }
     {   // (02/11 m, Agustin: "las opciones de slider no cambian nada") 340.w gestos grandes: lo que el gesto pasa de 1 cm se agranda
         // solo esa fraccion (como hacia el shader), asi la boca muy abierta no se dispara
@@ -566,7 +907,7 @@ static void Amp(const Skel& S, int d, Xf& x) {
     if (dq[3] < 0) for (float& v : dq) v = -v;
     const float sn = sqrtf(dq[0] * dq[0] + dq[1] * dq[1] + dq[2] * dq[2]);
     if (sn > 1e-6f) {
-        float a = 2.0f * atan2f(sn, dq[3]) * (g - 1.0f);
+        float a = 2.0f * atan2f(sn, dq[3]) * (g - 1.0f) * gF;
         a = std::clamp(a, -0.25f, 0.25f);   // tope ~14 grados de giro extra
         const float h = 0.5f * a, k = sinf(h) / sn, eq[4] = { dq[0] * k, dq[1] * k, dq[2] * k, cosf(h) };
         float nq[4]; QMul(eq, x.q, nq); memcpy(x.q, nq, sizeof nq);
@@ -587,6 +928,8 @@ static void Neutral(Skel& S, int d, const Xf& g) {
     for (int k = 0; k < 4; k++) { S.nQ[d][k] += (sg * lq[k] - S.nQ[d][k]) * a; l2 += S.nQ[d][k] * S.nQ[d][k]; }
     const float il = l2 > 1e-12f ? 1.0f / sqrtf(l2) : 1.0f; for (float& q : S.nQ[d]) q *= il;
     if (S.nN[d] < 1000000) S.nN[d]++;
+    // (04/11) los primeros 60 cuadros de cada jugador (carga, la cara todavia acomodandose) no cuentan: el promedio arranca de nuevo
+    if (S.nN[d] == 60 && !S.nWarm[d]) { S.nWarm[d] = true; S.nN[d] = 0; }
 }
 static bool Base(Skel& S, int d, Xf& x) { if (!ReadBase(S, d, x)) return false; Amp(S, d, x); return true; }
 // gira la transformacion de un hueso alrededor de su propia posicion: q nuevo = r * q base (r en el espacio del modelo)
@@ -621,7 +964,16 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
     // que dejo el juego (lo que el juego haga con el ojo se pisa entero, sin realimentacion)
     // la animacion facial del juego (habla, festeja): sin parpadeo del mod (la animacion trae el suyo)
     const float anim = (std::max)(HeadSpaceMove(S, D_LIPS_L, hc, hrInv), HeadSpaceMove(S, D_BROW_IL, hc, hrInv));
-    const float t = g_cfg.live[157][0];
+    const float t = AnimT();
+    // (06/11, Agustin: "la barba sigue temblando asi como la boca al mover la camara o adelantar el paso del tiempo, estas animaciones
+    // deberian estar ligadas al game clock") los suavizados de los parpados iban por cuadro dibujado: con otro ritmo de cuadros o con
+    // el tiempo del juego acelerado / frenado / en pausa no acompanaban. Ahora cuentan cuadros de 60 Hz del RELOJ DEL JUEGO (157.x)
+    {
+        const float dt = S.clockT < 0.0f ? 1.0f / 60.0f : t - S.clockT;
+        S.clockK = std::clamp(dt * 60.0f, 0.0f, 6.0f);   // en pausa 0: no cambia nada; un salto grande cuenta como 6 cuadros
+        S.clockT = t;
+    }
+    auto ease = [&](float a) { return 1.0f - powf(1.0f - a, S.clockK); };
     {
         const float* H = g_cfg.live[194];
         float wp[3];
@@ -642,7 +994,16 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
     }
     const float seed = S.seed;
     float g[2]; Gaze(t, seed, amp, g);
-    const float b = BlinkCurve(t, seed) * blinkAmt * (1.0f - SStep(0.0008f, 0.0015f, anim));
+    // (08/11, Agustin: "evitar parpadeos o vibraciones raras") la animacion medida (comisura / ceja contra la cabeza) anda cerca del
+    // umbral en las animaciones del juego: con la banda angosta de antes (0.8..1.5 mm, cruda) el parpadeo del mod se cortaba a la mitad
+    // o titilaba. Ahora banda 0.8..3 mm (como el shader) con histeresis de 0.3 mm y suavizado de ~6 cuadros del reloj del juego
+    {
+        if (!S.animHave) { S.animM = anim; S.animHave = true; }
+        else if (fabsf(anim - S.animM) > 0.0003f) S.animM = anim - copysignf(0.0003f, anim - S.animM);
+        const float gate = 1.0f - SStep(0.0008f, 0.0030f, S.animM);
+        S.animG = S.animGHave ? S.animG + (gate - S.animG) * ease(0.16f) : gate; S.animGHave = true;
+    }
+    const float b = BlinkCurve(t, seed) * blinkAmt * S.animG;
     static const float X[3] = { 1.0f, 0.0f, 0.0f }, Y[3] = { 0.0f, 1.0f, 0.0f };
     float ax[3], ay[3]; QRot(hr, X, ax); QRot(hr, Y, ay);
     // angulo positivo alrededor del eje X de la cabeza = el frente baja (como el menton con la boca: 3e57f2e)
@@ -660,17 +1021,33 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
         // (02/11 o, Agustin: "los ojos al moverse no mueven del todo realista el contorno de los parpados") los parpados seguian
         // solo la mirada del mod (PesGaze), no la del JUEGO (el hueso del ojo que mira la pelota / al companero): se suma el giro
         // vertical del globo del juego respecto de la cabeza (frente del ojo en los ejes de la cabeza; + = mira arriba)
-        float gp = 0.0f; int ne = 0;
+        float gp = 0.0f, gyw = 0.0f; int ne = 0;
         for (int e = 0; e < 2; e++) {
             const int d = D_EYE_L + e; if (!S.cur[d]) continue;
             Xf ex; if (!ReadXf(S.cur[d], ex)) continue;
             float rq[4], c[4], rel[4]; QMul(hr, S.rest[d].q, rq); QConj(rq, c); QMul(ex.q, c, rel);   // giro del ojo sobre el reposo llevado por la cabeza
             static const float Z[3] = { 0.0f, 0.0f, 1.0f }; float fz[3], fw[3], fl[3]; QRot(hr, Z, fz); QRot(rel, fz, fw); QRot(hrInv, fw, fl);
-            if (fl[2] > 0.2f) { gp += atan2f(fl[1], fl[2]); ne++; }
+            if (fl[2] > 0.2f) { gp += atan2f(fl[1], fl[2]); gyw += atan2f(fl[0], fl[2]); ne++; }
         }
         if (ne) {
             gp = std::clamp(gp / (float)ne, -0.45f, 0.45f);
-            S.eyeP = S.eyePHave ? S.eyeP + (gp - S.eyeP) * 0.5f : gp; S.eyePHave = true;   // medio cuadro de suavizado: sin temblor
+            // (04/11, Agustin: "vibran" los parpados, las pestanas y la sombra del ojo, todo lo que va con los huesos de los parpados)
+            // la mirada del juego se mide con el hueso del ojo contra la cabeza de ESTE momento, y el juego pone el ojo en otro punto
+            // del cuadro: con la cabeza en movimiento la medida temblaba ~1 grado de un cuadro a otro y el parpado la seguia 0.8 veces.
+            // Ahora: el objetivo solo cambia si la mirada se corre mas de 1.2 grados (histeresis: los saltos de la mirada del juego
+            // pasan, el temblor no) y el parpado llega a el con un suavizado de ~8 cuadros
+            if (!S.eyePHave) { S.eyePT = S.eyeP = gp; S.eyePHave = true; }
+            else {
+                if (fabsf(gp - S.eyePT) > 0.021f) S.eyePT = gp - copysignf(0.021f, gp - S.eyePT);
+                S.eyeP += (S.eyePT - S.eyeP) * ease(0.12f);
+            }
+            // (08/11) lo mismo para la mirada de COSTADO (giro alrededor del eje y de la cabeza; + = hacia su izquierda)
+            const float yw = std::clamp(gyw / (float)ne, -0.6f, 0.6f);
+            if (!S.eyeYHave) { S.eyeYT = S.eyeY = yw; S.eyeYHave = true; }
+            else {
+                if (fabsf(yw - S.eyeYT) > 0.021f) S.eyeYT = yw - copysignf(0.021f, yw - S.eyeYT);
+                S.eyeY += (S.eyeYT - S.eyeY) * ease(0.12f);
+            }
         }
         // (04/11, video de Agustin: "los parpados no acompanan") la mirada del mod (Gaze, la misma cuenta que PesGaze del shader)
         // tiene + = mira ABAJO; la del juego (eyeP) + = arriba: se sumaban con signos distintos y el parpado iba al reves de la mirada del mod
@@ -678,10 +1055,49 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
         // de arriba: el parpadeo lo baja 0.64 rad (igual que el shader) y acompana la mirada vertical casi entera (como en una cara
         // real: mirar abajo baja el parpado con el ojo, mirar arriba lo sube)
         // (02/11 d) con la sonrisa (sm) el ojo se achina: el de arriba baja un poco y el de abajo sube (sonrisa "de verdad")
-        const float up = (std::min)(0.64f * b - gy * (gy < 0.0f ? 0.80f : 0.55f) + 0.06f * sm, 0.66f);   // tope: cerrado, sin pasarse del ojo
+        // (04/11) la sonrisa medida en la comisura salta de un cuadro a otro al hablar: para los parpados va suavizada (~10 cuadros)
+        S.lidSm = S.lidSmHave ? S.lidSm + (sm - S.lidSm) * ease(0.10f) : sm; S.lidSmHave = true;
+        const float smL = S.lidSm;
+        // (04/11, Agustin: "el parpadeo hace que se muevan bastante") parpadeo mas suave: arriba 0.64 -> 0.58, abajo 0.12 -> 0.07
+        // (05/11, Agustin: "a la sonrisa le falta achicar los ojos un poco mas") con los parpados por huesos (350.y = 2) el shader no
+        // mueve los parpados (PesBlinkApply sale antes) y la forma del ojo de los gestos del mod (Sonrisa, Enojo, Asombro, Grito,
+        // Puchero) se perdia: solo quedaba la sonrisa medida en la comisura. Ahora tambien aca, las mismas cuentas que el shader con
+        // la sonrisa un ~30 % mas fuerte (a 1.0 el de arriba baja 0.20 rad y el de abajo sube 0.21; pasando 1.0, risa)
+        // (09/11) los valores SUAVIZADOS de la Transicion (w395), los mismos que la boca: antes los ojos saltaban al valor nuevo
+        // mientras la boca todavia iba llegando
+        const float G5[3] = { S.sl[0], S.sl[1], S.sl[2] }, G6[2] = { S.sl[4], S.sl[5] };
+        const float gAng = std::clamp(G5[0], 0.0f, 1.5f), gSmi = std::clamp(G5[1], 0.0f, 1.5f) * s_eyeSmK, gSur = std::clamp(G5[2], 0.0f, 1.5f);
+        const float gGri = std::clamp(G6[0], 0.0f, 1.5f), gPuc = std::clamp(G6[1], 0.0f, 1.5f), gBig = (std::max)(gSmi - 1.0f, 0.0f);
+        // (06/11, Agustin: "la sonrisa de messi cierra demasiado los ojos, un poco menos") la sonrisa a la mitad de lo que era (la cara
+        // esculpida de Messi ya achina el ojo por su forma)
+        // (07/11, Agustin: "baja el achinado") sonrisa y enojo otra vez ~40 % menos (a 1.2 los ojos quedaban casi cerrados)
+        const float geU = 0.06f * gSmi + 0.08f * gBig + 0.08f * gAng - 0.20f * gSur + 0.10f * gGri + 0.05f * gPuc;   // > 0 baja el de arriba
+        const float geL = -(0.06f * gSmi + 0.07f * gBig + 0.03f * gAng + 0.10f * gGri) + 0.04f * gSur;            // < 0 sube el de abajo
+        float up = (std::min)(0.58f * b - gy * (gy < 0.0f ? 0.80f : 0.55f) + 0.04f * smL + geU, 0.66f);   // tope: cerrado, sin pasarse del ojo
         // de abajo: sube un poco al parpadear, baja con la mirada abajo y sube apenas con la mirada arriba
-        const float lo = std::clamp(-0.12f * b - gy * (gy < 0.0f ? 0.35f : 0.15f) - 0.16f * sm, -0.22f, 0.18f);
-        float qu[4], ql[4]; AxisAngle(ax, up, qu); AxisAngle(ax, lo, ql);
+        float lo = std::clamp(-0.07f * b - gy * (gy < 0.0f ? 0.35f : 0.15f) - 0.10f * smL + geL, -0.45f, 0.18f);
+        if (s_ganiLidOn) { up = (std::min)(up + s_ganiLid[0], 0.66f); lo = std::clamp(lo + s_ganiLid[1], -0.45f, 0.18f); }   // (07/11) parpados del clip .gani
+        if (s_extraLidOn) { up = (std::min)(up + s_extraLid[0], 0.66f); lo = std::clamp(lo + s_extraLid[1], -0.45f, 0.18f); }   // (08/11) vida / esfuerzo / concentracion
+        {   // (08/11, Agustin: "un slider para cerrar y abrir los ojos") x391: + cierra (1 = cerrados), - abre de mas (-1 = bien abiertos)
+            const float ec = std::clamp(g_cfg.live[391][0], -1.0f, 1.0f);
+            if (ec > 0.0f) { up = up + (0.62f - up) * ec; lo = lo + (-0.07f - lo) * ec; }
+            else if (ec < 0.0f) { up = up + 0.22f * ec; lo = lo - 0.10f * ec; }
+            up = (std::min)(up, 0.66f); lo = std::clamp(lo, -0.45f, 0.18f);
+        }
+        // (04/11) limite de velocidad fuera del parpadeo: un cambio chico de un cuadro a otro (temblor de la medida) se frena;
+        // el parpadeo (b) y los saltos grandes pasan enteros
+        if (S.lidHave && b < 0.02f) {
+            const float kl = ease(0.35f); auto lim = [kl](float prev, float now) { const float d = now - prev; return fabsf(d) < 0.004f ? prev + d * kl : now; };
+            up = lim(S.lidU, up); lo = lim(S.lidL, lo);
+        }
+        S.lidU = up; S.lidL = lo; S.lidHave = true;
+        // (08/11, Agustin: "perfecciona los parpados") en una cara real el contorno de los parpados acompana tambien la mirada de COSTADO:
+        // el pliegue se corre con la cornea (el de arriba ~12 %, el de abajo ~8 % del giro del ojo). Antes solo seguian la vertical
+        const float gx = g[0] + (S.eyeYHave ? S.eyeY : 0.0f);
+        S.lidX = S.lidXHave ? S.lidX + (gx - S.lidX) * ease(0.25f) : gx; S.lidXHave = true;
+        float qu[4], ql[4];
+        { float a1[4], a2[4]; AxisAngle(ax, up, a1); AxisAngle(ay, 0.12f * S.lidX, a2); QMul(a2, a1, qu); }
+        { float a1[4], a2[4]; AxisAngle(ax, lo, a1); AxisAngle(ay, 0.08f * S.lidX, a2); QMul(a2, a1, ql); }
         const int ds[4] = { D_LID_TL, D_LID_TR, D_LID_BL, D_LID_BR };
         for (int i = 0; i < 4; i++) {
             if (!S.cur[ds[i]]) continue;
@@ -708,7 +1124,7 @@ static float Smile(Skel& S, const Xf& hc, const float* hrInv) {
         const float v[3] = { x.t[0] - hc.t[0], x.t[1] - hc.t[1], x.t[2] - hc.t[2] }; float r[3]; QRot(hrInv, v, r);
         const Xf& R = S.rest[d]; const Xf& H = S.rest[D_HEAD];
         // (02/11 p) contra la cara NEUTRA de este jugador (la forma del editor de caras corre la comisura respecto del reposo)
-        const bool nn = S.nN[d] >= 8;
+        const bool nn = S.nN[d] >= 120;   // (04/11) misma espera que el amplificador
         const float rx = nn ? S.nT[d][0] : R.t[0] - H.t[0], ry = nn ? S.nT[d][1] : R.t[1] - H.t[1];
         const float dy = r[1] - ry, dx = (r[0] - rx) * (e == 0 ? 1.0f : -1.0f);
         best = (std::max)(best, std::clamp((dy + 0.5f * dx - 0.0012f) / 0.0045f, 0.0f, 1.0f));   // zona muerta 1.2 mm: la cara quieta del juego no es exacto el reposo
@@ -724,12 +1140,14 @@ static void Secondary(Skel& S, const float* hr, float sm, float open) {
         { 16,  0.0004f, 0.0012f, -0.0008f, 2 }, { 17, -0.0004f, 0.0012f, -0.0008f, 2 },
         // (04/11, Agustin: "le falta mas naturalidad a la sonrisa") sonrisa de verdad (Duchenne): con el slider Sonrisa (355.y,
         // fijo, no medido: no titila) el pomulo sube mas y el bajo-ojo (orbicularisoculi_b) sube y se adelanta = ojo achinado
-        { 18,  0.0008f, 0.0022f, 0.0008f, 3 }, { 19, -0.0008f, 0.0022f, 0.0008f, 3 },
-        { 20,  0.0003f, 0.0016f, 0.0006f, 3 }, { 21, -0.0003f, 0.0016f, 0.0006f, 3 },
+        // (09/11 b, Agustin con foto real: "esa naturalidad ... en las mejillas") el pomulo sube y se redondea hacia adelante (manzana de
+        // la mejilla) y la mejilla de abajo (cheek_s, kPose) acompana adelante: el pliegue con el surco queda marcado por volumen
+        { 18,  0.0008f, 0.0026f, 0.0016f, 3 }, { 19, -0.0008f, 0.0026f, 0.0016f, 3 },
+        { 20,  0.0002f, 0.0009f, 0.0004f, 3 }, { 21, -0.0002f, 0.0009f, 0.0004f, 3 },   // (07/11) bajo-ojo 1.6 -> 0.9 mm: menos achinado
         // (04/11) los demas gestos tambien mueven pomulos y bajo-ojo: k 4 enojo (ojo apretado, pomulo tenso), 5 asombro (ojo abierto,
         // pomulo abajo), 6 grito (como una sonrisa fuerte), 7 puchero (pomulo abajo, bajo-ojo un poco arriba: cara triste)
         { 18,  0.0003f,  0.0008f, 0.0003f, 4 }, { 19, -0.0003f,  0.0008f, 0.0003f, 4 },
-        { 20,  0.0002f,  0.0012f, 0.0004f, 4 }, { 21, -0.0002f,  0.0012f, 0.0004f, 4 },
+        { 20,  0.0001f,  0.0007f, 0.0002f, 4 }, { 21, -0.0001f,  0.0007f, 0.0002f, 4 },   // (07/11) enojo: bajo-ojo 1.2 -> 0.7 mm
         { 18, 0, -0.0005f, 0, 5 },              { 19, 0, -0.0005f, 0, 5 },
         { 20, 0, -0.0007f, -0.0002f, 5 },       { 21, 0, -0.0007f, -0.0002f, 5 },
         { 18,  0.0010f,  0.0020f, 0.0006f, 6 }, { 19, -0.0010f,  0.0020f, 0.0006f, 6 },
@@ -751,6 +1169,16 @@ static void Secondary(Skel& S, const float* hr, float sm, float open) {
         const float a = f.k == 0 ? ks : f.k == 2 ? kn : f.k == 3 ? s_poseSmile : f.k == 4 ? s_poseG[1] : f.k == 5 ? s_poseG[3] : f.k == 6 ? s_poseG[4] : f.k == 7 ? s_poseG[5] : ko;
         if (a <= 0.001f) continue;
         acc[f.d][0] += f.x * a; acc[f.d][1] += f.y * a; acc[f.d][2] += f.z * a; use[f.d] = true;
+    }
+    if (s_puffAll > 0.001f) for (int d = 18; d <= 21; d++) {   // (09/11) cachetes inflados: pomulo afuera / arriba, bajo-ojo arriba (ojo achinado)
+        if (!S.cur[d]) continue; const float sl = (d % 2) == 0 ? 1.0f : -1.0f;
+        if (d <= 19) { acc[d][0] += sl * 0.0016f * s_puffAll; acc[d][1] += 0.0012f * s_puffAll; acc[d][2] += 0.0008f * s_puffAll; }
+        else { acc[d][1] += 0.0009f * s_puffAll; acc[d][2] += 0.0003f * s_puffAll; }
+        use[d] = true;
+    }
+    if (s_ganiSecOn) for (int d = 18; d <= 21; d++) {   // (07/11) clip .gani
+        if (!S.cur[d]) continue; const float* o = s_ganiSec[d - 18]; if (fabsf(o[0]) + fabsf(o[1]) + fabsf(o[2]) < 1e-7f) continue;
+        for (int k = 0; k < 3; k++) acc[d][k] += o[k]; use[d] = true;
     }
     if (const FaceProf* PF = (const FaceProf*)s_poseProf) {   // (04/11) perfil de la cara: pomulos y bajo-ojo por gesto
         for (int d = 18; d <= 21; d++) {
@@ -822,6 +1250,11 @@ static void PublishHead(const Skel& S) {
     }
 }
 // la cara a seguir: la del personaje fijado (*lock) si sigue al dia; si no, la que esta mas al centro de la vista de la camara
+bool ExprFaceAny() {   // (08/11 e) hay alguna cara con dato fresco (< 0.5 s): la usa la camara libre para saber si la recarga termino
+    std::lock_guard<std::mutex> lk(s_hpMx); const double now = Now();
+    for (int i = 0; i < 8; i++) if (s_hp[i].node && now - s_hp[i].t < 0.5) return true;
+    return false;
+}
 bool ExprFaceFrame(const float* camPos, const float* camFwd, const void** lock, float c[3], float fw[3], float up[3], double* age) {
     std::lock_guard<std::mutex> lk(s_hpMx);
     const double now = Now();
@@ -862,7 +1295,34 @@ static void ProfResolve(Skel& S, unsigned fr) {
         else Log("caras: jugador %u '%s' -> sin perfil", ci.id, ci.name);
     }
 }
-void ExprBonesFrame(const void* skel) {
+// (08/11) CUELLO en los gestos (fila 391.y = cuanto, 0 = nada, 1 = normal): al gritar, enojarse o apretar los dientes se tensan el
+// esternocleidomastoideo y los tendones del cuello (se marcan adelante y hacia el medio), y con la boca muy abierta la piel de abajo del
+// menton baja un poco. Corrimiento en los ejes del CUELLO (sk_neck actual contra su reposo: no siguen a la cabeza cuando gira), en metros.
+// Todo con sliders fijos o medidas ya suavizadas (sin temblor); el juego no anima estos huesos en la cara, asi que sin gesto se sueltan
+static void Neck(Skel& S, float tension, float open) {
+    const float k = std::clamp(g_cfg.live[391][1], 0.0f, 2.0f);
+    const float T = std::clamp(tension, 0.0f, 1.5f) * k, O = std::clamp(open, 0.0f, 1.0f) * k;
+    float nr[4] = { 0, 0, 0, 1 };
+    if (S.cur[D_NECK]) { Xf nc; if (ReadXf(S.cur[D_NECK], nc)) { float c[4]; QConj(S.rest[D_NECK].q, c); QMul(nc.q, c, nr); } }
+    else if (S.cur[D_HEAD]) { memcpy(nr, S.ahr, sizeof nr); }
+    struct NOff { int d; float t[3], o[3]; };   // t = por tension, o = por boca abierta
+    static const NOff kN[] = {
+        { D_NECKB,  { 0, 0, -0.0004f },              { 0, -0.0012f, 0.0004f } },   // abajo del menton: baja con la boca abierta
+        { D_SCM,    { 0, -0.0003f, 0.0012f },        { 0, -0.0006f, 0.0003f } },   // musculo del cuello: se adelanta tenso
+        { D_CLAV_L, {  -0.0009f, 0, 0.0018f },       { 0, 0, 0 } },                // tendones: adelante y hacia el medio
+        { D_CLAV_R, {   0.0009f, 0, 0.0018f },       { 0, 0, 0 } },
+    };
+    for (const NOff& f : kN) {
+        const int d = f.d; if (!S.cur[d]) continue;
+        const float v[3] = { f.t[0] * T + f.o[0] * O, f.t[1] * T + f.o[1] * O, f.t[2] * T + f.o[2] * O };
+        if (fabsf(v[0]) + fabsf(v[1]) + fabsf(v[2]) < 2e-6f) { Release(S, d); continue; }
+        Xf x; if (!ReadBase(S, d, x)) continue;
+        float mv[3]; QRot(nr, v, mv);
+        const float nt[3] = { x.t[0] + mv[0], x.t[1] + mv[1], x.t[2] + mv[2] };
+        if (WriteBone(S, d, x, x.q, nt)) s_neckW.fetch_add(1, std::memory_order_relaxed); else s_badWrite.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+static void FrameBody(const void* skel) {
     if (!skel) return;
     s_calls.fetch_add(1, std::memory_order_relaxed);
     const unsigned fr = s_frame.load(std::memory_order_relaxed);
@@ -874,26 +1334,15 @@ void ExprBonesFrame(const void* skel) {
     // (03/11, Agustin: "en las animaciones del juego ahora las barbas tambien se ven mal") con x347 negativo (-0.25 en su ini) la
     // DLL cerraba la mandibula de la cara en CADA cuadro, tambien en las animaciones del juego, y la malla de la barba no recibe
     // ese giro (sus huesos salen de otro lado): quedaba delante de la boca. Por huesos ya no se cierra: 0 o mas
-    const float* PZ = g_cfg.live[355];
-    const float pAng = std::clamp(PZ[0], 0.0f, 1.5f), pSmi = std::clamp(PZ[1], 0.0f, 1.5f), pSur = std::clamp(PZ[2], 0.0f, 1.5f), pTalk = std::clamp(PZ[3], 0.0f, 1.5f);
-    s_poseSmile = pSmi;
-    const float* PX = g_cfg.live[356];
-    const float pGri = std::clamp(PX[0], 0.0f, 1.5f), pPuc = std::clamp(PX[1], 0.0f, 1.5f), pNeu = std::clamp(PX[2], 0.0f, 1.5f);
-    const bool profOn = PX[3] > 0.5f;
-    // hablar: la mandibula sube y baja con un ritmo de silabas irregular (dos ondas que no se repiten juntas), por personaje distinto
-    float talkO = 0.0f, talkRound = 0.0f;
-    if (pTalk > 0.001f) {
-        // (04/11, Agustin: "el de hablar va muy rapido") z354 = velocidad del habla (1 = la de antes, ~4 silabas por segundo;
-        // 0 o sin poner = 0.55, mas pausado y con mas tiempo con la boca quieta entre frases)
-        const float sp = g_cfg.live[354][2] > 0.01f ? std::clamp(g_cfg.live[354][2], 0.2f, 1.5f) : 0.55f;
-        const float t = (g_cfg.live[157][0] + (float)(((uintptr_t)skel >> 6) & 63) * 0.37f) * sp;
-        const float w = 0.6f * sinf(t * 6.2831853f * 4.1f) + 0.4f * sinf(t * 6.2831853f * 2.3f + 1.3f);
-        const float env = (std::max)(0.0f, 0.40f + 0.60f * sinf(t * 6.2831853f * 0.37f));   // frases: a veces habla mas, a veces menos, con pausas
-        talkO = pTalk * 0.30f * (std::max)(w, 0.0f) * env;
-        talkRound = pTalk * sinf(t * 6.2831853f * 1.7f + 0.6f) * env;   // labios que se redondean (o / u) y se estiran (e / i)
-    }
-    const float o = (std::max)((std::max)(std::clamp(g_cfg.live[347][0], 0.0f, 1.0f), 0.45f * tongueOut), (std::min)(1.0f, 0.40f * pSur + 0.85f * pGri + 0.12f * pSmi + talkO));   // (04/11) la sonrisa abre un poco la boca
-    bool poseOn = pAng > 0.001f || pSmi > 0.001f || pSur > 0.001f || pGri > 0.001f || pPuc > 0.001f || fabsf(talkRound) > 0.001f;
+    // (08/11, Agustin: "agrega mas sliders de animaciones con mas realismo y ajusta las presentes") los sliders de gestos (355 / 356 /
+    // 361 / 362 / 365) se leen crudos aca y pasan por el suavizado w395 (Transicion) mas abajo, cuando ya se tiene el esqueleto
+    float slR[16];
+    { const float* PZ = g_cfg.live[355]; const float* PX = g_cfg.live[356]; const float* PB = g_cfg.live[361]; const float* PC = g_cfg.live[362];
+      for (int i = 0; i < 4; i++) slR[i] = std::clamp(PZ[i], 0.0f, 1.5f);
+      for (int i = 0; i < 3; i++) slR[4 + i] = std::clamp(PX[i], 0.0f, 1.5f);
+      for (int i = 0; i < 4; i++) { slR[7 + i] = std::clamp(PB[i], -1.5f, 1.5f); slR[11 + i] = std::clamp(PC[i], -1.5f, 1.5f); }
+      slR[15] = std::clamp(g_cfg.live[365][0], -1.5f, 1.5f); }
+    const bool profOn = g_cfg.live[356][3] > 0.5f;
     std::lock_guard<std::mutex> lk(s_mx);
     if (s_profCheck == 0xffffffffu || fr - s_profCheck >= 300) { s_profCheck = fr; ProfLoad(); }   // caras.ini: al arrancar y cada ~10 s si cambio
     Skel* S = Get(skel);
@@ -910,9 +1359,219 @@ void ExprBonesFrame(const void* skel) {
     }
     Xf jc; if (!ReadBase(*S, D_JAW, jc)) { Build(*S, skel); S->rebuilds++; return; }
     s_lastActive.store(fr, std::memory_order_relaxed);
+    // (09/11, Agustin: "no anda todo mal, solo de lejos") ALCANCE por huesos (z391, metros; 0 = sin limite): mas lejos de la camara del motor que
+    // esto el mod no escribe el esqueleto de la cara (devuelve lo escrito y sale): la cara ya no se ve a ese tamano y el juego anima a los
+    // jugadores lejanos a menos cuadros, donde cada escritura nuestra quedaba un cuadro si y otro no (vaiven)
+    {
+        const float lim = g_cfg.live[391][2];
+        if (lim > 0.5f && S->node && S->bHead) {
+            Xf bh; float w[3], cp[3], ct[3];
+            if (ReadXf(S->bHead, bh) && CharNodeToWorld(const_cast<void*>(S->node), bh.t, w, true) && EngineCamera(cp, ct, nullptr)) {
+                const float dx = w[0] - cp[0], dy = w[1] - cp[1], dz = w[2] - cp[2], dist = sqrtf(dx * dx + dy * dy + dz * dz);
+                const float on = S->farOff ? lim * 0.9f : lim * 1.1f;   // histeresis +-10 %: no se prende y apaga en el borde
+                S->farOff = dist > on;
+                if (S->farOff) { for (int d = 0; d < kND; d++) if (S->wHave[d]) Release(*S, d); s_far.fetch_add(1, std::memory_order_relaxed); return; }
+            }
+        } else S->farOff = false;
+    }
     ProfResolve(*S, fr);
     const FaceProf* PF = profOn && S->prof >= 0 && S->prof < (int)s_prof.size() ? &s_prof[S->prof] : nullptr;
+    const bool ownSmile = PF && PF->has[PG_SONRISA];
+    s_eyeSmK = ownSmile ? 0.5f : 1.0f;
+    const float kSmB = ownSmile ? 0.40f : 1.0f;   // (09/11 b) ver s_eyeSmK
+    const float tNow = AnimT();
+    // (08/11) w395 TRANSICION: los sliders de gestos no saltan: van al valor nuevo con una constante de 0.25 s x w395 (0 = como antes)
+    {
+        const float tr = std::clamp(g_cfg.live[395][3], 0.0f, 3.0f);
+        const float dt = S->slT < 0.0f || tNow < S->slT ? 1.0f : (std::min)(tNow - S->slT, 0.5f); S->slT = tNow;
+        if (!S->slHave || tr < 0.001f) { for (int i = 0; i < 16; i++) { S->sl[i] = slR[i]; S->slV[i] = 0.0f; } for (int g = 0; g < 2; g++) for (int i = 0; i < 8; i++) { S->slG[g][i] = slR[i]; S->slGV[g][i] = 0.0f; } }
+        else {
+            for (int i = 0; i < 16; i++) Damp(S->sl[i], S->slV[i], slR[i], 0.25f * tr, dt);   // resorte critico: arranca y frena suave
+            // (09/11 c, Agustin: "movimiento mas natural de todos los grupos de huesos") en la cara real los grupos no llegan juntos:
+            // las cejas y el entrecejo se mueven primero (65 % del tiempo), la boca despues y las mejillas / nariz llegan arrastradas (135 %)
+            for (int i = 0; i < 8; i++) { Damp(S->slG[0][i], S->slGV[0][i], slR[i], 0.25f * tr * 0.65f, dt); Damp(S->slG[1][i], S->slGV[1][i], slR[i], 0.25f * tr * 1.35f, dt); }
+        }
+        S->slHave = true;
+    }
+    const float pAng = S->sl[0], pSmi = S->sl[1], pSur = S->sl[2], pTalk = S->sl[3], pGri = S->sl[4], pPuc = S->sl[5], pNeu = S->sl[6];
+    s_poseSmile = pSmi;
+    // hablar: la mandibula sube y baja con un ritmo de silabas irregular (dos ondas que no se repiten juntas), por personaje distinto
+    float talkO = 0.0f, talkRound = 0.0f, talkLip = 0.0f, talkLow = 0.0f, talkProt = 0.0f, talkPress = 0.0f, talkAcc = 0.0f;
+    if (pTalk > 0.001f) {
+        // (04/11, Agustin: "el de hablar va muy rapido") z354 = velocidad del habla (1 = la de antes, ~4 silabas por segundo;
+        // 0 o sin poner = 0.55, mas pausado y con mas tiempo con la boca quieta entre frases)
+        const float sp = g_cfg.live[354][2] > 0.01f ? std::clamp(g_cfg.live[354][2], 0.2f, 1.5f) : 0.55f;
+        if (g_cfg.live[396][3] > 0.5f) {   // (08/11) w396 = 1: por PALABRAS (visemas, frases de anim\hablar.txt)
+            float ch[7]; TalkWords(*S, tNow, sp, ch);
+            talkO = pTalk * 0.30f * ch[0]; talkRound = pTalk * ch[1]; talkLip = pTalk * ch[2]; talkLow = pTalk * ch[3];
+            talkProt = pTalk * ch[4]; talkPress = pTalk * ch[5]; talkAcc = pTalk * ch[6];
+        } else {   // silabas: dos ondas que no se repiten juntas, por personaje distinto
+            const float t = (tNow + (float)(((uintptr_t)skel >> 6) & 63) * 0.37f) * sp;
+            const float w = 0.6f * sinf(t * 6.2831853f * 4.1f) + 0.4f * sinf(t * 6.2831853f * 2.3f + 1.3f);
+            const float env = (std::max)(0.0f, 0.40f + 0.60f * sinf(t * 6.2831853f * 0.37f));   // frases: a veces habla mas, a veces menos, con pausas
+            talkO = pTalk * 0.30f * (std::max)(w, 0.0f) * env;
+            talkRound = pTalk * sinf(t * 6.2831853f * 1.7f + 0.6f) * env;   // labios que se redondean (o / u) y se estiran (e / i)
+            // (08/11, Agustin: "ajusta las presentes para presentar movimientos mas realistas") al hablar no se mueve solo la mandibula: el
+            // labio de arriba sube y el de abajo baja con cada silaba (consonantes labiales: se juntan en los valles de la onda)
+            talkLip = pTalk * (std::max)(w + 0.15f, 0.0f) * env; talkLow = talkLip * 0.83f;
+        }
+    }
+    const float o = (std::max)((std::max)(std::clamp(g_cfg.live[347][0], 0.0f, 1.0f), 0.45f * tongueOut), (std::min)(1.0f, 0.40f * pSur + 0.85f * pGri + talkO + 0.35f * (std::max)(0.0f, pSmi - 1.0f)));   // (09/11) risa: 0.60 -> 0.35 (a 1.5 la boca se abria tanto que se leia como grito)   // (04/11 b, Agustin: "la sonrisa con los dientes cerrados") la sonrisa ya no abre la mandibula (antes 0.12): los labios se separan, los dientes quedan juntos; (04/11 c) pasando 1.0 la sonrisa grande abre la boca (1.5 = 0.30, como en la foto de Messi riendo)
+    // (04/11 d) filas 361 / 362, por huesos, de -1.5 a 1.5 (0 = nada): x361 cejas, y361 mordida, z361 mandibula de costado, w361 media
+    // sonrisa; x362 cachetes, y362 beso, z362 desprecio, w362 una ceja. (04/11 f) x365 angulo de las cejas (+ sube el inicio)
+    // (09/11, Agustin: "la sonrisa parece afectada por la gravedad") pasando 1.0 de Sonrisa la boca se abre con la mandibula y las
+    // comisuras / mejillas de abajo (peso 0.5 en la mandibula) bajaban con ella y se juntaban (kOpen): a 1.25 las comisuras quedaban
+    // ~2 mm MAS ABAJO que a 1.0 y el labio de abajo colgaba = la sonrisa se "caia". En una risa real las comisuras las sostiene el
+    // cigomatico: la parte de la apertura que viene de la sonrisa ya no las arrastra (oSmi = lo que la sonrisa agrega a la apertura)
+    const float oRest = (std::max)((std::max)(std::clamp(g_cfg.live[347][0], 0.0f, 1.0f), 0.45f * tongueOut), (std::min)(1.0f, 0.40f * pSur + 0.85f * pGri + talkO));
+    const float oSmi = (std::max)(0.0f, o - oRest);
+    float xB[8]; for (int i = 0; i < 8; i++) xB[i] = S->sl[7 + i];
+    const float xAng = S->sl[15];
+    bool xOn = fabsf(xAng) > 0.001f; for (float v : xB) if (fabsf(v) > 0.001f) xOn = true;
+    bool poseOn = pAng > 0.001f || pSmi > 0.001f || pSur > 0.001f || pGri > 0.001f || pPuc > 0.001f || fabsf(talkRound) > 0.001f || pTalk > 0.001f || xOn;
+    // (08/11, Agustin: "hincharse las mejillas, soplar y entrecerrar un poco los ojos podria ser una animacion cuando el jugador esta
+    // quieto o a punto de correr") velocidad del jugador: la cabeza del cuerpo en el mundo (CharNodeToWorld), suavizada con el reloj
+    bool arranco = false;
+    if (S->node && S->bHead && tNow >= 0.0f) {
+        Xf bh; float w[3];
+        if (ReadXf(S->bHead, bh) && CharNodeToWorld(const_cast<void*>(S->node), bh.t, w, true)) {
+            // (09/11, Agustin: "parecen siempre enojados") la velocidad se medía cuadro a cuadro: con el reloj de la animacion avanzando de a
+            // milesimas (editor, camara libre) un temblor de 1 cm de la cabeza daba 10 m/s = ESFUERZO prendido (cejas abajo y juntas, ojos
+            // entrecerrados) con el jugador quieto. Ahora se mide sobre ventanas de 0.15 s como minimo y un salto de mas de 1.5 m no cuenta
+            if (S->spHave && (tNow < S->spT || tNow - S->spT >= 0.5f)) S->spHave = false;
+            if (S->spHave && tNow >= S->spT + 0.15f) {
+                const float dt = tNow - S->spT, dx = w[0] - S->spP[0], dz = w[2] - S->spP[2];
+                const float dd = sqrtf(dx * dx + dz * dz);
+                const float v = dd > 1.5f ? S->speed : dd / dt, before = S->speed;
+                S->speed += ((std::min)(v, 12.0f) - S->speed) * (1.0f - expf(-dt / 0.25f));
+                if (S->speed < 0.5f) S->stillT += dt; else if (S->speed > 1.0f) { if (before <= 1.0f && S->stillT > 1.0f) arranco = true; S->stillT = 0.0f; }
+            }
+            if (!S->spHave || tNow >= S->spT + 0.15f) { memcpy(S->spP, w, sizeof w); S->spT = tNow; S->spHave = true; }
+        }
+    }
+    // (08/11, Agustin: "agrega mas sliders de animaciones con mas realismo") ANIMACIONES REALISTAS, filas 395 / 396, por huesos:
+    //   x395 Vida: la cara nunca esta del todo quieta: cejas, comisuras y alas de la nariz se mueven decimas de milimetro, lento y sin
+    //        repetirse (tres ondas que no son multiplos), distinto por jugador; los parpados se entrecierran apenas de a ratos
+    //   y395 Respiracion: ciclo de ~0.22 Hz quieto y hasta ~1 Hz corriendo: las alas de la nariz se abren al inhalar; corriendo
+    //        (> 2 m/s) respira por la boca: los labios se separan y la mandibula baja un poco con cada inhalacion
+    //   z395 Esfuerzo: segun la velocidad medida (de 2.5 a 7 m/s), sube en ~1 s y baja en ~4 s al parar: boca algo abierta, cejas
+    //        abajo y al medio, ojos entrecerrados, comisuras tensas, alas de la nariz abiertas, cuello tenso
+    //   w395 Transicion (arriba): suavizado de los sliders.   x396 Asimetria: el lado izquierdo del gesto mas fuerte y el derecho
+    //        mas flojo (15 % a 1.0) y una ceja apenas mas alta: ninguna cara real es simetrica.   y396 Concentracion: cejas abajo
+    //        y juntas, entrecejo adelante, parpados entrecerrados, labios apretados, comisuras adentro.   z396 Expresividad: ganancia
+    //        de todos los gestos por huesos del mod (1 = como estan; 0 o sin poner = 1).   w396 reservada
+    const float nVida = std::clamp(g_cfg.live[395][0], 0.0f, 1.5f), nResp = std::clamp(g_cfg.live[395][1], 0.0f, 1.5f), nEsf = std::clamp(g_cfg.live[395][2], 0.0f, 1.5f);
+    const float nAsim = std::clamp(g_cfg.live[396][0], 0.0f, 1.5f), nConc = std::clamp(g_cfg.live[396][1], 0.0f, 1.5f);
+    // (09/11, Agustin: "el slider de expresividad esta mal planteado"; en su ini z396 habia quedado en 0.1 y TODOS los gestos salian al 10 %:
+    // "los sliders no hacen nada") z396 ya no escala nada; queda reservada hasta definir que tiene que hacer
+    const float nExpr = 1.0f;
+    float eff = 0.0f, breath = 0.0f, brAmp = 0.0f, lifeBrow = 0.0f, lifeLipX = 0.0f, lifeLipY = 0.0f, lifeNose = 0.0f, lifeLid = 0.0f;
+    {
+        const float dt = S->anT < 0.0f || tNow < S->anT ? 0.0f : (std::min)(tNow - S->anT, 0.5f); S->anT = tNow;
+        const float spd = S->spHave ? S->speed : 0.0f;
+        const float target = SStep(2.5f, 7.0f, spd);
+        S->effort += (target - S->effort) * (1.0f - expf(-dt / (target > S->effort ? 1.0f : 4.0f)));
+        eff = nEsf * S->effort;
+        const float rate = (std::min)(0.22f + 0.10f * spd, 1.0f);
+        S->brPh = Frac(S->brPh + dt * rate);
+        // (09/11, Agustin con video FC27 / eFootball: "a esto me referia") ciclo real: inhala en el 40 % del ciclo, exhala mas lento y queda
+        // una pausa corta al final con la boca apenas entreabierta; subida y bajada suaves (sin esquinas)
+        { const float ph = S->brPh; breath = ph < 0.40f ? SStep(0.0f, 0.40f, ph) : ph < 0.88f ? 1.0f - SStep(0.40f, 0.88f, ph) : 0.0f; }
+        brAmp = nResp < 0.001f ? 0.0f : nResp * (0.45f + 0.55f * SStep(1.0f, 6.0f, spd));   // (09/11) 0 = apagada del todo
+        if (nVida > 0.001f) {
+            const float ph = (float)(S->pid % 9973u) * 0.0731f;
+            auto ns = [&](float f, float p) { return sinf(tNow * 6.2831853f * f + p + ph); };
+            lifeBrow = nVida * (0.5f * ns(0.13f, 0.0f) + 0.3f * ns(0.31f, 1.7f) + 0.2f * ns(0.071f, 3.1f));
+            lifeLipX = nVida * (0.5f * ns(0.17f, 0.9f) + 0.5f * ns(0.41f, 2.2f));
+            lifeLipY = nVida * (0.6f * ns(0.11f, 2.6f) + 0.4f * ns(0.29f, 0.3f));
+            lifeNose = nVida * (0.7f * ns(0.19f, 1.4f) + 0.3f * ns(0.47f, 2.9f));
+            lifeLid  = nVida * (std::max)(0.0f, 0.6f * ns(0.09f, 1.1f) + 0.4f * ns(0.23f, 0.4f) - 0.3f);
+        }
+    }
+    float puff = 0.0f;
+    {   // (09/11) soplido al recuperar el aire (ver abajo, en los huesos): esfuerzo alto, jugador frenando, solo en la exhalacion
+        const float spd = S->spHave ? S->speed : 0.0f, ph = S->brPh;
+        const float exh = ph >= 0.40f && ph < 0.88f ? sinf(3.14159265f * (ph - 0.40f) / 0.48f) : 0.0f;
+        puff = nEsf * SStep(0.30f, 0.80f, S->effort) * (1.0f - SStep(1.5f, 3.0f, spd)) * exh;
+        if (nResp < 0.001f) puff = 0.0f;   // sin respiracion no hay soplido
+    }
+    const bool nLive = nVida > 0.001f || brAmp > 0.001f || eff > 0.001f || nAsim > 0.001f || nConc > 0.001f || puff > 0.001f;
+    if (nLive) poseOn = true;
+    // (09/11, Agustin: "inflar los cachetes enteros, mas exagerado, agrandando las mejillas, cerrando un poco los ojos, mostrando arrugas")
+    // los cachetes inflados empujan los pomulos arriba y achinan los ojos (el de abajo sube, el de arriba baja apenas)
+    s_puffAll = std::clamp((std::max)(S->sl[11], 0.0f) + 0.8f * puff, 0.0f, 1.5f);
+    s_extraLid[0] = 0.05f * lifeLid + 0.07f * eff + 0.08f * nConc + 0.06f * s_puffAll;
+    s_extraLid[1] = -(0.03f * eff + 0.04f * nConc + 0.09f * s_puffAll);
+    s_extraLidOn = fabsf(s_extraLid[0]) > 1e-4f || fabsf(s_extraLid[1]) > 1e-4f;
     if (PF && pNeu > 0.001f && PF->has[PG_NEUTRA]) poseOn = true;
+    // (07/11, Agustin: "me gustaria que al jugar leas los ganis") clip .gani de la cara (fila 383, gani.cpp): la pose del clip en el
+    // RELOJ DEL JUEGO desde que arranco en este personaje; x = clip, y = peso, z = velocidad, w = 0 bucle / 1 una vez
+    GaniPose GP; bool ganiOn = false; float gW = 0.0f;
+    int gc = 0; float gF = 0.0f;
+    {
+        if (!s_defToAskOk) DefToAsk();
+        gc = (int)(g_cfg.live[383][0] + 0.5f); gW = std::clamp(g_cfg.live[383][1], 0.0f, 1.5f);
+        const float gSp = g_cfg.live[383][2] > 0.01f ? std::clamp(g_cfg.live[383][2], 0.1f, 4.0f) : 1.0f; const bool gLoop = g_cfg.live[383][3] < 0.5f;
+        const float gt = AnimT();
+        if (gc > 0 && gW > 0.001f) {
+            if (S->ganiClip != gc || gt < S->ganiT0) { S->ganiClip = gc; S->ganiT0 = gt; }
+            bool done = false; ganiOn = GaniSample(gc, (gt - S->ganiT0) * gSp, gLoop, GP, &done);
+            if (ganiOn) { gF = (gt - S->ganiT0) * gSp * 30.0f; if (gLoop && GP.frames > 0) gF = fmodf((std::max)(gF, 0.0f), (float)GP.frames); }
+        } else { S->ganiClip = 0; gc = 0; }
+    }
+    // (08/11, Agustin: "transiciones en los gani se puede?", "un metodo seguro, practico y avanzado") INERTIALIZACION del clip: en cada
+    // transicion (clip que empieza, termina, cambia, o bucle que da la vuelta) se toma la diferencia entre la pose mostrada (y su velocidad)
+    // y la pose nueva, por hueso (3 de posicion + 3 de giro como eje x angulo), y se apaga con el polinomio de grado 5 en y397 s (0.15;
+    // 0 = de golpe). El clip nuevo corre entero desde su primer cuadro; mientras queda diferencia el clip sigue mandando (los gestos
+    // propios esperan). Pose nueva = clip x peso y383, o reposo si no hay clip
+    {
+        const float tau = std::clamp(g_cfg.live[397][1], 0.0f, 2.0f);
+        const float gt2 = AnimT(); const float dtb = S->gBT < 0.0f || gt2 < S->gBT ? 1.0f / 60.0f : std::clamp(gt2 - S->gBT, 1e-4f, 0.25f); S->gBT = gt2;
+        GaniPose T = {};   // pose nueva
+        for (int b = 0; b < 31; b++) { T.q[b][3] = 1.0f; if (ganiOn && GP.has[b]) { QScale(GP.q[b], gW, T.q[b]); for (int c = 0; c < 3; c++) T.p[b][c] = GP.p[b][c] * gW; T.has[b] = true; } }
+        T.frames = ganiOn ? GP.frames : 1;
+        const bool trans = S->gBHave && tau >= 0.001f && (gc != S->gLastClip || ganiOn != S->gLastOn || (ganiOn && gF + 0.5f < S->gLastF));
+        if (trans) {
+            // velocidad de lo mostrado: (mostrado - anterior) / dt del cuadro anterior
+            const float idt = S->gPrevDt > 1e-5f ? 1.0f / S->gPrevDt : 0.0f;
+            for (int b = 0; b < 31; b++) {
+                float x0[3], v0[3]; for (int c = 0; c < 3; c++) { x0[c] = S->gB.p[b][c] - T.p[b][c]; v0[c] = (S->gB.p[b][c] - S->gPrev.p[b][c]) * idt; }
+                float cq[4], dq[4], r0[3]; QConj(T.q[b], cq); QMul(S->gB.q[b], cq, dq); QLog(dq, r0);
+                float cp[4], vq[4], rv[3]; QConj(S->gPrev.q[b], cp); QMul(S->gB.q[b], cp, vq); QLog(vq, rv); for (float& v : rv) v *= idt;
+                // (08/11 h, Agustin: "quizas el metodo de transicion no es el correcto, enfocate en uno mas seguro, transicion suave") sin
+                // velocidad heredada: la diferencia se apaga con el mismo polinomio pero arrancando quieta (ease-out puro): no puede
+                // pasarse ni rebotar aunque la velocidad medida venga rara (dt variable, hueso leido con lo del mod puesto)
+                (void)v0; (void)rv;
+                for (int c = 0; c < 3; c++) { InertStart(S->gI[b][c], x0[c], 0.0f, tau); InertStart(S->gI[b][3 + c], r0[c], 0.0f, tau); }
+            }
+            S->gIT0 = gt2;
+        }
+        S->gLastClip = gc; S->gLastOn = ganiOn; S->gLastF = gF;
+        S->gPrev = S->gB; S->gPrevDt = dtb;
+        bool any = false; const float ti = S->gIT0 < 0.0f ? 1e9f : gt2 - S->gIT0;
+        for (int b = 0; b < 31; b++) {
+            float off[3], rof[3]; bool rest = false;
+            for (int c = 0; c < 3; c++) { off[c] = InertEval(S->gI[b][c], ti); rof[c] = InertEval(S->gI[b][3 + c], ti); if (fabsf(off[c]) > 1e-6f || fabsf(rof[c]) > 1e-5f) rest = true; }
+            for (int c = 0; c < 3; c++) S->gB.p[b][c] = T.p[b][c] + off[c];
+            if (rest) { float eq[4]; QExp(rof, eq); QMul(eq, T.q[b], S->gB.q[b]); } else memcpy(S->gB.q[b], T.q[b], sizeof T.q[b]);
+            const bool live = T.has[b] || fabsf(S->gB.p[b][0]) + fabsf(S->gB.p[b][1]) + fabsf(S->gB.p[b][2]) > 2e-4f || S->gB.q[b][3] < 0.9999995f;
+            S->gB.has[b] = live; if (live) any = true;
+        }
+        S->gB.frames = T.frames;
+        if (!S->gBHave) { S->gPrev = S->gB; S->gBHave = true; }
+        if (tau >= 0.001f) { ganiOn = any; if (any) { GP = S->gB; gW = 1.0f; } }
+    }
+    if (ganiOn) poseOn = true;
+    s_ganiSecOn = false; s_ganiLidOn = false;
+    if (ganiOn) {
+        for (int d = 18; d <= 21; d++) { const int ab = s_defToAsk[d]; float ph[3] = {}; if (ab >= 0 && GP.has[ab]) GaniPToHead(GP.p[ab], ph); for (int k = 0; k < 3; k++) s_ganiSec[d - 18][k] = ph[k] * gW; }
+        s_ganiSecOn = true;
+        // parpados: en el clip van absolutos (base_normal: arriba 25 grados = abierto, abajo -5); el delta contra eso entra en EyesFrame
+        float at = 0, ab2 = 0; int nt = 0, nb = 0;
+        for (int b = 14; b <= 15; b++) if (GP.has[b]) { at += GaniAngZ(GP.q[b]); nt++; }
+        for (int b = 16; b <= 17; b++) if (GP.has[b]) { ab2 += GaniAngZ(GP.q[b]); nb++; }
+        if (nt || nb) { s_ganiLid[0] = nt ? -(at / nt - 0.43633f) * gW : 0.0f; s_ganiLid[1] = nb ? -(ab2 / nb + 0.08727f) * gW : 0.0f; s_ganiLidOn = true; }
+    }
     s_poseG[0] = pNeu; s_poseG[1] = pAng; s_poseG[2] = pSmi; s_poseG[3] = pSur; s_poseG[4] = pGri; s_poseG[5] = pPuc; s_poseProf = PF;
     if (FreeCamActive() && g_cfg.live[346][0] > 0.5f) PublishHead(*S);   // (02/11) camara libre "seguir la cara"
     float deg = 0.0f; if (JawAngle(*S, jc, &deg)) { S->angMin = (std::min)(S->angMin, deg); S->angMax = (std::max)(S->angMax, deg); S->angN++; }
@@ -926,7 +1585,7 @@ void ExprBonesFrame(const void* skel) {
     {   // (02/11 i) amplificador por huesos: ganancia por zona y escritura de los huesos que el juego mueve
         const float* E = g_cfg.live[340]; const float* Z = g_cfg.live[341];
         S->ampOn = E[1] > 1.005f || E[1] < 0.995f;
-        memcpy(S->ahc, hc.t, sizeof S->ahc); memcpy(S->ahr, hr, sizeof S->ahr);
+        memcpy(S->ahc, hc.t, sizeof S->ahc); memcpy(S->ahr, hr, sizeof S->ahr); S->ahFrame = s_frame.load(std::memory_order_relaxed);
         S->aCap = std::clamp(E[2], 0.1f, 3.0f) * 0.01f; S->aBig = std::clamp(E[3], 0.0f, 1.0f);
         for (int d = 0; d < kND; d++) {
             const float z = d <= 12 ? Z[3] : d <= 19 ? Z[2] : d <= 25 ? Z[1] : d <= 30 ? Z[0] : 0.0f;
@@ -958,42 +1617,298 @@ void ExprBonesFrame(const void* skel) {
     // escribir despues del juego
     // (02/11 h, Agustin: "quiero que se usen los por huesos, pero que sea perfecto") 350.x = 2: parpados por HUESOS tambien (para
     // medir con la lectura de la paleta por malla, expr.cpp "parpados por malla", si el giro llega igual a todas las mallas)
+    // (08/11, Agustin: "como aplicamos expresiones custom para cada jugador", "que tambien se muestren al expresarse en partido o en
+    // animaciones", "gestos que se reproduzcan entre medio como el jugador respirando e hinchando las mejillas") GESTOS PROPIOS DEL
+    // JUGADOR (gani.cpp: PES21FX\anim\face\<id>\ y todos\). Cuanto esta haciendo el juego cada gesto se MIDE en los huesos: lo que se
+    // corrio cada hueso contra la cara neutra de este jugador (ejes de la cabeza) proyectado sobre lo que mueve el clip del juego de ese
+    // gesto (gestos.txt), mas la mandibula. Con ese peso se suma la diferencia entre el clip propio y el del juego: la sonrisa del juego
+    // se vuelve la sonrisa propia, en partido, festejos y escenas, sin pisar ningun clip. En el editor (cara quieta) cuentan los sliders
+    // de gestos del mod con el mismo nombre. Los "entre_" se reproducen una vez cada 4..12 s, al azar, con la cara quieta.
+    if (!ganiOn && S->pKnown) {
+        if (S->ggPid != S->pid) { S->ggPid = S->pid; S->ggGen = 0; S->gg.clear(); S->btw = -1; S->btwNext = -1.0f; S->ggLog = 0; for (float& w : S->ggW) w = 0.0f; }
+        if (GaniGestGet(S->pid, S->ggGen, S->gg)) { S->btw = -1; for (float& w : S->ggW) w = 0.0f; }
+        const int NG = (std::min)((int)S->gg.size(), 16);
+        if (NG > 0) {
+            const float t = AnimT();
+            const float kf = S->ggT < 0.0f ? 1.0f : std::clamp((t - S->ggT) * 60.0f, 0.0f, 6.0f); S->ggT = t;
+            const float ea = 1.0f - powf(1.0f - 0.12f, kf);
+            float C[kND][3] = {}; bool cOk[kND] = {};
+            for (int d = 5; d <= 30; d++) {
+                if (d == 12 || (d >= 22 && d <= 25) || !S->cur[d] || S->nN[d] < 120) continue;
+                Xf x; if (!ReadBase(*S, d, x)) continue;
+                const float v[3] = { x.t[0] - hc.t[0], x.t[1] - hc.t[1], x.t[2] - hc.t[2] }; float r[3]; QRot(hrInv, v, r);
+                for (int k = 0; k < 3; k++) C[d][k] = r[k] - S->nT[d][k];
+                cOk[d] = true;
+            }
+            const float jawNow = deg / 57.29578f;
+            float wr[16] = {}, sum = 0.0f;
+            for (int i = 0; i < NG; i++) {
+                const GaniGest& g = S->gg[i]; if (g.between || !g.hasRef) continue;
+                float dot = 0.0f, rr = 0.0f;
+                for (int d = 5; d <= 30; d++) {
+                    if (!cOk[d]) continue; const int ab = s_defToAsk[d]; if (ab < 0) continue;
+                    float rh[3]; GaniPToHead(g.rP[ab], rh);
+                    for (int k = 0; k < 3; k++) { dot += C[d][k] * rh[k]; rr += rh[k] * rh[k]; }
+                }
+                const float rj = -g.rZ[1]; dot += 0.0004f * jawNow * rj; rr += 0.0004f * rj * rj;   // mandibula: 2 cm por radian
+                if (rr < 1e-8f) continue;
+                const float w = std::clamp((std::clamp(dot / rr, 0.0f, 1.0f) - 0.15f) / 0.70f, 0.0f, 1.0f);   // zona muerta: la cara quieta no dispara
+                wr[i] = w; sum += w;
+            }
+            if (sum > 1.0f) for (int i = 0; i < NG; i++) wr[i] /= sum;
+            // (09/11, Agustin con capturas del 07/11 vs hoy: "la sonrisa de messi sigue rota, las comisuras se caen, los ojos se cierran
+            // mucho") los sliders de gestos ya NO prenden el gesto propio .gani del mismo nombre: Sonrisa 1.5 sumaba encima de su forma por
+            // huesos + perfil + forma esculpida el clip 'sonrisa' entero y el 'risa' entero (ojos cerrados, mandibula abierta hasta 19
+            // grados) = mueca de llanto. Los gestos propios siguen entrando cuando el JUEGO hace ese gesto (medido arriba) y los "entre_"
+            if (false) for (int i = 0; i < NG; i++) {   // sliders de gestos del mod (editor): el gesto propio del mismo nombre
+                const char* n = S->gg[i].name; float sl = 0.0f;
+                if (!_stricmp(n, "sonrisa")) sl = (std::min)(pSmi, 1.0f); else if (!_stricmp(n, "risa")) sl = (std::max)(0.0f, pSmi - 1.0f) * 2.0f;
+                else if (!_stricmp(n, "enojo")) sl = pAng; else if (!_stricmp(n, "asombro")) sl = pSur; else if (!_stricmp(n, "grito")) sl = pGri; else if (!_stricmp(n, "puchero")) sl = pPuc;
+                wr[i] = (std::max)(wr[i], std::clamp(sl, 0.0f, 1.0f));
+            }
+            float total = 0.0f;
+            for (int i = 0; i < NG; i++) {
+                S->ggW[i] += (wr[i] - S->ggW[i]) * ea; total += S->ggW[i];
+                if (S->ggW[i] > 0.5f && !(S->ggLog & (1u << i)) && s_logs < 400) { S->ggLog |= 1u << i; s_logs++; Log("gani: jugador %u hace '%s' (peso %.2f): gesto propio", S->pid, S->gg[i].name, S->ggW[i]); }
+            }
+            float P[31][3] = {}, Z[31] = {}; bool any = false;
+            for (int i = 0; i < NG; i++) {
+                const float w = S->ggW[i]; const GaniGest& g = S->gg[i]; if (g.between || w < 0.002f) continue;
+                for (int b = 0; b < 31; b++) { for (int k = 0; k < 3; k++) P[b][k] += w * g.dP[b][k]; Z[b] += w * g.dZ[b]; }
+                any = true;
+            }
+            {   // "entre_" / "quieto_" / "corriendo_": uno cada tanto con la cara quieta; "arranque_": enseguida al arrancar a correr
+                auto rnd = [&](float n) { return Frac(sinf(n * 12.9898f + (float)(S->pid % 9973u) * 0.731f) * 43758.5453f); };
+                auto ok = [&](int k) { return k == 1 || (k == 2 && S->spHave && S->stillT > 1.5f) || (k == 4 && S->spHave && S->speed > 3.5f); };
+                int nb = 0; for (int i = 0; i < NG; i++) if (S->gg[i].between && ok(S->gg[i].kind)) nb++;
+                if (arranco) {
+                    int na = 0; for (int i = 0; i < NG; i++) if (S->gg[i].kind == 3) na++;
+                    if (na > 0) {
+                        int pick = (int)(rnd((float)S->btwN + 0.75f) * na); if (pick >= na) pick = na - 1;
+                        for (int i = 0; i < NG; i++) if (S->gg[i].kind == 3 && pick-- == 0) { S->btw = i; break; }
+                        S->btwT0 = t; S->btwN++;
+                    }
+                }
+                if (S->btw >= 0 && S->btw < NG) {
+                    const GaniGest& g = S->gg[S->btw]; const float tt = t - S->btwT0, dur = (std::max)(g.frames / 30.0f, 0.5f);
+                    if (tt < 0.0f || tt > dur) { S->btw = -1; S->btwNext = t + 4.0f + 8.0f * rnd((float)S->btwN); }
+                    else {
+                        float BP[31][3], BZ[31];
+                        if (GaniGestSample(S->pid, g.clip, tt, BP, BZ)) {
+                            const float fade = SStep(0.0f, 0.3f, tt) * (1.0f - SStep(dur - 0.3f, dur, tt)) * (1.0f - std::clamp(total * 3.0f, 0.0f, 1.0f));
+                            for (int b = 0; b < 31; b++) { for (int k = 0; k < 3; k++) P[b][k] += fade * BP[b][k]; Z[b] += fade * BZ[b]; }
+                            any = true;
+                        }
+                    }
+                } else if (nb > 0 && total < 0.08f && t >= 0.0f) {
+                    if (S->btwNext < 0.0f || S->btwNext > t + 30.0f) S->btwNext = t + 3.0f + 6.0f * rnd(0.5f);
+                    if (t >= S->btwNext) {
+                        int pick = (int)(rnd((float)S->btwN + 0.25f) * nb); if (pick >= nb) pick = nb - 1;
+                        for (int i = 0; i < NG; i++) if (S->gg[i].between && ok(S->gg[i].kind) && pick-- == 0) { S->btw = i; break; }
+                        S->btwT0 = t; S->btwN++;
+                    }
+                }
+            }
+            if (any) {
+                Z[1] = std::clamp(Z[1], -0.33f, 0.33f);   // la mandibula del gesto propio no pasa de 19 grados (la boca, regla fija)
+                for (int b = 0; b < 31; b++) { GP.has[b] = true; memcpy(GP.p[b], P[b], sizeof P[b]); GP.q[b][0] = GP.q[b][1] = GP.q[b][2] = 0.0f; GP.q[b][3] = 1.0f; }
+                GP.q[1][2] = sinf(0.5f * Z[1]); GP.q[1][3] = cosf(0.5f * Z[1]); GP.frames = 1;
+                ganiOn = true; gW = 1.0f; poseOn = true;
+                for (int d = 18; d <= 21; d++) { const int ab = s_defToAsk[d]; float ph[3] = {}; if (ab >= 0) GaniPToHead(P[ab], ph); for (int k = 0; k < 3; k++) s_ganiSec[d - 18][k] = ph[k]; }
+                s_ganiSecOn = true;
+                s_ganiLid[0] = -0.5f * (Z[14] + Z[15]); s_ganiLid[1] = -0.5f * (Z[16] + Z[17]); s_ganiLidOn = true;
+            }
+        }
+    }
     if (g_cfg.live[350][0] > 1.5f) EyesFrame(*S, hc, hr, sm);
     else for (int d = D_LID_TL; d <= D_LID_BR; d++) Release(*S, d);
-    Secondary(*S, hr, sm, openAll);
+    // (08/11, Agustin: "en partidos tambien vibra cuando el jugador deberia estar expresandose") la sonrisa medida en la comisura y la
+    // boca abierta medida en la mandibula cambian de un cuadro a otro (el juego anima la cara a 30 cuadros con claves ralas y la cabeza
+    // se mueve): pomulos, surco y bajo-ojo las seguian crudas. Ahora pasan por un suavizado de ~6 cuadros de 60 Hz del RELOJ DEL JUEGO y
+    // un margen de 0.02 (el temblor no pasa; los gestos de verdad si)
+    float smS = sm, openS = openAll;
+    {
+        const float t = AnimT();
+        const float k = S->secT < 0.0f ? 1.0f : std::clamp((t - S->secT) * 60.0f, 0.0f, 6.0f); S->secT = t;
+        const float a = 1.0f - powf(1.0f - 0.16f, k);
+        if (!S->secHave) { S->secSm = sm; S->secOpen = openAll; S->secHave = true; }
+        auto step = [a](float prev, float now) { const float d = now - prev; return fabsf(d) < 0.02f ? prev + d * a * 0.5f : prev + d * a; };
+        S->secSm = step(S->secSm, sm); S->secOpen = step(S->secOpen, openAll);
+        smS = S->secSm; openS = S->secOpen;
+    }
+    Secondary(*S, hr, smS, openS);
+    Neck(*S, 0.90f * pGri + 0.35f * pAng + 0.45f * (std::max)(xB[1], 0.0f) + (std::max)(0.0f, openS - 0.6f) + 0.40f * eff + 0.15f * nConc, openS);
+    if (g_cfg.live[397][0] > 0.001f) poseOn = true;   // (08/11 e) x397 suaviza los gestos del juego aunque no haya gestos propios
     if (fabsf(o) < 0.001f && teeth < 0.001f && !poseOn) { for (int d = 0; d < 18; d++) if (S->wHave[d]) Release(*S, d); for (int d = 26; d <= 30; d++) if (S->wHave[d]) Release(*S, d); return; }   // slider en 0: la boca vuelve a la del juego
     static const float X[3] = { 1.0f, 0.0f, 0.0f }; float ax[3]; QRot(hr, X, ax);
     float ln = sqrtf(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]); if (ln < 0.5f) return; for (float& v : ax) v /= ln;
     const float P[3] = { jc.t[0], jc.t[1], jc.t[2] };
-    float A = 0.40f * o;
+    float A = 0.40f * o * nExpr;
+    // (08/11) respiracion por la boca corriendo y esfuerzo: la mandibula baja un poco (0.35 grados por inhalacion, hasta 3 grados de esfuerzo)
+    A += 0.05f * eff + 0.0035f * brAmp * breath * (0.5f + 0.5f * SStep(1.5f, 6.0f, S->spHave ? S->speed : 0.0f));   // (09/11 b, video FC27 / eFootball) la mandibula afloja apenas al inhalar (0.2 grados quieto, 0.4 corriendo)
+    if (ganiOn && GP.has[1]) A += -GaniAngZ(GP.q[1]) * gW;   // (07/11) mandibula del clip (giro sobre z del .ask = -x de la cabeza)
     // (03/11) tope de la mandibula: lo del juego + lo del mod no pasa de 35 grados (la barba y la cara no dan para mas)
+    {   // (04/11 e) mordida: soltar abre la mandibula; apretar la cierra solo lo que el juego la tenga abierta (los dientes no se pasan)
+        const float bite = std::clamp(g_cfg.live[361][1], -1.5f, 1.5f);
+        if (bite < 0.0f) A += 0.045f * -bite;
+        else if (bite > 0.0f) A -= (std::min)(0.045f * bite, (std::max)(0.0f, deg / 57.29578f + (std::max)(A, 0.0f)));
+    }
+    // (08/11, Agustin: "los gani del juego tambien?") SUAVIZADO DE LOS GESTOS DEL JUEGO (x397): los clips del juego los mezcla el
+    // juego (claves a 30 cuadros, cambios de clip de golpe); la DLL no puede cambiar esa mezcla, pero si seguir la pose del juego
+    // con un retraso corto (0.10 s x x397) en los ejes de la cabeza y sumar la diferencia como gesto del mod: los saltos entre
+    // claves y entre clips se redondean sin que la cara se quede atras cuando la cabeza gira. Mandibula: el angulo del juego suavizado
+    float gsK = 0.0f, gsDt = 1.0f / 60.0f; const float gsAmt = std::clamp(g_cfg.live[397][0], 0.0f, 3.0f);
+    if (gsAmt > 0.001f) {
+        const float dtg = S->gsT < 0.0f || tNow < S->gsT ? 1.0f : (std::min)(tNow - S->gsT, 0.25f); S->gsT = tNow;
+        gsK = 1.0f - expf(-dtg / (0.10f * gsAmt));
+        if (!S->gsDegHave) { S->gsDeg = deg; S->gsDegV = 0.0f; S->gsDegHave = true; } else Damp(S->gsDeg, S->gsDegV, deg, 0.10f * gsAmt, dtg);
+        gsDt = dtg;
+        A += (S->gsDeg - deg) / 57.29578f;
+    } else { S->gsDegHave = false; for (bool& h : S->gsHave) h = false; }
     if (A > 0.0f) A = (std::min)(A, (std::max)(0.0f, (35.0f - deg) / 57.29578f));    // (02/11, Agustin: "esta al reves") con el signo negativo la boca se cerraba al subir el slider: en el cuaternion del motor el menton baja con el angulo positivo
     for (int d = 0; d < kND; d++) {
         if (!S->cur[d]) continue;
         const float* tv = TeethOf(d); const float* ov = OpenOf(d);
-        const float op = (std::max)(o, 0.0f);
-        float po[3]; PoseOf(d, pAng, pSmi, pSur, po);
-        for (const PoseOff2& p : kPose2) if (p.d == d) { for (int k = 0; k < 3; k++) po[k] += p.g[k] * pGri + p.p[k] * pPuc; break; }
+        const float op = (std::max)(o - (d >= 5 && d <= 8 ? oSmi : 0.0f), 0.0f);   // (09/11) comisuras: la risa no las junta ni las baja
+        // (09/11 c) cada grupo con su tiempo: cejas / entrecejo (26..30) rapido, mejillas de abajo y nariz (7, 8, 13..17) arrastradas
+        const int grp = d >= 26 ? 0 : (d == 7 || d == 8 || (d >= 13 && d <= 17)) ? 1 : -1;
+        const float* gs = grp >= 0 ? S->slG[grp] : S->sl;
+        const float qAng = gs[0], qSmi = gs[1], qSur = gs[2], qGri = gs[4], qPuc = gs[5], qNeu = gs[6];
+        float po[3]; PoseOf(d, qAng, d <= 17 ? qSmi * kSmB : qSmi, qSur, po);
+        for (const PoseOff2& p : kPose2) if (p.d == d) { for (int k = 0; k < 3; k++) po[k] += p.g[k] * qGri + p.p[k] * qPuc; break; }
         if (PF && ProfBoneOk(d)) {   // (04/11) perfil de esta cara: neutra (z356) y cada gesto con su slider
-            const float w[PG_N] = { pNeu, pAng, pSmi, pSur, pGri, pPuc };
+            const float w[PG_N] = { qNeu, qAng, qSmi, qSur, qGri, qPuc };
             for (int g = 0; g < PG_N; g++) if (PF->has[g] && w[g] > 0.001f) for (int k = 0; k < 3; k++) po[k] += PF->off[g][d][k] * w[g];
         }
         // (04/11) la mandibula real no gira en el lugar: al abrir, el condilo se desliza adelante y abajo (articulacion
         // temporomandibular): los huesos que siguen a la mandibula bajan y van adelante un poco con la apertura del mod
         if (kDef[d].jaw > 0.0f && op > 0.0f) { po[1] -= 0.0010f * op * kDef[d].jaw; po[2] += 0.0022f * op * kDef[d].jaw; }
-        if (d == 5 || d == 6) po[0] += (d == 5 ? -1.0f : 1.0f) * 0.0012f * talkRound;   // hablar: comisuras adentro / afuera
+        if (d == 5 || d == 6) po[0] += (d == 5 ? -1.0f : 1.0f) * 0.0016f * talkRound;   // hablar: comisuras adentro (redonda) / afuera (ancha)
+        if (xOn) {   // (04/11 d) filas 361 / 362 (ejes de la cabeza: x a la izquierda del jugador, y arriba, z adelante; metros por 1.0)
+            const bool isL = d <= 11 ? (d % 2) == 1 : (d % 2) == 0;   // izquierdos: lip_b_l 1, lip_s_l 5, cheek_s_l 7, lip_t_l 9, nosewing_l 14, nasolabial_l 16, ..., brow_i_l 26, brow_o_l 28
+            const float sl = isL ? 1.0f : -1.0f;
+            if (d >= 26 && d <= 29) po[1] += 0.0040f * xB[0];                       // cejas
+            if (d == 30) po[1] += 0.0020f * xB[0];                                  // entrecejo
+            if (d == 26 || d == 27) { po[1] += 0.0035f * xAng; po[0] -= sl * 0.0006f * xAng; }   // angulo: inicio de la ceja (y un poco al medio)
+            if (d == 28 || d == 29) po[1] -= 0.0012f * xAng;                      // angulo: la punta de afuera
+            if (d == 30) po[1] += 0.0015f * xAng;                                  // angulo: el entrecejo acompana el inicio
+            if (kDef[d].jaw > 0.0f) po[0] += 0.0030f * xB[2] * kDef[d].jaw;   // mandibula de costado
+            if (xB[1] > 0.0f) {   // apretar los dientes: maseteros afuera, labios apretados uno contra otro, menton que sube, comisuras tensas
+                const float k = xB[1];
+                if (d == 7 || d == 8) po[0] += sl * 0.0012f * k;
+                if (d == 1 || d == 2 || d == 3) po[1] += 0.0006f * k;
+                if (d == 9 || d == 10 || d == 11) po[1] -= 0.0005f * k;
+                if (d == 4) { po[1] += 0.0008f * k; po[2] += 0.0005f * k; }
+                if (d == 5 || d == 6) po[0] += sl * 0.0008f * k;
+            }
+            if (d == 5 || d == 6) {                                                 // media sonrisa
+                const float side = d == 5 ? (std::max)(xB[3], 0.0f) : (std::max)(-xB[3], 0.0f);
+                po[0] += sl * 0.0025f * side; po[1] += 0.0035f * side; po[2] -= 0.0010f * side;
+            }
+            if ((d == 7 || d == 8) && xB[4] != 0.0f) { po[0] += sl * 0.0030f * xB[4]; po[2] += 0.0010f * xB[4]; }   // cachetes
+            if ((d == 7 || d == 8) && xB[4] > 0.0f) { po[0] += sl * 0.0018f * xB[4]; po[1] += 0.0006f * xB[4]; po[2] += 0.0008f * xB[4]; }   // (09/11) inflados: mas afuera, arriba y adelante (4.8 mm a 1.0; el bulto redondo lo pone el shader)
+            if ((d == 16 || d == 17) && xB[4] != 0.0f) po[0] += sl * 0.0015f * xB[4];
+            if (xB[4] > 0.0f) {   // (09/11) aire adentro: labios cerrados y apretados, un poco adelante, comisuras al medio
+                if (d == 1 || d == 2 || d == 3) { po[1] += 0.0005f * xB[4]; po[2] += 0.0008f * xB[4]; }
+                if (d == 9 || d == 10 || d == 11) { po[1] -= 0.0004f * xB[4]; po[2] += 0.0008f * xB[4]; }
+                if (d == 5 || d == 6) po[0] -= sl * 0.0008f * xB[4];
+                if (d == 4) po[2] += 0.0006f * xB[4];
+            }
+            if (d == 5 || d == 6) { po[0] -= sl * 0.0040f * xB[5]; po[2] += 0.0020f * xB[5]; }                    // beso
+            if (d == 1 || d == 2 || d == 3 || d == 9 || d == 10 || d == 11) po[2] += 0.0025f * xB[5];
+            {   // desprecio: labio de arriba, ala de la nariz y comisura de un lado
+                const float side = isL ? (std::max)(xB[6], 0.0f) : (std::max)(-xB[6], 0.0f);
+                if (d == 9 || d == 11) po[1] += 0.0030f * side;
+                if (d == 14 || d == 15) po[1] += 0.0015f * side;
+                if (d == 5 || d == 6) po[1] += 0.0010f * side;
+            }
+            if (d >= 26 && d <= 29) { const float side = isL ? (std::max)(xB[7], 0.0f) : (std::max)(-xB[7], 0.0f); po[1] += 0.0045f * side; }   // una ceja
+        }
+        if (d == 9 || d == 10 || d == 11) po[1] += 0.0012f * talkLip;   // (08/11) hablar: labio de arriba sube
+        if (d == 1 || d == 2 || d == 3) po[1] -= 0.0012f * talkLow;      // y el de abajo baja (f / v: sube contra los dientes)
+        if (d == 12) po[1] += 0.0004f * talkLip;
+        if (talkProt > 0.001f || talkPress > 0.001f || talkAcc > 0.001f) {   // (08/11) hablar por palabras
+            if (d == 1 || d == 2 || d == 3 || d == 5 || d == 6 || d == 9 || d == 10 || d == 11 || d == 12) po[2] += 0.0022f * talkProt;   // o / u: labios adelante
+            if (d == 9 || d == 10 || d == 11) po[1] -= 0.0007f * talkPress;   // m / b / p: labios uno contra otro
+            if (d == 1 || d == 2 || d == 3) po[1] += 0.0007f * talkPress;
+            if (d == 5 || d == 6) po[0] -= (d == 5 ? 1.0f : -1.0f) * 0.0004f * talkPress;
+            if (d >= 26 && d <= 29) po[1] += 0.0009f * talkAcc;              // silaba tonica: cejas apenas arriba
+        }
+        if (nLive) {   // (08/11) animaciones realistas (filas 395 / 396): ejes de la cabeza, metros
+            const bool isL = d <= 11 ? (d % 2) == 1 : (d % 2) == 0; const float sl = isL ? 1.0f : -1.0f;
+            const float spd = S->spHave ? S->speed : 0.0f, mouthBr = brAmp * breath * SStep(1.5f, 6.0f, spd);
+            // vida
+            if (d >= 26 && d <= 29) po[1] += 0.0005f * lifeBrow;
+            if (d == 30) po[1] += 0.0003f * lifeBrow;
+            if (d == 5 || d == 6) { po[0] += sl * 0.00025f * lifeLipX; po[1] += 0.0002f * lifeLipY; }
+            if (d == 14 || d == 15) po[0] += sl * 0.0002f * lifeNose;
+            // respiracion
+            if (d == 14 || d == 15) { po[0] += sl * 0.0008f * brAmp * breath; po[1] += 0.0002f * brAmp * breath; }   // alas: se abren y suben apenas al inhalar
+            if (d == 13) po[2] += 0.0002f * brAmp * breath;
+            // (09/11 b, Agustin con video FC27 / eFootball: "mira las animaciones de respiracion en los dos juegos modernos") como en esos juegos:
+            // los labios se entreabren apenas al inhalar (0.3 mm arriba / 0.5 mm abajo quieto, el doble corriendo), las mejillas no
+            { const float lipBr = brAmp * breath * (0.5f + 0.5f * SStep(1.5f, 6.0f, spd)); (void)mouthBr;
+              if (d == 9 || d == 10 || d == 11) po[1] += 0.0003f * lipBr;
+              if (d == 1 || d == 2 || d == 3) po[1] -= 0.0005f * lipBr; }
+            // (09/11, Agustin: "le falta naturalidad, como inflar cachetes") SOPLIDO al recuperar el aire: despues de correr (esfuerzo alto) y ya
+            // frenando, en cada exhalacion los cachetes se inflan apenas, los labios se juntan adelante y las comisuras van al medio; se
+            // apaga solo cuando el esfuerzo baja (~4 s). z395 = 0 lo apaga con el esfuerzo
+            if (puff > 0.001f) {
+                if (d == 7 || d == 8) { po[0] += sl * 0.0040f * puff; po[1] += 0.0005f * puff; po[2] += 0.0010f * puff; }
+                if (d == 16 || d == 17) po[0] += sl * 0.0012f * puff;
+                if (d == 1 || d == 2 || d == 3 || d == 9 || d == 10 || d == 11) po[2] += 0.0012f * puff;
+                if (d == 5 || d == 6) po[0] -= sl * 0.0012f * puff;
+            }
+            // esfuerzo
+            if (d == 26 || d == 27) { po[1] -= 0.0025f * eff; po[0] -= sl * 0.0008f * eff; }
+            if (d == 28 || d == 29) po[1] -= 0.0010f * eff;
+            if (d == 30) po[1] -= 0.0015f * eff;
+            if (d == 14 || d == 15) po[0] += sl * 0.0008f * eff;
+            if (d == 5 || d == 6) { po[0] += sl * 0.0012f * eff; po[1] -= 0.0008f * eff; }
+            if (d == 7 || d == 8) po[0] += sl * 0.0008f * eff;
+            if (d == 4) po[1] -= 0.0006f * eff;
+            // concentracion
+            if (d == 26 || d == 27) { po[1] -= 0.0020f * nConc; po[0] -= sl * 0.0008f * nConc; }
+            if (d == 28 || d == 29) po[1] -= 0.0006f * nConc;
+            if (d == 30) { po[1] -= 0.0012f * nConc; po[2] += 0.0004f * nConc; }
+            if (d == 1 || d == 2 || d == 3) po[1] += 0.0005f * nConc;
+            if (d == 9 || d == 10 || d == 11) po[1] -= 0.0004f * nConc;
+            if (d == 5 || d == 6) po[0] -= sl * 0.0006f * nConc;
+            // asimetria: izquierda mas fuerte, derecha mas floja (solo huesos con par), y la ceja izquierda apenas mas alta
+            if (nAsim > 0.001f && kDef[d].x != 0.0f) { const float k = 1.0f + sl * 0.15f * nAsim; for (float& v : po) v *= k; if (d == 26 || d == 28) po[1] += 0.0004f * nAsim; }
+        }
+        if (nExpr != 1.0f) for (float& v : po) v *= nExpr;   // z396 expresividad (los gestos propios .gani no se escalan)
+        // (07/11) clip .gani: corrimiento (cm -> m, ejes de la cabeza) y giro local del hueso, por el peso; pomulos / bajo-ojo (18..21) los
+        // lleva Secondary y los parpados (22..25) EyesFrame; la mandibula ya entro en A
+        float gq[4] = { 0, 0, 0, 1 }; bool grot = false;
+        if (ganiOn && d != D_JAW && (d < 18 || (d >= 26 && d <= 30))) { const int ab = s_defToAsk[d]; if (ab >= 0 && GP.has[ab]) {
+            float ph[3]; GaniPToHead(GP.p[ab], ph); for (int k = 0; k < 3; k++) po[k] += ph[k] * gW;
+            float qh[4], qs[4]; GaniQToHead(GP.q[ab], qh); QScale(qh, gW, qs);
+            if (qs[3] < 0.999999f) { float r1[4]; QMul(hr, qs, r1); QMul(r1, hrInv, gq); grot = true; }
+        } }
+        Xf x; bool xOk = false;
+        if (gsK > 0.0f && d != D_JAW && (d < 18 || (d >= 26 && d <= 30))) {   // (08/11) x397: la posicion del juego de este hueso, suavizada
+            xOk = Base(*S, d, x);
+            if (xOk) {
+                const float v[3] = { x.t[0] - hc.t[0], x.t[1] - hc.t[1], x.t[2] - hc.t[2] }; float L[3]; QRot(hrInv, v, L);
+                if (!S->gsHave[d]) { memcpy(S->gsL[d], L, sizeof L); memset(S->gsV[d], 0, sizeof S->gsV[d]); S->gsHave[d] = true; }
+                else for (int k = 0; k < 3; k++) { Damp(S->gsL[d][k], S->gsV[d][k], L[k], 0.10f * gsAmt, gsDt); const float e = S->gsL[d][k] - L[k]; if (fabsf(e) < 0.02f) po[k] += e; else { S->gsL[d][k] = L[k]; S->gsV[d][k] = 0.0f; } }   // > 2 cm = cambio de cara / jugador: se reengancha
+            }
+        }
         const float mvv0[3] = { tv[0] * teeth + ov[0] * op + po[0], tv[1] * teeth + ov[1] * op + po[1], tv[2] * teeth + ov[2] * op + po[2] };
         const bool rot = kDef[d].jaw > 0.0f && fabsf(A) > 1e-5f, mv = fabsf(mvv0[0]) + fabsf(mvv0[1]) + fabsf(mvv0[2]) > 1e-6f;
-        if (!rot && !mv) { if ((d < 18 || (d >= 26 && d <= 30)) && S->wHave[d]) Release(*S, d); continue; }   // 18.. = gestos secundarios / parpados (otro dueno)
-        Xf x; if (!Base(*S, d, x)) continue;
+        if (!rot && !mv && !grot) { if ((d < 18 || (d >= 26 && d <= 30)) && S->wHave[d]) Release(*S, d); continue; }   // 18.. = gestos secundarios / parpados (otro dueno)
+        if (!xOk && !Base(*S, d, x)) continue;
         float nq[4] = { x.q[0], x.q[1], x.q[2], x.q[3] }, nt[3] = { x.t[0], x.t[1], x.t[2] };
         if (rot) {
-            const float h = 0.5f * A * kDef[d].jaw, sn = sinf(h);
+            const float Ad = d >= 5 && d <= 8 ? A - 0.40f * oSmi * nExpr : A;   // (09/11) comisuras y mejillas de abajo: sin la apertura de la risa
+            const float h = 0.5f * Ad * kDef[d].jaw, sn = sinf(h);
             const float qr[4] = { ax[0] * sn, ax[1] * sn, ax[2] * sn, cosf(h) };
             float v[3] = { x.t[0] - P[0], x.t[1] - P[1], x.t[2] - P[2] }, rv[3];
             QRot(qr, v, rv); QMul(qr, x.q, nq);
             nt[0] = P[0] + rv[0]; nt[1] = P[1] + rv[1]; nt[2] = P[2] + rv[2];
         }
+        if (grot) { float q2[4]; QMul(gq, nq, q2); memcpy(nq, q2, sizeof q2); }   // (07/11) giro del clip, en el lugar
         if (mv) {   // corrimiento en los ejes de la cabeza (x a la izquierda del jugador, y arriba, z adelante) -> modelo
             const float hv[3] = { mvv0[0], mvv0[1], mvv0[2] }; float mvv[3];
             QRot(hr, hv, mvv);
@@ -1080,8 +1995,60 @@ static void Dump(const Skel& S) {
     Log("%s", l);
 }
 
+// (08/11) GESTOS EN LA PALETA: al final del cuadro de este personaje se publica, por hueso de la cara, lo que dejo el juego (base), lo
+// que el mod quiere (nuevo: lo anotado por WriteBone este cuadro; si no, igual a la base) y el reposo, mas la cabeza y la matriz del nodo.
+// expr.cpp lo lee en el Present (ExprBonesPoses) y lo sube al VS. Si las expresiones estan apagadas no hay nada anotado: diferencia 0.
+static void Publish(Skel& S, unsigned fr) {
+    ExprCharPose& P = S.pub; P = ExprCharPose();
+    if (!g_cfg.optExprPalette || !S.cur[D_HEAD]) return;
+    Xf hc; if (!ReadXf(S.cur[D_HEAD], hc)) return;
+    P.frame = fr; P.pid = S.pKnown ? S.pid : 0; P.skel = S.skel;
+    memcpy(P.headT, hc.t, sizeof P.headT); memcpy(P.headQ, hc.q, sizeof P.headQ); memcpy(P.headRestT, S.rest[D_HEAD].t, sizeof P.headRestT); memcpy(P.headRestQ, S.rest[D_HEAD].q, sizeof P.headRestQ);
+    P.worldOk = S.node && CharNodeMatrix(const_cast<void*>(S.node), P.W);
+    float hr[4]; { float c[4]; QConj(S.rest[D_HEAD].q, c); QMul(hc.q, c, hr); }   // (08/11 g) cabeza actual * reposo^-1 (como Neutral)
+    for (int d = 0; d < kExprBones && d < kND; d++) {
+        if (!S.cur[d]) continue;
+        ExprCharPose::Bone& b = P.b[d];
+        // (08/11 g, Agustin: control total sobre "toda la expresion (juego + mod)") la cara NEUTRA de este jugador (promedio lento, Neutral())
+        // llevada a la cabeza de este cuadro: expr.cpp escala la expresion entera (lo del juego + lo del mod) respecto de ella
+        if (S.nN[d] >= 120) { float v[3]; QRot(hr, S.nT[d], v); for (int k = 0; k < 3; k++) b.zt[k] = hc.t[k] + v[k]; QMul(hr, S.nQ[d], b.zq); b.hasZ = true; }
+        const bool mv = S.dHave[d] && S.dFrame[d] == fr;
+        if (mv) { memcpy(b.bq, S.bq[d], sizeof b.bq); memcpy(b.bt, S.bt[d], sizeof b.bt); memcpy(b.nq, S.dq[d], sizeof b.nq); memcpy(b.nt, S.dt[d], sizeof b.nt); }
+        else { Xf x; if (!ReadXf(S.cur[d], x)) continue; memcpy(b.bq, x.q, sizeof b.bq); memcpy(b.bt, x.t, sizeof b.bt); memcpy(b.nq, x.q, sizeof b.nq); memcpy(b.nt, x.t, sizeof b.nt); }
+        memcpy(b.rq, S.rest[d].q, sizeof b.rq); memcpy(b.rt, S.rest[d].t, sizeof b.rt);
+        b.has = true; b.moved = mv;
+    }
+    P.ok = true;
+}
+void ExprBonesFrame(const void* skel) {
+    FrameBody(skel);
+    if (!skel || !g_cfg.optExprPalette) return;
+    std::lock_guard<std::mutex> lk(s_mx);
+    for (int i = 0; i < s_nSk; i++) if (s_sk[i].skel == skel) { if (s_sk[i].jawFound) Publish(s_sk[i], s_frame.load(std::memory_order_relaxed)); else s_sk[i].pub.ok = false; break; }
+}
+int ExprBonesPoses(ExprCharPose* out, int max) {
+    std::lock_guard<std::mutex> lk(s_mx);
+    const unsigned fr = s_frame.load(std::memory_order_relaxed); int n = 0;
+    for (int i = 0; i < s_nSk && n < max; i++) { const ExprCharPose& P = s_sk[i].pub; if (P.ok && fr - P.frame <= 10) out[n++] = P; }
+    // (08/11 c, Agustin: un ojo hundido en cuadros alternos al acercar la camara) dos esqueletos publicados con la cabeza en el mismo
+    // lugar (el editor arma otra instancia del mismo jugador, o una vieja que todavia no vencio): el VS elegia uno u otro segun el cuadro y
+    // las diferencias no eran las mismas. Si dos cabezas estan a menos de 3 cm queda solo la publicada mas nueva
+    auto headW = [](const ExprCharPose& P, float* o) { if (!P.worldOk) return false; for (int k = 0; k < 3; k++) o[k] = P.W[k * 4 + 0] * P.headT[0] + P.W[k * 4 + 1] * P.headT[1] + P.W[k * 4 + 2] * P.headT[2] + P.W[k * 4 + 3]; return true; };
+    for (int i = 0; i < n; i++) {
+        float a[3]; if (!headW(out[i], a)) continue;
+        for (int j = i + 1; j < n; j++) {
+            float b[3]; if (!headW(out[j], b)) continue;
+            const float d2 = (a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]);
+            if (d2 > 0.03f * 0.03f) continue;
+            if ((int)(out[j].frame - out[i].frame) > 0) out[i] = out[j];   // queda la mas nueva en i
+            out[j] = out[--n]; j--; headW(out[i], a);
+        }
+    }
+    return n;
+}
 // Present (hilo de render): estado para el shader (350.y) y resumen al log
 void ExprBonesPresent() {
+    GaniPresent();   // (07/11) clips .gani de la cara
     const unsigned fr = s_frame.fetch_add(1) + 1;
     const bool active = fr - s_lastActive.load(std::memory_order_relaxed) < 120;
     const bool eyesOn = fr - s_lastEyes.load(std::memory_order_relaxed) < 120;
@@ -1090,14 +2057,17 @@ void ExprBonesPresent() {
     if (fr - lastLog < 600) return;   // cada ~10 s
     lastLog = fr;
     std::lock_guard<std::mutex> lk(s_mx);
-    const int calls = s_calls.exchange(0), ap = s_applied.exchange(0), nj = s_noJaw.exchange(0), bw = s_badWrite.exchange(0), st = s_stale.exchange(0), ew = s_eyesW.exchange(0), bl = s_blinks.exchange(0), aw = s_ampW.exchange(0), ask = s_ampSkip.exchange(0), lsk = s_lidAmpSkip.exchange(0);
+    const int calls = s_calls.exchange(0), ap = s_applied.exchange(0), nj = s_noJaw.exchange(0), bw = s_badWrite.exchange(0), st = s_stale.exchange(0), ew = s_eyesW.exchange(0), bl = s_blinks.exchange(0), aw = s_ampW.exchange(0), ask = s_ampSkip.exchange(0), lsk = s_lidAmpSkip.exchange(0), lhf = s_lidHeadFix.exchange(0), lhft = s_lidHeadFixT.exchange(0), bhf = s_baseHeadFix.exchange(0), nkw = s_neckW.exchange(0), farN = s_far.exchange(0);
     if (!calls) return;
     int reusedAll = 0; for (int i = 0; i < s_nSk; i++) { reusedAll += s_sk[i].reused; s_sk[i].reused = 0; }
     static int dumped = 0;
     if (dumped < 0) for (int i = 0; i < s_nSk && dumped < 2; i++) if (s_sk[i].n > 0 && fr - s_sk[i].lastFrame < 600) { Dump(s_sk[i]); dumped++; }
     if (s_logs < 40) {
         char l[1200]; int k = snprintf(l, sizeof l, "boca por huesos [vivo x340 %.2f y340 %.2f x347 %.2f x350 %.0f]: %d pasos por el cuello, %d huesos agrandados (amplificador por huesos; %d sin agrandar por fuera de rango), %d giros escritos, %d sin mandibula, %d escrituras fallidas, %d rearmados por cambio de cara; ojos por huesos %d (cuadros con parpado cerrado %d); huesos leidos con el giro del mod todavia puesto %d; esqueletos:", g_cfg.live[340][0], g_cfg.live[340][1], g_cfg.live[347][0], g_cfg.live[350][0], calls, aw, ask, ap, nj, bw, st, ew, bl, reusedAll);
-        k += snprintf(l + k, sizeof l - k, " [parpados sin agrandar %d]", lsk);
+        k += snprintf(l + k, sizeof l - k, " [parpados sin agrandar %d, llevados a la cabeza %d giro / %d posicion]", lsk, lhf, lhft);
+        k += snprintf(l + k, sizeof l - k, " [otros huesos llevados a la cabeza %d]", bhf);
+        k += snprintf(l + k, sizeof l - k, " [cuello %d]", nkw);
+        if (farN) k += snprintf(l + k, sizeof l - k, " [lejos de la camara sin escribir %d]", farN);
         for (int i = 0; i < s_nSk && k < (int)sizeof l - 120; i++) {
             Skel& S = s_sk[i];
             if (fr - S.lastFrame > 600) continue;

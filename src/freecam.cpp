@@ -30,6 +30,9 @@
 namespace fx {
 
 static bool s_on = false;
+// (08/11 e) zoom minimo: los 3 congelamientos del 08/11 fueron reinicios de la placa (TDR, nvlddmkm 153) con la camara libre a
+// zoom 0.10-0.26 (campo de vision 0.02-0.09 rad): la cara llena la pantalla y la placa pasa los 2 s que Windows tolera.
+static const float kZoomMin = 0.05f;   // (08/11 e) Agustin no quiere zoom minimo: queda el de siempre
 static float s_zoomTarget = 1.0f; static std::atomic<int> s_wheel{0};
 static float s_fovBase = 0.0f, s_fovWritten = -1.0f;   // fov del juego sin zoom / ultimo fov escrito
 // "seguir la cara" (x346). (1/11) v1: la camara orbitaba alrededor de la cabeza sacada de la matriz de sk_head del dibujo de la
@@ -57,6 +60,7 @@ static std::atomic<int> s_headFrames{0};
 // (02/11) la captura de b6 (expr.cpp ExprCaptureHead) ya no se usa: daba la cabeza casi en cero
 bool FreeCamWantsHead() { return false; }
 static float s_pos[3] = {}, s_yaw = 0, s_pitch = 0;
+static void PoseApplyPending();
 static double s_t = 0;
 static POINT s_mouse{}; static bool s_mouseWas = false;
 static std::atomic<int> s_applies{0}, s_editorCalls{0}, s_editorApplied{0};
@@ -64,6 +68,13 @@ static int s_logged = 0;
 static const char* s_origen = "";
 
 bool FreeCamActive() { return g_cfg.live[344][0] > 0.5f; }
+static double s_headLostT = -1.0;   // (08/11 e) cuando se perdio el dato de la cabeza siguiendo la cara (-1 = no)
+static bool FreeCamHeadLost() {   // se pidio seguir la cara, se estaba siguiendo y el dato se corto: se suelta hasta que vuelva
+    if (s_headLostT < 0.0) return false;
+    if (g_cfg.live[346][0] < 0.5f) { s_headLostT = -1.0; return false; }
+    if (ExprFaceAny()) { s_headLostT = -1.0; return false; }
+    return true;
+}
 bool FreeCamBlocksKeys() { const float v = g_cfg.live[344][0]; return v > 0.5f && v < 1.5f; }
 
 static bool Key(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
@@ -87,17 +98,18 @@ static void TakeFromGame(const float* pos, const float* tgt) {
 // Devuelve false si la camara libre esta apagada (no toca nada).
 static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, const char* origen, const float* extra) {
     if (!FreeCamActive()) {
-        if (s_on) { s_on = false; s_follow = false; s_headSeen = false; s_lockNode = nullptr; Log("camara libre: apagada"); }
+        if (s_on) { s_on = false; s_follow = false; s_headSeen = false; s_lockNode = nullptr; g_cfg.live[345][3] = -1.0f; Log("camara libre: apagada"); }
         return false;
     }
     if (!s_on) {
         TakeFromGame(pos, tgt);
-        s_on = true; s_zoomTarget = std::clamp(g_cfg.live[344][2], 0.05f, 3.0f); s_wheel = 0; s_fovWritten = -1.0f;
+        s_on = true; s_zoomTarget = std::clamp(g_cfg.live[344][2], kZoomMin, 3.0f); s_wheel = 0; s_fovWritten = -1.0f;
         Log("camara libre: prendida (%s) en (%.2f, %.2f, %.2f) giro %.0f / %.0f grados; objetivo (%.2f, %.2f, %.2f), arriba (%.2f, %.2f, %.2f), proyeccion %d, campo de vision %.4f, cerca / lejos / aspecto %.3f / %.1f / %.3f",
             origen, pos[0], pos[1], pos[2], s_yaw * 57.2958f, s_pitch * 57.2958f, tgt[0], tgt[1], tgt[2], up[0], up[1], up[2], proj, *fov, extra[0], extra[1], extra[2]);
         s_logged = 0;
     }
     if (strcmp(origen, s_origen) != 0) { s_origen = origen; }
+    PoseApplyPending();   // (08/11) pose pedida por el panel en vivo
     // --- entrada (tiempo real) ---
     double t = Now(); float dt = (float)std::clamp(t - s_t, 0.0, 0.1); s_t = t;
     const bool front = GameInFront();
@@ -122,13 +134,13 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     {
         const int wheel = s_wheel.exchange(0);
         if (wheel != 0 && front) s_zoomTarget *= powf(0.92f, (float)wheel / 120.0f);   // cada muesca: 8 % mas cerca (o mas lejos)
-        s_zoomTarget = std::clamp(s_zoomTarget, 0.05f, 3.0f);
+        s_zoomTarget = std::clamp(s_zoomTarget, kZoomMin, 3.0f);
         float z = g_cfg.live[344][2];
         if (fabsf(z - s_zoomTarget) > 1e-4f) z += (s_zoomTarget - z) * std::clamp(6.0f * dt, 0.0f, 1.0f);   // ~1/6 s para llegar
         else { z = s_zoomTarget; }
         // si el usuario movio el slider del menu, el objetivo lo sigue
-        if (g_menuOpen.load()) s_zoomTarget = z = std::clamp(g_cfg.live[344][2], 0.05f, 3.0f);
-        g_cfg.live[344][2] = std::clamp(z, 0.05f, 3.0f);
+        if (g_menuOpen.load()) s_zoomTarget = z = std::clamp(g_cfg.live[344][2], kZoomMin, 3.0f);
+        g_cfg.live[344][2] = std::clamp(z, kZoomMin, 3.0f);
     }
     // mouse: gira con el boton derecho apretado (no mientras el menu del mod esta abierto: ahi el mouse es del menu)
     POINT m; GetCursorPos(&m);
@@ -159,7 +171,7 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
       R[0] = U[1] * F[2] - U[2] * F[1]; R[1] = U[2] * F[0] - U[0] * F[2]; R[2] = U[0] * F[1] - U[1] * F[0]; }
     const bool follow = haveHead || (wantFollow && s_headSeen && t - s_headT < 1.5);   // cortes cortos del dato: se queda donde esta
     // campo de vision que se va a ver (vertical, radianes): el del juego x zoom
-    float fovNow = (s_fovBase > 0.0f ? s_fovBase : (fov && *fov == *fov && *fov > 0.0f ? *fov : 0.8f)) * std::clamp(g_cfg.live[344][2], 0.05f, 3.0f);
+    float fovNow = (s_fovBase > 0.0f ? s_fovBase : (fov && *fov == *fov && *fov > 0.0f ? *fov : 0.8f)) * std::clamp(g_cfg.live[344][2], kZoomMin, 3.0f);
     if (fovNow > 3.2f) fovNow *= 0.0174533f;   // en grados (camara del partido)
     fovNow = std::clamp(fovNow, 0.01f, 2.5f);
     const float tanHalf = tanf(0.5f * fovNow);
@@ -178,7 +190,7 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
             mode == 1 ? "fija al rostro" : "orbitando la cabeza", s_head[0], s_head[1], s_head[2], F[0], F[1], F[2], s_dist);
     } else if (!follow && s_follow) {
         if (s_followMode == 1) s_fixHalf = std::clamp(s_dist * tanHalf, 0.05f, 2.0f);
-        s_follow = false; s_lockNode = nullptr; s_headSeen = false;
+        s_follow = false; s_lockNode = nullptr; s_headSeen = false; if (wantFollow) s_headLostT = Now();
         Log("camara libre: deja de seguir la cara%s", wantFollow ? " (sin dato de la cabeza: el personaje tiene que verse y la boca por huesos tiene que reconocer su cara)" : "");
     }
     s_upOut[0] = 0.0f; s_upOut[1] = 1.0f; s_upOut[2] = 0.0f;
@@ -234,7 +246,7 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     up[0] = s_upOut[0]; up[1] = s_upOut[1]; up[2] = s_upOut[2];
     float fovApplied = -1.0f;
     if (proj == 0) {
-        const float z = std::clamp(g_cfg.live[344][2], 0.05f, 3.0f);
+        const float z = std::clamp(g_cfg.live[344][2], kZoomMin, 3.0f);
         // El visor del editor NO reescribe su CameraImpl cada cuadro (solo con entrada del pad): multiplicar en el lugar
         // acumulaba el zoom cuadro a cuadro (fov 0.364 -> 0.092 en el log de Agustin). Se guarda el fov base del juego y
         // se escribe base x zoom; si el valor que llega no es el que escribimos, es que el juego lo cambio: nuevo base.
@@ -284,8 +296,25 @@ static void hk_SetCam(void* rt, unsigned char* cam) {
         if (s_haveOrig) { memcpy(cam + 0x10, s_orig, sizeof s_orig); Log("camara libre: camara del visor restaurada a la original"); }
         s_restore = false; s_haveOrig = false;
     }
+    // (08/11 e) cuelgue de Agustin (07:54 UTC, volcado cuelgue_20261108_0755): con la camara libre siguiendo la cara, el editor recargo
+    // al jugador (edit_idle_loop_face.gani) y el hilo de dibujo del juego quedo esperando su lista de comandos para siempre; los
+    // cierres de las 21:22 / 21:43 del 07/11 fueron en el mismo momento. Hasta saber la causa exacta: (1) la camara propia se escribe
+    // solo en el render target del visor (el primero que llega al prender), no en los que el juego arma al recargar el modelo; (2) si
+    // se sigue la cara y el dato de la cabeza se pierde (= recarga), la camara del juego pasa sin tocar hasta que la cara vuelva.
+    static void* s_rtMain = nullptr; static double s_rtMainT = 0.0;
+    if (!FreeCamActive()) s_rtMain = nullptr;
+    if (rt == s_rtMain) s_rtMainT = Now();
+    else if (s_rtMain && Now() - s_rtMainT > 1.0 && !FreeCamHeadLost()) { Log("camara libre: el visor cambio de render target (%p -> %p)", s_rtMain, rt); s_rtMain = rt; s_rtMainT = Now(); }   // el visor viejo ya no dibuja: se adopta el nuevo
+    if (cam && FreeCamActive() && s_on && s_rtMain && rt != s_rtMain) {
+        static int n = 0; if (n++ < 10) Log("camara libre: otro render target del editor (%p, el visor es %p): se deja la camara del juego", rt, s_rtMain);
+        o_setCam(rt, cam); return;
+    }
+    if (cam && FreeCamActive() && s_on && FreeCamHeadLost()) {
+        static double t = 0; if (Now() - t > 5.0) { t = Now(); Log("camara libre: sin la cara (recarga del jugador?): la camara del juego pasa sin tocar"); }
+        o_setCam(rt, cam); return;
+    }
     if (cam && FreeCamActive()) {
-        if (!s_on) { memcpy(s_orig, cam + 0x10, sizeof s_orig); s_haveOrig = true; s_restore = true; }
+        if (!s_on) { memcpy(s_orig, cam + 0x10, sizeof s_orig); s_haveOrig = true; s_restore = true; s_rtMain = rt; s_rtMainT = Now(); }
         float* pos = (float*)(cam + 0x10); float* tgt = (float*)(cam + 0x1c); float* up = (float*)(cam + 0x28); float* fov = (float*)(cam + 0x40);
         int proj; memcpy(&proj, cam + 0x3c, 4);
         float extra[3]; memcpy(&extra[0], cam + 0x34, 4); memcpy(&extra[1], cam + 0x38, 4); memcpy(&extra[2], cam + 0x44, 4);
@@ -324,6 +353,24 @@ void FreeCamPresent() {
     const int c = s_editorCalls.load() - s_c0, a = s_editorApplied.load() - s_a0;
     if (c > 0 || a > 0) Log("camara libre (30 s): camara del visor del editor %d veces (%d con la camara libre), %s", c, a, FreeCamActive() ? "prendida" : "apagada");
     s_t0 = t; s_c0 = s_editorCalls.load(); s_a0 = s_editorApplied.load();
+}
+
+// (08/11) panel en vivo (panel.cpp): poner / leer la pose de la camara libre desde la pagina. Se prende la camara libre si no
+// lo estaba (x344 = 2: el juego sigue viendo el teclado) y se sale del modo seguir la cara.
+static std::mutex s_poseMx; static bool s_poseWant = false; static float s_posePos[3]; static float s_poseYaw = 0, s_posePitch = 0;
+void FreeCamSetPose(const float* pos, float yaw, float pitch) {
+    std::lock_guard<std::mutex> lk(s_poseMx);
+    memcpy(s_posePos, pos, 12); s_poseYaw = yaw; s_posePitch = pitch; s_poseWant = true;
+    if (!FreeCamActive()) g_cfg.live[344][0] = 2.0f;
+}
+bool FreeCamGetPose(float* pos, float* yaw, float* pitch) { memcpy(pos, s_pos, 12); *yaw = s_yaw; *pitch = s_pitch; return s_on; }
+// se llama desde Update (hilo de render) despues de TakeFromGame al prender
+static void PoseApplyPending() {
+    std::lock_guard<std::mutex> lk(s_poseMx);
+    if (!s_poseWant) return;
+    s_poseWant = false; memcpy(s_pos, s_posePos, 12); s_yaw = s_poseYaw; s_pitch = std::clamp(s_posePitch, -1.55f, 1.55f);
+    if (s_follow) { s_follow = false; s_lockNode = nullptr; s_headSeen = false; }
+    Log("camara libre: pose puesta desde el panel (%.2f, %.2f, %.2f) giro %.0f / %.0f", s_pos[0], s_pos[1], s_pos[2], s_yaw * 57.2958f, s_pitch * 57.2958f);
 }
 
 } // namespace fx

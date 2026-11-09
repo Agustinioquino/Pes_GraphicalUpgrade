@@ -67,6 +67,37 @@ float3 PesSkTrans(float3 n, float3 V, float3 L, float trans) {
   return PESTransColor(tO, P34.z);
 }
 
+// (04/11 b) contraluz por GROSOR (la de las 5 grandes del sol): densidad del mapa de SSS, perfil de Jimenez, color z34, y solo la
+// piel de espaldas a la luz. Con el grosor del atlas (7dbbc) o el estimado por la forma (PesSkThickCurv, sin atlas)
+float3 PesSkTransThick(float thickM, float3 n, float3 L, float rawNdotL, float trans) {
+  float4 P64 = IniParams.Load(int2(64, 0));
+  float thin = saturate(trans * 1.6);
+  float dens = (P64.w > 0 ? P64.w : 30.0) * (1.25 - thin);
+  float3 Tt = PESTransColor(PESSkinTransmittance(thickM * dens), IniParams.Load(int2(34, 0)).z);
+  float backL = smoothstep(0.0, 0.35, dot(L, -n)) * (1.0 - saturate(rawNdotL * 3.0)) * lerp(0.35, 1.0, smoothstep(0.25, 0.75, thin));
+  return Tt * backL * P64.z * 0.8;
+}
+
+// (04/11 entrecejo) curvatura CONVEXA para el grosor de la contraluz: Agustin vio una linea dura del entrecejo por la nariz, en el
+// editor y en el partido, con la luz de atras. PesSkCurv no tiene signo y el pliegue entre la nariz y la mejilla (concavo) contaba
+// como piel fina igual que el borde de la oreja. Aca solo cuenta donde las normales se abren (dn . dP > 0). P = posicion en la vista
+// en el mismo espacio que n. Usa derivadas: llamarla FUERA de los if
+float PesSkCurvConvex(float3 n, float3 P) {
+  float3 dPx = ddx(P), dPy = ddy(P);
+  float num = dot(ddx(n), dPx) + dot(ddy(n), dPy);
+  float den = dot(dPx, dPx) + dot(dPy, dPy);
+  return saturate(0.02 * max(num, 0.0) / max(den, 1e-12));
+}
+
+// (04/11 b) grosor ESTIMADO por la forma donde no hay atlas (editor / sin pasada de sombras / jugadores lejanos): el radio de
+// curvatura (curv 1 = 2 cm) da el ancho del tejido que cruza la luz (oreja, aleta de la nariz, dedos: finos; frente, mejilla:
+// gruesos) y el mapa de SSS del juego lo afina donde la piel es delgada. Metros
+float PesSkThickCurv(float trans, float curv) {
+  float thin = saturate(trans * 1.6);
+  float r = 0.02 / max(curv, 0.15);
+  return clamp(r * lerp(1.2, 0.35, smoothstep(0.45, 0.9, thin)), 0.004, 0.08);
+}
+
 // brillo: el del juego escalado (w3), con el color del sol y el Fresnel de piel (fila 103), mas el lobulo fino GGX por zona (y5, w5)
 float3 PesSkSpec(float3 specGame, float3 n, float3 V, float3 L, float roughG, float specInt, float3 lightC, float shadow) {
   float4 P3 = IniParams.Load(int2(3,0)), P5 = IniParams.Load(int2(5,0)), Q103 = IniParams.Load(int2(103,0));

@@ -114,15 +114,20 @@ ID3D11ShaderResourceView* SSSSBeforeComposition(ID3D11DeviceContext* c) {
         c->PSSetShaderResources(0, 6, nulls);
     }
     // pasada 1: light (+ luz de prueba del editor) -> tex0, brillo -> tex2
-    ID3D11RenderTargetView* rt0[2] = { s_rtv[0], editorLight ? s_rtv[2] : nullptr }; c->OMSetRenderTargets(2, rt0, nullptr);
-    ID3D11ShaderResourceView* sv0[6] = { light, depth, mat, nrm, in[8], spec }; c->PSSetShaderResources(0, 6, sv0); { ID3D11ShaderResourceView* r6 = s_refSRV; c->PSSetShaderResources(6, 1, &r6); }   // t4 = albedo (tono de piel), t5 = brillo
-    c->PSSetShader(s_psH, nullptr, 0); c->Draw(3, 0);
+    // (08/11) sin luz de prueba del editor la pasada 1 (pes_ssss_h_ps) devuelve t9 tal cual ('return o' con x297 = 0 o con sol): una copia
+    // de toda la pantalla por cuadro al pedo. Se salta y la pasada 2 lee t9 directo (en partido ahorra una pasada completa de 1080p RGBA16F).
+    const bool preNeeded = g_cfg.live[297][0] > 0.5f && g_cfg.live[44][3] < 0.5f && g_cfg.live[255][3] > 0.5f;   // misma condicion que el shader (x297 y noSun)
+    if (preNeeded) {
+        ID3D11RenderTargetView* rt0[2] = { s_rtv[0], editorLight ? s_rtv[2] : nullptr }; c->OMSetRenderTargets(2, rt0, nullptr);
+        ID3D11ShaderResourceView* sv0[6] = { light, depth, mat, nrm, in[8], spec }; c->PSSetShaderResources(0, 6, sv0); { ID3D11ShaderResourceView* r6[2] = { s_refSRV, MouthMaskSRV() }; c->PSSetShaderResources(6, 2, r6); }   // (04/11 boca) t7 = mascara del interior de la boca   // t4 = albedo (tono de piel), t5 = brillo
+        c->PSSetShader(s_psH, nullptr, 0); c->Draw(3, 0);
+    }
     // pasada 2: disco de Burley, tex0 -> tex1
     c->PSSetShaderResources(0, 6, nulls);
     c->OMSetRenderTargets(1, &s_rtv[1], nullptr);
-    ID3D11ShaderResourceView* sv1[6] = { s_srv[0], depth, mat, nrm, in[8], nullptr }; c->PSSetShaderResources(0, 6, sv1);
+    ID3D11ShaderResourceView* sv1[6] = { preNeeded ? s_srv[0] : light, depth, mat, nrm, in[8], nullptr }; c->PSSetShaderResources(0, 6, sv1);
     c->PSSetShader(s_psV, nullptr, 0); c->Draw(3, 0);
-    c->PSSetShaderResources(0, 6, nulls); { ID3D11ShaderResourceView* n6 = nullptr; c->PSSetShaderResources(6, 1, &n6); }
+    c->PSSetShaderResources(0, 6, nulls); { ID3D11ShaderResourceView* n6[2] = {}; c->PSSetShaderResources(6, 2, n6); }
     if (editorLight) { s_specOut = s_srv[2]; s_edLightT.store(Now()); }
     // restaurar
     c->OMSetRenderTargets(8, oRT, oDS); for (auto* r : oRT) if (r) r->Release(); if (oDS) oDS->Release();
