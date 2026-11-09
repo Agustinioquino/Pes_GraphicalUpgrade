@@ -434,6 +434,28 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   if (preset == 0 && E5.x > 0.0) skyK = E5.x;   // (07/11) cielo en el manual
   if (preset == 0 && E6.z > 0.0) gndK = E6.z * 0.05 / 0.5;   // (07/11 c) rebote del suelo en el manual (0.5 = como los presets)
   shK *= shMul;
+  // (09/11, Agustin: "una opcion de timelapse para fingir que la luz pase un ciclo de dia y noche") w392 = ciclo de dia y noche
+  // (1 = 30 s, 2 = 1 min, 3 = 2 min, 4 = 5 min por vuelta). Reloj: w393 lo escribe la DLL en cada cuadro (segundos, vuelve a 0
+  // cada hora; los cuatro periodos dividen 3600, sin salto). Amanece a la derecha de la pantalla, mediodia alto y de frente,
+  // atardece a la izquierda (calido y bajo), y de noche una luna fria, baja y debil. El color, la fuerza, la luz de estudio que
+  // queda y el cielo van con la altura del sol; en el horizonte se funden sol y luna sin salto
+  int tlMode = (int)(IniParams.Load(int2(392, 0)).w + 0.5);
+  if (tlMode >= 1 && tlMode <= 4) {
+    float tlPer = tlMode == 1 ? 30.0 : (tlMode == 2 ? 60.0 : (tlMode == 3 ? 120.0 : 300.0));
+    float tlT = frac(IniParams.Load(int2(393, 0)).w / tlPer);
+    float sD = sin(6.2831853 * tlT);                      // > 0 de dia
+    float dayK = smoothstep(-0.10, 0.10, sD);
+    float sunEl = 75.0 * sD, sunAz = lerp(100.0, -100.0, saturate(tlT * 2.0));
+    float moonEl = 45.0 * max(-sD, 0.0), moonAz = lerp(100.0, -100.0, saturate(tlT * 2.0 - 1.0));
+    float sUp = saturate(sD);
+    if (dayK > 0.5) { az = sunAz; el = max(sunEl, 2.0); } else { az = moonAz; el = max(moonEl, 2.0); }
+    float tWarmDay = lerp(0.98, 0.55, smoothstep(0.0, 0.6, sUp));
+    warm  = lerp(0.12, tWarmDay, dayK);
+    inten = lerp(0.22, lerp(0.55, 1.25, smoothstep(0.0, 0.5, sUp)), dayK);
+    keep  = lerp(0.18, lerp(0.40, 0.55, sUp), dayK);
+    skyK  = lerp(0.10, 0.16, dayK); gndK = lerp(0.01, 0.05, dayK) * (0.3 + 0.7 * sUp);
+    pSpotD = 0.0; pSpotA = 0.0; g_lightWorld = false;
+  }
   bool studio = preset == 4;
   // --- referencia de intensidad: la irradiancia de estudio mas alta sobre la piel, suavizada en el tiempo (pasada 0, t6) ---
   float S = inRef.Load(int3(0, 0, 0)).x;
@@ -454,7 +476,7 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   // luz, en pocas opciones y siempre respecto de la camara (lo que se ve en pantalla): 1 de frente, 2 de costado, 3 desde atras
   // (contraluz: orejas, nariz y borde de la cara encendidos = SSS), 4 desde arriba. 0 = la del preset / los sliders
   { int qd = (int)(IniParams.Load(int2(392, 0)).z + 0.5);
-    if (qd >= 1 && qd <= 4) {
+    if (qd >= 1 && qd <= 4 && !(tlMode >= 1 && tlMode <= 4)) {
       g_lightWorld = false;
       if (qd == 1)      { az = 25.0;  el = 20.0; }
       else if (qd == 2) { az = 90.0;  el = 20.0; }
