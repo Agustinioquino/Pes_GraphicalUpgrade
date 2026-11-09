@@ -48,9 +48,9 @@ REAL_W = {True: [8.1, 6.8, 7.7, 7.1, 6.7],   # (04/11) Agustin 'reducir el taman
 PROFILE = os.environ.get('MOUTH_PROFILE', '')
 PROF = {
     '': dict(ext_up={'IC': -0.8, 'I': -0.8, 'C': -0.3}, corner_ic=(0.02, 0.08), corner_i_up=(0.04, 0.14), lat_back=0.0, canine=0.30),
-    'messi': dict(ext_up={'IC': 0.3, 'I': 0.1, 'C': -0.4}, corner_ic=(0.03, 0.06), corner_i_up=(0.03, 0.07), lat_back=0.0, canine=0.08, even=True, ext_lo=-0.3, corner_lo=(0.02, 0.04), gap_ic=0.004, gap=0.010, back_in=0.05),   # (09/11 b: incisivos CON separacion fina, Agustin 'que se note que son modelos individuales pero no una distancia irreal': gap 0.010 / centrales 0.004; muelas hacia adentro back_in) (09/11) Agustin (captura sonriendo vs foto): 'no se ve la separacion entre los dientes de arriba y abajo', 'no son lo suficientemente largos', 'estan separados los dos primeros dientes': arriba +0.5 mm vs v6, los de abajo 2.3 mm mas abajo (quedan por debajo del borde de los de arriba: se ve el hueco oscuro entre filas), centrales sin aire entre ellos
+    'messi': dict(ext_up={'IC': 0.3, 'I': -0.5, 'C': -0.1}, ext_p=-0.7, corner_ic=(0.04, 0.09), corner_i_up=(0.06, 0.14), lat_back=0.1, canine=0.22, even=False, ext_lo=-0.3, corner_lo=(0.03, 0.06), gap_ic=0.004, gap=0.010, back_in=0.05),   # (09/11 c) Agustin (foto de Messi riendo: 'mira la forma de los dientes y muelas'): arco de la sonrisa natural (centrales largos, laterales mas cortos y apenas detras, canino con punta casi al nivel de los centrales, premolares mas cortos subiendo hacia atras), esquinas redondeadas; dientes individuales con linea fina (gap 0.010 / 0.004), muelas adentro, hueco entre filas
 }[PROFILE]
-if PROFILE == 'messi': REAL_W = {True: [8.7, 7.7, 7.9, 7.1, 6.7], False: REAL_W[False]}   # (04/11 e) foto: centrales y laterales anchos   # (04/11 c) laterales anchos (comun 8.1 / 6.8)
+if PROFILE == 'messi': REAL_W = {True: [8.7, 7.0, 7.8, 7.1, 6.7], False: REAL_W[False]}   # (09/11 c) foto riendo: centrales anchos, laterales mas chicos   # (04/11 c) laterales anchos (comun 8.1 / 6.8)
 
 def fit_row(row, log=print, name=''):
     """(03/11 v19c) Agustin: 'ni todos pegados ni separados'. Entre dientes vecinos de una fila (en orden por el arco) se mide
@@ -547,7 +547,7 @@ def build(src_fmdl, texdir, log=print):
                 uvbox = ((xl0 + g2) / 512.0, (xr0 - g2) / 512.0, (gi0 + GUM * (ii0 - gi0)) / 512.0, min(ii0 / 512.0, 0.302) if up else max(ii0 / 512.0, 0.505))
             if REAL_TEETH:
                 # (03/11) curva de la sonrisa real: laterales ~0.7 mm mas cortos que los centrales, canino con la punta casi al nivel
-                ext = (0.0 if kind == 'P' else (PROF['ext_up'][kind] if up else PROF.get('ext_lo', LO_OVERBITE))) * MM
+                ext = ((PROF.get('ext_p', 0.0) if up else 0.0) if kind == 'P' else (PROF['ext_up'][kind] if up else PROF.get('ext_lo', LO_OVERBITE))) * MM   # (09/11) ext_p: premolares de arriba mas cortos (arco de la sonrisa)
             else:
                 ext = ((0.0 if kind == 'P' else (-0.2 if up else 1.0)) * MM if KONAMI_BITE else (EXT_UP if up else EXT_LO) + dext)
             Pt, UVt, Ft = tooth(M, xl / 512.0, xr / 512.0, vG, vI, kind, up, ext=ext, mes=mes, tw=(tw_row[i] if REAL_TEETH else None),
