@@ -24,6 +24,7 @@ Y_ARCH_C, Y_ARCH_P = 1.6410, 1.6340                              # borde del vel
 Z_AT = lambda y: 0.1181 + (np.clip(y, 1.6255, 1.6484) - 1.6255) / 0.0229 * 0.0020   # plano de la pared vieja
 DEEP = 19.0 * MM                                                 # pared de atras de la faringe (desde el plano del marco)
 REC = 8.0 * MM                                                   # el velo es un techo que baja hacia atras: su borde queda REC detras del paladar
+NOISE_H = float(__import__('os').environ.get('THROAT_NOISE', '0.08'))   # (09/11 e) Agustin 'no en ruido': antes 0.25
 UV_BOX = (0.107, 0.223, 0.707, 0.843)                            # u0, u1, v0, v1 en el atlas (libre)
 UVULA_BOX = (0.004, 0.026, 0.705, 0.840)                         # columna libre a la izquierda del atlas
 
@@ -216,7 +217,7 @@ def paint(gum_rgb, n_u, n_v, seed=71, edge_rgb=None):
         f = np.maximum(np.maximum(_sst(0.94, 1.0, yrel), _sst(0.94, 1.0, np.abs(xrel))), _sst(0.06, 0.0, yrel) * (1 - ap)) * 0.6
         col = col * (1 - f[..., None]) + np.asarray(edge_rgb, float) * f[..., None]
     h = (0.55 * rim - 0.30 * np.exp(-(xrel / 0.06) ** 2) * (1 - ap) * _sst(0.60, 0.75, yrel) + 0.15 * vess
-         + 0.25 * nz(1.0, seed + 4, (6.0, 2.0)) + 0.8 * foll + 0.6 * tonsil + 0.3 * band)
+         + NOISE_H * nz(1.0, seed + 4, (6.0, 2.0)) + 0.8 * foll + 0.6 * tonsil + 0.3 * band)
     rvar = 0.03 * nz(1.0, seed + 7, (4.0, 1.4))
     return np.clip(col, 0, 1), h, ap, depth, rvar
 
