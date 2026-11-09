@@ -395,6 +395,7 @@ struct Skel {
     std::vector<GaniGest> gg; unsigned ggGen = 0; uint32_t ggPid = 0; float ggW[16] = {}; float ggT = -1.0f; unsigned ggLog = 0;
     int btw = -1; float btwT0 = 0.0f, btwNext = -1.0f; int btwN = 0;
     float spP[3] = {}; float spT = -1.0f, speed = 0.0f, stillT = 0.0f; bool spHave = false;
+    bool farOff = false;   // (09/11) lejos de la camara: sin escribir el esqueleto (z391)
     float sl[16] = {}; bool slHave = false; float slT = -1.0f;   // (08/11) sliders de gestos suavizados (w395 Transicion)
     GaniPose gB = {}; bool gBHave = false; float gBT = -1.0f;                         // (08/11) clip .gani mostrado (y397: inertializacion en entrada / salida / cruce / vuelta del bucle)
     GaniPose gPrev = {}; float gPrevDt = 0.0f; Inert gI[31][6]; float gIT0 = -1.0f; int gLastClip = -1; bool gLastOn = false; float gLastF = 0.0f;
@@ -415,6 +416,7 @@ static std::atomic<unsigned> s_lastEyes{0};   // (02/11) cuadro del ultimo giro 
 static std::atomic<int> s_eyesW{0}, s_blinks{0};
 static std::atomic<int> s_lidAmpSkip{0};   // (04/11) parpados que el amplificador ya no toca
 static std::atomic<int> s_lidHeadFix{0}, s_lidHeadFixT{0};   // (04/11) parpados con la base llevada a la cabeza del cuadro
+static std::atomic<int> s_far{0};   // (09/11) pasos sin escribir por estar lejos de la camara (z391)
 static std::atomic<int> s_neckW{0};   // (08/11) huesos del cuello escritos (tension con grito / enojo / apretar, boca abierta)
 static std::atomic<int> s_baseHeadFix{0};   // (08/11) otros huesos con la parte no reescrita llevada a la cabeza del cuadro
 static std::atomic<int> s_ampW{0}, s_ampSkip{0};   // (02/11 i) huesos agrandados escritos (amplificador por huesos)   // cuadro del ultimo giro aplicado o esqueleto con mandibula visto
@@ -823,14 +825,11 @@ static bool WriteBone(Skel& S, int d, const Xf& base, const float* nq, const flo
         return true;
     }
     float out[7] = { nq[0], nq[1], nq[2], nq[3], nt[0], nt[1], nt[2] };
-    // (08/11 e, Agustin: "asegurate de que los sliders funcionen") sin paleta (expr_paleta = 0) los sliders de 'control total'
-    // (filas 421 / 422) y el tope por hueso tambien valen al escribir el esqueleto: mismas cuentas que la paleta
-    if (d < D_NECKB) {
-        // (08/11 g) con control total la base es la cara neutra de este jugador (toda la expresion, juego + mod); si no, lo que dejo el juego
-        if (g_cfg.live[350][0] > 2.5f && S.nN[d] >= 120 && S.cur[D_HEAD]) {
-            Xf hc; if (ReadXf(S.cur[D_HEAD], hc)) { float c[4], hr[4], zq[4], v[3], zt[3]; QConj(S.rest[D_HEAD].q, c); QMul(hc.q, c, hr); QRot(hr, S.nT[d], v); for (int k = 0; k < 3; k++) zt[k] = hc.t[k] + v[k]; QMul(hr, S.nQ[d], zq); ExprZoneScale(d, zq, zt, out, out + 4); }
-        } else ExprZoneScale(d, S.gq[d], S.gt[d], out, out + 4);
-    }
+    // (09/11, Agustin: "al alejar la camara todo vibra", log 06:33 con x350 = 3 y expr_paleta = 0: parpados saltando 40 grados, 26000 huesos
+    // por resumen leidos con lo del mod puesto) al escribir el ESQUELETO ya no se escala nada por zona (ExprZoneScale, filas 421 / 422): esa
+    // cuenta tomaba como base lo que dejo el juego, que en los jugadores lejanos (cara animada a menos cuadros) era lo nuestro del cuadro
+    // anterior, y lo volvia a escalar: realimentacion. El 'control total' queda solo para la paleta (expr_paleta = 1); con x350 = 3 el
+    // esqueleto se comporta como "Por huesos + parpados" (2)
     if (!SafeCopy((char*)S.cur[d] + 16, out, 28)) return false;
     Xf chk; if (ReadXf(S.cur[d], chk)) { memcpy(S.wq[d], chk.q, sizeof chk.q[0] * 4); memcpy(S.wt[d], chk.t, sizeof chk.t[0] * 3); }
     else { memcpy(S.wq[d], nq, 4 * sizeof(float)); memcpy(S.wt[d], nt, 3 * sizeof(float)); }
@@ -1334,6 +1333,21 @@ static void FrameBody(const void* skel) {
     }
     Xf jc; if (!ReadBase(*S, D_JAW, jc)) { Build(*S, skel); S->rebuilds++; return; }
     s_lastActive.store(fr, std::memory_order_relaxed);
+    // (09/11, Agustin: "no anda todo mal, solo de lejos") ALCANCE por huesos (z391, metros; 0 = sin limite): mas lejos de la camara del motor que
+    // esto el mod no escribe el esqueleto de la cara (devuelve lo escrito y sale): la cara ya no se ve a ese tamano y el juego anima a los
+    // jugadores lejanos a menos cuadros, donde cada escritura nuestra quedaba un cuadro si y otro no (vaiven)
+    {
+        const float lim = g_cfg.live[391][2];
+        if (lim > 0.5f && S->node && S->bHead) {
+            Xf bh; float w[3], cp[3], ct[3];
+            if (ReadXf(S->bHead, bh) && CharNodeToWorld(const_cast<void*>(S->node), bh.t, w, true) && EngineCamera(cp, ct, nullptr)) {
+                const float dx = w[0] - cp[0], dy = w[1] - cp[1], dz = w[2] - cp[2], dist = sqrtf(dx * dx + dy * dy + dz * dz);
+                const float on = S->farOff ? lim * 0.9f : lim * 1.1f;   // histeresis +-10 %: no se prende y apaga en el borde
+                S->farOff = dist > on;
+                if (S->farOff) { for (int d = 0; d < kND; d++) if (S->wHave[d]) Release(*S, d); s_far.fetch_add(1, std::memory_order_relaxed); return; }
+            }
+        } else S->farOff = false;
+    }
     ProfResolve(*S, fr);
     const FaceProf* PF = profOn && S->prof >= 0 && S->prof < (int)s_prof.size() ? &s_prof[S->prof] : nullptr;
     const float tNow = AnimT();
@@ -1403,7 +1417,9 @@ static void FrameBody(const void* skel) {
     //        de todos los gestos por huesos del mod (1 = como estan; 0 o sin poner = 1).   w396 reservada
     const float nVida = std::clamp(g_cfg.live[395][0], 0.0f, 1.5f), nResp = std::clamp(g_cfg.live[395][1], 0.0f, 1.5f), nEsf = std::clamp(g_cfg.live[395][2], 0.0f, 1.5f);
     const float nAsim = std::clamp(g_cfg.live[396][0], 0.0f, 1.5f), nConc = std::clamp(g_cfg.live[396][1], 0.0f, 1.5f);
-    const float nExpr = g_cfg.live[396][2] > 0.01f ? std::clamp(g_cfg.live[396][2], 0.1f, 2.0f) : 1.0f;
+    // (09/11, Agustin: "el slider de expresividad esta mal planteado"; en su ini z396 habia quedado en 0.1 y TODOS los gestos salian al 10 %:
+    // "los sliders no hacen nada") z396 ya no escala nada; queda reservada hasta definir que tiene que hacer
+    const float nExpr = 1.0f;
     float eff = 0.0f, breath = 0.0f, brAmp = 0.0f, lifeBrow = 0.0f, lifeLipX = 0.0f, lifeLipY = 0.0f, lifeNose = 0.0f, lifeLid = 0.0f;
     {
         const float dt = S->anT < 0.0f || tNow < S->anT ? 0.0f : (std::min)(tNow - S->anT, 0.5f); S->anT = tNow;
@@ -1414,7 +1430,7 @@ static void FrameBody(const void* skel) {
         const float rate = (std::min)(0.22f + 0.10f * spd, 1.0f);
         S->brPh = Frac(S->brPh + dt * rate);
         breath = 0.5f - 0.5f * cosf(S->brPh * 6.2831853f);                     // 0 exhalado .. 1 inhalado
-        brAmp = nResp * (0.45f + 0.55f * SStep(1.0f, 6.0f, spd));
+        brAmp = 0.5f * nResp * (0.45f + 0.55f * SStep(1.0f, 6.0f, spd));   // (09/11, Agustin: "la respiracion opaca a los demas") la mitad
         if (nVida > 0.001f) {
             const float ph = (float)(S->pid % 9973u) * 0.0731f;
             auto ns = [&](float f, float p) { return sinf(tNow * 6.2831853f * f + p + ph); };
@@ -1957,7 +1973,7 @@ void ExprBonesPresent() {
     if (fr - lastLog < 600) return;   // cada ~10 s
     lastLog = fr;
     std::lock_guard<std::mutex> lk(s_mx);
-    const int calls = s_calls.exchange(0), ap = s_applied.exchange(0), nj = s_noJaw.exchange(0), bw = s_badWrite.exchange(0), st = s_stale.exchange(0), ew = s_eyesW.exchange(0), bl = s_blinks.exchange(0), aw = s_ampW.exchange(0), ask = s_ampSkip.exchange(0), lsk = s_lidAmpSkip.exchange(0), lhf = s_lidHeadFix.exchange(0), lhft = s_lidHeadFixT.exchange(0), bhf = s_baseHeadFix.exchange(0), nkw = s_neckW.exchange(0);
+    const int calls = s_calls.exchange(0), ap = s_applied.exchange(0), nj = s_noJaw.exchange(0), bw = s_badWrite.exchange(0), st = s_stale.exchange(0), ew = s_eyesW.exchange(0), bl = s_blinks.exchange(0), aw = s_ampW.exchange(0), ask = s_ampSkip.exchange(0), lsk = s_lidAmpSkip.exchange(0), lhf = s_lidHeadFix.exchange(0), lhft = s_lidHeadFixT.exchange(0), bhf = s_baseHeadFix.exchange(0), nkw = s_neckW.exchange(0), farN = s_far.exchange(0);
     if (!calls) return;
     int reusedAll = 0; for (int i = 0; i < s_nSk; i++) { reusedAll += s_sk[i].reused; s_sk[i].reused = 0; }
     static int dumped = 0;
@@ -1967,6 +1983,7 @@ void ExprBonesPresent() {
         k += snprintf(l + k, sizeof l - k, " [parpados sin agrandar %d, llevados a la cabeza %d giro / %d posicion]", lsk, lhf, lhft);
         k += snprintf(l + k, sizeof l - k, " [otros huesos llevados a la cabeza %d]", bhf);
         k += snprintf(l + k, sizeof l - k, " [cuello %d]", nkw);
+        if (farN) k += snprintf(l + k, sizeof l - k, " [lejos de la camara sin escribir %d]", farN);
         for (int i = 0; i < s_nSk && k < (int)sizeof l - 120; i++) {
             Skel& S = s_sk[i];
             if (fr - S.lastFrame > 600) continue;
