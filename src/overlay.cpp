@@ -1340,6 +1340,7 @@ static void DrawSectionExtras(const std::string& sname) {
                     if (DebugIsOn(d, v)) ImGui::TextColored(ImVec4(0.95f, 0.80f, 0.35f, 1), TRS("prendida: %s (%c%d = %g)"), TRS(d.name), "xyzw"[d.comp], d.idx, v); }
                 if (ImGui::Button(IcoL(kIcoX, TRS("Apagar todo el debug")).c_str())) DebugAllOff();
             } else ImGui::TextColored(ImVec4(0.45f, 0.88f, 0.55f, 1), "%s", TRS("Ninguna vista de depuracion prendida"));
+            { bool sk = g_cfg.live[392][1] > 0.5f; if (ImGui::Checkbox(TRS("Ver el esqueleto (huesos en escena)"), &sk)) g_cfg.live[392][1] = sk ? 1.0f : 0.0f; }   // (09/11 f)
             ImGui::Spacing();
         }
         if (s_fontBold) ImGui::PushFont(s_fontBold);
@@ -2071,6 +2072,76 @@ static void DrawSunCompass() {
     dl->AddText(tp, IM_COL32(255, 240, 200, 255), buf);
 }
 
+
+// (09/11 f, Agustin: "agregar en diagnostico una vista del esqueleto, los huesos en escena, solo eso") y392 = 1: cada personaje cercano con
+// sus esqueletos (cuerpo blanco, manos celeste, cara amarillo): un punto por hueso y una linea a su padre. Solo lee la memoria del juego
+// (transformacion actual del hueso + 0x18, padre + 0x20; nodo + 0x88 cuerpo, + 0x90 / + 0x98 manos, + 0xA0 cara) y la proyecta con
+// m_projectionView de la escena. No escribe nada; nunca se guarda prendida (kDebugParams).
+static bool SkReadable(const void* p, size_t n) {
+    if (!p || (uintptr_t)p < 0x10000 || (uintptr_t)p > 0x00007fffffffffffull) return false;
+    MEMORY_BASIC_INFORMATION mi{};
+    if (!VirtualQuery(p, &mi, sizeof mi) || mi.State != MEM_COMMIT || (mi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) return false;
+    if (!(mi.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_WRITECOPY))) return false;
+    return (uintptr_t)p + n <= (uintptr_t)mi.BaseAddress + mi.RegionSize;
+}
+static bool SkCopy(void* dst, const void* src, size_t n) {
+    if (!SkReadable(src, n)) return false;
+    __try { memcpy(dst, src, n); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+static void DrawSkeletonView() {
+    std::vector<float> S; if (!NamedCBRead("SceneCB", S) || S.size() < 16) return;
+    const float* PV = &S[0];   // m_projectionView (mundo -> recorte), como headshadow.cpp
+    static CharInfo ci[kCharSlots]; static bool alive[kCharSlots];
+    CharSnapshot(ci, alive);
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    auto toScreen = [&](const float w[3], ImVec2& o) {
+        float c[4]; for (int j = 0; j < 4; j++) c[j] = PV[4 * j] * w[0] + PV[4 * j + 1] * w[1] + PV[4 * j + 2] * w[2] + PV[4 * j + 3];
+        if (c[3] <= 0.05f) return false;
+        const float nx = c[0] / c[3], ny = c[1] / c[3];
+        if (fabsf(nx) > 1.5f || fabsf(ny) > 1.5f) return false;
+        o = ImVec2(vp->Pos.x + (nx * 0.5f + 0.5f) * vp->Size.x, vp->Pos.y + (0.5f - 0.5f * ny) * vp->Size.y); return true;
+    };
+    static const int kOff[4] = { 0x88, 0x90, 0x98, 0xA0 };
+    static const ImU32 kCol[4] = { IM_COL32(255, 255, 255, 220), IM_COL32(90, 210, 255, 220), IM_COL32(90, 210, 255, 220), IM_COL32(255, 210, 60, 230) };
+    int drawn = 0, bones = 0;
+    for (int sl = 0; sl < kCharSlots && drawn < 24; sl++) {
+        if (!alive[sl] || !ci[sl].node) continue;
+        float W[12]; if (!CharNodeMatrix(ci[sl].node, W)) continue;
+        for (int r = 0; r < 4; r++) {
+            void* rig = nullptr; if (!SkCopy(&rig, (const char*)ci[sl].node + kOff[r], 8) || !rig) continue;
+            const char* arr = nullptr; int n = 0;
+            if (!SkCopy(&arr, (const char*)rig + 0x28, 8) || !arr || !SkCopy(&n, (const char*)rig + 0x30, 4) || n < 2 || n > 400) continue;
+            static ImVec2 pt[400]; static bool ok[400];
+            for (int b = 0; b < n; b++) {
+                ok[b] = false;
+                const char* bone = arr + (size_t)b * 0xc0; const void* cur = nullptr; float x[12];
+                if (!SkCopy(&cur, bone + 0x18, 8) || !cur || !SkCopy(x, cur, sizeof x)) continue;
+                const float* t = &x[8]; if (!(fabsf(t[0]) < 3.0f && fabsf(t[1]) < 3.0f && fabsf(t[2]) < 3.0f)) continue;
+                float w[3]; for (int k = 0; k < 3; k++) w[k] = W[4 * k] * t[0] + W[4 * k + 1] * t[1] + W[4 * k + 2] * t[2] + W[4 * k + 3];
+                ok[b] = toScreen(w, pt[b]);
+            }
+            for (int b = 0; b < n; b++) {
+                if (!ok[b]) continue; bones++;
+                const char* bone = arr + (size_t)b * 0xc0; uint64_t pv = 0; int par = -1;
+                if (SkCopy(&pv, bone + 0x20, 8)) {
+                    if (pv < (uint64_t)n) par = (int)pv;
+                    else if (pv >= (uint64_t)(uintptr_t)arr && pv < (uint64_t)(uintptr_t)(arr + (size_t)n * 0xc0) && ((pv - (uint64_t)(uintptr_t)arr) % 0xc0) == 0) par = (int)((pv - (uint64_t)(uintptr_t)arr) / 0xc0);
+                    else { int32_t pi = (int32_t)(pv & 0xffffffffu); if (pi >= 0 && pi < n) par = pi; }
+                }
+                if (par >= 0 && par != b && ok[par]) dl->AddLine(pt[par], pt[b], kCol[r], r == 3 ? 1.0f : 1.5f);
+                dl->AddCircleFilled(pt[b], r == 3 ? 1.8f : 2.5f, kCol[r], 8);
+            }
+        }
+        drawn++;
+    }
+    char buf[120]; snprintf(buf, sizeof buf, TRS("Esqueleto: %d personajes, %d huesos (blanco cuerpo, celeste manos, amarillo cara)"), drawn, bones);
+    ImVec2 tp(vp->Pos.x + 16, vp->Pos.y + vp->Size.y - 34);
+    ImVec2 ts = ImGui::CalcTextSize(buf);
+    dl->AddRectFilled(ImVec2(tp.x - 6, tp.y - 3), ImVec2(tp.x + ts.x + 6, tp.y + ts.y + 3), IM_COL32(0, 0, 0, 150), 4.0f);
+    dl->AddText(tp, IM_COL32(255, 240, 200, 255), buf);
+}
+
 void OverlayPresent(IDXGISwapChain* sc) {
     if (!g_dev.dev || !g_cfg.optOverlay) return;
     if (!s_init) Init(sc);
@@ -2123,6 +2194,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
     if (camHud) DrawCamaraHud(camFree, camSlow);
     if (lightIcons) DrawEditorLightIcons();
     if (sunCompass && !g_menuOpen) DrawSunCompass();
+    if (g_cfg.live[392][1] > 0.5f) DrawSkeletonView();   // (09/11 f) vista del esqueleto (Diagnostico)
     InspectDrawOverlay();
     // (31/10) teclas del juego: con 1 se bloquean solo mientras hay un campo de texto activo (buscador, nombres de presets)
     g_menuTyping = g_menuOpen && ImGui::GetIO().WantTextInput;
