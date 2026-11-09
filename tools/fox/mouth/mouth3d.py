@@ -748,6 +748,7 @@ def build(src_fmdl, texdir, log=print):
     # de adelante de abajo SUBEN enteros (rigidos, por el centro del diente) y la encia de la tira de abajo sube con ellos, asi el
     # alto de la corona y el margen de la encia quedan iguales. Pleno en los centrales, se apaga hacia el canino (que ya cruzaba).
     LIFT = float(os.environ.get('LO_LIFT', PROF.get('lift_lo', 0.0))) * MM
+    LO_FWD = (float(os.environ.get('LO_FWD_BASE', '1.2')), float(os.environ.get('LO_FWD_TIP', '0.5')))
     GUM_LIFT = float(os.environ.get('GUM_LIFT', '0.2'))   # (09/11 l) como Konami: dientes de abajo altos, poca encia a la vista
     if LIFT > 0:
         def lift_w(x):
@@ -760,6 +761,12 @@ def build(src_fmdl, texdir, log=print):
                 y0, y1 = Pp[:, 1].min(), Pp[:, 1].max()
                 s_ = np.clip((Pp[:, 1] - y0) / max(y1 - y0, 1e-6), 0, 1)
                 Pp[:, 1] += LIFT * lift_w(Pp[:, 0].mean()) * (GUM_LIFT + (1 - GUM_LIFT) * s_); nl += 1
+                # (09/11 l) Agustin 'no me gusta la profundidad': los de abajo quedaban 2-3 mm metidos detras del frente de la encia
+                # (en Konami el diente y la encia son una sola superficie). Salen hacia afuera del arco, mas en la base (menos
+                # volcados hacia la lengua) y algo menos en el borde (no tocan la cara de atras de los de arriba)
+                cxz = Pp[:, [0, 2]].mean(0); dv = np.array([cxz[0], 0.0, cxz[1] - 0.120]); dv /= max(np.linalg.norm(dv), 1e-9)
+                wz = np.exp(-(abs(cxz[0]) / (14.0 * MM)) ** 2)
+                Pp += np.outer((LO_FWD[0] * (1 - s_) + LO_FWD[1] * s_) * wz * MM, dv)
             elif tg == 'tira' and Wp[:, jaw].mean() > 0.5:
                 # toda la encia sube, pero se apaga hacia el BORDE de la tira (donde se une al piso de la boca y al labio): a 0 en
                 # el borde y entero a 4 mm de el, asi no se abre ningun hueco ni se estira un pico
