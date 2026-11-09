@@ -678,7 +678,7 @@ def wet_tissue(bsm, srm, log=print):
 
 DETAIL = float(os.environ.get('MAP_DETAIL', '1.0'))   # (04/11 c) 0 = como v18
 GEO_ANAT = float(os.environ.get('MOUTH_ANAT', '1.0'))   # (09/11 f) = MOUTH_ANAT del modelo: la forma grande esta en la malla
-TOOTH_N = float(os.environ.get('TOOTH_N', '1.1'))   # (09/11 e) fuerza del normal anatomico horneado de los dientes (0 = como v29)
+TOOTH_N = float(os.environ.get('TOOTH_N', '1.21'))   # (09/11 e) fuerza del normal anatomico horneado de los dientes (0 = como v29)
 _ANAT = {}
 def tooth_anatomy(N, log=print):
     """(09/11 e) Agustin: 'la diferencia con un modelo profesional es como estan modelados los detalles de los dientes y su
