@@ -119,8 +119,14 @@ void main(
   float mEnamelT = 0, mGumLine = 0, mLipShadow = 0;
   // (19/10 c) boca v3: x98 lengua (humedad/color), y98 sombra entre dientes, z98 oscurecimiento hacia la garganta, w98 saliva
   float4 Q98 = IniParams.Load(int2(98,0));
-  float mTongueZ = smoothstep(0.64, 0.68, v2.y) * smoothstep(0.52, 0.48, v2.x);   // lengua: abajo-izquierda del atlas
-  float mThroatZ = smoothstep(0.64, 0.68, v2.y) * smoothstep(0.48, 0.52, v2.x);   // garganta / paladar: abajo-derecha
+  // (09/11, Agustin: "sobre la lengua se ve un error en la mitad, creo que es de oclusion") las zonas de lengua y garganta venian
+  // del atlas de Konami de 512 (19/10: lengua a la izquierda de u 0.5, garganta a la derecha), pero en la boca v20 la LENGUA
+  // ocupa u 0.27..0.74 (centrada en u 0.503, el surco del medio) y la garganta / paladar es otra caja, u 0.75..0.97, v 0.72..0.97
+  // (medidas de tools/fox/mouth/make_oral.py, las mismas con que se hicieron las texturas). Con el corte en u 0.5 la mitad
+  // derecha de la lengua contaba como garganta: otra oclusion, sin reflejo y sin el alivio del sol (w388) -> una linea justo
+  // en el medio de la lengua. Ahora cada zona es su caja real
+  float mTongueZ = smoothstep(0.27, 0.31, v2.x) * smoothstep(0.74, 0.70, v2.x) * smoothstep(0.64, 0.68, v2.y);   // lengua
+  float mThroatZ = smoothstep(0.75, 0.78, v2.x) * smoothstep(0.97, 0.94, v2.x) * smoothstep(0.72, 0.75, v2.y) * smoothstep(0.97, 0.94, v2.y);   // garganta / paladar
   float mRows = saturate(mUpper + mLower);
   uint4 bitmask, uiDest;
   float4 fDest;
