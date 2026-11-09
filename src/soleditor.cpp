@@ -175,7 +175,9 @@ bool SolEditorSet(const float dirHaciaSol[3], const float rgb[3], float kelvin, 
         std::lock_guard<std::mutex> lk(s_mx);
         Pending p{}; for (int i = 0; i < 3; i++) { p.dir[i] = dirHaciaSol[i] / l; p.rgb[i] = rgb[i]; }
         p.kelvin = kelvin; p.lux = (std::max)(lux, 0.0f); p.on = on;
-        if (!s_hasPend || memcmp(&p, &s_pend, sizeof p) != 0) { s_pend = p; s_hasPend = true; s_pendT = Now(); }
+        // (09/11 e) la edad cuenta desde el PRIMER cambio sin aplicar: con el ciclo de dia y noche el sol cambia cada cuadro y antes
+        // la edad volvia a 0 en cada cuadro, asi que Present nunca lo aplicaba mientras se movia (sol trabado / a los saltos)
+        if (!s_hasPend || memcmp(&p, &s_pend, sizeof p) != 0) { if (!s_hasPend) s_pendT = Now(); s_pend = p; s_hasPend = true; }
     }
     return SolEditorBody() != nullptr;
 }
@@ -187,10 +189,10 @@ void SolEditorPresent() {
     if (s_bodyOk) {
         double t0 = 0; bool pend = PendingAge(&t0);
         void* b = SolEditorBody();
-        if (pend && b && Now() - t0 > 0.25) {
+        if (pend && b && Now() - t0 > 0.03) {   // (09/11 e) 0.25 s -> 0.03 s: el sol se mueve cuadro a cuadro sin escalones
             WritePending(b);
             CallApply(b);
-            if (s_forced.fetch_add(1) == 0 && LogOn()) Log("sol_editor: el motor no aplico en 0.25 s: se aplica desde Present (hilo %lu)", GetCurrentThreadId());
+            if (s_forced.fetch_add(1) == 0 && LogOn()) Log("sol_editor: el motor no aplico en 0.03 s: se aplica desde Present (hilo %lu)", GetCurrentThreadId());
         }
     }
     if (!LogOn()) return;

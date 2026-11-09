@@ -391,11 +391,26 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   o.c = float4(c0, 1); o.s = float4(s0, 1);
   float4 E = IniParams.Load(int2(297, 0)), E2 = IniParams.Load(int2(298, 0)), E3 = IniParams.Load(int2(319, 0));
   bool noSun = IniParams.Load(int2(44, 0)).w < 0.5 && IniParams.Load(int2(255, 0)).w > 0.5;
-  if (E.x < 0.5 || !noSun) return o;
+  if (E.x < 0.5) return o;
   // (09/11 d, Agustin: "el sol cercano tiene que ser un sol real del juego") z393 = 1: la DLL prendio el sol real del motor en el
   // editor (zfx_SolEditor, w378 / w392): lo dibuja la pasada del sol del partido con sus cascadas; aca no se imita ni se baja la
   // luz de estudio (c0 ya trae ese sol)
-  if (IniParams.Load(int2(393, 0)).z > 0.5) return o;
+  // (09/11 e, Agustin: "le falta el ambiente") con el ciclo de dia y noche (z393 = 2 + seno de la altura del sol) el ambiente va
+  // con la hora sobre TODA la luz (estudio + sol real): de noche baja a un tercio y se enfria (luna / cielo nocturno), en el
+  // amanecer y el atardecer se entibia. De dia queda tal cual: el sol real ya hace el contraste
+  { float zR = IniParams.Load(int2(393, 0)).z;
+    if (zR > 0.5) {
+      if (zR > 1.5) {
+        float sE = zR - 2.0;
+        float nightK = smoothstep(0.06, -0.20, sE);
+        float duskK = (1.0 - nightK) * (1.0 - smoothstep(0.04, 0.40, sE));
+        float3 amb = lerp(1.0.xxx, float3(1.10, 0.90, 0.72), duskK);
+        amb = lerp(amb, float3(0.26, 0.31, 0.45), nightK);
+        o.c = float4(c0 * amb, 1); o.s = float4(s0 * dot(amb, float3(0.3, 0.5, 0.2)), 1);
+      }
+      return o;
+    } }
+  if (!noSun) return o;
   float zC = LinZ(uv);
   float zSgn = zC < 0.0 ? -1.0 : 1.0, zA = abs(zC);
   float4 E4 = IniParams.Load(int2(377, 0)), E5 = IniParams.Load(int2(378, 0));
