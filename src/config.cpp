@@ -546,7 +546,7 @@ static const DebugParam kDebugParams[] = {
     { 380, 3, 0.5f, 0.0f, "Vista de prueba de la luz del editor", "Editor", kV380, 5 },
     { 393, 0, 0.5f, 0.0f, "Pasto del mod bajo el jugador (editor, experimento)", "Editor", kV1, 1 },
     { 392, 0, 0.5f, 0.0f, "Menus del juego ocultos (vista completa del editor)", "Editor", kV1, 1 },
-    { 392, 1, 0.5f, 0.0f, "Esqueleto: huesos en escena", "Diagnostico", kV1, 1 },   // (09/11 f) overlay.cpp DrawSkeletonView
+    { 426, 0, 0.5f, 0.0f, "Esqueleto: huesos en escena", "Diagnostico", kV1, 1 },   // (09/11 f) overlay.cpp DrawSkeletonView
     { 18, 2, 0.5f, 0.0f, "Zonas de la boca (dientes / encia / cavidad)", "Boca", kV1, 1 },
     { 27, 2, 0.5f, 0.0f, "Transpiracion: zonas / UV", "Piel", kV27, 2 },
     { 80, 0, 0.5f, 0.0f, "Arrugas de la ropa: compresion", "Ropa", kV1, 1 },

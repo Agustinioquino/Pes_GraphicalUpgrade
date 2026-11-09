@@ -1340,7 +1340,7 @@ static void DrawSectionExtras(const std::string& sname) {
                     if (DebugIsOn(d, v)) ImGui::TextColored(ImVec4(0.95f, 0.80f, 0.35f, 1), TRS("prendida: %s (%c%d = %g)"), TRS(d.name), "xyzw"[d.comp], d.idx, v); }
                 if (ImGui::Button(IcoL(kIcoX, TRS("Apagar todo el debug")).c_str())) DebugAllOff();
             } else ImGui::TextColored(ImVec4(0.45f, 0.88f, 0.55f, 1), "%s", TRS("Ninguna vista de depuracion prendida"));
-            { bool sk = g_cfg.live[392][1] > 0.5f; if (ImGui::Checkbox(TRS("Ver el esqueleto (huesos en escena)"), &sk)) g_cfg.live[392][1] = sk ? 1.0f : 0.0f; }   // (09/11 f)
+            { bool sk = g_cfg.live[426][0] > 0.5f; if (ImGui::Checkbox(TRS("Ver el esqueleto (huesos en escena)"), &sk)) g_cfg.live[426][0] = sk ? 1.0f : 0.0f; }   // (09/11 f)
             ImGui::Spacing();
         }
         if (s_fontBold) ImGui::PushFont(s_fontBold);
@@ -2194,7 +2194,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
     if (camHud) DrawCamaraHud(camFree, camSlow);
     if (lightIcons) DrawEditorLightIcons();
     if (sunCompass && !g_menuOpen) DrawSunCompass();
-    if (g_cfg.live[392][1] > 0.5f) DrawSkeletonView();   // (09/11 f) vista del esqueleto (Diagnostico)
+    if (g_cfg.live[426][0] > 0.5f) DrawSkeletonView();   // (09/11 f) vista del esqueleto (Diagnostico)
     InspectDrawOverlay();
     // (31/10) teclas del juego: con 1 se bloquean solo mientras hay un campo de texto activo (buscador, nombres de presets)
     g_menuTyping = g_menuOpen && ImGui::GetIO().WantTextInput;
