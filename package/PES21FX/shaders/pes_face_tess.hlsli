@@ -717,6 +717,20 @@ PesTessVS main(PesTessConst k, float3 b : SV_DomainLocation, const OutputPatch<P
   // (08/11 k) x360 = 2: VISTA DE PRUEBA del cuerpo (colores en el PS de la piel, sin inflar)
   { float x360 = IniParams.Load(int2(360, 0)).x;
     if (x360 > 0.5 && x360 < 1.5) d += normalize(b.x * N0 + b.y * N1 + b.z * N2) * (0.01 * min(seam, seamR)); }
+#if !PES_TESS_BODY
+  // (09/11, Agustin: "el recuadro de la boca transparente sigue pasando", "se nota que el modelo mouth se renderiza con transparencia
+  // por encima") la boca 3D (mejillas por dentro, encias, tira de la encia) esta apenas DETRAS de la piel de la cara sin teselar. El
+  // redondeo de Phong/PN (los pliegues de la comisura y el surco nasogeniano son concavos: el redondeo los hunde, hasta w364 mm) y la
+  // altura HD (fila 423, que solo se apagaba en un ovalo chico) metian la piel hacia adentro y la boca quedaba por DELANTE: un recuadro
+  // con el borde recto de la malla de la boca, piel clara y sin barba. En la caja donde dibuja la boca 3D (reposo |x| < 5.4 cm,
+  // y 1.6285 +- 2.6 cm, delante de z 0.09) el desplazamiento total nunca va hacia adentro; hacia afuera sigue igual. La boca no cambia.
+  { float3 r0b = PES_LERP3(pR).xyz;
+    float boxK = max(smoothstep(0.054, 0.064, abs(r0b.x)), smoothstep(0.026, 0.034, abs(r0b.y - 1.6285)));
+    if (r0b.z < 0.09) boxK = 1.0;
+    float3 Nb = normalize(b.x * N0 + b.y * N1 + b.z * N2);
+    float dn = dot(d, Nb);
+    if (dn < 0.0) d -= Nb * (dn * (1.0 - boxK)); }
+#endif
   float3 pv = pl + d;
 
 #if PES_TESS_ATLAS
