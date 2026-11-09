@@ -29,6 +29,30 @@ void SolLuzPresent() {
     const bool nearSun = g_cfg.live[378][3] > 0.5f;
     const int tl = (int)(g_cfg.live[392][3] + 0.5f);
     const bool tlOn = tl >= 1 && tl <= 4;
+    // (09/11 i, Agustin: "le falta el ambiente") con la TppAtmosphere en el EditFace (soleditor: SolEditorAtmo / SolEditorSetHora) el
+    // ciclo de dia y noche es el del PARTIDO: el motor mueve sol, luna, luz de cielo y exposicion con la hora. Sin atmosfera (archivo
+    // viejo: SolEditorAtmo devuelve false) queda la orbita propia con zfx_SolEditor (abajo)
+    static bool s_atmoOn = false, s_horaSet = false, s_atmoMissLogged = false;
+    static double s_h0 = 0; static bool s_hWas = false;
+    if (test && tlOn && !nearSun) {
+        if (!s_hWas) s_h0 = Now();
+        s_hWas = true;
+        if (SolEditorAtmo(true)) {
+            const float per = tl == 1 ? 30.0f : tl == 2 ? 60.0f : tl == 3 ? 120.0f : 300.0f;
+            double t = (Now() - s_h0) / per; t -= floor(t);
+            const float h = (float)fmod(6.0 + 24.0 * t, 24.0);   // arranca al amanecer
+            SolEditorSetHora(h); s_horaSet = true;
+            if (!s_atmoOn) Log("sol real del editor: ciclo de dia y noche con la atmosfera del motor (vuelta de %.0f s)", per);
+            s_atmoOn = true;
+            if (s_on) { const float d0[3] = { 0, 1, 0 }, c0[3] = { 1, 1, 1 }; SolEditorSet(d0, c0, 5600.0f, 0.0f, false); s_on = false; }   // un solo sol
+            g_solRealActivo = 1.0f;
+            static double s_tl2 = 0; if (Now() - s_tl2 > 10.0) { s_tl2 = Now(); Log("sol real del editor (10 s): hora %.2f (atmosfera)", h); }
+            return;
+        }
+        if (!s_atmoMissLogged) { s_atmoMissLogged = true; Log("sol real del editor: sin atmosfera en el EditFace: ciclo con zfx_SolEditor"); }
+    } else s_hWas = false;
+    if (s_atmoOn) { SolEditorAtmo(false); s_atmoOn = false; }
+    if (s_horaSet) { SolEditorHoraLibre(); s_horaSet = false; }
     const bool want = test && (nearSun || tlOn) && SolEditorBody() != nullptr;
     if (!want) {
         if (s_on) { const float d[3] = { 0, 1, 0 }, c[3] = { 1, 1, 1 }; SolEditorSet(d, c, 5600.0f, 0.0f, false); s_on = false; Log("sol real del editor: apagado"); }
