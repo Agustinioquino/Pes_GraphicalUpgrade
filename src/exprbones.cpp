@@ -224,8 +224,8 @@ static const PoseOff kPose[] = {
     {  2, { 0, 0, 0 },                   { -0.0010f, -0.0004f, 0 },        { 0, 0, 0 } },                    // lip_b_r
     {  5, {  0.0004f, -0.0022f, 0 },     {  0.0030f,  0.0022f, -0.0010f }, { -0.0015f, 0, 0.0005f } },       // lip_s_l: comisura
     {  6, { -0.0004f, -0.0022f, 0 },     { -0.0030f,  0.0022f, -0.0010f }, {  0.0015f, 0, 0.0005f } },       // lip_s_r
-    {  7, { 0, -0.0006f, 0 },            {  0.0010f,  0.0015f, 0 },        { 0, 0, 0 } },                    // cheek_s_l
-    {  8, { 0, -0.0006f, 0 },            { -0.0010f,  0.0015f, 0 },        { 0, 0, 0 } },                    // cheek_s_r
+    {  7, { 0, -0.0006f, 0 },            {  0.0010f,  0.0015f, 0.0008f },        { 0, 0, 0 } },                    // cheek_s_l
+    {  8, { 0, -0.0006f, 0 },            { -0.0010f,  0.0015f, 0.0008f },        { 0, 0, 0 } },                    // cheek_s_r
     {  9, { 0,  0.0010f, 0 },            {  0.0004f,  0.0008f, 0 },        { 0, 0, 0 } },                    // lip_t_l
     { 10, { 0,  0.0008f, 0 },            { 0, 0.0004f, 0 },                { 0, 0, 0 } },                    // lip_t_c
     { 11, { 0,  0.0010f, 0 },            { -0.0004f,  0.0008f, 0 },        { 0, 0, 0 } },                    // lip_t_r
@@ -1139,7 +1139,9 @@ static void Secondary(Skel& S, const float* hr, float sm, float open) {
         { 16,  0.0004f, 0.0012f, -0.0008f, 2 }, { 17, -0.0004f, 0.0012f, -0.0008f, 2 },
         // (04/11, Agustin: "le falta mas naturalidad a la sonrisa") sonrisa de verdad (Duchenne): con el slider Sonrisa (355.y,
         // fijo, no medido: no titila) el pomulo sube mas y el bajo-ojo (orbicularisoculi_b) sube y se adelanta = ojo achinado
-        { 18,  0.0008f, 0.0022f, 0.0008f, 3 }, { 19, -0.0008f, 0.0022f, 0.0008f, 3 },
+        // (09/11 b, Agustin con foto real: "esa naturalidad ... en las mejillas") el pomulo sube y se redondea hacia adelante (manzana de
+        // la mejilla) y la mejilla de abajo (cheek_s, kPose) acompana adelante: el pliegue con el surco queda marcado por volumen
+        { 18,  0.0008f, 0.0026f, 0.0016f, 3 }, { 19, -0.0008f, 0.0026f, 0.0016f, 3 },
         { 20,  0.0002f, 0.0009f, 0.0004f, 3 }, { 21, -0.0002f, 0.0009f, 0.0004f, 3 },   // (07/11) bajo-ojo 1.6 -> 0.9 mm: menos achinado
         // (04/11) los demas gestos tambien mueven pomulos y bajo-ojo: k 4 enojo (ojo apretado, pomulo tenso), 5 asombro (ojo abierto,
         // pomulo abajo), 6 grito (como una sonrisa fuerte), 7 puchero (pomulo abajo, bajo-ojo un poco arriba: cara triste)
