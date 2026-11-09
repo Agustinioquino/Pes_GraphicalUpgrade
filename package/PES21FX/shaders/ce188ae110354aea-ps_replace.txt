@@ -341,9 +341,9 @@ void main(
     { float4 G5a = IniParams.Load(int2(355, 0)), G6a = IniParams.Load(int2(356, 0));
       float sS = saturate(G5a.y), sS2 = saturate(G5a.y - 1.0), sA = saturate(G5a.x), sU = saturate(G5a.z), sG = saturate(G6a.x);
       // con arrugas horneadas propias (Messi) las del juego en la sonrisa a la mitad: mandan las suyas
-      { uint shTw0 = 0, shTh0 = 0; pesShapeWr.GetDimensions(shTw0, shTh0); if (G6a.w > 0.5 && shTw0 > 1) { sS *= 0.5; sS2 *= 0.5; } }
-      wTop = max(wTop, float4(0.55 * sU + 0.50 * sG, 0.35 * sU, 0.70 * sA + 0.50 * sG, 0.50 * sS + 0.30 * sS2 + 0.30 * sG));
-      wBot.x = max(wBot.x, 0.65 * sS + 0.25 * sS2 + 0.50 * sG); }
+      { uint shTw0 = 0, shTh0 = 0; pesShapeWr.GetDimensions(shTw0, shTh0); if (G6a.w > 0.5 && shTw0 > 1) { sS *= 0.75; sS2 *= 0.75; } }
+      wTop = max(wTop, float4(0.75 * sU + 0.60 * sG, 0.45 * sU, 0.85 * sA + 0.60 * sG, 0.70 * sS + 0.30 * sS2 + 0.40 * sG));   // (09/11 c) mas notorias
+      wBot.x = max(wBot.x, 0.85 * sS + 0.15 * sS2 + 0.60 * sG); }
     // sonrisa real: boca y ojos activos a la vez -> mas patas de gallo
     float smile = sqrt(saturate(max(g_psMaterial.m_materials[0].y, g_psMaterial.m_materials[4].x)) * saturate(wTop.w));
     wTop *= float4(wrZone.x, wrZone.x, wrZone.y, wrZone.z * (1.0 + wrSmile * smile));
@@ -445,7 +445,7 @@ void main(
   // con "Perfiles por cara" (356.w). Solo la enlaza la DLL en las mallas con formas (sin textura: tamano 0 -> nada)
   { float4 G5w = IniParams.Load(int2(355, 0)), G6w = IniParams.Load(int2(356, 0));
     // (09/11 b, Agustin: "ten mas en cuenta ... las arrugas que bakeaste") las arrugas horneadas de su sonrisa 60 % mas marcadas
-    float shW = G6w.w > 0.5 ? saturate(G5w.y) * 1.6 : 0.0;
+    float shW = G6w.w > 0.5 ? saturate(G5w.y) * 2.0 : 0.0;   // (09/11 c, Agustin: "las arrugas son poco notorias") 1.6 -> 2.0
     uint shTw = 0, shTh = 0; pesShapeWr.GetDimensions(shTw, shTh);
     if (shW > 0.001 && shTw > 1) {
       // (04/11 c) RG = arrugas de la sonrisa, BA = las de la sonrisa grande (messi6 de Agustin): de 1 a 1.5 pasa a las grandes
