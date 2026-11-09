@@ -47,7 +47,7 @@ REAL_W = {True: [8.1, 6.8, 7.7, 7.1, 6.7],   # (04/11) Agustin 'reducir el taman
 # caninos con punta; abajo igual que la comun (casi no se ve)
 PROFILE = os.environ.get('MOUTH_PROFILE', '')
 PROF = {
-    '': dict(ext_up={'IC': -0.8, 'I': -0.8, 'C': -0.3}, corner_ic=(0.02, 0.08), corner_i_up=(0.04, 0.14), lat_back=0.0, canine=0.30),
+    '': dict(ext_up={'IC': -0.5, 'I': -1.1, 'C': -0.5}, ext_p=-0.6, corner_ic=(0.04, 0.09), corner_i_up=(0.06, 0.14), lat_back=0.1, canine=0.26, ext_lo=0.8, corner_lo=(0.03, 0.06), gap_ic=0.006, gap=0.012, back_in=0.05, asym=(0.25, 0.12, 0.8, 0.10)),   # (09/11 d) Agustin 'mejora la boca generica tambien': lo aprendido con Messi (arco de la sonrisa, esquinas redondeadas, linea fina entre dientes, muelas adentro, filas que se separan al sonreir, asimetria) con dientes comunes
     'messi': dict(ext_up={'IC': 0.3, 'I': -0.5, 'C': -0.1}, ext_p=-0.7, corner_ic=(0.04, 0.09), corner_i_up=(0.06, 0.14), lat_back=0.1, canine=0.22, even=False, ext_lo=-0.3, corner_lo=(0.03, 0.06), gap_ic=0.004, gap=0.010, back_in=0.05, asym=(0.22, 0.10, 0.7, 0.10)),   # (09/11 c) Agustin (foto de Messi riendo: 'mira la forma de los dientes y muelas'): arco de la sonrisa natural (centrales largos, laterales mas cortos y apenas detras, canino con punta casi al nivel de los centrales, premolares mas cortos subiendo hacia atras), esquinas redondeadas; dientes individuales con linea fina (gap 0.010 / 0.004), muelas adentro, hueco entre filas
 }[PROFILE]
 if PROFILE == 'messi': REAL_W = {True: [8.7, 7.0, 7.8, 7.1, 6.7], False: REAL_W[False]}   # (09/11 c) foto riendo: centrales anchos, laterales mas chicos   # (04/11 c) laterales anchos (comun 8.1 / 6.8)

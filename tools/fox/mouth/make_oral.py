@@ -488,7 +488,8 @@ def konami_tone(bsm, log=print):
         hue = own * (1 - hue_k) + th * hue_k
         return np.clip(hue * Ln[..., None], 0, 1), med
     w = min(KONAMI_TONE, 1.0)
-    tT, mT = retone(mt, KT_TEETH, 0.60, 0.6)
+    # (09/11 d) Agustin 'mejora la textura de la boca generica': marfil un poco mas limpio y claro (menos gris) que el de Konami
+    tT, mT = retone(mt, np.array([0.600, 0.548, 0.462], np.float32) if TONGUE_CLEAN > 0 else KT_TEETH, 0.64 if TONGUE_CLEAN > 0 else 0.60, 0.6)
     tG, mG = retone(mg, KT_GUM, 0.34, 0.9)
     tG[..., 0] = np.maximum(tG[..., 0], np.minimum(tG[..., 1] + 0.15, 1.0))   # la encia sigue siendo tejido para el shader (R-G > 0.13)
     out = bsm.copy()
