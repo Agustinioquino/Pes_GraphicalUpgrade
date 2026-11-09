@@ -304,7 +304,9 @@ void PesOneLightMatch(float3 L, float3 col, float sh, float3 n, float3 V, float 
     float back = saturate(dot(-n, L) * 0.8 + 0.2);
     float3 sigT = float3(1.0, 3.6, 6.5) * (P34.y > 0 ? P34.y : 1.0);
     float3 Tr = exp(-(1.35 - thin) * sigT) * thin;
-    float thinGate = lerp(smoothstep(0.45, 0.85, thin), 1.0, saturate(P76.y));
+    // (09/11 g, Agustin: capturas "Desde atras": la oreja casi no se enciende) 0.45..0.85 -> 0.30..0.75: la oreja entera (no solo el
+    // borde mas fino) deja pasar la luz roja; la mejilla (trm bajo) sigue sin transmitir
+    float thinGate = lerp(smoothstep(0.30, 0.75, thin), 1.0, saturate(P76.y));
     float exitK = back * (0.6 + 0.6 * fwd) * smoothstep(-0.05, 0.25, dot(L, -V)) * lerp(0.2, 1.0, silK);
     // (09/11 c, Agustin eligio "las tres": borde rojizo, poros y mas luz en orejas y nariz a contraluz) x1.6 -> x2.3
     tr = PesSsTransColor(Tr * exitK * thinGate * P5.x * 2.3 * (P76.x > 0.0 ? P76.x : 1.0), P34.z);
