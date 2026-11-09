@@ -136,6 +136,12 @@ float PesTraceShadow(float3 Pv, float3 L, float rawNL, float zC, float zSgn, flo
       }
       float fh = sqrt(saturate(ta1 / csLen));
       occ = (1.0 - 0.5 * fh) * saturate(dzH / (0.2 * thick) + 0.35);
+      // (09/11, Agustin: "los cortes de la sombra se ven raros") el pelo (marca 252/255 de 02f1d510 / c75f6047, fila 339) llega
+      // al buffer de profundidad como placas solidas: el flequillo tiraba sobre la frente una sombra entera de borde recto y
+      // duro. El pelo real deja pasar luz entre las hebras: sombra parcial y blanda, mas tenue cuanto mas lejos esta el mechon
+      { float2 sH = (Q.xy + L.xy * ta1) / ((Q.z + L.z * ta1) * m_projectionParam.xy) + m_cameraCenterOffset.xy;
+        float mz = inMat.SampleLevel(sPoint, sH * float2(0.5, -0.5) + 0.5, 0).z;
+        if (abs(mz - 0.98823529) < 0.002) occ *= 0.45 * (1.0 - 0.5 * fh) * (0.6 + 0.4 * ign); }
       break;
     }
     tPrev = t;
