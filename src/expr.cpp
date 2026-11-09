@@ -1467,6 +1467,10 @@ static void SlotPresent(ID3D11DeviceContext* imm) {
                                     const float dd = sqrtf(dx * dx + dy * dy + dz * dz); if (dd < gmin) { gmin = dd; g = d; }
                                 }
                                 if (g >= 0 && gmin < 0.025f && AffDist(A, K[g]) < 0.25f) { slot[j] = (uint8_t)g; matched++; worst = (std::max)(worst, AffDist(A, K[g])); s_slotGeo++; continue; }
+                                // (09/11, log 05:47 con tope 0.20: en la malla de 30 lugares 12 de 18 pares iban al hueso 30, la glabela, con error
+                                // 0.10..0.20) con la pose dudosa y la geometria sin candidato (lugar lejos de todo hueso de la cara: pelo, oreja,
+                                // cuello) el lugar queda SIN gesto: tomar el hueso de pose mas parecida movia partes que no eran
+                                if (L.c[j][3] > 0.5f) { if (bd >= 0 && best < 0.25f) s_slotAmb++; continue; }
                             }
                             // (08/11 g, log 15:43: 15 lugares "emparejados" con error 0.241, justo bajo el tope de 0.25, en cada malla de 30 lugares, y
                             // 4 de 27 en las demas: pares como 17>0 o 7>4 que no eran) un emparejado real da un error chico (0.00..0.05 en los
