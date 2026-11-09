@@ -253,6 +253,7 @@ static void PoseOf(int d, float ang, float smi, float sur, float* o) {
 static float s_poseSmile = 0.0f;   // para Secondary (mejillas)
 // (04/11, Agustin: "que la sonrisa mueva toda la cara, asi como tambien en el enojado y demas") los sliders de gestos tambien para
 // Secondary (pomulos 18/19 y bajo-ojo 20/21): enojo, asombro, grito, puchero; y el perfil de la cara de este cuadro
+static float s_puffAll = 0.0f;   // (09/11) cachetes inflados de este esqueleto (x362 + soplido): pomulos / bajo-ojo en Secondary
 static float s_poseG[6] = {};   // 0 neutra (z356), 1 enojo, 2 sonrisa, 3 asombro, 4 grito, 5 puchero
 static const void* s_poseProf = nullptr;
 // (04/11, Agustin: "para messi una expresion de gritar custom ... para una mayor similitud a la vida real"; "la cara neutra me gusta
@@ -1161,6 +1162,12 @@ static void Secondary(Skel& S, const float* hr, float sm, float open) {
         if (a <= 0.001f) continue;
         acc[f.d][0] += f.x * a; acc[f.d][1] += f.y * a; acc[f.d][2] += f.z * a; use[f.d] = true;
     }
+    if (s_puffAll > 0.001f) for (int d = 18; d <= 21; d++) {   // (09/11) cachetes inflados: pomulo afuera / arriba, bajo-ojo arriba (ojo achinado)
+        if (!S.cur[d]) continue; const float sl = (d % 2) == 0 ? 1.0f : -1.0f;
+        if (d <= 19) { acc[d][0] += sl * 0.0016f * s_puffAll; acc[d][1] += 0.0012f * s_puffAll; acc[d][2] += 0.0008f * s_puffAll; }
+        else { acc[d][1] += 0.0009f * s_puffAll; acc[d][2] += 0.0003f * s_puffAll; }
+        use[d] = true;
+    }
     if (s_ganiSecOn) for (int d = 18; d <= 21; d++) {   // (07/11) clip .gani
         if (!S.cur[d]) continue; const float* o = s_ganiSec[d - 18]; if (fabsf(o[0]) + fabsf(o[1]) + fabsf(o[2]) < 1e-7f) continue;
         for (int k = 0; k < 3; k++) acc[d][k] += o[k]; use[d] = true;
@@ -1474,8 +1481,11 @@ static void FrameBody(const void* skel) {
     }
     const bool nLive = nVida > 0.001f || brAmp > 0.001f || eff > 0.001f || nAsim > 0.001f || nConc > 0.001f || puff > 0.001f;
     if (nLive) poseOn = true;
-    s_extraLid[0] = 0.05f * lifeLid + 0.07f * eff + 0.08f * nConc;
-    s_extraLid[1] = -(0.03f * eff + 0.04f * nConc);
+    // (09/11, Agustin: "inflar los cachetes enteros, mas exagerado, agrandando las mejillas, cerrando un poco los ojos, mostrando arrugas")
+    // los cachetes inflados empujan los pomulos arriba y achinan los ojos (el de abajo sube, el de arriba baja apenas)
+    s_puffAll = std::clamp((std::max)(S->sl[11], 0.0f) + 0.8f * puff, 0.0f, 1.5f);
+    s_extraLid[0] = 0.05f * lifeLid + 0.07f * eff + 0.08f * nConc + 0.06f * s_puffAll;
+    s_extraLid[1] = -(0.03f * eff + 0.04f * nConc + 0.09f * s_puffAll);
     s_extraLidOn = fabsf(s_extraLid[0]) > 1e-4f || fabsf(s_extraLid[1]) > 1e-4f;
     if (PF && pNeu > 0.001f && PF->has[PG_NEUTRA]) poseOn = true;
     // (07/11, Agustin: "me gustaria que al jugar leas los ganis") clip .gani de la cara (fila 383, gani.cpp): la pose del clip en el
@@ -1630,7 +1640,11 @@ static void FrameBody(const void* skel) {
                 wr[i] = w; sum += w;
             }
             if (sum > 1.0f) for (int i = 0; i < NG; i++) wr[i] /= sum;
-            for (int i = 0; i < NG; i++) {   // sliders de gestos del mod (editor): el gesto propio del mismo nombre
+            // (09/11, Agustin con capturas del 07/11 vs hoy: "la sonrisa de messi sigue rota, las comisuras se caen, los ojos se cierran
+            // mucho") los sliders de gestos ya NO prenden el gesto propio .gani del mismo nombre: Sonrisa 1.5 sumaba encima de su forma por
+            // huesos + perfil + forma esculpida el clip 'sonrisa' entero y el 'risa' entero (ojos cerrados, mandibula abierta hasta 19
+            // grados) = mueca de llanto. Los gestos propios siguen entrando cuando el JUEGO hace ese gesto (medido arriba) y los "entre_"
+            if (false) for (int i = 0; i < NG; i++) {   // sliders de gestos del mod (editor): el gesto propio del mismo nombre
                 const char* n = S->gg[i].name; float sl = 0.0f;
                 if (!_stricmp(n, "sonrisa")) sl = (std::min)(pSmi, 1.0f); else if (!_stricmp(n, "risa")) sl = (std::max)(0.0f, pSmi - 1.0f) * 2.0f;
                 else if (!_stricmp(n, "enojo")) sl = pAng; else if (!_stricmp(n, "asombro")) sl = pSur; else if (!_stricmp(n, "grito")) sl = pGri; else if (!_stricmp(n, "puchero")) sl = pPuc;
@@ -1772,7 +1786,14 @@ static void FrameBody(const void* skel) {
                 po[0] += sl * 0.0025f * side; po[1] += 0.0035f * side; po[2] -= 0.0010f * side;
             }
             if ((d == 7 || d == 8) && xB[4] != 0.0f) { po[0] += sl * 0.0030f * xB[4]; po[2] += 0.0010f * xB[4]; }   // cachetes
+            if ((d == 7 || d == 8) && xB[4] > 0.0f) { po[0] += sl * 0.0018f * xB[4]; po[1] += 0.0006f * xB[4]; po[2] += 0.0008f * xB[4]; }   // (09/11) inflados: mas afuera, arriba y adelante (4.8 mm a 1.0; el bulto redondo lo pone el shader)
             if ((d == 16 || d == 17) && xB[4] != 0.0f) po[0] += sl * 0.0015f * xB[4];
+            if (xB[4] > 0.0f) {   // (09/11) aire adentro: labios cerrados y apretados, un poco adelante, comisuras al medio
+                if (d == 1 || d == 2 || d == 3) { po[1] += 0.0005f * xB[4]; po[2] += 0.0008f * xB[4]; }
+                if (d == 9 || d == 10 || d == 11) { po[1] -= 0.0004f * xB[4]; po[2] += 0.0008f * xB[4]; }
+                if (d == 5 || d == 6) po[0] -= sl * 0.0008f * xB[4];
+                if (d == 4) po[2] += 0.0006f * xB[4];
+            }
             if (d == 5 || d == 6) { po[0] -= sl * 0.0040f * xB[5]; po[2] += 0.0020f * xB[5]; }                    // beso
             if (d == 1 || d == 2 || d == 3 || d == 9 || d == 10 || d == 11) po[2] += 0.0025f * xB[5];
             {   // desprecio: labio de arriba, ala de la nariz y comisura de un lado
@@ -1813,7 +1834,7 @@ static void FrameBody(const void* skel) {
             // frenando, en cada exhalacion los cachetes se inflan apenas, los labios se juntan adelante y las comisuras van al medio; se
             // apaga solo cuando el esfuerzo baja (~4 s). z395 = 0 lo apaga con el esfuerzo
             if (puff > 0.001f) {
-                if (d == 7 || d == 8) { po[0] += sl * 0.0026f * puff; po[2] += 0.0008f * puff; }
+                if (d == 7 || d == 8) { po[0] += sl * 0.0040f * puff; po[1] += 0.0005f * puff; po[2] += 0.0010f * puff; }
                 if (d == 16 || d == 17) po[0] += sl * 0.0012f * puff;
                 if (d == 1 || d == 2 || d == 3 || d == 9 || d == 10 || d == 11) po[2] += 0.0012f * puff;
                 if (d == 5 || d == 6) po[0] -= sl * 0.0012f * puff;

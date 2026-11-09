@@ -633,6 +633,32 @@ void PesMuscleApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
   if (Mu.x <= 0.0 && Mu.y <= 0.0 && Mu.z <= 0.0) return;
   uint hh = g_pesExprMesh.x;
   if (hh > 31) return;
+  // (09/11, Agustin: "los cachetes no se inflan de manera natural"; "inflar los cachetes enteros, mas exagerado, agrandando las
+  // mejillas") CACHETE INFLADO con volumen: los huesos (Inflar los cachetes x362, soplido al recuperar el aire) corren la mejilla
+  // hacia afuera, pero un hueso no hace un bulto redondo. Aca se mide cuanto salio ESTE vertice hacia afuera respecto de la cabeza
+  // rigida (skinning ya hecho: huesos del juego + mod) y se le suma un bulto redondo de hasta 5 mm que cubre el cachete entero (del
+  // pomulo a la mandibula, de la comisura a la oreja; nada a menos de 2.2 cm del medio: labios), con la normal inclinada para que la
+  // luz marque la curva. Solo la piel de la cara (VS faab87ee / 455eb97b): la boca no se toca
+  {
+    float sxp = rest.x >= 0.0 ? 1.0 : -1.0, xp = abs(rest.x);
+    float ex = (xp - 0.046) / 0.022, ey = (rest.y - 1.628) / 0.024, ez = (rest.z - 0.120) / 0.045;
+    float g = exp(-(ex * ex + ey * ey + ez * ez)) * smoothstep(0.022, 0.030, xp);
+    if (g > 0.01) {
+      float3x3 Mh = (float3x3)g_vsBone.m_boneMatrices[hh], Mp = (float3x3)g_vsPrevBone.m_boneMatrices[hh];
+      // (09/11 b, captura de Agustin: recuadro rojizo en el cachete en REPOSO) se media cuanto salio el vertice respecto de la cabeza
+      // rigida, pero la forma de cada cara del editor del juego tambien vive en los huesos: en Messi la mejilla ya esta corrida en reposo
+      // y el bulto (con la normal inclinada) quedaba siempre puesto. Ahora lo manda solo el slider Inflar los cachetes (x362, positivo)
+      float a = saturate(IniParams.Load(int2(362, 0)).x), aP = a;
+      float pf = 0.0050 * a * g, pfP = 0.0050 * aP * g;
+      if (pf > 1e-6 || pfP > 1e-6) {
+        float2 grp = pf * float2(-2.0 * ex / 0.022, -2.0 * ey / 0.024);
+        float3 np = normalize(float3(sxp * 0.85, -0.05, 0.52));
+        pos  += mul(np * pf, Mh);
+        prev += mul(np * pfP, Mp);
+        nrm  += mul(-float3(sxp * grp.x, grp.y, 0.0) * 0.6, Mh);
+      }
+    }
+  }
   float face = smoothstep(0.115, 0.145, rest.z);
   if (face <= 0.0) return;
   int sd = rest.x >= 0.0 ? 0 : 1;
@@ -644,30 +670,6 @@ void PesMuscleApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
   // sonrisa: la comisura sube / sale (6 mm = entera); ceno: la ceja interna baja / entra (4 mm = entero)
   float smile = saturate(PesMusGesture(corner, hh, Pc, false) / 0.006), smileP = saturate(PesMusGesture(corner, hh, Pc, true) / 0.006);
   float frown = saturate(-PesMusGesture(brow, hh, Pb, false) / 0.004), frownP = saturate(-PesMusGesture(brow, hh, Pb, true) / 0.004);
-  // (09/11, Agustin: "los cachetes no se inflan de manera natural") CACHETE INFLADO con volumen: los huesos (Inflar los cachetes x362,
-  // soplido al recuperar el aire) corren la mejilla de abajo entera hacia afuera, pero un hueso no hace un bulto redondo. Aca se mide
-  // cuanto salio ESTE vertice hacia afuera respecto de la cabeza rigida (skinning ya hecho: huesos del juego + mod) y, si paso de 1 mm,
-  // se le suma un bulto redondo de hasta 1.8 mm centrado en el cachete (lejos de los labios: nada a menos de 2.6 cm del medio), con la
-  // normal inclinada para que la luz marque la curva. Solo la piel de la cara (VS faab87ee / 455eb97b): la boca no se toca
-  float pf = 0, pfP = 0; float2 grp = 0;
-  {
-    float ex = (x - 0.045) / 0.017, ey = (y - 1.622) / 0.016;
-    float g = exp(-(ex * ex + ey * ey)) * smoothstep(0.026, 0.033, x);
-    if (g > 0.01) {
-      float3x3 Mh = (float3x3)g_vsBone.m_boneMatrices[hh], Mp = (float3x3)g_vsPrevBone.m_boneMatrices[hh];
-      float3 dl = mul(Mh, pos - mul(p, g_vsBone.m_boneMatrices[hh]));
-      float3 dlP = mul(Mp, prev - mul(p, g_vsPrevBone.m_boneMatrices[hh]));
-      float a = smoothstep(0.0010, 0.0032, sx * dl.x), aP = smoothstep(0.0010, 0.0032, sx * dlP.x);
-      pf = 0.0018 * a * g; pfP = 0.0018 * aP * g;
-      grp = pf * float2(-2.0 * ex / 0.017, -2.0 * ey / 0.016);
-    }
-  }
-  if (pf > 1e-6 || pfP > 1e-6) {
-    float3 np = normalize(float3(sx * 0.85, -0.05, 0.52));
-    pos  += mul(np * pf, (float3x3)g_vsBone.m_boneMatrices[hh]);
-    prev += mul(np * pfP, (float3x3)g_vsPrevBone.m_boneMatrices[hh]);
-    nrm  += mul(-float3(sx * grp.x, grp.y, 0.0) * 0.6, (float3x3)g_vsBone.m_boneMatrices[hh]);
-  }
   if (smile <= 0.001 && smileP <= 0.001 && frown <= 0.001 && frownP <= 0.001) return;
   // (01/11 k, captura de Agustin: "corte" azul en la union del ala de la nariz y rayas en la mandibula) la altura NO va
   // por la normal del vertice: en las aristas duras (ala de la nariz, menton) el modelo trae el mismo punto dos veces con
