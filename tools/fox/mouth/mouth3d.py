@@ -48,7 +48,7 @@ REAL_W = {True: [8.1, 6.8, 7.7, 7.1, 6.7],   # (04/11) Agustin 'reducir el taman
 PROFILE = os.environ.get('MOUTH_PROFILE', '')
 PROF = {
     '': dict(ext_up={'IC': -0.8, 'I': -0.8, 'C': -0.3}, corner_ic=(0.02, 0.08), corner_i_up=(0.04, 0.14), lat_back=0.0, canine=0.30),
-    'messi': dict(ext_up={'IC': -0.2, 'I': -0.4, 'C': -0.7}, corner_ic=(0.03, 0.06), corner_i_up=(0.03, 0.07), lat_back=0.0, canine=0.08, even=True, ext_lo=2.0, corner_lo=(0.02, 0.04)),   # (04/11 e) Agustin con captura del juego vs foto ('le falta naturalidad con las encias y el tamano de los dientes'): en la foto los de arriba son largos, anchos y parejos (carillas) y se ven enteros; en el juego cortos -> 1.6 mm mas largos que antes, esquinas apenas redondeadas. (04/11 g) 'ahora son muy largos, un poco mas cortos': -0.8 mm (a mitad de camino)
+    'messi': dict(ext_up={'IC': 0.3, 'I': 0.1, 'C': -0.4}, corner_ic=(0.03, 0.06), corner_i_up=(0.03, 0.07), lat_back=0.0, canine=0.08, even=True, ext_lo=-0.3, corner_lo=(0.02, 0.04), gap_ic=0.0),   # (09/11) Agustin (captura sonriendo vs foto): 'no se ve la separacion entre los dientes de arriba y abajo', 'no son lo suficientemente largos', 'estan separados los dos primeros dientes': arriba +0.5 mm vs v6, los de abajo 2.3 mm mas abajo (quedan por debajo del borde de los de arriba: se ve el hueco oscuro entre filas), centrales sin aire entre ellos
 }[PROFILE]
 if PROFILE == 'messi': REAL_W = {True: [8.7, 7.7, 7.9, 7.1, 6.7], False: REAL_W[False]}   # (04/11 e) foto: centrales y laterales anchos   # (04/11 c) laterales anchos (comun 8.1 / 6.8)
 
@@ -263,7 +263,7 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0
         deg = 1 if kind == 'P' else PDEG
         M = local_patch(M, uL - 0.1 * (uR - uL), uR + 0.1 * (uR - uL), vG - 0.3 * h, vI, deg=deg, degv=1)   # (01/11 f) todos rectos a lo alto
     gap = (0.012 if kind == 'IC' else 0.035) * (uR - uL)   # (01/11 d) los centrales se tocan
-    if REAL_TEETH: gap = (REAL_GAP_IC if kind == 'IC' else REAL_GAP) * (uR - uL)   # (03/11 v19c) Agustin: 'ni pegados ni separados': un poco de aire entre dientes
+    if REAL_TEETH: gap = (PROF.get('gap_ic', REAL_GAP_IC) if kind == 'IC' else REAL_GAP) * (uR - uL)   # (03/11 v19c) Agustin: 'ni pegados ni separados': un poco de aire entre dientes
     uL2, uR2 = uL + gap, uR - gap
     uc = 0.5 * (uL2 + uR2)
     b = -0.22 + 1.22 * np.sin(np.linspace(0, 1, nb) * np.pi / 2) ** 1.2   # mas filas cerca del borde incisal
