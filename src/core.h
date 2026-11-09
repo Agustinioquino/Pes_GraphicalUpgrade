@@ -408,6 +408,12 @@ bool FreeCamBlocksKeys();                         // x344 = 1: el juego no ve el
 void TiempoPresent();
 bool TiempoHooked();
 float TiempoFactor();   // (1/11) velocidad pedida por el menu (1 = apagada) para el aviso en pantalla
+// (09/11) sol real del motor en el editor: soleditor.cpp (hilo de descompilacion) encuentra / escribe la DirectionalLight
+// zfx_SolEditor del EditFace; solluz.cpp decide el sol (w378 sol de partido, w392 ciclo de dia y noche) y escribe z393
+void* SolEditorBody();
+bool SolEditorSet(const float dirHaciaSol[3], const float rgb[3], float kelvin, float lux, bool on);
+void SolLuzPresent();
+extern float g_solRealActivo;
 bool CamCutSince(int& seen);                      // true una vez por cada corte nuevo (cada consumidor guarda su 'seen'); x161 = 1
 int CamLastCutFrame();
 bool EngineCamera(float pos[3], float tgt[3], int* frame);   // ultima camara aplicada por el motor (sin atraso)
