@@ -384,6 +384,10 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0
                 anat = anat + 0.30 * MM * np.exp(-((cx - 0.12 * mes) / 0.38) ** 2) * sst(0.1, 0.75, bb)
             elif kind == 'P':
                 anat = anat + 0.26 * MM * np.exp(-(cx / 0.42) ** 2) * sst(0.05, 0.8, bb)
+            # (09/11 f) Agustin: 'tenes que acompanar los detalles bakeados en el modelo, aunque use menos poligonos': la forma
+            # grande de la anatomia (tooth_anat.low = lo que el normal NO repite) en la malla, solo en la cara de adelante
+            import tooth_anat
+            anat = anat + tooth_anat.low(cx, bb, kind, mes) * MM * sst(0.0, 0.35, cy)
             bulge = bulge + ANAT * anat * sst(-0.05, 0.15, bpos)
         Pf = Pf + anchor[None, :]
         front = Pf + Nf * bulge[:, None]
@@ -768,6 +772,25 @@ def build(src_fmdl, texdir, log=print):
         dm = np.where(tagA == 'diente')[0]; ax = np.abs(Pa[dm, 0])
         Pa[dm, 0] *= 1 - PROF['back_in'] * sst(0.015, 0.026, ax)
         log('  perfil: dientes de atras hacia adentro hasta %.2f mm' % (PROF['back_in'] * float(ax.max()) * 1000))
+    if REAL_TEETH and ANAT > 0:
+        # (09/11 f) Agustin: 'la forma de hundimiento de los dientes es la que me parece poco real': el diente entraba en la tira
+        # (pared lisa). Ahora la encia ABRAZA el cuello: los vertices de la tira del lado de la encia cerca de cada diente salen
+        # hacia afuera (collar con la forma del contorno del diente = margen festoneado y papila entre dientes) y el borde se
+        # redondea; lejos del diente la tira queda igual
+        from scipy.spatial import cKDTree
+        si = np.where(tagA == 'tira')[0]; ti = np.where(tagA == 'diente')[0]
+        d_, _ = cKDTree(Pa[ti]).query(Pa[si])
+        u_ = UVa[si, 0] * 512; v_ = UVa[si, 1] * 512
+        upr = v_ < 0.40 * 512
+        gl = np.where(upr, np.interp(u_, np.arange(512), rows[0]['g']), np.interp(u_, np.arange(512), rows[1]['g']))
+        inc = np.where(upr, np.interp(u_, np.arange(512), rows[0]['inc']), np.interp(u_, np.arange(512), rows[1]['inc']))
+        hgt = np.maximum(np.abs(inc - gl), 4.0)
+        gumside = np.where(upr, (gl + 0.25 * hgt - v_) / hgt, (v_ - gl + 0.25 * hgt) / hgt)   # > 0 del lado de la encia (con un poco del cuello)
+        wgum = sst(-0.05, 0.25, gumside)
+        push = 0.55 * MM * np.exp(-(d_ / (1.4 * MM)) ** 2) * wgum
+        Pa[si] = Pa[si] + Na[si] * push[:, None]
+        Nn = -vnormals(Pa, Fa); Na[si] = Nn[si]
+        log('  encia: collar alrededor del cuello de los dientes (hasta %.2f mm, %d vertices de la tira)' % (float(push.max()) * 1000, int((push > 0.05 * MM).sum())))
     Ta, tw = tangents(Pa, Na, UVa, Fa); tw = -tw
     # 4 huesos por vertice
     order = np.argsort(-Wa, 1)[:, :4]

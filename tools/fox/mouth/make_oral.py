@@ -413,6 +413,7 @@ def build(src, N=2048, NS=1024, log=print):
     bsm_o, S = wet_tissue(bsm_o, S, log)
     bsm_o = konami_tone(bsm_o, log)
     bsm_o = tongue_ao(bsm_o, B, log)
+    bsm_o = junction_ao(bsm_o, rows, log)
     nrm_o, S, Tr = detail_maps(bsm_o, nrm_o, S, Tr, rows, log)
     return {'bsm': bsm_o, 'nrm': nrm_o, 'srm': S, 'trm': Tr}, (B, on, line, crown, corner, cerv)
 
@@ -496,7 +497,9 @@ def konami_tone(bsm, log=print):
     w = min(KONAMI_TONE, 1.0)
     # (09/11 d) Agustin 'mejora la textura de la boca generica': marfil un poco mas limpio y claro (menos gris) que el de Konami
     tT, mT = retone(mt, np.array([0.600, 0.548, 0.462], np.float32) if TONGUE_CLEAN > 0 else KT_TEETH, 0.64 if TONGUE_CLEAN > 0 else 0.60, 0.6)
-    tG, mG = retone(mg, KT_GUM, 0.34, 0.9)
+    # (09/11 f) Agustin: 'las encias tienen un color muy similar a la lengua cuando no es asi': encia rosa coral mas clara y
+    # palida (queratinizada), la lengua queda mas roja/carmin
+    tG, mG = retone(mg, np.array([0.640, 0.440, 0.420], np.float32) if TOOTH_N > 0 else KT_GUM, 0.42 if TOOTH_N > 0 else 0.34, 0.9)
     tG[..., 0] = np.maximum(tG[..., 0], np.minimum(tG[..., 1] + 0.15, 1.0))   # la encia sigue siendo tejido para el shader (R-G > 0.13)
     out = bsm.copy()
     o = c * (1 - w * (mt + mg))[..., None] + w * (tT * mt[..., None] + tG * mg[..., None])
@@ -508,6 +511,30 @@ def konami_tone(bsm, log=print):
         mG, float(np.median(lo[kg])), np.median(o[kg], 0).round(3).tolist()))
     log('  clasificacion del shader: diente %.1f%%, tejido %.1f%%' % (100 * ((omx > 0.45) & (osat < 0.26) & (org < 0.11))[kt].mean(),
         100 * (org > 0.13)[kg].mean()))
+    return out
+
+def junction_ao(bsm, rows, log=print):
+    """(09/11 f) Agustin: 'los dientes no se incorporan bien con las encias' / 'le falta oclusion ambiental' / 'las encias tienen una
+    textura que se mezcla con los dientes'. Oclusion horneada suave: surco de la encia (franja fina y rojiza oscura pegada al
+    margen, del lado de la encia), cuello del diente 3D mas oscuro (tercio cervical) y costados del diente (entre dientes)."""
+    if TOOTH_N <= 0: return bsm
+    N = bsm.shape[0]; out = bsm.copy(); c = out[..., :3]
+    U, V, W = tooth_fields(rows, N, vmin=-1.6)
+    ins = U >= 0
+    dm = np.where(ins, np.clip(gum_field(rows, N, -1.6) - V, 0, 2), 1.0)
+    rg = c[..., 0] - c[..., 1]
+    gy = (np.mgrid[0:N, 0:N][0] + 0.5) / N
+    gum = sst(0.10, 0.15, rg) * sst(0.665, 0.64, gy)
+    sulc = np.exp(-(dm / 0.07) ** 2) * ins * gum
+    sulc = ndi.gaussian_filter(sulc.astype(np.float32), 1.0)
+    c = c * (1 - 0.32 * sulc[..., None] * np.array([0.85, 1.0, 1.0], np.float32))
+    tooth_anatomy(N, lambda *a: None)
+    BB, AX, M = _ANAT['bb'], _ANAT['ax'], _ANAT['M']
+    on = (BB > -0.5).astype(np.float32)
+    ao_t = 1 - on * (0.22 * sst(0.35, -0.05, BB) + 0.12 * sst(0.75, 1.0, AX))
+    c = c * ao_t[..., None]
+    out[..., :3] = np.clip(c, 0, 1)
+    log('  oclusion horneada: surco de la encia %.0f%% de la encia, cuello del diente hasta %.0f%%' % (100 * float((sulc > 0.3).sum()) / max(float((gum > 0.5).sum()), 1), 100 * (1 - float(ao_t.min()))))
     return out
 
 TONGUE_CLEAN = float(os.environ.get('TONGUE_CLEAN', '1.0'))   # (09/11) 0 = lengua como v26
@@ -529,7 +556,7 @@ def papillae(N):
         out = ndi.gaussian_filter(img, sig)
         return np.clip(out / (1.0 / (2 * np.pi * sig * sig)), 0, 1)
     fil = field(7.0 * N / 2048, 1.3 * N / 2048, 0.92)
-    fun = field(30.0 * N / 2048, 3.0 * N / 2048, 0.55)
+    fun = field(34.0 * N / 2048, 4.2 * N / 2048, 0.55)   # (09/11 f) fungiformes mas grandes y marcadas
     _PAP[N] = (fil, fun)
     return fil, fun
 
@@ -603,7 +630,7 @@ def wet_tissue(bsm, srm, log=print):
     fun = ndi.gaussian_filter(rng.standard_normal((N, N)).astype(np.float32), 1.6)
     fun = sst(2.6, 3.4, fun / max(float(fun.std()), 1e-6)) * (0.4 + 0.6 * sst(0.5, 0.9, np.abs(tu)) + 0.6 * sst(0.25, 0.0, tv))   # rojas, mas en los bordes y la punta
     low = ndi.gaussian_filter(rng.standard_normal((N, N)).astype(np.float32), 25); low /= max(float(np.abs(low).max()), 1e-6)
-    tcol = np.array([0.84, 0.46, 0.45], np.float32)
+    tcol = np.array([0.86, 0.38, 0.43], np.float32) if TOOTH_N > 0 else np.array([0.84, 0.46, 0.45], np.float32)   # (09/11 f) lengua mas carmin que la encia
     # (04/11 f) Agustin: 'la textura de la lengua no me convence, le falta oclusion y una textura mas real': celdas de papilas
     # (relieve irregular a dos escalas), saburra blanquecina leve en el centro y atras, bordes y punta mas rojos
     cell = ndi.gaussian_filter(rng.standard_normal((N, N)).astype(np.float32), 2.2); cell /= max(float(cell.std()), 1e-6)
@@ -621,12 +648,12 @@ def wet_tissue(bsm, srm, log=print):
         # filiformes como puntitos claros ordenados, fungiformes rojas redondas; saburra solo leve atras
         pf, pu = papillae(N)
         pu = pu * (0.35 + 0.65 * sst(0.55, 0.95, np.abs(tu)) + 0.65 * sst(0.3, 0.0, tv))
-        Lt = 0.46 * (1 + 0.025 * low - 0.12 * groove + 0.015 * np.tanh(cell2)) * (1.04 - 0.08 * sst(0.0, 1.0, tv))
+        Lt = 0.46 * (1 + 0.025 * low - 0.22 * groove + 0.015 * np.tanh(cell2)) * (1.04 - 0.08 * sst(0.0, 1.0, tv))
         T = tcol / (tcol * lumw).sum() * Lt[..., None]
         coat = np.exp(-(tu / 0.40) ** 2) * sst(0.45, 0.95, tv) * 0.6
         T = T * (1 - 0.15 * coat[..., None]) + np.array([0.86, 0.74, 0.72], np.float32) * Lt[..., None] * 1.12 * 0.15 * coat[..., None]
         T = T * (1 + np.clip(edge, 0, 1)[..., None] * np.array([0.05, -0.05, -0.03], np.float32))
-        T = T * (1 - 0.32 * pf[..., None]) + np.array([0.90, 0.74, 0.72], np.float32) * Lt[..., None] * 1.18 * 0.32 * pf[..., None]
+        T = T * (1 - 0.14 * pf[..., None]) + np.array([0.90, 0.74, 0.72], np.float32) * Lt[..., None] * 1.18 * 0.14 * pf[..., None]
         T = T * (1 - 0.55 * pu[..., None]) + np.array([0.92, 0.36, 0.37], np.float32) * Lt[..., None] * 1.75 * 0.55 * pu[..., None]
         fil, fun = pf, pu
     T = np.clip(T, 0, 1)
@@ -641,15 +668,16 @@ def wet_tissue(bsm, srm, log=print):
     S = srm.copy()
     rough_t = 0.24 + 0.14 * filS + 0.06 * funS - 0.06 * grS
     if TONGUE_CLEAN > 0:   # (09/11) saliva entre papilas muy lisa (reflejos chicos y nitidos), puntas de papila asperas, surco mojado
-        rough_t = 0.13 + 0.20 * filS + 0.05 * funS - 0.05 * grS + 0.05 * sst(0.4, 1.0, down(tv))
+        rough_t = 0.21 + 0.05 * ndi.gaussian_filter(filS, 1.0) + 0.03 * funS - 0.04 * grS + 0.05 * sst(0.4, 1.0, down(tv))   # (09/11 f) menos puntitos blancos
     rough_g = 0.17 + 0.03 * down(ndi.gaussian_filter(rng.standard_normal((N, N)).astype(np.float32), 1.0))
-    if TOOTH_N > 0: rough_g = rough_g - 0.04   # (09/11 e) encia mas mojada (referencia)
+    if TOOTH_N > 0: rough_g = 0.19 + 0.01 * (rough_g - 0.17)   # (09/11 f) sin puntitos blancos: rugosidad pareja
     S[..., 1] = S[..., 1] * (1 - tS - gS) + rough_t * tS + rough_g * gS
     S[..., 0] = S[..., 0] * (1 - tS - gS) + 0.07 * (tS + gS)
     S[..., :3] = np.clip(S[..., :3], 0, 1)
     return out, S
 
 DETAIL = float(os.environ.get('MAP_DETAIL', '1.0'))   # (04/11 c) 0 = como v18
+GEO_ANAT = float(os.environ.get('MOUTH_ANAT', '1.0'))   # (09/11 f) = MOUTH_ANAT del modelo: la forma grande esta en la malla
 TOOTH_N = float(os.environ.get('TOOTH_N', '1.1'))   # (09/11 e) fuerza del normal anatomico horneado de los dientes (0 = como v29)
 _ANAT = {}
 def tooth_anatomy(N, log=print):
@@ -680,19 +708,9 @@ def tooth_anatomy(N, log=print):
         Wmm = WMM[kind]; Hmm = 10.5 if kind != 'P' else 8.0
         H = np.zeros_like(cx)
         on = sst(-0.05, 0.10, bb)                         # solo sobre la corona (bajo la encia nada)
-        if kind in ('IC', 'I'):
-            H += -0.055 * (np.exp(-((cx - 0.34) / 0.10) ** 2) + np.exp(-((cx + 0.34) / 0.10) ** 2)) * sst(0.30, 0.75, bb)   # surcos de desarrollo
-            H += 0.030 * np.cos(3 * np.pi * cx / 2) ** 2 * sst(0.82, 0.97, bb) * (1 - ax)                                     # mamelones gastados
-        if kind == 'C':
-            H += 0.07 * np.exp(-((cx - 0.12 * mes) / 0.22) ** 2) * sst(0.15, 0.85, bb)                                           # cresta del canino
-            H += -0.03 * np.exp(-((ax - 0.50) / 0.12) ** 2) * sst(0.3, 0.9, bb)
-        if kind == 'P':
-            H += 0.06 * np.exp(-(cx / 0.25) ** 2) * sst(0.1, 0.9, bb)                                                            # cresta vestibular
-            H += -0.03 * np.exp(-((ax - 0.45) / 0.12) ** 2) * sst(0.4, 1.0, bb)
-        H += 0.045 * np.exp(-((ax - 0.80) / 0.07) ** 2) * sst(0.15, 0.6, bb)                                                    # crestas marginales
-        H += -0.10 * sst(0.86, 1.0, ax)                                                                                         # troneras: el costado cae
-        H += 0.05 * np.exp(-((bb - 0.12) / 0.07) ** 2)                                                                          # cresta cervical
-        H += -0.04 * sst(0.90, 1.0, bb)                                                                                         # borde redondeado
+        import tooth_anat
+        H += tooth_anat.macro(cx, bb, kind, mes)
+        if GEO_ANAT > 0: H -= GEO_ANAT * tooth_anat.low(cx, bb, kind, mes)   # (09/11 f) el modelo ya lleva la forma grande
         ph = ndi.gaussian_filter(rng.standard_normal((hgt, w)), (2, 6)); ph /= ph.std() + 1e-6
         per = np.sin(2 * np.pi * (bb * Hmm) / 0.42 + 0.8 * ph)
         H += 0.010 * per * (1 - 0.7 * sst(0.2, 0.9, bb)) * (1 - 0.6 * sst(0.7, 1.0, ax))                                      # periquimatias
@@ -733,9 +751,17 @@ def detail_maps(bsm, nrm, srm, trm, rows, log=print):
     orange = nz(1.4)
     # alto: lengua (papilas), encia (punteado), dientes (ondas finas + grano)
     perik = np.sin(gy * 2 * np.pi * 420 + 1.5 * nz(10)) * 0.5
+    tong_x = 0.0
     if TONGUE_CLEAN > 0:
-        pf, pu = papillae(N); fil, fun = pf, pu * (0.35 + 0.65 * sst(0.55, 0.95, np.abs(tu)) + 0.65 * sst(0.3, 0.0, (0.99 - gy) / 0.32))
-    h = tongue * (0.55 * fil + 0.9 * fun - 1.2 * groove) * (0.6 if TOOTH_N > 0 else 1.0) + tis * 0.35 * orange + teeth * (0.12 * perik + 0.10 * nz(0.9))
+        pf, pu = papillae(N); tvc = (0.99 - gy) / 0.32; tuc = (gx - 0.503) / 0.205
+        fil, fun = pf, pu * (0.35 + 0.65 * sst(0.55, 0.95, np.abs(tuc)) + 0.65 * sst(0.3, 0.0, tvc))
+        if TOOTH_N > 0:
+            # (09/11 f) Agustin: 'la lengua se ve muy porosa pero sin detalle marcado': menos poro fino, formas marcadas: surco
+            # central claro (de la punta al fondo), fungiformes en relieve, y el cuerpo con dos lomas a los lados del surco
+            groove = np.exp(-(tuc / 0.09) ** 2) * sst(0.06, 0.30, tvc) * sst(1.0, 0.7, tvc)
+            tong_x = 0.9 * np.exp(-((np.abs(tuc) - 0.35) / 0.25) ** 2) * sst(0.0, 0.4, tvc)
+            fil = 0.35 * fil
+    h = tongue * (0.55 * fil + 0.9 * fun - 1.2 * groove + tong_x) * (0.6 if TOOTH_N > 0 else 1.0) + tis * 0.35 * orange + teeth * (0.12 * perik + 0.10 * nz(0.9))
     h = ndi.gaussian_filter(h, 0.6) * DETAIL
     hy, hx = np.gradient(h)
     nx = nrm[..., 3] * 2 - 1; ny = nrm[..., 1] * 2 - 1
