@@ -136,11 +136,23 @@ float PesTraceShadow(float3 Pv, float3 L, float rawNL, float zC, float zSgn, flo
       }
       float fh = sqrt(saturate(ta1 / csLen));
       occ = (1.0 - 0.5 * fh) * saturate(dzH / (0.2 * thick) + 0.35);
+      // (09/11, Agustin: "los cortes de la sombra se ven raros") el pelo (marca 252/255 de 02f1d510 / c75f6047, fila 339) llega
+      // al buffer de profundidad como placas solidas: el flequillo tiraba sobre la frente una sombra entera de borde recto y
+      // duro. El pelo real deja pasar luz entre las hebras: sombra parcial y blanda, mas tenue cuanto mas lejos esta el mechon
+      { float2 sH = (Q.xy + L.xy * ta1) / ((Q.z + L.z * ta1) * m_projectionParam.xy) + m_cameraCenterOffset.xy;
+        float mz = inMat.SampleLevel(sPoint, sH * float2(0.5, -0.5) + 0.5, 0).z;
+        if (abs(mz - 0.98823529) < 0.002) occ *= 0.45 * (1.0 - 0.5 * fh) * (0.6 + 0.4 * ign); }
       break;
     }
     tPrev = t;
   }
   float2 eM = saturate(min(uv, 1.0 - uv) * 10.0);
+  // (09/11, Agustin: corte duro y recto de la frente al costado de la nariz con la luz de costado) con la luz lateral el rayo de
+  // un pixel cerca del terminador pasa por detras de la frente / el puente de la nariz (convexos, mas cerca de la camara) y la
+  // traza en pantalla los cuenta como oclusor: sombra de borde de regla adentro del lado iluminado. Ahi la caida de la luz ya
+  // la da N.L (suave); la sombra trazada entra de a poco (N.L 0.02 -> 0.40) y queda entera para las sombras proyectadas de
+  // verdad (nariz sobre la mejilla, menton sobre el cuello), que caen en zonas que miran a la luz
+  occ *= smoothstep(0.02, 0.40, rawNL);
   return 1.0 - saturate(occ * saturate(shK) * eM.x * eM.y);
 }
 
@@ -422,6 +434,28 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   if (preset == 0 && E5.x > 0.0) skyK = E5.x;   // (07/11) cielo en el manual
   if (preset == 0 && E6.z > 0.0) gndK = E6.z * 0.05 / 0.5;   // (07/11 c) rebote del suelo en el manual (0.5 = como los presets)
   shK *= shMul;
+  // (09/11, Agustin: "una opcion de timelapse para fingir que la luz pase un ciclo de dia y noche") w392 = ciclo de dia y noche
+  // (1 = 30 s, 2 = 1 min, 3 = 2 min, 4 = 5 min por vuelta). Reloj: w393 lo escribe la DLL en cada cuadro (segundos, vuelve a 0
+  // cada hora; los cuatro periodos dividen 3600, sin salto). Amanece a la derecha de la pantalla, mediodia alto y de frente,
+  // atardece a la izquierda (calido y bajo), y de noche una luna fria, baja y debil. El color, la fuerza, la luz de estudio que
+  // queda y el cielo van con la altura del sol; en el horizonte se funden sol y luna sin salto
+  int tlMode = (int)(IniParams.Load(int2(392, 0)).w + 0.5);
+  if (tlMode >= 1 && tlMode <= 4) {
+    float tlPer = tlMode == 1 ? 30.0 : (tlMode == 2 ? 60.0 : (tlMode == 3 ? 120.0 : 300.0));
+    float tlT = frac(IniParams.Load(int2(393, 0)).w / tlPer);
+    float sD = sin(6.2831853 * tlT);                      // > 0 de dia
+    float dayK = smoothstep(-0.10, 0.10, sD);
+    float sunEl = 75.0 * sD, sunAz = lerp(100.0, -100.0, saturate(tlT * 2.0));
+    float moonEl = 45.0 * max(-sD, 0.0), moonAz = lerp(100.0, -100.0, saturate(tlT * 2.0 - 1.0));
+    float sUp = saturate(sD);
+    if (dayK > 0.5) { az = sunAz; el = max(sunEl, 2.0); } else { az = moonAz; el = max(moonEl, 2.0); }
+    float tWarmDay = lerp(0.98, 0.55, smoothstep(0.0, 0.6, sUp));
+    warm  = lerp(0.12, tWarmDay, dayK);
+    inten = lerp(0.22, lerp(0.55, 1.25, smoothstep(0.0, 0.5, sUp)), dayK);
+    keep  = lerp(0.18, lerp(0.40, 0.55, sUp), dayK);
+    skyK  = lerp(0.10, 0.16, dayK); gndK = lerp(0.01, 0.05, dayK) * (0.3 + 0.7 * sUp);
+    pSpotD = 0.0; pSpotA = 0.0; g_lightWorld = false;
+  }
   bool studio = preset == 4;
   // --- referencia de intensidad: la irradiancia de estudio mas alta sobre la piel, suavizada en el tiempo (pasada 0, t6) ---
   float S = inRef.Load(int3(0, 0, 0)).x;
@@ -434,6 +468,21 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   float3 Pv = float3(pp * zC, zC);
   float3 V = -normalize(float3(pp, 1));
   float3 n = DecodeN(uv);
+  // (09/11, Agustin: "una opcion que coloque un sol cercano y permita cambiar sus angulos y posicion") w378 = 1: la luz principal
+  // de CUALQUIER preset pasa a ser un sol cercano con posicion: rumbo (z297) y altura (w297) tal cual los sliders (no sumados al
+  // preset), a y377 metros del jugador con un cono de z377 grados. Color e intensidad siguen siendo los del preset
+  if (E5.w > 0.5) { az = E.z; el = E.w; pSpotD = clamp(E4.y > 0 ? E4.y : 2.0, 0.3, 12.0); pSpotA = clamp(E4.z > 0 ? E4.z : 45.0, 10.0, 170.0); }
+  // (09/11, Agustin: "que sea mas facil de decidir... una opcion de sol por detras para probar el sss") z392 = de donde viene la
+  // luz, en pocas opciones y siempre respecto de la camara (lo que se ve en pantalla): 1 de frente, 2 de costado, 3 desde atras
+  // (contraluz: orejas, nariz y borde de la cara encendidos = SSS), 4 desde arriba. 0 = la del preset / los sliders
+  { int qd = (int)(IniParams.Load(int2(392, 0)).z + 0.5);
+    if (qd >= 1 && qd <= 4 && !(tlMode >= 1 && tlMode <= 4)) {
+      g_lightWorld = false;
+      if (qd == 1)      { az = 25.0;  el = 20.0; }
+      else if (qd == 2) { az = 90.0;  el = 20.0; }
+      else if (qd == 3) { az = 165.0; el = 12.0; }
+      else              { az = 10.0;  el = 78.0; }
+    } }
   float3 Lw = PesDirL(az, el, zSgn), L = Lw;
   // (07/11) foco en el manual: una luz con posicion a y377 m del jugador (el punto del centro de la pantalla) en la direccion del
   // rumbo / altura, cono de z377 grados con borde suave y caida con el cuadrado de la distancia (1 en el jugador)
@@ -454,6 +503,15 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   bool skin = IsSkin(uv);
   float4 mat = inMat.SampleLevel(sPoint, uv, 0);
   float rough = clamp(mat.x, 0.08, 1.0);
+  // (09/11, Agustin: "fingir que esta lloviendo y mojar el rostro") y392 = lluvia en la cara (0..1), con cualquier preset: la
+  // pelicula de agua deja la piel lisa (brillo nitido) y mas oscura (el agua llena los poros y baja la dispersion de la
+  // superficie); fuera de la piel solo un poco mas lisa. La boca (cavidad / mascara) no se moja aca
+  float wetK = saturate(IniParams.Load(int2(392, 0)).y);
+  bool wetSkin = false;
+  { uint wW = 0, wH = 0; inMouth.GetDimensions(wW, wH);
+    bool wMouth = wW > 0 && inMouth.Load(int3(min((uint2)pos.xy, uint2(wW - 1, wH - 1)), 0)) > 0.0;
+    if (wMouth) wetK = 0.0; }
+  if (wetK > 0.0) { wetSkin = IsSkin(uv); rough = lerp(rough, wetSkin ? 0.12 : max(rough * 0.6, 0.15), wetK * (wetSkin ? 1.0 : 0.5)); }
   uint tq = (uint)(inNrm.SampleLevel(sPoint, uv, 0).z * 1023.0 + 0.5);
   float trans = (float)(tq >> 4) / 63.0;
   // (04/11 nariz) grosor por la curvatura (como PesSkThickCurv del partido, sin atlas en el editor): normales del G-buffer a ~10 mm
@@ -577,7 +635,32 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
     float up = n.y * 0.5 + 0.5;   // normal en vista: y arriba
     // (07/11 c) el rebote del suelo depende de cuanto sol le llega al suelo (sol alto = mas rebote)
     if (preset == 0) gndC *= saturate(sin(radians(max(el, 0.0))) * 1.6 + 0.1);
-    dif += skyC * up + gndC * (1.0 - up);
+    // (09/11, "al maximo") oclusion del cielo y del suelo: el relleno llegaba entero a las cuencas de los ojos, debajo de la nariz,
+    // debajo del menton y adentro de la oreja, y aplanaba la cara. Horizonte en 8 direcciones a 1.5 / 3.5 / 6 cm en pantalla
+    // (lo que esta por delante del pixel tapa parte del cielo); la boca (mascara t7 o cavidad) queda sin oclusion, como antes
+    {
+      float aW, aH; inNrm.GetDimensions(aW, aH);
+      float aMpp = max(2.0 * abs(m_projectionParam.x) * zA / max(aW, 1.0), 1e-6);
+      float aoS = 0.0;
+      [unroll] for (int ai = 0; ai < 8; ai++) {
+        float aa = ai * 0.78539816 + 0.39 * frac(52.9829189 * frac(dot(pos.xy, float2(0.06711056, 0.00583715))));
+        float2 ad = float2(cos(aa), sin(aa)) / float2(aW, aH);
+        float hMax = 0.0;
+        [unroll] for (int ri = 0; ri < 3; ri++) {
+          float rM = ri == 0 ? 0.015 : (ri == 1 ? 0.035 : 0.06);
+          float2 uA = uv + ad * (rM / aMpp);
+          if (any(uA < 0.0) || any(uA > 1.0)) continue;
+          float h = (zC - LinZ(uA)) * zSgn;
+          if (h > 0.0 && h < 0.15) hMax = max(hMax, h / sqrt(h * h + rM * rM));   // seno del angulo de horizonte
+        }
+        aoS += hMax;
+      }
+      float skyAO = saturate(1.0 - 0.85 * aoS / 8.0);
+      skyAO *= skyAO;
+      { uint qW = 0, qH = 0; inMouth.GetDimensions(qW, qH);   // boca intacta: interior y cavidad sin oclusion nueva
+        if (legacy || (qW > 0 && inMouth.Load(int3(min((uint2)pos.xy, uint2(qW - 1, qH - 1)), 0)) > 0.0)) skyAO = 1.0; }
+      dif += (skyC * up + gndC * (1.0 - up)) * skyAO;
+    }
     // (07/11 c) reflector: una pared / pantalla del lado opuesto a la luz, baja, que devuelve parte de la luz sin sombra (como el
     // reflector de un fotografo). Color: blanco (el de la luz), plateado (mas frio y brillante), dorado (calido)
     if (preset == 0 && E6.w > 0.001) {
@@ -626,7 +709,14 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   }
   o.c = float4(c0 * keepC + dif + vol, 1);
   if (E7.z > 0.0) specMul *= E7.z;   // (07/11 c) brillo de la luz en el manual
-  o.s = float4(s0 * (geo ? saturate(keep) : 1.0) + spec * specMul, 1);
+  if (wetK > 0.0 && geo && !legacy) {   // (09/11) lluvia: brillo de la pelicula de agua y piel apenas mas oscura
+    specMul *= 1.0 + (wetSkin ? 1.6 : 0.6) * wetK;
+    if (wetSkin) o.c.xyz *= 1.0 - 0.12 * wetK;
+  }
+  // (09/11, Agustin: "mejora la iluminacion del modo editar al maximo") el brillo de la luz de estudio que queda tambien sigue a la
+  // luz principal: antes el lado en sombra conservaba el 55 % del brillo de estudio y se veia plastico / mojado en la sombra.
+  // Mismo factor que la difusa (la boca queda igual: keepC no cambia ahi)
+  o.s = float4(s0 * keepC + spec * specMul, 1);
   // (08/11) un NaN / infinito aca lo arrastra el TAA a toda la cara cuadro tras cuadro: se queda la luz del juego
   if (any(isnan(o.c.xyz)) || any(isinf(o.c.xyz))) o.c = float4(c0, 1);
   if (any(isnan(o.s.xyz)) || any(isinf(o.s.xyz))) o.s = float4(s0, 1);
