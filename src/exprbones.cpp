@@ -224,22 +224,22 @@ static const PoseOff kPose[] = {
     {  2, { 0, 0, 0 },                   { -0.0010f, -0.0004f, 0 },        { 0, 0, 0 } },                    // lip_b_r
     {  5, {  0.0004f, -0.0022f, 0 },     {  0.0030f,  0.0022f, -0.0010f }, { -0.0015f, 0, 0.0005f } },       // lip_s_l: comisura
     {  6, { -0.0004f, -0.0022f, 0 },     { -0.0030f,  0.0022f, -0.0010f }, {  0.0015f, 0, 0.0005f } },       // lip_s_r
-    {  7, { 0, -0.0006f, 0 },            {  0.0010f,  0.0015f, 0.0008f },        { 0, 0, 0 } },                    // cheek_s_l
-    {  8, { 0, -0.0006f, 0 },            { -0.0010f,  0.0015f, 0.0008f },        { 0, 0, 0 } },                    // cheek_s_r
-    {  9, { 0,  0.0010f, 0 },            {  0.0004f,  0.0008f, 0 },        { 0, 0, 0 } },                    // lip_t_l
-    { 10, { 0,  0.0008f, 0 },            { 0, 0.0004f, 0 },                { 0, 0, 0 } },                    // lip_t_c
-    { 11, { 0,  0.0010f, 0 },            { -0.0004f,  0.0008f, 0 },        { 0, 0, 0 } },                    // lip_t_r
+    {  7, { 0, -0.0006f, 0 },            {  0.0010f,  0.0015f, 0.0008f },  { 0, -0.0008f, 0 } },            // (09/11 c) asombro: la cara se alarga                    // cheek_s_l
+    {  8, { 0, -0.0006f, 0 },            { -0.0010f,  0.0015f, 0.0008f },  { 0, -0.0008f, 0 } },                    // cheek_s_r
+    {  9, { 0,  0.0010f, 0 },            {  0.0004f,  0.0008f, 0 },        { 0, 0.0004f, 0.0002f } },                    // lip_t_l
+    { 10, { 0,  0.0008f, 0 },            { 0, 0.0004f, 0 },                { 0, 0.0005f, 0.0002f } },                    // lip_t_c
+    { 11, { 0,  0.0010f, 0 },            { -0.0004f,  0.0008f, 0 },        { 0, 0.0004f, 0.0002f } },                    // lip_t_r
     {  3, { 0, 0.0006f, 0.0003f },       { 0, 0, 0 },                      { 0, -0.0005f, 0 } },             // lip_b_c: enojo = labios apretados
     {  4, { 0, 0.0008f, 0.0003f },       { 0, 0, 0 },                      { 0, -0.0006f, 0 } },             // doublechin: enojo = menton tenso
     { 13, { 0, 0.0008f, -0.0002f },      { 0, 0.0004f, 0 },                { 0, 0, 0 } },                    // nose: enojo arruga la nariz
-    { 14, {  0.0003f, 0.0010f, 0 },      {  0.0003f,  0.0006f, 0 },        { 0, 0, 0 } },                    // nosewing_l
-    { 15, { -0.0003f, 0.0010f, 0 },      { -0.0003f,  0.0006f, 0 },        { 0, 0, 0 } },                    // nosewing_r
-    { 16, {  0.0002f, 0.0008f, 0 },      {  0.0005f,  0.0010f, -0.0004f }, { 0, 0, 0 } },                    // nasolabialfold_t_l
-    { 17, { -0.0002f, 0.0008f, 0 },      { -0.0005f,  0.0010f, -0.0004f }, { 0, 0, 0 } },                    // nasolabialfold_t_r
+    { 14, {  0.0006f, 0.0012f, 0 },      {  0.0003f,  0.0006f, 0 },        { 0, 0, 0 } },                    // nosewing_l
+    { 15, { -0.0006f, 0.0012f, 0 },      { -0.0003f,  0.0006f, 0 },        { 0, 0, 0 } },                    // nosewing_r
+    { 16, {  0.0004f, 0.0010f, 0 },      {  0.0005f,  0.0010f, -0.0004f }, { 0, -0.0004f, 0 } },                    // nasolabialfold_t_l
+    { 17, { -0.0004f, 0.0010f, 0 },      { -0.0005f,  0.0010f, -0.0004f }, { 0, -0.0004f, 0 } },                    // nasolabialfold_t_r
     { 26, { -0.0020f, -0.0030f, 0.0005f }, {  0.0008f, 0.0014f, 0 },                    {  0.0003f, 0.0040f, 0 } },       // brow_i_l: ceno abajo y al medio
     { 27, {  0.0020f, -0.0030f, 0.0005f }, { -0.0008f, 0.0014f, 0 },                    { -0.0003f, 0.0040f, 0 } },       // brow_i_r
-    { 28, { 0, -0.0012f, 0 },            { 0, 0.0008f, 0 },                      { 0, 0.0035f, 0 } },              // brow_o_l
-    { 29, { 0, -0.0012f, 0 },            { 0, 0.0008f, 0 },                      { 0, 0.0035f, 0 } },              // brow_o_r
+    { 28, { 0, -0.0012f, 0 },            { 0, 0.0008f, 0 },                      { 0, 0.0030f, 0 } },              // brow_o_l
+    { 29, { 0, -0.0012f, 0 },            { 0, 0.0008f, 0 },                      { 0, 0.0030f, 0 } },              // brow_o_r
     { 30, { 0, -0.0020f, -0.0004f },     { 0, 0.0008f, 0 },                      { 0, 0.0020f, 0 } },              // glabella
 };
 static void PoseOf(int d, float ang, float smi, float sur, float* o) {
@@ -274,14 +274,14 @@ static const PoseOff2 kPose2[] = {
     {  4, { 0, 0, 0 },                        { 0,  0.0020f,  0.0010f } },          // doublechin: menton que sube (mentoniano)
     {  5, {  0.0030f, -0.0005f, -0.0012f },   { -0.0005f, -0.0020f, 0 } },          // lip_s_l: grito = comisura afuera y atras
     {  6, { -0.0030f, -0.0005f, -0.0012f },   {  0.0005f, -0.0020f, 0 } },          // lip_s_r
-    {  7, {  0.0010f, -0.0005f, 0 },          { 0, -0.0008f, 0 } },                 // cheek_s_l
-    {  8, { -0.0010f, -0.0005f, 0 },          { 0, -0.0008f, 0 } },                 // cheek_s_r
+    {  7, {  0.0010f,  0.0006f, 0.0004f },    { 0, -0.0008f, 0 } },   // (09/11 c) grito: la mejilla sube con el pomulo                 // cheek_s_l
+    {  8, { -0.0010f,  0.0006f, 0.0004f },    { 0, -0.0008f, 0 } },                 // cheek_s_r
     {  9, {  0.0005f,  0.0020f, 0 },          { 0,  0.0003f,  0.0008f } },          // lip_t_l: grito = labio de arriba sube (dientes)
-    { 10, { 0,  0.0018f, 0 },                 { 0,  0.0003f,  0.0008f } },          // lip_t_c
+    { 10, { 0,  0.0018f, 0 },                 { 0, -0.0003f,  0.0010f } },          // lip_t_c
     { 11, { -0.0005f,  0.0020f, 0 },          { 0,  0.0003f,  0.0008f } },          // lip_t_r
     { 13, { 0, 0.0010f, -0.0002f },           { 0, 0, 0 } },                        // nose: grito arruga la nariz
-    { 14, {  0.0004f,  0.0012f, 0 },          { 0, 0, 0 } },                        // nosewing_l
-    { 15, { -0.0004f,  0.0012f, 0 },          { 0, 0, 0 } },                        // nosewing_r
+    { 14, {  0.0007f,  0.0012f, 0 },          { 0, 0, 0 } },                        // nosewing_l
+    { 15, { -0.0007f,  0.0012f, 0 },          { 0, 0, 0 } },                        // nosewing_r
     { 16, {  0.0005f,  0.0012f, 0 },          { 0, 0, 0 } },                        // nasolabialfold_t_l
     { 17, { -0.0005f,  0.0012f, 0 },          { 0, 0, 0 } },                        // nasolabialfold_t_r
     { 26, { -0.0018f,  0.0015f, 0.0004f },    { -0.0008f,  0.0030f, 0 } },          // brow_i_l: grito = juntas y arriba; puchero = triste
@@ -407,6 +407,7 @@ struct Skel {
     GaniPose gPrev = {}; float gPrevDt = 0.0f; Inert gI[31][6]; float gIT0 = -1.0f; int gLastClip = -1; bool gLastOn = false; float gLastF = 0.0f;
     float gsL[kND][3] = {}, gsV[kND][3] = {}; bool gsHave[kND] = {}; float gsDeg = 0.0f, gsDegV = 0.0f; bool gsDegHave = false; float gsT = -1.0f;   // (08/11) gestos del juego suavizados (x397, resorte), ejes de la cabeza
     float slV[16] = {};   // velocidad del resorte de los sliders (w395)
+    float slG[2][8] = {}, slGV[2][8] = {};   // (09/11 c) los mismos gestos por grupo: 0 cejas (llegan antes), 1 mejillas / nariz (llegan despues)
     int tkPhrase = -1; float tkT0 = 0.0f, tkDur = 0.0f, tkPause = 0.0f, tkCh[7] = {}, tkT = -1.0f; unsigned tkN = 0; int tkLast = -1;   // (08/11) hablar por palabras: frase en curso, canales suavizados
     float effort = 0.0f, brPh = 0.0f, anT = -1.0f;                 // (08/11) esfuerzo por velocidad (sube ~1 s, baja ~4 s), fase de la respiracion
    // (08/11) velocidad del jugador (cabeza en el mundo, m/s) y cuanto lleva quieto
@@ -1383,8 +1384,13 @@ static void FrameBody(const void* skel) {
     {
         const float tr = std::clamp(g_cfg.live[395][3], 0.0f, 3.0f);
         const float dt = S->slT < 0.0f || tNow < S->slT ? 1.0f : (std::min)(tNow - S->slT, 0.5f); S->slT = tNow;
-        if (!S->slHave || tr < 0.001f) { for (int i = 0; i < 16; i++) { S->sl[i] = slR[i]; S->slV[i] = 0.0f; } }
-        else for (int i = 0; i < 16; i++) Damp(S->sl[i], S->slV[i], slR[i], 0.25f * tr, dt);   // resorte critico: arranca y frena suave
+        if (!S->slHave || tr < 0.001f) { for (int i = 0; i < 16; i++) { S->sl[i] = slR[i]; S->slV[i] = 0.0f; } for (int g = 0; g < 2; g++) for (int i = 0; i < 8; i++) { S->slG[g][i] = slR[i]; S->slGV[g][i] = 0.0f; } }
+        else {
+            for (int i = 0; i < 16; i++) Damp(S->sl[i], S->slV[i], slR[i], 0.25f * tr, dt);   // resorte critico: arranca y frena suave
+            // (09/11 c, Agustin: "movimiento mas natural de todos los grupos de huesos") en la cara real los grupos no llegan juntos:
+            // las cejas y el entrecejo se mueven primero (65 % del tiempo), la boca despues y las mejillas / nariz llegan arrastradas (135 %)
+            for (int i = 0; i < 8; i++) { Damp(S->slG[0][i], S->slGV[0][i], slR[i], 0.25f * tr * 0.65f, dt); Damp(S->slG[1][i], S->slGV[1][i], slR[i], 0.25f * tr * 1.35f, dt); }
+        }
         S->slHave = true;
     }
     const float pAng = S->sl[0], pSmi = S->sl[1], pSur = S->sl[2], pTalk = S->sl[3], pGri = S->sl[4], pPuc = S->sl[5], pNeu = S->sl[6];
@@ -1764,10 +1770,14 @@ static void FrameBody(const void* skel) {
         if (!S->cur[d]) continue;
         const float* tv = TeethOf(d); const float* ov = OpenOf(d);
         const float op = (std::max)(o - (d >= 5 && d <= 8 ? oSmi : 0.0f), 0.0f);   // (09/11) comisuras: la risa no las junta ni las baja
-        float po[3]; PoseOf(d, pAng, d <= 17 ? pSmi * kSmB : pSmi, pSur, po);
-        for (const PoseOff2& p : kPose2) if (p.d == d) { for (int k = 0; k < 3; k++) po[k] += p.g[k] * pGri + p.p[k] * pPuc; break; }
+        // (09/11 c) cada grupo con su tiempo: cejas / entrecejo (26..30) rapido, mejillas de abajo y nariz (7, 8, 13..17) arrastradas
+        const int grp = d >= 26 ? 0 : (d == 7 || d == 8 || (d >= 13 && d <= 17)) ? 1 : -1;
+        const float* gs = grp >= 0 ? S->slG[grp] : S->sl;
+        const float qAng = gs[0], qSmi = gs[1], qSur = gs[2], qGri = gs[4], qPuc = gs[5], qNeu = gs[6];
+        float po[3]; PoseOf(d, qAng, d <= 17 ? qSmi * kSmB : qSmi, qSur, po);
+        for (const PoseOff2& p : kPose2) if (p.d == d) { for (int k = 0; k < 3; k++) po[k] += p.g[k] * qGri + p.p[k] * qPuc; break; }
         if (PF && ProfBoneOk(d)) {   // (04/11) perfil de esta cara: neutra (z356) y cada gesto con su slider
-            const float w[PG_N] = { pNeu, pAng, pSmi, pSur, pGri, pPuc };
+            const float w[PG_N] = { qNeu, qAng, qSmi, qSur, qGri, qPuc };
             for (int g = 0; g < PG_N; g++) if (PF->has[g] && w[g] > 0.001f) for (int k = 0; k < 3; k++) po[k] += PF->off[g][d][k] * w[g];
         }
         // (04/11) la mandibula real no gira en el lugar: al abrir, el condilo se desliza adelante y abajo (articulacion
