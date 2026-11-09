@@ -3,7 +3,7 @@
 // por personaje la diferencia nuevo x base^-1 de cada hueso, en el mundo (expr.cpp DeltaUpload, t115), y el VS la aplica a lo que cada
 // influencia del skinning ya calculo: el mismo resultado que escribir el hueso, sin pelear con el juego.
 // t115: [0] = (personajes, 0, 0, 0), [1] = (reposo de sk_head en el modelo, 0); por personaje 1 + 33 x 6 float4: (cabeza en el mundo,
-// 1 = valida) y por hueso kDef 3 float4 de este cuadro + 3 del anterior (fila k = imagen del eje k, w = traslacion). Sin buffer: todo 0.
+// 1 + edad del jugador = valida, 09/11 g; tambien sin paleta, con las diferencias en identidad) y por hueso kDef 3 float4 de este cuadro + 3 del anterior (fila k = imagen del eje k, w = traslacion). Sin buffer: todo 0.
 #ifndef PES_BONEDELTA_HLSLI
 #define PES_BONEDELTA_HLSLI
 Buffer<float4> g_pesBoneD : register(t115);

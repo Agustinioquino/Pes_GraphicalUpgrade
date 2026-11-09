@@ -2028,13 +2028,15 @@ static void Dump(const Skel& S) {
 // expr.cpp lo lee en el Present (ExprBonesPoses) y lo sube al VS. Si las expresiones estan apagadas no hay nada anotado: diferencia 0.
 static void Publish(Skel& S, unsigned fr) {
     ExprCharPose& P = S.pub; P = ExprCharPose();
-    if (!g_cfg.optExprPalette || !S.cur[D_HEAD]) return;
+    // (09/11 g) sin paleta se publica solo la cabeza (expr.cpp DeltaUpload: cabeza y edad para las arrugas), sin los huesos
+    const bool pal = g_cfg.optExprPalette;
+    if (!S.cur[D_HEAD]) return;
     Xf hc; if (!ReadXf(S.cur[D_HEAD], hc)) return;
     P.frame = fr; P.pid = S.pKnown ? S.pid : 0; P.skel = S.skel;
     memcpy(P.headT, hc.t, sizeof P.headT); memcpy(P.headQ, hc.q, sizeof P.headQ); memcpy(P.headRestT, S.rest[D_HEAD].t, sizeof P.headRestT); memcpy(P.headRestQ, S.rest[D_HEAD].q, sizeof P.headRestQ);
     P.worldOk = S.node && CharNodeMatrix(const_cast<void*>(S.node), P.W);
     float hr[4]; { float c[4]; QConj(S.rest[D_HEAD].q, c); QMul(hc.q, c, hr); }   // (08/11 g) cabeza actual * reposo^-1 (como Neutral)
-    for (int d = 0; d < kExprBones && d < kND; d++) {
+    for (int d = 0; pal && d < kExprBones && d < kND; d++) {
         if (!S.cur[d]) continue;
         ExprCharPose::Bone& b = P.b[d];
         // (08/11 g, Agustin: control total sobre "toda la expresion (juego + mod)") la cara NEUTRA de este jugador (promedio lento, Neutral())
@@ -2050,7 +2052,7 @@ static void Publish(Skel& S, unsigned fr) {
 }
 void ExprBonesFrame(const void* skel) {
     FrameBody(skel);
-    if (!skel || !g_cfg.optExprPalette) return;
+    if (!skel) return;   // (09/11 g) tambien sin paleta: Publish deja solo la cabeza
     std::lock_guard<std::mutex> lk(s_mx);
     for (int i = 0; i < s_nSk; i++) if (s_sk[i].skel == skel) { if (s_sk[i].jawFound) Publish(s_sk[i], s_frame.load(std::memory_order_relaxed)); else s_sk[i].pub.ok = false; break; }
 }

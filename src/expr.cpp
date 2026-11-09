@@ -1588,7 +1588,10 @@ static void PackAff(const Aff& a, float* o) {   // 3 float4: fila k = columna k 
 }
 }
 static void DeltaUpload(ID3D11DeviceContext* imm) {
-    if (!g_dev.dev || !g_cfg.optExprPalette) return;
+    // (09/11 g) tambien sin paleta (expr_paleta = 0): se publican solo la cabeza y la edad de cada personaje (arrugas por edad,
+    // pes_wrdepth.hlsli) con todas las diferencias en identidad (el VS no cambia nada de la malla)
+    if (!g_dev.dev) return;
+    const bool pal = g_cfg.optExprPalette;
     if (!s_bdBuf) {
         D3D11_BUFFER_DESC d{}; d.ByteWidth = kBdF4 * 16; d.Usage = D3D11_USAGE_DYNAMIC; d.BindFlags = D3D11_BIND_SHADER_RESOURCE; d.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
         if (FAILED(g_dev.dev->CreateBuffer(&d, nullptr, &s_bdBuf))) { s_bdBuf = nullptr; return; }
@@ -1603,7 +1606,9 @@ static void DeltaUpload(ID3D11DeviceContext* imm) {
     for (int i = 0; i < np; i++) {
         const ExprCharPose& P = ps[i]; float* base = f.data() + (size_t)(2 + i * kBdStride) * 4;
         float hw[3]; const bool hv = PoseHeadWorld(P, hw);
-        base[0] = hv ? hw[0] : 0; base[1] = hv ? hw[1] : 0; base[2] = hv ? hw[2] : 0; base[3] = hv ? 1.0f : 0.0f;
+        // (09/11 g) w = 1 + edad del jugador (0 = no se sabe; >= 0.5 sigue siendo "posicion valida" para PesBoneChar)
+        int age = 0; { const int sl = CharSlotForSkel(P.skel); CharInfo ci; if (sl >= 0 && CharGet(sl, ci) && ci.known && ci.key) age = CharPlayerAge(ci.key); }
+        base[0] = hv ? hw[0] : 0; base[1] = hv ? hw[1] : 0; base[2] = hv ? hw[2] : 0; base[3] = hv ? 1.0f + (float)age : 0.0f;
         Aff W, WI; bool wOk = false; if (P.worldOk) { AffFromW(P.W, W); wOk = AffInv(W, WI); }
         PrevD& pv = s_prevD[P.skel]; const bool pvOk = pv.frame + 1 == P.frame || pv.frame == P.frame;   // el cuadro anterior de este personaje (si no, la de ahora)
         PrevD cur; cur.frame = P.frame;
@@ -1614,7 +1619,7 @@ static void DeltaUpload(ID3D11DeviceContext* imm) {
             // aplican sobre la expresion ENTERA respecto de la cara neutra de este jugador (b.zq / zt), tambien en los huesos que el mod no
             // toco este cuadro (la animacion del juego se escala); en los otros modos, solo sobre lo que agrega el mod
             const bool fullZ = g_cfg.live[350][0] > 2.5f && b.hasZ;
-            if (b.has && (b.moved || fullZ)) {
+            if (pal && b.has && (b.moved || fullZ)) {
                 Aff N, B, BI, Dm; AffQ(b.nq, b.nt, N); AffQ(b.bq, b.bt, B);
                 // (08/11 b) tope por hueso: el gesto del mod nunca corre un hueso de la cara mas de 40 grados ni 2 cm de lo que dejo el juego
                 // (si algo sale de rango -lectura rara, cara nueva- se recorta en vez de tirar la piel)
@@ -1677,7 +1682,7 @@ int ExprZoneScale(int d, const float* bq, const float* bt, float* nq2, float* nt
     nt2[0] = bt[0] + dx; nt2[1] = bt[1] + dy; nt2[2] = bt[2] + dz;
     return clip;
 }
-ID3D11ShaderResourceView* ExprBoneDeltaSrv() { return (g_cfg.optExprPalette && s_bdAny) ? s_bdSrv : nullptr; }
+ID3D11ShaderResourceView* ExprBoneDeltaSrv() { return s_bdAny ? s_bdSrv : nullptr; }   // (09/11 g) tambien sin paleta: cabeza y edad (diferencias en identidad)
 
 static void HeadPresent(ID3D11DeviceContext* imm) {
     s_hcapThisFrame = false;

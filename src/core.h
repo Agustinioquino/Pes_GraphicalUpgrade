@@ -542,6 +542,7 @@ struct CharInfo {
 void CharTrackInstall(); void CharTrackPresent(); bool CharTrackOk();
 int CharSlotForSkel(const void* skel);            // lugar del personaje de ese esqueleto (-1 = no se sabe); sin candado (Eval)
 bool CharPlayerName(uint64_t key, char* out, size_t n);   // nombre del jugador de esa clave (base de datos del juego)
+int CharPlayerAge(uint64_t key);                  // (09/11) edad del jugador (base de datos del juego; 0 = no se sabe)
 bool CharGet(int slot, CharInfo& out);
 int CharSnapshot(CharInfo out[kCharSlots], bool alive[kCharSlots]);   // copia de la tabla (devuelve cuantos vivos)
 unsigned CharTableGen();                          // sube cada vez que cambia la tabla

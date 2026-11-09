@@ -136,6 +136,7 @@ Texture2D<float4> StereoParams : register(t125);
 #include "pes_skintone.hlsli"
 #include "pes_pores.hlsli"   // (27/10 c) poros triplanares sobre la posicion de reposo
 #include "pes_collar.hlsli"   // (27/10) cuello de las caras reales fundido con el torso (fila 322)
+#include "pes_wrdepth.hlsli"   // (09/11 g) arrugas por gesto con profundidad (t45 / t46, x15 = 2) y edad del jugador
 #ifdef PES_HL_ACC
 RWByteAddressBuffer gHlAcc : register(u7);   // (24/10 e) medicion del color de la cara (ring.cpp / skintone.cpp; u5 / u6 son las semillas de las cejas)
 #endif
@@ -369,6 +370,24 @@ void main(
     r0.z = 1.0 - pow(1.0 - r0.z, 1.0 + wrCurve);
   }
   wrWeight = r0.z;
+  // (09/11 g, Agustin: "mejorar las arrugas ... la textura y como se aplica", "la edad tiene que importar como valor") x15 = 2: cada
+  // gesto con SUS arrugas (pes_wrdepth.hlsli: frente / entrecejo / ojos / surco / menton / marioneta / cuello / mejilla), que se forman
+  // (ancha y suave -> fina y profunda) con los mismos pesos de arriba (juego suavizado, sliders, zonas, compresion real), mas las de
+  // reposo por la edad del jugador (z15 = cuanto pesa). Reemplaza al mapa unico + manchas y a la divergencia de las normales.
+  bool wrD = wrOn && P15.x > 1.5 && PesWrDOk();
+  float wrDd = 0, wrDw = 0, wrDb = 0; float2 wrDg = 0;
+  if (wrD) {
+    float4 wa = float4(saturate(wTop.x + 0.5 * wTop.y), wTop.z, wTop.w, wBot.x);
+    float4 wb = float4(saturate(0.6 * wBot.x + 0.4 * max(wBot.y, wBot.z)), max(wBot.y, wBot.z), wBot.w, wTop.w);
+    wa = max(wa, pesCmp); wb = max(wb, pesCmp);
+    float dz = saturate(P15.y);
+    wa = saturate((wa - dz) / max(1.0 - dz, 0.05) * wrGain); wb = saturate((wb - dz) / max(1.0 - dz, 0.05) * wrGain);
+    wa = 1.0 - pow(1.0 - wa, 1.0 + wrCurve); wb = 1.0 - pow(1.0 - wb, 1.0 + wrCurve);
+    float ageK = PesWrAgeK(pR.w > 10.5 && pR.w < 12.5 ? (pR.w - 11.0) * 100.0 : 0.0, max(P15.z, 0.0));
+    float wrDgain = 1.0; PesWrAge(ageK, wa, wb, wrDgain);
+    PesWrDepth(g_samplerAnisotropic_Clamp_s, v2.xy, wa, wb, wrDgain, wrDd, wrDg, wrDw, wrDb);
+    wrWeight = saturate(max(wrDw, wrDd) / 0.30);
+  }
 
   // ---- normal de detalle + normal de animacion ----
   { uint cW, cH, cL; g_tex_normal.GetDimensions(0, cW, cH, cL); float capN = faceCap > 1.0 ? max(0.0, log2((float)max(cW, cH) / faceCap)) : 0.0; faceBN = max(faceBN, capN - g_tex_normal.CalculateLevelOfDetail(g_samplerAnisotropic_Clamp_s, v2.xy)); }
@@ -393,7 +412,7 @@ void main(
   r3.z = r1.w * r0.w;
   // surcos: divergencia del mapa de arrugas (las normales "miran" hacia el fondo del pliegue)
   float wrLod = wrHi ? pesWrinkleN.CalculateLevelOfDetail(g_samplerAnisotropic_Clamp_s, v2.xy) : g_tex_normal_animation.CalculateLevelOfDetail(g_samplerAnisotropic_Clamp_s, v2.xy);
-  if (wrOn && (wrCrease > 0 || exOn) && wrWeight > 0.002) {
+  if (!wrD && wrOn && (wrCrease > 0 || exOn) && wrWeight > 0.002) {
     uint wtw, wth;
     if (wrHi) pesWrinkleN.GetDimensions(wtw, wth); else g_tex_normal_animation.GetDimensions(wtw, wth);
     float2 wdu = float2(1.5 / max(wtw, 1u), 0);
@@ -421,6 +440,14 @@ void main(
       exRidgeZ = exOn ? wrRidgeW : 0.0;
     }
   }
+  if (wrD) {   // (09/11 g) surco, zona ancha y piel juntada entre surcos, todo de la misma profundidad
+    wrFold   = saturate(wrDd / 0.30);
+    wrFoldW  = saturate(wrDw / 0.30);
+    wrRidgeF = saturate((wrDb - wrDd) / 0.10) * saturate(wrDb / 0.12);
+    wrRidgeW = 0.7 * wrRidgeF;
+    exFoldZ  = exOn ? wrFoldW : 0.0;
+    exRidgeZ = exOn ? wrRidgeW : 0.0;
+  }
   r2.xyz = float3(-1,-1,-1) + r3.xyz;
   float2 pesWrN = r2.xy;   // (07/11) direccion de la arruga en el espacio tangente (la normal se inclina a traves del surco): la usan los poros
   // (04/11 i, Agustin: "el nrm de arrugas no es muy notorio junto a sus texturas") z365 = relieve de las arrugas (normal del gesto
@@ -435,6 +462,7 @@ void main(
   // (08/11, Agustin: "como se plasma en barbas") se guarda lo que la arruga inclina la normal (gesto + esculpida) para sacarlo
   // despues donde la textura pinta barba / bigote (fhMask, mas abajo): sobre pelo pintado el surco se veia como una raja a traves de la barba
   float3 wrDN = (float3(r2.xy * wrRelief, max(1.0 + r2.z, 0.05)) / length(float3(r2.xy * wrRelief, max(1.0 + r2.z, 0.05))) - float3(0, 0, 1)) * r0.zzz;
+  if (wrD) { float3 nD = normalize(float3(PesWrDNormalXY(wrDg) * wrRelief, 1.0)); wrDN = nD - float3(0, 0, 1); pesWrN = nD.xy; }   // (09/11 g)
   r1.xyz += wrDN;
   r0.z = dot(r1.xyz, r1.xyz);
   r0.z = rsqrt(r0.z);
