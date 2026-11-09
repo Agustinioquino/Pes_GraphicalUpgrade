@@ -644,6 +644,30 @@ void PesMuscleApply(float4 p, float3 rest, uint4 I, float4 W, float3 n,
   // sonrisa: la comisura sube / sale (6 mm = entera); ceno: la ceja interna baja / entra (4 mm = entero)
   float smile = saturate(PesMusGesture(corner, hh, Pc, false) / 0.006), smileP = saturate(PesMusGesture(corner, hh, Pc, true) / 0.006);
   float frown = saturate(-PesMusGesture(brow, hh, Pb, false) / 0.004), frownP = saturate(-PesMusGesture(brow, hh, Pb, true) / 0.004);
+  // (09/11, Agustin: "los cachetes no se inflan de manera natural") CACHETE INFLADO con volumen: los huesos (Inflar los cachetes x362,
+  // soplido al recuperar el aire) corren la mejilla de abajo entera hacia afuera, pero un hueso no hace un bulto redondo. Aca se mide
+  // cuanto salio ESTE vertice hacia afuera respecto de la cabeza rigida (skinning ya hecho: huesos del juego + mod) y, si paso de 1 mm,
+  // se le suma un bulto redondo de hasta 1.8 mm centrado en el cachete (lejos de los labios: nada a menos de 2.6 cm del medio), con la
+  // normal inclinada para que la luz marque la curva. Solo la piel de la cara (VS faab87ee / 455eb97b): la boca no se toca
+  float pf = 0, pfP = 0; float2 grp = 0;
+  {
+    float ex = (x - 0.045) / 0.017, ey = (y - 1.622) / 0.016;
+    float g = exp(-(ex * ex + ey * ey)) * smoothstep(0.026, 0.033, x);
+    if (g > 0.01) {
+      float3x3 Mh = (float3x3)g_vsBone.m_boneMatrices[hh], Mp = (float3x3)g_vsPrevBone.m_boneMatrices[hh];
+      float3 dl = mul(Mh, pos - mul(p, g_vsBone.m_boneMatrices[hh]));
+      float3 dlP = mul(Mp, prev - mul(p, g_vsPrevBone.m_boneMatrices[hh]));
+      float a = smoothstep(0.0010, 0.0032, sx * dl.x), aP = smoothstep(0.0010, 0.0032, sx * dlP.x);
+      pf = 0.0018 * a * g; pfP = 0.0018 * aP * g;
+      grp = pf * float2(-2.0 * ex / 0.017, -2.0 * ey / 0.016);
+    }
+  }
+  if (pf > 1e-6 || pfP > 1e-6) {
+    float3 np = normalize(float3(sx * 0.85, -0.05, 0.52));
+    pos  += mul(np * pf, (float3x3)g_vsBone.m_boneMatrices[hh]);
+    prev += mul(np * pfP, (float3x3)g_vsPrevBone.m_boneMatrices[hh]);
+    nrm  += mul(-float3(sx * grp.x, grp.y, 0.0) * 0.6, (float3x3)g_vsBone.m_boneMatrices[hh]);
+  }
   if (smile <= 0.001 && smileP <= 0.001 && frown <= 0.001 && frownP <= 0.001) return;
   // (01/11 k, captura de Agustin: "corte" azul en la union del ala de la nariz y rayas en la mandibula) la altura NO va
   // por la normal del vertice: en las aristas duras (ala de la nariz, menton) el modelo trae el mismo punto dos veces con
