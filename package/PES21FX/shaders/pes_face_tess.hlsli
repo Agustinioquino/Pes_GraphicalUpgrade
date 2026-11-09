@@ -471,7 +471,7 @@ float2 PesTessWrinkle(float2 uv)
   }
   // esculpidas de la sonrisa (Messi): slider Sonrisa 355.y con Perfiles por cara 356.w; de 1 a 1.5 pasa a las grandes (BA)
   { float4 G5 = IniParams.Load(int2(355, 0)), G6 = IniParams.Load(int2(356, 0));
-    float shW = G6.w > 0.5 ? saturate(G5.y) * 2.0 : 0.0;   // (09/11 c) horneadas de Messi al doble, como en el PS
+    float shW = G6.w > 0.5 ? max(saturate(G5.y), saturate(IniParams.Load(int2(391, 0)).w)) * 2.0 : 0.0;   // (09/11 e) tambien con la sonrisa del motor (w391)   // (09/11 c) horneadas de Messi al doble, como en el PS
     uint sw = 0, sh = 0; tShapeWr.GetDimensions(sw, sh);
     if (shW > 0.001 && sw > 1) {
       float bl = saturate((G5.y - 1.0) * 2.0), wx = 6.0 / sw, wy = 6.0 / sh;

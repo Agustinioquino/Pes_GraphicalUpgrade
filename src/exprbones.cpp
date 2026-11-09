@@ -1112,6 +1112,7 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
 }
 }   // namespace
 float g_tongueTap = 0.0f;   // (09/11 d) toque de la lengua (fuera del namespace anonimo: lo lee config.cpp)
+float g_ownSmileEng = 0.0f;   // (09/11 e) sonrisa medida (juego, gani o slider) de la cara con sonrisa esculpida propia (Messi); la subida la pone en w391
 
 // (02/11 d, Agustin: "le falta mas naturalidad a los gestos de las expresiones") MOVIMIENTOS QUE ACOMPANAN al gesto, como en una
 // cara real (el juego mueve solo los huesos de la animacion; el resto de la cara queda quieto y se ve de goma):
@@ -1754,6 +1755,14 @@ static void FrameBody(const void* skel) {
         auto step = [a](float prev, float now) { const float d = now - prev; return fabsf(d) < 0.02f ? prev + d * a * 0.5f : prev + d * a; };
         S->secSm = step(S->secSm, sm); S->secOpen = step(S->secOpen, openAll);
         smS = S->secSm; openS = S->secOpen;
+    }
+    {   // (09/11 e, Agustin: "si quiero que messi al sonreir tenga el modelo con blendshapes") la sonrisa que hace el MOTOR (Konami, gani o
+        // nuestros huesos) medida en las comisuras de este esqueleto: si la cara tiene sonrisa esculpida propia, el shader aplica la escultura
+        // con este valor (max con el slider). Un solo valor por personaje: las tres piezas de la cara reciben lo mismo (la union no se abre)
+        static float s_seAcc = 0.0f, s_seT = -1.0f;
+        const float t = AnimT();
+        if (t != s_seT) { g_ownSmileEng = s_seAcc; s_seAcc = 0.0f; s_seT = t; }
+        if (ownSmile) s_seAcc = (std::max)(s_seAcc, std::clamp(smS, 0.0f, 1.0f));
     }
     Secondary(*S, hr, smS, openS);
     Neck(*S, 0.90f * pGri + 0.35f * pAng + 0.45f * (std::max)(xB[1], 0.0f) + (std::max)(0.0f, openS - 0.6f) + 0.40f * eff + 0.15f * nConc, openS);

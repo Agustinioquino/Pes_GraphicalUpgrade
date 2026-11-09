@@ -887,7 +887,8 @@ void UpdateTimeParams() {
           } } }
       cloudT += adv; if (cloudT > 100000.0) cloudT -= 100000.0;
       p[157][0] = (float)cloudT; p[157][1] = 1.0f; p[157][2] = (good > 120) ? rate : 1.0f; p[157][3] = (good > 120) ? 1.0f : 0.0f; }
-    { extern float g_tongueTap; p[396][2] = std::clamp(g_tongueTap, 0.0f, 1.0f); }   // (09/11 d) lengua contra el paladar (exprbones.cpp); z396 reservada, nunca se guarda
+    { extern float g_tongueTap; p[396][2] = std::clamp(g_tongueTap, 0.0f, 1.0f); }
+    { extern float g_ownSmileEng; p[391][3] = std::clamp(g_ownSmileEng, 0.0f, 1.0f); }   // (09/11 e) sonrisa medida de la cara esculpida (exprbones.cpp); w391 la escribe la DLL   // (09/11 d) lengua contra el paladar (exprbones.cpp); z396 reservada, nunca se guarda
     // 19/10: pupila reactiva: brillo de la escena por la luz del sol/focos (m_lightColor0 de cPSLight), adaptado en el tiempo
     // como una pupila real (se contrae rapido, ~0.4 s; se dilata lento, ~3 s). x93 brillo adaptado 0 (noche) .. 1 (sol pleno)
     { static double lastT = t; static float adapt = 0.7f; std::vector<float> L;

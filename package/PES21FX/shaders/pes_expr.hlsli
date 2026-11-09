@@ -108,7 +108,10 @@ float3 PesShapeDelta1(uint lv)
   // a la sonrisa grande (forma 5; un paquete viejo de 5 formas no la trae y queda la de siempre)
   uint nS = g_pesExprShape.w;
   float sG = nS >= 6 ? saturate((G5.y - 1.0) * 2.0) : 0.0;
-  float w[6] = { saturate(G5.y) * (1.0 - sG), saturate(G6.x), saturate(G5.x), saturate(G5.z), saturate(G6.y), sG };
+  // (09/11 e, Agustin: "que messi al sonreir tenga el modelo con blendshapes") la sonrisa tambien la decide el MOTOR: w391 = sonrisa medida
+  // en las comisuras de esta cara (Konami, gani o huesos del mod; la escribe la DLL); el slider sigue andando (el mayor de los dos)
+  float sEng = saturate(IniParams.Load(int2(391, 0)).w);
+  float w[6] = { max(saturate(G5.y), sEng) * (1.0 - sG), saturate(G6.x), saturate(G5.x), saturate(G5.z), saturate(G6.y), sG };
   uint b = g_pesExprShape.x + lv * nS;
   float3 d = 0;
   [unroll] for (uint k = 0; k < 6; k++) if (k < nS && w[k] > 0.001) d += g_pesShapes[b + k].xyz * w[k];

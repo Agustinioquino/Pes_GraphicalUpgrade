@@ -448,7 +448,7 @@ void main(
   // con "Perfiles por cara" (356.w). Solo la enlaza la DLL en las mallas con formas (sin textura: tamano 0 -> nada)
   { float4 G5w = IniParams.Load(int2(355, 0)), G6w = IniParams.Load(int2(356, 0));
     // (09/11 b, Agustin: "ten mas en cuenta ... las arrugas que bakeaste") las arrugas horneadas de su sonrisa 60 % mas marcadas
-    float shW = G6w.w > 0.5 ? saturate(G5w.y) * 2.0 : 0.0;   // (09/11 c, Agustin: "las arrugas son poco notorias") 1.6 -> 2.0
+    float shW = G6w.w > 0.5 ? max(saturate(G5w.y), saturate(IniParams.Load(int2(391, 0)).w)) * 2.0 : 0.0;   // (09/11 e) tambien con la sonrisa del motor (w391)   // (09/11 c, Agustin: "las arrugas son poco notorias") 1.6 -> 2.0
     uint shTw = 0, shTh = 0; pesShapeWr.GetDimensions(shTw, shTh);
     if (shW > 0.001 && shTw > 1) {
       // (04/11 c) RG = arrugas de la sonrisa, BA = las de la sonrisa grande (messi6 de Agustin): de 1 a 1.5 pasa a las grandes
