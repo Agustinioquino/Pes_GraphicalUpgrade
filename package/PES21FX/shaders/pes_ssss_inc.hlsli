@@ -792,7 +792,12 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   float mel = (alb0L > 0.004) ? saturate(log2(0.47 / max(alb0L, 1e-3)) / 2.85) : 0.0;
   // (09/11 f) rojo 1.0 -> 1.5 mm (verde / azul igual): la entrada ya es irradiancia (sin textura) y el azul / verde no cambian:
   // el rojo viaja mas (medido en piel: rojo ~2.6 veces el verde) sin lavar poros; es el que hace el borde de sombra rojizo y blando de la piel real
-  float3 dmm = float3(lerp(1.5, 0.85, mel), lerp(0.42, 0.36, mel), lerp(0.26, 0.24, mel)) * widthScale;
+  // (09/11 h, Agustin: "el sss no funciona solo como un colorado en texturas") la luz se mueve bajo la piel en los TRES canales:
+  // antes el verde (0.42 mm) y el azul (0.26) casi no viajaban y el SSS se leia solo como un tinte rojo en el borde de la sombra.
+  // Proporcion de la piel medida (Jensen 2001: rojo 3.67, verde 1.37, azul 0.68 mm de camino libre): el verde llega a la mitad del
+  // rojo y el azul a un cuarto, asi la luz ablanda de verdad el sombreado (el terminador se corre hacia la sombra, las arrugas y los
+  // poros del relieve se iluminan desde adentro) y el rojo queda solo como lo que mas lejos llega
+  float3 dmm = float3(lerp(1.5, 0.85, mel), lerp(0.75, 0.50, mel), lerp(0.40, 0.30, mel)) * widthScale;
   float mmToPx = 0.001 * pxm;
   if (dmm.r * 3.0 * mmToPx < 0.6) return float4(c0, 1);   // de lejos lo resuelve la piel pre-integrada de la pasada de luz
   // (08/11 SSSS) entre 0.6 y 1.6 px el disco entra de a poco: antes se prendia de golpe y la cara cambiaba al acercar / alejar la camara
@@ -836,7 +841,7 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   // azul se difundia igual que el rojo (poros y arrugas lavados). Ahora la fuerza va por canal como la dispersion real: el rojo
   // casi entero (y95^0.5: borde de sombra rojizo y suave), el verde como el slider y el azul menos (y95^1.5: detalle fino)
   float sK = saturate(P.y);
-  float3 mixK = float3(sqrt(sK), sK, sK * sqrt(sK)) * nearK;
+  float3 mixK = float3(sqrt(sK), sqrt(sK), sK) * nearK;   // (09/11 h) el verde difunde como el rojo (es el que da el brillo de la piel)
   return float4(lerp(c0, blurred, mixK), 1);
 }
 #endif
