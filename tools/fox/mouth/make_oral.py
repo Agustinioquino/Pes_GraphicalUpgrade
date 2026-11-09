@@ -503,6 +503,29 @@ def konami_tone(bsm, log=print):
         100 * (org > 0.13)[kg].mean()))
     return out
 
+TONGUE_CLEAN = float(os.environ.get('TONGUE_CLEAN', '1.0'))   # (09/11) 0 = lengua como v26
+_PAP = {}
+def papillae(N):
+    """(09/11) Agustin: lengua 'mas real, mas limpia, mas detalle en los reflejos'. Papilas como puntos ordenados (rejilla con
+    desorden) en vez de ruido blanco: filiformes chicas y densas (~0.5 mm), fungiformes redondas y salteadas (~1 mm, mas en la
+    punta y los bordes). Devuelve (fil, fun) en 0..1 del tamano de la textura, con semilla fija."""
+    if N in _PAP: return _PAP[N]
+    rng = np.random.default_rng(91)
+    def field(step, sig, keep):
+        img = np.zeros((N, N), np.float32)
+        g = np.arange(step * 0.5, N, step)
+        yy, xx = np.meshgrid(g, g, indexing='ij')
+        yy = yy + rng.uniform(-0.42, 0.42, yy.shape) * step; xx = xx + rng.uniform(-0.42, 0.42, xx.shape) * step
+        m = rng.random(yy.shape) < keep
+        yi = np.clip(yy[m].astype(int), 0, N - 1); xi = np.clip(xx[m].astype(int), 0, N - 1)
+        img[yi, xi] = rng.uniform(0.6, 1.0, yi.shape)
+        out = ndi.gaussian_filter(img, sig)
+        return np.clip(out / (1.0 / (2 * np.pi * sig * sig)), 0, 1)
+    fil = field(7.0 * N / 2048, 1.3 * N / 2048, 0.92)
+    fun = field(30.0 * N / 2048, 3.0 * N / 2048, 0.55)
+    _PAP[N] = (fil, fun)
+    return fil, fun
+
 TONGUE_AO = float(os.environ.get('TONGUE_AO', '1.0'))   # (04/11 f) 0 = sin oclusion en la lengua
 def tongue_ao(bsm, B, log=print):
     """(04/11 f) Agustin: a la lengua 'le falta oclusion'. La de Konami trae la luz horneada: la punta (v alto) iluminada y el fondo,
@@ -513,13 +536,15 @@ def tongue_ao(bsm, B, log=print):
     gy, gx = (np.mgrid[0:N, 0:N] + 0.5) / N
     tongue = sst(0.29, 0.32, gx) * sst(0.725, 0.695, gx) * sst(0.655, 0.68, gy)
     lumw = np.array([0.30, 0.59, 0.11], np.float32)
-    Lk = ndi.gaussian_filter((B[..., :3] * lumw).sum(-1), 10)
+    Lk = ndi.gaussian_filter((B[..., :3] * lumw).sum(-1), 10 if TONGUE_CLEAN <= 0 else 26)   # (09/11) mas suave: sin manchas
     k = tongue > 0.5
     lo, hi = np.percentile(Lk[k], 5), np.percentile(Lk[k], 97)
     ao = np.clip((Lk - lo) / max(hi - lo, 1e-4), 0, 1) ** 0.75
     tu = (gx - 0.503) / 0.205
-    occ = (0.50 + 0.50 * ao) * (1 - 0.30 * sst(0.7, 1.0, np.abs(tu)))
     tv = (0.99 - gy) / 0.32
+    if TONGUE_CLEAN > 0:   # (09/11) mitad horneado de Konami (suavizado), mitad degradado limpio punta -> fondo
+        ao = 0.5 * ao + 0.5 * (1 - sst(0.05, 0.9, tv))
+    occ = (0.50 + 0.50 * ao) * (1 - 0.30 * sst(0.7, 1.0, np.abs(tu)))
     occ *= 1 - 0.45 * sst(0.45, 1.0, tv)   # hacia la garganta (bajo los dientes de arriba) cada vez menos luz
     w = (tongue * min(TONGUE_AO, 1.0))[..., None]
     out = bsm.copy()
@@ -576,6 +601,19 @@ def wet_tissue(bsm, srm, log=print):
     T = T * (1 + np.clip(edge, 0, 1)[..., None] * np.array([0.06, -0.06, -0.04], np.float32))
     T = T * (1 - 0.30 * fil[..., None]) + np.array([0.86, 0.72, 0.70], np.float32) * Lt[..., None] * 1.25 * 0.30 * fil[..., None]
     T = T * (1 - 0.5 * fun[..., None]) + np.array([0.80, 0.26, 0.28], np.float32) * 0.5 * fun[..., None]
+    if TONGUE_CLEAN > 0:
+        # (09/11) lengua limpia: base pareja (sin manchas de ruido grande), degradado punta rosada -> fondo mas oscuro,
+        # filiformes como puntitos claros ordenados, fungiformes rojas redondas; saburra solo leve atras
+        pf, pu = papillae(N)
+        pu = pu * (0.35 + 0.65 * sst(0.55, 0.95, np.abs(tu)) + 0.65 * sst(0.3, 0.0, tv))
+        Lt = 0.46 * (1 + 0.025 * low - 0.12 * groove + 0.015 * np.tanh(cell2)) * (1.04 - 0.08 * sst(0.0, 1.0, tv))
+        T = tcol / (tcol * lumw).sum() * Lt[..., None]
+        coat = np.exp(-(tu / 0.40) ** 2) * sst(0.45, 0.95, tv) * 0.6
+        T = T * (1 - 0.15 * coat[..., None]) + np.array([0.86, 0.74, 0.72], np.float32) * Lt[..., None] * 1.12 * 0.15 * coat[..., None]
+        T = T * (1 + np.clip(edge, 0, 1)[..., None] * np.array([0.05, -0.05, -0.03], np.float32))
+        T = T * (1 - 0.32 * pf[..., None]) + np.array([0.90, 0.74, 0.72], np.float32) * Lt[..., None] * 1.18 * 0.32 * pf[..., None]
+        T = T * (1 - 0.55 * pu[..., None]) + np.array([0.92, 0.36, 0.37], np.float32) * Lt[..., None] * 1.75 * 0.55 * pu[..., None]
+        fil, fun = pf, pu
     T = np.clip(T, 0, 1)
     out[..., :3] = out[..., :3] * (1 - tongue[..., None]) + T * tongue[..., None]
     o = out[..., :3]; org = o[..., 0] - o[..., 1]
@@ -587,6 +625,8 @@ def wet_tissue(bsm, srm, log=print):
     tS, gS = down(tongue), down(tis); filS, funS, grS = down(fil), down(fun), down(groove)
     S = srm.copy()
     rough_t = 0.24 + 0.14 * filS + 0.06 * funS - 0.06 * grS
+    if TONGUE_CLEAN > 0:   # (09/11) saliva entre papilas muy lisa (reflejos chicos y nitidos), puntas de papila asperas, surco mojado
+        rough_t = 0.13 + 0.20 * filS + 0.05 * funS - 0.05 * grS + 0.05 * sst(0.4, 1.0, down(tv))
     rough_g = 0.17 + 0.03 * down(ndi.gaussian_filter(rng.standard_normal((N, N)).astype(np.float32), 1.0))
     S[..., 1] = S[..., 1] * (1 - tS - gS) + rough_t * tS + rough_g * gS
     S[..., 0] = S[..., 0] * (1 - tS - gS) + 0.07 * (tS + gS)
@@ -616,6 +656,8 @@ def detail_maps(bsm, nrm, srm, trm, rows, log=print):
     orange = nz(1.4)
     # alto: lengua (papilas), encia (punteado), dientes (ondas finas + grano)
     perik = np.sin(gy * 2 * np.pi * 420 + 1.5 * nz(10)) * 0.5
+    if TONGUE_CLEAN > 0:
+        pf, pu = papillae(N); fil, fun = pf, pu * (0.35 + 0.65 * sst(0.55, 0.95, np.abs(tu)) + 0.65 * sst(0.3, 0.0, (0.99 - gy) / 0.32))
     h = tongue * (0.55 * fil + 0.9 * fun - 1.2 * groove) + tis * 0.35 * orange + teeth * (0.12 * perik + 0.10 * nz(0.9))
     h = ndi.gaussian_filter(h, 0.6) * DETAIL
     hy, hx = np.gradient(h)
@@ -635,7 +677,7 @@ def detail_maps(bsm, nrm, srm, trm, rows, log=print):
     rough_te = 0.13 + 0.21 * (1 - sst(0.5, 0.9, core)) + 0.02 * down(nz(1.2))
     S[..., 1] = S[..., 1] * (1 - teS) + np.clip(rough_te, 0.10, 0.6) * teS
     S[..., 0] = S[..., 0] * (1 - teS) + (0.07 + 0.03 * sst(0.5, 0.9, core)) * teS
-    S[..., 1] = S[..., 1] * (1 - tS) + np.clip(S[..., 1] + 0.05 * filS - 0.04 * funS, 0.1, 0.7) * tS
+    S[..., 1] = S[..., 1] * (1 - tS) + np.clip(S[..., 1] + (0.0 if TONGUE_CLEAN > 0 else 0.05 * filS - 0.04 * funS), 0.08 if TONGUE_CLEAN > 0 else 0.1, 0.7) * tS
     S[..., :3] = np.clip(S[..., :3], 0, 1)
     T = trm.copy()
     # translucidez: borde del diente hacia afuera de la mascara (incisal / puntas) un poco mas alto; solo se sube en dientes
