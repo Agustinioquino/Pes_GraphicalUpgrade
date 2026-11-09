@@ -64,6 +64,7 @@ Texture2D<float4> inShadow : register(t14);
 Texture2D<float4> PESGtao : register(t27);   // PES21 (20/10): GTAO de la DLL (1 = sin oclusion); se mezcla con el SSAO del juego (y132)
 Texture2DArray<float4> PESSkyEnv : register(t28);   // PES21 (21/10): panorama del cielo fisico para los reflejos (DLL, pes_skyenv): capa 0 nitida, 1 desenfocada
 Texture2D<float4> PESSsgi : register(t26);
+Texture2D<float> PESMouth : register(t43);   // PES21 (09/11 hilo boca): mascara del interior de la boca (profundidad del dibujo de la boca) para la sombra del volumen de la boca
 Texture2D<float4> PESShadowMap : register(t29);   // PES21 (23/10): atlas del shadow map del sol (3 cascadas apiladas), referencia tomada de los shaders de luz   // PES21 (21/10): SSGI temporal de la DLL (media resolucion: rgb luz indirecta, a profundidad)
 
 
@@ -102,6 +103,11 @@ void main(
   float4 fDest;
   float4 P11 = IniParams.Load(int2(11,0));   // x11 niebla, y11 calidez ambiente piel, z11 AO color piel, w11 on
   bool cmpOn = P11.w > 0.5;
+  bool mouthM = false;   // (09/11 hilo boca) interior de la boca VISIBLE (la mascara guarda su profundidad: donde la cara la tapo, no)
+  { uint mmW = 0, mmH = 0; PESMouth.GetDimensions(mmW, mmH); if (mmW > 0) {
+    uint2 mmP = min((uint2)v0.xy, uint2(mmW - 1, mmH - 1));
+    float mmZ = PESMouth.Load(int3(mmP, 0)), mmD = inDepth.Load(int3(mmP, 0)).x;
+    mouthM = mmZ > 0.0 && abs(mmZ - mmD) <= 1e-6 + 2e-4 * abs(mmD); } }
   float2 uvC = g_psSystem.m_renderBuffer.zw * v0.xy;
   float4 gmC = inGBufferMaterial.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0);
   float gnZ = inGBufferNormal.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).z;
@@ -181,6 +187,40 @@ void main(
           }
           r3.w *= 1.0 - hitC * saturate((15.0 - zcC) / 5.0);
         }
+      }
+    } }
+  // (09/11, hilo boca, Agustin: "el volumen de la boca y labios tienen que afectar a la sombra, como hace FC/FIFA" / "que al mover
+  // la luz la sombra lo acompane y no sea fija; el interior de la boca no recibe la misma luz por las sombras de la boca")
+  // SOMBRA DEL VOLUMEN DE LA BOCA: solo donde se VE el interior de la boca (mascara t43 con profundidad), un segundo rayo hacia el
+  // sol mas denso que el de contacto (16 pasos parejos de 4 cm con desfase por pixel, margen fino, espesor 3 cm): los labios, la
+  // mejilla y los dientes de arriba tapan el sol que entra por la abertura y esa sombra se mueve con la luz. Solo agrega sombra.
+  // Se apaga con w387 = 0 (como la de contacto)
+  { float4 CSm = IniParams.Load(int2(387, 0));
+    float3 LwM = pLc_dir.xyz;
+    if (cmpOn && mouthM && CSm.w > 0.001 && dot(LwM, LwM) > 1e-6 && r3.w > 0.01) {
+      float zcM = PESLinZ(uvC);
+      if (zcM > 0.05 && zcM < 15.0) {
+        float3 LdM = normalize(LwM);
+        float3 NcM = PESDecN(uvC); NcM.z = -NcM.z;
+        float ndM = dot(NcM, LdM);
+        float2 sCm = uvC * float2(2, -2) + float2(-1, 1);
+        float3 PvM = float3((sCm - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zcM, zcM);
+        float jM = frac(52.9829189 * frac(dot(v0.xy, float2(0.06711056, 0.00583715))));
+        float hitM = 0.0;
+        [loop] for (int mi = 0; mi < 16; mi++) {
+          float tM = (mi + jM) / 16.0;
+          float3 Q = PvM + LdM * (tM * 0.04);
+          if (Q.z < 0.06) break;
+          float2 sQ = Q.xy / (g_psScene.m_projectionParam.xy * Q.z) + g_psScene.m_cameraCenterOffset.xy;
+          float2 uvQ = (sQ + float2(1, -1)) * float2(0.5, -0.5);
+          if (any(uvQ < 0.0) || any(uvQ > 1.0)) break;
+          float zQ = PESLinZ(uvQ);
+          if (zQ < 0.05 || zQ > 300.0) continue;
+          float dQ = Q.z - zQ;
+          float biasM = 0.0008 + 0.0015 * zcM * tM + 0.002 * saturate(1.0 - abs(ndM));
+          if (dQ > biasM && dQ < 0.03) hitM = max(hitM, 1.0 - 0.25 * tM);
+        }
+        r3.w *= 1.0 - 0.9 * hitM * saturate((15.0 - zcM) / 5.0);
       }
     } }
   if (r5.w != 0) {

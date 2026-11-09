@@ -45,12 +45,13 @@ REAL_W = {True: [8.1, 6.8, 7.7, 7.1, 6.7],   # (04/11) Agustin 'reducir el taman
 # (04/11) perfiles por jugador (Agustin: 'una boca especifica para Messi', fotos de su sonrisa): MOUTH_PROFILE=messi
 # centrales de arriba grandes y cuadrados, laterales angostos, mas cortos y un poco hacia atras (escalon marcado),
 # caninos con punta; abajo igual que la comun (casi no se ve)
+ANAT = float(os.environ.get('MOUTH_ANAT', '1.0'))   # (09/11 e) 0 = sin detalle anatomico extra (como v21 / Messi v10)
 PROFILE = os.environ.get('MOUTH_PROFILE', '')
 PROF = {
-    '': dict(ext_up={'IC': -0.8, 'I': -0.8, 'C': -0.3}, corner_ic=(0.02, 0.08), corner_i_up=(0.04, 0.14), lat_back=0.0, canine=0.30),
-    'messi': dict(ext_up={'IC': 0.6, 'I': 0.4, 'C': 0.0}, corner_ic=(0.03, 0.06), corner_i_up=(0.03, 0.07), lat_back=0.0, canine=0.08, even=True, ext_lo=2.0, corner_lo=(0.02, 0.04)),   # (04/11 e) Agustin con captura del juego vs foto ('le falta naturalidad con las encias y el tamano de los dientes'): en la foto los de arriba son largos, anchos y parejos (carillas) y se ven enteros; en el juego cortos -> 1.6 mm mas largos que antes, esquinas apenas redondeadas
+    '': dict(ext_up={'IC': -0.5, 'I': -1.1, 'C': -0.5}, ext_p=-0.6, corner_ic=(0.04, 0.09), corner_i_up=(0.06, 0.14), lat_back=0.1, canine=0.26, ext_lo=0.8, corner_lo=(0.03, 0.06), gap_ic=0.006, gap=0.012, back_in=0.05, asym=(0.25, 0.12, 0.8, 0.10)),   # (09/11 d) Agustin 'mejora la boca generica tambien': lo aprendido con Messi (arco de la sonrisa, esquinas redondeadas, linea fina entre dientes, muelas adentro, filas que se separan al sonreir, asimetria) con dientes comunes
+    'messi': dict(ext_up={'IC': 0.3, 'I': -0.5, 'C': -0.1}, ext_p=-0.7, corner_ic=(0.04, 0.09), corner_i_up=(0.06, 0.14), lat_back=0.1, canine=0.22, even=False, ext_lo=-0.3, corner_lo=(0.03, 0.06), gap_ic=0.004, gap=0.010, back_in=0.05, asym=(0.22, 0.10, 0.7, 0.10)),   # (09/11 c) Agustin (foto de Messi riendo: 'mira la forma de los dientes y muelas'): arco de la sonrisa natural (centrales largos, laterales mas cortos y apenas detras, canino con punta casi al nivel de los centrales, premolares mas cortos subiendo hacia atras), esquinas redondeadas; dientes individuales con linea fina (gap 0.010 / 0.004), muelas adentro, hueco entre filas
 }[PROFILE]
-if PROFILE == 'messi': REAL_W = {True: [8.7, 7.7, 7.9, 7.1, 6.7], False: REAL_W[False]}   # (04/11 e) foto: centrales y laterales anchos   # (04/11 c) laterales anchos (comun 8.1 / 6.8)
+if PROFILE == 'messi': REAL_W = {True: [8.7, 7.0, 7.8, 7.1, 6.7], False: REAL_W[False]}   # (09/11 c) foto riendo: centrales anchos, laterales mas chicos   # (04/11 c) laterales anchos (comun 8.1 / 6.8)
 
 def fit_row(row, log=print, name=''):
     """(03/11 v19c) Agustin: 'ni todos pegados ni separados'. Entre dientes vecinos de una fila (en orden por el arco) se mide
@@ -254,6 +255,12 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0
     # (02/11) Agustin: 'evitar que los dientes se deformen para adentro y queden chuecos': sin giro por diente, y la
     # irregularidad de largo/profundidad mas chica (antes 0.18 / 0.12 mm y giro +-1)
     jit_len, jit_dep, jit_rot = rng.uniform(-0.10, 0.10) * MM, rng.uniform(-0.05, 0.05) * MM, 0.0
+    if REAL_TEETH and PROF.get('asym') and kind != 'P':
+        # (09/11 d) Agustin: 'le falta un poco de asimetria': incisivos y caninos con largo, profundidad y giro propios
+        # (semilla fija por diente) y un lado de la boca apenas mas largo que el otro; chico para no volver a 'chuecos' (02/11)
+        aL, aD, aR, aS = PROF['asym']
+        jit_len = rng.uniform(-aL, aL) * MM + aS * mes * MM
+        jit_dep, jit_rot = rng.uniform(-aD, aD) * MM, rng.uniform(-aR, aR)
     M0 = M
     if PATCH:
         h = vI - vG
@@ -263,7 +270,7 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0
         deg = 1 if kind == 'P' else PDEG
         M = local_patch(M, uL - 0.1 * (uR - uL), uR + 0.1 * (uR - uL), vG - 0.3 * h, vI, deg=deg, degv=1)   # (01/11 f) todos rectos a lo alto
     gap = (0.012 if kind == 'IC' else 0.035) * (uR - uL)   # (01/11 d) los centrales se tocan
-    if REAL_TEETH: gap = (REAL_GAP_IC if kind == 'IC' else REAL_GAP) * (uR - uL)   # (03/11 v19c) Agustin: 'ni pegados ni separados': un poco de aire entre dientes
+    if REAL_TEETH: gap = (PROF.get('gap_ic', REAL_GAP_IC) if kind == 'IC' else PROF.get('gap', REAL_GAP)) * (uR - uL)   # (03/11 v19c) Agustin: 'ni pegados ni separados': un poco de aire entre dientes
     uL2, uR2 = uL + gap, uR - gap
     uc = 0.5 * (uL2 + uR2)
     b = -0.22 + 1.22 * np.sin(np.linspace(0, 1, nb) * np.pi / 2) ** 1.2   # mas filas cerca del borde incisal
@@ -366,6 +373,22 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0
         dev = (0.08 * MM * np.exp(-((np.abs(cx) - 0.38) / 0.12) ** 2) * sst(0.35, 0.85, bb)) if kind in ('IC', 'I') else 0 * cx
         rot = 0.25 * MM * jit_rot * cx * sst(0.0, 0.3, bb)
         bulge = convex - dev + rot + jit_dep * sst(0.0, 0.3, bb) + lift - SINK * sst(bs, bs - 0.27, bpos)
+        if REAL_TEETH and ANAT > 0:
+            # (09/11 e) Agustin: 'la diferencia con uno profesional es como estan modelados los detalles y su tridimensionalidad, y
+            # los costados': canino con cresta vertical (eminencia), premolares con cresta vestibular, la cara de adelante que se
+            # curva hacia atras en el tercio incisal, y troneras: las esquinas se redondean hacia atras (el diente no es una placa)
+            ax = np.abs(cx)
+            anat = -0.22 * MM * sst(0.62, 1.0, ax) * sst(0.25, 0.9, bb)          # troneras / costados redondeados
+            anat = anat - 0.18 * MM * sst(0.55, 1.0, bb) ** 2                   # cara curvada hacia atras cerca del borde
+            if kind == 'C':
+                anat = anat + 0.30 * MM * np.exp(-((cx - 0.12 * mes) / 0.38) ** 2) * sst(0.1, 0.75, bb)
+            elif kind == 'P':
+                anat = anat + 0.26 * MM * np.exp(-(cx / 0.42) ** 2) * sst(0.05, 0.8, bb)
+            # (09/11 f) Agustin: 'tenes que acompanar los detalles bakeados en el modelo, aunque use menos poligonos': la forma
+            # grande de la anatomia (tooth_anat.low = lo que el normal NO repite) en la malla, solo en la cara de adelante
+            import tooth_anat
+            anat = anat + tooth_anat.low(cx, bb, kind, mes) * MM * sst(0.0, 0.35, cy)
+            bulge = bulge + ANAT * anat * sst(-0.05, 0.15, bpos)
         Pf = Pf + anchor[None, :]
         front = Pf + Nf * bulge[:, None]
         # (01/11 d) la cara de atras sale con la normal PROMEDIO del diente, horizontal: con la normal de cada punto, en las muelas (donde la
@@ -547,10 +570,11 @@ def build(src_fmdl, texdir, log=print):
                 uvbox = ((xl0 + g2) / 512.0, (xr0 - g2) / 512.0, (gi0 + GUM * (ii0 - gi0)) / 512.0, min(ii0 / 512.0, 0.302) if up else max(ii0 / 512.0, 0.505))
             if REAL_TEETH:
                 # (03/11) curva de la sonrisa real: laterales ~0.7 mm mas cortos que los centrales, canino con la punta casi al nivel
-                ext = (0.0 if kind == 'P' else (PROF['ext_up'][kind] if up else PROF.get('ext_lo', LO_OVERBITE))) * MM
+                ext = ((PROF.get('ext_p', 0.0) if up else 0.0) if kind == 'P' else (PROF['ext_up'][kind] if up else PROF.get('ext_lo', LO_OVERBITE))) * MM   # (09/11) ext_p: premolares de arriba mas cortos (arco de la sonrisa)
             else:
                 ext = ((0.0 if kind == 'P' else (-0.2 if up else 1.0)) * MM if KONAMI_BITE else (EXT_UP if up else EXT_LO) + dext)
-            Pt, UVt, Ft = tooth(M, xl / 512.0, xr / 512.0, vG, vI, kind, up, ext=ext, mes=mes, tw=(tw_row[i] if REAL_TEETH else None),
+            Pt, UVt, Ft = tooth(M, xl / 512.0, xr / 512.0, vG, vI, kind, up, ext=ext, mes=mes, na=(24 if (ANAT > 0 and kind != 'P') else 20),   # (09/11 e) los poligonos de las muelas pasan a los de adelante
+                                tw=(tw_row[i] if REAL_TEETH else None),
                                 seed=nteeth, uvbox=uvbox)
             if os.environ.get('TOOTH_DBG'): log('    diente %s %d %s x %.1f y %.1f z %.1f ancho %.1f' % ('arr' if up else 'abj', i, kind, *(Pt.mean(0) * 1000), np.ptp(Pt[:, 0]) * 1000))
             wt = np.zeros((len(Pt), len(names))); wt[:, names.index('sk_head' if up else 'skf_jaw')] = 1
@@ -616,7 +640,7 @@ def build(src_fmdl, texdir, log=print):
                         cc = mid - bd * (0.5 * Wb - 2.5 * MM)
                         ytip = lo_tips.get((side, k), ybot + 0.4 * MM) + 0.2 * MM
                         cc[1] = ytip + tipz + Hc
-                    Pm, UVm, Fm = molar.geometry(cc, t, bd, up, 0.94 * Lk, Wb, Hc, 1.5 * MM, kind, seed=nmol)
+                    Pm, UVm, Fm = molar.geometry(cc, t, bd, up, 0.94 * Lk, Wb, Hc, 1.5 * MM, kind, seed=nmol, **({'na': 10, 'nb': 4} if ANAT > 0 else {}))   # (09/11 e) Agustin: 'las muelas no tienen que tener muchos poligonos, es lo que menos se ve'
                     if k == 0 and retried < 3:
                         retried += 1
                         gap = float(_KD(last).query(Pm)[0].min())
@@ -744,6 +768,29 @@ def build(src_fmdl, texdir, log=print):
         ok = dist < 5 * MM
         nn = Na[border[ok]] + Na[ri[j[ok]]]
         Na[border[ok]] = nn / np.maximum(np.linalg.norm(nn, axis=1, keepdims=True), 1e-9)
+    if PROF.get('back_in'):   # (09/11) Agustin: 'al expresarse las muelas sobresalen mucho': premolares y muelas hacia adentro
+        dm = np.where(tagA == 'diente')[0]; ax = np.abs(Pa[dm, 0])
+        Pa[dm, 0] *= 1 - PROF['back_in'] * sst(0.015, 0.026, ax)
+        log('  perfil: dientes de atras hacia adentro hasta %.2f mm' % (PROF['back_in'] * float(ax.max()) * 1000))
+    if REAL_TEETH and ANAT > 0:
+        # (09/11 f) Agustin: 'la forma de hundimiento de los dientes es la que me parece poco real': el diente entraba en la tira
+        # (pared lisa). Ahora la encia ABRAZA el cuello: los vertices de la tira del lado de la encia cerca de cada diente salen
+        # hacia afuera (collar con la forma del contorno del diente = margen festoneado y papila entre dientes) y el borde se
+        # redondea; lejos del diente la tira queda igual
+        from scipy.spatial import cKDTree
+        si = np.where(tagA == 'tira')[0]; ti = np.where(tagA == 'diente')[0]
+        d_, _ = cKDTree(Pa[ti]).query(Pa[si])
+        u_ = UVa[si, 0] * 512; v_ = UVa[si, 1] * 512
+        upr = v_ < 0.40 * 512
+        gl = np.where(upr, np.interp(u_, np.arange(512), rows[0]['g']), np.interp(u_, np.arange(512), rows[1]['g']))
+        inc = np.where(upr, np.interp(u_, np.arange(512), rows[0]['inc']), np.interp(u_, np.arange(512), rows[1]['inc']))
+        hgt = np.maximum(np.abs(inc - gl), 4.0)
+        gumside = np.where(upr, (gl + 0.25 * hgt - v_) / hgt, (v_ - gl + 0.25 * hgt) / hgt)   # > 0 del lado de la encia (con un poco del cuello)
+        wgum = sst(-0.05, 0.25, gumside)
+        push = 0.55 * MM * np.exp(-(d_ / (1.4 * MM)) ** 2) * wgum
+        Pa[si] = Pa[si] + Na[si] * push[:, None]
+        Nn = -vnormals(Pa, Fa); Na[si] = Nn[si]
+        log('  encia: collar alrededor del cuello de los dientes (hasta %.2f mm, %d vertices de la tira)' % (float(push.max()) * 1000, int((push > 0.05 * MM).sum())))
     Ta, tw = tangents(Pa, Na, UVa, Fa); tw = -tw
     # 4 huesos por vertice
     order = np.argsort(-Wa, 1)[:, :4]
