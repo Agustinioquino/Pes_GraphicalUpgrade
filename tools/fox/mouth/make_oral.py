@@ -631,8 +631,9 @@ def detail_maps(bsm, nrm, srm, trm, rows, log=print):
     # centro de la corona (lejos de los bordes del diente) = esmalte pulido; bordes / cuello = mas aspero
     core = down(ndi.gaussian_filter((teeth > 0.5).astype(np.float32), 6))
     S = srm.copy()
-    rough_te = 0.22 + 0.16 * (1 - sst(0.5, 0.9, core)) + 0.03 * down(nz(1.2))
-    S[..., 1] = S[..., 1] * (1 - teS) + np.clip(rough_te, 0.12, 0.6) * teS
+    # esmalte pulido en la corona, cuello mas mate (Agustin 09/11 'reflejo real, tambien como textura')
+    rough_te = 0.13 + 0.21 * (1 - sst(0.5, 0.9, core)) + 0.02 * down(nz(1.2))
+    S[..., 1] = S[..., 1] * (1 - teS) + np.clip(rough_te, 0.10, 0.6) * teS
     S[..., 0] = S[..., 0] * (1 - teS) + (0.07 + 0.03 * sst(0.5, 0.9, core)) * teS
     S[..., 1] = S[..., 1] * (1 - tS) + np.clip(S[..., 1] + 0.05 * filS - 0.04 * funS, 0.1, 0.7) * tS
     S[..., :3] = np.clip(S[..., :3], 0, 1)

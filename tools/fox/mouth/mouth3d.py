@@ -48,7 +48,7 @@ REAL_W = {True: [8.1, 6.8, 7.7, 7.1, 6.7],   # (04/11) Agustin 'reducir el taman
 PROFILE = os.environ.get('MOUTH_PROFILE', '')
 PROF = {
     '': dict(ext_up={'IC': -0.8, 'I': -0.8, 'C': -0.3}, corner_ic=(0.02, 0.08), corner_i_up=(0.04, 0.14), lat_back=0.0, canine=0.30),
-    'messi': dict(ext_up={'IC': 0.3, 'I': -0.5, 'C': -0.1}, ext_p=-0.7, corner_ic=(0.04, 0.09), corner_i_up=(0.06, 0.14), lat_back=0.1, canine=0.22, even=False, ext_lo=-0.3, corner_lo=(0.03, 0.06), gap_ic=0.004, gap=0.010, back_in=0.05),   # (09/11 c) Agustin (foto de Messi riendo: 'mira la forma de los dientes y muelas'): arco de la sonrisa natural (centrales largos, laterales mas cortos y apenas detras, canino con punta casi al nivel de los centrales, premolares mas cortos subiendo hacia atras), esquinas redondeadas; dientes individuales con linea fina (gap 0.010 / 0.004), muelas adentro, hueco entre filas
+    'messi': dict(ext_up={'IC': 0.3, 'I': -0.5, 'C': -0.1}, ext_p=-0.7, corner_ic=(0.04, 0.09), corner_i_up=(0.06, 0.14), lat_back=0.1, canine=0.22, even=False, ext_lo=-0.3, corner_lo=(0.03, 0.06), gap_ic=0.004, gap=0.010, back_in=0.05, asym=(0.22, 0.10, 0.7, 0.10)),   # (09/11 c) Agustin (foto de Messi riendo: 'mira la forma de los dientes y muelas'): arco de la sonrisa natural (centrales largos, laterales mas cortos y apenas detras, canino con punta casi al nivel de los centrales, premolares mas cortos subiendo hacia atras), esquinas redondeadas; dientes individuales con linea fina (gap 0.010 / 0.004), muelas adentro, hueco entre filas
 }[PROFILE]
 if PROFILE == 'messi': REAL_W = {True: [8.7, 7.0, 7.8, 7.1, 6.7], False: REAL_W[False]}   # (09/11 c) foto riendo: centrales anchos, laterales mas chicos   # (04/11 c) laterales anchos (comun 8.1 / 6.8)
 
@@ -254,6 +254,12 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0
     # (02/11) Agustin: 'evitar que los dientes se deformen para adentro y queden chuecos': sin giro por diente, y la
     # irregularidad de largo/profundidad mas chica (antes 0.18 / 0.12 mm y giro +-1)
     jit_len, jit_dep, jit_rot = rng.uniform(-0.10, 0.10) * MM, rng.uniform(-0.05, 0.05) * MM, 0.0
+    if REAL_TEETH and PROF.get('asym') and kind != 'P':
+        # (09/11 d) Agustin: 'le falta un poco de asimetria': incisivos y caninos con largo, profundidad y giro propios
+        # (semilla fija por diente) y un lado de la boca apenas mas largo que el otro; chico para no volver a 'chuecos' (02/11)
+        aL, aD, aR, aS = PROF['asym']
+        jit_len = rng.uniform(-aL, aL) * MM + aS * mes * MM
+        jit_dep, jit_rot = rng.uniform(-aD, aD) * MM, rng.uniform(-aR, aR)
     M0 = M
     if PATCH:
         h = vI - vG
