@@ -129,6 +129,12 @@ GUM = 0.08   # (01/11 h) 0.18 -> 0.08: dientes mas largos del lado de la encia (
 # (02/11 v17b) Agustin: 'respetar tambien el tamano de la encia para los dientes de arriba': la fila de arriba deja la linea de
 # la encia donde la pinto Konami (sin correrla). Cada fila lleva su valor en rows[i]['gum'] (rows_layout)
 GUM_UP = float(os.environ.get('GUM_UP', '0.0'))
+# (09/11 k) Agustin 'no me gusta como esta hecha la encia de abajo': papila de abajo mas baja y redonda (era un pico en V);
+# mouth3d.py hunde el cuello del diente con la misma curva
+PAP_UP = (0.30, 0.14); PAP_LO = (float(os.environ.get('PAP_LO_H', '0.34')), float(os.environ.get('PAP_LO_W', '0.20')))   # papila que llena entre los cuellos, punta redonda
+LO_CLEAN = float(os.environ.get('LO_CLEAN', '-1.6'))
+LO_TOP = float(os.environ.get('LO_TOP', '-0.4'))   # (09/11 k) desde donde (entre dientes pintados) se alisa la encia de abajo
+LO_DEEP = float(os.environ.get('LO_DEEP', '4.0'))   # (09/11 k) la tira 3D de abajo usa la encia pintada hasta ~3.5 altos de diente (tope: antes de la lengua)
 
 def gum_field(rows, N, vmin):
     """valor de 'gum' de la fila de cada pixel (mismo criterio de 'adentro' que tooth_fields; afuera = GUM)"""
@@ -166,6 +172,16 @@ def gum_warp(img, rows, gum=None):
     out = np.stack([ndi.map_coordinates(img[..., c], [src, xx], order=1, mode='nearest') for c in range(img.shape[2])], -1)
     return out.astype(img.dtype)
 
+def lo_gum_t(rows, N):
+    """(09/11 k) encia de abajo por fila (en pixeles, sin columnas por diente): t = 0 en la linea de la encia, 1 = un alto de
+    diente hacia la raiz; mx = adentro de la fila a lo ancho"""
+    r1 = [r for r in rows if not r['down']][0]; s_ = N / 512.0
+    yy, xx = np.mgrid[0:N, 0:N].astype(np.float32) + 0.5
+    gl_ = np.interp(xx / s_, np.arange(512), r1['g']) * s_; ic_ = np.interp(xx / s_, np.arange(512), r1['inc']) * s_
+    hh_ = np.maximum(np.abs(gl_ - ic_), 4 * s_)
+    mx_ = sst(r1['x0'] * s_, r1['x0'] * s_ + 10 * s_, xx) * sst(r1['x1'] * s_, r1['x1'] * s_ - 10 * s_, xx)
+    return (yy - gl_) / hh_, mx_, (yy / N) > 0.40
+
 def clean_gum(bsm, nrm, rows, tissue0, gum=None):
     """(01/11 d) margen de la encia limpio: gum_warp estira la encia pintada al doble (vetas verticales, 'pelo') y el borde
     pintado de Konami es dentado (bloques del DXT de 512). En la franja [-1.6 gum, gum + papila] el color pasa a ser la encia
@@ -173,12 +189,13 @@ def clean_gum(bsm, nrm, rows, tissue0, gum=None):
     bajando entre dientes, con el margen apenas mas oscuro. El diente pintado de abajo queda (la boca de Konami lo sigue usando);
     la boca 3D usa solo el centro del diente pintado."""
     N = bsm.shape[0]
-    U, V, W = tooth_fields(rows, N, vmin=-1.0)
-    if gum is None: gum = gum_field(rows, N, -1.0)
+    U, V, W = tooth_fields(rows, N, vmin=LO_CLEAN)
+    if gum is None: gum = gum_field(rows, N, LO_CLEAN)
     ins = U >= 0
     u = np.clip(U, 0, 1)
     du = np.minimum(u, 1 - u)
-    pap = 0.30 * np.exp(-(du / 0.14) ** 2)                        # papila: baja entre dientes hacia el borde incisal
+    lo_row = ((np.mgrid[0:N, 0:N][0] + 0.5) / N) > 0.40
+    pap = np.where(lo_row, PAP_LO[0] * np.exp(-(du / PAP_LO[1]) ** 2), PAP_UP[0] * np.exp(-(du / PAP_UP[1]) ** 2))   # papila: baja entre dientes hacia el borde incisal
     edge = gum + pap
     # encia promediada con convolucion normalizada sobre los pixeles de encia (no mezcla color de diente)
     rgb = bsm[..., :3]
@@ -187,12 +204,31 @@ def clean_gum(bsm, nrm, rows, tissue0, gum=None):
     num = np.stack([blur(rgb[..., c] * wg, (5, 14)) for c in range(3)], -1); den = blur(wg, (5, 14))[..., None]
     base = num / np.maximum(den, 1e-4)
     base = np.where(den > 0.02, base, rgb)
+    lo_row3 = lo_row[..., None]
+    if LO_CLEAN < -1.0:
+        # (09/11 k) abajo: toda la encia limpia (la pintada de Konami estirada tenia vetas verticales que en 3D se veian como
+        # hilachas): color promediado mas ancho, sin las vetas
+        wl = (ins & lo_row & (V < gum - 0.02) & (V > LO_CLEAN + 0.05)).astype(np.float32)
+        numl = np.stack([blur(rgb[..., c] * wl, (10, 40)) for c in range(3)], -1); denl = blur(wl, (10, 40))[..., None]
+        basel = np.where(denl > 0.02, numl / np.maximum(denl, 1e-4), base)
+        base = np.where(lo_row3, basel, base)
     st = noise(N, 1.3, 21) * 0.010 + noise(N, 4.0, 22) * 0.018
     gumc = base * (1 + st)[..., None]
     # margen: 0..1 a lo largo de la franja, mas oscuro y un poco mas rojo pegado al diente
     dm = np.clip((edge - V) / 0.10, 0, 1)
     gumc = gumc * (1 - 0.10 * np.exp(-(dm / 0.35) ** 2))[..., None] * (1 + np.array([0.02, -0.03, -0.03], np.float32) * np.exp(-(dm / 0.35) ** 2)[..., None])
-    a_gum = sst(edge + 0.012, edge - 0.012, V) * sst(-1.6 * gum - 0.1, -1.6 * gum, V) * ins
+    lo_lim = np.where(lo_row, LO_CLEAN + 0.05 if LO_CLEAN < -1.0 else -1.6 * gum - 0.1, -1.6 * gum - 0.1)
+    a_gum = sst(edge + 0.012, edge - 0.012, V) * sst(lo_lim, lo_lim + 0.1, V) * ins
+    if LO_CLEAN < -1.0:
+        # (09/11 k) abajo la limpieza seguia la forma de cada diente (columnas): entre columnas quedaba la encia de Konami con
+        # vetas y en 3D se veian hilachas. Mascara por fila (en pixeles): toda la encia desde la linea de la encia hasta 1.6 altos
+        tt_, mx_, _ = lo_gum_t(rows, N); yy_ = np.mgrid[0:N, 0:N][0].astype(np.float32)
+        deep = sst(0.0, 0.3, tt_) * sst(LO_DEEP + 0.4, LO_DEEP, tt_) * mx_ * lo_row * sst(0.655, 0.64, (yy_ + 0.5) / N)   # hasta LO_DEEP altos (lo que cubre la tira 3D), sin entrar en la lengua
+        a_gum = np.maximum(a_gum, deep)
+        # hacia la raiz pasa a mucosa: algo mas oscura y roja (sin las vetas de Konami)
+        muc = sst(0.8, 2.6, tt_)[..., None]
+        deepc = basel * (1 + st)[..., None] * (1 - 0.28 * muc) * (1 + muc * np.array([0.04, -0.06, -0.04], np.float32))
+        gumc = np.where((deep > 0)[..., None] & (~(ins[..., None]) | (tt_[..., None] > 0.3)), deepc, gumc)
     a_gum = ndi.gaussian_filter(a_gum.astype(np.float32), 0.8)
     out = bsm.copy()
     out[..., :3] = rgb * (1 - a_gum[..., None]) + gumc * a_gum[..., None]
@@ -221,6 +257,9 @@ def gum_detail(bsm, nrm, rows):
     ins = U >= 0
     # distancia al margen (en alto de diente): 0 en el margen, crece hacia la raiz
     dm = np.where(ins, np.clip(gum_field(rows, N, -1.6) - V, 0, 2), 1.0)
+    if LO_CLEAN < -1.0:   # (09/11 k) abajo: distancia al margen por fila, no por columna de diente (se veian franjas)
+        tt_, mx_, lr_ = lo_gum_t(rows, N)
+        dm = np.where(lr_ & (mx_ > 0.5) & (tt_ > 0), np.clip(tt_, 0, 2), dm)
     attached = sst(0.75, 0.45, dm)                                   # encia adherida (con punteado) cerca del diente
     mucosa = 1 - attached
     # punteado: hoyuelos finos, mas marcados en la adherida
@@ -253,7 +292,8 @@ def gum_detail(bsm, nrm, rows):
         # vestibulares, verticales sobre el centro de cada diente) y el surco entre raices; punteado mas suave
         root = np.where(ins, np.exp(-((U - 0.5) / 0.30) ** 2), 0.0) * sst(0.0, 0.3, dm) * sst(1.0, 0.5, dm)
         root = ndi.gaussian_filter(root.astype(np.float32), 3.0)
-        h = (-0.15 * pits * (0.35 + 0.65 * attached) + 0.10 * vess * mucosa + 3.0 * root) * tis
+        root_k = np.where(gy > 0.40, 0.4, 3.0)   # (09/11 k) abajo: sin vetas verticales marcadas (se veian como chorreados)
+        h = (-0.15 * pits * (0.35 + 0.65 * attached) + 0.10 * vess * mucosa + root_k * root) * tis
     hy, hx = np.gradient(ndi.gaussian_filter(h, 0.6))
     nx = nrm[..., 3] * 2 - 1; ny = nrm[..., 1] * 2 - 1
     sc = 1.6
@@ -415,7 +455,42 @@ def build(src, N=2048, NS=1024, log=print):
     bsm_o = tongue_ao(bsm_o, B, log)
     bsm_o = junction_ao(bsm_o, rows, log)
     nrm_o, S, Tr = detail_maps(bsm_o, nrm_o, S, Tr, rows, log)
+    bsm_o, nrm_o, S = lo_gum_final(bsm_o, nrm_o, S, rows, log)
     return {'bsm': bsm_o, 'nrm': nrm_o, 'srm': S, 'trm': Tr}, (B, on, line, crown, corner, cerv)
+
+def lo_gum_final(bsm, nrm, srm, rows, log=print):
+    """(09/11 k) Agustin: 'no me gusta como esta hecha la encia de abajo'. La tira 3D de abajo usa la encia pintada desde el margen
+    hasta ~4 altos de diente (v .51-.65); ahi quedaban franjas verticales (columnas por diente de varias pasadas, vetas de
+    Konami y el festoneado/papilas pintados, que ya no coinciden con los dientes 3D) que en 3D se veian como hilachas. Pasada
+    final: en esa zona, fuera de lo que es diente pintado (los dientes 3D toman el centro del diente pintado), color, normal y
+    rugosidad se promedian a lo ancho SOLO con pixeles de encia (no entra blanco), queda el degradado margen -> mucosa y el
+    punteado fino."""
+    if LO_CLEAN >= -1.0: return bsm, nrm, srm
+    N = bsm.shape[0]
+    tt_, mx_, lr_ = lo_gum_t(rows, N)
+    gy = (np.mgrid[0:N, 0:N][0] + 0.5) / N
+    c = bsm[..., :3]; mxc = c.max(-1); sat = (mxc - c.min(-1)) / np.maximum(mxc, 1e-6); rg = c[..., 0] - c[..., 1]
+    tooth = sst(0.40, 0.50, mxc) * sst(0.30, 0.22, sat) * sst(0.12, 0.09, rg)
+    tooth = np.clip(ndi.gaussian_filter(tooth, 1.5) * 1.5, 0, 1)
+    zone = sst(LO_TOP, LO_TOP + 0.25, tt_) * sst(LO_DEEP + 0.4, LO_DEEP, tt_) * sst(0.652, 0.638, gy) * mx_ * lr_
+    w = (1 - tooth) * (zone > 0.01)
+    m = (zone * (1 - tooth)).astype(np.float32)[..., None]
+    def bx(a, sx=28, ww=w):
+        num = np.stack([ndi.gaussian_filter(a[..., k] * ww, (2.0, sx)) for k in range(a.shape[-1])], -1)
+        den = ndi.gaussian_filter(ww, (2.0, sx))[..., None]
+        return np.where(den > 1e-3, num / np.maximum(den, 1e-3), a)
+    def fine(a):
+        return a - np.stack([ndi.gaussian_filter(a[..., k], 1.6) for k in range(a.shape[-1])], -1)
+    b2 = bsm.copy(); b2[..., :3] = np.clip(bx(bsm[..., :3]) + 0.5 * fine(bsm[..., :3]), 0, 1)
+    n2 = np.clip(bx(nrm) + 0.8 * fine(nrm), 0, 1)
+    bsm = bsm * (1 - m) + b2 * m; nrm = nrm * (1 - m) + n2 * m
+    NS = srm.shape[0]
+    ms = ndi.zoom(m[..., 0], NS / N, order=1)[..., None] if NS != N else m
+    ws = ndi.zoom(w, NS / N, order=1) if NS != N else w
+    s2 = np.clip(bx(srm, 28 * NS / N, ws) + 0.5 * fine(srm), 0, 1)
+    srm = srm * (1 - ms) + s2 * ms
+    log('  encia de abajo: franjas y papilas pintadas promediadas (%.1f%% del atlas)' % (float((m > 0.5).mean()) * 100))
+    return bsm.astype(np.float32), nrm.astype(np.float32), srm.astype(np.float32)
 
 TEETH_LIFT = float(os.environ.get('TEETH_LIFT', '1.0'))   # (04/11) 0 = como v18
 def lift_teeth(bsm, log=print):
@@ -744,6 +819,9 @@ def detail_maps(bsm, nrm, srm, trm, rows, log=print):
     gy, gx = (np.mgrid[0:N, 0:N] + 0.5) / N
     tongue = sst(0.29, 0.32, gx) * sst(0.725, 0.695, gx) * sst(0.655, 0.68, gy)
     tis = sst(0.11, 0.15, rg) * (1 - tongue) * (1 - teeth)
+    if LO_CLEAN < -1.0:   # (09/11 k) la encia de abajo entera con el mismo punteado (por color quedaban columnas: franjas en 3D)
+        tt_, mx_, lr_ = lo_gum_t(rows, N)
+        tis = np.maximum(tis, sst(0.05, 0.3, tt_) * sst(LO_DEEP + 0.4, LO_DEEP, tt_) * sst(0.655, 0.64, gy) * mx_ * lr_ * (1 - teeth))
     rng = np.random.default_rng(73)
     def nz(sig): a = ndi.gaussian_filter(rng.standard_normal((N, N)).astype(np.float32), sig); return a / max(float(a.std()), 1e-6)
     tu = (gx - 0.505) / 0.21; tv = (gy - 0.66) / 0.34

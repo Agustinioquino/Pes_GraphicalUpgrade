@@ -22,6 +22,7 @@ MM = 0.001
 # se alargan para que cierren: los de arriba bajan 2.4 mm por delante de los de abajo, que suben 0.8 mm (se solapan ~0.7 mm)
 EXT_UP, EXT_LO = float(os.environ.get('EXT_UP', '1.7')) * 0.001, 0.7 * 0.001   # (01/11 f) 2.0 -> 1.5 mm: menos sobremordida (Agustin)   # (01/11 b) 2.4 / 0.8 -> 2.0 / 0.7: dientes un poco menos largos (Agustin)
 # (01/11 b) mas encia (Agustin): la linea de la encia baja GUM del alto del diente pintado; esa franja de la tira muestra encia
+GS_MIN = float(os.environ.get('GS_MIN', '0.6'))   # (09/11 k) encia 'de verdad' (sin el borde del cuello) para meter dientes que asoman
 GUM = 0.08   # = make_oral.GUM (01/11 h: 0.18 -> 0.08, dientes mas largos)
 KONAMI_BITE = int(os.environ.get('KONAMI_BITE', '1'))   # (02/11 g) Agustin: 'que la mordida sea la misma que la de Konami': el borde de cada diente 3D queda
 # justo en el borde del diente pintado de Konami (sin alargar, sin resalte); los premolares chicos crecen hacia la encia, no hacia el borde
@@ -36,6 +37,7 @@ REAL_GAP = float(os.environ.get('REAL_GAP', '0.024'))      # (03/11 v19c) aire e
 REAL_GAP_IC = float(os.environ.get('REAL_GAP_IC', '0.012'))
 REAL_AIR = float(os.environ.get('REAL_AIR', '0.2'))      # (03/11 v19c) aire minimo (mm) entre dientes vecinos, mitad de adelante
 ARCH_Z = float(os.environ.get('ARCH_Z', '0.125'))          # z (m) aproximado del centro del arco (para saber que es 'adelante')
+LO_NECK = float(os.environ.get('LO_NECK', '0.93'))   # (09/11 k) cuello de los de abajo
 NECK_N = float(os.environ.get('NECK_N', '0.78'))           # (03/11 v19c) ancho del cuello de incisivos/caninos (fraccion)
 LO_OVERBITE = float(os.environ.get('LO_OVERBITE', '2.2'))   # (03/11) mm que los de abajo suben detras de los de arriba (sobremordida)
 LO_OVERJET = float(os.environ.get('LO_OVERJET', '1.0'))     # (03/11) mm que los de abajo van detras (resalte)
@@ -327,6 +329,8 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0
         narrow = (0.88 + 0.12 * sst(-0.1, 0.45, bb)) if kind == 'IC' else (0.80 + 0.20 * sst(-0.1, 0.45, bb))
         if REAL_TEETH and kind in ('I', 'C'):   # (03/11) el ancho maximo (contacto) en el tercio incisal; cuello algo angosto
             narrow = NECK_N + (1 - NECK_N) * sst(-0.1, 0.55, bb)   # (03/11 v19c) cuello mas angosto: asoma la papila de encia entre dientes
+        if not upper and kind != 'P':   # (09/11 k) abajo el cuello casi tan ancho como la corona: sin triangulos oscuros entre cuellos
+            narrow = np.maximum(narrow, LO_NECK + (1 - LO_NECK) * sst(-0.1, 0.55, bb))
         uu = uc + (uu - uc) * narrow
         if kind == 'P':
             Pf, Nf = M(np.stack([uu, vG * np.ones_like(uu)], 1))
@@ -362,7 +366,8 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0
         duT = 0.5 * (1 - np.abs(cx)) * (1 - 2 * gap / (uR - uL))
         gum_r = make_oral.GUM_UP if upper else GUM
         # (02/11 v17b) arriba el diente sale de la encia en la linea de Konami (antes 0.12 del alto mas abajo, ~1 mm)
-        bs = (BS_UP if upper else 0.12) + (0.30 / (1 - gum_r)) * np.exp(-(duT / 0.14) ** 2)
+        ph, pw = make_oral.PAP_UP if upper else make_oral.PAP_LO   # (09/11 k) la misma papila que pinta make_oral.clean_gum
+        bs = (BS_UP if upper else 0.12) + (ph / (1 - gum_r)) * np.exp(-(duT / pw) ** 2)
         bpos = bb - off
         lift = 0.3 * MM * sst(bs - 0.05, bs + 0.10, bpos)
         # (01/11 e) convexidad: maximo en el tercio del cuello (altura de contorno) y se aplana hacia el borde; surcos de
@@ -750,7 +755,11 @@ def build(src_fmdl, texdir, log=print):
         jaw = names.index('skf_jaw'); nl = 0
         for Pp, UVp, _, Wp, tg in parts:
             if tg == 'diente' and Wp[:, jaw].mean() > 0.5 and not any(Pp is q for q in mol_parts):
-                Pp[:, 1] += LIFT * lift_w(Pp[:, 0].mean()); nl += 1
+                # la base (cuello/raiz) sube lo mismo que la encia y el borde sube entero: el cuello queda siempre dentro de la
+                # encia (09/11 k: Agustin 'algunas partes del diente sobresalen de las encias')
+                y0, y1 = Pp[:, 1].min(), Pp[:, 1].max()
+                s_ = np.clip((Pp[:, 1] - y0) / max(y1 - y0, 1e-6), 0, 1)
+                Pp[:, 1] += LIFT * lift_w(Pp[:, 0].mean()) * (GUM_LIFT + (1 - GUM_LIFT) * s_); nl += 1
             elif tg == 'tira' and Wp[:, jaw].mean() > 0.5:
                 # toda la encia sube, pero se apaga hacia el BORDE de la tira (donde se une al piso de la boca y al labio): a 0 en
                 # el borde y entero a 4 mm de el, asi no se abre ningun hueco ni se estira un pico
@@ -816,6 +825,15 @@ def build(src_fmdl, texdir, log=print):
         Pa[si] = Pa[si] + Na[si] * push[:, None]
         Nn = -vnormals(Pa, Fa); Na[si] = Nn[si]
         log('  encia: collar alrededor del cuello de los dientes (hasta %.2f mm, %d vertices de la tira)' % (float(push.max()) * 1000, int((push > 0.05 * MM).sum())))
+        # (09/11 k) Agustin: 'algunas partes del diente sobresalen de las encias': un vertice de diente cuyo vecino mas cercano de
+        # la tira es ENCIA (no la zona del diente pintado) y que queda por fuera de esa encia, se mete detras de ella
+        tree = cKDTree(Pa[si]); dd, jj = tree.query(Pa[ti], k=4)
+        gs = gumside[jj].mean(1); q = Pa[si][jj].mean(1); nq = Na[si][jj].mean(1)
+        nq = nq / np.maximum(np.linalg.norm(nq, axis=1, keepdims=True), 1e-9)
+        out_ = ((Pa[ti] - q) * nq).sum(1)
+        bad = (gs > GS_MIN) & (out_ > 0.0) & (dd[:, 0] < 2.5 * MM)
+        Pa[ti[bad]] -= nq[bad] * (out_[bad] + 0.2 * MM)[:, None]
+        log('  encia: %d vertices de diente que asomaban por la encia, metidos detras' % int(bad.sum()))
     Ta, tw = tangents(Pa, Na, UVa, Fa); tw = -tw
     # 4 huesos por vertice
     order = np.argsort(-Wa, 1)[:, :4]
