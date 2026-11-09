@@ -1439,11 +1439,35 @@ static void SlotPresent(ID3D11DeviceContext* imm) {
                         // de la tarde (5ab438b..f312ab1: parpados solo en lugares de parpado, uno a uno, doble lectura, geometria) quedan detras de
                         // expr_paleta_blindaje = 1 para probarlas aparte
                         const bool blind = g_cfg.optExprBlindaje;
+                        // (09/11, Agustin: "no hacen nada, no funciona"; log d1ec707 / 4e2b2c8: 0 mallas emparejadas, 27069 dudosos) con la cara
+                        // QUIETA (editor, jugador sin gesto) todas las matrices relativas son ~identidad: la pose no distingue un hueso de otro
+                        // (best y second casi iguales) y el emparejado simple queda vacio, con cualquier tope. Entonces, cuando la pose es dudosa,
+                        // decide la GEOMETRIA: el hueso cuyo reposo esta mas cerca del centro de los vertices del lugar (< 2.5 cm; la pose solo
+                        // confirma con error < 0.25). Parpados: solo en los lugares que la malla marco como parpado (mismo pivote que el ojo).
+                        // La mandibula va al lugar con mas vertices en la parte baja del medio (menton / quijada: su reposo esta 8 cm atras)
+                        int jawSlotS = -1;
+                        if (!blind) for (int j = 0; j <= L.maxIdx; j++) {
+                            if (j == L.head || L.c[j][3] <= 0.5f) continue;
+                            if (fabsf(L.c[j][0]) > 0.035f || L.c[j][1] < 1.55f || L.c[j][1] > 1.632f || L.c[j][2] < 0.07f) continue;
+                            if (jawSlotS < 0 || L.c[j][3] > L.c[jawSlotS][3]) jawSlotS = j;
+                        }
                         if (!blind) for (int j = 0; j <= L.maxIdx; j++) {
                             if (j == L.head) continue;
                             Aff Mj, A; AffFromPalette(r + j * 12, Mj); AffMul(MhI, Mj, A);
                             float best = 1e9f, second = 1e9f; int bd = -1;
                             for (int d = 0; d < kExprBones; d++) { if (!kOk[d]) continue; const float e = AffDist(A, K[d]); if (e < best) { second = best; best = e; bd = d; } else if (e < second) second = e; }
+                            if (!(bd >= 0 && best < 0.10f && second > 2.0f * best)) {   // pose dudosa (cara quieta): geometria
+                                int lidQ = -1; for (int q = 0; q < 4; q++) if (L.lids[q] == j) lidQ = q;
+                                int g = -1; float gmin = 1e9f;
+                                if (j == jawSlotS && kOk[0]) { g = 0; gmin = 0.0f; }
+                                else if (lidQ >= 0) { const int ld = D_LID_TL_ + lidQ; if (kOk[ld]) { g = ld; gmin = 0.0f; } }   // lids[]: arriba izq, arriba der, abajo izq, abajo der = kDef 22..25
+                                else if (L.c[j][3] > 0.5f) for (int d = 1; d < kExprBones; d++) {
+                                    if (!kOk[d] || d == D_EYE_L_ || d == D_EYE_R_ || (d >= D_LID_TL_ && d <= D_LID_BR_)) continue;
+                                    const float* rt = P.b[d].rt; const float dx = L.c[j][0] - rt[0], dy = L.c[j][1] - rt[1], dz = L.c[j][2] - rt[2];
+                                    const float dd = sqrtf(dx * dx + dy * dy + dz * dz); if (dd < gmin) { gmin = dd; g = d; }
+                                }
+                                if (g >= 0 && gmin < 0.025f && AffDist(A, K[g]) < 0.25f) { slot[j] = (uint8_t)g; matched++; worst = (std::max)(worst, AffDist(A, K[g])); s_slotGeo++; continue; }
+                            }
                             // (08/11 g, log 15:43: 15 lugares "emparejados" con error 0.241, justo bajo el tope de 0.25, en cada malla de 30 lugares, y
                             // 4 de 27 en las demas: pares como 17>0 o 7>4 que no eran) un emparejado real da un error chico (0.00..0.05 en los
                             // de la mandibula); con 0.25 entraban huesos equivocados y cada pieza movia partes distintas (uniones rotas). Tope 0.10:
