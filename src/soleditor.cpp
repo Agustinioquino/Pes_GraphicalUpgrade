@@ -7,6 +7,8 @@
 //        [1]  0x141811ed0 destructor                  -> suelta el puntero
 //        [7]  0x14181a0b0 (= [15]) aplicar propiedades -> llama FUN_141812350: entidad -> DirectionalLightSource (cuerpo+0x88)
 //        [8]  0x141813f70 desactivar                   -> suelta el puntero
+//        [6]  0x141815570 iniciar (al cargar la escena: FUN_141815620 y despues [11]) -> guarda el cuerpo (09/11 b: el log
+//             mostro que la primera creacion entra por aca, no por [14])
 //        [14] 0x14181a030 activar (FUN_141815620: crea la fuente y la mete en la escena de los focos) -> guarda el cuerpo
 //      Entidad = *(*(cuerpo+0x30)+0x18) (FUN_1402b9e60). Campos de la entidad (reflexion, 0x141816020): enable +0x130 (bool),
 //      direction +0x140 (Vector3, 16 B, hacia el sol; la gira el transform de la entidad, identidad en el fox2), color +0x170
@@ -35,7 +37,7 @@ static const uintptr_t kShadowPlugVtbl = 0x142a11eb0ull; // fox::gr::PluginShado
 static const uintptr_t kSunGlobalDir = 0x1437d5700ull;   // direccion del sol de la atmosfera (FUN_141943ce0 -> FUN_14169f3c0)
 
 typedef uintptr_t (__fastcall* Fn4)(void*, uintptr_t, uintptr_t, uintptr_t);
-static Fn4 o_dtor = nullptr, o_apply = nullptr, o_apply15 = nullptr, o_deact = nullptr, o_act = nullptr, o_sun = nullptr, o_shadow = nullptr;
+static Fn4 o_init = nullptr, o_dtor = nullptr, o_apply = nullptr, o_apply15 = nullptr, o_deact = nullptr, o_act = nullptr, o_sun = nullptr, o_shadow = nullptr;
 
 static bool s_tried = false, s_bodyOk = false, s_plugOk = false;
 static std::atomic<void*> s_body{nullptr};
@@ -97,8 +99,18 @@ static uintptr_t __fastcall hk_deact(void* b, uintptr_t a, uintptr_t c, uintptr_
     void* exp = b; if (s_body.compare_exchange_strong(exp, nullptr) && LogOn()) Log("sol_editor: sol desactivado (cuerpo %p)", b);
     return o_deact(b, a, c, d);
 }
+static void NoteCreated(void* b, const char* via);
+static uintptr_t __fastcall hk_init(void* b, uintptr_t a, uintptr_t c, uintptr_t d) {
+    uintptr_t r = o_init(b, a, c, d);
+    NoteCreated(b, "iniciar");
+    return r;
+}
 static uintptr_t __fastcall hk_act(void* b, uintptr_t a, uintptr_t c, uintptr_t d) {
     uintptr_t r = o_act(b, a, c, d);
+    NoteCreated(b, "activar");
+    return r;
+}
+static void NoteCreated(void* b, const char* via) {
     s_body = b; s_created++;
     if (LogOn()) {
         char* e = EntityOf(b); float dir[3] = {}, lux = 0, k = 0; unsigned char en = 0; void* src = nullptr;
@@ -106,8 +118,8 @@ static uintptr_t __fastcall hk_act(void* b, uintptr_t a, uintptr_t c, uintptr_t 
                 src = *(void**)((char*)b + 0x88); } __except (EXCEPTION_EXECUTE_HANDLER) {}
         Log("sol_editor: dirLightSource cuerpo=%p entidad=%p fuente=%p enable=%d dir=(%.3f %.3f %.3f) lux=%.0f %.0f K (hilo %lu)",
             b, (void*)e, src, en, dir[0], dir[1], dir[2], lux, k, GetCurrentThreadId());
+        Log("sol_editor: (creado via %s)", via);
     }
-    return r;
 }
 static uintptr_t __fastcall hk_apply(void* b, uintptr_t a, uintptr_t c, uintptr_t d) {
     s_applies++;
@@ -151,11 +163,11 @@ static void Install() {
     auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
     if ((uintptr_t)mod != 0x140000000ull || nt->FileHeader.TimeDateStamp != kStamp) { Log("sol_editor: exe distinto: sin ganchos"); return; }
     // comprobar las 5 entradas antes de cambiar ninguna
-    struct E { int i; uintptr_t a; } want[] = { {1, 0x141811ed0ull}, {7, 0x14181a0b0ull}, {8, 0x141813f70ull}, {14, 0x14181a030ull}, {15, 0x14181a0b0ull} };
+    struct E { int i; uintptr_t a; } want[] = { {1, 0x141811ed0ull}, {6, 0x141815570ull}, {7, 0x14181a0b0ull}, {8, 0x141813f70ull}, {14, 0x14181a030ull}, {15, 0x14181a0b0ull} };
     bool ok = true;
     for (auto& w : want) { void** s = (void**)(kBodyVtbl + w.i * 8); if (!Readable(s, 8) || (uintptr_t)*s != w.a) ok = false; }
     if (ok) {
-        s_bodyOk = Swap(kBodyVtbl, 1, 0x141811ed0ull, (void*)&hk_dtor, &o_dtor) && Swap(kBodyVtbl, 8, 0x141813f70ull, (void*)&hk_deact, &o_deact)
+        s_bodyOk = Swap(kBodyVtbl, 1, 0x141811ed0ull, (void*)&hk_dtor, &o_dtor) && Swap(kBodyVtbl, 6, 0x141815570ull, (void*)&hk_init, &o_init) && Swap(kBodyVtbl, 8, 0x141813f70ull, (void*)&hk_deact, &o_deact)
                 && Swap(kBodyVtbl, 14, 0x14181a030ull, (void*)&hk_act, &o_act) && Swap(kBodyVtbl, 7, 0x14181a0b0ull, (void*)&hk_apply, &o_apply)
                 && Swap(kBodyVtbl, 15, 0x14181a0b0ull, (void*)&hk_apply15, &o_apply15);
     } else Log("sol_editor: la vtable de DirectionalLightBody no coincide: sin control del sol del editor");
