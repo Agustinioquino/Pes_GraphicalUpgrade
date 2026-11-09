@@ -432,6 +432,9 @@ void main(
   // y esculpida) por encima del detalle de la textura de la cara; 1 = como antes
   float wrRelief = enhance ? clamp(IniParams.Load(int2(365, 0)).z, 0.0, 3.0) : 1.0;
   if (wrRelief <= 0.0) wrRelief = 1.0;
+  // (09/11 c, Agustin: "en el caso de messi deberias subir la intensidad un poco solo para messi") cara con arrugas horneadas
+  // propias (Messi, con perfiles 356.w): relieve de las arrugas del juego x1.5
+  { uint mwW = 0, mwH = 0; pesShapeWr.GetDimensions(mwW, mwH); if (mwW > 1 && IniParams.Load(int2(356, 0)).w > 0.5) wrRelief *= 1.5; }
   // (08/11, Agustin: "la luz en las arrugas parece al reves") el relieve inclina la normal de la arruga (xy) y recalcula z; antes se
   // multiplicaba (x, y, z - 1) entero: con z365 alto z quedaba negativo y la normal se daba vuelta (surco iluminado como cresta)
   // (08/11, Agustin: "como se plasma en barbas") se guarda lo que la arruga inclina la normal (gesto + esculpida) para sacarlo
