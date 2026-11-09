@@ -471,7 +471,17 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   // (09/11, Agustin: "una opcion que coloque un sol cercano y permita cambiar sus angulos y posicion") w378 = 1: la luz principal
   // de CUALQUIER preset pasa a ser un sol cercano con posicion: rumbo (z297) y altura (w297) tal cual los sliders (no sumados al
   // preset), a y377 metros del jugador con un cono de z377 grados. Color e intensidad siguen siendo los del preset
-  if (E5.w > 0.5) { az = E.z; el = E.w; pSpotD = clamp(E4.y > 0 ? E4.y : 2.0, 0.3, 12.0); pSpotA = clamp(E4.z > 0 ? E4.z : 45.0, 10.0, 170.0); }
+  // (09/11 b, Agustin: "la luz de sol cercano no se ve como un sol") antes heredaba el cono del foco (45 grados: recortaba la cara
+  // como una linterna), el color y la fuerza del preset (de noche, azul y debil). Un sol es: luz que baña todo (sin cono),
+  // calida y fuerte, sombra nitida del tamano del sol (0.53 grados), poco relleno de estudio y el resplandor / los haces en el
+  // aire hacia el sol. Rumbo, altura y distancia siguen siendo los sliders
+  bool nearSun = E5.w > 0.5;
+  if (nearSun) {
+    az = E.z; el = E.w; pSpotD = clamp(E4.y > 0 ? E4.y : 3.0, 1.5, 12.0); pSpotA = 170.0;
+    warm = 0.72; inten = max(inten, 1.6); keep = min(keep, 0.30); skyK = min(skyK, 0.12);
+    g_shRad = radians(0.53) * 0.5;
+    sunC = PesTint(warm) * (S * inten);
+  }
   // (09/11, Agustin: "que sea mas facil de decidir... una opcion de sol por detras para probar el sss") z392 = de donde viene la
   // luz, en pocas opciones y siempre respecto de la camara (lo que se ve en pantalla): 1 de frente, 2 de costado, 3 desde atras
   // (contraluz: orejas, nariz y borde de la cara encendidos = SSS), 4 desde arriba. 0 = la del preset / los sliders
@@ -677,6 +687,7 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   // (08/11 0qtsss, Agustin: "que la luz volumetrica agregue niebla o rayos de sol como en el partido") con la volumetrica del editor
   // en 0 (w377) y la del partido prendida (x335), los presets la copian: fuerza de x335 (0.6 -> 0.9), direccionalidad de z335
   float volS = E4.w;
+  if (nearSun) volS = max(volS, 0.9);   // (09/11 b) el sol cercano siempre con resplandor y haces
   { float4 VLm = IniParams.Load(int2(335, 0)); if (volS <= 0.001 && preset != 0 && VLm.x > 0.0) { volS = clamp(VLm.x * 1.5, 0.0, 4.0); g_volG = clamp(VLm.z, 0.0, 0.9); } }
   float3 vol = PesVolumetric(uv, pos.xy, Pv, zA, geo, zSgn, Lw, spot, Pl, sunC, volS, E5.y > 0 ? E5.y : 0.5);
   // (07/11 d) vistas de prueba (w380): aislar cada parte para juzgarla sola. Se pintan sobre gris neutro, sin la luz de estudio
