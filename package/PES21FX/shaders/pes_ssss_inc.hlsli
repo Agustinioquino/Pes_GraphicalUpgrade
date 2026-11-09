@@ -450,6 +450,17 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   // de CUALQUIER preset pasa a ser un sol cercano con posicion: rumbo (z297) y altura (w297) tal cual los sliders (no sumados al
   // preset), a y377 metros del jugador con un cono de z377 grados. Color e intensidad siguen siendo los del preset
   if (E5.w > 0.5) { az = E.z; el = E.w; pSpotD = clamp(E4.y > 0 ? E4.y : 2.0, 0.3, 12.0); pSpotA = clamp(E4.z > 0 ? E4.z : 45.0, 10.0, 170.0); }
+  // (09/11, Agustin: "que sea mas facil de decidir... una opcion de sol por detras para probar el sss") z392 = de donde viene la
+  // luz, en pocas opciones y siempre respecto de la camara (lo que se ve en pantalla): 1 de frente, 2 de costado, 3 desde atras
+  // (contraluz: orejas, nariz y borde de la cara encendidos = SSS), 4 desde arriba. 0 = la del preset / los sliders
+  { int qd = (int)(IniParams.Load(int2(392, 0)).z + 0.5);
+    if (qd >= 1 && qd <= 4) {
+      g_lightWorld = false;
+      if (qd == 1)      { az = 25.0;  el = 20.0; }
+      else if (qd == 2) { az = 90.0;  el = 20.0; }
+      else if (qd == 3) { az = 165.0; el = 12.0; }
+      else              { az = 10.0;  el = 78.0; }
+    } }
   float3 Lw = PesDirL(az, el, zSgn), L = Lw;
   // (07/11) foco en el manual: una luz con posicion a y377 m del jugador (el punto del centro de la pantalla) en la direccion del
   // rumbo / altura, cono de z377 grados con borde suave y caida con el cuadrado de la distancia (1 en el jugador)
