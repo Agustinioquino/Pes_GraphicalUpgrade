@@ -1430,7 +1430,7 @@ static void FrameBody(const void* skel) {
         const float rate = (std::min)(0.22f + 0.10f * spd, 1.0f);
         S->brPh = Frac(S->brPh + dt * rate);
         breath = 0.5f - 0.5f * cosf(S->brPh * 6.2831853f);                     // 0 exhalado .. 1 inhalado
-        brAmp = 0.5f * nResp * (0.45f + 0.55f * SStep(1.0f, 6.0f, spd));   // (09/11, Agustin: "la respiracion opaca a los demas") la mitad
+        brAmp = nResp < 0.001f ? 0.0f : nResp * (0.45f + 0.55f * SStep(1.0f, 6.0f, spd));   // (09/11) 0 = apagada del todo
         if (nVida > 0.001f) {
             const float ph = (float)(S->pid % 9973u) * 0.0731f;
             auto ns = [&](float f, float p) { return sinf(tNow * 6.2831853f * f + p + ph); };
@@ -1684,7 +1684,7 @@ static void FrameBody(const void* skel) {
     const float P[3] = { jc.t[0], jc.t[1], jc.t[2] };
     float A = 0.40f * o * nExpr;
     // (08/11) respiracion por la boca corriendo y esfuerzo: la mandibula baja un poco (0.35 grados por inhalacion, hasta 3 grados de esfuerzo)
-    A += 0.006f * brAmp * breath * SStep(2.0f, 6.0f, S->spHave ? S->speed : 0.0f) + 0.05f * eff;
+    A += 0.05f * eff;   // (09/11, Agustin: la respiracion "mueve la boca y deberia inflar la nariz un poco") la respiracion ya no abre la mandibula
     if (ganiOn && GP.has[1]) A += -GaniAngZ(GP.q[1]) * gW;   // (07/11) mandibula del clip (giro sobre z del .ask = -x de la cabeza)
     // (03/11) tope de la mandibula: lo del juego + lo del mod no pasa de 35 grados (la barba y la cara no dan para mas)
     {   // (04/11 e) mordida: soltar abre la mandibula; apretar la cierra solo lo que el juego la tenga abierta (los dientes no se pasan)
@@ -1771,11 +1771,9 @@ static void FrameBody(const void* skel) {
             if (d == 5 || d == 6) { po[0] += sl * 0.00025f * lifeLipX; po[1] += 0.0002f * lifeLipY; }
             if (d == 14 || d == 15) po[0] += sl * 0.0002f * lifeNose;
             // respiracion
-            if (d == 14 || d == 15) po[0] += sl * 0.0006f * brAmp * breath;
+            if (d == 14 || d == 15) { po[0] += sl * 0.0008f * brAmp * breath; po[1] += 0.0002f * brAmp * breath; }   // alas: se abren y suben apenas al inhalar
             if (d == 13) po[2] += 0.0002f * brAmp * breath;
-            if (d == 7 || d == 8) po[0] += sl * 0.0004f * mouthBr;
-            if (d == 9 || d == 10 || d == 11) po[1] += 0.0004f * mouthBr;
-            if (d == 1 || d == 2 || d == 3) po[1] -= 0.0004f * mouthBr;
+            (void)mouthBr;   // (09/11) la respiracion ya no separa los labios ni mueve las mejillas: solo la nariz (alas 14 / 15 y punta 13)
             // esfuerzo
             if (d == 26 || d == 27) { po[1] -= 0.0025f * eff; po[0] -= sl * 0.0008f * eff; }
             if (d == 28 || d == 29) po[1] -= 0.0010f * eff;
