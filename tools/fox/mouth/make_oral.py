@@ -630,7 +630,8 @@ def wet_tissue(bsm, srm, log=print):
     fun = ndi.gaussian_filter(rng.standard_normal((N, N)).astype(np.float32), 1.6)
     fun = sst(2.6, 3.4, fun / max(float(fun.std()), 1e-6)) * (0.4 + 0.6 * sst(0.5, 0.9, np.abs(tu)) + 0.6 * sst(0.25, 0.0, tv))   # rojas, mas en los bordes y la punta
     low = ndi.gaussian_filter(rng.standard_normal((N, N)).astype(np.float32), 25); low /= max(float(np.abs(low).max()), 1e-6)
-    tcol = np.array([0.86, 0.38, 0.43], np.float32) if TOOTH_N > 0 else np.array([0.84, 0.46, 0.45], np.float32)   # (09/11 f) lengua mas carmin que la encia
+    # (09/11 h) Agustin 'la lengua es como muy roja': rosada (R/G 2.3 -> 1.9), distinta de la encia por el tono (encia salmon, lengua rosa)
+    tcol = np.array([0.85, 0.45, 0.47], np.float32) if TOOTH_N > 0 else np.array([0.84, 0.46, 0.45], np.float32)
     # (04/11 f) Agustin: 'la textura de la lengua no me convence, le falta oclusion y una textura mas real': celdas de papilas
     # (relieve irregular a dos escalas), saburra blanquecina leve en el centro y atras, bordes y punta mas rojos
     cell = ndi.gaussian_filter(rng.standard_normal((N, N)).astype(np.float32), 2.2); cell /= max(float(cell.std()), 1e-6)
@@ -650,11 +651,11 @@ def wet_tissue(bsm, srm, log=print):
         pu = pu * (0.35 + 0.65 * sst(0.55, 0.95, np.abs(tu)) + 0.65 * sst(0.3, 0.0, tv))
         Lt = 0.46 * (1 + 0.025 * low - 0.04 * groove + 0.015 * np.tanh(cell2)) * (1.04 - 0.08 * sst(0.0, 1.0, tv))   # (09/11 g) Agustin: no oscurecer la linea del medio
         T = tcol / (tcol * lumw).sum() * Lt[..., None]
-        coat = np.exp(-(tu / 0.40) ** 2) * sst(0.45, 0.95, tv) * 0.6
-        T = T * (1 - 0.15 * coat[..., None]) + np.array([0.86, 0.74, 0.72], np.float32) * Lt[..., None] * 1.12 * 0.15 * coat[..., None]
-        T = T * (1 + np.clip(edge, 0, 1)[..., None] * np.array([0.05, -0.05, -0.03], np.float32))
+        coat = np.exp(-(tu / 0.55) ** 2) * (0.35 + 0.65 * sst(0.2, 0.9, tv))   # (09/11 h) pelicula blanquecina leve en todo el dorso (lengua real), mas atras
+        T = T * (1 - 0.18 * coat[..., None]) + np.array([0.86, 0.76, 0.75], np.float32) * Lt[..., None] * 1.12 * 0.18 * coat[..., None]
+        T = T * (1 + np.clip(edge, 0, 1)[..., None] * np.array([0.03, -0.03, -0.02], np.float32))
         T = T * (1 - 0.14 * pf[..., None]) + np.array([0.90, 0.74, 0.72], np.float32) * Lt[..., None] * 1.18 * 0.14 * pf[..., None]
-        T = T * (1 - 0.55 * pu[..., None]) + np.array([0.92, 0.36, 0.37], np.float32) * Lt[..., None] * 1.75 * 0.55 * pu[..., None]
+        T = T * (1 - 0.40 * pu[..., None]) + np.array([0.90, 0.42, 0.45], np.float32) * Lt[..., None] * 1.6 * 0.40 * pu[..., None]   # (09/11 h) fungiformes menos rojas
         fil, fun = pf, pu
     T = np.clip(T, 0, 1)
     out[..., :3] = out[..., :3] * (1 - tongue[..., None]) + T * tongue[..., None]
