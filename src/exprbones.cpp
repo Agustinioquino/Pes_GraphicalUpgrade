@@ -1456,7 +1456,14 @@ static void FrameBody(const void* skel) {
             lifeLid  = nVida * (std::max)(0.0f, 0.6f * ns(0.09f, 1.1f) + 0.4f * ns(0.23f, 0.4f) - 0.3f);
         }
     }
-    const bool nLive = nVida > 0.001f || brAmp > 0.001f || eff > 0.001f || nAsim > 0.001f || nConc > 0.001f;
+    float puff = 0.0f;
+    {   // (09/11) soplido al recuperar el aire (ver abajo, en los huesos): esfuerzo alto, jugador frenando, solo en la exhalacion
+        const float spd = S->spHave ? S->speed : 0.0f, ph = S->brPh;
+        const float exh = ph >= 0.40f && ph < 0.88f ? sinf(3.14159265f * (ph - 0.40f) / 0.48f) : 0.0f;
+        puff = nEsf * SStep(0.30f, 0.80f, S->effort) * (1.0f - SStep(1.5f, 3.0f, spd)) * exh;
+        if (nResp < 0.001f) puff = 0.0f;   // sin respiracion no hay soplido
+    }
+    const bool nLive = nVida > 0.001f || brAmp > 0.001f || eff > 0.001f || nAsim > 0.001f || nConc > 0.001f || puff > 0.001f;
     if (nLive) poseOn = true;
     s_extraLid[0] = 0.05f * lifeLid + 0.07f * eff + 0.08f * nConc;
     s_extraLid[1] = -(0.03f * eff + 0.04f * nConc);
@@ -1793,6 +1800,15 @@ static void FrameBody(const void* skel) {
             { const float lipBr = brAmp * breath * (0.5f + 0.5f * SStep(1.5f, 6.0f, spd)); (void)mouthBr;
               if (d == 9 || d == 10 || d == 11) po[1] += 0.0003f * lipBr;
               if (d == 1 || d == 2 || d == 3) po[1] -= 0.0005f * lipBr; }
+            // (09/11, Agustin: "le falta naturalidad, como inflar cachetes") SOPLIDO al recuperar el aire: despues de correr (esfuerzo alto) y ya
+            // frenando, en cada exhalacion los cachetes se inflan apenas, los labios se juntan adelante y las comisuras van al medio; se
+            // apaga solo cuando el esfuerzo baja (~4 s). z395 = 0 lo apaga con el esfuerzo
+            if (puff > 0.001f) {
+                if (d == 7 || d == 8) { po[0] += sl * 0.0026f * puff; po[2] += 0.0008f * puff; }
+                if (d == 16 || d == 17) po[0] += sl * 0.0012f * puff;
+                if (d == 1 || d == 2 || d == 3 || d == 9 || d == 10 || d == 11) po[2] += 0.0012f * puff;
+                if (d == 5 || d == 6) po[0] -= sl * 0.0012f * puff;
+            }
             // esfuerzo
             if (d == 26 || d == 27) { po[1] -= 0.0025f * eff; po[0] -= sl * 0.0008f * eff; }
             if (d == 28 || d == 29) po[1] -= 0.0010f * eff;
