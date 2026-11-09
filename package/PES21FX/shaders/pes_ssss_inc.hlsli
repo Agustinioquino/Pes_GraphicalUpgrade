@@ -306,7 +306,8 @@ void PesOneLightMatch(float3 L, float3 col, float sh, float3 n, float3 V, float 
     float3 Tr = exp(-(1.35 - thin) * sigT) * thin;
     float thinGate = lerp(smoothstep(0.45, 0.85, thin), 1.0, saturate(P76.y));
     float exitK = back * (0.6 + 0.6 * fwd) * smoothstep(-0.05, 0.25, dot(L, -V)) * lerp(0.2, 1.0, silK);
-    tr = PesSsTransColor(Tr * exitK * thinGate * P5.x * 1.6 * (P76.x > 0.0 ? P76.x : 1.0), P34.z);
+    // (09/11 c, Agustin eligio "las tres": borde rojizo, poros y mas luz en orejas y nariz a contraluz) x1.6 -> x2.3
+    tr = PesSsTransColor(Tr * exitK * thinGate * P5.x * 2.3 * (P76.x > 0.0 ? P76.x : 1.0), P34.z);
   } else tr = PesSsTransColor(thin * smoothstep(0.45, 0.85, thin) * pow(saturate(dot(V, -Lt)), 3.0) * float3(1.0, 0.24, 0.10) * P5.x, P34.z);
   if (P64.x > 0.5 && P64.z > 0.0) {
     float dens = (P64.w > 0 ? P64.w : 30.0) * (1.25 - thin);
@@ -471,7 +472,19 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   // (09/11, Agustin: "una opcion que coloque un sol cercano y permita cambiar sus angulos y posicion") w378 = 1: la luz principal
   // de CUALQUIER preset pasa a ser un sol cercano con posicion: rumbo (z297) y altura (w297) tal cual los sliders (no sumados al
   // preset), a y377 metros del jugador con un cono de z377 grados. Color e intensidad siguen siendo los del preset
-  if (E5.w > 0.5) { az = E.z; el = E.w; pSpotD = clamp(E4.y > 0 ? E4.y : 2.0, 0.3, 12.0); pSpotA = clamp(E4.z > 0 ? E4.z : 45.0, 10.0, 170.0); }
+  // (09/11 b, Agustin: "la luz de sol cercano no se ve como un sol") antes heredaba el cono del foco (45 grados: recortaba la cara
+  // como una linterna), el color y la fuerza del preset (de noche, azul y debil). Un sol es: luz que baña todo (sin cono),
+  // calida y fuerte, sombra nitida del tamano del sol (0.53 grados), poco relleno de estudio y el resplandor / los haces en el
+  // aire hacia el sol. Rumbo, altura y distancia siguen siendo los sliders
+  bool nearSun = E5.w > 0.5;
+  if (nearSun) {
+    // (09/11 c, Agustin: "que funcione como funciona el sol de los partidos de dia") rayos paralelos como el sol del partido: sin
+    // posicion ni distancia (la direccion es la misma en toda la cara); solo rumbo y altura
+    az = E.z; el = E.w; pSpotD = 0.0; pSpotA = 0.0;
+    warm = 0.72; inten = max(inten, 1.6); keep = min(keep, 0.30); skyK = min(skyK, 0.12);
+    g_shRad = radians(0.53) * 0.5;
+    sunC = PesTint(warm) * (S * inten);
+  }
   // (09/11, Agustin: "que sea mas facil de decidir... una opcion de sol por detras para probar el sss") z392 = de donde viene la
   // luz, en pocas opciones y siempre respecto de la camara (lo que se ve en pantalla): 1 de frente, 2 de costado, 3 desde atras
   // (contraluz: orejas, nariz y borde de la cara encendidos = SSS), 4 desde arriba. 0 = la del preset / los sliders
@@ -499,6 +512,7 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
     d2 = clamp(d2, 0.01, 1e6);
     float ca = cos(radians(ap * 0.5)), cone = smoothstep(ca, lerp(ca, 1.0, 0.35), dot(-L, Lw));
     lcol = sunC * cone * min(distL * distL / d2, 1.0);
+    if (nearSun) lcol = sunC;   // (09/11 b) un sol no cae con 1/d2 sobre la cara (eso lo hacia ver como un foco): la posicion solo da la direccion
   }
   bool skin = IsSkin(uv);
   float4 mat = inMat.SampleLevel(sPoint, uv, 0);
@@ -677,6 +691,7 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   // (08/11 0qtsss, Agustin: "que la luz volumetrica agregue niebla o rayos de sol como en el partido") con la volumetrica del editor
   // en 0 (w377) y la del partido prendida (x335), los presets la copian: fuerza de x335 (0.6 -> 0.9), direccionalidad de z335
   float volS = E4.w;
+  if (nearSun) volS = max(volS, 0.9);   // (09/11 b) el sol cercano siempre con resplandor y haces
   { float4 VLm = IniParams.Load(int2(335, 0)); if (volS <= 0.001 && preset != 0 && VLm.x > 0.0) { volS = clamp(VLm.x * 1.5, 0.0, 4.0); g_volG = clamp(VLm.z, 0.0, 0.9); } }
   float3 vol = PesVolumetric(uv, pos.xy, Pv, zA, geo, zSgn, Lw, spot, Pl, sunC, volS, E5.y > 0 ? E5.y : 0.5);
   // (07/11 d) vistas de prueba (w380): aislar cada parte para juzgarla sola. Se pintan sobre gris neutro, sin la luz de estudio
@@ -786,6 +801,12 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   // el pixel central entra con el peso de una muestra media: sin vecinos validos (borde) queda como estaba
   acc += c0; wsum += 1.0;
   float3 blurred = acc / wsum;
-  return float4(lerp(c0, blurred, saturate(P.y) * nearK), 1);
+  // (09/11, Agustin: "el sss puede ser mejor", con el ancho de vuelta en 1.41) la mezcla con la luz sin difundir era la misma en
+  // los tres canales: con fuerza 0.73 el rojo conservaba un 27 % de borde duro (penumbra sin el tono rojo de la piel real) y el
+  // azul se difundia igual que el rojo (poros y arrugas lavados). Ahora la fuerza va por canal como la dispersion real: el rojo
+  // casi entero (y95^0.5: borde de sombra rojizo y suave), el verde como el slider y el azul menos (y95^1.5: detalle fino)
+  float sK = saturate(P.y);
+  float3 mixK = float3(sqrt(sK), sK, sK * sqrt(sK)) * nearK;
+  return float4(lerp(c0, blurred, mixK), 1);
 }
 #endif
