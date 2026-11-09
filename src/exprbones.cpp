@@ -252,6 +252,10 @@ static void PoseOf(int d, float ang, float smi, float sur, float* o) {
     for (const PoseOff& p : kPose) if (p.d == d) { for (int k = 0; k < 3; k++) o[k] = p.a[k] * ang + p.s[k] * ((k == 1 && (d == 5 || d == 6)) ? smY : smi) + p.u[k] * sur; return; }
 }
 static float s_poseSmile = 0.0f;   // para Secondary (mejillas)
+// (09/11 b, Agustin: "ten mas en cuenta el modelado que yo hice en blend shapes ... y la forma de los ojos") en una cara con sonrisa
+// propia (perfil en caras.ini = Messi, que ademas trae su sonrisa esculpida en el shader) la sonrisa generica por huesos queda al 40 %
+// en boca/mejillas y el achinado de los ojos a la mitad: manda su escultura
+static float s_eyeSmK = 1.0f;
 // (04/11, Agustin: "que la sonrisa mueva toda la cara, asi como tambien en el enojado y demas") los sliders de gestos tambien para
 // Secondary (pomulos 18/19 y bajo-ojo 20/21): enojo, asombro, grito, puchero; y el perfil de la cara de este cuadro
 static float s_puffAll = 0.0f;   // (09/11) cachetes inflados de este esqueleto (x362 + soplido): pomulos / bajo-ojo en Secondary
@@ -1061,7 +1065,7 @@ static void EyesFrame(Skel& S, const Xf& hc, const float* hr, float sm) {
         // (09/11) los valores SUAVIZADOS de la Transicion (w395), los mismos que la boca: antes los ojos saltaban al valor nuevo
         // mientras la boca todavia iba llegando
         const float G5[3] = { S.sl[0], S.sl[1], S.sl[2] }, G6[2] = { S.sl[4], S.sl[5] };
-        const float gAng = std::clamp(G5[0], 0.0f, 1.5f), gSmi = std::clamp(G5[1], 0.0f, 1.5f), gSur = std::clamp(G5[2], 0.0f, 1.5f);
+        const float gAng = std::clamp(G5[0], 0.0f, 1.5f), gSmi = std::clamp(G5[1], 0.0f, 1.5f) * s_eyeSmK, gSur = std::clamp(G5[2], 0.0f, 1.5f);
         const float gGri = std::clamp(G6[0], 0.0f, 1.5f), gPuc = std::clamp(G6[1], 0.0f, 1.5f), gBig = (std::max)(gSmi - 1.0f, 0.0f);
         // (06/11, Agustin: "la sonrisa de messi cierra demasiado los ojos, un poco menos") la sonrisa a la mitad de lo que era (la cara
         // esculpida de Messi ya achina el ojo por su forma)
@@ -1369,6 +1373,9 @@ static void FrameBody(const void* skel) {
     }
     ProfResolve(*S, fr);
     const FaceProf* PF = profOn && S->prof >= 0 && S->prof < (int)s_prof.size() ? &s_prof[S->prof] : nullptr;
+    const bool ownSmile = PF && PF->has[PG_SONRISA];
+    s_eyeSmK = ownSmile ? 0.5f : 1.0f;
+    const float kSmB = ownSmile ? 0.40f : 1.0f;   // (09/11 b) ver s_eyeSmK
     const float tNow = AnimT();
     // (08/11) w395 TRANSICION: los sliders de gestos no saltan: van al valor nuevo con una constante de 0.25 s x w395 (0 = como antes)
     {
@@ -1755,7 +1762,7 @@ static void FrameBody(const void* skel) {
         if (!S->cur[d]) continue;
         const float* tv = TeethOf(d); const float* ov = OpenOf(d);
         const float op = (std::max)(o - (d >= 5 && d <= 8 ? oSmi : 0.0f), 0.0f);   // (09/11) comisuras: la risa no las junta ni las baja
-        float po[3]; PoseOf(d, pAng, pSmi, pSur, po);
+        float po[3]; PoseOf(d, pAng, d <= 17 ? pSmi * kSmB : pSmi, pSur, po);
         for (const PoseOff2& p : kPose2) if (p.d == d) { for (int k = 0; k < 3; k++) po[k] += p.g[k] * pGri + p.p[k] * pPuc; break; }
         if (PF && ProfBoneOk(d)) {   // (04/11) perfil de esta cara: neutra (z356) y cada gesto con su slider
             const float w[PG_N] = { pNeu, pAng, pSmi, pSur, pGri, pPuc };
