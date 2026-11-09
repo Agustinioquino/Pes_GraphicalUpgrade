@@ -263,7 +263,26 @@ float3 PesTongue(float3 rest, float2 uv, uint jaw)
   o.z += vivo * 0.0003 * s * s * sin(6.2832 * 0.5 * t + 0.7);   // la punta va y viene
   o.x += vivo * 0.0005 * s * s * sin(6.2832 * 0.35 * t + 1.3);
   o.y += vivo * 0.0002 * lado * s * raiz * sin(6.2832 * 0.35 * t + 1.3);   // se inclina un poco hacia el lado al que va la punta
+  // (09/11 d, Agustin: "al gritar la lengua reaccione de forma real") boca muy abierta (grito, del juego o del slider Grito 356.x):
+  // la lengua se tensa: la punta se retrae detras de los dientes de abajo, los bordes suben (lengua en cuchara) y tiembla apenas
+  float sh = smoothstep(0.55, 0.95, J) * max(smoothstep(0.75, 1.0, J), saturate(IniParams.Load(int2(356, 0)).x));
+  o.z -= sh * 0.0020 * s * s;
+  o.y -= sh * 0.0008 * s * s;
+  o.y += sh * 0.0014 * lado * lado * s * raiz;
+  o.y += sh * 0.00015 * s * raiz * sin(6.2832 * 7.0 * t + 3.0 * s);
   o *= T.x * (1.0 - 0.7 * L);   // afuera, el lomo ya no se hunde
+  // (09/11 d, Agustin: "al momento de hablar ... la lengua acompane de manera real, que choque con el paladar") toque contra el
+  // paladar: la DLL calcula en z396 (solo en la subida, nunca se guarda) cuando hay habla (slider Hablar o la mandibula del juego
+  // abriendo y cerrando) con la boca casi cerrada; la punta sube a los dientes de arriba y va un poco atras, el medio se arquea
+  { float tap = saturate(IniParams.Load(int2(396, 0)).z) * (1.0 - L) * (1.0 - sh);
+    if (tap > 0.001) {
+      float tipK = smoothstep(0.45, 0.85, min(s, 0.85));
+      // (09/11 d, Agustin: "de manera segura ... menos real pero mas seguro para el modelo") movimiento corto: la punta sube como mucho
+      // ~5 mm con la boca casi cerrada (no llega a atravesar los dientes ni el paladar) y el arco del medio 1 mm
+      o.y += tap * ((0.0040 + 0.0030 * J) * tipK + 0.0010 * sin(3.14159 * saturate(s)) * raiz);
+      o.z -= tap * 0.0010 * tipK;
+      o.x -= tap * rest.x * 0.10 * tipK;   // la punta se afina al apoyarse
+    } }
   if (L > 0.0) {
     // (02/11 c, Agustin: "mas angosta al sacar y que el slider haga que sacar la lengua sea mas natural, suba y baje")
     // el slider sigue una curva suave (sale despacio al principio y al final) y la punta recien cae sobre el labio cuando ya
