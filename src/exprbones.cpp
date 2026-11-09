@@ -247,7 +247,7 @@ static void PoseOf(int d, float ang, float smi, float sur, float* o) {
     // (04/11, Agustin con una foto de Messi riendo: "al aumentar la sonrisa ... el angulo de las puntas de la sonrisa no suben tanto,
     // abre mas la boca") pasando 1.0 de Sonrisa las comisuras casi no suben mas (un cuarto); se abren a lo ancho igual y la boca se
     // abre (la mandibula, abajo en ExprBonesFrame)
-    const float smY = smi <= 1.0f ? smi : 1.0f + 0.25f * (smi - 1.0f);
+    const float smY = smi <= 1.0f ? smi : 1.0f + 0.55f * (smi - 1.0f);   // (09/11, Agustin: "la sonrisa esta rota": a 1.5 se leia como mueca) 0.25 -> 0.55
     for (const PoseOff& p : kPose) if (p.d == d) { for (int k = 0; k < 3; k++) o[k] = p.a[k] * ang + p.s[k] * ((k == 1 && (d == 5 || d == 6)) ? smY : smi) + p.u[k] * sur; return; }
 }
 static float s_poseSmile = 0.0f;   // para Secondary (mejillas)
@@ -1384,7 +1384,7 @@ static void FrameBody(const void* skel) {
             talkLip = pTalk * (std::max)(w + 0.15f, 0.0f) * env; talkLow = talkLip * 0.83f;
         }
     }
-    const float o = (std::max)((std::max)(std::clamp(g_cfg.live[347][0], 0.0f, 1.0f), 0.45f * tongueOut), (std::min)(1.0f, 0.40f * pSur + 0.85f * pGri + talkO + 0.60f * (std::max)(0.0f, pSmi - 1.0f)));   // (04/11 b, Agustin: "la sonrisa con los dientes cerrados") la sonrisa ya no abre la mandibula (antes 0.12): los labios se separan, los dientes quedan juntos; (04/11 c) pasando 1.0 la sonrisa grande abre la boca (1.5 = 0.30, como en la foto de Messi riendo)
+    const float o = (std::max)((std::max)(std::clamp(g_cfg.live[347][0], 0.0f, 1.0f), 0.45f * tongueOut), (std::min)(1.0f, 0.40f * pSur + 0.85f * pGri + talkO + 0.35f * (std::max)(0.0f, pSmi - 1.0f)));   // (09/11) risa: 0.60 -> 0.35 (a 1.5 la boca se abria tanto que se leia como grito)   // (04/11 b, Agustin: "la sonrisa con los dientes cerrados") la sonrisa ya no abre la mandibula (antes 0.12): los labios se separan, los dientes quedan juntos; (04/11 c) pasando 1.0 la sonrisa grande abre la boca (1.5 = 0.30, como en la foto de Messi riendo)
     // (04/11 d) filas 361 / 362, por huesos, de -1.5 a 1.5 (0 = nada): x361 cejas, y361 mordida, z361 mandibula de costado, w361 media
     // sonrisa; x362 cachetes, y362 beso, z362 desprecio, w362 una ceja. (04/11 f) x365 angulo de las cejas (+ sube el inicio)
     // (09/11, Agustin: "la sonrisa parece afectada por la gravedad") pasando 1.0 de Sonrisa la boca se abre con la mandibula y las
