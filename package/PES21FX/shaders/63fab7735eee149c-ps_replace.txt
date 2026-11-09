@@ -336,7 +336,11 @@ void main(
           float rMm = Q388.y > 0.1 ? Q388.y : 6.0;     // radio de referencia: con ese radio concavo la sombra llega a 1
           float aoC = saturate(max(curv, 0.0) * rMm * 0.001);
           aoC *= aoC * (3.0 - 2.0 * aoC);              // rodilla suave: el ruido de un pixel no pinta rayas
-          float kC = (Q388.z > 0 ? Q388.z : 0.5) * aoC * (mTeeth + 0.8 * mTissue + 0.5 * mDeep) * lerp(1.0, mSunK, 0.5);
+          // (09/11, video de Agustin: franja oscura de lado a lado... a lo LARGO del medio de la lengua) la lengua 3D tiene un surco
+          // central de 0.6 mm (mouth3d.py) muy angosto: su curvatura es alta aunque sea poco profundo, y esta medida lo pintaba
+          // como un hueco entre dientes (franja oscura de borde duro). La curvatura no sabe de profundidad: la lengua queda fuera
+          // (ya trae su oclusion horneada en la textura y la de la raiz por w388); sigue en dientes, encias y fondo
+          float kC = (Q388.z > 0 ? Q388.z : 0.5) * aoC * (mTeeth + 0.8 * mTissue + 0.5 * mDeep) * (1.0 - mTongueZ) * lerp(1.0, mSunK, 0.5);
           r0.xyz *= 1.0 - saturate(kC);
           r3.xyz *= 1.0 - saturate(kC * 0.7);          // el reflejo del ambiente tampoco llega al fondo del hueco
         } }
