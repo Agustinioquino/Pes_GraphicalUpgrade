@@ -48,7 +48,7 @@ REAL_W = {True: [8.1, 6.8, 7.7, 7.1, 6.7],   # (04/11) Agustin 'reducir el taman
 PROFILE = os.environ.get('MOUTH_PROFILE', '')
 PROF = {
     '': dict(ext_up={'IC': -0.8, 'I': -0.8, 'C': -0.3}, corner_ic=(0.02, 0.08), corner_i_up=(0.04, 0.14), lat_back=0.0, canine=0.30),
-    'messi': dict(ext_up={'IC': 0.3, 'I': 0.1, 'C': -0.4}, corner_ic=(0.03, 0.06), corner_i_up=(0.03, 0.07), lat_back=0.0, canine=0.08, even=True, ext_lo=-0.3, corner_lo=(0.02, 0.04), gap_ic=0.0),   # (09/11) Agustin (captura sonriendo vs foto): 'no se ve la separacion entre los dientes de arriba y abajo', 'no son lo suficientemente largos', 'estan separados los dos primeros dientes': arriba +0.5 mm vs v6, los de abajo 2.3 mm mas abajo (quedan por debajo del borde de los de arriba: se ve el hueco oscuro entre filas), centrales sin aire entre ellos
+    'messi': dict(ext_up={'IC': 0.3, 'I': 0.1, 'C': -0.4}, corner_ic=(0.03, 0.06), corner_i_up=(0.03, 0.07), lat_back=0.0, canine=0.08, even=True, ext_lo=-0.3, corner_lo=(0.02, 0.04)),   # (09/11 b: incisivos CON separacion, Agustin 'no tienen separacion en los dientes incisivos') (09/11) Agustin (captura sonriendo vs foto): 'no se ve la separacion entre los dientes de arriba y abajo', 'no son lo suficientemente largos', 'estan separados los dos primeros dientes': arriba +0.5 mm vs v6, los de abajo 2.3 mm mas abajo (quedan por debajo del borde de los de arriba: se ve el hueco oscuro entre filas), centrales sin aire entre ellos
 }[PROFILE]
 if PROFILE == 'messi': REAL_W = {True: [8.7, 7.7, 7.9, 7.1, 6.7], False: REAL_W[False]}   # (04/11 e) foto: centrales y laterales anchos   # (04/11 c) laterales anchos (comun 8.1 / 6.8)
 
