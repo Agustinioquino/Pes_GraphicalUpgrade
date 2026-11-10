@@ -1074,6 +1074,7 @@ bool LoadHairConfig() {
     std::string sec;
     std::map<std::string, HairType> types;
     std::map<std::string, std::vector<float>> tessFace;   // (04/11 m)
+    std::map<std::string, std::vector<float>> wrFace;   // (10/11) arrugas por jugador
     if (ok) for (auto& raw : lines) {
         std::string l = Trim(raw);
         if (l.empty() || l[0] == ';' || l[0] == '#') continue;
@@ -1098,6 +1099,9 @@ bool LoadHairConfig() {
         } else if (sec == "cejas_cara") {   // (04/11) id = cantidad, largo
             std::vector<float> f = ParseFloats(v);
             if (!f.empty()) { std::vector<float> b = { 1.f, 1.f, 0.f, 0.35f, 0.2f, 0.12f, 0.f, 0.55f, 0.3f, 0.15f, 0.f, 1.f, 1.f, 0.f }; for (size_t i = 0; i < f.size() && i < b.size(); i++) b[i] = f[i]; h.browFace[k] = b; }   // (04/11 i) + mezcla, r, g, b; (04/11 l) + contraluz, hebras extra
+        } else if (sec == "arrugas_cara") {   // (10/11) id = intensidad, frente, ojos, surco, menton, cuello, anios de piel, reposo
+            std::vector<float> f = ParseFloats(v);
+            if (!f.empty()) wrFace[k] = f;
         } else if (sec == "teselacion_cara") {   // (04/11 m) id = teselar, densidad, suavidad, tope, relieve, surcos, formas, relieve en la luz
             std::vector<float> f = ParseFloats(v);
             if (!f.empty()) tessFace[k] = f;
@@ -1110,6 +1114,7 @@ bool LoadHairConfig() {
     h.loaded = ok;
     { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.hair = h; }
     FaceGenHairChanged();
+    WrPlayerSetSaved(wrFace);   // (10/11) arrugas por jugador
     FaceTessSetSaved(tessFace);   // (04/11 m) teselacion por jugador
     if (!tessFace.empty()) Log("teselacion por jugador: %d caras en [teselacion_cara]", (int)tessFace.size());
     Log("pelo: %s (%d tipos, %d caras asignadas, default '%s')", ok ? "PES21FX_hair.ini leido" : "sin PES21FX_hair.ini (tipos por defecto)", (int)h.types.size(), (int)h.faces.size(), h.defType.c_str());

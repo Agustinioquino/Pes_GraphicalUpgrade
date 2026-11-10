@@ -392,7 +392,7 @@ void main(
     float ageK = PesWrAgeK(pR.w > 10.5 && pR.w < 12.5 ? (pR.w - 11.0) * 100.0 : 0.0, max(P15.z, 0.0));
     float wrDgain = 1.0; PesWrAge(ageK, wa, wb, wrDgain);
     PesWrDepth(g_samplerAnisotropic_Clamp_s, v2.xy, wa, wb, wrDgain, wrDd, wrDg, wrDw, wrDb);
-    wrWeight = saturate(max(wrDw, wrDd) / 0.30);
+    wrWeight = saturate(abs(wrDd - wrDb) / 0.45);   // (10/11 c) relieve contra el promedio de los alrededores (texturas sacadas de las remasterizadas)
   }
 
   // ---- normal de detalle + normal de animacion ----
@@ -447,9 +447,12 @@ void main(
     }
   }
   if (wrD) {   // (09/11 g) surco, zona ancha y piel juntada entre surcos, todo de la misma profundidad
-    wrFold   = saturate(wrDd / 0.30);
-    wrFoldW  = saturate(wrDw / 0.30);
-    wrRidgeF = saturate((wrDb - wrDd) / 0.10) * saturate(wrDb / 0.12);
+    // (10/11 e, Agustin: "en que edad, como afectan a las sombras de una manera realista") la piel joven se pliega ancha y elastica:
+    // el fondo casi no se oscurece ni pierde brillo; con la edad el pliegue queda marcado y su fondo recibe menos luz
+    float wrAgeSh = lerp(0.55, 1.20, g_wrAgeK);
+    wrFold   = saturate((wrDd - wrDb) / 0.45 * wrAgeSh);
+    wrFoldW  = saturate((wrDd - wrDb) / 0.90 * wrAgeSh);
+    wrRidgeF = saturate((wrDb - wrDd) / 0.45);
     wrRidgeW = 0.7 * wrRidgeF;
     exFoldZ  = exOn ? wrFoldW : 0.0;
     exRidgeZ = exOn ? wrRidgeW : 0.0;
@@ -468,7 +471,11 @@ void main(
   // (08/11, Agustin: "como se plasma en barbas") se guarda lo que la arruga inclina la normal (gesto + esculpida) para sacarlo
   // despues donde la textura pinta barba / bigote (fhMask, mas abajo): sobre pelo pintado el surco se veia como una raja a traves de la barba
   float3 wrDN = (float3(r2.xy * wrRelief, max(1.0 + r2.z, 0.05)) / length(float3(r2.xy * wrRelief, max(1.0 + r2.z, 0.05))) - float3(0, 0, 1)) * r0.zzz;
-  if (wrD) { float3 nD = normalize(float3(PesWrDNormalXY(wrDg) * wrRelief, 1.0)); wrDN = nD - float3(0, 0, 1); pesWrN = nD.xy; }   // (09/11 g)
+  // (10/11, Agustin: "arrugas feas ... se ven negras") la pendiente de la profundidad esta en u / v: se pasa al marco tangente con
+  // los signos reales del modelo (PesTanSigns, como los poros); antes fijo B = -v y en las caras con la bitangente al reves el surco
+  // se iluminaba como cresta (linea negra del lado de la luz)
+  float2 wrTS = PesTanSigns(v4.xyz, v5.xyz, v3.xyz, ddx(v2.xy), ddy(v2.xy));
+  if (wrD) { float3 nD = normalize(float3(wrDg * wrTS * wrRelief, 1.0)); wrDN = nD - float3(0, 0, 1); pesWrN = nD.xy; }   // (09/11 g)
   r1.xyz += wrDN;
   r0.z = dot(r1.xyz, r1.xyz);
   r0.z = rsqrt(r0.z);
@@ -644,7 +651,8 @@ void main(
   // que metieron las arrugas y se bajan igual los surcos / crestas (brillo, SSS, sombra del surco). Las barbas 3D (pes_beard) no
   // pasan por aca: siguen la piel con el gesto por la DLL (pozo t116 + diferencia de huesos t115)
   if (fhMask > 0.001) { float fhK = 1.0 - 0.75 * fhMask; r1.xyz = normalize(r1.xyz - wrDN * (1.0 - fhK));
-    wrFold *= fhK; wrFoldW *= fhK; wrRidgeF *= fhK; wrRidgeW *= fhK; shFold *= fhK; shFoldW *= fhK; shRidge *= fhK; }
+    wrFold *= fhK; wrFoldW *= fhK; wrRidgeF *= fhK; wrRidgeW *= fhK; shFold *= fhK; shFoldW *= fhK; shRidge *= fhK;
+    exFoldZ *= fhK; exRidgeZ *= fhK; }   // (10/11, hilo arrugas) la sangre / palidez del pliegue tampoco sobre la barba pintada
   float poreAmt = 0;
   if (enhance) {
     // poros y microrrelieve de la piel (se apaga a distancia para no titilar)
@@ -841,7 +849,9 @@ void main(
   // Pliegues de expresion: dentro del surco llega menos luz y la piel brilla menos
   if (wrOn && wrFold > 0) {
     float fold = saturate(wrFold * wrCrease);
-    r2.xyz *= (1.0 - 0.20 * fold);   // (09/11, Agustin: "las arrugas se ven oscuras a veces") 0.35 -> 0.20
+    // (10/11 g, Agustin: "el sss debe jugar con esas arrugas") la sombra del surco no es gris: la luz que entra por las paredes del
+    // pliegue sale rojiza (el rojo viaja mas bajo la piel), asi que el fondo pierde mas verde y azul que rojo (media 0.20 como antes)
+    r2.xyz *= 1.0 - fold * float3(0.12, 0.23, 0.25);
     r0.z  *= (1.0 - 0.5 * fold);
     r0.w   = lerp(r0.w, max(r0.w, 0.6), 0.5 * fold);
   }

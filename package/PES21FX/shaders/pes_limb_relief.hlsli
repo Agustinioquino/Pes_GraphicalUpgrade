@@ -171,7 +171,7 @@ float PesLegTense(float3 p, float3 act) {
 }
 
 // kind 1 mano, 2 pierna; a, b = (cierre del puno, 0) o (rodilla, esfuerzo). Suma la pendiente a nxy y devuelve (cavidad, pliegue)
-float2 PesLimbRelief(int kind, float3 pr, float a, float3 act, float3 dPx, float3 dPy, float2 dUx, float2 dUy, float gain, inout float2 nxy) {
+float2 PesLimbRelief(int kind, float3 pr, float a, float3 act, float3 dPx, float3 dPy, float2 dUx, float2 dUy, float gain, inout float2 nxy, float2 ts = float2(1.0, -1.0)) {
     float pix = max(length(dPx), length(dPy));
     float fade = 1.0 - smoothstep(0.0012, 0.0030, pix);
     if (fade <= 0.0 || gain <= 0.0) return 0;
@@ -196,7 +196,10 @@ float2 PesLimbRelief(int kind, float3 pr, float a, float3 act, float3 dPx, float
         hv = (PesLegH(p + e * ev, a, act, c3) - PesLegH(p - e * ev, a, act, c4)) / (2.0 * e);
     }
     float k = 2.2 * gain * fade;
-    nxy += clamp(float2(-hu, hv) * k, -0.45, 0.45);
+    // (10/11, Agustin: "las rodillas se marcan en el lado incorrecto") la pendiente esta en u / v: al marco tangente del modelo con sus
+    // signos reales (ts = PesTanSigns, como los poros); antes se suponia T = +u, B = -v y donde el modelo trae otro signo el pliegue
+    // se iluminaba del lado contrario
+    nxy += clamp(float2(-hu * ts.x, -hv * ts.y) * k, -0.45, 0.45);
     float l2 = dot(nxy, nxy); if (l2 > 0.94) nxy *= rsqrt(l2 / 0.94);
     return float2(saturate(-h0 / 0.0012) * gain * fade, saturate(c0 / 0.0004) * gain * fade);
 }

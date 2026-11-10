@@ -416,6 +416,8 @@ void PesTessTilt(inout float3 N, inout float3 T, inout float3 B, float2 g, inout
 // t20 / t21 las nuestras, t31 las esculpidas de la sonrisa). Con el mismo peso que el PS y el surco medido ancho (wrFoldW), la piel
 // se hunde z366 mm en el surco y sube w366 mm en la cresta: cambia la silueta y la sombra, no solo la luz. Sin nada enlazado = 0.
 cbuffer cPSMaterialT : register(b4) { float4 g_tMat[8]; }
+// (10/11, hilo arrugas) pesos del juego suavizados por la DLL (= PS b12 PESWrSmooth); sin enlazar vale 0 y no cambia nada
+cbuffer PESWrSmoothT : register(b11) { float4 tWrS0; float4 tWrS3; float4 tWrS4; }
 Texture2D<float4> tWrAnimN : register(t5);
 Texture2D<float4> tWrMaskG : register(t6);
 Texture2D<float4> tWrN     : register(t20);
@@ -438,6 +440,8 @@ float2 PesTessWrinkle(float2 uv, float age)
   float4 wz = float4(P14.x > 0 ? P14.x : 1.0, P14.y > 0 ? P14.y : 1.0, P14.z > 0 ? P14.z : 1.0, P14.w > 0 ? P14.w : 1.0);
   float4 wTop = g_tMat[3];
   float4 wBot = float4(uv.x < 0.5 ? g_tMat[0].y : g_tMat[4].x, g_tMat[4].yzw);
+  { float k = saturate(IniParams.Load(int2(397, 0)).z) * (tWrS0.y > 0.5 ? 1.0 : 0.0);   // (10/11) igual que el PS (z397)
+    if (k > 0.0) { wTop = lerp(wTop, tWrS3, k); wBot = lerp(wBot, float4(uv.x < 0.5 ? tWrS0.x : tWrS4.x, tWrS4.yzw), k); } }
   float smile = sqrt(saturate(max(g_tMat[0].y, g_tMat[4].x)) * saturate(wTop.w));
   wTop *= float4(wz.x, wz.x, wz.y, wz.z * (1.0 + max(P13.z, 0.0) * smile));
   wBot.x *= wz.w;
@@ -468,11 +472,12 @@ float2 PesTessWrinkle(float2 uv, float age)
       wa = 1.0 - pow(1.0 - wa, 1.0 + cv); wb = 1.0 - pow(1.0 - wb, 1.0 + cv);
       float gain = 1.0; PesWrAge(PesWrAgeK(age, max(P15.z, 0.0)), wa, wb, gain);
       wa = saturate(wa); wb = saturate(wb);
-      float4 pa = 1.0 + 2.5 * wa, pb = 1.0 + 2.5 * wb;
-      float4 ka = kWrDmmA * pow(wa, 0.8) * gain, kb = kWrDmmB * pow(wb, 0.8) * gain;
-      float dd = PesWrD1(pesWrDA.SampleLevel(pesTessSamp, uv, 1), pesWrDB.SampleLevel(pesTessSamp, uv, 1), pa, pb, ka, kb);
-      float dB = dot(ka, pesWrDA.SampleLevel(pesTessSamp, uv, 3)) + dot(kb, pesWrDB.SampleLevel(pesTessSamp, uv, 3));
-      wrDr = float2(saturate(dd / 0.30), 0.7 * saturate((dB - dd) / 0.10) * saturate(dB / 0.12));
+      float wrSh = (0.08 + 0.30 * g_wrAgeK) * g_wrEmoSh;   // (10/11 f) igual que el PS
+      float4 pa = 1.0 + wrSh * wa, pb = 1.0 + wrSh * wb;
+      float4 ka = kWrDmmA * pow(wa, 0.8) * gain * g_wrGA, kb = kWrDmmB * pow(wb, 0.8) * gain * g_wrGB;
+      float dd = PesWrDS(pesTessSamp, uv, 1, pa, pb, ka, kb);   // (10/11 d) con los mapas de edad
+      float dB = PesWrDS(pesTessSamp, uv, 4, pa, pb, ka, kb);
+      wrDr = float2(saturate((dd - dB) / 0.45), 0.7 * saturate((dB - dd) / 0.45));   // (10/11 c) surco / cresta contra el promedio de ~4 mm (relieve entero)
       wrDon = true;
     } }
   float w = saturate(dot(wTop, mT) + dot(wBot, mB));
