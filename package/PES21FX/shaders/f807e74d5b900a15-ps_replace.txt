@@ -61,6 +61,9 @@ Texture2D<float4> inDepth : register(t11);
 Texture2D<float4> inFogVolume : register(t12);
 Texture2D<float4> inOcclusion : register(t13);
 Texture2D<float4> inShadow : register(t14);
+Texture2D<float4> PESSsgi : register(t26);   // PES21 (08/11 0qtsss): SSGI temporal de la DLL en el editor (x411), como en 619b; sin enlazar = el rebote simple de abajo
+Texture2D<float> PESMouth : register(t43);   // PES21 (08/11 0qtsss): mascara del interior de la boca de la DLL (1 = boca): ahi lo nuevo de x411 no corre
+Texture2D<float4> PESGtao : register(t27);   // PES21 (08/11): GTAO de la DLL (1 = sin oclusion), como en 619b; sin enlazar = sin efecto
 
 
 // 3Dmigoto declarations
@@ -95,6 +98,11 @@ void main(
   float gnZ = inGBufferNormal.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).z;
   int tyC = (int)((uint)(gnZ * 1023 + 0.5) & 15);
   bool skinC = cmpOn && (tyC == 0) && (abs(gmC.z - 0.98039) < 0.003);
+  bool mouthC = false;   // (08/11 0qtsss) REGLA FIJA: el interior de la boca queda como antes
+  { uint mmW = 0, mmH = 0; PESMouth.GetDimensions(mmW, mmH); if (mmW > 0) {   // (09/11) la mascara guarda la profundidad de la boca: solo cuenta si coincide con la del pixel (donde la cara la tapo, no)
+    uint2 mmP = min((uint2)v0.xy, uint2(mmW - 1, mmH - 1));
+    float mmZ = PESMouth.Load(int3(mmP, 0)), mmD = inDepth.Load(int3(mmP, 0)).x;
+    mouthC = mmZ > 0.0 && abs(mmZ - mmD) <= 1e-6 + 2e-4 * abs(mmD); } }
 
   r0.xy = g_psSystem.m_renderBuffer.zw * v0.xy;
   r0.z = inDepth.SampleLevel(g_samplerPoint_Clamp_s, r0.xy, 0).x;
@@ -121,6 +129,75 @@ void main(
     }
   }
   r0.w = inShadow.Sample(g_samplerPoint_Clamp_s, r0.xy).x;
+  // (08/11 b) SOMBRA DE CONTACTO del sol (w387), la misma de la composicion del partido (619b): esta composicion es la del
+  // editor y ahi no corria, asi que lo chico y pegado (labio sobre los dientes, nariz, ceja, dedos) seguia sin sombra. La
+  // direccion del sol sale de m_dominantLightDir (mundo -> vista, como el PS de la boca). Solo agrega sombra
+  { float4 CSn = IniParams.Load(int2(387, 0));
+    float3 LwC = g_psSystem.m_dominantLightDir.xyz;
+    if (cmpOn && CSn.w > 0.001 && dot(LwC, LwC) > 1e-6 && r0.w > 0.01) {
+      float zcC = PESLinZ(uvC);
+      if (zcC > 0.05 && zcC < 15.0) {
+        float3 LdC = normalize(float3(dot(LwC, g_psScene.m_view._m00_m10_m20), dot(LwC, g_psScene.m_view._m01_m11_m21), dot(LwC, g_psScene.m_view._m02_m12_m22)) + 1e-6);
+        LdC.z = -LdC.z;                                       // a la convencion de la posicion (z hacia adelante)
+        float3 NcC = PESDecN(uvC); NcC.z = -NcC.z;
+        float ndC = dot(NcC, LdC);
+        if (ndC > 0.02) {
+          float2 sCc = uvC * float2(2, -2) + float2(-1, 1);
+          float3 PvC = float3((sCc - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zcC, zcC);
+          float lenC = clamp(CSn.w * 0.01, 0.01, 1.0);
+          float hitC = 0.0;
+          [unroll] for (int ci = 0; ci < 8; ci++) {
+            float tC = (ci + 0.6) / 8.0; tC = tC * tC;
+            float3 Q = PvC + LdC * (tC * lenC);
+            if (Q.z < 0.06) break;
+            float2 sQ = Q.xy / (g_psScene.m_projectionParam.xy * Q.z) + g_psScene.m_cameraCenterOffset.xy;
+            float2 uvQ = (sQ + float2(1, -1)) * float2(0.5, -0.5);
+            if (any(uvQ < 0.0) || any(uvQ > 1.0)) break;
+            float zQ = PESLinZ(uvQ);
+            if (zQ < 0.05 || zQ > 300.0) continue;
+            float dQ = Q.z - zQ;
+            float biasC = 0.0015 + 0.004 * zcC * tC + 0.01 * tC * lenC * saturate(1.0 - ndC);
+            float thickC = 0.06 + 0.5 * lenC;
+            if (dQ > biasC && dQ < thickC) hitC = max(hitC, 1.0 - tC * 0.35);
+          }
+          r0.w *= 1.0 - hitC * saturate((15.0 - zcC) / 5.0);
+        }
+      }
+    } }
+  // (09/11, hilo boca, Agustin: "el volumen de la boca y labios tienen que afectar a la sombra, como hace FC/FIFA" / "que al mover
+  // la luz la sombra lo acompane y no sea fija; el interior de la boca no recibe la misma luz por las sombras de la boca")
+  // SOMBRA DEL VOLUMEN DE LA BOCA: solo donde se VE el interior de la boca (mascara t43 con profundidad), un segundo rayo hacia el
+  // sol mas denso que el de contacto (16 pasos parejos de 4 cm con desfase por pixel, margen fino, espesor 3 cm): los labios, la
+  // mejilla y los dientes de arriba tapan el sol que entra por la abertura y esa sombra se mueve con la luz. Solo agrega sombra.
+  // Se apaga con w387 = 0 (como la de contacto)
+  { float4 CSm = IniParams.Load(int2(387, 0));
+    float3 LwM = g_psSystem.m_dominantLightDir.xyz;
+    if (cmpOn && mouthC && CSm.w > 0.001 && dot(LwM, LwM) > 1e-6 && r0.w > 0.01) {
+      float zcM = PESLinZ(uvC);
+      if (zcM > 0.05 && zcM < 15.0) {
+        float3 LdM = normalize(float3(dot(LwM, g_psScene.m_view._m00_m10_m20), dot(LwM, g_psScene.m_view._m01_m11_m21), dot(LwM, g_psScene.m_view._m02_m12_m22)) + 1e-6) * float3(1, 1, -1);
+        float3 NcM = PESDecN(uvC); NcM.z = -NcM.z;
+        float ndM = dot(NcM, LdM);
+        float2 sCm = uvC * float2(2, -2) + float2(-1, 1);
+        float3 PvM = float3((sCm - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zcM, zcM);
+        float jM = frac(52.9829189 * frac(dot(v0.xy, float2(0.06711056, 0.00583715))));
+        float hitM = 0.0;
+        [loop] for (int mi = 0; mi < 16; mi++) {
+          float tM = (mi + jM) / 16.0;
+          float3 Q = PvM + LdM * (tM * 0.04);
+          if (Q.z < 0.06) break;
+          float2 sQ = Q.xy / (g_psScene.m_projectionParam.xy * Q.z) + g_psScene.m_cameraCenterOffset.xy;
+          float2 uvQ = (sQ + float2(1, -1)) * float2(0.5, -0.5);
+          if (any(uvQ < 0.0) || any(uvQ > 1.0)) break;
+          float zQ = PESLinZ(uvQ);
+          if (zQ < 0.05 || zQ > 300.0) continue;
+          float dQ = Q.z - zQ;
+          float biasM = 0.0008 + 0.0015 * zcM * tM + 0.002 * saturate(1.0 - abs(ndM));
+          if (dQ > biasM && dQ < 0.03) hitM = max(hitM, 1.0 - 0.25 * tM);
+        }
+        r0.w *= 1.0 - 0.9 * hitM * saturate((15.0 - zcM) / 5.0);
+      }
+    } }
   if (r5.w != 0) {
     r2.w = r0.z * r0.z;
     r2.w = rsqrt(r2.w);
@@ -253,6 +330,44 @@ void main(
     float4 P10g = IniParams.Load(int2(10,0));
     float giK = P9g.w < 0 ? 0.0 : (P9g.w > 0 ? P9g.w : 1.0);
     float zg = PESLinZ(uvC);
+    // (08/11 0qtsss, Agustin: "el ssgi en el modo editar deberia cargar por completo") con x411 la DLL calcula el SSGI acumulado en el
+    // tiempo (t26) tambien para esta composicion: se sube de resolucion con el mismo filtro bilateral que el partido (profundidad y
+    // normal). Sin t26 (DLL vieja, x411 = 0, primer cuadro) queda el rebote simple de antes
+    float4 SGt = IniParams.Load(int2(155,0));
+    float Wg = 0, Hg = 0; PESSsgi.GetDimensions(Wg, Hg);
+    bool giT = SGt.x > 0.5 && Wg > 0 && IniParams.Load(int2(411,0)).x > 0.5 && !mouthC;
+    { float wAcc = IniParams.Load(int2(153,0)).w; if (giT && wAcc > 0.0) giK = wAcc; }
+    if (giT && cmpOn && giK > 0 && zg > 0.1 && zg < 90.0) {
+      float4 Q336 = IniParams.Load(int2(336,0)), Q337 = IniParams.Load(int2(337,0));
+      float zMaxG = Q337.y > 1.0 ? Q337.y : 90.0;
+      if (zg < zMaxG) {
+        float2 txg = 1.0 / float2(Wg, Hg);
+        float3 Ncg = PESDecN(uvC);
+        float nPow = (Q336.z >= 0.0 ? Q336.z : 1.0) * 8.0;
+        int kR = (int)clamp(Q336.y, 0.0, 2.0);
+        float2 tcg = uvC * float2(Wg, Hg) - 0.5; float2 fg = frac(tcg); float2 b0g = (floor(tcg) + 0.5) * txg;
+        float3 accU = 0; float wU = 0; float3 nearU = 0; float bestU = 1e9;
+        float sig = 0.6 + 0.7 * kR;
+        [loop] for (int gy = -kR; gy <= kR + 1; gy++) [loop] for (int gx = -kR; gx <= kR + 1; gx++) {
+          float2 uvT = b0g + float2(gx, gy) * txg;
+          float4 sg = PESSsgi.SampleLevel(g_samplerPoint_Clamp_s, uvT, 0);
+          float dzg = abs(sg.w - zg);
+          float2 dd = float2(gx, gy) - fg;
+          float ws = kR == 0 ? (gx ? fg.x : 1.0 - fg.x) * (gy ? fg.y : 1.0 - fg.y) : exp(-dot(dd, dd) / (2.0 * sig * sig));
+          float3 nT = PESDecN(uvT);
+          float wn = nPow > 0.0 ? pow(saturate(dot(nT, Ncg)), nPow) : 1.0;
+          float wb = ws * wn * exp(-dzg / (0.03 * zg + 0.02));
+          accU += sg.rgb * wb; wU += wb;
+          if (dzg < bestU) { bestU = dzg; nearU = sg.rgb; }
+        }
+        float3 ind = (wU > 1e-4 ? accU / wU : nearU) * giK * saturate((zMaxG - zg) / (zMaxG / 3.0));
+        { float sat = Q336.w > 0.0 ? Q336.w : 1.0; float lg = dot(ind, float3(0.2126, 0.7152, 0.0722)); ind = max(lerp(lg.xxx, ind, sat), 0.0); }
+        if (skinC) ind *= 1.0 - 0.5 * saturate(IniParams.Load(int2(124,0)).x);
+        if (skinC) ind *= Q337.x > 0.0 ? Q337.x : 1.0;
+        r2.xyz += ind;
+        giDbg = ind;
+      }
+    } else
     if (cmpOn && giK > 0 && zg > 0.1 && zg < 90.0) {
       float2 sC = uvC * float2(2, -2) + float2(-1, 1);
       float3 Pc = float3((sC - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zg, zg);
@@ -286,12 +401,53 @@ void main(
     }
   }
   r0.x = inOcclusion.Sample(g_samplerLinear_Clamp_s, r0.xy).x;
+  { // (08/11 b) GTAO de la DLL tambien en el editor (antes solo en el partido), mezclado con el SSAO del juego como en 619b (y132).
+    // Trae la oclusion de corto alcance (fila 387): rendija de los labios, fondo de la boca, hueco entre dientes, fosas nasales
+    float4 GT = IniParams.Load(int2(132,0));
+    uint gtW = 0, gtH = 0; PESGtao.GetDimensions(gtW, gtH);
+    if (GT.x > 0.5 && gtW > 0) { float g = PESGtao.SampleLevel(g_samplerLinear_Clamp_s, uvC, 0).x; r0.x = lerp(r0.x, min(r0.x * 0.35 + 0.65, g), saturate(GT.y)); }
+  }
   float3 occRGB = r0.xxx;
   if (skinC) {
     // la luz ambiente del estadio es gris/verdosa: en la piel se calienta un poco
     r2.xyz *= lerp(float3(1,1,1), float3(1.07, 0.985, 0.93), saturate(P11.y));
     // oclusion de la piel con tinte rojizo (la luz rebota dentro del tejido en los pliegues)
     occRGB = lerp(r0.xxx, pow(max(r0.x, 1e-4), float3(0.72, 1.0, 1.08)), saturate(P11.z));
+    // (10/11) SSS real, parte 2: la OCLUSION tambien se difunde bajo la piel. Agustin: "todas las luces deberian afectar al sss".
+    // La luz del cielo, del estadio y del rebote (SSGI) entra a la piel recortada por la oclusion (pliegue de la nariz, comisura,
+    // parpado, cuello): esa luz ya recortada tambien viaja bajo la piel, el rojo unos 3 mm y el azul menos de 1 mm. Antes la
+    // oclusion se aplicaba despues de la dispersion, con el borde gris y duro y un tinte fijo. Aca se difunde con el mismo perfil
+    // de Burley que la luz directa (x95 = ancho), con la distancia real en mm entre los puntos y solo entre piel. z11 = cuanto
+    if (IniParams.Load(int2(95,0)).w > 0.5 && P11.z > 0.0 && !mouthC) {
+      float zo = PESLinZ(uvC), zoA = abs(zo);
+      float mmPx = 2000.0 * abs(g_psScene.m_projectionParam.x) * zoA * g_psSystem.m_renderBuffer.z;   // mm por pixel
+      float3 dmm = float3(1.5, 0.75, 0.40) * max(IniParams.Load(int2(95,0)).x, 0.3);
+      float nearK = saturate((dmm.r * 3.0 / max(mmPx, 1e-6) - 1.5) / 3.0);
+      if (zoA > 0.1 && nearK > 0.0) {
+        float4 GTo = IniParams.Load(int2(132,0));
+        uint goW = 0, goH = 0; PESGtao.GetDimensions(goW, goH);
+        bool gOn = GTo.x > 0.5 && goW > 0;
+        static const float kR[8] = { 0.25, 0.60, 1.00, 1.50, 2.10, 2.90, 3.90, 5.50 };   // radios en unidades del alcance del rojo
+        static const float kW[8] = { 0.30, 0.35, 0.45, 0.55, 0.70, 0.90, 1.30, 2.00 };   // ancho del anillo de cada muestra
+        float3 ws = 0.2 * dmm.r / dmm;          // centro: el disco de radio 0.1 (2 / d por unidad de radio)
+        float3 acc = r0.xxx * ws;
+        float rot = 6.2831853 * frac(52.9829189 * frac(dot(v0.xy, float2(0.06711056, 0.00583715))));
+        [loop] for (int oi = 0; oi < 8; oi++) {
+          float rmm = kR[oi] * dmm.r;
+          float ang = oi * 2.39996323 + rot;
+          float2 uvS = uvC + float2(cos(ang), sin(ang)) * (rmm / max(mmPx, 1e-6)) * g_psSystem.m_renderBuffer.zw;
+          if (any(uvS < 0.0) || any(uvS > 1.0)) continue;
+          if (abs(inGBufferMaterial.SampleLevel(g_samplerPoint_Clamp_s, uvS, 0).z - 0.98039) >= 0.003) continue;   // solo piel
+          float dzmm = (PESLinZ(uvS) - zo) * 1000.0;
+          float r3 = sqrt(rmm * rmm + dzmm * dzmm);
+          float3 w = (exp(-r3 / dmm) + exp(-r3 / (3.0 * dmm))) / dmm * (kW[oi] * dmm.r) * (rmm / max(r3, 1e-4));
+          float aS = inOcclusion.SampleLevel(g_samplerLinear_Clamp_s, uvS, 0).x;
+          if (gOn) aS = lerp(aS, min(aS * 0.35 + 0.65, PESGtao.SampleLevel(g_samplerLinear_Clamp_s, uvS, 0).x), saturate(GTo.y));
+          acc += w * aS; ws += w;
+        }
+        occRGB = lerp(occRGB, acc / max(ws, 1e-6), saturate(P11.z) * nearK);
+      }
+    }
   }
   // === PES21 relieve de pliegues (curvatura de normales en pantalla): telas y ropa menos planas ===
   {
@@ -361,8 +517,48 @@ void main(
       }
     }
   }
+  // (08/11 0qtsss) oclusion mejorada tambien en el editor (z411, con x411): multirebote (Jimenez 2016) y oclusion especular (Lagarde)
+  // de la fila 48 como en el partido (619b), los rasgos de la cara (x124) y micro-sombras (x88, apertura por la oclusion) del lado de
+  // la luz dominante del editor. Sin z411 queda la mezcla de antes
+  float4 AOP = IniParams.Load(int2(48,0)), Q411 = IniParams.Load(int2(411,0));
+  if (cmpOn && AOP.w > 0.5 && Q411.x > 0.5 && Q411.z > 0.5 && !mouthC) {
+    float aoRaw = saturate(r0.x);
+    float faceK = skinC ? saturate(IniParams.Load(int2(124,0)).x) : 0.0;
+    if (faceK > 0.0) { aoRaw = pow(aoRaw, 1.0 + 0.8 * faceK); occRGB = pow(max(occRGB, 1e-4), 1.0 + 0.8 * faceK); }
+    float3 diffC = r7.xyz * r2.xyz;
+    float3 specC = r1.xyz;
+    float aoK = lerp(1.0, aoRaw, saturate(AOP.z));
+    float3 alb = saturate(r7.xyz);
+    float3 ma = 2.0404 * alb - 0.3324, mb = -4.7951 * alb + 0.6417, mc = 2.7552 * alb + 0.6903;
+    float3 multi = max(aoK.xxx, ((aoK * ma + mb) * aoK + mc) * aoK);
+    float3 aoD = lerp(occRGB, occRGB * multi / max(aoRaw, 1e-3), saturate(AOP.x) * (1.0 - faceK));
+    aoD = min(aoD, 1.0);
+    float aoS = aoK;
+    float zA = PESLinZ(uvC);
+    if (zA > 0.1 && zA < 90.0) {
+      float3 Na = PESDecN(uvC); Na.z = -Na.z;
+      float2 sA = uvC * float2(2, -2) + float2(-1, 1);
+      float3 Va = normalize(float3((sA - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zA, zA));
+      float ndvS = saturate(dot(Na, -Va));
+      float roughS = saturate(gmC.x);
+      float so = saturate(pow(max(ndvS + aoK, 1e-4), exp2(-16.0 * roughS - 1.0)) - 1.0 + aoK);
+      aoS = lerp(aoK, so, saturate(AOP.y));
+      float4 MS = IniParams.Load(int2(88,0));
+      float3 LwM = g_psSystem.m_dominantLightDir.xyz;
+      if (MS.y > 0.5 && MS.x > 0.0 && dot(LwM, LwM) > 1e-6 && zA < 15.0) {
+        float3 LdM = normalize(float3(dot(LwM, g_psScene.m_view._m00_m10_m20), dot(LwM, g_psScene.m_view._m01_m11_m21), dot(LwM, g_psScene.m_view._m02_m12_m22)) + 1e-6);
+        LdM.z = -LdM.z;
+        float ndlM = dot(Na, LdM);
+        float micro = saturate(abs(ndlM) + 2.0 * aoRaw * aoRaw - 1.0);
+        float msK = lerp(1.0, max(micro, 0.4), saturate(MS.x) * saturate(ndlM * 4.0));
+        diffC *= msK; specC *= skinC ? msK : lerp(1.0, msK, 0.5);
+      }
+    }
+    r0.xyw = diffC * aoD + specC * aoS;
+  } else {
   r1.xyz = r7.xyz * r2.xyz + r1.xyz;
   r0.xyw = r1.xyz * occRGB;
+  }
   r0.z = log2(r0.z);
   r0.z = g_psScene.m_fogParam[2].y * r0.z;
   r0.z = r0.z * 0.693147182 + g_psScene.m_fogParam[2].z;
@@ -406,7 +602,7 @@ void main(
       if (P89.z > 0.5) c89 += pow(nv, 24.0) * 0.08 * lv;
       o0.xyz = c89;
     } }
-  if (IniParams.Load(int2(12,0)).w > 1.5) o0.xyz = giDbg * 3.0;   // w12 = 2: ver solo el rebote de luz
+  { float dbgE = IniParams.Load(int2(12,0)).w; if (dbgE > 1.5 && dbgE < 2.5) o0.xyz = giDbg * 3.0; }   // w12 = 2: ver solo el rebote de luz (08/11: solo 2, las vistas 6 y 7 son del sol)
   if (IniParams.Load(int2(12,0)).w < -0.5) {   // PES21 debug: bits de m_shadowMapResolutions y m_exposure en la esquina
     int bx = (int)(v0.x / 24.0), by = (int)((v0.y - 300.0) / 24.0);
     if (v0.y >= 300.0 && by < 8 && bx < 32) {

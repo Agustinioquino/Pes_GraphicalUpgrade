@@ -1,0 +1,14 @@
+reemplazos/angr_brwnit_lorol.gani 2672 FA428B83
+reemplazos/smil_soft.gani 2288 68B51C2E
+zfx_abrir_boca.gani 1392 A1FC43A2
+zfx_asombro.gani 1392 DFB8186A
+zfx_cejas_arriba.gani 1392 21D761A8
+zfx_ceno.gani 1392 57A560D3
+zfx_dientes.gani 1392 9DA609D4
+zfx_enojo.gani 1392 D6069F17
+zfx_grito.gani 1392 55886686
+zfx_hablar.gani 10336 B4667FE1
+zfx_preocupado.gani 1392 F2E4FE2E
+zfx_puchero.gani 1392 957B6447
+zfx_risa.gani 1392 340B81C8
+zfx_sonrisa.gani 1392 DDC8C2C0

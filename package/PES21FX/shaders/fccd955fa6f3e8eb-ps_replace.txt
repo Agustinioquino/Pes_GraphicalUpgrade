@@ -111,6 +111,7 @@ void main(
   r0.w = dot(r0.xyz, r0.xyz);
   r0.w = rsqrt(r0.w);
   r0.xyz = r0.xyz * r0.www;
+  float3 eyeVt = r0.xyz;   // (04/11) vista en el espacio tangente del ojo (para la profundidad del iris)
   r0.w = g_tex_height.Sample(g_sampler_height_s, v2.xy).y;
   float eyeH = r0.w;
   r0.xy = r0.xy * r0.ww;
@@ -122,6 +123,18 @@ void main(
   r0.xy = float2(0.25,0.25) * r0.xy;
   r0.xy = r0.xy / r0.zz;
   r0.xy = v2.xy + -r0.xy;
+  // (04/11, Agustin: "les hace falta una mayor naturalidad a los modelos eye, quizas colocando el iris con profundidad?") y318:
+  // PROFUNDIDAD DEL IRIS por refraccion de la cornea. El iris real esta ~2.5 mm detras de la cornea (camara anterior, n = 1.376):
+  // mirado de costado se corre bajo la cornea y la pupila se ve hundida. El juego ya hace un paralaje chico con la altura (arriba);
+  // esto suma el corrimiento refractado (angulo de Snell) hasta 0.10 de la textura (~2.5 mm, con el iris de 0.245 = 6 mm) por la
+  // altura del ojo, solo dentro de la cornea. 0 = como el juego.
+  { float dep = clamp(IniParams.Load(int2(318,0)).y, 0.0, 2.0);
+    if (dep > 0.001) {
+      float s1 = length(eyeVt.xy);
+      float st = s1 / 1.376, ct = sqrt(max(1.0 - st * st, 0.04));
+      float2 dir = s1 > 1e-4 ? eyeVt.xy / s1 : float2(0, 0);
+      r0.xy -= dir * (st / ct) * 0.10 * dep * eyeH * eyeIris;
+    } }
   // === PES21 (19/10) iris realista: la textura del ojo esta centrada en (0.5, 0.5); el iris llega a r = 0.245 y la pupila a 0.088
   // (medido en las texturas volcadas). Con eso se pasa a polares y se leen las texturas de detalle del mod (t20/t21),
   // que sirven para cualquier color: el color sigue saliendo de la textura del juego (t6).
@@ -129,13 +142,43 @@ void main(
   float4 P91 = IniParams.Load(int2(91,0));   // x91 relieve del iris, y91 criptas/contraste, z91 sombra del parpado sobre el iris, w91 tamano de la pupila (1 = del juego)
   float4 P92 = IniParams.Load(int2(92,0));   // x92 reflejo en pantalla, y92 humedad (brillo de la esclerotica), z92 saturacion del iris, w92 brillo del iris
   float2 irisD = r0.xy - 0.5;
-  float irisR = length(irisD) / 0.245;
-  // pupila: w91 < 1 la achica, > 1 la agranda (se remapea el radio dentro del iris; el borde del iris no se mueve)
-  // pupila reactiva (y93 on/off, z93 cuanto): con sol pleno se contrae, de noche se dilata (x93 = brillo adaptado, lo pone la DLL)
+  // (04/11, Agustin: "el tamano de los ojos cambia", el iris del mod se veia ~25 % mas grande que con Ver original) el radio del iris
+  // ya no es fijo (0.245): cada cara trae su textura y en muchas el iris del juego es mas chico, asi que el detalle, la sombra del borde,
+  // el limbo y el reflejo en pantalla oscurecian un anillo de lo blanco y el iris parecia mas grande. Se mide el borde REAL del iris en
+  // la direccion de este pixel con la altura del juego (la misma mascara que usa el juego para mezclar iris y esclerotica, eyeIris)
+  float irisRad = 0.245;
+  { float2 dU = irisD / max(length(irisD), 1e-5);
+    float prevE = 1.0, prevR = 0.06, found = -1.0;
+    [unroll] for (int k = 0; k < 16; k++) {
+      float rr = 0.08 + 0.016 * k;
+      float hh = g_tex_height.SampleLevel(g_sampler_height_s, 0.5 + dU * rr, 0).y;
+      float e = 1.0 - pow(1.0 - hh, 4.0);
+      if (found < 0.0 && e < 0.5) found = lerp(prevR, rr, saturate((prevE - 0.5) / max(prevE - e, 1e-4)));
+      prevE = e; prevR = rr;
+    }
+    if (found > 0.0) irisRad = clamp(found, 0.12, 0.30); }
+  float irisR = length(irisD) / irisRad;
+  // PUPILA REACTIVA (04/11 b, Agustin: "la idea de la pupila reactiva no es cambiar el tamano si no modificar la forma"; "va asi"):
+  // como un ojo real, el agujero del medio se abre o se cierra y el iris se estira (luz fuerte: fibras finas y largas) o se arruga
+  // (poca luz: fibras juntas), el borde de afuera del iris no se mueve. Se remapea en radio la UV con la que se lee la textura del
+  // juego (t6), asi la pupila del juego cambia de verdad y no solo el detalle. Base = tamano del juego; cambio chico (hasta +-15 %
+  // por z93) y lento (x93 lo adapta la DLL: se cierra en ~0.4 s, se abre en ~3 s), SOLO en partido (w93): en el editor queda la
+  // pupila del juego. Forma: apenas ovalada y con el borde irregular, y un temblor chico (hippus). y93 on/off.
+  // Pupila del juego en la textura: 0.36 del radio del iris (0.088 / 0.245, medido en las texturas volcadas).
   float4 P93 = IniParams.Load(int2(93,0));
-  float pupAuto = (P93.y > 0.5) ? lerp(1.0, lerp(1.4, 0.72, saturate(P93.x)), saturate(P93.z)) : 1.0;
-  { float pup = clamp(P91.w * pupAuto, 0.55, 1.7); float rIn = 0.36 * pup;
-    irisR = irisR < rIn ? irisR / pup : lerp(0.36, 1.0, (irisR - rIn) / max(1.0 - rIn, 1e-3)) ; }
+  { float rn = irisR, rs = rn;
+    if (P93.y > 0.5 && rn < 1.0) {
+      float th = atan2(irisD.y, irisD.x);
+      float k = 1.0;
+      if (P93.w > 0.5) k = 1.0 + 0.15 * saturate(P93.z) * (1.0 - 2.0 * saturate(P93.x));   // sol pleno -> 0.85, noche -> 1.15
+      float t = IniParams.Load(int2(157, 0)).x;
+      k *= 1.0 + 0.012 * sin(t * 1.7) * sin(t * 0.63 + 1.3);                                  // hippus: temblor de decimas de mm
+      float shp = 1.0 + 0.025 * cos(2.0 * th) + 0.018 * sin(5.0 * th + 0.7) + 0.012 * sin(9.0 * th + 2.1);   // ovalada e irregular
+      float pb = 0.36 * k * shp;                                                              // borde de la pupila que se ve
+      rs = rn < pb ? rn * (0.36 / pb) : lerp(0.36, 1.0, (rn - pb) / max(1.0 - pb, 1e-3));
+      r0.xy = 0.5 + irisD * (rs / max(rn, 1e-5));
+    }
+    irisR = rs; }
   float irisTh = atan2(irisD.y, irisD.x) * 0.15915494 + 0.5;
   float irisVt = saturate((irisR - 0.36) / 0.64);                    // 0 = borde de la pupila, 1 = borde del iris
   float irisIn = (1 - smoothstep(0.97, 1.03, irisR)) * smoothstep(0.30, 0.37, irisR);   // 1 dentro del iris (sin pupila)
@@ -285,6 +328,56 @@ void main(
           float3 ssr = sc * fres * saturate(P90.y) * 0.3;
           refl = lerp(refl, ssr, edge * saturate(P92.x) * ssrM);
         } } }
+    // === (31/10) claridad del ojo (x318): el ojo real es un lente. La cornea enfoca la luz sobre el iris, que es concavo: el lado
+    // del iris OPUESTO a la luz queda mas claro (caustica, como el "iris caustic" de los ojos de UE5), y el borde pegado a la
+    // pupila recibe mas luz que el limbo. La esclerotica no es gris: es blanca y translucida, apenas rosada hacia los lagrimales.
+    // Sin esto el ojo del juego queda opaco (iris chato y oscuro, blanco grisaceo) aunque la luz le pegue.
+    { float eyeClr = saturate(IniParams.Load(int2(318,0)).x);
+      if (eyeClr > 0.001) {
+        float3 Lw = g_psSystem.m_dominantLightDir.xyz;   // luz dominante (mundo) -> vista, como PESLightV del pelo
+        float3 Lv = normalize(float3(dot(Lw, g_psScene.m_view._m00_m10_m20), dot(Lw, g_psScene.m_view._m01_m11_m21), dot(Lw, g_psScene.m_view._m02_m12_m22)) + float3(1e-5, 2e-5, 1e-5));
+        float2 lt = float2(dot(Lv, r3.xyz), dot(Lv, r2.xyz));   // parte tangente de la luz en el marco (T = u, B = v) del ojo
+        float ltl = length(lt); float2 ltd = ltl > 1e-4 ? lt / ltl : float2(0, 1);
+        float2 rad = normalize(irisD + 1e-5);
+        float caus = saturate(dot(rad, -ltd)) * saturate(ltl * 2.0);          // lado opuesto a la luz
+        float lit = saturate(dot(Lv, eyeNc)) * 0.5 + 0.5;                    // de espaldas a la luz apenas
+        float irisW = irisOn * (1.0 - 0.5 * irisVt);                          // mas cerca de la pupila
+        base *= 1.0 + eyeClr * lit * (0.35 * caus + 0.12) * irisW;
+        // esclerotica: mas blanca y limpia, rosada suave lejos del iris (vasos del lagrimal)
+        float scleraM = saturate(1.0 - irisIn) * smoothstep(1.0, 1.25, irisR);
+        float lum = dot(base, float3(0.2126, 0.7152, 0.0722));
+        float3 white = lerp(base, max(base, lum.xxx * float3(1.02, 1.0, 0.98)), 0.6);
+        white = lerp(white, white * float3(1.0, 0.94, 0.92), smoothstep(1.8, 3.0, irisR) * 0.6);
+        base = lerp(base, white * 1.12, eyeClr * scleraM);
+      } }
+    // (08/11, Agustin: "los ojos un poco mas claros y respetando la luz") w318 LUZ EN EL OJO: el ojo se aclara segun cuanta luz dominante
+    // le llega (N.L de la cornea: de frente a la luz hasta +38 % en el iris y +20 % en lo blanco a 1.0; de espaldas solo un piso del 8 / 5 %),
+    // asi un ojo en sombra sigue oscuro y el que mira a la luz se abre. 0 = nada
+    { float eyeLit = clamp(IniParams.Load(int2(318,0)).w, 0.0, 2.0);
+      if (eyeLit > 0.001) {
+        float3 Lw2 = g_psSystem.m_dominantLightDir.xyz;
+        float3 Lv2 = normalize(float3(dot(Lw2, g_psScene.m_view._m00_m10_m20), dot(Lw2, g_psScene.m_view._m01_m11_m21), dot(Lw2, g_psScene.m_view._m02_m12_m22)) + float3(1e-5, 2e-5, 1e-5));
+        float ndl = saturate(dot(Lv2, eyeNc));
+        float irisK = saturate(irisIn), sclK = saturate(1.0 - irisIn);
+        base *= 1.0 + eyeLit * (irisK * (0.08 + 0.30 * ndl) + sclK * (0.05 + 0.15 * ndl));
+      } }
+    // (04/11, Agustin: "les hace falta una mayor naturalidad a los modelos eye") z318 BORDES DEL OJO: (1) el anillo del limbo se
+    // oscurece al mirar el ojo de costado (la cornea es mas gruesa en el borde y el limbo queda en sombra); (2) venitas muy finas
+    // en la esclerotica, solo lejos del iris y apagadas donde serian mas chicas que un pixel; (3) sombra suave hacia los
+    // lagrimales y las comisuras del ojo (el globo se mete bajo los parpados). 0 = como antes
+    { float bo = clamp(IniParams.Load(int2(318,0)).z, 0.0, 1.5);
+      if (bo > 0.001) {
+        float ndv2 = saturate(dot(eyeNc, eyeV));
+        float limb = smoothstep(0.85, 1.0, irisR) * (1.0 - smoothstep(1.05, 1.3, irisR));
+        base *= 1.0 - bo * limb * (0.10 + 0.30 * (1.0 - ndv2));
+        float th = irisTh * 6.2831853;
+        float vw = fwidth(th * 23.0);
+        float vein = pow(saturate(1.0 - abs(sin(th * 23.0 + 2.6 * sin(th * 7.0) + 1.7 * sin(irisR * 3.1)))), 24.0);
+        vein *= 1.0 - smoothstep(0.6, 2.0, vw);                       // sin vetas que titilan de lejos
+        vein *= smoothstep(1.7, 2.6, irisR) * (0.6 + 0.4 * sin(th * 3.0 + 1.1));
+        base *= lerp(float3(1, 1, 1), float3(0.97, 0.80, 0.80), saturate(bo * 0.35 * vein));
+        base *= 1.0 - bo * 0.22 * smoothstep(2.3, 3.4, irisR);
+      } }
     o0.xyz = base + refl;
     // brillo del sol/focos sobre la cornea: rugosidad baja donde hay cornea (lo resuelve la luz diferida del juego).
     // o2.x es la rugosidad CODIFICADA del juego (minimo valido ~0.13: por debajo la pasada de luz devuelve negro;

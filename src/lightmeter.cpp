@@ -213,10 +213,12 @@ void LightMeterPresent() {
             // la ganancia aplicada es 1 + (gFull - 1) k  ->  gFull = 1 + (gWant - 1) / k
             gFull = k > 0.05f ? 1.0f + (gWant - 1.0f) / k : 1.0f;
         }
-        gFull = std::clamp(gFull, 0.45f, 1.8f);
+        // (02/11) piso 0.45 -> 0.2: en Villarreal (40 grados) la ganancia quedaba clavada en el piso con el pasto a 2.1 contra 4.9
+        // del objetivo ("chato"); el modelo pedia ~0.16
+        gFull = std::clamp(gFull, 0.2f, 1.8f);
         float a = (float)(1.0 - exp(-dt / 2.5));
         s_gain += (gFull - s_gain) * a;
-        s_gain = std::clamp(s_gain, 0.45f, 1.8f);
+        s_gain = std::clamp(s_gain, 0.2f, 1.8f);
     }
     p125[0] = 1.0f + (s_gain - 1.0f) * k;
     p125[1] = s_ratio[0]; p125[2] = s_target; p125[3] = s_tintSh;
