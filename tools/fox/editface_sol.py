@@ -185,6 +185,7 @@ def main(argv=None):
     ap.add_argument('--temp', type=float, default=5600.0)
     ap.add_argument('--rango', type=float, default=12.0)
     ap.add_argument('--sin-luz', action='store_true')
+    ap.add_argument('--sin-sombra', action='store_true', help='no agrega GrShadowSettings (para aislar si una escena no carga)')
     ap.add_argument('--donante'); ap.add_argument('--donante-fpk')
     ap.add_argument('--fpk-entrada'); ap.add_argument('--fpk-salida')
     ap.add_argument('--hora', type=int, default=16); ap.add_argument('--minuto', type=int, default=0)
@@ -205,7 +206,7 @@ def main(argv=None):
         raise SystemExit('no parece una escena de luz de estudio (EditFace/Default: falta TimeOfDaySettings o SpotLight)')
     n0 = len(f.ents)
 
-    add_shadow_settings(f)
+    if not a.sin_sombra: add_shadow_settings(f)
     if a.modo == 'direccional':
         add_sun(f, a)
     else:

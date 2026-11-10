@@ -163,6 +163,18 @@ static bool ReadableAt(uintptr_t p, size_t n) {
     if (!VirtualQuery((void*)p, &m, sizeof(m)) || m.State != MEM_COMMIT || (m.Protect & (PAGE_NOACCESS | PAGE_GUARD))) return false;
     return p + n <= (uintptr_t)m.BaseAddress + m.RegionSize;
 }
+// direccion de retorno real: los bytes de antes son una instruccion CALL
+static bool AfterCall(uintptr_t v) {
+    if (!ReadableAt(v - 7, 7)) return false;
+    const uint8_t* p = (const uint8_t*)v;
+    if (p[-5] == 0xE8) return true;                                         // call rel32
+    if (p[-2] == 0xFF && (p[-1] & 0x38) == 0x10) return true;               // call r/m (sin desplazamiento)
+    if (p[-3] == 0xFF && (p[-2] & 0x38) == 0x10) return true;               // call [r+d8] / con SIB
+    if (p[-6] == 0xFF && (p[-5] & 0x38) == 0x10) return true;               // call [rip+d32] / [r+d32]
+    if (p[-7] == 0xFF && (p[-6] & 0x38) == 0x10) return true;               // call [r+SIB+d32]
+    if (p[-3] == 0x41 && p[-2] == 0xFF && (p[-1] & 0x38) == 0x10) return true; // call r8..r15
+    return false;
+}
 static int OrphanThreads(uintptr_t b, uintptr_t e, const char* dll) {
     HMODULE nt = GetModuleHandleW(L"ntdll.dll");
     auto qit = (PFN_NtQIT)GetProcAddress(nt, "NtQueryInformationThread");
@@ -176,7 +188,7 @@ static int OrphanThreads(uintptr_t b, uintptr_t e, const char* dll) {
         HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, te.th32ThreadID);
         if (!h) continue;
         seen++;
-        bool orphan = false; char why[96] = "";
+        bool orphan = false, stackOnly = false; char why[96] = "";
         void* start = nullptr;
         if (qit && qit(h, 9 /*ThreadQuerySetWin32StartAddress*/, &start, sizeof(start), nullptr) == 0 && (uintptr_t)start >= b && (uintptr_t)start < e) {
             orphan = true; snprintf(why, sizeof(why), "arranco en %s+0x%llx", dll, (unsigned long long)((uintptr_t)start - b));
@@ -196,9 +208,17 @@ static int OrphanThreads(uintptr_t b, uintptr_t e, const char* dll) {
                     if (v < b + 0x1000 || v >= e) continue;
                     MEMORY_BASIC_INFORMATION mi{};
                     if (!VirtualQuery((void*)v, &mi, sizeof(mi)) || !(mi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))) continue;
-                    orphan = true; snprintf(why, sizeof(why), "va a volver a %s+0x%llx", dll, (unsigned long long)(v - b)); break;
+                    // 10/11: un valor viejo en la pila no es una vuelta real. Solo cuenta si justo antes hay un CALL
+                    // (E8 rel32, FF /2 con 2..7 bytes). Y un hilo que NO arranco en la DLL (pool de COM/ntdll del juego)
+                    // no se termina por esto: matar un hilo del sistema parado en ntdll cerro el juego (22:40 PC, Switcher).
+                    if (!AfterCall(v)) continue;
+                    snprintf(why, sizeof(why), "va a volver a %s+0x%llx", dll, (unsigned long long)(v - b));
+                    stackOnly = true; break;
                 }
             }
+        }
+        if (stackOnly && !orphan) {
+            Log("  hilo %lu: %s (solo por la pila, no arranco en la DLL), parado en %s -> no se toca", te.th32ThreadID, why, ModOff((void*)cx.Rip).c_str());
         }
         if (orphan && gotCx) {
             Log("  hilo %lu: %s, parado en %s -> se lo hace terminar", te.th32ThreadID, why, ModOff((void*)cx.Rip).c_str());
@@ -495,6 +515,7 @@ static int InitMod() {
     fx::StartHangWatch();   // (08/11 c) congelamientos: volcado automatico
     fx::PanelStart(fx::g_cfg.panelPort);   // (08/11) panel en vivo: HTTP en 127.0.0.1 (panel.cpp)
     fx::MemWatchStart();   // (26/10) liberador de memoria del juego + VirtualProtect/VirtualFree (memwatch.cpp)
+    fx::RastroV4Start();   // (10/11 d) rastro v4: solo crea un hilo que espera Ctrl+Shift+F9 (rastro_v4.ini); no engancha nada al arrancar
     fx::CoverStart();   // (08/11 h) medidor de cobertura del codigo (cobertura = 1 en el ini)
     if (fx::g_cfg.coverOn) fx::Log("codigo: vigilancia del codigo apagada mientras se mide la cobertura");
     else if (fx::DiagOn(2)) fx::CodeWatchStart();
@@ -510,7 +531,8 @@ BOOL APIENTRY DllMain(HMODULE h, DWORD reason, LPVOID reserved) {
     if (reason == DLL_PROCESS_ATTACH) { s_self = h; DisableThreadLibraryCalls(h); fx_LoadRealD3D11(); }
     if (reason == DLL_PROCESS_DETACH && fx::g_log) {   // el juego se esta cerrando "normalmente" (ExitProcess)
         fx::CoverFlush();   // (08/11 h) ultimo volcado de la cobertura
-        fx::RastroFlush(true);   // (08/11 i) rastro del motor
+        fx::RastroFlush(true);
+        fx::RastroV4Flush(true);   // (10/11 d)   // (08/11 i) rastro del motor
         fprintf(fx::g_log, "--- fin del proceso (%s)\n", reserved ? "el juego salio" : "DLL descargada");
         fflush(fx::g_log);
     }

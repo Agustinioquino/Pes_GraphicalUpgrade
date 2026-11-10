@@ -108,6 +108,8 @@ jobs:
           Copy-Item build/Release/d3d11.dll dist/
           if (Test-Path build/Release/d3d11.map) { Copy-Item build/Release/d3d11.map dist/ }   # (07/11) para el medidor de VRAM por archivo
           Copy-Item package/LEEME.txt dist/
+          # (10/11 d) rastro v4 dentro de la d3d11: su ini y las listas de funciones van a PES21FX\ a mano (no con el paquete)
+          if (Test-Path package/rastro) { New-Item -ItemType Directory -Force -Path dist/rastro | Out-Null; Copy-Item package/rastro/* dist/rastro/ }
           Copy-Item -Recurse package/sider dist/sider
           if (Test-Path shadercheck.txt) { Copy-Item shadercheck.txt dist/ }
           if (Test-Path distvisor/PesExplorerNEM.exe) { New-Item -ItemType Directory -Force -Path dist/visor | Out-Null; Copy-Item distvisor/PesExplorerNEM.exe dist/visor/; Copy-Item tools/visor/LEEME.txt dist/visor/ }   # (08/11) app del entorno visual
