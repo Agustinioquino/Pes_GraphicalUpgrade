@@ -68,3 +68,13 @@ set_target_properties(PES21FX PROPERTIES OUTPUT_NAME "d3d11" PREFIX "")
 if(MSVC)
   target_link_options(PES21FX PRIVATE "/MAP")
 endif()
+
+# (09/11) Rastro v4: DLL de investigacion aparte (dinput8.dll), solo lectura; no toca la DLL grafica
+add_library(rastro SHARED src-rastro/rastrodll.cpp src-rastro/dinput8.def)
+target_include_directories(rastro PRIVATE ${minhook_SOURCE_DIR}/include)
+target_compile_definitions(rastro PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+target_link_libraries(rastro PRIVATE minhook)
+set_target_properties(rastro PROPERTIES OUTPUT_NAME "dinput8" PREFIX "")
+if(MSVC)
+  target_link_options(rastro PRIVATE "/MAP")
+endif()
