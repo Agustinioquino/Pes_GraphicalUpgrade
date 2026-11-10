@@ -10,8 +10,12 @@
 // Config: PES21FX\PES21FX.ini, claves rastro=1, rastro_fotos, rastro_max_mb, rastro_faltas, rastro_anime, rastro_funcs.
 // No depende de core.h: todo lo necesario (Log, config, lectura segura) esta aca.
 #include <windows.h>
+#include <unknwn.h>
+#include <objbase.h>
 #include <tlhelp32.h>
 #include <intrin.h>
+#include <cstdlib>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdarg>
@@ -346,7 +350,6 @@ void ArmTrace() {
 }
 
 // ---------------------------------------------------------------- config (PES21FX.ini)
-void TrimParse(const std::string& line) {}
 void LoadCfg() {
     // baseDir = carpeta del exe + PES21FX\ ;  ini
     wchar_t exe[MAX_PATH]; GetModuleFileNameW(nullptr, exe, MAX_PATH);
