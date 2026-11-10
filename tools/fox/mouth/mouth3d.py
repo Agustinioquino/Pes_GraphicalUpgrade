@@ -821,7 +821,7 @@ def build(src_fmdl, texdir, log=print):
             c_ = [q for q in lo_ if q[:, 0].mean() * sd_ > 0]
             if not c_: continue
             Pp = min(c_, key=lambda q: abs(q[:, 0].mean())); cx = float(Pp[:, 0].mean()); t_ = (cx - Pp[:, 0]) * sd_; m_ = t_ > 0
-            e_ = float(t_[Pp[:, 1] > Pp[:, 1].min() + 0.4 * np.ptp(Pp[:, 1])].max()); g_ = abs(cx) - e_ - 0.5 * float(PROF['close_lo']) * MM
+            hh_ = (Pp[:, 1] - Pp[:, 1].min()) / max(np.ptp(Pp[:, 1]), 1e-9); e_ = float(np.median([t_[np.abs(hh_ - f_) < 0.07].max() for f_ in (0.45, 0.55, 0.65, 0.75, 0.85) if (np.abs(hh_ - f_) < 0.07).any()])); g_ = abs(cx) - e_ - 0.5 * float(PROF['close_lo']) * MM
             log('  centrales de abajo: lado %+d centro %.2f mm, media cara %.2f, aire %.2f' % (sd_, cx / MM, e_ / MM, g_ / MM))
             if g_ > 0 and e_ > 1e-6: Pp[m_, 0] -= sd_ * t_[m_] * min(g_ / e_, 0.25)
     if PROF.get('bite_fit'):
