@@ -138,7 +138,7 @@ float PesSkFaceShadow(float4 AB, float4 clipP, float2 pos, float zC, float3 L, f
   float4 CS = IniParams.Load(int2(52,0));
   float zSgn = zC < 0.0 ? -1.0 : 1.0, zA = abs(zC);
   // solo donde hay luz que quitar (con 26 a 48 focos por cuadro en el editor, los que casi no aportan no trazan)
-  if (CS.w < 0.5 || CS.x <= 0.0 || nl < 0.03 || zA < 0.1 || zA > 12.0 || dot(lightC, 0.3333.xxx) * nl < 0.001) return 1.0;
+  if (CS.w < 0.5 || CS.x <= 0.0 || nl < 0.03 || zA < 0.1 || zA > 8.0 || dot(lightC, 0.3333.xxx) * nl < 0.004) return 1.0;   // (10/11 b) 76 focos en el editor: solo trazan los que se ven
   { uint mmW = 0, mmH = 0; pesMouthMask.GetDimensions(mmW, mmH);
     if (mmW == 0) return 1.0;
     uint2 mmP = min((uint2)pos, uint2(mmW - 1, mmH - 1));
@@ -154,8 +154,8 @@ float PesSkFaceShadow(float4 AB, float4 clipP, float2 pos, float zC, float3 L, f
   float bias = (0.004 + 0.0012 * zA) * (0.6 + 0.4 / max(nl, 0.12));
   float3 Q = Pv + Lc * bias;
   float occ = 0.0;
-  [loop] for (int ci = 0; ci < 10; ci++) {
-    float f = (ci + ign) / 10.0;
+  [loop] for (int ci = 0; ci < 6; ci++) {
+    float f = (ci + ign) / 6.0;
     float t = f * f * len;
     float3 R = Q + Lc * t;
     float RzA = R.z * zSgn;
@@ -171,7 +171,7 @@ float PesSkFaceShadow(float4 AB, float4 clipP, float2 pos, float zC, float3 L, f
     }
   }
   // junto al terminador la sombra la da la propia forma (y la difunde la SSSS): el trazado entra de a poco, sin escalones
-  occ *= smoothstep(0.03, 0.22, nl) * saturate((12.0 - zA) / 4.0);
+  occ *= smoothstep(0.03, 0.22, nl) * saturate((8.0 - zA) / 3.0);
   return 1.0 - saturate(occ * CS.x);
 }
 #endif
