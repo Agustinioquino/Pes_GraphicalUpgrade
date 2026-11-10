@@ -470,7 +470,8 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   // queda y el cielo van con la altura del sol; en el horizonte se funden sol y luna sin salto
   int tlMode = (int)(IniParams.Load(int2(392, 0)).w + 0.5);
   if (tlMode >= 1 && tlMode <= 4) {
-    float tlPer = tlMode == 1 ? 30.0 : (tlMode == 2 ? 60.0 : (tlMode == 3 ? 120.0 : 300.0));
+    // (10/11, Agustin: "el timelapse en 30s es poco natural, se pierde detalle") vueltas de 2 / 5 / 10 / 20 minutos
+    float tlPer = tlMode == 1 ? 120.0 : (tlMode == 2 ? 300.0 : (tlMode == 3 ? 600.0 : 1200.0));
     float tlT = frac(IniParams.Load(int2(393, 0)).w / tlPer);
     float sD = sin(6.2831853 * tlT);                      // > 0 de dia
     float dayK = smoothstep(-0.10, 0.10, sD);
@@ -487,8 +488,9 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
     float tWarmDay = lerp(0.98, 0.55, smoothstep(0.0, 0.6, sUp));
     warm  = lerp(0.12, tWarmDay, dayK);
     inten = lerp(0.22, lerp(0.55, 1.25, smoothstep(0.0, 0.5, sUp)), dayK);
-    keep  = lerp(0.18, lerp(0.40, 0.55, sUp), dayK);
-    skyK  = lerp(0.10, 0.16, dayK); gndK = lerp(0.01, 0.05, dayK) * (0.3 + 0.7 * sUp);
+    // (10/11, Agustin: "los negros no son negros del todo") de noche casi no queda luz de estudio ni de cielo: manda la luna
+    keep  = lerp(0.05, lerp(0.40, 0.55, sUp), dayK);
+    skyK  = lerp(0.03, 0.16, dayK); gndK = lerp(0.0, 0.05, dayK) * (0.3 + 0.7 * sUp);
     inten *= lerp(0.04, 1.0, orbFade);
     pSpotD = 0.0; pSpotA = 0.0; g_lightWorld = true;
   }
@@ -727,6 +729,7 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   // en 0 (w377) y la del partido prendida (x335), los presets la copian: fuerza de x335 (0.6 -> 0.9), direccionalidad de z335
   float volS = E4.w;
   if (nearSun) volS = max(volS, 0.9);   // (09/11 b) el sol cercano siempre con resplandor y haces
+  if (tlMode >= 1 && tlMode <= 4) volS *= lerp(0.1, 1.0, smoothstep(-0.10, 0.10, sin(6.2831853 * frac(IniParams.Load(int2(393, 0)).w / (tlMode == 1 ? 120.0 : (tlMode == 2 ? 300.0 : (tlMode == 3 ? 600.0 : 1200.0)))))));   // (10/11) de noche sin bruma clara (negros negros)
   { float4 VLm = IniParams.Load(int2(335, 0)); if (volS <= 0.001 && preset != 0 && VLm.x > 0.0) { volS = clamp(VLm.x * 1.5, 0.0, 4.0); g_volG = clamp(VLm.z, 0.0, 0.9); } }
   float3 vol = PesVolumetric(uv, pos.xy, Pv, zA, geo, zSgn, Lw, spot, Pl, sunC, volS, E5.y > 0 ? E5.y : 0.5);
   // (07/11 d) vistas de prueba (w380): aislar cada parte para juzgarla sola. Se pintan sobre gris neutro, sin la luz de estudio
