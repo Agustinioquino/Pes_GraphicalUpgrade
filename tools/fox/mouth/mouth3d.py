@@ -50,8 +50,8 @@ REAL_W = {True: [8.1, 6.8, 7.7, 7.1, 6.7],   # (04/11) Agustin 'reducir el taman
 ANAT = float(os.environ.get('MOUTH_ANAT', '1.0'))   # (09/11 e) 0 = sin detalle anatomico extra (como v21 / Messi v10)
 PROFILE = os.environ.get('MOUTH_PROFILE', '')
 PROF = {
-    '': dict(ext_up={'IC': -0.5, 'I': -1.1, 'C': -0.5}, ext_p=-0.6, corner_ic=(0.04, 0.09), corner_i_up=(0.06, 0.14), lat_back=0.1, canine=0.26, ext_lo=0.8, lift_lo=2.5, lift_sig=14.0, ext_lo_c=0.8, bite_fit=2, bite_in=0.8, bite_dn=0.0, w_lo=(5.3, 5.8, 6.9, 6.5, 6.2, 5.0), p_out=1.2, strip_back=11.0, corner_lo=(0.03, 0.06), gap_ic=0.006, gap=0.012, back_in=0.05, asym=(0.25, 0.12, 0.8, 0.10)),   # (09/11 i) Agustin 'la mordedura no llega a cerrarse' + 'que las encias acompanen': lift_lo sube los dientes de adelante de abajo JUNTO con su encia (ver LIFT). (09/11 d) Agustin 'mejora la boca generica tambien': lo aprendido con Messi (arco de la sonrisa, esquinas redondeadas, linea fina entre dientes, muelas adentro, filas que se separan al sonreir, asimetria) con dientes comunes
-    'messi': dict(ext_up={'IC': 0.3, 'I': -0.5, 'C': -0.1}, ext_p=-0.7, corner_ic=(0.04, 0.09), corner_i_up=(0.06, 0.14), lat_back=0.1, canine=0.22, even=False, ext_lo=-0.3, lift_lo=2.5, lift_sig=14.0, ext_lo_c=-0.3, bite_fit=2, bite_in=0.8, bite_dn=0.0, w_lo=(5.3, 5.8, 6.9, 6.5, 6.2, 5.0), p_out=1.2, corner_lo=(0.03, 0.06), gap_ic=0.004, gap=0.010, back_in=0.05, asym=(0.22, 0.10, 0.7, 0.10)),   # (09/11 i) lift_lo: con la boca cerrada quedaba hueco (se veia la lengua) entre filas. (09/11 c) Agustin (foto de Messi riendo: 'mira la forma de los dientes y muelas'): arco de la sonrisa natural (centrales largos, laterales mas cortos y apenas detras, canino con punta casi al nivel de los centrales, premolares mas cortos subiendo hacia atras), esquinas redondeadas; dientes individuales con linea fina (gap 0.010 / 0.004), muelas adentro, hueco entre filas
+    '': dict(ext_up={'IC': -0.5, 'I': -1.1, 'C': -0.5}, ext_p=-0.6, corner_ic=(0.04, 0.09), corner_i_up=(0.06, 0.14), lat_back=0.1, canine=0.26, ext_lo=0.8, lift_lo=2.5, lift_sig=14.0, ext_lo_c=0.8, bite_fit=2, bite_in=0.8, bite_dn=0.0, overlap=1.4, occl=1, mol_air_up=1.8, fit_min=0.6, w_lo=(5.3, 5.8, 6.9, 6.5, 6.2, 5.0), p_out=1.2, strip_back=11.0, corner_lo=(0.03, 0.06), gap_ic=0.006, gap=0.012, back_in=0.05, asym=(0.25, 0.12, 0.8, 0.10)),   # (09/11 i) Agustin 'la mordedura no llega a cerrarse' + 'que las encias acompanen': lift_lo sube los dientes de adelante de abajo JUNTO con su encia (ver LIFT). (09/11 d) Agustin 'mejora la boca generica tambien': lo aprendido con Messi (arco de la sonrisa, esquinas redondeadas, linea fina entre dientes, muelas adentro, filas que se separan al sonreir, asimetria) con dientes comunes
+    'messi': dict(ext_up={'IC': 0.3, 'I': -0.5, 'C': -0.1}, ext_p=-0.7, corner_ic=(0.04, 0.09), corner_i_up=(0.06, 0.14), lat_back=0.1, canine=0.22, even=False, ext_lo=-0.3, lift_lo=2.5, lift_sig=14.0, ext_lo_c=-0.3, bite_fit=2, bite_in=0.8, bite_dn=0.0, overlap=1.4, occl=1, mol_air_up=1.8, fit_min=0.6, w_lo=(5.3, 5.8, 6.9, 6.5, 6.2, 5.0), p_out=1.2, corner_lo=(0.03, 0.06), gap_ic=0.004, gap=0.010, back_in=0.05, asym=(0.22, 0.10, 0.7, 0.10)),   # (09/11 i) lift_lo: con la boca cerrada quedaba hueco (se veia la lengua) entre filas. (09/11 c) Agustin (foto de Messi riendo: 'mira la forma de los dientes y muelas'): arco de la sonrisa natural (centrales largos, laterales mas cortos y apenas detras, canino con punta casi al nivel de los centrales, premolares mas cortos subiendo hacia atras), esquinas redondeadas; dientes individuales con linea fina (gap 0.010 / 0.004), muelas adentro, hueco entre filas
 }[PROFILE]
 if PROFILE == 'messi': REAL_W = {True: [8.7, 7.0, 7.8, 7.1, 6.7], False: REAL_W[False]}
 # (10/11) Agustin: 'revisar ambos modelos, el modelado 3d': la fila de abajo de Konami tiene 6 dientes pintados por lado en el
@@ -80,7 +80,8 @@ def fit_row(row, log=print, name=''):
         over = ea + eb + air - L
         if over > 0:
             nfix += 1
-            fac[i][1] = max(0.8, 1 - 0.5 * over / max(ea, 1e-6)); fac[i + 1][0] = max(0.8, 1 - 0.5 * over / max(eb, 1e-6))
+            fmin = PROF.get('fit_min', 0.8)   # (10/11 b) tope por lado; mas bajo = los premolares de abajo dejan de encimarse entre si
+            fac[i][1] = max(fmin, 1 - 0.5 * over / max(ea, 1e-6)); fac[i + 1][0] = max(fmin, 1 - 0.5 * over / max(eb, 1e-6))
     for i, q in enumerate(row):
         P, c = q[0], C[i]
         for k, j in ((0, i - 1), (1, i)):
@@ -653,8 +654,9 @@ def build(src_fmdl, texdir, log=print):
                     if k == 0 and retried < 3:
                         retried += 1
                         gap = float(_KD(last).query(Pm)[0].min())
-                        if abs(gap - MOL_AIR * MM) > 0.15 * MM:
-                            s0 -= gap - MOL_AIR * MM
+                        air_ = (PROF.get('mol_air_up', MOL_AIR) if up else MOL_AIR) * MM   # (10/11 b) arriba: si la 1a muela se pega al premolar, su huella levanta la encia que se ve y quedan colgajos
+                        if abs(gap - air_) > 0.15 * MM:
+                            s0 -= gap - air_
                             log('  muela 1 %s lado %+d: hueco %.1f mm -> se corre' % ('arriba' if up else 'abajo', side, gap / MM)); continue
                     wm = np.zeros((len(Pm), len(names))); wm[:, names.index('sk_head' if up else 'skf_jaw')] = 1
                     parts.append((Pm, UVm, Fm, wm, 'diente')); nmol += 1; mol_parts.append(Pm)
@@ -671,7 +673,8 @@ def build(src_fmdl, texdir, log=print):
                 if up != sup: continue
                 d = Pp - cc[None]
                 db = d @ bd   # del lado de la lengua el margen es mas ancho (la tira sube por ahi)
-                inside = (np.abs(d @ t) < 0.5 * Lk + 1.2 * MM) & (db < 0.5 * Wb + 0.8 * MM) & (db > -(0.5 * Wb + 3.0 * MM))
+                mt_, mb_ = ((PROF.get('mol_strip', 1.2), PROF.get('mol_strip_b', 0.8)) if up else (1.2, 0.8))   # (10/11 b) arriba, margen mas ancho: quedaban colgajos de encia sin subir junto a la 1a muela
+                inside = (np.abs(d @ t) < 0.5 * Lk + mt_ * MM) & (db < 0.5 * Wb + mb_ * MM) & (db > -(0.5 * Wb + 3.0 * MM))
                 h = -d[:, 1] if up else d[:, 1]   # altura hacia la corona
                 hit = inside & (h > -0.3 * MM) & (h < Hc + 2.0 * MM)
                 Pp[hit, 1] = cc[1] + (0.3 * MM if up else -0.3 * MM); moved += int(hit.sum())
@@ -787,6 +790,26 @@ def build(src_fmdl, texdir, log=print):
     # quedaban hasta 2.2 mm ADENTRO de los de arriba (246 vertices; de costado se veian dientes fundidos). Por diente de abajo:
     # mientras tenga vertices dentro de un diente de arriba (o al reves), la corona se corre hacia la lengua (hasta bite_in mm,
     # como en una mordida real: la cuspide de afuera de arriba queda por fuera) y despues baja de a 0.15 mm (hasta bite_dn mm)
+    # ---- (10/11 b) Agustin: 'el problema sigue siendo la mordida y como se ven huecos entre las dos': la fila de arriba tiene el
+    # arco de la sonrisa (laterales ~1 mm mas cortos, premolares subiendo) y la de abajo era pareja: debajo de los laterales y
+    # caninos quedaba hueco oscuro. Cada diente de adelante de abajo crece (escala desde el cuello, no pliega) hasta cruzar
+    # 'overlap' mm por detras del borde del diente de arriba mas CORTO que tiene encima: el borde de abajo copia el arco de arriba
+    if PROF.get('overlap'):
+        jaw = names.index('skf_jaw'); OV = float(PROF['overlap']) * MM; grow = []
+        Pu_all = np.vstack([q[0] for q in parts if q[4] == 'diente' and q[3][:, jaw].mean() <= 0.5])
+        Pu_all = Pu_all[Pu_all[:, 2] > 0.150]
+        for Pp, _, _, Wp, tg in parts:
+            if tg != 'diente' or Wp[:, jaw].mean() <= 0.5 or any(Pp is q for q in mol_parts) or abs(Pp[:, 0].mean()) > 12.5 * MM: continue
+            x0_, x1_ = np.percentile(Pp[:, 0], [15, 85]); ed = []
+            for xg in np.linspace(x0_, x1_, 7):
+                mu = np.abs(Pu_all[:, 0] - xg) < 1.5 * MM
+                if mu.any(): ed.append(Pu_all[mu, 1].min())
+            if not ed: continue
+            y0 = Pp[:, 1].min(); y1 = Pp[:, 1].max()
+            need = float(np.clip(max(ed) + OV - y1, 0.0, min(float(PROF.get('overlap_max', 1.6)) * MM, max(min(ed) + 3.2 * MM - y1, 0.0))))
+            if need > 0.05 * MM:
+                Pp[:, 1] = y0 + (Pp[:, 1] - y0) * (1 + need / max(y1 - y0, 1e-6)); grow.append('%+.0f: %.1f' % (Pp[:, 0].mean() / MM, need / MM))
+        log('  mordida: dientes de adelante de abajo que crecen para no dejar hueco (x: mm): %s' % (', '.join(grow) or 'ninguno'))
     if PROF.get('bite_fit'):
         def _inside(Q, Pm, Fm):   # rayo +z, paridad de cruces
             a_, b_, c_ = Pm[Fm[:, 0]], Pm[Fm[:, 1]], Pm[Fm[:, 2]]
@@ -841,6 +864,86 @@ def build(src_fmdl, texdir, log=print):
             need = float(np.clip(0.3 * MM - np.percentile(o_, 25), 0, PROF['p_out'] * MM))
             if need > 0.05 * MM: Pp += need * dv; sh_.append('%+.0f: %.1f' % (c_[0] / MM, need / MM))
         log('  premolares de arriba que salen hacia el carrillo (x: mm): %s' % (', '.join(sh_) or 'ninguno'))
+    # ---- (10/11 b) costados: (A) el diente de abajo que no llega a tocar al de arriba crece hasta tocarlo (sin hueco entre filas de
+    # costado); (C) Agustin 'las dos cosas que no viste mejoralas igual': los premolares/muelas de abajo cruzaban hasta 2 mm
+    # los de arriba. Acortar el diente entero lo dejaba de 3 mm (probado): ahora se talla SOLO lo que cruza, como en una mordida
+    # real (la cuspide de arriba calza en la mesa del de abajo): cada vertice de abajo que queda dentro de un diente de arriba
+    # baja hasta justo debajo de su cara de abajo, y cada vertice de arriba dentro de uno de abajo sube hasta salir
+    if PROF.get('occl'):
+        def _zin(Q, Pm, Fm):
+            a_, b_, c_ = Pm[Fm[:, 0]], Pm[Fm[:, 1]], Pm[Fm[:, 2]]
+            d_ = (b_[:, 0] - a_[:, 0]) * (c_[:, 1] - a_[:, 1]) - (c_[:, 0] - a_[:, 0]) * (b_[:, 1] - a_[:, 1])
+            ok = np.abs(d_) > 1e-14; a_, b_, c_, d_ = a_[ok], b_[ok], c_[ok], d_[ok]
+            qx = Q[:, 0][:, None]; qy = Q[:, 1][:, None]
+            l1 = ((qx - a_[:, 0]) * (c_[:, 1] - a_[:, 1]) - (c_[:, 0] - a_[:, 0]) * (qy - a_[:, 1])) / d_
+            l2 = ((b_[:, 0] - a_[:, 0]) * (qy - a_[:, 1]) - (qx - a_[:, 0]) * (b_[:, 1] - a_[:, 1])) / d_
+            z_ = a_[:, 2] + l1 * (b_[:, 2] - a_[:, 2]) + l2 * (c_[:, 2] - a_[:, 2])
+            return (((l1 >= 0) & (l2 >= 0) & (l1 + l2 <= 1) & (z_ > Q[:, 2][:, None])).sum(1) % 2) == 1
+        def _ycross(Q, Pm, Fm):   # y de cada cruce de la vertical por Q con la malla (nan = no cruza)
+            a_, b_, c_ = Pm[Fm[:, 0]], Pm[Fm[:, 1]], Pm[Fm[:, 2]]
+            d_ = (b_[:, 0] - a_[:, 0]) * (c_[:, 2] - a_[:, 2]) - (c_[:, 0] - a_[:, 0]) * (b_[:, 2] - a_[:, 2])
+            ok = np.abs(d_) > 1e-14; a_, b_, c_, d_ = a_[ok], b_[ok], c_[ok], d_[ok]
+            qx = Q[:, 0][:, None]; qz = Q[:, 2][:, None]
+            l1 = ((qx - a_[:, 0]) * (c_[:, 2] - a_[:, 2]) - (c_[:, 0] - a_[:, 0]) * (qz - a_[:, 2])) / d_
+            l2 = ((b_[:, 0] - a_[:, 0]) * (qz - a_[:, 2]) - (qx - a_[:, 0]) * (b_[:, 2] - a_[:, 2])) / d_
+            y_ = a_[:, 1] + l1 * (b_[:, 1] - a_[:, 1]) + l2 * (c_[:, 1] - a_[:, 1])
+            return np.where((l1 >= 0) & (l2 >= 0) & (l1 + l2 <= 1), y_, np.nan)
+        jaw = names.index('skf_jaw'); EPS = 0.12 * MM
+        tl = [q for q in parts if q[4] == 'diente' and q[3][:, jaw].mean() > 0.5 and abs(q[0][:, 0].mean()) > 10.6 * MM]   # del 1er premolar de abajo hacia atras
+        tu = [q for q in parts if q[4] == 'diente' and q[3][:, jaw].mean() <= 0.5 and abs(q[0][:, 0].mean()) > 12.5 * MM]
+        def near(A_, B_): return not ((A_.min(0) > B_.max(0) + 0.3 * MM)[[0, 2]].any() or (A_.max(0) < B_.min(0) - 0.3 * MM)[[0, 2]].any())
+        grow = []
+        for Pp, _, Fp, _, _ in tl:   # (A) cerrar el hueco
+            y0 = Pp[:, 1].min(); y1 = Pp[:, 1].max(); top = Pp[:, 1] > y1 - 1.5 * MM; cl = []
+            for Pu_, _, Fu_, _, _ in tu:
+                if not near(Pp, Pu_): continue
+                Y = _ycross(Pp[top], Pu_, Fu_); Y = np.where(Y > Pp[top][:, 1][:, None] - 3.0 * MM, Y, np.nan)
+                if np.isfinite(Y).any(): cl.append(float(np.nanmin(np.nanmin(np.where(np.isfinite(Y), Y, np.inf), axis=1) - Pp[top][:, 1])))
+            if not cl: continue
+            need = float(np.clip(min(cl) + float(PROF.get('occl_touch', 0.3)) * MM, 0.0, (1.2 if any(Pp is q for q in mol_parts) else 2.0) * MM))   # las muelas, menos (04/11 Agustin: 'bajar un poco las muelas de abajo')
+            if need > 0.05 * MM:
+                Pp[:, 1] = y0 + (Pp[:, 1] - y0) * (1 + need / max(y1 - y0, 1e-6)); grow.append('%+.0f: %.1f' % (Pp[:, 0].mean() / MM, need / MM))
+        ncl = ncu = 0
+        y_before = {id(q[0]): q[0][:, 1].copy() for q in tl + tu}
+        def spread(lst):   # reparte el hundimiento a los vecinos (0.6 por anillo, 3 anillos): fosa suave, nunca menos honda que lo tallado
+            for Pp, _, Fp, _, _ in lst:
+                d_ = Pp[:, 1] - y_before[id(Pp)]
+                if not np.abs(d_).max() > 1e-9: continue
+                sg = -1.0 if d_.min() < 0 else 1.0; m_ = np.abs(d_)
+                e_ = np.concatenate([Fp[:, [0, 1]], Fp[:, [1, 2]], Fp[:, [2, 0]]]); e_ = np.concatenate([e_, e_[:, ::-1]])
+                for _k in range(3):
+                    nb = np.zeros_like(m_); np.maximum.at(nb, e_[:, 0], m_[e_[:, 1]])
+                    m_ = np.maximum(m_, 0.6 * nb)
+                if sg > 0:   # arriba: el borde de afuera (lo que se ve desde el carrillo) no sube
+                    m_ = m_ * lingual[id(Pp)]
+                Pp[:, 1] = y_before[id(Pp)] + sg * m_
+        lingual = {}
+        for Pu_, _, _, _, _ in tu:
+            c_ = Pu_.mean(0); dv = np.array([c_[0], 0.0, c_[2] - 0.120]); dv /= max(np.linalg.norm(dv), 1e-9); r_ = (Pu_ - c_) @ dv
+            lingual[id(Pu_)] = sst(0.55, 0.15, (r_ - r_.min()) / max(np.ptp(r_), 1e-9))   # 1 del lado de la lengua, 0 en la cara de afuera
+        # (C1) primero se talla la cara de ABAJO del diente de arriba (mitad de la lengua: no se ve ni de frente ni con la boca
+        # abierta), asi el de abajo conserva su corona; (C2) lo que todavia cruce (la cara de afuera) se talla en el de abajo
+        for _round in range(5):
+            for Pu_, _, Fu_, _, _ in tu:
+                for Pp, _, Fp, _, _ in tl:
+                    if not near(Pp, Pu_) or Pp[:, 1].max() < Pu_[:, 1].min(): continue
+                    ins = _zin(Pu_, Pp, Fp) & (lingual[id(Pu_)] > 0.5)
+                    if ins.any():
+                        Y = _ycross(Pu_[ins], Pp, Fp); Ya = np.where(Y >= Pu_[ins][:, 1][:, None] - 1e-7, Y, np.inf).min(1)
+                        okv = np.isfinite(Ya); idx = np.where(ins)[0][okv]
+                        Pu_[idx, 1] = Ya[okv] + EPS; ncu += len(idx)
+            spread(tu)
+        for _round in range(6):
+            for Pp, _, Fp, _, _ in tl:
+                for Pu_, _, Fu_, _, _ in tu:
+                    if not near(Pp, Pu_) or Pp[:, 1].max() < Pu_[:, 1].min(): continue
+                    ins = _zin(Pp, Pu_, Fu_)
+                    if ins.any():
+                        Y = _ycross(Pp[ins], Pu_, Fu_); Yb = np.where(Y <= Pp[ins][:, 1][:, None] + 1e-7, Y, -np.inf).max(1)
+                        okv = np.isfinite(Yb); idx = np.where(ins)[0][okv]
+                        Pp[idx, 1] = Yb[okv] - EPS; ncl += len(idx)
+        spread(tl)
+        log('  mordida de costado: crecen hasta tocar (x: mm): %s; tallados %d vertices de abajo y %d de arriba que cruzaban' % (', '.join(grow) or 'ninguno', ncl, ncu))
     # ---- juntar
     Pa, UVa, Fa, Wa, tag = [], [], [], [], []
     base = 0
