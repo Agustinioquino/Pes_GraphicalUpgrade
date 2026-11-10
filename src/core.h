@@ -189,6 +189,8 @@ struct Config {
     bool lightTrace = false;                  // (27/10) [PES21FX] luz_rastrear: pila de quien llena el cbuffer de la luz del sol (hooks.cpp)
     bool meterOn = true;                      // (07/11) [PES21FX] medidor: VRAM por dueno y ms de GPU por efecto (gpumeter.cpp)
     int panelPort = 21021;                    // (08/11) [PES21FX] panel_puerto: servidor local del panel en vivo (panel.cpp), 0 = apagado
+    bool solEditorDll = true;                 // (10/11) [PES21FX] sol_editor_dll: sol real creado por la DLL en la escena del editor
+    int solEditorDirSigno = -1;               // (10/11) [PES21FX] sol_editor_dir_signo: -1 = la fuente recibe la direccion de viaje
     bool solEditorLog = true;                 // (09/11) [PES21FX] sol_editor_log: log del sol real del editor (soleditor.cpp)
     bool sunWatch = false;                    // (26/10) [PES21FX] sol_vigilar: quien escribe el sol de las repeticiones (sunwatch.cpp)
 };
