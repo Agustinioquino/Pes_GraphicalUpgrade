@@ -539,7 +539,11 @@ DWORD WINAPI Worker(void*) {
         const bool key = KeyCombo(VK_F9);
         const bool autoOn = g_cfg.autoSeg > 0 && GetTickCount64() - t0 > (ULONGLONG)g_cfg.autoSeg * 1000;
         if (!key && !autoOn) continue;
-        if (!RdPtr(kRegGlobal)) { if (key) { Beep(300, 300); Log("rastro: Ctrl+Shift+F9 pero el juego todavia no esta listo"); Sleep(800); } continue; }
+        // (10/11 d) La tecla prende DONDE SEA (menu o partido). Antes pedia el registro del partido, que solo existe dentro de
+        // un partido: el Ctrl+Shift+F9 del menu daba el pitido grave y no prendia nada (sesion del 10/11 15:18). La espera
+        // automatica (rastro_auto_seg) si sigue aguardando a que haya partido.
+        if (!key && !RdPtr(kRegGlobal)) continue;
+        Log("rastro: prendiendo por %s (%s)", key ? "Ctrl+Shift+F9" : "rastro_auto_seg", RdPtr(kRegGlobal) ? "dentro de un partido" : "fuera de un partido");
         SafeInstall();
         if (s_installed.load()) { Beep(600, 120); Beep(1000, 160); }
         else { Beep(300, 400); Log("rastro: no se pudo prender (ver lineas anteriores)"); return 0; }
