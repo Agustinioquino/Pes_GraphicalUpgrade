@@ -184,6 +184,7 @@ void main(
   r3.w = (-(r3.zzzz)).w;
   float3 skN = normalize(r3.xyw);
   float skCurv = PesSkCurv(skN, skZ);   // fuera de los if: usa derivadas
+  float skCurvT = PesSkCurvConvex(skN, float3((v0.xy / v0.w - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * skZ, skZ));   // (10/11 d) para la contraluz de costado
   float4 skAB = PesSkUvMap(v0, v1); float skFS = 1.0;   // (10/11) sombra fina del foco sobre la cara
   bool skOn = PesSkIsSkin(skMat, r5.y, skTag);
   float skTF = r5.x * r5.y;
@@ -211,7 +212,7 @@ void main(
   r1.z = (saturate(max(r1.wwww, r1.zzzz))).z;
   r0.w = (saturate(r0.wwww)).w;
   r3.xyz = ((r7.xyzx * r1.zzzz)).xyz;
-  if (skOn) { skFS = PesSkFaceShadow(skAB, v0, v2.xy, skZ, skL, skNL, r7.xyz); r3.xyz = (PesSkDiffuse(skNL, r5.y, skTF, skZ, skCurv) * skFS + PesSkTrans(skN, skV, skL, r5.y)) * r7.xyz; }   // (04/11) piel
+  if (skOn) { skFS = PesSkFaceShadow(skAB, v0, v2.xy, skZ, skL, skNL, r7.xyz); r3.xyz = (PesSkDiffuse(skNL, r5.y, skTF, skZ, skCurv) * skFS + PesSkTransAll(skN, skV, skL, skNL, r5.y, skCurvT, v2.xy)) * r7.xyz; }   // (04/11) piel
   r2.xzw = ((r2.zzzz * r9.xxyz)).xzw;
   r8.x = ((dot((r0.xyzx).xyz, (r6.xyzx).xyz)).xxxx).x;
   r0.x = ((g_lut1.Sample(g_samplerLinear_Clamp_s, (r8.xyxx).xy)).xyzw).x;

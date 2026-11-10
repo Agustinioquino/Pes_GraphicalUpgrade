@@ -134,16 +134,30 @@ float4 PesSkUvMap(float4 clipP, float4 uvP) {
   float2 Am = dU / dS;
   return float4(Am, uvC - Am * sC);
 }
+// boca visible (o sin mascara de la DLL): ahi todo queda como antes (regla de la boca)
+bool PesSkMouthPx(float2 pos) {
+  uint mmW = 0, mmH = 0; pesMouthMask.GetDimensions(mmW, mmH);
+  if (mmW == 0) return true;
+  uint2 mmP = min((uint2)pos, uint2(mmW - 1, mmH - 1));
+  float mmZ = pesMouthMask.Load(int3(mmP, 0)), mmD = g_DepthTexture.Load(int3(mmP, 0)).x;
+  return mmZ > 0.0 && abs(mmZ - mmD) <= 1e-6 + 2e-4 * abs(mmD);
+}
+// (10/11 d) CONTRALUZ DE COSTADO EN LOS FOCOS. PesSkTrans solo se ve con la luz casi detras de la cabeza mirando a la camara; con
+// un foco de costado la oreja, la aleta de la nariz y los dedos quedaban opacos. Se suma la contraluz por GROSOR de las pasadas
+// del sol (PesSkTransThick con el grosor estimado por la forma, fila 64: x on, z fuerza, w densidad), que no depende de donde
+// esta la camara: la luz cruza la piel fina que le da la espalda. curvT = PesSkCurvConvex (fuera de los if)
+float3 PesSkTransAll(float3 n, float3 V, float3 L, float nl, float trans, float curvT, float2 pos) {
+  float3 t = PesSkTrans(n, V, L, trans);
+  float4 P64 = IniParams.Load(int2(64, 0));
+  if (P64.x > 0.5 && P64.z > 0.0 && !PesSkMouthPx(pos)) t = max(t, PesSkTransThick(PesSkThickCurv(trans, curvT), n, L, nl, trans));
+  return t;
+}
 float PesSkFaceShadow(float4 AB, float4 clipP, float2 pos, float zC, float3 L, float nl, float3 lightC) {
   float4 CS = IniParams.Load(int2(52,0));
   float zSgn = zC < 0.0 ? -1.0 : 1.0, zA = abs(zC);
   // solo donde hay luz que quitar (con 26 a 48 focos por cuadro en el editor, los que casi no aportan no trazan)
   if (CS.w < 0.5 || CS.x <= 0.0 || nl < 0.03 || zA < 0.1 || zA > 8.0 || dot(lightC, 0.3333.xxx) * nl < 0.004) return 1.0;   // (10/11 b) 76 focos en el editor: solo trazan los que se ven
-  { uint mmW = 0, mmH = 0; pesMouthMask.GetDimensions(mmW, mmH);
-    if (mmW == 0) return 1.0;
-    uint2 mmP = min((uint2)pos, uint2(mmW - 1, mmH - 1));
-    float mmZ = pesMouthMask.Load(int3(mmP, 0)), mmD = g_DepthTexture.Load(int3(mmP, 0)).x;
-    if (mmZ > 0.0 && abs(mmZ - mmD) <= 1e-6 + 2e-4 * abs(mmD)) return 1.0; }
+  if (PesSkMouthPx(pos)) return 1.0;
   float2 sC = clipP.xy / clipP.w;
   float3 Pv = float3((sC - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zC, zC);
   float3 Lc = normalize(L);
