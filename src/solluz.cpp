@@ -64,6 +64,7 @@ void SolLuzPresent() {
     const bool want = test && (nearSun || tlOn) && SolEditorBody() != nullptr;
     if (!want) {
         if (s_on) { const float d[3] = { 0, 1, 0 }, c[3] = { 1, 1, 1 }; SolEditorSet(d, c, 5600.0f, 0.0f, false); s_on = false; Log("sol real del editor: apagado"); }
+        if (g_cfg.solEditorExpoAuto) SolEditorExposicion(true, 0.0f, g_cfg.solEditorExpoMin, g_cfg.solEditorExpoMax, -7.1f);
         g_solRealActivo = 0.0f; return;
     }
     float az = 0, el = 0, kelvin, lux; float rgb[3] = { 1, 1, 1 }; float d[3];
@@ -99,6 +100,19 @@ void SolLuzPresent() {
         DirFrom(az, el, d);
     }
     lux *= exp2f(ev);
+    // (10/11, Agustin: "falta el ambiente y la exposicion automatica") exposicion automatica del estudio (soleditor 7f1196d):
+    // con el ciclo el tope de adaptacion baja de noche (-5.1 de dia .. -6.6 de noche) para que la adaptacion no levante la noche
+    // (negros negros); en pasos de 0.1 EV para no empujar el TOD cada cuadro. Sin ciclo vuelve al rango del ini
+    {
+        float mx = g_cfg.solEditorExpoMax, mn = g_cfg.solEditorExpoMin;
+        if (tlOn) {
+            const float dayK = std::clamp((s_sunSin + 0.10f) / 0.30f, 0.0f, 1.0f);
+            mx = std::min(mx, -6.6f + (mx + 6.6f) * dayK);
+            mx = roundf(mx * 10.0f) / 10.0f;
+            if (mn > mx) mn = mx;
+        }
+        if (g_cfg.solEditorExpoAuto) SolEditorExposicion(true, 0.0f, mn, mx, -7.1f);
+    }
     const bool ok = SolEditorSet(d, rgb, kelvin, lux, true);
     // z393: 1 = sol de partido; con el ciclo, 2 + seno de la altura del SOL (1..3: < 2 de noche) para el ambiente del shader
     if (ok) { if (!s_on) Log("sol real del editor: prendido (%s)", tlOn ? "ciclo de dia y noche" : "sol de partido"); s_on = true; g_solRealActivo = tlOn ? 2.0f + s_sunSin : 1.0f; }
