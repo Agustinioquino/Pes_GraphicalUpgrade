@@ -6,17 +6,17 @@ import gani_firmas as gf
 CUERPO, CARA = '1787A4C3', 'C15E13FF'
 CAT_ESCENA = {'dml_goal': 3, 'dml_hugset': 3, 'dml_offsidegoal': 3, 'dml_end': 4, 'dml_ent': 5, 'dml_tu': 5, 'dml_md': 6,
               'dml_foul': 7, 'dml_pk': 7, 'dml_change': 7, 'dml_injury': 7, 'dml_assistant': 7, 'dml_menu': 1}
-CATS = ['', 'Editar y menus', 'Gameplay (partido)', 'Festejos de gol', 'Ceremonias y final', 'Entrada y previa', 'Liga Master (dml_md)',
+CATS = ['', 'Editar y menus', 'Gameplay (partido)', 'Festejos de gol', 'Ceremonias y final', 'Entrada y previa', 'Liga Master y myClub',
         'Arbitro, faltas, penales y cambios', 'Gestos de cara', 'Varias']
 def clasificar(rel, de_partido):
     r = '\\' + rel.lower()
     b = r.rsplit('\\', 1)[-1]
-    if ('\\hand\\' in r or 'audience' in r or 'standsflag' in r or b.endswith('hand.gani') or b.endswith('_eyes_target.gani')
+    if ('\\hand\\' in r or 'audience' in r or 'standsflag' in r or b.endswith('_lhand.gani') or b.endswith('_rhand.gani') or b.endswith('_eyes_target.gani')
             or b.endswith('_mobh.gani') or b.startswith('dml_mobh') or b.startswith('dml_prop') or '_enum_dummy' in b):
         return None, None
+    if de_partido: return 'cuerpo', 2
     tipo = 'cara' if (b.endswith('_face.gani') or '\\face\\' in r) else 'cuerpo'
     if '\\face\\animations\\' in r: return tipo, 8
-    if de_partido: return tipo, 2
     if '\\interfaceload\\' in r or '\\interface\\' in r: return tipo, 1
     if 'fixdemo' in r:
         m = re.match(r'^([a-z]+)_([a-z]+)', b)
@@ -67,7 +67,7 @@ def main():
                 continue
             cats[tipo][cat] += 1
             grupos[tipo][cat][grupo(rel)] += 1
-    print('# gani_reglas (ProbadorAnimaciones 3.1)')
+    print('# gani_reglas (ProbadorAnimaciones 3.1, reglas corregidas 21:41 UTC)')
     print('EXCLUIDAS POR NOMBRE QUE SI SON DE JUGADOR (deberia ser 0): %d' % len(mal_excl))
     for x in mal_excl[:60]: print('   ' + x)
     print('CANAL EQUIVOCADO por nombre (deberia ser 0): %d' % len(mal_canal))
