@@ -43,7 +43,7 @@ float3 PesSkDiffuse(float rawNdotL, float trans, float transFloor, float zView, 
   if (uni) {
     float mpp = max(abs(zView) * abs(g_psScene.m_projectionParam.x) * 2.0 / max(g_psScene.m_viewportSize.x, 1.0), 1e-6);
     float rPx = 0.006 * max(IniParams.Load(int2(95,0)).x, 0.3) / mpp;
-    w *= 1.0 - 0.45 * saturate((rPx - 1.0) / 5.0);
+    w *= 1.0 - 0.85 * saturate((rPx - 1.0) / 5.0);
   }
   float3 d = saturate(PesSkSoftTerm(rawNdotL, w));
   return max(d, min(transFloor, 0.03).xxx);
