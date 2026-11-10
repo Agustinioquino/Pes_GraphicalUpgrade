@@ -1,0 +1,1 @@
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src-rastro\rastrodll.cpp(27,11): error C1075: '{': no matching token found [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\rastro.vcxproj]
