@@ -809,7 +809,16 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   // Proporcion de la piel medida (Jensen 2001: rojo 3.67, verde 1.37, azul 0.68 mm de camino libre): el verde llega a la mitad del
   // rojo y el azul a un cuarto, asi la luz ablanda de verdad el sombreado (el terminador se corre hacia la sombra, las arrugas y los
   // poros del relieve se iluminan desde adentro) y el rojo queda solo como lo que mas lejos llega
-  float3 dmm = float3(lerp(1.5, 0.85, mel), lerp(0.75, 0.50, mel), lerp(0.40, 0.30, mel)) * widthScale;
+  // (10/11, Agustin: "no funciona como un subsurface scattering facial real de nueva generacion") PERFIL DE BURLEY POR ALBEDO, como
+  // Unreal 5 / Disney (Christensen-Burley 2015, configuracion de camino libre medio): el alcance de cada canal sale del COLOR REAL de
+  // la piel en este punto, d = ld / s(A) con s(A) = 1.85 - A + 7 |A - 0.8|^3. La piel clara (albedo alto) difunde mas lejos y la
+  // oscura menos, canal por canal (antes: un solo numero de melanina sacado de la luminancia). ld = camino libre de la piel
+  // calibrado para que una piel clara tipica (0.75 / 0.55 / 0.45) de lo mismo que antes (1.5 / 0.75 / 0.40 mm)
+  float3 albC = saturate(inAlb.SampleLevel(sPoint, uv, 0).xyz);
+  float3 sA = 1.85 - albC + 7.0 * pow(abs(albC - 0.8), 3.0);
+  float3 dmm = float3(1.66, 1.17, 0.80) / max(sA, 0.5) * widthScale;
+  dmm = (alb0L > 0.004) ? dmm : float3(1.5, 0.75, 0.40) * widthScale;   // sin albedo valido (negro): el perfil de antes
+  dmm = max(dmm, 0.05);
   float mmToPx = 0.001 * pxm;
   if (dmm.r * 3.0 * mmToPx < 0.6) return float4(c0, 1);   // de lejos lo resuelve la piel pre-integrada de la pasada de luz
   // (08/11 SSSS) entre 0.6 y 1.6 px el disco entra de a poco: antes se prendia de golpe y la cara cambiaba al acercar / alejar la camara
@@ -828,8 +837,10 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   float rot = 6.2831853 * frac(52.9829189 * frac(dot(pos.xy, float2(0.06711056, 0.00583715))) + (IniParams.Load(int2(331, 0)).x > 0.5 ? frac(m_timeParam.z * 7.31) : 0.0));
   float3 acc = 0, wsum = 0;
   [unroll] for (int i = 0; i < 24; i++) {
-    bool redSet = (i % 3) != 2;   // dos de cada tres muestras con el radio del rojo (el que mas lejos llega)
-    float rmm = kBurleyX[i / 3] * (redSet ? dmm.r : dmm.g);
+    // (10/11) una de cada tres muestras con el radio de cada canal: antes el azul se pesaba con los radios del rojo y el verde y
+    // casi no tenia muestras cerca del centro (su difusion quedaba de mas o de menos segun el ruido)
+    int ch = i % 3;
+    float rmm = kBurleyX[i / 3] * (ch == 0 ? dmm.r : (ch == 1 ? dmm.g : dmm.b));
     float a = rot + i * 2.3999632;                       // angulo aureo: las 16 muestras no se alinean
     float2 off = float2(cos(a), sin(a)) * (rmm * mmToPx);   // en pixeles
     float2 uvS = uv + off * rb;
@@ -840,7 +851,7 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
     float tol = max(1.0, 0.5 * rmm) / tolK;               // la superficie puede curvarse mas lejos del centro
     float depthW = exp(-(dzmm * dzmm) / (tol * tol));
     // peso de cada canal = perfil / pdf de la mezcla (rojo + verde, mitad y mitad): el 1/r de los dos se cancela
-    float pdf = 0.667 * BurleyF(rmm / dmm.r) / dmm.r + 0.333 * BurleyF(rmm / dmm.g) / dmm.g;
+    float pdf = (BurleyF(rmm / dmm.r) / dmm.r + BurleyF(rmm / dmm.g) / dmm.g + BurleyF(rmm / dmm.b) / dmm.b) / 3.0;
     float3 w = float3(BurleyF(rmm / dmm.r) / dmm.r, BurleyF(rmm / dmm.g) / dmm.g, BurleyF(rmm / dmm.b) / dmm.b) / max(pdf, 1e-6);
     w *= depthW;
     acc += w * inLight.SampleLevel(sPoint, uvS, 0).xyz;   // (27/10 i) muestra puntual: con la bilineal, en el borde de la cara entraba el fondo claro de al lado (contorno de pixeles brillantes)
@@ -854,7 +865,10 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   // azul se difundia igual que el rojo (poros y arrugas lavados). Ahora la fuerza va por canal como la dispersion real: el rojo
   // casi entero (y95^0.5: borde de sombra rojizo y suave), el verde como el slider y el azul menos (y95^1.5: detalle fino)
   float sK = saturate(P.y);
-  float3 mixK = float3(sqrt(sK), sqrt(sK), sK) * nearK;   // (09/11 h) el verde difunde como el rojo (es el que da el brillo de la piel)
+  // (10/11) la difusion es ENTERA en los tres canales (como en Unreal 5): el detalle de poros y arrugas queda en la textura (la
+  // composicion multiplica por el albedo despues) y el perfil por canal ya decide cuanto viaja cada color. y95 queda como fuerza
+  // general (1 = real); con menos, los tres canales bajan juntos, sin dejar un borde duro solo en el azul
+  float3 mixK = sK.xxx * nearK;
   return float4(lerp(c0, blurred, mixK), 1);
 }
 #endif
