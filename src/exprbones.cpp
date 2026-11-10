@@ -222,8 +222,8 @@ struct PoseOff { int d; float a[3], s[3], u[3]; };   // a = enojo, s = sonrisa, 
 static const PoseOff kPose[] = {
     {  1, { 0, 0, 0 },                   {  0.0010f, -0.0004f, 0 },        { 0, 0, 0 } },                    // lip_b_l
     {  2, { 0, 0, 0 },                   { -0.0010f, -0.0004f, 0 },        { 0, 0, 0 } },                    // lip_b_r
-    {  5, {  0.0004f, -0.0022f, 0 },     {  0.0030f,  0.0022f, -0.0010f }, { -0.0015f, 0, 0.0005f } },       // lip_s_l: comisura
-    {  6, { -0.0004f, -0.0022f, 0 },     { -0.0030f,  0.0022f, -0.0010f }, {  0.0015f, 0, 0.0005f } },       // lip_s_r
+    {  5, {  0.0004f, -0.0022f, 0 },     {  0.0022f,  0.0016f, -0.0010f }, { -0.0015f, 0, 0.0005f } },       // lip_s_l: comisura (10/11, Agustin: "muy anchas y altas") 3.0 / 2.2 -> 2.2 / 1.6 mm
+    {  6, { -0.0004f, -0.0022f, 0 },     { -0.0022f,  0.0016f, -0.0010f }, {  0.0015f, 0, 0.0005f } },       // lip_s_r
     {  7, { 0, -0.0006f, 0 },            {  0.0010f,  0.0015f, 0.0008f },  { 0, -0.0008f, 0 } },            // (09/11 c) asombro: la cara se alarga                    // cheek_s_l
     {  8, { 0, -0.0006f, 0 },            { -0.0010f,  0.0015f, 0.0008f },  { 0, -0.0008f, 0 } },                    // cheek_s_r
     {  9, { 0,  0.0010f, 0 },            {  0.0004f,  0.0008f, 0 },        { 0, 0.0004f, 0.0002f } },                    // lip_t_l
@@ -2075,6 +2075,28 @@ int ExprBonesPoses(ExprCharPose* out, int max) {
         }
     }
     return n;
+}
+// (10/11, Agustin: "la vibracion", video 11:24: los parpados saltan cada medio segundo; "las comisuras en la sonrisa vibran") lo que
+// el mod escribe en el Eval del cuello lo pisa despues el juego algunos cuadros: el enganche de la cara al cuerpo (0x1419f8390) y las
+// restricciones de la cara (mirada, parpados), que corren solo cuando nodo+0xf1 esta prendido. faceinject.cpp llama a esto justo antes
+// de que 0x1419f8820 arme las matrices del rig (cuerpo o cara): se vuelve a poner lo escrito en este cuadro, asi lo del mod queda
+// ultimo. Sin candado bloqueante (try_lock): si el hilo del Eval lo tiene, este rig sale como estaba.
+std::atomic<unsigned> g_exprReapplied{0}, g_exprReapplyBusy{0};
+void ExprBonesReapply(const void* rig) {
+    if (!rig) return;
+    std::unique_lock<std::mutex> lk(s_mx, std::try_to_lock);
+    if (!lk.owns_lock()) { g_exprReapplyBusy.fetch_add(1, std::memory_order_relaxed); return; }
+    const unsigned fr = s_frame.load(std::memory_order_relaxed);
+    for (int i = 0; i < s_nSk; i++) {
+        Skel& S = s_sk[i];
+        if (S.skel != rig && S.face != rig) continue;
+        if (fr - S.lastFrame > 1) continue;   // validado (StillValid) en este cuadro o el anterior
+        for (int d = 0; d < kND; d++) {
+            if (!S.wHave[d] || !S.cur[d] || fr - S.wFrame[d] > 1) continue;
+            float out[7] = { S.wq[d][0], S.wq[d][1], S.wq[d][2], S.wq[d][3], S.wt[d][0], S.wt[d][1], S.wt[d][2] };
+            if (SafeCopy((char*)S.cur[d] + 16, out, 28)) g_exprReapplied.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
 }
 // Present (hilo de render): estado para el shader (350.y) y resumen al log
 void ExprBonesPresent() {

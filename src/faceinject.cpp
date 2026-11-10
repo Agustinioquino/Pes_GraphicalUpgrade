@@ -75,6 +75,7 @@ uintptr_t __fastcall hk_Rig(void* rig) {
             int f = PresentNo();
             if (s_lastFaceFrame.exchange(f) != f) s_faceFrames.fetch_add(1, std::memory_order_relaxed);
             if (p.parent && CharSlotForSkel((const void*)p.parent) >= 0) s_faceKnown.fetch_add(1, std::memory_order_relaxed);
+            if (g_cfg.optExprInject >= 2) ExprBonesReapply(rig);   // (10/11) paso 2: lo del mod queda ultimo
             if (!s_infoFace.exchange(true)) {
                 snprintf(s_infoF, sizeof s_infoF, "primera cara %p: %llu transformaciones, %llu huesos, padre %p (personaje %d), hilo %lu", rig,
                          (unsigned long long)p.xfCount, (unsigned long long)p.bones, (void*)p.parent, p.parent ? CharSlotForSkel((const void*)p.parent) : -1, GetCurrentThreadId());
@@ -84,6 +85,7 @@ uintptr_t __fastcall hk_Rig(void* rig) {
             s_body.fetch_add(1, std::memory_order_relaxed);
             int slot = CharSlotForSkel(rig);
             if (slot >= 0) {
+                if (g_cfg.optExprInject >= 2) ExprBonesReapply(rig);
                 s_bodyKnown.fetch_add(1, std::memory_order_relaxed);
                 if (!s_infoBody.exchange(true)) {
                     snprintf(s_infoB, sizeof s_infoB, "primer cuerpo de personaje %p: %llu transformaciones, %llu huesos, personaje %d, hilo %lu", rig,
@@ -109,7 +111,7 @@ void Install() {
     // otro gancho ya puesto (salto) o relleno: no se engancha encima
     if (b[0] == 0xE9 || b[0] == 0xCC || b[0] == 0xC3) { Log("inyeccion caras: 0x1419f8820 empieza raro (%s), sin gancho", hex); return; }
     if (MH_CreateHook((void*)kRigMatrices, (void*)&hk_Rig, (void**)&o_rig) == MH_OK && MH_EnableHook((void*)kRigMatrices) == MH_OK) s_ok = true;
-    Log("inyeccion caras: gancho en 0x1419f8820 (matrices del rig) %s; bytes %s(hilo de Present %lu)", s_ok ? "puesto, solo mide" : "NO", hex, GetCurrentThreadId());
+    Log("inyeccion caras: gancho en 0x1419f8820 (matrices del rig) %s; bytes %s(hilo de Present %lu)", s_ok ? g_cfg.optExprInject >= 2 ? "puesto, lo del mod queda ultimo" : "puesto, solo mide" : "NO", hex, GetCurrentThreadId());
 }
 }  // namespace
 
@@ -130,6 +132,9 @@ void FaceInjectPresent() {
     char tids[96] = {}; int nt = 0; size_t o = 0;
     for (auto& s : s_tid) { unsigned v = s.exchange(0); if (v) { nt++; o += snprintf(tids + o, sizeof tids - o, "%s%u", o ? "," : "", v); if (o >= sizeof tids) break; } }
     if (!fc && !bd && !ot) { Log("inyeccion caras: %.0f s sin rigs (menu o carga)", sec); return; }
+    extern std::atomic<unsigned> g_exprReapplied, g_exprReapplyBusy;
+    const unsigned rap = g_exprReapplied.exchange(0), rbz = g_exprReapplyBusy.exchange(0);
+    Log("inyeccion caras: reaplicado %u huesos (ocupado %u) [expr_inyeccion %d]", rap, rbz, g_cfg.optExprInject);
     Log("inyeccion caras: %.0f s, %d cuadros: caras %u (%d distintas, en %u cuadros = %.0f %%, %.1f por cara y cuadro; padre conocido %u), "
         "cuerpos %u (de personaje %u), otros rigs %u, ilegibles %u; hilos de la cara %d [%s]",
         sec, frames, fc, nf, ff, frames > 0 ? 100.0 * ff / frames : 0.0, (nf && ff) ? (double)fc / ((double)nf * ff) : 0.0, fk, bd, bk, ot, bad, nt, tids);
