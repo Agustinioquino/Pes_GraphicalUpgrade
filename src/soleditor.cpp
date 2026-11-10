@@ -188,6 +188,13 @@ static std::atomic<int> s_todsApplied{0}, s_todsSeen{0};
 static unsigned char s_studio[0x60]; static bool s_hasStudio = false;   // +0x130..+0x18f del archivo (luz de estudio)
 struct TodReq { bool atmo; int h, m; bool hora; };
 static TodReq s_treq{false, 16, 0, false}, s_tdone{false, -1, -1, false}; static bool s_tdirty = false;
+// (10/11) exposicion automatica: cualquier TimeOfDaySettings de estudio (firma del archivo: overrideGameExposure, compensacion -7.1,
+// min = max = 0; los estadios traen -13/-14..-9/-7 y no entran), no solo la marcada del EditFace con atmosfera
+static std::atomic<void*> s_todsLive{nullptr};
+static unsigned char s_liveExpo[0x38]; static bool s_hasLiveExpo = false;   // +0x158..+0x18f del archivo (game + demo)
+struct ExpoReq { bool on; float comp, mn, mx, init; };
+static ExpoReq s_ereq{false, 0, 0, 0, 0}, s_edone{false, 1, 1, 1, 1}; static void* s_edoneFor = nullptr; static bool s_einit = false;
+static std::atomic<int> s_expoApplied{0};
 
 static bool TodsBodyValid(void* b) {
     if (!b || !Readable(b, 0x90)) return false;
@@ -205,9 +212,27 @@ static bool IsEditorTods(char* e) {
         return expo && marca;
     } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
+static bool IsStudioTods(char* e) {   // sin objetos C++
+    if (!e || !Readable(e + 0x158, 0x38)) return false;
+    __try {
+        return *(unsigned char*)(e + 0x158) && fabsf(*(float*)(e + 0x15c) + 7.1f) < 0.01f && *(float*)(e + 0x160) == 0.0f && *(float*)(e + 0x164) == 0.0f;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+static bool CopyExpo(void* dst, const void* src) {   // sin objetos C++
+    __try { memcpy(dst, src, 0x38); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+static void NoteLiveTods(void* b, char* e) {
+    if (s_todsLive.load() == b || !IsStudioTods(e)) return;
+    if (!CopyExpo(s_liveExpo, e + 0x158)) return;
+    s_hasLiveExpo = true;
+    s_todsLive.store(b);
+    { std::lock_guard<std::mutex> lk(s_mx); s_edoneFor = nullptr; }
+    if (LogOn()) Log("sol_editor: TimeOfDaySettings de estudio para la exposicion cuerpo=%p entidad=%p", b, e);
+}
 static void SnapStudio(char* e) { __try { memcpy(s_studio, e + 0x130, sizeof s_studio); s_hasStudio = true; } __except (EXCEPTION_EXECUTE_HANDLER) {} }
 static void NoteTods(void* b, const char* via) {
     s_todsSeen.fetch_add(1);
+    if (s_todsLive.load() != b) { char* le = EntityOf(b); if (le) NoteLiveTods(b, le); }
     if (s_tods.load() == b) return;
     char* e = EntityOf(b);
     if (!IsEditorTods(e)) {
@@ -226,8 +251,13 @@ static void NoteTods(void* b, const char* via) {
     if (LogOn()) Log("sol_editor: TimeOfDaySettings del editor cuerpo=%p entidad=%p (%s) hora archivo %u:%02u", b, e, via,
                      *(unsigned*)(e + 0x134), *(unsigned*)(e + 0x138));
 }
-static uintptr_t __fastcall hk_tDtor(void* b, uintptr_t a, uintptr_t c, uintptr_t d) { void* x = b; s_tods.compare_exchange_strong(x, nullptr); return o_tDtor(b, a, c, d); }
-static uintptr_t __fastcall hk_tDeact(void* b, uintptr_t a, uintptr_t c, uintptr_t d) { void* x = b; s_tods.compare_exchange_strong(x, nullptr); return o_tDeact(b, a, c, d); }
+// al irse la escena se devuelve la exposicion del archivo a la entidad (si se reactiva, vuelve a tener la firma de estudio)
+static void DropLive(void* b) {
+    void* x = b;
+    if (s_todsLive.compare_exchange_strong(x, nullptr) && s_hasLiveExpo) { char* e = EntityOf(b); if (e) CopyExpo(e + 0x158, s_liveExpo); }
+}
+static uintptr_t __fastcall hk_tDtor(void* b, uintptr_t a, uintptr_t c, uintptr_t d) { void* x = b; s_tods.compare_exchange_strong(x, nullptr); DropLive(b); return o_tDtor(b, a, c, d); }
+static uintptr_t __fastcall hk_tDeact(void* b, uintptr_t a, uintptr_t c, uintptr_t d) { void* x = b; s_tods.compare_exchange_strong(x, nullptr); DropLive(b); return o_tDeact(b, a, c, d); }
 static uintptr_t __fastcall hk_tAct(void* b, uintptr_t a, uintptr_t c, uintptr_t d) { uintptr_t r = o_tAct(b, a, c, d); NoteTods(b, "activar"); return r; }
 static uintptr_t __fastcall hk_tReact(void* b, uintptr_t a, uintptr_t c, uintptr_t d) { uintptr_t r = o_tReact(b, a, c, d); NoteTods(b, "reactivar"); return r; }
 
@@ -282,9 +312,57 @@ static void TodsPresent() {
     char* e = EntityOf(b);
     if (!e) return;
     WriteTods(e, q);
+    if (b == s_todsLive.load()) { std::lock_guard<std::mutex> lk(s_mx); s_edoneFor = nullptr; }   // WriteTods repone la exposicion del archivo
     bool ok = PushTods(e);
     if (s_todsApplied.fetch_add(1) == 0 && LogOn())
         Log("sol_editor: TimeOfDaySettings aplicada (%s): atmosfera %d hora %d %d:%02d (hilo %lu)", ok ? "ok" : "FALLO", q.atmo, q.hora, q.h, q.m, GetCurrentThreadId());
+}
+
+static void WriteExpo(char* e, const ExpoReq& r) {   // sin objetos C++
+    __try {
+        if (!r.on) { if (s_hasLiveExpo) memcpy(e + 0x158, s_liveExpo, sizeof s_liveExpo); return; }
+        for (int k = 0; k < 2; k++) {   // game (+0x158) y demo (+0x174): comp, min, max, key, maxLum, inicial
+            char* x = e + (k ? 0x174 : 0x158);
+            *(unsigned char*)x = 1; *(float*)(x + 4) = r.comp; *(float*)(x + 8) = r.mn; *(float*)(x + 0xc) = r.mx;
+            *(float*)(x + 0x10) = 0.18f; *(float*)(x + 0x14) = 32.0f; *(float*)(x + 0x18) = r.init;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+static void ExpoPresent() {
+    if (!s_todsOk) return;
+    static double s_last = 0;
+    double t = Now();
+    if (t - s_last < 1.0 / 30.0) return;
+    void* b = s_todsLive.load();
+    if (!TodsBodyValid(b)) return;
+    ExpoReq r;
+    {
+        std::lock_guard<std::mutex> lk(s_mx);
+        if (!s_einit) {   // valor del ini hasta que alguien llame a SolEditorExposicion
+            s_einit = true;
+            if (g_cfg.solEditorExpoAuto) s_ereq = ExpoReq{ true, 0.0f, g_cfg.solEditorExpoMin, g_cfg.solEditorExpoMax, -7.1f };
+        }
+        if (s_treq.atmo && b == s_tods.load()) return;   // con atmosfera manda la exposicion del estadio (WriteTods)
+        r = s_ereq;
+        if (s_edoneFor == b && memcmp(&r, &s_edone, sizeof r) == 0) return;
+        if (s_edoneFor != b && !r.on) { s_edoneFor = b; s_edone = r; return; }   // escena nueva sin pedido: queda la del archivo
+        s_edone = r; s_edoneFor = b;
+    }
+    s_last = t;
+    char* e = EntityOf(b);
+    if (!e) return;
+    WriteExpo(e, r);
+    bool ok = PushTods(e);
+    if (s_expoApplied.fetch_add(1) < 4 && LogOn())
+        Log("sol_editor: exposicion del estudio (%s): %s comp %.2f [%.1f %.1f] inicial %.1f (cuerpo %p)", ok ? "ok" : "FALLO",
+            r.on ? "automatica" : "fija del archivo", r.comp, r.mn, r.mx, r.init, b);
+}
+void SolEditorExposicion(bool on, float comp, float minEV, float maxEV, float initEV) {
+    if (!std::isfinite(comp) || !std::isfinite(minEV) || !std::isfinite(maxEV) || !std::isfinite(initEV)) return;
+    if (minEV > maxEV) { float t = minEV; minEV = maxEV; maxEV = t; }
+    std::lock_guard<std::mutex> lk(s_mx);
+    s_einit = true;
+    s_ereq = on ? ExpoReq{ true, comp, minEV, maxEV, initEV } : ExpoReq{ false, 0, 0, 0, 0 };
 }
 
 void SolEditorSetHora(float horas) {
@@ -509,6 +587,7 @@ void SolEditorPresent() {
     if (!s_tried) Install();
     if (!s_bodyOk && !s_plugOk && !s_todsOk) return;
     TodsPresent();
+    ExpoPresent();
     // si el motor no llama "aplicar" seguido, se llama una vez con lo pendiente (solo cuerpos validos)
     if (s_bodyOk) {
         double t0 = 0; bool pend = PendingAge(&t0);
