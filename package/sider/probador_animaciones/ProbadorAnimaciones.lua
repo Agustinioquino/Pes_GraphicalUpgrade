@@ -1,4 +1,4 @@
--- ProbadorAnimaciones v2.1 - PES 2021 1.07.02 / Sider 7  (PES21 FX, 10/11/2026)
+-- ProbadorAnimaciones v2.2 - PES 2021 1.07.02 / Sider 7  (PES21 FX, 10/11/2026)
 -- Probador de animaciones (.gani) con el menu Editar como visor. Version simple: dos paginas.
 --
 -- CUERPO: el visor del Editar carga los 162 festejos de gol TODOS JUNTOS al entrar al jugador.
@@ -28,7 +28,11 @@
 -- "raiz = carpeta completa", despues una ruta por linea relativa a esa carpeta. El modulo las
 -- reparte solo: caras a CARA, cuerpos a CUERPO; manos, ojos y publico quedan afuera.
 
-local m = { version = "2.1" }
+-- Sider no les da pcall a los modulos (sider.log del 10/11: "attempt to call global 'pcall'").
+-- Si no esta, la funcion se llama directo: un error queda anotado por Sider en sider.log.
+local pcall = pcall or function(f, ...) return true, f(...) end
+
+local m = { version = "2.2" }
 local TANDA = 162
 
 -- direcciones de PES2021.exe 1.07.02 (base 0x140000000), leidas del decompilado. Solo lectura.

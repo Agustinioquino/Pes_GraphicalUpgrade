@@ -1,4 +1,4 @@
--- ProbadorPiezas v3.0 - PES 2021 1.07.02 / Sider 7  (PES21 FX, 10/11/2026)
+-- ProbadorPiezas v3.1 - PES 2021 1.07.02 / Sider 7  (PES21 FX, 10/11/2026)
 -- Previsualizador de modelos (.fmdl) sobre el jugador del menu Editar. Version simple:
 -- UNA lista y UN modelo elegido a la vez; al cambiar, el jugador se recarga solo.
 --
@@ -29,7 +29,11 @@
 -- [nombre] abre un grupo) y, al lado de cada modelo, "<modelo>.fmdl.txt" con sus materiales
 -- (tecla 2). indice.txt y esos .txt los arma catalogo_indice.py.
 
-local m = { version = "3.0" }
+-- Sider no les da pcall a los modulos (sider.log del 10/11: "attempt to call global 'pcall'").
+-- Si no esta, la funcion se llama directo: un error queda anotado por Sider en sider.log.
+local pcall = pcall or function(f, ...) return true, f(...) end
+
+local m = { version = "3.1" }
 local POR_PAGINA = 14
 
 -- direcciones de PES2021.exe 1.07.02 (base 0x140000000), leidas del decompilado
