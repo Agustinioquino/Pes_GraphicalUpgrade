@@ -1,0 +1,4 @@
+# Reglas del ProbadorPiezas. Una por linea. Ejemplos (quitar el # para usarlos):
+# shirt* = OCULTAR
+# sleeve* = OCULTAR
+# pants_007.fmdl = mis_modelos\\short_prueba.fmdl
