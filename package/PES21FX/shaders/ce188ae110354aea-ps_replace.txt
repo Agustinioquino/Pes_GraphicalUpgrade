@@ -447,8 +447,11 @@ void main(
     }
   }
   if (wrD) {   // (09/11 g) surco, zona ancha y piel juntada entre surcos, todo de la misma profundidad
-    wrFold   = saturate((wrDd - wrDb) / 0.45);   // (10/11 c) surco / cresta contra el promedio de ~4 mm
-    wrFoldW  = saturate((wrDd - wrDb) / 0.90);
+    // (10/11 e, Agustin: "en que edad, como afectan a las sombras de una manera realista") la piel joven se pliega ancha y elastica:
+    // el fondo casi no se oscurece ni pierde brillo; con la edad el pliegue queda marcado y su fondo recibe menos luz
+    float wrAgeSh = lerp(0.55, 1.20, g_wrAgeK);
+    wrFold   = saturate((wrDd - wrDb) / 0.45 * wrAgeSh);
+    wrFoldW  = saturate((wrDd - wrDb) / 0.90 * wrAgeSh);
     wrRidgeF = saturate((wrDb - wrDd) / 0.45);
     wrRidgeW = 0.7 * wrRidgeF;
     exFoldZ  = exOn ? wrFoldW : 0.0;

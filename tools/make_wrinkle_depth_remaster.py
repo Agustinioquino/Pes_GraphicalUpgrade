@@ -38,18 +38,27 @@ s = np.clip((V - 0.600) / 0.03, 0, 1); s = s * s * (3 - 2 * s)
 # forma de las remasterizadas; y pes_wrinkle_age.dds (R joven, G adulto, B veterano): arrugas en reposo, relieve con signo (0.5 = liso).
 def blur(x, sg):
     return np.real(np.fft.ifft2(np.fft.fft2(x) * np.exp(-2 * (np.pi * sg) ** 2 * (fu ** 2 + fv ** 2))))
-import subprocess, os, tempfile
-tmp = tempfile.mkdtemp()
-subprocess.run([sys.executable, '-I', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'make_wrinkle_depth.py'), tmp, '2048'], check=True, stdout=subprocess.DEVNULL)
-def rd(fn): return np.frombuffer(open(fn, 'rb').read(), np.uint8, N * N * 4, 148).reshape(N, N, 4).astype(np.float32) / 255
-old = np.concatenate([rd(tmp + '/pes_wrinkle_depth_a.dds'), rd(tmp + '/pes_wrinkle_depth_b.dds')], -1)
-R = []
-for i in range(8):
-    z = blur(old[..., i], 28.0); z = np.clip(z / max(z.max(), 1e-6) / 0.35, 0, 1); R.append(z * z * (3 - 2 * z))   # zona = surcos dibujados ensanchados ~1.5 cm
-R[7] = R[7] * 0
+# (10/11 e, Agustin: "ve mas alla, considera el cuello y toda la cabeza, de donde salen las arrugas, en que edad") ZONAS ANATOMICAS de
+# toda la cabeza en las uv (centro u = 0.5; ojos v 0.38, boca v 0.61, orejas dx 0.34..0.40, cuello v 0.78..0.97). Las 8 primeras son
+# las de los gestos (canales a / b); las 3 ultimas solo salen con la edad. Las orejas, los parpados y los labios quedan afuera.
+DX = np.abs((np.arange(N) + 0.5)[None, :] / N - 0.5) * np.ones((N, 1), np.float32)
+def sst(x): x = np.clip(x, 0, 1); return x * x * (3 - 2 * x)
+def ell(cx, cv, rx, rv): return sst((1.0 - ((DX - cx) / rx) ** 2 - ((V - cv) / rv) ** 2) * 2.0)
+def box(x1, v0, v1, sf=0.02): return sst((x1 - DX) / sf) * sst((V - v0) / sf) * sst((v1 - V) / sf)
+R = [box(0.19, 0.185, 0.305),                                                   # 0 frente (frontal: lineas horizontales)
+     np.maximum(ell(0.0, 0.335, 0.055, 0.045), 0.7 * ell(0.03, 0.40, 0.03, 0.035)),   # 1 entrecejo (corrugador) + costados de la nariz
+     np.maximum(ell(0.215, 0.385, 0.05, 0.06), ell(0.115, 0.425, 0.075, 0.025)),      # 2 patas de gallo (orbicular) + bajo el ojo
+     ell(0.10, 0.55, 0.04, 0.09),                                               # 3 surco nasogeniano
+     ell(0.0, 0.705, 0.075, 0.035),                                             # 4 menton (mentoniano)
+     ell(0.10, 0.685, 0.04, 0.06),                                              # 5 marioneta (depresor de la comisura)
+     box(0.42, 0.79, 0.97),                                                     # 6 cuello entero: anillos, platisma, costados y nuca
+     ell(0.17, 0.50, 0.06, 0.07),                                               # 7 mejilla (pliegues de la sonrisa, por fuera del surco)
+     ell(0.315, 0.45, 0.02, 0.08),                                              # 8 delante de la oreja (solo edad)
+     ell(0.25, 0.31, 0.04, 0.05),                                               # 9 sien (solo edad)
+     ell(0.0, 0.765, 0.16, 0.03)]                                               # 10 papada (solo edad)
 kmm = []
 D = np.zeros((N, N, 8), np.float32)
-for i, z in enumerate(R):
+for i, z in enumerate(R[:8]):
     act = z > 0.3
     if not act.any(): kmm.append(0.0); continue
     lo, hi = np.percentile(dep[act], 3), np.percentile(dep[act], 99.7)
@@ -57,12 +66,14 @@ for i, z in enumerate(R):
     sd = np.hypot(*np.gradient(d ** 1.2)) / 0.275    # 0.275 mm por texel de 2048; gesto entero: perfil ^ (1 + 0.2)
     kmm.append(float(np.percentile(slope[act], 99) / np.percentile(sd[act], 99)))
     D[..., i] = d
-# edad: frente, entrecejo, ojos, surco, menton, marioneta, cuello (cada edad con menos zonas y mas suave)
-AW = np.array([[0.10, 0.00, 0.10, 0.30, 0.00, 0.00, 0.10],
-               [0.35, 0.20, 0.35, 0.50, 0.10, 0.15, 0.30],
-               [0.70, 0.55, 0.70, 0.75, 0.30, 0.50, 0.60]], np.float32)
+# edad (cuando aparece cada una en la vida real): de joven solo los anillos del cuello y un surco leve; de adulto la frente, las patas
+# de gallo finas, el entrecejo y el surco; de veterano se suman marioneta, papada, sien, delante de la oreja y todo mas hondo
+#               frente entrec ojos  surco menton marion cuello mejilla oreja sien  papada
+AW = np.array([[0.08, 0.00, 0.08, 0.25, 0.00, 0.00, 0.15, 0.00, 0.00, 0.00, 0.00],
+               [0.35, 0.20, 0.35, 0.50, 0.10, 0.12, 0.35, 0.10, 0.00, 0.10, 0.10],
+               [0.70, 0.55, 0.75, 0.80, 0.30, 0.50, 0.65, 0.30, 0.40, 0.35, 0.40]], np.float32)
 hd = dep - blur(dep, 12.0)
-ages = [sum(AW[a, z] * R[z] * hd for z in range(7)) for a in range(3)]
+ages = [sum(AW[a, z] * R[z] * hd for z in range(11)) for a in range(3)]
 S = max(np.abs(x).max() for x in ages)
 sv = np.hypot(*np.gradient(ages[2] / S)) / 0.275
 kage = float(0.30 / np.percentile(sv[R[0] + R[2] + R[3] > 0.3], 99))   # veterano: pendiente p99 0.30 (gesto entero ~0.5)

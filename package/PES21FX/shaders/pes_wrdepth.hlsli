@@ -16,14 +16,15 @@ Texture2D<float4> pesWrDB : register(t46);
 // (10/11 d, Agustin: "tres mapas para la edad real, cada uno con menos secciones y menor intensidad") arrugas en reposo por edad:
 // R joven, G adulto, B veterano; relieve con signo (0.5 = liso), (muestra - 0.5) * kWrAgeMm = mm. Sin enlazar (DLL vieja) = nada
 Texture2D<float4> pesWrAgeT : register(t47);
-static const float kWrAgeMm = 2.507;
+static const float kWrAgeMm = 2.262;
+static float g_wrAgeK = 0.3;   // edad 0..1 de esta cara (PesWrAge)
 static float3 g_wrAg = 0;   // mm por mapa (joven, adulto, veterano), lo arma PesWrAge
 // (10/11, Agustin: "la escala esta mal", "tomando de base las remasterizadas") texturas nuevas sacadas de la normal remasterizada
 // (tools/make_wrinkle_depth_remaster.py): pliegues 2 veces mas anchos y en las zonas del juego; la profundidad da con el gesto entero
 // la misma pendiente que las remasterizadas
-static const float4 kWrDmmA = float4(3.68, 3.80, 4.70, 3.52);   // (10/11 d) relieve entero (surcos + piel juntada) en su zona anatomica, 2048   // (10/11) entrecejo 0.50 -> 0.75: en el video el enojo a 1.42 casi no se veia
+static const float4 kWrDmmA = float4(3.44, 3.91, 3.08, 3.64);   // (10/11 d) relieve entero (surcos + piel juntada) en su zona anatomica, 2048   // (10/11) entrecejo 0.50 -> 0.75: en el video el enojo a 1.42 casi no se veia
 //   // profundidad maxima (mm) por canal: frente, entrecejo, ojos, surco
-static const float4 kWrDmmB = float4(2.24, 2.76, 4.21, 0.00);   // menton, marioneta, cuello, mejilla
+static const float4 kWrDmmB = float4(2.20, 3.13, 4.32, 2.29);   // menton, marioneta, cuello, mejilla
 bool PesWrDOk() { uint w = 0, h = 0; pesWrDA.GetDimensions(w, h); return w > 1; }
 // edad del jugador (anios; 0 = no se sabe) -> 0 (20 o menos) .. 1 (38 o mas); sin dato, un adulto joven
 float PesWrAgeK(float age, float ageW)
@@ -38,6 +39,7 @@ void PesWrAge(float ageK, inout float4 wa, inout float4 wb, out float gain)
   float j = 1.0 - smoothstep(0.15, 0.35, ageK), v = smoothstep(0.45, 0.75, ageK);
   uint aw = 0, ah = 0; pesWrAgeT.GetDimensions(aw, ah);
   g_wrAg = aw > 1 ? float3(j, saturate(1.0 - j - v), v) * kWrAgeMm * saturate(ageK * 4.0) : 0;
+  g_wrAgeK = ageK;
   gain = lerp(0.80, 1.35, ageK);
 }
 float PesWrD1(float4 ha, float4 hb, float4 pa, float4 pb, float4 ka, float4 kb)
