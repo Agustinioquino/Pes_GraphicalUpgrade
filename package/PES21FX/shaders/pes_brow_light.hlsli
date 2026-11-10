@@ -37,7 +37,7 @@ float3 PesBrowLightDir(float3 c0, float3 c1, float3 c2, float3 dom, float vz)
   { float4 Q = IniParams.Load(int2(392, 0));
     int tlM = (int)(Q.w + 0.5), qd = (int)(Q.z + 0.5);
     if (tlM >= 1 && tlM <= 4) {
-      float per = tlM == 1 ? 30.0 : (tlM == 2 ? 60.0 : (tlM == 3 ? 120.0 : 300.0));
+      float per = tlM == 1 ? 120.0 : (tlM == 2 ? 300.0 : (tlM == 3 ? 600.0 : 1200.0));
       float tA = 6.2831853 * frac(IniParams.Load(int2(393, 0)).w / per);
       float3 orb = float3(cos(tA), sin(tA) * 0.9063078, sin(tA) * 0.4226183);
       if (sin(tA) < 0.0) orb = -orb;

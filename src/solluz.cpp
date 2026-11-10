@@ -29,7 +29,7 @@ static void DirFrom(float azDeg, float elDeg, float out[3]) {
 // de la DLL, la imitacion del shader y la luz de las cejas van con la MISMA hora
 static double s_phase = 0.0, s_phT = 0.0;
 float g_tlClock = 0.0f;   // w393 (UploadParams)
-static float TlPeriod(int tl) { return tl == 1 ? 30.0f : tl == 2 ? 60.0f : tl == 3 ? 120.0f : 300.0f; }
+static float TlPeriod(int tl) { return tl == 1 ? 120.0f : tl == 2 ? 300.0f : tl == 3 ? 600.0f : 1200.0f; }   // (10/11) 2 / 5 / 10 / 20 min
 
 void SolLuzPresent() {
     const bool test = g_cfg.live[297][0] > 0.5f;
