@@ -414,7 +414,7 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
         float nightK = smoothstep(0.06, -0.20, sE);
         float duskK = (1.0 - nightK) * (1.0 - smoothstep(0.04, 0.40, sE));
         float3 amb = lerp(1.0.xxx, float3(1.10, 0.90, 0.72), duskK);
-        amb = lerp(amb, float3(0.26, 0.31, 0.45), nightK);
+        amb = lerp(amb, float3(0.10, 0.12, 0.18), nightK);   // (10/11) negros de noche (antes 0.26: "los negros no son negros")
         o.c = float4(c0 * amb, 1); o.s = float4(s0 * dot(amb, float3(0.3, 0.5, 0.2)), 1);
       }
       return o;
