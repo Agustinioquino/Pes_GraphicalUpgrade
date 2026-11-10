@@ -892,6 +892,43 @@ def build(src_fmdl, texdir, log=print):
         tl = [q for q in parts if q[4] == 'diente' and q[3][:, jaw].mean() > 0.5 and abs(q[0][:, 0].mean()) > 10.6 * MM]   # del 1er premolar de abajo hacia atras
         tu = [q for q in parts if q[4] == 'diente' and q[3][:, jaw].mean() <= 0.5 and abs(q[0][:, 0].mean()) > 12.5 * MM]
         def near(A_, B_): return not ((A_.min(0) > B_.max(0) + 0.3 * MM)[[0, 2]].any() or (A_.max(0) < B_.min(0) - 0.3 * MM)[[0, 2]].any())
+        # (S) (10/11 c) Agustin: los premolares de abajo se encimaban entre si (hasta 1.6 mm). Cada par de vecinos de abajo que se
+        # cruza se angosta de a 0.1 mm SOLO en la mitad que mira al vecino (escala lineal sobre la linea que une los centros: no
+        # pliega), hasta que apenas se tocan; la muela no se toca (cede el diente)
+        if PROF.get('sep', 1):
+            lows = [q for q in parts if q[4] == 'diente' and q[3][:, jaw].mean() > 0.5 and abs(q[0][:, 0].mean()) > float(PROF.get('sep_x', 7.5)) * MM]
+            ism = lambda q: any(q[0] is m_ for m_ in mol_parts)
+            nsep = 0; wsep = 0.0; wsh = 0.0
+            def _cross(A_, B_):
+                if (A_[0].min(0) > B_[0].max(0)).any() or (A_[0].max(0) < B_[0].min(0)).any(): return False
+                return bool(_zin(A_[0], B_[0], B_[2]).any() or _zin(B_[0], A_[0], A_[2]).any())
+            def _narrow(Q_, c_, t_):   # angosta 0.1 mm la mitad de Q_ que mira hacia t_
+                s_ = (Q_[0] - c_) @ t_; m_ = s_ > 0; smax = float(s_.max())
+                if smax > 1.2 * MM: Q_[0][m_] -= np.outer(s_[m_] * (0.1 * MM / smax), t_)
+            for sd_ in (-1.0, 1.0):
+                ch = sorted([q for q in lows if not ism(q) and q[0][:, 0].mean() * sd_ > 0], key=lambda q: -q[0][:, 2].mean())   # de adelante hacia atras
+                mo = [q for q in lows if ism(q) and q[0][:, 0].mean() * sd_ > 0]
+                sh_tot = 0.0
+                for i_ in range(len(ch) - 1):
+                    A_, B_ = ch[i_], ch[i_ + 1]; done_ = 0.0
+                    for _it in range(40):
+                        if not _cross(A_, B_): break
+                        cA = A_[0].mean(0); cB = B_[0].mean(0); t_ = cB - cA; t_[1] = 0.0; t_ /= max(np.linalg.norm(t_), 1e-9)
+                        if sh_tot < float(PROF.get('sep_shift', 1.4)) * MM:   # primero se corre hacia atras (hay lugar antes de la muela)
+                            for q in ch[i_ + 1:]: q[0][:] = q[0] + 0.1 * MM * t_
+                            sh_tot += 0.1 * MM
+                        elif done_ < float(PROF.get('sep_max', 1.0)):
+                            _narrow(A_, cA, t_); _narrow(B_, cB, -t_); done_ += 0.1
+                        else: break
+                    if _it: nsep += 1; wsep = max(wsep, done_)
+                if ch:   # el ultimo contra la muela: cede el diente
+                    A_ = ch[-1]
+                    for B_ in mo:
+                        for _it in range(int(PROF.get('sep_mol', 2.0) * 10)):
+                            if not _cross(A_, B_): break
+                            cA = A_[0].mean(0); t_ = B_[0].mean(0) - cA; t_[1] = 0.0; t_ /= max(np.linalg.norm(t_), 1e-9); _narrow(A_, cA, t_)
+                wsh = max(wsh, sh_tot / MM)
+            log('  dientes de abajo encimados: %d pares separados (se corren hacia atras hasta %.1f mm; angostados hasta %.1f mm por lado)' % (nsep, wsh, wsep))
         grow = []
         for Pp, _, Fp, _, _ in tl:   # (A) cerrar el hueco
             y0 = Pp[:, 1].min(); y1 = Pp[:, 1].max(); top = Pp[:, 1] > y1 - 1.5 * MM; cl = []
