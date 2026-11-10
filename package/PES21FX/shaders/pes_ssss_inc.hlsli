@@ -566,7 +566,7 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   float wetK = saturate(IniParams.Load(int2(392, 0)).y);
   bool wetSkin = false;
   { uint wW = 0, wH = 0; inMouth.GetDimensions(wW, wH);
-    bool wMouth = wW > 0 && inMouth.Load(int3(min((uint2)pos.xy, uint2(wW - 1, wH - 1)), 0)) > 0.0;
+    bool wMouth = PesMouthAt(pos.xy, wW, wH);   // (10/11) solo la boca VISIBLE (la mascara guarda profundidad): con '> 0' entraba toda la silueta de la malla de la boca tapada por la piel = el recuadro
     if (wMouth) wetK = 0.0; }
   if (wetK > 0.0) { wetSkin = IsSkin(uv); rough = lerp(rough, wetSkin ? 0.12 : max(rough * 0.6, 0.15), wetK * (wetSkin ? 1.0 : 0.5)); }
   uint tq = (uint)(inNrm.SampleLevel(sPoint, uv, 0).z * 1023.0 + 0.5);
@@ -715,7 +715,7 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
       float skyAO = saturate(1.0 - 0.85 * aoS / 8.0);
       skyAO *= skyAO;
       { uint qW = 0, qH = 0; inMouth.GetDimensions(qW, qH);   // boca intacta: interior y cavidad sin oclusion nueva
-        if (legacy || (qW > 0 && inMouth.Load(int3(min((uint2)pos.xy, uint2(qW - 1, qH - 1)), 0)) > 0.0)) skyAO = 1.0; }
+        if (legacy || PesMouthAt(pos.xy, qW, qH)) skyAO = 1.0; }   // (10/11) solo la boca visible (ver wMouth)
       dif += (skyC * up + gndC * (1.0 - up)) * skyAO;
     }
     // (07/11 c) reflector: una pared / pantalla del lado opuesto a la luz, baja, que devuelve parte de la luz sin sombra (como el
@@ -762,7 +762,7 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
     uint mW = 0, mH = 0; inMouth.GetDimensions(mW, mH);
     // cualquier valor de la mascara cuenta (> 0): sirve con la mascara 0/1 de antes y con la de profundidad del hilo de la boca
     // (0dlnmc f151b82); donde la cara tapa la boca tambien se deja como antes (de mas, nunca de menos)
-    if (mW > 0 && inMouth.Load(int3(min((uint2)pos.xy, uint2(mW - 1, mH - 1)), 0)) > 0.0) mouthPx = true;
+    if (PesMouthAt(pos.xy, mW, mH)) mouthPx = true;   // (10/11) RECUADRO DE LA BOCA: con '> 0' la piel que tapa la malla de la boca quedaba sin el factor de la luz (mas clara, con la forma de la malla); ahora solo la boca visible
     if (!mouthPx) { float wrapK = saturate(dot(n, L) * 0.5 + 0.5); keepC *= lerp(0.45, 1.0, wrapK * wrapK); }
   }
   o.c = float4(c0 * keepC + dif + vol, 1);
