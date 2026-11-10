@@ -42,6 +42,26 @@ cbuffer cPSMaterial : register(b4)
   } g_psMaterial : packoffset(c0);
 }
 
+cbuffer cPSScene : register(b2)   // (04/11 piel) vista, para llevar la luz dominante (mundo) a la vista: micro sombra de los poros
+{
+  struct
+  {
+    float4x4 m_projectionView;
+    float4x4 m_projection;
+    float4x4 m_view;
+    float4x4 m_shadowProjection;
+    float4x4 m_shadowProjection2;
+    float4 m_eyepos;
+    float4 m_projectionParam;
+    float4 m_viewportSize;
+    float4 m_exposure;
+    float4 m_fogParam[3];
+    float4 m_fogColor;
+    float4 m_cameraCenterOffset;
+    float4 m_shadowMapResolutions;
+  } g_psScene : packoffset(c0);
+}
+
 cbuffer cPSSystem : register(b0)
 {
   struct
@@ -70,13 +90,22 @@ Texture2D<float4> g_tex_rotation_mask : register(t7);
 Texture2D<float4> g_tex_mesh : register(t15);
 // texturas remasterizadas (las carga d3dx.ini: ResourcePESWrinkleN / ResourcePESWrinkleM)
 Texture2D<float4> pesWrinkleN : register(t20);   // normal de arrugas 2048 (mismo formato que el juego)
+Texture2D<float4> pesShapeWr  : register(t31);   // (04/11) arrugas esculpidas de la sonrisa de esta cara (expr.cpp, formas\grupo_<n>_sonrisa.dds; RG = normal)
 Texture2D<float4> pesWrinkleM : register(t21);   // mascara de zonas 512x1024 (+ surco nasogeniano y pomulos)
 Texture2D<float4> pesSSSMap   : register(t22);   // PES21 (18/10) mapa de SSS de la cara: R finura, G curvatura, B sangre, A piel
 Texture2D<float4> pesFaceA    : register(t23);   // PES21 (18/10) quinta textura generada en vivo por cara: R cavidad, G curvatura, B grosor, A vello/pelo
 Texture2D<float4> pesFaceB    : register(t24);   //   R poros, G zona de brillo, B convexidad grande, A = 1 si existe
 struct PesSeed { float4 posV; float4 nrmV; float4 dirV; float4 col; };
 Texture2D<float4> pesSeedMap  : register(t26);
-Texture2D<float4> pesSkinMicro : register(t27);
+Texture2D<float4> pesBrowMap  : register(t44);   // (07/11) mapa de la ceja de esta cara (facegen, pes_browmap_ps): A = ceja pintada; para borrarla bajo las hebras
+Texture2D<float4> pesSkinMicro : register(t27);   // (04/11 poros v4) poros redondos (pes_skin_pores_round.dds)
+Texture2D<float4> pesSkinCrepe : register(t37);   // (04/11) arruguitas cruzadas (pes_skin_crepe.dds)
+Texture2D<float4> pesSkinLips  : register(t38);   // (04/11) estrias de los labios (pes_skin_lips.dds)
+Texture2D<float4> pesSkinLarge : register(t39);   // (04/11 poros v5) poros grandes de nariz y menton (pes_skin_pores_large.dds)
+Texture2D<float4> pesSkinFhead : register(t40);   // (04/11 poros v5) frente y sobre las cejas (pes_skin_forehead.dds)
+Texture2D<float4> pesSkinNeck  : register(t41);   // (04/11 poros v5) cuello (pes_skin_neck.dds)
+Texture2D<float4> pesFacePores2 : register(t42);  // (04/11 poros v5) guia 2: R frente, G sobre las cejas, B cuello (pes_face_pores2.dds)
+Texture2D<float4> pesTorsoTex  : register(t29);   // PES21 (27/10) torso_N_bsm de TorsoBody del tono del jugador (brazos.cpp; pes_collar.hlsli)
 Texture2D<float4> pesFacePores : register(t28);   // PES21 (19/10 b) guia de poros por zona (textures\pes_face_pores.dds): R densidad, G tamano, B zona T (brillo), A oclusion   // PES21 (19/10) micro normal de poros en mosaico (textures\pes_skin_micro_n.dds), A = poro   // PES21 (18/10) semillas de cejas por celda (salida C del generador)
 RWStructuredBuffer<PesSeed> pesSeeds : register(u5);   // PES21 (18/10) semillas animadas de este dibujo (las lee pes_brow_vs)
 RWByteAddressBuffer pesSeedArgs : register(u6);          // PES21 (18/10 b) {verts por instancia, instancias, 0, 0}: cuenta de semillas para DrawInstancedIndirect
@@ -97,6 +126,8 @@ Texture2D<float4> pesZones    : register(t25);   // PES21 (18/10) zonas de la ca
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 #include "pes_skintone.hlsli"
+#include "pes_pores.hlsli"   // (27/10 c) poros triplanares sobre la posicion de reposo
+#include "pes_collar.hlsli"   // (27/10) cuello de las caras reales fundido con el torso (fila 322)
 #ifdef PES_HL_ACC
 RWByteAddressBuffer gHlAcc : register(u7);   // (24/10 e) medicion del color de la cara (ring.cpp / skintone.cpp; u5 / u6 son las semillas de las cejas)
 #endif
@@ -167,7 +198,9 @@ void main(
   float4 v6 : TEXCOORD7,
   float4 v7 : TEXCOORD8,
   float2 w2 : TEXCOORD9,   // PES21 (19/10 c): AL FINAL. En ce188 el VS (455eb97bc2c3a958) saca TEXCOORD9 en su propio registro (v8),
-                           // despues de TEXCOORD8; declarado antes corria todos los registros uno y la cara salia rayada.
+                           // despues de TEXCOORD8; declarado antes corria todos los registros uno y la cara salia rayada. (27/10 j: float2 como el VS)
+  float4 pR : TEXCOORD10,   // (27/10 j) posicion de reposo (x, y, z) del VS de la cabeza, w = 11
+  float4 pD : TEXCOORD11,   // (01/11 j) gesto respecto de la cabeza rigida (marco de reposo), w = 12
   out float4 o0 : SV_Target0,
   out float4 o1 : SV_Target1,
   out float4 o2 : SV_Target2,
@@ -191,6 +224,9 @@ void main(
   float4 P32 = IniParams.Load(int2(32,0));
   float faceBD = P32.w > 0.5 ? P32.x : 0.0;
   float faceBN = P32.w > 0.5 ? P32.y : 0.0;
+  // (08/11, Agustin: "que lo maximo sean texturas en 2k") z32 = tope de resolucion de las texturas de la cara en px (0 = sin tope).
+  // Devuelve el mip minimo para que una textura de 4096 nunca se lea por encima de 2048 (las de 2048 o menos no cambian).
+  float faceCap = P32.z;
   float tmin = IniParams.Load(int2(10,0)).x;   // minutos reales de partido (los calcula d3dx.ini)
   float sweatProg = saturate((tmin - P9.x) / max(P9.y - P9.x, 0.1));
   bool  enhance      = P0.w > 0.5;
@@ -215,6 +251,9 @@ void main(
   bool  wrHi      = wrOn && P15.x > 0.5;
   float wrWeight  = 0;     // peso final de arrugas (para el sombreado de pliegues)
   float wrFold    = 0;     // 0..1: cuanto "surco" hay en este pixel
+  float wrRidgeF  = 0;     // (04/11 h) 0..1: cresta fina entre arrugas (piel estirada)
+  float shFold = 0, shRidge = 0;   // (04/11 h) surco / cresta de las arrugas esculpidas de la sonrisa
+  float wrFoldW = 0, shFoldW = 0, wrRidgeW = 0;  // (05/11) los mismos surcos medidos 4 veces mas ancho: zonas suaves para la luz de frente
   float4 P16 = IniParams.Load(int2(16,0));
   bool  exOn      = wrOn && P16.w > 0.5;
   float exBlood   = max(P16.x, 0.0);
@@ -237,6 +276,36 @@ void main(
   o3.xy = g_psSystem.m_renderBuffer.xy * r0.zw;
   float2 pesMotionRaw = r0.zw;   // PES21 cejas: movimiento sin escalar (para las hebras)
 
+  // ---- (01/11 j, hilo expresiones) ARRUGAS POR COMPRESION REAL DE LA PIEL (348.w) ----
+  // El VS manda el gesto D (posicion con huesos, amplificador y musculos virtuales menos la cabeza rigida) en el marco de reposo
+  // y la posicion de reposo R. Con las derivadas de pantalla se arma el jacobiano de D sobre la superficie de reposo (2 x 2 en la
+  // base tangente): su parte simetrica es la deformacion de la piel y su autovalor minimo, si es negativo, cuanto se comprime la
+  // piel en este pixel (12 % = arrugas enteras). Eso entra como peso de arrugas donde la mascara del juego las permite, ademas
+  // de los pesos por zona del motor: las arrugas aparecen donde la piel realmente se arruga. Derivadas fuera de toda rama (fxc).
+  float pesCmp = 0.0;
+  {
+    float3 dRx = ddx(pR.xyz), dRy = ddy(pR.xyz), dDx = ddx(pD.xyz), dDy = ddy(pD.xyz);
+    float pesCmpW = IniParams.Load(int2(348, 0)).w;
+    float lx = length(dRx);
+    float3 e1 = lx > 1e-9 ? dRx / lx : float3(1.0, 0.0, 0.0);
+    float3 e2 = dRy - e1 * dot(dRy, e1); float l2 = length(e2); e2 = l2 > 1e-9 ? e2 / l2 : float3(0.0, 1.0, 0.0);
+    float a11 = dot(dRx, e1), a12 = dot(dRx, e2), a21 = dot(dRy, e1), a22 = dot(dRy, e2);
+    float b11 = dot(dDx, e1), b12 = dot(dDx, e2), b21 = dot(dDy, e1), b22 = dot(dDy, e2);
+    float det = a11 * a22 - a12 * a21;
+    if (pesCmpW > 0.0 && pD.w > 9.0 && abs(det) > 1e-14) {
+      // J = A^-1 B
+      float j11 = ( a22 * b11 - a12 * b21) / det, j12 = ( a22 * b12 - a12 * b22) / det;
+      float j21 = (-a21 * b11 + a11 * b21) / det, j22 = (-a21 * b12 + a11 * b22) / det;
+      float exx = j11, eyy = j22, exy = 0.5 * (j12 + j21);
+      float m = 0.5 * (exx + eyy), rr = sqrt(max(0.25 * (exx - eyy) * (exx - eyy) + exy * exy, 0.0));
+      float lmin = m - rr;
+      // (01/11 l, capturas: rayas finas en la mandibula con la boca abierta) 20 % = entero y como mucho 0.6 de peso
+      pesCmp = saturate(-lmin / 0.20 * pesCmpW) * 0.6;
+      // (01/11 k, Agustin: "las arrugas debajo del ojo estan muy fuertes") bajo el ojo (y 167.0..169.6, |x| 1.2..4.8 cm) a un cuarto
+      float ueY = smoothstep(1.664, 1.672, pR.y) * (1.0 - smoothstep(1.694, 1.700, pR.y)), ueX = smoothstep(0.009, 0.014, abs(pR.x)) * (1.0 - smoothstep(0.046, 0.052, abs(pR.x)));
+      pesCmp *= 1.0 - 0.75 * ueY * ueX;
+    }
+  }
   // ---- arrugas animadas ----
   r0.z = cmp(v2.x < 0.5);
   if (r0.z != 0) {
@@ -258,10 +327,24 @@ void main(
     float smile = sqrt(saturate(max(g_psMaterial.m_materials[0].y, g_psMaterial.m_materials[4].x)) * saturate(wTop.w));
     wTop *= float4(wrZone.x, wrZone.x, wrZone.y, wrZone.z * (1.0 + wrSmile * smile));
     wBot.x *= wrZone.w;
+    // (01/11, hilo expresiones; Agustin: "la malla se deforma con mas realismo y la luz se proyecta en las arrugas") las arrugas
+    // siguen al gesto agrandado por el VS (pes_expr.hlsli: ganancia y340 por zona x341..w341) y a la boca abierta del slider (x347)
+    float4 pesXE = IniParams.Load(int2(340, 0)), pesXZ = IniParams.Load(int2(341, 0));
+    if (pesXE.x > 0.5) {
+      float pesXg = max(pesXE.y, 0.0);
+      wTop *= float4(pesXg * pesXZ.x, pesXg * pesXZ.x, pesXg * pesXZ.x, 1.0 + (pesXg - 1.0) * (pesXZ.y + pesXZ.z) * 0.5);
+      wBot.x *= 1.0 + (pesXg - 1.0) * pesXZ.w;
+    }
+    float pesXO = saturate(IniParams.Load(int2(347, 0)).x);
+    wBot += pesXO * float4(0.35, 0.60, 0.60, 0.30);   // boca abierta: comisuras, mandibula der/izq y cuello
   }
   r0.z = dot(wTop, r2.xyzw);
   r0.w = dot(wBot, r3.xyzw);
   r0.z = saturate(r0.z + r0.w);
+  if (pesCmp > 0.0) {   // (01/11 j) compresion real: donde la mascara del juego tiene arrugas (cualquiera de las 8 zonas)
+    float pesMaskAny = saturate(dot(r2.xyzw, float4(1,1,1,1)) + dot(r3.xyzw, float4(1,1,1,1)));
+    r0.z = max(r0.z, pesCmp * pesMaskAny);
+  }
   if (wrOn) {
     // zona muerta: los pesos chicos de la cara en reposo no dibujan arrugas (y15)
     float wrDead = saturate(P15.y);
@@ -272,6 +355,7 @@ void main(
   wrWeight = r0.z;
 
   // ---- normal de detalle + normal de animacion ----
+  { uint cW, cH, cL; g_tex_normal.GetDimensions(0, cW, cH, cL); float capN = faceCap > 1.0 ? max(0.0, log2((float)max(cW, cH) / faceCap)) : 0.0; faceBN = max(faceBN, capN - g_tex_normal.CalculateLevelOfDetail(g_samplerAnisotropic_Clamp_s, v2.xy)); }
   r1.xyz = g_tex_normal.SampleBias(g_samplerAnisotropic_Clamp_s, v2.xy, faceBN).xyw;
   r1.x = r1.x * r1.z;
   r1.xy = r1.xy * float2(2,2) + float2(-1,-1);
@@ -306,65 +390,120 @@ void main(
     float divY = (wc.y - wd.y) * 2.0;
     float wdiv = divX + wrYSign * divY;
     wrFold = saturate(-wdiv * 4.0) * wrWeight;
-    if (exOn) {
-      // misma deteccion con un radio 4 veces mayor -> zonas suaves, no lineas
+    wrRidgeF = saturate(wdiv * 4.0) * wrWeight;
+    {
+      // misma deteccion con un radio 4 veces mayor -> zonas suaves, no lineas (05/11: siempre, la usa tambien el surco con luz de frente)
       float2 wdu2 = wdu * 4.0, wdv2 = wdv * 4.0;
       float4 za = wrHi ? pesWrinkleN.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy + wdu2, wrLod + 1) : g_tex_normal_animation.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy + wdu2, wrLod + 1);
       float4 zb = wrHi ? pesWrinkleN.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy - wdu2, wrLod + 1) : g_tex_normal_animation.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy - wdu2, wrLod + 1);
       float4 zc = wrHi ? pesWrinkleN.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy + wdv2, wrLod + 1) : g_tex_normal_animation.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy + wdv2, wrLod + 1);
       float4 zd = wrHi ? pesWrinkleN.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy - wdv2, wrLod + 1) : g_tex_normal_animation.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy - wdv2, wrLod + 1);
       float zdiv = (za.x * za.w - zb.x * zb.w) * 0.5 + wrYSign * (zc.y - zd.y) * 0.5;
-      exFoldZ  = saturate(-zdiv * 2.0) * wrWeight;
-      exRidgeZ = saturate( zdiv * 2.0) * wrWeight;
+      wrFoldW  = saturate(-zdiv * 2.0) * wrWeight;
+      exFoldZ  = exOn ? wrFoldW : 0.0;
+      wrRidgeW = saturate( zdiv * 2.0) * wrWeight;
+      exRidgeZ = exOn ? wrRidgeW : 0.0;
     }
   }
   r2.xyz = float3(-1,-1,-1) + r3.xyz;
-  r1.xyz = r2.xyz * r0.zzz + r1.xyz;
+  float2 pesWrN = r2.xy;   // (07/11) direccion de la arruga en el espacio tangente (la normal se inclina a traves del surco): la usan los poros
+  // (04/11 i, Agustin: "el nrm de arrugas no es muy notorio junto a sus texturas") z365 = relieve de las arrugas (normal del gesto
+  // y esculpida) por encima del detalle de la textura de la cara; 1 = como antes
+  float wrRelief = enhance ? clamp(IniParams.Load(int2(365, 0)).z, 0.0, 3.0) : 1.0;
+  if (wrRelief <= 0.0) wrRelief = 1.0;
+  r1.xyz = r2.xyz * (r0.zzz * wrRelief) + r1.xyz;
   r0.z = dot(r1.xyz, r1.xyz);
   r0.z = rsqrt(r0.z);
   r1.xyz = r1.xyz * r0.zzz;
+  // (04/11, Agustin esculpio las arrugas de la sonrisa de Messi en Blender) normal esculpida del gesto, por el slider Sonrisa (355.y)
+  // con "Perfiles por cara" (356.w). Solo la enlaza la DLL en las mallas con formas (sin textura: tamano 0 -> nada)
+  { float4 G5w = IniParams.Load(int2(355, 0)), G6w = IniParams.Load(int2(356, 0));
+    float shW = G6w.w > 0.5 ? saturate(G5w.y) : 0.0;
+    uint shTw = 0, shTh = 0; pesShapeWr.GetDimensions(shTw, shTh);
+    if (shW > 0.001 && shTw > 1) {
+      // (04/11 c) RG = arrugas de la sonrisa, BA = las de la sonrisa grande (messi6 de Agustin): de 1 a 1.5 pasa a las grandes
+      float4 shT = pesShapeWr.Sample(g_samplerAnisotropic_Clamp_s, v2.xy);
+      float2 shN = lerp(shT.xy, shT.zw, saturate((G5w.y - 1.0) * 2.0)) * 2.0 - 1.0;
+      r1.xy += shN * shW * wrRelief; r1.xyz = normalize(r1.xyz);
+      // (04/11 h, Agustin: "mas detalle de srm y trm en las expresiones asi como en el nrm") divergencia de la normal esculpida:
+      // donde las normales miran hacia adentro hay surco, hacia afuera cresta. Lo usan brillo / rugosidad / translucidez mas abajo
+      float sdx = 1.5 / shTw, sdy = 1.5 / shTh, sbl = saturate((G5w.y - 1.0) * 2.0);
+      float4 sa = pesShapeWr.Sample(g_samplerAnisotropic_Clamp_s, v2.xy + float2(sdx, 0)), sb = pesShapeWr.Sample(g_samplerAnisotropic_Clamp_s, v2.xy - float2(sdx, 0));
+      float4 sc = pesShapeWr.Sample(g_samplerAnisotropic_Clamp_s, v2.xy + float2(0, sdy)), sd = pesShapeWr.Sample(g_samplerAnisotropic_Clamp_s, v2.xy - float2(0, sdy));
+      float sdiv = (lerp(sa.x, sa.z, sbl) - lerp(sb.x, sb.z, sbl)) * 2.0 + wrYSign * (lerp(sc.y, sc.w, sbl) - lerp(sd.y, sd.w, sbl)) * 2.0;
+      shFold  = saturate(-sdiv * 3.0) * shW;
+      { float wx = sdx * 4.0, wy = sdy * 4.0;   // (05/11) ancho, como wrFoldW
+        float4 ta = pesShapeWr.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy + float2(wx, 0), 2), tb = pesShapeWr.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy - float2(wx, 0), 2);
+        float4 tc = pesShapeWr.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy + float2(0, wy), 2), td = pesShapeWr.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy - float2(0, wy), 2);
+        float tdiv = (lerp(ta.x, ta.z, sbl) - lerp(tb.x, tb.z, sbl)) * 0.5 + wrYSign * (lerp(tc.y, tc.w, sbl) - lerp(td.y, td.w, sbl)) * 0.5;
+        shFoldW = saturate(-tdiv * 2.0) * shW; }
+      shRidge = saturate( sdiv * 3.0) * shW;
+    } }
   // === PES21 (19/10) micro normal de poros: mosaico fino sobre la normal del juego, solo de cerca.
   // x94 intensidad, y94 escala (repeticiones sobre la cara), w94 on/off
-  float pesPoreA = 0.0, pesMicroVar = 0.0, pesPoreOcc = 1.0, pesTZone = 0.0;
+  float pesPoreA = 0.0, pesPoreC = 0.0, pesMicroVar = 0.0, pesTZone = 0.0, pesLipW = 0.0; float3 pesPoreOcc = 1.0;
   float4 P94 = IniParams.Load(int2(94,0));   // (declarado aca: lo usa tambien el bloque del especular mas abajo)
   float3 pesMicroDbg = float3(-1, 0, 0);     // dbg: intensidad = 2.00 pinta el mosaico;  pesMicroVar: varianza de la micro normal (Toksvig) -> rugosidad extra
+  // (27/10 c) poros triplanares sobre la posicion de reposo de la malla (pes_pores.hlsli): el VS de la cabeza deja la posicion
+  // de reposo en TEXCOORD10.xyz, w = 11 (27/10 j: semantica nueva al final; las salidas originales del VS quedan intactas). Derivadas fuera de la rama (fxc).
+  bool pesHasR = pR.w > 9.0;
+  float3 pesPM = pR.xyz;
+  float3 pesDPx = ddx(pesPM), pesDPy = ddy(pesPM);
+  float2 pesDUx = ddx(v2.xy), pesDUy = ddy(v2.xy);
   { if (enhance && P94.w > 0.5) {
-      float sc = max(P94.y, 1.0);
-      float2 muv = v2.xy * sc;
-      float2 mdx = ddx(muv), mdy = ddy(muv);
-      // 19/10 b: el fundido va por la densidad de la TEXTURA DE CARA en pantalla (texeles de 2048 por pixel): en primer plano
-      // ~1-2, a media distancia 6+. (Antes se media en texeles del mosaico y se apagaba siempre: no se veia ningun cambio.)
-      float fpx = max(fwidth(v2.x), fwidth(v2.y)) * 2048.0;
-      float near = saturate((5.0 - fpx) / 3.5);
+      // (04/11 poros v5) seis micro relieves por zona a TAMANO REAL fijo (pes_pores.hlsli PesTriPores5): mejillas, nariz / menton,
+      // frente / sobre las cejas, parpados (arruguitas), labios y cuello; y94 ya no cambia el tamano. Mezcla con la normal de la cara
+      // por RNM (como UE5 / HDRP) y con el signo del marco tangente del juego verificado en cada pixel
+      float4 guide = pesFacePores.Sample(g_samplerLinear_Clamp_s, v2.xy);    // R densidad, G tamano (grandes), B zona T, A arruguitas
+      float4 guide2 = pesFacePores2.Sample(g_samplerLinear_Clamp_s, v2.xy);  // R frente, G sobre las cejas, B cuello, A = 1 - labios (v6: los dos labios)
+      float4 pesFZp = pesZones.Sample(g_samplerLinear_Clamp_s, v2.xy);       // G labios, A piel
+      // (07/11, Agustin: "las arrugas ... manejan un sistema de poros distintas") POROS QUE ACOMPANAN LA ARRUGA (por y365): en el surco
+      // la piel se junta y los poros se aprietan a traves de la arruga (se alargan a lo largo de ella) y se hunden mas; en la cresta
+      // la piel se estira: los poros se abren a traves, mas chatos y lisos. La posicion de reposo que muestrea el mosaico se comprime
+      // o estira a lo largo de la direccion de la arruga (dp/du, dp/dv del reposo). Nada en los labios (FZ.g)
+      float3 pesPMw = pesPM, pesDPxw = pesDPx, pesDPyw = pesDPy; float pesWrF = 0.0, pesWrR = 0.0;
+      { float pwK = enhance ? saturate(clamp(IniParams.Load(int2(365, 0)).y, 0.0, 2.0)) : 0.0;
+        float lipK = 1.0 - saturate(2.0 * pesFZp.g);
+        pesWrF = saturate((wrOn ? max(wrFold, wrFoldW) : 0.0) + max(shFold, shFoldW)) * pwK * lipK;
+        pesWrR = saturate((wrOn ? max(wrRidgeF, wrRidgeW) : 0.0) + shRidge) * pwK * lipK;
+        float wnl = length(pesWrN);
+        if (pesWrF + pesWrR > 0.01 && wnl > 0.02) {
+          float det = pesDUx.x * pesDUy.y - pesDUx.y * pesDUy.x; det = abs(det) < 1e-12 ? 1e-12 : det;
+          float3 dpdu = (pesDPx * pesDUy.y - pesDPy * pesDUx.y) / det, dpdv = (pesDPy * pesDUx.x - pesDPx * pesDUy.x) / det;
+          float3 across = dpdu * pesWrN.x + dpdv * (pesWrN.y * wrYSign); float al = length(across);
+          if (al > 1e-9) { across /= al;
+            float k = 0.55 * pesWrF - 0.35 * pesWrR;   // + aprieta (el mosaico se ve mas chico a traves), - estira
+            pesPMw  += across * dot(pesPM,  across) * k;
+            pesDPxw += across * dot(pesDPx, across) * k;
+            pesDPyw += across * dot(pesDPy, across) * k; }
+        } }
+      PesPores pp = PesTriPores5(pesSkinMicro, pesSkinLarge, pesSkinFhead, pesSkinCrepe, pesSkinLips, pesSkinNeck, g_samplerAnisotropic_Clamp_s,
+                                 pesPMw, pesDPxw, pesDPyw, pesDUx, pesDUy, float4(guide.g, guide.a, 1.0 - guide2.a, guide2.b), guide2.rg, pesHasR);
+      float near = pp.near;
+      pesLipW = 1.0 - guide2.a;   // (v6) los dos labios
       if (near > 0.001) {
-        float4 guide = pesFacePores.Sample(g_samplerLinear_Clamp_s, v2.xy);   // por zona: densidad, tamano, zona T, oclusion
         pesTZone = guide.b;
-        float4 mn = pesSkinMicro.SampleGrad(g_samplerAnisotropic_Clamp_s, frac(muv), mdx, mdy);   // frac + grad: sin costura de mip
-        // poros grandes (nariz, barbilla): el mismo mosaico a la mitad de escala, mezclado segun el tamano de la zona
-        float2 muv2 = muv * 0.5 + 0.37; float2 mdx2 = mdx * 0.5, mdy2 = mdy * 0.5;
-        float4 mn2 = pesSkinMicro.SampleGrad(g_samplerAnisotropic_Clamp_s, frac(muv2), mdx2, mdy2);
-        float big = guide.g;
-        mn = lerp(mn, mn2, big * 0.7);
-        float3 tn = mn.xyz * 2.0 - 1.0;
         // solo piel: se atenua donde la quinta textura marca pelo/barba (A) y donde el mapa de zonas no es piel (A)
         float skinM = 1.0;
         { float4 P68e = IniParams.Load(int2(68,0));
           float4 FBe = pesFaceB.Sample(g_samplerLinear_Clamp_s, v2.xy);
           if (P68e.x > 0.5 && FBe.a > 0.5) { float4 FAe = pesFaceA.Sample(g_samplerLinear_Clamp_s, v2.xy); skinM *= 1.0 - saturate(FAe.a * 1.5); }
-          skinM *= lerp(0.5, 1.0, pesZones.Sample(g_samplerLinear_Clamp_s, v2.xy).a); }
-        float str = clamp(P94.x, 0.0, 2.0) * near * 1.1 * skinM * (0.25 + 1.0 * guide.r);   // 19/10 d: densidad por zona (guia)
-        r1.xy += tn.xy * str;
-        r1.xyz = normalize(r1.xyz);
-        pesPoreA = mn.a * near * (0.3 + guide.r);
-        // oclusion de poro: el fondo del poro recibe menos luz (ambiente y directa). Mas donde la guia marca oclusion.
-        pesPoreOcc = 1.0 - pesPoreA * guide.a * 0.55 * saturate(P94.x);
-        if (P94.x >= 1.995) pesMicroDbg = float3(mn.xy, near);   // diagnostico: con Intensidad al tope se ve el mosaico en crudo (rojo/verde) y el fundido en azul
-        // Toksvig (GPU Gems 3 / dqlin): la micro normal promediada en un area mas grande pierde largo; ese acortamiento
-        // es la varianza de la micro-geometria y se convierte en rugosidad para el brillo (y de lejos, donde el mosaico ya no se ve,
-        // la rugosidad se mantiene y el brillo no destella)
-        { float4 ma = pesSkinMicro.SampleGrad(g_samplerAnisotropic_Clamp_s, frac(muv), mdx * 6.0, mdy * 6.0);
-          float ln = length(ma.xyz * 2.0 - 1.0);
-          pesMicroVar = saturate((1.0 - ln) * 8.0) * saturate(P94.x * 0.7) * skinM; } 
+          skinM *= lerp(0.5, 1.0, pesFZp.a); }
+        float wPore = saturate(guide2.a - guide.a - guide2.b);         // parte de poros (el resto: arruguitas / labios / cuello)
+        float dens = lerp(0.8, 0.25 + 1.0 * guide.r, wPore);                 // arruguitas, labios y cuello con fuerza propia
+        float str = clamp(P94.x, 0.0, 2.0) * near * 1.1 * skinM * dens;
+        str *= 1.0 + 0.45 * pesWrF - 0.5 * pesWrR;   // (07/11) poros mas marcados en el surco, mas chatos en la cresta estirada
+        float2 pesTS = PesTanSigns(v4.xyz, v5.xyz, v3.xyz, pesDUx, pesDUy);
+        r1.xyz = PesRNM(normalize(r1.xyz), normalize(float3(pp.dT * pesTS * str, 1.0)));   // en el espacio tangente del normal map
+        pesPoreA = pp.a * near * lerp(0.5, 0.3 + guide.r, wPore);
+        pesPoreA *= 1.0 + 0.3 * pesWrF - 0.4 * pesWrR;   // (07/11) idem para el hueco y el brillo cortado
+        pesPoreC = pesPoreA * pp.close;   // hueco del poro solo en primer plano real (ver pes_pores.hlsli)
+        // (04/11) el fondo del poro / surco apenas mas oscuro y CALIDO (sangre y sombra bajo la piel), no gris; lo que mas se nota
+        // es el brillo cortado (mas abajo)
+        float aoW = lerp(0.5, saturate(guide.r * (0.6 + 0.4 * guide.g)), wPore);
+        pesPoreOcc = 1.0 - pesPoreC * aoW * saturate(P94.x) * 0.10;   // (04/11 v6) gris y suave: el poro se ve por la luz y el brillo, no pintado de color
+        if (P94.x >= 1.995) pesMicroDbg = float3(pp.dbg, near);   // diagnostico: con Intensidad al tope: rojo = poros, verde = arruguitas, azul = fundido
+        pesMicroVar = pp.var * saturate(P94.x * 0.7) * skinM * (1.0 + 0.35 * pesWrF - 0.45 * pesWrR);   // (07/11) la cresta estirada queda mas lisa (menos rugosidad extra)
       } } }
   // 16/10: oclusion de cavidades a partir del normal map (pliegues de la oreja, arco de la ceja, aletas de la nariz):
   // donde la normal se inclina mucho la superficie esta dentro de un hueco y le llega menos luz. x35 fuerza, w35 on/off
@@ -372,7 +511,7 @@ void main(
   float pesCav = 1.0;
   if (P35.w > 0.5) {
     float tilt = saturate(1.0 - r1.z);                       // 0 = plano, crece en los pliegues
-    pesCav = 1.0 - saturate(P35.x) * smoothstep(0.02, 0.35, tilt) * 0.55;
+    pesCav = 1.0 - saturate(P35.x) * smoothstep(0.02, 0.35, tilt) * 0.68;   // (04/11) 0.55 -> 0.68: forma mas definida en la sombra
   }
 
   // ---- gotas de sudor: relieve en la normal (espacio tangente) ----
@@ -411,6 +550,13 @@ void main(
   // no toda la cara suda a la vez: la frente, las sienes y la nariz arrancan antes; mandibula y mejillas despues
   float sweatProgZ = zonesOn ? saturate(sweatProg * lerp(1.0, 0.35 + 1.1 * saturate(FZ.r * 1.25), saturate(P73.z))) : sweatProg;
   float filmWet = zonesOn ? saturate(sweatProgZ * zoneSw) * saturate(P72.x) : 0.0;
+  // (25/10) lluvia en la piel (z12): con lluvia en el partido (114.x = 1, lo publica la DLL) la cara se moja entera, no por
+  // zonas: pelicula de agua (menos rugosidad, mas brillo, albedo apenas mas oscuro) y gotas aunque todavia no haya sudor
+  float4 P12 = IniParams.Load(int2(12,0));
+  float pesRainV = IniParams.Load(int2(114,0)).x;
+  float rainK = (enhance && pesRainV > 0.5 && pesRainV < 1.5) ? saturate(P12.z) : 0.0;
+  filmWet = max(filmWet, rainK * 0.85);
+  sweatProgZ = max(sweatProgZ, rainK * 0.6);
   if (enhance && P9.z > 0) {
     // vello facial pintado (barba, cejas, bigote): mascara por color oscuro y poco saturado
     float3 albE = g_tex_diffuse.Sample(g_samplerAnisotropic_Clamp_s, uvD).xyz;
@@ -430,7 +576,10 @@ void main(
       r1.xyz = normalize(r1.xyz);
     }
   }
-  if (fgOk) fhMask = max(fhMask, FA.a * saturate(P68.w));   // PES21 quinta textura: vello y nacimiento del pelo exactos
+  // (31/10) vello / nacimiento del pelo de la quinta textura con el borde FUNDIDO: el canal A es un umbral por texel y su borde
+  // dentado se veia como una escalera palida en la patilla y la sien de las genericas (donde fhMask = 1 la piel queda mate, sin
+  // brillo ni translucidez). Mip 3 (8x8 texeles, ~8 mm) = transicion suave; el resto de la quinta textura sigue fino.
+  if (fgOk) fhMask = max(fhMask, saturate(pesFaceA.SampleBias(g_samplerLinear_Clamp_s, v2.xy, 3.0).a * 1.15) * saturate(P68.w));
   fhMask *= 1.0 - lipM;   // PES21 zonas: los labios no son barba
   float poreAmt = 0;
   if (enhance) {
@@ -442,7 +591,7 @@ void main(
     r1.xyz = normalize(r1.xyz);
   }
   float pesSwFp = max(length(ddx(v2.xy)), length(ddy(v2.xy)));   // PES21 (20/10): tamano del pixel en uv (fuera de la rama)
-  if (enhance && P8.w > 0.5 && sweatProg > 0.001) {
+  if (enhance && P8.w > 0.5 && (sweatProg > 0.001 || rainK > 0.001)) {
     float t = g_psSystem.m_timeParam.z * max(P8.z, 0.01);
     float4 sA = SweatLayer(v2.xy, 70.0, P8.x * sweatProgZ, max(P8.y, 0.1), t, true, pesSwFp * 70.0);          // PES21 zonas: gotas donde se suda
     float4 sB = SweatLayer(v2.xy + 0.37, 150.0, P8.x * 1.3 * sweatProgZ, max(P8.y, 0.1) * 0.8, t, false, pesSwFp * 150.0);
@@ -485,11 +634,47 @@ void main(
   r1.xyz = r1.xwz * r0.zzz;
 
   // ---- especular / brillo / albedo / suciedad ----
-  r0.zw = g_tex_srm.SampleBias(g_sampler_srm_s, v2.xy, faceBD).xy;
+  float faceBS = faceBD, capD = 0.0;
+  { uint cW, cH, cL; g_tex_srm.GetDimensions(0, cW, cH, cL); float capS = faceCap > 1.0 ? max(0.0, log2((float)max(cW, cH) / faceCap)) : 0.0; faceBS = max(faceBD, capS - g_tex_srm.CalculateLevelOfDetail(g_sampler_srm_s, v2.xy)); g_tex_diffuse.GetDimensions(0, cW, cH, cL); capD = faceCap > 1.0 ? max(0.0, log2((float)max(cW, cH) / faceCap)) : 0.0; }
+  r0.zw = g_tex_srm.SampleBias(g_sampler_srm_s, v2.xy, faceBS).xy;
   float pesSpec0 = r0.z, pesSrmY = r0.w;   // (20/10) valores del juego, para el borde de las genericas
   r1.w = g_tex_diffuse.CalculateLevelOfDetail(g_samplerAnisotropic_Clamp_s, uvD);
-  r1.w = clamp(r1.w + faceBD, 0, 5);
+  r1.w = clamp(r1.w + faceBD, capD, max(5.0, capD));
   r2.xyz = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, uvD, r1.w).xyz;
+  // (07/11, Agustin: "borrar la textura plana de las cejas y reemplazarlas por las cejas en hebras") de cerca, donde las hebras se
+  // dibujan, la ceja PINTADA se borra del albedo y se rellena con la piel de alrededor (la mas clara de 8 puntos a ~1.2 cm, mip 3,
+  // como el mapa de la ceja de pes_browmap_ps) mezclada con el promedio local; de lejos (sin hebras) la pintura vuelve sola, con el
+  // mismo corte de distancia que el GS (y75). x382 = cuanto se borra (0 = como siempre), y382 = corrimiento del corte en mips
+  { float4 PE = IniParams.Load(int2(382, 0));
+    if (fgOk && PE.x > 0.001 && IniParams.Load(int2(74, 0)).x > 0.5) {
+      float4 bm = pesBrowMap.SampleLevel(g_samplerLinear_Clamp_s, uvD, 0);
+      if (bm.a > 0.02) {
+        float twB, thB; g_tex_diffuse.GetDimensions(twB, thB);
+        float texelM = 0.3 / max(twB, 1.0);                                    // ~30 cm de cabeza por vuelta de textura
+        float pxM = max(IniParams.Load(int2(75, 0)).y, 0.5) / 934.0;          // pixel en el borde de la distancia de las hebras (pes_brow_gs)
+        float lodCut = log2(max(pxM / texelM, 1.0)) - 0.5 + PE.y;
+        float nearB = saturate(lodCut - r1.w + 0.5);                          // 1 = de cerca (hay hebras), 0 = lejos
+        float kB = saturate(bm.a * 1.4) * saturate(PE.x) * nearB;
+        if (kB > 0.001) {
+          float3 skB = 0; float slB = -1;
+          [unroll] for (int qB = 0; qB < 8; qB++) { float aB2 = qB * 0.785398;
+            float3 cB = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, uvD + float2(cos(aB2) * 0.034, sin(aB2) * 0.026), 3.0).xyz;
+            float lB = dot(cB, float3(0.2126, 0.7152, 0.0722)); if (lB > slB) { slB = lB; skB = cB; } }
+          float3 skinB = lerp(g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, uvD, 4.0).xyz, skB, 0.75);
+          r2.xyz = lerp(r2.xyz, skinB, kB);
+        }
+      }
+    } }
+  // (27/10) marcas de la piel (y124): lunares, pecas, manchas y venitas que ya estan pintadas en la textura de la cara se
+  // pierden (la textura es chica y se ve lavada). Se realza el detalle fino del albedo: la luminancia de este punto contra el
+  // promedio de su zona (2.5 niveles de mip mas arriba), solo en la piel (no en barba ni pelo pintados) y solo de cerca.
+  // No inventa marcas: solo marca mas las que la cara ya tiene. 0 = como el juego
+  { float mk = saturate(IniParams.Load(int2(124,0)).y) * (1.0 - fhMask) * saturate(3.5 - r1.w);
+    if (enhance && mk > 0.001) {
+      float3 aB = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, uvD, r1.w + 2.5).xyz;
+      float rat = (dot(r2.xyz, float3(0.2126, 0.7152, 0.0722)) + 0.01) / (dot(aB, float3(0.2126, 0.7152, 0.0722)) + 0.01);
+      r2.xyz *= pow(clamp(rat, 0.25, 4.0), 0.9 * mk);
+    } }
   r3.xyz = g_tex_Dirty.Sample(g_sampler_Dirty_s, v2.xy).xyz;
   r1.w = saturate(dot(g_psMaterial.m_materials[1].yzw, r3.xyz));
   r3.xy = r0.ww * float2(255,255) + float2(-205,-170);
@@ -552,12 +737,29 @@ void main(
       r2.xyz = lerp(r2.xyz, r2.xyz * lipTint, lipM * saturate(P72.z)); }
     if (fgOk) {   // PES21 quinta textura: cavidades (pliegues, alas de nariz, comisuras) mas oscuras y rojizas, y mas mates
       float cavK = FA.r * saturate(P68.y);
-      r2.xyz *= lerp(float3(1,1,1), float3(0.88, 0.83, 0.81), cavK);   // 21/10: casi neutro (con el rojo-marron fuerte la cara quedaba naranja y manchada; el AO ya oscurece el hueco)
+      r2.xyz *= lerp(float3(1,1,1), float3(0.80, 0.76, 0.75), cavK);   // (04/11) mas definicion en los pliegues (antes 0.88 0.83 0.81)   // 21/10: casi neutro (con el rojo-marron fuerte la cara quedaba naranja y manchada; el AO ya oscurece el hueco)
       r0.w = lerp(r0.w, max(r0.w, 0.7), cavK * 0.4);
+      // (04/11 piel) con la teselacion hundiendo los surcos de la quinta textura (fila 359: x fuerza, y mm), el brillo se apaga
+      // en el fondo del surco en proporcion a lo que se hundio (oclusion especular del relieve; hasta -45 % con 0.8 mm o mas)
+      { float4 R359 = IniParams.Load(int2(359,0));
+        if (IniParams.Load(int2(357,0)).x > 0.5 && R359.x > 0.001 && R359.y > 0.001)
+          r0.z *= 1.0 - 0.45 * saturate(FA.r * saturate(R359.x) * R359.y / 0.8); }
     }
     r2.xyz = saturate(r2.xyz);
     // rubor progresivo por el esfuerzo (sube con el reloj del partido)
-    float flushF = sweatProg * IniParams.Load(int2(12,0)).x;
+    float flushF = sweatProg * P12.x;
+    // (25/10) sangre por zona (y12): la sangre sube donde la piel esta mas irrigada (mejillas, nariz, orejas: canal de sangre
+    // del mapa de SSS y lo fino), no pareja en toda la cara; y con mas melanina se ve mucho menos (piel oscura: casi nada).
+    // 0 = rubor parejo como antes
+    float flushZ = 1.0;
+    if (P12.y > 0.001) {
+      float bl = sssMap.w > 0.01 ? sssMap.z * sssMap.w : 0.5;               // sin mapa de SSS: zona media
+      float zoneB = saturate(0.30 + 1.10 * bl + 0.45 * saturate(thin));
+      float lA = dot(r2.xyz, float3(0.2126, 0.7152, 0.0722));
+      float melA = saturate(log2(0.47 / max(lA, 1e-3)) / 2.85);             // indice de melanina (PESMelanin)
+      flushZ = lerp(1.0, 1.6 * zoneB * (1.0 - 0.7 * melA), saturate(P12.y));
+    }
+    flushF *= flushZ;
     r2.xyz *= float3(1.0 + flushF, 1.0 - flushF * 0.35, 1.0 - flushF * 0.45);
   }
   // cavidades (x35): menos luz difusa y menos brillo dentro de los huecos; la translucidez se mantiene (las orejas siguen rojas a contraluz)
@@ -580,6 +782,36 @@ void main(
     r0.z *= (1.0 + 0.25 * exRidgeZ * exGloss);                                // especular
     r1.w *= (1.0 - 0.35 * exFoldZ * exTrans) * (1.0 + 0.2 * exRidgeZ * exTrans); // translucidez
   }
+  // (04/11 h, Agustin: "mas detalle de srm y trm en las expresiones asi como en el nrm") cada arruga fina y esculpida tambien
+  // cambia brillo (SRM) y translucidez (TRM), no solo la normal: en el fondo del surco la piel brilla menos (oclusion del
+  // especular), es mas aspera y deja pasar menos luz (piel apretada); en la cresta estirada la piel es mas lisa, brilla un poco
+  // mas y el SSS se ve un poco mas. y365 = cuanto (0 = como antes). Nada en los labios ni en la boca (regla de Agustin).
+  { float srmK = enhance ? clamp(IniParams.Load(int2(365, 0)).y, 0.0, 2.0) : 0.0;
+    srmK *= 1.0 - saturate(2.0 * FZ.g);
+    float fF = saturate((wrOn ? wrFold * max(wrCrease, 0.5) : 0.0) + shFold) * srmK;
+    float fR = saturate((wrOn ? wrRidgeF : 0.0) + shRidge) * srmK;
+    if (fF + fR > 0.001) {
+      r0.z *= (1.0 - 0.45 * saturate(fF)) * (1.0 + 0.15 * fR);
+      r0.w  = saturate(r0.w + 0.18 * fF - 0.10 * fR);
+      r1.w *= (1.0 - 0.30 * saturate(fF)) * (1.0 + 0.12 * fR);
+    }
+    // (05/11, Agustin: "no se ve realista, antes a contraluz se veia mas real, ahora con la luz de frente se ve feo") la oclusion
+    // propia del surco (04/11 m) se saco: con la luz de frente marcaba las arrugas como lineas negras.
+    // (05/11, Agustin: "me gustaria que con la luz a favor tambien se vean bien las arrugas") con la luz de frente un surco real no
+    // se ve negro: se ve un poco mas rojo y apagado (la sangre se junta en el pliegue y le llega menos luz rebotada) en una zona
+    // ancha y suave. Se usa el surco medido ancho (no la linea fina, que era ruidosa), por y365
+    float fW = smoothstep(0.03, 0.45, saturate((wrOn ? wrFoldW : 0.0) + shFoldW)) * srmK;
+    if (fW > 0.001) {
+      // (06/11, Agustin: "se ven un poco mejor pero no tanto como deberian") mas fuerte: 0.95/0.87/0.86 -> 0.91/0.79/0.77, brillo -32 %
+      r2.xyz *= lerp(float3(1.0, 1.0, 1.0), float3(0.91, 0.79, 0.77), fW);
+      r0.z   *= 1.0 - 0.32 * fW;
+    }
+    // (06/11, Agustin: "podes jugar con el sss tambien?") LUZ DENTRO DE LA PIEL por la forma de la arruga, en zonas anchas: en el
+    // pliegue la piel esta apretada (mas gruesa, entra menos luz: translucidez -45 %) y en la cresta estirada es mas fina y deja pasar
+    // mas (+35 %), asi a contraluz las crestas brillan rojizas y los surcos quedan oscuros. Por y365, nada en labios
+    float fRW = smoothstep(0.03, 0.45, wrOn ? wrRidgeW : 0.0) * srmK;
+    if (fW + fRW > 0.001) r1.w = saturate(r1.w * (1.0 - 0.45 * saturate(fW)) * (1.0 + 0.35 * saturate(fRW)));
+  }
   // 2) Especular: la piel real refleja ~2.8% (F0 0.028). El valor del juego
   //    suele quedar alto -> efecto plastico. Se escala de forma controlada.
   r0.z = saturate(r0.z * specScale);
@@ -600,7 +832,17 @@ void main(
   r0.w = saturate(r0.w + pesMicroVar * 0.30 + pesPoreA * 0.20);
   // zona T mas brillante (grasa natural), mejillas mas mate; y el albedo se oscurece en el fondo de los poros
   r0.w = saturate(r0.w * lerp(1.06, 0.86, pesTZone * saturate(P94.x)));
-  r0.z *= (1.0 - 0.45 * pesPoreA) * lerp(0.95, 1.12, pesTZone * saturate(P94.x));
+  r0.z *= (1.0 - 0.45 * pesPoreC) * lerp(0.95, 1.12, pesTZone * saturate(P94.x));   // (31/10) brillo del poro solo en primer plano
+  // (04/11 piel) RUGOSIDAD REAL de la piel (Agustin: "le falta cierta rugosidad a la cara"): la piel seca no baja de ~0.42 de
+  // rugosidad (0.33 en la zona T grasa: frente, nariz, menton), medido en pieles escaneadas (MetaHuman / Weyrich 2006). Con el valor
+  // del juego la frente y la nariz quedaban como plastico encerado: un brillo ancho y parejo. Ademas la rugosidad no es pareja:
+  // varia +-12 % con la red de surcos y los poros (pesPoreA). Labios, sudor y pelicula de agua quedan como estaban
+  if (enhance) {
+    float rFloor = lerp(0.42, 0.33, saturate(pesTZone)) * (1.0 + 0.12 * saturate(pesPoreA * 2.0 - 0.3));
+    float rKeep = (1.0 - saturate(max(lipM, pesLipW) * 1.5)) * (1.0 - sweatWet) * (1.0 - saturate(filmWet * 1.5));
+    r0.w = lerp(r0.w, max(r0.w, rFloor), rKeep);
+    r0.z *= lerp(1.0, 0.85, rKeep * saturate((rFloor - 0.3) * 6.0));   // el brillo ancho reparte la misma energia: un poco menos de pico
+  }
   r2.xyz *= pesPoreOcc;
   r0.z *= (1.0 - 0.6 * fhMask);
   r0.z = lerp(r0.z, max(r0.z, 0.75), sweatWet);
@@ -629,6 +871,17 @@ void main(
   r0.y = exp2(r0.y);
   r0.x = r0.x * r0.y;
   float3 stVeil = g_psMaterial.m_materials[2].xyz;
+  float pesCol = 0.0;   // (27/10) cuello de las caras reales: franja sobre la union con el torso (pes_collar.hlsli, fila 322)
+  float4 PC322 = IniParams.Load(int2(322,0));
+  { uint ctW = 0, ctH = 0; pesTorsoTex.GetDimensions(ctW, ctH);
+    if (PC322.x > 0.5 && ctW > 0) {
+      float3 pesRest = pR.xyz;   // posicion de reposo del VS de la cabeza (TEXCOORD10)
+      pesCol = PesCollarW(pesRest, PC322.y * 0.001) * saturate(PC322.z);
+      if (pesCol > 0.001) {
+        float3 ctT = PesCollarTorso(pesTorsoTex, g_samplerLinear_Clamp_s, pesRest);
+        r2.xyz = lerp(r2.xyz, r2.xyz * PesCollarRatio(g_tex_diffuse, g_samplerAnisotropic_Clamp_s, uvD, ctT), pesCol);
+      }
+    } }
   {   // (24/10 c) tono de piel propio del jugador (skintone.cpp + pes_skintone.hlsli): Oklab, tambien el velo de borde; el
       // VS faab87ee (reemplazo propio) dice el jugador en o6.w
 #ifdef PES_HL_ACC
@@ -641,12 +894,27 @@ void main(
     }
 #endif
     int stE = PesSkinEntry(v6.w);
-    if (stE >= 0) { float3 stP = PesSkinParams(stE); r2.xyz = PesSkinApply(r2.xyz, stP); stVeil = PesSkinApply(stVeil, stP); }
+    if (stE >= 0) {
+      float3 stP = PesSkinParams(stE);
+      float3 stA = PesSkinApply(r2.xyz, stP);
+      if (pesCol > 0.001) stA = lerp(stA, PesSkinApply(r2.xyz, PesSkinParamsBody(stE)), pesCol);   // (27/10) la franja del cuello lleva el tono del cuerpo
+      r2.xyz = stA; stVeil = PesSkinApply(stVeil, stP);
+    }
   }
   r3.xyz = stVeil + -r2.xyz;
   o0.xyz = r0.xxx * r3.xyz + r2.xyz;
+  if (PC322.w > 0.5) o0.xyz = lerp(o0.xyz, float3(1.0, 0.0, 0.0), pesCol);   // (27/10) diagnostico w322: rojo = franja del cuello
   if (P147.y > 0.5) o0.xyz = lerp(o0.xyz, float3(1.0, 0.0, 0.0), pesEdge);   // (20/10) diagnostico y147: rojo = franja del borde de la mascara generica
 
+  // (02/11) AA especular (Kaplanyan 2016 / Tokuyoshi 2019): donde la normal final cambia mas rapido que un pixel (poros, pliegues
+  // finos, la piel que se aleja) el brillo del sol titila y sale pixelado. La varianza de la normal en pantalla se suma a la
+  // rugosidad (en alfa^2, con tope 0.18): el brillo se ensancha justo lo que el pixel no puede mostrar. Sin cambio de cerca.
+  { float3 aaN = normalize(r1.xyz);
+    float3 aaX = ddx(aaN), aaY = ddy(aaN);
+    float aaV = min(0.5 * (dot(aaX, aaX) + dot(aaY, aaY)), 0.18);
+    aaV *= 1.0 - saturate(2.0 * FZ.g);   // (02/11, regla de Agustin) nada cerca de la boca: los labios quedan como antes
+    float aaA = r0.w * r0.w; aaA = aaA * aaA;
+    r0.w = sqrt(sqrt(saturate(aaA + aaV))); }
   // ---- rugosidad codificada ----
   r0.x = r0.w * 0.0361702144 + 0.0904255286;
   r0.x = r0.x * r0.w + 0.180851057;
@@ -701,6 +969,35 @@ void main(
           if (dbg75 > 1.5) o0.xyz = float3(0.0, 1.0, 1.0);   // diagnostico 2: pixel que escribio la semilla en cian
         }
       }
+    } }
+  // (04/11 piel) MICRO SOMBRA de los poros y surcos (Chan 2018, Call of Duty WWII; la de HDRP / UE5 para el detalle): la normal del
+  // poro ya cambia como le pega la luz, pero el fondo de un hueco ademas queda TAPADO por sus paredes cuando la luz viene rasante
+  // (de costado, sol bajo, luz de arriba en la frente). Visibilidad = saturate(|N.L| + 2 ao^2 - 1): con la luz de frente no cambia
+  // nada, rasante el fondo del poro se oscurece. Luz = la dominante del cuadro (el sol), llevada a la vista como el pelo y los ojos
+  if (enhance && pesPoreA > 0.001) {
+    float3 Lw = g_psSystem.m_dominantLightDir.xyz;
+    float vOk = dot(g_psScene.m_view._m00_m10_m20, g_psScene.m_view._m00_m10_m20);   // b2 enlazado (si no, no se toca nada)
+    if (vOk > 0.25 && dot(Lw, Lw) > 0.25) {
+      float3 Lv = normalize(float3(dot(Lw, g_psScene.m_view._m00_m10_m20), dot(Lw, g_psScene.m_view._m01_m11_m21), dot(Lw, g_psScene.m_view._m02_m12_m22)));
+      float msAo = 1.0 - saturate(pesPoreA * 0.75 * saturate(IniParams.Load(int2(94,0)).x));
+      float msVis = saturate(abs(dot(normalize(r1.xyz), Lv)) + 2.0 * msAo * msAo - 1.0);
+      o0.xyz *= lerp(1.0, msVis, 0.85);
+    } }
+  // (06/11, Agustin: "las arrugas en la vida real tienen peso, volumen, profundidad en las sombras, cambian la iluminacion") SOMBRA
+  // PROPIA DEL SURCO segun de donde venga la luz (la misma cuenta de la micro sombra de los poros, Chan 2018, con la profundidad del
+  // surco de la arruga fina, la ancha y la esculpida): con la luz rasante (de costado, de arriba) el fondo del pliegue queda tapado
+  // por sus paredes y se oscurece hondo; de frente casi no cambia (ahi manda el tono rojizo del surco). Profundidad por el relieve
+  // z365 (1.5 = 0.85). Nada en labios / boca (FZ.g)
+  if (enhance) {
+    float wrDepth = saturate((wrOn ? max(wrFold, wrFoldW) : 0.0) + max(shFold, shFoldW)) * (1.0 - saturate(2.0 * FZ.g));
+    float zK = saturate(clamp(IniParams.Load(int2(365, 0)).z, 0.0, 3.0) / 1.5) * 0.85;
+    float3 Lw = g_psSystem.m_dominantLightDir.xyz;
+    float vOk = dot(g_psScene.m_view._m00_m10_m20, g_psScene.m_view._m00_m10_m20);
+    if (wrDepth * zK > 0.001 && vOk > 0.25 && dot(Lw, Lw) > 0.25) {
+      float3 Lv = normalize(float3(dot(Lw, g_psScene.m_view._m00_m10_m20), dot(Lw, g_psScene.m_view._m01_m11_m21), dot(Lw, g_psScene.m_view._m02_m12_m22)));
+      float wAo = 1.0 - wrDepth * zK;
+      float wVis = saturate(abs(dot(normalize(r1.xyz), Lv)) + 2.0 * wAo * wAo - 1.0);
+      o0.xyz *= lerp(1.0, wVis, 0.9);
     } }
   // ---- empaquetado normal octaedrica + translucidez ----
   r0.x = r1.w * 63 + 0.5;

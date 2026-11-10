@@ -7,9 +7,11 @@
 namespace fx {
 
 static ID3D11VertexShader* s_vs = nullptr; static ID3D11PixelShader* s_psH = nullptr; static ID3D11PixelShader* s_psV = nullptr; static bool s_tried = false;
-static ID3D11Texture2D* s_tex[2] = {}; static ID3D11RenderTargetView* s_rtv[2] = {}; static ID3D11ShaderResourceView* s_srv[2] = {};
-static UINT s_w = 0, s_h = 0; static DXGI_FORMAT s_fmt = DXGI_FORMAT_UNKNOWN;
+static ID3D11Texture2D* s_tex[3] = {}; static ID3D11RenderTargetView* s_rtv[3] = {}; static ID3D11ShaderResourceView* s_srv[3] = {};   // (27/10 b) [2] = brillo (t10) con la luz de prueba del editor
+static UINT s_w = 0, s_h = 0; static DXGI_FORMAT s_fmt = DXGI_FORMAT_UNKNOWN, s_fmtS = DXGI_FORMAT_UNKNOWN;
+static ID3D11ShaderResourceView* s_specOut = nullptr;   // (27/10 b) brillo con la luz de prueba (null = el del juego)
 static ID3D11SamplerState* s_sampP = nullptr; static ID3D11SamplerState* s_sampL = nullptr;
+static ID3D11PixelShader* s_psR = nullptr; static ID3D11Texture2D* s_refTex = nullptr; static ID3D11RenderTargetView* s_refRTV = nullptr; static ID3D11ShaderResourceView* s_refSRV = nullptr; static ID3D11BlendState* s_bsRef = nullptr;   // (01/11) referencia suavizada
 static ID3D11RasterizerState* s_rs = nullptr; static ID3D11DepthStencilState* s_dss = nullptr; static ID3D11BlendState* s_bs = nullptr;
 std::atomic<int> g_ssssDraws{0};
 
@@ -18,6 +20,8 @@ static void EnsureShaders() {
     ID3DBlob* vb = CompileNamedShader(L"pes_fs_vs.hlsl", "vs_5_0");
     ID3DBlob* hb = CompileNamedShader(L"pes_ssss_h_ps.hlsl", "ps_5_0");
     ID3DBlob* pb = CompileNamedShader(L"pes_ssss_v_ps.hlsl", "ps_5_0");
+    ID3DBlob* rb = CompileNamedShader(L"pes_ssss_ref_ps.hlsl", "ps_5_0");
+    if (rb) { g_dev.dev->CreatePixelShader(rb->GetBufferPointer(), rb->GetBufferSize(), nullptr, &s_psR); rb->Release(); }
     if (vb) { g_dev.dev->CreateVertexShader(vb->GetBufferPointer(), vb->GetBufferSize(), nullptr, &s_vs); vb->Release(); }
     if (hb) { g_dev.dev->CreatePixelShader(hb->GetBufferPointer(), hb->GetBufferSize(), nullptr, &s_psH); hb->Release(); }
     if (pb) { g_dev.dev->CreatePixelShader(pb->GetBufferPointer(), pb->GetBufferSize(), nullptr, &s_psV); pb->Release(); }
@@ -26,39 +30,58 @@ static void EnsureShaders() {
     D3D11_RASTERIZER_DESC rd{}; rd.FillMode = D3D11_FILL_SOLID; rd.CullMode = D3D11_CULL_NONE; rd.DepthClipEnable = TRUE; g_dev.dev->CreateRasterizerState(&rd, &s_rs);
     D3D11_DEPTH_STENCIL_DESC dd{}; dd.DepthEnable = FALSE; dd.StencilEnable = FALSE; g_dev.dev->CreateDepthStencilState(&dd, &s_dss);
     D3D11_BLEND_DESC bd{}; bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL; g_dev.dev->CreateBlendState(&bd, &s_bs);
+    {   // (01/11) mezcla de la referencia con la del cuadro anterior: nuevo * k + viejo * (1 - k), k = blend factor
+        D3D11_BLEND_DESC br{}; auto& t = br.RenderTarget[0]; t.BlendEnable = TRUE; t.SrcBlend = t.SrcBlendAlpha = D3D11_BLEND_BLEND_FACTOR;
+        t.DestBlend = t.DestBlendAlpha = D3D11_BLEND_INV_BLEND_FACTOR; t.BlendOp = t.BlendOpAlpha = D3D11_BLEND_OP_ADD; t.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+        g_dev.dev->CreateBlendState(&br, &s_bsRef);
+        D3D11_TEXTURE2D_DESC rd1{}; rd1.Width = rd1.Height = 1; rd1.MipLevels = rd1.ArraySize = 1; rd1.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; rd1.SampleDesc.Count = 1;
+        rd1.Usage = D3D11_USAGE_DEFAULT; rd1.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        if (SUCCEEDED(g_dev.dev->CreateTexture2D(&rd1, nullptr, &s_refTex))) { g_dev.dev->CreateRenderTargetView(s_refTex, nullptr, &s_refRTV); g_dev.dev->CreateShaderResourceView(s_refTex, nullptr, &s_refSRV); }
+    }
     Log("ssss: shaders %s", (s_vs && s_psH && s_psV) ? "listos" : "NO compilaron (ver errores)");
 }
 void SSSSReloadShaders() {
-    if (s_vs) { s_vs->Release(); s_vs = nullptr; } if (s_psH) { s_psH->Release(); s_psH = nullptr; } if (s_psV) { s_psV->Release(); s_psV = nullptr; }
+    if (s_vs) { s_vs->Release(); s_vs = nullptr; } if (s_psH) { s_psH->Release(); s_psH = nullptr; } if (s_psV) { s_psV->Release(); s_psV = nullptr; } if (s_psR) { s_psR->Release(); s_psR = nullptr; }
     s_tried = false;
 }
-static bool EnsureTargets(UINT w, UINT h, DXGI_FORMAT fmt) {
-    if (s_tex[0] && s_w == w && s_h == h && s_fmt == fmt) return true;
-    for (int i = 0; i < 2; i++) { if (s_srv[i]) s_srv[i]->Release(); if (s_rtv[i]) s_rtv[i]->Release(); if (s_tex[i]) s_tex[i]->Release(); s_srv[i] = nullptr; s_rtv[i] = nullptr; s_tex[i] = nullptr; }
+static bool EnsureTargets(UINT w, UINT h, DXGI_FORMAT fmt, DXGI_FORMAT fmtS) {
+    if (s_tex[0] && s_w == w && s_h == h && s_fmt == fmt && s_fmtS == fmtS) return true;
+    for (int i = 0; i < 3; i++) { if (s_srv[i]) s_srv[i]->Release(); if (s_rtv[i]) s_rtv[i]->Release(); if (s_tex[i]) s_tex[i]->Release(); s_srv[i] = nullptr; s_rtv[i] = nullptr; s_tex[i] = nullptr; }
     D3D11_TEXTURE2D_DESC td{}; td.Width = w; td.Height = h; td.MipLevels = 1; td.ArraySize = 1; td.Format = fmt; td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 3; i++) {
+        td.Format = i == 2 ? fmtS : fmt;
         if (FAILED(g_dev.dev->CreateTexture2D(&td, nullptr, &s_tex[i]))) return false;
         if (FAILED(g_dev.dev->CreateRenderTargetView(s_tex[i], nullptr, &s_rtv[i]))) return false;
         if (FAILED(g_dev.dev->CreateShaderResourceView(s_tex[i], nullptr, &s_srv[i]))) return false;
     }
-    s_w = w; s_h = h; s_fmt = fmt;
-    Log("ssss: targets %ux%u fmt %d", w, h, (int)fmt);
+    s_w = w; s_h = h; s_fmt = fmt; s_fmtS = fmtS;
+    Log("ssss: targets %ux%u fmt %d (brillo %d)", w, h, (int)fmt, (int)fmtS);
     return true;
 }
 
 // Devuelve el SRV difundido para t9 (o null si no se pudo). Se llama en BeforeDraw del shader de composicion.
+ID3D11ShaderResourceView* SSSSSpecSRV() { return s_specOut; }
+// (01/11) iconos de las luces del editor (overlay.cpp): cuando corrio la luz de prueba por ultima vez y el tamano del cuadro
+static std::atomic<double> s_edLightT{ -1.0 };
+double SSSSEditorLightAge() { double t = s_edLightT.load(); return t < 0 ? 1e9 : Now() - t; }
+void SSSSRenderSize(unsigned& w, unsigned& h) { w = s_w; h = s_h; }
 ID3D11ShaderResourceView* SSSSBeforeComposition(ID3D11DeviceContext* c) {
+    s_specOut = nullptr;
     if (!g_dev.dev || g_cfg.live[95][3] < 0.5f) return nullptr;
     EnsureShaders(); if (!s_vs || !s_psH || !s_psV) return nullptr;
     ID3D11ShaderResourceView* in[12] = {}; c->PSGetShaderResources(0, 12, in);
     auto rel = [&]() { for (auto* v : in) if (v) v->Release(); };
-    ID3D11ShaderResourceView* light = in[9]; ID3D11ShaderResourceView* depth = in[11]; ID3D11ShaderResourceView* mat = in[1]; ID3D11ShaderResourceView* nrm = in[0];
+    ID3D11ShaderResourceView* light = in[9]; ID3D11ShaderResourceView* depth = in[11]; ID3D11ShaderResourceView* mat = in[1]; ID3D11ShaderResourceView* nrm = in[0]; ID3D11ShaderResourceView* spec = in[10];
     if (!light || !depth || !mat || !nrm) { rel(); return nullptr; }
     ID3D11Resource* res = nullptr; light->GetResource(&res); if (!res) { rel(); return nullptr; }
     D3D11_TEXTURE2D_DESC td; ((ID3D11Texture2D*)res)->GetDesc(&td); res->Release();
     D3D11_SHADER_RESOURCE_VIEW_DESC vd; light->GetDesc(&vd);
     DXGI_FORMAT fmt = vd.Format == DXGI_FORMAT_UNKNOWN ? td.Format : vd.Format;
-    if (td.SampleDesc.Count != 1 || !EnsureTargets(td.Width, td.Height, fmt)) { rel(); return nullptr; }
+    // (27/10 b) luz de prueba del editor (297): la pasada 1 escribe tambien el brillo (t10) y se lo da a la composicion
+    const bool editorLight = g_cfg.live[297][0] > 0.5f && g_cfg.live[44][3] < 0.5f && g_cfg.live[255][3] > 0.5f && spec != nullptr;
+    DXGI_FORMAT fmtS = fmt;
+    if (spec) { D3D11_SHADER_RESOURCE_VIEW_DESC vs; spec->GetDesc(&vs); fmtS = vs.Format; if (fmtS == DXGI_FORMAT_UNKNOWN) { ID3D11Resource* rs = nullptr; spec->GetResource(&rs); if (rs) { D3D11_TEXTURE2D_DESC ts; ((ID3D11Texture2D*)rs)->GetDesc(&ts); fmtS = ts.Format; rs->Release(); } } }
+    if (td.SampleDesc.Count != 1 || !EnsureTargets(td.Width, td.Height, fmt, fmtS)) { rel(); return nullptr; }
     // guardar estado
     ID3D11RenderTargetView* oRT[8] = {}; ID3D11DepthStencilView* oDS = nullptr; c->OMGetRenderTargets(8, oRT, &oDS);
     UINT nvp = 8; D3D11_VIEWPORT ovp[8]; c->RSGetViewports(&nvp, ovp);
@@ -71,23 +94,41 @@ ID3D11ShaderResourceView* SSSSBeforeComposition(ID3D11DeviceContext* c) {
     ID3D11SamplerState* oS[2] = {}; c->PSGetSamplers(0, 2, oS);
     ID3D11ShaderResourceView* oVS120 = nullptr; c->PSGetShaderResources(120, 1, &oVS120);
     // estado comun
-    ID3D11ShaderResourceView* nulls[5] = {};
+    ID3D11ShaderResourceView* nulls[6] = {};
     c->VSSetShader(s_vs, nullptr, 0); c->GSSetShader(nullptr, nullptr, 0); c->HSSetShader(nullptr, nullptr, 0); c->DSSetShader(nullptr, nullptr, 0);
     c->IASetInputLayout(nullptr); c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     c->RSSetState(s_rs); c->OMSetDepthStencilState(s_dss, 0); float bf[4] = {}; c->OMSetBlendState(s_bs, bf, 0xffffffff);
     ID3D11SamplerState* ss[2] = { s_sampP, s_sampL }; c->PSSetSamplers(0, 2, ss);
     D3D11_VIEWPORT vp{ 0, 0, (float)td.Width, (float)td.Height, 0, 1 }; c->RSSetViewports(1, &vp);
     ID3D11ShaderResourceView* prm = g_dev.paramSRV; c->PSSetShaderResources(120, 1, &prm);
-    // pasada H: light -> tex0
-    c->OMSetRenderTargets(1, &s_rtv[0], nullptr);
-    ID3D11ShaderResourceView* sv0[5] = { light, depth, mat, nrm, in[8] }; c->PSSetShaderResources(0, 5, sv0);   // t4 = albedo (tono de piel)
-    c->PSSetShader(s_psH, nullptr, 0); c->Draw(3, 0);
-    // pasada V: tex0 -> tex1
-    c->PSSetShaderResources(0, 5, nulls);
+    // (01/11) pasada 0: referencia de intensidad de la luz de prueba, mezclada con la de los cuadros anteriores (sin saltos al mover la camara)
+    if (editorLight && s_psR && s_refRTV) {
+        const double age = SSSSEditorLightAge();
+        const float k = age > 0.5 ? 1.0f : 0.08f;   // recien prendida (o sin correr hace rato): toma el valor de una
+        c->OMSetRenderTargets(1, &s_refRTV, nullptr);
+        ID3D11ShaderResourceView* svr[6] = { light, depth, mat, nrm, nullptr, nullptr }; c->PSSetShaderResources(0, 6, svr);
+        D3D11_VIEWPORT v1{ 0, 0, 1, 1, 0, 1 }; c->RSSetViewports(1, &v1);
+        float kf[4] = { k, k, k, k }; c->OMSetBlendState(s_bsRef, kf, 0xffffffff);
+        c->PSSetShader(s_psR, nullptr, 0); c->Draw(3, 0);
+        c->OMSetBlendState(s_bs, bf, 0xffffffff); c->RSSetViewports(1, &vp);
+        c->PSSetShaderResources(0, 6, nulls);
+    }
+    // pasada 1: light (+ luz de prueba del editor) -> tex0, brillo -> tex2
+    // (08/11) sin luz de prueba del editor la pasada 1 (pes_ssss_h_ps) devuelve t9 tal cual ('return o' con x297 = 0 o con sol): una copia
+    // de toda la pantalla por cuadro al pedo. Se salta y la pasada 2 lee t9 directo (en partido ahorra una pasada completa de 1080p RGBA16F).
+    const bool preNeeded = g_cfg.live[297][0] > 0.5f && g_cfg.live[44][3] < 0.5f && g_cfg.live[255][3] > 0.5f;   // misma condicion que el shader (x297 y noSun)
+    if (preNeeded) {
+        ID3D11RenderTargetView* rt0[2] = { s_rtv[0], editorLight ? s_rtv[2] : nullptr }; c->OMSetRenderTargets(2, rt0, nullptr);
+        ID3D11ShaderResourceView* sv0[6] = { light, depth, mat, nrm, in[8], spec }; c->PSSetShaderResources(0, 6, sv0); { ID3D11ShaderResourceView* r6[2] = { s_refSRV, MouthMaskSRV() }; c->PSSetShaderResources(6, 2, r6); }   // (04/11 boca) t7 = mascara del interior de la boca   // t4 = albedo (tono de piel), t5 = brillo
+        c->PSSetShader(s_psH, nullptr, 0); c->Draw(3, 0);
+    }
+    // pasada 2: disco de Burley, tex0 -> tex1
+    c->PSSetShaderResources(0, 6, nulls);
     c->OMSetRenderTargets(1, &s_rtv[1], nullptr);
-    ID3D11ShaderResourceView* sv1[5] = { s_srv[0], depth, mat, nrm, in[8] }; c->PSSetShaderResources(0, 5, sv1);
+    ID3D11ShaderResourceView* sv1[6] = { preNeeded ? s_srv[0] : light, depth, mat, nrm, in[8], nullptr }; c->PSSetShaderResources(0, 6, sv1);
     c->PSSetShader(s_psV, nullptr, 0); c->Draw(3, 0);
-    c->PSSetShaderResources(0, 5, nulls);
+    c->PSSetShaderResources(0, 6, nulls); { ID3D11ShaderResourceView* n6[2] = {}; c->PSSetShaderResources(6, 2, n6); }
+    if (editorLight) { s_specOut = s_srv[2]; s_edLightT.store(Now()); }
     // restaurar
     c->OMSetRenderTargets(8, oRT, oDS); for (auto* r : oRT) if (r) r->Release(); if (oDS) oDS->Release();
     c->RSSetViewports(nvp, ovp);
