@@ -13,12 +13,17 @@
 #define PES_WRDEPTH_HLSLI
 Texture2D<float4> pesWrDA : register(t45);
 Texture2D<float4> pesWrDB : register(t46);
+// (10/11 d, Agustin: "tres mapas para la edad real, cada uno con menos secciones y menor intensidad") arrugas en reposo por edad:
+// R joven, G adulto, B veterano; relieve con signo (0.5 = liso), (muestra - 0.5) * kWrAgeMm = mm. Sin enlazar (DLL vieja) = nada
+Texture2D<float4> pesWrAgeT : register(t47);
+static const float kWrAgeMm = 2.507;
+static float3 g_wrAg = 0;   // mm por mapa (joven, adulto, veterano), lo arma PesWrAge
 // (10/11, Agustin: "la escala esta mal", "tomando de base las remasterizadas") texturas nuevas sacadas de la normal remasterizada
 // (tools/make_wrinkle_depth_remaster.py): pliegues 2 veces mas anchos y en las zonas del juego; la profundidad da con el gesto entero
 // la misma pendiente que las remasterizadas
-static const float4 kWrDmmA = float4(3.05, 4.51, 4.64, 4.15);   // (10/11 c) relieve entero (surcos + piel juntada), 2048   // (10/11) entrecejo 0.50 -> 0.75: en el video el enojo a 1.42 casi no se veia
+static const float4 kWrDmmA = float4(3.68, 3.80, 4.70, 3.52);   // (10/11 d) relieve entero (surcos + piel juntada) en su zona anatomica, 2048   // (10/11) entrecejo 0.50 -> 0.75: en el video el enojo a 1.42 casi no se veia
 //   // profundidad maxima (mm) por canal: frente, entrecejo, ojos, surco
-static const float4 kWrDmmB = float4(4.31, 5.90, 6.50, 0.00);   // menton, marioneta, cuello, mejilla
+static const float4 kWrDmmB = float4(2.24, 2.76, 4.21, 0.00);   // menton, marioneta, cuello, mejilla
 bool PesWrDOk() { uint w = 0, h = 0; pesWrDA.GetDimensions(w, h); return w > 1; }
 // edad del jugador (anios; 0 = no se sabe) -> 0 (20 o menos) .. 1 (38 o mas); sin dato, un adulto joven
 float PesWrAgeK(float age, float ageW)
@@ -29,13 +34,22 @@ float PesWrAgeK(float age, float ageW)
 // arrugas en reposo por edad y ganancia de profundidad
 void PesWrAge(float ageK, inout float4 wa, inout float4 wb, out float gain)
 {
-  wa = max(wa, ageK * float4(0.15, 0.08, 0.15, 0.18));   // (10/11) a la mitad: "todas las caras tienen marcadas unas arrugas"
-  wb = max(wb, ageK * float4(0.05, 0.10, 0.15, 0.00));
+  // (10/11 d) las de reposo ya no prenden los gestos: salen de los tres mapas de edad (joven -> adulto -> veterano, ageK 0.25 / 0.6)
+  float j = 1.0 - smoothstep(0.15, 0.35, ageK), v = smoothstep(0.45, 0.75, ageK);
+  uint aw = 0, ah = 0; pesWrAgeT.GetDimensions(aw, ah);
+  g_wrAg = aw > 1 ? float3(j, saturate(1.0 - j - v), v) * kWrAgeMm * saturate(ageK * 4.0) : 0;
   gain = lerp(0.80, 1.35, ageK);
 }
 float PesWrD1(float4 ha, float4 hb, float4 pa, float4 pb, float4 ka, float4 kb)
 {
   return dot(ka, pow(max(ha, 1e-4), pa)) + dot(kb, pow(max(hb, 1e-4), pb));
+}
+// gestos + edad en un punto (mm)
+float PesWrDS(SamplerState s, float2 uv, float lod, float4 pa, float4 pb, float4 ka, float4 kb)
+{
+  float d = PesWrD1(pesWrDA.SampleLevel(s, uv, lod), pesWrDB.SampleLevel(s, uv, lod), pa, pb, ka, kb);
+  if (any(g_wrAg > 0.0)) d += dot(g_wrAg, pesWrAgeT.SampleLevel(s, uv, lod).rgb - 0.5);
+  return d;
 }
 #ifndef PES_WRD_NO_PS   // (CalculateLevelOfDetail: solo PS; el DS de la teselacion usa PesWrD1 directo)
 // d = profundidad (mm) aqui; g = pendiente (mm / mm) en u y en v (v hacia abajo de la textura); dWide = el mismo surco sin afinar
@@ -49,17 +63,15 @@ void PesWrDepth(SamplerState s, float2 uv, float4 wa, float4 wb, float gain, out
   float4 ka = kWrDmmA * pow(wa, 0.8) * gain, kb = kWrDmmB * pow(wb, 0.8) * gain;
   float2 du = float2(1.5 / tw, 0.0), dv = float2(0.0, 1.5 / th);
   float4 a0 = pesWrDA.SampleLevel(s, uv, lod), b0 = pesWrDB.SampleLevel(s, uv, lod);
-  d = PesWrD1(a0, b0, pa, pb, ka, kb);
-  float xp = PesWrD1(pesWrDA.SampleLevel(s, uv + du, lod), pesWrDB.SampleLevel(s, uv + du, lod), pa, pb, ka, kb);
-  float xm = PesWrD1(pesWrDA.SampleLevel(s, uv - du, lod), pesWrDB.SampleLevel(s, uv - du, lod), pa, pb, ka, kb);
-  float yp = PesWrD1(pesWrDA.SampleLevel(s, uv + dv, lod), pesWrDB.SampleLevel(s, uv + dv, lod), pa, pb, ka, kb);
-  float ym = PesWrD1(pesWrDA.SampleLevel(s, uv - dv, lod), pesWrDB.SampleLevel(s, uv - dv, lod), pa, pb, ka, kb);
+  d = PesWrDS(s, uv, lod, pa, pb, ka, kb);
+  float xp = PesWrDS(s, uv + du, lod, pa, pb, ka, kb), xm = PesWrDS(s, uv - du, lod, pa, pb, ka, kb);
+  float yp = PesWrDS(s, uv + dv, lod, pa, pb, ka, kb), ym = PesWrDS(s, uv - dv, lod, pa, pb, ka, kb);
   float mm = 1.5 * 0.55 * 1024.0 / (float)tw;   // un texel de 1024 son ~0.55 mm de piel de la cara
   g = float2(xp - xm, yp - ym) / (2.0 * mm);
   dWide = dot(ka, a0) + dot(kb, b0);
   // (10/11 c) las texturas traen el relieve entero (la piel lisa queda en el medio): surco / cresta se miden contra el promedio de
   // los alrededores (~4 mm, 3 mips mas arriba, con el mismo perfil)
-  dBlur = PesWrD1(pesWrDA.SampleLevel(s, uv, lod + 3.0), pesWrDB.SampleLevel(s, uv, lod + 3.0), pa, pb, ka, kb);
+  dBlur = PesWrDS(s, uv, lod + 3.0, pa, pb, ka, kb);
 }
 #endif
 // normal del espacio tangente que deja el surco (la misma convencion del mapa de arrugas del juego: x con u, y hacia arriba)

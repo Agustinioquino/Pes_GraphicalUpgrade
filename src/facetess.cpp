@@ -302,7 +302,7 @@ bool FaceTessBegin(ID3D11DeviceContext* c, uint64_t vsHash, ID3D11ShaderResource
       ID3D11ShaderResourceView* w2[2] = {}; c->PSGetShaderResources(5, 2, w2); c->DSSetShaderResources(5, 2, w2); for (auto* x : w2) if (x) x->Release();
       ID3D11ShaderResourceView* w3[2] = {}; c->PSGetShaderResources(20, 2, w3); c->DSSetShaderResources(20, 2, w3); for (auto* x : w3) if (x) x->Release();
       ID3D11ShaderResourceView* w4 = nullptr; c->PSGetShaderResources(31, 1, &w4); c->DSSetShaderResources(31, 1, &w4); if (w4) w4->Release();
-      ID3D11ShaderResourceView* w5[2] = {}; c->PSGetShaderResources(45, 2, w5); c->DSSetShaderResources(45, 2, w5); for (auto* x : w5) if (x) x->Release();   // (09/11 g) arrugas por gesto con profundidad
+      ID3D11ShaderResourceView* w5[3] = {}; c->PSGetShaderResources(45, 3, w5); c->DSSetShaderResources(45, 3, w5); for (auto* x : w5) if (x) x->Release();   // (09/11 g) arrugas por gesto con profundidad
       ID3D11Buffer* b4 = nullptr; UINT f4 = 0, n4 = 0; ID3D11DeviceContext1* c4 = nullptr;
       if (SUCCEEDED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c4)) && c4) {
         c4->PSGetConstantBuffers1(4, 1, &b4, &f4, &n4);
@@ -338,7 +338,7 @@ void FaceTessEnd(ID3D11DeviceContext* c, FaceTessScope& s) {
     if (s.relief) { ID3D11ShaderResourceView* n2[2] = {}; ID3D11SamplerState* ns = nullptr; c->DSSetShaderResources(23, 2, n2); c->DSSetSamplers(0, 1, &ns); s.relief = false; }
     if (s.height) { ID3D11ShaderResourceView* nh = nullptr; ID3D11SamplerState* ns = nullptr; c->DSSetShaderResources(25, 1, &nh); c->DSSetSamplers(0, 1, &ns); s.height = false; }
     if (s.v >= 0 && s.v < 2) {   // (07/11) volumen de las arrugas: se suelta siempre (si no se enlazo, poner nulos no cuesta nada)
-      ID3D11ShaderResourceView* z2[2] = {}; c->DSSetShaderResources(5, 2, z2); c->DSSetShaderResources(20, 2, z2); c->DSSetShaderResources(31, 1, z2); c->DSSetShaderResources(45, 2, z2);
+      ID3D11ShaderResourceView* z2[2] = {}; c->DSSetShaderResources(5, 2, z2); c->DSSetShaderResources(20, 2, z2); c->DSSetShaderResources(31, 1, z2); { ID3D11ShaderResourceView* z3[3] = {}; c->DSSetShaderResources(45, 3, z3); }
       c->DSSetConstantBuffers(4, 1, &nb); c->DSSetConstantBuffers(11, 1, &nb); ID3D11SamplerState* ns = nullptr; c->DSSetSamplers(0, 1, &ns);
     }
 }

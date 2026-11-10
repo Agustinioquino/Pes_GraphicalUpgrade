@@ -32,50 +32,42 @@ T = np.stack([up(m[:512, :, c]) for c in range(4)], -1); B = np.stack([up(m[512:
 dep = -h
 V = (np.arange(N) + 0.5)[:, None] / N * np.ones((1, N))
 s = np.clip((V - 0.600) / 0.03, 0, 1); s = s * s * (3 - 2 * s)
-ch = [dep * np.maximum(T[..., 0], T[..., 1]), dep * T[..., 2], dep * T[..., 3], dep * B[..., 0] * (1 - s),
-      dep * B[..., 0] * s, dep * np.maximum(B[..., 1], B[..., 2]), dep * B[..., 3], dep * 0]
-# (10/11 b, Agustin: "deben tener mas detalle, como arrugas en Unreal Engine 5") ARRUGUITAS FINAS QUE SIGUEN AL PLIEGUE: ruido
-# estirado a lo largo de cada pliegue (convolucion integral de linea sobre la direccion del pliegue, sacada del tensor de estructura
-# de la profundidad), pasa altos -> rayitas paralelas de ~1 mm en las paredes y alrededor del pliegue, que se prenden con el mismo
-# gesto (envolvente = la profundidad de cada canal). Todo a 2048 (antes 1024: la mitad del detalle).
+# (10/11 d, Agustin: "esta raro el detalle, asi no se marcan las arrugas en la vida real", "marca distintas zonas", "tres mapas para la
+# edad real, cada uno con menos secciones y menor intensidad", "mira FC 27") sin rayitas finas; cada gesto solo en SU zona anatomica
+# (la ubicacion de los surcos de make_wrinkle_depth.py, ensanchada: frente, entrecejo, ojos, surco, menton, marioneta, cuello) con la
+# forma de las remasterizadas; y pes_wrinkle_age.dds (R joven, G adulto, B veterano): arrugas en reposo, relieve con signo (0.5 = liso).
 def blur(x, sg):
     return np.real(np.fft.ifft2(np.fft.fft2(x) * np.exp(-2 * (np.pi * sg) ** 2 * (fu ** 2 + fv ** 2))))
-ds = blur(np.maximum(dep, 0), 4.0)
-gx, gy = np.gradient(ds, axis=1), np.gradient(ds, axis=0)
-jxx, jxy, jyy = blur(gx * gx, 6.0), blur(gx * gy, 6.0), blur(gy * gy, 6.0)
-ang = 0.5 * np.arctan2(2 * jxy, jxx - jyy) + np.pi / 2          # direccion del pliegue (perpendicular a la pendiente)
-tx, ty = np.cos(ang), np.sin(ang)
-rng = np.random.default_rng(1011)
-noise = blur(rng.standard_normal((N, N)), 0.9)
-yy, xx = np.mgrid[0:N, 0:N].astype(np.float32)
-def samp(img, x, y):
-    x = np.clip(x, 0, N - 1.001); y = np.clip(y, 0, N - 1.001); x0 = x.astype(np.int32); y0 = y.astype(np.int32); fx = x - x0; fy = y - y0
-    return (img[y0, x0] * (1 - fx) + img[y0, x0 + 1] * fx) * (1 - fy) + (img[y0 + 1, x0] * (1 - fx) + img[y0 + 1, x0 + 1] * fx) * fy
-lic = noise.copy(); wsum = 1.0
-for sgn in (1.0, -1.0):
-    px, py, dx, dy = xx.copy(), yy.copy(), tx * sgn, ty * sgn
-    for k in range(1, 15):
-        px += dx; py += dy
-        ix, iy = np.clip(px, 0, N - 1).astype(np.int32), np.clip(py, 0, N - 1).astype(np.int32)
-        nx2, ny2 = tx[iy, ix], ty[iy, ix]
-        flip = (nx2 * dx + ny2 * dy) < 0; dx, dy = np.where(flip, -nx2, nx2), np.where(flip, -ny2, ny2)
-        w = np.exp(-0.5 * (k / 8.0) ** 2); lic += w * samp(noise, px, py); wsum += w
-lic /= wsum
-fine = lic - blur(lic, 4.0); fine /= fine.std() + 1e-6
-FINE = 0.015   # alto de las arruguitas (fraccion del fondo del pliegue)
+import subprocess, os, tempfile
+tmp = tempfile.mkdtemp()
+subprocess.run([sys.executable, '-I', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'make_wrinkle_depth.py'), tmp, '2048'], check=True, stdout=subprocess.DEVNULL)
+def rd(fn): return np.frombuffer(open(fn, 'rb').read(), np.uint8, N * N * 4, 148).reshape(N, N, 4).astype(np.float32) / 255
+old = np.concatenate([rd(tmp + '/pes_wrinkle_depth_a.dds'), rd(tmp + '/pes_wrinkle_depth_b.dds')], -1)
+R = []
+for i in range(8):
+    z = blur(old[..., i], 28.0); z = np.clip(z / max(z.max(), 1e-6) / 0.35, 0, 1); R.append(z * z * (3 - 2 * z))   # zona = surcos dibujados ensanchados ~1.5 cm
+R[7] = R[7] * 0
 kmm = []
 D = np.zeros((N, N, 8), np.float32)
-zm = [np.maximum(T[..., 0], T[..., 1]), T[..., 2], T[..., 3], B[..., 0] * (1 - s), B[..., 0] * s, np.maximum(B[..., 1], B[..., 2]), B[..., 3], B[..., 3] * 0]
-for i, z in enumerate(zm):
+for i, z in enumerate(R):
     act = z > 0.3
     if not act.any(): kmm.append(0.0); continue
     lo, hi = np.percentile(dep[act], 3), np.percentile(dep[act], 99.7)
-    d = np.clip((dep - lo) / (hi - lo), 0, 1) * np.clip(z, 0, 1)
+    d = np.clip((dep - lo) / (hi - lo), 0, 1) * z
     sd = np.hypot(*np.gradient(d ** 1.2)) / 0.275    # 0.275 mm por texel de 2048; gesto entero: perfil ^ (1 + 0.2)
     kmm.append(float(np.percentile(slope[act], 99) / np.percentile(sd[act], 99)))
-    env = np.clip((blur(np.maximum(dep - np.median(dep[act]), 0) / (hi - lo), 3.0) * z - 0.02) / 0.30, 0, 1); env = env * env * (3 - 2 * env)
-    D[..., i] = np.clip(d + FINE * fine * env, 0, 1)
-print('kWrDmmA', np.round(kmm[:4], 2), 'kWrDmmB', np.round(kmm[4:], 2))
+    D[..., i] = d
+# edad: frente, entrecejo, ojos, surco, menton, marioneta, cuello (cada edad con menos zonas y mas suave)
+AW = np.array([[0.10, 0.00, 0.10, 0.30, 0.00, 0.00, 0.10],
+               [0.35, 0.20, 0.35, 0.50, 0.10, 0.15, 0.30],
+               [0.70, 0.55, 0.70, 0.75, 0.30, 0.50, 0.60]], np.float32)
+hd = dep - blur(dep, 12.0)
+ages = [sum(AW[a, z] * R[z] * hd for z in range(7)) for a in range(3)]
+S = max(np.abs(x).max() for x in ages)
+sv = np.hypot(*np.gradient(ages[2] / S)) / 0.275
+kage = float(0.30 / np.percentile(sv[R[0] + R[2] + R[3] > 0.3], 99))   # veterano: pendiente p99 0.30 (gesto entero ~0.5)
+AGE = np.stack([0.5 + 0.5 * x / S for x in ages] + [np.ones((N, N), np.float32)], -1)
+print('kWrAgeMm', round(2 * kage, 3), '(muestra - 0.5) * esto = mm')
 def write_dds(fn, img):
     mips = []; cur = img.astype(np.float32)
     while True:
@@ -92,6 +84,8 @@ def write_dds(fn, img):
         for mm in mips: f.write(mm.tobytes())
 q = np.round(D * 255)
 write_dds(out + '/pes_wrinkle_depth_a.dds', q[..., :4]); write_dds(out + '/pes_wrinkle_depth_b.dds', q[..., 4:])
+write_dds(out + '/pes_wrinkle_age.dds', np.round(np.clip(AGE, 0, 1) * 255))
+print('kWrDmmA', np.round(kmm[:4], 2), 'kWrDmmB', np.round(kmm[4:], 2))
 if '--vista' in sys.argv:
     cols = np.array([(255, 80, 80), (80, 255, 80), (90, 140, 255), (255, 220, 60), (255, 120, 255), (60, 255, 255), (255, 160, 60), (200, 200, 200)], np.float32)
     img = np.full((N, N, 3), 40.0)

@@ -474,8 +474,8 @@ float2 PesTessWrinkle(float2 uv, float age)
       wa = saturate(wa); wb = saturate(wb);
       float4 pa = 1.0 + 0.2 * wa, pb = 1.0 + 0.2 * wb;   // (10/11) igual que el PS
       float4 ka = kWrDmmA * pow(wa, 0.8) * gain, kb = kWrDmmB * pow(wb, 0.8) * gain;
-      float dd = PesWrD1(pesWrDA.SampleLevel(pesTessSamp, uv, 1), pesWrDB.SampleLevel(pesTessSamp, uv, 1), pa, pb, ka, kb);
-      float dB = PesWrD1(pesWrDA.SampleLevel(pesTessSamp, uv, 4), pesWrDB.SampleLevel(pesTessSamp, uv, 4), pa, pb, ka, kb);
+      float dd = PesWrDS(pesTessSamp, uv, 1, pa, pb, ka, kb);   // (10/11 d) con los mapas de edad
+      float dB = PesWrDS(pesTessSamp, uv, 4, pa, pb, ka, kb);
       wrDr = float2(saturate((dd - dB) / 0.45), 0.7 * saturate((dB - dd) / 0.45));   // (10/11 c) surco / cresta contra el promedio de ~4 mm (relieve entero)
       wrDon = true;
     } }
