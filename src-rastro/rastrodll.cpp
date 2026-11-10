@@ -562,6 +562,8 @@ DWORD WINAPI Worker(void*) {
     return 0;
 }
 
+} // namespace
+
 // ---------------------------------------------------------------- entrada
 // (10/11) Ya NO es proxy de dinput8.dll: en la PC de Agustin ya existe un dinput8.dll de otro mod (y dsound.dll es la fisica de ropa).
 // La carga un modulo Lua de Sider (rastro_v4.lua, LoadLibrary por ffi): no reemplaza ni pisa ninguna DLL.
