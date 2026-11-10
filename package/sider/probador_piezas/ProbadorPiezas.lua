@@ -1,4 +1,4 @@
--- ProbadorPiezas v2.1 - PES 2021 / Sider  (PES21 FX, 10/11/2026)
+-- ProbadorPiezas v2.2 - PES 2021 / Sider  (PES21 FX, 10/11/2026)
 -- Probador de modelos (.fmdl) de los jugadores, UNO A UNO.
 -- Elegis un LUGAR del jugador (camiseta, cuello, mangas, short) y con una tecla vas pasando
 -- por el CATALOGO de modelos del juego: en ese lugar se carga el modelo elegido en vez del
@@ -6,13 +6,20 @@
 -- Sirve para ver que es cada fmdl (pechera de entrenamiento, polo, traje, ropa de
 -- entrenamiento, camiseta interior...) y encontrar los que no conoces.
 --
+-- (2.2) Previsualizador de CUALQUIER modelo del juego: el catalogo puede traer todos los
+-- fmdl (jugadores, pelotas, arcos, estadio, objetos...), ordenados por grupo (carpeta).
+-- En el modo Editar el jugador hace de maniqui: pones el modelo en un lugar y lo miras.
+--
 -- Catalogo: content\probador-piezas\catalogo\  (los .fmdl que esten ahi adentro),
--- listado en content\probador-piezas\catalogo\indice.txt (una ruta relativa por linea).
+-- listado en catalogo\indice.txt (una ruta relativa por linea, grupo\archivo.fmdl).
+-- Si existe content\probador-piezas\catalogo_raiz.txt, su primera linea es la carpeta
+-- del catalogo (ruta completa, por ejemplo en otro disco) y el indice se lee de ahi.
 --
 -- Uso: overlay de Sider, pasar a este modulo con [ y ] :
 --   0      = SIGUIENTE modelo del catalogo en el lugar elegido     9 = anterior
 --   7 / 8  = lugar anterior / siguiente (camiseta, cuello, mangas, short, ropa de
 --            entrenamiento, camiseta interior, pechera)
+--   5 / 6  = GRUPO anterior / siguiente del catalogo (salta al primer modelo del grupo)
 --   1      = ese lugar vuelve a NORMAL          2 = ese lugar OCULTO (modelo vacio)
 --   3      = todo a normal
 -- El juego guarda los modelos ya cargados: despues de cambiar, volve a entrar al jugador
@@ -20,7 +27,7 @@
 -- Lo elegido se recuerda entre sesiones (estado.txt). No usar junto con SinCamiseta.
 -- No todos los modelos van a calzar en cualquier lugar: para eso es el probador.
 
-local m = { version = "2.1" }
+local m = { version = "2.2" }
 local DIR, CAT, EMPTY, ESTADO
 local catalogo = {}                 -- rutas relativas dentro de catalogo\
 local LUGARES = {
@@ -113,6 +120,23 @@ local function cargar()
     end
 end
 
+local function grupo_de(r)
+    return string.match(r, "^(.*)[\\/][^\\/]+$") or ""
+end
+
+local function leer_raiz()
+    local f = io.open(DIR .. "catalogo_raiz.txt", "rb")
+    if not f then return end
+    local l = f:read("*l") or ""
+    f:close()
+    l = string.match(l, "^%s*(.-)%s*$")
+    if l ~= "" then
+        local c = string.sub(l, -1)
+        if c ~= "\\" and c ~= "/" then l = l .. "\\" end
+        CAT = l
+    end
+end
+
 local function leer_catalogo()
     catalogo = {}
     local f = io.open(CAT .. "indice.txt", "rb")
@@ -131,6 +155,7 @@ local function texto_estado(i)
     local e = estado[i]
     if e == -1 then return "OCULTO" end
     if e >= 1 and catalogo[e] then return string.format("modelo %d de %d:  %s", e, #catalogo, catalogo[e]) end
+    if e >= 1 then return "modelo " .. e .. " (ya no esta en el catalogo)" end
     return "normal"
 end
 
@@ -158,6 +183,29 @@ function m.key_down(ctx, vkey)
             if e < 1 then e = n end
         end
         estado[lugar] = e
+    elseif vkey == 0x35 or vkey == 0x36 then
+        if n == 0 then
+            aviso = "el catalogo esta vacio (falta catalogo\\indice.txt)"
+            return
+        end
+        local e = estado[lugar]
+        if e < 1 then e = 1 end
+        if e > n then e = n end
+        local g = grupo_de(catalogo[e])
+        if vkey == 0x36 then
+            local k = e
+            while k <= n and grupo_de(catalogo[k]) == g do k = k + 1 end
+            if k > n then k = 1 end
+            e = k
+        else
+            local k = e
+            while k >= 1 and grupo_de(catalogo[k]) == g do k = k - 1 end      -- ultimo del grupo anterior
+            if k < 1 then k = n end
+            local g2 = grupo_de(catalogo[k])
+            while k > 1 and grupo_de(catalogo[k - 1]) == g2 do k = k - 1 end  -- su primer modelo
+            e = k
+        end
+        estado[lugar] = e
     elseif vkey == 0x31 then estado[lugar] = 0
     elseif vkey == 0x32 then estado[lugar] = -1
     elseif vkey == 0x33 then for i = 1, #LUGARES do estado[i] = 0 end
@@ -174,7 +222,7 @@ function m.overlay_on(ctx)
     for i, l in ipairs(LUGARES) do
         t[#t + 1] = string.format("%s %-10s %s", i == lugar and ">" or " ", l.nombre, texto_estado(i))
     end
-    t[#t + 1] = "0 = siguiente modelo | 9 = anterior | 7/8 = lugar | 1 normal | 2 oculto | 3 todo normal"
+    t[#t + 1] = "0 = siguiente modelo | 9 = anterior | 5/6 = grupo | 7/8 = lugar | 1 normal | 2 oculto | 3 todo normal"
     if aviso ~= "" then t[#t + 1] = aviso end
     return table.concat(t, "\n")
 end
@@ -184,6 +232,7 @@ function m.init(ctx)
     CAT = DIR .. "catalogo\\"
     EMPTY = DIR .. "vacio.fmdl"
     ESTADO = DIR .. "estado.txt"
+    leer_raiz()
     leer_catalogo()
     cargar()
     if not exists(EMPTY) then log("ProbadorPiezas: FALTA " .. EMPTY) end
