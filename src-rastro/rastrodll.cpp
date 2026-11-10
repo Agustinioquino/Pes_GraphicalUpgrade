@@ -48,7 +48,7 @@ const char* const kWatchName[3] = { "tipo_falta(MI+0x1588)", "infractor(MI+0x159
 struct Cfg {
     std::wstring baseDir;
     bool on = false; int maxMb = 2000, fps = 2; bool falta = true, anime = true;
-    std::vector<uintptr_t> funcs; int funcsLote = 100, funcsEspera = 90;   // tanda cada 250 ms; segundos de espera antes de armar
+    std::vector<uintptr_t> funcs; int funcsLote = 100, funcsEspera = 10, autoSeg = 0;   // tanda cada 250 ms; segundos de espera antes de armar
 } g_cfg;
 
 FILE* g_logf = nullptr;
@@ -360,7 +360,7 @@ void ArmTrace() {
     s_trT0 = GetTickCount64(); GetLocalTime(&s_trLocal0);
     if (!s_th) { Log("rastro_funcs: sin memoria para el anillo, rastreador apagado"); s_trState = 3; return; }
     s_trState = 1;
-    Log("rastro: rastreador de funciones: %zu direcciones; arma de a %d cada 250 ms tras %d s de espera", s_trace.size(), g_cfg.funcsLote, g_cfg.funcsEspera);
+    Log("rastro: rastreador de funciones: %zu direcciones; arma de a %d cada 300 ms tras %d s de espera", s_trace.size(), g_cfg.funcsLote, g_cfg.funcsEspera);
 }
 // pone los int3 de a tandas (hilo Worker, cada 250 ms). La tabla ya esta ordenada: el VEH puede buscar siempre.
 void TraceStep() {
@@ -430,6 +430,7 @@ void LoadCfg() {
         else if (k == "rastro_fotos") { int x = atoi(v.c_str()); g_cfg.fps = x < 1 ? 1 : (x > 54 ? 54 : x); }
         else if (k == "rastro_faltas") g_cfg.falta = atoi(v.c_str()) != 0;
         else if (k == "rastro_anime") g_cfg.anime = atoi(v.c_str()) != 0;
+        else if (k == "rastro_auto_seg") { int x = atoi(v.c_str()); g_cfg.autoSeg = x < 0 ? 0 : (x > 36000 ? 36000 : x); }
         else if (k == "rastro_funcs_lote") { int x = atoi(v.c_str()); g_cfg.funcsLote = x < 1 ? 1 : (x > 2000 ? 2000 : x); }
         else if (k == "rastro_funcs_espera") { int x = atoi(v.c_str()); g_cfg.funcsEspera = x < 0 ? 0 : (x > 3600 ? 3600 : x); }
         else if (k == "rastro_funcs") {
@@ -516,24 +517,48 @@ void Flush(bool final) {
 // __try/__except aislado en su propia funcion (sin objetos C++ que requieran desenrollado): evita C2712
 static void SafeInstall() { __try { Install(); } __except (EXCEPTION_EXECUTE_HANDLER) {} }
 
+// (10/11 c) La DLL arranca APAGADA: no engancha nada durante la carga del juego (dos arranques se quedaron en la pantalla de
+// carga con los ganchos puestos). Se prende con Ctrl+Shift+F9 con el juego en primer plano (pitido grave-agudo), o sola a los
+// rastro_auto_seg segundos si es > 0. Ctrl+Shift+F10 deja una MARCA numerada con la hora en marcas.log (pitido corto), para
+// saber despues que estaba haciendo el jugador en cada momento.
+static bool KeyCombo(int vk) {
+    DWORD pid = 0; HWND fg = GetForegroundWindow(); if (fg) GetWindowThreadProcessId(fg, &pid);
+    if (pid != GetCurrentProcessId()) return false;
+    return (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_SHIFT) & 0x8000) && (GetAsyncKeyState(vk) & 0x8000);
+}
 DWORD WINAPI Worker(void*) {
     LoadCfg();
     { CreateDirectoryW(g_cfg.baseDir.c_str(), nullptr); g_logf = _wfopen((g_cfg.baseDir + L"rastro_dll.log").c_str(), L"wb"); }
-    Log("rastro v4 (DLL de investigacion) cargada; rastro=%d", g_cfg.on ? 1 : 0);
-    for (int i = 0; i < 1200 && !s_installed.load(); i++) {   // espera a que el exe este listo (hasta 10 min)
-        if (RdPtr(kRegGlobal) || i > 20) SafeInstall();
-        Sleep(500);
-        s_frame.fetch_add(1, std::memory_order_relaxed);
-        if (s_installed.load() && (i % 10) == 0) Flush(false);
+    Log("rastro v4 (DLL de investigacion) cargada; rastro=%d; APAGADA hasta Ctrl+Shift+F9%s", g_cfg.on ? 1 : 0, g_cfg.autoSeg > 0 ? " o la espera de rastro_auto_seg" : "");
+    if (!g_cfg.on) return 0;
+    const ULONGLONG t0 = GetTickCount64();
+    while (!s_installed.load()) {   // nada enganchado todavia
+        Sleep(100);
+        const bool key = KeyCombo(VK_F9);
+        const bool autoOn = g_cfg.autoSeg > 0 && GetTickCount64() - t0 > (ULONGLONG)g_cfg.autoSeg * 1000;
+        if (!key && !autoOn) continue;
+        if (!RdPtr(kRegGlobal)) { if (key) { Beep(300, 300); Log("rastro: Ctrl+Shift+F9 pero el juego todavia no esta listo"); Sleep(800); } continue; }
+        SafeInstall();
+        if (s_installed.load()) { Beep(600, 120); Beep(1000, 160); }
+        else { Beep(300, 400); Log("rastro: no se pudo prender (ver lineas anteriores)"); return 0; }
     }
-    for (int i = 0; s_installed.load(); i++) {   // 250 ms: tandas del rastreador + guardian; volcado cada 5 s
-        Sleep(250); TraceStep(); TraceWatch();
-        if ((i % 20) == 19) { s_frame.fetch_add(10, std::memory_order_relaxed); Flush(false); }
+    FILE* marks = _wfopen((s_dir + L"marcas.log").c_str(), L"wb");
+    if (marks) { fputs("marca\thora\ttick\n", marks); fflush(marks); }
+    int nMark = 0; bool f10Was = false;
+    for (int i = 0; s_installed.load(); i++) {   // 100 ms: marcas, tandas del rastreador, guardian; volcado cada 5 s
+        Sleep(100);
+        const bool f10 = KeyCombo(VK_F10);
+        if (f10 && !f10Was) {
+            SYSTEMTIME lt; GetLocalTime(&lt); nMark++;
+            if (marks) { fprintf(marks, "%d\t%02d:%02d:%02d.%03d\t%d\n", nMark, lt.wHour, lt.wMinute, lt.wSecond, lt.wMilliseconds, s_tick.load()); fflush(marks); }
+            Log("rastro: MARCA %d", nMark); Beep(1400, 70);
+        }
+        f10Was = f10;
+        if ((i % 3) == 2) { TraceStep(); TraceWatch(); }
+        if ((i % 50) == 49) { s_frame.fetch_add(10, std::memory_order_relaxed); Flush(false); }
     }
     return 0;
 }
-
-} // namespace
 
 // ---------------------------------------------------------------- entrada
 // (10/11) Ya NO es proxy de dinput8.dll: en la PC de Agustin ya existe un dinput8.dll de otro mod (y dsound.dll es la fisica de ropa).
