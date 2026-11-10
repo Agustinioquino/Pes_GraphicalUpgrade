@@ -1,0 +1,108 @@
+MSBuild version 18.11.1-1.26513.3+940033be3 for .NET Framework
+
+  1>Checking Build System
+  Building Custom Rule D:/a/Pes_GraphicalUpgrade/Pes_GraphicalUpgrade/CMakeLists.txt
+  buffer.c
+  hook.c
+  trampoline.c
+  hde64.c
+  Generating Code...
+  minhook.vcxproj -> D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\Release\minhook.lib
+  Building Custom Rule D:/a/Pes_GraphicalUpgrade/Pes_GraphicalUpgrade/CMakeLists.txt
+  Assembling D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\d3d11_exports.asm...
+  main.cpp
+  d3d11_proxy.cpp
+  config.cpp
+  hooks.cpp
+  overlay.cpp
+  lang.cpp
+  presets.cpp
+  catalog.cpp
+  grass.cpp
+  statecache.cpp
+  menutest.cpp
+  facegen.cpp
+  inspect.cpp
+  ssss.cpp
+  headshadow.cpp
+  pitchwear.cpp
+  lod.cpp
+  lightmeter.cpp
+  gtao.cpp
+  ssgi.cpp
+  Generating Code...
+  Compiling...
+  exedump.cpp
+  asyncshot.cpp
+  exepatch.cpp
+  camhook.cpp
+  soleditor.cpp
+  musculo.cpp
+  musculo_ui.cpp
+  personajes.cpp
+  fisico.cpp
+  codewatch.cpp
+  memwatch.cpp
+  skintone.cpp
+  glass.cpp
+  ring.cpp
+  cuerpo.cpp
+  manos.cpp
+  sunwatch.cpp
+  solreloj.cpp
+  grassdist.cpp
+  brazos.cpp
+  Generating Code...
+  Compiling...
+  inflate.cpp
+  keyblock.cpp
+  expr.cpp
+  exprbones.cpp
+  faceinject.cpp
+  facetess.cpp
+  arrugasjug.cpp
+  bocajug.cpp
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\arrugasjug.cpp(37,28): error C2065: 'g_cfg': undeclared identifier [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\arrugasjug.cpp(37,48): error C2065: 'g_cfg': undeclared identifier [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\arrugasjug.cpp(37,68): error C2065: 'g_cfg': undeclared identifier [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\arrugasjug.cpp(37,88): error C2065: 'g_cfg': undeclared identifier [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\arrugasjug.cpp(37,108): error C2065: 'g_cfg': undeclared identifier [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\arrugasjug.cpp(37,128): error C2065: 'g_cfg': undeclared identifier [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\arrugasjug.cpp(37,148): error C2065: 'g_cfg': undeclared identifier [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\arrugasjug.cpp(37,168): error C2065: 'g_cfg': undeclared identifier [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\arrugasjug.cpp(50,26): error C2065: 'g_dev': undeclared identifier [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\arrugasjug.cpp(61,36): error C2065: 'g_dev': undeclared identifier [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\arrugasjug.cpp(74,43): error C2065: 'g_cfg': undeclared identifier [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\arrugasjug.cpp(74,70): error C2065: 'g_cfg': undeclared identifier [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\arrugasjug.cpp(75,30): error C3861: 'Log': identifier not found [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\arrugasjug.cpp(84,9): error C2065: 'g_dev': undeclared identifier [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\arrugasjug.cpp(84,121): error C2065: 'g_dev': undeclared identifier [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\arrugasjug.cpp(93,31): error C2065: 'g_cfg': undeclared identifier [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\arrugasjug.cpp(114,5): error C3861: 'Log': identifier not found [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+  tiempo.cpp
+  freecam.cpp
+  caras_hd.cpp
+  caramalla.cpp
+  mouthmask.cpp
+  gpumeter.cpp
+  gani.cpp
+  panel.cpp
+  cmdlistguard.cpp
+  relwatch.cpp
+  cobertura.cpp
+  rastro.cpp
+  Generating Code...
+  Compiling...
+  rastro_v4.cpp
+  publico.cpp
+  solluz.cpp
+  imgui.cpp
+  imgui_draw.cpp
+  imgui_tables.cpp
+  imgui_widgets.cpp
+  imgui_impl_dx11.cpp
+  imgui_impl_win32.cpp
+  DDSTextureLoader.cpp
+  ScreenGrab.cpp
+  WICTextureLoader.cpp
+  Generating Code...
