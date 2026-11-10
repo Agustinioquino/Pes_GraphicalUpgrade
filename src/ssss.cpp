@@ -78,7 +78,9 @@ ID3D11ShaderResourceView* SSSSBeforeComposition(ID3D11DeviceContext* c) {
     D3D11_SHADER_RESOURCE_VIEW_DESC vd; light->GetDesc(&vd);
     DXGI_FORMAT fmt = vd.Format == DXGI_FORMAT_UNKNOWN ? td.Format : vd.Format;
     // (27/10 b) luz de prueba del editor (297): la pasada 1 escribe tambien el brillo (t10) y se lo da a la composicion
-    const bool editorLight = g_cfg.live[297][0] > 0.5f && g_cfg.live[44][3] < 0.5f && g_cfg.live[255][3] > 0.5f && spec != nullptr;
+    // (09/11 e) con el sol real del motor en el ciclo de dia y noche (z393 > 1.5) el sol corre (w44 = 1) pero la pasada 1 sigue: pone el ambiente por hora
+    const bool solRealCiclo = g_solRealActivo > 1.5f && g_cfg.live[297][0] > 0.5f && g_cfg.live[255][3] > 0.5f;
+    const bool editorLight = ((g_cfg.live[297][0] > 0.5f && g_cfg.live[44][3] < 0.5f && g_cfg.live[255][3] > 0.5f) || solRealCiclo) && spec != nullptr;
     DXGI_FORMAT fmtS = fmt;
     if (spec) { D3D11_SHADER_RESOURCE_VIEW_DESC vs; spec->GetDesc(&vs); fmtS = vs.Format; if (fmtS == DXGI_FORMAT_UNKNOWN) { ID3D11Resource* rs = nullptr; spec->GetResource(&rs); if (rs) { D3D11_TEXTURE2D_DESC ts; ((ID3D11Texture2D*)rs)->GetDesc(&ts); fmtS = ts.Format; rs->Release(); } } }
     if (td.SampleDesc.Count != 1 || !EnsureTargets(td.Width, td.Height, fmt, fmtS)) { rel(); return nullptr; }
@@ -116,7 +118,7 @@ ID3D11ShaderResourceView* SSSSBeforeComposition(ID3D11DeviceContext* c) {
     // pasada 1: light (+ luz de prueba del editor) -> tex0, brillo -> tex2
     // (08/11) sin luz de prueba del editor la pasada 1 (pes_ssss_h_ps) devuelve t9 tal cual ('return o' con x297 = 0 o con sol): una copia
     // de toda la pantalla por cuadro al pedo. Se salta y la pasada 2 lee t9 directo (en partido ahorra una pasada completa de 1080p RGBA16F).
-    const bool preNeeded = g_cfg.live[297][0] > 0.5f && g_cfg.live[44][3] < 0.5f && g_cfg.live[255][3] > 0.5f;   // misma condicion que el shader (x297 y noSun)
+    const bool preNeeded = (g_cfg.live[297][0] > 0.5f && g_cfg.live[44][3] < 0.5f && g_cfg.live[255][3] > 0.5f) || solRealCiclo;   // misma condicion que el shader (x297 y noSun)
     if (preNeeded) {
         ID3D11RenderTargetView* rt0[2] = { s_rtv[0], editorLight ? s_rtv[2] : nullptr }; c->OMSetRenderTargets(2, rt0, nullptr);
         ID3D11ShaderResourceView* sv0[6] = { light, depth, mat, nrm, in[8], spec }; c->PSSetShaderResources(0, 6, sv0); { ID3D11ShaderResourceView* r6[2] = { s_refSRV, MouthMaskSRV() }; c->PSSetShaderResources(6, 2, r6); }   // (04/11 boca) t7 = mascara del interior de la boca   // t4 = albedo (tono de piel), t5 = brillo
@@ -126,6 +128,7 @@ ID3D11ShaderResourceView* SSSSBeforeComposition(ID3D11DeviceContext* c) {
     c->PSSetShaderResources(0, 6, nulls);
     c->OMSetRenderTargets(1, &s_rtv[1], nullptr);
     ID3D11ShaderResourceView* sv1[6] = { preNeeded ? s_srv[0] : light, depth, mat, nrm, in[8], nullptr }; c->PSSetShaderResources(0, 6, sv1);
+    { ID3D11ShaderResourceView* r7 = MouthMaskSRV(); c->PSSetShaderResources(7, 1, &r7); }   // (09/11) la pasada 2 tambien: no difumina la boca con los labios
     c->PSSetShader(s_psV, nullptr, 0); c->Draw(3, 0);
     c->PSSetShaderResources(0, 6, nulls); { ID3D11ShaderResourceView* n6[2] = {}; c->PSSetShaderResources(6, 2, n6); }
     if (editorLight) { s_specOut = s_srv[2]; s_edLightT.store(Now()); }

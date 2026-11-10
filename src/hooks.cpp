@@ -517,7 +517,8 @@ static void UploadParams() {
         if (p[139][0] > 0.5f) p[104][0] = 1.0f;   // (20/10) pasto v5: necesita el pasto v3 (x104) prendido en la GPU
         p[258][0] = (g_cfg.motorPatch && g_cfg.motorSunFix && g_cfg.motorShadowFix == 0) ? 1.0f : 0.0f;   // (02/11) x258: la luz esta corregida y el shadow map no (los shaders del sol no miden grosor con el)
         p[147][3] = 1.0f;   // (20/10) w147: esta DLL iguala la cabeza de las caras genericas con la cara (reglas PS + VS)
-        p[393][3] = (float)fmod(Now(), 3600.0);   // (09/11) w393: reloj en segundos (vuelve a 0 cada hora) para el ciclo de dia y noche de la luz del editor (w392)
+        p[393][3] = g_tlClock;   // (10/11) fase guardada del ciclo (solluz.cpp) x periodo; antes el reloj (s mod 3600)   // (09/11) w393: reloj en segundos (vuelve a 0 cada hora) para el ciclo de dia y noche de la luz del editor (w392)
+        p[393][2] = g_solRealActivo;   // (09/11) z393 = 1: el sol real del motor esta prendido en el editor (el shader deja de imitarlo)
         for (auto& kv : g_cfg.rules) {
             if (kv.second.paramSet < 0) continue;
             for (auto& a : kv.second.actions) if (a.kind == RuleAction::SetParam) {
@@ -1252,6 +1253,34 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
 static std::atomic<bool> g_shirtSeen{false};   // (27/10 c) se dibujo una camiseta desde el ultimo Present
 static std::atomic<bool> s_firstRule{false};
 thread_local bool t_sparseGrass = false;
+// (09/11, hilo boca/oclusion) DIAGNOSTICO del recuadro de la boca con el SSS (w95): un cuadro cada 10 s se anotan, en orden, los
+// dibujos de la malla de la boca (65280 indices) y de la cara / boca / composicion del editor, con su profundidad y su mezcla, para
+// ver si algun dibujo de la boca escribe profundidad delante de la piel sin pintar color. Solo lectura (no cambia nada del dibujo).
+static std::atomic<int> s_mdState{0}; static std::atomic<int> s_mdSeq{0}; static double s_mdLast = 0;
+static void MouthDrawDiag(ID3D11DeviceContext* c, uint64_t psh, uint64_t vsh, UINT idx) {
+    if (s_mdState.load(std::memory_order_relaxed) != 1) return;
+    const bool face = psh == 0x5ce3ed8702271bc1ULL || psh == 0xce188ae110354aeaULL || psh == 0x63fab7735eee149cULL || psh == 0xf807e74d5b900a15ULL || psh == 0x619b86cb5691cdceULL;
+    const int seq = s_mdSeq.fetch_add(1, std::memory_order_relaxed);
+    if (!(face || idx == 65280u)) return;
+    static std::atomic<int> s_lines{0}; if (s_lines.fetch_add(1) > 2000) return;   // tope de toda la sesion
+    ID3D11RenderTargetView* rt[8] = {}; ID3D11DepthStencilView* dsv = nullptr; c->OMGetRenderTargets(8, rt, &dsv);
+    int nrt = 0; for (auto* r : rt) if (r) { nrt++; r->Release(); }
+    ID3D11DepthStencilState* dss = nullptr; UINT ref = 0; c->OMGetDepthStencilState(&dss, &ref);
+    D3D11_DEPTH_STENCIL_DESC dd{}; bool hasDss = dss != nullptr; if (dss) { dss->GetDesc(&dd); dss->Release(); } else { dd.DepthEnable = TRUE; dd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL; dd.DepthFunc = D3D11_COMPARISON_LESS; }
+    ID3D11BlendState* bs = nullptr; float bf[4]; UINT sm = 0; c->OMGetBlendState(&bs, bf, &sm);
+    D3D11_BLEND_DESC bd{}; if (bs) { bs->GetDesc(&bd); bs->Release(); } else { bd.RenderTarget[0].RenderTargetWriteMask = 0xF; }
+    ID3D11RasterizerState* rs = nullptr; c->RSGetState(&rs); D3D11_RASTERIZER_DESC rd{}; if (rs) { rs->GetDesc(&rd); rs->Release(); }
+    Log("dibujo boca diag #%d ps %016llx vs %016llx idx %u rtv %d dsv %d | prof %s%d escribe %d func %d | mezcla rt0 %d mascara %x %x %x | bias %d cull %d",
+        seq, (unsigned long long)psh, (unsigned long long)vsh, idx, nrt, dsv ? 1 : 0, hasDss ? "" : "(defecto) ", dd.DepthEnable ? 1 : 0, (int)dd.DepthWriteMask, (int)dd.DepthFunc,
+        bd.RenderTarget[0].BlendEnable ? 1 : 0, bd.RenderTarget[0].RenderTargetWriteMask, bd.RenderTarget[1].RenderTargetWriteMask, bd.RenderTarget[2].RenderTargetWriteMask,
+        rs ? rd.DepthBias : 0, rs ? (int)rd.CullMode : 0);
+    if (dsv) dsv->Release();
+}
+static void MouthDrawDiagPresent() {
+    const double t = Now();
+    if (s_mdState.load() == 1) { s_mdState = 0; s_mdLast = t; return; }
+    if (t - s_mdLast > 10.0) { s_mdSeq = 0; s_mdState = 1; Log("dibujo boca diag: cuadro nuevo"); }
+}
 thread_local UINT t_drawVerts = 0; thread_local int t_drawKind = 0; thread_local UINT t_drawStart = 0; thread_local INT t_drawBase = 0; thread_local bool t_lodNoted = false; thread_local LodIA t_grassSub;   // (20/10) DrawIndexed en curso (LOD de caras)   // vertices del dibujo en curso (para "solo esta capa" del inspector)   // el dibujo en curso es una parcela lejana del pasto (lo marca GrassOnDraw)
 static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (!g_dev.dev) return false;
@@ -1266,6 +1295,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     // (27/10 b) brazos, manos, muslos y torso de TorsoBody del tono de la cara (brazos.cpp, filas 321 / 327): son las texturas
     // del cuerpo, no un shader, asi que valen tambien con "Ver original" (el shader original lee el mismo t0)
     LeakCheck(c, ps, vs);
+    MouthDrawDiag(c, ps ? ps->hash : 0, vs ? vs->hash : 0, t_drawKind == 1 ? t_drawVerts : 0u);   // (09/11) diagnostico del recuadro de la boca
     if (vs) if (ID3D11ShaderResourceView* at = ArmsTextureFor(c, vs->hash, t_drawVerts)) { ArmSwapNote(ps, t_drawVerts); Remember(c, d, true, true, 0); c->PSSetShaderResources(0, 1, &at); }
     if (g_cfg.bypass) return d.n > 0;
     if (g_skinDiagArmed.load(std::memory_order_relaxed)) SkinDiagDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0, t_drawVerts);   // (24/10) skintone.cpp
@@ -1387,7 +1417,8 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     // (27/10 c) sombra de la cabeza: el atlas propio (t30) a los 7 shaders del sol reemplazados
     if (ps && ps->repl) { int si = SunPassIndex(ps->hash); if (si >= 0 && si != 7) if (ID3D11ShaderResourceView* hs = HeadShadowSRV()) { Remember(c, d, true, true, 30); c->PSSetShaderResources(30, 1, &hs); } }
     // (04/11 boca) d0e9 / 7dbbc: mascara del interior de la boca en t43 (donde hay boca, la contraluz de antes)
-    if (ps && ps->repl && (ps->hash == 0xd0e9d81c09b3da66ULL || ps->hash == 0x7dbbc922c9ae74c5ULL || ps->hash == 0x619b86cb5691cdceULL)) if (ID3D11ShaderResourceView* mm = MouthMaskSRV())   /* (09/11 hilo boca) + 619b: sombra del volumen de la boca */ { Remember(c, d, true, true, 43); c->PSSetShaderResources(43, 1, &mm); }
+    if (ps && ps->repl && (ps->hash == 0xd0e9d81c09b3da66ULL || ps->hash == 0x7dbbc922c9ae74c5ULL || ps->hash == 0x619b86cb5691cdceULL
+        /* (10/11) focos: la sombra fina sobre la cara no entra en la boca */ || ps->hash == 0x142c18270479a113ULL || ps->hash == 0x68d58aa84c0256f5ULL || ps->hash == 0x9ce9d8463800b399ULL || ps->hash == 0xc33576f12dd818bfULL || ps->hash == 0xd5037e255559ea13ULL)) if (ID3D11ShaderResourceView* mm = MouthMaskSRV())   /* (09/11 hilo boca) + 619b: sombra del volumen de la boca */ { Remember(c, d, true, true, 43); c->PSSetShaderResources(43, 1, &mm); }
     // 20/10: desgaste de la cancha en vivo: la posicion de cada jugador sale del dibujo de su short / medias (b5 del VS)
     if (ps && ps->hash == 0x55297925e0c66085ULL) PitchWearNotePlayer(c);
     // (2/11) botines / pelota (aadffecf): anotar la traslacion para reconocer la pelota; en el dibujo de la pelota, b12 = manchas (fila 177)
@@ -2105,9 +2136,12 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     RastroEventosPresent();   // (08/11) eventos del partido para los gestos del publico (fila 394)
     { static ULONGLONG t = 0; ULONGLONG n = GetTickCount64(); if (n - t > 10000) { t = n; RastroFlush(false); } }
     FaceInjectPresent();   // (09/11) matrices del rig: donde se arma la cara (solo mide, expr_inyeccion)
+    SolEditorPresent();   // (09/11) sol real del editor: ganchos (primer Present), aplicar pendiente, log cada 10 s
     CamHookPresent();   // (23/10) camara del motor: ganchos (primer Present), cortes de camara -> 160, log
     TiempoPresent();    // (31/10) camara lenta: ganchos (visor del editor / reloj del partido, primer Present), 343.w, log
+    SolLuzPresent();    // (09/11) sol real del motor en el editor (w378 / w392 -> zfx_SolEditor), z393
     CmdListGuardPresent();
+    MouthDrawDiagPresent();   // (09/11) diagnostico del recuadro de la boca (un cuadro cada 10 s)
     StateCachePresent();   // (08/11) estados del mod por descripcion (statecache.cpp)
     RelWatchPresent();   // (08/11 g) quien suelta la ultima referencia de cada estado (cierre 11:19 en LUCDeferDeletion)   // (08/11) locks de las listas de comandos del juego con tope de espera (cuelgues del editor)
     FreeCamPresent();   // (1/11) camara libre: gancho a la camara del visor del editor (primer Present), log

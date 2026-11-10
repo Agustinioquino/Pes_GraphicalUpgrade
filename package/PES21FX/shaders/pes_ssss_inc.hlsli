@@ -35,6 +35,21 @@ float Lum(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 // radios del perfil de Burley en unidades de d: inversa de la CDF 1 - e^-x/4 - 3e^(-x/3)/4 en u = (i + 0.5) / 8
 static const float kBurleyX[8] = { 0.1305, 0.4299, 0.7976, 1.2651, 1.8883, 2.7792, 4.2184, 7.4616 };
 
+// (09/11) pixel de la boca visible: la mascara de la DLL guarda la profundidad del dibujo de la boca y solo vale si coincide con la final
+bool PesMouthAt(float2 px, uint mw, uint mh) {
+  if (mw == 0) return false;
+  uint2 p = min((uint2)px, uint2(mw - 1, mh - 1));
+  float mz = inMouth.Load(int3(p, 0)), dz = inDepth.Load(int3(p, 0)).x;
+  return mz > 0.0 && abs(mz - dz) <= 1e-6 + 2e-4 * abs(dz);
+}
+// (10/11, Agustin: "no me gusta como detecta a la piel") PIEL DE VERDAD, no solo la marca del G-buffer: la marca 250/255 la llevan
+// tambien la barba, el bigote, las cejas y el nacimiento del pelo pintados en la textura de la cara. El PS de la cara pone la
+// translucidez (6 bits de la normal .z) en 0 donde la textura es pelo (fhMask) y la piel mas gruesa nunca baja de ~0.10:
+// 0 = pelo sobre la piel (no difunde ni presta luz: la barba no se lava ni mancha la mejilla), 1 = piel
+float PesSkinK(float2 uv) {
+  uint q = (uint)(inNrm.SampleLevel(sPoint, uv, 0).z * 1023.0 + 0.5);
+  return smoothstep(0.5 / 63.0, 3.5 / 63.0, (float)(q >> 4) / 63.0);
+}
 float BurleyF(float x) { return exp(-x) + exp(-x / 3.0); }
 
 #ifdef SSSS_REF
@@ -283,7 +298,7 @@ void PesOneLightMatch(float3 L, float3 col, float sh, float3 n, float3 V, float 
   float3 w = saturate(trans) * wd * float3(1.0, 0.6, 0.45);
   { float4 Q62 = IniParams.Load(int2(62, 0)); if (Q62.x > 0.5 && Q62.w > 0.0) w *= lerp(1.0, 0.45 + 1.4 * g_skCurv, saturate(Q62.w)); }
   w = min(w * 0.12, float3(0.22, 0.11, 0.07));
-  if (uni) { float rPx = 0.006 * max(P95.x, 0.3) / max(g_skMpp, 1e-6); w *= 1.0 - 0.45 * saturate((rPx - 1.0) / 5.0); }
+  if (uni) { float rPx = 0.006 * max(P95.x, 0.3) / max(g_skMpp, 1e-6); w *= 1.0 - 0.85 * saturate((rPx - 1.0) / 5.0); }
   float3 d = saturate(PesMtSoftTerm(rawNL, w));
   float shT = lerp(1.0, sh, smoothstep(0.02, 0.12, rawNL));   // la sombra trazada solo existe con N.L > 0.02: sin escalon
   dif += col * d * shT;
@@ -304,9 +319,12 @@ void PesOneLightMatch(float3 L, float3 col, float sh, float3 n, float3 V, float 
     float back = saturate(dot(-n, L) * 0.8 + 0.2);
     float3 sigT = float3(1.0, 3.6, 6.5) * (P34.y > 0 ? P34.y : 1.0);
     float3 Tr = exp(-(1.35 - thin) * sigT) * thin;
-    float thinGate = lerp(smoothstep(0.45, 0.85, thin), 1.0, saturate(P76.y));
+    // (09/11 g, Agustin: capturas "Desde atras": la oreja casi no se enciende) 0.45..0.85 -> 0.30..0.75: la oreja entera (no solo el
+    // borde mas fino) deja pasar la luz roja; la mejilla (trm bajo) sigue sin transmitir
+    float thinGate = lerp(smoothstep(0.30, 0.75, thin), 1.0, saturate(P76.y));
     float exitK = back * (0.6 + 0.6 * fwd) * smoothstep(-0.05, 0.25, dot(L, -V)) * lerp(0.2, 1.0, silK);
-    tr = PesSsTransColor(Tr * exitK * thinGate * P5.x * 1.6 * (P76.x > 0.0 ? P76.x : 1.0), P34.z);
+    // (09/11 c, Agustin eligio "las tres": borde rojizo, poros y mas luz en orejas y nariz a contraluz) x1.6 -> x2.3
+    tr = PesSsTransColor(Tr * exitK * thinGate * P5.x * 2.3 * (P76.x > 0.0 ? P76.x : 1.0), P34.z);
   } else tr = PesSsTransColor(thin * smoothstep(0.45, 0.85, thin) * pow(saturate(dot(V, -Lt)), 3.0) * float3(1.0, 0.24, 0.10) * P5.x, P34.z);
   if (P64.x > 0.5 && P64.z > 0.0) {
     float dens = (P64.w > 0 ? P64.w : 30.0) * (1.25 - thin);
@@ -390,7 +408,26 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   o.c = float4(c0, 1); o.s = float4(s0, 1);
   float4 E = IniParams.Load(int2(297, 0)), E2 = IniParams.Load(int2(298, 0)), E3 = IniParams.Load(int2(319, 0));
   bool noSun = IniParams.Load(int2(44, 0)).w < 0.5 && IniParams.Load(int2(255, 0)).w > 0.5;
-  if (E.x < 0.5 || !noSun) return o;
+  if (E.x < 0.5) return o;
+  // (09/11 d, Agustin: "el sol cercano tiene que ser un sol real del juego") z393 = 1: la DLL prendio el sol real del motor en el
+  // editor (zfx_SolEditor, w378 / w392): lo dibuja la pasada del sol del partido con sus cascadas; aca no se imita ni se baja la
+  // luz de estudio (c0 ya trae ese sol)
+  // (09/11 e, Agustin: "le falta el ambiente") con el ciclo de dia y noche (z393 = 2 + seno de la altura del sol) el ambiente va
+  // con la hora sobre TODA la luz (estudio + sol real): de noche baja a un tercio y se enfria (luna / cielo nocturno), en el
+  // amanecer y el atardecer se entibia. De dia queda tal cual: el sol real ya hace el contraste
+  { float zR = IniParams.Load(int2(393, 0)).z;
+    if (zR > 0.5) {
+      if (zR > 1.5) {
+        float sE = zR - 2.0;
+        float nightK = smoothstep(0.06, -0.20, sE);
+        float duskK = (1.0 - nightK) * (1.0 - smoothstep(0.04, 0.40, sE));
+        float3 amb = lerp(1.0.xxx, float3(1.10, 0.90, 0.72), duskK);
+        amb = lerp(amb, float3(0.10, 0.12, 0.18), nightK);   // (10/11) negros de noche (antes 0.26: "los negros no son negros")
+        o.c = float4(c0 * amb, 1); o.s = float4(s0 * dot(amb, float3(0.3, 0.5, 0.2)), 1);
+      }
+      return o;
+    } }
+  if (!noSun) return o;
   float zC = LinZ(uv);
   float zSgn = zC < 0.0 ? -1.0 : 1.0, zA = abs(zC);
   float4 E4 = IniParams.Load(int2(377, 0)), E5 = IniParams.Load(int2(378, 0));
@@ -441,20 +478,29 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   // queda y el cielo van con la altura del sol; en el horizonte se funden sol y luna sin salto
   int tlMode = (int)(IniParams.Load(int2(392, 0)).w + 0.5);
   if (tlMode >= 1 && tlMode <= 4) {
-    float tlPer = tlMode == 1 ? 30.0 : (tlMode == 2 ? 60.0 : (tlMode == 3 ? 120.0 : 300.0));
+    // (10/11, Agustin: "el timelapse en 30s es poco natural, se pierde detalle") vueltas de 2 / 5 / 10 / 20 minutos
+    float tlPer = tlMode == 1 ? 120.0 : (tlMode == 2 ? 300.0 : (tlMode == 3 ? 600.0 : 1200.0));
     float tlT = frac(IniParams.Load(int2(393, 0)).w / tlPer);
     float sD = sin(6.2831853 * tlT);                      // > 0 de dia
     float dayK = smoothstep(-0.10, 0.10, sD);
-    float sunEl = 75.0 * sD, sunAz = lerp(100.0, -100.0, saturate(tlT * 2.0));
-    float moonEl = 45.0 * max(-sD, 0.0), moonAz = lerp(100.0, -100.0, saturate(tlT * 2.0 - 1.0));
     float sUp = saturate(sD);
-    if (dayK > 0.5) { az = sunAz; el = max(sunEl, 2.0); } else { az = moonAz; el = max(moonEl, 2.0); }
+    // (09/11 e, Agustin: "no es suave, ni la luz recorre como si fuera un timelapse") la misma orbita que el sol real de la DLL
+    // (solluz.cpp): fija en el MUNDO (al girar la camara el sol se queda en el cielo), sale por un costado, arco hasta 65 grados
+    // al mediodia y se pone por el otro; de noche la luna hace el mismo arco. En el horizonte la fuerza baja a 0 (abajo), asi el
+    // cambio sol -> luna no salta
+    float tA = 6.2831853 * tlT, oCa = cos(tA), oSa = sin(tA);
+    float3 orb = float3(oCa, oSa * 0.9063078, oSa * 0.4226183);
+    if (oSa < 0.0) orb = -orb;
+    float orbFade = smoothstep(0.005, 0.20, orb.y);
+    az = degrees(atan2(orb.x, orb.z)); el = max(degrees(asin(saturate(orb.y))), 1.0);
     float tWarmDay = lerp(0.98, 0.55, smoothstep(0.0, 0.6, sUp));
     warm  = lerp(0.12, tWarmDay, dayK);
     inten = lerp(0.22, lerp(0.55, 1.25, smoothstep(0.0, 0.5, sUp)), dayK);
-    keep  = lerp(0.18, lerp(0.40, 0.55, sUp), dayK);
-    skyK  = lerp(0.10, 0.16, dayK); gndK = lerp(0.01, 0.05, dayK) * (0.3 + 0.7 * sUp);
-    pSpotD = 0.0; pSpotA = 0.0; g_lightWorld = false;
+    // (10/11, Agustin: "los negros no son negros del todo") de noche casi no queda luz de estudio ni de cielo: manda la luna
+    keep  = lerp(0.05, lerp(0.40, 0.55, sUp), dayK);
+    skyK  = lerp(0.03, 0.16, dayK); gndK = lerp(0.0, 0.05, dayK) * (0.3 + 0.7 * sUp);
+    inten *= lerp(0.04, 1.0, orbFade);
+    pSpotD = 0.0; pSpotA = 0.0; g_lightWorld = true;
   }
   bool studio = preset == 4;
   // --- referencia de intensidad: la irradiancia de estudio mas alta sobre la piel, suavizada en el tiempo (pasada 0, t6) ---
@@ -471,7 +517,19 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   // (09/11, Agustin: "una opcion que coloque un sol cercano y permita cambiar sus angulos y posicion") w378 = 1: la luz principal
   // de CUALQUIER preset pasa a ser un sol cercano con posicion: rumbo (z297) y altura (w297) tal cual los sliders (no sumados al
   // preset), a y377 metros del jugador con un cono de z377 grados. Color e intensidad siguen siendo los del preset
-  if (E5.w > 0.5) { az = E.z; el = E.w; pSpotD = clamp(E4.y > 0 ? E4.y : 2.0, 0.3, 12.0); pSpotA = clamp(E4.z > 0 ? E4.z : 45.0, 10.0, 170.0); }
+  // (09/11 b, Agustin: "la luz de sol cercano no se ve como un sol") antes heredaba el cono del foco (45 grados: recortaba la cara
+  // como una linterna), el color y la fuerza del preset (de noche, azul y debil). Un sol es: luz que baña todo (sin cono),
+  // calida y fuerte, sombra nitida del tamano del sol (0.53 grados), poco relleno de estudio y el resplandor / los haces en el
+  // aire hacia el sol. Rumbo, altura y distancia siguen siendo los sliders
+  bool nearSun = E5.w > 0.5;
+  if (nearSun) {
+    // (09/11 c, Agustin: "que funcione como funciona el sol de los partidos de dia") rayos paralelos como el sol del partido: sin
+    // posicion ni distancia (la direccion es la misma en toda la cara); solo rumbo y altura
+    az = E.z; el = E.w; pSpotD = 0.0; pSpotA = 0.0;
+    warm = 0.72; inten = max(inten, 1.6); keep = min(keep, 0.30); skyK = min(skyK, 0.12);
+    g_shRad = radians(0.53) * 0.5;
+    sunC = PesTint(warm) * (S * inten);
+  }
   // (09/11, Agustin: "que sea mas facil de decidir... una opcion de sol por detras para probar el sss") z392 = de donde viene la
   // luz, en pocas opciones y siempre respecto de la camara (lo que se ve en pantalla): 1 de frente, 2 de costado, 3 desde atras
   // (contraluz: orejas, nariz y borde de la cara encendidos = SSS), 4 desde arriba. 0 = la del preset / los sliders
@@ -499,6 +557,7 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
     d2 = clamp(d2, 0.01, 1e6);
     float ca = cos(radians(ap * 0.5)), cone = smoothstep(ca, lerp(ca, 1.0, 0.35), dot(-L, Lw));
     lcol = sunC * cone * min(distL * distL / d2, 1.0);
+    if (nearSun) lcol = sunC;   // (09/11 b) un sol no cae con 1/d2 sobre la cara (eso lo hacia ver como un foco): la posicion solo da la direccion
   }
   bool skin = IsSkin(uv);
   float4 mat = inMat.SampleLevel(sPoint, uv, 0);
@@ -509,7 +568,7 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   float wetK = saturate(IniParams.Load(int2(392, 0)).y);
   bool wetSkin = false;
   { uint wW = 0, wH = 0; inMouth.GetDimensions(wW, wH);
-    bool wMouth = wW > 0 && inMouth.Load(int3(min((uint2)pos.xy, uint2(wW - 1, wH - 1)), 0)) > 0.0;
+    bool wMouth = PesMouthAt(pos.xy, wW, wH);   // (10/11) solo la boca VISIBLE (la mascara guarda profundidad): con '> 0' entraba toda la silueta de la malla de la boca tapada por la piel = el recuadro
     if (wMouth) wetK = 0.0; }
   if (wetK > 0.0) { wetSkin = IsSkin(uv); rough = lerp(rough, wetSkin ? 0.12 : max(rough * 0.6, 0.15), wetK * (wetSkin ? 1.0 : 0.5)); }
   uint tq = (uint)(inNrm.SampleLevel(sPoint, uv, 0).z * 1023.0 + 0.5);
@@ -658,7 +717,7 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
       float skyAO = saturate(1.0 - 0.85 * aoS / 8.0);
       skyAO *= skyAO;
       { uint qW = 0, qH = 0; inMouth.GetDimensions(qW, qH);   // boca intacta: interior y cavidad sin oclusion nueva
-        if (legacy || (qW > 0 && inMouth.Load(int3(min((uint2)pos.xy, uint2(qW - 1, qH - 1)), 0)) > 0.0)) skyAO = 1.0; }
+        if (legacy || PesMouthAt(pos.xy, qW, qH)) skyAO = 1.0; }   // (10/11) solo la boca visible (ver wMouth)
       dif += (skyC * up + gndC * (1.0 - up)) * skyAO;
     }
     // (07/11 c) reflector: una pared / pantalla del lado opuesto a la luz, baja, que devuelve parte de la luz sin sombra (como el
@@ -677,6 +736,8 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   // (08/11 0qtsss, Agustin: "que la luz volumetrica agregue niebla o rayos de sol como en el partido") con la volumetrica del editor
   // en 0 (w377) y la del partido prendida (x335), los presets la copian: fuerza de x335 (0.6 -> 0.9), direccionalidad de z335
   float volS = E4.w;
+  if (nearSun) volS = max(volS, 0.9);   // (09/11 b) el sol cercano siempre con resplandor y haces
+  if (tlMode >= 1 && tlMode <= 4) volS *= lerp(0.1, 1.0, smoothstep(-0.10, 0.10, sin(6.2831853 * frac(IniParams.Load(int2(393, 0)).w / (tlMode == 1 ? 120.0 : (tlMode == 2 ? 300.0 : (tlMode == 3 ? 600.0 : 1200.0)))))));   // (10/11) de noche sin bruma clara (negros negros)
   { float4 VLm = IniParams.Load(int2(335, 0)); if (volS <= 0.001 && preset != 0 && VLm.x > 0.0) { volS = clamp(VLm.x * 1.5, 0.0, 4.0); g_volG = clamp(VLm.z, 0.0, 0.9); } }
   float3 vol = PesVolumetric(uv, pos.xy, Pv, zA, geo, zSgn, Lw, spot, Pl, sunC, volS, E5.y > 0 ? E5.y : 0.5);
   // (07/11 d) vistas de prueba (w380): aislar cada parte para juzgarla sola. Se pintan sobre gris neutro, sin la luz de estudio
@@ -704,7 +765,7 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
     uint mW = 0, mH = 0; inMouth.GetDimensions(mW, mH);
     // cualquier valor de la mascara cuenta (> 0): sirve con la mascara 0/1 de antes y con la de profundidad del hilo de la boca
     // (0dlnmc f151b82); donde la cara tapa la boca tambien se deja como antes (de mas, nunca de menos)
-    if (mW > 0 && inMouth.Load(int3(min((uint2)pos.xy, uint2(mW - 1, mH - 1)), 0)) > 0.0) mouthPx = true;
+    if (PesMouthAt(pos.xy, mW, mH)) mouthPx = true;   // (10/11) RECUADRO DE LA BOCA: con '> 0' la piel que tapa la malla de la boca quedaba sin el factor de la luz (mas clara, con la forma de la malla); ahora solo la boca visible
     if (!mouthPx) { float wrapK = saturate(dot(n, L) * 0.5 + 0.5); keepC *= lerp(0.45, 1.0, wrapK * wrapK); }
   }
   o.c = float4(c0 * keepC + dif + vol, 1);
@@ -724,68 +785,6 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   return o;
 }
 #else
-// ===================================================================================================================
-// Pasada 2: disco de Burley
-float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
-  float4 P = IniParams.Load(int2(95,0));
-  float3 c0 = inLight.SampleLevel(sPoint, uv, 0).xyz;
-  if (P.w < 0.5 || !IsSkin(uv)) return float4(c0, 1);
-  float z0 = LinZ(uv);
-  // (08/11 SSSS) tamano de un pixel en uv desde el tamano real de la textura: ddx/ddy despues del 'return' de arriba (pixeles que no
-  // son piel en el mismo cuadrito de 2x2: pestanas, cejas, borde de la cara) es indefinido y cambiaba el ancho del disco al mover la camara
-  float2 rb; { uint lw, lh; inLight.GetDimensions(lw, lh); rb = 1.0 / float2(max(lw, 1u), max(lh, 1u)); }
-  float pxm = 1.0 / max(2.0 * abs(m_projectionParam.x) * z0 * m_renderBuffer.z, 1e-5);   // pixeles por metro (como la composicion)
-  // diagnostico: x95 >= 2.95 pinta la piel: verde = pasa por aca, con el ancho en pixeles como brillo
-  if (P.x >= 2.95) return float4(0, saturate(6.0 * 0.001 * pxm / 40.0), 0, 1);
-  float widthScale = (P.x > 0 ? P.x : 1.0);
-  // trm (translucidez del juego, 6 bits en el G-buffer): lo fino (orejas, aletas, labios) difunde algo mas ancho, lo grueso algo menos
-  float4 P2 = IniParams.Load(int2(100,0));
-  uint tq = (uint)(inNrm.SampleLevel(sPoint, uv, 0).z * 1023.0 + 0.5);
-  float thinK = smoothstep(0.08, 0.70, (float)(tq >> 4) / 63.0);
-  widthScale *= lerp(1.0, lerp(0.85, 1.2, thinK), saturate(P2.y));
-  // perfil por tono de piel (melanina del albedo): en piel clara el rojo viaja ~2.5 veces mas que el verde (penumbra rojiza);
-  // con mas melanina la epidermis absorbe y el rojo viaja menos (penumbra marron calida, no roja). Distancias d en mm.
-  float alb0L = dot(inAlb.SampleLevel(sPoint, uv, 0).xyz, float3(0.2126, 0.7152, 0.0722));
-  float mel = (alb0L > 0.004) ? saturate(log2(0.47 / max(alb0L, 1e-3)) / 2.85) : 0.0;
-  float3 dmm = float3(lerp(1.0, 0.62, mel), lerp(0.42, 0.36, mel), lerp(0.26, 0.24, mel)) * widthScale;
-  float mmToPx = 0.001 * pxm;
-  if (dmm.r * 3.0 * mmToPx < 0.6) return float4(c0, 1);   // de lejos lo resuelve la piel pre-integrada de la pasada de luz
-  // (08/11 SSSS) entre 0.6 y 1.6 px el disco entra de a poco: antes se prendia de golpe y la cara cambiaba al acercar / alejar la camara
-  float nearK = smoothstep(0.6, 1.6, dmm.r * 3.0 * mmToPx);
-  // plano de la superficie: pendiente de la profundidad por pixel (del lado mas suave, para no tomar un borde)
-  // (08/11 SSSS) un vecino que no es piel (pestana, ceja, pelo) no da la pendiente: en los cuencos de los ojos la tomaba de la pestana
-  float2 uxp = uv + float2(rb.x, 0), uxn = uv - float2(rb.x, 0), uyp = uv + float2(0, rb.y), uyn = uv - float2(0, rb.y);
-  float zxp = LinZ(uxp) - z0, zxn = z0 - LinZ(uxn);
-  float zyp = LinZ(uyp) - z0, zyn = z0 - LinZ(uyn);
-  if (!IsSkin(uxp)) zxp = 1e6; if (!IsSkin(uxn)) zxn = 1e6; if (!IsSkin(uyp)) zyp = 1e6; if (!IsSkin(uyn)) zyn = 1e6;
-  float2 slope = float2(abs(zxp) < abs(zxn) ? zxp : zxn, abs(zyp) < abs(zyn) ? zyp : zyn);
-  slope = (abs(slope) > 1e5) ? 0.0 : slope;
-  float tolK = P.z > 0.0 ? P.z : 1.0;
-  // rotacion por pixel y por cuadro (ruido de gradiente intercalado, Jimenez 2014)
-  // (27/10 g) 24 muestras (antes 16) y el giro por cuadro solo si x331 > 0.5 (sin TAA el giro por cuadro era grano que titila)
-  float rot = 6.2831853 * frac(52.9829189 * frac(dot(pos.xy, float2(0.06711056, 0.00583715))) + (IniParams.Load(int2(331, 0)).x > 0.5 ? frac(m_timeParam.z * 7.31) : 0.0));
-  float3 acc = 0, wsum = 0;
-  [unroll] for (int i = 0; i < 24; i++) {
-    bool redSet = (i % 3) != 2;   // dos de cada tres muestras con el radio del rojo (el que mas lejos llega)
-    float rmm = kBurleyX[i / 3] * (redSet ? dmm.r : dmm.g);
-    float a = rot + i * 2.3999632;                       // angulo aureo: las 16 muestras no se alinean
-    float2 off = float2(cos(a), sin(a)) * (rmm * mmToPx);   // en pixeles
-    float2 uvS = uv + off * rb;
-    if (!IsSkin(uvS)) continue;
-    float zS = LinZ(uvS);
-    float dzmm = abs(zS - (z0 + dot(slope, off))) * 1000.0;
-    float tol = max(1.0, 0.5 * rmm) / tolK;               // la superficie puede curvarse mas lejos del centro
-    float depthW = exp(-(dzmm * dzmm) / (tol * tol));
-    // peso de cada canal = perfil / pdf de la mezcla (rojo + verde, mitad y mitad): el 1/r de los dos se cancela
-    float pdf = 0.667 * BurleyF(rmm / dmm.r) / dmm.r + 0.333 * BurleyF(rmm / dmm.g) / dmm.g;
-    float3 w = float3(BurleyF(rmm / dmm.r) / dmm.r, BurleyF(rmm / dmm.g) / dmm.g, BurleyF(rmm / dmm.b) / dmm.b) / max(pdf, 1e-6);
-    w *= depthW;
-    acc += w * inLight.SampleLevel(sPoint, uvS, 0).xyz;   // (27/10 i) muestra puntual: con la bilineal, en el borde de la cara entraba el fondo claro de al lado (contorno de pixeles brillantes)
-    wsum += w;
-  }
-  // el pixel central entra con el peso de una muestra media: sin vecinos validos (borde) queda como estaba
-  acc += c0; wsum += 1.0;
-  float3 blurred = acc / wsum;
-  return float4(lerp(c0, blurred, saturate(P.y) * nearK), 1);
-}
+// (10/11) Pasada 2: SSS real, version nueva (pes_sss_real.hlsli). El disco de antes (plano + tolerancia de profundidad) se fue.
+#include "pes_sss_real.hlsli"
 #endif

@@ -189,6 +189,10 @@ struct Config {
     bool lightTrace = false;                  // (27/10) [PES21FX] luz_rastrear: pila de quien llena el cbuffer de la luz del sol (hooks.cpp)
     bool meterOn = true;                      // (07/11) [PES21FX] medidor: VRAM por dueno y ms de GPU por efecto (gpumeter.cpp)
     int panelPort = 21021;                    // (08/11) [PES21FX] panel_puerto: servidor local del panel en vivo (panel.cpp), 0 = apagado
+    bool solEditorDll = true;                 // (10/11) [PES21FX] sol_editor_dll: sol real creado por la DLL en la escena del editor
+    bool solEditorSombra = false;             // (10/11) [PES21FX] sol_editor_sombra: el sol de la DLL proyecta sombra (0 = no; los focos ya la dan)
+    int solEditorDirSigno = -1;               // (10/11) [PES21FX] sol_editor_dir_signo: -1 = la fuente recibe la direccion de viaje
+    bool solEditorLog = true;                 // (09/11) [PES21FX] sol_editor_log: log del sol real del editor (soleditor.cpp)
     bool sunWatch = false;                    // (26/10) [PES21FX] sol_vigilar: quien escribe el sol de las repeticiones (sunwatch.cpp)
 };
 extern Config g_cfg;
@@ -395,6 +399,15 @@ ID3D11RasterizerState* CachedRS(const D3D11_RASTERIZER_DESC& d);
 void StateCachePresent();
 bool CharSceneViewport(float out[4]);             // (09/11) viewport del ultimo dibujo de cara/cuerpo (x, y, ancho, alto en pixeles del backbuffer)
 void FaceInjectPresent();                         // (09/11) gancho de las matrices del rig (0x1419f8820): diagnostico de donde se arma la cara
+// (09/11) sol real del motor en el editor (soleditor.cpp): DirectionalLight "zfx_SolEditor" del EditFace.fox2
+void SolEditorPresent();
+void* SolEditorBody();   // cuerpo validado por vtable; nullptr si no hay sol en el editor o se destruyo
+bool SolEditorSet(const float dirHaciaSol[3], const float rgb[3], float kelvin, float lux, bool on);   // se aplica desde el hilo del motor
+// (09/11 c) hora del motor y atmosfera (TimeOfDaySettings del EditFace con TppAtmosphere del estadio):
+void SolEditorSetHora(float horas);   // 0..24 (minuto entero); pone overrideDateTime; la atmosfera mueve sol, luna y cielo
+void SolEditorHoraLibre();            // vuelve a la hora del archivo
+bool SolEditorAtmo(bool on);          // on: sunLux 150000 / moonLux 1 / cielo 1 + exposicion del estadio -14..-7; off: luz 0 y
+                                      // exposicion fija del archivo (-7.1, luz de estudio). false = no hay TimeOfDaySettings del editor
 void CamHookPresent();                            // ganchos (primer Present), 160 = cuadros desde el corte / cortes / TAA / ok
 // (31/10) camara libre (freecam.cpp): pisa el parametro de la camara del motor desde el gancho de camhook.cpp; 344 (ini) / 345 (DLL)
 void FreeCamApply(unsigned char* param);
@@ -411,6 +424,11 @@ bool FreeCamBlocksKeys();                         // x344 = 1: el juego no ve el
 void TiempoPresent();
 bool TiempoHooked();
 float TiempoFactor();   // (1/11) velocidad pedida por el menu (1 = apagada) para el aviso en pantalla
+// (09/11) sol real del motor en el editor: soleditor.cpp (hilo de descompilacion) encuentra / escribe la DirectionalLight
+// zfx_SolEditor del EditFace; solluz.cpp decide el sol (w378 sol de partido, w392 ciclo de dia y noche) y escribe z393
+void SolLuzPresent();
+extern float g_solRealActivo;
+extern float g_tlClock;   // w393: fase del ciclo de dia y noche x periodo
 bool CamCutSince(int& seen);                      // true una vez por cada corte nuevo (cada consumidor guarda su 'seen'); x161 = 1
 int CamLastCutFrame();
 bool EngineCamera(float pos[3], float tgt[3], int* frame);   // ultima camara aplicada por el motor (sin atraso)
@@ -522,6 +540,7 @@ int FisicoSkinIndex();                            // color de piel del juego (1.
 void SunWatchFrame(const float* w, float devSky, int frame);
 void SunWatchRequestArm(uintptr_t a);   // (27/10) vigilar escrituras en el origen del cbuffer de la luz (sunwatch.cpp)   // (26/10) sol de la luz en mundo por cuadro (sunwatch.cpp)
 void CoverStart(); void CoverNextPhase(); void CoverFlush();
+void RastroV4Start(); void RastroV4Flush(bool final);   // (10/11 d) rastro v4 (src-rastro/rastrodll.cpp)
 void RastroPresent(); void RastroFlush(bool final); void RastroEventosPresent();   // (08/11 i) rastro del motor (rastro.cpp)   // (08/11 h) medidor de cobertura del codigo del juego (cobertura.cpp)
 void CodeWatchStart();                            // (24/10) vigila la seccion .text del exe: anota en el log lo que cambie (codewatch.cpp)
 bool CodeWatchOrig(uintptr_t a, unsigned char* out, size_t n);   // bytes de la copia (registro de cierres)

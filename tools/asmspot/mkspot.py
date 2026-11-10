@@ -55,6 +55,6 @@ def build(gen_path, out_name, head, splices):
         assert code.count(anchor)==1, (out_name, anchor, code.count(anchor))
         k=code.index(anchor); k=code.index('\n',k)+1
         code=code[:k]+text+code[k:]
-    out=head+pre+decl+bfi+'#include "pes_common.hlsli"\nfloat3 PESSunColor() { return g_psLight.m_lightSourceColor.xyz; }   // para pes_skinlight: el tinte del brillo sigue al color del foco\n#include "pes_skinlight.hlsli"\n\n'+code
+    out=head+pre+decl+bfi+'#include "pes_common.hlsli"\nfloat3 PESSunColor() { return g_psLight.m_lightSourceColor.xyz; }   // para pes_skinlight: el tinte del brillo sigue al color del foco\nTexture2D<float> pesMouthMask : register(t43);   // (10/11) mascara del interior de la boca (mouthmask.cpp): sin sombra nueva ahi\n#define PES_SK_FACESHADOW 1\n#include "pes_skinlight.hlsli"\n\n'+code
     open(SH+out_name,'w',newline='\n').write(out)
     print('ok',out_name,len(out))

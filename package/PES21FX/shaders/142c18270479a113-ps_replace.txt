@@ -66,6 +66,8 @@ Texture2D<float4> StereoParams : register(t125);
 uint4 PESBfi(uint4 w, uint4 o, uint4 ins, uint4 b) { uint4 m = (w >= 32u) ? 0xffffffffu : (((1u << w) - 1u) << o); return ((ins << o) & m) | (b & ~m); }
 #include "pes_common.hlsli"
 float3 PESSunColor() { return g_psLight.m_lightSourceColor.xyz; }   // para pes_skinlight: el tinte del brillo sigue al color del foco
+Texture2D<float> pesMouthMask : register(t43);   // (10/11) mascara del interior de la boca (mouthmask.cpp): sin sombra nueva ahi
+#define PES_SK_FACESHADOW 1
 #include "pes_skinlight.hlsli"
 
 void main(
@@ -174,6 +176,8 @@ void main(
   r3.w = (-(r3.zzzz)).w;
   float3 skN = normalize(r3.xyw);
   float skCurv = PesSkCurv(skN, skZ);   // fuera de los if: usa derivadas
+  float skCurvT = PesSkCurvConvex(skN, float3((v0.xy / v0.w - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * skZ, skZ));   // (10/11 d) para la contraluz de costado
+  float4 skAB = PesSkUvMap(v0, v1); float skFS = 1.0;   // (10/11) sombra fina del foco sobre la cara
   bool skOn = PesSkIsSkin(skMat, r5.y, skTag);
   float skTF = r5.x * r5.y;
   r0.w = ((dot((r1.yzwy).xyz, (r3.xywx).xyz)).xxxx).w;
@@ -200,7 +204,7 @@ void main(
   r2.w = (saturate(max(r2.wwww, r3.xxxx))).w;
   r0.w = (saturate(r0.wwww)).w;
   r3.xyz = ((r6.xyzx * r2.wwww)).xyz;
-  if (skOn) r3.xyz = (PesSkDiffuse(skNL, r5.y, skTF, skZ, skCurv) + PesSkTrans(skN, skV, skL, r5.y)) * r6.xyz;   // (04/11) piel
+  if (skOn) { skFS = PesSkFaceShadow(skAB, v0, v2.xy, skZ, skL, skNL, r6.xyz); r3.xyz = (PesSkDiffuse(skNL, r5.y, skTF, skZ, skCurv) * skFS + PesSkTransAll(skN, skV, skL, skNL, r5.y, skCurvT, v2.xy)) * r6.xyz; }   // (04/11) piel
   r4.xyz = ((r2.zzzz * r8.xyzx)).xyz;
   r7.x = ((dot((r0.xyzx).xyz, (r1.yzwy).xyz)).xxxx).x;
   r0.x = ((g_lut1.Sample(g_samplerLinear_Clamp_s, (r7.xyxx).xy)).xyzw).x;
@@ -225,7 +229,7 @@ void main(
   r0.x = ((r0.xxxx * float4(0.250000, 0.250000, 0.250000, 0.250000))).x;
   r0.xyz = ((r6.xyzx * r0.xxxx)).xyz;
   r0.xyz = ((r4.xyzx * r0.xyzx)).xyz;
-  if (skOn) r0.xyz = PesSkSpec(r0.xyz, skN, skV, skL, skRough, skSpecI, r6.xyz, 1.0);   // (04/11) brillo de piel
+  if (skOn) r0.xyz = PesSkSpec(r0.xyz, skN, skV, skL, skRough, skSpecI, r6.xyz, 1.0) * skFS;   // (04/11) brillo de piel
   o0.xyz = ((r3.xyzx * g_psLight.m_lightSourceParam3.yyyy)).xyz;
   r0.xyz = ((r0.xyzx * g_psLight.m_lightSourceParam3.xxxx)).xyz;
   o1.xyz = (min(r0.xyzx, float4(10000.000000, 10000.000000, 10000.000000, 0.000000))).xyz;
