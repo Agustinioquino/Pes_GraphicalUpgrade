@@ -1,4 +1,6 @@
--- ProbadorPiezas v1.0 - PES 2021 / Sider  (PES21 FX, 10/11/2026)
+-- ProbadorPiezas v1.1 - PES 2021 / Sider  (PES21 FX, 10/11/2026)
+-- (1.1) Sin pasos obligatorios: anota TODOS los archivos desde que abre el juego y los va
+-- guardando solo en vistos.txt; las piezas ocultadas se recuerdan en marcas.txt entre sesiones.
 -- Muestra cada modelo (.fmdl) que el juego pide y deja OCULTARLO o REEMPLAZARLO por otro
 -- para probar piezas y objetos de los jugadores. Reemplaza a SinCamiseta (no usar los dos juntos).
 --
@@ -8,14 +10,15 @@
 -- recargue (salir y volver a entrar al jugador en Edit, o empezar otro partido).
 -- Limite: las piezas del CUERPO (torso, pechera bibs, ropa de entrenamiento...) no se piden
 -- sueltas: vienen dentro de common_package.fpk, que se carga una vez al abrir el juego.
--- Esas no aparecen en la lista; el paquete entero SI aparece con la tecla 6 (todos los archivos).
+-- Esas no aparecen sueltas en la lista; el paquete entero si.
 --
 -- Uso: overlay de Sider, pasar a este modulo con [ y ] :
 --   9 / 0  = pieza anterior / siguiente          7 / 8 = saltar 10
 --   1      = ocultar / mostrar la pieza elegida (por nombre de archivo)
 --   2      = ocultar / mostrar TODAS las que empiezan igual (ej. shirt*, sleeve*)
 --   3      = quitar todas las marcas
---   4      = guardar la lista de archivos vistos en content\probador-piezas\vistos.txt
+--   4      = guardar un resumen (veces, marca) en content\probador-piezas\resumen.txt
+--            (vistos.txt se escribe solo, sin tocar nada)
 --   5      = volver a leer content\probador-piezas\reglas.txt
 --   6      = anotar solo .fmdl / todos los archivos (fpk, ftex, bin...)
 -- reglas.txt (opcional), una por linea, sin distinguir mayusculas:
@@ -23,13 +26,14 @@
 --   nombre.fmdl = ruta\relativa\a\content\probador-piezas\otro.fmdl
 --   # comentario
 
-local m = { version = "1.0" }
-local DIR, EMPTY, VISTOS, REGLAS
+local m = { version = "1.1" }
+local DIR, EMPTY, VISTOS, REGLAS, MARCAS
+local pendientes, guardados = {}, 0
 local seen, order = {}, {}        -- nombre base -> {n = veces, full = ruta pedida}
 local hide_name, hide_prefix = {}, {}
 local repl_name, repl_prefix = {}, {}
-local sel, todo, n_reglas, aviso = 1, false, 0, ""
-local MAX = 4000
+local sel, todo, n_reglas, aviso = 1, true, 0, ""
+local MAX = 20000
 
 local function basename(f)
     return string.lower(string.match(f, "([^\\/]+)$") or f)
@@ -85,6 +89,38 @@ local function target(b)
     return nil
 end
 
+-- guarda solo: agrega al final de vistos.txt lo nuevo, de a tandas
+local function flush()
+    if #pendientes == 0 then return end
+    local f = io.open(VISTOS, "ab")
+    if not f then pendientes = {} return end
+    f:write(table.concat(pendientes))
+    f:close()
+    guardados = guardados + #pendientes
+    pendientes = {}
+end
+
+local function save_marks()
+    local f = io.open(MARCAS, "wb")
+    if not f then return end
+    for b in pairs(hide_name) do f:write(b .. "\r\n") end
+    for p in pairs(hide_prefix) do f:write(p .. "*\r\n") end
+    f:close()
+end
+
+local function load_marks()
+    local f = io.open(MARCAS, "rb")
+    if not f then return end
+    local txt = f:read("*a") or ""
+    f:close()
+    for line in string.gmatch(txt, "[^\r\n]+") do
+        local k = string.lower((string.gsub(line, "%s+", "")))
+        if k ~= "" then
+            if string.sub(k, -1) == "*" then hide_prefix[string.sub(k, 1, -2)] = true else hide_name[k] = true end
+        end
+    end
+end
+
 function m.make_key(ctx, filename)
     local b = basename(filename)
     local es_fmdl = string.sub(b, -5) == ".fmdl"
@@ -95,6 +131,8 @@ function m.make_key(ctx, filename)
         elseif #order < MAX then
             seen[b] = { n = 1, full = filename }
             order[#order + 1] = b
+            pendientes[#pendientes + 1] = filename .. "\r\n"
+            if #pendientes >= 40 then flush() end
         end
     end
     if es_fmdl and target(b) then return "probadorpiezas:" .. b end
@@ -107,7 +145,8 @@ function m.get_filepath(ctx, filename, key)
 end
 
 local function save_seen()
-    local f = io.open(VISTOS, "wb")
+    flush()
+    local f = io.open(DIR .. "resumen.txt", "wb")
     if not f then aviso = "no pude escribir " .. VISTOS return end
     f:write("# veces\tarchivo\truta pedida\tmarca\r\n")
     for _, b in ipairs(order) do
@@ -116,7 +155,7 @@ local function save_seen()
         f:write(string.format("%d\t%s\t%s\t%s\r\n", s.n, b, s.full, t and (t == EMPTY and "OCULTA" or t) or ""))
     end
     f:close()
-    aviso = string.format("guardados %d archivos en vistos.txt", #order)
+    aviso = string.format("resumen de %d archivos en resumen.txt", #order)
 end
 
 function m.key_down(ctx, vkey)
@@ -147,12 +186,15 @@ function m.key_down(ctx, vkey)
     else
         return
     end
+    if vkey >= 0x31 and vkey <= 0x33 then save_marks() end
+    flush()
     if sel > n then sel = n end
     if sel < 1 then sel = 1 end
     if aviso ~= "" then log("ProbadorPiezas: " .. aviso) end
 end
 
 function m.overlay_on(ctx)
+    flush()
     local n = #order
     local t = { string.format("ProbadorPiezas %s | %d archivos vistos | reglas %d | %s", m.version, n, n_reglas, todo and "todos" or "solo fmdl") }
     if n == 0 then
@@ -180,6 +222,10 @@ function m.init(ctx)
     EMPTY = DIR .. "vacio.fmdl"
     VISTOS = DIR .. "vistos.txt"
     REGLAS = DIR .. "reglas.txt"
+    MARCAS = DIR .. "marcas.txt"
+    local f0 = io.open(VISTOS, "ab")
+    if f0 then f0:write("# --- sesion nueva ---\r\n") f0:close() end
+    load_marks()
     if not exists(EMPTY) then
         log("ProbadorPiezas: FALTA " .. EMPTY .. " (modelo vacio): ocultar no va a funcionar")
     end
