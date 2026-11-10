@@ -1,4 +1,4 @@
--- ProbadorPiezas v2.3 - PES 2021 / Sider  (PES21 FX, 10/11/2026)
+-- ProbadorPiezas v2.4 - PES 2021 / Sider  (PES21 FX, 10/11/2026)
 -- Probador de modelos (.fmdl) de los jugadores, UNO A UNO.
 -- Elegis un LUGAR del jugador (camiseta, cuello, mangas, short) y con una tecla vas pasando
 -- por el CATALOGO de modelos del juego: en ese lugar se carga el modelo elegido en vez del
@@ -13,6 +13,10 @@
 -- (2.3) El overlay muestra tambien los MATERIALES del modelo elegido: shader, texturas
 -- (lugar = ruta) y parametros del shader (nombre = 4 valores). Salen de "<modelo>.fmdl.txt",
 -- un archivo de texto al lado de cada fmdl del catalogo (lo arma fmdl_info.py). Tecla 4 = pagina.
+--
+-- (2.4) Si el modelo elegido NO es una pieza del mismo tipo que su lugar (un traje entero, una
+-- pechera, un objeto puesto donde va la camiseta), las demas piezas del uniforme que esten en
+-- normal (camiseta, cuello, mangas, short) se ocultan solas para que no queden sobrando.
 --
 -- Catalogo: content\probador-piezas\catalogo\  (los .fmdl que esten ahi adentro),
 -- listado en catalogo\indice.txt (una ruta relativa por linea, grupo\archivo.fmdl).
@@ -31,7 +35,7 @@
 -- Lo elegido se recuerda entre sesiones (estado.txt). No usar junto con SinCamiseta.
 -- No todos los modelos van a calzar en cualquier lugar: para eso es el probador.
 
-local m = { version = "2.3" }
+local m = { version = "2.4" }
 local POR_PAGINA = 18
 local DIR, CAT, EMPTY, ESTADO
 local catalogo = {}                 -- rutas relativas dentro de catalogo\
@@ -70,9 +74,25 @@ local function lugar_de(b)
     return nil
 end
 
+-- true si en el lugar i hay un modelo del catalogo que no es una pieza de ese lugar (modelo "entero")
+local function es_entero(i)
+    local e = estado[i]
+    if e < 1 or not catalogo[e] then return false end
+    return lugar_de(basename(catalogo[e])) ~= i
+end
+
+-- hay algun modelo entero puesto en un lugar del uniforme (1..4) distinto de i
+local function sobra(i)
+    if i > 4 or estado[i] ~= 0 then return false end
+    for k = 1, 4 do
+        if k ~= i and es_entero(k) then return true end
+    end
+    return false
+end
+
 local function destino(i)
     local e = estado[i]
-    if e == -1 then return EMPTY end
+    if e == -1 or sobra(i) then return EMPTY end
     if e >= 1 and catalogo[e] then return CAT .. catalogo[e] end
     return nil
 end
@@ -81,7 +101,7 @@ function m.make_key(ctx, filename)
     local b = basename(filename)
     if string.sub(b, -5) ~= ".fmdl" then return end
     local i = lugar_de(b)
-    if i and estado[i] ~= 0 then return "probadorpiezas2:" .. i .. ":" .. estado[i] end
+    if i and (estado[i] ~= 0 or sobra(i)) then return "probadorpiezas2:" .. i .. ":" .. estado[i] .. (sobra(i) and ":s" or "") end
 end
 
 function m.get_filepath(ctx, filename, key)
@@ -162,6 +182,7 @@ local function texto_estado(i)
     if e == -1 then return "OCULTO" end
     if e >= 1 and catalogo[e] then return string.format("modelo %d de %d:  %s", e, #catalogo, catalogo[e]) end
     if e >= 1 then return "modelo " .. e .. " (ya no esta en el catalogo)" end
+    if sobra(i) then return "oculto solo (hay un modelo entero puesto)" end
     return "normal"
 end
 
