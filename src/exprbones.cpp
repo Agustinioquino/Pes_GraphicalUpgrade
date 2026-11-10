@@ -378,6 +378,9 @@ struct Skel {
     // (02/11 i) amplificador POR HUESOS: base del juego leida este cuadro (lo que se guarda como base al escribir), cuadro de la
     // ultima escritura y la cabeza del cuadro para medir el gesto (actual - cabeza rigida)
     float gq[kND][4] = {}, gt[kND][3] = {}; unsigned wFrame[kND] = {};
+    // (10/11) expr_inyeccion 3 (una sola escritura): lo que el mod quiere en cada hueso, como diferencia con la base del juego en los
+    // ejes de la cabeza (giro rq, corrimiento rt); se escribe una sola vez en el gancho de 0x1419f8820 sobre la pose final del juego
+    float rq[kND][4] = {}, rt[kND][3] = {}; bool pHave[kND] = {}; unsigned pFrame[kND] = {}, hookFrame = 0;
     float bwHr[kND][4] = {}, bwHc[kND][3] = {}; bool bwHave[kND] = {};   // (08/11) cabeza del cuadro en que se guardo la base (bq / bt)
     bool ampOn = false; float ahc[3] = {}, ahr[4] = { 0, 0, 0, 1 }, aGain[kND] = {}, aCap = 0.012f, aBig = 0.35f;
     // (02/11 l, Agustin: "vibra un poco al abrirse ... la camara lenta") cabeza del cuadro en que el JUEGO escribio cada hueso: en
@@ -849,6 +852,18 @@ static bool WriteBone(Skel& S, int d, const Xf& base, const float* nq, const flo
     // cuenta tomaba como base lo que dejo el juego, que en los jugadores lejanos (cara animada a menos cuadros) era lo nuestro del cuadro
     // anterior, y lo volvia a escalar: realimentacion. El 'control total' queda solo para la paleta (expr_paleta = 1); con x350 = 3 el
     // esqueleto se comporta como "Por huesos + parpados" (2)
+    if (g_cfg.optExprInject >= 3 && FaceInjectActive() && S.hookFrame && s_frame.load(std::memory_order_relaxed) - S.hookFrame <= 2) {   // si el gancho no paso por este esqueleto hace poco, se escribe aca como antes
+        // (10/11, Agustin: "la inyeccion de expresiones se puede mejorar") no se escribe aca: el juego todavia pisa la cara despues
+        // (enganche al cuerpo, mirada, parpados). Se guarda la diferencia con su base y se escribe una sola vez en el gancho
+        Xf h; if (!S.cur[D_HEAD] || !ReadXf(S.cur[D_HEAD], h)) return false;
+        float c[4], r[4], hc[4], t1[4], v[3];
+        QConj(S.gq[d], c); QMul(out, c, r);                     // giro del mod en el modelo
+        QConj(h.q, hc); QMul(hc, r, t1); QMul(t1, h.q, S.rq[d]);   // ... en los ejes de la cabeza
+        const float dv[3] = { out[4] - S.gt[d][0], out[5] - S.gt[d][1], out[6] - S.gt[d][2] };
+        QRot(hc, dv, v); memcpy(S.rt[d], v, sizeof v);
+        S.pHave[d] = true; S.pFrame[d] = s_frame.load(std::memory_order_relaxed);
+        (void)base; return true;
+    }
     if (!SafeCopy((char*)S.cur[d] + 16, out, 28)) return false;
     Xf chk; if (ReadXf(S.cur[d], chk)) { memcpy(S.wq[d], chk.q, sizeof chk.q[0] * 4); memcpy(S.wt[d], chk.t, sizeof chk.t[0] * 3); }
     else { memcpy(S.wq[d], nq, 4 * sizeof(float)); memcpy(S.wt[d], nt, 3 * sizeof(float)); }
@@ -863,6 +878,8 @@ static bool WriteBone(Skel& S, int d, const Xf& base, const float* nq, const flo
 // se rompia con la boca por huesos y volvia con "Por shader", con 0 giros de mandibula escritos)
 static void Release(Skel& S, int d) {
     if (PaletteMode(d)) { if (!(S.dHave[d] && S.dFrame[d] == s_frame.load(std::memory_order_relaxed))) S.dHave[d] = false; return; }   // (08/11) nada escrito: nada que devolver
+    if (S.pHave[d] && S.pFrame[d] == s_frame.load(std::memory_order_relaxed)) return;   // (10/11) inyeccion 3: ya pedido este cuadro
+    S.pHave[d] = false;
     if (S.wFrame[d] == s_frame.load(std::memory_order_relaxed) && S.wHave[d]) return;   // (02/11 i) ya escrito este cuadro (amplificador)
     if (!S.wHave[d] || !S.cur[d]) { S.wHave[d] = false; return; }
     Xf x; if (ReadBase(S, d, x)) { float out[7] = { x.q[0], x.q[1], x.q[2], x.q[3], x.t[0], x.t[1], x.t[2] }; SafeCopy((char*)S.cur[d] + 16, out, 28); }
@@ -2082,6 +2099,39 @@ int ExprBonesPoses(ExprCharPose* out, int max) {
 // de que 0x1419f8820 arme las matrices del rig (cuerpo o cara): se vuelve a poner lo escrito en este cuadro, asi lo del mod queda
 // ultimo. Sin candado bloqueante (try_lock): si el hilo del Eval lo tiene, este rig sale como estaba.
 std::atomic<unsigned> g_exprReapplied{0}, g_exprReapplyBusy{0}, g_exprReapplyStale{0}, g_exprReapplyFar{0};
+// (10/11, Agustin: "la inyeccion de expresiones se puede mejorar") expr_inyeccion 3: UNA SOLA ESCRITURA. El Eval del cuello calcula lo
+// de siempre pero no escribe (WriteBone guarda la diferencia con la base del juego en los ejes de la cabeza); aca, justo antes de que el
+// juego arme las matrices, se lee la pose final del juego (ya con enganche, mirada y parpados) y se le suma esa diferencia. Asi no hay
+// nada que tapar ni que deshacer: sin vaiven entre lo del juego y lo del mod, tambien de lejos. Si el juego no reescribio el hueso desde
+// nuestra ultima escritura, la base es la que se guardo (no se suma dos veces)
+static void InjectOnce(Skel& S, unsigned fr) {
+    Xf h; if (!S.cur[D_HEAD] || !ReadXf(S.cur[D_HEAD], h)) return;
+    for (int d = 0; d < kND; d++) {
+        if (!S.pHave[d] || !S.cur[d] || fr - S.pFrame[d] > 1) continue;
+        Xf now; if (!ReadXf(S.cur[d], now)) continue;
+        Xf b = now;
+        if (S.wHave[d]) {
+            const float* w = S.wq[d]; const float* u = S.wt[d];
+            const float dq = fabsf(now.q[0] - w[0]) + fabsf(now.q[1] - w[1]) + fabsf(now.q[2] - w[2]) + fabsf(now.q[3] - w[3]);
+            const float dt = fabsf(now.t[0] - u[0]) + fabsf(now.t[1] - u[1]) + fabsf(now.t[2] - u[2]);
+            if (dq < 2e-6f) memcpy(b.q, S.bq[d], sizeof b.q);
+            if (dt < 1e-7f + 1e-6f * (fabsf(u[0]) + fabsf(u[1]) + fabsf(u[2]))) memcpy(b.t, S.bt[d], 3 * sizeof(float));
+        }
+        float hc[4], t1[4], r[4], nq[4], v[3];
+        QConj(h.q, hc); QMul(h.q, S.rq[d], t1); QMul(t1, hc, r);   // giro de la cabeza de ahora
+        QMul(r, b.q, nq);
+        const float l = sqrtf(nq[0] * nq[0] + nq[1] * nq[1] + nq[2] * nq[2] + nq[3] * nq[3]); if (l < 0.5f) continue;
+        for (float& q : nq) q /= l;
+        QRot(h.q, S.rt[d], v);
+        float out[7] = { nq[0], nq[1], nq[2], nq[3], b.t[0] + v[0], b.t[1] + v[1], b.t[2] + v[2] };
+        if (!SafeCopy((char*)S.cur[d] + 16, out, 28)) continue;
+        Xf chk; if (ReadXf(S.cur[d], chk)) { memcpy(S.wq[d], chk.q, 4 * sizeof(float)); memcpy(S.wt[d], chk.t, 3 * sizeof(float)); }
+        else { memcpy(S.wq[d], nq, sizeof nq); memcpy(S.wt[d], out + 4, 3 * sizeof(float)); }
+        memcpy(S.bq[d], b.q, 4 * sizeof(float)); memcpy(S.bt[d], b.t, 3 * sizeof(float));
+        S.wHave[d] = true; S.wFrame[d] = fr; S.bwHave[d] = false;
+        g_exprReapplied.fetch_add(1, std::memory_order_relaxed);
+    }
+}
 void ExprBonesReapply(const void* rig) {
     if (!rig) return;
     std::unique_lock<std::mutex> lk(s_mx, std::try_to_lock);
@@ -2096,6 +2146,7 @@ void ExprBonesReapply(const void* rig) {
         // este esqueleto y se escribia la cara vieja sobre el modelo nuevo (o en memoria liberada). Se revalida aca tambien, y no se
         // vuelve a poner nada si el juego dejo el hueso en otra pose (mas de 3.5 cm / ~40 grados de lo nuestro: carga, cambio de cara)
         if (!StillValid(S)) { g_exprReapplyStale.fetch_add(1, std::memory_order_relaxed); continue; }
+        if (g_cfg.optExprInject >= 3) { S.hookFrame = fr; InjectOnce(S, fr); continue; }
         for (int d = 0; d < kND; d++) {
             if (!S.wHave[d] || !S.cur[d] || fr - S.wFrame[d] > 1) continue;
             Xf now; if (!ReadXf(S.cur[d], now)) continue;
