@@ -935,7 +935,11 @@ def paint_throat(bsm, nrm, srm, trm, gum_mask, log=print):
         xs0, xs1, ys0, ys1 = box(b, NS)
         z = lambda a: ndi.zoom(a, (float(ys1 - ys0) / a.shape[0], float(xs1 - xs0) / a.shape[1]), order=1) if np.ndim(a) == 2 else np.zeros((ys1 - ys0, xs1 - xs0)) + a
         apS, rvS = z(ap), z(rvar)
-        sm = np.stack([0.06 + 0.02 * apS, np.clip(0.22 + 0.10 * apS + rvS, 0, 1), np.zeros_like(apS)], -1)   # mucosa humeda: brilla mas que la encia
+        # (10/11) Agustin: 'el interior de la boca brilla mucho' (no dientes, lengua ni encias): la garganta y los cachetes por
+        # dentro tenian rugosidad 0.22 y reflejo 0.06 ('mucosa humeda: brilla mas que la encia') -> reflejos nitidos en la pared
+        # del fondo, que deberia quedar en penumbra. Ahora mate (rugosidad THROAT_ROUGH 0.55, reflejo a la mitad)
+        tr_ = float(os.environ.get('THROAT_ROUGH', '0.55')); ts_ = float(os.environ.get('THROAT_SPEC', '0.03'))
+        sm = np.stack([ts_ + 0.01 * apS, np.clip(tr_ + 0.10 * apS + rvS, 0, 1), np.zeros_like(apS)], -1)
         put(srm[..., :3], ys0, ys1, xs0, xs1, sm, PAD // 2)
         put(trm[..., :3], ys0, ys1, xs0, xs1, np.zeros((ys1 - ys0, xs1 - xs0, 3)) + tr_gum, PAD // 2)
     return bsm, nrm, srm, trm
@@ -980,6 +984,18 @@ def main():
     ap = argparse.ArgumentParser(); ap.add_argument('src'); ap.add_argument('dst'); ap.add_argument('--preview')
     a = ap.parse_args()
     tex, dbg = build(a.src)
+    # (10/11) Agustin: 'el interior de la boca brilla mucho' / 'tiene una textura mas brillante que la de Konami?'. Medido: la
+    # rugosidad (srm G) estaba en 0.13 en dientes (Konami 0.51) y 0.22 en encia/lengua/garganta (Konami 0.34) -> reflejos nitidos
+    # en toda la boca. Se sube sin perder el detalle: g' = max(g, MATTE_B + MATTE_A * g) (0.13 -> 0.30, 0.22 -> 0.35, 0.34 -> 0.42)
+    # (10/11) fondo mate: pasos posteriores (tejido humedo) volvian a pulir casi toda la caja de la garganta; se fija al final
+    import throat as _th
+    n_ = tex['srm'].shape[0]; p_ = 7
+    for u0_, u1_, v0_, v1_ in (_th.UV_BOX, _th.UVULA_BOX):
+        bx_ = tex['srm'][max(int(round(v0_ * n_)) - p_, 0):int(round(v1_ * n_)) + p_, max(int(round(u0_ * n_)) - p_, 0):int(round(u1_ * n_)) + p_]
+        bx_[..., 1] = np.maximum(bx_[..., 1], float(os.environ.get('THROAT_ROUGH', '0.55'))); bx_[..., 0] = np.minimum(bx_[..., 0], float(os.environ.get('THROAT_SPEC', '0.03')) + 0.01)
+    ma_, mb_ = float(os.environ.get('ORAL_MATTE_A', '0.60')), float(os.environ.get('ORAL_MATTE_B', '0.22'))
+    if os.environ.get('ORAL_MATTE', '0') != '0':   # apagado: Agustin aclaro que el brillo que molesta es solo el del fondo (ver paint_throat)
+        g_ = tex['srm'][..., 1]; tex['srm'][..., 1] = np.maximum(g_, mb_ + ma_ * g_)
     import player_tone   # (04/11) textura de dientes con tono propio por jugador (Messi): pes_oral_<perfil>_bsm.dds aparte
     for prof in player_tone.TONES: tex['%s_bsm' % prof] = player_tone.tone_bsm(tex['bsm'], prof)
     os.makedirs(a.dst, exist_ok=True)
