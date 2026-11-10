@@ -294,9 +294,23 @@ void SolEditorHoraLibre() {
     std::lock_guard<std::mutex> lk(s_mx);
     if (s_treq.hora) { s_treq.hora = false; s_tdirty = true; }
 }
+// (10/11) cantidad de atmosferas vivas del gestor *0x1437d59e8 (+0xd8). Sin atmosfera no se prende la exposicion del estadio:
+// sin sol real el jugador quedaria negro (-14 EV con focos de ~1000 lux)
+static int AtmoCount() {
+    __try {
+        char* m = *(char* volatile*)0x1437d59e8ull;
+        if (!m || !Readable(m + 0xd8, 4)) return 0;
+        int n = *(int volatile*)(m + 0xd8);
+        return (n > 0 && n < 64) ? n : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
 bool SolEditorAtmo(bool on) {
+    const bool ok = TodsBodyValid(s_tods.load()) && AtmoCount() > 0;
+    if (on && !ok) on = false;
     { std::lock_guard<std::mutex> lk(s_mx); if (s_treq.atmo != on) { s_treq.atmo = on; s_tdirty = true; } }
-    return TodsBodyValid(s_tods.load());
+    static bool s_warned = false;
+    if (!ok && !s_warned && LogOn() && s_tods.load()) { s_warned = true; Log("sol_editor: TimeOfDaySettings marcada pero 0 atmosferas vivas: no se prende la atmosfera"); }
+    return ok;
 }
 
 static void Install() {
