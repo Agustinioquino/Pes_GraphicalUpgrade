@@ -57,8 +57,8 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   float3 acc = 0, wsum = 0;
   { float3 pdfC = PesSssR(rC, dmm); float3 wC = PesSssR(rC, dmm) / max(dot(pdfC, 1.0 / 3.0), 1e-9); acc = wC * c0; wsum = wC; }
   // (10/11 c) de muy cerca (camara libre con zoom) el disco pasaba de 200 px y cada lectura caia lejos de la anterior (3.5 ms):
-  // el disco no pasa de 56 px; mas cerca que eso se encoge todo junto (misma forma)
-  float capS = min(1.0, 56.0 / max(3.6408 * dmm.r * mmToPx, 1e-4));
+  // el disco no pasa de 110 px (a zoom 0.26 queda del tamano real); mas cerca que eso se encoge todo junto (misma forma)
+  float capS = min(1.0, 110.0 / max(3.6408 * dmm.r * mmToPx, 1e-4));
   [unroll] for (int i = 0; i < 21; i++) {
     int ch = i % 3;
     float dch = ch == 0 ? dmm.r : (ch == 1 ? dmm.g : dmm.b);
