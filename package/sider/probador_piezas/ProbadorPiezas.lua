@@ -1,4 +1,4 @@
--- ProbadorPiezas v2.2 - PES 2021 / Sider  (PES21 FX, 10/11/2026)
+-- ProbadorPiezas v2.3 - PES 2021 / Sider  (PES21 FX, 10/11/2026)
 -- Probador de modelos (.fmdl) de los jugadores, UNO A UNO.
 -- Elegis un LUGAR del jugador (camiseta, cuello, mangas, short) y con una tecla vas pasando
 -- por el CATALOGO de modelos del juego: en ese lugar se carga el modelo elegido en vez del
@@ -9,6 +9,10 @@
 -- (2.2) Previsualizador de CUALQUIER modelo del juego: el catalogo puede traer todos los
 -- fmdl (jugadores, pelotas, arcos, estadio, objetos...), ordenados por grupo (carpeta).
 -- En el modo Editar el jugador hace de maniqui: pones el modelo en un lugar y lo miras.
+--
+-- (2.3) El overlay muestra tambien los MATERIALES del modelo elegido: shader, texturas
+-- (lugar = ruta) y parametros del shader (nombre = 4 valores). Salen de "<modelo>.fmdl.txt",
+-- un archivo de texto al lado de cada fmdl del catalogo (lo arma fmdl_info.py). Tecla 4 = pagina.
 --
 -- Catalogo: content\probador-piezas\catalogo\  (los .fmdl que esten ahi adentro),
 -- listado en catalogo\indice.txt (una ruta relativa por linea, grupo\archivo.fmdl).
@@ -21,13 +25,14 @@
 --            entrenamiento, camiseta interior, pechera)
 --   5 / 6  = GRUPO anterior / siguiente del catalogo (salta al primer modelo del grupo)
 --   1      = ese lugar vuelve a NORMAL          2 = ese lugar OCULTO (modelo vacio)
---   3      = todo a normal
+--   3      = todo a normal                      4 = pagina siguiente de materiales/texturas
 -- El juego guarda los modelos ya cargados: despues de cambiar, volve a entrar al jugador
 -- (Edit > Apariencia) o empeza otro partido para que los recargue.
 -- Lo elegido se recuerda entre sesiones (estado.txt). No usar junto con SinCamiseta.
 -- No todos los modelos van a calzar en cualquier lugar: para eso es el probador.
 
-local m = { version = "2.2" }
+local m = { version = "2.3" }
+local POR_PAGINA = 18
 local DIR, CAT, EMPTY, ESTADO
 local catalogo = {}                 -- rutas relativas dentro de catalogo\
 local LUGARES = {
@@ -43,6 +48,7 @@ local LUGARES = {
 local estado = {}
 for i = 1, #LUGARES do estado[i] = 0 end
 local lugar, aviso = 1, ""
+local info, info_de, pagina = {}, nil, 1   -- lineas de materiales del modelo mostrado
 
 local function basename(f)
     return string.lower(string.match(f, "([^\\/]+)$") or f)
@@ -159,6 +165,21 @@ local function texto_estado(i)
     return "normal"
 end
 
+local function leer_info()
+    local e = estado[lugar]
+    local r = (e >= 1) and catalogo[e] or nil
+    if r == info_de then return end
+    info_de, info, pagina = r, {}, 1
+    if not r then return end
+    local f = io.open(CAT .. r .. ".txt", "rb")
+    if not f then info[1] = "(sin datos de materiales: falta " .. r .. ".txt)" return end
+    local txt = f:read("*a") or ""
+    f:close()
+    for line in string.gmatch(txt, "[^\r\n]+") do
+        info[#info + 1] = (string.gsub(line, "/Assets/pes16/model/", ""))
+    end
+end
+
 function m.key_down(ctx, vkey)
     local n = #catalogo
     if vkey == 0x37 then
@@ -206,6 +227,11 @@ function m.key_down(ctx, vkey)
             e = k
         end
         estado[lugar] = e
+    elseif vkey == 0x34 then
+        leer_info()
+        pagina = pagina + 1
+        if (pagina - 1) * POR_PAGINA >= #info then pagina = 1 end
+        return
     elseif vkey == 0x31 then estado[lugar] = 0
     elseif vkey == 0x32 then estado[lugar] = -1
     elseif vkey == 0x33 then for i = 1, #LUGARES do estado[i] = 0 end
@@ -222,7 +248,13 @@ function m.overlay_on(ctx)
     for i, l in ipairs(LUGARES) do
         t[#t + 1] = string.format("%s %-10s %s", i == lugar and ">" or " ", l.nombre, texto_estado(i))
     end
-    t[#t + 1] = "0 = siguiente modelo | 9 = anterior | 5/6 = grupo | 7/8 = lugar | 1 normal | 2 oculto | 3 todo normal"
+    t[#t + 1] = "0 = siguiente modelo | 9 = anterior | 5/6 = grupo | 7/8 = lugar | 1 normal | 2 oculto | 3 todo normal | 4 = pagina"
+    leer_info()
+    if #info > 0 then
+        local paginas = math.floor((#info + POR_PAGINA - 1) / POR_PAGINA)
+        t[#t + 1] = string.format("--- materiales de %s (pagina %d de %d) ---", LUGARES[lugar].nombre, pagina, paginas)
+        for k = (pagina - 1) * POR_PAGINA + 1, math.min(pagina * POR_PAGINA, #info) do t[#t + 1] = info[k] end
+    end
     if aviso ~= "" then t[#t + 1] = aviso end
     return table.concat(t, "\n")
 end
