@@ -416,6 +416,8 @@ void PesTessTilt(inout float3 N, inout float3 T, inout float3 B, float2 g, inout
 // t20 / t21 las nuestras, t31 las esculpidas de la sonrisa). Con el mismo peso que el PS y el surco medido ancho (wrFoldW), la piel
 // se hunde z366 mm en el surco y sube w366 mm en la cresta: cambia la silueta y la sombra, no solo la luz. Sin nada enlazado = 0.
 cbuffer cPSMaterialT : register(b4) { float4 g_tMat[8]; }
+// (10/11, hilo arrugas) pesos del juego suavizados por la DLL (= PS b12 PESWrSmooth); sin enlazar vale 0 y no cambia nada
+cbuffer PESWrSmoothT : register(b11) { float4 tWrS0; float4 tWrS3; float4 tWrS4; }
 Texture2D<float4> tWrAnimN : register(t5);
 Texture2D<float4> tWrMaskG : register(t6);
 Texture2D<float4> tWrN     : register(t20);
@@ -438,6 +440,8 @@ float2 PesTessWrinkle(float2 uv, float age)
   float4 wz = float4(P14.x > 0 ? P14.x : 1.0, P14.y > 0 ? P14.y : 1.0, P14.z > 0 ? P14.z : 1.0, P14.w > 0 ? P14.w : 1.0);
   float4 wTop = g_tMat[3];
   float4 wBot = float4(uv.x < 0.5 ? g_tMat[0].y : g_tMat[4].x, g_tMat[4].yzw);
+  { float k = saturate(IniParams.Load(int2(397, 0)).z) * (tWrS0.y > 0.5 ? 1.0 : 0.0);   // (10/11) igual que el PS (z397)
+    if (k > 0.0) { wTop = lerp(wTop, tWrS3, k); wBot = lerp(wBot, float4(uv.x < 0.5 ? tWrS0.x : tWrS4.x, tWrS4.yzw), k); } }
   float smile = sqrt(saturate(max(g_tMat[0].y, g_tMat[4].x)) * saturate(wTop.w));
   wTop *= float4(wz.x, wz.x, wz.y, wz.z * (1.0 + max(P13.z, 0.0) * smile));
   wBot.x *= wz.w;

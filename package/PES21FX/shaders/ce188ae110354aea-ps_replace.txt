@@ -644,7 +644,8 @@ void main(
   // que metieron las arrugas y se bajan igual los surcos / crestas (brillo, SSS, sombra del surco). Las barbas 3D (pes_beard) no
   // pasan por aca: siguen la piel con el gesto por la DLL (pozo t116 + diferencia de huesos t115)
   if (fhMask > 0.001) { float fhK = 1.0 - 0.75 * fhMask; r1.xyz = normalize(r1.xyz - wrDN * (1.0 - fhK));
-    wrFold *= fhK; wrFoldW *= fhK; wrRidgeF *= fhK; wrRidgeW *= fhK; shFold *= fhK; shFoldW *= fhK; shRidge *= fhK; }
+    wrFold *= fhK; wrFoldW *= fhK; wrRidgeF *= fhK; wrRidgeW *= fhK; shFold *= fhK; shFoldW *= fhK; shRidge *= fhK;
+    exFoldZ *= fhK; exRidgeZ *= fhK; }   // (10/11, hilo arrugas) la sangre / palidez del pliegue tampoco sobre la barba pintada
   float poreAmt = 0;
   if (enhance) {
     // poros y microrrelieve de la piel (se apaga a distancia para no titilar)

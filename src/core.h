@@ -463,7 +463,7 @@ ID3D11Buffer* ExprBufferForDraw(ID3D11DeviceContext* c, UINT count, UINT start, 
 struct FaceTessScope { bool on = false, relief = false, height = false; D3D11_PRIMITIVE_TOPOLOGY topo = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST; int v = -1; UINT cnt = 0, start = 0; INT base = 0; int tm = -1; };   // (07/11) tm: medidor de GPU de este dibujo (-1 = sin medir)   // (04/11 piel) v / cnt / start / base: para repetir la cara teselada en el atlas de las cabezas
 ID3D11DomainShader* FaceTessAtlasDS(int v);   // (04/11 piel) DS de la cara teselada para el atlas de las cabezas (v 0 cabeza, 1 cara animada)
 bool HeadShadowClearedThisFrame(); ID3D11DepthStencilState* HeadShadowAtlasDSS(); ID3D11RasterizerState* HeadShadowAtlasRS(ID3D11RasterizerState* cur); void HeadShadowTessNote(int what);   // (04/11 piel) cara teselada en el atlas
-bool FaceTessBegin(ID3D11DeviceContext* c, uint64_t vsHash, ID3D11ShaderResourceView* seam, ID3D11ShaderResourceView* params, FaceTessScope& s, const std::string& faceId = std::string());   // (04/11 m) faceId = cara del dibujo (teselacion por jugador)
+bool FaceTessBegin(ID3D11DeviceContext* c, uint64_t vsHash, ID3D11ShaderResourceView* seam, ID3D11ShaderResourceView* params, FaceTessScope& s, const std::string& faceId = std::string(), ID3D11Buffer* wrCb = nullptr);   // (04/11 m) faceId = cara del dibujo (teselacion por jugador)
 void FaceTessSetSaved(const std::map<std::string, std::vector<float>>& m);   // (04/11 m) [teselacion_cara] de PES21FX_hair.ini
 std::string FaceTessSaveCurrent();   // (04/11 m) boton tess_save
 void FaceTessEnd(ID3D11DeviceContext* c, FaceTessScope& s);
