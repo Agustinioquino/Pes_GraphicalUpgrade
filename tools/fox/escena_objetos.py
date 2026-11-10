@@ -5,7 +5,9 @@ los cargue y los dibuje el propio Fox Engine, con sus materiales, sin dibujador 
 Como: una entidad cobra::rd::StadiumModel por objeto (la misma que usa el juego para cada pieza de un estadio: camarografos,
 carteles, tribunas). Su cuerpo (StadiumModelBody::vf7 0x1419054a0) hace FUN_141692630(escena de la entidad) +
 FUN_1416927c0(escena, modelo): la MISMA via por la que los focos SpotLight entran a la escena del estudio. Propiedades y
-valores copiados de una StadiumModel real (st024_2018_common_cam00.fox2, version 3, 0x190 bytes).
+valores copiados de StadiumModel reales (st024: cam00 y pitch; version 3, 0x190 bytes). kind / direction = DEFAULT y
+demoGroup = NONE como el modelo del pasto. El cuerpo (FUN_141906600) solo usa el codigo general de modelos de Fox
+(0x14169xxxx), sin datos del estadio ni del partido.
 
 INFERIDO, falta probar en el juego: que la escena del Editar acepte la clase (la DirectionalLight en esta misma escena hizo
 que no cargara, 10/11 02:00 UTC). Probar con UN objeto antes de seguir.
@@ -51,11 +53,11 @@ def add_objeto(f, n, ruta, pos):
     f.set(e, 'lodNearSize', 'Float', -1.0)
     f.set(e, 'lodPolygonSize', 'Float', 2.0)
     f.set(e, 'color', 'Color', (1, 1, 1, 1))
-    f.set(e, 'drawRejectionLevel', 'Int32', 8)
+    f.set(e, 'drawRejectionLevel', 'Int32', 7)       # NO_REJECT: un objeto chico no se descarta por tamaño
     f.set(e, 'drawMode', 'Int32', 0)
     f.set(e, 'rejectFarRangeShadowCast', 'Int32', 2)
-    f.set(e, 'direction', 'Int32', 0)
-    f.set(e, 'kind', 'Int32', 9)
+    f.set(e, 'direction', 'Int32', 5)                # DEFAULT
+    f.set(e, 'kind', 'Int32', 17)                    # DEFAULT (no STAFF_* / STAND_*: esos los prende y apaga el partido)
     f.set(e, 'demoGroup', 'Int32', 0)
     f.set(e, 'customBits', 'UInt32', 0)
     f.ents.append(e)
