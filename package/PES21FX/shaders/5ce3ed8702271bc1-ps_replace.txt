@@ -339,7 +339,8 @@ void main(
       // con arrugas horneadas propias (Messi) las del juego en la sonrisa a la mitad: mandan las suyas
       { uint shTw0 = 0, shTh0 = 0; pesShapeWr.GetDimensions(shTw0, shTh0); if (G6a.w > 0.5 && shTw0 > 1) { sS *= 0.75; sS2 *= 0.75; } }
       wTop = max(wTop, float4(0.75 * sU + 0.60 * sG, 0.45 * sU, 0.85 * sA + 0.60 * sG, 0.70 * sS + 0.30 * sS2 + 0.40 * sG));   // (09/11 c) mas notorias
-      wBot.x = max(wBot.x, 0.85 * sS + 0.15 * sS2 + 0.60 * sG); }
+      wBot.x = max(wBot.x, 0.85 * sS + 0.15 * sS2 + 0.60 * sG + 0.35 * sA);
+      wBot.yz = max(wBot.yz, 0.45 * sA); }   // (10/11, video de Agustin: el enojo casi no marcaba) enojo: labio de arriba tenso (surco) y comisuras abajo (marioneta)
     // sonrisa real: boca y ojos activos a la vez -> mas patas de gallo
     float smile = sqrt(saturate(max(g_psMaterial.m_materials[0].y, g_psMaterial.m_materials[4].x)) * saturate(wTop.w));
     wTop *= float4(wrZone.x, wrZone.x, wrZone.y, wrZone.z * (1.0 + wrSmile * smile));

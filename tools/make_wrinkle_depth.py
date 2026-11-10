@@ -4,7 +4,7 @@
 # arrugas de UN grupo, dibujadas como surcos con la anatomia (ubicadas sobre el mapa original del juego), y el PS arma de ahi la
 # normal, el fondo del surco, el brillo y el SSS (una sola fuente); la teselacion hunde lo mismo.
 #   pes_wrinkle_depth_a.dds  R frente (asombro)  G entrecejo + nariz (enojo)  B patas de gallo + bajo el ojo (ojos)  A surco nasogeniano (boca)
-#   pes_wrinkle_depth_b.dds  R menton + labio de arriba (boca, puchero)  G marioneta (mandibula)  B cuello  A mejilla bajo el ojo (sonrisa)
+#   pes_wrinkle_depth_b.dds  R menton (boca, puchero)  G marioneta (mandibula)  B cuello  A mejilla bajo el ojo (sonrisa)
 # Cada valor es 0 (piel lisa) .. 1 (fondo del surco), perfil gaussiano ancho: el PS lo afina con la fuerza del gesto (la arruga se
 # forma: primero hendidura ancha y suave, despues fina y profunda).
 #   python3 make_wrinkle_depth.py carpeta_salida [tamano=1024] [--vista fondo.png]
@@ -91,10 +91,11 @@ groove(A[3], [(0.060, 0.502), (0.074, 0.530), (0.086, 0.565)], amp=0.45, sig=1.6
 groove(A[3], [(0.112, 0.545), (0.122, 0.580), (0.126, 0.615)], amp=0.35, sig=2.6, taper=0.35, wob=0.6, seed=63)
 groove(A[3], [(0.068, 0.630), (0.074, 0.639), (0.080, 0.650)], amp=0.55, sig=1.5, taper=0.4, seed=64)
 
-# ---- B.r MENTON y LABIOS (boca, puchero): surco del menton, rayas verticales del labio de arriba, piel de naranja del menton
+# ---- B.r MENTON (boca, puchero): surco del menton y piel de naranja del menton
 groove(B[0], [(-0.042, 0.671), (0.0, 0.683), (0.042, 0.671)], amp=0.85, sig=2.6, mirror=False, taper=0.25, wob=0.6, seed=71)
-for k, dx in enumerate((0.009, 0.021, 0.033, 0.045)):
-    groove(B[0], [(dx, 0.578 + 0.003 * k), (dx + 0.001, 0.589 + 0.002 * k), (dx + 0.002, 0.598 + 0.001 * k)], amp=0.45 - 0.06 * k, sig=1.2, taper=0.45, seed=72 + k)
+# (10/11, Agustin: "una sombra rara en la parte de arriba de la boca ... con la version nueva de arrugas, la vieja no causa eso") las
+# rayas verticales del labio de arriba se sacaron: se prendian con cualquier gesto de la boca (tambien la sonrisa), de lejos se
+# juntaban en una banda oscura sobre el labio y la teselacion las hundia. Este canal queda solo para el menton
 peel = vnoise(150, 77) * 0.6 + vnoise(300, 78) * 0.4
 chin = np.exp(-(((U - CU) / 0.032) ** 2 + ((V - 0.703) / 0.018) ** 2))
 B[0] = np.maximum(B[0], (np.clip((peel - 0.52) / 0.2, 0, 1) * chin * 0.45).astype(np.float32))
