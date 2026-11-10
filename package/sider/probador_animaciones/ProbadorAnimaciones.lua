@@ -1,230 +1,483 @@
--- ProbadorAnimaciones v1.2 - PES 2021 / Sider  (PES21 FX, 10/11/2026)
--- Probador de animaciones (.gani), UNA A UNA, con el modo Editar como visor.
--- Cada PAGINA es un tipo de animacion. Con una tecla pasas a la animacion siguiente de la
--- lista de esa pagina: el juego la carga EN LUGAR de la animacion que el visor pide siempre
--- (la de reposo), asi la reproduce el motor mismo. El overlay muestra numero y archivo.
--- No reemplaza ni toca ningun .gani: solo cambia cual se entrega mientras el modulo esta activo.
+-- ProbadorAnimaciones v2.0 - PES 2021 1.07.02 / Sider 7  (PES21 FX, 10/11/2026)
+-- Probador de animaciones (.gani) con el menu Editar como visor. Version simple: dos paginas.
 --
--- Pagina "cara": el visor pide edit_idle_loop_face.gani al cargar al jugador; se le entrega
---   el clip elegido de la lista content\probador-animaciones\cara.txt
--- Pagina "cuerpo" (1.1): en Edit > Movimientos > festejo de gol, el visor pide el festejo como
---   archivo suelto dml_goal_celebrate_NNNN.gani (162 festejos, tabla 0x143536b80 del exe); se le
---   entrega el clip elegido de cuerpo.txt (cinematicas, previas, manos, publico...). Para verla:
---   elegi la animacion aca y despues entra (o cambia) el festejo en Movimientos. Mientras haya
---   una elegida, los festejos de un partido tambien salen cambiados: dejala en normal al terminar.
---   Los archivos companeros (_sub1, _eyes_target) no se tocan.
--- Pagina "partido" (1.2): igual que "cuerpo" (se ve en el festejo de Movimientos) pero con las
---   4389 animaciones de PARTIDO, sacadas de body_anime_file0..9.mtar con su nombre real
---   (lista partido.txt; cada archivo se llama <id del juego>_<nombre>.gani, agrupados por comienzo del nombre).
---   Si "cuerpo" y "partido" tienen una elegida, gana "cuerpo".
--- Lista de una pagina (<pagina>.txt): primera linea "raiz = carpeta completa" y despues una
---   ruta por linea, relativa a esa carpeta (grupo\archivo.gani). Lineas con # no cuentan.
--- Paginas extra: content\probador-animaciones\paginas.txt, una por linea:
---   nombre = comienzo del nombre del archivo que pide el juego; si empieza con ^ es un patron de Lua
+-- CUERPO: el visor del Editar carga los 162 festejos de gol TODOS JUNTOS al entrar al jugador.
+--   Este modulo le entrega, en lugar de cada festejo, una animacion de la lista: 162 por tanda.
+--   Despues se miran desde el propio juego: Editar > jugador > Movimientos > Festejo de gol.
+--   El festejo numero N muestra la animacion (primera de la tanda + N - 1); el overlay dice
+--   cual es la que esta puesta en el visor en ese momento.
+-- CARA: una animacion de cara a la vez, en lugar de la cara de reposo del visor.
 --
--- Ademas anota solo (sin teclas) cada .gani distinto que pide el juego en
--- content\probador-animaciones\vistos_gani.txt : sirve para saber que archivo pide cada pantalla.
+-- El juego carga las animaciones al entrar al jugador, no cuando tocas la tecla: despues de
+-- cambiar de tanda hay que volver a la lista de jugadores y entrar de nuevo. El overlay avisa
+-- solo: PENDIENTE hasta que el juego las vuelve a pedir, APLICADO cuando ya las cargo.
 --
--- Uso: overlay de Sider, pasar a este modulo con [ y ] :
---   0 = animacion SIGUIENTE      9 = anterior       5 / 6 = grupo (carpeta) anterior / siguiente
---   7 / 8 = pagina anterior / siguiente              1 = esa pagina vuelve a NORMAL    3 = todo normal
--- Para verla: volve a entrar al jugador (Edit > Apariencia), el visor recarga la animacion.
+-- Teclas (overlay de Sider abierto y este modulo elegido; en tu Sider el overlay se abre con la
+-- barra espaciadora y se pasa de modulo con la tecla 1):
+--   0 = tanda / animacion SIGUIENTE     9 = anterior      8 / 7 = grupo siguiente / anterior
+--   5 = volver al original              6 = pagina cuerpo <-> cara
+--   4 = pedirle a Sider que recargue al jugador (la recarga de kserv / kitpos)
+--
+-- Que toca: no cambia ningun archivo ni escribe memoria. Solo elige que archivo se entrega
+-- mientras estas en Editar, y lee del visor que festejo esta puesto. Fuera de Editar no hace nada.
+-- Anota solo en sider.log cada .gani distinto que pide el juego ("el juego pide ...").
+--
+-- Listas: content\probador-animaciones\cara.txt, cuerpo.txt y partido.txt. Primera linea
+-- "raiz = carpeta completa", despues una ruta por linea relativa a esa carpeta. El modulo las
+-- reparte solo: caras a CARA, cuerpos a CUERPO; manos, ojos y publico quedan afuera.
 
-local m = { version = "1.2" }
-local DIR, ESTADO, VISTOS
-local PAGS = {
-    { nombre = "cara", pref = "edit_idle_loop_face" },
-    { nombre = "cuerpo", pref = "^dml_goal_celebrate_%d+%.gani$" },
-    { nombre = "partido", pref = "^dml_goal_celebrate_%d+%.gani$" },
-}
-local pag, aviso = 1, ""
-local vistos, nvistos = {}, 0
+local m = { version = "2.0" }
+local TANDA = 162
 
+-- direcciones de PES2021.exe 1.07.02 (base 0x140000000), leidas del decompilado. Solo lectura.
+local EMV_PTR = 0x1438040d0      -- puntero a edit::ModelView (visor del menu Editar)
+local IMPL_VT = 0x142ba51e0      -- vtable de draw::util::TaskModelView::Impl
+local O_ANIM_TIPO, O_ANIM_ID, ID_FESTEJO_0 = 0x3c0, 0x3c4, 0x2c
+
+-- orden de los 162 festejos en el menu (tabla 0x143536b80 del exe): dml_goal_celebrate_<numero>.
+-- El 38 no lo pude leer del exe (marcado con ?): se acomoda solo cuando el juego lo pide.
+local FESTEJOS =
+    "0006 0007 0008 0009 0052 0002 0081 0109 0118 0098 0088 0070 0128 0069 0114 0116 0028 0115 0030 0133 " ..
+    "0021 0132 0110 0084 0061 0125 0124 0054 0103 0082 0107 0106 0053 0122 0087 0100 0117 ? 0093 0092 " ..
+    "0134 0113 0112 0111 0131 0074 0096 0095 0094 0090 0089 0211 0130 0129 0286 0108 0077 0075 0080 0126 " ..
+    "0099 0120 0022 0119 0102 0073 0072 0020 0127 0071 0068 0209 0105 0067 0066 0018 0064 0104 0213 0055 " ..
+    "0101 0123 0057 0058 0060 0059 0051 0208 0175 0214 0173 0174 0180 0176 0078 0135 0091 0079 0063 0121 " ..
+    "0156 0097 0076 0056 0216 0086 0085 0083 0279 0177 0178 0179 0143 0142 0141 0140 0139 0138 0137 0191 " ..
+    "0192 0136 0003 0001 0232 0233 0231 0314 0016 0019 0029 0236 0235 0015 0017 0298 0014 0010 0012 0013 " ..
+    "0267 0268 0035 0266 0269 0270 0263 0271 0272 0273 0274 0262_a 0284 0285 0287 0288 0289 0290 0291 " ..
+    "0293 0294 0297"
+
+local DIR
+local cuerpo, cara = {}, {}          -- { ruta = archivo completo, nombre, g = grupo }
+local pag = 1                        -- 1 = cuerpo, 2 = cara
+local base, activo = 0, false        -- primera animacion de la tanda (desde 0) y si se entrega
+local sel_cara = 0                   -- 0 = cara normal
+local IDX, HUECO = {}, nil           -- numero de festejo -> lugar en el menu (desde 0)
+local orden, n_extra, ultimo, hueco_usado = {}, 0, -1, false
+local serv, n_serv = {}, 0           -- festejos distintos entregados con la tanda actual
+local serv_cara, n_serv_cara = {}, 0
+local hubo_cuerpo, hubo_cara = false, false
+local sanos, malos = {}, 0
+local en_edit = false
+local vistos, n_vistos = {}, 0
+local aviso, recarga_txt = "", ""
+
+-------------------------------------------------------------------------------------------
+-- utilidades
+-------------------------------------------------------------------------------------------
 local function basename(f)
-    return string.lower(string.match(f, "([^\\/]+)$") or f)
+    return string.match(f, "([^\\/]+)$") or f
 end
 
-local function trim(s) return (string.match(s, "^%s*(.-)%s*$")) end
-
-local function leer_lista(p)
-    p.lista, p.raiz, p.sel = {}, "", p.sel or 0
-    local f = io.open(DIR .. p.nombre .. ".txt", "rb")
-    if not f then return end
-    local txt = f:read("*a") or ""
-    f:close()
-    for line in string.gmatch(txt, "[^\r\n]+") do
-        local l = trim(line)
-        local r = string.match(l, "^raiz%s*=%s*(.+)$")
-        if r then
-            local c = string.sub(r, -1)
-            if c ~= "\\" and c ~= "/" then r = r .. "\\" end
-            p.raiz = r
-        elseif l ~= "" and string.sub(l, 1, 1) ~= "#" and string.lower(string.sub(l, -5)) == ".gani" then
-            p.lista[#p.lista + 1] = l
-        end
-    end
+local function termina(s, fin)
+    return string.sub(s, -#fin) == fin
 end
 
-local function leer_paginas()
-    local f = io.open(DIR .. "paginas.txt", "rb")
-    if f then
-        local txt = f:read("*a") or ""
-        f:close()
-        for line in string.gmatch(txt, "[^\r\n]+") do
-            local k, v = string.match(line, "^%s*([^#=]-)%s*=%s*(.-)%s*$")
-            if k and k ~= "" and v ~= "" then
-                local ya = false
-                for _, p in ipairs(PAGS) do if p.nombre == k then p.pref = string.lower(v) ya = true end end
-                if not ya then PAGS[#PAGS + 1] = { nombre = k, pref = string.lower(v) } end
-            end
-        end
-    end
-    for _, p in ipairs(PAGS) do leer_lista(p) end
-end
-
-local function calza(p, b)
-    if string.sub(p.pref, 1, 1) == "^" then return string.match(b, p.pref) ~= nil end
-    return string.sub(b, 1, #p.pref) == p.pref
-end
-
--- primera pagina que reemplaza a ese archivo Y tiene una animacion elegida
-local function pagina_de(b)
-    for i, p in ipairs(PAGS) do
-        if p.sel >= 1 and p.lista[p.sel] and calza(p, b) then return i end
-    end
+local function leer(addr, n)
+    if type(memory) ~= "table" or type(memory.read) ~= "function" then return nil end
+    local ok, s = pcall(memory.read, addr, n)
+    if ok and type(s) == "string" and #s == n then return s end
     return nil
 end
 
-local function anotar(filename, b)
-    if vistos[b] or nvistos >= 5000 then return end
-    vistos[b] = true
-    nvistos = nvistos + 1
-    local f = io.open(VISTOS, "ab")
-    if f then f:write(filename .. "\r\n") f:close() end
+local function numero(s)
+    local v = 0
+    for i = #s, 1, -1 do v = v * 256 + string.byte(s, i) end
+    return v
+end
+
+local function puntero(addr)
+    local s = leer(addr, 8)
+    if not s then return nil end
+    local v = numero(s)
+    if v < 0x10000 or v > 0x7fffffffffff then return nil end
+    return v
+end
+
+local function u32(addr)
+    local s = leer(addr, 4)
+    return s and numero(s) or nil
+end
+
+local function en_editar(ctx)
+    if en_edit then return true end
+    if ctx and ctx.edit_mode_team ~= nil then return true end
+    return puntero(EMV_PTR) ~= nil
+end
+
+-- festejo puesto ahora en el visor del Editar (lugar en el menu, desde 0), o nil
+local function festejo_en_visor()
+    local emv = puntero(EMV_PTR)
+    local task = emv and puntero(emv + 0x78)
+    local impl = task and puntero(task + 0x90)
+    if not impl then return nil end
+    local vt = leer(impl, 8)
+    if not vt or numero(vt) ~= IMPL_VT then return nil end
+    if u32(impl + O_ANIM_TIPO) ~= 1 then return nil end
+    local id = u32(impl + O_ANIM_ID)
+    if not id or id < ID_FESTEJO_0 or id >= ID_FESTEJO_0 + TANDA then return nil end
+    return id - ID_FESTEJO_0
+end
+
+-- un .gani bueno empieza con D2 A2 FC 0B; si no, no se entrega (el juego usa el suyo)
+local MAGIA = string.char(0xD2, 0xA2, 0xFC, 0x0B)
+local function sano(path)
+    local v = sanos[path]
+    if v ~= nil then return v end
+    v = false
+    local f = io.open(path, "rb")
+    if f then
+        v = (f:read(4) == MAGIA)
+        f:close()
+    end
+    sanos[path] = v
+    if not v then
+        malos = malos + 1
+        if malos <= 5 then log("ProbadorAnimaciones: no entrego (falta o no es un .gani): " .. path) end
+    end
+    return v
+end
+
+-- recarga de Sider, la misma de kserv / kitpos / Face_Animation_Test
+local function recarga_sider(ctx)
+    if not (ctx and ctx.kits and ctx.kits.refresh) then return false end
+    local ok = pcall(function()
+        local team_id = ctx.kits.get_current_team(0)
+        local kit_id, is_gk = ctx.kits.get_current_kit_id(0)
+        if team_id and team_id ~= 0x1ffff and kit_id then
+            if is_gk then
+                local cfg = ctx.kits.get_gk(team_id)
+                if cfg then ctx.kits.set_gk(team_id, cfg) end
+            else
+                local cfg = ctx.kits.get(team_id, kit_id)
+                if cfg then ctx.kits.set(team_id, kit_id, cfg) end
+            end
+        end
+        ctx.kits.refresh(0)
+    end)
+    return ok
+end
+
+-------------------------------------------------------------------------------------------
+-- que archivo del juego es que
+-------------------------------------------------------------------------------------------
+-- festejo de gol del visor: ...\fixdemo\animations\dml_goal_celebrate_<n>.gani (o dml_pcc_ de PCC)
+local function es_festejo(f, b)
+    if not string.find(f, "fixdemo", 1, true) then return false end
+    if string.sub(b, 1, 19) ~= "dml_goal_celebrate_" and string.sub(b, 1, 8) ~= "dml_pcc_" then return false end
+    if termina(b, "_face.gani") or termina(b, "_eyes_target.gani") or termina(b, "hand.gani") then return false end
+    return true
+end
+
+-- cara de las poses del visor: ...\foxanim\interface(load)\<pose>_face.gani
+local function es_cara_visor(f, b)
+    return termina(b, "_face.gani") and string.find(f, "foxanim\\interface", 1, true) ~= nil
+end
+
+-- lugar del festejo en el menu (desde 0)
+local function lugar(b)
+    local k = orden[b]
+    if k then return k end
+    local s = string.match(b, "^dml_goal_celebrate_(.-)%.gani$")
+    k = s and IDX[s]
+    if not k then
+        local slot = tonumber(string.match(b, "^dml_pcc_b%d+_(%d+)%.gani$") or "")
+        local escena = tonumber(s or "")
+        if slot and slot > TANDA then
+            k = slot - 1                                   -- festejos agregados por PCC
+        elseif escena and escena >= 6000 then
+            k = TANDA + escena - 6000                      -- el mismo festejo de PCC, por su otro nombre
+        elseif s and HUECO and not hueco_usado and ultimo == HUECO - 1 then
+            k, hueco_usado = HUECO, true                   -- el que no pude leer del exe
+        else
+            k = TANDA + n_extra
+            n_extra = n_extra + 1
+        end
+    end
+    orden[b] = k
+    if k < TANDA then ultimo = k end
+    return k
 end
 
 function m.make_key(ctx, filename)
-    local b = basename(filename)
-    if string.sub(b, -5) ~= ".gani" then return end
-    anotar(filename, b)
-    local i = pagina_de(b)
-    if i and PAGS[i].sel >= 1 and PAGS[i].lista[PAGS[i].sel] then
-        return "probadoranim1:" .. i .. ":" .. PAGS[i].sel
+    local f = string.lower(filename)
+    if string.sub(f, -5) ~= ".gani" then return end
+    f = string.gsub(f, "/", "\\")
+    local b = basename(f)
+    if not vistos[b] and n_vistos < 400 then
+        vistos[b] = true
+        n_vistos = n_vistos + 1
+        log("ProbadorAnimaciones: el juego pide " .. filename)
+    end
+    if sel_cara > 0 and es_cara_visor(f, b) and en_editar(ctx) then
+        local e = cara[sel_cara]
+        if e and sano(e.ruta) then
+            if not serv_cara[b] then
+                serv_cara[b] = true
+                n_serv_cara = n_serv_cara + 1
+                log("ProbadorAnimaciones: cara " .. b .. " -> entrego " .. e.ruta)
+            end
+            return "pa2|" .. e.ruta
+        end
+        return
+    end
+    if activo and es_festejo(f, b) and en_editar(ctx) then
+        local k = lugar(b)
+        local e = cuerpo[base + k + 1]
+        if e and sano(e.ruta) then
+            if not serv[b] then
+                serv[b] = true
+                n_serv = n_serv + 1
+                if n_serv <= 3 then
+                    log(string.format("ProbadorAnimaciones: festejo %d (%s) -> entrego %s", k + 1, b, e.ruta))
+                end
+            end
+            return "pa2|" .. e.ruta
+        end
     end
 end
 
 function m.get_filepath(ctx, filename, key)
-    if key and string.sub(key, 1, 14) == "probadoranim1:" then
-        local i = tonumber(string.match(key, "^probadoranim1:(%d+):"))
-        local p = i and PAGS[i]
-        if p and p.sel >= 1 and p.lista[p.sel] then return p.raiz .. p.lista[p.sel] end
+    if key and string.sub(key, 1, 4) == "pa2|" then
+        return string.sub(key, 5)
     end
 end
 
-local function guardar()
-    local f = io.open(ESTADO, "wb")
-    if not f then return end
-    for _, p in ipairs(PAGS) do
-        f:write(p.nombre .. " = " .. ((p.sel >= 1 and p.lista[p.sel]) or "normal") .. "\r\n")
+-------------------------------------------------------------------------------------------
+-- listas
+-------------------------------------------------------------------------------------------
+-- devuelve "cara" o "cuerpo" y un orden (primero lo que usa el propio visor), o nil si no va
+local function clasificar(r, de_partido)
+    local b = basename(r)
+    if string.find(r, "\\hand\\", 1, true) or string.find(r, "audience", 1, true)
+        or string.find(r, "standsflag", 1, true) or termina(b, "hand.gani")
+        or termina(b, "_eyes_target.gani") then
+        return nil
     end
-    f:close()
+    local inter = 3
+    if string.find(r, "\\interfaceload\\", 1, true) then inter = 1
+    elseif string.find(r, "\\interface\\", 1, true) then inter = 2 end
+    if termina(b, "_face.gani") then return "cara", inter end
+    if string.find(r, "\\face\\animations\\base\\", 1, true) then return "cara", 4 end
+    if string.find(r, "\\face\\", 1, true) then return "cara", 5 end
+    if de_partido then return "cuerpo", 5 end
+    if inter < 3 then return "cuerpo", inter end
+    if string.find(r, "fixdemo", 1, true) then return "cuerpo", 3 end
+    return "cuerpo", 4
 end
 
-local function cargar()
-    local f = io.open(ESTADO, "rb")
-    if not f then return end
-    local txt = f:read("*a") or ""
-    f:close()
-    for line in string.gmatch(txt, "[^\r\n]+") do
-        local k, v = string.match(line, "^%s*(.-)%s*=%s*(.-)%s*$")
-        if k and v then
-            for _, p in ipairs(PAGS) do
-                if p.nombre == k then
-                    for n, c in ipairs(p.lista) do if c == v then p.sel = n end end
+local function grupo_de(rel)
+    local carpeta, nombre = string.match(rel, "^(.*)[\\/]([^\\/]+)$")
+    if not carpeta then return "" end
+    if termina(string.lower(carpeta), "fixdemo\\animations") then
+        -- carpeta gigante: la parto por el comienzo del nombre (dml_goal, dml_ceremony, ...)
+        local a, c = string.match(string.lower(nombre), "^(%a+)_(%a+)")
+        if a then return carpeta .. "\\" .. a .. "_" .. c .. "*" end
+    end
+    return carpeta
+end
+
+local function leer_listas()
+    local todo, ya = { cara = {}, cuerpo = {} }, {}
+    local total, afuera = 0, 0
+    for _, nombre in ipairs({ "cara", "cuerpo", "partido" }) do
+        local f = io.open(DIR .. nombre .. ".txt", "rb")
+        if f then
+            local txt = f:read("*a") or ""
+            f:close()
+            local raiz = ""
+            for line in string.gmatch(txt, "[^\r\n]+") do
+                local l = string.match(line, "^%s*(.-)%s*$")
+                local r = string.match(l, "^raiz%s*=%s*(.+)$")
+                if r then
+                    local c = string.sub(r, -1)
+                    if c ~= "\\" and c ~= "/" then r = r .. "\\" end
+                    raiz = r
+                elseif l ~= "" and string.sub(l, 1, 1) ~= "#" and string.lower(string.sub(l, -5)) == ".gani" then
+                    l = string.gsub(l, "/", "\\")
+                    local ruta = raiz .. l
+                    local clave = string.lower(ruta)
+                    if not ya[clave] then
+                        ya[clave] = true
+                        total = total + 1
+                        local tipo, rango = clasificar("\\" .. string.lower(l), nombre == "partido")
+                        if tipo then
+                            local t = todo[tipo]
+                            t[#t + 1] = { ruta = ruta, nombre = basename(l), g = grupo_de(l), rango = rango, n = #t + 1 }
+                        else
+                            afuera = afuera + 1
+                        end
+                    end
                 end
             end
+        else
+            log("ProbadorAnimaciones: falta la lista " .. DIR .. nombre .. ".txt")
         end
     end
+    local function antes(a, b2)
+        if a.rango ~= b2.rango then return a.rango < b2.rango end
+        return a.n < b2.n
+    end
+    table.sort(todo.cara, antes)
+    table.sort(todo.cuerpo, antes)
+    cara, cuerpo = todo.cara, todo.cuerpo
+    return total, afuera
 end
 
-local function grupo_de(r) return string.match(r, "^(.*)[\\/][^\\/]+$") or "" end
-
-local function texto(p)
-    if p.sel >= 1 and p.lista[p.sel] then
-        return string.format("animacion %d de %d:  %s", p.sel, #p.lista, p.lista[p.sel])
+-------------------------------------------------------------------------------------------
+-- teclas y overlay
+-------------------------------------------------------------------------------------------
+local function salto_grupo(lista, pos, adelante)       -- pos y resultado: indice desde 1
+    local n = #lista
+    local k = pos
+    if k < 1 then return 1 end
+    local g = lista[k].g
+    if adelante then
+        while k <= n and lista[k].g == g do k = k + 1 end
+        if k > n then k = 1 end
+    else
+        while k >= 1 and lista[k].g == g do k = k - 1 end
+        if k < 1 then k = n end
+        local g2 = lista[k].g
+        while k > 1 and lista[k - 1].g == g2 do k = k - 1 end
     end
-    return string.format("normal   (%d en la lista)", #p.lista)
+    return k
+end
+
+local function cambio(ctx, texto)
+    log("ProbadorAnimaciones: " .. texto)
+    recarga_txt = recarga_sider(ctx) and "recarga pedida a Sider" or ""
+end
+
+local function tecla_cuerpo(ctx, vkey)
+    local n = #cuerpo
+    if vkey == 0x35 then
+        if activo then
+            activo = false
+            serv, n_serv = {}, 0
+            cambio(ctx, "cuerpo vuelve al original")
+        end
+        return
+    end
+    if n == 0 then aviso = "no hay animaciones de cuerpo: faltan cuerpo.txt y partido.txt" return end
+    if not activo then
+        activo = true                                   -- la primera tecla prende la tanda actual
+    elseif vkey == 0x30 then
+        base = base + TANDA
+        if base >= n then base = 0 end
+    elseif vkey == 0x39 then
+        if base == 0 then base = math.floor((n - 1) / TANDA) * TANDA
+        else base = math.max(0, base - TANDA) end
+    elseif vkey == 0x38 then
+        base = salto_grupo(cuerpo, base + 1, true) - 1
+    else
+        base = salto_grupo(cuerpo, base + 1, false) - 1
+    end
+    serv, n_serv, hubo_cuerpo = {}, 0, true
+    cambio(ctx, string.format("cuerpo: tanda %d a %d de %d, empieza en %s", base + 1, math.min(base + TANDA, n), n, cuerpo[base + 1].ruta))
+end
+
+local function tecla_cara(ctx, vkey)
+    local n = #cara
+    if vkey == 0x35 then
+        if sel_cara > 0 then
+            sel_cara = 0
+            serv_cara, n_serv_cara = {}, 0
+            cambio(ctx, "cara vuelve a la normal")
+        end
+        return
+    end
+    if n == 0 then aviso = "no hay animaciones de cara: falta cara.txt" return end
+    if vkey == 0x30 then
+        sel_cara = sel_cara + 1
+        if sel_cara > n then sel_cara = 1 end
+    elseif vkey == 0x39 then
+        sel_cara = sel_cara - 1
+        if sel_cara < 1 then sel_cara = n end
+    else
+        sel_cara = salto_grupo(cara, sel_cara, vkey == 0x38)
+    end
+    serv_cara, n_serv_cara, hubo_cara = {}, 0, true
+    cambio(ctx, string.format("cara: %d de %d, %s", sel_cara, n, cara[sel_cara].ruta))
 end
 
 function m.key_down(ctx, vkey)
-    local p = PAGS[pag]
-    local n = #p.lista
-    if vkey == 0x37 then
-        pag = pag - 1
-        if pag < 1 then pag = #PAGS end
-        return
-    elseif vkey == 0x38 then
-        pag = pag + 1
-        if pag > #PAGS then pag = 1 end
-        return
-    elseif vkey == 0x30 or vkey == 0x39 or vkey == 0x35 or vkey == 0x36 then
-        if n == 0 then
-            aviso = "la lista de '" .. p.nombre .. "' esta vacia (falta " .. p.nombre .. ".txt)"
-            return
-        end
-        local e = p.sel
-        if vkey == 0x30 then
-            e = e + 1
-            if e > n then e = 1 end
-        elseif vkey == 0x39 then
-            e = e - 1
-            if e < 1 then e = n end
-        else
-            if e < 1 then e = 1 end
-            local g = grupo_de(p.lista[e])
-            local k = e
-            if vkey == 0x36 then
-                while k <= n and grupo_de(p.lista[k]) == g do k = k + 1 end
-                if k > n then k = 1 end
-            else
-                while k >= 1 and grupo_de(p.lista[k]) == g do k = k - 1 end
-                if k < 1 then k = n end
-                local g2 = grupo_de(p.lista[k])
-                while k > 1 and grupo_de(p.lista[k - 1]) == g2 do k = k - 1 end
-            end
-            e = k
-        end
-        p.sel = e
-    elseif vkey == 0x31 then p.sel = 0
-    elseif vkey == 0x33 then for _, q in ipairs(PAGS) do q.sel = 0 end
-    else return end
-    guardar()
-    aviso = p.nombre .. " -> " .. texto(p) .. "   (volve a entrar al jugador para verla)"
-    log("ProbadorAnimaciones: " .. aviso)
+    aviso = ""
+    if vkey == 0x36 then
+        pag = (pag == 1) and 2 or 1
+    elseif vkey == 0x34 then
+        recarga_txt = recarga_sider(ctx) and "recarga pedida a Sider" or "Sider no pudo pedir la recarga"
+        log("ProbadorAnimaciones: tecla 4, " .. recarga_txt)
+    elseif vkey == 0x30 or vkey == 0x39 or vkey == 0x38 or vkey == 0x37 or vkey == 0x35 then
+        if pag == 1 then tecla_cuerpo(ctx, vkey) else tecla_cara(ctx, vkey) end
+    end
 end
 
+local COMO = "volve a la lista de jugadores y entra de nuevo al jugador (si sigue igual, sali de Editar y volve a entrar)"
+
 function m.overlay_on(ctx)
-    local t = { "ProbadorAnimaciones " .. m.version }
-    for i, p in ipairs(PAGS) do
-        t[#t + 1] = string.format("%s %-8s %s", i == pag and ">" or " ", p.nombre, texto(p))
-        if i == pag then t[#t + 1] = "           reemplaza a: " .. (string.find(p.pref, "celebrate", 1, true) and "el festejo de gol (Edit > Movimientos)" or (p.pref .. "*.gani")) end
+    local t = { string.format("ProbadorAnimaciones %s | cuerpo: %d animaciones | cara: %d", m.version, #cuerpo, #cara) }
+    local n = #cuerpo
+    local p1, p2 = (pag == 1) and "> " or "  ", (pag == 2) and "> " or "  "
+    if activo and n > 0 then
+        local e = cuerpo[base + 1]
+        t[#t + 1] = string.format("%sCUERPO: tanda %d a %d de %d   [%s]", p1, base + 1, math.min(base + TANDA, n), n, e.g)
+        t[#t + 1] = string.format("   Editar > Movimientos > Festejo de gol: el festejo N muestra la animacion %d + N", base)
+        t[#t + 1] = "   festejo 1 = " .. e.nombre
+        local k = festejo_en_visor()
+        if k and n_serv > 0 then
+            local a = cuerpo[base + k + 1]
+            t[#t + 1] = string.format("   AHORA EN EL VISOR: festejo %d -> animacion %d: %s", k + 1, base + k + 1, a and a.nombre or "(fuera de la lista: sale el festejo del juego)")
+        elseif k then
+            t[#t + 1] = string.format("   AHORA EN EL VISOR: festejo %d (todavia sin esta tanda)", k + 1)
+        end
+        if n_serv > 0 then
+            t[#t + 1] = string.format("   estado: APLICADO, el juego cargo %d de los %d festejos con esta tanda", n_serv, TANDA)
+        else
+            t[#t + 1] = "   estado: PENDIENTE, " .. COMO
+        end
+    else
+        t[#t + 1] = p1 .. "CUERPO: original del juego" .. (hubo_cuerpo and "  (los festejos originales vuelven al entrar de nuevo al jugador)" or "")
     end
-    t[#t + 1] = "0 = siguiente | 9 = anterior | 5/6 = grupo | 7/8 = pagina | 1 normal | 3 todo normal"
+    if sel_cara > 0 and cara[sel_cara] then
+        local e = cara[sel_cara]
+        t[#t + 1] = string.format("%sCARA: %d de %d   %s   [%s]", p2, sel_cara, #cara, e.nombre, e.g)
+        if n_serv_cara > 0 then
+            t[#t + 1] = "   estado: APLICADO, el juego ya la cargo"
+        else
+            t[#t + 1] = "   estado: PENDIENTE, " .. COMO
+        end
+    else
+        t[#t + 1] = p2 .. "CARA: normal" .. (hubo_cara and "  (vuelve al entrar de nuevo al jugador)" or "")
+    end
+    if pag == 1 then
+        t[#t + 1] = "0 tanda siguiente | 9 anterior | 8 / 7 grupo | 5 original | 6 pasar a CARA | 4 recargar | (tecla 1 = otro modulo)"
+    else
+        t[#t + 1] = "0 cara siguiente | 9 anterior | 8 / 7 grupo | 5 normal | 6 pasar a CUERPO | 4 recargar | (tecla 1 = otro modulo)"
+    end
+    if malos > 0 then t[#t + 1] = string.format("%d archivos de la lista faltan o no son .gani: no se entregan", malos) end
+    if recarga_txt ~= "" then t[#t + 1] = recarga_txt end
     if aviso ~= "" then t[#t + 1] = aviso end
     return table.concat(t, "\n")
 end
 
 function m.init(ctx)
     DIR = ctx.sider_dir .. "content\\probador-animaciones\\"
-    ESTADO = DIR .. "estado.txt"
-    VISTOS = DIR .. "vistos_gani.txt"
-    leer_paginas()
-    cargar()
+    local i = 0
+    for s in string.gmatch(FESTEJOS, "%S+") do
+        if s == "?" then HUECO = i else IDX[s] = i end
+        i = i + 1
+    end
+    local total, afuera = leer_listas()
     ctx.register("livecpk_make_key", m.make_key)
     ctx.register("livecpk_get_filepath", m.get_filepath)
     ctx.register("key_down", m.key_down)
     ctx.register("overlay_on", m.overlay_on)
-    log(string.format("ProbadorAnimaciones %s listo (%d paginas, cara: %d clips, cuerpo: %d, partido: %d)", m.version, #PAGS, #PAGS[1].lista, #PAGS[2].lista, #PAGS[3].lista))
+    pcall(ctx.register, "set_home_team_for_kits", function(c, team, edit) en_edit = (edit == true or edit == 1) end)
+    pcall(ctx.register, "set_teams", function() en_edit = false end)
+    log(string.format("ProbadorAnimaciones %s listo (%d en las listas: %d de cuerpo, %d de cara, %d afuera; %d festejos en la tabla; memoria %s; recarga de Sider %s)",
+        m.version, total, #cuerpo, #cara, afuera, i, type(memory) == "table" and "si" or "NO",
+        (ctx.kits and ctx.kits.refresh) and "si" or "NO"))
 end
 
 return m
