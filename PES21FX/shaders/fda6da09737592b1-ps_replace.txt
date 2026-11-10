@@ -1,0 +1,164 @@
+// PES 2021 - LUZ GLOBAL del estadio (iluminacion indirecta precalculada)  [hash fda6da09737592b1]
+// Traducido a HLSL desde el ensamblador (PES21 FX catalogo, 18/10). Es el "bounce light" del motor:
+// un volumen de irradiancia en clipmap (7 niveles alrededor de la camara) -> textura de indireccion -> bricks
+// de un atlas 3D. Por canal (R, G, B) guarda amplitud + un vector cuyo largo es la concentracion de la luz;
+// se evalua con la normal del G-buffer, se multiplica por sqrt(AO) y la exposicion y se suma a la luz difusa.
+// PES21 FX agrega: x56 fuerza, y56 contraste cielo/suelo (lo que mira arriba recibe mas, lo que mira abajo menos),
+// z56 cuanto pesa la oclusion (0.5 = original sqrt, 1 = lineal), w56 on/off
+
+cbuffer cPSSystem : register(b0)
+{
+  struct { float4 m_param; float4 m_renderInfo; float4 m_renderBuffer; float4 m_dominantLightDir; float4 m_timeParam; } g_psSystem : packoffset(c0);
+}
+cbuffer cPSScene : register(b2)
+{
+  struct
+  {
+    float4 m_projectionView[4];     // matrices como float4[4]: registro = fila tal cual la lee el asm
+    float4 m_projection[4];
+    float4 m_view[4];
+    float4 m_shadowProjection[4];   // en esta pasada: vista -> mundo (registros 12..14)
+    float4 m_shadowProjection2[4];
+    float4 m_eyepos;
+    float4 m_projectionParam;
+    float4 m_viewportSize;
+    float4 m_exposure;
+    float4 m_fogParam[3];
+    float4 m_fogColor;
+    float4 m_cameraCenterOffset;
+    float4 m_shadowMapResolutions;
+  } g_psScene : packoffset(c0);
+}
+cbuffer cPSObject : register(b5)
+{
+  struct
+  {
+    float4 m_viewWorld[4];
+    float4 m_world[4];
+    float4 m_useWeightCount;
+    float4 m_localParam[9];         // [0] tamano de la indireccion (x,y,z por nivel), [1] centro, [2] escala, [3] 1/atlas
+  } g_psObject : packoffset(c0);
+}
+
+SamplerState g_samplerPoint_Clamp_s : register(s9);
+SamplerState g_samplerLinear_Clamp_s : register(s11);
+Texture3D<float4> inIndirectionTexture : register(t0);
+Texture3D<float4> inAtlasTextureR : register(t1);
+Texture3D<float4> inAtlasTextureG : register(t2);
+Texture3D<float4> inAtlasTextureB : register(t3);
+Texture3D<float4> inValidityTexture : register(t4);
+Texture2D<float4> inDepthTexture : register(t5);
+Texture2D<float4> inNormalTexture : register(t6);
+Texture2D<float4> inAmbientOcclusionTexture : register(t7);
+
+Texture2D<float4> PESGtao : register(t27);   // PES21 (20/10): GTAO de la DLL
+Texture1D<float4> IniParams : register(t120);
+#include "pes_common.hlsli"   // PES21 (18/10): curva del dia
+// PES21 (18/10): copia del cbuffer de luz del sol (regla cb = 13 LightCB); si no hay sol queda en cero
+cbuffer PESLightCopyC : register(b13)
+{
+  float4 pLc_dir;     // direccion hacia el sol, espacio de vista
+  float4 pLc_color;
+}
+
+// un canal: amplitud A + vector D (largo = concentracion). Sin direccion = ambiente plano.
+float PESEvalChannel(float4 s, float3 Nw) {
+  float A = s.x; float3 D = s.yzw;
+  float l2 = dot(D, D); float l = sqrt(l2);
+  if (l == 0.0) return A;
+  float3 d = D * rsqrt(l2);
+  float ndl = dot(Nw, d) * 0.5 + 0.5;
+  float k = l / A;
+  float w = (1.0 - k) / (1.0 + k);
+  float p = 2.0 * k + 1.0, q = 2.0 * k + 2.0;
+  float e = pow(max(ndl, 1e-5), p);
+  return (w * (1.0 - q * e) + q * e) * A;
+}
+
+void main(float4 v0 : SV_Position0, out float4 o0 : SV_Target0, out float4 o1 : SV_Target1)
+{
+  int3 px = int3((int2)v0.xy, 0);
+  float2 sc = v0.xy / g_psSystem.m_renderInfo.xy * float2(2, -2) + float2(-1, 1);
+  // normal del G-buffer (octaedrica, 10+10+2 bits)
+  float4 nb = inNormalTexture.Load(px);
+  uint3 q3 = (uint3)(float3(1023, 1023, 3) * nb.xyw);
+  float2 e = float2((q3.x << 1) | (q3.z >> 1), (q3.y << 1) | (q3.z & 1)) * 0.000977 - 1.0;
+  float3 n = float3(e.xy, 1.0 - abs(e.x) - abs(e.y));
+  if (n.z < 0) n.xy = (1.0 - abs(e.yx)) * (e.xy >= 0 ? 1.0 : -1.0);
+  n = normalize(n);
+  // posicion en vista y en mundo
+  float d = inDepthTexture.Load(px).x;
+  float z = g_psScene.m_projectionParam.z / (d - g_psScene.m_projectionParam.w);
+  float3 pv = float3((sc - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * z, z);
+  float4 w0 = g_psScene.m_shadowProjection[0], w1 = g_psScene.m_shadowProjection[1], w2 = g_psScene.m_shadowProjection[2];
+  float3 Pw = float3(dot(float4(pv, 1), w0), dot(float4(pv, 1), w1), dot(float4(pv, 1), w2));
+  float3 nv = float3(n.x, n.y, -n.z);
+  float3 Nw = normalize(float3(dot(nv, w0.xyz), dot(nv, w1.xyz), dot(nv, w2.xyz)));
+  // clipmap: nivel segun la distancia al centro
+  float3 lp0 = g_psObject.m_localParam[0].xyz, lp1 = g_psObject.m_localParam[1].xyz, lp2 = g_psObject.m_localParam[2].xyz, lp3 = g_psObject.m_localParam[3].xyz;
+  float3 ps = Pw * lp2;
+  float3 rel = ps - lp1;
+  float m = max(max(abs(rel.x), abs(rel.y)), abs(rel.z)) * 4.0;
+  float lvl = floor(max(log2(m), 0.0));
+  float s = exp2(lvl);
+  float3 f = frac(ps / s);
+  float3 dims = lp0 * float3(1, 1, 7);
+  float3 idx = floor(dims * float3(f.x, f.y, f.z / 7.0 + lvl / 7.0)) + 0.5;
+  float4 ind = inIndirectionTexture.Sample(g_samplerPoint_Clamp_s, idx / dims) * 255.0;
+  float3 t = frac(ps * (lp0 / ind.w));
+  float3 uvw = (t * 0.666667 + ind.zyx + 0.166667) * lp3.zyx;
+  float4 R = inAtlasTextureR.Sample(g_samplerLinear_Clamp_s, uvw);
+  float4 G = inAtlasTextureG.Sample(g_samplerLinear_Clamp_s, uvw);
+  float4 B = inAtlasTextureB.Sample(g_samplerLinear_Clamp_s, uvw);
+  float valid = inValidityTexture.Sample(g_samplerLinear_Clamp_s, uvw).y;
+  float3 irr = max(float3(PESEvalChannel(R, Nw), PESEvalChannel(G, Nw), PESEvalChannel(B, Nw)), 0.0);
+  float ao = inAmbientOcclusionTexture.Sample(g_samplerLinear_Clamp_s, v0.xy * g_psSystem.m_renderBuffer.zw).x;
+  { float4 GT = IniParams.Load(int2(132,0)); if (GT.x > 0.5) { float g = PESGtao.SampleLevel(g_samplerLinear_Clamp_s, v0.xy * g_psSystem.m_renderBuffer.zw, 0).x; ao = lerp(ao, min(ao * 0.35 + 0.65, g), saturate(GT.y)); } }   // PES21 GTAO (20/10)
+  { // (26/10 d) PES21 pasto: entre hojas finas la oclusion de pantalla es fuerte y cambia con la vista, y se aplicaba dos veces (aca
+    // sobre el ambiente y otra vez en la composicion): en el cesped (tipo 3) se alivia con x108, el mismo alivio que usa la composicion
+    uint tyV = ((uint)(nb.z * 1023.0 + 0.5)) & 15u;
+    if (tyV == 3u && IniParams.Load(int2(104,0)).x > 0.5) ao = lerp(1.0, ao, saturate(1.0 - IniParams.Load(int2(108,0)).x)); }
+  // === PES21 FX: controles de la luz global ===
+  float4 GL = IniParams.Load(int2(56, 0));
+  float aoW = sqrt(ao);
+  if (GL.w > 0.5) {
+    irr *= max(GL.x, 0.0);
+    float up = Nw.y;   // el mundo tiene Y arriba
+    irr *= 1.0 + clamp(GL.y, -1.0, 2.0) * up * 0.35;
+    aoW = pow(max(ao, 1e-4), clamp(GL.z, 0.25, 2.0));
+  }
+  // === PES21 curva del dia (18/10): la luz ambiente sube y baja con la altura del sol; hora azul en el horizonte ===
+  {
+    float3 Ld = pLc_dir.xyz;
+    if (dot(Ld, Ld) > 1e-6) {
+      float3 Lw = normalize(float3(dot(Ld, w0.xyz), dot(Ld, w1.xyz), dot(Ld, w2.xyz)));   // a mundo (Y arriba)
+      float3 sc = max(pLc_color.xyz, 0.0);
+      float kSun = saturate((sc.r / max(sc.b, 1e-4) - 0.85) * 4.0);
+      PESDay dy = PESDayCurve(saturate(abs(Lw.y)), kSun);
+      if (dy.on > 0.0) { irr *= dy.amb; irr = PESBlueTint(irr, dy.blue); }
+      irr *= PESDayAmbMul(kSun);   // PES21 contraste de dia (x109)
+      irr *= PESAmbGain();         // PES21 (20/10) luz calibrada: ganancia que ajusta el medidor de luz (126)
+      // PES21 (20/10) sombra con color de cielo: lo que no ve el sol lo ilumina el cielo, que es mas azul que el sol
+      // (~11000 K contra ~5500 K). Se cambia el COLOR de la luz ambiente (no su cantidad) hacia el del cielo relativo al
+      // color del sol de este estadio, mas en lo que mira hacia arriba (lo que mira al piso recibe el rebote del pasto).
+      // x127 fuerza (0 = color del archivo de luz)
+      { float4 ST = IniParams.Load(int2(127,0));
+        if (ST.x > 0.001 && kSun > 0.01) {
+          const float3 LWs = float3(0.2126, 0.7152, 0.0722);
+          float3 sn = sc / max(dot(sc, LWs), 1e-4);
+          float3 skyC = sn * float3(0.80, 0.93, 1.32);
+          // (21/10) cielo fisico (149): el color de la luz del cielo relativo al sol sale del modelo de atmosfera (la DLL lo
+          // integra sobre el hemisferio en 150): con el sol bajo el cielo queda mucho mas azul que el sol
+          { float4 PHs = IniParams.Load(int2(149,0)), SKs = IniParams.Load(int2(150,0)); if (PHs.x > 0.5 && SKs.y > 0.01) skyC = sn * SKs.xyz; }
+          skyC /= max(dot(skyC, LWs), 1e-4);
+          float upS = saturate(0.5 + 0.5 * Nw.y);
+          float lS = dot(irr, LWs);
+          irr = lerp(irr, lS * skyC, saturate(ST.x) * upS * kSun);
+        } }
+    }
+  }
+  o0.xyz = aoW * g_psScene.m_exposure.z * irr;
+  o0.w = 1.0;
+  o1.xyz = 0;
+  o1.w = ao * valid * 3.141593;
+}
