@@ -18,6 +18,7 @@ Texture2D<float4> pesWrDB : register(t46);
 Texture2D<float4> pesWrAgeT : register(t47);
 static const float kWrAgeMm = 2.262;
 static float g_wrAgeK = 0.3;   // edad 0..1 de esta cara (PesWrAge)
+static float g_wrSeed = 0;   // rasgo propio del jugador 1..7 (0 = sin dato: sin variacion)
 static float4 g_wrGA = 1, g_wrGB = 1;   // ganancia por zona segun la edad (PesWrAge)
 static float3 g_wrAg = 0;   // mm por mapa (joven, adulto, veterano), lo arma PesWrAge
 // (10/11, Agustin: "la escala esta mal", "tomando de base las remasterizadas") texturas nuevas sacadas de la normal remasterizada
@@ -27,10 +28,16 @@ static const float4 kWrDmmA = float4(3.44, 3.91, 3.08, 3.64);   // (10/11 d) rel
 //   // profundidad maxima (mm) por canal: frente, entrecejo, ojos, surco
 static const float4 kWrDmmB = float4(2.20, 3.13, 4.32, 2.29);   // menton, marioneta, cuello, mejilla
 bool PesWrDOk() { uint w = 0, h = 0; pesWrDA.GetDimensions(w, h); return w > 1; }
+float PesWrHash(float i) { return frac(sin((g_wrSeed + 1.0) * 12.9898 + i * 78.233) * 43758.5453); }
 // edad del jugador (anios; 0 = no se sabe) -> 0 (20 o menos) .. 1 (38 o mas); sin dato, un adulto joven
 float PesWrAgeK(float age, float ageW)
 {
+  // (10/11 g) la DLL manda edad + rasgo propio del jugador en la fraccion ((1 + 2 n) / 32, n = 1..7)
+  g_wrSeed = age > 0.5 ? floor(frac(age + 0.001) * 16.0) : 0.0;
+  age = floor(age + 0.001);
   float k = age > 0.5 ? saturate((age - 20.0) / 18.0) : 0.3;
+  // cada uno envejece distinto: hasta +- 5 anios de piel
+  if (g_wrSeed > 0.5) k = saturate(k + (PesWrHash(8.0) - 0.5) * 0.28 * step(0.02, k + 0.2));
   return saturate(k * ageW);
 }
 // arrugas en reposo por edad y ganancia de profundidad
@@ -50,6 +57,13 @@ void PesWrAge(float ageK, inout float4 wa, inout float4 wb, out float gain)
   wa = saturate((wa - tA) / (1.0 - tA)); wb = saturate((wb - tB) / (1.0 - tB));
   g_wrGA = lerp(float4(0.65, 0.85, 0.65, 0.95), float4(1.40, 1.25, 1.45, 1.20), ageK);
   g_wrGB = lerp(float4(0.80, 0.60, 0.70, 0.90), float4(1.20, 1.40, 1.40, 1.15), ageK);
+  // (10/11 g, Agustin: "la frente o las patas de gallo no son iguales para todos, asi como las mejillas o las orejas") cada jugador
+  // marca mas unas zonas que otras (0.55 .. 1.40 por zona, fijo por jugador); sin dato del jugador, todas igual
+  if (g_wrSeed > 0.5) {
+    g_wrGA *= lerp(0.55, 1.40, float4(PesWrHash(0.0), PesWrHash(1.0), PesWrHash(2.0), PesWrHash(3.0)));
+    g_wrGB *= lerp(0.55, 1.40, float4(PesWrHash(4.0), PesWrHash(5.0), PesWrHash(6.0), PesWrHash(7.0)));
+    g_wrAg *= lerp(0.70, 1.30, PesWrHash(9.0));
+  }
   gain = 1.0;
 }
 float PesWrD1(float4 ha, float4 hb, float4 pa, float4 pb, float4 ka, float4 kb)

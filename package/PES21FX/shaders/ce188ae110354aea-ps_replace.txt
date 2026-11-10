@@ -849,7 +849,9 @@ void main(
   // Pliegues de expresion: dentro del surco llega menos luz y la piel brilla menos
   if (wrOn && wrFold > 0) {
     float fold = saturate(wrFold * wrCrease);
-    r2.xyz *= (1.0 - 0.20 * fold);   // (09/11, Agustin: "las arrugas se ven oscuras a veces") 0.35 -> 0.20
+    // (10/11 g, Agustin: "el sss debe jugar con esas arrugas") la sombra del surco no es gris: la luz que entra por las paredes del
+    // pliegue sale rojiza (el rojo viaja mas bajo la piel), asi que el fondo pierde mas verde y azul que rojo (media 0.20 como antes)
+    r2.xyz *= 1.0 - fold * float3(0.12, 0.23, 0.25);
     r0.z  *= (1.0 - 0.5 * fold);
     r0.w   = lerp(r0.w, max(r0.w, 0.6), 0.5 * fold);
   }

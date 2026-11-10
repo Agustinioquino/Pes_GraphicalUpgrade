@@ -1607,8 +1607,11 @@ static void DeltaUpload(ID3D11DeviceContext* imm) {
         const ExprCharPose& P = ps[i]; float* base = f.data() + (size_t)(2 + i * kBdStride) * 4;
         float hw[3]; const bool hv = PoseHeadWorld(P, hw);
         // (09/11 g) w = 1 + edad del jugador (0 = no se sabe; >= 0.5 sigue siendo "posicion valida" para PesBoneChar)
-        int age = 0; { const int sl = CharSlotForSkel(P.skel); CharInfo ci; if (sl >= 0 && CharGet(sl, ci) && ci.known && ci.key) age = CharPlayerAge(ci.key); }
-        base[0] = hv ? hw[0] : 0; base[1] = hv ? hw[1] : 0; base[2] = hv ? hw[2] : 0; base[3] = hv ? 1.0f + (float)age : 0.0f;
+        // (10/11, Agustin: "la frente o las patas de gallo no son iguales para todos") + rasgo propio del jugador en la fraccion: (1 + 2 n) / 32,
+        // n = 1..7 sale del id (0 = no se sabe); el PS lo separa de la edad (pes_wrdepth.hlsli PesWrAgeK)
+        int age = 0; float wrSeed = 0.0f; { const int sl = CharSlotForSkel(P.skel); CharInfo ci; if (sl >= 0 && CharGet(sl, ci) && ci.known && ci.key) { age = CharPlayerAge(ci.key);
+            if (age > 0) { uint32_t hsh = (uint32_t)(ci.key >> 32) * 2654435761u; wrSeed = (1.0f + 2.0f * (float)(1 + (hsh >> 13) % 7)) / 32.0f; } } }
+        base[0] = hv ? hw[0] : 0; base[1] = hv ? hw[1] : 0; base[2] = hv ? hw[2] : 0; base[3] = hv ? 1.0f + (float)age + wrSeed : 0.0f;
         Aff W, WI; bool wOk = false; if (P.worldOk) { AffFromW(P.W, W); wOk = AffInv(W, WI); }
         PrevD& pv = s_prevD[P.skel]; const bool pvOk = pv.frame + 1 == P.frame || pv.frame == P.frame;   // el cuadro anterior de este personaje (si no, la de ahora)
         PrevD cur; cur.frame = P.frame;
