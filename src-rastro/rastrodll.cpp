@@ -1,4 +1,4 @@
-// PES21 FX - Rastro v4: DLL de INVESTIGACION, aparte de la DLL grafica (d3d11). Se inyecta como proxy de dinput8.dll al lado del
+// PES21 FX - Rastro v4: DLL de INVESTIGACION (rastro_v4.dll), aparte de la DLL grafica (d3d11). La carga un modulo Lua de Sider (rastro_v4.lua).
 // exe y no toca nada del mod grafico ni de la tela. Solo LEE. Junta y mejora el rastro v2 + v3:
 //   1. Vuelca el REGISTRO ENTERO del partido cada tick (todos los bloques, objeto completo de cada jugador) -> partido.bin.
 //   2. Recupera el registro de depuracion interno del juego (printf vacio PES2021+0x23628c0) -> motor.log, filtrando el ruido.
@@ -10,8 +10,6 @@
 // Config PROPIA: PES21FX\rastro_v4.ini (no PES21FX.ini: la DLL grafica lee ahi su propio "rastro" y se pisarian), salida PES21FX\rastro_v4\<fecha>\. Claves rastro=1, rastro_fotos, rastro_max_mb, rastro_faltas, rastro_anime, rastro_funcs.
 // No depende de core.h: todo lo necesario (Log, config, lectura segura) esta aca.
 #include <windows.h>
-#include <unknwn.h>
-#include <objbase.h>
 #include <tlhelp32.h>
 #include <intrin.h>
 #include <algorithm>
@@ -482,42 +480,12 @@ DWORD WINAPI Worker(void*) {
 
 } // namespace
 
-// ---------------------------------------------------------------- proxy de dinput8.dll (reenvia al real)
-namespace {
-HMODULE g_real = nullptr;
-using DI8Create_t = HRESULT(WINAPI*)(HINSTANCE, DWORD, REFIID, LPVOID*, LPUNKNOWN);
-using DllGetClassObject_t = HRESULT(WINAPI*)(REFCLSID, REFIID, LPVOID*);
-using DllCanUnload_t = HRESULT(WINAPI*)();
-using DllReg_t = HRESULT(WINAPI*)();
-using GetdfDIJoystick_t = LPVOID(WINAPI*)();
-DI8Create_t p_DI8Create = nullptr; DllGetClassObject_t p_DllGetClassObject = nullptr; DllCanUnload_t p_DllCanUnload = nullptr;
-DllReg_t p_DllRegister = nullptr, p_DllUnregister = nullptr; GetdfDIJoystick_t p_GetdfDIJoystick = nullptr;
-void LoadReal() {
-    wchar_t sys[MAX_PATH]; GetSystemDirectoryW(sys, MAX_PATH); wcscat_s(sys, L"\\dinput8.dll");
-    g_real = LoadLibraryW(sys);
-    if (!g_real) return;
-    p_DI8Create = (DI8Create_t)GetProcAddress(g_real, "DirectInput8Create");
-    p_DllGetClassObject = (DllGetClassObject_t)GetProcAddress(g_real, "DllGetClassObject");
-    p_DllCanUnload = (DllCanUnload_t)GetProcAddress(g_real, "DllCanUnloadNow");
-    p_DllRegister = (DllReg_t)GetProcAddress(g_real, "DllRegisterServer");
-    p_DllUnregister = (DllReg_t)GetProcAddress(g_real, "DllUnregisterServer");
-    p_GetdfDIJoystick = (GetdfDIJoystick_t)GetProcAddress(g_real, "GetdfDIJoystick");
-}
-}
-
-extern "C" {
-HRESULT WINAPI DirectInput8Create(HINSTANCE h, DWORD v, REFIID r, LPVOID* o, LPUNKNOWN u) { return p_DI8Create ? p_DI8Create(h, v, r, o, u) : E_FAIL; }
-HRESULT WINAPI DllGetClassObject(REFCLSID c, REFIID r, LPVOID* o) { return p_DllGetClassObject ? p_DllGetClassObject(c, r, o) : E_FAIL; }
-HRESULT WINAPI DllCanUnloadNow() { return p_DllCanUnload ? p_DllCanUnload() : S_FALSE; }
-HRESULT WINAPI DllRegisterServer() { return p_DllRegister ? p_DllRegister() : E_FAIL; }
-HRESULT WINAPI DllUnregisterServer() { return p_DllUnregister ? p_DllUnregister() : E_FAIL; }
-LPVOID WINAPI GetdfDIJoystick() { return p_GetdfDIJoystick ? p_GetdfDIJoystick() : nullptr; }
-}
-
+// ---------------------------------------------------------------- entrada
+// (10/11) Ya NO es proxy de dinput8.dll: en la PC de Agustin ya existe un dinput8.dll de otro mod (y dsound.dll es la fisica de ropa).
+// La carga un modulo Lua de Sider (rastro_v4.lua, LoadLibrary por ffi): no reemplaza ni pisa ninguna DLL.
 BOOL APIENTRY DllMain(HMODULE h, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(h);
-        LoadReal();
         if (HANDLE t = CreateThread(nullptr, 0, Worker, nullptr, 0, nullptr)) CloseHandle(t);
     } else if (reason == DLL_PROCESS_DETACH) {
         Flush(true);
