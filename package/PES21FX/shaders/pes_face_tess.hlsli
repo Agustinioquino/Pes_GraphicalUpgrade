@@ -472,11 +472,11 @@ float2 PesTessWrinkle(float2 uv, float age)
       wa = 1.0 - pow(1.0 - wa, 1.0 + cv); wb = 1.0 - pow(1.0 - wb, 1.0 + cv);
       float gain = 1.0; PesWrAge(PesWrAgeK(age, max(P15.z, 0.0)), wa, wb, gain);
       wa = saturate(wa); wb = saturate(wb);
-      float4 pa = 1.0 + 2.5 * wa, pb = 1.0 + 2.5 * wb;
+      float4 pa = 1.0 + 0.6 * wa, pb = 1.0 + 0.6 * wb;   // (10/11) igual que el PS
       float4 ka = kWrDmmA * pow(wa, 0.8) * gain, kb = kWrDmmB * pow(wb, 0.8) * gain;
       float dd = PesWrD1(pesWrDA.SampleLevel(pesTessSamp, uv, 1), pesWrDB.SampleLevel(pesTessSamp, uv, 1), pa, pb, ka, kb);
       float dB = dot(ka, pesWrDA.SampleLevel(pesTessSamp, uv, 3)) + dot(kb, pesWrDB.SampleLevel(pesTessSamp, uv, 3));
-      wrDr = float2(saturate(dd / 0.30), 0.7 * saturate((dB - dd) / 0.10) * saturate(dB / 0.12));
+      wrDr = float2(saturate(dd / 0.90), 0.7 * saturate((dB - dd) / 0.30) * saturate(dB / 0.36));   // (10/11) profundidades x3 (texturas nuevas)
       wrDon = true;
     } }
   float w = saturate(dot(wTop, mT) + dot(wBot, mB));

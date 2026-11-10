@@ -13,9 +13,12 @@
 #define PES_WRDEPTH_HLSLI
 Texture2D<float4> pesWrDA : register(t45);
 Texture2D<float4> pesWrDB : register(t46);
-static const float4 kWrDmmA = float4(0.40, 0.75, 0.32, 0.75);   // (10/11) entrecejo 0.50 -> 0.75: en el video el enojo a 1.42 casi no se veia
+// (10/11, Agustin: "la escala esta mal", "tomando de base las remasterizadas") texturas nuevas sacadas de la normal remasterizada
+// (tools/make_wrinkle_depth_remaster.py): pliegues 2 veces mas anchos y en las zonas del juego; la profundidad da con el gesto entero
+// la misma pendiente que las remasterizadas
+static const float4 kWrDmmA = float4(1.33, 2.05, 2.10, 1.57);   // (10/11) entrecejo 0.50 -> 0.75: en el video el enojo a 1.42 casi no se veia
 //   // profundidad maxima (mm) por canal: frente, entrecejo, ojos, surco
-static const float4 kWrDmmB = float4(0.32, 0.42, 0.50, 0.25);   // menton, marioneta, cuello, mejilla
+static const float4 kWrDmmB = float4(1.41, 1.02, 2.09, 0.00);   // menton, marioneta, cuello, mejilla
 bool PesWrDOk() { uint w = 0, h = 0; pesWrDA.GetDimensions(w, h); return w > 1; }
 // edad del jugador (anios; 0 = no se sabe) -> 0 (20 o menos) .. 1 (38 o mas); sin dato, un adulto joven
 float PesWrAgeK(float age, float ageW)
@@ -26,8 +29,8 @@ float PesWrAgeK(float age, float ageW)
 // arrugas en reposo por edad y ganancia de profundidad
 void PesWrAge(float ageK, inout float4 wa, inout float4 wb, out float gain)
 {
-  wa = max(wa, ageK * float4(0.30, 0.15, 0.30, 0.35));
-  wb = max(wb, ageK * float4(0.10, 0.20, 0.30, 0.00));
+  wa = max(wa, ageK * float4(0.15, 0.08, 0.15, 0.18));   // (10/11) a la mitad: "todas las caras tienen marcadas unas arrugas"
+  wb = max(wb, ageK * float4(0.05, 0.10, 0.15, 0.00));
   gain = lerp(0.80, 1.35, ageK);
 }
 float PesWrD1(float4 ha, float4 hb, float4 pa, float4 pb, float4 ka, float4 kb)
@@ -42,7 +45,7 @@ void PesWrDepth(SamplerState s, float2 uv, float4 wa, float4 wb, float gain, out
   uint tw = 1, th = 1; pesWrDA.GetDimensions(tw, th);
   float lod = pesWrDA.CalculateLevelOfDetail(s, uv);
   wa = saturate(wa); wb = saturate(wb);
-  float4 pa = 1.0 + 2.5 * wa, pb = 1.0 + 2.5 * wb;
+  float4 pa = 1.0 + 0.6 * wa, pb = 1.0 + 0.6 * wb;   // (10/11) afinado suave (2.5 dejaba el pliegue a la mitad de ancho: lineas negras)
   float4 ka = kWrDmmA * pow(wa, 0.8) * gain, kb = kWrDmmB * pow(wb, 0.8) * gain;
   float2 du = float2(1.5 / tw, 0.0), dv = float2(0.0, 1.5 / th);
   float4 a0 = pesWrDA.SampleLevel(s, uv, lod), b0 = pesWrDB.SampleLevel(s, uv, lod);

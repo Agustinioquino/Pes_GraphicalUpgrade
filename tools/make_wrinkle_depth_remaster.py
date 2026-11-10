@@ -1,0 +1,65 @@
+# PES21 FX (10/11, Agustin: "las de la cara ... tomando de base como se plasman las texturas de arrugas remasterizadas, la escala esta
+# mal") ARRUGAS POR GESTO SACADAS DE LAS REMASTERIZADAS. Las de make_wrinkle_depth.py eran surcos dibujados de ~0.9 mm de ancho
+# (longitud de onda ~12 texeles de 1024) que cubrian el 0.1-1 % de la cara: lineas finas y oscuras que no seguian las arrugas del
+# juego. Aca la profundidad sale de INTEGRAR la normal remasterizada (pes_wrinkle_normal_2048, Poisson por FFT: los mismos pliegues,
+# ~25 texeles de 1024 de longitud de onda) y se reparte por gesto con la mascara de zonas del juego (pes_wrinkle_mask_512x1024):
+#   a: R frente (+ sienes)  G entrecejo  B ojos  A surco (zona boca, arriba de la comisura)
+#   b: R menton (zona boca, abajo)  G marioneta (mandibulas)  B cuello  A (vacio)
+# Cada canal 0..1 (fondo = percentil 99.7). Imprime la profundidad en mm por canal (kWrDmmA / kWrDmmB de pes_wrdepth.hlsli) que hace
+# que con el gesto entero la pendiente sea la de las remasterizadas (p99 por zona).
+#   python3 make_wrinkle_depth_remaster.py carpeta_textures carpeta_salida
+import sys, struct, numpy as np
+from PIL import Image
+src, out = sys.argv[1], sys.argv[2]
+def dds(fn, w, h):
+    d = open(fn, 'rb').read(); a = np.frombuffer(d, np.uint8, w * h * 4, 128).reshape(h, w, 4).astype(np.float32) / 255
+    return a[..., [2, 1, 0, 3]]   # BGRA -> RGBA
+N = 2048
+n = dds(src + '/pes_wrinkle_normal_2048.dds', N, N)
+nx, ny = n[..., 0] * n[..., 3] * 2 - 1, n[..., 1] * 2 - 1   # como el PS (x = R * A, y = G); marco T = +u, B = -v
+gu, gv = -nx, ny
+fu = np.fft.fftfreq(N)[None, :]; fv = np.fft.fftfreq(N)[:, None]
+k2 = (2 * np.pi) ** 2 * (fu ** 2 + fv ** 2); k2[0, 0] = 1
+H = (np.conj(2j * np.pi * fu) * np.fft.fft2(gu) + np.conj(2j * np.pi * fv) * np.fft.fft2(gv)) / k2; H[0, 0] = 0
+h = np.real(np.fft.ifft2(H))
+h -= np.real(np.fft.ifft2(np.fft.fft2(h) * np.exp(-2 * (np.pi * 24.0) ** 2 * (fu ** 2 + fv ** 2))))   # sin la forma grande
+slope = np.hypot(np.gradient(h, axis=1), np.gradient(h, axis=0))
+m = dds(src + '/pes_wrinkle_mask_512x1024.dds', 512, 1024)
+up = lambda x: np.asarray(Image.fromarray(x).resize((N, N), Image.BILINEAR))
+T = np.stack([up(m[:512, :, c]) for c in range(4)], -1); B = np.stack([up(m[512:, :, c]) for c in range(4)], -1)
+dep = np.maximum(-h, 0)
+V = (np.arange(N) + 0.5)[:, None] / N * np.ones((1, N))
+s = np.clip((V - 0.600) / 0.03, 0, 1); s = s * s * (3 - 2 * s)
+ch = [dep * np.maximum(T[..., 0], T[..., 1]), dep * T[..., 2], dep * T[..., 3], dep * B[..., 0] * (1 - s),
+      dep * B[..., 0] * s, dep * np.maximum(B[..., 1], B[..., 2]), dep * B[..., 3], dep * 0]
+kmm = []
+D = np.zeros((1024, 1024, 8), np.float32)
+for i, c in enumerate(ch):
+    act = c > 0.05
+    if not act.any(): kmm.append(0.0); continue
+    hm = np.percentile(c[act], 99.7)
+    d = np.clip(c.reshape(1024, 2, 1024, 2).mean((1, 3)) / hm, 0, 1); D[..., i] = d
+    sd = np.hypot(*np.gradient(d ** 1.6)) / 0.55     # 0.55 mm por texel de 1024; gesto entero: perfil ^ (1 + 0.6)
+    kmm.append(float(np.percentile(slope[act], 99) / np.percentile(sd[d > 0.05], 99)))
+print('kWrDmmA', np.round(kmm[:4], 2), 'kWrDmmB', np.round(kmm[4:], 2))
+def write_dds(fn, img):
+    mips = []; cur = img.astype(np.float32)
+    while True:
+        mips.append(np.clip(np.round(cur), 0, 255).astype(np.uint8))
+        if cur.shape[0] == 1: break
+        cur = cur.reshape(cur.shape[0] // 2, 2, cur.shape[1] // 2, 2, 4).mean((1, 3))
+    hh, ww = img.shape[:2]
+    hdr = struct.pack('<4sIIIIIII44x', b'DDS ', 124, 0x1 | 0x2 | 0x4 | 0x1000 | 0x20000, hh, ww, ww * 4, 0, len(mips))
+    pf = struct.pack('<II4sIIIII', 32, 0x4, b'DX10', 0, 0, 0, 0, 0)
+    caps = struct.pack('<IIIII', 0x1000 | 0x400000 | 0x8, 0, 0, 0, 0)
+    dx10 = struct.pack('<IIIII', 28, 3, 0, 1, 0)
+    with open(fn, 'wb') as f:
+        f.write(hdr + pf + caps + dx10)
+        for mm in mips: f.write(mm.tobytes())
+q = np.round(D * 255)
+write_dds(out + '/pes_wrinkle_depth_a.dds', q[..., :4]); write_dds(out + '/pes_wrinkle_depth_b.dds', q[..., 4:])
+if '--vista' in sys.argv:
+    cols = np.array([(255, 80, 80), (80, 255, 80), (90, 140, 255), (255, 220, 60), (255, 120, 255), (60, 255, 255), (255, 160, 60), (200, 200, 200)], np.float32)
+    img = np.full((1024, 1024, 3), 40.0)
+    for i in range(8): img = img * (1 - D[..., i:i + 1]) + cols[i] * D[..., i:i + 1]
+    Image.fromarray(img.clip(0, 255).astype(np.uint8)).save(sys.argv[sys.argv.index('--vista') + 1])
