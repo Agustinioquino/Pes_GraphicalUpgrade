@@ -1301,7 +1301,9 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (g_skinDiagArmed.load(std::memory_order_relaxed)) SkinDiagDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0, t_drawVerts);   // (24/10) skintone.cpp
     if (g_toneChkArmed.load(std::memory_order_relaxed)) SkinToneCheckDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0);   // (24/10 c) punto de los dibujos de piel
     if (UiHideShouldSkip(c, ps ? ps->hash : 0)) { d.skip = true; return d.n > 0; }   // (08/11 e) x392: menus del juego ocultos (sin vidrio ni aro)
-    if (ID3D11ShaderResourceView* bg_ = EditorBgFor(c, ps ? ps->hash : 0)) { Remember(c, d, true, true, 8); c->PSSetShaderResources(8, 1, &bg_); }   // (08/11 qk2yxa) x424: fondo del visor del editor negro / imagen propia
+    { ID3D11PixelShader* edge_ = nullptr;
+      if (ID3D11ShaderResourceView* bg_ = EditorBgFor(c, ps ? ps->hash : 0, &edge_)) { Remember(c, d, true, true, 8); c->PSSetShaderResources(8, 1, &bg_); }
+      if (edge_ && !d.restorePS) { c->PSGetShader(&d.restorePS, nullptr, nullptr); c->PSSetShader(edge_, nullptr, 0); } }   // (10/11 m042wp) borde del jugador sin el gris del fondo del juego   // (08/11 qk2yxa) x424: fondo del visor del editor negro / imagen propia
     GlassBeforeDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0, t_drawVerts, d.glass);   // (24/10) vidrio de los menus: GS + PS propios (se devuelven en FX_DRAW)
     RingBeforeDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0, d.ring);   // (24/10 c) aro del musculo: variante de la piel / dibujo extra encima del jugador
     // 19/10: PS sin registrar (lo creo otra DLL, p.ej. cloth-mod): si el ini lo declara "como = <hash>", se trata como ese shader

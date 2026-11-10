@@ -624,7 +624,7 @@ struct GlassScope { bool on = false; ID3D11PixelShader* ps = nullptr; ID3D11Shad
 bool GlassBeforeDraw(ID3D11DeviceContext* c, uint64_t ps, uint64_t vs, UINT verts, GlassScope& g);
 void GlassAfterDraw(ID3D11DeviceContext* c, GlassScope& g);
 bool UiHideShouldSkip(ID3D11DeviceContext* c, uint64_t ps);
-void EditorBgNoteComposition(); void EditorBgPresent(); ID3D11ShaderResourceView* EditorBgFor(ID3D11DeviceContext* c, uint64_t ps);   // (08/11 qk2yxa) x424: fondo del visor del editor (glass.cpp)   // (08/11 e) x392: menus del juego ocultos (glass.cpp)
+void EditorBgNoteComposition(); void EditorBgPresent(); ID3D11ShaderResourceView* EditorBgFor(ID3D11DeviceContext* c, uint64_t ps, ID3D11PixelShader** edgePS);   // (08/11 qk2yxa) x424: fondo del visor del editor (glass.cpp)   // (08/11 e) x392: menus del juego ocultos (glass.cpp)
 extern std::atomic<int> g_uiHidden;
 void GlassPresent(); void GlassReloadShaders();
 extern std::atomic<int> g_glassDraws, g_glassSnaps;
