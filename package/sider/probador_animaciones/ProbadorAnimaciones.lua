@@ -1,4 +1,4 @@
--- ProbadorAnimaciones v1.0 - PES 2021 / Sider  (PES21 FX, 10/11/2026)
+-- ProbadorAnimaciones v1.1 - PES 2021 / Sider  (PES21 FX, 10/11/2026)
 -- Probador de animaciones (.gani), UNA A UNA, con el modo Editar como visor.
 -- Cada PAGINA es un tipo de animacion. Con una tecla pasas a la animacion siguiente de la
 -- lista de esa pagina: el juego la carga EN LUGAR de la animacion que el visor pide siempre
@@ -7,10 +7,16 @@
 --
 -- Pagina "cara": el visor pide edit_idle_loop_face.gani al cargar al jugador; se le entrega
 --   el clip elegido de la lista content\probador-animaciones\cara.txt
+-- Pagina "cuerpo" (1.1): en Edit > Movimientos > festejo de gol, el visor pide el festejo como
+--   archivo suelto dml_goal_celebrate_NNNN.gani (162 festejos, tabla 0x143536b80 del exe); se le
+--   entrega el clip elegido de cuerpo.txt (cinematicas, previas, manos, publico...). Para verla:
+--   elegi la animacion aca y despues entra (o cambia) el festejo en Movimientos. Mientras haya
+--   una elegida, los festejos de un partido tambien salen cambiados: dejala en normal al terminar.
+--   Los archivos companeros (_sub1, _eyes_target) no se tocan.
 -- Lista de una pagina (<pagina>.txt): primera linea "raiz = carpeta completa" y despues una
 --   ruta por linea, relativa a esa carpeta (grupo\archivo.gani). Lineas con # no cuentan.
 -- Paginas extra: content\probador-animaciones\paginas.txt, una por linea:
---   nombre = comienzo del nombre del archivo que pide el juego   (ej.  cuerpo = edit_idle_loop_body)
+--   nombre = comienzo del nombre del archivo que pide el juego; si empieza con ^ es un patron de Lua
 --
 -- Ademas anota solo (sin teclas) cada .gani distinto que pide el juego en
 -- content\probador-animaciones\vistos_gani.txt : sirve para saber que archivo pide cada pantalla.
@@ -20,9 +26,12 @@
 --   7 / 8 = pagina anterior / siguiente              1 = esa pagina vuelve a NORMAL    3 = todo normal
 -- Para verla: volve a entrar al jugador (Edit > Apariencia), el visor recarga la animacion.
 
-local m = { version = "1.0" }
+local m = { version = "1.1" }
 local DIR, ESTADO, VISTOS
-local PAGS = { { nombre = "cara", pref = "edit_idle_loop_face" } }
+local PAGS = {
+    { nombre = "cara", pref = "edit_idle_loop_face" },
+    { nombre = "cuerpo", pref = "^dml_goal_celebrate_%d+%.gani$" },
+}
 local pag, aviso = 1, ""
 local vistos, nvistos = {}, 0
 
@@ -70,7 +79,9 @@ end
 
 local function pagina_de(b)
     for i, p in ipairs(PAGS) do
-        if string.sub(b, 1, #p.pref) == p.pref then return i end
+        if string.sub(p.pref, 1, 1) == "^" then
+            if string.match(b, p.pref) then return i end
+        elseif string.sub(b, 1, #p.pref) == p.pref then return i end
     end
     return nil
 end
@@ -187,7 +198,7 @@ function m.overlay_on(ctx)
     local t = { "ProbadorAnimaciones " .. m.version }
     for i, p in ipairs(PAGS) do
         t[#t + 1] = string.format("%s %-8s %s", i == pag and ">" or " ", p.nombre, texto(p))
-        if i == pag then t[#t + 1] = "           reemplaza a: " .. p.pref .. "*.gani" end
+        if i == pag then t[#t + 1] = "           reemplaza a: " .. (i == 2 and "el festejo de gol (Edit > Movimientos)" or (p.pref .. "*.gani")) end
     end
     t[#t + 1] = "0 = siguiente | 9 = anterior | 5/6 = grupo | 7/8 = pagina | 1 normal | 3 todo normal"
     if aviso ~= "" then t[#t + 1] = aviso end
@@ -204,7 +215,7 @@ function m.init(ctx)
     ctx.register("livecpk_get_filepath", m.get_filepath)
     ctx.register("key_down", m.key_down)
     ctx.register("overlay_on", m.overlay_on)
-    log(string.format("ProbadorAnimaciones %s listo (%d paginas, cara: %d clips)", m.version, #PAGS, #PAGS[1].lista))
+    log(string.format("ProbadorAnimaciones %s listo (%d paginas, cara: %d clips, cuerpo: %d)", m.version, #PAGS, #PAGS[1].lista, #PAGS[2].lista))
 end
 
 return m
