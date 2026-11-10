@@ -454,7 +454,8 @@ float2 PesTessWrinkle(float2 uv, float age)
   { float sS = saturate(G5a.y), sS2 = saturate(G5a.y - 1.0), sA = saturate(G5a.x), sU = saturate(G5a.z), sG = saturate(G6a.x);
     if (own) { sS *= 0.75; sS2 *= 0.75; }
     wTop = max(wTop, float4(0.75 * sU + 0.60 * sG, 0.45 * sU, 0.85 * sA + 0.60 * sG, 0.70 * sS + 0.30 * sS2 + 0.40 * sG));
-    wBot.x = max(wBot.x, 0.85 * sS + 0.15 * sS2 + 0.60 * sG); }
+    wBot.x = max(wBot.x, 0.85 * sS + 0.15 * sS2 + 0.60 * sG + 0.35 * sA);
+      wBot.yz = max(wBot.yz, 0.45 * sA); }   // (10/11, video de Agustin: el enojo casi no marcaba) enojo: labio de arriba tenso (surco) y comisuras abajo (marioneta)
   // (09/11 g) x15 = 2: el volumen sale de la misma profundidad por gesto que el PS (pes_wrdepth.hlsli), con la edad del jugador:
   // surco = fondo de la arruga ya formada (fina y profunda con el gesto entero), cresta = piel juntada entre surcos
   float2 wrDr = 0; bool wrDon = false;

@@ -13,7 +13,8 @@
 #define PES_WRDEPTH_HLSLI
 Texture2D<float4> pesWrDA : register(t45);
 Texture2D<float4> pesWrDB : register(t46);
-static const float4 kWrDmmA = float4(0.40, 0.50, 0.32, 0.75);   // profundidad maxima (mm) por canal: frente, entrecejo, ojos, surco
+static const float4 kWrDmmA = float4(0.40, 0.75, 0.32, 0.75);   // (10/11) entrecejo 0.50 -> 0.75: en el video el enojo a 1.42 casi no se veia
+//   // profundidad maxima (mm) por canal: frente, entrecejo, ojos, surco
 static const float4 kWrDmmB = float4(0.32, 0.42, 0.50, 0.25);   // menton, marioneta, cuello, mejilla
 bool PesWrDOk() { uint w = 0, h = 0; pesWrDA.GetDimensions(w, h); return w > 1; }
 // edad del jugador (anios; 0 = no se sabe) -> 0 (20 o menos) .. 1 (38 o mas); sin dato, un adulto joven
