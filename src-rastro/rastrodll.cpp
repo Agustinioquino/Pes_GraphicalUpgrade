@@ -48,7 +48,7 @@ const char* const kWatchName[3] = { "tipo_falta(MI+0x1588)", "infractor(MI+0x159
 struct Cfg {
     std::wstring baseDir;
     bool on = false; int maxMb = 2000, fps = 2; bool falta = true, anime = true;
-    std::vector<uintptr_t> funcs;
+    std::vector<uintptr_t> funcs; int funcsLote = 100, funcsEspera = 90;   // tanda cada 250 ms; segundos de espera antes de armar
 } g_cfg;
 
 FILE* g_logf = nullptr;
@@ -239,6 +239,12 @@ bool LooksLikeRet(uintptr_t v) {
 struct TrFn { uintptr_t addr; unsigned char orig; std::atomic<unsigned char> state; };   // state 1 armada, 2 ejecutada
 std::vector<TrFn*> s_trace;
 std::atomic<unsigned> s_trHits{0};
+// anillo de golpes del rastreador: lo llena el VEH (sin locks), lo vuelca TraceFlush desde el hilo Worker
+struct TrHit { ULONGLONG ms; int tick; DWORD tid; uintptr_t a, rcx, rdx, r8, r9, ret; double x0; std::atomic<int> ok; };
+constexpr unsigned kTrHitN = 65536;
+TrHit* s_th = nullptr; std::atomic<unsigned> s_thN{0}; unsigned s_thDone = 0;
+std::atomic<int> s_trState{0};   // 0 sin armar, 1 armando por tandas, 2 armado, 3 desarmado
+size_t s_trNext = 0; ULONGLONG s_trT0 = 0; SYSTEMTIME s_trLocal0{};
 // s_trace queda ordenado por direccion (ArmTrace): busqueda binaria, sirve para miles de funciones
 TrFn* FindTrace(uintptr_t a) {
     size_t lo = 0, hi = s_trace.size();
@@ -271,18 +277,17 @@ LONG CALLBACK Veh(EXCEPTION_POINTERS* ep) {
         TrFn* t = FindTrace(a); if (!t) return EXCEPTION_CONTINUE_SEARCH;
         unsigned char st = 1;
         if (t->state.compare_exchange_strong(st, 2)) {
-            // la pagina de codigo es de solo lectura/ejecucion: abrirla para devolver el byte original
-            { DWORD old = 0; if (VirtualProtect((void*)a, 1, PAGE_EXECUTE_READWRITE, &old)) { *(volatile unsigned char*)a = t->orig; VirtualProtect((void*)a, 1, old, &old); } FlushInstructionCache(GetCurrentProcess(), (void*)a, 1); }
-            if (s_fn) {
-                double x0 = 0; Rd(&cx->Xmm0, &x0, 8);
-                SYSTEMTIME lt; GetLocalTime(&lt);
-                char line[360];
-                int n = snprintf(line, sizeof line, "%02d:%02d:%02d.%03d\t%d\t%s\trcx=%llx rdx=%llx r8=%llx r9=%llx xmm0=%g\t<-%s\n",
-                    lt.wHour, lt.wMinute, lt.wSecond, lt.wMilliseconds,
-                    s_tick.load(std::memory_order_relaxed), ModOff((void*)a).c_str(),
-                    (unsigned long long)cx->Rcx, (unsigned long long)cx->Rdx, (unsigned long long)cx->R8, (unsigned long long)cx->R9, x0,
-                    ModOff((void*)(*(uintptr_t*)cx->Rsp)).c_str());
-                if (n > 0) { AcquireSRWLockExclusive(&s_lk); fwrite(line, 1, n < (int)sizeof line ? n : (int)sizeof line - 1, s_fn); fflush(s_fn); ReleaseSRWLockExclusive(&s_lk); }
+            // (10/11 b) NADA de locks, heap, stdio ni APIs del cargador aca adentro: la version anterior escribia el log
+            // desde el VEH (SRW + fwrite + GetModuleHandleEx) y colgo el juego en la carga. La pagina ya quedo
+            // escribible al armar; aca solo se devuelve el byte y se anota en un anillo que vuelca el hilo Worker.
+            *(volatile unsigned char*)a = t->orig;
+            const unsigned i = s_thN.fetch_add(1, std::memory_order_relaxed);
+            if (i < kTrHitN) {
+                TrHit& h = s_th[i];
+                h.ms = GetTickCount64(); h.tick = s_tick.load(std::memory_order_relaxed); h.tid = GetCurrentThreadId();
+                h.a = a; h.rcx = cx->Rcx; h.rdx = cx->Rdx; h.r8 = cx->R8; h.r9 = cx->R9; h.ret = 0; h.x0 = 0;
+                Rd((const void*)cx->Rsp, &h.ret, 8); Rd(&cx->Xmm0, &h.x0, 8);
+                h.ok.store(1, std::memory_order_release);
             }
             s_trHits.fetch_add(1, std::memory_order_relaxed);
         }
@@ -348,17 +353,60 @@ void ArmTrace() {
         unsigned char b = 0; if (!Rd((const void*)a, &b, 1) || b == 0xCC) { Log("rastro_funcs: %llx no legible o ya con int3", (unsigned long long)a); continue; }
         s_trace.push_back(new TrFn{ a, b, {1} });
     }
-    // primero la tabla ordenada y sin repetidos, DESPUES los int3 (el VEH busca en la tabla)
     std::sort(s_trace.begin(), s_trace.end(), [](const TrFn* x, const TrFn* y) { return x->addr < y->addr; });
     s_trace.erase(std::unique(s_trace.begin(), s_trace.end(), [](const TrFn* x, const TrFn* y) { return x->addr == y->addr; }), s_trace.end());
-    for (TrFn* t : s_trace) {
-        const uintptr_t a = t->addr;
-        DWORD old; if (VirtualProtect((void*)a, 1, PAGE_EXECUTE_READWRITE, &old)) {
-            *(volatile unsigned char*)a = 0xCC;
-            VirtualProtect((void*)a, 1, old, &old); FlushInstructionCache(GetCurrentProcess(), (void*)a, 1);
-        } else { t->state.store(2); Log("rastro_funcs: no se pudo armar %llx", (unsigned long long)a); }
+    for (TrFn* t : s_trace) t->state.store(0);   // 0 = todavia sin int3
+    s_th = (TrHit*)VirtualAlloc(nullptr, sizeof(TrHit) * kTrHitN, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    s_trT0 = GetTickCount64(); GetLocalTime(&s_trLocal0);
+    if (!s_th) { Log("rastro_funcs: sin memoria para el anillo, rastreador apagado"); s_trState = 3; return; }
+    s_trState = 1;
+    Log("rastro: rastreador de funciones: %zu direcciones; arma de a %d cada 250 ms tras %d s de espera", s_trace.size(), g_cfg.funcsLote, g_cfg.funcsEspera);
+}
+// pone los int3 de a tandas (hilo Worker, cada 250 ms). La tabla ya esta ordenada: el VEH puede buscar siempre.
+void TraceStep() {
+    if (s_trState.load() != 1) return;
+    if (GetTickCount64() - s_trT0 < (ULONGLONG)g_cfg.funcsEspera * 1000) return;
+    int n = 0;
+    for (; s_trNext < s_trace.size() && n < g_cfg.funcsLote; s_trNext++, n++) {
+        TrFn* t = s_trace[s_trNext]; const uintptr_t a = t->addr;
+        DWORD old; if (!VirtualProtect((void*)a, 1, PAGE_EXECUTE_READWRITE, &old)) { t->state.store(2); continue; }   // la pagina queda escribible: el VEH no llama a nada
+        t->state.store(1); *(volatile unsigned char*)a = 0xCC;
     }
-    if (!s_trace.empty()) Log("rastro: rastreador de funciones armado en %zu direcciones -> funcs.log", s_trace.size());
+    if (s_trNext >= s_trace.size()) { s_trState = 2; Log("rastro: rastreador armado entero (%zu)", s_trace.size()); }
+}
+// saca todos los int3 que queden (guardian o cierre)
+void TraceDisarm(const char* why) {
+    int n = 0;
+    for (TrFn* t : s_trace) { unsigned char st = 1; if (t->state.compare_exchange_strong(st, 2)) { *(volatile unsigned char*)t->addr = t->orig; n++; } }
+    s_trState = 3;
+    Log("rastro: rastreador DESARMADO (%s): %d int3 retirados, %u funciones vistas", why, n, s_trHits.load());
+}
+// guardian: si el proceso casi no usa CPU durante 12 s con int3 puestos, el juego esta trabado -> desarmar
+void TraceWatch() {
+    const int st = s_trState.load(); if (st != 1 && st != 2) return;
+    if (GetTickCount64() - s_trT0 < (ULONGLONG)g_cfg.funcsEspera * 1000) return;
+    static ULONGLONG lastT = 0, lastCpu = 0; static int low = 0;
+    const ULONGLONG now = GetTickCount64(); if (now - lastT < 3000) return;
+    // con el juego en segundo plano (alt-tab) es normal que casi no use CPU: ahi no se juzga
+    { DWORD pid = 0; HWND fg = GetForegroundWindow(); if (fg) GetWindowThreadProcessId(fg, &pid); if (pid != GetCurrentProcessId()) { low = 0; lastT = 0; return; } }
+    FILETIME c, e, k, u; if (!GetProcessTimes(GetCurrentProcess(), &c, &e, &k, &u)) return;
+    const ULONGLONG cpu = (((ULONGLONG)k.dwHighDateTime << 32) | k.dwLowDateTime) + (((ULONGLONG)u.dwHighDateTime << 32) | u.dwLowDateTime);   // 100 ns
+    if (lastT) { const double frac = (double)(cpu - lastCpu) / 10000.0 / (double)(now - lastT); low = frac < 0.20 ? low + 1 : 0; }   // < 20 % de un nucleo
+    lastT = now; lastCpu = cpu;
+    if (low >= 4) TraceDisarm("el juego dejo de avanzar");
+}
+void TraceFlush() {
+    if (!s_fn || !s_th) return;
+    const unsigned n = s_thN.load() < kTrHitN ? s_thN.load() : kTrHitN;
+    for (; s_thDone < n; s_thDone++) {
+        TrHit& h = s_th[s_thDone]; if (!h.ok.load(std::memory_order_acquire)) break;
+        // hora de reloj = hora local del armado + milisegundos transcurridos
+        ULONGLONG ms = (ULONGLONG)s_trLocal0.wHour * 3600000 + s_trLocal0.wMinute * 60000 + s_trLocal0.wSecond * 1000 + s_trLocal0.wMilliseconds + (h.ms - s_trT0);
+        fprintf(s_fn, "%02d:%02d:%02d.%03d\t%d\t%lu\t%s\trcx=%llx rdx=%llx r8=%llx r9=%llx xmm0=%g\t<-%s\n",
+            (int)(ms / 3600000 % 24), (int)(ms / 60000 % 60), (int)(ms / 1000 % 60), (int)(ms % 1000), h.tick, h.tid, ModOff((void*)h.a).c_str(),
+            (unsigned long long)h.rcx, (unsigned long long)h.rdx, (unsigned long long)h.r8, (unsigned long long)h.r9, h.x0, ModOff((void*)h.ret).c_str());
+    }
+    fflush(s_fn);
 }
 
 // ---------------------------------------------------------------- config (PES21FX.ini)
@@ -382,6 +430,8 @@ void LoadCfg() {
         else if (k == "rastro_fotos") { int x = atoi(v.c_str()); g_cfg.fps = x < 1 ? 1 : (x > 54 ? 54 : x); }
         else if (k == "rastro_faltas") g_cfg.falta = atoi(v.c_str()) != 0;
         else if (k == "rastro_anime") g_cfg.anime = atoi(v.c_str()) != 0;
+        else if (k == "rastro_funcs_lote") { int x = atoi(v.c_str()); g_cfg.funcsLote = x < 1 ? 1 : (x > 2000 ? 2000 : x); }
+        else if (k == "rastro_funcs_espera") { int x = atoi(v.c_str()); g_cfg.funcsEspera = x < 0 ? 0 : (x > 3600 ? 3600 : x); }
         else if (k == "rastro_funcs") {
             const char* p = v.c_str();
             while (*p) { char* e = nullptr; unsigned long long a = _strtoui64(p, &e, 16); if (e == p) break; if (a) g_cfg.funcs.push_back((uintptr_t)a); p = e; while (*p == ',' || *p == ' ' || *p == '\t') p++; }
@@ -428,7 +478,7 @@ void Install() {
     if (s_log) { setvbuf(s_log, nullptr, _IOFBF, 1 << 20); fputs("cuadro\ttick\thilo\tmensaje\n", s_log); }
     if (s_csv) fputs("cuadro\ttick\tfase\ttipo\tlluvia\tentorno\tescala_tiempo\tsentido_local\tsentido_visita\tjugadores\n", s_csv);
     if (g_cfg.anime) { s_anm = _wfopen((s_dir + L"anime.log").c_str(), L"wb"); if (s_anm) fputs("cuadro\ttick\tjugador\tanim_id\ta2\ta3\ta4\n", s_anm); }
-    if (!g_cfg.funcs.empty()) { s_fn = _wfopen((s_dir + L"funcs.log").c_str(), L"wb"); if (s_fn) fputs("hora\ttick\tfuncion\targumentos\tllamada_desde\n", s_fn); }
+    if (!g_cfg.funcs.empty()) { s_fn = _wfopen((s_dir + L"funcs.log").c_str(), L"wb"); if (s_fn) fputs("hora\ttick\thilo\tfuncion\targumentos\tllamada_desde\n", s_fn); }
     WriteFormat();
     if (MH_Initialize() != MH_OK) { Log("rastro: MinHook no inicializo"); }
     bool logOk = false, relOk = false, motOk = false;
@@ -451,12 +501,14 @@ void Install() {
         logOk ? "ok" : "NO", relOk ? "ok" : "NO", RecSize(), motOk ? "ok" : "no", !g_cfg.falta ? "apagado" : mcOk ? "ok" : "NO", g_cfg.funcs.size(), name, (unsigned long long)(s_cap >> 20));
 }
 void Flush(bool final) {
-    if (!s_on.load()) return;
+    if (final && (s_trState.load() == 1 || s_trState.load() == 2)) TraceDisarm("cierre");
+    if (!s_on.load()) { TraceFlush(); return; }
     AcquireSRWLockExclusive(&s_lk);
     if (s_log) fflush(s_log); if (s_bin) fflush(s_bin); if (s_csv) fflush(s_csv); if (s_anm) fflush(s_anm);
     FaltaFlush();
     if (!final) { const uintptr_t mc = s_mc.load(); if (mc) { static ULONGLONG t = 0; ULONGLONG n = GetTickCount64(); if (n - t > 30000) { t = n; FaltaRequestArm(mc); } } }
     ReleaseSRWLockExclusive(&s_lk);
+    TraceFlush();
     Log("rastro: %u mensajes (%u ERROR filtrados), %u fotos, %.1f MB, %u descartados, faltas %u, animaciones %u, funcs %u%s",
         s_msgs.load(), s_skip.load(), s_snaps.load(), s_bytes.load() / 1048576.0, s_drop.load(), s_fhAll.load(), s_anime.load(), s_trHits.load(), final ? " (final)" : "");
 }
@@ -474,7 +526,10 @@ DWORD WINAPI Worker(void*) {
         s_frame.fetch_add(1, std::memory_order_relaxed);
         if (s_installed.load() && (i % 10) == 0) Flush(false);
     }
-    while (s_installed.load()) { Sleep(5000); s_frame.fetch_add(10, std::memory_order_relaxed); Flush(false); }
+    for (int i = 0; s_installed.load(); i++) {   // 250 ms: tandas del rastreador + guardian; volcado cada 5 s
+        Sleep(250); TraceStep(); TraceWatch();
+        if ((i % 20) == 19) { s_frame.fetch_add(10, std::memory_order_relaxed); Flush(false); }
+    }
     return 0;
 }
 
