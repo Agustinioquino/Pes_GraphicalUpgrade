@@ -196,11 +196,13 @@ def main(argv=None):
 
     d = open(a.entrada, 'rb').read()
     pk = P.read(d) if d[:6] == b'foxfpk' else None
-    fox = [e for e in pk['ents'] if e[0] == FOX2_PATH][0][1] if pk else d
+    # 10/11: sirve para cualquier escena de luz de estudio (EditFace.fpkd = editor de caras, Default.fpkd = el resto del editor)
+    fox_path = next((e[0] for e in pk['ents'] if e[0].endswith('.fox2')), FOX2_PATH) if pk else FOX2_PATH
+    fox = [e for e in pk['ents'] if e[0] == fox_path][0][1] if pk else d
     f = F.Fox2.parse(fox)
     assert f.build() == fox, 'el fox2 de entrada no se rearma identico: no se escribe nada'
-    if not f.find(name='SL_Key0000_ver03'):
-        raise SystemExit('no parece EditFace.fox2 (falta SL_Key0000_ver03)')
+    if not f.find(cls='TimeOfDaySettings') or not f.find(cls='SpotLight'):
+        raise SystemExit('no parece una escena de luz de estudio (EditFace/Default: falta TimeOfDaySettings o SpotLight)')
     n0 = len(f.ents)
 
     add_shadow_settings(f)
@@ -227,7 +229,7 @@ def main(argv=None):
     for e in chk.ents[n0:]:
         print('agregada 0x%x %s %s' % (e.address, chk.string(e.cls), chk.name_of(e) or ''))
     if pk:
-        P.put(pk, FOX2_PATH, out)
+        P.put(pk, fox_path, out)
         out = P.write(pk)
     open(a.salida, 'wb').write(out)
     print('%s: %d bytes (%d entidades)' % (a.salida, len(out), len(chk.ents)))

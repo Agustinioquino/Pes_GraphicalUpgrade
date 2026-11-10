@@ -192,7 +192,12 @@ static bool IsEditorTods(char* e) {
     if (!e || !Readable(e + 0x130, 0x60)) return false;
     __try {
         float c = *(float*)(e + 0x15c), mn = *(float*)(e + 0x160), mx = *(float*)(e + 0x164);
-        return *(unsigned char*)(e + 0x158) && fabsf(c + 7.1f) < 0.01f && mn == 0.0f && mx == 0.0f;
+        // (10/11) ademas la marca del EditFace con atmosfera de editface_sol.py (--atmo-luz apagada): overrideAtmosphere con
+        // sunLux = skyLightSunScale = 0. Sin la marca es otra escena de estudio (log 10/11: se tomo una TimeOfDaySettings de 12:00
+        // con 26 focos que no era la de LucesEditor y el ciclo escribio la hora donde no habia atmosfera)
+        bool expo = *(unsigned char*)(e + 0x158) && fabsf(c + 7.1f) < 0.01f && mn == 0.0f && mx == 0.0f;
+        bool marca = *(unsigned char*)(e + 0x144) && *(float*)(e + 0x148) == 0.0f && *(float*)(e + 0x150) == 0.0f;
+        return expo && marca;
     } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 static void SnapStudio(char* e) { __try { memcpy(s_studio, e + 0x130, sizeof s_studio); s_hasStudio = true; } __except (EXCEPTION_EXECUTE_HANDLER) {} }
@@ -200,7 +205,16 @@ static void NoteTods(void* b, const char* via) {
     s_todsSeen.fetch_add(1);
     if (s_tods.load() == b) return;
     char* e = EntityOf(b);
-    if (!IsEditorTods(e)) return;
+    if (!IsEditorTods(e)) {
+        static int s_rej = 0;
+        if (e && s_rej < 8 && LogOn() && Readable(e + 0x130, 0x60)) {
+            s_rej++;
+            Log("sol_editor: TimeOfDaySettings ajena (%s) cuerpo=%p hora %u:%02u (override %d) atmosfera %d sunLux %.0f expo %.2f [%.1f %.1f]: no es el EditFace de LucesEditor",
+                via, b, *(unsigned*)(e + 0x134), *(unsigned*)(e + 0x138), *(unsigned char*)(e + 0x130), *(unsigned char*)(e + 0x144),
+                *(float*)(e + 0x148), *(float*)(e + 0x15c), *(float*)(e + 0x160), *(float*)(e + 0x164));
+        }
+        return;
+    }
     SnapStudio(e);
     s_tods.store(b);
     { std::lock_guard<std::mutex> lk(s_mx); s_tdone = TodReq{false, -1, -1, false}; s_tdirty = true; }
