@@ -7,13 +7,14 @@
 //   5. Rastreador de funciones: para cada direccion de la lista [PES21FX] rastro_funcs = ..., pone un int3 al inicio y anota, la
 //      primera vez que corre, los argumentos (rcx, rdx, r8, r9, xmm0) y quien la llamo. Sirve para ver que hace una funcion que el
 //      codigo quieto no aclara. Solo lee el contexto y restaura el byte: no cambia la ejecucion.
-// Config: PES21FX\PES21FX.ini, claves rastro=1, rastro_fotos, rastro_max_mb, rastro_faltas, rastro_anime, rastro_funcs.
+// Config PROPIA: PES21FX\rastro_v4.ini (no PES21FX.ini: la DLL grafica lee ahi su propio "rastro" y se pisarian), salida PES21FX\rastro_v4\<fecha>\. Claves rastro=1, rastro_fotos, rastro_max_mb, rastro_faltas, rastro_anime, rastro_funcs.
 // No depende de core.h: todo lo necesario (Log, config, lectura segura) esta aca.
 #include <windows.h>
 #include <unknwn.h>
 #include <objbase.h>
 #include <tlhelp32.h>
 #include <intrin.h>
+#include <algorithm>
 #include <cstdlib>
 #include <cctype>
 #include <cstdint>
@@ -240,7 +241,12 @@ bool LooksLikeRet(uintptr_t v) {
 struct TrFn { uintptr_t addr; unsigned char orig; std::atomic<unsigned char> state; };   // state 1 armada, 2 ejecutada
 std::vector<TrFn*> s_trace;
 std::atomic<unsigned> s_trHits{0};
-TrFn* FindTrace(uintptr_t a) { for (auto* t : s_trace) if (t->addr == a) return t; return nullptr; }
+// s_trace queda ordenado por direccion (ArmTrace): busqueda binaria, sirve para miles de funciones
+TrFn* FindTrace(uintptr_t a) {
+    size_t lo = 0, hi = s_trace.size();
+    while (lo < hi) { size_t m = (lo + hi) / 2; if (s_trace[m]->addr < a) lo = m + 1; else hi = m; }
+    return (lo < s_trace.size() && s_trace[lo]->addr == a) ? s_trace[lo] : nullptr;
+}
 
 LONG CALLBACK Veh(EXCEPTION_POINTERS* ep) {
     const DWORD code = ep->ExceptionRecord->ExceptionCode;
@@ -267,11 +273,14 @@ LONG CALLBACK Veh(EXCEPTION_POINTERS* ep) {
         TrFn* t = FindTrace(a); if (!t) return EXCEPTION_CONTINUE_SEARCH;
         unsigned char st = 1;
         if (t->state.compare_exchange_strong(st, 2)) {
-            *(volatile unsigned char*)a = t->orig; FlushInstructionCache(GetCurrentProcess(), (void*)a, 1);
+            // la pagina de codigo es de solo lectura/ejecucion: abrirla para devolver el byte original
+            { DWORD old = 0; if (VirtualProtect((void*)a, 1, PAGE_EXECUTE_READWRITE, &old)) { *(volatile unsigned char*)a = t->orig; VirtualProtect((void*)a, 1, old, &old); } FlushInstructionCache(GetCurrentProcess(), (void*)a, 1); }
             if (s_fn) {
                 double x0 = 0; Rd(&cx->Xmm0, &x0, 8);
-                char line[320];
-                int n = snprintf(line, sizeof line, "%d\t%s\trcx=%llx rdx=%llx r8=%llx r9=%llx xmm0=%g\t<-%s\n",
+                SYSTEMTIME lt; GetLocalTime(&lt);
+                char line[360];
+                int n = snprintf(line, sizeof line, "%02d:%02d:%02d.%03d\t%d\t%s\trcx=%llx rdx=%llx r8=%llx r9=%llx xmm0=%g\t<-%s\n",
+                    lt.wHour, lt.wMinute, lt.wSecond, lt.wMilliseconds,
                     s_tick.load(std::memory_order_relaxed), ModOff((void*)a).c_str(),
                     (unsigned long long)cx->Rcx, (unsigned long long)cx->Rdx, (unsigned long long)cx->R8, (unsigned long long)cx->R9, x0,
                     ModOff((void*)(*(uintptr_t*)cx->Rsp)).c_str());
@@ -339,12 +348,17 @@ void ArmTrace() {
     for (uintptr_t a : g_cfg.funcs) {
         if (a < kBase || a >= kBase + 0x1c000000ull) { Log("rastro_funcs: %llx fuera del exe, salteada", (unsigned long long)a); continue; }
         unsigned char b = 0; if (!Rd((const void*)a, &b, 1) || b == 0xCC) { Log("rastro_funcs: %llx no legible o ya con int3", (unsigned long long)a); continue; }
-        auto* t = new TrFn{ a, b, {1} };
+        s_trace.push_back(new TrFn{ a, b, {1} });
+    }
+    // primero la tabla ordenada y sin repetidos, DESPUES los int3 (el VEH busca en la tabla)
+    std::sort(s_trace.begin(), s_trace.end(), [](const TrFn* x, const TrFn* y) { return x->addr < y->addr; });
+    s_trace.erase(std::unique(s_trace.begin(), s_trace.end(), [](const TrFn* x, const TrFn* y) { return x->addr == y->addr; }), s_trace.end());
+    for (TrFn* t : s_trace) {
+        const uintptr_t a = t->addr;
         DWORD old; if (VirtualProtect((void*)a, 1, PAGE_EXECUTE_READWRITE, &old)) {
-            *(volatile unsigned char*)a = 0xCC; FlushInstructionCache(GetCurrentProcess(), (void*)a, 1);
-            VirtualProtect((void*)a, 1, old, &old);
-            s_trace.push_back(t);
-        } else { delete t; Log("rastro_funcs: no se pudo armar %llx", (unsigned long long)a); }
+            *(volatile unsigned char*)a = 0xCC;
+            VirtualProtect((void*)a, 1, old, &old); FlushInstructionCache(GetCurrentProcess(), (void*)a, 1);
+        } else { t->state.store(2); Log("rastro_funcs: no se pudo armar %llx", (unsigned long long)a); }
     }
     if (!s_trace.empty()) Log("rastro: rastreador de funciones armado en %zu direcciones -> funcs.log", s_trace.size());
 }
@@ -355,7 +369,7 @@ void LoadCfg() {
     wchar_t exe[MAX_PATH]; GetModuleFileNameW(nullptr, exe, MAX_PATH);
     wchar_t* sl = wcsrchr(exe, L'\\'); if (sl) sl[1] = 0;
     g_cfg.baseDir = std::wstring(exe) + L"PES21FX\\";
-    FILE* f = _wfopen((g_cfg.baseDir + L"PES21FX.ini").c_str(), L"rb");
+    FILE* f = _wfopen((g_cfg.baseDir + L"rastro_v4.ini").c_str(), L"rb");
     if (!f) return;
     char buf[4096];
     while (fgets(buf, sizeof buf, f)) {
@@ -376,6 +390,16 @@ void LoadCfg() {
         }
     }
     fclose(f);
+    // lista larga de funciones: PES21FX\rastro_funcs.txt, una direccion hex por linea (lo que sigue a la direccion se ignora)
+    if (FILE* g = _wfopen((g_cfg.baseDir + L"rastro_funcs.txt").c_str(), L"rb")) {
+        while (fgets(buf, sizeof buf, g)) {
+            const char* p = buf; while (*p == ' ' || *p == '\t') p++;
+            if (*p == ';' || *p == '#') continue;
+            char* e = nullptr; unsigned long long a = _strtoui64(p, &e, 16);
+            if (e != p && a) g_cfg.funcs.push_back((uintptr_t)a);
+        }
+        fclose(g);
+    }
 }
 
 void WriteFormat() {
@@ -398,7 +422,7 @@ void Install() {
     s_cap = (uint64_t)(g_cfg.maxMb > 0 ? g_cfg.maxMb : 2000) << 20;
     SYSTEMTIME st; GetLocalTime(&st);
     wchar_t name[48]; swprintf(name, 48, L"%04d%02d%02d_%02d%02d%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
-    s_dir = g_cfg.baseDir + L"rastro\\"; CreateDirectoryW(s_dir.c_str(), nullptr);
+    s_dir = g_cfg.baseDir + L"rastro_v4\\"; CreateDirectoryW(s_dir.c_str(), nullptr);
     s_dir += name; s_dir += L"\\"; CreateDirectoryW(s_dir.c_str(), nullptr);
     s_log = _wfopen((s_dir + L"motor.log").c_str(), L"wb");
     s_bin = _wfopen((s_dir + L"partido.bin").c_str(), L"wb");
@@ -406,7 +430,7 @@ void Install() {
     if (s_log) { setvbuf(s_log, nullptr, _IOFBF, 1 << 20); fputs("cuadro\ttick\thilo\tmensaje\n", s_log); }
     if (s_csv) fputs("cuadro\ttick\tfase\ttipo\tlluvia\tentorno\tescala_tiempo\tsentido_local\tsentido_visita\tjugadores\n", s_csv);
     if (g_cfg.anime) { s_anm = _wfopen((s_dir + L"anime.log").c_str(), L"wb"); if (s_anm) fputs("cuadro\ttick\tjugador\tanim_id\ta2\ta3\ta4\n", s_anm); }
-    if (!g_cfg.funcs.empty()) { s_fn = _wfopen((s_dir + L"funcs.log").c_str(), L"wb"); if (s_fn) fputs("tick\tfuncion\targumentos\tllamada_desde\n", s_fn); }
+    if (!g_cfg.funcs.empty()) { s_fn = _wfopen((s_dir + L"funcs.log").c_str(), L"wb"); if (s_fn) fputs("hora\ttick\tfuncion\targumentos\tllamada_desde\n", s_fn); }
     WriteFormat();
     if (MH_Initialize() != MH_OK) { Log("rastro: MinHook no inicializo"); }
     bool logOk = false, relOk = false, motOk = false;
