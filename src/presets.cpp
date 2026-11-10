@@ -138,6 +138,17 @@ static void ReadMatch(MatchInfo& m) {
         std::string k = PLower(PTrim(l.substr(0, eq))); int v = atoi(PTrim(l.substr(eq + 1)).c_str());
         if (k == "stadium") m.stadium = v; else if (k == "timeofday") m.timeofday = v;
         else if (k == "weather") m.weather = v; else if (k == "season") m.season = v; else if (k == "tournament") m.tournament = v;
+        else if (k == "home") m.homeTeam = v; else if (k == "away") m.awayTeam = v;
+        else if (k == "home_crest") m.homeCrest = v; else if (k == "away_crest") m.awayCrest = v;
+        else if (k == "home_color1" || k == "home_color2" || k == "away_color1" || k == "away_color2") {
+            // "#rrggbb" del kitserver
+            std::string s = PTrim(l.substr(eq + 1)); if (!s.empty() && s[0] == '#') s = s.substr(1);
+            float* c = k == "home_color1" ? m.homeC1 : k == "home_color2" ? m.homeC2 : k == "away_color1" ? m.awayC1 : m.awayC2;
+            if (s.size() >= 6 && s.find_first_not_of("0123456789abcdefABCDEF") >= 6) {
+                unsigned rgb = (unsigned)strtoul(s.substr(0, 6).c_str(), nullptr, 16);
+                c[0] = ((rgb >> 16) & 255) / 255.0f; c[1] = ((rgb >> 8) & 255) / 255.0f; c[2] = (rgb & 255) / 255.0f;
+            }
+        }
     }
 }
 
@@ -165,8 +176,13 @@ void PollMatch() {
     MatchInfo m; ReadMatch(m);
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     bool changed = m.stadium != g_cfg.match.stadium || m.timeofday != g_cfg.match.timeofday;
+    if (m.homeTeam != g_cfg.match.homeTeam || m.awayTeam != g_cfg.match.awayTeam || m.homeCrest != g_cfg.match.homeCrest || m.awayCrest != g_cfg.match.awayCrest)
+        Log("escudos: local %d (%s, camiseta %.2f %.2f %.2f), visitante %d (%s, camiseta %.2f %.2f %.2f)",
+            m.homeTeam, m.homeCrest == 1 ? "bordado" : m.homeCrest == 0 ? "impreso" : "sin dato", m.homeC1[0], m.homeC1[1], m.homeC1[2],
+            m.awayTeam, m.awayCrest == 1 ? "bordado" : m.awayCrest == 0 ? "impreso" : "sin dato", m.awayC1[0], m.awayC1[1], m.awayC1[2]);
     g_cfg.match = m;
     if (!m.known) return;
+    MatchWind(m, w);   // (02/11) viento de este partido (hora, clima, estacion y azar) -> cloth.ini
     if (changed) g_cfg.presetManual = false;
     if (g_cfg.presetManual) return;
     std::string f = m.stadium >= 0 ? PresetNameFor(m.stadium, m.timeofday) : "";
