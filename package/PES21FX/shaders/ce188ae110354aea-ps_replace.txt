@@ -392,7 +392,7 @@ void main(
     float ageK = PesWrAgeK(pR.w > 10.5 && pR.w < 12.5 ? (pR.w - 11.0) * 100.0 : 0.0, max(P15.z, 0.0));
     float wrDgain = 1.0; PesWrAge(ageK, wa, wb, wrDgain);
     PesWrDepth(g_samplerAnisotropic_Clamp_s, v2.xy, wa, wb, wrDgain, wrDd, wrDg, wrDw, wrDb);
-    wrWeight = saturate(max(wrDw, wrDd) / 0.90);   // (10/11) profundidades x3 (texturas sacadas de las remasterizadas)
+    wrWeight = saturate(abs(wrDd - wrDb) / 0.45);   // (10/11 c) relieve contra el promedio de los alrededores (texturas sacadas de las remasterizadas)
   }
 
   // ---- normal de detalle + normal de animacion ----
@@ -447,9 +447,9 @@ void main(
     }
   }
   if (wrD) {   // (09/11 g) surco, zona ancha y piel juntada entre surcos, todo de la misma profundidad
-    wrFold   = saturate(wrDd / 0.90);
-    wrFoldW  = saturate(wrDw / 0.90);
-    wrRidgeF = saturate((wrDb - wrDd) / 0.30) * saturate(wrDb / 0.36);
+    wrFold   = saturate((wrDd - wrDb) / 0.45);   // (10/11 c) surco / cresta contra el promedio de ~4 mm
+    wrFoldW  = saturate((wrDd - wrDb) / 0.90);
+    wrRidgeF = saturate((wrDb - wrDd) / 0.45);
     wrRidgeW = 0.7 * wrRidgeF;
     exFoldZ  = exOn ? wrFoldW : 0.0;
     exRidgeZ = exOn ? wrRidgeW : 0.0;
