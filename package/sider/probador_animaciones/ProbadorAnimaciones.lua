@@ -1,4 +1,4 @@
--- ProbadorAnimaciones v3.0 - PES 2021 1.07.02 / Sider 7  (PES21 FX, 10/11/2026)
+-- ProbadorAnimaciones v3.1 - PES 2021 1.07.02 / Sider 7  (PES21 FX, 10/11/2026)
 -- Probador de animaciones (.gani) EN EL MOMENTO. Con el jugador en pantalla dentro de Editar
 -- (Apariencia o cualquier pantalla donde se lo ve de pie), una tecla le cambia la animacion del
 -- cuerpo o de la cara. No hay que salir ni volver a entrar.
@@ -11,9 +11,17 @@
 --
 -- Teclas (overlay de Sider abierto y este modulo elegido; en tu Sider el overlay se abre con la
 -- barra espaciadora y se pasa de modulo con la tecla 1):
---   0 = animacion SIGUIENTE     9 = anterior      8 / 7 = carpeta siguiente / anterior
+--   0 = animacion SIGUIENTE     9 = anterior
+--   8 / 7 = CATEGORIA siguiente / anterior      3 / 2 = grupo siguiente / anterior dentro de la lista
 --   5 = volver al original      6 = pagina cuerpo <-> cara      4 = ponerla de nuevo desde el principio
 --   La animacion se pone al SOLTAR la tecla: dejandola apretada solo se recorre la lista.
+--
+-- Nuevo en la 3.1:
+--   * Solo se ponen animaciones DE JUGADOR. Antes de poner una se lee el comienzo del archivo y se
+--     compara su esqueleto con el del jugador; las de objetos (copas, carteles, banderas), publico,
+--     manos y ojos se saltean solas. Una de esas (una copa) fue la que cerro el juego con la 3.0.
+--   * Categorias: Editar y menus, Gameplay (partido), Festejos de gol, Ceremonias y final, Entrada y
+--     previa, Liga Master y myClub, Arbitro/faltas/penales/cambios, Gestos de cara y Varias.
 --
 -- Que toca en el juego, y solo cuando apretas una tecla con un jugador en pantalla:
 --   escribe el puntero de nombre de esa pose (tabla 0x143536b00) y su marca de carga, con los
@@ -26,9 +34,9 @@
 --
 -- Listas: content\probador-animaciones\cara.txt, cuerpo.txt y partido.txt. Primera linea
 -- "raiz = carpeta completa", despues una ruta por linea relativa a esa carpeta. El modulo las
--- reparte solo: caras a CARA, cuerpos a CUERPO; manos, ojos y publico quedan afuera.
+-- reparte solo: caras a CARA, cuerpos a CUERPO; manos, ojos, publico y objetos quedan afuera.
 
-local m = { version = "3.0" }
+local m = { version = "3.1" }
 
 -- direcciones de PES2021.exe 1.07.02 (base 0x140000000), confirmadas en el codigo de maquina
 local EMV_PTR    = 0x1438040d0   -- puntero a edit::ModelView (visor del menu Editar)
@@ -56,9 +64,8 @@ local O_RES_EN_IMPL = 0x1e0      -- Impl guarda aca el mismo puntero de RES_PTR
 local O_CANDADO_IMPL = 0x510     -- candado del visor: el juego lo tiene tomado mientras atiende un pedido
 
 local DIR
-local cuerpo, cara = {}, {}          -- { ruta = archivo completo, nombre, g = grupo }
+local cuerpo, cara = {}, {}          -- { ruta = archivo completo, nombre, cat = categoria, g = grupo, sg = categoria y grupo }
 local pag = 1                        -- 1 = cuerpo, 2 = cara
-local sanos, malos = {}, 0
 local vistos, n_vistos = {}, 0
 -- Lo que tiene que seguir existiendo aunque Sider vuelva a cargar este modulo con el juego abierto
 -- (los nombres que le di al juego y que archivo va con cada uno). En init se guarda en ctx.
@@ -137,23 +144,99 @@ local function reloj()
     return nil
 end
 
--- un .gani bueno empieza con D2 A2 FC 0B; si no, no se le da al juego
+-------------------------------------------------------------------------------------------
+-- que animaciones puede usar el jugador
+-------------------------------------------------------------------------------------------
+-- Cada .gani trae la lista de PIEZAS del esqueleto que mueve (un numero por pieza) y, de cada pieza,
+-- sus pistas, cada una con un indice y un tipo. El juego usa ese indice sin comprobar que el modelo
+-- que esta en pantalla lo tenga (funcion 0x1423ae2a0): una animacion de un OBJETO (una copa, un
+-- cartel) puesta al jugador lee fuera de su tabla y cierra el juego. Paso el 10/11/2026 con
+-- ..._cup_lg_ita2_hi (196 pistas contra las 27 del jugador). Por eso antes de poner una animacion
+-- se lee su comienzo y solo se pone si trae EXACTAMENTE las piezas del jugador (cuerpo) o de su
+-- cara, con los mismos indices y tipos.
+-- "pieza:indice.tipo,..." medido en los 11003 .gani del catalogo (gani_firmas.py, 10/11/2026):
+-- cuerpo = 15 piezas y 27 pistas (6980 archivos); cara = 32 piezas y 59 pistas (225 archivos)
+local ESQUELETO = {
+    c = "D3C3FF90:0.5,1.6 39BC5D3E:2.0,3.3 E96BC45A:4.0 C917522B:5.3,6.0,7.0 602089FA:8.0 80E81915:9.3,10.0,11.0 519FC0F1:12.0 DAC1DFE3:13.0 96DBCD2D:14.0 BEDBFB94:15.0 E7CE157E:16.0 9A9200CE:17.0,18.3,19.0,20.0 600C67FC:21.0 C555E93B:22.0,23.3,24.0,25.0 A3ED8071:26.0",
+    f = "D3C3FF90:0.5,1.6 D7886F00:2.0,3.3 BF968528:4.0 B3C2A0D4:5.0,6.3 13984EAC:7.0,8.3 A13BA15B:9.0,10.3 079C59E8:11.0,12.3 7503D963:13.0,14.3 D6D21686:15.0,16.3 55011CD8:17.0,18.3 3AA921A1:19.0,20.3 9027ED31:21.0,22.3 16C455FF:23.0,24.3 DE427183:25.0,26.3 2D62FB55:27.0,28.3 A03480FA:29.0 73C2EA62:30.0 59935477:31.0 CCFCAE76:32.0 102F1F71:33.0,34.3 E263223A:35.0,36.3 FB40FE50:37.0,38.3 02767479:39.0,40.3 68D6B887:41.0,42.3 998D15DC:43.0,44.3 67B10931:45.0,46.3 6338490F:47.0,48.3 412160EC:49.0,50.3 87E8F2FF:51.0,52.3 3FBCB898:53.0,54.3 528F1ED6:55.0,56.3 FB5E99C0:57.0,58.3",
+}
 local MAGIA = string.char(0xD2, 0xA2, 0xFC, 0x0B)
-local function sano(path)
-    local v = sanos[path]
-    if v ~= nil then return v end
-    v = false
+local esq_de = {}                    -- letra del canal -> { n = cuantas piezas, [1..n] = pieza, de = { [pieza] = "0.5,1.6" } }
+local aptos, por_que_no = {}, {}     -- "c|archivo" -> true / false, y el motivo
+local malos = 0
+
+local function n32(s, o)             -- numero de 4 bytes en la posicion o (contando desde 0) del texto s
+    local a, b, c, d = string.byte(s, o + 1, o + 4)
+    if not d then return nil end
+    return a + b * 256 + c * 65536 + d * 16777216
+end
+
+local function esqueleto(letra)
+    local e = esq_de[letra]
+    if e then return e end
+    e = { n = 0, de = {} }
+    for pieza, idx in string.gmatch(ESQUELETO[letra], "(%x+):([%x%.,]+)") do
+        e.n = e.n + 1
+        e[e.n] = tonumber(pieza, 16)
+        e.de[e[e.n]] = idx
+    end
+    esq_de[letra] = e
+    return e
+end
+
+-- true si el .gani trae exactamente el esqueleto ref (las mismas piezas, en el mismo orden, con las
+-- mismas pistas) y esta entero; si no, false y por que
+local function examinar(path, ref)
     local f = io.open(path, "rb")
-    if f then
-        v = (f:read(4) == MAGIA)
-        f:close()
+    if not f then return false, "falta el archivo" end
+    local s = f:read(0x2000) or ""
+    local tam = f:seek("end")
+    f:close()
+    if string.sub(s, 1, 4) ~= MAGIA then return false, "no es un .gani" end
+    if #s < 0xA8 or string.sub(s, 0x51, 0x56) ~= "MOTION" or n32(s, 0x6C) ~= 0x30 then
+        return false, "es un .gani de otra clase"
     end
-    sanos[path] = v
-    if not v then
+    -- la cabecera dice cuanto pesa el archivo: uno mas corto esta cortado y sus pistas apuntan a datos que no estan
+    local dice = n32(s, 8)
+    if tam and dice and tam < dice then
+        return false, string.format("esta cortado (pesa %d y su cabecera dice %d)", tam, dice)
+    end
+    local np, nt = n32(s, 0x90), n32(s, 0x94)
+    if np ~= ref.n then return false, string.format("no es de jugador (trae %d piezas y %d pistas)", np, nt) end
+    local pistas, t = 0, {}
+    for i = 0, np - 1 do
+        local q = 0x90 + (n32(s, 0xA4 + 4 * i) or 0x100000)
+        local h, n = n32(s, q), string.byte(s, q + 5)
+        if not h or not n or n < 1 or q + 8 + 8 * n > #s then return false, "no pude leer sus piezas" end
+        for k = 1, n do
+            local lo, hi, tipo = string.byte(s, q + 8 * k + 5, q + 8 * k + 7)
+            t[k] = (lo + hi * 256) .. "." .. string.format("%X", tipo % 16)
+        end
+        for k = n + 1, #t do t[k] = nil end
+        local idx = ref.de[h]
+        if not idx then return false, "no es de jugador (mueve una pieza que el jugador no tiene)" end
+        if ref[i + 1] ~= h then return false, "no es de jugador (trae las piezas en otro orden)" end
+        if idx ~= table.concat(t, ",") then return false, "no es de jugador (una pieza trae otras pistas)" end
+        pistas = pistas + n
+    end
+    if pistas ~= nt then return false, "su cabecera no cierra" end
+    return true
+end
+
+-- se puede poner el archivo en el canal c? Para recorrer la lista se lee una sola vez por archivo;
+-- al ponerlo y al entregarlo al juego (de_nuevo) se lee otra vez, por si cambio en el disco
+local function apto(c, path, de_nuevo)
+    local k = c.letra .. "|" .. path
+    local v = aptos[k]
+    if v ~= nil and not de_nuevo then return v, por_que_no[k] end
+    local antes, por_que = v, nil
+    v, por_que = examinar(path, esqueleto(c.letra))
+    aptos[k], por_que_no[k] = v, por_que
+    if not v and antes ~= false then
         malos = malos + 1
-        if malos <= 5 then log("ProbadorAnimaciones: falta o no es un .gani: " .. path) end
+        if malos <= 40 then log(string.format("ProbadorAnimaciones: no se pone en %s: %s: %s", c.titulo, por_que, path)) end
     end
-    return v
+    return v, por_que
 end
 
 -------------------------------------------------------------------------------------------
@@ -344,12 +427,13 @@ local function poner(c, e, nota)
     local p = { e = e, sel = c.sel, intentos = 0, destino = c.orig, nota = nota }
     if e then
         -- el archivo se mira ANTES que el visor: entre mirar el visor y usarlo no hay que tocar el disco
-        if not sano(e.ruta) then
-            c.nota = "ese archivo falta o no es un .gani: no lo puse. Segui con 0"
+        local sirve, por_que2 = apto(c, e.ruta, true)
+        if not sirve then
+            c.nota = "no la puse: " .. por_que2 .. ". Segui con 0"
             return false
         end
-        local emv, por_que2 = visor()
-        if not emv then c.nota = "ESPERA: " .. por_que2 .. ". Despues apreta 4" return false end
+        local emv, por_que3 = visor()
+        if not emv then c.nota = "ESPERA: " .. por_que3 .. ". Despues apreta 4" return false end
         -- un nombre por archivo: si ya lo puse antes uso el mismo y el juego no lo vuelve a leer del disco
         local k = c.letra .. "|" .. e.ruta
         local d = G.nombre_de[k]
@@ -443,42 +527,78 @@ end
 
 function m.get_filepath(ctx, filename, key)
     if key and string.sub(key, 1, 4) == "pa3|" then
-        return G.sirve[string.sub(key, 5)]
+        -- se vuelve a leer el comienzo del archivo: nunca se entrega algo que no sea de jugador
+        local b = string.sub(key, 5)
+        local ruta = G.sirve[b]
+        if ruta and apto((string.sub(b, 5, 5) == "f") and CARA or CUERPO, ruta, true) then return ruta end
     end
 end
 
 -------------------------------------------------------------------------------------------
 -- listas
 -------------------------------------------------------------------------------------------
--- devuelve "cara" o "cuerpo" y un orden (primero lo que usa el propio visor), o nil si no va
+-- categorias: 8 y 7 saltan de una a la otra
+local CATS = { "Editar y menus", "Gameplay (partido)", "Festejos de gol", "Ceremonias y final", "Entrada y previa",
+               "Liga Master y myClub", "Arbitro, faltas, penales y cambios", "Gestos de cara", "Varias" }
+-- comienzo del nombre de las escenas (carpeta FixDemo) -> categoria
+local CAT_ESCENA = {
+    dml_goal = 3, dml_hugset = 3, dml_offsidegoal = 3,
+    dml_end = 4,
+    dml_ent = 5, dml_tu = 5,
+    dml_md = 6,
+    dml_foul = 7, dml_pk = 7, dml_change = 7, dml_injury = 7, dml_assistant = 7,
+    dml_menu = 1,
+}
+
+-- devuelve "cara" o "cuerpo", la categoria y un orden dentro de ella, o nil si no es de jugador
+-- (por el nombre; lo que el nombre no dice lo decide despues el esqueleto del archivo)
 local function clasificar(r, de_partido)
     local b = basename(r)
     if string.find(r, "\\hand\\", 1, true) or string.find(r, "audience", 1, true)
-        or string.find(r, "standsflag", 1, true) or termina(b, "hand.gani")
-        or termina(b, "_eyes_target.gani") then
+        or string.find(r, "standsflag", 1, true)
+        or termina(b, "_lhand.gani") or termina(b, "_rhand.gani")   -- manos sueltas; "facehand", "onehand", "godhand" son de jugador
+        or termina(b, "_eyes_target.gani") or termina(b, "_mobh.gani")
+        or string.sub(b, 1, 8) == "dml_mobh" or string.sub(b, 1, 8) == "dml_prop"
+        or string.find(b, "_enum_dummy", 1, true) then
         return nil
     end
-    local inter = 3
-    if string.find(r, "\\interfaceload\\", 1, true) then inter = 1
-    elseif string.find(r, "\\interface\\", 1, true) then inter = 2 end
-    if termina(b, "_face.gani") then return "cara", inter end
-    if string.find(r, "\\face\\animations\\base\\", 1, true) then return "cara", 4 end
-    if string.find(r, "\\face\\", 1, true) then return "cara", 5 end
-    if de_partido then return "cuerpo", 5 end
-    if inter < 3 then return "cuerpo", inter end
-    if string.find(r, "fixdemo", 1, true) then return "cuerpo", 3 end
-    return "cuerpo", 4
+    if de_partido then return "cuerpo", 2, 1 end            -- las del partido son todas de cuerpo (hay "..._face" que no son caras)
+    local tipo = "cuerpo"
+    if termina(b, "_face.gani") or string.find(r, "\\face\\", 1, true) then tipo = "cara" end
+    if string.find(r, "\\face\\animations\\", 1, true) then
+        return tipo, 8, string.find(r, "\\base\\", 1, true) and 1 or 2
+    end
+    if string.find(r, "\\interfaceload\\", 1, true) then return tipo, 1, 1 end
+    if string.find(r, "\\interface\\", 1, true) then return tipo, 1, 2 end
+    if string.find(r, "fixdemo", 1, true) then
+        local a, c = string.match(b, "^(%a+)_(%a+)")
+        if a ~= "dml" then return tipo, 1, 3 end            -- idle, match_home, uniselect_home: son de menu
+        return tipo, CAT_ESCENA[a .. "_" .. c] or 9, 3
+    end
+    return tipo, 9, 4
 end
 
+-- grupo dentro de la categoria (3 y 2 saltan de uno al otro)
 local function grupo_de(rel)
     local carpeta, nombre = string.match(rel, "^(.*)[\\/]([^\\/]+)$")
     if not carpeta then return "" end
+    local corta = string.match(carpeta, "([^\\/]+)$") or carpeta
+    local n = string.lower(nombre)
     if termina(string.lower(carpeta), "fixdemo\\animations") then
-        -- carpeta gigante: la parto por el comienzo del nombre (dml_goal, dml_ceremony, ...)
-        local a, c = string.match(string.lower(nombre), "^(%a+)_(%a+)")
-        if a then return carpeta .. "\\" .. a .. "_" .. c .. "*" end
+        -- carpeta gigante: la parto por el comienzo del nombre (dml_end_champione, dml_goal_celebrate_02**, ...)
+        local a, c, d, resto = string.match(n, "^(%a+)_(%a+)_(%a+)(.*)$")
+        if a then
+            local cien = string.match(resto, "^_(%d%d)%d%d")
+            return a .. "_" .. c .. "_" .. d .. (cien and ("_" .. cien .. "**") or "")
+        end
+        a, c = string.match(n, "^(%a+)_(%a+)")
+        if a then return a .. "_" .. c end
+        return string.match(n, "^(%a+)") or "otras"
     end
-    return carpeta
+    if string.find(string.lower(carpeta), "\\face\\animations", 1, true) then
+        return corta .. ": " .. (string.match(n, "^(%a+)") or "otras")
+    end
+    return corta
 end
 
 local function leer_listas()
@@ -509,10 +629,12 @@ local function leer_listas()
                     if not ya[clave] then
                         ya[clave] = true
                         total = total + 1
-                        local tipo, rango = clasificar("\\" .. string.lower(l), nombre == "partido")
+                        local tipo, cat, rango = clasificar("\\" .. string.lower(l), nombre == "partido")
                         if tipo then
                             local t = todo[tipo]
-                            t[#t + 1] = { ruta = ruta, nombre = basename(l), g = grupo_de(l), rango = rango, n = #t + 1 }
+                            local g = grupo_de(l)
+                            t[#t + 1] = { ruta = ruta, nombre = basename(l), cat = cat, g = g, sg = cat .. "|" .. g,
+                                          rango = rango, n = #t + 1 }
                         else
                             afuera = afuera + 1
                         end
@@ -524,6 +646,7 @@ local function leer_listas()
         end
     end
     local function antes(a, b2)
+        if a.cat ~= b2.cat then return a.cat < b2.cat end
         if a.rango ~= b2.rango then return a.rango < b2.rango end
         return a.n < b2.n
     end
@@ -531,27 +654,82 @@ local function leer_listas()
     table.sort(todo.cuerpo, antes)
     cara, cuerpo = todo.cara, todo.cuerpo
     CUERPO.lista, CARA.lista = cuerpo, cara
+    for _, c in ipairs({ CUERPO, CARA }) do
+        c.por_cat, c.orden_cat = {}, {}
+        for _, e in ipairs(c.lista) do
+            if not c.por_cat[e.cat] then
+                c.por_cat[e.cat] = 0
+                c.orden_cat[#c.orden_cat + 1] = e.cat
+            end
+            c.por_cat[e.cat] = c.por_cat[e.cat] + 1
+        end
+    end
     return total, afuera
 end
 
 -------------------------------------------------------------------------------------------
 -- teclas y overlay
 -------------------------------------------------------------------------------------------
-local function salto_grupo(lista, pos, adelante)       -- pos y resultado: indice desde 1
+-- primer lugar del grupo (campo "sg") o de la categoria (campo "cat") siguiente o anterior al de pos
+local function salto(lista, pos, adelante, campo)      -- pos y resultado: indice desde 1
     local n = #lista
     local k = pos
     if k < 1 then return 1 end
-    local g = lista[k].g
+    local g = lista[k][campo]
     if adelante then
-        while k <= n and lista[k].g == g do k = k + 1 end
+        while k <= n and lista[k][campo] == g do k = k + 1 end
         if k > n then k = 1 end
     else
-        while k >= 1 and lista[k].g == g do k = k - 1 end
+        while k >= 1 and lista[k][campo] == g do k = k - 1 end
         if k < 1 then k = n end
-        local g2 = lista[k].g
-        while k > 1 and lista[k - 1].g == g2 do k = k - 1 end
+        local g2 = lista[k][campo]
+        while k > 1 and lista[k - 1][campo] == g2 do k = k - 1 end
     end
     return k
+end
+
+-- lleva el cursor a la primera animacion de jugador del grupo o la categoria siguiente (o anterior);
+-- si ese grupo no tiene ninguna sigue con el que le sigue. false = no encontro. Lee del disco 400
+-- archivos como mucho por tecla; los ya leidos no cuentan, asi la tecla siguiente sigue desde ahi
+local function saltar(c, adelante, campo)
+    local lista, n, k, nuevos, vueltas = c.lista, #c.lista, c.sel, 0, 0
+    while vueltas <= n do
+        k = salto(lista, k, adelante, campo)
+        local g, j = lista[k][campo], k
+        while j <= n and lista[j][campo] == g do
+            local ruta = lista[j].ruta
+            if aptos[c.letra .. "|" .. ruta] == nil then
+                nuevos = nuevos + 1
+                if nuevos > 400 then return false end
+            end
+            if apto(c, ruta) then
+                c.sel = j
+                return true
+            end
+            j = j + 1
+            vueltas = vueltas + 1
+        end
+    end
+    return false
+end
+
+-- mueve el cursor de a uno (paso 1 o -1) hasta la proxima animacion que el jugador puede usar.
+-- Devuelve cuantas salteo, o nil si no encontro (lee del disco 400 como mucho por tecla; los ya
+-- leidos no cuentan, asi la tecla siguiente sigue desde ahi)
+local function avanzar(c, paso)
+    local n = #c.lista
+    local nuevos = 0
+    for i = 1, n do
+        c.sel = c.sel + paso
+        if c.sel > n then c.sel = 1 elseif c.sel < 1 then c.sel = n end
+        local ruta = c.lista[c.sel].ruta
+        if aptos[c.letra .. "|" .. ruta] == nil then
+            nuevos = nuevos + 1
+            if nuevos > 400 then return nil end
+        end
+        if apto(c, ruta) then return i - 1 end
+    end
+    return nil
 end
 
 poner_elegida = function(c)
@@ -577,29 +755,34 @@ function m.key_down(ctx, vkey)
     elseif vkey == 0x34 then
         c.falta_poner = false
         if c.sel > 0 then poner(c, c.lista[c.sel]) else aviso = "primero elegi una animacion con 0 o 9" end
-    elseif vkey == 0x30 or vkey == 0x39 or vkey == 0x38 or vkey == 0x37 then
+    elseif vkey == 0x30 or vkey == 0x39 or vkey == 0x38 or vkey == 0x37 or vkey == 0x33 or vkey == 0x32 then
         if n == 0 then
             aviso = "no hay animaciones de " .. string.lower(c.titulo) .. ": falta content\\probador-animaciones\\"
                 .. string.lower(c.titulo) .. ".txt (o no trae archivos de " .. string.lower(c.titulo) .. ")"
             return
         end
-        if vkey == 0x30 then
-            c.sel = c.sel + 1
-            if c.sel > n then c.sel = 1 end
-        elseif vkey == 0x39 then
-            c.sel = c.sel - 1
-            if c.sel < 1 then c.sel = n end
-        else
-            c.sel = salto_grupo(c.lista, c.sel, vkey == 0x38)
+        local salteo
+        local estaba = c.sel
+        if vkey == 0x30 or vkey == 0x39 then
+            salteo = avanzar(c, (vkey == 0x30) and 1 or -1)
+        elseif saltar(c, vkey == 0x38 or vkey == 0x33, (vkey == 0x38 or vkey == 0x37) and "cat" or "sg") then
+            salteo = 0
+        end
+        if not salteo then
+            -- el cursor vuelve a donde estaba; lo que estaba por ponerse al soltar la tecla sigue en pie
+            c.sel = estaba
+            c.nota = "no encontre animaciones de jugador cerca de ahi (mira sider.log): apreta de nuevo para seguir buscando"
+            return
         end
         -- se pone al SOLTAR la tecla: dejarla apretada solo recorre la lista (no carga una por repeticion)
         c.falta_poner, c.t_tecla, c.n_tecla = true, reloj(), 0
         c.nota = "solta la tecla para ponerla"
+        if salteo > 0 then c.nota = c.nota .. string.format(" (saltee %d que no son de jugador)", salteo) end
     end
 end
 
 function m.key_up(ctx, vkey)
-    if vkey == 0x30 or vkey == 0x39 or vkey == 0x38 or vkey == 0x37 then
+    if vkey == 0x30 or vkey == 0x39 or vkey == 0x38 or vkey == 0x37 or vkey == 0x33 or vkey == 0x32 then
         if CUERPO.falta_poner then poner_elegida(CUERPO) end
         if CARA.falta_poner then poner_elegida(CARA) end
     end
@@ -608,7 +791,11 @@ end
 local function renglones(t, c, marca)
     local e = c.sel > 0 and c.lista[c.sel]
     if e then
-        t[#t + 1] = string.format("%s%s %d de %d   %s   [%s]", marca, c.titulo, c.sel, #c.lista, e.nombre, e.g)
+        t[#t + 1] = string.format("%s%s %d de %d   %s", marca, c.titulo, c.sel, #c.lista, e.nombre)
+        local k = 0
+        for i, cat in ipairs(c.orden_cat) do if cat == e.cat then k = i end end
+        t[#t + 1] = string.format("     categoria %d de %d: %s (%d)   grupo: %s", k, #c.orden_cat, CATS[e.cat] or "?",
+            c.por_cat[e.cat] or 0, e.g)
     else
         t[#t + 1] = string.format("%s%s: todavia no elegiste ninguna   (%d en la lista)", marca, c.titulo, #c.lista)
     end
@@ -633,12 +820,12 @@ function m.overlay_on(ctx)
     local t = { string.format("ProbadorAnimaciones %s | con el jugador en pantalla en Editar (Apariencia), cambia en el momento", m.version) }
     renglones(t, CUERPO, (pag == 1) and "> " or "  ")
     renglones(t, CARA, (pag == 2) and "> " or "  ")
-    t[#t + 1] = string.format("0 siguiente | 9 anterior | 8 / 7 carpeta sig. / ant. | 4 ponerla de nuevo | 5 original | 6 pasar a %s | (tecla 1 = otro modulo)",
+    t[#t + 1] = string.format("0 siguiente | 9 anterior | 8 / 7 categoria | 3 / 2 grupo | 4 de nuevo | 5 original | 6 pasar a %s | (tecla 1 = otro modulo)",
         (pag == 1) and "CARA" or "CUERPO")
     if G.serie >= 300 then
         t[#t + 1] = string.format("ya probaste %d animaciones distintas: si el juego se pone pesado, volve con Atras hasta el menu principal de Editar y entra de nuevo", G.serie)
     end
-    if malos > 0 then t[#t + 1] = string.format("archivos de la lista que faltan o no son .gani: %d (estan anotados en sider.log)", malos) end
+    if malos > 0 then t[#t + 1] = string.format("salteadas porque no son de jugador o faltan: %d (anotadas en sider.log)", malos) end
     if aviso ~= "" then t[#t + 1] = aviso end
     return table.concat(t, "\n")
 end
