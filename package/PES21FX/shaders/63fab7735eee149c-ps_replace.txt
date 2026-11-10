@@ -271,6 +271,10 @@ void main(
     float mEnter = saturate(dot(mLv, mVc) * 1.4 + 0.2);
     mSunK = lerp(1.0, mSunK, lerp(1.0, mDir * mEnter, mDepK));
     mSunK = lerp(mSunK, 1.0, mDpt * mDepK);
+    // (10/11 e) Agustin: "brilla mucho la parte de adentro, asi como la lengua y los dientes": el reflejo del ambiente se sumaba
+    // entero tambien en las muelas, la raiz de la lengua y la garganta (los dientes llevan el reflejo completo). Al fondo no llega
+    // el cielo: se apaga con la misma profundidad dentro de la boca (w388)
+    r3.xyz *= 1.0 - 0.75 * mDpt * mDepK;
     // (31/10 b) sombra del sol por forma (Agustin: "se aclaran pero no tienen sombra del sol"): el shadow map es muy grueso para
     // la boca y la luz de ambiente del juego aplana los dientes; los que miran lejos de la luz (fondo del arco, el lado opuesto
     // al sol) quedan mas oscuros, con la misma fuerza de la cavidad (x17)

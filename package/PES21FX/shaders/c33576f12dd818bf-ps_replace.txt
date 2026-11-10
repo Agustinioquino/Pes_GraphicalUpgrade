@@ -244,5 +244,6 @@ void main(
   o0.w = (float4(asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U))).w;
   o1.w = (float4(asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U))).w;
   o2.xyzw = (float4(asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U))).xyzw;
+  { float skMS = PesSkMouthShadow(skAB, v0, v2.xy, skZ, skL); o0.xyz *= skMS; o1.xyz *= skMS; }   // (10/11 e) sombra de esta luz dentro de la boca (w388)
   return;
 }
