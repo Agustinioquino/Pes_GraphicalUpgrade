@@ -1,6 +1,7 @@
 // PES21 FX - dispersion subsuperficial en pantalla separable (19/10): justo antes del dibujo de composicion (619b/f807)
 // se toma la irradiancia difusa que ese shader va a leer (t9), se la pasa por un blur horizontal y uno vertical (perfil de
 // piel de d'Eon, ancho por profundidad, solo piel) y se le da al dibujo la version difundida en el mismo slot.
+#include <cstring>
 #include "core.h"
 #include <d3d11.h>
 
@@ -106,7 +107,12 @@ ID3D11ShaderResourceView* SSSSBeforeComposition(ID3D11DeviceContext* c) {
     // (01/11) pasada 0: referencia de intensidad de la luz de prueba, mezclada con la de los cuadros anteriores (sin saltos al mover la camara)
     if (editorLight && s_psR && s_refRTV) {
         const double age = SSSSEditorLightAge();
-        const float k = age > 0.5 ? 1.0f : 0.08f;   // recien prendida (o sin correr hace rato): toma el valor de una
+        // (10/11, Agustin: "no se actualiza en tiempo real") 0.08 tardaba ~1 s en asentarse: 0.3 (~0.15 s) y de una al tocar las filas
+        // 297/298 de la luz de prueba (sliders / angulo)
+        static float s_l297[8] = {};
+        bool tocada = memcmp(s_l297, g_cfg.live[297], 4 * sizeof(float)) != 0 || memcmp(s_l297 + 4, g_cfg.live[298], 4 * sizeof(float)) != 0;
+        if (tocada) { memcpy(s_l297, g_cfg.live[297], 4 * sizeof(float)); memcpy(s_l297 + 4, g_cfg.live[298], 4 * sizeof(float)); }
+        const float k = (age > 0.5 || tocada) ? 1.0f : 0.3f;   // recien prendida (o sin correr hace rato) o slider tocado: toma el valor de una
         c->OMSetRenderTargets(1, &s_refRTV, nullptr);
         ID3D11ShaderResourceView* svr[6] = { light, depth, mat, nrm, nullptr, nullptr }; c->PSSetShaderResources(0, 6, svr);
         D3D11_VIEWPORT v1{ 0, 0, 1, 1, 0, 1 }; c->RSSetViewports(1, &v1);
