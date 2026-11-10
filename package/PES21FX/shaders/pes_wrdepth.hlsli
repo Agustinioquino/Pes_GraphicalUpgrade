@@ -47,6 +47,7 @@ float PesWrAgeK(float age, float ageW)
   // (10/11 g) la DLL manda edad + rasgo propio del jugador en la fraccion ((1 + 2 n) / 32, n = 1..7)
   g_wrSeed = age > 0.5 ? floor(frac(age + 0.001) * 16.0) : 0.0;
   age = floor(age + 0.001);
+  if (ageW <= 0.001) return -1.0;   // (10/11 h, Agustin: "centrate solo en arrugas por expresion sin edad") z15 = 0: SIN EDAD (PesWrAge)
   if (wrPlC.x > 0.5 && abs(wrPlB.z) > 0.5) age = clamp((age > 0.5 ? age : 26.0) + wrPlB.z, 14.0, 60.0);   // anios de piel de este jugador
   float k = age > 0.5 ? saturate((age - 20.0) / 18.0) : 0.3;
   // cada uno envejece distinto: hasta +- 5 anios de piel
@@ -57,9 +58,11 @@ float PesWrAgeK(float age, float ageW)
 void PesWrAge(float ageK, inout float4 wa, inout float4 wb, out float gain)
 {
   // (10/11 d) las de reposo ya no prenden los gestos: salen de los tres mapas de edad (joven -> adulto -> veterano, ageK 0.25 / 0.6)
+  // (10/11 h) sin edad: nada en reposo y todos responden al gesto como un adulto (0.5), igual para cualquier jugador
+  bool wrNoAge = ageK < 0.0; if (wrNoAge) ageK = 0.5;
   float j = 1.0 - smoothstep(0.15, 0.35, ageK), v = smoothstep(0.45, 0.75, ageK);
   uint aw = 0, ah = 0; pesWrAgeT.GetDimensions(aw, ah);
-  g_wrAg = aw > 1 ? float3(j, saturate(1.0 - j - v), v) * kWrAgeMm * saturate(ageK * 4.0) : 0;
+  g_wrAg = aw > 1 ? float3(j, saturate(1.0 - j - v), v) * kWrAgeMm * saturate(ageK * 4.0) * (wrNoAge ? 0.0 : 1.0) : 0;
   g_wrAgeK = ageK;
   // (10/11 f, Agustin: "al ejercer animaciones se tienen que marcar de distintas formas dependiendo la accion, la edad") RESPUESTA DE
   // CADA ZONA AL GESTO SEGUN LA EDAD. Piel joven (elastica): un gesto chico no marca nada (umbral) y el gesto entero deja un pliegue
