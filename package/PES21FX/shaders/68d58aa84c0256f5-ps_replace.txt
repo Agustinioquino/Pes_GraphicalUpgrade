@@ -188,5 +188,6 @@ void main(
   o1.xyzw = (float4(0.0, 0.0, 0.0, asfloat(0x3f800000U))).xyzw;
   if (skOn) o1.xyz = min(PesSkSpec(0.0.xxx, skN, skV, skL, skSt.x, skSt.y, skC * g_psLight.m_lightSourceParam3.y, 1.0) * skFS, 10000.0.xxx);   // (04/11) brillo de piel
   o2.xyzw = (float4(asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U))).xyzw;
+  { float skMS = PesSkMouthShadow(skAB, v0, v2.xy, skP.z, skL); o0.xyz *= skMS; o1.xyz *= skMS; }   // (10/11 e) sombra de esta luz dentro de la boca (w388)
   return;
 }

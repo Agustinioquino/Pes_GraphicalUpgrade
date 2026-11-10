@@ -142,6 +142,43 @@ bool PesSkMouthPx(float2 pos) {
   float mmZ = pesMouthMask.Load(int3(mmP, 0)), mmD = g_DepthTexture.Load(int3(mmP, 0)).x;
   return mmZ > 0.0 && abs(mmZ - mmD) <= 1e-6 + 2e-4 * abs(mmD);
 }
+// (10/11 e) SOMBRA DE CADA LUZ DENTRO DE LA BOCA. Agustin: "el problema es las sombras del interior de la boca, la oclusion, que
+// brilla mucho la parte de adentro, asi como la lengua y los dientes". Los focos (26 a 76 en el editor) y el sol sin shadow map
+// iluminaban el interior de la boca, la lengua y los dientes como si no hubiera labios: luz directa y brillo enteros en el fondo.
+// La luz solo entra por la abertura: desde cada pixel de la boca VISIBLE (mascara de la DLL) se traza hacia la luz en el buffer
+// de profundidad; si un labio, la mejilla o un diente de adelante queda en el camino, ese pixel no recibe esa luz. Con la luz
+// del lado de la camara el rayo sale por la abertura y la boca se ilumina; desde arriba el labio de arriba sombrea los dientes.
+// w388 (profundidad dentro de la boca) = fuerza; 0 = como antes. Multiplica la difusa y el brillo de esa luz
+float PesSkMouthShadow(float4 AB, float4 clipP, float2 pos, float zC, float3 L) {
+  float K = saturate(IniParams.Load(int2(388, 0)).w);
+  if (K <= 0.0) return 1.0;
+  uint mmW = 0, mmH = 0; pesMouthMask.GetDimensions(mmW, mmH);
+  if (mmW == 0) return 1.0;
+  uint2 mmP = min((uint2)pos, uint2(mmW - 1, mmH - 1));
+  float mmZ = pesMouthMask.Load(int3(mmP, 0)), mmD = g_DepthTexture.Load(int3(mmP, 0)).x;
+  if (!(mmZ > 0.0 && abs(mmZ - mmD) <= 1e-6 + 2e-4 * abs(mmD))) return 1.0;   // solo la boca visible
+  float zSgn = zC < 0.0 ? -1.0 : 1.0, zA = abs(zC);
+  if (zA < 0.05 || zA > 8.0) return 1.0;
+  float2 sC = clipP.xy / clipP.w;
+  float3 Pv = float3((sC - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zC, zC);
+  float3 Lc = normalize(L);
+  float2 px = (sC * 0.5 + 0.5) * g_psScene.m_viewportSize.xy;
+  float ign = frac(52.9829189 * frac(dot(px, float2(0.06711056, 0.00583715))));
+  float3 Q = Pv + Lc * (0.0015 + 0.0006 * zA);
+  float occ = 0.0;
+  [loop] for (int mi = 0; mi < 8; mi++) {
+    float t = (mi + ign) / 8.0 * 0.045;                    // 4.5 cm: de la garganta a los labios
+    float3 R = Q + Lc * t;
+    float RzA = R.z * zSgn;
+    if (RzA < 0.05) break;
+    float2 uv = AB.xy * (R.xy / (R.z * g_psScene.m_projectionParam.xy) + g_psScene.m_cameraCenterOffset.xy) + AB.zw;
+    if (any(uv < 0.0) || any(uv > 1.0)) break;
+    float zS = g_psScene.m_projectionParam.z / (g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, uv, 0).x - g_psScene.m_projectionParam.w);
+    float dz = (R.z - zS) * zSgn;
+    if (dz > 0.0012 + 0.0004 * RzA && dz < 0.03 + 0.5 * t && (zC - zS) * zSgn > 0.002) { occ = saturate(dz / 0.004); break; }
+  }
+  return 1.0 - 0.85 * K * occ * saturate((8.0 - zA) / 3.0);
+}
 // (10/11 d) CONTRALUZ DE COSTADO EN LOS FOCOS. PesSkTrans solo se ve con la luz casi detras de la cabeza mirando a la camara; con
 // un foco de costado la oreja, la aleta de la nariz y los dedos quedaban opacos. Se suma la contraluz por GROSOR de las pasadas
 // del sol (PesSkTransThick con el grosor estimado por la forma, fila 64: x on, z fuerza, w densidad), que no depende de donde

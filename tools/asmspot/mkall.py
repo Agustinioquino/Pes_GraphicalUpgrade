@@ -20,6 +20,7 @@ build(W+'68d58aa84c0256f5.hlsl','68d58aa84c0256f5-ps_replace.txt',
  ('r0.x = ((dot((r0.xyzx).xyz, (r2.xywx).xyz)).xxxx).x;','  float skNL = r0.x;\n'),
  ('r0.xyz = ((r1.yzwy * r0.xxxx)).xyz;','  if (skOn) { skFS = PesSkFaceShadow(skAB, v0, v2.xy, skP.z, skL, skNL, skC); r0.xyz = (PesSkDiffuse(skNL, r3.y, skTF, skP.z, skCurv) * skFS + PesSkTransAll(skN, skV, skL, skNL, r3.y, skCurvT, v2.xy)) * skC; }   // (04/11) piel\n'),
  ('o1.xyzw = (float4(0.0, 0.0, 0.0, asfloat(0x3f800000U))).xyzw;','  if (skOn) o1.xyz = min(PesSkSpec(0.0.xxx, skN, skV, skL, skSt.x, skSt.y, skC * g_psLight.m_lightSourceParam3.y, 1.0) * skFS, 10000.0.xxx);   // (04/11) brillo de piel\n'),
+ ('o2.xyzw = (','  { float skMS = PesSkMouthShadow(skAB, v0, v2.xy, skP.z, skL); o0.xyz *= skMS; o1.xyz *= skMS; }   // (10/11 e) sombra de esta luz dentro de la boca (w388)\n'),
 ])
 # c33576f1: foco + GGX
 build(W+'c33576f12dd818bf.hlsl','c33576f12dd818bf-ps_replace.txt',
@@ -36,6 +37,7 @@ build(W+'c33576f12dd818bf.hlsl','c33576f12dd818bf-ps_replace.txt',
  ('r0.w = ((dot((r6.xyzx).xyz, (r3.xywx).xyz)).xxxx).w;','  float skNL = r0.w;\n'),
  ('r3.xyz = ((r7.xyzx * r1.zzzz)).xyz;','  if (skOn) { skFS = PesSkFaceShadow(skAB, v0, v2.xy, skZ, skL, skNL, r7.xyz); r3.xyz = (PesSkDiffuse(skNL, r5.y, skTF, skZ, skCurv) * skFS + PesSkTransAll(skN, skV, skL, skNL, r5.y, skCurvT, v2.xy)) * r7.xyz; }   // (04/11) piel\n'),
  ('r0.xyz = ((r2.xzwx * r0.xyzx)).xyz;','  if (skOn) r0.xyz = PesSkSpec(r0.xyz, skN, skV, skL, skRough, skSpecI, r7.xyz, 1.0) * skFS;   // (04/11) brillo de piel\n'),
+ ('o2.xyzw = (','  { float skMS = PesSkMouthShadow(skAB, v0, v2.xy, skZ, skL); o0.xyz *= skMS; o1.xyz *= skMS; }   // (10/11 e) sombra de esta luz dentro de la boca (w388)\n'),
 ])
 # 9ce9d846: foco + GGX + sombra
 build(W+'9ce9d8463800b399.hlsl','9ce9d8463800b399-ps_replace.txt',
@@ -50,6 +52,7 @@ build(W+'9ce9d8463800b399.hlsl','9ce9d8463800b399-ps_replace.txt',
  ('r0.y = ((dot((r9.xyzx).xyz, (r3.xywx).xyz)).xxxx).y;','  float skNL = r0.y;\n'),
  ('r3.xyz = ((r10.xyzx * r0.wwww)).xyz;','  if (skOn) { skFS = PesSkFaceShadow(skAB, v0, v2.xy, skZ, skL, skNL, r10.xyz); r3.xyz = (PesSkDiffuse(skNL, r5.y, skTF, skZ, skCurv) * skFS + PesSkTransAll(skN, skV, skL, skNL, r5.y, skCurvT, v2.xy)) * r10.xyz; }   // (04/11) piel\n'),
  ('r0.yzw = ((r2.xxzw * r0.yyzw)).yzw;','  if (skOn) r0.yzw = PesSkSpec(r0.yzw, skN, skV, skL, skRough, skSpecI, r10.xyz, 1.0) * skFS;   // (04/11) brillo de piel (la sombra del foco va despues)\n'),
+ ('o2.xyzw = (','  { float skMS = PesSkMouthShadow(skAB, v0, v2.xy, skZ, skL); o0.xyz *= skMS; o1.xyz *= skMS; }   // (10/11 e) sombra de esta luz dentro de la boca (w388)\n'),
 ])
 # 142c1827: luz PUNTUAL (sin cono, caida 1/(d + x)^2) + GGX
 build(W+'142c18270479a113.hlsl','142c18270479a113-ps_replace.txt',
@@ -65,6 +68,7 @@ build(W+'142c18270479a113.hlsl','142c18270479a113-ps_replace.txt',
  ('r0.w = ((dot((r1.yzwy).xyz, (r3.xywx).xyz)).xxxx).w;','  float skNL = r0.w;\n'),
  ('r3.xyz = ((r6.xyzx * r2.wwww)).xyz;','  if (skOn) { skFS = PesSkFaceShadow(skAB, v0, v2.xy, skZ, skL, skNL, r6.xyz); r3.xyz = (PesSkDiffuse(skNL, r5.y, skTF, skZ, skCurv) * skFS + PesSkTransAll(skN, skV, skL, skNL, r5.y, skCurvT, v2.xy)) * r6.xyz; }   // (04/11) piel\n'),
  ('r0.xyz = ((r4.xyzx * r0.xyzx)).xyz;','  if (skOn) r0.xyz = PesSkSpec(r0.xyz, skN, skV, skL, skRough, skSpecI, r6.xyz, 1.0) * skFS;   // (04/11) brillo de piel\n'),
+ ('o2.xyzw = (','  { float skMS = PesSkMouthShadow(skAB, v0, v2.xy, skZ, skL); o0.xyz *= skMS; o1.xyz *= skMS; }   // (10/11 e) sombra de esta luz dentro de la boca (w388)\n'),
 ])
 # d5037e25: foco con sombra, sin especular
 build(W+'d5037e255559ea13.hlsl','d5037e255559ea13-ps_replace.txt',
@@ -80,4 +84,5 @@ build(W+'d5037e255559ea13.hlsl','d5037e255559ea13-ps_replace.txt',
  ('r0.yzw = ((r7.xxyz * r0.yyyy)).yzw;','  if (skOn) { skFS = PesSkFaceShadow(skAB, v0, v2.xy, skP.z, skL, skNL, r7.xyz); r0.yzw = (PesSkDiffuse(skNL, r3.y, skTF, skP.z, skCurv) * skFS + PesSkTransAll(skN, skV, skL, skNL, r3.y, skCurvT, v2.xy)) * r7.xyz; }   // (04/11) piel\n'),
  ('r0.x = ((g_psLight.m_lightSourceParam3.zzzz * r0.xxxx','  float skSh = r0.x;   // sombra del foco\n'),
  ('o1.xyzw = (float4(0.0, 0.0, 0.0, 1.000000)).xyzw;','  if (skOn) o1.xyz = min(PesSkSpec(0.0.xxx, skN, skV, skL, skSt.x, skSt.y, r7.xyz * g_psLight.m_lightSourceParam3.y, 1.0) * skFS * skSh, 10000.0.xxx);   // (04/11) brillo de piel\n'),
+ ('o2.xyzw = (','  { float skMS = PesSkMouthShadow(skAB, v0, v2.xy, skP.z, skL); o0.xyz *= skMS; o1.xyz *= skMS; }   // (10/11 e) sombra de esta luz dentro de la boca (w388)\n'),
 ])
