@@ -463,7 +463,11 @@ void main(
   // (08/11, Agustin: "como se plasma en barbas") se guarda lo que la arruga inclina la normal (gesto + esculpida) para sacarlo
   // despues donde la textura pinta barba / bigote (fhMask, mas abajo): sobre pelo pintado el surco se veia como una raja a traves de la barba
   float3 wrDN = (float3(r2.xy * wrRelief, max(1.0 + r2.z, 0.05)) / length(float3(r2.xy * wrRelief, max(1.0 + r2.z, 0.05))) - float3(0, 0, 1)) * r0.zzz;
-  if (wrD) { float3 nD = normalize(float3(PesWrDNormalXY(wrDg) * wrRelief, 1.0)); wrDN = nD - float3(0, 0, 1); pesWrN = nD.xy; }   // (09/11 g)
+  // (10/11, Agustin: "arrugas feas ... se ven negras") la pendiente de la profundidad esta en u / v: se pasa al marco tangente con
+  // los signos reales del modelo (PesTanSigns, como los poros); antes fijo B = -v y en las caras con la bitangente al reves el surco
+  // se iluminaba como cresta (linea negra del lado de la luz)
+  float2 wrTS = PesTanSigns(v4.xyz, v5.xyz, v3.xyz, ddx(v2.xy), ddy(v2.xy));
+  if (wrD) { float3 nD = normalize(float3(wrDg * wrTS * wrRelief, 1.0)); wrDN = nD - float3(0, 0, 1); pesWrN = nD.xy; }   // (09/11 g)
   r1.xyz += wrDN;
   r0.z = dot(r1.xyz, r1.xyz);
   r0.z = rsqrt(r0.z);
