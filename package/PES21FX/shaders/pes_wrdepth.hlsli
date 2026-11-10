@@ -31,6 +31,7 @@ cbuffer PESWrPlayer : register(b13)
   float4 wrPlC;   // x = 1 si hay valores
 }
 static float g_wrSeed = 0;   // rasgo propio del jugador 1..7 (0 = sin dato: sin variacion)
+static float g_wrEmoSh = 1.0;   // (10/11 i) cuanto se afina el pliegue segun la emocion (PesWrEmotion)
 static float4 g_wrGA = 1, g_wrGB = 1;   // ganancia por zona segun la edad (PesWrAge)
 static float3 g_wrAg = 0;   // mm por mapa (joven, adulto, veterano), lo arma PesWrAge
 // (10/11, Agustin: "la escala esta mal", "tomando de base las remasterizadas") texturas nuevas sacadas de la normal remasterizada
@@ -54,11 +55,38 @@ float PesWrAgeK(float age, float ageW)
   if (g_wrSeed > 0.5) k = saturate(k + (PesWrHash(8.0) - 0.5) * 0.28 * step(0.02, k + 0.2));
   return saturate(k * ageW);
 }
+// (10/11 i, Agustin: "ten en cuenta el sentimiento del jugador: al sonreir no se marcan las arrugas de la misma manera") LA EMOCION
+// DECIDE COMO SE MARCA. Se reconoce de la combinacion de zonas activas (sirve igual para los pesos de la animacion del juego, los
+// sliders y lo que mande el inyector) y cambia el reparto y la forma del pliegue, como en una cara real:
+//   alegria (ojos + comisuras, sin ceno): patas de gallo, surco y mejilla llenos y ANCHOS; frente, entrecejo y menton lisos
+//   enojo (entrecejo sin frente): entrecejo y nariz hondos y FINOS, menton y marioneta tensos; la frente no se raya
+//   asombro (frente sin ceno ni sonrisa): frente llena; sin patas de gallo (ojo abierto) ni entrecejo
+//   esfuerzo / grito (ceno + ojos apretados + boca o cuello): todo marcado y fino, el cuello mas
+//   zonas a: frente, entrecejo, ojos, surco    b: menton, marioneta, cuello, mejilla
+void PesWrEmotion(inout float4 wa, inout float4 wb)
+{
+  float fr = wa.x, ce = wa.y, oj = wa.z, su = wa.w;
+  float eG = saturate(min(ce, oj) * max(su, wb.z) * 2.0);                       // esfuerzo / grito
+  float eS = sqrt(saturate(oj * su)) * saturate(1.0 - 1.5 * ce) * (1.0 - eG);   // alegria
+  float eA = ce * saturate(1.0 - 0.8 * fr) * (1.0 - eS) * (1.0 - eG);           // enojo
+  float eU = fr * saturate(1.0 - 1.5 * ce) * saturate(1.0 - 1.5 * su);          // asombro
+  wa.x *= (1.0 - 0.60 * eS) * (1.0 - 0.50 * eA) * (1.0 + 0.25 * eU);
+  wa.y *= (1.0 - 0.70 * eS) * (1.0 + 0.35 * eA) * (1.0 - 0.80 * eU);
+  wa.z *= (1.0 + 0.30 * eS) * (1.0 - 0.35 * eA) * (1.0 - 0.80 * eU);
+  wa.w *= (1.0 + 0.15 * eS) * (1.0 - 0.30 * eU);
+  wb.x *= (1.0 - 0.75 * eS) * (1.0 + 0.30 * eA);
+  wb.y *= (1.0 - 0.55 * eS) * (1.0 + 0.30 * eA);
+  wb.z *= (1.0 + 0.40 * eG);
+  wb.w *= (1.0 + 0.45 * eS) * (1.0 - 0.60 * eA) * (1.0 - 0.60 * eU);
+  wa = saturate(wa); wb = saturate(wb);
+  g_wrEmoSh = clamp(1.0 - 0.55 * eS + 0.70 * eA + 0.50 * eG - 0.20 * eU, 0.4, 1.8);
+}
 // arrugas en reposo por edad y ganancia de profundidad
 void PesWrAge(float ageK, inout float4 wa, inout float4 wb, out float gain)
 {
   // (10/11 d) las de reposo ya no prenden los gestos: salen de los tres mapas de edad (joven -> adulto -> veterano, ageK 0.25 / 0.6)
   // (10/11 h) sin edad: nada en reposo y todos responden al gesto como un adulto (0.5), igual para cualquier jugador
+  PesWrEmotion(wa, wb);
   bool wrNoAge = ageK < 0.0; if (wrNoAge) ageK = 0.5;
   float j = 1.0 - smoothstep(0.15, 0.35, ageK), v = smoothstep(0.45, 0.75, ageK);
   uint aw = 0, ah = 0; pesWrAgeT.GetDimensions(aw, ah);
@@ -109,7 +137,7 @@ void PesWrDepth(SamplerState s, float2 uv, float4 wa, float4 wb, float gain, out
   uint tw = 1, th = 1; pesWrDA.GetDimensions(tw, th);
   float lod = pesWrDA.CalculateLevelOfDetail(s, uv);
   wa = saturate(wa); wb = saturate(wb);
-  float wrSh = 0.08 + 0.30 * g_wrAgeK;   // (10/11 f) el pliegue se afina con el gesto: casi nada de joven, mas de veterano
+  float wrSh = (0.08 + 0.30 * g_wrAgeK) * g_wrEmoSh;   // (10/11 f) el pliegue se afina con el gesto: casi nada de joven, mas de veterano
   float4 pa = 1.0 + wrSh * wa, pb = 1.0 + wrSh * wb;
   float4 ka = kWrDmmA * pow(wa, 0.8) * gain * g_wrGA, kb = kWrDmmB * pow(wb, 0.8) * gain * g_wrGB;
   float2 du = float2(1.5 / tw, 0.0), dv = float2(0.0, 1.5 / th);

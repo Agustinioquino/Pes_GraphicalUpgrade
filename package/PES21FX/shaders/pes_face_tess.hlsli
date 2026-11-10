@@ -472,7 +472,7 @@ float2 PesTessWrinkle(float2 uv, float age)
       wa = 1.0 - pow(1.0 - wa, 1.0 + cv); wb = 1.0 - pow(1.0 - wb, 1.0 + cv);
       float gain = 1.0; PesWrAge(PesWrAgeK(age, max(P15.z, 0.0)), wa, wb, gain);
       wa = saturate(wa); wb = saturate(wb);
-      float wrSh = 0.08 + 0.30 * g_wrAgeK;   // (10/11 f) igual que el PS
+      float wrSh = (0.08 + 0.30 * g_wrAgeK) * g_wrEmoSh;   // (10/11 f) igual que el PS
       float4 pa = 1.0 + wrSh * wa, pb = 1.0 + wrSh * wb;
       float4 ka = kWrDmmA * pow(wa, 0.8) * gain * g_wrGA, kb = kWrDmmB * pow(wb, 0.8) * gain * g_wrGB;
       float dd = PesWrDS(pesTessSamp, uv, 1, pa, pb, ka, kb);   // (10/11 d) con los mapas de edad
