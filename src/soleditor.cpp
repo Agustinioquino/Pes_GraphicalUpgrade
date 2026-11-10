@@ -364,7 +364,7 @@ static void* MakeSunIn(void* scene) {   // sin objetos C++
         if (!src) return nullptr;
         ((FnSrcB)0x14169fa50ull)(src, 1);
         ((FnSrcB)0x14169f440ull)(src, 0);        // apagada hasta SolEditorSet(on)
-        ((FnSrcB)0x14169f7f0ull)(src, 1);        // proyecta sombra
+        ((FnSrcB)0x14169f7f0ull)(src, g_cfg.solEditorSombra ? 1 : 0);   // sombra solo si se pide (TDR 10/11 al cargar jugador)
         ((FnSrcB)0x14169f270ull)(src, 1);        // mezcla de cascadas
         ((FnAddSrc)0x1416927c0ull)(scene, src);
         return src;
@@ -381,6 +381,12 @@ static bool ApplySun(void* src, const Pending& p, float signo) {   // sin objeto
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
+// apagar una fuente nuestra como hace DirectionalLightBody::vf8 (f440 0) y sin sombra: la referencia sigue viva (no se libera),
+// asi que tocarla es seguro aunque su escena ya no exista; sin esto quedaba prendida y con sombra en la escena vieja y el
+// motor la seguia usando como luz principal (log 10/11 23:46 PC: luz_principal = fuente de la escena cerrada, luego TDR)
+static void KillSun(void* src) {   // sin objetos C++
+    __try { ((FnSrcB)0x14169f440ull)(src, 0); ((FnSrcB)0x14169f7f0ull)(src, 0); } __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
 static void DllSunOnSpot(void* body) {   // SpotLightBody[6], despues del original (hilo del motor)
     if (!g_cfg.solEditorDll) return;
     void* sc = SceneOfBody(body);
@@ -390,7 +396,13 @@ static void DllSunOnSpot(void* body) {   // SpotLightBody[6], despues del origin
     for (int i = 0; i < s_ndsun; i++) if (s_dsun[i].scene == sc && !s_dsun[i].dead) { idx = i; break; }
     if (idx < 0) {
         int slot = -1;
-        for (int i = 0; i < s_ndsun; i++) if (s_dsun[i].dead) { slot = i; break; }
+        // una sola fuente viva: la de una escena anterior se apaga antes de crear la nueva
+        for (int i = 0; i < s_ndsun; i++) if (!s_dsun[i].dead && s_dsun[i].src) {
+            KillSun(s_dsun[i].src); s_dsun[i].dead = true;
+            for (int k = 0; k < s_nspot; ) if (s_spotRec[k].idx == i) s_spotRec[k] = s_spotRec[--s_nspot]; else k++;   // su slot se puede reusar
+            if (LogOn()) Log("sol_editor: sol de la DLL de la escena %p apagado (escena nueva %p)", s_dsun[i].scene, sc);
+        }
+        if (slot < 0) for (int i = 0; i < s_ndsun; i++) if (s_dsun[i].dead) { slot = i; break; }
         if (slot < 0) { if (s_ndsun >= 8) return; slot = s_ndsun++; }
         void* src = MakeSunIn(sc);
         s_dsun[slot] = DllSun{ sc, src, 0, src == nullptr };
@@ -406,7 +418,7 @@ static uintptr_t __fastcall hk_spotDtor(void* b, uintptr_t a, uintptr_t c, uintp
         std::lock_guard<std::mutex> lk(s_dmx);
         for (int i = 0; i < s_nspot; i++) if (s_spotRec[i].body == b) {
             DllSun& ds = s_dsun[s_spotRec[i].idx];
-            if (--ds.spots <= 0 && !ds.dead) { ds.dead = true; if (LogOn()) Log("sol_editor: escena %p cerrada: su sol de la DLL ya no se toca", ds.scene); }
+            if (--ds.spots <= 0 && !ds.dead) { ds.dead = true; if (ds.src) KillSun(ds.src); if (LogOn()) Log("sol_editor: escena %p cerrada: su sol de la DLL apagado y sin sombra", ds.scene); }
             s_spotRec[i] = s_spotRec[--s_nspot];
             break;
         }
