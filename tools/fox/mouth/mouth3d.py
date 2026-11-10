@@ -50,8 +50,8 @@ REAL_W = {True: [8.1, 6.8, 7.7, 7.1, 6.7],   # (04/11) Agustin 'reducir el taman
 ANAT = float(os.environ.get('MOUTH_ANAT', '1.0'))   # (09/11 e) 0 = sin detalle anatomico extra (como v21 / Messi v10)
 PROFILE = os.environ.get('MOUTH_PROFILE', '')
 PROF = {
-    '': dict(ext_up={'IC': -0.5, 'I': -1.1, 'C': -0.5}, ext_p=-0.6, corner_ic=(0.04, 0.09), corner_i_up=(0.06, 0.14), lat_back=0.1, canine=0.26, ext_lo=0.8, lift_lo=2.5, lift_sig=14.0, ext_lo_c=0.8, bite_fit=2, bite_in=0.8, bite_dn=0.0, overlap=1.4, occl=1, mol_air_up=1.8, fit_min=0.6, w_lo=(5.3, 5.8, 6.9, 6.5, 6.2, 5.0), p_out=1.2, strip_back=11.0, corner_lo=(0.03, 0.06), gap_ic=0.006, gap=0.012, back_in=0.05, asym=(0.25, 0.12, 0.8, 0.10)),   # (09/11 i) Agustin 'la mordedura no llega a cerrarse' + 'que las encias acompanen': lift_lo sube los dientes de adelante de abajo JUNTO con su encia (ver LIFT). (09/11 d) Agustin 'mejora la boca generica tambien': lo aprendido con Messi (arco de la sonrisa, esquinas redondeadas, linea fina entre dientes, muelas adentro, filas que se separan al sonreir, asimetria) con dientes comunes
-    'messi': dict(ext_up={'IC': 0.3, 'I': -0.5, 'C': -0.1}, ext_p=-0.7, corner_ic=(0.04, 0.09), corner_i_up=(0.06, 0.14), lat_back=0.1, canine=0.22, even=False, ext_lo=-0.3, lift_lo=2.5, lift_sig=14.0, ext_lo_c=-0.3, bite_fit=2, bite_in=0.8, bite_dn=0.0, overlap=1.4, occl=1, mol_air_up=1.8, fit_min=0.6, w_lo=(5.3, 5.8, 6.9, 6.5, 6.2, 5.0), p_out=1.2, corner_lo=(0.03, 0.06), gap_ic=0.004, gap=0.010, back_in=0.05, asym=(0.22, 0.10, 0.7, 0.10)),   # (09/11 i) lift_lo: con la boca cerrada quedaba hueco (se veia la lengua) entre filas. (09/11 c) Agustin (foto de Messi riendo: 'mira la forma de los dientes y muelas'): arco de la sonrisa natural (centrales largos, laterales mas cortos y apenas detras, canino con punta casi al nivel de los centrales, premolares mas cortos subiendo hacia atras), esquinas redondeadas; dientes individuales con linea fina (gap 0.010 / 0.004), muelas adentro, hueco entre filas
+    '': dict(ext_up={'IC': -0.5, 'I': -1.1, 'C': -0.5}, ext_p=-0.6, corner_ic=(0.04, 0.09), corner_i_up=(0.06, 0.14), lat_back=0.1, canine=0.26, ext_lo=0.8, lift_lo=2.5, lift_sig=14.0, ext_lo_c=0.8, bite_fit=2, bite_in=0.8, bite_dn=0.0, overlap=1.4, occl=1, close_lo=0.0, mol_air_up=1.8, w_lo=(5.3, 5.8, 6.9, 6.5, 6.2, 5.0), p_out=1.2, strip_back=11.0, corner_lo=(0.03, 0.06), gap_ic=0.006, gap=0.012, back_in=0.05, asym=(0.25, 0.12, 0.8, 0.10)),   # (09/11 i) Agustin 'la mordedura no llega a cerrarse' + 'que las encias acompanen': lift_lo sube los dientes de adelante de abajo JUNTO con su encia (ver LIFT). (09/11 d) Agustin 'mejora la boca generica tambien': lo aprendido con Messi (arco de la sonrisa, esquinas redondeadas, linea fina entre dientes, muelas adentro, filas que se separan al sonreir, asimetria) con dientes comunes
+    'messi': dict(ext_up={'IC': 0.3, 'I': -0.5, 'C': -0.1}, ext_p=-0.7, corner_ic=(0.04, 0.09), corner_i_up=(0.06, 0.14), lat_back=0.1, canine=0.22, even=False, ext_lo=-0.3, lift_lo=2.5, lift_sig=14.0, ext_lo_c=-0.3, bite_fit=2, bite_in=0.8, bite_dn=0.0, overlap=1.4, occl=1, close_lo=0.0, mol_air_up=1.8, w_lo=(5.3, 5.8, 6.9, 6.5, 6.2, 5.0), p_out=1.2, corner_lo=(0.03, 0.06), gap_ic=0.004, gap=0.010, back_in=0.05, asym=(0.22, 0.10, 0.7, 0.10)),   # (09/11 i) lift_lo: con la boca cerrada quedaba hueco (se veia la lengua) entre filas. (09/11 c) Agustin (foto de Messi riendo: 'mira la forma de los dientes y muelas'): arco de la sonrisa natural (centrales largos, laterales mas cortos y apenas detras, canino con punta casi al nivel de los centrales, premolares mas cortos subiendo hacia atras), esquinas redondeadas; dientes individuales con linea fina (gap 0.010 / 0.004), muelas adentro, hueco entre filas
 }[PROFILE]
 if PROFILE == 'messi': REAL_W = {True: [8.7, 7.0, 7.8, 7.1, 6.7], False: REAL_W[False]}
 # (10/11) Agustin: 'revisar ambos modelos, el modelado 3d': la fila de abajo de Konami tiene 6 dientes pintados por lado en el
@@ -82,10 +82,15 @@ def fit_row(row, log=print, name=''):
             nfix += 1
             fmin = PROF.get('fit_min', 0.8)   # (10/11 b) tope por lado; mas bajo = los premolares de abajo dejan de encimarse entre si
             fac[i][1] = max(fmin, 1 - 0.5 * over / max(ea, 1e-6)); fac[i + 1][0] = max(fmin, 1 - 0.5 * over / max(eb, 1e-6))
+        elif name == 'abajo' and PROF.get('close_lo') is not None and max(abs(ca[0]), abs(cb[0])) < 11 * MM:
+            # (10/11 d) Agustin: 'los dientes de abajo quedan muy separados entre si': el par de adelante que queda con aire se
+            # ensancha (solo la mitad que mira al vecino) hasta dejar close_lo mm
+            g_ = (L - ea - eb) - float(PROF['close_lo']) * MM
+            if g_ > 0: fac[i][1] = min(1.2, 1 + 0.5 * g_ / max(ea, 1e-6)); fac[i + 1][0] = min(1.2, 1 + 0.5 * g_ / max(eb, 1e-6))
     for i, q in enumerate(row):
         P, c = q[0], C[i]
         for k, j in ((0, i - 1), (1, i)):
-            if not (0 <= j < len(U)) or fac[i][k] >= 1.0: continue
+            if not (0 <= j < len(U)) or fac[i][k] == 1.0: continue
             u = U[j] if k == 1 else -U[j]
             t = (P - c) @ u; side = t > 0
             P[side] -= np.outer(t[side] * (1 - fac[i][k]), u)
@@ -333,7 +338,7 @@ def tooth(M, uL, uR, vG, vI, kind, upper, na=20, nb=13, ext=0.0, mes=1.0, seed=0
         # cuello mas angosto
         narrow = (0.88 + 0.12 * sst(-0.1, 0.45, bb)) if kind == 'IC' else (0.80 + 0.20 * sst(-0.1, 0.45, bb))
         if REAL_TEETH and kind in ('I', 'C'):   # (03/11) el ancho maximo (contacto) en el tercio incisal; cuello algo angosto
-            narrow = NECK_N + (1 - NECK_N) * sst(-0.1, 0.55, bb)   # (03/11 v19c) cuello mas angosto: asoma la papila de encia entre dientes
+            nk_ = NECK_N if upper else PROF.get('neck_lo', NECK_N); narrow = nk_ + (1 - nk_) * sst(-0.1, 0.55, bb)   # (03/11 v19c) cuello mas angosto: asoma la papila de encia entre dientes
         if not upper and kind != 'P':   # (09/11 k) abajo el cuello casi tan ancho como la corona: sin triangulos oscuros entre cuellos
             narrow = np.maximum(narrow, LO_NECK + (1 - LO_NECK) * sst(-0.1, 0.55, bb))
         uu = uc + (uu - uc) * narrow
@@ -810,6 +815,15 @@ def build(src_fmdl, texdir, log=print):
             if need > 0.05 * MM:
                 Pp[:, 1] = y0 + (Pp[:, 1] - y0) * (1 + need / max(y1 - y0, 1e-6)); grow.append('%+.0f: %.1f' % (Pp[:, 0].mean() / MM, need / MM))
         log('  mordida: dientes de adelante de abajo que crecen para no dejar hueco (x: mm): %s' % (', '.join(grow) or 'ninguno'))
+    if PROF.get('close_lo') is not None:   # (10/11 d) los dos centrales de abajo (cada fila se ajusta por lado): la mitad que mira a la linea media se ensancha hasta cerrar el aire del medio
+        jaw = names.index('skf_jaw'); lo_ = [q[0] for q in parts if q[4] == 'diente' and q[3][:, jaw].mean() > 0.5 and not any(q[0] is m_ for m_ in mol_parts)]
+        for sd_ in (-1.0, 1.0):
+            c_ = [q for q in lo_ if q[:, 0].mean() * sd_ > 0]
+            if not c_: continue
+            Pp = min(c_, key=lambda q: abs(q[:, 0].mean())); cx = float(Pp[:, 0].mean()); t_ = (cx - Pp[:, 0]) * sd_; m_ = t_ > 0
+            e_ = float(t_[Pp[:, 1] > Pp[:, 1].min() + 0.4 * np.ptp(Pp[:, 1])].max()); g_ = abs(cx) - e_ - 0.5 * float(PROF['close_lo']) * MM
+            log('  centrales de abajo: lado %+d centro %.2f mm, media cara %.2f, aire %.2f' % (sd_, cx / MM, e_ / MM, g_ / MM))
+            if g_ > 0 and e_ > 1e-6: Pp[m_, 0] -= sd_ * t_[m_] * min(g_ / e_, 0.25)
     if PROF.get('bite_fit'):
         def _inside(Q, Pm, Fm):   # rayo +z, paridad de cruces
             a_, b_, c_ = Pm[Fm[:, 0]], Pm[Fm[:, 1]], Pm[Fm[:, 2]]
