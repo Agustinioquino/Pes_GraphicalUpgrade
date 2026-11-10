@@ -271,10 +271,6 @@ void main(
     float mEnter = saturate(dot(mLv, mVc) * 1.4 + 0.2);
     mSunK = lerp(1.0, mSunK, lerp(1.0, mDir * mEnter, mDepK));
     mSunK = lerp(mSunK, 1.0, mDpt * mDepK);
-    // (10/11 e) Agustin: "brilla mucho la parte de adentro, asi como la lengua y los dientes": el reflejo del ambiente se sumaba
-    // entero tambien en las muelas, la raiz de la lengua y la garganta (los dientes llevan el reflejo completo). Al fondo no llega
-    // el cielo: se apaga con la misma profundidad dentro de la boca (w388)
-    r3.xyz *= 1.0 - 0.75 * mDpt * mDepK;
     // (31/10 b) sombra del sol por forma (Agustin: "se aclaran pero no tienen sombra del sol"): el shadow map es muy grueso para
     // la boca y la luz de ambiente del juego aplana los dientes; los que miran lejos de la luz (fondo del arco, el lado opuesto
     // al sol) quedan mas oscuros, con la misma fuerza de la cavidad (x17)
@@ -463,7 +459,10 @@ void main(
   float mGeoVar = r0.x;   // (27/10 h) varianza geometrica de la normal (anti-aliasing especular del juego): se conserva en dientes/encias
   r0.x = r4.x * r4.x + r0.x;
   r0.x = sqrt(r0.x);
-  if (mOn) r0.x = saturate(r0.x * (1.0 - mWet * (0.30 * mTeeth + 0.50 * mTissue)));   // saliva / esmalte pulido
+  // (10/11 e) Agustin: brilla la pared de adentro (garganta, cachetes por dentro), no dientes/lengua/encias: la saliva ya no
+  // pule el fondo de la boca (garganta y zona profunda); dientes, encias y lengua quedan igual
+  float mBackW = mOn ? saturate(max(mThroatZ, mDeep)) : 0.0;
+  if (mOn) r0.x = saturate(r0.x * (1.0 - mWet * (0.30 * mTeeth + 0.50 * mTissue * (1.0 - mBackW))));   // saliva / esmalte pulido
   r0.y = r0.x * 0.0361702144 + 0.0904255286;
   r0.y = r0.y * r0.x + 0.180851057;
   r0.y = r0.y * r0.x + 0.271276593;
@@ -479,7 +478,7 @@ void main(
   o3.zw = float2(0,0);
   o4.xyzw = float4(0,0,0,1);
   if (mOn) {
-    o2.y = saturate(mSpec * (1.0 + 0.4 * mWet * mTissue) + 0.04 * mWet * mTissue) * (1.0 - 0.5 * mCavity * mDeep);
+    o2.y = saturate(mSpec * (1.0 + 0.4 * mWet * mTissue * (1.0 - mBackW)) + 0.04 * mWet * mTissue * (1.0 - mBackW)) * (1.0 - 0.5 * mCavity * mDeep);
     if (m2On) {
       // esmalte: brillo alto y nitido (como vidrio mojado); encias humedas con brillo mas ancho
       float en = mTeeth * saturate(Q96.y);
