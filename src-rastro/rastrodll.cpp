@@ -47,7 +47,7 @@ const char* const kWatchName[3] = { "tipo_falta(MI+0x1588)", "infractor(MI+0x159
 // ---------------------------------------------------------------- configuracion propia
 struct Cfg {
     std::wstring baseDir;
-    bool on = false; int maxMb = 2000, fps = 2; bool falta = true, anime = true;
+    bool on = false; int maxMb = 2000, fps = 2; bool falta = true, anime = false, motor = true, registro = true;   // (10/11 c) cada gancho se apaga por separado para aislar cual molesta
     std::vector<uintptr_t> funcs; int funcsLote = 100, funcsEspera = 10, autoSeg = 0;   // tanda cada 250 ms; segundos de espera antes de armar
 } g_cfg;
 
@@ -429,6 +429,8 @@ void LoadCfg() {
         else if (k == "rastro_max_mb") { int x = atoi(v.c_str()); g_cfg.maxMb = x < 10 ? 10 : (x > 100000 ? 100000 : x); }
         else if (k == "rastro_fotos") { int x = atoi(v.c_str()); g_cfg.fps = x < 1 ? 1 : (x > 54 ? 54 : x); }
         else if (k == "rastro_faltas") g_cfg.falta = atoi(v.c_str()) != 0;
+        else if (k == "rastro_motor") g_cfg.motor = atoi(v.c_str()) != 0;
+        else if (k == "rastro_registro") g_cfg.registro = atoi(v.c_str()) != 0;
         else if (k == "rastro_anime") g_cfg.anime = atoi(v.c_str()) != 0;
         else if (k == "rastro_auto_seg") { int x = atoi(v.c_str()); g_cfg.autoSeg = x < 0 ? 0 : (x > 36000 ? 36000 : x); }
         else if (k == "rastro_funcs_lote") { int x = atoi(v.c_str()); g_cfg.funcsLote = x < 1 ? 1 : (x > 2000 ? 2000 : x); }
@@ -483,8 +485,8 @@ void Install() {
     WriteFormat();
     if (MH_Initialize() != MH_OK) { Log("rastro: MinHook no inicializo"); }
     bool logOk = false, relOk = false, motOk = false;
-    if (SigAt(kLogStub, kLogSig, sizeof kLogSig) && MH_CreateHook((void*)kLogStub, (void*)&hk_log, (void**)&o_log) == MH_OK && MH_EnableHook((void*)kLogStub) == MH_OK) logOk = true;
-    if (SigAt(kRegRelease, kRelSig, sizeof kRelSig) && MH_CreateHook((void*)kRegRelease, (void*)&hk_rel, (void**)&o_rel) == MH_OK && MH_EnableHook((void*)kRegRelease) == MH_OK) relOk = true;
+    if (g_cfg.motor && SigAt(kLogStub, kLogSig, sizeof kLogSig) && MH_CreateHook((void*)kLogStub, (void*)&hk_log, (void**)&o_log) == MH_OK && MH_EnableHook((void*)kLogStub) == MH_OK) logOk = true;
+    if (g_cfg.registro && SigAt(kRegRelease, kRelSig, sizeof kRelSig) && MH_CreateHook((void*)kRegRelease, (void*)&hk_rel, (void**)&o_rel) == MH_OK && MH_EnableHook((void*)kRegRelease) == MH_OK) relOk = true;
     if (g_cfg.anime && MH_CreateHook((void*)kSetMotion, (void*)&hk_mot, (void**)&o_mot) == MH_OK && MH_EnableHook((void*)kSetMotion) == MH_OK) motOk = true;
     bool mcOk = false;
     if (g_cfg.falta && SigAt(kMcVf19, kMcSig, sizeof kMcSig)) {
@@ -496,7 +498,7 @@ void Install() {
         AddVectoredExceptionHandler(1, Veh);
     }
     if (!g_cfg.funcs.empty()) ArmTrace();
-    s_on = logOk || relOk;
+    s_on = true;
     s_installed = true;
     Log("rastro v4: motor %s, foto del partido %s (%u B/foto), animaciones %s, faltas %s, funcs %zu -> %ls (tope %llu MB)",
         logOk ? "ok" : "NO", relOk ? "ok" : "NO", RecSize(), motOk ? "ok" : "no", !g_cfg.falta ? "apagado" : mcOk ? "ok" : "NO", g_cfg.funcs.size(), name, (unsigned long long)(s_cap >> 20));
