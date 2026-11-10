@@ -15,6 +15,8 @@
 #include <fstream>
 #include <cmath>
 
+namespace fx {
+
 namespace {
 using Vals = std::vector<float>;
 const int kN = 8;
@@ -117,3 +119,5 @@ std::string WrPlayerSaveCurrent() {
     else snprintf(msg, sizeof(msg), "Arrugas guardadas para la cara %s", cur.c_str());
     return msg;
 }
+
+}   // namespace fx
