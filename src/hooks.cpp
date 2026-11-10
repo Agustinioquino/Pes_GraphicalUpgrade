@@ -1216,6 +1216,8 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
                     d.lod = L; d.hdMesh = true; if (hp) { Remember(c, d, false, true, 114); c->VSSetShaderResources(114, 1, &hp); } }
             }
             if (ID3D11Buffer* b = ExprBufferForDraw(c, t_drawKind == 1 ? t_drawVerts : 0, t_drawStart, t_drawBase, &hc, &hd, &shp, &shw, &seam, false, &wrb, skinPs0)) { Remember(c, d, false, false, a.slot); c->VSSetConstantBuffers(a.slot, 1, &b); }
+            ID3D11Buffer* wrPl = skinPs0 ? WrPlayerBuffer(d.faceId) : nullptr;   // (10/11) arrugas por jugador (PS b13 / DS b9); sin valores: nulo = como todos
+            if (skinPs0) { Remember(c, d, true, false, 13); c->PSSetConstantBuffers(13, 1, &wrPl); }
             if (wrb) { Remember(c, d, true, false, 12); c->PSSetConstantBuffers(12, 1, &wrb); }   // (08/11) pesos de arrugas del juego suavizados (PS b12 PESWrSmooth)
             if (shp) { Remember(c, d, false, true, 118); c->VSSetShaderResources(118, 1, &shp); }   // (04/11) gestos esculpidos de esta malla
             if (ID3D11ShaderResourceView* bd = ExprBoneDeltaSrv()) { Remember(c, d, false, true, 115); c->VSSetShaderResources(115, 1, &bd); }   // (08/11) gestos en la paleta (t115)
@@ -1228,7 +1230,7 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
                 ID3D11ShaderResourceView* prm = nullptr; c->VSGetShaderResources(120, 1, &prm);
                 if (!prm) FaceTessNote(1);
                 bool tessOn = false;
-                if (prm) { if (FaceTessBegin(c, hash, seam, prm, d.tess, d.faceId, wrb)) { tessOn = true; Remember(c, d, false, true, 119); c->VSSetShaderResources(119, 1, &seam);
+                if (prm) { if (FaceTessBegin(c, hash, seam, prm, d.tess, d.faceId, wrb, wrPl)) { tessOn = true; Remember(c, d, false, true, 119); c->VSSetShaderResources(119, 1, &seam);
                     d.tess.cnt = t_drawVerts; d.tess.start = t_drawStart; d.tess.base = t_drawBase; } prm->Release(); }
                 // (08/11 g) sin teselar tambien: el VS lee el peso de borde (t119) para no aplicar los gestos de la paleta en el borde de la
                 // pieza (pes_expr.hlsli PesBoneDeltaEdge: las uniones entre piezas de la cara no se abren)
@@ -2154,6 +2156,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     { GpuZoneScope gz_(g_dev.imm, kGzGlass); GlassPresent(); }        // (24/10) vidrio de los menus: lectura de lo anotado por el PS y plan de copias del fondo
     MuscleHookPresent();   // (23/10) musculatura: ganchos a los huesos de musculo del motor (primer Present)
     ExprPresent();         // (31/10) expresiones faciales: mallas de cara nuevas (cabeza en la paleta)
+    WrPlayerPresent();     // (10/11) arrugas por jugador
     FaceTessPresent();     // (04/11 b) teselacion de la cara: resumen
     { GpuZoneScope gz_(g_dev.imm, kGzBody); BodyPresent(); }         // (25/10) la ropa contra el cuerpo real: mallas de piel nuevas, cuadro nuevo
     MouthMaskPresent();    // (04/11 boca) mascara del interior de la boca: limpiar para el cuadro siguiente

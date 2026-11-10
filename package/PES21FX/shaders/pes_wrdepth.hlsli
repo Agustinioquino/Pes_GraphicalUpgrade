@@ -18,6 +18,18 @@ Texture2D<float4> pesWrDB : register(t46);
 Texture2D<float4> pesWrAgeT : register(t47);
 static const float kWrAgeMm = 2.262;
 static float g_wrAgeK = 0.3;   // edad 0..1 de esta cara (PesWrAge)
+// (10/11 h, Agustin: "hay jugadores que tienen arrugas bakeadas ... un slider por jugador para bajar la intensidad o la zona asi como la
+// edad") valores de ESTE jugador (arrugasjug.cpp, PES21FX_hair.ini [arrugas_cara]); sin enlazar todo vale 0 y wrPlC.x = 0 = como todos
+#ifdef PES_WRD_NO_PS
+cbuffer PESWrPlayer : register(b9)
+#else
+cbuffer PESWrPlayer : register(b13)
+#endif
+{
+  float4 wrPlA;   // intensidad de los gestos, frente + entrecejo, ojos, surco + mejilla
+  float4 wrPlB;   // menton + marioneta, cuello, anios de piel (+ / -), arrugas de reposo (edad)
+  float4 wrPlC;   // x = 1 si hay valores
+}
 static float g_wrSeed = 0;   // rasgo propio del jugador 1..7 (0 = sin dato: sin variacion)
 static float4 g_wrGA = 1, g_wrGB = 1;   // ganancia por zona segun la edad (PesWrAge)
 static float3 g_wrAg = 0;   // mm por mapa (joven, adulto, veterano), lo arma PesWrAge
@@ -35,6 +47,7 @@ float PesWrAgeK(float age, float ageW)
   // (10/11 g) la DLL manda edad + rasgo propio del jugador en la fraccion ((1 + 2 n) / 32, n = 1..7)
   g_wrSeed = age > 0.5 ? floor(frac(age + 0.001) * 16.0) : 0.0;
   age = floor(age + 0.001);
+  if (wrPlC.x > 0.5 && abs(wrPlB.z) > 0.5) age = clamp((age > 0.5 ? age : 26.0) + wrPlB.z, 14.0, 60.0);   // anios de piel de este jugador
   float k = age > 0.5 ? saturate((age - 20.0) / 18.0) : 0.3;
   // cada uno envejece distinto: hasta +- 5 anios de piel
   if (g_wrSeed > 0.5) k = saturate(k + (PesWrHash(8.0) - 0.5) * 0.28 * step(0.02, k + 0.2));
@@ -63,6 +76,14 @@ void PesWrAge(float ageK, inout float4 wa, inout float4 wb, out float gain)
     g_wrGA *= lerp(0.55, 1.40, float4(PesWrHash(0.0), PesWrHash(1.0), PesWrHash(2.0), PesWrHash(3.0)));
     g_wrGB *= lerp(0.55, 1.40, float4(PesWrHash(4.0), PesWrHash(5.0), PesWrHash(6.0), PesWrHash(7.0)));
     g_wrAg *= lerp(0.70, 1.30, PesWrHash(9.0));
+  }
+  // SISTEMAS SEPARADOS Y CONECTADOS (10/11 h): gestos (canales a / b, con los pesos de la animacion) y edad (mapas de reposo, g_wrAg)
+  // tienen su control cada uno; los une la edad (decide cuanto y como responde cada zona al gesto) y el dibujo: los dos salen del
+  // mismo relieve, asi el gesto profundiza la linea que la edad ya dejo marcada en vez de dibujar otra al lado
+  if (wrPlC.x > 0.5) {
+    g_wrGA *= max(wrPlA.x, 0.0) * max(float4(wrPlA.y, wrPlA.y, wrPlA.z, wrPlA.w), 0.0);
+    g_wrGB *= max(wrPlA.x, 0.0) * max(float4(wrPlB.x, wrPlB.x, wrPlB.y, wrPlA.w), 0.0);
+    g_wrAg *= max(wrPlB.w, 0.0);
   }
   gain = 1.0;
 }
