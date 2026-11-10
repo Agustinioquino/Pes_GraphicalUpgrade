@@ -23,7 +23,7 @@ float3 PesSssPos(float2 uv, float z) {
   float2 pp = ((uv * float2(2, -2) + float2(-1, 1)) - m_cameraCenterOffset.xy) * m_projectionParam.xy;
   return float3(pp * z, z);
 }
-static const float kSssX[7] = { 0.1501, 0.5021, 0.9509, 1.5522, 2.4188, 3.8349, 7.0631 };   // (10/11 b) 7 por canal: en el editor la pasada costaba 3.5 ms con 10   // cuantiles del perfil (r / d)
+static const float kSssX[7] = { 0.1235, 0.4046, 0.7455, 1.1713, 1.7253, 2.4885, 3.6408 };   // (10/11 c) perfil cortado en 4.5 d (83 % de la energia): la cola lejana casi no pesa y sus lecturas dispersas eran lo caro   // (10/11 b) 7 por canal: en el editor la pasada costaba 3.5 ms con 10   // cuantiles del perfil (r / d)
 
 float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   float4 P = IniParams.Load(int2(95,0));
@@ -56,10 +56,13 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   float rC = 0.35 / max(mmToPx, 1e-4);
   float3 acc = 0, wsum = 0;
   { float3 pdfC = PesSssR(rC, dmm); float3 wC = PesSssR(rC, dmm) / max(dot(pdfC, 1.0 / 3.0), 1e-9); acc = wC * c0; wsum = wC; }
+  // (10/11 c) de muy cerca (camara libre con zoom) el disco pasaba de 200 px y cada lectura caia lejos de la anterior (3.5 ms):
+  // el disco no pasa de 56 px; mas cerca que eso se encoge todo junto (misma forma)
+  float capS = min(1.0, 56.0 / max(3.6408 * dmm.r * mmToPx, 1e-4));
   [unroll] for (int i = 0; i < 21; i++) {
     int ch = i % 3;
     float dch = ch == 0 ? dmm.r : (ch == 1 ? dmm.g : dmm.b);
-    float rmm = kSssX[i / 3] * dch;
+    float rmm = kSssX[i / 3] * dch * capS;
     float a = rot + i * 2.3999632;
     float2 uvS = uv + float2(cos(a), sin(a)) * (rmm * mmToPx) * rb;
     if (any(uvS < 0.0) || any(uvS > 1.0) || !IsSkin(uvS)) continue;
@@ -69,7 +72,7 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
     if (mmW2 > 0) { float mz = inMouth.Load(int3(min((uint2)(uvS / rb), uint2(mmW2 - 1, mmH2 - 1)), 0)); if (mz > 0.0 && abs(mz - dRaw) <= 1e-6 + 2e-4 * abs(dRaw)) continue; }
     float3 Ps = PesSssPos(uvS, m_projectionParam.z / (dRaw - m_projectionParam.w));
     float r3 = max(length(Ps - P0) * 1000.0, rmm);          // distancia real entre los dos puntos de la piel, mm
-    float pdf = dot(PesSssR(rmm, dmm), 1.0 / 3.0);          // con que densidad se eligio este punto (mezcla de los tres canales)
+    float pdf = dot(PesSssR(rmm / capS, dmm), 1.0 / 3.0);          // con que densidad se eligio este punto (mezcla de los tres canales)
     float3 w = PesSssR(r3, dmm) / max(pdf, 1e-9) * skS;
     acc += w * inLight.SampleLevel(sPoint, uvS, 0).xyz;
     wsum += w;
