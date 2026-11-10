@@ -439,12 +439,15 @@ void Flush(bool final) {
         s_msgs.load(), s_skip.load(), s_snaps.load(), s_bytes.load() / 1048576.0, s_drop.load(), s_fhAll.load(), s_anime.load(), s_trHits.load(), final ? " (final)" : "");
 }
 
+// __try/__except aislado en su propia funcion (sin objetos C++ que requieran desenrollado): evita C2712
+static void SafeInstall() { __try { Install(); } __except (EXCEPTION_EXECUTE_HANDLER) {} }
+
 DWORD WINAPI Worker(void*) {
     LoadCfg();
     { CreateDirectoryW(g_cfg.baseDir.c_str(), nullptr); g_logf = _wfopen((g_cfg.baseDir + L"rastro_dll.log").c_str(), L"wb"); }
     Log("rastro v4 (DLL de investigacion) cargada; rastro=%d", g_cfg.on ? 1 : 0);
     for (int i = 0; i < 1200 && !s_installed.load(); i++) {   // espera a que el exe este listo (hasta 10 min)
-        if (RdPtr(kRegGlobal) || i > 20) { __try { Install(); } __except (EXCEPTION_EXECUTE_HANDLER) {} }
+        if (RdPtr(kRegGlobal) || i > 20) SafeInstall();
         Sleep(500);
         s_frame.fetch_add(1, std::memory_order_relaxed);
         if (s_installed.load() && (i % 10) == 0) Flush(false);
