@@ -18,6 +18,7 @@ Texture2D<float4> pesWrDB : register(t46);
 Texture2D<float4> pesWrAgeT : register(t47);
 static const float kWrAgeMm = 2.262;
 static float g_wrAgeK = 0.3;   // edad 0..1 de esta cara (PesWrAge)
+static float4 g_wrGA = 1, g_wrGB = 1;   // ganancia por zona segun la edad (PesWrAge)
 static float3 g_wrAg = 0;   // mm por mapa (joven, adulto, veterano), lo arma PesWrAge
 // (10/11, Agustin: "la escala esta mal", "tomando de base las remasterizadas") texturas nuevas sacadas de la normal remasterizada
 // (tools/make_wrinkle_depth_remaster.py): pliegues 2 veces mas anchos y en las zonas del juego; la profundidad da con el gesto entero
@@ -40,7 +41,16 @@ void PesWrAge(float ageK, inout float4 wa, inout float4 wb, out float gain)
   uint aw = 0, ah = 0; pesWrAgeT.GetDimensions(aw, ah);
   g_wrAg = aw > 1 ? float3(j, saturate(1.0 - j - v), v) * kWrAgeMm * saturate(ageK * 4.0) : 0;
   g_wrAgeK = ageK;
-  gain = lerp(0.80, 1.35, ageK);
+  // (10/11 f, Agustin: "al ejercer animaciones se tienen que marcar de distintas formas dependiendo la accion, la edad") RESPUESTA DE
+  // CADA ZONA AL GESTO SEGUN LA EDAD. Piel joven (elastica): un gesto chico no marca nada (umbral) y el gesto entero deja un pliegue
+  // ancho y bajo; con la edad el mismo gesto marca antes y mas hondo. No todas las zonas envejecen igual: frente, patas de gallo,
+  // marioneta y cuello cambian mucho; el surco nasogeniano y la mejilla se marcan al sonreir a cualquier edad.
+  //   zonas a: frente, entrecejo, ojos, surco    b: menton, marioneta, cuello, mejilla
+  float4 tA = float4(0.20, 0.12, 0.20, 0.05) * (1.0 - ageK), tB = float4(0.12, 0.22, 0.16, 0.08) * (1.0 - ageK);
+  wa = saturate((wa - tA) / (1.0 - tA)); wb = saturate((wb - tB) / (1.0 - tB));
+  g_wrGA = lerp(float4(0.65, 0.85, 0.65, 0.95), float4(1.40, 1.25, 1.45, 1.20), ageK);
+  g_wrGB = lerp(float4(0.80, 0.60, 0.70, 0.90), float4(1.20, 1.40, 1.40, 1.15), ageK);
+  gain = 1.0;
 }
 float PesWrD1(float4 ha, float4 hb, float4 pa, float4 pb, float4 ka, float4 kb)
 {
@@ -61,8 +71,9 @@ void PesWrDepth(SamplerState s, float2 uv, float4 wa, float4 wb, float gain, out
   uint tw = 1, th = 1; pesWrDA.GetDimensions(tw, th);
   float lod = pesWrDA.CalculateLevelOfDetail(s, uv);
   wa = saturate(wa); wb = saturate(wb);
-  float4 pa = 1.0 + 0.2 * wa, pb = 1.0 + 0.2 * wb;   // (10/11) afinado suave (2.5 dejaba el pliegue a la mitad de ancho: lineas negras)
-  float4 ka = kWrDmmA * pow(wa, 0.8) * gain, kb = kWrDmmB * pow(wb, 0.8) * gain;
+  float wrSh = 0.08 + 0.30 * g_wrAgeK;   // (10/11 f) el pliegue se afina con el gesto: casi nada de joven, mas de veterano
+  float4 pa = 1.0 + wrSh * wa, pb = 1.0 + wrSh * wb;
+  float4 ka = kWrDmmA * pow(wa, 0.8) * gain * g_wrGA, kb = kWrDmmB * pow(wb, 0.8) * gain * g_wrGB;
   float2 du = float2(1.5 / tw, 0.0), dv = float2(0.0, 1.5 / th);
   float4 a0 = pesWrDA.SampleLevel(s, uv, lod), b0 = pesWrDB.SampleLevel(s, uv, lod);
   d = PesWrDS(s, uv, lod, pa, pb, ka, kb);
