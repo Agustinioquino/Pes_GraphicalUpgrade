@@ -24,22 +24,30 @@ static void DirFrom(float azDeg, float elDeg, float out[3]) {
     out[0] = sinf(a) * cosf(e); out[1] = sinf(e); out[2] = cosf(a) * cosf(e);   // hacia el sol, y > 0 de dia
 }
 
+// (10/11) fase del ciclo de dia y noche (0 = amanecer .. 1), GUARDADA: avanza solo mientras el ciclo corre y no vuelve a las 6:00
+// al tocar x297 / el menu. La DLL la pasa a los shaders en w393 (= fase x periodo, el shader hace frac(w393 / periodo)): el sol
+// de la DLL, la imitacion del shader y la luz de las cejas van con la MISMA hora
+static double s_phase = 0.0, s_phT = 0.0;
+float g_tlClock = 0.0f;   // w393 (UploadParams)
+static float TlPeriod(int tl) { return tl == 1 ? 30.0f : tl == 2 ? 60.0f : tl == 3 ? 120.0f : 300.0f; }
+
 void SolLuzPresent() {
     const bool test = g_cfg.live[297][0] > 0.5f;
     const bool nearSun = g_cfg.live[378][3] > 0.5f;
     const int tl = (int)(g_cfg.live[392][3] + 0.5f);
     const bool tlOn = tl >= 1 && tl <= 4;
+    { const double now = Now(); double dt = s_phT > 0.0 ? now - s_phT : 0.0; s_phT = now;
+      if (dt < 0.0 || dt > 0.5) dt = 0.0;   // pausas / carga: no salta
+      if (tlOn && test) { s_phase += dt / TlPeriod(tl); s_phase -= floor(s_phase); }
+      g_tlClock = (float)(s_phase * TlPeriod(tlOn ? tl : 1)); }
     // (09/11 i, Agustin: "le falta el ambiente") con la TppAtmosphere en el EditFace (soleditor: SolEditorAtmo / SolEditorSetHora) el
     // ciclo de dia y noche es el del PARTIDO: el motor mueve sol, luna, luz de cielo y exposicion con la hora. Sin atmosfera (archivo
     // viejo: SolEditorAtmo devuelve false) queda la orbita propia con zfx_SolEditor (abajo)
     static bool s_atmoOn = false, s_horaSet = false, s_atmoMissLogged = false;
-    static double s_h0 = 0; static bool s_hWas = false;
     if (test && tlOn && !nearSun) {
-        if (!s_hWas) s_h0 = Now();
-        s_hWas = true;
         if (SolEditorAtmo(true)) {
-            const float per = tl == 1 ? 30.0f : tl == 2 ? 60.0f : tl == 3 ? 120.0f : 300.0f;
-            double t = (Now() - s_h0) / per; t -= floor(t);
+            const float per = TlPeriod(tl);
+            const double t = s_phase;
             const float h = (float)fmod(6.0 + 24.0 * t, 24.0);   // arranca al amanecer
             SolEditorSetHora(h); s_horaSet = true;
             if (!s_atmoOn) Log("sol real del editor: ciclo de dia y noche con la atmosfera del motor (vuelta de %.0f s)", per);
@@ -50,7 +58,7 @@ void SolLuzPresent() {
             return;
         }
         if (!s_atmoMissLogged) { s_atmoMissLogged = true; Log("sol real del editor: sin atmosfera en el EditFace: ciclo con zfx_SolEditor"); }
-    } else s_hWas = false;
+    }
     if (s_atmoOn) { SolEditorAtmo(false); s_atmoOn = false; }
     if (s_horaSet) { SolEditorHoraLibre(); s_horaSet = false; }
     const bool want = test && (nearSun || tlOn) && SolEditorBody() != nullptr;
@@ -60,16 +68,12 @@ void SolLuzPresent() {
     }
     float az = 0, el = 0, kelvin, lux; float rgb[3] = { 1, 1, 1 }; float d[3];
     const float ev = std::clamp(g_cfg.live[381][0], -6.0f, 6.0f);
-    static bool s_tlWas = false; static double s_tl0 = 0;
-    if (tlOn && !s_tlWas) s_tl0 = Now();   // cada vez que se prende arranca al amanecer
-    s_tlWas = tlOn;
     if (tlOn) {
         // (09/11 e, Agustin: "no es suave, ni la luz recorre como si fuera un timelapse") una orbita continua como la del cielo:
         // sale por un costado (horizonte), sube en arco hasta 65 grados al mediodia y se pone por el otro costado; de noche la
         // luna hace el mismo arco. En el horizonte la fuerza baja a casi 0, asi el cambio sol -> luna no se ve como salto.
         // Se escribe cada cuadro (SolEditorSet descarta lo igual), sin umbrales: el movimiento es continuo
-        const float per = tl == 1 ? 30.0f : tl == 2 ? 60.0f : tl == 3 ? 120.0f : 300.0f;
-        double t = (Now() - s_tl0) / per; t -= floor(t);
+        const double t = s_phase;
         const float a = 6.2831853f * (float)t, ca = cosf(a), sa = sinf(a);
         const float sN = 0.9063078f, cN = 0.4226183f;   // mediodia a 65 grados
         float o[3] = { ca, sa * sN, sa * cN };            // sol (y > 0 de dia)

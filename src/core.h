@@ -425,6 +425,7 @@ float TiempoFactor();   // (1/11) velocidad pedida por el menu (1 = apagada) par
 // zfx_SolEditor del EditFace; solluz.cpp decide el sol (w378 sol de partido, w392 ciclo de dia y noche) y escribe z393
 void SolLuzPresent();
 extern float g_solRealActivo;
+extern float g_tlClock;   // w393: fase del ciclo de dia y noche x periodo
 bool CamCutSince(int& seen);                      // true una vez por cada corte nuevo (cada consumidor guarda su 'seen'); x161 = 1
 int CamLastCutFrame();
 bool EngineCamera(float pos[3], float tgt[3], int* frame);   // ultima camara aplicada por el motor (sin atraso)
