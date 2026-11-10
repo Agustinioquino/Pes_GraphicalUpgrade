@@ -587,7 +587,7 @@ void main(
       float mppS = max(zS0 * abs(g_psScene.m_projectionParam.x) * 2.0 / max(g_psScene.m_viewportSize.x, 1.0), 1e-6);
       float rPx = 0.006 * max(IniParams.Load(int2(95,0)).x, 0.3) / mppS;   // radio de la SSSS en pixeles (6 mm x ancho)
       pesSsssK = saturate((rPx - 1.0) / 5.0) * ((pesUni || IniParams.Load(int2(146,0)).x > 0.5) ? 1.0 : 0.0);
-      w *= 1.0 - 0.45 * pesSsssK;   // (27/10 f) antes 0.85: el terminador quedaba duro con la SSSS
+      w *= 1.0 - 0.85 * pesSsssK;   // (27/10 f) antes 0.85: el terminador quedaba duro con la SSSS
     }
     if (!sssOn) w = 0.03;                 // 18/10: ancho del borde acotado (antes envolvia la cara y corria la luz)
     float3 d = saturate(PESSoftTerm(rawNdotL, w));

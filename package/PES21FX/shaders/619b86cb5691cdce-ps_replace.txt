@@ -950,6 +950,41 @@ void main(
     r2.xyz *= lerp(float3(1,1,1), float3(1.07, 0.985, 0.93), saturate(P11.y));
     // oclusion de la piel con tinte rojizo (la luz rebota dentro del tejido en los pliegues)
     occRGB = lerp(r0.xxx, pow(max(r0.x, 1e-4), float3(0.72, 1.0, 1.08)), saturate(P11.z));
+    // (10/11) SSS real, parte 2: la OCLUSION tambien se difunde bajo la piel. Agustin: "todas las luces deberian afectar al sss".
+    // La luz del cielo, del estadio y del rebote (SSGI) entra a la piel recortada por la oclusion (pliegue de la nariz, comisura,
+    // parpado, cuello): esa luz ya recortada tambien viaja bajo la piel, el rojo unos 3 mm y el azul menos de 1 mm. Antes la
+    // oclusion se aplicaba despues de la dispersion, con el borde gris y duro y un tinte fijo. Aca se difunde con el mismo perfil
+    // de Burley que la luz directa (x95 = ancho), con la distancia real en mm entre los puntos y solo entre piel. z11 = cuanto
+    if (IniParams.Load(int2(95,0)).w > 0.5 && P11.z > 0.0 && !mouthM) {
+      float zo = PESLinZ(uvC), zoA = abs(zo);
+      float mmPx = 2000.0 * abs(g_psScene.m_projectionParam.x) * zoA * g_psSystem.m_renderBuffer.z;   // mm por pixel
+      float3 dmm = float3(1.5, 0.75, 0.40) * max(IniParams.Load(int2(95,0)).x, 0.3);
+      float nearK = saturate((dmm.r * 3.0 / max(mmPx, 1e-6) - 1.5) / 3.0);
+      if (zoA > 0.1 && nearK > 0.0) {
+        float4 GTo = IniParams.Load(int2(132,0));
+        uint goW = 0, goH = 0; PESGtao.GetDimensions(goW, goH);
+        bool gOn = GTo.x > 0.5 && goW > 0;
+        static const float kR[8] = { 0.25, 0.60, 1.00, 1.50, 2.10, 2.90, 3.90, 5.50 };   // radios en unidades del alcance del rojo
+        static const float kW[8] = { 0.30, 0.35, 0.45, 0.55, 0.70, 0.90, 1.30, 2.00 };   // ancho del anillo de cada muestra
+        float3 ws = 0.2 * dmm.r / dmm;          // centro: el disco de radio 0.1 (2 / d por unidad de radio)
+        float3 acc = r0.xxx * ws;
+        float rot = 6.2831853 * frac(52.9829189 * frac(dot(v0.xy, float2(0.06711056, 0.00583715))));
+        [loop] for (int oi = 0; oi < 8; oi++) {
+          float rmm = kR[oi] * dmm.r;
+          float ang = oi * 2.39996323 + rot;
+          float2 uvS = uvC + float2(cos(ang), sin(ang)) * (rmm / max(mmPx, 1e-6)) * g_psSystem.m_renderBuffer.zw;
+          if (any(uvS < 0.0) || any(uvS > 1.0)) continue;
+          if (abs(inGBufferMaterial.SampleLevel(g_samplerPoint_Clamp_s, uvS, 0).z - 0.98039) >= 0.003) continue;   // solo piel
+          float dzmm = (PESLinZ(uvS) - zo) * 1000.0;
+          float r3 = sqrt(rmm * rmm + dzmm * dzmm);
+          float3 w = (exp(-r3 / dmm) + exp(-r3 / (3.0 * dmm))) / dmm * (kW[oi] * dmm.r) * (rmm / max(r3, 1e-4));
+          float aS = inOcclusion.SampleLevel(g_samplerLinear_Clamp_s, uvS, 0).x;
+          if (gOn) aS = lerp(aS, min(aS * 0.35 + 0.65, PESGtao.SampleLevel(g_samplerLinear_Clamp_s, uvS, 0).x), saturate(GTo.y));
+          acc += w * aS; ws += w;
+        }
+        occRGB = lerp(occRGB, acc / max(ws, 1e-6), saturate(P11.z) * nearK);
+      }
+    }
   }
   { // PES21 ojos (20/10): blanco del ojo neutro. La esclerotica es casi blanca y copia el color de la luz difusa del estadio
     // (verdosa por el rebote del cesped): en los primeros planos salia amarillo-verdosa. El shader del ojo marca el pixel con

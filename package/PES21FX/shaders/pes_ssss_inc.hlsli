@@ -42,6 +42,14 @@ bool PesMouthAt(float2 px, uint mw, uint mh) {
   float mz = inMouth.Load(int3(p, 0)), dz = inDepth.Load(int3(p, 0)).x;
   return mz > 0.0 && abs(mz - dz) <= 1e-6 + 2e-4 * abs(dz);
 }
+// (10/11, Agustin: "no me gusta como detecta a la piel") PIEL DE VERDAD, no solo la marca del G-buffer: la marca 250/255 la llevan
+// tambien la barba, el bigote, las cejas y el nacimiento del pelo pintados en la textura de la cara. El PS de la cara pone la
+// translucidez (6 bits de la normal .z) en 0 donde la textura es pelo (fhMask) y la piel mas gruesa nunca baja de ~0.10:
+// 0 = pelo sobre la piel (no difunde ni presta luz: la barba no se lava ni mancha la mejilla), 1 = piel
+float PesSkinK(float2 uv) {
+  uint q = (uint)(inNrm.SampleLevel(sPoint, uv, 0).z * 1023.0 + 0.5);
+  return smoothstep(0.5 / 63.0, 3.5 / 63.0, (float)(q >> 4) / 63.0);
+}
 float BurleyF(float x) { return exp(-x) + exp(-x / 3.0); }
 
 #ifdef SSSS_REF
@@ -290,7 +298,7 @@ void PesOneLightMatch(float3 L, float3 col, float sh, float3 n, float3 V, float 
   float3 w = saturate(trans) * wd * float3(1.0, 0.6, 0.45);
   { float4 Q62 = IniParams.Load(int2(62, 0)); if (Q62.x > 0.5 && Q62.w > 0.0) w *= lerp(1.0, 0.45 + 1.4 * g_skCurv, saturate(Q62.w)); }
   w = min(w * 0.12, float3(0.22, 0.11, 0.07));
-  if (uni) { float rPx = 0.006 * max(P95.x, 0.3) / max(g_skMpp, 1e-6); w *= 1.0 - 0.45 * saturate((rPx - 1.0) / 5.0); }
+  if (uni) { float rPx = 0.006 * max(P95.x, 0.3) / max(g_skMpp, 1e-6); w *= 1.0 - 0.85 * saturate((rPx - 1.0) / 5.0); }
   float3 d = saturate(PesMtSoftTerm(rawNL, w));
   float shT = lerp(1.0, sh, smoothstep(0.02, 0.12, rawNL));   // la sombra trazada solo existe con N.L > 0.02: sin escalon
   dif += col * d * shT;
@@ -560,7 +568,7 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   float wetK = saturate(IniParams.Load(int2(392, 0)).y);
   bool wetSkin = false;
   { uint wW = 0, wH = 0; inMouth.GetDimensions(wW, wH);
-    bool wMouth = wW > 0 && inMouth.Load(int3(min((uint2)pos.xy, uint2(wW - 1, wH - 1)), 0)) > 0.0;
+    bool wMouth = PesMouthAt(pos.xy, wW, wH);   // (10/11) solo la boca VISIBLE (la mascara guarda profundidad): con '> 0' entraba toda la silueta de la malla de la boca tapada por la piel = el recuadro
     if (wMouth) wetK = 0.0; }
   if (wetK > 0.0) { wetSkin = IsSkin(uv); rough = lerp(rough, wetSkin ? 0.12 : max(rough * 0.6, 0.15), wetK * (wetSkin ? 1.0 : 0.5)); }
   uint tq = (uint)(inNrm.SampleLevel(sPoint, uv, 0).z * 1023.0 + 0.5);
@@ -709,7 +717,7 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
       float skyAO = saturate(1.0 - 0.85 * aoS / 8.0);
       skyAO *= skyAO;
       { uint qW = 0, qH = 0; inMouth.GetDimensions(qW, qH);   // boca intacta: interior y cavidad sin oclusion nueva
-        if (legacy || (qW > 0 && inMouth.Load(int3(min((uint2)pos.xy, uint2(qW - 1, qH - 1)), 0)) > 0.0)) skyAO = 1.0; }
+        if (legacy || PesMouthAt(pos.xy, qW, qH)) skyAO = 1.0; }   // (10/11) solo la boca visible (ver wMouth)
       dif += (skyC * up + gndC * (1.0 - up)) * skyAO;
     }
     // (07/11 c) reflector: una pared / pantalla del lado opuesto a la luz, baja, que devuelve parte de la luz sin sombra (como el
@@ -757,7 +765,7 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
     uint mW = 0, mH = 0; inMouth.GetDimensions(mW, mH);
     // cualquier valor de la mascara cuenta (> 0): sirve con la mascara 0/1 de antes y con la de profundidad del hilo de la boca
     // (0dlnmc f151b82); donde la cara tapa la boca tambien se deja como antes (de mas, nunca de menos)
-    if (mW > 0 && inMouth.Load(int3(min((uint2)pos.xy, uint2(mW - 1, mH - 1)), 0)) > 0.0) mouthPx = true;
+    if (PesMouthAt(pos.xy, mW, mH)) mouthPx = true;   // (10/11) RECUADRO DE LA BOCA: con '> 0' la piel que tapa la malla de la boca quedaba sin el factor de la luz (mas clara, con la forma de la malla); ahora solo la boca visible
     if (!mouthPx) { float wrapK = saturate(dot(n, L) * 0.5 + 0.5); keepC *= lerp(0.45, 1.0, wrapK * wrapK); }
   }
   o.c = float4(c0 * keepC + dif + vol, 1);
@@ -777,87 +785,6 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   return o;
 }
 #else
-// ===================================================================================================================
-// Pasada 2: disco de Burley
-float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
-  float4 P = IniParams.Load(int2(95,0));
-  float3 c0 = inLight.SampleLevel(sPoint, uv, 0).xyz;
-  if (P.w < 0.5 || !IsSkin(uv)) return float4(c0, 1);
-  // (09/11, captura 1744 de Agustin: borde rosado y blanco delante del labio de abajo) la boca (lengua, encias: marca de piel) entraba
-  // al disco y su luz se corria a los labios, y la de los labios a la boca. Donde la mascara (con profundidad) dice boca: ni se
-  // difumina ni da muestras. La boca queda como sin SSSS.
-  uint mmW2 = 0, mmH2 = 0; inMouth.GetDimensions(mmW2, mmH2);
-  if (PesMouthAt(pos.xy, mmW2, mmH2)) return float4(c0, 1);
-  float z0 = LinZ(uv);
-  // (08/11 SSSS) tamano de un pixel en uv desde el tamano real de la textura: ddx/ddy despues del 'return' de arriba (pixeles que no
-  // son piel en el mismo cuadrito de 2x2: pestanas, cejas, borde de la cara) es indefinido y cambiaba el ancho del disco al mover la camara
-  float2 rb; { uint lw, lh; inLight.GetDimensions(lw, lh); rb = 1.0 / float2(max(lw, 1u), max(lh, 1u)); }
-  float pxm = 1.0 / max(2.0 * abs(m_projectionParam.x) * z0 * m_renderBuffer.z, 1e-5);   // pixeles por metro (como la composicion)
-  // diagnostico: x95 >= 2.95 pinta la piel: verde = pasa por aca, con el ancho en pixeles como brillo
-  if (P.x >= 2.95) return float4(0, saturate(6.0 * 0.001 * pxm / 40.0), 0, 1);
-  float widthScale = (P.x > 0 ? P.x : 1.0);
-  // trm (translucidez del juego, 6 bits en el G-buffer): lo fino (orejas, aletas, labios) difunde algo mas ancho, lo grueso algo menos
-  float4 P2 = IniParams.Load(int2(100,0));
-  uint tq = (uint)(inNrm.SampleLevel(sPoint, uv, 0).z * 1023.0 + 0.5);
-  float thinK = smoothstep(0.08, 0.70, (float)(tq >> 4) / 63.0);
-  widthScale *= lerp(1.0, lerp(0.85, 1.2, thinK), saturate(P2.y));
-  // perfil por tono de piel (melanina del albedo): en piel clara el rojo viaja ~2.5 veces mas que el verde (penumbra rojiza);
-  // con mas melanina la epidermis absorbe y el rojo viaja menos (penumbra marron calida, no roja). Distancias d en mm.
-  float alb0L = dot(inAlb.SampleLevel(sPoint, uv, 0).xyz, float3(0.2126, 0.7152, 0.0722));
-  float mel = (alb0L > 0.004) ? saturate(log2(0.47 / max(alb0L, 1e-3)) / 2.85) : 0.0;
-  // (09/11 f) rojo 1.0 -> 1.5 mm (verde / azul igual): la entrada ya es irradiancia (sin textura) y el azul / verde no cambian:
-  // el rojo viaja mas (medido en piel: rojo ~2.6 veces el verde) sin lavar poros; es el que hace el borde de sombra rojizo y blando de la piel real
-  // (09/11 h, Agustin: "el sss no funciona solo como un colorado en texturas") la luz se mueve bajo la piel en los TRES canales:
-  // antes el verde (0.42 mm) y el azul (0.26) casi no viajaban y el SSS se leia solo como un tinte rojo en el borde de la sombra.
-  // Proporcion de la piel medida (Jensen 2001: rojo 3.67, verde 1.37, azul 0.68 mm de camino libre): el verde llega a la mitad del
-  // rojo y el azul a un cuarto, asi la luz ablanda de verdad el sombreado (el terminador se corre hacia la sombra, las arrugas y los
-  // poros del relieve se iluminan desde adentro) y el rojo queda solo como lo que mas lejos llega
-  float3 dmm = float3(lerp(1.5, 0.85, mel), lerp(0.75, 0.50, mel), lerp(0.40, 0.30, mel)) * widthScale;
-  float mmToPx = 0.001 * pxm;
-  if (dmm.r * 3.0 * mmToPx < 0.6) return float4(c0, 1);   // de lejos lo resuelve la piel pre-integrada de la pasada de luz
-  // (08/11 SSSS) entre 0.6 y 1.6 px el disco entra de a poco: antes se prendia de golpe y la cara cambiaba al acercar / alejar la camara
-  float nearK = smoothstep(0.6, 1.6, dmm.r * 3.0 * mmToPx);
-  // plano de la superficie: pendiente de la profundidad por pixel (del lado mas suave, para no tomar un borde)
-  // (08/11 SSSS) un vecino que no es piel (pestana, ceja, pelo) no da la pendiente: en los cuencos de los ojos la tomaba de la pestana
-  float2 uxp = uv + float2(rb.x, 0), uxn = uv - float2(rb.x, 0), uyp = uv + float2(0, rb.y), uyn = uv - float2(0, rb.y);
-  float zxp = LinZ(uxp) - z0, zxn = z0 - LinZ(uxn);
-  float zyp = LinZ(uyp) - z0, zyn = z0 - LinZ(uyn);
-  if (!IsSkin(uxp)) zxp = 1e6; if (!IsSkin(uxn)) zxn = 1e6; if (!IsSkin(uyp)) zyp = 1e6; if (!IsSkin(uyn)) zyn = 1e6;
-  float2 slope = float2(abs(zxp) < abs(zxn) ? zxp : zxn, abs(zyp) < abs(zyn) ? zyp : zyn);
-  slope = (abs(slope) > 1e5) ? 0.0 : slope;
-  float tolK = P.z > 0.0 ? P.z : 1.0;
-  // rotacion por pixel y por cuadro (ruido de gradiente intercalado, Jimenez 2014)
-  // (27/10 g) 24 muestras (antes 16) y el giro por cuadro solo si x331 > 0.5 (sin TAA el giro por cuadro era grano que titila)
-  float rot = 6.2831853 * frac(52.9829189 * frac(dot(pos.xy, float2(0.06711056, 0.00583715))) + (IniParams.Load(int2(331, 0)).x > 0.5 ? frac(m_timeParam.z * 7.31) : 0.0));
-  float3 acc = 0, wsum = 0;
-  [unroll] for (int i = 0; i < 24; i++) {
-    bool redSet = (i % 3) != 2;   // dos de cada tres muestras con el radio del rojo (el que mas lejos llega)
-    float rmm = kBurleyX[i / 3] * (redSet ? dmm.r : dmm.g);
-    float a = rot + i * 2.3999632;                       // angulo aureo: las 16 muestras no se alinean
-    float2 off = float2(cos(a), sin(a)) * (rmm * mmToPx);   // en pixeles
-    float2 uvS = uv + off * rb;
-    if (!IsSkin(uvS)) continue;
-    if (PesMouthAt(uvS / rb, mmW2, mmH2)) continue;   // (09/11) la boca no da muestras a la piel
-    float zS = LinZ(uvS);
-    float dzmm = abs(zS - (z0 + dot(slope, off))) * 1000.0;
-    float tol = max(1.0, 0.5 * rmm) / tolK;               // la superficie puede curvarse mas lejos del centro
-    float depthW = exp(-(dzmm * dzmm) / (tol * tol));
-    // peso de cada canal = perfil / pdf de la mezcla (rojo + verde, mitad y mitad): el 1/r de los dos se cancela
-    float pdf = 0.667 * BurleyF(rmm / dmm.r) / dmm.r + 0.333 * BurleyF(rmm / dmm.g) / dmm.g;
-    float3 w = float3(BurleyF(rmm / dmm.r) / dmm.r, BurleyF(rmm / dmm.g) / dmm.g, BurleyF(rmm / dmm.b) / dmm.b) / max(pdf, 1e-6);
-    w *= depthW;
-    acc += w * inLight.SampleLevel(sPoint, uvS, 0).xyz;   // (27/10 i) muestra puntual: con la bilineal, en el borde de la cara entraba el fondo claro de al lado (contorno de pixeles brillantes)
-    wsum += w;
-  }
-  // el pixel central entra con el peso de una muestra media: sin vecinos validos (borde) queda como estaba
-  acc += c0; wsum += 1.0;
-  float3 blurred = acc / wsum;
-  // (09/11, Agustin: "el sss puede ser mejor", con el ancho de vuelta en 1.41) la mezcla con la luz sin difundir era la misma en
-  // los tres canales: con fuerza 0.73 el rojo conservaba un 27 % de borde duro (penumbra sin el tono rojo de la piel real) y el
-  // azul se difundia igual que el rojo (poros y arrugas lavados). Ahora la fuerza va por canal como la dispersion real: el rojo
-  // casi entero (y95^0.5: borde de sombra rojizo y suave), el verde como el slider y el azul menos (y95^1.5: detalle fino)
-  float sK = saturate(P.y);
-  float3 mixK = float3(sqrt(sK), sqrt(sK), sK) * nearK;   // (09/11 h) el verde difunde como el rojo (es el que da el brillo de la piel)
-  return float4(lerp(c0, blurred, mixK), 1);
-}
+// (10/11) Pasada 2: SSS real, version nueva (pes_sss_real.hlsli). El disco de antes (plano + tolerancia de profundidad) se fue.
+#include "pes_sss_real.hlsli"
 #endif

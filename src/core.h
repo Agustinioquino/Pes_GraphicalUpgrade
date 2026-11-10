@@ -189,6 +189,12 @@ struct Config {
     bool lightTrace = false;                  // (27/10) [PES21FX] luz_rastrear: pila de quien llena el cbuffer de la luz del sol (hooks.cpp)
     bool meterOn = true;                      // (07/11) [PES21FX] medidor: VRAM por dueno y ms de GPU por efecto (gpumeter.cpp)
     int panelPort = 21021;                    // (08/11) [PES21FX] panel_puerto: servidor local del panel en vivo (panel.cpp), 0 = apagado
+    bool solEditorDll = true;                 // (10/11) [PES21FX] sol_editor_dll: sol real creado por la DLL en la escena del editor
+    bool solEditorSombra = false;             // (10/11) [PES21FX] sol_editor_sombra: el sol de la DLL proyecta sombra (0 = no; los focos ya la dan)
+    bool solEditorExpoAuto = true;            // (10/11) [PES21FX] sol_editor_expo_auto: exposicion automatica en la escena de estudio
+    float solEditorExpoMin = -9.1f;           // (10/11) [PES21FX] sol_editor_expo_min / _max: limites (EV) de la adaptacion; el archivo
+    float solEditorExpoMax = -5.1f;           //   trae fija -7.1 (min = max = 0 + compensacion -7.1); estadios -14..-7 / -13..-9 con sol 150000 lux
+    int solEditorDirSigno = -1;               // (10/11) [PES21FX] sol_editor_dir_signo: -1 = la fuente recibe la direccion de viaje
     bool solEditorLog = true;                 // (09/11) [PES21FX] sol_editor_log: log del sol real del editor (soleditor.cpp)
     bool sunWatch = false;                    // (26/10) [PES21FX] sol_vigilar: quien escribe el sol de las repeticiones (sunwatch.cpp)
 };
@@ -403,6 +409,10 @@ bool SolEditorSet(const float dirHaciaSol[3], const float rgb[3], float kelvin, 
 // (09/11 c) hora del motor y atmosfera (TimeOfDaySettings del EditFace con TppAtmosphere del estadio):
 void SolEditorSetHora(float horas);   // 0..24 (minuto entero); pone overrideDateTime; la atmosfera mueve sol, luna y cielo
 void SolEditorHoraLibre();            // vuelve a la hora del archivo
+// (10/11) exposicion automatica de la escena de estudio (cualquier TimeOfDaySettings de estudio: Apariencia = Default, Editar
+// jugador = EditFace): on = adaptacion del motor entre minEV y maxEV (compensacion comp, arranque initEV); off = la fija del archivo.
+// Si SolEditorAtmo(true) esta activa manda la exposicion del estadio de la atmosfera.
+void SolEditorExposicion(bool on, float comp, float minEV, float maxEV, float initEV);
 bool SolEditorAtmo(bool on);          // on: sunLux 150000 / moonLux 1 / cielo 1 + exposicion del estadio -14..-7; off: luz 0 y
                                       // exposicion fija del archivo (-7.1, luz de estudio). false = no hay TimeOfDaySettings del editor
 void CamHookPresent();                            // ganchos (primer Present), 160 = cuadros desde el corte / cortes / TAA / ok

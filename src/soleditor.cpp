@@ -101,9 +101,13 @@ static uintptr_t __fastcall hk_deact(void* b, uintptr_t a, uintptr_t c, uintptr_
     return o_deact(b, a, c, d);
 }
 static void NoteCreated(void* b, const char* via);
+static void DllSunOnSpot(void* body);
+static void DllSunFrame();
 static uintptr_t __fastcall hk_spotInit(void* b, uintptr_t a, uintptr_t c, uintptr_t d) {
     s_spots++;
-    return o_spotInit(b, a, c, d);
+    uintptr_t r = o_spotInit(b, a, c, d);
+    DllSunOnSpot(b);
+    return r;
 }
 static uintptr_t __fastcall hk_init(void* b, uintptr_t a, uintptr_t c, uintptr_t d) {
     uintptr_t r = o_init(b, a, c, d);
@@ -138,6 +142,7 @@ static uintptr_t __fastcall hk_apply15(void* b, uintptr_t a, uintptr_t c, uintpt
 }
 static uintptr_t __fastcall hk_sun(void* self, uintptr_t a, uintptr_t c, uintptr_t d) {
     s_sunCalls++;
+    DllSunFrame();
     return o_sun(self, a, c, d);
 }
 static uintptr_t __fastcall hk_shadow(void* self, uintptr_t a, uintptr_t c, uintptr_t d) {
@@ -183,6 +188,13 @@ static std::atomic<int> s_todsApplied{0}, s_todsSeen{0};
 static unsigned char s_studio[0x60]; static bool s_hasStudio = false;   // +0x130..+0x18f del archivo (luz de estudio)
 struct TodReq { bool atmo; int h, m; bool hora; };
 static TodReq s_treq{false, 16, 0, false}, s_tdone{false, -1, -1, false}; static bool s_tdirty = false;
+// (10/11) exposicion automatica: cualquier TimeOfDaySettings de estudio (firma del archivo: overrideGameExposure, compensacion -7.1,
+// min = max = 0; los estadios traen -13/-14..-9/-7 y no entran), no solo la marcada del EditFace con atmosfera
+static std::atomic<void*> s_todsLive{nullptr};
+static unsigned char s_liveExpo[0x38]; static bool s_hasLiveExpo = false;   // +0x158..+0x18f del archivo (game + demo)
+struct ExpoReq { bool on; float comp, mn, mx, init; };
+static ExpoReq s_ereq{false, 0, 0, 0, 0}, s_edone{false, 1, 1, 1, 1}; static void* s_edoneFor = nullptr; static bool s_einit = false;
+static std::atomic<int> s_expoApplied{0};
 
 static bool TodsBodyValid(void* b) {
     if (!b || !Readable(b, 0x90)) return false;
@@ -200,9 +212,27 @@ static bool IsEditorTods(char* e) {
         return expo && marca;
     } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
+static bool IsStudioTods(char* e) {   // sin objetos C++
+    if (!e || !Readable(e + 0x158, 0x38)) return false;
+    __try {
+        return *(unsigned char*)(e + 0x158) && fabsf(*(float*)(e + 0x15c) + 7.1f) < 0.01f && *(float*)(e + 0x160) == 0.0f && *(float*)(e + 0x164) == 0.0f;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+static bool CopyExpo(void* dst, const void* src) {   // sin objetos C++
+    __try { memcpy(dst, src, 0x38); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+static void NoteLiveTods(void* b, char* e) {
+    if (s_todsLive.load() == b || !IsStudioTods(e)) return;
+    if (!CopyExpo(s_liveExpo, e + 0x158)) return;
+    s_hasLiveExpo = true;
+    s_todsLive.store(b);
+    { std::lock_guard<std::mutex> lk(s_mx); s_edoneFor = nullptr; }
+    if (LogOn()) Log("sol_editor: TimeOfDaySettings de estudio para la exposicion cuerpo=%p entidad=%p", b, e);
+}
 static void SnapStudio(char* e) { __try { memcpy(s_studio, e + 0x130, sizeof s_studio); s_hasStudio = true; } __except (EXCEPTION_EXECUTE_HANDLER) {} }
 static void NoteTods(void* b, const char* via) {
     s_todsSeen.fetch_add(1);
+    if (s_todsLive.load() != b) { char* le = EntityOf(b); if (le) NoteLiveTods(b, le); }
     if (s_tods.load() == b) return;
     char* e = EntityOf(b);
     if (!IsEditorTods(e)) {
@@ -221,8 +251,13 @@ static void NoteTods(void* b, const char* via) {
     if (LogOn()) Log("sol_editor: TimeOfDaySettings del editor cuerpo=%p entidad=%p (%s) hora archivo %u:%02u", b, e, via,
                      *(unsigned*)(e + 0x134), *(unsigned*)(e + 0x138));
 }
-static uintptr_t __fastcall hk_tDtor(void* b, uintptr_t a, uintptr_t c, uintptr_t d) { void* x = b; s_tods.compare_exchange_strong(x, nullptr); return o_tDtor(b, a, c, d); }
-static uintptr_t __fastcall hk_tDeact(void* b, uintptr_t a, uintptr_t c, uintptr_t d) { void* x = b; s_tods.compare_exchange_strong(x, nullptr); return o_tDeact(b, a, c, d); }
+// al irse la escena se devuelve la exposicion del archivo a la entidad (si se reactiva, vuelve a tener la firma de estudio)
+static void DropLive(void* b) {
+    void* x = b;
+    if (s_todsLive.compare_exchange_strong(x, nullptr) && s_hasLiveExpo) { char* e = EntityOf(b); if (e) CopyExpo(e + 0x158, s_liveExpo); }
+}
+static uintptr_t __fastcall hk_tDtor(void* b, uintptr_t a, uintptr_t c, uintptr_t d) { void* x = b; s_tods.compare_exchange_strong(x, nullptr); DropLive(b); return o_tDtor(b, a, c, d); }
+static uintptr_t __fastcall hk_tDeact(void* b, uintptr_t a, uintptr_t c, uintptr_t d) { void* x = b; s_tods.compare_exchange_strong(x, nullptr); DropLive(b); return o_tDeact(b, a, c, d); }
 static uintptr_t __fastcall hk_tAct(void* b, uintptr_t a, uintptr_t c, uintptr_t d) { uintptr_t r = o_tAct(b, a, c, d); NoteTods(b, "activar"); return r; }
 static uintptr_t __fastcall hk_tReact(void* b, uintptr_t a, uintptr_t c, uintptr_t d) { uintptr_t r = o_tReact(b, a, c, d); NoteTods(b, "reactivar"); return r; }
 
@@ -277,9 +312,57 @@ static void TodsPresent() {
     char* e = EntityOf(b);
     if (!e) return;
     WriteTods(e, q);
+    if (b == s_todsLive.load()) { std::lock_guard<std::mutex> lk(s_mx); s_edoneFor = nullptr; }   // WriteTods repone la exposicion del archivo
     bool ok = PushTods(e);
     if (s_todsApplied.fetch_add(1) == 0 && LogOn())
         Log("sol_editor: TimeOfDaySettings aplicada (%s): atmosfera %d hora %d %d:%02d (hilo %lu)", ok ? "ok" : "FALLO", q.atmo, q.hora, q.h, q.m, GetCurrentThreadId());
+}
+
+static void WriteExpo(char* e, const ExpoReq& r) {   // sin objetos C++
+    __try {
+        if (!r.on) { if (s_hasLiveExpo) memcpy(e + 0x158, s_liveExpo, sizeof s_liveExpo); return; }
+        for (int k = 0; k < 2; k++) {   // game (+0x158) y demo (+0x174): comp, min, max, key, maxLum, inicial
+            char* x = e + (k ? 0x174 : 0x158);
+            *(unsigned char*)x = 1; *(float*)(x + 4) = r.comp; *(float*)(x + 8) = r.mn; *(float*)(x + 0xc) = r.mx;
+            *(float*)(x + 0x10) = 0.18f; *(float*)(x + 0x14) = 32.0f; *(float*)(x + 0x18) = r.init;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+static void ExpoPresent() {
+    if (!s_todsOk) return;
+    static double s_last = 0;
+    double t = Now();
+    if (t - s_last < 1.0 / 30.0) return;
+    void* b = s_todsLive.load();
+    if (!TodsBodyValid(b)) return;
+    ExpoReq r;
+    {
+        std::lock_guard<std::mutex> lk(s_mx);
+        if (!s_einit) {   // valor del ini hasta que alguien llame a SolEditorExposicion
+            s_einit = true;
+            if (g_cfg.solEditorExpoAuto) s_ereq = ExpoReq{ true, 0.0f, g_cfg.solEditorExpoMin, g_cfg.solEditorExpoMax, -7.1f };
+        }
+        if (s_treq.atmo && b == s_tods.load()) return;   // con atmosfera manda la exposicion del estadio (WriteTods)
+        r = s_ereq;
+        if (s_edoneFor == b && memcmp(&r, &s_edone, sizeof r) == 0) return;
+        if (s_edoneFor != b && !r.on) { s_edoneFor = b; s_edone = r; return; }   // escena nueva sin pedido: queda la del archivo
+        s_edone = r; s_edoneFor = b;
+    }
+    s_last = t;
+    char* e = EntityOf(b);
+    if (!e) return;
+    WriteExpo(e, r);
+    bool ok = PushTods(e);
+    if (s_expoApplied.fetch_add(1) < 4 && LogOn())
+        Log("sol_editor: exposicion del estudio (%s): %s comp %.2f [%.1f %.1f] inicial %.1f (cuerpo %p)", ok ? "ok" : "FALLO",
+            r.on ? "automatica" : "fija del archivo", r.comp, r.mn, r.mx, r.init, b);
+}
+void SolEditorExposicion(bool on, float comp, float minEV, float maxEV, float initEV) {
+    if (!std::isfinite(comp) || !std::isfinite(minEV) || !std::isfinite(maxEV) || !std::isfinite(initEV)) return;
+    if (minEV > maxEV) { float t = minEV; minEV = maxEV; maxEV = t; }
+    std::lock_guard<std::mutex> lk(s_mx);
+    s_einit = true;
+    s_ereq = on ? ExpoReq{ true, comp, minEV, maxEV, initEV } : ExpoReq{ false, 0, 0, 0, 0 };
 }
 
 void SolEditorSetHora(float horas) {
@@ -294,9 +377,150 @@ void SolEditorHoraLibre() {
     std::lock_guard<std::mutex> lk(s_mx);
     if (s_treq.hora) { s_treq.hora = false; s_tdirty = true; }
 }
+// (10/11) cantidad de atmosferas vivas del gestor *0x1437d59e8 (+0xd8). Sin atmosfera no se prende la exposicion del estadio:
+// sin sol real el jugador quedaria negro (-14 EV con focos de ~1000 lux)
+static int AtmoCount() {
+    __try {
+        char* m = *(char* volatile*)0x1437d59e8ull;
+        if (!m || !Readable(m + 0xd8, 4)) return 0;
+        int n = *(int volatile*)(m + 0xd8);
+        return (n > 0 && n < 64) ? n : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
 bool SolEditorAtmo(bool on) {
+    const bool ok = TodsBodyValid(s_tods.load()) && AtmoCount() > 0;
+    if (on && !ok) on = false;
     { std::lock_guard<std::mutex> lk(s_mx); if (s_treq.atmo != on) { s_treq.atmo = on; s_tdirty = true; } }
-    return TodsBodyValid(s_tods.load());
+    static bool s_warned = false;
+    if (!ok && !s_warned && LogOn() && s_tods.load()) { s_warned = true; Log("sol_editor: TimeOfDaySettings marcada pero 0 atmosferas vivas: no se prende la atmosfera"); }
+    return ok;
+}
+
+// ---- (10/11) sol creado por la DLL dentro de la escena de estudio ------------------------------------------------------------
+// El editor no carga una escena de luz con una DirectionalLight agregada (10/11: Apariencia = Default.fox2 con zfx_SolEditor no
+// carga nada; solo GrShadowSettings si). Entonces la DLL hace lo mismo que el cuerpo de la DirectionalLight (FUN_141815620) pero
+// sin entidad: al iniciarse el primer foco de una escena (SpotLightBody[6], hilo del motor) toma la escena de ese foco igual que el
+// motor (FUN_1402ba010 -> nombre +0x10 -> FUN_141692630), crea una fox::gr::DirectionalLightSource (FUN_14169ee20), la deja
+// apagada (FUN_14169fa50 1, FUN_14169f440 0) y la agrega a la escena (FUN_1416927c0, como los focos). SolEditorSet se aplica en
+// PluginSunlight::vf8 (cada cuadro, hilo de render): direccion FUN_14169f3c0, color FUN_141693630(K, 0, rgb, lux) ->
+// FUN_14169f2e0, encendido FUN_14169f440, sombra FUN_14169f7f0 + cascadas FUN_14169f270.
+// Vida: se cuentan los focos de cada escena (SpotLightBody[1] dtor 0x141812280); con 0 focos la escena se da por muerta y su fuente
+// no se vuelve a tocar (no se libera nuestra referencia: 0xa0 bytes por visita, para no dejar a la escena con un puntero libre).
+// Direccion: el global del sol del partido vale (0,-1,0) sin atmosfera = direccion de VIAJE de la luz (sol arriba alumbra hacia
+// abajo), asi que se pasa -dirHaciaSol (sol_editor_dir_signo = -1; 1 la invierte).
+typedef void* (__fastcall* FnMkSrc)(void** out);
+typedef void (__fastcall* FnSrcB)(void* src, char on);
+typedef void (__fastcall* FnSrcV)(void* src, const float* v);
+typedef float* (__fastcall* FnMkCol)(float* out, float kelvin, float deflection, const float* rgb, float lux);
+typedef void (__fastcall* FnAddSrc)(void* scene, void* src);
+typedef void* (__fastcall* FnBodyName)(void* body, void** out);
+typedef void* (__fastcall* FnFindScene)(uintptr_t* key);
+typedef void (__fastcall* FnRelName)(void** h);
+static Fn4 o_spotDtor = nullptr;
+struct DllSun { void* scene; void* src; int spots; bool dead; };
+static DllSun s_dsun[8]; static int s_ndsun = 0;
+struct SpotRec { void* body; int idx; };
+static SpotRec s_spotRec[256]; static int s_nspot = 0;
+static std::mutex s_dmx;
+static Pending s_dpend{}; static std::atomic<unsigned> s_dver{0}; static unsigned s_dapplied = 0;
+static std::atomic<int> s_dcreated{0}, s_dapplies{0};
+
+static void* SceneOfBody(void* body) {   // sin objetos C++
+    __try {
+        void* h = nullptr;
+        ((FnBodyName)0x1402ba010ull)(body, &h);
+        void* sc = nullptr;
+        if (h) { uintptr_t key = *(uintptr_t*)((char*)h + 0x10); sc = ((FnFindScene)0x141692630ull)(&key); }
+        ((FnRelName)0x1403d2420ull)(&h);
+        return sc;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+static void* MakeSunIn(void* scene) {   // sin objetos C++
+    __try {
+        void* src = nullptr;
+        ((FnMkSrc)0x14169ee20ull)(&src);
+        if (!src) return nullptr;
+        ((FnSrcB)0x14169fa50ull)(src, 1);
+        ((FnSrcB)0x14169f440ull)(src, 0);        // apagada hasta SolEditorSet(on)
+        ((FnSrcB)0x14169f7f0ull)(src, g_cfg.solEditorSombra ? 1 : 0);   // sombra solo si se pide (TDR 10/11 al cargar jugador)
+        ((FnSrcB)0x14169f270ull)(src, 1);        // mezcla de cascadas
+        ((FnAddSrc)0x1416927c0ull)(scene, src);
+        return src;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+static bool ApplySun(void* src, const Pending& p, float signo) {   // sin objetos C++
+    __try {
+        float d[4] = { p.dir[0] * signo, p.dir[1] * signo, p.dir[2] * signo, 0.0f };
+        float rgb[4] = { p.rgb[0], p.rgb[1], p.rgb[2], 1.0f }, col[4] = {};
+        ((FnSrcV)0x14169f3c0ull)(src, d);
+        ((FnMkCol)0x141693630ull)(col, p.kelvin, 0.0f, rgb, p.lux);
+        ((FnSrcV)0x14169f2e0ull)(src, col);
+        ((FnSrcB)0x14169f440ull)(src, p.on ? 1 : 0);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+// apagar una fuente nuestra como hace DirectionalLightBody::vf8 (f440 0) y sin sombra: la referencia sigue viva (no se libera),
+// asi que tocarla es seguro aunque su escena ya no exista; sin esto quedaba prendida y con sombra en la escena vieja y el
+// motor la seguia usando como luz principal (log 10/11 23:46 PC: luz_principal = fuente de la escena cerrada, luego TDR)
+static void KillSun(void* src) {   // sin objetos C++
+    __try { ((FnSrcB)0x14169f440ull)(src, 0); ((FnSrcB)0x14169f7f0ull)(src, 0); } __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+static void DllSunOnSpot(void* body) {   // SpotLightBody[6], despues del original (hilo del motor)
+    if (!g_cfg.solEditorDll) return;
+    void* sc = SceneOfBody(body);
+    if (!sc) return;
+    std::lock_guard<std::mutex> lk(s_dmx);
+    int idx = -1;
+    for (int i = 0; i < s_ndsun; i++) if (s_dsun[i].scene == sc && !s_dsun[i].dead) { idx = i; break; }
+    if (idx < 0) {
+        int slot = -1;
+        // una sola fuente viva: la de una escena anterior se apaga antes de crear la nueva
+        for (int i = 0; i < s_ndsun; i++) if (!s_dsun[i].dead && s_dsun[i].src) {
+            KillSun(s_dsun[i].src); s_dsun[i].dead = true;
+            for (int k = 0; k < s_nspot; ) if (s_spotRec[k].idx == i) s_spotRec[k] = s_spotRec[--s_nspot]; else k++;   // su slot se puede reusar
+            if (LogOn()) Log("sol_editor: sol de la DLL de la escena %p apagado (escena nueva %p)", s_dsun[i].scene, sc);
+        }
+        if (slot < 0) for (int i = 0; i < s_ndsun; i++) if (s_dsun[i].dead) { slot = i; break; }
+        if (slot < 0) { if (s_ndsun >= 8) return; slot = s_ndsun++; }
+        void* src = MakeSunIn(sc);
+        s_dsun[slot] = DllSun{ sc, src, 0, src == nullptr };
+        if (!src) return;
+        idx = slot; s_dcreated++; s_dapplied = 0;   // que la fuente nueva reciba lo ultimo pedido
+        if (LogOn()) Log("sol_editor: sol de la DLL creado en la escena %p (fuente %p, foco %p)", sc, src, body);
+    }
+    s_dsun[idx].spots++;
+    if (s_nspot < 256) s_spotRec[s_nspot++] = SpotRec{ body, idx };
+}
+static uintptr_t __fastcall hk_spotDtor(void* b, uintptr_t a, uintptr_t c, uintptr_t d) {
+    {
+        std::lock_guard<std::mutex> lk(s_dmx);
+        for (int i = 0; i < s_nspot; i++) if (s_spotRec[i].body == b) {
+            DllSun& ds = s_dsun[s_spotRec[i].idx];
+            if (--ds.spots <= 0 && !ds.dead) { ds.dead = true; if (ds.src) KillSun(ds.src); if (LogOn()) Log("sol_editor: escena %p cerrada: su sol de la DLL apagado y sin sombra", ds.scene); }
+            s_spotRec[i] = s_spotRec[--s_nspot];
+            break;
+        }
+    }
+    return o_spotDtor(b, a, c, d);
+}
+static void DllSunFrame() {   // PluginSunlight::vf8 (hilo de render, cada cuadro)
+    if (!g_cfg.solEditorDll) return;
+    unsigned v = s_dver.load();
+    std::lock_guard<std::mutex> lk(s_dmx);
+    if (v == s_dapplied) return;
+    s_dapplied = v;
+    const float signo = g_cfg.solEditorDirSigno < 0 ? -1.0f : 1.0f;
+    for (int i = 0; i < s_ndsun; i++) if (!s_dsun[i].dead && s_dsun[i].src) {
+        bool ok = ApplySun(s_dsun[i].src, s_dpend, signo);
+        if (s_dapplies.fetch_add(1) == 0 && LogOn())
+            Log("sol_editor: sol de la DLL aplicado (%s): on %d lux %.0f %.0f K dir hacia el sol (%.2f %.2f %.2f) signo %.0f",
+                ok ? "ok" : "FALLO", s_dpend.on, s_dpend.lux, s_dpend.kelvin, s_dpend.dir[0], s_dpend.dir[1], s_dpend.dir[2], signo);
+    }
+}
+static bool DllSunLive() {
+    std::lock_guard<std::mutex> lk(s_dmx);
+    for (int i = 0; i < s_ndsun; i++) if (!s_dsun[i].dead && s_dsun[i].src) return true;
+    return false;
 }
 
 static void Install() {
@@ -314,7 +538,11 @@ static void Install() {
                 && Swap(kBodyVtbl, 14, 0x14181a030ull, (void*)&hk_act, &o_act) && Swap(kBodyVtbl, 7, 0x14181a0b0ull, (void*)&hk_apply, &o_apply)
                 && Swap(kBodyVtbl, 15, 0x14181a0b0ull, (void*)&hk_apply15, &o_apply15);
     } else Log("sol_editor: la vtable de DirectionalLightBody no coincide: sin control del sol del editor");
-    if (!Swap(0x142a483e0ull, 6, 0x1418155f0ull, (void*)&hk_spotInit, &o_spotInit)) Log("sol_editor: sin contador de focos");
+    // el sol de la DLL necesita los dos ganchos del foco (iniciar + destructor): si falta uno, no se crea
+    if (Readable((void*)(0x142a483e0ull + 8), 8) && *(uintptr_t*)(0x142a483e0ull + 8) == 0x141812280ull && Readable((void*)(0x142a483e0ull + 48), 8) && *(uintptr_t*)(0x142a483e0ull + 48) == 0x1418155f0ull) {
+        Swap(0x142a483e0ull, 1, 0x141812280ull, (void*)&hk_spotDtor, &o_spotDtor);
+        if (!Swap(0x142a483e0ull, 6, 0x1418155f0ull, (void*)&hk_spotInit, &o_spotInit)) Log("sol_editor: sin contador de focos");
+    } else { g_cfg.solEditorDll = false; Log("sol_editor: vtable de SpotLightBody distinta: sin sol de la DLL"); }
     {
         struct E2 { int i; uintptr_t a; } tw[] = { {1, 0x141922ed0ull}, {7, 0x141922f90ull}, {8, 0x141923af0ull}, {14, 0x141925fa0ull} };
         bool tok = true;
@@ -329,7 +557,10 @@ static void Install() {
 
 void* SolEditorBody() {
     void* b = s_body.load();
-    return BodyValid(b) ? b : nullptr;
+    if (BodyValid(b)) return b;
+    // (10/11) sin entidad en el fox2: vale el sol que crea la DLL en la escena (solo se usa como "hay sol")
+    static char s_dllMark;
+    return DllSunLive() ? (void*)&s_dllMark : nullptr;
 }
 
 bool SolEditorSet(const float dirHaciaSol[3], const float rgb[3], float kelvin, float lux, bool on) {
@@ -343,6 +574,12 @@ bool SolEditorSet(const float dirHaciaSol[3], const float rgb[3], float kelvin, 
         // la edad volvia a 0 en cada cuadro, asi que Present nunca lo aplicaba mientras se movia (sol trabado / a los saltos)
         if (!s_hasPend || memcmp(&p, &s_pend, sizeof p) != 0) { if (!s_hasPend) s_pendT = Now(); s_pend = p; s_hasPend = true; }
     }
+    {
+        Pending p{}; for (int i = 0; i < 3; i++) { p.dir[i] = dirHaciaSol[i] / l; p.rgb[i] = rgb[i]; }
+        p.kelvin = kelvin; p.lux = (std::max)(lux, 0.0f); p.on = on;
+        std::lock_guard<std::mutex> lk(s_dmx);
+        if (memcmp(&p, &s_dpend, sizeof p) != 0) { s_dpend = p; s_dver++; }
+    }
     return SolEditorBody() != nullptr;
 }
 
@@ -350,10 +587,11 @@ void SolEditorPresent() {
     if (!s_tried) Install();
     if (!s_bodyOk && !s_plugOk && !s_todsOk) return;
     TodsPresent();
+    ExpoPresent();
     // si el motor no llama "aplicar" seguido, se llama una vez con lo pendiente (solo cuerpos validos)
     if (s_bodyOk) {
         double t0 = 0; bool pend = PendingAge(&t0);
-        void* b = SolEditorBody();
+        void* b = s_body.load(); if (!BodyValid(b)) b = nullptr;   // solo la entidad real (SolEditorBody tambien marca el sol de la DLL)
         if (pend && b && Now() - t0 > 0.03) {   // (09/11 e) 0.25 s -> 0.03 s: el sol se mueve cuadro a cuadro sin escalones
             WritePending(b);
             CallApply(b);
@@ -371,8 +609,8 @@ void SolEditorPresent() {
     ReadSunGlobal(g);
     void* b = SolEditorBody();
     if (sc != sc0 || sh != sh0 || a != a0 || b || s_tods.load())
-        Log("plugins_editor: sunlight=%.1f/s shadow=%.1f/s luz_principal=%p aplicar=%.1f/s sol_editor=%p (creados %d, forzados %d, focos iniciados %d) tods=%p (vistas %d, aplicadas %d)",
-            (sc - sc0) / dt, (sh - sh0) / dt, s_shadowLight.load(), (a - a0) / dt, b, s_created.load(), s_forced.load(), s_spots.load(),
+        Log("plugins_editor: sunlight=%.1f/s shadow=%.1f/s luz_principal=%p aplicar=%.1f/s sol_editor=%p (creados %d, forzados %d, focos iniciados %d, sol DLL creados %d aplicados %d) tods=%p (vistas %d, aplicadas %d)",
+            (sc - sc0) / dt, (sh - sh0) / dt, s_shadowLight.load(), (a - a0) / dt, b, s_created.load(), s_forced.load(), s_spots.load(), s_dcreated.load(), s_dapplies.load(),
             s_tods.load(), s_todsSeen.load(), s_todsApplied.load());
     if (g[0] != 0 || g[1] != 0 || g[2] != 0)
         Log("sol_dir_partido: DAT_1437d5700=(%.3f %.3f %.3f) partido %d", g[0], g[1], g[2], g_matchGen.load());

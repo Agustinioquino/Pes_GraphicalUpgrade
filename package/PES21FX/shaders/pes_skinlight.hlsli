@@ -43,7 +43,7 @@ float3 PesSkDiffuse(float rawNdotL, float trans, float transFloor, float zView, 
   if (uni) {
     float mpp = max(abs(zView) * abs(g_psScene.m_projectionParam.x) * 2.0 / max(g_psScene.m_viewportSize.x, 1.0), 1e-6);
     float rPx = 0.006 * max(IniParams.Load(int2(95,0)).x, 0.3) / mpp;
-    w *= 1.0 - 0.45 * saturate((rPx - 1.0) / 5.0);
+    w *= 1.0 - 0.85 * saturate((rPx - 1.0) / 5.0);
   }
   float3 d = saturate(PesSkSoftTerm(rawNdotL, w));
   return max(d, min(transFloor, 0.03).xxx);
@@ -119,4 +119,60 @@ float3 PesSkSpec(float3 specGame, float3 n, float3 V, float3 L, float roughG, fl
   r1 += D * F * nl * 0.25 * P5.y * lightC * shadow * PESSkinSharpOcc(specInt, P5.w);
   return r1;
 }
+#ifdef PES_SK_FACESHADOW   // el archivo declara pesMouthMask (t43) y g_DepthTexture antes de incluir
+// (10/11) SOMBRA FINA DE CADA FOCO SOBRE LA CARA. Agustin: "todas las luces deberian afectar al sss y las sombras faciales",
+// "asi tambien como sombras del estadio o de demas objetos". Los focos (luces de estudio del editor, focos del partido) no
+// proyectaban ninguna sombra propia sobre la piel: la nariz no sombreaba la mejilla, ni el pelo la frente, ni el menton el cuello.
+// Trazado corto en pantalla desde la piel hacia la luz (como las sombras de contacto del sol, fila 52: w on, x fuerza, y largo,
+// z suavidad), con el grosor de los rasgos de una cara. La sombra queda en la luz difusa que despues difunde la SSSS (borde
+// difuminado y rojizo). PesSkUvMap usa derivadas: llamarla FUERA de los if
+// REGLA de la boca: el interior de la boca no cambia. Sin la mascara de la DLL (t43 vacio) o donde marca boca, no hay sombra nueva
+float4 PesSkUvMap(float4 clipP, float4 uvP) {
+  float2 sC = clipP.xy / clipP.w, uvC = uvP.xy / uvP.w;
+  float2 dS = float2(ddx(sC.x), ddy(sC.y)), dU = float2(ddx(uvC.x), ddy(uvC.y));
+  dS = (abs(dS) < 1e-9) ? 1e-9 : dS;
+  float2 Am = dU / dS;
+  return float4(Am, uvC - Am * sC);
+}
+float PesSkFaceShadow(float4 AB, float4 clipP, float2 pos, float zC, float3 L, float nl, float3 lightC) {
+  float4 CS = IniParams.Load(int2(52,0));
+  float zSgn = zC < 0.0 ? -1.0 : 1.0, zA = abs(zC);
+  // solo donde hay luz que quitar (con 26 a 48 focos por cuadro en el editor, los que casi no aportan no trazan)
+  if (CS.w < 0.5 || CS.x <= 0.0 || nl < 0.03 || zA < 0.1 || zA > 8.0 || dot(lightC, 0.3333.xxx) * nl < 0.004) return 1.0;   // (10/11 b) 76 focos en el editor: solo trazan los que se ven
+  { uint mmW = 0, mmH = 0; pesMouthMask.GetDimensions(mmW, mmH);
+    if (mmW == 0) return 1.0;
+    uint2 mmP = min((uint2)pos, uint2(mmW - 1, mmH - 1));
+    float mmZ = pesMouthMask.Load(int3(mmP, 0)), mmD = g_DepthTexture.Load(int3(mmP, 0)).x;
+    if (mmZ > 0.0 && abs(mmZ - mmD) <= 1e-6 + 2e-4 * abs(mmD)) return 1.0; }
+  float2 sC = clipP.xy / clipP.w;
+  float3 Pv = float3((sC - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zC, zC);
+  float3 Lc = normalize(L);
+  float len = clamp(CS.y > 0.0 ? CS.y : 0.35, 0.05, 0.25);
+  float soft = saturate(CS.z);
+  float2 px = (sC * 0.5 + 0.5) * g_psScene.m_viewportSize.xy;
+  float ign = frac(52.9829189 * frac(dot(px, float2(0.06711056, 0.00583715))));
+  float bias = (0.004 + 0.0012 * zA) * (0.6 + 0.4 / max(nl, 0.12));
+  float3 Q = Pv + Lc * bias;
+  float occ = 0.0;
+  [loop] for (int ci = 0; ci < 6; ci++) {
+    float f = (ci + ign) / 6.0;
+    float t = f * f * len;
+    float3 R = Q + Lc * t;
+    float RzA = R.z * zSgn;
+    if (RzA < 0.1) break;
+    float2 uv = AB.xy * (R.xy / (R.z * g_psScene.m_projectionParam.xy) + g_psScene.m_cameraCenterOffset.xy) + AB.zw;
+    if (any(uv < 0.0) || any(uv > 1.0)) break;
+    float zS = g_psScene.m_projectionParam.z / (g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, uv, 0).x - g_psScene.m_projectionParam.w);
+    float dz = (R.z - zS) * zSgn;
+    float thick = 0.035 + 0.25 * t + 0.0015 * RzA;
+    if (dz > 0.002 + 0.0006 * RzA && dz < thick && (zC - zS) * zSgn > 0.008 + 0.0015 * zA) {
+      occ = (1.0 - soft * f) * saturate(dz / (0.35 * thick));
+      break;
+    }
+  }
+  // junto al terminador la sombra la da la propia forma (y la difunde la SSSS): el trazado entra de a poco, sin escalones
+  occ *= smoothstep(0.03, 0.22, nl) * saturate((8.0 - zA) / 3.0);
+  return 1.0 - saturate(occ * CS.x);
+}
+#endif
 #endif

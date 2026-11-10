@@ -81,6 +81,8 @@ Texture2D<float4> StereoParams : register(t125);
 uint4 PESBfi(uint4 w, uint4 o, uint4 ins, uint4 b) { uint4 m = (w >= 32u) ? 0xffffffffu : (((1u << w) - 1u) << o); return ((ins << o) & m) | (b & ~m); }
 #include "pes_common.hlsli"
 float3 PESSunColor() { return g_psLight.m_lightSourceColor.xyz; }   // para pes_skinlight: el tinte del brillo sigue al color del foco
+Texture2D<float> pesMouthMask : register(t43);   // (10/11) mascara del interior de la boca (mouthmask.cpp): sin sombra nueva ahi
+#define PES_SK_FACESHADOW 1
 #include "pes_skinlight.hlsli"
 
 void main(
@@ -272,6 +274,7 @@ void main(
   r3.w = (-(r3.zzzz)).w;
   float3 skN = normalize(r3.xyw);
   float skCurv = PesSkCurv(skN, skZ);   // fuera de los if: usa derivadas
+  float4 skAB = PesSkUvMap(v0, v1); float skFS = 1.0;   // (10/11) sombra fina del foco sobre la cara
   bool skOn = PesSkIsSkin(skMat, r5.y, skTag);
   float3 skV = -r7.xyz, skL = r9.xyz;
   float skTF = r5.x * r5.y;
@@ -299,7 +302,7 @@ void main(
   r0.w = (saturate(max(r0.wwww, r2.xxxx))).w;
   r0.y = (saturate(r0.yyyy)).y;
   r3.xyz = ((r10.xyzx * r0.wwww)).xyz;
-  if (skOn) r3.xyz = (PesSkDiffuse(skNL, r5.y, skTF, skZ, skCurv) + PesSkTrans(skN, skV, skL, r5.y)) * r10.xyz;   // (04/11) piel
+  if (skOn) { skFS = PesSkFaceShadow(skAB, v0, v2.xy, skZ, skL, skNL, r10.xyz); r3.xyz = (PesSkDiffuse(skNL, r5.y, skTF, skZ, skCurv) * skFS + PesSkTrans(skN, skV, skL, r5.y)) * r10.xyz; }   // (04/11) piel
   r2.xzw = ((r2.zzzz * r12.xxyz)).xzw;
   r11.x = ((dot((r1.yzwy).xyz, (r9.xyzx).xyz)).xxxx).x;
   r0.w = ((g_lut1.Sample(g_samplerLinear_Clamp_s, (r11.xyxx).xy)).yzwx).w;
@@ -324,7 +327,7 @@ void main(
   r0.y = ((r0.yyyy * float4(asfloat(0x3e800000U), asfloat(0x3e800000U), asfloat(0x3e800000U), asfloat(0x3e800000U)))).y;
   r0.yzw = ((r10.xxyz * r0.yyyy)).yzw;
   r0.yzw = ((r2.xxzw * r0.yyzw)).yzw;
-  if (skOn) r0.yzw = PesSkSpec(r0.yzw, skN, skV, skL, skRough, skSpecI, r10.xyz, 1.0);   // (04/11) brillo de piel (la sombra del foco va despues)
+  if (skOn) r0.yzw = PesSkSpec(r0.yzw, skN, skV, skL, skRough, skSpecI, r10.xyz, 1.0) * skFS;   // (04/11) brillo de piel (la sombra del foco va despues)
   r0.x = ((r0.xxxx * r0.xxxx + float4(asfloat(0xbf800000U), asfloat(0xbf800000U), asfloat(0xbf800000U), asfloat(0xbf800000U)))).x;
   r0.x = ((g_psLight.m_lightSourceParam3.zzzz * r0.xxxx + float4(asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U)))).x;
   r1.xyz = ((r0.xxxx * r3.xyzx)).xyz;
