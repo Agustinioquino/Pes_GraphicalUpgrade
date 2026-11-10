@@ -187,6 +187,9 @@ static bool LoadConfigLocked() {
             else if (kl == "memoria_vigilar") c.memWatch = atoi(v.c_str()) != 0;
             else if (kl == "sol_editor_log") c.solEditorLog = atoi(v.c_str()) != 0;
             else if (kl == "sol_editor_dll") c.solEditorDll = atoi(v.c_str()) != 0;
+            else if (kl == "sol_editor_expo_auto") c.solEditorExpoAuto = atoi(v.c_str()) != 0;
+            else if (kl == "sol_editor_expo_min") c.solEditorExpoMin = (float)atof(v.c_str());
+            else if (kl == "sol_editor_expo_max") c.solEditorExpoMax = (float)atof(v.c_str());
             else if (kl == "sol_editor_sombra") c.solEditorSombra = atoi(v.c_str()) != 0;
             else if (kl == "sol_editor_dir_signo") c.solEditorDirSigno = atoi(v.c_str()) < 0 ? -1 : 1;
             else if (kl == "sol_vigilar") c.sunWatch = atoi(v.c_str()) != 0;
