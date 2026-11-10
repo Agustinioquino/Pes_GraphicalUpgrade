@@ -132,9 +132,9 @@ void FaceInjectPresent() {
     char tids[96] = {}; int nt = 0; size_t o = 0;
     for (auto& s : s_tid) { unsigned v = s.exchange(0); if (v) { nt++; o += snprintf(tids + o, sizeof tids - o, "%s%u", o ? "," : "", v); if (o >= sizeof tids) break; } }
     if (!fc && !bd && !ot) { Log("inyeccion caras: %.0f s sin rigs (menu o carga)", sec); return; }
-    extern std::atomic<unsigned> g_exprReapplied, g_exprReapplyBusy;
-    const unsigned rap = g_exprReapplied.exchange(0), rbz = g_exprReapplyBusy.exchange(0);
-    Log("inyeccion caras: reaplicado %u huesos (ocupado %u) [expr_inyeccion %d]", rap, rbz, g_cfg.optExprInject);
+    extern std::atomic<unsigned> g_exprReapplied, g_exprReapplyBusy, g_exprReapplyStale, g_exprReapplyFar;
+    const unsigned rap = g_exprReapplied.exchange(0), rbz = g_exprReapplyBusy.exchange(0), rst = g_exprReapplyStale.exchange(0), rfr = g_exprReapplyFar.exchange(0);
+    Log("inyeccion caras: reaplicado %u huesos (ocupado %u; cara cambiada / cargando %u; hueso en otra pose %u) [expr_inyeccion %d]", rap, rbz, rst, rfr, g_cfg.optExprInject);
     Log("inyeccion caras: %.0f s, %d cuadros: caras %u (%d distintas, en %u cuadros = %.0f %%, %.1f por cara y cuadro; padre conocido %u), "
         "cuerpos %u (de personaje %u), otros rigs %u, ilegibles %u; hilos de la cara %d [%s]",
         sec, frames, fc, nf, ff, frames > 0 ? 100.0 * ff / frames : 0.0, (nf && ff) ? (double)fc / ((double)nf * ff) : 0.0, fk, bd, bk, ot, bad, nt, tids);

@@ -2081,7 +2081,7 @@ int ExprBonesPoses(ExprCharPose* out, int max) {
 // restricciones de la cara (mirada, parpados), que corren solo cuando nodo+0xf1 esta prendido. faceinject.cpp llama a esto justo antes
 // de que 0x1419f8820 arme las matrices del rig (cuerpo o cara): se vuelve a poner lo escrito en este cuadro, asi lo del mod queda
 // ultimo. Sin candado bloqueante (try_lock): si el hilo del Eval lo tiene, este rig sale como estaba.
-std::atomic<unsigned> g_exprReapplied{0}, g_exprReapplyBusy{0};
+std::atomic<unsigned> g_exprReapplied{0}, g_exprReapplyBusy{0}, g_exprReapplyStale{0}, g_exprReapplyFar{0};
 void ExprBonesReapply(const void* rig) {
     if (!rig) return;
     std::unique_lock<std::mutex> lk(s_mx, std::try_to_lock);
@@ -2091,8 +2091,17 @@ void ExprBonesReapply(const void* rig) {
         Skel& S = s_sk[i];
         if (S.skel != rig && S.face != rig) continue;
         if (fr - S.lastFrame > 1) continue;   // validado (StillValid) en este cuadro o el anterior
+        // (10/11, Agustin: "las expresiones hacen que los modelos se rompan al cargar") entre el Eval del cuadro anterior y este gancho
+        // el juego puede cambiar de jugador / de cara (editor, carga de un modelo): los punteros a las transformaciones ya no son de
+        // este esqueleto y se escribia la cara vieja sobre el modelo nuevo (o en memoria liberada). Se revalida aca tambien, y no se
+        // vuelve a poner nada si el juego dejo el hueso en otra pose (mas de 3.5 cm / ~40 grados de lo nuestro: carga, cambio de cara)
+        if (!StillValid(S)) { g_exprReapplyStale.fetch_add(1, std::memory_order_relaxed); continue; }
         for (int d = 0; d < kND; d++) {
             if (!S.wHave[d] || !S.cur[d] || fr - S.wFrame[d] > 1) continue;
+            Xf now; if (!ReadXf(S.cur[d], now)) continue;
+            {   const float dx = now.t[0] - S.wt[d][0], dy = now.t[1] - S.wt[d][1], dz = now.t[2] - S.wt[d][2];
+                const float dot = fabsf(now.q[0] * S.wq[d][0] + now.q[1] * S.wq[d][1] + now.q[2] * S.wq[d][2] + now.q[3] * S.wq[d][3]);
+                if (dx * dx + dy * dy + dz * dz > 0.035f * 0.035f || dot < 0.94f) { g_exprReapplyFar.fetch_add(1, std::memory_order_relaxed); continue; } }
             float out[7] = { S.wq[d][0], S.wq[d][1], S.wq[d][2], S.wq[d][3], S.wt[d][0], S.wt[d][1], S.wt[d][2] };
             if (SafeCopy((char*)S.cur[d] + 16, out, 28)) g_exprReapplied.fetch_add(1, std::memory_order_relaxed);
         }
