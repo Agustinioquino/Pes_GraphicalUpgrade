@@ -1,4 +1,4 @@
--- ProbadorAnimaciones v2.0 - PES 2021 1.07.02 / Sider 7  (PES21 FX, 10/11/2026)
+-- ProbadorAnimaciones v2.1 - PES 2021 1.07.02 / Sider 7  (PES21 FX, 10/11/2026)
 -- Probador de animaciones (.gani) con el menu Editar como visor. Version simple: dos paginas.
 --
 -- CUERPO: el visor del Editar carga los 162 festejos de gol TODOS JUNTOS al entrar al jugador.
@@ -8,9 +8,11 @@
 --   cual es la que esta puesta en el visor en ese momento.
 -- CARA: una animacion de cara a la vez, en lugar de la cara de reposo del visor.
 --
--- El juego carga las animaciones al entrar al jugador, no cuando tocas la tecla: despues de
--- cambiar de tanda hay que volver a la lista de jugadores y entrar de nuevo. El overlay avisa
--- solo: PENDIENTE hasta que el juego las vuelve a pedir, APLICADO cuando ya las cargo.
+-- El juego carga las animaciones una sola vez y las guarda hasta que salis de la pantalla
+-- "Jugadores" de Editar. Si elegis la tanda ANTES de entrar a Jugadores no hace falta nada mas.
+-- Si la cambias despues, retrocede con Atras hasta el menu principal de Editar y volve a entrar
+-- al jugador (volver solo a la lista de jugadores no alcanza). El overlay avisa solo:
+-- PENDIENTE hasta que el juego las vuelve a pedir, APLICADO cuando ya las cargo.
 --
 -- Teclas (overlay de Sider abierto y este modulo elegido; en tu Sider el overlay se abre con la
 -- barra espaciadora y se pasa de modulo con la tecla 1):
@@ -26,7 +28,7 @@
 -- "raiz = carpeta completa", despues una ruta por linea relativa a esa carpeta. El modulo las
 -- reparte solo: caras a CARA, cuerpos a CUERPO; manos, ojos y publico quedan afuera.
 
-local m = { version = "2.0" }
+local m = { version = "2.1" }
 local TANDA = 162
 
 -- direcciones de PES2021.exe 1.07.02 (base 0x140000000), leidas del decompilado. Solo lectura.
@@ -34,11 +36,10 @@ local EMV_PTR = 0x1438040d0      -- puntero a edit::ModelView (visor del menu Ed
 local IMPL_VT = 0x142ba51e0      -- vtable de draw::util::TaskModelView::Impl
 local O_ANIM_TIPO, O_ANIM_ID, ID_FESTEJO_0 = 0x3c0, 0x3c4, 0x2c
 
--- orden de los 162 festejos en el menu (tabla 0x143536b80 del exe): dml_goal_celebrate_<numero>.
--- El 38 no lo pude leer del exe (marcado con ?): se acomoda solo cuando el juego lo pide.
+-- orden de los 162 festejos en el menu (tabla 0x143536b80 del exe): dml_goal_celebrate_<numero>
 local FESTEJOS =
     "0006 0007 0008 0009 0052 0002 0081 0109 0118 0098 0088 0070 0128 0069 0114 0116 0028 0115 0030 0133 " ..
-    "0021 0132 0110 0084 0061 0125 0124 0054 0103 0082 0107 0106 0053 0122 0087 0100 0117 ? 0093 0092 " ..
+    "0021 0132 0110 0084 0061 0125 0124 0054 0103 0082 0107 0106 0053 0122 0087 0100 0117 0031 0093 0092 " ..
     "0134 0113 0112 0111 0131 0074 0096 0095 0094 0090 0089 0211 0130 0129 0286 0108 0077 0075 0080 0126 " ..
     "0099 0120 0022 0119 0102 0073 0072 0020 0127 0071 0068 0209 0105 0067 0066 0018 0064 0104 0213 0055 " ..
     "0101 0123 0057 0058 0060 0059 0051 0208 0175 0214 0173 0174 0180 0176 0078 0135 0091 0079 0063 0121 " ..
@@ -413,7 +414,7 @@ function m.key_down(ctx, vkey)
     end
 end
 
-local COMO = "volve a la lista de jugadores y entra de nuevo al jugador (si sigue igual, sali de Editar y volve a entrar)"
+local COMO = "retrocede con Atras hasta el menu principal de Editar (el que tiene Jugadores) y volve a entrar al jugador"
 
 function m.overlay_on(ctx)
     local t = { string.format("ProbadorAnimaciones %s | cuerpo: %d animaciones | cara: %d", m.version, #cuerpo, #cara) }
@@ -437,7 +438,7 @@ function m.overlay_on(ctx)
             t[#t + 1] = "   estado: PENDIENTE, " .. COMO
         end
     else
-        t[#t + 1] = p1 .. "CUERPO: original del juego" .. (hubo_cuerpo and "  (los festejos originales vuelven al entrar de nuevo al jugador)" or "")
+        t[#t + 1] = p1 .. "CUERPO: original del juego" .. (hubo_cuerpo and "  (los festejos originales vuelven al salir de Jugadores y entrar de nuevo)" or "")
     end
     if sel_cara > 0 and cara[sel_cara] then
         local e = cara[sel_cara]
@@ -448,7 +449,7 @@ function m.overlay_on(ctx)
             t[#t + 1] = "   estado: PENDIENTE, " .. COMO
         end
     else
-        t[#t + 1] = p2 .. "CARA: normal" .. (hubo_cara and "  (vuelve al entrar de nuevo al jugador)" or "")
+        t[#t + 1] = p2 .. "CARA: normal" .. (hubo_cara and "  (vuelve al salir de Jugadores y entrar de nuevo)" or "")
     end
     if pag == 1 then
         t[#t + 1] = "0 tanda siguiente | 9 anterior | 8 / 7 grupo | 5 original | 6 pasar a CARA | 4 recargar | (tecla 1 = otro modulo)"
