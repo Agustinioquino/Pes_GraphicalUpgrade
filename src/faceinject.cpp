@@ -140,4 +140,6 @@ void FaceInjectPresent() {
         sec, frames, fc, nf, ff, frames > 0 ? 100.0 * ff / frames : 0.0, (nf && ff) ? (double)fc / ((double)nf * ff) : 0.0, fk, bd, bk, ot, bad, nt, tids);
 }
 
+bool FaceInjectActive() { return s_ok; }   // (10/11) gancho puesto (expr_inyeccion 3 escribe solo ahi)
+
 }  // namespace fx
