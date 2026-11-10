@@ -68,6 +68,8 @@ Texture2D<float4> StereoParams : register(t125);
 uint4 PESBfi(uint4 w, uint4 o, uint4 ins, uint4 b) { uint4 m = (w >= 32u) ? 0xffffffffu : (((1u << w) - 1u) << o); return ((ins << o) & m) | (b & ~m); }
 #include "pes_common.hlsli"
 float3 PESSunColor() { return g_psLight.m_lightSourceColor.xyz; }   // para pes_skinlight: el tinte del brillo sigue al color del foco
+Texture2D<float> pesMouthMask : register(t43);   // (10/11) mascara del interior de la boca (mouthmask.cpp): sin sombra nueva ahi
+#define PES_SK_FACESHADOW 1
 #include "pes_skinlight.hlsli"
 
 void main(
@@ -168,6 +170,7 @@ void main(
   r2.w = (-(r2.zzzz)).w;
   float3 skN = normalize(r2.xyw);
   float skCurv = PesSkCurv(skN, skP.z);   // fuera de los if: usa derivadas
+  float4 skAB = PesSkUvMap(v0, v1); float skFS = 1.0;   // (10/11) sombra fina del foco sobre la cara
   bool skOn = PesSkIsSkin(skMat, r3.y, skSt.z);
   float3 skV = -normalize(skP);
   float skTF = r3.x * r3.y;
@@ -178,11 +181,11 @@ void main(
   r0.y = ((r3.xxxx * r3.yyyy)).y;
   r0.x = (saturate(max(r0.yyyy, r0.xxxx))).x;
   r0.xyz = ((r1.yzwy * r0.xxxx)).xyz;
-  if (skOn) r0.xyz = (PesSkDiffuse(skNL, r3.y, skTF, skP.z, skCurv) + PesSkTrans(skN, skV, skL, r3.y)) * skC;   // (04/11) piel
+  if (skOn) { skFS = PesSkFaceShadow(skAB, v0, v2.xy, skP.z, skL, skNL, skC); r0.xyz = (PesSkDiffuse(skNL, r3.y, skTF, skP.z, skCurv) * skFS + PesSkTrans(skN, skV, skL, r3.y)) * skC; }   // (04/11) piel
   o0.xyz = ((r0.xyzx * g_psLight.m_lightSourceParam3.yyyy)).xyz;
   o0.w = (float4(asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U))).w;
   o1.xyzw = (float4(0.0, 0.0, 0.0, asfloat(0x3f800000U))).xyzw;
-  if (skOn) o1.xyz = min(PesSkSpec(0.0.xxx, skN, skV, skL, skSt.x, skSt.y, skC * g_psLight.m_lightSourceParam3.y, 1.0), 10000.0.xxx);   // (04/11) brillo de piel
+  if (skOn) o1.xyz = min(PesSkSpec(0.0.xxx, skN, skV, skL, skSt.x, skSt.y, skC * g_psLight.m_lightSourceParam3.y, 1.0) * skFS, 10000.0.xxx);   // (04/11) brillo de piel
   o2.xyzw = (float4(asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U))).xyzw;
   return;
 }

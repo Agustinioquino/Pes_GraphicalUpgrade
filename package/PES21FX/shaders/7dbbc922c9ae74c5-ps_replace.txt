@@ -98,6 +98,7 @@ float3 PESSunColor() {
   return res;
 }
 // === FIN SOL ===
+#define PES_SK_FACESHADOW 1
 #include "pes_skinlight.hlsli"   // (03/11) modelo de piel compacto (la piel igual en todos los modos)
 #include "pes_headshadow.hlsli"  // (04/11 b) atlas de sombras de las cabezas y piernas cercanas (t30, la DLL lo ata a esta pasada)
 #include "pes_skinthick.hlsli"   // (04/11 b) grosor real de la piel con ese atlas
@@ -230,6 +231,7 @@ void main(
   r7.w = -r7.z;
   float3 skN = normalize(r7.xyw);   // (03/11) normal para la piel
   float skCurv = PesSkCurv(skN, skZ);   // (04/11) curvatura para la piel de lejos (fuera de los if: usa derivadas)
+  float4 skAB = PesSkUvMap(v0, v1); float skFS = 1.0;   // (10/11) sombra fina de la luz sobre la cara (fila 52)
   float skCurvT = PesSkCurvConvex(skN, float3(skPP * skZ, skZ));   // (04/11 entrecejo) solo convexa, para el grosor de la contraluz
   { // (04/11 boca) REGLA de Agustin: el interior de la boca no cambia. Sin la mascara de la DLL (o donde marca boca) queda la
     // curvatura de antes, identica; la curvatura convexa solo se usa con la mascara presente y fuera de la boca
@@ -266,7 +268,7 @@ void main(
   r3.xyz = r3.xxx * r1.xyw;
   bool skOn = PesSkIsSkin(skMat, r4.y, skTag);
   float3 skV = -normalize(float3(skPP, 1)), skL = normalize(g_psLight.m_lightDir0.xyz);
-  if (skOn) r3.xyz = PesSkDiffuse(skNL, r4.y, skTF, skZ, skCurv) * r1.xyw;   // (03/11) piel
+  if (skOn) { skFS = PesSkFaceShadow(skAB, v0, v2.xy, skZ, skL, skNL, r1.xyw); r3.xyz = PesSkDiffuse(skNL, r4.y, skTF, skZ, skCurv) * skFS * r1.xyw; }   // (03/11) piel
   r4.xyz = r8.xyz * r2.zzz;
   r5.x = dot(r0.xyz, g_psLight.m_lightDir0.xyz);
   r0.x = g_lut1.Sample(g_samplerLinear_Clamp_s, r5.xy).x;
@@ -304,7 +306,7 @@ void main(
       if (skIn > 0.0) skTrD = lerp(skTrD, max(PesSkTransThick(skThk, skN, skL, skNL, r4.y), skTrD * 0.5), skIn);
     }
     o0.xyz += skTrD * r1.xyw;
-    r0.xyz = PesSkSpec(r0.xyz, skN, skV, skL, skRough, skSpecI, r1.xyw, saturate(r2.w));
+    r0.xyz = PesSkSpec(r0.xyz, skN, skV, skL, skRough, skSpecI, r1.xyw, saturate(r2.w)) * skFS;
   }
   o1.xyz = min(float3(10000,10000,10000), r0.xyz);
   o0.w = 1;

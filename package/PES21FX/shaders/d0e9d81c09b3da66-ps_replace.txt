@@ -85,6 +85,7 @@ float3 PESSunColor() {
   return res;
 }
 // === FIN SOL ===
+#define PES_SK_FACESHADOW 1
 #include "pes_skinlight.hlsli"   // (03/11) modelo de piel compacto (la piel igual en todos los modos)
 
 void main(
@@ -177,6 +178,7 @@ void main(
   float3 skN = normalize(r3.xyw);   // (03/11) normal para la piel (r3.x se pisa mas abajo)
   float skCurv = PesSkCurv(skN, skZ);   // (04/11) curvatura para la piel de lejos (fuera de los if: usa derivadas)
   float skCurvT = PesSkCurvConvex(skN, float3(skPP * skZ, skZ));   // (04/11 entrecejo) solo convexa, para el grosor de la contraluz
+  float4 skAB = PesSkUvMap(v0, v1); float skFS = 1.0;   // (10/11) sombra fina de la luz sobre la cara (fila 52)
   { // (04/11 boca) REGLA de Agustin: el interior de la boca no cambia. Sin la mascara de la DLL (o donde marca boca) queda la
     // curvatura de antes, identica; la curvatura convexa solo se usa con la mascara presente y fuera de la boca
     uint mmW = 0, mmH = 0; pesMouthMask.GetDimensions(mmW, mmH);
@@ -218,7 +220,8 @@ void main(
     // luz cruza orejas, nariz y dedos segun su ancho real, solo con la piel de espaldas a la luz
     float4 skP64 = IniParams.Load(int2(64, 0));
     if (skP64.x > 0.5 && skP64.z > 0.0) skTr = max(skTr, PesSkTransThick(PesSkThickCurv(r5.y, skCurvT), skN, skL, skNL, r5.y));
-    o0.xyz = PesSkDiffuse(skNL, r5.y, skTF, skZ, skCurv) * r1.yzw + skTr * r1.yzw;
+    skFS = PesSkFaceShadow(skAB, v0, v2.xy, skZ, skL, skNL, r1.yzw);
+    o0.xyz = PesSkDiffuse(skNL, r5.y, skTF, skZ, skCurv) * skFS * r1.yzw + skTr * r1.yzw;
   }
   r3.xyz = r7.xyz * r2.zzz;
   r6.x = dot(r0.xyz, g_psLight.m_lightDir0.xyz);
@@ -244,7 +247,7 @@ void main(
   r0.x = 0.25 * r0.x;
   r0.xyz = r0.xxx * r1.yzw;
   r0.xyz = r0.xyz * r3.xyz;
-  if (skOn) r0.xyz = PesSkSpec(r0.xyz, skN, skV, skL, skRough, skSpecI, r1.yzw, 1.0);   // (03/11) brillo de piel
+  if (skOn) r0.xyz = PesSkSpec(r0.xyz, skN, skV, skL, skRough, skSpecI, r1.yzw, 1.0) * skFS;   // (03/11) brillo de piel
   o1.xyz = min(float3(10000,10000,10000), r0.xyz);
   o0.w = 1;
   o1.w = 1;
