@@ -370,7 +370,29 @@ static void EditorBgDiagTick(int mode) {
                       mode, ui, cp, nc, af, n8, rt, sm, s_bgSwaps.load());
 }
 
-ID3D11ShaderResourceView* EditorBgFor(ID3D11DeviceContext* c, uint64_t ps) {
+// (10/11 m042wp) Agustin: "mira el contorno del jugador" (fondo negro: filo gris en las puntas del pelo y la oreja). La imagen
+// del jugador trae en el borde el color con el que el juego limpio su render target (gris, alfa 0 afuera); con el fondo azul
+// no se notaba. Para ese dibujo se pone pes_editor_edge_ps.hlsl (igual que 55a003da pero le resta al borde el color de la
+// limpieza). z424 = 1 lo deja como el juego. Con el vidrio del menu Fisico activo (GS propio) no se toca.
+static ID3D11PixelShader* s_edgePS = nullptr; static bool s_edgeTried = false;
+static ID3D11PixelShader* EditorEdgePS(ID3D11DeviceContext* c, const D3D11_TEXTURE2D_DESC& d) {
+    if (g_cfg.live[424][2] >= 0.5f || GlassWanted()) return nullptr;
+    { ID3D11GeometryShader* gs = nullptr; c->GSGetShader(&gs, nullptr, nullptr); if (gs) { gs->Release(); return nullptr; } }
+    {   std::lock_guard<std::mutex> lk(s_bgMx);
+        if (!s_edgeTried) { s_edgeTried = true;
+            if (ID3DBlob* b = CompileNamedShader(L"pes_editor_edge_ps.hlsl", "ps_5_0")) { g_dev.dev->CreatePixelShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_edgePS); b->Release(); }
+            Log("fondo del editor: borde del jugador %s (pes_editor_edge_ps.hlsl)", s_edgePS ? "limpio del color de fondo del juego" : "SIN arreglo: no compilo"); } }
+    if (!s_edgePS) return nullptr;
+    static std::atomic<int> n{ 0 };
+    if (n.fetch_add(1) < 3) { ID3D11BlendState* bs = nullptr; float bf[4]; UINT sm = 0; c->OMGetBlendState(&bs, bf, &sm);
+        D3D11_BLEND_DESC bd{}; if (bs) { bs->GetDesc(&bd); bs->Release(); }
+        Log("fondo del editor: borde del jugador limpiado en la imagen %ux%u (formato %d, mezcla %s src %d dst %d)", d.Width, d.Height, (int)d.Format,
+            bs ? (bd.RenderTarget[0].BlendEnable ? "si" : "no") : "ninguna", (int)bd.RenderTarget[0].SrcBlend, (int)bd.RenderTarget[0].DestBlend); }
+    return s_edgePS;
+}
+
+ID3D11ShaderResourceView* EditorBgFor(ID3D11DeviceContext* c, uint64_t ps, ID3D11PixelShader** edgePS) {
+    if (edgePS) *edgePS = nullptr;
     const int mode = (int)(g_cfg.live[424][0] + 0.5f);
     if (ps != kUiPS || mode <= 0 || !g_dev.dev) return nullptr;
     s_bgNUi.fetch_add(1, std::memory_order_relaxed); EditorBgDiagTick(mode);
@@ -390,6 +412,7 @@ ID3D11ShaderResourceView* EditorBgFor(ID3D11DeviceContext* c, uint64_t ps) {
             static std::atomic<int> nv{ 0 };
             if (nv.fetch_add(1) < 4) Log("fondo del editor: visor del editor reconocido por la imagen del jugador %ux%u (formato %d)", d.Width, d.Height, (int)d.Format);
             s_edCompT.store(Now(), std::memory_order_relaxed);
+            if (edgePS) *edgePS = EditorEdgePS(c, d);
         }
         return nullptr;
     }
