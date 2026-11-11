@@ -91,7 +91,10 @@ void main(
   // su propio atlas (t11 / t12, tools/make_grass_natural.py): hojas sueltas hasta la raiz, nervio, venas, fibras, un numero por hoja y la
   // altura real en la hoja. z412 = 1 vuelve al atlas viejo. El artificial sigue con pes_grass_blades igual que antes
   float4 P412n = IniParams.Load(int2(412,0)), P409n = IniParams.Load(int2(409,0));
-  bool pesNat = pesV3 && !pesArt && P412n.z < 0.5;
+  // (11/11 g) los recortes que vuelan (pes_clip_vs: o8.y = 0 y raiz 9 = sin raiz) usan el atlas de particulas (t8 / t9 = pes_debris.dds):
+  // con el natural tomaban el atlas del natural (t11 / t12) y los terrones y el polvo salian como hojas
+  bool pesClipP = v8.y < 0.05 && v7.z > 8.5;
+  bool pesNat = pesV3 && !pesArt && P412n.z < 0.5 && !pesClipP;
   // opciones propias del natural (menu "Pasto natural"): y412 detalle de la hoja, w412 parte de hojas secas / amarillentas, z409 brillo de
   // la hoja (cera), w409 translucidez de la lamina. 0 en y412 / z409 / w409 = 1 (ini sin la linea)
   float natDet = P412n.y > 0.001 ? clamp(P412n.y, 0.0, 2.0) : 1.0;
