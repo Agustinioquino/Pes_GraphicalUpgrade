@@ -175,6 +175,8 @@ struct Config {
     int menuMouseNear = 1;                     // (11/11 v2) en los huecos entre filas de un grupo vale la mas cercana ([PES21FX] mouse_menus_cerca)
     int menuMouseKey = 0;                      // (11/11 v2) tecla que saca / pone el mouse en los menus (0 = ninguna, de fabrica: Agustin 22:23 no la necesita) ([PES21FX] tecla_mouse_menus = F8...)
     int keyHud = 4;                            // (11/11) cuadrito con la ultima tecla apretada: 0 apagado, 1..4 esquina ([PES21FX] ultima_tecla)
+    int motorPage = 1;                         // (11/11) motorpage.cpp: el estudio del Motor con filas nativas del juego ([PES21FX] motor_pagina)
+    int motorDress = 1;                        // (11/11) motorpage.cpp: vestir al jugador del estudio por la via nativa ([PES21FX] motor_vestir)
     int blockKeys = 1;                         // (31/10) teclas del juego con el menu: 0 nunca se bloquean, 1 al escribir en un campo, 2 con el menu abierto ([PES21FX] bloquear_teclado)
     int lang = 0;                              // (27/10) idioma del menu: 0 espanol, 1 ingles ([PES21FX] language = es / en)
     bool autoCap = false; float autoCapSec = 20.0f; int autoCapMax = 150; bool autoCapAB = false; bool exeDump = true; bool motorPatch = true; bool motorSunFix = true; int motorShadowFix = 1; int motorShadowRes = 0; float motorCascadeScale = 0.0f;   // [Motor]: parches en memoria (exepatch.cpp)   // exe_dump: volcado del exe desempaquetado (una vez por version)   // auto_captura_ab: pares A (todo) / B (un grupo del menu apagado 3 cuadros)
@@ -675,6 +677,7 @@ extern std::atomic<bool> g_blockGameKeys;   // (31/10) keyblock.cpp: el juego no
 extern std::atomic<bool> g_menuTyping;      // (31/10) overlay.cpp: hay un campo de texto del menu activo (la camara libre no lee W A S D)
 void KeyBlockInstall();
 // (11/11 3icxbh) mouse en los menus nativos del juego (menumouse.cpp): ganchos en el primer Present; la rueda llega por la ventana; cursor para overlay.cpp
+void MotorPagePresent();   // (11/11) motorpage.cpp: filas nativas del Motor en el estudio 3D
 void MenuMousePresent(); void MenuMouseWheel(int delta); bool MenuMouseCursor(float* x, float* y); HWND OverlayHwnd(); bool MotorPanelOpen();
 extern std::atomic<int> g_replacedCount, g_failedCount;
 extern std::vector<std::string> g_compileErrors;
