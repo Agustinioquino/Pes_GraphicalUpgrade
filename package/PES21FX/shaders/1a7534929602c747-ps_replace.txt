@@ -46,12 +46,17 @@ float3 PesEdgeAA(float2 uv, float3 c, float4 P)
   if (lMax - lMin < max(clamp(P.z, 0.02, 0.5), lMax * 0.125)) return c;   // sin borde: igual que antes
   float2 dir = float2(-((lNW + lNE) - (lSW + lSE)), (lNW + lSW) - (lNE + lSE));
   float red = max((lNW + lNE + lSW + lSE) * 0.03125, 1.0 / 128.0);
+  // (11/11, Agustin: "el taa hace que se pierda detalle") solo en bordes DE VERDAD (contorno, linea, pelo contra el fondo). En textura fina
+  // (hojas de 1-2 px, red del arco, costuras) las 4 diagonales no forman un borde: el gradiente se cancela y el FXAA solo borroneaba la hoja.
+  // Coherencia = gradiente / rango: ~1 borde recto, ~0.5 diagonal, ~0 una hoja fina o ruido -> sin AA
+  float kE = smoothstep(0.25, 0.6, max(abs(dir.x), abs(dir.y)) / (2.0 * (lMax - lMin) + 1e-4));
+  if (kE <= 0.0) return c;
   dir = clamp(dir / (min(abs(dir.x), abs(dir.y)) + red), -8.0, 8.0) * px;
   float3 a = 0.5 * (t0.SampleLevel(s11, uv + dir * (1.0 / 3.0 - 0.5), 0).xyz + t0.SampleLevel(s11, uv + dir * (2.0 / 3.0 - 0.5), 0).xyz);
   float3 b = a * 0.5 + 0.25 * (t0.SampleLevel(s11, uv - dir * 0.5, 0).xyz + t0.SampleLevel(s11, uv + dir * 0.5, 0).xyz);
   float lB = PesLumaAA(b);
   float3 r = (lB < lMin || lB > lMax) ? a : b;
-  return lerp(c, r, saturate(P.y));
+  return lerp(c, r, saturate(P.y) * kE);
 }
 
 void main(

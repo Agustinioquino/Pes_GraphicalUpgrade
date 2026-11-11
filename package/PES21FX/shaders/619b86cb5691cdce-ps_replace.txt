@@ -727,13 +727,14 @@ void main(
           float3 warm = lerp(float3(1.10, 1.16, 0.62), float3(1.20, 1.10, 0.55), 1.0 - sunUp);   // verde amarillo; con sol bajo mas dorado
           c *= lerp(float3(1.0, 1.0, 1.0), warm, saturate(0.55 * lit * natP));
           float lum2 = dot(c, float3(0.2126, 0.7152, 0.0722));
-          c = max(lerp(lum2.xxx, c, 1.0 + 0.45 * natP * clamp(PS4.y, 0.0, 2.0) * saturate(lit)), 0.0);
+          // (11/11 h, referencia de Agustin: puntas al sol PALIDAS, casi blanco crema, no lima) natural: la luz fuerte casi no satura (0.15)
+          c = max(lerp(lum2.xxx, c, 1.0 + (natP < 0.99 ? 0.15 : 0.45 * natP) * clamp(PS4.y, 0.0, 2.0) * saturate(lit)), 0.0);
           c *= (lum / max(lum2, 1e-5)) * (1.0 + 0.22 * saturate(lit));      // conserva el brillo y lo sube un poco: luz fuerte
           r2.xyz = c;
           float fwd = saturate(dot(Ld, Vsk)), side = saturate(1.0 - abs(dot(Ld, Vsk)));
           float3 sunC = sc * g_psScene.m_exposure.zzz;
           float glow = (0.55 * pow(fwd, 2.0) + 0.30 * side) * lerp(0.6, 1.4, saturate(trC)) * clamp(PS4.z, 0.0, 2.0);
-          r2.xyz += sunC * glow * lit * 0.10 * float3(0.80, 1.0, 0.30);
+          r2.xyz += sunC * glow * lit * 0.10 * (natP < 0.99 ? float3(0.95, 1.0, 0.74) : float3(0.80, 1.0, 0.30));   // (11/11 h) natural: brillo crema
         }
         // (08/11 ac) SOL BAJO (w415 de la DLL): amanecer / atardecer. La luz rasante pinta el pasto AL SOL con su propio tono: atardecer
         // naranja rojizo (la luz pasa por mas aire: pierde azul), amanecer mas frio y rosado (aire limpio y humedo); menos saturacion que a

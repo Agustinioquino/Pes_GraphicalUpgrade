@@ -320,12 +320,26 @@ void PitchBallNote(ID3D11DeviceContext* c, int frame) {
     if (d.ByteWidth >= off + 32) { D3D11_BOX bx = { off, 0, 0, off + 32, 1, 1 }; c->CopySubresourceRegion(s_ballStage[w], 0, 0, 0, 0, cb, 0, &bx); s_ballStageFrame[w] = frame; }
     cb->Release();
 }
+// (11/11, Agustin: "estos deberian seguir el gameclock para que no se borren en la repeticion") RELOJ DEL JUEGO para los recortes, el
+// seguimiento de los jugadores (pisadas, frenadas) y el pasto aplastado: el mismo de las nubes (fila 157, config.cpp: m_timeParam del
+// juego; la pausa lo congela, la camara lenta de la repeticion lo frena, el salto hacia atras al empezarla no cuenta). En pausa los
+// pedacitos quedan quietos en el aire y no se desvanecen; en la repeticion en camara lenta vuelan despacio y las acciones repetidas los
+// vuelven a arrancar (la velocidad de los jugadores se mide en tiempo de juego). Hasta ver ese reloj avanzar (w157 = 0): el real.
+static float GameStep(double& lastG, double& lastR) {
+    const double t = Now(), g = (double)g_cfg.live[157][0];
+    const double dR = lastR < 0.0 ? 0.0 : t - lastR; lastR = t;
+    double dG = lastG < -1e8 ? 0.0 : g - lastG; lastG = g; if (dG < -50000.0) dG += 100000.0;   // vuelta del reloj de las nubes (100000 s)
+    if (g_cfg.live[157][3] < 0.5f) return (float)std::clamp(dR, 0.0, 0.1);
+    return (float)std::clamp(dG, 0.0, 0.1);
+}
+static int s_plGen = 0;   // (11/11) actualizaciones de s_pl: la huella de cada pisada se estampa una sola vez aunque el seguimiento se saltee cuadros (pausa)
 static void PitchFlatPresent() {
     const float* F = g_cfg.live[136];
     bool v5 = g_cfg.live[139][0] > 0.5f && g_cfg.live[139][2] > 0.001f;   // (20/10) pasto v5: las hojas se doblan con el mapa
     if ((F[0] < 0.5f && !v5) || !g_dev.imm) return;
     EnsureFlat(); if (!s_flatRTV || !s_fsVS || !s_zeroPS || !s_vs || !s_ps || !s_flatCB || !s_bsAddR || !s_bsAddG) return;
-    double t = Now(); float dt = (float)std::clamp(t - s_flatT, 0.001, 0.1); s_flatT = t; s_flatFrame++;
+    static double s_fG = -1e9, s_fR = -1.0; float dt = GameStep(s_fG, s_fR); s_flatT = Now(); s_flatFrame++;   // (11/11) reloj del juego
+    static int s_flatPlGen = -1; const bool newPl = s_plGen != s_flatPlGen; s_flatPlGen = s_plGen;
     if (g_matchGen.load() != s_flatMatch) { s_flatMatch = g_matchGen.load(); float z[4] = {}; g_dev.imm->ClearRenderTargetView(s_flatRTV, z); s_ballOk = false; }
     // pelota: el staging mas viejo ya listo (anillo de 3)
     { int w = s_ballW.load(), rd = (w + 1) % kStages; s_ballW = rd;
@@ -350,7 +364,7 @@ static void PitchFlatPresent() {
         brush[nb][0] = p.x / 140.f + 0.5f; brush[nb][1] = p.z / 79.f + 0.5f; brush[nb][2] = 2.5f * dt * k * (1.f + 2.5f * p.skid * kAct) * (fpOn > 0.5f ? 0.35f : 1.f); brush[nb][3] = 0.45f; nb++;
         // (08/11) huella: una marca por pisada (pie izquierdo / derecho alternados, zancada segun la velocidad), con forma de botin
         // (talon mas fuerte + punta hacia adelante). La marca entera en un cuadro (no por dt): se ve cada pisada por separado
-        if (fpOn > 0.5f && p.printDue && sp > 0.3f && nb < kMaxPlayers - 16) {
+        if (fpOn > 0.5f && p.printDue && newPl && sp > 0.3f && nb < kMaxPlayers - 16) {
             float ux = p.vx / sp, uz = p.vz / sp, kf = FpForce() * k * (0.55f + 0.45f * std::min(sp / 6.f, 1.f)) * (1.f + 1.5f * p.skid * kAct);
             brush[nb][0] = p.printX / 140.f + 0.5f; brush[nb][1] = p.printZ / 79.f + 0.5f; brush[nb][2] = 0.75f * kf; brush[nb][3] = 0.13f; nb++;
             if (nb < kMaxPlayers - 16) { brush[nb][0] = (p.printX + ux * 0.12f) / 140.f + 0.5f; brush[nb][1] = (p.printZ + uz * 0.12f) / 79.f + 0.5f; brush[nb][2] = 0.55f * kf; brush[nb][3] = 0.10f; nb++; }
@@ -372,7 +386,7 @@ static void PitchFlatPresent() {
         if (dist > 4.0f) dist = 0.0f;   // salto de camara / saque
         int steps = std::clamp((int)(dist / 0.08f) + 1, 1, 15);
         float kb = (F[3] > 0.f ? F[3] : 1.0f) * k * onGround;
-        { const float kv = std::clamp(g_cfg.live[177][2], 0.f, 2.f); float spd = std::min(dist / dt / 12.f, 1.5f);   // (2/11) rapida: aplasta mas; lenta: menos
+        { const float kv = std::clamp(g_cfg.live[177][2], 0.f, 2.f); float spd = dt > 0.002f ? std::min(dist / dt / 12.f, 1.5f) : 0.f;   // (2/11) rapida: aplasta mas; lenta: menos
           kb *= std::max(0.25f, 1.f + kv * (spd - 0.5f)); }
         // (2/11) manchas de la pelota (fila 177 x). Agustin: PROGRESIVAS y MUY SUTILES, con los minutos de partido y segun la humedad de la
         // cancha; nada por contacto. La pelota solo "recuerda" por donde rueda (promedios lentos de tierra bajo ella y de cruces de cal) y
@@ -401,7 +415,7 @@ static void PitchFlatPresent() {
         }
         // (08/11, Agustin: "desprendimiento ... chutando") REMATE: la pelota pasa de lenta a rapida en un cuadro, estando en el piso.
         // El pie de apoyo y el botin arrancan pasto detras de donde estaba la pelota, hacia adelante (el golpe) y un poco hacia los costados
-        float sp = dist / dt;
+        float sp = dt > 0.002f ? dist / dt : 0.f;   // (11/11) en pausa (reloj del juego quieto) no hay remate
         { float rk = ReactK(); float thr = 9.0f / rk, jump = 5.0f / rk;
           if (sp > thr && sp - s_ballSpPrev > jump && sp < 60.f && s_ballPrev[1] < 0.35f && dist > 0.01f) {
               float ix = dx / dist, iz = dz / dist; float strength = std::min((sp - thr) / 14.f + 0.5f, 2.0f) * rk;
@@ -578,8 +592,10 @@ void PitchWearPresent() {
     int w = s_stageW.load(); int n = std::min(s_count.exchange(0), kMaxPlayers);
     s_stageFrame[w] = n > 0 ? s_frame : -1; s_frame++;
     int rd = (w + 1) % kStages;
-    double t = Now(); float dt = (float)std::clamp(t - s_lastT, 0.001, 0.1); s_lastT = t;
-    ClipSimAndUpload(dt);
+    double t = Now(); s_lastT = t;
+    static double s_wG = -1e9, s_wR = -1.0; const float gdt = GameStep(s_wG, s_wR);   // (11/11) reloj del juego (pausa: 0; camara lenta: menos)
+    static float s_plAcc = 0.f; s_plAcc += gdt;   // tiempo de juego desde la ultima lectura de posiciones
+    ClipSimAndUpload(gdt);
     int pending = s_stageFrame[rd]; s_stageFrame[rd] = -1; s_stageW = rd;
     if (pending < 0 || !s_stage[rd]) return;
     D3D11_MAPPED_SUBRESOURCE m; if (FAILED(g_dev.imm->Map(s_stage[rd], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) return;
@@ -605,7 +621,10 @@ void PitchWearPresent() {
     if (cnt == 0) return;
     // (11/11) recortes v2: tiempo real desde la ultima lectura de posiciones (si un cuadro no se pudo leer -DO_NOT_WAIT- la distancia era
     // de 2 cuadros sobre el dt de 1 y la velocidad salia doble); un hueco largo (pausa, repeticion, carga) reinicia las velocidades
-    static double s_plT = 0.0; float dtP = (float)(t - s_plT); s_plT = t; const bool gapP = dtP > 0.1f || dtP < 0.0005f; dtP = std::clamp(dtP, 0.001f, 0.1f);
+    // (11/11) en tiempo de juego: en pausa (no avanzo) no se toca nada y se sigue sumando; en la camara lenta las velocidades salen bien
+    if (s_plAcc < 0.002f) return;
+    static double s_plT = 0.0; const bool gapP = (t - s_plT) > 0.25 || s_plAcc > 0.1f; s_plT = t;
+    float dtP = std::clamp(s_plAcc, 0.002f, 0.1f); s_plAcc = 0.f;
     // velocidad: el mas cercano del cuadro anterior
     float brush[kMaxPlayers][4]; int nb = 0;
     float rate = P[0] > 0.f ? P[0] : 1.0f, rad = std::clamp(P[1], 0.3f, 2.0f);
@@ -665,7 +684,7 @@ void PitchWearPresent() {
     }
     // (11/11) recortes v2: los recortes salen en la pisada (EmitStrike, arriba); w116 = 0 los borra
     if (g_cfg.live[116][3] < 0.5f) s_clips.clear();
-    s_prev.assign(&pos[0][0], &pos[0][0] + cnt * 2); s_pl.swap(plNow);
+    s_prev.assign(&pos[0][0], &pos[0][0] + cnt * 2); s_pl.swap(plNow); s_plGen++;
     // (08/11) huecos del pasto arrancado (cola de EmitStrike) y huellas en el desgaste (marcas que quedan)
     for (const WearBrush& wb : s_wearQueue) { if (nb >= kMaxPlayers) break; brush[nb][0] = wb.u; brush[nb][1] = wb.v; brush[nb][2] = wb.k * rate; brush[nb][3] = wb.rad; nb++; }
     s_wearQueue.clear();

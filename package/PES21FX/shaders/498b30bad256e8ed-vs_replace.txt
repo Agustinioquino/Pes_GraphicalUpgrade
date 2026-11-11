@@ -862,7 +862,9 @@ void main(
   }
   if (pesPaint > 0.001) {   // (27/10 h) hoja pintada por la linea: blanco crema de la pintura (w295), por encima de zonas, seco y color del suelo
     float pb = P295.w > 0.05 ? P295.w : 0.72;   // (27/10 i) 0.85 -> 0.72: paradas al sol rasante reciben mas luz que el suelo y salian blancas quemadas
-    o3.xyz = lerp(o3.xyz, saturate(float3(1.0, 0.985, 0.93) * pb), pesPaint);
+    // (11/11 h, referencia de Agustin: "el color de las lineas") natural: cal BLANCA (no crema) y un poco mas clara (tope 0.84)
+    if (pesNatV) pb = min(pb * 1.12, 0.84);
+    o3.xyz = lerp(o3.xyz, saturate((pesNatV ? float3(0.985, 1.0, 0.985) : float3(1.0, 0.985, 0.93)) * pb), pesPaint);
   }
   // --- normal de la hoja (detalle) ---
   r9.x = r9.z * r9.x;
