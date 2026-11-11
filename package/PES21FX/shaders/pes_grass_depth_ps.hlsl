@@ -40,6 +40,12 @@ void main(
       float pesHvR = frac(v8.z * 32.0);
       float mixB = saturate(P412.x);
       float rowB = (mixB > 0.001 && frac(pesHvR * 23.7 + 0.61) < mixB) ? 1.0 : 0.0;
+      if (pesNat) {   // (11/11 d) igual que 18afff: 4 variantes por banda y tipo, la mitad espejadas
+        float kv = floor(frac(pesHvR * 41.3 + 0.17) * 4.0);
+        float uu = saturate(v1.x); if (frac(pesHvR * 57.1 + 0.33) < 0.5) uu = 1.0 - uu;
+        uvA.x = (uu + band * 2.0 + fmod(kv, 2.0)) * 0.125;
+        uvA.y = (saturate(uvA.y) + rowB * 2.0 + floor(kv * 0.5)) * 0.25;
+      } else
       uvA.y = saturate(uvA.y) * 0.5 + rowB * 0.5;
     }
   }

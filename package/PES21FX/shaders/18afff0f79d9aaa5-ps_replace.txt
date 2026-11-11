@@ -130,6 +130,7 @@ void main(
   // la cal pintada cubre la parte alta de la hoja: hacia la raiz queda verde (solo de cerca, donde la hoja mide)
   if (pesV3 && pesPaintF > 0.001) pesPaintF *= lerp(1.0, lerp(0.45, 1.0, smoothstep(0.0, 0.5, relH)), saturate(kRoot) * nearF);
   float2 uvA = v1.xy;
+  bool pesMir = false;   // (11/11 d) tarjeta espejada (natural)
   if (pesV3) {
     if (Q5.w > 0.5) uvA.y = 1.0 - uvA.y;   // raiz del atlas arriba
     float band = clamp(floor(v8.w - (pesFB ? 8.0 : 0.0) - 0.5), 0.0, 3.0);   // banda del manojo (la elige el VS: tipo de pasto + parcela)
@@ -138,6 +139,15 @@ void main(
     // ancha y plana con el nervio en V y torsion. x412 = fraccion de hojas del tipo ancho (al azar por hoja, v8.z); el artificial es todo fino
     { float4 P412 = IniParams.Load(int2(412,0)); float mixB = pesArt ? 0.0 : saturate(P412.x);
       float rowB = (mixB > 0.001 && frac(pesHvR * 23.7 + 0.61) < mixB) ? 1.0 : 0.0;
+      if (pesNat) {
+        // (11/11 d, Agustin: "que el atlas no sea solo 4 texturas que se repitan") natural: 8 x 4 tarjetas de 512, 4 variantes por banda y
+        // tipo de hoja (una al azar por tarjeta) y la mitad espejadas. MISMA cuenta en pes_grass_depth_ps.hlsl
+        float kv = floor(frac(pesHvR * 41.3 + 0.17) * 4.0);
+        pesMir = frac(pesHvR * 57.1 + 0.33) < 0.5;
+        float uu = saturate(v1.x); if (pesMir) uu = 1.0 - uu;
+        uvA.x = (uu + band * 2.0 + fmod(kv, 2.0)) * 0.125;
+        uvA.y = (saturate(uvA.y) + rowB * 2.0 + floor(kv * 0.5)) * 0.25;
+      } else
       uvA.y = saturate(uvA.y) * 0.5 + rowB * 0.5; }
   }
   float atlasPx = 128.0;   // el fundido de la oclusion por distancia se mide como el juego (tamano en pantalla, no del atlas)
@@ -170,6 +180,7 @@ void main(
   r0.w = cmp(r0.w < 0);
   if (r0.w != 0) discard;
   float pesLight = r0.x;                     // claridad (0.5 neutro) del atlas propio
+  if (pesNat && pesMir) pesN.x = 1.0 - pesN.x;   // (11/11 d) tarjeta espejada: la normal a lo ancho cambia de lado
   if (pesNat && !pesFar) {   // (11/11) y412 detalle: nervio, venas, fibras y manchas de la hoja (claridad y relieve de la normal)
     pesLight = 0.5 + (pesLight - 0.5) * natDet;
     pesN.xy = 0.5 + (pesN.xy - 0.5) * lerp(1.0, natDet, 0.6);
@@ -190,7 +201,7 @@ void main(
   // raiz, que lleva la oclusion del atlas (G ~ 0.2): cada hoja era un punto al 50-75 % de brillo sobre el suelo ("manchas negras", lineas
   // sucias). Mientras la hoja toma el color del suelo (pesCf < 1) la oclusion se lee de un mip grueso del atlas (el promedio del manojo)
   float4 P299 = IniParams.Load(int2(299,0));
-  if (pesV3 && !pesFar && v4.w > 0.0 && pesCf < 0.999 && P299.y > 0.5) r0.y = lerp(pesNat ? PESNatAtlas.SampleLevel(g_samplerLinear_Wrap_s, uvA, 6.0).y : PESGrassAtlas.SampleLevel(g_samplerLinear_Wrap_s, uvA, 5.0).y, r0.y, pesCf);
+  if (pesV3 && !pesFar && v4.w > 0.0 && pesCf < 0.999 && P299.y > 0.5) r0.y = lerp(pesNat ? PESNatAtlas.SampleLevel(g_samplerLinear_Wrap_s, uvA, 5.0).y : PESGrassAtlas.SampleLevel(g_samplerLinear_Wrap_s, uvA, 5.0).y, r0.y, pesCf);
   r0.w = r0.y + r0.y;
   r0.y = -r0.y * 2 + 1;
   r0.y = v3.w * r0.y + r0.w;
@@ -266,9 +277,19 @@ void main(
     float3 c = o0.xyz * clar;
     float tipK = smoothstep(0.55, 1.0, pesN.z) * (0.08 + 0.6 * v8.x) * pesCf;   // (26/10 d) 0.18 -> 0.08: las puntas tenian un 18% de paja aun sin desgaste (r/g 0.45 -> 0.57, lima a media distancia)
     // (11/11) w412: en el pasto de verdad hay hojas sueltas secas o amarillentas entre las verdes (mas hacia la punta); hoja por hoja
+    // (11/11 c, Agustin: "no siempre el color es amarillo") la hoja seca no es siempre amarilla: verde apagado, verde amarillento, paja o
+    // marron, uno por hoja; el seco del desgaste / las puntas sigue con el tinte de siempre
     float natDry = 0.0;
     if (pesNat && frac(pesHvR * 13.37 + 0.07) < saturate(P412n.w)) natDry = (0.30 + 0.45 * frac(pesHvR * 29.1 + 0.5)) * lerp(0.55, 1.0, relH) * pesCfN;
-    c = PESDryTint(c, tipK + natDry + v8.x * saturate(Q7.y) * 0.85);
+    if (natDry > 0.001) {
+      float lD = dot(c, float3(0.2126, 0.7152, 0.0722)); float kd = frac(pesHvR * 7.13 + 0.37);
+      float3 cd = kd < 0.35 ? lD * float3(0.92, 1.05, 0.62)           // verde apagado (oliva)
+                : kd < 0.60 ? c * float3(1.14, 1.04, 0.72)            // verde amarillento
+                : kd < 0.85 ? lD * float3(1.30, 1.12, 0.62)           // paja
+                :             lD * float3(1.10, 0.82, 0.52) * 0.85;   // marron
+      c = lerp(c, cd, saturate(natDry * 1.3));
+    }
+    c = PESDryTint(c, tipK + v8.x * saturate(Q7.y) * 0.85);
     { // misma correccion de color que la base de la cancha ("Pasto v2", x29): antes las hojas quedaban mas amarillas/grises que el suelo
       float4 GV = IniParams.Load(int2(29,0));
       if (GV.w > 0.5) {
