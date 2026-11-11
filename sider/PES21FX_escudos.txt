@@ -1,0 +1,477 @@
+; PES21FX - escudo de cada equipo en la camiseta que usan los JUGADORES (version de partido, ultimo kit)
+; id_equipo, 1 = bordado / 0 = impreso o termoaplicado ; nombre (carpeta del kitserver)
+; Equipos que no estan: el shader lo estima por la textura del kit (y el tejido).
+; 08/11/2026: version de partido de Nike, Adidas, Puma, New Balance, Castore, Umbro y Kappa = termoaplicado o silicona
+;   (el bordado es de la version de hincha). Clasicos hasta 2008 = bordado. Se puede corregir a mano: cambiar el 0 / 1.
+
+100, 0 ; ENG\A\Manchester United
+101, 0 ; ENG\A\Arsenal
+102, 0 ; ENG\A\Chelsea
+103, 0 ; ENG\A\Liverpool
+104, 0 ; ENG\A\Leeds
+106, 0 ; ENG\A\Newcastle
+107, 0 ; ENG\A\Aston Villa
+173, 0 ; ENG\A\Manchester City
+177, 0 ; ENG\A\Everton
+178, 0 ; ENG\A\Fulham
+179, 0 ; ENG\A\Tottenham
+377, 0 ; ENG\A\Brighton
+382, 0 ; ENG\A\Crystal Palace
+386, 0 ; ENG\A\Ipswich
+389, 0 ; ENG\A\Nottingham Forest
+396, 0 ; ENG\A\Sunderland
+1589, 0 ; ENG\A\Hull City
+4071, 0 ; ENG\A\Bournemouth
+4180, 0 ; ENG\A\Brentford
+4183, 0 ; ENG\A\Coventry
+108, 0 ; ESP\A\Barcelona
+109, 0 ; ESP\A\Real Madrid
+110, 0 ; ESP\A\Valencia
+111, 0 ; ESP\A\La Coruna
+172, 0 ; ESP\A\Atletico Madrid
+194, 0 ; ESP\A\Real Betis
+195, 0 ; ESP\A\Celta
+196, 0 ; ESP\A\Real Sociedad
+258, 0 ; ESP\A\Athletic Bilbao
+259, 0 ; ESP\A\Espanyol
+260, 0 ; ESP\A\Malaga
+263, 0 ; ESP\A\Osasuna
+264, 0 ; ESP\A\Real Racing
+265, 0 ; ESP\A\Sevilla
+267, 0 ; ESP\A\Villarreal
+361, 0 ; ESP\A\Elche
+362, 0 ; ESP\A\Getafe
+366, 0 ; ESP\A\Levante
+370, 0 ; ESP\A\Rayo Vallecano
+4145, 0 ; ESP\A\Deportivo Alaves
+119, 0 ; ITA\A\Internazionale
+120, 0 ; ITA\A\Juventus
+121, 0 ; ITA\A\Milan
+122, 0 ; ITA\A\Lazio
+123, 0 ; ITA\A\Parma
+124, 0 ; ITA\A\Fiorentina
+125, 0 ; ITA\A\Roma
+186, 0 ; ITA\A\Bologna
+190, 0 ; ITA\A\Udinese
+234, 0 ; ITA\A\Atalanta
+320, 0 ; ITA\A\Cagliari
+323, 0 ; ITA\A\Genoa
+327, 0 ; ITA\A\Napoli
+333, 0 ; ITA\A\Torino
+1919, 0 ; ITA\A\Sassuolo
+4219, 0 ; ITA\A\Como
+4229, 0 ; ITA\A\Venezia
+4234, 0 ; ITA\A\Frosinone
+4237, 0 ; ITA\A\Lecce
+4914, 0 ; ITA\A\Monza
+112, 0 ; FRA\A\Monaco
+113, 0 ; FRA\A\Marseille
+114, 0 ; FRA\A\PSG
+180, 0 ; FRA\A\Auxerre
+181, 0 ; FRA\A\Lyon
+182, 0 ; FRA\A\Lens
+212, 0 ; FRA\A\Le Mans
+213, 0 ; FRA\A\Lille
+217, 0 ; FRA\A\Nice
+218, 0 ; FRA\A\Rennes
+221, 0 ; FRA\A\Toulouse
+403, 0 ; FRA\A\Angers
+413, 0 ; FRA\A\Le Havre
+414, 0 ; FRA\A\Lorient
+420, 0 ; FRA\A\Troyes
+1329, 0 ; FRA\A\Brest
+4211, 0 ; FRA\A\Paris FC
+4213, 0 ; FRA\A\Strasbourg
+126, 0 ; GER\A\Borussia Dortmund
+127, 0 ; GER\A\Bayern Munich
+128, 0 ; GER\A\Leverkusen
+129, 0 ; GER\A\Hambuger
+184, 0 ; GER\A\Schalke
+185, 0 ; GER\A\Werder Bremen
+225, 0 ; GER\A\Borussia Mgladbach
+226, 0 ; GER\A\Frankfurt
+227, 0 ; GER\A\Freiburg
+231, 0 ; GER\A\Stuttgart
+436, 0 ; GER\A\Mainz
+4124, 0 ; GER\A\Augsburg
+4126, 0 ; GER\A\Hoffenheim
+4137, 0 ; GER\A\Koln
+4140, 0 ; GER\A\Union Berlin
+4324, 0 ; GER\A\Paderborn
+5010, 0 ; GER\A\RB Leipzig
+6094, 0 ; GER\A\Elversberg
+116, 0 ; NED\A\Ajax
+117, 0 ; NED\A\Feyenoord
+118, 0 ; NED\A\PSV
+242, 0 ; NED\A\AZ
+243, 0 ; NED\A\Den Haag
+244, 0 ; NED\A\Groningen
+245, 0 ; NED\A\Heerenveen
+247, 0 ; NED\A\NEC
+250, 0 ; NED\A\Twente
+251, 0 ; NED\A\Utrecht
+255, 0 ; NED\A\Willem II
+256, 0 ; NED\A\Zwolle
+338, 0 ; NED\A\Cambuur
+344, 0 ; NED\A\Excelsior
+345, 0 ; NED\A\Fortuna
+346, 0 ; NED\A\Go Ahead Eagles
+351, 0 ; NED\A\Sparta Rotterdam
+352, 0 ; NED\A\Telstar
+191, 0 ; POR\A\Benfica
+192, 0 ; POR\A\Porto
+193, 0 ; POR\A\Sporting
+130, 0 ; TUR\A\Galatasaray
+197, 0 ; TUR\A\Fenerbahce
+273, 0 ; TUR\A\Besiktas
+1230, 0 ; TUR\A\Genclerbirligi
+1945, 0 ; TUR\A\Trabzonspor
+1989, 0 ; TUR\A\Antalyaspor
+1995, 0 ; TUR\A\Istanbul Basaksehir
+1996, 0 ; TUR\A\Kayserispor
+2625, 0 ; TUR\A\Kasimpasa
+5202, 0 ; TUR\A\Alanyaspor
+5203, 0 ; TUR\A\Goztepe
+5204, 0 ; TUR\A\Konyaspor
+5353, 0 ; TUR\A\Erzurumspor
+5354, 0 ; TUR\A\Rizespor
+5356, 0 ; TUR\A\Gazisehir Gaziantep
+5361, 0 ; TUR\A\Samsunspor
+5820, 0 ; TUR\A\Eyupspor
+5821, 0 ; TUR\A\Kocaelispor
+5898, 0 ; TUR\A\Bodrum
+5962, 0 ; TUR\A\Corum
+6081, 0 ; TUR\A\Amed
+131, 0 ; SCO\A\Celtic
+132, 0 ; SCO\A\Rangers
+1219, 0 ; SCO\A\Aberdeen
+1220, 0 ; SCO\A\Dundee United
+1221, 0 ; SCO\A\Hearts
+1222, 0 ; SCO\A\Hibernian
+1985, 0 ; SCO\A\Kilmarnock
+1986, 0 ; SCO\A\Motherwell
+1987, 0 ; SCO\A\St Mirren
+2365, 0 ; SCO\A\St Johnstone
+2621, 0 ; SCO\A\Dundee
+5317, 0 ; SCO\A\Falkirk
+174, 0 ; BEL\A\Anderlecht
+269, 0 ; BEL\A\Brugge
+1195, 0 ; BEL\A\Genk
+1196, 0 ; BEL\A\Gent
+1197, 0 ; BEL\A\Standard Liege
+1200, 0 ; BEL\A\Mechelen
+2009, 0 ; BEL\A\Cercle
+2010, 0 ; BEL\A\Sporting Charleroi
+2013, 0 ; BEL\A\Kortrijk
+2019, 0 ; BEL\A\Zulte Waregem
+5191, 0 ; BEL\A\Antwerp
+5194, 0 ; BEL\A\Sint-Truiden
+5195, 0 ; BEL\A\Beveren
+5217, 0 ; BEL\A\Oh Leuven
+5220, 0 ; BEL\A\USG
+5221, 0 ; BEL\A\Westerlo
+5422, 0 ; BEL\A\Lommel
+6067, 0 ; BEL\A\La Louviere
+136, 0 ; BRA\A\Vasco Da Gama
+137, 0 ; BRA\A\Palmeiras
+274, 0 ; BRA\A\Cruzeiro
+1245, 0 ; BRA\A\Mineiro
+1246, 0 ; BRA\A\Botafogo
+1247, 0 ; BRA\A\Corinthians
+1248, 0 ; BRA\A\Flamengo
+1249, 0 ; BRA\A\Fluminense
+1250, 0 ; BRA\A\Gremio
+1252, 0 ; BRA\A\Internacional
+1254, 0 ; BRA\A\Santos
+1255, 0 ; BRA\A\Sao Paulo
+1930, 0 ; BRA\A\Paranaense
+1931, 0 ; BRA\A\Coritiba
+1937, 0 ; BRA\A\Vitoria
+2453, 0 ; BRA\A\Bahia
+2459, 0 ; BRA\A\RB Bragantino
+4108, 0 ; BRA\A\Chapecoense
+5145, 0 ; BRA\A\Remo
+5767, 0 ; BRA\A\Mirassol
+138, 0 ; ARG\A\River
+139, 0 ; ARG\A\Boca
+1236, 0 ; ARG\A\Argentinos Jrs
+1237, 0 ; ARG\A\Racing
+1238, 0 ; ARG\A\Estudiantes LP
+1239, 0 ; ARG\A\Gimnasia LP
+1240, 0 ; ARG\A\Independiente
+1241, 0 ; ARG\A\Newells Old Boys
+1242, 0 ; ARG\A\Rosario Central
+1243, 0 ; ARG\A\San Lorenzo
+1244, 0 ; ARG\A\Velez
+1922, 0 ; ARG\A\Huracan
+1926, 0 ; ARG\A\Tigre
+1927, 0 ; ARG\A\Banfield
+1929, 0 ; ARG\A\Lanus
+2536, 0 ; ARG\A\Belgrano
+2538, 0 ; ARG\A\Union
+2717, 0 ; ARG\A\Aldosivi
+2719, 0 ; ARG\A\Atl Tucuman
+2722, 0 ; ARG\A\Defensa Y Justicia
+2726, 0 ; ARG\A\Independiente Rivadavia
+2727, 0 ; ARG\A\Instituto
+2730, 0 ; ARG\A\Sarmiento
+4995, 0 ; ARG\A\Ctral Cordoba
+4997, 0 ; ARG\A\GyE Mendoza
+5046, 0 ; ARG\A\Talleres Cba
+5366, 0 ; ARG\A\Riestra
+5454, 0 ; ARG\A\Platense
+5657, 0 ; ARG\A\Barracas
+5659, 0 ; ARG\A\Estudiantes RC
+1348, 0 ; KSA\A\Al-Shabab
+1349, 0 ; KSA\A\Al-Ahli
+1350, 0 ; KSA\A\Al-Ittihad
+1489, 0 ; KSA\A\Al-Hilal
+1902, 0 ; KSA\A\Al-Ettifaq
+2344, 0 ; KSA\A\Abha
+2398, 0 ; KSA\A\Al-Diriyah
+2405, 0 ; KSA\A\Al-Qadsiah
+2406, 0 ; KSA\A\Al-Riyadh
+2408, 0 ; KSA\A\Al-Khaleej
+2409, 0 ; KSA\A\Al-Kholood
+2575, 0 ; KSA\A\Al-Faisaly
+2576, 0 ; KSA\A\Al-Fateh
+2577, 0 ; KSA\A\Al-Nassr
+2580, 0 ; KSA\A\Al-Taawoun
+4002, 0 ; KSA\A\Al-Hazem
+4004, 0 ; KSA\A\NEOM
+5940, 0 ; KSA\A\Al-Fayha
+1335, 0 ; UAE\A\Al Ain
+1264, 0 ; MEX\A\America
+1265, 0 ; MEX\A\Cruz Azul
+1699, 0 ; MEX\A\Pachuca
+1700, 0 ; MEX\A\Guadalajara
+1772, 0 ; MEX\A\Puebla
+1773, 0 ; MEX\A\Toluca
+1775, 0 ; MEX\A\Pumas
+1776, 0 ; MEX\A\Atlante
+1777, 0 ; MEX\A\Atlas
+1778, 0 ; MEX\A\Rayados
+1779, 0 ; MEX\A\Santos Laguna
+1782, 0 ; MEX\A\Tigres
+1785, 0 ; MEX\A\Tijuana
+1789, 0 ; MEX\A\Leon
+1792, 0 ; MEX\A\Queretaro
+5130, 0 ; MEX\A\Necaxa
+5153, 0 ; MEX\A\Juarez
+5379, 0 ; MEX\A\San Luis
+4148, 0 ; USA\A\Chicago Fire
+4150, 0 ; USA\A\Colorado Rapids
+4151, 0 ; USA\A\Columbus Crew
+4152, 0 ; USA\A\DC United
+4153, 0 ; USA\A\Dallas
+4154, 0 ; USA\A\Houston Dynamo
+4155, 0 ; USA\A\LA Galaxy
+4156, 0 ; USA\A\Montreal
+4157, 0 ; USA\A\NE Revolution
+4158, 0 ; USA\A\NYRB
+4159, 0 ; USA\A\Philadelphia Union
+4160, 0 ; USA\A\Portland Timbers
+4161, 0 ; USA\A\Real Salt Lake
+4162, 0 ; USA\A\SJ Earthquakes
+4163, 0 ; USA\A\Seattle Sounders
+4164, 0 ; USA\A\Sporting KC
+4165, 0 ; USA\A\Toronto FC
+4166, 0 ; USA\A\Whitecaps
+5061, 0 ; USA\A\NYCFC
+5062, 0 ; USA\A\Orlando City
+5736, 0 ; USA\A\Atlanta United
+5737, 0 ; USA\A\Cincinnati
+5738, 0 ; USA\A\Inter Miami
+5739, 0 ; USA\A\Nashville
+5740, 0 ; USA\A\Austin
+5741, 0 ; USA\A\LAFC
+5742, 0 ; USA\A\Minnesota United
+5832, 0 ; USA\A\Charlotte
+5903, 0 ; USA\A\St Louis
+6084, 0 ; USA\A\San Diego
+1, 0 ; FIFA\UEFA\Ireland
+2, 0 ; FIFA\UEFA\Northern Ireland
+3, 0 ; FIFA\UEFA\Scotland
+4, 0 ; FIFA\UEFA\Wales
+5, 0 ; FIFA\UEFA\England
+6, 0 ; FIFA\UEFA\Portugal
+7, 0 ; FIFA\UEFA\Spain
+8, 0 ; FIFA\UEFA\France
+9, 0 ; FIFA\UEFA\Belgium
+10, 0 ; FIFA\UEFA\Netherlands
+11, 0 ; FIFA\UEFA\Switzerland
+12, 0 ; FIFA\UEFA\Italy
+13, 0 ; FIFA\UEFA\Czechia
+14, 0 ; FIFA\UEFA\Germany
+15, 0 ; FIFA\UEFA\Denmark
+16, 0 ; FIFA\UEFA\Norway
+17, 0 ; FIFA\UEFA\Sweden
+18, 0 ; FIFA\UEFA\Finland
+19, 0 ; FIFA\UEFA\Poland
+20, 0 ; FIFA\UEFA\Slovakia
+21, 0 ; FIFA\UEFA\Austria
+22, 0 ; FIFA\UEFA\Hungary
+23, 0 ; FIFA\UEFA\Slovenia
+24, 0 ; FIFA\UEFA\Croatia
+26, 0 ; FIFA\UEFA\Romania
+27, 0 ; FIFA\UEFA\Bulgary
+28, 0 ; FIFA\UEFA\Greece
+29, 0 ; FIFA\UEFA\Turkiye
+30, 0 ; FIFA\UEFA\Ukraine
+31, 0 ; FIFA\UEFA\Russia
+59, 0 ; FIFA\UEFA\Latvia
+1164, 0 ; FIFA\UEFA\Israel
+1166, 0 ; FIFA\UEFA\Andorra
+1167, 0 ; FIFA\UEFA\Armenia
+1168, 0 ; FIFA\UEFA\Azerbaijan
+1169, 0 ; FIFA\UEFA\Belarus
+1170, 0 ; FIFA\UEFA\Bosnia
+1171, 0 ; FIFA\UEFA\Cyprus
+1172, 0 ; FIFA\UEFA\Estonia
+1173, 0 ; FIFA\UEFA\Faroe Islands
+1174, 0 ; FIFA\UEFA\Georgia
+1175, 0 ; FIFA\UEFA\Iceland
+1176, 0 ; FIFA\UEFA\Kazakhstan
+1177, 0 ; FIFA\UEFA\Liechtenstein
+1178, 0 ; FIFA\UEFA\Lithuania
+1179, 0 ; FIFA\UEFA\Luxembourg
+1180, 0 ; FIFA\UEFA\North Macedonia
+1181, 0 ; FIFA\UEFA\Malta
+1182, 0 ; FIFA\UEFA\Moldova
+1183, 0 ; FIFA\UEFA\San Marino
+1550, 0 ; FIFA\UEFA\Serbia
+1551, 0 ; FIFA\UEFA\Montenegro
+5439, 0 ; FIFA\UEFA\Gibraltar
+5440, 0 ; FIFA\UEFA\Kosovo
+44, 0 ; FIFA\CONMEBOL\Colombia
+45, 0 ; FIFA\CONMEBOL\Brasil
+46, 0 ; FIFA\CONMEBOL\Peru
+47, 0 ; FIFA\CONMEBOL\Chile
+48, 0 ; FIFA\CONMEBOL\Paraguay
+49, 0 ; FIFA\CONMEBOL\Uruguay
+50, 0 ; FIFA\CONMEBOL\Argentina
+51, 0 ; FIFA\CONMEBOL\Ecuador
+1128, 0 ; FIFA\CONMEBOL\Bolivia
+1129, 0 ; FIFA\CONMEBOL\Venezuela
+900, 1 ; CLASSIC\Nations\Brasil 1970
+902, 1 ; CLASSIC\Nations\England 1986
+903, 1 ; CLASSIC\Nations\France 1998
+904, 1 ; CLASSIC\Nations\Germany 1990
+905, 1 ; CLASSIC\Nations\Italy 1994
+906, 1 ; CLASSIC\Nations\Netherlands 1988
+907, 1 ; CLASSIC\Nations\Brasil 2002
+908, 1 ; CLASSIC\Nations\Argentina 1986
+909, 1 ; CLASSIC\Nations\Austria 1978
+910, 1 ; CLASSIC\Nations\Australia 2004
+911, 0 ; CLASSIC\Nations\Costa Rica 2014
+912, 1 ; CLASSIC\Nations\Scotland 1982
+1399, 1 ; CLASSIC\Nations\USA 1994
+1393, 0 ; CLASSIC\Nations\Cote D Ivoire 2010
+1394, 1 ; CLASSIC\Nations\Cameroon 2002
+1395, 1 ; CLASSIC\Nations\Nigeria 1996
+1396, 1 ; CLASSIC\Nations\Ecuador 1998
+1397, 1 ; CLASSIC\Nations\Sweden 1994
+1398, 1 ; CLASSIC\Nations\Hungary 1954
+1400, 1 ; CLASSIC\Nations\Serbia 1990
+1401, 1 ; CLASSIC\Nations\Denmark 1986
+1402, 1 ; CLASSIC\Nations\Czechia 2006
+1403, 1 ; CLASSIC\Nations\Russia 1960
+1404, 1 ; CLASSIC\Nations\Croatia 1998
+1405, 1 ; CLASSIC\Nations\Romania 1996
+1406, 1 ; CLASSIC\Nations\Turkey 2002
+1436, 1 ; CLASSIC\Nations\Japan 1998
+1440, 0 ; CLASSIC\Nations\Spain 2010
+1445, 1 ; CLASSIC\Nations\Colombia 1990
+1446, 0 ; CLASSIC\Nations\Chile 2015
+1447, 1 ; CLASSIC\Nations\Paraguay 1998
+1448, 1 ; CLASSIC\Nations\Peru 1978
+1449, 1 ; CLASSIC\Nations\Uruguay 1995
+1450, 1 ; CLASSIC\Nations\Mexico 1998
+1451, 1 ; CLASSIC\Nations\Belgium 1982
+4062, 1 ; CLASSIC\Nations\Portugal 2004
+920, 1 ; CLASSIC\Teams\Santos 1962
+921, 1 ; CLASSIC\Teams\Benfica 1962
+922, 1 ; CLASSIC\Teams\Inter 1965
+923, 1 ; CLASSIC\Teams\Penarol 1968
+927, 1 ; CLASSIC\Teams\Alianza Lima 1978
+929, 1 ; CLASSIC\Teams\Liverpool 1984
+930, 1 ; CLASSIC\Teams\Juventus 1985
+931, 1 ; CLASSIC\Teams\Atletico Nacional 1989
+938, 0 ; CLASSIC\Teams\River 2015
+940, 0 ; CLASSIC\Teams\Tigres 2015
+941, 0 ; CLASSIC\Teams\Atletico Nacional 2016
+942, 0 ; CLASSIC\Teams\Chapecoense 2016
+1408, 1 ; CLASSIC\Teams\Palmeiras 1999
+1409, 0 ; CLASSIC\Teams\Wolfsburg 2009
+1410, 1 ; CLASSIC\Teams\Leverkusen 2002
+1411, 0 ; CLASSIC\Teams\Schalke 04 2011
+1412, 1 ; CLASSIC\Teams\Gremio 1995
+1413, 1 ; CLASSIC\Teams\Cruzeiro 1997
+1414, 1 ; CLASSIC\Teams\Vasco da Gama 1998
+1438, 1 ; CLASSIC\Teams\Galatasaray 2000
+1437, 1 ; CLASSIC\Teams\PSV 1988
+1439, 1 ; CLASSIC\Teams\Lyon 2008
+1441, 1 ; CLASSIC\Teams\Porto 2004
+1442, 1 ; CLASSIC\Teams\Monaco 2004
+1443, 0 ; CLASSIC\Teams\PSG 2013
+1444, 0 ; CLASSIC\Teams\Manchester City 2012
+1452, 1 ; CLASSIC\Teams\Sevilla 2007
+1453, 0 ; CLASSIC\Teams\Internacional 2010
+1454, 0 ; CLASSIC\Teams\Corinthians 2012
+1455, 0 ; CLASSIC\Teams\Atletico Mineiro 2013
+1456, 0 ; CLASSIC\Teams\San Lorenzo 2014
+1457, 0 ; CLASSIC\Teams\Juventus 2015
+1458, 0 ; CLASSIC\Teams\Chivas 2011
+1459, 1 ; CLASSIC\Teams\Colo Colo 1991
+1460, 1 ; CLASSIC\Teams\U Catolica 1994
+1461, 0 ; CLASSIC\Teams\Chelsea 2012
+1462, 1 ; CLASSIC\Teams\Boca 2007
+1463, 0 ; CLASSIC\Teams\Atletico Madrid 2014
+1464, 1 ; CLASSIC\Teams\Marseille 1993
+1465, 0 ; CLASSIC\Teams\Real Madrid 2014
+1466, 1 ; CLASSIC\Teams\Milan 2006
+1467, 1 ; CLASSIC\Teams\Real Madrid 2002
+1468, 1 ; CLASSIC\Teams\Chelsea 2005
+1469, 0 ; CLASSIC\Teams\Atletico Madrid 2009
+1470, 1 ; CLASSIC\Teams\Velez 1994
+1473, 1 ; CLASSIC\Teams\Sporting Cristal 1997
+1482, 1 ; CLASSIC\Teams\Bolivar 2004
+1483, 1 ; CLASSIC\Teams\Lazio 1999
+1484, 1 ; CLASSIC\Teams\Roma 2000
+1487, 1 ; CLASSIC\Teams\La Coruna 2000
+1471, 1 ; CLASSIC\Teams\Ajax 1994
+1472, 1 ; CLASSIC\Teams\Napoli 1988
+1474, 1 ; CLASSIC\Teams\Boca 2000
+1475, 1 ; CLASSIC\Teams\River 1997
+1476, 0 ; CLASSIC\Teams\Estudiantes LP 2009
+1477, 0 ; CLASSIC\Teams\Santos 2010
+1478, 1 ; CLASSIC\Teams\Colo Colo 2006
+1479, 0 ; CLASSIC\Teams\U Chile 2011
+1480, 1 ; CLASSIC\Teams\LDU Quito 2008
+1481, 1 ; CLASSIC\Teams\Independiente 1984
+1485, 1 ; CLASSIC\Teams\Valencia 2001
+1486, 1 ; CLASSIC\Teams\Villarreal 2005
+1533, 1 ; CLASSIC\Teams\Real Madrid 1958
+1534, 1 ; CLASSIC\Teams\Ajax 1973
+1535, 1 ; CLASSIC\Teams\Red Star 1991
+1536, 1 ; CLASSIC\Teams\U Chile 1996
+1537, 1 ; CLASSIC\Teams\Internazionale 1998
+1538, 1 ; CLASSIC\Teams\Real Madrid 1998
+1539, 1 ; CLASSIC\Teams\Milan 2003
+5052, 1 ; CLASSIC\Teams\Barcelona 1992
+5058, 1 ; CLASSIC\Teams\Barcelona 2005
+5059, 1 ; CLASSIC\Teams\Barcelona 2008
+5068, 1 ; CLASSIC\Teams\Liverpool 2004
+5078, 1 ; CLASSIC\Teams\Borussia Dortmund 1996
+5080, 0 ; CLASSIC\Teams\Borussia Dortmund 2013
+5604, 1 ; CLASSIC\Teams\Manchester United 1999
+5605, 1 ; CLASSIC\Teams\Manchester United 2007
+5607, 1 ; CLASSIC\Teams\Arsenal 2003
+5610, 1 ; CLASSIC\Teams\Juventus 2003
+5619, 1 ; CLASSIC\Teams\Bayern Munchen 2001
+5611, 1 ; CLASSIC\Teams\Juventus 1996
+5613, 0 ; CLASSIC\Teams\Internazionale 2009
+5616, 1 ; CLASSIC\Teams\Milan 1990
+5715, 0 ; CLASSIC\Teams\Barcelona 2015
+5716, 0 ; CLASSIC\Teams\Bayern Munchen 2013
+5717, 1 ; CLASSIC\Teams\Sao Paulo 1992
