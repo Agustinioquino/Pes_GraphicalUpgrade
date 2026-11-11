@@ -58,6 +58,7 @@ typedef void (*PFN_SelClear)(void* sel);                                    // 0
 typedef void (*PFN_SelAdd)(void* sel, const char* text);                    // 0x140e53ee0
 typedef void (*PFN_SelSet)(void* sel, unsigned i);                          // 0x140e54180
 typedef void (*PFN_Headline)(void* node, const char* text);                 // 0x140e56ca0
+typedef void (*PFN_HelpText)(void* page, int slot, const char* text);       // 0x140e43500: texto de un boton de la barra de ayuda ("" lo saca)
 typedef void* (*PFN_GetMv)();                                               // 0x141f05cd0
 typedef void (*PFN_MvHold)(void* mv, char on, void*, void*);                // 0x141f06e10
 typedef uintptr_t (*PFN_Dress)(void* mv, uint64_t key, uint32_t team, uint32_t a, uint32_t gk, uint32_t kit, uint8_t b);   // 0x141f06920
@@ -70,6 +71,7 @@ static const PFN_SelClear g_SelClear = (PFN_SelClear)0x140e54140ull;
 static const PFN_SelAdd g_SelAdd = (PFN_SelAdd)0x140e53ee0ull;
 static const PFN_SelSet g_SelSet = (PFN_SelSet)0x140e54180ull;
 static const PFN_Headline g_Headline = (PFN_Headline)0x140e56ca0ull;
+static const PFN_HelpText g_HelpText = (PFN_HelpText)0x140e43500ull;
 static const PFN_GetMv g_GetMv = (PFN_GetMv)0x141f05cd0ull;
 static const PFN_MvHold g_MvHold = (PFN_MvHold)0x141f06e10ull;
 static const PFN_Dress g_Dress = (PFN_Dress)0x141f06920ull;
@@ -192,8 +194,14 @@ static uintptr_t my_Build(void* page) {
     uint8_t* top = Ptr(I) ? P8(I + 0x90) : nullptr;
     void* head = Ptr(top) ? Sub(top, "headline") : nullptr;
     if (Ptr(head)) g_Headline(head, "Motor en tiempo real");
-    if (k <= 6) Log("motor (pagina): filas del Motor puestas en la pagina %p (%d de %d con selector; lista de la pagina %s, %d entradas; titulo %s)",
-                    page, hechas, kNFilas, tamper ? "apartada mientras armaba" : "sin tocar", (int)n, Ptr(head) ? "puesto" : "sin nodo");
+    // (Agustin 23:12: "ni que muestres los botones abajo del mando") la barra de ayuda se arma con el texto de cada boton
+    // (Impl+0x168 + 0x20 x boton, 17 botones; 0x140e73660 saca los que no tienen texto y esconde la barra si no queda ninguno).
+    // Se vacian los que tienen texto; los modos de las acciones (Impl+0x120) no cambian: "volver" sigue andando
+    int sinAyuda = 0;
+    if (g_cfg.motorHelpBar == 0 && Ptr(I) && Readable(I + 0x168, 17 * 0x20))
+        for (int i = 0; i < 17; i++) if (U64(I + 0x178 + (size_t)i * 0x20) != 0) { g_HelpText(page, i, ""); sinAyuda++; }
+    if (k <= 6) Log("motor (pagina): filas del Motor puestas en la pagina %p (%d de %d con selector; lista de la pagina %s, %d entradas; titulo %s; %d botones de ayuda sacados)",
+                    page, hechas, kNFilas, tamper ? "apartada mientras armaba" : "sin tocar", (int)n, Ptr(head) ? "puesto" : "sin nodo", sinAyuda);
     return ret;
 }
 
