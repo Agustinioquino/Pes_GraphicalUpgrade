@@ -134,7 +134,7 @@ void main(
   float kRoot = P325.z > 0.001 ? clamp(P325.z, 0.0, 2.0) : 1.0;
   float sparkK = smoothstep(2.0, 5.0, pxA * 0.012);
   // la cal pintada cubre la parte alta de la hoja: hacia la raiz queda verde (solo de cerca, donde la hoja mide)
-  if (pesV3 && pesPaintF > 0.001) pesPaintF *= lerp(1.0, lerp(0.45, 1.0, smoothstep(0.0, 0.5, relH)), saturate(kRoot) * nearF);
+  if (pesV3 && pesPaintF > 0.001) pesPaintF *= lerp(1.0, lerp(pesNat ? 0.70 : 0.45, 1.0, smoothstep(0.0, 0.5, relH)), saturate(kRoot) * nearF);   // (11/11 i) natural: la cal baja mas por la hoja
   float2 uvA = v1.xy;
   bool pesMir = false;   // (11/11 d) tarjeta espejada (natural)
   if (pesV3) {
