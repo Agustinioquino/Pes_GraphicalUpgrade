@@ -38,7 +38,8 @@ struct MotorLink {
     uint32_t alambreDibujos;        // +0x28 dibujos pasados a alambre en el ultimo cuadro
     float escala;                   // +0x2c pedido del modulo: escala de la vista de profundidad (0 = automatica)
     float escalaAct;                // +0x30 lo que rige
-    uint32_t res[3];                // +0x34
+    uint32_t panel;                 // +0x34 (11/11) el modulo lo cambia en cada cuadro con su panel abierto: el mouse es del Motor (menumouse.cpp)
+    uint32_t res[2];                // +0x38
 };
 #pragma pack(pop)
 static_assert(sizeof(MotorLink) == 64, "MotorLink debe medir 64 bytes (lo lee MotorTiempoReal.lua)");
@@ -47,6 +48,8 @@ std::atomic<bool> g_motorWire{ false };
 static HANDLE s_map = nullptr;
 static MotorLink* s_ml = nullptr;
 static uint32_t s_lastSeq = 0;
+static std::atomic<double> s_panelT{ -1.0e9 };   // (11/11) ultimo cuadro en que el modulo movio 'panel'
+bool MotorPanelOpen() { return Now() - s_panelT.load(std::memory_order_relaxed) < 0.5; }
 static std::atomic<unsigned> s_wireDraws{ 0 };
 
 // ---------------------------------------------------------------- alambre
@@ -128,6 +131,7 @@ void MotorLinkPresent() {
     {
         std::lock_guard<std::mutex> lk(g_cfgMutex);
         if (s_ml) {
+            { static uint32_t pl = 0; const uint32_t pn = s_ml->panel; if (pn != pl) { pl = pn; s_panelT.store(Now(), std::memory_order_relaxed); } }
             const uint32_t q = s_ml->seq;
             if (q != s_lastSeq) {
                 s_lastSeq = q;

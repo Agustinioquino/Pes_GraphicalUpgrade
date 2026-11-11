@@ -36,7 +36,7 @@
 --
 -- Offsets leidos en el exe decompilado (PES2021.exe 1.07.02): ver memoria del proyecto motor-tiempo-real-exe.
 
-local m = { version = "0.5" }
+local m = { version = "0.5.1" }
 local VERSION = m.version
 local DIR
 -- lo que hay que recordar aunque Sider recargue el modulo con el juego abierto (queda en ctx)
@@ -3027,6 +3027,8 @@ function m.overlay_on(ctx)
     end
     E.cuadros = E.cuadros + 1
     if not E.hilo_cuadro then E.hilo_cuadro = C.mtr_GetCurrentThreadId() end
+    -- (0.5.1) pulso para la DLL grafica: con este panel abierto el mouse es del Motor y no de los menus del juego
+    if RX.dll.u32 or RX.dll_abrir() then RX.dll.u32[13] = E.cuadros end
     local ahora = reloj()
     local viejo = ahora - E.t_expl
     -- con muchisimos objetos (un partido) se explora mas espaciado

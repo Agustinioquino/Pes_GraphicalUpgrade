@@ -140,7 +140,8 @@ static void SelectLikeGame(void* win, uint8_t* I, int g, int r) {
     ((PFN_Select)kSelect)(win, g, row);
 }
 
-static bool Enabled() { return s_ok && g_cfg.menuMouse != 0 && !g_menuOpen.load(std::memory_order_relaxed) && !FreeCamActive(); }
+// apagado con el menu de PES21FX abierto, con la camara libre y con el panel del Motor en tiempo real abierto (ahi el mouse es del Motor)
+static bool Enabled() { return s_ok && g_cfg.menuMouse != 0 && !g_menuOpen.load(std::memory_order_relaxed) && !FreeCamActive() && !MotorPanelOpen(); }
 
 static void Sample(double now, bool fresh) {
     s_m = Muestra(); s_m.t = now;
