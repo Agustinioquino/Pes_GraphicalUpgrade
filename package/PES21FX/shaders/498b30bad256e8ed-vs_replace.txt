@@ -163,7 +163,7 @@ void main(
       float kEvB = saturate(IniParams.Load(int2(108, 0)).w);
       bool cutB = PESBu(sB, 3u) < lerp(0.68, 0.94, kEvB);
       float h = PES_NAT_CUT * (cutB ? 0.058 * (1.0 - (0.08 - 0.065 * kEvB) * PESBu(sB, 4u)) : 0.058 * lerp(0.42 + 0.50 * PESBu(sB, 4u), 0.30 + 0.40 * PESBu(sB, 4u), kEvB));   // (11/11 k) x w296 / 60 mm (0.058 = la hoja de antes, ~6 cm)
-      float wB = 0.0029 * (0.65 + 0.70 * PESBu(sB, 5u));
+      float wB = 0.0029 * (0.65 + 0.70 * PESBu(sB, 5u)) * pow(min(PES_NAT_CUT, 1.0), -0.4);   // (11/11 l) pasto bajo: hojas algo mas anchas (28 mm: x1.36) para que no se vea pelado
       if (PESBu(sB, 6u) < saturate(IniParams.Load(int2(412, 0)).x)) wB *= 1.55;   // x412: parte de hojas anchas
       float bnd = PESBu(sB, 7u) < lerp(0.12, 0.03, kEvB) ? 0.55 + 0.35 * PESBu(sB, 8u) : 0.06 + 0.30 * PESBu(sB, 8u);   // curva (fraccion del alto); 12 % dobladas por el peso (3 % con w108 = 1)
       float tilt = lerp(0.14, 0.09, kEvB) * PESBu(sB, 9u);
@@ -392,6 +392,7 @@ void main(
     pesH = hT * pesHz * (1.0 + (n - 0.5) * 2.0 * hv) * (1.0 - pesWear.x * 0.35) * (1.0 - (pesWShort ? 0.4 : 1.0) * pesWear.y) * (pesWShort ? lerp(1.0, PESWearLiveHeight(pesLive), 0.5) : PESWearLiveHeight(pesLive));   // (11/11 h) natural: "muy desgastada": hasta 45 %, no 25 %
     pesH *= pesHmul;             // (27/10 m) tanda 10: alto de la mata y de la hoja
     pesCutS = pesNatV ? (pesBlade ? PES_NAT_CUT : pesHz) : 1.0;   // (11/11 k)
+    if (pesNatV && !pesBlade) pesWmul *= pow(min(pesHz, 1.0), -0.4);   // (11/11 l) tarjetas del natural mas bajas: algo mas anchas (cubren el suelo)
     pesLean += pesClumpLean;     // (27/10 m) tanda 10: la hoja se abre hacia afuera de la mata y cada una con su curva
     v0.y *= pesH;
     pesExtW.y = v0.y;   // las parcelas extra toman la misma altura
@@ -511,8 +512,13 @@ void main(
     if (pesNatV) {
       // (11/11 h, Agustin: "no reacciona mucho aplastandose con la pelota") natural: debajo de la pelota el pasto se aplasta mas (85 %) en un
       // radio algo mayor y se abre hacia afuera (la punta mas que la raiz); tambien el pasto del juego pegado a la camara (antes solo el del mod)
-      float kB = smoothstep(0.26, 0.09, dB) * saturate(W177.w);
-      pesSinkF = max(pesSinkF, 0.85 * kB);
+      // (11/11 l, Agustin: "aunque la pelota este saltando el pasto abajo desaparece") con el pasto de 28 mm el aplastado fijo (85 % en
+      // 26 cm con el centro de la pelota a menos de 35 cm) dejaba un circulo pelado bajo la pelota en el aire. Ahora la hoja baja solo hasta
+      // la superficie de la pelota encima de ella (esfera R 0.115): en el aire no toca nada, apoyada aplasta solo la huella (~8 cm)
+      const float RbS = 0.115;
+      float ySB = dB < RbS ? cb4[3].y - sqrt(max(RbS * RbS - dB * dB, 0.0)) : 1000.0;
+      float kB = saturate(1.0 - max(ySB, 0.0) / max(pesHref * (pesBlade ? PES_NAT_CUT : 1.0), 0.005)) * saturate(W177.w);   // alto real de la hoja
+      pesSinkF = max(pesSinkF, 0.9 * kB);
       float2 dO = dB > 1e-4 ? (r1.xz - cb4[3].xz) / dB : float2(1.0, 0.0);
       r1.xz += dO * (kB * 0.9 * max(v0.y, 0.0));
     } else pesSinkF = max(pesSinkF, 0.7 * smoothstep(0.22, 0.10, dB) * saturate(W177.w));   // (02/11 paso 7) la pelota se apoya (capsula radio 0.112)
