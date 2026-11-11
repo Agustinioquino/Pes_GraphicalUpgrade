@@ -861,7 +861,10 @@ function PE.jugador()
     if not id then id, de = PE.buscar_ficha(), "la primera ficha de la base de datos" end
     if not id then id, de = PE.MANIQUI, "el maniqui del juego" end
     if id == 0 or (id >= 0x80000000 and id <= 0x8000009f) then return false, "no tengo un jugador que sirva" end
-    if not leer(p, 8) or P(0) ~= PE.VT_CTX then return false, "el contexto del Editar cambio mientras buscaba el jugador" end
+    -- buscar en la base lleva muchas lecturas: antes de escribir, el contexto tiene que seguir siendo el mismo objeto y la
+    -- clave seguir invalida (si el juego puso un jugador en el medio, se deja el suyo)
+    if rptr(PE.CTX) ~= p or not leer(p, 8) or P(0) ~= PE.VT_CTX then return false, "el contexto del Editar cambio mientras buscaba el jugador" end
+    if not leer(p + 0xe0, 8) or B32[0] ~= 0xffff or B32[1] ~= 0 then return false, "el juego cambio la clave del jugador mientras la buscaba" end
     W32[0], W32[1] = 0, id
     if not poner(p + 0xe0, 8) then return false, "no pude escribir la clave del jugador" end
     if not leer(p + 0xe0, 8) or B32[0] ~= 0 or B32[1] ~= id then return false, "la clave del jugador no quedo escrita" end
