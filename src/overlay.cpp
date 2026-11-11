@@ -86,6 +86,8 @@ static void BuildFonts(float H) {
 // Agustin: un cuadrito semitransparente en una esquina con la ultima tecla del teclado. [PES21FX] ultima_tecla = 0 apagado,
 // 1 arriba izquierda, 2 arriba derecha, 3 abajo izquierda, 4 abajo derecha. Solo mira el teclado (GetAsyncKeyState) con la
 // ventana del juego al frente; no toca lo que recibe el juego.
+// (22:48, Agustin: "me referia que aparezca solo en el motor") solo se ve con el Motor en tiempo real abierto: su estudio 3D
+// (MotorPageActive, motorpage.cpp) o su panel (MotorPanelOpen). Fuera del Motor no se mira el teclado ni se dibuja nada.
 static int s_khVk = 0, s_khN = 0; static double s_khT = -1.0e9; static unsigned char s_khWas[256] = {};
 static const char* KeyHudName(int vk, char* buf, size_t n) {
     if ((vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z')) { snprintf(buf, n, "%c", (char)vk); return buf; }
@@ -107,6 +109,7 @@ static const char* KeyHudName(int vk, char* buf, size_t n) {
 // una vez por cuadro: anota la tecla recien apretada. Devuelve si hay que dibujar el cuadrito
 static bool KeyHudPoll() {
     if (g_cfg.keyHud <= 0) return false;
+    if (!MotorPageActive() && !MotorPanelOpen()) { if (s_khVk) { s_khVk = 0; s_khN = 0; memset(s_khWas, 0, sizeof s_khWas); } return false; }
     if (s_hwnd && GetForegroundWindow() == s_hwnd) {
         for (int vk = 8; vk < 255; vk++) {
             if (vk >= VK_LSHIFT && vk <= VK_RMENU) continue;            // ya entran como Shift / Ctrl / Alt
@@ -1612,10 +1615,10 @@ static void DrawSettingsPage() {
     {   // (11/11) cuadrito con la ultima tecla apretada: [PES21FX] ultima_tecla
         const char* kEsq[5] = { TRS("No"), TRS("Arriba a la izquierda"), TRS("Arriba a la derecha"), TRS("Abajo a la izquierda"), TRS("Abajo a la derecha") };
         int kh = std::clamp(g_cfg.keyHud, 0, 4);
-        row(TRS("Mostrar la ultima tecla apretada"));
+        row(TRS("Ultima tecla apretada (solo en el Motor)"));
         ImGui::SetNextItemWidth(260 * UIK());
         if (ImGui::Combo("##ultimatecla", &kh, kEsq, 5)) { g_cfg.keyHud = kh; SaveOption("ultima_tecla", std::to_string(kh)); }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Un cuadrito semitransparente en una esquina con la ultima tecla del teclado que apretaste."));
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Un icono de tecla semitransparente en una esquina con la ultima tecla del teclado que apretaste. Solo se ve dentro del Motor en tiempo real."));
     }
     {
         row(TRS("Tamano del menu"));

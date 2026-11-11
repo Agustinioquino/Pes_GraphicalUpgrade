@@ -144,6 +144,8 @@ static bool LoadConfigLocked() {
             else if (kl == "mouse_menus_cerca") c.menuMouseNear = atoi(v.c_str()) != 0 ? 1 : 0;
             else if (kl == "tecla_mouse_menus") c.menuMouseKey = (v == "0" || v.empty()) ? 0 : VkFromName(v);
             else if (kl == "ultima_tecla") c.keyHud = std::clamp(atoi(v.c_str()), 0, 4);   // (11/11) cuadrito con la ultima tecla apretada
+            else if (kl == "motor_pagina") c.motorPage = atoi(v.c_str()) != 0 ? 1 : 0;   // (11/11) filas nativas del Motor en el estudio
+            else if (kl == "motor_vestir") c.motorDress = atoi(v.c_str()) != 0 ? 1 : 0;
             else if (kl == "favoritos") c.favorites = v;
             else if (kl == "menu_seccion") c.menuSection = v;
             else if (kl == "ui_scale") c.uiScale = std::clamp((float)atof(v.c_str()), 0.7f, 2.0f);
