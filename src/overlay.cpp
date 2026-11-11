@@ -1519,7 +1519,15 @@ static void DrawSettingsPage() {
         bool mm = g_cfg.menuMouse != 0;
         row(TRS("Mouse en los menus del juego"));
         if (ImGui::Checkbox("##mousemenus", &mm)) { g_cfg.menuMouse = mm ? 1 : 0; SaveOption("mouse_menus", mm ? "1" : "0"); }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Los menus del juego eligen la fila que esta debajo del mouse. Clic = aceptar, clic derecho = volver, rueda = subir y bajar. Los menus siguen siendo los del juego."));
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Los menus del juego eligen la fila que esta debajo del mouse. Clic = aceptar, clic derecho = volver, rueda = subir y bajar. Los menus siguen siendo los del juego. La tecla F8 lo saca y lo pone al toque (tecla_mouse_menus en el ini)."));
+        if (mm) {   // (11/11 v2) el juego muestra la fila elegida 2 cuadros despues: la flecha espera lo mismo
+            int rt = std::clamp(g_cfg.menuMouseDelay, 0, 4);
+            row(TRS("Flecha del mouse: retraso (cuadros)"));
+            ImGui::SetNextItemWidth(200 * UIK());
+            if (ImGui::SliderInt("##mousemenusret", &rt, 0, 4)) g_cfg.menuMouseDelay = rt;
+            if (ImGui::IsItemDeactivatedAfterEdit()) SaveOption("mouse_menus_retraso", std::to_string(g_cfg.menuMouseDelay));
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("El juego tarda 2 cuadros en marcar la fila elegida. Con 2 la flecha y la fila marcada van juntas; con 0 la flecha va mas pegada a la mano pero la fila la sigue de atras."));
+        }
     }
     {
         row(TRS("Tamano del menu"));
