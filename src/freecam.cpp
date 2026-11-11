@@ -74,6 +74,7 @@ bool FreeCamActive() { return g_cfg.live[344][0] > 0.5f; }
 // (motorgizmo.cpp) pide orbitar alrededor del pivote (el punto al que miraba la camara del juego al prender) o alinear la vista a
 // un eje. s_pivot se toma en TakeFromGame.
 static float s_pivot[3] = {}; static bool s_pivotOk = false;
+static float s_homePos[3] = {}, s_homePiv[3] = {}, s_homeYaw = 0, s_homePitch = 0; static bool s_homeOk = false;   // pose al prender (el visor no reescribe su camara: "inicio" vuelve aca)
 static std::atomic<int> s_gzAxis{-1}; static std::atomic<int> s_gzHome{0};
 static std::mutex s_gzMx; static float s_gzDYaw = 0, s_gzDPitch = 0;
 static bool MotorFly() { return MotorPageActive() && g_cfg.live[344][0] > 0.5f; }
@@ -120,6 +121,7 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     }
     if (!s_on) {
         TakeFromGame(pos, tgt);
+        memcpy(s_homePos, s_pos, 12); memcpy(s_homePiv, s_pivot, 12); s_homeYaw = s_yaw; s_homePitch = s_pitch; s_homeOk = true;
         s_on = true; s_zoomTarget = std::clamp(g_cfg.live[344][2], kZoomMin, 3.0f); s_wheel = 0; s_fovWritten = -1.0f;
         Log("camara libre: prendida (%s) en (%.2f, %.2f, %.2f) giro %.0f / %.0f grados; objetivo (%.2f, %.2f, %.2f), arriba (%.2f, %.2f, %.2f), proyeccion %d, campo de vision %.4f, cerca / lejos / aspecto %.3f / %.1f / %.3f",
             origen, pos[0], pos[1], pos[2], s_yaw * 57.2958f, s_pitch * 57.2958f, tgt[0], tgt[1], tgt[2], up[0], up[1], up[2], proj, *fov, extra[0], extra[1], extra[2]);
@@ -132,7 +134,9 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     const bool front = GameInFront();
     const bool typing = g_menuTyping.load();
     { static bool s_homeWas = false; const bool home = front && Key(VK_HOME);
-      if ((home && !s_homeWas) || s_gzHome.exchange(0)) { TakeFromGame(pos, tgt); Log("camara libre: Inicio, se vuelve a la camara del juego"); }
+      if (home && !s_homeWas) { TakeFromGame(pos, tgt); Log("camara libre: Inicio, se vuelve a la camara del juego"); }
+      if (s_gzHome.exchange(0) && s_homeOk) { memcpy(s_pos, s_homePos, 12); memcpy(s_pivot, s_homePiv, 12); s_yaw = s_homeYaw; s_pitch = s_homePitch; s_zoomTarget = 1.0f;
+          Log("camara libre: inicio (gizmo del Motor), vuelve a la pose con la que se prendio"); }
       s_homeWas = home; }
     float speed = std::clamp(g_cfg.live[344][1], 0.05f, 50.0f);
     if (Key(VK_SHIFT)) speed *= 4.0f;
