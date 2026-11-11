@@ -398,7 +398,7 @@ end
 -- sin_pestana.txt o apagado.txt, no se escribe nada y, si estaba puesta, se saca: el menu queda con sus 11 botones.
 -- Si la pestana se puso alguna vez desde que se abrio el juego, mi archivo de flujo se sigue entregando aunque la pestana
 -- este sacada (el juego recuerda el cursor del menu; con 11 botones el enlace de mas no hace nada).
--- Con solo_lectura.txt no se escribe nada: queda como este (puesta o sin poner).
+-- Con solo_lectura.txt no se pone; si ya estaba puesta queda asi, salvo que falte el archivo de flujo: ahi se saca.
 -- Efecto secundario conocido: si en algun otro lugar del juego faltaba un texto y decia "No String", ahi tambien dira
 -- "Motor en tiempo real".
 PE.VT, PE.FN_ARMAR = 0x1427012b0, 0x140c29340
@@ -458,9 +458,16 @@ function PE.poner(dir, n, protegida)
     local ok
     if protegida then
         if C.mtr_VirtualProtect(dir, n, 4, HECHO) == 0 then return false end
-        local antes = HECHO[0]
+        -- se vuelve a la proteccion que tenia la pagina la PRIMERA vez que se abrio: si una vuelta falla, la siguiente la repara
+        local pag = dir - dir % 4096
+        G.pe_prot = G.pe_prot or {}
+        local antes = G.pe_prot[pag] or HECHO[0]
+        G.pe_prot[pag] = antes
         ok = C.mtr_WriteProcessMemory(PROC, dir, W8, n, NR) ~= 0
-        C.mtr_VirtualProtect(dir, n, antes, HECHO)
+        if C.mtr_VirtualProtect(dir, n, antes, HECHO) == 0 and not PE.abierta then
+            PE.abierta = true
+            R("pestana: Windows no me dejo volver a proteger la pagina 0x" .. hx(pag) .. " del exe; lo intento de nuevo en la proxima escritura", true)
+        end
     else
         ok = C.mtr_WriteProcessMemory(PROC, dir, W8, n, NR) ~= 0
     end
@@ -550,11 +557,31 @@ function PE.quieta(motivo)
     return esta
 end
 
+-- una vez por carga del modulo: si la memoria del juego ya tiene la pestana (la puso una carga anterior cuyo estado se
+-- perdio, por ejemplo Sider cerrado y vuelto a abrir con el juego abierto), se la toma como propia: asi se la puede sacar
+-- y su archivo de flujo se sigue entregando. Solo lee.
+function PE.adoptar()
+    if PE.adoptada then return end
+    PE.adoptada = true
+    if G.pe_toco then return end
+    local v = PE.mirar()
+    if v then
+        if v.cuenta == PE.FN_12 or v.id ~= 0 or v.mia then G.pe_toco = true end
+    elseif C and E.exe_ok and rptr(PE.RANURA) == PE.FN_12 and rptr(PE.VT + 76 * 8) == PE.FN_ARMAR then
+        G.pe_toco = true
+    end
+    if G.pe_toco then R("pestana: la memoria del juego ya la tenia puesta de antes; la tomo como propia", true) end
+end
+
 -- deja la pestana como corresponde en este momento y dice si hay que entregar mi EditMenu.json.
 -- de_ruta = Sider esta pidiendo la ruta del archivo (ahi se que el que va a leer el juego es el mio)
 function PE.resolver(de_ruta, archivo)
     local hay = existe(DIR .. "pestana\\" .. archivo)
-    if existe(DIR .. "solo_lectura.txt") then PE.quieta("solo_lectura.txt presente")
+    PE.adoptar()
+    if existe(DIR .. "solo_lectura.txt") then
+        -- solo_lectura.txt no deja PONER. SACAR si (es volver a los valores de fabrica), y solo cuando no hay archivo que
+        -- entregar: lo unico que no puede quedar es el boton 12 sin su enlace
+        if PE.quieta("solo_lectura.txt presente") and not hay then PE.asegurar(false, "falta pestana\\" .. archivo) end
     else
         local motivo
         if existe(DIR .. "apagado.txt") then motivo = "apagado.txt presente"
@@ -599,8 +626,10 @@ end
 -- cargados: con esa misma condicion entrego la copia hecha a partir de la suya, asi el fondo del menu no cambia.
 function PE.pedido(ctx, filename)
     PE.pedidos = PE.pedidos + 1
-    local archivo = PE.JSON
-    if type(ctx) == "table" and ctx.tournament_id and ctx.home_team and ctx.away_team then archivo = PE.JSON_MS end
+    local archivo, otra = PE.JSON, PE.JSON_MS
+    if type(ctx) == "table" and ctx.tournament_id and ctx.home_team and ctx.away_team then archivo, otra = PE.JSON_MS, PE.JSON end
+    -- si falta la copia que corresponde y esta la otra, va la otra: las dos traen el enlace del boton 12 (solo cambia el fondo)
+    if not existe(DIR .. "pestana\\" .. archivo) and existe(DIR .. "pestana\\" .. otra) then archivo = otra end
     local ok = PE.resolver(false, archivo)
     PE.decir("el juego pidio " .. filename, ok, archivo)
     if ok then return PE.clave(archivo) end
@@ -611,6 +640,7 @@ end
 -- tres valores del exe solo estan cambiados mientras se esta dentro del Editar, y no puede quedar un boton 12 puesto si
 -- mas adelante otro modulo pasa a entregar el archivo de flujo del menu.
 function PE.salida(filename)
+    PE.adoptar()
     if not G.pe_toco or existe(DIR .. "solo_lectura.txt") then return end
     PE.asegurar(false, "el juego salio del modo Editar")
     PE.decir("el juego pidio " .. filename, false, "")

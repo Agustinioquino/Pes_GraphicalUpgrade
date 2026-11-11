@@ -83,6 +83,7 @@ class Mem:
         self.prot = {}           # dir -> proteccion de su pagina (2 = solo lectura: hay que abrirla con VirtualProtect; 4 = abierta)
         self.falla = set()       # direcciones donde WriteProcessMemory falla (para probar la marcha atras)
         self.sin_permiso = set() # direcciones donde VirtualProtect falla
+        self.falla_cerrar = 0    # cuantas veces mas falla VirtualProtect al VOLVER a proteger (la pagina queda abierta)
         self.exe_escr = []       # (dir, datos) que el modulo escribio dentro del exe
 
     def nuevo(self, n, dir=None):
@@ -694,7 +695,11 @@ class Sim:
         if dir not in m.prot or m.exe_ok.get(dir) != n or prot not in (2, 4):
             m.malas.append((dir, n)); return None                 # el modulo no tiene que abrir ninguna otra pagina
         if dir in m.sin_permiso: return None
-        antes = m.prot[dir]; m.prot[dir] = prot
+        if prot != 4 and m.falla_cerrar:
+            m.falla_cerrar -= 1; return None
+        antes = m.prot[dir]
+        for d in m.prot:
+            if d >> 12 == dir >> 12: m.prot[d] = prot
         return antes
 
     def _reservar(self, n):
@@ -720,7 +725,7 @@ class Sim:
             self.cache[clave] = r
         m = self.mem
         assert not m.malas, 'escritura fuera de lugar: %s' % [(hex(d), n) for d, n in m.malas[:5]]
-        assert all(v == 2 for v in m.prot.values()), 'una pagina del exe quedo abierta'
+        assert m.falla_cerrar or getattr(m, 'quedo_abierta', False) or all(v == 2 for v in m.prot.values()), 'una pagina del exe quedo abierta'
         res = self.cache[clave].decode() if self.cache[clave] else None
         if self.ttl: self.kc[nombre] = (res, self.t_sider + self.ttl)
         return res
@@ -735,7 +740,7 @@ class Sim:
         # el juego recuerda el cursor de cada menu y lo repone sin mirar la cantidad de botones (inferido del C): si alguna vez
         # hubo 12 botones, el cursor pudo quedar en el 12, y aceptar ahi pide el enlace "proceed" aunque el boton no se vea
         if len(b) == 12: self.cursor12 = True
-        elif getattr(self, 'cursor12', False) and self.SIM[b'existe'][b'EditMenu_menuserver.json' if ms else b'EditMenu.json']:
+        elif getattr(self, 'cursor12', False) and (self.SIM[b'existe'][b'EditMenu_menuserver.json'] or self.SIM[b'existe'][b'EditMenu.json']):
             assert 'proceed' in json.loads(flujo.decode('ascii'))['events'], \
                 'el cursor recordado quedo en el boton 12 y el flujo entregado (%s) no tiene ese enlace: el juego se cuelga' % r
         return r, b
@@ -1660,23 +1665,36 @@ def e_pestana(F):
     puesta(w, *s.editar()); assert s.pedir(SALIDA) is None; puesta(w, *s.editar()); assert len(m.escrituras) == n
     s.SIM[b'existe'][b'solo_lectura.txt'] = None
     sacada(w, *s.editar(), entrega=MIO)
-    # 8. se borra mi archivo de flujo con la pestana puesta: se saca (y ahi ya no hay archivo mio que entregar)
+    # 8. se borra una copia del archivo de flujo con la pestana puesta: va la otra (trae el mismo enlace). Se borran las
+    # dos: se saca (y ahi ya no hay archivo mio que entregar)
     s.SIM[b'existe'][b'sin_pestana.txt'] = None; puesta(w, *s.editar())
-    s.SIM[b'existe'][b'EditMenu.json'] = None; sacada(w, *s.editar())
+    s.SIM[b'existe'][b'EditMenu.json'] = None; puesta(w, *s.editar(), archivo='EditMenu_menuserver.json')
+    s.SIM[b'existe'][b'EditMenu_menuserver.json'] = None; sacada(w, *s.editar())
     assert any('falta pestana\\EditMenu.json' in x for x in s.logs())
+    # 8b. solo_lectura.txt con la pestana puesta: si falta una copia va la otra; si faltan las dos se saca igual (lo unico
+    # que no puede quedar es el boton 12 sin enlace)
+    w = Mundo(); s = Sim(F, w, existe=CON); m = w.m; puesta(w, *s.editar())
+    s.SIM[b'existe'][b'solo_lectura.txt'] = True; n = len(m.escrituras); ne = len(m.exe_escr)
+    s.SIM[b'existe'][b'EditMenu.json'] = None; puesta(w, *s.editar(), archivo='EditMenu_menuserver.json'); assert len(m.escrituras) == n
+    s.SIM[b'existe'][b'EditMenu_menuserver.json'] = None; sacada(w, *s.editar())
+    assert m.exe_escr[ne][0] == PE['RANURA']
+    # 8c. falta desde el principio la copia de Menu-server: sin torneo y con torneo va la del juego, con la pestana puesta
+    w = Mundo(); s = Sim(F, w, existe=CON[:3]); puesta(w, *s.editar())
+    for c in (b'tournament_id', b'home_team', b'away_team'): s.ctx[c] = 7
+    puesta(w, *s.editar()); s.SIM[b'existe'][b'solo_lectura.txt'] = True; puesta(w, *s.editar())
+    assert s.pedir(SALIDA) is None; puesta(w, *s.editar())
 
     # 9. desde el arranque, sin escribir ni una vez: sin_pestana, apagado (ni siquiera lee), solo_lectura, sin archivo, sin ffi
-    for extra, lee in (('sin_pestana.txt', False), ('apagado.txt', False), ('solo_lectura.txt', False)):
-        w = Mundo(); s = Sim(F, w, existe=CON + (extra,)); l0 = w.m.lecturas
-        sacada(w, *s.editar()); sacada(w, *s.editar()); assert s.pedir(SALIDA) is None
+    # (la primera vez mira una vez la memoria, por si la pestana quedo puesta de una carga anterior; despues ni lee)
+    for extra in ('sin_pestana.txt', 'apagado.txt', 'solo_lectura.txt'):
+        w = Mundo(); s = Sim(F, w, existe=CON + (extra,))
+        sacada(w, *s.editar()); l0 = w.m.lecturas
+        sacada(w, *s.editar()); assert s.pedir(SALIDA) is None
         assert not w.m.escrituras and w.m.lecturas == l0, (extra, w.m.lecturas - l0)
         s.cuadro(2); assert not w.m.exe_escr
     w = Mundo(); s = Sim(F, w); sacada(w, *s.editar()); assert not w.m.escrituras
-    w = Mundo(); s = Sim(F, w, existe=CON[:3])          # falta solo la copia de Menu-server
-    for c in (b'tournament_id', b'home_team', b'away_team'): s.ctx[c] = 7
-    sacada(w, *s.editar()); assert not w.m.escrituras
-    for c in (b'tournament_id', b'home_team', b'away_team'): s.ctx[c] = None
-    puesta(w, *s.editar())
+    w = Mundo(); s = Sim(F, w, existe=CON[:2] + CON[3:])       # falta la copia del juego: va la de Menu-server
+    puesta(w, *s.editar(), archivo='EditMenu_menuserver.json')
     w = Mundo(); s = Sim(F, w, existe=CON, sin_ffi=True); sacada(w, *s.editar()); s.cuadro()
 
     # 10. el exe no es el que conozco: no se escribe nada y el registro dice por que
@@ -1746,6 +1764,31 @@ def e_pestana(F):
     sacada(w, *s.editar()); s.SIM[b'existe'][b'sin_pestana.txt'] = None; s.t_sider += 5; sacada(w, *s.editar())
     assert not w.m.escrituras
     s.t_sider += 6; puesta(w, *s.editar())
+    # la segunda salida del Editar dentro de los 10 s de la anterior no llega al modulo: queda puesta fuera del Editar
+    # (conocido e inofensivo: al volver a entrar mi archivo llega igual) y se saca en la salida siguiente
+    w = Mundo(); s = Sim(F, w, existe=CON); s.ttl = 10
+    puesta(w, *s.editar()); s.t_sider += 20; assert s.pedir(SALIDA) is None and w.pe_estado() == FAB
+    s.t_sider += 2; puesta(w, *s.editar()); s.t_sider += 4; assert s.pedir(SALIDA) is None and w.pe_estado() != FAB
+    s.t_sider += 30; puesta(w, *s.editar()); assert s.pedir(SALIDA) is None and w.pe_estado() == FAB
+    # 16. el Lua de Sider empieza de cero con la pestana puesta en la memoria del juego (Sider cerrado y vuelto a abrir):
+    # el modulo nuevo la reconoce como suya; la saca si corresponde y su archivo sigue llegando
+    for extra in (None, 'sin_pestana.txt', 'apagado.txt', 'solo_lectura.txt'):
+        w = Mundo(); s = Sim(F, w, existe=CON); puesta(w, *s.editar())
+        s = Sim(F, w, existe=CON + ((extra,) if extra else ())); n = len(w.m.escrituras); ne = len(w.m.exe_escr)
+        if extra in (None, 'solo_lectura.txt'):
+            puesta(w, *s.editar()); assert len(w.m.escrituras) == n
+            assert s.pedir(SALIDA) is None and (w.pe_estado() == FAB) == (extra is None)
+        else:
+            sacada(w, *s.editar(), entrega=MIO); assert w.m.exe_escr[ne][0] == PE['RANURA']
+        assert any('la tomo como propia' in x for x in s.logs()), s.logs()[-3:]
+    # 17. Windows no deja volver a proteger la pagina una vez: la escritura siguiente la deja de nuevo en solo lectura
+    w = Mundo(); s = Sim(F, w, existe=CON); m = w.m; m.falla_cerrar = 1; m.quedo_abierta = True
+    puesta(w, *s.editar()); assert all(v == 2 for v in m.prot.values()), m.prot       # la 2da escritura de la pagina ya la reparo
+    w = Mundo(); s = Sim(F, w, existe=CON); m = w.m; puesta(w, *s.editar())
+    m.falla_cerrar = 2; m.quedo_abierta = True; assert s.pedir(SALIDA) is None and w.pe_estado() == FAB
+    assert any(v == 4 for v in m.prot.values()) and any('volver a proteger' in x for x in s.logs())
+    puesta(w, *s.editar()); m.quedo_abierta = False; assert all(v == 2 for v in m.prot.values()), m.prot
+    assert s.pedir(SALIDA) is None
     print('   pestana: 12 botones solo con mi archivo de flujo; se saca sola; 3 escrituras en el exe y ninguna otra')
 
 
