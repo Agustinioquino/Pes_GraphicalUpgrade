@@ -81,6 +81,9 @@ static void* s_vt[1 + kSlots] = {};        // [0] = el dato de tipo que va antes
 static PFN_Page o_build = nullptr, o_ready = nullptr;
 static uint64_t s_seenKey = 0; static uint32_t s_seenTeam = 0;    // ultimo jugador que se vio en el Editar con su equipo
 static std::atomic<int> s_nPages{0};
+// (22:48, Agustin: el icono de la ultima tecla "solo en el motor") la pagina del estudio del Motor que esta viva: la anota la fabrica y
+// la confirma en cada cuadro el gancho de entrada de los menus (menumouse.cpp llama a MotorPageSeen con cada ventana activa)
+static std::atomic<void*> s_motorWin{nullptr}; static std::atomic<double> s_motorT{-1.0e9};
 
 static bool Readable(const void* p, size_t n) {
     MEMORY_BASIC_INFORMATION mi{};
@@ -238,21 +241,34 @@ static void* hk_Factory(void* key, void* name, void* flag) {
             if ((uint32_t)(k >> 32) != 0 && (uint16_t)k != 0xffff && t != bad && t != 0xffffffffu) { s_seenKey = k; s_seenTeam = t; }
         }
     }
-    if (!page || !g_cfg.motorPage || !Readable(page, 0x138) || *(uintptr_t*)page != kVtApp) return page;
+    if (!page || !Readable(page, 0x138) || *(uintptr_t*)page != kVtApp) return page;
     char nm[96];
     const bool okName = GameStr(name, nm, sizeof nm);
     const int k = s_nPages.fetch_add(1, std::memory_order_relaxed);
     const bool mine = okName && strncmp(nm, "BugCheck/BugCheckSim", 20) == 0;
-    if (k < 12) Log("motor (pagina): pagina de Apariencia %p creada para el nodo \"%s\" -> %s", page, okName ? nm : "?", mine ? "filas del Motor" : "se deja como es");
-    if (mine) *(void***)page = &s_vt[1];
+    const bool swap = mine && g_cfg.motorPage != 0;
+    if (k < 12) Log("motor (pagina): pagina de Apariencia %p creada para el nodo \"%s\" -> %s", page, okName ? nm : "?",
+                    swap ? "filas del Motor" : mine ? "es la del Motor, pero motor_pagina = 0: quedan las filas de Apariencia" : "se deja como es");
+    if (mine) { s_motorWin.store(page); s_motorT.store(Now()); }
+    if (swap) *(void***)page = &s_vt[1];
     return page;
 }
+
+// la ventana que esta recibiendo entrada en este cuadro (la pasa menumouse.cpp): si es la del estudio del Motor, sigue viva
+void MotorPageSeen(void* win) {
+    if (!win || win != s_motorWin.load(std::memory_order_relaxed)) return;
+    const uintptr_t vp = *(uintptr_t*)win;
+    if (vp == (uintptr_t)&s_vt[1] || vp == kVtApp) s_motorT.store(Now(), std::memory_order_relaxed);
+    else s_motorWin.store(nullptr, std::memory_order_relaxed);         // esa memoria ya es de otra ventana
+}
+// el estudio del Motor esta abierto (su pagina recibio entrada hace menos de 0.6 s)
+bool MotorPageActive() { return Now() - s_motorT.load(std::memory_order_relaxed) < 0.6; }
 
 void MotorPagePresent() {
     if (s_tried) return;
     s_tried = true;
     if (!g_cfg.motorPatch) { Log("motor (pagina): parches en memoria apagados (motor = 0): el estudio queda con las filas de Apariencia"); return; }
-    if (!g_cfg.motorPage) { Log("motor (pagina): motor_pagina = 0: el estudio queda con las filas de Apariencia"); return; }
+    if (!g_cfg.motorPage) Log("motor (pagina): motor_pagina = 0: el estudio queda con las filas de Apariencia (el gancho va igual, solo para saber cuando esta abierto)");
     HMODULE mod = GetModuleHandleW(nullptr);
     auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
     if ((uintptr_t)mod != 0x140000000ull || nt->FileHeader.TimeDateStamp != kStamp) { Log("motor (pagina): exe distinto: sin gancho"); return; }

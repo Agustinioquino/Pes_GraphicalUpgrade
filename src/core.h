@@ -678,6 +678,7 @@ extern std::atomic<bool> g_menuTyping;      // (31/10) overlay.cpp: hay un campo
 void KeyBlockInstall();
 // (11/11 3icxbh) mouse en los menus nativos del juego (menumouse.cpp): ganchos en el primer Present; la rueda llega por la ventana; cursor para overlay.cpp
 void MotorPagePresent();   // (11/11) motorpage.cpp: filas nativas del Motor en el estudio 3D
+void MotorPageSeen(void* win); bool MotorPageActive();   // el estudio del Motor esta abierto (lo confirma menumouse.cpp en cada cuadro)
 void MenuMousePresent(); void MenuMouseWheel(int delta); bool MenuMouseCursor(float* x, float* y); HWND OverlayHwnd(); bool MotorPanelOpen();
 extern std::atomic<int> g_replacedCount, g_failedCount;
 extern std::vector<std::string> g_compileErrors;

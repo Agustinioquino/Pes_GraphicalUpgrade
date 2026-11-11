@@ -253,6 +253,7 @@ static void Step(void* win) {
 
 static void hk_Hover(void* win) {
     o_hover(win);
+    MotorPageSeen(win);     // motorpage.cpp: para saber si el estudio del Motor esta abierto (icono de la ultima tecla)
     Step(win);
 }
 
