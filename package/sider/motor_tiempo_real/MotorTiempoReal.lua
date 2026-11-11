@@ -1414,15 +1414,23 @@ end
 -- El propio motor prende y apaga una etapa con la ranura 16 de su tabla; en la clase base esa funcion es solo
 -- "mov [rcx+0x48], dl" (FN_ACTIVAR), o sea lo mismo que escribir el byte. Seis clases traen una funcion propia (tonemap,
 -- antialiasing, profundidad de campo, reduccion del G-buffer, luz de entorno, modificador de luz): hacen algo mas y NO se
--- tocan desde aca. Las hijas de otra etapa se pueden cambiar en cualquier momento (el motor las prepara siempre y mira
--- el byte recien al dibujar); una etapa suelta se mira dos veces por cuadro (preparar y dibujar): se cambia solo cuando
--- el motor no esta dibujando (+0xd0 en cero).
+-- tocan desde aca. El motor mira el byte DOS veces por cuadro, al preparar y al dibujar (las sueltas en FUN_14168d1a0, las
+-- hijas en FUN_14168d120 y FUN_14168b970): se cambia solo cuando el motor no esta armando un cuadro. Eso se sabe por dos
+-- datos: el candado del cuadro G_CANDADO = { int cuenta, int giro, int hilo duenio } que FUN_14168b1c0 toma al empezar el
+-- cuadro y suelta al terminar (FUN_1403f7f80 / FUN_1403f8020), y render+0xd0, distinto de cero mientras recorre las etapas.
+-- MODO DEL MOTOR (experimental). GrTools.SwitchRenderMode (FUN_1416d2410) solo escribe un entero en render+0xd8: 2 deferred
+-- (el normal), 3 forward, 4 prepass, 5 wireframe, 6 pseudoshade = que lista de etapas corre para cada vista. En el juego de
+-- venta las listas 3 a 6 estan vacias (leido en el codigo, sin probar): lo esperado es pantalla negra y sin menus. Se deja
+-- probar desde el panel, y vuelve solo al normal a los 8 segundos.
 -- VISTAS. El juego de venta no trae los dibujos de depuracion del Fox Engine (alambre, G-buffer): los hace la DLL grafica
 -- (PES21 FX, motorlink.cpp) y se le piden por una memoria compartida de 64 bytes "PES21FX_Motor_<pid>":
 --   +0x00 'MTRL', +0x04 version 1, +0x08 seq (lo subo en cada pedido), +0x0c vista, +0x10 alambre, +0x14 corte (floats),
 --   +0x18 cuadros de la DLL, +0x1c / +0x20 / +0x24 lo que rige, +0x28 dibujos en alambre del ultimo cuadro,
 --   +0x2c escala de profundidad pedida, +0x30 la que rige.
-RX.G_RENDER, RX.VT_RENDER, RX.FN_ACTIVAR = 0x14374ced8, 0x142a07c58, 0x14168c810
+RX.G_RENDER, RX.VT_RENDER, RX.FN_ACTIVAR, RX.G_CANDADO = 0x14374ced8, 0x142a07c58, 0x14168c810, 0x143756438
+RX.MODO_SIG = { [2] = 5, [5] = 6, [6] = 3, [3] = 4, [4] = 2 }      -- orden en que la tecla 8 recorre los modos del motor
+RX.MODO_NOM = { [2] = "deferred (normal)", [3] = "forward", [4] = "prepass", [5] = "wireframe (alambre)", [6] = "pseudoshade" }
+RX.exp = { hasta = nil, espera = 0 }                            -- vuelta automatica del modo experimental
 RX.LISTA = { [0] = "pre", "post", "deferred", "forward", "prepass", "wireframe", "pseudoshade" }
 RX.VISTA = { [0] = "Normal", "Luz difusa", "Luz especular", "Normales", "Normales de mundo", "Albedo (sin luz)", "Profundidad",
     "Oclusion", "Sombra del sol", "Solo luz (sin texturas)", "Material" }
@@ -1449,6 +1457,7 @@ function RX.leer()
     end
     if ren and leer(ren, 0xe8) and P(0) == RX.VT_RENDER then
         RX.render, RX.modo = ren, B32[0xd8 / 4]
+        if RX.modo >= 3 and RX.modo <= 6 and not RX.exp.hasta then RX.exp.hasta = reloj() + 8000 end
     end
     local dirs = {}
     if n > 0 then
@@ -1510,6 +1519,31 @@ function RX.leer()
     RX.etapas = lista
 end
 
+-- espera (hasta ms milisegundos) a que el motor no este armando un cuadro: el candado del cuadro libre (o tomado por este
+-- mismo hilo: Sider me llamo desde adentro del cuadro) y el render sin recorrer sus etapas (+0xd0 en cero). Lecturas
+-- directas, sin pasar por leer(): son muchas y seguidas. OJO: pisa el buffer de lectura. Devuelve true, o false y el motivo.
+function RX.esperar_libre(ren, ms)
+    local t0, vueltas, yo = reloj(), 0, C.mtr_GetCurrentThreadId()
+    while vueltas < 400000 do
+        vueltas = vueltas + 1
+        if C.mtr_ReadProcessMemory(PROC, RX.G_CANDADO, B8, 12, NR) == 0 then return false, "no pude leer el candado del render" end
+        local cuenta, duenio = B32[0], B32[2]
+        if (cuenta == 0 and duenio == 0) or duenio == yo then
+            if C.mtr_ReadProcessMemory(PROC, ren + 0xd0, B8, 8, NR) == 0 then return false, "no pude leer el render principal" end
+            if B32[0] == 0 and B32[1] == 0 then
+                RX.exp.espera = vueltas
+                return true
+            end
+        end
+        if vueltas % 64 == 0 then
+            local dt = reloj() - t0
+            if dt > ms or dt < 0 then break end
+        end
+    end
+    RX.exp.espera = vueltas
+    return false, string.format("el motor no dejo de dibujar en %d ms: proba de nuevo", ms)
+end
+
 -- prende o apaga una etapa. Devuelve true, o false y el motivo.
 function RX.poner(e, si)
     if E.solo_lectura then return false, "en SOLO LECTURA no se cambia ninguna etapa" end
@@ -1522,24 +1556,10 @@ function RX.poner(e, si)
         e.activa = si
         return true
     end
-    if not e.padre or e.huerfana then
-        local ren = RX.render
-        if not ren then return false, "no encuentro el render principal del motor" end
-        local t0, libre, vueltas = reloj(), false, 0
-        while vueltas < 400000 do
-            vueltas = vueltas + 1
-            if C.mtr_ReadProcessMemory(PROC, ren + 0xd0, B8, 8, NR) == 0 then break end
-            if B32[0] == 0 and B32[1] == 0 then
-                libre = true
-                break
-            end
-            if vueltas % 256 == 0 then
-                local dt = reloj() - t0
-                if dt > 60 or dt < 0 then break end
-            end
-        end
-        if not libre then return false, "el motor no dejo de dibujar en 60 ms: proba de nuevo" end
-    end
+    local ren = RX.render
+    if not ren then return false, "no encuentro el render principal del motor" end
+    local libre, por_que = RX.esperar_libre(ren, 60)
+    if not libre then return false, por_que end
     if not poner_u8(e.dir + 0x48, si and 1 or 0) then return false, "no pude escribir en esa etapa" end
     local g = G.et_orig[e.dir]
     if g and g.nombre == e.nombre then
@@ -1549,6 +1569,59 @@ function RX.poner(e, si)
     end
     e.activa = si
     return true
+end
+
+-- EXPERIMENTAL: modo de dibujo del render principal (render+0xd8, lo mismo que escribe GrTools.SwitchRenderMode).
+-- forzar = la vuelta al normal: se hace aunque el modulo este en solo lectura (no se deja la pantalla en un modo raro).
+function RX.modo_poner(modo, ms, forzar)
+    if E.solo_lectura and not forzar then return false, "en SOLO LECTURA no se cambia el modo del motor" end
+    local ren = RX.render
+    if not ren or not leer(ren, 0xe8) or P(0) ~= RX.VT_RENDER then return false, "no encuentro el render principal del motor" end
+    local era = B32[0xd8 / 4]
+    if era < 2 or era > 6 then return false, "el modo actual del render no es uno que conozca: no lo toco" end
+    if era ~= modo then
+        local libre, por_que = RX.esperar_libre(ren, ms)
+        if not libre then return false, por_que end
+        if forzar then
+            W32[0] = modo
+            E.n_escr = E.n_escr + 1
+            if C.mtr_WriteProcessMemory(PROC, ren + 0xd8, W8, 4, NR) == 0 then return false, "no pude escribir el modo" end
+        elseif not poner_u32(ren + 0xd8, modo) then
+            return false, "no pude escribir el modo"
+        end
+    end
+    RX.modo = modo
+    if modo == 2 then RX.exp.hasta = nil else RX.exp.hasta = reloj() + 8000 end
+    return true
+end
+-- una vez por cuadro del panel: a los 8 segundos el modo experimental vuelve solo al normal (si el motor esta ocupado,
+-- prueba de nuevo en el cuadro siguiente)
+function RX.exp_pulso(ya)
+    local x = RX.exp
+    if not x.hasta then return end
+    local ahora = reloj()
+    if not ya and ahora < x.hasta and ahora >= x.hasta - 8000 then return end
+    if RX.modo_poner(2, 4, true) then
+        R("render: fin del modo experimental, el motor vuelve a deferred (el normal)", true)
+        E.sucio = true
+    end
+end
+function RX.tecla_modo(vkey)
+    local quiero
+    if vkey == 0x38 then quiero = RX.MODO_SIG[RX.modo or 2] or 2
+    elseif vkey == 0x37 then quiero = 2
+    else
+        E.aviso = "8 pasa al modo siguiente (vuelve solo a los 8 s), 7 vuelve al normal"
+        return
+    end
+    local ok, por_que = RX.modo_poner(quiero, 60, quiero == 2)
+    if ok then
+        R(string.format("render: MODO DEL MOTOR %d %s (render 0x%s +0xd8, espere %d vueltas)%s", quiero, RX.MODO_NOM[quiero], hx(RX.render),
+            RX.exp.espera, (quiero ~= 2) and "; vuelve solo a deferred en 8 s" or ""), true)
+    else
+        E.aviso = por_que
+    end
+    E.sucio = true
 end
 
 function RX.tecla_etapa(e, vkey)
@@ -1567,7 +1640,7 @@ function RX.tecla_etapa(e, vkey)
         return
     end
     local ok, por_que = RX.poner(e, quiero)
-    if ok then R(string.format("render: etapa %s %s (0x%s)", e.nombre, quiero and "PRENDIDA" or "apagada", hx(e.dir)), true)
+    if ok then R(string.format("render: etapa %s %s (0x%s, espere %d vueltas)", e.nombre, quiero and "PRENDIDA" or "apagada", hx(e.dir), RX.exp.espera), true)
     else E.aviso = por_que end
     E.sucio = true
 end
@@ -1831,6 +1904,7 @@ local function restaurar_todo()
     if G.cam then cam_restaurar() end
     local ne, fe = RX.reponer()                 -- etapas del render como las tenia el juego
     falta = falta + fe
+    if RX.exp.hasta then RX.exp_pulso(true) end -- modo del motor: al normal
     if RX.dll_abrir() then                      -- vista normal, sin alambre ni pantalla partida (solo si habia algo puesto)
         local v, a, c = RX.dll_valores()
         if v ~= 0 or a > 0.5 or c > 0.005 then RX.dll_pedir(0, 0, 0, 0) end
@@ -2052,11 +2126,12 @@ local function tecla(vkey)
             E.aviso = "anotado en content\\motor-tiempo-real\\registro.txt"
         end
     elseif pag == 6 then
-        local n, cur = 3 + #RX.etapas, E.cur[6]
+        local n, cur = 4 + #RX.etapas, E.cur[6]
         if vkey == 0x30 then mover_cursor(6, n, 1)
         elseif vkey == 0x39 then mover_cursor(6, n, -1)
         elseif cur <= 3 then RX.tecla_vista(cur, vkey)
-        else RX.tecla_etapa(RX.etapas[cur - 3], vkey) end
+        elseif cur == 4 then RX.tecla_modo(vkey)
+        else RX.tecla_etapa(RX.etapas[cur - 4], vkey) end
     end
 end
 
@@ -2235,7 +2310,7 @@ local function filas_pagina()
         pie = "0/9 baja/sube | 8 usar o cambiar | 4/3 menos/mas"
     elseif pag == 6 then
         local et, d = RX.etapas, RX.dll
-        local n, cur = 3 + #et, E.cur[6]
+        local n, cur = 4 + #et, E.cur[6]
         if cur > n then cur = n end
         local ini = ventana(n, cur)
         local v, a, c = 0, 0, 0
@@ -2245,8 +2320,9 @@ local function filas_pagina()
             if i == 1 then s = string.format("    %-18s %s", "Vista", d.u32 and (RX.VISTA[v] or "?") or "-")
             elseif i == 2 then s = string.format("    %-18s %s", "Alambre", d.u32 and ((a > 0.5) and "SI" or "no") or "-")
             elseif i == 3 then s = string.format("    %-18s %s", "Pantalla partida", d.u32 and ((c > 0.005) and string.format("%.0f %%", c * 100) or "no") or "-")
+            elseif i == 4 then s = string.format("    %-18s %s", "Modo motor (exp.)", RX.modo and (RX.MODO_NOM[RX.modo] or tostring(RX.modo)) or "-")
             else
-                local e = et[i - 3]
+                local e = et[i - 4]
                 s = string.format("%s %s%s", e.propio and "[=]" or (e.activa and "[x]" or "[ ]"), string.rep("  ", e.nivel), e.nombre)
             end
             der[#der + 1] = ((i == cur) and ">" or " ") .. s
@@ -2280,8 +2356,19 @@ local function filas_pagina()
             pie = (cur == 1) and "0/9 baja/sube | 8 o 3 vista siguiente | 4 anterior | 7 imagen normal"
                 or (cur == 2) and "0/9 baja/sube | 8 prender/apagar | 7 apagar"
                 or "0/9 baja/sube | 8 mitad / nada | 4/3 corre el corte | 7 sin corte"
+        elseif cur == 4 then
+            izq[2] = "MODO DEL MOTOR (EXPERIMENTAL, sin DLL)"
+            izq[3] = string.format("ahora: %s", RX.modo and (RX.MODO_NOM[RX.modo] or tostring(RX.modo)) or "no encuentro el render")
+            izq[4] = "es el interruptor propio del Fox Engine"
+            izq[5] = "al juego de venta le faltan las piezas"
+            izq[6] = "de los otros modos: lo esperado es"
+            izq[7] = "pantalla negra y sin menus"
+            izq[8] = "vuelve solo al normal a los 8 segundos"
+            if RX.exp.hasta then izq[9] = string.format("VUELVE AL NORMAL EN %d s", math.max(0, math.floor((RX.exp.hasta - reloj()) / 1000 + 0.999))) end
+            if RX.mal then izq[10] = string.sub(RX.mal, 1, A_IZQ) end
+            pie = "0/9 baja/sube | 8 modo siguiente (vuelve solo a los 8 s) | 7 volver al normal ya"
         else
-            local e = et[cur - 3]
+            local e = et[cur - 4]
             if e then
                 izq[2] = string.sub(e.nombre, 1, A_IZQ)
                 izq[3] = e.propio and "INTERRUPTOR PROPIO del motor: no se toca"
@@ -2291,7 +2378,7 @@ local function filas_pagina()
                 izq[6] = string.format("tipo %d  indice %d  0x%s", e.tipo, e.idx, hx(e.dir))
                 izq[7] = string.format("clase  %s", clase_corta(e.vt))
             end
-            izq[9] = RX.mal and string.sub(RX.mal, 1, A_IZQ) or string.format("modo del render: %s", RX.LISTA[RX.modo or -1] or "?")
+            izq[9] = RX.mal and string.sub(RX.mal, 1, A_IZQ) or string.format("modo del motor: %s", RX.LISTA[RX.modo or -1] or "?")
             izq[10] = "apagar DRAW2D esconde los menus del juego"
             pie = "0/9 baja/sube | 8 prender/apagar la etapa | 7 dejarla como la tenia el juego"
         end
@@ -2350,6 +2437,7 @@ end
 function m.overlay_on(ctx)
     local ok, por_que = puede()
     if not ok then
+        if C and RX.exp.hasta then RX.exp_pulso(true) end      -- lo unico que se hace apagado: sacar el modo experimental
         return string.format("MotorTiempoReal %s | (tecla 1 = otro modulo)\n%s", VERSION, por_que)
     end
     E.cuadros = E.cuadros + 1
@@ -2377,6 +2465,7 @@ function m.overlay_on(ctx)
     entrada()
     cam_escribir()
     RX.dll_pulso()
+    RX.exp_pulso()
     volcar_registro()
     local t = { cabecera() }
     if E.compacto then

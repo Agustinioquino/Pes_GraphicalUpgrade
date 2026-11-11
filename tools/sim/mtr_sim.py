@@ -45,6 +45,7 @@ RANURAS = [(0x142a0a880, 0x141697bd0), (0x142a0af88, 0x14169ed80), (0x142a0ad48,
            (0x142a07c58, 0x14168aae0), (0x142a07bc0 + 8 * 16, 0x14168c810)]
 FN_COLOR, FN_MATRIZ = 0x14169f2e0, 0x14169de80
 G_ESCENAS, G_VISOR, G_RENDER = 0x14374d958, 0x1438040d0, 0x14374ced8
+G_CANDADO = 0x143756438       # candado del cuadro: { int cuenta, int giro, int hilo duenio }
 FN_ACTIVAR = 0x14168c810            # ranura 16 de la clase base de las etapas: mov [rcx+0x48], dl
 ACTIVAR_PROPIO = dict(plug_ton=0x1416cdb80, plug_dof=0x1416ae420)      # clases con interruptor propio (no se tocan)
 # etapas del render en el orden del arreglo del gestor (a proposito, hijas antes que su padre): nombre, padre, clase, activa,
@@ -149,7 +150,7 @@ class Mundo:
             if k.startswith('plug_'): m.u64(vt + 0x80, ACTIVAR_PROPIO.get(k, FN_ACTIVAR))
         m.nuevo(0x40, FN_COLOR); m.escribir(FN_COLOR, bytes.fromhex('488b41380f28020f294040488b0148ff6078'), False)
         m.nuevo(0x40, FN_MATRIZ); m.escribir(FN_MATRIZ, bytes.fromhex('40534883ec200f2802488bd90f294140'), False)
-        m.nuevo(8, G_ESCENAS); m.nuevo(8, G_VISOR); m.nuevo(8, G_RENDER)
+        m.nuevo(8, G_ESCENAS); m.nuevo(8, G_VISOR); m.nuevo(8, G_RENDER); m.nuevo(0x10, G_CANDADO)
         self.gestor = self.render = None; self.etapas = {}
         if con_render: self._render()
         # --- escenas
@@ -198,11 +199,11 @@ class Mundo:
         """gestor de render como lo deja el motor: +0x10 cantidad de etapas, +0x18 arreglo de punteros (lugar para 0x80),
         +0x20 lista de renders, +0x28 render principal (fox::gr::Render: +0xd0 distinto de cero mientras dibuja, +0xd8 modo).
         Etapa: +0x30 prioridad, +0x38 nombre, +0x40 indice, +0x44 tipo, +0x48 activa, +0x4c lista, +0x50 nombre del padre.
-        El modulo solo puede pisar el byte +0x48 de cada etapa"""
+        El modulo solo puede pisar el byte +0x48 de cada etapa y el modo del render principal (+0xd8)"""
         m = self.m
         g, ren, arr = m.nuevo(0x50), m.nuevo(0xf8), m.nuevo(0x80 * 8)
         m.u64(G_RENDER, g); m.u32(g + 0x10, len(ETAPAS)); m.u64(g + 0x18, arr); m.u64(g + 0x20, ren); m.u64(g + 0x28, ren)
-        m.u64(ren, VT['render']); m.u32(ren + 0xd8, 2)
+        m.u64(ren, VT['render']); m.u32(ren + 0xd8, 2); m.permitidas.append((ren + 0xd8, ren + 0xdc))
         vacio = m.fox_cadena('')                  # el motor usa UNA cadena vacia compartida
         for i, (nombre, padre, clase, activa, prio, modo) in enumerate(ETAPAS):
             p = m.nuevo(0x60); m.u64(p, VT[clase]); m.u32(p + 0x30, prio & 0xffffffff)
@@ -1173,15 +1174,27 @@ def e_render(F):
     assert s.fila_cursor().split() == ['>', 'Vista', '-'], s.fila_cursor()
     s.tecla('8', '3', '7'); assert 'no trae las vistas' in s.texto and not m.escrituras
     s.cuadro(600); assert int(s.SIM[b'map_intentos']) <= 7, 'busca la DLL demasiado seguido: %d' % int(s.SIM[b'map_intentos'])
-    # una hija se cambia en cualquier momento (aunque el motor este dibujando) y 7 la deja como la tenia el juego
-    m.u64(w.render + 0xd0, 0x1a0000100)
+    # el motor mira el byte de TODA etapa dos veces por cuadro: una hija tampoco se cambia mientras arma el cuadro
     s.cursor_en('SSAO', 6); assert s.fila_cursor().startswith('>[ ]     SSAO') and 'dentro de  SHADING_PASS' in s.texto, s.texto
+    m.u64(w.render + 0xd0, 0x1a0000100); s.SIM[b'tick_paso'] = 5; lect = m.lecturas
+    s.tecla('8'); s.SIM[b'tick_paso'] = None
+    assert w.etapa_activa('SSAO') == 0 and not m.escrituras and 'no dejo de dibujar' in s.texto, s.texto
+    assert m.lecturas - lect < 20000, m.lecturas - lect
+    m.u64(w.render + 0xd0, 0)
+    # el candado del cuadro tomado por otro hilo: tampoco. Tomado por este mismo hilo (Sider me llama desde el cuadro): si
+    m.u32(G_CANDADO, 1); m.u32(G_CANDADO + 8, 4321); s.SIM[b'tick_paso'] = 5
+    s.tecla('8'); s.SIM[b'tick_paso'] = None
+    assert w.etapa_activa('SSAO') == 0 and not m.escrituras and 'no dejo de dibujar' in s.texto, s.texto
+    m.u32(G_CANDADO + 8, 77)
     s.tecla('8'); assert w.etapa_activa('SSAO') == 1 and m.escrituras == [(w.etapas['SSAO'] + 0x48, 1)], m.escrituras
+    assert 'espere 1 vueltas' in s.registro(), [x for x in s.registro().split('\r\n') if 'render: etapa' in x]
+    m.u32(G_CANDADO, 0); m.u32(G_CANDADO + 8, 0)
     assert s.fila_cursor().startswith('>[x]     SSAO') and 'PRENDIDA   (cambiada por mi)' in s.texto and '11 etapas, 0 apagadas' in s.texto, s.texto
     s.tecla('7'); assert w.etapa_activa('SSAO') == 0 and 'cambiada por mi' not in s.texto and n_esc(m) == 2
     s.tecla('7'); assert 'esta como la dejo el juego' in s.texto and n_esc(m) == 2, s.texto
     s.tecla('3'); assert '8 prende / apaga la etapa' in s.texto and n_esc(m) == 2, s.texto
-    # una etapa suelta: solo cuando el motor no esta dibujando (+0xd0 en cero); si no afloja en 60 ms, no se toca
+    # una etapa suelta: igual, solo cuando el motor no esta dibujando (+0xd0 en cero); si no afloja en 60 ms, no se toca
+    m.u64(w.render + 0xd0, 0x1a0000100)
     s.cursor_en('POSTFILTER', 6); s.SIM[b'tick_paso'] = 5; lect = m.lecturas
     s.tecla('8'); s.SIM[b'tick_paso'] = None
     assert w.etapa_activa('POSTFILTER') == 1 and n_esc(m) == 2 and 'no dejo de dibujar' in s.texto, s.texto
@@ -1245,7 +1258,9 @@ def e_render(F):
         elif que == 'punteros': assert 'RENDER  6 etapas' in s.texto, s.texto
         elif que == 'render':
             s.cursor_en('DRAW2D', 6); s.tecla('8'); assert 'no encuentro el render principal' in s.texto and not m.escrituras, s.texto
-            s.cursor_en('SSAO', 6); s.tecla('8'); assert w.etapa_activa('SSAO') == 1          # (las hijas no lo necesitan)
+            s.cursor_en('SSAO', 6); s.tecla('8'); assert w.etapa_activa('SSAO') == 0 and not m.escrituras      # (las hijas tambien lo necesitan)
+            s.cursor_en('Modo motor', 6); assert s.fila_cursor().split()[-1] == '-', s.fila_cursor()
+            s.tecla('8'); assert 'no encuentro el render principal' in s.texto and not m.escrituras, s.texto
         elif que in ('ciclo', 'repetida'): assert 'RENDER  11 etapas' in s.texto, s.texto
         for k in '0808070809999': s.tecla(k)
         assert not m.malas
@@ -1312,7 +1327,7 @@ def e_render(F):
     for k in '8038037': s.tecla(k)
     assert s.dll(2) == n and 'SOLO LECTURA' in s.texto and len(m.escrituras) == ne, s.texto
     # (en el paso de la basura el cursor paso por algunas etapas: lo unico que se escribio en el juego son bytes +0x48 de etapas)
-    assert not m.malas and all(n == 1 and a - 0x48 in w.etapas.values() for a, n in m.escrituras)
+    assert not m.malas and all((n == 1 and a - 0x48 in w.etapas.values()) or (n == 4 and a == w.render + 0xd8) for a, n in m.escrituras)
     # una DLL que habla otra version, o no se puede abrir la memoria: lo dice y no deja nada abierto
     w = Mundo(); s = Sim(F, w); S = s.SIM; S[b'dll_crear'](2); s.cuadro(3); s.pagina(6); s.cuadro(300)
     assert 'otra version del enlace' in s.texto and int(S[b'vistas']) == 0 and int(S[b'map_abiertos']) == int(S[b'map_cerrados']) >= 2, s.texto
@@ -1348,7 +1363,62 @@ def e_render(F):
     assert 'tope de brillo' in s.texto and tope / 1.3 < c1 <= tope * 1.0001, (c0, c1, tope, s.texto)
     n = len(s.llamadas); s.tecla('3'); assert len(s.llamadas) == n
     s.tecla('4'); assert max(m.rf(d['p'] + 0x40, 3)) < c1 and 'tope' not in s.texto
-    print('   etapas del render, vistas por la DLL, teclas G R S / X Y Z, tope de brillo: bien')
+    # ---------- 6. EXPERIMENTAL: modo del motor (render +0xd8, lo que escribe GrTools.SwitchRenderMode), con vuelta sola
+    w = Mundo(); s = Sim(F, w); m = w.m; S = s.SIM; s.cuadro(3); d8 = w.render + 0xd8
+    modo = lambda: m.r32(d8)
+    s.cursor_en('Modo motor', 6); assert s.fila_cursor().split() == ['>', 'Modo', 'motor', '(exp.)', 'deferred', '(normal)'], s.fila_cursor()
+    assert 'MODO DEL MOTOR (EXPERIMENTAL' in s.texto and 'VUELVE AL NORMAL' not in s.texto, s.texto
+    s.tecla('3'); assert '8 pasa al modo siguiente' in s.texto and not m.escrituras, s.texto
+    s.tecla('7'); assert not m.escrituras and modo() == 2                     # ya esta en el normal: no escribe nada
+    s.tecla('8'); assert modo() == 5 and m.escrituras == [(d8, 4)] and 'wireframe' in s.fila_cursor() and 'VUELVE AL NORMAL EN 8 s' in s.texto, s.texto
+    assert 'MODO DEL MOTOR 5 wireframe' in s.registro() and 'vuelve solo a deferred en 8 s' in s.registro()
+    vistos = []
+    for _ in range(4): s.tecla('8'); vistos.append(modo())
+    assert vistos == [6, 3, 4, 2] and 'VUELVE AL NORMAL' not in s.texto and 'deferred (normal)' in s.fila_cursor(), (vistos, s.texto)
+    s.tecla('8'); s.tecla('7'); assert modo() == 2 and len(m.escrituras) == 7 and 'VUELVE' not in s.texto
+    # vuelve solo a los 8 segundos (no antes), y lo anota
+    s.tecla('8'); s.cuadro(400); assert modo() == 5 and 'VUELVE AL NORMAL EN 2 s' in s.texto, s.texto
+    s.cuadro(110); assert modo() == 2 and 'fin del modo experimental' in s.registro() and 'VUELVE' not in s.texto, s.texto
+    # el motor armando un cuadro (candado de otro hilo, o recorriendo etapas): no se cambia; la vuelta sola espera y reintenta
+    m.u32(G_CANDADO, 1); m.u32(G_CANDADO + 8, 4321); S[b'tick_paso'] = 5; n = len(m.escrituras)
+    s.tecla('8'); S[b'tick_paso'] = None
+    assert modo() == 2 and len(m.escrituras) == n and 'no dejo de dibujar' in s.texto, s.texto
+    m.u32(G_CANDADO, 0); m.u32(G_CANDADO + 8, 0)
+    s.tecla('8'); assert modo() == 5
+    m.u64(w.render + 0xd0, 0x1a0000100); S[b'tick_paso'] = 3; s.cuadro(400); S[b'tick_paso'] = None
+    assert modo() == 5, 'con el motor dibujando no se escribe el modo'
+    m.u64(w.render + 0xd0, 0); s.cuadro(2); assert modo() == 2, 'apenas afloja, vuelve al normal'
+    # el modo cambiado y el modulo recargado (Shift+R): igual vuelve solo
+    s.tecla('8'); assert modo() == 5
+    s.recargar(F); s.cuadro(3); assert modo() == 5
+    s.cuadro(520); assert modo() == 2, 'despues de recargar tiene que volver solo al normal'
+    # "Dejar todo como estaba" lo saca ya
+    s.cursor_en('Modo motor', 6); s.tecla('8'); s.tecla('8'); assert modo() == 6
+    s.opcion('Dejar todo como estaba'); s.tecla('8'); assert modo() == 2, s.texto
+    # SOLO LECTURA: no se entra a un modo, pero volver al normal se puede siempre (tecla 7 y vuelta sola)
+    s.cursor_en('Modo motor', 6); s.tecla('8'); assert modo() == 5
+    S[b'existe'][b'solo_lectura.txt'] = True; s.cuadro(70); n = len(m.escrituras)
+    s.tecla('8'); assert modo() == 5 and len(m.escrituras) == n and 'SOLO LECTURA' in s.texto, s.texto
+    s.tecla('7'); assert modo() == 2 and len(m.escrituras) == n + 1
+    S[b'existe'][b'solo_lectura.txt'] = None; s.cuadro(70)
+    s.tecla('8'); assert modo() == 5
+    S[b'existe'][b'solo_lectura.txt'] = True; s.cuadro(600); assert modo() == 2, 'en solo lectura tambien vuelve solo'
+    S[b'existe'][b'solo_lectura.txt'] = None; s.cuadro(70)
+    # apagado.txt con un modo puesto: lo unico que hace el modulo apagado es volver al normal
+    s.cursor_en('Modo motor', 6); s.tecla('8'); assert modo() == 5
+    S[b'existe'][b'apagado.txt'] = True; s.cuadro(70); assert 'apagado por' in s.texto and modo() == 2, s.texto
+    n = len(m.escrituras); s.cuadro(200); assert len(m.escrituras) == n
+    S[b'existe'][b'apagado.txt'] = None; s.cuadro(70)
+    # un modo que no conozco (otra cosa escribio ahi): se muestra y no se toca
+    m.u32(d8, 9); s.cuadro(80); s.cursor_en('Modo motor', 6); assert s.fila_cursor().split()[-1] == '9', s.fila_cursor()
+    n = len(m.escrituras); s.tecla('8'); s.tecla('7'); assert modo() == 9 and len(m.escrituras) == n and 'no es uno que conozca' in s.texto, s.texto
+    m.u32(d8, 2); s.cuadro(80)
+    assert not m.malas and all(a == d8 and n == 4 for a, n in m.escrituras), m.escrituras
+    # sin render: la fila lo dice y no se escribe
+    w = Mundo(con_render=False); s = Sim(F, w); s.cuadro(3); s.cursor_en('Modo motor', 6)
+    assert s.fila_cursor().split()[-1] == '-' and 'no encuentro el render' in s.texto, s.texto
+    s.tecla('8'); s.tecla('7'); assert not w.m.escrituras
+    print('   etapas del render, vistas por la DLL, modo del motor experimental, teclas G R S / X Y Z, tope de brillo: bien')
 
 
 def e_roto(F):
