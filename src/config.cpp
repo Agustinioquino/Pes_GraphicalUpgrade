@@ -139,6 +139,7 @@ static bool LoadConfigLocked() {
             if (kl == "menu_key") c.menuKey = VkFromName(v);
             else if (kl == "tutorials") c.tutorials = atoi(v.c_str()) != 0;
             else if (kl == "bloquear_teclado") c.blockKeys = std::clamp(atoi(v.c_str()), 0, 2);
+            else if (kl == "mouse_menus") c.menuMouse = atoi(v.c_str()) != 0 ? 1 : 0;   // (11/11) mouse en los menus nativos del juego
             else if (kl == "favoritos") c.favorites = v;
             else if (kl == "menu_seccion") c.menuSection = v;
             else if (kl == "ui_scale") c.uiScale = std::clamp((float)atof(v.c_str()), 0.7f, 2.0f);

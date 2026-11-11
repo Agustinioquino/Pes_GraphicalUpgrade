@@ -81,17 +81,21 @@ static void BuildFonts(float H) {
     Log("menu: letras para %.0f px de alto (x%.2f)", H, k);
 }
 
+HWND OverlayHwnd() { return s_hwnd; }   // (11/11) menumouse.cpp
 void OverlayResize() { if (s_rtv) { s_rtv->Release(); s_rtv = nullptr; } }
 
 static LRESULT CALLBACK MenuProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     // (1/11) rueda del mouse para el zoom de la camara libre (mensaje normal o raw input, por si el juego pide NOLEGACY)
-    if (!g_menuOpen && FreeCamActive()) {
-        if (m == WM_MOUSEWHEEL) FreeCamWheel((int)GET_WHEEL_DELTA_WPARAM(w));
+    // (11/11) sin camara libre la rueda va a los menus nativos del juego (menumouse.cpp: arriba / abajo)
+    if (!g_menuOpen) {
+        int wd = 0;
+        if (m == WM_MOUSEWHEEL) wd = (int)GET_WHEEL_DELTA_WPARAM(w);
         else if (m == WM_INPUT) {
             RAWINPUT ri{}; UINT sz = sizeof(ri);
             if (GetRawInputData((HRAWINPUT)l, RID_INPUT, &ri, &sz, sizeof(RAWINPUTHEADER)) != (UINT)-1 && ri.header.dwType == RIM_TYPEMOUSE &&
-                (ri.data.mouse.usButtonFlags & RI_MOUSE_WHEEL)) FreeCamWheel((int)(short)ri.data.mouse.usButtonData);
+                (ri.data.mouse.usButtonFlags & RI_MOUSE_WHEEL)) wd = (int)(short)ri.data.mouse.usButtonData;
         }
+        if (wd != 0) { if (FreeCamActive()) FreeCamWheel(wd); else MenuMouseWheel(wd); }
     }
     if ((g_menuOpen || g_inspectOn) && s_init) {
         ImGui_ImplWin32_WndProcHandler(h, m, w, l);
@@ -1511,6 +1515,12 @@ static void DrawSettingsPage() {
         if (ImGui::Combo("##bloqteclas", &bk, kBlk, 3)) { g_cfg.blockKeys = bk; SaveOption("bloquear_teclado", std::to_string(bk)); }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Que el juego no reciba las teclas mientras escribis en el menu (buscador, nombres). 'No al escribir' = solo con un campo de texto activo; 'No con el menu' = mientras el menu esta abierto."));
     }
+    {   // (11/11) mouse en los menus nativos del juego: [PES21FX] mouse_menus
+        bool mm = g_cfg.menuMouse != 0;
+        row(TRS("Mouse en los menus del juego"));
+        if (ImGui::Checkbox("##mousemenus", &mm)) { g_cfg.menuMouse = mm ? 1 : 0; SaveOption("mouse_menus", mm ? "1" : "0"); }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Los menus del juego eligen la fila que esta debajo del mouse. Clic = aceptar, clic derecho = volver, rueda = subir y bajar. Los menus siguen siendo los del juego."));
+    }
     {
         row(TRS("Tamano del menu"));
         ImGui::SetNextItemWidth(200 * UIK());
@@ -2201,7 +2211,8 @@ void OverlayPresent(IDXGISwapChain* sc) {
     const bool menuShown = g_menuOpen || s_menuVis > 0.0f;
     FrameTimeTick();   // (08/11) diagnostico: tiempo de cada cuadro
     const bool skelView = g_cfg.live[426][0] > 0.5f;   // (09/11) la vista del esqueleto se dibuja tambien con el menu cerrado
-    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView) return;
+    float mmx = 0, mmy = 0; const bool mmCur = !g_menuOpen && MenuMouseCursor(&mmx, &mmy);   // (11/11) flecha del mouse sobre los menus del juego
+    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView && !mmCur) return;
     if (!s_rtv) {
         ID3D11Texture2D* bb = nullptr;
         if (FAILED(sc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb)) || !bb) return;
@@ -2232,6 +2243,12 @@ void OverlayPresent(IDXGISwapChain* sc) {
     if (lightIcons) DrawEditorLightIcons();
     if (sunCompass && !g_menuOpen) DrawSunCompass();
     if (g_cfg.live[426][0] > 0.5f) DrawSkeletonView();   // (09/11 f) vista del esqueleto (Diagnostico)
+    if (mmCur) {   // (11/11) el juego esconde el cursor de Windows: una flecha chica donde esta el mouse (los menus son los del juego)
+        ImDrawList* dl = ImGui::GetForegroundDrawList(); const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f);
+        const ImVec2 a(mmx, mmy), b(mmx, mmy + 19.0f * k), c(mmx + 5.2f * k, mmy + 14.6f * k), d(mmx + 13.5f * k, mmy + 13.5f * k);
+        dl->AddTriangleFilled(a, b, c, IM_COL32(255, 255, 255, 255)); dl->AddTriangleFilled(a, c, d, IM_COL32(255, 255, 255, 255));
+        const ImVec2 pts[4] = { a, b, c, d }; dl->AddPolyline(pts, 4, IM_COL32(0, 0, 0, 255), ImDrawFlags_Closed, 1.4f * k);
+    }
     InspectDrawOverlay();
     // (31/10) teclas del juego: con 1 se bloquean solo mientras hay un campo de texto activo (buscador, nombres de presets)
     g_menuTyping = g_menuOpen && ImGui::GetIO().WantTextInput;

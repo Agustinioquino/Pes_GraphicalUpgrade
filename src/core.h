@@ -170,6 +170,7 @@ struct Config {
     float uiScale = 1.0f;                      // 19/10: tamano del menu ([PES21FX] ui_scale)
     bool compact = false;                      // 19/10: grupos contraidos por defecto ([PES21FX] compacto)
     int menuHelp = 1; bool menuAdvanced = false, menuCols = true; int menuSize = 0; float menuAlpha = 0.85f; bool menuGlass = true, menuFont = true; int menuAutoSave = 0;   // (08/11) menu_autoguardar 0 no, 1 al soltar (1 s), 2 cada 10 s; [PES21FX] menu_ayuda / menu_avanzado / menu_columnas / menu_tamano / menu_opacidad / menu_vidrio / menu_letra (overlay.cpp)
+    int menuMouse = 1;                         // (11/11) mouse en los menus nativos del juego (menumouse.cpp): 0 apagado, 1 prendido ([PES21FX] mouse_menus)
     int blockKeys = 1;                         // (31/10) teclas del juego con el menu: 0 nunca se bloquean, 1 al escribir en un campo, 2 con el menu abierto ([PES21FX] bloquear_teclado)
     int lang = 0;                              // (27/10) idioma del menu: 0 espanol, 1 ingles ([PES21FX] language = es / en)
     bool autoCap = false; float autoCapSec = 20.0f; int autoCapMax = 150; bool autoCapAB = false; bool exeDump = true; bool motorPatch = true; bool motorSunFix = true; int motorShadowFix = 1; int motorShadowRes = 0; float motorCascadeScale = 0.0f;   // [Motor]: parches en memoria (exepatch.cpp)   // exe_dump: volcado del exe desempaquetado (una vez por version)   // auto_captura_ab: pares A (todo) / B (un grupo del menu apagado 3 cuadros)
@@ -669,6 +670,8 @@ extern std::atomic<bool> g_menuOpen;
 extern std::atomic<bool> g_blockGameKeys;   // (31/10) keyblock.cpp: el juego no ve el teclado mientras esta prendido
 extern std::atomic<bool> g_menuTyping;      // (31/10) overlay.cpp: hay un campo de texto del menu activo (la camara libre no lee W A S D)
 void KeyBlockInstall();
+// (11/11 3icxbh) mouse en los menus nativos del juego (menumouse.cpp): ganchos en el primer Present; la rueda llega por la ventana; cursor para overlay.cpp
+void MenuMousePresent(); void MenuMouseWheel(int delta); bool MenuMouseCursor(float* x, float* y); HWND OverlayHwnd();
 extern std::atomic<int> g_replacedCount, g_failedCount;
 extern std::vector<std::string> g_compileErrors;
 extern std::mutex g_errMutex;
