@@ -81,6 +81,82 @@ static void BuildFonts(float H) {
     Log("menu: letras para %.0f px de alto (x%.2f)", H, k);
 }
 
+
+// ---------------------------------------------------------------- (11/11) ultima tecla apretada
+// Agustin: un cuadrito semitransparente en una esquina con la ultima tecla del teclado. [PES21FX] ultima_tecla = 0 apagado,
+// 1 arriba izquierda, 2 arriba derecha, 3 abajo izquierda, 4 abajo derecha. Solo mira el teclado (GetAsyncKeyState) con la
+// ventana del juego al frente; no toca lo que recibe el juego.
+static int s_khVk = 0, s_khN = 0; static double s_khT = -1.0e9; static unsigned char s_khWas[256] = {};
+static const char* KeyHudName(int vk, char* buf, size_t n) {
+    if ((vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z')) { snprintf(buf, n, "%c", (char)vk); return buf; }
+    if (vk >= VK_F1 && vk <= VK_F24) { snprintf(buf, n, "F%d", vk - VK_F1 + 1); return buf; }
+    if (vk >= VK_NUMPAD0 && vk <= VK_NUMPAD9) { snprintf(buf, n, "Num %d", vk - VK_NUMPAD0); return buf; }
+    switch (vk) {
+    case VK_RETURN: return "Enter"; case VK_ESCAPE: return "Esc"; case VK_SPACE: return "Espacio"; case VK_TAB: return "Tab";
+    case VK_BACK: return "Retroceso"; case VK_DELETE: return "Supr"; case VK_INSERT: return "Insert"; case VK_HOME: return "Inicio";
+    case VK_END: return "Fin"; case VK_PRIOR: return "Re Pag"; case VK_NEXT: return "Av Pag"; case VK_UP: return "Flecha arriba";
+    case VK_DOWN: return "Flecha abajo"; case VK_LEFT: return "Flecha izquierda"; case VK_RIGHT: return "Flecha derecha";
+    case VK_SHIFT: return "Shift"; case VK_CONTROL: return "Ctrl"; case VK_MENU: return "Alt"; case VK_CAPITAL: return "Bloq Mayus";
+    case VK_PAUSE: return "Pausa"; case VK_SNAPSHOT: return "Impr Pant"; case VK_LWIN: case VK_RWIN: return "Windows";
+    case VK_ADD: return "Num +"; case VK_SUBTRACT: return "Num -"; case VK_MULTIPLY: return "Num *"; case VK_DIVIDE: return "Num /"; case VK_DECIMAL: return "Num .";
+    }
+    const UINT sc = MapVirtualKeyA((UINT)vk, MAPVK_VK_TO_VSC);
+    if (sc && GetKeyNameTextA((LONG)(sc << 16), buf, (int)n) > 0) return buf;
+    snprintf(buf, n, "Tecla 0x%02X", vk); return buf;
+}
+// una vez por cuadro: anota la tecla recien apretada. Devuelve si hay que dibujar el cuadrito
+static bool KeyHudPoll() {
+    if (g_cfg.keyHud <= 0) return false;
+    if (s_hwnd && GetForegroundWindow() == s_hwnd) {
+        for (int vk = 8; vk < 255; vk++) {
+            if (vk >= VK_LSHIFT && vk <= VK_RMENU) continue;            // ya entran como Shift / Ctrl / Alt
+            const unsigned char d = (GetAsyncKeyState(vk) & 0x8000) ? 1 : 0;
+            if (d && !s_khWas[vk]) { s_khN = (vk == s_khVk && Now() - s_khT < 1.5) ? s_khN + 1 : 1; s_khVk = vk; s_khT = Now(); }
+            s_khWas[vk] = d;
+        }
+    } else memset(s_khWas, 0, sizeof s_khWas);
+    return s_khVk != 0;
+}
+// (11/11, Agustin 22:29: "que muestre un icono de la tecla") la tecla se dibuja como una tecla de teclado: base oscura, cara clara
+// con brillo arriba y el nombre adentro; las flechas van con su triangulo y la barra espaciadora ancha.
+static void KeyHudDraw() {
+    char nb[64]; const char* nm = KeyHudName(s_khVk, nb, sizeof nb);
+    const int arrow = s_khVk == VK_UP ? 1 : s_khVk == VK_DOWN ? 2 : s_khVk == VK_LEFT ? 3 : s_khVk == VK_RIGHT ? 4 : 0;
+    ImDrawList* dl = ImGui::GetForegroundDrawList(); const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    const float k = std::max(1.0f, ds.y / 1080.0f), fs = 24.0f * k, mg = 22.0f * k, pad = 8.0f * k;
+    ImFont* f = ImGui::GetFont(); const ImVec2 ts = arrow ? ImVec2(fs, fs) : f->CalcTextSizeA(fs, FLT_MAX, 0.0f, nm);
+    const float kh = 50.0f * k;                                                                   // alto de la tecla
+    float kw = std::max(kh, ts.x + 26.0f * k); if (s_khVk == VK_SPACE) kw = std::max(kw, 170.0f * k);   // ancho: cuadrada si es una letra
+    char rep[16] = ""; if (s_khN > 1) snprintf(rep, sizeof rep, "x%d", s_khN);
+    const float fr = 17.0f * k; const ImVec2 rs = rep[0] ? f->CalcTextSizeA(fr, FLT_MAX, 0.0f, rep) : ImVec2(0, 0);
+    const float w = pad * 2.0f + kw + (rep[0] ? rs.x + 8.0f * k : 0.0f), h = pad * 2.0f + kh; const int c = std::clamp(g_cfg.keyHud, 1, 4);
+    const float x = (c == 1 || c == 3) ? mg : ds.x - mg - w, y = (c <= 2) ? mg : ds.y - mg - h;
+    const double age = Now() - s_khT; const float a = age < 1.2 ? 1.0f : (age < 2.0 ? 1.0f - 0.5f * (float)((age - 1.2) / 0.8) : 0.5f);   // recien apretada se ve fuerte; despues queda tenue
+    const float push = age < 0.12 ? 2.5f * k : 0.0f;                                              // recien apretada: la tecla baja un poco
+    auto A = [a](int v) { return (int)((float)v * a); };
+    dl->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + h), IM_COL32(8, 12, 20, A(120)), 9.0f * k);                       // fondo semitransparente
+    const float kx = x + pad, ky = y + pad, r = 7.0f * k, lip = 6.0f * k;                         // lip = canto de abajo de la tecla
+    dl->AddRectFilled(ImVec2(kx, ky + push), ImVec2(kx + kw, ky + kh), IM_COL32(38, 42, 52, A(235)), r);                // base (canto)
+    const ImVec2 f0(kx + 2.0f * k, ky + push + 1.0f * k), f1(kx + kw - 2.0f * k, ky + kh - lip + push * 0.6f);         // cara de arriba
+    dl->AddRectFilled(f0, f1, IM_COL32(236, 239, 244, A(240)), r - 1.0f * k);
+    dl->AddRectFilled(f0, ImVec2(f1.x, f0.y + (f1.y - f0.y) * 0.45f), IM_COL32(255, 255, 255, A(70)), r - 1.0f * k);    // brillo
+    dl->AddRect(ImVec2(kx, ky + push), ImVec2(kx + kw, ky + kh), IM_COL32(0, 0, 0, A(170)), r, 0, 1.2f * k);
+    const ImVec2 ctr((f0.x + f1.x) * 0.5f, (f0.y + f1.y) * 0.5f); const ImU32 ink = IM_COL32(22, 26, 34, A(255));
+    if (arrow) {
+        const float q = 9.0f * k; ImVec2 p0, p1, p2;
+        if (arrow == 1) { p0 = ImVec2(ctr.x, ctr.y - q); p1 = ImVec2(ctr.x - q, ctr.y + q * 0.7f); p2 = ImVec2(ctr.x + q, ctr.y + q * 0.7f); }
+        else if (arrow == 2) { p0 = ImVec2(ctr.x, ctr.y + q); p1 = ImVec2(ctr.x + q, ctr.y - q * 0.7f); p2 = ImVec2(ctr.x - q, ctr.y - q * 0.7f); }
+        else if (arrow == 3) { p0 = ImVec2(ctr.x - q, ctr.y); p1 = ImVec2(ctr.x + q * 0.7f, ctr.y + q); p2 = ImVec2(ctr.x + q * 0.7f, ctr.y - q); }
+        else { p0 = ImVec2(ctr.x + q, ctr.y); p1 = ImVec2(ctr.x - q * 0.7f, ctr.y - q); p2 = ImVec2(ctr.x - q * 0.7f, ctr.y + q); }
+        dl->AddTriangleFilled(p0, p1, p2, ink);
+    } else if (s_khVk == VK_SPACE) {
+        dl->AddRectFilled(ImVec2(ctr.x - kw * 0.28f, ctr.y + 5.0f * k), ImVec2(ctr.x + kw * 0.28f, ctr.y + 8.0f * k), ink, 1.5f * k);   // la rayita de la barra
+        const ImVec2 t2 = f->CalcTextSizeA(fr, FLT_MAX, 0.0f, nm);
+        dl->AddText(f, fr, ImVec2(ctr.x - t2.x * 0.5f, ctr.y - t2.y * 0.5f - 6.0f * k), ink, nm);
+    } else dl->AddText(f, fs, ImVec2(ctr.x - ts.x * 0.5f, ctr.y - ts.y * 0.5f), ink, nm);
+    if (rep[0]) dl->AddText(f, fr, ImVec2(kx + kw + 8.0f * k, y + (h - rs.y) * 0.5f), IM_COL32(255, 255, 255, A(230)), rep);
+}
+
 HWND OverlayHwnd() { return s_hwnd; }   // (11/11) menumouse.cpp
 void OverlayResize() { if (s_rtv) { s_rtv->Release(); s_rtv = nullptr; } }
 
@@ -1523,7 +1599,23 @@ static void DrawSettingsPage() {
         bool mm = g_cfg.menuMouse != 0;
         row(TRS("Mouse en los menus del juego"));
         if (ImGui::Checkbox("##mousemenus", &mm)) { g_cfg.menuMouse = mm ? 1 : 0; SaveOption("mouse_menus", mm ? "1" : "0"); }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Los menus del juego eligen la fila que esta debajo del mouse. Clic = aceptar, clic derecho = volver, rueda = subir y bajar. Los menus siguen siendo los del juego."));
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Los menus del juego eligen la fila que esta debajo del mouse. Clic = aceptar, clic derecho = volver, rueda = subir y bajar. Los menus siguen siendo los del juego. Al usar el control la flecha se va sola."));
+        if (mm) {   // (11/11 v2) el juego muestra la fila elegida 2 cuadros despues: la flecha espera lo mismo
+            int rt = std::clamp(g_cfg.menuMouseDelay, 0, 4);
+            row(TRS("Flecha del mouse: retraso (cuadros)"));
+            ImGui::SetNextItemWidth(200 * UIK());
+            if (ImGui::SliderInt("##mousemenusret", &rt, 0, 4)) g_cfg.menuMouseDelay = rt;
+            if (ImGui::IsItemDeactivatedAfterEdit()) SaveOption("mouse_menus_retraso", std::to_string(g_cfg.menuMouseDelay));
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("El juego tarda 2 cuadros en marcar la fila elegida. Con 2 la flecha y la fila marcada van juntas; con 0 la flecha va mas pegada a la mano pero la fila la sigue de atras."));
+        }
+    }
+    {   // (11/11) cuadrito con la ultima tecla apretada: [PES21FX] ultima_tecla
+        const char* kEsq[5] = { TRS("No"), TRS("Arriba a la izquierda"), TRS("Arriba a la derecha"), TRS("Abajo a la izquierda"), TRS("Abajo a la derecha") };
+        int kh = std::clamp(g_cfg.keyHud, 0, 4);
+        row(TRS("Mostrar la ultima tecla apretada"));
+        ImGui::SetNextItemWidth(260 * UIK());
+        if (ImGui::Combo("##ultimatecla", &kh, kEsq, 5)) { g_cfg.keyHud = kh; SaveOption("ultima_tecla", std::to_string(kh)); }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Un cuadrito semitransparente en una esquina con la ultima tecla del teclado que apretaste."));
     }
     {
         row(TRS("Tamano del menu"));
@@ -2216,7 +2308,8 @@ void OverlayPresent(IDXGISwapChain* sc) {
     FrameTimeTick();   // (08/11) diagnostico: tiempo de cada cuadro
     const bool skelView = g_cfg.live[426][0] > 0.5f;   // (09/11) la vista del esqueleto se dibuja tambien con el menu cerrado
     float mmx = 0, mmy = 0; const bool mmCur = !g_menuOpen && MenuMouseCursor(&mmx, &mmy);   // (11/11) flecha del mouse sobre los menus del juego
-    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView && !mmCur) return;
+    const bool keyHud = KeyHudPoll();   // (11/11) cuadrito con la ultima tecla apretada
+    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView && !mmCur && !keyHud) return;
     if (!s_rtv) {
         ID3D11Texture2D* bb = nullptr;
         if (FAILED(sc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb)) || !bb) return;
@@ -2253,6 +2346,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
         dl->AddTriangleFilled(a, b, c, IM_COL32(255, 255, 255, 255)); dl->AddTriangleFilled(a, c, d, IM_COL32(255, 255, 255, 255));
         const ImVec2 pts[4] = { a, b, c, d }; dl->AddPolyline(pts, 4, IM_COL32(0, 0, 0, 255), ImDrawFlags_Closed, 1.4f * k);
     }
+    if (keyHud) KeyHudDraw();
     InspectDrawOverlay();
     // (31/10) teclas del juego: con 1 se bloquean solo mientras hay un campo de texto activo (buscador, nombres de presets)
     g_menuTyping = g_menuOpen && ImGui::GetIO().WantTextInput;

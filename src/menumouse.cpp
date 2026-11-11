@@ -67,7 +67,7 @@ static void* s_latchWin = nullptr; static int s_latchG = -1, s_latchR = -1; stat
 // compartido con el hilo de Present / la ventana
 static std::atomic<int> s_wheel{0};
 static std::atomic<int> s_curX{0}, s_curY{0}; static std::atomic<double> s_moveT{0}, s_liveT{0};
-static std::atomic<int> s_nSel{0}, s_nClick{0}, s_nBack{0}, s_nWheel{0}, s_nStep{0};
+static std::atomic<int> s_nSel{0}, s_nClick{0}, s_nBack{0}, s_nWheel{0}, s_nStep{0}, s_nNear{0};
 
 static bool Readable(const void* p, size_t n) {
     MEMORY_BASIC_INFORMATION mi{};
@@ -91,12 +91,15 @@ static inline bool RowClass(void** vt) {
     return a == 0x140e4d9e0ull && (b == 0x140e4ade0ull || b == 0x140e54130ull || b == 0x140e5b9c0ull || b == 0x140e90710ull || b == 0x140e92170ull);
 }
 
-struct Hit { int group = -1, row = -1; float x = 0, y = 0, w = 0, h = 0; };
+struct Hit { int group = -1, row = -1; float x = 0, y = 0, w = 0, h = 0, dist = 0; };   // dist > 0: no esta justo encima, es la fila mas cercana de su grupo
 
 // replica de la recorrida de 0x140e400d0 con (mx, my) en vez del puntero del juego
 static bool HitTest(uint8_t* I, float mx, float my, Hit& out) {
     uint8_t* root = P8(I + 0x98); if (!Ptr(root)) return false;
     const uint32_t ng = U32(I + 0xa4); if (ng == 0 || ng > 64) return false;
+    // (v2) huecos entre filas de un mismo grupo (pestanas separadas, listas con margen): con el mouse dentro del rectangulo que
+    // encierra a las filas del grupo vale la fila mas cercana. Una fila justo debajo del mouse gana siempre (se devuelve al toque).
+    Hit best; float bestD = 1e9f;
     for (uint32_t g = 0; g < ng; g++) {
         {   // grupo anotado en el vector con +0xc en 0: no se prueba
             uint8_t* vb = P8(I + 0xa8); uint8_t* ve = P8(I + 0xb0); bool skip = false;
@@ -110,6 +113,7 @@ static bool HitTest(uint8_t* I, float mx, float my, Hit& out) {
         { uint8_t* lb = P8(I + 0xc0); uint8_t* le = P8(I + 0xc8);
           if (lb != le && Ptr(lb) && le > lb && (size_t)(le - lb) <= 4 * 256) for (uint8_t* e = lb; e + 4 <= le; e += 4) if (U32(e) == g) { inList = true; break; } }
         const uint32_t n = ChildCount(grp); if (n > 512) continue;
+        Hit cand; float nearD = 1e9f; int rows = 0; float bx0 = 1e9f, by0 = 1e9f, bx1 = -1e9f, by1 = -1e9f;
         for (uint32_t r = 0; r < n; r++) {
             uint8_t* node = Child(grp, r);
             if (!Ptr(node) || !NodeFlag(node, 0x0c) || (!NodeFlag(node, 0x10) && !inList)) continue;
@@ -119,11 +123,18 @@ static bool HitTest(uint8_t* I, float mx, float my, Hit& out) {
             ((PFN_NodeVec2)vt[0xc0 / 8])(node, size);
             if (!(size[0] > 0.0f) || !(size[1] > 0.0f)) continue;
             if (mx > pos[0] && pos[0] + size[0] > mx && my > pos[1] && pos[1] + size[1] > my) {
-                out.group = (int)g; out.row = (int)r; out.x = pos[0]; out.y = pos[1]; out.w = size[0]; out.h = size[1];
+                out.group = (int)g; out.row = (int)r; out.x = pos[0]; out.y = pos[1]; out.w = size[0]; out.h = size[1]; out.dist = 0;
                 return true;
             }
+            if (!(size[0] < 4000.0f) || !(size[1] < 4000.0f) || !(std::fabs(pos[0]) < 8000.0f) || !(std::fabs(pos[1]) < 8000.0f)) continue;
+            rows++; bx0 = std::min(bx0, pos[0]); by0 = std::min(by0, pos[1]); bx1 = std::max(bx1, pos[0] + size[0]); by1 = std::max(by1, pos[1] + size[1]);
+            const float dx = std::max(std::max(pos[0] - mx, mx - (pos[0] + size[0])), 0.0f), dy = std::max(std::max(pos[1] - my, my - (pos[1] + size[1])), 0.0f);
+            const float d = std::sqrt(dx * dx + dy * dy), cap = std::min(160.0f, 1.25f * std::max(size[0], size[1]));
+            if (d <= cap && d < nearD) { nearD = d; cand.group = (int)g; cand.row = (int)r; cand.x = pos[0]; cand.y = pos[1]; cand.w = size[0]; cand.h = size[1]; cand.dist = std::max(d, 0.01f); }
         }
+        if (rows >= 2 && cand.group >= 0 && nearD < bestD && mx > bx0 && mx < bx1 && my > by0 && my < by1) { bestD = nearD; best = cand; }
     }
+    if (g_cfg.menuMouseNear != 0 && best.group >= 0) { out = best; return true; }
     return false;
 }
 
@@ -186,8 +197,10 @@ static void Step(void* win) {
     if (on && !((int)U32(I + 0xa0) == hit.group && (int)U32(I + 0xd8) == hit.row)) {
         SelectLikeGame(win, I, hit.group, hit.row); chose = true;
         const int k = s_nSel.fetch_add(1, std::memory_order_relaxed);
-        if (k < 12) Log("mouse en menus: fila bajo el mouse -> grupo %d fila %d (rect %.0f %.0f %.0f x %.0f; mouse %.0f %.0f de 1920 x 1080; ventana %.0f x %.0f; seleccion ahora %d / %d)",
-                        hit.group, hit.row, hit.x, hit.y, hit.w, hit.h, mx, my, cw, ch, (int)U32(I + 0xa0), (int)U32(I + 0xd8));
+        if (hit.dist > 0) s_nNear.fetch_add(1, std::memory_order_relaxed);
+        if (k < 12 || (hit.dist > 0 && s_nNear.load(std::memory_order_relaxed) <= 8))
+            Log("mouse en menus: fila %s -> grupo %d fila %d (rect %.0f %.0f %.0f x %.0f; mouse %.0f %.0f de 1920 x 1080; a %.0f; ventana %.0f x %.0f; seleccion ahora %d / %d)",
+                hit.dist > 0 ? "mas cercana" : "bajo el mouse", hit.group, hit.row, hit.x, hit.y, hit.w, hit.h, mx, my, hit.dist, cw, ch, (int)U32(I + 0xa0), (int)U32(I + 0xd8));
     }
     if (s_m.lEdge && on) {
         s_m.lEdge = false;                            // un clic es para una sola ventana
@@ -267,21 +280,42 @@ bool MenuMouseCursor(float* x, float* y) {
     if (now - s_liveT.load() > 0.25 || now - s_moveT.load() > 4.0) return false;
     CURSORINFO ci{}; ci.cbSize = sizeof ci;
     if (GetCursorInfo(&ci) && (ci.flags & CURSOR_SHOWING)) return false;   // Windows ya muestra el suyo
-    if (x) *x = (float)s_curX.load(); if (y) *y = (float)s_curY.load();
+    // (v2) el juego tarda 2 cuadros en mostrar la fila elegida (medido en video a 60 fps): la flecha se dibuja con ese mismo retraso
+    // para que flecha y fila marcada vayan juntas ([PES21FX] mouse_menus_retraso, 0..4 cuadros)
+    static int s_hx[8] = {}, s_hy[8] = {}; static unsigned s_hn = 0; static double s_hT = 0;
+    const int cx = s_curX.load(), cy = s_curY.load();
+    if (now - s_hT > 0.25) for (int i = 0; i < 8; i++) { s_hx[i] = cx; s_hy[i] = cy; }      // primera vez despues de un rato: sin saltos
+    s_hT = now; s_hn++; s_hx[s_hn & 7] = cx; s_hy[s_hn & 7] = cy;
+    const unsigned d = (unsigned)std::clamp(g_cfg.menuMouseDelay, 0, 4);
+    if (x) *x = (float)s_hx[(s_hn - d) & 7]; if (y) *y = (float)s_hy[(s_hn - d) & 7];
     return true;
 }
 
 void MenuMousePresent() {
     if (!s_tried) Install();
     if (!s_ok) return;
+    {   // (v2) atajo para sacar / poner el mouse en los menus (y su flecha): [PES21FX] tecla_mouse_menus (sin tecla de fabrica; ej. F8).
+        // No se guarda en el ini: al abrir el juego vale lo que diga mouse_menus
+        static bool s_was = false; const int vk = g_cfg.menuMouseKey;
+        const bool down = vk > 0 && vk < 256 && (GetAsyncKeyState(vk) & 0x8000) != 0;
+        if (down && !s_was && !g_menuTyping.load(std::memory_order_relaxed)) {
+            HWND h = OverlayHwnd();
+            if (h && GetForegroundWindow() == h && !(GetAsyncKeyState(VK_CONTROL) & 0x8000) && !(GetAsyncKeyState(VK_MENU) & 0x8000)) {
+                g_cfg.menuMouse = g_cfg.menuMouse ? 0 : 1;
+                if (g_cfg.menuMouse) s_moveT.store(Now());
+                Log("mouse en menus: %s con la tecla", g_cfg.menuMouse ? "prendido" : "apagado");
+            }
+        }
+        s_was = down;
+    }
     static double s_t = 0; static int s_a[5] = {};
     const double t = Now();
     if (s_t == 0) { s_t = t; return; }
     if (t - s_t < 30.0) return;
     const int b[5] = { s_nStep.load(), s_nSel.load(), s_nClick.load(), s_nBack.load(), s_nWheel.load() };
     if (b[1] != s_a[1] || b[2] != s_a[2] || b[3] != s_a[3] || b[4] != s_a[4])
-        Log("mouse en menus (30 s): %d cuadros de menu, %d filas elegidas con el mouse, %d clics de aceptar, %d de volver, %d pasos de rueda",
-            b[0] - s_a[0], b[1] - s_a[1], b[2] - s_a[2], b[3] - s_a[3], b[4] - s_a[4]);
+        Log("mouse en menus (30 s): %d cuadros de menu, %d filas elegidas con el mouse (%d por cercania en total), %d clics de aceptar, %d de volver, %d pasos de rueda",
+            b[0] - s_a[0], b[1] - s_a[1], s_nNear.load(), b[2] - s_a[2], b[3] - s_a[3], b[4] - s_a[4]);
     memcpy(s_a, b, sizeof s_a); s_t = t;
 }
 
