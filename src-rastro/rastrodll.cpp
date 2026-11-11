@@ -305,14 +305,19 @@ void VgAddJudge(uintptr_t p) {
     const bool strong = out == p + kJudgeBlk;
     if (!strong && !(vt2 >= kRdLo && vt2 < kRdHi)) return;
     for (int i = 0; i < g_vg.nj; i++) if (g_vg.j[i].a == p) return;
-    if (g_vg.nj >= kVgJ) return;
+    if (g_vg.nj >= kVgJ) {   // lleno: uno con bloque propio le gana a uno dudoso
+        int w = -1; if (strong) for (int i = 0; i < g_vg.nj; i++) if (!g_vg.j[i].strong) { w = i; break; }
+        if (w < 0) return;
+        for (int k = w; k + 1 < g_vg.nj; k++) g_vg.j[k] = g_vg.j[k + 1];
+        g_vg.nj--;
+    }
     VgJudge& j = g_vg.j[g_vg.nj]; memset(&j, 0, sizeof j); j.a = p; j.strong = strong;
     VgLine("JUEZ%d encontrado en %p (%s; salida %p)", g_vg.nj, (void*)p, strong ? "bloque propio" : "sin bloque propio todavia", (void*)out);
     g_vg.nj++;
 }
 void VgScanStep() {
-    uint64_t budget = 8ull << 20;
-    while (budget > 0) {
+    uint64_t budget = 2ull << 20; int queries = 0;   // 2 MB y 256 consultas por paso: el hilo casi no pesa
+    while (budget > 0 && queries++ < 256) {
         MEMORY_BASIC_INFORMATION mbi{};
         if (g_vg.scanNext >= 0x7ffffffe0000ull || !VirtualQuery((const void*)g_vg.scanNext, &mbi, sizeof mbi)) {
             g_vg.scanning = false;
@@ -405,7 +410,7 @@ bool VgStep() {
         g_vg.nj--; i--;
     }
     if (g_vg.scanning) VgScanStep();
-    else if (g_vg.nj == 0 && g_vg.scans < 12 && now - g_vg.scanT > 15000) { g_vg.scanning = true; g_vg.scanNext = 0x10000; g_vg.scanT = now; g_vg.scans++; g_vg.scanBytes = 0; }
+    else if (g_vg.nj == 0 && g_vg.scans < 4 && now - g_vg.scanT > 20000) { g_vg.scanning = true; g_vg.scanNext = 0x10000; g_vg.scanT = now; g_vg.scans++; g_vg.scanBytes = 0; }
     // MatchInfo
     unsigned char cur[0x70];
     if (Rd((const void*)(mi + 0x1554), cur, sizeof cur)) {
@@ -551,6 +556,8 @@ static bool KeyCombo(int vk) {
 DWORD WINAPI Worker(void*) {
     LoadCfg();
     { CreateDirectoryW(g_cfg.baseDir.c_str(), nullptr); g_logf = _wfopen((g_cfg.baseDir + L"rastro_dll.log").c_str(), L"wb"); }
+    g_cfg.vigia = g_cfg.vigia && g_cfg.on;   // sin rastro_v4.ini o con rastro = 0 no corre nada
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);   // nunca le saca tiempo al juego
     const bool viejos = g_cfg.on && g_cfg.ganchos;
     Log("rastro v4 cargado: vigia de offside %s (solo lectura, sin ganchos); ganchos viejos %s", g_cfg.vigia ? "PRENDIDO" : "apagado (vigia = 0)", viejos ? "disponibles con Ctrl+Shift+F9 (rastro_ganchos = 1)" : "apagados");
     if (g_cfg.vigia) {   // las direcciones del vigia son de este exe exacto
