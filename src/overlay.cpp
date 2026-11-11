@@ -1358,7 +1358,13 @@ static void DrawSectionExtras(const std::string& sname) {
         ImGui::TextUnformatted(IcoL(kIcoDiag, TRS("Prueba automatica")).c_str());
         if (s_fontBold) ImGui::PopFont();
         ImGui::TextWrapped("%s", TRS("Apaga un momento cada efecto prendido, mide cuantos ms cuesta (CPU y placa), si cambia la imagen y saca una foto; despues prende una por una las vistas de depuracion y las fotografia. Al final deja todo como estaba (no guarda nada en el ini) y escribe PES21FX\\diagnostico\\<fecha>\\ con resumen.txt, informe.json y las fotos, para que Claude lo lea. Con la camara quieta (repeticion en pausa o el editor); tarda 2 a 4 minutos. Esc la corta."));
-        if (!MenuTestActive()) { if (ImGui::Button(IcoL(kIcoDiag, TRS("Empezar la prueba")).c_str(), ImVec2(0, 0))) MenuTestStart(); }
+        if (!MenuTestActive()) { if (ImGui::Button(IcoL(kIcoDiag, TRS("Empezar la prueba")).c_str(), ImVec2(0, 0))) MenuTestStart();
+            // (11/11) buscar el cuelgue: para el reinicio de la placa al sacar "Ver original" en el partido (menutest.cpp MenuHangStart)
+            ImGui::SameLine(); if (ImGui::Button(IcoL(kIcoDiag, TRS("Buscar el cuelgue")).c_str(), ImVec2(0, 0))) MenuHangStart();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Para cuando la placa se reinicia con el mod prendido. Apaga todos los efectos, saca 'Ver original' y los vuelve a prender de a uno cada 4 segundos, anotando cada paso en el log antes de hacerlo. Si la placa se reinicia, el ultimo efecto anotado es el culpable. No guarda nada; con Esc se corta y todo vuelve a como estaba."));
+            // (11/11) la busqueda general dio "Cejas con hebras": ahora cual de sus opciones (hebras v3, pasada propia, sombra, barba...)
+            ImGui::SameLine(); if (ImGui::Button(IcoL(kIcoDiag, TRS("Buscar dentro de: Cejas con hebras")).c_str(), ImVec2(0, 0))) MenuHangStartGroup(74, 0);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Deja el resto del mod como esta, pone en 0 las opciones de Cejas con hebras, prende la tarjeta y devuelve cada opcion de a una cada 4 segundos, anotando antes cada paso. Si la placa se reinicia, la ultima opcion anotada es la culpable. No guarda nada.")); }
         else { if (ImGui::Button(IcoL(kIcoX, TRS("Cancelar")).c_str(), ImVec2(0, 0))) MenuTestStop();
                ImGui::SameLine(); ImGui::ProgressBar(MenuTestProgress(), ImVec2(std::max(120.0f * UIK(), ImGui::GetContentRegionAvail().x), 0)); }
         ImGui::PushTextWrapPos(0); ImGui::TextUnformatted(Utf8(MenuTestStatus()).c_str()); ImGui::PopTextWrapPos();
