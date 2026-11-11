@@ -609,7 +609,7 @@ ID3D11Resource* NamedSRVResource(const std::string& name);   // hooks.cpp: recur
 ID3D11ShaderResourceView* SSSSBeforeComposition(ID3D11DeviceContext* c); ID3D11ShaderResourceView* SSSSSpecSRV(); void SSSSReloadShaders(); double SSSSEditorLightAge(); void SSSSRenderSize(unsigned& w, unsigned& h); extern std::atomic<int> g_ssssDraws;   // ssss.cpp
 // prueba automatica del menu (menutest.cpp)
 void MenuTestPresent(IDXGISwapChain* sc, ID3D11Texture2D* frame);
-void MenuTestStart(); void MenuTestStop(); bool MenuTestActive();
+void MenuTestStart(); void MenuTestStop(); bool MenuTestActive(); void MenuHangStart(); bool MenuHangActive();   // (11/11) buscar el cuelgue (TDR)
 int MenuTestCount(int what); float MenuTestNoise(); const std::string& MenuTestStatus();
 size_t MenuTestResults(); bool MenuTestResult_(size_t i, std::string& group, std::string& section, float& diff, int& state, float& cpuMs, float& gpuMs);
 float MenuTestProgress(); const std::wstring& MenuTestDir();
