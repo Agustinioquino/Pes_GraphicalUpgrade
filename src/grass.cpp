@@ -196,7 +196,7 @@ static float NatCutK() {
     return (mm > 1.0f ? std::clamp(mm, 10.0f, 90.0f) : 28.0f) / 60.0f;
 }
 // (11/11 n, usuarios: "the grass blades has to get thinner"; Agustin: "y una mayor cantidad si pasa eso") w425 = ancho de las hojas del
-// natural (hojas 3D y tarjetas; 0 / sin la linea = 1). Mas finas = mas tarjetas (el compute cubre igual) y mas hojas 3D (x 1 / ancho)
+// natural de cerca (hojas 3D y el ancho de cerca de las tarjetas; 0 / sin la linea = 1). Mas finas = mas tarjetas de cerca y mas hojas 3D (x 1 / ancho)
 static float NatWidth() {
     if (g_cfg.live[104][0] < 0.5f || g_cfg.live[407][0] > 0.5f) return 1.0f;
     const float w = g_cfg.live[425][3];
@@ -1001,7 +1001,7 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
     bool emitted = false;
     float T[4]; Thresholds(T);
     float tall = p59[0] > 0.05f ? p59[0] : 1.3f;
-    float wide = (p59[1] >= 0.0f ? p59[1] : 1.0f) * NatWidth();   // (11/11 n) w425: natural mas fino (el compute pone mas tarjetas)
+    float wide = p59[1] >= 0.0f ? p59[1] : 1.0f;
     int q = (int)(g_cfg.live[61][0] + 0.5f); q = (std::max)(0, (std::min)(q, 4));
     // (27/10 q) Calidad 4 = Ultra (pedido de Agustin: "cargar todas las parcelas como antes y el pasto al maximo"): cobertura 2.4x, hoja
     // minima de 1 px, todas las capas de muy cerca, hojas 3D hasta el fondo de la cancha (sin el limite del cesped lejano) y sin densidad adaptativa
@@ -1048,7 +1048,9 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
     // tupidas de cerca recien se veia con la camara casi pegada al suelo); por defecto 200 / 450
     const float pR0 = g_cfg.live[294][1] >= 50.0f ? (std::min)(g_cfg.live[294][1], 3000.0f) : 300.0f;
     const float pR1 = g_cfg.live[294][2] >= pR0 + 20.0f ? (std::min)(g_cfg.live[294][2], 6000.0f) : (std::max)(pR0 * 2.3f, pR0 + 100.0f);
-    const float wGame = 0.012f * wide, wClose = 0.004f * wide, pRamp0 = pR0, pRamp1 = pR1;
+    // (11/11 n, Agustin: "las hojas finas con un limite de distancia para que se vean en los primeros planos") w425 solo en el ancho de
+    // cerca (rampa y294 / z294 del nivel 0; el compute pone mas tarjetas solo ahi) y en las hojas 3D: de lejos el ancho y el costo de antes
+    const float wGame = 0.012f * wide, wClose = 0.004f * wide * NatWidth(), pRamp0 = pR0, pRamp1 = pR1;
     // (27/10 m) tanda 10, w328: capas de hojas por pixel de suelo en el primer plano (0 = 6). Es el costo del plano cercano (25-30 FPS con la
     // camara al ras): 4 recorta un tercio de las hojas de muy cerca sin tocar las camaras de juego
     const float dNear = (g_cfg.live[328][3] >= 1.0f) ? std::clamp(g_cfg.live[328][3], 2.0f, 10.0f) : (ultra ? 10.0f : 6.0f);   // (27/10 q) Ultra: todas las capas; (2/11 paso 10) w328 a mano manda tambien en Ultra
