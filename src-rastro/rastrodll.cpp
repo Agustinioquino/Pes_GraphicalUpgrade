@@ -237,6 +237,7 @@ struct Vg {
     uintptr_t reg = 0; VgJudge j[kVgJ] = {}; int nj = 0;
     bool scanning = false; uintptr_t scanNext = 0; ULONGLONG scanT = 0; int scans = 0; uint64_t scanBytes = 0;
     unsigned char mi[0x70] = {}; bool hmi = false;
+    uintptr_t w = 0; bool wWarn = false, hmk = false; unsigned char mk[0x28] = {}; float ln[4] = {};
     int tick = -1, lastTick = -1, fotoAt = -1; VgRing* ring = nullptr; int ringPos = 0, ringCnt = 0;
     int events = 0, eventsFull = 0, lines = 0, secLines = 0, drop = 0; ULONGLONG secT = 0; unsigned faults = 0;
 } g_vg;
@@ -316,8 +317,8 @@ void VgAddJudge(uintptr_t p) {
     g_vg.nj++;
 }
 void VgScanStep() {
-    uint64_t budget = 2ull << 20; int queries = 0;   // 2 MB y 256 consultas por paso: el hilo casi no pesa
-    while (budget > 0 && queries++ < 256) {
+    uint64_t budget = 8ull << 20; int queries = 0;   // 8 MB y 1024 consultas por paso (con 2 MB tardo 174 s en 7 GB)
+    while (budget > 0 && queries++ < 1024) {
         MEMORY_BASIC_INFORMATION mbi{};
         if (g_vg.scanNext >= 0x7ffffffe0000ull || !VirtualQuery((const void*)g_vg.scanNext, &mbi, sizeof mbi)) {
             g_vg.scanning = false;
@@ -336,7 +337,19 @@ void VgScanStep() {
         } else g_vg.scanNext = end;
     }
 }
-uintptr_t VgWorld(uintptr_t judge) { const uintptr_t p = RdPtr(judge + 0x3b8), q = RdPtr(p); return q ? RdPtr(q + 0x18) : 0; }
+// W = match::registry::AnalyzeInfo, bloque del registro en reg+0x2968 (FUN_140464090 lo crea; adentro tiene las tres
+// AnalyzeDetail*, cuyas vtables sirven para saber que es el). Se prueba el puntero tal cual y corrido 8 (cabecera de la reserva).
+const uintptr_t kVtAnInstr = 0x1425a65a0ull, kVtAnLink = 0x1425a65c0ull;
+bool VgIsWorld(uintptr_t w) { return w && RdPtr(w + 0x25cf0) == kVtAnInstr && RdPtr(w + 0x25e00) == kVtAnLink; }
+uintptr_t VgWorld() {
+    if (!g_vg.reg) return 0;
+    if (g_vg.w && VgIsWorld(g_vg.w)) return g_vg.w;
+    const uintptr_t p = RdPtr(g_vg.reg + 0x2968); uintptr_t w = 0;
+    if (VgIsWorld(p)) w = p; else if (p && VgIsWorld(p + 8)) w = p + 8;
+    if (w && w != g_vg.w) VgLine("mundo (AnalyzeInfo) en %p (registro+0x2968 = %p)", (void*)w, (void*)p);
+    else if (!w && !g_vg.wWarn && p) { g_vg.wWarn = true; VgLine("registro+0x2968 = %p no tiene la forma de AnalyzeInfo: sin mascaras", (void*)p); }
+    g_vg.w = w; return w;
+}
 uintptr_t VgAnyJudge() { for (int i = 0; i < g_vg.nj; i++) if (g_vg.j[i].strong) return g_vg.j[i].a; return g_vg.nj ? g_vg.j[0].a : 0; }
 
 void BuildRecord(std::string& rec, uintptr_t reg, int tick, int phase);
@@ -363,13 +376,13 @@ void VgEvent(const char* what, int ji, bool full) {
     static unsigned char buf[0x1B00];
     if (judge) {
         Rd((const void*)judge, buf, 0x3f0); VgChunk("JUEZ", buf, 0x3f0);
-        const uintptr_t blk = RdPtr(judge + 0x3c0);
-        if (blk) { static unsigned char b2[0xd10]; Rd((const void*)blk, b2, sizeof b2); VgChunk("BLOQ", b2, sizeof b2); }
-        if (const uintptr_t w = VgWorld(judge)) {
-            Rd((const void*)(w + 0x24600), buf, 0x1B00); VgChunk("MUND", buf, 0x1B00);
-            unsigned m[8] = {}; Rd((const void*)(w + 0x253c4), m, sizeof m);
-            VgLine("EVENTO %d mundo %p: mascaras adelantados equipo0 %x %x %x %x | equipo1 %x %x %x %x", n, (void*)w, m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7]);
-        }
+        const uintptr_t blk = judge + kJudgeBlk;   // fijo: juez+0x3c0 solo vale dentro de la llamada del juego
+        { static unsigned char b2[0xd10]; Rd((const void*)blk, b2, sizeof b2); VgChunk("BLOQ", b2, sizeof b2); }
+    }
+    if (const uintptr_t w = VgWorld()) {
+        Rd((const void*)(w + 0x24600), buf, 0x1B00); VgChunk("MUND", buf, 0x1B00);
+        unsigned m[8] = {}; Rd((const void*)(w + 0x253c4), m, sizeof m);
+        VgLine("EVENTO %d mundo %p: mascaras adelantados equipo0 %x %x %x %x | equipo1 %x %x %x %x", n, (void*)w, m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7]);
     }
     if (full) { VgFoto("FOTO"); g_vg.fotoAt = g_vg.tick + 60; }
     VgLine(full ? "EVENTO %d guardado (%s): %d ticks anteriores + foto del registro" : "EVENTO %d guardado (%s)", n, what, g_vg.ringCnt);
@@ -390,13 +403,13 @@ bool VgStep() {
     const uintptr_t reg = RdPtr(kRegGlobal);
     if (!reg) {
         if (g_vg.reg) { VgLine("fin del partido (registro en 0)"); if (g_vg.log) fflush(g_vg.log); }
-        g_vg.reg = 0; g_vg.nj = 0; g_vg.scanning = false; g_vg.hmi = false; g_vg.lastTick = -1; g_vg.ringCnt = 0; g_vg.scans = 0; g_vg.fotoAt = -1;
+        g_vg.reg = 0; g_vg.w = 0; g_vg.wWarn = false; g_vg.hmk = false; g_vg.nj = 0; g_vg.scanning = false; g_vg.hmi = false; g_vg.lastTick = -1; g_vg.ringCnt = 0; g_vg.scans = 0; g_vg.fotoAt = -1;
         return false;
     }
     const ULONGLONG now = GetTickCount64();
     if (reg != g_vg.reg) {
         if (!VgOpen()) return false;
-        g_vg.reg = reg; g_vg.nj = 0; g_vg.hmi = false; g_vg.lastTick = -1; g_vg.ringCnt = 0; g_vg.fotoAt = -1;
+        g_vg.reg = reg; g_vg.w = 0; g_vg.wWarn = false; g_vg.hmk = false; g_vg.nj = 0; g_vg.hmi = false; g_vg.lastTick = -1; g_vg.ringCnt = 0; g_vg.fotoAt = -1;
         g_vg.scanning = true; g_vg.scanNext = 0x10000; g_vg.scanT = now; g_vg.scans = 1; g_vg.scanBytes = 0;
         VgLine("partido nuevo: registro %p; buscando al juez", (void*)reg);
     }
@@ -436,12 +449,27 @@ bool VgStep() {
                 if (nuevo) VgEvent(VgI(jg, 0x28) == 1 ? "juez: pendiente nuevo tipo 1 (offside)" : "juez: pendiente nuevo", i, VgI(jg, 0x28) == 1);
             } else { memcpy(j.jg + 0xc, jg + 0xc, 8); }
         }
-        const uintptr_t blk = RdPtr(j.a + 0x3c0);
+        const uintptr_t blk = j.a + kJudgeBlk;
         unsigned char bk[0x70];
-        if (blk && Rd((const void*)blk, bk, sizeof bk) && (!j.hb || memcmp(bk, j.bk, sizeof bk) != 0)) {
+        if (Rd((const void*)blk, bk, sizeof bk) && (!j.hb || memcmp(bk, j.bk, sizeof bk) != 0)) {
             const int was = j.hb ? VgI(j.bk, 0x34) : 0; const bool first = !j.hb;
             VgBlockLine("BLOQUE", i, bk); memcpy(j.bk, bk, sizeof bk); j.hb = true;
             if (!first && VgI(bk, 0x34) != 0 && VgI(bk, 0x34) != was) VgEvent(VgI(bk, 0x34) == 1 ? "bloque del juez: tipo de falta 1 (offside)" : "bloque del juez: tipo de falta distinto de 0", i, false);
+        }
+    }
+    // marcas de "en posicion adelantada": W+0x253bc = tick del ultimo calculo por equipo, W+0x253c4 = mascaras [equipo][clase 0..3]
+    // (0 = mas de 4 m adelantado, 1 = 1 a 4 m, 2 = menos de 1 m, 3 = habilitado por menos de 1 m), W+0x254ec = linea usada
+    if (const uintptr_t w = VgWorld()) {
+        unsigned char mk[0x28]; float ln[4] = {};
+        if (Rd((const void*)(w + 0x253bc), mk, sizeof mk) && Rd((const void*)(w + 0x254ec), ln, 8)) {
+            Rd((const void*)(w + 0x58), &ln[2], 4); Rd((const void*)(w + 0x44), &ln[3], 4);   // la linea que cuenta para un equipo es la del rival (W+0x44+rival*0x14)
+            if (!g_vg.hmk || memcmp(mk, g_vg.mk, sizeof mk) != 0) {
+                const bool algo = memcmp(mk + 8, g_vg.mk + 8, sizeof mk - 8) != 0 || !g_vg.hmk;   // solo el tick cambio: no se anota
+                memcpy(g_vg.mk, mk, sizeof mk); g_vg.hmk = true;
+                if (algo) VgLine("MARCA calculo en ticks %d %d | equipo0 %x %x %x %x linea %.2f (ahora %.2f) | equipo1 %x %x %x %x linea %.2f (ahora %.2f)",
+                    VgI(mk, 0), VgI(mk, 4), VgI(mk, 8), VgI(mk, 0xc), VgI(mk, 0x10), VgI(mk, 0x14), ln[0], ln[2],
+                    VgI(mk, 0x18), VgI(mk, 0x1c), VgI(mk, 0x20), VgI(mk, 0x24), ln[1], ln[3]);
+            }
         }
     }
     // anillo: una muestra por tick
@@ -451,7 +479,7 @@ bool VgStep() {
         r.tick = tick; r.ms = (uint32_t)GetTickCount();
         if (const uintptr_t ball = RdPtr(reg + 0x40)) Rd((const void*)ball, r.ball, sizeof r.ball);
         for (int i = 0; i < 22; i++) if (const uintptr_t p = RdPtr(reg + 0x1dd8 + (uintptr_t)i * 0x28)) Rd((const void*)(p + 0x55c), r.pos[i], 12);
-        if (const uintptr_t jd = VgAnyJudge()) if (const uintptr_t w = VgWorld(jd)) Rd((const void*)(w + 0x24700), r.w, sizeof r.w);
+        if (const uintptr_t w = VgWorld()) Rd((const void*)(w + 0x24700), r.w, sizeof r.w);
         g_vg.ringPos = (g_vg.ringPos + 1) % kVgRingN; if (g_vg.ringCnt < kVgRingN) g_vg.ringCnt++;
         if (g_vg.fotoAt >= 0 && (tick >= g_vg.fotoAt || tick < g_vg.fotoAt - 600)) { g_vg.fotoAt = -1; VgFoto("FOT2"); fflush(g_vg.bin); }
     }
