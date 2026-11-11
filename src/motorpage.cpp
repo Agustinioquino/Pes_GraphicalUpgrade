@@ -113,18 +113,18 @@ static bool GameStr(const void* s, char* out, size_t n) {
 
 // ---------------------------------------------------------------- las filas del Motor
 static const char* const kVista[] = { "Normal", "Luz difusa", "Luz especular", "Normales", "Normales de mundo", "Albedo (sin luz)", "Profundidad", "Oclusion", "Sombra del sol", "Solo luz (sin texturas)", "Material" };
-static const char* const kNoSi[] = { "No", "Si" };
+static const char* const kNoSi[] = { "No", "Si", "Si, con teselacion" };
 static const char* const kCorte[] = { "No", "25 %", "50 %", "75 %" };
 static const float kCorteV[] = { 0.0f, 0.25f, 0.5f, 0.75f };
 struct Fila { const char* nombre; const char* const* op; int n; };
-static const Fila kFilas[] = { { "Vista", kVista, 11 }, { "Alambre", kNoSi, 2 }, { "Pantalla partida", kCorte, 4 } };
+static const Fila kFilas[] = { { "Vista", kVista, 11 }, { "Alambre", kNoSi, 3 }, { "Pantalla partida", kCorte, 4 } };
 static const int kNFilas = (int)(sizeof kFilas / sizeof kFilas[0]);
 
 static int FilaActual(int r) {
     float v[4];
     { std::lock_guard<std::mutex> lk(g_cfgMutex); for (int i = 0; i < 4; i++) v[i] = g_cfg.live[429][i]; }
     if (r == 0) return std::clamp((int)(v[0] + 0.5f), 0, 10);
-    if (r == 1) return v[1] > 0.5f ? 1 : 0;
+    if (r == 1) return v[1] > 1.5f ? 2 : v[1] > 0.5f ? 1 : 0;
     int best = 0; for (int i = 1; i < 4; i++) if (std::fabs(kCorteV[i] - v[2]) < std::fabs(kCorteV[best] - v[2])) best = i;
     return best;
 }
@@ -204,7 +204,7 @@ static void my_Value(void*, int group, int row, int value) {
     {
         std::lock_guard<std::mutex> lk(g_cfgMutex);
         if (row == 0) g_cfg.live[429][0] = (float)v;
-        else if (row == 1) g_cfg.live[429][1] = v ? 1.0f : 0.0f;
+        else if (row == 1) g_cfg.live[429][1] = (float)v;      // 0 no, 1 alambre (piel sin teselar), 2 alambre con la teselacion
         else g_cfg.live[429][2] = kCorteV[v];
     }
     static int n = 0; if (n++ < 40) Log("motor (pagina): %s -> %s", kFilas[row].nombre, kFilas[row].op[v]);

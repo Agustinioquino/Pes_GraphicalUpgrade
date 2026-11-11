@@ -256,6 +256,10 @@ bool FaceTessBegin(ID3D11DeviceContext* c, uint64_t vsHash, ID3D11ShaderResource
     if (!seam || !params || !g_dev.dev) return false;
     const int v = vsHash == kVsHead ? 0 : vsHash == kVsFace ? 1 : vsHash == kVsBody ? 2 : -1;
     if (v < 0) return false;
+    // (11/11 23:15, Agustin: "la vista de alambre es la unica que no lee correcto") con el alambre del Motor la piel teselada daba
+    // triangulos tan chicos que se veia rellena y oscura (cara negra): en alambre se dibuja la malla del juego, sin teselar.
+    // y429 = 2 ("Si, con teselacion") la deja para ver la malla teselada
+    if (g_motorWire.load(std::memory_order_relaxed) && g_cfg.live[429][1] < 1.5f) return false;
     { D3D11_VIEWPORT cv{}; UINT cn = 1; c->RSGetViewports(&cn, &cv);   // (09/11) viewport de la escena de personajes (vista del esqueleto, overlay.cpp)
       if (cn >= 1 && cv.Width > 64 && cv.Height > 64) { s_cvX = (int)cv.TopLeftX; s_cvY = (int)cv.TopLeftY; s_cvW = (int)cv.Width; s_cvH = (int)cv.Height; s_cvF = PresentNo(); } }
     // (04/11 m) valores propios de esta cara (y la anota para el "jugador actual" aunque la teselacion este apagada)
