@@ -1341,6 +1341,17 @@ static void DrawSectionExtras(const std::string& sname) {
                 if (ImGui::Button(IcoL(kIcoX, TRS("Apagar todo el debug")).c_str())) DebugAllOff();
             } else ImGui::TextColored(ImVec4(0.45f, 0.88f, 0.55f, 1), "%s", TRS("Ninguna vista de depuracion prendida"));
             { bool sk = g_cfg.live[426][0] > 0.5f; if (ImGui::Checkbox(TRS("Ver el esqueleto (huesos en escena)"), &sk)) g_cfg.live[426][0] = sk ? 1.0f : 0.0f; }   // (09/11 f)
+            {   // (11/11 3icxbh) vistas del motor (fila 429): las mismas que maneja el Motor en tiempo real desde Sider (motorlink.cpp)
+                static const char* kVm[] = { "Normal", "Luz difusa", "Luz especular", "Normales", "Normales de mundo", "Albedo (sin luz)", "Profundidad", "Oclusion", "Sombra del sol", "Solo luz (sin texturas)", "Material" };
+                int vm = (int)(g_cfg.live[429][0] + 0.5f); if (vm < 0 || vm > 10) vm = 0;
+                ImGui::SetNextItemWidth(220.0f * UIK());
+                if (ImGui::BeginCombo(TRS("Vista del motor"), TRS(kVm[vm]))) {
+                    for (int i = 0; i <= 10; i++) if (ImGui::Selectable(TRS(kVm[i]), i == vm)) g_cfg.live[429][0] = (float)i;
+                    ImGui::EndCombo(); }
+                bool wf = g_cfg.live[429][1] > 0.5f; if (ImGui::Checkbox(TRS("Vista del motor: alambre"), &wf)) g_cfg.live[429][1] = wf ? 1.0f : 0.0f;
+                if (vm > 0) { float ct = g_cfg.live[429][2]; ImGui::SetNextItemWidth(220.0f * UIK());
+                    if (ImGui::SliderFloat(TRS("Pantalla partida (0 = toda la pantalla)"), &ct, 0.0f, 1.0f, "%.2f")) g_cfg.live[429][2] = ct; }
+            }
             ImGui::Spacing();
         }
         if (s_fontBold) ImGui::PushFont(s_fontBold);
