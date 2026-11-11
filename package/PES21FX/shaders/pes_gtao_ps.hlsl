@@ -40,6 +40,11 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   if (z0 < 0.05 || z0 > 300.0) return 1.0;
   float3 Pc = PosV(uv, z0);
   float3 V = -normalize(Pc);
+  // (11/11 g, Agustin: "a veces la pelota se ve a traves" del pasto) una hoja de pasto es FINA: el horizonte la tomaba como un muro
+  // infinito y las hojas que estan DELANTE de la pelota / botines (mas cerca de la camara) le dejaban franjas oscuras con su forma.
+  // En lo que no es pasto, una muestra de pasto que esta mas de thinT delante no tapa (hoja pegada si). El pasto entre si, igual que antes
+  bool rcvTurf = (((uint)(inNrm.SampleLevel(sPoint, uv, 0).z * 1023.0 + 0.5)) & 15u) == 3u;
+  float thinT = 0.035 + 0.002 * z0;
   // (21/10 c) normal GEOMETRICA reconstruida de la profundidad (32 bits float: limpia), no la del G-buffer: la del G-buffer
   // trae los mapas de normales (poros, arrugas, trama y estampados de la tela) y el GTAO, que compara esa normal con la
   // superficie real de la profundidad, sombreaba esos dibujos (curvas oscuras en el cuello, la oreja y la camiseta).
@@ -73,6 +78,17 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   float noiseDir = frac(52.9829189 * frac(dot(ip, float2(0.06711056, 0.00583715))) + frT * 0.618034);
   float noiseOff = frac(dot(ip, float2(0.25, 0.5)) + frT * 0.381966);
   const int kSlices = 3, kSteps = 6;
+  // (08/11) OCLUSION DE CORTO ALCANCE (fila 387). El barrido de arriba usa un radio de 60 cm y 6 pasos con t^2: a un
+  // centimetro de la superficie quedan una o dos muestras, asi que los huecos chicos (la rendija de los labios y la cavidad
+  // de la boca, los huecos entre dientes del modelo 3D, las fosas nasales, el pliegue del parpado, donde el pelo nace, el
+  // borde de la oreja, las costuras del kit) casi no tapaban nada: la cara quedaba plana en los primeros planos. Ahora, en
+  // la misma rebanada y el mismo lado, se agregan 4 muestras repartidas dentro de y387 centimetros: entran al mismo
+  // horizonte (la matematica no cambia) y ademas suman un termino de oclusion cercana propio, con su fuerza (z387), que
+  // se multiplica al final. Son 24 lecturas mas de profundidad por pixel (el barrido ancho son 36): se apaga con x387 = 0
+  float4 PN = IniParams.Load(int2(387, 0));
+  bool nearOn = PN.x > 0.5;
+  float rNear = clamp((PN.y > 0.0 ? PN.y : 3.0) * 0.01, 0.004, 0.25);
+  float nearSum = 0.0, nearCnt = 0.0;
   float vis = 0.0;
   [unroll] for (int s = 0; s < kSlices; s++) {
     float phi = (s + noiseDir) * (3.14159265 / kSlices);
@@ -98,6 +114,7 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
         float2 uvS = uv + sgn * dir * (t * rPx) * px;
         if (any(uvS < 0.0) || any(uvS > 1.0)) break;
         float zS = LinZ(uvS);
+        if (!rcvTurf && z0 - zS > thinT && ((((uint)(inNrm.SampleLevel(sPoint, uvS, 0).z * 1023.0 + 0.5)) & 15u) == 3u)) continue;   // (11/11 g) hoja delante
         float3 Ps = PosV(uvS, zS);
         float3 dS = Ps - Pc; float lenS = length(dS);
         if (lenS < 1e-4) continue;
@@ -111,6 +128,28 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
         cosS = lerp(-1.0, cosS, w);
         cosH = max(cosH, cosS);
       }
+      // (08/11) muestras de corto alcance: 4 pasos repartidos dentro de rNear (en metros -> pixeles, al menos un pixel)
+      if (nearOn) {
+        float rnPx = max(rNear * pxm, 1.0);
+        [unroll] for (int sn = 0; sn < 4; sn++) {
+          float tn = (sn + 0.5 + noiseOff * 0.5) / 4.0;
+          float2 uvS = uv + sgn * dir * (tn * rnPx) * px;
+          if (any(uvS < 0.0) || any(uvS > 1.0)) break;
+          float zS = LinZ(uvS);
+          if (zS < 0.05 || zS > 300.0) continue;
+          if (!rcvTurf && z0 - zS > thinT && ((((uint)(inNrm.SampleLevel(sPoint, uvS, 0).z * 1023.0 + 0.5)) & 15u) == 3u)) continue;   // (11/11 g)
+          float3 dS = PosV(uvS, zS) - Pc; float lenS = length(dS);
+          if (lenS < 1e-5) continue;
+          float hN = dot(dS, N);
+          nearCnt += 1.0;
+          if (hN > depthEps && lenS < rNear) {
+            // cuanto tapa: el seno del angulo sobre el plano tangente, atenuado con la distancia (lo pegado tapa mas)
+            float o = saturate(hN / lenS) * saturate(1.0 - (lenS / rNear) * (lenS / rNear));
+            nearSum += o;
+            cosH = max(cosH, dot(dS, V) / lenS);
+          }
+        }
+      }
       h[side] = cosH;
     }
     float h0 = -acos(h.y), h1 = acos(h.x);   // h.x = horizonte hacia +dir, h.y = hacia -dir (XeGTAO: h1 = +dir)
@@ -121,5 +160,11 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   }
   vis = saturate(vis / kSlices);
   float strength = P.w > 0.05 ? P.w : 1.0;
-  return pow(vis, strength);
+  float ao = pow(vis, strength);
+  // (08/11) oclusion de corto alcance: promedio de lo que tapan los vecinos cercanos, con su fuerza (z387)
+  if (nearOn && nearCnt > 0.5) {
+    float nearAO = saturate(1.0 - (PN.z > 0.0 ? PN.z : 1.0) * (nearSum / nearCnt));
+    ao = min(ao, nearAO);
+  }
+  return ao;
 }

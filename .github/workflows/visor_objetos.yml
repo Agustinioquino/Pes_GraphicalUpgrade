@@ -1,0 +1,52 @@
+name: visor-objetos
+
+on:
+  push:
+    paths:
+      - 'tools/visor_objetos/**'
+      - 'tools/cpk_extract.py'
+      - 'tools/ftex.py'
+      - 'tools/fox/fmdl.py'
+      - '.github/workflows/visor_objetos.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Probar que lee un fmdl y una ftex
+        shell: pwsh
+        run: |
+          python -m pip install --quiet pyinstaller numpy pillow pywebview
+          python -c "import sys; sys.path[:0]=['tools','tools/fox']; import cpk_extract, ftex, fmdl; print('ok')"
+      - name: Armar VisorObjetos.exe
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --onefile --windowed --name VisorObjetos --distpath dist --workpath buildpy --specpath buildpy `
+            --paths tools --paths tools/fox --add-data "../tools/visor_objetos/static;static" `
+            --hidden-import cpk_extract --hidden-import ftex --hidden-import fmdl --collect-all webview tools/visor_objetos/visor_objetos.py
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Copy-Item tools/visor_objetos/LEEME.txt dist/
+          Get-ChildItem dist | Select-Object Name, Length
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VisorObjetos
+          path: dist/
+      - name: Publicar en la rama build-visor-objetos
+        shell: pwsh
+        run: |
+          cd dist
+          git init -q
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git checkout -q -b build-visor-objetos
+          git add -A
+          git commit -q -m "VisorObjetos $env:GITHUB_SHA ($env:GITHUB_REF_NAME)"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" build-visor-objetos

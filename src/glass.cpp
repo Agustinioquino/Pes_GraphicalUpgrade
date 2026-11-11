@@ -17,6 +17,11 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <cmath>
+#include <mutex>
+#include <string>
+#include <DDSTextureLoader.h>
+#include <WICTextureLoader.h>
 
 namespace fx {
 
@@ -77,8 +82,10 @@ void GlassReloadShaders() {
 
 static bool EnsureTargets(const D3D11_TEXTURE2D_DESC& rd) {
     if (s_snap && s_w == rd.Width && s_h == rd.Height && s_fmt == rd.Format) return true;
-    RelT(s_snapSRV); RelT(s_snap);
-    for (int i = 0; i < 5; i++) { RelT(s_lvSRV[i]); RelT(s_lvRTV[i]); RelT(s_lv[i]); }
+    // (08/11 e) las copias pudieron quedar enlazadas en una lista diferida del juego: se sueltan a los 30 s
+    auto drop = [](auto*& p) { if (p) { DeferRelease(p); p = nullptr; } };
+    drop(s_snapSRV); drop(s_snap);
+    for (int i = 0; i < 5; i++) { drop(s_lvSRV[i]); drop(s_lvRTV[i]); drop(s_lv[i]); }
     s_haveSnap = false;
     D3D11_TEXTURE2D_DESC td{}; td.Width = rd.Width; td.Height = rd.Height; td.MipLevels = 1; td.ArraySize = 1; td.Format = rd.Format;
     td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
@@ -258,6 +265,28 @@ void GlassAfterDraw(ID3D11DeviceContext* c, GlassScope& g) {
     g = GlassScope();
 }
 
+// (08/11 e) "Ocultar los menus del juego" (x392, Alt+Shift+M, boton del ojo tachado arriba en el menu Insert): Agustin pidio ver
+// el visor del editor (Apariencia, Movimiento) sin los paneles del juego encima. Los menus del juego son dibujos del PS 55a003da
+// con texturas de archivo (paneles, letras, iconos, fondos); la imagen del jugador / la escena 3D es el mismo PS pero con una
+// textura que es un render target (el juego la dibujo este cuadro). Se saltan los dibujos de 55a003da cuya textura t8 no es
+// render target (o no hay textura). Nunca se guarda prendido (kDebugParams): al reiniciar arranca mostrando los menus.
+std::atomic<int> g_uiHidden{0};
+bool UiHideShouldSkip(ID3D11DeviceContext* c, uint64_t ps) {
+    if (ps != kUiPS || g_cfg.live[392][0] < 0.5f) return false;
+    bool rt = false;
+    ID3D11ShaderResourceView* t8 = nullptr; c->PSGetShaderResources(8, 1, &t8);
+    if (t8) {
+        ID3D11Resource* r = nullptr; t8->GetResource(&r);
+        if (r) { ID3D11Texture2D* t2 = nullptr; r->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t2); r->Release();
+            if (t2) { D3D11_TEXTURE2D_DESC d; t2->GetDesc(&d); rt = (d.BindFlags & D3D11_BIND_RENDER_TARGET) != 0; t2->Release(); } }
+        t8->Release();
+    }
+    if (rt) return false;
+    const int n = g_uiHidden.fetch_add(1);
+    if (n == 0 || n == 5000) Log("menus del juego ocultos (x392): dibujo del menu salteado (%d hasta ahora); la escena (render target) se sigue dibujando", n + 1);
+    return true;
+}
+
 // en Present: (w191) cada 20 s, como fue la ultima pasada del menu
 void GlassPresent() {
     if (g_cfg.live[189][0] < 0.5f || g_cfg.live[191][3] < 0.5f) return;
@@ -270,6 +299,144 @@ void GlassPresent() {
     for (int i = 0; i < 6 && i < p.draws && n < 140; i++) n += snprintf(tex + n, sizeof tex - n, " %ux%u", p.tw[i], p.th[i]);
     Log("vidrio: pasada del menu de %d dibujos, %d con nuestro shader, copia del fondo antes del #%d | texturas de los primeros:%s | %d copias desde el inicio",
         p.draws, p.bound, p.snapAt, tex, g_glassSnaps.load());
+}
+
+} // namespace fx
+
+namespace fx {
+
+// (08/11 qk2yxa) FONDO DEL VISOR DEL EDITOR (fila 424). Agustin: "reemplazar el fondo del modo edicion por una imagen propia, o
+// mejor un fondo negro". El fondo (la textura azul de Dream Patch) es un dibujo del PS del menu 55a003da con una textura de
+// archivo grande y apaisada (16:9 / 16:10), dibujado ANTES de la imagen del jugador (el mismo PS con un render target). Mientras
+// corre la composicion del editor (PS f807, ultimo medio segundo) se cambia su t8 por negro (x424 = 1) o por la imagen de
+// PES21FX\fondos\ (x424 = 2: fondo.png / fondo.jpg / fondo.dds; sin imagen queda negro). Lo dibujado despues de la escena
+// (paneles, textos) no se toca nunca, asi que el menu sigue encima igual. y/z/w424 libres.
+static std::atomic<double> s_edCompT{ -1.0 };
+static std::atomic<bool> s_bgSceneSeen{ false };
+static std::mutex s_bgMx;
+static ID3D11ShaderResourceView* s_bgBlack = nullptr;
+static ID3D11ShaderResourceView* s_bgImg = nullptr;
+static bool s_bgImgTried = false;
+static std::atomic<int> s_bgSwaps{ 0 }, s_bgDiag{ 0 };
+static std::atomic<uintptr_t> s_bgKnown[4];   // (08/11 kd63zh b) texturas ya reconocidas como fondo
+static std::atomic<int> s_bgKnownN{ 0 };
+void EditorBgNoteCompositionCount();
+void EditorBgNoteComposition() { s_edCompT.store(Now(), std::memory_order_relaxed); EditorBgNoteCompositionCount(); }
+static void EditorBgDiagTick(int mode);
+void EditorBgPresent() { s_bgSceneSeen.store(false, std::memory_order_relaxed); EditorBgDiagTick((int)(g_cfg.live[424][0] + 0.5f)); }
+
+static ID3D11ShaderResourceView* SolidSRV(uint32_t rgba) {
+    D3D11_TEXTURE2D_DESC td{}; td.Width = td.Height = 1; td.MipLevels = td.ArraySize = 1; td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_IMMUTABLE; td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    D3D11_SUBRESOURCE_DATA sd{ &rgba, 4, 4 }; ID3D11Texture2D* t = nullptr; ID3D11ShaderResourceView* v = nullptr;
+    if (SUCCEEDED(g_dev.dev->CreateTexture2D(&td, &sd, &t))) { g_dev.dev->CreateShaderResourceView(t, nullptr, &v); t->Release(); }
+    return v;
+}
+
+// imagen del usuario: se carga una vez (y de nuevo al volver a elegir "imagen propia" en el menu)
+static ID3D11ShaderResourceView* LoadUserBg() {
+    if (s_bgImgTried) return s_bgImg;
+    if (s_bgImg) { s_bgImg->Release(); s_bgImg = nullptr; }
+    s_bgImgTried = true;
+    static const wchar_t* kNames[] = { L"fondos\\fondo.png", L"fondos\\fondo.jpg", L"fondos\\fondo.jpeg", L"fondos\\fondo.bmp", L"fondos\\fondo.dds" };
+    for (const wchar_t* n : kNames) {
+        const std::wstring p = g_cfg.baseDir + n;
+        if (GetFileAttributesW(p.c_str()) == INVALID_FILE_ATTRIBUTES) continue;
+        ID3D11ShaderResourceView* v = nullptr; HRESULT hr;
+        const bool dds = _wcsicmp(n + wcslen(n) - 4, L".dds") == 0;
+        if (dds) hr = DirectX::CreateDDSTextureFromFile(g_dev.dev, p.c_str(), nullptr, &v);
+        else { EnsureComInit(); hr = DirectX::CreateWICTextureFromFileEx(g_dev.dev, nullptr, p.c_str(), 0, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE, 0, 0, DirectX::WIC_LOADER_IGNORE_SRGB | DirectX::WIC_LOADER_FORCE_RGBA32, nullptr, &v); }
+        if (FAILED(hr) || !v) { Log("fondo del editor: no se pudo cargar PES21FX\\%ls (0x%08x)", n, (unsigned)hr); if (v) v->Release(); continue; }
+        { ID3D11Resource* r = nullptr; v->GetResource(&r); ID3D11Texture2D* t2 = nullptr; D3D11_TEXTURE2D_DESC d{};
+          if (r) { r->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t2); r->Release(); } if (t2) { t2->GetDesc(&d); t2->Release(); }
+          Log("fondo del editor: imagen PES21FX\\%ls cargada (%ux%u)", n, d.Width, d.Height); }
+        s_bgImg = v; return v;
+    }
+    Log("fondo del editor: no hay imagen en PES21FX\\fondos\\ (fondo.png / .jpg / .dds): se usa negro");
+    return nullptr;
+}
+
+// (08/11 kd63zh) diagnostico: en la prueba de fc4255a no salio NINGUNA linea "fondo del editor" con x424 = 1; cada 15 s se cuenta
+// por que se descarto cada dibujo del menu (sin visor f807 reciente, despues de la escena, sin t8, no apaisado) para ver donde se corta
+static std::atomic<int> s_bgNUi{ 0 }, s_bgNNoComp{ 0 }, s_bgNAfter{ 0 }, s_bgNNoT8{ 0 }, s_bgNRt{ 0 }, s_bgNSmall{ 0 }, s_bgNComp{ 0 };
+static std::atomic<double> s_bgLogT{ 0.0 };
+void EditorBgNoteCompositionCount() { s_bgNComp.fetch_add(1, std::memory_order_relaxed); }
+static void EditorBgDiagTick(int mode) {
+    const double now = Now(), last = s_bgLogT.load(std::memory_order_relaxed);
+    if (now - last < 15.0) return;
+    s_bgLogT.store(now, std::memory_order_relaxed);
+    const int ui = s_bgNUi.exchange(0), nc = s_bgNNoComp.exchange(0), af = s_bgNAfter.exchange(0), n8 = s_bgNNoT8.exchange(0), rt = s_bgNRt.exchange(0), sm = s_bgNSmall.exchange(0), cp = s_bgNComp.exchange(0);
+    if (ui || cp) Log("fondo del editor (15 s, x424 = %d): %d dibujos del menu 55a003da, %d composiciones f807 | descartados: %d sin visor del editor reciente, %d despues de la escena, %d sin t8, %d con la imagen del jugador, %d no apaisados | %d cambiados en total",
+                      mode, ui, cp, nc, af, n8, rt, sm, s_bgSwaps.load());
+}
+
+// (10/11 m042wp) Agustin: "mira el contorno del jugador" (fondo negro: filo gris en las puntas del pelo y la oreja). La imagen
+// del jugador trae en el borde el color con el que el juego limpio su render target (gris, alfa 0 afuera); con el fondo azul
+// no se notaba. Para ese dibujo se pone pes_editor_edge_ps.hlsl (igual que 55a003da pero le resta al borde el color de la
+// limpieza). z424 = 1 lo deja como el juego. Con el vidrio del menu Fisico activo (GS propio) no se toca.
+static ID3D11PixelShader* s_edgePS = nullptr; static bool s_edgeTried = false;
+static ID3D11PixelShader* EditorEdgePS(ID3D11DeviceContext* c, const D3D11_TEXTURE2D_DESC& d) {
+    if (g_cfg.live[424][2] >= 0.5f || GlassWanted()) return nullptr;
+    { ID3D11GeometryShader* gs = nullptr; c->GSGetShader(&gs, nullptr, nullptr); if (gs) { gs->Release(); return nullptr; } }
+    {   std::lock_guard<std::mutex> lk(s_bgMx);
+        if (!s_edgeTried) { s_edgeTried = true;
+            if (ID3DBlob* b = CompileNamedShader(L"pes_editor_edge_ps.hlsl", "ps_5_0")) { g_dev.dev->CreatePixelShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_edgePS); b->Release(); }
+            Log("fondo del editor: borde del jugador %s (pes_editor_edge_ps.hlsl)", s_edgePS ? "limpio del color de fondo del juego" : "SIN arreglo: no compilo"); } }
+    if (!s_edgePS) return nullptr;
+    static std::atomic<int> n{ 0 };
+    if (n.fetch_add(1) < 3) { ID3D11BlendState* bs = nullptr; float bf[4]; UINT sm = 0; c->OMGetBlendState(&bs, bf, &sm);
+        D3D11_BLEND_DESC bd{}; if (bs) { bs->GetDesc(&bd); bs->Release(); }
+        Log("fondo del editor: borde del jugador limpiado en la imagen %ux%u (formato %d, mezcla %s src %d dst %d)", d.Width, d.Height, (int)d.Format,
+            bs ? (bd.RenderTarget[0].BlendEnable ? "si" : "no") : "ninguna", (int)bd.RenderTarget[0].SrcBlend, (int)bd.RenderTarget[0].DestBlend); }
+    return s_edgePS;
+}
+
+ID3D11ShaderResourceView* EditorBgFor(ID3D11DeviceContext* c, uint64_t ps, ID3D11PixelShader** edgePS) {
+    if (edgePS) *edgePS = nullptr;
+    const int mode = (int)(g_cfg.live[424][0] + 0.5f);
+    if (ps != kUiPS || mode <= 0 || !g_dev.dev) return nullptr;
+    s_bgNUi.fetch_add(1, std::memory_order_relaxed); EditorBgDiagTick(mode);
+    // (08/11 kd63zh) en la PC de Agustin la composicion f807 no pasa NUNCA por BeforeDraw en el editor (log 04e625e: 0 composiciones
+    // f807 en 15 s, 350693 dibujos del menu descartados). El visor del editor se reconoce ahora por el mismo menu: un dibujo de
+    // 55a003da que lee en t8 una textura render target grande (la imagen del jugador). Se mira primero t8 y luego la ventana de 0.5 s.
+    ID3D11ShaderResourceView* t8 = nullptr; c->PSGetShaderResources(8, 1, &t8);
+    if (!t8) { s_bgNNoT8.fetch_add(1, std::memory_order_relaxed); return nullptr; }
+    D3D11_TEXTURE2D_DESC d{}; bool ok = false; uintptr_t resId = 0;
+    { ID3D11Resource* r = nullptr; t8->GetResource(&r);
+      if (r) { resId = (uintptr_t)r; ID3D11Texture2D* t2 = nullptr; r->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t2); r->Release(); if (t2) { t2->GetDesc(&d); ok = true; t2->Release(); } } }
+    t8->Release();
+    if (!ok) return nullptr;
+    if (d.BindFlags & D3D11_BIND_RENDER_TARGET) {   // la imagen del jugador: el visor del editor esta en pantalla
+        s_bgNRt.fetch_add(1, std::memory_order_relaxed); s_bgSceneSeen.store(true, std::memory_order_relaxed);
+        if (d.Width >= 512 && d.Height >= 512) {
+            static std::atomic<int> nv{ 0 };
+            if (nv.fetch_add(1) < 4) Log("fondo del editor: visor del editor reconocido por la imagen del jugador %ux%u (formato %d)", d.Width, d.Height, (int)d.Format);
+            s_edCompT.store(Now(), std::memory_order_relaxed);
+            if (edgePS) *edgePS = EditorEdgePS(c, d);
+        }
+        return nullptr;
+    }
+    const double t = s_edCompT.load(std::memory_order_relaxed);
+    if (t < 0 || Now() - t > 0.5) { s_bgNNoComp.fetch_add(1, std::memory_order_relaxed); return nullptr; }   // fuera del visor del editor: nada
+    // (08/11 kd63zh b) el fondo parpadeaba (log d1ec707: 15606 cambiados, 131421 "despues de la escena"): en muchos cuadros el
+    // mismo fondo se dibuja despues de la imagen del jugador. La textura que ya se reconocio como fondo se cambia siempre,
+    // aunque venga despues; lo demas dibujado despues de la escena (paneles, textos) sigue sin tocarse.
+    bool known = false;
+    for (int i = 0; i < 4; i++) if (resId && s_bgKnown[i].load(std::memory_order_relaxed) == resId) known = true;
+    if (!known && s_bgSceneSeen.load(std::memory_order_relaxed)) { s_bgNAfter.fetch_add(1, std::memory_order_relaxed); return nullptr; }  // despues de la escena: paneles del menu, no se tocan
+    const float ar = d.Height ? (float)d.Width / (float)d.Height : 0.0f;
+    const bool big = d.Width >= 1024 && ar > 1.45f && ar < 1.95f;      // fondo de pantalla completa (los atlas del menu son cuadrados o 2:1)
+    if (s_bgDiag.fetch_add(1) < 12) Log("fondo del editor: dibujo del menu antes de la escena con textura %ux%u -> %s", d.Width, d.Height, big ? "fondo (se cambia)" : "se deja");
+    if (!big) { s_bgNSmall.fetch_add(1, std::memory_order_relaxed); return nullptr; }
+    if (!known && resId) { const int k = s_bgKnownN.fetch_add(1) & 3; s_bgKnown[k].store(resId, std::memory_order_relaxed); }   // se recuerda la textura del fondo (solo el puntero, sin AddRef)
+    std::lock_guard<std::mutex> lk(s_bgMx);
+    ID3D11ShaderResourceView* v = nullptr;
+    if (mode >= 2) v = LoadUserBg();
+    else if (s_bgImgTried) { s_bgImgTried = false; }                   // al volver a "imagen propia" se relee el archivo
+    if (!v) { if (!s_bgBlack) s_bgBlack = SolidSRV(0xff000000u); v = s_bgBlack; }
+    const int n = s_bgSwaps.fetch_add(1);
+    if (n == 0 || n == 20000) Log("fondo del editor (x424 = %d): fondo %ux%u cambiado por %s (%d veces)", mode, d.Width, d.Height, v == s_bgBlack ? "negro" : "la imagen propia", n + 1);
+    return v;
 }
 
 } // namespace fx
