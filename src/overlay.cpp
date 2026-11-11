@@ -81,6 +81,56 @@ static void BuildFonts(float H) {
     Log("menu: letras para %.0f px de alto (x%.2f)", H, k);
 }
 
+
+// ---------------------------------------------------------------- (11/11) ultima tecla apretada
+// Agustin: un cuadrito semitransparente en una esquina con la ultima tecla del teclado. [PES21FX] ultima_tecla = 0 apagado,
+// 1 arriba izquierda, 2 arriba derecha, 3 abajo izquierda, 4 abajo derecha. Solo mira el teclado (GetAsyncKeyState) con la
+// ventana del juego al frente; no toca lo que recibe el juego.
+static int s_khVk = 0, s_khN = 0; static double s_khT = -1.0e9; static unsigned char s_khWas[256] = {};
+static const char* KeyHudName(int vk, char* buf, size_t n) {
+    if ((vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z')) { snprintf(buf, n, "%c", (char)vk); return buf; }
+    if (vk >= VK_F1 && vk <= VK_F24) { snprintf(buf, n, "F%d", vk - VK_F1 + 1); return buf; }
+    if (vk >= VK_NUMPAD0 && vk <= VK_NUMPAD9) { snprintf(buf, n, "Num %d", vk - VK_NUMPAD0); return buf; }
+    switch (vk) {
+    case VK_RETURN: return "Enter"; case VK_ESCAPE: return "Esc"; case VK_SPACE: return "Espacio"; case VK_TAB: return "Tab";
+    case VK_BACK: return "Retroceso"; case VK_DELETE: return "Supr"; case VK_INSERT: return "Insert"; case VK_HOME: return "Inicio";
+    case VK_END: return "Fin"; case VK_PRIOR: return "Re Pag"; case VK_NEXT: return "Av Pag"; case VK_UP: return "Flecha arriba";
+    case VK_DOWN: return "Flecha abajo"; case VK_LEFT: return "Flecha izquierda"; case VK_RIGHT: return "Flecha derecha";
+    case VK_SHIFT: return "Shift"; case VK_CONTROL: return "Ctrl"; case VK_MENU: return "Alt"; case VK_CAPITAL: return "Bloq Mayus";
+    case VK_PAUSE: return "Pausa"; case VK_SNAPSHOT: return "Impr Pant"; case VK_LWIN: case VK_RWIN: return "Windows";
+    case VK_ADD: return "Num +"; case VK_SUBTRACT: return "Num -"; case VK_MULTIPLY: return "Num *"; case VK_DIVIDE: return "Num /"; case VK_DECIMAL: return "Num .";
+    }
+    const UINT sc = MapVirtualKeyA((UINT)vk, MAPVK_VK_TO_VSC);
+    if (sc && GetKeyNameTextA((LONG)(sc << 16), buf, (int)n) > 0) return buf;
+    snprintf(buf, n, "Tecla 0x%02X", vk); return buf;
+}
+// una vez por cuadro: anota la tecla recien apretada. Devuelve si hay que dibujar el cuadrito
+static bool KeyHudPoll() {
+    if (g_cfg.keyHud <= 0) return false;
+    if (s_hwnd && GetForegroundWindow() == s_hwnd) {
+        for (int vk = 8; vk < 255; vk++) {
+            if (vk >= VK_LSHIFT && vk <= VK_RMENU) continue;            // ya entran como Shift / Ctrl / Alt
+            const unsigned char d = (GetAsyncKeyState(vk) & 0x8000) ? 1 : 0;
+            if (d && !s_khWas[vk]) { s_khN = (vk == s_khVk && Now() - s_khT < 1.5) ? s_khN + 1 : 1; s_khVk = vk; s_khT = Now(); }
+            s_khWas[vk] = d;
+        }
+    } else memset(s_khWas, 0, sizeof s_khWas);
+    return s_khVk != 0;
+}
+static void KeyHudDraw() {
+    char nb[64], tx[96]; const char* nm = KeyHudName(s_khVk, nb, sizeof nb);
+    if (s_khN > 1) snprintf(tx, sizeof tx, "%s  x%d", nm, s_khN); else snprintf(tx, sizeof tx, "%s", nm);
+    ImDrawList* dl = ImGui::GetForegroundDrawList(); const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    const float k = std::max(1.0f, ds.y / 1080.0f), fs = 22.0f * k, pad = 9.0f * k, mg = 22.0f * k;
+    ImFont* f = ImGui::GetFont(); const ImVec2 ts = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, tx);
+    const float w = ts.x + pad * 2.0f, h = ts.y + pad * 1.4f; const int c = std::clamp(g_cfg.keyHud, 1, 4);
+    const float x = (c == 1 || c == 3) ? mg : ds.x - mg - w, y = (c <= 2) ? mg : ds.y - mg - h;
+    const double age = Now() - s_khT; const float a = age < 1.2 ? 1.0f : (age < 2.0 ? 1.0f - 0.55f * (float)((age - 1.2) / 0.8) : 0.45f);   // recien apretada se ve fuerte; despues queda tenue
+    dl->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + h), IM_COL32(8, 12, 20, (int)(150 * a)), 6.0f * k);
+    dl->AddRect(ImVec2(x, y), ImVec2(x + w, y + h), IM_COL32(255, 255, 255, (int)(60 * a)), 6.0f * k, 0, 1.0f * k);
+    dl->AddText(f, fs, ImVec2(x + pad, y + pad * 0.7f), IM_COL32(255, 255, 255, (int)(235 * a)), tx);
+}
+
 HWND OverlayHwnd() { return s_hwnd; }   // (11/11) menumouse.cpp
 void OverlayResize() { if (s_rtv) { s_rtv->Release(); s_rtv = nullptr; } }
 
@@ -1519,7 +1569,7 @@ static void DrawSettingsPage() {
         bool mm = g_cfg.menuMouse != 0;
         row(TRS("Mouse en los menus del juego"));
         if (ImGui::Checkbox("##mousemenus", &mm)) { g_cfg.menuMouse = mm ? 1 : 0; SaveOption("mouse_menus", mm ? "1" : "0"); }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Los menus del juego eligen la fila que esta debajo del mouse. Clic = aceptar, clic derecho = volver, rueda = subir y bajar. Los menus siguen siendo los del juego. La tecla F8 lo saca y lo pone al toque (tecla_mouse_menus en el ini)."));
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Los menus del juego eligen la fila que esta debajo del mouse. Clic = aceptar, clic derecho = volver, rueda = subir y bajar. Los menus siguen siendo los del juego. Al usar el control la flecha se va sola."));
         if (mm) {   // (11/11 v2) el juego muestra la fila elegida 2 cuadros despues: la flecha espera lo mismo
             int rt = std::clamp(g_cfg.menuMouseDelay, 0, 4);
             row(TRS("Flecha del mouse: retraso (cuadros)"));
@@ -1528,6 +1578,14 @@ static void DrawSettingsPage() {
             if (ImGui::IsItemDeactivatedAfterEdit()) SaveOption("mouse_menus_retraso", std::to_string(g_cfg.menuMouseDelay));
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("El juego tarda 2 cuadros en marcar la fila elegida. Con 2 la flecha y la fila marcada van juntas; con 0 la flecha va mas pegada a la mano pero la fila la sigue de atras."));
         }
+    }
+    {   // (11/11) cuadrito con la ultima tecla apretada: [PES21FX] ultima_tecla
+        const char* kEsq[5] = { TRS("No"), TRS("Arriba a la izquierda"), TRS("Arriba a la derecha"), TRS("Abajo a la izquierda"), TRS("Abajo a la derecha") };
+        int kh = std::clamp(g_cfg.keyHud, 0, 4);
+        row(TRS("Mostrar la ultima tecla apretada"));
+        ImGui::SetNextItemWidth(260 * UIK());
+        if (ImGui::Combo("##ultimatecla", &kh, kEsq, 5)) { g_cfg.keyHud = kh; SaveOption("ultima_tecla", std::to_string(kh)); }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Un cuadrito semitransparente en una esquina con la ultima tecla del teclado que apretaste."));
     }
     {
         row(TRS("Tamano del menu"));
@@ -2220,7 +2278,8 @@ void OverlayPresent(IDXGISwapChain* sc) {
     FrameTimeTick();   // (08/11) diagnostico: tiempo de cada cuadro
     const bool skelView = g_cfg.live[426][0] > 0.5f;   // (09/11) la vista del esqueleto se dibuja tambien con el menu cerrado
     float mmx = 0, mmy = 0; const bool mmCur = !g_menuOpen && MenuMouseCursor(&mmx, &mmy);   // (11/11) flecha del mouse sobre los menus del juego
-    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView && !mmCur) return;
+    const bool keyHud = KeyHudPoll();   // (11/11) cuadrito con la ultima tecla apretada
+    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView && !mmCur && !keyHud) return;
     if (!s_rtv) {
         ID3D11Texture2D* bb = nullptr;
         if (FAILED(sc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb)) || !bb) return;
@@ -2257,6 +2316,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
         dl->AddTriangleFilled(a, b, c, IM_COL32(255, 255, 255, 255)); dl->AddTriangleFilled(a, c, d, IM_COL32(255, 255, 255, 255));
         const ImVec2 pts[4] = { a, b, c, d }; dl->AddPolyline(pts, 4, IM_COL32(0, 0, 0, 255), ImDrawFlags_Closed, 1.4f * k);
     }
+    if (keyHud) KeyHudDraw();
     InspectDrawOverlay();
     // (31/10) teclas del juego: con 1 se bloquean solo mientras hay un campo de texto activo (buscador, nombres de presets)
     g_menuTyping = g_menuOpen && ImGui::GetIO().WantTextInput;

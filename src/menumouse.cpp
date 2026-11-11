@@ -294,7 +294,7 @@ bool MenuMouseCursor(float* x, float* y) {
 void MenuMousePresent() {
     if (!s_tried) Install();
     if (!s_ok) return;
-    {   // (v2) atajo para sacar / poner el mouse en los menus (y su flecha): [PES21FX] tecla_mouse_menus (F8 de fabrica; 0 = sin tecla).
+    {   // (v2) atajo para sacar / poner el mouse en los menus (y su flecha): [PES21FX] tecla_mouse_menus (sin tecla de fabrica; ej. F8).
         // No se guarda en el ini: al abrir el juego vale lo que diga mouse_menus
         static bool s_was = false; const int vk = g_cfg.menuMouseKey;
         const bool down = vk > 0 && vk < 256 && (GetAsyncKeyState(vk) & 0x8000) != 0;
