@@ -23,19 +23,37 @@ BASE = 0x140000000
 VT = dict(modelo=0x142a0a880, luz=0x142a0ad48, sol=0x142a0add8, local=0x142a0ae68, punto=0x142a0aef8, foco=0x142a0af88,
           ent_modelo=0x142a721e8, cuerpo=0x142a72268, functor=0x142a72358, cam=0x142aa5368, visor=0x142ba51e0,
           nodo=0x142c7a730, ent_foco=0x142a48360, te=0x14255ea00, dataset=0x142a01100, otro=0x142a01200, locator=0x142a01300,
-          dg_luz=0x142a226a0, dg_sol=0x142a226b0, dg_local=0x142a226c0, dg_punto=0x142a226d0, dg_foco=0x142a226e0)
+          dg_luz=0x142a226a0, dg_sol=0x142a226b0, dg_local=0x142a226c0, dg_punto=0x142a226d0, dg_foco=0x142a226e0,
+          # render (0.3): fox::gr::Render y las clases de etapa (plugin) con su direccion real (tablas/rtti.txt)
+          render=0x142a07c58, plug_base=0x142a07bc0, plug_2d=0x142a0b6b8, plug_def=0x142a0c8d8, plug_geo=0x142a0c970,
+          plug_shading=0x142a0cc88, plug_dof=0x142a0e688, plug_post=0x142a10040, plug_sombra=0x142a11eb0, plug_ton=0x142a13548,
+          plug_ssao=0x142a14f00)
 RTTI = {VT['modelo']: 'Model@gr@fox', VT['foco']: 'SpotLightSource@gr@fox', VT['ent_modelo']: 'StadiumModel@rd@cobra',
         VT['cuerpo']: 'StadiumModelBody@rd@cobra', VT['cam']: 'CameraImpl@camera@rc@cobra', VT['nodo']: 'Node@?A0xc19a98f1@impl@scene@draw',
         VT['ent_foco']: 'SpotLight@grx@fox', VT['te']: 'TransformEntity@fox', VT['dataset']: 'DataSet@fox',
         VT['otro']: 'Decal@gr@fox', VT['locator']: 'Locator@fox', VT['sol']: 'DirectionalLightSource@gr@fox',
-        VT['dg_foco']: 'SpotLightSource@dg@gr@fox', VT['dg_sol']: 'DirectionalLightSource@dg@gr@fox'}
+        VT['dg_foco']: 'SpotLightSource@dg@gr@fox', VT['dg_sol']: 'DirectionalLightSource@dg@gr@fox',
+        VT['plug_base']: 'RenderPlugin@gr@fox', VT['plug_2d']: 'Plugin2D@gr@fox', VT['plug_def']: 'PluginDeferredRendering@gr@fox',
+        VT['plug_geo']: 'PluginDeferredGeometry@gr@fox', VT['plug_shading']: 'PluginDeferredShading@gr@fox',
+        VT['plug_dof']: 'PluginDepthOfField@gr@fox', VT['plug_post']: 'PluginPostFilter@gr@fox', VT['plug_sombra']: 'PluginShadow@gr@fox',
+        VT['plug_ton']: 'PluginTonemap@gr@fox', VT['plug_ssao']: 'PluginScreenSpaceAmbientOcclusion@gr@fox'}
 RANURAS = [(0x142a0a880, 0x141697bd0), (0x142a0af88, 0x14169ed80), (0x142a0ad48, 0x14169ec20), (0x142a0add8, 0x14169eba0),
            (0x142a0ae68, 0x14169ec80), (0x142a0aef8, 0x14169ece0), (0x142a721e8, 0x141905750), (0x142a72268 + 48, 0x1419057e0),
            (0x142a72268 + 120, 0x1419064f0), (0x142a72358, 0x141905310), (0x142aa5368, 0x1419fcd70), (0x142ba51e0, 0x141ee73f0),
            (0x14255ea00, 0x1402bc920), (0x142a226a0, 0x14171d6e0), (0x142a226b0, 0x14171d620), (0x142a226c0, 0x14171d740),
-           (0x142a226d0, 0x14171d7a0), (0x142a226e0, 0x14171d8c0)]
+           (0x142a226d0, 0x14171d7a0), (0x142a226e0, 0x14171d8c0),
+           (0x142a07c58, 0x14168aae0), (0x142a07bc0 + 8 * 16, 0x14168c810)]
 FN_COLOR, FN_MATRIZ = 0x14169f2e0, 0x14169de80
-G_ESCENAS, G_VISOR = 0x14374d958, 0x1438040d0
+G_ESCENAS, G_VISOR, G_RENDER = 0x14374d958, 0x1438040d0, 0x14374ced8
+FN_ACTIVAR = 0x14168c810            # ranura 16 de la clase base de las etapas: mov [rcx+0x48], dl
+ACTIVAR_PROPIO = dict(plug_ton=0x1416cdb80, plug_dof=0x1416ae420)      # clases con interruptor propio (no se tocan)
+# etapas del render en el orden del arreglo del gestor (a proposito, hijas antes que su padre): nombre, padre, clase, activa,
+# prioridad, lista (execMode)
+ETAPAS = [('SSAO', 'SHADING_PASS', 'plug_ssao', 0, 5, 2), ('GEOMETRY_PASS', 'DEFERRED', 'plug_geo', 1, 10, 2),
+          ('DEFERRED', '', 'plug_def', 1, 100, 2), ('SUN_SHADOW', 'DEFERRED', 'plug_sombra', 1, 20, 2),
+          ('SHADING_PASS', 'DEFERRED', 'plug_shading', 1, 30, 2), ('POSTFILTER', '', 'plug_post', 1, 200, 1),
+          ('DOF', 'POSTFILTER', 'plug_dof', 1, 10, 1), ('TONEMAP', 'POSTFILTER', 'plug_ton', 1, 20, 1),
+          ('DRAW2D', '', 'plug_2d', 1, -5, 1), ('SIN_PADRE', 'NO_EXISTE', 'plug_base', 1, 0, 3), ('', '', 'plug_base', 1, 7, 0)]
 EXE_FIN = 0x15b470000               # fin de la imagen del exe (SizeOfImage de la cabecera falsa)
 N_LISTAS = 0x40                     # listas por tipo que reserva el ctor de la escena (FUN_1416916b0)
 TIPO = dict(modelo=11, luz=23, otro=5)      # ids de tipo: el motor los reparte al arrancar (no son fijos): cualquiera sirve
@@ -105,7 +123,7 @@ def mat_srt(S, Q, T, conj=False):
 
 class Mundo:
     """arma la memoria del Editar > Apariencia con la escena del motor"""
-    def __init__(self, conj=False, con_ayudas=True, con_limite=False, huesos=1, con_visor=True, extras=False, en_cola=()):
+    def __init__(self, conj=False, con_ayudas=True, con_limite=False, huesos=1, con_visor=True, extras=False, en_cola=(), con_render=True):
         self.m = m = Mem(); self.conj = conj
         self.modelos, self.luces, self.ents_ds = {}, {}, []
         self.rangos = {}                 # objeto de escena -> rangos que el modulo puede pisar mientras siga en su escena
@@ -127,9 +145,13 @@ class Mundo:
                 m.nuevo(0x100, BASE + rva); m.escribir(BASE + rva + 0x10, b'.?AV' + RTTI[vt].encode() + b'@@\0', False)
                 m.u64(vt - 8, col); rva += 0x100
             if not any(a == vt for a, _ in RANURAS): m.u64(vt, 0x141000000 + (vt & 0xffff))
+        for k, vt in VT.items():                 # la ranura 16 de cada clase de etapa: la de la base, o la propia
+            if k.startswith('plug_'): m.u64(vt + 0x80, ACTIVAR_PROPIO.get(k, FN_ACTIVAR))
         m.nuevo(0x40, FN_COLOR); m.escribir(FN_COLOR, bytes.fromhex('488b41380f28020f294040488b0148ff6078'), False)
         m.nuevo(0x40, FN_MATRIZ); m.escribir(FN_MATRIZ, bytes.fromhex('40534883ec200f2802488bd90f294140'), False)
-        m.nuevo(8, G_ESCENAS); m.nuevo(8, G_VISOR)
+        m.nuevo(8, G_ESCENAS); m.nuevo(8, G_VISOR); m.nuevo(8, G_RENDER)
+        self.gestor = self.render = None; self.etapas = {}
+        if con_render: self._render()
         # --- escenas
         self.esc = [self._escena(0x1111222233334444), self._escena(0xaaaabbbbccccdddd)]
         m.u64(G_ESCENAS, self.esc[0]); m.u64(self.esc[0], self.esc[1])
@@ -171,6 +193,26 @@ class Mundo:
             m.f(cam + 0x10, 0.0, 1.2, 6.5, 0.0, 1.2, 0.0, 0.0, 1.0, 0.0, 0.1, 500.0); m.u32(cam + 0x3c, 0); m.f(cam + 0x40, 0.09, 1.7777)
             m.f(cam + 0x48, 1.5, 2.5); m.u8(cam + 0x58, 1)
             self.cam = cam; m.permitidas.append((cam + 0x10, cam + 0x60))
+
+    def _render(self):
+        """gestor de render como lo deja el motor: +0x10 cantidad de etapas, +0x18 arreglo de punteros (lugar para 0x80),
+        +0x20 lista de renders, +0x28 render principal (fox::gr::Render: +0xd0 distinto de cero mientras dibuja, +0xd8 modo).
+        Etapa: +0x30 prioridad, +0x38 nombre, +0x40 indice, +0x44 tipo, +0x48 activa, +0x4c lista, +0x50 nombre del padre.
+        El modulo solo puede pisar el byte +0x48 de cada etapa"""
+        m = self.m
+        g, ren, arr = m.nuevo(0x50), m.nuevo(0xf8), m.nuevo(0x80 * 8)
+        m.u64(G_RENDER, g); m.u32(g + 0x10, len(ETAPAS)); m.u64(g + 0x18, arr); m.u64(g + 0x20, ren); m.u64(g + 0x28, ren)
+        m.u64(ren, VT['render']); m.u32(ren + 0xd8, 2)
+        vacio = m.fox_cadena('')                  # el motor usa UNA cadena vacia compartida
+        for i, (nombre, padre, clase, activa, prio, modo) in enumerate(ETAPAS):
+            p = m.nuevo(0x60); m.u64(p, VT[clase]); m.u32(p + 0x30, prio & 0xffffffff)
+            m.u64(p + 0x38, m.fox_cadena(nombre) if nombre else vacio); m.u32(p + 0x40, i); m.u32(p + 0x44, 3)
+            m.u8(p + 0x48, activa); m.u32(p + 0x4c, modo); m.u64(p + 0x50, m.fox_cadena(padre) if padre else vacio)
+            m.u64(arr + 8 * i, p); m.permitidas.append((p + 0x48, p + 0x49))
+            self.etapas[nombre] = p
+        self.gestor, self.render, self.arr_etapas = g, ren, arr
+
+    def etapa_activa(self, nombre): return self.m.leer(self.etapas[nombre] + 0x48, 1)[0]
 
     def _escena(self, h):
         """fox::gr::Scene como la deja su ctor (FUN_1416916b0): +0x28 cantidad de listas, +0x30 arreglo de punteros a lista
@@ -380,7 +422,10 @@ function Cf.mtr_GetWindowThreadProcessId(h, pid) pid[0] = SIM.frente and 4242 or
 function Cf.mtr_GetCurrentProcessId() return 4242 end
 function Cf.mtr_GetCurrentThreadId() return SIM.hilo end
 function Cf.mtr_GetClientRect(h, rc) rc[0] = 0; rc[1] = 0; rc[2] = 1920; rc[3] = 1080 return 1 end
-function Cf.mtr_GetTickCount() return SIM.tick end
+function Cf.mtr_GetTickCount()
+    if SIM.tick_paso then SIM.tick = SIM.tick + SIM.tick_paso end       -- el reloj avanza dentro de un cuadro (esperas del modulo)
+    return SIM.tick
+end
 function Cf.mtr_MultiByteToWideChar(cp, fl, s, n, w, wn)
     if w ~= nil then for i = 1, #s do w[i - 1] = string.byte(s, i) end w[#s] = 0 end
     return #s + 1
@@ -401,7 +446,57 @@ function Cf.mtr_WriteFile(h, buf, n, hecho, ov)
     SIM.archivos[ruta] = SIM.archivos[ruta] .. string.sub(buf, 1, n); hecho[0] = n
     return 1
 end
-function Cf.mtr_CloseHandle(h) abiertos[tonumber(ffi_real.cast("intptr_t", h))] = nil return 1 end
+function Cf.mtr_CloseHandle(h)
+    local n = tonumber(ffi_real.cast("intptr_t", h))
+    if n == 0x7777 then SIM.map_cerrados = SIM.map_cerrados + 1 end
+    abiertos[n] = nil
+    return 1
+end
+-- la DLL grafica (motorlink.cpp): memoria compartida de 64 bytes "PES21FX_Motor_<pid>" y lo que hace una vez por cuadro
+SIM.map_abiertos, SIM.map_cerrados, SIM.vistas, SIM.dll_pedidos, SIM.fila, SIM.dll_seq = 0, 0, 0, 0, { 0, 0, 0, 0 }, 0
+function SIM.dll_crear(version)
+    SIM.dll_buf = ffi_real.new("uint8_t[64]")
+    local u = ffi_real.cast("uint32_t *", SIM.dll_buf)
+    u[0] = 0x4C52544D; u[1] = version or 1
+    SIM.dll_seq = u[2]
+end
+function SIM.dll_cuadro()
+    if not SIM.dll_buf or SIM.dll_parada then return end
+    local u, f = ffi_real.cast("uint32_t *", SIM.dll_buf), ffi_real.cast("float *", SIM.dll_buf)
+    local function limpio(i, lo, hi)                -- NaN o fuera de rango = 0 (como Limpio() de la DLL)
+        local b = u[i]
+        if b > 0xff800000 or (b > 0x7f800000 and b < 0x80000000) then return 0 end
+        local v = f[i]
+        if v >= lo and v <= hi then return v end
+        return 0
+    end
+    if u[2] ~= SIM.dll_seq then
+        SIM.dll_seq = u[2]
+        SIM.fila = { math.floor(limpio(3, 0, 10.5) + 0.5), (limpio(4, -1e30, 1e30) > 0.5) and 1 or 0, limpio(5, 0, 1), limpio(11, 0, 100) }
+        SIM.dll_pedidos = SIM.dll_pedidos + 1
+    end
+    f[7], f[8], f[9], f[12] = SIM.fila[1], SIM.fila[2], SIM.fila[3], SIM.fila[4]
+    u[10] = (SIM.fila[2] > 0.5) and 321 or 0
+    u[6] = u[6] + 1
+end
+function Cf.mtr_OpenFileMappingA(acceso, heredar, nombre)
+    assert(acceso == 0xF001F and heredar == 0 and type(nombre) == "string", "OpenFileMappingA mal llamada")
+    SIM.map_intentos = (SIM.map_intentos or 0) + 1
+    if not SIM.dll_buf or nombre ~= "PES21FX_Motor_4242" then return ffi_real.cast("void *", 0) end
+    SIM.map_abiertos = SIM.map_abiertos + 1
+    return ffi_real.cast("void *", 0x7777)
+end
+function Cf.mtr_MapViewOfFile(h, acceso, alto, bajo, n)
+    assert(tonumber(ffi_real.cast("intptr_t", h)) == 0x7777 and acceso == 0xF001F and alto == 0 and bajo == 0 and n == 64, "MapViewOfFile mal llamada")
+    if SIM.map_falla then return ffi_real.cast("void *", 0) end
+    SIM.vistas = SIM.vistas + 1
+    return ffi_real.cast("void *", SIM.dll_buf)
+end
+function Cf.mtr_UnmapViewOfFile(p)
+    assert(p == ffi_real.cast("void *", SIM.dll_buf), "UnmapViewOfFile de otra cosa")
+    SIM.vistas = SIM.vistas - 1
+    return 1
+end
 
 local ffi_falso = { C = Cf, cdefs = 0 }
 function ffi_falso.cdef(s) ffi_falso.cdefs = ffi_falso.cdefs + 1; ffi_real.cdef((string.gsub(s, "mtr_", "mtr" .. ffi_falso.cdefs .. "_"))) end   -- que al menos compile como C
@@ -454,7 +549,7 @@ local env = setmetatable({}, { __index = function(_, k)
     end
     return v
 end, __newindex = function(_, k) error("el modulo crea el global '" .. tostring(k) .. "'", 2) end })
-SIM.ffi_falso, SIM.permitidos = ffi_falso, permitidos
+SIM.ffi_falso, SIM.permitidos, SIM.ffi_real_string, SIM.ffi_real_cast = ffi_falso, permitidos, ffi_real.string, ffi_real.cast
 
 function cargar(fuente, ctx)
     local f = assert(loadstring(fuente, "=MotorTiempoReal.lua"))
@@ -525,6 +620,7 @@ class Sim:
                 self.mem.lecturas = n                                       # (no son lecturas del modulo)
             self.cuadros += 1
             t = self.reg[b'overlay_on'](self.ctx)
+            self.SIM[b'dll_cuadro']()                    # la DLL grafica atiende el pedido una vez por cuadro
             self.texto = t.decode('latin1') if t else ''
             for linea in self.texto.split('\n'):
                 assert len(linea) <= 112, 'renglon de %d letras: %s' % (len(linea), linea)
@@ -559,8 +655,8 @@ class Sim:
         a = self.SIM[b'archivos']
         return b''.join(list(a.values())).decode('latin1')
     def pagina(self, n):
-        for _ in range(8):
-            if ('[%s]' % ['ESCENA', 'LUCES', 'ENTIDADES', 'OPCIONES', 'REGISTRO'][n - 1]) in self.texto: return
+        for _ in range(9):
+            if ('[%s]' % ['ESCENA', 'LUCES', 'ENTIDADES', 'OPCIONES', 'REGISTRO', 'RENDER'][n - 1]) in self.texto: return
             self.tecla('6')
         raise AssertionError('no llego a la pagina %d' % n)
     def opcion(self, texto):
@@ -569,6 +665,16 @@ class Sim:
             if any(l.split(' | ')[-1].startswith('> ' + texto) for l in self.texto.split('\n')): return
             self.tecla('0')
         raise AssertionError('no encontre la opcion ' + texto)
+    def golpe(self, *vks):
+        """varias teclas dentro del MISMO cuadro (sin dibujar entre una y otra)"""
+        for vk in vks: self.reg[b'key_down'](self.ctx, vk)
+        self.cuadro()
+    def fila_cursor(self):
+        return next((l.split(' | ')[-1] for l in self.texto.split('\n') if l.split(' | ')[-1].startswith('>')), '')
+    def dll(self, i, como='I'):
+        """campo i (de a 4 bytes) de la memoria compartida de la DLL"""
+        b = self.lua.eval('function() return SIM.ffi_real_string(SIM.dll_buf, 64) end')()
+        return struct.unpack_from('<' + como, b, 4 * i)[0]
     def cursor_en(self, nombre, pag=1):
         self.pagina(pag)
         for _ in range(200):
@@ -1047,20 +1153,229 @@ def e_repaso(F):
     print('   lista a medio cambiar, reponer y "dejarla sola" sin poder escribir, direccion reusada, escena ajena: bien')
 
 
+def e_render(F):
+    """0.3: pagina RENDER (etapas del render del motor y vistas de la DLL grafica), teclas G R S / X Y Z, tope de brillo"""
+    etapas_reg = lambda s: [x for x in s.registro().split('\r\n') if x.startswith('etapa ')]
+    n_esc = lambda m: len(m.escrituras)
+    # ---------- 1. sin la DLL nueva: las etapas andan igual, las vistas dicen por que no
+    w = Mundo(); s = Sim(F, w); m = w.m; s.cuadro(3)
+    r = etapas_reg(s); orden = [x.split()[3] for x in r]
+    assert len(r) == 11, r
+    assert orden[:10] == ['DEFERRED', 'GEOMETRY_PASS', 'SUN_SHADOW', 'SHADING_PASS', 'SSAO', 'POSTFILTER', 'DOF', 'TONEMAP', 'DRAW2D', 'SIN_PADRE'], orden
+    assert orden[10].startswith('etapa_') and '    SSAO' in r[4] and 'apagada' in r[4] and 'padre SHADING_PASS' in r[4], r
+    assert 'INTERRUPTOR PROPIO' in r[6] and 'INTERRUPTOR PROPIO' in r[7] and 'INTERRUPTOR PROPIO' not in r[5], r[5:8]
+    assert 'PADRE INEXISTENTE' in r[9] and 'prio -5 ' in r[8] and 'lista post' in r[8] and 'lista deferred' in r[0], r
+    reg = s.registro()
+    assert '11 etapas (1 apagadas)' in reg and 'modo 2' in reg and 'vistas: la DLL grafica instalada no trae las vistas' in reg, [x for x in reg.split('\r\n') if 'render' in x or 'vistas' in x]
+    assert not m.escrituras
+    s.pagina(6)
+    assert 'RENDER  11 etapas, 1 apagadas' in s.texto and 'la DLL grafica instalada no trae las vistas' in s.texto, s.texto
+    assert s.fila_cursor().split() == ['>', 'Vista', '-'], s.fila_cursor()
+    s.tecla('8', '3', '7'); assert 'no trae las vistas' in s.texto and not m.escrituras
+    s.cuadro(600); assert int(s.SIM[b'map_intentos']) <= 7, 'busca la DLL demasiado seguido: %d' % int(s.SIM[b'map_intentos'])
+    # una hija se cambia en cualquier momento (aunque el motor este dibujando) y 7 la deja como la tenia el juego
+    m.u64(w.render + 0xd0, 0x1a0000100)
+    s.cursor_en('SSAO', 6); assert s.fila_cursor().startswith('>[ ]     SSAO') and 'dentro de  SHADING_PASS' in s.texto, s.texto
+    s.tecla('8'); assert w.etapa_activa('SSAO') == 1 and m.escrituras == [(w.etapas['SSAO'] + 0x48, 1)], m.escrituras
+    assert s.fila_cursor().startswith('>[x]     SSAO') and 'PRENDIDA   (cambiada por mi)' in s.texto and '11 etapas, 0 apagadas' in s.texto, s.texto
+    s.tecla('7'); assert w.etapa_activa('SSAO') == 0 and 'cambiada por mi' not in s.texto and n_esc(m) == 2
+    s.tecla('7'); assert 'esta como la dejo el juego' in s.texto and n_esc(m) == 2, s.texto
+    s.tecla('3'); assert '8 prende / apaga la etapa' in s.texto and n_esc(m) == 2, s.texto
+    # una etapa suelta: solo cuando el motor no esta dibujando (+0xd0 en cero); si no afloja en 60 ms, no se toca
+    s.cursor_en('POSTFILTER', 6); s.SIM[b'tick_paso'] = 5; lect = m.lecturas
+    s.tecla('8'); s.SIM[b'tick_paso'] = None
+    assert w.etapa_activa('POSTFILTER') == 1 and n_esc(m) == 2 and 'no dejo de dibujar' in s.texto, s.texto
+    assert m.lecturas - lect < 20000, m.lecturas - lect
+    s.cursor_en('SIN_PADRE', 6); assert 'padre inexistente: NO_EXISTE' in s.texto, s.texto
+    s.SIM[b'tick_paso'] = 5; s.tecla('8'); s.SIM[b'tick_paso'] = None
+    assert w.etapa_activa('SIN_PADRE') == 1 and n_esc(m) == 2, 'una etapa de padre inexistente se trata como suelta'
+    # ... y si afloja durante la espera, se cambia
+    arm = {'n': 300}; leer0 = m.leer
+    def leer(dir, n, arm=arm, leer0=leer0, d0=w.render + 0xd0):
+        if dir == d0:
+            arm['n'] -= 1
+            if arm['n'] < 0: return bytes(n)
+        return leer0(dir, n)
+    m.leer = leer; s.cursor_en('DRAW2D', 6); arm['n'] = 300; s.SIM[b'tick_paso'] = 1; s.tecla('8'); s.SIM[b'tick_paso'] = None; m.leer = leer0
+    assert w.etapa_activa('DRAW2D') == 0 and n_esc(m) == 3 and s.fila_cursor().startswith('>[ ] DRAW2D'), s.texto
+    m.u64(w.render + 0xd0, 0)
+    s.tecla('8'); assert w.etapa_activa('DRAW2D') == 1 and n_esc(m) == 4
+    # las clases con interruptor propio no se tocan
+    for nombre, clase in (('TONEMAP', 'PluginTonemap'), ('DOF', 'PluginDepthOfField')):
+        s.cursor_en(nombre, 6); assert s.fila_cursor().startswith('>[=]   ' + nombre) and 'INTERRUPTOR PROPIO' in s.texto and clase in s.texto, s.texto
+        s.tecla('8'); assert 'interruptor propio' in s.texto and n_esc(m) == 4 and w.etapa_activa(nombre) == 1, s.texto
+        s.tecla('7'); assert n_esc(m) == 4
+    s.cursor_en('etapa_', 6); assert 'dentro de  (suelta)' in s.texto and 'lista  pre   prioridad 7' in s.texto, s.texto
+    # la etapa cambio por debajo entre la lista y la tecla (el motor rearmo su render): no se escribe
+    s.cursor_en('GEOMETRY_PASS', 6); p = w.etapas['GEOMETRY_PASS']; m.u64(p, VT['plug_sombra'])
+    s.tecla('8'); assert 'ya no esta' in s.texto and n_esc(m) == 4 and w.etapa_activa('GEOMETRY_PASS') == 1, s.texto
+    m.u64(p, VT['plug_geo']); s.cuadro(40)
+    # "Dejar todo como estaba" repone las etapas; tambien despues de recargar el modulo (Shift+R en Sider)
+    s.cursor_en('SSAO', 6); s.tecla('8'); s.cursor_en('SUN_SHADOW', 6); s.tecla('8'); s.cursor_en('DRAW2D', 6); s.tecla('8')
+    assert (w.etapa_activa('SSAO'), w.etapa_activa('SUN_SHADOW'), w.etapa_activa('DRAW2D')) == (1, 0, 0)
+    s.recargar(F); s.cuadro(3); s.cursor_en('SUN_SHADOW', 6); assert 'apagada   (cambiada por mi)' in s.texto, s.texto
+    # (una de las tres ya no es la misma etapa: en esa direccion hay otra con otro nombre -> no se toca)
+    m.u64(w.etapas['DRAW2D'] + 0x38, m.fox_cadena('OTRA_COSA')); s.cuadro(40)
+    s.opcion('Dejar todo como estaba'); s.tecla('8')
+    assert (w.etapa_activa('SSAO'), w.etapa_activa('SUN_SHADOW'), w.etapa_activa('DRAW2D')) == (0, 1, 0), s.texto
+    assert '2 etapas del render' in s.texto and 'NO repuse' not in s.texto, s.texto
+    s.cursor_en('SUN_SHADOW', 6); assert 'cambiada por mi' not in s.texto
+    assert not m.malas and all(n == 1 for _, n in m.escrituras)
+    # en SOLO LECTURA no se cambia ninguna etapa
+    w = Mundo(); s = Sim(F, w, existe=('Default.fpkd', 'Default.fpk', 'solo_lectura.txt')); m = w.m; s.cuadro(3)
+    s.cursor_en('SUN_SHADOW', 6); s.tecla('8'); assert 'SOLO LECTURA' in s.texto and not m.escrituras, s.texto
+    # ---------- 2. el gestor de render no esta, o no es el que conozco: lo dice y no rompe
+    w = Mundo(con_render=False); s = Sim(F, w); s.cuadro(3); s.pagina(6)
+    assert 'RENDER  0 etapas' in s.texto and 'todavia no armo su render' in s.texto, s.texto
+    s.tecla('0', '0', '0', '8', '7', '9'); assert not w.m.escrituras
+    for que in ('cantidad', 'arreglo', 'punteros', 'render', 'ciclo', 'repetida'):
+        w = Mundo(); m = w.m
+        if que == 'cantidad': m.u32(w.gestor + 0x10, 0xffffffff)
+        elif que == 'arreglo': m.u64(w.gestor + 0x18, 0x7ff812345678)
+        elif que == 'punteros':
+            m.u64(w.arr_etapas, 0); m.u64(w.arr_etapas + 8, 0x7ff812345678); m.u64(w.etapas['DEFERRED'], 0x12345)       # nulo, ilegible, tabla basura
+            m.u8(w.etapas['SUN_SHADOW'] + 0x48, 7); m.u32(w.etapas['DOF'] + 0x4c, 99)                                       # byte y lista imposibles
+        elif que == 'render': m.u64(w.render, VT['otro'])
+        elif que == 'ciclo':
+            m.u64(w.etapas['DEFERRED'] + 0x50, m.fox_cadena('SSAO'))                 # DEFERRED > SHADING_PASS > SSAO > DEFERRED
+        elif que == 'repetida': m.u64(w.etapas['POSTFILTER'] + 0x38, m.fox_cadena('DEFERRED'))
+        s = Sim(F, w); s.cuadro(3); s.pagina(6); s.cuadro(40)
+        if que == 'cantidad': assert 'no es el que conozco' in s.texto and '0 etapas' in s.texto, s.texto
+        elif que == 'arreglo': assert 'no pude leer la lista de etapas' in s.texto, s.texto
+        elif que == 'punteros': assert 'RENDER  6 etapas' in s.texto, s.texto
+        elif que == 'render':
+            s.cursor_en('DRAW2D', 6); s.tecla('8'); assert 'no encuentro el render principal' in s.texto and not m.escrituras, s.texto
+            s.cursor_en('SSAO', 6); s.tecla('8'); assert w.etapa_activa('SSAO') == 1          # (las hijas no lo necesitan)
+        elif que in ('ciclo', 'repetida'): assert 'RENDER  11 etapas' in s.texto, s.texto
+        for k in '0808070809999': s.tecla(k)
+        assert not m.malas
+    # ---------- 3. con la DLL nueva: vistas, alambre y pantalla partida por la memoria compartida
+    w = Mundo(); s = Sim(F, w); m = w.m; S = s.SIM; s.cuadro(3); s.pagina(6); assert 'no trae las vistas' in s.texto
+    S[b'dll_crear'](); s.cuadro(10); assert s.fila_cursor().split() == ['>', 'Vista', '-']       # se busca de nuevo cada 2 s, no en cada cuadro
+    s.cuadro(200); assert s.fila_cursor().split() == ['>', 'Vista', 'Normal'] and 'DLL grafica: enlazada' in s.texto, s.texto
+    assert (int(S[b'map_abiertos']), int(S[b'map_cerrados']), int(S[b'vistas'])) == (1, 1, 1)
+    fila = lambda: [float(x) for x in S[b'fila'].values()]
+    s.tecla('8'); assert fila() == [1, 0, 0, 0] and 'Luz difusa' in s.fila_cursor() and '1 de 10: Luz difusa' in s.texto, s.texto
+    s.tecla('3'); assert fila()[0] == 2 and 'Luz especular' in s.fila_cursor()
+    s.tecla('4'); assert fila()[0] == 1
+    s.tecla('7'); assert fila()[0] == 0 and 'Normal' in s.fila_cursor()
+    s.tecla('4'); assert fila()[0] == 10 and 'Material' in s.fila_cursor(), s.texto
+    s.tecla('8'); assert fila()[0] == 0
+    s.golpe(0x38, 0x38, 0x38); assert fila()[0] == 3 and 'Normales' in s.fila_cursor(), (fila(), s.texto)     # tres teclas en un cuadro
+    assert int(S[b'dll_pedidos']) == 7 and s.dll(2) == 9, (int(S[b'dll_pedidos']), s.dll(2))
+    vistos = set()
+    for _ in range(11): s.tecla('8'); vistos.add(s.fila_cursor().strip())
+    assert len(vistos) == 11 and fila()[0] == 3, vistos
+    s.tecla('0'); assert s.fila_cursor().split() == ['>', 'Alambre', 'no']
+    s.tecla('8'); s.cuadro(); assert fila() == [3, 1, 0, 0] and 'PRENDIDO   dibujos en alambre: 321' in s.texto and s.fila_cursor().split()[-1] == 'SI', s.texto
+    s.tecla('3'); assert 'se prende y se apaga con 8' in s.texto and fila()[1] == 1
+    s.tecla('0'); assert s.fila_cursor().split()[-1] == 'no' and 'toda la pantalla' in s.texto, s.texto
+    s.tecla('8'); assert abs(fila()[2] - 0.5) < 1e-6 and '50 %' in s.fila_cursor() and 'izquierda del 50 %' in s.texto, s.texto
+    s.tecla('3'); assert abs(fila()[2] - 0.55) < 1e-6 and '55 %' in s.fila_cursor()
+    s.tecla('4', '4'); assert abs(fila()[2] - 0.45) < 1e-6
+    for _ in range(25): s.tecla('4')
+    assert abs(fila()[2] - 0.05) < 1e-6 and '5 %' in s.fila_cursor()
+    for _ in range(25): s.tecla('3')
+    assert abs(fila()[2] - 0.95) < 1e-6
+    s.tecla('8'); assert fila()[2] == 0
+    s.tecla('3'); assert abs(fila()[2] - 0.5) < 1e-6
+    s.tecla('7'); assert fila() == [3, 1, 0, 0]
+    # lo que se cambia desde el menu de la DLL se ve en el panel, y un pedido mio conserva lo demas (tambien la escala)
+    S[b'fila'] = s.lua.eval('{ 5, 0, 0.25, 0.02 }'); s.cuadro(2)
+    assert '25 %' in s.fila_cursor(); s.tecla('9'); assert s.fila_cursor().split()[-1] == 'no'; s.tecla('9'); assert 'Albedo' in s.fila_cursor()
+    s.tecla('8'); f = fila(); assert f[0] == 6 and f[1] == 0 and abs(f[2] - 0.25) < 1e-6 and abs(f[3] - 0.02) < 1e-6, f
+    # la DLL deja de avanzar (juego en pausa, o se descargo): lo dice; y un pedido pendiente se muestra como pedido
+    S[b'dll_parada'] = True; s.cuadro(200); assert 'sin cuadros nuevos' in s.texto, s.texto
+    s.tecla('8'); assert 'Oclusion' in s.fila_cursor() and fila()[0] == 6
+    # basura en la memoria compartida (NaN, infinito, enormes): ni un error de Lua ni una vista imposible
+    for bits in (0xffffffff, 0xffc00000, 0x7fc00000, 0x7f800000, 0xff800000, 0x7f7fffff, 0xc1200000, 0x41300000):
+        s.lua.eval('function(b) local u = SIM.ffi_real_cast("uint32_t *", SIM.dll_buf); for _, i in ipairs({ 3, 4, 5, 7, 8, 9, 11, 12 }) do u[i] = b end; u[6] = u[6] + 1 end')(bits)
+        s.cuadro(2)
+        for k in '0098': s.tecla(k)
+        s.lua.eval('function(b) local u = SIM.ffi_real_cast("uint32_t *", SIM.dll_buf); for _, i in ipairs({ 7, 8, 9, 12 }) do u[i] = b end end')(bits)
+        s.tecla('9', '8', '9'); s.cuadro(2)
+    S[b'dll_parada'] = None; s.cuadro(3); S[b'fila'] = s.lua.eval('{ 0, 0, 0, 0 }'); s.cuadro(3)
+    # "Dejar todo como estaba": vista normal, sin alambre ni corte. Con todo ya en cero no pide nada
+    s.pagina(6); s.cuadro(3)
+    while 'Vista' not in s.fila_cursor(): s.tecla('9')
+    s.tecla('8'); s.tecla('0'); s.tecla('8'); assert fila()[0] != 0 and fila()[1] == 1, fila()
+    s.opcion('Dejar todo como estaba'); s.tecla('8'); s.cuadro(2); assert fila() == [0, 0, 0, 0], fila()
+    n = int(S[b'dll_pedidos']); s.tecla('8'); s.cuadro(2); assert int(S[b'dll_pedidos']) == n
+    # recarga del modulo con una vista puesta: "Dejar todo como estaba" la saca aunque no se haya vuelto a la pagina RENDER
+    s.pagina(6)
+    while 'Vista' not in s.fila_cursor(): s.tecla('9')
+    s.tecla('8'); assert fila() == [1, 0, 0, 0], fila()
+    s.recargar(F); s.cuadro(3); assert '[ESCENA]' in s.texto or '[RENDER]' in s.texto
+    s.opcion('Dejar todo como estaba'); s.tecla('8'); s.cuadro(2); assert fila() == [0, 0, 0, 0], fila()
+    # en SOLO LECTURA no se pide nada
+    S[b'existe'][b'solo_lectura.txt'] = True; s.cuadro(70); s.pagina(6); n = s.dll(2); ne = len(m.escrituras)
+    for k in '8038037': s.tecla(k)
+    assert s.dll(2) == n and 'SOLO LECTURA' in s.texto and len(m.escrituras) == ne, s.texto
+    # (en el paso de la basura el cursor paso por algunas etapas: lo unico que se escribio en el juego son bytes +0x48 de etapas)
+    assert not m.malas and all(n == 1 and a - 0x48 in w.etapas.values() for a, n in m.escrituras)
+    # una DLL que habla otra version, o no se puede abrir la memoria: lo dice y no deja nada abierto
+    w = Mundo(); s = Sim(F, w); S = s.SIM; S[b'dll_crear'](2); s.cuadro(3); s.pagina(6); s.cuadro(300)
+    assert 'otra version del enlace' in s.texto and int(S[b'vistas']) == 0 and int(S[b'map_abiertos']) == int(S[b'map_cerrados']) >= 2, s.texto
+    s.tecla('8'); assert s.dll(2) == 0
+    w = Mundo(); s = Sim(F, w); S = s.SIM; S[b'dll_crear'](); S[b'map_falla'] = True; s.cuadro(3); s.pagina(6); s.cuadro(300)
+    assert 'no pude abrir la memoria de la DLL' in s.texto and int(S[b'map_abiertos']) == int(S[b'map_cerrados']), s.texto
+    S[b'map_falla'] = None; s.cuadro(200); assert 'enlazada' in s.texto
+    # ---------- 4. teclas como Blender: G mover, R rotar, S escalar; X / Y / Z el eje (la misma otra vez = pantalla)
+    w = Mundo(); s = Sim(F, w); m = w.m; s.cuadro(3); s.pagina(2)
+    s.tecla(0x52); assert '[ESCENA]' in s.texto and 'HERRAMIENTA ROTAR   EJE PANTALLA' in s.texto and 'ROTAR en el eje PANTALLA' in s.texto, s.texto
+    s.tecla(0x59); assert 'EJE Y' in s.texto
+    s.tecla(0x59); assert 'EJE PANTALLA' in s.texto
+    s.tecla(0x5A); assert 'EJE Z' in s.texto
+    s.tecla(0x58); assert 'HERRAMIENTA ROTAR   EJE X' in s.texto
+    s.tecla(0x47); assert 'HERRAMIENTA MOVER   EJE X' in s.texto
+    s.pagina(6); s.tecla(0x53); assert '[ESCENA]' in s.texto and 'HERRAMIENTA ESCALAR   EJE X' in s.texto, s.texto
+    s.tecla(0x58); assert 'HERRAMIENTA ESCALAR   EJE PANTALLA' in s.texto
+    assert not m.escrituras
+    a0 = estado_objeto(w, 'zfx_Obj_01'); s.cursor_en('zfx_Obj_01'); s.tecla('8'); s.arrastre('izq', 100, 0)
+    cerca(estado_objeto(w, 'zfx_Obj_01')['S'], a0['S'] * math.exp(0.5), 1e-3)
+    s.tecla(0x47, 0x59); s.arrastre('izq', 0, -300); k = 2 * 6.5 * math.tan(0.045) / 1080
+    cerca(estado_objeto(w, 'zfx_Obj_01')['T'], a0['T'] + np.array([0, 300 * k, 0]), 2e-4)
+    s.raton(izq=True); s.cuadro(9); s.raton(izq=True, dx=20); s.tecla(0x52, 0x5A)
+    assert 'solta el mouse' in s.texto and 'HERRAMIENTA MOVER   EJE Y' in s.texto, s.texto
+    s.raton(); s.cuadro(2)
+    for vk in (0x41, 0x48, 0x54, 0x51, 0x0d, 0x20, 0x70): s.tecla(vk)        # otras teclas: nada
+    assert 'HERRAMIENTA MOVER   EJE Y' in s.texto
+    # ---------- 5. tope de brillo: 2000, u 8 veces lo que traia la luz
+    w = Mundo(); s = Sim(F, w); m = w.m; s.cuadro(3)
+    s.cursor_en('SpotLight_Key ', 2); o, d = w.luz('SpotLight_Key'); c0 = max(m.rf(d['p'] + 0x40, 3))
+    for _ in range(80): s.tecla('3')
+    c1 = max(m.rf(d['p'] + 0x40, 3)); tope = max(2000.0, 8 * c0)
+    assert 'tope de brillo' in s.texto and tope / 1.3 < c1 <= tope * 1.0001, (c0, c1, tope, s.texto)
+    n = len(s.llamadas); s.tecla('3'); assert len(s.llamadas) == n
+    s.tecla('4'); assert max(m.rf(d['p'] + 0x40, 3)) < c1 and 'tope' not in s.texto
+    print('   etapas del render, vistas por la DLL, teclas G R S / X Y Z, tope de brillo: bien')
+
+
 def e_roto(F):
     """la memoria cambia por debajo (el juego descarga cosas, listas con ciclos, punteros basura): nunca un error de Lua
     y nunca una escritura fuera de un objeto conocido"""
     rnd = random.Random(int(os.environ.get('MTR_SEMILLA', '1234')))
-    teclas = '0023456789'
+    teclas = list('0023456789') * 3 + [0x47, 0x52, 0x53, 0x58, 0x59, 0x5A]
     for vuelta in range(60):
-        w = Mundo(conj=rnd.random() < 0.3, con_limite=rnd.random() < 0.5, huesos=rnd.choice([0, 1, 2]), con_visor=rnd.random() < 0.8)
+        w = Mundo(conj=rnd.random() < 0.3, con_limite=rnd.random() < 0.5, huesos=rnd.choice([0, 1, 2]), con_visor=rnd.random() < 0.8,
+                  con_render=rnd.random() < 0.9)
         s = Sim(F, w); m = w.m
+        if rnd.random() < 0.6: s.SIM[b'dll_crear'](1 if rnd.random() < 0.9 else 3)      # con la DLL nueva (o una de otra version)
+        if rnd.random() < 0.5:                       # el motor dibujando: el reloj avanza dentro del cuadro para que la espera corte
+            s.SIM[b'tick_paso'] = 3
+            if w.render: m.u64(w.render + 0xd0, 0x1a0000100)
+        if vuelta % 3 == 0: s.pagina(6)              # una de cada tres vueltas arranca en la pagina RENDER
         for paso in range(260):
             r = rnd.random()
             if r < 0.45: s.tecla(rnd.choice(teclas))
             elif r < 0.70:
                 s.raton(izq=rnd.random() < 0.5, der=rnd.random() < 0.4, med=rnd.random() < 0.2, dx=rnd.randint(-40, 40), dy=rnd.randint(-40, 40))
-            elif r < 0.76: s.cuadro(rnd.randint(1, 40))
+            elif r < 0.76:
+                s.cuadro(rnd.randint(1, 40))
+                if rnd.random() < 0.3 and s.SIM[b'dll_buf'] is not None:        # basura en la memoria compartida de la DLL
+                    s.lua.eval('function(i, b) SIM.ffi_real_cast("uint32_t *", SIM.dll_buf)[i] = b end')(
+                        rnd.randrange(2, 16), rnd.choice([0, 0xffffffff, 0x7fc00000, 0xffc00001, 0x7f800000, 0xff800000, 0x41200000, 0xc1200000, rnd.getrandbits(32)]))
+                if rnd.random() < 0.1: s.SIM[b'dll_parada'] = not s.SIM[b'dll_parada']
             elif r < 0.80:
                 # un arrastre entero con la herramienta o con la camara
                 s.arrastre(rnd.choice(['izq', 'izq', 'der', 'med', 'izq+der']), rnd.randint(-80, 80), rnd.randint(-80, 80))
@@ -1091,7 +1406,8 @@ def e_roto(F):
     print('   60 vueltas de 260 pasos con la memoria rompiendose: sin errores y sin escrituras fuera de lugar')
 
 
-ESCENARIOS = dict(basico=e_basico, mover=e_mover, luces=e_luces, camara=e_camara, seguro=e_seguro, listas=e_listas, repaso=e_repaso, roto=e_roto)
+ESCENARIOS = dict(basico=e_basico, mover=e_mover, luces=e_luces, camara=e_camara, seguro=e_seguro, listas=e_listas, repaso=e_repaso,
+                  render=e_render, roto=e_roto)
 
 if __name__ == '__main__':
     fuente = open(sys.argv[1], 'rb').read()

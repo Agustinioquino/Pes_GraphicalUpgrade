@@ -31,11 +31,13 @@
 --
 -- Offsets leidos en el exe decompilado (PES2021.exe 1.07.02): ver memoria del proyecto motor-tiempo-real-exe.
 
-local m = { version = "0.2.1" }
+local m = { version = "0.3" }
 local VERSION = m.version
 local DIR
 -- lo que hay que recordar aunque Sider recargue el modulo con el juego abierto (queda en ctx)
-local G = { luz_orig = {}, tf_orig = {}, oc_orig = {}, cam = false }
+local G = { luz_orig = {}, tf_orig = {}, oc_orig = {}, et_orig = {}, cam = false }
+-- todo lo de la pagina RENDER vive en una sola tabla (Lua admite 200 variables sueltas por archivo y ya hay muchas)
+local RX = {}
 
 ---------------------------------------------------------------------------------------------
 -- 1. ENTREGA DE LA ESCENA (igual que la 0.1, probada en el juego)
@@ -100,7 +102,7 @@ local E = {
     listo = nil, sin_ffi = nil, apagado = false, solo_lectura = false, sin_llamadas = false,
     n_lect = 0, n_escr = 0, n_llam = 0, n_falla = 0, mi_pid = 0,
     pag = 1, aviso = "", compacto = false, mouse = true, cuadros = 0, t_expl = -100000, sucio = true,
-    cur = { 1, 1, 1, 1, 1 }, herr = 1, eje = 1, grilla = false, marcadores = false, solo = nil,
+    cur = { 1, 1, 1, 1, 1, 1 }, herr = 1, eje = 1, grilla = false, marcadores = false, solo = nil,
     conj = false, conj_visto = "sin verificar", volcado = false, hilo_cuadro = nil, hilo_tecla = nil,
     exe_ok = nil, exe_motivo = nil,
     listas_ok = false, listas_mal = 0, listas_dicho = false, n_obj = 0, n_puede = 0, conj_intentos = 0,
@@ -151,6 +153,9 @@ local function preparar()
         int mtr_WriteFile(void *h, const char *buf, uint32_t n, uint32_t *hecho, void *ov) __asm__("WriteFile");
         uint32_t mtr_SetFilePointer(void *h, int32_t dist, int32_t *alto, uint32_t metodo) __asm__("SetFilePointer");
         int mtr_CloseHandle(void *h) __asm__("CloseHandle");
+        void *mtr_OpenFileMappingA(uint32_t acceso, int heredar, const char *nombre) __asm__("OpenFileMappingA");
+        void *mtr_MapViewOfFile(void *h, uint32_t acceso, uint32_t alto, uint32_t bajo, size_t n) __asm__("MapViewOfFile");
+        int mtr_UnmapViewOfFile(void *p) __asm__("UnmapViewOfFile");
     ]]
     C = ffi.C
     PROC = C.mtr_GetCurrentProcess()
@@ -315,6 +320,7 @@ local RANURAS = {   -- direccion de una tabla de funciones del exe -> la funcion
     { 0x142aa5368, 0x1419fcd70 }, { 0x142ba51e0, 0x141ee73f0 }, { 0x14255ea00, 0x1402bc920 },
     { 0x142a226a0, 0x14171d6e0 }, { 0x142a226b0, 0x14171d620 }, { 0x142a226c0, 0x14171d740 }, { 0x142a226d0, 0x14171d7a0 },
     { 0x142a226e0, 0x14171d8c0 },
+    { 0x142a07c58, 0x14168aae0 }, { 0x142a07bc0 + 8 * 16, 0x14168c810 },     -- fox::gr::Render y RenderPlugin (pagina RENDER)
 }
 -- funciones del juego que se llaman (pocas, chicas y con el comienzo comprobado)
 local FN_COLOR, FIRMA_COLOR = 0x14169f2e0, de_hex("488b41380f28020f294040488b0148ff6078")      -- luz: color + aviso
@@ -1398,6 +1404,315 @@ end
 ---------------------------------------------------------------------------------------------
 -- 10. VOLCADO COMPLETO AL REGISTRO
 ---------------------------------------------------------------------------------------------
+---------------------------------------------------------------------------------------------
+-- 10. RENDER: las etapas del render del motor (plugins) y las vistas de la DLL grafica
+---------------------------------------------------------------------------------------------
+-- ETAPAS. Gestor de render = [G_RENDER] (el motor lo puede destruir y volver a crear: se relee siempre). +0x10 cantidad de
+-- plugins, +0x18 arreglo de punteros a todos, +0x28 render principal (fox::gr::Render: +0xd0 distinto de cero mientras
+-- dibuja el cuadro, +0xd8 modo). Plugin: +0x30 prioridad, +0x38 nombre, +0x40 indice, +0x44 tipo, +0x48 ACTIVO (un byte
+-- que el bucle de dibujo FUN_14168d1a0 mira en cada cuadro), +0x4c lista (execMode), +0x50 nombre del padre.
+-- El propio motor prende y apaga una etapa con la ranura 16 de su tabla; en la clase base esa funcion es solo
+-- "mov [rcx+0x48], dl" (FN_ACTIVAR), o sea lo mismo que escribir el byte. Seis clases traen una funcion propia (tonemap,
+-- antialiasing, profundidad de campo, reduccion del G-buffer, luz de entorno, modificador de luz): hacen algo mas y NO se
+-- tocan desde aca. Las hijas de otra etapa se pueden cambiar en cualquier momento (el motor las prepara siempre y mira
+-- el byte recien al dibujar); una etapa suelta se mira dos veces por cuadro (preparar y dibujar): se cambia solo cuando
+-- el motor no esta dibujando (+0xd0 en cero).
+-- VISTAS. El juego de venta no trae los dibujos de depuracion del Fox Engine (alambre, G-buffer): los hace la DLL grafica
+-- (PES21 FX, motorlink.cpp) y se le piden por una memoria compartida de 64 bytes "PES21FX_Motor_<pid>":
+--   +0x00 'MTRL', +0x04 version 1, +0x08 seq (lo subo en cada pedido), +0x0c vista, +0x10 alambre, +0x14 corte (floats),
+--   +0x18 cuadros de la DLL, +0x1c / +0x20 / +0x24 lo que rige, +0x28 dibujos en alambre del ultimo cuadro,
+--   +0x2c escala de profundidad pedida, +0x30 la que rige.
+RX.G_RENDER, RX.VT_RENDER, RX.FN_ACTIVAR = 0x14374ced8, 0x142a07c58, 0x14168c810
+RX.LISTA = { [0] = "pre", "post", "deferred", "forward", "prepass", "wireframe", "pseudoshade" }
+RX.VISTA = { [0] = "Normal", "Luz difusa", "Luz especular", "Normales", "Normales de mundo", "Albedo (sin luz)", "Profundidad",
+    "Oclusion", "Sombra del sol", "Solo luz (sin texturas)", "Material" }
+RX.QUE = { [0] = "la imagen de siempre", "solo la luz difusa que llega", "solo los brillos", "hacia donde mira cada cara (camara)",
+    "hacia donde mira cada cara (mundo)", "el color del material, sin luz", "cerca claro, lejos oscuro (bandas 20 cm)",
+    "la oclusion ambiente", "la sombra del sol", "la luz sobre un modelo sin texturas", "los canales del material" }
+RX.T_HERR = { [0x47] = 1, [0x52] = 2, [0x53] = 3 }              -- G mover, R rotar, S escalar (como Blender)
+RX.T_EJE = { [0x58] = 2, [0x59] = 3, [0x5A] = 4 }               -- X, Y, Z (otra vez la misma = eje de la pantalla)
+RX.etapas, RX.render, RX.modo, RX.mal, RX.apagadas, RX.t = {}, nil, nil, nil, 0, -100000
+RX.dll = { u32 = nil, f = nil, t = -100000, estado = "todavia no busque la DLL grafica", pend = nil, visto = nil, t_visto = 0, viva = false }
+
+function RX.leer()
+    local vistas, por_nombre = {}, {}
+    RX.etapas, RX.render, RX.modo, RX.mal, RX.apagadas = {}, nil, nil, nil, 0
+    local g = rptr(RX.G_RENDER)
+    if not g or not leer(g, 0x30) then
+        RX.mal = "el motor todavia no armo su render"
+        return
+    end
+    local n, arr, ren = B32[0x10 / 4], P(0x18), P(0x28)
+    if n > 0x80 or not arr then
+        RX.mal = "el gestor de render no es el que conozco"
+        return
+    end
+    if ren and leer(ren, 0xe8) and P(0) == RX.VT_RENDER then
+        RX.render, RX.modo = ren, B32[0xd8 / 4]
+    end
+    local dirs = {}
+    if n > 0 then
+        if not leer(arr, n * 8) then
+            RX.mal = "no pude leer la lista de etapas"
+            return
+        end
+        for i = 1, n do dirs[i] = P((i - 1) * 8) or false end
+    end
+    for i = 1, n do
+        local p = dirs[i]
+        if p and leer(p, 0x60) then
+            local vt, prio, idx, tipo, act, modo = P(0), B32[0x30 / 4], B32[0x40 / 4], B32[0x44 / 4], B8[0x48], B32[0x4c / 4]
+            local s_nom = P(0x38)
+            if vt and vt >= BASE and vt < EXE_FIN and s_nom and act <= 1 and modo <= 6 then
+                if prio >= 0x80000000 then prio = prio - 4294967296 end
+                local e = { dir = p, vt = vt, s_nom = s_nom, prio = prio, idx = idx, tipo = tipo, modo = modo, activa = (act == 1), nivel = 0 }
+                e.propio = (rptr(vt + 0x80) ~= RX.FN_ACTIVAR)
+                e.nombre = fox_cadena(p + 0x38, 40) or ("etapa_" .. hx(p))
+                e.padre = fox_cadena(p + 0x50, 40)
+                vistas[#vistas + 1] = e
+                if not por_nombre[e.nombre] then por_nombre[e.nombre] = e end
+                if not e.activa then RX.apagadas = RX.apagadas + 1 end
+            end
+        end
+    end
+    -- arbol: cada etapa seguida de sus hijas (el padre se busca por nombre y gana la primera, como hace el motor)
+    local hijos, sueltas = {}, {}
+    for i = 1, #vistas do
+        local e = vistas[i]
+        local pa = e.padre and por_nombre[e.padre]
+        if pa and pa ~= e then
+            local h = hijos[pa]
+            if not h then
+                h = {}
+                hijos[pa] = h
+            end
+            h[#h + 1] = e
+        else
+            if e.padre then e.huerfana = true end       -- nombra un padre que no existe: el motor nunca la ejecuta
+            sueltas[#sueltas + 1] = e
+        end
+    end
+    local lista, puesto = {}, {}
+    local function rama(e, nivel)
+        if puesto[e] or nivel > 6 then return end
+        puesto[e] = true
+        e.nivel = nivel
+        lista[#lista + 1] = e
+        local h = hijos[e]
+        if h then
+            for i = 1, #h do rama(h[i], nivel + 1) end
+        end
+    end
+    for i = 1, #sueltas do rama(sueltas[i], 0) end
+    for i = 1, #vistas do                               -- si quedara un ciclo de padres, nada se pierde
+        if not puesto[vistas[i]] then rama(vistas[i], 0) end
+    end
+    RX.etapas = lista
+end
+
+-- prende o apaga una etapa. Devuelve true, o false y el motivo.
+function RX.poner(e, si)
+    if E.solo_lectura then return false, "en SOLO LECTURA no se cambia ninguna etapa" end
+    if e.propio then return false, "esa etapa tiene un interruptor propio del motor: desde aca no se toca" end
+    if not leer(e.dir, 0x60) or P(0) ~= e.vt or P(0x38) ~= e.s_nom or B8[0x48] > 1 then
+        return false, "esa etapa ya no esta: el motor rearmo su render"
+    end
+    local era = (B8[0x48] == 1)
+    if era == si then
+        e.activa = si
+        return true
+    end
+    if not e.padre or e.huerfana then
+        local ren = RX.render
+        if not ren then return false, "no encuentro el render principal del motor" end
+        local t0, libre, vueltas = reloj(), false, 0
+        while vueltas < 400000 do
+            vueltas = vueltas + 1
+            if C.mtr_ReadProcessMemory(PROC, ren + 0xd0, B8, 8, NR) == 0 then break end
+            if B32[0] == 0 and B32[1] == 0 then
+                libre = true
+                break
+            end
+            if vueltas % 256 == 0 then
+                local dt = reloj() - t0
+                if dt > 60 or dt < 0 then break end
+            end
+        end
+        if not libre then return false, "el motor no dejo de dibujar en 60 ms: proba de nuevo" end
+    end
+    if not poner_u8(e.dir + 0x48, si and 1 or 0) then return false, "no pude escribir en esa etapa" end
+    local g = G.et_orig[e.dir]
+    if g and g.nombre == e.nombre then
+        if g.activa == si then G.et_orig[e.dir] = nil end        -- volvio a como la tenia el juego
+    else
+        G.et_orig[e.dir] = { nombre = e.nombre, activa = era }
+    end
+    e.activa = si
+    return true
+end
+
+function RX.tecla_etapa(e, vkey)
+    if not e then return end
+    local quiero
+    if vkey == 0x38 then quiero = not e.activa
+    elseif vkey == 0x37 then
+        local g = G.et_orig[e.dir]
+        if not (g and g.nombre == e.nombre) then
+            E.aviso = "esa etapa esta como la dejo el juego"
+            return
+        end
+        quiero = g.activa
+    else
+        E.aviso = "8 prende / apaga la etapa, 7 la deja como la tenia el juego"
+        return
+    end
+    local ok, por_que = RX.poner(e, quiero)
+    if ok then R(string.format("render: etapa %s %s (0x%s)", e.nombre, quiero and "PRENDIDA" or "apagada", hx(e.dir)), true)
+    else E.aviso = por_que end
+    E.sucio = true
+end
+
+-- deja las etapas como las tenia el juego; devuelve cuantas repuso y cuantas no pudo
+function RX.reponer()
+    RX.leer()
+    local hechas, falta, quedan = 0, 0, {}
+    for i = 1, #RX.etapas do
+        local e = RX.etapas[i]
+        local g = G.et_orig[e.dir]
+        if g and g.nombre == e.nombre then
+            if RX.poner(e, g.activa) then hechas = hechas + 1
+            else
+                quedan[e.dir] = g
+                falta = falta + 1
+            end
+        end
+    end
+    G.et_orig = quedan
+    return hechas, falta
+end
+
+-- ---- vistas de la DLL grafica
+function RX.dll_f(i)
+    local u = RX.dll.u32[i]
+    if u > 0xff800000 or (u > 0x7f800000 and u < 0x80000000) then return 0 end
+    return RX.dll.f[i]
+end
+function RX.dll_abrir()
+    local d = RX.dll
+    if d.u32 then return true end
+    local ahora = reloj()
+    if ahora - d.t < 2000 and ahora >= d.t then return false end
+    d.t = ahora
+    local nombre = string.format("PES21FX_Motor_%d", E.mi_pid)
+    local h = C.mtr_OpenFileMappingA(0xF001F, 0, nombre)
+    if h == nil then
+        d.estado = "la DLL grafica instalada no trae las vistas"
+        return false
+    end
+    local p = C.mtr_MapViewOfFile(h, 0xF001F, 0, 0, 64)
+    C.mtr_CloseHandle(h)                    -- la vista sigue valida sin el identificador
+    if p == nil then
+        d.estado = "no pude abrir la memoria de la DLL grafica"
+        return false
+    end
+    local u = ffi.cast("uint32_t *", p)
+    if u[0] ~= 0x4C52544D or u[1] ~= 1 then
+        C.mtr_UnmapViewOfFile(p)
+        d.estado = "la DLL grafica habla otra version del enlace"
+        return false
+    end
+    d.u32, d.f = u, ffi.cast("float *", p)
+    d.estado = "enlazada"
+    R("vistas: enlace con la DLL grafica abierto (" .. nombre .. ")", true)
+    return true
+end
+-- lo que rige: vista, alambre, corte, escala. Si hay un pedido mio que la DLL todavia no tomo, vale el pedido.
+function RX.dll_valores()
+    local d = RX.dll
+    if d.pend and d.u32[6] == d.pend then return math.floor(RX.dll_f(3) + 0.5), RX.dll_f(4), RX.dll_f(5), RX.dll_f(11) end
+    d.pend = nil
+    local v = math.floor(RX.dll_f(7) + 0.5)
+    if v < 0 or v > 10 then v = 0 end
+    return v, RX.dll_f(8), RX.dll_f(9), RX.dll_f(12)
+end
+function RX.dll_pedir(v, a, c, k)
+    if E.solo_lectura then
+        E.aviso = "en SOLO LECTURA no se cambia la vista"
+        return false
+    end
+    if not RX.dll_abrir() then
+        E.aviso = RX.dll.estado
+        return false
+    end
+    local d = RX.dll
+    d.f[3], d.f[4], d.f[5], d.f[11] = v, a, c, k
+    d.pend = d.u32[6]
+    d.u32[2] = d.u32[2] + 1
+    return true
+end
+-- una vez por cuadro del panel: la DLL esta viva si su cuenta de cuadros avanza
+function RX.dll_pulso()
+    local d = RX.dll
+    if not d.u32 then return end
+    local s, ahora = d.u32[6], reloj()
+    if s ~= d.visto then
+        d.visto, d.t_visto, d.viva = s, ahora, true
+    elseif ahora - d.t_visto > 2000 or ahora < d.t_visto then
+        d.viva = false
+    end
+end
+function RX.tecla_vista(fila, vkey)
+    if not RX.dll_abrir() then
+        E.aviso = RX.dll.estado
+        return
+    end
+    local v, a, c, k = RX.dll_valores()
+    if fila == 1 then
+        if vkey == 0x38 or vkey == 0x33 then v = (v + 1) % 11
+        elseif vkey == 0x34 then v = (v - 1) % 11
+        elseif vkey == 0x37 then v = 0
+        else return end
+    elseif fila == 2 then
+        if vkey == 0x38 then a = (a > 0.5) and 0 or 1
+        elseif vkey == 0x37 then a = 0
+        else
+            E.aviso = "el alambre se prende y se apaga con 8"
+            return
+        end
+    else
+        local hay = (c > 0.005)
+        if vkey == 0x38 then c = hay and 0 or 0.5
+        elseif vkey == 0x33 then c = hay and math.min(0.95, c + 0.05) or 0.5
+        elseif vkey == 0x34 then c = hay and math.max(0.05, c - 0.05) or 0.5
+        elseif vkey == 0x37 then c = 0
+        else return end
+    end
+    if RX.dll_pedir(v, a, c, k) then
+        R(string.format("vista: %s, alambre %s, pantalla partida %s", RX.VISTA[v], (a > 0.5) and "SI" or "no",
+            (c > 0.005) and string.format("%.0f %%", c * 100) or "no"), true)
+    end
+end
+function RX.volcar()
+    RX.leer()
+    R(string.format("render: gestor [0x%s], render principal %s, modo %s, %d etapas (%d apagadas)%s", hx(RX.G_RENDER),
+        RX.render and ("0x" .. hx(RX.render)) or "NO", tostring(RX.modo), #RX.etapas, RX.apagadas, RX.mal and (" | " .. RX.mal) or ""))
+    for i = 1, #RX.etapas do
+        local e = RX.etapas[i]
+        R(string.format("etapa %2d 0x%s %s%-32s %s lista %s prio %d tipo %d indice %d padre %s tabla 0x%s%s%s", i, hx(e.dir),
+            string.rep("  ", e.nivel), e.nombre, e.activa and "PRENDIDA" or "apagada ", RX.LISTA[e.modo] or "?", e.prio, e.tipo, e.idx,
+            e.padre or "-", hx(e.vt), e.propio and " INTERRUPTOR PROPIO (no se toca)" or "", e.huerfana and " PADRE INEXISTENTE (no corre)" or ""))
+    end
+    local d = RX.dll
+    if RX.dll_abrir() then
+        RX.dll_pulso()
+        local v, a, c, k = RX.dll_valores()
+        R(string.format("vistas: DLL enlazada (cuadros %d, %s), vista %d %s, alambre %s (%d dibujos), corte %.2f, escala %g", d.u32[6],
+            d.viva and "viva" or "sin avanzar", v, RX.VISTA[v] or "?", (a > 0.5) and "SI" or "no", d.u32[10], c, k))
+    else
+        R("vistas: " .. d.estado)
+    end
+end
+
 local function volcar_todo(por_que)
     R(string.format("===== VOLCADO (%s) version %s: %d escenas, %d modelos + %d de ayuda, %d luces, %d otros; lecturas %d escrituras %d llamadas %d fallas %d; giro %s",
         por_que, VERSION, #escenas, #modelos, #ayudas, #luces, #otros, E.n_lect, E.n_escr, E.n_llam, E.n_falla, E.conj_visto), true)
@@ -1441,13 +1756,14 @@ local function volcar_todo(por_que)
     else
         R("camara del visor: no hay (fuera de Editar > Apariencia)")
     end
+    RX.volcar()
     R("===== fin del volcado")
 end
 
 ---------------------------------------------------------------------------------------------
 -- 11. PAGINAS: que muestra cada una y que hace cada tecla
 ---------------------------------------------------------------------------------------------
-local PAGS = { "ESCENA", "LUCES", "ENTIDADES", "OPCIONES", "REGISTRO" }
+local PAGS = { "ESCENA", "LUCES", "ENTIDADES", "OPCIONES", "REGISTRO", "RENDER" }
 local FILAS, A_IZQ, A_DER = 10, 46, 56
 
 local function col(s, n)
@@ -1513,8 +1829,14 @@ local function restaurar_todo()
     G.luz_orig, G.tf_orig, G.oc_orig = ql, qt, qo
     E.solo, E.grilla, E.marcadores = nil, false, false
     if G.cam then cam_restaurar() end
+    local ne, fe = RX.reponer()                 -- etapas del render como las tenia el juego
+    falta = falta + fe
+    if RX.dll_abrir() then                      -- vista normal, sin alambre ni pantalla partida (solo si habia algo puesto)
+        local v, a, c = RX.dll_valores()
+        if v ~= 0 or a > 0.5 or c > 0.005 then RX.dll_pedir(0, 0, 0, 0) end
+    end
     E.sucio = true
-    E.aviso = string.format("todo como estaba: %d luces, %d objetos en su lugar, %d visibles / ocultos%s", nl, nt, no,
+    E.aviso = string.format("todo como estaba: %d luces, %d objetos en su lugar, %d visibles / ocultos, %d etapas del render%s", nl, nt, no, ne,
         (falta > 0) and string.format(" | NO repuse %d: probar de nuevo", falta) or "")
     R(E.aviso, true)
 end
@@ -1602,6 +1924,21 @@ OPC = {
 local function tecla(vkey)
     local pag = E.pag
     E.aviso = ""
+    if RX.T_HERR[vkey] or RX.T_EJE[vkey] then
+        -- como en Blender: G mover, R rotar, S escalar; X / Y / Z fijan el eje (la misma letra otra vez = eje de la pantalla)
+        if arr then
+            E.aviso = "solta el mouse antes de cambiar de herramienta o de eje"
+            return
+        end
+        if RX.T_HERR[vkey] then E.herr = RX.T_HERR[vkey]
+        else E.eje = (E.eje == RX.T_EJE[vkey]) and 1 or RX.T_EJE[vkey] end
+        if pag ~= 1 then
+            E.pag = 1
+            E.sucio = true
+        end
+        E.aviso = string.format("%s en el eje %s: marca objetos con 8 y arrastra con el boton izquierdo del mouse", HERR[E.herr], EJES[E.eje])
+        return
+    end
     if vkey == 0x36 then
         E.pag = pag % #PAGS + 1
         E.sucio = true
@@ -1674,7 +2011,13 @@ local function tecla(vkey)
             local f = (vkey == 0x33) and 1.25 or 0.8
             local c = l.color
             if luz_fuerza(l) < 0.0001 and f > 1 then c = { 1, 1, 1, c[4] } end   -- estaba en negro: arranca en blanco
-            if luz_color(l, { c[1] * f, c[2] * f, c[3] * f, c[4] }) then
+            -- tope: 2000, o 8 veces lo que traia la luz si ya era mas fuerte (en la prueba 2 un sol llego a 815663)
+            local g = G.luz_orig[l.dir]
+            local base = (g and g.nombre == l.nombre) and math.max(g.color[1], g.color[2], g.color[3]) or luz_fuerza(l)
+            local tope = math.max(2000, 8 * (finito(base) and base or 0))
+            if f > 1 and math.max(c[1], c[2], c[3]) * f > tope then
+                E.aviso = string.format("tope de brillo (%.0f): no lo subo mas", tope)
+            elseif luz_color(l, { c[1] * f, c[2] * f, c[3] * f, c[4] }) then
                 R(string.format("luz %s: color %.3f %.3f %.3f", l.nombre, l.color[1], l.color[2], l.color[3]), true)
             end
         elseif vkey == 0x32 and l then
@@ -1708,6 +2051,12 @@ local function tecla(vkey)
             volcar_todo("pedido con la tecla")
             E.aviso = "anotado en content\\motor-tiempo-real\\registro.txt"
         end
+    elseif pag == 6 then
+        local n, cur = 3 + #RX.etapas, E.cur[6]
+        if vkey == 0x30 then mover_cursor(6, n, 1)
+        elseif vkey == 0x39 then mover_cursor(6, n, -1)
+        elseif cur <= 3 then RX.tecla_vista(cur, vkey)
+        else RX.tecla_etapa(RX.etapas[cur - 3], vkey) end
     end
 end
 
@@ -1809,7 +2158,7 @@ local function filas_pagina()
         end
         izq[9] = string.format("HERRAMIENTA %s   EJE %s", HERR[E.herr], EJES[E.eje])
         izq[10] = "mouse izq. arrastra = " .. string.lower(HERR[E.herr]) .. " lo marcado"
-        pie = "0/9 baja/sube | 8 marcar | 7 ocultar/mostrar | 4 herramienta | 3 eje | 2 enfocar camara"
+        pie = "0/9 baja/sube | 8 marcar | 7 ocultar/mostrar | 4 o G R S herramienta | 3 o X Y Z eje | 2 enfocar camara"
     elseif pag == 2 then
         local n, cur = #luces, E.cur[2]
         local ini = ventana(n, cur)
@@ -1884,6 +2233,68 @@ local function filas_pagina()
         izq[8] = "giro: " .. string.sub(E.conj_visto, 1, 38)
         izq[9] = E.solo_lectura and "SOLO LECTURA (archivo solo_lectura.txt)" or (E.sin_llamadas and "sin llamadas al juego (archivo)" or "")
         pie = "0/9 baja/sube | 8 usar o cambiar | 4/3 menos/mas"
+    elseif pag == 6 then
+        local et, d = RX.etapas, RX.dll
+        local n, cur = 3 + #et, E.cur[6]
+        if cur > n then cur = n end
+        local ini = ventana(n, cur)
+        local v, a, c = 0, 0, 0
+        if d.u32 then v, a, c = RX.dll_valores() end
+        for i = ini, math.min(n, ini + FILAS - 1) do
+            local s
+            if i == 1 then s = string.format("    %-18s %s", "Vista", d.u32 and (RX.VISTA[v] or "?") or "-")
+            elseif i == 2 then s = string.format("    %-18s %s", "Alambre", d.u32 and ((a > 0.5) and "SI" or "no") or "-")
+            elseif i == 3 then s = string.format("    %-18s %s", "Pantalla partida", d.u32 and ((c > 0.005) and string.format("%.0f %%", c * 100) or "no") or "-")
+            else
+                local e = et[i - 3]
+                s = string.format("%s %s%s", e.propio and "[=]" or (e.activa and "[x]" or "[ ]"), string.rep("  ", e.nivel), e.nombre)
+            end
+            der[#der + 1] = ((i == cur) and ">" or " ") .. s
+        end
+        izq[1] = string.format("RENDER  %d etapas, %d apagadas", #et, RX.apagadas)
+        if cur <= 3 then
+            izq[2] = (cur == 1) and "VISTA DE LA IMAGEN" or (cur == 2) and "ALAMBRE (mallas en lineas)" or "PANTALLA PARTIDA"
+            izq[3] = d.u32 and (d.viva and "la dibuja la DLL grafica: enlazada" or "DLL grafica enlazada (sin cuadros nuevos)")
+                or string.sub(d.estado, 1, A_IZQ)
+            if d.u32 then
+                if cur == 1 then
+                    izq[4] = string.format("%d de 10: %s", v, RX.VISTA[v] or "?")
+                    izq[5] = string.sub(RX.QUE[v] or "", 1, A_IZQ)
+                    izq[7] = "vale en el Editar y en el partido"
+                elseif cur == 2 then
+                    izq[4] = string.format("%s   dibujos en alambre: %d", (a > 0.5) and "PRENDIDO" or "apagado", d.u32[10])
+                    izq[5] = "jugador, estadio y pasto en lineas;"
+                    izq[6] = "la luz y los menus quedan como estan"
+                else
+                    izq[4] = (c > 0.005) and string.format("la vista a la izquierda del %.0f %%", c * 100) or "la vista ocupa toda la pantalla"
+                    izq[5] = "a la derecha queda la imagen normal"
+                end
+            else
+                izq[4] = "(las vistas las trae la DLL grafica nueva)"
+                izq[5] = "sin esa DLL sirven igual las etapas"
+                izq[6] = "del render de mas abajo"
+            end
+            if RX.mal then izq[8] = string.sub(RX.mal, 1, A_IZQ) end
+            izq[9] = "con el shader mod en \"Ver original\""
+            izq[10] = "las vistas no se ven (el alambre si)"
+            pie = (cur == 1) and "0/9 baja/sube | 8 o 3 vista siguiente | 4 anterior | 7 imagen normal"
+                or (cur == 2) and "0/9 baja/sube | 8 prender/apagar | 7 apagar"
+                or "0/9 baja/sube | 8 mitad / nada | 4/3 corre el corte | 7 sin corte"
+        else
+            local e = et[cur - 3]
+            if e then
+                izq[2] = string.sub(e.nombre, 1, A_IZQ)
+                izq[3] = e.propio and "INTERRUPTOR PROPIO del motor: no se toca"
+                    or string.format("%s%s", e.activa and "PRENDIDA" or "apagada", G.et_orig[e.dir] and "   (cambiada por mi)" or "")
+                izq[4] = e.huerfana and ("padre inexistente: " .. string.sub(e.padre, 1, 24)) or ("dentro de  " .. (e.padre or "(suelta)"))
+                izq[5] = string.format("lista  %s   prioridad %d", RX.LISTA[e.modo] or "?", e.prio)
+                izq[6] = string.format("tipo %d  indice %d  0x%s", e.tipo, e.idx, hx(e.dir))
+                izq[7] = string.format("clase  %s", clase_corta(e.vt))
+            end
+            izq[9] = RX.mal and string.sub(RX.mal, 1, A_IZQ) or string.format("modo del render: %s", RX.LISTA[RX.modo or -1] or "?")
+            izq[10] = "apagar DRAW2D esconde los menus del juego"
+            pie = "0/9 baja/sube | 8 prender/apagar la etapa | 7 dejarla como la tenia el juego"
+        end
     else
         local u = reg.ult
         for i = math.max(1, #u - FILAS + 1), #u do der[#der + 1] = u[i] end
@@ -1948,6 +2359,10 @@ function m.overlay_on(ctx)
     -- con muchisimos objetos (un partido) se explora mas espaciado
     if not raton.modo and (E.sucio or viejo > ((E.n_obj > 1500) and 2000 or 500) or viejo < 0) then
         explorar()
+        if E.pag == 6 then
+            RX.leer()
+            RX.dll_abrir()
+        end
         if E.pag == 3 and (ahora - ents.t > 2000 or ahora < ents.t) then listar_entidades() end
         if E.marcadores then marcadores_poner() end
         if cam.activa and cam_buscar() ~= cam.dir then cam_soltar("el visor ya no usa esa camara") end
@@ -1961,6 +2376,7 @@ function m.overlay_on(ctx)
     end
     entrada()
     cam_escribir()
+    RX.dll_pulso()
     volcar_registro()
     local t = { cabecera() }
     if E.compacto then
@@ -2000,6 +2416,7 @@ function m.init(ctx)
     local g = ctx.MotorTiempoReal2
     if type(g) == "table" and type(g.luz_orig) == "table" and type(g.tf_orig) == "table" and type(g.oc_orig) == "table" then
         G = g
+        if type(G.et_orig) ~= "table" then G.et_orig = {} end       -- lo guardo la 0.2.1, que no conocia las etapas
     else
         ctx.MotorTiempoReal2 = G
     end
