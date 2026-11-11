@@ -50,6 +50,11 @@ void main(
     }
   }
   float2 dUx = ddx(uvA), dUy = ddy(uvA);
+  // (11/11 f) natural: gradiente de la uv DENTRO de la tarjeta (sin los saltos de variante / espejo / fila del atlas). Si el azar de la hoja
+  // variaba dentro de una tarjeta (pasto del juego: celdas de 5 cm por vertice), el salto llevaba el gradiente al mip mas chico, el alfa
+  // promedio pasaba el recorte y la tarjeta salia como un triangulo plano. MISMA cuenta en 18afff0f79d9aaa5. El artificial queda igual
+  float2 dVx = ddx(v1.xy), dVy = ddy(v1.xy);
+  if (pesV3 && !pesArt) { float2 tS = pesNat ? float2(0.125, 0.25) : float2(0.25, 0.5); dUx = dVx * tS; dUy = dVy * tS; }
   float a;
   if (pesV3) {
     float shp = pesArt ? lerp(1.0, 0.5, smoothstep(600.0, 1500.0, abs(v4.w))) : lerp(1.0, 0.5, smoothstep(420.0, 1050.0, abs(v4.w)));   // (11/11) natural: igual que 18afff

@@ -155,6 +155,11 @@ void main(
   float pesBid = 0.0;   // (11/11) numero de la hoja (atlas del natural)
   // derivadas fuera de la rama (muestreo con gradiente explicito adentro)
   float2 dUx = ddx(uvA), dUy = ddy(uvA);
+  // (11/11 f) natural: gradiente de la uv DENTRO de la tarjeta (sin los saltos de variante / espejo / fila del atlas). Si el azar de la hoja
+  // variaba dentro de una tarjeta (pasto del juego: celdas de 5 cm por vertice), el salto llevaba el gradiente al mip mas chico, el alfa
+  // promedio pasaba el recorte y la tarjeta salia como un triangulo plano. MISMA cuenta en pes_grass_depth_ps.hlsl. El artificial queda igual
+  float2 dVx = ddx(v1.xy), dVy = ddy(v1.xy);
+  if (pesV3 && !pesArt) { float2 tS = pesNat ? float2(0.125, 0.25) : float2(0.25, 0.5); dUx = dVx * tS; dUy = dVy * tS; }
   if (pesV3) {
     // (27/10 j) pegado a la camara (>= 600 px/m) el atlas se muestrea mas nitido (gradientes a la mitad = un mip mas fino): las hojas de
     // muy cerca se veian blandas, "con poco detalle"

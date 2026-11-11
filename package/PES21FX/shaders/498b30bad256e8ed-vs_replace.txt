@@ -30,6 +30,9 @@ StructuredBuffer<float4> PESGrassInst : register(t121);   // PES21: parcelas del
 // y enlazado aca en b6: con eso las hojas calculan el MISMO color que el suelo de la vista de juego (x148)
 cbuffer PESTurfMatC : register(b6) { float4 pTM[8]; }
 #include "pes_grass.hlsli"   // PES21 pasto v3 (19/10): tipo, alto, patrones de corte, desgaste, zonas
+// (11/11 f) azar entero (PCG) y Halton base 3 (raiz de cada tarjeta en la malla del mod, como BuildDense de la DLL): ver pesHv y pesCardRoot
+uint PESBh(uint v) { uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
+float PESHal3(uint n) { float f = 1.0, r = 0.0; [loop] for (int k = 0; k < 12; k++) { if (n == 0u) break; f *= (1.0 / 3.0); r += f * (float)(n % 3u); n /= 3u; } return r; }
 
 // (2/11) viento de las hojas en funcion del tiempo, para calcularlo dos veces: ahora (z23) y en el cuadro anterior (w23). Con la
 // camara quieta el TAA del juego solo ve el movimiento que le dice el vector de velocidad (o6.zw / o7.y): antes se calculaba con la
@@ -87,6 +90,7 @@ void main(
   float4 v0 = v0_in;
   bool pesKill = false;
   float3 pesExtW = 0; float2 pesExtRoot = 0; float pesExtScale = 1; float2 pesExtOrg = 0; float pesPx = 0.0;
+  float2 pesCardRoot = 0;   // (11/11 f) raiz de la tarjeta del mod (igual en todos sus vertices)
   // (26/10 d) indice de la tarjeta (hoja) y giro de la celda: fase del viento y banda del atlas POR HOJA (antes por vertice: 70-80% de las
   // hojas se retorcian en vez de mecerse); alto efectivo de la hoja (x59 lejos, alto cercano cb5[10].y cerca); fundido por ventana
   int pesCard = -1; int pesRot = 0; float pesTallE = 1.0; float pesWinK = 1.0;
@@ -120,6 +124,15 @@ void main(
     float2 lp = (cb5[11].z > 0.5 && cb5[9].z > 0.5) ? v0_in.xz : v0_in.xz * pesExtScale;
     float2 rp = float2(cs * lp.x + sn * lp.y, -sn * lp.x + cs * lp.y);
     pesExtRoot = ins.xy + rp;
+    // (11/11 f) raiz de la TARJETA: la misma en todos sus vertices (Halton 2 / 3 de la malla del mod, BuildDense: raices en la celda con
+    // +-2 mm de ruido). Las matas del natural se miden aca y no en cada vertice: medidas por vertice, una tarjeta que cruzaba el borde de una
+    // mata o pasaba cerca de su centro tenia otro giro en cada vertice, v8.z (giro + azar de la hoja) variaba dentro de la tarjeta y el PS
+    // cambiaba de variante / espejo / fila del atlas en cada pixel: la tarjeta salia como un triangulo plano ("el natural se ve mal")
+    if (pesCard >= 0) {
+      float rsc = (cb5[11].z > 0.5 && cb5[9].z > 0.5) ? max(cb5[13].x, 0.25) : 0.5 * pesExtScale;   // lado de la celda (0.5 / 1 / 2 m)
+      float2 rl = (float2((float)reversebits((uint)pesCard + 1u) * 2.3283064e-10, PESHal3((uint)pesCard + 1u)) - 0.5) * rsc;
+      pesCardRoot = ins.xy + float2(cs * rl.x + sn * rl.y, -sn * rl.x + cs * rl.y);
+    } else pesCardRoot = pesExtRoot;
     float4 cv = float4(dot(float4(ins.x, 0, ins.y, 1), cb2[8]), dot(float4(ins.x, 0, ins.y, 1), cb2[9]), dot(float4(ins.x, 0, ins.y, 1), cb2[10]), dot(float4(ins.x, 0, ins.y, 1), cb2[11]));
     float4 cc = float4(dot(cv, cb2[4]), dot(cv, cb2[5]), dot(cv, cb2[6]), dot(cv, cb2[7]));
     float k;
@@ -217,8 +230,19 @@ void main(
   float2 pesRoot = pesIsExt ? pesExtRoot : float2(dot(v0_in, cb5[4]), dot(v0_in, cb5[6]));
   // (27/10 h) valor al azar por hoja (el PS lo usa para variar claridad y tono entre hojas, y295). (27/10 m) se calcula aca porque la tanda 10
   // lo usa tambien para el alto, el ancho y la curva de cada hoja
-  float pesHv = (pesIsExt && pesCard >= 0) ? PESGh21(float2((float)pesCard * 0.0291 + pesExtOrg.x * 0.59, pesExtOrg.y * 0.43 + (float)pesRot * 0.17) + 0.23)
-                                           : PESGh21(floor(pesRoot * 20.0) * 0.137 + 0.59);
+  // (11/11 f) natural en el pasto del JUEGO (cerca de la camara): valor al azar POR TARJETA. Antes salia de la posicion de cada vertice en
+  // celdas de 5 cm: las ~46 tarjetas de una celda repetian el mismo dibujo y las que cruzaban un borde (1 de cada 3) tenian otro valor en
+  // cada vertice -> el PS cambiaba de variante / espejo / fila del atlas en cada pixel, el gradiente se iba al mip mas chico y la tarjeta
+  // salia como un triangulo plano. Grupos de 24 vertices = tarjetas enteras (el juego 4 vertices por tarjeta, mallas densas 6 / 8) +
+  // parcela (origen de 0.5 m) + instancia. El artificial queda como estaba (no usa el azar para el dibujo del atlas)
+  bool pesNatV = IniParams.Load(int2(407, 0)).x < 0.5;
+  float pesHv;
+  if (pesIsExt && pesCard >= 0) pesHv = PESGh21(float2((float)pesCard * 0.0291 + pesExtOrg.x * 0.59, pesExtOrg.y * 0.43 + (float)pesRot * 0.17) + 0.23);
+  else if (pesNatV) {
+    int2 pq = (int2)floor(float2(cb5[4].w, cb5[6].w) * 2.0 + 0.5);
+    uint sG = PESBh((vid / 24u) * 2654435761u ^ PESBh((uint)pq.x * 73856093u ^ (uint)pq.y * 19349663u ^ iid * 83492791u));
+    pesHv = (float)(sG & 0xFFFFFFu) * (1.0 / 16777216.0);
+  } else pesHv = PESGh21(floor(pesRoot * 20.0) * 0.137 + 0.59);
   // (27/10 m) tanda 10, fila 328: matas y variedad en las hojas del mod. Hasta ahora todas las hojas de una celda median lo mismo (el alto
   // variaba solo en manchas de 60 cm) y salian repartidas parejo: "un tapiz de rayitas iguales". x328 matas: la cancha se divide en matas
   // de ~12 cm; cada mata tiene su alto (0.72..1.28) y sus hojas se abren hacia afuera desde el centro, las del borde mas cortas: montoncitos
@@ -235,21 +259,22 @@ void main(
     bool pesArt = P407.x > 0.5;
     float kSz = pesArt ? 0.0 : saturate(P407.z * 0.5) * 2.0;
     if (pesArt) { kM *= 0.15; kV *= 0.3; }
+    float2 pesRootK = pesArt ? pesRoot : pesCardRoot;   // (11/11 f) natural: las matas se miden en la raiz de la tarjeta (ver pesCardRoot)
     if (kM > 0.001) {
       // w408: tamano de la mata en cm (0 = 12 cm, como antes)
       float cl0 = IniParams.Load(int2(408, 0)).w > 0.5 ? clamp(IniParams.Load(int2(408, 0)).w, 4.0, 30.0) * 0.01 : 0.12;
       float cl = cl0, hOff = 0.0;
       if (kSz > 0.001) {
-        float rg = PESGh21(floor(pesRoot / (6.0 * cl0)) * 0.211 + 0.17);   // zona de 6 matas (multiplo de 1/2, 1 y 2 matas: no se cortan en el medio)
+        float rg = PESGh21(floor(pesRootK / (6.0 * cl0)) * 0.211 + 0.17);   // zona de 6 matas (multiplo de 1/2, 1 y 2 matas: no se cortan en el medio)
         float kS = saturate(kSz);
         if (rg < 0.35 * kS) { cl = 0.5 * cl0; hOff = -0.12 * kS; }
         else if (rg > 1.0 - 0.30 * kS) { cl = 2.0 * cl0; hOff = 0.15 * kS; }
       }
-      float2 cid = floor(pesRoot / cl);
+      float2 cid = floor(pesRootK / cl);
       float2 jit = float2(PESGh21(cid * 0.173 + 0.29), PESGh21(cid * 0.311 + 0.71)) - 0.5;
       float2 ctr = (cid + 0.5 + jit * 0.5) * cl;
       float hc = PESGh21(cid * 0.137 + 0.43);                       // alto de la mata
-      float2 dv = pesRoot - ctr; float dl = length(dv);
+      float2 dv = pesRootK - ctr; float dl = length(dv);
       float edge = saturate(dl / (0.7 * cl));                       // 0 centro de la mata, 1 borde
       float spr = 0.56 * (1.0 + 0.6 * saturate(kSz * 0.5));       // (08/11 y) z407: mas diferencia de alto entre matas
       float hf = lerp(1.0, (1.0 - 0.5 * spr + hOff + spr * hc) * (1.0 - 0.30 * edge), saturate(kM));
