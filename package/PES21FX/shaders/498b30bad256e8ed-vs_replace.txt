@@ -30,6 +30,12 @@ StructuredBuffer<float4> PESGrassInst : register(t121);   // PES21: parcelas del
 // y enlazado aca en b6: con eso las hojas calculan el MISMO color que el suelo de la vista de juego (x148)
 cbuffer PESTurfMatC : register(b6) { float4 pTM[8]; }
 #include "pes_grass.hlsli"   // PES21 pasto v3 (19/10): tipo, alto, patrones de corte, desgaste, zonas
+// (11/11 o) gradiente analitico del ruido de valor de PESGnoise (las mismas 4 esquinas): para correr los macollos de las hojas 3D
+float2 PESGnGrad(float2 p) {
+  float2 i = floor(p), f = frac(p), u = f * f * (3.0 - 2.0 * f), du = 6.0 * f * (1.0 - f);
+  float a = PESGh21(i), b = PESGh21(i + float2(1, 0)), c = PESGh21(i + float2(0, 1)), d = PESGh21(i + 1.0);
+  return du * float2(b - a + (a - b - c + d) * u.y, c - a + (a - b - c + d) * u.x);
+}
 // (11/11 f) azar entero (PCG) y Halton base 3 (raiz de cada tarjeta en la malla del mod, como BuildDense de la DLL): ver pesHv y pesCardRoot
 uint PESBh(uint v) { uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
 float PESHal3(uint n) { float f = 1.0, r = 0.0; [loop] for (int k = 0; k < 12; k++) { if (n == 0u) break; f *= (1.0 / 3.0); r += f * (float)(n % 3u); n /= 3u; } return r; }
@@ -158,15 +164,44 @@ void main(
       float2 r2 = frac(0.5 + ((float)tl + offR2) * float2(0.7548776662, 0.5698402910));
       float cellM = max(cb5[13].x, 0.25);
       float2 rootT = (r2 - 0.5) * cellM + (float2(PESBu(sT, 1u), PESBu(sT, 2u)) - 0.5) * 0.004;
+      // (11/11 o, Agustin: "dale naturalidad a la distancia entre pastos") con la secuencia R2 los macollos quedaban casi equidistantes (como
+      // plantados en fila). Ahora se corren hacia los maximos de un ruido suave de ~6 cm (dos octavas, la segunda girada: sin grilla) medido en
+      // la CANCHA, no en la celda (sigue de una celda a la otra): grupos mas tupidos que se tocan y claros chicos entre ellos (el relleno del
+      // atlas sigue debajo). Cada macollo ademas mas cerrado o mas abierto. z403 variacion = cuanto (0 = como antes)
+      float csR = rot == 0 ? 1.0 : (rot == 2 ? -1.0 : 0.0), snR = rot == 1 ? 1.0 : (rot == 3 ? -1.0 : 0.0);
+      float kVsC = clamp(IniParams.Load(int2(403, 0)).z, 0.0, 2.0);
+      if (kVsC > 0.001) {
+        float2 qW = (ins.xy + float2(csR * rootT.x + snR * rootT.y, -snR * rootT.x + csR * rootT.y)) * 16.0 + 3.7;
+        float2 q2 = float2(0.8 * qW.x - 0.6 * qW.y, 0.6 * qW.x + 0.8 * qW.y) * 1.7 + 5.1;
+        float2 g1 = PESGnGrad(qW), g2 = PESGnGrad(q2);
+        float2 gq = g1 + 0.85 * float2(0.8 * g2.x + 0.6 * g2.y, -0.6 * g2.x + 0.8 * g2.y);   // gradiente por unidad de qW (1 = 6.25 cm)
+        float2 dW = gq * (0.0060 * kVsC);
+        float lD = length(dW), mD = 0.011 * kVsC;
+        dW *= lD > mD ? mD / lD : 1.0;
+        rootT += float2(csR * dW.x - snR * dW.y, snR * dW.x + csR * dW.y);   // de la cancha a la celda (giro inverso)
+      }
       float yaw = PESBu(sT, 3u) * 6.2832 + (float)tk * 2.0944 + (PESBu(sB, 1u) - 0.5) * 0.9;
       float2 W0 = float2(cos(yaw), sin(yaw)), F0 = float2(-W0.y, W0.x);
-      float2 root = rootT + F0 * (0.0015 + 0.0025 * PESBu(sB, 2u));   // las hojas del macollo salen un poco corridas hacia su cara
+      float opT = lerp(1.0, lerp(0.45, 2.1, PESBu(sT, 6u)), saturate(kVsC));   // macollo cerrado / abierto
+      float2 root = rootT + F0 * (0.0015 + 0.0025 * PESBu(sB, 2u)) * opT;   // las hojas del macollo salen un poco corridas hacia su cara
       pesBRoot = root;
+      // (11/11 o, Agustin: "que no todas tengan las puntas iguales", "en las partes pintadas de la cancha es mas normal que este cortada y que la
+      // punta si sea mas recta") tipo de punta por hoja con el MISMO azar que le llega al PS (frac(v8.z * 32) = frac(pesHv * 37.1 + 0.13) x 0.999,
+      // pesHv de las hojas del mod, ver abajo): cortada recta, cortada en diagonal, desgarrada (cuchilla gastada: el centro queda en pico o en
+      // muesca), en lanza o roma. Sobre la cal (cobertura de la linea en la raiz de la hoja) casi todas cortadas y rectas
+      float hvT = PESGh21(float2((float)pesCard * 0.0291 + pesExtOrg.x * 0.59, pesExtOrg.y * 0.43 + (float)pesRot * 0.17) + 0.23);
+      float rTp = frac(hvT * 37.1 + 0.13) * 0.999;
+      float uTc = frac(rTp * 3.17 + 0.41), uTs = frac(rTp * 6.37 + 0.29);   // MISMA cuenta en 18afff (tipo de punta)
+      float kLn = 0.0;
+      if (IniParams.Load(int2(295, 0)).x > 0.5) {
+        float2 uvL = (ins.xy + float2(csR * root.x + snR * root.y, -snR * root.x + csR * root.y)) * cb4[1].xy + cb4[1].zw;
+        kLn = smoothstep(0.25, 0.65, max(g_tex_mask.SampleLevel(g_samplerLinear_Clamp_s, uvL, 0).x, g_tex_diffuse.SampleLevel(g_samplerLinear_Clamp_s, uvL, 0).w));
+      }
       // (11/11 j, Agustin: "necesitan un corte mas parejo", "las hojas mas altas se ve como pasto disparejo") w108 corte parejo (0 = como
       // antes): mas hojas cortadas por la cortadora (68 -> 94 %), todas casi a la misma altura (+-8 % -> +-1.5 %), las nuevas en punta mas
       // bajas que el corte (no asoman por encima), menos hojas dobladas por el peso y menos inclinadas
       float kEvB = saturate(IniParams.Load(int2(108, 0)).w);
-      bool cutB = PESBu(sB, 3u) < lerp(0.68, 0.94, kEvB);
+      bool cutB = uTc < lerp(lerp(0.68, 0.94, kEvB), 0.97, kLn);   // (11/11 o) sobre la cal casi todas cortadas
       float h = PES_NAT_CUT * (cutB ? 0.058 * (1.0 - (0.08 - 0.065 * kEvB) * PESBu(sB, 4u)) : 0.058 * lerp(0.42 + 0.50 * PESBu(sB, 4u), 0.30 + 0.40 * PESBu(sB, 4u), kEvB));   // (11/11 k) x w296 / 60 mm (0.058 = la hoja de antes, ~6 cm)
       float wB = 0.0029 * (0.65 + 0.70 * PESBu(sB, 5u)) * pow(min(PES_NAT_CUT, 1.0), -0.4);   // (11/11 l) pasto bajo: hojas algo mas anchas (28 mm: x1.36) para que no se vea pelado
       if (PESBu(sB, 6u) < saturate(IniParams.Load(int2(412, 0)).x)) wB *= 1.55;   // x412: parte de hojas anchas
@@ -205,7 +240,18 @@ void main(
           cutS = (PESBu(sB, 18u) < 0.5 ? -1.0 : 1.0) * (0.8 + 1.0 * PESBu(sB, 19u)); tilt += 0.25 * PESBu(sB, 20u);
         }
       }
-      float wr = row == 0u ? 1.0 : (row == 1u ? 0.96 : (row == 2u ? 0.84 : (cutB ? 0.78 : 0.0)));
+      // (11/11 o) forma de la punta: recta (34 %, sobre la cal 86 %), diagonal mas marcada (42 %, cal 11 %), desgarrada (24 %, cal 3 %);
+      // las que no corto la cortadora: en lanza (60 %) o romas (40 %). Las desparejas de abajo quedan como estaban
+      float tipMid = 0.0, tipW2 = 0.84, tipW3 = cutB ? 0.78 : 0.0;
+      if (pesBIrr < 0.5) {
+        if (cutB) {
+          float pSt = lerp(0.34, 0.86, kLn), pDg = lerp(0.42, 0.11, kLn);
+          if (uTs < pSt) cutS *= 0.12;
+          else if (uTs < pSt + pDg) cutS = (cutS < 0.0 ? -1.0 : 1.0) * (0.35 + 1.2 * abs(cutS));
+          else { cutS *= 0.5; tipMid = (PESBu(sB, 27u) < 0.5 ? -1.0 : 1.0) * (0.35 + 0.45 * PESBu(sB, 28u)); tipW3 = 0.88; }
+        } else if (uTs < 0.40) { tipW2 = 0.80; tipW3 = 0.30; }
+      }
+      float wr = row == 0u ? 1.0 : (row == 1u ? 0.96 : (row == 2u ? tipW2 : tipW3));
       wr *= 1.0 + (PESBu(sB, 21u + row) - 0.5) * wJ;   // bordes irregulares (solo las desparejas)
       float wh = 0.5 * wB * wr;
       float sd = (float)col - 1.0;   // -1 borde, 0 nervio, +1 borde
@@ -214,7 +260,7 @@ void main(
       float yy = h * t * (1.0 - 0.22 * bnd * t);   // la curva acorta un poco el alto (largo casi constante)
       float tK = max(t - 0.5, 0.0);
       yy -= kink * h * 1.6 * tK * tK * (1.0 + 2.0 * tK);   // (11/11 m) doblada: la punta cae
-      if (row == 3u && cutB) yy += sd * cutS * wB * 0.5;
+      if (row == 3u && cutB) yy += sd * cutS * wB * 0.5 + (1.0 - abs(sd)) * tipMid * wB * 0.7;   // (11/11 o) desgarrada: pico o muesca en el centro
       float2 xz = root + F0 * (bnd * h * t * t + tilt * h * t) + Wd * (sd * wh) + Fd * (abs(sd) * 0.30 * wh);   // bordes adelante del nervio: V
       pesVin = float3(xz.x, max(yy, 0.0), xz.y);
       pesUV1 = float2(0.5 + 0.5 * sd, 0.995 - 0.985 * t);

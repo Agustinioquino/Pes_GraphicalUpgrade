@@ -107,6 +107,9 @@ void main(
   // menos pantalla: se pierde el degrade base oscura -> punta clara y queda una alfombra pareja. 0 desde 60 mm, 1 a 28 mm o menos
   float natMM = IniParams.Load(int2(296, 0)).w;
   float kShortP = pesNat ? saturate((60.0 - (natMM > 1.0 ? clamp(natMM, 10.0, 90.0) : 28.0)) / 32.0) : 0.0;
+  // (11/11 o, Agustin: "con el pasto mas corto se perdieron un poco las puntas; que se noten no importa la altura") los tramos de la punta
+  // que eran una fraccion de la hoja (borde del corte, punta seca) pasan a medirse en milimetros: con 28 mm ocupan 2.1 veces mas hoja
+  float pesTipSc = pesNat ? clamp(60.0 / (natMM > 1.0 ? clamp(natMM, 10.0, 90.0) : 28.0), 1.0, 2.2) : 1.0;
   float pesTxGb = 0.0;   // (08/11 aa) w413: transmision con el sol calculada en las puntas, va tambien a la translucidez del G-buffer
   float sC = 0.9 + 0.3 * kC;   // pendiente de la claridad del atlas (R): 0.9 = como antes
   // (27/10 j) puntas al sol y variacion por hoja solo donde la hoja ya mide en pantalla: rampa por encima del limite del color propio (z291)
@@ -200,7 +203,7 @@ void main(
       float fib = PESGnoise(float2(u * 23.0 + pesHvR * 7.0, relH * 140.0)) - 0.5;
       float blo = PESGnoise(float2(relH * 5.0 + pesHvR * 13.0, pesHvR * 3.0)) - 0.5;
       float L = 0.5 + 0.07 * mid - 0.03 * vein * vK * (1.0 - mid) - 0.05 * smoothstep(0.36, 0.5, au) + 0.035 * fib * vK + 0.05 * blo;
-      L += 0.16 * smoothstep(0.955, 0.995, relH);   // borde del corte de la cortadora (o la punta) mas claro
+      L += 0.16 * smoothstep(1.0 - 0.045 * pesTipSc, 0.995, relH);   // borde del corte de la cortadora (o la punta) mas claro
       r0 = float4(L, 0.84 + 0.16 * smoothstep(0.0, 0.6, relH), 0.0, 1.0);
       pesN = float4(0.5 + (u - 0.5) * 0.6, 0.5, relH, lerp(0.28, 0.78, mid) + 0.12 * vein * (1.0 - mid) * vK);
     } else if (pesNat) {
@@ -342,8 +345,26 @@ void main(
     c = PESDryTint(c, tipK + v8.x * saturate(Q7.y) * 0.85);
     // (11/11 h, referencia: "el color en las puntas") natural: la punta CORTADA por la cortadora se seca y queda palida (verde paja claro),
     // el ultimo ~14 % de la hoja; al sol sale casi blanco crema como en la foto. Las pintadas no
-    if (pesNat) { float cutT = smoothstep(0.86, 1.0, relH) * pesCfN * (1.0 - pesPaintF);
-      c = lerp(c, dot(c, float3(0.2126, 0.7152, 0.0722)) * float3(1.12, 1.18, 0.80) * 1.30, 0.50 * cutT); }
+    // (11/11 o, Agustin: "que no todas tengan las puntas iguales") cada hoja con su punta (mismo azar que el VS 498b30, que les da la forma
+    // a las hojas 3D): corte recto (linea seca fina y clara), corte en diagonal (algo mas larga), desgarrada por la cuchilla (mas larga, borde
+    // deshilachado y mas paja / marron), y las que la cortadora no alcanzo: en lanza o romas, sin seco y con la punta tierna mas clara.
+    // Largo del tramo en milimetros (no en fraccion de la hoja) y fuerza distinta en cada hoja. Las pintadas no
+    if (pesNat) {
+      float uTc = frac(pesHvR * 3.17 + 0.41), uTs = frac(pesHvR * 6.37 + 0.29), uTa = frac(pesHvR * 11.7 + 0.63);
+      bool cutP = uTc < lerp(0.68, 0.94, saturate(IniParams.Load(int2(108, 0)).w));
+      float kTp = pesCfN * (1.0 - pesPaintF) * (0.75 + 0.50 * uTa);
+      if (cutP) {
+        float lenT = uTs < 0.34 ? 0.10 : (uTs < 0.76 ? 0.15 : 0.24);
+        bool torn = uTs >= 0.76;
+        float rT = relH + (torn ? (PESGnoise(float2(saturate(v1.x) * 38.0 + pesHvR * 9.0, pesHvR * 57.0)) - 0.5) * 0.10 * pesTipSc : 0.0);
+        float cutT = smoothstep(1.0 - lenT * pesTipSc, 1.0 - 0.25 * lenT * pesTipSc, rT) * kTp;
+        float3 dryT = torn ? float3(1.22, 1.12, 0.70) * 1.16 : float3(1.12, 1.18, 0.80) * 1.30;
+        c = lerp(c, dot(c, float3(0.2126, 0.7152, 0.0722)) * dryT, (torn ? 0.62 : 0.55) * cutT);
+      } else {
+        float newT = smoothstep(1.0 - 0.30 * pesTipSc, 1.0, relH) * kTp;
+        c *= lerp(float3(1.0, 1.0, 1.0), float3(1.10, 1.17, 0.90), 0.8 * newT);
+      }
+    }
     { // misma correccion de color que la base de la cancha ("Pasto v2", x29): antes las hojas quedaban mas amarillas/grises que el suelo
       float4 GV = IniParams.Load(int2(29,0));
       if (GV.w > 0.5) {
