@@ -559,6 +559,19 @@ static void BallDrawPresent() {
             for (int i = 0, n = 0; i < kBallSlots && n < 3; i++) { if (!s_bdIdx[rd][i]) continue; n++; const float* r = q + i * 32;
                 Log("pelota: candidato %u indices b5 f0 (%.2f %.2f %.2f %.2f) f3 (%.2f %.2f %.2f %.2f) f4 (%.2f %.2f %.2f %.2f) f7 (%.2f %.2f %.2f %.2f)", s_bdIdx[rd][i],
                     r[0], r[1], r[2], r[3], r[12], r[13], r[14], r[15], r[16], r[17], r[18], r[19], r[28], r[29], r[30], r[31]); } } }
+    {   // (11/11 n, Agustin: "los pastos alrededor de los botines no se deforman o hunden") DIAGNOSTICO para la proxima tanda: si los dibujos de
+        // botines traen su propia posicion en b5 (cerca del suelo, separados de la pelota) se pueden pasar al pasto como la pelota. Cada ~30 s
+        // (6 veces) se anotan los dibujos a menos de 2.5 m de la pelota con sus 4 lecturas de traslacion y la fila 0
+        static int s_bootLogs = 0; static UINT s_bootF = 0;
+        if (s_bootLogs < 6 && (++s_bootF % 1800u) == 900u) { s_bootLogs++; int n = 0;
+            for (int i = 0; i < kBallSlots && n < 8; i++) { if (!s_bdIdx[rd][i]) continue; const float* r = q + i * 32;
+                const float cand[4][3] = { { r[12], r[13], r[14] }, { r[28], r[29], r[30] }, { r[3], r[7], r[11] }, { r[19], r[23], r[27] } };
+                int kc = -1; for (int k = 0; k < 4 && kc < 0; k++) { const float dx = cand[k][0] - s_ball[0], dz = cand[k][2] - s_ball[2]; if (dx * dx + dz * dz < 2.5f * 2.5f && cand[k][1] > -0.3f && cand[k][1] < 1.2f) kc = k; }
+                if (kc < 0) continue; n++;
+                Log("botines (diag): dibujo %u lectura %d (%.3f %.3f %.3f) pelota (%.3f %.3f %.3f) f0 (%.2f %.2f %.2f %.2f) f1 (%.2f %.2f %.2f %.2f) f2 (%.2f %.2f %.2f %.2f)", s_bdIdx[rd][i], kc,
+                    cand[kc][0], cand[kc][1], cand[kc][2], s_ball[0], s_ball[1], s_ball[2], r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11]); }
+            Log("botines (diag): %d de %d dibujos de botines / pelota a menos de 2.5 m de la pelota", n, nCand); }
+    }
     g_dev.imm->Unmap(s_bdStage[rd], 0); memset(s_bdIdx[rd], 0, sizeof s_bdIdx[rd]);
     if (found) {   // (2/11 paso 10) voto por el indice mas frecuente de los ultimos 10 cuadros con candidato (antes 3 seguidos, que un botin intercalado reiniciaba)
         UINT* hist = s_ballHist; s_ballHist[s_ballHp] = found; s_ballHp = (s_ballHp + 1) % 10;

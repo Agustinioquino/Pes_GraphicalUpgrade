@@ -34,9 +34,13 @@ static const int kSlotCap = 8192, kBins = 6, kSlots = 18;
 // (11/11) ranura 18 = HOJAS 3D de primerisimo plano (celdas de 0.5 m pegadas a la camara, malla de hojas sueltas, forma armada en el VS)
 static const int kBladeSlot = kSlots;
 static const int kMaxInst = kSlotCap * (kSlots + 1);
-static const UINT kBladeMax = 8192, kBladeVpb = 12, kBladeIpb = 36;   // hojas por celda como maximo, vertices / indices por hoja
+static const UINT kBladeMax = 8192, kBladeVpb = 12, kBladeIpb = 36;   // hojas de la malla (un trozo usa las primeras 512), vertices / indices por hoja
+static const UINT kBladeChunk = 512, kBladeCellMax = 16384;   // (11/11 n) hojas por trozo (una instancia) y tope por celda (32 trozos)
 static ID3D11Buffer* s_bladePos = nullptr; static ID3D11Buffer* s_bladeUv = nullptr; static ID3D11Buffer* s_bladeIb = nullptr; static bool s_bladeTried = false;
 static std::atomic<int> s_bladeCells{0}, s_bladePer{0}; static std::atomic<bool> s_bladeLast{false}; static float s_bladeThrLast = 0.0f;
+// (11/11 n) hojas 3D por trozos: total pedido, trozos dibujados y la escala del tope por celda (la DLL la baja para que el total pedido
+// quepa en 200000 x z408; se lee de cuadros anteriores con la escala que uso ese cuadro)
+static std::atomic<int> s_bladeSum{0}, s_bladeChunks{0}; static std::atomic<float> s_bladeScale{1.0f};
 struct GInst { float x, z, s, r; };   // instancia: posicion, escala, giro (multiplos de 90 grados)
 
 static std::atomic<int> s_frame{0};   // numero de Present (lo sube GrassFrameBoundary)
@@ -422,8 +426,8 @@ static bool EnsureGPU() {
     };
     raw(96, 0, &s_count, &s_countUAV);   // (11/11) 80 -> 96: [20] celdas con hojas 3D
     raw((kSlots + 1) * 20, D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS, &s_args, &s_argsUAV);   // (11/11) + ranura 18 (hojas 3D)
-    raw(112, 0, &s_claim, &s_claimUAV);   // (11/11) 96 -> 112: [24] celdas y [25] hojas por celda de las hojas 3D
-    for (auto& st : s_claimStage) if (!st) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 112; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; ID3D11Buffer* nb = nullptr; if (SUCCEEDED(g_dev.dev->CreateBuffer(&d, nullptr, &nb)) && nb) st = nb; }
+    raw(128, 0, &s_claim, &s_claimUAV);   // (11/11) 96 -> 112: [24] celdas y [25] hojas por celda de las hojas 3D; (11/11 n) 128: [26] total, [27] trozos, [28] tope usado
+    for (auto& st : s_claimStage) if (!st) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 128; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; ID3D11Buffer* nb = nullptr; if (SUCCEEDED(g_dev.dev->CreateBuffer(&d, nullptr, &nb)) && nb) st = nb; }
     const bool ok = s_cullCb && s_sceneCb && s_cpVs0 && s_cpVs4 && s_cpPs0 && s_instG && s_instGSRV && s_instGUAV && s_count && s_countUAV && s_args && s_argsUAV && s_claim && s_claimUAV;
     const bool pairs = ok && UavOf(s_countUAV, s_count) && UavOf(s_argsUAV, s_args) && UavOf(s_claimUAV, s_claim) && UavOf(s_instGUAV, s_instG) && SrvOf(s_instGSRV, s_instG);
     static bool logged = false;
@@ -710,6 +714,17 @@ void GrassFrameBoundary(UINT flags) {
                     s_lastCount = g_grassDbg.ring[0] + g_grassDbg.ring[1] + g_grassDbg.ring[2]; g_grassDbg.patches = s_lastCount;
                     memcpy(&s_camM11, &q[19], 4); memcpy(&s_camEye[0], &q[20], 4); memcpy(&s_camEye[1], &q[21], 4); memcpy(&s_camEye[2], &q[22], 4);
                     s_bladeCells.store((int)q[24]); s_bladePer.store((int)q[25]);   // (11/11) hojas 3D: celdas anotadas y hojas por celda
+                    s_bladeSum.store((int)q[26]); s_bladeChunks.store((int)q[27]);
+                    {   // (11/11 n) tope por celda: el total pedido en ese cuadro con su tope (q[28]) -> el tope que da 200000 x z408. Baja enseguida,
+                        // sube de a poco (sin vaivenes por la demora de la lectura)
+                        float used = 0.0f; memcpy(&used, &q[28], 4);
+                        const float amt = g_cfg.live[408][2] > 0.05f ? std::clamp(g_cfg.live[408][2], 0.1f, 3.0f) : 1.0f;
+                        const float base = (std::min)(4096.0f * amt, (float)kBladeCellMax), tot = 200000.0f * amt;
+                        if (q[26] > 0 && used > 0.5f && base > 0.0f) {
+                            const float tgt = std::clamp((used / base) * tot / (float)q[26], 0.02f, 1.0f), cur = s_bladeScale.load();
+                            s_bladeScale.store(tgt < cur ? tgt : cur + (tgt - cur) * 0.15f);
+                        }
+                    }
                     g_grassDbg.lost = (int)q[23];   // (2/11 paso 10) celdas que no entraron en su ranura (CS: Count[19] -> Claim[23]; 0 con un CS viejo)
                     s_okRun++; s_zeroRun = 0;
                 } else { s_zeroRun++; s_okRun = 0; if (on) s_framesNoGrass++; }
@@ -863,7 +878,7 @@ void GrassPresent() {
             s_emitSt.exchange(0), s_emitRt4.exchange(0), s_emitSnap.exchange(0), s_emitBare.exchange(0), s_skipNoBase.exchange(0));
         { const int cp = s_r4Copies.exchange(0), bd = s_r4Binds.exchange(0);   // (11/11 j)
           Log("pasto luz del estadio en las hojas (y290 = %.0f): copias de RT4 %d, dibujos con la copia %d%s", g_cfg.live[290][1], cp, bd, s_r4Failed ? " | NO SE PUDO CREAR LA COPIA" : ""); }
-        if (s_bladeLast.load()) Log("pasto hojas 3D (z410): celdas %d, hojas por celda %d (~%d hojas), umbral %.0f px/m", s_bladeCells.load(), s_bladePer.load(), s_bladeCells.load() * s_bladePer.load(), s_bladeThrLast);
+        if (s_bladeLast.load()) Log("pasto hojas 3D (z410): celdas %d, hojas por celda %d en promedio (%d hojas, %d trozos de %u), tope por celda x%.2f, umbral %.0f px/m", s_bladeCells.load(), s_bladePer.load(), s_bladeSum.load(), s_bladeChunks.load(), kBladeChunk, s_bladeScale.load(), s_bladeThrLast);
         g_grassDbg.calls = 0; g_grassDbg.emits = 0; g_grassDbg.sparseLast = g_grassDbg.sparse; g_grassDbg.sparse = 0; }
 }
 
@@ -1033,9 +1048,11 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
     // (11/11) hojas 3D de primerisimo plano: solo pasto natural (x407 0) con el atlas nuevo (z412 0) y el pasto v3 (x104)
     const bool bladeNat = g_cfg.live[104][0] > 0.5f && g_cfg.live[407][0] < 0.5f && g_cfg.live[412][2] < 0.5f;
     const bool bladeOn = bladeNat && g_cfg.live[410][2] > 0.5f && s_bladeIb && s_bladePos && s_bladeUv;
-    const float bladeThr = g_cfg.live[410][3] >= 200.0f ? std::clamp(g_cfg.live[410][3], 200.0f, 6000.0f) : 1200.0f;
+    const float bladeThr = g_cfg.live[410][3] >= 100.0f ? std::clamp(g_cfg.live[410][3], 100.0f, 6000.0f) : 1200.0f;   // (11/11 n) desde 100 px/m (antes 200)
     const float bladeAmt = g_cfg.live[408][2] > 0.05f ? std::clamp(g_cfg.live[408][2], 0.1f, 3.0f) : 1.0f;   // (11/11 m) tope 2 -> 3 (Agustin: "de cerca una mayor cantidad de hojas 3d")
     s_bladeLast.store(bladeOn); s_bladeThrLast = bladeThr;
+    if (!bladeOn) s_bladeScale.store(1.0f);
+    const float bladePerCell = (std::min)(4096.0f * bladeAmt, (float)kBladeCellMax) * s_bladeScale.load();   // (11/11 n) la celda mas cercana
     const float halfL = 52.5f + 3.0f, halfW = 34.0f + 3.0f, halfH = 0.5f * (float)(g_bbH ? g_bbH : 1080);
     ID3D11DeviceContext1* c1 = nullptr; c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1);
     // estado del contexto que se toca (se devuelve al final)
@@ -1104,7 +1121,7 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         // (11/11 m) gPad[4].y: relleno del atlas bajo las hojas 3D (y403); gPad[5] (hojas 3D) ya en los niveles 0..2: el nivel 0 cuenta sus
         // tarjetas con el alto del relleno donde hay hojas 3D (antes gPad[5] se llenaba despues y en los niveles 0..2 valia 0)
         cull[37] = bladeOn ? NatFill() : 0.0f;
-        cull[40] = bladeOn ? bladeThr : 0.0f; cull[41] = (std::min)(4096.0f * bladeAmt, (float)kBladeMax); cull[42] = 200000.0f * bladeAmt; cull[43] = (float)kBladeIpb;
+        cull[40] = bladeOn ? bladeThr : 0.0f; cull[41] = bladePerCell; cull[42] = 200000.0f * bladeAmt; cull[43] = (float)kBladeIpb;
         // (26/10 d) reclamo del cuadro: la primera emision que la GPU ejecuta despues del Present se queda con el cuadro (Count[18] = 1);
         // las demas pasan por las celdas sin anotar nada y dibujan 0 instancias
         GpuTimer* tm = (p58[3] > 0.5f && TimersReady()) ? TimerClaim(s_frame.load()) : nullptr;   // (1/11) medidor de GPU (solo con el registro prendido)
@@ -1124,7 +1141,7 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         }
         // (11/11, Agustin: "solo de cerca siiiii", "para primerisimos primer plano nada mas") HOJAS 3D (z410, solo el natural): celdas de 0.5 m
         // que miden >= w410 px/m (1200 si 0); z408 cantidad (hojas por celda hasta 4096 x z408 y un tope total de 200000 x z408 x adaptativa, minimo 0.6)
-        /* (11/11 m) cull[40..43] se llenan arriba, antes de los niveles 0..2 */ cull[40] = bladeThr; cull[41] = (std::min)(4096.0f * bladeAmt, (float)kBladeMax); cull[42] = 200000.0f * bladeAmt;   /* (11/11 l) sin adaptativa */   // (11/11 g) 60000 -> 200000: en la captura 13.54 habia 219 hojas por celda de 0.5 m (se veia el suelo negro entre las hojas); la adaptativa no baja de 0.6 (solo primerisimos planos) cull[43] = (float)kBladeIpb;
+        /* (11/11 m) cull[40..43] se llenan arriba, antes de los niveles 0..2 */ cull[40] = bladeThr; cull[41] = bladePerCell; cull[42] = 200000.0f * bladeAmt;   /* (11/11 l) sin adaptativa */   // (11/11 g) 60000 -> 200000: en la captura 13.54 habia 219 hojas por celda de 0.5 m (se veia el suelo negro entre las hojas); la adaptativa no baja de 0.6 (solo primerisimos planos) cull[43] = (float)kBladeIpb;
         if (bladeOn) {
             UINT gw = (UINT)ceilf(2.0f * halfL / 0.5f), gh = (UINT)ceilf(2.0f * halfW / 0.5f);
             cull[0] = 5.0f; cull[1] = 0.5f; cull[7] = (float)gw; cull[8] = (float)gh;
@@ -1222,7 +1239,7 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
             if (sl == kBins - 1 && bladeOn) {   // (11/11) hojas 3D (ranura 18) despues del nivel 0, con sus mismos estados; en la prepasada tambien
                 ID3D11Buffer* bvb[4] = { s_bladePos, svVb[1], svVb[2], s_bladeUv }; UINT bst[4] = { 12, svSt[1], svSt[2], 4 }, bof[4] = { 0, svOf[1], svOf[2], 0 };
                 c->IASetVertexBuffers(0, 4, bvb, bst, bof); c->IASetIndexBuffer(s_bladeIb, DXGI_FORMAT_R32_UINT, 0); boundMesh = -2;
-                cbq[32] = (float)kBladeVpb; cbq[37] = (float)(kBladeSlot * kSlotCap); cbq[52] = 0.5f; cbq[53] = 1.0f;   // cb5[13].y = 1: el VS arma la hoja
+                cbq[32] = (float)kBladeVpb; cbq[37] = (float)(kBladeSlot * kSlotCap); cbq[52] = 0.5f; cbq[53] = 1.0f; cbq[54] = (float)kBladeChunk;   // cb5[13].y = 1: el VS arma la hoja; .z hojas por trozo (11/11 n)
                 c->UpdateSubresource(s_cb, 0, nullptr, cbq, 0, 0);
                 c->DrawIndexedInstancedIndirect(s_args, (UINT)kBladeSlot * 20);
             }

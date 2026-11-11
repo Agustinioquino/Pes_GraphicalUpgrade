@@ -102,6 +102,11 @@ void main(
   float natGl = P409n.z > 0.001 ? clamp(P409n.z, 0.0, 2.0) : 1.0;
   float natTr = P409n.w > 0.001 ? clamp(P409n.w, 0.0, 2.0) : 1.0;
   float kT = pesV3 ? clamp(P295.z, 0.0, 2.0) : 0.0;
+  // (11/11 n, Agustin: "revisa si al cambiar el alto de la hoja se pierden ciertos efectos", captura de las 15.20 con ~9.6 cm) natural bajo
+  // (w296 < 60 mm): la base oscura, el tramo encendido de la punta y su color son FRACCIONES de la hoja, y con 28 mm ocupan 3.4 veces
+  // menos pantalla: se pierde el degrade base oscura -> punta clara y queda una alfombra pareja. 0 desde 60 mm, 1 a 28 mm o menos
+  float natMM = IniParams.Load(int2(296, 0)).w;
+  float kShortP = pesNat ? saturate((60.0 - (natMM > 1.0 ? clamp(natMM, 10.0, 90.0) : 28.0)) / 32.0) : 0.0;
   float pesTxGb = 0.0;   // (08/11 aa) w413: transmision con el sol calculada en las puntas, va tambien a la translucidez del G-buffer
   float sC = 0.9 + 0.3 * kC;   // pendiente de la claridad del atlas (R): 0.9 = como antes
   // (27/10 j) puntas al sol y variacion por hoja solo donde la hoja ya mide en pantalla: rampa por encima del limite del color propio (z291)
@@ -135,7 +140,7 @@ void main(
   float kRoot = P325.z > 0.001 ? clamp(P325.z, 0.0, 2.0) : 1.0;
   float sparkK = smoothstep(2.0, 5.0, pxA * 0.012);
   // la cal pintada cubre la parte alta de la hoja: hacia la raiz queda verde (solo de cerca, donde la hoja mide)
-  if (pesV3 && pesPaintF > 0.001) pesPaintF *= lerp(1.0, lerp(pesNat ? 0.70 : 0.45, 1.0, smoothstep(0.0, 0.5, relH)), saturate(kRoot) * nearF);   // (11/11 i) natural: la cal baja mas por la hoja
+  if (pesV3 && pesPaintF > 0.001) pesPaintF *= lerp(1.0, lerp(pesNat ? lerp(0.70, 0.90, kShortP) : 0.45, 1.0, smoothstep(0.0, 0.5, relH)), saturate(kRoot) * nearF);   // (11/11 i) natural: la cal baja mas por la hoja
   float2 uvA = v1.xy;
   bool pesMir = false;   // (11/11 d) tarjeta espejada (natural)
   if (pesV3) {
@@ -277,7 +282,7 @@ void main(
     // mip y de 1.5 a 6 px de ancho quedaba en 14-58%): "sombra entre las hojas" que no depende del filtro de sombras ni del SSAO
     float sunUpC = saturate(PESSunWorld().y);
     // (26/10 e) 0.4 -> 0.25: la raiz quedaba negra cerca. (27/10 h) y295: + 0.10 por punto de contraste (0.35 natural): bases mas oscuras, como en la foto
-    float aoC = lerp(1.0 - saturate((0.25 + 0.10 * kC + 0.07 * kS * nearF) * kRoot) * saturate(Q6.y) * lerp(0.85, 1.15 - 0.45 * sunUpC, pesDayK), 1.0, smoothstep(0.0, 0.85, relH));   // (2/11) z325   // (27/10 p) z334: raiz mas oscura de cerca. (04/11) 0.15 -> 0.07: de cerca la cancha quedaba ~8 % mas oscura que a media distancia
+    float aoC = lerp(1.0 - saturate((0.25 + 0.10 * kC + 0.07 * kS * nearF) * (1.0 + 0.35 * kShortP) * kRoot) * saturate(Q6.y) * lerp(0.85, 1.15 - 0.45 * sunUpC, pesDayK), 1.0, smoothstep(0.0, 0.85, relH));   // (2/11) z325   // (27/10 p) z334: raiz mas oscura de cerca. (04/11) 0.15 -> 0.07: de cerca la cancha quedaba ~8 % mas oscura que a media distancia
     // (08/11 aa) z413 SOMBRA ENTRE HOJAS por tipo. Natural: la sombra de la raiz depende del lado del sol (la cara de la hoja que mira al sol
     // se aclara desde mas abajo, la de atras queda en sombra hasta mas arriba) y de la oclusion propia del atlas (G) multiplicada por la
     // densidad de la mata (donde hay mas hojas juntas, menos luz llega abajo). Artificial: fibras parejas sobre relleno de caucho oscuro
@@ -356,7 +361,7 @@ void main(
       // x409 color de las puntas: 0 = el de antes (casi neutro), 1 = dorado, 2 = muy calido; y409 largo del tramo encendido (1 = 65 % de la hoja)
       float4 P409 = IniParams.Load(int2(409,0));
       float tW = P409.x > 0.001 ? clamp(P409.x, 0.0, 2.0) : 1.0;
-      if (P409.y > 0.001) tz = smoothstep(saturate(1.0 - 0.65 * clamp(P409.y, 0.2, 1.5)), 1.0, relH) * kT * pesCfN * (1.0 - pesPaintF) * (pesArt ? 0.3 : 1.0);
+      if (P409.y > 0.001) tz = smoothstep(saturate(1.0 - 0.65 * clamp(P409.y, 0.2, 1.5) * (1.0 + 0.15 * kShortP)), 1.0, relH) * kT * pesCfN * (1.0 - pesPaintF) * (pesArt ? 0.3 : 1.0);
       // (08/11 aa) w413 TRANSMISION CON EL SOL: "verse traspasado por la luz al ser fuerte". La punta se enciende segun la fuerza del sol
       // (dia despejado, sol alto; con lluvia / nublado casi nada) y segun si la hoja esta a contraluz respecto de la luz dominante: desde
       // atras la luz atraviesa la hoja (mas en la fina: A del atlas) y la punta sale amarillo verdosa; de frente apenas. Natural completo,
@@ -371,15 +376,17 @@ void main(
         float3 Ld = g_psSystem.m_dominantLightDir.xyz; float lv = length(Ld); Ld = lv > 1e-3 ? Ld / lv : Sd;
         float back = saturate(0.5 - 0.5 * dot(normalize(float3(pesN.x * 2.0 - 1.0, pesN.z, pesN.y * 2.0 - 1.0) + 1e-4), Ld));   // la normal de la hoja mira lejos de la luz = contraluz
         float thin = saturate(1.3 - 0.9 * pesN.w);
-        float tx = smoothstep(0.3, 1.0, relH) * sunK * (0.35 + 0.65 * back) * thin * kTx * pesCfN * (1.0 - pesPaintF) * (pesArt ? 0.35 : 1.0);
+        float tx = smoothstep(0.3, 1.0, relH) * sunK * (pesNat ? 0.28 + 0.82 * back : 0.35 + 0.65 * back) * thin * kTx * pesCfN * (1.0 - pesPaintF) * (pesArt ? 0.35 : 1.0);   // (11/11 n) natural: mas diferencia a contraluz
         // (11/11) natural: la luz que atraviesa multiplica el color de la hoja (sin sumar una base pareja): se ve la lamina encendida y las
         // venas / el nervio (mas gruesos en el atlas nuevo) mas oscuros, en vez de un verde amarillo plano
         // (11/11 g, Agustin: "la luz se ve rara", captura 13.54: lima saturado) natural 1.30 / 1.42 / 0.78 -> 1.18 / 1.28 / 0.88
-        if (pesNat) c = lerp(c, c * float3(1.18, 1.28, 0.88), saturate(tx * 0.8));
+        // (11/11 n, Agustin: "un traspaso de la luz a contraluz un poco mas notorio") 1.18 / 1.28 / 0.88 x 0.8 -> 1.26 / 1.36 / 0.86 x 0.95
+        if (pesNat) c = lerp(c, c * float3(1.26, 1.36, 0.86), saturate(tx * 0.95));
         else c = lerp(c, c * float3(1.22, 1.30, 0.80) + float3(0.04, 0.06, 0.0), saturate(tx * 0.8));
         pesTxGb = saturate(tx);
       }
       tz *= lerp(0.3, 1.0, saturate(IniParams.Load(int2(414,0)).w));   // (08/11 ab) puntas doradas fuertes solo con sol fuerte y despejado
+      tz = saturate(tz * (1.0 + 0.30 * kShortP));   // (11/11 n) natural bajo: punta algo mas encendida
       // (11/11 g) natural: puntas al sol menos doradas (sumadas a la transmision y a x414 salian lima / amarillas)
       c *= lerp(float3(1.0, 1.0, 1.0), pesNat ? lerp(float3(1.08, 1.09, 0.99), float3(1.20, 1.16, 0.93), tW) : lerp(float3(1.16, 1.15, 0.98), float3(1.34, 1.24, 0.86), tW), tz);
     }
@@ -488,7 +495,7 @@ void main(
   if (pesNat && !pesFar) pesTr = lerp(v1.w, saturate(v1.w * lerp(1.0, 1.55 - 1.1 * pesN.w, natTr)), pesCf);   // (11/11) w409: lamina fina translucida, nervio y venas opacos
   else if (pesV3 && !pesFar) pesTr = lerp(v1.w, saturate(v1.w * (1.35 - 0.8 * pesN.w)), pesCf);   // puntas finas mas translucidas (A = grosor); lejos sin variar
   // (27/10 h) z295: la punta deja pasar mas luz a contraluz (y57 lee esto del G-buffer); la pintura tapa
-  if (pesV3) pesTr = saturate(pesTr * (1.0 + 0.35 * smoothstep(0.45, 1.0, relH) * kT * pesCfN) * (1.0 - 0.85 * pesPaintF));
+  if (pesV3) pesTr = saturate(pesTr * (1.0 + (pesNat ? 0.55 : 0.35) * smoothstep(0.45, 1.0, relH) * kT * pesCfN) * (1.0 - 0.85 * pesPaintF));   // (11/11 n) natural: la punta deja pasar mas
   if (pesV3) pesTr = saturate(pesTr + 0.30 * pesTxGb);   // (08/11 aa) w413: la pasada del sol tambien la enciende mas a contraluz   // (27/10 i) pintura: casi opaca (salia lima a contraluz)
   // (27/10 n) tanda 11, x329: la punta deja pasar mas luz (translucidez al G-buffer, la lee la pasada del sol): hojas encendidas a contraluz
   if (pesV3 && v4.w > 0.0) { float4 P329t = IniParams.Load(int2(329,0)); pesTr = saturate(pesTr * (1.0 + 0.6 * clamp(P329t.x, 0.0, 2.0) * smoothstep(0.3, 1.0, relH) * pesCfN * (1.0 - pesPaintF))); }

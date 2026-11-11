@@ -19,10 +19,10 @@ cbuffer PESGrassCull : register(b0) {
                     // [1]: x margen del fundido en pHi | y, z, w indices por tarjeta de los niveles 0 / 1 / 2
                     // [2]: (nivel 0) x ancho de la hoja en camaras de juego (m) | y ancho con la camara al ras (m) | z, w rampa en px/m
                     // [4]: x 1 = editor | (11/11 m) y relleno del atlas bajo las hojas 3D (y403; la DLL lo manda solo con las hojas 3D prendidas)
-                    // [5]: (11/11) HOJAS 3D: x umbral (px/m; 0 = hojas 3D apagadas en los niveles 0..2) | y tope de hojas por celda | z tope total de hojas | w indices por hoja
+                    // [5]: (11/11) HOJAS 3D: x umbral (px/m; 0 = hojas 3D apagadas en los niveles 0..2) | y hojas de la celda mas cercana (la DLL lo ajusta al total) | z tope total de hojas | w indices por hoja
 }
 RWStructuredBuffer<float4> Inst : register(u0);
-RWByteAddressBuffer Count : register(u1);   // 18 contadores (uint), uno por ranura; [18] = 1 si esta emision se quedo con el cuadro; [20] celdas con hojas 3D
+RWByteAddressBuffer Count : register(u1);   // 18 contadores (uint), uno por ranura; [18] = 1 si esta emision se quedo con el cuadro; [20] trozos de hojas 3D (11/11 n), [21] celdas, [22] hojas pedidas
 RWByteAddressBuffer Args : register(u2);    // 18 x 5 uints: indices, instancias, primer indice, vertice base, primera instancia
 // (26/10 d) reclamo del cuadro: [0] emisiones ejecutadas desde el ultimo Present (la DLL lo pone en cero en el contexto inmediato en
 // cada Present), [1..18] instancias por ranura de la emision que dibujo, [19] _m11 de su camara, [20..22] ojo. Solo la PRIMERA emision
@@ -64,17 +64,20 @@ void main(uint3 id : SV_DispatchThreadID)
     } else if (s == 3 * nb) {
       // (11/11) ranura 18: hojas 3D de primerisimo plano. Cada celda lleva hasta 'per' hojas: el tope total se reparte entre las celdas
       // anotadas (el VS corta por celda segun su fundido, tope de la instancia)
+      // (11/11 n) cada instancia es un TROZO de 512 hojas de una celda (las celdas cercanas llevan mas trozos que las lejanas): el VS solo
+      // procesa las hojas que se dibujan. El tope total lo ajusta la DLL bajando gPad[5].y con lo que leyo de cuadros anteriores ([26]);
+      // aca queda un tope duro de 2x el total (corte de camara de lejos a muy cerca) para no colgar la placa
       uint cap = (uint)(gP1.y + 0.5);
-      uint n = active ? min(Count.Load(80), cap) : 0u;
-      uint perMax = (uint)(gPad[5].y + 0.5), tot = (uint)(gPad[5].z + 0.5);
-      uint per = n > 0u ? min(perMax, tot / n) : 0u;
+      uint tot = (uint)(gPad[5].z + 0.5);
+      uint n = active ? min(min(Count.Load(80), cap), (2u * tot + 511u) / 512u) : 0u;
       uint ipcB = (uint)(gPad[5].w + 0.5); if (ipcB == 0u) ipcB = 36u;
-      Args.Store(360, per * ipcB);
-      Args.Store(364, per > 0u ? n : 0u);
+      Args.Store(360, 512u * ipcB);
+      Args.Store(364, n);
       Args.Store(368, 0u);
       Args.Store(372, 0u);
       Args.Store(376, 0u);
-      if (active) { Claim.Store(96, n); Claim.Store(100, per); }
+      if (active) { uint cB = Count.Load(84), sB = Count.Load(88);
+        Claim.Store(96, cB); Claim.Store(100, cB > 0u ? sB / cB : 0u); Claim.Store(104, sB); Claim.Store(108, n); Claim.Store(112, asuint(gPad[5].y)); }
     }
     return;
   }
@@ -98,14 +101,23 @@ void main(uint3 id : SV_DispatchThreadID)
     if (kB < 0.01) return;
     float pxB = (abs(cb2[4].x) + abs(cb2[4].z)) * radB, pyB = (abs(cb2[5].y) + abs(cb2[5].z)) * radB;
     if (ccB.x < -wB - pxB || ccB.x > wB + pxB || ccB.y < -wB - pyB || ccB.y > wB + pyB) return;
+    // (11/11 n, Agustin: "dejarme subir la distancia" + "partes donde los manojos 3D no llegan a tapar") las celdas pegadas a la camara
+    // (>= 3x el umbral) llevan todas las hojas; hacia el umbral bajan hasta 35 %: al alejar las hojas 3D no se ralean las de adelante
     float NvB = kB * max(gPad[5].y, 1.0);
-    uint limB = (uint)ceil(NvB - 0.0001); if (limB < 1u) limB = 1u;
+    if (gPad[4].x < 0.5) NvB *= lerp(0.35, 1.0, smoothstep(thr, thr * 3.0, pB));
+    uint limB = (uint)ceil(NvB - 0.0001); limB = clamp(limB, 1u, 16384u);
     float frB = saturate(NvB - (float)(limB - 1u));
-    uint capB = (uint)(gP1.y + 0.5), idxB;
-    Count.InterlockedAdd(80, 1u, idxB);
-    if (idxB >= capB) return;
+    uint capB = (uint)(gP1.y + 0.5), idxB, dumB;
+    uint nCh = (limB + 511u) / 512u;
+    Count.InterlockedAdd(80, nCh, idxB);
+    Count.InterlockedAdd(84, 1u, dumB);
+    Count.InterlockedAdd(88, limB, dumB);
     uint rotB = ((id.x * 7u + id.y * 13u) ^ (id.x * id.y)) & 3u;
-    Inst[(3u * nb) * capB + idxB] = float4(xB, zB, 1.0 + frB * 0.5, (float)(limB * 4u + rotB));
+    // w = (trozo * 32768 + hojas de la celda) * 4 + giro (entero exacto en float hasta 2^24)
+    for (uint jB = 0u; jB < nCh; jB++) {
+      if (idxB + jB >= capB) break;
+      Inst[(3u * nb) * capB + idxB + jB] = float4(xB, zB, 1.0 + frB * 0.5, (float)((jB * 32768u + limB) * 4u + rotB));
+    }
     return;
   }
   float cell = gP0.y;

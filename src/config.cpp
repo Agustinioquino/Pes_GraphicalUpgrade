@@ -615,7 +615,7 @@ bool SaveConfigValues() {
         for (auto& g : g_cfg.groups) for (auto& sl : g.sliders) {
             if (!sl.ext.empty() || sl.idx != idx || sl.comp != comp || !sl.optVals.empty()) continue;
             float& v = g_cfg.live[idx][comp];
-            if (v < sl.lo || v > sl.hi) { float cl = v < sl.lo ? sl.lo : sl.hi; Log("guardar: %s = %g fuera del rango %g..%g del slider '%s': guardado %g", k.c_str(), v, sl.lo, sl.hi, sl.label.c_str(), cl); v = cl; }
+            if (v < (std::min)(sl.lo, sl.hi) || v > (std::max)(sl.lo, sl.hi)) { float cl = std::clamp(v, (std::min)(sl.lo, sl.hi), (std::max)(sl.lo, sl.hi));   /* (11/11 n) slider al reves (lo > hi) */ Log("guardar: %s = %g fuera del rango %g..%g del slider '%s': guardado %g", k.c_str(), v, sl.lo, sl.hi, sl.label.c_str(), cl); v = cl; }
         }
         char buf[64]; snprintf(buf, sizeof(buf), "%g", g_cfg.live[idx][comp]);
         // (08/11) Agustin: "la camara libre nunca la dejes prendida al cerrar el juego": x344 se guarda siempre en 0 (apagada);

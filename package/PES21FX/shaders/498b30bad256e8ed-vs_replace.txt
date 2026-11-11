@@ -113,6 +113,7 @@ void main(
   float pesNatMM = IniParams.Load(int2(296, 0)).w;
   const float PES_NAT_CUT = (pesNatMM > 1.0 ? clamp(pesNatMM, 10.0, 90.0) : 28.0) / 60.0;
   float pesNearT = 1.0, pesCutS = 1.0;
+  float kShortV = saturate((1.0 - PES_NAT_CUT) * 60.0 / 32.0);   // (11/11 n) natural bajo: 0 desde 60 mm, 1 a 28 mm (ver kShortP en 18afff)
   float4 P58 = IniParams.Load(int2(58, 0));
   if (pesIsExt) {
     // v2 instanciado: la parcela sale del buffer de instancias; fundido por altura en los bordes de la banda y
@@ -126,8 +127,11 @@ void main(
     int insW = (int)(ins.w + 0.5);
     int rot = insW & 3; pesRot = rot;
     int lim = insW >> 2;
+    // (11/11 n) hojas 3D por trozos (cb5[13].z = hojas por trozo): lim = trozo * 32768 + hojas de la celda; la hoja es la del trozo
+    int chkB = 0;
+    if (cb5[13].y > 0.5 && cb5[13].z > 0.5) { chkB = (lim >> 15) * (int)(cb5[13].z + 0.5); lim = lim & 32767; }
     if (lim > 0 && cb5[8].x > 0.5) {
-      int card = (int)(vid / (uint)(cb5[8].x + 0.5));
+      int card = (int)(vid / (uint)(cb5[8].x + 0.5)) + chkB;
       if (card >= lim) {
         o0 = float4(0.0, 0.0, -2.0, 1.0); o1 = 0; o2 = 0; o3 = 0; o4 = 0; o5 = 0; o6 = 0; o7 = 0; o8 = 0;
         return;
@@ -429,7 +433,7 @@ void main(
       float4 P403f = IniParams.Load(int2(403, 0)), P410f = IniParams.Load(int2(410, 0));
       float kF = saturate(P403f.y);
       if (kF > 0.001 && P410f.z > 0.5 && IniParams.Load(int2(412, 0)).z < 0.5 && !(pesIsExt && cb5[13].w > 0.5)) {   // cb5[13].w = 1: editor (ahi las hojas 3D van alrededor del jugador)
-        float thrF = P410f.w >= 200.0 ? clamp(P410f.w, 200.0, 6000.0) : 1200.0;
+        float thrF = P410f.w >= 100.0 ? clamp(P410f.w, 100.0, 6000.0) : 1200.0;   // (11/11 n) desde 100 px/m, como la DLL
         float pF = pesPx;
         if (!pesIsExt) {   // pasto del juego: px/m en su raiz, como el CS (mitad del alto de pantalla en z63)
           float4 Pr = float4(pesRoot.x, 0.0, pesRoot.y, 1.0);
@@ -603,7 +607,7 @@ void main(
     float kP = clamp(P334v.y, 0.0, 2.0);
     float nearP = pesIsExt ? smoothstep(175.0, 420.0, pesPx) : 1.0;   // (04/11) antes 250-600, como nearF del PS
     if (kP > 0.001 && nearP > 0.001) {
-      float2 jR = (float2(frac(pesHv * 5.17 + 0.31), frac(pesHv * 11.3 + 0.77)) - 0.5) * 0.08 * kP * (pesNatV ? 0.4 : 1.0);   // (11/11 i) natural: borde mas fiel al trazo
+      float2 jR = (float2(frac(pesHv * 5.17 + 0.31), frac(pesHv * 11.3 + 0.77)) - 0.5) * 0.08 * kP * (pesNatV ? 0.4 + 0.3 * kShortV : 1.0);   // (11/11 i) natural: borde mas fiel al trazo; (11/11 n) bajo: algo mas deshilachado
       float2 puvJ = (pesRoot + jR) * cb4[1].xy + cb4[1].zw;
       float covJ = max(g_tex_mask.SampleLevel(g_samplerLinear_Clamp_s, puvJ, 0).x, g_tex_diffuse.SampleLevel(g_samplerLinear_Clamp_s, puvJ, 0).w);
       covR = lerp(covR, covJ, nearP);
@@ -614,7 +618,7 @@ void main(
     // umbral bajo y parejo (0.10-0.35: antes lejos 0.2-0.8 dejaba la linea flaca a media distancia), la cobertura TAMBIEN donde esta este
     // vertice (la hoja que cae encima de la linea se pinta en la parte que queda sobre la cal, como la pintura que se tira desde arriba) y solo
     // 3 % de hojas verdes adentro (antes 7 %). Vale para el pasto del juego, las tarjetas del mod y las hojas 3D
-    if (pesNatV) { thr = 0.10 + 0.25 * hP; covR = max(covR, max(pesMsk.x, pesDif.w)); }
+    if (pesNatV) { thr = (0.10 + 0.25 * hP) * (1.0 - 0.35 * kShortV); covR = max(covR, max(pesMsk.x, pesDif.w)); }   // (11/11 n) natural bajo: la cal pinta mas hojas (con 9.6 cm la linea se veia ancha y tupida)
     pesPaint = saturate((covR - thr) * 8.0 + 0.5) * (hP > (pesNatV ? 0.97 : 0.93) ? 0.2 : 1.0);
     // (27/10 j) solo de cerca / media distancia (>= 60-90 px/m): lejos las hojas pintadas, paradas y sueltas sobre la linea, la dejaban punteada;
     // ahi vuelven a hundirse (y292) y la linea la pinta el suelo
