@@ -183,6 +183,12 @@ void main(
       float scT = 1.0 + (PESBu(sT, 5u) - 0.5) * 0.34 * kVs;
       h *= scT * (1.0 + (PESBu(sB, 12u) - 0.5) * 0.14 * kVs);
       wB *= lerp(1.0, scT, 0.7) * (1.0 + (PESBu(sB, 13u) - 0.5) * 0.24 * kVs);
+      // (11/11 n, usuarios: "the grass blades has to get thinner") w425 ancho del natural (0 = 1; la DLL pone mas hojas). Agustin: "una mayor
+      // variacion de angulos" (foto: de casi parada a ~45 grados, sin orden): con z403 la inclinacion se abre (la mayoria casi parada) y el giro
+      float kWn = IniParams.Load(int2(425, 0)).w; kWn = kWn > 0.05 ? clamp(kWn, 0.4, 1.5) : 1.0;
+      wB *= kWn;
+      tilt += 0.50 * kVs * pow(PESBu(sB, 26u), 1.6);
+      twist *= 1.0 + 0.5 * kVs;
       float kink = 0.0, wJ = 0.0;
       if (PESBu(sB, 14u) < 0.16 * kIr) {
         float uI = PESBu(sB, 15u), u2 = PESBu(sB, 16u);

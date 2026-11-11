@@ -195,6 +195,17 @@ static float NatCutK() {
     const float mm = g_cfg.live[296][3];
     return (mm > 1.0f ? std::clamp(mm, 10.0f, 90.0f) : 28.0f) / 60.0f;
 }
+// (11/11 n, usuarios: "the grass blades has to get thinner"; Agustin: "y una mayor cantidad si pasa eso") w425 = ancho de las hojas del
+// natural (hojas 3D y tarjetas; 0 / sin la linea = 1). Mas finas = mas tarjetas (el compute cubre igual) y mas hojas 3D (x 1 / ancho)
+static float NatWidth() {
+    if (g_cfg.live[104][0] < 0.5f || g_cfg.live[407][0] > 0.5f) return 1.0f;
+    const float w = g_cfg.live[425][3];
+    return w > 0.05f ? std::clamp(w, 0.4f, 1.5f) : 1.0f;
+}
+static float BladeAmtEff() {   // cantidad de hojas 3D (z408) / ancho: con hojas mas finas, mas hojas para tapar igual
+    const float amt = g_cfg.live[408][2] > 0.05f ? std::clamp(g_cfg.live[408][2], 0.1f, 3.0f) : 1.0f;
+    return amt / NatWidth();
+}
 // (11/11 m) y403 = relleno del atlas bajo las hojas 3D (solo con las hojas 3D del natural prendidas: x104, x407 0, z412 0, z410)
 static float NatFill() {
     const bool on = g_cfg.live[104][0] > 0.5f && g_cfg.live[407][0] < 0.5f && g_cfg.live[412][2] < 0.5f && g_cfg.live[410][2] > 0.5f;
@@ -718,7 +729,7 @@ void GrassFrameBoundary(UINT flags) {
                     {   // (11/11 n) tope por celda: el total pedido en ese cuadro con su tope (q[28]) -> el tope que da 200000 x z408. Baja enseguida,
                         // sube de a poco (sin vaivenes por la demora de la lectura)
                         float used = 0.0f; memcpy(&used, &q[28], 4);
-                        const float amt = g_cfg.live[408][2] > 0.05f ? std::clamp(g_cfg.live[408][2], 0.1f, 3.0f) : 1.0f;
+                        const float amt = BladeAmtEff();
                         const float base = (std::min)(4096.0f * amt, (float)kBladeCellMax), tot = 200000.0f * amt;
                         if (q[26] > 0 && used > 0.5f && base > 0.0f) {
                             const float tgt = std::clamp((used / base) * tot / (float)q[26], 0.02f, 1.0f), cur = s_bladeScale.load();
@@ -990,7 +1001,7 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
     bool emitted = false;
     float T[4]; Thresholds(T);
     float tall = p59[0] > 0.05f ? p59[0] : 1.3f;
-    float wide = p59[1] >= 0.0f ? p59[1] : 1.0f;
+    float wide = (p59[1] >= 0.0f ? p59[1] : 1.0f) * NatWidth();   // (11/11 n) w425: natural mas fino (el compute pone mas tarjetas)
     int q = (int)(g_cfg.live[61][0] + 0.5f); q = (std::max)(0, (std::min)(q, 4));
     // (27/10 q) Calidad 4 = Ultra (pedido de Agustin: "cargar todas las parcelas como antes y el pasto al maximo"): cobertura 2.4x, hoja
     // minima de 1 px, todas las capas de muy cerca, hojas 3D hasta el fondo de la cancha (sin el limite del cesped lejano) y sin densidad adaptativa
@@ -1049,7 +1060,7 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
     const bool bladeNat = g_cfg.live[104][0] > 0.5f && g_cfg.live[407][0] < 0.5f && g_cfg.live[412][2] < 0.5f;
     const bool bladeOn = bladeNat && g_cfg.live[410][2] > 0.5f && s_bladeIb && s_bladePos && s_bladeUv;
     const float bladeThr = g_cfg.live[410][3] >= 100.0f ? std::clamp(g_cfg.live[410][3], 100.0f, 6000.0f) : 1200.0f;   // (11/11 n) desde 100 px/m (antes 200)
-    const float bladeAmt = g_cfg.live[408][2] > 0.05f ? std::clamp(g_cfg.live[408][2], 0.1f, 3.0f) : 1.0f;   // (11/11 m) tope 2 -> 3 (Agustin: "de cerca una mayor cantidad de hojas 3d")
+    const float bladeAmt = BladeAmtEff();   // (11/11 m) tope 2 -> 3 (Agustin: "de cerca una mayor cantidad de hojas 3d"); (11/11 n) / ancho (w425)
     s_bladeLast.store(bladeOn); s_bladeThrLast = bladeThr;
     if (!bladeOn) s_bladeScale.store(1.0f);
     const float bladePerCell = (std::min)(4096.0f * bladeAmt, (float)kBladeCellMax) * s_bladeScale.load();   // (11/11 n) la celda mas cercana
