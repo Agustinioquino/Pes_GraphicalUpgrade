@@ -114,6 +114,14 @@ void main(
   float pesCfN = 1.0;
   if (pesV3 && v4.w > 0.0) { float c1 = max(P291.x > 0.5 ? P291.z : 100.0, 20.0); pesCfN = smoothstep(c1, c1 * 2.2, v4.w); }
   float relH = saturate((0.995 - v1.y) / 0.985);   // 0 raiz -> 1 punta (v1.y = 1 en la raiz)
+  // (11/11 n, Agustin: "que las lineas de la cancha y el pasto se mezclen de una manera mas organica, con algunas partes en los bordes
+  // mezclandose con pasto normal y cal") natural: en el borde de la linea la hoja a medio pintar ya no sale verde grisacea pareja; la cal
+  // cae desde arriba como el rociado de la maquina: la punta blanca y la base verde, mas abajo cuanto mas adentro de la linea (cada hoja
+  // con su corte al azar)
+  if (pesNat && pesPaintF > 0.02 && pesPaintF < 0.97) {
+    float hS = 1.0 - 1.25 * pesPaintF + (frac(v8.z * 13.71 + 0.37) - 0.5) * 0.22;
+    pesPaintF = smoothstep(hS - 0.10, hS + 0.10, relH);
+  }
   // (1/11) optimizacion paso 1: camino LIVIANO de lejos. Cuando la hoja toma entera el color del suelo (pesCf = 0, mezcla con la copia de RT0)
   // y no llega a la rampa de puntas / variacion (pesCfN = 0), todo lo que se calcula para o0 antes de la mezcla se pisa con el suelo: la
   // normal del atlas, la claridad, el seco, la correccion del amarillo, el grade, la variacion por hoja y la normal por hoja no cambian
