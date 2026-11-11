@@ -1,4 +1,4 @@
--- MotorTiempoReal.lua 0.4 (PES21 FX, 11/11/2026) - modulo de Sider.
+-- MotorTiempoReal.lua 0.5 (PES21 FX, 11/11/2026) - modulo de Sider.
 -- "Motor en tiempo real" del Editar: un editor en vivo de lo que dibuja el Fox Engine. Todo dentro del juego y todo
 -- por Sider (sin DLL): lee la lista de escenas graficas del motor y muestra, con nombre, los modelos y las luces;
 -- deja marcar uno o muchos objetos, moverlos, rotarlos, escalarlos, ocultarlos; prender, apagar y dar brillo a cada
@@ -6,10 +6,9 @@
 -- mostrar la grilla y un marcador en cada foco; y anota todo lo que lee y escribe en
 --   content\motor-tiempo-real\registro.txt
 --
--- COMO SE LLEGA: el menu de Editar gana un boton 12, "Motor en tiempo real" (seccion 3b: la pestana). En esta version
--- lleva a la misma pantalla que "Jugadores" (elegir jugador > Apariencia es el estudio 3D, donde trabaja el panel); el
--- paso directo al estudio queda para la version siguiente.
--- COMO SE USA (en Editar > jugador > Apariencia; tambien lista lo que hay en un partido):
+-- COMO SE LLEGA: el menu de Editar gana un boton 12, "Motor en tiempo real" (seccion 3b: la pestana), que abre DIRECTO
+-- el estudio 3D (la pantalla de Apariencia) con un jugador puesto (seccion 3c). Atras vuelve al menu de Editar.
+-- COMO SE USA (en ese estudio, o en Editar > jugador > Apariencia; tambien lista lo que hay en un partido):
 --   Espacio abre el panel de Sider, 1 pasa de modulo hasta llegar a este.
 --   6 / 5 pagina siguiente / anterior: ESCENA, LUCES, ENTIDADES, OPCIONES, REGISTRO.
 --   0 / 9 baja / sube en la lista.  8 accion principal.  7 accion secundaria.  4 / 3 menos / mas.  2 enfocar.
@@ -20,7 +19,8 @@
 -- que devuelven error en vez de cerrar el juego si una direccion ya no existe. Antes de escribir se comprueba
 -- que el exe sea el 1.07.02 (tablas de funciones) y que cada objeto siga siendo de la clase esperada. Nunca
 -- se escribe dentro del exe, salvo las TRES direcciones fijas de la pestana del menu de Editar (seccion 3b), cada una
--- con su valor anterior comprobado. Solo se llaman dos funciones del juego (color de una luz y matriz de un modelo),
+-- con su valor anterior comprobado. Fuera del exe, la pestana escribe un solo dato del juego: la clave del jugador que
+-- muestra el estudio 3D (seccion 3c). Solo se llaman dos funciones del juego (color de una luz y matriz de un modelo),
 -- las dos con su comienzo comprobado byte a byte.
 --   content\motor-tiempo-real\apagado.txt       = el modulo no entrega la escena ni toca nada
 --   content\motor-tiempo-real\solo_lectura.txt  = lista todo pero no escribe nada
@@ -36,7 +36,7 @@
 --
 -- Offsets leidos en el exe decompilado (PES2021.exe 1.07.02): ver memoria del proyecto motor-tiempo-real-exe.
 
-local m = { version = "0.4" }
+local m = { version = "0.5" }
 local VERSION = m.version
 local DIR
 -- lo que hay que recordar aunque Sider recargue el modulo con el juego abierto (queda en ctx)
@@ -77,6 +77,9 @@ end
 function m.make_key(ctx, filename)
     if PE.es(filename, PE.ARCH) then return PE.pedido(ctx, filename) end
     if PE.es(filename, PE.ARCH_SALIDA) then PE.salida(filename) end
+    local nodo = PE.nodo_de(filename)
+    if nodo then return PE.pedido_estudio(filename, nodo) end
+    PE.muestra(filename)
     local n = cual(filename)
     if not n then return end
     pedidos[n] = (pedidos[n] or 0) + 1
@@ -263,16 +266,24 @@ local function R(s, importante)
     if importante then log("MotorTiempoReal: " .. s) end
 end
 
+-- al_final: true = agrega al final (crea el archivo si falta); false / nil = lo crea de nuevo; un numero = pisa bytes de
+-- un archivo que YA existe a partir de esa posicion (no lo crea ni le cambia el largo)
 local function a_archivo(ruta, texto, al_final)
     local n = C.mtr_MultiByteToWideChar(65001, 0, ruta, -1, nil, 0)
     if n <= 0 then return false end
     local w = ffi.new("uint16_t[?]", n + 1)
     C.mtr_MultiByteToWideChar(65001, 0, ruta, -1, w, n)
-    -- 0x40000000 escribir, 1 compartir lectura, 4 abrir o crear / 2 crear de nuevo, 0x80 normal
-    local h = C.mtr_CreateFileW(w, 0x40000000, 1, nil, al_final and 4 or 2, 0x80, nil)
+    local en = type(al_final) == "number" and al_final or nil
+    -- 0x40000000 escribir, 1 compartir lectura, 4 abrir o crear / 3 abrir el que existe / 2 crear de nuevo, 0x80 normal
+    local h = C.mtr_CreateFileW(w, 0x40000000, 1, nil, en and 3 or (al_final and 4 or 2), 0x80, nil)
     if h == nil or tonumber(ffi.cast("intptr_t", h)) == -1 then return false end
     local tam = 0
-    if al_final then tam = C.mtr_SetFilePointer(h, 0, nil, 2) end
+    if en then
+        if C.mtr_SetFilePointer(h, en, nil, 0) ~= en then
+            C.mtr_CloseHandle(h)
+            return false
+        end
+    elseif al_final then tam = C.mtr_SetFilePointer(h, 0, nil, 2) end
     local r = C.mtr_WriteFile(h, texto, #texto, HECHO, nil)
     C.mtr_CloseHandle(h)
     return r ~= 0, tam
@@ -577,16 +588,19 @@ end
 -- de_ruta = Sider esta pidiendo la ruta del archivo (ahi se que el que va a leer el juego es el mio)
 function PE.resolver(de_ruta, archivo)
     local hay = existe(DIR .. "pestana\\" .. archivo)
+    -- el boton 12 lleva al estudio 3D (seccion 3c): sin el archivo de flujo del estudio no hay pestana
+    local falta = hay and not PE.e3d_listo() and PE.JSON_E3D or archivo
+    if falta ~= archivo then hay = false end
     PE.adoptar()
     if existe(DIR .. "solo_lectura.txt") then
         -- solo_lectura.txt no deja PONER. SACAR si (es volver a los valores de fabrica), y solo cuando no hay archivo que
         -- entregar: lo unico que no puede quedar es el boton 12 sin su enlace
-        if PE.quieta("solo_lectura.txt presente") and not hay then PE.asegurar(false, "falta pestana\\" .. archivo) end
+        if PE.quieta("solo_lectura.txt presente") and not hay then PE.asegurar(false, "falta pestana\\" .. falta) end
     else
         local motivo
         if existe(DIR .. "apagado.txt") then motivo = "apagado.txt presente"
         elseif existe(DIR .. "sin_pestana.txt") then motivo = "sin_pestana.txt presente"
-        elseif not hay then motivo = "falta pestana\\" .. archivo end
+        elseif not hay then motivo = "falta pestana\\" .. falta end
         if motivo then
             if not G.pe_toco then PE.puesta, PE.estado = false, "sin poner: " .. motivo
             elseif not PE.asegurar(false, motivo) then PE.quieta("no pude sacarla (" .. motivo .. ")") end
@@ -649,6 +663,7 @@ end
 -- Sider pide la ruta del archivo (key = la clave que di en PE.pedido)
 function PE.entrega(filename, key)
     local archivo = string.match(key, "|%d+|(.+)$")
+    if archivo == PE.JSON_E3D then return PE.entrega_estudio(filename, key) end
     if archivo ~= PE.JSON and archivo ~= PE.JSON_MS then return nil end
     local ok = PE.resolver(true, archivo)
     PE.decir("Sider pidio la ruta de " .. filename, ok, archivo)
@@ -658,6 +673,229 @@ function PE.entrega(filename, key)
         return DIR .. "pestana\\" .. archivo
     end
     G.pe_gen = (G.pe_gen or 0) + 1          -- Sider anoto que para esta clave no tengo archivo: la proxima vez uso otra
+    return nil
+end
+
+---------------------------------------------------------------------------------------------
+-- 3c. EL ESTUDIO 3D DIRECTO: a donde lleva el boton 12 (sin DLL)
+---------------------------------------------------------------------------------------------
+-- Leido en el exe 1.07.02 por tres lectores y verificado (11/11/2026; memoria del proyecto estudio-3d-entrada-directa).
+-- * Una pagina de menu se elige por "data.key" de su archivo de flujo, no por el nombre del nodo. Un nodo cualquiera con
+--   "key":"Edit/Player/EditPlAppearance" arma la pantalla de Apariencia (el estudio 3D) con salida propia. El archivo
+--   pestana\Estudio3D.json es eso: la pantalla de Apariencia con TODOS sus enlaces (atras y las cuatro filas) de vuelta
+--   al menu de Editar. Asi no se entra a ninguna pagina nativa del jugador: su cadena de vuelta lee una tabla con un
+--   indice sin comprobar cuando no se paso por "Jugadores" (cierre del juego).
+-- * El nodo usa un nombre que YA existe en los archivos del juego y que nada usa (BugCheck/BugCheckSim..., restos de
+--   Konami sin ningun enlace que llegue a ellos): Sider solo tiene que reemplazar un archivo, que es lo ya probado.
+-- * Que jugador muestra el estudio lo dice la clave del contexto de edicion ([0x1438040a8] + 0xe0 = { u16 clase, u16 0,
+--   u32 id }). El menu de Editar la deja invalida (FF FF 00 00 00 00 00 00) cada vez que se arma, asi que hay que
+--   escribirla en CADA entrada: se escribe cuando el juego pide el archivo del nodo, antes de que exista la pagina.
+--   Es el unico dato del juego que escribe la pestana fuera de las tres direcciones del exe. El equipo no se toca.
+--   Jugador: el ultimo que se vio en el Editar en esta sesion; si no hubo, la primera ficha de la base de datos; si
+--   no se puede leer, el maniqui del propio juego (0x800000a0). Nunca un id de jugador creado (0x80000000..0x8000009f).
+--   El ultimo que se vio se busca en la base antes de usarlo. Si el juego ya tiene un jugador puesto, se deja ese.
+--   Sin clave (solo_lectura.txt, apagado.txt, o el contexto distinto de lo esperado) el estudio abre vacio: se sale con atras.
+-- * Sider recuerda 10 segundos lo que contesto por cada nombre de archivo y en ese rato no le avisa al modulo. Para que
+--   una segunda entrada rapida tambien avise, el enlace del boton va rotando entre tres nodos de nombre igual de largo:
+--   en cada entrada se pisan esos 24 bytes en los dos EditMenu*.json (el juego los vuelve a leer al volver al menu).
+PE.CTX, PE.VT_CTX, PE.BD, PE.MANIQUI = 0x1438040a8, 0x142ba6ac0, 0x143714240, 0x800000a0
+PE.JSON_E3D = "Estudio3D.json"
+PE.NODOS = { "BugCheck/BugCheckSimNews", "BugCheck/BugCheckSimMain", "BugCheck/BugCheckSimRank" }
+PE.ARCH_E3D = {}
+for i = 1, #PE.NODOS do PE.ARCH_E3D[i] = "script\\flow\\" .. string.lower(string.gsub(PE.NODOS[i], "/", "\\")) .. ".json" end
+PE.e3d, PE.e3d_n = "todavia no se uso", 0
+
+-- cual de mis nodos pide este nombre de archivo (1..3), o nil
+function PE.nodo_de(filename)
+    for i = 1, #PE.ARCH_E3D do
+        if PE.es(filename, PE.ARCH_E3D[i]) then return i end
+    end
+    return nil
+end
+
+-- el archivo de flujo del estudio, byte por byte (el mismo juego de enlaces que trae Edit\Player\EditPlAppearance.json)
+function PE.texto_e3d()
+    local ev = { "proceed", "0_Face", "1_Hair", "2_Body", "3_Accessory", "4_BLreturn", "return", "5_appearancebl" }
+    local t = { "{\n\t\"events\":{\n" }
+    for i = 1, #ev do
+        t[#t + 1] = "\t\t\"" .. ev[i] .. "\":{\n\t\t\t\"to\":\"Edit/EditMenu\",\n\t\t\t\"go\":\"backward\",\n\t\t\t\"clear\":\"all\",\n"
+            .. "\t\t\t\"fadeStart\":\"\",\n\t\t\t\"fadeEnd\":\"do\",\n\t\t\t\"bgType\":\"none\"\n\t\t}" .. (i < #ev and "," or "") .. "\n"
+    end
+    t[#t + 1] = "\t},\n\t\"data\":{\n\t\t\"type\":\"menu\",\n\t\t\"bgId\":\"\",\n\t\t\"dialog\":\"\",\n"
+        .. "\t\t\"key\":\"Edit/Player/EditPlAppearance\"\n\t},\n\t\"binFile\":{\n\t\t\"files\":[\n\t\t]\n\t}\n}\n"
+    return table.concat(t)
+end
+
+local function leer_archivo(ruta)
+    local f = io.open(ruta, "rb")
+    if not f then return nil end
+    local s = f:read("*a")
+    f:close()
+    if type(s) ~= "string" then return nil end
+    return s
+end
+
+-- pestana\Estudio3D.json esta y es el que tiene que ser? Si falta o es otro, se arma de nuevo (es un archivo propio).
+function PE.e3d_listo()
+    local ruta, t = DIR .. "pestana\\" .. PE.JSON_E3D, PE.texto_e3d()
+    if leer_archivo(ruta) == t then return true end
+    if not preparar() then return false end
+    if a_archivo(ruta, t, false) and leer_archivo(ruta) == t then
+        R("pestana: arme pestana\\" .. PE.JSON_E3D .. " (faltaba o no era el mio)", true)
+        return true
+    end
+    return false
+end
+
+-- a que nodo apunta el enlace "proceed" de una de las dos copias del flujo del menu. Devuelve el indice del nodo y cuantos
+-- bytes hay antes de su nombre; o nil (no hay archivo, no hay enlace, o apunta a otra pagina)
+function PE.enlace(archivo)
+    local s = leer_archivo(DIR .. "pestana\\" .. archivo)
+    if not s then return nil end
+    local a = string.find(s, "\"proceed\":{", 1, true)
+    if not a then return nil end
+    local fin = string.find(s, "}", a, true)
+    local _, c = string.find(s, "\"to\":\"", a, true)
+    if not fin or not c or c > fin then return nil end
+    local q = string.find(s, "\"", c + 1, true)
+    if not q or q > fin then return nil end
+    local nombre = string.sub(s, c + 1, q - 1)
+    for i = 1, #PE.NODOS do
+        if PE.NODOS[i] == nombre then return i, c end
+    end
+    return nil
+end
+
+-- deja el enlace del boton 12 apuntando al nodo que sigue al que se acaba de usar (en las dos copias)
+function PE.rotar(usado)
+    local sig = usado % #PE.NODOS + 1
+    if #PE.NODOS[sig] ~= #PE.NODOS[usado] or not C then return end
+    local copias = { PE.JSON, PE.JSON_MS }
+    for k = 1, 2 do
+        local i, pos = PE.enlace(copias[k])
+        if i and i ~= sig and #PE.NODOS[i] == #PE.NODOS[sig] then
+            local ok = a_archivo(DIR .. "pestana\\" .. copias[k], PE.NODOS[sig], pos)
+            if (not ok or PE.enlace(copias[k]) ~= sig) and not PE.rotar_dicho then
+                PE.rotar_dicho = true
+                R("pestana: no pude cambiar el enlace en pestana\\" .. copias[k] .. " (una segunda entrada rapida puede abrir el estudio vacio)", true)
+            end
+        end
+    end
+end
+
+-- el contexto de edicion del juego (edit::Manager). Devuelve su direccion y deja sus primeros 0xf8 bytes en el buffer de
+-- lectura; o nil y el motivo. El puntero se lee de nuevo cada vez: el juego lo destruye y lo vuelve a crear.
+function PE.ctx()
+    if not exe_conocido() then return nil, E.exe_motivo or "no pude preparar el modulo" end
+    local p = rptr(PE.CTX)
+    if not p or (p >= BASE and p < EXE_FIN) then return nil, "el juego no tiene armado el modo Editar" end
+    if not leer(p, 0xf8) or P(0) ~= PE.VT_CTX then return nil, "el contexto del Editar no es el que conozco" end
+    return p
+end
+
+-- mientras se anda por el Editar: se acuerda del ultimo jugador de la base de datos que tuvo el contexto. Solo lee.
+function PE.muestra(filename)
+    if not G.pe_toco or not C or not E.exe_ok or type(filename) ~= "string" then return end
+    if not string.find(string.lower(filename), "flow[\\/]edit[\\/]") then return end
+    if not PE.ctx() then return end
+    local id = B32[57]
+    if B32[56] == 0 and id ~= 0 and id < 0x80000000 then G.pe_jug = id end
+end
+
+-- la tabla de fichas de la base de datos de jugadores: su direccion y cuantas fichas tiene (solo lee; nil si no esta
+-- cargada o si algo no es lo esperado). Ficha de 0x17c bytes con la clave { u16 clase, u16 0, u32 id } en +0x2c.
+function PE.fichas()
+    local db = rptr(PE.BD)
+    if not db or not leer(db + 0x30, 0x20) or B32[0] ~= 4 then return nil end
+    local pdb = P(0x18)
+    if not pdb then return nil end
+    local n, modo = ru32(pdb + 0xd0bce8), ru32(pdb + 0x183789c)
+    if not n or n < 1 or n > 35999 or not modo or modo == 2 then return nil end
+    return pdb, n
+end
+
+-- recorre las fichas de a 10 por lectura. Con id: true si hay una ficha de jugador con ese id, false si no hay. Sin id:
+-- el id de la primera ficha de jugador de la base. nil si la base no se puede leer.
+function PE.buscar_ficha(id)
+    local pdb, n = PE.fichas()
+    if not pdb then return nil end
+    local i = 0
+    while i < n do
+        local m = math.min(10, n - i)
+        if not leer(pdb + i * 0x17c + 0x2c, (m - 1) * 0x17c + 8) then return nil end
+        for j = 0, m - 1 do
+            local clase, este = B32[j * 95], B32[j * 95 + 1]
+            if clase == 0 and este ~= 0 and este < 0x80000000 then
+                if not id then return este end
+                if este == id then return true end
+            end
+        end
+        i = i + m
+    end
+    if id then return false end
+    return nil
+end
+
+-- escribe la clave del jugador que va a mostrar el estudio. Devuelve true, de donde salio el jugador y su id; o false y
+-- el motivo. Solo escribe si la clave esta invalida, como la deja el menu de Editar; si el juego ya tiene un jugador
+-- puesto (no la borro al armar el menu) se deja ese. El equipo no se toca nunca.
+function PE.jugador()
+    if existe(DIR .. "apagado.txt") then return false, "apagado.txt presente" end
+    if E.solo_lectura or existe(DIR .. "solo_lectura.txt") then return false, "solo_lectura.txt presente" end
+    local p, por_que = PE.ctx()
+    if not p then return false, por_que end
+    local clase, id = B32[56], B32[57]
+    if clase == 0 and id ~= 0 then
+        if id == G.pe_puse then return true, G.pe_de or "el de la entrada anterior", id end
+        return true, "el que ya tenia puesto el juego", id
+    end
+    if clase ~= 0xffff or id ~= 0 then return false, "la clave del jugador no esta como la deja el menu de Editar" end
+    local de
+    id = G.pe_jug
+    if id then
+        -- el ultimo que se vio tiene que seguir estando en la base de datos (si la base no se puede leer, vale igual: lo puso el juego)
+        local esta = PE.buscar_ficha(id)
+        if esta == false then id, G.pe_jug = nil, nil
+        else de = esta and "el ultimo jugador que viste" or "el ultimo jugador que viste, sin comprobar en la base" end
+    end
+    if not id then id, de = PE.buscar_ficha(), "la primera ficha de la base de datos" end
+    if not id then id, de = PE.MANIQUI, "el maniqui del juego" end
+    if id == 0 or (id >= 0x80000000 and id <= 0x8000009f) then return false, "no tengo un jugador que sirva" end
+    if not leer(p, 8) or P(0) ~= PE.VT_CTX then return false, "el contexto del Editar cambio mientras buscaba el jugador" end
+    W32[0], W32[1] = 0, id
+    if not poner(p + 0xe0, 8) then return false, "no pude escribir la clave del jugador" end
+    if not leer(p + 0xe0, 8) or B32[0] ~= 0 or B32[1] ~= id then return false, "la clave del jugador no quedo escrita" end
+    G.pe_puse, G.pe_de = id, de
+    return true, de, id
+end
+
+-- el juego pidio el archivo de uno de mis nodos: se apreto el boton 12. Devuelve la clave de Sider del archivo del estudio.
+function PE.pedido_estudio(filename, nodo)
+    PE.e3d_n = PE.e3d_n + 1
+    if not PE.e3d_listo() then
+        PE.e3d = "no tengo pestana\\" .. PE.JSON_E3D .. " y no lo pude armar"
+        if PE.e3d_dicho ~= PE.e3d then
+            PE.e3d_dicho = PE.e3d
+            R("pestana: el juego pidio " .. filename .. " -> " .. PE.e3d, true)
+        end
+        return nil
+    end
+    local ok, de, id = PE.jugador()
+    PE.rotar(nodo)
+    PE.e3d = ok and string.format("jugador 0x%s (%s)", hx(id), de) or ("sin jugador, abre vacio: " .. tostring(de))
+    -- se anota cada entrada (Sider avisa a lo sumo una vez cada 10 s por nodo); dos avisos pegados del mismo pedido, una sola vez
+    local d, t = nodo .. PE.e3d, reloj()
+    if d ~= PE.e3d_dicho or not PE.e3d_t or t - PE.e3d_t > 1500 or t < PE.e3d_t then
+        PE.e3d_dicho, PE.e3d_t = d, t
+        R(string.format("pestana: estudio 3D, pedido %d (%s) -> %s", PE.e3d_n, PE.NODOS[nodo], PE.e3d), true)
+    end
+    if C then volcar_registro() end
+    return PE.clave(PE.JSON_E3D)
+end
+
+function PE.entrega_estudio(filename, key)
+    if PE.e3d_listo() then return DIR .. "pestana\\" .. PE.JSON_E3D end
+    G.pe_gen = (G.pe_gen or 0) + 1
     return nil
 end
 
@@ -1947,6 +2185,7 @@ function RX.tecla_modo(vkey)
             RX.exp.espera, (quiero ~= 2) and "; vuelve solo a deferred en 8 s" or ""), true)
     else
         E.aviso = por_que
+        R(string.format("render: NO cambie el modo del motor a %d %s: %s", quiero, RX.MODO_NOM[quiero] or "?", tostring(por_que)))
     end
     E.sucio = true
 end
@@ -1968,7 +2207,10 @@ function RX.tecla_etapa(e, vkey)
     end
     local ok, por_que = RX.poner(e, quiero)
     if ok then R(string.format("render: etapa %s %s (0x%s, espere %d vueltas)", e.nombre, quiero and "PRENDIDA" or "apagada", hx(e.dir), RX.exp.espera), true)
-    else E.aviso = por_que end
+    else
+        E.aviso = por_que
+        R(string.format("render: NO pude dejar %s la etapa %s: %s", quiero and "prendida" or "apagada", tostring(e.nombre), tostring(por_que)))
+    end
     E.sucio = true
 end
 
@@ -2325,7 +2567,7 @@ OPC = {
             E.aviso = "anotado en content\\motor-tiempo-real\\registro.txt"
         end },
     { "Pestana en Editar", function() return PE.puesta and "puesta" or "no" end,
-        function() E.aviso = "pestana: " .. PE.estado .. " (se saca creando sin_pestana.txt)" end },
+        function() E.aviso = "pestana: " .. PE.estado .. " | estudio 3D: " .. PE.e3d .. " (se saca creando sin_pestana.txt)" end },
 }
 
 local function tecla(vkey)

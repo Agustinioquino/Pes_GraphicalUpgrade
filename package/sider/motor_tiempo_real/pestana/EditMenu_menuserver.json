@@ -97,7 +97,7 @@
 			"bgType":"none"
 		},
 		"proceed":{
-			"to":"Edit/Player/EditPlayerMain",
+			"to":"BugCheck/BugCheckSimNews",
 			"go":"forward",
 			"clear":"all",
 			"fadeStart":"",

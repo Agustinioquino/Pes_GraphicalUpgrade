@@ -52,6 +52,9 @@ PE = dict(VT=0x1427012b0, ARMAR=0x140c29340, RANURA=0x142701520, FN11=0x141b9f46
 PE_TEXTOS = [0x200026, 0x200027, 0x1a02a6, 0x1a00f1, 0x1d0013, 0x200064, 0x4b003c, 0x200033, 0x200059, 0x190055, 0x190056]
 PE_NOMBRES = ['Player', 'Team', 'Coach', 'Representative', 'Transfer', 'Stadium', 'LeagueCup', 'LeagueOrganize', 'ExternalData',
               'DataSave', 'DataLoad']
+ED = dict(CTX=0x1438040a8, VT=0x142ba6ac0, BD=0x143714240, MANIQUI=0x800000a0, PDB=0x20000000000)
+ED_NODOS = ['BugCheck/BugCheckSimNews', 'BugCheck/BugCheckSimMain', 'BugCheck/BugCheckSimRank']
+ED_EVENTOS = ['proceed', '0_Face', '1_Hair', '2_Body', '3_Accessory', '4_BLreturn', 'return', '5_appearancebl']
 PE_FILAS = 17                       # filas c_menu_0..16 de la pantalla editSettingList (leido del archivo del juego, 11/11/2026)
 PE_ARCHIVO = b'common\\script\\flow\\Edit\\EditMenu.json'
 PE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'package', 'sider', 'motor_tiempo_real', 'pestana')
@@ -262,6 +265,48 @@ class Mundo:
         nuevo(0x10, PE['NOSTRING']); m.escribir(PE['NOSTRING'], b'No String\0', False)
         m.exe_ok = {PE['RANURA']: 8, PE['TEXTO12']: 4, PE['SIN']: 8}
         m.prot = {PE['RANURA']: 2, PE['TEXTO12']: 2}
+        self._editar()
+
+    def _editar(self, fichas=((0, 0), (0, 0x9d2), (0, 0x9d3), (1, 7))):
+        """el contexto de edicion (edit::Manager, [0x1438040a8]: +0xe0 clave del jugador, +0xe8 equipo, +0xf0) como lo deja el
+        menu de Editar, y la base de datos de jugadores ([0x143714240]: +0x30 == 4 cargada, +0x48 tabla; fichas de 0x17c
+        bytes con la clave en +0x2c; cantidad en tabla+0xd0bce8; modo en tabla+0x183789c). El modulo solo puede pisar los 8
+        bytes de la clave"""
+        m = self.m
+        for d in (ED['CTX'], ED['VT'], ED['BD']):
+            assert all(d + 8 <= b or b + len(x) <= d for b, x in m.reg.items()), 'region encimada %x' % d
+            m.nuevo(8, d)
+        self.ctx = c = m.nuevo(800); m.u64(c, ED['VT']); m.u64(ED['CTX'], c)
+        m.permitidas.append((c + 0xe0, c + 0xe8))
+        self.ed_menu()
+        self.bd = db = m.nuevo(0x80); m.u64(ED['BD'], db); m.u32(db + 0x30, 4)
+        pdb = ED['PDB']; m.nuevo(64 * 0x17c + 0x40, pdb); m.nuevo(4, pdb + 0xd0bce8); m.nuevo(4, pdb + 0x183789c)
+        m.u64(db + 0x48, pdb); m.u32(pdb + 0xd0bce8, len(fichas)); m.u32(pdb + 0x183789c, 0)
+        for i, (cl, ident) in enumerate(fichas): m.escribir(pdb + i * 0x17c + 0x2c, struct.pack('<HHI', cl, 0, ident), False)
+
+    def ed_menu(self):
+        """menu::MenuEditMenu::vf76: cada vez que se arma el menu de Editar deja la clave y el equipo invalidos"""
+        m = self.m; n = m.lecturas
+        try:
+            c = m.r64(ED['CTX'])
+            if m.leer(c, 800) is not None and m.r64(c) == ED['VT']:
+                m.escribir(c + 0xe0, struct.pack('<HHIIHH', 0xffff, 0, 0, 0xffffffff, 0, 0), False)
+                m.escribir(c + 0xf0, struct.pack('<H', 0xffff), False)
+        except (TypeError, struct.error): pass
+        m.lecturas = n
+
+    def ed_clave(self):
+        """(clase, id) de la clave del jugador del contexto; None si no hay contexto"""
+        m = self.m; n = m.lecturas
+        try:
+            b = m.leer(m.r64(ED['CTX']) + 0xe0, 8)
+            return None if b is None else (struct.unpack('<HHI', b)[0], struct.unpack('<HHI', b)[2])
+        except (TypeError, struct.error): return None
+        finally: m.lecturas = n
+
+    def ed_juego_elige(self, ident):
+        """el juego pone un jugador en el contexto (lista de jugadores del Editar)"""
+        self.m.escribir(self.m.r64(ED['CTX']) + 0xe0, struct.pack('<HHI', 0, 0, ident), False)
 
     def pe_estado(self):
         """(funcion de la ranura 78, numero de texto del lugar 12, puntero del texto de reemplazo)"""
@@ -481,7 +526,7 @@ LUA_ENTORNO = r'''
 local ffi_real = require("ffi")
 local py = ...
 SIM = { izq = false, der = false, med = false, x = 500, y = 400, frente = true, tick = 1000, hilo = 77, logs = {}, archivos = {}, llamadas = {},
-        existe = {}, set_cursor = 0 }
+        existe = {}, set_cursor = 0, contenido = {}, bloqueado = {} }
 local Cf = {}
 function Cf.mtr_GetCurrentProcess() return ffi_real.cast("void *", -1) end
 function Cf.mtr_ReadProcessMemory(h, dir, buf, n, got)
@@ -540,13 +585,45 @@ function Cf.mtr_CreateFileW(w, acc, comp, seg, disp, fl, pl)
     while w[i] ~= 0 do t[#t + 1] = string.char(w[i]); i = i + 1 end
     local ruta = table.concat(t)
     if SIM.sin_archivo then return ffi_real.cast("void *", -1) end
+    if string.find(ruta, "\\pestana\\", 1, true) then
+        -- los archivos de flujo de la pestana tienen contenido de verdad: el modulo solo puede crear de nuevo el del estudio
+        -- o pisar bytes de uno que ya existe (nunca agregar al final)
+        local n = string.match(ruta, "([^\\]+)$")
+        assert(acc == 0x40000000 and comp == 1, "pestana: abrir solo para escribir, compartiendo lectura")
+        assert((disp == 2 and n == "Estudio3D.json") or (disp == 3 and n ~= "Estudio3D.json"), "pestana: forma de abrir " .. n .. " no prevista: " .. tostring(disp))
+        if SIM.bloqueado[n] or (disp == 3 and not SIM.existe[n]) or (disp == 2 and SIM.sin_crear) then return ffi_real.cast("void *", -1) end
+        if disp == 2 then SIM.existe[n] = true; SIM.contenido[n] = "" end
+        nh = nh + 1; abiertos[nh] = { n = n, pos = 0, crea = (disp == 2) }
+        SIM.pe_abiertos = (SIM.pe_abiertos or 0) + 1
+        return ffi_real.cast("void *", nh)
+    end
     if disp == 2 or not SIM.archivos[ruta] then SIM.archivos[ruta] = "" end
     nh = nh + 1; abiertos[nh] = ruta
     return ffi_real.cast("void *", nh)
 end
-function Cf.mtr_SetFilePointer(h, d, alto, metodo) return #SIM.archivos[abiertos[tonumber(ffi_real.cast("intptr_t", h))]] + (SIM.tam_extra or 0) end
+function Cf.mtr_SetFilePointer(h, d, alto, metodo)
+    local a = abiertos[tonumber(ffi_real.cast("intptr_t", h))]
+    if type(a) == "table" then
+        assert(metodo == 0 and alto == nil and d >= 0 and d < #SIM.contenido[a.n], "pestana: posicion fuera del archivo")
+        if SIM.sin_posicion then return 0xFFFFFFFF end
+        a.pos = d
+        return d
+    end
+    return #SIM.archivos[a] + (SIM.tam_extra or 0)
+end
 function Cf.mtr_WriteFile(h, buf, n, hecho, ov)
-    local ruta = abiertos[tonumber(ffi_real.cast("intptr_t", h))]
+    local a = abiertos[tonumber(ffi_real.cast("intptr_t", h))]
+    if type(a) == "table" then
+        local c = SIM.contenido[a.n]
+        assert(type(buf) == "string" and n == #buf, "pestana: escritura rara")
+        assert(a.crea or a.pos + n <= #c, "pestana: la escritura alarga un archivo de flujo")
+        if SIM.escribe_mal then hecho[0] = 0 return 0 end
+        SIM.contenido[a.n] = string.sub(c, 1, a.pos) .. buf .. string.sub(c, a.pos + n + 1)
+        a.pos = a.pos + n; hecho[0] = n
+        SIM.pe_escritos = (SIM.pe_escritos or 0) + 1
+        return 1
+    end
+    local ruta = a
     SIM.archivos[ruta] = SIM.archivos[ruta] .. string.sub(buf, 1, n); hecho[0] = n
     return 1
 end
@@ -640,7 +717,13 @@ local permitidos = { assert = assert, ipairs = ipairs, pairs = pairs, math = mat
     io = { open = function(ruta, modo)
         assert(modo == "rb", "io.open solo lee en el Sider de Agustin")
         local n = string.match(ruta, "([^\\]+)$")
-        if SIM.existe[n] then return { close = function() end, read = function() return "" end } end
+        if SIM.existe[n] then
+            return { close = function() end, read = function(_, que)
+                if SIM.contenido[n] == nil then return "" end
+                assert(que == "*a", "io: los archivos de la pestana se leen enteros")
+                return SIM.contenido[n]
+            end }
+        end
         return nil
     end },
     memory = {},
@@ -682,7 +765,9 @@ class Sim:
         self.lua.execute(LUA_ENTORNO.encode(), py)
         g = self.lua.globals()
         self.SIM = g[b'SIM']
-        for n in existe: self.SIM[b'existe'][n.encode()] = True
+        for n in existe:
+            self.SIM[b'existe'][n.encode()] = True
+            if os.path.isfile(os.path.join(PE_DIR, n)): self.SIM[b'contenido'][n.encode()] = open(os.path.join(PE_DIR, n), 'rb').read()
         if sin_ffi: self.SIM[b'permitidos'][b'ffi'] = None
         self.m, self.reg, self.ctx = g[b'cargar'](fuente, ctx)
         self.texto = ''; self.cuadros = 0
@@ -730,13 +815,19 @@ class Sim:
         if self.ttl: self.kc[nombre] = (res, self.t_sider + self.ttl)
         return res
 
+    def contenido(self, nombre):
+        """lo que hay AHORA en un archivo de la pestana (el modulo puede haberle cambiado el enlace o haberlo armado)"""
+        return bytes(self.SIM[b'contenido'][nombre.encode()])
+
     def editar(self, nombre=PE_ARCHIVO):
         """entra al menu de Editar: Sider resuelve el archivo de flujo y el juego arma el menu. Devuelve (archivo, botones)"""
         r = self.pedir(nombre)
         ms = bool(self.ctx[b'tournament_id'] and self.ctx[b'home_team'] and self.ctx[b'away_team'])
-        if r: flujo = open(os.path.join(PE_DIR, r), 'rb').read()
+        if r: flujo = self.contenido(r)
         else: flujo = pe_flujo_original(ms)
         b = self.w.menu_editar(flujo)
+        self.flujo = flujo
+        self.w.ed_menu()                 # el menu, al armarse, deja invalida la clave del jugador
         # el juego recuerda el cursor de cada menu y lo repone sin mirar la cantidad de botones (inferido del C): si alguna vez
         # hubo 12 botones, el cursor pudo quedar en el 12, y aceptar ahi pide el enlace "proceed" aunque el boton no se vea
         if len(b) == 12: self.cursor12 = True
@@ -1584,6 +1675,28 @@ def e_render(F):
     print('   etapas del render, vistas por la DLL, modo del motor experimental, teclas G R S / X Y Z, tope de brillo: bien')
 
 
+def estudio(s, veces=2):
+    """el jugador acepta en el boton 12 con el menu armado por la ultima s.editar(): el juego busca el enlace "proceed" del
+    flujo que leyo ENTONCES, le pide a Sider el archivo de ese nodo (mira si existe y despues lo abre) y arma la pagina que
+    dice su "data.key". Devuelve (nodo, clave del jugador con la que abre el estudio) o (pagina nativa, None). Falla si el
+    juego se quedaria colgado"""
+    ev = json.loads(s.flujo.decode('ascii'))['events']
+    assert 'proceed' in ev, 'se acepto en el boton 12 y el flujo no tiene ese enlace: el juego se cuelga'
+    to = ev['proceed']['to']
+    nombre = ('common\\script\\flow\\' + to.replace('/', '\\') + '.json').encode()
+    for _ in range(veces): r = s.pedir(nombre)
+    if r is None:
+        assert not to.startswith('BugCheck/'), 'el enlace va a %s y nadie entrega su archivo: pagina nula, el juego se cuelga' % to
+        return to, None
+    assert r == 'Estudio3D.json', r
+    d = json.loads(s.contenido(r).decode('ascii'))
+    assert d['data'] == dict(type='menu', bgId='', dialog='', key='Edit/Player/EditPlAppearance'), d['data']
+    assert list(d['events']) == ED_EVENTOS, list(d['events'])
+    vuelta = dict(to='Edit/EditMenu', go='backward', clear='all', fadeStart='', fadeEnd='do', bgType='none')
+    assert all(e == vuelta for e in d['events'].values()), 'un enlace del estudio no vuelve al menu de Editar'
+    return to, s.w.ed_clave()
+
+
 def pe_flujo_original(menu_server=False):
     """el archivo de flujo del menu de Editar SIN la pestana: el del juego (2066 bytes, CRC 7C81894A) o el del mod Menu-server
     (2091 bytes, CRC FC5F8BE8). Sale de sacarle el enlace nuevo a los archivos del paquete: asi de paso se comprueba que
@@ -1601,7 +1714,7 @@ def e_pestana(F):
     """la pestana "Motor en tiempo real" del menu de Editar: el boton 12 aparece solo cuando Sider entrega mi archivo de flujo,
     nunca quedan 12 botones con el archivo de otro, se saca sola, y las unicas escrituras en el exe son las tres previstas"""
     FAB = (PE['FN11'], 0, PE['NOSTRING'])
-    CON = ('Default.fpkd', 'Default.fpk', 'EditMenu.json', 'EditMenu_menuserver.json')
+    CON = ('Default.fpkd', 'Default.fpk', 'EditMenu.json', 'EditMenu_menuserver.json', 'Estudio3D.json')
     once = Mundo().menu_editar(pe_flujo_original())
     assert len(once) == 11 and once[0] == ('texto 200026', 'Edit/Player/EditPlayerMain') and once[8][1] == 'Edit/DataManagement/EditExternalDataMain'
     assert Mundo().menu_editar(pe_flujo_original(True)) == once
@@ -1637,12 +1750,14 @@ def e_pestana(F):
     assert len(m.escrituras) == n
     s.cuadro(3); s.opcion('Pestana en Editar'); assert 'puesta' in s.fila_cursor(), s.fila_cursor()
     s.tecla('8'); assert 'pestana: puesta' in s.texto, s.texto
-    # otros archivos no son asunto de la pestana
-    lect = m.lecturas
+    # otros archivos no son asunto de la pestana: con los del Editar solo mira que jugador tiene puesto el juego (dos
+    # lecturas, ninguna escritura); con los demas no lee nada
     for otro in (b'common\\script\\flow\\Edit\\EditDataCheckProcess.json', b'common\\script\\flow\\Edit\\Player\\EditMenu.json.bak', b'EditMenu.json',
-                 b'common\\script\\flow\\TopMenu\\TopMenu.json'):
+                 b'common\\script\\flow\\TopMenu\\TopMenu.json', b'common\\script\\flow\\Exhibition\\ExhibiEditMenu.json'):
+        lect = m.lecturas
         assert s.pedir(otro) is None
-    assert m.lecturas == lect and len(m.escrituras) == n
+        assert m.lecturas - lect == (2 if b'\\flow\\Edit\\' in otro else 0), (otro, m.lecturas - lect)
+    assert len(m.escrituras) == n
     # 3. con torneo y equipos cargados (ahi entrega Menu-server): va la copia hecha con la suya, misma pestana
     for c in (b'tournament_id', b'home_team', b'away_team'): s.ctx[c] = 65535
     puesta(w, *s.editar(), archivo='EditMenu_menuserver.json'); assert len(m.escrituras) == n
@@ -1792,6 +1907,166 @@ def e_pestana(F):
     print('   pestana: 12 botones solo con mi archivo de flujo; se saca sola; 3 escrituras en el exe y ninguna otra')
 
 
+def e_estudio(F):
+    """el boton 12 abre el estudio 3D directo: el modulo entrega el archivo del estudio por un nodo que el juego ya tiene,
+    escribe SOLO la clave del jugador (8 bytes del contexto de edicion) y va rotando el enlace para que la cache de Sider no
+    se trague el aviso de una entrada rapida"""
+    CON = ('Default.fpkd', 'Default.fpk', 'EditMenu.json', 'EditMenu_menuserver.json', 'Estudio3D.json')
+    EMP = open(os.path.join(PE_DIR, 'Estudio3D.json'), 'rb').read()
+    assert (len(EMP), zlib.crc32(EMP)) == (1271, 0x6D1DC23B), (len(EMP), hex(zlib.crc32(EMP)))
+    ORIG = {n: open(os.path.join(PE_DIR, n), 'rb').read() for n in ('EditMenu.json', 'EditMenu_menuserver.json')}
+    SALIDA = b'common\\script\\flow\\Edit\\EditDataAutoSaveProcess.json'
+    def nuevo(ttl=10, existe=CON, **k):
+        w = Mundo(**k); s = Sim(F, w, existe=existe); s.ttl = ttl
+        return w, s, w.m
+    def enlaces(s): return [json.loads(s.contenido(n).decode('ascii'))['events']['proceed']['to'] for n in ORIG]
+    def solo_cambio_el_nodo(s):
+        for n, o in ORIG.items():
+            c = s.contenido(n); assert len(c) == len(o), n
+            a = o.index(ED_NODOS[0].encode())
+            L = len(ED_NODOS[0]); assert c[:a] == o[:a] and c[a + L:] == o[a + L:] and c[a:a + L].decode() in ED_NODOS, n
+    def escr_juego(m, w):                # escrituras del modulo fuera del exe y fuera de sus propias reservas
+        return [(d, n) for d, n in m.escrituras if w.ctx <= d < w.ctx + 800]
+
+    # 1. sesion nueva: el boton lleva al primer nodo; al apretarlo se escribe la primera ficha de jugador de la base (la de
+    # id 0 se saltea) y nada mas; el enlace de las dos copias pasa al nodo siguiente sin tocar otro byte
+    w, s, m = nuevo()
+    r, b = s.editar(); assert r == 'EditMenu.json' and len(b) == 12 and b[11] == ('Motor en tiempo real', ED_NODOS[0]), b[11:]
+    assert w.ed_clave() == (0xffff, 0)
+    n0 = len(m.escrituras)
+    assert estudio(s) == (ED_NODOS[0], (0, 0x9d2))
+    assert [(d - w.ctx, n) for d, n in m.escrituras[n0:]] == [(0xe0, 8)], [(hex(d), n) for d, n in m.escrituras[n0:]]
+    assert bytes(m.leer(w.ctx + 0xe8, 10)) == struct.pack('<IHHH', 0xffffffff, 0, 0, 0xffff)       # equipo y +0xf0 sin tocar
+    assert enlaces(s) == [ED_NODOS[1]] * 2; solo_cambio_el_nodo(s)
+    assert s.contenido('Estudio3D.json') == EMP
+    reg = s.registro()
+    assert 'pestana: estudio 3D, pedido 1 (BugCheck/BugCheckSimNews) -> jugador 0x9d2 (la primera ficha de la base de datos)' in reg, reg[-400:]
+    s.cuadro(3); s.opcion('Pestana en Editar'); s.tecla('8'); assert 'estudio 3D: jugador 0x9d2' in s.texto, s.texto[-300:]
+    # 2. atras: el menu se arma de nuevo (clave invalida otra vez) con el enlace nuevo; segunda y tercera entrada dentro de
+    # los 10 s de Sider: cada una pide OTRO nombre de archivo, asi que el modulo se entera y vuelve a escribir la clave
+    for k in (1, 2):
+        s.t_sider += 2
+        r, b = s.editar(); assert len(b) == 12 and b[11][1] == ED_NODOS[k] and w.ed_clave() == (0xffff, 0), (k, b[11], w.ed_clave())
+        assert estudio(s) == (ED_NODOS[k], (0, 0x9d2)), k
+        assert enlaces(s) == [ED_NODOS[(k + 1) % 3]] * 2; solo_cambio_el_nodo(s)
+    assert 'pedido 3 (BugCheck/BugCheckSimRank) -> jugador 0x9d2' in s.registro()
+    # 2b. una CUARTA entrada antes de los 10 s de la primera: Sider contesta de memoria y el modulo no se entera. No falla
+    # nada: el estudio abre con la clave invalida (lo dice la guia: esperar entre entradas). Pasados los 10 s vuelve a andar
+    s.t_sider += 2
+    r, b = s.editar(); assert b[11][1] == ED_NODOS[0]
+    assert estudio(s) == (ED_NODOS[0], (0xffff, 0)) and enlaces(s) == [ED_NODOS[0]] * 2
+    s.t_sider += 11
+    s.editar(); assert estudio(s) == (ED_NODOS[0], (0, 0x9d2)) and enlaces(s) == [ED_NODOS[1]] * 2
+    # 2c. si el juego NO borro la clave al armar el menu (queda la de la entrada anterior), se deja y no se escribe nada
+    s.t_sider += 11; s.editar(); w.ed_juego_elige(0x9d2); n0 = len(m.escrituras)
+    assert estudio(s)[1] == (0, 0x9d2) and len(m.escrituras) == n0
+    # ... y si el juego tiene puesto otro jugador (aunque sea uno creado), tampoco se toca: es el que el juego mostraria
+    s.t_sider += 11; s.editar(); w.ed_juego_elige(0x80000003); n0 = len(m.escrituras)
+    assert estudio(s)[1] == (0, 0x80000003) and len(m.escrituras) == n0
+    assert 'el que ya tenia puesto el juego' in s.registro()
+    # 3. el ultimo jugador que se vio en el Editar: el modulo lo anota al pasar un pedido de un archivo del Editar (solo lee)
+    # y lo usa despues, si sigue en la base; uno creado o uno que no esta en la base no se usan
+    for visto, sale, dice in ((0x9d3, 0x9d3, 'el ultimo jugador que viste)'), (0x80000003, 0x9d3, 'el ultimo jugador que viste)'),
+                              (0x7654321, 0x9d2, 'la primera ficha de la base de datos)')):
+        s.t_sider += 11; s.editar(); w.ed_juego_elige(visto); n0 = len(m.escrituras)
+        assert s.pedir(b'common\\script\\flow\\Edit\\Player\\EditPlEditMenu.json') is None and len(m.escrituras) == n0
+        s.t_sider += 11; s.editar()
+        assert estudio(s)[1] == (0, sale), (hex(visto), w.ed_clave())
+        assert ('jugador 0x%x (%s' % (sale, dice)) in s.registro(), s.registro()[-300:]
+    # 4. sin base de datos legible (no cargada, modo por indice, cantidad absurda, puntero roto): el maniqui del juego
+    for romper in ('estado', 'modo', 'cantidad', 'puntero', 'tabla'):
+        w, s, m = nuevo()
+        if romper == 'estado': m.u32(w.bd + 0x30, 3)
+        elif romper == 'modo': m.u32(ED['PDB'] + 0x183789c, 2)
+        elif romper == 'cantidad': m.u32(ED['PDB'] + 0xd0bce8, 36000)
+        elif romper == 'puntero': m.u64(ED['BD'], 0)
+        else: del m.reg[ED['PDB']]
+        s.editar(); assert estudio(s) == (ED_NODOS[0], (0, ED['MANIQUI'])), romper
+        assert 'jugador 0x800000a0 (el maniqui del juego)' in s.registro(), romper
+    # 4b. una base sin ninguna ficha de jugador que sirva: tambien el maniqui
+    w = Mundo(); pdb = ED['PDB']
+    for i, (cl, ident) in enumerate(((0, 0), (1, 5), (0, 0x80000001), (0, 0))): w.m.escribir(pdb + i * 0x17c + 0x2c, struct.pack('<HHI', cl, 0, ident), False)
+    s = Sim(F, w, existe=CON); s.editar(); assert estudio(s)[1] == (0, ED['MANIQUI'])
+    # 4c. una base grande: la ficha buscada esta al final (lectura de a 10 fichas, la ultima tanda incompleta)
+    w = Mundo(); m = w.m
+    for i in range(57): m.escribir(pdb + i * 0x17c + 0x2c, struct.pack('<HHI', 0, 0, 0x1000 + i), False)
+    m.u32(pdb + 0xd0bce8, 57)
+    s = Sim(F, w, existe=CON); s.ttl = 10
+    s.editar(); w.ed_juego_elige(0x1000 + 56); s.pedir(b'common\\script\\flow\\Edit\\Player\\EditPlEditMenu.json')
+    s.editar(); assert estudio(s)[1] == (0, 0x1000 + 56) and 'el ultimo jugador que viste)' in s.registro()
+    # 5. no se escribe la clave: apagado.txt o solo_lectura.txt creados con la pestana ya puesta, el contexto no esta, no es
+    # el que conozco o la clave tiene otra cosa. El estudio se entrega igual (abre vacio, se sale con atras) y queda anotado
+    for caso, dice in (('apagado', 'apagado.txt presente'), ('lectura', 'solo_lectura.txt presente'), ('nulo', 'no tiene armado el modo Editar'),
+                       ('otro', 'no es el que conozco'), ('rara', 'no esta como la deja el menu de Editar'), ('escribir', 'no pude escribir la clave')):
+        w, s, m = nuevo()
+        s.editar()
+        if caso == 'apagado': s.SIM[b'existe'][b'apagado.txt'] = True
+        elif caso == 'lectura': s.SIM[b'existe'][b'solo_lectura.txt'] = True
+        elif caso == 'nulo': m.u64(ED['CTX'], 0)
+        elif caso == 'otro': m.u64(w.ctx, ED['VT'] + 8)
+        elif caso == 'rara': m.escribir(w.ctx + 0xe0, struct.pack('<HHI', 3, 0, 0), False)
+        else: m.falla.add(w.ctx + 0xe0)                       # Windows no deja escribir ahi
+        antes = w.ed_clave(); n0 = len(m.escrituras)
+        nodo, clave = estudio(s)
+        assert nodo == ED_NODOS[0] and clave == (None if caso == 'nulo' else antes), (caso, clave)
+        assert len(m.escrituras) == n0 + (caso == 'escribir'), caso
+        assert ('sin jugador, abre vacio: ' in s.registro()) and dice in s.registro(), (caso, s.registro()[-300:])
+    # 6. el archivo de un enlace no se puede abrir para escribir (solo lectura, antivirus): no se rota, se avisa una vez, y
+    # la entrada siguiente pasados los 10 s sigue andando por el mismo nodo
+    w, s, m = nuevo()
+    s.SIM[b'bloqueado'][b'EditMenu.json'] = True
+    s.editar(); assert estudio(s) == (ED_NODOS[0], (0, 0x9d2))
+    assert enlaces(s) == [ED_NODOS[0], ED_NODOS[1]] and s.contenido('EditMenu.json') == ORIG['EditMenu.json']
+    assert s.registro().count('no pude cambiar el enlace en pestana\\EditMenu.json') == 1
+    s.t_sider += 11; s.editar(); assert estudio(s) == (ED_NODOS[0], (0, 0x9d2))
+    assert s.registro().count('no pude cambiar el enlace') == 1
+    # 6b. la posicion o la escritura fallan: el archivo queda como estaba, entero
+    for falla in (b'sin_posicion', b'escribe_mal'):
+        w, s, m = nuevo(); s.SIM[falla] = True
+        s.editar(); assert estudio(s)[1] == (0, 0x9d2)
+        assert all(s.contenido(n) == o for n, o in ORIG.items()), falla
+        assert 'no pude cambiar el enlace' in s.registro(), falla
+    # 7. falta pestana\Estudio3D.json (o es otro): el modulo lo arma igual al del paquete ANTES de poner la pestana
+    for previo in (None, b'{}', EMP[:-1], EMP + b'\n'):
+        w, s, m = nuevo(existe=CON[:4])
+        if previo is not None: s.SIM[b'existe'][b'Estudio3D.json'] = True; s.SIM[b'contenido'][b'Estudio3D.json'] = previo
+        r, b = s.editar(); assert len(b) == 12, (previo, r, len(b))
+        assert s.contenido('Estudio3D.json') == EMP and 'arme pestana\\Estudio3D.json' in s.registro()
+        assert estudio(s) == (ED_NODOS[0], (0, 0x9d2))
+    # 7b. si no se puede armar, la pestana NO se pone (11 botones, el menu de siempre) y dice por que
+    w, s, m = nuevo(existe=CON[:4]); s.SIM[b'sin_crear'] = True
+    r, b = s.editar(); assert r is None and len(b) == 11 and not m.exe_escr, (r, len(b))
+    s.cuadro(3); s.opcion('Pestana en Editar'); s.tecla('8'); assert 'falta pestana\\Estudio3D.json' in s.texto, s.texto[-300:]
+    # 8. con los EditMenu*.json de la version 0.4 (el boton lleva a "Jugadores"): sigue andando como antes, sin rotar ni escribir
+    w, s, m = nuevo()
+    for n, o in ORIG.items(): s.SIM[b'contenido'][n.encode()] = o.replace(b'BugCheck/BugCheckSimNews', b'Edit/Player/EditPlayerMain')
+    viejo = {n: s.contenido(n) for n in ORIG}
+    r, b = s.editar(); assert len(b) == 12 and b[11][1] == 'Edit/Player/EditPlayerMain'
+    assert estudio(s) == ('Edit/Player/EditPlayerMain', None) and w.ed_clave() == (0xffff, 0)
+    assert all(s.contenido(n) == viejo[n] for n in ORIG) and not escr_juego(m, w)
+    # 9. con torneo y equipos cargados (entrega la copia hecha con la de Menu-server): lo mismo
+    w, s, m = nuevo()
+    for c in (b'tournament_id', b'home_team', b'away_team'): s.ctx[c] = 65535
+    r, b = s.editar(); assert r == 'EditMenu_menuserver.json' and b[11][1] == ED_NODOS[0]
+    assert estudio(s) == (ED_NODOS[0], (0, 0x9d2)) and enlaces(s) == [ED_NODOS[1]] * 2
+    s.t_sider += 3; r, b = s.editar(); assert r == 'EditMenu_menuserver.json' and estudio(s) == (ED_NODOS[1], (0, 0x9d2))
+    # 10. salir del Editar saca la pestana; un pedido suelto de un nodo con la pestana sacada igual entrega el estudio (el
+    # cursor recordado) y los pedidos de otros BugCheck no son asunto del modulo
+    assert s.pedir(SALIDA) is None
+    s.t_sider += 11
+    assert s.pedir(b'common\\script\\flow\\BugCheck\\BugCheckSimNews.json') == 'Estudio3D.json'
+    for otro in (b'common\\script\\flow\\BugCheck\\BugCheckSimMainNews.json', b'common\\script\\flow\\BugCheck\\BugCheckSimPlayerEdit.json',
+                 b'common\\script\\flow\\BugCheck\\BugCheckSimNews.json.bak', b'BugCheckSimNews.json'):
+        assert s.pedir(otro) is None, otro
+    # 11. con sin_pestana.txt la pestana no se pone y el juego no tiene como llegar a mis nodos. Si igual llegara un pedido
+    # (un menu de 12 botones armado antes de recargar el modulo), se entrega el estudio: la pagina propia de esos nodos no
+    # existe en el juego de venta y lo dejaria colgado. No se toca el exe
+    w = Mundo(); s = Sim(F, w, existe=CON + ('sin_pestana.txt',)); m = w.m
+    r, b = s.editar(); assert r is None and len(b) == 11
+    assert s.pedir(b'common\\script\\flow\\BugCheck\\BugCheckSimNews.json') == 'Estudio3D.json' and not m.exe_escr
+    print('   entrada directa al estudio: clave del jugador, rotacion del enlace, cache de Sider, fallas de archivo y de memoria')
+
+
 def e_roto(F):
     """la memoria cambia por debajo (el juego descarga cosas, listas con ciclos, punteros basura): nunca un error de Lua
     y nunca una escritura fuera de un objeto conocido"""
@@ -1800,7 +2075,7 @@ def e_roto(F):
     for vuelta in range(60):
         w = Mundo(conj=rnd.random() < 0.3, con_limite=rnd.random() < 0.5, huesos=rnd.choice([0, 1, 2]), con_visor=rnd.random() < 0.8,
                   con_render=rnd.random() < 0.9)
-        s = Sim(F, w, existe=('Default.fpkd', 'Default.fpk', 'EditMenu.json', 'EditMenu_menuserver.json')); m = w.m
+        s = Sim(F, w, existe=('Default.fpkd', 'Default.fpk', 'EditMenu.json', 'EditMenu_menuserver.json') + (('Estudio3D.json',) if rnd.random() < 0.8 else ())); m = w.m
         if rnd.random() < 0.6: s.SIM[b'dll_crear'](1 if rnd.random() < 0.9 else 3)      # con la DLL nueva (o una de otra version)
         if rnd.random() < 0.5:                       # el motor dibujando: el reloj avanza dentro del cuadro para que la espera corte
             s.SIM[b'tick_paso'] = 3
@@ -1816,6 +2091,17 @@ def e_roto(F):
                 if rnd.random() < 0.1: s.cache = {}
                 s.t_sider += rnd.choice([0, 1, 4, 12])
                 arch, bot = s.editar(); assert len(bot) == 11 or arch, (vuelta, paso, arch, len(bot))     # 12 botones: solo con mi archivo
+                # con 12 botones a veces acepta en el 12 (una o dos veces seguidas, volviendo al menu en el medio): o abre el
+                # estudio con mi archivo, o va a una pagina nativa; nunca un nodo sin archivo
+                for _ in range(rnd.choice([0, 0, 1, 2]) if len(bot) == 12 else 0):
+                    if rnd.random() < 0.3: s.w.ed_juego_elige(rnd.choice([0x9d2, 0x80000003, 0, 0x7fffffff]))
+                    antes = s.w.ed_clave()
+                    nodo, clave = estudio(s)
+                    # o la clave queda como estaba (la puso el juego, o no se pudo escribir), o es la de un jugador que sirve
+                    assert clave is None or clave == antes or (clave[0] == 0 and clave[1] != 0 and not 0x80000000 <= clave[1] <= 0x8000009f), (vuelta, paso, antes, clave)
+                    s.t_sider += rnd.choice([0, 2, 5, 11])
+                    arch, bot = s.editar()
+                    if len(bot) != 12: break
                 if rnd.random() < 0.3: s.pedir(b'common\\script\\flow\\Edit\\EditDataAutoSaveProcess.json')     # y sale del modo Editar
             if r < 0.45: s.tecla(rnd.choice(teclas))
             elif r < 0.70:
@@ -1857,7 +2143,7 @@ def e_roto(F):
 
 
 ESCENARIOS = dict(basico=e_basico, mover=e_mover, luces=e_luces, camara=e_camara, seguro=e_seguro, listas=e_listas, repaso=e_repaso,
-                  render=e_render, pestana=e_pestana, roto=e_roto)
+                  render=e_render, pestana=e_pestana, estudio=e_estudio, roto=e_roto)
 
 if __name__ == '__main__':
     fuente = open(sys.argv[1], 'rb').read()
