@@ -937,6 +937,115 @@ def e_listas(F):
     print('   cola de altas, listas por tipo, bajas, clases de luz, compuerta de listas, gestos del mouse, apagado en vivo: bien')
 
 
+def _renacer(w, o, archivo=None, mascara=0, bit=0):
+    """el motor destruye un Model y el asignador le da la MISMA direccion a uno nuevo (ctor FUN_141696f60: todo en cero,
+    sin functores), que entra a la lista de modelos. Con 'archivo' es otro .fmdl; sin el, el mismo archivo"""
+    m = w.m; esc = m.r64(o + 0x28); viejo = m.r64(o + 0x118)
+    if m.r32(o + 0x24) & 1: w.sacar(o)
+    m.reg[o][:] = bytes(0x200)
+    m.u64(o, VT['modelo']); m.u32(o + 0x30, TIPO['modelo']); m.u64(o + 0x28, esc)
+    m.f(o + 0x40, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1); m.f(o + 0xa0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)
+    m.f(o + 0x1bc, 1.0); m.f(o + 0x1c4, 1.0)
+    if archivo:
+        f = m.nuevo(0x40); rec = m.nuevo(0x10); m.u64(rec, m.cadena(archivo)); m.u64(f + 0x30, rec); m.u64(o + 0x118, f)
+    else:
+        m.u64(o + 0x118, viejo)
+    m.u32(o + 0x1ac, mascara); m.u32(o + 0x1b4, 0x10 | bit)
+    w._enlazar(w._lista(esc, TIPO['modelo']), o)
+    w.rangos[o] = [(o + 0x1ac, o + 0x1b8)]; m.permitidas += w.rangos[o]
+
+
+def e_repaso(F):
+    """lo que encontro la revision de la 0.2.1: lista leida a medio cambiar, reponer sin poder escribir, 'dejarla sola' sin
+    poder escribir, direccion reusada por otro modelo, escena ajena que no coincide"""
+    BOTAS = '/Assets/pes16/model/character/boots.fmdl'
+    fila = lambda s, n: [l.split('|')[-1].strip() for l in s.texto.split('\n') if n in l.split('|')[-1] and '[' in l.split('|')[-1]]
+    # 1. una lista a medio cambiar durante UNA lectura (el motor apaga y prende el bit0 al mover un objeto): no se pierden las
+    #    marcas ni el cursor y no se escribe nada (los marcadores no se esconden y vuelven)
+    for cual, saltos in (('modelo', 0), ('luz', 5)):
+        w = Mundo(); s = Sim(F, w); s.cuadro(3); m = w.m
+        s.cursor_en('zfx_Obj_02'); s.tecla('8'); s.opcion('Marcador en cada foco'); s.tecla('8'); s.cuadro(40); s.pagina(1)
+        antes = fila(s, 'zfx_Obj_02'); assert antes and antes[0].startswith('>[x]'), s.texto
+        o = m.r64(w._lista(w.esc[0], TIPO[cual]))
+        for _ in range(saltos): o = m.r64(o + 0x18)
+        arm = {'n': 1}; leer0 = m.leer
+        def leer(dir, n, o=o, arm=arm, leer0=leer0):
+            d = leer0(dir, n)
+            if d is not None and dir == o and n == 0x38 and arm['n'] > 0:
+                arm['n'] -= 1
+                b = bytearray(d); struct.pack_into('<I', b, 0x24, struct.unpack_from('<I', b, 0x24)[0] & 0xfffffffe)
+                return bytes(b)
+            return d
+        m.leer = leer
+        ne = len(m.escrituras); s.cuadro(40)
+        assert arm['n'] == 0, 'la lectura a medio cambiar no llego a pasar'
+        assert fila(s, 'zfx_Obj_02') == antes and len(m.escrituras) == ne and not m.malas, (cual, fila(s, 'zfx_Obj_02'), len(m.escrituras) - ne)
+        m.leer = leer0
+    # 2. "Dejar todo como estaba" sin poder escribir: no dice que repuso ni olvida los originales
+    w = Mundo(extras=True, con_limite=True); s = Sim(F, w); s.cuadro(5); m = w.m
+    _, dl = w.luz('SpotLight_Key'); f0 = m.r32(dl['p'] + 0x64); c0 = m.rf(dl['p'] + 0x40, 4)
+    s.cursor_en('SpotLight_Key ', 2); s.tecla('8', '3', '3')
+    _, dm = w.por_nombre('zfx_Obj_01'); T0 = m.rf(dm['te'] + 0x50, 3)
+    s.cursor_en('zfx_Obj_01'); s.tecla('8'); s.arrastre('izq', 60, 0); s.tecla('7')
+    assert m.r32(dl['p'] + 0x64) != f0 and m.rf(dl['p'] + 0x40, 4) != c0 and m.rf(dm['te'] + 0x50, 3) != T0
+    s.SIM[b'existe'][b'solo_lectura.txt'] = True; s.cuadro(70); ne = len(m.escrituras)
+    s.opcion('Dejar todo como estaba'); s.tecla('8')
+    assert 'en SOLO LECTURA no se repone nada' in s.texto and len(m.escrituras) == ne, s.texto
+    s.SIM[b'existe'][b'solo_lectura.txt'] = None; s.SIM[b'existe'][b'sin_llamadas.txt'] = True; s.cuadro(70)
+    s.opcion('Dejar todo como estaba'); s.tecla('8')
+    assert 'NO repuse 1' in s.texto and m.rf(dl['p'] + 0x40, 4) != c0, s.texto        # (el brillo necesita la llamada)
+    cerca(m.rf(dm['te'] + 0x50, 3), T0, 1e-6); assert not estado_objeto(w, 'zfx_Obj_01')['oculto']
+    s.SIM[b'existe'][b'sin_llamadas.txt'] = None; s.cuadro(70)
+    s.opcion('Dejar todo como estaba'); s.tecla('8')
+    assert 'NO repuse' not in s.texto and m.r32(dl['p'] + 0x64) == f0, s.texto
+    cerca(m.rf(dl['p'] + 0x40, 4), c0, 1e-3)
+    # 3. "dejarla sola" y prender / apagar sin poder escribir: ni lo anota ni muestra (SOLA)
+    w = Mundo(); m = w.m; lst = w._lista(w.esc[0], TIPO['modelo']); m.u32(lst + 0x10, m.r32(lst + 0x10) + 1)     # compuerta cerrada
+    s = Sim(F, w); s.cuadro(3); s.cursor_en('SpotLight_Key ', 2); n = len(s.logs()); s.tecla('7')
+    assert not m.escrituras and '(SOLA)' not in s.texto and not [x for x in s.logs()[n:] if 'queda sola' in x], s.texto
+    s.tecla('8'); assert not m.escrituras
+    w = Mundo(); m = w.m; s = Sim(F, w); s.cuadro(3); s.SIM[b'existe'][b'solo_lectura.txt'] = True; s.cuadro(70)
+    s.cursor_en('SpotLight_Key ', 2); n = len(s.logs()); s.tecla('7')
+    assert not m.escrituras and '(SOLA)' not in s.texto and 'no pude tocar las luces' in s.texto, s.texto
+    s.tecla('8'); assert not m.escrituras and 'no pude tocar esa luz' in s.texto, s.texto
+    s.SIM[b'existe'][b'solo_lectura.txt'] = None; s.cuadro(70); s.tecla('7'); assert '(SOLA)' in s.texto and m.escrituras, s.texto
+    s.tecla('7'); assert '(SOLA)' not in s.texto
+    # 4. la direccion de un objeto marcado pasa a OTRO modelo entre dos exploraciones: la tecla de ocultar no lo toca, y
+    #    despues no hereda ni la marca ni el nombre
+    for nombre in ('zfx_Obj_01', BOTAS):
+        w = Mundo(con_limite=True); s = Sim(F, w); s.cuadro(3); m = w.m
+        o, d = w.por_nombre(nombre); s.cursor_en(nombre.split('/')[-1]); s.tecla('8')
+        _renacer(w, o, '/Assets/pes16/model/character/hair_NUEVO.fmdl')
+        if d.get('cuerpo'): m.u64(d['cuerpo'], VT['otro'])                 # el cuerpo viejo ya fue destruido
+        ne = len(m.escrituras); s.tecla('7')
+        assert len(m.escrituras) == ne and m.r32(o + 0x1ac) == 0 and m.r32(o + 0x1b4) & 1 == 0, 'oculto al modelo nuevo'
+        s.cuadro(80); s.pagina(1)
+        f = fila(s, 'hair_NUEVO'); assert f and '[ ]' in f[0] and not fila(s, nombre.split('/')[-1]), s.texto
+        s.opcion('Dejar todo como estaba'); s.tecla('8'); s.cuadro(5)
+        assert m.r32(o + 0x1ac) == 0 and m.r32(o + 0x1b4) & 1 == 0 and not m.malas
+    # 5. un modelo del juego que toque y que el motor destruye: si renace en la misma direccion (mismo archivo) con el panel
+    #    abierto, "Dejar todo como estaba" no le pone el estado del anterior
+    for buscado, toques, nace in (('oculto_del_juego', 1, (0, 0)), ('face_high', 1, (0, 0)), ('face_high', 1, (0xffffffff, 0)), ('face_high', 2, (0xffffffff, 0))):
+        w = Mundo(extras=True); s = Sim(F, w); m = w.m; s.cuadro(3)
+        o = [a for a, d in w.modelos.items() if d['nombre'] and buscado in d['nombre']][0]
+        s.cursor_en('~' + buscado)
+        for _ in range(toques): s.tecla('7')
+        w.sacar(o); s.cuadro(80)                                           # una exploracion ve que ya no esta
+        _renacer(w, o, None, *nace); s.cuadro(80)
+        s.opcion('Dejar todo como estaba'); s.tecla('8'); s.cuadro(5)
+        assert (m.r32(o + 0x1ac), m.r32(o + 0x1b4) & 1) == nace, (buscado, toques, nace, hex(m.r32(o + 0x1ac)))
+    # 6. una escena ajena (sin modelos ni luces) cuya cantidad no coincide no deja al resto en solo lectura; queda anotada
+    w = Mundo(); m = w.m; lst = w._lista(w.esc[1], TIPO['otro']); m.u32(lst + 0x10, m.r32(lst + 0x10) + 1)
+    s = Sim(F, w); s.cuadro(300)
+    r = s.registro(); assert 'listas del motor comprobadas' in r and 'sin modelos ni luces NO coincide' in r, [x for x in r.split('\r\n') if 'escena' in x][:6]
+    assert 'no coinciden' not in s.texto, s.texto
+    s.cursor_en('zfx_Obj_01'); s.tecla('7'); assert estado_objeto(w, 'zfx_Obj_01')['oculto'] and not m.malas
+    # 7. panel compacto: el renglon de estado entra entero en el peor caso (ESCALAR, PANTALLA, camara del juego)
+    s.tecla('4', '4'); s.opcion('Panel'); s.tecla('8')
+    l2 = s.texto.split('\n')[1]; assert l2.endswith('(ver OPCIONES)') and len(l2) + 7 <= 112, (len(l2), l2)
+    print('   lista a medio cambiar, reponer y "dejarla sola" sin poder escribir, direccion reusada, escena ajena: bien')
+
+
 def e_roto(F):
     """la memoria cambia por debajo (el juego descarga cosas, listas con ciclos, punteros basura): nunca un error de Lua
     y nunca una escritura fuera de un objeto conocido"""
@@ -981,7 +1090,7 @@ def e_roto(F):
     print('   60 vueltas de 260 pasos con la memoria rompiendose: sin errores y sin escrituras fuera de lugar')
 
 
-ESCENARIOS = dict(basico=e_basico, mover=e_mover, luces=e_luces, camara=e_camara, seguro=e_seguro, listas=e_listas, roto=e_roto)
+ESCENARIOS = dict(basico=e_basico, mover=e_mover, luces=e_luces, camara=e_camara, seguro=e_seguro, listas=e_listas, repaso=e_repaso, roto=e_roto)
 
 if __name__ == '__main__':
     fuente = open(sys.argv[1], 'rb').read()

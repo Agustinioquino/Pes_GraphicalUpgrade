@@ -535,7 +535,7 @@ local function leer_luz(o, r)
     return true
 end
 
-local function explorar()
+local function pasada()
     N.expl = N.expl + 1
     local id = N.expl
     local nesc, nm, nl, na, no = {}, {}, {}, {}, {}
@@ -601,7 +601,15 @@ local function explorar()
                     esc.n = esc.n + 1
                     if r.tipo == "modelo" then
                         if leer_modelo(o, r) then
-                            if not r.resuelto or r.fun ~= r.fun_res or r.n_fun ~= r.nfun_res then resolver_modelo(o, r) end
+                            if not r.resuelto or r.fun ~= r.fun_res or r.n_fun ~= r.nfun_res or r.archivo ~= r.arch_res then
+                                r.nom_antes = r.resuelto and r.nombre or nil
+                                resolver_modelo(o, r)
+                                r.arch_res = r.archivo
+                                -- la misma direccion con otro nombre = otro objeto (el juego reuso la memoria): no hereda la marca
+                                if r.nom_antes and r.nom_antes ~= r.nombre then marcados[o] = nil end
+                                -- ni el "como estaba" de visibilidad que se habia guardado para el anterior
+                                if r.nom_antes then G.oc_orig[o] = nil end
+                            end
                             esc.n_mod = esc.n_mod + 1
                             if r.ayuda then na[#na + 1] = r else nm[#nm + 1] = r end
                         end
@@ -625,6 +633,26 @@ local function explorar()
         if sig == primera then break end
         e = sig
     end
+    return nesc, nm, nl, na, no, ne, id
+end
+
+local function explorar()
+    local nesc, nm, nl, na, no, ne, id = pasada()
+    -- con las listas ya comprobadas: si una lista se corto a mitad (el motor la estaba cambiando), se recorre otra vez
+    if E.listas_ok then
+        local cortada = false
+        for i = 1, ne do
+            local x = nesc[i]
+            if x and not x.tope and x.raro > 0 and x.cuenta > 0 then cortada = true end
+        end
+        if cortada then nesc, nm, nl, na, no, ne, id = pasada() end
+    end
+    -- pasada limpia = ninguna lista cortada ni con tope: lo que no se vio es que de verdad ya no esta
+    local limpia = true
+    for i = 1, ne do
+        local x = nesc[i]
+        if x and (x.tope or x.raro > 0) then limpia = false end
+    end
     -- primera vez: lo recorrido tiene que coincidir con la cantidad que lleva el motor en cada lista. Hasta que eso pase una
     -- vez, el modulo lista pero no escribe sobre modelos ni luces (si mi lectura del motor fuera equivocada, no toco nada)
     local total = 0
@@ -633,20 +661,31 @@ local function explorar()
     end
     E.n_obj = total
     if not E.listas_ok then
-        local bien, con_algo = true, 0
+        -- cuentan las escenas donde encontre modelos o luces (las unicas donde escribo). Una escena SIN modelos ni luces que
+        -- no coincida no frena a las demas: se anota para verla en el registro
+        local bien, con_algo, ajenas = true, 0, 0
         for i = 1, ne do
             local x = nesc[i]
             if x and not x.tope and (x.n_mod + x.n_luz > 0 or x.cuenta > 0) then
                 if x.ok then
                     if x.n_mod + x.n_luz > 0 then con_algo = con_algo + 1 end
-                else
+                elseif x.n_mod + x.n_luz > 0 then
                     bien = false
+                else
+                    ajenas = ajenas + 1
                 end
             end
         end
         if bien and con_algo > 0 then
             E.listas_ok = true
             R(string.format("listas del motor comprobadas (%d objetos en %d escenas: lo recorrido coincide con la cantidad de cada lista)", total, ne), true)
+            for i = 1, ne do
+                local x = nesc[i]
+                if ajenas > 0 and x and not x.ok and not x.tope and x.cuenta > 0 then
+                    R(string.format("  (escena %d 0x%s sin modelos ni luces NO coincide: cantidad del motor %d, recorridos %d, cosas raras %d; no la toco)",
+                        i, hx(x.dir), x.cuenta, x.n, x.raro))
+                end
+            end
         elseif bien then
             E.listas_mal = 0                            -- todavia no hay modelos ni luces contra los que comprobar
         else
@@ -668,6 +707,9 @@ local function explorar()
         if r.visto ~= id then
             por_dir[d] = nil
             marcados[d] = nil
+            -- un modelo del juego (sin cuerpo de escena) que ya no esta: su "como estaba" no vale para el que nazca despues
+            -- en la misma direccion (los objetos de escena renacen como dice el archivo, asi que el suyo sigue valiendo)
+            if limpia and r.tipo == "modelo" and not r.cuerpo then G.oc_orig[d] = nil end
         end
     end
     -- el cursor sigue sobre el mismo objeto aunque la lista cambie
@@ -952,6 +994,11 @@ end
 
 local function ocultar(r, oc, exacto)
     if not en_escena(r, VT_MODELO) then return false end
+    -- sigue siendo el modelo que explore (mismos functores y mismo archivo)? si la direccion paso a otro, no lo toco
+    if not leer(r.dir + 0x100, 0x20) or B32[0] ~= r.nfun_res or P(8) ~= r.fun_res or P(0x18) ~= r.archivo then
+        E.sucio = true
+        return false
+    end
     if not leer(r.dir + 0x1ac, 0xc) then return false end
     local masc, v = B32[0], B32[2]
     if G.oc_orig[r.dir] == nil or G.oc_orig[r.dir].nombre ~= r.nombre then
@@ -1453,33 +1500,44 @@ local function paso_herr(signo)
     herr_fin(a)
 end
 local function restaurar_todo()
-    local nl, no, nt = 0, 0, 0
+    if E.solo_lectura then                  -- no se puede escribir: no se repone ni se olvida ningun original
+        E.aviso = "en SOLO LECTURA no se repone nada: borra solo_lectura.txt y volve a elegir esta opcion"
+        return
+    end
+    local nl, no, nt, falta = 0, 0, 0, 0
+    local ql, qt, qo = {}, {}, {}           -- originales que no se pudieron reponer: quedan para otro intento
     for i = 1, #luces do
         local l, g = luces[i], G.luz_orig[luces[i].dir]
         if g and g.nombre == l.nombre then
-            luz_prender(l, g.prendida)
-            if c_color and (l.color[1] ~= g.color[1] or l.color[2] ~= g.color[2] or l.color[3] ~= g.color[3]) then luz_color(l, g.color) end
-            nl = nl + 1
+            local ok = luz_prender(l, g.prendida)
+            if ok and c_color and (l.color[1] ~= g.color[1] or l.color[2] ~= g.color[2] or l.color[3] ~= g.color[3]) then ok = luz_color(l, g.color) end
+            if ok then nl = nl + 1 else ql[l.dir] = g falta = falta + 1 end
         end
     end
     for i = 1, #modelos + #ayudas do
         local r = (i <= #modelos) and modelos[i] or ayudas[i - #modelos]
         local g = r.ent and G.tf_orig[r.ent]
-        if g and g.nombre == r.nombre and aplicar_tf(r, g.S, g.Q, g.T) then
-            avisar_motor(r)
-            nt = nt + 1
+        if g and g.nombre == r.nombre then
+            if aplicar_tf(r, g.S, g.Q, g.T) then
+                avisar_motor(r)
+                nt = nt + 1
+            else
+                qt[r.ent] = g
+                falta = falta + 1
+            end
         end
         local go = G.oc_orig[r.dir]
         if go and go.nombre == r.nombre and (r.oculto ~= go.oculto
             or (not r.cuerpo and go.masc and go.bit and (r.mascara ~= go.masc or r.b1b4 % 2 ~= go.bit))) then
-            if ocultar(r, go.oculto, go) then no = no + 1 end
+            if ocultar(r, go.oculto, go) then no = no + 1 else qo[r.dir] = go falta = falta + 1 end
         end
     end
-    G.luz_orig, G.tf_orig, G.oc_orig = {}, {}, {}
+    G.luz_orig, G.tf_orig, G.oc_orig = ql, qt, qo
     E.solo, E.grilla, E.marcadores = nil, false, false
     if G.cam then cam_restaurar() end
     E.sucio = true
-    E.aviso = string.format("todo como estaba: %d luces, %d objetos en su lugar, %d visibles / ocultos", nl, nt, no)
+    E.aviso = string.format("todo como estaba: %d luces, %d objetos en su lugar, %d visibles / ocultos%s", nl, nt, no,
+        (falta > 0) and string.format(" | NO repuse %d: probar de nuevo", falta) or "")
     R(E.aviso, true)
 end
 
@@ -1606,22 +1664,32 @@ local function tecla(vkey)
         elseif vkey == 0x39 then mover_cursor(2, #luces, -1)
         elseif vkey == 0x38 and l then
             local si = not l.prendida
-            if luz_prender(l, si) then R(string.format("luz %s: %s", l.nombre, si and "PRENDIDA" or "apagada"), true) end
+            if luz_prender(l, si) then R(string.format("luz %s: %s", l.nombre, si and "PRENDIDA" or "apagada"), true)
+            else E.aviso = "no pude tocar esa luz (solo lectura, listas sin comprobar o ya no esta)" end
         elseif vkey == 0x37 and l then
-            if E.solo then
-                for i = 1, #luces do
-                    local x = luces[i]
-                    if E.solo[x.dir] ~= nil then luz_prender(x, E.solo[x.dir]) end
+            -- cambiadas = las que de verdad cambie; pend = las que habia que cambiar y no pude (solo lectura, listas sin
+            -- comprobar, luz que ya no esta). Si no cambie ninguna y quedaron pendientes, no anoto ni muestro nada hecho
+            local antes, cambiadas, pend = {}, 0, 0
+            for i = 1, #luces do
+                local x = luces[i]
+                local era, q = x.prendida, (x == l)
+                antes[x.dir] = era
+                if E.solo then q = E.solo[x.dir] end
+                if q ~= nil then
+                    if not luz_prender(x, q) then
+                        if era ~= q then pend = pend + 1 end
+                    elseif x.prendida ~= era then
+                        cambiadas = cambiadas + 1
+                    end
                 end
+            end
+            if cambiadas == 0 and pend > 0 then
+                E.aviso = "no pude tocar las luces (solo lectura, listas sin comprobar o ya no estan)"
+            elseif E.solo then
                 E.solo = nil
                 R("luces: vuelven las que estaban prendidas", true)
             else
-                E.solo = {}
-                for i = 1, #luces do
-                    local x = luces[i]
-                    E.solo[x.dir] = x.prendida
-                    luz_prender(x, x == l)
-                end
+                E.solo = antes
                 R("luces: queda sola " .. l.nombre, true)
             end
         elseif (vkey == 0x34 or vkey == 0x33) and l then
@@ -1918,7 +1986,7 @@ function m.overlay_on(ctx)
     volcar_registro()
     local t = { cabecera() }
     if E.compacto then
-        t[2] = string.format("%d modelos, %d luces | herramienta %s eje %s | camara %s | panel compacto (se cambia en OPCIONES)",
+        t[2] = string.format("%d modelos, %d luces | herramienta %s eje %s | camara %s | panel compacto (ver OPCIONES)",
             #modelos, #luces, HERR[E.herr], EJES[E.eje], cam.activa and "libre" or "del juego")
         local o = (E.pag == 4) and OPC[E.cur[4]] or nil
         if o then t[3] = string.format("> %s %s", o[1], o[2]()) end      -- en OPCIONES se ve sobre que opcion esta el cursor
