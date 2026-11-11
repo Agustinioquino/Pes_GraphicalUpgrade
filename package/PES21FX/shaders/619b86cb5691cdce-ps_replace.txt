@@ -550,7 +550,10 @@ void main(
       // (08/11 y, Agustin: "como esto afecta a la pelota por abajo") w407: cerca del suelo el pasto al sol ocupa casi toda la mitad de abajo
       // del cielo que ve el objeto (la pelota, los botines): rebote hasta 2.5x y con el verde del cesped (sin desaturar); 0 = como antes
       { float kL = lowK * clamp(IniParams.Load(int2(407,0)).w, 0.0, 2.0);
-        if (kL > 0.001) { float3 tg = TB.y > 0.01 ? TB.xyz * 1.35 : float3(0.14, 0.24, 0.07); turf = lerp(turf, tg, saturate(0.7 * kL)) * (1.0 + 0.75 * kL); } }
+        // (11/11 g, Agustin: "el rebote de la luz en la pelota" se ve raro, captura 13.54: la mitad de abajo verde oliva) el verde del cesped
+        // medido llega mas gris (60 %; el pasto al sol devuelve tambien luz blanca de la cera de las hojas) y hasta 1.5x en vez de 1.75x
+        if (kL > 0.001) { float3 tg = TB.y > 0.01 ? TB.xyz * 1.35 : float3(0.14, 0.24, 0.07); tg = lerp(dot(tg, float3(0.2126, 0.7152, 0.0722)).xxx, tg, 0.6);
+          turf = lerp(turf, tg, saturate(0.7 * kL)) * (1.0 + 0.5 * kL); } }
       r2.xyz += sunC * sunUp * turf * shadeB * skyTint * fGround3 * max(BG.x, 0.0) * saturate((120.0 - zb) / 40.0) * PESAmbGain();
     }
   }
@@ -717,10 +720,12 @@ void main(
         if (lit > 0.001) {
           float3 c = r2.xyz;
           float lum = dot(c, float3(0.2126, 0.7152, 0.0722));
+          // (11/11 g, Agustin: "la luz se ve rara" con el pasto natural, lima saturado) natural (x407 = 0): 60 % del tinte y la saturacion
+          float natP = IniParams.Load(int2(407,0)).x < 0.5 ? 0.6 : 1.0;
           float3 warm = lerp(float3(1.10, 1.16, 0.62), float3(1.20, 1.10, 0.55), 1.0 - sunUp);   // verde amarillo; con sol bajo mas dorado
-          c *= lerp(float3(1.0, 1.0, 1.0), warm, saturate(0.55 * lit));
+          c *= lerp(float3(1.0, 1.0, 1.0), warm, saturate(0.55 * lit * natP));
           float lum2 = dot(c, float3(0.2126, 0.7152, 0.0722));
-          c = max(lerp(lum2.xxx, c, 1.0 + 0.45 * clamp(PS4.y, 0.0, 2.0) * saturate(lit)), 0.0);
+          c = max(lerp(lum2.xxx, c, 1.0 + 0.45 * natP * clamp(PS4.y, 0.0, 2.0) * saturate(lit)), 0.0);
           c *= (lum / max(lum2, 1e-5)) * (1.0 + 0.22 * saturate(lit));      // conserva el brillo y lo sube un poco: luz fuerte
           r2.xyz = c;
           float fwd = saturate(dot(Ld, Vsk)), side = saturate(1.0 - abs(dot(Ld, Vsk)));

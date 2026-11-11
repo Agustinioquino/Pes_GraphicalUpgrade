@@ -74,7 +74,10 @@ float PESTurfMicroShadow(Texture2D<float4> dT, SamplerState sP, float2 sC, float
   // (Agustin: "al acercarme mucho la camara se oscurece"). Ahora la sombra reparte la luz en vez de quitarla: la hoja tapada baja (la hoja
   // de delante deja pasar algo, no es negra) y la que ve el sol sube un poco, asi el promedio queda como de lejos y se ve el contraste
   float kk = fadeT * saturate(k) * eM.x * eM.y;
-  return max(1.0 + kk * (0.18 - 0.62 * occ), 0.0);
+  // (11/11 g, Agustin: "el sol afectando a las hojas individuales") natural en primerisimo plano (menos de ~1-2 mm por pixel: las hojas 3D):
+  // cada hoja tapada queda en la sombra de verdad (0.27, la luz del cielo y el rebote la llenan) y la que ve el sol sube (1.22). Lejos como antes
+  float clN = (IniParams.Load(int2(407, 0)).x < 0.5) ? 1.0 - smoothstep(0.0009, 0.0025, mpp) : 0.0;
+  return max(1.0 + kk * lerp(0.18 - 0.62 * occ, 0.22 - 0.95 * occ, clN), 0.0);
 }
 
 // (04/11) translucidez a contraluz: la luz del sol que ATRAVIESA la hoja hacia la camara (mirando hacia el sol se encienden las puntas).

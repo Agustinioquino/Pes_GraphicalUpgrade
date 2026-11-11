@@ -294,6 +294,9 @@ void main(
   // salia como un triangulo plano. Grupos de 24 vertices = tarjetas enteras (el juego 4 vertices por tarjeta, mallas densas 6 / 8) +
   // parcela (origen de 0.5 m) + instancia. El artificial queda como estaba (no usa el azar para el dibujo del atlas)
   bool pesNatV = IniParams.Load(int2(407, 0)).x < 0.5;
+  // (11/11 g, Agustin: "las zonas que no tienen pasto por desgaste deberian seguirse viendo pero mas corto") natural dentro de la cancha
+  // (+3 m): lo gastado / pelado (desgaste fijo y en vivo, mascara del estadio) deja pasto corto (40-50 % del alto) en vez de enterrarlo
+  bool pesWShort = false;
   float pesHv;
   if (pesIsExt && pesCard >= 0) pesHv = PESGh21(float2((float)pesCard * 0.0291 + pesExtOrg.x * 0.59, pesExtOrg.y * 0.43 + (float)pesRot * 0.17) + 0.23);
   else if (pesNatV) {
@@ -357,6 +360,7 @@ void main(
     float4 Q6 = IniParams.Load(int2(106, 0)), Q7 = IniParams.Load(int2(107, 0));
     float2 puv = pesRoot * cb4[1].xy + cb4[1].zw;
     pesPm = PESPitchMeters(puv);
+    pesWShort = pesNatV && abs(pesPm.x) < 55.5 && abs(pesPm.y) < 37.0;
     float pesLive = PESWearMap.SampleLevel(g_samplerLinear_Clamp_s, puv, 0).x;   // desgaste en vivo (mapa de la DLL, t8)
     pesWear = PESWear(pesPm, pesRoot, Q4.w, Q7.x, Q7.z, pesLive);
     pesZone = PESGrassZones(pesRoot, Q6.x);
@@ -368,7 +372,7 @@ void main(
     float hT = tipo == 0 ? 0.9 : (tipo == 2 ? 1.45 : 1.0);   // (el manojo corto ya ocupa menos tarjeta)
     float hv = tipo == 0 ? 0.10 : (tipo == 2 ? 0.35 : 0.20);
     float n = PESGnoise(pesRoot * 1.7 + 0.37);
-    pesH = hT * clamp(Q4.z, 0.3, 3.0) * (1.0 + (n - 0.5) * 2.0 * hv) * (1.0 - pesWear.x * 0.35) * (1.0 - pesWear.y) * PESWearLiveHeight(pesLive);
+    pesH = hT * clamp(Q4.z, 0.3, 3.0) * (1.0 + (n - 0.5) * 2.0 * hv) * (1.0 - pesWear.x * 0.35) * (1.0 - (pesWShort ? 0.55 : 1.0) * pesWear.y) * PESWearLiveHeight(pesLive);
     pesH *= pesHmul;             // (27/10 m) tanda 10: alto de la mata y de la hoja
     pesLean += pesClumpLean;     // (27/10 m) tanda 10: la hoja se abre hacia afuera de la mata y cada una con su curva
     v0.y *= pesH;
@@ -388,6 +392,7 @@ void main(
       float4 LWv = IniParams.Load(int2(115, 0));
       float thin = saturate(wC.y + (LWv.w > 0.5 ? 0.7 * smoothstep(0.15, 0.9, PESWearLiveCurve(lvC)) : 0.0)) * smoothstep(8.0, 40.0, pesPx);   // sin saltos al cruzar el limite; (02/11 paso 6) rampa larga 8..40 (antes 14..28: popping)
       float hc = PESGh21(float2((float)pesCard * 0.0413 + pesExtOrg.x * 0.37, pesExtOrg.y * 0.61 + (float)pesRot * 0.29) + 0.73);
+      if (pesWShort) thin *= 0.25;   // (11/11 g) natural: lo gastado queda algo mas ralo, no sin pasto
       if (hc < thin) pesKill = true;
     }
     // (20/10) inclinacion real de la hoja segun el grano del corte (las franjas se ven en 3D de cerca) y viento:
@@ -517,6 +522,7 @@ void main(
       float covJ = max(g_tex_mask.SampleLevel(g_samplerLinear_Clamp_s, puvJ, 0).x, g_tex_diffuse.SampleLevel(g_samplerLinear_Clamp_s, puvJ, 0).w);
       covR = lerp(covR, covJ, nearP);
       thr = lerp(thr, 0.12 + 0.45 * hP, nearP * saturate(kP));
+      if (pesNatV) thr *= 0.75;   // (11/11 g, Agustin: las lineas de la cancha casi no se veian con el natural) mas hojas pintadas sobre la cal
     }
     pesPaint = saturate((covR - thr) * 8.0 + 0.5) * (hP > 0.93 ? 0.2 : 1.0);
     // (27/10 j) solo de cerca / media distancia (>= 60-90 px/m): lejos las hojas pintadas, paradas y sueltas sobre la linea, la dejaban punteada;
@@ -530,6 +536,11 @@ void main(
   r2.z = max(r0.w, r5.w);
   r2.z = r2.z * 0.06;
   r2.z = max(r2.z, 0.0);
+  if (pesWShort) r2.z = min(r2.z, 0.03 * max(pesH, 0.2));   // (11/11 g) natural: lo gastado se entierra hasta la mitad (pasto corto)
+  // (11/11 g) natural, pasto del JUEGO pegado a la camara: las hojas SIN pintar sobre la cal se entierran (como y292 en las del mod); antes la
+  // tapaban y la linea quedaba como una franja borrosa con puntos blancos (captura 13.54). Las pintadas quedan paradas y blancas
+  if (pesNatV && pesV3 && !pesIsExt) { float4 P292g = IniParams.Load(int2(292, 0));
+    if (P292g.y > 0.5) r2.z = max(r2.z, 0.055 * smoothstep(0.2, 0.9, max(pesMsk.x, pesDif.w)) * (1.0 - pesPaint)); }
   float pesSinkG = r2.z;   // (26/10 f) hundimiento del juego en este vertice (lineas, areas gastadas, sin pasto): hasta 6 cm
   r0.y = -r2.z;
   r6.xyz = r0.xyz + r1.xyz;
@@ -540,6 +551,7 @@ void main(
   r0.x = min(r0.x, 1.0);
   r0.y = -r4.w + 0.99;
   r0.y = r0.y * 0.06 * pesH;   // PES21 pasto v3: el tope de 6 cm del juego escala con el alto
+  if (pesWShort) r0.y = max(r0.y, 0.4 * 0.06 * pesH);   // (11/11 g) natural: sin pasto en la mascara = pasto corto
   r0.y = min(r0.y, r6.y);
   r0.y = saturate(r0.y + 0.06);
   r6.y = r0.y - 0.06;
@@ -555,11 +567,14 @@ void main(
     float4 P292 = IniParams.Load(int2(292, 0));
     if (P292.x > 0.5) {
       float capE = saturate(0.99 - pesMsk.w) * 0.06 * max(pesH, 0.2) * pesTallE;
+      if (pesWShort) capE = max(capE, 0.4 * 0.06 * max(pesH, 0.2) * pesTallE);   // (11/11 g) natural: pasto corto, no pelado
       capE = lerp(capE, max(capE, 0.035 * pesTallE), pesPaint);   // (27/10 h) la hoja pintada se queda parada (al menos 3.5 cm)
       r6.y = min(r6.y, capE);
       // (2/11 c) borde suave (smoothstep en vez de un umbral duro: en Alaves / Etihad / Villarreal se veian manchas palidas recortadas sin
       // hojas en el circulo central) y tope del 80 %: la zona gastada queda con pasto corto y ralo, no un agujero hasta el suelo
-      float fr = max(saturate(pesSinkG / 0.06), smoothstep(0.2, 0.9, max(pesMsk.x, pesDif.w)) * saturate(P292.y));
+      float frW = saturate(pesSinkG / 0.06);
+      if (pesWShort) frW = min(frW, 0.45);   // (11/11 g) natural: lo gastado se entierra hasta 2.3 cm (queda la mitad de arriba); la cal no
+      float fr = max(frW, smoothstep(0.2, 0.9, max(pesMsk.x, pesDif.w)) * saturate(P292.y));
       fr *= 1.0 - 0.85 * pesPaint;   // (27/10 h) x295: las hojas pintadas no se entierran bajo la linea
       pesSinkE = fr * 0.05 * pesTallE + (capE < 0.004 ? 0.004 : 0.0);
     }

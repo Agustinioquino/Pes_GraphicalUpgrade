@@ -1061,8 +1061,8 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
             c->Dispatch((gw + 7) / 8, (gh + 7) / 8, 1);
         }
         // (11/11, Agustin: "solo de cerca siiiii", "para primerisimos primer plano nada mas") HOJAS 3D (z410, solo el natural): celdas de 0.5 m
-        // que miden >= w410 px/m (1200 si 0); z408 cantidad (hojas por celda hasta 4096 x z408 y un tope total de 60000 x z408 x adaptativa)
-        cull[40] = bladeThr; cull[41] = (std::min)(4096.0f * bladeAmt, (float)kBladeMax); cull[42] = 60000.0f * bladeAmt * s_adapt.load(); cull[43] = (float)kBladeIpb;
+        // que miden >= w410 px/m (1200 si 0); z408 cantidad (hojas por celda hasta 4096 x z408 y un tope total de 200000 x z408 x adaptativa, minimo 0.6)
+        cull[40] = bladeThr; cull[41] = (std::min)(4096.0f * bladeAmt, (float)kBladeMax); cull[42] = 200000.0f * bladeAmt * (std::max)(s_adapt.load(), 0.6f);   // (11/11 g) 60000 -> 200000: en la captura 13.54 habia 219 hojas por celda de 0.5 m (se veia el suelo negro entre las hojas); la adaptativa no baja de 0.6 (solo primerisimos planos) cull[43] = (float)kBladeIpb;
         if (bladeOn) {
             UINT gw = (UINT)ceilf(2.0f * halfL / 0.5f), gh = (UINT)ceilf(2.0f * halfW / 0.5f);
             cull[0] = 5.0f; cull[1] = 0.5f; cull[7] = (float)gw; cull[8] = (float)gh;

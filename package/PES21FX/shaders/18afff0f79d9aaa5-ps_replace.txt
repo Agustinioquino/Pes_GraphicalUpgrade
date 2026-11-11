@@ -358,12 +358,14 @@ void main(
         float tx = smoothstep(0.3, 1.0, relH) * sunK * (0.35 + 0.65 * back) * thin * kTx * pesCfN * (1.0 - pesPaintF) * (pesArt ? 0.35 : 1.0);
         // (11/11) natural: la luz que atraviesa multiplica el color de la hoja (sin sumar una base pareja): se ve la lamina encendida y las
         // venas / el nervio (mas gruesos en el atlas nuevo) mas oscuros, en vez de un verde amarillo plano
-        if (pesNat) c = lerp(c, c * float3(1.30, 1.42, 0.78), saturate(tx * 0.8));
+        // (11/11 g, Agustin: "la luz se ve rara", captura 13.54: lima saturado) natural 1.30 / 1.42 / 0.78 -> 1.18 / 1.28 / 0.88
+        if (pesNat) c = lerp(c, c * float3(1.18, 1.28, 0.88), saturate(tx * 0.8));
         else c = lerp(c, c * float3(1.22, 1.30, 0.80) + float3(0.04, 0.06, 0.0), saturate(tx * 0.8));
         pesTxGb = saturate(tx);
       }
       tz *= lerp(0.3, 1.0, saturate(IniParams.Load(int2(414,0)).w));   // (08/11 ab) puntas doradas fuertes solo con sol fuerte y despejado
-      c *= lerp(float3(1.0, 1.0, 1.0), lerp(float3(1.16, 1.15, 0.98), float3(1.34, 1.24, 0.86), tW), tz);
+      // (11/11 g) natural: puntas al sol menos doradas (sumadas a la transmision y a x414 salian lima / amarillas)
+      c *= lerp(float3(1.0, 1.0, 1.0), pesNat ? lerp(float3(1.08, 1.09, 0.99), float3(1.20, 1.16, 0.93), tW) : lerp(float3(1.16, 1.15, 0.98), float3(1.34, 1.24, 0.86), tW), tz);
     }
     if (pesNat) c -= max(c - 0.75, 0.0) * 0.6;   // (11/11) natural: hombro suave arriba de 0.75 (el sol fuerte recortaba en 1 y borraba el dibujo de la hoja)
     o0.xyz = saturate(c);
