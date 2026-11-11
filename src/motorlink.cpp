@@ -11,7 +11,7 @@
 //  - fila 429 de t120 (nunca se guarda, esta en kDebugParams): x429 = vista (pes_vista_motor.hlsli, mismas cuentas que el
 //    shader del motor), z429 = corte de pantalla partida, w429 = escala de la profundidad;
 //  - y429 = 1: ALAMBRE. No hay shader que lo haga: es el estado de raster (relleno en alambre). Se cambia solo en los dibujos
-//    de geometria del G-buffer (los que tienen 3 o mas destinos de dibujo a la vez), con el mismo descarte de caras que traia
+//    de geometria del G-buffer (los que tienen 4 o mas destinos de dibujo a la vez y vista de profundidad; el G-buffer de PES tiene 5), con el mismo descarte de caras que traia
 //    el dibujo, y se devuelve apenas termina. Sombras, luces, composicion, menus y texto no se tocan.
 //
 // El modulo de Sider no puede escribir t120: se le deja un bloque de MEMORIA COMPARTIDA con nombre "PES21FX_Motor_<pid>"
@@ -80,10 +80,13 @@ static ID3D11RasterizerState* WireFor(ID3D11RasterizerState* cur) {
 
 // antes de un dibujo: true = se puso el estado de alambre y *prev guarda (con referencia) el que estaba (puede ser nulo)
 bool MotorWireBegin(ID3D11DeviceContext* c, ID3D11RasterizerState** prev) {
-    ID3D11RenderTargetView* rt[3] = {};
-    c->OMGetRenderTargets(3, rt, nullptr);
-    const bool gbuf = rt[0] && rt[1] && rt[2];   // geometria del G-buffer: 3 o mas destinos a la vez
+    // G-buffer de PES = 5 destinos + profundidad. Con "3 o mas" entraban tambien las luces diferidas (difusa, especular y
+    // sombra: 3 destinos) y el generador de mapas de cara de la DLL (facegen.cpp: 3 destinos, sin profundidad, RS nulo)
+    ID3D11RenderTargetView* rt[4] = {}; ID3D11DepthStencilView* dsv = nullptr;
+    c->OMGetRenderTargets(4, rt, &dsv);
+    const bool gbuf = rt[0] && rt[1] && rt[2] && rt[3] && dsv;   // geometria del G-buffer: 4 o mas destinos a la vez + profundidad
     for (auto* r : rt) if (r) r->Release();
+    if (dsv) dsv->Release();
     if (!gbuf) return false;
     ID3D11RasterizerState* cur = nullptr;
     c->RSGetState(&cur);
@@ -151,11 +154,11 @@ void MotorLinkPresent() {
         s_ml->alambreDibujos = nd;
         s_ml->dllSeq = s_ml->dllSeq + 1;
     }
-    if (wire) {   // cada 10 s con el alambre prendido: cuantos dibujos se cambiaron (0 = ningun dibujo con 3 destinos: avisar)
+    if (wire) {   // cada 10 s con el alambre prendido: cuantos dibujos se cambiaron (0 = ningun dibujo de G-buffer: avisar)
         static double t = 0; static unsigned acc = 0, frames = 0;
         acc += nd; frames++;
         const double now = Now();
-        if (now - t > 10.0) { static int n = 0; if (n++ < 30) Log("motor: alambre, %u dibujos cambiados en %u cuadros%s", acc, frames, acc ? "" : " (ningun dibujo con 3 destinos a la vez: nada que pasar a alambre)"); t = now; acc = 0; frames = 0; }
+        if (now - t > 10.0) { static int n = 0; if (n++ < 30) Log("motor: alambre, %u dibujos cambiados en %u cuadros%s", acc, frames, acc ? "" : " (ningun dibujo de G-buffer, 4 o mas destinos + profundidad: nada que pasar a alambre)"); t = now; acc = 0; frames = 0; }
     }
 }
 

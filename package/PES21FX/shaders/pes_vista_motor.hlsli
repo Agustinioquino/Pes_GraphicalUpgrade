@@ -40,7 +40,7 @@ void PESVistaMotor(inout float4 o0, float2 pix, float escalaZ)
   else if (m == 3) c = PESDecN(uv) * 0.5 + 0.5;
   else if (m == 4) {
     float3 nv = PESDecN(uv); nv.z = -nv.z;
-    c = mul(nv, (float3x3)g_psScene.m_view) * 0.5 + 0.5;
+    c = mul((float3x3)g_psScene.m_view, nv) * 0.5 + 0.5;   // vista -> mundo = filas de m_view (como 619b 1150-1153)
   }
   else if (m == 5) c = inAlbedo.SampleLevel(g_samplerPoint_Clamp_s, uv, 0).xyz;
   else if (m == 6) {
