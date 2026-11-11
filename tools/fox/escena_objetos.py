@@ -73,8 +73,12 @@ def add_objeto(f, nombre, ruta, pos, escala=(1, 1, 1), visible=True):
 
 def medir(archivo):
     """caja del modelo en metros (minimo, maximo), leida de los vertices del .fmdl"""
-    import numpy as np
-    import fmdl
+    try:
+        import numpy as np
+        import fmdl
+    except ImportError:
+        raise SystemExit('para medir %s hace falta numpy y aca no esta: pasar la caja a mano, '
+                         'por ejemplo --caja="-0.11,-0.11,-0.11,0.11,0.11,0.11"' % archivo)
     m = fmdl.meshes(fmdl.Fmdl(archivo))
     pos = [x['pos'] for x in m if x['pos'] is not None and len(x['pos'])]
     if not pos: raise SystemExit('no pude medir %s (sin posiciones legibles): pasar --caja' % archivo)

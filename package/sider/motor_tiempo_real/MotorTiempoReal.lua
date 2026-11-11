@@ -1,4 +1,4 @@
--- MotorTiempoReal.lua 0.2 (PES21 FX, 10/11/2026) - modulo de Sider.
+-- MotorTiempoReal.lua 0.2.1 (PES21 FX, 11/11/2026) - modulo de Sider.
 -- "Motor en tiempo real" del Editar: un editor en vivo de lo que dibuja el Fox Engine. Todo dentro del juego y todo
 -- por Sider (sin DLL): lee la lista de escenas graficas del motor y muestra, con nombre, los modelos y las luces;
 -- deja marcar uno o muchos objetos, moverlos, rotarlos, escalarlos, ocultarlos; prender, apagar y dar brillo a cada
@@ -21,10 +21,17 @@
 --   content\motor-tiempo-real\apagado.txt       = el modulo no entrega la escena ni toca nada
 --   content\motor-tiempo-real\solo_lectura.txt  = lista todo pero no escribe nada
 --   content\motor-tiempo-real\sin_llamadas.txt  = escribe datos pero no llama funciones del juego
+-- (los tres se miran cada segundo mientras el panel esta abierto: se pueden crear o borrar con el juego abierto)
+--
+-- LISTAS DEL MOTOR (fox::gr::Scene): un objeto recien cargado entra a una cola de altas (escena+0x38, cantidad +0x48) y
+-- en el cuadro siguiente el motor (FUN_1416928b0) lo pasa a la lista de su tipo: [escena+0x30] = arreglo de [escena+0x28]
+-- punteros a lista { +0 primero, +8 ultimo, +0x10 cantidad }. Lo que se dibuja esta en esas listas por tipo.
+-- Objeto +0x24: bit0 = enlazado (en la cola o en su lista), bit1 = todavia en la cola. Antes de dejar escribir, el modulo
+-- comprueba una vez que lo que recorre coincide con la cantidad que lleva el motor en cada lista.
 --
 -- Offsets leidos en el exe decompilado (PES2021.exe 1.07.02): ver memoria del proyecto motor-tiempo-real-exe.
 
-local m = { version = "0.2" }
+local m = { version = "0.2.1" }
 local VERSION = m.version
 local DIR
 -- lo que hay que recordar aunque Sider recargue el modulo con el juego abierto (queda en ctx)
@@ -85,7 +92,7 @@ end
 ---------------------------------------------------------------------------------------------
 -- 2. WINDOWS POR FFI: memoria sin riesgo, mouse, archivo de registro
 ---------------------------------------------------------------------------------------------
-local BASE, EXE_FIN = 0x140000000, 0x150000000
+local BASE, EXE_FIN = 0x140000000, 0x160000000    -- el fin real se lee de la cabecera del exe (exe_conocido)
 local DIR_MIN, DIR_MAX = 0x10000, 0x7ffffffe0000
 
 -- estado general del editor (una sola tabla: Lua admite pocas variables sueltas por funcion)
@@ -96,6 +103,7 @@ local E = {
     cur = { 1, 1, 1, 1, 1 }, herr = 1, eje = 1, grilla = false, marcadores = false, solo = nil,
     conj = false, conj_visto = "sin verificar", volcado = false, hilo_cuadro = nil, hilo_tecla = nil,
     exe_ok = nil, exe_motivo = nil,
+    listas_ok = false, listas_mal = 0, listas_dicho = false, n_obj = 0, n_puede = 0, conj_intentos = 0,
 }
 local C, PROC
 local B8, B32, BF, B64, NR          -- lectura (un solo buffer: sacar los valores antes de leer otra cosa)
@@ -321,6 +329,9 @@ local function exe_conocido()
     end
     local e = leer(BASE + 0x3c, 4) and B32[0]
     local sello = e and e < 0x1000 and leer(BASE + e + 8, 4) and B32[0]
+    -- tamano del exe en memoria (SizeOfImage): ahi adentro nunca se escribe y ningun objeto del juego vive ahi
+    local tam = e and e < 0x1000 and leer(BASE + e + 0x50, 4) and B32[0]
+    if tam and tam >= 0x1000000 and tam <= 0x40000000 then EXE_FIN = BASE + tam end
     for i = 1, #RANURAS do
         local r = RANURAS[i]
         if not leer(r[1], 8) or tonumber(B64[0]) ~= r[2] then
@@ -331,8 +342,8 @@ local function exe_conocido()
         end
     end
     E.exe_ok = true
-    R(string.format("exe reconocido: sello 0x%s (el del 1.07.02 es 0x62787c6a), %d tablas de funciones iguales",
-        sello and hx(sello) or "?", #RANURAS), true)
+    R(string.format("exe reconocido: sello 0x%s (el del 1.07.02 es 0x62787c6a), %d tablas de funciones iguales, exe hasta 0x%s",
+        sello and hx(sello) or "?", #RANURAS, hx(EXE_FIN)), true)
     if leer(FN_COLOR, #FIRMA_COLOR) and ffi.string(B8, #FIRMA_COLOR) == FIRMA_COLOR then
         c_color = ffi.cast("void (__fastcall *)(uintptr_t, float *)", FN_COLOR)
     else
@@ -438,10 +449,15 @@ local function leer_modelo(o, r)
     r.n_fun, r.fun, r.archivo = B32[0x100 / 4], P(0x108), P(0x118)
     r.copia3, r.limite = P(0x198), P(0x1a0)
     r.mascara, r.b1b0, r.b1b4 = B32[0x1ac / 4], B32[0x1b0 / 4], B32[0x1b4 / 4]
-    r.oculto = (r.b1b4 % 2) == 1
+    -- el dibujo mira la mascara de vistas (+0x1ac); el bit0 de +0x1b4 es "oculto a la fuerza". El juego esconde sus propios
+    -- modelos solo con la mascara; los objetos de escena (StadiumModelBody) llevan las dos cosas juntas
+    r.oculto = (r.b1b4 % 2) == 1 or r.mascara ~= 0
     r.esc_media = fl(0x1c4 / 4)
     r.lod_cerca, r.lod_lejos, r.lod_poli, r.descarte = fl(0x1cc / 4), fl(0x1d0 / 4), fl(0x1e0 / 4), B8[0x1f1]
-    r.e1, r.e2, r.e3 = fl(0x40 / 4), fl(0x54 / 4), fl(0x68 / 4)   -- diagonal de la matriz (escala si no esta girado)
+    -- escala = largo de cada fila de la matriz (la diagonal sola vale unicamente si el objeto no esta girado)
+    r.e1 = math.sqrt(fl(16) ^ 2 + fl(17) ^ 2 + fl(18) ^ 2)
+    r.e2 = math.sqrt(fl(20) ^ 2 + fl(21) ^ 2 + fl(22) ^ 2)
+    r.e3 = math.sqrt(fl(24) ^ 2 + fl(25) ^ 2 + fl(26) ^ 2)
     return true
 end
 
@@ -489,12 +505,20 @@ local function resolver_modelo(o, r)
     r.movible = (r.ent ~= nil and r.te ~= nil and r.cuerpo ~= nil and r.padre == nil)
 end
 
+-- cada clase de luz mide distinto (Luz 0x58, Local 0x90, Sol 0xa0, Punto 0xb0, Foco 0xf0): solo el foco tiene giro y cono
+-- en +0x90..+0xa7 (en el sol y en el punto ahi hay punteros) y el sol no tiene alcance. Los campos que una clase no tiene
+-- quedan en numeros neutros, nunca en nil (se muestran con string.format)
 local function leer_luz(o, r)
-    if not leer(o, 0xb0) then return false end
+    local foco = (r.clase == "Foco")
+    local con_alcance = foco or r.clase == "Punto" or r.clase == "Local"
+    if not leer(o, foco and 0xa8 or (con_alcance and 0x88 or 0x58)) then return false end
     local p, nom = P(0x38), P(0x50)
-    r.alc_int, r.alcance = fl(0x80 / 4), fl(0x84 / 4)
-    r.q = { fl(0x90 / 4), fl(0x94 / 4), fl(0x98 / 4), fl(0x9c / 4) }
-    r.umbra, r.penumbra = fl(0xa0 / 4), fl(0xa4 / 4)
+    r.alc_int, r.alcance, r.q, r.umbra, r.penumbra = 0, 0, { 0, 0, 0, 1 }, 0, 0
+    if con_alcance then r.alc_int, r.alcance = fl(0x80 / 4), fl(0x84 / 4) end
+    if foco then
+        r.q = { fl(0x90 / 4), fl(0x94 / 4), fl(0x98 / 4), fl(0x9c / 4) }
+        r.umbra, r.penumbra = fl(0xa0 / 4), fl(0xa4 / 4)
+    end
     if not p or (p >= BASE and p < EXE_FIN) or not leer(p, 0x80) then return false end
     r.p, r.vt_p = p, P(0)
     r.p_ok = (r.vt_p ~= nil and VT_DG[r.vt_p] == true)       -- si no es una clase conocida se muestra pero no se toca
@@ -520,45 +544,125 @@ local function explorar()
     while e and ne < 64 do
         ne = ne + 1
         if not leer(e, 0x50) then break end
-        local sig, rec, primero, cuenta = P(0), P(0x20), P(0x38), B32[0x48 / 4]
+        local sig, rec, n_listas, arreglo, cola, n_cola = P(0), P(0x20), B32[0x28 / 4], P(0x30), P(0x38), B32[0x48 / 4]
         local hash = "?"
         if rec and leer(rec + 0x10, 8) then hash = string.format("%08x%08x", B32[1], B32[0]) end
-        local esc = { dir = e, hash = hash, cuenta = cuenta, n = 0, n_mod = 0, n_luz = 0 }
+        local esc = { dir = e, hash = hash, cuenta = 0, n = 0, n_mod = 0, n_luz = 0, n_listas = 0, n_cola = 0, raro = 0, tope = false, ok = false }
         nesc[ne] = esc
-        local o, k = primero, 0
-        while o and k < 4096 do
-            k = k + 1
-            if not leer(o, 0x38) then break end
-            local vt, sgte = P(0), P(0x18)
-            local r = por_dir[o]
-            if not r or r.vt ~= vt then
-                r = { dir = o, vt = vt }
-                por_dir[o] = r
-                if vt == VT_MODELO then r.tipo = "modelo"
-                elseif vt and VT_LUZ[vt] then r.tipo, r.clase = "luz", VT_LUZ[vt]
-                else r.tipo, r.clase = "otro", clase_corta(vt) end
-            end
-            r.visto, r.esc = id, ne
-            esc.n = esc.n + 1
-            if r.tipo == "modelo" then
-                if leer_modelo(o, r) then
-                    if not r.resuelto or r.fun ~= r.fun_res or r.n_fun ~= r.nfun_res then resolver_modelo(o, r) end
-                    esc.n_mod = esc.n_mod + 1
-                    if r.ayuda then na[#na + 1] = r else nm[#nm + 1] = r end
-                end
-            elseif r.tipo == "luz" then
-                if leer_luz(o, r) then
-                    esc.n_luz = esc.n_luz + 1
-                    nl[#nl + 1] = r
-                end
-            else
-                no[#no + 1] = r
-            end
-            if sgte == primero then break end
-            o = sgte
+        -- cabezas a recorrer: la cola de altas y cada lista por tipo que no este vacia. El buffer de lectura es uno solo:
+        -- primero se copian todas las direcciones y recien despues se recorren los objetos
+        local cab, ncab = {}, 0
+        if cola and n_cola >= 1 and n_cola <= 100000 then
+            ncab = 1
+            cab[1] = cola
+            esc.cuenta, esc.n_cola = n_cola, n_cola
+        elseif cola or n_cola ~= 0 then
+            esc.raro = esc.raro + 1                     -- cola con cabeza y sin cantidad, o al reves
         end
+        if arreglo and (arreglo < BASE or arreglo >= EXE_FIN) and n_listas >= 1 and n_listas <= 256 and leer(arreglo, n_listas * 8) then
+            local lst = {}
+            for i = 1, n_listas do lst[i] = P((i - 1) * 8) or false end
+            for i = 1, n_listas do
+                if lst[i] and leer(lst[i], 0x18) then
+                    local primero, cuantos = P(0), B32[4]
+                    if primero and cuantos >= 1 and cuantos <= 100000 then
+                        ncab = ncab + 1
+                        cab[ncab] = primero
+                        esc.cuenta = esc.cuenta + cuantos
+                        esc.n_listas = esc.n_listas + 1
+                    elseif primero or cuantos ~= 0 then
+                        esc.raro = esc.raro + 1
+                    end
+                end
+            end
+        else
+            esc.raro = esc.raro + 1                     -- una escena sin su arreglo de listas no es lo que conozco
+        end
+        local k = 0
+        for ci = 1, ncab do
+            local o = cab[ci]
+            while o do
+                if k >= 4096 then esc.tope = true break end
+                k = k + 1
+                if not leer(o, 0x38) then esc.raro = esc.raro + 1 break end
+                local vt, sgte = P(0), P(0x18)
+                -- enlazado (bit0) y de esta escena: si no, el motor lo saco mientras yo recorria
+                if B32[0x24 / 4] % 2 ~= 1 or P(0x28) ~= e then esc.raro = esc.raro + 1 break end
+                local r = por_dir[o]
+                if not r or r.vt ~= vt then
+                    r = { dir = o, vt = vt }
+                    por_dir[o] = r
+                    if vt == VT_MODELO then r.tipo = "modelo"
+                    elseif vt and VT_LUZ[vt] then r.tipo, r.clase = "luz", VT_LUZ[vt]
+                    else r.tipo, r.clase = "otro", clase_corta(vt) end
+                end
+                if r.visto ~= id then                   -- (nunca dos veces en la misma pasada)
+                    r.visto, r.esc = id, ne
+                    esc.n = esc.n + 1
+                    if r.tipo == "modelo" then
+                        if leer_modelo(o, r) then
+                            if not r.resuelto or r.fun ~= r.fun_res or r.n_fun ~= r.nfun_res then resolver_modelo(o, r) end
+                            esc.n_mod = esc.n_mod + 1
+                            if r.ayuda then na[#na + 1] = r else nm[#nm + 1] = r end
+                        end
+                    elseif r.tipo == "luz" then
+                        if leer_luz(o, r) then
+                            esc.n_luz = esc.n_luz + 1
+                            nl[#nl + 1] = r
+                        end
+                    else
+                        no[#no + 1] = r
+                    end
+                else
+                    esc.raro = esc.raro + 1             -- repetido: el motor lo cambio de lista en el medio, o hay un ciclo
+                end
+                if sgte == cab[ci] then esc.raro = esc.raro + 1 break end
+                o = sgte
+            end
+            if esc.tope then break end
+        end
+        esc.ok = (not esc.tope) and esc.raro == 0 and esc.n == esc.cuenta
         if sig == primera then break end
         e = sig
+    end
+    -- primera vez: lo recorrido tiene que coincidir con la cantidad que lleva el motor en cada lista. Hasta que eso pase una
+    -- vez, el modulo lista pero no escribe sobre modelos ni luces (si mi lectura del motor fuera equivocada, no toco nada)
+    local total = 0
+    for i = 1, ne do
+        if nesc[i] then total = total + nesc[i].n end
+    end
+    E.n_obj = total
+    if not E.listas_ok then
+        local bien, con_algo = true, 0
+        for i = 1, ne do
+            local x = nesc[i]
+            if x and not x.tope and (x.n_mod + x.n_luz > 0 or x.cuenta > 0) then
+                if x.ok then
+                    if x.n_mod + x.n_luz > 0 then con_algo = con_algo + 1 end
+                else
+                    bien = false
+                end
+            end
+        end
+        if bien and con_algo > 0 then
+            E.listas_ok = true
+            R(string.format("listas del motor comprobadas (%d objetos en %d escenas: lo recorrido coincide con la cantidad de cada lista)", total, ne), true)
+        elseif bien then
+            E.listas_mal = 0                            -- todavia no hay modelos ni luces contra los que comprobar
+        else
+            E.listas_mal = E.listas_mal + 1             -- (seis pasadas seguidas = 3 segundos: no es un cambio pasajero)
+            if E.listas_mal == 6 and not E.listas_dicho then
+                E.listas_dicho = true
+                R("las listas del motor NO coinciden con lo que recorro: sigo en solo lectura para modelos y luces", true)
+                for i = 1, ne do
+                    local x = nesc[i]
+                    if x then
+                        R(string.format("  escena %d 0x%s: listas con algo %d, en cola %d, cantidad del motor %d, recorridos %d, cosas raras %d%s",
+                            i, hx(x.dir), x.n_listas, x.n_cola, x.cuenta, x.n, x.raro, x.tope and " (tope de 4096)" or ""))
+                    end
+                end
+            end
+        end
     end
     for d, r in pairs(por_dir) do
         if r.visto ~= id then
@@ -650,6 +754,10 @@ local function listar_entidades()
             end
         end
     end
+    if comprobar > 0 and E.conj_visto == "sin verificar" then
+        E.conj_intentos = E.conj_intentos + 1
+        if E.conj_intentos >= 3 then E.conj_visto = "sin comprobar (uso la normal, la que arma el motor)" end
+    end
     -- ordenadas como un arbol de escena: por clase y despues por nombre
     table.sort(lista, function(x, y)
         if x.clase ~= y.clase then return x.clase < y.clase end
@@ -664,16 +772,30 @@ end
 -- 6. OBJETOS: mover, rotar, escalar, ocultar (sobre entidades StadiumModel: las que cargo el motor desde la escena)
 ---------------------------------------------------------------------------------------------
 -- el objeto sigue en su escena? (el juego pudo sacarlo o destruirlo desde la ultima exploracion)
--- rapido: misma tabla de funciones, marcado "en escena" y apuntando a la escena donde lo encontre
+-- rapido: misma tabla de funciones, enlazado (bit0 de +0x24: el destructor de un objeto empieza por sacarlo de su escena
+-- y apagar ese bit) y apuntando a la escena donde lo encontre. Nada de esto vale hasta haber comprobado las listas una vez
 local function en_escena(r, vt)
     local e = escenas[r.esc]
-    if not e or not leer(r.dir, 0x30) then return false end
-    return P(0) == vt and (math.floor(B32[0x24 / 4] / 2) % 2) == 1 and P(0x28) == e.dir
+    if not E.listas_ok or not e or not leer(r.dir, 0x30) then return false end
+    return P(0) == vt and (B32[0x24 / 4] % 2) == 1 and P(0x28) == e.dir
 end
--- a fondo (antes de llamar una funcion del juego): ademas tiene que estar en la lista de la escena
+-- a fondo (antes de llamar una funcion del juego): ademas tiene que estar en la lista donde lo tiene el motor, elegida
+-- como la elige el motor al darlo de baja (FUN_141692420): bit1 = la cola de altas; si no, la lista de su tipo (+0x30)
 local function viva(r, vt)
     if not en_escena(r, vt) then return false end
-    local primero = rptr(escenas[r.esc].dir + 0x38)
+    local e = escenas[r.esc].dir
+    if not leer(r.dir, 0x38) then return false end
+    local en_cola, tipo = (math.floor(B32[0x24 / 4] / 2) % 2) == 1, B32[0x30 / 4]
+    local primero
+    if en_cola then
+        primero = rptr(e + 0x38)
+    else
+        if not leer(e, 0x38) then return false end
+        local n, arreglo = B32[0x28 / 4], P(0x30)
+        if not arreglo or n > 256 or tipo < 1 or tipo > n then return false end
+        local lst = rptr(arreglo + 8 * (tipo - 1))
+        primero = lst and rptr(lst)
+    end
     local o, k = primero, 0
     while o and k < 4096 do
         if o == r.dir then return true end
@@ -696,9 +818,11 @@ end
 -- posicion de cada hueso respecto del modelo (los modelos de escena llevan sus huesos pegados a la matriz del modelo)
 local function huesos_reposo(r)
     if r.reposo ~= nil then return r.reposo end
-    r.reposo = false
     local n = r.huesos
-    if n < 1 or n > 64 then return false end
+    if n < 1 or n > 64 then
+        r.reposo = false
+        return false
+    end
     local base = rptr(r.dir + 0xe0)
     if not base or (base >= BASE and base < EXE_FIN) or not leer(r.dir + 0x40, 0x40) then return false end
     local Wm = {}
@@ -734,7 +858,7 @@ end
 -- los huesos siguen pegados a la matriz del modelo? (se mira justo antes de pisarlos)
 local function huesos_pegados(r)
     local n = r.reposo and #r.reposo or 0
-    if n < 1 or n > 64 or rptr(r.dir + 0xe0) ~= r.dir_huesos or not leer(r.dir + 0x40, 0x40) then return false end
+    if n < 1 or n > 64 or rptr(r.dir + 0xe0) ~= r.dir_huesos or ru32(r.dir + 0xf8) ~= n or not leer(r.dir + 0x40, 0x40) then return false end
     local Wm = {}
     for i = 1, 12 do Wm[i] = fl(i - 1) end
     if not leer(r.dir_huesos, n * 0x40) then return false end
@@ -826,11 +950,13 @@ local function avisar_motor(r)
     E.n_llam = E.n_llam + 1
 end
 
-local function ocultar(r, oc)
+local function ocultar(r, oc, exacto)
     if not en_escena(r, VT_MODELO) then return false end
-    local v = ru32(r.dir + 0x1b4)
-    if not v then return false end
-    if G.oc_orig[r.dir] == nil or G.oc_orig[r.dir].nombre ~= r.nombre then G.oc_orig[r.dir] = { nombre = r.nombre, oculto = (v % 2) == 1 } end
+    if not leer(r.dir + 0x1ac, 0xc) then return false end
+    local masc, v = B32[0], B32[2]
+    if G.oc_orig[r.dir] == nil or G.oc_orig[r.dir].nombre ~= r.nombre then
+        G.oc_orig[r.dir] = { nombre = r.nombre, oculto = (v % 2) == 1 or masc ~= 0, masc = masc, bit = v % 2 }
+    end
     if cuerpo_sigue(r) then
         -- para el motor (FUN_141906600) un objeto se ve si su entidad esta habilitada (flags bit0, estado 3) Y su cuerpo es
         -- visible. Las ayudas vienen apagadas desde el archivo (flags 6): al mostrarlas se prende tambien la entidad, asi
@@ -842,10 +968,12 @@ local function ocultar(r, oc)
         end
         poner_u8(r.cuerpo + 0x81, oc and 0 or 1)
     end
-    poner_u32(r.dir + 0x1ac, oc and 0xffffffff or 0)
-    if oc and v % 2 == 0 then v = v + 1 elseif not oc and v % 2 == 1 then v = v - 1 end
-    local ok = poner_u32(r.dir + 0x1b4, v)
-    if ok then r.oculto = oc end
+    -- un modelo del juego (sin cuerpo de escena) vuelve a su mascara y a su bit de antes, tal cual estaban
+    local masc_n, bit_n = oc and 0xffffffff or 0, oc and 1 or 0
+    if exacto and exacto.masc and exacto.bit and not r.cuerpo then masc_n, bit_n = exacto.masc, exacto.bit end
+    poner_u32(r.dir + 0x1ac, masc_n)
+    local ok = poner_u32(r.dir + 0x1b4, v - v % 2 + bit_n)
+    if ok then r.oculto, r.mascara, r.b1b4 = (bit_n == 1 or masc_n ~= 0), masc_n, v - v % 2 + bit_n end
     return ok
 end
 
@@ -903,9 +1031,13 @@ local function cam_activar()
     local orig = ffi.string(B8 + 0x10, 0x50)
     local dx, dy, dz = px - tx, py - ty, pz - tz
     local D = math.sqrt(dx * dx + dy * dy + dz * dz)
-    R(string.format("camara del visor 0x%s (nodo 0x%s clase %s, visor 0x%s): pos %.3f %.3f %.3f objetivo %.3f %.3f %.3f cerca %.3f lejos %.1f proyeccion %d campo %.4f aspecto %.3f",
-        hx(c), hx(nodo), clase_corta(rptr(nodo)), hx(impl), px, py, pz, tx, ty, tz, cerca, lejos, proy, fov, asp), true)
-    if not (D > 0.01 and D < 100000) or not (fov > 0.001 and fov < 3.2) or proy ~= 0 then
+    local rara = not (D > 0.01 and D < 100000) or not (fov > 0.001 and fov < 3.2) or proy ~= 0
+    if cam.anotada ~= c or cam.anotada_rara ~= rara then
+        cam.anotada, cam.anotada_rara = c, rara
+        R(string.format("camara del visor 0x%s (nodo 0x%s clase %s, visor 0x%s): pos %.3f %.3f %.3f objetivo %.3f %.3f %.3f cerca %.3f lejos %.1f proyeccion %d campo %.4f aspecto %.3f",
+            hx(c), hx(nodo), clase_corta(rptr(nodo)), hx(impl), px, py, pz, tx, ty, tz, cerca, lejos, proy, fov, asp), true)
+    end
+    if rara then
         E.aviso = "la camara del visor tiene valores que no conozco: no la toco (anotado en el registro)"
         return false
     end
@@ -1148,11 +1280,23 @@ local function luz_color(r, c)
         E.aviso = "esa luz ya no esta en la escena"
         return false
     end
-    luz_recordar(r)
-    for i = 1, 4 do
-        if not finito(c[i]) then return false end
-        WF[i - 1] = c[i]
+    -- la funcion del juego termina en la actualizacion propia de cada clase (ranura +0x78), que escribe en un bloque que
+    -- cuelga de la luz sin mirar si existe: foco [+0xd8] (0xb0 bytes), punto y sol [+0x90] (0x40 bytes)
+    local blo, tam = nil, 0
+    if r.clase == "Foco" then blo, tam = rptr(r.dir + 0xd8), 0xb0
+    elseif r.clase == "Punto" or r.clase == "Sol" then blo, tam = rptr(r.dir + 0x90), 0x40 end
+    if tam > 0 and (not blo or (blo >= BASE and blo < EXE_FIN) or not leer(blo, tam)) then
+        E.aviso = "esa luz no tiene su bloque de dibujo: no le cambio el brillo"
+        return false
     end
+    for i = 1, 4 do
+        if not finito(c[i]) or math.abs(c[i]) > 1000000 then
+            E.aviso = "brillo fuera de rango: no lo cambio"
+            return false
+        end
+    end
+    luz_recordar(r)
+    for i = 1, 4 do WF[i - 1] = c[i] end
     c_color(r.dir, WF)
     E.n_llam = E.n_llam + 1
     r.color = { c[1], c[2], c[3], c[4] }
@@ -1163,10 +1307,18 @@ local function luz_fuerza(r) return math.max(r.color[1], r.color[2], r.color[3])
 -- marcadores: un objeto zfx_Luz_NN por foco, puesto un poco por detras del foco (hacia afuera de la escena)
 -- para que no le tape su propia luz ni su sombra
 local function marcadores_poner()
-    local k = 0
+    -- se marcan las luces de la misma escena grafica que los marcadores (hay otras escenas con luces propias); si en esa
+    -- escena no hubiera ninguna luz, valen las de todas
+    local k, esc_m, en_esa = 0, nil, 0
+    for j = 1, #ayudas do
+        if ayudas[j].ayuda == "luz" then esc_m = ayudas[j].esc break end
+    end
+    for i = 1, #luces do
+        if luces[i].esc == esc_m then en_esa = en_esa + 1 end
+    end
     for i = 1, #luces do
         local l = luces[i]
-        if l.clase ~= "Sol" and finito(l.x) and finito(l.y) and finito(l.z) then
+        if (l.esc == esc_m or en_esa == 0) and l.clase ~= "Sol" and l.clase ~= "Luz" and finito(l.x) and finito(l.y) and finito(l.z) then
             local mo
             for j = 1, #ayudas do
                 if ayudas[j].ayuda == "luz" and not ayudas[j].usado then mo = ayudas[j] break end
@@ -1176,9 +1328,16 @@ local function marcadores_poner()
             mo.usado = true
             local afuera = norm3(l.x, l.y - 1, l.z) or { 0, 1, 0 }
             local x, y, z = l.x + afuera[1] * 0.18, l.y + afuera[2] * 0.18, l.z + afuera[3] * 0.18
-            if mo.movible and (math.abs(mo.x - x) > 0.002 or math.abs(mo.y - y) > 0.002 or math.abs(mo.z - z) > 0.002) then
-                local S, Q, T = leer_tf(mo)
-                if S then
+            local S, Q, T = nil, nil, nil
+            if mo.movible then S, Q, T = leer_tf(mo) end
+            if S then
+                -- lo que va al punto es el CENTRO de la caja del modelo (como lo arma escena_objetos.py), no su origen
+                local c = mo.caja
+                local cx, cy, cz = (c[1] + c[4]) / 2 * S[1], (c[2] + c[5]) / 2 * S[2], (c[3] + c[6]) / 2 * S[3]
+                if finito(cx) and finito(cy) and finito(cz) and math.abs(cx) < 5 and math.abs(cy) < 5 and math.abs(cz) < 5 then
+                    x, y, z = x - cx, y - cy, z - cz
+                end
+                if math.abs(T[1] - x) > 0.002 or math.abs(T[2] - y) > 0.002 or math.abs(T[3] - z) > 0.002 then
                     T[1], T[2], T[3] = x, y, z
                     if aplicar_tf(mo, S, Q, T) then avisar_motor(mo) end
                 end
@@ -1217,14 +1376,16 @@ end
 local function volcar_todo(por_que)
     R(string.format("===== VOLCADO (%s) version %s: %d escenas, %d modelos + %d de ayuda, %d luces, %d otros; lecturas %d escrituras %d llamadas %d fallas %d; giro %s",
         por_que, VERSION, #escenas, #modelos, #ayudas, #luces, #otros, E.n_lect, E.n_escr, E.n_llam, E.n_falla, E.conj_visto), true)
-    R(string.format("hilos: cuadro %s, tecla %s, proceso %d", tostring(E.hilo_cuadro), tostring(E.hilo_tecla), E.mi_pid))
+    R(string.format("hilos: cuadro %s, tecla %s, proceso %d; listas del motor %s", tostring(E.hilo_cuadro), tostring(E.hilo_tecla), E.mi_pid,
+        E.listas_ok and "comprobadas" or "SIN COMPROBAR (solo lectura para modelos y luces)"))
     for i = 1, #escenas do
         local e = escenas[i]
-        R(string.format("escena %d: 0x%s nombre(hash) %s, cuenta %d, recorridos %d (%d modelos, %d luces)", i, hx(e.dir), e.hash, e.cuenta, e.n, e.n_mod, e.n_luz))
+        R(string.format("escena %d: 0x%s nombre(hash) %s, listas con algo %d, en cola %d, cuenta %d, recorridos %d (%d modelos, %d luces), raras %d%s -> %s",
+            i, hx(e.dir), e.hash, e.n_listas, e.n_cola, e.cuenta, e.n, e.n_mod, e.n_luz, e.raro, e.tope and " TOPE" or "", e.ok and "coincide" or "NO coincide"))
     end
     for i = 1, #modelos + #ayudas do
         local r = (i <= #modelos) and modelos[i] or ayudas[i - #modelos]
-        R(string.format("modelo E%d 0x%s %-28s pos %.3f %.3f %.3f diag %.3f %.3f %.3f caja %.2f %.2f %.2f / %.2f %.2f %.2f huesos %d limite %s copia3 %s oculto %s (1ac %s 1b0 %s 1b4 %s) lod %.1f %.1f %.1f descarte %d cuerpo %s entidad %s (%s) te %s padre %s%s",
+        R(string.format("modelo E%d 0x%s %-28s pos %.3f %.3f %.3f escala %.3f %.3f %.3f caja %.2f %.2f %.2f / %.2f %.2f %.2f huesos %d limite %s copia3 %s oculto %s (1ac %s 1b0 %s 1b4 %s) lod %.1f %.1f %.1f descarte %d cuerpo %s entidad %s (%s) te %s padre %s%s",
             r.esc, hx(r.dir), r.nombre, r.x, r.y, r.z, r.e1, r.e2, r.e3, r.caja[1], r.caja[2], r.caja[3], r.caja[4], r.caja[5], r.caja[6],
             r.huesos, r.limite and hx(r.limite) or "no", r.copia3 and hx(r.copia3) or "no", tostring(r.oculto), hx(r.mascara), hx(r.b1b0), hx(r.b1b4),
             r.lod_cerca, r.lod_lejos, r.lod_poli, r.descarte, r.cuerpo and hx(r.cuerpo) or "-", r.ent and hx(r.ent) or "-",
@@ -1309,9 +1470,9 @@ local function restaurar_todo()
             nt = nt + 1
         end
         local go = G.oc_orig[r.dir]
-        if go and go.nombre == r.nombre and r.oculto ~= go.oculto then
-            ocultar(r, go.oculto)
-            no = no + 1
+        if go and go.nombre == r.nombre and (r.oculto ~= go.oculto
+            or (not r.cuerpo and go.masc and go.bit and (r.mascara ~= go.masc or r.b1b4 % 2 ~= go.bit))) then
+            if ocultar(r, go.oculto, go) then no = no + 1 end
         end
     end
     G.luz_orig, G.tf_orig, G.oc_orig = {}, {}, {}
@@ -1420,13 +1581,19 @@ local function tecla(vkey)
         elseif vkey == 0x37 then
             local sel = seleccion()
             if #sel > 0 then
-                local oc = not sel[1].oculto
-                for i = 1, #sel do ocultar(sel[i], oc) end
-                R(string.format("%s %d objeto(s): %s%s", oc and "oculto" or "muestro", #sel, sel[1].nombre, (#sel > 1) and " y mas" or ""), true)
+                local oc, hechos = not sel[1].oculto, 0
+                for i = 1, #sel do
+                    if ocultar(sel[i], oc) then hechos = hechos + 1 end
+                end
+                R(string.format("%s %d de %d objeto(s): %s%s", oc and "oculto" or "muestro", hechos, #sel, sel[1].nombre, (#sel > 1) and " y mas" or ""), true)
+                if hechos < #sel then E.aviso = string.format("solo pude con %d de %d (los otros ya no estan o esta en solo lectura)", hechos, #sel) end
                 E.sucio = true
             end
-        elseif vkey == 0x34 then E.herr = E.herr % #HERR + 1
-        elseif vkey == 0x33 then E.eje = E.eje % #EJES + 1
+        elseif vkey == 0x34 or vkey == 0x33 then
+            -- con un arrastre en curso no se cambia de herramienta ni de eje (reinterpretaria todo el arrastre)
+            if arr then E.aviso = "solta el mouse antes de cambiar de herramienta o de eje"
+            elseif vkey == 0x34 then E.herr = E.herr % #HERR + 1
+            else E.eje = E.eje % #EJES + 1 end
         elseif vkey == 0x32 and r then
             local c = r.caja
             local radio = 0.5 * math.sqrt((c[4] - c[1]) ^ 2 + (c[5] - c[2]) ^ 2 + (c[6] - c[3]) ^ 2) * math.max(math.abs(r.e1), math.abs(r.e2), math.abs(r.e3))
@@ -1465,7 +1632,9 @@ local function tecla(vkey)
                 R(string.format("luz %s: color %.3f %.3f %.3f", l.nombre, l.color[1], l.color[2], l.color[3]), true)
             end
         elseif vkey == 0x32 and l then
-            if cam_enfocar(l.x, l.y, l.z, nil) then R("camara: enfoco la luz " .. l.nombre) end
+            if l.clase == "Sol" or l.clase == "Luz" then
+                E.aviso = "esa luz no tiene posicion (es una direccion): no hay donde enfocar"
+            elseif cam_enfocar(l.x, l.y, l.z, nil) then R("camara: enfoco la luz " .. l.nombre) end
         end
         E.sucio = true
     elseif pag == 3 then
@@ -1497,7 +1666,9 @@ local function tecla(vkey)
 end
 
 -- mouse: se mira en cada cuadro (el juego no usa el mouse). Solo con la ventana del juego al frente.
-local raton = { x = 0, y = 0, modo = nil, ix = 0, iy = 0 }
+-- modo = lo que se esta haciendo; pedido = lo que piden los botones (si un pedido falla, modo queda en "nada" y NO se
+-- reintenta hasta que cambien los botones); cam = hubo un boton de camara en este gesto; t_izq = cuando se apreto el izquierdo
+local raton = { x = 0, y = 0, modo = nil, pedido = nil, ix = 0, iy = 0, cam = false, t_izq = nil }
 local function arrastre_fin(modo)
     if modo == "herr" and arr then
         herr_fin(arr)
@@ -1506,7 +1677,8 @@ local function arrastre_fin(modo)
 end
 local function entrada()
     if not E.mouse then
-        if raton.modo then arrastre_fin(raton.modo) raton.modo = nil end
+        if raton.modo then arrastre_fin(raton.modo) end
+        raton.modo, raton.pedido, raton.cam, raton.t_izq = nil, nil, false, nil
         return
     end
     PID[0] = 0
@@ -1517,19 +1689,27 @@ local function entrada()
     local izq = frente and C.mtr_GetAsyncKeyState(1) < 0
     local der = frente and C.mtr_GetAsyncKeyState(2) < 0
     local med = frente and C.mtr_GetAsyncKeyState(4) < 0
+    -- despues de un gesto de camara el izquierdo no es herramienta hasta soltar todos los botones (al soltar "izq+der" nunca
+    -- se sueltan los dos en el mismo cuadro), y el izquierdo solo recien es herramienta a los 120 ms (al apretar tampoco)
+    if der or med then raton.cam = true elseif not izq then raton.cam = false end
+    if not izq then raton.t_izq = nil end
     local quiere = nil
     if izq and der then quiere = "zoom" elseif der then quiere = "orbita" elseif med then quiere = "paneo"
-    elseif izq and E.pag == 1 then quiere = "herr" end
-    if quiere ~= raton.modo then
+    elseif izq and E.pag == 1 and not raton.cam then
+        local t = reloj()
+        if not raton.t_izq then raton.t_izq = t end
+        local pasaron = t - raton.t_izq
+        if raton.pedido == "herr" or pasaron >= 120 or pasaron < 0 then quiere = "herr" end
+    end
+    if quiere ~= raton.pedido then
         if raton.modo then arrastre_fin(raton.modo) end
-        raton.modo, raton.ix, raton.iy = quiere, x, y
+        raton.pedido, raton.modo, raton.ix, raton.iy = quiere, quiere, x, y
         if quiere == "herr" then
             arr = herr_inicio()
             if not arr then raton.modo = "nada" end
         elseif quiere and not cam.activa and not cam_activar() then
             raton.modo = "nada"
         end
-        if raton.modo == "nada" and not quiere then raton.modo = nil end
         raton.x, raton.y = x, y
         return
     end
@@ -1601,10 +1781,13 @@ local function filas_pagina()
         if l then
             izq[2] = l.nombre
             izq[3] = string.format("tipo   %s   %s", l.clase, l.prendida and "PRENDIDA" or "apagada")
-            izq[4] = string.format("pos    %.3f  %.3f  %.3f", l.x, l.y, l.z)
+            local sin_pos = (l.clase == "Sol" or l.clase == "Luz")
+            izq[4] = string.format("%s    %.3f  %.3f  %.3f", sin_pos and "dir" or "pos", l.x, l.y, l.z)
             izq[5] = string.format("color  %.2f  %.2f  %.2f", l.color[1], l.color[2], l.color[3])
-            izq[6] = string.format("alcance %.1f m   sombra %s", l.alcance, l.sombra and "si" or "no")
-            izq[7] = string.format("cono   %.0f / %.0f grados", math.deg(l.umbra) * 2, math.deg(l.penumbra) * 2)
+            izq[6] = sin_pos and string.format("sin alcance   sombra %s", l.sombra and "si" or "no")
+                or string.format("alcance %.1f m   sombra %s", l.alcance, l.sombra and "si" or "no")
+            izq[7] = (l.clase == "Foco") and string.format("cono   %.0f / %.0f grados", math.deg(l.umbra) * 2, math.deg(l.penumbra) * 2)
+                or "cono   no tiene"
             izq[8] = string.format("escena %d   0x%s", l.esc, hx(l.dir))
         else
             izq[2] = "no hay luces en las escenas del motor"
@@ -1681,6 +1864,17 @@ end
 -- 12. EVENTOS DE SIDER
 ---------------------------------------------------------------------------------------------
 local function puede()
+    -- los tres archivos de apagado se vuelven a mirar cada 60 llamadas (un segundo con el panel abierto): se pueden crear
+    -- o borrar con el juego abierto. Va por cuenta de llamadas y no por reloj porque apagado no hay reloj.
+    E.n_puede = E.n_puede + 1
+    if E.n_puede % 60 == 0 then
+        local a, s, l = existe(DIR .. "apagado.txt"), existe(DIR .. "solo_lectura.txt"), existe(DIR .. "sin_llamadas.txt")
+        if a ~= E.apagado or s ~= E.solo_lectura or l ~= E.sin_llamadas then
+            E.apagado, E.solo_lectura, E.sin_llamadas = a, s, l
+            log("MotorTiempoReal: archivos de apagado ahora: " .. (a and "APAGADO " or "") .. (s and "SOLO LECTURA " or "")
+                .. (l and "sin llamadas al juego" or "") .. ((a or s or l) and "" or "ninguno"))
+        end
+    end
     if E.apagado then return false, "apagado por content\\motor-tiempo-real\\apagado.txt" end
     if not exe_conocido() then return false, E.exe_motivo or "no pude preparar el modulo" end
     return true
@@ -1690,7 +1884,9 @@ function m.key_down(ctx, vkey)
     local ok = puede()
     if not ok then return end
     if not E.hilo_tecla then E.hilo_tecla = C.mtr_GetCurrentThreadId() end
+    local n0 = reg.n
     tecla(vkey)
+    if E.solo_lectura and reg.n > n0 then R("(SOLO LECTURA: lo anterior no se escribio en el juego)", true) end
     volcar_registro()
 end
 
@@ -1703,7 +1899,8 @@ function m.overlay_on(ctx)
     if not E.hilo_cuadro then E.hilo_cuadro = C.mtr_GetCurrentThreadId() end
     local ahora = reloj()
     local viejo = ahora - E.t_expl
-    if not raton.modo and (E.sucio or viejo > 500 or viejo < 0) then
+    -- con muchisimos objetos (un partido) se explora mas espaciado
+    if not raton.modo and (E.sucio or viejo > ((E.n_obj > 1500) and 2000 or 500) or viejo < 0) then
         explorar()
         if E.pag == 3 and (ahora - ents.t > 2000 or ahora < ents.t) then listar_entidades() end
         if E.marcadores then marcadores_poner() end
@@ -1723,6 +1920,8 @@ function m.overlay_on(ctx)
     if E.compacto then
         t[2] = string.format("%d modelos, %d luces | herramienta %s eje %s | camara %s | panel compacto (se cambia en OPCIONES)",
             #modelos, #luces, HERR[E.herr], EJES[E.eje], cam.activa and "libre" or "del juego")
+        local o = (E.pag == 4) and OPC[E.cur[4]] or nil
+        if o then t[3] = string.format("> %s %s", o[1], o[2]()) end      -- en OPCIONES se ve sobre que opcion esta el cursor
     else
         local izq, der, pie = filas_pagina()
         for i = 1, FILAS do
@@ -1735,7 +1934,9 @@ function m.overlay_on(ctx)
         t[#t + 1] = pie
         t[#t + 1] = "mouse: derecho gira | medio corre la vista | izq+der acerca/aleja | izquierdo usa la herramienta (en ESCENA)"
     end
-    if E.aviso ~= "" then t[#t + 1] = "* " .. E.aviso end
+    if not E.listas_ok and E.listas_mal >= 6 then
+        t[#t + 1] = "* las listas del motor no coinciden con lo que conozco: modelos y luces en SOLO LECTURA (ver registro.txt)"
+    elseif E.aviso ~= "" then t[#t + 1] = "* " .. E.aviso end
     for i = 1, #t do                        -- un valor basura (memoria que cambio) no puede ensanchar el panel
         if #t[i] > 112 then t[i] = string.sub(t[i], 1, 112) end
     end

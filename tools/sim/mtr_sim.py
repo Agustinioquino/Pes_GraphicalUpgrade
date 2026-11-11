@@ -1,6 +1,11 @@
-import os
 #!/usr/bin/env python3
 """Simulador de MotorTiempoReal.lua (modulo de Sider) fuera del juego. Necesita python3 + lupa + numpy.
+
+OJO: esto prueba la LOGICA del modulo y que aguante memoria rota; NO valida los offsets del motor, porque la memoria
+falsa se arma con lo que el autor leyo en el decompilado. La 0.2 pasaba todo aca y no habria listado nada en el juego:
+las escenas se armaban colgando los objetos de escena+0x38, que en el motor es solo la cola de altas. Desde la 0.2.1 las
+escenas se arman como las deja el motor (leido en FUN_1416916b0 ctor, FUN_1416927c0 alta, FUN_1416928b0 vaciado por
+cuadro, FUN_141692420 baja): cola de altas + una lista por tipo de objeto, cada una con su cantidad.
 
 Arma una copia FALSA de la memoria del motor (escenas graficas, modelos, cuerpos, entidades, luces, camara del visor,
 RTTI, cabecera del exe) con los mismos offsets que usa el modulo, carga el modulo en LuaJIT con el mismo entorno
@@ -31,6 +36,10 @@ RANURAS = [(0x142a0a880, 0x141697bd0), (0x142a0af88, 0x14169ed80), (0x142a0ad48,
            (0x142a226d0, 0x14171d7a0), (0x142a226e0, 0x14171d8c0)]
 FN_COLOR, FN_MATRIZ = 0x14169f2e0, 0x14169de80
 G_ESCENAS, G_VISOR = 0x14374d958, 0x1438040d0
+EXE_FIN = 0x15b470000               # fin de la imagen del exe (SizeOfImage de la cabecera falsa)
+N_LISTAS = 0x40                     # listas por tipo que reserva el ctor de la escena (FUN_1416916b0)
+TIPO = dict(modelo=11, luz=23, otro=5)      # ids de tipo: el motor los reparte al arrancar (no son fijos): cualquiera sirve
+TAM_LUZ = dict(luz=0x58, local=0x90, sol=0xa0, punto=0xb0, foco=0xf0)       # lo que libera el destructor de cada clase
 
 
 class Mem:
@@ -64,7 +73,7 @@ class Mem:
         d, o = self._donde(dir, len(datos))
         if del_modulo:
             self.escrituras.append((dir, len(datos)))
-            if d is None or BASE <= dir < 0x150000000: self.malas.append((dir, len(datos)))
+            if d is None or BASE <= dir < EXE_FIN: self.malas.append((dir, len(datos)))
             elif not any(a <= dir and dir + len(datos) <= b for a, b in self.permitidas): self.malas.append((dir, len(datos)))
         if d is None: return False
         d[o:o + len(datos)] = datos
@@ -96,11 +105,14 @@ def mat_srt(S, Q, T, conj=False):
 
 class Mundo:
     """arma la memoria del Editar > Apariencia con la escena del motor"""
-    def __init__(self, conj=False, con_ayudas=True, con_limite=False, huesos=1, con_visor=True):
+    def __init__(self, conj=False, con_ayudas=True, con_limite=False, huesos=1, con_visor=True, extras=False, en_cola=()):
         self.m = m = Mem(); self.conj = conj
         self.modelos, self.luces, self.ents_ds = {}, {}, []
+        self.rangos = {}                 # objeto de escena -> rangos que el modulo puede pisar mientras siga en su escena
+        self.en_cola = set(en_cola)      # nombres que nacen en la cola de altas (el motor los pasa a su lista al cuadro siguiente)
+        self.auto_vaciar = True
         # --- exe: cabecera, tablas de funciones, RTTI, comienzo de las funciones
-        m.nuevo(0x1000, BASE); m.u32(BASE + 0x3c, 0x100); m.u32(BASE + 0x108, 0x62787C6A)
+        m.nuevo(0x1000, BASE); m.u32(BASE + 0x3c, 0x100); m.u32(BASE + 0x108, 0x62787C6A); m.u32(BASE + 0x150, EXE_FIN - BASE)
         tablas = sorted(set(VT.values()))
         tramos = []                               # tablas vecinas comparten region (si no, se pisarian entre si)
         for vt in tablas:
@@ -128,6 +140,8 @@ class Mundo:
         for i, n in enumerate(['face_high.fmdl', 'hair_high.fmdl', 'uniform.fmdl', 'boots.fmdl']):
             self._modelo(self.esc[0], None, (0, 0, 0), archivo='/Assets/pes16/model/character/' + n, huesos=30 if i == 0 else 0, animado=True)
         self._modelo(self.esc[0], None, (0, 0, 0))     # sin nombre de ningun tipo
+        if extras:      # un modelo que el JUEGO tiene oculto a su manera: solo la mascara de vistas, sin el bit0 de +0x1b4
+            self._modelo(self.esc[0], None, (0, 0, 0), archivo='/Assets/pes16/model/character/oculto_del_juego.fmdl', mascara=0xffffffff)
         # --- objetos del motor
         self._objeto('zfx_Obj_01', (0.6, 1.0, 0.0), huesos=huesos, limite=con_limite)
         self._objeto('zfx_Obj_02', (-0.6, 1.0, 0.0), S=(2, 2, 2), Q=(0, 0.3826834, 0, 0.9238795), huesos=huesos, limite=con_limite)
@@ -137,9 +151,15 @@ class Mundo:
         # --- luces: las 26 de Default con sus valores reales + un sol
         d = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'luces_default.json')))
         for l in d: self._luz(l)
-        self._luz(dict(nombre='Sol_prueba', T=[0.3, -0.8, 0.5], Q=[0, 0, 0, 1], en=True, lumen=0, color=[3, 3, 3, 1], sombra=True), sol=True)
+        self._luz(dict(nombre='Sol_prueba', T=[0.3, -0.8, 0.5], Q=[0, 0, 0, 1], en=True, lumen=0, color=[3, 3, 3, 1], sombra=True), clase='sol')
+        if extras:
+            self._luz(dict(nombre='Punto_prueba', T=[1.0, 2.0, 3.0], Q=[0, 0, 0, 1], en=True, lumen=0, color=[2, 2, 2, 1], sombra=False), clase='punto')
+            self._luz(dict(nombre='Local_prueba', T=[-1.0, 2.0, 3.0], Q=[0, 0, 0, 1], en=True, lumen=0, color=[2, 2, 2, 1], sombra=False), clase='local')
+            self._luz(dict(nombre='Luz_base', T=[0.0, 0.0, 0.0], Q=[0, 0, 0, 1], en=True, lumen=0, color=[1, 1, 1, 1], sombra=False), clase='luz')
+            # una luz de OTRA escena grafica (los marcadores de foco no la tienen que contar)
+            self._luz(dict(nombre='Foco_de_otra_escena', T=[9.0, 9.0, 9.0], Q=[0, 0, 0, 1], en=True, lumen=0, color=[1, 1, 1, 1], sombra=False), esc=self.esc[1])
         for k in range(3):
-            o = self._obj_escena(self.esc[1], 0x60); m.u64(o, VT['otro'])
+            o = self._obj_escena(self.esc[1], 0x60, TIPO['otro']); m.u64(o, VT['otro'])
         loc = self._entidad('CP0000', VT['locator'], (0, 0.12, 0), (1, 1, 1), (0, 0, 0, 1))
         self._mapa()
         # --- visor y camara
@@ -153,35 +173,102 @@ class Mundo:
             self.cam = cam; m.permitidas.append((cam + 0x10, cam + 0x60))
 
     def _escena(self, h):
+        """fox::gr::Scene como la deja su ctor (FUN_1416916b0): +0x28 cantidad de listas, +0x30 arreglo de punteros a lista
+        { +0 primero, +8 ultimo, +0x10 cantidad }, +0x38 / +0x40 / +0x48 la cola de altas (misma forma, vacia)"""
         m = self.m
         e = m.nuevo(0x60); rec = m.nuevo(0x20); m.u64(e + 0x20, rec); m.u64(rec + 0x10, h)
+        arr = m.nuevo(N_LISTAS * 8)
+        for i in range(N_LISTAS): m.u64(arr + 8 * i, m.nuevo(0x18))
+        m.u32(e + 0x28, N_LISTAS); m.u32(e + 0x2c, N_LISTAS); m.u64(e + 0x30, arr)
         return e
 
-    def _obj_escena(self, esc, n):
+    def _lista(self, esc, tipo): return self.m.r64(self.m.r64(esc + 0x30) + (tipo - 1) * 8)
+
+    def _enlazar(self, lst, o):
+        """al final de la lista (todos con la misma prioridad), como FUN_141691e20; prende bit0 de +0x24"""
+        m = self.m; ult = m.r64(lst + 8)
+        m.u64(o + 0x10, ult); m.u64(o + 0x18, 0)
+        if ult: m.u64(ult + 0x18, o)
+        else: m.u64(lst, o)
+        m.u64(lst + 8, o); m.u32(lst + 0x10, m.r32(lst + 0x10) + 1); m.u32(o + 0x24, m.r32(o + 0x24) | 1)
+
+    def _desenlazar(self, lst, o):
+        """FUN_141692340: lo saca de la lista, apaga bit0 y baja la cantidad"""
+        m = self.m; ant, sig = m.r64(o + 0x10), m.r64(o + 0x18)
+        if ant: m.u64(ant + 0x18, sig)
+        else: m.u64(lst, sig)
+        if sig: m.u64(sig + 0x10, ant)
+        else: m.u64(lst + 8, ant)
+        m.u64(o + 0x10, 0); m.u64(o + 0x18, 0); m.u32(o + 0x24, m.r32(o + 0x24) & ~1 & 0xffffffff); m.u32(lst + 0x10, m.r32(lst + 0x10) - 1)
+
+    def _obj_escena(self, esc, n, tipo, en_cola=False):
+        """alta de un objeto: FUN_1416927c0 lo pone en la cola de altas (flags 3); el vaciado de cada cuadro lo pasa a la
+        lista de su tipo (flags 1). Por defecto nace ya pasado, que es como esta todo lo que se ve en pantalla"""
         m = self.m
-        o = m.nuevo(n)
-        ult = m.r64(esc + 0x40)
-        if ult: m.u64(ult + 0x18, o); m.u64(o + 0x10, ult)
-        else: m.u64(esc + 0x38, o)
-        m.u64(esc + 0x40, o); m.u32(esc + 0x48, m.r32(esc + 0x48) + 1)
-        m.u64(o + 0x28, esc); m.u32(o + 0x24, 3)
+        o = m.nuevo(n); m.u64(o + 0x28, esc); m.u32(o + 0x30, tipo)
+        if en_cola:
+            m.u32(o + 0x24, 2); self._enlazar(esc + 0x38, o)
+        else:
+            self._enlazar(self._lista(esc, tipo), o)
         return o
 
-    def _modelo(self, esc, M, pos, archivo=None, huesos=0, animado=False, limite=False, oculto=False):
+    def vaciar_colas(self):
+        """lo que hace el motor en cada cuadro con cada escena (FUN_1416928b0)"""
         m = self.m
-        o = self._obj_escena(esc, 0x200); m.u64(o, VT['modelo'])
+        for esc in self.esc:
+            if m.leer(esc, 0x50) is None: continue
+            for _ in range(10000):
+                o = m.r64(esc + 0x38)
+                if not o or m.leer(o, 0x38) is None or not m.r32(esc + 0x48): break
+                tipo = m.r32(o + 0x30)
+                self._desenlazar(esc + 0x38, o); m.u32(o + 0x24, m.r32(o + 0x24) & ~2 & 0xffffffff)
+                if 1 <= tipo <= N_LISTAS and m.leer(m.r64(esc + 0x30) + (tipo - 1) * 8, 8) is not None and m.leer(self._lista(esc, tipo), 0x18) is not None:
+                    self._enlazar(self._lista(esc, tipo), o)
+
+    def sacar(self, o):
+        """el juego da de baja un objeto (FUN_141692420, lo primero que hace el destructor): desde aca el modulo no puede
+        escribirle nada, ni a el ni a lo que cuelga de el"""
+        m = self.m; esc = m.r64(o + 0x28)
+        if not m.r32(o + 0x24) & 1: return
+        if m.r32(o + 0x24) & 2:
+            self._desenlazar(esc + 0x38, o); m.u32(o + 0x24, m.r32(o + 0x24) & ~2 & 0xffffffff)
+        else:
+            self._desenlazar(self._lista(esc, m.r32(o + 0x30)), o)
+        fuera = self.rangos.pop(o, [])
+        m.permitidas = [r for r in m.permitidas if r not in fuera]
+
+    def en_alguna_lista(self, obj):
+        m = self.m
+        for esc in self.esc:
+            if m.leer(esc, 0x50) is None: continue
+            cabezas = [m.r64(esc + 0x38)]
+            arr, n = m.r64(esc + 0x30), m.r32(esc + 0x28)
+            for i in range(n if n <= 256 else 0):
+                if m.leer(arr + 8 * i, 8) is not None and m.leer(m.r64(arr + 8 * i), 8) is not None: cabezas.append(m.r64(m.r64(arr + 8 * i)))
+            for o in cabezas:
+                k = 0
+                while o and k < 5000 and m.leer(o + 0x18, 8) is not None:
+                    if o == obj: return True
+                    o = m.r64(o + 0x18); k += 1
+        return False
+
+    def _modelo(self, esc, M, pos, archivo=None, huesos=0, animado=False, limite=False, oculto=False, mascara=None, nombre=None):
+        m = self.m
+        o = self._obj_escena(esc, 0x200, TIPO['modelo'], en_cola=((nombre or archivo or '') in self.en_cola)); m.u64(o, VT['modelo'])
         if M is None: M = mat_srt((1, 1, 1), (0, 0, 0, 1), pos)
         fl = [float(x) for x in M.flatten()]
         m.f(o + 0x40, *fl); m.f(o + 0xa0, *fl)
         m.f(o + 0x80, -0.11, -0.11, -0.11, 0, 0.11, 0.11, 0.11, 0)
         c3 = m.nuevo(0x40); m.f(c3, *fl); m.u64(o + 0x198, c3)
-        m.permitidas += [(o + 0x40, o + 0x80), (o + 0xa0, o + 0xe0), (o + 0x1ac, o + 0x1b8), (o + 0x1c4, o + 0x1c8), (c3, c3 + 0x40)]
+        self.rangos[o] = [(o + 0x40, o + 0x80), (o + 0xa0, o + 0xe0), (o + 0x1ac, o + 0x1b8), (o + 0x1c4, o + 0x1c8), (c3, c3 + 0x40)]
+        m.permitidas += self.rangos[o]
         if limite: m.u64(o + 0x1a0, m.nuevo(0x40))
         m.u32(o + 0x1ac, 0xffffffff if oculto else 0); m.u32(o + 0x1b0, 0x18); m.u32(o + 0x1b4, 0x10 | (1 if oculto else 0))
+        if mascara is not None: m.u32(o + 0x1ac, mascara)
         m.f(o + 0x1bc, 1.0); m.f(o + 0x1c4, 1.0); m.f(o + 0x1cc, -1.0, -1.0); m.f(o + 0x1e0, 2.0); m.u8(o + 0x1f1, 7)
         if huesos:
             hb = m.nuevo(huesos * 0x40); m.u64(o + 0xe0, hb); m.u32(o + 0xf8, huesos)
-            m.permitidas.append((hb, hb + huesos * 0x40))
+            m.permitidas.append((hb, hb + huesos * 0x40)); self.rangos[o].append((hb, hb + huesos * 0x40))
             for i in range(huesos):
                 if animado: B = mat_srt((1, 1, 1), (0.1 * i % 1, 0, 0, 0.9), (0.01 * i, 1 + 0.02 * i, 0))
                 else:
@@ -196,7 +283,8 @@ class Mundo:
         m = self.m
         e = m.nuevo(n); m.u64(e, vt); m.u64(e + 0x28, m.fox_cadena(nombre)); m.u64(e + 0x30, self.hds)
         te = m.nuevo(0x60); m.u64(te, VT['te']); m.u64(e + 0x78, te)
-        m.permitidas += [(te + 0x30, te + 0x60), (e + 0xc0, e + 0x100), (e + 0xb8, e + 0xbc)]
+        self.rangos_ent = [(te + 0x30, te + 0x60), (e + 0xc0, e + 0x100), (e + 0xb8, e + 0xbc)]
+        m.permitidas += self.rangos_ent
         m.f(te + 0x30, S[0], S[1], S[2], 0, Q[0], Q[1], Q[2], Q[3], T[0], T[1], T[2], 0)
         M = mat_srt(S, Q, T, self.conj)
         m.f(e + 0xc0, *[float(x) for x in M.flatten()]); m.u32(e + 0xb8, flags); m.u32(e + 0xbc, 3)
@@ -206,26 +294,37 @@ class Mundo:
     def _objeto(self, nombre, T, S=(1, 1, 1), Q=(0, 0, 0, 1), huesos=1, limite=False, oculto=False):
         m = self.m
         e, te, M = self._entidad(nombre, VT['ent_modelo'], T, S, Q, n=0x190, flags=6 if oculto else 7)
-        o = self._modelo(self.esc[0], M, T, huesos=huesos, limite=limite, oculto=oculto)
+        de_ent = self.rangos_ent
+        o = self._modelo(self.esc[0], M, T, huesos=huesos, limite=limite, oculto=oculto, nombre=nombre)
         c = m.nuevo(0xf0); m.u64(c, VT['cuerpo']); h = m.nuevo(0x20); m.u64(h + 0x18, e); m.u64(c + 0x30, h)
         m.permitidas += [(c + 0x80, c + 0x82), (c + 0xa0, c + 0xe0)]
+        self.rangos[o] += de_ent + [(c + 0x80, c + 0x82), (c + 0xa0, c + 0xe0)]
         m.u8(c + 0x80, 0 if oculto else 1); m.u8(c + 0x81, 1); m.u64(c + 0x88, o); m.f(c + 0xa0, *[float(x) for x in M.flatten()])
         fn = m.nuevo(0x28); m.u64(fn, VT['functor']); m.u64(fn + 0x10, c)
         arr = m.nuevo(0x20); m.u64(arr, fn); m.u64(o + 0x108, arr); m.u32(o + 0x100, 1); m.u32(o + 0x104, 4)
         self.modelos[o] = dict(nombre=nombre, ent=e, te=te, cuerpo=c)
         return o
 
-    def _luz(self, l, sol=False):
-        m = self.m
-        o = self._obj_escena(self.esc[0], 0xe0); m.u64(o, VT['sol'] if sol else VT['foco'])
+    def _luz(self, l, clase='foco', esc=None):
+        """cada clase con su tamano exacto (pasarse de largo al leer falla, como al final de una region) y sus campos:
+        solo el foco tiene giro (+0x90) y cono (+0xa0); en el sol y el punto +0x90 es el puntero a su bloque de dibujo"""
+        m = self.m; sol = (clase == 'sol')
+        o = self._obj_escena(esc or self.esc[0], TAM_LUZ[clase], TIPO['luz'], en_cola=(l['nombre'] in self.en_cola)); m.u64(o, VT[clase])
         p = m.nuevo(0x100); m.u64(o + 0x38, p); m.u64(o + 0x50, m.fox_cadena(l['nombre']))
-        m.u64(p, VT['dg_sol'] if sol else VT['dg_foco']); m.permitidas.append((p + 0x64, p + 0x68))
-        m.f(o + 0x80, 0.0, 10.0); m.f(o + 0x90, *l['Q']); m.f(o + 0xa0, 0.5, 0.6)
+        m.u64(p, VT['dg_' + clase]); m.permitidas.append((p + 0x64, p + 0x68)); self.rangos[o] = [(p + 0x64, p + 0x68)]
+        if clase == 'foco':
+            m.f(o + 0x80, 0.0, 10.0); m.f(o + 0x90, *l['Q']); m.f(o + 0xa0, 0.5, 0.6)
+            m.u64(o + 0xd8, m.nuevo(0xb0)); m.u64(o + 0xe0, m.nuevo(0x20))
+        elif clase == 'sol':
+            m.f(o + 0x80, 256.0, 1.0); m.u64(o + 0x90, m.nuevo(0x40)); m.u64(o + 0x98, 0x1234567890abcdef)
+        elif clase == 'punto':
+            m.f(o + 0x80, 0.005, 7.5); m.u64(o + 0x90, m.nuevo(0x40)); m.u64(o + 0x98, m.nuevo(0x20)); m.u64(o + 0xa0, 0xfedcba0987654321)
+        elif clase == 'local':
+            m.f(o + 0x80, 0.005, 5.0)
         c = l['color']; k = l['lumen'] / 3.14159 if l['lumen'] else 1.0
         m.f(p + 0x40, c[0] * k, c[1] * k, c[2] * k, 1.0); m.u32(p + 0x64, (1 if l['en'] else 0) | (0x10 if l['sombra'] else 0)); m.f(p + 0x70, *l['T'], 1.0)
-        rp = m.nuevo(0x100); m.u64(o + 0xd8, rp)
-        self.luces[o] = dict(nombre=l['nombre'], p=p)
-        if not sol:
+        self.luces[o] = dict(nombre=l['nombre'], p=p, clase=clase)
+        if clase == 'foco' and esc is None:
             e, te, M = self._entidad(l['nombre'], VT['ent_foco'], l['T'], (1, 1, 1), l['Q'])
             m.u8(e + 0x168, 1 if l['en'] else 0); m.f(e + 0x1c0, 10.0, 0.0); m.f(e + 0x1d0, *c, 1.0); m.f(e + 0x1e0, 6500.0); m.f(e + 0x1e8, l['lumen'])
             m.f(e + 0x1f0, 60.0, 70.0); m.u8(e + 0x229, 1 if l['sombra'] else 0)
@@ -382,7 +481,7 @@ class Sim:
         for n in existe: self.SIM[b'existe'][n.encode()] = True
         if sin_ffi: self.SIM[b'permitidos'][b'ffi'] = None
         self.m, self.reg, self.ctx = g[b'cargar'](fuente, ctx)
-        self.texto = ''
+        self.texto = ''; self.cuadros = 0
 
     def _leer(self, dir, n): return self.mem.leer(int(dir), int(n))
     def _escribir(self, dir, s): return self.mem.escribir(int(dir), s)
@@ -393,19 +492,21 @@ class Sim:
         v = struct.unpack('<16f', buf)
         # lo que el modulo TIENE que garantizar antes de llamar: el objeto existe, es de la clase y esta en una escena
         assert m.leer(obj, 0x40) is not None, 'llamada sobre memoria que no existe'
-        en_lista = False
-        for esc in self.w.esc:
-            o, k = (m.r64(esc + 0x38) if m.leer(esc + 0x38, 8) else 0), 0
-            while o and k < 5000 and m.leer(o + 0x18, 8) is not None:
-                if o == obj: en_lista = True; break
-                o = m.r64(o + 0x18); k += 1
-        assert en_lista, 'llamada sobre un objeto que no esta en ninguna escena'
+        n = m.lecturas; viva = self.w.en_alguna_lista(obj); m.lecturas = n
+        assert viva, 'llamada sobre un objeto que no esta en ninguna escena'
         def pon(dir, *vals):       # campos internos rotos a proposito por el escenario "roto": el juego real no los tendria asi
             m.escribir(dir, struct.pack('<%df' % len(vals), *vals), False)
         if dir == FN_COLOR:
             assert m.r64(obj) in (VT['foco'], VT['sol'], VT['luz'], VT['local'], VT['punto']), 'color sobre algo que no es luz'
             p = m.r64(obj + 0x38); pon(p + 0x40, *v[:4])
-            if m.leer(obj + 0xd8, 8): pon(m.r64(obj + 0xd8) + 0x30, v[0] / math.pi, v[1] / math.pi)
+            # la actualizacion de cada clase (ranura +0x78) escribe en el bloque de dibujo SIN mirar si existe
+            vt = m.r64(obj)
+            if vt == VT['foco']:
+                blo = m.r64(obj + 0xd8); assert m.leer(blo, 0xb0) is not None, 'el juego se cierra: foco sin bloque de dibujo'
+                pon(blo + 0x30, v[0] / math.pi, v[1] / math.pi)
+            elif vt in (VT['sol'], VT['punto']):
+                blo = m.r64(obj + 0x90); assert m.leer(blo, 0x40) is not None, 'el juego se cierra: luz sin bloque de dibujo'
+                pon(blo + 0x20, v[0] / math.pi, v[1] / math.pi, v[2] / math.pi, 1.0)
         elif dir == FN_MATRIZ:
             assert m.r64(obj) == VT['modelo'], 'matriz sobre algo que no es modelo'
             pon(obj + 0x40, *v); pon(obj + 0xa0, *v); c3 = m.r64(obj + 0x198)
@@ -417,6 +518,12 @@ class Sim:
     def cuadro(self, n=1, ms=16):
         for _ in range(n):
             self.SIM[b'tick'] += ms
+            if self.w.auto_vaciar and self.cuadros > 0:      # el motor vacia la cola de altas en cada cuadro
+                n = self.mem.lecturas
+                try: self.w.vaciar_colas()
+                except (AssertionError, TypeError, struct.error): pass      # listas rotas a proposito (escenario "roto"): el motor falso no sigue
+                self.mem.lecturas = n                                       # (no son lecturas del modulo)
+            self.cuadros += 1
             t = self.reg[b'overlay_on'](self.ctx)
             self.texto = t.decode('latin1') if t else ''
             for linea in self.texto.split('\n'):
@@ -438,6 +545,7 @@ class Sim:
     def arrastre(self, boton, dx, dy, pasos=5):
         kw = {b: True for b in boton.split('+')}
         self.raton(**kw)                                 # aprieta
+        if boton == 'izq': self.cuadro(9)                # el izquierdo solo recien es herramienta a los 120 ms
         for _ in range(pasos): self.raton(dx=dx // pasos, dy=dy // pasos, **kw)
         self.raton()                                     # suelta
         self.cuadro()
@@ -715,6 +823,120 @@ def e_seguro(F):
     cerca(estado_objeto(w, 'zfx_Obj_01')['T'], a0['T']); assert w.m.leer(w.cam + 0x10, 0x50) == orig
 
 
+def e_listas(F):
+    """las escenas como las deja el motor (cola de altas, listas por tipo, bajas), las clases de luz y lo que corrigio la 0.2.1"""
+    BOTAS = '/Assets/pes16/model/character/boots.fmdl'
+    # 1. tres objetos nacen en la cola de altas: aparecen ya en el primer cuadro, una sola vez, y siguen despues del vaciado
+    w = Mundo(extras=True, en_cola=('zfx_Obj_02', 'SpotLight_Key', BOTAS)); s = Sim(F, w); m = w.m
+    assert m.r32(w.esc[0] + 0x48) == 3 and m.r32(w.por_nombre('zfx_Obj_02')[0] + 0x24) == 3
+    t = s.cuadro(1); assert ' de 8 (+48 de ayuda)' in t and 'zfx_Obj_02' in t and '~boots.fmdl' in t, t
+    r = s.registro(); assert 'listas del motor comprobadas' in r and 'en cola 3' in r and 'NO coincide' not in r, r[:1500]
+    s.cuadro(40); assert m.r32(w.esc[0] + 0x48) == 0 and m.r32(w.por_nombre('zfx_Obj_02')[0] + 0x24) == 1
+    assert ' de 8 (+48 de ayuda)' in s.texto and s.texto.count('zfx_Obj_02') == 1 and '> [ ] ~boots'.replace('> [', '>[') in s.texto, s.texto   # el cursor sigue al mismo objeto
+    s.pagina(2); assert ' de 31   prendidas' in s.texto, s.texto          # 26 focos + sol + punto + local + luz base + 1 de otra escena
+    # 2. cada clase de luz con sus campos (el sol no tiene posicion ni alcance; solo el foco tiene cono)
+    s.cursor_en('Sol_prueba', 2); assert 'dir    0.300  -0.800  0.500' in s.texto and 'sin alcance' in s.texto and 'cono   no tiene' in s.texto, s.texto
+    n = len(m.escrituras); s.tecla('2'); assert 'no tiene posicion' in s.texto and len(m.escrituras) == n, s.texto
+    s.cursor_en('Punto_prueba', 2); assert 'pos    1.000  2.000  3.000' in s.texto and 'alcance 7.5 m' in s.texto and 'cono   no tiene' in s.texto, s.texto
+    o, d = w.luz('Punto_prueba'); c0 = m.rf(d['p'] + 0x40, 4); s.tecla('3')
+    cerca(m.rf(d['p'] + 0x40, 4), [c0[0] * 1.25, c0[1] * 1.25, c0[2] * 1.25, c0[3]]); assert s.llamadas[-1] == (FN_COLOR, o)
+    s.cursor_en('Local_prueba', 2); assert 'alcance 5.0 m' in s.texto and 'cono   no tiene' in s.texto, s.texto
+    s.cursor_en('SpotLight_Key ', 2); assert 'cono   57 / 69 grados' in s.texto and 'alcance 10.0 m' in s.texto, s.texto
+    # un foco al que le falta su bloque de dibujo: el brillo no llama al juego (la funcion del juego escribiria en nulo)
+    o, d = w.luz('SpotLight_Key'); m.u64(o + 0xd8, 0); n = len(s.llamadas); s.tecla('3')
+    assert len(s.llamadas) == n and 'bloque de dibujo' in s.texto, s.texto
+    # 3. marcadores: solo las luces de la escena de los marcadores (26 focos + punto + local = 28 candidatas, 26 marcadores)
+    s.opcion('Marcador en cada foco'); s.tecla('8'); s.cuadro(40)
+    for i in range(26):
+        e = estado_objeto(w, 'zfx_Luz_%02d' % (i + 1)); assert not e['oculto']
+        assert np.linalg.norm(e['T'] - np.array([9.0, 9.0, 9.0])) > 1.0, 'un marcador fue a la luz de otra escena'
+    s.opcion('Dejar todo como estaba'); s.tecla('8'); s.cuadro(40)
+    # 4. un modelo que el JUEGO tiene oculto solo con la mascara: se ve como oculto, se puede mostrar y vuelve EXACTO
+    oc = next(o for o, d in w.modelos.items() if d['nombre'] and 'oculto_del_juego' in d['nombre'])
+    s.cursor_en('~oculto_del_juego'); fila = next(l for l in s.texto.split('\n') if '>' in l and 'oculto_del_juego' in l)
+    assert fila.rstrip().endswith('oc'), fila
+    s.tecla('7'); assert m.r32(oc + 0x1ac) == 0 and not m.r32(oc + 0x1b4) & 1
+    s.opcion('Dejar todo como estaba'); s.tecla('8')
+    assert m.r32(oc + 0x1ac) == 0xffffffff and not m.r32(oc + 0x1b4) & 1, (hex(m.r32(oc + 0x1ac)), hex(m.r32(oc + 0x1b4)))
+    s.cursor_en('~oculto_del_juego'); s.tecla('7', '7')      # mostrar y volver a ocultar a mano: oculto del todo
+    assert m.r32(oc + 0x1ac) == 0xffffffff and m.r32(oc + 0x1b4) & 1
+    s.opcion('Dejar todo como estaba'); s.tecla('8'); assert m.r32(oc + 0x1ac) == 0xffffffff and not m.r32(oc + 0x1b4) & 1
+    # 5. la escala de un objeto girado es el largo de cada fila, no la diagonal
+    s.cursor_en('zfx_Obj_02'); assert 'escala 2.00 2.00 2.00' in s.texto, s.texto
+    assert not m.malas
+    # 6. el juego da de baja un objeto (como empieza su destructor): ni una escritura ni una llamada sobre el
+    w = Mundo(con_limite=True); s = Sim(F, w); s.cuadro(3); m = w.m
+    o, d = w.por_nombre('zfx_Obj_01'); s.cursor_en('zfx_Obj_01'); s.tecla('8')
+    w.sacar(o); n = len(m.escrituras)
+    s.raton(izq=True); s.cuadro(9); s.raton(izq=True, dx=30); s.raton(); s.tecla('7')
+    assert len(m.escrituras) == n and not s.llamadas and not m.malas, (m.escrituras[n:], s.llamadas)
+    s.cuadro(40); assert ' de 6 (+48 de ayuda)' in s.texto and 'zfx_Obj_01' not in s.texto, s.texto
+    o, d = w.luz('SpotLight_Key'); s.cursor_en('SpotLight_Key ', 2); w.sacar(o); n = len(m.escrituras); f0 = m.r32(d['p'] + 0x64)
+    s.tecla('8'); assert len(m.escrituras) == n and not s.llamadas and m.r32(d['p'] + 0x64) == f0
+    s.tecla('3', '8')        # (el cursor ya esta sobre otra luz, que si existe: esas si se tocan; la que se fue, nunca)
+    assert (FN_COLOR, o) not in s.llamadas and m.r32(d['p'] + 0x64) == f0 and not m.malas and 'SpotLight_Key ' not in s.texto, s.texto
+    # 7. una lista cuya cantidad no coincide con lo recorrido: lista todo pero no escribe sobre modelos ni luces, y lo dice
+    w = Mundo(); m = w.m; lst = w._lista(w.esc[0], TIPO['modelo']); m.u32(lst + 0x10, m.r32(lst + 0x10) + 1)
+    s = Sim(F, w); s.cuadro(3); assert 'OBJETO 1 de 7 (+48 de ayuda)' in s.texto, s.texto
+    s.cursor_en('zfx_Obj_01'); s.tecla('8', '7'); s.arrastre('izq', 60, 0)
+    s.cursor_en('SpotLight_Key ', 2); s.tecla('8', '3')
+    s.opcion('Grilla de orientacion'); s.tecla('8'); s.cuadro(200)
+    assert not m.escrituras and not s.llamadas, m.escrituras[:3]
+    assert 'las listas del motor no coinciden' in s.texto, s.texto
+    r = s.registro(); assert 'las listas del motor NO coinciden' in r and 'cantidad del motor 83, recorridos 82' in r, [x for x in r.split('\r\n') if 'escena' in x][:6]
+    s.arrastre('der', 50, 0); assert m.escrituras and all(w.cam <= a < w.cam + 0x60 for a, _ in m.escrituras)      # la camara si anda
+    m.u32(lst + 0x10, m.r32(lst + 0x10) - 1); s.cuadro(40)          # (era pasajero: en cuanto coincide una vez, anda)
+    s.cursor_en('zfx_Obj_01'); s.tecla('7'); assert estado_objeto(w, 'zfx_Obj_01')['oculto']
+    # 8. un ciclo en una lista (el ultimo apunta al primero): cada objeto una sola vez, no se cuelga, y queda en solo lectura
+    w = Mundo(); m = w.m; lst = w._lista(w.esc[0], TIPO['modelo']); m.u64(m.r64(lst + 8) + 0x18, m.r64(lst))
+    s = Sim(F, w); lect = m.lecturas; s.cuadro(3)
+    assert 'OBJETO 1 de 7 (+48 de ayuda)' in s.texto and m.lecturas - lect < 2000, (s.texto, m.lecturas - lect)
+    # 9. cantidad de listas basura y arreglo basura: no lista nada de esa escena y no rompe
+    w = Mundo(); m = w.m; m.u32(w.esc[0] + 0x28, 0xffffffff); m.u64(w.esc[1] + 0x30, 0x7ff812345678)
+    s = Sim(F, w); s.cuadro(3); assert 'no hay modelos' in s.texto and not m.escrituras, s.texto
+    # 10. el gesto de acercar (izq + der) no mueve lo marcado, se suelte primero el que se suelte y se apriete primero el que sea
+    for herr in (0, 1, 2):
+        w = Mundo(con_limite=True); s = Sim(F, w); s.cuadro(3); m = w.m
+        s.cursor_en('zfx_Obj_01'); s.tecla('8')
+        for _ in range(herr): s.tecla('4')
+        a0 = estado_objeto(w, 'zfx_Obj_01')
+        s.raton(izq=True, der=True)
+        for _ in range(10): s.raton(izq=True, der=True, dx=5, dy=7)
+        for _ in range(4): s.raton(izq=True, dx=6, dy=3)          # se solto antes el derecho, con el mouse en movimiento
+        s.raton(); s.cuadro(3)
+        s.raton(izq=True, dx=4); s.raton(izq=True, dx=4)           # se aprieta antes el izquierdo, 2 cuadros
+        for _ in range(6): s.raton(izq=True, der=True, dy=5)
+        s.raton(der=True, dy=5); s.raton(); s.cuadro(3)
+        a1 = estado_objeto(w, 'zfx_Obj_01'); cerca(a1['T'], a0['T'], 1e-7); cerca(a1['S'], a0['S'], 1e-7); cerca(a1['Q'], a0['Q'], 1e-7)
+        assert not s.llamadas and all(w.cam <= a < w.cam + 0x60 for a, _ in m.escrituras), 'el gesto de acercar toco un objeto'
+    # con un arrastre en curso no se cambia de herramienta ni de eje
+    s.tecla('5', '6'); s.raton(izq=True); s.cuadro(9); s.raton(izq=True, dx=20); s.tecla('4', '3')
+    assert 'solta el mouse' in s.texto, s.texto
+    s.raton()
+    # 11. un pedido que falla no se reintenta ni se anota en cada cuadro (camara que no conozco + boton derecho sostenido)
+    w = Mundo(); s = Sim(F, w); s.cuadro(3); w.m.u32(w.cam + 0x3c, 1); n = len(s.logs())
+    for _ in range(120): s.raton(der=True, dx=1)
+    assert len(s.logs()) - n <= 2 and not w.m.escrituras, s.logs()[n:n + 5]
+    s.raton(); n = len(s.logs()); s.cuadro(3); s.pagina(1)
+    for _ in range(120): s.raton(izq=True, dx=1)                    # herramienta sobre un modelo del juego: "nada para mover"
+    assert len(s.logs()) - n <= 2 and not w.m.escrituras
+    s.raton()
+    # 12. los archivos de apagado valen con el juego abierto (se miran cada 60 llamadas)
+    w = Mundo(con_limite=True); s = Sim(F, w); s.cuadro(3); m = w.m
+    s.cursor_en('zfx_Obj_01'); s.tecla('8'); s.arrastre('izq', 30, 0); assert m.escrituras and s.llamadas
+    s.SIM[b'existe'][b'sin_llamadas.txt'] = True; s.cuadro(70); n = len(s.llamadas); s.arrastre('izq', 30, 0); assert len(s.llamadas) == n
+    s.SIM[b'existe'][b'solo_lectura.txt'] = True; s.cuadro(70); n = len(m.escrituras)
+    s.arrastre('izq', 30, 0); s.tecla('7'); s.arrastre('der', 30, 0); assert len(m.escrituras) == n and 'SOLO LECTURA' in s.registro()
+    s.SIM[b'existe'][b'apagado.txt'] = True; s.cuadro(70); assert 'apagado por' in s.texto, s.texto
+    lect = m.lecturas; s.tecla('7', '8'); s.cuadro(30); assert m.lecturas == lect and len(m.escrituras) == n
+    for k in (b'apagado.txt', b'solo_lectura.txt', b'sin_llamadas.txt'): s.SIM[b'existe'][k] = None
+    s.cuadro(70); assert '[ESCENA]' in s.texto; s.arrastre('izq', 30, 0); assert len(m.escrituras) > n
+    # 13. panel compacto en OPCIONES: se ve sobre que opcion esta el cursor
+    s.opcion('Panel'); s.tecla('8'); assert 'panel compacto' in s.texto and '> Panel compacto' in s.texto, s.texto
+    s.tecla('0'); assert '> Dejar todo como estaba' in s.texto, s.texto
+    print('   cola de altas, listas por tipo, bajas, clases de luz, compuerta de listas, gestos del mouse, apagado en vivo: bien')
+
+
 def e_roto(F):
     """la memoria cambia por debajo (el juego descarga cosas, listas con ciclos, punteros basura): nunca un error de Lua
     y nunca una escritura fuera de un objeto conocido"""
@@ -728,14 +950,30 @@ def e_roto(F):
             if r < 0.45: s.tecla(rnd.choice(teclas))
             elif r < 0.70:
                 s.raton(izq=rnd.random() < 0.5, der=rnd.random() < 0.4, med=rnd.random() < 0.2, dx=rnd.randint(-40, 40), dy=rnd.randint(-40, 40))
-            elif r < 0.80: s.cuadro(rnd.randint(1, 40))
-            elif r < 0.90:
+            elif r < 0.76: s.cuadro(rnd.randint(1, 40))
+            elif r < 0.80:
+                # un arrastre entero con la herramienta o con la camara
+                s.arrastre(rnd.choice(['izq', 'izq', 'der', 'med', 'izq+der']), rnd.randint(-80, 80), rnd.randint(-80, 80))
+            elif r < 0.84:
+                # el motor da de baja un objeto de escena como corresponde, o carga uno nuevo (entra por la cola de altas)
+                if rnd.random() < 0.6:
+                    vivos = [o for o in list(w.modelos) + list(w.luces) if m.leer(o, 0x38) is not None and m.r32(o + 0x24) & 1
+                             and m.leer(m.r64(o + 0x28), 0x50) is not None and m.r64(o + 0x28) in w.esc]
+                    if vivos:
+                        o = rnd.choice(vivos)
+                        try: w.sacar(o)
+                        except (AssertionError, TypeError, struct.error): pass      # las listas ya estaban rotas por otro paso
+                elif m.leer(w.esc[0], 0x50) is not None:
+                    nombre = '/Assets/nuevo_%d.fmdl' % paso; w.en_cola.add(nombre)
+                    try: w._modelo(w.esc[0], None, (1, 2, 3), archivo=nombre)
+                    except (AssertionError, TypeError, struct.error): pass
+            elif r < 0.92:
                 # el juego descarga algo: desaparece una region cualquiera que no sea del exe
-                bases = [b for b in m.reg if not (BASE <= b < 0x150000000)]
+                bases = [b for b in m.reg if not (BASE <= b < EXE_FIN)]
                 if bases: del m.reg[rnd.choice(bases)]
             else:
                 # basura en un puntero o en un valor de algun objeto
-                bases = [b for b in m.reg if not (BASE <= b < 0x150000000)]
+                bases = [b for b in m.reg if not (BASE <= b < EXE_FIN)]
                 if bases:
                     b = rnd.choice(bases); d = m.reg[b]; o = rnd.randrange(0, max(1, len(d) - 8), 8)
                     d[o:o + 8] = struct.pack('<Q', rnd.choice([0, 0xffffffffffffffff, 0x7ff8000000000000, 0xffffffd8ffffffdc, 0xfff80000ffc00001, 0x7f800000ff800000, 0xbf800000ffffff9c, rnd.choice(bases), rnd.getrandbits(47), 0x140000000 + rnd.getrandbits(24), b]))[:len(d) - o]
@@ -743,7 +981,7 @@ def e_roto(F):
     print('   60 vueltas de 260 pasos con la memoria rompiendose: sin errores y sin escrituras fuera de lugar')
 
 
-ESCENARIOS = dict(basico=e_basico, mover=e_mover, luces=e_luces, camara=e_camara, seguro=e_seguro, roto=e_roto)
+ESCENARIOS = dict(basico=e_basico, mover=e_mover, luces=e_luces, camara=e_camara, seguro=e_seguro, listas=e_listas, roto=e_roto)
 
 if __name__ == '__main__':
     fuente = open(sys.argv[1], 'rb').read()
