@@ -607,8 +607,6 @@ local function pasada()
                                 r.arch_res = r.archivo
                                 -- la misma direccion con otro nombre = otro objeto (el juego reuso la memoria): no hereda la marca
                                 if r.nom_antes and r.nom_antes ~= r.nombre then marcados[o] = nil end
-                                -- ni el "como estaba" de visibilidad que se habia guardado para el anterior
-                                if r.nom_antes then G.oc_orig[o] = nil end
                             end
                             esc.n_mod = esc.n_mod + 1
                             if r.ayuda then na[#na + 1] = r else nm[#nm + 1] = r end
@@ -647,12 +645,6 @@ local function explorar()
         end
         if cortada then nesc, nm, nl, na, no, ne, id = pasada() end
     end
-    -- pasada limpia = ninguna lista cortada ni con tope: lo que no se vio es que de verdad ya no esta
-    local limpia = true
-    for i = 1, ne do
-        local x = nesc[i]
-        if x and (x.tope or x.raro > 0) then limpia = false end
-    end
     -- primera vez: lo recorrido tiene que coincidir con la cantidad que lleva el motor en cada lista. Hasta que eso pase una
     -- vez, el modulo lista pero no escribe sobre modelos ni luces (si mi lectura del motor fuera equivocada, no toco nada)
     local total = 0
@@ -661,31 +653,20 @@ local function explorar()
     end
     E.n_obj = total
     if not E.listas_ok then
-        -- cuentan las escenas donde encontre modelos o luces (las unicas donde escribo). Una escena SIN modelos ni luces que
-        -- no coincida no frena a las demas: se anota para verla en el registro
-        local bien, con_algo, ajenas = true, 0, 0
+        local bien, con_algo = true, 0
         for i = 1, ne do
             local x = nesc[i]
             if x and not x.tope and (x.n_mod + x.n_luz > 0 or x.cuenta > 0) then
                 if x.ok then
                     if x.n_mod + x.n_luz > 0 then con_algo = con_algo + 1 end
-                elseif x.n_mod + x.n_luz > 0 then
-                    bien = false
                 else
-                    ajenas = ajenas + 1
+                    bien = false
                 end
             end
         end
         if bien and con_algo > 0 then
             E.listas_ok = true
             R(string.format("listas del motor comprobadas (%d objetos en %d escenas: lo recorrido coincide con la cantidad de cada lista)", total, ne), true)
-            for i = 1, ne do
-                local x = nesc[i]
-                if ajenas > 0 and x and not x.ok and not x.tope and x.cuenta > 0 then
-                    R(string.format("  (escena %d 0x%s sin modelos ni luces NO coincide: cantidad del motor %d, recorridos %d, cosas raras %d; no la toco)",
-                        i, hx(x.dir), x.cuenta, x.n, x.raro))
-                end
-            end
         elseif bien then
             E.listas_mal = 0                            -- todavia no hay modelos ni luces contra los que comprobar
         else
@@ -707,9 +688,6 @@ local function explorar()
         if r.visto ~= id then
             por_dir[d] = nil
             marcados[d] = nil
-            -- un modelo del juego (sin cuerpo de escena) que ya no esta: su "como estaba" no vale para el que nazca despues
-            -- en la misma direccion (los objetos de escena renacen como dice el archivo, asi que el suyo sigue valiendo)
-            if limpia and r.tipo == "modelo" and not r.cuerpo then G.oc_orig[d] = nil end
         end
     end
     -- el cursor sigue sobre el mismo objeto aunque la lista cambie

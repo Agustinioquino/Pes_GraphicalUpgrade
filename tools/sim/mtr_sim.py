@@ -957,7 +957,7 @@ def _renacer(w, o, archivo=None, mascara=0, bit=0):
 
 def e_repaso(F):
     """lo que encontro la revision de la 0.2.1: lista leida a medio cambiar, reponer sin poder escribir, 'dejarla sola' sin
-    poder escribir, direccion reusada por otro modelo, escena ajena que no coincide"""
+    poder escribir, direccion reusada por otro modelo, parte del jugador que sale y vuelve, escena ajena que no coincide"""
     BOTAS = '/Assets/pes16/model/character/boots.fmdl'
     fila = lambda s, n: [l.split('|')[-1].strip() for l in s.texto.split('\n') if n in l.split('|')[-1] and '[' in l.split('|')[-1]]
     # 1. una lista a medio cambiar durante UNA lectura (el motor apaga y prende el bit0 al mover un objeto): no se pierden las
@@ -1023,23 +1023,24 @@ def e_repaso(F):
         f = fila(s, 'hair_NUEVO'); assert f and '[ ]' in f[0] and not fila(s, nombre.split('/')[-1]), s.texto
         s.opcion('Dejar todo como estaba'); s.tecla('8'); s.cuadro(5)
         assert m.r32(o + 0x1ac) == 0 and m.r32(o + 0x1b4) & 1 == 0 and not m.malas
-    # 5. un modelo del juego que toque y que el motor destruye: si renace en la misma direccion (mismo archivo) con el panel
-    #    abierto, "Dejar todo como estaba" no le pone el estado del anterior
-    for buscado, toques, nace in (('oculto_del_juego', 1, (0, 0)), ('face_high', 1, (0, 0)), ('face_high', 1, (0xffffffff, 0)), ('face_high', 2, (0xffffffff, 0))):
-        w = Mundo(extras=True); s = Sim(F, w); m = w.m; s.cuadro(3)
-        o = [a for a, d in w.modelos.items() if d['nombre'] and buscado in d['nombre']][0]
-        s.cursor_en('~' + buscado)
-        for _ in range(toques): s.tecla('7')
-        w.sacar(o); s.cuadro(80)                                           # una exploracion ve que ya no esta
-        _renacer(w, o, None, *nace); s.cuadro(80)
-        s.opcion('Dejar todo como estaba'); s.tecla('8'); s.cuadro(5)
-        assert (m.r32(o + 0x1ac), m.r32(o + 0x1b4) & 1) == nace, (buscado, toques, nace, hex(m.r32(o + 0x1ac)))
-    # 6. una escena ajena (sin modelos ni luces) cuya cantidad no coincide no deja al resto en solo lectura; queda anotada
+    # 5. una parte del jugador que escondi y que el motor saca de la escena un rato y vuelve a poner (el MISMO objeto, como
+    #    FUN_141a4b130): "Dejar todo como estaba" la vuelve a mostrar
+    w = Mundo(extras=True); s = Sim(F, w); m = w.m; s.cuadro(3)
+    o = [a for a, d in w.modelos.items() if d['nombre'] and 'face_high' in d['nombre']][0]
+    s.cursor_en('~face_high'); s.tecla('7'); assert m.r32(o + 0x1ac) == 0xffffffff and m.r32(o + 0x1b4) & 1 == 1
+    esc = m.r64(o + 0x28); rangos = list(w.rangos.get(o, []))
+    w.sacar(o); s.cuadro(80)
+    w._enlazar(w._lista(esc, TIPO['modelo']), o); w.rangos[o] = rangos; m.permitidas += rangos; s.cuadro(80)
+    s.opcion('Dejar todo como estaba'); s.tecla('8'); s.cuadro(5)
+    assert m.r32(o + 0x1ac) == 0 and m.r32(o + 0x1b4) & 1 == 0 and not m.malas, hex(m.r32(o + 0x1ac))
+    # 6. una escena ajena cuya cantidad no coincide: todo en solo lectura, con aviso y el detalle por escena en el registro
     w = Mundo(); m = w.m; lst = w._lista(w.esc[1], TIPO['otro']); m.u32(lst + 0x10, m.r32(lst + 0x10) + 1)
     s = Sim(F, w); s.cuadro(300)
-    r = s.registro(); assert 'listas del motor comprobadas' in r and 'sin modelos ni luces NO coincide' in r, [x for x in r.split('\r\n') if 'escena' in x][:6]
-    assert 'no coinciden' not in s.texto, s.texto
-    s.cursor_en('zfx_Obj_01'); s.tecla('7'); assert estado_objeto(w, 'zfx_Obj_01')['oculto'] and not m.malas
+    s.cursor_en('zfx_Obj_01'); s.tecla('8', '7'); s.arrastre('izq', 60, 0); s.cursor_en('SpotLight_Key ', 2); s.tecla('8', '3')
+    r = s.registro(); assert not m.escrituras and not s.llamadas and 'las listas del motor no coinciden' in s.texto, s.texto
+    assert 'las listas del motor NO coinciden' in r and 'cantidad del motor 4, recorridos 3' in r, [x for x in r.split('\r\n') if 'escena' in x][:6]
+    m.u32(lst + 0x10, m.r32(lst + 0x10) - 1); s.cuadro(40); s.cursor_en('zfx_Obj_01'); s.tecla('7')
+    assert estado_objeto(w, 'zfx_Obj_01')['oculto'] and not m.malas                    # (en cuanto coincide una vez, anda)
     # 7. panel compacto: el renglon de estado entra entero en el peor caso (ESCALAR, PANTALLA, camara del juego)
     s.tecla('4', '4'); s.opcion('Panel'); s.tecla('8')
     l2 = s.texto.split('\n')[1]; assert l2.endswith('(ver OPCIONES)') and len(l2) + 7 <= 112, (len(l2), l2)
