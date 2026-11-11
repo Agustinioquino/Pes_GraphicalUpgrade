@@ -552,8 +552,10 @@ void main(
       { float kL = lowK * clamp(IniParams.Load(int2(407,0)).w, 0.0, 2.0);
         // (11/11 g, Agustin: "el rebote de la luz en la pelota" se ve raro, captura 13.54: la mitad de abajo verde oliva) el verde del cesped
         // medido llega mas gris (60 %; el pasto al sol devuelve tambien luz blanca de la cera de las hojas) y hasta 1.5x en vez de 1.75x
-        if (kL > 0.001) { float3 tg = TB.y > 0.01 ? TB.xyz * 1.35 : float3(0.14, 0.24, 0.07); tg = lerp(dot(tg, float3(0.2126, 0.7152, 0.0722)).xxx, tg, 0.6);
-          turf = lerp(turf, tg, saturate(0.7 * kL)) * (1.0 + 0.5 * kL); } }
+        // (11/11 h) Agustin con la tanda 1: "le falta ... la pelota del rebote de la luz": el oliva oscuro venia sobre todo de la oclusion
+        // ambiental de las hojas de delante (arreglado en pes_gtao_ps); el rebote vuelve a 85 % del verde, algo dorado, hasta 1.65x
+        if (kL > 0.001) { float3 tg = TB.y > 0.01 ? TB.xyz * 1.35 : float3(0.14, 0.24, 0.07); tg = lerp(dot(tg, float3(0.2126, 0.7152, 0.0722)).xxx, tg, 0.85) * float3(1.06, 1.0, 0.86);
+          turf = lerp(turf, tg, saturate(0.7 * kL)) * (1.0 + 0.65 * kL); } }
       r2.xyz += sunC * sunUp * turf * shadeB * skyTint * fGround3 * max(BG.x, 0.0) * saturate((120.0 - zb) / 40.0) * PESAmbGain();
     }
   }

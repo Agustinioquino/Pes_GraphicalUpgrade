@@ -111,5 +111,7 @@ float3 PESTurfTransmit(float3 sunC, float2 sC, float2 uvC, Texture2D<float4> dT,
   float trK = lerp(tr, tr * tr, nearQ);                  // (06/11) de lejos lineal (una hoja verde 0.4 -> 0.5 en vez de 0.25)
   float3 tint = lerp(float3(1.0, 1.0, 1.0), float3(1.10, 1.0, 0.42), saturate(PG.y));   // clorofila: amarillo verdoso (y313)
   float amt = k * lerp(saturate(P330.w), 1.0, nearQ) * trK * back * lobe;
+  // (11/11 h, Agustin: "le falta ese detalle de luz atravesando") natural de cerca: la hoja a contraluz deja pasar 1.7x (lejos igual)
+  if (IniParams.Load(int2(407, 0)).x < 0.5) amt *= lerp(1.0, 1.7, nearQ);
   return sunC * tint * amt;
 }
