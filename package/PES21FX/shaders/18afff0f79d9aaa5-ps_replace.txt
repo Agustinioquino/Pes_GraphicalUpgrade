@@ -134,7 +134,7 @@ void main(
   float kRoot = P325.z > 0.001 ? clamp(P325.z, 0.0, 2.0) : 1.0;
   float sparkK = smoothstep(2.0, 5.0, pxA * 0.012);
   // la cal pintada cubre la parte alta de la hoja: hacia la raiz queda verde (solo de cerca, donde la hoja mide)
-  if (pesV3 && pesPaintF > 0.001) pesPaintF *= lerp(1.0, lerp(0.45, 1.0, smoothstep(0.0, 0.5, relH)), saturate(kRoot) * nearF);
+  if (pesV3 && pesPaintF > 0.001) pesPaintF *= lerp(1.0, lerp(pesNat ? 0.70 : 0.45, 1.0, smoothstep(0.0, 0.5, relH)), saturate(kRoot) * nearF);   // (11/11 i) natural: la cal baja mas por la hoja
   float2 uvA = v1.xy;
   bool pesMir = false;   // (11/11 d) tarjeta espejada (natural)
   if (pesV3) {
@@ -154,7 +154,9 @@ void main(
         uvA.x = (uu + band * 2.0 + fmod(kv, 2.0)) * 0.125;
         uvA.y = (saturate(uvA.y) + rowB * 2.0 + floor(kv * 0.5)) * 0.25;
       } else
-      uvA.y = saturate(uvA.y) * 0.5 + rowB * 0.5; }
+      // (11/11 h, Agustin: "los pedazitos que vuelan no salen correctamente") los recortes que vuelan usan pes_debris.dds, que es UNA fila
+      // (2048x512): con la cuenta de 2 filas del atlas de hojas salia media tarjeta estirada (y con el natural, 1 de cada 3 la mitad de abajo)
+      uvA.y = pesClipP ? saturate(uvA.y) : saturate(uvA.y) * 0.5 + rowB * 0.5; }
   }
   if (pesBladeM) pesMir = false;   // (11/11) hojas 3D: sin tarjeta que espejar
   float atlasPx = 128.0;   // el fundido de la oclusion por distancia se mide como el juego (tamano en pantalla, no del atlas)
@@ -167,7 +169,7 @@ void main(
   // promedio pasaba el recorte y la tarjeta salia como un triangulo plano. MISMA cuenta en pes_grass_depth_ps.hlsl. El artificial queda igual
   float2 dVx = ddx(v1.xy), dVy = ddy(v1.xy);
   float pesFwU = fwidth(saturate(v1.x));   // (11/11) hojas 3D: ancho de un pixel a lo ancho de la hoja (fuera de la rama)
-  if (pesV3 && !pesArt) { float2 tS = pesNat ? float2(0.125, 0.25) : float2(0.25, 0.5); dUx = dVx * tS; dUy = dVy * tS; }
+  if (pesV3 && !pesArt) { float2 tS = pesNat ? float2(0.125, 0.25) : (pesClipP ? float2(0.25, 1.0) : float2(0.25, 0.5)); dUx = dVx * tS; dUy = dVy * tS; }
   if (pesV3) {
     // (27/10 j) pegado a la camara (>= 600 px/m) el atlas se muestrea mas nitido (gradientes a la mitad = un mip mas fino): las hojas de
     // muy cerca se veian blandas, "con poco detalle"
@@ -296,6 +298,12 @@ void main(
       }
     }
     r1.xyz *= lerp(1.0, aoC, pesCf);   // (26/10 f) lejos sin la sombra raiz -> punta (de lejos solo pasan el alfa los texeles de la raiz)
+    // (11/11 h, foto de referencia de Agustin: "le faltan las sombras") natural: el fondo de la mata es VERDE PROFUNDO y saturado (la luz que
+    // llega abajo ya reboto en otras hojas: pierde rojo y azul), no gris oliva. Referencia: 5 % mas oscuro (9, 20, 2) contra (31, 41, 13)
+    // del mod. Mas abajo y mas denso = mas oscuro; las pintadas no
+    if (pesNat) { float densR = saturate((1.0 - r0.y) * 2.0);
+      float kR = (1.0 - smoothstep(0.0, 0.55, relH)) * (0.6 + 0.4 * densR) * pesCf * (1.0 - pesPaintF);
+      r1.xyz *= lerp(float3(1.0, 1.0, 1.0), float3(0.60, 0.78, 0.50), kR); }
   }
   o0.xyz = v1.zzz * r1.xyz;
   float clar = 1.0;   // (27/10 j) claridad del atlas, la usa tambien la hoja pintada despues del grade
@@ -318,6 +326,10 @@ void main(
       c = lerp(c, cd, saturate(natDry * 1.3));
     }
     c = PESDryTint(c, tipK + v8.x * saturate(Q7.y) * 0.85);
+    // (11/11 h, referencia: "el color en las puntas") natural: la punta CORTADA por la cortadora se seca y queda palida (verde paja claro),
+    // el ultimo ~14 % de la hoja; al sol sale casi blanco crema como en la foto. Las pintadas no
+    if (pesNat) { float cutT = smoothstep(0.86, 1.0, relH) * pesCfN * (1.0 - pesPaintF);
+      c = lerp(c, dot(c, float3(0.2126, 0.7152, 0.0722)) * float3(1.12, 1.18, 0.80) * 1.30, 0.50 * cutT); }
     { // misma correccion de color que la base de la cancha ("Pasto v2", x29): antes las hojas quedaban mas amarillas/grises que el suelo
       float4 GV = IniParams.Load(int2(29,0));
       if (GV.w > 0.5) {
@@ -396,6 +408,10 @@ void main(
     // brillo: la hoja es mas lustrosa en el centro (B del atlas) y se regula con z106; seca = mate
     float gl = clamp(Q6.z, 0.0, 2.0);
     o2.y = saturate(o2.y * gl * (0.5 + pesGlossF) * (1.0 - v8.x * 0.5) * (1.0 - 0.5 * pesPaintF));   // (27/10 h) la pintura es mate
+    // (11/11 h, referencia: "el brillo") natural de cerca: la cara de la hoja tiene cera (cuticula): brillo mas alto y mas liso de la mitad a la
+    // punta (los reflejos blancos de la foto); la seca y la pintada no
+    if (pesNat) { float wax = pesCfN * smoothstep(0.15, 0.7, relH) * (1.0 - saturate(v8.x)) * (1.0 - pesPaintF);
+      o2.y = saturate(o2.y * (1.0 + 0.45 * wax)); o2.x *= 1.0 - 0.18 * wax; }
     { float3 cg = o0.xyz; float sp = o2.y, rg = o2.x; PESGroundLook(cg, sp, rg, PESGround()); o0.xyz = cg; o2.y = sp; o2.x = rg; }   // suelo humedo / seco
     // (27/10 n) tanda 11, x329 "transpiracion": en la foto de Agustin algunas hojas sueltas tienen un brillo humedo puntual (rocio / riego) en la
     // punta, chispas con el sol de frente. Una de cada ~8 hojas del mod (al azar por hoja, v8.z) lleva en la punta mas brillo y menos rugosidad;
