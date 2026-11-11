@@ -175,7 +175,7 @@ struct Config {
     int menuMouseNear = 1;                     // (11/11 v2) en los huecos entre filas de un grupo vale la mas cercana ([PES21FX] mouse_menus_cerca)
     int menuMouseKey = 0;                      // (11/11 v2) tecla que saca / pone el mouse en los menus (0 = ninguna, de fabrica: Agustin 22:23 no la necesita) ([PES21FX] tecla_mouse_menus = F8...)
     int keyHud = 4;                            // (11/11) cuadrito con la ultima tecla apretada: 0 apagado, 1..4 esquina ([PES21FX] ultima_tecla)
-    int motorHelpBar = 0; float motorPanelX = 0, motorPanelY = 0; int motorPage = 1;                         // (11/11) motorpage.cpp: el estudio del Motor con filas nativas del juego ([PES21FX] motor_pagina)
+    int motorHelpBar = 0; int motorBg = 1, motorCam = 1, motorGizmo = 1; float motorPanelX = 0, motorPanelY = 0; int motorPage = 1;                         // (11/11) motorpage.cpp: el estudio del Motor con filas nativas del juego ([PES21FX] motor_pagina)
     int motorDress = 1;                        // (11/11) motorpage.cpp: vestir al jugador del estudio por la via nativa ([PES21FX] motor_vestir)
     int blockKeys = 1;                         // (31/10) teclas del juego con el menu: 0 nunca se bloquean, 1 al escribir en un campo, 2 con el menu abierto ([PES21FX] bloquear_teclado)
     int lang = 0;                              // (27/10) idioma del menu: 0 espanol, 1 ingles ([PES21FX] language = es / en)
@@ -598,6 +598,8 @@ void AutoCapturePresent(ID3D11Texture2D* frame);   // hooks.cpp
 // (08/11) panel en vivo (panel.cpp): HTTP solo en 127.0.0.1 para la pagina tools\visor; camara libre y camara del juego para el panel
 void PanelStart(int port); void PanelPresent(ID3D11Texture2D* frame);
 void FreeCamSetPose(const float* pos, float yaw, float pitch); bool FreeCamGetPose(float* pos, float* yaw, float* pitch);
+void FreeCamGizmoOrbit(float dyaw, float dpitch); void FreeCamGizmoAxis(int a); void FreeCamGizmoHome();   // (11/11) gizmo de camara del Motor
+bool MotorGizmoPoll(); void MotorGizmoDraw(); bool MotorGizmoOver(float px, float py);                     // motorgizmo.cpp
 bool CamHookLast(float* pos, float* tgt, int* id, int* frame);   // camhook.cpp: ultima camara aplicada por el CameraSystem
 // (27/10 c) sombra propia de la cabeza (headshadow.cpp): atlas de sombras de alta resolucion de las cabezas mas cercanas
 // (04/11 boca) mascara del interior de la boca (mouthmask.cpp): la luz de la piel no cambia la boca

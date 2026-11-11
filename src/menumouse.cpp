@@ -182,7 +182,7 @@ static int SelectorDir(uint8_t* I, const Hit& hit, float mx) {
 }
 
 // apagado con el menu de PES21FX abierto, con la camara libre y con el panel del Motor en tiempo real abierto (ahi el mouse es del Motor)
-static bool Enabled() { return s_ok && g_cfg.menuMouse != 0 && !g_menuOpen.load(std::memory_order_relaxed) && !FreeCamActive() && !MotorPanelOpen(); }
+static bool Enabled() { return s_ok && g_cfg.menuMouse != 0 && !g_menuOpen.load(std::memory_order_relaxed) && (!FreeCamActive() || MotorPageActive()) && !MotorPanelOpen(); }
 
 static void Sample(double now, bool fresh) {
     s_m = Muestra(); s_m.t = now;
@@ -208,6 +208,7 @@ static void Step(void* win) {
     if (fresh) { s_wheelAcc = 0; s_wheel.store(0); s_latchWin = nullptr; }
     if (batch) Sample(now, fresh);                 // siempre, para no inventar un clic al volver del menu de PES21FX
     if (!Enabled() || !Ptr(win)) { s_latchWin = nullptr; return; }
+    if (s_rWas && FreeCamActive()) { s_liveT.store(now); return; }   // volando con la camara libre del Motor: el mouse no elige filas
     uint8_t* I = P8((uint8_t*)win + 0x88); if (!Ptr(I)) return;
     s_liveT.store(now); s_nStep.fetch_add(1, std::memory_order_relaxed);
     if (!s_m.ok) return;
@@ -232,6 +233,7 @@ static void Step(void* win) {
             if (Ptr(vt) && RowClass(vt) && ((PFN_NodeVec2)vt[0xa0 / 8])(r0, pos) >= 0) { ((PFN_NodeVec2)vt[0xc0 / 8])(r0, size); tx = pos[0]; ty = pos[1]; tw = size[0]; } }
         if (MotorPageDrag(win, mx, my, s_lWas, s_m.lEdge, tx, ty, tw)) { s_m.lEdge = false; s_moveT.store(now); return; }
     }
+    if (MotorGizmoOver((float)s_m.p.x, (float)s_m.p.y)) { s_m.lEdge = false; s_moveT.store(now); return; }   // el gizmo de camara del Motor (motorgizmo.cpp): el clic es suyo
     Hit hit; const bool on = (s_m.moved || s_m.lEdge) && HitTest(I, mx, my, hit);
     // (v3) la fila actual del juego (Impl+0xd8) cuenta el desplazamiento de la lista: se compara con ese numero, no con el de la fila dibujada
     const int hitAbs = on ? AbsRow(win, I, hit.group, hit.row) : -1;
@@ -252,7 +254,7 @@ static void Step(void* win) {
             else if (dir != 0) { s_pendDxWin = win; s_pendDx = dir; }
             else { s_pendWin = win; s_pendAction = 0; }
         }
-    } else if (s_m.rEdge) {
+    } else if (s_m.rEdge && !FreeCamActive()) {       // con la camara libre del Motor el boton derecho es para volar
         bool given = false; for (int i = 0; i < s_rN; i++) if (s_rGiven[i] == win) given = true;
         if (!given && s_rN < 8) { s_rGiven[s_rN++] = win; s_pendWin = win; s_pendAction = 1; }
     }

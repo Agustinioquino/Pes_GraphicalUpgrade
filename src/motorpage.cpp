@@ -350,6 +350,21 @@ void MotorPagePresent() {
         snprintf(b, sizeof b, "%.0f", g_cfg.motorPanelY); SaveOption("motor_panel_y", b);
         Log("motor (pagina): panel soltado en %.0f, %.0f (guardado)", g_cfg.motorPanelX, g_cfg.motorPanelY);
     }
+    {   // (Agustin 23:33: el Motor "que venga con la camara libre") al abrir el estudio se prende la camara libre (x344 = 2: el juego
+        // sigue viendo el teclado; en el Motor se vuela con el boton derecho) y al salir se apaga si la prendio el Motor
+        static bool s_actWas = false, s_camMine = false;
+        const bool act = MotorPageActive();
+        if (act != s_actWas) {
+            s_actWas = act;
+            int what = 0;
+            {   std::lock_guard<std::mutex> lk(g_cfgMutex);
+                if (act && g_cfg.motorCam != 0 && g_cfg.live[344][0] < 0.5f) { g_cfg.live[344][0] = 2.0f; s_camMine = true; what = 1; }
+                else if (!act && s_camMine) { g_cfg.live[344][0] = 0.0f; s_camMine = false; what = 2; }
+                else if (!act) s_camMine = false; }
+            if (what == 1) Log("motor (pagina): estudio abierto -> camara libre prendida (boton derecho apretado = volar; gizmo arriba a la derecha)");
+            if (what == 2) Log("motor (pagina): estudio cerrado -> camara libre apagada");
+        }
+    }
     if (s_tried) return;
     s_tried = true;
     if (!g_cfg.motorPatch) { Log("motor (pagina): parches en memoria apagados (motor = 0): el estudio queda con las filas de Apariencia"); return; }
