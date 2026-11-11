@@ -14,7 +14,7 @@ Las funciones de Windows (ReadProcessMemory y demas) y las dos funciones del jue
 
 uso:  python3 mtr_sim.py <MotorTiempoReal.lua> [escenario ...]      (sin escenario: todos)
 """
-import json, math, os, random, struct, sys
+import json, math, os, random, re, struct, sys, zlib
 
 import numpy as np
 import lupa.luajit21 as L
@@ -46,6 +46,15 @@ RANURAS = [(0x142a0a880, 0x141697bd0), (0x142a0af88, 0x14169ed80), (0x142a0ad48,
 FN_COLOR, FN_MATRIZ = 0x14169f2e0, 0x14169de80
 G_ESCENAS, G_VISOR, G_RENDER = 0x14374d958, 0x1438040d0, 0x14374ced8
 G_CANDADO = 0x143756438       # candado del cuadro: { int cuenta, int giro, int hilo duenio }
+# la pestana del menu de Editar (0.4): lo que el modulo lee y las TRES direcciones del exe que puede pisar
+PE = dict(VT=0x1427012b0, ARMAR=0x140c29340, RANURA=0x142701520, FN11=0x141b9f460, FN12=0x1420df440, NOMBRES=0x1434c44a0,
+          VACIO=0x142700fd3, TEXTOS=0x1427011c0, TEXTO12=0x1427011ec, SIN=0x14350a9a0, NOSTRING=0x142972e40, ID=0x7ffe0001)
+PE_TEXTOS = [0x200026, 0x200027, 0x1a02a6, 0x1a00f1, 0x1d0013, 0x200064, 0x4b003c, 0x200033, 0x200059, 0x190055, 0x190056]
+PE_NOMBRES = ['Player', 'Team', 'Coach', 'Representative', 'Transfer', 'Stadium', 'LeagueCup', 'LeagueOrganize', 'ExternalData',
+              'DataSave', 'DataLoad']
+PE_FILAS = 17                       # filas c_menu_0..16 de la pantalla editSettingList (leido del archivo del juego, 11/11/2026)
+PE_ARCHIVO = b'common\\script\\flow\\Edit\\EditMenu.json'
+PE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'package', 'sider', 'motor_tiempo_real', 'pestana')
 FN_ACTIVAR = 0x14168c810            # ranura 16 de la clase base de las etapas: mov [rcx+0x48], dl
 ACTIVAR_PROPIO = dict(plug_ton=0x1416cdb80, plug_dof=0x1416ae420)      # clases con interruptor propio (no se tocan)
 # etapas del render en el orden del arreglo del gestor (a proposito, hijas antes que su padre): nombre, padre, clase, activa,
@@ -70,6 +79,11 @@ class Mem:
         self.malas = []          # escrituras fuera de region o dentro del exe
         self.permitidas = []     # (desde, hasta): los unicos campos que el modulo tiene permiso de pisar
         self.lecturas = 0
+        self.exe_ok = {}         # dir -> n: las unicas escrituras que el modulo puede hacer DENTRO del exe (la pestana)
+        self.prot = {}           # dir -> proteccion de su pagina (2 = solo lectura: hay que abrirla con VirtualProtect; 4 = abierta)
+        self.falla = set()       # direcciones donde WriteProcessMemory falla (para probar la marcha atras)
+        self.sin_permiso = set() # direcciones donde VirtualProtect falla
+        self.exe_escr = []       # (dir, datos) que el modulo escribio dentro del exe
 
     def nuevo(self, n, dir=None):
         if dir is None:
@@ -92,8 +106,13 @@ class Mem:
         d, o = self._donde(dir, len(datos))
         if del_modulo:
             self.escrituras.append((dir, len(datos)))
-            if d is None or BASE <= dir < EXE_FIN: self.malas.append((dir, len(datos)))
+            if d is None: self.malas.append((dir, len(datos)))
+            elif BASE <= dir < EXE_FIN:
+                if self.exe_ok.get(dir) != len(datos): self.malas.append((dir, len(datos)))
+                elif self.prot.get(dir, 4) != 4 or dir in self.falla: return False      # pagina de solo lectura: Windows no escribe
+                else: self.exe_escr.append((dir, bytes(datos)))
             elif not any(a <= dir and dir + len(datos) <= b for a, b in self.permitidas): self.malas.append((dir, len(datos)))
+            elif dir in self.falla: return False
         if d is None: return False
         d[o:o + len(datos)] = datos
         return True
@@ -153,6 +172,7 @@ class Mundo:
         m.nuevo(8, G_ESCENAS); m.nuevo(8, G_VISOR); m.nuevo(8, G_RENDER); m.nuevo(0x10, G_CANDADO)
         self.gestor = self.render = None; self.etapas = {}
         if con_render: self._render()
+        self._pestana()
         # --- escenas
         self.esc = [self._escena(0x1111222233334444), self._escena(0xaaaabbbbccccdddd)]
         m.u64(G_ESCENAS, self.esc[0]); m.u64(self.esc[0], self.esc[1])
@@ -214,6 +234,72 @@ class Mundo:
         self.gestor, self.render, self.arr_etapas = g, ren, arr
 
     def etapa_activa(self, nombre): return self.m.leer(self.etapas[nombre] + 0x48, 1)[0]
+
+    def _pestana(self):
+        """lo del menu de Editar como esta en el exe 1.07.02: tabla de funciones de menu::MenuEditMenu (ranura 76 = armar,
+        ranura 78 = "cuantos botones"), las funciones "return 11" y "return 12", la tabla de nombres de enlace (el lugar 12
+        apunta a un texto vacio), la de numeros de texto (el lugar 12 vale 0) y el puntero al texto de reemplazo "No String".
+        El modulo solo puede pisar la ranura 78, el numero de texto 12 y ese puntero; las dos primeras estan en paginas de
+        solo lectura"""
+        m = self.m
+        def nuevo(n, dir):
+            assert all(dir + n <= b or b + len(d) <= dir for b, d in m.reg.items()), 'region encimada %x' % dir
+            return m.nuevo(n, dir)
+        for fn, n in ((PE['FN11'], 11), (PE['FN12'], 12)):
+            nuevo(0x10, fn); m.escribir(fn, bytes([0xb8, n, 0, 0, 0, 0xc3]) + b'\xcc' * 10, False)
+        nuevo(87 * 8, PE['VT'])
+        for i in range(87): m.u64(PE['VT'] + 8 * i, 0x140c20000 + 0x40 * i)
+        m.u64(PE['VT'] + 76 * 8, PE['ARMAR']); m.u64(PE['RANURA'], PE['FN11'])
+        nuevo(0x30, PE['TEXTOS'])
+        for i, t in enumerate(PE_TEXTOS): m.u32(PE['TEXTOS'] + 4 * i, t)
+        nuevo(8, PE['VACIO'] - 3); m.escribir(PE['VACIO'] - 3, b'abc\0\0\0\0\0', False)
+        nuevo(12 * 8, PE['NOMBRES'])
+        for i, t in enumerate(PE_NOMBRES):
+            d = nuevo(0x20, 0x142700000 + 0x20 * i); m.escribir(d, t.encode() + b'\0', False); m.u64(PE['NOMBRES'] + 8 * i, d)
+        m.u64(PE['NOMBRES'] + 8 * 11, PE['VACIO'])
+        nuevo(8, PE['SIN']); m.u64(PE['SIN'], PE['NOSTRING'])
+        nuevo(0x10, PE['NOSTRING']); m.escribir(PE['NOSTRING'], b'No String\0', False)
+        m.exe_ok = {PE['RANURA']: 8, PE['TEXTO12']: 4, PE['SIN']: 8}
+        m.prot = {PE['RANURA']: 2, PE['TEXTO12']: 2}
+
+    def pe_estado(self):
+        """(funcion de la ranura 78, numero de texto del lugar 12, puntero del texto de reemplazo)"""
+        m = self.m; n = m.lecturas
+        r = (m.r64(PE['RANURA']), m.r32(PE['TEXTO12']), m.r64(PE['SIN'])); m.lecturas = n
+        return r
+
+    def menu_editar(self, flujo):
+        """lo que hace el JUEGO al abrir el menu de Editar con la memoria como esta ahora y este archivo de flujo, y al apretar
+        cada boton (leido en menu::MenuEditMenu::vf76, FUN_140e3ec40 y el registro de enlaces del flujo). Devuelve
+        [(texto del boton, pagina a la que lleva)]; falla si el juego se cerraria o se quedaria colgado"""
+        m = self.m; n0 = m.lecturas
+        def texto_c(p):
+            t = b''
+            while True:
+                c = m.leer(p + len(t), 1); assert c is not None, 'el juego lee un texto en memoria que no existe (0x%x): se cierra' % p
+                if c == b'\0': return t.decode('latin1')
+                t += c
+        def corto(k):
+            x = re.match(r'\d+_(.*)$', k)
+            return x.group(1) if x else k
+        try:
+            cod = m.leer(m.r64(PE['RANURA']), 6)
+            assert cod is not None and cod[0] == 0xb8 and cod[5] == 0xc3, 'la ranura 78 no apunta a una funcion "return N": el juego se cierra'
+            n = struct.unpack_from('<I', cod, 1)[0]
+            assert n <= PE_FILAS and n <= 12, '%d botones: mas que las filas o que los lugares de las tablas' % n
+            ev = json.loads(flujo.decode('ascii'))['events']
+            botones = []
+            for i in range(n):
+                nombre = texto_c(m.r64(PE['NOMBRES'] + 8 * i)) or 'proceed'       # nombre vacio: el juego usa "proceed"
+                tid = m.r32(PE['TEXTOS'] + 4 * i)
+                assert tid != 0, 'el boton %d no tiene numero de texto' % i
+                if (tid >> 16) in (0x19, 0x1a, 0x1d, 0x20, 0x4b): texto = 'texto %06x' % tid
+                else: texto = texto_c(m.r64(PE['SIN']))                             # categoria que no existe: texto de reemplazo
+                clave = next((k for k in ev if k == nombre or corto(k) == nombre), None)
+                assert clave is not None and ev[clave]['to'], 'el boton %d (%s) no tiene enlace en el flujo: el juego se cuelga al apretarlo' % (i, nombre)
+                botones.append((texto, ev[clave]['to']))
+            return botones
+        finally: m.lecturas = n0
 
     def _escena(self, h):
         """fox::gr::Scene como la deja su ctor (FUN_1416916b0): +0x28 cantidad de listas, +0x30 arreglo de punteros a lista
@@ -412,6 +498,22 @@ function Cf.mtr_WriteProcessMemory(h, dir, buf, n, got)
     got[0] = n
     return 1
 end
+-- la pestana: VirtualProtect solo sobre las dos direcciones de solo lectura que el modulo puede pisar; VirtualAlloc da una
+-- pagina propia (nunca se libera)
+SIM.reservas = 0
+function Cf.mtr_VirtualProtect(dir, n, prot, antes)
+    assert(type(dir) == "number" and dir == math.floor(dir), "direccion no entera")
+    local a = py.proteger(dir, n, prot)
+    if not a then return 0 end
+    antes[0] = a
+    return 1
+end
+function Cf.mtr_VirtualAlloc(dir, n, tipo, prot)
+    assert(dir == 0 and n == 0x1000 and tipo == 0x3000 and prot == 4, "VirtualAlloc mal llamada")
+    SIM.reservas = SIM.reservas + 1
+    if SIM.sin_memoria then return 0 end
+    return py.reservar(n)
+end
 function Cf.mtr_GetAsyncKeyState(vk)
     local b = (vk == 1 and SIM.izq) or (vk == 2 and SIM.der) or (vk == 4 and SIM.med)
     return b and -32768 or 0
@@ -570,7 +672,12 @@ class Sim:
         self.w = mundo; self.mem = mundo.m
         self.lua = L.LuaRuntime(encoding=None, unpack_returned_tuples=True)
         self.llamadas = []
-        py = self.lua.table_from({b'leer': self._leer, b'escribir': self._escribir, b'llamada': self._llamada})
+        py = self.lua.table_from({b'leer': self._leer, b'escribir': self._escribir, b'llamada': self._llamada,
+                                  b'proteger': self._proteger, b'reservar': self._reservar})
+        self.cache = {}                  # lo que Sider recuerda: clave del modulo -> ruta entregada (o None)
+        # la otra cache de Sider (key-cache.ttl-sec = 10 en la PC): por unos segundos recuerda el resultado de cada nombre
+        # de archivo y NO llama al modulo. ttl None = sin ella. t_sider = reloj de Sider, en segundos
+        self.kc, self.ttl, self.t_sider = {}, None, 0.0
         self.lua.execute(LUA_ENTORNO.encode(), py)
         g = self.lua.globals()
         self.SIM = g[b'SIM']
@@ -581,6 +688,57 @@ class Sim:
 
     def _leer(self, dir, n): return self.mem.leer(int(dir), int(n))
     def _escribir(self, dir, s): return self.mem.escribir(int(dir), s)
+
+    def _proteger(self, dir, n, prot):
+        dir, n, prot = int(dir), int(n), int(prot); m = self.mem
+        if dir not in m.prot or m.exe_ok.get(dir) != n or prot not in (2, 4):
+            m.malas.append((dir, n)); return None                 # el modulo no tiene que abrir ninguna otra pagina
+        if dir in m.sin_permiso: return None
+        antes = m.prot[dir]; m.prot[dir] = prot
+        return antes
+
+    def _reservar(self, n):
+        d = self.mem.nuevo(int(n)); self.mem.permitidas.append((d, d + int(n)))
+        return d
+
+    def pedir(self, nombre=PE_ARCHIVO):
+        """lo que hace Sider cuando el juego pide un archivo: le pide la clave al modulo y, si no tiene guardada la ruta de
+        esa clave, le pide la ruta y comprueba que el archivo exista. Devuelve el nombre del archivo entregado o None"""
+        if self.ttl:
+            g = self.kc.get(nombre)
+            if g and g[1] > self.t_sider: return g[0]
+        k = self.reg[b'livecpk_make_key'](self.ctx, nombre)
+        assert k is None or isinstance(k, bytes), k
+        clave = k if k is not None else nombre
+        if clave not in self.cache:
+            r = self.reg[b'livecpk_get_filepath'](self.ctx, nombre, clave)
+            assert r is None or isinstance(r, bytes), r
+            if r is not None:
+                assert r.startswith(self.ctx[b'sider_dir'] + b'content\\motor-tiempo-real\\'), r
+                r = r.rsplit(b'\\', 1)[-1]
+                if not self.SIM[b'existe'][r]: r = None
+            self.cache[clave] = r
+        m = self.mem
+        assert not m.malas, 'escritura fuera de lugar: %s' % [(hex(d), n) for d, n in m.malas[:5]]
+        assert all(v == 2 for v in m.prot.values()), 'una pagina del exe quedo abierta'
+        res = self.cache[clave].decode() if self.cache[clave] else None
+        if self.ttl: self.kc[nombre] = (res, self.t_sider + self.ttl)
+        return res
+
+    def editar(self, nombre=PE_ARCHIVO):
+        """entra al menu de Editar: Sider resuelve el archivo de flujo y el juego arma el menu. Devuelve (archivo, botones)"""
+        r = self.pedir(nombre)
+        ms = bool(self.ctx[b'tournament_id'] and self.ctx[b'home_team'] and self.ctx[b'away_team'])
+        if r: flujo = open(os.path.join(PE_DIR, r), 'rb').read()
+        else: flujo = pe_flujo_original(ms)
+        b = self.w.menu_editar(flujo)
+        # el juego recuerda el cursor de cada menu y lo repone sin mirar la cantidad de botones (inferido del C): si alguna vez
+        # hubo 12 botones, el cursor pudo quedar en el 12, y aceptar ahi pide el enlace "proceed" aunque el boton no se vea
+        if len(b) == 12: self.cursor12 = True
+        elif getattr(self, 'cursor12', False) and self.SIM[b'existe'][b'EditMenu_menuserver.json' if ms else b'EditMenu.json']:
+            assert 'proceed' in json.loads(flujo.decode('ascii'))['events'], \
+                'el cursor recordado quedo en el boton 12 y el flujo entregado (%s) no tiene ese enlace: el juego se cuelga' % r
+        return r, b
 
     def _llamada(self, dir, obj, buf):
         dir, obj = int(dir), int(obj); m = self.mem
@@ -1421,6 +1579,176 @@ def e_render(F):
     print('   etapas del render, vistas por la DLL, modo del motor experimental, teclas G R S / X Y Z, tope de brillo: bien')
 
 
+def pe_flujo_original(menu_server=False):
+    """el archivo de flujo del menu de Editar SIN la pestana: el del juego (2066 bytes, CRC 7C81894A) o el del mod Menu-server
+    (2091 bytes, CRC FC5F8BE8). Sale de sacarle el enlace nuevo a los archivos del paquete: asi de paso se comprueba que
+    son los originales byte por byte mas ese enlace y nada mas"""
+    d = open(os.path.join(PE_DIR, 'EditMenu_menuserver.json' if menu_server else 'EditMenu.json'), 'rb').read()
+    a = d.index(b',\n\t\t"proceed":{'); b = d.index(b'\n\t\t}', a) + 4
+    j = json.loads(d.decode('ascii'))['events']['proceed']
+    assert j == dict(to=j['to'], go='forward', clear='all', fadeStart='', fadeEnd='do', bgType='none'), j
+    o = d[:a] + d[b:]
+    assert (len(o), zlib.crc32(o)) == ((2091, 0xFC5F8BE8) if menu_server else (2066, 0x7C81894A)), (len(o), hex(zlib.crc32(o)))
+    return o
+
+
+def e_pestana(F):
+    """la pestana "Motor en tiempo real" del menu de Editar: el boton 12 aparece solo cuando Sider entrega mi archivo de flujo,
+    nunca quedan 12 botones con el archivo de otro, se saca sola, y las unicas escrituras en el exe son las tres previstas"""
+    FAB = (PE['FN11'], 0, PE['NOSTRING'])
+    CON = ('Default.fpkd', 'Default.fpk', 'EditMenu.json', 'EditMenu_menuserver.json')
+    once = Mundo().menu_editar(pe_flujo_original())
+    assert len(once) == 11 and once[0] == ('texto 200026', 'Edit/Player/EditPlayerMain') and once[8][1] == 'Edit/DataManagement/EditExternalDataMain'
+    assert Mundo().menu_editar(pe_flujo_original(True)) == once
+    destino = json.load(open(os.path.join(PE_DIR, 'EditMenu.json')))['events']['proceed']['to']
+    def puesta(w, r, b, archivo='EditMenu.json'):
+        assert r == archivo, r
+        assert b[:11] == once and b[11] == ('Motor en tiempo real', destino), b[11:]
+        e = w.pe_estado(); assert e[0] == PE['FN12'] and e[1] == PE['ID'] and e[2] not in (PE['NOSTRING'], 0), e
+    def sacada(w, r, b, entrega=None):
+        # entrega: una vez que la pestana se puso en esta sesion, mi archivo sigue llegando aunque este sacada (cursor recordado)
+        assert r == entrega and b == once and w.pe_estado() == FAB, (r, len(b), w.pe_estado())
+    MIO = 'EditMenu.json'
+
+    # 1. primera entrada al Editar: se pone al pedir Sider la ruta; las tres escrituras, en orden (texto, numero, cantidad)
+    w = Mundo(); s = Sim(F, w, existe=CON); m = w.m
+    assert w.pe_estado() == FAB and s.cuadro(2)
+    assert not m.exe_escr                               # dibujar el panel no pone la pestana
+    k = s.reg[b'livecpk_make_key'](s.ctx, PE_ARCHIVO)
+    assert k == b'mtrpe1|0|EditMenu.json' and w.pe_estado() == FAB     # con solo la clave todavia no toca nada
+    puesta(w, *s.editar())
+    assert [d for d, _ in m.exe_escr] == [PE['SIN'], PE['TEXTO12'], PE['RANURA']], [hex(d) for d, _ in m.exe_escr]
+    assert s.SIM[b'reservas'] == 1
+    assert 'pestana: ' in s.registro() and any('pestana: ' in x and 'puesta (boton 12' in x for x in s.logs()), s.logs()[-3:]
+    # 1b. salir del modo Editar: se saca (primero la cantidad); al volver a entrar se pone en el pedido de la clave (Sider ya
+    # tiene la ruta y no la vuelve a pedir)
+    SALIDA = b'common\\script\\flow\\Edit\\EditDataAutoSaveProcess.json'
+    n = len(m.exe_escr); assert s.pedir(SALIDA) is None and w.pe_estado() == FAB and m.exe_escr[n][0] == PE['RANURA']
+    assert any('el juego salio del modo Editar' in x for x in s.logs()), s.logs()[-2:]
+    n = len(m.escrituras); assert s.pedir(SALIDA) is None and len(m.escrituras) == n       # ya estaba sacada: nada que escribir
+    puesta(w, *s.editar()); assert s.SIM[b'reservas'] == 1
+    # 2. volver a entrar (Sider ya tiene la ruta): nada nuevo que escribir; con otra forma de escribir la ruta tambien
+    n = len(m.escrituras); puesta(w, *s.editar()); puesta(w, *s.editar(b'COMMON/script/flow/edit/editmenu.JSON'))
+    assert len(m.escrituras) == n
+    s.cuadro(3); s.opcion('Pestana en Editar'); assert 'puesta' in s.fila_cursor(), s.fila_cursor()
+    s.tecla('8'); assert 'pestana: puesta' in s.texto, s.texto
+    # otros archivos no son asunto de la pestana
+    lect = m.lecturas
+    for otro in (b'common\\script\\flow\\Edit\\EditDataCheckProcess.json', b'common\\script\\flow\\Edit\\Player\\EditMenu.json.bak', b'EditMenu.json',
+                 b'common\\script\\flow\\TopMenu\\TopMenu.json'):
+        assert s.pedir(otro) is None
+    assert m.lecturas == lect and len(m.escrituras) == n
+    # 3. con torneo y equipos cargados (ahi entrega Menu-server): va la copia hecha con la suya, misma pestana
+    for c in (b'tournament_id', b'home_team', b'away_team'): s.ctx[c] = 65535
+    puesta(w, *s.editar(), archivo='EditMenu_menuserver.json'); assert len(m.escrituras) == n
+    for c in (b'tournament_id', b'home_team', b'away_team'): s.ctx[c] = None
+    # 4. sin_pestana.txt: se saca (primero la cantidad de botones) y vuelve al crear de nuevo; la memoria del texto se reusa
+    s.SIM[b'existe'][b'sin_pestana.txt'] = True; n = len(m.exe_escr)
+    sacada(w, *s.editar(), entrega=MIO); assert m.exe_escr[n][0] == PE['RANURA'], hex(m.exe_escr[n][0])
+    assert any('sin_pestana.txt presente' in x for x in s.logs())
+    sacada(w, *s.editar(), entrega=MIO); s.cuadro(2); s.opcion('Pestana en Editar'); assert ' no' in s.fila_cursor(), s.fila_cursor()
+    s.SIM[b'existe'][b'sin_pestana.txt'] = None
+    puesta(w, *s.editar()); assert s.SIM[b'reservas'] == 1
+    # 5. apagado.txt con la pestana puesta: tambien se saca
+    s.SIM[b'existe'][b'apagado.txt'] = True; sacada(w, *s.editar(), entrega=MIO); s.SIM[b'existe'][b'apagado.txt'] = None
+    puesta(w, *s.editar())
+    # 6. Sider recarga el modulo (mismo ctx): sigue puesta sin escribir nada; tambien si Sider olvido sus rutas
+    n = len(m.escrituras); s.recargar(F); s.cuadro(2); puesta(w, *s.editar())
+    s.cache = {}; puesta(w, *s.editar()); assert len(m.escrituras) == n and s.SIM[b'reservas'] == 1
+    # 7. solo_lectura.txt con la pestana puesta: queda como esta y mi archivo sigue llegando; nada escrito
+    s.SIM[b'existe'][b'solo_lectura.txt'] = True; s.SIM[b'existe'][b'sin_pestana.txt'] = True
+    puesta(w, *s.editar()); assert s.pedir(SALIDA) is None; puesta(w, *s.editar()); assert len(m.escrituras) == n
+    s.SIM[b'existe'][b'solo_lectura.txt'] = None
+    sacada(w, *s.editar(), entrega=MIO)
+    # 8. se borra mi archivo de flujo con la pestana puesta: se saca (y ahi ya no hay archivo mio que entregar)
+    s.SIM[b'existe'][b'sin_pestana.txt'] = None; puesta(w, *s.editar())
+    s.SIM[b'existe'][b'EditMenu.json'] = None; sacada(w, *s.editar())
+    assert any('falta pestana\\EditMenu.json' in x for x in s.logs())
+
+    # 9. desde el arranque, sin escribir ni una vez: sin_pestana, apagado (ni siquiera lee), solo_lectura, sin archivo, sin ffi
+    for extra, lee in (('sin_pestana.txt', False), ('apagado.txt', False), ('solo_lectura.txt', False)):
+        w = Mundo(); s = Sim(F, w, existe=CON + (extra,)); l0 = w.m.lecturas
+        sacada(w, *s.editar()); sacada(w, *s.editar()); assert s.pedir(SALIDA) is None
+        assert not w.m.escrituras and w.m.lecturas == l0, (extra, w.m.lecturas - l0)
+        s.cuadro(2); assert not w.m.exe_escr
+    w = Mundo(); s = Sim(F, w); sacada(w, *s.editar()); assert not w.m.escrituras
+    w = Mundo(); s = Sim(F, w, existe=CON[:3])          # falta solo la copia de Menu-server
+    for c in (b'tournament_id', b'home_team', b'away_team'): s.ctx[c] = 7
+    sacada(w, *s.editar()); assert not w.m.escrituras
+    for c in (b'tournament_id', b'home_team', b'away_team'): s.ctx[c] = None
+    puesta(w, *s.editar())
+    w = Mundo(); s = Sim(F, w, existe=CON, sin_ffi=True); sacada(w, *s.editar()); s.cuadro()
+
+    # 10. el exe no es el que conozco: no se escribe nada y el registro dice por que
+    def otro_exe(cambio, dice):
+        w = Mundo(); cambio(w.m); antes = w.pe_estado(); s = Sim(F, w, existe=CON)
+        r, b = s.editar(); assert r is None and len(b) == 11 and w.pe_estado() == antes and not w.m.escrituras, (dice, r)
+        assert any(dice in x for x in s.logs()), (dice, s.logs()[-2:])
+        s.cuadro(2); s.editar(); assert not w.m.escrituras
+    otro_exe(lambda m: m.u64(0x142a72268 + 48, 0x1419057e1), 'solo anda con PES2021.exe 1.07.02')
+    otro_exe(lambda m: m.escribir(PE['FN12'] + 1, b'\x0d', False), 'la funcion 0x1420df440 del juego no es la que espero')
+    otro_exe(lambda m: m.u64(PE['VT'] + 76 * 8, PE['ARMAR'] + 0x10), 'la tabla del menu de Editar no es la que conozco')
+    otro_exe(lambda m: m.u64(PE['NOMBRES'] + 88, PE['NOMBRES']), 'el lugar 12 de los nombres del menu no esta vacio')
+    otro_exe(lambda m: m.escribir(PE['VACIO'], b'x', False), 'el lugar 12 de los nombres del menu no esta vacio')
+    otro_exe(lambda m: m.escribir(PE['NOSTRING'], b'Sin texto\0', False), "el texto 'No String' del juego no esta donde espero")
+    otro_exe(lambda m: m.u64(PE['SIN'], m.cadena('texto de otro mod')), "ya lo cambio otro")
+    otro_exe(lambda m: m.u64(PE['SIN'], PE['NOSTRING'] + 3), "ya lo cambio otro")
+    # la ranura 78 cambiada por otro (ni 11 ni 12) y el numero de texto 12 ocupado: tampoco
+    w = Mundo(); w.m.u64(PE['RANURA'], PE['FN11'] + 0x40); s = Sim(F, w, existe=CON); assert s.pedir() is None and not w.m.escrituras
+    w = Mundo(); w.m.u32(PE['TEXTO12'], 0x200026); s = Sim(F, w, existe=CON); assert s.pedir() is None and not w.m.escrituras
+
+    # 11. Windows no deja escribir: se deshace lo hecho y el menu queda de fabrica
+    def falla(preparar, dice, toco=True):
+        # toco: llego a intentar una escritura en el exe. Desde ahi mi archivo se entrega igual (11 botones, el enlace de mas
+        # no hace nada); si ni lo intento (sin memoria para el texto), va el archivo de siempre y Sider no se queda con el "no"
+        w = Mundo(); s = Sim(F, w, existe=CON); preparar(w.m, s); e = MIO if toco else None
+        sacada(w, *s.editar(), entrega=e); assert any(dice in x for x in s.logs()), (dice, s.logs()[-2:])
+        sacada(w, *s.editar(), entrega=e)                   # la vez siguiente lo intenta de nuevo y vuelve a fallar
+        w.m.falla.clear(); w.m.sin_permiso.clear(); s.SIM[b'sin_memoria'] = None
+        puesta(w, *s.editar())                              # cuando Windows deja, se pone sola
+        k = s.reg[b'livecpk_make_key'](s.ctx, PE_ARCHIVO)
+        assert k == (b'mtrpe1|0|EditMenu.json' if toco else b'mtrpe1|2|EditMenu.json') and (toco or len(s.cache) >= 3), (k, list(s.cache))
+    falla(lambda m, s: m.sin_permiso.add(PE['TEXTO12']), 'no pude escribir en el exe')
+    falla(lambda m, s: m.sin_permiso.add(PE['RANURA']), 'no pude escribir en el exe')
+    falla(lambda m, s: m.falla.add(PE['RANURA']), 'no pude escribir en el exe')
+    falla(lambda m, s: m.falla.add(PE['SIN']), 'no pude escribir en el exe')
+    falla(lambda m, s: s.SIM.__setitem__(b'sin_memoria', True), 'Windows no me dio memoria para el texto', toco=False)
+    # 12. no se puede sacar (la cantidad de botones no vuelve a 11): mi archivo tiene que seguir llegando, el boton sigue andando
+    w = Mundo(); s = Sim(F, w, existe=CON); puesta(w, *s.editar())
+    s.SIM[b'existe'][b'sin_pestana.txt'] = True; w.m.sin_permiso.add(PE['RANURA'])
+    r, b = s.editar(); assert r == 'EditMenu.json' and len(b) == 12 and b[11][1] == destino, (r, len(b))
+    assert any('no pude sacarla' in x for x in s.logs()), s.logs()[-2:]
+    w.m.sin_permiso.clear(); sacada(w, *s.editar(), entrega=MIO)
+    # 12b. Sider ya tiene la ruta, sale del Editar, y al volver Windows no deja escribir: 11 botones con mi archivo (el
+    # cursor pudo quedar recordado en el boton 12: su enlace sigue estando), y a la vez siguiente se pone
+    w = Mundo(); s = Sim(F, w, existe=CON); puesta(w, *s.editar()); assert s.pedir(SALIDA) is None
+    w.m.sin_permiso.add(PE['RANURA']); sacada(w, *s.editar(), entrega=MIO); sacada(w, *s.editar(), entrega=MIO)
+    w.m.sin_permiso.clear(); puesta(w, *s.editar())
+    # 13. el modulo se recarga con la pestana puesta y sin_pestana.txt: la reconoce como suya y la saca
+    w = Mundo(); s = Sim(F, w, existe=CON); puesta(w, *s.editar())
+    s.SIM[b'existe'][b'sin_pestana.txt'] = True; s.recargar(F); sacada(w, *s.editar(), entrega=MIO)
+    # 14. con torneo y equipos, despues de haberla puesto: sacada, sigue llegando la copia de Menu-server con el enlace
+    for c in (b'tournament_id', b'home_team', b'away_team'): s.ctx[c] = 9
+    sacada(w, *s.editar(), entrega='EditMenu_menuserver.json')
+    for c in (b'tournament_id', b'home_team', b'away_team'): s.ctx[c] = None
+    # 15. Sider con su cache de claves (10 s): dentro de ese lapso no llama al modulo y repite lo que entrego la vez anterior
+    w = Mundo(); s = Sim(F, w, existe=CON); s.ttl = 10; m = w.m
+    puesta(w, *s.editar()); s.t_sider += 3
+    n = len(m.escrituras); puesta(w, *s.editar()); assert len(m.escrituras) == n
+    assert s.pedir(SALIDA) is None and w.pe_estado() == FAB       # sale del Editar: sacada
+    s.t_sider += 4; sacada(w, *s.editar(), entrega=MIO)           # vuelve enseguida: Sider no pregunta -> 11 botones con mi archivo
+    s.t_sider += 11; puesta(w, *s.editar())                       # pasado el lapso vuelve sola
+    s.SIM[b'existe'][b'sin_pestana.txt'] = True; s.t_sider += 2
+    puesta(w, *s.editar())                                        # sin_pestana.txt y Sider sin preguntar: sigue puesta, con mi archivo
+    s.t_sider += 11; sacada(w, *s.editar(), entrega=MIO)
+    # desde el arranque con sin_pestana.txt, que se borra enseguida: Sider recuerda el "no hay" -> 11 botones con el de siempre
+    w = Mundo(); s = Sim(F, w, existe=CON + ('sin_pestana.txt',)); s.ttl = 10
+    sacada(w, *s.editar()); s.SIM[b'existe'][b'sin_pestana.txt'] = None; s.t_sider += 5; sacada(w, *s.editar())
+    assert not w.m.escrituras
+    s.t_sider += 6; puesta(w, *s.editar())
+    print('   pestana: 12 botones solo con mi archivo de flujo; se saca sola; 3 escrituras en el exe y ninguna otra')
+
+
 def e_roto(F):
     """la memoria cambia por debajo (el juego descarga cosas, listas con ciclos, punteros basura): nunca un error de Lua
     y nunca una escritura fuera de un objeto conocido"""
@@ -1429,14 +1757,23 @@ def e_roto(F):
     for vuelta in range(60):
         w = Mundo(conj=rnd.random() < 0.3, con_limite=rnd.random() < 0.5, huesos=rnd.choice([0, 1, 2]), con_visor=rnd.random() < 0.8,
                   con_render=rnd.random() < 0.9)
-        s = Sim(F, w); m = w.m
+        s = Sim(F, w, existe=('Default.fpkd', 'Default.fpk', 'EditMenu.json', 'EditMenu_menuserver.json')); m = w.m
         if rnd.random() < 0.6: s.SIM[b'dll_crear'](1 if rnd.random() < 0.9 else 3)      # con la DLL nueva (o una de otra version)
         if rnd.random() < 0.5:                       # el motor dibujando: el reloj avanza dentro del cuadro para que la espera corte
             s.SIM[b'tick_paso'] = 3
             if w.render: m.u64(w.render + 0xd0, 0x1a0000100)
         if vuelta % 3 == 0: s.pagina(6)              # una de cada tres vueltas arranca en la pagina RENDER
+        if rnd.random() < 0.5: s.ttl = 10            # la mitad de las vueltas, Sider con su cache de claves de 10 s
         for paso in range(260):
             r = rnd.random()
+            if rnd.random() < 0.04:
+                # el jugador entra al menu de Editar: pase lo que pase con la memoria, o 11 botones con el archivo de siempre
+                # o 12 con el mio (menu_editar falla si el juego se cerraria o un boton quedaria sin enlace)
+                if rnd.random() < 0.2: s.SIM[b'existe'][b'sin_pestana.txt'] = (not s.SIM[b'existe'][b'sin_pestana.txt']) or None
+                if rnd.random() < 0.1: s.cache = {}
+                s.t_sider += rnd.choice([0, 1, 4, 12])
+                arch, bot = s.editar(); assert len(bot) == 11 or arch, (vuelta, paso, arch, len(bot))     # 12 botones: solo con mi archivo
+                if rnd.random() < 0.3: s.pedir(b'common\\script\\flow\\Edit\\EditDataAutoSaveProcess.json')     # y sale del modo Editar
             if r < 0.45: s.tecla(rnd.choice(teclas))
             elif r < 0.70:
                 s.raton(izq=rnd.random() < 0.5, der=rnd.random() < 0.4, med=rnd.random() < 0.2, dx=rnd.randint(-40, 40), dy=rnd.randint(-40, 40))
@@ -1477,7 +1814,7 @@ def e_roto(F):
 
 
 ESCENARIOS = dict(basico=e_basico, mover=e_mover, luces=e_luces, camara=e_camara, seguro=e_seguro, listas=e_listas, repaso=e_repaso,
-                  render=e_render, roto=e_roto)
+                  render=e_render, pestana=e_pestana, roto=e_roto)
 
 if __name__ == '__main__':
     fuente = open(sys.argv[1], 'rb').read()

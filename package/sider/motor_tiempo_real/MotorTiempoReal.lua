@@ -1,4 +1,4 @@
--- MotorTiempoReal.lua 0.2.1 (PES21 FX, 11/11/2026) - modulo de Sider.
+-- MotorTiempoReal.lua 0.4 (PES21 FX, 11/11/2026) - modulo de Sider.
 -- "Motor en tiempo real" del Editar: un editor en vivo de lo que dibuja el Fox Engine. Todo dentro del juego y todo
 -- por Sider (sin DLL): lee la lista de escenas graficas del motor y muestra, con nombre, los modelos y las luces;
 -- deja marcar uno o muchos objetos, moverlos, rotarlos, escalarlos, ocultarlos; prender, apagar y dar brillo a cada
@@ -6,6 +6,9 @@
 -- mostrar la grilla y un marcador en cada foco; y anota todo lo que lee y escribe en
 --   content\motor-tiempo-real\registro.txt
 --
+-- COMO SE LLEGA: el menu de Editar gana un boton 12, "Motor en tiempo real" (seccion 3b: la pestana). En esta version
+-- lleva a la misma pantalla que "Jugadores" (elegir jugador > Apariencia es el estudio 3D, donde trabaja el panel); el
+-- paso directo al estudio queda para la version siguiente.
 -- COMO SE USA (en Editar > jugador > Apariencia; tambien lista lo que hay en un partido):
 --   Espacio abre el panel de Sider, 1 pasa de modulo hasta llegar a este.
 --   6 / 5 pagina siguiente / anterior: ESCENA, LUCES, ENTIDADES, OPCIONES, REGISTRO.
@@ -16,12 +19,14 @@
 -- SEGURIDAD: la memoria se lee y se escribe con ReadProcessMemory / WriteProcessMemory sobre el propio juego,
 -- que devuelven error en vez de cerrar el juego si una direccion ya no existe. Antes de escribir se comprueba
 -- que el exe sea el 1.07.02 (tablas de funciones) y que cada objeto siga siendo de la clase esperada. Nunca
--- se escribe dentro del exe. Solo se llaman dos funciones del juego (color de una luz y matriz de un modelo),
+-- se escribe dentro del exe, salvo las TRES direcciones fijas de la pestana del menu de Editar (seccion 3b), cada una
+-- con su valor anterior comprobado. Solo se llaman dos funciones del juego (color de una luz y matriz de un modelo),
 -- las dos con su comienzo comprobado byte a byte.
 --   content\motor-tiempo-real\apagado.txt       = el modulo no entrega la escena ni toca nada
 --   content\motor-tiempo-real\solo_lectura.txt  = lista todo pero no escribe nada
 --   content\motor-tiempo-real\sin_llamadas.txt  = escribe datos pero no llama funciones del juego
--- (los tres se miran cada segundo mientras el panel esta abierto: se pueden crear o borrar con el juego abierto)
+--   content\motor-tiempo-real\sin_pestana.txt   = no agrega el boton al menu de Editar (se mira al entrar al Editar)
+-- (los tres primeros se miran cada segundo mientras el panel esta abierto; todos se pueden crear o borrar con el juego abierto)
 --
 -- LISTAS DEL MOTOR (fox::gr::Scene): un objeto recien cargado entra a una cola de altas (escena+0x38, cantidad +0x48) y
 -- en el cuadro siguiente el motor (FUN_1416928b0) lo pasa a la lista de su tipo: [escena+0x30] = arreglo de [escena+0x28]
@@ -31,13 +36,15 @@
 --
 -- Offsets leidos en el exe decompilado (PES2021.exe 1.07.02): ver memoria del proyecto motor-tiempo-real-exe.
 
-local m = { version = "0.3" }
+local m = { version = "0.4" }
 local VERSION = m.version
 local DIR
 -- lo que hay que recordar aunque Sider recargue el modulo con el juego abierto (queda en ctx)
 local G = { luz_orig = {}, tf_orig = {}, oc_orig = {}, et_orig = {}, cam = false }
 -- todo lo de la pagina RENDER vive en una sola tabla (Lua admite 200 variables sueltas por archivo y ya hay muchas)
 local RX = {}
+-- y todo lo de la pestana del menu de Editar en otra (seccion 3b)
+local PE = {}
 
 ---------------------------------------------------------------------------------------------
 -- 1. ENTREGA DE LA ESCENA (igual que la 0.1, probada en el juego)
@@ -68,6 +75,8 @@ local function cual(filename)
 end
 
 function m.make_key(ctx, filename)
+    if PE.es(filename, PE.ARCH) then return PE.pedido(ctx, filename) end
+    if PE.es(filename, PE.ARCH_SALIDA) then PE.salida(filename) end
     local n = cual(filename)
     if not n then return end
     pedidos[n] = (pedidos[n] or 0) + 1
@@ -83,6 +92,7 @@ function m.make_key(ctx, filename)
 end
 
 function m.get_filepath(ctx, filename, key)
+    if type(key) == "string" and string.sub(key, 1, #PE.CLAVE) == PE.CLAVE then return PE.entrega(filename, key) end
     if not key or string.sub(key, 1, 6) ~= "mtr01|" then return end
     local n = string.sub(key, 7)
     local p = DIR .. "escena\\" .. n
@@ -156,6 +166,8 @@ local function preparar()
         void *mtr_OpenFileMappingA(uint32_t acceso, int heredar, const char *nombre) __asm__("OpenFileMappingA");
         void *mtr_MapViewOfFile(void *h, uint32_t acceso, uint32_t alto, uint32_t bajo, size_t n) __asm__("MapViewOfFile");
         int mtr_UnmapViewOfFile(void *p) __asm__("UnmapViewOfFile");
+        int mtr_VirtualProtect(uintptr_t dir, size_t n, uint32_t prot, uint32_t *antes) __asm__("VirtualProtect");
+        uintptr_t mtr_VirtualAlloc(uintptr_t dir, size_t n, uint32_t tipo, uint32_t prot) __asm__("VirtualAlloc");
     ]]
     C = ffi.C
     PROC = C.mtr_GetCurrentProcess()
@@ -320,7 +332,6 @@ local RANURAS = {   -- direccion de una tabla de funciones del exe -> la funcion
     { 0x142aa5368, 0x1419fcd70 }, { 0x142ba51e0, 0x141ee73f0 }, { 0x14255ea00, 0x1402bc920 },
     { 0x142a226a0, 0x14171d6e0 }, { 0x142a226b0, 0x14171d620 }, { 0x142a226c0, 0x14171d740 }, { 0x142a226d0, 0x14171d7a0 },
     { 0x142a226e0, 0x14171d8c0 },
-    { 0x142a07c58, 0x14168aae0 }, { 0x142a07bc0 + 8 * 16, 0x14168c810 },     -- fox::gr::Render y RenderPlugin (pagina RENDER)
 }
 -- funciones del juego que se llaman (pocas, chicas y con el comienzo comprobado)
 local FN_COLOR, FIRMA_COLOR = 0x14169f2e0, de_hex("488b41380f28020f294040488b0148ff6078")      -- luz: color + aviso
@@ -361,6 +372,263 @@ local function exe_conocido()
         R("la funcion de matriz de modelo (0x14169de80) no empieza como espero: no aviso al motor de los limites", true)
     end
     return true
+end
+
+---------------------------------------------------------------------------------------------
+-- 3b. LA PESTANA: boton 12 "Motor en tiempo real" en el menu de Editar (sin DLL)
+---------------------------------------------------------------------------------------------
+-- Leido en el exe 1.07.02 (11/11/2026). El menu de Editar es menu::MenuEditMenu (pagina "Edit/EditMenu"), una de las 59
+-- pantallas que usan la lista comun del Editar (menu::MenuEditCmnSettingList, pantalla editSettingList.bin, hasta 17
+-- filas). Al abrirse pregunta "cuantos botones" a la ranura 78 de su tabla de funciones (0x142701520, que apunta a
+-- 0x141b9f460 = "return 11") y por cada uno lee un nombre de enlace (tabla 0x1434c44a0) y un numero de texto (tabla
+-- 0x1427011c0). Las dos tablas ya traen un lugar 12 sin usar: nombre "" (0x1434c44f8 -> 0x142700fd3) y texto 0
+-- (0x1427011ec). A donde lleva cada boton lo dice el archivo de flujo common\script\flow\Edit\EditMenu.json, que el
+-- juego vuelve a leer cada vez que entra a ese menu; un boton de nombre vacio dispara el enlace "proceed".
+-- La pestana son entonces TRES escrituras dentro del exe (las unicas de este modulo ahi) y un archivo entregado por Sider:
+--   1. la ranura 78 pasa a apuntar a 0x1420df440, una funcion del juego que es solo "return 12";
+--   2. el texto del lugar 12 pasa a ser un numero de una categoria de textos que no existe: para esos el juego muestra
+--      el texto al que apunta 0x14350a9a0 (de fabrica "No String");
+--   3. ese puntero pasa a apuntar a "Motor en tiempo real" (una pagina de memoria pedida a Windows que no se libera
+--      nunca: el juego la puede leer cuando quiera, tambien si Sider recarga este modulo);
+--   4. content\motor-tiempo-real\pestana\EditMenu.json = el del juego mas el enlace "proceed" (y EditMenu_menuserver.json =
+--      el del mod Menu-server mas el mismo enlace).
+-- Se pone cuando Sider esta por entregar ese archivo (o sea, al entrar al menu de Editar), se saca al salir del modo
+-- Editar (cuando el juego pide el flujo Edit\EditDataAutoSaveProcess.json) y solo se pone si cada valor esta como
+-- en el exe de fabrica o como lo dejo este mismo modulo. Si falta el archivo, si algo no coincide, o si existe
+-- sin_pestana.txt o apagado.txt, no se escribe nada y, si estaba puesta, se saca: el menu queda con sus 11 botones.
+-- Si la pestana se puso alguna vez desde que se abrio el juego, mi archivo de flujo se sigue entregando aunque la pestana
+-- este sacada (el juego recuerda el cursor del menu; con 11 botones el enlace de mas no hace nada).
+-- Con solo_lectura.txt no se escribe nada: queda como este (puesta o sin poner).
+-- Efecto secundario conocido: si en algun otro lugar del juego faltaba un texto y decia "No String", ahi tambien dira
+-- "Motor en tiempo real".
+PE.VT, PE.FN_ARMAR = 0x1427012b0, 0x140c29340
+PE.RANURA, PE.FN_11, PE.FN_12 = 0x142701520, 0x141b9f460, 0x1420df440
+PE.NOMBRE, PE.NOMBRE_ERA = 0x1434c44f8, 0x142700fd3
+PE.TEXTO, PE.ID = 0x1427011ec, 0x7ffe0001
+PE.SIN_TEXTO, PE.SIN_TEXTO_ERA = 0x14350a9a0, 0x142972e40
+PE.ETIQUETA = "Motor en tiempo real"
+PE.ARCH, PE.CLAVE = "script\\flow\\edit\\editmenu.json", "mtrpe1|"
+-- el flujo que el juego lee al SALIR del modo Editar (el "return" del menu de Editar): ahi la pestana se saca
+PE.ARCH_SALIDA = "script\\flow\\edit\\editdataautosaveprocess.json"
+-- dos copias del archivo de flujo, las dos con el enlace nuevo: la del juego y la del mod Menu-server (igual, con otro fondo)
+PE.JSON, PE.JSON_MS = "EditMenu.json", "EditMenu_menuserver.json"
+PE.puesta, PE.estado, PE.pedidos, PE.dicho = false, "el juego todavia no pidio el menu de Editar", 0, nil
+
+-- el nombre que pide el juego termina en esa ruta? (sin importar mayusculas ni el sentido de las barras)
+function PE.es(filename, ruta)
+    if type(filename) ~= "string" or #filename < #ruta then return false end
+    local f = string.gsub(string.lower(string.sub(filename, -#ruta)), "/", "\\")
+    return f == ruta
+end
+
+-- lee todo lo que la pestana toca. Devuelve { cuenta, id, sin, mia } o nil y el motivo (algo no es lo que conozco)
+function PE.mirar()
+    if not exe_conocido() then return nil, E.exe_motivo or "no pude preparar el modulo" end
+    if not leer(PE.FN_12, 8) or B32[0] ~= 0x00000cb8 or B8[4] ~= 0 or B8[5] ~= 0xc3 then
+        return nil, "la funcion 0x1420df440 del juego no es la que espero"
+    end
+    local armar, cuenta = rptr(PE.VT + 76 * 8), rptr(PE.RANURA)
+    if armar ~= PE.FN_ARMAR or (cuenta ~= PE.FN_11 and cuenta ~= PE.FN_12) then
+        return nil, "la tabla del menu de Editar no es la que conozco"
+    end
+    local nom = rptr(PE.NOMBRE)
+    if nom ~= PE.NOMBRE_ERA or not leer(nom, 1) or B8[0] ~= 0 then return nil, "el lugar 12 de los nombres del menu no esta vacio" end
+    local id = ru32(PE.TEXTO)
+    if id ~= 0 and id ~= PE.ID then return nil, "el lugar 12 de los textos del menu no esta vacio" end
+    local sin, mia = rptr(PE.SIN_TEXTO), false
+    if sin == PE.SIN_TEXTO_ERA then
+        if not leer(sin, 10) or ffi.string(B8, 10) ~= "No String\0" then return nil, "el texto 'No String' del juego no esta donde espero" end
+    else
+        -- no es el de fabrica: solo vale si apunta a mi etiqueta (la puso este modulo, quiza antes de que Sider lo recargara)
+        local n = #PE.ETIQUETA + 1
+        if not sin or (sin >= BASE and sin < EXE_FIN) or not leer(sin, n) or ffi.string(B8, n) ~= PE.ETIQUETA .. "\0" then
+            return nil, "el texto de reemplazo del juego ('No String') ya lo cambio otro"
+        end
+        mia = true
+    end
+    return { cuenta = cuenta, id = id, sin = sin, mia = mia }
+end
+
+-- escribe los n primeros bytes del buffer de escritura en una de las tres direcciones de la pestana (y en ninguna otra).
+-- protegida = pagina de solo lectura del exe: se abre con VirtualProtect y se deja como estaba.
+function PE.poner(dir, n, protegida)
+    if dir ~= PE.RANURA and dir ~= PE.TEXTO and dir ~= PE.SIN_TEXTO then return false end
+    G.pe_toco = true
+    E.n_escr = E.n_escr + 1
+    local ok
+    if protegida then
+        if C.mtr_VirtualProtect(dir, n, 4, HECHO) == 0 then return false end
+        local antes = HECHO[0]
+        ok = C.mtr_WriteProcessMemory(PROC, dir, W8, n, NR) ~= 0
+        C.mtr_VirtualProtect(dir, n, antes, HECHO)
+    else
+        ok = C.mtr_WriteProcessMemory(PROC, dir, W8, n, NR) ~= 0
+    end
+    return ok
+end
+function PE.poner_ptr(dir, v, protegida)
+    local alto = math.floor(v / 4294967296)
+    W32[0], W32[1] = v - alto * 4294967296, alto
+    return PE.poner(dir, 8, protegida)
+end
+
+-- memoria propia con la etiqueta (una pagina; no se libera). nil si Windows no la da.
+function PE.etiqueta()
+    local n = #PE.ETIQUETA + 1
+    local p = G.pe_etiqueta
+    if type(p) == "number" and leer(p, n) and ffi.string(B8, n) == PE.ETIQUETA .. "\0" then return p end
+    p = tonumber(C.mtr_VirtualAlloc(0, 0x1000, 0x3000, 4))        -- reservar y comprometer, lectura y escritura
+    if not p or p < DIR_MIN or p >= DIR_MAX then return nil end
+    ffi.copy(W8, PE.ETIQUETA, n - 1)
+    W8[n - 1] = 0
+    if C.mtr_WriteProcessMemory(PROC, p, W8, n, NR) == 0 then return nil end
+    if not leer(p, n) or ffi.string(B8, n) ~= PE.ETIQUETA .. "\0" then return nil end
+    G.pe_etiqueta = p
+    return p
+end
+
+-- saca la pestana. v = lo que devolvio PE.mirar(). Primero la cantidad de botones: si no vuelve a 11, el texto se queda
+-- (mientras haya 12 botones, el 12 tiene que tener su texto)
+function PE.sacar(v)
+    if v.cuenta == PE.FN_12 and not PE.poner_ptr(PE.RANURA, PE.FN_11, true) then return false end
+    local ok = true
+    if v.id ~= 0 then
+        W32[0] = 0
+        ok = PE.poner(PE.TEXTO, 4, true) and ok
+    end
+    if v.mia then ok = PE.poner_ptr(PE.SIN_TEXTO, PE.SIN_TEXTO_ERA, false) and ok end
+    return ok
+end
+
+-- deja la pestana puesta (quiero = true) o sacada. Devuelve true si quedo como se pidio. PE.estado dice que paso.
+function PE.asegurar(quiero, motivo)
+    local v, por_que = PE.mirar()
+    if not v then
+        -- no entiendo como esta: lo unico que hago es volver la cantidad de botones a la de fabrica, si la habia cambiado
+        if C and E.exe_ok and rptr(PE.RANURA) == PE.FN_12 and rptr(PE.VT + 76 * 8) == PE.FN_ARMAR then PE.poner_ptr(PE.RANURA, PE.FN_11, true) end
+        PE.puesta, PE.estado = false, "no se puso: " .. por_que
+        return false
+    end
+    local estaba = (v.cuenta == PE.FN_12 and v.id == PE.ID and v.mia)
+    if not quiero then
+        local tocada = (v.cuenta == PE.FN_12 or v.id ~= 0 or v.mia)
+        if tocada and not PE.sacar(v) then
+            PE.puesta, PE.estado = false, "no pude sacarla del todo (" .. motivo .. ")"
+            return false
+        end
+        PE.puesta, PE.estado = false, "sin poner: " .. motivo
+        return true
+    end
+    if not estaba then
+        local et = v.mia and v.sin or PE.etiqueta()
+        local ok = et and true or false
+        -- orden: el texto primero y la cantidad de botones al final (nunca 12 botones sin su texto)
+        if ok and not v.mia then ok = PE.poner_ptr(PE.SIN_TEXTO, et, false) end
+        if ok and v.id ~= PE.ID then
+            W32[0] = PE.ID
+            ok = PE.poner(PE.TEXTO, 4, true)
+        end
+        if ok and v.cuenta ~= PE.FN_12 then ok = PE.poner_ptr(PE.RANURA, PE.FN_12, true) end
+        local w = ok and PE.mirar() or nil
+        if not (w and w.cuenta == PE.FN_12 and w.id == PE.ID and w.mia) then
+            w = PE.mirar()
+            if w then PE.sacar(w) end
+            PE.puesta, PE.estado = false, et and "no se puso: no pude escribir en el exe" or "no se puso: Windows no me dio memoria para el texto"
+            return false
+        end
+    end
+    PE.puesta, PE.estado = true, "puesta (boton 12 del menu de Editar)"
+    return true
+end
+
+-- como esta ahora, SIN escribir nada (y sin leer nada si este modulo nunca la puso)
+function PE.quieta(motivo)
+    local v = G.pe_toco and PE.mirar() or nil
+    local esta = (v and v.cuenta == PE.FN_12 and v.id == PE.ID and v.mia) and true or false
+    PE.puesta = esta
+    PE.estado = (esta and "puesta, y queda asi: " or "sin poner: ") .. motivo
+    return esta
+end
+
+-- deja la pestana como corresponde en este momento y dice si hay que entregar mi EditMenu.json.
+-- de_ruta = Sider esta pidiendo la ruta del archivo (ahi se que el que va a leer el juego es el mio)
+function PE.resolver(de_ruta, archivo)
+    local hay = existe(DIR .. "pestana\\" .. archivo)
+    if existe(DIR .. "solo_lectura.txt") then PE.quieta("solo_lectura.txt presente")
+    else
+        local motivo
+        if existe(DIR .. "apagado.txt") then motivo = "apagado.txt presente"
+        elseif existe(DIR .. "sin_pestana.txt") then motivo = "sin_pestana.txt presente"
+        elseif not hay then motivo = "falta pestana\\" .. archivo end
+        if motivo then
+            if not G.pe_toco then PE.puesta, PE.estado = false, "sin poner: " .. motivo
+            elseif not PE.asegurar(false, motivo) then PE.quieta("no pude sacarla (" .. motivo .. ")") end
+        elseif not de_ruta and not (G.pe_dada and G.pe_dada[PE.clave(archivo)]) then
+            -- la pestana se pone recien cuando Sider me pide la ruta del archivo: asi nunca hay 12 botones con el archivo de
+            -- flujo de otro. Si Sider ya tiene guardada la ruta de esta clave (no vuelve a preguntar), se pone en el pedido.
+            PE.estado = G.pe_fallo or "espero a que Sider me pida el archivo"
+            return true
+        elseif PE.asegurar(true, "") then G.pe_fallo = nil
+        else G.pe_fallo = PE.estado end
+    end
+    -- mi archivo va siempre que la pestana este puesta, y tambien si se puso alguna vez desde que se abrio el juego: el
+    -- juego recuerda en que boton quedo el cursor de cada menu, y si quedo en el 12, aceptar ahi tiene que seguir teniendo
+    -- su enlace aunque el boton ya no se vea. Con 11 botones el enlace de mas no hace nada.
+    return hay and (PE.puesta or G.pe_toco == true)
+end
+
+-- la clave de Sider para una de las dos copias. Sider guarda por clave lo que le contesto (tambien los "no tengo"): por eso
+-- la clave lleva un numero que cambia cada vez que una entrega falla, y asi la vez siguiente vuelve a preguntar.
+function PE.clave(archivo)
+    return PE.CLAVE .. (G.pe_gen or 0) .. "|" .. archivo
+end
+
+function PE.decir(que, ok, archivo)
+    local d = (ok and "1" or "0") .. archivo .. PE.estado
+    if d ~= PE.dicho then
+        PE.dicho = d
+        R(string.format("pestana: %s (pedido %d) -> %s; %s", que, PE.pedidos, PE.estado,
+            ok and ("va pestana\\" .. archivo) or "va el archivo de siempre"), true)
+    end
+    if C then volcar_registro() end
+end
+
+-- el juego pidio el archivo de flujo del menu de Editar (esta entrando a ese menu). Devuelve la clave de Sider si el
+-- archivo lo entrego yo, o nil (el juego usa el de siempre, con sus 11 botones).
+-- El mod Menu-server (MenuServer.lua) entrega su propia copia de este archivo cuando Sider tiene torneo y equipos
+-- cargados: con esa misma condicion entrego la copia hecha a partir de la suya, asi el fondo del menu no cambia.
+function PE.pedido(ctx, filename)
+    PE.pedidos = PE.pedidos + 1
+    local archivo = PE.JSON
+    if type(ctx) == "table" and ctx.tournament_id and ctx.home_team and ctx.away_team then archivo = PE.JSON_MS end
+    local ok = PE.resolver(false, archivo)
+    PE.decir("el juego pidio " .. filename, ok, archivo)
+    if ok then return PE.clave(archivo) end
+    return nil
+end
+
+-- el juego sale del modo Editar: la pestana se saca (vuelve sola la proxima vez que se entra al menu de Editar). Asi los
+-- tres valores del exe solo estan cambiados mientras se esta dentro del Editar, y no puede quedar un boton 12 puesto si
+-- mas adelante otro modulo pasa a entregar el archivo de flujo del menu.
+function PE.salida(filename)
+    if not G.pe_toco or existe(DIR .. "solo_lectura.txt") then return end
+    PE.asegurar(false, "el juego salio del modo Editar")
+    PE.decir("el juego pidio " .. filename, false, "")
+end
+
+-- Sider pide la ruta del archivo (key = la clave que di en PE.pedido)
+function PE.entrega(filename, key)
+    local archivo = string.match(key, "|%d+|(.+)$")
+    if archivo ~= PE.JSON and archivo ~= PE.JSON_MS then return nil end
+    local ok = PE.resolver(true, archivo)
+    PE.decir("Sider pidio la ruta de " .. filename, ok, archivo)
+    if ok then
+        G.pe_dada = G.pe_dada or {}
+        G.pe_dada[key] = true               -- Sider ya tiene la ruta de esta clave: no va a volver a pedirla
+        return DIR .. "pestana\\" .. archivo
+    end
+    G.pe_gen = (G.pe_gen or 0) + 1          -- Sider anoto que para esta clave no tengo archivo: la proxima vez uso otra
+    return nil
 end
 
 -- nombre de clase de un objeto C++ por su tabla de funciones (RTTI del exe): ".?AVModel@gr@fox@@" -> fox::gr::Model
@@ -1440,11 +1708,24 @@ RX.QUE = { [0] = "la imagen de siempre", "solo la luz difusa que llega", "solo l
 RX.T_HERR = { [0x47] = 1, [0x52] = 2, [0x53] = 3 }              -- G mover, R rotar, S escalar (como Blender)
 RX.T_EJE = { [0x58] = 2, [0x59] = 3, [0x5A] = 4 }               -- X, Y, Z (otra vez la misma = eje de la pantalla)
 RX.etapas, RX.render, RX.modo, RX.mal, RX.apagadas, RX.t = {}, nil, nil, nil, 0, -100000
+-- fox::gr::Render (primera ranura) y RenderPlugin (ranura 16): si no coinciden se apaga solo la pagina RENDER, no el modulo
+RX.RANURAS, RX.exe = { { 0x142a07c58, 0x14168aae0 }, { 0x142a07bc0 + 8 * 16, 0x14168c810 } }, nil
 RX.dll = { u32 = nil, f = nil, t = -100000, estado = "todavia no busque la DLL grafica", pend = nil, visto = nil, t_visto = 0, viva = false }
 
 function RX.leer()
     local vistas, por_nombre = {}, {}
     RX.etapas, RX.render, RX.modo, RX.mal, RX.apagadas = {}, nil, nil, nil, 0
+    if RX.exe == nil then
+        RX.exe = true
+        for i = 1, #RX.RANURAS do
+            if rptr(RX.RANURAS[i][1]) ~= RX.RANURAS[i][2] then RX.exe = false end
+        end
+        if not RX.exe then R("render: las tablas de Render / RenderPlugin de este exe no son las que lei: la pagina RENDER queda sin etapas", true) end
+    end
+    if not RX.exe then
+        RX.mal = "no reconozco el render de este exe"
+        return
+    end
     local g = rptr(RX.G_RENDER)
     if not g or not leer(g, 0x30) then
         RX.mal = "el motor todavia no armo su render"
@@ -1457,7 +1738,7 @@ function RX.leer()
     end
     if ren and leer(ren, 0xe8) and P(0) == RX.VT_RENDER then
         RX.render, RX.modo = ren, B32[0xd8 / 4]
-        if RX.modo >= 3 and RX.modo <= 6 and not RX.exp.hasta then RX.exp.hasta = reloj() + 8000 end
+        if G.modo_mio and RX.modo >= 3 and RX.modo <= 6 and not RX.exp.hasta then RX.exp.hasta = reloj() + 8000 end
     end
     local dirs = {}
     if n > 0 then
@@ -1553,13 +1834,24 @@ function RX.poner(e, si)
     end
     local era = (B8[0x48] == 1)
     if era == si then
+        local g = G.et_orig[e.dir]
+        if g and g.nombre == e.nombre and g.activa == si then G.et_orig[e.dir] = nil end     -- ya esta como la tenia el juego
         e.activa = si
         return true
     end
     local ren = RX.render
-    if not ren then return false, "no encuentro el render principal del motor" end
+    if not ren or not leer(ren, 8) or P(0) ~= RX.VT_RENDER then return false, "no encuentro el render principal del motor" end
     local libre, por_que = RX.esperar_libre(ren, 60)
-    if not libre then return false, por_que end
+    if not libre then return false, por_que, true end        -- el tercer valor: no se pudo por espera agotada
+    -- la espera pudo durar varios cuadros (y piso el buffer de lectura): la etapa se mira otra vez justo antes de escribir
+    if not leer(e.dir, 0x60) or P(0) ~= e.vt or P(0x38) ~= e.s_nom or B8[0x48] > 1 then
+        return false, "esa etapa ya no esta: el motor rearmo su render"
+    end
+    era = (B8[0x48] == 1)
+    if era == si then                       -- el motor la cambio mientras esperaba: no hay nada que escribir
+        e.activa = si
+        return true
+    end
     if not poner_u8(e.dir + 0x48, si and 1 or 0) then return false, "no pude escribir en esa etapa" end
     local g = G.et_orig[e.dir]
     if g and g.nombre == e.nombre then
@@ -1582,6 +1874,10 @@ function RX.modo_poner(modo, ms, forzar)
     if era ~= modo then
         local libre, por_que = RX.esperar_libre(ren, ms)
         if not libre then return false, por_que end
+        -- la espera pudo durar varios cuadros (y piso el buffer de lectura): el render se mira otra vez antes de escribir
+        if not leer(ren, 0xe8) or P(0) ~= RX.VT_RENDER or B32[0xd8 / 4] ~= era then
+            return false, "el render cambio mientras esperaba: no lo toco"
+        end
         if forzar then
             W32[0] = modo
             E.n_escr = E.n_escr + 1
@@ -1591,6 +1887,7 @@ function RX.modo_poner(modo, ms, forzar)
         end
     end
     RX.modo = modo
+    if modo == 2 then G.modo_mio = nil elseif era ~= modo then G.modo_mio = true end
     if modo == 2 then RX.exp.hasta = nil else RX.exp.hasta = reloj() + 8000 end
     return true
 end
@@ -1648,12 +1945,16 @@ end
 -- deja las etapas como las tenia el juego; devuelve cuantas repuso y cuantas no pudo
 function RX.reponer()
     RX.leer()
-    local hechas, falta, quedan = 0, 0, {}
+    local hechas, falta, quedan, ocupado = 0, 0, {}, false
     for i = 1, #RX.etapas do
         local e = RX.etapas[i]
         local g = G.et_orig[e.dir]
         if g and g.nombre == e.nombre then
-            if RX.poner(e, g.activa) then hechas = hechas + 1
+            -- si el motor no aflojo para una, no se vuelve a esperar por cada una de las demas (quedan para otro intento)
+            local ok, por_que, agotada = false, nil, false
+            if not ocupado then ok, por_que, agotada = RX.poner(e, g.activa) end
+            if agotada then ocupado = true end
+            if ok then hechas = hechas + 1
             else
                 quedan[e.dir] = g
                 falta = falta + 1
@@ -1993,6 +2294,8 @@ OPC = {
             volcar_todo("pedido con la tecla")
             E.aviso = "anotado en content\\motor-tiempo-real\\registro.txt"
         end },
+    { "Pestana en Editar", function() return PE.puesta and "puesta" or "no" end,
+        function() E.aviso = "pestana: " .. PE.estado .. " (se saca creando sin_pestana.txt)" end },
 }
 
 local function tecla(vkey)
@@ -2005,7 +2308,10 @@ local function tecla(vkey)
             return
         end
         if RX.T_HERR[vkey] then E.herr = RX.T_HERR[vkey]
-        else E.eje = (E.eje == RX.T_EJE[vkey]) and 1 or RX.T_EJE[vkey] end
+        elseif RX.eje_abajo ~= vkey then        -- la misma letra sin soltarla es la repeticion del teclado: no cuenta como "otra vez"
+            RX.eje_abajo = vkey
+            E.eje = (E.eje == RX.T_EJE[vkey]) and 1 or RX.T_EJE[vkey]
+        end
         if pag ~= 1 then
             E.pag = 1
             E.sucio = true
@@ -2127,6 +2433,10 @@ local function tecla(vkey)
         end
     elseif pag == 6 then
         local n, cur = 4 + #RX.etapas, E.cur[6]
+        if cur > n then                         -- la lista se achico: el cursor es el que muestra el panel
+            cur = n
+            E.cur[6] = n
+        end
         if vkey == 0x30 then mover_cursor(6, n, 1)
         elseif vkey == 0x39 then mover_cursor(6, n, -1)
         elseif cur <= 3 then RX.tecla_vista(cur, vkey)
@@ -2363,7 +2673,7 @@ local function filas_pagina()
             izq[5] = "al juego de venta le faltan las piezas"
             izq[6] = "de los otros modos: lo esperado es"
             izq[7] = "pantalla negra y sin menus"
-            izq[8] = "vuelve solo al normal a los 8 segundos"
+            izq[8] = "vuelve solo a los 8 s CON ESTE PANEL ABIERTO"
             if RX.exp.hasta then izq[9] = string.format("VUELVE AL NORMAL EN %d s", math.max(0, math.floor((RX.exp.hasta - reloj()) / 1000 + 0.999))) end
             if RX.mal then izq[10] = string.sub(RX.mal, 1, A_IZQ) end
             pie = "0/9 baja/sube | 8 modo siguiente (vuelve solo a los 8 s) | 7 volver al normal ya"
@@ -2462,6 +2772,7 @@ function m.overlay_on(ctx)
             if E.volcado then volcar_todo("primera vez que veo objetos del motor") end
         end
     end
+    if RX.eje_abajo and C.mtr_GetAsyncKeyState(RX.eje_abajo) >= 0 then RX.eje_abajo = nil end     -- solto la letra del eje
     entrada()
     cam_escribir()
     RX.dll_pulso()
