@@ -64,9 +64,12 @@ void main(
   if (r0.x != 0) discard;
   // === PES21 pasto v3: atlas propio
   float4 Q4 = IniParams.Load(int2(104,0));
-  bool pesV3 = Q4.x > 0.5 && v8.w > 0.5;   // v8.w = 1 + banda del atlas (0 = VS sin v3)
+  // (11/11) v8.w + 16 = HOJAS 3D de primerisimo plano (VS 498b30, cb5[13].y): la forma es geometria; sin atlas ni recorte por alfa
+  bool pesBladeM = v8.w > 16.5;
+  float pesW8 = v8.w - (pesBladeM ? 16.0 : 0.0);
+  bool pesV3 = Q4.x > 0.5 && pesW8 > 0.5;   // v8.w = 1 + banda del atlas (0 = VS sin v3)
   // (26/10 f) pasto tanda 6: v8.w + 8 = la DLL dibuja estas hojas del mod mezclando el color con el suelo ya dibujado (alfa de o0)
-  bool pesFB = pesV3 && v8.w > 8.5;
+  bool pesFB = pesV3 && pesW8 > 8.5;
   // lejos -> cerca de las hojas del mod (px/m del vertice, y291 / z291): lejos la hoja toma el color, las lineas, el desgaste y la luz
   // horneada de la base y deja sus terminos por hoja (oclusion de la raiz, claridad, puntas, brillo, normal y translucidez del atlas):
   // eran el granulado de lejos (cada hoja de 2-6 px con otra receta que el suelo de al lado). Cerca (>= 140 px/m) queda como antes
@@ -133,7 +136,7 @@ void main(
   bool pesMir = false;   // (11/11 d) tarjeta espejada (natural)
   if (pesV3) {
     if (Q5.w > 0.5) uvA.y = 1.0 - uvA.y;   // raiz del atlas arriba
-    float band = clamp(floor(v8.w - (pesFB ? 8.0 : 0.0) - 0.5), 0.0, 3.0);   // banda del manojo (la elige el VS: tipo de pasto + parcela)
+    float band = clamp(floor(pesW8 - (pesFB ? 8.0 : 0.0) - 0.5), 0.0, 3.0);   // banda del manojo (la elige el VS: tipo de pasto + parcela)
     uvA.x = (saturate(v1.x) + band) * 0.25;
     // (08/11 y, Agustin: "dos tipos de hojas distintos") el atlas tiene ahora 2 filas (2048x1024): fila 0 = hoja fina (como antes), fila 1 = hoja
     // ancha y plana con el nervio en V y torsion. x412 = fraccion de hojas del tipo ancho (al azar por hoja, v8.z); el artificial es todo fino
@@ -150,6 +153,7 @@ void main(
       } else
       uvA.y = saturate(uvA.y) * 0.5 + rowB * 0.5; }
   }
+  if (pesBladeM) pesMir = false;   // (11/11) hojas 3D: sin tarjeta que espejar
   float atlasPx = 128.0;   // el fundido de la oclusion por distancia se mide como el juego (tamano en pantalla, no del atlas)
   float4 pesN = float4(0.5, 0.5, 0.0, 1.0);
   float pesBid = 0.0;   // (11/11) numero de la hoja (atlas del natural)
@@ -159,12 +163,28 @@ void main(
   // variaba dentro de una tarjeta (pasto del juego: celdas de 5 cm por vertice), el salto llevaba el gradiente al mip mas chico, el alfa
   // promedio pasaba el recorte y la tarjeta salia como un triangulo plano. MISMA cuenta en pes_grass_depth_ps.hlsl. El artificial queda igual
   float2 dVx = ddx(v1.xy), dVy = ddy(v1.xy);
+  float pesFwU = fwidth(saturate(v1.x));   // (11/11) hojas 3D: ancho de un pixel a lo ancho de la hoja (fuera de la rama)
   if (pesV3 && !pesArt) { float2 tS = pesNat ? float2(0.125, 0.25) : float2(0.25, 0.5); dUx = dVx * tS; dUy = dVy * tS; }
   if (pesV3) {
     // (27/10 j) pegado a la camara (>= 600 px/m) el atlas se muestrea mas nitido (gradientes a la mitad = un mip mas fino): las hojas de
     // muy cerca se veian blandas, "con poco detalle"
     float shp = lerp(1.0, 0.5, smoothstep(420.0, 1050.0, abs(v4.w)));
-    if (pesNat) {
+    if (pesBladeM) {
+      // (11/11) hoja 3D: claridad, nervio, venas, fibras y manchas por cuenta (u a lo ancho, relH a lo largo), con la misma codificacion que el
+      // atlas del natural (R claridad, G oclusion, normal RG a lo ancho, B altura, A grosor); alfa entero (la forma es la malla). Las venas y
+      // las fibras se apagan si miden menos de 2 px (titilarian)
+      float u = saturate(v1.x), au = abs(u - 0.5);
+      float fu = max(pesFwU, 1e-5);
+      float vK = saturate(((1.0 / 9.0) / fu - 2.0) * 0.5);
+      float mid = exp(-au * au / 0.0049);
+      float vein = 0.5 + 0.5 * cos(u * 56.5487);
+      float fib = PESGnoise(float2(u * 23.0 + pesHvR * 7.0, relH * 140.0)) - 0.5;
+      float blo = PESGnoise(float2(relH * 5.0 + pesHvR * 13.0, pesHvR * 3.0)) - 0.5;
+      float L = 0.5 + 0.07 * mid - 0.03 * vein * vK * (1.0 - mid) - 0.05 * smoothstep(0.36, 0.5, au) + 0.035 * fib * vK + 0.05 * blo;
+      L += 0.16 * smoothstep(0.955, 0.995, relH);   // borde del corte de la cortadora (o la punta) mas claro
+      r0 = float4(L, 0.84 + 0.16 * smoothstep(0.0, 0.6, relH), 0.0, 1.0);
+      pesN = float4(0.5 + (u - 0.5) * 0.6, 0.5, relH, lerp(0.28, 0.78, mid) + 0.12 * vein * (1.0 - mid) * vK);
+    } else if (pesNat) {
       r0.xyzw = PESNatAtlas.SampleGrad(g_samplerLinear_Wrap_s, uvA, dUx * shp, dUy * shp).xyzw;
       if (!pesFar) pesN = PESNatAtlasN.SampleGrad(g_samplerLinear_Wrap_s, uvA, dUx * shp, dUy * shp).xyzw;
     } else {
@@ -176,7 +196,7 @@ void main(
     float lod = log2(max(max(dd.x, dd.y), 1.0));
     r0.w = saturate(r0.w * (1.0 + 0.12 * lod));
     // (11/11) numero de la hoja sin filtrar (el filtrado mezclaria el numero de dos hojas vecinas en el borde): texel del mip que corresponde
-    if (pesNat && !pesFar) { uint m = (uint)clamp(lod, 0.0, 3.0); uint2 sz = uint2(4096u >> m, 2048u >> m);
+    if (pesNat && !pesFar && !pesBladeM) { uint m = (uint)clamp(lod, 0.0, 3.0); uint2 sz = uint2(4096u >> m, 2048u >> m);
       pesBid = PESNatAtlas.Load(int3(min((uint2)(saturate(uvA) * (float2)sz), sz - 1u), m)).z; }
   } else {
     r0.xyzw = g_tex_grassDiffuse.SampleGrad(g_samplerLinear_Wrap_s, v1.xy, dUx, dUy).xyzw;
@@ -206,7 +226,7 @@ void main(
   // raiz, que lleva la oclusion del atlas (G ~ 0.2): cada hoja era un punto al 50-75 % de brillo sobre el suelo ("manchas negras", lineas
   // sucias). Mientras la hoja toma el color del suelo (pesCf < 1) la oclusion se lee de un mip grueso del atlas (el promedio del manojo)
   float4 P299 = IniParams.Load(int2(299,0));
-  if (pesV3 && !pesFar && v4.w > 0.0 && pesCf < 0.999 && P299.y > 0.5) r0.y = lerp(pesNat ? PESNatAtlas.SampleLevel(g_samplerLinear_Wrap_s, uvA, 5.0).y : PESGrassAtlas.SampleLevel(g_samplerLinear_Wrap_s, uvA, 5.0).y, r0.y, pesCf);
+  if (pesV3 && !pesFar && !pesBladeM && v4.w > 0.0 && pesCf < 0.999 && P299.y > 0.5) r0.y = lerp(pesNat ? PESNatAtlas.SampleLevel(g_samplerLinear_Wrap_s, uvA, 5.0).y : PESGrassAtlas.SampleLevel(g_samplerLinear_Wrap_s, uvA, 5.0).y, r0.y, pesCf);
   r0.w = r0.y + r0.y;
   r0.y = -r0.y * 2 + 1;
   r0.y = v3.w * r0.y + r0.w;
@@ -431,7 +451,7 @@ void main(
   r0.x = dot(v4.xyz, v4.xyz);
   r0.x = rsqrt(r0.x);
   r0.xyz = v4.xyz * r0.xxx;
-  if (pesV3 && Q6.w > 0.001 && !pesFar) {   // (1/11) lejos nm = 0: la normal queda la del suelo
+  if (pesV3 && Q6.w > 0.001 && !pesFar && !pesBladeM) {   // (1/11) lejos nm = 0: la normal queda la del suelo; (11/11) hojas 3D: la normal ya es la de la hoja
     // normal por hoja: la normal del juego es la de la cancha (hacia arriba): todas las hojas se iluminan igual.
     // Se le suma la normal del atlas en un marco con "a lo ancho" = la derecha de la camara proyectada, asi cada hoja
     // se ve cilindrica (clara de un lado, oscura del otro) y el sol da brillos por hoja.

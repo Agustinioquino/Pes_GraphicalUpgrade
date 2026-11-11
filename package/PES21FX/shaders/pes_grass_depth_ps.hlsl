@@ -20,6 +20,8 @@ void main(
   float4 v8 : TEXCOORD7)
 {
   if (v2.y < 0) discard;
+  // (11/11) hojas 3D de primerisimo plano (v8.w + 16, VS 498b30): la forma es la malla, sin recorte por alfa (18afff tampoco descarta)
+  if (v8.w > 16.5) return;
   float4 Q4 = IniParams.Load(int2(104,0));
   bool pesV3 = Q4.x > 0.5 && v8.w > 0.5;
   bool pesFB = pesV3 && v8.w > 8.5;

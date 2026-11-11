@@ -34,6 +34,9 @@ cbuffer PESTurfMatC : register(b6) { float4 pTM[8]; }
 uint PESBh(uint v) { uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
 float PESHal3(uint n) { float f = 1.0, r = 0.0; [loop] for (int k = 0; k < 12; k++) { if (n == 0u) break; f *= (1.0 / 3.0); r += f * (float)(n % 3u); n /= 3u; } return r; }
 
+// (11/11) hojas 3D de primerisimo plano: azar entero (PCG) por celda y por hoja, el mismo en todos los vertices de la hoja
+float PESBu(uint s, uint k) { return (float)(PESBh(s ^ (k * 0x9E3779B9u)) & 0xFFFFFFu) * (1.0 / 16777216.0); }
+
 // (2/11) viento de las hojas en funcion del tiempo, para calcularlo dos veces: ahora (z23) y en el cuadro anterior (w23). Con la
 // camara quieta el TAA del juego solo ve el movimiento que le dice el vector de velocidad (o6.zw / o7.y): antes se calculaba con la
 // MISMA posicion (solo camara), asi que las hojas se movian con el viento pero el TAA las creia quietas y las promediaba (borroso).
@@ -89,6 +92,12 @@ void main(
   bool pesIsExt = abs(pesExt.y - 1234.5) < 0.01;   // marca del mod (el juego usa cb5[8] con otros valores)
   float4 v0 = v0_in;
   bool pesKill = false;
+  // (11/11) hojas 3D (cb5[13].y = 1): posicion y uv de la hoja armados aca (la malla de la DLL solo da el orden de los triangulos)
+  float3 pesVin = v0_in.xyz; float2 pesUV1 = v1;
+  bool pesBlade = false; float2 pesRotCS = float2(1.0, 0.0);
+  float2 pesBF = float2(0.0, 1.0), pesBW = float2(1.0, 0.0), pesBSl = float2(0.0, 0.0); float pesBSide = 0.0;
+  float3 pesBNm = float3(0.0, 0.0, 1.0), pesBMid = float3(0.0, 0.0, 0.0);
+  float2 pesBRoot = float2(0.0, 0.0);   // (11/11 f) raiz de la hoja 3D en la celda (para las matas, como pesCardRoot)
   float3 pesExtW = 0; float2 pesExtRoot = 0; float pesExtScale = 1; float2 pesExtOrg = 0; float pesPx = 0.0;
   float2 pesCardRoot = 0;   // (11/11 f) raiz de la tarjeta del mod (igual en todos sus vertices)
   // (26/10 d) indice de la tarjeta (hoja) y giro de la celda: fase del viento y banda del atlas POR HOJA (antes por vertice: 70-80% de las
@@ -119,9 +128,57 @@ void main(
       float Nc = (float)(lim - 1) + pesLastK; float Fw = max(1.0, 0.2 * Nc);
       pesWinK = saturate((Nc - (float)card) / Fw);
     }
+    // (11/11, Agustin: "solo de cerca siiiii", "para primerisimos primer plano nada mas") HOJAS 3D: la DLL dibuja (z410) las celdas de 0.5 m
+    // pegadas a la camara con una malla de hojas sueltas (cb5[13].y = 1; 12 vertices por hoja = 4 filas x borde / nervio / borde). La forma sale
+    // de aca (numero de vertice + azar de la celda), no de la malla: macollos de 3 hojas abiertas desde una raiz comun (secuencia R2 desde un
+    // inicio al azar por celda: las primeras N cubren la celda parejo), cada hoja con su alto, ancho, curva, inclinacion y torsion, nervio en V;
+    // la mayoria cortadas por la cortadora (corte limpio en diagonal, casi todas a la misma altura) y el resto en punta (hojas nuevas, mas bajas)
+    pesBlade = cb5[13].y > 0.5 && pesCard >= 0;
+    if (pesBlade) {
+      uint vk = vid % 12u, row = vk / 3u, col = vk - row * 3u;
+      float t = (float)row / 3.0;
+      uint cid = ((uint)(int)floor(ins.x * 2.0 + 4000.25) * 73856093u) ^ ((uint)(int)floor(ins.y * 2.0 + 4000.25) * 19349663u);
+      uint bi = (uint)pesCard, tl = bi / 3u, tk = bi - tl * 3u;
+      uint sT = PESBh(tl * 2654435761u ^ cid), sB = PESBh(bi * 2246822519u ^ cid ^ 0x68BC21EBu);
+      float offR2 = (float)(PESBh(cid ^ 0x5BD1E995u) & 4095u);
+      float2 r2 = frac(0.5 + ((float)tl + offR2) * float2(0.7548776662, 0.5698402910));
+      float cellM = max(cb5[13].x, 0.25);
+      float2 rootT = (r2 - 0.5) * cellM + (float2(PESBu(sT, 1u), PESBu(sT, 2u)) - 0.5) * 0.004;
+      float yaw = PESBu(sT, 3u) * 6.2832 + (float)tk * 2.0944 + (PESBu(sB, 1u) - 0.5) * 0.9;
+      float2 W0 = float2(cos(yaw), sin(yaw)), F0 = float2(-W0.y, W0.x);
+      float2 root = rootT + F0 * (0.0015 + 0.0025 * PESBu(sB, 2u));   // las hojas del macollo salen un poco corridas hacia su cara
+      pesBRoot = root;
+      bool cutB = PESBu(sB, 3u) < 0.68;
+      float h = cutB ? 0.058 * (0.92 + 0.08 * PESBu(sB, 4u)) : 0.058 * (0.42 + 0.50 * PESBu(sB, 4u));
+      float wB = 0.0029 * (0.65 + 0.70 * PESBu(sB, 5u));
+      if (PESBu(sB, 6u) < saturate(IniParams.Load(int2(412, 0)).x)) wB *= 1.55;   // x412: parte de hojas anchas
+      float bnd = PESBu(sB, 7u) < 0.12 ? 0.55 + 0.35 * PESBu(sB, 8u) : 0.06 + 0.30 * PESBu(sB, 8u);   // curva (fraccion del alto); 12 % dobladas por el peso
+      float tilt = 0.14 * PESBu(sB, 9u);
+      float twist = (PESBu(sB, 10u) - 0.5) * 0.9;
+      float cutS = (PESBu(sB, 11u) - 0.5) * 1.1;   // corte en diagonal: diferencia de alto entre los dos bordes / ancho
+      float wr = row == 0u ? 1.0 : (row == 1u ? 0.96 : (row == 2u ? 0.84 : (cutB ? 0.78 : 0.0)));
+      float wh = 0.5 * wB * wr;
+      float sd = (float)col - 1.0;   // -1 borde, 0 nervio, +1 borde
+      float psi = yaw + twist * t;
+      float2 Wd = float2(cos(psi), sin(psi)), Fd = float2(-Wd.y, Wd.x);
+      float yy = h * t * (1.0 - 0.22 * bnd * t);   // la curva acorta un poco el alto (largo casi constante)
+      if (row == 3u && cutB) yy += sd * cutS * wB * 0.5;
+      float2 xz = root + F0 * (bnd * h * t * t + tilt * h * t) + Wd * (sd * wh) + Fd * (abs(sd) * 0.30 * wh);   // bordes adelante del nervio: V
+      pesVin = float3(xz.x, max(yy, 0.0), xz.y);
+      pesUV1 = float2(0.5 + 0.5 * sd, 0.995 - 0.985 * t);
+      // marco de la hoja para la normal (local, antes del giro de la celda): cara y ancho en esta fila, pendiente propia, cara a media hoja
+      pesBF = Fd; pesBW = Wd; pesBSide = sd;
+      pesBSl = F0 * (2.0 * bnd * t + tilt) / max(1.0 - 0.44 * bnd * t, 0.3);
+      float2 slM = F0 * (bnd + tilt) / max(1.0 - 0.22 * bnd, 0.3);
+      float3 Fm = float3(F0.x, 0.0, F0.y), Tm = normalize(float3(slM.x, 1.0, slM.y));
+      pesBNm = normalize(Fm - Tm * dot(Fm, Tm));
+      float cM = 0.25 * bnd * h + 0.5 * tilt * h;
+      pesBMid = float3(root.x + F0.x * cM, 0.5 * h, root.y + F0.y * cM);
+    }
     float cs = rot == 0 ? 1.0 : (rot == 2 ? -1.0 : 0.0), sn = rot == 1 ? 1.0 : (rot == 3 ? -1.0 : 0.0);
+    pesRotCS = float2(cs, sn);
     // (25/10 c) cb5[9].z = 1: la malla ya trae las raices repartidas en la celda y los desplazamientos de la hoja en metros (no se escalan)
-    float2 lp = (cb5[11].z > 0.5 && cb5[9].z > 0.5) ? v0_in.xz : v0_in.xz * pesExtScale;
+    float2 lp = (cb5[11].z > 0.5 && cb5[9].z > 0.5) ? pesVin.xz : pesVin.xz * pesExtScale;
     float2 rp = float2(cs * lp.x + sn * lp.y, -sn * lp.x + cs * lp.y);
     pesExtRoot = ins.xy + rp;
     // (11/11 f) raiz de la TARJETA: la misma en todos sus vertices (Halton 2 / 3 de la malla del mod, BuildDense: raices en la celda con
@@ -131,6 +188,7 @@ void main(
     if (pesCard >= 0) {
       float rsc = (cb5[11].z > 0.5 && cb5[9].z > 0.5) ? max(cb5[13].x, 0.25) : 0.5 * pesExtScale;   // lado de la celda (0.5 / 1 / 2 m)
       float2 rl = (float2((float)reversebits((uint)pesCard + 1u) * 2.3283064e-10, PESHal3((uint)pesCard + 1u)) - 0.5) * rsc;
+      if (pesBlade) rl = pesBRoot;   // hoja 3D: su raiz sale de la cuenta de la hoja, no de la malla
       pesCardRoot = ins.xy + float2(cs * rl.x + sn * rl.y, -sn * rl.x + cs * rl.y);
     } else pesCardRoot = pesExtRoot;
     float4 cv = float4(dot(float4(ins.x, 0, ins.y, 1), cb2[8]), dot(float4(ins.x, 0, ins.y, 1), cb2[9]), dot(float4(ins.x, 0, ins.y, 1), cb2[10]), dot(float4(ins.x, 0, ins.y, 1), cb2[11]));
@@ -155,7 +213,7 @@ void main(
     // quedaban cortas y finas (alfombra borrosa); el alto / ancho de primer plano vale solo con la camara pegada al suelo
     float pesP0 = cb5[12].y > 1.0 ? cb5[12].y : 110.0, pesP1 = cb5[12].z > pesP0 ? cb5[12].z : 250.0;
     pesTallE = lerp(max(pesExt.z, 0.1), cb5[10].y > 0.05 ? cb5[10].y : max(pesExt.z, 0.1), smoothstep(pesP0, pesP1, pesPx));
-    v0.y = v0_in.y * pesTallE * k;
+    v0.y = pesVin.y * pesTallE * k;
     pesExtW = float3(pesExtRoot.x, v0.y, pesExtRoot.y);
     // descarte por pantalla: centro de la parcela con margen del tamano de la parcela
     float rad = 0.5 * pesExtScale + 0.15;
@@ -282,7 +340,7 @@ void main(
       pesClumpLean += (dl > 1e-4 ? dv / dl : float2(0.0, 0.0)) * 0.45 * edge * kM;
       pesClumpAO = lerp(1.0, 0.62 + 0.38 * hc, 0.6) * lerp(1.0, 0.80, edge);   // 0.62..1: las matas bajas y los bordes reciben menos luz
     }
-    if (kV > 0.001) {
+    if (kV > 0.001 && !pesBlade) {   // (11/11) las hojas 3D traen su propio alto, curva e inclinacion
       float h1 = frac(pesHv * 3.71 + 0.13), h2 = frac(pesHv * 9.13 + 0.57), h3 = frac(pesHv * 13.7 + 0.91);
       pesHmul *= lerp(1.0, 0.75 + 0.5 * h1, kV);
       pesWmul = lerp(1.0, 0.80 + 0.4 * h2, kV);
@@ -531,8 +589,9 @@ void main(
     float wid = pesIsExt ? pesWidB * pesWmul : 0.012 * max(FAR.x, 1.0) * max(FA2.y, 0.0) * pesFarK;   // (27/10 m) ancho por hoja (y328)
     // (25/10 c) ancho minimo en pixeles (cb5[10].x): una hoja de menos de ~1.4 px titila al mover la camara
     if (pesIsExt && cb5[10].x > 0.0 && pesPx > 1.0) wid = max(wid, cb5[10].x / pesPx);
+    if (pesBlade) wid = 0.0;   // (11/11) hojas 3D: el ancho es el de la hoja (geometria), sin ensanche hacia la camara
     // (26/10 d) el ensanche se afina hacia la punta como la malla (antes era constante y anulaba el afinado: cintas)
-    r6.xyz += camRight * ((v1.x - 0.5) * wid * (pesIsExt ? (1.0 - 0.3 * saturate((0.995 - v1.y) / 0.985)) : 1.0));
+    r6.xyz += camRight * ((pesUV1.x - 0.5) * wid * (pesIsExt ? (1.0 - 0.3 * saturate((0.995 - pesUV1.y) / 0.985)) : 1.0));
   }
   // --- proyeccion ---
   r8.x = dot(r6, cb2[8]);
@@ -581,7 +640,7 @@ void main(
   if ((pesFl & 1) != 0) o1.z = 1.0;
   // (26/10 g) el pasto del juego (cerca de la camara, hasta T0) dibujado con el stencil de la base (w290, la DLL lo marca en b12): sin sombra plana
   if (!pesIsExt && pGG.x > 0.5) o1.z = 1.0;
-  o1.xy = v1.xy;
+  o1.xy = pesUV1;
   r0.yz = r2.xy * float2(32.0, 24.0);
   r2 = g_tex_grain.SampleLevel(g_samplerLinear_Clamp_s, r2.xy, 0);
   float pesGrW = r2.w;
@@ -813,6 +872,24 @@ void main(
     float kN = (0.55 + clamp(Q39.y, 0.0, 2.0) * 0.5 * pesGust) * (pesIsExt ? ((P291.x > 0.5 && P291.w > 0.5) ? pesC : lerp(1.8, 1.0, saturate(pesPx / 110.0))) : 1.0);
     r0.xzw = normalize(r0.xzw + float3(sl.x, 0.0, sl.y) * kN);
   }
+  if (pesBlade) {
+    // (11/11) hojas 3D: normal de la hoja (cara con la pendiente de la curva y del viento, y el nervio en V), del lado que ve la camara (una sola
+    // decision por hoja, con la cara a media altura). y413 la mezcla con la normal del suelo de las tarjetas (0 en el ini = 0.65; 1 = la de la
+    // hoja pura): con la normal pura el sol alto deja oscuras las hojas paradas, y en la cancha real la luz que rebota entre hojas las aclara
+    float2 rc = pesRotCS;
+    float2 slW = float2(rc.x * pesBSl.x + rc.y * pesBSl.y, -rc.y * pesBSl.x + rc.x * pesBSl.y) + (pesV5 ? 2.0 * pesLean * pesTB : pesLean);
+    float2 fW = float2(rc.x * pesBF.x + rc.y * pesBF.y, -rc.y * pesBF.x + rc.x * pesBF.y);
+    float2 wW = float2(rc.x * pesBW.x + rc.y * pesBW.y, -rc.y * pesBW.x + rc.x * pesBW.y);
+    float3 Tb = normalize(float3(slW.x, 1.0, slW.y));
+    float3 Fw = float3(fW.x, 0.0, fW.y), Ww = float3(wW.x, 0.0, wW.y);
+    float3 Nb = normalize(Fw - Tb * dot(Fw, Tb) + 1e-5);
+    Nb = normalize(Nb - Ww * (pesBSide * 0.30));
+    float2 nmx = float2(rc.x * pesBNm.x + rc.y * pesBNm.z, -rc.y * pesBNm.x + rc.x * pesBNm.z);
+    float2 mdx = pesExtOrg + float2(rc.x * pesBMid.x + rc.y * pesBMid.z, -rc.y * pesBMid.x + rc.x * pesBMid.z);
+    float sg = dot(float3(nmx.x, pesBNm.y, nmx.y), cb2[20].xyz - float3(mdx.x, pesBMid.y, mdx.y)) >= 0.0 ? 1.0 : -1.0;
+    float kR = IniParams.Load(int2(413, 0)).y; kR = kR > 0.001 ? saturate(kR) : 0.65;
+    r0.xzw = normalize(lerp(r0.xzw, Nb * sg, kR));
+  }
   o4.x = dot(r0.xzw, cb2[8].xyz);
   o4.y = dot(r0.xzw, cb2[9].xyz);
   o4.z = dot(r0.xzw, cb2[10].xyz);
@@ -854,6 +931,6 @@ void main(
     o7.zw = rcw > 0.01 ? float2(dot(rv, cb2[4]), dot(rv, cb2[5])) / rcw : float2(9.0, 9.0);   // 9 = fuera de pantalla: el PS usa su pixel
   }
   // (27/10 m) y = oclusion de la mata (tanda 10, 0.5..1; antes el pelado, que el PS solo usaba en la depuracion w107 = 2)
-  o8 = float4(pesWear.x, pesIsExt ? pesClumpAO : 1.0, (min(floor(pesYaw * 32.0), 31.0) + frac(pesHv * 37.1 + 0.13) * 0.999) / 32.0, pesV3 ? 1.0 + pesBand + ((pesFl & 2) != 0 ? 8.0 : 0.0) : 0.0);   // z (27/10 h) valor al azar por hoja (antes pesH, el PS no lo leia); (04/11) z = (sector de 32 del giro + azar) / 32; w = 1 + banda del atlas (0 = sin v3) + 8 si se mezcla con el suelo (igual en todo el dibujo)
+  o8 = float4(pesWear.x, pesIsExt ? pesClumpAO : 1.0, (min(floor(pesYaw * 32.0), 31.0) + frac(pesHv * 37.1 + 0.13) * 0.999) / 32.0, pesV3 ? 1.0 + pesBand + ((pesFl & 2) != 0 ? 8.0 : 0.0) + (pesBlade ? 16.0 : 0.0) : 0.0);   // z (27/10 h) valor al azar por hoja (antes pesH, el PS no lo leia); (04/11) z = (sector de 32 del giro + azar) / 32; w = 1 + banda del atlas (0 = sin v3) + 8 si se mezcla con el suelo (igual en todo el dibujo) + 16 hojas 3D (11/11)
   if (pesKill) o0 = float4(0.0, 0.0, -2.0, 1.0);   // todos los vertices iguales: triangulos nulos, no se rasteriza
 }
