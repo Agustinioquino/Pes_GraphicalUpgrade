@@ -125,14 +125,18 @@ void main(
   }
   // (11/11 4wp0pj) botines sucios: grumos de tierra y hojitas de pasto con relieve, primero donde la mascara de barro del juego (t4 .w,
   // alta = se ensucia primero: suela, tapones, bordes) lo dice y avanzando con la cantidad de ESE jugador
-  float4 bH = 0.0; float bootCov = 0.0, bootWet = 0.0, bootRel = 0.0; float2 bootCv = 0.0;
+  float4 bH = 0.0; float bootCov = 0.0, bootWet = 0.0, bootRel = 0.0; float2 bootG = 0.0;
   if (pesBoot && (pBall.y + pBall.z) > 0.002) {
     bootWet = saturate(pBall.w);
     float order = saturate(pesStn.w);
     float dCov = saturate(saturate(pBall.y) * 1.3 - (1.0 - order) * 0.85 + 0.05);
     float gCov = saturate(saturate(pBall.z) * (BT.z > 0.001 ? saturate(BT.z) * 2.0 : 1.0) * 0.9 - (1.0 - order) * 0.7 + 0.05);
-    bootCv = float2(dCov, gCov);
     bH = PesBootH(v2.xy, dCov, gCov);
+    {   // gradiente del alto en uv con las derivadas de pantalla (una sola evaluacion del ruido; la rama es pareja en todo el dibujo)
+      float hC = bH.x + bH.y * 0.5; float2 dh = float2(ddx_fine(hC), ddy_fine(hC)); float2 ux = ddx_fine(v2.xy), uy = ddy_fine(v2.xy);
+      float det = ux.x * uy.y - ux.y * uy.x;
+      bootG = abs(det) > 1e-14 ? float2(dh.x * uy.y - dh.y * ux.y, dh.y * ux.x - dh.x * uy.x) / det : 0.0;
+    }
     float lum = dot(o0.xyz, float3(0.3, 0.59, 0.11));
     float3 dirtC = lerp(float3(0.19, 0.13, 0.08), float3(0.33, 0.25, 0.16), bH.z) * lerp(1.0, 0.62, bootWet);   // mojada: barro oscuro
     float film = saturate(dCov * 1.4 - 0.15) * saturate(order * 1.5) * 0.45;                                     // capa fina entre grumos
@@ -162,11 +166,8 @@ void main(
     N = normalize(N + (n0 * gH.x + n1 * gH.y) * pesStainH * 1.2);
   }
   if (bootCov > 0.001 && bootRel > 0.001) {
-    // (11/11 4wp0pj) relieve de los grumos y las hojitas: gradiente del alto en uv (diferencias finitas) -> inclina la normal
-    float2 du = float2(1.0 / 2048.0, 0.0), dv = float2(0.0, 1.0 / 2048.0);
-    float4 hX = PesBootH(v2.xy + du, bootCv.x, bootCv.y), hY = PesBootH(v2.xy + dv, bootCv.x, bootCv.y);
-    float hC = bH.x + bH.y * 0.5;
-    float2 gB = float2(hX.x + hX.y * 0.5 - hC, hY.x + hY.y * 0.5 - hC) * 48.0;
+    // (11/11 4wp0pj) relieve de los grumos y las hojitas: gradiente del alto en uv (de las derivadas de pantalla) -> inclina la normal
+    float2 gB = clamp(bootG * (48.0 / 2048.0), -3.0, 3.0);
     N = normalize(N - (n0 * gB.x + n1 * gB.y) * bootRel);
   }
   // codificacion octaedrica del juego (10 bits + 2 bits bajos en w)
