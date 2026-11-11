@@ -68,6 +68,18 @@ static int s_logged = 0;
 static const char* s_origen = "";
 
 bool FreeCamActive() { return g_cfg.live[344][0] > 0.5f; }
+// (11/11, Agustin 23:33 / 23:36: el Motor "que venga con la camara libre", manejada como en Blender) Dentro del estudio del Motor
+// (MotorPageActive) la camara libre se maneja como en un editor: las teclas W A S D Q E y el giro con el mouse valen SOLO con el
+// boton derecho apretado (mientras tanto el juego no ve el teclado); las flechas quedan para el menu del juego. El gizmo de ejes
+// (motorgizmo.cpp) pide orbitar alrededor del pivote (el punto al que miraba la camara del juego al prender) o alinear la vista a
+// un eje. s_pivot se toma en TakeFromGame.
+static float s_pivot[3] = {}; static bool s_pivotOk = false;
+static std::atomic<int> s_gzAxis{-1}; static std::atomic<int> s_gzHome{0};
+static std::mutex s_gzMx; static float s_gzDYaw = 0, s_gzDPitch = 0;
+static bool MotorFly() { return MotorPageActive() && g_cfg.live[344][0] > 0.5f; }
+void FreeCamGizmoOrbit(float dyaw, float dpitch) { std::lock_guard<std::mutex> lk(s_gzMx); s_gzDYaw += dyaw; s_gzDPitch += dpitch; }
+void FreeCamGizmoAxis(int a) { s_gzAxis.store(a); }      // 0 +X, 1 -X, 2 +Y, 3 -Y, 4 +Z, 5 -Z: la camara se pone de ese lado del pivote
+void FreeCamGizmoHome() { s_gzHome.store(1); }
 static double s_headLostT = -1.0;   // (08/11 e) cuando se perdio el dato de la cabeza siguiendo la cara (-1 = no)
 static bool FreeCamHeadLost() {   // se pidio seguir la cara, se estaba siguiendo y el dato se corto: se suelta hasta que vuelva
     if (s_headLostT < 0.0) return false;
@@ -75,7 +87,11 @@ static bool FreeCamHeadLost() {   // se pidio seguir la cara, se estaba siguiend
     if (ExprFaceAny()) { s_headLostT = -1.0; return false; }
     return true;
 }
-bool FreeCamBlocksKeys() { const float v = g_cfg.live[344][0]; return v > 0.5f && v < 1.5f; }
+bool FreeCamBlocksKeys() {
+    const float v = g_cfg.live[344][0];
+    if (v > 0.5f && MotorPageActive()) return (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;   // en el Motor: solo mientras se vuela
+    return v > 0.5f && v < 1.5f;
+}
 
 static bool Key(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
 static bool GameInFront() {
@@ -88,6 +104,7 @@ static void TakeFromGame(const float* pos, const float* tgt) {
     float d[3] = { tgt[0] - pos[0], tgt[1] - pos[1], tgt[2] - pos[2] };
     float l = Len3(d); if (l < 1e-5f) { d[0] = 0; d[1] = 0; d[2] = 1; l = 1; }
     memcpy(s_pos, pos, 12);
+    { const float pd = std::clamp(l, 0.3f, 60.0f); for (int i = 0; i < 3; i++) s_pivot[i] = pos[i] + d[i] / l * pd; s_pivotOk = true; }
     s_pitch = asinf(std::clamp(d[1] / l, -1.0f, 1.0f));
     s_yaw = atan2f(d[0], d[2]);
     s_t = Now();
@@ -115,15 +132,16 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     const bool front = GameInFront();
     const bool typing = g_menuTyping.load();
     { static bool s_homeWas = false; const bool home = front && Key(VK_HOME);
-      if (home && !s_homeWas) { TakeFromGame(pos, tgt); Log("camara libre: Inicio, se vuelve a la camara del juego"); }
+      if ((home && !s_homeWas) || s_gzHome.exchange(0)) { TakeFromGame(pos, tgt); Log("camara libre: Inicio, se vuelve a la camara del juego"); }
       s_homeWas = home; }
     float speed = std::clamp(g_cfg.live[344][1], 0.05f, 50.0f);
     if (Key(VK_SHIFT)) speed *= 4.0f;
     if (Key(VK_CONTROL)) speed *= 0.25f;
     const float sens = std::clamp(g_cfg.live[344][3], 0.05f, 10.0f);
+    const bool motor = MotorFly();           // dentro del Motor: flechas para el menu, volar solo con el boton derecho
     if (front && !typing) {
         const float rot = 1.2f * dt;   // flechas: ~70 grados por segundo
-        if (!s_follow) {
+        if (!s_follow && !motor) {
             if (Key(VK_LEFT)) s_yaw += rot; if (Key(VK_RIGHT)) s_yaw -= rot;
             if (Key(VK_UP)) s_pitch += rot; if (Key(VK_DOWN)) s_pitch -= rot;
         }
@@ -147,6 +165,22 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     const bool look = front && !g_menuOpen.load() && Key(VK_RBUTTON);
     if (look && s_mouseWas && !s_follow) { s_yaw -= (m.x - s_mouse.x) * 0.0025f * sens; s_pitch -= (m.y - s_mouse.y) * 0.0025f * sens; }
     s_pitch = std::clamp(s_pitch, -1.55f, 1.55f);
+    if (motor && !s_follow && s_pivotOk) {   // pedidos del gizmo de ejes: orbitar alrededor del pivote / mirar desde un eje
+        float dy = 0, dp = 0; { std::lock_guard<std::mutex> lk(s_gzMx); dy = s_gzDYaw; dp = s_gzDPitch; s_gzDYaw = s_gzDPitch = 0; }
+        const int ax = s_gzAxis.exchange(-1);
+        if (dy != 0.0f || dp != 0.0f || (ax >= 0 && ax < 6)) {
+            float d[3] = { s_pivot[0] - s_pos[0], s_pivot[1] - s_pos[1], s_pivot[2] - s_pos[2] };
+            const float dist = std::clamp(Len3(d), 0.3f, 60.0f);
+            if (ax >= 0 && ax < 6) {
+                static const float kF[6][3] = { { -1, 0, 0 }, { 1, 0, 0 }, { 0, -1, 0 }, { 0, 1, 0 }, { 0, 0, -1 }, { 0, 0, 1 } };   // hacia donde mira
+                s_pitch = asinf(std::clamp(kF[ax][1], -1.0f, 1.0f)); if (ax != 2 && ax != 3) s_yaw = atan2f(kF[ax][0], kF[ax][2]);
+                Log("camara libre: vista desde el eje %s%c (gizmo del Motor), a %.2f m del pivote", (ax & 1) ? "-" : "+", "XYZ"[ax / 2], dist);
+            } else { s_yaw += dy; s_pitch += dp; }
+            s_pitch = std::clamp(s_pitch, -1.55f, 1.55f);
+            const float c2 = cosf(s_pitch); const float nf[3] = { c2 * sinf(s_yaw), sinf(s_pitch), c2 * cosf(s_yaw) };
+            for (int i = 0; i < 3; i++) s_pos[i] = s_pivot[i] - nf[i] * dist;
+        }
+    } else if (!motor) { s_gzAxis.store(-1); }
     const float cp = cosf(s_pitch), sp = sinf(s_pitch);
     float f[3] = { cp * sinf(s_yaw), sp, cp * cosf(s_yaw) };
     // derecha: el mundo del juego es diestro (mirando a -z la derecha es +x); Agustin 1/11: con la version anterior A / D iban al reves
@@ -227,7 +261,7 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
         }
         float d[3] = { s_center[0] - s_pos[0], s_center[1] - s_pos[1], s_center[2] - s_pos[2] }; float l = Len3(d);
         if (l > 1e-5f) { f[0] = d[0] / l; f[1] = d[1] / l; f[2] = d[2] / l; s_yaw = atan2f(f[0], f[2]); s_pitch = asinf(std::clamp(f[1], -1.0f, 1.0f)); }
-    } else if (front && !typing) {
+    } else if (front && !typing && (!motor || look)) {
         float mv[3] = {};
         if (Key('W')) { mv[0] += f[0]; mv[1] += f[1]; mv[2] += f[2]; }
         if (Key('S')) { mv[0] -= f[0]; mv[1] -= f[1]; mv[2] -= f[2]; }

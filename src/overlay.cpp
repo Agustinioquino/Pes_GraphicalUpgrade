@@ -2299,7 +2299,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
     // la barra de botones
     const bool hint = false;
     if (!g_menuOpen) { g_blockGameKeys = FreeCamBlocksKeys(); g_menuTyping = false; }   // (31/10) con la camara libre el juego tampoco ve el teclado
-    const bool camFree = FreeCamActive(); const float camSlow = TiempoFactor();   // (1/11) aviso en pantalla
+    const bool camFree = FreeCamActive() && !MotorPageActive(); const float camSlow = TiempoFactor();   // (1/11) aviso en pantalla
     const bool camHud = !g_menuOpen && (camFree || camSlow != 1.0f);
     const bool lightIcons = g_cfg.live[319][0] > 0.5f && g_cfg.live[297][0] > 0.5f && g_cfg.live[378][2] < 0.5f && SSSSEditorLightAge() < 0.5;   // (08/11) con la luz fija al mundo (z378) el icono (relativo a la camara) mentiria: no se dibuja   // (1/11) iconos de la luz del editor
     const bool sunCompass = g_cfg.live[175][0] > 0.5f && g_cfg.live[93][3] > 0.5f;   // (2/11) brujula del sol, solo en partido
@@ -2312,7 +2312,8 @@ void OverlayPresent(IDXGISwapChain* sc) {
     const bool skelView = g_cfg.live[426][0] > 0.5f;   // (09/11) la vista del esqueleto se dibuja tambien con el menu cerrado
     float mmx = 0, mmy = 0; const bool mmCur = !g_menuOpen && MenuMouseCursor(&mmx, &mmy);   // (11/11) flecha del mouse sobre los menus del juego
     const bool keyHud = KeyHudPoll();   // (11/11) cuadrito con la ultima tecla apretada
-    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView && !mmCur && !keyHud) return;
+    const bool gizmo = MotorGizmoPoll();   // (11/11) gizmo de camara del Motor (motorgizmo.cpp)
+    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView && !mmCur && !keyHud && !gizmo) return;
     if (!s_rtv) {
         ID3D11Texture2D* bb = nullptr;
         if (FAILED(sc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb)) || !bb) return;
@@ -2349,6 +2350,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
         dl->AddTriangleFilled(a, b, c, IM_COL32(255, 255, 255, 255)); dl->AddTriangleFilled(a, c, d, IM_COL32(255, 255, 255, 255));
         const ImVec2 pts[4] = { a, b, c, d }; dl->AddPolyline(pts, 4, IM_COL32(0, 0, 0, 255), ImDrawFlags_Closed, 1.4f * k);
     }
+    if (gizmo) MotorGizmoDraw();
     if (keyHud) KeyHudDraw();
     InspectDrawOverlay();
     // (31/10) teclas del juego: con 1 se bloquean solo mientras hay un campo de texto activo (buscador, nombres de presets)
