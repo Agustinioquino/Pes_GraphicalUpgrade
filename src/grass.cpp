@@ -787,8 +787,22 @@ void GrassPresent() {
           if (tn >= nextLogA && g_cfg.live[58][3] > 0.5f) { nextLogA = tn + 30.0; Log("pasto adaptativo: apagado (x333 = %.0f; hace falta 20 o mas)", target); } }
       else if (tn >= nextAdj && ema > 0.0f) { nextAdj = tn + 0.5;
           float fps = 1.0f / ema; float a = s_adapt.load();
-          if (fps < target * 0.97f) a = (std::max)(floorA, a * 0.93f);
-          else if (fps > target * 1.10f) a = (std::min)(1.0f, a * 1.06f);   // (27/10 q) 1.03 -> 1.06: volvia al 100 % en 15 s, ahora en 8
+          // (11/11 l, Agustin: "la densidad automatica no funciona correctamente para ganar fps", captura a 15 FPS con x333 = 59: el pasto
+          // quedo al minimo x0.61 y los FPS siguieron en 15) si bajar el pasto no sube los FPS el cuello de botella es otro (la luz, el
+          // SSGI, la CPU): se vuelve al 100 % y la adaptativa descansa 60 s. Se mide desde que empieza a bajar (fps0 con a0)
+          static float fps0 = 0.0f, a0 = 1.0f; static double t0 = 0.0, restUntil = 0.0;
+          if (tn < restUntil) { a = (std::min)(1.0f, a * 1.06f); }
+          else {
+            if (fps < target * 0.97f) {
+              if (a >= 0.999f || fps0 <= 0.0f) { fps0 = fps; a0 = a; t0 = tn; }
+              a = (std::max)(floorA, a * 0.93f);
+              // a los 6 s de bajar (o en el minimo) se compara: menos del 30 % de pasto sacado con menos de 5 % de FPS ganados = inutil
+              if (tn - t0 > 6.0 && (a <= floorA + 1e-3f || a < a0 * 0.75f) && fps < fps0 * 1.05f) {
+                  Log("pasto adaptativo: bajar el pasto no sube los FPS (%.0f con x%.2f -> %.0f con x%.2f): el limite es otro, vuelve al 100 %% y descansa 60 s", fps0, a0, fps, a);
+                  a = 1.0f; restUntil = tn + 60.0; fps0 = 0.0f; s_adaptV[0] = s_adaptV[1] = 1.0f;
+              }
+            } else { fps0 = 0.0f; if (fps > target * 1.10f) a = (std::min)(1.0f, a * 1.06f); }   // (27/10 q) 1.03 -> 1.06: volvia al 100 % en 15 s, ahora en 8
+          }
           s_adapt = a; s_adaptV[useN ? 1 : 0] = a;
           if (tn >= nextLogA && g_cfg.live[58][3] > 0.5f) { nextLogA = tn + 10.0; Log("pasto adaptativo (%s): FPS %.0f (objetivo %.0f) -> densidad x%.2f en los 3 niveles (minimo %.2f, calidad %d, parcelas %d/%d/%d)", useN ? "vista cercana, fila 410" : "general, fila 333", fps, target, a, floorA, (int)(g_cfg.live[61][0] + 0.5f), g_grassDbg.ring[0], g_grassDbg.ring[1], g_grassDbg.ring[2]); } } }
     if (s_vbState.load() == 1 && s_vbStage && g_dev.imm) {
@@ -995,7 +1009,10 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
     // (27/10 m) tanda 10, w328: capas de hojas por pixel de suelo en el primer plano (0 = 6). Es el costo del plano cercano (25-30 FPS con la
     // camara al ras): 4 recorta un tercio de las hojas de muy cerca sin tocar las camaras de juego
     const float dNear = (g_cfg.live[328][3] >= 1.0f) ? std::clamp(g_cfg.live[328][3], 2.0f, 10.0f) : (ultra ? 10.0f : 6.0f);   // (27/10 q) Ultra: todas las capas; (2/11 paso 10) w328 a mano manda tambien en Ultra
-    const float wEff0 = wGame, tallNear = 1.0f, Dfloor = dNear * cMul[q] * dens;
+    // (11/11 l, Agustin: "le faltan hojas de cerca") la adaptativa ya no ralea el nivel 0 (hojas de cerca) ni las hojas 3D: recorta los
+    // niveles 1 y 2 (media distancia y lejos, donde se nota menos). densN = la densidad sin la adaptativa
+    const float densN = g_cfg.live[58][0] > 0.05f ? std::clamp(g_cfg.live[58][0], 0.3f, 2.0f) : 1.0f;
+    const float wEff0 = wGame, tallNear = 1.0f, Dfloor = dNear * cMul[q] * densN;
     // (11/11) hojas 3D de primerisimo plano: solo pasto natural (x407 0) con el atlas nuevo (z412 0) y el pasto v3 (x104)
     const bool bladeNat = g_cfg.live[104][0] > 0.5f && g_cfg.live[407][0] < 0.5f && g_cfg.live[412][2] < 0.5f;
     const bool bladeOn = bladeNat && g_cfg.live[410][2] > 0.5f && s_bladeIb && s_bladePos && s_bladeUv;
@@ -1080,12 +1097,13 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
             cull[12] = wEff0;   // ancho de la hoja en metros; (2/11 paso 10) el mismo en los 3 niveles (antes x1.6 x2 y x2 x4 por la celda: cintas a media distancia)
             cull[15] = (float)mIpc[i];
             cull[20] = i == 0 ? Dfloor : 0.0f; cull[24] = i == 0 ? fadeT0 : fadeM;
+            cull[14] = i == 0 ? 0.30f * cMul[q] * densN : cBase; cull[19] = 4.0f * cMul[q] * (i == 0 ? densN : dens);   // (11/11 l) nivel 0 sin adaptativa
             c->UpdateSubresource(s_cullCb, 0, nullptr, cull, 0, 0);
             c->Dispatch((gw + 7) / 8, (gh + 7) / 8, 1);
         }
         // (11/11, Agustin: "solo de cerca siiiii", "para primerisimos primer plano nada mas") HOJAS 3D (z410, solo el natural): celdas de 0.5 m
         // que miden >= w410 px/m (1200 si 0); z408 cantidad (hojas por celda hasta 4096 x z408 y un tope total de 200000 x z408 x adaptativa, minimo 0.6)
-        cull[40] = bladeThr; cull[41] = (std::min)(4096.0f * bladeAmt, (float)kBladeMax); cull[42] = 200000.0f * bladeAmt * (std::max)(s_adapt.load(), 0.6f);   // (11/11 g) 60000 -> 200000: en la captura 13.54 habia 219 hojas por celda de 0.5 m (se veia el suelo negro entre las hojas); la adaptativa no baja de 0.6 (solo primerisimos planos) cull[43] = (float)kBladeIpb;
+        cull[40] = bladeThr; cull[41] = (std::min)(4096.0f * bladeAmt, (float)kBladeMax); cull[42] = 200000.0f * bladeAmt;   /* (11/11 l) sin adaptativa */   // (11/11 g) 60000 -> 200000: en la captura 13.54 habia 219 hojas por celda de 0.5 m (se veia el suelo negro entre las hojas); la adaptativa no baja de 0.6 (solo primerisimos planos) cull[43] = (float)kBladeIpb;
         if (bladeOn) {
             UINT gw = (UINT)ceilf(2.0f * halfL / 0.5f), gh = (UINT)ceilf(2.0f * halfW / 0.5f);
             cull[0] = 5.0f; cull[1] = 0.5f; cull[7] = (float)gw; cull[8] = (float)gh;
