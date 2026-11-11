@@ -225,6 +225,13 @@ static void Step(void* win) {
     const float cw = s_m.cw, ch = s_m.ch; float sw = cw, sh = ch, ox = 0, oy = 0;
     if (cw * 9.0f > ch * 16.0f) { sw = ch * 16.0f / 9.0f; ox = (cw - sw) * 0.5f; } else if (cw * 9.0f < ch * 16.0f) { sh = cw * 9.0f / 16.0f; oy = (ch - sh) * 0.5f; }
     const float mx = ((float)s_m.p.x - ox) * 1920.0f / sw, my = ((float)s_m.p.y - oy) * 1080.0f / sh;
+    {   // (v4) panel del Motor: arrastrar desde la franja del titulo (motorpage.cpp). La primera fila dibujada del grupo 0 da el lugar
+        float tx = 0, ty = 0, tw = 0;
+        uint8_t* root0 = P8(I + 0x98); uint8_t* g0 = Ptr(root0) ? Child(root0, 0) : nullptr; uint8_t* r0 = Ptr(g0) ? Child(g0, 0) : nullptr;
+        if (Ptr(r0)) { void** vt = *(void***)r0; float pos[2] = { 0, 0 }, size[2] = { 0, 0 };
+            if (Ptr(vt) && RowClass(vt) && ((PFN_NodeVec2)vt[0xa0 / 8])(r0, pos) >= 0) { ((PFN_NodeVec2)vt[0xc0 / 8])(r0, size); tx = pos[0]; ty = pos[1]; tw = size[0]; } }
+        if (MotorPageDrag(win, mx, my, s_lWas, s_m.lEdge, tx, ty, tw)) { s_m.lEdge = false; s_moveT.store(now); return; }
+    }
     Hit hit; const bool on = (s_m.moved || s_m.lEdge) && HitTest(I, mx, my, hit);
     // (v3) la fila actual del juego (Impl+0xd8) cuenta el desplazamiento de la lista: se compara con ese numero, no con el de la fila dibujada
     const int hitAbs = on ? AbsRow(win, I, hit.group, hit.row) : -1;

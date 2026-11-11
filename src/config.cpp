@@ -145,6 +145,8 @@ static bool LoadConfigLocked() {
             else if (kl == "tecla_mouse_menus") c.menuMouseKey = (v == "0" || v.empty()) ? 0 : VkFromName(v);
             else if (kl == "ultima_tecla") c.keyHud = std::clamp(atoi(v.c_str()), 0, 4);   // (11/11) cuadrito con la ultima tecla apretada
             else if (kl == "motor_pagina") c.motorPage = atoi(v.c_str()) != 0 ? 1 : 0;   // (11/11) filas nativas del Motor en el estudio
+            else if (kl == "motor_panel_x") c.motorPanelX = (float)atof(v.c_str());   // (11/11) panel del Motor corrido con el mouse (escenario 1920 x 1080)
+            else if (kl == "motor_panel_y") c.motorPanelY = (float)atof(v.c_str());
             else if (kl == "motor_botones") c.motorHelpBar = atoi(v.c_str()) != 0;   // (11/11) 1 = deja la barra de botones del mando en la pagina del Motor
             else if (kl == "motor_vestir") c.motorDress = atoi(v.c_str()) != 0 ? 1 : 0;
             else if (kl == "favoritos") c.favorites = v;

@@ -27,6 +27,8 @@
 #include <MinHook.h>
 #include <atomic>
 #include <cstring>
+#include <cstdio>
+#include <string>
 #include <cmath>
 #include <algorithm>
 
@@ -138,6 +140,74 @@ static void* Sub(void* node, const char* name) {      // hijo por nombre, como h
     return ((PFN_Find)vt[1])(sub, name);
 }
 
+// ---------------------------------------------------------------- el panel se mueve (camino A: paneles con piezas del juego)
+// Agustin 20:23 "interfaz movible" / 23:12 "no el diseno del menu de Editar". El panel de la pagina (titulo + filas) es el nodo
+// de arriba de la ventana (Impl+0x90). Todo nodo tiene "poner posicion" en la ranura 19 (0x140e4e5a0, o 0x140e90340 en el nodo
+// ventana: usa el clip padre 0x141f95c60 y lo suelta con 0x141f968e0) = propiedad 0x1000 del clip (posicion local, 2 floats);
+// 0x141f95cd0 la lee. Se guarda la posicion de fabrica al armar la pagina y se le suma [PES21FX] motor_panel_x / _y (unidades
+// del escenario de 1920 x 1080). menumouse.cpp avisa del mouse: arrastrar desde la franja del titulo mueve el panel.
+typedef int (*PFN_SetPos)(void* node, float* xy);
+typedef void (*PFN_ClipGetPos)(void* clip, float* x, float* y);             // 0x141f95cd0
+typedef void* (*PFN_ClipParent)(void* clip);                                // 0x141f95c60
+typedef void (*PFN_ClipRelease)(void* clip);                                // 0x141f968e0
+static void* s_panelWin = nullptr; static float s_panelBX = 0, s_panelBY = 0; static bool s_panelOk = false;
+static std::atomic<bool> s_panelSave{false};
+static void* s_dragWin = nullptr; static float s_dragMX = 0, s_dragMY = 0, s_dragOX = 0, s_dragOY = 0;
+
+static void* PanelNode(void* page, uintptr_t* setPos) {
+    uint8_t* I = P8((uint8_t*)page + 0x88); uint8_t* top = Ptr(I) ? P8(I + 0x90) : nullptr;
+    if (!Ptr(top) || !Readable(top, 0x48)) return nullptr;
+    void** vt = *(void***)top; if (!Ptr(vt) || !Readable(vt, 0xa0)) return nullptr;
+    const uintptr_t f = (uintptr_t)vt[0x98 / 8];
+    if (f != 0x140e4e5a0ull && f != 0x140e90340ull) return nullptr;
+    if (!Ptr(P8(top + 0x40))) return nullptr;
+    *setPos = f; return top;
+}
+static void PanelApply(void* page) {
+    if (page != s_panelWin || !s_panelOk) return;
+    uintptr_t f = 0; void* top = PanelNode(page, &f); if (!top) return;
+    float p[2] = { s_panelBX + g_cfg.motorPanelX, s_panelBY + g_cfg.motorPanelY };
+    ((PFN_SetPos)f)(top, p);
+}
+// al armar la pagina: anota la posicion de fabrica del panel y aplica la guardada
+static void PanelInit(void* page) {
+    s_panelWin = page; s_panelOk = false; s_dragWin = nullptr;
+    uintptr_t f = 0; uint8_t* top = (uint8_t*)PanelNode(page, &f);
+    if (!top) { Log("motor (pagina): el panel no tiene la funcion de posicion esperada: no se puede mover"); return; }
+    void* clip = P8(top + 0x40); void* par = nullptr;
+    if (f == 0x140e90340ull) par = ((PFN_ClipParent)0x141f95c60ull)(clip);
+    float x = 1.0e9f, y = 1.0e9f;
+    ((PFN_ClipGetPos)0x141f95cd0ull)(par ? par : clip, &x, &y);
+    if (par) ((PFN_ClipRelease)0x141f968e0ull)(par);
+    if (!(std::fabs(x) < 8000.0f) || !(std::fabs(y) < 8000.0f)) { Log("motor (pagina): no pude leer la posicion del panel: no se puede mover"); return; }
+    s_panelBX = x; s_panelBY = y; s_panelOk = true;
+    g_cfg.motorPanelX = std::clamp(g_cfg.motorPanelX, -1900.0f, 1900.0f); g_cfg.motorPanelY = std::clamp(g_cfg.motorPanelY, -1000.0f, 1000.0f);
+    if (g_cfg.motorPanelX != 0.0f || g_cfg.motorPanelY != 0.0f) PanelApply(page);
+    static int n = 0; if (n++ < 8) Log("motor (pagina): panel en %.0f, %.0f de fabrica; corrido %.0f, %.0f (se arrastra con el mouse desde el titulo)", x, y, g_cfg.motorPanelX, g_cfg.motorPanelY);
+}
+// menumouse.cpp, en cada paso de la ventana con el mouse sobre el juego: (mx, my) en el escenario de 1920 x 1080; down = boton
+// izquierdo apretado; edge = recien apretado; (tx, ty, tw) = primera fila dibujada (la franja del titulo esta justo encima).
+// Devuelve true si el clic es del arrastre (no va al menu)
+bool MotorPageDrag(void* win, float mx, float my, bool down, bool edge, float tx, float ty, float tw) {
+    if (!win || win != s_panelWin || !s_panelOk || win != s_motorWin.load(std::memory_order_relaxed)) return false;
+    if (s_dragWin == win) {
+        if (down) {
+            g_cfg.motorPanelX = std::clamp(s_dragOX + (mx - s_dragMX), -1900.0f, 1900.0f);
+            g_cfg.motorPanelY = std::clamp(s_dragOY + (my - s_dragMY), -1000.0f, 1000.0f);
+            PanelApply(win);
+            return true;
+        }
+        s_dragWin = nullptr;
+        s_panelSave.store(true);                    // el ini lo escribe el hilo de Present (MotorPagePresent)
+        return false;
+    }
+    if (edge && down && tw > 40.0f && mx > tx && mx < tx + tw && my > ty - 56.0f && my < ty - 1.0f) {
+        s_dragWin = win; s_dragMX = mx; s_dragMY = my; s_dragOX = g_cfg.motorPanelX; s_dragOY = g_cfg.motorPanelY;
+        return true;
+    }
+    return false;
+}
+
 // ranura 78: cantidad de filas
 static unsigned my_Count(void*) { return (unsigned)kNFilas; }
 // ranuras 85 / 86: el texto de cada fila es literal (sin numero de texto del juego)
@@ -197,6 +267,7 @@ static uintptr_t my_Build(void* page) {
     // (Agustin 23:12: "ni que muestres los botones abajo del mando") la barra de ayuda se arma con el texto de cada boton
     // (Impl+0x168 + 0x20 x boton, 17 botones; 0x140e73660 saca los que no tienen texto y esconde la barra si no queda ninguno).
     // Se vacian los que tienen texto; los modos de las acciones (Impl+0x120) no cambian: "volver" sigue andando
+    PanelInit(page);
     int sinAyuda = 0;
     if (g_cfg.motorHelpBar == 0 && Ptr(I) && Readable(I + 0x168, 17 * 0x20))
         for (int i = 0; i < 17; i++) if (U64(I + 0x178 + (size_t)i * 0x20) != 0) { g_HelpText(page, i, ""); sinAyuda++; }
@@ -273,6 +344,12 @@ void MotorPageSeen(void* win) {
 bool MotorPageActive() { return Now() - s_motorT.load(std::memory_order_relaxed) < 0.6; }
 
 void MotorPagePresent() {
+    if (s_panelSave.exchange(false)) {
+        char b[32];
+        snprintf(b, sizeof b, "%.0f", g_cfg.motorPanelX); SaveOption("motor_panel_x", b);
+        snprintf(b, sizeof b, "%.0f", g_cfg.motorPanelY); SaveOption("motor_panel_y", b);
+        Log("motor (pagina): panel soltado en %.0f, %.0f (guardado)", g_cfg.motorPanelX, g_cfg.motorPanelY);
+    }
     if (s_tried) return;
     s_tried = true;
     if (!g_cfg.motorPatch) { Log("motor (pagina): parches en memoria apagados (motor = 0): el estudio queda con las filas de Apariencia"); return; }
