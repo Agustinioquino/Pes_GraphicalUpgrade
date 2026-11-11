@@ -114,7 +114,9 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
         float2 uvS = uv + sgn * dir * (t * rPx) * px;
         if (any(uvS < 0.0) || any(uvS > 1.0)) break;
         float zS = LinZ(uvS);
-        if (!rcvTurf && z0 - zS > thinT && ((((uint)(inNrm.SampleLevel(sPoint, uvS, 0).z * 1023.0 + 0.5)) & 15u) == 3u)) continue;   // (11/11 g) hoja delante
+        // (11/11 l) el && de HLSL no corta: la lectura del G-buffer se hacia en CADA muestra (GTAO 2.4-4.6 -> 12.7 ms en el log de Agustin).
+        // Ahora solo se lee con una muestra delante de verdad, en una rama real
+        [branch] if (!rcvTurf && z0 - zS > thinT) { if ((((uint)(inNrm.SampleLevel(sPoint, uvS, 0).z * 1023.0 + 0.5)) & 15u) == 3u) continue; }   // (11/11 g) hoja delante
         float3 Ps = PosV(uvS, zS);
         float3 dS = Ps - Pc; float lenS = length(dS);
         if (lenS < 1e-4) continue;
@@ -137,7 +139,7 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
           if (any(uvS < 0.0) || any(uvS > 1.0)) break;
           float zS = LinZ(uvS);
           if (zS < 0.05 || zS > 300.0) continue;
-          if (!rcvTurf && z0 - zS > thinT && ((((uint)(inNrm.SampleLevel(sPoint, uvS, 0).z * 1023.0 + 0.5)) & 15u) == 3u)) continue;   // (11/11 g)
+          [branch] if (!rcvTurf && z0 - zS > thinT) { if ((((uint)(inNrm.SampleLevel(sPoint, uvS, 0).z * 1023.0 + 0.5)) & 15u) == 3u) continue; }   // (11/11 g, l)
           float3 dS = PosV(uvS, zS) - Pc; float lenS = length(dS);
           if (lenS < 1e-5) continue;
           float hN = dot(dS, N);
