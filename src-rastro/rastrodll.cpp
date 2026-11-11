@@ -2,15 +2,15 @@
 // exe y no toca nada del mod grafico ni de la tela. Solo LEE. Junta y mejora el rastro v2 + v3:
 //   1. Vuelca el REGISTRO ENTERO del partido cada tick (todos los bloques, objeto completo de cada jugador) -> partido.bin.
 //   2. Recupera el registro de depuracion interno del juego (printf vacio PES2021+0x23628c0) -> motor.log, filtrando el ruido.
-//   3. Vigia por hardware (DR0-DR2) quien escribe el registro de faltas de MatchControl (el "pitido" del offside) -> falta.log.
+//   3. (11/11) VIGIA PASIVO DEL OFFSIDE: solo lee memoria desde el hilo propio (MatchInfo, el juez de la IA y su bloque) y anota
+//      cada cambio + el momento entero cuando se cobra una falta. Sin ganchos. Anda solo, sin teclas (vigia = 0 lo apaga).
 //   4. Engancha SetMotion (0x1406f17f0) para saber QUE jugador arranca cada animacion -> anime.log.
-//   5. Rastreador de funciones: para cada direccion de la lista [PES21FX] rastro_funcs = ..., pone un int3 al inicio y anota, la
-//      primera vez que corre, los argumentos (rcx, rdx, r8, r9, xmm0) y quien la llamo. Sirve para ver que hace una funcion que el
-//      codigo quieto no aclara. Solo lee el contexto y restaura el byte: no cambia la ejecucion.
-// Config PROPIA: PES21FX\rastro_v4.ini (no PES21FX.ini: la DLL grafica lee ahi su propio "rastro" y se pisarian), salida PES21FX\rastro_v4\<fecha>\. Claves rastro=1, rastro_fotos, rastro_max_mb, rastro_faltas, rastro_anime, rastro_funcs.
+// (11/11) BORRADOS el vigia por registros de depuracion (DR0-DR2) y el rastreador por int3: tras prenderlos en un partido la placa
+// de video se reinicio (TDR). Los ganchos viejos (1, 2 y 4) quedan APAGADOS salvo rastro_ganchos = 1 en rastro_v4.ini.
+// Config PROPIA: PES21FX\rastro_v4.ini (no PES21FX.ini: la DLL grafica lee ahi su propio "rastro" y se pisarian), salida PES21FX\rastro_v4\<fecha>\. Claves vigia, rastro=1, rastro_ganchos, rastro_fotos, rastro_max_mb, rastro_anime.
 // No depende de core.h: todo lo necesario (Log, config, lectura segura) esta aca.
 #include <windows.h>
-#include <tlhelp32.h>
+#include <psapi.h>
 #include <intrin.h>
 #include <algorithm>
 #include <cstdlib>
@@ -37,18 +37,11 @@ const uintptr_t kTickEndLo  = 0x1404279c0ull, kTickEndHi = 0x140427a80ull;   // 
 const uintptr_t kRegGlobal  = 0x143702208ull;   // puntero al registro del partido (0 fuera del partido)
 const uintptr_t kRdLo       = 0x142538000ull, kRdHi = 0x143a00000ull;        // cadenas del exe
 const uintptr_t kSetMotion  = 0x1406f17f0ull;   // arranque de una animacion (que jugador)
-const uintptr_t kMcVf19     = 0x1404228d0ull;   // MatchControl::vf19, una vez por tick: da el puntero al objeto
-const unsigned char kMcSig[16] = { 0x48,0x8b,0xc4,0x48,0x89,0x50,0x10,0x55,0x53,0x56,0x57,0x41,0x56,0x48,0x8b,0xec };
-
-// faltas: registro de la ultima falta en MatchControl +0x2940 (se copia a MatchInfo+0x1584 cada tick)
-const uint32_t kWatchOff[3]    = { 0x2944, 0x294c, 0x2930 };
-const char* const kWatchName[3] = { "tipo_falta(MI+0x1588)", "infractor(MI+0x1590)", "motivo_detencion(MI+0x1574)" };
-
 // ---------------------------------------------------------------- configuracion propia
 struct Cfg {
     std::wstring baseDir;
-    bool on = false; int maxMb = 2000, fps = 2; bool falta = true, anime = false, motor = true, registro = true;   // (10/11 c) cada gancho se apaga por separado para aislar cual molesta
-    std::vector<uintptr_t> funcs; int funcsLote = 100, funcsEspera = 10, autoSeg = 0;   // tanda cada 250 ms; segundos de espera antes de armar
+    bool on = false, vigia = true, ganchos = false; int maxMb = 2000, fps = 2; bool anime = false, motor = true, registro = true;   // (10/11 c) cada gancho se apaga por separado para aislar cual molesta
+    int autoSeg = 0;
 } g_cfg;
 
 FILE* g_logf = nullptr;
@@ -91,7 +84,7 @@ std::atomic<unsigned> s_msgs{0}, s_drop{0}, s_snaps{0}, s_skip{0}, s_anime{0};
 std::atomic<int> s_tick{-1};
 std::atomic<int> s_frame{0};
 SRWLOCK s_lk = SRWLOCK_INIT;
-FILE* s_log = nullptr; FILE* s_bin = nullptr; FILE* s_csv = nullptr; FILE* s_falta = nullptr; FILE* s_anm = nullptr; FILE* s_fn = nullptr;
+FILE* s_log = nullptr; FILE* s_bin = nullptr; FILE* s_csv = nullptr; FILE* s_anm = nullptr;
 std::wstring s_dir;
 int s_lastSnapTick = -1000000;
 int PresentNo() { return s_frame.load(std::memory_order_relaxed); }
@@ -155,17 +148,8 @@ const Blk kBlks[] = {
 };
 uint32_t RecSize() { uint32_t s = 16; for (auto& b : kBlks) s += (b.idx ? b.idx : 1) * (8 + b.len); return s; }
 
-void Snapshot() {
-    const uintptr_t reg = RdPtr(kRegGlobal);
-    if (!reg) return;
-    const uintptr_t mi = RdPtr(reg + 0x270);
-    int tick = -1, phase = -1, type = -1;
-    if (mi) { Rd((const void*)(mi + 0x1198), &tick, 4); Rd((const void*)(mi + 0x1168), &phase, 4); Rd((const void*)(mi + 0x116c), &type, 4); }
-    s_tick.store(tick, std::memory_order_relaxed);
-    const int step = 54 / (g_cfg.fps > 0 ? (g_cfg.fps > 54 ? 54 : g_cfg.fps) : 2);
-    if (tick < 0 || (tick - s_lastSnapTick < step && tick >= s_lastSnapTick)) return;
-    s_lastSnapTick = tick;
-    static std::string rec; rec.assign(RecSize(), '\0');
+void BuildRecord(std::string& rec, uintptr_t reg, int tick, int phase) {
+    rec.assign(RecSize(), '\0');
     char* p = &rec[0];
     const uint32_t magic = 0x52545850; const uint32_t ms = (uint32_t)GetTickCount();
     memcpy(p, &magic, 4); memcpy(p + 4, &tick, 4); memcpy(p + 8, &phase, 4); memcpy(p + 12, &ms, 4); p += 16;
@@ -178,6 +162,19 @@ void Snapshot() {
             p += b.len;
         }
     }
+}
+
+void Snapshot() {
+    const uintptr_t reg = RdPtr(kRegGlobal);
+    if (!reg) return;
+    const uintptr_t mi = RdPtr(reg + 0x270);
+    int tick = -1, phase = -1, type = -1;
+    if (mi) { Rd((const void*)(mi + 0x1198), &tick, 4); Rd((const void*)(mi + 0x1168), &phase, 4); Rd((const void*)(mi + 0x116c), &type, 4); }
+    s_tick.store(tick, std::memory_order_relaxed);
+    const int step = 54 / (g_cfg.fps > 0 ? (g_cfg.fps > 54 ? 54 : g_cfg.fps) : 2);
+    if (tick < 0 || (tick - s_lastSnapTick < step && tick >= s_lastSnapTick)) return;
+    s_lastSnapTick = tick;
+    static std::string rec; BuildRecord(rec, reg, tick, phase);
     Put(s_bin, rec.data(), rec.size());
     unsigned char rain = 0, env = 0; float tscale = 0; signed char dir0 = 0, dir1 = 0;
     if (uintptr_t me = RdPtr(reg + 0x2c0)) { Rd((const void*)(me + 0x12), &rain, 1); Rd((const void*)(me + 0x44), &env, 1); Rd((const void*)(me + 0x5c), &tscale, 4); }
@@ -218,196 +215,254 @@ void* hk_mot(void* self, void* a2, void* a3, void* a4) {
     return o_mot(self, a2, a3, a4);
 }
 
-// ---------------------------------------------------------------- vigia de faltas por hardware (DR0-DR2)
-using Vf19Fn = void(*)(void*, void*);
-Vf19Fn o_vf19 = nullptr;
-std::atomic<uintptr_t> s_mc{0}, s_armedMc{0};
-struct FaltaHit { uint32_t ms; int tick; int slot; uint32_t val; uint32_t tid; uintptr_t rip; uintptr_t ret[12]; };
-const int kFaltaN = 4096; FaltaHit s_fh[kFaltaN];
-std::atomic<int> s_fhN{0}; int s_fhDone = 0;
-uint32_t s_fhLast[3] = { 0xffffffffu, 0xffffffffu, 0xffffffffu }; uintptr_t s_fhLastRip[3] = {};
-std::atomic<unsigned> s_fhAll{0};
+// ---------------------------------------------------------------- vigia pasivo del offside (11/11)
+// Reemplaza al vigia por registros de depuracion (DR0-DR2) y al rastreador por int3, que se BORRARON: el 10/11 la placa de
+// video se reinicio (TDR 0x887A0020) 5 s despues de prenderlos en un partido. Este vigia SOLO LEE memoria desde el hilo propio
+// de la DLL: no engancha funciones, no pone excepciones, no suspende ni toca ningun otro hilo, no escribe en el juego.
+// Mira tres cosas cada ~2 ms dentro de un partido y anota cada cambio en PES21FX\vigia_offside\<fecha>\vigia.log:
+//   MI     = MatchInfo+0x1554 (estado de detencion + registro de falta; tipo de falta en +0x34 del bloque, 1 = offside)
+//   JUEZ   = match::ai::Judge (lo encuentra buscando su vtable en la memoria del proceso): el "pendiente" que arma
+//            FUN_14050f7f0 (juez+8 = hay pendiente, +0xc/+0x10 esperas, +0x14.. = infractor, victima, ..., +0x28 tipo, +0x34 posicion)
+//   BLOQUE = el bloque de trabajo del juez (juez+0x40b8), de donde MatchControl copia a MatchInfo
+// Cuando aparece un pendiente o un tipo de falta distinto de 0 guarda en eventos.bin: los ultimos 256 ticks (pelota, posicion
+// de los 22, tablas del mundo de la IA W+0x24700..0x25600 con las mascaras de "en posicion adelantada"), el juez, el bloque y
+// una foto entera del registro del partido.
+const uintptr_t kJudgeVt  = 0x1425ce1a0ull;   // vtable de match::ai::Judge (rtti.txt)
+const uintptr_t kJudgeBlk = 0x40b8;           // juez (X+0x908) -> bloque del juez (X+0x49c0)
+constexpr int kVgJ = 4, kVgRingN = 256, kVgMaxEv = 60, kVgMaxEvChico = 300, kVgMaxLines = 300000;   // 60 offsides enteros (~1,8 MB c/u) + 300 faltas livianas
+struct VgRing { int tick; uint32_t ms; unsigned char ball[0x40]; float pos[22][3]; unsigned char w[0xF00]; };
+struct VgJudge { uintptr_t a; bool strong, hj, hb; unsigned char jg[0xa8], bk[0x70]; };
+struct Vg {
+    bool dead = false; FILE* log = nullptr; FILE* bin = nullptr;
+    uintptr_t reg = 0; VgJudge j[kVgJ] = {}; int nj = 0;
+    bool scanning = false; uintptr_t scanNext = 0; ULONGLONG scanT = 0; int scans = 0; uint64_t scanBytes = 0;
+    unsigned char mi[0x70] = {}; bool hmi = false;
+    int tick = -1, lastTick = -1, fotoAt = -1; VgRing* ring = nullptr; int ringPos = 0, ringCnt = 0;
+    int events = 0, eventsFull = 0, lines = 0, secLines = 0, drop = 0; ULONGLONG secT = 0; unsigned faults = 0;
+} g_vg;
 
-bool LooksLikeRet(uintptr_t v) {
-    if (v < 0x140001000ull || v >= kRdLo) return false;
-    unsigned char b[7] = {};
-    if (!Rd((const void*)(v - 7), b, 7)) return false;
-    return b[2] == 0xe8 || (b[1] == 0xff && b[2] == 0x15) || (b[4] == 0xff && (b[5] & 0x38) == 0x10) ||
-           (b[5] == 0xff && (b[6] & 0x38) == 0x10) || (b[3] == 0xff && (b[4] & 0x38) == 0x10) || (b[0] == 0xff && (b[1] & 0x38) == 0x10);
+void VgLine(const char* fmt, ...) {
+    if (!g_vg.log) return;
+    const ULONGLONG now = GetTickCount64();
+    if (now - g_vg.secT >= 1000) { if (g_vg.drop) fprintf(g_vg.log, "(%d renglones salteados en 1 s)\n", g_vg.drop); g_vg.secT = now; g_vg.secLines = 0; g_vg.drop = 0; }
+    if (g_vg.lines >= kVgMaxLines || g_vg.secLines >= 200) { g_vg.drop++; return; }
+    g_vg.lines++; g_vg.secLines++;
+    char b[1500]; va_list ap; va_start(ap, fmt); int n = vsnprintf(b, sizeof b, fmt, ap); va_end(ap);
+    if (n < 0) return; if (n >= (int)sizeof b) n = (int)sizeof b - 1;
+    SYSTEMTIME st; GetLocalTime(&st);
+    fprintf(g_vg.log, "%02d:%02d:%02d.%03d\t%d\t%.*s\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, g_vg.tick, n, b);
 }
-// rastreador de funciones por int3 (comparte el VEH); 1 = tipo de hit de falta, 2 = funcion rastreada
-struct TrFn { uintptr_t addr; unsigned char orig; std::atomic<unsigned char> state; };   // state 1 armada, 2 ejecutada
-std::vector<TrFn*> s_trace;
-std::atomic<unsigned> s_trHits{0};
-// anillo de golpes del rastreador: lo llena el VEH (sin locks), lo vuelca TraceFlush desde el hilo Worker
-struct TrHit { ULONGLONG ms; int tick; DWORD tid; uintptr_t a, rcx, rdx, r8, r9, ret; double x0; std::atomic<int> ok; };
-constexpr unsigned kTrHitN = 65536;
-TrHit* s_th = nullptr; std::atomic<unsigned> s_thN{0}; unsigned s_thDone = 0;
-std::atomic<int> s_trState{0};   // 0 sin armar, 1 armando por tandas, 2 armado, 3 desarmado
-size_t s_trNext = 0; ULONGLONG s_trT0 = 0; SYSTEMTIME s_trLocal0{};
-// s_trace queda ordenado por direccion (ArmTrace): busqueda binaria, sirve para miles de funciones
-TrFn* FindTrace(uintptr_t a) {
-    size_t lo = 0, hi = s_trace.size();
-    while (lo < hi) { size_t m = (lo + hi) / 2; if (s_trace[m]->addr < a) lo = m + 1; else hi = m; }
-    return (lo < s_trace.size() && s_trace[lo]->addr == a) ? s_trace[lo] : nullptr;
+void VgHex(char* out, size_t cap, const unsigned char* d, int n) {
+    static const char* hx = "0123456789abcdef"; size_t k = 0;
+    for (int i = 0; i < n && k + 3 < cap; i++) { if (i && !(i & 3)) out[k++] = ' '; out[k++] = hx[d[i] >> 4]; out[k++] = hx[d[i] & 15]; }
+    out[k] = 0;
 }
+int VgI(const unsigned char* d, int off) { int v; memcpy(&v, d + off, 4); return v; }
+float VgF(const unsigned char* d, int off) { float v; memcpy(&v, d + off, 4); return v; }
 
-LONG CALLBACK Veh(EXCEPTION_POINTERS* ep) {
-    const DWORD code = ep->ExceptionRecord->ExceptionCode;
-    CONTEXT* cx = ep->ContextRecord;
-    if (code == EXCEPTION_SINGLE_STEP) {   // vigia de faltas (hardware)
-        const uintptr_t mc = s_armedMc.load(std::memory_order_relaxed);
-        if (!mc || !(cx->Dr6 & 7) || cx->Dr0 != mc + kWatchOff[0]) return EXCEPTION_CONTINUE_SEARCH;
-        const int slot = (cx->Dr6 & 1) ? 0 : (cx->Dr6 & 2) ? 1 : 2;
-        cx->Dr6 = 0; s_fhAll.fetch_add(1, std::memory_order_relaxed);
-        uint32_t v = 0; Rd((const void*)(mc + kWatchOff[slot]), &v, 4);
-        if (v == s_fhLast[slot] && (uintptr_t)cx->Rip == s_fhLastRip[slot]) return EXCEPTION_CONTINUE_EXECUTION;
-        s_fhLast[slot] = v; s_fhLastRip[slot] = (uintptr_t)cx->Rip;
-        const int i = s_fhN.fetch_add(1, std::memory_order_relaxed);
-        if (i < kFaltaN) {
-            FaltaHit& h = s_fh[i]; memset(&h, 0, sizeof h);
-            h.ms = (uint32_t)GetTickCount(); h.tick = s_tick.load(std::memory_order_relaxed); h.slot = slot; h.val = v; h.tid = GetCurrentThreadId(); h.rip = (uintptr_t)cx->Rip;
-            const uintptr_t* sp = (const uintptr_t*)cx->Rsp; int k = 0;
-            for (int j = 0; j < 512 && k < 12; j++) { uintptr_t r = 0; if (!Rd(sp + j, &r, 8)) break; if (LooksLikeRet(r)) h.ret[k++] = r; }
-        }
-        return EXCEPTION_CONTINUE_EXECUTION;
-    }
-    if (code == EXCEPTION_BREAKPOINT) {   // rastreador de funciones (int3)
-        const uintptr_t a = (uintptr_t)ep->ExceptionRecord->ExceptionAddress;
-        TrFn* t = FindTrace(a); if (!t) return EXCEPTION_CONTINUE_SEARCH;
-        unsigned char st = 1;
-        if (t->state.compare_exchange_strong(st, 2)) {
-            // (10/11 b) NADA de locks, heap, stdio ni APIs del cargador aca adentro: la version anterior escribia el log
-            // desde el VEH (SRW + fwrite + GetModuleHandleEx) y colgo el juego en la carga. La pagina ya quedo
-            // escribible al armar; aca solo se devuelve el byte y se anota en un anillo que vuelca el hilo Worker.
-            *(volatile unsigned char*)a = t->orig;
-            const unsigned i = s_thN.fetch_add(1, std::memory_order_relaxed);
-            if (i < kTrHitN) {
-                TrHit& h = s_th[i];
-                h.ms = GetTickCount64(); h.tick = s_tick.load(std::memory_order_relaxed); h.tid = GetCurrentThreadId();
-                h.a = a; h.rcx = cx->Rcx; h.rdx = cx->Rdx; h.r8 = cx->R8; h.r9 = cx->R9; h.ret = 0; h.x0 = 0;
-                Rd((const void*)cx->Rsp, &h.ret, 8); Rd(&cx->Xmm0, &h.x0, 8);
-                h.ok.store(1, std::memory_order_release);
-            }
-            s_trHits.fetch_add(1, std::memory_order_relaxed);
-        }
-        cx->Rip = (DWORD64)a;
-        return EXCEPTION_CONTINUE_EXECUTION;
-    }
-    return EXCEPTION_CONTINUE_SEARCH;
+bool VgOpen() {
+    if (g_vg.log) return true;
+    SYSTEMTIME st; GetLocalTime(&st);
+    wchar_t name[48]; swprintf(name, 48, L"%04d%02d%02d_%02d%02d%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    std::wstring dir = g_cfg.baseDir + L"vigia_offside\\"; CreateDirectoryW(dir.c_str(), nullptr);
+    dir += name; dir += L"\\"; CreateDirectoryW(dir.c_str(), nullptr);
+    g_vg.log = _wfopen((dir + L"vigia.log").c_str(), L"wb");
+    g_vg.bin = _wfopen((dir + L"eventos.bin").c_str(), L"wb");
+    g_vg.ring = (VgRing*)VirtualAlloc(nullptr, sizeof(VgRing) * kVgRingN, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!g_vg.log || !g_vg.bin || !g_vg.ring) { Log("vigia: no se pudo abrir la carpeta de salida o reservar memoria: apagado"); g_vg.dead = true; return false; }
+    fputs("hora\ttick\tque\n", g_vg.log);
+    Log("vigia de offside: anotando en vigia_offside\\%ls", name);
+    return true;
 }
 
-DWORD WINAPI FaltaArm(void* arg) {
-    const uintptr_t mc = (uintptr_t)arg;
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-    if (snap == INVALID_HANDLE_VALUE) return 0;
-    THREADENTRY32 te{}; te.dwSize = sizeof te;
-    const DWORD me = GetCurrentThreadId(), pid = GetCurrentProcessId(); int done = 0, tot = 0;
-    for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
-        if (te.th32OwnerProcessID != pid || te.th32ThreadID == me) continue;
-        tot++;
-        HANDLE th = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, te.th32ThreadID);
-        if (!th) continue;
-        if (SuspendThread(th) != (DWORD)-1) {
-            CONTEXT c{}; c.ContextFlags = CONTEXT_DEBUG_REGISTERS;
-            if (GetThreadContext(th, &c)) {
-                DWORD64 d7 = c.Dr7;
-                for (int s = 0; s < 3; s++) { d7 &= ~((DWORD64)3 << (2 * s)); d7 &= ~((DWORD64)0xF << (16 + 4 * s)); d7 |= ((DWORD64)1 << (2 * s)) | ((DWORD64)1 << (16 + 4 * s)) | ((DWORD64)3 << (18 + 4 * s)); }
-                c.Dr0 = mc + kWatchOff[0]; c.Dr1 = mc + kWatchOff[1]; c.Dr2 = mc + kWatchOff[2]; c.Dr7 = d7;
-                if (SetThreadContext(th, &c)) done++;
-            }
-            ResumeThread(th);
-        }
-        CloseHandle(th);
-    }
-    CloseHandle(snap);
-    static int s_logs = 0; if (s_logs++ < 6) Log("rastro: vigia de faltas en MatchControl %p: %d de %d hilos", (void*)mc, done, tot);
-    return 0;
+// busca la vtable del juez en la memoria privada de lectura/escritura (nunca paginas guardia ni memoria mapeada del driver),
+// y solo en las paginas que YA estan en uso (QueryWorkingSetEx): leer una pagina reservada sin usar la haria ocupar memoria.
+int VgScanRange(uintptr_t a, uintptr_t e, uintptr_t* found, int n, int cap) {
+    __try {
+        for (uintptr_t p = a; p + 8 <= e; p += 8)
+            if (*(const uintptr_t*)p == kJudgeVt) { if (n < cap) found[n++] = p; }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    return n;
 }
-void FaltaRequestArm(uintptr_t mc) {
-    s_armedMc.store(mc, std::memory_order_relaxed);
-    for (int s = 0; s < 3; s++) { s_fhLast[s] = 0xffffffffu; s_fhLastRip[s] = 0; }
-    if (HANDLE t = CreateThread(nullptr, 0, FaltaArm, (void*)mc, 0, nullptr)) CloseHandle(t);
-}
-void hk_vf19(void* self, void* a2) {
-    const uintptr_t me = (uintptr_t)self;
-    if (me && s_mc.load(std::memory_order_relaxed) != me && !(me & 3)) { s_mc.store(me, std::memory_order_relaxed); FaltaRequestArm(me); }
-    o_vf19(self, a2);
-}
-void FaltaFlush() {
-    if (!s_falta) return;
-    const int n = s_fhN.load() < kFaltaN ? s_fhN.load() : kFaltaN;
-    for (; s_fhDone < n; s_fhDone++) {
-        const FaltaHit& h = s_fh[s_fhDone];
-        fprintf(s_falta, "%u\t%d\t%s\t%u\t%u\t%s", h.ms, h.tick, kWatchName[h.slot], h.val, h.tid, ModOff((void*)h.rip).c_str());
-        for (int k = 0; k < 12 && h.ret[k]; k++) fprintf(s_falta, "%s%s", k ? " < " : "\t", ModOff((void*)h.ret[k]).c_str());
-        fputs("\n", s_falta);
-    }
-    fflush(s_falta);
-}
-
-// armar los int3 del rastreador de funciones (una vez)
-void ArmTrace() {
-    for (uintptr_t a : g_cfg.funcs) {
-        if (a < kBase || a >= kBase + 0x1c000000ull) { Log("rastro_funcs: %llx fuera del exe, salteada", (unsigned long long)a); continue; }
-        unsigned char b = 0; if (!Rd((const void*)a, &b, 1) || b == 0xCC) { Log("rastro_funcs: %llx no legible o ya con int3", (unsigned long long)a); continue; }
-        s_trace.push_back(new TrFn{ a, b, {1} });
-    }
-    std::sort(s_trace.begin(), s_trace.end(), [](const TrFn* x, const TrFn* y) { return x->addr < y->addr; });
-    s_trace.erase(std::unique(s_trace.begin(), s_trace.end(), [](const TrFn* x, const TrFn* y) { return x->addr == y->addr; }), s_trace.end());
-    for (TrFn* t : s_trace) t->state.store(0);   // 0 = todavia sin int3
-    s_th = (TrHit*)VirtualAlloc(nullptr, sizeof(TrHit) * kTrHitN, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    s_trT0 = GetTickCount64(); GetLocalTime(&s_trLocal0);
-    if (!s_th) { Log("rastro_funcs: sin memoria para el anillo, rastreador apagado"); s_trState = 3; return; }
-    s_trState = 1;
-    Log("rastro: rastreador de funciones: %zu direcciones; arma de a %d cada 300 ms tras %d s de espera", s_trace.size(), g_cfg.funcsLote, g_cfg.funcsEspera);
-}
-// pone los int3 de a tandas (hilo Worker, cada 250 ms). La tabla ya esta ordenada: el VEH puede buscar siempre.
-void TraceStep() {
-    if (s_trState.load() != 1) return;
-    if (GetTickCount64() - s_trT0 < (ULONGLONG)g_cfg.funcsEspera * 1000) return;
+int VgScanChunk(uintptr_t a, uintptr_t e, uintptr_t* found, int cap) {   // a alineado a pagina, e - a <= 8 MB
+    static PSAPI_WORKING_SET_EX_INFORMATION ws[2048];
+    const size_t np = (size_t)((e - a + 0xfff) >> 12);
+    if (!np || np > 2048 || (a & 0xfff)) return 0;
+    for (size_t i = 0; i < np; i++) { ws[i].VirtualAddress = (PVOID)(a + i * 0x1000); ws[i].VirtualAttributes.Flags = 0; }
+    if (!QueryWorkingSetEx(GetCurrentProcess(), ws, (DWORD)(np * sizeof ws[0]))) return 0;   // sin el dato no se lee nada
     int n = 0;
-    for (; s_trNext < s_trace.size() && n < g_cfg.funcsLote; s_trNext++, n++) {
-        TrFn* t = s_trace[s_trNext]; const uintptr_t a = t->addr;
-        DWORD old; if (!VirtualProtect((void*)a, 1, PAGE_EXECUTE_READWRITE, &old)) { t->state.store(2); continue; }   // la pagina queda escribible: el VEH no llama a nada
-        t->state.store(1); *(volatile unsigned char*)a = 0xCC;
+    for (size_t i = 0; i < np; ) {
+        if (!ws[i].VirtualAttributes.Valid) { i++; continue; }
+        size_t k = i; while (k < np && ws[k].VirtualAttributes.Valid) k++;
+        const uintptr_t ra = a + i * 0x1000, re = a + k * 0x1000;
+        n = VgScanRange(ra, re < e ? re : e, found, n, cap);
+        i = k;
     }
-    if (s_trNext >= s_trace.size()) { s_trState = 2; Log("rastro: rastreador armado entero (%zu)", s_trace.size()); }
+    return n;
 }
-// saca todos los int3 que queden (guardian o cierre)
-void TraceDisarm(const char* why) {
-    int n = 0;
-    for (TrFn* t : s_trace) { unsigned char st = 1; if (t->state.compare_exchange_strong(st, 2)) { *(volatile unsigned char*)t->addr = t->orig; n++; } }
-    s_trState = 3;
-    Log("rastro: rastreador DESARMADO (%s): %d int3 retirados, %u funciones vistas", why, n, s_trHits.load());
-}
-// guardian: si el proceso casi no usa CPU durante 12 s con int3 puestos, el juego esta trabado -> desarmar
-void TraceWatch() {
-    const int st = s_trState.load(); if (st != 1 && st != 2) return;
-    if (GetTickCount64() - s_trT0 < (ULONGLONG)g_cfg.funcsEspera * 1000) return;
-    static ULONGLONG lastT = 0, lastCpu = 0; static int low = 0;
-    const ULONGLONG now = GetTickCount64(); if (now - lastT < 3000) return;
-    // con el juego en segundo plano (alt-tab) es normal que casi no use CPU: ahi no se juzga
-    { DWORD pid = 0; HWND fg = GetForegroundWindow(); if (fg) GetWindowThreadProcessId(fg, &pid); if (pid != GetCurrentProcessId()) { low = 0; lastT = 0; return; } }
-    FILETIME c, e, k, u; if (!GetProcessTimes(GetCurrentProcess(), &c, &e, &k, &u)) return;
-    const ULONGLONG cpu = (((ULONGLONG)k.dwHighDateTime << 32) | k.dwLowDateTime) + (((ULONGLONG)u.dwHighDateTime << 32) | u.dwLowDateTime);   // 100 ns
-    if (lastT) { const double frac = (double)(cpu - lastCpu) / 10000.0 / (double)(now - lastT); low = frac < 0.20 ? low + 1 : 0; }   // < 20 % de un nucleo
-    lastT = now; lastCpu = cpu;
-    if (low >= 4) TraceDisarm("el juego dejo de avanzar");
-}
-void TraceFlush() {
-    if (!s_fn || !s_th) return;
-    const unsigned n = s_thN.load() < kTrHitN ? s_thN.load() : kTrHitN;
-    for (; s_thDone < n; s_thDone++) {
-        TrHit& h = s_th[s_thDone]; if (!h.ok.load(std::memory_order_acquire)) break;
-        // hora de reloj = hora local del armado + milisegundos transcurridos
-        ULONGLONG ms = (ULONGLONG)s_trLocal0.wHour * 3600000 + s_trLocal0.wMinute * 60000 + s_trLocal0.wSecond * 1000 + s_trLocal0.wMilliseconds + (h.ms - s_trT0);
-        fprintf(s_fn, "%02d:%02d:%02d.%03d\t%d\t%lu\t%s\trcx=%llx rdx=%llx r8=%llx r9=%llx xmm0=%g\t<-%s\n",
-            (int)(ms / 3600000 % 24), (int)(ms / 60000 % 60), (int)(ms / 1000 % 60), (int)(ms % 1000), h.tick, h.tid, ModOff((void*)h.a).c_str(),
-            (unsigned long long)h.rcx, (unsigned long long)h.rdx, (unsigned long long)h.r8, (unsigned long long)h.r9, h.x0, ModOff((void*)h.ret).c_str());
+void VgAddJudge(uintptr_t p) {
+    const uintptr_t out = RdPtr(p + 0x3c0), vt2 = RdPtr(p + 0x3c8);
+    const bool strong = out == p + kJudgeBlk;
+    if (!strong && !(vt2 >= kRdLo && vt2 < kRdHi)) return;
+    for (int i = 0; i < g_vg.nj; i++) if (g_vg.j[i].a == p) return;
+    if (g_vg.nj >= kVgJ) {   // lleno: uno con bloque propio le gana a uno dudoso
+        int w = -1; if (strong) for (int i = 0; i < g_vg.nj; i++) if (!g_vg.j[i].strong) { w = i; break; }
+        if (w < 0) return;
+        for (int k = w; k + 1 < g_vg.nj; k++) g_vg.j[k] = g_vg.j[k + 1];
+        g_vg.nj--;
     }
-    fflush(s_fn);
+    VgJudge& j = g_vg.j[g_vg.nj]; memset(&j, 0, sizeof j); j.a = p; j.strong = strong;
+    VgLine("JUEZ%d encontrado en %p (%s; salida %p)", g_vg.nj, (void*)p, strong ? "bloque propio" : "sin bloque propio todavia", (void*)out);
+    g_vg.nj++;
 }
+void VgScanStep() {
+    uint64_t budget = 2ull << 20; int queries = 0;   // 2 MB y 256 consultas por paso: el hilo casi no pesa
+    while (budget > 0 && queries++ < 256) {
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (g_vg.scanNext >= 0x7ffffffe0000ull || !VirtualQuery((const void*)g_vg.scanNext, &mbi, sizeof mbi)) {
+            g_vg.scanning = false;
+            VgLine("busqueda del juez terminada: %d encontrados, %llu MB leidos en %llu ms", g_vg.nj, (unsigned long long)(g_vg.scanBytes >> 20), (unsigned long long)(GetTickCount64() - g_vg.scanT));
+            g_vg.scanT = GetTickCount64();
+            return;
+        }
+        const uintptr_t base = (uintptr_t)mbi.BaseAddress, end = base + mbi.RegionSize;
+        if (end <= g_vg.scanNext) { g_vg.scanning = false; return; }
+        if (mbi.State == MEM_COMMIT && mbi.Type == MEM_PRIVATE && mbi.Protect == PAGE_READWRITE) {
+            const uintptr_t a = g_vg.scanNext > base ? g_vg.scanNext : base;
+            const uintptr_t e = (end - a > budget) ? a + (uintptr_t)budget : end;
+            uintptr_t f[16]; const int n = VgScanChunk(a, e, f, 16);
+            for (int i = 0; i < n; i++) VgAddJudge(f[i]);
+            budget -= (e - a); g_vg.scanBytes += (e - a); g_vg.scanNext = e;
+        } else g_vg.scanNext = end;
+    }
+}
+uintptr_t VgWorld(uintptr_t judge) { const uintptr_t p = RdPtr(judge + 0x3b8), q = RdPtr(p); return q ? RdPtr(q + 0x18) : 0; }
+uintptr_t VgAnyJudge() { for (int i = 0; i < g_vg.nj; i++) if (g_vg.j[i].strong) return g_vg.j[i].a; return g_vg.nj ? g_vg.j[0].a : 0; }
+
+void BuildRecord(std::string& rec, uintptr_t reg, int tick, int phase);
+void VgBin(const void* d, size_t n) { if (g_vg.bin) fwrite(d, 1, n, g_vg.bin); }
+void VgChunk(const char tag[4], const void* d, uint32_t n) { VgBin(tag, 4); VgBin(&n, 4); if (n) VgBin(d, n); }
+void VgFoto(const char tag[4]) {
+    static std::string rec; int phase = -1;
+    if (uintptr_t mi = RdPtr(g_vg.reg + 0x270)) Rd((const void*)(mi + 0x1168), &phase, 4);
+    BuildRecord(rec, g_vg.reg, g_vg.tick, phase);
+    VgChunk(tag, rec.data(), (uint32_t)rec.size());
+}
+// eventos.bin = bloques {4 letras, u32 largo, datos}: EVNT (cabecera), RING, JUEZ, BLOQ, MUND, FOTO, FOT2 (foto 60 ticks despues).
+// full (offside): con RING y FOTO. Las demas faltas: solo JUEZ, BLOQ y MUND.
+void VgEvent(const char* what, int ji, bool full) {
+    if (full && g_vg.eventsFull >= kVgMaxEv) full = false;
+    if (g_vg.events >= kVgMaxEvChico) { if (g_vg.events == kVgMaxEvChico) { VgLine("EVENTO (%s): tope de %d eventos guardados, no se guardan mas", what, kVgMaxEvChico); g_vg.events++; } return; }
+    const int n = ++g_vg.events; if (full) g_vg.eventsFull++;
+    struct { int n, tick; uint32_t ms; int ringCnt, ringEntry; char what[44]; } h{};
+    h.n = n; h.tick = g_vg.tick; h.ms = (uint32_t)GetTickCount(); h.ringCnt = full ? g_vg.ringCnt : 0; h.ringEntry = (int)sizeof(VgRing); strncpy(h.what, what, sizeof h.what - 1);
+    VgChunk("EVNT", &h, sizeof h);
+    if (full) { VgBin("RING", 4); uint32_t sz = (uint32_t)(sizeof(VgRing) * g_vg.ringCnt); VgBin(&sz, 4); }
+    if (full) for (int i = 0; i < g_vg.ringCnt; i++) VgBin(&g_vg.ring[(g_vg.ringPos - g_vg.ringCnt + i + 2 * kVgRingN) % kVgRingN], sizeof(VgRing));
+    const uintptr_t judge = (ji >= 0 && ji < g_vg.nj) ? g_vg.j[ji].a : VgAnyJudge();
+    static unsigned char buf[0x1B00];
+    if (judge) {
+        Rd((const void*)judge, buf, 0x3f0); VgChunk("JUEZ", buf, 0x3f0);
+        const uintptr_t blk = RdPtr(judge + 0x3c0);
+        if (blk) { static unsigned char b2[0xd10]; Rd((const void*)blk, b2, sizeof b2); VgChunk("BLOQ", b2, sizeof b2); }
+        if (const uintptr_t w = VgWorld(judge)) {
+            Rd((const void*)(w + 0x24600), buf, 0x1B00); VgChunk("MUND", buf, 0x1B00);
+            unsigned m[8] = {}; Rd((const void*)(w + 0x253c4), m, sizeof m);
+            VgLine("EVENTO %d mundo %p: mascaras adelantados equipo0 %x %x %x %x | equipo1 %x %x %x %x", n, (void*)w, m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7]);
+        }
+    }
+    if (full) { VgFoto("FOTO"); g_vg.fotoAt = g_vg.tick + 60; }
+    VgLine(full ? "EVENTO %d guardado (%s): %d ticks anteriores + foto del registro" : "EVENTO %d guardado (%s)", n, what, g_vg.ringCnt);
+    fflush(g_vg.bin); fflush(g_vg.log);
+    Log("vigia: evento %d (%s) en el tick %d", n, what, g_vg.tick);
+}
+void VgBlockLine(const char* name, int idx, const unsigned char* b) {
+    char hx[260], nm[16]; VgHex(hx, sizeof hx, b, 0x70);
+    if (idx < 0) snprintf(nm, sizeof nm, "%s", name); else snprintf(nm, sizeof nm, "%s%d", name, idx);
+    VgLine("%s estado=%d pos=(%.2f %.2f %.2f) motivo=%d tipo_falta=%d clase=%d infractor=%d victima=%d | %s", nm,
+        VgI(b, 0), VgF(b, 8), VgF(b, 0xc), VgF(b, 0x10), VgI(b, 0x20), VgI(b, 0x34), VgI(b, 0x38), VgI(b, 0x3c), VgI(b, 0x40), hx);
+}
+void VgPend(char* out, size_t cap, const unsigned char* j, int o) {   // pendiente en juez+o (0x14 o 0x58), forma de FUN_14050f7f0
+    snprintf(out, cap, "{infractor=%d victima=%d cursor=%d %d detencion=%d tipo=%d %d pos=(%.2f %.2f %.2f)}",
+        VgI(j, o), VgI(j, o + 4), VgI(j, o + 8), VgI(j, o + 0xc), VgI(j, o + 0x10), VgI(j, o + 0x14), VgI(j, o + 0x18), VgF(j, o + 0x20), VgF(j, o + 0x24), VgF(j, o + 0x28));
+}
+bool VgStep() {
+    const uintptr_t reg = RdPtr(kRegGlobal);
+    if (!reg) {
+        if (g_vg.reg) { VgLine("fin del partido (registro en 0)"); if (g_vg.log) fflush(g_vg.log); }
+        g_vg.reg = 0; g_vg.nj = 0; g_vg.scanning = false; g_vg.hmi = false; g_vg.lastTick = -1; g_vg.ringCnt = 0; g_vg.scans = 0; g_vg.fotoAt = -1;
+        return false;
+    }
+    const ULONGLONG now = GetTickCount64();
+    if (reg != g_vg.reg) {
+        if (!VgOpen()) return false;
+        g_vg.reg = reg; g_vg.nj = 0; g_vg.hmi = false; g_vg.lastTick = -1; g_vg.ringCnt = 0; g_vg.fotoAt = -1;
+        g_vg.scanning = true; g_vg.scanNext = 0x10000; g_vg.scanT = now; g_vg.scans = 1; g_vg.scanBytes = 0;
+        VgLine("partido nuevo: registro %p; buscando al juez", (void*)reg);
+    }
+    const uintptr_t mi = RdPtr(reg + 0x270);
+    if (!mi) return true;
+    int tick = -1; Rd((const void*)(mi + 0x1198), &tick, 4); g_vg.tick = tick;
+    // jueces: validar, buscar
+    for (int i = 0; i < g_vg.nj; i++) if (RdPtr(g_vg.j[i].a) != kJudgeVt) {
+        VgLine("JUEZ%d ya no esta en %p", i, (void*)g_vg.j[i].a);
+        for (int k = i; k + 1 < g_vg.nj; k++) g_vg.j[k] = g_vg.j[k + 1];
+        g_vg.nj--; i--;
+    }
+    if (g_vg.scanning) VgScanStep();
+    else if (g_vg.nj == 0 && g_vg.scans < 4 && now - g_vg.scanT > 20000) { g_vg.scanning = true; g_vg.scanNext = 0x10000; g_vg.scanT = now; g_vg.scans++; g_vg.scanBytes = 0; }
+    // MatchInfo
+    unsigned char cur[0x70];
+    if (Rd((const void*)(mi + 0x1554), cur, sizeof cur)) {
+        if (!g_vg.hmi || memcmp(cur, g_vg.mi, sizeof cur) != 0) {
+            const int was = g_vg.hmi ? VgI(g_vg.mi, 0x34) : 0;
+            VgBlockLine("MI", -1, cur);
+            const bool first = !g_vg.hmi; memcpy(g_vg.mi, cur, sizeof cur); g_vg.hmi = true;
+            if (!first && VgI(cur, 0x34) != 0 && VgI(cur, 0x34) != was) VgEvent(VgI(cur, 0x34) == 1 ? "MatchInfo: tipo de falta 1 (offside)" : "MatchInfo: tipo de falta distinto de 0", -1, VgI(cur, 0x34) == 1);
+        }
+    }
+    for (int i = 0; i < g_vg.nj; i++) {
+        VgJudge& j = g_vg.j[i];
+        if (!j.strong && RdPtr(j.a + 0x3c0) == j.a + kJudgeBlk) { j.strong = true; VgLine("JUEZ%d ahora apunta a su bloque propio", i); }
+        unsigned char jg[0xa8];
+        if (Rd((const void*)j.a, jg, sizeof jg)) {
+            // +0xc y +0x10 son esperas que bajan cada tick: no cuentan como cambio
+            const bool ch = !j.hj || jg[8] != j.jg[8] || memcmp(jg + 0x14, j.jg + 0x14, sizeof jg - 0x14) != 0;
+            if (ch) {
+                char a[200], b[200], hx[400]; VgPend(a, sizeof a, jg, 0x14); VgPend(b, sizeof b, jg, 0x58); VgHex(hx, sizeof hx, jg + 8, 0xa0);
+                VgLine("JUEZ%d pendiente=%d espera=%d cuenta=%d A%s B%s ultimo=%d | %s", i, jg[8], VgI(jg, 0xc), VgI(jg, 0x10), a, b, VgI(jg, 0xa0), hx);
+                const bool nuevo = j.hj && jg[8] && (!j.jg[8] || VgI(jg, 0x14) != VgI(j.jg, 0x14) || VgI(jg, 0x28) != VgI(j.jg, 0x28));
+                memcpy(j.jg, jg, sizeof jg); j.hj = true;
+                if (nuevo) VgEvent(VgI(jg, 0x28) == 1 ? "juez: pendiente nuevo tipo 1 (offside)" : "juez: pendiente nuevo", i, VgI(jg, 0x28) == 1);
+            } else { memcpy(j.jg + 0xc, jg + 0xc, 8); }
+        }
+        const uintptr_t blk = RdPtr(j.a + 0x3c0);
+        unsigned char bk[0x70];
+        if (blk && Rd((const void*)blk, bk, sizeof bk) && (!j.hb || memcmp(bk, j.bk, sizeof bk) != 0)) {
+            const int was = j.hb ? VgI(j.bk, 0x34) : 0; const bool first = !j.hb;
+            VgBlockLine("BLOQUE", i, bk); memcpy(j.bk, bk, sizeof bk); j.hb = true;
+            if (!first && VgI(bk, 0x34) != 0 && VgI(bk, 0x34) != was) VgEvent(VgI(bk, 0x34) == 1 ? "bloque del juez: tipo de falta 1 (offside)" : "bloque del juez: tipo de falta distinto de 0", i, false);
+        }
+    }
+    // anillo: una muestra por tick
+    if (tick != g_vg.lastTick && g_vg.ring) {
+        g_vg.lastTick = tick;
+        VgRing& r = g_vg.ring[g_vg.ringPos]; memset(&r, 0, sizeof r);
+        r.tick = tick; r.ms = (uint32_t)GetTickCount();
+        if (const uintptr_t ball = RdPtr(reg + 0x40)) Rd((const void*)ball, r.ball, sizeof r.ball);
+        for (int i = 0; i < 22; i++) if (const uintptr_t p = RdPtr(reg + 0x1dd8 + (uintptr_t)i * 0x28)) Rd((const void*)(p + 0x55c), r.pos[i], 12);
+        if (const uintptr_t jd = VgAnyJudge()) if (const uintptr_t w = VgWorld(jd)) Rd((const void*)(w + 0x24700), r.w, sizeof r.w);
+        g_vg.ringPos = (g_vg.ringPos + 1) % kVgRingN; if (g_vg.ringCnt < kVgRingN) g_vg.ringCnt++;
+        if (g_vg.fotoAt >= 0 && (tick >= g_vg.fotoAt || tick < g_vg.fotoAt - 600)) { g_vg.fotoAt = -1; VgFoto("FOT2"); fflush(g_vg.bin); }
+    }
+    return true;
+}
+bool VgStepSafe() {
+    if (g_vg.dead) return false;
+    __try { return VgStep(); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { if (++g_vg.faults > 50) { g_vg.dead = true; Log("vigia: demasiadas lecturas fallidas, apagado"); } return false; }
+}
+void VgFlush() { if (g_vg.log) fflush(g_vg.log); if (g_vg.bin) fflush(g_vg.bin); }
 
 // ---------------------------------------------------------------- config (PES21FX.ini)
 void LoadCfg() {
@@ -428,29 +483,14 @@ void LoadCfg() {
         if (k == "rastro") g_cfg.on = atoi(v.c_str()) != 0;
         else if (k == "rastro_max_mb") { int x = atoi(v.c_str()); g_cfg.maxMb = x < 10 ? 10 : (x > 100000 ? 100000 : x); }
         else if (k == "rastro_fotos") { int x = atoi(v.c_str()); g_cfg.fps = x < 1 ? 1 : (x > 54 ? 54 : x); }
-        else if (k == "rastro_faltas") g_cfg.falta = atoi(v.c_str()) != 0;
+        else if (k == "vigia") g_cfg.vigia = atoi(v.c_str()) != 0;
+        else if (k == "rastro_ganchos") g_cfg.ganchos = atoi(v.c_str()) != 0;
         else if (k == "rastro_motor") g_cfg.motor = atoi(v.c_str()) != 0;
         else if (k == "rastro_registro") g_cfg.registro = atoi(v.c_str()) != 0;
         else if (k == "rastro_anime") g_cfg.anime = atoi(v.c_str()) != 0;
         else if (k == "rastro_auto_seg") { int x = atoi(v.c_str()); g_cfg.autoSeg = x < 0 ? 0 : (x > 36000 ? 36000 : x); }
-        else if (k == "rastro_funcs_lote") { int x = atoi(v.c_str()); g_cfg.funcsLote = x < 1 ? 1 : (x > 2000 ? 2000 : x); }
-        else if (k == "rastro_funcs_espera") { int x = atoi(v.c_str()); g_cfg.funcsEspera = x < 0 ? 0 : (x > 3600 ? 3600 : x); }
-        else if (k == "rastro_funcs") {
-            const char* p = v.c_str();
-            while (*p) { char* e = nullptr; unsigned long long a = _strtoui64(p, &e, 16); if (e == p) break; if (a) g_cfg.funcs.push_back((uintptr_t)a); p = e; while (*p == ',' || *p == ' ' || *p == '\t') p++; }
-        }
     }
     fclose(f);
-    // lista larga de funciones: PES21FX\rastro_funcs.txt, una direccion hex por linea (lo que sigue a la direccion se ignora)
-    if (FILE* g = _wfopen((g_cfg.baseDir + L"rastro_funcs.txt").c_str(), L"rb")) {
-        while (fgets(buf, sizeof buf, g)) {
-            const char* p = buf; while (*p == ' ' || *p == '\t') p++;
-            if (*p == ';' || *p == '#') continue;
-            char* e = nullptr; unsigned long long a = _strtoui64(p, &e, 16);
-            if (e != p && a) g_cfg.funcs.push_back((uintptr_t)a);
-        }
-        fclose(g);
-    }
 }
 
 void WriteFormat() {
@@ -481,48 +521,33 @@ void Install() {
     if (s_log) { setvbuf(s_log, nullptr, _IOFBF, 1 << 20); fputs("cuadro\ttick\thilo\tmensaje\n", s_log); }
     if (s_csv) fputs("cuadro\ttick\tfase\ttipo\tlluvia\tentorno\tescala_tiempo\tsentido_local\tsentido_visita\tjugadores\n", s_csv);
     if (g_cfg.anime) { s_anm = _wfopen((s_dir + L"anime.log").c_str(), L"wb"); if (s_anm) fputs("cuadro\ttick\tjugador\tanim_id\ta2\ta3\ta4\n", s_anm); }
-    if (!g_cfg.funcs.empty()) { s_fn = _wfopen((s_dir + L"funcs.log").c_str(), L"wb"); if (s_fn) fputs("hora\ttick\thilo\tfuncion\targumentos\tllamada_desde\n", s_fn); }
     WriteFormat();
     { const MH_STATUS mi = MH_Initialize(); if (mi != MH_OK && mi != MH_ERROR_ALREADY_INITIALIZED) Log("rastro: MinHook no inicializo"); }
     bool logOk = false, relOk = false, motOk = false;
     if (g_cfg.motor && SigAt(kLogStub, kLogSig, sizeof kLogSig) && MH_CreateHook((void*)kLogStub, (void*)&hk_log, (void**)&o_log) == MH_OK && MH_EnableHook((void*)kLogStub) == MH_OK) logOk = true;
     if (g_cfg.registro && SigAt(kRegRelease, kRelSig, sizeof kRelSig) && MH_CreateHook((void*)kRegRelease, (void*)&hk_rel, (void**)&o_rel) == MH_OK && MH_EnableHook((void*)kRegRelease) == MH_OK) relOk = true;
     if (g_cfg.anime && MH_CreateHook((void*)kSetMotion, (void*)&hk_mot, (void**)&o_mot) == MH_OK && MH_EnableHook((void*)kSetMotion) == MH_OK) motOk = true;
-    bool mcOk = false;
-    if (g_cfg.falta && SigAt(kMcVf19, kMcSig, sizeof kMcSig)) {
-        s_falta = _wfopen((s_dir + L"falta.log").c_str(), L"wb");
-        if (s_falta) fputs("ms\ttick\tcampo\tvalor_nuevo\thilo\tinstruccion_que_escribe\tretornos\n", s_falta);
-        AddVectoredExceptionHandler(1, Veh);
-        mcOk = MH_CreateHook((void*)kMcVf19, (void*)&hk_vf19, (void**)&o_vf19) == MH_OK && MH_EnableHook((void*)kMcVf19) == MH_OK;
-    } else if (!g_cfg.funcs.empty()) {
-        AddVectoredExceptionHandler(1, Veh);
-    }
-    if (!g_cfg.funcs.empty()) ArmTrace();
     s_on = true;
     s_installed = true;
-    Log("rastro v4: motor %s, foto del partido %s (%u B/foto), animaciones %s, faltas %s, funcs %zu -> %ls (tope %llu MB)",
-        logOk ? "ok" : "NO", relOk ? "ok" : "NO", RecSize(), motOk ? "ok" : "no", !g_cfg.falta ? "apagado" : mcOk ? "ok" : "NO", g_cfg.funcs.size(), name, (unsigned long long)(s_cap >> 20));
+    Log("rastro v4 (ganchos viejos): motor %s, foto del partido %s (%u B/foto), animaciones %s -> %ls (tope %llu MB)",
+        logOk ? "ok" : "NO", relOk ? "ok" : "NO", RecSize(), motOk ? "ok" : "no", name, (unsigned long long)(s_cap >> 20));
 }
 void Flush(bool final) {
-    if (final && (s_trState.load() == 1 || s_trState.load() == 2)) TraceDisarm("cierre");
-    if (!s_on.load()) { TraceFlush(); return; }
+    VgFlush();
+    if (!s_on.load()) return;
     AcquireSRWLockExclusive(&s_lk);
     if (s_log) fflush(s_log); if (s_bin) fflush(s_bin); if (s_csv) fflush(s_csv); if (s_anm) fflush(s_anm);
-    FaltaFlush();
-    if (!final) { const uintptr_t mc = s_mc.load(); if (mc) { static ULONGLONG t = 0; ULONGLONG n = GetTickCount64(); if (n - t > 30000) { t = n; FaltaRequestArm(mc); } } }
     ReleaseSRWLockExclusive(&s_lk);
-    TraceFlush();
-    Log("rastro: %u mensajes (%u ERROR filtrados), %u fotos, %.1f MB, %u descartados, faltas %u, animaciones %u, funcs %u%s",
-        s_msgs.load(), s_skip.load(), s_snaps.load(), s_bytes.load() / 1048576.0, s_drop.load(), s_fhAll.load(), s_anime.load(), s_trHits.load(), final ? " (final)" : "");
+    Log("rastro: %u mensajes (%u ERROR filtrados), %u fotos, %.1f MB, %u descartados, animaciones %u%s",
+        s_msgs.load(), s_skip.load(), s_snaps.load(), s_bytes.load() / 1048576.0, s_drop.load(), s_anime.load(), final ? " (final)" : "");
 }
 
 // __try/__except aislado en su propia funcion (sin objetos C++ que requieran desenrollado): evita C2712
 static void SafeInstall() { __try { Install(); } __except (EXCEPTION_EXECUTE_HANDLER) {} }
 
-// (10/11 c) La DLL arranca APAGADA: no engancha nada durante la carga del juego (dos arranques se quedaron en la pantalla de
-// carga con los ganchos puestos). Se prende con Ctrl+Shift+F9 con el juego en primer plano (pitido grave-agudo), o sola a los
-// rastro_auto_seg segundos si es > 0. Ctrl+Shift+F10 deja una MARCA numerada con la hora en marcas.log (pitido corto), para
-// saber despues que estaba haciendo el jugador en cada momento.
+// (11/11) El vigia de offside anda SOLO desde que hay partido (solo lee memoria). Ctrl+Shift+F10 deja una MARCA numerada
+// (pitido corto) en vigia.log. Ctrl+Shift+F9 ya NO prende nada salvo que rastro_v4.ini diga rastro_ganchos = 1 (ganchos viejos:
+// motor.log, foto del partido, animaciones); prenderlos en un partido el 10/11 termino en un reinicio de la placa de video.
 static bool KeyCombo(int vk) {
     DWORD pid = 0; HWND fg = GetForegroundWindow(); if (fg) GetWindowThreadProcessId(fg, &pid);
     if (pid != GetCurrentProcessId()) return false;
@@ -531,39 +556,48 @@ static bool KeyCombo(int vk) {
 DWORD WINAPI Worker(void*) {
     LoadCfg();
     { CreateDirectoryW(g_cfg.baseDir.c_str(), nullptr); g_logf = _wfopen((g_cfg.baseDir + L"rastro_dll.log").c_str(), L"wb"); }
-    Log("rastro v4 (DLL de investigacion) cargada; rastro=%d; APAGADA hasta Ctrl+Shift+F9%s", g_cfg.on ? 1 : 0, g_cfg.autoSeg > 0 ? " o la espera de rastro_auto_seg" : "");
-    if (!g_cfg.on) return 0;
-    const ULONGLONG t0 = GetTickCount64();
-    while (!s_installed.load()) {   // nada enganchado todavia
-        Sleep(100);
-        const bool key = KeyCombo(VK_F9);
-        const bool autoOn = g_cfg.autoSeg > 0 && GetTickCount64() - t0 > (ULONGLONG)g_cfg.autoSeg * 1000;
-        if (!key && !autoOn) continue;
-        // (10/11 d) La tecla prende DONDE SEA (menu o partido). Antes pedia el registro del partido, que solo existe dentro de
-        // un partido: el Ctrl+Shift+F9 del menu daba el pitido grave y no prendia nada (sesion del 10/11 15:18). La espera
-        // automatica (rastro_auto_seg) si sigue aguardando a que haya partido.
-        if (!key && !RdPtr(kRegGlobal)) continue;
-        Log("rastro: prendiendo por %s (%s)", key ? "Ctrl+Shift+F9" : "rastro_auto_seg", RdPtr(kRegGlobal) ? "dentro de un partido" : "fuera de un partido");
-        SafeInstall();
-        if (s_installed.load()) { Beep(600, 120); Beep(1000, 160); }
-        else { Beep(300, 400); Log("rastro: no se pudo prender (ver lineas anteriores)"); return 0; }
+    g_cfg.vigia = g_cfg.vigia && g_cfg.on;   // sin rastro_v4.ini o con rastro = 0 no corre nada
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);   // nunca le saca tiempo al juego
+    const bool viejos = g_cfg.on && g_cfg.ganchos;
+    Log("rastro v4 cargado: vigia de offside %s (solo lectura, sin ganchos); ganchos viejos %s", g_cfg.vigia ? "PRENDIDO" : "apagado (vigia = 0)", viejos ? "disponibles con Ctrl+Shift+F9 (rastro_ganchos = 1)" : "apagados");
+    if (g_cfg.vigia) {   // las direcciones del vigia son de este exe exacto
+        HMODULE mod = GetModuleHandleW(nullptr);
+        auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
+        if ((uintptr_t)mod != kBase || nt->FileHeader.TimeDateStamp != kStamp) { Log("vigia: exe distinto (sello %08X): apagado", (unsigned)nt->FileHeader.TimeDateStamp); g_cfg.vigia = false; }
     }
-    FILE* marks = _wfopen((s_dir + L"marcas.log").c_str(), L"wb");
-    if (marks) { fputs("marca\thora\ttick\n", marks); fflush(marks); }
-    int nMark = 0; bool f10Was = false;
-    for (int i = 0; s_installed.load(); i++) {   // 100 ms: marcas, tandas del rastreador, guardian; volcado cada 5 s
-        Sleep(100);
-        const bool f10 = KeyCombo(VK_F10);
-        if (f10 && !f10Was) {
-            SYSTEMTIME lt; GetLocalTime(&lt); nMark++;
-            if (marks) { fprintf(marks, "%d\t%02d:%02d:%02d.%03d\t%d\n", nMark, lt.wHour, lt.wMinute, lt.wSecond, lt.wMilliseconds, s_tick.load()); fflush(marks); }
-            Log("rastro: MARCA %d", nMark); Beep(1400, 70);
+    if (!g_cfg.vigia && !viejos) return 0;
+    const ULONGLONG t0 = GetTickCount64(); ULONGLONG tKey = t0, tFlush = t0;
+    FILE* marks = nullptr; int nMark = 0; bool f10Was = false, f9Was = false;
+    for (;;) {
+        const bool inMatch = g_cfg.vigia && VgStepSafe();
+        Sleep(inMatch ? 2 : 100);
+        const ULONGLONG now = GetTickCount64();
+        if (now - tKey >= 100) {
+            tKey = now;
+            const bool f9 = KeyCombo(VK_F9), f10 = KeyCombo(VK_F10);
+            if (f9 && !f9Was && !viejos) Log("rastro: Ctrl+Shift+F9 no hace nada: los ganchos viejos estan apagados. El vigia de offside anda solo.");
+            if (viejos && !s_tried.load()) {
+                const bool autoOn = g_cfg.autoSeg > 0 && now - t0 > (ULONGLONG)g_cfg.autoSeg * 1000 && RdPtr(kRegGlobal);
+                if ((f9 && !f9Was) || autoOn) {
+                    Log("rastro: prendiendo los ganchos viejos por %s (%s)", autoOn ? "rastro_auto_seg" : "Ctrl+Shift+F9", RdPtr(kRegGlobal) ? "dentro de un partido" : "fuera de un partido");
+                    SafeInstall();
+                    if (s_installed.load()) {
+                        Beep(600, 120); Beep(1000, 160);
+                        marks = _wfopen((s_dir + L"marcas.log").c_str(), L"wb");
+                        if (marks) { fputs("marca\thora\ttick\n", marks); fflush(marks); }
+                    } else { Beep(300, 400); Log("rastro: no se pudieron prender los ganchos viejos (ver lineas anteriores)"); }
+                }
+            }
+            if (f10 && !f10Was) {
+                SYSTEMTIME lt; GetLocalTime(&lt); nMark++;
+                if (marks) { fprintf(marks, "%d\t%02d:%02d:%02d.%03d\t%d\n", nMark, lt.wHour, lt.wMinute, lt.wSecond, lt.wMilliseconds, s_tick.load()); fflush(marks); }
+                VgLine("MARCA %d (Ctrl+Shift+F10)", nMark);
+                Log("rastro: MARCA %d", nMark); Beep(1400, 70);
+            }
+            f9Was = f9; f10Was = f10;
         }
-        f10Was = f10;
-        if ((i % 3) == 2) { TraceStep(); TraceWatch(); }
-        if ((i % 50) == 49) { s_frame.fetch_add(10, std::memory_order_relaxed); Flush(false); }
+        if (now - tFlush >= 5000) { tFlush = now; s_frame.fetch_add(10, std::memory_order_relaxed); Flush(false); }
     }
-    return 0;
 }
 
 } // namespace

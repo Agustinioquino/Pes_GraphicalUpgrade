@@ -319,7 +319,9 @@ void main(
                          pesVeins.SampleBias(g_samplerLinear_Clamp_s, v2.xy - float2(0.0, jd.y), bBN).w) - 0.5;
       float4 jh = (kb * max(jw, 0.0) + kf * max(-jw, 0.0)) * (2.0 * 2.0);   // profundidad (texeles, KQ = 2 en joint_skin.py) con la pose;
       // la pendiente del marco tangente: +x con +u, +y con -v (medido en el horneado)
-      float2 js = float2((jh.x - jh.y), -(jh.z - jh.w)) * (0.5 * 1.8);
+      // (10/11) con los signos reales del marco tangente (PesTanSigns): antes fijo T = +u, B = -v (el pliegue del codo salia al reves donde no)
+      float2 jTS = PesTanSigns(v4.xyz, v5.xyz, v3.xyz, hpDUx, hpDUy);
+      float2 js = float2((jh.x - jh.y) * jTS.x, (jh.z - jh.w) * jTS.y) * (0.5 * 1.8);
       r2.xy += clamp(js, -0.45, 0.45);
       float l2 = dot(r2.xy, r2.xy); if (l2 > 0.94) r2.xy *= rsqrt(l2 / 0.94);
       jsCav = saturate(0.25 * dot(jh, float4(1, 1, 1, 1)) / (2.0 * 2.0) * 2.2);   // fondo del pliegue: mas oscuro
@@ -345,7 +347,7 @@ void main(
       // (08/11) pierna: tension de cada grupo (pes_limbs.hlsli PesLegAct) en v1.y = 2 + (cuadriceps + 8 isquios + 64 gemelo) / 1024
       float na = round((v1.y - 2.0) * 1024.0);
       float3 lact = (lrK == 2 && v1.y > 1.99 && v1.y < 2.6) ? saturate(float3(fmod(na, 8.0), fmod(floor(na / 8.0), 8.0), floor(na / 64.0)) / 7.0) : float3(0.3, 0.3, 0.3);
-      float2 lc = PesLimbRelief(lrK, pR.xyz, la, lact, hpDPx, hpDPy, hpDUx, hpDUy, lrGain, r2.xy);
+      float2 lc = PesLimbRelief(lrK, pR.xyz, la, lact, hpDPx, hpDPy, hpDUx, hpDUy, lrGain, r2.xy, PesTanSigns(v4.xyz, v5.xyz, v3.xyz, hpDUx, hpDUy));
       lrCav = lc.x * (lrK == 1 ? 0.5 : 1.0); lrCr = lc.y;   // (08/11 n) la mano: fondo de los surcos la mitad de oscuro
       if (lrK == 2) lrTense = PesLegTense(float3(abs(pR.x), pR.y, pR.z), lact) * saturate(lrGain);
     }
