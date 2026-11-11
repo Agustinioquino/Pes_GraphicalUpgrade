@@ -548,13 +548,15 @@ void MatchWind(const MatchInfo& m, unsigned long long seed) {
 // (08/11) vistas de depuracion: Agustin: "opciones de diagnostico y debug de opciones avanzadas, sombras, efectos". Se juntan aca
 // para que (1) nunca se guarden ni arranquen prendidas, (2) "Apagar todo el debug" las apague de una y (3) la prueba automatica
 // fotografie cada vista. minOn = desde que valor (absoluto) es depuracion; safe = valor al apagarla (z314: 2 = depuracion, 1 = normal prendido)
-static const float kV12[] = { 2, 3, 4, 5, 6, 7, -3 }, kV380[] = { 1, 2, 3, 4, 5 }, kV107[] = { 1, 2, 3, 4 }, kV75[] = { 1, 2 }, kV27[] = { 1, 2 }, kV1[] = { 1 }, kV2[] = { 2 };
+static const float kV12[] = { 2, 3, 4, 5, 6, 7, -3 }, kV380[] = { 1, 2, 3, 4, 5 }, kV107[] = { 1, 2, 3, 4 }, kV75[] = { 1, 2 }, kV27[] = { 1, 2 }, kV1[] = { 1 }, kV2[] = { 2 }, kV429[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
 static const DebugParam kDebugParams[] = {
     { 12, 3, 0.5f, 0.0f, "Vista de diagnostico (rebote, sol y piel, contacto, nubes, cascadas, sombra, resolucion)", "Diagnostico", kV12, 7 },
     { 380, 3, 0.5f, 0.0f, "Vista de prueba de la luz del editor", "Editor", kV380, 5 },
     { 393, 0, 0.5f, 0.0f, "Pasto del mod bajo el jugador (editor, experimento)", "Editor", kV1, 1 },
     { 392, 0, 0.5f, 0.0f, "Menus del juego ocultos (vista completa del editor)", "Editor", kV1, 1 },
     { 426, 0, 0.5f, 0.0f, "Esqueleto: huesos en escena", "Diagnostico", kV1, 1 },   // (09/11 f) overlay.cpp DrawSkeletonView
+    { 429, 0, 0.5f, 0.0f, "Vista del motor (luz, normales, albedo, profundidad, oclusion, sombra, material)", "Diagnostico", kV429, 10 },   // (11/11 3icxbh) pes_vista_motor.hlsli
+    { 429, 1, 0.5f, 0.0f, "Vista del motor: alambre", "Diagnostico", kV1, 1 },   // (11/11 3icxbh) motorlink.cpp
     { 18, 2, 0.5f, 0.0f, "Zonas de la boca (dientes / encia / cavidad)", "Boca", kV1, 1 },
     { 27, 2, 0.5f, 0.0f, "Transpiracion: zonas / UV", "Piel", kV27, 2 },
     { 80, 0, 0.5f, 0.0f, "Arrugas de la ropa: compresion", "Ropa", kV1, 1 },
