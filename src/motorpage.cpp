@@ -7,7 +7,7 @@
 //    una lista nativa (MenuEditCmnSettingList) con el visor 3D al lado.
 //  - Todas las paginas del Editar nacen en 0x140a977d0(clave, nombre del nodo, bandera). Gancho ahi: si la pagina recien
 //    creada es la de Apariencia y el nodo es uno de los del Motor, se le cambia la tabla de funciones por una COPIA con
-//    siete ranuras propias. La pagina de Apariencia de verdad (Editar > Jugadores) no se toca.
+//    ocho ranuras propias. La pagina de Apariencia de verdad (Editar > Jugadores) no se toca.
 //  - Con eso las filas pasan a ser las del Motor (lista nativa: mismo dibujo, sonido, cursor, mouse y control del juego):
 //    "Vista", "Alambre" y "Pantalla partida", cada una con el selector nativo de izquierda / derecha. Cambiar una fila
 //    escribe la fila 429 (la misma que usan el menu de PES21FX y el panel de Sider).
@@ -16,7 +16,12 @@
 //    el juego con su maniqui (0x140ce8ef0): mismo hilo, mismo momento, sin Lua en el medio (la 0.6 del modulo se colgaba
 //    por llamarla desde Lua). Equipo: el del ultimo jugador que se vio en el Editar si es el mismo; si no, "sin equipo"
 //    (0xfffcc000), el valor que usa el propio juego.
-//  - El boton "restablecer apariencia" de esa pagina (accion 3, escribe datos del jugador) queda anulado en la copia.
+//  - El boton "restablecer apariencia" de esa pagina (accion 3, escribe datos del jugador) queda anulado en la copia, y tambien
+//    el "aceptar" de la pagina (mandaba el evento de la fila al flujo: salir a Cara / Peinado / Fisico).
+//  - Segunda lectura (22:40): el nombre que recibe la fabrica es el del nodo del flujo (nodo+0x38; 0x141fb1f80 -> "menu" ->
+//    0x140a958e0); la pagina de Apariencia solo esta en la tabla del Editar (0x14266b620, entrada 75); aceptar sobre una fila
+//    con selector no hace nada en el juego (0x140e3daa0), la opcion se cambia con izquierda / derecha (0x140e3c770), que avisa
+//    por la ranura 63; con el mouse, el clic sobre el selector lo convierte menumouse.cpp en "derecha".
 // Nada se escribe en el exe. [PES21FX] motor_pagina = 0 deja la pagina como antes; motor_vestir = 0 no viste.
 #include "core.h"
 #include <MinHook.h>
@@ -53,7 +58,6 @@ typedef void (*PFN_SelClear)(void* sel);                                    // 0
 typedef void (*PFN_SelAdd)(void* sel, const char* text);                    // 0x140e53ee0
 typedef void (*PFN_SelSet)(void* sel, unsigned i);                          // 0x140e54180
 typedef void (*PFN_Headline)(void* node, const char* text);                 // 0x140e56ca0
-typedef char (*PFN_LeftRight)(void* page, int dir, char wrap);              // 0x140e3c770
 typedef void* (*PFN_GetMv)();                                               // 0x141f05cd0
 typedef void (*PFN_MvHold)(void* mv, char on, void*, void*);                // 0x141f06e10
 typedef uintptr_t (*PFN_Dress)(void* mv, uint64_t key, uint32_t team, uint32_t a, uint32_t gk, uint32_t kit, uint8_t b);   // 0x141f06920
@@ -66,7 +70,6 @@ static const PFN_SelClear g_SelClear = (PFN_SelClear)0x140e54140ull;
 static const PFN_SelAdd g_SelAdd = (PFN_SelAdd)0x140e53ee0ull;
 static const PFN_SelSet g_SelSet = (PFN_SelSet)0x140e54180ull;
 static const PFN_Headline g_Headline = (PFN_Headline)0x140e56ca0ull;
-static const PFN_LeftRight g_LeftRight = (PFN_LeftRight)0x140e3c770ull;
 static const PFN_GetMv g_GetMv = (PFN_GetMv)0x141f05cd0ull;
 static const PFN_MvHold g_MvHold = (PFN_MvHold)0x141f06e10ull;
 static const PFN_Dress g_Dress = (PFN_Dress)0x141f06920ull;
@@ -88,6 +91,11 @@ static inline bool Ptr(const void* p) { const uintptr_t a = (uintptr_t)p; return
 static inline uint32_t U32(const uint8_t* p) { uint32_t v; memcpy(&v, p, 4); return v; }
 static inline uint64_t U64(const uint8_t* p) { uint64_t v; memcpy(&v, p, 8); return v; }
 static inline uint8_t* P8(const uint8_t* p) { uint8_t* v; memcpy(&v, p, 8); return v; }
+static bool Writable(const void* p, size_t n) {
+    MEMORY_BASIC_INFORMATION mi{};
+    if (!p || !VirtualQuery(p, &mi, sizeof mi) || mi.State != MEM_COMMIT || (mi.Protect & 0xff) != PAGE_READWRITE) return false;
+    return (uintptr_t)p + n <= (uintptr_t)mi.BaseAddress + mi.RegionSize;
+}
 
 // std::string del juego (MSVC): 16 bytes en linea o puntero, largo en +0x10, capacidad en +0x18
 static bool GameStr(const void* s, char* out, size_t n) {
@@ -130,22 +138,43 @@ static unsigned my_Count(void*) { return (unsigned)kNFilas; }
 // ranuras 85 / 86: el texto de cada fila es literal (sin numero de texto del juego)
 static int my_RowTextId(void*, unsigned) { return -1; }
 static const char* my_RowText(void*, unsigned row) { return row < (unsigned)kNFilas ? kFilas[row].nombre : ""; }
-// ranura 52: "restablecer apariencia" (escribe datos del jugador): no en el Motor
+// ranura 52: "restablecer apariencia" (escribe datos del jugador): no en el Motor. Ranura 49: aceptar de la pagina (mandaba el
+// evento de la fila al flujo). Sobre una fila con selector el juego ni la llama; queda anulada por si no hay fila elegida
 static void my_Nop(void*) {}
 
-// ranura 76: arma las filas. Primero la funcion de la pagina (deja el visor, los botones de ayuda y el contexto como siempre) y
-// despues las filas del Motor encima
+// ranura 76: arma las filas. Primero corre la funcion de la pagina (deja el titulo con el escudo, los botones de ayuda y devuelve
+// "listo" como siempre) y despues se ponen las filas del Motor.
+// La funcion de la pagina (0x140c08e70) recorre su lista de filas (vector de u32 en +0x120..+0x128: 0 cara, 1 peinado, 2 fisico,
+// 3 ...) y a cada una le pone texto por numero, evento "0_Face"... y apagado segun el jugador; al final fija la cantidad. Mientras
+// corre se le deja una lista de kNFilas entradas con un valor que no conoce (>= 4): asi solo crea las filas vacias y fija la
+// cantidad en kNFilas. La lista se restaura apenas vuelve. Si la lista no es la esperada no se toca y las filas se corrigen despues.
 static uintptr_t my_Build(void* page) {
+    uint8_t* pg = (uint8_t*)page;
+    uint32_t* vb = (uint32_t*)P8(pg + 0x120); uint32_t* ve = (uint32_t*)P8(pg + 0x128);
+    uint32_t saved[17] = {}; size_t n = 0; bool tamper = false;
+    if (Ptr(vb) && ve > vb && (((uintptr_t)ve - (uintptr_t)vb) & 3) == 0 && (uintptr_t)ve - (uintptr_t)vb <= 17 * 4) {
+        n = (size_t)(ve - vb);
+        if (n >= (size_t)kNFilas && n <= 17 && Writable(vb, n * 4)) {
+            bool sane = true; for (size_t i = 0; i < n; i++) if (vb[i] >= 16) sane = false;
+            if (sane) {
+                memcpy(saved, vb, n * 4);
+                for (int i = 0; i < kNFilas; i++) vb[i] = 0xff;
+                uint32_t* cut = vb + kNFilas; memcpy(pg + 0x128, &cut, 8);
+                tamper = true;
+            }
+        }
+    }
     const uintptr_t ret = o_build(page);
-    uint8_t* I = P8((uint8_t*)page + 0x88);
+    if (tamper) { memcpy(vb, saved, n * 4); memcpy(pg + 0x128, &ve, 8); }
+    uint8_t* I = P8(pg + 0x88);
     uint8_t* root = Ptr(I) ? P8(I + 0x98) : nullptr;
     void* list = Ptr(root) ? g_Child(root, 0) : nullptr;
     const int k = s_nPages.load(std::memory_order_relaxed);
     if (!Ptr(list)) { if (k <= 6) Log("motor (pagina): sin lista de filas en la pagina %p: quedan las filas de Apariencia", page); return ret; }
-    g_SetCount(page, (unsigned)kNFilas);
+    if (!tamper) g_SetCount(page, (unsigned)kNFilas);
     int hechas = 0;
     for (int i = 0; i < kNFilas; i++) {
-        g_RowType(page, 1, (unsigned)i, 0);                              // 1 = fila con selector
+        g_RowType(page, 1, (unsigned)i, 0);                              // 1 = fila con selector (clase de control 0), como 0x140c079e0
         void* row = g_Child(list, (unsigned)i);
         if (!Ptr(row)) continue;
         g_NodeOn(row, 1, 1, 2);                                          // la pagina apaga algunas (cara / peinado de caras reales)
@@ -160,11 +189,12 @@ static uintptr_t my_Build(void* page) {
     uint8_t* top = Ptr(I) ? P8(I + 0x90) : nullptr;
     void* head = Ptr(top) ? Sub(top, "headline") : nullptr;
     if (Ptr(head)) g_Headline(head, "Motor en tiempo real");
-    if (k <= 6) Log("motor (pagina): filas del Motor puestas en la pagina %p (%d de %d con selector; titulo %s)", page, hechas, kNFilas, Ptr(head) ? "puesto" : "sin nodo");
+    if (k <= 6) Log("motor (pagina): filas del Motor puestas en la pagina %p (%d de %d con selector; lista de la pagina %s, %d entradas; titulo %s)",
+                    page, hechas, kNFilas, tamper ? "apartada mientras armaba" : "sin tocar", (int)n, Ptr(head) ? "puesto" : "sin nodo");
     return ret;
 }
 
-// ranura 63: el juego cambio el valor de una fila (izquierda / derecha, o aceptar)
+// ranura 63: el juego cambio el valor de una fila (izquierda / derecha; 0x140e3c770 la llama con grupo, fila y opcion nueva)
 static void my_Value(void*, int group, int row, int value) {
     if (group != 0 || row < 0 || row >= kNFilas) return;
     const int v = std::clamp(value, 0, kFilas[row].n - 1);
@@ -176,10 +206,6 @@ static void my_Value(void*, int group, int row, int value) {
     }
     static int n = 0; if (n++ < 40) Log("motor (pagina): %s -> %s", kFilas[row].nombre, kFilas[row].op[v]);
 }
-
-// ranura 49: aceptar sobre una fila. En Apariencia mandaba el evento de la fila al flujo (salir a otra pagina); aca pasa a la
-// opcion siguiente, como la flecha derecha (con el mouse: clic sobre la fila)
-static void my_Accept(void* page) { g_LeftRight(page, 1, 1); }
 
 // ranura 75: la pagina espera al visor 3D y le pide el modelo. Justo antes se viste al visor (equipo + camiseta), con las mismas
 // guardas que usa el juego para su maniqui
@@ -212,7 +238,7 @@ static void* hk_Factory(void* key, void* name, void* flag) {
             if ((uint32_t)(k >> 32) != 0 && (uint16_t)k != 0xffff && t != bad && t != 0xffffffffu) { s_seenKey = k; s_seenTeam = t; }
         }
     }
-    if (!page || !g_cfg.motorPage || !Readable(page, 0x130) || *(uintptr_t*)page != kVtApp) return page;
+    if (!page || !g_cfg.motorPage || !Readable(page, 0x138) || *(uintptr_t*)page != kVtApp) return page;
     char nm[96];
     const bool okName = GameStr(name, nm, sizeof nm);
     const int k = s_nPages.fetch_add(1, std::memory_order_relaxed);
@@ -239,7 +265,7 @@ void MotorPagePresent() {
     for (const auto& e : kExpect) if ((uintptr_t)vt[e.slot] != e.fn) { Log("motor (pagina): la ranura %d de la tabla no es la esperada (%p): se omite", e.slot, vt[e.slot]); return; }
     memcpy(s_vt, vt - 1, sizeof(void*) * (kSlots + 1));
     o_build = (PFN_Page)vt[76]; o_ready = (PFN_Page)vt[75];
-    s_vt[1 + 49] = (void*)&my_Accept; s_vt[1 + 52] = (void*)&my_Nop; s_vt[1 + 63] = (void*)&my_Value; s_vt[1 + 75] = (void*)&my_Ready;
+    s_vt[1 + 49] = (void*)&my_Nop; s_vt[1 + 52] = (void*)&my_Nop; s_vt[1 + 63] = (void*)&my_Value; s_vt[1 + 75] = (void*)&my_Ready;
     s_vt[1 + 76] = (void*)&my_Build; s_vt[1 + 78] = (void*)&my_Count; s_vt[1 + 85] = (void*)&my_RowTextId; s_vt[1 + 86] = (void*)&my_RowText;
     if (MH_CreateHook((void*)kFactory, (void*)&hk_Factory, (void**)&o_factory) != MH_OK || MH_EnableHook((void*)kFactory) != MH_OK) {
         MH_RemoveHook((void*)kFactory); Log("motor (pagina): MinHook no pudo poner el gancho en 0x140a977d0: se omite"); return;

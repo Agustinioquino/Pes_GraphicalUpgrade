@@ -20,6 +20,8 @@
 //     una fila debajo, la selecciona con la funcion del juego (0x140e42300). Si no hay fila debajo no toca nada.
 //  2) 0x140e3e6b0: la rueda pasa a ser "arriba" / "abajo" (el juego mueve la seleccion, con su sonido).
 //  3) 0x140e48f80: clic izquierdo sobre la fila seleccionada = accion 0 (aceptar); clic derecho = accion 1 (volver).
+//  (v3) clic izquierdo sobre una fila con selector de opciones = "derecha" (o "izquierda" en la mitad izquierda del selector), por el
+//     gancho 2: el juego cambia la opcion con su propia funcion (0x140e3c770), su sonido y sus avisos a la pagina.
 // No escribe nada en el exe ni en los datos del menu. [PES21FX] mouse_menus = 0 lo apaga (los ganchos quedan pasando de largo).
 #include "core.h"
 #include <MinHook.h>
@@ -52,22 +54,25 @@ typedef char (*PFN_Action)(void*, void*, int);
 typedef void (*PFN_Select)(void*, int, long long);
 typedef void* (*PFN_Scroll)(void*, int);
 typedef int (*PFN_NodeVec2)(void*, float*);
+typedef uint8_t* (*PFN_ChildByType)(void* sub, int type, int idx);   // 0x140e4f5d0: hijo de un nodo por tipo (2 = selector)
+static const uintptr_t kChildByType = 0x140e4f5d0ull;
 static PFN_Hover o_hover = nullptr; static PFN_Dirs o_dirs = nullptr; static PFN_Action o_action = nullptr;
 
 static bool s_tried = false, s_ok = false;
 // estado del hilo del menu (los tres ganchos corren ahi)
 static void* s_pendWin = nullptr; static int s_pendAction = -1;
+static void* s_pendDxWin = nullptr; static int s_pendDx = 0;              // (v3) clic sobre una fila con selector: "derecha" / "izquierda" para el juego
 static POINT s_last = { -32000, -32000 }; static bool s_lWas = false, s_rWas = false; static double s_stepT = 0;
 static int s_wheelAcc = 0;
 // una muestra del mouse por tanda de ventanas (varias ventanas pueden pedir entrada en el mismo paso del menu)
 struct Muestra { double t = 0; POINT p{}; float cw = 0, ch = 0; bool ok = false, moved = false, lEdge = false, rEdge = false; };
 static Muestra s_m;
 static void* s_rGiven[8] = {}; static int s_rN = 0;                       // ventanas que ya recibieron este clic derecho
-static void* s_latchWin = nullptr; static int s_latchG = -1, s_latchR = -1; static double s_latchT = 0;   // clic que tuvo que elegir la fila: acepta en el paso siguiente
+static void* s_latchWin = nullptr; static int s_latchG = -1, s_latchR = -1, s_latchDir = 0; static double s_latchT = 0;   // clic que tuvo que elegir la fila: acepta en el paso siguiente
 // compartido con el hilo de Present / la ventana
 static std::atomic<int> s_wheel{0};
 static std::atomic<int> s_curX{0}, s_curY{0}; static std::atomic<double> s_moveT{0}, s_liveT{0};
-static std::atomic<int> s_nSel{0}, s_nClick{0}, s_nBack{0}, s_nWheel{0}, s_nStep{0}, s_nNear{0};
+static std::atomic<int> s_nSel{0}, s_nClick{0}, s_nBack{0}, s_nWheel{0}, s_nStep{0}, s_nNear{0}, s_nOpt{0};
 
 static bool Readable(const void* p, size_t n) {
     MEMORY_BASIC_INFORMATION mi{};
@@ -138,9 +143,10 @@ static bool HitTest(uint8_t* I, float mx, float my, Hit& out) {
     return false;
 }
 
-// lo mismo que el final de 0x140e400d0: si el grupo esta en el vector se suma el desplazamiento de su lista
-static void SelectLikeGame(void* win, uint8_t* I, int g, int r) {
-    long long row = r;
+// lo mismo que el final de 0x140e400d0: si el grupo esta en el vector se suma el desplazamiento de su lista. Devuelve el numero de
+// fila que el juego guarda en Impl+0xd8 para la fila dibujada r del grupo g
+static int AbsRow(void* win, uint8_t* I, int g, int r) {
+    int row = r;
     uint8_t* vb = P8(I + 0xa8); uint8_t* ve = P8(I + 0xb0);
     if (vb != ve && Ptr(vb) && ve > vb && (size_t)(ve - vb) <= 0x18 * 256)
         for (uint8_t* e = vb; e + 0x18 <= ve; e += 0x18) if ((int)U32(e) == g) {
@@ -148,7 +154,31 @@ static void SelectLikeGame(void* win, uint8_t* I, int g, int r) {
             if (Ptr(s)) row += (int)U32(s + 0xc0);
             break;
         }
-    ((PFN_Select)kSelect)(win, g, row);
+    return row;
+}
+static void SelectLikeGame(void* win, int g, int absRow) { ((PFN_Select)kSelect)(win, g, (long long)absRow); }
+
+// (v3) fila con selector de opciones. En el juego "aceptar" sobre una de esas filas no hace nada (0x140e3c660 -> 0x140e3daa0 lo da
+// por atendido) y la opcion se cambia con izquierda / derecha (0x140e3c770). Con el mouse: el clic pasa a ser "derecha", o "izquierda"
+// si cae en la mitad izquierda del selector. Aca solo se mira lo mismo que mira 0x140e3c770: clase de control 0 o 9 de la fila
+// actual (vector Impl+0xe0, 12 bytes {clase, grupo, fila}) y un hijo de tipo 2 visible y activo. Devuelve +1 / -1, o 0 si no hay selector
+static int SelectorDir(uint8_t* I, const Hit& hit, float mx) {
+    const int g = (int)U32(I + 0xa0), r = (int)U32(I + 0xd8);
+    uint8_t* kb = P8(I + 0xe0); uint8_t* ke = P8(I + 0xe8); int kind = -1;
+    if (kb == ke || !Ptr(kb) || ke < kb || (size_t)(ke - kb) > 12 * 2048) return 0;
+    for (uint8_t* e = kb; e + 12 <= ke; e += 12) if ((int)U32(e + 4) == g && (int)U32(e + 8) == r) { kind = (int)U32(e); break; }
+    if (kind != 0 && kind != 9) return 0;
+    uint8_t* root = P8(I + 0x98); uint8_t* grp = Ptr(root) ? Child(root, (uint32_t)hit.group) : nullptr;
+    uint8_t* row = Ptr(grp) ? Child(grp, (uint32_t)hit.row) : nullptr;
+    if (!Ptr(row) || !Ptr(P8(row + 0x98)) || !Ptr(P8(row + 0x98 + 0x78))) return 0;
+    uint8_t* sel = ((PFN_ChildByType)kChildByType)(row + 0x98, 2, 0);
+    if (!Ptr(sel) || !NodeFlag(sel, 0x0c) || !NodeFlag(sel, 0x10)) return 0;
+    void** vt = *(void***)sel; float pos[2] = { 0, 0 }, size[2] = { 0, 0 };
+    if (Ptr(vt) && RowClass(vt) && ((PFN_NodeVec2)vt[0xa0 / 8])(sel, pos) >= 0) {
+        ((PFN_NodeVec2)vt[0xc0 / 8])(sel, size);
+        if (size[0] > 8.0f && size[0] < 4000.0f && mx > pos[0] && mx < pos[0] + size[0] * 0.5f) return -1;
+    }
+    return 1;
 }
 
 // apagado con el menu de PES21FX abierto, con la camara libre y con el panel del Motor en tiempo real abierto (ahi el mouse es del Motor)
@@ -174,7 +204,7 @@ static void Step(void* win) {
     const double now = Now();
     const bool fresh = now - s_stepT > 0.25;      // primer paso de un menu despues de un rato sin menus
     const bool batch = fresh || now - s_m.t > 0.004;
-    s_stepT = now; s_pendWin = nullptr; s_pendAction = -1;
+    s_stepT = now; s_pendWin = nullptr; s_pendAction = -1; s_pendDxWin = nullptr;
     if (fresh) { s_wheelAcc = 0; s_wheel.store(0); s_latchWin = nullptr; }
     if (batch) Sample(now, fresh);                 // siempre, para no inventar un clic al volver del menu de PES21FX
     if (!Enabled() || !Ptr(win)) { s_latchWin = nullptr; return; }
@@ -185,7 +215,10 @@ static void Step(void* win) {
     if (s_latchWin == win) {                          // clic del paso anterior que primero tuvo que elegir la fila
         const bool same = (int)U32(I + 0xa0) == s_latchG && (int)U32(I + 0xd8) == s_latchR && now - s_latchT < 0.25;
         s_latchWin = nullptr;
-        if (same) { s_pendWin = win; s_pendAction = 0; return; }
+        if (same) {
+            if (s_latchDir != 0) { s_pendDxWin = win; s_pendDx = s_latchDir; } else { s_pendWin = win; s_pendAction = 0; }
+            return;
+        }
     }
     if (!s_m.moved && !s_m.lEdge && !s_m.rEdge) return;
     // escenario de 1920 x 1080 centrado en la ventana
@@ -193,9 +226,11 @@ static void Step(void* win) {
     if (cw * 9.0f > ch * 16.0f) { sw = ch * 16.0f / 9.0f; ox = (cw - sw) * 0.5f; } else if (cw * 9.0f < ch * 16.0f) { sh = cw * 9.0f / 16.0f; oy = (ch - sh) * 0.5f; }
     const float mx = ((float)s_m.p.x - ox) * 1920.0f / sw, my = ((float)s_m.p.y - oy) * 1080.0f / sh;
     Hit hit; const bool on = (s_m.moved || s_m.lEdge) && HitTest(I, mx, my, hit);
+    // (v3) la fila actual del juego (Impl+0xd8) cuenta el desplazamiento de la lista: se compara con ese numero, no con el de la fila dibujada
+    const int hitAbs = on ? AbsRow(win, I, hit.group, hit.row) : -1;
     bool chose = false;
-    if (on && !((int)U32(I + 0xa0) == hit.group && (int)U32(I + 0xd8) == hit.row)) {
-        SelectLikeGame(win, I, hit.group, hit.row); chose = true;
+    if (on && !((int)U32(I + 0xa0) == hit.group && (int)U32(I + 0xd8) == hitAbs)) {
+        SelectLikeGame(win, hit.group, hitAbs); chose = true;
         const int k = s_nSel.fetch_add(1, std::memory_order_relaxed);
         if (hit.dist > 0) s_nNear.fetch_add(1, std::memory_order_relaxed);
         if (k < 12 || (hit.dist > 0 && s_nNear.load(std::memory_order_relaxed) <= 8))
@@ -204,8 +239,10 @@ static void Step(void* win) {
     }
     if (s_m.lEdge && on) {
         s_m.lEdge = false;                            // un clic es para una sola ventana
-        if ((int)U32(I + 0xa0) == hit.group && (int)U32(I + 0xd8) == hit.row) {
-            if (chose) { s_latchWin = win; s_latchG = hit.group; s_latchR = hit.row; s_latchT = now; }   // como con el mando: mover y aceptar en pasos distintos
+        if ((int)U32(I + 0xa0) == hit.group && (int)U32(I + 0xd8) == hitAbs) {
+            const int dir = SelectorDir(I, hit, mx);     // fila con selector: el clic cambia la opcion en vez de "aceptar"
+            if (chose) { s_latchWin = win; s_latchG = hit.group; s_latchR = hitAbs; s_latchDir = dir; s_latchT = now; }   // como con el mando: mover y aceptar en pasos distintos
+            else if (dir != 0) { s_pendDxWin = win; s_pendDx = dir; }
             else { s_pendWin = win; s_pendAction = 0; }
         }
     } else if (s_m.rEdge) {
@@ -222,7 +259,15 @@ static void hk_Hover(void* win) {
 static void hk_Dirs(void* win, int* dx, int* dy, unsigned char* trig) {
     o_dirs(win, dx, dy, trig);
     const int w = s_wheel.exchange(0);
+    void* const optWin = s_pendDxWin; s_pendDxWin = nullptr;
     if (!Enabled() || !dx || !dy) { s_wheelAcc = 0; return; }
+    if (optWin && optWin == win && *dx == 0 && *dy == 0) {               // (v3) clic sobre un selector: lo mismo que apretar derecha / izquierda
+        *dx = s_pendDx > 0 ? 1 : -1; if (trig) *trig = 1;                 // 1 = recien apretado: al llegar a la ultima opcion da la vuelta
+        s_wheelAcc = 0; s_moveT.store(Now());
+        const int k = s_nOpt.fetch_add(1, std::memory_order_relaxed);
+        if (k < 8) Log("mouse en menus: clic sobre un selector -> opcion %s", s_pendDx > 0 ? "siguiente" : "anterior");
+        return;
+    }
     s_wheelAcc = std::clamp(s_wheelAcc + w, -600, 600);
     if (std::abs(s_wheelAcc) < 120 || *dx != 0 || *dy != 0) return;       // el mando / teclado mandan
     HWND h = OverlayHwnd(); if (!h || GetForegroundWindow() != h) { s_wheelAcc = 0; return; }
@@ -314,8 +359,8 @@ void MenuMousePresent() {
     if (t - s_t < 30.0) return;
     const int b[5] = { s_nStep.load(), s_nSel.load(), s_nClick.load(), s_nBack.load(), s_nWheel.load() };
     if (b[1] != s_a[1] || b[2] != s_a[2] || b[3] != s_a[3] || b[4] != s_a[4])
-        Log("mouse en menus (30 s): %d cuadros de menu, %d filas elegidas con el mouse (%d por cercania en total), %d clics de aceptar, %d de volver, %d pasos de rueda",
-            b[0] - s_a[0], b[1] - s_a[1], s_nNear.load(), b[2] - s_a[2], b[3] - s_a[3], b[4] - s_a[4]);
+        Log("mouse en menus (30 s): %d cuadros de menu, %d filas elegidas con el mouse (%d por cercania en total), %d clics de aceptar, %d de volver, %d pasos de rueda; %d clics sobre selectores en total",
+            b[0] - s_a[0], b[1] - s_a[1], s_nNear.load(), b[2] - s_a[2], b[3] - s_a[3], b[4] - s_a[4], s_nOpt.load());
     memcpy(s_a, b, sizeof s_a); s_t = t;
 }
 
