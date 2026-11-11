@@ -50,7 +50,7 @@ static UINT s_stW = 0, s_stH = 0; static DXGI_FORMAT s_stF = DXGI_FORMAT_UNKNOWN
 // prender los grupos de a uno, acumulando, con kHangWait segundos entre cada uno. Cada paso queda en PES21FX.log y en
 // PES21FX\diagnostico\cuelgue_<fecha>.txt (con fflush) ANTES de aplicarlo: si la placa se reinicia, el ultimo "prendo" antes de
 // "PLACA DE VIDEO REINICIADA" es el culpable. No guarda nada en el ini; al terminar (o con Esc / Cancelar) deja todo como estaba.
-struct HangStep { int idx = -1, comp = 0; float val = 0; std::string label, section; };
+struct HangStep { int idx = -1, comp = 0; float val = 0, orig = 0; std::string label, section; };   // val = lo que se prende, orig = lo que vuelve al final
 struct HangState {
     bool active = false;
     std::vector<HangStep> steps; size_t si = 0;
@@ -70,7 +70,7 @@ static bool HangSkip(const MenuGroup& g) {   // solo diagnostico, camara y ajust
 }
 static void HangFinish(const char* why) {
     if (!s_h.active) return;
-    for (const HangStep& h : s_h.steps) g_cfg.live[h.idx][h.comp] = h.val;   // todo como estaba (los que faltaban prender tambien)
+    for (const HangStep& h : s_h.steps) g_cfg.live[h.idx][h.comp] = h.orig;   // todo como estaba (los que faltaban prender tambien)
     g_cfg.bypass = s_h.bypassSaved;
     HangLine("%s (%d de %d grupos prendidos); todo vuelve a como estaba, no se guardo nada", why, (int)s_h.si, (int)s_h.steps.size());
     if (s_h.f) { fclose(s_h.f); s_h.f = nullptr; }
@@ -89,7 +89,7 @@ void MenuHangStart() {
         if (HangSkip(g)) continue;
         if (g.tIdx < 0 || g.tIdx >= kParamCount) { noToggle++; continue; }
         if (g_cfg.live[g.tIdx][g.tComp] < 0.5f) { off++; continue; }
-        HangStep h; h.idx = g.tIdx; h.comp = g.tComp; h.val = g_cfg.live[g.tIdx][g.tComp]; h.label = g.title; h.section = g.section;
+        HangStep h; h.idx = g.tIdx; h.comp = g.tComp; h.val = h.orig = g_cfg.live[g.tIdx][g.tComp]; h.label = g.title; h.section = g.section;
         s_h.steps.push_back(h);
     }
     s_h.nGroups = g_cfg.groups.size(); s_h.bypassSaved = g_cfg.bypass;
@@ -116,6 +116,39 @@ static void HangPresent() {
     char b[300]; snprintf(b, sizeof b, "Buscando el cuelgue: %d/%d prendi %s. No toques nada; Esc corta.", (int)s_h.si + 1, (int)s_h.steps.size(), h.label.c_str());
     s_t.status = b;
     s_h.si++; s_h.next = Now() + kHangWait;
+}
+// (11/11) "buscar dentro del grupo": la busqueda general dio "Cejas con hebras" (x74). Con el resto del mod como esta (prendido),
+// apaga las opciones de ese grupo (selectores y deslizadores que pueden ir a 0: hebras v3, pasada propia, sombra entre hebras, barba,
+// pestanas, borde mixto...), prende el interruptor del grupo y despues devuelve cada opcion de a una, con el mismo registro.
+void MenuHangStartGroup(int tIdx, int tComp) {
+    if (s_t.active || s_h.active) return;
+    int gi = -1; for (int i = 0; i < (int)g_cfg.groups.size(); i++) if (g_cfg.groups[i].tIdx == tIdx && g_cfg.groups[i].tComp == tComp) { gi = i; break; }
+    if (gi < 0) { s_t.status = "No encontre el grupo a probar"; return; }
+    const MenuGroup& g = g_cfg.groups[gi];
+    s_h = HangState();
+    SYSTEMTIME st; GetLocalTime(&st); wchar_t n[80];
+    swprintf(n, 80, L"cuelgue_grupo_%04d%02d%02d_%02d%02d%02d.txt", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    const std::wstring root = g_cfg.baseDir + L"diagnostico\\"; CreateDirectoryW(root.c_str(), nullptr);
+    s_h.f = _wfopen((root + n).c_str(), L"wb");
+    HangStep tg; tg.idx = tIdx; tg.comp = tComp; tg.orig = g_cfg.live[tIdx][tComp]; tg.val = 1.0f; tg.label = g.title + " (solo el interruptor, opciones en 0)"; tg.section = g.section;
+    std::vector<HangStep> subs;
+    for (const MenuSlider& sl : g.sliders) {
+        if (!sl.ext.empty() || sl.idx < 0 || sl.idx >= kParamCount || (sl.idx == tIdx && sl.comp == tComp)) continue;
+        const float v = g_cfg.live[sl.idx][sl.comp];
+        if (fabsf(v) < 1e-6f) continue;                                   // ya en 0: no se toca
+        const bool canZero = !sl.optVals.empty() ? std::find(sl.optVals.begin(), sl.optVals.end(), 0.0f) != sl.optVals.end() : (!sl.options.empty() || sl.lo <= 0.0f);
+        if (!canZero) continue;
+        HangStep h; h.idx = sl.idx; h.comp = sl.comp; h.val = h.orig = v; h.label = sl.label; h.section = g.title; subs.push_back(h);
+    }
+    s_h.steps.push_back(tg); for (auto& h : subs) s_h.steps.push_back(h);
+    s_h.nGroups = g_cfg.groups.size(); s_h.bypassSaved = g_cfg.bypass;
+    HangLine("inicio (dentro del grupo \"%s\"): el resto del mod queda como esta; %d opciones a probar; %.0f s por paso", g.title.c_str(), (int)subs.size(), kHangWait);
+    g_cfg.live[tIdx][tComp] = 0.0f;
+    for (auto& h : subs) { g_cfg.live[h.idx][h.comp] = 0.0f; HangLine("  en 0: \"%s\" (%c%d, era %g)", h.label.c_str(), "xyzw"[h.comp], h.idx, h.orig); }
+    HangLine("paso 0: \"Ver original\" sacado, el grupo apagado y sus opciones en 0");
+    g_cfg.bypass = false;
+    s_h.active = true; s_h.si = 0; s_h.next = Now() + kHangFirst;
+    s_t.status = "Buscando dentro del grupo: paso 0. No toques nada; Esc corta.";
 }
 bool MenuHangActive() { return s_h.active; }
 
