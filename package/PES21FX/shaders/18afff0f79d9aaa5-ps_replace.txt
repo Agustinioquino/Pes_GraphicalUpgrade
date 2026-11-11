@@ -24,6 +24,7 @@ Texture2D<float4> PESGrassAtlas : register(t8);    // PES21: textures\pes_grass_
 Texture2D<float4> PESGrassAtlasN : register(t9);   // PES21: textures\pes_grass_blades_n.dds (RG normal, B altura raiz->punta, A grosor)
 Texture2D<float4> PESNatAtlas : register(t11);     // PES21 (11/11): textures\pes_grass_natural.dds, PASTO NATURAL (R claridad, G oclusion, B numero de hoja, A alfa)
 Texture2D<float4> PESNatAtlasN : register(t12);    // PES21 (11/11): textures\pes_grass_natural_n.dds (RG normal, B altura real en la hoja, A grosor)
+Texture2D<float4> PESBaseRT4 : register(t44);       // PES21 (11/11 j): copia de RT4 de la base (luz difusa / horneada del estadio), solo con y290 = 0 (la DLL; sin enlazar = 0 x 0)
 Texture2D<float4> PESBaseRT0 : register(t10);       // PES21 (26/10 g): copia del suelo ya dibujado (RT0), solo en las hojas lejanas del mod (x291)
 
 
@@ -522,6 +523,19 @@ void main(
   o2.w = v5.z;
   o3.zw = float2(0,0);
   o4.xyzw = float4(0,0,0,1);
+  // (11/11 j, captura 15.21 de Agustin: "ves el color de las sombras en las partes cortas") con y290 = 0 ("Propia") las hojas escribian RT4 = 0
+  // y perdian la luz difusa / horneada del estadio: en la sombra el pasto quedaba gris oscuro contra las puntas lima al sol (con y290 = 1 la
+  // tenian, pero delante de la pelota quedaba la de la pelota). Ahora la DLL enlaza en t44 una copia del RT4 de la base y la hoja escribe la luz
+  // del suelo en su RAIZ (v7.zw); si la raiz cae fuera de pantalla o tapada por algo mas oscuro, la del suelo bajo su pixel (los recortes que
+  // vuelan no tienen raiz: la de su pixel). y290 = 1 vuelve a lo de antes (RT4 sin escribir)
+  { uint bw4 = 0, bh4 = 0; PESBaseRT4.GetDimensions(bw4, bh4);
+    if (bw4 > 0 && bh4 > 0) {
+      float2 rb4 = float2(bw4, bh4);
+      float3 lP = PESBaseRT4.Load(int3(int2(clamp(v0.xy, 0.0, rb4 - 1.0)), 0)).xyz, lR = lP;
+      if (all(abs(v7.zw) < 1.0)) lR = PESBaseRT4.Load(int3(int2(clamp((v7.zw * float2(0.5, -0.5) + 0.5) * rb4, 0.0, rb4 - 1.0)), 0)).xyz;
+      const float3 LW4 = float3(0.2126, 0.7152, 0.0722);
+      o4.xyz = max(dot(lR, LW4) >= 0.6 * dot(lP, LW4) ? lR : lP, 0.0);
+    } }
     {
     // === PES21 mod: hojas de pasto 3D con variacion por hoja ===
     float4 G = IniParams.Load(int2(10,0));

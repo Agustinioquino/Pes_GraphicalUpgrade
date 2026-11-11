@@ -271,7 +271,7 @@ void GrassOnBaseDraw(ID3D11DeviceContext* c);
 void GrassEditorAfterFace(ID3D11DeviceContext* c);   // (08/11 c) x393: pasto del mod bajo el jugador en el editor, tras el dibujo de la cara    // (25/10) v3: al terminar la base de la cancha (PS 5e92 / c956)
 void GrassDiagState(ID3D11DeviceContext* c, uint64_t psHash);   // (26/10 f) log del stencil de las pasadas del sol y de la base de la cancha
 // (26/10 g) pasto del juego en el G-buffer con los estados de las hojas del mod (w290): se ponen antes del dibujo y se devuelven despues
-struct GrassStScope { bool on = false, b12 = false; ID3D11DepthStencilState* dss = nullptr; UINT ref = 0; ID3D11BlendState* bs = nullptr; float bf[4] = {}; UINT bm = 0xffffffff; ID3D11Buffer* vsB12 = nullptr; };
+struct GrassStScope { bool on = false, b12 = false, t44Set = false; ID3D11DepthStencilState* dss = nullptr; UINT ref = 0; ID3D11BlendState* bs = nullptr; float bf[4] = {}; UINT bm = 0xffffffff; ID3D11Buffer* vsB12 = nullptr; ID3D11ShaderResourceView* t44 = nullptr; };   // (11/11 j) t44 = copia de RT4 (y290 = 0)
 void GrassGameStates(ID3D11DeviceContext* c, GrassStScope& s);
 void GrassGameStatesRestore(ID3D11DeviceContext* c, GrassStScope& s);
 // (26/10 g) emision del pasto del mod despues del ULTIMO dibujo de la base de la cancha (w294): pendiente por contexto hasta el siguiente
