@@ -1,4 +1,4 @@
--- MotorTiempoReal.lua 0.6 (PES21 FX, 11/11/2026) - modulo de Sider.
+-- MotorTiempoReal.lua 0.5 (PES21 FX, 11/11/2026) - modulo de Sider.
 -- "Motor en tiempo real" del Editar: un editor en vivo de lo que dibuja el Fox Engine. Todo dentro del juego y todo
 -- por Sider (sin DLL): lee la lista de escenas graficas del motor y muestra, con nombre, los modelos y las luces;
 -- deja marcar uno o muchos objetos, moverlos, rotarlos, escalarlos, ocultarlos; prender, apagar y dar brillo a cada
@@ -20,8 +20,8 @@
 -- que el exe sea el 1.07.02 (tablas de funciones) y que cada objeto siga siendo de la clase esperada. Nunca
 -- se escribe dentro del exe, salvo las TRES direcciones fijas de la pestana del menu de Editar (seccion 3b), cada una
 -- con su valor anterior comprobado. Fuera del exe, la pestana escribe un solo dato del juego: la clave del jugador que
--- muestra el estudio 3D (seccion 3c). Solo se llaman tres funciones del juego (color de una luz, matriz de un modelo y,
--- desde la 0.6, la que le pone el uniforme al jugador del estudio), las tres con su comienzo comprobado byte a byte.
+-- muestra el estudio 3D (seccion 3c). Solo se llaman dos funciones del juego (color de una luz y matriz de un modelo),
+-- las dos con su comienzo comprobado byte a byte.
 --   content\motor-tiempo-real\apagado.txt       = el modulo no entrega la escena ni toca nada
 --   content\motor-tiempo-real\solo_lectura.txt  = lista todo pero no escribe nada
 --   content\motor-tiempo-real\sin_llamadas.txt  = escribe datos pero no llama funciones del juego
@@ -36,7 +36,7 @@
 --
 -- Offsets leidos en el exe decompilado (PES2021.exe 1.07.02): ver memoria del proyecto motor-tiempo-real-exe.
 
-local m = { version = "0.6" }
+local m = { version = "0.5" }
 local VERSION = m.version
 local DIR
 -- lo que hay que recordar aunque Sider recargue el modulo con el juego abierto (queda en ctx)
@@ -798,13 +798,8 @@ function PE.muestra(filename)
     if not G.pe_toco or not C or not E.exe_ok or type(filename) ~= "string" then return end
     if not string.find(string.lower(filename), "flow[\\/]edit[\\/]") then return end
     if not PE.ctx() then return end
-    local id, eq = B32[57], B32[58]
-    if B32[56] == 0 and id ~= 0 and id < 0x80000000 then
-        -- el equipo con el que el juego lo mostro (0xffffffff = ninguno). Si es el mismo jugador y ahora no hay equipo (el
-        -- menu de Editar lo borro y la clave la puse yo), se conserva el que se vio con el
-        if id ~= G.pe_jug then G.pe_jug, G.pe_eq = id, nil end
-        if eq ~= 0xffffffff then G.pe_eq = eq end
-    end
+    local id = B32[57]
+    if B32[56] == 0 and id ~= 0 and id < 0x80000000 then G.pe_jug = id end
 end
 
 -- la tabla de fichas de la base de datos de jugadores: su direccion y cuantas fichas tiene (solo lee; nil si no esta
@@ -860,7 +855,7 @@ function PE.jugador()
     if id then
         -- el ultimo que se vio tiene que seguir estando en la base de datos (si la base no se puede leer, vale igual: lo puso el juego)
         local esta = PE.buscar_ficha(id)
-        if esta == false then id, G.pe_jug, G.pe_eq = nil, nil, nil
+        if esta == false then id, G.pe_jug = nil, nil
         else de = esta and "el ultimo jugador que viste" or "el ultimo jugador que viste, sin comprobar en la base" end
     end
     if not id then id, de = PE.buscar_ficha(), "la primera ficha de la base de datos" end
@@ -880,7 +875,6 @@ end
 -- el juego pidio el archivo de uno de mis nodos: se apreto el boton 12. Devuelve la clave de Sider del archivo del estudio.
 function PE.pedido_estudio(filename, nodo)
     PE.e3d_n = PE.e3d_n + 1
-    if C then G.pe_hilo = C.mtr_GetCurrentThreadId() end      -- el hilo que maneja el menu del juego (para la tecla de vestir)
     if not PE.e3d_listo() then
         PE.e3d = "no tengo pestana\\" .. PE.JSON_E3D .. " y no lo pude armar"
         if PE.e3d_dicho ~= PE.e3d then
@@ -891,19 +885,12 @@ function PE.pedido_estudio(filename, nodo)
     end
     local ok, de, id = PE.jugador()
     PE.rotar(nodo)
-    if ok then
-        local v, por_que = PE.vestir("pedido")
-        if not v and PE.vest_dicho ~= por_que then
-            PE.vest_dicho = por_que
-            R("pestana: el uniforme no se puso al entrar: " .. tostring(por_que), true)
-        end
-    end
     PE.e3d = ok and string.format("jugador 0x%s (%s)", hx(id), de) or ("sin jugador, abre vacio: " .. tostring(de))
     -- se anota cada entrada (Sider avisa a lo sumo una vez cada 10 s por nodo); dos avisos pegados del mismo pedido, una sola vez
     local d, t = nodo .. PE.e3d, reloj()
     if d ~= PE.e3d_dicho or not PE.e3d_t or t - PE.e3d_t > 1500 or t < PE.e3d_t then
         PE.e3d_dicho, PE.e3d_t = d, t
-        R(string.format("pestana: estudio 3D, pedido %d (%s, hilo %s) -> %s", PE.e3d_n, PE.NODOS[nodo], tostring(G.pe_hilo), PE.e3d), true)
+        R(string.format("pestana: estudio 3D, pedido %d (%s) -> %s", PE.e3d_n, PE.NODOS[nodo], PE.e3d), true)
     end
     if C then volcar_registro() end
     return PE.clave(PE.JSON_E3D)
@@ -913,79 +900,6 @@ function PE.entrega_estudio(filename, key)
     if PE.e3d_listo() then return DIR .. "pestana\\" .. PE.JSON_E3D end
     G.pe_gen = (G.pe_gen or 0) + 1
     return nil
-end
-
--- EL UNIFORME DEL ESTUDIO (0.6). Leido en el exe 1.07.02 (11/11/2026) y visto en juego: la entrada directa muestra al
--- jugador sin camiseta ni pantalon. El juego lo viste con FUN_141f06920(visor, clave, equipo, 0, arquero, camiseta, 0)
--- (edit::ModelView: guarda equipo en +0xc8 y camiseta en +0xd4, pide el uniforme al visor 3D y despues el jugador). Lo
--- llaman la pagina del jugador (MenuEditPlEditMenu::vf40, con su equipo) y la del maniqui del Editar (FUN_140ce8ef0, con
--- la clave que haya y el equipo 0xfffcc000, el "sin equipo" del propio juego); la pantalla de Apariencia no. Aca se
--- llama igual, con el equipo del ultimo jugador que se vio en el Editar o con 0xfffcc000. Camiseta = equipo con los 14
--- bits de abajo en 0 (la primera de campo, como hace el juego para un jugador que no es arquero).
--- Cuando: (a) al entrar al estudio, en el pedido del archivo del nodo (lo hace el mismo hilo que maneja el menu), si el
--- visor 3D ya existe (desde la segunda entrada de cada vez que se entra al Editar: el visor se crea con la primera
--- pantalla que lo usa y vive hasta salir del Editar); (b) con la tecla 8 en la fila "Vestir al jugador del estudio" de
--- OPCIONES, SOLO si la tecla llega por ese mismo hilo (si no, no llama y lo anota).
-PE.VISOR, PE.VT_VISOR, PE.FN_VESTIR, PE.SIN_EQUIPO = 0x1438040d0, 0x142ba7c68, 0x141f06920, 0xfffcc000
-PE.FIRMA_VESTIR = "\x48\x89\x5c\x24\x08\x44\x89\x44\x24\x18\x57\x48\x83\xec\x50\x4c\x8d\x91\xc8\x00\x00\x00\x48\x89\x91\xc0\x00\x00\x00"
-PE.vest = "todavia no"
-
--- el visor 3D del Editar (edit::ModelView) listo para recibir un jugador: su direccion, o nil y el motivo
-function PE.visor()
-    local v = rptr(PE.VISOR)
-    if not v or (v >= BASE and v < EXE_FIN) then return nil, "todavia no hay visor 3D (se arma con la primera pantalla que lo usa)" end
-    if not leer(v, 0x99) or P(0) ~= PE.VT_VISOR then return nil, "el visor 3D no es el que conozco" end
-    if not P(0x78) then return nil, "el visor 3D todavia no tiene su parte de dibujo" end
-    -- la pantalla de Apariencia pide el visor de tipo (0, 0) (FUN_141f059d0(0,0) -> FUN_141f07cd0): si el que hay es de
-    -- otro tipo (el del avatar es (x, 3)) lo da de baja y arma uno nuevo, asi que vestir este no sirve. +0x98 = dado de baja
-    if B32[0x80 / 4] ~= 0 or B32[0x88 / 4] ~= 0 then return nil, "el visor 3D es de otra pantalla (la de Apariencia arma el suyo)" end
-    if B8[0x98] ~= 0 then return nil, "el visor 3D esta dado de baja" end
-    if B32[0x90 / 4] ~= 0 or B32[0x8c / 4] < 4 or B32[0x8c / 4] > 5 then return nil, "el visor 3D esta ocupado (cargando o saliendo)" end
-    return v
-end
-
--- viste al jugador que tiene puesto el contexto del Editar. donde = "pedido" (desde el pedido del archivo del nodo) o
--- "tecla". Devuelve true o false y el motivo; deja el resultado en PE.vest
-function PE.vestir(donde)
-    local function no(m) PE.vest = "no: " .. m return false, m end
-    if existe(DIR .. "apagado.txt") then return no("apagado.txt presente") end
-    if E.solo_lectura or existe(DIR .. "solo_lectura.txt") then return no("solo_lectura.txt presente") end
-    if E.sin_llamadas or existe(DIR .. "sin_llamadas.txt") then return no("sin_llamadas.txt presente") end
-    if not C then return no("sin ffi") end
-    local yo = C.mtr_GetCurrentThreadId()
-    if donde ~= "pedido" then
-        if not G.pe_hilo then return no("todavia no se entro al estudio en esta sesion") end
-        if yo ~= G.pe_hilo then
-            return no(string.format("la tecla llega por el hilo %d y el menu del juego corre en el %d: no llamo (vuelve a entrar al estudio y se viste solo)", yo, G.pe_hilo))
-        end
-    end
-    local p, por_que = PE.ctx()
-    if not p then return no(por_que) end
-    local clase, id = B32[56], B32[57]
-    if clase ~= 0 or id == 0 then return no("no hay jugador puesto en el contexto del Editar") end
-    if donde ~= "pedido" and id ~= G.pe_puse then return no("no estas en el estudio del Motor (el jugador puesto no es el mio)") end
-    if id >= 0x80000000 and id <= 0x8000009f then return no("es un jugador creado") end
-    local v
-    v, por_que = PE.visor()
-    if not v then return no(por_que) end
-    if not PE.c_vestir then
-        if not leer(PE.FN_VESTIR, #PE.FIRMA_VESTIR) or ffi.string(B8, #PE.FIRMA_VESTIR) ~= PE.FIRMA_VESTIR then
-            return no("la funcion del uniforme (0x141f06920) no empieza como espero")
-        end
-        PE.c_vestir = ffi.cast("uint64_t (__fastcall *)(uintptr_t, uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint8_t)", PE.FN_VESTIR)
-    end
-    local eq, de = PE.SIN_EQUIPO, "sin equipo"
-    if G.pe_jug == id and G.pe_eq then eq, de = G.pe_eq, "su equipo" end
-    local camiseta = eq - eq % 0x4000
-    -- se llama en cada entrada aunque el visor ya tenga esos datos, como hace el juego cada vez que abre la pagina del
-    -- jugador (MenuEditPlEditMenu::vf40): lo que guarda el visor no dice si el uniforme sigue cargado
-    -- justo antes de llamar: el contexto y el visor tienen que seguir siendo los mismos objetos, con la misma clave
-    if rptr(PE.CTX) ~= p or not leer(p + 0xe0, 8) or B32[0] ~= 0 or B32[1] ~= id then return no("el contexto cambio") end
-    if rptr(PE.VISOR) ~= v or not leer(v, 8) or P(0) ~= PE.VT_VISOR then return no("el visor 3D cambio") end
-    PE.c_vestir(v, ffi.cast("uint64_t", id) * 4294967296, eq, 0, 0, camiseta, 0)
-    PE.vest = string.format("vestido (%s): jugador 0x%s, %s 0x%s", donde, hx(id), de, hx(eq))
-    R("pestana: " .. PE.vest, true)
-    return true
 end
 
 -- nombre de clase de un objeto C++ por su tabla de funciones (RTTI del exe): ".?AVModel@gr@fox@@" -> fox::gr::Model
@@ -2657,8 +2571,6 @@ OPC = {
         end },
     { "Pestana en Editar", function() return PE.puesta and "puesta" or "no" end,
         function() E.aviso = "pestana: " .. PE.estado .. " | estudio 3D: " .. PE.e3d .. " (se saca creando sin_pestana.txt)" end },
-    { "Vestir al jugador del estudio", function() return PE.vest end,
-        function() local _, m = PE.vestir("tecla") E.aviso = "uniforme: " .. PE.vest end },
 }
 
 local function tecla(vkey)

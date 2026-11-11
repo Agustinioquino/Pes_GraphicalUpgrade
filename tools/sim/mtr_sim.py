@@ -53,7 +53,6 @@ PE_TEXTOS = [0x200026, 0x200027, 0x1a02a6, 0x1a00f1, 0x1d0013, 0x200064, 0x4b003
 PE_NOMBRES = ['Player', 'Team', 'Coach', 'Representative', 'Transfer', 'Stadium', 'LeagueCup', 'LeagueOrganize', 'ExternalData',
               'DataSave', 'DataLoad']
 ED = dict(CTX=0x1438040a8, VT=0x142ba6ac0, BD=0x143714240, MANIQUI=0x800000a0, PDB=0x20000000000)
-VI = dict(VISOR=0x1438040d0, VT=0x142ba7c68, FN=0x141f06920, FIRMA='48895c24084489442418574883ec504c8d91c8000000488991c0000000', SIN_EQUIPO=0xfffcc000)
 ED_NODOS = ['BugCheck/BugCheckSimNews', 'BugCheck/BugCheckSimMain', 'BugCheck/BugCheckSimRank']
 ED_EVENTOS = ['proceed', '0_Face', '1_Hair', '2_Body', '3_Accessory', '4_BLreturn', 'return', '5_appearancebl']
 PE_FILAS = 17                       # filas c_menu_0..16 de la pantalla editSettingList (leido del archivo del juego, 11/11/2026)
@@ -215,7 +214,6 @@ class Mundo:
         if con_visor:
             a, b, impl, nodo, cam = m.nuevo(0x100), m.nuevo(0x100), m.nuevo(0x600), m.nuevo(0x100), m.nuevo(0x120)
             m.u64(G_VISOR, a); m.u64(a + 0x78, b); m.u64(b + 0x90, impl); m.u64(impl, VT['visor']); m.u64(impl + 0xd8, nodo)
-            m.u64(a, VI['VT']); m.u32(a + 0x8c, 5); self.visor = a      # edit::ModelView listo (ya se vio un jugador en el Editar)
             m.u64(nodo, VT['nodo']); m.u64(nodo + 0x60, cam); m.u64(cam, VT['cam'])
             m.f(cam + 0x10, 0.0, 1.2, 6.5, 0.0, 1.2, 0.0, 0.0, 1.0, 0.0, 0.1, 500.0); m.u32(cam + 0x3c, 0); m.f(cam + 0x40, 0.09, 1.7777)
             m.f(cam + 0x48, 1.5, 2.5); m.u8(cam + 0x58, 1)
@@ -279,8 +277,6 @@ class Mundo:
             assert all(d + 8 <= b or b + len(x) <= d for b, x in m.reg.items()), 'region encimada %x' % d
             m.nuevo(8, d)
         self.ctx = c = m.nuevo(800); m.u64(c, ED['VT']); m.u64(ED['CTX'], c)
-        m.nuevo(0x40, VI['FN']); m.escribir(VI['FN'], bytes.fromhex(VI['FIRMA']), False)
-        self.visor, self.vestidos, self.hilo_menu = None, [], 77
         m.permitidas.append((c + 0xe0, c + 0xe8))
         self.ed_menu()
         self.bd = db = m.nuevo(0x80); m.u64(ED['BD'], db); m.u32(db + 0x30, 4)
@@ -298,21 +294,6 @@ class Mundo:
                 m.escribir(c + 0xf0, struct.pack('<H', 0xffff), False)
         except (TypeError, struct.error): pass
         m.lecturas = n
-
-    def ed_visor(self, estado=5):
-        """la pantalla de Apariencia (o cualquiera con jugador) arma el visor 3D si no existe: edit::ModelView con su parte de
-        dibujo (+0x78) y estado listo (+0x8c 4 o 5, +0x90 en 0). Vive hasta salir del Editar"""
-        m = self.m
-        if not self.visor:
-            self.visor = v = m.nuevo(0x100); m.u64(v, VI['VT']); m.u64(v + 0x78, m.nuevo(0x100))
-            m.u64(VI['VISOR'], v)
-        # sin assert: en el escenario roto la region del visor puede haber desaparecido por debajo (memoria rota a proposito)
-        m.escribir(self.visor + 0x8c, struct.pack('<I', estado), False); m.escribir(self.visor + 0x90, struct.pack('<I', 0), False)
-        return self.visor
-
-    def ed_sin_visor(self):
-        """se sale del modo Editar: el visor se destruye"""
-        self.m.u64(VI['VISOR'], 0); self.visor = None
 
     def ed_clave(self):
         """(clase, id) de la clave del jugador del contexto; None si no hay contexto"""
@@ -704,14 +685,6 @@ function ffi_falso.cast(tipo, v)
     if type(tipo) == "string" and string.find(tipo, "(", 1, true) then
         -- una funcion del juego: devuelvo una imitacion que comprueba como la llaman
         local dir = v
-        if string.find(tipo, "uint64_t (__fastcall *)(uintptr_t, uint64_t", 1, true) then
-            return function(visor, clave, equipo, a4, a5, camiseta, a7)
-                assert(type(visor) == "number", "el visor va como numero")
-                SIM.llamadas[#SIM.llamadas + 1] = { dir = dir, obj = visor }
-                py.vestir(dir, visor, tostring(ffi_real.cast("uint64_t", clave)), equipo, a4, a5, camiseta, a7, SIM.hilo)
-                return 1
-            end
-        end
         return function(obj, buf)
             assert(type(obj) == "number", "el objeto va como numero")
             if type(buf) == "table" then buf = rawget(buf, "__real") end
@@ -784,7 +757,7 @@ class Sim:
         self.lua = L.LuaRuntime(encoding=None, unpack_returned_tuples=True)
         self.llamadas = []
         py = self.lua.table_from({b'leer': self._leer, b'escribir': self._escribir, b'llamada': self._llamada,
-                                  b'proteger': self._proteger, b'reservar': self._reservar, b'vestir': self._vestir})
+                                  b'proteger': self._proteger, b'reservar': self._reservar})
         self.cache = {}                  # lo que Sider recuerda: clave del modulo -> ruta entregada (o None)
         # la otra cache de Sider (key-cache.ttl-sec = 10 en la PC): por unos segundos recuerda el resultado de cada nombre
         # de archivo y NO llama al modulo. ttl None = sin ella. t_sider = reloj de Sider, en segundos
@@ -862,23 +835,6 @@ class Sim:
             assert 'proceed' in json.loads(flujo.decode('ascii'))['events'], \
                 'el cursor recordado quedo en el boton 12 y el flujo entregado (%s) no tiene ese enlace: el juego se cuelga' % r
         return r, b
-
-    def _vestir(self, dir, visor, clave, equipo, a4, a5, camiseta, a7, hilo):
-        """FUN_141f06920 del juego: lo que el modulo tiene que garantizar antes de llamarla, y lo que hace"""
-        dir, visor, clave, equipo, a4, a5, camiseta, a7 = int(dir), int(visor), int(clave.decode().rstrip('ULL')), int(equipo), int(a4), int(a5), int(camiseta), int(a7)
-        m = self.mem; n = m.lecturas
-        try:
-            assert dir == VI['FN'], 'llamada a una funcion desconocida %x' % dir
-            assert self.w.visor and visor == self.w.visor and m.r64(VI['VISOR']) == visor and m.r64(visor) == VI['VT'], 'vestir sobre algo que no es el visor 3D'
-            assert m.r64(visor + 0x78) != 0 and m.r32(visor + 0x90) == 0 and m.r32(visor + 0x8c) in (4, 5), 'vestir con el visor sin listo'
-            assert m.r32(visor + 0x80) == 0 and m.r32(visor + 0x88) == 0 and m.leer(visor + 0x98, 1) == b'\0', 'vestir un visor que la pantalla de Apariencia va a reemplazar (otro tipo, o dado de baja)'
-            assert hilo == self.w.hilo_menu, 'vestir desde un hilo que no es el del menu (%s, menu %s)' % (hilo, self.w.hilo_menu)
-            c = self.w.ed_clave(); assert c is not None and c[0] == 0 and (clave >> 32) == c[1] and clave & 0xffffffff == 0, (hex(clave), c)
-            assert not 0x80000000 <= c[1] <= 0x8000009f, 'vestir a un jugador creado'
-            assert (a4, a5, a7) == (0, 0, 0) and camiseta == equipo & 0xffffc000, (a4, a5, camiseta, a7)
-            m.escribir(visor + 0xc0, struct.pack('<QI', clave, equipo), False); m.u32(visor + 0xd4, camiseta)
-            self.w.vestidos.append((c[1], equipo))
-        finally: m.lecturas = n
 
     def _llamada(self, dir, obj, buf):
         dir, obj = int(dir), int(obj); m = self.mem
@@ -1738,7 +1694,6 @@ def estudio(s, veces=2):
     assert list(d['events']) == ED_EVENTOS, list(d['events'])
     vuelta = dict(to='Edit/EditMenu', go='backward', clear='all', fadeStart='', fadeEnd='do', bgType='none')
     assert all(e == vuelta for e in d['events'].values()), 'un enlace del estudio no vuelve al menu de Editar'
-    if getattr(s.w, 'ctx', None) and s.w.m.leer(ED['CTX'], 8) is not None: s.w.ed_visor()      # la pagina de Apariencia arma el visor 3D
     return to, s.w.ed_clave()
 
 
@@ -1985,7 +1940,7 @@ def e_estudio(F):
     assert enlaces(s) == [ED_NODOS[1]] * 2; solo_cambio_el_nodo(s)
     assert s.contenido('Estudio3D.json') == EMP
     reg = s.registro()
-    assert 'pestana: estudio 3D, pedido 1 (BugCheck/BugCheckSimNews, hilo 77) -> jugador 0x9d2 (la primera ficha de la base de datos)' in reg, reg[-400:]
+    assert 'pestana: estudio 3D, pedido 1 (BugCheck/BugCheckSimNews) -> jugador 0x9d2 (la primera ficha de la base de datos)' in reg, reg[-400:]
     s.cuadro(3); s.opcion('Pestana en Editar'); s.tecla('8'); assert 'estudio 3D: jugador 0x9d2' in s.texto, s.texto[-300:]
     # 2. atras: el menu se arma de nuevo (clave invalida otra vez) con el enlace nuevo; segunda y tercera entrada dentro de
     # los 10 s de Sider: cada una pide OTRO nombre de archivo, asi que el modulo se entera y vuelve a escribir la clave
@@ -1994,7 +1949,7 @@ def e_estudio(F):
         r, b = s.editar(); assert len(b) == 12 and b[11][1] == ED_NODOS[k] and w.ed_clave() == (0xffff, 0), (k, b[11], w.ed_clave())
         assert estudio(s) == (ED_NODOS[k], (0, 0x9d2)), k
         assert enlaces(s) == [ED_NODOS[(k + 1) % 3]] * 2; solo_cambio_el_nodo(s)
-    assert 'pedido 3 (BugCheck/BugCheckSimRank, hilo 77) -> jugador 0x9d2' in s.registro()
+    assert 'pedido 3 (BugCheck/BugCheckSimRank) -> jugador 0x9d2' in s.registro()
     # 2b. una CUARTA entrada antes de los 10 s de la primera: Sider contesta de memoria y el modulo no se entera. No falla
     # nada: el estudio abre con la clave invalida (lo dice la guia: esperar entre entradas). Pasados los 10 s vuelve a andar
     s.t_sider += 2
@@ -2109,60 +2064,7 @@ def e_estudio(F):
     w = Mundo(); s = Sim(F, w, existe=CON + ('sin_pestana.txt',)); m = w.m
     r, b = s.editar(); assert r is None and len(b) == 11
     assert s.pedir(b'common\\script\\flow\\BugCheck\\BugCheckSimNews.json') == 'Estudio3D.json' and not m.exe_escr
-    # 12. EL UNIFORME (0.6). a) sesion nueva del Editar, sin visor 3D todavia: al entrar no se puede vestir (lo anota); la
-    # pagina arma el visor; con la tecla 8 en "Vestir al jugador del estudio" (mismo hilo que el menu) se viste con el
-    # equipo "sin equipo" del juego; otra vez la tecla: llama otra vez
-    def vestir_tecla(s):
-        s.cuadro(2); s.opcion('Vestir al jugador del estudio'); s.tecla('8'); return s.texto
-    w = Mundo(con_visor=False); s = Sim(F, w, existe=CON); s.ttl = 10; m = w.m
-    s.editar(); assert estudio(s) == (ED_NODOS[0], (0, 0x9d2)) and not w.vestidos
-    assert 'el uniforme no se puso al entrar: todavia no hay visor 3D' in s.registro(), s.registro()[-300:]
-    t = vestir_tecla(s); assert w.vestidos == [(0x9d2, VI['SIN_EQUIPO'])], (w.vestidos, t[-300:])
-    assert 'uniforme: vestido (tecla): jugador 0x9d2, sin equipo 0xfffcc000' in t, t[-300:]
-    assert 'pestana: vestido (tecla): jugador 0x9d2, sin equipo 0xfffcc000' in s.registro()
-    t = vestir_tecla(s); assert len(w.vestidos) == 2 and 'uniforme: vestido (tecla)' in t, t[-200:]      # la tecla llama siempre
-    # b) atras y otra entrada: el visor ya existe y se viste solo en el pedido del nodo (cada entrada, como el juego)
-    s.t_sider += 11; s.editar(); assert estudio(s)[1] == (0, 0x9d2) and w.vestidos[2:] == [(0x9d2, VI['SIN_EQUIPO'])], w.vestidos
-    assert 'pestana: vestido (pedido): jugador 0x9d2, sin equipo 0xfffcc000' in s.registro()
-    # c) el jugador visto en Jugadores con su equipo: la entrada siguiente lo viste con ESE equipo
-    s.t_sider += 11; s.editar(); w.ed_juego_elige(0x9d3); m.u32(w.ctx + 0xe8, 0x0001c000)
-    s.pedir(b'common\\script\\flow\\Edit\\Player\\EditPlEditMenu.json')
-    s.t_sider += 11; s.editar(); assert estudio(s)[1] == (0, 0x9d3) and w.vestidos[-1] == (0x9d3, 0x0001c000), w.vestidos
-    assert 'vestido (pedido): jugador 0x9d3, su equipo 0x1c000' in s.registro(), s.registro()[-300:]
-    # y en las entradas que siguen (el menu de Editar ya borro el equipo del contexto) se sigue vistiendo con ese equipo
-    s.t_sider += 11; s.editar(); assert struct.unpack('<I', m.leer(w.ctx + 0xe8, 4))[0] == 0xffffffff
-    assert estudio(s)[1] == (0, 0x9d3) and w.vestidos[-2:] == [(0x9d3, 0x0001c000)] * 2, w.vestidos
-    # d) la tecla llega por OTRO hilo que el menu: no llama y lo dice
-    n = len(w.vestidos); s.SIM[b'hilo'] = 91
-    t = vestir_tecla(s); assert len(w.vestidos) == n and 'la tecla llega por el hilo 91 y el menu del juego corre en el 77' in t, t[-300:]
-    s.SIM[b'hilo'] = 77
-    t = vestir_tecla(s); assert len(w.vestidos) == n + 1, t[-300:]          # mismo hilo: ahora si
-    # e) archivos: sin_llamadas.txt / solo_lectura.txt / apagado.txt -> no llama nunca
-    for arch in (b'sin_llamadas.txt', b'solo_lectura.txt', b'apagado.txt'):
-        w = Mundo(); s = Sim(F, w, existe=CON); s.ttl = 10
-        s.editar(); s.SIM[b'existe'][arch] = True
-        estudio(s); vestir_tecla(s); assert not w.vestidos, arch
-    # f) el visor ocupado (cargando: +0x8c < 4, o saliendo: +0x90 != 0), de otra clase, sin parte de dibujo, de otro tipo que
-    # el (0, 0) que pide la pantalla de Apariencia, dado de baja, o la funcion del juego distinta: no llama
-    for romper in ('cargando', 'saliendo', 'clase', 'dibujo', 'tipo', 'tipo2', 'baja', 'firma'):
-        w = Mundo(); m = w.m; s = Sim(F, w, existe=CON); s.ttl = 10
-        if romper == 'cargando': m.u32(w.visor + 0x8c, 2)
-        elif romper == 'tipo': m.u32(w.visor + 0x88, 3)              # el visor del avatar: (x, 3)
-        elif romper == 'tipo2': m.u32(w.visor + 0x80, 1)
-        elif romper == 'baja': m.u8(w.visor + 0x98, 1)
-        elif romper == 'saliendo': m.u32(w.visor + 0x90, 1)
-        elif romper == 'clase': m.u64(w.visor, VI['VT'] + 8)
-        elif romper == 'dibujo': m.u64(w.visor + 0x78, 0)
-        else: m.escribir(VI['FN'] + 5, b'\x90', False)
-        s.editar(); w.ed_visor = lambda estado=5: w.visor            # la pagina no arregla el visor
-        estudio(s); assert not w.vestidos, romper
-        assert 'el uniforme no se puso al entrar' in s.registro(), romper
-    # g) la tecla fuera del estudio (otro jugador puesto por el juego) o antes de entrar al estudio: no llama
-    w = Mundo(); s = Sim(F, w, existe=CON); s.ttl = 10
-    t = vestir_tecla(s); assert not w.vestidos and 'todavia no se entro al estudio' in t, t[-200:]
-    s.editar(); estudio(s); n = len(w.vestidos); w.ed_juego_elige(0x9d3)
-    t = vestir_tecla(s); assert len(w.vestidos) == n and 'no estas en el estudio del Motor' in t, t[-200:]
-    print('   entrada directa al estudio: clave del jugador, rotacion del enlace, cache de Sider, fallas de archivo y de memoria, uniforme')
+    print('   entrada directa al estudio: clave del jugador, rotacion del enlace, cache de Sider, fallas de archivo y de memoria')
 
 
 def e_roto(F):
