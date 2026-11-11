@@ -18,7 +18,8 @@ cbuffer PESGrassCull : register(b0) {
   float4 gPad[6];   // [0]: x piso de capas por pixel de suelo (nivel 0) | y, z rampa en px/m | w alto cerca / alto
                     // [1]: x margen del fundido en pHi | y, z, w indices por tarjeta de los niveles 0 / 1 / 2
                     // [2]: (nivel 0) x ancho de la hoja en camaras de juego (m) | y ancho con la camara al ras (m) | z, w rampa en px/m
-                    // [5]: (11/11) HOJAS 3D: x umbral (px/m) | y tope de hojas por celda | z tope total de hojas | w indices por hoja
+                    // [4]: x 1 = editor | (11/11 m) y relleno del atlas bajo las hojas 3D (y403; la DLL lo manda solo con las hojas 3D prendidas)
+                    // [5]: (11/11) HOJAS 3D: x umbral (px/m; 0 = hojas 3D apagadas en los niveles 0..2) | y tope de hojas por celda | z tope total de hojas | w indices por hoja
 }
 RWStructuredBuffer<float4> Inst : register(u0);
 RWByteAddressBuffer Count : register(u1);   // 18 contadores (uint), uno por ranura; [18] = 1 si esta emision se quedo con el cuadro; [20] celdas con hojas 3D
@@ -150,6 +151,10 @@ void main(uint3 id : SV_DispatchThreadID)
     // (26/10 d) alto de la hoja cerca de la camara (el VS funde de x59 al alto cercano entre 110 y 250 px/m, igual que aca)
     float hP0 = gPad[2].z > 1.0 ? gPad[2].z : 110.0, hP1 = gPad[2].w > hP0 ? gPad[2].w : 250.0;   // (26/10 e) misma rampa que el VS
     float hM = gP4.z * (gPad[0].w > 0.0 ? lerp(1.0, gPad[0].w, smoothstep(hP0, hP1, pc)) : 1.0);
+    // (11/11 m) nivel 0 en la zona de las hojas 3D: el VS 498b30 deja las tarjetas como relleno al 48-90 % del alto (y403): se cuentan con
+    // ese alto (69 % en promedio) para que cubran lo mismo (mas tarjetas, mas bajas)
+    if (lvl == 0 && gPad[5].x > 1.0 && gPad[4].y > 0.001 && gPad[4].x < 0.5)
+      hM *= lerp(1.0, 0.69, smoothstep(gPad[5].x * 0.8, gPad[5].x * 1.25, pc) * saturate(gPad[4].y));
     float hpx = max(hM * pc, 1.0);
     // (02/11 paso 4) recorte por alto en pantalla (gPad[3].y / .z px, por defecto 1.2 / 3.0): una hoja de < 1.2 px de alto no se dibuja,
     // entre 1.2 y 3 px se ralea en rampa; lejos queda el cesped plano de la base (PESFarTurf), que empalma con su kFar

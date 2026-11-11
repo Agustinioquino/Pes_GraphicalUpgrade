@@ -185,6 +185,17 @@ static void BuildDense(float curv) {
     s_denseBuilt = true; s_denseCurv = curv;
     Log("pasto v4: mallas de manojos curvos listas (%u tarjetas x %u/%u indices, curvatura %.2f)", kMaxCards, s_dense[0].idxPerCard, s_dense[1].idxPerCard, curv);
 }
+// (11/11 m) alto del pasto NATURAL (w296 en mm, 0 = 28) sobre los 60 mm que suponian las cuentas de tarjetas; 1 = artificial o sin v3
+static float NatCutK() {
+    if (g_cfg.live[104][0] < 0.5f || g_cfg.live[407][0] > 0.5f) return 1.0f;
+    const float mm = g_cfg.live[296][3];
+    return (mm > 1.0f ? std::clamp(mm, 10.0f, 90.0f) : 28.0f) / 60.0f;
+}
+// (11/11 m) y403 = relleno del atlas bajo las hojas 3D (solo con las hojas 3D del natural prendidas: x104, x407 0, z412 0, z410)
+static float NatFill() {
+    const bool on = g_cfg.live[104][0] > 0.5f && g_cfg.live[407][0] < 0.5f && g_cfg.live[412][2] < 0.5f && g_cfg.live[410][2] > 0.5f;
+    return on ? std::clamp(g_cfg.live[403][1], 0.0f, 1.0f) : 0.0f;
+}
 // decide si este dibujo del juego se cambia por la malla propia; llena 'out' (con referencias) y devuelve true
 static bool DensePick(UINT count, LodIA* out) {
     // (20/10) pasto v5 (x139): usa los manojos curvos del v4 aunque el v4 este apagado (densidad 1.25, curvatura 0.6)
@@ -206,6 +217,12 @@ static bool DensePick(UINT count, LodIA* out) {
     {   // (25/10 c) con el pasto del mod prendido, el lado del juego sigue a Calidad (x61) y Densidad (x58) como el del mod (empalme parejo en 240 px/m)
         if (g_cfg.live[58][3] > 0.5f) { static const float cMulQ[5] = { 0.6f, 1.0f, 1.4f, 1.8f, 2.4f }; int q = std::clamp((int)(g_cfg.live[61][0] + 0.5f), 0, 4);
             float d58 = g_cfg.live[58][0] > 0.05f ? std::clamp(g_cfg.live[58][0], 0.3f, 2.0f) : 1.0f; dens = std::clamp(dens * cMulQ[q] * d58, 0.25f, 2.0f); }
+    }
+    {   // (11/11 m, Agustin: "al ser mas corto se pierde la cantidad de hojas, asi como se ve la textura del pasto del piso") el natural de
+        // 28 mm (w296) deja las tarjetas del juego a la mitad del alto de antes: mas tarjetas (hasta x1.6) y x1.15 con el relleno de y403
+        // (debajo de las hojas 3D las tarjetas quedan mas bajas). Tope: 2x las del juego (las 9248 de la malla)
+        const float K = NatCutK();
+        if (K < 0.999f) { float f = (std::min)(powf(K, -0.6f), 1.6f); if (NatFill() > 0.001f) f *= 1.0f + 0.15f * NatFill(); dens = (std::min)(dens * f, 2.0f); }
     }
     UINT cards = (std::min)((UINT)(gameCards * dens + 0.5f), s_dense[lvl].cards); if (cards < 16) return false;
     DenseLevel& L = s_dense[lvl];
@@ -1017,7 +1034,7 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
     const bool bladeNat = g_cfg.live[104][0] > 0.5f && g_cfg.live[407][0] < 0.5f && g_cfg.live[412][2] < 0.5f;
     const bool bladeOn = bladeNat && g_cfg.live[410][2] > 0.5f && s_bladeIb && s_bladePos && s_bladeUv;
     const float bladeThr = g_cfg.live[410][3] >= 200.0f ? std::clamp(g_cfg.live[410][3], 200.0f, 6000.0f) : 1200.0f;
-    const float bladeAmt = g_cfg.live[408][2] > 0.05f ? std::clamp(g_cfg.live[408][2], 0.1f, 2.0f) : 1.0f;
+    const float bladeAmt = g_cfg.live[408][2] > 0.05f ? std::clamp(g_cfg.live[408][2], 0.1f, 3.0f) : 1.0f;   // (11/11 m) tope 2 -> 3 (Agustin: "de cerca una mayor cantidad de hojas 3d")
     s_bladeLast.store(bladeOn); s_bladeThrLast = bladeThr;
     const float halfL = 52.5f + 3.0f, halfW = 34.0f + 3.0f, halfH = 0.5f * (float)(g_bbH ? g_bbH : 1080);
     ID3D11DeviceContext1* c1 = nullptr; c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1);
@@ -1068,7 +1085,7 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         // gP4.z alto de la hoja (m), gP4.w tope de capas de hojas por pixel: con la camara baja la celda se ve como una banda angosta y la
         // cuenta de frente ((celda * p)^2) sobraba 14-46x; el tope sigue a Calidad / Densidad
         cull[18] = 0.058f * tall; cull[19] = 4.0f * cMul[q] * dens;   // (26/10 e) tope de capas 6 -> 4 (camara baja: menos solapamiento)
-        cull[21] = pRamp0; cull[22] = pRamp1; cull[23] = tallNear / tall;
+        cull[21] = pRamp0; cull[22] = pRamp1; cull[23] = tallNear * NatCutK() / tall;   // (11/11 m) natural: alto cercano real (w296); antes se contaba como de 6 cm y salia la mitad de tarjetas
         cull[25] = (float)mIpc[0]; cull[26] = (float)mIpc[1]; cull[27] = (float)mIpc[2];
         cull[28] = wGame; cull[29] = wClose; cull[30] = pRamp0; cull[31] = pRamp1;   // gPad[2]: rampa del ancho del nivel 0 (como el VS)
         // (2/11 paso 10) gPad[3]: z333 tope de capas en las camaras de juego (x el de la Calidad; 0.6 natural), w333 alto minimo de la hoja en
@@ -1084,6 +1101,10 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         // pasa de 1000 px/m (T0, donde empieza el pasto del juego) y el nivel 0 no emitia nada: en el editor no hay pasto del juego, asi
         // que el nivel 0 va sin tope; y el alcance se mide desde el jugador (origen), no desde la camara, que con zoom queda a 15-40 m
         if (t_editor) cull[36] = 1.0f;
+        // (11/11 m) gPad[4].y: relleno del atlas bajo las hojas 3D (y403); gPad[5] (hojas 3D) ya en los niveles 0..2: el nivel 0 cuenta sus
+        // tarjetas con el alto del relleno donde hay hojas 3D (antes gPad[5] se llenaba despues y en los niveles 0..2 valia 0)
+        cull[37] = bladeOn ? NatFill() : 0.0f;
+        cull[40] = bladeOn ? bladeThr : 0.0f; cull[41] = (std::min)(4096.0f * bladeAmt, (float)kBladeMax); cull[42] = 200000.0f * bladeAmt; cull[43] = (float)kBladeIpb;
         // (26/10 d) reclamo del cuadro: la primera emision que la GPU ejecuta despues del Present se queda con el cuadro (Count[18] = 1);
         // las demas pasan por las celdas sin anotar nada y dibujan 0 instancias
         GpuTimer* tm = (p58[3] > 0.5f && TimersReady()) ? TimerClaim(s_frame.load()) : nullptr;   // (1/11) medidor de GPU (solo con el registro prendido)
@@ -1103,7 +1124,7 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         }
         // (11/11, Agustin: "solo de cerca siiiii", "para primerisimos primer plano nada mas") HOJAS 3D (z410, solo el natural): celdas de 0.5 m
         // que miden >= w410 px/m (1200 si 0); z408 cantidad (hojas por celda hasta 4096 x z408 y un tope total de 200000 x z408 x adaptativa, minimo 0.6)
-        cull[40] = bladeThr; cull[41] = (std::min)(4096.0f * bladeAmt, (float)kBladeMax); cull[42] = 200000.0f * bladeAmt;   /* (11/11 l) sin adaptativa */   // (11/11 g) 60000 -> 200000: en la captura 13.54 habia 219 hojas por celda de 0.5 m (se veia el suelo negro entre las hojas); la adaptativa no baja de 0.6 (solo primerisimos planos) cull[43] = (float)kBladeIpb;
+        /* (11/11 m) cull[40..43] se llenan arriba, antes de los niveles 0..2 */ cull[40] = bladeThr; cull[41] = (std::min)(4096.0f * bladeAmt, (float)kBladeMax); cull[42] = 200000.0f * bladeAmt;   /* (11/11 l) sin adaptativa */   // (11/11 g) 60000 -> 200000: en la captura 13.54 habia 219 hojas por celda de 0.5 m (se veia el suelo negro entre las hojas); la adaptativa no baja de 0.6 (solo primerisimos planos) cull[43] = (float)kBladeIpb;
         if (bladeOn) {
             UINT gw = (UINT)ceilf(2.0f * halfL / 0.5f), gh = (UINT)ceilf(2.0f * halfW / 0.5f);
             cull[0] = 5.0f; cull[1] = 0.5f; cull[7] = (float)gw; cull[8] = (float)gh;
@@ -1194,6 +1215,7 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
             // cb5[12].w (26/10 f): 1 = hojas con el stencil de la base (el sol con sombra las ilumina: sin sombra plana), + 2 = color mezclado con el suelo
             cbq[51] = (stRoute ? 1.0f : 0.0f) + (farBl ? 2.0f : 0.0f);
             cbq[52] = L[i].cell;   // (26/10 g) lado de la celda: el raleo por desgaste mira un punto al azar de la celda, no su esquina
+            cbq[55] = t_editor ? 1.0f : 0.0f;   // (11/11 m) cb5[13].w = 1 editor: el VS no achica las tarjetas como relleno (ahi las hojas 3D van alrededor del jugador)
             c->UpdateSubresource(s_cb, 0, nullptr, cbq, 0, 0);
             c->VSSetConstantBuffers(5, 1, &s_cb);
             c->DrawIndexedInstancedIndirect(s_args, (UINT)sl * 20);

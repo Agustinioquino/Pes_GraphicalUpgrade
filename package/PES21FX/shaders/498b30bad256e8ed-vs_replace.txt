@@ -8,7 +8,7 @@
 cbuffer cVSSystem : register(b0) { float4 cb0[3]; }
 cbuffer cVSScene : register(b2) { float4 cb2[21]; }
 cbuffer cVSMaterial : register(b4) { float4 cb4[5]; }
-cbuffer cVSObject : register(b5) { float4 cb5[14]; }   // cb5[12] / cb5[13] solo en parcelas del mod (rampa cerca: ancho de primer plano, p0, p1 px/m, marcas; lado de la celda)
+cbuffer cVSObject : register(b5) { float4 cb5[14]; }   // cb5[12] / cb5[13] solo en parcelas del mod (rampa cerca: ancho de primer plano, p0, p1 px/m, marcas; lado de la celda, hojas 3D, -, 1 = editor)
 cbuffer PESGameGrassC : register(b12) { float4 pGG; }   // (26/10 g) la DLL, solo en el pasto del juego: x = 1 con el stencil de la base (sin enlazar = 0)
 
 SamplerState g_samplerLinear_Wrap_s : register(s10);
@@ -98,6 +98,7 @@ void main(
   float2 pesBF = float2(0.0, 1.0), pesBW = float2(1.0, 0.0), pesBSl = float2(0.0, 0.0); float pesBSide = 0.0;
   float3 pesBNm = float3(0.0, 0.0, 1.0), pesBMid = float3(0.0, 0.0, 0.0);
   float2 pesBRoot = float2(0.0, 0.0);   // (11/11 f) raiz de la hoja 3D en la celda (para las matas, como pesCardRoot)
+  float pesBIrr = 0.0;                  // (11/11 m) 1 = hoja 3D despareja de abajo (acostada / doblada / rota): algo mas oscura (oclusion)
   float3 pesExtW = 0; float2 pesExtRoot = 0; float pesExtScale = 1; float2 pesExtOrg = 0; float pesPx = 0.0;
   float2 pesCardRoot = 0;   // (11/11 f) raiz de la tarjeta del mod (igual en todos sus vertices)
   // (26/10 d) indice de la tarjeta (hoja) y giro de la celda: fase del viento y banda del atlas POR HOJA (antes por vertice: 70-80% de las
@@ -169,19 +170,47 @@ void main(
       float tilt = lerp(0.14, 0.09, kEvB) * PESBu(sB, 9u);
       float twist = (PESBu(sB, 10u) - 0.5) * 0.9;
       float cutS = (PESBu(sB, 11u) - 0.5) * 1.1;   // corte en diagonal: diferencia de alto entre los dos bordes / ancho
+      // (11/11 m, Agustin: "deberian variar un poco los tamanos y la escala", "para rellenar unas hojas con menos forma pareja") z403 escala
+      // por macollo (alto y ancho juntos, +-17 %) y por hoja (alto +-7 %, ancho +-12 %). w403 hojas desparejas de abajo (16 % de las hojas):
+      // acostadas sobre las otras, dobladas por la mitad (la punta cae) o rotas / chicas con el corte desparejo, todas con los bordes
+      // irregulares y por debajo del corte (el parejo de arriba, w108, no cambia). 0 / 0 = como antes
+      float4 P403 = IniParams.Load(int2(403, 0));
+      float kVs = clamp(P403.z, 0.0, 2.0), kIr = clamp(P403.w, 0.0, 2.0);
+      float scT = 1.0 + (PESBu(sT, 5u) - 0.5) * 0.34 * kVs;
+      h *= scT * (1.0 + (PESBu(sB, 12u) - 0.5) * 0.14 * kVs);
+      wB *= lerp(1.0, scT, 0.7) * (1.0 + (PESBu(sB, 13u) - 0.5) * 0.24 * kVs);
+      float kink = 0.0, wJ = 0.0;
+      if (PESBu(sB, 14u) < 0.16 * kIr) {
+        float uI = PESBu(sB, 15u), u2 = PESBu(sB, 16u);
+        pesBIrr = 1.0; wJ = 0.40; twist *= 2.2;
+        if (uI < 0.45) {          // acostada: sale casi al ras, largo de hoja normal
+          tilt = lerp(1.1, 2.6, u2); bnd = 0.25 + 0.45 * PESBu(sB, 17u);
+          h *= lerp(0.6, 1.0, PESBu(sB, 18u)) / sqrt(1.0 + tilt * tilt);
+          cutB = PESBu(sB, 19u) < 0.5;
+        } else if (uI < 0.75) {   // doblada por la mitad: sube y el ultimo tercio cae
+          bnd = 0.8 + 0.6 * u2; tilt = 0.2 + 0.4 * PESBu(sB, 17u); kink = 0.55 + 0.45 * PESBu(sB, 18u);
+          h *= 0.85 + 0.25 * PESBu(sB, 19u); cutB = false;
+        } else {                  // rota / chica: corte desparejo, mas ancha
+          h *= 0.35 + 0.25 * u2; wB *= 1.15 + 0.30 * PESBu(sB, 17u); cutB = true;
+          cutS = (PESBu(sB, 18u) < 0.5 ? -1.0 : 1.0) * (0.8 + 1.0 * PESBu(sB, 19u)); tilt += 0.25 * PESBu(sB, 20u);
+        }
+      }
       float wr = row == 0u ? 1.0 : (row == 1u ? 0.96 : (row == 2u ? 0.84 : (cutB ? 0.78 : 0.0)));
+      wr *= 1.0 + (PESBu(sB, 21u + row) - 0.5) * wJ;   // bordes irregulares (solo las desparejas)
       float wh = 0.5 * wB * wr;
       float sd = (float)col - 1.0;   // -1 borde, 0 nervio, +1 borde
       float psi = yaw + twist * t;
       float2 Wd = float2(cos(psi), sin(psi)), Fd = float2(-Wd.y, Wd.x);
       float yy = h * t * (1.0 - 0.22 * bnd * t);   // la curva acorta un poco el alto (largo casi constante)
+      float tK = max(t - 0.5, 0.0);
+      yy -= kink * h * 1.6 * tK * tK * (1.0 + 2.0 * tK);   // (11/11 m) doblada: la punta cae
       if (row == 3u && cutB) yy += sd * cutS * wB * 0.5;
       float2 xz = root + F0 * (bnd * h * t * t + tilt * h * t) + Wd * (sd * wh) + Fd * (abs(sd) * 0.30 * wh);   // bordes adelante del nervio: V
       pesVin = float3(xz.x, max(yy, 0.0), xz.y);
       pesUV1 = float2(0.5 + 0.5 * sd, 0.995 - 0.985 * t);
       // marco de la hoja para la normal (local, antes del giro de la celda): cara y ancho en esta fila, pendiente propia, cara a media hoja
       pesBF = Fd; pesBW = Wd; pesBSide = sd;
-      pesBSl = F0 * (2.0 * bnd * t + tilt) / max(1.0 - 0.44 * bnd * t, 0.3);
+      pesBSl = F0 * (2.0 * bnd * t + tilt) / max(1.0 - 0.44 * bnd * t - kink * 1.6 * (2.0 * tK + 6.0 * tK * tK), kink > 0.0 ? 0.12 : 0.3);
       float2 slM = F0 * (bnd + tilt) / max(1.0 - 0.22 * bnd, 0.3);
       float3 Fm = float3(F0.x, 0.0, F0.y), Tm = normalize(float3(slM.x, 1.0, slM.y));
       pesBNm = normalize(Fm - Tm * dot(Fm, Tm));
@@ -366,6 +395,7 @@ void main(
       pesClumpLean += float2(cos(ca), sin(ca)) * 0.25 * frac(pesHv * 5.3 + 0.37) * kV;
       pesClumpAO *= lerp(1.0, 0.85 + 0.3 * h1, 0.5 * saturate(kV));   // la hoja alta asoma: mas luz
     }
+    if (pesBlade) pesClumpAO *= lerp(1.0, 0.80, pesBIrr);   // (11/11 m) las desparejas de abajo reciben menos luz
     // (04/11) matojos: la hoja mira hacia donde se abre desde el centro de su mata (+ su curva propia). El PS (z334) la ilumina segun
     // ese giro: el lado de la mata que da al sol claro y el de atras en sombra, un manojo con volumen en vez de puntos sueltos
     float lnL = length(pesClumpLean);
@@ -391,6 +421,28 @@ void main(
     float pesHz = pesNatV ? (pesBlade ? 1.0 : (pesIsExt ? lerp(0.5 * (PES_NAT_CUT + 1.0), PES_NAT_CUT, pesNearT) : PES_NAT_CUT)) : clamp(Q4.z, 0.3, 3.0);
     pesH = hT * pesHz * (1.0 + (n - 0.5) * 2.0 * hv) * (1.0 - pesWear.x * 0.35) * (1.0 - (pesWShort ? 0.4 : 1.0) * pesWear.y) * (pesWShort ? lerp(1.0, PESWearLiveHeight(pesLive), 0.5) : PESWearLiveHeight(pesLive));   // (11/11 h) natural: "muy desgastada": hasta 45 %, no 25 %
     pesH *= pesHmul;             // (27/10 m) tanda 10: alto de la mata y de la hoja
+    // (11/11 m, Agustin: "rellenar ahi con pasto de atlas", "un pasto mas pequeno para rellenar") y403: donde se dibujan las hojas 3D (z410,
+    // mismo umbral w410 y rampa que el CS) las tarjetas del atlas (pasto del juego y nivel 0 del mod) quedan como RELLENO debajo de las hojas
+    // 3D: 48-90 % del alto (cada tarjeta el suyo), algo mas anchas y abiertas para cualquier lado. La DLL pone mas tarjetas ahi (el mismo
+    // cubrimiento con hojas mas bajas, y con el natural de 28 mm las que faltaban). 0 = como antes
+    if (pesNatV && !pesBlade) {
+      float4 P403f = IniParams.Load(int2(403, 0)), P410f = IniParams.Load(int2(410, 0));
+      float kF = saturate(P403f.y);
+      if (kF > 0.001 && P410f.z > 0.5 && IniParams.Load(int2(412, 0)).z < 0.5 && !(pesIsExt && cb5[13].w > 0.5)) {   // cb5[13].w = 1: editor (ahi las hojas 3D van alrededor del jugador)
+        float thrF = P410f.w >= 200.0 ? clamp(P410f.w, 200.0, 6000.0) : 1200.0;
+        float pF = pesPx;
+        if (!pesIsExt) {   // pasto del juego: px/m en su raiz, como el CS (mitad del alto de pantalla en z63)
+          float4 Pr = float4(pesRoot.x, 0.0, pesRoot.y, 1.0);
+          float4 cvr = float4(dot(Pr, cb2[8]), dot(Pr, cb2[9]), dot(Pr, cb2[10]), dot(Pr, cb2[11]));
+          pF = abs(cb2[5].y) * IniParams.Load(int2(63, 0)).z / max(dot(cvr, cb2[7]), 0.05);
+        }
+        float kZ = smoothstep(thrF * 0.8, thrF * 1.25, pF) * kF;
+        pesH *= lerp(1.0, 0.48 + 0.42 * frac(pesHv * 7.31 + 0.27), kZ);
+        pesWmul *= lerp(1.0, 1.18, kZ);
+        float aF = frac(pesHv * 4.13 + 0.61) * 6.2832;
+        pesLean += float2(cos(aF), sin(aF)) * 0.30 * kZ;
+      }
+    }
     pesCutS = pesNatV ? (pesBlade ? PES_NAT_CUT : pesHz) : 1.0;   // (11/11 k)
     if (pesNatV && !pesBlade) pesWmul *= pow(min(pesHz, 1.0), -0.4);   // (11/11 l) tarjetas del natural mas bajas: algo mas anchas (cubren el suelo)
     pesLean += pesClumpLean;     // (27/10 m) tanda 10: la hoja se abre hacia afuera de la mata y cada una con su curva
@@ -1008,7 +1060,9 @@ void main(
     float sunB = saturate(IniParams.Load(int2(414, 0)).w);
     float dl = length(dB);
     float aoB = (1.0 - smoothstep(Rb * 1.05, Rb * 2.4, dl)) * saturate(0.25 + 0.75 * saturate(dB.y / max(dl, 1e-3)));
-    float kB = saturate(1.0 - 0.62 * shB * lerp(0.35, 1.0, sunB) - 0.35 * aoB);
+    // (11/11 m, capturas 19.22 de Agustin: hojas lima dentro de la sombra negra de la pelota) mas fuerte, como la sombra plana del suelo:
+    // 0.62 x (0.35..1 segun el sol) -> 0.88 x (0.6..1); con el sol tapado o de noche igual queda la sombra de contacto
+    float kB = saturate(1.0 - 0.88 * shB * lerp(0.6, 1.0, sunB) - 0.40 * aoB);
     o3.xyz *= kB;
   }
   o8 = float4(pesWear.x * (pesWShort ? 0.6 : 1.0), pesIsExt ? pesClumpAO : 1.0, (min(floor(pesYaw * 32.0), 31.0) + frac(pesHv * 37.1 + 0.13) * 0.999) / 32.0, pesV3 ? 1.0 + pesBand + ((pesFl & 2) != 0 ? 8.0 : 0.0) + (pesBlade ? 16.0 : 0.0) : 0.0);   // z (27/10 h) valor al azar por hoja (antes pesH, el PS no lo leia); (04/11) z = (sector de 32 del giro + azar) / 32; w = 1 + banda del atlas (0 = sin v3) + 8 si se mezcla con el suelo (igual en todo el dibujo) + 16 hojas 3D (11/11)

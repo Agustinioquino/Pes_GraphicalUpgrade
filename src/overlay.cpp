@@ -246,14 +246,14 @@ enum : unsigned {
     kIcoCamera = 0xf030, kIcoPad = 0xf11b, kIcoDiag = 0xf0f1, kIcoLayers = 0xf5fd, kIcoStar = 0xf005, kIcoPen = 0xf304, kIcoHistory = 0xf1da,
     kIcoSliders = 0xf1de, kIcoTools = 0xf7d9, kIcoGear = 0xf013, kIcoWarn = 0xf071, kIcoSave = 0xf0c7, kIcoUndo = 0xf2ea, kIcoRedo = 0xf2f9,
     kIcoRevert = 0xf0e2, kIcoEye = 0xf06e, kIcoEyeSlash = 0xf070, kIcoReload = 0xf021, kIcoSearch = 0xf002, kIcoX = 0xf00d, kIcoCompress = 0xf066, kIcoExpand = 0xf065,
-    kIcoFilter = 0xf0b0, kIcoDot = 0xf111, kIcoHelp = 0xf059, kIcoDown = 0xf078, kIcoRight = 0xf054, kIcoKeys = 0xf11c, kIcoMuscle = 0xf44b,
+    kIcoFilter = 0xf0b0, kIcoDot = 0xf111, kIcoHelp = 0xf059, kIcoDown = 0xf078, kIcoRight = 0xf054, kIcoKeys = 0xf11c, kIcoMuscle = 0xf44b, kIcoSeedling = 0xf4d8,
 };
 // categoria (0 escena, 1 jugadores, 2 otros), orden dentro de ella e icono de cada seccion (la clave es la seccion en espanol)
 static void SecInfo(const std::string& s, int& cat, int& ord, unsigned& ico) {
     struct E { const char* pre; int cat, ord; unsigned ico; };
     static const E kE[] = {
         { "Ilumin", 0, 0, kIcoLight }, { "Sombra", 0, 1, kIcoShadow }, { "Color", 0, 2, kIcoPalette }, { "Post", 0, 3, kIcoWand },
-        { "Cancha", 0, 4, kIcoBall }, { "Estadio", 0, 5, kIcoStadium },
+        { "Cancha", 0, 4, kIcoBall }, { "Pasto", 0, 5, kIcoSeedling }, { "Estadio", 0, 6, kIcoStadium },   // (11/11 m) Pasto: seccion propia (Agustin: "separado de la cancha y cielo")
         { "Cara", 1, 0, kIcoFace }, { "Piel", 1, 1, kIcoHand }, { "Pelo", 1, 2, kIcoHair }, { "Sudor", 1, 3, kIcoDrop },
         { "Cuerpo", 1, 4, kIcoBody }, { "Kits", 1, 5, kIcoShirt }, { "Ropa", 1, 6, kIcoWind },
         { "Diagn", 2, 9, kIcoDiag },
@@ -975,10 +975,14 @@ static const char* TutorialFor(const std::string& sec) {
         "Que hay aca: la tela de los kits (tejido, brillo tipo 'sheen', luz envolvente), dorsales y escudos con relieve, y la sombra limpia sobre la ropa simulada.\n"
         "Por donde empezar: 1) 'Tejido next-gen' es el efecto principal: mira la camiseta de cerca. 2) Si aparecen franjas de sombra sobre la ropa que se mueve, 'Sombra limpia sobre los kits' mas alto. 3) El brillo de tela con cuidado: mucho = saten.\n"
         "Como probar: primer plano de la espalda de un jugador (dorsal) con sol de costado.";
-    if (sec.rfind("Cancha", 0) == 0) return
-        "Que hay aca: pasto (sombreado entre hojas, zonas secas, variacion), rebote de luz verde del pasto hacia los jugadores, y cielo.\n"
-        "Por donde empezar: 1) 'Rebote del pasto' tine un poco de verde la cara de abajo de piernas y short, como en TV. 2) El pasto se ve mejor en camara baja. 3) Los cambios de cielo se notan mas de tarde.\n"
+    if (sec.rfind("Pasto", 0) == 0) return   // (11/11 m) seccion propia del pasto (antes dentro de Cancha y cielo)
+        "Que hay aca: todo el pasto: el del mod (cerca y toda la cancha), el natural (alto en mm, hojas 3D de primerisimo plano y su relleno), color, luz, corte, viento, pisadas y desgaste.\n"
+        "Por donde empezar: 1) 'Pasto natural' > 'Alto del pasto (mm)': 28 = cancha profesional. 2) Si de cerca se ve el suelo entre las hojas, subi 'Relleno bajo las hojas 3D' o 'Cantidad de hojas 3D'. 3) El pasto se ve mejor en camara baja.\n"
         "Consejo: si el pasto queda 'empastado', baja la variacion macro.";
+    if (sec.rfind("Cancha", 0) == 0) return
+        "Que hay aca: la cancha mojada (reflejos), las nubes, el cielo y el sol visible. El pasto tiene su propia seccion (Pasto).\n"
+        "Por donde empezar: 1) Los cambios de cielo se notan mas de tarde. 2) Los reflejos de la cancha mojada solo con lluvia.\n"
+        "Consejo: el rebote de luz verde del pasto hacia los jugadores esta en Iluminacion.";
     if (sec.rfind("Color", 0) == 0) return
         "Que hay aca: el color final de la imagen: tono, contraste, saturacion, calidez de sombras y luces.\n"
         "Por donde empezar: 1) Cambios chicos: 0.05 ya se nota. 2) Ajusta con una escena de dia y una de noche, no solo una. 3) 'Ver original' para no perder la referencia.\n"
@@ -1396,7 +1400,7 @@ static void DrawSectionExtras(const std::string& sname) {
     if (sname.rfind("Ilumin", 0) == 0) { ImGui::TextDisabled("%s", LightMeterSummary().c_str()); ImGui::Spacing(); }
     if (sname.rfind("Diagn", 0) == 0 || sname.rfind("Debug", 0) == 0) { const std::string gm = GpuMeterSummary();   // (07/11) medidor de VRAM y de ms de GPU (x375)
         if (!gm.empty()) { ImGui::TextWrapped("%s", gm.c_str()); ImGui::Spacing(); } }
-    if (sname.rfind("Cancha", 0) == 0) { ImGui::TextDisabled(TRS("Pasto: parcelas lejanas del juego escaladas: %d en 3 s. Extendido: %d parcelas/cuadro (anillos %d/%d/%d), variante %u idx, camara %s (%.0f, %.0f), estado: %s"), g_grassDbg.sparseLast, g_grassDbg.patches, g_grassDbg.ring[0], g_grassDbg.ring[1], g_grassDbg.ring[2], g_grassDbg.lod, g_grassDbg.cam ? "ok" : "no", g_grassDbg.ex, g_grassDbg.ez, g_grassDbg.why ? g_grassDbg.why : "-"); ImGui::Spacing(); }
+    if (sname.rfind("Pasto", 0) == 0) { ImGui::TextDisabled(TRS("Pasto: parcelas lejanas del juego escaladas: %d en 3 s. Extendido: %d parcelas/cuadro (anillos %d/%d/%d), variante %u idx, camara %s (%.0f, %.0f), estado: %s"), g_grassDbg.sparseLast, g_grassDbg.patches, g_grassDbg.ring[0], g_grassDbg.ring[1], g_grassDbg.ring[2], g_grassDbg.lod, g_grassDbg.cam ? "ok" : "no", g_grassDbg.ex, g_grassDbg.ez, g_grassDbg.why ? g_grassDbg.why : "-"); ImGui::Spacing(); }
 }
 static void SectionLabel(const MenuGroup& g) {
     int cat, ord; unsigned ico; SecInfo(SecKey(g), cat, ord, ico);
