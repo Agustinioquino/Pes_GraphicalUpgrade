@@ -45,7 +45,7 @@ static std::atomic<int> s_frame{0};   // numero de Present (lo sube GrassFrameBo
 // identifica el cuadro de la GPU (quedaban cuadros con 0 emisiones = cancha pelada un cuadro, y otros con 2). Cada grabacion
 // lleva una emision; la GPU decide cual de las que ejecuta en un cuadro dibuja de verdad (compuerta en el compute: la primera
 // que llega tras el reinicio de Present, ver GrassFrameBoundary). Las demas salen con 0 instancias.
-struct GRec { bool emitted = false, captured = false, clips = false, ball = false, base = false; int pres = -1; int turfN = 0; };   // turfN (26/10 g): dibujos de la base en esta grabacion   // base (26/10 f): ya se dibujo la base de la cancha en esta grabacion
+struct GRec { bool emitted = false, captured = false, clips = false, ball = false, base = false, r4 = false; int pres = -1; int turfN = 0; };   // turfN (26/10 g): dibujos de la base en esta grabacion   // base (26/10 f): ya se dibujo la base de la cancha en esta grabacion
 static std::mutex s_recMx; static std::unordered_map<ID3D11DeviceContext*, GRec> s_rec;
 struct GList { int recPres; };
 static std::unordered_map<ID3D11CommandList*, GList> s_lists;   // listas terminadas con una emision adentro (hasta que se ejecutan)
@@ -441,6 +441,11 @@ static ID3D11Buffer* s_ggCb = nullptr;   // (26/10 g) b12 del VS en el pasto del
 // orden, que cambia en cada cuadro: ruido y titileo entre 40 y 140 px/m)
 static ID3D11Texture2D* s_r0Tex = nullptr; static ID3D11ShaderResourceView* s_r0Srv = nullptr; static D3D11_TEXTURE2D_DESC s_r0Desc = {};
 static DXGI_FORMAT s_r0Fmt = DXGI_FORMAT_UNKNOWN; static UINT s_r0Mip = 0; static bool s_r0Failed = false;
+// (11/11 j) y290 = 0 ("Propia"): copia de RT4 de la base (luz difusa / horneada del estadio) que el PS de las hojas (18afff, t44) escribe en su RT4
+// con la del suelo en la raiz. Antes escribian 0: en la sombra el pasto corto quedaba gris oscuro (captura 15.21 de Agustin). Una por grabacion
+static ID3D11Texture2D* s_r4Tex = nullptr; static ID3D11ShaderResourceView* s_r4Srv = nullptr; static D3D11_TEXTURE2D_DESC s_r4Desc = {};
+static DXGI_FORMAT s_r4Fmt = DXGI_FORMAT_UNKNOWN; static UINT s_r4Mip = 0; static bool s_r4Failed = false;
+static std::atomic<int> s_r4Copies{0}, s_r4Binds{0};
 // (26/10 g) emision diferida: las hojas se dibujan despues del ULTIMO dibujo de la base de la grabacion (antes: despues del primero; si la
 // cancha viene en varios dibujos, las partes dibujadas despues quedaban debajo de las hojas sin escribir RT0 / RT4 = suelo sin color ni luz).
 // Se guarda la pasada (targets, viewports, stencil de la base y una copia de la escena del VS b2) y se emite antes del siguiente dibujo que
@@ -462,6 +467,7 @@ static void HyDropLocked() {
     if (s_baseDss) s_baseDss->Release(); s_baseDss = nullptr; s_baseDssOk = false;
     if (s_ggCb) s_ggCb->Release(); s_ggCb = nullptr;
     if (s_r0Srv) s_r0Srv->Release(); if (s_r0Tex) s_r0Tex->Release(); s_r0Srv = nullptr; s_r0Tex = nullptr; s_r0Failed = false;
+    if (s_r4Srv) s_r4Srv->Release(); if (s_r4Tex) s_r4Tex->Release(); s_r4Srv = nullptr; s_r4Tex = nullptr; s_r4Failed = false;
 }
 static D3D11_DEPTH_STENCIL_DESC DssDesc(ID3D11DepthStencilState* s) {
     D3D11_DEPTH_STENCIL_DESC d = {};
@@ -514,9 +520,15 @@ static ID3D11BlendState* BladeBlend(ID3D11BlendState* src, int mode) {
     n->AddRef(); return n;
 }
 // (26/10 g) copia del RT0 puesto (el suelo ya dibujado) a una textura propia; devuelve su vista con referencia o null
-static ID3D11ShaderResourceView* SnapshotRT0(ID3D11DeviceContext* c) {
-    if (!g_dev.dev) return nullptr;
-    ID3D11RenderTargetView* rtv = nullptr; c->OMGetRenderTargets(1, &rtv, nullptr);
+// (11/11 j) generalizada: idx 0 = RT0 (color del suelo, x291), 4 = RT4 (luz del estadio, y290 = 0); cada una con su textura
+static ID3D11ShaderResourceView* SnapshotRT(ID3D11DeviceContext* c, UINT idx) {
+    if (!g_dev.dev || (idx != 0 && idx != 4)) return nullptr;
+    ID3D11Texture2D*& s_r0Tex = idx == 4 ? s_r4Tex : fx::s_r0Tex; ID3D11ShaderResourceView*& s_r0Srv = idx == 4 ? s_r4Srv : fx::s_r0Srv;
+    D3D11_TEXTURE2D_DESC& s_r0Desc = idx == 4 ? s_r4Desc : fx::s_r0Desc; DXGI_FORMAT& s_r0Fmt = idx == 4 ? s_r4Fmt : fx::s_r0Fmt;
+    UINT& s_r0Mip = idx == 4 ? s_r4Mip : fx::s_r0Mip; bool& s_r0Failed = idx == 4 ? s_r4Failed : fx::s_r0Failed;
+    ID3D11RenderTargetView* rtvs[8] = {}; c->OMGetRenderTargets(idx + 1, rtvs, nullptr);
+    ID3D11RenderTargetView* rtv = rtvs[idx];
+    for (UINT i = 0; i < idx; i++) if (rtvs[i]) rtvs[i]->Release();
     if (!rtv) return nullptr;
     D3D11_RENDER_TARGET_VIEW_DESC rd; rtv->GetDesc(&rd);
     ID3D11Resource* res = nullptr; rtv->GetResource(&res); rtv->Release();
@@ -537,7 +549,7 @@ static ID3D11ShaderResourceView* SnapshotRT0(ID3D11DeviceContext* c) {
                 D3D11_SHADER_RESOURCE_VIEW_DESC sd = {}; sd.Format = rd.Format; sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D; sd.Texture2D.MostDetailedMip = rd.Texture2D.MipSlice; sd.Texture2D.MipLevels = 1;
                 if (FAILED(g_dev.dev->CreateShaderResourceView(s_r0Tex, &sd, &s_r0Srv))) s_r0Srv = nullptr;
             } else s_r0Tex = nullptr;
-            if (!s_r0Tex || !s_r0Srv) { s_r0Failed = true; Log("pasto tanda 6: no se pudo crear la copia del suelo (RT0 %ux%u formato %d / vista %d): las hojas lejanas quedan con su color", td.Width, td.Height, (int)td.Format, (int)rd.Format); }
+            if (!s_r0Tex || !s_r0Srv) { s_r0Failed = true; Log("pasto tanda 6: no se pudo crear la copia del suelo (RT%u %ux%u formato %d / vista %d): %s", idx, td.Width, td.Height, (int)td.Format, (int)rd.Format, idx == 4 ? "las hojas quedan sin la luz del estadio (y290 = 0)" : "las hojas lejanas quedan con su color"); }
         }
         if (!s_r0Failed && s_r0Tex && s_r0Srv) { dst = s_r0Tex; dst->AddRef(); out = s_r0Srv; out->AddRef(); }
     }
@@ -818,6 +830,8 @@ void GrassPresent() {
             s_turfMaxRec.exchange(0), s_turfAfter.exchange(0), s_flushWhy[0].exchange(0), s_flushWhy[1].exchange(0), s_flushWhy[2].exchange(0), s_flushWhy[3].exchange(0),
             s_flushWhy[4].exchange(0), s_flushWhy[5].exchange(0), s_flushOther.exchange(0), s_pendLost.exchange(0),
             s_emitSt.exchange(0), s_emitRt4.exchange(0), s_emitSnap.exchange(0), s_emitBare.exchange(0), s_skipNoBase.exchange(0));
+        { const int cp = s_r4Copies.exchange(0), bd = s_r4Binds.exchange(0);   // (11/11 j)
+          Log("pasto luz del estadio en las hojas (y290 = %.0f): copias de RT4 %d, dibujos con la copia %d%s", g_cfg.live[290][1], cp, bd, s_r4Failed ? " | NO SE PUDO CREAR LA COPIA" : ""); }
         if (s_bladeLast.load()) Log("pasto hojas 3D (z410): celdas %d, hojas por celda %d (~%d hojas), umbral %.0f px/m", s_bladeCells.load(), s_bladePer.load(), s_bladeCells.load() * s_bladePer.load(), s_bladeThrLast);
         g_grassDbg.calls = 0; g_grassDbg.emits = 0; g_grassDbg.sparseLast = g_grassDbg.sparse; g_grassDbg.sparse = 0; }
 }
@@ -826,6 +840,15 @@ void GrassPresent() {
 // ese dibujo); si no, se pone el guardado y se devuelve el del contexto al terminar.
 // Devuelve true si los dibujos quedaron grabados (la grabacion ya lleva su emision).
 static thread_local bool t_editor = false;   // (08/11 c) emision en el editor (x393): sin estados de la base, alcance y393
+// (11/11 j) y290 = 0: la luz del estadio de la base (RT4) para las hojas, copiada UNA vez por grabacion (la primera hoja / recorte / pasto del
+// juego despues de la base) y enlazada en t44 del PS de las hojas. null = no corresponde (y290 = 1, editor, sin la base debajo, sin copia)
+static ID3D11ShaderResourceView* BaseRT4ForBlades(ID3D11DeviceContext* c, bool baseUnder) {
+    if (!baseUnder || g_cfg.live[290][1] > 0.5f || t_editor || !g_dev.dev) return nullptr;
+    if (RecClaim(c, &GRec::r4)) { ID3D11ShaderResourceView* s = SnapshotRT(c, 4); if (s) s_r4Copies++; return s; }
+    std::lock_guard<std::mutex> lk(s_bsMx);
+    if (s_r4Failed || !s_r4Srv || s_hyDev != g_dev.dev) return nullptr;
+    s_r4Srv->AddRef(); return s_r4Srv;
+}
 // (08/11 d, Agustin: "no puedes cargar sin haber cargado un partido antes?") ESTADO PROPIO para el editor: sin partido visto no hay
 // estado del pasto del juego (shaders, texturas de la cancha, cbuffers), asi que se arma uno equivalente una sola vez: los shaders del
 // pasto del catalogo (los reemplazos del mod, 498b30 / 18afff: las reglas de t7 / t8 / t9 y t120 se aplican igual en BeforeDraw), un
@@ -1092,9 +1115,11 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
             if (bD) bD->Release();
         }
         ID3D11ShaderResourceView* snap = nullptr; ID3D11ShaderResourceView* oldT10 = nullptr; bool t10Set = false;
+        ID3D11ShaderResourceView* r4 = nullptr; ID3D11ShaderResourceView* oldT44 = nullptr; bool t44Set = false;   // (11/11 j) luz del estadio (y290 = 0)
         { int bm = 0; const bool baseUnder = !t_editor && (!bound || RecHas(c, &GRec::base));   // (08/11 c) editor: sin RT4 ni copia del suelo (no hay cancha)   // sin la base dibujada antes no hay suelo con que mezclar ni luz en RT4
           if (g_cfg.live[290][1] > 0.5f && baseUnder) bm |= 1;
-          if (g_cfg.live[291][0] > 0.5f && baseUnder && (snap = SnapshotRT0(c)) != nullptr) bm |= 2;   // (26/10 g) sin la copia del suelo no hay mezcla
+          if (g_cfg.live[291][0] > 0.5f && baseUnder && (snap = SnapshotRT(c, 0)) != nullptr) bm |= 2;   // (26/10 g) sin la copia del suelo no hay mezcla
+          if ((r4 = BaseRT4ForBlades(c, baseUnder)) != nullptr) { c->PSGetShaderResources(44, 1, &oldT44); c->PSSetShaderResources(44, 1, &r4); t44Set = true; s_r4Binds++; }
           if (bm) if (ID3D11BlendState* nb = BladeBlend(svBs, bm)) { c->OMSetBlendState(nb, svBf, svBm); nb->Release(); farBl = (bm & 2) != 0; bmSet = bm; }
           if (farBl) { c->PSGetShaderResources(10, 1, &oldT10); c->PSSetShaderResources(10, 1, &snap); t10Set = true; } }
         if (stRoute) s_emitSt++; if (bmSet & 1) s_emitRt4++; if (bmSet & 2) s_emitSnap++; if (!stRoute && !bmSet) s_emitBare++;
@@ -1173,6 +1198,8 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         if (svDss) svDss->Release(); if (svBs) svBs->Release();
         if (t10Set) c->PSSetShaderResources(10, 1, &oldT10);
         if (oldT10) oldT10->Release(); if (snap) snap->Release();
+        if (t44Set) c->PSSetShaderResources(44, 1, &oldT44);
+        if (oldT44) oldT44->Release(); if (r4) r4->Release();
         emitted = true;
         Why(bound ? "emitiendo (desde el pasto del juego)" : "emitiendo (desde la base de la cancha)");
     }
@@ -1295,7 +1322,15 @@ void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, const ShaderEntr
     // (25/10) estado del dibujo de pasto del juego, una vez por grabacion: con el se emite desde la base de la cancha
     if (extraOn && RecClaim(c, &GRec::captured)) CaptureState(c, vs, ps);
     if (RecClaim(c, &GRec::ball)) PitchBallNote(c, f);     // (20/10) posicion de la pelota para el pasto aplastado
-    if (RecClaim(c, &GRec::clips)) PitchClipsDraw(c, f);   // recortes de pasto volando (una vez por grabacion; el estado del pasto ya esta puesto)
+    if (RecClaim(c, &GRec::clips)) {   // recortes de pasto volando (una vez por grabacion; el estado del pasto ya esta puesto)
+        // (11/11 j, captura 15.21: "manchas negras") los recortes salian con el estado propio del pasto del juego: sin el stencil de la base (la
+        // pasada del sol con mapa de sombras no los iluminaba) y RT4 = 0 (sin la luz del estadio): negros. Ahora con los mismos estados que las hojas
+        const bool keepGB = t_gameGB; t_gameGB = true;
+        GrassStScope cs; GrassGameStates(c, cs);
+        PitchClipsDraw(c, f);
+        GrassGameStatesRestore(c, cs);
+        t_gameGB = keepGB;
+    }
     // (20/10) pasto v4: tarjetas curvas propias en vez de las del juego (cerca). (26/10) Con el pasto del mod emitiendo y T0 >= 1000
     // el VS anula casi todas las parcelas del juego: no vale la pena cambiarles la malla (1.4x mas vertices que se anulan igual)
     { float T[4]; Thresholds(T); bool denseSkip = extraOn && T[0] >= 1000.0f && !s_missing.load();
@@ -1420,9 +1455,12 @@ void GrassBaseFlush(ID3D11DeviceContext* c, int why, uint64_t psHash, UINT nRtv,
 void GrassGameStates(ID3D11DeviceContext* c, GrassStScope& s) {
     const bool gb = t_gameGB; t_gameGB = false;
     if (!gb || g_cfg.bypass || !g_dev.dev || g_cfg.live[58][3] < 0.5f || g_cfg.live[290][3] < 0.5f) return;
-    const bool st = g_cfg.live[290][0] > 0.5f, rt4 = g_cfg.live[290][1] > 0.5f && RecHas(c, &GRec::base);   // RT4 solo con la base ya debajo
-    if (!st && !rt4) return;
+    const bool baseHere = RecHas(c, &GRec::base);
+    const bool st = g_cfg.live[290][0] > 0.5f, rt4 = g_cfg.live[290][1] > 0.5f && baseHere;   // RT4 solo con la base ya debajo
+    ID3D11ShaderResourceView* r4 = BaseRT4ForBlades(c, baseHere);   // (11/11 j) y290 = 0: la luz del estadio de la base para escribir en RT4
+    if (!st && !rt4 && !r4) return;
     c->OMGetDepthStencilState(&s.dss, &s.ref); c->OMGetBlendState(&s.bs, s.bf, &s.bm); s.on = true;
+    if (r4) { c->PSGetShaderResources(44, 1, &s.t44); c->PSSetShaderResources(44, 1, &r4); r4->Release(); s.t44Set = true; s_r4Binds++; }
     bool stOk = false;
     if (st) {
         ID3D11DepthStencilState* bD = nullptr; UINT bR = 0; bool have = false;
@@ -1450,6 +1488,7 @@ void GrassGameStatesRestore(ID3D11DeviceContext* c, GrassStScope& s) {
     if (!s.on) return;
     c->OMSetDepthStencilState(s.dss, s.ref); c->OMSetBlendState(s.bs, s.bf, s.bm);
     if (s.b12) { c->VSSetConstantBuffers(12, 1, &s.vsB12); if (s.vsB12) s.vsB12->Release(); }
+    if (s.t44Set) { c->PSSetShaderResources(44, 1, &s.t44); if (s.t44) s.t44->Release(); }
     if (s.dss) s.dss->Release(); if (s.bs) s.bs->Release();
     s = GrassStScope();
 }
