@@ -1,0 +1,205 @@
+// PES21 FX (18/10): vertex shader de medias / calentadores / cuello del kit (malla animada por huesos, PS 55297925e0c66085).
+// Agrega "inercia de tejido": la media se retrasa unos milimetros respecto del hueso cuando la pierna acelera (y vuelve),
+// mas en la cana que en el tobillo. Solo por debajo de una altura (el cuello queda fuera). x82 on | y82 inercia | z82 altura max (m) | w82 tobillo libre
+
+cbuffer cVSScene : register(b2)
+{
+
+  struct
+  {
+    float4x4 m_projectionView;
+    float4x4 m_projection;
+    float4x4 m_view;
+    float4x4 m_shadowProjection;
+    float4x4 m_shadowProjection2;
+    float4 m_eyepos;
+    float4 m_projectionParam;
+    float4 m_viewportSize;
+    float4 m_exposure;
+    float4 m_fogParam[3];
+    float4 m_fogColor;
+    float4 m_cameraCenterOffset;
+    float4 m_shadowMapResolutions;
+  } g_vsScene : packoffset(c0);
+
+}
+
+cbuffer cVSObject : register(b5)
+{
+
+  struct
+  {
+    float4x4 m_viewWorld;
+    float4x4 m_world;
+    float4 m_useWeightCount;
+    float4 m_localParam[9];
+  } g_vsObject : packoffset(c0);
+
+}
+
+cbuffer VSBones : register(b6)
+{
+
+  struct
+  {
+    float4x3 m_boneMatrices[32];
+  } g_vsBone : packoffset(c0);
+
+
+  struct
+  {
+    float4x3 m_boneMatrices[32];
+  } g_vsPrevBone : packoffset(c96);
+
+}
+
+
+
+// 3Dmigoto declarations
+#define cmp -
+Texture1D<float4> IniParams : register(t120);
+Texture2D<float4> StereoParams : register(t125);
+#include "pes_cloth.hlsli"
+
+
+void main(
+  float4 v0 : POSITION0,
+  float4 v1 : NORMAL0,
+  float4 v2 : COLOR0,
+  float4 v3 : TANGENT0,
+  uint4 v4 : BLENDINDICES0,
+  float4 v5 : BLENDWEIGHT0,
+  float4 v6 : TEXCOORD0,
+  float4 v7 : TEXCOORD1,
+  float4 v8 : TEXCOORD2,
+  float2 v9 : TEXCOORD3,
+  out float4 o0 : SV_Position0,
+  out float4 o1 : COLOR0,
+  out float4 o2 : TEXCOORD0,
+  out float4 o3 : TEXCOORD4,
+  out float4 o4 : TEXCOORD5,
+  out float4 o5 : TEXCOORD6,
+  out float4 o6 : TEXCOORD7,
+  out float4 o7 : TEXCOORD8,
+  out float2 o8 : TEXCOORD9)
+{
+  float4 r0,r1,r2,r3,r4,r5;
+  uint4 bitmask, uiDest;
+  float4 fDest;
+
+  r0.x = cmp(g_vsObject.m_useWeightCount.x != 0.000000);
+  if (r0.x != 0) {
+    r0.xyzw = (int4)v4.xyzw * int4(3,3,3,3);
+    r1.xyzw = g_vsBone.m_boneMatrices[v4.y]._m00_m10_m20_m30 * v5.yyyy;
+    r2.xyzw = g_vsBone.m_boneMatrices[v4.y]._m01_m11_m21_m31 * v5.yyyy;
+    r3.xyzw = g_vsBone.m_boneMatrices[v4.y]._m02_m12_m22_m32 * v5.yyyy;
+    r1.xyzw = g_vsBone.m_boneMatrices[v4.x]._m00_m10_m20_m30 * v5.xxxx + r1.xyzw;
+    r2.xyzw = g_vsBone.m_boneMatrices[v4.x]._m01_m11_m21_m31 * v5.xxxx + r2.xyzw;
+    r3.xyzw = g_vsBone.m_boneMatrices[v4.x]._m02_m12_m22_m32 * v5.xxxx + r3.xyzw;
+    r1.xyzw = g_vsBone.m_boneMatrices[v4.z]._m00_m10_m20_m30 * v5.zzzz + r1.xyzw;
+    r2.xyzw = g_vsBone.m_boneMatrices[v4.z]._m01_m11_m21_m31 * v5.zzzz + r2.xyzw;
+    r3.xyzw = g_vsBone.m_boneMatrices[v4.z]._m02_m12_m22_m32 * v5.zzzz + r3.xyzw;
+    r1.xyzw = g_vsBone.m_boneMatrices[v4.w]._m00_m10_m20_m30 * v5.wwww + r1.xyzw;
+    r2.xyzw = g_vsBone.m_boneMatrices[v4.w]._m01_m11_m21_m31 * v5.wwww + r2.xyzw;
+    r3.xyzw = g_vsBone.m_boneMatrices[v4.w]._m02_m12_m22_m32 * v5.wwww + r3.xyzw;
+    PesClothScale(r1, r2, r3, v0.xyz, v1.xyz);   // (24/10 f) ropa: escala de la musculatura atenuada (x163 / w163)
+    r4.x = dot(v0.xyzw, r1.xyzw);
+    r4.y = dot(v0.xyzw, r2.xyzw);
+    r4.z = dot(v0.xyzw, r3.xyzw);
+    r1.x = dot(v1.xyz, r1.xyz);
+    r1.y = dot(v1.xyz, r2.xyz);
+    r1.z = dot(v1.xyz, r3.xyz);
+    r2.xyzw = g_vsPrevBone.m_boneMatrices[v4.y]._m00_m10_m20_m30 * v5.yyyy;
+    r3.xyzw = g_vsPrevBone.m_boneMatrices[v4.y]._m01_m11_m21_m31 * v5.yyyy;
+    r5.xyzw = g_vsPrevBone.m_boneMatrices[v4.y]._m02_m12_m22_m32 * v5.yyyy;
+    r2.xyzw = g_vsPrevBone.m_boneMatrices[v4.x]._m00_m10_m20_m30 * v5.xxxx + r2.xyzw;
+    r3.xyzw = g_vsPrevBone.m_boneMatrices[v4.x]._m01_m11_m21_m31 * v5.xxxx + r3.xyzw;
+    r5.xyzw = g_vsPrevBone.m_boneMatrices[v4.x]._m02_m12_m22_m32 * v5.xxxx + r5.xyzw;
+    r2.xyzw = g_vsPrevBone.m_boneMatrices[v4.z]._m00_m10_m20_m30 * v5.zzzz + r2.xyzw;
+    r3.xyzw = g_vsPrevBone.m_boneMatrices[v4.z]._m01_m11_m21_m31 * v5.zzzz + r3.xyzw;
+    r5.xyzw = g_vsPrevBone.m_boneMatrices[v4.z]._m02_m12_m22_m32 * v5.zzzz + r5.xyzw;
+    r2.xyzw = g_vsPrevBone.m_boneMatrices[v4.w]._m00_m10_m20_m30 * v5.wwww + r2.xyzw;
+    r3.xyzw = g_vsPrevBone.m_boneMatrices[v4.w]._m01_m11_m21_m31 * v5.wwww + r3.xyzw;
+    r0.xyzw = g_vsPrevBone.m_boneMatrices[v4.w]._m02_m12_m22_m32 * v5.wwww + r5.xyzw;
+    PesClothScale(r2, r3, r0, v0.xyz, v1.xyz);   // (24/10 g) la posicion anterior con la misma escala (vectores de movimiento)
+    r2.x = dot(v0.xyzw, r2.xyzw);
+    r2.y = dot(v0.xyzw, r3.xyzw);
+    r2.z = dot(v0.xyzw, r0.xyzw);
+  } else {
+    r1.xyz = v1.xyz;
+    r4.xyz = v0.xyz;
+    r2.xyz = v0.xyz;
+  }
+  // === PES21 inercia de tejido (medias y calentadores) ===
+  { float4 P82 = IniParams.Load(int2(82,0));
+    if (P82.x > 0.5 && g_vsObject.m_useWeightCount.x != 0.0) {
+      // altura sobre el origen del jugador, en mundo (sin suponer el eje "arriba" del modelo)
+      float4 pm = float4(r4.xyz, 1.0);
+      float hW = dot(pm, g_vsObject.m_world._m01_m11_m21_m31) - g_vsObject.m_world._m31;
+      float hMax = P82.z > 0.1 ? P82.z : 0.6;
+      float ankle = clamp(P82.w, 0.0, 0.3);
+      float m = saturate((hMax - hW) * 12.0) * saturate((hW - ankle) / 0.18);   // 0 en el tobillo y en el pie, 1 en la cana
+      float3 vel = r4.xyz - r2.xyz;                                              // desplazamiento del hueso en este cuadro
+      float vl = length(vel);
+      if (m > 0.001 && vl > 1e-5) {
+        // solo la parte del movimiento perpendicular a la pierna (a lo largo del hueso la media no resbala)
+        // calibrado (18/10 b): una media elastica se retrasa ~1 mm caminando y ~4-5 mm en sprint (13 cm de hueso por
+        // cuadro a 60 fps): factor 0.05 del desplazamiento del cuadro, tope 6 mm en la cana
+        float3 lag = -vel * (P82.y > 0 ? P82.y : 0.05);
+        float ll = length(lag);
+        float lmax = 0.006 * m;
+        if (ll > lmax) lag *= lmax / ll;
+        r4.xyz += lag * m;
+      }
+    } }
+  r4.w = v0.w;
+  r0.x = dot(r4.xyzw, g_vsObject.m_viewWorld._m00_m10_m20_m30);
+  r0.y = dot(r4.xyzw, g_vsObject.m_viewWorld._m01_m11_m21_m31);
+  r0.z = dot(r4.xyzw, g_vsObject.m_viewWorld._m02_m12_m22_m32);
+  r0.w = dot(r4.xyzw, g_vsObject.m_viewWorld._m03_m13_m23_m33);
+  r3.x = dot(r0.xyzw, g_vsScene.m_projection._m00_m10_m20_m30);
+  r3.y = dot(r0.xyzw, g_vsScene.m_projection._m01_m11_m21_m31);
+  o0.z = dot(r0.xyzw, g_vsScene.m_projection._m02_m12_m22_m32);
+  r3.w = dot(r0.xyzw, g_vsScene.m_projection._m03_m13_m23_m33);
+  r2.w = v0.w;
+  r4.x = dot(r2.xyzw, g_vsScene.m_shadowProjection._m00_m10_m20_m30);
+  r4.y = dot(r2.xyzw, g_vsScene.m_shadowProjection._m01_m11_m21_m31);
+  r4.z = dot(r2.xyzw, g_vsScene.m_shadowProjection._m02_m12_m22_m32);
+  r4.w = dot(r2.xyzw, g_vsScene.m_shadowProjection._m03_m13_m23_m33);
+  o7.z = dot(r4.xyzw, g_vsScene.m_shadowProjection2._m00_m10_m20_m30);
+  o7.w = dot(r4.xyzw, g_vsScene.m_shadowProjection2._m01_m11_m21_m31);
+  o8.y = dot(r4.xyzw, g_vsScene.m_shadowProjection2._m03_m13_m23_m33);
+  r0.w = dot(r0.xyz, r0.xyz);
+  r0.w = rsqrt(r0.w);
+  r0.xyz = r0.xyz * r0.www;
+  r2.x = dot(r1.xyz, g_vsObject.m_viewWorld._m00_m10_m20);
+  r2.y = dot(r1.xyz, g_vsObject.m_viewWorld._m01_m11_m21);
+  r2.z = dot(r1.xyz, g_vsObject.m_viewWorld._m02_m12_m22);
+  r0.w = dot(r2.xyz, r2.xyz);
+  r0.w = rsqrt(r0.w);
+  r1.xyz = r2.xyz * r0.www;
+  r2.x = dot(v3.xyz, g_vsObject.m_viewWorld._m00_m10_m20);
+  r2.y = dot(v3.xyz, g_vsObject.m_viewWorld._m01_m11_m21);
+  r2.z = dot(v3.xyz, g_vsObject.m_viewWorld._m02_m12_m22);
+  r0.w = dot(r2.xyz, r2.xyz);
+  r0.w = rsqrt(r0.w);
+  r2.xyz = r2.xyz * r0.www;
+  r4.xyz = r2.yzx * r1.zxy;
+  r4.xyz = r1.yzx * r2.zxy + -r4.xyz;
+  r0.w = dot(r4.xyz, r4.xyz);
+  r0.w = rsqrt(r0.w);
+  r4.xyz = r4.xyz * r0.www;
+  r4.xyz = v3.www * r4.xyz;
+  o3.xyz = -r0.xyz;
+  o4.xyz = r2.xyz;
+  o5.xyz = r4.xyz;
+  o6.xyz = r1.xyz;
+  o0.xyw = r3.xyw;
+  o1.xyz = v2.xyz;
+  o1.w = g_vsObject.m_useWeightCount.w;
+  o2.xy = v6.xy;
+  o2.zw = v7.xy;
+  o7.xy = r3.xy;
+  o8.x = r3.w;
+  return;
+}
