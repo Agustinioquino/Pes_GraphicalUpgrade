@@ -157,6 +157,7 @@ void main(
   float pesNearT = 1.0, pesCutS = 1.0;
   float kShortV = saturate((1.0 - PES_NAT_CUT) * 60.0 / 32.0);   // (11/11 n) natural bajo: 0 desde 60 mm, 1 a 28 mm (ver kShortP en 18afff)
   float4 P58 = IniParams.Load(int2(58, 0));
+  bool pesNatV0 = IniParams.Load(int2(407, 0)).x < 0.5;   // (12/11) natural (x438 reparto sin filas: el artificial no cambia)
   if (pesIsExt) {
     // v2 instanciado: la parcela sale del buffer de instancias; fundido por altura en los bordes de la banda y
     // descarte exacto con la camara de este cuadro
@@ -206,6 +207,13 @@ void main(
       uint sT = PESBh(tl * 2654435761u ^ cid), sB = PESBh(bi * 2246822519u ^ cid ^ 0x68BC21EBu);
       float offR2 = (float)(PESBh(cid ^ 0x5BD1E995u) & 4095u);
       float2 r2 = frac(0.5 + ((float)tl + offR2) * float2(0.7548776662, 0.5698402910));
+      // (12/11, Agustin: franjas oscuras finas y paralelas en el pasto de cerca, "es notorio en las hojas achicadas las mas cercanas") la
+      // secuencia R2 es una RED (red de Kronecker): con las hojas angostas, que casi no se tapan entre si, las filas de la red se veian de lejos
+      // como franjas en dos direcciones fijas (iguales en todas las celdas: la red solo se corre). x438 (0 = como antes) corre cada macollo al
+      // azar dentro de su lugar en la red (unos 0.9 espacios; las primeras de la celda, que tienen mas lugar, mas): reparto parejo sin filas.
+      // Fijo por macollo: no se mueve con la camara (la cantidad por celda cambia, la posicion de cada macollo no)
+      float kSpr = pesNatV0 ? clamp(IniParams.Load(int2(438, 0)).x, 0.0, 1.5) : 0.0;
+      if (kSpr > 0.001) r2 = frac(r2 + (float2(PESBu(sT, 12u), PESBu(sT, 13u)) - 0.5) * (0.9 * kSpr) * rsqrt((float)tl + 1.0));
       float cellM = max(cb5[13].x, 0.25);
       float2 rootT = (r2 - 0.5) * cellM + (float2(PESBu(sT, 1u), PESBu(sT, 2u)) - 0.5) * 0.004;
       // (11/11 o, Agustin: "dale naturalidad a la distancia entre pastos") con la secuencia R2 los macollos quedaban casi equidistantes (como
@@ -391,6 +399,21 @@ void main(
     pesRotCS = float2(cs, sn);
     // (25/10 c) cb5[9].z = 1: la malla ya trae las raices repartidas en la celda y los desplazamientos de la hoja en metros (no se escalan)
     float2 lp = (cb5[11].z > 0.5 && cb5[9].z > 0.5) ? pesVin.xz : pesVin.xz * pesExtScale;
+    // (12/11) x438 tambien en las TARJETAS del natural: la malla de la DLL (BuildDense) pone las raices con Halton 2 / 3 y es la MISMA en todas
+    // las celdas (solo gira de a 90 grados): el mismo dibujo de filas repetido cada 0.5 / 1 / 2 m. Cada tarjeta se corre al azar por celda
+    // (dentro de la celda, dando la vuelta en el borde: la cobertura sigue pareja), con la misma cuenta que las hojas 3D
+    float2 pesRlOff = float2(0.0, 0.0);
+    if (pesCard >= 0 && !pesBlade && pesNatV0) {
+      float kSprC = clamp(IniParams.Load(int2(438, 0)).x, 0.0, 1.5);
+      if (kSprC > 0.001) {
+        float rscJ = (cb5[11].z > 0.5 && cb5[9].z > 0.5) ? max(cb5[13].x, 0.25) : 0.5 * pesExtScale;
+        float2 h0 = float2((float)reversebits((uint)pesCard + 1u) * 2.3283064e-10, PESHal3((uint)pesCard + 1u));
+        uint cJ = PESBh(((uint)(int)floor(ins.x * 4.0 + 8000.5) * 73856093u) ^ ((uint)(int)floor(ins.y * 4.0 + 8000.5) * 19349663u) ^ ((uint)pesCard * 2654435761u));
+        float2 h1 = frac(h0 + (float2(PESBu(cJ, 1u), PESBu(cJ, 2u)) - 0.5) * (0.9 * kSprC) * rsqrt((float)pesCard + 1.0));
+        pesRlOff = (h1 - h0) * rscJ;
+        lp += pesRlOff;
+      }
+    }
     float2 rp = float2(cs * lp.x + sn * lp.y, -sn * lp.x + cs * lp.y);
     pesExtRoot = ins.xy + rp;
     // (11/11 f) raiz de la TARJETA: la misma en todos sus vertices (Halton 2 / 3 de la malla del mod, BuildDense: raices en la celda con
@@ -400,6 +423,7 @@ void main(
     if (pesCard >= 0) {
       float rsc = (cb5[11].z > 0.5 && cb5[9].z > 0.5) ? max(cb5[13].x, 0.25) : 0.5 * pesExtScale;   // lado de la celda (0.5 / 1 / 2 m)
       float2 rl = (float2((float)reversebits((uint)pesCard + 1u) * 2.3283064e-10, PESHal3((uint)pesCard + 1u)) - 0.5) * rsc;
+      rl += pesRlOff;                // (12/11) x438: la raiz corrida de la tarjeta
       if (pesBlade) rl = pesBRoot;   // hoja 3D: su raiz sale de la cuenta de la hoja, no de la malla
       pesCardRoot = ins.xy + float2(cs * rl.x + sn * rl.y, -sn * rl.x + cs * rl.y);
     } else pesCardRoot = pesExtRoot;
