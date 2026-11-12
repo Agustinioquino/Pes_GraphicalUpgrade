@@ -61,6 +61,10 @@ static std::vector<WearBrush> s_wearQueue;
 //    del shader (pes_grass.hlsli, PESWearLiveCurve con x431)
 static inline bool WearReal() { return g_cfg.live[431][0] > 0.5f; }
 static inline float WearActK() { return std::clamp(g_cfg.live[431][1], 0.f, 2.f); }
+// (12/11, Agustin: "un slider para activar en el momento y que el desgaste se note mucho mas de los jugadores", para grabar) w437 PRUEBA:
+// multiplica en vivo la velocidad del desgaste (x115) de lo que hacen los jugadores y la pelota: 0 o 1 = como antes, 20 = cada pisada,
+// frenada, giro o barrida se ve crecer en segundos. Sigue frenado en pausa y en las repeticiones (reloj del partido)
+static inline float WearBoost() { const float b = g_cfg.live[437][3]; return b > 1.f ? std::min(b, 30.f) : 1.f; }
 static int s_tkLast = -1; static double s_tkChangeT = -1e9; static bool s_tkSeen = false;
 static void SimClockPoll() { int tk = g_simTick.load(std::memory_order_relaxed); if (tk >= 0 && tk != s_tkLast) { s_tkLast = tk; s_tkChangeT = Now(); s_tkSeen = true; } }
 // 1 = el desgaste puede sumar ahora; 0 = partido detenido para la simulacion (pausa, repeticion, escena). Sin el gancho: siempre 1 (como antes)
@@ -471,7 +475,7 @@ static void PitchFlatPresent() {
               EmitStrike(s_ballPrev[0] - ix * 0.25f, s_ballPrev[2] - iz * 0.25f, ix, iz, std::min(0.30f + 0.35f * strength, 1.2f), true);
               // (12/11) desgaste real: el pie de apoyo (al costado y algo detras de la pelota) y el raspon del botin debajo de la pelota
               if (WearReal() && g_cfg.live[115][3] > 0.5f && SimGate() > 0.5f) {
-                  const float aK = WearActK(), rt = g_cfg.live[115][0] > 0.f ? g_cfg.live[115][0] : 1.f, st = std::min(strength, 1.6f);
+                  const float aK = WearActK(), rt = (g_cfg.live[115][0] > 0.f ? g_cfg.live[115][0] : 1.f) * WearBoost(), st = std::min(strength, 1.6f);
                   const float sg = Rand01() < 0.5f ? -1.f : 1.f, px = -iz * sg, pz = ix * sg;
                   WearStamp(s_ballPrev[0] - ix * 0.30f + px * 0.22f, s_ballPrev[2] - iz * 0.30f + pz * 0.22f, 0.045f * aK * st * rt, 0.15f);
                   for (int e = 0; e < 3; e++) { float a = -0.35f + 0.15f * e; WearStamp(s_ballPrev[0] + ix * a, s_ballPrev[2] + iz * a, 0.020f * aK * st * rt, 0.11f); }
@@ -789,7 +793,7 @@ void PitchWearPresent() {
     float dtP = std::clamp(s_plAcc, 0.002f, 0.1f); s_plAcc = 0.f;
     // velocidad: el mas cercano del cuadro anterior
     float brush[kWearBrushes][4]; int nb = 0;
-    float rate = P[0] > 0.f ? P[0] : 1.0f, rad = std::clamp(P[1], 0.3f, 2.0f);
+    float rate = (P[0] > 0.f ? P[0] : 1.0f) * WearBoost(), rad = std::clamp(P[1], 0.3f, 2.0f);
     std::vector<PlayerPrev> plNow; plNow.reserve(cnt);
     const float kAct = std::clamp(g_cfg.live[177][1], 0.f, 2.f);   // (2/11) frenadas y arranques desgastan mas (y arrastran la marca)
     const bool real = WearReal(); const float aK = WearActK(), simK = SimGate();   // (12/11) desgaste real
