@@ -943,6 +943,7 @@ void UpdateTimeParams() {
               float wn = sqrtf(wx * wx + wy * wy + wz * wz); if (wn > 1e-6f) { wx /= wn; wy /= wn; wz /= wn; }
               if (wy < 0) { wx = -wx; wy = -wy; wz = -wz; }   // siempre "hacia el sol"
               p[111][0] = wx; p[111][1] = wy; p[111][2] = wz; p[111][3] = asinf(std::clamp(wy, -1.f, 1.f)) * 57.2958f;
+              p[435][0] = M[1]; p[435][1] = M[5]; p[435][2] = M[9]; p[435][3] = 1.f;   // (12/11 4wp0pj) "arriba" del mundo en espacio de vista (botines sucios: la suela primero); no va al ini
               // (26/10) sol estable (312) para el cielo, el disco del sol, los rayos y las sombras de nubes: en la previa y en las
               // repeticiones el motor gira la luz de toma en toma (log de 7894072) y con la luz de cada toma el sol del cielo
               // saltaba de lugar y el dibujo de las nubes sobre la cancha cambiaba entero en cada corte. Se toma la ultima
