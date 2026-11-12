@@ -633,7 +633,42 @@ template<int V> static void STDMETHODCALLTYPE hk_Dispatch(ID3D11DeviceContext* c
     if (g_bodyDiagArmed.load(std::memory_order_relaxed) && Ctx(c).clothCS) BodyNoteClothDispatch(c, x);
     o_Dispatch[V](c, x, y, z);
 }
+// (12/11 v7) PC CPY: la cadena del juego no pasa por ningun CreateSwapChain enganchado. Sin crear nada (la cadena de prueba
+// cerraba el juego con Sider), se busca la cadena desde el destino de dibujo: la imagen final es una superficie de DXGI
+// cuyo padre es la cadena. Solo corre mientras s_findSC esta prendido (lo prende el plan B a los 15 s).
+static std::atomic<bool> s_findSC{false};
+static std::atomic<IDXGISwapChain*> s_foundSC{nullptr};
+static std::atomic<int> s_findTries{0}, s_findSurf{0}, s_findBB{0};
+static std::atomic<long> s_findParentHr{0};
+static void FindSwapChainFromRT(UINT n, ID3D11RenderTargetView* const* v) {
+    if (!v || n > D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT) return;
+    for (UINT i = 0; i < n; ++i) {
+        if (!v[i]) continue;
+        if (s_findTries.fetch_add(1, std::memory_order_relaxed) > 400000) { s_findSC = false; return; }
+        ID3D11Resource* r = nullptr; v[i]->GetResource(&r);
+        if (!r) continue;
+        IDXGISurface* sf = nullptr;
+        if (SUCCEEDED(r->QueryInterface(__uuidof(IDXGISurface), (void**)&sf)) && sf) {
+            s_findSurf.fetch_add(1, std::memory_order_relaxed);
+            IDXGISwapChain* sc = nullptr;
+            const HRESULT hr = sf->GetParent(__uuidof(IDXGISwapChain), (void**)&sc);
+            if (SUCCEEDED(hr) && sc) {
+                IDXGISwapChain* exp = nullptr;
+                if (s_foundSC.compare_exchange_strong(exp, sc)) s_findSC = false; else sc->Release();
+            } else {
+                IDXGIResource* dr = nullptr; DXGI_USAGE us = 0;
+                if (SUCCEEDED(r->QueryInterface(__uuidof(IDXGIResource), (void**)&dr)) && dr) {
+                    if (SUCCEEDED(dr->GetUsage(&us)) && (us & DXGI_USAGE_BACK_BUFFER)) { s_findBB.fetch_add(1, std::memory_order_relaxed); s_findParentHr = (long)hr; }
+                    dr->Release();
+                }
+            }
+            sf->Release();
+        }
+        r->Release();
+    }
+}
 template<int V> static void STDMETHODCALLTYPE hk_OMSetRT(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* v, ID3D11DepthStencilView* d) {
+    if (s_findSC.load(std::memory_order_relaxed)) FindSwapChainFromRT(v ? n : 0, v);
     GrassBaseFlush(c, 1, 0, v ? n : 0, v, d);
     o_OMSetRT[V](c, n, v, d);
     Ctx(c).shadowDSV = HeadShadowBind(n, v, d); Ctx(c).gameShadow = HeadShadowIsGameRes(d);
@@ -2357,6 +2392,38 @@ static DWORD WINAPI PresentPlanB(void*) {
     // (12/11 v6) la cadena de prueba que se armaba aca CERRABA el juego en la PC CPY (v2 a v5): Sider la toma como la
     // cadena del juego ("DX11.SwapChain->GetBuffer failed") y desborda la pila. No se crea NADA: solo el aviso.
     Log("Present: a los 15 s el juego no paso por los CreateSwapChain enganchados: sin menu ni ganchos del primer Present (ver las lineas 'crear:')");
+    s_findSC = true;
+    IDXGISwapChain* gsc = nullptr;
+    for (int i = 0; i < 300 && !(gsc = s_foundSC.load()); ++i) Sleep(100);
+    s_findSC = false;
+    if (!gsc) {
+        Log("Present: no se encontro la cadena del juego desde el destino de dibujo (%d destinos mirados, %d superficies DXGI, %d imagenes finales, GetParent %08X): sin menu",
+            s_findTries.load(), s_findSurf.load(), s_findBB.load(), (unsigned)s_findParentHr.load());
+        return 0;
+    }
+    {
+        void** gvt = VT(gsc);
+        void* realPres = DxgiSlotFromDisk(&gvt[8]);
+        void* realResz = DxgiSlotFromDisk(&gvt[13]);
+        DXGI_SWAP_CHAIN_DESC gd{}; gsc->GetDesc(&gd);
+        std::lock_guard<std::recursive_mutex> lk(s_hookMutex);
+        Log("Present: cadena del juego encontrada desde el destino de dibujo (%p, %ux%u): en su vtable Present = %s; Present de dxgi.dll = %s",
+            (void*)gsc, gd.BufferDesc.Width, gd.BufferDesc.Height, ModOff(gvt[8]).c_str(), realPres ? ModOff(realPres).c_str() : "?");
+        if (!s_scHooked && realPres) {
+            // se engancha el Present verdadero de dxgi.dll (el ultimo de la cadena cloth-mod -> Sider -> dxgi): no se toca la
+            // vtable ni el codigo de otro mod, y no se crea ninguna cadena (eso es lo que hacia volver a enganchar a Sider)
+            s_planBMode = true;
+            const bool ok = Hook(realPres, (void*)&hk_Present, (void**)&o_Present, "dxgi Present (cadena encontrada)");
+            if (ok && realResz) Hook(realResz, (void*)&hk_Resize, (void**)&o_Resize, "dxgi ResizeBuffers (cadena encontrada)");
+            if (ok) { s_scHooked = true; Log("Present enganchado (dxgi, sin cadena de prueba)"); } else s_planBMode = false;
+        } else if (!realPres) Log("Present: no se pudo leer el Present de dxgi.dll del disco: sin menu");
+        gsc->Release();
+    }
+    if (s_planBMode) {
+        const long c0 = s_presentCalls.load();
+        Sleep(10000);
+        Log("Present: el juego paso %ld veces por nuestro Present en 10 s", s_presentCalls.load() - c0);
+    }
     if (g_cfg.optPresent) return 0;
     auto cdsc = (PFN_D3D11CreateDeviceAndSwapChain)(::fx_RealD3D11() ? GetProcAddress(::fx_RealD3D11(), "D3D11CreateDeviceAndSwapChain") : nullptr);
     if (!cdsc) { Log("Present: plan B sin D3D11CreateDeviceAndSwapChain de Windows"); return 0; }
