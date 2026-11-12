@@ -1,0 +1,15 @@
+add_ago_open                   1 c: labios 13 gr 2.1 cm, cachetes  1.4 cm, mandibula 22 gr, surco  0.8 cm
+add_d_me_mihiraku             36 c: parpados 25 gr, cejas  0.7 cm, ceno  0.4 cm, bajo-ojo 2 gr
+add_eyeblink_single            8 c: parpados 25 gr
+add_kuti                     424 c: labios 3 gr 1.6 cm, cachetes  1.0 cm, mandibula 15 gr, surco  0.3 cm
+add_kuti_toji                  1 c: labios  0.6 cm
+add_kuti_yoko                 25 c: surco  1.5 cm, labios  1.2 cm, cachetes  1.3 cm
+add_kuti_yoko_close            1 c: labios  1.0 cm, cachetes  0.4 cm, surco  0.2 cm, mandibula 2 gr
+add_mayu_down                  1 c: cejas  0.4 cm, ceno  0.3 cm, parpados 3 gr
+add_mayu_up                    1 c: cejas  0.7 cm, ceno  0.5 cm, parpados 3 gr
+add_me_toji                  102 c: parpados 26 gr, cejas 6 gr 0.7 cm, bajo-ojo  0.4 cm, ceno  0.4 cm
+add_miken_yose                 1 c: cejas  0.8 cm, ceno  0.3 cm, parpados 3 gr
+old_add_kuchipaku              1 c: labios 3 gr 0.8 cm, mandibula 9 gr, cachetes  0.3 cm
+old_add_kuchisubome            1 c: labios 27 gr 1.4 cm, cachetes  0.9 cm, surco  0.1 cm, nariz  0.1 cm
+old_add_metoji                 2 c: parpados 25 gr, bajo-ojo 2 gr 0.2 cm
+old_add_mihiraki               1 c: cejas  0.7 cm, parpados 15 gr, ceno  0.2 cm
