@@ -2286,11 +2286,49 @@ static void HookSwapChain(IDXGISwapChain* sc) {
 // nosotros) el juego nunca paso por los CreateSwapChain enganchados: sin "cadena de intercambio", sin menu Insert y sin los
 // ganchos que se ponen en el primer Present. Si a los 15 s de crear el dispositivo no hay cadena, se arma una cadena de prueba
 // (ventana oculta, dispositivo aparte con el d3d11 de Windows) solo para leer de su vtable donde esta el codigo de Present y de
-// ResizeBuffers, y se cambia el puntero de esa vtable (compartida por todas las cadenas de dxgi), sin
-// meterse en el codigo de otro mod (v3). Si la cadena del juego ya se engancho por el camino normal no se hace nada (en 1.07.02 asi es siempre).
+// ResizeBuffers, y se engancha el Present verdadero de dxgi.dll (leido del archivo, v4), sin tocar
+// la vtable ni el codigo de otro mod. Si la cadena del juego ya se engancho por el camino normal no se hace nada (en 1.07.02 asi es siempre).
 }   // namespace fx
 HMODULE fx_RealD3D11();   // d3d11_proxy.cpp (fuera del namespace)
 namespace fx {
+static void* DxgiSlotFromDisk(void** slot) {
+    // la vtable esta en dxgi.dll: se lee el mismo lugar en el archivo y se pasa a la direccion cargada
+    HMODULE m = nullptr; wchar_t path[MAX_PATH];
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)slot, &m) || !m) return nullptr;
+    if (m != GetModuleHandleW(L"dxgi.dll")) return nullptr;
+    if (!GetModuleFileNameW(m, path, MAX_PATH)) return nullptr;
+    const uintptr_t base = (uintptr_t)m, rva = (uintptr_t)slot - base;
+    auto dos = (IMAGE_DOS_HEADER*)m; auto nt = (IMAGE_NT_HEADERS64*)(base + dos->e_lfanew);
+    HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return nullptr;
+    void* res = nullptr;
+    auto sec = IMAGE_FIRST_SECTION(nt);
+    for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++sec) {
+        if (rva < sec->VirtualAddress || rva + 8 > sec->VirtualAddress + sec->SizeOfRawData) continue;
+        LARGE_INTEGER off; off.QuadPart = sec->PointerToRawData + (rva - sec->VirtualAddress);
+        uint64_t v = 0; DWORD got = 0;
+        if (SetFilePointerEx(f, off, nullptr, FILE_BEGIN) && ReadFile(f, &v, 8, &got, nullptr) && got == 8) {
+            // ImageBase del archivo (en memoria el cargador la reescribe)
+            IMAGE_DOS_HEADER fd{}; IMAGE_NT_HEADERS64 fn{}; LARGE_INTEGER z{}; DWORD g2 = 0;
+            if (SetFilePointerEx(f, z, nullptr, FILE_BEGIN) && ReadFile(f, &fd, sizeof fd, &g2, nullptr) && g2 == sizeof fd) {
+                LARGE_INTEGER o2; o2.QuadPart = fd.e_lfanew;
+                if (SetFilePointerEx(f, o2, nullptr, FILE_BEGIN) && ReadFile(f, &fn, sizeof fn, &g2, nullptr) && g2 == sizeof fn && fn.Signature == IMAGE_NT_SIGNATURE) {
+                    const uint64_t prva = v - fn.OptionalHeader.ImageBase;
+                    if (prva < nt->OptionalHeader.SizeOfImage) {
+                        // tiene que caer en una seccion de codigo
+                        auto s2 = IMAGE_FIRST_SECTION(nt);
+                        for (unsigned k = 0; k < nt->FileHeader.NumberOfSections; ++k, ++s2)
+                            if ((s2->Characteristics & IMAGE_SCN_MEM_EXECUTE) && prva >= s2->VirtualAddress && prva < s2->VirtualAddress + s2->Misc.VirtualSize)
+                                res = (void*)(base + prva);
+                    }
+                }
+            }
+        }
+        break;
+    }
+    CloseHandle(f);
+    return res;
+}
 static DWORD WINAPI PresentPlanB(void*) {
     Sleep(15000);
     {
@@ -2314,15 +2352,21 @@ static DWORD WINAPI PresentPlanB(void*) {
         void* pres = vt[8]; void* resz = vt[13];
         std::lock_guard<std::recursive_mutex> lk(s_hookMutex);
         if (!s_scHooked) {
-            // (12/11 v3) NO se engancha con MinHook el codigo que esta en la vtable: en la PC CPY ahi estaba la funcion del
-            // cloth-mod (dsound.dll+0xeaf0) y meterse adentro de ella cerro el juego (0xc00000fd, pila desbordada). Se cambia el
-            // puntero de la vtable, igual que Sider y cloth-mod: la vtable de la cadena de dxgi es la misma para todas las cadenas
-            Log("Present: plan B: en la vtable estaba Present = %s, ResizeBuffers = %s; se encadena por la vtable", ModOff(pres).c_str(), ModOff(resz).c_str());
-            s_planBMode = true;
-            PatchSlot(&vt[8], (void*)&hk_Present, (void**)&o_Present);
-            PatchSlot(&vt[13], (void*)&hk_Resize, (void**)&o_Resize);
-            if (vt[8] == (void*)&hk_Present) { s_scHooked = true; Log("Present enganchado (plan B, vtable)"); }
-            else { s_planBMode = false; Log("Present: plan B: no se pudo cambiar la vtable"); }
+            // (12/11 v4) ni MinHook sobre el codigo de otro mod (v2: dsound.dll+0xeaf0 del cloth-mod, pila desbordada) ni
+            // cambio de la vtable (v3: el cloth-mod vuelve a poner su puntero, Sider y cloth-mod quedan llamandose entre si,
+            // pila desbordada en sider.dll). Se engancha el Present VERDADERO de dxgi.dll, el ultimo de la cadena: su direccion
+            // se lee de la vtable de dxgi.dll en el ARCHIVO (la de memoria la pisan los otros mods). Nadie mira ese codigo.
+            void* realPres = DxgiSlotFromDisk(&vt[8]);
+            void* realResz = DxgiSlotFromDisk(&vt[13]);
+            Log("Present: plan B: en la vtable Present = %s, ResizeBuffers = %s; en dxgi.dll del disco Present = %s, ResizeBuffers = %s",
+                ModOff(pres).c_str(), ModOff(resz).c_str(), realPres ? ModOff(realPres).c_str() : "?", realResz ? ModOff(realResz).c_str() : "?");
+            if (realPres) {
+                s_planBMode = true;
+                const bool ok = Hook(realPres, (void*)&hk_Present, (void**)&o_Present, "dxgi Present (plan B)");
+                if (ok && realResz) Hook(realResz, (void*)&hk_Resize, (void**)&o_Resize, "dxgi ResizeBuffers (plan B)");
+                if (ok) { s_scHooked = true; Log("Present enganchado (plan B, dxgi)"); }
+                else s_planBMode = false;
+            } else Log("Present: plan B: no se encontro el Present de dxgi.dll en el disco: sin menu");
         } else Log("Present: plan B: la cadena del juego se engancho mientras tanto, no se hace nada");
     } else Log("Present: plan B: no se pudo crear la cadena de prueba (%08X)", (unsigned)hr);
     if (sc) sc->Release();
