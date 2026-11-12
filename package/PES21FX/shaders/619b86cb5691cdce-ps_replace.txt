@@ -1042,9 +1042,58 @@ void main(
         float pxM5 = abs(2.0 * g_psScene.m_projectionParam.y * zsk * g_psSystem.m_renderBuffer.w);   // metros que mide un pixel ahi
         float shC5 = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
         float ss5 = smoothstep(0.0, 0.08, sinE) * day5;                      // con el sol pegado al horizonte se apaga suave
+        float shEff5 = shC5;                                                  // luz de sol en la punta despues de y445 (borde de la sombra)
+        // --- y445 borde de las sombras con hojas (primero: x445 y z445 usan la luz de sol que queda en la punta)
+        float kE = clamp(P445.y, 0.0, 2.0) * ss5;
+        if (kE > 0.001 && hC5 > -0.05 && hC5 < 0.3) {
+          // celda de cada hoja en potencias de 2 de 5 mm, fija al mundo; entre un tamano y el siguiente se funde (no se rebaraja al mover la camara)
+          float lv5 = log2(max(pxM5 * 1.5 / 0.005, 1.0)), lf5 = floor(lv5), cs5 = 0.005 * exp2(lf5);
+          float rb5 = lerp(PES445H(floor(w5 / cs5)), PES445H(floor(w5 / (2.0 * cs5))), smoothstep(0.6, 1.0, lv5 - lf5));
+          float sw5 = 0.12 * wind5 * (0.5 + 0.5 * sin(tw5 * 2.3 + rb5 * 6.2832));   // la punta baja y sube con las rafagas
+          float u5 = art5 ? 0.85 + 0.15 * rb5 : lerp(0.35 + 0.65 * rb5, 0.75 + 0.25 * rb5, even5);
+          float grazV = 1.0 - abs(dot(Vsk, up5));                             // de costado se ven mas puntas
+          float hT5 = hCut * u5 * (1.0 - aC * (1.0 - PES445N(w5 / 0.12))) * (1.0 - sw5) * (0.5 + 0.5 * grazV);
+          // z314 = 1: la hoja recibe la sombra de su pie (falta todo el alto); 0: la recibe a su altura (falta lo que queda hasta la punta)
+          float hE = IniParams.Load(int2(314,0)).z > 0.5 ? max(hC5, hT5) : max(hT5 - max(hC5, 0.0), 0.0);
+          if (hE > 0.001) {
+            float3 Qv = Pgeo - up5 * max(hC5, 0.0) - (Ld5 - up5 * sinE) * (hE / max(sinE, 0.05));
+            if (Qv.z > 0.05) {
+              float2 sQ = Qv.xy / (g_psScene.m_projectionParam.xy * Qv.z) + g_psScene.m_cameraCenterOffset.xy;
+              float2 uvQ = float2(sQ.x * 0.5 + 0.5, 0.5 - sQ.y * 0.5);
+              float2 dPx = (uvQ - uvC) / g_psSystem.m_renderBuffer.zw;
+              if (uvQ.x > 0.0 && uvQ.y > 0.0 && uvQ.x < 1.0 && uvQ.y < 1.0 && dot(dPx, dPx) > 0.25) {
+                float shQ = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvQ, 0).x);
+                float dS5 = abs(shQ - shC5);
+                if (dS5 > 0.02) {
+                  int tyQ = (int)((uint)(inGBufferNormal.SampleLevel(g_samplerPoint_Clamp_s, uvQ, 0).z * 1023 + 0.5) & 15);
+                  float zQ = PESLinZ(uvQ);
+                  bool okQ = tyQ == 3 && abs(zQ - Qv.z) < 0.04 * Qv.z + 0.1;
+                  [unroll] for (int j5 = 1; j5 <= 2; j5++) {
+                    float2 uvS = lerp(uvC, uvQ, (float)j5 / 3.0);
+                    int tyS = (int)((uint)(inGBufferNormal.SampleLevel(g_samplerPoint_Clamp_s, uvS, 0).z * 1023 + 0.5) & 15);
+                    if (tyS != 3) okQ = false;
+                  }
+                  if (okQ) {
+                    // (12/11, segunda lectura) cociente de la luz TOTAL de cada lado (la del motor + la de cielo de 314 con la sombra de ese
+                    // lado): al cruzar el borde queda la luz del otro lado con los retoques propios de la hoja, sin linea brillante, sin quedar
+                    // mas oscura que la sombra y nunca negra. Corre antes de x445 / z445 y les pasa la luz de sol que queda (shEff5)
+                    float3 rawC = inLightDiffuse.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).xyz;
+                    float3 rawQ = inLightDiffuse.SampleLevel(g_samplerPoint_Clamp_s, uvQ, 0).xyz;
+                    float m5 = saturate(kE) * smoothstep(0.02, 0.15, dS5);
+                    float y314 = saturate(IniParams.Load(int2(314,0)).y);
+                    float3 LC5 = max(rawC + sky314 * lerp(y314, 1.0, 1.0 - shC5), 0.0);
+                    float3 LQ5 = max(rawQ + sky314 * lerp(y314, 1.0, 1.0 - shQ), 0.0);
+                    r2.xyz *= lerp(float3(1.0, 1.0, 1.0), clamp(LQ5 / max(LC5, 1e-4), 0.05, 8.0), m5);
+                    shEff5 = lerp(shC5, shQ, m5);
+                  }
+                }
+              }
+            }
+          }
+        }
         // --- x445 sombras de las matas
         float kT = clamp(P445.x, 0.0, 2.0) * ss5;
-        if (kT > 0.001 && shC5 > 0.01 && hC5 > -0.05 && hC5 < 0.3) {
+        if (kT > 0.001 && shEff5 > 0.01 && hC5 > -0.05 && hC5 < 0.3) {
           // (12/11, segunda lectura) matas y manojos con bordes marcados (un relieve suave casi no se hace sombra) y cada uno con su
           // marcha hacia el sol; lo que no entra en pantalla usa el promedio MEDIDO de esa misma marcha (simulado: 200k puntos, error
           // < 0.03), asi de cerca y de lejos se oscurece lo mismo
@@ -1076,57 +1125,13 @@ void main(
           float occF = 1.0 - (1.0 - lerp(avgC, oC, dC)) * (1.0 - lerp(avgT, oT, dT));
           float vf = 0.85 + 0.30 * dot(Vsk, Ld5);                              // mirando hacia el sol se ven los lados en sombra
           float nearK = smoothstep(0.0006, 0.0018, pxM5);                    // de muy cerca las hojas 3D ya se hacen sombra entre ellas
-          float dk = saturate(kT * occF * shC5 * 0.6 * vf * nearK);
+          float dk = saturate(kT * occF * shEff5 * 0.6 * vf * nearK);
           r2.xyz *= (1.0 - 0.7 * dk) * lerp(float3(1.0, 1.0, 1.0), float3(0.95, 0.99, 1.06), dk);
-        }
-        // --- y445 borde de las sombras con hojas
-        float kE = clamp(P445.y, 0.0, 2.0) * ss5;
-        if (kE > 0.001 && hC5 > -0.05 && hC5 < 0.3) {
-          // celda de cada hoja en potencias de 2 de 5 mm, fija al mundo; entre un tamano y el siguiente se funde (no se rebaraja al mover la camara)
-          float lv5 = log2(max(pxM5 * 1.5 / 0.005, 1.0)), lf5 = floor(lv5), cs5 = 0.005 * exp2(lf5);
-          float rb5 = lerp(PES445H(floor(w5 / cs5)), PES445H(floor(w5 / (2.0 * cs5))), smoothstep(0.6, 1.0, lv5 - lf5));
-          float sw5 = 0.12 * wind5 * (0.5 + 0.5 * sin(tw5 * 2.3 + rb5 * 6.2832));   // la punta baja y sube con las rafagas
-          float u5 = art5 ? 0.85 + 0.15 * rb5 : lerp(0.35 + 0.65 * rb5, 0.75 + 0.25 * rb5, even5);
-          float grazV = 1.0 - abs(dot(Vsk, up5));                             // de costado se ven mas puntas
-          float hT5 = hCut * u5 * (1.0 - aC * (1.0 - PES445N(w5 / 0.12))) * (1.0 - sw5) * (0.5 + 0.5 * grazV);
-          // z314 = 1: la hoja recibe la sombra de su pie (falta todo el alto); 0: la recibe a su altura (falta lo que queda hasta la punta)
-          float hE = IniParams.Load(int2(314,0)).z > 0.5 ? max(hC5, hT5) : max(hT5 - max(hC5, 0.0), 0.0);
-          if (hE > 0.001) {
-            float3 Qv = Pgeo - up5 * max(hC5, 0.0) - (Ld5 - up5 * sinE) * (hE / max(sinE, 0.05));
-            if (Qv.z > 0.05) {
-              float2 sQ = Qv.xy / (g_psScene.m_projectionParam.xy * Qv.z) + g_psScene.m_cameraCenterOffset.xy;
-              float2 uvQ = float2(sQ.x * 0.5 + 0.5, 0.5 - sQ.y * 0.5);
-              float2 dPx = (uvQ - uvC) / g_psSystem.m_renderBuffer.zw;
-              if (uvQ.x > 0.0 && uvQ.y > 0.0 && uvQ.x < 1.0 && uvQ.y < 1.0 && dot(dPx, dPx) > 0.25) {
-                float shQ = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvQ, 0).x);
-                float dS5 = abs(shQ - shC5);
-                if (dS5 > 0.02) {
-                  int tyQ = (int)((uint)(inGBufferNormal.SampleLevel(g_samplerPoint_Clamp_s, uvQ, 0).z * 1023 + 0.5) & 15);
-                  float zQ = PESLinZ(uvQ);
-                  bool okQ = tyQ == 3 && abs(zQ - Qv.z) < 0.04 * Qv.z + 0.1;
-                  [unroll] for (int j5 = 1; j5 <= 2; j5++) {
-                    float2 uvS = lerp(uvC, uvQ, (float)j5 / 3.0);
-                    int tyS = (int)((uint)(inGBufferNormal.SampleLevel(g_samplerPoint_Clamp_s, uvS, 0).z * 1023 + 0.5) & 15);
-                    if (tyS != 3) okQ = false;
-                  }
-                  if (okQ) {
-                    // (12/11, segunda lectura) se pasa la DIFERENCIA de luz (la del motor y la de cielo de 314 que depende de la sombra), no un
-                    // cociente: al cruzar el borde queda la luz del otro lado, sin linea brillante ni mas oscura que la sombra
-                    float3 rawC = inLightDiffuse.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).xyz;
-                    float3 rawQ = inLightDiffuse.SampleLevel(g_samplerPoint_Clamp_s, uvQ, 0).xyz;
-                    float m5 = saturate(kE) * smoothstep(0.02, 0.15, dS5);
-                    float3 dSky5 = sky314 * (1.0 - saturate(IniParams.Load(int2(314,0)).y)) * (shC5 - shQ);
-                    r2.xyz = max(r2.xyz + m5 * ((rawQ - rawC) + dSky5), 0.0);
-                  }
-                }
-              }
-            }
-          }
         }
         // --- z445 halo de contraluz
         float kH = clamp(P445.z, 0.0, 2.0) * ss5;
         float fw5 = dot(Vsk, Ld5);
-        if (kH > 0.001 && fw5 > 0.25 && shC5 > 0.01) {
+        if (kH > 0.001 && fw5 > 0.25 && shEff5 > 0.01) {
           float2 px5 = g_psSystem.m_renderBuffer.zw;
           float edg = 0.0;
           [unroll] for (int e5 = 0; e5 < 6; e5++) {
@@ -1142,7 +1147,7 @@ void main(
             tint = lerp(tint, tint * float3(1.0, 0.92, 0.75), saturate(IniParams.Load(int2(412,0)).w * 3.0) * (1.0 - wetH));   // hojas secas
             float thin = lerp(0.7, 1.25, saturate(trC));                     // hoja fina (translucidez del G-buffer)
             float lowB = 0.6 + 0.6 * (1.0 - sinE);
-            r1.xyz += sunC5 * tint * (edg * fp * kH * shC5 * 0.22 * thin * lowB * (art5 ? 0.45 : 1.0) * (0.8 + 0.5 * wetH) * seas5);
+            r1.xyz += sunC5 * tint * (edg * fp * kH * shEff5 * 0.22 * thin * lowB * (art5 ? 0.45 : 1.0) * (0.8 + 0.5 * wetH) * seas5);
           }
         }
       }
