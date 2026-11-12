@@ -853,27 +853,44 @@ void main(
       float2 dirB = dF > 1e-4 ? vB / dF : float2(0.0, 0.0), latB = float2(-dirB.y, dirB.x);
       float2 dP = r1.xz - cb4[3].xz; float dL = length(dP); float2 dU = dL > 1e-4 ? dP / dL : dirB;
       float hW = max(v0.y, 0.0);
+      // (12/11 20:50, Agustin: "revisa tambien la forma que tiene el pasto de doblarse con la pelota al moverse al ras") 1) la hoja ya no se
+      // inclina recta como un palito (corrimiento proporcional al alto): se DOBLA EN CURVA como una hoja empujada cerca de la punta (viga
+      // empotrada, t^2 (3 - t) / 2: la raiz firme y el tramo de arriba mas; el largo constante v5 baja la punta). 2) la proa empieza donde la
+      // pelota toca de verdad las puntas: radio de contacto de una esfera de 11.5 cm con el alto del corte (28 mm ~7.5 cm, 60 mm ~10 cm; mas
+      // rapida un poco antes) y no a 15-25 cm; rodando despacio tambien empuja (antes casi nada). 3) cada hoja con su rigidez y un desvio de
+      // hasta 17 grados (no se peinan todas iguales). 4) segun la cancha: mojada (lluvia o humedad y407) se dobla mas y queda mas acostada,
+      // suelo seco un poco menos, artificial (fibra rigida) bastante menos
+      float hRB = max(pesHref * (pesBlade ? PES_NAT_CUT : 1.0), 0.005);
+      float tBb = saturate(hW / hRB);
+      float gBb = tBb * (3.0 - tBb) * 0.5;                                 // hW x gBb = perfil de viga (1 en la punta, 0.28 a un quinto)
+      float gndB = IniParams.Load(int2(114, 0)).x;
+      float wetB = (abs(gndB - 1.0) < 0.5 ? 1.2 : (abs(gndB - 2.0) < 0.5 ? 0.9 : 1.0)) * (1.0 + 0.15 * saturate(IniParams.Load(int2(407, 0)).y));
+      float stB = (0.8 + 0.4 * frac(pesHv * 7.13 + 0.3)) * wetB * (IniParams.Load(int2(407, 0)).x > 0.5 ? 0.7 : 1.0);
+      float aJ = (pesHv - 0.5) * 0.6; float2 csJ = float2(cos(aJ), sin(aJ));
       float kBall = clamp(P442.x, 0.0, 2.0);
       if (kBall > 0.001 && dF > 0.002 && dL < 1.6) {
         float spK = saturate(dF / 0.08);                                   // ~5 m/s a 60 cuadros por segundo = todo
         float contact = smoothstep(0.30, 0.15, cb4[3].y);                 // rodando o apoyada
         float al = dot(dP, dirB), lt = dot(dP, latB);
-        float rBow = 0.15 + 0.10 * spK;
-        float kBow = smoothstep(rBow, 0.09, dL) * smoothstep(-0.06, 0.0, al) * contact * spK;
+        float hTopB = min(pesNatV ? PES_NAT_CUT * 0.058 : pesHref, 0.1);
+        float rCt = sqrt(max(0.013225 - (0.115 - hTopB) * (0.115 - hTopB), 0.0));   // donde la esfera toca la altura de las puntas
+        float rBow = rCt + 0.02 + 0.06 * spK;
+        float kBow = smoothstep(rBow, rCt * 0.55, dL) * smoothstep(-0.06, 0.0, al) * contact * (0.35 + 0.65 * spK);
         float Lw = 0.10 + 6.0 * dF;
         float kWake = smoothstep(0.13, 0.05, abs(lt)) * saturate(1.0 + al / Lw) * (1.0 - step(0.0, al)) * contact * spK;
         float air = smoothstep(1.0, 0.35, cb4[3].y) * (1.0 - contact) * smoothstep(0.06, 0.20, dF);
         float rnd = frac(sin(dot(floor(r1.xz * 40.0), float2(12.9898, 78.233))) * 43758.55);   // cada hoja un poco distinta
         float kAir = air * smoothstep(0.30, 0.0, abs(lt)) * saturate(1.0 + al / (0.15 + 4.0 * dF)) * (1.0 - step(0.10, al)) * (0.6 + 0.4 * rnd);
         float2 dsp = normalize(dU + dirB * 0.8) * (0.85 * kBow) + dirB * (0.80 * kWake + 0.55 * kAir) + latB * (sign(lt) * 0.25 * kAir);
-        r1.xz += dsp * kBall * hW;
-        pesSinkF = max(pesSinkF, saturate((0.30 * kBow + 0.60 * kWake) * kBall));
+        dsp = float2(dsp.x * csJ.x - dsp.y * csJ.y, dsp.x * csJ.y + dsp.y * csJ.x);   // desvio propio de la hoja
+        r1.xz += dsp * (kBall * hW * gBb * stB * 1.1);
+        pesSinkF = max(pesSinkF, saturate((0.30 * kBow + 0.60 * kWake) * kBall * wetB));
       }
       float kPq = clamp(P442.w, 0.0, 2.0) * smoothstep(0.010, 0.035, vY) * smoothstep(0.65, 0.20, cb4[3].y);
       if (kPq > 0.001 && dL < 0.8) {
         float rr = 0.12 + 0.9 * max(cb4[3].y - 0.11, 0.0);
         float ring = exp(-((dL - rr) * (dL - rr)) / 0.005);
-        r1.xz += dU * (ring * kPq * 1.1 * hW);
+        r1.xz += dU * (ring * kPq * 1.2 * hW * gBb * stB);
         pesSinkF = max(pesSinkF, saturate(0.40 * ring * kPq));
       }
     }

@@ -94,6 +94,37 @@ cbuffer PESLightCopyC : register(b13)
 }
 
 #include "pes_vista_motor.hlsli"   // PES21 (11/11, Motor en tiempo real): vistas del motor (fila 429)
+// PES21 (12/11 20:50, fila 445): azar y ruido fijos al mundo (sin seno: estables lejos del centro de la cancha) y luz del sol en un
+// punto del aire (espacio de vista; shadow map del sol con la misma cuenta que la luz volumetrica 335)
+float PES445H(float2 c) { float2 q = frac(c * float2(0.1031, 0.1030)); q += dot(q, q.yx + 33.33); return frac((q.x + q.y) * q.x); }
+float PES445N(float2 p) {
+  float2 i = floor(p), f = frac(p); f = f * f * (3.0 - 2.0 * f);
+  return lerp(lerp(PES445H(i), PES445H(i + float2(1, 0)), f.x), lerp(PES445H(i + float2(0, 1)), PES445H(i + float2(1, 1)), f.x), f.y);
+}
+float PES445Lit(float3 Q) {
+  float resS = g_psScene.m_shadowMapResolutions.x;
+  float smW = 0, smH = 0; PESShadowMap.GetDimensions(smW, smH);
+  float lit = 1.0;                                                        // fuera de las 3 cascadas: al sol
+  if (resS > 1.0 && smW > 1.0 && smH > 2.5 * smW) {
+    float bnd = 1.0 - 8.0 / max(resS, 16.0);
+    float4 hq = float4(PESShadowAlign(float3(Q.x, Q.y, Q.z + g_psScene.m_shadowProjection2._m33), g_psScene.m_view, IniParams.Load(int2(337,0)).w), 1.0);
+    float3 s0 = float3(dot(hq, g_psScene.m_shadowProjection._m00_m10_m20_m30), dot(hq, g_psScene.m_shadowProjection._m01_m11_m21_m31), dot(hq, g_psScene.m_shadowProjection._m02_m12_m22_m32));
+    bool done = false;
+    [unroll] for (int cI = 0; cI < 3; cI++) {
+      float scl = cI == 0 ? 1.0 : (cI == 1 ? g_psScene.m_shadowProjection2._m03 : g_psScene.m_shadowProjection2._m13);
+      float3 ofs = cI == 0 ? float3(0, 0, 0) : (cI == 1 ? g_psScene.m_shadowProjection2._m00_m01_m02 : g_psScene.m_shadowProjection2._m10_m11_m12);
+      float3 sp = s0 * scl + ofs;
+      float zr = g_psScene.m_shadowProjection2._m30 * (1.0 + sp.z);
+      if (!done && abs(sp.x) <= bnd && abs(sp.y) <= bnd && zr >= 0.0) {
+        float2 uvM = float2(sp.x * 0.5 + 0.5, (cI + 0.5 - sp.y * 0.5) / 3.0);
+        float dS = PESShadowMap.Load(int3(min(uvM * float2(smW, smH), float2(smW, smH) - 1.0), 0)).x;
+        lit = dS > zr ? 0.0 : 1.0;
+        done = true;
+      }
+    }
+  }
+  return lit;
+}
 void main(
   float4 v0 : SV_Position0,
   float2 v1 : TEXCOORD0,
@@ -955,6 +986,149 @@ void main(
       }
     }
   }
+  // === PES21 (12/11 20:50, Agustin con 4 fotos: "me gustan esas cuatro"; "todos estos valores tienen que ser dinamicos y variables frente
+  // a los diferentes cambios de horas, estaciones, clima, situaciones o parametros"; "tambien tienen que ser adaptables a la forma del
+  // cesped del estadio, su corte") fila 445, solo el cesped (tipo 3) al sol de dia:
+  //  x445 SOMBRAS DE LAS MATAS CON EL SOL BAJO: la copa del pasto es un relieve fijo en el mundo (matas de ~12 cm y manojos de ~3.5 cm)
+  //       y cada punto mira hacia el sol (4 pasos con la pendiente del sol) por si una mata mas alta le tapa la luz: al atardecer las
+  //       sombritas se estiran y lo iluminado toma grano; al mediodia casi nada. Donde la mata mide menos de 2 px queda el promedio
+  //  y445 BORDE DE LAS SOMBRAS CON HOJAS: la punta de una hoja de alto h ve la luz del suelo corrido h / tan(sol) hacia el lado contrario
+  //       al sol; se toma la luz de ese pixel (misma cancha con su propia sombra): en el borde de la sombra del arco, los jugadores o el
+  //       estadio las puntas asoman a la luz y el borde queda dentado, mas ancho cuanto mas bajo el sol (si en el medio hay un pie o un
+  //       poste no: su sombra baja no le llega a la punta)
+  //  z445 HALO DE CONTRALUZ: donde una hoja (o la linea del pasto contra el fondo) se recorta contra algo lejano y la camara mira hacia
+  //       el sol, el borde fino se enciende (pelusa y cera de la hoja; con humedad o rocio mas blanco, seca mas dorado)
+  // Todo se mueve solo con: altura y fuerza del sol (hora y estacion, filas 114 / 415 de la DLL), nubes y lluvia (sin sol real casi nada),
+  // humedad (y407, suelo mojado, rocio de la manana), viento (y108: las puntas suben y bajan) y la forma del cesped del estadio y del
+  // menu: alto (w296 y tipo corto / medio / largo), corte parejo (w108), matas (x328), desgaste (w104), natural / artificial (x407).
+  // 0 = como antes
+  { float4 P445 = IniParams.Load(int2(445,0));
+    float3 Ld5 = pLc_dir.xyz;
+    if (geoOk && tyC == 3 && zsk < 250.0 && (P445.x > 0.001 || P445.y > 0.001 || P445.z > 0.001) && dot(Ld5, Ld5) > 1e-6
+        && IniParams.Load(int2(104,0)).x > 0.5) {
+      Ld5 = normalize(Ld5);
+      float3 sc5 = max(pLc_color.xyz, 0.0);
+      float4 S114 = IniParams.Load(int2(114,0)), S415 = IniParams.Load(int2(415,0));
+      float day5 = saturate((sc5.r / max(sc5.b, 1e-4) - 0.85) * 4.0) * (S114.w > 0.5 ? 1.0 : 0.35);   // sol real (luz calida); sin sol fuerte, poco
+      float3 up5 = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
+      if (dot(Ld5, up5) < 0) up5 = -up5;
+      float sinE = saturate(dot(Ld5, up5));
+      if (day5 > 0.01 && sinE > 0.02) {
+        float cosE = sqrt(max(1.0 - sinE * sinE, 0.0)), cotE = min(cosE / sinE, 20.0), tanE = sinE / max(cosE, 1e-3);
+        float3 sunC5 = sc5 * g_psScene.m_exposure.zzz;
+        // estado de la cancha y del clima
+        float wetG = abs(S114.x - 1.0) < 0.5 ? 1.0 : 0.0, dryG = abs(S114.x - 2.0) < 0.5 ? 1.0 : 0.0;   // suelo (DLL): 1 mojado (lluvia), 2 seco
+        float dew5 = (S415.z > 0.5 && S415.x >= 0.0) ? saturate((10.5 - S415.x) / 3.0) : 0.0;           // rocio: a la manana, antes de las 10:30
+        float hum5 = saturate(IniParams.Load(int2(407,0)).y * 0.8 + wetG * 0.6 + dew5 * 0.5);
+        float seas5 = S114.z < -0.5 ? 1.0 : (S114.z < 0.5 ? 1.05 : (S114.z < 1.5 ? 0.85 : 0.95));      // verano / invierno / otra
+        bool art5 = IniParams.Load(int2(407,0)).x > 0.5;
+        float4 Q104 = IniParams.Load(int2(104,0));
+        float mm5 = IniParams.Load(int2(296,0)).w; mm5 = mm5 > 1.0 ? clamp(mm5, 15.0, 80.0) : 28.0;
+        float hCut = mm5 * 0.001 * (Q104.y < 0.5 ? 0.9 : (Q104.y > 1.5 ? 1.45 : 1.0)) * (1.0 - 0.35 * saturate(Q104.w)) * (1.0 - 0.1 * hum5);
+        float even5 = saturate(IniParams.Load(int2(108,0)).w), wind5 = saturate(IniParams.Load(int2(108,0)).y);
+        float clmp5 = clamp(IniParams.Load(int2(328,0)).x, 0.0, 2.0);
+        float aC = art5 ? 0.04 : 0.30 * clmp5 * (1.0 - 0.6 * even5) * (1.0 + 0.2 * hum5) * seas5;   // matas (12 cm)
+        float aT = art5 ? 0.10 : 0.35 * (1.0 - 0.4 * even5) * (1.0 + 0.1 * dryG) * seas5;          // manojos (3.5 cm)
+        float tw5 = IniParams.Load(int2(23,0)).z;
+        float3 vX5 = normalize(float3(g_psScene.m_view._m00, g_psScene.m_view._m01, g_psScene.m_view._m02));
+        float3 vZ5 = normalize(float3(g_psScene.m_view._m20, g_psScene.m_view._m21, g_psScene.m_view._m22));
+        float hC5 = g_psScene.m_eyepos.y + dot(Pgeo, up5);                     // altura del pixel sobre la cancha (m)
+        float2 w5 = g_psScene.m_eyepos.xz + float2(dot(Pgeo, vX5), dot(Pgeo, vZ5));
+        float2 L5 = float2(dot(Ld5, vX5), dot(Ld5, vZ5)); L5 = dot(L5, L5) > 1e-8 ? normalize(L5) : float2(1.0, 0.0);
+        float a84 = radians(IniParams.Load(int2(84,0)).z); float2 wd5 = float2(cos(a84), sin(a84));
+        float2 wsw = wd5 * (0.004 * wind5 * sin(tw5 * 2.1 + PES445N(w5 * 2.0) * 6.2832));   // las matas se mecen con las rafagas
+        float pxM5 = abs(2.0 * g_psScene.m_projectionParam.y * zsk * g_psSystem.m_renderBuffer.w);   // metros que mide un pixel ahi
+        float shC5 = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
+        float ss5 = smoothstep(0.0, 0.08, sinE) * day5;                      // con el sol pegado al horizonte se apaga suave
+        // --- x445 sombras de las matas
+        float kT = clamp(P445.x, 0.0, 2.0) * ss5;
+        if (kT > 0.001 && shC5 > 0.01 && hC5 > -0.05 && hC5 < 0.3) {
+          float dT = smoothstep(0.02, 0.008, pxM5), dC = smoothstep(0.07, 0.03, pxM5);   // el detalle que entra en pantalla sin titilar
+          float aTe = aT * dT, aCe = aC * dC;
+          float Dm = min((aCe + aTe) * hCut * cotE, 0.5);
+          float occ = 0.0;
+          if (Dm > 0.002) {
+            float2 p0 = w5 + wsw;
+            float h0 = hCut * (1.0 - aCe * (1.0 - PES445N(p0 / 0.12)) - aTe * (1.0 - PES445N(p0 / 0.035 + 17.3)));
+            [unroll] for (int i5 = 1; i5 <= 4; i5++) {
+              float d5 = Dm * (float)i5 * 0.25;
+              float2 p5 = p0 + L5 * d5;
+              float hi = hCut * (1.0 - aCe * (1.0 - PES445N(p5 / 0.12)) - aTe * (1.0 - PES445N(p5 / 0.035 + 17.3)));
+              occ = max(occ, saturate((hi - h0 - d5 * tanE) / (0.12 * hCut + 1e-4)));
+            }
+          }
+          float occAvg = 0.32 * saturate((aC + aT) * hCut * cotE / 0.05);   // lo que no entra en pantalla: la parte en sombra en promedio
+          float occF = lerp(occAvg, occ, max(dT, dC));
+          float vf = 0.85 + 0.30 * dot(Vsk, Ld5);                              // mirando hacia el sol se ven los lados en sombra
+          float nearK = smoothstep(0.0006, 0.0018, pxM5);                    // de muy cerca las hojas 3D ya se hacen sombra entre ellas
+          float dk = saturate(kT * occF * shC5 * 0.6 * vf * nearK);
+          r2.xyz *= (1.0 - 0.7 * dk) * lerp(float3(1.0, 1.0, 1.0), float3(0.95, 0.99, 1.06), dk);
+        }
+        // --- y445 borde de las sombras con hojas
+        float kE = clamp(P445.y, 0.0, 2.0) * ss5;
+        if (kE > 0.001 && hC5 > -0.05 && hC5 < 0.3) {
+          float cs5 = max(0.005, pxM5 * 1.5);
+          float rb5 = PES445H(floor(w5 / cs5));
+          float sw5 = 0.12 * wind5 * (0.5 + 0.5 * sin(tw5 * 2.3 + rb5 * 6.2832));   // la punta baja y sube con las rafagas
+          float u5 = art5 ? 0.85 + 0.15 * rb5 : lerp(0.35 + 0.65 * rb5, 0.75 + 0.25 * rb5, even5);
+          float grazV = 1.0 - abs(dot(Vsk, up5));                             // de costado se ven mas puntas
+          float hT5 = hCut * u5 * (1.0 - aC * (1.0 - PES445N(w5 / 0.12))) * (1.0 - sw5) * (0.5 + 0.5 * grazV);
+          // z314 = 1: la hoja recibe la sombra de su pie (falta todo el alto); 0: la recibe a su altura (falta lo que queda hasta la punta)
+          float hE = IniParams.Load(int2(314,0)).z > 0.5 ? max(hC5, hT5) : max(hT5 - max(hC5, 0.0), 0.0);
+          if (hE > 0.001) {
+            float3 Qv = Pgeo - up5 * max(hC5, 0.0) - (Ld5 - up5 * sinE) * (hE / max(sinE, 0.05));
+            if (Qv.z > 0.05) {
+              float2 sQ = Qv.xy / (g_psScene.m_projectionParam.xy * Qv.z) + g_psScene.m_cameraCenterOffset.xy;
+              float2 uvQ = float2(sQ.x * 0.5 + 0.5, 0.5 - sQ.y * 0.5);
+              float2 dPx = (uvQ - uvC) / g_psSystem.m_renderBuffer.zw;
+              if (uvQ.x > 0.0 && uvQ.y > 0.0 && uvQ.x < 1.0 && uvQ.y < 1.0 && dot(dPx, dPx) > 0.25) {
+                float shQ = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvQ, 0).x);
+                float dS5 = abs(shQ - shC5);
+                if (dS5 > 0.02) {
+                  int tyQ = (int)((uint)(inGBufferNormal.SampleLevel(g_samplerPoint_Clamp_s, uvQ, 0).z * 1023 + 0.5) & 15);
+                  float zQ = PESLinZ(uvQ);
+                  bool okQ = tyQ == 3 && abs(zQ - Qv.z) < 0.04 * Qv.z + 0.1;
+                  [unroll] for (int j5 = 1; j5 <= 2; j5++) {
+                    float2 uvS = lerp(uvC, uvQ, (float)j5 / 3.0);
+                    int tyS = (int)((uint)(inGBufferNormal.SampleLevel(g_samplerPoint_Clamp_s, uvS, 0).z * 1023 + 0.5) & 15);
+                    if (tyS != 3) okQ = false;
+                  }
+                  if (okQ) {
+                    float3 rawC = max(inLightDiffuse.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).xyz, 1e-4);
+                    float3 rawQ = inLightDiffuse.SampleLevel(g_samplerPoint_Clamp_s, uvQ, 0).xyz;
+                    float m5 = saturate(kE) * smoothstep(0.02, 0.15, dS5);
+                    r2.xyz *= lerp(float3(1.0, 1.0, 1.0), clamp(rawQ / rawC, 0.1, 8.0), m5);
+                  }
+                }
+              }
+            }
+          }
+        }
+        // --- z445 halo de contraluz
+        float kH = clamp(P445.z, 0.0, 2.0) * ss5;
+        float fw5 = dot(Vsk, Ld5);
+        if (kH > 0.001 && fw5 > 0.25 && shC5 > 0.01) {
+          float2 px5 = g_psSystem.m_renderBuffer.zw;
+          float edg = 0.0;
+          [unroll] for (int e5 = 0; e5 < 6; e5++) {
+            float2 o5 = e5 == 0 ? float2(0, -1) : (e5 == 1 ? float2(-1, -1) : (e5 == 2 ? float2(1, -1) : (e5 == 3 ? float2(-1, 0) : (e5 == 4 ? float2(1, 0) : float2(0, -2)))));
+            float zN = PESLinZ(saturate(uvC + o5 * px5));
+            if (!(zN > 0.0) || !(zN < 1e5)) zN = 1e5;                         // cielo
+            edg = max(edg, saturate((zN - zsk * 1.2 - 0.03) / (0.3 * zsk + 0.05)) * (e5 == 5 ? 0.6 : 1.0));
+          }
+          if (edg > 0.001) {
+            float fp = pow(saturate(fw5), 6.0) * 0.6 + pow(saturate(fw5), 30.0) * 1.6;
+            float wetH = saturate(hum5 + dew5 * 0.5);
+            float3 tint = lerp(float3(1.0, 0.95, 0.74), float3(1.0, 1.0, 0.97), wetH);   // seca: dorado; mojada o con rocio: blanco
+            tint = lerp(tint, tint * float3(1.0, 0.92, 0.75), saturate(IniParams.Load(int2(412,0)).w * 3.0) * (1.0 - wetH));   // hojas secas
+            float thin = lerp(0.7, 1.25, saturate(trC));                     // hoja fina (translucidez del G-buffer)
+            float lowB = 0.6 + 0.6 * (1.0 - sinE);
+            r1.xyz += sunC5 * tint * (edg * fp * kH * shC5 * 0.22 * thin * lowB * (art5 ? 0.45 : 1.0) * (0.8 + 0.5 * wetH) * seas5);
+          }
+        }
+      }
+    }
+  }
   // === PES21 luz de borde (17/10): con el sol detras del jugador, el contorno (hombros, pelo, brazos) se enciende.
   // Solo piel y kits, nunca el estadio. x46 fuerza, y46 ancho del borde (2 fino .. 5 muy fino), w46 on/off [Alt+Shift+R]
   {
@@ -1510,6 +1684,89 @@ void main(
         float3 sunV = max(pLc_color.xyz, 0.0) * g_psScene.m_exposure.zzz;
         vlDbg = sunV * (ph * VL.x * 1e-3 * acc * dt);
         r0.xyz += vlDbg;
+      }
+    }
+  }
+  // === PES21 (12/11 20:50, Agustin con 4 fotos) w445 POLEN Y MOTAS A CONTRALUZ (foto 3): motitas en el aire a ras del pasto (6 capas fijas
+  // de 0.12 a 2.2 m sobre la cancha, una grilla de 35 cm fija al mundo con una mota en algunas celdas) que el viento lleva (direccion de
+  // las nubes z84, fuerza y108; cada capa a su velocidad y cada mota con su remolino) y que solo se ven cuando el sol las atraviesa:
+  // mirando hacia el sol y en el aire al sol (shadow map: bajo el techo, la sombra del arco o de los jugadores no brillan). Cerca de la
+  // camara son discos grandes y suaves (desenfocadas); cada una aparece y se va despacio y titila al girar. Cuantas y de que color segun
+  // la hora (a la manana rocio: mas, chicas y blancas; a la tarde polen y polvo dorado), la estacion (invierno pocas), el clima (con lluvia
+  // nada; suelo seco mas polvo) y la cancha (pasto alto mas polen; artificial o gastada, polvo). Solo de dia con sol. 0 = apagado
+  { float kM = clamp(IniParams.Load(int2(445,0)).w, 0.0, 2.0);
+    float3 LdM = pLc_dir.xyz;
+    if (cmpOn && kM > 0.001 && dot(LdM, LdM) > 1e-6) {
+      LdM = normalize(LdM);
+      float3 scM = max(pLc_color.xyz, 0.0);
+      float4 M114 = IniParams.Load(int2(114,0)), M415 = IniParams.Load(int2(415,0));
+      float dayM = saturate((scM.r / max(scM.b, 1e-4) - 0.85) * 4.0) * (M114.w > 0.5 ? 1.0 : 0.2);
+      float rainM = abs(M114.x - 1.0) < 0.5 ? 1.0 : 0.0, dryM = abs(M114.x - 2.0) < 0.5 ? 1.0 : 0.0;
+      float seasM = M114.z < -0.5 ? 0.8 : (M114.z < 0.5 ? 1.0 : (M114.z < 1.5 ? 0.35 : 0.8));
+      float dewM = (M415.z > 0.5 && M415.x >= 0.0) ? saturate((10.5 - M415.x) / 3.0) : 0.0;
+      bool artM = IniParams.Load(int2(407,0)).x > 0.5;
+      float mmM = IniParams.Load(int2(296,0)).w; mmM = mmM > 1.0 ? clamp(mmM, 15.0, 80.0) : 28.0;
+      float wearM = saturate(IniParams.Load(int2(104,0)).w);
+      float pollen = artM ? 0.15 : clamp(mmM / 28.0, 0.7, 1.8) * seasM;
+      float dust = (0.25 + 0.6 * wearM + (artM ? 0.4 : 0.0)) * (1.0 + 0.8 * dryM);
+      float densM = kM * dayM * (1.0 - rainM) * saturate((pollen + dust) * (1.0 + 0.4 * dewM) * 0.6);
+      float3 upM = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
+      if (dot(LdM, upM) < 0) upM = -upM;
+      float zM = PESLinZ(uvC); if (!(zM > 0.0) || !(zM < 1e5)) zM = 1e5;
+      float3 PvM = float3(((uvC * float2(2, -2) + float2(-1, 1)) - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zM, zM);
+      float dSurf = length(PvM);
+      float3 VdM = PvM / max(dSurf, 1e-4);
+      float fwM = dot(VdM, LdM);
+      float vyM = dot(VdM, upM);
+      if (densM > 0.002 && fwM > 0.2 && abs(vyM) > 1e-4) {
+        float ph = pow(saturate(fwM), 5.0) * 1.2 + pow(saturate(fwM), 40.0) * 4.0;   // la luz que pasa casi derecho (polen, gotitas)
+        float3 vXM = normalize(float3(g_psScene.m_view._m00, g_psScene.m_view._m01, g_psScene.m_view._m02));
+        float3 vZM = normalize(float3(g_psScene.m_view._m20, g_psScene.m_view._m21, g_psScene.m_view._m22));
+        float twM = IniParams.Load(int2(23,0)).z;
+        float aW = radians(IniParams.Load(int2(84,0)).z);
+        float2 wdM = float2(cos(aW), sin(aW));
+        float spM = 0.12 + 0.6 * saturate(IniParams.Load(int2(108,0)).y);   // m/s a ras del piso
+        float pxK = abs(2.0 * g_psScene.m_projectionParam.y * g_psSystem.m_renderBuffer.w);   // metros por pixel por metro de distancia
+        float pCell = saturate(0.45 * densM);
+        float3 accM = 0;
+        [loop] for (int kL = 0; kL < 6; kL++) {
+          float hL = 0.12 * (1.0 + (float)kL) + 0.06 * (float)(kL * kL);   // 0.12, 0.30, 0.60, 1.02, 1.56, 2.22 m
+          float tL = (hL - g_psScene.m_eyepos.y) / vyM;
+          if (tL > 0.08 && tL < min(dSurf, 30.0)) {
+            float3 Hv = VdM * tL;
+            float2 hw = g_psScene.m_eyepos.xz + float2(dot(Hv, vXM), dot(Hv, vZM));
+            float2 drift = wdM * (spM * (0.7 + 0.12 * (float)kL) * twM);
+            float2 g0 = floor((hw - drift) / 0.35);
+            [unroll] for (int cy = -1; cy <= 1; cy++) {
+              [unroll] for (int cx = -1; cx <= 1; cx++) {
+                float2 ci = g0 + float2(cx, cy);
+                float2 ch = ci + float2(17.0, 31.0) * (float)(kL + 1);
+                if (PES445H(ch) < pCell) {
+                  float r1m = PES445H(ch + 5.3), r2m = PES445H(ch + 9.1), r3m = PES445H(ch + 2.7);
+                  float2 mp = (ci + 0.15 + 0.7 * float2(r1m, r2m)) * 0.35 + drift;
+                  mp += 0.03 * float2(sin(twM * (0.7 + r3m) + r1m * 6.2832), cos(twM * (0.9 + r2m) + r3m * 6.2832));   // remolino
+                  float my = hL + 0.03 * sin(twM * (0.5 + 0.5 * r1m) + r2m * 6.2832);
+                  float3 dm = float3(mp.x - g_psScene.m_eyepos.x, my - g_psScene.m_eyepos.y, mp.y - g_psScene.m_eyepos.z);
+                  float3 Mv = vXM * dm.x + upM * dm.y + vZM * dm.z;            // al espacio de vista
+                  float tM = dot(Mv, VdM);
+                  if (tM > 0.08 && tM < dSurf) {
+                    float dPerp = length(Mv - VdM * tM);
+                    float rw = (0.0012 + 0.0018 * r3m) * (1.0 - 0.35 * dewM);     // 1-3 mm con su brillo (gotitas mas chicas)
+                    float re = max(max(rw, 0.9 * pxK * tM), 0.007 * saturate((1.6 - tM) / 1.3));   // cerca: desenfocada, disco grande y suave
+                    if (dPerp < 2.5 * re) {
+                      float Im = (rw * rw) / (re * re) * exp(-2.0 * dPerp * dPerp / (re * re));
+                      float life = 0.5 - 0.5 * cos(6.2832 * (twM * 0.07 * (0.6 + r3m) + r1m));   // aparece y se va despacio
+                      float twk = 0.65 + 0.35 * sin(twM * (2.0 + 3.0 * r2m) + r1m * 20.0);       // titila al girar
+                      float3 colM = lerp(float3(1.0, 0.86, 0.55), float3(0.95, 0.98, 1.0), saturate(dewM * (0.6 + 0.4 * r2m)));   // polen dorado / gotita blanca
+                      accM += colM * (Im * life * twk * PES445Lit(Mv));
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        r0.xyz += scM * g_psScene.m_exposure.zzz * accM * (ph * 0.9 * kM);
       }
     }
   }

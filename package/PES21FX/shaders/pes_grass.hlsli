@@ -273,14 +273,32 @@ void PESGrassColorGrade(inout float3 c)
     float2 iq = float2(yiq.y * ca - yiq.z * sa, yiq.y * sa + yiq.z * ca);
     c = max(float3(yiq.x + 0.956 * iq.x + 0.621 * iq.y, yiq.x - 0.272 * iq.x - 0.647 * iq.y, yiq.x - 1.106 * iq.x + 1.703 * iq.y), 0.0);
   }
+  // (12/11 20:50, Agustin: "la opcion de color del pasto para que funcione bien con este nuevo pasto natural") natural: "Verde" y "Verde
+  // natural" ya no llevan cada pixel al MISMO color (eso borraba las hojas secas, las puntas paja, las encendidas y las mezclas de pasto:
+  // con w112 0.5 perdian el 42 % de su color): se calcula el corrimiento que necesita el verde medio del pasto (r/g 0.40, b/g 0.25) y se
+  // aplica igual a todos los colores, con la claridad de cada uno. El verde medio llega al mismo lugar que antes; la variedad queda
+  bool natR = PESNatOn();
+  const float3 gRef = float3(0.40, 1.0, 0.25);
   if (abs(C.y) > 0.001) {
-    float3 g = float3(0.19, 0.42, 0.10); g *= l / dot(g, LW);
-    c = max(lerp(c, g, clamp(C.y, -1.0, 1.0) * 0.6), 0.0);
+    float3 g = float3(0.19, 0.42, 0.10);
+    if (natR) {
+      float3 rt = max(lerp(gRef, g / g.g, clamp(C.y, -1.0, 1.0) * 0.6), 0.02) / gRef;
+      float3 cn = c * rt; c = max(cn * (dot(c, LW) / max(dot(cn, LW), 1e-5)), 0.0);
+    } else {
+      g *= l / dot(g, LW);
+      c = max(lerp(c, g, clamp(C.y, -1.0, 1.0) * 0.6), 0.0);
+    }
   }
   if (abs(C.z) > 0.001) { float k = 1.0 + clamp(C.z, -0.8, 1.0); c = max((c - 0.18) * k + 0.18, 0.0); }
   // (27/10 n) tanda 11, w112 "verde natural": el cesped real al sol con cielo despejado (foto de Agustin, pelota sobre la linea) tiene
   // r/g 0.75-0.80 y b/g 0.3-0.5; el del mod daba r/g 0.40 y b/g 0.25 (verde saturado y frio, "no humano"). El "Verde" (y112) acerca a
   // (0.19, 0.42, 0.10) = r/g 0.45, aun mas saturado. Esto acerca la cromatica a (0.78, 1, 0.42) conservando la luminancia; 1 = casi todo
-  if (C.w > 0.001) { float3 t = float3(0.78, 1.0, 0.42); t *= l / dot(t, LW); c = max(lerp(c, t, clamp(C.w, 0.0, 1.0) * 0.85), 0.0); }
+  if (C.w > 0.001) {
+    float3 t = float3(0.78, 1.0, 0.42);
+    if (natR) {
+      float3 rt = lerp(gRef, t, clamp(C.w, 0.0, 1.0) * 0.85) / gRef;
+      float3 cn = c * rt; c = max(cn * (dot(c, LW) / max(dot(cn, LW), 1e-5)), 0.0);
+    } else { t *= l / dot(t, LW); c = max(lerp(c, t, clamp(C.w, 0.0, 1.0) * 0.85), 0.0); }
+  }
 }
 #endif

@@ -360,6 +360,26 @@ void main(
     // claridad por hoja (nervio, bordes, vetas) y puntas mas palidas; pasto seco donde hay desgaste (v8.x)
     clar = lerp(1.0225, (1.0 - 0.5 * sC) + sC * pesLight, pesCf);   // (26/10 f) lejos la claridad media del atlas (R 0.525); (27/10 h) pendiente con y295
     float3 c = o0.xyz * clar * pesNatG;   // (12/11) x433 brillo del natural (el mismo en el suelo)
+    // (12/11 20:50, Agustin: "estaria bien que veas la opcion de color del pasto para que funcione bien con este nuevo pasto natural")
+    // natural: la correccion del amarillo (x29) y el color del pasto (112) van sobre el verde de la hoja ANTES de sus detalles (hojas secas,
+    // puntas cortadas / tiernas, luz que atraviesa la punta), como en la base, donde el seco del desgaste va despues del color. Antes iban al
+    // final y la correccion del amarillo y el "Verde" deshacian justo las hojas secas, las puntas paja y las encendidas (todo eso es
+    // "amarillo"). El contraste (z112) gira alrededor del mismo gris que en la base (antes de la ganancia x433)
+    if (pesNat) {
+      float4 GVn = IniParams.Load(int2(29,0));
+      if (GVn.w > 0.5) {
+        const float3 LWn = float3(0.2126, 0.7152, 0.0722);
+        float lgn = dot(c, LWn);
+        float yeln = saturate((c.r / max(c.g, 1e-3) - 0.55) * 2.5);
+        yeln *= saturate(((max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b))) / max(max(c.r, max(c.g, c.b)), 1e-3) - 0.12) * 5.0);
+        float3 natn = c * float3(0.80, 1.0, 0.95);
+        natn *= lgn / max(dot(natn, LWn), 1e-4);
+        c = lerp(c, natn, saturate(GVn.x) * yeln);
+        c = lerp(dot(c, LWn).xxx, c, GVn.z > 0 ? GVn.z : 1.0);
+        c *= GVn.y > 0 ? GVn.y : 1.0;
+      }
+      float3 cgn = c / max(pesNatG, 1e-3); PESGrassColorGrade(cgn); c = max(cgn, 0.0) * pesNatG;
+    }
     float tipK = smoothstep(0.55, 1.0, pesN.z) * (0.08 + 0.6 * v8.x) * pesCf;   // (26/10 d) 0.18 -> 0.08: las puntas tenian un 18% de paja aun sin desgaste (r/g 0.45 -> 0.57, lima a media distancia)
     // (11/11) w412: en el pasto de verdad hay hojas sueltas secas o amarillentas entre las verdes (mas hacia la punta); hoja por hoja
     // (11/11 c, Agustin: "no siempre el color es amarillo") la hoja seca no es siempre amarilla: verde apagado, verde amarillento, paja o
@@ -399,7 +419,7 @@ void main(
     }
     { // misma correccion de color que la base de la cancha ("Pasto v2", x29): antes las hojas quedaban mas amarillas/grises que el suelo
       float4 GV = IniParams.Load(int2(29,0));
-      if (GV.w > 0.5) {
+      if (GV.w > 0.5 && !pesNat) {   // (12/11 20:50) el natural ya la tuvo antes de los detalles
         const float3 LWg = float3(0.2126, 0.7152, 0.0722);
         float lg = dot(c, LWg);
         float yel = saturate((c.r / max(c.g, 1e-3) - 0.55) * 2.5);
@@ -470,7 +490,7 @@ void main(
     if (pesNat) c -= max(c - 0.75, 0.0) * 0.6;   // (11/11) natural: hombro suave arriba de 0.75 (el sol fuerte recortaba en 1 y borraba el dibujo de la hoja)
     o0.xyz = saturate(c);
   }
-  if (!pesFar) { float3 cg = o0.xyz; PESGrassColorGrade(cg); o0.xyz = saturate(cg); }   // (25/10 b) color del pasto (112), igual que la base
+  if (!pesFar && !(pesV3 && pesNat)) { float3 cg = o0.xyz; PESGrassColorGrade(cg); o0.xyz = saturate(cg); }   // (25/10 b) color del pasto (112), igual que la base (natural: antes de los detalles, 12/11 20:50)
   if (pesV3 && !pesFar && pesPaintF > 0.001) {   // (27/10 h) hoja pintada: conserva el sombreado (raiz, claridad, sombra plana) pero no el seco, el amarillo,
     // el tinte ni el color del pasto (112: "Verde" la ponia lima). (27/10 j) despues del grade
     o0.xyz = lerp(o0.xyz, saturate(PESNatShoulder(v1.zzz * r1.xyz * clar * pesNatG)), pesPaintF);
@@ -715,7 +735,8 @@ void main(
   if (pesFB && v5.w < 0.5 && !pesFar && P330.y > 0.001) {
     float3 gnd = pesGnd;
     float3 flatC = saturate(v1.zzz * v3.xyz * pesNatG);
-    { float3 cg = flatC; PESGrassColorGrade(cg); flatC = saturate(cg); }
+    if (pesNat) { float3 cg = flatC / max(pesNatG, 1e-3); PESGrassColorGrade(cg); flatC = saturate(cg * pesNatG); }   // (12/11 20:50) como la hoja: color antes de la ganancia
+    else { float3 cg = flatC; PESGrassColorGrade(cg); flatC = saturate(cg); }
     float3 rel = clamp(o0.xyz / max(flatC, 0.02), 0.0, 1.6);
     o0.xyz = lerp(o0.xyz, saturate(gnd * rel), saturate(P330.y));
   }
