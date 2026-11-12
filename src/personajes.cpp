@@ -26,9 +26,9 @@
 namespace fx {
 
 static const unsigned kStamp = 0x62787C6A;
-static const uintptr_t kHumanListVt = 0x142b98c00ull, kHumanListCol = 0x142e083e8ull, kHumanCreate = 0x141ecd100ull;
-static const uintptr_t kNodeVt = 0x142aab948ull, kNodeCol = 0x142da4618ull, kNodeDtor = 0x141a22f50ull, kNodeBuild = 0x141a232b0ull;
-static const uintptr_t kPlayerDbGlobal = 0x143714240ull, kDbFind = 0x1414c0e40ull, kRecName = 0x1414c5d70ull;
+static const uintptr_t kHumanListVt = XA(0x142b98c00ull), kHumanListCol = XA(0x142e083e8ull), kHumanCreate = XA(0x141ecd100ull);
+static const uintptr_t kNodeVt = XA(0x142aab948ull), kNodeCol = XA(0x142da4618ull), kNodeDtor = XA(0x141a22f50ull), kNodeBuild = XA(0x141a232b0ull);
+static const uintptr_t kPlayerDbGlobal = XA(0x143714240ull), kDbFind = XA(0x1414c0e40ull), kRecName = XA(0x1414c5d70ull);
 static const unsigned char kDbFindSig[] = { 0x48, 0x89, 0x54, 0x24, 0x10, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xc2, 0x48, 0x8b, 0xd9 };
 static const unsigned char kRecNameSig[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x8b, 0x81, 0x44, 0x01, 0x00, 0x00, 0x48, 0x8b, 0xd9, 0xc1 };
 
@@ -310,7 +310,7 @@ void CharTrackInstall() {
     if (!DiagOn(0)) { Log("personajes: seguimiento de jugadores apagado (x173 = 0, Diagnostico > Ganchos nuevos)"); return; }
     HMODULE mod = GetModuleHandleW(nullptr);
     auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
-    if ((uintptr_t)mod != 0x140000000ull || nt->FileHeader.TimeDateStamp != kStamp) { Log("personajes: exe distinto, sin ganchos"); return; }
+    if ((uintptr_t)mod != 0x140000000ull || !ExeStampOk((unsigned)nt->FileHeader.TimeDateStamp)) { Log("personajes: exe distinto, sin ganchos"); return; }
     s_nameOk = SigAt(kDbFind, kDbFindSig, sizeof kDbFindSig) && SigAt(kRecName, kRecNameSig, sizeof kRecNameSig) && Readable((void*)kPlayerDbGlobal, 8);
     s_okCreate = PatchVt(kHumanListVt, kHumanListCol, 14, kHumanCreate, (void*)&hk_Create, (void**)&o_create);
     // primero el destructor: si no se puede, no se arma la tabla (quedarian nodos muertos en ella)

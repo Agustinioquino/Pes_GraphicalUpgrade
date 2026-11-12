@@ -30,8 +30,8 @@
 namespace fx {
 
 static const unsigned kStamp = 0x62787C6A;
-static const uintptr_t kMunmap = 0x1403fc0d0;    // win32munmap de dlmalloc dentro del exe
-static const uintptr_t kCrashRip = 0x1403fe31d;  // release_unused_segments: mov [rbx+38h], ecx (insert_large_chunk)
+static const uintptr_t kMunmap = XA(0x1403fc0d0ull);    // win32munmap de dlmalloc dentro del exe
+static const uintptr_t kCrashRip = XA(0x1403fe31dull);  // release_unused_segments: mov [rbx+38h], ecx (insert_large_chunk)
 // prologo: mov [rsp+8],rbx ; push rdi ; sub rsp,50h ; mov rdi,rdx ; mov rbx,rcx
 static const unsigned char kMunmapSig[16] = { 0x48,0x89,0x5c,0x24,0x08,0x57,0x48,0x83,0xec,0x50,0x48,0x8b,0xfa,0x48,0x8b,0xd9 };
 
@@ -298,7 +298,7 @@ void MemWatchStart() {
     s_fix = g_cfg.memFix >= 2;
     HMODULE mod = GetModuleHandleW(nullptr);
     auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
-    bool exeOk = (uintptr_t)mod == 0x140000000ull && nt->FileHeader.TimeDateStamp == kStamp;
+    bool exeOk = (uintptr_t)mod == 0x140000000ull && ExeStampOk((unsigned)nt->FileHeader.TimeDateStamp);
     if (!exeOk) Log("memoria: exe distinto (sello %08X): sin gancho en el liberador del juego", (unsigned)nt->FileHeader.TimeDateStamp);
     else if (memcmp((const void*)kMunmap, kMunmapSig, sizeof kMunmapSig) != 0) Log("memoria: el liberador del juego (PES2021.exe+0x3fc0d0) no tiene la firma esperada: sin gancho");
     else if (MH_CreateHook((void*)kMunmap, (void*)&hk_Munmap, (void**)&o_munmap) != MH_OK || MH_EnableHook((void*)kMunmap) != MH_OK)

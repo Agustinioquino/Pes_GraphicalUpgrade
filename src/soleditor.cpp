@@ -31,10 +31,10 @@
 namespace fx {
 
 static const unsigned kStamp = 0x62787C6A;
-static const uintptr_t kBodyVtbl = 0x142a48290ull;     // fox::grx::DirectionalLightBody
-static const uintptr_t kSunPlugVtbl = 0x142a1afd8ull;  // fox::gr::PluginSunlight
-static const uintptr_t kShadowPlugVtbl = 0x142a11eb0ull; // fox::gr::PluginShadow
-static const uintptr_t kSunGlobalDir = 0x1437d5700ull;   // direccion del sol de la atmosfera (FUN_141943ce0 -> FUN_14169f3c0)
+static const uintptr_t kBodyVtbl = XA(0x142a48290ull);     // fox::grx::DirectionalLightBody
+static const uintptr_t kSunPlugVtbl = XA(0x142a1afd8ull);  // fox::gr::PluginSunlight
+static const uintptr_t kShadowPlugVtbl = XA(0x142a11eb0ull); // fox::gr::PluginShadow
+static const uintptr_t kSunGlobalDir = XA(0x1437d5700ull);   // direccion del sol de la atmosfera (FUN_141943ce0 -> FUN_14169f3c0)
 
 typedef uintptr_t (__fastcall* Fn4)(void*, uintptr_t, uintptr_t, uintptr_t);
 static Fn4 o_spotInit = nullptr, o_init = nullptr, o_dtor = nullptr, o_apply = nullptr, o_apply15 = nullptr, o_deact = nullptr, o_act = nullptr, o_sun = nullptr, o_shadow = nullptr;
@@ -176,8 +176,8 @@ static bool Swap(uintptr_t vtbl, int idx, uintptr_t expect, void* hook, Fn4* ori
 // queda sucio (+0x80 = 1, como FUN_14191bca0): en el siguiente TOD_Pump 0x14191c7b0 -> Apply2 0x14191c8f0 la atmosfera recibe
 // la hora (Sky_SetDateTime) y sunLux/moonLux/skyLightSunScale, y la exposicion.
 // Se toma solo la TimeOfDaySettings del editor: exposicion fija (gameExposureCompensation -7.1, min = max = 0) al activarse.
-static const uintptr_t kTodsVtbl = 0x142a7deb8ull;
-static const uintptr_t kTodMgr = 0x1437d2120ull;
+static const uintptr_t kTodsVtbl = XA(0x142a7deb8ull);
+static const uintptr_t kTodMgr = XA(0x1437d2120ull);
 typedef void* (__fastcall* FnMakeSlot)(char* ent, void** out, void* r8);
 typedef void (__fastcall* FnSetGlobal)(void* mgr, void** p, uintptr_t, uintptr_t);
 typedef void (__fastcall* FnAssign)(void** dst, void* src);
@@ -284,10 +284,10 @@ static bool PushTods(char* e) {
         void* mgr = *(void* volatile*)kTodMgr;
         if (!mgr || !Readable(mgr, 0x90)) return false;
         void* p = nullptr;
-        ((FnMakeSlot)0x1419230e0ull)(e, &p, nullptr);
+        ((FnMakeSlot)XA(0x1419230e0ull))(e, &p, nullptr);
         if (!p) return false;
-        ((FnSetGlobal)0x14191c310ull)(mgr, &p, 0, 0);
-        ((FnAssign)0x1403cf4d0ull)(&p, nullptr);
+        ((FnSetGlobal)XA(0x14191c310ull))(mgr, &p, 0, 0);
+        ((FnAssign)XA(0x1403cf4d0ull))(&p, nullptr);
         *(volatile unsigned char*)((char*)mgr + 0x80) = 1;
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
@@ -381,7 +381,7 @@ void SolEditorHoraLibre() {
 // sin sol real el jugador quedaria negro (-14 EV con focos de ~1000 lux)
 static int AtmoCount() {
     __try {
-        char* m = *(char* volatile*)0x1437d59e8ull;
+        char* m = *(char* volatile*)XA(0x1437d59e8ull);
         if (!m || !Readable(m + 0xd8, 4)) return 0;
         int n = *(int volatile*)(m + 0xd8);
         return (n > 0 && n < 64) ? n : 0;
@@ -428,23 +428,23 @@ static std::atomic<int> s_dcreated{0}, s_dapplies{0};
 static void* SceneOfBody(void* body) {   // sin objetos C++
     __try {
         void* h = nullptr;
-        ((FnBodyName)0x1402ba010ull)(body, &h);
+        ((FnBodyName)XA(0x1402ba010ull))(body, &h);
         void* sc = nullptr;
-        if (h) { uintptr_t key = *(uintptr_t*)((char*)h + 0x10); sc = ((FnFindScene)0x141692630ull)(&key); }
-        ((FnRelName)0x1403d2420ull)(&h);
+        if (h) { uintptr_t key = *(uintptr_t*)((char*)h + 0x10); sc = ((FnFindScene)XA(0x141692630ull))(&key); }
+        ((FnRelName)XA(0x1403d2420ull))(&h);
         return sc;
     } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
 }
 static void* MakeSunIn(void* scene) {   // sin objetos C++
     __try {
         void* src = nullptr;
-        ((FnMkSrc)0x14169ee20ull)(&src);
+        ((FnMkSrc)XA(0x14169ee20ull))(&src);
         if (!src) return nullptr;
-        ((FnSrcB)0x14169fa50ull)(src, 1);
-        ((FnSrcB)0x14169f440ull)(src, 0);        // apagada hasta SolEditorSet(on)
-        ((FnSrcB)0x14169f7f0ull)(src, g_cfg.solEditorSombra ? 1 : 0);   // sombra solo si se pide (TDR 10/11 al cargar jugador)
-        ((FnSrcB)0x14169f270ull)(src, 1);        // mezcla de cascadas
-        ((FnAddSrc)0x1416927c0ull)(scene, src);
+        ((FnSrcB)XA(0x14169fa50ull))(src, 1);
+        ((FnSrcB)XA(0x14169f440ull))(src, 0);        // apagada hasta SolEditorSet(on)
+        ((FnSrcB)XA(0x14169f7f0ull))(src, g_cfg.solEditorSombra ? 1 : 0);   // sombra solo si se pide (TDR 10/11 al cargar jugador)
+        ((FnSrcB)XA(0x14169f270ull))(src, 1);        // mezcla de cascadas
+        ((FnAddSrc)XA(0x1416927c0ull))(scene, src);
         return src;
     } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
 }
@@ -452,10 +452,10 @@ static bool ApplySun(void* src, const Pending& p, float signo) {   // sin objeto
     __try {
         float d[4] = { p.dir[0] * signo, p.dir[1] * signo, p.dir[2] * signo, 0.0f };
         float rgb[4] = { p.rgb[0], p.rgb[1], p.rgb[2], 1.0f }, col[4] = {};
-        ((FnSrcV)0x14169f3c0ull)(src, d);
-        ((FnMkCol)0x141693630ull)(col, p.kelvin, 0.0f, rgb, p.lux);
-        ((FnSrcV)0x14169f2e0ull)(src, col);
-        ((FnSrcB)0x14169f440ull)(src, p.on ? 1 : 0);
+        ((FnSrcV)XA(0x14169f3c0ull))(src, d);
+        ((FnMkCol)XA(0x141693630ull))(col, p.kelvin, 0.0f, rgb, p.lux);
+        ((FnSrcV)XA(0x14169f2e0ull))(src, col);
+        ((FnSrcB)XA(0x14169f440ull))(src, p.on ? 1 : 0);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
@@ -463,7 +463,7 @@ static bool ApplySun(void* src, const Pending& p, float signo) {   // sin objeto
 // asi que tocarla es seguro aunque su escena ya no exista; sin esto quedaba prendida y con sombra en la escena vieja y el
 // motor la seguia usando como luz principal (log 10/11 23:46 PC: luz_principal = fuente de la escena cerrada, luego TDR)
 static void KillSun(void* src) {   // sin objetos C++
-    __try { ((FnSrcB)0x14169f440ull)(src, 0); ((FnSrcB)0x14169f7f0ull)(src, 0); } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    __try { ((FnSrcB)XA(0x14169f440ull))(src, 0); ((FnSrcB)XA(0x14169f7f0ull))(src, 0); } __except (EXCEPTION_EXECUTE_HANDLER) {}
 }
 static void DllSunOnSpot(void* body) {   // SpotLightBody[6], despues del original (hilo del motor)
     if (!g_cfg.solEditorDll) return;
@@ -528,30 +528,30 @@ static void Install() {
     if (!g_cfg.motorPatch) { Log("sol_editor: parches en memoria apagados (motor = 0)"); return; }
     HMODULE mod = GetModuleHandleW(nullptr);
     auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
-    if ((uintptr_t)mod != 0x140000000ull || nt->FileHeader.TimeDateStamp != kStamp) { Log("sol_editor: exe distinto: sin ganchos"); return; }
+    if ((uintptr_t)mod != 0x140000000ull || !ExeStampOk((unsigned)nt->FileHeader.TimeDateStamp)) { Log("sol_editor: exe distinto: sin ganchos"); return; }
     // comprobar las 5 entradas antes de cambiar ninguna
-    struct E { int i; uintptr_t a; } want[] = { {1, 0x141811ed0ull}, {6, 0x141815570ull}, {7, 0x14181a0b0ull}, {8, 0x141813f70ull}, {14, 0x14181a030ull}, {15, 0x14181a0b0ull} };
+    struct E { int i; uintptr_t a; } want[] = { {1, XA(0x141811ed0ull)}, {6, XA(0x141815570ull)}, {7, XA(0x14181a0b0ull)}, {8, XA(0x141813f70ull)}, {14, XA(0x14181a030ull)}, {15, XA(0x14181a0b0ull)} };
     bool ok = true;
     for (auto& w : want) { void** s = (void**)(kBodyVtbl + w.i * 8); if (!Readable(s, 8) || (uintptr_t)*s != w.a) ok = false; }
     if (ok) {
-        s_bodyOk = Swap(kBodyVtbl, 1, 0x141811ed0ull, (void*)&hk_dtor, &o_dtor) && Swap(kBodyVtbl, 6, 0x141815570ull, (void*)&hk_init, &o_init) && Swap(kBodyVtbl, 8, 0x141813f70ull, (void*)&hk_deact, &o_deact)
-                && Swap(kBodyVtbl, 14, 0x14181a030ull, (void*)&hk_act, &o_act) && Swap(kBodyVtbl, 7, 0x14181a0b0ull, (void*)&hk_apply, &o_apply)
-                && Swap(kBodyVtbl, 15, 0x14181a0b0ull, (void*)&hk_apply15, &o_apply15);
+        s_bodyOk = Swap(kBodyVtbl, 1, XA(0x141811ed0ull), (void*)&hk_dtor, &o_dtor) && Swap(kBodyVtbl, 6, XA(0x141815570ull), (void*)&hk_init, &o_init) && Swap(kBodyVtbl, 8, XA(0x141813f70ull), (void*)&hk_deact, &o_deact)
+                && Swap(kBodyVtbl, 14, XA(0x14181a030ull), (void*)&hk_act, &o_act) && Swap(kBodyVtbl, 7, XA(0x14181a0b0ull), (void*)&hk_apply, &o_apply)
+                && Swap(kBodyVtbl, 15, XA(0x14181a0b0ull), (void*)&hk_apply15, &o_apply15);
     } else Log("sol_editor: la vtable de DirectionalLightBody no coincide: sin control del sol del editor");
     // el sol de la DLL necesita los dos ganchos del foco (iniciar + destructor): si falta uno, no se crea
-    if (Readable((void*)(0x142a483e0ull + 8), 8) && *(uintptr_t*)(0x142a483e0ull + 8) == 0x141812280ull && Readable((void*)(0x142a483e0ull + 48), 8) && *(uintptr_t*)(0x142a483e0ull + 48) == 0x1418155f0ull) {
-        Swap(0x142a483e0ull, 1, 0x141812280ull, (void*)&hk_spotDtor, &o_spotDtor);
-        if (!Swap(0x142a483e0ull, 6, 0x1418155f0ull, (void*)&hk_spotInit, &o_spotInit)) Log("sol_editor: sin contador de focos");
+    if (Readable((void*)(XA(0x142a483e0ull) + 8), 8) && *(uintptr_t*)(XA(0x142a483e0ull) + 8) == XA(0x141812280ull) && Readable((void*)(XA(0x142a483e0ull) + 48), 8) && *(uintptr_t*)(XA(0x142a483e0ull) + 48) == XA(0x1418155f0ull)) {
+        Swap(XA(0x142a483e0ull), 1, XA(0x141812280ull), (void*)&hk_spotDtor, &o_spotDtor);
+        if (!Swap(XA(0x142a483e0ull), 6, XA(0x1418155f0ull), (void*)&hk_spotInit, &o_spotInit)) Log("sol_editor: sin contador de focos");
     } else { g_cfg.solEditorDll = false; Log("sol_editor: vtable de SpotLightBody distinta: sin sol de la DLL"); }
     {
-        struct E2 { int i; uintptr_t a; } tw[] = { {1, 0x141922ed0ull}, {7, 0x141922f90ull}, {8, 0x141923af0ull}, {14, 0x141925fa0ull} };
+        struct E2 { int i; uintptr_t a; } tw[] = { {1, XA(0x141922ed0ull)}, {7, XA(0x141922f90ull)}, {8, XA(0x141923af0ull)}, {14, XA(0x141925fa0ull)} };
         bool tok = true;
         for (auto& w : tw) { void** sl = (void**)(kTodsVtbl + w.i * 8); if (!Readable(sl, 8) || (uintptr_t)*sl != w.a) tok = false; }
-        s_todsOk = tok && Swap(kTodsVtbl, 1, 0x141922ed0ull, (void*)&hk_tDtor, &o_tDtor) && Swap(kTodsVtbl, 8, 0x141923af0ull, (void*)&hk_tDeact, &o_tDeact)
-                && Swap(kTodsVtbl, 7, 0x141922f90ull, (void*)&hk_tAct, &o_tAct) && Swap(kTodsVtbl, 14, 0x141925fa0ull, (void*)&hk_tReact, &o_tReact);
+        s_todsOk = tok && Swap(kTodsVtbl, 1, XA(0x141922ed0ull), (void*)&hk_tDtor, &o_tDtor) && Swap(kTodsVtbl, 8, XA(0x141923af0ull), (void*)&hk_tDeact, &o_tDeact)
+                && Swap(kTodsVtbl, 7, XA(0x141922f90ull), (void*)&hk_tAct, &o_tAct) && Swap(kTodsVtbl, 14, XA(0x141925fa0ull), (void*)&hk_tReact, &o_tReact);
         if (!s_todsOk) Log("sol_editor: TimeOfDaySettingsBody no coincide: sin hora ni atmosfera del editor");
     }
-    s_plugOk = Swap(kSunPlugVtbl, 8, 0x1416ee820ull, (void*)&hk_sun, &o_sun) && Swap(kShadowPlugVtbl, 7, 0x1416c66e0ull, (void*)&hk_shadow, &o_shadow);
+    s_plugOk = Swap(kSunPlugVtbl, 8, XA(0x1416ee820ull), (void*)&hk_sun, &o_sun) && Swap(kShadowPlugVtbl, 7, XA(0x1416c66e0ull), (void*)&hk_shadow, &o_shadow);
     Log("sol_editor: cuerpo de la luz direccional %s, plugins sol/sombra %s", s_bodyOk ? "enganchado" : "NO", s_plugOk ? "contados" : "NO");
 }
 

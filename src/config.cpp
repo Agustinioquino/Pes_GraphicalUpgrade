@@ -126,6 +126,7 @@ static bool LoadConfigLocked() {
         }
         if (Lower(section) == "motor") {   // (20/10) parches en memoria del motor (exepatch.cpp)
             if (kl == "motor") c.motorPatch = atoi(v.c_str()) != 0;
+            else if (kl == "exe_100") c.optExe100 = atoi(v.c_str()) != 0;   // (12/11) exe 1.00 (5F5ED4BF) con direcciones traducidas
             else if (kl == "sol_parche") c.motorSunFix = atoi(v.c_str()) != 0;   // (27/10) el sol en vista con la matriz al reves (exepatch.cpp)
             else if (kl == "sombra_parche") c.motorShadowFix = std::clamp(atoi(v.c_str()), 0, 4);   // (27/10) la matriz del shadow map con la vista al reves
             else if (kl == "sombra_resolucion") c.motorShadowRes = std::clamp(atoi(v.c_str()), 0, 8192);

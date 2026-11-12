@@ -21,8 +21,8 @@ namespace fx {
 
 namespace {
 const unsigned kStamp = 0x62787C6A;
-const uintptr_t kRigMatrices = 0x1419f8820ull;
-const uintptr_t kVtFaceRig = 0x142ab4560ull, kVtCharRig = 0x142aa4cd0ull;
+const uintptr_t kRigMatrices = XA(0x1419f8820ull);
+const uintptr_t kVtFaceRig = XA(0x142ab4560ull), kVtCharRig = XA(0x142aa4cd0ull);
 
 typedef uintptr_t (__fastcall* RigFn)(void* rig);
 RigFn o_rig = nullptr;
@@ -104,7 +104,7 @@ void Install() {
     if (!g_cfg.motorPatch) { Log("inyeccion caras: parches en memoria apagados (motor = 0)"); return; }
     HMODULE mod = GetModuleHandleW(nullptr);
     auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
-    if ((uintptr_t)mod != 0x140000000ull || nt->FileHeader.TimeDateStamp != kStamp) { Log("inyeccion caras: exe distinto, sin gancho"); return; }
+    if ((uintptr_t)mod != 0x140000000ull || !ExeStampOk((unsigned)nt->FileHeader.TimeDateStamp)) { Log("inyeccion caras: exe distinto, sin gancho"); return; }
     unsigned char b[16] = {};
     __try { memcpy(b, (const void*)kRigMatrices, sizeof b); } __except (EXCEPTION_EXECUTE_HANDLER) { Log("inyeccion caras: no se puede leer 0x1419f8820"); return; }
     char hex[64]; for (int i = 0; i < 16; i++) snprintf(hex + i * 3, 4, "%02X ", b[i]);

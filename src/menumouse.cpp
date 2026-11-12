@@ -36,7 +36,7 @@ namespace fx {
 HWND OverlayHwnd();   // overlay.cpp
 
 static const unsigned kStamp = 0x62787C6A;
-static const uintptr_t kHover = 0x140e400d0ull, kDirs = 0x140e3e6b0ull, kAction = 0x140e48f80ull, kSelect = 0x140e42300ull, kScroll = 0x140e3fbd0ull;
+static const uintptr_t kHover = XA(0x140e400d0ull), kDirs = XA(0x140e3e6b0ull), kAction = XA(0x140e48f80ull), kSelect = XA(0x140e42300ull), kScroll = XA(0x140e3fbd0ull);
 // 0x140e400d0: push r13; sub rsp,60h; mov rax,[rcx+88h]; mov r13,rcx; cmp qword [rax+98h],0
 static const unsigned char kHoverSig[24] = { 0x41,0x55,0x48,0x83,0xec,0x60,0x48,0x8b,0x81,0x88,0x00,0x00,0x00,0x4c,0x8b,0xe9,0x48,0x83,0xb8,0x98,0x00,0x00,0x00,0x00 };
 // 0x140e3e6b0: mov [rsp+20h],r9; push rsi; push r12; push r13; push r15; sub rsp,58h; mov rax,[rcx+88h]
@@ -55,7 +55,7 @@ typedef void (*PFN_Select)(void*, int, long long);
 typedef void* (*PFN_Scroll)(void*, int);
 typedef int (*PFN_NodeVec2)(void*, float*);
 typedef uint8_t* (*PFN_ChildByType)(void* sub, int type, int idx);   // 0x140e4f5d0: hijo de un nodo por tipo (2 = selector)
-static const uintptr_t kChildByType = 0x140e4f5d0ull;
+static const uintptr_t kChildByType = XA(0x140e4f5d0ull);
 static PFN_Hover o_hover = nullptr; static PFN_Dirs o_dirs = nullptr; static PFN_Action o_action = nullptr;
 
 static bool s_tried = false, s_ok = false;
@@ -93,7 +93,7 @@ static inline uint8_t* Child(const uint8_t* node, uint32_t i) { if (ChildCount(n
 // todas las clases de nodo del menu (60) comparten la posicion 0x140e4d9e0 en la ranura 20; el tamano (ranura 24) es uno de estos
 static inline bool RowClass(void** vt) {
     const uintptr_t a = (uintptr_t)vt[0xa0 / 8], b = (uintptr_t)vt[0xc0 / 8];
-    return a == 0x140e4d9e0ull && (b == 0x140e4ade0ull || b == 0x140e54130ull || b == 0x140e5b9c0ull || b == 0x140e90710ull || b == 0x140e92170ull);
+    return a == XA(0x140e4d9e0ull) && (b == XA(0x140e4ade0ull) || b == XA(0x140e54130ull) || b == XA(0x140e5b9c0ull) || b == XA(0x140e90710ull) || b == XA(0x140e92170ull));
 }
 
 struct Hit { int group = -1, row = -1; float x = 0, y = 0, w = 0, h = 0, dist = 0; };   // dist > 0: no esta justo encima, es la fila mas cercana de su grupo
@@ -313,7 +313,7 @@ static void Install() {
     if (!g_cfg.motorPatch) { Log("mouse en menus: parches en memoria apagados (motor = 0): sin mouse en los menus del juego"); return; }
     HMODULE mod = GetModuleHandleW(nullptr);
     auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
-    if ((uintptr_t)mod != 0x140000000ull || nt->FileHeader.TimeDateStamp != kStamp) {
+    if ((uintptr_t)mod != 0x140000000ull || !ExeStampOk((unsigned)nt->FileHeader.TimeDateStamp)) {
         Log("mouse en menus: exe distinto (base %p, sello %08X): sin gancho", (void*)mod, (unsigned)nt->FileHeader.TimeDateStamp); return;
     }
     if (!SigAt(kHover, kHoverSig, sizeof kHoverSig) || !SigAt(kDirs, kDirsSig, sizeof kDirsSig) || !SigAt(kAction, kActionSig, sizeof kActionSig) ||

@@ -35,8 +35,8 @@
 namespace fx {
 
 static const unsigned kStamp = 0x62787C6A;
-static const uintptr_t kFactory = 0x140a977d0ull;          // fabrica de paginas del Editar (clave, nombre, bandera)
-static const uintptr_t kVtApp = 0x1426edeb8ull;            // menu::MenuEditPlAppearance (89 ranuras)
+static const uintptr_t kFactory = XA(0x140a977d0ull);          // fabrica de paginas del Editar (clave, nombre, bandera)
+static const uintptr_t kVtApp = XA(0x1426edeb8ull);            // menu::MenuEditPlAppearance (89 ranuras)
 static const int kSlots = 89;
 // 0x140a977d0: mov [rsp+8],rbx; mov [rsp+10h],rbp; mov [rsp+18h],rsi; push rdi; push r12..r15; sub rsp,20h; xor r15d,r15d
 static const unsigned char kFactorySig[31] = { 0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x6c,0x24,0x10,0x48,0x89,0x74,0x24,0x18,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x83,0xec,0x20,0x45,0x33,0xff };
@@ -44,8 +44,8 @@ static const unsigned char kFactorySig[31] = { 0x48,0x89,0x5c,0x24,0x08,0x48,0x8
 static const unsigned char kDressSig[22] = { 0x48,0x89,0x5c,0x24,0x08,0x44,0x89,0x44,0x24,0x18,0x57,0x48,0x83,0xec,0x50,0x4c,0x8d,0x91,0xc8,0x00,0x00,0x00 };
 // ranuras de la tabla que se comprueban antes de copiarla (indice, valor esperado)
 static const struct { int slot; uintptr_t fn; } kExpect[] = {
-    { 49, 0x140c09410ull }, { 50, 0x140c09370ull }, { 52, 0x140c09470ull }, { 62, 0x141b42640ull }, { 63, 0x141b42640ull },
-    { 75, 0x140c09280ull }, { 76, 0x140c08e70ull }, { 78, 0x140c08da0ull }, { 85, 0x1403f9410ull }, { 86, 0x140b725f0ull } };
+    { 49, XA(0x140c09410ull) }, { 50, XA(0x140c09370ull) }, { 52, XA(0x140c09470ull) }, { 62, XA(0x141b42640ull) }, { 63, XA(0x141b42640ull) },
+    { 75, XA(0x140c09280ull) }, { 76, XA(0x140c08e70ull) }, { 78, XA(0x140c08da0ull) }, { 85, XA(0x1403f9410ull) }, { 86, XA(0x140b725f0ull) } };
 
 // funciones del juego que se llaman (todas con argumentos simples; leidas en el desensamblado)
 typedef void* (*PFN_Factory)(void* key, void* name, void* flag);
@@ -64,20 +64,20 @@ typedef void (*PFN_HelpText)(void* page, int slot, const char* text);       // 0
 typedef void* (*PFN_GetMv)();                                               // 0x141f05cd0
 typedef void (*PFN_MvHold)(void* mv, char on, void*, void*);                // 0x141f06e10
 typedef uintptr_t (*PFN_Dress)(void* mv, uint64_t key, uint32_t team, uint32_t a, uint32_t gk, uint32_t kit, uint8_t b);   // 0x141f06920
-static const PFN_SetCount g_SetCount = (PFN_SetCount)0x140cd3680ull;
-static const PFN_RowType g_RowType = (PFN_RowType)0x140cd39f0ull;
-static const PFN_RowTexts g_RowTexts = (PFN_RowTexts)0x140cd3740ull;
-static const PFN_Child g_Child = (PFN_Child)0x140e8fa80ull;
-static const PFN_NodeOn g_NodeOn = (PFN_NodeOn)0x140e4dfc0ull;
-static const PFN_SelClear g_SelClear = (PFN_SelClear)0x140e54140ull;
-static const PFN_SelAdd g_SelAdd = (PFN_SelAdd)0x140e53ee0ull;
-static const PFN_SelSet g_SelSet = (PFN_SelSet)0x140e54180ull;
-static const PFN_Headline g_Headline = (PFN_Headline)0x140e56ca0ull;
-static const PFN_HelpText g_HelpText = (PFN_HelpText)0x140e43500ull;
-static const PFN_GetMv g_GetMv = (PFN_GetMv)0x141f05cd0ull;
-static const PFN_MvHold g_MvHold = (PFN_MvHold)0x141f06e10ull;
-static const PFN_Dress g_Dress = (PFN_Dress)0x141f06920ull;
-static const uintptr_t kCtx = 0x1438040a8ull, kInvalidTeam = 0x143528f44ull, kVtMv = 0x142ba7c68ull;
+static const PFN_SetCount g_SetCount = (PFN_SetCount)XA(0x140cd3680ull);
+static const PFN_RowType g_RowType = (PFN_RowType)XA(0x140cd39f0ull);
+static const PFN_RowTexts g_RowTexts = (PFN_RowTexts)XA(0x140cd3740ull);
+static const PFN_Child g_Child = (PFN_Child)XA(0x140e8fa80ull);
+static const PFN_NodeOn g_NodeOn = (PFN_NodeOn)XA(0x140e4dfc0ull);
+static const PFN_SelClear g_SelClear = (PFN_SelClear)XA(0x140e54140ull);
+static const PFN_SelAdd g_SelAdd = (PFN_SelAdd)XA(0x140e53ee0ull);
+static const PFN_SelSet g_SelSet = (PFN_SelSet)XA(0x140e54180ull);
+static const PFN_Headline g_Headline = (PFN_Headline)XA(0x140e56ca0ull);
+static const PFN_HelpText g_HelpText = (PFN_HelpText)XA(0x140e43500ull);
+static const PFN_GetMv g_GetMv = (PFN_GetMv)XA(0x141f05cd0ull);
+static const PFN_MvHold g_MvHold = (PFN_MvHold)XA(0x141f06e10ull);
+static const PFN_Dress g_Dress = (PFN_Dress)XA(0x141f06920ull);
+static const uintptr_t kCtx = XA(0x1438040a8ull), kInvalidTeam = XA(0x143528f44ull), kVtMv = XA(0x142ba7c68ull);
 
 static PFN_Factory o_factory = nullptr;
 static bool s_tried = false, s_ok = false;
@@ -159,7 +159,7 @@ static void* PanelNode(void* page, uintptr_t* setPos) {
     if (!Ptr(top) || !Readable(top, 0x48)) return nullptr;
     void** vt = *(void***)top; if (!Ptr(vt) || !Readable(vt, 0xa0)) return nullptr;
     const uintptr_t f = (uintptr_t)vt[0x98 / 8];
-    if (f != 0x140e4e5a0ull && f != 0x140e90340ull) return nullptr;
+    if (f != XA(0x140e4e5a0ull) && f != XA(0x140e90340ull)) return nullptr;
     if (!Ptr(P8(top + 0x40))) return nullptr;
     *setPos = f; return top;
 }
@@ -175,10 +175,10 @@ static void PanelInit(void* page) {
     uintptr_t f = 0; uint8_t* top = (uint8_t*)PanelNode(page, &f);
     if (!top) { Log("motor (pagina): el panel no tiene la funcion de posicion esperada: no se puede mover"); return; }
     void* clip = P8(top + 0x40); void* par = nullptr;
-    if (f == 0x140e90340ull) par = ((PFN_ClipParent)0x141f95c60ull)(clip);
+    if (f == XA(0x140e90340ull)) par = ((PFN_ClipParent)XA(0x141f95c60ull))(clip);
     float x = 1.0e9f, y = 1.0e9f;
-    ((PFN_ClipGetPos)0x141f95cd0ull)(par ? par : clip, &x, &y);
-    if (par) ((PFN_ClipRelease)0x141f968e0ull)(par);
+    ((PFN_ClipGetPos)XA(0x141f95cd0ull))(par ? par : clip, &x, &y);
+    if (par) ((PFN_ClipRelease)XA(0x141f968e0ull))(par);
     if (!(std::fabs(x) < 8000.0f) || !(std::fabs(y) < 8000.0f)) { Log("motor (pagina): no pude leer la posicion del panel: no se puede mover"); return; }
     s_panelBX = x; s_panelBY = y; s_panelOk = true;
     g_cfg.motorPanelX = std::clamp(g_cfg.motorPanelX, -1900.0f, 1900.0f); g_cfg.motorPanelY = std::clamp(g_cfg.motorPanelY, -1000.0f, 1000.0f);
@@ -293,10 +293,11 @@ static void my_Value(void*, int group, int row, int value) {
 // guardas que usa el juego para su maniqui
 static uintptr_t my_Ready(void* page) {
     if (g_cfg.motorDress) {
+        const int kKeyOff = ExeVer() == 100 ? 0xd0 : 0xe0;   // EditWork: en el exe 1.00 la clave esta 0x10 antes
         uint8_t* ctx = *(uint8_t**)kCtx; uint8_t* mv = (uint8_t*)g_GetMv();
-        if (Ptr(ctx) && Ptr(mv) && Readable(ctx + 0xe0, 0x10) && Readable(mv, 0x118) && *(uintptr_t*)mv == kVtMv && Ptr(P8(mv + 0x78)) &&
+        if (Ptr(ctx) && Ptr(mv) && Readable(ctx + kKeyOff, 0x10) && Readable(mv, 0x118) && *(uintptr_t*)mv == kVtMv && Ptr(P8(mv + 0x78)) &&
             U32(mv + 0x90) == 0 && U32(mv + 0x8c) - 4u < 2u) {
-            const uint64_t key = U64(ctx + 0xe0); const uint32_t id = (uint32_t)(key >> 32), bad = *(uint32_t*)kInvalidTeam;
+            const uint64_t key = U64(ctx + kKeyOff); const uint32_t id = (uint32_t)(key >> 32), bad = *(uint32_t*)kInvalidTeam;
             if (id != 0 && (uint16_t)key != 0xffff) {
                 uint32_t team = 0xfffcc000u;                              // "sin equipo" del propio juego
                 if (key == s_seenKey && s_seenTeam != bad && s_seenTeam != 0xffffffffu) team = s_seenTeam;
@@ -315,8 +316,9 @@ static void* hk_Factory(void* key, void* name, void* flag) {
     void* page = o_factory(key, name, flag);
     {   // de paso: el ultimo jugador con equipo que se vio en el Editar (para vestirlo con su camiseta)
         uint8_t* ctx = *(uint8_t**)kCtx;
-        if (Ptr(ctx) && Readable(ctx + 0xe0, 0x10)) {
-            const uint64_t k = U64(ctx + 0xe0); const uint32_t t = U32(ctx + 0xe8), bad = *(uint32_t*)kInvalidTeam;
+        const int kKeyOff = ExeVer() == 100 ? 0xd0 : 0xe0;   // EditWork: en el exe 1.00 la clave (+ equipo en + 8) esta 0x10 antes
+        if (Ptr(ctx) && Readable(ctx + kKeyOff, 0x10)) {
+            const uint64_t k = U64(ctx + kKeyOff); const uint32_t t = U32(ctx + kKeyOff + 8), bad = *(uint32_t*)kInvalidTeam;
             if ((uint32_t)(k >> 32) != 0 && (uint16_t)k != 0xffff && t != bad && t != 0xffffffffu) { s_seenKey = k; s_seenTeam = t; }
         }
     }
@@ -372,9 +374,9 @@ void MotorPagePresent() {
     if (!g_cfg.motorPage) Log("motor (pagina): motor_pagina = 0: el estudio queda con las filas de Apariencia (el gancho va igual, solo para saber cuando esta abierto)");
     HMODULE mod = GetModuleHandleW(nullptr);
     auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
-    if ((uintptr_t)mod != 0x140000000ull || nt->FileHeader.TimeDateStamp != kStamp) { Log("motor (pagina): exe distinto: sin gancho"); return; }
+    if ((uintptr_t)mod != 0x140000000ull || !ExeStampOk((unsigned)nt->FileHeader.TimeDateStamp)) { Log("motor (pagina): exe distinto: sin gancho"); return; }
     if (!Readable((const void*)kFactory, sizeof kFactorySig) || memcmp((const void*)kFactory, kFactorySig, sizeof kFactorySig) != 0 ||
-        !Readable((const void*)0x141f06920ull, sizeof kDressSig) || memcmp((const void*)0x141f06920ull, kDressSig, sizeof kDressSig) != 0) {
+        !Readable((const void*)XA(0x141f06920ull), sizeof kDressSig) || memcmp((const void*)XA(0x141f06920ull), kDressSig, sizeof kDressSig) != 0) {
         Log("motor (pagina): firma distinta en 0x140a977d0 o 0x141f06920: se omite"); return;
     }
     void** vt = (void**)kVtApp;
