@@ -601,7 +601,42 @@ template<int V> static void STDMETHODCALLTYPE hk_Dispatch(ID3D11DeviceContext* c
     if (g_bodyDiagArmed.load(std::memory_order_relaxed) && Ctx(c).clothCS) BodyNoteClothDispatch(c, x);
     o_Dispatch[V](c, x, y, z);
 }
+// (12/11 v7) PC CPY: la cadena del juego no pasa por ningun CreateSwapChain enganchado. Sin crear nada (la cadena de prueba
+// cerraba el juego con Sider), se busca la cadena desde el destino de dibujo: la imagen final es una superficie de DXGI
+// cuyo padre es la cadena. Solo corre mientras s_findSC esta prendido (lo prende el plan B a los 15 s).
+static std::atomic<bool> s_findSC{false};
+static std::atomic<IDXGISwapChain*> s_foundSC{nullptr};
+static std::atomic<int> s_findTries{0}, s_findSurf{0}, s_findBB{0};
+static std::atomic<long> s_findParentHr{0};
+static void FindSwapChainFromRT(UINT n, ID3D11RenderTargetView* const* v) {
+    if (!v || n > D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT) return;
+    for (UINT i = 0; i < n; ++i) {
+        if (!v[i]) continue;
+        if (s_findTries.fetch_add(1, std::memory_order_relaxed) > 400000) { s_findSC = false; return; }
+        ID3D11Resource* r = nullptr; v[i]->GetResource(&r);
+        if (!r) continue;
+        IDXGISurface* sf = nullptr;
+        if (SUCCEEDED(r->QueryInterface(__uuidof(IDXGISurface), (void**)&sf)) && sf) {
+            s_findSurf.fetch_add(1, std::memory_order_relaxed);
+            IDXGISwapChain* sc = nullptr;
+            const HRESULT hr = sf->GetParent(__uuidof(IDXGISwapChain), (void**)&sc);
+            if (SUCCEEDED(hr) && sc) {
+                IDXGISwapChain* exp = nullptr;
+                if (s_foundSC.compare_exchange_strong(exp, sc)) s_findSC = false; else sc->Release();
+            } else {
+                IDXGIResource* dr = nullptr; DXGI_USAGE us = 0;
+                if (SUCCEEDED(r->QueryInterface(__uuidof(IDXGIResource), (void**)&dr)) && dr) {
+                    if (SUCCEEDED(dr->GetUsage(&us)) && (us & DXGI_USAGE_BACK_BUFFER)) { s_findBB.fetch_add(1, std::memory_order_relaxed); s_findParentHr = (long)hr; }
+                    dr->Release();
+                }
+            }
+            sf->Release();
+        }
+        r->Release();
+    }
+}
 template<int V> static void STDMETHODCALLTYPE hk_OMSetRT(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* v, ID3D11DepthStencilView* d) {
+    if (s_findSC.load(std::memory_order_relaxed)) FindSwapChainFromRT(v ? n : 0, v);
     GrassBaseFlush(c, 1, 0, v ? n : 0, v, d);
     o_OMSetRT[V](c, n, v, d);
     Ctx(c).shadowDSV = HeadShadowBind(n, v, d); Ctx(c).gameShadow = HeadShadowIsGameRes(d);
@@ -643,7 +678,7 @@ static std::atomic<int> s_ltSrcOk{0}, s_ltSrcMiss{0}, s_ltArmReq{0};
 static uintptr_t LightTraceSrc() {
     static const unsigned char kSig[9] = { 0x85, 0xc0, 0x78, 0x34, 0x45, 0x8b, 0x44, 0x34, 0x18 };
     if (!s_ltExeLo) return 0;
-    const DWORD64 target = s_ltExeLo + (0x1417ae85aull - 0x140000000ull);
+    const DWORD64 target = s_ltExeLo + (XA(0x1417ae85aull) - 0x140000000ull);
     if (target + 9 > s_ltExeHi || memcmp((const void*)target, kSig, 9) != 0) return 0;
     CONTEXT c; RtlCaptureContext(&c);
     for (int i = 0; i < 16 && c.Rip; i++) {
@@ -1800,12 +1835,29 @@ static void OnSwapChain(IUnknown* devUnk, IDXGISwapChain* sc) {
 }
 static HRESULT STDMETHODCALLTYPE hk_CreateSC(IDXGIFactory* f, IUnknown* dev, DXGI_SWAP_CHAIN_DESC* d, IDXGISwapChain** sc) {
     HRESULT hr = o_CreateSC(f, dev, d, sc);
+    Log("crear: IDXGIFactory::CreateSwapChain desde %s (hr %08X, cadena %p)", ModOff(_ReturnAddress()).c_str(), (unsigned)hr, (SUCCEEDED(hr) && sc) ? (void*)*sc : nullptr);
     if (SUCCEEDED(hr) && sc && *sc) OnSwapChain(dev, *sc);
     return hr;
 }
 static HRESULT STDMETHODCALLTYPE hk_CreateSCHwnd(IDXGIFactory2* f, IUnknown* dev, HWND w, const DXGI_SWAP_CHAIN_DESC1* d,
                                                  const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fd, IDXGIOutput* o, IDXGISwapChain1** sc) {
     HRESULT hr = o_CreateSCHwnd(f, dev, w, d, fd, o, sc);
+    Log("crear: IDXGIFactory2::CreateSwapChainForHwnd desde %s (hr %08X, cadena %p)", ModOff(_ReturnAddress()).c_str(), (unsigned)hr, (SUCCEEDED(hr) && sc) ? (void*)*sc : nullptr);
+    if (SUCCEEDED(hr) && sc && *sc) OnSwapChain(dev, *sc);
+    return hr;
+}
+using PFN_CreateSCCore = HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, IUnknown*, const DXGI_SWAP_CHAIN_DESC1*, IDXGIOutput*, IDXGISwapChain1**);
+using PFN_CreateSCComp = HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, const DXGI_SWAP_CHAIN_DESC1*, IDXGIOutput*, IDXGISwapChain1**);
+static PFN_CreateSCCore o_CreateSCCore; static PFN_CreateSCComp o_CreateSCComp;
+static HRESULT STDMETHODCALLTYPE hk_CreateSCCore(IDXGIFactory2* f, IUnknown* dev, IUnknown* w, const DXGI_SWAP_CHAIN_DESC1* d, IDXGIOutput* o, IDXGISwapChain1** sc) {
+    HRESULT hr = o_CreateSCCore(f, dev, w, d, o, sc);
+    Log("crear: IDXGIFactory2::CreateSwapChainForCoreWindow desde %s (hr %08X)", ModOff(_ReturnAddress()).c_str(), (unsigned)hr);
+    if (SUCCEEDED(hr) && sc && *sc) OnSwapChain(dev, *sc);
+    return hr;
+}
+static HRESULT STDMETHODCALLTYPE hk_CreateSCComp(IDXGIFactory2* f, IUnknown* dev, const DXGI_SWAP_CHAIN_DESC1* d, IDXGIOutput* o, IDXGISwapChain1** sc) {
+    HRESULT hr = o_CreateSCComp(f, dev, d, o, sc);
+    Log("crear: IDXGIFactory2::CreateSwapChainForComposition desde %s (hr %08X)", ModOff(_ReturnAddress()).c_str(), (unsigned)hr);
     if (SUCCEEDED(hr) && sc && *sc) OnSwapChain(dev, *sc);
     return hr;
 }
@@ -1818,6 +1870,8 @@ static void HookFactory(IDXGIFactory* fac) {
     IDXGIFactory2* f2 = nullptr;
     if (SUCCEEDED(fac->QueryInterface(__uuidof(IDXGIFactory2), (void**)&f2)) && f2) {
         Hook(VT(f2)[15], (void*)&hk_CreateSCHwnd, (void**)&o_CreateSCHwnd, "IDXGIFactory2::CreateSwapChainForHwnd");
+        Hook(VT(f2)[16], (void*)&hk_CreateSCCore, (void**)&o_CreateSCCore, "IDXGIFactory2::CreateSwapChainForCoreWindow");
+        Hook(VT(f2)[24], (void*)&hk_CreateSCComp, (void**)&o_CreateSCComp, "IDXGIFactory2::CreateSwapChainForComposition");
         f2->Release();
     }
     Log("ganchos de DXGI: %s", ok ? "ok" : "FALLARON (sin menu ni parametros)");
@@ -1952,8 +2006,19 @@ void AutoCapturePresent(ID3D11Texture2D* frame) {
     }
     if (count == 1) Log("captura automatica: primera imagen en capturas\\ (cada %.0f s, maximo %d)", g_cfg.autoCapSec, g_cfg.autoCapMax);
 }
+static std::atomic<bool> s_planBMode{false};   // Present enganchado por el plan B (vtable compartida de dxgi)
+static std::atomic<long> s_presentCalls{0};
+static thread_local int t_inPresent = 0;        // (12/11) otro mod que vuelve a llamar Present desde adentro: pasa derecho
+struct PresentDepth { PresentDepth() { ++t_inPresent; } ~PresentDepth() { --t_inPresent; } };
 static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT flags) {
+    if (t_inPresent) return o_Present(sc, sync, flags);
+    PresentDepth depth_;
+    s_presentCalls.fetch_add(1, std::memory_order_relaxed);
     ID3D11Device* d = nullptr;
+    if (s_planBMode.load(std::memory_order_relaxed) && g_dev.dev && SUCCEEDED(sc->GetDevice(__uuidof(ID3D11Device), (void**)&d)) && d) {
+        const bool otro = (d != g_dev.dev); d->Release(); d = nullptr;
+        if (otro) return o_Present(sc, sync, flags);   // plan B: la vtable es de todas las cadenas; se queda con la primera que presenta (el juego)
+    }
     if (SUCCEEDED(sc->GetDevice(__uuidof(ID3D11Device), (void**)&d)) && d) {
         if (!s_deviceHooked) {   // el juego creo el dispositivo antes que nosotros
             Log("AVISO: el dispositivo ya existia al cargar el mod; los shaders creados antes no se reemplazan");
@@ -2083,6 +2148,136 @@ static void HookSwapChain(IDXGISwapChain* sc) {
     Log("Present enganchado");
 }
 
+// (12/11) plan B del Present: en una PC con PES 2021 CPY + DreamPatch Switcher (Sider cargado por el Switcher, despues de
+// nosotros) el juego nunca paso por los CreateSwapChain enganchados: sin "cadena de intercambio", sin menu Insert y sin los
+// ganchos que se ponen en el primer Present. Si a los 15 s de crear el dispositivo no hay cadena, se arma una cadena de prueba
+// (ventana oculta, dispositivo aparte con el d3d11 de Windows) solo para leer de su vtable donde esta el codigo de Present y de
+// ResizeBuffers, y se engancha el Present verdadero de dxgi.dll (leido del archivo, v4), sin tocar
+// la vtable ni el codigo de otro mod. Si la cadena del juego ya se engancho por el camino normal no se hace nada (en 1.07.02 asi es siempre).
+}   // namespace fx
+HMODULE fx_RealD3D11();   // d3d11_proxy.cpp (fuera del namespace)
+namespace fx {
+static void* DxgiSlotFromDisk(void** slot) {
+    // la vtable esta en dxgi.dll: se lee el mismo lugar en el archivo y se pasa a la direccion cargada
+    HMODULE m = nullptr; wchar_t path[MAX_PATH];
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)slot, &m) || !m) return nullptr;
+    if (m != GetModuleHandleW(L"dxgi.dll")) return nullptr;
+    if (!GetModuleFileNameW(m, path, MAX_PATH)) return nullptr;
+    const uintptr_t base = (uintptr_t)m, rva = (uintptr_t)slot - base;
+    auto dos = (IMAGE_DOS_HEADER*)m; auto nt = (IMAGE_NT_HEADERS64*)(base + dos->e_lfanew);
+    HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return nullptr;
+    void* res = nullptr;
+    auto sec = IMAGE_FIRST_SECTION(nt);
+    for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++sec) {
+        if (rva < sec->VirtualAddress || rva + 8 > sec->VirtualAddress + sec->SizeOfRawData) continue;
+        LARGE_INTEGER off; off.QuadPart = sec->PointerToRawData + (rva - sec->VirtualAddress);
+        uint64_t v = 0; DWORD got = 0;
+        if (SetFilePointerEx(f, off, nullptr, FILE_BEGIN) && ReadFile(f, &v, 8, &got, nullptr) && got == 8) {
+            // ImageBase del archivo (en memoria el cargador la reescribe)
+            IMAGE_DOS_HEADER fd{}; IMAGE_NT_HEADERS64 fn{}; LARGE_INTEGER z{}; DWORD g2 = 0;
+            if (SetFilePointerEx(f, z, nullptr, FILE_BEGIN) && ReadFile(f, &fd, sizeof fd, &g2, nullptr) && g2 == sizeof fd) {
+                LARGE_INTEGER o2; o2.QuadPart = fd.e_lfanew;
+                if (SetFilePointerEx(f, o2, nullptr, FILE_BEGIN) && ReadFile(f, &fn, sizeof fn, &g2, nullptr) && g2 == sizeof fn && fn.Signature == IMAGE_NT_SIGNATURE) {
+                    const uint64_t prva = v - fn.OptionalHeader.ImageBase;
+                    if (prva < nt->OptionalHeader.SizeOfImage) {
+                        // tiene que caer en una seccion de codigo
+                        auto s2 = IMAGE_FIRST_SECTION(nt);
+                        for (unsigned k = 0; k < nt->FileHeader.NumberOfSections; ++k, ++s2)
+                            if ((s2->Characteristics & IMAGE_SCN_MEM_EXECUTE) && prva >= s2->VirtualAddress && prva < s2->VirtualAddress + s2->Misc.VirtualSize)
+                                res = (void*)(base + prva);
+                    }
+                }
+            }
+        }
+        break;
+    }
+    CloseHandle(f);
+    return res;
+}
+static DWORD WINAPI PresentPlanB(void*) {
+    Sleep(15000);
+    {
+        std::lock_guard<std::recursive_mutex> lk(s_hookMutex);
+        if (s_scHooked || !g_cfg.optPresent) return 0;
+    }
+    // (12/11 v6) la cadena de prueba que se armaba aca CERRABA el juego en la PC CPY (v2 a v5): Sider la toma como la
+    // cadena del juego ("DX11.SwapChain->GetBuffer failed") y desborda la pila. No se crea NADA: solo el aviso.
+    Log("Present: a los 15 s el juego no paso por los CreateSwapChain enganchados: sin menu ni ganchos del primer Present (ver las lineas 'crear:')");
+    s_findSC = true;
+    IDXGISwapChain* gsc = nullptr;
+    for (int i = 0; i < 300 && !(gsc = s_foundSC.load()); ++i) Sleep(100);
+    s_findSC = false;
+    if (!gsc) {
+        Log("Present: no se encontro la cadena del juego desde el destino de dibujo (%d destinos mirados, %d superficies DXGI, %d imagenes finales, GetParent %08X): sin menu",
+            s_findTries.load(), s_findSurf.load(), s_findBB.load(), (unsigned)s_findParentHr.load());
+        return 0;
+    }
+    {
+        void** gvt = VT(gsc);
+        void* realPres = DxgiSlotFromDisk(&gvt[8]);
+        void* realResz = DxgiSlotFromDisk(&gvt[13]);
+        DXGI_SWAP_CHAIN_DESC gd{}; gsc->GetDesc(&gd);
+        std::lock_guard<std::recursive_mutex> lk(s_hookMutex);
+        Log("Present: cadena del juego encontrada desde el destino de dibujo (%p, %ux%u): en su vtable Present = %s; Present de dxgi.dll = %s",
+            (void*)gsc, gd.BufferDesc.Width, gd.BufferDesc.Height, ModOff(gvt[8]).c_str(), realPres ? ModOff(realPres).c_str() : "?");
+        if (!s_scHooked && realPres) {
+            // se engancha el Present verdadero de dxgi.dll (el ultimo de la cadena cloth-mod -> Sider -> dxgi): no se toca la
+            // vtable ni el codigo de otro mod, y no se crea ninguna cadena (eso es lo que hacia volver a enganchar a Sider)
+            s_planBMode = true;
+            const bool ok = Hook(realPres, (void*)&hk_Present, (void**)&o_Present, "dxgi Present (cadena encontrada)");
+            if (ok && realResz) Hook(realResz, (void*)&hk_Resize, (void**)&o_Resize, "dxgi ResizeBuffers (cadena encontrada)");
+            if (ok) { s_scHooked = true; Log("Present enganchado (dxgi, sin cadena de prueba)"); } else s_planBMode = false;
+        } else if (!realPres) Log("Present: no se pudo leer el Present de dxgi.dll del disco: sin menu");
+        gsc->Release();
+    }
+    if (s_planBMode) {
+        const long c0 = s_presentCalls.load();
+        Sleep(10000);
+        Log("Present: el juego paso %ld veces por nuestro Present en 10 s", s_presentCalls.load() - c0);
+    }
+    if (g_cfg.optPresent) return 0;
+    auto cdsc = (PFN_D3D11CreateDeviceAndSwapChain)(::fx_RealD3D11() ? GetProcAddress(::fx_RealD3D11(), "D3D11CreateDeviceAndSwapChain") : nullptr);
+    if (!cdsc) { Log("Present: plan B sin D3D11CreateDeviceAndSwapChain de Windows"); return 0; }
+    WNDCLASSEXW wc{}; wc.cbSize = sizeof wc; wc.lpfnWndProc = DefWindowProcW; wc.hInstance = GetModuleHandleW(nullptr); wc.lpszClassName = L"PES21FX_planB";
+    RegisterClassExW(&wc);
+    HWND w = CreateWindowExW(0, wc.lpszClassName, L"", WS_OVERLAPPEDWINDOW, 0, 0, 64, 64, nullptr, nullptr, wc.hInstance, nullptr);
+    if (!w) { Log("Present: plan B sin ventana de prueba (%lu)", GetLastError()); return 0; }
+    DXGI_SWAP_CHAIN_DESC sd{};
+    sd.BufferCount = 1; sd.BufferDesc.Width = 64; sd.BufferDesc.Height = 64; sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT; sd.OutputWindow = w; sd.SampleDesc.Count = 1; sd.Windowed = TRUE; sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+    IDXGISwapChain* sc = nullptr; ID3D11Device* dev = nullptr; ID3D11DeviceContext* ctx = nullptr; D3D_FEATURE_LEVEL fl{};
+    HRESULT hr = cdsc(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &sd, &sc, &dev, &fl, &ctx);
+    if (SUCCEEDED(hr) && sc) {
+        void** vt = VT(sc);
+        void* pres = vt[8]; void* resz = vt[13];
+        std::lock_guard<std::recursive_mutex> lk(s_hookMutex);
+        if (!s_scHooked) {
+            // (12/11 v4) ni MinHook sobre el codigo de otro mod (v2: dsound.dll+0xeaf0 del cloth-mod, pila desbordada) ni
+            // cambio de la vtable (v3: el cloth-mod vuelve a poner su puntero, Sider y cloth-mod quedan llamandose entre si,
+            // pila desbordada en sider.dll). Se engancha el Present VERDADERO de dxgi.dll, el ultimo de la cadena: su direccion
+            // se lee de la vtable de dxgi.dll en el ARCHIVO (la de memoria la pisan los otros mods). Nadie mira ese codigo.
+            // (12/11 v5) el plan B ya NO engancha nada: con el cloth-mod y Sider ya enganchados, cambiar la vtable (v3) o
+            // meterse en el Present (v2, v4) cerro el juego (pila desbordada). Solo deja anotado que paso para el log.
+            void* realPres = DxgiSlotFromDisk(&vt[8]);
+            Log("Present: plan B (solo aviso, sin enganchar): en la vtable Present = %s, ResizeBuffers = %s; Present de dxgi.dll = %s. Sin menu",
+                ModOff(pres).c_str(), ModOff(resz).c_str(), realPres ? ModOff(realPres).c_str() : "?");
+        } else Log("Present: plan B: la cadena del juego se engancho mientras tanto, no se hace nada");
+    } else Log("Present: plan B: no se pudo crear la cadena de prueba (%08X)", (unsigned)hr);
+    if (sc) sc->Release();
+    if (ctx) ctx->Release();
+    if (dev) dev->Release();
+    DestroyWindow(w); UnregisterClassW(wc.lpszClassName, wc.hInstance);
+    if (s_planBMode) {
+        const long c0 = s_presentCalls.load();
+        Sleep(10000);
+        const long n = s_presentCalls.load() - c0;
+        if (n > 0) Log("Present: plan B: el juego paso %ld veces por nuestro Present en 10 s", n);
+        else Log("Present: plan B: en 10 s el juego no paso por nuestro Present (su cadena no usa esta vtable)");
+    }
+    return 0;
+}
+
 // cada ~1 s se mira si algun shader cambio en disco (fecha y cantidad); si cambio, se recompila solo ese cambio
 void WatchShaderFolder() {
 #ifdef PES21FX_PUBLIC
@@ -2149,7 +2344,19 @@ bool InstallHooks() {
 }
 
 // llamado por nuestro D3D11CreateDevice (somos el d3d11.dll de la carpeta del juego)
-void OnDeviceCreated(ID3D11Device* d) { if (d) HookDevice(d); }
+void OnDeviceAndSwapChainCreated(ID3D11Device* d, IDXGISwapChain* sc) {
+    Log("D3D11CreateDeviceAndSwapChain: el juego creo dispositivo y cadena juntos");
+    OnSwapChain(d, sc);
+}
+void NoteCreateCall(const char* fn, void* caller, void* dev, void* sc) {
+    Log("crear: %s desde %s (hilo %lu, dispositivo %p, cadena %p)", fn, ModOff(caller).c_str(), GetCurrentThreadId(), dev, sc);
+}
+void OnDeviceCreated(ID3D11Device* d) {
+    if (!d) return;
+    HookDevice(d);
+    static std::atomic<bool> s_planB{false};   // (12/11) plan B del Present, una sola vez
+    if (!s_planB.exchange(true)) if (HANDLE t = CreateThread(nullptr, 0, PresentPlanB, nullptr, 0, nullptr)) CloseHandle(t);
+}
 
 // ---------------------------------------------------------------- diagnostico: referencias a una DLL que se descarga
 static bool Readable(uintptr_t p, size_t n) {

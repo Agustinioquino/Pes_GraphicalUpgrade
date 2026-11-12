@@ -12,8 +12,8 @@ namespace fx {
 static const unsigned  kExeStampSol = 0x62787C6A;
 // (02/11 b) las dos son VARIABLES con un puntero al objeto (mov rcx,[0x1437d4a20] antes de TODLight_SetTime en 0x14195a92b;
 // mov rcx,[0x1437d59e8] en 0x141948b42): la primera version leia la variable como si fuera el objeto (0x7C000000 s, 0 atmosferas)
-static const uintptr_t kAtmoManagerPtr = 0x1437d59e8ull;   // -> manager: +0xd8 cantidad de atmosferas, +0xe0 arreglo de punteros
-static const uintptr_t kTodLightPtr    = 0x1437d4a20ull;   // -> TODLight: +0x10 cantidad de spans, +0x64 segundos del dia (mod 86400)
+static const uintptr_t kAtmoManagerPtr = XA(0x1437d59e8ull);   // -> manager: +0xd8 cantidad de atmosferas, +0xe0 arreglo de punteros
+static const uintptr_t kTodLightPtr    = XA(0x1437d4a20ull);   // -> TODLight: +0x10 cantidad de spans, +0x64 segundos del dia (mod 86400)
 
 static bool Readable(const void* p, size_t n) {
     if (!p) return false;
@@ -34,7 +34,7 @@ void SolRelojPresent() {
         s_checked = true;
         HMODULE mod = GetModuleHandleW(nullptr);
         auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
-        s_ok = (uintptr_t)mod == 0x140000000ull && nt->FileHeader.TimeDateStamp == kExeStampSol
+        s_ok = (uintptr_t)mod == 0x140000000ull && ExeStampOk((unsigned)nt->FileHeader.TimeDateStamp)
             && Readable((void*)kAtmoManagerPtr, 8) && Readable((void*)kTodLightPtr, 8);
         Log("hora del sol: registro %s (exe %08X)", s_ok ? "activo: atmosfera y reloj del motor cada 10 s" : "no disponible (exe distinto)", (unsigned)nt->FileHeader.TimeDateStamp);
     }

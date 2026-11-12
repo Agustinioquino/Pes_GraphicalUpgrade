@@ -28,18 +28,18 @@
 namespace fx {
 
 static const unsigned kStamp = 0x62787C6A;
-static const uintptr_t kStep = 0x14035dcb0ull;   // DeltaGameTimeHolder: paso por cuadro (partido)
+static const uintptr_t kStep = XA(0x14035dcb0ull);   // DeltaGameTimeHolder: paso por cuadro (partido)
 // prologo: mov [rsp+10h],rbx; mov [rsp+18h],r8; push rdi; sub rsp,40h; movaps [rsp+30h],xmm6
 static const unsigned char kStepSig[20] = { 0x48,0x89,0x5c,0x24,0x10,0x4c,0x89,0x44,0x24,0x18,0x57,0x48,0x83,0xec,0x40,0x0f,0x29,0x74,0x24,0x30 };
 static const unsigned char kStepSig2[5] = { 0xf3,0x0f,0x10,0x77,0x30 };                 // 0x14035dcee movss xmm6,[rdi+30h]
 static const unsigned char kStepSig3[7] = { 0xc7,0x47,0x30,0x00,0x00,0x80,0x3f };       // 0x14035dcfb mov dword [rdi+30h],1.0f
 
-static const uintptr_t kSetStep = 0x141afd270ull;  // BodyAnimControl::SetStep (visor del editor)
+static const uintptr_t kSetStep = XA(0x141afd270ull);  // BodyAnimControl::SetStep (visor del editor)
 // mov rax,[rcx+88h]; test rax,rax; jz +11h; mulss xmm1,[rip+...] (300.0); mov rax,[rax+10h]; movss [rax+44h],xmm1; ret
-static const unsigned char kSetStepSig[30] = { 0x48,0x8b,0x81,0x88,0x00,0x00,0x00,0x48,0x85,0xc0,0x74,0x11,0xf3,0x0f,0x59,0x0d,0xc8,0xe4,0xaa,0x00,
+static unsigned char kSetStepSig[30] = { 0x48,0x8b,0x81,0x88,0x00,0x00,0x00,0x48,0x85,0xc0,0x74,0x11,0xf3,0x0f,0x59,0x0d,0xc8,0xe4,0xaa,0x00,
                                                0x48,0x8b,0x40,0x10,0xf3,0x0f,0x11,0x48,0x44,0xc3 };
-static const uintptr_t kBoneLo = 0x1423f2ca0ull, kBoneHi = 0x1423f3a60ull;   // draw::ModelViewBoneUpdator
-static const unsigned char kBoneSig[20] = { 0x40,0x53,0x57,0x48,0x83,0xec,0x48,0x0f,0x29,0x74,0x24,0x20,0x48,0x8b,0xda,0x48,0x8b,0xf9,0xe8,0xc9 };
+static const uintptr_t kBoneLo = XA(0x1423f2ca0ull), kBoneHi = XA(0x1423f3a60ull);   // draw::ModelViewBoneUpdator
+static unsigned char kBoneSig[20] = { 0x40,0x53,0x57,0x48,0x83,0xec,0x48,0x0f,0x29,0x74,0x24,0x20,0x48,0x8b,0xda,0x48,0x8b,0xf9,0xe8,0xc9 };
 
 typedef void (*StepFn)(void* holder, float delta, void* r8);
 typedef void (*SetStepFn)(void* ctrl, float step);
@@ -92,13 +92,14 @@ static void Install() {
     if (!g_cfg.motorPatch) { Log("camara lenta: parches en memoria apagados (motor = 0)"); return; }
     HMODULE mod = GetModuleHandleW(nullptr);
     auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
-    if ((uintptr_t)mod != 0x140000000ull || nt->FileHeader.TimeDateStamp != kStamp) {
+    if ((uintptr_t)mod != 0x140000000ull || !ExeStampOk((unsigned)nt->FileHeader.TimeDateStamp)) {
         Log("camara lenta: exe distinto (base %p, sello %08X): sin gancho", (void*)mod, (unsigned)nt->FileHeader.TimeDateStamp); return;
     }
+    if (ExeVer() == 100) { kSetStepSig[17] = 0xab; kBoneSig[19] = 0xf9; }   // exe 1.00: la constante 300.0 y la llamada quedan a otra distancia
     if (!SigAt(kSetStep, kSetStepSig, sizeof kSetStepSig) || !SigAt(kBoneLo, kBoneSig, sizeof kBoneSig))
         Log("camara lenta: la firma de 0x141afd270 / 0x1423f2ca0 (visor del editor) no coincide, se omite");
     else if (MH_CreateHook((void*)kSetStep, (void*)&hk_SetStep, (void**)&o_setStep) == MH_OK && MH_EnableHook((void*)kSetStep) == MH_OK) s_okEditor = true;
-    if (!SigAt(kStep, kStepSig, sizeof kStepSig) || !SigAt(0x14035dceeull, kStepSig2, sizeof kStepSig2) || !SigAt(0x14035dcfbull, kStepSig3, sizeof kStepSig3))
+    if (!SigAt(kStep, kStepSig, sizeof kStepSig) || !SigAt(XA(0x14035dceeull), kStepSig2, sizeof kStepSig2) || !SigAt(XA(0x14035dcfbull), kStepSig3, sizeof kStepSig3))
         Log("camara lenta: la firma de 0x14035dcb0 (reloj del partido) no coincide, se omite");
     else if (MH_CreateHook((void*)kStep, (void*)&hk_Step, (void**)&o_step) == MH_OK && MH_EnableHook((void*)kStep) == MH_OK) s_okMatch = true;
     Log("camara lenta: visor del editor (0x141afd270 desde ModelViewBoneUpdator) %s; reloj del partido (0x14035dcb0) %s; velocidad x343 = %.2f, %s, partido %s",
