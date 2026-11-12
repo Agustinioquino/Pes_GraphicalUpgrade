@@ -26,7 +26,7 @@ static const int kStageMinAge = 3;
 static int StageOldest(const int* stamp, int now) { int b = -1; for (int i = 0; i < kStages; i++) if (stamp[i] >= 0 && now - stamp[i] >= kStageMinAge && (b < 0 || stamp[i] < stamp[b])) b = i; return b; }
 static int s_rdOk[3] = {}, s_rdRetry[3] = {}, s_rdLost[3] = {};   // lecturas por anillo (0 jugadores, 1 botines / pelota, 2 capsula de la pelota) para el log
 static const int kWearBrushes = 192;   // (12/11) pinceles del desgaste por cuadro (se dibujan de a 48: el cbuffer del VS)
-static ID3D11Buffer* s_stage[kStages] = {}; static int s_stageFrame[kStages] = { -1, -1, -1, -1, -1, -1, -1, -1 }; static double s_stageG[kStages] = {};   // s_stageG: reloj del juego acumulado al escribirse static std::atomic<int> s_stageW{0};
+static ID3D11Buffer* s_stage[kStages] = {}; static int s_stageFrame[kStages] = { -1, -1, -1, -1, -1, -1, -1, -1 }; static double s_stageG[kStages] = {}; static std::atomic<int> s_stageW{0};   // s_stageG: reloj del juego acumulado al escribirse
 static std::atomic<int> s_count{0};          // dibujos anotados en el cuadro actual
 static std::atomic<int> s_noteCalls{0}, s_noteOk{0}, s_noteShort{0}, s_noteNoStage{0}, s_noteBone{0}, s_boneShort{0}, s_boneNone{0}; static int s_posBad = 0, s_posZero = 0, s_posOk = 0, s_rowPick[4] = {}; static ID3D11Buffer* s_zeroBuf = nullptr;   // (08/11 aa) s_zeroBuf: 64 B en cero para limpiar el hueso del slot cuando el dibujo no tiene b6   // (08/11 z) diagnostico
 static int s_frame = 0;
