@@ -59,6 +59,9 @@ static bool BrowFaceGet(const std::string& id, BrowVals& v) {
     auto it = g_cfg.hair.browFace.find(BLower(id)); if (it == g_cfg.hair.browFace.end() || it->second.size() < 6) return false;
     v = it->second; BrowPad(v); return true;
 }
+// (12/11) aparicion de a poco: cuanto de las hebras lleva cada cara (1 = completas; caras sin medir = 1). Lo mueve BrowSelPresent.
+static std::mutex s_fadeMx; static std::unordered_map<std::string, float> s_fadeOf;
+static float BrowFadeOf(const std::string& id) { std::lock_guard<std::mutex> lk(s_fadeMx); auto it = s_fadeOf.find(id); return it == s_fadeOf.end() ? 1.f : it->second; }
 static HairCB MakeHairCB(const HairType& t, bool userMap, const std::string& id = "") {
     HairCB cb{};
     cb.a[0] = t.largo; cb.a[1] = t.rizo; cb.a[2] = t.rigidez; cb.a[3] = t.peso;
@@ -69,7 +72,7 @@ static HairCB MakeHairCB(const HairType& t, bool userMap, const std::string& id 
     { BrowVals v;   // (04/11) cejas por jugador: lo guardado en [cejas_cara] o lo que se esta tocando en el menu
       if (BrowFaceGet(id, v)) { BrowPad(v); cb.brow[1] *= v[0]; cb.brow[3] *= v[1]; cb.browCol[0] = v[3]; cb.browCol[1] = v[4]; cb.browCol[2] = v[5]; cb.browCol[3] = v[2];
         cb.browBack[0] = v[7]; cb.browBack[1] = v[8]; cb.browBack[2] = v[9]; cb.browBack[3] = v[6]; cb.browX[0] = v[10]; cb.brow[2] *= v[11] > 0.f ? v[11] : 1.f; cb.brow[0] *= v[12] > 0.f ? v[12] : 1.f; cb.browX[1] = v[13]; } }   // 0 = fila ausente en el ini: como todos
-    cb.misc[0] = 1.f; cb.misc[1] = userMap ? 1.f : 0.f; cb.misc[2] = FaceSeed(id); cb.misc[3] = 0;
+    cb.misc[0] = 1.f; cb.misc[1] = userMap ? 1.f : 0.f; cb.misc[2] = FaceSeed(id); cb.misc[3] = 1.f - BrowFadeOf(id);   // (12/11) w = cuanto falta de las hebras
     return cb;
 }
 // identidad estable de una cara: hash FNV-1a de un mip chico (<= 64 px) de su mapa de normales (copia a staging, contexto inmediato)
@@ -425,6 +428,7 @@ static bool FaceCacheLoad(ID3D11DeviceContext* c, const std::string& id, UINT w,
     e.a = v[0]; e.b = v[1]; e.c = v[2]; e.d = v[3];
     return true;
 }
+static std::vector<std::string> s_saveQ;   // (12/11) caras generadas que faltan guardar en PES21FX\hebras
 static void FaceCacheSave(ID3D11DeviceContext* c, const FaceEntry& e) {
     if (e.id.empty() || g_cfg.live[416][2] < 0.5f || FaceCacheVersion().empty() || !e.a || !e.b || !e.c || !e.d) return;
     CreateDirectoryW((g_cfg.baseDir + L"hebras").c_str(), nullptr);
@@ -444,10 +448,11 @@ static void FaceCacheSave(ID3D11DeviceContext* c, const FaceEntry& e) {
 
 // en Present, contexto inmediato: genera hasta 2 caras por cuadro
 static std::atomic<int> s_browFaces{0};   // caras con hebras dibujadas en este cuadro (x77 = maximo por pantalla)
-static void BrowSelPresent();
+static void BrowSelPresent(); static void BrowFadeApply();
 void FaceGenPresent() {
     s_browFaces.store(0);
     BrowSelPresent();   // (12/11) caras con hebras por cercania
+    BrowFadeApply();    // (12/11) aparicion de a poco: rehace el cbuffer de las caras que cambiaron
     s_hfFrame.fetch_add(1);
     { static double hfNext = 0; double t = Now(); if (t > hfNext) { hfNext = t + 10.0; int d = s_hfDraws.exchange(0); if (d > 0) Log("cejas: pasada propia del pelo: %d dibujos en 10 s", d); } }
     { double t = Now(); if (t > s_stNext) { s_stNext = t + 10.0;
@@ -510,6 +515,13 @@ void FaceGenPresent() {
           for (auto& kv : s_cache) { FaceEntry& fe = kv.second; if (fe.id != cur || !fe.hairCB) continue;
               if (const HairType* ht = HairTypeFor(fe.id, &fe.type)) { HairCB cb = MakeHairCB(*ht, fe.userMap, fe.id); g_dev.imm->UpdateSubresource(fe.hairCB, 0, nullptr, &cb, 0, 0); } }
       } }
+    // (12/11, Agustin: "que se guarden los mapas") guardado de la cache en disco de a UNA cara cada 0.5 s (cada guardado son 4 copias a
+    // la CPU que esperan a la placa); la cara con mapa de pelo propio no se guarda (su mapa c no es el generado) y se vuelve a generar
+    { static double nextSave = 0; double t = Now();
+      if (!s_saveQ.empty() && t >= nextSave) { nextSave = t + 0.5;
+        std::string id = s_saveQ.front(); s_saveQ.erase(s_saveQ.begin());
+        std::lock_guard<std::mutex> lk(s_mx);
+        for (auto& kv : s_cache) { const FaceEntry& fe = kv.second; if (fe.id != id) continue; if (!fe.userMap) FaceCacheSave(g_dev.imm, fe); break; } } }
     std::vector<FaceReq> todo;
     {
         std::lock_guard<std::mutex> lk(s_mx);
@@ -584,7 +596,7 @@ void FaceGenPresent() {
                 // 18/10 pelo: identidad de la cara, tipo de pelo (PES21FX_hair.ini) y mapa de pelo propio (PES21FX\hair\<id>.dds)
                 e.id = preId;
                 if (loaded) Log("hebras: cara %s: mapas cargados de PES21FX\\hebras (sin generar)", e.id.c_str());
-                else FaceCacheSave(c, e);   // (08/11 y) antes del mapa propio del usuario: se guarda el generado
+                else if (!e.id.empty()) s_saveQ.push_back(e.id);   // (12/11) se guarda despues, de a una cara cada medio segundo (antes 2 por cuadro al entrar al partido = tirones)
                 if (!e.id.empty()) CarasHdNewFace(c, e.id, r.in);   // (04/11) caras en alta: volcar originales / buscar las reescaladas
                 if (!e.id.empty()) {
                     ID3D11ShaderResourceView* usrv = LoadUserHairMap(e.id);
@@ -690,6 +702,8 @@ struct SelFace { float d = -1; int frame = -1; };
 static std::mutex s_selMx;
 static std::unordered_map<std::string, SelFace> s_selDist;          // ultima distancia medida por cara
 static std::set<std::string> s_selOn;                                // caras elegidas para este cuadro
+static std::set<std::string> s_selTop;                               // las x77 mas cercanas (sin las que se estan yendo)
+static std::vector<std::pair<std::string, float>> s_fadeDirty;      // caras cuyo cbuffer hay que rehacer (aparicion de a poco)
 static int s_selFrame = 0, s_selValidFrame = -1000;                 // cuadro de Present y ultimo con medidas validas
 static std::set<std::string> s_selFallback;                          // sin medidas: primeras caras distintas del cuadro
 static std::map<std::pair<void*, UINT>, std::string> s_selObj[2];    // bloque b5 (buffer, primer constante) -> cara, cuadro actual y anterior
@@ -765,18 +779,50 @@ static void BrowSelPresent() {
     std::vector<std::pair<float, std::string>> cand;
     for (auto it = s_selDist.begin(); it != s_selDist.end();) {
         if (s_selFrame - it->second.frame > 600) { it = s_selDist.erase(it); continue; }
-        if (s_selFrame - it->second.frame <= 20 && it->second.d <= maxD * (s_selOn.count(it->first) ? 1.05f : 1.0f))
-            cand.push_back({ it->second.d * (s_selOn.count(it->first) ? 0.9f : 1.0f), it->first });
+        if (s_selFrame - it->second.frame <= 20 && it->second.d <= maxD * (s_selTop.count(it->first) ? 1.05f : 1.0f))
+            cand.push_back({ it->second.d * (s_selTop.count(it->first) ? 0.9f : 1.0f), it->first });
         ++it;
     }
     std::sort(cand.begin(), cand.end());
-    std::set<std::string> on; for (int i = 0; i < (int)cand.size() && i < maxN; i++) on.insert(cand[i].second);
-    s_selOn.swap(on);
+    std::set<std::string> top; for (int i = 0; i < (int)cand.size() && i < maxN; i++) top.insert(cand[i].second);
+    // (12/11, Agustin: "me gusta que vayan de a poco") cada cara sube o baja su parte de hebras en ~0.6 s hacia su objetivo: 1 dentro de
+    // las x77 mas cercanas, bajando en el ultimo 20 % de y75 (las hebras se van de a una al alejarse), 0 afuera. Se sigue dibujando
+    // mientras se va (como mucho x77 + 2 caras a la vez); la ceja pintada vuelve en la misma medida (5ce3 / ce188)
+    static double lastT = 0; double tn = Now(); float dt = lastT > 0 ? (float)std::min(tn - lastT, 0.1) : 0.f; lastT = tn;
+    const bool measured = s_selFrame - s_selValidFrame <= 30;
+    std::vector<std::pair<std::string, float>> changed;
+    {   std::lock_guard<std::mutex> lf(s_fadeMx);
+        for (const auto& id : top) if (!s_fadeOf.count(id)) s_fadeOf[id] = 0.f;
+        std::vector<std::pair<float, std::string>> leaving;
+        for (auto it = s_fadeOf.begin(); it != s_fadeOf.end();) {
+            float tgt = 0.f;
+            if (!measured) tgt = 1.f;   // sin medidas: completas (manda el tope por orden)
+            else if (top.count(it->first)) { auto dd = s_selDist.find(it->first); float d = dd != s_selDist.end() ? dd->second.d : 0.f;
+                tgt = std::min(1.f, std::max(0.f, (maxD - d) / (0.2f * maxD))); }
+            float f = it->second, nf = tgt > f ? std::min(tgt, f + dt / 0.6f) : std::max(tgt, f - dt / 0.6f);
+            if (nf != f) { it->second = nf; changed.push_back({ it->first, nf }); }
+            if (nf <= 0.f && tgt <= 0.f && !top.count(it->first)) { it = s_fadeOf.erase(it); continue; }
+            if (!top.count(it->first)) leaving.push_back({ -nf, it->first });
+            ++it;
+        }
+        std::set<std::string> on = top;   // las que se van: las de mas hebras primero, hasta 2
+        std::sort(leaving.begin(), leaving.end());
+        for (int i = 0; i < (int)leaving.size() && i < 2; i++) on.insert(leaving[i].second);
+        s_selOn.swap(on);
+    }
+    s_selTop.swap(top);
+    if (!changed.empty()) s_fadeDirty.insert(s_fadeDirty.end(), changed.begin(), changed.end());
     static double next = 0; double t = Now();
     if (t > next && !s_selDist.empty()) { next = t + 10.0;
         std::string ln; for (int i = 0; i < (int)cand.size() && i < 6; i++) { char b[48]; snprintf(b, sizeof b, "%s%s %.1f m", i ? ", " : "", cand[i].second.substr(0, 6).c_str(), s_selDist[cand[i].second].d); ln += b; }
         Log("cejas: caras con hebras %d de %d cerca (tope %d, hasta %.1f m)%s%s%s", (int)s_selOn.size(), (int)cand.size(), maxN, maxD,
             s_selFrame - s_selValidFrame <= 30 ? "" : " SIN MEDIDAS: tope por orden", ln.empty() ? "" : ": ", ln.c_str()); }
+}
+static void BrowFadeApply() {
+    {   std::vector<std::pair<std::string, float>> dirty; { std::lock_guard<std::mutex> lk(s_selMx); dirty.swap(s_fadeDirty); }
+        if (!dirty.empty() && g_dev.imm) { std::lock_guard<std::mutex> lk(s_mx);
+            for (auto& kv : s_cache) { FaceEntry& fe = kv.second; if (!fe.hairCB || fe.id.empty()) continue;
+                for (auto& d : dirty) if (d.first == fe.id) { if (const HairType* ht = HairTypeFor(fe.id, &fe.type)) { HairCB cb = MakeHairCB(*ht, fe.userMap, fe.id); g_dev.imm->UpdateSubresource(fe.hairCB, 0, nullptr, &cb, 0, 0); } break; } } } }
 }
 bool BrowWanted(ID3D11DeviceContext* c, const FaceGenExtra& ex, uint64_t vsHash) {
     if (!ex.seedMap || g_cfg.live[74][0] < 0.5f) return false;
