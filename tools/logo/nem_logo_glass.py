@@ -22,7 +22,11 @@ rim=np.exp(-inside/2.5)*0.55
 col=im*(1-gloss[...,None])+gloss[...,None]*1.0+band[...,None]
 col=col+rim[...,None]*np.array([0.85,1.0,0.9])
 # colores glass: menos saturado y hacia un tono frio
-lum=col.mean(-1,keepdims=True); col=lum+(col-lum)*0.55; col=col*np.array([0.88,1.0,1.08])+0.05
+lum0=im.mean(-1); rel=np.clip((lum0-0.08)/0.6,0,1)
+# vidrio transparente: sin color, solo relieve (aristas claras = brillo)
+gy,gx=np.gradient(nd.gaussian_filter(lum0,1.0)); edge=np.clip(np.hypot(gx,gy)*6,0,1)
+col=np.ones_like(col)*np.array([0.92,0.96,1.0])
+glassA=np.clip(0.10+0.35*rel**1.4+0.55*edge+gloss*0.7+band*1.2+0.6*np.exp(-inside/2.2),0,1)
 # contorno de vidrio por fuera de la silueta
 outd=nd.distance_transform_edt(a<0.5); ring=(outd>0)&(outd<14)
 rt=np.clip(outd/14,0,1)
@@ -30,7 +34,7 @@ ringA=np.where(ring,0.22+0.6*np.exp(-((rt-0.95)/0.08)**2)+0.45*np.exp(-((rt-0.08
 ringC=np.array([0.80,0.93,1.0])
 ringC=ringC*(1-gloss[...,None]*0)+gloss[...,None]*0.4
 col=np.clip(col,0,1)
-alpha=a*np.clip(0.70+0.25*np.exp(-inside/4)+gloss*0.6+band,0,1)
+alpha=a*glassA
 ra=np.clip(ringA*(1+gloss*1.5+band*2),0,1)*(1-a)
 A=alpha+ra
 col=(col*alpha[...,None]+np.clip(ringC+band[...,None],0,1)*ra[...,None])/np.maximum(A,1e-4)[...,None]
