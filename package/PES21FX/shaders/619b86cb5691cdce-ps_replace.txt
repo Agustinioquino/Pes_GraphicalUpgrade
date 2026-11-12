@@ -584,8 +584,8 @@ void main(
       float3 Pp = float3((sP - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zbp, zbp);
       float hPp = g_psScene.m_eyepos.y + dot(Pp, upP);                        // altura del pixel sobre la cancha (m)
       float mmP = IniParams.Load(int2(296,0)).w; mmP = mmP > 1.0 ? clamp(mmP, 15.0, 80.0) : 28.0;
-      float Hg = mmP * 0.00115 + 0.012;                                         // alto del pasto (m) + el nido de la pelota
-      float inG = (1.0 - smoothstep(0.15 * Hg, Hg, hPp)) * step(-0.05, hPp);
+      float HgP = mmP * 0.00115 + 0.012;                                         // alto del pasto (m) + el nido de la pelota
+      float inG = (1.0 - smoothstep(0.15 * HgP, HgP, hPp)) * step(-0.05, hPp);
       if (inG > 0.001) {
         float kG2 = saturate(inG * 0.60 * kBp);
         r2.xyz *= lerp(float3(1.0, 1.0, 1.0), float3(0.60, 0.72, 0.48), kG2);   // menos luz y verdosa
@@ -1284,9 +1284,9 @@ void main(
                                     dot(RvG, float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12)),
                                     dot(RvG, float3(g_psScene.m_view._m20, g_psScene.m_view._m21, g_psScene.m_view._m22))));
       float rgG = saturate(gmC.x);
-      float uG = atan2(RwG.z, RwG.x) * 0.15915494 + 0.5;
-      float vG = clamp(sqrt(saturate(asin(saturate(RwG.y)) / 1.5707963)), 0.5 / 16.0, 1.0 - 0.5 / 16.0);
-      float3 envG = lerp(PESSkyEnv.SampleLevel(g_samplerLinear_Wrap_s, float3(uG, vG, 0), 0).xyz, PESSkyEnv.SampleLevel(g_samplerLinear_Wrap_s, float3(uG, vG, 1), 0).xyz, saturate(rgG * 1.7));
+      float uSkG = atan2(RwG.z, RwG.x) * 0.15915494 + 0.5;
+      float vSkG = clamp(sqrt(saturate(asin(saturate(RwG.y)) / 1.5707963)), 0.5 / 16.0, 1.0 - 0.5 / 16.0);
+      float3 envG = lerp(PESSkyEnv.SampleLevel(g_samplerLinear_Wrap_s, float3(uSkG, vSkG, 0), 0).xyz, PESSkyEnv.SampleLevel(g_samplerLinear_Wrap_s, float3(uSkG, vSkG, 1), 0).xyz, saturate(rgG * 1.7));
       envG *= saturate(RwG.y * 6.0 + 0.15);                                       // hacia abajo la hoja ve pasto, no cielo
       float NdVg = saturate(dot(Nsk, -Vsk));
       float4 rrG = rgG * float4(-1.0, -0.0275, -0.572, 0.022) + float4(1.0, 0.0425, 1.04, -0.04);
