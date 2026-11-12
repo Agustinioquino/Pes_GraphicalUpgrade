@@ -1,0 +1,17 @@
+VISOR DE OBJETOS (PES21 FX) - muestra en 3D los .fmdl del catalogo, sin abrir el juego.
+
+Abrir: doble clic en VisorObjetos.exe. No hay que configurar nada.
+  - Catalogo: B:\VisualPes21\catalogo_fmdl (los .fmdl y su indice.txt con los grupos del ProbadorPiezas).
+  - Texturas: las busca en los .cpk de D:\SteamLibrary\steamapps\common\eFootball PES 2021\download y en las
+    carpetas cpk.root activas del sider.ini de Dream Patch Sider (como el juego: livecpk primero).
+  - La primera vez lee la lista de archivos de los cpk (puede tardar un poco; abajo a la izquierda dice cuanto falta).
+
+Solo LEE el juego y Sider. Lo unico que escribe es su cache en B:\VisualPes21\visor_objetos
+(indice_cpk.json, texturas\*.png y visor_objetos.log). Borrar esa carpeta no rompe nada.
+
+Uso: clic en un modelo de la lista (o flechas arriba/abajo). Mouse izquierdo gira, rueda acerca, derecho mueve.
+Botones: Texturas, Malla (alambre), Luz, Fondo, Centrar, Girar solo, Detalle (materiales y de donde salio cada textura).
+"Solo objetos" deja los modelos sin huesos.
+
+Limites conocidos: muestra el color base (la textura bsm); el relieve (nrm) y el brillo (srm) todavia no. Mallas con la
+posicion en un formato distinto de 3 floats se saltan y se avisa en Detalle.

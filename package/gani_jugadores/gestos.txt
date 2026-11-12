@@ -1,0 +1,11 @@
+; PES21FX\anim\face\gestos.txt  (08/11) - que clip del juego corresponde a cada gesto propio (<id>\<gesto>.gani o todos\<gesto>.gani).
+; Cuando el juego hace ese clip (partido, festejo, escena), la DLL lo cambia por el gesto propio del jugador, en la medida en que lo hace.
+; Una linea por gesto: nombre = clip del juego (sin .gani). Se puede agregar cualquier gesto nuevo con su clip.
+sonrisa = smil_soft
+risa = smil_mho
+enojo = angr_brwnit_soft
+asombro = supris_brwup_mho_eyo_hard
+grito = base_goal_hoe
+puchero = pow_brwnit_puck_hard
+dolor = pain_brwtrb_shut_eyhc_hard
+preocupado = neut_brwtrb_lorol

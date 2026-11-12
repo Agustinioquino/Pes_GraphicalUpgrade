@@ -1,0 +1,12 @@
+10/11/2026. Default.fpkd/.fpk con sol del editor (zfx_SolEditor apagado) + GrShadowSettings + TppAtmosphere st024 con lux 0.
+POR QUE: el editor de jugadores usa la escena Default (26 focos); EditFace solo la vista del editor de caras
+(FUN_141edbc20: 1 = EditFace, 2 = EditSpike, 3 = MatchMenu, el resto = Default). Log 09/11: TimeOfDaySettings de 12:00
+con 26 focos = Default; el EditFace v2 nunca se cargo en esa vista.
+Destino: <Sider>\livecpk\LucesEditor\Asset\model\light\#Win\ (junto al EditFace v2, que se queda)
+  Default.fpkd  84928 B  CRC F0353A23 (desde el Default de Konami RECONSTRUIDO de fox2_txt\Default.json)
+  Default.fpk  333200 B  CRC 06327287 (= EditFace.fpk v2: Default.rpd + zfx_EditFace_sol.atsh/.pcsp)
+MEJOR en la PC si hay otro Default.fpkd en uso (el que hoy gana en livecpk, o el de Konami real 76016 B):
+  python editface_sol.py <Default.fpkd en uso> d1.fpkd --sin-luz
+  python editface_sol.py d1.fpkd Default.fpkd --modo atmosfera --donante light_st024_af.fpkd --donante-fpk light_st024_af.fpk --fpk-entrada <Default.fpk en uso> --fpk-salida Default.fpk --hora 16
+  (donante en luz_editor/donante/; herramienta tools/fox/editface_sol.py + fox2_edit.py + fpk_edit.py)
+Volver atras: borrar Default.fpkd y Default.fpk de LucesEditor.
