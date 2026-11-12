@@ -196,14 +196,14 @@ static void BuildDense(float curv) {
 // (11/11 m) alto del pasto NATURAL (w296 en mm, 0 = 28) sobre los 60 mm que suponian las cuentas de tarjetas; 1 = artificial o sin v3
 static float NatCutK() {
     if (g_cfg.live[104][0] < 0.5f || g_cfg.live[407][0] > 0.5f) return 1.0f;
-    const float mm = g_cfg.live[296][3];
+    const float mm = GrassLive(296, 3);
     return (mm > 1.0f ? std::clamp(mm, 10.0f, 90.0f) : 28.0f) / 60.0f;
 }
 // (11/11 n, usuarios: "the grass blades has to get thinner"; Agustin: "y una mayor cantidad si pasa eso") w425 = ancho de las hojas del
 // natural de cerca (hojas 3D y el ancho de cerca de las tarjetas; 0 / sin la linea = 1). Mas finas = mas tarjetas de cerca y mas hojas 3D (x 1 / ancho)
 static float NatWidth() {
     if (g_cfg.live[104][0] < 0.5f || g_cfg.live[407][0] > 0.5f) return 1.0f;
-    const float w = g_cfg.live[425][3];
+    const float w = GrassLive(425, 3);
     return w > 0.05f ? std::clamp(w, 0.4f, 1.5f) : 1.0f;
 }
 static float BladeAmtEff() {   // cantidad de hojas 3D (z408) / ancho: con hojas mas finas, mas hojas para tapar igual
@@ -212,8 +212,8 @@ static float BladeAmtEff() {   // cantidad de hojas 3D (z408) / ancho: con hojas
 }
 // (11/11 m) y403 = relleno del atlas bajo las hojas 3D (solo con las hojas 3D del natural prendidas: x104, x407 0, z412 0, z410)
 static float NatFill() {
-    const bool on = g_cfg.live[104][0] > 0.5f && g_cfg.live[407][0] < 0.5f && g_cfg.live[412][2] < 0.5f && g_cfg.live[410][2] > 0.5f;
-    return on ? std::clamp(g_cfg.live[403][1], 0.0f, 1.0f) : 0.0f;
+    const bool on = g_cfg.live[104][0] > 0.5f && g_cfg.live[407][0] < 0.5f && GrassLive(412, 2) < 0.5f && GrassLive(410, 2) > 0.5f;
+    return on ? std::clamp(GrassLive(403, 1), 0.0f, 1.0f) : 0.0f;
 }
 // decide si este dibujo del juego se cambia por la malla propia; llena 'out' (con referencias) y devuelve true
 static bool DensePick(UINT count, LodIA* out) {
@@ -1067,8 +1067,8 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
     const float densN = g_cfg.live[58][0] > 0.05f ? std::clamp(g_cfg.live[58][0], 0.3f, 2.0f) : 1.0f;
     const float wEff0 = wGame, tallNear = 1.0f, Dfloor = dNear * cMul[q] * densN;
     // (11/11) hojas 3D de primerisimo plano: solo pasto natural (x407 0) con el atlas nuevo (z412 0) y el pasto v3 (x104)
-    const bool bladeNat = g_cfg.live[104][0] > 0.5f && g_cfg.live[407][0] < 0.5f && g_cfg.live[412][2] < 0.5f;
-    const bool bladeOn = bladeNat && g_cfg.live[410][2] > 0.5f && s_bladeIb && s_bladePos && s_bladeUv;
+    const bool bladeNat = g_cfg.live[104][0] > 0.5f && g_cfg.live[407][0] < 0.5f && GrassLive(412, 2) < 0.5f;
+    const bool bladeOn = bladeNat && GrassLive(410, 2) > 0.5f && s_bladeIb && s_bladePos && s_bladeUv;
     const float bladeThr = g_cfg.live[410][3] >= 100.0f ? std::clamp(g_cfg.live[410][3], 100.0f, 6000.0f) : 1200.0f;   // (11/11 n) desde 100 px/m (antes 200)
     const float bladeAmt = BladeAmtEff();   // (11/11 m) tope 2 -> 3 (Agustin: "de cerca una mayor cantidad de hojas 3d"); (11/11 n) / ancho (w425)
     s_bladeLast.store(bladeOn); s_bladeThrLast = bladeThr;
@@ -1076,9 +1076,9 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
     const float bladePerCell = (std::min)(4096.0f * bladeAmt, (float)kBladeCellMax);   // (11/11 n) la celda mas cercana; (12/11) el tope total lo reparte el compute en el mismo cuadro (sin s_bladeScale)
     // (12/11) x432 = hojas angostas de primerisimo plano: desde x432 veces el umbral de las hojas 3D (0 = sin escalon); y432 su ancho
     // (parte del de la hoja comun), z432 cuantas por cada hoja comun
-    const float narrowK = g_cfg.live[432][0];
+    const float narrowK = GrassLive(432, 0);
     const float narrowThr = (bladeOn && narrowK >= 0.5f) ? bladeThr * std::clamp(narrowK, 1.0f, 6.0f) : 0.0f;
-    const float narrowMul = g_cfg.live[432][2] > 0.05f ? std::clamp(g_cfg.live[432][2], 0.5f, 3.0f) : 1.6f;
+    const float narrowMul = GrassLive(432, 2) > 0.05f ? std::clamp(GrassLive(432, 2), 0.5f, 3.0f) : 1.6f;
     const float halfL = 52.5f + 3.0f, halfW = 34.0f + 3.0f, halfH = 0.5f * (float)(g_bbH ? g_bbH : 1080);
     ID3D11DeviceContext1* c1 = nullptr; c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1);
     // estado del contexto que se toca (se devuelve al final)

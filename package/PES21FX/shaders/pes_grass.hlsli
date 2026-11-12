@@ -65,7 +65,10 @@ float PESWearTest(float live, float2 uv, float2 wxz) {
   float wg = 0.45 * exp(-(a.y - 27.0) * (a.y - 27.0) / 30.0) * step(a.x, 52.5);  // carriles de los laterales
   float use = saturate(gm + 0.8 * pk + 0.75 * cc + wg) * step(a.x, 53.5) * step(a.y, 35.0);
   float n = PESGnoise(wxz * 0.7 + 2.3) * 0.6 + PESGnoise(wxz * 2.9 + 8.1) * 0.4;
-  return max(live, saturate(t) * (0.12 + 0.40 * use) * (0.6 + 0.8 * n));
+  float w = saturate(t) * (0.12 + 0.40 * use) * (0.6 + 0.8 * n);
+  // (12/11, Agustin: "forzar el desgaste en vivo en tiempo real al maximo") de 1 a 2: cancha muy castigada (toda gastada, bocas de arco peladas)
+  w = lerp(w, saturate((0.55 + 0.45 * use) * (0.7 + 0.6 * n)), saturate(t - 1.0));
+  return max(live, w);
 }
 // (12/11, Agustin: "el brillo del pasto al mover la camara se nota bastante mas que al estar quieto") x436 BRILLO ESTABLE (0 = como antes,
 // 1 = natural, 2 = mas filtrado). PESTipS = smoothstep de los efectos de la punta (cera, rocio, punta encendida) que, cuando un pixel ya cubre

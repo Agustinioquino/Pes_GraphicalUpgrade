@@ -208,6 +208,8 @@ struct Config {
 };
 extern Config g_cfg;
 extern std::mutex g_cfgMutex;
+// (12/11) z437 version del pasto para comparar (0 = actual): el valor de live[r][c] con la version elegida aplicada (hooks.cpp)
+float GrassLive(int r, int c);
 
 bool LoadConfig();                              // PES21FX.ini + PES21FX_rules.ini
 bool SaveConfigValues();

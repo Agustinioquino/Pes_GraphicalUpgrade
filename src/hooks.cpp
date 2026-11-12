@@ -506,6 +506,36 @@ static bool CreateParamTex(ID3D11Texture1D** tex, ID3D11ShaderResourceView** srv
     return SUCCEEDED(g_dev.dev->CreateShaderResourceView(*tex, nullptr, srv));
 }
 
+// (12/11, Agustin: "agregues por slider la posibilidad de probar las versiones viejas, hasta anteayer, con un selector en slider, es para
+// grabar un video") z437 VERSION DEL PASTO para comparar: 0 = la actual; 1 = 12/11 madrugada (antes de: reparto sin filas, hojas sueltas
+// altas, base menos saturada, pelota asentada, sombra suave, TAA nuevo, puntas humedas / encendidas al azar, hojas medianas de cerca);
+// 2 = 11/11 noche (antes de: hojas angostas, mismo alto y brillo a toda distancia, viento nuevo, brillo estable, cielo en el pasto, el sol
+// en las puntas, desgaste real); 3 = 11/11 tarde (natural nuevo con hojas 3D, todavia de ~9 cm, sin relleno de atlas ni corte parejo,
+// con la luz propia vieja); 4 = 10/11, anteayer (atlas viejo, sin hojas 3D). Cada cosa nueva vuelve a su valor "como antes" (su control
+// en 0) en la GPU y en las cuentas del pasto de la DLL, SIN tocar g_cfg.live ni el ini: volver a 0 deja todo como estaba. Lo que cambio
+// en el codigo sin control propio (p. ej. el brillo parejo de las hojas 3D) queda como hoy: es la vista mas cercana a cada version
+struct GrassVerOv { int ver, r, c; float v; };
+static const GrassVerOv kGrassVer[] = {
+    // >= 1: lo de 12/11 02:00 en adelante
+    {1, 438, 0, 0.0f}, {1, 438, 1, 0.0f}, {1, 438, 3, 0.0f}, {1, 437, 1, 0.0f},
+    {1, 439, 0, 0.0f}, {1, 439, 2, 0.0f}, {1, 439, 3, 0.0f},
+    {1, 440, 0, 0.0f}, {1, 440, 1, 0.0f}, {1, 440, 2, 0.0f}, {1, 440, 3, 0.0f},
+    // >= 2: 12/11 00:00 - 01:40
+    {2, 432, 0, 0.0f}, {2, 432, 3, 0.0f}, {2, 433, 0, 1.0f}, {2, 433, 1, 0.0f}, {2, 433, 3, 0.0f},
+    {2, 436, 0, 0.0f}, {2, 436, 1, 0.0f}, {2, 436, 2, 0.0f}, {2, 436, 3, 0.0f}, {2, 431, 0, 0.0f},
+    // >= 3: 11/11 18:30 - 23:59 (luz propia nueva y290, corte parejo w108, 28 mm w296, relleno / variacion / desparejas, ancho w425)
+    {3, 290, 1, 1.0f}, {3, 108, 3, 0.0f}, {3, 296, 3, 90.0f}, {3, 403, 1, 0.0f}, {3, 403, 2, 0.0f}, {3, 403, 3, 0.0f}, {3, 425, 3, 1.0f},
+    // >= 4: antes del natural nuevo (11/11 15:20): atlas viejo y sin hojas 3D
+    {4, 412, 2, 1.0f}, {4, 410, 2, 0.0f},
+};
+static int GrassVer() { const float z = g_cfg.live[437][2]; return z > 0.5f ? (int)std::clamp(z + 0.5f, 1.0f, 4.0f) : 0; }
+float GrassLive(int r, int c) {
+    const int ver = GrassVer();
+    float v = g_cfg.live[r][c];
+    if (ver > 0) for (const GrassVerOv& o : kGrassVer) if (o.r == r && o.c == c && ver >= o.ver) v = o.v;
+    return v;
+}
+
 static void UploadParams() {
     if (!g_dev.imm || !g_dev.paramTex) return;
     static float p[kParamCount][4], q[kParamCount][4];
@@ -514,6 +544,7 @@ static void UploadParams() {
     {
         std::lock_guard<std::mutex> lk(g_cfgMutex);
         memcpy(p, g_cfg.live, sizeof(p));
+        { const int ver = GrassVer(); if (ver > 0) for (const GrassVerOv& o : kGrassVer) if (ver >= o.ver) p[o.r][o.c] = o.v; }   // (12/11) z437 version del pasto
         if (p[139][0] > 0.5f) p[104][0] = 1.0f;   // (20/10) pasto v5: necesita el pasto v3 (x104) prendido en la GPU
         p[258][0] = (g_cfg.motorPatch && g_cfg.motorSunFix && g_cfg.motorShadowFix == 0) ? 1.0f : 0.0f;   // (02/11) x258: la luz esta corregida y el shadow map no (los shaders del sol no miden grosor con el)
         p[147][3] = 1.0f;   // (20/10) w147: esta DLL iguala la cabeza de las caras genericas con la cara (reglas PS + VS)
