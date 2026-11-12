@@ -341,6 +341,7 @@ void MotorPageSeen(void* win) {
     else s_motorWin.store(nullptr, std::memory_order_relaxed);         // esa memoria ya es de otra ventana
 }
 // el estudio del Motor esta abierto (su pagina recibio entrada hace menos de 0.6 s)
+bool MotorPageIs(void* win) { return win && win == s_motorWin.load(std::memory_order_relaxed); }
 bool MotorPageActive() { return Now() - s_motorT.load(std::memory_order_relaxed) < 0.6; }
 
 void MotorPagePresent() {
