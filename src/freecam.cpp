@@ -90,6 +90,10 @@ static bool FreeCamHeadLost() {   // se pidio seguir la cara, se estaba siguiend
 }
 bool FreeCamBlocksKeys() {
     const float v = g_cfg.live[344][0];
+    // (12/11, Agustin 00:05: "las teclas del teclado que funcionaban como mando no deberian funcionar asi en el menu ... en el de
+    // motor") con el estudio del Motor abierto el juego no ve el teclado: el Motor se maneja con el mouse (y el mando sigue
+    // andando); Esc = salir lo pone menumouse.cpp. [PES21FX] motor_teclado = 0 lo deja como antes
+    if (g_cfg.motorKeys != 0 && MotorPageActive()) return true;
     if (v > 0.5f && MotorPageActive()) return (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;   // en el Motor: solo mientras se vuela
     return v > 0.5f && v < 1.5f;
 }
