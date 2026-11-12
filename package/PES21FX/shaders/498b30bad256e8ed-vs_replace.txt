@@ -895,7 +895,9 @@ void main(
     // parcelas extendidas: altura = la de la hoja, tope 6 cm x alto
     // (2/11 d) el tope escala con el alto elegido (z104 / tipo / matas), como en el pasto del juego (0.06 * pesH mas arriba): con z104 = 1.6
     // el tope fijo de 6 cm recortaba la tarjeta a 2/3 y la hoja de cerca perdia la punta (quedaba chata, 'aplastada')
-    r6.y = min(v0.y, 0.06 * max(pesH, 0.2) * pesTallE) * (1.0 - pesSinkF);   // (02/11 paso 7) hundimiento bajo pelota / pisadas (antes del largo constante: la hoja sigue doblandose)
+    // (12/11) las hojas 3D traen su alto exacto (w296, x439 hojas sueltas mas altas): el tope de 6 cm x alto (pensado para las tarjetas) les
+    // aplanaba la punta a las mas altas; para ellas solo un tope holgado de 25 cm
+    r6.y = min(v0.y, pesBlade ? 0.25 : 0.06 * max(pesH, 0.2) * pesTallE) * (1.0 - pesSinkF);   // (02/11 paso 7) hundimiento bajo pelota / pisadas (antes del largo constante: la hoja sigue doblandose)
     // (26/10 f) x292: el hundimiento del juego tambien en las hojas del mod (las del juego se entierran donde la textura del estadio marca
     // lineas, areas gastadas o sin pasto; las del mod tapaban todo eso) y su tope de alto (mask.w); y292 entierra ademas las hojas sobre
     // la pintura de las lineas. Se resta despues del largo constante (v5) para que queden bajo el suelo y no como astillas encima
