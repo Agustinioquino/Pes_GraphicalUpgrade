@@ -32,9 +32,9 @@
 namespace fx {
 
 static const unsigned kStamp = 0x62787C6A;
-static const uintptr_t kCamApply = 0x14198d3b0ull;            // CameraSystem: aplicar la camara principal
-static const uintptr_t kAAVtbl = 0x142a2b520ull;              // vtable de fox::gr::dg::plugins::AntiAliasing
-static const uintptr_t kAAExec = 0x141754850ull;              // su entrada [4] (TAA del juego)
+static const uintptr_t kCamApply = XA(0x14198d3b0ull);            // CameraSystem: aplicar la camara principal
+static const uintptr_t kAAVtbl = XA(0x142a2b520ull);              // vtable de fox::gr::dg::plugins::AntiAliasing
+static const uintptr_t kAAExec = XA(0x141754850ull);              // su entrada [4] (TAA del juego)
 // prologo de 0x14198d3b0: mov rax,rsp; push rbp; push rdi; push r12; push r14; push r15; lea rbp,[rax-138h]
 static const unsigned char kCamSig[16] = { 0x48,0x8b,0xc4,0x55,0x57,0x41,0x54,0x41,0x56,0x41,0x57,0x48,0x8d,0xa8,0xc8,0xfe };
 static const unsigned char kCamSig2[5] = { 0x44,0x0f,0xb6,0x77,0x48 };                        // 0x14198d44c movzx r14d,byte [rdi+48h]
@@ -128,17 +128,17 @@ static void Install() {
     if (!g_cfg.motorPatch) { Log("camara del motor: parches en memoria apagados (motor = 0)"); return; }
     HMODULE mod = GetModuleHandleW(nullptr);
     auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
-    if ((uintptr_t)mod != 0x140000000ull || nt->FileHeader.TimeDateStamp != kStamp) {
+    if ((uintptr_t)mod != 0x140000000ull || !ExeStampOk((unsigned)nt->FileHeader.TimeDateStamp)) {
         Log("camara del motor: exe distinto (base %p, sello %08X): sin ganchos", (void*)mod, (unsigned)nt->FileHeader.TimeDateStamp); return;
     }
     // 1) aplicar camara (MinHook)
-    if (SigAt(kCamApply, kCamSig, sizeof kCamSig) && SigAt(0x14198d44cull, kCamSig2, sizeof kCamSig2) && SigAt(0x14198dddbull, kCamSig3, sizeof kCamSig3)) {
+    if (SigAt(kCamApply, kCamSig, sizeof kCamSig) && SigAt(XA(0x14198d44cull), kCamSig2, sizeof kCamSig2) && SigAt(XA(0x14198dddbull), kCamSig3, sizeof kCamSig3)) {
         if (MH_CreateHook((void*)kCamApply, (void*)&hk_Cam, (void**)&o_cam) == MH_OK && MH_EnableHook((void*)kCamApply) == MH_OK) s_camOk = true;
         else Log("camara del motor: no se pudo enganchar 0x14198d3b0");
     } else Log("camara del motor: la firma de 0x14198d3b0 no coincide, se omite");
     // 2) TAA del juego: entrada [4] de la vtable de AntiAliasing (solo lectura: VirtualProtect)
     void** slot = (void**)(kAAVtbl + 4 * sizeof(void*));
-    if (Readable(slot, sizeof(void*)) && (uintptr_t)*slot == kAAExec && SigAt(kAAExec, kAASig, sizeof kAASig) && SigAt(0x1417549cdull, kAASig2, sizeof kAASig2)) {
+    if (Readable(slot, sizeof(void*)) && (uintptr_t)*slot == kAAExec && SigAt(kAAExec, kAASig, sizeof kAASig) && SigAt(XA(0x1417549cdull), kAASig2, sizeof kAASig2)) {
         DWORD old = 0;
         if (VirtualProtect(slot, sizeof(void*), PAGE_READWRITE, &old)) {
             o_aa = (AAExecFn)*slot;

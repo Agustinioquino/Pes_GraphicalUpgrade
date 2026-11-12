@@ -340,6 +340,7 @@ static int InitMod() {
     }
     fx::Log("modulo propio (d3d11.dll) en %p", (void*)s_self);
     if (!fx::LoadConfig()) fx::Log("aviso: no se pudo leer la configuracion");
+    fx::ExeVerLog();
     if (fx::g_cfg.optPin) fx::PinGameDlls();
     if (fx::g_cfg.optDump) fx::DumpModule(L"DreamPatch Switcher.dll", L"dump_switcher.bin");
     if (!fx::g_cfg.optHooks) { fx::Log("hooks = 0: el mod queda cargado pero sin ganchos (prueba)"); return 2; }

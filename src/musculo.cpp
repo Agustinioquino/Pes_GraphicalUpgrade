@@ -68,41 +68,41 @@ enum Mus : int {
 struct MusCls { const char* name; uintptr_t vt, col, eval; int mus; int side; float ax, ay, az, kx, ky, kz; };
 static const MusCls s_cls[] = {
     // hombros y brazos (anclas sobre el eje del brazo, medido en arm.fmdl de TorsoBody v11)
-    { "deltoides",       0x142ab2f18ull, 0x142da5818ull, 0x141a58a80ull, M_DELT,     1, 0.180f, 1.440f,  0.026f, 0.8f, 0.8f, 0.35f }, // centro de la tapa del hombro; Z del hueso = hacia arriba (crece poco: si no, escalon con el trapecio)
-    { "brazo",           0x142ab2f50ull, 0x142da58b0ull, 0x141a67300ull, M_ARM,      1, 0.300f, 1.335f,  0.025f, 0.0f, 0.5f, 0.25f }, // pesa sobre todo en la union con el torso (v11): poco
-    { "brazo piel",      0x142ab2f88ull, 0x142da5948ull, 0x141a68820ull, M_ARM,      1, 0.310f, 1.330f,  0.025f, 0.0f, 1.0f, 0.6f },
-    { "brazo piel 2",    0x142ab2fc0ull, 0x142da59e0ull, 0x141a67e60ull, M_ARM,      1, 0.265f, 1.368f,  0.025f, 0.0f, 0.8f, 0.5f },
-    { "manga",           0x142ab2ff8ull, 0x142da5a78ull, 0x141a62e20ull, M_SLEEVE,   1, 0.250f, 1.380f,  0.025f, 0.0f, 1.0f, 0.6f },
-    { "antebrazo",       0x142ab3158ull, 0x142da5e08ull, 0x141a5a5a0ull, M_FORE,     2, 0.451f, 1.213f,  0.037f, 0.0f, 1.0f, 1.0f },
-    { "antebrazo 2",     0x142ab3120ull, 0x142da5d70ull, 0x141a5a260ull, M_FORE2,    1, 0.545f, 1.123f,  0.051f, 0.0f, 1.0f, 1.0f },
-    { "codo",            0x142ab30e8ull, 0x142da5cd8ull, 0x141a59560ull, M_ELBOW,    2, 0.400f, 1.258f,  0.030f, 1.0f, 1.0f, 1.0f },
-    { "muneca",          0x142ab30b0ull, 0x142da5c40ull, 0x141a694d0ull, M_WRIST,    1, 0.590f, 1.090f,  0.058f, 1.0f, 1.0f, 1.0f },
+    { "deltoides",       XA(0x142ab2f18ull), XA(0x142da5818ull), XA(0x141a58a80ull), M_DELT,     1, 0.180f, 1.440f,  0.026f, 0.8f, 0.8f, 0.35f }, // centro de la tapa del hombro; Z del hueso = hacia arriba (crece poco: si no, escalon con el trapecio)
+    { "brazo",           XA(0x142ab2f50ull), XA(0x142da58b0ull), XA(0x141a67300ull), M_ARM,      1, 0.300f, 1.335f,  0.025f, 0.0f, 0.5f, 0.25f }, // pesa sobre todo en la union con el torso (v11): poco
+    { "brazo piel",      XA(0x142ab2f88ull), XA(0x142da5948ull), XA(0x141a68820ull), M_ARM,      1, 0.310f, 1.330f,  0.025f, 0.0f, 1.0f, 0.6f },
+    { "brazo piel 2",    XA(0x142ab2fc0ull), XA(0x142da59e0ull), XA(0x141a67e60ull), M_ARM,      1, 0.265f, 1.368f,  0.025f, 0.0f, 0.8f, 0.5f },
+    { "manga",           XA(0x142ab2ff8ull), XA(0x142da5a78ull), XA(0x141a62e20ull), M_SLEEVE,   1, 0.250f, 1.380f,  0.025f, 0.0f, 1.0f, 0.6f },
+    { "antebrazo",       XA(0x142ab3158ull), XA(0x142da5e08ull), XA(0x141a5a5a0ull), M_FORE,     2, 0.451f, 1.213f,  0.037f, 0.0f, 1.0f, 1.0f },
+    { "antebrazo 2",     XA(0x142ab3120ull), XA(0x142da5d70ull), XA(0x141a5a260ull), M_FORE2,    1, 0.545f, 1.123f,  0.051f, 0.0f, 1.0f, 1.0f },
+    { "codo",            XA(0x142ab30e8ull), XA(0x142da5cd8ull), XA(0x141a59560ull), M_ELBOW,    2, 0.400f, 1.258f,  0.030f, 1.0f, 1.0f, 1.0f },
+    { "muneca",          XA(0x142ab30b0ull), XA(0x142da5c40ull), XA(0x141a694d0ull), M_WRIST,    1, 0.590f, 1.090f,  0.058f, 1.0f, 1.0f, 1.0f },
     // pecho, espalda, abdomen y gluteos: se corren hacia afuera (la direccion y cuanto: UpdateFactors)
-    { "pectoral",        0x142ab32a8ull, 0x142da6198ull, 0x141a605c0ull, M_PECT,     1, 0.100f, 1.384f,  0.069f, 0.0f, 0.0f, 0.0f },
-    { "pecho alto",      0x142ab3238ull, 0x142da6068ull, 0x141a57e30ull, M_CLAV,     1, 0.100f, 1.485f,  0.050f, 0.0f, 0.0f, 0.0f },
-    { "axila",           0x142ab3328ull, 0x142da62c8ull, 0x141a66b80ull, M_UNDERARM, 1, 0.150f, 1.418f,  0.070f, 0.0f, 0.0f, 0.0f },
-    { "costado",         0x142ab3270ull, 0x142da6100ull, 0x141a612d0ull, M_RIB,      1, 0.120f, 1.275f,  0.039f, 0.0f, 0.0f, 0.0f },
-    { "dorsal",          0x142ab3360ull, 0x142da6360ull, 0x141a66960ull, M_LAT,      1, 0.150f, 1.427f, -0.020f, 0.0f, 0.0f, 0.0f },
-    { "omoplato",        0x142ab3398ull, 0x142da63f8ull, 0x141a619d0ull, M_SCAP,     3, 0.110f, 1.443f, -0.020f, 0.0f, 0.0f, 0.0f },
-    { "trapecio",        0x142ab3068ull, 0x142da5ba8ull, 0x141a647f0ull, M_TRAP,     1, 0.100f, 1.490f, -0.017f, 0.0f, 0.0f, 0.0f },
-    { "base del cuello", 0x142ab3200ull, 0x142da5fd0ull, 0x141a582f0ull, M_COLLAR,   1, 0.060f, 1.510f,  0.020f, 0.0f, 0.0f, 0.0f },
-    { "espalda baja",    0x142ab32e0ull, 0x142da6230ull, 0x141a54d70ull, M_BACK,     0, 0.000f, 1.168f, -0.020f, 0.0f, 0.0f, 0.0f },
-    { "lumbar",          0x142ab34e0ull, 0x142da6778ull, 0x141a550c0ull, M_LUMB,     1, 0.070f, 1.187f, -0.020f, 0.0f, 0.0f, 0.0f },
-    { "abdominal",       0x142ab3470ull, 0x142da6648ull, 0x141a55890ull, M_ABS,      1, 0.070f, 1.151f,  0.130f, 0.0f, 0.0f, 0.0f },
-    { "oblicuo",         0x142ab34a8ull, 0x142da66e0ull, 0x141a563c0ull, M_OBL,      1, 0.130f, 1.151f,  0.047f, 0.0f, 0.0f, 0.0f },
-    { "panza",           0x142ab3430ull, 0x142da65b0ull, 0x141a57980ull, M_BELLY,    0, 0.000f, 1.178f,  0.140f, 0.0f, 0.0f, 0.0f },
-    { "gluteo",          0x142ab3518ull, 0x142da6810ull, 0x141a5c4a0ull, M_GLUTE,    2, 0.080f, 1.010f, -0.020f, 0.0f, 0.0f, 0.0f },
+    { "pectoral",        XA(0x142ab32a8ull), XA(0x142da6198ull), XA(0x141a605c0ull), M_PECT,     1, 0.100f, 1.384f,  0.069f, 0.0f, 0.0f, 0.0f },
+    { "pecho alto",      XA(0x142ab3238ull), XA(0x142da6068ull), XA(0x141a57e30ull), M_CLAV,     1, 0.100f, 1.485f,  0.050f, 0.0f, 0.0f, 0.0f },
+    { "axila",           XA(0x142ab3328ull), XA(0x142da62c8ull), XA(0x141a66b80ull), M_UNDERARM, 1, 0.150f, 1.418f,  0.070f, 0.0f, 0.0f, 0.0f },
+    { "costado",         XA(0x142ab3270ull), XA(0x142da6100ull), XA(0x141a612d0ull), M_RIB,      1, 0.120f, 1.275f,  0.039f, 0.0f, 0.0f, 0.0f },
+    { "dorsal",          XA(0x142ab3360ull), XA(0x142da6360ull), XA(0x141a66960ull), M_LAT,      1, 0.150f, 1.427f, -0.020f, 0.0f, 0.0f, 0.0f },
+    { "omoplato",        XA(0x142ab3398ull), XA(0x142da63f8ull), XA(0x141a619d0ull), M_SCAP,     3, 0.110f, 1.443f, -0.020f, 0.0f, 0.0f, 0.0f },
+    { "trapecio",        XA(0x142ab3068ull), XA(0x142da5ba8ull), XA(0x141a647f0ull), M_TRAP,     1, 0.100f, 1.490f, -0.017f, 0.0f, 0.0f, 0.0f },
+    { "base del cuello", XA(0x142ab3200ull), XA(0x142da5fd0ull), XA(0x141a582f0ull), M_COLLAR,   1, 0.060f, 1.510f,  0.020f, 0.0f, 0.0f, 0.0f },
+    { "espalda baja",    XA(0x142ab32e0ull), XA(0x142da6230ull), XA(0x141a54d70ull), M_BACK,     0, 0.000f, 1.168f, -0.020f, 0.0f, 0.0f, 0.0f },
+    { "lumbar",          XA(0x142ab34e0ull), XA(0x142da6778ull), XA(0x141a550c0ull), M_LUMB,     1, 0.070f, 1.187f, -0.020f, 0.0f, 0.0f, 0.0f },
+    { "abdominal",       XA(0x142ab3470ull), XA(0x142da6648ull), XA(0x141a55890ull), M_ABS,      1, 0.070f, 1.151f,  0.130f, 0.0f, 0.0f, 0.0f },
+    { "oblicuo",         XA(0x142ab34a8ull), XA(0x142da66e0ull), XA(0x141a563c0ull), M_OBL,      1, 0.130f, 1.151f,  0.047f, 0.0f, 0.0f, 0.0f },
+    { "panza",           XA(0x142ab3430ull), XA(0x142da65b0ull), XA(0x141a57980ull), M_BELLY,    0, 0.000f, 1.178f,  0.140f, 0.0f, 0.0f, 0.0f },
+    { "gluteo",          XA(0x142ab3518ull), XA(0x142da6810ull), XA(0x141a5c4a0ull), M_GLUTE,    2, 0.080f, 1.010f, -0.020f, 0.0f, 0.0f, 0.0f },
     // piernas (anclas sobre el eje de la pierna, medido en thigh_middle / thigh_short)
-    { "muslo",           0x142ab3550ull, 0x142da68a8ull, 0x141a64180ull, M_THIGH,    2, 0.130f, 0.680f,  0.066f, 0.0f, 1.0f, 1.0f },
-    { "aductor",         0x142ab3588ull, 0x142da6940ull, 0x141a63d30ull, M_ADD,      1, 0.120f, 0.742f,  0.067f, 0.0f, 0.3f, 0.3f },
-    { "pantorrilla",     0x142ab3748ull, 0x142da6e08ull, 0x141a5cf10ull, M_CALF,     2, 0.177f, 0.430f,  0.041f, 0.0f, 0.8f, 0.8f },
-    { "rodilla",         0x142ab3780ull, 0x142da6ea0ull, 0x141a5c750ull, M_KNEE,     2, 0.150f, 0.544f,  0.062f, 0.2f, 0.0f, 1.0f },  // X adelante (rotula), Z costado
-    { "corva",           0x142ab37b8ull, 0x142da6f38ull, 0x141a5cc80ull, M_KNEE,     2, 0.150f, 0.544f,  0.062f, 0.6f, 0.0f, 1.0f },  // X atras, Z costado
-    { "borde del short", 0x142ab35f8ull, 0x142da6a70ull, 0x141a5ad80ull, M_HEM,      1, 0.100f, 0.850f,  0.063f, 0.0f, 1.0f, 1.0f },
-    { "short",           0x142ab35c0ull, 0x142da69d8ull, 0x141a5dd30ull, M_PANTS,    1, 0.110f, 1.000f,  0.065f, 0.0f, 1.0f, 1.0f },
+    { "muslo",           XA(0x142ab3550ull), XA(0x142da68a8ull), XA(0x141a64180ull), M_THIGH,    2, 0.130f, 0.680f,  0.066f, 0.0f, 1.0f, 1.0f },
+    { "aductor",         XA(0x142ab3588ull), XA(0x142da6940ull), XA(0x141a63d30ull), M_ADD,      1, 0.120f, 0.742f,  0.067f, 0.0f, 0.3f, 0.3f },
+    { "pantorrilla",     XA(0x142ab3748ull), XA(0x142da6e08ull), XA(0x141a5cf10ull), M_CALF,     2, 0.177f, 0.430f,  0.041f, 0.0f, 0.8f, 0.8f },
+    { "rodilla",         XA(0x142ab3780ull), XA(0x142da6ea0ull), XA(0x141a5c750ull), M_KNEE,     2, 0.150f, 0.544f,  0.062f, 0.2f, 0.0f, 1.0f },  // X adelante (rotula), Z costado
+    { "corva",           XA(0x142ab37b8ull), XA(0x142da6f38ull), XA(0x141a5cc80ull), M_KNEE,     2, 0.150f, 0.544f,  0.062f, 0.6f, 0.0f, 1.0f },  // X atras, Z costado
+    { "borde del short", XA(0x142ab35f8ull), XA(0x142da6a70ull), XA(0x141a5ad80ull), M_HEM,      1, 0.100f, 0.850f,  0.063f, 0.0f, 1.0f, 1.0f },
+    { "short",           XA(0x142ab35c0ull), XA(0x142da69d8ull), XA(0x141a5dd30ull), M_PANTS,    1, 0.110f, 1.000f,  0.065f, 0.0f, 1.0f, 1.0f },
     // cuello (scm: ejes del modelo; nuca: X atras, Z costado): engorda alrededor del eje vertical
-    { "cuello",          0x142ab31c8ull, 0x142da5f38ull, 0x141a61e40ull, M_NECK,     0, 0.000f, 1.580f,  0.025f, 1.0f, 0.0f, 1.0f },
-    { "nuca",            0x142ab3190ull, 0x142da5ea0ull, 0x141a5d3a0ull, M_NAPE,     0, 0.000f, 1.560f,  0.025f, 1.0f, 0.0f, 1.0f },   // (24/10 g) slider propio
+    { "cuello",          XA(0x142ab31c8ull), XA(0x142da5f38ull), XA(0x141a61e40ull), M_NECK,     0, 0.000f, 1.580f,  0.025f, 1.0f, 0.0f, 1.0f },
+    { "nuca",            XA(0x142ab3190ull), XA(0x142da5ea0ull), XA(0x141a5d3a0ull), M_NAPE,     0, 0.000f, 1.560f,  0.025f, 1.0f, 0.0f, 1.0f },   // (24/10 g) slider propio
 };
 static const int kN = (int)(sizeof(s_cls) / sizeof(s_cls[0]));
 static const float kArmR = 0.044f;     // medio grosor del brazo de adelante hacia atras (m, arm.fmdl)
@@ -1022,8 +1022,8 @@ static bool Readable(const void* p, size_t n) {
 // menu::MenuEditPlBodyPhysiqueSetting (Editar > Jugadores > Fisico): vtable 0x142708848 (COL 0x142cd5c40); [0] = 0x141fa9d60 es
 // el paso por cuadro (comun a los menus de Editar; solo se cambia en la vtable de Fisico) y *(this + 0x78) + 0x50 = activo.
 // Mientras esta en pantalla, Insert abre una ventana chica con la musculatura de ese jugador y abajo aparece un aviso.
-static const uintptr_t kPhysVt = 0x142708848ull, kPhysCol = 0x142cd5c40ull, kPhysStep = 0x141fa9d60ull;
-static const uintptr_t kBodyVt = 0x142704dd8ull, kBodyCol = 0x142cd50d8ull;   // menu::MenuEditPlBodySetting (el Fisico de Editar)
+static const uintptr_t kPhysVt = XA(0x142708848ull), kPhysCol = XA(0x142cd5c40ull), kPhysStep = XA(0x141fa9d60ull);
+static const uintptr_t kBodyVt = XA(0x142704dd8ull), kBodyCol = XA(0x142cd50d8ull);   // menu::MenuEditPlBodySetting (el Fisico de Editar)
 typedef void* (__fastcall* PhysStepFn)(void* self, void* a2, void* a3, void* a4);
 static PhysStepFn o_physStep = nullptr;
 static std::atomic<long long> s_physLast{0}, s_physEnter{0};   // QPC del ultimo paso activo / de la entrada
@@ -1049,7 +1049,7 @@ static void Install() {
     if (!g_cfg.motorPatch) { Log("musculatura: parches en memoria apagados (motor = 0)"); return; }
     HMODULE mod = GetModuleHandleW(nullptr);
     auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
-    if ((uintptr_t)mod != 0x140000000ull || nt->FileHeader.TimeDateStamp != kStamp) { Log("musculatura: exe distinto, sin ganchos"); return; }
+    if ((uintptr_t)mod != 0x140000000ull || !ExeStampOk((unsigned)nt->FileHeader.TimeDateStamp)) { Log("musculatura: exe distinto, sin ganchos"); return; }
     std::string bad;
     if (!DiagOn(3)) Log("musculatura: huesos de musculo sin enganchar (w173 = 0, Diagnostico > Ganchos nuevos)");
     for (int i = 0; i < kN && DiagOn(3); i++) {

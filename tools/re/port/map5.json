@@ -1,0 +1,1287 @@
+{
+"0x140000000": [
+null,
+"fuera",
+""
+],
+"0x140001000": [
+"0x140001000",
+"func",
+"funcion identica (29 bytes)"
+],
+"0x1402ba010": [
+"0x1402ba3e0",
+"func",
+"funcion identica (375 bytes)"
+],
+"0x14035dcb0": [
+"0x14035e1f0",
+"func",
+"funcion identica (408 bytes)"
+],
+"0x14035dcee": [
+"0x14035e22e",
+"func",
+"funcion identica (408 bytes)"
+],
+"0x14035dcfb": [
+"0x14035e23b",
+"func",
+"funcion identica (408 bytes)"
+],
+"0x1403cf4d0": [
+"0x1403cf7e0",
+"func",
+"funcion identica (83 bytes)"
+],
+"0x1403d2420": [
+"0x1403d25a0",
+"func",
+"funcion identica (79 bytes)"
+],
+"0x1403f9410": [
+"0x140c8e250",
+"icf",
+"or eax,-1; ret (plegada): 7 llamadas + 397 ranuras de vtable de acuerdo"
+],
+"0x1403fc0d0": [
+"0x1403fc080",
+"func",
+"funcion identica (148 bytes)"
+],
+"0x1403fe31d": [
+"0x1403fe2cd",
+"func",
+"funcion identica (643 bytes)"
+],
+"0x1404228d0": [
+"0x140422030",
+"func",
+"funcion identica (23 bytes)"
+],
+"0x1404279c0": [
+"0x140427100",
+"func",
+"funcion identica (97 bytes)"
+],
+"0x140427a80": [
+"0x1404271c0",
+"func",
+"funcion identica (226 bytes)"
+],
+"0x140a48ae0": [
+"0x140a484f0",
+"func",
+"funcion identica (64 bytes)"
+],
+"0x140a977d0": [
+"0x140a97280",
+"func",
+"funcion identica (199 bytes)"
+],
+"0x140b725f0": [
+"0x140b39e70",
+"icf",
+"lea rax,[tabla]; ret: 202 ranuras de vtable de acuerdo"
+],
+"0x140c08da0": [
+"0x140c25ea0",
+"vtslot",
+"salto a la seccion protegida; ranura de vtable + distancia de las vecinas"
+],
+"0x140c08e70": [
+"0x140c25f70",
+"win",
+"ventana -0/+8 instrucciones"
+],
+"0x140c09280": [
+"0x140c26380",
+"vecinos",
+"5 candidatos, 1 entre las funciones vecinas (delta 0x1d100/0x1d100)"
+],
+"0x140c09370": [
+"0x140c26470",
+"func",
+"funcion identica (27 bytes)"
+],
+"0x140c09410": [
+"0x140c26510",
+"func",
+"funcion identica (29 bytes)"
+],
+"0x140c09470": [
+"0x140c26570",
+"func",
+"funcion identica (116 bytes)"
+],
+"0x140c2e120": [
+"0x140bfc0d0",
+"vecinos",
+"5 candidatos, 1 entre las funciones vecinas (delta -0x32050/-0x32050)"
+],
+"0x140c2e140": [
+"0x140bfc0f0",
+"func",
+"funcion identica (64 bytes)"
+],
+"0x140c2e1e0": [
+"0x140bfc190",
+"func",
+"funcion identica (77 bytes)"
+],
+"0x140c2e3e0": [
+"0x140bfc390",
+"func",
+"funcion identica (61 bytes)"
+],
+"0x140c2e420": [
+"0x140bfc3d0",
+"func",
+"funcion identica (30 bytes)"
+],
+"0x140cd35d0": [
+"0x140cbb0b0",
+"func",
+"funcion identica (164 bytes)"
+],
+"0x140cd3680": [
+"0x140cbb160",
+"func",
+"funcion identica (42 bytes)"
+],
+"0x140cd3740": [
+"0x140cbb220",
+"func",
+"funcion identica (684 bytes)"
+],
+"0x140cd39f0": [
+"0x140cbb4d0",
+"func",
+"funcion identica (45 bytes)"
+],
+"0x140e3e6b0": [
+"0x140e3c280",
+"func",
+"funcion identica (93 bytes)"
+],
+"0x140e3fbd0": [
+"0x140e3d7a0",
+"func",
+"funcion identica (68 bytes)"
+],
+"0x140e400d0": [
+"0x140e3dca0",
+"func",
+"funcion identica (69 bytes)"
+],
+"0x140e42300": [
+"0x140e3fed0",
+"func",
+"funcion identica (93 bytes)"
+],
+"0x140e433d0": [
+"0x140e40fa0",
+"func",
+"funcion identica (134 bytes)"
+],
+"0x140e43500": [
+"0x140e410d0",
+"vecinos-exacto",
+"200 candidatos; el unico a la distancia de las funciones vecinas (-0x2430)"
+],
+"0x140e48f80": [
+"0x140e46b50",
+"func",
+"funcion identica (141 bytes)"
+],
+"0x140e4ade0": [
+"0x140e489a0",
+"func",
+"funcion identica (64 bytes)"
+],
+"0x140e4b030": [
+"0x140e48bf0",
+"vecinos",
+"el volcado 1.07 tenia un gancho en los primeros 14 bytes; el resto de la funcion (971 bytes) coincide"
+],
+"0x140e4d9e0": [
+"0x140e4b5b0",
+"vecinos-exacto",
+"2 candidatos; el unico a la distancia de las funciones vecinas (-0x2430)"
+],
+"0x140e4dfc0": [
+"0x140e4bba0",
+"func",
+"funcion identica (161 bytes)"
+],
+"0x140e4e5a0": [
+"0x140e4c190",
+"func",
+"funcion identica (49 bytes)"
+],
+"0x140e4f5d0": [
+"0x140e4d1c0",
+"func",
+"funcion identica (64 bytes)"
+],
+"0x140e53ee0": [
+"0x140e51b60",
+"func",
+"funcion identica (335 bytes)"
+],
+"0x140e540f0": [
+"0x141030a80",
+"icf",
+"mov eax,[rcx+0xd8]; ret (plegada): 30 llamadas de acuerdo"
+],
+"0x140e54130": [
+"0x140e51da0",
+"func",
+"funcion identica (64 bytes)"
+],
+"0x140e54140": [
+"0x140e51db0",
+"func",
+"funcion identica (56 bytes)"
+],
+"0x140e54180": [
+"0x140e51df0",
+"func",
+"funcion identica (278 bytes)"
+],
+"0x140e56c10": [
+"0x140e54900",
+"vecinos",
+"2 candidatos, 1 entre las funciones vecinas (delta -0x2310/-0x2310)"
+],
+"0x140e56ca0": [
+"0x140e54990",
+"func",
+"funcion identica (227 bytes)"
+],
+"0x140e5b9c0": [
+"0x140e599d0",
+"vecinos",
+"1 candidatos, 1 entre las funciones vecinas (delta -0x1ff0/-0x2000)"
+],
+"0x140e5b9d0": [
+"0x141667490",
+"icf",
+"mov eax,[rcx+0xd0]; ret (plegada): 24 llamadas de acuerdo"
+],
+"0x140e5bf80": [
+"0x140e59f80",
+"func",
+"funcion identica (80 bytes)"
+],
+"0x140e81350": [
+"0x140e7f510",
+"func",
+"funcion identica (35 bytes)"
+],
+"0x140e8fa80": [
+"0x140e8dc40",
+"func",
+"funcion identica (64 bytes)"
+],
+"0x140e90340": [
+"0x140e8fc10",
+"func",
+"funcion identica (109 bytes)"
+],
+"0x140e90710": [
+"0x140e8e800",
+"func",
+"funcion identica (64 bytes)"
+],
+"0x140e92170": [
+"0x140e902c0",
+"func",
+"funcion identica (64 bytes)"
+],
+"0x1414c0e40": [
+"0x1414bb2a0",
+"func",
+"funcion identica (164 bytes)"
+],
+"0x1414c5d70": [
+"0x1414c0280",
+"func",
+"funcion identica (64 bytes)"
+],
+"0x141692630": [
+"0x14168ca30",
+"func",
+"funcion identica (121 bytes)"
+],
+"0x1416927c0": [
+"0x14168cbc0",
+"func",
+"funcion identica (116 bytes)"
+],
+"0x141693630": [
+"0x14168da20",
+"func",
+"funcion identica (292 bytes)"
+],
+"0x14169ee20": [
+"0x141699270",
+"func",
+"funcion identica (97 bytes)"
+],
+"0x14169f270": [
+"0x1416996c0",
+"func",
+"funcion identica (64 bytes)"
+],
+"0x14169f2e0": [
+"0x141699730",
+"func",
+"funcion identica (64 bytes)"
+],
+"0x14169f3c0": [
+"0x141699810",
+"vecinos-exacto",
+"3 candidatos; el unico a la distancia de las funciones vecinas (-0x5bb0)"
+],
+"0x14169f440": [
+"0x141699890",
+"func",
+"funcion identica (64 bytes)"
+],
+"0x14169f7f0": [
+"0x141699c40",
+"func",
+"funcion identica (64 bytes)"
+],
+"0x14169fa50": [
+"0x141699ea0",
+"func",
+"funcion identica (64 bytes)"
+],
+"0x1416b4b50": [
+"0x1416af010",
+"vecinos",
+"6 candidatos, 1 entre las funciones vecinas (delta -0x5b40/-0x5b40)"
+],
+"0x1416b9a10": [
+"0x1416b3ed0",
+"vecinos",
+"4 candidatos, 1 entre las funciones vecinas (delta -0x5b40/-0x5b40)"
+],
+"0x1416bb1e0": [
+"0x1416b5690",
+"vecinos",
+"6 candidatos, 1 entre las funciones vecinas (delta -0x5b50/-0x5b50)"
+],
+"0x1416bdcc0": [
+"0x1416b8170",
+"vecinos",
+"4 candidatos, 1 entre las funciones vecinas (delta -0x5b50/-0x5b50)"
+],
+"0x1416bfeb0": [
+"0x1416ba370",
+"func",
+"funcion identica (225 bytes)"
+],
+"0x1416c61e9": [
+"0x1416c06a9",
+"win",
+"ventana -4/+8 instrucciones"
+],
+"0x1416c6216": [
+"0x1416c06d6",
+"win",
+"ventana -4/+8 instrucciones"
+],
+"0x1416c66e0": [
+"0x1416c0ba0",
+"func",
+"funcion identica (39 bytes)"
+],
+"0x1416c70c0": [
+"0x1416c1580",
+"func",
+"funcion identica (377 bytes)"
+],
+"0x1416de354": [
+"0x1416d87d4",
+"win",
+"ventana -4/+8 instrucciones"
+],
+"0x1416de373": [
+"0x1416d87f3",
+"win",
+"ventana -4/+8 instrucciones"
+],
+"0x1416ee820": [
+"0x1416e8e90",
+"func",
+"funcion identica (2821 bytes)"
+],
+"0x14171e2a7": [
+"0x141718937",
+"func",
+"funcion identica (1382 bytes)"
+],
+"0x14171e34a": [
+"0x1417189da",
+"func",
+"funcion identica (1382 bytes)"
+],
+"0x14171e37a": [
+"0x141718a0a",
+"func",
+"funcion identica (1382 bytes)"
+],
+"0x141754850": [
+"0x14174f170",
+"func",
+"funcion identica (42 bytes)"
+],
+"0x1417549cd": [
+"0x14174f2ed",
+"func",
+"funcion identica (444 bytes)"
+],
+"0x1417ae85a": [
+"0x1417a90ca",
+"func",
+"funcion identica (309 bytes)"
+],
+"0x141811ed0": [
+"0x14180c530",
+"func",
+"funcion identica (130 bytes)"
+],
+"0x141812280": [
+"0x14180c8e0",
+"vecinos",
+"6 candidatos, 1 entre las funciones vecinas (delta -0x59a0/-0x5960)"
+],
+"0x141813f70": [
+"0x14180e610",
+"func",
+"funcion identica (100 bytes)"
+],
+"0x141815570": [
+"0x14180fc00",
+"vecinos-exacto",
+"3 candidatos; el unico a la distancia de las funciones vecinas (-0x5970)"
+],
+"0x1418155f0": [
+"0x14180fc80",
+"vecinos-exacto",
+"3 candidatos; el unico a la distancia de las funciones vecinas (-0x5970)"
+],
+"0x14181a030": [
+"0x1418146c0",
+"vecinos-exacto",
+"118 candidatos; el unico a la distancia de las funciones vecinas (-0x5970)"
+],
+"0x14181a0b0": [
+"0x141814740",
+"vecinos-exacto",
+"27 bytes; candidato a la distancia de la funcion anterior (-0x5970)"
+],
+"0x14191c310": [
+"0x1419170c0",
+"func",
+"funcion identica (83 bytes)"
+],
+"0x141922ed0": [
+"0x14191dbb0",
+"vecinos",
+"2 candidatos, 1 entre las funciones vecinas (delta -0x5320/-0x5320)"
+],
+"0x141922f90": [
+"0x14191dc70",
+"vecinos",
+"2 candidatos, 1 entre las funciones vecinas (delta -0x5320/-0x5320)"
+],
+"0x1419230e0": [
+"0x14191ddc0",
+"func",
+"funcion identica (2562 bytes)"
+],
+"0x141923af0": [
+"0x14191e7d0",
+"func",
+"funcion identica (33 bytes)"
+],
+"0x141925fa0": [
+"0x141920c80",
+"vecinos",
+"2 candidatos, 1 entre las funciones vecinas (delta -0x5320/-0x5320)"
+],
+"0x14198d3b0": [
+"0x141987a20",
+"func",
+"funcion identica (3739 bytes)"
+],
+"0x14198d44c": [
+"0x141987abc",
+"func",
+"funcion identica (3739 bytes)"
+],
+"0x14198dddb": [
+"0x14198844b",
+"func",
+"funcion identica (3739 bytes)"
+],
+"0x1419bf3f0": [
+"0x1419b9ea0",
+"func",
+"funcion identica (228 bytes)"
+],
+"0x1419f8820": [
+"0x1419f3340",
+"func",
+"funcion identica (31 bytes)"
+],
+"0x141a22f50": [
+"0x141a1dbd0",
+"vecinos",
+"2 candidatos, 1 entre las funciones vecinas (delta -0x5380/-0x5380)"
+],
+"0x141a232b0": [
+"0x141a1df30",
+"func",
+"funcion identica (39 bytes)"
+],
+"0x141a54d70": [
+"0x141a4f970",
+"func",
+"funcion identica (837 bytes)"
+],
+"0x141a550c0": [
+"0x141a4fcc0",
+"win",
+"ventana -0/+20 instrucciones"
+],
+"0x141a55890": [
+"0x141a50490",
+"win",
+"ventana -0/+8 instrucciones"
+],
+"0x141a563c0": [
+"0x141a50fc0",
+"win",
+"ventana -0/+20 instrucciones"
+],
+"0x141a57980": [
+"0x141a52580",
+"win",
+"ventana -0/+8 instrucciones"
+],
+"0x141a57e30": [
+"0x141a52a30",
+"win",
+"ventana -0/+8 instrucciones"
+],
+"0x141a582f0": [
+"0x141a52ef0",
+"win",
+"ventana -0/+8 instrucciones"
+],
+"0x141a58a80": [
+"0x141a53680",
+"win",
+"ventana -0/+8 instrucciones"
+],
+"0x141a59560": [
+"0x141a54160",
+"win",
+"ventana -0/+20 instrucciones"
+],
+"0x141a5a260": [
+"0x141a54e60",
+"win",
+"ventana -0/+12 instrucciones"
+],
+"0x141a5a5a0": [
+"0x141a551a0",
+"win",
+"ventana -0/+20 instrucciones"
+],
+"0x141a5ad80": [
+"0x141a55980",
+"win",
+"ventana -0/+8 instrucciones"
+],
+"0x141a5c4a0": [
+"0x141a570a0",
+"func",
+"funcion identica (688 bytes)"
+],
+"0x141a5c750": [
+"0x141a57350",
+"win",
+"ventana -0/+8 instrucciones"
+],
+"0x141a5cc80": [
+"0x141a57880",
+"func",
+"funcion identica (656 bytes)"
+],
+"0x141a5cf10": [
+"0x141a57b10",
+"win",
+"ventana -0/+20 instrucciones"
+],
+"0x141a5d3a0": [
+"0x141a57fa0",
+"win",
+"ventana -0/+8 instrucciones"
+],
+"0x141a5dd30": [
+"0x141a58930",
+"win",
+"ventana -0/+8 instrucciones"
+],
+"0x141a605c0": [
+"0x141a5b1c0",
+"win",
+"ventana -0/+8 instrucciones"
+],
+"0x141a612d0": [
+"0x141a5bed0",
+"win",
+"ventana -0/+12 instrucciones"
+],
+"0x141a619d0": [
+"0x141a5c5d0",
+"win",
+"ventana -0/+12 instrucciones"
+],
+"0x141a61e40": [
+"0x141a5ca40",
+"win",
+"ventana -0/+8 instrucciones"
+],
+"0x141a62e20": [
+"0x141a5da20",
+"win",
+"ventana -0/+20 instrucciones"
+],
+"0x141a63d30": [
+"0x141a5e930",
+"win",
+"ventana -0/+12 instrucciones"
+],
+"0x141a64180": [
+"0x141a5ed80",
+"func",
+"funcion identica (871 bytes)"
+],
+"0x141a647f0": [
+"0x141a5f3f0",
+"win",
+"ventana -0/+8 instrucciones"
+],
+"0x141a66960": [
+"0x141a61560",
+"func",
+"funcion identica (539 bytes)"
+],
+"0x141a66b80": [
+"0x141a61780",
+"win",
+"ventana -0/+12 instrucciones"
+],
+"0x141a67300": [
+"0x141a61f00",
+"win",
+"ventana -0/+8 instrucciones"
+],
+"0x141a67e60": [
+"0x141a62a60",
+"win",
+"ventana -0/+8 instrucciones"
+],
+"0x141a68820": [
+"0x141a63420",
+"win",
+"ventana -0/+8 instrucciones"
+],
+"0x141a694d0": [
+"0x141a640d0",
+"win",
+"ventana -0/+8 instrucciones"
+],
+"0x141afd270": [
+"0x141af7a90",
+"func",
+"funcion identica (64 bytes)"
+],
+"0x141b42640": [
+"0x141794410",
+"icf",
+"ret 0 (plegada): 30 llamadas + 35268 ranuras de acuerdo"
+],
+"0x141ecd100": [
+"0x141ec4560",
+"win",
+"ventana -0/+12 instrucciones"
+],
+"0x141f05cd0": [
+"0x141efd420",
+"vecinos",
+"2 candidatos, 1 entre las funciones vecinas (delta -0x88b0/-0x88b0)"
+],
+"0x141f06920": [
+"0x141efe070",
+"func",
+"funcion identica (524 bytes)"
+],
+"0x141f06e10": [
+"0x141efe560",
+"func",
+"funcion identica (64 bytes)"
+],
+"0x141f95c60": [
+"0x141f8ce80",
+"func",
+"funcion identica (107 bytes)"
+],
+"0x141f95cd0": [
+"0x141f8cef0",
+"func",
+"funcion identica (107 bytes)"
+],
+"0x141f968e0": [
+"0x141f8db00",
+"vecinos",
+"2 candidatos, 1 entre las funciones vecinas (delta -0x8de0/-0x8de0)"
+],
+"0x141fa9d60": [
+"0x141fa0f90",
+"win",
+"ventana -0/+8 instrucciones"
+],
+"0x141ff6560": [
+"0x141fed8a0",
+"func",
+"funcion identica (79 bytes)"
+],
+"0x141ff65f0": [
+"0x141fed930",
+"func",
+"funcion identica (97 bytes)"
+],
+"0x141ff6660": [
+"0x141fed9a0",
+"func",
+"funcion identica (119 bytes)"
+],
+"0x141ff6700": [
+"0x141feda40",
+"func",
+"funcion identica (92 bytes)"
+],
+"0x14217c0b0": [
+"0x142173a70",
+"func",
+"funcion identica (76 bytes)"
+],
+"0x14217f830": [
+"0x140f5f2f0",
+"icf",
+"mov eax,0xd; ret (plegada): 5 llamadas + 9 ranuras"
+],
+"0x1423628c0": [
+"0x1405ce4e0",
+"icf",
+"printf vacio (plegada): 29 llamadas de acuerdo"
+],
+"0x1423f2ca0": [
+"0x1423ea560",
+"func",
+"funcion identica (72 bytes)"
+],
+"0x1423f3a60": [
+"0x1423eb320",
+"vecinos-exacto",
+"72 candidatos; el unico a la distancia de las funciones vecinas (-0x8740)"
+],
+"0x142538000": [
+"0x14252f000",
+"dato",
+".rdata: 3 refs, 3 resueltas, todas de acuerdo"
+],
+"0x1426edeb8": [
+"0x1426f7030",
+"dato+rtti",
+".?AVMenuEditPlAppearance@menu@@+0x0, 89 metodos (1.00: 89)"
+],
+"0x142704dd8": [
+"0x1426de188",
+"dato+rtti",
+".?AVMenuEditPlBodySetting@menu@@+0x0, 87 metodos (1.00: 87)"
+],
+"0x142708848": [
+"0x1426e1c48",
+"dato+rtti",
+".?AVMenuEditPlBodyPhysiqueSetting@menu@@+0x0, 87 metodos (1.00: 87)"
+],
+"0x1427d0350": [
+"0x1427c6660",
+"dato+rtti",
+".?AVColorPaletteWindow@menusystem@@+0x0, 74 metodos (1.00: 74)"
+],
+"0x142a11eb0": [
+"0x142a06630",
+"dato+rtti",
+".?AVPluginShadow@gr@fox@@+0x0, 18 metodos (1.00: 18)"
+],
+"0x142a1afd8": [
+"0x142a0f758",
+"dato+rtti",
+".?AVPluginSunlight@gr@fox@@+0x0, 18 metodos (1.00: 18)"
+],
+"0x142a2b520": [
+"0x142a1fca0",
+"rtti+rtti",
+".?AVAntiAliasing@plugins@dg@gr@fox@@+0x0, 10 metodos (1.00: 10)"
+],
+"0x142a48290": [
+"0x142a3ca10",
+"dato+rtti",
+".?AVDirectionalLightBody@grx@fox@@+0x0, 25 metodos (1.00: 25)"
+],
+"0x142a483e0": [
+"0x142a3cb60",
+"dato+rtti",
+".?AVSpotLightBody@grx@fox@@+0x0, 25 metodos (1.00: 25)"
+],
+"0x142a7deb8": [
+"0x142a72638",
+"dato+rtti",
+".?AVTimeOfDaySettingsBody@rd@cobra@@+0x0, 25 metodos (1.00: 25)"
+],
+"0x142aa4cd0": [
+"0x142a99450",
+"dato+rtti",
+".?AVCharacterRig@rd@cobra@@+0x0, 3 metodos (1.00: 3)"
+],
+"0x142aab948": [
+"0x142aa00c8",
+"rtti+rtti",
+".?AVSceneCharacterNode@rd@cobra@@+0x0, 13 metodos (1.00: 13)"
+],
+"0x142ab2f18": [
+"0x142aa7698",
+"rtti+rtti",
+".?AVDeltoidConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab2f50": [
+"0x142aa76d0",
+"dato+rtti",
+".?AVUpperArmConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab2f88": [
+"0x142aa7708",
+"dato+rtti",
+".?AVUpperArmSkinxConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab2fc0": [
+"0x142aa7740",
+"rtti+rtti",
+".?AVUpperArmSkinTxConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab2ff8": [
+"0x142aa7778",
+"rtti+rtti",
+".?AVSleeveConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab3068": [
+"0x142aa77e8",
+"dato+rtti",
+".?AVTrapeziusConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab30b0": [
+"0x142aa7830",
+"dato+rtti",
+".?AVWristConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab30e8": [
+"0x142aa7868",
+"rtti+rtti",
+".?AVElbowConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab3120": [
+"0x142aa78a0",
+"dato+rtti",
+".?AVForearmConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab3158": [
+"0x142aa78d8",
+"dato+rtti",
+".?AVForearmTxConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab3190": [
+"0x142aa7910",
+"rtti+rtti",
+".?AVNeckBackConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab31c8": [
+"0x142aa7948",
+"rtti+rtti",
+".?AVScmConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab3200": [
+"0x142aa7980",
+"dato+rtti",
+".?AVCollarConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab3238": [
+"0x142aa79b8",
+"dato+rtti",
+".?AVClavicleConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab3270": [
+"0x142aa79f0",
+"dato+rtti",
+".?AVRibConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab32a8": [
+"0x142aa7a28",
+"dato+rtti",
+".?AVPectConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab32e0": [
+"0x142aa7a60",
+"dato+rtti",
+".?AVBackConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab3328": [
+"0x142aa7aa8",
+"dato+rtti",
+".?AVUnderarmConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab3360": [
+"0x142aa7ae0",
+"rtti+rtti",
+".?AVUnderarmBackConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab3398": [
+"0x142aa7b18",
+"dato+rtti",
+".?AVScapulaConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab3430": [
+"0x142aa7bb0",
+"dato+rtti",
+".?AVBellyScaleConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab3470": [
+"0x142aa7bf0",
+"rtti+rtti",
+".?AVBellyFxConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab34a8": [
+"0x142aa7c28",
+"rtti+rtti",
+".?AVBellyOxConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab34e0": [
+"0x142aa7c60",
+"dato+rtti",
+".?AVBellyBaxConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab3518": [
+"0x142aa7c98",
+"rtti+rtti",
+".?AVHipConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab3550": [
+"0x142aa7cd0",
+"rtti+rtti",
+".?AVThighMainConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab3588": [
+"0x142aa7d08",
+"dato+rtti",
+".?AVThighConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab35c0": [
+"0x142aa7d40",
+"dato+rtti",
+".?AVPantsConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab35f8": [
+"0x142aa7d78",
+"dato+rtti",
+".?AVHemConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab3748": [
+"0x142aa7ec8",
+"rtti+rtti",
+".?AVLegConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab3780": [
+"0x142aa7f00",
+"rtti+rtti",
+".?AVKneeConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab37b8": [
+"0x142aa7f38",
+"rtti+rtti",
+".?AVKneebackConstraint@rd@cobra@@+0x0, 6 metodos (1.00: 6)"
+],
+"0x142ab4560": [
+"0x142aa8ce0",
+"dato+rtti",
+".?AVFaceRig@rd@cobra@@+0x0, 3 metodos (1.00: 3)"
+],
+"0x142b98c00": [
+"0x142b8cb20",
+"dato+rtti",
+".?AVHumanList@load@draw@@+0x0, 18 metodos (1.00: 18)"
+],
+"0x142ba7c68": [
+"0x142b9bb40",
+"dato+rtti",
+".?AVModelView@edit@@+0x0, 8 metodos (1.00: 8)"
+],
+"0x142cd50d8": [
+"0x142cc31f8",
+"rtti-col",
+".?AVMenuEditPlBodySetting@menu@@"
+],
+"0x142cd5c40": [
+"0x142cc4120",
+"rtti-col",
+".?AVMenuEditPlBodyPhysiqueSetting@menu@@"
+],
+"0x142da4618": [
+"0x142d986d8",
+"rtti-col",
+".?AVSceneCharacterNode@rd@cobra@@"
+],
+"0x142da5818": [
+"0x142d998d8",
+"rtti-col",
+".?AVDeltoidConstraint@rd@cobra@@"
+],
+"0x142da58b0": [
+"0x142d99970",
+"rtti-col",
+".?AVUpperArmConstraint@rd@cobra@@"
+],
+"0x142da5948": [
+"0x142d99a08",
+"rtti-col",
+".?AVUpperArmSkinxConstraint@rd@cobra@@"
+],
+"0x142da59e0": [
+"0x142d99aa0",
+"rtti-col",
+".?AVUpperArmSkinTxConstraint@rd@cobra@@"
+],
+"0x142da5a78": [
+"0x142d99b38",
+"rtti-col",
+".?AVSleeveConstraint@rd@cobra@@"
+],
+"0x142da5ba8": [
+"0x142d99c68",
+"rtti-col",
+".?AVTrapeziusConstraint@rd@cobra@@"
+],
+"0x142da5c40": [
+"0x142d99d00",
+"rtti-col",
+".?AVWristConstraint@rd@cobra@@"
+],
+"0x142da5cd8": [
+"0x142d99d98",
+"rtti-col",
+".?AVElbowConstraint@rd@cobra@@"
+],
+"0x142da5d70": [
+"0x142d99e30",
+"rtti-col",
+".?AVForearmConstraint@rd@cobra@@"
+],
+"0x142da5e08": [
+"0x142d99ec8",
+"rtti-col",
+".?AVForearmTxConstraint@rd@cobra@@"
+],
+"0x142da5ea0": [
+"0x142d99f60",
+"rtti-col",
+".?AVNeckBackConstraint@rd@cobra@@"
+],
+"0x142da5f38": [
+"0x142d99ff8",
+"rtti-col",
+".?AVScmConstraint@rd@cobra@@"
+],
+"0x142da5fd0": [
+"0x142d9a090",
+"rtti-col",
+".?AVCollarConstraint@rd@cobra@@"
+],
+"0x142da6068": [
+"0x142d9a128",
+"rtti-col",
+".?AVClavicleConstraint@rd@cobra@@"
+],
+"0x142da6100": [
+"0x142d9a1c0",
+"rtti-col",
+".?AVRibConstraint@rd@cobra@@"
+],
+"0x142da6198": [
+"0x142d9a258",
+"rtti-col",
+".?AVPectConstraint@rd@cobra@@"
+],
+"0x142da6230": [
+"0x142d9a2f0",
+"rtti-col",
+".?AVBackConstraint@rd@cobra@@"
+],
+"0x142da62c8": [
+"0x142d9a388",
+"rtti-col",
+".?AVUnderarmConstraint@rd@cobra@@"
+],
+"0x142da6360": [
+"0x142d9a420",
+"rtti-col",
+".?AVUnderarmBackConstraint@rd@cobra@@"
+],
+"0x142da63f8": [
+"0x142d9a4b8",
+"rtti-col",
+".?AVScapulaConstraint@rd@cobra@@"
+],
+"0x142da65b0": [
+"0x142d9a670",
+"rtti-col",
+".?AVBellyScaleConstraint@rd@cobra@@"
+],
+"0x142da6648": [
+"0x142d9a708",
+"rtti-col",
+".?AVBellyFxConstraint@rd@cobra@@"
+],
+"0x142da66e0": [
+"0x142d9a7a0",
+"rtti-col",
+".?AVBellyOxConstraint@rd@cobra@@"
+],
+"0x142da6778": [
+"0x142d9a838",
+"rtti-col",
+".?AVBellyBaxConstraint@rd@cobra@@"
+],
+"0x142da6810": [
+"0x142d9a8d0",
+"rtti-col",
+".?AVHipConstraint@rd@cobra@@"
+],
+"0x142da68a8": [
+"0x142d9a968",
+"rtti-col",
+".?AVThighMainConstraint@rd@cobra@@"
+],
+"0x142da6940": [
+"0x142d9aa00",
+"rtti-col",
+".?AVThighConstraint@rd@cobra@@"
+],
+"0x142da69d8": [
+"0x142d9aa98",
+"rtti-col",
+".?AVPantsConstraint@rd@cobra@@"
+],
+"0x142da6a70": [
+"0x142d9ab30",
+"rtti-col",
+".?AVHemConstraint@rd@cobra@@"
+],
+"0x142da6e08": [
+"0x142d9aec8",
+"rtti-col",
+".?AVLegConstraint@rd@cobra@@"
+],
+"0x142da6ea0": [
+"0x142d9af60",
+"rtti-col",
+".?AVKneeConstraint@rd@cobra@@"
+],
+"0x142da6f38": [
+"0x142d9aff8",
+"rtti-col",
+".?AVKneebackConstraint@rd@cobra@@"
+],
+"0x142e083e8": [
+"0x142dfbe98",
+"rtti-col",
+".?AVHumanList@load@draw@@"
+],
+"0x1434d1dc0": [
+"0x1434c3d50",
+"dato",
+".data: 1 refs, 1 resueltas, todas de acuerdo"
+],
+"0x143528f44": [
+"0x14351ae44",
+"dato",
+".data: 315 refs, 12 resueltas, todas de acuerdo"
+],
+"0x143702208": [
+"0x1436f3dc8",
+"dato",
+".data: 403 refs, 12 resueltas, todas de acuerdo"
+],
+"0x143714240": [
+"0x143705e10",
+"dato",
+".data: 14 refs, 12 resueltas, todas de acuerdo"
+],
+"0x14374cd94": [
+"0x14373e954",
+"bloque",
+"global sin referencia directa; los 7 globales vecinos (0x14374cd60..cda0) se mueven todos -0xE440"
+],
+"0x1437d2120": [
+"0x1437c3ce0",
+"dato",
+".data: 4 refs, 4 resueltas, todas de acuerdo"
+],
+"0x1437d4a20": [
+"0x1437c65e0",
+"dato",
+".data: 33 refs, 12 resueltas, todas de acuerdo"
+],
+"0x1437d5700": [
+"0x1437c72c0",
+"dato",
+".data: 1 refs, 1 resueltas, todas de acuerdo"
+],
+"0x1437d59e8": [
+"0x1437c75a8",
+"dato",
+".data: 12 refs, 10 resueltas, todas de acuerdo"
+],
+"0x1438040a8": [
+"0x1437f5c28",
+"dato",
+".data: 10 refs, 10 resueltas, todas de acuerdo"
+],
+"0x143a00000": [
+null,
+"dato-sinref",
+".data: 0 refs"
+],
+"0x146000000": [
+null,
+"fuera",
+""
+]
+}
