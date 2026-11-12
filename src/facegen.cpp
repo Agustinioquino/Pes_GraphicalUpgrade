@@ -403,9 +403,33 @@ static std::wstring FaceCacheVersion() {
         for (unsigned char ch : src) { h ^= ch; h *= 1099511628211ull; } }
     wchar_t b[20]; swprintf(b, 20, L"%08x", (unsigned)(h ^ (h >> 32))); v = b; return v;
 }
-static std::wstring FaceCachePath(const std::string& id, wchar_t k) {
-    return g_cfg.baseDir + L"hebras\\" + std::wstring(id.begin(), id.end()) + L"_" + FaceCacheVersion() + L"_" + k + L".dds";
+// (12/11, Agustin: "que se guarden los mapas con sider ... en una carpeta content") la cache va a la carpeta content de Sider:
+// <juego>\<carpeta de Sider>\content\PES21FX-hebras\ (la de Sider se busca como la carpeta del juego que tiene sider.ini y content;
+// primero "Dream Patch Sider"). Es solo una carpeta que lee la DLL: no hace falta ningun cpk.root en sider.ini. Sin Sider, PES21FX\hebras.
+// Al cargar se busca primero en content y despues en PES21FX\hebras (lo ya guardado antes sigue sirviendo).
+static bool DirExists(const std::wstring& p) { DWORD a = GetFileAttributesW(p.c_str()); return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY); }
+static const std::wstring& FaceCacheDir() {
+    static std::wstring d; static bool done = false;
+    if (done) return d; done = true;
+    std::wstring base = g_cfg.baseDir; while (!base.empty() && (base.back() == L'\\' || base.back() == L'/')) base.pop_back();
+    size_t sl = base.find_last_of(L"\\/"); std::wstring game = sl == std::wstring::npos ? std::wstring() : base.substr(0, sl + 1);
+    std::wstring content;
+    if (!game.empty()) {
+        if (DirExists(game + L"Dream Patch Sider\\content") && GetFileAttributesW((game + L"Dream Patch Sider\\sider.ini").c_str()) != INVALID_FILE_ATTRIBUTES) content = game + L"Dream Patch Sider\\content\\";
+        else { WIN32_FIND_DATAW fd; HANDLE h = FindFirstFileW((game + L"*").c_str(), &fd);
+            if (h != INVALID_HANDLE_VALUE) { do { if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || fd.cFileName[0] == L'.') continue;
+                std::wstring sd = game + fd.cFileName + L"\\";
+                if (DirExists(sd + L"content") && GetFileAttributesW((sd + L"sider.ini").c_str()) != INVALID_FILE_ATTRIBUTES) { content = sd + L"content\\"; break; }
+            } while (FindNextFileW(h, &fd)); FindClose(h); } }
+    }
+    if (!content.empty()) { d = content + L"PES21FX-hebras\\"; CreateDirectoryW(d.c_str(), nullptr); if (!DirExists(d)) d.clear(); }
+    if (d.empty()) d = g_cfg.baseDir + L"hebras\\";
+    Log("hebras: los mapas de las caras se guardan en %ls", d.c_str());
+    return d;
 }
+static std::wstring FaceCacheName(const std::string& id, wchar_t k) { return std::wstring(id.begin(), id.end()) + L"_" + FaceCacheVersion() + L"_" + k + L".dds"; }
+static std::wstring FaceCachePath(const std::string& id, wchar_t k) { return FaceCacheDir() + FaceCacheName(id, k); }
+static std::wstring FaceCacheOldPath(const std::string& id, wchar_t k) { return g_cfg.baseDir + L"hebras\\" + FaceCacheName(id, k); }
 static bool FaceCacheCheckFile(const std::wstring& p, UINT w, UINT h) {   // cabecera DDS + medidas + tamano completo del mip 0
     FILE* f = _wfopen(p.c_str(), L"rb"); if (!f) return false;
     uint32_t hd[32] = {}; size_t n = fread(hd, 4, 32, f); fseek(f, 0, SEEK_END); long sz = ftell(f); fclose(f);
@@ -418,6 +442,7 @@ static bool FaceCacheLoad(ID3D11DeviceContext* c, const std::string& id, UINT w,
     bool ok = true;
     for (int i = 0; i < 4 && ok; i++) {
         std::wstring p = FaceCachePath(id, ks[i]);
+        if (!FaceCacheCheckFile(p, ws[i], hs[i])) p = FaceCacheOldPath(id, ks[i]);   // (12/11) lo guardado antes en PES21FX\\hebras
         if (!FaceCacheCheckFile(p, ws[i], hs[i])) { ok = false; break; }
         ID3D11Resource* r = nullptr;
         if (FAILED(DirectX::CreateDDSTextureFromFile(g_dev.dev, c, p.c_str(), &r, &v[i])) || !v[i]) { ok = false; if (r) r->Release(); break; }
@@ -431,7 +456,7 @@ static bool FaceCacheLoad(ID3D11DeviceContext* c, const std::string& id, UINT w,
 static std::vector<std::string> s_saveQ;   // (12/11) caras generadas que faltan guardar en PES21FX\hebras
 static void FaceCacheSave(ID3D11DeviceContext* c, const FaceEntry& e) {
     if (e.id.empty() || g_cfg.live[416][2] < 0.5f || FaceCacheVersion().empty() || !e.a || !e.b || !e.c || !e.d) return;
-    CreateDirectoryW((g_cfg.baseDir + L"hebras").c_str(), nullptr);
+    CreateDirectoryW(FaceCacheDir().c_str(), nullptr);
     const wchar_t ks[4] = { L'a', L'b', L'c', L'd' }; ID3D11ShaderResourceView* v[4] = { e.a, e.b, e.c, e.d };
     int good = 0;
     for (int i = 0; i < 4; i++) {
@@ -443,7 +468,7 @@ static void FaceCacheSave(ID3D11DeviceContext* c, const FaceEntry& e) {
         else { DeleteFileW(tmp.c_str()); Log("hebras: cara %s: el mapa %c NO se guardo bien (0x%08X): se vuelve a generar la proxima vez", e.id.c_str(), (char)ks[i], (unsigned)hr); }
     }
     if (good < 4) for (int i = 0; i < 4; i++) DeleteFileW(FaceCachePath(e.id, ks[i]).c_str());   // todo o nada: nunca una cara a medias
-    else Log("hebras: cara %s: 4 mapas guardados y verificados en PES21FX\\hebras (version %ls)", e.id.c_str(), FaceCacheVersion().c_str());
+    else Log("hebras: cara %s: 4 mapas guardados y verificados en %ls (version %ls)", e.id.c_str(), FaceCacheDir().c_str(), FaceCacheVersion().c_str());
 }
 
 // en Present, contexto inmediato: genera hasta 2 caras por cuadro
@@ -595,7 +620,7 @@ void FaceGenPresent() {
                 e.w = r.w; e.h = r.h;
                 // 18/10 pelo: identidad de la cara, tipo de pelo (PES21FX_hair.ini) y mapa de pelo propio (PES21FX\hair\<id>.dds)
                 e.id = preId;
-                if (loaded) Log("hebras: cara %s: mapas cargados de PES21FX\\hebras (sin generar)", e.id.c_str());
+                if (loaded) Log("hebras: cara %s: mapas cargados de la cache (sin generar)", e.id.c_str());
                 else if (!e.id.empty()) s_saveQ.push_back(e.id);   // (12/11) se guarda despues, de a una cara cada medio segundo (antes 2 por cuadro al entrar al partido = tirones)
                 if (!e.id.empty()) CarasHdNewFace(c, e.id, r.in);   // (04/11) caras en alta: volcar originales / buscar las reescaladas
                 if (!e.id.empty()) {
