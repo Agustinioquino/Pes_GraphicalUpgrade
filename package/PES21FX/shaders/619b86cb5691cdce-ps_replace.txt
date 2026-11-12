@@ -105,6 +105,57 @@ void main(
   float4 P11 = IniParams.Load(int2(11,0));   // x11 niebla, y11 calidez ambiente piel, z11 AO color piel, w11 on
   bool cmpOn = P11.w > 0.5;
   bool mouthM = false;   // (09/11 hilo boca) interior de la boca VISIBLE (la mascara guarda su profundidad: donde la cara la tapo, no)
+  // === PES21 (12/11 20:30, Agustin: "puedes hacer que la pelota se asiente mas al pasto sin modificar la fisica?") x443 PASTO DELANTE DE LA
+  // PELOTA (y443 de los botines): las hojas que quedan entre la camara y la base de la pelota la tapan. Lo de la pelota / el botin que queda
+  // por debajo del alto de las hojas (w296 en mm; x443 = 1 hasta el corte, 2 = el doble: se ve mas hundida; botines 0.6 de eso x y443)
+  // muestra el pasto que tiene justo abajo en pantalla (la cancha de adelante, con su misma luz, franjas, desgaste y sombra), con el borde
+  // dentado de las puntas (una hoja cada ~4 mm, fijo en el mundo). El alto del pixel sale de su profundidad (exacto y del mismo cuadro): la
+  // fisica no se toca y en el aire no pasa nada. De muy cerca (hojas 3D, menos de ~1 mm por pixel) las hojas reales ya la tapan y se apaga.
+  // Solo lo que no mira hacia arriba (la base, no un piso). RT2.w (aadffecf): 1 pelota, 0.7 botines. Se toma ese pixel de pasto entero (v0)
+  float pesCovDk = 1.0;
+  { float4 P443 = IniParams.Load(int2(443,0));
+    if (cmpOn && (P443.x > 0.001 || P443.y > 0.001) && IniParams.Load(int2(104,0)).x > 0.5 && IniParams.Load(int2(407,0)).x < 0.5) {
+      float2 uvB = g_psSystem.m_renderBuffer.zw * v0.xy;
+      float4 gmB = inGBufferMaterial.SampleLevel(g_samplerPoint_Clamp_s, uvB, 0);
+      int tyB = (int)((uint)(inGBufferNormal.SampleLevel(g_samplerPoint_Clamp_s, uvB, 0).z * 1023 + 0.5) & 15);
+      if (tyB == 1 && gmB.w > 0.5) {
+        float kCv = gmB.w > 0.85 ? clamp(P443.x, 0.0, 2.0) : 0.6 * clamp(P443.y, 0.0, 2.0);
+        float zB = PESLinZ(uvB);
+        if (kCv > 0.001 && zB > 0.1 && zB < 90.0) {
+          float3 upB = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
+          { float3 LdB = pLc_dir.xyz; if (dot(LdB, LdB) > 1e-6 && dot(LdB, upB) < 0) upB = -upB; }
+          float3 PB = float3(((uvB * float2(2, -2) + float2(-1, 1)) - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zB, zB);
+          float hB = g_psScene.m_eyepos.y + dot(PB, upB);                        // altura del pixel sobre la cancha (m)
+          float mmB = IniParams.Load(int2(296,0)).w; mmB = mmB > 1.0 ? clamp(mmB, 15.0, 80.0) : 28.0;
+          float pxB = abs(2.0 * g_psScene.m_projectionParam.y * zB * g_psSystem.m_renderBuffer.w);   // metros que mide un pixel a esa distancia
+          float topB = mmB * 0.001 * kCv * smoothstep(0.0007, 0.0016, pxB);
+          float3 NB = PESDecN(uvB); NB.z = -NB.z;
+          if (topB > 0.002 && hB > -0.03 && hB < topB && dot(NB, upB) < 0.6) {
+            float3 vXB = float3(g_psScene.m_view._m00, g_psScene.m_view._m01, g_psScene.m_view._m02), vZB = float3(g_psScene.m_view._m20, g_psScene.m_view._m21, g_psScene.m_view._m22);
+            float2 wB = g_psScene.m_eyepos.xz + float2(dot(PB, vXB), dot(PB, vZB));
+            float2 cB = floor(wB * 250.0);
+            float2 qB = frac(cB * float2(0.1031, 0.1030)); qB += dot(qB, qB.yx + 33.33);
+            float tipB = topB * (0.70 + 0.30 * frac((qB.x + qB.y) * qB.x));   // la punta de cada hoja (azar sin seno: estable lejos del centro)
+            if (hB < tipB) {
+              float bandPx = topB / max(pxB, 1e-5);
+              [loop] for (int iB = 0; iB < 4; iB++) {
+                float offB = floor(1.5 + bandPx * (0.5 + 0.7 * (float)iB));
+                float2 uvT = uvB + float2(0.0, offB * g_psSystem.m_renderBuffer.w);
+                if (uvT.y >= 1.0) break;
+                int tyT = (int)((uint)(inGBufferNormal.SampleLevel(g_samplerPoint_Clamp_s, uvT, 0).z * 1023 + 0.5) & 15);
+                float zT = PESLinZ(uvT);
+                if (tyT == 3 && zT < zB + 0.3 && zT > zB - 1.5 - 0.05 * zB) {
+                  v0.y += offB;
+                  pesCovDk = lerp(0.78, 0.95, saturate(hB / max(tipB, 1e-4)));   // mas abajo, mas a la sombra de la pelota
+                  break;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
   { uint mmW = 0, mmH = 0; PESMouth.GetDimensions(mmW, mmH); if (mmW > 0) {
     uint2 mmP = min((uint2)v0.xy, uint2(mmW - 1, mmH - 1));
     float mmZ = PESMouth.Load(int3(mmP, 0)), mmD = inDepth.Load(int3(mmP, 0)).x;
@@ -1315,6 +1366,7 @@ void main(
       r0.xyw = r0.xyw * (1.0 - 0.35 * saturate(B)) + albL * (B * 2500.0 * g_psScene.m_exposure.z * angK);
     }
   }
+  r0.xyw *= pesCovDk;   // (12/11 20:30) x443: el pasto delante de la base de la pelota, algo a su sombra
   r0.z = log2(r0.z);
   r0.z = g_psScene.m_fogParam[2].y * r0.z;
   r0.z = r0.z * 0.693147182 + g_psScene.m_fogParam[2].z;

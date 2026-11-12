@@ -616,7 +616,7 @@ void PitchWearNotePlayer(ID3D11DeviceContext* c) {
 // indice del dibujo para reconocer la pelota en Present; devuelve el b12 a enlazar si este dibujo ya es "la pelota" (con manchas) o nullptr
 ID3D11Buffer* PitchBallDrawNote(ID3D11DeviceContext* c, UINT verts) {
     if (!g_dev.dev || verts == 0) return nullptr;
-    const bool ballOn = g_cfg.live[177][0] >= 0.001f, bootOn = BootAmt() >= 0.001f;   // (11/11 4wp0pj) tambien se anota para los botines sucios
+    const bool ballOn = g_cfg.live[177][0] >= 0.001f || g_cfg.live[443][0] >= 0.001f, bootOn = BootAmt() >= 0.001f;   // (11/11 4wp0pj) tambien se anota para los botines sucios; (12/11 20:30) y para x443 (pasto delante de la pelota: la marca RT2.w de la pelota)
     const bool footOn = FootOn();   // (12/11 16:50) y para las pisadas reales
     s_bdCalls++; if (!ballOn && !bootOn && !footOn) { s_bdOffX177++; return nullptr; }
     UINT bi = s_ballIdx.load(std::memory_order_relaxed); int slot = -1; const UINT key = bootOn ? BootKey(c, verts) : 0u;

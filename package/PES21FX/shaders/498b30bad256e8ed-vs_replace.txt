@@ -636,12 +636,14 @@ void main(
     float lnL = length(pesClumpLean);
     if (kM > 0.001 && lnL > 1e-4) pesYaw = frac(atan2(pesClumpLean.y, pesClumpLean.x) * 0.15915494 + 1.0);
   }
+  float pesLiveW = 0.0;   // (12/11 20:30) desgaste en vivo en la raiz (z443 lineas gastadas, w443 franjas que se borran)
   if (pesV3) {
     float4 Q6 = IniParams.Load(int2(106, 0)), Q7 = IniParams.Load(int2(107, 0));
     float2 puv = pesRoot * cb4[1].xy + cb4[1].zw;
     pesPm = PESPitchMeters(puv);
     pesWShort = pesNatV && abs(pesPm.x) < 55.5 && abs(pesPm.y) < 37.0;
     float pesLive = PESWearTest(PESWearMap.SampleLevel(g_samplerLinear_Clamp_s, puv, 0).x, puv, pesRoot);   // desgaste en vivo (mapa de la DLL, t8); (12/11) + prueba x437
+    pesLiveW = pesLive;
     pesWear = PESWear(pesPm, pesRoot, Q4.w, Q7.x, Q7.z, pesLive);
     pesZone = PESGrassZones(pesRoot, Q6.x);
     int tipo = (int)(Q4.y + 0.5);
@@ -713,6 +715,7 @@ void main(
       float4 gt = g_tex_grain.SampleLevel(g_samplerLinear_Clamp_s, puv, 0);
       float3 gr = normalize(gt.xzy * 2.0 - 1.0);
       if (Q5e.x > 0.5) gr = PESMowGrain(pesPm, gr, Q5e.x, Q5e.y, 0.55 * clamp(Q5e.z, 0.2, 3.0));
+      gr = PESTrampleGrain(gr, pesRoot, pesLiveW);   // (12/11 20:30) w443: pisoteado, acostado para cualquier lado
       pesLean += gr.xz * 0.7 * saturate(Q8.z);
       float tw = IniParams.Load(int2(23, 0)).z;
       float ang = radians(IniParams.Load(int2(84, 0)).z);
@@ -919,6 +922,7 @@ void main(
     // del trazo o dejan entrar el verde (ruido de ~10 cm sobre la cobertura) y un borde mas ancho de hojas a medio pintar (el PS les pinta
     // la punta y deja la base verde)
     if (pesNatV) covR = saturate(covR + (PESGnoise(pesRoot * 9.0 + 0.71) - 0.5) * 0.30 * saturate(covR * 4.0) * saturate((1.0 - covR) * 4.0 + 0.25));
+    covR *= PESLineWearK(pesRoot, pesLiveW);   // (12/11 20:30) z443 lineas gastadas: las hojas del raspon quedan verdes, como la base
     pesPaint = saturate((covR - thr) * (pesNatV ? 4.5 : 8.0) + 0.5) * (hP > (pesNatV ? 0.97 : 0.93) ? 0.2 : 1.0);
     // (27/10 j) solo de cerca / media distancia (>= 60-90 px/m): lejos las hojas pintadas, paradas y sueltas sobre la linea, la dejaban punteada;
     // ahi vuelven a hundirse (y292) y la linea la pinta el suelo
@@ -1140,6 +1144,7 @@ void main(
   if (pesV3) {   // PES21 pasto v3: patron de corte sintetizado (misma funcion que en la base de la cancha)
     float4 Q5 = IniParams.Load(int2(105, 0));
     if (Q5.x > 0.5) { r2.xyz = PESMowGrain(pesPm, r2.xyz, Q5.x, Q5.y, 0.55 * clamp(Q5.z, 0.2, 3.0)); pesGrain = r2.xyz; }
+    r2.xyz = PESTrampleGrain(r2.xyz, pesRoot, pesLiveW); pesGrain = r2.xyz;   // (12/11 20:30) w443 franjas que se borran donde se juega (como la base)
   }
   r5.xyz = r2.xyz * float3(0, 0, 1);
   r5.xyz = r2.zxy * float3(0, 1, 0) - r5.xyz;
