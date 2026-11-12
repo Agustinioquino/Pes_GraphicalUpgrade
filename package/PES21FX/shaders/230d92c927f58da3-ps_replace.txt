@@ -482,7 +482,7 @@ void main(
     float dd = nh * nh * (a4 - 1) + 1;
     float D2 = a4 / (3.14159 * dd * dd);
     float F2 = 0.028 + 0.972 * pow(1 - saturate(dot(V2, H2)), 5);
-    float sharp = D2 * F2 * nl2 * 0.25 * P5.y;
+    float sharp = D2 * F2 * nl2 * PESSkinVis(nl2, saturate(dot(n2, V2)), a4) * P5.y;
     r0.xyz += sharp * PESSunColor() * g_psScene.m_exposure.zzz * shadowScalar * PESSkinSharpOcc(specInt, w5k);
   }
   { float dbgW12 = IniParams.Load(int2(12,0)).w; if (dbgW12 > 3.5 && dbgW12 < 4.5) { float lum = dot(o0.xyz, float3(0.2126, 0.7152, 0.0722)); o0.xyz = lerp(o0.xyz, float3(10.0, 0.0, 0.0), saturate((1.0 - csDbg) * 3.0)); r0.xyz = 0; } }   // diagnostico 4: sombras de contacto

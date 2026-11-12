@@ -1108,7 +1108,7 @@ void main(
     float dd = nh * nh * (a4 - 1) + 1;
     float D2 = a4 / (3.14159 * dd * dd);
     float F2 = 0.028 + 0.972 * pow(1 - saturate(dot(V2, H2)), 5);
-    float sharp = D2 * F2 * nl2 * 0.25 * P5.y * eF;
+    float sharp = D2 * F2 * nl2 * PESSkinVis(nl2, saturate(dot(n2, V2)), a4) * P5.y * eF;
     r1.xyz += sharp * PESSunColor() * g_psScene.m_exposure.zzz * shadowScalar * PESSkinSharpOcc(specInt, w5k);
   }
   // diagnostico w12 = 3 sobre piel: magenta = es piel pero no se midio el grosor (sin cascada / transmision apagada);

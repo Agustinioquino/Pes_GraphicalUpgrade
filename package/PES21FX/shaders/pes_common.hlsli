@@ -168,6 +168,15 @@ float PESSkinSharpRough(float roughG, float k)
   float r = clamp(roughG * 0.45, 0.12, 0.32);
   return lerp(0.18, r, saturate(k));
 }
+// (12/11, piel v2 w124) visibilidad de Smith-GGX correlacionada (Heitz 2014, la de UE5 / Filament) del lobulo fino. Sin v2 queda el
+// 0.25 fijo de antes, que es el valor justo solo de frente: con luz rasante y en el borde de la cara el brillo quedaba corto. La
+// usan las 7 pasadas del sol y pes_skinlight (focos), asi el brillo fino es el mismo con cualquier luz
+float PESSkinVis(float nl, float nv, float a4)
+{
+  if (IniParams.Load(int2(124, 0)).w < 0.5) return 0.25;
+  nl = max(nl, 1e-3); nv = max(nv, 1e-3);
+  return min(0.5 / max(nl * sqrt(nv * nv * (1.0 - a4) + a4) + nv * sqrt(nl * nl * (1.0 - a4) + a4), 1e-4), 1.0);
+}
 // oclusion del lobulo fino: el piso de 0.3 hacia brillar el fondo de pliegues y comisuras aunque la cara bajara ahi la
 // intensidad especular (cavidades x35 / t23). Con k = 1 el piso se apaga solo donde la intensidad cae casi a cero.
 float PESSkinSharpOcc(float specInt, float k)

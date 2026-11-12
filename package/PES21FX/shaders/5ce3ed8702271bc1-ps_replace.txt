@@ -1,4 +1,7 @@
 // PES 2021 - Piel de cara (G-buffer) - version mejorada
+// (12/11) UN SOLO CODIGO para las dos variantes de la cara: ce188ae110354aea (cara con animacion facial, primeros planos, VS
+// 455eb97b) es este mismo archivo con PES_FACE_UV2 (firma con dos UV: .xy difusa, .zw el resto; TEXCOORD9 al final). Antes eran
+// dos copias de 1100 lineas que habia que cambiar a la par. Sin PES_FACE_UV2 uvD = v2 (la difusa usa la misma UV).
 // Hash original: 5ce3ed8702271bc1  (volcado con 3Dmigoto 1.3.16)
 //
 // Este shader NO ilumina: escribe el G-buffer que despues usa la pasada de luz.
@@ -137,6 +140,7 @@ Texture2D<float4> StereoParams : register(t125);
 #include "pes_pores.hlsli"   // (27/10 c) poros triplanares sobre la posicion de reposo
 #include "pes_collar.hlsli"   // (27/10) cuello de las caras reales fundido con el torso (fila 322)
 #include "pes_wrdepth.hlsli"   // (09/11 g) arrugas por gesto con profundidad (t45 / t46, x15 = 2) y edad del jugador
+#include "pes_skin2.hlsli"     // (12/11) PIEL v2 (w124): color, sangre, cavidades, rugosidad y brillo rehechos
 #ifdef PES_HL_ACC
 RWByteAddressBuffer gHlAcc : register(u7);   // (24/10 e) medicion del color de la cara (ring.cpp / skintone.cpp; u5 / u6 son las semillas de las cejas)
 #endif
@@ -200,13 +204,21 @@ float4 SweatLayer(float2 uv, float cells, float amount, float size, float t, boo
 void main(
   float4 v0 : SV_Position0,
   float4 v1 : COLOR0,
+#ifdef PES_FACE_UV2
+  float4 v2in : TEXCOORD0,   // ce188: UV de la cara en .zw (en 5ce3 es float2 v2); .xy = segundo UV
+#else
   float2 v2 : TEXCOORD0,
   float2 w2 : TEXCOORD9,
+#endif
   float4 v3 : TEXCOORD4,
   float4 v4 : TEXCOORD5,
   float4 v5 : TEXCOORD6,
   float4 v6 : TEXCOORD7,
   float4 v7 : TEXCOORD8,
+#ifdef PES_FACE_UV2
+  float2 w2 : TEXCOORD9,   // PES21 (19/10 c): AL FINAL. En ce188 el VS (455eb97bc2c3a958) saca TEXCOORD9 en su propio registro (v8),
+                           // despues de TEXCOORD8; declarado antes corria todos los registros uno y la cara salia rayada. (27/10 j: float2 como el VS)
+#endif
   float4 pR : TEXCOORD10,   // (27/10 j) posicion de reposo (x, y, z) del VS de la cabeza, w = 11
   float4 pD : TEXCOORD11,   // (01/11 j) gesto respecto de la cabeza rigida (marco de reposo), w = 12
   out float4 o0 : SV_Target0,
@@ -215,6 +227,14 @@ void main(
   out float4 o3 : SV_Target3,
   out float4 o4 : SV_Target4)
 {
+#ifdef PES_FACE_UV2
+  float2 v2 = v2in.zw;   // PES21 (19/10): variante de la cara con animacion facial (primeros planos)
+  float2 uvD = v2in.xy;  // PES21 (19/10 b): en el original la DIFUSA (t0) se lee con TEXCOORD0.xy y el resto (normal, srm, suciedad,
+                         // animacion, mascaras) con .zw. Las caras genericas de Konami (VS 455eb97bc2c3a958) traen dos UV distintos:
+                         // con un solo UV la difusa salia como un barrido diagonal.
+#else
+  float2 uvD = v2;       // 5ce3: una sola UV
+#endif
   float4 r0,r1,r2,r3,r4;
   uint4 bitmask, uiDest;
   float4 fDest;
@@ -234,6 +254,7 @@ void main(
   float tmin = IniParams.Load(int2(10,0)).x;   // minutos reales de partido (los calcula d3dx.ini)
   float sweatProg = saturate((tmin - P9.x) / max(P9.y - P9.x, 0.1));
   bool  enhance      = P0.w > 0.5;
+  bool  sk2          = enhance && PesSk2On();   // (12/11) piel v2 (pes_skin2.hlsli); 0 = la de antes
   float sssBoost     = enhance ? P0.x : 1.0;
   float albedoSat    = enhance ? P0.y : 1.0;
   float specScale    = enhance ? P0.z : 1.0;
@@ -391,7 +412,8 @@ void main(
   }
 
   // ---- normal de detalle + normal de animacion ----
-  { uint cW, cH, cL; g_tex_normal.GetDimensions(0, cW, cH, cL); float capN = faceCap > 1.0 ? max(0.0, log2((float)max(cW, cH) / faceCap)) : 0.0; faceBN = max(faceBN, capN - g_tex_normal.CalculateLevelOfDetail(g_samplerAnisotropic_Clamp_s, v2.xy)); }
+  float pesLodN = g_tex_normal.CalculateLevelOfDetail(g_samplerAnisotropic_Clamp_s, v2.xy);   // (12/11) fuera de las ramas (tambien la usan las cavidades v2)
+  { uint cW, cH, cL; g_tex_normal.GetDimensions(0, cW, cH, cL); float capN = faceCap > 1.0 ? max(0.0, log2((float)max(cW, cH) / faceCap)) : 0.0; faceBN = max(faceBN, capN - pesLodN); }
   r1.xyz = g_tex_normal.SampleBias(g_samplerAnisotropic_Clamp_s, v2.xy, faceBN).xyw;
   r1.x = r1.x * r1.z;
   r1.xy = r1.xy * float2(2,2) + float2(-1,-1);
@@ -570,7 +592,22 @@ void main(
   // donde la normal se inclina mucho la superficie esta dentro de un hueco y le llega menos luz. x35 fuerza, w35 on/off
   float4 P35 = IniParams.Load(int2(35,0));
   float pesCav = 1.0;
-  if (P35.w > 0.5) {
+  if (P35.w > 0.5 && sk2) {
+    // (12/11) piel v2: CONCAVIDAD de verdad. La inclinacion (abajo) oscurece las dos laderas de cualquier relieve (tambien las
+    // crestas de la oreja y el lomo de la nariz) y, como r1 ya trae arrugas y poros, cada poro inclinado manchaba el color. Aca se
+    // mide la divergencia del normal map solo (sin poros ni arrugas) a 4 mm de piel (~30 cm de cabeza por vuelta de UV), en un mip
+    // nunca mas fino que el pixel: hueco = las normales se miran entre si (divergencia negativa); cresta o pendiente = nada.
+    // De lejos, cuando el pixel ya es mas grande que 4 mm, el mip promedia los dos lados y la cavidad se apaga sola
+    uint cW, cH, cL; g_tex_normal.GetDimensions(0, cW, cH, cL);
+    const float dUV = 4.0 / 300.0;
+    float lc = max(pesLodN, log2(dUV * (float)max(cW, cH)) - 1.0);
+    float4 na = g_tex_normal.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy + float2(dUV, 0.0), lc);
+    float4 nb = g_tex_normal.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy - float2(dUV, 0.0), lc);
+    float4 nc = g_tex_normal.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy + float2(0.0, dUV), lc);
+    float4 nd = g_tex_normal.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy - float2(0.0, dUV), lc);
+    float dvg = (na.x * na.w - nb.x * nb.w) * wrTS.x + (nc.y - nd.y) * wrTS.y;   // (n(+4 mm) - n(-4 mm)) / 2, con el signo de la UV
+    pesCav = 1.0 - saturate(P35.x) * saturate(-dvg * 2.5);
+  } else if (P35.w > 0.5) {
     float tilt = saturate(1.0 - r1.z);                       // 0 = plano, crece en los pliegues
     pesCav = 1.0 - saturate(P35.x) * smoothstep(0.02, 0.35, tilt) * 0.68;   // (04/11) 0.55 -> 0.68: forma mas definida en la sombra
   }
@@ -593,11 +630,16 @@ void main(
   float4 P147 = IniParams.Load(int2(147,0));
   float pesEdge = 0.0;
   {
-    // (20/10 b) en este shader NO: las genericas en partido usan una sola malla para toda la cabeza (textura de 1024 con el
+    // (20/10 b) en 5ce3 NO: las genericas en partido usan una sola malla para toda la cabeza (textura de 1024 con el
     // montaje ya pegado en el plano de la cabeza), sin pieza aparte para el cuello. Fundir el borde aca le sacaba la mascara de
     // pelo de la quinta textura al cuero cabelludo (el pelo rapado se veia gris y brilloso). Solo aplica a ce188 (dos UV).
+#ifdef PES_FACE_UV2
+    bool gen = enhance && P147.x > 0.5 && any(abs(uvD - v2) > 0.003);   // dos UV distintos = montaje generico (la difusa va en el uv del montaje)
+    float2 gr = uvD;
+#else
     bool gen = false;
     float2 gr = float2(0.5, 0.5);
+#endif
     float dE = min(min(gr.x, 1.0 - gr.x), min(gr.y, 1.0 - gr.y)) * 0.7044;   // distancia al borde en el plano de la cabeza
     pesEdge = gen ? 1.0 - smoothstep(0.012, 0.07, dE) : 0.0;
   }
@@ -623,12 +665,12 @@ void main(
   sweatProgZ = max(sweatProgZ, rainK * 0.6);
   if (enhance && P9.z > 0) {
     // vello facial pintado (barba, cejas, bigote): mascara por color oscuro y poco saturado
-    float3 albE = g_tex_diffuse.Sample(g_samplerAnisotropic_Clamp_s, v2.xy).xyz;
+    float3 albE = g_tex_diffuse.Sample(g_samplerAnisotropic_Clamp_s, uvD).xyz;
     float lumE = dot(albE, float3(0.2126, 0.7152, 0.0722));
     float mxE = max(albE.r, max(albE.g, albE.b)), mnE = min(albE.r, min(albE.g, albE.b));
     float satE = (mxE - mnE) / max(mxE, 1e-3);
     // relativo al tono de piel local (mip alto = color medio de la zona): sirve para pieles claras y oscuras
-    float3 albA = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy, 5.0).xyz;
+    float3 albA = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, uvD, 5.0).xyz;
     float lumA = dot(albA, float3(0.2126, 0.7152, 0.0722));
     float ratioE = lumE / max(lumA, 0.005);
     fhMask = smoothstep(0.62, 0.38, ratioE) * smoothstep(0.15, 0.06, lumE) * smoothstep(0.45, 0.20, satE) * saturate(P9.z);
@@ -652,7 +694,9 @@ void main(
     wrFold *= fhK; wrFoldW *= fhK; wrRidgeF *= fhK; wrRidgeW *= fhK; shFold *= fhK; shFoldW *= fhK; shRidge *= fhK;
     exFoldZ *= fhK; exRidgeZ *= fhK; }   // (10/11, hilo arrugas) la sangre / palidez del pliegue tampoco sobre la barba pintada
   float poreAmt = 0;
-  if (enhance) {
+  // (12/11) en la piel v2 NO: era ruido sobre la UV (estirado donde la UV se estira) activo hasta celdas de 0.7 pixel, encima de los
+  // poros v5 por zona: a media distancia quedaba como granito y manchas en el brillo
+  if (enhance && !sk2) {
     // poros y microrrelieve de la piel (se apaga a distancia para no titilar)
     float fw = max(length(ddx(v2.xy)), length(ddy(v2.xy))) * 1400.0;
     poreAmt = saturate(1.5 - fw) * (1.0 - fhMask);
@@ -708,16 +752,16 @@ void main(
   { uint cW, cH, cL; g_tex_srm.GetDimensions(0, cW, cH, cL); float capS = faceCap > 1.0 ? max(0.0, log2((float)max(cW, cH) / faceCap)) : 0.0; faceBS = max(faceBD, capS - g_tex_srm.CalculateLevelOfDetail(g_sampler_srm_s, v2.xy)); g_tex_diffuse.GetDimensions(0, cW, cH, cL); capD = faceCap > 1.0 ? max(0.0, log2((float)max(cW, cH) / faceCap)) : 0.0; }
   r0.zw = g_tex_srm.SampleBias(g_sampler_srm_s, v2.xy, faceBS).xy;
   float pesSpec0 = r0.z, pesSrmY = r0.w;   // (20/10) valores del juego, para el borde de las genericas
-  r1.w = g_tex_diffuse.CalculateLevelOfDetail(g_samplerAnisotropic_Clamp_s, v2.xy);
+  r1.w = g_tex_diffuse.CalculateLevelOfDetail(g_samplerAnisotropic_Clamp_s, uvD);
   r1.w = clamp(r1.w + faceBD, capD, max(5.0, capD));
-  r2.xyz = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy, r1.w).xyz;
+  r2.xyz = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, uvD, r1.w).xyz;
   // (07/11, Agustin: "borrar la textura plana de las cejas y reemplazarlas por las cejas en hebras") de cerca, donde las hebras se
   // dibujan, la ceja PINTADA se borra del albedo y se rellena con la piel de alrededor (la mas clara de 8 puntos a ~1.2 cm, mip 3,
   // como el mapa de la ceja de pes_browmap_ps) mezclada con el promedio local; de lejos (sin hebras) la pintura vuelve sola, con el
   // mismo corte de distancia que el GS (y75). x382 = cuanto se borra (0 = como siempre), y382 = corrimiento del corte en mips
   { float4 PE = IniParams.Load(int2(382, 0));
     if (fgOk && PE.x > 0.001 && IniParams.Load(int2(74, 0)).x > 0.5) {
-      float4 bm = pesBrowMap.SampleLevel(g_samplerLinear_Clamp_s, v2.xy, 0);
+      float4 bm = pesBrowMap.SampleLevel(g_samplerLinear_Clamp_s, uvD, 0);
       if (bm.a > 0.02) {
         float twB, thB; g_tex_diffuse.GetDimensions(twB, thB);
         float texelM = 0.3 / max(twB, 1.0);                                    // ~30 cm de cabeza por vuelta de textura
@@ -728,9 +772,9 @@ void main(
         if (kB > 0.001) {
           float3 skB = 0; float slB = -1;
           [unroll] for (int qB = 0; qB < 8; qB++) { float aB2 = qB * 0.785398;
-            float3 cB = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy + float2(cos(aB2) * 0.034, sin(aB2) * 0.026), 3.0).xyz;
+            float3 cB = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, uvD + float2(cos(aB2) * 0.034, sin(aB2) * 0.026), 3.0).xyz;
             float lB = dot(cB, float3(0.2126, 0.7152, 0.0722)); if (lB > slB) { slB = lB; skB = cB; } }
-          float3 skinB = lerp(g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy, 4.0).xyz, skB, 0.75);
+          float3 skinB = lerp(g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, uvD, 4.0).xyz, skB, 0.75);
           r2.xyz = lerp(r2.xyz, skinB, kB);
         }
         // (08/11 y, Agustin: "el color de todas las cejas no cambia el color de todo") la pintura que queda bajo las hebras (lo que no
@@ -739,7 +783,7 @@ void main(
         { float4 G3 = IniParams.Load(int2(373, 0));
           float kC = saturate(G3.x) * saturate(bm.a * 1.4) * (1.0 - saturate(kB));
           if (kC > 0.001) {
-            float lP = dot(r2.xyz, float3(0.2126, 0.7152, 0.0722)), lZ = dot(g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy, 3.0).xyz, float3(0.2126, 0.7152, 0.0722));
+            float lP = dot(r2.xyz, float3(0.2126, 0.7152, 0.0722)), lZ = dot(g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, uvD, 3.0).xyz, float3(0.2126, 0.7152, 0.0722));
             r2.xyz = lerp(r2.xyz, saturate(G3.yzw) * clamp(lP / max(lZ, 1e-3), 0.6, 1.4), kC);
           } }
       }
@@ -748,9 +792,11 @@ void main(
   // pierden (la textura es chica y se ve lavada). Se realza el detalle fino del albedo: la luminancia de este punto contra el
   // promedio de su zona (2.5 niveles de mip mas arriba), solo en la piel (no en barba ni pelo pintados) y solo de cerca.
   // No inventa marcas: solo marca mas las que la cara ya tiene. 0 = como el juego
+  float sk2MmPx = PesSk2MmPx(pesDPx, pesDPy, pesHasR);   // (12/11) mm de piel por pixel (piel v2: todos los fundidos por distancia)
+  if (sk2) r2.xyz = PesSk2Marks(g_tex_diffuse, g_samplerAnisotropic_Clamp_s, uvD, r2.xyz, r1.w, sk2MmPx, saturate(IniParams.Load(int2(124,0)).y) * (1.0 - fhMask));
   { float mk = saturate(IniParams.Load(int2(124,0)).y) * (1.0 - fhMask) * saturate(3.5 - r1.w);
-    if (enhance && mk > 0.001) {
-      float3 aB = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy, r1.w + 2.5).xyz;
+    if (enhance && !sk2 && mk > 0.001) {
+      float3 aB = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, uvD, r1.w + 2.5).xyz;
       float rat = (dot(r2.xyz, float3(0.2126, 0.7152, 0.0722)) + 0.01) / (dot(aB, float3(0.2126, 0.7152, 0.0722)) + 0.01);
       r2.xyz *= pow(clamp(rat, 0.25, 4.0), 0.9 * mk);
     } }
@@ -802,10 +848,26 @@ void main(
   if (r0.x != 0) discard;
 
   // ================= MEJORAS DE PIEL =================
-  // 1) Albedo: la piel de PES sale grisacea/"plastica". Saturacion suave
-  //    preservando luminancia + calidez en zonas finas (donde la sangre
-  //    se ve a traves de la piel: orejas, aletas de la nariz, labios).
-  {
+  // (12/11) PIEL v2: entradas comunes de pes_skin2.hlsli (se llenan aunque este apagada; el compilador saca lo que no se usa)
+  PesSk2In sk2I = (PesSk2In)0;
+  sk2I.NoV = saturate(dot(normalize(r1.xyz), normalize(v3.xyz)));
+  if (sk2) {
+    float flushF2 = sweatProg * P12.x;
+    if (P12.y > 0.001) {   // sangre del esfuerzo por zona (y12), igual que la piel de antes
+      float bl = sssMap.w > 0.01 ? sssMap.z * sssMap.w : 0.5;
+      float zoneB = saturate(0.30 + 1.10 * bl + 0.45 * saturate(thin));
+      float melA = saturate(log2(0.47 / max(dot(r2.xyz, float3(0.2126, 0.7152, 0.0722)), 1e-3)) / 2.85);
+      flushF2 *= lerp(1.0, 1.6 * zoneB * (1.0 - 0.7 * melA), saturate(P12.y));
+    }
+    sk2I.alb = r2.xyz; sk2I.thin = thin; sk2I.sat = albedoSat; sk2I.thinWarm = thinWarmth; sk2I.mapBlood = mapBlood; sk2I.flush = flushF2;
+    sk2I.lipM = lipM * saturate(P72.z); sk2I.lipW = pesLipW;
+    sk2I.lipTint = lerp(float3(1.10, 0.84, 0.86), float3(1.16, 0.70, 0.72), saturate(P73.y));
+    sk2I.cav = fgOk ? FA.r * saturate(P68.y) : 0.0; sk2I.tiltCav = 1.0 - pesCav;
+    r2.xyz = PesSk2Albedo(sk2I);
+    { float4 R359 = IniParams.Load(int2(359,0));   // teselacion: brillo apagado en el fondo del surco hundido (igual que antes)
+      if (fgOk && IniParams.Load(int2(357,0)).x > 0.5 && R359.x > 0.001 && R359.y > 0.001)
+        r0.z *= 1.0 - 0.45 * saturate(FA.r * saturate(R359.x) * R359.y / 0.8); }
+  } else {
     float lum = dot(r2.xyz, float3(0.2126, 0.7152, 0.0722));
     r2.xyz = max(0, lerp(lum.xxx, r2.xyz, albedoSat));
     float3 bloodTint = float3(1.04, 0.98, 0.96);   // 21/10: mas sutil
@@ -842,8 +904,10 @@ void main(
     r2.xyz *= float3(1.0 + flushF, 1.0 - flushF * 0.35, 1.0 - flushF * 0.45);
   }
   // cavidades (x35): menos luz difusa y menos brillo dentro de los huecos; la translucidez se mantiene (las orejas siguen rojas a contraluz)
-  r2.xyz *= pesCav;
-  r0.z  *= lerp(1.0, pesCav, 0.8);
+  if (!sk2) {   // (12/11) en la piel v2 las cavidades ya estan en PesSk2Albedo / PesSk2Spec
+    r2.xyz *= pesCav;
+    r0.z  *= lerp(1.0, pesCav, 0.8);
+  }
   // Pliegues de expresion: dentro del surco llega menos luz y la piel brilla menos
   if (wrOn && wrFold > 0) {
     float fold = saturate(wrFold * wrCrease);
@@ -895,39 +959,50 @@ void main(
   }
   // 2) Especular: la piel real refleja ~2.8% (F0 0.028). El valor del juego
   //    suele quedar alto -> efecto plastico. Se escala de forma controlada.
-  r0.z = saturate(r0.z * specScale);
-  // 3) Brillo/gloss (entrada de la curva de rugosidad)
-  r0.w = saturate(r0.w * glossScale);
-  // PES21 zonas (18/10): labios mas lisos y brillosos que la piel; pelicula de sudor progresiva por zonas (antes de las gotas)
-  r0.w = lerp(r0.w, min(r0.w, 0.30), lipM * saturate(P73.x));
-  r0.z = lerp(r0.z, max(r0.z, 0.55), lipM * saturate(P73.x) * 0.8);
-  r0.w = lerp(r0.w, r0.w * 0.45, filmWet);
-  r0.z = lerp(r0.z, max(r0.z, 0.5), filmWet * 0.8);
-  r2.xyz *= 1.0 - 0.06 * filmWet;
-  // superficie mojada: muy brillante y lisa, albedo apenas mas oscuro
-  r0.w = lerp(r0.w, 0.05, sweatWet);  // r0.w es rugosidad: mojado = liso (PES21 20/10: 0.05, el agua no es un espejo perfecto)
-  // vello facial: no es traslucido, es mas aspero y refleja menos
-  r0.w = lerp(r0.w, max(r0.w, 0.75), fhMask);
-  // micro-geometria de poros en el especular (19/10): dentro del poro el brillo baja y la superficie es mas aspera;
-  // la varianza de la micro normal (Toksvig) suma rugosidad para que el brillo no sea un plastico liso
-  r0.w = saturate(r0.w + pesMicroVar * 0.30 + pesPoreA * 0.20);
-  // zona T mas brillante (grasa natural), mejillas mas mate; y el albedo se oscurece en el fondo de los poros
-  r0.w = saturate(r0.w * lerp(1.06, 0.86, pesTZone * saturate(P94.x)));
-  r0.z *= (1.0 - 0.45 * pesPoreC) * lerp(0.95, 1.12, pesTZone * saturate(P94.x));   // (31/10) brillo del poro solo en primer plano
-  // (04/11 piel) RUGOSIDAD REAL de la piel (Agustin: "le falta cierta rugosidad a la cara"): la piel seca no baja de ~0.42 de
-  // rugosidad (0.33 en la zona T grasa: frente, nariz, menton), medido en pieles escaneadas (MetaHuman / Weyrich 2006). Con el valor
-  // del juego la frente y la nariz quedaban como plastico encerado: un brillo ancho y parejo. Ademas la rugosidad no es pareja:
-  // varia +-12 % con la red de surcos y los poros (pesPoreA). Labios, sudor y pelicula de agua quedan como estaban
-  if (enhance) {
-    float rFloor = lerp(0.42, 0.33, saturate(pesTZone)) * (1.0 + 0.12 * saturate(pesPoreA * 2.0 - 0.3));
-    float rKeep = (1.0 - saturate(max(lipM, pesLipW) * 1.5)) * (1.0 - sweatWet) * (1.0 - saturate(filmWet * 1.5));
-    r0.w = lerp(r0.w, max(r0.w, rFloor), rKeep);
-    r0.z *= lerp(1.0, 0.85, rKeep * saturate((rFloor - 0.3) * 6.0));   // el brillo ancho reparte la misma energia: un poco menos de pico
+  if (sk2) {   // (12/11) PIEL v2: rugosidad y brillo en pes_skin2.hlsli (PesSk2Spec)
+    sk2I.lipM = lipM;   // labios para el brillo (x73), sin el z72 del color
+    sk2I.rough = r0.w; sk2I.spec = r0.z; sk2I.specScale = specScale; sk2I.glossScale = glossScale; sk2I.lipGloss = saturate(P73.x);
+    sk2I.filmWet = filmWet; sk2I.sweatWet = sweatWet; sk2I.fhMask = fhMask;
+    sk2I.microVar = pesMicroVar; sk2I.poreA = pesPoreA; sk2I.poreC = pesPoreC; sk2I.tZone = pesTZone; sk2I.poreK = saturate(P94.x);
+    float sk2Alb = 1.0;
+    float2 sk2RS = PesSk2Spec(sk2I, sk2Alb);
+    r0.w = sk2RS.x; r0.z = sk2RS.y;
+    r2.xyz *= pesPoreOcc * sk2Alb;   // hueco del poro de cerca (gris y suave, v6) y piel mojada
+  } else {
+    r0.z = saturate(r0.z * specScale);
+    // 3) Brillo/gloss (entrada de la curva de rugosidad)
+    r0.w = saturate(r0.w * glossScale);
+    // PES21 zonas (18/10): labios mas lisos y brillosos que la piel; pelicula de sudor progresiva por zonas (antes de las gotas)
+    r0.w = lerp(r0.w, min(r0.w, 0.30), lipM * saturate(P73.x));
+    r0.z = lerp(r0.z, max(r0.z, 0.55), lipM * saturate(P73.x) * 0.8);
+    r0.w = lerp(r0.w, r0.w * 0.45, filmWet);
+    r0.z = lerp(r0.z, max(r0.z, 0.5), filmWet * 0.8);
+    r2.xyz *= 1.0 - 0.06 * filmWet;
+    // superficie mojada: muy brillante y lisa, albedo apenas mas oscuro
+    r0.w = lerp(r0.w, 0.05, sweatWet);  // r0.w es rugosidad: mojado = liso (PES21 20/10: 0.05, el agua no es un espejo perfecto)
+    // vello facial: no es traslucido, es mas aspero y refleja menos
+    r0.w = lerp(r0.w, max(r0.w, 0.75), fhMask);
+    // micro-geometria de poros en el especular (19/10): dentro del poro el brillo baja y la superficie es mas aspera;
+    // la varianza de la micro normal (Toksvig) suma rugosidad para que el brillo no sea un plastico liso
+    r0.w = saturate(r0.w + pesMicroVar * 0.30 + pesPoreA * 0.20);
+    // zona T mas brillante (grasa natural), mejillas mas mate; y el albedo se oscurece en el fondo de los poros
+    r0.w = saturate(r0.w * lerp(1.06, 0.86, pesTZone * saturate(P94.x)));
+    r0.z *= (1.0 - 0.45 * pesPoreC) * lerp(0.95, 1.12, pesTZone * saturate(P94.x));   // (31/10) brillo del poro solo en primer plano
+    // (04/11 piel) RUGOSIDAD REAL de la piel (Agustin: "le falta cierta rugosidad a la cara"): la piel seca no baja de ~0.42 de
+    // rugosidad (0.33 en la zona T grasa: frente, nariz, menton), medido en pieles escaneadas (MetaHuman / Weyrich 2006). Con el valor
+    // del juego la frente y la nariz quedaban como plastico encerado: un brillo ancho y parejo. Ademas la rugosidad no es pareja:
+    // varia +-12 % con la red de surcos y los poros (pesPoreA). Labios, sudor y pelicula de agua quedan como estaban
+    if (enhance) {
+      float rFloor = lerp(0.42, 0.33, saturate(pesTZone)) * (1.0 + 0.12 * saturate(pesPoreA * 2.0 - 0.3));
+      float rKeep = (1.0 - saturate(max(lipM, pesLipW) * 1.5)) * (1.0 - sweatWet) * (1.0 - saturate(filmWet * 1.5));
+      r0.w = lerp(r0.w, max(r0.w, rFloor), rKeep);
+      r0.z *= lerp(1.0, 0.85, rKeep * saturate((rFloor - 0.3) * 6.0));   // el brillo ancho reparte la misma energia: un poco menos de pico
+    }
+    r2.xyz *= pesPoreOcc;
+    r0.z *= (1.0 - 0.6 * fhMask);
+    r0.z = lerp(r0.z, max(r0.z, 0.75), sweatWet);
+    r2.xyz *= lerp(1.0, 0.9, sweatWet);
   }
-  r2.xyz *= pesPoreOcc;
-  r0.z *= (1.0 - 0.6 * fhMask);
-  r0.z = lerp(r0.z, max(r0.z, 0.75), sweatWet);
-  r2.xyz *= lerp(1.0, 0.9, sweatWet);
   // 4) Translucidez: la pasada de luz del motor usa este valor para el
   //    scattering subsuperficial. Subirlo da piel con luz "dentro",
   //    terminador rojizo y sombras menos duras.
@@ -960,7 +1035,7 @@ void main(
       pesCol = PesCollarW(pesRest, PC322.y * 0.001) * saturate(PC322.z);
       if (pesCol > 0.001) {
         float3 ctT = PesCollarTorso(pesTorsoTex, g_samplerLinear_Clamp_s, pesRest);
-        r2.xyz = lerp(r2.xyz, r2.xyz * PesCollarRatio(g_tex_diffuse, g_samplerAnisotropic_Clamp_s, v2.xy, ctT), pesCol);
+        r2.xyz = lerp(r2.xyz, r2.xyz * PesCollarRatio(g_tex_diffuse, g_samplerAnisotropic_Clamp_s, uvD, ctT), pesCol);
       }
     } }
   {   // (24/10 c) tono de piel propio del jugador (skintone.cpp + pes_skintone.hlsli): Oklab, tambien el velo de borde; el
@@ -1055,12 +1130,16 @@ void main(
   // poro ya cambia como le pega la luz, pero el fondo de un hueco ademas queda TAPADO por sus paredes cuando la luz viene rasante
   // (de costado, sol bajo, luz de arriba en la frente). Visibilidad = saturate(|N.L| + 2 ao^2 - 1): con la luz de frente no cambia
   // nada, rasante el fondo del poro se oscurece. Luz = la dominante del cuadro (el sol), llevada a la vista como el pelo y los ojos
-  if (enhance && pesPoreA > 0.001) {
+  // (12/11, Agustin: "manchas raras en la piel, a ciertas distancias es peor") SOLO EN PRIMER PLANO (pesPoreC, poro de 2 o mas
+  // pixeles). Con pesPoreA (el poro promediado por el mip, hasta ~2 mm por pixel) el fondo de un poro que ya no se ve oscurecia el
+  // color en toda la franja donde la cara queda de costado al sol (|N.L| < 0.4, hasta -34 %), con la forma del normal map: manchas
+  // del lado del terminador a media distancia, que ademas seguian a la luz dominante tambien en la sombra (multiplica el albedo)
+  if (enhance && pesPoreC > 0.001) {
     float3 Lw = g_psSystem.m_dominantLightDir.xyz;
     float vOk = dot(g_psScene.m_view._m00_m10_m20, g_psScene.m_view._m00_m10_m20);   // b2 enlazado (si no, no se toca nada)
     if (vOk > 0.25 && dot(Lw, Lw) > 0.25) {
       float3 Lv = normalize(float3(dot(Lw, g_psScene.m_view._m00_m10_m20), dot(Lw, g_psScene.m_view._m01_m11_m21), dot(Lw, g_psScene.m_view._m02_m12_m22)));
-      float msAo = 1.0 - saturate(pesPoreA * 0.75 * saturate(IniParams.Load(int2(94,0)).x));
+      float msAo = 1.0 - saturate(pesPoreC * 0.75 * saturate(IniParams.Load(int2(94,0)).x));
       float msVis = saturate(abs(dot(normalize(r1.xyz), Lv)) + 2.0 * msAo * msAo - 1.0);
       o0.xyz *= lerp(1.0, msVis, 0.85);
     } }

@@ -212,7 +212,7 @@ void main(
   { // PES21 tono de piel (20/10, 140): cromaticidad dentro del lugar de la piel real para su claridad (cada tono se conserva)
     float4 SK = IniParams.Load(int2(140,0));
     if (skinC && SK.x > 0.5) {
-      r3.xyz = PESSkinLocus(r3.xyz, SK.y > 0.0 ? SK.y : 0.35);
+      r3.xyz = PESSkinLocus(r3.xyz, SK.y >= 0.0 ? SK.y : 0.35);
       if (SK.w > 0.5) { float mD = PESMelanin(r3.xyz); r3.xyz = float3(mD, 0.25, 1.0 - mD) * 0.5; }   // depuracion: rojo = piel oscura, azul = clara
     }
   }
@@ -1478,7 +1478,11 @@ void main(
         float litSide = saturate(ndlM * 4.0);                         // solo donde pega el sol
         // (01/11) piso 0.4: un pliegue nunca queda negro, y en la piel el brillo baja igual que la difusa (antes quedaba el reflejo
         // azulado del cielo sobre poca difusa rojiza: nudillos y dedos violetas)
-        float msK = lerp(1.0, max(micro, 0.4), saturate(MS.x) * litSide);
+        // (12/11, piel v2 w124) en la piel la micro sombra sale de poros y del normal map fino: solo mientras se resuelven (hasta
+        // 0.8 mm de piel por pixel entera, nada a 2 mm). Mas lejos comparaba normales que el mip ya no muestra bien y dejaba manchas
+        // en la franja del terminador que cambiaban con la distancia (mejillas, orejas)
+        float msFar = (skinC && IniParams.Load(int2(124,0)).w > 0.5) ? saturate((2.0 - 2000.0 * abs(g_psScene.m_projectionParam.x) * zsk * g_psSystem.m_renderBuffer.z) / 1.2) : 1.0;
+        float msK = lerp(1.0, max(micro, 0.4), saturate(MS.x) * litSide * msFar);
         diffC *= msK; specC *= skinC ? msK : lerp(1.0, msK, 0.5);
       } }
     r0.xyw = diffC * aoD + specC * aoS;
