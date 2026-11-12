@@ -76,6 +76,33 @@ float PESWearTest(float live, float2 uv, float2 wxz) {
 float PESStableK() { return clamp(IniParams.Load(int2(436, 0)).x, 0.0, 2.0); }
 float PESTipS(float a, float b, float x, float aa) { return lerp(smoothstep(a, b, x), saturate(1.0 - 0.5 * (a + b)), aa); }
 bool PESWearLiveOn(float4 LW) { return LW.w > 0.5 || IniParams.Load(int2(437, 0)).x > 0.001; }
+// (12/11 20:30, Agustin: "y otras dos mejoras visuales del propio cesped") dos cosas que pasan en una cancha real a medida que se juega,
+// con el mismo mapa de desgaste en vivo (live = PESWearTest del mapa; 0 = nadie piso ahi) y fijas en el mundo (wxz en metros):
+// z443 LINEAS GASTADAS: donde se juega mucho (bocas de arco, area, circulo) los tapones raspan la cal: la linea se corta en manchones de
+// 3-25 cm que dejan ver el pasto de abajo y el resto queda mas fino. Devuelve cuanto queda de la pintura (1 = entera). Misma cuenta en la
+// base (5e92 / c956) y en las hojas pintadas (498b30): el borde de cada raspon coincide
+float PESLineWearK(float2 wxz, float live) {
+  float k = clamp(IniParams.Load(int2(443, 0)).z, 0.0, 2.0);
+  if (k < 0.001 || live < 1e-4 || !PESWearLiveOn(IniParams.Load(int2(115, 0)))) return 1.0;
+  float a = saturate(PESWearLiveCurve(live) * k * 1.2);
+  if (a < 0.005) return 1.0;
+  float n = PESGnoise(wxz * 4.5 + 2.9) * 0.55 + PESGnoise(wxz * 13.0 + 7.3) * 0.30 + PESGnoise(wxz * 31.0 + 0.7) * 0.15;
+  float off = 1.0 - smoothstep(a * 0.62 - 0.05, a * 0.62 + 0.05, n);   // raspado (los manchones crecen con el desgaste; a tope ~60 %: la linea se sigue leyendo)
+  return saturate((1.0 - 0.88 * off) * (1.0 - 0.25 * a));
+}
+// w443 FRANJAS QUE SE BORRAN DONDE SE JUEGA: el pasto pisado una y otra vez queda acostado para cualquier lado (remolinos de ~40 cm): las
+// franjas del corte se pierden en las zonas de mucho juego y quedan manchas claras y oscuras sueltas, que cambian con la camara como las
+// franjas. g = grano (hacia donde esta peinada la hoja, espacio mundo); base (5e92 / c956) y hojas (498b30) con la misma cuenta
+float3 PESTrampleGrain(float3 g, float2 wxz, float live) {
+  float k = clamp(IniParams.Load(int2(443, 0)).w, 0.0, 2.0);
+  if (k < 0.001 || live < 1e-4 || !PESWearLiveOn(IniParams.Load(int2(115, 0)))) return g;
+  float t = saturate(k * smoothstep(0.03, 0.50, PESWearLiveCurve(live)));
+  if (t < 0.001) return g;
+  float an = (PESGnoise(wxz * 2.2 + 4.1) * 0.65 + PESGnoise(wxz * 6.3 + 1.7) * 0.35) * 12.566;
+  float L = length(g.xz) * (0.75 + 0.5 * PESGnoise(wxz * 3.7 + 9.3));
+  float3 gR = normalize(float3(cos(an) * L, max(g.y, 0.2), sin(an) * L));
+  return normalize(lerp(g, gR, t));
+}
 float2 PESWear(float2 pm, float2 wxz, float wear, float areas, float bald, float live)
 {
   float col = 0.0, bare = 0.0;
