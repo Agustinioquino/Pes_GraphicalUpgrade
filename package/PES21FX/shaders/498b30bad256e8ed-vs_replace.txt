@@ -277,8 +277,8 @@ void main(
       float2 rootW = ins.xy + float2(csR * root.x + snR * root.y, -snR * root.x + csR * root.y);
       float2 uvRt = rootW * cb4[1].xy + cb4[1].zw;
       float wrB = 0.0;
-      if (IniParams.Load(int2(431, 0)).x > 0.5 && IniParams.Load(int2(115, 0)).w > 0.5)
-        wrB = saturate(PESWearLiveCurve(PESWearMap.SampleLevel(g_samplerLinear_Clamp_s, uvRt, 0).x) * (0.55 + 0.9 * PESBu(sB, 32u)));
+      if (IniParams.Load(int2(431, 0)).x > 0.5 && PESWearLiveOn(IniParams.Load(int2(115, 0))))   // (12/11) x437 prueba del desgaste
+        wrB = saturate(PESWearLiveCurve(PESWearTest(PESWearMap.SampleLevel(g_samplerLinear_Clamp_s, uvRt, 0).x, uvRt, rootW)) * (0.55 + 0.9 * PESBu(sB, 32u)));
       h *= 1.0 - 0.30 * wrB * PESBu(sB, 33u);
       tilt += 0.45 * wrB * PESBu(sB, 34u);
       if (PESBu(sB, 14u) < 0.16 * kIr + 0.55 * wrB) {
@@ -581,7 +581,7 @@ void main(
     float2 puv = pesRoot * cb4[1].xy + cb4[1].zw;
     pesPm = PESPitchMeters(puv);
     pesWShort = pesNatV && abs(pesPm.x) < 55.5 && abs(pesPm.y) < 37.0;
-    float pesLive = PESWearMap.SampleLevel(g_samplerLinear_Clamp_s, puv, 0).x;   // desgaste en vivo (mapa de la DLL, t8)
+    float pesLive = PESWearTest(PESWearMap.SampleLevel(g_samplerLinear_Clamp_s, puv, 0).x, puv, pesRoot);   // desgaste en vivo (mapa de la DLL, t8); (12/11) + prueba x437
     pesWear = PESWear(pesPm, pesRoot, Q4.w, Q7.x, Q7.z, pesLive);
     pesZone = PESGrassZones(pesRoot, Q6.x);
     int tipo = (int)(Q4.y + 0.5);
@@ -594,7 +594,7 @@ void main(
     float n = PESGnoise(pesRoot * 1.7 + 0.37);
     // (11/11 k) natural: el alto sale de w296 (mm), no de z104; las hojas 3D ya lo traen en h
     float pesHz = pesNatV ? (pesBlade ? 1.0 : (pesIsExt ? lerp(0.5 * (PES_NAT_CUT + 1.0), PES_NAT_CUT, max(pesNearT, saturate(IniParams.Load(int2(432, 0)).w))) : PES_NAT_CUT)) : clamp(Q4.z, 0.3, 3.0);   // (12/11) w432: mismo alto a toda distancia
-    bool pesRealW = pesNatV && IniParams.Load(int2(431, 0)).x > 0.5 && IniParams.Load(int2(115, 0)).w > 0.5;   // (12/11) desgaste real: el pasto no se borra
+    bool pesRealW = pesNatV && IniParams.Load(int2(431, 0)).x > 0.5 && PESWearLiveOn(IniParams.Load(int2(115, 0)));   // (12/11) desgaste real: el pasto no se borra
     pesH = hT * pesHz * (1.0 + (n - 0.5) * 2.0 * hv) * (1.0 - pesWear.x * 0.35) * (1.0 - ((pesWShort || pesRealW) ? 0.4 : 1.0) * pesWear.y) * (pesWShort ? lerp(1.0, PESWearLiveHeight(pesLive), 0.5) : PESWearLiveHeight(pesLive));   // (11/11 h) natural: "muy desgastada": hasta 45 %, no 25 %
     pesH *= pesHmul;             // (27/10 m) tanda 10: alto de la mata y de la hoja
     // (11/11 m, Agustin: "rellenar ahi con pasto de atlas", "un pasto mas pequeno para rellenar") y403: donde se dibujan las hojas 3D (z410,
@@ -634,10 +634,10 @@ void main(
                          PESGh21(float2((float)pesCard * 0.0389 + 0.53, (float)pesRot * 0.31) + pesExtOrg * 0.67)) - 0.5;
       float2 pC = pesExtOrg + jC * max(cb5[13].x, 0.0);
       float2 puvC = pC * cb4[1].xy + cb4[1].zw;
-      float lvC = PESWearMap.SampleLevel(g_samplerLinear_Clamp_s, puvC, 0).x;
+      float lvC = PESWearTest(PESWearMap.SampleLevel(g_samplerLinear_Clamp_s, puvC, 0).x, puvC, pC);
       float2 wC = PESWear(PESPitchMeters(puvC), pC, Q4.w, Q7.x, Q7.z, lvC);
       float4 LWv = IniParams.Load(int2(115, 0));
-      float thin = saturate(wC.y + (LWv.w > 0.5 ? 0.7 * smoothstep(0.15, 0.9, PESWearLiveCurve(lvC)) : 0.0)) * smoothstep(8.0, 40.0, pesPx);   // sin saltos al cruzar el limite; (02/11 paso 6) rampa larga 8..40 (antes 14..28: popping)
+      float thin = saturate(wC.y + (PESWearLiveOn(LWv) ? 0.7 * smoothstep(0.15, 0.9, PESWearLiveCurve(lvC)) : 0.0)) * smoothstep(8.0, 40.0, pesPx);   // sin saltos al cruzar el limite; (02/11 paso 6) rampa larga 8..40 (antes 14..28: popping)
       float hc = PESGh21(float2((float)pesCard * 0.0413 + pesExtOrg.x * 0.37, pesExtOrg.y * 0.61 + (float)pesRot * 0.29) + 0.73);
       if (pesWShort) thin *= 0.25;   // (11/11 g) natural: lo gastado queda algo mas ralo, no sin pasto
       // (12/11, Agustin: "el desgaste no que se borre el pasto, que cambie su color, su tamano") desgaste real: casi no se sacan hojas (solo

@@ -51,6 +51,29 @@ float3 PESMowGrain(float2 pm, float3 gIn, float pat, float widthM, float lean)
 float PESWearLiveCurve(float live) {
   if (IniParams.Load(int2(431, 0)).x > 0.5) { float c = saturate(live * 2.2); return c * c * (3.0 - 2.0 * c); }
   return IniParams.Load(int2(292, 0)).w > 0.5 ? 1.0 - exp(-5.0 * saturate(live)) : saturate(live); }
+// (12/11, Agustin: "un slider para probar el desgaste en vivo") x437 PRUEBA: suma al mapa del partido el desgaste de un partido ya jugado, al
+// instante y en vivo, con el reparto tipico: bocas de arco, punto penal, circulo central, carriles de los laterales y un poco toda la cancha,
+// en parches (ruido). 0 = solo lo del partido; 1 = final de un partido muy gastado. No toca el mapa: al volver a 0 queda lo que habia
+// (anda aunque el desgaste en vivo w115 este apagado). uv = la del mapa (pm se saca de ahi), wxz = metros del mundo
+float PESWearTest(float live, float2 uv, float2 wxz) {
+  float t = IniParams.Load(int2(437, 0)).x;
+  if (t < 0.001) return live;
+  float2 pm = PESPitchMeters(uv), a = abs(pm);
+  float gm = exp(-((a.x - 49.5) * (a.x - 49.5) / 9.0 + pm.y * pm.y / 30.0));   // boca del arco (area chica)
+  float pk = exp(-((a.x - 41.5) * (a.x - 41.5) / 40.0 + pm.y * pm.y / 70.0));  // punto penal / medialuna
+  float cc = exp(-(pm.x * pm.x / 70.0 + pm.y * pm.y / 45.0));                  // circulo central
+  float wg = 0.45 * exp(-(a.y - 27.0) * (a.y - 27.0) / 30.0) * step(a.x, 52.5);  // carriles de los laterales
+  float use = saturate(gm + 0.8 * pk + 0.75 * cc + wg) * step(a.x, 53.5) * step(a.y, 35.0);
+  float n = PESGnoise(wxz * 0.7 + 2.3) * 0.6 + PESGnoise(wxz * 2.9 + 8.1) * 0.4;
+  return max(live, saturate(t) * (0.12 + 0.40 * use) * (0.6 + 0.8 * n));
+}
+// (12/11, Agustin: "el brillo del pasto al mover la camara se nota bastante mas que al estar quieto") x436 BRILLO ESTABLE (0 = como antes,
+// 1 = natural, 2 = mas filtrado). PESTipS = smoothstep de los efectos de la punta (cera, rocio, punta encendida) que, cuando un pixel ya cubre
+// buena parte de la hoja (aa -> 1), pasa a su PROMEDIO sobre la hoja: lo mismo que deja el TAA con la camara quieta, sin prenderse y
+// apagarse pixel a pixel al moverla
+float PESStableK() { return clamp(IniParams.Load(int2(436, 0)).x, 0.0, 2.0); }
+float PESTipS(float a, float b, float x, float aa) { return lerp(smoothstep(a, b, x), saturate(1.0 - 0.5 * (a + b)), aa); }
+bool PESWearLiveOn(float4 LW) { return LW.w > 0.5 || IniParams.Load(int2(437, 0)).x > 0.001; }
 float2 PESWear(float2 pm, float2 wxz, float wear, float areas, float bald, float live)
 {
   float col = 0.0, bare = 0.0;
@@ -71,7 +94,7 @@ float2 PESWear(float2 pm, float2 wxz, float wear, float areas, float bald, float
   // Multiplica el seco y el pelado de los dos (base y hojas a la vez, misma funcion)
   float wearK = 1.0 + clamp(IniParams.Load(int2(329, 0)).y, 0.0, 3.0);
   col = saturate(col * wearK); bare = saturate(bare * wearK);
-  if (LW.w > 0.5 && live > 0.001) {
+  if (PESWearLiveOn(LW) && live > 0.001) {
     float n4 = PESGnoise(wxz * 2.1 + 4.4);                       // el pisoteo no es parejo
     float lv = saturate(PESWearLiveCurve(live) * (0.8 + 0.4 * n4));
     // (12/11) x431 desgaste real, por etapas: hasta ~40 % solo mas corto (PESWearLiveHeight) y apenas mas apagado; despues seco (verde paja, no
@@ -92,8 +115,8 @@ float2 PESWear(float2 pm, float2 wxz, float wear, float areas, float bald, float
   return float2(col, bare);
 }
 float PESWearLiveHeight(float live) { float4 LW = IniParams.Load(int2(115, 0));
-  if (LW.w > 0.5 && IniParams.Load(int2(431, 0)).x > 0.5) return 1.0 - 0.55 * smoothstep(0.0, 0.6, PESWearLiveCurve(live));   // (12/11) desgaste real: primero mas corto (hasta 45 % del alto)
-  return LW.w > 0.5 ? 1.0 - 0.45 * PESWearLiveCurve(live) : 1.0; }
+  if (PESWearLiveOn(LW) && IniParams.Load(int2(431, 0)).x > 0.5) return 1.0 - 0.55 * smoothstep(0.0, 0.6, PESWearLiveCurve(live));   // (12/11) desgaste real: primero mas corto (hasta 45 % del alto)
+  return PESWearLiveOn(LW) ? 1.0 - 0.45 * PESWearLiveCurve(live) : 1.0; }
 
 // variacion de color por zonas (manchas de 2-6 m mas verdes / mas palidas, y detalle de 0.5 m): multiplicador rgb
 float3 PESGrassZones(float2 wxz, float k)
