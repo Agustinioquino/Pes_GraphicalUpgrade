@@ -40,19 +40,19 @@ std::string ModOff(void* p);
 
 namespace {
 const unsigned kStamp = 0x62787C6A;
-const uintptr_t kLogStub = 0x1423628c0ull;           // printf de depuracion vacio (119 llamadas)
+const uintptr_t kLogStub = XA(0x1423628c0ull);           // printf de depuracion vacio (119 llamadas)
 const unsigned char kLogSig[16] = { 0x4c,0x89,0x44,0x24,0x18,0x4c,0x89,0x4c,0x24,0x20,0xc3,0xcc,0xcc,0xcc,0xcc,0xcc };
-const uintptr_t kRegRelease = 0x140a48ae0ull;        // liberar las referencias tomadas del registro del partido
+const uintptr_t kRegRelease = XA(0x140a48ae0ull);        // liberar las referencias tomadas del registro del partido
 const unsigned char kRelSig[10] = { 0x80,0xb9,0xb0,0x04,0x00,0x00,0x00,0x4c,0x8b,0xc1 };
-const uintptr_t kTickEndLo = 0x1404279c0ull, kTickEndHi = 0x140427a80ull;   // final del tick (EndListener)
-const uintptr_t kRegGlobal = 0x143702208ull;         // puntero al registro del partido (0 fuera del partido)
-const uintptr_t kRdLo = 0x142538000ull, kRdHi = 0x143a00000ull;            // cadenas del exe (.idata/.rdata del volcado)
+const uintptr_t kTickEndLo = XA(0x1404279c0ull), kTickEndHi = XA(0x140427a80ull);   // final del tick (EndListener)
+const uintptr_t kRegGlobal = XA(0x143702208ull);         // puntero al registro del partido (0 fuera del partido)
+const uintptr_t kRdLo = ExeVer() == 100 ? 0x14252f000ull : 0x142538000ull, kRdHi = 0x143a00000ull;   // (en 1.00 .rdata empieza 0x9000 antes)            // cadenas del exe (.idata/.rdata del volcado)
 // (12/11 16:45, Agustin: "en la repeticion?, tenemos el slowmoprobe en lua modulos") REPETICION: FUN_14217c0b0 = control de la repeticion con
 // el mando (avance / retroceso / palanca, velocidad en +0x1c). La llama FUN_14217ea90 (actualizacion del objeto de repeticion, al lado de
 // match::ReplayObjectListener) en cada cuadro del visor, antes de FUN_14217bf20 (que solo avanza con el estado [0] == 5 = reproduciendo).
 // Devuelve dos floats en RAX (CONCAT44). SlowMoServer.lua le parchea los mulss de +0x83 / +0xa4 / +0xd2, no el prologo (bytes del exe
 // 1.07.02 leidos de su disco: mov [rsp+8],rbx / mov [rsp+18],rsi / push rdi / sub rsp,40 / mov rdi,rcx)
-const uintptr_t kReplayCtl = 0x14217c0b0ull;
+const uintptr_t kReplayCtl = XA(0x14217c0b0ull);
 const unsigned char kReplaySig[18] = { 0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x74,0x24,0x18,0x57,0x48,0x83,0xec,0x40,0x48,0x8b,0xf9 };
 using RplFn = uint64_t(*)(void*, unsigned, unsigned char);
 RplFn o_rpl = nullptr;
@@ -245,7 +245,7 @@ void hk_rel(void* view) {
 // (DR0-DR2, en todos los hilos) y cada escritura que cambia el valor anota la instruccion que escribio y las direcciones de
 // retorno de la pila -> falta.log. Solo mira: no cambia nada. Se engancha MatchControl::vf19 (0x1404228d0, una vez por tick)
 // para saber donde esta el objeto.
-const uintptr_t kMcVf19 = 0x1404228d0ull;
+const uintptr_t kMcVf19 = XA(0x1404228d0ull);
 const unsigned char kMcSig[16] = { 0x48,0x8b,0xc4,0x48,0x89,0x50,0x10,0x55,0x53,0x56,0x57,0x41,0x56,0x48,0x8b,0xec };
 const uint32_t kWatchOff[3] = { 0x2944, 0x294c, 0x2930 };
 const char* const kWatchName[3] = { "tipo_falta(MI+0x1588)", "infractor(MI+0x1590)", "motivo_detencion(MI+0x1574)" };
@@ -261,7 +261,7 @@ std::atomic<unsigned> s_fhAll{0};
 FILE* s_falta = nullptr;
 
 bool LooksLikeRet(uintptr_t v) {
-    if (v < 0x140001000ull || v >= kRdLo) return false;
+    if (v < XA(0x140001000ull) || v >= kRdLo) return false;
     unsigned char b[7] = {};
     if (!Rd((const void*)(v - 7), b, 7)) return false;
     return b[2] == 0xe8 /* call rel32 */ || (b[1] == 0xff && b[2] == 0x15) /* call [rip+x] */ || (b[4] == 0xff && (b[5] & 0x38) == 0x10) /* call reg/[reg+d8] */ ||
@@ -374,7 +374,7 @@ void RastroPresent() {
     s_tried = true;
     HMODULE mod = GetModuleHandleW(nullptr);
     auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
-    if ((uintptr_t)mod != 0x140000000ull || nt->FileHeader.TimeDateStamp != kStamp) { Log("rastro: exe distinto (sello %08X): apagado", (unsigned)nt->FileHeader.TimeDateStamp); return; }
+    if ((uintptr_t)mod != 0x140000000ull || !ExeStampOk((unsigned)nt->FileHeader.TimeDateStamp)) { Log("rastro: exe distinto (sello %08X): apagado", (unsigned)nt->FileHeader.TimeDateStamp); return; }
     s_cap = (uint64_t)(g_cfg.rastroMaxMb > 0 ? g_cfg.rastroMaxMb : 2000) << 20;
     SYSTEMTIME st; GetLocalTime(&st);
     wchar_t name[48]; swprintf(name, 48, L"%04d%02d%02d_%02d%02d%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
@@ -411,7 +411,7 @@ void RastroEventosPresent() {
     tried = true;
     HMODULE mod = GetModuleHandleW(nullptr);
     auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
-    if ((uintptr_t)mod != 0x140000000ull || nt->FileHeader.TimeDateStamp != kStamp) { Log("publico: exe distinto (sello %08X): sin eventos del partido", (unsigned)nt->FileHeader.TimeDateStamp); return; }
+    if ((uintptr_t)mod != 0x140000000ull || !ExeStampOk((unsigned)nt->FileHeader.TimeDateStamp)) { Log("publico: exe distinto (sello %08X): sin eventos del partido", (unsigned)nt->FileHeader.TimeDateStamp); return; }
     if (!s_relHooked.load() && SigAt(kRegRelease, kRelSig, sizeof kRelSig) && MH_CreateHook((void*)kRegRelease, (void*)&hk_rel, (void**)&o_rel) == MH_OK && MH_EnableHook((void*)kRegRelease) == MH_OK) s_relHooked = true;
     s_ev = s_relHooked.load();
     if (g_cfg.live[431][0] > 0.5f && !g_replayHook.load()) {   // (12/11 16:45) visor de repeticiones para el desgaste real

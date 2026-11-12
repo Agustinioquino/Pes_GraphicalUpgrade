@@ -675,7 +675,7 @@ static std::atomic<int> s_ltSrcOk{0}, s_ltSrcMiss{0}, s_ltArmReq{0};
 static uintptr_t LightTraceSrc() {
     static const unsigned char kSig[9] = { 0x85, 0xc0, 0x78, 0x34, 0x45, 0x8b, 0x44, 0x34, 0x18 };
     if (!s_ltExeLo) return 0;
-    const DWORD64 target = s_ltExeLo + (0x1417ae85aull - 0x140000000ull);
+    const DWORD64 target = s_ltExeLo + (XA(0x1417ae85aull) - 0x140000000ull);
     if (target + 9 > s_ltExeHi || memcmp((const void*)target, kSig, 9) != 0) return 0;
     CONTEXT c; RtlCaptureContext(&c);
     for (int i = 0; i < 16 && c.Rip; i++) {

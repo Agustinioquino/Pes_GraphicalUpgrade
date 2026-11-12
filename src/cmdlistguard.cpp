@@ -20,7 +20,7 @@
 namespace fx {
 
 static const unsigned kStamp = 0x62787C6A;
-static const uintptr_t kBegin = 0x141ff6560ull, kFinish = 0x141ff65f0ull, kGet = 0x141ff6660ull, kFree = 0x141ff6700ull;
+static const uintptr_t kBegin = XA(0x141ff6560ull), kFinish = XA(0x141ff65f0ull), kGet = XA(0x141ff6660ull), kFree = XA(0x141ff6700ull);
 // firmas (primeros bytes de cada funcion en el volcado del 08/11 09:08)
 static const unsigned char kSigBegin[]  = { 0x40,0x53,0x48,0x83,0xec,0x20,0x48,0x8b,0xd9,0xb8,0x01,0x00,0x00,0x00,0xf0,0x0f,0xc1,0x41,0x18,0x85,0xc0 };
 static const unsigned char kSigFinish[] = { 0x48,0x89,0x5c,0x24,0x10,0x57,0x48,0x83,0xec,0x20,0x48,0x8b,0x02,0x4c,0x8b,0xca,0x33,0xff,0x48,0x8b,0xd9 };
@@ -113,7 +113,7 @@ void CmdListGuardPresent() {
     if (!g_cfg.motorPatch) { Log("listas del juego: parches en memoria apagados (motor = 0): sin guardia"); return; }
     HMODULE mod = GetModuleHandleW(nullptr);
     auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
-    if ((uintptr_t)mod != 0x140000000ull || nt->FileHeader.TimeDateStamp != kStamp) { Log("listas del juego: exe distinto: sin guardia"); return; }
+    if ((uintptr_t)mod != 0x140000000ull || !ExeStampOk((unsigned)nt->FileHeader.TimeDateStamp)) { Log("listas del juego: exe distinto: sin guardia"); return; }
     if (!Sig(kBegin, kSigBegin, sizeof kSigBegin) || !Sig(kFinish, kSigFinish, sizeof kSigFinish) || !Sig(kGet, kSigGet, sizeof kSigGet) || !Sig(kFree, kSigFree, sizeof kSigFree)) {
         Log("listas del juego: las firmas de 0x141ff6560/65f0/6660/6700 no coinciden: sin guardia"); return;
     }

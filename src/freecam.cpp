@@ -321,9 +321,9 @@ void FreeCamApply(unsigned char* b) {
 
 // ---- visor del editor: gancho a RenderTarget::SetCamera(cliente, CameraImpl) ----
 static const unsigned kStamp = 0x62787C6A;
-static const uintptr_t kSetCam = 0x1419bf3f0ull;
+static const uintptr_t kSetCam = XA(0x1419bf3f0ull);
 // push rbx; sub rsp,150h; mov rax,[rip+security_cookie]; xor rax,rsp
-static const unsigned char kSetCamSig[19] = { 0x40,0x53,0x48,0x81,0xec,0x50,0x01,0x00,0x00,0x48,0x8b,0x05,0x20,0xa0,0xb5,0x01,0x48,0x33,0xc4 };
+static unsigned char kSetCamSig[19] = { 0x40,0x53,0x48,0x81,0xec,0x50,0x01,0x00,0x00,0x48,0x8b,0x05,0x20,0xa0,0xb5,0x01,0x48,0x33,0xc4 };
 typedef void (*SetCamFn)(void* rt, unsigned char* cam);
 static SetCamFn o_setCam = nullptr;
 static bool s_tried = false, s_okEditor = false;
@@ -378,7 +378,8 @@ static void Install() {
     if (!g_cfg.motorPatch) { Log("camara libre: parches en memoria apagados (motor = 0): sin camara libre en el editor"); return; }
     HMODULE mod = GetModuleHandleW(nullptr);
     auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
-    if ((uintptr_t)mod != 0x140000000ull || nt->FileHeader.TimeDateStamp != kStamp) { Log("camara libre: exe distinto: sin gancho en el editor"); return; }
+    if ((uintptr_t)mod != 0x140000000ull || !ExeStampOk((unsigned)nt->FileHeader.TimeDateStamp)) { Log("camara libre: exe distinto: sin gancho en el editor"); return; }
+    if (ExeVer() == 100) { kSetCamSig[12] = 0x90; kSetCamSig[13] = 0x14; }   // exe 1.00: la cookie de seguridad queda a otra distancia
     if (!Readable((const void*)kSetCam, sizeof kSetCamSig) || memcmp((const void*)kSetCam, kSetCamSig, sizeof kSetCamSig) != 0) {
         Log("camara libre: la firma de 0x1419bf3f0 (camara del visor del editor) no coincide, se omite"); return;
     }

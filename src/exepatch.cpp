@@ -26,9 +26,9 @@ typedef void*(__fastcall *LookupFn)(void* map, void* key);
 
 struct Patch { const char* name; uintptr_t reader, lookup; ReaderFn oReader; LookupFn oLookup; int kind; };
 static Patch s_p[3] = {
-    { "GrPluginPesShadow.ShadowResolution",  0x1416b9a10, 0x1416b4b50, nullptr, nullptr, 0 },
-    { "GrShadowSettings",                   0x1416c70c0, 0x1416bfeb0, nullptr, nullptr, 1 },
-    { "GrPluginPlanarShadowCombiner.ShadowQuality", 0x1416bdcc0 - 0x10, 0x1416bb1e0, nullptr, nullptr, 2 },
+    { "GrPluginPesShadow.ShadowResolution",  XA(0x1416b9a10ull), XA(0x1416b4b50ull), nullptr, nullptr, 0 },
+    { "GrShadowSettings",                   XA(0x1416c70c0ull), XA(0x1416bfeb0ull), nullptr, nullptr, 1 },
+    { "GrPluginPlanarShadowCombiner.ShadowQuality", XA(0x1416bdcb0ull), XA(0x1416bb1e0ull), nullptr, nullptr, 2 },
 };
 static thread_local int t_capIdx = -1; static thread_local void* t_capPtr = nullptr;
 
@@ -77,7 +77,7 @@ void ExePatchInstall() {
     if (!g_cfg.motorPatch) { Log("motor: parches en memoria apagados (motor = 0)"); return; }
     HMODULE mod = GetModuleHandleW(nullptr);
     auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
-    if ((uintptr_t)mod != 0x140000000ull || nt->FileHeader.TimeDateStamp != kExeStamp) {
+    if ((uintptr_t)mod != 0x140000000ull || !ExeStampOk((unsigned)nt->FileHeader.TimeDateStamp)) {
         Log("motor: exe distinto (base %p, sello %08X): sin parches", (void*)mod, (unsigned)nt->FileHeader.TimeDateStamp); return;
     }
     void* readers[3] = { (void*)&hk_Reader<0>, (void*)&hk_Reader<1>, (void*)&hk_Reader<2> };
@@ -107,12 +107,13 @@ void ExePatchInstall() {
 // vista en rdx + 0x1f0 (la misma disposicion que m_view del cbuffer, donde el shader proyecta con las columnas). El parche
 // reescribe esos 57 bytes para que haga v = (fila0 . d, fila1 . d, fila2 . d), con el mismo largo y los mismos registros
 // (xmm0 queda con la constante x [r8+0x40] como antes; xmm1 y xmm3 ya eran descartables). Usa insertps (SSE4.1) y haddps (SSE3).
-static const uintptr_t kSunFixAt = 0x14171e2a7ull;
-static const unsigned char kSunFixOld[57] = {
+static const uintptr_t kSunFixAt = XA(0x14171e2a7ull);
+// (12/11) no son const: en el exe 1.00 la constante queda a otra distancia (SunFixPresent corrige el desplazamiento)
+static unsigned char kSunFixOld[57] = {
     0x0f,0x28,0xd1, 0x0f,0x28,0xc1, 0x0f,0xc6,0xd1,0x55, 0x0f,0x59,0x92,0x00,0x02,0x00,0x00, 0x0f,0xc6,0xc1,0x00,
     0x0f,0x59,0x82,0xf0,0x01,0x00,0x00, 0x0f,0xc6,0xc9,0xaa, 0x0f,0x59,0x8a,0x10,0x02,0x00,0x00, 0x0f,0x58,0xd0,
     0x0f,0x28,0x05,0xb8,0xcd,0x2e,0x01, 0x41,0x0f,0x59,0x40,0x40, 0x0f,0x58,0xd1 };
-static const unsigned char kSunFixNew[57] = {
+static unsigned char kSunFixNew[57] = {
     0x66,0x0f,0x3a,0x21,0xc9,0x08,            // insertps xmm1,xmm1,8   (w = 0: la fila 3 no entra)
     0x0f,0x28,0x92,0xf0,0x01,0x00,0x00,       // movaps xmm2,[rdx+1f0]
     0x0f,0x59,0xd1,                           // mulps  xmm2,xmm1
@@ -127,6 +128,11 @@ static const unsigned char kSunFixNew[57] = {
 static bool s_sunFixDone = false; static int s_sunFixTries = 0;
 static void SunFixPresent() {
     if (s_sunFixDone || !g_cfg.motorSunFix) return;
+    static bool s_sunFixVer = false;
+    if (!s_sunFixVer) {   // exe 1.00: movaps xmm0,[rip+0x012e6ea8] en vez de [rip+0x012ecdb8] (la misma constante, verificada en el exe)
+        s_sunFixVer = true;
+        if (ExeVer() == 100) { kSunFixOld[45] = 0xa8; kSunFixOld[46] = 0x6e; kSunFixNew[48] = 0xa5; kSunFixNew[49] = 0x6e; }
+    }
     if (!SigOk(kSunFixAt, kSunFixOld, sizeof kSunFixOld)) {
         if (SigOk(kSunFixAt, kSunFixNew, sizeof kSunFixNew)) { s_sunFixDone = true; Log("motor: sol_parche ya estaba puesto"); return; }
         if (++s_sunFixTries == 30) Log("motor: sol_parche: los bytes de 0x14171e2a7 no coinciden con los esperados (exe distinto?): no se parchea");
@@ -176,7 +182,7 @@ static void SunFixPresent() {
 // (La primera version, 7a8f7d8, trasponia la matriz entera en 0x14171e34a sola: no tocaba la sombra del sol.)
 // sombra_parche: 0 = como el juego, 1 = (31/10) corrige la camara de sombras en el exe (0x1416c61e9, abajo), 2 = la
 // correccion vieja de m_shadowProjection en el cbuffer de escena (hooks.cpp; no sirve sola), 3 = solo registro (sin corregir: anota las matrices de la camara, la del cuadro anterior y las del shader).
-static const uintptr_t kShadowFixAt = 0x14171e34aull, kShadowFixBack = 0x14171e37aull;
+static const uintptr_t kShadowFixAt = XA(0x14171e34aull), kShadowFixBack = XA(0x14171e37aull);
 static const unsigned char kShadowFixOld[48] = {
     0x0f,0x28,0xb2,0x00,0x02,0x00,0x00, 0x44,0x0f,0x28,0xa2,0x20,0x02,0x00,0x00, 0x44,0x0f,0x28,0xd6,
     0xf3,0x41,0x0f,0x10,0x98,0xdc,0x00,0x00,0x00, 0x41,0x0f,0x28,0xe4, 0x44,0x0f,0x28,0xba,0x10,0x02,0x00,0x00,
@@ -193,7 +199,7 @@ static const unsigned char kCaveKeepT[] = {          // la columna 3 y la fila 3
 static const unsigned char kCaveTail[] = {           // movss xmm3,[r8+dc]; movaps xmm10,xmm6; movaps xmm4,xmm12; jmp [rip+0]
     0xf3,0x41,0x0f,0x10,0x98,0xdc,0x00,0x00,0x00, 0x44,0x0f,0x28,0xd6, 0x41,0x0f,0x28,0xe4, 0xff,0x25,0x00,0x00,0x00,0x00 };
 // escena (0x1416de354, rbx = camara): carga xmm10/xmm9/xmm0/xmm12 con la 3x3 traspuesta (w = 0) y vuelve a 0x1416de373
-static const uintptr_t kSceneFixAt = 0x1416de354ull, kSceneFixBack = 0x1416de373ull;
+static const uintptr_t kSceneFixAt = XA(0x1416de354ull), kSceneFixBack = XA(0x1416de373ull);
 static const unsigned char kSceneFixOld[31] = {
     0x44,0x0f,0x28,0x93,0xf0,0x01,0x00,0x00, 0x44,0x0f,0x28,0x8b,0x00,0x02,0x00,0x00, 0x0f,0x28,0x83,0x10,0x02,0x00,0x00,
     0x44,0x0f,0x28,0xa3,0x20,0x02,0x00,0x00 };
@@ -211,7 +217,7 @@ static const unsigned char kSceneCaveT[] = {          // traspone la 3x3 de xmm1
 // de ahi salen el cbuffer de escena (m_shadowProjection) y la pasada de profundidad, por eso hay que corregirlo en la fuente.
 // El parche salta a un codigo propio que carga esas 3 filas TRASPUESTAS (w = 0) y vuelve: la inversa del juego da entonces
 // [3x3 ; -t x 3x3] = vista -> mundo de verdad, y la sombra queda fija al cielo con cualquier camara. Se quita en vivo (0).
-static const uintptr_t kCasterFixAt = 0x1416c61e9ull, kCasterFixBack = 0x1416c6216ull;
+static const uintptr_t kCasterFixAt = XA(0x1416c61e9ull), kCasterFixBack = XA(0x1416c6216ull);
 static const unsigned char kCasterFixOld[45] = {
     0x41,0x0f,0x28,0xa5,0xf0,0x01,0x00,0x00, 0x0f,0x29,0xa5,0x90,0x05,0x00,0x00,     // movaps xmm4,[r13+1f0]; movaps [rbp+590],xmm4
     0x41,0x0f,0x28,0xad,0x00,0x02,0x00,0x00, 0x0f,0x29,0xad,0xa0,0x05,0x00,0x00,     // movaps xmm5,[r13+200]; movaps [rbp+5a0],xmm5
@@ -441,16 +447,18 @@ static int s_lodBase = -1, s_lodLast = -1; static bool s_lodChecked = false, s_l
 void ExePatchPresent() {
     if (!g_cfg.motorPatch) return;
     double t = Now(); if (t - s_lodT < 1.0) return; s_lodT = t;
+    static int s_exeOk = -1; if (s_exeOk < 0) s_exeOk = ExeOk() ? 1 : 0;   // (12/11) exe desconocido o exe_100 = 0: nada de esto
+    if (!s_exeOk) return;
     SolRelojPresent();   // (02/11) hora del dia, sol y sunLux del motor (solo registro)
     SunFixPresent();   // (27/10) el sol que gira con la camara
     ShadowFixPresent(); ShadowFixCamLog(); CasterFixLog(); ShadowCasterLogPresent();   // (27/10) la sombra que gira con la camara
-    volatile int* g = (volatile int*)0x14374cd94ull;
+    volatile int* g = (volatile int*)XA(0x14374cd94ull);
     if (!s_lodChecked) {
         s_lodChecked = true;
         HMODULE mod = GetModuleHandleW(nullptr);
         auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
         MEMORY_BASIC_INFORMATION mi{};
-        s_lodOk = (uintptr_t)mod == 0x140000000ull && nt->FileHeader.TimeDateStamp == kExeStamp && VirtualQuery((void*)g, &mi, sizeof mi)
+        s_lodOk = (uintptr_t)mod == 0x140000000ull && ExeStampOk((unsigned)nt->FileHeader.TimeDateStamp) && VirtualQuery((void*)g, &mi, sizeof mi)
                && mi.State == MEM_COMMIT && (mi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_WRITECOPY));
         if (!s_lodOk) { Log("motor: LOD de modelos no disponible (exe distinto o memoria protegida %08X)", (unsigned)mi.Protect); return; }
     }

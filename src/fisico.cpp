@@ -23,19 +23,19 @@
 namespace fx {
 
 static const unsigned kStamp = 0x62787C6A;
-static const uintptr_t kBodyVt = 0x142704dd8ull, kBodyCol = 0x142cd50d8ull;
-static const uintptr_t kEditWorkGlobal = 0x1438040a8ull;
+static const uintptr_t kBodyVt = XA(0x142704dd8ull), kBodyCol = XA(0x142cd50d8ull);
+static const uintptr_t kEditWorkGlobal = XA(0x1438040a8ull);
 // funciones del juego (con su firma para verificar antes de llamarlas)
-static const uintptr_t kGetComp = 0x140e4f5d0ull, kSetRow = 0x140cd39f0ull, kSetNumRows = 0x140cd3680ull, kSetCursor = 0x140e42300ull,
-    kSetEnable = 0x140e4dfc0ull, kSelClear = 0x140e54140ull, kSelAdd = 0x140e53ee0ull, kSelSet = 0x140e54180ull, kSelGet = 0x140e540f0ull,
-    kSliderRange = 0x140e5bf80ull, kSliderGet = 0x140e5b9d0ull, kTitleSetStr = 0x140e56ca0ull, kTitleSetId = 0x140e56c10ull,
-    kSetText = 0x140e4b030ull, kSetBtnMode = 0x140e433d0ull, kSetHintStr = 0x140e43500ull, kUiSetColor = 0x140e81350ull;
+static const uintptr_t kGetComp = XA(0x140e4f5d0ull), kSetRow = XA(0x140cd39f0ull), kSetNumRows = XA(0x140cd3680ull), kSetCursor = XA(0x140e42300ull),
+    kSetEnable = XA(0x140e4dfc0ull), kSelClear = XA(0x140e54140ull), kSelAdd = XA(0x140e53ee0ull), kSelSet = XA(0x140e54180ull), kSelGet = XA(0x140e540f0ull),
+    kSliderRange = XA(0x140e5bf80ull), kSliderGet = XA(0x140e5b9d0ull), kTitleSetStr = XA(0x140e56ca0ull), kTitleSetId = XA(0x140e56c10ull),
+    kSetText = XA(0x140e4b030ull), kSetBtnMode = XA(0x140e433d0ull), kSetHintStr = XA(0x140e43500ull), kUiSetColor = XA(0x140e81350ull);
 // (24/10 d) paleta de colores del juego (menusystem::ColorPaletteWindow, la de pelo / ojos / accesorios): la abre el menu
 // base al decidir sobre una fila de color ("c_color", estado 5; tabla de tipos 0x143707d60: tipo 6 -> 0x140e3caf0 abre la
 // ventana con el componente de color (tipo 8, color RGBA en + 0xb4) como dueno; la ventana le escribe el color elegido cada
 // cuadro (vtable[31]) y al cerrarse el menu base llama a vtable[62] (fila, lista)). Sus paletas: [0x2a] / [0x2b] = puntero y
 // cantidad de "p_all" (72 colores genericos; en el modo 0 se ven p_current, p_all y p_creat = colores creados a mano)
-static const uintptr_t kPaletteVt = 0x1427d0350ull;
+static const uintptr_t kPaletteVt = XA(0x1427d0350ull);
 struct Sig { uintptr_t a; unsigned char b[10]; };
 static const Sig kSigs[] = {
     { kGetComp,     { 0x48, 0x8b, 0x49, 0x78, 0x44, 0x8b, 0xd2, 0x45, 0x33, 0xc9 } },
@@ -63,9 +63,9 @@ static const Sig kSigs[] = {
 enum { V_DECIDE = 49, V_BACK = 50, V_RESET = 52, V_L1 = 53, V_R1 = 54, V_VAL = 62, V_VALSET = 63, V_ROWS = 76, V_COUNT = 78 };
 enum { B_L1 = 6, B_R1 = 7 };
 static const struct { int i; uintptr_t orig; } kVt[] = {
-    { V_DECIDE, 0x140cd35d0ull }, { V_BACK, 0x140c2e3e0ull }, { V_RESET, 0x140c2e420ull }, { V_VAL, 0x140c2e120ull },
-    { V_VALSET, 0x140c2e140ull }, { V_ROWS, 0x140c2e1e0ull }, { V_COUNT, 0x14217f830ull },
-    { V_L1, 0x141b42640ull }, { V_R1, 0x141b42640ull },
+    { V_DECIDE, XA(0x140cd35d0ull) }, { V_BACK, XA(0x140c2e3e0ull) }, { V_RESET, XA(0x140c2e420ull) }, { V_VAL, XA(0x140c2e120ull) },
+    { V_VALSET, XA(0x140c2e140ull) }, { V_ROWS, XA(0x140c2e1e0ull) }, { V_COUNT, XA(0x14217f830ull) },
+    { V_L1, XA(0x141b42640ull) }, { V_R1, XA(0x141b42640ull) },
 };
 
 typedef void* (__fastcall* Fn4)(void*, void*, void*, void*);
@@ -332,7 +332,7 @@ static const char* PageTitle(int page) {
 static void ReadEditPlayer() {
     s_editId = 0; s_editName[0] = 0;
     void* ew = nullptr; uint64_t key = 0;
-    if (!Rd((void*)kEditWorkGlobal, ew) || !ew || !Rd((char*)ew + 0xe0, key)) return;
+    if (!Rd((void*)kEditWorkGlobal, ew) || !ew || !Rd((char*)ew + (ExeVer() == 100 ? 0xd0 : 0xe0), key)) return;   // en el exe 1.00 la clave esta 0x10 antes
     s_editId = (uint32_t)(key >> 32) & 0x800bffffu;
     CharPlayerName(key, s_editName, sizeof s_editName);
 }
@@ -579,7 +579,7 @@ static void ApplySkin(int row, int idx) {
 // (24/10 e) la paleta la abre el menu base por su cuenta (no pasa por decidir), y toma sus 72 colores genericos de una
 // tabla fija del exe (p_all, 0x1434d1dc0, solo lectura). Mientras la pagina Piel esta activa, esa tabla lleva en memoria
 // una grilla ordenada de tonos (ver PalApply); al salir vuelve la original (el exe en disco no se toca)
-static const uintptr_t kPalAll = 0x1434d1dc0ull; static const int kPalN = 72;
+static const uintptr_t kPalAll = XA(0x1434d1dc0ull); static const int kPalN = 72;
 static uint32_t s_palOrig[kPalN]; static bool s_palSaved = false, s_palPatched = false;
 static void PalWrite(const uint32_t* v) {
     DWORD old = 0; void* dst = (void*)kPalAll;
@@ -1034,7 +1034,7 @@ void FisicoInstall() {
     if (!DiagOn(1)) { Log("fisico: ganchos del menu Fisico apagados (y173 = 0, Diagnostico > Ganchos nuevos)"); return; }
     HMODULE mod = GetModuleHandleW(nullptr);
     auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
-    if ((uintptr_t)mod != 0x140000000ull || nt->FileHeader.TimeDateStamp != kStamp) { Log("fisico: exe distinto, sin musculatura en el menu Fisico"); return; }
+    if ((uintptr_t)mod != 0x140000000ull || !ExeStampOk((unsigned)nt->FileHeader.TimeDateStamp)) { Log("fisico: exe distinto, sin musculatura en el menu Fisico"); return; }
     for (auto& s : kSigs) if (!Readable((void*)s.a, sizeof s.b) || memcmp((void*)s.a, s.b, sizeof s.b) != 0) { Log("fisico: la funcion 0x%llx no coincide, sin musculatura en el menu Fisico", (unsigned long long)s.a); return; }
     // 0x140e4b030 (poner el texto de un componente) suele estar desviada por otro mod (Sider la usa para sus textos): se llama
     // igual, pasa por el desvio y termina en la original

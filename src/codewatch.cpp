@@ -53,8 +53,8 @@ static DWORD WINAPI WatchThread(void*) {
     HMODULE m = GetModuleHandleW(nullptr);
     auto dos = (const IMAGE_DOS_HEADER*)m; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)m + dos->e_lfanew);
     const IMAGE_SECTION_HEADER* sh = IMAGE_FIRST_SECTION(nt);
-    for (int i = 0; i < nt->FileHeader.NumberOfSections; i++)
-        if (memcmp(sh[i].Name, ".text\0\0\0", 8) == 0) { s_base = (uintptr_t)m + sh[i].VirtualAddress; s_size = sh[i].Misc.VirtualSize; break; }
+    (void)sh; (void)nt;
+    { uintptr_t lo = 0; size_t sz = 0; if (ExeCodeSection(&lo, &sz)) { s_base = lo; s_size = sz; } }   // ".text"; en el exe 1.00, ".trace"
     s_mod = (uintptr_t)m;
     if (!s_base || !s_size) { Log("codigo: no encontre la seccion .text de PES2021.exe, sin vigilancia"); return 0; }
     s_size = (s_size + 0xFFF) & ~(size_t)0xFFF;
