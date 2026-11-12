@@ -2089,7 +2089,9 @@ static void HookSwapChain(IDXGISwapChain* sc) {
 // (ventana oculta, dispositivo aparte con el d3d11 de Windows) solo para leer de su vtable donde esta el codigo de Present y de
 // ResizeBuffers, y se engancha ese codigo con MinHook: pasa por ahi cualquier cadena, este quien este antes en la vtable (Sider
 // llama a ese mismo codigo). Si la cadena del juego ya se engancho por el camino normal no se hace nada (en 1.07.02 asi es siempre).
-HMODULE fx_RealD3D11();
+}   // namespace fx
+HMODULE fx_RealD3D11();   // d3d11_proxy.cpp (fuera del namespace)
+namespace fx {
 static DWORD WINAPI PresentPlanB(void*) {
     Sleep(15000);
     {
@@ -2097,7 +2099,7 @@ static DWORD WINAPI PresentPlanB(void*) {
         if (s_scHooked || !g_cfg.optPresent) return 0;
     }
     Log("Present: a los 15 s el juego no paso por CreateSwapChain (sin menu ni ganchos del primer Present): plan B");
-    auto cdsc = (PFN_D3D11CreateDeviceAndSwapChain)(fx_RealD3D11() ? GetProcAddress(fx_RealD3D11(), "D3D11CreateDeviceAndSwapChain") : nullptr);
+    auto cdsc = (PFN_D3D11CreateDeviceAndSwapChain)(::fx_RealD3D11() ? GetProcAddress(::fx_RealD3D11(), "D3D11CreateDeviceAndSwapChain") : nullptr);
     if (!cdsc) { Log("Present: plan B sin D3D11CreateDeviceAndSwapChain de Windows"); return 0; }
     WNDCLASSEXW wc{}; wc.cbSize = sizeof wc; wc.lpfnWndProc = DefWindowProcW; wc.hInstance = GetModuleHandleW(nullptr); wc.lpszClassName = L"PES21FX_planB";
     RegisterClassExW(&wc);
