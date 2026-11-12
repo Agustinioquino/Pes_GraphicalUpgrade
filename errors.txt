@@ -1,0 +1,2 @@
+hooks.obj : error LNK2019: unresolved external symbol "struct HINSTANCE__ * __cdecl fx::fx_RealD3D11(void)" (?fx_RealD3D11@fx@@YAPEAUHINSTANCE__@@XZ) referenced in function "unsigned long __cdecl fx::PresentPlanB(void *)" (?PresentPlanB@fx@@YAKPEAX@Z) [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\Release\d3d11.dll : fatal error LNK1120: 1 unresolved externals [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
