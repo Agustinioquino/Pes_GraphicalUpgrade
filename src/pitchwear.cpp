@@ -74,7 +74,7 @@ static std::vector<BootDirt> s_bd; static int s_bdGen = -1;
 static UINT s_bdKey[kStages][kBallSlots] = {};          // clave de cada dibujo anotado (vertices ^ textura t0) para no cruzar botines
 static UINT s_bootKey[kBallSlots] = {}; static float s_bootVal[kBallSlots][4] = {}; static float s_bootAvgV[4] = { 2.f, 0.f, 0.f, 0.f };
 static ID3D11Buffer* s_bootCb[kBallSlots] = {}; static ID3D11Buffer* s_bootAvgCb = nullptr;
-static std::atomic<int> s_bootHit{0}, s_bootAvgN{0}, s_bootAssigned{0}; static float s_bootSlideT = 0.f; static int s_bootLandN = 0; static float s_bootYb = 0.f; static int s_bootYn = 0;
+static std::atomic<int> s_bootHit{0}, s_bootAvgN{0}, s_bootAssigned{0}; static float s_bootReplayT = 0.f; /* (12/11) segundos de repeticion (tiempo ya jugado) en los que no se sumo */ static float s_bootSlideT = 0.f; static int s_bootLandN = 0; static float s_bootYb = 0.f; static int s_bootYn = 0;
 static inline float BootAmt() { return std::clamp(g_cfg.live[430][0], 0.f, 2.f); }
 static float WetNow() {   // misma regla que PESEqWet de los shaders (filas 110 / 114): automatico = lluvia del partido
     const float* Q = g_cfg.live[110]; const float* L = g_cfg.live[114]; int m = (int)(Q[2] + 0.5f); float wet = 0.f;
@@ -621,8 +621,8 @@ static void BallDrawPresent() {
             if (s_bootCb[i]) g_dev.imm->UpdateSubresource(s_bootCb[i], 0, nullptr, s_bootVal[i], 0, 0); else s_bootKey[i] = 0; }
         if (s_bootAvgCb) g_dev.imm->UpdateSubresource(s_bootAvgCb, 0, nullptr, s_bootAvgV, 0, 0);
         static double nextL = 0.0; if (tn >= nextL && g_cfg.live[58][3] > 0.5f) { nextL = tn + 15.0; float mx = 0.f, mg = 0.f; for (const BootDirt& b : s_bd) { mx = std::max(mx, b.dirt); mg = std::max(mg, b.grass); }
-            Log("botines sucios (15 s): jugadores %d (activos %d) | tierra media %.2f max %.2f, pasto medio %.2f max %.2f, mojado %.2f | barridas %.1f s, caidas de salto %d, cadera de pie media %.2f m | dibujos con su jugador %d, con el promedio %d, asignados %d | x430 %.2f y430 %.2f z430 %.2f w430 %.2f",
-                (int)s_bd.size(), nAct, s_bootAvgV[1], mx, s_bootAvgV[2], mg, wet, s_bootSlideT, s_bootLandN, s_bootYn ? s_bootYb / s_bootYn : -1.f, s_bootHit.exchange(0), s_bootAvgN.exchange(0), s_bootAssigned.exchange(0), g_cfg.live[430][0], g_cfg.live[430][1], g_cfg.live[430][2], g_cfg.live[430][3]); s_bootSlideT = 0.f; s_bootLandN = 0; s_bootYb = 0.f; s_bootYn = 0; } }
+            Log("botines sucios (15 s): jugadores %d (activos %d) | tierra media %.2f max %.2f, pasto medio %.2f max %.2f, mojado %.2f | barridas %.1f s, caidas de salto %d, repeticion sin sumar %.1f s, cadera de pie media %.2f m | dibujos con su jugador %d, con el promedio %d, asignados %d | x430 %.2f y430 %.2f z430 %.2f w430 %.2f",
+                (int)s_bd.size(), nAct, s_bootAvgV[1], mx, s_bootAvgV[2], mg, wet, s_bootSlideT, s_bootLandN, s_bootReplayT, s_bootYn ? s_bootYb / s_bootYn : -1.f, s_bootHit.exchange(0), s_bootAvgN.exchange(0), s_bootAssigned.exchange(0), g_cfg.live[430][0], g_cfg.live[430][1], g_cfg.live[430][2], g_cfg.live[430][3]); s_bootSlideT = 0.f; s_bootLandN = 0; s_bootReplayT = 0.f; s_bootYb = 0.f; s_bootYn = 0; } }
     g_dev.imm->Unmap(s_bdStage[rd], 0); memset(s_bdIdx[rd], 0, sizeof s_bdIdx[rd]); memset(s_bdKey[rd], 0, sizeof s_bdKey[rd]);
     if (found) {   // (2/11 paso 10) voto por el indice mas frecuente de los ultimos 10 cuadros con candidato (antes 3 seguidos, que un botin intercalado reiniciaba)
         UINT* hist = s_ballHist; s_ballHist[s_ballHp] = found; s_ballHp = (s_ballHp + 1) % 10;
@@ -640,6 +640,16 @@ static void BootDirtUpdate(const std::vector<PlayerPrev>& pl, float dt) {
     const float amt = BootAmt(); if (amt < 0.001f || dt <= 0.f) return;
     if (g_matchGen.load() != s_bdGen) { s_bdGen = g_matchGen.load(); s_bd.clear(); }
     if (g_cfg.live[10][0] <= 0.f) return;   // fuera del partido (editor, menus): no junta
+    // (12/11, Agustin: "la suciedad tiene que tener memoria y ir con el gameclock interno") lo de cada jugador dura todo el partido (solo se borra
+    // con un partido nuevo) y solo suma cuando el reloj del juego (fila 157) pasa por tiempo NUEVO: si la repeticion lo rebobina y lo vuelve a
+    // correr, lo ya jugado no ensucia de nuevo. Con el reloj del juego apagado (w157 0) se usa el dt de siempre
+    static double s_gMax = -1e18; static int s_gGen = -1;
+    if (s_gGen != s_bdGen) { s_gGen = s_bdGen; s_gMax = -1e18; }
+    if (g_cfg.live[157][3] >= 0.5f) { const double g = (double)g_cfg.live[157][0];
+        if (s_gMax < -1e17) s_gMax = g;
+        double dNew = g - s_gMax; if (dNew < -50000.0) dNew += 100000.0;   // vuelta del reloj (100000 s)
+        if (dNew <= 0.0) { s_bootReplayT += dt; dt = 0.f; } else { dt = std::min(dt, (float)dNew); s_gMax = g; } }
+    const bool accum = dt > 0.f;
     const double tn = Now(); const float wet = WetNow(), dry = g_cfg.live[114][0] > 1.5f ? 1.f : 0.f;
     const float fall = g_cfg.live[430][3] > 0.001f ? std::clamp(g_cfg.live[430][3], 0.f, 3.f) : 1.f;
     std::vector<char> used(s_bd.size(), 0);
@@ -650,7 +660,7 @@ static void BootDirtUpdate(const std::vector<PlayerPrev>& pl, float dt) {
         if (bj < 0) { bd = 1e9f; for (size_t j = 0; j < s_bd.size(); j++) { if (used[j] || tn - s_bd[j].seen < 0.3) continue; float dx = s_bd[j].x - p.x, dz = s_bd[j].z - p.z, d2 = dx * dx + dz * dz; if (d2 < bd) { bd = d2; bj = (int)j; } } }
         if (bj < 0) { if (s_bd.size() >= (size_t)kMaxPlayers) continue; s_bd.push_back(BootDirt{ p.x, p.z, 0.f, 0.f, tn }); used.push_back(0); bj = (int)s_bd.size() - 1; }
         used[bj] = 1; BootDirt& b = s_bd[bj]; b.x = p.x; b.z = p.z; b.seen = tn; if (p.yok && p.yb > 0.f) { s_bootYb += p.yb; s_bootYn++; }
-        if (p.trk < 4) continue;   // recien aparecido: sin velocidad confiable
+        if (p.trk < 4 || !accum) continue;   // recien aparecido: sin velocidad confiable; repeticion: ya se sumo
         const float sp = std::min(sqrtf(p.svx * p.svx + p.svz * p.svz), 11.f);
         const float run = (sp > 1.2f && !p.air) ? sp * dt : 0.f;                       // metros corridos (caminar despacio o en el aire no ensucia)
         const float bare = std::clamp(WearCpuAt(p.x, p.z), 0.f, 1.f);                  // cancha pelada bajo sus pies (desgaste del partido)
