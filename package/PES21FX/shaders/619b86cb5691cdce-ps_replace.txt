@@ -648,6 +648,21 @@ void main(
       }
     }
   }
+  // === PES21 (12/11 20:40, Agustin: dos mejoras del pasto en general) x444 BRILLO CON EL SOL A LA ESPALDA (efecto de oposicion del pasto):
+  // con el sol detras de la camara cada hoja tapa su propia sombra y la cancha se ve mas clara y pareja, con un halo mas claro alrededor
+  // del punto justo opuesto al sol (donde caeria la sombra de la camara); mirando hacia el sol se ven los lados en sombra y queda apenas mas
+  // oscura (la contraluz y57 sigue igual). Solo el cesped (tipo 3) al sol, de dia. 0 = como antes
+  { float kHs = clamp(IniParams.Load(int2(444,0)).x, 0.0, 2.0);
+    if (cmpOn && kHs > 0.001 && tyC == 3 && IniParams.Load(int2(114,0)).w > 0.5 && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {
+      float zH = PESLinZ(uvC);
+      if (zH > 0.1 && zH < 400.0) {
+        float3 PH = float3(((uvC * float2(2, -2) + float2(-1, 1)) - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zH, zH);
+        float cA = -dot(normalize(pLc_dir.xyz), normalize(PH));            // 1 = sol a la espalda, -1 = de frente (como dot(Ld, Vsk))
+        float shH = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
+        float hot = exp(-(1.0 - cA) * 33.0);                                 // halo de ~14 grados
+        r2.xyz *= 1.0 + kHs * shH * (0.22 * hot + 0.08 * cA);
+      }
+    } }
   // === PES21 luz de cielo (17/10): ambiente hemisferico. Lo que mira hacia arriba recibe un poco de azul del cielo,
   // lo que mira al costado la mitad; cambia con la altura del sol (mas azul de dia, violaceo al atardecer, nada de noche).
   // x47 fuerza, y47 cuanto azul (0 = gris), w47 on/off [Alt+Shift+C]

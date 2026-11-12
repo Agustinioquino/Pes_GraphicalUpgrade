@@ -150,12 +150,22 @@ float PESWearLiveHeight(float live) { float4 LW = IniParams.Load(int2(115, 0));
 // variacion de color por zonas (manchas de 2-6 m mas verdes / mas palidas, y detalle de 0.5 m): multiplicador rgb
 float3 PESGrassZones(float2 wxz, float k)
 {
-  if (k <= 0.001) return float3(1.0, 1.0, 1.0);
+  // (12/11 20:40, Agustin: dos mejoras del pasto en general) y444 MEZCLA DE VARIEDADES: una cancha real se siembra con dos o tres pastos
+  // (raigras y poa): manchones finos de 20-50 cm de uno mas oscuro y azulado entre otro mas claro y amarillento. Misma cuenta en la base y
+  // en las hojas (cada hoja toma el de su raiz), fijo en el mundo. 0 = como antes
+  float kMix = clamp(IniParams.Load(int2(444, 0)).y, 0.0, 2.0);
+  float3 tMix = float3(1.0, 1.0, 1.0);
+  if (kMix > 0.001) {
+    float nM = PESGnoise(wxz * 2.6 + 11.3) * 0.6 + PESGnoise(wxz * 6.1 + 3.9) * 0.4;
+    float sp = smoothstep(0.42, 0.62, nM);
+    tMix = lerp(float3(1.0, 1.0, 1.0), lerp(float3(0.92, 0.96, 1.04), float3(1.06, 1.04, 0.90), sp), saturate(0.7 * kMix));
+  }
+  if (k <= 0.001) return tMix;
   float m1 = PESGnoise(wxz * 0.045), m2 = PESGnoise(wxz * 0.16 + 5.3), m3 = PESGnoise(wxz * 0.85 + 1.7);
   float macro = (m1 * 0.55 + m2 * 0.3 + m3 * 0.15) - 0.5;
   float hue = m2 - 0.5;
   float3 t = (1.0 + macro * 0.28 * k) * lerp(float3(1.0, 1.0, 1.0), float3(1.10, 1.0, 0.82), hue * 0.9 * k);
-  return t;
+  return t * tMix;
 }
 
 // color seco (amarillo pajizo) y tierra, con la luminancia del pasto
