@@ -92,6 +92,7 @@ void main(
   r0.zw = (((r0.zzzz != 0) ? r1.xxxy : r2.xxxy)).zw;
   r0.zw = ((t2.Sample(s9, (r0.zwzz).xy)).zwxy).zw;
   r0.zw = ((r0.zzzw + -(cb5[10].zzzw))).zw;
+  float pesVelPx = length(r0.zw);   // (12/11) w440: movimiento de este pixel en px por cuadro (velocidad del juego, sin el jitter)
   r1.xy = ((r0.zwzz * cb5[9].zwzz)).xy;
   r1.zw = (((float4(0.0, 0.0, 0.0, 0.0) != cb5[12].yyyx) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).zw;
   r2.x = (float4((~int4(r1.wwww)))).x;
@@ -332,6 +333,14 @@ void main(
     r0.x = (saturate((r1.yyyy * r0.yyyy + r0.xxxx))).x;
     // PES21 x332 / z332: piso del peso hacia el cuadro actual (la historia no acumula sin limite); mas donde hay contraste fino
     if (pesOn) r0.x = max(r0.x, saturate(clamp(P332.x, 0.0, 0.5) + clamp(P332.z, 0.0, 0.5) * saturate(pesCon * 2.0 - 0.1)));
+    // (12/11, Agustin: "al hacer zoom parece que el taa borroneo mas el pasto") w440 NITIDEZ EN MOVIMIENTO: con la camara quieta la historia
+    // vale ~1 / x332 cuadros; con zoom o paneo cada cuadro la historia se vuelve a muestrear corrida una fraccion de pixel y cada vuelta la
+    // ablanda un poco: en las hojas (1-2 px, mucho contraste) se nota como pasto borroso mientras la camara se mueve. Mientras el pixel se
+    // mueve, el cuadro actual pesa mas (hasta 0.30 donde hay contraste fino, 0.12 en lo liso) y entra con mas realce (abajo). Quieta = igual
+    float pesMovK = 0.0;
+    if (pesOn) { float kMv = clamp(IniParams.Load(int2(440,0)).w, 0.0, 1.0);
+      if (kMv > 0.001) { pesMovK = kMv * smoothstep(0.08, 1.2, pesVelPx);
+        r0.x = max(r0.x, pesMovK * lerp(0.12, 0.30, saturate(pesCon * 2.0 - 0.1))); } }
     if (pesOn) {
       // PES21 (04/11) mezcla pesada por luminancia (anti-titileo, tipo Lottes/Karis): un pixel claro del cuadro actual (punta de hoja
       // con sol, brillo del pelo, borde de la cara contra el cielo) pesa menos que uno oscuro, asi el borde serruchado del cuadro
@@ -341,7 +350,7 @@ void main(
       // con un realce suave contra el promedio de su vecindario (como el filtro de reconstruccion con realce de los TAA de Unreal), recortado
       // al rango del vecindario (sin halos). Con la camara quieta la historia converge a la imagen promediada de los jitters YA realzada:
       // gana definicion sin subir el alfa (el titileo de las puntas no crece). 0 = como antes
-      { float kDef = clamp(IniParams.Load(int2(440,0)).y, 0.0, 1.0);
+      { float kDef = saturate(clamp(IniParams.Load(int2(440,0)).y, 0.0, 1.0) + 0.5 * pesMovK);   // w440: mas realce en movimiento
         if (kDef > 0.001) { float3 c0 = pesCur; pesCur = clamp(c0 + (c0 - pesMean5) * (0.6 * kDef), min(pesNMin, c0), max(pesNMax, c0)); } }
       float wc = r0.x / (1.0 + dot(pesCur, float3(0.2126, 0.7152, 0.0722)));
       float wh = (1.0 - r0.x) / (1.0 + dot(r9.xyz, float3(0.2126, 0.7152, 0.0722)));
