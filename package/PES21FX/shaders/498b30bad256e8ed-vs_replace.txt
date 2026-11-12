@@ -875,7 +875,7 @@ void main(
         float hTopB = min(pesNatV ? PES_NAT_CUT * 0.058 : pesHref, 0.1);
         float rCt = sqrt(max(0.013225 - (0.115 - hTopB) * (0.115 - hTopB), 0.0));   // donde la esfera toca la altura de las puntas
         float rBow = rCt + 0.02 + 0.06 * spK;
-        float kBow = smoothstep(rBow, rCt * 0.55, dL) * smoothstep(-0.06, 0.0, al) * contact * (0.35 + 0.65 * spK);
+        float kBow = smoothstep(rBow, rCt * 0.55, dL) * smoothstep(-0.06, 0.0, al) * contact * (0.35 * smoothstep(0.002, 0.006, dF) + 0.65 * spK);   // el piso entra suave: la pelota que se frena no suelta el pasto de golpe
         float Lw = 0.10 + 6.0 * dF;
         float kWake = smoothstep(0.13, 0.05, abs(lt)) * saturate(1.0 + al / Lw) * (1.0 - step(0.0, al)) * contact * spK;
         float air = smoothstep(1.0, 0.35, cb4[3].y) * (1.0 - contact) * smoothstep(0.06, 0.20, dF);

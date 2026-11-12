@@ -279,10 +279,14 @@ void PESGrassColorGrade(inout float3 c)
   // aplica igual a todos los colores, con la claridad de cada uno. El verde medio llega al mismo lugar que antes; la variedad queda
   bool natR = PESNatOn();
   const float3 gRef = float3(0.40, 1.0, 0.25);
+  // (12/11) el tono del natural solo mueve lo que tiene color: gris / blanco (lineas de cal, bordes de linea) quedan como estan
+  float mxC = max(c.r, max(c.g, c.b)), mnC = min(c.r, min(c.g, c.b));
+  float kS = saturate(((mxC - mnC) / max(mxC, 1e-3) - 0.12) * 5.0);
   if (abs(C.y) > 0.001) {
     float3 g = float3(0.19, 0.42, 0.10);
     if (natR) {
       float3 rt = max(lerp(gRef, g / g.g, clamp(C.y, -1.0, 1.0) * 0.6), 0.02) / gRef;
+      rt = lerp(float3(1.0, 1.0, 1.0), rt, kS);
       float3 cn = c * rt; c = max(cn * (dot(c, LW) / max(dot(cn, LW), 1e-5)), 0.0);
     } else {
       g *= l / dot(g, LW);
@@ -297,6 +301,7 @@ void PESGrassColorGrade(inout float3 c)
     float3 t = float3(0.78, 1.0, 0.42);
     if (natR) {
       float3 rt = lerp(gRef, t, clamp(C.w, 0.0, 1.0) * 0.85) / gRef;
+      rt = lerp(float3(1.0, 1.0, 1.0), rt, kS);
       float3 cn = c * rt; c = max(cn * (dot(c, LW) / max(dot(cn, LW), 1e-5)), 0.0);
     } else { t *= l / dot(t, LW); c = max(lerp(c, t, clamp(C.w, 0.0, 1.0) * 0.85), 0.0); }
   }

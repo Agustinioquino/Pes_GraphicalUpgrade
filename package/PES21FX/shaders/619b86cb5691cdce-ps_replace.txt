@@ -762,6 +762,7 @@ void main(
   // entero sobre el suelo: celeste del cielo fisico (150) o de la niebla, ocluida con el AO. x314 fuerza (1 = sombra a ~1/3 del sol
   // con el sol a ~30 grados, como una foto), y314 cuanto llega tambien a lo que esta al sol (el motor ya trae algo de ambiente ahi),
   // w314 on/off. Solo de dia con sol.
+  float3 sky314 = 0;   // (12/11) la luz de cielo de 314 sin la sombra (y445 la pasa de un lado al otro del borde)
   {
     float4 TS = IniParams.Load(int2(314,0));
     if (geoOk && TS.w > 0.5 && TS.x > 0.0 && tyC == 3 && zsk < 400.0 && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {
@@ -785,6 +786,7 @@ void main(
         float aoT = lerp(1.0, saturate(inOcclusion.SampleLevel(g_samplerLinear_Clamp_s, uvC, 0).x), 0.25);
         float kT = max(TS.x, 0.0) * 0.2 * lerp(saturate(TS.y), 1.0, 1.0 - shT);
         r2.xyz += lumT * skyT * kT * dayT * aoT * saturate((400.0 - zsk) / 120.0) * PESAmbGain();
+        sky314 = lumT * skyT * 0.2 * max(TS.x, 0.0) * dayT * aoT * saturate((400.0 - zsk) / 120.0) * PESAmbGain();
       }
     }
   }
@@ -1043,22 +1045,35 @@ void main(
         // --- x445 sombras de las matas
         float kT = clamp(P445.x, 0.0, 2.0) * ss5;
         if (kT > 0.001 && shC5 > 0.01 && hC5 > -0.05 && hC5 < 0.3) {
+          // (12/11, segunda lectura) matas y manojos con bordes marcados (un relieve suave casi no se hace sombra) y cada uno con su
+          // marcha hacia el sol; lo que no entra en pantalla usa el promedio MEDIDO de esa misma marcha (simulado: 200k puntos, error
+          // < 0.03), asi de cerca y de lejos se oscurece lo mismo
           float dT = smoothstep(0.02, 0.008, pxM5), dC = smoothstep(0.07, 0.03, pxM5);   // el detalle que entra en pantalla sin titilar
-          float aTe = aT * dT, aCe = aC * dC;
-          float Dm = min((aCe + aTe) * hCut * cotE, 0.5);
-          float occ = 0.0;
-          if (Dm > 0.002) {
-            float2 p0 = w5 + wsw;
-            float h0 = hCut * (1.0 - aCe * (1.0 - PES445N(p0 / 0.12)) - aTe * (1.0 - PES445N(p0 / 0.035 + 17.3)));
-            [unroll] for (int i5 = 1; i5 <= 4; i5++) {
-              float d5 = Dm * (float)i5 * 0.25;
-              float2 p5 = p0 + L5 * d5;
-              float hi = hCut * (1.0 - aCe * (1.0 - PES445N(p5 / 0.12)) - aTe * (1.0 - PES445N(p5 / 0.035 + 17.3)));
-              occ = max(occ, saturate((hi - h0 - d5 * tanE) / (0.12 * hCut + 1e-4)));
+          float2 p0 = w5 + wsw;
+          float thr5 = 1.0 / (0.12 * hCut + 1e-4);
+          float xC5 = aC * hCut * cotE / 0.12, xT5 = aT * hCut * cotE / 0.035;
+          float pC5 = pow(max(xC5, 0.0), 2.4), pT5 = pow(max(xT5, 0.0), 1.86);
+          float avgC = aC > 0.005 ? 0.45 * pC5 / (pC5 + 18.0 * pow(0.12 / aC, 0.87)) : 0.0;
+          float avgT = aT > 0.005 ? 0.50 * pT5 / (pT5 + 19.2 * pow(0.12 / aT, 1.05)) : 0.0;
+          float oC = 0.0, oT = 0.0;
+          float DmC = min(aC * hCut * cotE, 0.5), DmT = min(aT * hCut * cotE, 0.5);
+          if (dC > 0.001 && DmC > 0.002) {
+            float h0 = aC * hCut * smoothstep(0.30, 0.80, PES445N(p0 / 0.12));
+            [unroll] for (int i5 = 1; i5 <= 6; i5++) {
+              float d5 = DmC * (float)i5 / 6.0;
+              float hi = aC * hCut * smoothstep(0.30, 0.80, PES445N((p0 + L5 * d5) / 0.12));
+              oC = max(oC, saturate((hi - h0 - d5 * tanE) * thr5));
             }
           }
-          float occAvg = 0.32 * saturate((aC + aT) * hCut * cotE / 0.05);   // lo que no entra en pantalla: la parte en sombra en promedio
-          float occF = lerp(occAvg, occ, max(dT, dC));
+          if (dT > 0.001 && DmT > 0.002) {
+            float h0 = aT * hCut * smoothstep(0.50, 0.85, PES445N(p0 / 0.035 + 17.3));
+            [unroll] for (int i6 = 1; i6 <= 6; i6++) {
+              float d6 = DmT * (float)i6 / 6.0;
+              float hi = aT * hCut * smoothstep(0.50, 0.85, PES445N((p0 + L5 * d6) / 0.035 + 17.3));
+              oT = max(oT, saturate((hi - h0 - d6 * tanE) * thr5));
+            }
+          }
+          float occF = 1.0 - (1.0 - lerp(avgC, oC, dC)) * (1.0 - lerp(avgT, oT, dT));
           float vf = 0.85 + 0.30 * dot(Vsk, Ld5);                              // mirando hacia el sol se ven los lados en sombra
           float nearK = smoothstep(0.0006, 0.0018, pxM5);                    // de muy cerca las hojas 3D ya se hacen sombra entre ellas
           float dk = saturate(kT * occF * shC5 * 0.6 * vf * nearK);
@@ -1067,8 +1082,9 @@ void main(
         // --- y445 borde de las sombras con hojas
         float kE = clamp(P445.y, 0.0, 2.0) * ss5;
         if (kE > 0.001 && hC5 > -0.05 && hC5 < 0.3) {
-          float cs5 = max(0.005, pxM5 * 1.5);
-          float rb5 = PES445H(floor(w5 / cs5));
+          // celda de cada hoja en potencias de 2 de 5 mm, fija al mundo; entre un tamano y el siguiente se funde (no se rebaraja al mover la camara)
+          float lv5 = log2(max(pxM5 * 1.5 / 0.005, 1.0)), lf5 = floor(lv5), cs5 = 0.005 * exp2(lf5);
+          float rb5 = lerp(PES445H(floor(w5 / cs5)), PES445H(floor(w5 / (2.0 * cs5))), smoothstep(0.6, 1.0, lv5 - lf5));
           float sw5 = 0.12 * wind5 * (0.5 + 0.5 * sin(tw5 * 2.3 + rb5 * 6.2832));   // la punta baja y sube con las rafagas
           float u5 = art5 ? 0.85 + 0.15 * rb5 : lerp(0.35 + 0.65 * rb5, 0.75 + 0.25 * rb5, even5);
           float grazV = 1.0 - abs(dot(Vsk, up5));                             // de costado se ven mas puntas
@@ -1094,10 +1110,13 @@ void main(
                     if (tyS != 3) okQ = false;
                   }
                   if (okQ) {
-                    float3 rawC = max(inLightDiffuse.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).xyz, 1e-4);
+                    // (12/11, segunda lectura) se pasa la DIFERENCIA de luz (la del motor y la de cielo de 314 que depende de la sombra), no un
+                    // cociente: al cruzar el borde queda la luz del otro lado, sin linea brillante ni mas oscura que la sombra
+                    float3 rawC = inLightDiffuse.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).xyz;
                     float3 rawQ = inLightDiffuse.SampleLevel(g_samplerPoint_Clamp_s, uvQ, 0).xyz;
                     float m5 = saturate(kE) * smoothstep(0.02, 0.15, dS5);
-                    r2.xyz *= lerp(float3(1.0, 1.0, 1.0), clamp(rawQ / rawC, 0.1, 8.0), m5);
+                    float3 dSky5 = sky314 * (1.0 - saturate(IniParams.Load(int2(314,0)).y)) * (shC5 - shQ);
+                    r2.xyz = max(r2.xyz + m5 * ((rawQ - rawC) + dSky5), 0.0);
                   }
                 }
               }
@@ -1732,7 +1751,8 @@ void main(
         [loop] for (int kL = 0; kL < 6; kL++) {
           float hL = 0.12 * (1.0 + (float)kL) + 0.06 * (float)(kL * kL);   // 0.12, 0.30, 0.60, 1.02, 1.56, 2.22 m
           float tL = (hL - g_psScene.m_eyepos.y) / vyM;
-          if (tL > 0.08 && tL < min(dSurf, 30.0)) {
+          float gF = smoothstep(0.03, 0.08, abs(vyM));                        // rayo casi horizontal: la capa se apaga (no se corta)
+          if (gF > 0.001 && tL > 0.08 && tL < min(dSurf, 30.0)) {
             float3 Hv = VdM * tL;
             float2 hw = g_psScene.m_eyepos.xz + float2(dot(Hv, vXM), dot(Hv, vZM));
             float2 drift = wdM * (spM * (0.7 + 0.12 * (float)kL) * twM);
@@ -1745,7 +1765,9 @@ void main(
                   float r1m = PES445H(ch + 5.3), r2m = PES445H(ch + 9.1), r3m = PES445H(ch + 2.7);
                   float2 mp = (ci + 0.15 + 0.7 * float2(r1m, r2m)) * 0.35 + drift;
                   mp += 0.03 * float2(sin(twM * (0.7 + r3m) + r1m * 6.2832), cos(twM * (0.9 + r2m) + r3m * 6.2832));   // remolino
-                  float my = hL + 0.03 * sin(twM * (0.5 + 0.5 * r1m) + r2m * 6.2832);
+                  float my = hL;                                                // en el plano de la capa: la busqueda 3x3 siempre la encuentra
+                  float2 dh = abs(mp - hw);
+                  float edF = smoothstep(0.35, 0.22, max(dh.x, dh.y)) * gF;      // se apaga suave antes del borde de las 3x3 celdas (no se corta)
                   float3 dm = float3(mp.x - g_psScene.m_eyepos.x, my - g_psScene.m_eyepos.y, mp.y - g_psScene.m_eyepos.z);
                   float3 Mv = vXM * dm.x + upM * dm.y + vZM * dm.z;            // al espacio de vista
                   float tM = dot(Mv, VdM);
@@ -1758,7 +1780,7 @@ void main(
                       float life = 0.5 - 0.5 * cos(6.2832 * (twM * 0.07 * (0.6 + r3m) + r1m));   // aparece y se va despacio
                       float twk = 0.65 + 0.35 * sin(twM * (2.0 + 3.0 * r2m) + r1m * 20.0);       // titila al girar
                       float3 colM = lerp(float3(1.0, 0.86, 0.55), float3(0.95, 0.98, 1.0), saturate(dewM * (0.6 + 0.4 * r2m)));   // polen dorado / gotita blanca
-                      accM += colM * (Im * life * twk * PES445Lit(Mv));
+                      if (edF > 0.001) accM += colM * (Im * life * twk * edF * PES445Lit(Mv));
                     }
                   }
                 }
