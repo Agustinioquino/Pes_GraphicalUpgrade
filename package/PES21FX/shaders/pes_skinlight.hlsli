@@ -119,11 +119,7 @@ float3 PesSkSpec(float3 specGame, float3 n, float3 V, float3 L, float roughG, fl
   // (12/11) piel v2 (w124): visibilidad de Smith correlacionada (Heitz 2014, la de UE5) en vez del 0.25 fijo. De frente da lo mismo
   // (nl = nv = 1 -> 0.25); con la luz o la camara rasantes el lobulo fino crece como en la piel real (borde de la cara, sol bajo)
   // en lugar de apagarse con N.L. Tope 1.0 para que un pixel casi de canto no explote
-  float vis = 0.25;
-  if (IniParams.Load(int2(124, 0)).w > 0.5) {
-    float nv = max(saturate(dot(n, V)), 1e-3), nlv = max(nl, 1e-3);
-    vis = min(0.5 / max(nlv * sqrt(nv * nv * (1.0 - a4) + a4) + nv * sqrt(nlv * nlv * (1.0 - a4) + a4), 1e-4), 1.0);
-  }
+  float vis = PESSkinVis(nl, saturate(dot(n, V)), a4);   // (12/11) Smith con piel v2, 0.25 sin ella (pes_common)
   r1 += D * F * nl * vis * P5.y * lightC * shadow * PESSkinSharpOcc(specInt, P5.w);
   return r1;
 }
@@ -190,7 +186,7 @@ float PesSkMouthShadow(float4 AB, float4 clipP, float2 pos, float zC, float3 L) 
   float2 px = (sC * 0.5 + 0.5) * g_psScene.m_viewportSize.xy;
   float ign = frac(52.9829189 * frac(dot(px, float2(0.06711056, 0.00583715))));
   float3 Q = Pv + Lc * (0.0015 + 0.0006 * zA);
-  float2 gS = PesSkZSlope(AB, sC, zC);   // (12/11) plano del receptor
+  float2 gS = 0.0; bool gSok = false;   // (12/11) plano del receptor: se lee recien con el primer candidato a sombra (casi nunca)
   float occ = 0.0;
   [loop] for (int mi = 0; mi < 8; mi++) {
     float t = (mi + ign) / 8.0 * 0.045;                    // 4.5 cm: de la garganta a los labios
@@ -201,8 +197,11 @@ float PesSkMouthShadow(float4 AB, float4 clipP, float2 pos, float zC, float3 L) 
     if (any(uv < 0.0) || any(uv > 1.0)) break;
     float zS = g_psScene.m_projectionParam.z / (g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, uv, 0).x - g_psScene.m_projectionParam.w);
     float dz = (R.z - zS) * zSgn;
-    float zP = zC + dot(gS, R.xy / (R.z * g_psScene.m_projectionParam.xy) + g_psScene.m_cameraCenterOffset.xy - sC);
-    if (dz > 0.0012 + 0.0004 * RzA && dz < 0.03 + 0.5 * t && (zC - zS) * zSgn > 0.002 && (zP - zS) * zSgn > 0.0015 + 0.0005 * RzA + 0.1 * t) { occ = saturate(dz / 0.004); break; }
+    if (dz > 0.0012 + 0.0004 * RzA && dz < 0.03 + 0.5 * t && (zC - zS) * zSgn > 0.002) {
+      if (!gSok) { gS = PesSkZSlope(AB, sC, zC); gSok = true; }
+      float zP = zC + dot(gS, R.xy / (R.z * g_psScene.m_projectionParam.xy) + g_psScene.m_cameraCenterOffset.xy - sC);
+      if ((zP - zS) * zSgn > 0.0015 + 0.0005 * RzA + 0.1 * t) { occ = saturate(dz / 0.004); break; }
+    }
   }
   return 1.0 - 0.85 * K * occ * saturate((8.0 - zA) / 3.0);
 }
@@ -231,7 +230,7 @@ float PesSkFaceShadow(float4 AB, float4 clipP, float2 pos, float zC, float3 L, f
   float ign = frac(52.9829189 * frac(dot(px, float2(0.06711056, 0.00583715))));
   float bias = (0.004 + 0.0012 * zA) * (0.6 + 0.4 / max(nl, 0.12));
   float3 Q = Pv + Lc * bias;
-  float2 gS = PesSkZSlope(AB, sC, zC);   // (12/11) plano del receptor
+  float2 gS = 0.0; bool gSok = false;   // (12/11) plano del receptor, solo con el primer candidato (con 76 focos importa)
   float occ = 0.0;
   [loop] for (int ci = 0; ci < 6; ci++) {
     float f = (ci + ign) / 6.0;
@@ -244,10 +243,10 @@ float PesSkFaceShadow(float4 AB, float4 clipP, float2 pos, float zC, float3 L, f
     float zS = g_psScene.m_projectionParam.z / (g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, uv, 0).x - g_psScene.m_projectionParam.w);
     float dz = (R.z - zS) * zSgn;
     float thick = 0.035 + 0.25 * t + 0.0015 * RzA;
-    float zP = zC + dot(gS, R.xy / (R.z * g_psScene.m_projectionParam.xy) + g_psScene.m_cameraCenterOffset.xy - sC);
-    if (dz > 0.002 + 0.0006 * RzA && dz < thick && (zC - zS) * zSgn > 0.008 + 0.0015 * zA && (zP - zS) * zSgn > 0.003 + 0.0008 * RzA + 0.1 * t) {
-      occ = (1.0 - soft * f) * saturate(dz / (0.35 * thick));
-      break;
+    if (dz > 0.002 + 0.0006 * RzA && dz < thick && (zC - zS) * zSgn > 0.008 + 0.0015 * zA) {
+      if (!gSok) { gS = PesSkZSlope(AB, sC, zC); gSok = true; }
+      float zP = zC + dot(gS, R.xy / (R.z * g_psScene.m_projectionParam.xy) + g_psScene.m_cameraCenterOffset.xy - sC);
+      if ((zP - zS) * zSgn > 0.003 + 0.0008 * RzA + 0.1 * t) { occ = (1.0 - soft * f) * saturate(dz / (0.35 * thick)); break; }
     }
   }
   // junto al terminador la sombra la da la propia forma (y la difunde la SSSS): el trazado entra de a poco, sin escalones

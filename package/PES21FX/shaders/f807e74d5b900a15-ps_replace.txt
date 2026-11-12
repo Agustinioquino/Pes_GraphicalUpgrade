@@ -551,7 +551,8 @@ void main(
         LdM.z = -LdM.z;
         float ndlM = dot(Na, LdM);
         float micro = saturate(abs(ndlM) + 2.0 * aoRaw * aoRaw - 1.0);
-        float msK = lerp(1.0, max(micro, 0.4), saturate(MS.x) * saturate(ndlM * 4.0));
+        float msFar = (skinC && IniParams.Load(int2(124,0)).w > 0.5) ? saturate((2.0 - 2000.0 * abs(g_psScene.m_projectionParam.x) * zA * g_psSystem.m_renderBuffer.z) / 1.2) : 1.0;   // (12/11) como 619b
+        float msK = lerp(1.0, max(micro, 0.4), saturate(MS.x) * saturate(ndlM * 4.0) * msFar);
         diffC *= msK; specC *= skinC ? msK : lerp(1.0, msK, 0.5);
       }
     }

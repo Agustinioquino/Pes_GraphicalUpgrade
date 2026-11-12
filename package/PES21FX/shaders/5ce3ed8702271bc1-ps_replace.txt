@@ -412,7 +412,8 @@ void main(
   }
 
   // ---- normal de detalle + normal de animacion ----
-  { uint cW, cH, cL; g_tex_normal.GetDimensions(0, cW, cH, cL); float capN = faceCap > 1.0 ? max(0.0, log2((float)max(cW, cH) / faceCap)) : 0.0; faceBN = max(faceBN, capN - g_tex_normal.CalculateLevelOfDetail(g_samplerAnisotropic_Clamp_s, v2.xy)); }
+  float pesLodN = g_tex_normal.CalculateLevelOfDetail(g_samplerAnisotropic_Clamp_s, v2.xy);   // (12/11) fuera de las ramas (tambien la usan las cavidades v2)
+  { uint cW, cH, cL; g_tex_normal.GetDimensions(0, cW, cH, cL); float capN = faceCap > 1.0 ? max(0.0, log2((float)max(cW, cH) / faceCap)) : 0.0; faceBN = max(faceBN, capN - pesLodN); }
   r1.xyz = g_tex_normal.SampleBias(g_samplerAnisotropic_Clamp_s, v2.xy, faceBN).xyw;
   r1.x = r1.x * r1.z;
   r1.xy = r1.xy * float2(2,2) + float2(-1,-1);
@@ -591,7 +592,22 @@ void main(
   // donde la normal se inclina mucho la superficie esta dentro de un hueco y le llega menos luz. x35 fuerza, w35 on/off
   float4 P35 = IniParams.Load(int2(35,0));
   float pesCav = 1.0;
-  if (P35.w > 0.5) {
+  if (P35.w > 0.5 && sk2) {
+    // (12/11) piel v2: CONCAVIDAD de verdad. La inclinacion (abajo) oscurece las dos laderas de cualquier relieve (tambien las
+    // crestas de la oreja y el lomo de la nariz) y, como r1 ya trae arrugas y poros, cada poro inclinado manchaba el color. Aca se
+    // mide la divergencia del normal map solo (sin poros ni arrugas) a 4 mm de piel (~30 cm de cabeza por vuelta de UV), en un mip
+    // nunca mas fino que el pixel: hueco = las normales se miran entre si (divergencia negativa); cresta o pendiente = nada.
+    // De lejos, cuando el pixel ya es mas grande que 4 mm, el mip promedia los dos lados y la cavidad se apaga sola
+    uint cW, cH, cL; g_tex_normal.GetDimensions(0, cW, cH, cL);
+    const float dUV = 4.0 / 300.0;
+    float lc = max(pesLodN, log2(dUV * (float)max(cW, cH)) - 1.0);
+    float4 na = g_tex_normal.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy + float2(dUV, 0.0), lc);
+    float4 nb = g_tex_normal.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy - float2(dUV, 0.0), lc);
+    float4 nc = g_tex_normal.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy + float2(0.0, dUV), lc);
+    float4 nd = g_tex_normal.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy - float2(0.0, dUV), lc);
+    float dvg = (na.x * na.w - nb.x * nb.w) * wrTS.x + (nc.y - nd.y) * wrTS.y;   // (n(+4 mm) - n(-4 mm)) / 2, con el signo de la UV
+    pesCav = 1.0 - saturate(P35.x) * saturate(-dvg * 2.5);
+  } else if (P35.w > 0.5) {
     float tilt = saturate(1.0 - r1.z);                       // 0 = plano, crece en los pliegues
     pesCav = 1.0 - saturate(P35.x) * smoothstep(0.02, 0.35, tilt) * 0.68;   // (04/11) 0.55 -> 0.68: forma mas definida en la sombra
   }
@@ -767,7 +783,7 @@ void main(
         { float4 G3 = IniParams.Load(int2(373, 0));
           float kC = saturate(G3.x) * saturate(bm.a * 1.4) * (1.0 - saturate(kB));
           if (kC > 0.001) {
-            float lP = dot(r2.xyz, float3(0.2126, 0.7152, 0.0722)), lZ = dot(g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy, 3.0).xyz, float3(0.2126, 0.7152, 0.0722));
+            float lP = dot(r2.xyz, float3(0.2126, 0.7152, 0.0722)), lZ = dot(g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, uvD, 3.0).xyz, float3(0.2126, 0.7152, 0.0722));
             r2.xyz = lerp(r2.xyz, saturate(G3.yzw) * clamp(lP / max(lZ, 1e-3), 0.6, 1.4), kC);
           } }
       }

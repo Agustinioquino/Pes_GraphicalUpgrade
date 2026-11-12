@@ -31,9 +31,10 @@ struct PesPores { float2 dT; float a; float var; float2 dbg; float near; float c
 
 float4 PesTriTapZ(Texture2D<float4> t, SamplerState smp, float3 q, float3 qx, float3 qy, float3 wgt, float sc, float ofs) {
   float3 qs = q / sc + ofs, qxs = qx / sc, qys = qy / sc;
-  float4 mX = t.SampleGrad(smp, frac(qs.zy + float2(0.0, 0.31)), qxs.zy, qys.zy);
-  float4 mY = t.SampleGrad(smp, frac(qs.xz + float2(0.57, 0.13)), qxs.xz, qys.xz);
-  float4 mZ = t.SampleGrad(smp, frac(qs.xy), qxs.xy, qys.xy);
+  float4 mX = 0.5, mY = 0.5, mZ = 0.5;   // (12/11) un eje sin peso no se lee (en la cara casi siempre pesan 1 o 2 de los 3)
+  [branch] if (wgt.x > 0.0) mX = t.SampleGrad(smp, frac(qs.zy + float2(0.0, 0.31)), qxs.zy, qys.zy);
+  [branch] if (wgt.y > 0.0) mY = t.SampleGrad(smp, frac(qs.xz + float2(0.57, 0.13)), qxs.xz, qys.xz);
+  [branch] if (wgt.z > 0.0) mZ = t.SampleGrad(smp, frac(qs.xy), qxs.xy, qys.xy);
   float3 tX = mX.xyz * 2.0 - 1.0, tY = mY.xyz * 2.0 - 1.0, tZ = mZ.xyz * 2.0 - 1.0;
   return float4(wgt.y * tY.x + wgt.z * tZ.x, wgt.x * tX.y + wgt.z * tZ.y, wgt.x * tX.x + wgt.y * tY.y,
                 wgt.x * mX.a + wgt.y * mY.a + wgt.z * mZ.a);
@@ -41,9 +42,10 @@ float4 PesTriTapZ(Texture2D<float4> t, SamplerState smp, float3 q, float3 qx, fl
 // varianza (Toksvig): largo de la normal promediada en un area 6 veces mayor (el mip no renormaliza)
 float PesTriVarZ(Texture2D<float4> t, SamplerState smp, float3 q, float3 qx, float3 qy, float3 wgt, float sc) {
   float3 qs = q / sc, qxs = qx * (6.0 / sc), qys = qy * (6.0 / sc);
-  float lX = length(t.SampleGrad(smp, frac(qs.zy + float2(0.0, 0.31)), qxs.zy, qys.zy).xyz * 2.0 - 1.0);
-  float lY = length(t.SampleGrad(smp, frac(qs.xz + float2(0.57, 0.13)), qxs.xz, qys.xz).xyz * 2.0 - 1.0);
-  float lZ = length(t.SampleGrad(smp, frac(qs.xy), qxs.xy, qys.xy).xyz * 2.0 - 1.0);
+  float lX = 1.0, lY = 1.0, lZ = 1.0;
+  [branch] if (wgt.x > 0.0) lX = length(t.SampleGrad(smp, frac(qs.zy + float2(0.0, 0.31)), qxs.zy, qys.zy).xyz * 2.0 - 1.0);
+  [branch] if (wgt.y > 0.0) lY = length(t.SampleGrad(smp, frac(qs.xz + float2(0.57, 0.13)), qxs.xz, qys.xz).xyz * 2.0 - 1.0);
+  [branch] if (wgt.z > 0.0) lZ = length(t.SampleGrad(smp, frac(qs.xy), qxs.xy, qys.xy).xyz * 2.0 - 1.0);
   return saturate((1.0 - (wgt.x * lX + wgt.y * lY + wgt.z * lZ)) * 8.0);
 }
 
@@ -71,6 +73,7 @@ PesPores PesTriPores5(Texture2D<float4> tR, Texture2D<float4> tG, Texture2D<floa
   float3 nM = normalize(cross(dpdu, dpdv));
   float3 tM = normalize(dpdu), bM = normalize(dpdv - tM * dot(dpdv, tM));
   float3 wgt = pow(abs(nM), 4.0); wgt /= max(wgt.x + wgt.y + wgt.z, 1e-6);
+  wgt = max(wgt - 0.03, 0.0); wgt /= max(wgt.x + wgt.y + wgt.z, 1e-6);   // (12/11) los ejes con menos de 3 % quedan en 0 sin salto (no se leen)
   float3 q = pM / tileM, qx = dPx / tileM, qy = dPy / tileM;
   // pesos por zona (suman 1): labios > cuello > arruguitas > frente / cejas > poros (grandes o de mejilla)
   float rem = 1.0;
