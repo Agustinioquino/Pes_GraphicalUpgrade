@@ -276,6 +276,38 @@ static bool NodePos(void* node, float out[3]) {
     float m[16]; return NodeMat(node, m) && NodePosL(m, s_nodeLayout.load(), out);
 }
 bool CharNodeWorldPos(void* node, float out[3]) { return NodePos(node, out); }   // (26/10) la usa musculo.cpp (ropa por jugador)
+// (02/11) un punto o una direccion del espacio del modelo del personaje al mundo con la matriz del nodo (camara libre "seguir la
+// cara": la cabeza sale del esqueleto, que esta en el espacio del modelo). Si la parte de giro no tiene pinta de giro (filas de
+// largo fuera de 0.5..2), se usa solo la traslacion.
+bool CharNodeToWorld(void* node, const float p[3], float out[3], bool point) {
+    float m[16]; if (!NodeMat(node, m)) return false;
+    const int L = s_nodeLayout.load();
+    auto at = [&](int r, int c) { return L == 0 ? m[4 * r + c] : m[4 * c + r]; };   // (fila del punto, componente de salida)
+    bool rotOk = true;
+    for (int r = 0; r < 3; r++) { float l = sqrtf(at(r, 0) * at(r, 0) + at(r, 1) * at(r, 1) + at(r, 2) * at(r, 2)); if (!(l > 0.5f && l < 2.0f)) rotOk = false; }
+    for (int j = 0; j < 3; j++) {
+        float v = rotOk ? p[0] * at(0, j) + p[1] * at(1, j) + p[2] * at(2, j) : p[j];
+        if (point) v += at(3, j);
+        if (!(v == v) || fabsf(v) > 2000.0f) return false;
+        out[j] = v;
+    }
+    return true;
+}
+// (08/11) la matriz entera del nodo (modelo -> mundo), 3x4 fila mayor; si la parte de giro no tiene pinta de giro, queda la identidad
+// con la traslacion (como CharNodeToWorld)
+bool CharNodeMatrix(void* node, float out[12]) {
+    float m[16]; if (!NodeMat(node, m)) return false;
+    const int L = s_nodeLayout.load();
+    auto at = [&](int r, int c) { return L == 0 ? m[4 * r + c] : m[4 * c + r]; };
+    bool rotOk = true;
+    for (int r = 0; r < 3; r++) { float l = sqrtf(at(r, 0) * at(r, 0) + at(r, 1) * at(r, 1) + at(r, 2) * at(r, 2)); if (!(l > 0.5f && l < 2.0f)) rotOk = false; }
+    for (int c = 0; c < 3; c++) {
+        for (int r = 0; r < 3; r++) out[c * 4 + r] = rotOk ? at(r, c) : (r == c ? 1.0f : 0.0f);
+        const float t = at(3, c); if (!(t == t) || fabsf(t) > 2000.0f) return false;
+        out[c * 4 + 3] = t;
+    }
+    return true;
+}
 static void ToneCheckPresent(const CharInfo* ci, const bool* alive);   // abajo
 static double s_tabLog = 0;
 // (24/10 e) medicion "cuerpo como la cara": ring.cpp acumula en el menu Fisico el color de la base del cuello del cuerpo

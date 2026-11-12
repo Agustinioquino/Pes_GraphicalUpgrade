@@ -31,7 +31,10 @@ extern "C" HRESULT WINAPI D3D11CreateDevice(IDXGIAdapter* a, D3D_DRIVER_TYPE t, 
                                             ID3D11Device** d, D3D_FEATURE_LEVEL* ofl, ID3D11DeviceContext** c) {
     if (!fx_LoadRealD3D11()) return E_FAIL;
     fx_EnsureInit();
+    // (08/11 g) el mod crea texturas desde otros hilos (caras_hd): el dispositivo tiene que ser multihilo
+    const UINT f0 = f; f &= ~(UINT)D3D11_CREATE_DEVICE_SINGLETHREADED;
     HRESULT hr = s_realCD(a, t, s, f, fl, n, v, d, ofl, c);
+    fx::NoteDeviceFlags(f0, SUCCEEDED(hr));
     if (SUCCEEDED(hr) && d && *d) fx::OnDeviceCreated(*d);
     return hr;
 }
@@ -39,7 +42,10 @@ extern "C" HRESULT WINAPI D3D11CreateDeviceAndSwapChain(IDXGIAdapter* a, D3D_DRI
         const DXGI_SWAP_CHAIN_DESC* sd, IDXGISwapChain** sc, ID3D11Device** d, D3D_FEATURE_LEVEL* ofl, ID3D11DeviceContext** c) {
     if (!fx_LoadRealD3D11()) return E_FAIL;
     fx_EnsureInit();
+    // (08/11 g) el mod crea texturas desde otros hilos (caras_hd): el dispositivo tiene que ser multihilo
+    const UINT f0 = f; f &= ~(UINT)D3D11_CREATE_DEVICE_SINGLETHREADED;
     HRESULT hr = s_realCDSC(a, t, s, f, fl, n, v, sd, sc, d, ofl, c);
+    fx::NoteDeviceFlags(f0, SUCCEEDED(hr));
     if (SUCCEEDED(hr) && d && *d) fx::OnDeviceCreated(*d);
     return hr;
 }

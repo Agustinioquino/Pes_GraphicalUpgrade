@@ -46,7 +46,11 @@ float3 PESMowGrain(float2 pm, float3 gIn, float pat, float widthM, float lean)
 // live = desgaste en vivo (mapa que pinta la DLL con los jugadores, 0..1): seca y, al maximo, pela (z115)
 // (26/10 f) w292: desgaste en vivo mas visible: el mapa sube muy lento (una pasada de un jugador ~0.01, uno parado ~0.02/s; a los pocos
 // minutos casi todo queda < 0.15 = 9-15% de paja, imperceptible). 1 - exp(-5 x): 0.1 -> 0.39, 0.15 -> 0.53, 0.3 -> 0.78
-float PESWearLiveCurve(float live) { return IniParams.Load(int2(292, 0)).w > 0.5 ? 1.0 - exp(-5.0 * saturate(live)) : saturate(live); }
+// (12/11) x431 desgaste real: curva PROGRESIVA en S (una pasada suelta casi no se ve; donde se insiste sube rapido y despues se satura): 0.1 -> 0.10,
+// 0.2 -> 0.35, 0.3 -> 0.65, 0.45 -> 0.97. El mapa ahora sube por las acciones (frenadas, giros, remates, barridas), no por estar parado
+float PESWearLiveCurve(float live) {
+  if (IniParams.Load(int2(431, 0)).x > 0.5) { float c = saturate(live * 2.2); return c * c * (3.0 - 2.0 * c); }
+  return IniParams.Load(int2(292, 0)).w > 0.5 ? 1.0 - exp(-5.0 * saturate(live)) : saturate(live); }
 float2 PESWear(float2 pm, float2 wxz, float wear, float areas, float bald, float live)
 {
   float col = 0.0, bare = 0.0;
@@ -63,15 +67,33 @@ float2 PESWear(float2 pm, float2 wxz, float wear, float areas, float bald, float
     bare = smoothstep(thr - 0.12, thr + 0.02, n + use * 0.25) * (bald > 0.001 ? 1.0 : 0.0);
   }
   float4 LW = IniParams.Load(int2(115, 0));
+  // (27/10 n) tanda 11, y329: desgaste mas visible. El del partido (w115) sube muy lento y el fijo (w104) suele estar en 0: Agustin no lo notaba.
+  // Multiplica el seco y el pelado de los dos (base y hojas a la vez, misma funcion)
+  float wearK = 1.0 + clamp(IniParams.Load(int2(329, 0)).y, 0.0, 3.0);
+  col = saturate(col * wearK); bare = saturate(bare * wearK);
   if (LW.w > 0.5 && live > 0.001) {
     float n4 = PESGnoise(wxz * 2.1 + 4.4);                       // el pisoteo no es parejo
     float lv = saturate(PESWearLiveCurve(live) * (0.8 + 0.4 * n4));
-    col = saturate(col + lv * 0.9);
-    bare = max(bare, smoothstep(0.55, 1.0, lv) * saturate(LW.z));
+    // (12/11) x431 desgaste real, por etapas: hasta ~40 % solo mas corto (PESWearLiveHeight) y apenas mas apagado; despues seco (verde paja, no
+    // amarillo: "el color raro del desgaste") y desde ~80 % la tierra asoma por manchas (el ruido n4 hace el borde irregular)
+    if (IniParams.Load(int2(431, 0)).x > 0.5) {
+      // (12/11, Agustin: "el desgaste no que se borre el pasto, que cambie su color, su tamano", "tiene que parecer real") el gastado no es
+      // una mancha pareja: se rompe en parches de ~10 cm (unas matas aguantan, otras no) y la tierra solo asoma al final, en motas chicas
+      // ENTRE las hojas (ruido de ~3 cm), nunca como un claro liso
+      float n5 = PESGnoise(wxz * 9.0 + 1.9), n6 = PESGnoise(wxz * 37.0 + 5.3);
+      float lvR = saturate(PESWearLiveCurve(live) * (0.60 + 0.50 * n4 + 0.40 * n5));
+      col = saturate(col + smoothstep(0.25, 0.85, lvR) * 0.45 * wearK);
+      bare = max(bare, smoothstep(0.88 / wearK, 1.0, lvR) * smoothstep(0.35, 0.65, n6) * 0.7 * saturate(LW.z));
+    } else {
+    col = saturate(col + lv * 0.6 * wearK);   // (02/11 paso 6) 0.9 -> 0.6: con live ~0.1 ya habia 70 % de paja
+    bare = max(bare, smoothstep(0.7 / wearK, 1.0, lv) * saturate(LW.z));   // (02/11 paso 6) pelado desde mas desgaste (antes 0.55)
+    }
   }
   return float2(col, bare);
 }
-float PESWearLiveHeight(float live) { float4 LW = IniParams.Load(int2(115, 0)); return LW.w > 0.5 ? 1.0 - 0.45 * PESWearLiveCurve(live) : 1.0; }
+float PESWearLiveHeight(float live) { float4 LW = IniParams.Load(int2(115, 0));
+  if (LW.w > 0.5 && IniParams.Load(int2(431, 0)).x > 0.5) return 1.0 - 0.55 * smoothstep(0.0, 0.6, PESWearLiveCurve(live));   // (12/11) desgaste real: primero mas corto (hasta 45 % del alto)
+  return LW.w > 0.5 ? 1.0 - 0.45 * PESWearLiveCurve(live) : 1.0; }
 
 // variacion de color por zonas (manchas de 2-6 m mas verdes / mas palidas, y detalle de 0.5 m): multiplicador rgb
 float3 PESGrassZones(float2 wxz, float k)
@@ -112,6 +134,41 @@ void PESGroundLook(inout float3 c, inout float spec, inout float rough, float2 g
 }
 // sol en espacio mundo (lo publica la DLL en 111: xyz hacia el sol, w altura en grados); (0,1,0) si todavia no hay dato
 float3 PESSunWorld() { float4 L = IniParams.Load(int2(111, 0)); return dot(L.xyz, L.xyz) > 0.5 ? L.xyz : float3(0.0, 1.0, 0.0); }
+// (04/11) sol del cielo en mundo (fila 312 de la DLL, no gira con la camara en repeticiones); si no hay, el de la luz (111)
+float3 PESSunSky() { float4 S = IniParams.Load(int2(312, 0)); return (S.w > 0.5 && S.y > 0.0) ? normalize(S.xyz) : PESSunWorld(); }
+// (12/11, Agustin, captura 21.20.40: "el pasto super cercano se ve mucho mas brillante que el demas, puedes hacer que el pasto de lejos
+// mantenga ese brillo y color") las hojas 3D salian ~1.6-1.9 veces mas claras que las tarjetas y el suelo por un error de cuenta (su
+// oclusion iba como 0.84..1 y el atlas la guarda como la mitad: el PS la duplica). Arreglado eso, x433 = BRILLO DEL NATURAL: una sola
+// ganancia para el suelo (5e92 / c956), las tarjetas y las hojas 3D (0 / sin la linea = 1.6, lo que tenian las hojas 3D), con hombro suave
+// arriba de 0.75 para que el sol fuerte no lo lave. Solo el natural con el pasto v3
+bool PESNatOn() { return IniParams.Load(int2(104, 0)).x > 0.5 && IniParams.Load(int2(407, 0)).x < 0.5 && IniParams.Load(int2(412, 0)).z < 0.5; }
+float PESNatGain() { if (!PESNatOn()) return 1.0; float g = IniParams.Load(int2(433, 0)).x; return g > 0.05 ? clamp(g, 0.5, 2.5) : 1.6; }
+float3 PESNatShoulder(float3 c) { return c - max(c - 0.75, 0.0) * 0.6; }
+// (12/11, Agustin: "los efectos de translucidez y de mojado en algunas puntas se mantienen hasta cierta distancia y se actualizan lo mas en
+// vivo posible") lo que las hojas de cerca suman por hoja (la luz del sol que atraviesa la lamina a contraluz, las puntas encendidas, el
+// brillo humedo de algunas puntas) el suelo lo lleva como PROMEDIO de la copa: mismo tono de cerca y de lejos, calculado en cada cuadro con
+// el sol, la camara y la humedad de ese momento. V = del punto al ojo (mundo). pxm = px/m del punto: se apaga por debajo de z433 px/m
+// (0 = 10). y433 = cuanto (0 = nada). spec / rough = o2.y / o2.x
+void PESNatCanopy(inout float3 c, inout float spec, inout float rough, float3 V, float pxm) {
+  float4 P = IniParams.Load(int2(433, 0));
+  if (P.y < 0.001 || !PESNatOn()) return;
+  float lim = P.z > 0.5 ? clamp(P.z, 2.0, 200.0) : 10.0;
+  float kY = saturate(P.y) * smoothstep(lim * 0.5, lim, pxm);
+  if (kY < 0.001) return;
+  float4 P414 = IniParams.Load(int2(414, 0)), P114 = IniParams.Load(int2(114, 0));
+  float day = P114.w > 0.5 ? 1.0 : 0.0;
+  float sunK = saturate(P414.w * 1.2) * day;
+  float3 S = PESSunSky();
+  float back = saturate(0.5 - 0.5 * dot(normalize(V.xz + 1e-5), normalize(S.xz + 1e-5)));   // mirando hacia el sol = contraluz
+  float tx = 0.32 * sunK * (0.28 + 0.82 * back) * clamp(IniParams.Load(int2(413, 0)).w, 0.0, 2.0);   // media de la transmision a lo largo de la hoja
+  c = lerp(c, c * float3(1.26, 1.36, 0.86), saturate(tx * 0.95) * kY);
+  c *= lerp(float3(1.0, 1.0, 1.0), float3(1.05, 1.06, 0.95), 0.5 * clamp(IniParams.Load(int2(295, 0)).z, 0.0, 2.0) * kY * lerp(0.3, 1.0, saturate(P414.w)));   // puntas
+  // puntas mojadas (x329: una de cada ~8 hojas, mas con la cancha humeda, en invierno y al amanecer): brillo promedio
+  float2 g = PESGround();
+  float dewK = (1.0 + 0.8 * g.x) * (1.0 - 0.85 * g.y) * (abs(P114.z - 1.0) < 0.5 ? 1.4 : 1.0);
+  float dew = 0.12 * dewK * clamp(IniParams.Load(int2(329, 0)).x, 0.0, 2.0) * kY;
+  spec = saturate(spec + 0.45 * dew); rough = lerp(rough, 0.12, saturate(dew));
+}
 // (25/10) cesped lejano en la base de la cancha: donde una hoja ya no mide en pantalla (mas alla del nivel medio del pasto
 // 3D), la base toma el aspecto del cesped visto de lejos en vez de una textura plana: matas claras / oscuras de 8 y 22 cm
 // (atenuadas con el tamano del pixel para que no titilen), cobertura segun el angulo de vista (rasante = se ven las puntas,
@@ -145,7 +202,7 @@ void PESFarTurf(inout float3 c, inout float spec, float3 V, float2 wxz, float px
 void PESGrassColorGrade(inout float3 c)
 {
   float4 C = IniParams.Load(int2(112, 0));
-  if (abs(C.x) < 0.01 && abs(C.y) < 0.001 && abs(C.z) < 0.001) return;
+  if (abs(C.x) < 0.01 && abs(C.y) < 0.001 && abs(C.z) < 0.001 && C.w < 0.001) return;
   const float3 LW = float3(0.2126, 0.7152, 0.0722);
   float l = dot(c, LW);
   if (abs(C.x) > 0.01) {
@@ -159,5 +216,9 @@ void PESGrassColorGrade(inout float3 c)
     c = max(lerp(c, g, clamp(C.y, -1.0, 1.0) * 0.6), 0.0);
   }
   if (abs(C.z) > 0.001) { float k = 1.0 + clamp(C.z, -0.8, 1.0); c = max((c - 0.18) * k + 0.18, 0.0); }
+  // (27/10 n) tanda 11, w112 "verde natural": el cesped real al sol con cielo despejado (foto de Agustin, pelota sobre la linea) tiene
+  // r/g 0.75-0.80 y b/g 0.3-0.5; el del mod daba r/g 0.40 y b/g 0.25 (verde saturado y frio, "no humano"). El "Verde" (y112) acerca a
+  // (0.19, 0.42, 0.10) = r/g 0.45, aun mas saturado. Esto acerca la cromatica a (0.78, 1, 0.42) conservando la luminancia; 1 = casi todo
+  if (C.w > 0.001) { float3 t = float3(0.78, 1.0, 0.42); t *= l / dot(t, LW); c = max(lerp(c, t, clamp(C.w, 0.0, 1.0) * 0.85), 0.0); }
 }
 #endif

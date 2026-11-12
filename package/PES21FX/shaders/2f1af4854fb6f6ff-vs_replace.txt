@@ -80,6 +80,7 @@ cbuffer VSBones : register(b6)
 #define cmp -
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
+#include "pes_beard.hlsli"   // (04/11 c) barba por los huesos de la cara
 
 
 void main(
@@ -93,6 +94,7 @@ void main(
   float4 v7 : TEXCOORD1,
   float4 v8 : TEXCOORD2,
   float2 v9 : TEXCOORD3,
+  uint pesVid : SV_VertexID,   // (04/11 c) barba: enlace por vertice a la piel de la cara (pes_beard.hlsli)
   out float4 o0 : SV_Position0,
   out float4 o1 : COLOR0,
   out float2 o2 : TEXCOORD0,
@@ -163,6 +165,8 @@ void main(
     r2.x = dot(v0.xyzw, r2.xyzw);
     r2.z = dot(v0.xyzw, r3.xyzw);
     r2.y = dot(v0.xyzw, r0.xyzw);
+    // (04/11 c) barba por los huesos de la cara (pes_beard.hlsli): la posicion del objeto es r4.xzy / r2.xzy en este shader
+    { float3 bp = r4.xzy, bq = r2.xzy; PesBeardFollow(pesVid, v0.xyz, bp, bq); r4.xzy = bp; r2.xzy = bq; }
   } else {
     r5.xyz = v1.xyz;
     r1.xyz = v3.xyz;
