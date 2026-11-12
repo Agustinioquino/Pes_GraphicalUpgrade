@@ -215,6 +215,7 @@ bool DeletePresetFile(const std::string& file);
 // ---------------------------------------------------------------- d3d
 bool InstallHooks();
 void OnDeviceCreated(ID3D11Device* d);
+void NoteCreateCall(const char* fn, void* caller, void* dev, void* sc);   // (12/11) registro: quien crea el dispositivo
 void OnDeviceAndSwapChainCreated(ID3D11Device* d, IDXGISwapChain* sc);   // (12/11) D3D11CreateDeviceAndSwapChain del juego
 void ReloadShaders();
 void WatchShaderFolder();                      // recarga sola los shaders que cambian en disco

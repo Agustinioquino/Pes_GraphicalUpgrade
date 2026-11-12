@@ -1800,12 +1800,29 @@ static void OnSwapChain(IUnknown* devUnk, IDXGISwapChain* sc) {
 }
 static HRESULT STDMETHODCALLTYPE hk_CreateSC(IDXGIFactory* f, IUnknown* dev, DXGI_SWAP_CHAIN_DESC* d, IDXGISwapChain** sc) {
     HRESULT hr = o_CreateSC(f, dev, d, sc);
+    Log("crear: IDXGIFactory::CreateSwapChain desde %s (hr %08X, cadena %p)", ModOff(_ReturnAddress()).c_str(), (unsigned)hr, (SUCCEEDED(hr) && sc) ? (void*)*sc : nullptr);
     if (SUCCEEDED(hr) && sc && *sc) OnSwapChain(dev, *sc);
     return hr;
 }
 static HRESULT STDMETHODCALLTYPE hk_CreateSCHwnd(IDXGIFactory2* f, IUnknown* dev, HWND w, const DXGI_SWAP_CHAIN_DESC1* d,
                                                  const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fd, IDXGIOutput* o, IDXGISwapChain1** sc) {
     HRESULT hr = o_CreateSCHwnd(f, dev, w, d, fd, o, sc);
+    Log("crear: IDXGIFactory2::CreateSwapChainForHwnd desde %s (hr %08X, cadena %p)", ModOff(_ReturnAddress()).c_str(), (unsigned)hr, (SUCCEEDED(hr) && sc) ? (void*)*sc : nullptr);
+    if (SUCCEEDED(hr) && sc && *sc) OnSwapChain(dev, *sc);
+    return hr;
+}
+using PFN_CreateSCCore = HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, IUnknown*, const DXGI_SWAP_CHAIN_DESC1*, IDXGIOutput*, IDXGISwapChain1**);
+using PFN_CreateSCComp = HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, const DXGI_SWAP_CHAIN_DESC1*, IDXGIOutput*, IDXGISwapChain1**);
+static PFN_CreateSCCore o_CreateSCCore; static PFN_CreateSCComp o_CreateSCComp;
+static HRESULT STDMETHODCALLTYPE hk_CreateSCCore(IDXGIFactory2* f, IUnknown* dev, IUnknown* w, const DXGI_SWAP_CHAIN_DESC1* d, IDXGIOutput* o, IDXGISwapChain1** sc) {
+    HRESULT hr = o_CreateSCCore(f, dev, w, d, o, sc);
+    Log("crear: IDXGIFactory2::CreateSwapChainForCoreWindow desde %s (hr %08X)", ModOff(_ReturnAddress()).c_str(), (unsigned)hr);
+    if (SUCCEEDED(hr) && sc && *sc) OnSwapChain(dev, *sc);
+    return hr;
+}
+static HRESULT STDMETHODCALLTYPE hk_CreateSCComp(IDXGIFactory2* f, IUnknown* dev, const DXGI_SWAP_CHAIN_DESC1* d, IDXGIOutput* o, IDXGISwapChain1** sc) {
+    HRESULT hr = o_CreateSCComp(f, dev, d, o, sc);
+    Log("crear: IDXGIFactory2::CreateSwapChainForComposition desde %s (hr %08X)", ModOff(_ReturnAddress()).c_str(), (unsigned)hr);
     if (SUCCEEDED(hr) && sc && *sc) OnSwapChain(dev, *sc);
     return hr;
 }
@@ -1818,6 +1835,8 @@ static void HookFactory(IDXGIFactory* fac) {
     IDXGIFactory2* f2 = nullptr;
     if (SUCCEEDED(fac->QueryInterface(__uuidof(IDXGIFactory2), (void**)&f2)) && f2) {
         Hook(VT(f2)[15], (void*)&hk_CreateSCHwnd, (void**)&o_CreateSCHwnd, "IDXGIFactory2::CreateSwapChainForHwnd");
+        Hook(VT(f2)[16], (void*)&hk_CreateSCCore, (void**)&o_CreateSCCore, "IDXGIFactory2::CreateSwapChainForCoreWindow");
+        Hook(VT(f2)[24], (void*)&hk_CreateSCComp, (void**)&o_CreateSCComp, "IDXGIFactory2::CreateSwapChainForComposition");
         f2->Release();
     }
     Log("ganchos de DXGI: %s", ok ? "ok" : "FALLARON (sin menu ni parametros)");
@@ -2147,7 +2166,10 @@ static DWORD WINAPI PresentPlanB(void*) {
         std::lock_guard<std::recursive_mutex> lk(s_hookMutex);
         if (s_scHooked || !g_cfg.optPresent) return 0;
     }
-    Log("Present: a los 15 s el juego no paso por CreateSwapChain (sin menu ni ganchos del primer Present): plan B");
+    // (12/11 v6) la cadena de prueba que se armaba aca CERRABA el juego en la PC CPY (v2 a v5): Sider la toma como la
+    // cadena del juego ("DX11.SwapChain->GetBuffer failed") y desborda la pila. No se crea NADA: solo el aviso.
+    Log("Present: a los 15 s el juego no paso por los CreateSwapChain enganchados: sin menu ni ganchos del primer Present (ver las lineas 'crear:')");
+    if (g_cfg.optPresent) return 0;
     auto cdsc = (PFN_D3D11CreateDeviceAndSwapChain)(::fx_RealD3D11() ? GetProcAddress(::fx_RealD3D11(), "D3D11CreateDeviceAndSwapChain") : nullptr);
     if (!cdsc) { Log("Present: plan B sin D3D11CreateDeviceAndSwapChain de Windows"); return 0; }
     WNDCLASSEXW wc{}; wc.cbSize = sizeof wc; wc.lpfnWndProc = DefWindowProcW; wc.hInstance = GetModuleHandleW(nullptr); wc.lpszClassName = L"PES21FX_planB";
@@ -2258,6 +2280,9 @@ bool InstallHooks() {
 void OnDeviceAndSwapChainCreated(ID3D11Device* d, IDXGISwapChain* sc) {
     Log("D3D11CreateDeviceAndSwapChain: el juego creo dispositivo y cadena juntos");
     OnSwapChain(d, sc);
+}
+void NoteCreateCall(const char* fn, void* caller, void* dev, void* sc) {
+    Log("crear: %s desde %s (hilo %lu, dispositivo %p, cadena %p)", fn, ModOff(caller).c_str(), GetCurrentThreadId(), dev, sc);
 }
 void OnDeviceCreated(ID3D11Device* d) {
     if (!d) return;
