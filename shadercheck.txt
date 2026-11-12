@@ -1,0 +1,10 @@
+
+==== aadffecf2090e4f1-ps_replace.txt
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\aadffecf2090e4f1-ps_replace.txt(60,28-30): error X3004: undeclared identifier 'dir'
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\aadffecf2090e4f1-ps_replace.txt(60,21-31): error X3013: 'dot': no matching 2 parameter intrinsic function
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\aadffecf2090e4f1-ps_replace.txt(60,21-31): error X3013: Possible intrinsic functions are:
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\PES21FX\shaders\aadffecf2090e4f1-ps_replace.txt(60,21-31): error X3013:     dot(floatM|halfM|doubleM|min10floatM|min16floatM|intM|uintM|min12intM|min16intM|min16uintM, floatM|halfM|doubleM|min10floatM|min16floatM|intM|uintM|min12intM|min16intM|min16uintM)
+
+compilation failed; no code produced
+
+shaders: 158, con errores: 1 (fxc: C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\fxc.exe)
