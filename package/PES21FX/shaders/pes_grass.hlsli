@@ -77,8 +77,13 @@ float2 PESWear(float2 pm, float2 wxz, float wear, float areas, float bald, float
     // (12/11) x431 desgaste real, por etapas: hasta ~40 % solo mas corto (PESWearLiveHeight) y apenas mas apagado; despues seco (verde paja, no
     // amarillo: "el color raro del desgaste") y desde ~80 % la tierra asoma por manchas (el ruido n4 hace el borde irregular)
     if (IniParams.Load(int2(431, 0)).x > 0.5) {
-      col = saturate(col + smoothstep(0.30, 0.85, lv) * 0.40 * wearK);
-      bare = max(bare, smoothstep(0.80 / wearK, 1.0, lv) * saturate(LW.z));
+      // (12/11, Agustin: "el desgaste no que se borre el pasto, que cambie su color, su tamano", "tiene que parecer real") el gastado no es
+      // una mancha pareja: se rompe en parches de ~10 cm (unas matas aguantan, otras no) y la tierra solo asoma al final, en motas chicas
+      // ENTRE las hojas (ruido de ~3 cm), nunca como un claro liso
+      float n5 = PESGnoise(wxz * 9.0 + 1.9), n6 = PESGnoise(wxz * 37.0 + 5.3);
+      float lvR = saturate(PESWearLiveCurve(live) * (0.60 + 0.50 * n4 + 0.40 * n5));
+      col = saturate(col + smoothstep(0.25, 0.85, lvR) * 0.45 * wearK);
+      bare = max(bare, smoothstep(0.88 / wearK, 1.0, lvR) * smoothstep(0.35, 0.65, n6) * 0.7 * saturate(LW.z));
     } else {
     col = saturate(col + lv * 0.6 * wearK);   // (02/11 paso 6) 0.9 -> 0.6: con live ~0.1 ya habia 70 % de paja
     bare = max(bare, smoothstep(0.7 / wearK, 1.0, lv) * saturate(LW.z));   // (02/11 paso 6) pelado desde mas desgaste (antes 0.55)
@@ -131,6 +136,39 @@ void PESGroundLook(inout float3 c, inout float spec, inout float rough, float2 g
 float3 PESSunWorld() { float4 L = IniParams.Load(int2(111, 0)); return dot(L.xyz, L.xyz) > 0.5 ? L.xyz : float3(0.0, 1.0, 0.0); }
 // (04/11) sol del cielo en mundo (fila 312 de la DLL, no gira con la camara en repeticiones); si no hay, el de la luz (111)
 float3 PESSunSky() { float4 S = IniParams.Load(int2(312, 0)); return (S.w > 0.5 && S.y > 0.0) ? normalize(S.xyz) : PESSunWorld(); }
+// (12/11, Agustin, captura 21.20.40: "el pasto super cercano se ve mucho mas brillante que el demas, puedes hacer que el pasto de lejos
+// mantenga ese brillo y color") las hojas 3D salian ~1.6-1.9 veces mas claras que las tarjetas y el suelo por un error de cuenta (su
+// oclusion iba como 0.84..1 y el atlas la guarda como la mitad: el PS la duplica). Arreglado eso, x433 = BRILLO DEL NATURAL: una sola
+// ganancia para el suelo (5e92 / c956), las tarjetas y las hojas 3D (0 / sin la linea = 1.6, lo que tenian las hojas 3D), con hombro suave
+// arriba de 0.75 para que el sol fuerte no lo lave. Solo el natural con el pasto v3
+bool PESNatOn() { return IniParams.Load(int2(104, 0)).x > 0.5 && IniParams.Load(int2(407, 0)).x < 0.5 && IniParams.Load(int2(412, 0)).z < 0.5; }
+float PESNatGain() { if (!PESNatOn()) return 1.0; float g = IniParams.Load(int2(433, 0)).x; return g > 0.05 ? clamp(g, 0.5, 2.5) : 1.6; }
+float3 PESNatShoulder(float3 c) { return c - max(c - 0.75, 0.0) * 0.6; }
+// (12/11, Agustin: "los efectos de translucidez y de mojado en algunas puntas se mantienen hasta cierta distancia y se actualizan lo mas en
+// vivo posible") lo que las hojas de cerca suman por hoja (la luz del sol que atraviesa la lamina a contraluz, las puntas encendidas, el
+// brillo humedo de algunas puntas) el suelo lo lleva como PROMEDIO de la copa: mismo tono de cerca y de lejos, calculado en cada cuadro con
+// el sol, la camara y la humedad de ese momento. V = del punto al ojo (mundo). pxm = px/m del punto: se apaga por debajo de z433 px/m
+// (0 = 10). y433 = cuanto (0 = nada). spec / rough = o2.y / o2.x
+void PESNatCanopy(inout float3 c, inout float spec, inout float rough, float3 V, float pxm) {
+  float4 P = IniParams.Load(int2(433, 0));
+  if (P.y < 0.001 || !PESNatOn()) return;
+  float lim = P.z > 0.5 ? clamp(P.z, 2.0, 200.0) : 10.0;
+  float kY = saturate(P.y) * smoothstep(lim * 0.5, lim, pxm);
+  if (kY < 0.001) return;
+  float4 P414 = IniParams.Load(int2(414, 0)), P114 = IniParams.Load(int2(114, 0));
+  float day = P114.w > 0.5 ? 1.0 : 0.0;
+  float sunK = saturate(P414.w * 1.2) * day;
+  float3 S = PESSunSky();
+  float back = saturate(0.5 - 0.5 * dot(normalize(V.xz + 1e-5), normalize(S.xz + 1e-5)));   // mirando hacia el sol = contraluz
+  float tx = 0.32 * sunK * (0.28 + 0.82 * back) * clamp(IniParams.Load(int2(413, 0)).w, 0.0, 2.0);   // media de la transmision a lo largo de la hoja
+  c = lerp(c, c * float3(1.26, 1.36, 0.86), saturate(tx * 0.95) * kY);
+  c *= lerp(float3(1.0, 1.0, 1.0), float3(1.05, 1.06, 0.95), 0.5 * clamp(IniParams.Load(int2(295, 0)).z, 0.0, 2.0) * kY * lerp(0.3, 1.0, saturate(P414.w)));   // puntas
+  // puntas mojadas (x329: una de cada ~8 hojas, mas con la cancha humeda, en invierno y al amanecer): brillo promedio
+  float2 g = PESGround();
+  float dewK = (1.0 + 0.8 * g.x) * (1.0 - 0.85 * g.y) * (abs(P114.z - 1.0) < 0.5 ? 1.4 : 1.0);
+  float dew = 0.12 * dewK * clamp(IniParams.Load(int2(329, 0)).x, 0.0, 2.0) * kY;
+  spec = saturate(spec + 0.45 * dew); rough = lerp(rough, 0.12, saturate(dew));
+}
 // (25/10) cesped lejano en la base de la cancha: donde una hoja ya no mide en pantalla (mas alla del nivel medio del pasto
 // 3D), la base toma el aspecto del cesped visto de lejos en vez de una textura plana: matas claras / oscuras de 8 y 22 cm
 // (atenuadas con el tamano del pixel para que no titilen), cobertura segun el angulo de vista (rasante = se ven las puntas,

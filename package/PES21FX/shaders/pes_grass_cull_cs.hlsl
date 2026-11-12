@@ -15,14 +15,16 @@ cbuffer PESGrassCull : register(b0) {
   float4 gP2;       // x celdas a lo ancho | y margen del fundido (fraccion) | z semi largo de la grilla (m) | w semi ancho (m)
   float4 gP3;       // x ancho de la hoja (m) | y ancho minimo (px) | z C base | w indices por tarjeta
   float4 gP4;       // x tarjetas de la malla | y subniveles | z alto de la hoja (m) | w tope de capas de hojas por pixel
-  float4 gPad[6];   // [0]: x piso de capas por pixel de suelo (nivel 0) | y, z rampa en px/m | w alto cerca / alto
+  float4 gPad[7];   // [0]: x piso de capas por pixel de suelo (nivel 0) | y, z rampa en px/m | w alto cerca / alto
                     // [1]: x margen del fundido en pHi | y, z, w indices por tarjeta de los niveles 0 / 1 / 2
                     // [2]: (nivel 0) x ancho de la hoja en camaras de juego (m) | y ancho con la camara al ras (m) | z, w rampa en px/m
                     // [4]: x 1 = editor | (11/11 m) y relleno del atlas bajo las hojas 3D (y403; la DLL lo manda solo con las hojas 3D prendidas)
                     // [5]: (11/11) HOJAS 3D: x umbral (px/m; 0 = hojas 3D apagadas en los niveles 0..2) | y hojas de la celda mas cercana (la DLL lo ajusta al total) | z tope total de hojas | w indices por hoja
+                    // [6]: (12/11) HOJAS ANGOSTAS de primerisimo plano (x432): x umbral (px/m; 0 = sin escalon angosto) | y hojas angostas por hoja comun | z indices por hoja angosta
 }
 RWStructuredBuffer<float4> Inst : register(u0);
-RWByteAddressBuffer Count : register(u1);   // 18 contadores (uint), uno por ranura; [18] = 1 si esta emision se quedo con el cuadro; [20] trozos de hojas 3D (11/11 n), [21] celdas, [22] hojas pedidas
+RWByteAddressBuffer Count : register(u1);   // 18 contadores (uint), uno por ranura; [18] = 1 si esta emision se quedo con el cuadro; [20] trozos de hojas 3D (11/11 n), [21] celdas, [22] hojas pedidas;
+                                            // (12/11) [23] suma de hojas pedidas x 16 (pasada 5), [24] trozos de hojas angostas (ranura 19)
 RWByteAddressBuffer Args : register(u2);    // 18 x 5 uints: indices, instancias, primer indice, vertice base, primera instancia
 // (26/10 d) reclamo del cuadro: [0] emisiones ejecutadas desde el ultimo Present (la DLL lo pone en cero en el contexto inmediato en
 // cada Present), [1..18] instancias por ranura de la emision que dibujo, [19] _m11 de su camara, [20..22] ojo. Solo la PRIMERA emision
@@ -78,15 +80,34 @@ void main(uint3 id : SV_DispatchThreadID)
       Args.Store(376, 0u);
       if (active) { uint cB = Count.Load(84), sB = Count.Load(88);
         Claim.Store(96, cB); Claim.Store(100, cB > 0u ? sB / cB : 0u); Claim.Store(104, sB); Claim.Store(108, n); Claim.Store(112, asuint(gPad[5].y)); }
+    } else if (s == 3 * nb + 1) {
+      // (12/11) ranura 19: HOJAS ANGOSTAS (escalon de primerisimo plano), trozos de 512 como la 18, con su malla (gPad[6].z indices por hoja)
+      uint cap = (uint)(gP1.y + 0.5);
+      uint tot = (uint)(gPad[5].z + 0.5);
+      uint n = active ? min(min(Count.Load(96), cap), (2u * tot + 511u) / 512u) : 0u;
+      uint ipcN = (uint)(gPad[6].z + 0.5); if (ipcN == 0u) ipcN = 48u;
+      Args.Store(380, 512u * ipcN);
+      Args.Store(384, n);
+      Args.Store(388, 0u);
+      Args.Store(392, 0u);
+      Args.Store(396, 0u);
+      if (active) Claim.Store(116, n);
     }
     return;
   }
   if (!active) return;
   if (id.x >= (uint)(gP1.w + 0.5) || id.y >= (uint)(gP2.x + 0.5)) return;
-  if (lvl == 5) {
+  if (lvl == 5 || lvl == 6) {
     // (11/11, Agustin: "solo de cerca siiiii", "para primerisimos primer plano nada mas") HOJAS 3D: celdas de 0.5 m (la grilla del nivel 0)
     // que miden >= umbral px/m (rampa 0.8x .. 1.25x); en el editor (gPad[4].x) las celdas a menos de 1.6 m del jugador. Las tarjetas siguen
     // abajo como relleno. Tope por celda = fundido x tope de hojas por celda (el VS corta las que sobran)
+    // (12/11, Agustin: "al mover la camara o empezar la repeticion se notan como se descargan y cargan partes") DOS pasadas en el MISMO cuadro:
+    // la 5 suma las hojas que piden todas las celdas y la 6 las anota escaladas al tope total. Antes el tope se ajustaba con lo leido de la
+    // GPU 2-3 cuadros despues y subia de a 15 % por cuadro: en cada corte de camara las celdas se llenaban de a poco
+    // (12/11, Agustin: "unas hojas mas angostas nuevas para los primeros planos, despues a cierta distancia las hojas que ya tenemos reduciendo un
+    // poco la cantidad poligonal") ESCALONES: desde gPad[6].x px/m (rampa 0.8x .. 1.25x) la celda lleva HOJAS ANGOSTAS (ranura 19, malla de
+    // 5 filas, gPad[6].y por cada hoja comun); mas lejos las hojas 3D de siempre con 3 filas (ranura 18). En la rampa las dos a la vez, cada una
+    // con su parte (se disuelven una en la otra hoja por hoja, sin salto)
     float cellB = gP0.y;
     float xB = -gP2.z + ((float)id.x + 0.5) * cellB, zB = -gP2.w + ((float)id.y + 0.5) * cellB;
     float4 PB = float4(xB, 0.0, zB, 1.0);
@@ -105,18 +126,33 @@ void main(uint3 id : SV_DispatchThreadID)
     // (>= 3x el umbral) llevan todas las hojas; hacia el umbral bajan hasta 35 %: al alejar las hojas 3D no se ralean las de adelante
     float NvB = kB * max(gPad[5].y, 1.0);
     if (gPad[4].x < 0.5) NvB *= lerp(0.35, 1.0, smoothstep(thr, thr * 3.0, pB));
-    uint limB = (uint)ceil(NvB - 0.0001); limB = clamp(limB, 1u, 16384u);
-    float frB = saturate(NvB - (float)(limB - 1u));
-    uint capB = (uint)(gP1.y + 0.5), idxB, dumB;
-    uint nCh = (limB + 511u) / 512u;
-    Count.InterlockedAdd(80, nCh, idxB);
-    Count.InterlockedAdd(84, 1u, dumB);
-    Count.InterlockedAdd(88, limB, dumB);
+    float kN = (gPad[6].x > 1.0 && gPad[4].x < 0.5) ? smoothstep(gPad[6].x * 0.8, gPad[6].x * 1.25, pB) : 0.0;
+    float nMul = gPad[6].y > 0.05 ? gPad[6].y : 1.0;
+    float n0 = NvB * kN * nMul, n1 = NvB * (1.0 - kN);   // angostas / comunes
+    if (lvl == 5) {   // pasada de suma (x16: cuarto de hoja, entero)
+      uint dS; Count.InterlockedAdd(92, (uint)((n0 + n1) * 16.0 + 0.5), dS);
+      return;
+    }
+    // escala al tope total, la misma para todas las celdas del cuadro (sin demora)
+    float sumB = (float)Count.Load(92) / 16.0;
+    float scB = sumB > gPad[5].z ? gPad[5].z / sumB : 1.0;
+    n0 *= scB; n1 *= scB;
+    uint capB = (uint)(gP1.y + 0.5), dumB;
     uint rotB = ((id.x * 7u + id.y * 13u) ^ (id.x * id.y)) & 3u;
-    // w = (trozo * 32768 + hojas de la celda) * 4 + giro (entero exacto en float hasta 2^24)
-    for (uint jB = 0u; jB < nCh; jB++) {
-      if (idxB + jB >= capB) break;
-      Inst[(3u * nb) * capB + idxB + jB] = float4(xB, zB, 1.0 + frB * 0.5, (float)((jB * 32768u + limB) * 4u + rotB));
+    Count.InterlockedAdd(84, 1u, dumB);
+    [unroll] for (uint lB = 0u; lB < 2u; lB++) {
+      float Nq = lB == 0u ? n1 : n0;
+      if (Nq < 0.5) continue;
+      uint limB = (uint)ceil(Nq - 0.0001); limB = clamp(limB, 1u, 16384u);
+      float frB = saturate(Nq - (float)(limB - 1u));
+      uint nCh = (limB + 511u) / 512u, idxB;
+      Count.InterlockedAdd(lB == 0u ? 80 : 96, nCh, idxB);
+      Count.InterlockedAdd(88, limB, dumB);
+      // w = (trozo * 32768 + hojas de la celda) * 4 + giro (entero exacto en float hasta 2^24)
+      for (uint jB = 0u; jB < nCh; jB++) {
+        if (idxB + jB >= capB) break;
+        Inst[(3u * nb + lB) * capB + idxB + jB] = float4(xB, zB, 1.0 + frB * 0.5, (float)((jB * 32768u + limB) * 4u + rotB));
+      }
     }
     return;
   }
