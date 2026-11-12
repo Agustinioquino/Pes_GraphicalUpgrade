@@ -1201,10 +1201,21 @@ static void WrinkleCapture(ID3D11DeviceContext* c, FaceMesh* m) {   // con s_mx 
     b->Release();
 }
 static int s_wrLogs = 0; static double s_wrLogT = 0;
+// (11/11, Agustin: "cambios rapidos en las expresiones, que sigan el gameclock") RELOJ DE LAS ARRUGAS = el de los gestos (exprbones.cpp
+// AnimT): si el reloj del juego (fila 157.x) avanzo desde el cuadro anterior se toma ese paso (la camara lenta de las repeticiones frena
+// tambien las arrugas, antes iban a tiempo real y llegaban antes que la cara); si esta quieto o en cero (editor, menus) el reloj real
+static double WrClock() {   // una vez por Present
+    static double t = 0.0, lastGame = -1.0, lastReal = -1.0;
+    const double real = Now(), game = (double)g_cfg.live[157][0];
+    const double dG = lastGame < 0.0 ? 0.0 : game - lastGame, dR = lastReal < 0.0 ? 0.0 : real - lastReal;
+    lastGame = game; lastReal = real;
+    t += (dG > 1e-5 && dG < 0.5) ? dG : (dR < 0.0 ? 0.0 : dR > 1.0 / 15.0 ? 1.0 / 15.0 : dR);
+    return t;
+}
 static void WrinklePresent(ID3D11DeviceContext* imm) {   // con s_mx tomado (Present)
     const bool on = g_cfg.live[397][2] > 0.0f;
     const float x = g_cfg.live[397][0]; const float tau = x > 0.0f ? 0.10f * x : 0.05f;   // mismo tiempo que los huesos (397.x); sin suavizado de huesos, 50 ms
-    const double now = Now(); int nUp = 0;
+    const double now = WrClock(), nowReal = Now(); int nUp = 0;
     for (auto& kv : s_meshes) {
         FaceMesh* m = kv.second;
         if (m->wrStI == 0) continue;
@@ -1232,7 +1243,7 @@ static void WrinklePresent(ID3D11DeviceContext* imm) {   // con s_mx tomado (Pre
         if (!m->wrCb) { D3D11_BUFFER_DESC d{}; d.ByteWidth = 48; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER; if (FAILED(g_dev.dev->CreateBuffer(&d, nullptr, &m->wrCb))) { m->wrCb = nullptr; continue; } }
         const float up[12] = { m->wrW[0], 1.0f, tau, 0.0f, m->wrW[1], m->wrW[2], m->wrW[3], m->wrW[4], m->wrW[5], m->wrW[6], m->wrW[7], m->wrW[8] };
         imm->UpdateSubresource(m->wrCb, 0, nullptr, up, 0, 0); nUp++;
-        if (s_wrLogs < 6 && now - s_wrLogT > 10.0) { s_wrLogT = now; s_wrLogs++;
+        if (s_wrLogs < 6 && nowReal - s_wrLogT > 10.0) { s_wrLogT = nowReal; s_wrLogs++;
             Log("arrugas: malla %d pesos del juego (0.y %.2f | 3 %.2f %.2f %.2f %.2f | 4 %.2f %.2f %.2f %.2f) suavizados tau %.3f s", m->id, tgt[0], tgt[1], tgt[2], tgt[3], tgt[4], tgt[5], tgt[6], tgt[7], tgt[8], tau); }
     }
     (void)nUp;
