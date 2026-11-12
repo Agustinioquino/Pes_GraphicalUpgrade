@@ -174,7 +174,7 @@ static std::atomic<double> s_hfLastDraw{-10.0};
 static ID3D11GeometryShader* s_v3RootGS[2] = {}; static ID3D11GeometryShader* s_v3GS = nullptr; static ID3D11GeometryShader* s_v3GSso = nullptr; static ID3D11GeometryShader* s_v3GSsoOnly = nullptr;
 static ID3D11VertexShader* s_v3VS = nullptr; static ID3D11InputLayout* s_v3IL = nullptr; static ID3D11Buffer* s_v3Roots = nullptr;
 static constexpr UINT kV3Stride = 128;            // 8 float4 (RootOut de pes_brow_gs.hlsli)
-static constexpr UINT kV3Bytes = 8u << 20;        // 65536 raices por dibujo de cara
+static constexpr UINT kV3Bytes = 4u << 20;        // 32768 raices por dibujo de cara (12/11: 8 -> 4 MB, tope duro de hebras por cara contra los cuadros de varios segundos)
 static const D3D11_SO_DECLARATION_ENTRY kV3SO[] = {
     { 0, "TEXCOORD", 0, 0, 4, 0 }, { 0, "TEXCOORD", 1, 0, 4, 0 }, { 0, "TEXCOORD", 2, 0, 4, 0 }, { 0, "TEXCOORD", 3, 0, 4, 0 },
     { 0, "TEXCOORD", 4, 0, 4, 0 }, { 0, "TEXCOORD", 5, 0, 4, 0 }, { 0, "TEXCOORD", 6, 0, 4, 0 }, { 0, "TEXCOORD", 7, 0, 4, 0 } };
@@ -444,8 +444,10 @@ static void FaceCacheSave(ID3D11DeviceContext* c, const FaceEntry& e) {
 
 // en Present, contexto inmediato: genera hasta 2 caras por cuadro
 static std::atomic<int> s_browFaces{0};   // caras con hebras dibujadas en este cuadro (x77 = maximo por pantalla)
+static void BrowSelPresent();
 void FaceGenPresent() {
     s_browFaces.store(0);
+    BrowSelPresent();   // (12/11) caras con hebras por cercania
     s_hfFrame.fetch_add(1);
     { static double hfNext = 0; double t = Now(); if (t > hfNext) { hfNext = t + 10.0; int d = s_hfDraws.exchange(0); if (d > 0) Log("cejas: pasada propia del pelo: %d dibujos en 10 s", d); } }
     { double t = Now(); if (t > s_stNext) { s_stNext = t + 10.0;
@@ -673,18 +675,122 @@ struct BrowSaved {
     ID3D11DepthStencilState* strandDSS = nullptr; ID3D11DepthStencilState* shadowDSS = nullptr; ID3D11GeometryShader* strandGS = nullptr; ID3D11GeometryShader* shadowGS = nullptr;   // no se liberan (cache / globales)
 };
 static thread_local BrowSaved t_bs;
-bool BrowWanted(const FaceGenExtra& ex, uint64_t vsHash) {
+// (12/11, Agustin: "bajar el maximo de jugadores con hebras en pantalla a 3 y bajar la distancia") CARAS CON HEBRAS POR CERCANIA.
+// Antes x77 contaba DIBUJOS en el orden en que el juego los manda: entraban las primeras 11 partes de cara del cuadro (a cualquier
+// distancia; un jugador lejano le podia quitar las hebras al de adelante) y, como el mapa t44 se enlazaba antes del tope, a la
+// cara que quedaba afuera se le borraba igual la ceja pintada (x382) y quedaba sin cejas. Ahora: cada dibujo de cara candidato copia
+// la traslacion de su m_world (b5 del VS, bytes 112..127, lo mismo que lod.cpp) a un staging en anillo; en Present (2 cuadros despues)
+// se mide la distancia real a la camara y se eligen las x77 caras MAS CERCANAS que esten a menos de y75 metros (con 10 % de ventaja
+// para las que ya tenian hebras: no titilan cuando dos estan a la par). Solo esas pasan BrowWanted (hebras + borrado de la pintura) y
+// sus pestanas (mismo bloque b5 del objeto en el cuadro). Sin medidas validas (camara desconocida) queda el tope por caras distintas.
+static const int kSelNotes = 128, kSelRing = 3;
+static ID3D11Buffer* s_selStage[kSelRing] = {}; static int s_selW = 0; static int s_selN[kSelRing] = { -1, -1, -1 };
+static std::string s_selNoteId[kSelRing][kSelNotes]; static std::atomic<int> s_selCount{0};
+struct SelFace { float d = -1; int frame = -1; };
+static std::mutex s_selMx;
+static std::unordered_map<std::string, SelFace> s_selDist;          // ultima distancia medida por cara
+static std::set<std::string> s_selOn;                                // caras elegidas para este cuadro
+static int s_selFrame = 0, s_selValidFrame = -1000;                 // cuadro de Present y ultimo con medidas validas
+static std::set<std::string> s_selFallback;                          // sin medidas: primeras caras distintas del cuadro
+static std::map<std::pair<void*, UINT>, std::string> s_selObj[2];    // bloque b5 (buffer, primer constante) -> cara, cuadro actual y anterior
+static std::atomic<int> s_lashFrameDraws{0};
+static int BrowMaxFaces() { int n = (int)(g_cfg.live[77][0] + 0.5f); return n < 1 ? 3 : (n > 22 ? 22 : n); }
+static float BrowMaxDist() { float d = g_cfg.live[75][1]; return d < 0.5f ? 5.0f : d; }
+static ID3D11Buffer* SelVSCB5(ID3D11DeviceContext* c, UINT* first) {
+    ID3D11Buffer* cb = nullptr; UINT num = 0; *first = 0; ID3D11DeviceContext1* c1 = nullptr;
+    if (SUCCEEDED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) && c1) { c1->VSGetConstantBuffers1(5, 1, &cb, first, &num); c1->Release(); }
+    else c->VSGetConstantBuffers(5, 1, &cb);
+    return cb;
+}
+static bool BrowPick(ID3D11DeviceContext* c, const std::string& id) {
+    if (g_cfg.live[75][2] > 2.5f) return true;   // diagnostico "todas" (z75 = 3): sin tope
+    UINT first = 0; ID3D11Buffer* cb = SelVSCB5(c, &first);
+    if (cb) {
+        int w = s_selW; int i = s_selStage[w] ? s_selCount.fetch_add(1) : kSelNotes;
+        D3D11_BUFFER_DESC d; cb->GetDesc(&d); UINT off = first * 16 + 112;
+        if (i < kSelNotes) {
+            if (d.ByteWidth >= off + 16) { D3D11_BOX bx = { off, 0, 0, off + 16, 1, 1 }; c->CopySubresourceRegion(s_selStage[w], 0, (UINT)i * 16, 0, 0, cb, 0, &bx); s_selNoteId[w][i] = id; }
+            else s_selNoteId[w][i].clear();
+        }
+        { std::lock_guard<std::mutex> lk(s_selMx); s_selObj[0][{ (void*)cb, first }] = id; }
+        cb->Release();
+    }
+    std::lock_guard<std::mutex> lk(s_selMx);
+    if (s_selFrame - s_selValidFrame <= 30) return s_selOn.count(id) != 0;
+    if (s_selFallback.count(id)) return true;                          // sin medidas: las primeras x77 caras distintas del cuadro
+    if ((int)s_selFallback.size() >= BrowMaxFaces()) return false;
+    s_selFallback.insert(id); return true;
+}
+// pestanas: la cara del mismo objeto (bloque b5) en este cuadro o el anterior; si no se sabe de quien son, pasan (las corta el GS por
+// distancia) pero nunca mas de 2 por cara elegida en el cuadro
+static bool LashPick(ID3D11DeviceContext* c) {
+    if (g_cfg.live[75][2] > 2.5f) return true;
+    UINT first = 0; ID3D11Buffer* cb = SelVSCB5(c, &first);
+    std::string id;
+    if (cb) { std::lock_guard<std::mutex> lk(s_selMx); auto k = std::make_pair((void*)cb, first);
+        auto it = s_selObj[0].find(k); if (it != s_selObj[0].end()) id = it->second; else { it = s_selObj[1].find(k); if (it != s_selObj[1].end()) id = it->second; } }
+    if (cb) cb->Release();
+    if (!id.empty()) { std::lock_guard<std::mutex> lk(s_selMx); if (s_selFrame - s_selValidFrame <= 30 && !s_selOn.count(id)) return false; }
+    return s_lashFrameDraws.fetch_add(1) < 2 * BrowMaxFaces();
+}
+static void BrowSelPresent() {
+    s_lashFrameDraws.store(0);
+    if (!g_dev.dev || !g_dev.imm) return;
+    for (int i = 0; i < kSelRing; i++) if (!s_selStage[i]) {
+        D3D11_BUFFER_DESC d = {}; d.ByteWidth = kSelNotes * 16; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        g_dev.dev->CreateBuffer(&d, nullptr, &s_selStage[i]); }
+    int w = s_selW; int n = std::min(s_selCount.exchange(0), kSelNotes);
+    s_selN[w] = n; int rd = (w + 1) % kSelRing; int pending = s_selN[rd]; s_selN[rd] = -1; s_selW = rd;
+    std::lock_guard<std::mutex> lk(s_selMx);
+    s_selFrame++;
+    s_selFallback.clear(); s_selObj[1].swap(s_selObj[0]); s_selObj[0].clear();
+    if (pending > 0 && s_selStage[rd] && g_eyeValid) {
+        D3D11_MAPPED_SUBRESOURCE m;
+        if (SUCCEEDED(g_dev.imm->Map(s_selStage[rd], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) {
+            const float* p = (const float*)m.pData; int good = 0;
+            for (int i = 0; i < pending; i++) {
+                const std::string& id = s_selNoteId[rd][i]; if (id.empty()) continue;
+                float dx = p[i * 4] - g_eyePos[0], dy = p[i * 4 + 1] - g_eyePos[1], dz = p[i * 4 + 2] - g_eyePos[2];
+                float d = sqrtf(dx * dx + dy * dy + dz * dz);
+                if (!(d > 0.01f && d < 500.f)) continue;
+                SelFace& f = s_selDist[id]; if (f.frame != s_selFrame) { f.d = d; f.frame = s_selFrame; } else f.d = std::min(f.d, d);
+                good++;
+            }
+            g_dev.imm->Unmap(s_selStage[rd], 0);
+            if (good > 0) s_selValidFrame = s_selFrame;
+        }
+    }
+    // elegir: vistas en los ultimos 20 cuadros, a menos de y75 m, las x77 mas cercanas (las que ya estaban, 10 % de ventaja)
+    const float maxD = BrowMaxDist(); const int maxN = BrowMaxFaces();
+    std::vector<std::pair<float, std::string>> cand;
+    for (auto it = s_selDist.begin(); it != s_selDist.end();) {
+        if (s_selFrame - it->second.frame > 600) { it = s_selDist.erase(it); continue; }
+        if (s_selFrame - it->second.frame <= 20 && it->second.d <= maxD * (s_selOn.count(it->first) ? 1.05f : 1.0f))
+            cand.push_back({ it->second.d * (s_selOn.count(it->first) ? 0.9f : 1.0f), it->first });
+        ++it;
+    }
+    std::sort(cand.begin(), cand.end());
+    std::set<std::string> on; for (int i = 0; i < (int)cand.size() && i < maxN; i++) on.insert(cand[i].second);
+    s_selOn.swap(on);
+    static double next = 0; double t = Now();
+    if (t > next && !s_selDist.empty()) { next = t + 10.0;
+        std::string ln; for (int i = 0; i < (int)cand.size() && i < 6; i++) { char b[48]; snprintf(b, sizeof b, "%s%s %.1f m", i ? ", " : "", cand[i].second.substr(0, 6).c_str(), s_selDist[cand[i].second].d); ln += b; }
+        Log("cejas: caras con hebras %d de %d cerca (tope %d, hasta %.1f m)%s%s%s", (int)s_selOn.size(), (int)cand.size(), maxN, maxD,
+            s_selFrame - s_selValidFrame <= 30 ? "" : " SIN MEDIDAS: tope por orden", ln.empty() ? "" : ": ", ln.c_str()); }
+}
+bool BrowWanted(ID3D11DeviceContext* c, const FaceGenExtra& ex, uint64_t vsHash) {
     if (!ex.seedMap || g_cfg.live[74][0] < 0.5f) return false;
     if (vsHash != kVSHead && vsHash != kVSFaceAnim) return false;
     // y77 = 0: como la v1, solo en partido (y24 lo pone PollMatch al ver el pasto)
     if (g_cfg.live[77][1] < 0.5f && g_cfg.live[93][3] < 0.5f) return false;
-    return true;
+    return BrowPick(c, ex.id.empty() ? "k" + std::to_string((uintptr_t)ex.key) : ex.id);   // (12/11) solo las x77 caras mas cercanas a menos de y75 m
 }
 // (04/11 i, Agustin: "puedes darle hebras a las pestanas?") la tira de pestanas: VS 66917213 (reemplazo de expresiones) + PS del
 // juego f0d74b9c; fila 368.x prende. Se repite con pes_lash_gs y el PS de las hebras (BrowStrandsBegin con vsHash = kVSLash)
-bool LashWanted(uint64_t vsHash, uint64_t psHash) {
+bool LashWanted(ID3D11DeviceContext* c, uint64_t vsHash, uint64_t psHash) {
     if (vsHash != kVSLash || psHash != 0xf0d74b9c069f3ee3ULL || g_cfg.live[368][0] < 0.5f) return false;
-    return s_lashGS && s_browPS;   // los shaders se compilan en Present (EnsureBrowShaders)
+    if (!s_lashGS || !s_browPS) return false;   // los shaders se compilan en Present (EnsureBrowShaders)
+    return LashPick(c);   // (12/11) solo las pestanas de las caras elegidas
 }
 bool BrowStrandsBegin(ID3D11DeviceContext* c, const FaceGenExtra* ex, uint64_t vsHash) {
     const bool lash = vsHash == kVSLash;
@@ -693,8 +799,9 @@ bool BrowStrandsBegin(ID3D11DeviceContext* c, const FaceGenExtra* ex, uint64_t v
     ID3D11GeometryShader* gs = lash ? s_lashGS : s_browGS[vsHash == kVSFaceAnim ? 1 : 0];
     if (!lash && HairFwdWanted() && s_browGSso[vsHash == kVSFaceAnim ? 1 : 0] && s_hfSO) gs = s_browGSso[vsHash == kVSFaceAnim ? 1 : 0];   // (08/11 v)
     if (!gs) return false;
-    int maxFaces = (int)g_cfg.live[77][0]; if (maxFaces < 1) maxFaces = 22;
-    if (!lash && s_browFaces.fetch_add(1) >= maxFaces) return false;   // tope de caras por cuadro (rendimiento)
+    // (12/11) el tope de caras ya lo decide BrowWanted (las x77 mas cercanas); aca queda solo un tope de seguridad de dibujos por
+    // cuadro (cada cara se dibuja en 1..4 partes): x77 x 6
+    if (!lash && s_browFaces.fetch_add(1) >= BrowMaxFaces() * 6) return false;
     BrowSaved& s = t_bs; s = BrowSaved();
     c->VSGetShader(&s.vs, nullptr, nullptr); c->PSGetShader(&s.ps, nullptr, nullptr); c->GSGetShader(&s.gs, nullptr, nullptr); c->HSGetShader(&s.hs, nullptr, nullptr); c->DSGetShader(&s.ds, nullptr, nullptr);
     c->IAGetPrimitiveTopology(&s.topo); c->RSGetState(&s.rs); c->OMGetDepthStencilState(&s.dss, &s.ref);

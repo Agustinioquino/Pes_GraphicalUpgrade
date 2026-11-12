@@ -1196,7 +1196,7 @@ static void RunRuleActions(ID3D11DeviceContext* c, const Rule* rule, bool ps, ui
                 // cejas con hebras v2 (04/11): el mapa de pelo en t26 (lo usa el diagnostico "semillas sobre la cara") y se anota este
                 // dibujo para repetirlo con el GS de hebras apenas termine (BrowStrands). Ya no se enlaza el UAV de semillas de la v1.
                 const ShaderEntry* bvs = Ctx(c).vs;
-                if (t_drawKind == 1 && bvs && bvs->repl && !g_cfg.bypass && BrowWanted(ex, bvs->hash)) {
+                if (t_drawKind == 1 && bvs && bvs->repl && !g_cfg.bypass && BrowWanted(c, ex, bvs->hash)) {
                     Remember(c, d, true, true, 26); c->PSSetShaderResources(26, 1, &ex.seedMap);
                     if (ex.browMap) { Remember(c, d, true, true, 44); c->PSSetShaderResources(44, 1, &ex.browMap); }   // (07/11) borrar la ceja pintada bajo las hebras (fila 382)
                     d.brow = ex; d.brow.browVS = bvs->hash; d.brow.browCount = t_drawVerts; d.brow.browStart = t_drawStart; d.brow.browBase = t_drawBase;
@@ -1536,7 +1536,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         for (auto* v : chk) if (v) v->Release();
     }
     // (04/11 i) pestanas con hebras: la tira de pestanas (VS 66917213 / PS f0d74b9c) se repite con el GS de pestanas al terminar
-    if (t_drawKind == 1 && vs && ps && !g_cfg.bypass && !d.brow.browVS && LashWanted(vs->hash, ps->hash)) {
+    if (t_drawKind == 1 && vs && ps && !g_cfg.bypass && !d.brow.browVS && LashWanted(c, vs->hash, ps->hash)) {
         d.brow = FaceGenExtra(); d.brow.browVS = vs->hash; d.brow.browCount = t_drawVerts; d.brow.browStart = t_drawStart; d.brow.browBase = t_drawBase;
     }
     RingFaceBind(c, d.ring);   // (24/10 e) medicion del color de la cara: u7 (despues de las cejas en u5 / u6)
