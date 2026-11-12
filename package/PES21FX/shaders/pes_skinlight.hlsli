@@ -116,7 +116,15 @@ float3 PesSkSpec(float3 specGame, float3 n, float3 V, float3 L, float roughG, fl
   float dd = nh * nh * (a4 - 1) + 1;
   float D = a4 / (3.14159 * dd * dd);
   float F = 0.028 + 0.972 * pow(1 - saturate(dot(V, H)), 5);
-  r1 += D * F * nl * 0.25 * P5.y * lightC * shadow * PESSkinSharpOcc(specInt, P5.w);
+  // (12/11) piel v2 (w124): visibilidad de Smith correlacionada (Heitz 2014, la de UE5) en vez del 0.25 fijo. De frente da lo mismo
+  // (nl = nv = 1 -> 0.25); con la luz o la camara rasantes el lobulo fino crece como en la piel real (borde de la cara, sol bajo)
+  // en lugar de apagarse con N.L. Tope 1.0 para que un pixel casi de canto no explote
+  float vis = 0.25;
+  if (IniParams.Load(int2(124, 0)).w > 0.5) {
+    float nv = max(saturate(dot(n, V)), 1e-3), nlv = max(nl, 1e-3);
+    vis = min(0.5 / max(nlv * sqrt(nv * nv * (1.0 - a4) + a4) + nv * sqrt(nlv * nlv * (1.0 - a4) + a4), 1e-4), 1.0);
+  }
+  r1 += D * F * nl * vis * P5.y * lightC * shadow * PESSkinSharpOcc(specInt, P5.w);
   return r1;
 }
 #ifdef PES_SK_FACESHADOW   // el archivo declara pesMouthMask (t43) y g_DepthTexture antes de incluir
