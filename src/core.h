@@ -244,6 +244,7 @@ bool DeletePresetFile(const std::string& file);
 // ---------------------------------------------------------------- d3d
 bool InstallHooks();
 void OnDeviceCreated(ID3D11Device* d);
+void NoteCreateCall(const char* fn, void* caller, void* dev, void* sc);   // (12/11) registro: quien crea el dispositivo
 void OnDeviceAndSwapChainCreated(ID3D11Device* d, IDXGISwapChain* sc);   // (12/11) D3D11CreateDeviceAndSwapChain del juego
 void NoteDeviceFlags(UINT flags, bool ok);   // (08/11 g) banderas con que el juego pidio el dispositivo (al log en el primer Present)
 void ReloadShaders();

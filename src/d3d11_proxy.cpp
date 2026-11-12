@@ -1,6 +1,7 @@
 // PES21 FX - somos el d3d11.dll de la carpeta del juego (el lugar que ocupaba 3DMigoto).
 // Asi el mod queda cargado desde el arranque del proceso, antes que cualquier otro mod.
 // Reenviamos todo al d3d11.dll de Windows; solo D3D11CreateDevice(AndSwapChain) pasan por nosotros.
+#include <intrin.h>
 #include "core.h"
 #include <cstdio>
 
@@ -35,6 +36,7 @@ extern "C" HRESULT WINAPI D3D11CreateDevice(IDXGIAdapter* a, D3D_DRIVER_TYPE t, 
     const UINT f0 = f; f &= ~(UINT)D3D11_CREATE_DEVICE_SINGLETHREADED;
     HRESULT hr = s_realCD(a, t, s, f, fl, n, v, d, ofl, c);
     fx::NoteDeviceFlags(f0, SUCCEEDED(hr));
+    fx::NoteCreateCall("D3D11CreateDevice", _ReturnAddress(), (SUCCEEDED(hr) && d) ? (void*)*d : nullptr, nullptr);
     if (SUCCEEDED(hr) && d && *d) fx::OnDeviceCreated(*d);
     return hr;
 }
@@ -46,6 +48,7 @@ extern "C" HRESULT WINAPI D3D11CreateDeviceAndSwapChain(IDXGIAdapter* a, D3D_DRI
     const UINT f0 = f; f &= ~(UINT)D3D11_CREATE_DEVICE_SINGLETHREADED;
     HRESULT hr = s_realCDSC(a, t, s, f, fl, n, v, sd, sc, d, ofl, c);
     fx::NoteDeviceFlags(f0, SUCCEEDED(hr));
+    fx::NoteCreateCall("D3D11CreateDeviceAndSwapChain", _ReturnAddress(), (SUCCEEDED(hr) && d) ? (void*)*d : nullptr, (SUCCEEDED(hr) && sc) ? (void*)*sc : nullptr);
     if (SUCCEEDED(hr) && d && *d) fx::OnDeviceCreated(*d);
     // (12/11) PES 2021 1.00 / CPY crea dispositivo y cadena juntos: la cadena no pasa por los CreateSwapChain enganchados
     // (los ganchos de la fabrica se ponen al crear el dispositivo, despues). Se engancha aca, antes que Sider y cloth-mod
