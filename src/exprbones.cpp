@@ -598,7 +598,13 @@ static float AnimT() {
         const double game = (double)g_cfg.live[157][0];
         double dG = lastGame < 0.0 ? 0.0 : game - lastGame, dR = lastReal < 0.0 ? 0.0 : real - lastReal;
         lastGame = game; lastReal = real;
+        if (dG < -50000.0) dG += 100000.0;   // vuelta del reloj (100000 s)
         double adv = (dG > 1e-5 && dG < 0.5) ? dG : std::clamp(dR, 0.0, 1.0 / 15.0);
+        // (11/11, Agustin: "no seguian el gameclock, por eso al pausar la repeticion todo vibra") EN PARTIDO (cancha a la vista hace
+        // < 15 s, 93.w) y con el reloj del juego ya reconocido (157.w) manda SOLO ese reloj: pausa = paso 0 (los gestos quedan
+        // quietos con la cara), camara lenta = despacio. Antes, con el reloj quieto, se pasaba al real y hablar / vida / respiracion /
+        // parpadeo seguian moviendo los huesos sobre una cara congelada. Editor y menus (sin cancha): como antes, reloj real
+        if (g_cfg.live[157][3] >= 0.5f && g_cfg.live[93][3] >= 0.5f) adv = std::clamp(dG, 0.0, 0.1);
         animT += adv; if (animT > 100000.0) animT -= 100000.0;
     }
     return (float)animT;

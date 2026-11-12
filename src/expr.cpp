@@ -1207,9 +1207,12 @@ static int s_wrLogs = 0; static double s_wrLogT = 0;
 static double WrClock() {   // una vez por Present
     static double t = 0.0, lastGame = -1.0, lastReal = -1.0;
     const double real = Now(), game = (double)g_cfg.live[157][0];
-    const double dG = lastGame < 0.0 ? 0.0 : game - lastGame, dR = lastReal < 0.0 ? 0.0 : real - lastReal;
+    double dG = lastGame < 0.0 ? 0.0 : game - lastGame; const double dR = lastReal < 0.0 ? 0.0 : real - lastReal;
+    if (dG < -50000.0) dG += 100000.0;
     lastGame = game; lastReal = real;
-    t += (dG > 1e-5 && dG < 0.5) ? dG : (dR < 0.0 ? 0.0 : dR > 1.0 / 15.0 ? 1.0 / 15.0 : dR);
+    // en partido con el reloj del juego reconocido manda solo ese reloj (pausa = 0), igual que AnimT (exprbones.cpp)
+    if (g_cfg.live[157][3] >= 0.5f && g_cfg.live[93][3] >= 0.5f) t += dG < 0.0 ? 0.0 : dG > 0.1 ? 0.1 : dG;
+    else t += (dG > 1e-5 && dG < 0.5) ? dG : (dR < 0.0 ? 0.0 : dR > 1.0 / 15.0 ? 1.0 / 15.0 : dR);
     return t;
 }
 static void WrinklePresent(ID3D11DeviceContext* imm) {   // con s_mx tomado (Present)
@@ -1233,8 +1236,8 @@ static void WrinklePresent(ID3D11DeviceContext* imm) {   // con s_mx tomado (Pre
         bool bad = false; for (float v : tgt) if (!(v == v) || fabsf(v) > 64.0f) bad = true;
         if (bad) continue;
         float dt = (float)(now - m->wrT); m->wrT = now;
-        if (!m->wrHave || dt > 1.0f || dt <= 0.0f) { memcpy(m->wrW, tgt, sizeof tgt); memset(m->wrV, 0, sizeof m->wrV); m->wrHave = true; }
-        else {
+        if (!m->wrHave || dt > 1.0f) { memcpy(m->wrW, tgt, sizeof tgt); memset(m->wrV, 0, sizeof m->wrV); m->wrHave = true; }
+        else if (dt > 0.0f) {   // dt = 0: reloj del juego en pausa, las arrugas quedan como estan
             if (dt > 1.0f / 15.0f) dt = 1.0f / 15.0f;
             // resorte criticamente amortiguado (SmoothDamp), igual que Damp() de exprbones.cpp
             const float om = 2.0f / (tau > 0.001f ? tau : 0.001f), xx = om * dt, e = 1.0f / (1.0f + xx + 0.48f * xx * xx + 0.235f * xx * xx * xx);
