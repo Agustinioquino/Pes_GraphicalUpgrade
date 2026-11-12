@@ -15,7 +15,8 @@
 //        451 = x "copiar el sol del partido" (se vuelve a 0 sola)
 //        452 = (la escribe la DLL, no va al ini) xyz direccion final en el mundo (hacia el sol), w 1 = la usa el shader, 2 = ya esta
 //              en el motor (el shader no gira nada y deja las sombras reales encendidas)
-//        453 = (la escribe la DLL) xyz tinte de la temperatura (luminancia 1), w 1 = usarlo
+//        453 = (la escribe la DLL) xyz tinte: temperatura (luminancia 1) x color segun la altura x nubes, w 1 = usarlo
+//        455 = x color segun la altura del sol, y recorrido del dia (grados de arco/s), z nubes que pasan (0..1)
 #include "core.h"
 #include <atomic>
 #include <mutex>
@@ -123,14 +124,40 @@ void SolLibreFrame(float (*p)[4], double t) {
         Log("sol libre: copiar el sol del partido %s (azimut %.0f, elevacion %.0f)", rOk ? "ok" : "sin dato", azR, elR);
     }
     if (on && fabsf(p[450][3]) > 1e-4f) { spin = fmodf(spin + p[450][3] * (float)dt, 360.0f); }
-    float az = (p[101][1] + spin + (rel && rOk ? azR : 0.0f)) * 0.01745329f, el = std::clamp(p[101][2], -10.0f, 90.0f) * 0.01745329f;
+    float azD = p[101][1] + spin + (rel && rOk ? azR : 0.0f), elD = std::clamp(p[101][2], -10.0f, 90.0f);
+    // (12/11 b) y455 recorrido del dia: el sol sale a 90 grados del Azimut, sube hasta la Elevacion (z101) y se pone del otro lado;
+    // y455 = grados de arco por segundo (180 = un dia por segundo). Al llegar al horizonte vuelve a salir
+    static float dayPh = 0.0f;
+    if (on && p[455][1] > 1e-4f) {
+        dayPh = fmodf(dayPh + p[455][1] * (float)dt, 180.0f);
+        azD += dayPh - 90.0f; elD = (std::max)(elD, 1.0f) * sinf(dayPh * 0.01745329f);
+    } else dayPh = 0.0f;
+    float az = azD * 0.01745329f, el = elD * 0.01745329f;
     float w[3] = { cosf(el) * sinf(az), sinf(el), cosf(el) * cosf(az) };
     { std::lock_guard<std::mutex> lk(s_mx); s_wantOn = eng; for (int k = 0; k < 3; k++) s_want[k] = w[k]; }
     bool inEng = eng && t - appliedT < 0.25;
     p[452][0] = w[0]; p[452][1] = w[1]; p[452][2] = w[2]; p[452][3] = !on ? 0.0f : inEng ? 2.0f : 1.0f;
-    float K = p[450][2];
-    if (on && K >= 1000.0f) { float c[3]; KelvinRgb(K, c); p[453][0] = c[0]; p[453][1] = c[1]; p[453][2] = c[2]; p[453][3] = 1.0f; }
-    else { p[453][0] = p[453][1] = p[453][2] = 1.0f; p[453][3] = 0.0f; }
+    float K = p[450][2], c[3] = { 1, 1, 1 }; bool useT = false;
+    if (on && K >= 1000.0f) { KelvinRgb(K, c); useT = true; }
+    // (12/11 b) x455 color segun la altura: con el sol bajo la luz se pone naranja y mas debil (mas aire en el camino), como al
+    // atardecer; desde 25 grados para arriba queda como esta
+    if (on && p[455][0] > 1e-4f) {
+        float k = std::clamp(p[455][0], 0.0f, 1.0f) * (1.0f - std::clamp((elD - 2.0f) / 23.0f, 0.0f, 1.0f));
+        const float warm[3] = { 1.0f, 0.58f, 0.28f };
+        for (int i = 0; i < 3; i++) c[i] *= (1.0f + (warm[i] - 1.0f) * k) * (1.0f - 0.35f * k);
+        useT = true;
+    }
+    // (12/11 b) z455 nubes que pasan: la luz del sol baja de a ratos, suave (suma de ondas lentas, 5 a 40 s), hasta z455
+    static double cloudT = 0.0;
+    if (on && p[455][2] > 1e-4f) {
+        cloudT += dt;
+        double u = 0.5 * sin(cloudT * 0.157) + 0.3 * sin(cloudT * 0.41 + 1.7) + 0.2 * sin(cloudT * 1.13 + 4.1);   // -1..1
+        float cov = (float)std::clamp((u - 0.1) / 0.5, 0.0, 1.0); cov = cov * cov * (3.0f - 2.0f * cov);
+        float dim = 1.0f - std::clamp(p[455][2], 0.0f, 1.0f) * 0.8f * cov;
+        for (int i = 0; i < 3; i++) c[i] *= dim;
+        useT = true;
+    }
+    p[453][0] = c[0]; p[453][1] = c[1]; p[453][2] = c[2]; p[453][3] = useT ? 1.0f : 0.0f;
     if (on && t - logT >= 30.0) { logT = t; int wr, re, fa; { std::lock_guard<std::mutex> lk(s_mx); wr = s_writes; re = s_reals; fa = s_fails; }
         Log("sol libre: azimut %.0f elevacion %.0f | sombras %s (%s) | sol real %s az %.0f el %.0f | escrituras %d, la atmosfera lo piso %d, fallos %d",
             az * 57.29578f, el * 57.29578f, eng ? "siguen" : "del sol real", eng ? (inEng ? "motor movido" : "SIN luz del motor: solo shader") : "-",
