@@ -2271,6 +2271,49 @@ static void HookSwapChain(IDXGISwapChain* sc) {
     Log("Present enganchado");
 }
 
+// (12/11) plan B del Present: en una PC con PES 2021 CPY + DreamPatch Switcher (Sider cargado por el Switcher, despues de
+// nosotros) el juego nunca paso por los CreateSwapChain enganchados: sin "cadena de intercambio", sin menu Insert y sin los
+// ganchos que se ponen en el primer Present. Si a los 15 s de crear el dispositivo no hay cadena, se arma una cadena de prueba
+// (ventana oculta, dispositivo aparte con el d3d11 de Windows) solo para leer de su vtable donde esta el codigo de Present y de
+// ResizeBuffers, y se engancha ese codigo con MinHook: pasa por ahi cualquier cadena, este quien este antes en la vtable (Sider
+// llama a ese mismo codigo). Si la cadena del juego ya se engancho por el camino normal no se hace nada (en 1.07.02 asi es siempre).
+HMODULE fx_RealD3D11();
+static DWORD WINAPI PresentPlanB(void*) {
+    Sleep(15000);
+    {
+        std::lock_guard<std::recursive_mutex> lk(s_hookMutex);
+        if (s_scHooked || !g_cfg.optPresent) return 0;
+    }
+    Log("Present: a los 15 s el juego no paso por CreateSwapChain (sin menu ni ganchos del primer Present): plan B");
+    auto cdsc = (PFN_D3D11CreateDeviceAndSwapChain)(fx_RealD3D11() ? GetProcAddress(fx_RealD3D11(), "D3D11CreateDeviceAndSwapChain") : nullptr);
+    if (!cdsc) { Log("Present: plan B sin D3D11CreateDeviceAndSwapChain de Windows"); return 0; }
+    WNDCLASSEXW wc{}; wc.cbSize = sizeof wc; wc.lpfnWndProc = DefWindowProcW; wc.hInstance = GetModuleHandleW(nullptr); wc.lpszClassName = L"PES21FX_planB";
+    RegisterClassExW(&wc);
+    HWND w = CreateWindowExW(0, wc.lpszClassName, L"", WS_OVERLAPPEDWINDOW, 0, 0, 64, 64, nullptr, nullptr, wc.hInstance, nullptr);
+    if (!w) { Log("Present: plan B sin ventana de prueba (%lu)", GetLastError()); return 0; }
+    DXGI_SWAP_CHAIN_DESC sd{};
+    sd.BufferCount = 1; sd.BufferDesc.Width = 64; sd.BufferDesc.Height = 64; sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT; sd.OutputWindow = w; sd.SampleDesc.Count = 1; sd.Windowed = TRUE; sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+    IDXGISwapChain* sc = nullptr; ID3D11Device* dev = nullptr; ID3D11DeviceContext* ctx = nullptr; D3D_FEATURE_LEVEL fl{};
+    HRESULT hr = cdsc(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &sd, &sc, &dev, &fl, &ctx);
+    if (SUCCEEDED(hr) && sc) {
+        void** vt = VT(sc);
+        void* pres = vt[8]; void* resz = vt[13];
+        std::lock_guard<std::recursive_mutex> lk(s_hookMutex);
+        if (!s_scHooked) {
+            Log("Present: plan B: codigo de Present en %s, ResizeBuffers en %s", ModOff(pres).c_str(), ModOff(resz).c_str());
+            const bool ok = Hook(pres, (void*)&hk_Present, (void**)&o_Present, "IDXGISwapChain::Present (plan B)");
+            if (ok) Hook(resz, (void*)&hk_Resize, (void**)&o_Resize, "IDXGISwapChain::ResizeBuffers (plan B)");
+            if (ok) { s_scHooked = true; Log("Present enganchado (plan B)"); }
+        } else Log("Present: plan B: la cadena del juego se engancho mientras tanto, no se hace nada");
+    } else Log("Present: plan B: no se pudo crear la cadena de prueba (%08X)", (unsigned)hr);
+    if (sc) sc->Release();
+    if (ctx) ctx->Release();
+    if (dev) dev->Release();
+    DestroyWindow(w); UnregisterClassW(wc.lpszClassName, wc.hInstance);
+    return 0;
+}
+
 // cada ~1 s se mira si algun shader cambio en disco (fecha y cantidad); si cambio, se recompila solo ese cambio
 void WatchShaderFolder() {
     static double next = 0; static ULONGLONG lastSig = 0;
@@ -2334,7 +2377,12 @@ bool InstallHooks() {
 }
 
 // llamado por nuestro D3D11CreateDevice (somos el d3d11.dll de la carpeta del juego)
-void OnDeviceCreated(ID3D11Device* d) { if (d) HookDevice(d); }
+void OnDeviceCreated(ID3D11Device* d) {
+    if (!d) return;
+    HookDevice(d);
+    static std::atomic<bool> s_planB{false};   // (12/11) plan B del Present, una sola vez
+    if (!s_planB.exchange(true)) if (HANDLE t = CreateThread(nullptr, 0, PresentPlanB, nullptr, 0, nullptr)) CloseHandle(t);
+}
 static std::atomic<UINT> s_devFlags{0xffffffffu};
 void NoteDeviceFlags(UINT flags, bool ok) {
     s_devFlags.store(flags);
