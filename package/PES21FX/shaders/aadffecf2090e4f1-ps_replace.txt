@@ -55,7 +55,7 @@ float4 PesBootH(float2 uv, float dCov, float gCov) {
   [unroll] for (int j3 = -1; j3 <= 1; j3++) [unroll] for (int i3 = -1; i3 <= 1; i3++) {
     float2 c = ig + float2(i3, j3), h = PesH2(c + 31.0);
     float on = step(frac(h.x * 9.1 + h.y * 21.7), gCov);
-    float a = h.x * 6.2832, L = 0.32 + 0.16 * h.y;   // (12/11) hojitas mas grandes y anchas: se tienen que ver float2 dir = float2(cos(a), sin(a));
+    float a = h.x * 6.2832, L = 0.32 + 0.16 * h.y; float2 dir = float2(cos(a), sin(a));   // (12/11) hojitas mas grandes y anchas: se tienen que ver
     float2 o = fg - (float2(i3, j3) + 0.5 + 0.3 * (h - 0.5));
     float t = clamp(dot(o, dir), -L, L); float dd = length(o - dir * t);
     float wdt = (0.05 + 0.04 * h.y) * (1.0 - 0.7 * abs(t) / L);
