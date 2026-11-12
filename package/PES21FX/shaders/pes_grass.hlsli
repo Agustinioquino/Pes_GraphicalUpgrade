@@ -87,7 +87,7 @@ float PESLineWearK(float2 wxz, float live) {
   float a = saturate(PESWearLiveCurve(live) * k * 1.2);
   if (a < 0.005) return 1.0;
   float n = PESGnoise(wxz * 4.5 + 2.9) * 0.55 + PESGnoise(wxz * 13.0 + 7.3) * 0.30 + PESGnoise(wxz * 31.0 + 0.7) * 0.15;
-  float off = 1.0 - smoothstep(a * 0.85 - 0.05, a * 0.85 + 0.05, n);   // raspado (los manchones crecen con el desgaste)
+  float off = 1.0 - smoothstep(a * 0.62 - 0.05, a * 0.62 + 0.05, n);   // raspado (los manchones crecen con el desgaste; a tope ~60 %: la linea se sigue leyendo)
   return saturate((1.0 - 0.88 * off) * (1.0 - 0.25 * a));
 }
 // w443 FRANJAS QUE SE BORRAN DONDE SE JUEGA: el pasto pisado una y otra vez queda acostado para cualquier lado (remolinos de ~40 cm): las
