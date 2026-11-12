@@ -30,6 +30,8 @@ StructuredBuffer<float4> PESGrassInst : register(t121);   // PES21: parcelas del
 // y enlazado aca en b6: con eso las hojas calculan el MISMO color que el suelo de la vista de juego (x148)
 cbuffer PESTurfMatC : register(b6) { float4 pTM[8]; }
 #include "pes_grass.hlsli"   // PES21 pasto v3 (19/10): tipo, alto, patrones de corte, desgaste, zonas
+// (12/11) pasto aplastado: el mayor de pisadas (R) y rastro de la pelota (G) en una uv de la cancha
+float PESFlatAt(float2 uv) { float2 f = PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, uv, 0).xy; return max(f.x, f.y); }
 // (11/11 o) gradiente analitico del ruido de valor de PESGnoise (las mismas 4 esquinas): para correr los macollos de las hojas 3D
 float2 PESGnGrad(float2 p) {
   float2 i = floor(p), f = frac(p), u = f * f * (3.0 - 2.0 * f), du = 6.0 * f * (1.0 - f);
@@ -104,6 +106,7 @@ void main(
   float2 pesBF = float2(0.0, 1.0), pesBW = float2(1.0, 0.0), pesBSl = float2(0.0, 0.0); float pesBSide = 0.0;
   float3 pesBNm = float3(0.0, 0.0, 1.0), pesBMid = float3(0.0, 0.0, 0.0);
   float2 pesBRoot = float2(0.0, 0.0);   // (11/11 f) raiz de la hoja 3D en la celda (para las matas, como pesCardRoot)
+  float pesDefK = 0.0, pesFlatK = 0.0, pesDefT = 0.0;   // (12/11) hoja 3D aplastada: 0..1 doblandose, 0..1 acostada, alto en la hoja (0 raiz .. 1 punta)
   float pesBIrr = 0.0;                  // (11/11 m) 1 = hoja 3D despareja de abajo (acostada / doblada / rota): algo mas oscura (oclusion)
   float3 pesExtW = 0; float2 pesExtRoot = 0; float pesExtScale = 1; float2 pesExtOrg = 0; float pesPx = 0.0;
   float2 pesCardRoot = 0;   // (11/11 f) raiz de la tarjeta del mod (igual en todos sus vertices)
@@ -272,6 +275,41 @@ void main(
       pesBNm = normalize(Fm - Tm * dot(Fm, Tm));
       float cM = 0.25 * bnd * h + 0.5 * tilt * h;
       pesBMid = float3(root.x + F0.x * cM, 0.5 * h, root.y + F0.y * cM);
+      // (12/11, Agustin: "una textura y un modelo para cuando esta siendo aplastado y cuando esta abajo del todo, que se cambien sutilmente con el
+      // movimiento") PASTO APLASTADO EN DOS ESTADOS, con el mapa pes_flat (pisadas R / rastro de la pelota G, se apaga solo: z136 s) leido en la
+      // raiz de la hoja. Doblandose (hasta ~0.45): la parte de arriba se dobla hacia afuera de la pisada y la de abajo sigue parada (pliegue a
+      // media hoja). Abajo del todo (0.4 .. 0.85): la hoja se acuesta desde la raiz contra el suelo, apenas curvada, con la cara hacia arriba.
+      // Al levantarse el mapa la hoja vuelve por los mismos estados (y el vaiven de x413). Cada hoja con su respuesta y su angulo
+      float4 Q39b = IniParams.Load(int2(139, 0));
+      if (Q39b.x > 0.5 && Q39b.z > 0.001 && pesBIrr < 0.5) {
+        float2 uvF = (ins.xy + float2(csR * root.x + snR * root.y, -snR * root.x + csR * root.y)) * cb4[1].xy + cb4[1].zw;
+        float flB = saturate(PESFlatAt(uvF) * clamp(Q39b.z, 0.0, 2.0) * (0.8 + 0.4 * PESBu(sB, 29u)));
+        if (flB > 0.02) {
+          const float2 tF = float2(2.0 / 1024.0, 2.0 / 512.0);
+          float2 gF = float2(PESFlatAt(uvF + float2(tF.x, 0.0)) - PESFlatAt(uvF - float2(tF.x, 0.0)), PESFlatAt(uvF + float2(0.0, tF.y)) - PESFlatAt(uvF - float2(0.0, tF.y)));
+          float lgF = length(gF);
+          float2 dW = lgF > 1e-3 ? -gF / lgF : float2(csR * F0.x + snR * F0.y, -snR * F0.x + csR * F0.y);   // hacia afuera de la pisada (en el centro: su propia cara)
+          float2 dL = float2(csR * dW.x - snR * dW.y, snR * dW.x + csR * dW.y);                          // de la cancha a la celda
+          dL = normalize(dL + F0 * 0.35 + float2(-F0.y, F0.x) * (PESBu(sB, 30u) - 0.5) * 0.6);
+          float crushK = smoothstep(0.05, 0.45, flB), flatK = smoothstep(0.40, 0.85, flB);
+          float thM = lerp(1.20, 1.50, flatK) * (0.9 + 0.2 * PESBu(sB, 31u)), ex = lerp(1.9, 0.55, flatK);
+          float2 cP = float2(0.0, 0.0);   // (avance hacia afuera, alto) por tramos de la hoja hasta esta fila
+          [unroll] for (uint j = 1u; j <= 3u; j++) { if (j <= row) { float th = thM * pow(((float)j - 0.5) / 3.0, ex); cP += (h / 3.0) * float2(sin(th), cos(th)); } }
+          float thR = thM * pow(max(t, 0.05), ex);
+          float2 cS = root + F0 * (bnd * h * t * t + tilt * h * t), cD = root + dL * cP.x;
+          float2 Wl = float2(-dL.y, dL.x);
+          float2 WdD = normalize(lerp(Wd, Wl * (dot(Wd, Wl) >= 0.0 ? 1.0 : -1.0), crushK) + 1e-5);
+          float2 FdD = float2(-WdD.y, WdD.x);
+          float2 xzD = lerp(cS, cD, crushK) + WdD * (sd * wh) + FdD * (abs(sd) * 0.30 * wh * (1.0 - 0.7 * flatK));
+          float yD = lerp(yy, max(cP.y, 0.0015 + 0.003 * t), crushK) + abs(sd) * 0.25 * wh * crushK;
+          pesVin = float3(xzD.x, max(yD, 0.0), xzD.y);
+          pesBF = normalize(lerp(Fd, dL, crushK) + 1e-5); pesBW = WdD;
+          pesBSl = lerp(pesBSl, dL * tan(min(thR, 1.45)), crushK);
+          pesBNm = normalize(lerp(pesBNm, float3(0.0, 1.0, 0.0), crushK));
+          pesBMid = float3(lerp(pesBMid.x, root.x + dL.x * 0.5 * h, crushK), pesBMid.y * (1.0 - 0.85 * crushK), lerp(pesBMid.z, root.y + dL.y * 0.5 * h, crushK));
+          pesDefK = crushK; pesFlatK = flatK; pesDefT = t;
+        }
+      }
     }
     float cs = rot == 0 ? 1.0 : (rot == 2 ? -1.0 : 0.0), sn = rot == 1 ? 1.0 : (rot == 3 ? -1.0 : 0.0);
     pesRotCS = float2(cs, sn);
@@ -564,7 +602,7 @@ void main(
     // (27/10 n) R = pisadas (se levantan en segundos), G = rastro de la pelota (dura z329 s): las hojas se agachan con el mayor de los dos
     float2 fl2 = PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF, 0).xy;
     float fl0 = max(fl2.x, fl2.y);
-    if ((pesIsExt || pesNatV) && W177.w > 0.001) pesSinkF = saturate(0.55 * saturate(fl2.x) + 0.35 * saturate(fl2.y)) * saturate(W177.w);   // (11/11 h) natural: tambien el pasto del juego pegado a la camara   // (02/11 paso 7) R pisadas, G rastro de la pelota
+    if ((pesIsExt || pesNatV) && W177.w > 0.001) pesSinkF = saturate(0.55 * saturate(fl2.x) + 0.35 * saturate(fl2.y)) * saturate(W177.w) * (1.0 - 0.7 * pesDefK);   // (12/11) la hoja 3D acostada no se entierra   // (11/11 h) natural: tambien el pasto del juego pegado a la camara   // (02/11 paso 7) R pisadas, G rastro de la pelota
     if (fl0 > 0.003) {
       const float2 tx = float2(2.0 / 1024.0, 2.0 / 512.0);
       #define PESFL(o) (max(PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF + (o), 0).x, PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF + (o), 0).y))
@@ -586,7 +624,7 @@ void main(
         float2 dSide = float2(-dOut.y, dOut.x);
         pesLean += dSide * cos(ph * 0.5 + hbR) * 0.25 * env * kReb;   // tambien de costado: no se mueven todas en el mismo plano
       }
-      pesLean += dOut * 1.2 * kF;   // se abren hacia afuera del rastro
+      if (!pesBlade) pesLean += dOut * 1.2 * kF;   // se abren hacia afuera del rastro; (12/11) las hojas 3D ya se doblan / acuestan con su forma
     }
   }
   // --- posicion en el mundo y doblado por jugador / pelota ---
@@ -1002,6 +1040,17 @@ void main(
         float tr = saturate(max(f2.y, 0.5 * f2.x) * 1.5) * clamp(P329v.w, 0.0, 2.0);
         o3.xyz = saturate(o3.xyz * lerp(float3(1.0, 1.0, 1.0), float3(1.12, 1.08, 0.94), tr)); } }
     o1.w = saturate(o1.w * (1.0 - pesWear.x * 0.5) * ((int)(Q4.y + 0.5) == 2 ? 1.3 : 1.0));
+    // (12/11) hoja 3D aplastada, la "textura" de cada estado (sutil, Agustin: "que no sobresalga mucho del resto"): doblandose = pliegue algo mas
+    // oscuro a media hoja y la parte doblada muestra el enves (un poco mas claro y palido); acostada = verde apenas mas claro con el brillo largo
+    // de la hoja planchada (cambia segun de donde se mire, como las franjas del corte)
+    if (pesBlade && pesDefK > 0.01) {
+      float fold = pesDefK * (1.0 - pesFlatK) * exp(-(pesDefT - 0.45) * (pesDefT - 0.45) / 0.05);
+      float under = pesDefK * (1.0 - pesFlatK) * smoothstep(0.40, 0.95, pesDefT);
+      o3.xyz *= 1.0 - 0.16 * fold;
+      o3.xyz = lerp(o3.xyz, saturate(o3.xyz * float3(1.09, 1.10, 1.03)), 0.6 * under);
+      o3.xyz = lerp(o3.xyz, saturate(o3.xyz * float3(1.05, 1.07, 1.00)), 0.5 * pesFlatK);
+      o1.w = saturate(o1.w * (1.0 + 0.25 * pesFlatK));
+    }
   }
   if (pesPaint > 0.001) {   // (27/10 h) hoja pintada por la linea: blanco crema de la pintura (w295), por encima de zonas, seco y color del suelo
     float pb = P295.w > 0.05 ? P295.w : 0.72;   // (27/10 i) 0.85 -> 0.72: paradas al sol rasante reciben mas luz que el suelo y salian blancas quemadas

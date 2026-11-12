@@ -46,7 +46,11 @@ float3 PESMowGrain(float2 pm, float3 gIn, float pat, float widthM, float lean)
 // live = desgaste en vivo (mapa que pinta la DLL con los jugadores, 0..1): seca y, al maximo, pela (z115)
 // (26/10 f) w292: desgaste en vivo mas visible: el mapa sube muy lento (una pasada de un jugador ~0.01, uno parado ~0.02/s; a los pocos
 // minutos casi todo queda < 0.15 = 9-15% de paja, imperceptible). 1 - exp(-5 x): 0.1 -> 0.39, 0.15 -> 0.53, 0.3 -> 0.78
-float PESWearLiveCurve(float live) { return IniParams.Load(int2(292, 0)).w > 0.5 ? 1.0 - exp(-5.0 * saturate(live)) : saturate(live); }
+// (12/11) x431 desgaste real: curva PROGRESIVA en S (una pasada suelta casi no se ve; donde se insiste sube rapido y despues se satura): 0.1 -> 0.10,
+// 0.2 -> 0.35, 0.3 -> 0.65, 0.45 -> 0.97. El mapa ahora sube por las acciones (frenadas, giros, remates, barridas), no por estar parado
+float PESWearLiveCurve(float live) {
+  if (IniParams.Load(int2(431, 0)).x > 0.5) { float c = saturate(live * 2.2); return c * c * (3.0 - 2.0 * c); }
+  return IniParams.Load(int2(292, 0)).w > 0.5 ? 1.0 - exp(-5.0 * saturate(live)) : saturate(live); }
 float2 PESWear(float2 pm, float2 wxz, float wear, float areas, float bald, float live)
 {
   float col = 0.0, bare = 0.0;
@@ -70,12 +74,21 @@ float2 PESWear(float2 pm, float2 wxz, float wear, float areas, float bald, float
   if (LW.w > 0.5 && live > 0.001) {
     float n4 = PESGnoise(wxz * 2.1 + 4.4);                       // el pisoteo no es parejo
     float lv = saturate(PESWearLiveCurve(live) * (0.8 + 0.4 * n4));
+    // (12/11) x431 desgaste real, por etapas: hasta ~40 % solo mas corto (PESWearLiveHeight) y apenas mas apagado; despues seco (verde paja, no
+    // amarillo: "el color raro del desgaste") y desde ~80 % la tierra asoma por manchas (el ruido n4 hace el borde irregular)
+    if (IniParams.Load(int2(431, 0)).x > 0.5) {
+      col = saturate(col + smoothstep(0.30, 0.85, lv) * 0.40 * wearK);
+      bare = max(bare, smoothstep(0.80 / wearK, 1.0, lv) * saturate(LW.z));
+    } else {
     col = saturate(col + lv * 0.6 * wearK);   // (02/11 paso 6) 0.9 -> 0.6: con live ~0.1 ya habia 70 % de paja
     bare = max(bare, smoothstep(0.7 / wearK, 1.0, lv) * saturate(LW.z));   // (02/11 paso 6) pelado desde mas desgaste (antes 0.55)
+    }
   }
   return float2(col, bare);
 }
-float PESWearLiveHeight(float live) { float4 LW = IniParams.Load(int2(115, 0)); return LW.w > 0.5 ? 1.0 - 0.45 * PESWearLiveCurve(live) : 1.0; }
+float PESWearLiveHeight(float live) { float4 LW = IniParams.Load(int2(115, 0));
+  if (LW.w > 0.5 && IniParams.Load(int2(431, 0)).x > 0.5) return 1.0 - 0.55 * smoothstep(0.0, 0.6, PESWearLiveCurve(live));   // (12/11) desgaste real: primero mas corto (hasta 45 % del alto)
+  return LW.w > 0.5 ? 1.0 - 0.45 * PESWearLiveCurve(live) : 1.0; }
 
 // variacion de color por zonas (manchas de 2-6 m mas verdes / mas palidas, y detalle de 0.5 m): multiplicador rgb
 float3 PESGrassZones(float2 wxz, float k)
