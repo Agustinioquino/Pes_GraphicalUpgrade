@@ -401,9 +401,14 @@ void main(
       float4 Q6 = IniParams.Load(int2(106,0)), Q7 = IniParams.Load(int2(107,0));
       float2 wxz = v9.xz;
       float2 wr = pesWearB;
+      // (11/11 g, Agustin: "la zona desgastada se ve muy desgastada y de un color raro") natural: menos seco y mucho menos tierra pelada
+      // (el pasto sigue ahi, mas corto: VS 498b30); la tierra que asoma se mezcla con pasto seco en vez de quedar gris marron
+      bool natW = IniParams.Load(int2(407,0)).x < 0.5;
+      if (natW) wr *= float2(0.6, 0.3);
       float3 c = o0.xyz * PESGrassZones(wxz, Q6.x);
       c = PESDryTint(c, wr.x * saturate(Q7.y) * 0.85);
       float3 dirt = PESDirt(wxz);
+      if (natW) dirt = lerp(dirt, PESDryTint(c, 1.0), 0.45);
       c = lerp(c, dirt, wr.y);
       o0.xyz = saturate(c);
       o2.y = saturate(o2.y * (1.0 - wr.y * 0.6 - wr.x * 0.25));   // tierra y pasto seco: mate

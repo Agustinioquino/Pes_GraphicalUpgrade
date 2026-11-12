@@ -32,7 +32,7 @@ static std::vector<float> s_prev;           // posiciones del cuadro anterior (x
 //   tierra hay bajo la pelota sin leer la GPU; la pelota se reconoce entre los dibujos del PS de botines/pelota (aadffecf) porque la
 //   traslacion de su m_world coincide con la capsula de la pelota del pasto (s_ball): el indice de ese dibujo queda como "la pelota"
 //   y en sus dibujos se enlaza b12 (PESBallC: x 1, y verde, z tierra, w cal).
-struct PlayerPrev { float x, z, vx, vz, skid; float stride = 0.f; int foot = 0; float printX = 0.f, printZ = 0.f; int printDue = 0; };
+struct PlayerPrev { float x, z, vx, vz, skid; float stride = 0.f; int foot = 0; float printX = 0.f, printZ = 0.f; int printDue = 0; float svx = 0.f, svz = 0.f, sax = 0.f, saz = 0.f; int trk = 0; };   // (11/11) sv / sa: velocidad y aceleracion suavizadas (m/s, m/s2); trk: cuadros seguidos
 // (08/11, Agustin: "las pisadas tienen que ser mejoradas ... desprendimiento realista del pasto con mantos de tierra") fila 389:
 //   x huellas marcadas (pisada por pisada, pie izquierdo / derecho, en vez de una mancha continua) | y fuerza de la huella |
 //   z cantidad de pasto que salta | w segundos que los terrones quedan en el piso
@@ -93,42 +93,64 @@ static float LineDist(float x, float z) {
 static int s_matchGenSeen = -1; static bool s_cleared = false;
 static double s_lastT = 0; static int s_logged = 0;
 // ---- recortes de pasto (particulas en CPU, dibujadas con el PS de las hojas en la pasada del pasto)
-struct Clip { float x, y, z, vx, vy, vz, age, life, size, rot; int kind = 0; int rest = 0; };   // (08/11) rest = 1: quedo en el piso (tarjeta acostada, w = giro + 10 * (tipo + 5))   // (2/11) kind: 0 manojo arrancado, 1 terron de tierra, 2 polvo, 3 pedazo de hoja (bandas de textures\pes_debris.dds)
+struct Clip { float x, y, z, vx, vy, vz, age, life, size, rot; int kind = 0; int rest = 0; float spin = 0.f, ph = 0.f; };   // (11/11) spin: giro propio (rad/s), ph: fase del aleteo de las hojas   // (08/11) rest = 1: quedo en el piso (tarjeta acostada, w = giro + 10 * (tipo + 5))   // (2/11) kind: 0 manojo arrancado, 1 terron de tierra, 2 polvo, 3 pedazo de hoja (bandas de textures\pes_debris.dds)
 static thread_local bool t_clipDraw = false; bool PitchClipDrawActive() { return t_clipDraw; }
-// (2/11) que particula suelta una pisada / la pelota en este punto: tierra donde la cancha esta pelada (desgaste en vivo), polvo si la cancha
-// esta seca, si no manojo (1 de 4) o pedazo de hoja
-static float WearCpuAt(float x, float z);
-static int ClipKindAt(float x, float z, float r) {
-    float w = WearCpuAt(x, z); bool dry = g_cfg.live[114][0] > 1.5f;
-    if (w > 0.3f && r < w * 0.9f) return (dry && r < w * 0.35f) ? 2 : 1;
-    return r < 0.25f ? 0 : 3;
-}
 static const int kMaxClips = 2048;
 static std::vector<Clip> s_clips;
 static float Rand01();
-// (08/11) terrones con manto de tierra que saltan de una accion fuerte (frenada, giro, remate, arranque): salen hacia donde va el
-// movimiento, caen y quedan en el piso (w389 s), y dejan el hueco con la tierra a la vista en el desgaste en vivo
-static void EmitClods(float x, float z, float ux, float uz, float strength, float spread, bool fromBall) {
-    float amt = ClodAmt(); if (amt <= 0.001f || g_cfg.live[116][3] < 0.5f) return;
-    int cap = ClipCap(); if ((int)s_clips.size() >= cap - 4) return;
-    float want = strength * amt * 2.0f; int n = (int)want; if (Rand01() < want - n) n++;
-    float size = ClodSize(); bool dry = g_cfg.live[114][0] > 1.5f; float dust = DustAmt();
-    for (int e = 0; e < n && (int)s_clips.size() < cap; e++) {
-        Clip cp; cp.x = x + (Rand01() - 0.5f) * spread; cp.z = z + (Rand01() - 0.5f) * spread; cp.y = 0.03f;
-        float r = Rand01(); float w = WearCpuAt(cp.x, cp.z);
-        cp.kind = (w > 0.25f && r < w) ? 1 : (r < 0.7f ? 0 : 3);            // tierra pelada: terron; si no, manojo con raiz (o un pedazo de hoja)
-        float sp = 1.2f + 2.2f * Rand01() * strength;
-        cp.vx = ux * sp * (0.6f + 0.8f * Rand01()) + (Rand01() - 0.5f) * 1.4f; cp.vz = uz * sp * (0.6f + 0.8f * Rand01()) + (Rand01() - 0.5f) * 1.4f;
-        cp.vy = (1.6f + 2.4f * Rand01()) * std::min(1.f, 0.5f + 0.5f * strength);
-        cp.age = 0.f; cp.life = 0.9f + 0.8f * Rand01(); cp.size = size * (0.6f + 0.9f * Rand01()) * (cp.kind == 3 ? 0.5f : 1.f); cp.rot = Rand01() * 6.2832f;
-        if (cp.kind == 1) cp.size *= 0.8f;
-        s_clips.push_back(cp);
-        // polvo que acompana (seco: mas)
-        if (dust > 0.001f && Rand01() < dust * (dry ? 0.9f : 0.35f) && (int)s_clips.size() < cap) {
-            Clip d = cp; d.kind = 2; d.size = size * 2.5f * (0.7f + 0.6f * Rand01()); d.life = 0.5f + 0.4f * Rand01(); d.vy *= 0.5f; d.vx *= 0.6f; d.vz *= 0.6f; s_clips.push_back(d); }
+// (11/11, Agustin: "como se calculan estos pedazitos que vuelan ... debe ser rehecho") RECORTES v2. Antes salian CADA CUADRO detras de todo
+// jugador que corria (90 por segundo a 60 FPS, mas con mas FPS), de la cadera y no del pie, con la velocidad cruda (ruido = frenadas falsas),
+// desaparecian en el aire a los 0.5-1.2 s y la pelota rodando tiraba pasto. Ahora salen SOLO en la pisada (una por media zancada) y segun lo
+// que hace ese pie: impulso / sprint -> hacia atras; frenada -> hacia adelante y bajo; giro -> hacia afuera de la curva; remate -> hacia
+// donde sale la pelota. Trotar o caminar no arranca nada. Cantidad por pisada (no depende de los FPS).
+//   tipos: 0 manojo arrancado con raiz, 1 terron de tierra, 2 polvo, 3 pedazo de hoja (bandas de textures\pes_debris.dds)
+enum { kClipTuft = 0, kClipClod = 1, kClipDust = 2, kClipBlade = 3 };
+static std::atomic<int> s_strikeN{0}; static std::atomic<int> s_bornN[4];
+static void PushClip(int kind, float x, float y, float z, float vx, float vy, float vz, float size) {
+    if ((int)s_clips.size() >= ClipCap()) return;
+    Clip c; c.x = x; c.y = y; c.z = z; c.vx = vx; c.vy = vy; c.vz = vz; c.age = 0.f; c.size = size; c.rot = Rand01() * 6.2832f; c.kind = kind;
+    float sg = Rand01() < 0.5f ? -1.f : 1.f;
+    c.spin = sg * (kind == kClipBlade ? 8.f + 14.f * Rand01() : kind == kClipTuft ? 4.f + 6.f * Rand01() : kind == kClipClod ? 2.f + 5.f * Rand01() : 0.3f);
+    c.ph = Rand01() * 6.2832f;
+    c.life = kind == kClipDust ? 0.7f + 0.7f * Rand01() : 4.0f;   // en el aire viven hasta tocar el piso (4 s de seguridad); el polvo se disipa
+    s_clips.push_back(c); s_bornN[kind & 3]++;
+}
+// (x, z) donde pisa el pie, (tx, tz) hacia donde sale despedido (unitario), inten 0..~1.5 (fuerza de la accion)
+static void EmitStrike(float x, float z, float tx, float tz, float inten, bool fromBall) {
+    const float* C = g_cfg.live[116]; if (C[3] < 0.5f || inten < 0.05f) return;
+    if ((int)s_clips.size() >= ClipCap() - 4) return;
+    s_strikeN++;
+    const float amount = C[0] > 0.f ? C[0] : 1.0f, bsz = (C[1] > 0.f ? C[1] : 3.0f) * 0.01f;
+    const float w = WearCpuAt(x, z); const bool dry = g_cfg.live[114][0] > 1.5f, wet = g_cfg.live[114][0] > 0.5f && !dry;
+    const float px = -tz, pz = tx;   // costado del tiro
+    const float I1 = std::min(inten, 1.f);
+    // pedazos de hoja sueltos: pocos en el sprint (~0.5 por pisada), muchos en la frenada / el giro fuerte. Abanico mas cerrado con mas fuerza
+    float want = amount * 4.5f * inten; int n = (int)want; if (Rand01() < want - n) n++; n = std::min(n, 14);
+    for (int e = 0; e < n; e++) {
+        float a = (Rand01() - 0.5f) * (1.6f - 0.7f * I1);
+        float dx = tx + px * a, dz = tz + pz * a, l = sqrtf(dx * dx + dz * dz) + 1e-4f; dx /= l; dz /= l;
+        float hs = (0.5f + 2.0f * inten) * (0.5f + Rand01()), vy = (0.6f + 1.5f * inten) * (0.6f + 0.8f * Rand01());
+        PushClip(kClipBlade, x + (Rand01() - 0.5f) * 0.12f, 0.03f, z + (Rand01() - 0.5f) * 0.12f, dx * hs, vy, dz * hs, bsz * (0.6f + 0.8f * Rand01()));
     }
-    // hueco en el desgaste: donde se arranco el pasto queda la tierra (mas con mas pasto arrancado)
-    if (n > 0 && g_cfg.live[115][3] > 0.5f) { float k = 0.03f * std::min((float)n, 4.f) * (fromBall ? 1.5f : 1.f); s_wearQueue.push_back({ x / 140.f + 0.5f, z / 79.f + 0.5f, k, 0.14f }); WearCpuAdd(x / 140.f + 0.5f, z / 79.f + 0.5f, k, 0.14f); }
+    // manojos con raiz y terrones (el "divot"): solo acciones fuertes y con x389 z > 0; en lo pelado sale tierra, con cancha humeda mas
+    const float clodA = ClodAmt();
+    if (clodA > 0.001f && inten > 0.45f) {
+        float wantC = clodA * (inten - 0.45f) * (wet ? 3.0f : 2.0f); int m = (int)wantC; if (Rand01() < wantC - m) m++; m = std::min(m, 4);
+        const float csz = ClodSize(), dust = DustAmt();
+        for (int e = 0; e < m; e++) {
+            bool soil = (w > 0.25f && Rand01() < w) || Rand01() < 0.25f;
+            float a = (Rand01() - 0.5f) * 0.7f; float dx = tx + px * a, dz = tz + pz * a, l = sqrtf(dx * dx + dz * dz) + 1e-4f; dx /= l; dz /= l;
+            float hs = (0.8f + 1.6f * inten) * (0.6f + 0.8f * Rand01()), vy = (1.0f + 1.6f * inten) * (0.6f + 0.7f * Rand01());
+            PushClip(soil ? kClipClod : kClipTuft, x, 0.02f, z, dx * hs, vy, dz * hs, csz * (0.6f + 0.8f * Rand01()) * (soil ? 0.8f : 1.f));
+            if (dust > 0.001f && (soil || dry) && Rand01() < dust * (dry ? 0.9f : 0.4f))
+                PushClip(kClipDust, x, 0.03f, z, dx * hs * 0.4f, vy * 0.35f, dz * hs * 0.4f, csz * 2.5f * (0.7f + 0.6f * Rand01()));
+        }
+        // hueco en el desgaste: donde se arranco el pasto queda la tierra
+        if (m > 0 && g_cfg.live[115][3] > 0.5f) { float k = 0.03f * std::min((float)m * 1.5f, 4.f) * (fromBall ? 1.5f : 1.f); s_wearQueue.push_back({ x / 140.f + 0.5f, z / 79.f + 0.5f, k, 0.14f }); WearCpuAdd(x / 140.f + 0.5f, z / 79.f + 0.5f, k, 0.14f); }
+    }
+    // tierra seca / pelada: polvo aunque no salga terron
+    if (DustAmt() > 0.001f && (dry || w > 0.4f) && Rand01() < DustAmt() * 0.5f * I1)
+        PushClip(kClipDust, x, 0.03f, z, tx * 0.6f, 0.25f, tz * 0.6f, ClodSize() * 2.5f * (0.7f + 0.6f * Rand01()));
 }
 static ID3D11Buffer* s_clipBuf = nullptr; static ID3D11ShaderResourceView* s_clipSRV = nullptr; static ID3D11VertexShader* s_clipVS = nullptr; static bool s_clipTried = false;
 static std::atomic<int> s_clipCount{0}; static std::atomic<int> s_clipFrame{-1};
@@ -149,19 +171,39 @@ static void ClipSimAndUpload(float dt) {
     // viento de las nubes (z84 direccion, y84 velocidad)
     float ang = g_cfg.live[84][2] * 0.0174533f, wsp = std::min(std::max(g_cfg.live[84][1], 0.f), 60.f) * 0.03f;
     float wx = cosf(ang) * wsp, wz = sinf(ang) * wsp;
+    // (11/11) RECORTES v2: gravedad real y arrastre del aire por tipo (velocidad terminal: hoja ~1.2 m/s, manojo ~5, terron ~12): la hoja
+    // planea y aletea de costado, el terron sigue una parabola y pica. Arrastre implicito (estable con cualquier dt)
     size_t n = 0;
     for (size_t i = 0; i < s_clips.size(); i++) {
         Clip& c = s_clips[i];
         if (c.rest) { c.age += dt; if (c.age < c.life) s_clips[n++] = c; continue; }   // (08/11) en el piso: quieto hasta que se desvanece
-        c.vy -= 7.0f * dt; float drag = 1.0f - 2.2f * dt; c.vx = c.vx * drag + wx * dt; c.vz = c.vz * drag + wz * dt; c.vy *= 1.0f - 1.2f * dt;
-        c.x += c.vx * dt; c.y += c.vy * dt; c.z += c.vz * dt; c.age += dt; c.rot += 6.0f * dt;
-        if (c.y <= 0.004f) {
-            // (08/11) toca el piso: los terrones y manojos pican una vez y despues quedan acostados (w389 s); el polvo se va
+        c.age += dt;
+        if (c.kind == kClipDust) {   // polvo: casi sin peso, lo lleva el aire, se frena rapido, crece y se va
+            float a = std::min(1.f, 3.0f * dt); c.vx += (wx - c.vx) * a; c.vz += (wz - c.vz) * a; c.vy += (0.12f - c.vy) * a;
+            c.size *= 1.0f + 0.7f * dt; c.x += c.vx * dt; c.y += c.vy * dt; c.z += c.vz * dt; c.rot += c.spin * dt;
+            if (c.age < c.life) s_clips[n++] = c;
+            continue;
+        }
+        const float kD = c.kind == kClipBlade ? 6.5f : c.kind == kClipTuft ? 0.35f : 0.07f;   // arrastre cuadratico (vt = sqrt(9.81 / kD))
+        const float kW = c.kind == kClipBlade ? 1.0f : c.kind == kClipTuft ? 0.15f : 0.0f;    // cuanto lo lleva el viento
+        float rx = c.vx - wx * kW, rz = c.vz - wz * kW, ry = c.vy; float sp = sqrtf(rx * rx + ry * ry + rz * rz);
+        float f = 1.0f / (1.0f + kD * sp * dt);
+        c.vx = wx * kW + rx * f; c.vz = wz * kW + rz * f; c.vy = ry * f - 9.81f * dt;
+        if (c.kind == kClipBlade) {   // aleteo: la hoja planea de costado (perpendicular a su avance) y se mece
+            c.ph += (6.0f + 0.25f * fabsf(c.spin)) * dt;
+            float hs = sqrtf(c.vx * c.vx + c.vz * c.vz) + 1e-3f, sx = -c.vz / hs, sz = c.vx / hs, fl = 2.8f * sinf(c.ph);
+            c.vx += sx * fl * dt; c.vz += sz * fl * dt; c.vy += 1.4f * cosf(c.ph * 1.3f) * dt * std::min(1.f, sp);
+        }
+        c.x += c.vx * dt; c.y += c.vy * dt; c.z += c.vz * dt; c.rot += c.spin * dt;
+        if (c.y <= 0.010f && c.vy < 0.f) {
+            // toca el pasto: el terron pica (y rueda un poco), el manojo apenas, la hoja se queda; despues quedan acostados (w389 s)
             float restS = ClodRest();
-            if (c.kind == 2 || restS < 0.1f) continue;
-            if (c.vy < -1.3f && c.kind != 3) { c.y = 0.005f; c.vy = -c.vy * 0.22f; c.vx *= 0.45f; c.vz *= 0.45f; s_clips[n++] = c; continue; }
-            c.rest = 1; c.y = 0.008f; c.vx = c.vz = c.vy = 0.f; c.age = 0.f; c.life = restS * (0.6f + 0.8f * Rand01()) * (c.kind == 3 ? 0.5f : 1.f);
+            if (c.kind == kClipClod && c.vy < -1.0f) { c.y = 0.011f; c.vy = -c.vy * 0.30f; c.vx *= 0.55f; c.vz *= 0.55f; c.spin *= 0.5f; s_clips[n++] = c; continue; }
+            if (c.kind == kClipTuft && c.vy < -1.6f) { c.y = 0.011f; c.vy = -c.vy * 0.15f; c.vx *= 0.4f; c.vz *= 0.4f; c.spin *= 0.4f; s_clips[n++] = c; continue; }
+            if (restS < 0.1f) continue;
             if (fabsf(c.x) > 55.f || fabsf(c.z) > 36.f) continue;   // fuera de la cancha no queda nada
+            c.rest = 1; c.y = c.kind == kClipBlade ? 0.012f + 0.010f * Rand01() : 0.008f; c.vx = c.vz = c.vy = 0.f; c.age = 0.f;
+            c.life = restS * (0.6f + 0.8f * Rand01()) * (c.kind == kClipBlade ? 0.35f : 1.f);   // la hoja suelta se pierde entre el pasto antes
             s_clips[n++] = c; continue;
         }
         if (c.age < c.life) s_clips[n++] = c;
@@ -170,7 +212,7 @@ static void ClipSimAndUpload(float dt) {
     if (!s_clipBuf || !s_clipSRV) return;
     D3D11_MAPPED_SUBRESOURCE m; if (FAILED(g_dev.imm->Map(s_clipBuf, 0, D3D11_MAP_WRITE_DISCARD, 0, &m))) return;
     float* q = (float*)m.pData;
-    for (size_t i = 0; i < n; i++) { const Clip& c = s_clips[i]; float fade = std::min(1.0f, (c.life - c.age) * (c.rest ? 1.0f : 4.0f));
+    for (size_t i = 0; i < n; i++) { const Clip& c = s_clips[i]; float fade = std::min(1.0f, (c.life - c.age) * (c.rest ? 1.0f : (c.kind == kClipDust ? 2.0f : 4.0f)));
         q[i * 8 + 0] = c.x; q[i * 8 + 1] = c.y; q[i * 8 + 2] = c.z; q[i * 8 + 3] = c.size * fade;
         q[i * 8 + 4] = c.vx; q[i * 8 + 5] = c.vy; q[i * 8 + 6] = c.vz; q[i * 8 + 7] = fmodf(c.rot, 6.2832f) + 10.0f * (float)(c.kind + (c.rest ? 5 : 0)); }   // (2/11) w = giro + 10 * tipo; (08/11) + 50 si esta acostado en el piso
     g_dev.imm->Unmap(s_clipBuf, 0);
@@ -278,12 +320,26 @@ void PitchBallNote(ID3D11DeviceContext* c, int frame) {
     if (d.ByteWidth >= off + 32) { D3D11_BOX bx = { off, 0, 0, off + 32, 1, 1 }; c->CopySubresourceRegion(s_ballStage[w], 0, 0, 0, 0, cb, 0, &bx); s_ballStageFrame[w] = frame; }
     cb->Release();
 }
+// (11/11, Agustin: "estos deberian seguir el gameclock para que no se borren en la repeticion") RELOJ DEL JUEGO para los recortes, el
+// seguimiento de los jugadores (pisadas, frenadas) y el pasto aplastado: el mismo de las nubes (fila 157, config.cpp: m_timeParam del
+// juego; la pausa lo congela, la camara lenta de la repeticion lo frena, el salto hacia atras al empezarla no cuenta). En pausa los
+// pedacitos quedan quietos en el aire y no se desvanecen; en la repeticion en camara lenta vuelan despacio y las acciones repetidas los
+// vuelven a arrancar (la velocidad de los jugadores se mide en tiempo de juego). Hasta ver ese reloj avanzar (w157 = 0): el real.
+static float GameStep(double& lastG, double& lastR) {
+    const double t = Now(), g = (double)g_cfg.live[157][0];
+    const double dR = lastR < 0.0 ? 0.0 : t - lastR; lastR = t;
+    double dG = lastG < -1e8 ? 0.0 : g - lastG; lastG = g; if (dG < -50000.0) dG += 100000.0;   // vuelta del reloj de las nubes (100000 s)
+    if (g_cfg.live[157][3] < 0.5f) return (float)std::clamp(dR, 0.0, 0.1);
+    return (float)std::clamp(dG, 0.0, 0.1);
+}
+static int s_plGen = 0;   // (11/11) actualizaciones de s_pl: la huella de cada pisada se estampa una sola vez aunque el seguimiento se saltee cuadros (pausa)
 static void PitchFlatPresent() {
     const float* F = g_cfg.live[136];
     bool v5 = g_cfg.live[139][0] > 0.5f && g_cfg.live[139][2] > 0.001f;   // (20/10) pasto v5: las hojas se doblan con el mapa
     if ((F[0] < 0.5f && !v5) || !g_dev.imm) return;
     EnsureFlat(); if (!s_flatRTV || !s_fsVS || !s_zeroPS || !s_vs || !s_ps || !s_flatCB || !s_bsAddR || !s_bsAddG) return;
-    double t = Now(); float dt = (float)std::clamp(t - s_flatT, 0.001, 0.1); s_flatT = t; s_flatFrame++;
+    static double s_fG = -1e9, s_fR = -1.0; float dt = GameStep(s_fG, s_fR); s_flatT = Now(); s_flatFrame++;   // (11/11) reloj del juego
+    static int s_flatPlGen = -1; const bool newPl = s_plGen != s_flatPlGen; s_flatPlGen = s_plGen;
     if (g_matchGen.load() != s_flatMatch) { s_flatMatch = g_matchGen.load(); float z[4] = {}; g_dev.imm->ClearRenderTargetView(s_flatRTV, z); s_ballOk = false; }
     // pelota: el staging mas viejo ya listo (anillo de 3)
     { int w = s_ballW.load(), rd = (w + 1) % kStages; s_ballW = rd;
@@ -308,7 +364,7 @@ static void PitchFlatPresent() {
         brush[nb][0] = p.x / 140.f + 0.5f; brush[nb][1] = p.z / 79.f + 0.5f; brush[nb][2] = 2.5f * dt * k * (1.f + 2.5f * p.skid * kAct) * (fpOn > 0.5f ? 0.35f : 1.f); brush[nb][3] = 0.45f; nb++;
         // (08/11) huella: una marca por pisada (pie izquierdo / derecho alternados, zancada segun la velocidad), con forma de botin
         // (talon mas fuerte + punta hacia adelante). La marca entera en un cuadro (no por dt): se ve cada pisada por separado
-        if (fpOn > 0.5f && p.printDue && sp > 0.3f && nb < kMaxPlayers - 16) {
+        if (fpOn > 0.5f && p.printDue && newPl && sp > 0.3f && nb < kMaxPlayers - 16) {
             float ux = p.vx / sp, uz = p.vz / sp, kf = FpForce() * k * (0.55f + 0.45f * std::min(sp / 6.f, 1.f)) * (1.f + 1.5f * p.skid * kAct);
             brush[nb][0] = p.printX / 140.f + 0.5f; brush[nb][1] = p.printZ / 79.f + 0.5f; brush[nb][2] = 0.75f * kf; brush[nb][3] = 0.13f; nb++;
             if (nb < kMaxPlayers - 16) { brush[nb][0] = (p.printX + ux * 0.12f) / 140.f + 0.5f; brush[nb][1] = (p.printZ + uz * 0.12f) / 79.f + 0.5f; brush[nb][2] = 0.55f * kf; brush[nb][3] = 0.10f; nb++; }
@@ -330,7 +386,7 @@ static void PitchFlatPresent() {
         if (dist > 4.0f) dist = 0.0f;   // salto de camara / saque
         int steps = std::clamp((int)(dist / 0.08f) + 1, 1, 15);
         float kb = (F[3] > 0.f ? F[3] : 1.0f) * k * onGround;
-        { const float kv = std::clamp(g_cfg.live[177][2], 0.f, 2.f); float spd = std::min(dist / dt / 12.f, 1.5f);   // (2/11) rapida: aplasta mas; lenta: menos
+        { const float kv = std::clamp(g_cfg.live[177][2], 0.f, 2.f); float spd = dt > 0.002f ? std::min(dist / dt / 12.f, 1.5f) : 0.f;   // (2/11) rapida: aplasta mas; lenta: menos
           kb *= std::max(0.25f, 1.f + kv * (spd - 0.5f)); }
         // (2/11) manchas de la pelota (fila 177 x). Agustin: PROGRESIVAS y MUY SUTILES, con los minutos de partido y segun la humedad de la
         // cancha; nada por contacto. La pelota solo "recuerda" por donde rueda (promedios lentos de tierra bajo ella y de cruces de cal) y
@@ -359,21 +415,16 @@ static void PitchFlatPresent() {
         }
         // (08/11, Agustin: "desprendimiento ... chutando") REMATE: la pelota pasa de lenta a rapida en un cuadro, estando en el piso.
         // El pie de apoyo y el botin arrancan pasto detras de donde estaba la pelota, hacia adelante (el golpe) y un poco hacia los costados
-        float sp = dist / dt;
+        float sp = dt > 0.002f ? dist / dt : 0.f;   // (11/11) en pausa (reloj del juego quieto) no hay remate
         { float rk = ReactK(); float thr = 9.0f / rk, jump = 5.0f / rk;
           if (sp > thr && sp - s_ballSpPrev > jump && sp < 60.f && s_ballPrev[1] < 0.35f && dist > 0.01f) {
               float ix = dx / dist, iz = dz / dist; float strength = std::min((sp - thr) / 14.f + 0.5f, 2.0f) * rk;
-              EmitClods(s_ballPrev[0] - ix * 0.25f, s_ballPrev[2] - iz * 0.25f, ix * 0.7f, iz * 0.7f, strength, 0.35f, true);
+              // (11/11) recortes v2: el botin raspa el pasto debajo / detras de la pelota y salen hacia donde va el tiro
+              EmitStrike(s_ballPrev[0] - ix * 0.25f, s_ballPrev[2] - iz * 0.25f, ix, iz, std::min(0.30f + 0.35f * strength, 1.2f), true);
               static int kickLog = 0; if (kickLog < 3) { kickLog++; Log("pasto: remate a %.1f m/s (antes %.1f): terrones en (%.1f, %.1f)", sp, s_ballSpPrev, s_ballPrev[0], s_ballPrev[2]); }
           }
           s_ballSpPrev = (dist > 0.f && sp < 60.f) ? sp : 0.f; }
-        if (onGround > 0.5f && sp > 9.0f && sp < 45.0f && g_cfg.live[116][3] > 0.5f && (int)s_clips.size() < ClipCap() && Rand01() < 0.6f) {
-            Clip cp; cp.x = s_ball[0]; cp.z = s_ball[2]; cp.y = 0.02f; float ix = dist > 0 ? dx / dist : 0, iz = dist > 0 ? dz / dist : 0;
-            cp.vx = ix * (1.0f + Rand01() * 2.0f) + (Rand01() - 0.5f); cp.vz = iz * (1.0f + Rand01() * 2.0f) + (Rand01() - 0.5f); cp.vy = 1.0f + 2.0f * Rand01();
-            cp.age = 0; cp.life = 0.4f + 0.5f * Rand01(); cp.size = 0.02f * (0.6f + 0.8f * Rand01()); cp.rot = Rand01() * 6.2832f;
-            cp.kind = ClipKindAt(cp.x, cp.z, Rand01()); if (cp.kind == 1) cp.size *= 1.5f; if (cp.kind == 2) { cp.size *= 3.0f; cp.life *= 0.7f; cp.vy *= 0.5f; }
-            s_clips.push_back(cp);
-        }
+        // (11/11) recortes v2: la pelota rodando ya no tira pasto (antes un recorte el 60 % de los cuadros a mas de 9 m/s); solo el remate
     }
     ID3D11DeviceContext* c = g_dev.imm;
     ID3D11RenderTargetView* oRT[8] = {}; ID3D11DepthStencilView* oDS = nullptr; c->OMGetRenderTargets(8, oRT, &oDS);
@@ -528,7 +579,10 @@ void PitchWearPresent() {
     { static double nextD = 0.0; double tn = Now(); if (tn >= nextD && g_cfg.live[58][3] > 0.5f) { nextD = tn + 15.0;
         Log("desgaste en vivo (15 s): dibujos de short 5529 %d (anotados %d, b5 corto %d, sin staging %d; hueso 0 de b6 %d, b6 corto %d, sin b6 %d) | posiciones: validas %d (hueso 0 %d, fila 7 %d, fila 3 %d, columna w %d), fuera de rango %d, en cero %d | jugadores seguidos %d, recortes vivos %d | x115 %.2f w115 %.0f x136 %.0f x389 %.0f",
             s_noteCalls.exchange(0), s_noteOk.exchange(0), s_noteShort.exchange(0), s_noteNoStage.exchange(0), s_noteBone.exchange(0), s_boneShort.exchange(0), s_boneNone.exchange(0), s_posOk, s_rowPick[0], s_rowPick[1], s_rowPick[2], s_rowPick[3], s_posBad, s_posZero, (int)s_pl.size(), (int)s_clips.size(), P[0], P[3], g_cfg.live[136][0], g_cfg.live[389][0]);
-        s_posOk = s_posBad = s_posZero = 0; s_rowPick[0] = s_rowPick[1] = s_rowPick[2] = s_rowPick[3] = 0; } }
+        s_posOk = s_posBad = s_posZero = 0; s_rowPick[0] = s_rowPick[1] = s_rowPick[2] = s_rowPick[3] = 0;
+        Log("recortes v2 (15 s): pisadas que arrancaron pasto %d | nacidos: hojas %d, manojos %d, terrones %d, polvo %d | vivos %d (tope %d) | x116 %.2f y116 %.1f w116 %.0f z389 %.2f",
+            s_strikeN.exchange(0), s_bornN[kClipBlade].exchange(0), s_bornN[kClipTuft].exchange(0), s_bornN[kClipClod].exchange(0), s_bornN[kClipDust].exchange(0), (int)s_clips.size(), ClipCap(),
+            g_cfg.live[116][0], g_cfg.live[116][1], g_cfg.live[116][3], g_cfg.live[389][2]); } }
     if (P[3] < 0.5f) { s_count = 0; return; }
     EnsureRes(); if (!s_tex || !s_cb) return;
     // partido nuevo: borrar
@@ -538,8 +592,10 @@ void PitchWearPresent() {
     int w = s_stageW.load(); int n = std::min(s_count.exchange(0), kMaxPlayers);
     s_stageFrame[w] = n > 0 ? s_frame : -1; s_frame++;
     int rd = (w + 1) % kStages;
-    double t = Now(); float dt = (float)std::clamp(t - s_lastT, 0.001, 0.1); s_lastT = t;
-    ClipSimAndUpload(dt);
+    double t = Now(); s_lastT = t;
+    static double s_wG = -1e9, s_wR = -1.0; const float gdt = GameStep(s_wG, s_wR);   // (11/11) reloj del juego (pausa: 0; camara lenta: menos)
+    static float s_plAcc = 0.f; s_plAcc += gdt;   // tiempo de juego desde la ultima lectura de posiciones
+    ClipSimAndUpload(gdt);
     int pending = s_stageFrame[rd]; s_stageFrame[rd] = -1; s_stageW = rd;
     if (pending < 0 || !s_stage[rd]) return;
     D3D11_MAPPED_SUBRESOURCE m; if (FAILED(g_dev.imm->Map(s_stage[rd], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) return;
@@ -563,6 +619,12 @@ void PitchWearPresent() {
     }
     g_dev.imm->Unmap(s_stage[rd], 0);
     if (cnt == 0) return;
+    // (11/11) recortes v2: tiempo real desde la ultima lectura de posiciones (si un cuadro no se pudo leer -DO_NOT_WAIT- la distancia era
+    // de 2 cuadros sobre el dt de 1 y la velocidad salia doble); un hueco largo (pausa, repeticion, carga) reinicia las velocidades
+    // (11/11) en tiempo de juego: en pausa (no avanzo) no se toca nada y se sigue sumando; en la camara lenta las velocidades salen bien
+    if (s_plAcc < 0.002f) return;
+    static double s_plT = 0.0; const bool gapP = (t - s_plT) > 0.25 || s_plAcc > 0.1f; s_plT = t;
+    float dtP = std::clamp(s_plAcc, 0.002f, 0.1f); s_plAcc = 0.f;
     // velocidad: el mas cercano del cuadro anterior
     float brush[kMaxPlayers][4]; int nb = 0;
     float rate = P[0] > 0.f ? P[0] : 1.0f, rad = std::clamp(P[1], 0.3f, 2.0f);
@@ -570,42 +632,49 @@ void PitchWearPresent() {
     const float kAct = std::clamp(g_cfg.live[177][1], 0.f, 2.f);   // (2/11) frenadas y arranques desgastan mas (y arrastran la marca)
     for (int i = 0; i < cnt; i++) {
         float best = 1e9f; int bi = -1; for (size_t k = 0; k < s_pl.size(); k++) { float dx = s_pl[k].x - pos[i][0], dz = s_pl[k].z - pos[i][1]; float d2 = dx * dx + dz * dz; if (d2 < best) { best = d2; bi = (int)k; } }
-        float speed = best < 1e8f ? sqrtf(best) / dt : 0.f;            // m/s
-        if (speed > 15.f) { speed = 0.f; bi = -1; }                       // salto de camara / teletransporte
+        float speed = best < 1e8f ? sqrtf(best) / dtP : 0.f;           // m/s
+        if (speed > 15.f || gapP) { speed = 0.f; bi = -1; }               // salto de camara / teletransporte / hueco
         PlayerPrev pn{ pos[i][0], pos[i][1], 0.f, 0.f, 0.f };
-        if (bi >= 0 && speed > 0.f) { pn.vx = (pos[i][0] - s_pl[bi].x) / dt; pn.vz = (pos[i][1] - s_pl[bi].z) / dt;
-            float spPrev = sqrtf(s_pl[bi].vx * s_pl[bi].vx + s_pl[bi].vz * s_pl[bi].vz);
-            float acc = (speed - spPrev) / dt;                              // m/s2 (negativo = frena)
+        if (bi >= 0) { const PlayerPrev& pp = s_pl[bi];
+            pn.vx = (pos[i][0] - pp.x) / dtP; pn.vz = (pos[i][1] - pp.z) / dtP;
+            { float r = sqrtf(pn.vx * pn.vx + pn.vz * pn.vz); if (r > 11.f) { pn.vx *= 11.f / r; pn.vz *= 11.f / r; } }   // nadie corre a mas de 11 m/s (cruce de dos jugadores)
+            pn.trk = std::min(pp.trk + 1, 1000);
+            // (11/11) recortes v2: velocidad (~80 ms) y aceleracion (~120 ms) suavizadas: la resta cruda de posiciones cuadro a cuadro tenia
+            // ruido (0.1 m/s de error = 6 m/s2 de "aceleracion") y daba frenadas y giros falsos que tiraban pasto al azar
+            float aV = 1.f - expf(-dtP / 0.08f), aA = 1.f - expf(-dtP / 0.12f);
+            if (pp.trk == 0) { pn.svx = pn.vx; pn.svz = pn.vz; pn.sax = pn.saz = 0.f; }   // recien aparecido: arranca con su velocidad (sin "arranque" falso)
+            else { pn.svx = pp.svx + (pn.vx - pp.svx) * aV; pn.svz = pp.svz + (pn.vz - pp.svz) * aV;
+                pn.sax = pp.sax + ((pn.svx - pp.svx) / dtP - pp.sax) * aA; pn.saz = pp.saz + ((pn.svz - pp.svz) / dtP - pp.saz) * aA;
+                float am = sqrtf(pn.sax * pn.sax + pn.saz * pn.saz); if (am > 15.f) { pn.sax *= 15.f / am; pn.saz *= 15.f / am; } }
+            float sS = sqrtf(pn.svx * pn.svx + pn.svz * pn.svz), sP = sqrtf(pp.svx * pp.svx + pp.svz * pp.svz);
+            float hx = sS > 0.3f ? pn.svx / sS : 0.f, hz = sS > 0.3f ? pn.svz / sS : 0.f;
+            float aL = pn.sax * hx + pn.saz * hz, aT = -pn.sax * hz + pn.saz * hx;   // a lo largo (+ acelera, - frena) y de costado (+ hacia la izquierda)
             const float rk = ReactK();
-            float skid = std::clamp((-acc - 5.f / rk) / 12.f * rk, 0.f, 1.f) * std::min(spPrev / 5.f, 1.f) + std::clamp((acc - 8.f / rk) / 12.f * rk, 0.f, 0.6f);
-            // (08/11) giro brusco (cambio de direccion con velocidad): la pierna de apoyo patina de costado
-            if (spPrev > 2.5f && speed > 2.5f) { float cosT = (pn.vx * s_pl[bi].vx + pn.vz * s_pl[bi].vz) / (speed * spPrev); skid = std::max(skid, std::clamp((0.85f - cosT) * 2.5f * rk, 0.f, 1.f) * std::min(speed / 5.f, 1.f)); }
-            if (speed > 7.0f) skid = std::max(skid, 0.12f * rk);         // (08/11) sprint: pisada fuerte sostenida, pedacitos chicos
-            pn.skid = std::max(skid, s_pl[bi].skid * 0.85f);
+            float brake  = std::clamp((-aL - 4.f / rk) / 10.f * rk, 0.f, 1.f) * std::min(std::max(sS, sP) / 4.f, 1.f);   // frenada
+            float push   = std::clamp((aL - 3.f / rk) / 8.f * rk, 0.f, 1.f);                                               // arranque
+            float cutK   = std::clamp((fabsf(aT) - 4.f / rk) / 10.f * rk, 0.f, 1.f) * std::min(sS / 3.f, 1.f);             // giro / cambio de direccion
+            float sprint = sS > 6.0f ? std::min(0.06f + 0.1f * (sS - 6.0f) / 3.0f, 0.2f) * rk : 0.f;                        // sprint: pocos y chicos
+            float skid = std::max(std::max(brake, cutK), std::max(push * 0.6f, sS > 7.0f ? 0.12f * rk : 0.f));
+            pn.skid = std::max(skid, pp.skid * expf(-dtP / 0.1f));
             // (08/11) zancada: una huella cada media zancada (0.75 m parado / caminando .. 1.1 m al sprint), alternando el pie
-            pn.stride = s_pl[bi].stride + speed * dt; pn.foot = s_pl[bi].foot;
-            float half = std::clamp(0.55f + 0.08f * speed, 0.6f, 1.15f);
-            if (pn.stride >= half) { pn.stride -= half; pn.foot ^= 1; float ux = pn.vx / speed, uz = pn.vz / speed, side = pn.foot ? 0.11f : -0.11f;
-                pn.printX = pos[i][0] + (-uz) * side; pn.printZ = pos[i][1] + ux * side; pn.printDue = 1; }
-            // terrones por accion fuerte: frenada / giro / arranque (solo si hay pisada real, no al caminar)
-            if (pn.skid > 0.45f && speed > 2.f && s_pl[bi].skid < pn.skid) { float ux = pn.vx / speed, uz = pn.vz / speed; EmitClods(pos[i][0] - ux * 0.15f, pos[i][1] - uz * 0.15f, ux, uz, (pn.skid - 0.3f) * 1.4f, 0.3f, false); }
-        }
-        float k = (0.25f + 0.75f * std::min(speed / 7.f, 1.f)) * rate * dt * 0.08f * (1.f + 3.f * pn.skid * kAct);   // parado: poco; corriendo: mas; frenando: mucho
-        brush[nb][0] = pos[i][0] / 140.f + 0.5f; brush[nb][1] = pos[i][1] / 79.f + 0.5f; brush[nb][2] = k; brush[nb][3] = rad; nb++;
-        WearCpuAdd(brush[nb - 1][0], brush[nb - 1][1], k, rad);
-        // (2/11) pisada fuerte (frenada / arranque, no la carrera pareja): suelta pasto (recortes), como en FC; respeta w116 / x116 / y116
-        if (pn.skid > 0.3f && kAct > 0.01f && g_cfg.live[116][3] > 0.5f && speed > 1.f && (int)s_clips.size() < ClipCap() - 8) {
-            const float* C = g_cfg.live[116]; float amount = C[0] > 0.f ? C[0] : 1.0f, size = (C[1] > 0.f ? C[1] : 3.0f) * 0.01f;
-            float want = amount * pn.skid * kAct * 2.5f; int nEmit = (int)want; if (Rand01() < want - nEmit) nEmit++;
-            float ux = pn.vx / speed, uz = pn.vz / speed;
-            for (int e = 0; e < nEmit && (int)s_clips.size() < ClipCap(); e++) {
-                Clip cp; cp.x = pos[i][0] + (Rand01() - 0.5f) * 0.3f; cp.z = pos[i][1] + (Rand01() - 0.5f) * 0.3f; cp.y = 0.03f;
-                cp.vx = ux * (0.8f + 1.6f * Rand01()) + (Rand01() - 0.5f) * 1.2f; cp.vz = uz * (0.8f + 1.6f * Rand01()) + (Rand01() - 0.5f) * 1.2f; cp.vy = 1.5f + 2.5f * Rand01();   // hacia adelante: la frenada patina
-                cp.age = 0.f; cp.life = 0.5f + 0.7f * Rand01(); cp.size = size * (0.7f + 0.9f * Rand01()); cp.rot = Rand01() * 6.2832f;
-                cp.kind = ClipKindAt(cp.x, cp.z, Rand01() * 0.8f); if (cp.kind == 1) cp.size *= 1.6f; if (cp.kind == 2) { cp.size *= 3.5f; cp.life *= 0.7f; cp.vy *= 0.5f; }   // frenada en lo pelado: terrones y polvo
-                s_clips.push_back(cp);
+            pn.stride = pp.stride + sS * dtP; pn.foot = pp.foot;
+            float half = std::clamp(0.55f + 0.08f * sS, 0.6f, 1.15f);
+            if (pn.stride >= half && sS > 0.3f) { pn.stride -= half; pn.foot ^= 1; float side = pn.foot ? 0.11f : -0.11f;
+                pn.printX = pos[i][0] + (-hz) * side; pn.printZ = pos[i][1] + hx * side; pn.printDue = 1;
+                // (11/11) recortes v2: lo que arranca ESTE pie al pisar. Impulso / sprint -> atras; frenada -> adelante (patina); giro -> hacia
+                // afuera de la curva. Trotar o caminar (sin aceleracion) no arranca nada
+                float inten = std::max(std::max(push * 0.9f, brake * 1.1f), cutK) + sprint;
+                if (inten >= 0.05f && pn.trk >= 4) {
+                    float wB = push + sprint, wF = brake * 1.2f, wC = cutK, sg = aT > 0.f ? -1.f : 1.f;
+                    float tx = -hx * wB + hx * wF + (-hz) * sg * wC, tz = -hz * wB + hz * wF + hx * sg * wC;
+                    float l = sqrtf(tx * tx + tz * tz); if (l < 1e-3f) { tx = -hx; tz = -hz; } else { tx /= l; tz /= l; }
+                    EmitStrike(pn.printX + tx * 0.08f, pn.printZ + tz * 0.08f, tx, tz, inten, false);
+                }
             }
         }
+        float k = (0.25f + 0.75f * std::min(speed / 7.f, 1.f)) * rate * dtP * 0.08f * (1.f + 3.f * pn.skid * kAct);   // parado: poco; corriendo: mas; frenando: mucho
+        brush[nb][0] = pos[i][0] / 140.f + 0.5f; brush[nb][1] = pos[i][1] / 79.f + 0.5f; brush[nb][2] = k; brush[nb][3] = rad; nb++;
+        WearCpuAdd(brush[nb - 1][0], brush[nb - 1][1], k, rad);
         if (pn.skid > 0.2f && kAct > 0.01f && speed > 1.f && nb < kMaxPlayers) {   // arrastre detras del jugador que frena
             float ux = pn.vx / speed, uz = pn.vz / speed, bx = pos[i][0] - ux * 0.4f, bz = pos[i][1] - uz * 0.4f;
             brush[nb][0] = bx / 140.f + 0.5f; brush[nb][1] = bz / 79.f + 0.5f; brush[nb][2] = k * 0.7f; brush[nb][3] = rad * 0.8f; nb++;
@@ -613,27 +682,10 @@ void PitchWearPresent() {
         }
         plNow.push_back(pn);
     }
-    // recortes de pasto que vuelan (20/10): se emiten detras de los jugadores que corren (x116 cantidad, y116 tamano cm, w116 on)
-    { const float* C = g_cfg.live[116];
-      if (C[3] > 0.5f) {
-        float amount = C[0] > 0.f ? C[0] : 1.0f, size = (C[1] > 0.f ? C[1] : 3.0f) * 0.01f;
-        for (int i = 0; i < cnt; i++) {
-            float best = 1e9f, bx = 0, bz = 0; for (size_t k = 0; k + 1 < s_prev.size(); k += 2) { float dx = pos[i][0] - s_prev[k], dz = pos[i][1] - s_prev[k + 1]; float d2 = dx * dx + dz * dz; if (d2 < best) { best = d2; bx = dx; bz = dz; } }
-            float speed = best < 1e8f ? sqrtf(best) / dt : 0.f; if (speed < 2.5f || speed > 15.f) continue;
-            float dirx = bx / (speed * dt + 1e-6f), dirz = bz / (speed * dt + 1e-6f);
-            float want = amount * std::min(speed / 7.f, 1.5f) * 1.5f; int nEmit = (int)want; if (Rand01() < want - nEmit) nEmit++;
-            for (int e = 0; e < nEmit && (int)s_clips.size() < ClipCap(); e++) {
-                Clip cp; float r1 = Rand01(), r2 = Rand01(), r3 = Rand01();
-                cp.x = pos[i][0] - dirx * (0.1f + 0.3f * r1) + (r2 - 0.5f) * 0.3f; cp.z = pos[i][1] - dirz * (0.1f + 0.3f * r1) + (r3 - 0.5f) * 0.3f; cp.y = 0.03f;
-                cp.vx = -dirx * (0.4f + 1.4f * Rand01()) + (Rand01() - 0.5f) * 1.0f; cp.vz = -dirz * (0.4f + 1.4f * Rand01()) + (Rand01() - 0.5f) * 1.0f; cp.vy = 1.2f + 2.6f * Rand01();
-                cp.age = 0.f; cp.life = 0.5f + 0.7f * Rand01(); cp.size = size * (0.6f + 0.8f * Rand01()); cp.rot = Rand01() * 6.2832f;
-                cp.kind = ClipKindAt(cp.x, cp.z, Rand01()); if (cp.kind == 1) cp.size *= 1.4f; if (cp.kind == 2) { cp.size *= 3.0f; cp.life *= 0.6f; cp.vy *= 0.5f; }
-                s_clips.push_back(cp);
-            }
-        }
-      } else s_clips.clear(); }
-    s_prev.assign(&pos[0][0], &pos[0][0] + cnt * 2); s_pl.swap(plNow);
-    // (08/11) huecos del pasto arrancado (cola de EmitClods) y huellas en el desgaste (marcas que quedan)
+    // (11/11) recortes v2: los recortes salen en la pisada (EmitStrike, arriba); w116 = 0 los borra
+    if (g_cfg.live[116][3] < 0.5f) s_clips.clear();
+    s_prev.assign(&pos[0][0], &pos[0][0] + cnt * 2); s_pl.swap(plNow); s_plGen++;
+    // (08/11) huecos del pasto arrancado (cola de EmitStrike) y huellas en el desgaste (marcas que quedan)
     for (const WearBrush& wb : s_wearQueue) { if (nb >= kMaxPlayers) break; brush[nb][0] = wb.u; brush[nb][1] = wb.v; brush[nb][2] = wb.k * rate; brush[nb][3] = wb.rad; nb++; }
     s_wearQueue.clear();
     if (FpOn() > 0.5f) for (const PlayerPrev& pp : s_pl) { if (nb >= kMaxPlayers) break; if (!pp.printDue) continue;

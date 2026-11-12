@@ -1006,7 +1006,7 @@ template<int V> static void STDMETHODCALLTYPE hk_SetCS(ID3D11DeviceContext* c, I
 // lo que una regla enlaza se devuelve a como estaba despues del dibujo (como "post ps-t20 = ..." en 3DMigoto)
 struct Saved { bool ps; bool srv; int slot; IUnknown* prev; };
 static const int kSavedMax = 64;   // (02/11) 24 -> 64: con los grupos del brazo (t26/t30/t36/t123) los dibujos del brazo pasaban de 24 y lo enlazado despues no se devolvia (se filtraba al dibujo siguiente: la boca tomaba texturas ajenas)
-struct DrawScope { Saved s[kSavedMax]; int n = 0; FaceGenExtra brow; std::string faceId; bool skip = false; ID3D11PixelShader* restorePS = nullptr; LodIA lod; GlassScope glass; RingScope ring; FaceTessScope tess; bool hdMesh = false; bool mouth = false; UINT mCnt = 0, mStart = 0; INT mBase = 0; };   // tess: teselacion de la cara (facetess.cpp)   // glass: vidrio de los menus (glass.cpp)   // lod.count > 0: dibujar con la geometria de LOD0 (lod.cpp)
+struct DrawScope { Saved s[kSavedMax]; int n = 0; FaceGenExtra brow; std::string faceId; bool skip = false; ID3D11PixelShader* restorePS = nullptr; LodIA lod; GlassScope glass; RingScope ring; FaceTessScope tess; bool hdMesh = false; bool mouth = false; UINT mCnt = 0, mStart = 0; INT mBase = 0; bool wire = false; ID3D11RasterizerState* wireRS = nullptr; };   // wire: vista en alambre del Motor (motorlink.cpp)   // tess: teselacion de la cara (facetess.cpp)   // glass: vidrio de los menus (glass.cpp)   // lod.count > 0: dibujar con la geometria de LOD0 (lod.cpp)
 
 static void Remember(ID3D11DeviceContext* c, DrawScope& d, bool ps, bool srv, int slot) {
     if (d.n >= kSavedMax) {   // (26/10 d) 12 -> 24, (02/11) -> 64: lo que no entra no se devolveria
@@ -1293,6 +1293,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         s.devKnown = true;
     }
     if (s.dev != g_dev.dev) return false;
+    if (g_motorWire.load(std::memory_order_relaxed)) d.wire = MotorWireBegin(c, &d.wireRS);   // (11/11 3icxbh) Motor en tiempo real: geometria del G-buffer en alambre (y429); se devuelve en FX_DRAW
     const ShaderEntry *ps = s.ps, *vs = s.vs;
     // (27/10 b) brazos, manos, muslos y torso de TorsoBody del tono de la cara (brazos.cpp, filas 321 / 327): son las texturas
     // del cuerpo, no un shader, asi que valen tambien con "Ver original" (el shader original lee el mismo t0)
@@ -1539,7 +1540,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if ((kind) == 1 && g_lodAny) { if (!t_lodNoted && !ds.lod.count) { CtxState& cl_ = Ctx(c); LodNoteAnyDraw(c, cl_.vs ? cl_.vs->hash : 0, cl_.ps ? cl_.ps->hash : 0, verts, t_drawStart, t_drawBase, &ds.lod); } t_lodNoted = false; } \
     if ((kind) == 1 && !ds.lod.count && g_caraMallaAny.load(std::memory_order_relaxed) && CaraMallaAnyDraw(c, verts, t_drawStart, t_drawBase, &ds.lod)) ds.hdMesh = true; \
     if ((kind) == 1 && t_grassSub.count) { if (!ds.lod.count) ds.lod = t_grassSub; else t_grassSub.Release(); t_grassSub = LodIA(); } \
-    if (!ds.skip) { call; } if (ds.restorePS) { c->PSSetShader(ds.restorePS, nullptr, 0); ds.restorePS->Release(); } if (ds.glass.on) GlassAfterDraw(c, ds.glass); if (ds.ring.on) RingAfterDraw(c, ds.ring); \
+    if (!ds.skip) { call; } if (ds.wire) MotorWireEnd(c, ds.wireRS); if (ds.restorePS) { c->PSSetShader(ds.restorePS, nullptr, 0); ds.restorePS->Release(); } if (ds.glass.on) GlassAfterDraw(c, ds.glass); if (ds.ring.on) RingAfterDraw(c, ds.ring); \
     if (ds.ring.overlay && !ds.skip) { RingOverlayBegin(c, ds.ring); call; RingOverlayEnd(c, ds.ring); } \
     { CtxState& cm_ = Ctx(c); if (cm_.ps && (cm_.ps->hash == 0x619b86cb5691cdceULL || cm_.ps->hash == 0xf807e74d5b900a15ULL)) { if (!ds.skip) HairFwdAfterComposition(c); if (g_meterHook) { int gz_ = GpuZoneBegin(c, kGzLightMeter); LightMeterAfterComposition(c); GpuZoneEnd(c, gz_); } } } \
     if (g_inspectOn) { CtxState& ci_ = Ctx(c); if (InspectBegin(c, ci_.ps, ci_.vs, kind, verts, inst)) { call; InspectEnd(c); } } \
@@ -2142,6 +2143,8 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     FaceInjectPresent();   // (09/11) matrices del rig: donde se arma la cara (solo mide, expr_inyeccion)
     SolEditorPresent();   // (09/11) sol real del editor: ganchos (primer Present), aplicar pendiente, log cada 10 s
     CamHookPresent();   // (23/10) camara del motor: ganchos (primer Present), cortes de camara -> 160, log
+    MotorPagePresent();   // (11/11) Motor en tiempo real: filas nativas en el estudio 3D (motorpage.cpp)
+    MenuMousePresent();   // (11/11 3icxbh) mouse en los menus nativos del juego: ganchos (primer Present), log
     TiempoPresent();    // (31/10) camara lenta: ganchos (visor del editor / reloj del partido, primer Present), 343.w, log
     SolLuzPresent();    // (09/11) sol real del motor en el editor (w378 / w392 -> zfx_SolEditor), z393
     CmdListGuardPresent();
@@ -2170,6 +2173,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
       g_cfg.live[320][2] = on; }
     GrassFrameBoundary(flags);   // (26/10 d) pasto: limite del cuadro (reclamo en la GPU, x63) ANTES de subir t120
     HeadShadowPresent();   // (27/10 c) sombra de la cabeza: cabezas elegidas, cajas y filas 310 / 316..319 ANTES de subir t120
+    MotorLinkPresent();    // (11/11 3icxbh) Motor en tiempo real: pedido del modulo de Sider -> fila 429, ANTES de subir t120
     UploadParams();
     WatchShaderFolder();
     PollMatch();

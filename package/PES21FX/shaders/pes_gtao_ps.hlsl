@@ -40,6 +40,11 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   if (z0 < 0.05 || z0 > 300.0) return 1.0;
   float3 Pc = PosV(uv, z0);
   float3 V = -normalize(Pc);
+  // (11/11 g, Agustin: "a veces la pelota se ve a traves" del pasto) una hoja de pasto es FINA: el horizonte la tomaba como un muro
+  // infinito y las hojas que estan DELANTE de la pelota / botines (mas cerca de la camara) le dejaban franjas oscuras con su forma.
+  // En lo que no es pasto, una muestra de pasto que esta mas de thinT delante no tapa (hoja pegada si). El pasto entre si, igual que antes
+  bool rcvTurf = (((uint)(inNrm.SampleLevel(sPoint, uv, 0).z * 1023.0 + 0.5)) & 15u) == 3u;
+  float thinT = 0.035 + 0.002 * z0;
   // (21/10 c) normal GEOMETRICA reconstruida de la profundidad (32 bits float: limpia), no la del G-buffer: la del G-buffer
   // trae los mapas de normales (poros, arrugas, trama y estampados de la tela) y el GTAO, que compara esa normal con la
   // superficie real de la profundidad, sombreaba esos dibujos (curvas oscuras en el cuello, la oreja y la camiseta).
@@ -109,6 +114,9 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
         float2 uvS = uv + sgn * dir * (t * rPx) * px;
         if (any(uvS < 0.0) || any(uvS > 1.0)) break;
         float zS = LinZ(uvS);
+        // (11/11 l) el && de HLSL no corta: la lectura del G-buffer se hacia en CADA muestra (GTAO 2.4-4.6 -> 12.7 ms en el log de Agustin).
+        // Ahora solo se lee con una muestra delante de verdad, en una rama real
+        [branch] if (!rcvTurf && z0 - zS > thinT) { if ((((uint)(inNrm.SampleLevel(sPoint, uvS, 0).z * 1023.0 + 0.5)) & 15u) == 3u) continue; }   // (11/11 g) hoja delante
         float3 Ps = PosV(uvS, zS);
         float3 dS = Ps - Pc; float lenS = length(dS);
         if (lenS < 1e-4) continue;
@@ -131,6 +139,7 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
           if (any(uvS < 0.0) || any(uvS > 1.0)) break;
           float zS = LinZ(uvS);
           if (zS < 0.05 || zS > 300.0) continue;
+          [branch] if (!rcvTurf && z0 - zS > thinT) { if ((((uint)(inNrm.SampleLevel(sPoint, uvS, 0).z * 1023.0 + 0.5)) & 15u) == 3u) continue; }   // (11/11 g, l)
           float3 dS = PosV(uvS, zS) - Pc; float lenS = length(dS);
           if (lenS < 1e-5) continue;
           float hN = dot(dS, N);
