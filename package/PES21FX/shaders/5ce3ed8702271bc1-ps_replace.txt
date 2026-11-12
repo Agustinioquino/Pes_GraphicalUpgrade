@@ -1,4 +1,7 @@
 // PES 2021 - Piel de cara (G-buffer) - version mejorada
+// (12/11) UN SOLO CODIGO para las dos variantes de la cara: ce188ae110354aea (cara con animacion facial, primeros planos, VS
+// 455eb97b) es este mismo archivo con PES_FACE_UV2 (firma con dos UV: .xy difusa, .zw el resto; TEXCOORD9 al final). Antes eran
+// dos copias de 1100 lineas que habia que cambiar a la par. Sin PES_FACE_UV2 uvD = v2 (la difusa usa la misma UV).
 // Hash original: 5ce3ed8702271bc1  (volcado con 3Dmigoto 1.3.16)
 //
 // Este shader NO ilumina: escribe el G-buffer que despues usa la pasada de luz.
@@ -200,13 +203,21 @@ float4 SweatLayer(float2 uv, float cells, float amount, float size, float t, boo
 void main(
   float4 v0 : SV_Position0,
   float4 v1 : COLOR0,
+#ifdef PES_FACE_UV2
+  float4 v2in : TEXCOORD0,   // ce188: UV de la cara en .zw (en 5ce3 es float2 v2); .xy = segundo UV
+#else
   float2 v2 : TEXCOORD0,
   float2 w2 : TEXCOORD9,
+#endif
   float4 v3 : TEXCOORD4,
   float4 v4 : TEXCOORD5,
   float4 v5 : TEXCOORD6,
   float4 v6 : TEXCOORD7,
   float4 v7 : TEXCOORD8,
+#ifdef PES_FACE_UV2
+  float2 w2 : TEXCOORD9,   // PES21 (19/10 c): AL FINAL. En ce188 el VS (455eb97bc2c3a958) saca TEXCOORD9 en su propio registro (v8),
+                           // despues de TEXCOORD8; declarado antes corria todos los registros uno y la cara salia rayada. (27/10 j: float2 como el VS)
+#endif
   float4 pR : TEXCOORD10,   // (27/10 j) posicion de reposo (x, y, z) del VS de la cabeza, w = 11
   float4 pD : TEXCOORD11,   // (01/11 j) gesto respecto de la cabeza rigida (marco de reposo), w = 12
   out float4 o0 : SV_Target0,
@@ -215,6 +226,14 @@ void main(
   out float4 o3 : SV_Target3,
   out float4 o4 : SV_Target4)
 {
+#ifdef PES_FACE_UV2
+  float2 v2 = v2in.zw;   // PES21 (19/10): variante de la cara con animacion facial (primeros planos)
+  float2 uvD = v2in.xy;  // PES21 (19/10 b): en el original la DIFUSA (t0) se lee con TEXCOORD0.xy y el resto (normal, srm, suciedad,
+                         // animacion, mascaras) con .zw. Las caras genericas de Konami (VS 455eb97bc2c3a958) traen dos UV distintos:
+                         // con un solo UV la difusa salia como un barrido diagonal.
+#else
+  float2 uvD = v2;       // 5ce3: una sola UV
+#endif
   float4 r0,r1,r2,r3,r4;
   uint4 bitmask, uiDest;
   float4 fDest;
@@ -593,11 +612,16 @@ void main(
   float4 P147 = IniParams.Load(int2(147,0));
   float pesEdge = 0.0;
   {
-    // (20/10 b) en este shader NO: las genericas en partido usan una sola malla para toda la cabeza (textura de 1024 con el
+    // (20/10 b) en 5ce3 NO: las genericas en partido usan una sola malla para toda la cabeza (textura de 1024 con el
     // montaje ya pegado en el plano de la cabeza), sin pieza aparte para el cuello. Fundir el borde aca le sacaba la mascara de
     // pelo de la quinta textura al cuero cabelludo (el pelo rapado se veia gris y brilloso). Solo aplica a ce188 (dos UV).
+#ifdef PES_FACE_UV2
+    bool gen = enhance && P147.x > 0.5 && any(abs(uvD - v2) > 0.003);   // dos UV distintos = montaje generico (la difusa va en el uv del montaje)
+    float2 gr = uvD;
+#else
     bool gen = false;
     float2 gr = float2(0.5, 0.5);
+#endif
     float dE = min(min(gr.x, 1.0 - gr.x), min(gr.y, 1.0 - gr.y)) * 0.7044;   // distancia al borde en el plano de la cabeza
     pesEdge = gen ? 1.0 - smoothstep(0.012, 0.07, dE) : 0.0;
   }
@@ -623,12 +647,12 @@ void main(
   sweatProgZ = max(sweatProgZ, rainK * 0.6);
   if (enhance && P9.z > 0) {
     // vello facial pintado (barba, cejas, bigote): mascara por color oscuro y poco saturado
-    float3 albE = g_tex_diffuse.Sample(g_samplerAnisotropic_Clamp_s, v2.xy).xyz;
+    float3 albE = g_tex_diffuse.Sample(g_samplerAnisotropic_Clamp_s, uvD).xyz;
     float lumE = dot(albE, float3(0.2126, 0.7152, 0.0722));
     float mxE = max(albE.r, max(albE.g, albE.b)), mnE = min(albE.r, min(albE.g, albE.b));
     float satE = (mxE - mnE) / max(mxE, 1e-3);
     // relativo al tono de piel local (mip alto = color medio de la zona): sirve para pieles claras y oscuras
-    float3 albA = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy, 5.0).xyz;
+    float3 albA = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, uvD, 5.0).xyz;
     float lumA = dot(albA, float3(0.2126, 0.7152, 0.0722));
     float ratioE = lumE / max(lumA, 0.005);
     fhMask = smoothstep(0.62, 0.38, ratioE) * smoothstep(0.15, 0.06, lumE) * smoothstep(0.45, 0.20, satE) * saturate(P9.z);
@@ -708,16 +732,16 @@ void main(
   { uint cW, cH, cL; g_tex_srm.GetDimensions(0, cW, cH, cL); float capS = faceCap > 1.0 ? max(0.0, log2((float)max(cW, cH) / faceCap)) : 0.0; faceBS = max(faceBD, capS - g_tex_srm.CalculateLevelOfDetail(g_sampler_srm_s, v2.xy)); g_tex_diffuse.GetDimensions(0, cW, cH, cL); capD = faceCap > 1.0 ? max(0.0, log2((float)max(cW, cH) / faceCap)) : 0.0; }
   r0.zw = g_tex_srm.SampleBias(g_sampler_srm_s, v2.xy, faceBS).xy;
   float pesSpec0 = r0.z, pesSrmY = r0.w;   // (20/10) valores del juego, para el borde de las genericas
-  r1.w = g_tex_diffuse.CalculateLevelOfDetail(g_samplerAnisotropic_Clamp_s, v2.xy);
+  r1.w = g_tex_diffuse.CalculateLevelOfDetail(g_samplerAnisotropic_Clamp_s, uvD);
   r1.w = clamp(r1.w + faceBD, capD, max(5.0, capD));
-  r2.xyz = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy, r1.w).xyz;
+  r2.xyz = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, uvD, r1.w).xyz;
   // (07/11, Agustin: "borrar la textura plana de las cejas y reemplazarlas por las cejas en hebras") de cerca, donde las hebras se
   // dibujan, la ceja PINTADA se borra del albedo y se rellena con la piel de alrededor (la mas clara de 8 puntos a ~1.2 cm, mip 3,
   // como el mapa de la ceja de pes_browmap_ps) mezclada con el promedio local; de lejos (sin hebras) la pintura vuelve sola, con el
   // mismo corte de distancia que el GS (y75). x382 = cuanto se borra (0 = como siempre), y382 = corrimiento del corte en mips
   { float4 PE = IniParams.Load(int2(382, 0));
     if (fgOk && PE.x > 0.001 && IniParams.Load(int2(74, 0)).x > 0.5) {
-      float4 bm = pesBrowMap.SampleLevel(g_samplerLinear_Clamp_s, v2.xy, 0);
+      float4 bm = pesBrowMap.SampleLevel(g_samplerLinear_Clamp_s, uvD, 0);
       if (bm.a > 0.02) {
         float twB, thB; g_tex_diffuse.GetDimensions(twB, thB);
         float texelM = 0.3 / max(twB, 1.0);                                    // ~30 cm de cabeza por vuelta de textura
@@ -728,9 +752,9 @@ void main(
         if (kB > 0.001) {
           float3 skB = 0; float slB = -1;
           [unroll] for (int qB = 0; qB < 8; qB++) { float aB2 = qB * 0.785398;
-            float3 cB = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy + float2(cos(aB2) * 0.034, sin(aB2) * 0.026), 3.0).xyz;
+            float3 cB = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, uvD + float2(cos(aB2) * 0.034, sin(aB2) * 0.026), 3.0).xyz;
             float lB = dot(cB, float3(0.2126, 0.7152, 0.0722)); if (lB > slB) { slB = lB; skB = cB; } }
-          float3 skinB = lerp(g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy, 4.0).xyz, skB, 0.75);
+          float3 skinB = lerp(g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, uvD, 4.0).xyz, skB, 0.75);
           r2.xyz = lerp(r2.xyz, skinB, kB);
         }
         // (08/11 y, Agustin: "el color de todas las cejas no cambia el color de todo") la pintura que queda bajo las hebras (lo que no
@@ -750,7 +774,7 @@ void main(
   // No inventa marcas: solo marca mas las que la cara ya tiene. 0 = como el juego
   { float mk = saturate(IniParams.Load(int2(124,0)).y) * (1.0 - fhMask) * saturate(3.5 - r1.w);
     if (enhance && mk > 0.001) {
-      float3 aB = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, v2.xy, r1.w + 2.5).xyz;
+      float3 aB = g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, uvD, r1.w + 2.5).xyz;
       float rat = (dot(r2.xyz, float3(0.2126, 0.7152, 0.0722)) + 0.01) / (dot(aB, float3(0.2126, 0.7152, 0.0722)) + 0.01);
       r2.xyz *= pow(clamp(rat, 0.25, 4.0), 0.9 * mk);
     } }
@@ -960,7 +984,7 @@ void main(
       pesCol = PesCollarW(pesRest, PC322.y * 0.001) * saturate(PC322.z);
       if (pesCol > 0.001) {
         float3 ctT = PesCollarTorso(pesTorsoTex, g_samplerLinear_Clamp_s, pesRest);
-        r2.xyz = lerp(r2.xyz, r2.xyz * PesCollarRatio(g_tex_diffuse, g_samplerAnisotropic_Clamp_s, v2.xy, ctT), pesCol);
+        r2.xyz = lerp(r2.xyz, r2.xyz * PesCollarRatio(g_tex_diffuse, g_samplerAnisotropic_Clamp_s, uvD, ctT), pesCol);
       }
     } }
   {   // (24/10 c) tono de piel propio del jugador (skintone.cpp + pes_skintone.hlsli): Oklab, tambien el velo de borde; el
