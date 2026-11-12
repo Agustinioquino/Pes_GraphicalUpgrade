@@ -115,6 +115,10 @@ void main(
   int tyC = (int)((uint)(gnZ * 1023 + 0.5) & 15);
   float trC = (float)(((uint)(gnZ * 1023 + 0.5) >> 4) & 63) / 63.0;   // PES21 pasto v3: translucidez por pixel del G-buffer (hojas: grosor)
   bool skinC = cmpOn && (tyC == 0) && (abs(gmC.z - 0.98039) < 0.003);
+  // (12/11, Agustin: "a la pelota le falta tener una luz de el cielo tambien un poco") la pelota y los botines son tipo 1 (como los carteles)
+  // y el tipo 1 no recibia la luz de cielo (x47) ni el reflejo del cielo (151). El PS de la pelota / botines (aadffecf) marca RT2.w = 1 (el
+  // tipo 1 no usa ese canal: ni la luz del sol ni la composicion lo leen). z440 = cuanto cielo reciben (0 = como antes, sin cielo)
+  float pesBallSkyK = (cmpOn && tyC == 1 && gmC.w > 0.5) ? clamp(IniParams.Load(int2(440,0)).z, 0.0, 2.0) : 0.0;
 
   r0.xy = g_psSystem.m_renderBuffer.zw * v0.xy;
   r0.z = inDepth.SampleLevel(g_samplerPoint_Clamp_s, r0.xy, 0).x;
@@ -620,7 +624,7 @@ void main(
       if (pesNskOk) NskR = pesNskR0;   // (04/11 piel) la misma normal del anillo, calculada antes del SSGI (ver pesNskR0)
       float2 sC = uvC * float2(2, -2) + float2(-1, 1);
       Vsk = normalize(float3((sC - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zsk, zsk));
-      if (SKY.w > 0.5 && tyC != 1 && tyC != 3) {
+      if (SKY.w > 0.5 && (tyC != 1 || pesBallSkyK > 0.001) && tyC != 3) {
         Ld = normalize(Ld);
         float3 upV = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
         if (dot(Ld, upV) < 0) upV = -upV;
@@ -652,7 +656,7 @@ void main(
         // (07/11) y109: hemisferio coseno. Una superficie de costado recibe la MITAD del cielo, no un cuarto (fSky^2 apagaba el lado
         // en sombra de los jugadores: 'cuando estan en la sombra no se ve casi nada'). 0 = como antes, 1 = fisico.
         float3 fSkW = lerp(fSk3 * fSk3, fSk3, saturate(IniParams.Load(int2(109,0)).y));
-        r2.xyz += lum * tint * fSkW * max(SKY.x, 0.0) * 0.12 * day * aoSky * saturate((400.0 - zsk) / 120.0) * PESAmbGain();
+        r2.xyz += lum * tint * fSkW * max(SKY.x, 0.0) * 0.12 * day * aoSky * saturate((400.0 - zsk) / 120.0) * PESAmbGain() * (tyC == 1 ? pesBallSkyK : 1.0);
       }
     }
   }
@@ -1225,7 +1229,7 @@ void main(
     // Fresnel y rugosidad con la BRDF de entorno (Karis); en los huecos se apaga con oclusion especular (Lagarde) y con la
     // visibilidad del cielo (oclusion ambiental). 151: x on | y fuerza | z oclusion especular | w pasto en los reflejos
     float4 RS = IniParams.Load(int2(151,0)), SKr = IniParams.Load(int2(150,0));
-    if (cmpOn && RS.x > 0.5 && geoOk && SKr.y > 0.01 && tyC != 1 && tyC != 3 && gmC.y > 0.004 && zsk < 300.0) {
+    if (cmpOn && RS.x > 0.5 && geoOk && SKr.y > 0.01 && (tyC != 1 || pesBallSkyK > 0.001) && tyC != 3 && gmC.y > 0.004 && zsk < 300.0) {
       float3 Rv = reflect(Vsk, Nsk);
       float3 vXr = float3(g_psScene.m_view._m00, g_psScene.m_view._m01, g_psScene.m_view._m02);
       float3 vYr = float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12);
@@ -1271,7 +1275,7 @@ void main(
         } }
       float soK = lerp(1.0, soL * lerp(1.0, aoE, 0.5) * hzK, RS.z > 0 ? saturate(RS.z) : 1.0);
       float sunLe = max(dot(max(pLc_color.xyz, 0.0), float3(0.2126, 0.7152, 0.0722)), 0.0) * g_psScene.m_exposure.z;
-      r0.xyw += env * sunLe * specE * soK * (skinC ? 0.1 : max(RS.y, 0.0));
+      r0.xyw += env * sunLe * specE * soK * (skinC ? 0.1 : max(RS.y, 0.0)) * (tyC == 1 ? min(pesBallSkyK, 1.0) : 1.0);
     }
   }
   { // === PES21 (12/11) y436 b) BRILLO DEL CIELO EN EL CESPED: 151 salta el pasto (tipo 3). La cera de las hojas refleja el cielo en angulo

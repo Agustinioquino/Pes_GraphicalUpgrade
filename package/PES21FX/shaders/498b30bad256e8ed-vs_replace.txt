@@ -304,6 +304,23 @@ void main(
           cutS = (PESBu(sB, 18u) < 0.5 ? -1.0 : 1.0) * (0.8 + 1.0 * PESBu(sB, 19u)); tilt += 0.25 * PESBu(sB, 20u);
         }
       }
+      // (12/11, Agustin con la captura vieja de pasto largo: "podemos modificar la version corta para tomar de esos 5 puntos y mejorarlo")
+      // x439 HOJAS SUELTAS MAS ALTAS: una parte de las hojas (x439, al azar por hoja) se escapo de la cortadora y crece por encima del corte
+      // (de 1.25 a y439 veces el alto, la mayoria cerca de 1.25): asoman sobre la alfombra, se arquean e inclinan por su propio peso (curva
+      // propia de cada una) y son algo mas angostas, en punta (hojas nuevas). Con el pasto corto vuelven las capas a distintas alturas y la
+      // profundidad del pasto largo. No sobre la cal (ahi el corte es recto) ni en las desparejas de abajo; con desgaste, menos. 0 = como antes
+      { float4 P439 = IniParams.Load(int2(439, 0));
+        float kTall = pesNatV0 ? clamp(P439.x, 0.0, 0.4) : 0.0;
+        if (pesBIrr < 0.5 && kTall > 0.001 && PESBu(sB, 40u) < kTall * (1.0 - kLn) * (1.0 - 0.7 * wrB)) {
+          float mT = P439.y > 1.05 ? clamp(P439.y, 1.1, 3.0) : 1.8;
+          float uT = PESBu(sB, 41u);
+          float gT = lerp(1.25, max(mT, 1.25), uT * uT);
+          h = PES_NAT_CUT * 0.058 * scT * gT * (1.0 - 0.30 * wrB);
+          cutB = false;
+          bnd = 0.30 + 0.40 * PESBu(sB, 42u) * saturate(gT - 0.9);           // arco: mas cuanto mas larga
+          tilt = 0.08 + 0.30 * PESBu(sB, 43u) * saturate(gT - 1.0);          // inclinada hacia su cara
+          wB *= 0.85;
+        } }
       // (11/11 o) forma de la punta: recta (34 %, sobre la cal 86 %), diagonal mas marcada (42 %, cal 11 %), desgarrada (24 %, cal 3 %);
       // las que no corto la cortadora: en lanza (60 %) o romas (40 %). Las desparejas de abajo quedan como estaban
       float tipMid = 0.0, tipW2 = 0.84, tipW3 = cutB ? 0.78 : 0.0;
@@ -785,9 +802,16 @@ void main(
       float hRef = max(pesHref * (pesBlade ? PES_NAT_CUT : 1.0), 0.005);
       float kB = saturate(1.0 - max(ySB, 0.0) / hRef) * saturate(W177.w);   // alto real de la hoja
       float kNest = smoothstep(0.17, 0.085, dB) * smoothstep(0.17, 0.125, yC) * saturate(W177.w);
+      // (12/11, Agustin: captura vieja de pasto largo, "la pelota hundida / asentada entre las hojas") w439 PELOTA ASENTADA: el nido abria y
+      // bajaba las hojas de alrededor (hasta 17 cm), justo las que de frente tapan la parte de abajo de la pelota: quedaba apoyada arriba de
+      // un pozo. Ahora el nido es chico (un cuarto) y las hojas del borde de la huella (hasta ~14 cm del centro) quedan paradas y se
+      // recuestan un poco CONTRA la pelota: de frente tapan y oscurecen su base, como el pasto real alrededor de una pelota quieta. 0 = como antes
+      float kSeat = saturate(IniParams.Load(int2(439, 0)).w);
+      kNest *= 1.0 - 0.75 * kSeat;
+      float kLeanIn = kSeat * smoothstep(0.145, 0.095, dB) * (1.0 - kB) * smoothstep(0.17, 0.125, yC) * saturate(W177.w);
       pesSinkF = max(pesSinkF, max(0.9 * kB, 0.45 * kNest));
       float2 dO = dB > 1e-4 ? (r1.xz - cC) / dB : float2(1.0, 0.0);
-      r1.xz += dO * (max(kB * 0.9, kNest * 0.75) * max(v0.y, 0.0));
+      r1.xz += dO * ((max(kB * 0.9, kNest * 0.75) - 0.35 * kLeanIn) * max(v0.y, 0.0));
     } else pesSinkF = max(pesSinkF, 0.7 * smoothstep(0.22, 0.10, dB) * saturate(W177.w));   // (02/11 paso 7) la pelota se apoya (capsula radio 0.112)
   }   // (02/11 paso 7) la pelota se apoya (capsula radio 0.112)
   r0.yz = cb4[3].xz + cb4[4].xz;
@@ -1280,7 +1304,11 @@ void main(
   // oscurecer dos veces a los jugadores): sobre el pasto no quedaba la sombra de la pelota. Se calcula aca: el rayo de esta parte de la hoja
   // hacia el sol pasa por la pelota (esfera de 11.2 cm, borde suave que se abre con la distancia) -> sombra; mas la oscuridad de contacto
   // debajo y alrededor cuando apoya. Solo donde la sombra plana esta apagada; mas fuerte con sol fuerte (w414)
-  if (pesNatV && pesPlanOff && cb4[3].y > 0.06 && cb4[3].y < 40.0) {
+  // (12/11, Agustin: "si podes hacer que la pelota tambien reaccione mejor al pasto en cuanto a la sombra") con w439 tambien con la sombra
+  // plana prendida (x290 = 0, "Como el pasto del juego"): antes este bloque no corria y sobre las hojas quedaba solo la sombra plana del
+  // juego, leida en la raiz (borrosa, sin la oscuridad de contacto). Se toma la MAS OSCURA de las dos (no se oscurece dos veces)
+  bool pesBallSh = pesPlanOff || (pesIsExt && IniParams.Load(int2(439, 0)).w > 0.001);
+  if (pesNatV && pesBallSh && cb4[3].y > 0.06 && cb4[3].y < 40.0) {
     const float Rb = 0.112;
     float3 dB = cb4[3].xyz - r6.xyz;
     float3 Ls = PESSunSky();
@@ -1296,7 +1324,8 @@ void main(
     // (11/11 m, capturas 19.22 de Agustin: hojas lima dentro de la sombra negra de la pelota) mas fuerte, como la sombra plana del suelo:
     // 0.62 x (0.35..1 segun el sol) -> 0.88 x (0.6..1); con el sol tapado o de noche igual queda la sombra de contacto
     float kB = saturate(1.0 - 0.88 * shB * lerp(0.6, 1.0, sunB) - 0.40 * aoB);
-    o3.xyz *= kB;
+    if (pesPlanOff) o3.xyz *= kB;
+    else o1.z = min(o1.z, kB);   // (12/11) con la sombra plana: la mas oscura de las dos (o1.z multiplica el color de la hoja en el PS)
   }
   o8 = float4(pesWear.x * (pesWShort ? 0.6 : 1.0), pesIsExt ? pesClumpAO : 1.0, (min(floor(pesYaw * 32.0), 31.0) + frac(pesHv * 37.1 + 0.13) * 0.999) / 32.0, pesV3 ? 1.0 + pesBand + ((pesFl & 2) != 0 ? 8.0 : 0.0) + (pesBlade ? (pesNarV ? 48.0 : 16.0) : 0.0) : 0.0);   // z (27/10 h) valor al azar por hoja (antes pesH, el PS no lo leia); (04/11) z = (sector de 32 del giro + azar) / 32; w = 1 + banda del atlas (0 = sin v3) + 8 si se mezcla con el suelo (igual en todo el dibujo) + 16 hojas 3D (11/11)
   if (pesKill) o0 = float4(0.0, 0.0, -2.0, 1.0);   // todos los vertices iguales: triangulos nulos, no se rasteriza

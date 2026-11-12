@@ -138,6 +138,7 @@ void main(
   r13.xyz = (max(r9.xyzx, r11.xyzx)).xyz;
   r13.xyz = (max(r10.xyzx, r13.xyzx)).xyz;
   r13.xyz = (max(r8.xyzx, r13.xyzx)).xyz;
+  float3 pesNMin = min(r12.xyz, r7.xyz), pesNMax = max(r13.xyz, r7.xyz), pesMean5 = r7.xyz;   // (12/11) y440: vecindario del cuadro actual
   r2.w = (((r2.wwww < float4(asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U))) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).w;
   r12.xyz = (((r12.xyzx != r13.xyzx) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).xyz;
   r5.z = (float4(0.0, 0.0, (float)((int)r12.y | (int)r12.x), 0.0)).z;
@@ -184,6 +185,7 @@ void main(
     r8.xyz = ((r11.xyzx * r11.xyzx + r8.xyzx)).xyz;
     r8.xyz = ((r9.xyzx * r9.xyzx + r8.xyzx)).xyz;
     r9.xyz = ((r15.xyzx * float4(asfloat(0x3e4ccccdU), asfloat(0x3e4ccccdU), asfloat(0x3e4ccccdU), 0.0))).xyz;
+    pesMean5 = r9.xyz;
     r10.xyz = ((r9.xyzx * r9.xyzx)).xyz;
     r8.xyz = ((r8.xyzx * float4(asfloat(0x3e4ccccdU), asfloat(0x3e4ccccdU), asfloat(0x3e4ccccdU), 0.0) + -(r10.xyzx))).xyz;
     r8.xyz = (sqrt(abs(r8.xyzx))).xyz;
@@ -335,6 +337,12 @@ void main(
       // con sol, brillo del pelo, borde de la cara contra el cielo) pesa menos que uno oscuro, asi el borde serruchado del cuadro
       // actual no "salta" encima de la historia suavizada. Con el mismo alfa da lo mismo en zonas planas.
       float3 pesCur = r1.xzw + r9.xyz;            // cuadro actual reconstruido (r1.xzw = actual - historia)
+      // (12/11, Agustin: "cambiar un poco el taa para que de una mayor definicion") y440 DEFINICION: el cuadro actual entra a la historia
+      // con un realce suave contra el promedio de su vecindario (como el filtro de reconstruccion con realce de los TAA de Unreal), recortado
+      // al rango del vecindario (sin halos). Con la camara quieta la historia converge a la imagen promediada de los jitters YA realzada:
+      // gana definicion sin subir el alfa (el titileo de las puntas no crece). 0 = como antes
+      { float kDef = clamp(IniParams.Load(int2(440,0)).y, 0.0, 1.0);
+        if (kDef > 0.001) { float3 c0 = pesCur; pesCur = clamp(c0 + (c0 - pesMean5) * (0.6 * kDef), min(pesNMin, c0), max(pesNMax, c0)); } }
       float wc = r0.x / (1.0 + dot(pesCur, float3(0.2126, 0.7152, 0.0722)));
       float wh = (1.0 - r0.x) / (1.0 + dot(r9.xyz, float3(0.2126, 0.7152, 0.0722)));
       r1.xyz = (pesCur * wc + r9.xyz * wh) / max(wc + wh, 1e-5);

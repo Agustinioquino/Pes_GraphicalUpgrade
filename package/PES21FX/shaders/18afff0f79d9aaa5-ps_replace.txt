@@ -648,6 +648,17 @@ void main(
       o0.xyz = saturate(c);
     }
   }
+  // (12/11, Agustin con la captura vieja de pasto largo: "verde medio en la base y solo la punta lima") z439 BASE MENOS SATURADA: a lo largo
+  // de la hoja natural, la parte de abajo pierde saturacion (verde medio, mismo brillo) y el tramo de la punta (en mm, relT) la gana un poco:
+  // el lima queda solo en las puntas. Lo que se ve desde la camara es sobre todo la parte alta de las hojas, asi que el color promedio
+  // de la cancha casi no cambia (y lejos, donde la hoja toma el color del suelo, no corre). 0 = como antes
+  { float kDs = pesNat ? clamp(IniParams.Load(int2(439,0)).z, 0.0, 1.0) : 0.0;
+    if (kDs > 0.001 && !pesFar) {
+      float lmD = dot(o0.xyz, float3(0.2126, 0.7152, 0.0722));
+      float sD = lerp(1.0 - 0.38 * kDs, 1.0 + 0.14 * kDs, smoothstep(0.10, 0.85, relT));
+      sD = lerp(1.0, sD, pesCfN * (1.0 - pesPaintF));
+      o0.xyz = saturate(lmD + (o0.xyz - lmD) * sD);
+    } }
   // (26/10 g) lejos: el color del suelo ya dibujado (copia de RT0 que hace la DLL en t10), lerp por pesCf sin mezcla por alfa: con varias
   // capas de hojas gana la de adelante (antes cada capa volvia a mezclar sobre la anterior y el resultado dependia del orden). z59 sin mezclar
   // (27/10 l) tanda 9a, z299: las hojas pintadas por la linea toman el color del suelo (la linea de la base, nitida) hasta que la hoja mide en

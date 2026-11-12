@@ -315,7 +315,7 @@ void main(
   // (02/11) z314: sombra "al pie" sobre el pasto (matType 3). El pixel de la hoja se proyecta al suelo antes de muestrear el shadow
   // map (como el rebote en 619b): la hoja recibe la misma sombra que el suelo bajo ella. Antes se evaluaba a la altura de cada hoja
   // con su normal y sus derivadas y la sombra del botin / pelota salia "peinada", recortada hoja por hoja (captura 02/11 10:06)
-  float4 TS3 = IniParams.Load(int2(314,0)); bool pesFoot = false; float3 pesFootP = r6.xyz;
+  float4 TS3 = IniParams.Load(int2(314,0)); bool pesFoot = false; float3 pesFootP = r6.xyz; float3 pesPosV = r6.xyz;
   if (matType == 3 && TS3.z > 0.5) {
     float3 upF = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
     if (dot(pesLDir.xyz, upF) < 0.0) upF = -upF;                        // el sol siempre arriba
@@ -578,6 +578,23 @@ void main(
   r0.x = min(r0.x, r0.y);
   r0.y = g_WorldShadowMask.Sample(g_samplerPoint_Clamp_s, r0.zw).x;
   r0.xyzw = min(r0.xxxx, r0.yyyy);
+  // (12/11, Agustin: con "Como el pasto del juego" las sombras sobre el pasto "se ven menos oscuras y mas naturales"; pide "una mezcla de
+  // ambas") x440 SOMBRA SUAVE EN LAS HOJAS: con x290 = 1 las hojas reciben la sombra del estadio y de los jugadores como el suelo; x440
+  // la aclara (0 = como el suelo, como antes; 1 = sin sombra, como el pasto del juego). En el medio la hoja a la sombra conserva parte
+  // del sol, mas en la punta (la luz que se cuela entre las hojas de arriba) que en la raiz. Solo en las hojas (tipo 3, entre 4 mm y
+  // 25 cm sobre la cancha): el suelo sigue igual. El borde de la sombra queda donde esta
+  { float kShH = IniParams.Load(int2(440,0)).x;
+    if (matType == 3 && kShH > 0.001) {
+      float3 upH = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
+      if (dot(pesLDir.xyz, upH) < 0.0) upH = -upH;
+      float hPH = g_psScene.m_eyepos.y + dot(pesPosV, upH);
+      if (hPH > 0.004 && hPH < 0.25) {
+        float mmH = IniParams.Load(int2(296,0)).w; mmH = mmH > 1.0 ? clamp(mmH, 10.0, 90.0) : 28.0;
+        float hrH = saturate(hPH / (mmH * 0.001));
+        float liftH = saturate(kShH) * lerp(0.55, 1.0, hrH);
+        r0.xyzw = lerp(r0.xyzw, float4(1.0, 1.0, 1.0, 1.0), liftH);
+      }
+    } }
   r1.x = cmp(r0.w < 0.00999999978);
   if (r1.x != 0) {
     if (-1 != 0) discard;
