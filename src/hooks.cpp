@@ -1428,6 +1428,12 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (ps && ps->hash == 0x55297925e0c66085ULL) PitchWearNotePlayer(c);
     // (2/11) botines / pelota (aadffecf): anotar la traslacion para reconocer la pelota; en el dibujo de la pelota, b12 = manchas (fila 177)
     if (ps && ps->hash == 0xaadffecf2090e4f1ULL && ps->repl) if (ID3D11Buffer* bb = PitchBallDrawNote(c, t_drawVerts)) { Remember(c, d, true, false, 12); c->PSSetConstantBuffers(12, 1, &bb); }
+    // (11/11 4wp0pj) para el segundo paso de los botines sucios (grumos con malla por teselacion, como la piel del cuerpo): que VS, topologia y
+    // tipo de dibujo usan los botines. Se anotan los primeros 6 pares distintos (VS, vertices), una sola vez por sesion
+    if (ps && ps->hash == 0xaadffecf2090e4f1ULL) { static std::mutex s_bmx; static std::vector<uint64_t> s_bseen; uint64_t k = (vs ? vs->hash : 0) ^ ((uint64_t)t_drawVerts << 40);
+        std::lock_guard<std::mutex> lk(s_bmx); if (s_bseen.size() < 6 && std::find(s_bseen.begin(), s_bseen.end(), k) == s_bseen.end()) { s_bseen.push_back(k);
+            D3D11_PRIMITIVE_TOPOLOGY tp; c->IAGetPrimitiveTopology(&tp);
+            Log("botines (diag teselacion): VS %016llx (reemplazado %s) vertices %u tipo de dibujo %d topologia %d", (unsigned long long)(vs ? vs->hash : 0), vs && vs->repl ? "si" : "no", t_drawVerts, t_drawKind, (int)tp); } }
     // (04/11 g, Agustin: "teselacion a las manos, brazos y piernas") piel del cuerpo (VS 1c02a92a + PS aa7d1833 reemplazado, DrawIndexed):
     // expr.cpp lee la malla una vez (solo pesos de borde) y facetess.cpp pone el HS / DS del cuerpo; b12 = vertices / primer indice
     // de la malla, t119 = pesos de borde (los lee el VS para TEXCOORD12). Fila 364 (361 / 362 expresiones, 363 piel).

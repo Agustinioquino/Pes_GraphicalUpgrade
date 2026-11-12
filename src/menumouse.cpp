@@ -207,6 +207,14 @@ static void Step(void* win) {
     s_stepT = now; s_pendWin = nullptr; s_pendAction = -1; s_pendDxWin = nullptr;
     if (fresh) { s_wheelAcc = 0; s_wheel.store(0); s_latchWin = nullptr; }
     if (batch) Sample(now, fresh);                 // siempre, para no inventar un clic al volver del menu de PES21FX
+    // (12/11) en el Motor el juego no ve el teclado (freecam.cpp FreeCamBlocksKeys): Esc = "volver" lo pone la DLL, este o no el
+    // mouse en menus prendido, para que siempre se pueda salir sin mando
+    if (g_cfg.motorKeys != 0 && Ptr(win) && MotorPageIs(win) && !g_menuOpen.load(std::memory_order_relaxed)) {
+        static bool s_escWas = true; HWND h = OverlayHwnd();
+        const bool esc = h && GetForegroundWindow() == h && (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
+        const bool edge = esc && !s_escWas && !fresh; s_escWas = esc;
+        if (edge) { s_pendWin = win; s_pendAction = 1; Log("mouse en menus: Esc en el Motor -> volver"); return; }
+    }
     if (!Enabled() || !Ptr(win)) { s_latchWin = nullptr; return; }
     if (s_rWas && FreeCamActive()) { s_liveT.store(now); return; }   // volando con la camara libre del Motor: el mouse no elige filas
     uint8_t* I = P8((uint8_t*)win + 0x88); if (!Ptr(I)) return;
