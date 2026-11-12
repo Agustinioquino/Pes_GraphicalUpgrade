@@ -51,13 +51,14 @@ float3 PESMowGrain(float2 pm, float3 gIn, float pat, float widthM, float lean)
 float PESWearLiveCurve(float live) {
   if (IniParams.Load(int2(431, 0)).x > 0.5) { float c = saturate(live * 2.2); return c * c * (3.0 - 2.0 * c); }
   return IniParams.Load(int2(292, 0)).w > 0.5 ? 1.0 - exp(-5.0 * saturate(live)) : saturate(live); }
-// (12/11, Agustin: "un slider para probar el desgaste en vivo") x437 PRUEBA: suma al mapa del partido el desgaste de un partido ya jugado, al
-// instante y en vivo, con el reparto tipico: bocas de arco, punto penal, circulo central, carriles de los laterales y un poco toda la cancha,
-// en parches (ruido). 0 = solo lo del partido; 1 = final de un partido muy gastado. No toca el mapa: al volver a 0 queda lo que habia
-// (anda aunque el desgaste en vivo w115 este apagado). uv = la del mapa (pm se saca de ahi), wxz = metros del mundo
+// (12/11, Agustin: "un slider para probar el desgaste en vivo") x437 PRUEBA. (12/11 15:02, Agustin: "desgasta partes de la cancha que no
+// se tocaron aun") ya no pinta un partido fijo: AGRANDA al instante el desgaste que ya hay en el mapa del partido (solo donde se piso o se
+// jugo), mas en las zonas que mas se gastan (bocas de arco, punto penal, circulo central, laterales) y en parches (ruido). 0 = como esta;
+// 1 = lo pisado ~4x mas gastado; 2 = ~9x (lo poco pisado ya seco, lo mucho pelado). No toca el mapa: al volver a 0 queda lo que habia.
+// uv = la del mapa (pm se saca de ahi), wxz = metros del mundo
 float PESWearTest(float live, float2 uv, float2 wxz) {
   float t = IniParams.Load(int2(437, 0)).x;
-  if (t < 0.001) return live;
+  if (t < 0.001 || live < 1e-4) return live;
   float2 pm = PESPitchMeters(uv), a = abs(pm);
   float gm = exp(-((a.x - 49.5) * (a.x - 49.5) / 9.0 + pm.y * pm.y / 30.0));   // boca del arco (area chica)
   float pk = exp(-((a.x - 41.5) * (a.x - 41.5) / 40.0 + pm.y * pm.y / 70.0));  // punto penal / medialuna
@@ -65,10 +66,8 @@ float PESWearTest(float live, float2 uv, float2 wxz) {
   float wg = 0.45 * exp(-(a.y - 27.0) * (a.y - 27.0) / 30.0) * step(a.x, 52.5);  // carriles de los laterales
   float use = saturate(gm + 0.8 * pk + 0.75 * cc + wg) * step(a.x, 53.5) * step(a.y, 35.0);
   float n = PESGnoise(wxz * 0.7 + 2.3) * 0.6 + PESGnoise(wxz * 2.9 + 8.1) * 0.4;
-  float w = saturate(t) * (0.12 + 0.40 * use) * (0.6 + 0.8 * n);
-  // (12/11, Agustin: "forzar el desgaste en vivo en tiempo real al maximo") de 1 a 2: cancha muy castigada (toda gastada, bocas de arco peladas)
-  w = lerp(w, saturate((0.55 + 0.45 * use) * (0.7 + 0.6 * n)), saturate(t - 1.0));
-  return max(live, w);
+  float amp = 1.0 + clamp(t, 0.0, 2.0) * (2.5 + 2.0 * use) * (0.7 + 0.6 * n);
+  return saturate(live * amp);
 }
 // (12/11, Agustin: "el brillo del pasto al mover la camara se nota bastante mas que al estar quieto") x436 BRILLO ESTABLE (0 = como antes,
 // 1 = natural, 2 = mas filtrado). PESTipS = smoothstep de los efectos de la punta (cera, rocio, punta encendida) que, cuando un pixel ya cubre
