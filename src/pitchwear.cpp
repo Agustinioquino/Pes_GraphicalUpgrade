@@ -18,6 +18,7 @@
 namespace fx {
 
 static const int kMaxPlayers = 48, kStages = 3;
+static const int kWearBrushes = 192;   // (12/11) pinceles del desgaste por cuadro (se dibujan de a 48: el cbuffer del VS)
 static ID3D11Buffer* s_stage[kStages] = {}; static int s_stageFrame[kStages] = { -1, -1, -1 }; static std::atomic<int> s_stageW{0};
 static std::atomic<int> s_count{0};          // dibujos anotados en el cuadro actual
 static std::atomic<int> s_noteCalls{0}, s_noteOk{0}, s_noteShort{0}, s_noteNoStage{0}, s_noteBone{0}, s_boneShort{0}, s_boneNone{0}; static int s_posBad = 0, s_posZero = 0, s_posOk = 0, s_rowPick[4] = {}; static ID3D11Buffer* s_zeroBuf = nullptr;   // (08/11 aa) s_zeroBuf: 64 B en cero para limpiar el hueso del slot cuando el dibujo no tiene b6   // (08/11 z) diagnostico
@@ -32,7 +33,7 @@ static std::vector<float> s_prev;           // posiciones del cuadro anterior (x
 //   tierra hay bajo la pelota sin leer la GPU; la pelota se reconoce entre los dibujos del PS de botines/pelota (aadffecf) porque la
 //   traslacion de su m_world coincide con la capsula de la pelota del pasto (s_ball): el indice de ese dibujo queda como "la pelota"
 //   y en sus dibujos se enlaza b12 (PESBallC: x 1, y verde, z tierra, w cal).
-struct PlayerPrev { float x, z, vx, vz, skid; float stride = 0.f; int foot = 0; float printX = 0.f, printZ = 0.f; int printDue = 0; };
+struct PlayerPrev { float x, z, vx, vz, skid; float stride = 0.f; int foot = 0; float printX = 0.f, printZ = 0.f; int printDue = 0; float svx = 0.f, svz = 0.f, sax = 0.f, saz = 0.f; int trk = 0; float y = 0.f, yb = 0.f; int yok = 0, air = 0, slide = 0, land = 0; float printK = 0.f; };   // (12/11 yo8viw) printK: fuerza de la accion en la ultima pisada (desgaste real)   // (11/11 4wp0pj) y: alto del hueso 0 (cadera), yb: su alto de pie (promedio lento), air / slide / land: en el aire, barriendose, cayo de un salto   // (11/11) sv / sa: velocidad y aceleracion suavizadas (m/s, m/s2); trk: cuadros seguidos
 // (08/11, Agustin: "las pisadas tienen que ser mejoradas ... desprendimiento realista del pasto con mantos de tierra") fila 389:
 //   x huellas marcadas (pisada por pisada, pie izquierdo / derecho, en vez de una mancha continua) | y fuerza de la huella |
 //   z cantidad de pasto que salta | w segundos que los terrones quedan en el piso
@@ -48,6 +49,28 @@ static inline int   ClipCap()   { int q = (int)(g_cfg.live[390][3] + 0.5f); retu
 // pinceles de desgaste pendientes (huecos que deja el pasto arrancado), los consume la pasada del desgaste
 struct WearBrush { float u, v, k, rad; };
 static std::vector<WearBrush> s_wearQueue;
+// (12/11, Agustin: "crea un pitch wear real con el gameclock ... con memoria", "tiene que ser progresivo y no siempre el desgaste es igual,
+// un jugador al patear fuerte o al presionar mucho en una zona el desgaste es mayor") DESGASTE REAL, fila 431: x 1 = on, y diferencia por
+// accion (0 = todo igual, 1 = natural, 2 = muy marcada).
+//  - reloj del PARTIDO: el mapa solo se gasta mientras el tick del partido (MatchInfo+0x1198, gancho del final del tick en rastro.cpp) avanza:
+//    en pausa, en las repeticiones y en las escenas no se suma nada (antes la repeticion de una barrida la volvia a marcar)
+//  - memoria: se borra solo con un partido nuevo (Sider reescribe match.ini) o, sin eso, cuando el tick del partido vuelve a empezar; el
+//    entretiempo (cancha sin dibujarse 20 s) ya no lo borra
+//  - por accion: caminar o estar parado casi no gasta; la pisada fuerte (arranque, frenada, giro), el pie de apoyo del remate y el raspon
+//    del botin, y la barrida (raspon largo) gastan mucho mas. Lo progresivo (primero mas corto, despues seco, al final tierra) es la curva
+//    del shader (pes_grass.hlsli, PESWearLiveCurve con x431)
+static inline bool WearReal() { return g_cfg.live[431][0] > 0.5f; }
+static inline float WearActK() { return std::clamp(g_cfg.live[431][1], 0.f, 2.f); }
+static int s_tkLast = -1; static double s_tkChangeT = -1e9; static bool s_tkSeen = false;
+static void SimClockPoll() { int tk = g_simTick.load(std::memory_order_relaxed); if (tk >= 0 && tk != s_tkLast) { s_tkLast = tk; s_tkChangeT = Now(); s_tkSeen = true; } }
+// 1 = el desgaste puede sumar ahora; 0 = partido detenido para la simulacion (pausa, repeticion, escena). Sin el gancho: siempre 1 (como antes)
+static inline float SimGate() { if (!WearReal() || !s_tkSeen) return 1.f; return (Now() - s_tkChangeT) < 0.25 ? 1.f : 0.f; }
+static void WearCpuAdd(float u, float v, float k, float radM);
+// pincel de desgaste por una accion (cola: lo dibuja PitchWearPresent en este mismo cuadro)
+static void WearStamp(float x, float z, float k, float rad) {
+    if (k <= 0.f) return; float u = x / 140.f + 0.5f, v = z / 79.f + 0.5f; if (u < 0.f || u > 1.f || v < 0.f || v > 1.f) return;
+    s_wearQueue.push_back({ u, v, k, rad }); WearCpuAdd(u, v, k, rad);
+}
 static std::vector<PlayerPrev> s_pl;        // jugadores del cuadro anterior con su velocidad (m/s) y cuanto frenaban (0..1)
 static float s_wearCpu[128][256] = {};
 static float s_stain[3] = {};               // verde, tierra, cal (0..1)
@@ -59,6 +82,31 @@ static std::atomic<UINT> s_ballIdx{0};      // indice de vertices del dibujo de 
 static std::atomic<int> s_bdCalls{0}, s_bdOffX177{0}, s_bdNoStage{0}, s_bdNoCb{0}, s_bdNoted{0};   // (2/11 b) diagnostico: por que no se anota
 static std::atomic<int> s_ballIdxVotes{0}; static int s_ballLogged = 0;
 static std::atomic<int> s_bdOverflow{0}; static int s_ballChanges = 0; static UINT s_ballHist[10] = {}; static int s_ballHp = 0;   // (2/11 paso 10) dibujos que no entraron en los slots; cambios del indice votado
+// (11/11 4wp0pj, Agustin: "que el pasto manche los botines con pedazos de tierra en 3d o con detalle en 3d de cesped en la parte de abajo
+// despues de un rato en partido progresivo y dependiendo si el jugador corrio mucho o el estado de la cancha" + "tiene que funcionar con las
+// mecanicas de gameplay del juego ... no solo algo visual que se activa por que si") BOTINES SUCIOS POR JUGADOR. Cada jugador que sigue el
+// desgaste (dibujos del short) junta en sus botines, por METRO CORRIDO en tiempo de juego: tierra (mas donde la cancha esta pelada -
+// s_wearCpu bajo sus pies -, mas en frenadas / giros / arranques - skid -, el doble con cancha mojada) y pasto pegado (mas en cancha
+// sana y humeda). Parado no junta nada; el pasto pegado se cae solo en ~4 min, la tierra seca en ~15. Cada dibujo de botines (PS aadffecf,
+// el mismo que la pelota) se asigna al jugador mas cercano por la traslacion de su b5 (leida 2 cuadros despues, como la pelota) y recibe
+// en b12 x 2, y tierra, z pasto, w mojado; el shader pone grumos de tierra y hojitas de pasto con relieve (normal) donde la mascara de
+// barro del juego (t4) dice que se ensucia primero (suela, tapones, bordes). Fila 430: x cantidad (0 = no), y relieve, z pasto pegado,
+// w cuanto se desprende solo.
+struct BootDirt { float x, z, dirt, grass; double seen; };
+static std::vector<BootDirt> s_bd; static int s_bdGen = -1;
+static UINT s_bdKey[kStages][kBallSlots] = {};          // clave de cada dibujo anotado (vertices ^ textura t0) para no cruzar botines
+static UINT s_bootKey[kBallSlots] = {}; static float s_bootVal[kBallSlots][4] = {}; static float s_bootAvgV[4] = { 2.f, 0.f, 0.f, 0.f };
+static ID3D11Buffer* s_bootCb[kBallSlots] = {}; static ID3D11Buffer* s_bootAvgCb = nullptr;
+static std::atomic<int> s_bootHit{0}, s_bootAvgN{0}, s_bootAssigned{0}; static float s_bootReplayT = 0.f; /* (12/11) segundos de repeticion (tiempo ya jugado) en los que no se sumo */ static float s_bootSlideT = 0.f; static int s_bootLandN = 0; static float s_bootYb = 0.f; static int s_bootYn = 0;
+static inline float BootAmt() { return std::clamp(g_cfg.live[430][0], 0.f, 2.f); }
+static float WetNow() {   // misma regla que PESEqWet de los shaders (filas 110 / 114): automatico = lluvia del partido
+    const float* Q = g_cfg.live[110]; const float* L = g_cfg.live[114]; int m = (int)(Q[2] + 0.5f); float wet = 0.f;
+    if (m == 0) wet = ((int)(L[0] + 0.5f) == 1) ? 1.f : 0.f; else if (m == 2) wet = 1.f;
+    return wet * (Q[3] > 0.001f ? std::clamp(Q[3], 0.f, 1.f) : 1.f);
+}
+static UINT BootKey(ID3D11DeviceContext* c, UINT verts) {
+    ID3D11ShaderResourceView* v = nullptr; c->PSGetShaderResources(0, 1, &v); UINT k = verts ^ (UINT)(((uintptr_t)v >> 4) * 2654435761u); if (v) v->Release(); return k ? k : 1u;
+}
 static void WearCpuAdd(float u, float v, float k, float radM) {
     // mismo pincel que pes_wear_ps.hlsl: k * exp(-r2 * 2.2), r en radios, hasta 1.5 radios
     float cu = u * 256.f, cv = v * 128.f, ru = radM / 140.f * 256.f, rv = radM / 79.f * 128.f;
@@ -93,42 +141,64 @@ static float LineDist(float x, float z) {
 static int s_matchGenSeen = -1; static bool s_cleared = false;
 static double s_lastT = 0; static int s_logged = 0;
 // ---- recortes de pasto (particulas en CPU, dibujadas con el PS de las hojas en la pasada del pasto)
-struct Clip { float x, y, z, vx, vy, vz, age, life, size, rot; int kind = 0; int rest = 0; };   // (08/11) rest = 1: quedo en el piso (tarjeta acostada, w = giro + 10 * (tipo + 5))   // (2/11) kind: 0 manojo arrancado, 1 terron de tierra, 2 polvo, 3 pedazo de hoja (bandas de textures\pes_debris.dds)
+struct Clip { float x, y, z, vx, vy, vz, age, life, size, rot; int kind = 0; int rest = 0; float spin = 0.f, ph = 0.f; };   // (11/11) spin: giro propio (rad/s), ph: fase del aleteo de las hojas   // (08/11) rest = 1: quedo en el piso (tarjeta acostada, w = giro + 10 * (tipo + 5))   // (2/11) kind: 0 manojo arrancado, 1 terron de tierra, 2 polvo, 3 pedazo de hoja (bandas de textures\pes_debris.dds)
 static thread_local bool t_clipDraw = false; bool PitchClipDrawActive() { return t_clipDraw; }
-// (2/11) que particula suelta una pisada / la pelota en este punto: tierra donde la cancha esta pelada (desgaste en vivo), polvo si la cancha
-// esta seca, si no manojo (1 de 4) o pedazo de hoja
-static float WearCpuAt(float x, float z);
-static int ClipKindAt(float x, float z, float r) {
-    float w = WearCpuAt(x, z); bool dry = g_cfg.live[114][0] > 1.5f;
-    if (w > 0.3f && r < w * 0.9f) return (dry && r < w * 0.35f) ? 2 : 1;
-    return r < 0.25f ? 0 : 3;
-}
 static const int kMaxClips = 2048;
 static std::vector<Clip> s_clips;
 static float Rand01();
-// (08/11) terrones con manto de tierra que saltan de una accion fuerte (frenada, giro, remate, arranque): salen hacia donde va el
-// movimiento, caen y quedan en el piso (w389 s), y dejan el hueco con la tierra a la vista en el desgaste en vivo
-static void EmitClods(float x, float z, float ux, float uz, float strength, float spread, bool fromBall) {
-    float amt = ClodAmt(); if (amt <= 0.001f || g_cfg.live[116][3] < 0.5f) return;
-    int cap = ClipCap(); if ((int)s_clips.size() >= cap - 4) return;
-    float want = strength * amt * 2.0f; int n = (int)want; if (Rand01() < want - n) n++;
-    float size = ClodSize(); bool dry = g_cfg.live[114][0] > 1.5f; float dust = DustAmt();
-    for (int e = 0; e < n && (int)s_clips.size() < cap; e++) {
-        Clip cp; cp.x = x + (Rand01() - 0.5f) * spread; cp.z = z + (Rand01() - 0.5f) * spread; cp.y = 0.03f;
-        float r = Rand01(); float w = WearCpuAt(cp.x, cp.z);
-        cp.kind = (w > 0.25f && r < w) ? 1 : (r < 0.7f ? 0 : 3);            // tierra pelada: terron; si no, manojo con raiz (o un pedazo de hoja)
-        float sp = 1.2f + 2.2f * Rand01() * strength;
-        cp.vx = ux * sp * (0.6f + 0.8f * Rand01()) + (Rand01() - 0.5f) * 1.4f; cp.vz = uz * sp * (0.6f + 0.8f * Rand01()) + (Rand01() - 0.5f) * 1.4f;
-        cp.vy = (1.6f + 2.4f * Rand01()) * std::min(1.f, 0.5f + 0.5f * strength);
-        cp.age = 0.f; cp.life = 0.9f + 0.8f * Rand01(); cp.size = size * (0.6f + 0.9f * Rand01()) * (cp.kind == 3 ? 0.5f : 1.f); cp.rot = Rand01() * 6.2832f;
-        if (cp.kind == 1) cp.size *= 0.8f;
-        s_clips.push_back(cp);
-        // polvo que acompana (seco: mas)
-        if (dust > 0.001f && Rand01() < dust * (dry ? 0.9f : 0.35f) && (int)s_clips.size() < cap) {
-            Clip d = cp; d.kind = 2; d.size = size * 2.5f * (0.7f + 0.6f * Rand01()); d.life = 0.5f + 0.4f * Rand01(); d.vy *= 0.5f; d.vx *= 0.6f; d.vz *= 0.6f; s_clips.push_back(d); }
+// (11/11, Agustin: "como se calculan estos pedazitos que vuelan ... debe ser rehecho") RECORTES v2. Antes salian CADA CUADRO detras de todo
+// jugador que corria (90 por segundo a 60 FPS, mas con mas FPS), de la cadera y no del pie, con la velocidad cruda (ruido = frenadas falsas),
+// desaparecian en el aire a los 0.5-1.2 s y la pelota rodando tiraba pasto. Ahora salen SOLO en la pisada (una por media zancada) y segun lo
+// que hace ese pie: impulso / sprint -> hacia atras; frenada -> hacia adelante y bajo; giro -> hacia afuera de la curva; remate -> hacia
+// donde sale la pelota. Trotar o caminar no arranca nada. Cantidad por pisada (no depende de los FPS).
+//   tipos: 0 manojo arrancado con raiz, 1 terron de tierra, 2 polvo, 3 pedazo de hoja (bandas de textures\pes_debris.dds)
+enum { kClipTuft = 0, kClipClod = 1, kClipDust = 2, kClipBlade = 3 };
+static std::atomic<int> s_strikeN{0}; static std::atomic<int> s_bornN[4];
+static void PushClip(int kind, float x, float y, float z, float vx, float vy, float vz, float size) {
+    if ((int)s_clips.size() >= ClipCap()) return;
+    Clip c; c.x = x; c.y = y; c.z = z; c.vx = vx; c.vy = vy; c.vz = vz; c.age = 0.f; c.size = size; c.rot = Rand01() * 6.2832f; c.kind = kind;
+    float sg = Rand01() < 0.5f ? -1.f : 1.f;
+    c.spin = sg * (kind == kClipBlade ? 8.f + 14.f * Rand01() : kind == kClipTuft ? 4.f + 6.f * Rand01() : kind == kClipClod ? 2.f + 5.f * Rand01() : 0.3f);
+    c.ph = Rand01() * 6.2832f;
+    c.life = kind == kClipDust ? 0.7f + 0.7f * Rand01() : 4.0f;   // en el aire viven hasta tocar el piso (4 s de seguridad); el polvo se disipa
+    s_clips.push_back(c); s_bornN[kind & 3]++;
+}
+// (x, z) donde pisa el pie, (tx, tz) hacia donde sale despedido (unitario), inten 0..~1.5 (fuerza de la accion)
+static void EmitStrike(float x, float z, float tx, float tz, float inten, bool fromBall) {
+    const float* C = g_cfg.live[116]; if (C[3] < 0.5f || inten < 0.05f) return;
+    if ((int)s_clips.size() >= ClipCap() - 4) return;
+    s_strikeN++;
+    const float amount = C[0] > 0.f ? C[0] : 1.0f, bsz = (C[1] > 0.f ? C[1] : 3.0f) * 0.01f;
+    const float w = WearCpuAt(x, z); const bool dry = g_cfg.live[114][0] > 1.5f, wet = g_cfg.live[114][0] > 0.5f && !dry;
+    const float px = -tz, pz = tx;   // costado del tiro
+    const float I1 = std::min(inten, 1.f);
+    // pedazos de hoja sueltos: pocos en el sprint (~0.5 por pisada), muchos en la frenada / el giro fuerte. Abanico mas cerrado con mas fuerza
+    float want = amount * 4.5f * inten; int n = (int)want; if (Rand01() < want - n) n++; n = std::min(n, 14);
+    for (int e = 0; e < n; e++) {
+        float a = (Rand01() - 0.5f) * (1.6f - 0.7f * I1);
+        float dx = tx + px * a, dz = tz + pz * a, l = sqrtf(dx * dx + dz * dz) + 1e-4f; dx /= l; dz /= l;
+        float hs = (0.5f + 2.0f * inten) * (0.5f + Rand01()), vy = (0.6f + 1.5f * inten) * (0.6f + 0.8f * Rand01());
+        PushClip(kClipBlade, x + (Rand01() - 0.5f) * 0.12f, 0.03f, z + (Rand01() - 0.5f) * 0.12f, dx * hs, vy, dz * hs, bsz * (0.6f + 0.8f * Rand01()));
     }
-    // hueco en el desgaste: donde se arranco el pasto queda la tierra (mas con mas pasto arrancado)
-    if (n > 0 && g_cfg.live[115][3] > 0.5f) { float k = 0.03f * std::min((float)n, 4.f) * (fromBall ? 1.5f : 1.f); s_wearQueue.push_back({ x / 140.f + 0.5f, z / 79.f + 0.5f, k, 0.14f }); WearCpuAdd(x / 140.f + 0.5f, z / 79.f + 0.5f, k, 0.14f); }
+    // manojos con raiz y terrones (el "divot"): solo acciones fuertes y con x389 z > 0; en lo pelado sale tierra, con cancha humeda mas
+    const float clodA = ClodAmt();
+    if (clodA > 0.001f && inten > 0.45f) {
+        float wantC = clodA * (inten - 0.45f) * (wet ? 3.0f : 2.0f); int m = (int)wantC; if (Rand01() < wantC - m) m++; m = std::min(m, 4);
+        const float csz = ClodSize(), dust = DustAmt();
+        for (int e = 0; e < m; e++) {
+            bool soil = (w > 0.25f && Rand01() < w) || Rand01() < 0.25f;
+            float a = (Rand01() - 0.5f) * 0.7f; float dx = tx + px * a, dz = tz + pz * a, l = sqrtf(dx * dx + dz * dz) + 1e-4f; dx /= l; dz /= l;
+            float hs = (0.8f + 1.6f * inten) * (0.6f + 0.8f * Rand01()), vy = (1.0f + 1.6f * inten) * (0.6f + 0.7f * Rand01());
+            PushClip(soil ? kClipClod : kClipTuft, x, 0.02f, z, dx * hs, vy, dz * hs, csz * (0.6f + 0.8f * Rand01()) * (soil ? 0.8f : 1.f));
+            if (dust > 0.001f && (soil || dry) && Rand01() < dust * (dry ? 0.9f : 0.4f))
+                PushClip(kClipDust, x, 0.03f, z, dx * hs * 0.4f, vy * 0.35f, dz * hs * 0.4f, csz * 2.5f * (0.7f + 0.6f * Rand01()));
+        }
+        // hueco en el desgaste: donde se arranco el pasto queda la tierra
+        if (m > 0 && g_cfg.live[115][3] > 0.5f && !WearReal()) { float k = 0.03f * std::min((float)m * 1.5f, 4.f) * (fromBall ? 1.5f : 1.f); s_wearQueue.push_back({ x / 140.f + 0.5f, z / 79.f + 0.5f, k, 0.14f }); WearCpuAdd(x / 140.f + 0.5f, z / 79.f + 0.5f, k, 0.14f); }
+    }
+    // tierra seca / pelada: polvo aunque no salga terron
+    if (DustAmt() > 0.001f && (dry || w > 0.4f) && Rand01() < DustAmt() * 0.5f * I1)
+        PushClip(kClipDust, x, 0.03f, z, tx * 0.6f, 0.25f, tz * 0.6f, ClodSize() * 2.5f * (0.7f + 0.6f * Rand01()));
 }
 static ID3D11Buffer* s_clipBuf = nullptr; static ID3D11ShaderResourceView* s_clipSRV = nullptr; static ID3D11VertexShader* s_clipVS = nullptr; static bool s_clipTried = false;
 static std::atomic<int> s_clipCount{0}; static std::atomic<int> s_clipFrame{-1};
@@ -149,19 +219,39 @@ static void ClipSimAndUpload(float dt) {
     // viento de las nubes (z84 direccion, y84 velocidad)
     float ang = g_cfg.live[84][2] * 0.0174533f, wsp = std::min(std::max(g_cfg.live[84][1], 0.f), 60.f) * 0.03f;
     float wx = cosf(ang) * wsp, wz = sinf(ang) * wsp;
+    // (11/11) RECORTES v2: gravedad real y arrastre del aire por tipo (velocidad terminal: hoja ~1.2 m/s, manojo ~5, terron ~12): la hoja
+    // planea y aletea de costado, el terron sigue una parabola y pica. Arrastre implicito (estable con cualquier dt)
     size_t n = 0;
     for (size_t i = 0; i < s_clips.size(); i++) {
         Clip& c = s_clips[i];
         if (c.rest) { c.age += dt; if (c.age < c.life) s_clips[n++] = c; continue; }   // (08/11) en el piso: quieto hasta que se desvanece
-        c.vy -= 7.0f * dt; float drag = 1.0f - 2.2f * dt; c.vx = c.vx * drag + wx * dt; c.vz = c.vz * drag + wz * dt; c.vy *= 1.0f - 1.2f * dt;
-        c.x += c.vx * dt; c.y += c.vy * dt; c.z += c.vz * dt; c.age += dt; c.rot += 6.0f * dt;
-        if (c.y <= 0.004f) {
-            // (08/11) toca el piso: los terrones y manojos pican una vez y despues quedan acostados (w389 s); el polvo se va
+        c.age += dt;
+        if (c.kind == kClipDust) {   // polvo: casi sin peso, lo lleva el aire, se frena rapido, crece y se va
+            float a = std::min(1.f, 3.0f * dt); c.vx += (wx - c.vx) * a; c.vz += (wz - c.vz) * a; c.vy += (0.12f - c.vy) * a;
+            c.size *= 1.0f + 0.7f * dt; c.x += c.vx * dt; c.y += c.vy * dt; c.z += c.vz * dt; c.rot += c.spin * dt;
+            if (c.age < c.life) s_clips[n++] = c;
+            continue;
+        }
+        const float kD = c.kind == kClipBlade ? 6.5f : c.kind == kClipTuft ? 0.35f : 0.07f;   // arrastre cuadratico (vt = sqrt(9.81 / kD))
+        const float kW = c.kind == kClipBlade ? 1.0f : c.kind == kClipTuft ? 0.15f : 0.0f;    // cuanto lo lleva el viento
+        float rx = c.vx - wx * kW, rz = c.vz - wz * kW, ry = c.vy; float sp = sqrtf(rx * rx + ry * ry + rz * rz);
+        float f = 1.0f / (1.0f + kD * sp * dt);
+        c.vx = wx * kW + rx * f; c.vz = wz * kW + rz * f; c.vy = ry * f - 9.81f * dt;
+        if (c.kind == kClipBlade) {   // aleteo: la hoja planea de costado (perpendicular a su avance) y se mece
+            c.ph += (6.0f + 0.25f * fabsf(c.spin)) * dt;
+            float hs = sqrtf(c.vx * c.vx + c.vz * c.vz) + 1e-3f, sx = -c.vz / hs, sz = c.vx / hs, fl = 2.8f * sinf(c.ph);
+            c.vx += sx * fl * dt; c.vz += sz * fl * dt; c.vy += 1.4f * cosf(c.ph * 1.3f) * dt * std::min(1.f, sp);
+        }
+        c.x += c.vx * dt; c.y += c.vy * dt; c.z += c.vz * dt; c.rot += c.spin * dt;
+        if (c.y <= 0.010f && c.vy < 0.f) {
+            // toca el pasto: el terron pica (y rueda un poco), el manojo apenas, la hoja se queda; despues quedan acostados (w389 s)
             float restS = ClodRest();
-            if (c.kind == 2 || restS < 0.1f) continue;
-            if (c.vy < -1.3f && c.kind != 3) { c.y = 0.005f; c.vy = -c.vy * 0.22f; c.vx *= 0.45f; c.vz *= 0.45f; s_clips[n++] = c; continue; }
-            c.rest = 1; c.y = 0.008f; c.vx = c.vz = c.vy = 0.f; c.age = 0.f; c.life = restS * (0.6f + 0.8f * Rand01()) * (c.kind == 3 ? 0.5f : 1.f);
+            if (c.kind == kClipClod && c.vy < -1.0f) { c.y = 0.011f; c.vy = -c.vy * 0.30f; c.vx *= 0.55f; c.vz *= 0.55f; c.spin *= 0.5f; s_clips[n++] = c; continue; }
+            if (c.kind == kClipTuft && c.vy < -1.6f) { c.y = 0.011f; c.vy = -c.vy * 0.15f; c.vx *= 0.4f; c.vz *= 0.4f; c.spin *= 0.4f; s_clips[n++] = c; continue; }
+            if (restS < 0.1f) continue;
             if (fabsf(c.x) > 55.f || fabsf(c.z) > 36.f) continue;   // fuera de la cancha no queda nada
+            c.rest = 1; c.y = c.kind == kClipBlade ? 0.012f + 0.010f * Rand01() : 0.008f; c.vx = c.vz = c.vy = 0.f; c.age = 0.f;
+            c.life = restS * (0.6f + 0.8f * Rand01()) * (c.kind == kClipBlade ? 0.35f : 1.f);   // la hoja suelta se pierde entre el pasto antes
             s_clips[n++] = c; continue;
         }
         if (c.age < c.life) s_clips[n++] = c;
@@ -170,7 +260,7 @@ static void ClipSimAndUpload(float dt) {
     if (!s_clipBuf || !s_clipSRV) return;
     D3D11_MAPPED_SUBRESOURCE m; if (FAILED(g_dev.imm->Map(s_clipBuf, 0, D3D11_MAP_WRITE_DISCARD, 0, &m))) return;
     float* q = (float*)m.pData;
-    for (size_t i = 0; i < n; i++) { const Clip& c = s_clips[i]; float fade = std::min(1.0f, (c.life - c.age) * (c.rest ? 1.0f : 4.0f));
+    for (size_t i = 0; i < n; i++) { const Clip& c = s_clips[i]; float fade = std::min(1.0f, (c.life - c.age) * (c.rest ? 1.0f : (c.kind == kClipDust ? 2.0f : 4.0f)));
         q[i * 8 + 0] = c.x; q[i * 8 + 1] = c.y; q[i * 8 + 2] = c.z; q[i * 8 + 3] = c.size * fade;
         q[i * 8 + 4] = c.vx; q[i * 8 + 5] = c.vy; q[i * 8 + 6] = c.vz; q[i * 8 + 7] = fmodf(c.rot, 6.2832f) + 10.0f * (float)(c.kind + (c.rest ? 5 : 0)); }   // (2/11) w = giro + 10 * tipo; (08/11) + 50 si esta acostado en el piso
     g_dev.imm->Unmap(s_clipBuf, 0);
@@ -278,12 +368,26 @@ void PitchBallNote(ID3D11DeviceContext* c, int frame) {
     if (d.ByteWidth >= off + 32) { D3D11_BOX bx = { off, 0, 0, off + 32, 1, 1 }; c->CopySubresourceRegion(s_ballStage[w], 0, 0, 0, 0, cb, 0, &bx); s_ballStageFrame[w] = frame; }
     cb->Release();
 }
+// (11/11, Agustin: "estos deberian seguir el gameclock para que no se borren en la repeticion") RELOJ DEL JUEGO para los recortes, el
+// seguimiento de los jugadores (pisadas, frenadas) y el pasto aplastado: el mismo de las nubes (fila 157, config.cpp: m_timeParam del
+// juego; la pausa lo congela, la camara lenta de la repeticion lo frena, el salto hacia atras al empezarla no cuenta). En pausa los
+// pedacitos quedan quietos en el aire y no se desvanecen; en la repeticion en camara lenta vuelan despacio y las acciones repetidas los
+// vuelven a arrancar (la velocidad de los jugadores se mide en tiempo de juego). Hasta ver ese reloj avanzar (w157 = 0): el real.
+static float GameStep(double& lastG, double& lastR) {
+    const double t = Now(), g = (double)g_cfg.live[157][0];
+    const double dR = lastR < 0.0 ? 0.0 : t - lastR; lastR = t;
+    double dG = lastG < -1e8 ? 0.0 : g - lastG; lastG = g; if (dG < -50000.0) dG += 100000.0;   // vuelta del reloj de las nubes (100000 s)
+    if (g_cfg.live[157][3] < 0.5f) return (float)std::clamp(dR, 0.0, 0.1);
+    return (float)std::clamp(dG, 0.0, 0.1);
+}
+static int s_plGen = 0;   // (11/11) actualizaciones de s_pl: la huella de cada pisada se estampa una sola vez aunque el seguimiento se saltee cuadros (pausa)
 static void PitchFlatPresent() {
     const float* F = g_cfg.live[136];
     bool v5 = g_cfg.live[139][0] > 0.5f && g_cfg.live[139][2] > 0.001f;   // (20/10) pasto v5: las hojas se doblan con el mapa
     if ((F[0] < 0.5f && !v5) || !g_dev.imm) return;
     EnsureFlat(); if (!s_flatRTV || !s_fsVS || !s_zeroPS || !s_vs || !s_ps || !s_flatCB || !s_bsAddR || !s_bsAddG) return;
-    double t = Now(); float dt = (float)std::clamp(t - s_flatT, 0.001, 0.1); s_flatT = t; s_flatFrame++;
+    static double s_fG = -1e9, s_fR = -1.0; float dt = GameStep(s_fG, s_fR); s_flatT = Now(); s_flatFrame++;   // (11/11) reloj del juego
+    static int s_flatPlGen = -1; const bool newPl = s_plGen != s_flatPlGen; s_flatPlGen = s_plGen;
     if (g_matchGen.load() != s_flatMatch) { s_flatMatch = g_matchGen.load(); float z[4] = {}; g_dev.imm->ClearRenderTargetView(s_flatRTV, z); s_ballOk = false; }
     // pelota: el staging mas viejo ya listo (anillo de 3)
     { int w = s_ballW.load(), rd = (w + 1) % kStages; s_ballW = rd;
@@ -308,7 +412,7 @@ static void PitchFlatPresent() {
         brush[nb][0] = p.x / 140.f + 0.5f; brush[nb][1] = p.z / 79.f + 0.5f; brush[nb][2] = 2.5f * dt * k * (1.f + 2.5f * p.skid * kAct) * (fpOn > 0.5f ? 0.35f : 1.f); brush[nb][3] = 0.45f; nb++;
         // (08/11) huella: una marca por pisada (pie izquierdo / derecho alternados, zancada segun la velocidad), con forma de botin
         // (talon mas fuerte + punta hacia adelante). La marca entera en un cuadro (no por dt): se ve cada pisada por separado
-        if (fpOn > 0.5f && p.printDue && sp > 0.3f && nb < kMaxPlayers - 16) {
+        if (fpOn > 0.5f && p.printDue && newPl && sp > 0.3f && nb < kMaxPlayers - 16) {
             float ux = p.vx / sp, uz = p.vz / sp, kf = FpForce() * k * (0.55f + 0.45f * std::min(sp / 6.f, 1.f)) * (1.f + 1.5f * p.skid * kAct);
             brush[nb][0] = p.printX / 140.f + 0.5f; brush[nb][1] = p.printZ / 79.f + 0.5f; brush[nb][2] = 0.75f * kf; brush[nb][3] = 0.13f; nb++;
             if (nb < kMaxPlayers - 16) { brush[nb][0] = (p.printX + ux * 0.12f) / 140.f + 0.5f; brush[nb][1] = (p.printZ + uz * 0.12f) / 79.f + 0.5f; brush[nb][2] = 0.55f * kf; brush[nb][3] = 0.10f; nb++; }
@@ -330,7 +434,7 @@ static void PitchFlatPresent() {
         if (dist > 4.0f) dist = 0.0f;   // salto de camara / saque
         int steps = std::clamp((int)(dist / 0.08f) + 1, 1, 15);
         float kb = (F[3] > 0.f ? F[3] : 1.0f) * k * onGround;
-        { const float kv = std::clamp(g_cfg.live[177][2], 0.f, 2.f); float spd = std::min(dist / dt / 12.f, 1.5f);   // (2/11) rapida: aplasta mas; lenta: menos
+        { const float kv = std::clamp(g_cfg.live[177][2], 0.f, 2.f); float spd = dt > 0.002f ? std::min(dist / dt / 12.f, 1.5f) : 0.f;   // (2/11) rapida: aplasta mas; lenta: menos
           kb *= std::max(0.25f, 1.f + kv * (spd - 0.5f)); }
         // (2/11) manchas de la pelota (fila 177 x). Agustin: PROGRESIVAS y MUY SUTILES, con los minutos de partido y segun la humedad de la
         // cancha; nada por contacto. La pelota solo "recuerda" por donde rueda (promedios lentos de tierra bajo ella y de cruces de cal) y
@@ -359,21 +463,23 @@ static void PitchFlatPresent() {
         }
         // (08/11, Agustin: "desprendimiento ... chutando") REMATE: la pelota pasa de lenta a rapida en un cuadro, estando en el piso.
         // El pie de apoyo y el botin arrancan pasto detras de donde estaba la pelota, hacia adelante (el golpe) y un poco hacia los costados
-        float sp = dist / dt;
+        float sp = dt > 0.002f ? dist / dt : 0.f;   // (11/11) en pausa (reloj del juego quieto) no hay remate
         { float rk = ReactK(); float thr = 9.0f / rk, jump = 5.0f / rk;
           if (sp > thr && sp - s_ballSpPrev > jump && sp < 60.f && s_ballPrev[1] < 0.35f && dist > 0.01f) {
               float ix = dx / dist, iz = dz / dist; float strength = std::min((sp - thr) / 14.f + 0.5f, 2.0f) * rk;
-              EmitClods(s_ballPrev[0] - ix * 0.25f, s_ballPrev[2] - iz * 0.25f, ix * 0.7f, iz * 0.7f, strength, 0.35f, true);
+              // (11/11) recortes v2: el botin raspa el pasto debajo / detras de la pelota y salen hacia donde va el tiro
+              EmitStrike(s_ballPrev[0] - ix * 0.25f, s_ballPrev[2] - iz * 0.25f, ix, iz, std::min(0.30f + 0.35f * strength, 1.2f), true);
+              // (12/11) desgaste real: el pie de apoyo (al costado y algo detras de la pelota) y el raspon del botin debajo de la pelota
+              if (WearReal() && g_cfg.live[115][3] > 0.5f && SimGate() > 0.5f) {
+                  const float aK = WearActK(), rt = g_cfg.live[115][0] > 0.f ? g_cfg.live[115][0] : 1.f, st = std::min(strength, 1.6f);
+                  const float sg = Rand01() < 0.5f ? -1.f : 1.f, px = -iz * sg, pz = ix * sg;
+                  WearStamp(s_ballPrev[0] - ix * 0.30f + px * 0.22f, s_ballPrev[2] - iz * 0.30f + pz * 0.22f, 0.045f * aK * st * rt, 0.15f);
+                  for (int e = 0; e < 3; e++) { float a = -0.35f + 0.15f * e; WearStamp(s_ballPrev[0] + ix * a, s_ballPrev[2] + iz * a, 0.020f * aK * st * rt, 0.11f); }
+              }
               static int kickLog = 0; if (kickLog < 3) { kickLog++; Log("pasto: remate a %.1f m/s (antes %.1f): terrones en (%.1f, %.1f)", sp, s_ballSpPrev, s_ballPrev[0], s_ballPrev[2]); }
           }
           s_ballSpPrev = (dist > 0.f && sp < 60.f) ? sp : 0.f; }
-        if (onGround > 0.5f && sp > 9.0f && sp < 45.0f && g_cfg.live[116][3] > 0.5f && (int)s_clips.size() < ClipCap() && Rand01() < 0.6f) {
-            Clip cp; cp.x = s_ball[0]; cp.z = s_ball[2]; cp.y = 0.02f; float ix = dist > 0 ? dx / dist : 0, iz = dist > 0 ? dz / dist : 0;
-            cp.vx = ix * (1.0f + Rand01() * 2.0f) + (Rand01() - 0.5f); cp.vz = iz * (1.0f + Rand01() * 2.0f) + (Rand01() - 0.5f); cp.vy = 1.0f + 2.0f * Rand01();
-            cp.age = 0; cp.life = 0.4f + 0.5f * Rand01(); cp.size = 0.02f * (0.6f + 0.8f * Rand01()); cp.rot = Rand01() * 6.2832f;
-            cp.kind = ClipKindAt(cp.x, cp.z, Rand01()); if (cp.kind == 1) cp.size *= 1.5f; if (cp.kind == 2) { cp.size *= 3.0f; cp.life *= 0.7f; cp.vy *= 0.5f; }
-            s_clips.push_back(cp);
-        }
+        // (11/11) recortes v2: la pelota rodando ya no tira pasto (antes un recorte el 60 % de los cuadros a mas de 9 m/s); solo el remate
     }
     ID3D11DeviceContext* c = g_dev.imm;
     ID3D11RenderTargetView* oRT[8] = {}; ID3D11DepthStencilView* oDS = nullptr; c->OMGetRenderTargets(8, oRT, &oDS);
@@ -459,25 +565,31 @@ void PitchWearNotePlayer(ID3D11DeviceContext* c) {
 // indice del dibujo para reconocer la pelota en Present; devuelve el b12 a enlazar si este dibujo ya es "la pelota" (con manchas) o nullptr
 ID3D11Buffer* PitchBallDrawNote(ID3D11DeviceContext* c, UINT verts) {
     if (!g_dev.dev || verts == 0) return nullptr;
-    s_bdCalls++; if (g_cfg.live[177][0] < 0.001f) { s_bdOffX177++; return nullptr; }
-    UINT bi = s_ballIdx.load(std::memory_order_relaxed);
+    const bool ballOn = g_cfg.live[177][0] >= 0.001f, bootOn = BootAmt() >= 0.001f;   // (11/11 4wp0pj) tambien se anota para los botines sucios
+    s_bdCalls++; if (!ballOn && !bootOn) { s_bdOffX177++; return nullptr; }
+    UINT bi = s_ballIdx.load(std::memory_order_relaxed); int slot = -1; const UINT key = bootOn ? BootKey(c, verts) : 0u;
     {   // (2/11 paso 10) se anota siempre (antes se dejaba de anotar con 3 votos y un botin votado quedaba fijo para todo el partido)
         int w = s_bdW.load(); if (!s_bdStage[w]) s_bdNoStage++; else { int i = s_bdCount.fetch_add(1);
-            if (i >= kBallSlots) s_bdOverflow++; else { ID3D11Buffer* cb = nullptr; UINT first = 0, num = 0; ID3D11DeviceContext1* c1 = nullptr;
+            if (i >= kBallSlots) s_bdOverflow++; else { slot = i; ID3D11Buffer* cb = nullptr; UINT first = 0, num = 0; ID3D11DeviceContext1* c1 = nullptr;
                 if (SUCCEEDED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) && c1) { c1->VSGetConstantBuffers1(5, 1, &cb, &first, &num); c1->Release(); } else c->VSGetConstantBuffers(5, 1, &cb);
                 // (2/11 e) se copian las 8 primeras filas de b5 (128 B): la traslacion puede estar en la fila 3, en la 7 o en la columna w de las
                 // filas 4..6 (matriz traspuesta, como la del pasto); antes solo la fila 7 y la pelota nunca se reconocio
                 if (!cb) s_bdNoCb++; else { D3D11_BUFFER_DESC d; cb->GetDesc(&d); UINT off = first * 16;
-                    if (d.ByteWidth >= off + 128) { D3D11_BOX bx = { off, 0, 0, off + 128, 1, 1 }; c->CopySubresourceRegion(s_bdStage[w], 0, (UINT)i * 128, 0, 0, cb, 0, &bx); s_bdIdx[w][i] = verts; s_bdNoted++; }
+                    if (d.ByteWidth >= off + 128) { D3D11_BOX bx = { off, 0, 0, off + 128, 1, 1 }; c->CopySubresourceRegion(s_bdStage[w], 0, (UINT)i * 128, 0, 0, cb, 0, &bx); s_bdIdx[w][i] = verts; s_bdKey[w][i] = key; s_bdNoted++; }
                     else s_bdNoCb++;
                     cb->Release(); } } }
     }
-    return (bi != 0 && verts == bi && s_ballIdxVotes.load(std::memory_order_relaxed) >= 3) ? s_ballCb : nullptr;   // (2/11 paso 10) b12 solo con el indice confirmado
+    if (ballOn && bi != 0 && verts == bi && s_ballIdxVotes.load(std::memory_order_relaxed) >= 3) return s_ballCb;   // (2/11 paso 10) b12 solo con el indice confirmado
+    if (!bootOn) return nullptr;
+    // (11/11 4wp0pj) botin: el valor del jugador asignado a este mismo orden de dibujo hace 2 cuadros (si la clave coincide); si no, el promedio
+    if (slot >= 0 && s_bootCb[slot] && s_bootKey[slot] == key) { s_bootHit++; return s_bootCb[slot]; }
+    s_bootAvgN++; return s_bootAvgCb;
 }
 static void BallDrawPresent() {
     if (!g_dev.dev || !g_dev.imm) return;
     for (int i = 0; i < kStages; i++) if (!s_bdStage[i]) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 128 * kBallSlots; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; g_dev.dev->CreateBuffer(&d, nullptr, &s_bdStage[i]); }
     if (!s_ballCb) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 16; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER; g_dev.dev->CreateBuffer(&d, nullptr, &s_ballCb); }
+    if (!s_bootAvgCb) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 16; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER; D3D11_SUBRESOURCE_DATA sd = { s_bootAvgV, 0, 0 }; g_dev.dev->CreateBuffer(&d, &sd, &s_bootAvgCb); }   // (11/11 4wp0pj)
     // publicar las manchas (b12: x 1 pelota, y verde, z tierra, w cal), escaladas por x177
     if (s_ballCb) { const float kS = std::clamp(g_cfg.live[177][0], 0.f, 2.f); float v[4] = { 1.f, std::min(1.f, s_stain[0] * kS), std::min(1.f, s_stain[1] * kS), std::min(1.f, s_stain[2] * kS) }; g_dev.imm->UpdateSubresource(s_ballCb, 0, nullptr, v, 0, 0); }
     // anillo de 3 como el desgaste: leer el de hace 2 cuadros y comparar con la pelota del pasto
@@ -491,10 +603,10 @@ static void BallDrawPresent() {
       if (presents % 1800 == 0 && logs < 4) { logs++;   // (2/11 paso 10) tambien con indice ya votado (antes se callaba justo cuando el indice alternaba)
           Log("pelota: diagnostico (%d cuadros): dibujos aadffecf %d, saltados por x177 %d, sin staging %d, sin b5 %d, anotados %d, desbordes %d; cuadros sin anotaciones %d, sin pelota del pasto %d, lecturas que fallaron %d; indice %u votos %d cambios %d; x177 %.2f capsula %s (%.1f, %.2f, %.1f)",
               presents, s_bdCalls.load(), s_bdOffX177.load(), s_bdNoStage.load(), s_bdNoCb.load(), s_bdNoted.load(), s_bdOverflow.load(), noPending, noBall, mapFail, s_ballIdx.load(), s_ballIdxVotes.load(), s_ballChanges, g_cfg.live[177][0], s_ballOk ? "si" : "no", s_ball[0], s_ball[1], s_ball[2]); }
-      if (pending < 0 || !s_bdStage[rd] || !s_ballOk) return;
-      D3D11_MAPPED_SUBRESOURCE m; if (FAILED(g_dev.imm->Map(s_bdStage[rd], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) { mapFail++; memset(s_bdIdx[rd], 0, sizeof s_bdIdx[rd]); return; }   // (2/11 paso 10) sin el memset los slots viejos volvian como candidatos
+      if (pending < 0 || !s_bdStage[rd]) return;   // (11/11 4wp0pj) sin pelota del pasto igual se leen los botines
+      D3D11_MAPPED_SUBRESOURCE m; if (FAILED(g_dev.imm->Map(s_bdStage[rd], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) { mapFail++; memset(s_bdIdx[rd], 0, sizeof s_bdIdx[rd]); memset(s_bdKey[rd], 0, sizeof s_bdKey[rd]); return; }   // (2/11 paso 10) sin el memset los slots viejos volvian como candidatos
     const float* q = (const float*)m.pData; UINT found = 0; int nf = 0; static int s_noMatch = 0; int nCand = 0; float bestD = 1e9f; int bestH = -1;
-    for (int i = 0; i < kBallSlots; i++) { if (!s_bdIdx[rd][i]) continue; nCand++; const float* r = q + i * 32;
+    for (int i = 0; i < kBallSlots && s_ballOk; i++) { if (!s_bdIdx[rd][i]) continue; nCand++; const float* r = q + i * 32;
         // candidatos a traslacion: fila 3 (m_world por filas), fila 7 (matriz en 4..7), columna w de 0..2 y de 4..6 (matriz traspuesta)
         const float cand[4][3] = { { r[12], r[13], r[14] }, { r[28], r[29], r[30] }, { r[3], r[7], r[11] }, { r[19], r[23], r[27] } };
         for (int k = 0; k < 4; k++) { float dx = cand[k][0] - s_ball[0], dy = cand[k][1] - s_ball[1], dz = cand[k][2] - s_ball[2];
@@ -503,12 +615,49 @@ static void BallDrawPresent() {
             // entraban en el radio y el indice alternaba pelota <-> botin cada cuadro. Ahora: primero los que estan a la altura de la
             // capsula (|dy| < 6 cm), y entre esos el mas cercano
             if (d2 < 0.3f * 0.3f) { nf++; int h = fabsf(dy) < 0.06f ? 1 : 0; if (h > bestH || (h == bestH && d2 < bestD)) { bestH = h; bestD = d2; found = s_bdIdx[rd][i]; } break; } } }
-    if (!found && nCand > 0) { if (++s_noMatch == 600) {   // ~10 s sin reconocerla: volcar que se leyo (una vez)
+    if (s_ballOk && !found && nCand > 0) { if (++s_noMatch == 600) {   // ~10 s sin reconocerla: volcar que se leyo (una vez)
             Log("pelota: sin dibujo reconocido tras 600 cuadros (%d dibujos de botines/pelota por cuadro); capsula del pasto (%.2f, %.2f, %.2f)", nCand, s_ball[0], s_ball[1], s_ball[2]);
             for (int i = 0, n = 0; i < kBallSlots && n < 3; i++) { if (!s_bdIdx[rd][i]) continue; n++; const float* r = q + i * 32;
                 Log("pelota: candidato %u indices b5 f0 (%.2f %.2f %.2f %.2f) f3 (%.2f %.2f %.2f %.2f) f4 (%.2f %.2f %.2f %.2f) f7 (%.2f %.2f %.2f %.2f)", s_bdIdx[rd][i],
                     r[0], r[1], r[2], r[3], r[12], r[13], r[14], r[15], r[16], r[17], r[18], r[19], r[28], r[29], r[30], r[31]); } } }
-    g_dev.imm->Unmap(s_bdStage[rd], 0); memset(s_bdIdx[rd], 0, sizeof s_bdIdx[rd]);
+    {   // (11/11 n, Agustin: "los pastos alrededor de los botines no se deforman o hunden") DIAGNOSTICO para la proxima tanda: si los dibujos de
+        // botines traen su propia posicion en b5 (cerca del suelo, separados de la pelota) se pueden pasar al pasto como la pelota. Cada ~30 s
+        // (6 veces) se anotan los dibujos a menos de 2.5 m de la pelota con sus 4 lecturas de traslacion y la fila 0
+        static int s_bootLogs = 0; static UINT s_bootF = 0;
+        if (s_ballOk && s_bootLogs < 6 && (++s_bootF % 1800u) == 900u) { s_bootLogs++; int n = 0;
+            for (int i = 0; i < kBallSlots && n < 8; i++) { if (!s_bdIdx[rd][i]) continue; const float* r = q + i * 32;
+                const float cand[4][3] = { { r[12], r[13], r[14] }, { r[28], r[29], r[30] }, { r[3], r[7], r[11] }, { r[19], r[23], r[27] } };
+                int kc = -1; for (int k = 0; k < 4 && kc < 0; k++) { const float dx = cand[k][0] - s_ball[0], dz = cand[k][2] - s_ball[2]; if (dx * dx + dz * dz < 2.5f * 2.5f && cand[k][1] > -0.3f && cand[k][1] < 1.2f) kc = k; }
+                if (kc < 0) continue; n++;
+                Log("botines (diag): dibujo %u lectura %d (%.3f %.3f %.3f) pelota (%.3f %.3f %.3f) f0 (%.2f %.2f %.2f %.2f) f1 (%.2f %.2f %.2f %.2f) f2 (%.2f %.2f %.2f %.2f)", s_bdIdx[rd][i], kc,
+                    cand[kc][0], cand[kc][1], cand[kc][2], s_ball[0], s_ball[1], s_ball[2], r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11]); }
+            Log("botines (diag): %d de %d dibujos de botines / pelota a menos de 2.5 m de la pelota", n, nCand); }
+    }
+    // (11/11 4wp0pj) botines sucios: cada dibujo leido (orden i del cuadro) -> jugador mas cercano a su traslacion (a menos de 1.5 m) -> su
+    // tierra / pasto en el b12 de ese orden de dibujo; el dibujo de la pelota y los que no estan a la altura del piso quedan con el promedio
+    if (BootAmt() >= 0.001f) { const double tn = Now(); float sumD = 0.f, sumG = 0.f; int nAct = 0;
+        for (const BootDirt& b : s_bd) if (tn - b.seen < 2.0) { sumD += b.dirt; sumG += b.grass; nAct++; }
+        const float wet = WetNow();
+        s_bootAvgV[0] = 2.f; s_bootAvgV[1] = nAct ? sumD / nAct : 0.f; s_bootAvgV[2] = nAct ? sumG / nAct : 0.f; s_bootAvgV[3] = wet;
+        // (12/11, Agustin: "un slider que suba este valor de suciedad en el momento para ver como se ve") fila 434: x tierra, y pasto forzados
+        // (como minimo) en todos los botines; 0 = lo que junto cada jugador
+        const float tryD = std::clamp(g_cfg.live[434][0], 0.f, 1.f), tryG = std::clamp(g_cfg.live[434][1], 0.f, 1.f);
+        s_bootAvgV[1] = std::max(s_bootAvgV[1], tryD); s_bootAvgV[2] = std::max(s_bootAvgV[2], tryG);
+        for (int i = 0; i < kBallSlots; i++) { s_bootKey[i] = 0; if (!s_bdIdx[rd][i] || s_bdIdx[rd][i] == found) continue; const float* r = q + i * 32;
+            const float cand[4][3] = { { r[12], r[13], r[14] }, { r[28], r[29], r[30] }, { r[3], r[7], r[11] }, { r[19], r[23], r[27] } };
+            int kc = -1; for (int k = 0; k < 4 && kc < 0; k++) if (fabsf(cand[k][0]) < 80.f && fabsf(cand[k][2]) < 50.f && cand[k][1] > -0.3f && cand[k][1] < 1.2f && fabsf(cand[k][0]) + fabsf(cand[k][2]) > 0.02f) kc = k;
+            if (kc < 0) continue;
+            float bestD = 1.5f * 1.5f; int bj = -1;
+            for (size_t j = 0; j < s_bd.size(); j++) { if (tn - s_bd[j].seen > 2.0) continue; float dx = s_bd[j].x - cand[kc][0], dz = s_bd[j].z - cand[kc][2]; float d2 = dx * dx + dz * dz; if (d2 < bestD) { bestD = d2; bj = (int)j; } }
+            if (bj < 0) continue;
+            s_bootKey[i] = s_bdKey[rd][i]; s_bootVal[i][0] = 2.f; s_bootVal[i][1] = std::max(s_bd[bj].dirt, tryD); s_bootVal[i][2] = std::max(s_bd[bj].grass, tryG); s_bootVal[i][3] = wet; s_bootAssigned++;
+            if (!s_bootCb[i]) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 16; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER; g_dev.dev->CreateBuffer(&d, nullptr, &s_bootCb[i]); }
+            if (s_bootCb[i]) g_dev.imm->UpdateSubresource(s_bootCb[i], 0, nullptr, s_bootVal[i], 0, 0); else s_bootKey[i] = 0; }
+        if (s_bootAvgCb) g_dev.imm->UpdateSubresource(s_bootAvgCb, 0, nullptr, s_bootAvgV, 0, 0);
+        static double nextL = 0.0; if (tn >= nextL && g_cfg.live[58][3] > 0.5f) { nextL = tn + 15.0; float mx = 0.f, mg = 0.f; for (const BootDirt& b : s_bd) { mx = std::max(mx, b.dirt); mg = std::max(mg, b.grass); }
+            Log("botines sucios (15 s): jugadores %d (activos %d) | tierra media %.2f max %.2f, pasto medio %.2f max %.2f, mojado %.2f | barridas %.1f s, caidas de salto %d, repeticion sin sumar %.1f s, cadera de pie media %.2f m | dibujos con su jugador %d, con el promedio %d, asignados %d | x430 %.2f y430 %.2f z430 %.2f w430 %.2f",
+                (int)s_bd.size(), nAct, s_bootAvgV[1], mx, s_bootAvgV[2], mg, wet, s_bootSlideT, s_bootLandN, s_bootReplayT, s_bootYn ? s_bootYb / s_bootYn : -1.f, s_bootHit.exchange(0), s_bootAvgN.exchange(0), s_bootAssigned.exchange(0), g_cfg.live[430][0], g_cfg.live[430][1], g_cfg.live[430][2], g_cfg.live[430][3]); s_bootSlideT = 0.f; s_bootLandN = 0; s_bootReplayT = 0.f; s_bootYb = 0.f; s_bootYn = 0; } }
+    g_dev.imm->Unmap(s_bdStage[rd], 0); memset(s_bdIdx[rd], 0, sizeof s_bdIdx[rd]); memset(s_bdKey[rd], 0, sizeof s_bdKey[rd]);
     if (found) {   // (2/11 paso 10) voto por el indice mas frecuente de los ultimos 10 cuadros con candidato (antes 3 seguidos, que un botin intercalado reiniciaba)
         UINT* hist = s_ballHist; s_ballHist[s_ballHp] = found; s_ballHp = (s_ballHp + 1) % 10;
         UINT best = 0; int bestN = 0; for (int a = 0; a < 10; a++) { if (!hist[a]) continue; int n = 0; for (int b = 0; b < 10; b++) n += hist[b] == hist[a]; if (n > bestN) { bestN = n; best = hist[a]; } }
@@ -516,6 +665,51 @@ static void BallDrawPresent() {
         if (best != cur) { s_ballChanges++; if (s_ballChanges <= 5) Log("pelota: indice candidato %u -> %u (%d de 10 cuadros, %d dibujos cerca de la capsula, dy %s)", cur, best, bestN, nf, bestH > 0 ? "a la altura de la capsula" : "por debajo"); }
         s_ballIdx = best; s_ballIdxVotes = bestN;
         if (s_ballLogged < 2 && prevVotes < 3 && bestN >= 3) { s_ballLogged++; Log("pelota: dibujo reconocido (indice %u, %d de 10 cuadros, %d dibujos cerca de la capsula); manchas verde %.2f tierra %.2f cal %.2f", best, bestN, nf, s_stain[0], s_stain[1], s_stain[2]); } }
+    }
+}
+// (11/11 4wp0pj) tierra y pasto que junta cada jugador en los botines, en tiempo de juego (dt de GameStep: pausa = nada, camara lenta = menos).
+// Por metro corrido (velocidad suavizada; parado o caminando despacio casi nada): con la cancha a 1 (natural) un jugador que corre ~1.5 km en
+// un partido de 10 min llega a ~0.6 de tierra en zona pelada y ~0.5 de pasto en zona sana; el que casi no se mueve queda limpio
+static void BootDirtUpdate(const std::vector<PlayerPrev>& pl, float dt) {
+    const float amt = BootAmt(); if (amt < 0.001f || dt <= 0.f) return;
+    if (g_matchGen.load() != s_bdGen) { s_bdGen = g_matchGen.load(); s_bd.clear(); }
+    if (g_cfg.live[10][0] <= 0.f) return;   // fuera del partido (editor, menus): no junta
+    // (12/11, Agustin: "la suciedad tiene que tener memoria y ir con el gameclock interno") lo de cada jugador dura todo el partido (solo se borra
+    // con un partido nuevo) y solo suma cuando el reloj del juego (fila 157) pasa por tiempo NUEVO: si la repeticion lo rebobina y lo vuelve a
+    // correr, lo ya jugado no ensucia de nuevo. Con el reloj del juego apagado (w157 0) se usa el dt de siempre
+    static double s_gMax = -1e18; static int s_gGen = -1;
+    if (s_gGen != s_bdGen) { s_gGen = s_bdGen; s_gMax = -1e18; }
+    if (g_cfg.live[157][3] >= 0.5f) { const double g = (double)g_cfg.live[157][0];
+        if (s_gMax < -1e17) s_gMax = g;
+        double dNew = g - s_gMax; if (dNew < -50000.0) dNew += 100000.0;   // vuelta del reloj (100000 s)
+        if (dNew <= 0.0) { s_bootReplayT += dt; dt = 0.f; } else { dt = std::min(dt, (float)dNew); s_gMax = g; } }
+    const bool accum = dt > 0.f;
+    const double tn = Now(); const float wet = WetNow(), dry = g_cfg.live[114][0] > 1.5f ? 1.f : 0.f;
+    const float fall = g_cfg.live[430][3] > 0.001f ? std::clamp(g_cfg.live[430][3], 0.f, 3.f) : 1.f;
+    std::vector<char> used(s_bd.size(), 0);
+    for (const PlayerPrev& p : pl) {
+        // mismo jugador: el registro mas cercano a menos de 2.5 m; si no hay (corte de camara, saque, repeticion), el mas cercano que no se vio hace 0.3 s
+        int bj = -1; float bd = 2.5f * 2.5f;
+        for (size_t j = 0; j < s_bd.size(); j++) { if (used[j]) continue; float dx = s_bd[j].x - p.x, dz = s_bd[j].z - p.z, d2 = dx * dx + dz * dz; if (d2 < bd) { bd = d2; bj = (int)j; } }
+        if (bj < 0) { bd = 1e9f; for (size_t j = 0; j < s_bd.size(); j++) { if (used[j] || tn - s_bd[j].seen < 0.3) continue; float dx = s_bd[j].x - p.x, dz = s_bd[j].z - p.z, d2 = dx * dx + dz * dz; if (d2 < bd) { bd = d2; bj = (int)j; } } }
+        if (bj < 0) { if (s_bd.size() >= (size_t)kMaxPlayers) continue; s_bd.push_back(BootDirt{ p.x, p.z, 0.f, 0.f, tn }); used.push_back(0); bj = (int)s_bd.size() - 1; }
+        used[bj] = 1; BootDirt& b = s_bd[bj]; b.x = p.x; b.z = p.z; b.seen = tn; if (p.yok && p.yb > 0.f) { s_bootYb += p.yb; s_bootYn++; }
+        if (p.trk < 4 || !accum) continue;   // recien aparecido: sin velocidad confiable; repeticion: ya se sumo
+        const float sp = std::min(sqrtf(p.svx * p.svx + p.svz * p.svz), 11.f);
+        const float run = (sp > 1.2f && !p.air) ? sp * dt : 0.f;                       // metros corridos (caminar despacio o en el aire no ensucia)
+        const float bare = std::clamp(WearCpuAt(p.x, p.z), 0.f, 1.f);                  // cancha pelada bajo sus pies (desgaste del partido)
+        const float act = 1.f + 2.5f * std::clamp(p.skid, 0.f, 1.f);                    // frenadas, giros y arranques clavan el botin
+        b.dirt  += run / 1500.f * amt * (0.25f + 0.75f * bare) * act * (1.f + 1.3f * wet) * (1.f - 0.35f * dry) * (1.f - 0.5f * b.dirt);
+        b.grass += run / 1400.f * amt * (1.f - 0.6f * bare) * (0.6f + 0.4f * act) * (1.f + 0.6f * wet) * (1.f - 0.5f * dry) * (1.f - 0.6f * b.grass);
+        if (p.slide) {   // barrida: el botin y el costado se arrastran por el pasto (~1 s de barrida = +0.12 de tierra, +0.15 de pasto)
+            b.dirt  += dt * 0.12f * amt * (0.4f + 0.6f * bare) * (1.f + 1.2f * wet) * (1.f - 0.4f * b.dirt);
+            b.grass += dt * 0.15f * amt * (1.f - 0.5f * bare) * (1.f + 0.5f * wet) * (1.f - 0.4f * b.grass); s_bootSlideT += dt; }
+        if (p.land) {    // caida de un salto: los tapones se clavan
+            b.dirt  += 0.025f * amt * (0.3f + 0.7f * bare) * (1.f + 1.2f * wet); b.grass += 0.02f * amt * (1.f - 0.5f * bare); s_bootLandN++; }
+        // lo que se desprende solo: el pasto en ~4 min de juego (mas rapido corriendo, el botin lo sacude), la tierra seca en ~15 (mojada se pega)
+        b.grass -= b.grass * dt * fall * (1.f / 240.f) * (1.f + 0.06f * sp);
+        b.dirt  -= b.dirt * dt * fall * (1.f / 900.f) * (1.f - 0.6f * wet);
+        b.dirt = std::clamp(b.dirt, 0.f, 1.f); b.grass = std::clamp(b.grass, 0.f, 1.f);
     }
 }
 void PitchWearPresent() {
@@ -528,22 +722,46 @@ void PitchWearPresent() {
     { static double nextD = 0.0; double tn = Now(); if (tn >= nextD && g_cfg.live[58][3] > 0.5f) { nextD = tn + 15.0;
         Log("desgaste en vivo (15 s): dibujos de short 5529 %d (anotados %d, b5 corto %d, sin staging %d; hueso 0 de b6 %d, b6 corto %d, sin b6 %d) | posiciones: validas %d (hueso 0 %d, fila 7 %d, fila 3 %d, columna w %d), fuera de rango %d, en cero %d | jugadores seguidos %d, recortes vivos %d | x115 %.2f w115 %.0f x136 %.0f x389 %.0f",
             s_noteCalls.exchange(0), s_noteOk.exchange(0), s_noteShort.exchange(0), s_noteNoStage.exchange(0), s_noteBone.exchange(0), s_boneShort.exchange(0), s_boneNone.exchange(0), s_posOk, s_rowPick[0], s_rowPick[1], s_rowPick[2], s_rowPick[3], s_posBad, s_posZero, (int)s_pl.size(), (int)s_clips.size(), P[0], P[3], g_cfg.live[136][0], g_cfg.live[389][0]);
-        s_posOk = s_posBad = s_posZero = 0; s_rowPick[0] = s_rowPick[1] = s_rowPick[2] = s_rowPick[3] = 0; } }
+        s_posOk = s_posBad = s_posZero = 0; s_rowPick[0] = s_rowPick[1] = s_rowPick[2] = s_rowPick[3] = 0;
+        Log("recortes v2 (15 s): pisadas que arrancaron pasto %d | nacidos: hojas %d, manojos %d, terrones %d, polvo %d | vivos %d (tope %d) | x116 %.2f y116 %.1f w116 %.0f z389 %.2f",
+            s_strikeN.exchange(0), s_bornN[kClipBlade].exchange(0), s_bornN[kClipTuft].exchange(0), s_bornN[kClipClod].exchange(0), s_bornN[kClipDust].exchange(0), (int)s_clips.size(), ClipCap(),
+            g_cfg.live[116][0], g_cfg.live[116][1], g_cfg.live[116][3], g_cfg.live[389][2]); } }
     if (P[3] < 0.5f) { s_count = 0; return; }
     EnsureRes(); if (!s_tex || !s_cb) return;
     // partido nuevo: borrar
-    if (g_matchGen.load() != s_matchGenSeen || !s_cleared) { s_matchGenSeen = g_matchGen.load(); float z[4] = {}; g_dev.imm->ClearRenderTargetView(s_rtv, z); s_cleared = true; s_prev.clear(); s_pl.clear();
-        memset(s_wearCpu, 0, sizeof s_wearCpu); s_stain[0] = s_stain[1] = s_stain[2] = 0.f; }
+    SimClockPoll();
+    if (!WearReal()) {
+      if (g_matchGen.load() != s_matchGenSeen || !s_cleared) { s_matchGenSeen = g_matchGen.load(); float z[4] = {}; g_dev.imm->ClearRenderTargetView(s_rtv, z); s_cleared = true; s_prev.clear(); s_pl.clear();
+          memset(s_wearCpu, 0, sizeof s_wearCpu); s_stain[0] = s_stain[1] = s_stain[2] = 0.f; }
+    } else {
+      // (12/11) desgaste real: MEMORIA. Partido nuevo = Sider reescribio match.ini, o el tick del partido volvio a empezar despues de un rato
+      // sin cancha. La cancha sin dibujarse 20 s (entretiempo, menu de pausa largo) solo reinicia el seguimiento de los jugadores
+      static int s_iniSeen = -1, s_tkMax = 0, s_tkAtGen = -1; static bool s_pendGen = false;
+      bool clearNow = !s_cleared; const char* why = "primer partido";
+      const int ig = g_matchIniGen.load(); if (s_iniSeen < 0) s_iniSeen = ig; else if (ig != s_iniSeen) { s_iniSeen = ig; clearNow = true; why = "match.ini nuevo"; }
+      if (g_matchGen.load() != s_matchGenSeen) { s_matchGenSeen = g_matchGen.load(); s_prev.clear(); s_pl.clear();
+          if (s_tkSeen) { s_pendGen = true; s_tkAtGen = s_tkLast; } else if (!clearNow) { clearNow = true; why = "cancha nueva (sin reloj del partido)"; } }
+      if (s_pendGen && s_tkLast != s_tkAtGen) { s_pendGen = false;
+          Log("desgaste real: la cancha volvio, tick del partido %d (antes llego a %d): %s", s_tkLast, s_tkMax, (s_tkMax > 1000 && s_tkLast < s_tkMax / 2) ? "partido nuevo, se borra" : "mismo partido, se conserva");
+          if (s_tkMax > 1000 && s_tkLast < s_tkMax / 2 && !clearNow) { clearNow = true; why = "el tick del partido volvio a empezar"; } }
+      if (clearNow) { float z[4] = {}; g_dev.imm->ClearRenderTargetView(s_rtv, z); s_cleared = true; s_prev.clear(); s_pl.clear(); s_wearQueue.clear();
+          memset(s_wearCpu, 0, sizeof s_wearCpu); s_stain[0] = s_stain[1] = s_stain[2] = 0.f; s_tkMax = 0; Log("desgaste real: mapa borrado (%s)", why); }
+      if (s_tkLast > s_tkMax) s_tkMax = s_tkLast;
+      { static double nextL = 0.0; if (Now() >= nextL) { nextL = Now() + 30.0;
+          Log("desgaste real (30 s): reloj del partido %s (tick %d), se suma %s, accion x%.2f", s_tkSeen ? "enganchado" : "SIN gancho (se suma con el reloj del juego)", s_tkLast, SimGate() > 0.5f ? "si" : "no (partido detenido / repeticion)", WearActK()); } }
+    }
     // anillo de 3: este cuadro escribio en w; el siguiente escribe en (w+1); se lee el de hace 2 cuadros = (w+1) (la GPU ya lo termino)
     int w = s_stageW.load(); int n = std::min(s_count.exchange(0), kMaxPlayers);
     s_stageFrame[w] = n > 0 ? s_frame : -1; s_frame++;
     int rd = (w + 1) % kStages;
-    double t = Now(); float dt = (float)std::clamp(t - s_lastT, 0.001, 0.1); s_lastT = t;
-    ClipSimAndUpload(dt);
+    double t = Now(); s_lastT = t;
+    static double s_wG = -1e9, s_wR = -1.0; const float gdt = GameStep(s_wG, s_wR);   // (11/11) reloj del juego (pausa: 0; camara lenta: menos)
+    static float s_plAcc = 0.f; s_plAcc += gdt;   // tiempo de juego desde la ultima lectura de posiciones
+    ClipSimAndUpload(gdt);
     int pending = s_stageFrame[rd]; s_stageFrame[rd] = -1; s_stageW = rd;
     if (pending < 0 || !s_stage[rd]) return;
     D3D11_MAPPED_SUBRESOURCE m; if (FAILED(g_dev.imm->Map(s_stage[rd], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) return;
-    const float* q = (const float*)m.pData; int cnt = 0; float pos[kMaxPlayers][2];
+    const float* q = (const float*)m.pData; int cnt = 0; float pos[kMaxPlayers][2]; float posY[kMaxPlayers]; int posYok[kMaxPlayers];
     for (int i = 0; i < kMaxPlayers && cnt < kMaxPlayers; i++) {
         // (08/11 z) candidatos de posicion dentro de las 8 filas copiadas: fila 7 (xyz), fila 3 (xyz), columna w de las filas 4..6
         const float* r = q + i * 48; float x = 0, y = 0, z = 0; int pick = -1;
@@ -559,91 +777,114 @@ void PitchWearPresent() {
         s_rowPick[pick]++; s_posOk++;   // (08/11 aa) 0 = hueso 0, 1 = fila 7, 2 = fila 3, 3 = columna w
         bool dup = false; for (int k = 0; k < cnt; k++) if (fabsf(pos[k][0] - x) < 0.05f && fabsf(pos[k][1] - z) < 0.05f) { dup = true; break; }
         if (dup) continue;
-        pos[cnt][0] = x; pos[cnt][1] = z; cnt++;
+        pos[cnt][0] = x; pos[cnt][1] = z; posY[cnt] = y; posYok[cnt] = pick == 0 ? 1 : 0; cnt++;   // (11/11 4wp0pj) el alto solo vale del hueso 0
     }
     g_dev.imm->Unmap(s_stage[rd], 0);
     if (cnt == 0) return;
+    // (11/11) recortes v2: tiempo real desde la ultima lectura de posiciones (si un cuadro no se pudo leer -DO_NOT_WAIT- la distancia era
+    // de 2 cuadros sobre el dt de 1 y la velocidad salia doble); un hueco largo (pausa, repeticion, carga) reinicia las velocidades
+    // (11/11) en tiempo de juego: en pausa (no avanzo) no se toca nada y se sigue sumando; en la camara lenta las velocidades salen bien
+    if (s_plAcc < 0.002f) return;
+    static double s_plT = 0.0; const bool gapP = (t - s_plT) > 0.25 || s_plAcc > 0.1f; s_plT = t;
+    float dtP = std::clamp(s_plAcc, 0.002f, 0.1f); s_plAcc = 0.f;
     // velocidad: el mas cercano del cuadro anterior
-    float brush[kMaxPlayers][4]; int nb = 0;
+    float brush[kWearBrushes][4]; int nb = 0;
     float rate = P[0] > 0.f ? P[0] : 1.0f, rad = std::clamp(P[1], 0.3f, 2.0f);
     std::vector<PlayerPrev> plNow; plNow.reserve(cnt);
     const float kAct = std::clamp(g_cfg.live[177][1], 0.f, 2.f);   // (2/11) frenadas y arranques desgastan mas (y arrastran la marca)
+    const bool real = WearReal(); const float aK = WearActK(), simK = SimGate();   // (12/11) desgaste real
     for (int i = 0; i < cnt; i++) {
         float best = 1e9f; int bi = -1; for (size_t k = 0; k < s_pl.size(); k++) { float dx = s_pl[k].x - pos[i][0], dz = s_pl[k].z - pos[i][1]; float d2 = dx * dx + dz * dz; if (d2 < best) { best = d2; bi = (int)k; } }
-        float speed = best < 1e8f ? sqrtf(best) / dt : 0.f;            // m/s
-        if (speed > 15.f) { speed = 0.f; bi = -1; }                       // salto de camara / teletransporte
+        float speed = best < 1e8f ? sqrtf(best) / dtP : 0.f;           // m/s
+        if (speed > 15.f || gapP) { speed = 0.f; bi = -1; }               // salto de camara / teletransporte / hueco
         PlayerPrev pn{ pos[i][0], pos[i][1], 0.f, 0.f, 0.f };
-        if (bi >= 0 && speed > 0.f) { pn.vx = (pos[i][0] - s_pl[bi].x) / dt; pn.vz = (pos[i][1] - s_pl[bi].z) / dt;
-            float spPrev = sqrtf(s_pl[bi].vx * s_pl[bi].vx + s_pl[bi].vz * s_pl[bi].vz);
-            float acc = (speed - spPrev) / dt;                              // m/s2 (negativo = frena)
+        if (bi >= 0) { const PlayerPrev& pp = s_pl[bi];
+            pn.vx = (pos[i][0] - pp.x) / dtP; pn.vz = (pos[i][1] - pp.z) / dtP;
+            { float r = sqrtf(pn.vx * pn.vx + pn.vz * pn.vz); if (r > 11.f) { pn.vx *= 11.f / r; pn.vz *= 11.f / r; } }   // nadie corre a mas de 11 m/s (cruce de dos jugadores)
+            pn.trk = std::min(pp.trk + 1, 1000);
+            pn.yb = pp.yb; pn.air = pp.air; pn.slide = pp.slide;
+            // (11/11) recortes v2: velocidad (~80 ms) y aceleracion (~120 ms) suavizadas: la resta cruda de posiciones cuadro a cuadro tenia
+            // ruido (0.1 m/s de error = 6 m/s2 de "aceleracion") y daba frenadas y giros falsos que tiraban pasto al azar
+            float aV = 1.f - expf(-dtP / 0.08f), aA = 1.f - expf(-dtP / 0.12f);
+            if (pp.trk == 0) { pn.svx = pn.vx; pn.svz = pn.vz; pn.sax = pn.saz = 0.f; }   // recien aparecido: arranca con su velocidad (sin "arranque" falso)
+            else { pn.svx = pp.svx + (pn.vx - pp.svx) * aV; pn.svz = pp.svz + (pn.vz - pp.svz) * aV;
+                pn.sax = pp.sax + ((pn.svx - pp.svx) / dtP - pp.sax) * aA; pn.saz = pp.saz + ((pn.svz - pp.svz) / dtP - pp.saz) * aA;
+                float am = sqrtf(pn.sax * pn.sax + pn.saz * pn.saz); if (am > 15.f) { pn.sax *= 15.f / am; pn.saz *= 15.f / am; } }
+            float sS = sqrtf(pn.svx * pn.svx + pn.svz * pn.svz), sP = sqrtf(pp.svx * pp.svx + pp.svz * pp.svz);
+            float hx = sS > 0.3f ? pn.svx / sS : 0.f, hz = sS > 0.3f ? pn.svz / sS : 0.f;
+            float aL = pn.sax * hx + pn.saz * hz, aT = -pn.sax * hz + pn.saz * hx;   // a lo largo (+ acelera, - frena) y de costado (+ hacia la izquierda)
             const float rk = ReactK();
-            float skid = std::clamp((-acc - 5.f / rk) / 12.f * rk, 0.f, 1.f) * std::min(spPrev / 5.f, 1.f) + std::clamp((acc - 8.f / rk) / 12.f * rk, 0.f, 0.6f);
-            // (08/11) giro brusco (cambio de direccion con velocidad): la pierna de apoyo patina de costado
-            if (spPrev > 2.5f && speed > 2.5f) { float cosT = (pn.vx * s_pl[bi].vx + pn.vz * s_pl[bi].vz) / (speed * spPrev); skid = std::max(skid, std::clamp((0.85f - cosT) * 2.5f * rk, 0.f, 1.f) * std::min(speed / 5.f, 1.f)); }
-            if (speed > 7.0f) skid = std::max(skid, 0.12f * rk);         // (08/11) sprint: pisada fuerte sostenida, pedacitos chicos
-            pn.skid = std::max(skid, s_pl[bi].skid * 0.85f);
+            float brake  = std::clamp((-aL - 4.f / rk) / 10.f * rk, 0.f, 1.f) * std::min(std::max(sS, sP) / 4.f, 1.f);   // frenada
+            float push   = std::clamp((aL - 3.f / rk) / 8.f * rk, 0.f, 1.f);                                               // arranque
+            float cutK   = std::clamp((fabsf(aT) - 4.f / rk) / 10.f * rk, 0.f, 1.f) * std::min(sS / 3.f, 1.f);             // giro / cambio de direccion
+            float sprint = sS > 6.0f ? std::min(0.06f + 0.1f * (sS - 6.0f) / 3.0f, 0.2f) * rk : 0.f;                        // sprint: pocos y chicos
+            float skid = std::max(std::max(brake, cutK), std::max(push * 0.6f, sS > 7.0f ? 0.12f * rk : 0.f));
+            pn.skid = std::max(skid, pp.skid * expf(-dtP / 0.1f));
             // (08/11) zancada: una huella cada media zancada (0.75 m parado / caminando .. 1.1 m al sprint), alternando el pie
-            pn.stride = s_pl[bi].stride + speed * dt; pn.foot = s_pl[bi].foot;
-            float half = std::clamp(0.55f + 0.08f * speed, 0.6f, 1.15f);
-            if (pn.stride >= half) { pn.stride -= half; pn.foot ^= 1; float ux = pn.vx / speed, uz = pn.vz / speed, side = pn.foot ? 0.11f : -0.11f;
-                pn.printX = pos[i][0] + (-uz) * side; pn.printZ = pos[i][1] + ux * side; pn.printDue = 1; }
-            // terrones por accion fuerte: frenada / giro / arranque (solo si hay pisada real, no al caminar)
-            if (pn.skid > 0.45f && speed > 2.f && s_pl[bi].skid < pn.skid) { float ux = pn.vx / speed, uz = pn.vz / speed; EmitClods(pos[i][0] - ux * 0.15f, pos[i][1] - uz * 0.15f, ux, uz, (pn.skid - 0.3f) * 1.4f, 0.3f, false); }
-        }
-        float k = (0.25f + 0.75f * std::min(speed / 7.f, 1.f)) * rate * dt * 0.08f * (1.f + 3.f * pn.skid * kAct);   // parado: poco; corriendo: mas; frenando: mucho
-        brush[nb][0] = pos[i][0] / 140.f + 0.5f; brush[nb][1] = pos[i][1] / 79.f + 0.5f; brush[nb][2] = k; brush[nb][3] = rad; nb++;
-        WearCpuAdd(brush[nb - 1][0], brush[nb - 1][1], k, rad);
-        // (2/11) pisada fuerte (frenada / arranque, no la carrera pareja): suelta pasto (recortes), como en FC; respeta w116 / x116 / y116
-        if (pn.skid > 0.3f && kAct > 0.01f && g_cfg.live[116][3] > 0.5f && speed > 1.f && (int)s_clips.size() < ClipCap() - 8) {
-            const float* C = g_cfg.live[116]; float amount = C[0] > 0.f ? C[0] : 1.0f, size = (C[1] > 0.f ? C[1] : 3.0f) * 0.01f;
-            float want = amount * pn.skid * kAct * 2.5f; int nEmit = (int)want; if (Rand01() < want - nEmit) nEmit++;
-            float ux = pn.vx / speed, uz = pn.vz / speed;
-            for (int e = 0; e < nEmit && (int)s_clips.size() < ClipCap(); e++) {
-                Clip cp; cp.x = pos[i][0] + (Rand01() - 0.5f) * 0.3f; cp.z = pos[i][1] + (Rand01() - 0.5f) * 0.3f; cp.y = 0.03f;
-                cp.vx = ux * (0.8f + 1.6f * Rand01()) + (Rand01() - 0.5f) * 1.2f; cp.vz = uz * (0.8f + 1.6f * Rand01()) + (Rand01() - 0.5f) * 1.2f; cp.vy = 1.5f + 2.5f * Rand01();   // hacia adelante: la frenada patina
-                cp.age = 0.f; cp.life = 0.5f + 0.7f * Rand01(); cp.size = size * (0.7f + 0.9f * Rand01()); cp.rot = Rand01() * 6.2832f;
-                cp.kind = ClipKindAt(cp.x, cp.z, Rand01() * 0.8f); if (cp.kind == 1) cp.size *= 1.6f; if (cp.kind == 2) { cp.size *= 3.5f; cp.life *= 0.7f; cp.vy *= 0.5f; }   // frenada en lo pelado: terrones y polvo
-                s_clips.push_back(cp);
+            pn.stride = pp.stride + sS * dtP; pn.foot = pp.foot;
+            float half = std::clamp(0.55f + 0.08f * sS, 0.6f, 1.15f);
+            if (pn.stride >= half && sS > 0.3f) { pn.stride -= half; pn.foot ^= 1; float side = pn.foot ? 0.11f : -0.11f;
+                pn.printX = pos[i][0] + (-hz) * side; pn.printZ = pos[i][1] + hx * side; pn.printDue = 1;
+                // (11/11) recortes v2: lo que arranca ESTE pie al pisar. Impulso / sprint -> atras; frenada -> adelante (patina); giro -> hacia
+                // afuera de la curva. Trotar o caminar (sin aceleracion) no arranca nada
+                float inten = std::max(std::max(push * 0.9f, brake * 1.1f), cutK) + sprint;
+                pn.printK = inten;   // (12/11) desgaste real: cuanto gasta esta pisada
+                if (inten >= 0.05f && pn.trk >= 4) {
+                    float wB = push + sprint, wF = brake * 1.2f, wC = cutK, sg = aT > 0.f ? -1.f : 1.f;
+                    float tx = -hx * wB + hx * wF + (-hz) * sg * wC, tz = -hz * wB + hz * wF + hx * sg * wC;
+                    float l = sqrtf(tx * tx + tz * tz); if (l < 1e-3f) { tx = -hx; tz = -hz; } else { tx /= l; tz /= l; }
+                    EmitStrike(pn.printX + tx * 0.08f, pn.printZ + tz * 0.08f, tx, tz, inten, false);
+                }
             }
         }
-        if (pn.skid > 0.2f && kAct > 0.01f && speed > 1.f && nb < kMaxPlayers) {   // arrastre detras del jugador que frena
+        // (11/11 4wp0pj, Agustin: "si el jugador decide tirarse a barrer tambien es un valor si el jugador salta") barrida y salto por el alto
+        // de la cadera (hueso 0) contra su alto de pie: mas de 28 cm abajo moviendose = barrida (arrastra el botin por el pasto); mas de 22 cm
+        // arriba = en el aire (no junta); al volver al piso, la caida clava los tapones
+        pn.y = posY[i]; pn.yok = posYok[i]; pn.land = 0;
+        if (pn.yok && bi >= 0) { const float sv = sqrtf(pn.svx * pn.svx + pn.svz * pn.svz);
+            if (pn.yb < 0.3f) pn.yb = pn.y;
+            const float dy = pn.y - pn.yb; const int wasAir = pn.air;
+            pn.slide = (pn.yb > 0.45f && dy < -0.28f && (sv > 1.5f || pn.slide)) ? 1 : 0;
+            pn.air = (pn.yb > 0.45f && dy > 0.22f) ? 1 : 0;
+            pn.land = (wasAir && !pn.air) ? 1 : 0;
+            if (!pn.slide && !pn.air && fabsf(dy) < 0.15f) pn.yb += (pn.y - pn.yb) * (1.f - expf(-dtP / 2.f));   // alto de pie: ~2 s
+        } else { pn.slide = pn.air = 0; }
+        float k = (0.25f + 0.75f * std::min(speed / 7.f, 1.f)) * rate * dtP * 0.08f * (1.f + 3.f * pn.skid * kAct);   // parado: poco; corriendo: mas; frenando: mucho
+        // (12/11) desgaste real: parado / caminando casi nada, corriendo poco; lo que gasta son las acciones (frenada, giro, arranque) y se
+        // acumula donde se insiste; nada con el partido detenido (pausa, repeticion)
+        if (real) k = (0.08f + 0.50f * std::min(speed / 7.f, 1.f)) * rate * dtP * 0.08f * (1.f + 5.f * pn.skid * aK) * simK;
+        brush[nb][0] = pos[i][0] / 140.f + 0.5f; brush[nb][1] = pos[i][1] / 79.f + 0.5f; brush[nb][2] = k; brush[nb][3] = rad; nb++;
+        WearCpuAdd(brush[nb - 1][0], brush[nb - 1][1], k, rad);
+        if (pn.skid > 0.2f && kAct > 0.01f && speed > 1.f && nb < kWearBrushes) {   // arrastre detras del jugador que frena
             float ux = pn.vx / speed, uz = pn.vz / speed, bx = pos[i][0] - ux * 0.4f, bz = pos[i][1] - uz * 0.4f;
             brush[nb][0] = bx / 140.f + 0.5f; brush[nb][1] = bz / 79.f + 0.5f; brush[nb][2] = k * 0.7f; brush[nb][3] = rad * 0.8f; nb++;
             WearCpuAdd(brush[nb - 1][0], brush[nb - 1][1], k * 0.7f, rad * 0.8f);
         }
+        // (12/11) desgaste real: BARRIDA (pn.slide, deteccion del hilo de botines por la cadera): raspon largo por todo el tramo recorrido
+        if (real && bi >= 0 && pn.slide && simK > 0.5f) { const PlayerPrev& pp = s_pl[bi];
+            float dx = pos[i][0] - pp.x, dz = pos[i][1] - pp.z, dl = sqrtf(dx * dx + dz * dz); int st = std::clamp((int)(dl / 0.2f) + 1, 1, 6);
+            for (int e = 0; e < st; e++) { float a = (e + 0.5f) / st; WearStamp(pp.x + dx * a, pp.z + dz * a, 0.030f * aK * rate, 0.22f); }
+            static int slideLog = 0; if (slideLog < 5) { slideLog++; Log("desgaste real: barrida en (%.1f, %.1f), cadera %.2f m (de pie %.2f m) a %.1f m/s", pos[i][0], pos[i][1], pn.y, pn.yb, speed); } }
+        // caida de un salto: los tapones se clavan (marca chica)
+        if (real && pn.land && simK > 0.5f) WearStamp(pos[i][0], pos[i][1], 0.012f * aK * rate, 0.18f);
         plNow.push_back(pn);
     }
-    // recortes de pasto que vuelan (20/10): se emiten detras de los jugadores que corren (x116 cantidad, y116 tamano cm, w116 on)
-    { const float* C = g_cfg.live[116];
-      if (C[3] > 0.5f) {
-        float amount = C[0] > 0.f ? C[0] : 1.0f, size = (C[1] > 0.f ? C[1] : 3.0f) * 0.01f;
-        for (int i = 0; i < cnt; i++) {
-            float best = 1e9f, bx = 0, bz = 0; for (size_t k = 0; k + 1 < s_prev.size(); k += 2) { float dx = pos[i][0] - s_prev[k], dz = pos[i][1] - s_prev[k + 1]; float d2 = dx * dx + dz * dz; if (d2 < best) { best = d2; bx = dx; bz = dz; } }
-            float speed = best < 1e8f ? sqrtf(best) / dt : 0.f; if (speed < 2.5f || speed > 15.f) continue;
-            float dirx = bx / (speed * dt + 1e-6f), dirz = bz / (speed * dt + 1e-6f);
-            float want = amount * std::min(speed / 7.f, 1.5f) * 1.5f; int nEmit = (int)want; if (Rand01() < want - nEmit) nEmit++;
-            for (int e = 0; e < nEmit && (int)s_clips.size() < ClipCap(); e++) {
-                Clip cp; float r1 = Rand01(), r2 = Rand01(), r3 = Rand01();
-                cp.x = pos[i][0] - dirx * (0.1f + 0.3f * r1) + (r2 - 0.5f) * 0.3f; cp.z = pos[i][1] - dirz * (0.1f + 0.3f * r1) + (r3 - 0.5f) * 0.3f; cp.y = 0.03f;
-                cp.vx = -dirx * (0.4f + 1.4f * Rand01()) + (Rand01() - 0.5f) * 1.0f; cp.vz = -dirz * (0.4f + 1.4f * Rand01()) + (Rand01() - 0.5f) * 1.0f; cp.vy = 1.2f + 2.6f * Rand01();
-                cp.age = 0.f; cp.life = 0.5f + 0.7f * Rand01(); cp.size = size * (0.6f + 0.8f * Rand01()); cp.rot = Rand01() * 6.2832f;
-                cp.kind = ClipKindAt(cp.x, cp.z, Rand01()); if (cp.kind == 1) cp.size *= 1.4f; if (cp.kind == 2) { cp.size *= 3.0f; cp.life *= 0.6f; cp.vy *= 0.5f; }
-                s_clips.push_back(cp);
-            }
-        }
-      } else s_clips.clear(); }
-    s_prev.assign(&pos[0][0], &pos[0][0] + cnt * 2); s_pl.swap(plNow);
-    // (08/11) huecos del pasto arrancado (cola de EmitClods) y huellas en el desgaste (marcas que quedan)
-    for (const WearBrush& wb : s_wearQueue) { if (nb >= kMaxPlayers) break; brush[nb][0] = wb.u; brush[nb][1] = wb.v; brush[nb][2] = wb.k * rate; brush[nb][3] = wb.rad; nb++; }
+    // (11/11) recortes v2: los recortes salen en la pisada (EmitStrike, arriba); w116 = 0 los borra
+    if (g_cfg.live[116][3] < 0.5f) s_clips.clear();
+    BootDirtUpdate(plNow, dtP);   // (11/11 4wp0pj) botines sucios por jugador
+    s_prev.assign(&pos[0][0], &pos[0][0] + cnt * 2); s_pl.swap(plNow); s_plGen++;
+    // (08/11) huecos del pasto arrancado (cola de EmitStrike) y huellas en el desgaste (marcas que quedan)
+    // (12/11) desgaste real: la pisada fuerte deja su marca aunque las huellas (x389) esten apagadas, mas cuanto mas fuerte
+    if (real && simK > 0.5f) for (const PlayerPrev& pp : s_pl) { if (!pp.printDue || pp.printK < 0.12f) continue;
+        WearStamp(pp.printX, pp.printZ, 0.022f * aK * std::min(pp.printK, 1.5f) * rate, 0.15f); }
+    for (const WearBrush& wb : s_wearQueue) { if (nb >= kWearBrushes) break; brush[nb][0] = wb.u; brush[nb][1] = wb.v; brush[nb][2] = wb.k * (real ? 1.f : rate); brush[nb][3] = wb.rad; nb++; }
     s_wearQueue.clear();
-    if (FpOn() > 0.5f) for (const PlayerPrev& pp : s_pl) { if (nb >= kMaxPlayers) break; if (!pp.printDue) continue;
-        float kf = 0.012f * FpForce() * rate * (1.f + 2.f * pp.skid * kAct); brush[nb][0] = pp.printX / 140.f + 0.5f; brush[nb][1] = pp.printZ / 79.f + 0.5f; brush[nb][2] = kf; brush[nb][3] = 0.14f; nb++;
+    if (FpOn() > 0.5f) for (const PlayerPrev& pp : s_pl) { if (nb >= kWearBrushes) break; if (!pp.printDue) continue;
+        float kf = 0.012f * FpForce() * rate * (1.f + 2.f * pp.skid * kAct) * (real ? simK : 1.f); brush[nb][0] = pp.printX / 140.f + 0.5f; brush[nb][1] = pp.printZ / 79.f + 0.5f; brush[nb][2] = kf; brush[nb][3] = 0.14f; nb++;
         WearCpuAdd(brush[nb - 1][0], brush[nb - 1][1], kf, 0.14f); }
     if (!s_vs || !s_ps) return;
     // subir pinceles y dibujar
-    D3D11_MAPPED_SUBRESOURCE mc; if (FAILED(g_dev.imm->Map(s_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mc))) return;
-    float* cbp = (float*)mc.pData; cbp[0] = (float)nb; cbp[1] = 140.f; cbp[2] = 79.f; cbp[3] = 0.f;
-    memcpy(cbp + 4, brush, nb * 16); g_dev.imm->Unmap(s_cb, 0);
+    if (nb <= 0) return;
     ID3D11DeviceContext* c = g_dev.imm;
     ID3D11RenderTargetView* oRT[8] = {}; ID3D11DepthStencilView* oDS = nullptr; c->OMGetRenderTargets(8, oRT, &oDS);
     UINT nvp = 8; D3D11_VIEWPORT ovp[8]; c->RSGetViewports(&nvp, ovp);
@@ -658,7 +899,13 @@ void PitchWearPresent() {
     c->IASetInputLayout(nullptr); c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
     c->RSSetState(s_rs); c->OMSetDepthStencilState(s_dss, 0); float bf[4] = {}; c->OMSetBlendState(s_bsAdd, bf, 0xffffffff);
     c->VSSetConstantBuffers(0, 1, &s_cb);
-    c->DrawInstanced(4, (UINT)nb, 0, 0);
+    for (int b0 = 0; b0 < nb; b0 += kMaxPlayers) {   // (12/11) de a 48 pinceles (tamano del cbuffer del VS)
+        const int nn = std::min(nb - b0, kMaxPlayers);
+        D3D11_MAPPED_SUBRESOURCE mc; if (FAILED(c->Map(s_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mc))) break;
+        float* cbp = (float*)mc.pData; cbp[0] = (float)nn; cbp[1] = 140.f; cbp[2] = 79.f; cbp[3] = 0.f;
+        memcpy(cbp + 4, &brush[b0][0], nn * 16); c->Unmap(s_cb, 0);
+        c->DrawInstanced(4, (UINT)nn, 0, 0);
+    }
     // restaurar
     c->OMSetRenderTargets(8, oRT, oDS); for (auto* v : oRT) if (v) v->Release(); if (oDS) oDS->Release();
     c->RSSetViewports(nvp, ovp);

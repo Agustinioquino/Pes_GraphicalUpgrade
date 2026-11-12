@@ -93,6 +93,7 @@ cbuffer PESLightCopyC : register(b13)
   float4 pLc_color;
 }
 
+#include "pes_vista_motor.hlsli"   // PES21 (11/11, Motor en tiempo real): vistas del motor (fila 429)
 void main(
   float4 v0 : SV_Position0,
   float2 v1 : TEXCOORD0,
@@ -550,8 +551,46 @@ void main(
       // (08/11 y, Agustin: "como esto afecta a la pelota por abajo") w407: cerca del suelo el pasto al sol ocupa casi toda la mitad de abajo
       // del cielo que ve el objeto (la pelota, los botines): rebote hasta 2.5x y con el verde del cesped (sin desaturar); 0 = como antes
       { float kL = lowK * clamp(IniParams.Load(int2(407,0)).w, 0.0, 2.0);
-        if (kL > 0.001) { float3 tg = TB.y > 0.01 ? TB.xyz * 1.35 : float3(0.14, 0.24, 0.07); turf = lerp(turf, tg, saturate(0.7 * kL)) * (1.0 + 0.75 * kL); } }
+        // (11/11 g, Agustin: "el rebote de la luz en la pelota" se ve raro, captura 13.54: la mitad de abajo verde oliva) el verde del cesped
+        // medido llega mas gris (60 %; el pasto al sol devuelve tambien luz blanca de la cera de las hojas) y hasta 1.5x en vez de 1.75x
+        // (11/11 h) Agustin con la tanda 1: "le falta ... la pelota del rebote de la luz": el oliva oscuro venia sobre todo de la oclusion
+        // ambiental de las hojas de delante (arreglado en pes_gtao_ps); el rebote vuelve a 85 % del verde, algo dorado, hasta 1.65x
+        if (kL > 0.001) { float3 tg = TB.y > 0.01 ? TB.xyz * 1.35 : float3(0.14, 0.24, 0.07); tg = lerp(dot(tg, float3(0.2126, 0.7152, 0.0722)).xxx, tg, 0.85) * float3(1.06, 1.0, 0.86);
+          turf = lerp(turf, tg, saturate(0.7 * kL)) * (1.0 + 0.65 * kL);
+          // (11/11 n, Agustin: "en los botines no noto el rebote de la luz del pasto", "y en la pelota") lo que la pelota y los botines
+          // reciben a la SOMBRA (abajo, el lado de atras) es casi todo la luz de ambiente del juego, gris / celeste: el rebote sumado quedaba
+          // chico al lado. Cerca del suelo esa luz viene sobre todo del pasto al sol: se tine con su verde (mismo brillo, otro color). Solo
+          // donde no da el sol directo (la cara al sol queda igual), mas abajo y mirando hacia el suelo mas; w407 2 = el doble
+          float3 Ls7 = normalize(pLc_dir.xyz);
+          float shP7 = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
+          float dir7 = saturate(dot(Nb, Ls7) * 3.0) * shP7;                    // 1 = le da el sol de lleno
+          float3 tgN = tg / max(dot(tg, float3(0.2126, 0.7152, 0.0722)), 1e-4);
+          tgN = lerp(float3(1.0, 1.0, 1.0), tgN, 0.75);
+          float kT7 = saturate(0.55 * kL) * saturate(0.35 + 0.9 * fGround) * (1.0 - dir7) * lerp(0.45, 1.0, shadeB) * smoothstep(0.0, 0.15, sunUp);
+          r2.xyz *= lerp(float3(1.0, 1.0, 1.0), tgN, kT7); } }
       r2.xyz += sunC * sunUp * turf * shadeB * skyTint * fGround3 * max(BG.x, 0.0) * saturate((120.0 - zb) / 40.0) * PESAmbGain();
+    }
+  }
+  // === PES21 (12/11, Agustin: "que la pelota reaccione de mejor manera en la luz con el pasto, y sus sombras") w436 PELOTA EN EL PASTO: lo
+  // que queda DENTRO del pasto natural (la parte de abajo de la pelota hundida en el nido, la suela y el taco de los botines) recibe solo la
+  // luz que pasa entre las hojas: menos luz (sol, ambiente y brillo) y verdosa (la que atraviesa las hojas), mas cuanto mas abajo, con un
+  // borde suave a la altura del corte (w296 en mm + el nido). Arriba del pasto no cambia. Nunca sobre el cesped (tipo 3)
+  { float kBp = clamp(IniParams.Load(int2(436,0)).w, 0.0, 2.0);
+    float zbp = PESLinZ(uvC);
+    if (cmpOn && kBp > 0.001 && tyC != 3 && zbp > 0.1 && zbp < 60.0 && IniParams.Load(int2(104,0)).x > 0.5 && IniParams.Load(int2(407,0)).x < 0.5) {
+      float3 upP = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
+      { float3 LdP = pLc_dir.xyz; if (dot(LdP, LdP) > 1e-6 && dot(LdP, upP) < 0) upP = -upP; }
+      float2 sP = uvC * float2(2, -2) + float2(-1, 1);
+      float3 Pp = float3((sP - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zbp, zbp);
+      float hPp = g_psScene.m_eyepos.y + dot(Pp, upP);                        // altura del pixel sobre la cancha (m)
+      float mmP = IniParams.Load(int2(296,0)).w; mmP = mmP > 1.0 ? clamp(mmP, 15.0, 80.0) : 28.0;
+      float HgP = mmP * 0.00115 + 0.012;                                         // alto del pasto (m) + el nido de la pelota
+      float inG = (1.0 - smoothstep(0.15 * HgP, HgP, hPp)) * step(-0.05, hPp);
+      if (inG > 0.001) {
+        float kG2 = saturate(inG * 0.60 * kBp);
+        r2.xyz *= lerp(float3(1.0, 1.0, 1.0), float3(0.60, 0.72, 0.48), kG2);   // menos luz y verdosa
+        r1.xyz *= 1.0 - 0.6 * kG2;                                             // el brillo tambien se apaga entre las hojas
+      }
     }
   }
   // === PES21 luz de cielo (17/10): ambiente hemisferico. Lo que mira hacia arriba recibe un poco de azul del cielo,
@@ -648,6 +687,32 @@ void main(
       }
     }
   }
+  // === PES21 (12/11, Agustin: "que el color del cielo tambien importe para su shader un poco") y436 CIELO EN EL PASTO (tipo 3), de dia. La
+  // luz de cielo de 314 llegaba de lleno solo a la sombra: aca un poco de luz con el COLOR DEL CIELO (cielo fisico 150 o el de la niebla)
+  // tambien en lo que esta al sol, mas en lo que mira hacia arriba (las puntas ven todo el cielo; la raiz y los costados menos). Celeste con
+  // cielo azul, calido al atardecer, gris nublado; de noche nada (las torres son otra luz). El brillo del cielo en la cera va mas abajo (151)
+  { float kSkG = clamp(IniParams.Load(int2(436,0)).y, 0.0, 2.0);
+    if (geoOk && kSkG > 0.001 && tyC == 3 && zsk < 400.0 && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {
+      float3 scG = max(pLc_color.xyz, 0.0);
+      float warmG = saturate((scG.r / max(scG.b, 1e-4) - 0.85) * 4.0);
+      float3 LdG = normalize(pLc_dir.xyz);
+      float3 upG = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
+      if (dot(LdG, upG) < 0) upG = -upG;
+      float dayG = smoothstep(0.0, 0.25, saturate(dot(LdG, upG))) * warmG;
+      if (dayG > 0.01) {
+        float3 sunG = scG * g_psScene.m_exposure.zzz;
+        float lumG = dot(sunG, float3(0.3, 0.5, 0.2));
+        float3 skyG = float3(0.80, 0.93, 1.18);
+        { float4 SKg = IniParams.Load(int2(150,0));
+          if (SKg.y > 0.01) { float3 t = (sunG / max(lumG, 1e-4)) * SKg.xyz; skyG = t / max(dot(t, float3(0.3, 0.5, 0.2)), 1e-4); }
+          else { float3 hor = max(g_psScene.m_fogColor.xyz, 0.0); float lh = dot(hor, float3(0.3, 0.5, 0.2));
+                 if (lh > 1e-4) { skyG = hor / lh * float3(0.85, 0.95, 1.15); skyG /= max(dot(skyG, float3(0.3, 0.5, 0.2)), 1e-4); } } }
+        float upF = saturate(0.5 + 0.5 * dot(Nsk, upG));
+        float aoG = lerp(1.0, saturate(inOcclusion.SampleLevel(g_samplerLinear_Clamp_s, uvC, 0).x), 0.5);
+        r2.xyz += lumG * skyG * 0.045 * kSkG * upF * upF * dayG * aoG * saturate((400.0 - zsk) / 120.0) * PESAmbGain();
+      }
+    }
+  }
   // === PES21 (07/11) color en la sombra (z109): a la sombra del sol el juego deja una luz gris y plana ('todo muy opaco'). La luz
   // real de una sombra de dia es cielo + rebote, con color propio: se sube la saturacion solo en lo que el shadow map marca a la
   // sombra, de dia con sol (de noche las torres no), conservando la luminancia. 0 = apagado, 0.25 = suave, 0.5 = marcado.
@@ -717,16 +782,32 @@ void main(
         if (lit > 0.001) {
           float3 c = r2.xyz;
           float lum = dot(c, float3(0.2126, 0.7152, 0.0722));
+          // (11/11 g, Agustin: "la luz se ve rara" con el pasto natural, lima saturado) natural (x407 = 0): 60 % del tinte y la saturacion
+          float natP = IniParams.Load(int2(407,0)).x < 0.5 ? 0.6 : 1.0;
           float3 warm = lerp(float3(1.10, 1.16, 0.62), float3(1.20, 1.10, 0.55), 1.0 - sunUp);   // verde amarillo; con sol bajo mas dorado
-          c *= lerp(float3(1.0, 1.0, 1.0), warm, saturate(0.55 * lit));
+          c *= lerp(float3(1.0, 1.0, 1.0), warm, saturate(0.55 * lit * natP));
           float lum2 = dot(c, float3(0.2126, 0.7152, 0.0722));
-          c = max(lerp(lum2.xxx, c, 1.0 + 0.45 * clamp(PS4.y, 0.0, 2.0) * saturate(lit)), 0.0);
+          // (11/11 h, referencia de Agustin: puntas al sol PALIDAS, casi blanco crema, no lima) natural: la luz fuerte casi no satura (0.15)
+          c = max(lerp(lum2.xxx, c, 1.0 + (natP < 0.99 ? 0.15 : 0.45 * natP) * clamp(PS4.y, 0.0, 2.0) * saturate(lit)), 0.0);
           c *= (lum / max(lum2, 1e-5)) * (1.0 + 0.22 * saturate(lit));      // conserva el brillo y lo sube un poco: luz fuerte
           r2.xyz = c;
           float fwd = saturate(dot(Ld, Vsk)), side = saturate(1.0 - abs(dot(Ld, Vsk)));
           float3 sunC = sc * g_psScene.m_exposure.zzz;
           float glow = (0.55 * pow(fwd, 2.0) + 0.30 * side) * lerp(0.6, 1.4, saturate(trC)) * clamp(PS4.z, 0.0, 2.0);
-          r2.xyz += sunC * glow * lit * 0.10 * float3(0.80, 1.0, 0.30);
+          // (11/11 n, Agustin: "hacer un poco mas notorio las puntas con un traspaso de la luz a contraluz") natural: a contraluz la punta
+          // fina (trC alto) se enciende mas; de frente igual que antes
+          // (12/11, Agustin con la captura del pasto largo: "que el sol pinte las puntas un poco mas al ser luz de contraluz o cuando le da el
+          // sol directamente") z436: la punta (trC alto: la mas fina y translucida, medida en mm en 18afff) a contraluz se enciende mas y al sol
+          // directo toma su verde amarillo palido (no lima: sigue la referencia de puntas crema)
+          float kTp = clamp(IniParams.Load(int2(436,0)).z, 0.0, 2.0);
+          if (natP < 0.99) glow += 0.40 * (1.0 + 0.6 * kTp) * pow(fwd, 2.0) * smoothstep(0.35, 0.9, saturate(trC)) * clamp(PS4.z, 0.0, 2.0);
+          if (natP < 0.99 && kTp > 0.001) {
+            float tipT = smoothstep(0.40, 0.92, saturate(trC));
+            float lumP = dot(r2.xyz, float3(0.2126, 0.7152, 0.0722));
+            float3 cP = r2.xyz * lerp(float3(1.0, 1.0, 1.0), float3(1.10, 1.13, 0.80), saturate(0.45 * lit * tipT * kTp));
+            r2.xyz = cP * (lumP / max(dot(cP, float3(0.2126, 0.7152, 0.0722)), 1e-5)) * (1.0 + 0.10 * lit * tipT * kTp);
+          }
+          r2.xyz += sunC * glow * lit * 0.10 * (natP < 0.99 ? float3(0.95, 1.0, 0.74) : float3(0.80, 1.0, 0.30));   // (11/11 h) natural: brillo crema
         }
         // (08/11 ac) SOL BAJO (w415 de la DLL): amanecer / atardecer. La luz rasante pinta el pasto AL SOL con su propio tono: atardecer
         // naranja rojizo (la luz pasa por mas aire: pierde azul), amanecer mas frio y rosado (aire limpio y humedo); menos saturacion que a
@@ -1193,6 +1274,30 @@ void main(
       r0.xyw += env * sunLe * specE * soK * (skinC ? 0.1 : max(RS.y, 0.0));
     }
   }
+  { // === PES21 (12/11) y436 b) BRILLO DEL CIELO EN EL CESPED: 151 salta el pasto (tipo 3). La cera de las hojas refleja el cielo en angulo
+    // rasante: la cancha de lejos se ve un poco plateada / celeste con cielo azul, calida al atardecer. Panorama fisico desenfocado (150 /
+    // pes_skyenv), Fresnel de la cera (F0 0.035) con la rugosidad del G-buffer; a la sombra del estadio menos (se ve menos cielo)
+    float4 SKg2 = IniParams.Load(int2(150,0)); float kSk2 = clamp(IniParams.Load(int2(436,0)).y, 0.0, 2.0);
+    if (cmpOn && geoOk && kSk2 > 0.001 && tyC == 3 && SKg2.y > 0.01 && zsk < 400.0) {
+      float3 RvG = reflect(Vsk, Nsk);
+      float3 RwG = normalize(float3(dot(RvG, float3(g_psScene.m_view._m00, g_psScene.m_view._m01, g_psScene.m_view._m02)),
+                                    dot(RvG, float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12)),
+                                    dot(RvG, float3(g_psScene.m_view._m20, g_psScene.m_view._m21, g_psScene.m_view._m22))));
+      float rgG = saturate(gmC.x);
+      float uSkG = atan2(RwG.z, RwG.x) * 0.15915494 + 0.5;
+      float vSkG = clamp(sqrt(saturate(asin(saturate(RwG.y)) / 1.5707963)), 0.5 / 16.0, 1.0 - 0.5 / 16.0);
+      float3 envG = lerp(PESSkyEnv.SampleLevel(g_samplerLinear_Wrap_s, float3(uSkG, vSkG, 0), 0).xyz, PESSkyEnv.SampleLevel(g_samplerLinear_Wrap_s, float3(uSkG, vSkG, 1), 0).xyz, saturate(rgG * 1.7));
+      envG *= saturate(RwG.y * 6.0 + 0.15);                                       // hacia abajo la hoja ve pasto, no cielo
+      float NdVg = saturate(dot(Nsk, -Vsk));
+      float4 rrG = rgG * float4(-1.0, -0.0275, -0.572, 0.022) + float4(1.0, 0.0425, 1.04, -0.04);
+      float aG = min(rrG.x * rrG.x, exp2(-9.28 * NdVg)) * rrG.x + rrG.y;
+      float2 ABg = float2(-1.04, 1.04) * aG + rrG.zw;
+      float specG = (0.035 * ABg.x + ABg.y) * saturate(gmC.y * 10.0);
+      float shG2 = lerp(0.4, 1.0, saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x));
+      float sunLg = max(dot(max(pLc_color.xyz, 0.0), float3(0.2126, 0.7152, 0.0722)), 0.0) * g_psScene.m_exposure.z;
+      r0.xyw += envG * sunLg * specG * shG2 * saturate(aoRaw) * 0.5 * kSk2;
+    }
+  }
   { // PES21 carteles LED (20/10, 141): los shaders de los carteles marcan el pixel (rugosidad 253/255, especular 1/255, metal 0).
     // Un LED emite: se le suma luz propia en unidades fisicas (luminancia fija x la exposicion del motor), asi se ve encendido
     // en la sombra y de noche brilla mucho mas que lo iluminado (como en TV). El sol que le pega lo lava un poco (y141 = brillo,
@@ -1389,5 +1494,6 @@ void main(
       o0.xyz = ((bits >> (31 - bx)) & 1) ? float3(0.5, 0.5, 0.5) : float3(0, 0, 0);
     }
   }
+  PESVistaMotor(o0, v0.xy, 0.01);   // PES21 (11/11, Motor en tiempo real): vistas del motor (fila 429); va ultima para ganarle a las otras vistas de prueba
   return;
 }

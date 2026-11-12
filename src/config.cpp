@@ -139,6 +139,20 @@ static bool LoadConfigLocked() {
             if (kl == "menu_key") c.menuKey = VkFromName(v);
             else if (kl == "tutorials") c.tutorials = atoi(v.c_str()) != 0;
             else if (kl == "bloquear_teclado") c.blockKeys = std::clamp(atoi(v.c_str()), 0, 2);
+            else if (kl == "mouse_menus") c.menuMouse = atoi(v.c_str()) != 0 ? 1 : 0;   // (11/11) mouse en los menus nativos del juego
+            else if (kl == "mouse_menus_retraso") c.menuMouseDelay = std::clamp(atoi(v.c_str()), 0, 4);
+            else if (kl == "mouse_menus_cerca") c.menuMouseNear = atoi(v.c_str()) != 0 ? 1 : 0;
+            else if (kl == "tecla_mouse_menus") c.menuMouseKey = (v == "0" || v.empty()) ? 0 : VkFromName(v);
+            else if (kl == "ultima_tecla") c.keyHud = std::clamp(atoi(v.c_str()), 0, 4);   // (11/11) cuadrito con la ultima tecla apretada
+            else if (kl == "motor_pagina") c.motorPage = atoi(v.c_str()) != 0 ? 1 : 0;   // (11/11) filas nativas del Motor en el estudio
+            else if (kl == "motor_panel_x") c.motorPanelX = (float)atof(v.c_str());   // (11/11) panel del Motor corrido con el mouse (escenario 1920 x 1080)
+            else if (kl == "motor_panel_y") c.motorPanelY = (float)atof(v.c_str());
+            else if (kl == "motor_teclado") c.motorKeys = atoi(v.c_str()) != 0;      // (12/11) 1 = en el Motor el juego no ve el teclado (Esc = salir)
+            else if (kl == "motor_fondo") c.motorBg = atoi(v.c_str()) != 0;          // (11/11) 1 = fondo negro en el estudio del Motor
+            else if (kl == "motor_camara") c.motorCam = atoi(v.c_str()) != 0;        // (11/11) 1 = el Motor abre con la camara libre
+            else if (kl == "motor_gizmo") c.motorGizmo = atoi(v.c_str()) != 0;       // (11/11) 1 = gizmo de ejes arriba a la derecha
+            else if (kl == "motor_botones") c.motorHelpBar = atoi(v.c_str()) != 0;   // (11/11) 1 = deja la barra de botones del mando en la pagina del Motor
+            else if (kl == "motor_vestir") c.motorDress = atoi(v.c_str()) != 0 ? 1 : 0;
             else if (kl == "favoritos") c.favorites = v;
             else if (kl == "menu_seccion") c.menuSection = v;
             else if (kl == "ui_scale") c.uiScale = std::clamp((float)atof(v.c_str()), 0.7f, 2.0f);
@@ -548,13 +562,15 @@ void MatchWind(const MatchInfo& m, unsigned long long seed) {
 // (08/11) vistas de depuracion: Agustin: "opciones de diagnostico y debug de opciones avanzadas, sombras, efectos". Se juntan aca
 // para que (1) nunca se guarden ni arranquen prendidas, (2) "Apagar todo el debug" las apague de una y (3) la prueba automatica
 // fotografie cada vista. minOn = desde que valor (absoluto) es depuracion; safe = valor al apagarla (z314: 2 = depuracion, 1 = normal prendido)
-static const float kV12[] = { 2, 3, 4, 5, 6, 7, -3 }, kV380[] = { 1, 2, 3, 4, 5 }, kV107[] = { 1, 2, 3, 4 }, kV75[] = { 1, 2 }, kV27[] = { 1, 2 }, kV1[] = { 1 }, kV2[] = { 2 };
+static const float kV12[] = { 2, 3, 4, 5, 6, 7, -3 }, kV380[] = { 1, 2, 3, 4, 5 }, kV107[] = { 1, 2, 3, 4 }, kV75[] = { 1, 2 }, kV27[] = { 1, 2 }, kV1[] = { 1 }, kV2[] = { 2 }, kV429[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
 static const DebugParam kDebugParams[] = {
     { 12, 3, 0.5f, 0.0f, "Vista de diagnostico (rebote, sol y piel, contacto, nubes, cascadas, sombra, resolucion)", "Diagnostico", kV12, 7 },
     { 380, 3, 0.5f, 0.0f, "Vista de prueba de la luz del editor", "Editor", kV380, 5 },
     { 393, 0, 0.5f, 0.0f, "Pasto del mod bajo el jugador (editor, experimento)", "Editor", kV1, 1 },
     { 392, 0, 0.5f, 0.0f, "Menus del juego ocultos (vista completa del editor)", "Editor", kV1, 1 },
     { 426, 0, 0.5f, 0.0f, "Esqueleto: huesos en escena", "Diagnostico", kV1, 1 },   // (09/11 f) overlay.cpp DrawSkeletonView
+    { 429, 0, 0.5f, 0.0f, "Vista del motor (luz, normales, albedo, profundidad, oclusion, sombra, material)", "Diagnostico", kV429, 10 },   // (11/11 3icxbh) pes_vista_motor.hlsli
+    { 429, 1, 0.5f, 0.0f, "Vista del motor: alambre", "Diagnostico", kV1, 1 },   // (11/11 3icxbh) motorlink.cpp
     { 18, 2, 0.5f, 0.0f, "Zonas de la boca (dientes / encia / cavidad)", "Boca", kV1, 1 },
     { 27, 2, 0.5f, 0.0f, "Transpiracion: zonas / UV", "Piel", kV27, 2 },
     { 80, 0, 0.5f, 0.0f, "Arrugas de la ropa: compresion", "Ropa", kV1, 1 },
@@ -603,7 +619,7 @@ bool SaveConfigValues() {
         for (auto& g : g_cfg.groups) for (auto& sl : g.sliders) {
             if (!sl.ext.empty() || sl.idx != idx || sl.comp != comp || !sl.optVals.empty()) continue;
             float& v = g_cfg.live[idx][comp];
-            if (v < sl.lo || v > sl.hi) { float cl = v < sl.lo ? sl.lo : sl.hi; Log("guardar: %s = %g fuera del rango %g..%g del slider '%s': guardado %g", k.c_str(), v, sl.lo, sl.hi, sl.label.c_str(), cl); v = cl; }
+            if (v < (std::min)(sl.lo, sl.hi) || v > (std::max)(sl.lo, sl.hi)) { float cl = std::clamp(v, (std::min)(sl.lo, sl.hi), (std::max)(sl.lo, sl.hi));   /* (11/11 n) slider al reves (lo > hi) */ Log("guardar: %s = %g fuera del rango %g..%g del slider '%s': guardado %g", k.c_str(), v, sl.lo, sl.hi, sl.label.c_str(), cl); v = cl; }
         }
         char buf[64]; snprintf(buf, sizeof(buf), "%g", g_cfg.live[idx][comp]);
         // (08/11) Agustin: "la camara libre nunca la dejes prendida al cerrar el juego": x344 se guarda siempre en 0 (apagada);
@@ -927,6 +943,7 @@ void UpdateTimeParams() {
               float wn = sqrtf(wx * wx + wy * wy + wz * wz); if (wn > 1e-6f) { wx /= wn; wy /= wn; wz /= wn; }
               if (wy < 0) { wx = -wx; wy = -wy; wz = -wz; }   // siempre "hacia el sol"
               p[111][0] = wx; p[111][1] = wy; p[111][2] = wz; p[111][3] = asinf(std::clamp(wy, -1.f, 1.f)) * 57.2958f;
+              p[435][0] = M[1]; p[435][1] = M[5]; p[435][2] = M[9]; p[435][3] = 1.f;   // (12/11 4wp0pj) "arriba" del mundo en espacio de vista (botines sucios: la suela primero); no va al ini
               // (26/10) sol estable (312) para el cielo, el disco del sol, los rayos y las sombras de nubes: en la previa y en las
               // repeticiones el motor gira la luz de toma en toma (log de 7894072) y con la luz de cada toma el sol del cielo
               // saltaba de lugar y el dibujo de las nubes sobre la cancha cambiaba entero en cada corte. Se toma la ultima

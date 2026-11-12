@@ -129,7 +129,7 @@ void main(
   float2 pesWearB = float2(0.0, 0.0);   // PES21 pasto v3: (seco, pelado) de este pixel, se calcula una vez
   { // PES21 pasto v3: patron de corte sintetizado (franjas, damero, diagonal, rombos, circulos) en vez del grano del juego
     float4 Q4g = IniParams.Load(int2(104,0)), Q5g = IniParams.Load(int2(105,0));
-    if (Q4g.x > 0.5) { float4 Q7g = IniParams.Load(int2(107,0)); float lv = PESWearMap.Sample(g_samplerLinear_Clamp_s, v1.xy).x; pesWearB = PESWear(PESPitchMeters(v1.xy), v9.xz, Q4g.w, Q7g.x, Q7g.z, lv); }
+    if (Q4g.x > 0.5) { float4 Q7g = IniParams.Load(int2(107,0)); float lv = PESWearTest(PESWearMap.Sample(g_samplerLinear_Clamp_s, v1.xy).x, v1.xy, v9.xz); pesWearB = PESWear(PESPitchMeters(v1.xy), v9.xz, Q4g.w, Q7g.x, Q7g.z, lv); }
     if (Q4g.x > 0.5 && Q5g.x > 0.5) { r0.xyz = PESMowGrain(PESPitchMeters(v1.xy), r0.xyz, Q5g.x, Q5g.y, 0.55 * clamp(Q5g.z, 0.2, 3.0)); pesGrain = r0.xyz; }
   }
   r1.xyz = float3(0,0,1) * r0.xyz;
@@ -395,15 +395,21 @@ void main(
     }
   }
   { float3 cg = o0.xyz; PESGrassColorGrade(cg); o0.xyz = saturate(cg); }   // (25/10 b) color del pasto (112): matiz, verde, contraste
+  o0.xyz = saturate(PESNatShoulder(o0.xyz * PESNatGain()));   // (12/11) x433 brillo del natural: la misma ganancia que las tarjetas y las hojas 3D (pes_grass.hlsli)
   { // === PES21 pasto v3 (19/10): desgaste (seco / tierra) y zonas de color, con las mismas funciones que las hojas
     float4 Q4 = IniParams.Load(int2(104,0));
     if (Q4.x > 0.5) {
       float4 Q6 = IniParams.Load(int2(106,0)), Q7 = IniParams.Load(int2(107,0));
       float2 wxz = v9.xz;
       float2 wr = pesWearB;
+      // (11/11 g, Agustin: "la zona desgastada se ve muy desgastada y de un color raro") natural: menos seco y mucho menos tierra pelada
+      // (el pasto sigue ahi, mas corto: VS 498b30); la tierra que asoma se mezcla con pasto seco en vez de quedar gris marron
+      bool natW = IniParams.Load(int2(407,0)).x < 0.5;
+      if (natW) wr *= float2(0.6, 0.3);
       float3 c = o0.xyz * PESGrassZones(wxz, Q6.x);
       c = PESDryTint(c, wr.x * saturate(Q7.y) * 0.85);
       float3 dirt = PESDirt(wxz);
+      if (natW) dirt = lerp(dirt, PESDryTint(c, 1.0), 0.45);
       c = lerp(c, dirt, wr.y);
       o0.xyz = saturate(c);
       o2.y = saturate(o2.y * (1.0 - wr.y * 0.6 - wr.x * 0.25));   // tierra y pasto seco: mate
@@ -416,6 +422,16 @@ void main(
       { float3 cg = o0.xyz; float sp = o2.y, rg = o2.x; PESGroundLook(cg, sp, rg, PESGround()); o0.xyz = cg; o2.y = sp; o2.x = rg; }   // suelo humedo / seco
       if (Q7.w > 1.5 && Q7.w < 2.5) o0.xyz = float3(wr.x, wr.y, 0.0);   // depuracion: desgaste
     }
+  }
+  { // (12/11) y433 / z433: tono de la copa (luz que atraviesa las hojas a contraluz, puntas, brillo de las puntas mojadas) como promedio en el
+    // suelo, con el sol y la camara de este cuadro (PESNatCanopy, pes_grass.hlsli); la cal no
+    float3 pesEc = g_psScene.m_eyepos.xyz - v9.xyz; float pesDc = max(length(pesEc), 0.05);
+    float hh = IniParams.Load(int2(63,0)).z;
+    float pxc = abs(g_psScene.m_projection._m11) * (hh > 1.0 ? hh : 540.0) / pesDc;
+    float3 cc = o0.xyz; float spc = o2.y, rgc = o2.x;
+    PESNatCanopy(cc, spc, rgc, pesEc / pesDc, pxc);
+    float kLc = 1.0 - saturate(pesLine);
+    o0.xyz = saturate(lerp(o0.xyz, cc, kLc)); o2.y = lerp(o2.y, spc, kLc); o2.x = lerp(o2.x, rgc, kLc);
   }
   { // === PES21 pasto v3 (25/10): cesped lejano en la base (PESFarTurf, pes_grass.hlsli). Entra donde se va el nivel medio
     // del pasto 3D (tamano en pantalla < 35 px/m / densidad) y es pleno donde ya no hay hojas. y61 fuerza, z61 matas, w61 cobertura

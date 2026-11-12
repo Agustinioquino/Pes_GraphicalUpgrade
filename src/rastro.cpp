@@ -32,6 +32,8 @@
 
 namespace fx {
 
+std::atomic<int> g_simTick{-1};   // (12/11) tick del partido para el desgaste real (pitchwear.cpp), lo escribe hk_rel al final de cada tick
+
 std::string ModOff(void* p);
 
 namespace {
@@ -213,7 +215,9 @@ void hk_rel(void* view) {
     const uintptr_t ra = (uintptr_t)_ReturnAddress();
     if (ra > kTickEndLo && ra < kTickEndHi) {
         if (s_on.load(std::memory_order_relaxed)) { __try { Snapshot(); } __except (EXCEPTION_EXECUTE_HANDLER) {} }
-        if (s_ev.load(std::memory_order_relaxed)) { __try { EventTick(); } __except (EXCEPTION_EXECUTE_HANDLER) {} }
+        if (s_ev.load(std::memory_order_relaxed) && g_cfg.live[394][0] > 0.0f) { __try { EventTick(); } __except (EXCEPTION_EXECUTE_HANDLER) {} }
+        // (12/11) desgaste real (fila 431): el tick del partido avanza solo con el partido corriendo (no en pausa ni en las repeticiones)
+        __try { const uintptr_t reg = RdPtr(kRegGlobal); const uintptr_t mi = reg ? RdPtr(reg + 0x270) : 0; int tk = -1; if (mi) Rd((const void*)(mi + 0x1198), &tk, 4); g_simTick.store(tk, std::memory_order_relaxed); } __except (EXCEPTION_EXECUTE_HANDLER) {}
     }
     o_rel(view);
 }
@@ -387,7 +391,7 @@ void RastroPresent() {
 // el rastro este apagado. Solo lectura de MatchInfo. Se llama en cada Present despues de RastroPresent.
 void RastroEventosPresent() {
     static bool tried = false;
-    if (tried || g_cfg.live[394][0] <= 0.0f) return;
+    if (tried || (g_cfg.live[394][0] <= 0.0f && g_cfg.live[431][0] <= 0.5f)) return;   // (12/11) tambien para el desgaste real (reloj del partido)
     tried = true;
     HMODULE mod = GetModuleHandleW(nullptr);
     auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);

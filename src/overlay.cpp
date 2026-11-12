@@ -81,17 +81,100 @@ static void BuildFonts(float H) {
     Log("menu: letras para %.0f px de alto (x%.2f)", H, k);
 }
 
+
+// ---------------------------------------------------------------- (11/11) ultima tecla apretada
+// Agustin: un cuadrito semitransparente en una esquina con la ultima tecla del teclado. [PES21FX] ultima_tecla = 0 apagado,
+// 1 arriba izquierda, 2 arriba derecha, 3 abajo izquierda, 4 abajo derecha. Solo mira el teclado (GetAsyncKeyState) con la
+// ventana del juego al frente; no toca lo que recibe el juego.
+// (22:48, Agustin: "me referia que aparezca solo en el motor") solo se ve con el Motor en tiempo real abierto: su estudio 3D
+// (MotorPageActive, motorpage.cpp) o su panel (MotorPanelOpen). Fuera del Motor no se mira el teclado ni se dibuja nada.
+static int s_khVk = 0, s_khN = 0; static double s_khT = -1.0e9; static unsigned char s_khWas[256] = {};
+static const char* KeyHudName(int vk, char* buf, size_t n) {
+    if ((vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z')) { snprintf(buf, n, "%c", (char)vk); return buf; }
+    if (vk >= VK_F1 && vk <= VK_F24) { snprintf(buf, n, "F%d", vk - VK_F1 + 1); return buf; }
+    if (vk >= VK_NUMPAD0 && vk <= VK_NUMPAD9) { snprintf(buf, n, "Num %d", vk - VK_NUMPAD0); return buf; }
+    switch (vk) {
+    case VK_RETURN: return "Enter"; case VK_ESCAPE: return "Esc"; case VK_SPACE: return "Espacio"; case VK_TAB: return "Tab";
+    case VK_BACK: return "Retroceso"; case VK_DELETE: return "Supr"; case VK_INSERT: return "Insert"; case VK_HOME: return "Inicio";
+    case VK_END: return "Fin"; case VK_PRIOR: return "Re Pag"; case VK_NEXT: return "Av Pag"; case VK_UP: return "Flecha arriba";
+    case VK_DOWN: return "Flecha abajo"; case VK_LEFT: return "Flecha izquierda"; case VK_RIGHT: return "Flecha derecha";
+    case VK_SHIFT: return "Shift"; case VK_CONTROL: return "Ctrl"; case VK_MENU: return "Alt"; case VK_CAPITAL: return "Bloq Mayus";
+    case VK_PAUSE: return "Pausa"; case VK_SNAPSHOT: return "Impr Pant"; case VK_LWIN: case VK_RWIN: return "Windows";
+    case VK_ADD: return "Num +"; case VK_SUBTRACT: return "Num -"; case VK_MULTIPLY: return "Num *"; case VK_DIVIDE: return "Num /"; case VK_DECIMAL: return "Num .";
+    }
+    const UINT sc = MapVirtualKeyA((UINT)vk, MAPVK_VK_TO_VSC);
+    if (sc && GetKeyNameTextA((LONG)(sc << 16), buf, (int)n) > 0) return buf;
+    snprintf(buf, n, "Tecla 0x%02X", vk); return buf;
+}
+// una vez por cuadro: anota la tecla recien apretada. Devuelve si hay que dibujar el cuadrito
+static bool KeyHudPoll() {
+    if (g_cfg.keyHud <= 0) return false;
+    if (!MotorPageActive() && !MotorPanelOpen()) { if (s_khVk) { s_khVk = 0; s_khN = 0; memset(s_khWas, 0, sizeof s_khWas); } return false; }
+    if (s_hwnd && GetForegroundWindow() == s_hwnd) {
+        for (int vk = 8; vk < 255; vk++) {
+            if (vk >= VK_LSHIFT && vk <= VK_RMENU) continue;            // ya entran como Shift / Ctrl / Alt
+            const unsigned char d = (GetAsyncKeyState(vk) & 0x8000) ? 1 : 0;
+            if (d && !s_khWas[vk]) { s_khN = (vk == s_khVk && Now() - s_khT < 1.5) ? s_khN + 1 : 1; s_khVk = vk; s_khT = Now(); }
+            s_khWas[vk] = d;
+        }
+    } else memset(s_khWas, 0, sizeof s_khWas);
+    return s_khVk != 0;
+}
+// (11/11, Agustin 22:29: "que muestre un icono de la tecla") la tecla se dibuja como una tecla de teclado: base oscura, cara clara
+// con brillo arriba y el nombre adentro; las flechas van con su triangulo y la barra espaciadora ancha.
+static void KeyHudDraw() {
+    char nb[64]; const char* nm = KeyHudName(s_khVk, nb, sizeof nb);
+    const int arrow = s_khVk == VK_UP ? 1 : s_khVk == VK_DOWN ? 2 : s_khVk == VK_LEFT ? 3 : s_khVk == VK_RIGHT ? 4 : 0;
+    ImDrawList* dl = ImGui::GetForegroundDrawList(); const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    const float k = std::max(1.0f, ds.y / 1080.0f), fs = 24.0f * k, mg = 22.0f * k, pad = 8.0f * k;
+    ImFont* f = ImGui::GetFont(); const ImVec2 ts = arrow ? ImVec2(fs, fs) : f->CalcTextSizeA(fs, FLT_MAX, 0.0f, nm);
+    const float kh = 50.0f * k;                                                                   // alto de la tecla
+    float kw = std::max(kh, ts.x + 26.0f * k); if (s_khVk == VK_SPACE) kw = std::max(kw, 170.0f * k);   // ancho: cuadrada si es una letra
+    char rep[16] = ""; if (s_khN > 1) snprintf(rep, sizeof rep, "x%d", s_khN);
+    const float fr = 17.0f * k; const ImVec2 rs = rep[0] ? f->CalcTextSizeA(fr, FLT_MAX, 0.0f, rep) : ImVec2(0, 0);
+    const float w = pad * 2.0f + kw + (rep[0] ? rs.x + 8.0f * k : 0.0f), h = pad * 2.0f + kh; const int c = std::clamp(g_cfg.keyHud, 1, 4);
+    const float x = (c == 1 || c == 3) ? mg : ds.x - mg - w, y = (c <= 2) ? mg : ds.y - mg - h;
+    const double age = Now() - s_khT; const float a = age < 1.2 ? 1.0f : (age < 2.0 ? 1.0f - 0.5f * (float)((age - 1.2) / 0.8) : 0.5f);   // recien apretada se ve fuerte; despues queda tenue
+    const float push = age < 0.12 ? 2.5f * k : 0.0f;                                              // recien apretada: la tecla baja un poco
+    auto A = [a](int v) { return (int)((float)v * a); };
+    dl->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + h), IM_COL32(8, 12, 20, A(120)), 9.0f * k);                       // fondo semitransparente
+    const float kx = x + pad, ky = y + pad, r = 7.0f * k, lip = 6.0f * k;                         // lip = canto de abajo de la tecla
+    dl->AddRectFilled(ImVec2(kx, ky + push), ImVec2(kx + kw, ky + kh), IM_COL32(38, 42, 52, A(235)), r);                // base (canto)
+    const ImVec2 f0(kx + 2.0f * k, ky + push + 1.0f * k), f1(kx + kw - 2.0f * k, ky + kh - lip + push * 0.6f);         // cara de arriba
+    dl->AddRectFilled(f0, f1, IM_COL32(236, 239, 244, A(240)), r - 1.0f * k);
+    dl->AddRectFilled(f0, ImVec2(f1.x, f0.y + (f1.y - f0.y) * 0.45f), IM_COL32(255, 255, 255, A(70)), r - 1.0f * k);    // brillo
+    dl->AddRect(ImVec2(kx, ky + push), ImVec2(kx + kw, ky + kh), IM_COL32(0, 0, 0, A(170)), r, 0, 1.2f * k);
+    const ImVec2 ctr((f0.x + f1.x) * 0.5f, (f0.y + f1.y) * 0.5f); const ImU32 ink = IM_COL32(22, 26, 34, A(255));
+    if (arrow) {
+        const float q = 9.0f * k; ImVec2 p0, p1, p2;
+        if (arrow == 1) { p0 = ImVec2(ctr.x, ctr.y - q); p1 = ImVec2(ctr.x - q, ctr.y + q * 0.7f); p2 = ImVec2(ctr.x + q, ctr.y + q * 0.7f); }
+        else if (arrow == 2) { p0 = ImVec2(ctr.x, ctr.y + q); p1 = ImVec2(ctr.x + q, ctr.y - q * 0.7f); p2 = ImVec2(ctr.x - q, ctr.y - q * 0.7f); }
+        else if (arrow == 3) { p0 = ImVec2(ctr.x - q, ctr.y); p1 = ImVec2(ctr.x + q * 0.7f, ctr.y + q); p2 = ImVec2(ctr.x + q * 0.7f, ctr.y - q); }
+        else { p0 = ImVec2(ctr.x + q, ctr.y); p1 = ImVec2(ctr.x - q * 0.7f, ctr.y - q); p2 = ImVec2(ctr.x - q * 0.7f, ctr.y + q); }
+        dl->AddTriangleFilled(p0, p1, p2, ink);
+    } else if (s_khVk == VK_SPACE) {
+        dl->AddRectFilled(ImVec2(ctr.x - kw * 0.28f, ctr.y + 5.0f * k), ImVec2(ctr.x + kw * 0.28f, ctr.y + 8.0f * k), ink, 1.5f * k);   // la rayita de la barra
+        const ImVec2 t2 = f->CalcTextSizeA(fr, FLT_MAX, 0.0f, nm);
+        dl->AddText(f, fr, ImVec2(ctr.x - t2.x * 0.5f, ctr.y - t2.y * 0.5f - 6.0f * k), ink, nm);
+    } else dl->AddText(f, fs, ImVec2(ctr.x - ts.x * 0.5f, ctr.y - ts.y * 0.5f), ink, nm);
+    if (rep[0]) dl->AddText(f, fr, ImVec2(kx + kw + 8.0f * k, y + (h - rs.y) * 0.5f), IM_COL32(255, 255, 255, A(230)), rep);
+}
+
+HWND OverlayHwnd() { return s_hwnd; }   // (11/11) menumouse.cpp
 void OverlayResize() { if (s_rtv) { s_rtv->Release(); s_rtv = nullptr; } }
 
 static LRESULT CALLBACK MenuProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     // (1/11) rueda del mouse para el zoom de la camara libre (mensaje normal o raw input, por si el juego pide NOLEGACY)
-    if (!g_menuOpen && FreeCamActive()) {
-        if (m == WM_MOUSEWHEEL) FreeCamWheel((int)GET_WHEEL_DELTA_WPARAM(w));
+    // (11/11) sin camara libre la rueda va a los menus nativos del juego (menumouse.cpp: arriba / abajo)
+    if (!g_menuOpen) {
+        int wd = 0;
+        if (m == WM_MOUSEWHEEL) wd = (int)GET_WHEEL_DELTA_WPARAM(w);
         else if (m == WM_INPUT) {
             RAWINPUT ri{}; UINT sz = sizeof(ri);
             if (GetRawInputData((HRAWINPUT)l, RID_INPUT, &ri, &sz, sizeof(RAWINPUTHEADER)) != (UINT)-1 && ri.header.dwType == RIM_TYPEMOUSE &&
-                (ri.data.mouse.usButtonFlags & RI_MOUSE_WHEEL)) FreeCamWheel((int)(short)ri.data.mouse.usButtonData);
+                (ri.data.mouse.usButtonFlags & RI_MOUSE_WHEEL)) wd = (int)(short)ri.data.mouse.usButtonData;
         }
+        if (wd != 0) { if (FreeCamActive()) FreeCamWheel(wd); else MenuMouseWheel(wd); }
     }
     if ((g_menuOpen || g_inspectOn) && s_init) {
         ImGui_ImplWin32_WndProcHandler(h, m, w, l);
@@ -242,14 +325,14 @@ enum : unsigned {
     kIcoCamera = 0xf030, kIcoPad = 0xf11b, kIcoDiag = 0xf0f1, kIcoLayers = 0xf5fd, kIcoStar = 0xf005, kIcoPen = 0xf304, kIcoHistory = 0xf1da,
     kIcoSliders = 0xf1de, kIcoTools = 0xf7d9, kIcoGear = 0xf013, kIcoWarn = 0xf071, kIcoSave = 0xf0c7, kIcoUndo = 0xf2ea, kIcoRedo = 0xf2f9,
     kIcoRevert = 0xf0e2, kIcoEye = 0xf06e, kIcoEyeSlash = 0xf070, kIcoReload = 0xf021, kIcoSearch = 0xf002, kIcoX = 0xf00d, kIcoCompress = 0xf066, kIcoExpand = 0xf065,
-    kIcoFilter = 0xf0b0, kIcoDot = 0xf111, kIcoHelp = 0xf059, kIcoDown = 0xf078, kIcoRight = 0xf054, kIcoKeys = 0xf11c, kIcoMuscle = 0xf44b,
+    kIcoFilter = 0xf0b0, kIcoDot = 0xf111, kIcoHelp = 0xf059, kIcoDown = 0xf078, kIcoRight = 0xf054, kIcoKeys = 0xf11c, kIcoMuscle = 0xf44b, kIcoSeedling = 0xf4d8,
 };
 // categoria (0 escena, 1 jugadores, 2 otros), orden dentro de ella e icono de cada seccion (la clave es la seccion en espanol)
 static void SecInfo(const std::string& s, int& cat, int& ord, unsigned& ico) {
     struct E { const char* pre; int cat, ord; unsigned ico; };
     static const E kE[] = {
         { "Ilumin", 0, 0, kIcoLight }, { "Sombra", 0, 1, kIcoShadow }, { "Color", 0, 2, kIcoPalette }, { "Post", 0, 3, kIcoWand },
-        { "Cancha", 0, 4, kIcoBall }, { "Estadio", 0, 5, kIcoStadium },
+        { "Cancha", 0, 4, kIcoBall }, { "Pasto", 0, 5, kIcoSeedling }, { "Estadio", 0, 6, kIcoStadium },   // (11/11 m) Pasto: seccion propia (Agustin: "separado de la cancha y cielo")
         { "Cara", 1, 0, kIcoFace }, { "Piel", 1, 1, kIcoHand }, { "Pelo", 1, 2, kIcoHair }, { "Sudor", 1, 3, kIcoDrop },
         { "Cuerpo", 1, 4, kIcoBody }, { "Kits", 1, 5, kIcoShirt }, { "Ropa", 1, 6, kIcoWind },
         { "Diagn", 2, 9, kIcoDiag },
@@ -858,7 +941,7 @@ static void DrawGroup(MenuGroup& g, int gid) {
                 // (31/10) AlwaysClamp: el valor escrito con Ctrl+clic tambien queda dentro del rango del slider
                 // (x318 "Claridad del ojo" se guardaba en -1.17 / 2.61 con rango 0..1); ademas se recorta lo que
                 // venga de afuera (teclas, Avanzado) para que el ini nunca guarde un valor fuera del rango
-                if (!isExt && (val < sl.lo || val > sl.hi)) { float cl = val < sl.lo ? sl.lo : sl.hi; Log("menu: %c%d = %g fuera del rango %g..%g del slider '%s': recortado a %g", "xyzw"[sl.comp], sl.idx, val, sl.lo, sl.hi, sl.label.c_str(), cl); val = cl; }
+                if (!isExt && (val < (std::min)(sl.lo, sl.hi) || val > (std::max)(sl.lo, sl.hi))) { float cl = std::clamp(val, (std::min)(sl.lo, sl.hi), (std::max)(sl.lo, sl.hi));   /* (11/11 n) slider al reves (lo > hi) */ Log("menu: %c%d = %g fuera del rango %g..%g del slider '%s': recortado a %g", "xyzw"[sl.comp], sl.idx, val, sl.lo, sl.hi, sl.label.c_str(), cl); val = cl; }
                 char tipb[300];   // (08/11) el rango del slider en el aviso
                 { char a[40], b[40]; snprintf(a, sizeof a, sl.fmt.c_str(), sl.lo); snprintf(b, sizeof b, sl.fmt.c_str(), sl.hi);
                   snprintf(tipb, sizeof tipb, TRS("Va de %s a %s. Arrastra, o la rueda del mouse para el ajuste fino (Shift: mas fino). Doble clic o clic derecho: volver a lo guardado. Toca el numero para escribirlo."), a, b); }
@@ -971,10 +1054,14 @@ static const char* TutorialFor(const std::string& sec) {
         "Que hay aca: la tela de los kits (tejido, brillo tipo 'sheen', luz envolvente), dorsales y escudos con relieve, y la sombra limpia sobre la ropa simulada.\n"
         "Por donde empezar: 1) 'Tejido next-gen' es el efecto principal: mira la camiseta de cerca. 2) Si aparecen franjas de sombra sobre la ropa que se mueve, 'Sombra limpia sobre los kits' mas alto. 3) El brillo de tela con cuidado: mucho = saten.\n"
         "Como probar: primer plano de la espalda de un jugador (dorsal) con sol de costado.";
-    if (sec.rfind("Cancha", 0) == 0) return
-        "Que hay aca: pasto (sombreado entre hojas, zonas secas, variacion), rebote de luz verde del pasto hacia los jugadores, y cielo.\n"
-        "Por donde empezar: 1) 'Rebote del pasto' tine un poco de verde la cara de abajo de piernas y short, como en TV. 2) El pasto se ve mejor en camara baja. 3) Los cambios de cielo se notan mas de tarde.\n"
+    if (sec.rfind("Pasto", 0) == 0) return   // (11/11 m) seccion propia del pasto (antes dentro de Cancha y cielo)
+        "Que hay aca: todo el pasto: el del mod (cerca y toda la cancha), el natural (alto en mm, hojas 3D de primerisimo plano y su relleno), color, luz, corte, viento, pisadas y desgaste.\n"
+        "Por donde empezar: 1) 'Pasto natural' > 'Alto del pasto (mm)': 28 = cancha profesional. 2) Si de cerca se ve el suelo entre las hojas, subi 'Relleno bajo las hojas 3D' o 'Cantidad de hojas 3D'. 3) El pasto se ve mejor en camara baja.\n"
         "Consejo: si el pasto queda 'empastado', baja la variacion macro.";
+    if (sec.rfind("Cancha", 0) == 0) return
+        "Que hay aca: la cancha mojada (reflejos), las nubes, el cielo y el sol visible. El pasto tiene su propia seccion (Pasto).\n"
+        "Por donde empezar: 1) Los cambios de cielo se notan mas de tarde. 2) Los reflejos de la cancha mojada solo con lluvia.\n"
+        "Consejo: el rebote de luz verde del pasto hacia los jugadores esta en Iluminacion.";
     if (sec.rfind("Color", 0) == 0) return
         "Que hay aca: el color final de la imagen: tono, contraste, saturacion, calidez de sombras y luces.\n"
         "Por donde empezar: 1) Cambios chicos: 0.05 ya se nota. 2) Ajusta con una escena de dia y una de noche, no solo una. 3) 'Ver original' para no perder la referencia.\n"
@@ -1341,13 +1428,30 @@ static void DrawSectionExtras(const std::string& sname) {
                 if (ImGui::Button(IcoL(kIcoX, TRS("Apagar todo el debug")).c_str())) DebugAllOff();
             } else ImGui::TextColored(ImVec4(0.45f, 0.88f, 0.55f, 1), "%s", TRS("Ninguna vista de depuracion prendida"));
             { bool sk = g_cfg.live[426][0] > 0.5f; if (ImGui::Checkbox(TRS("Ver el esqueleto (huesos en escena)"), &sk)) g_cfg.live[426][0] = sk ? 1.0f : 0.0f; }   // (09/11 f)
+            {   // (11/11 3icxbh) vistas del motor (fila 429): las mismas que maneja el Motor en tiempo real desde Sider (motorlink.cpp)
+                static const char* kVm[] = { "Normal", "Luz difusa", "Luz especular", "Normales", "Normales de mundo", "Albedo (sin luz)", "Profundidad", "Oclusion", "Sombra del sol", "Solo luz (sin texturas)", "Material" };
+                int vm = (int)(g_cfg.live[429][0] + 0.5f); if (vm < 0 || vm > 10) vm = 0;
+                ImGui::SetNextItemWidth(220.0f * UIK());
+                if (ImGui::BeginCombo(TRS("Vista del motor"), TRS(kVm[vm]))) {
+                    for (int i = 0; i <= 10; i++) if (ImGui::Selectable(TRS(kVm[i]), i == vm)) g_cfg.live[429][0] = (float)i;
+                    ImGui::EndCombo(); }
+                bool wf = g_cfg.live[429][1] > 0.5f; if (ImGui::Checkbox(TRS("Vista del motor: alambre"), &wf)) g_cfg.live[429][1] = wf ? 1.0f : 0.0f;
+                if (vm > 0) { float ct = g_cfg.live[429][2]; ImGui::SetNextItemWidth(220.0f * UIK());
+                    if (ImGui::SliderFloat(TRS("Pantalla partida (0 = toda la pantalla)"), &ct, 0.0f, 1.0f, "%.2f")) g_cfg.live[429][2] = ct; }
+            }
             ImGui::Spacing();
         }
         if (s_fontBold) ImGui::PushFont(s_fontBold);
         ImGui::TextUnformatted(IcoL(kIcoDiag, TRS("Prueba automatica")).c_str());
         if (s_fontBold) ImGui::PopFont();
         ImGui::TextWrapped("%s", TRS("Apaga un momento cada efecto prendido, mide cuantos ms cuesta (CPU y placa), si cambia la imagen y saca una foto; despues prende una por una las vistas de depuracion y las fotografia. Al final deja todo como estaba (no guarda nada en el ini) y escribe PES21FX\\diagnostico\\<fecha>\\ con resumen.txt, informe.json y las fotos, para que Claude lo lea. Con la camara quieta (repeticion en pausa o el editor); tarda 2 a 4 minutos. Esc la corta."));
-        if (!MenuTestActive()) { if (ImGui::Button(IcoL(kIcoDiag, TRS("Empezar la prueba")).c_str(), ImVec2(0, 0))) MenuTestStart(); }
+        if (!MenuTestActive()) { if (ImGui::Button(IcoL(kIcoDiag, TRS("Empezar la prueba")).c_str(), ImVec2(0, 0))) MenuTestStart();
+            // (11/11) buscar el cuelgue: para el reinicio de la placa al sacar "Ver original" en el partido (menutest.cpp MenuHangStart)
+            ImGui::SameLine(); if (ImGui::Button(IcoL(kIcoDiag, TRS("Buscar el cuelgue")).c_str(), ImVec2(0, 0))) MenuHangStart();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Para cuando la placa se reinicia con el mod prendido. Apaga todos los efectos, saca 'Ver original' y los vuelve a prender de a uno cada 4 segundos, anotando cada paso en el log antes de hacerlo. Si la placa se reinicia, el ultimo efecto anotado es el culpable. No guarda nada; con Esc se corta y todo vuelve a como estaba."));
+            // (11/11) la busqueda general dio "Cejas con hebras": ahora cual de sus opciones (hebras v3, pasada propia, sombra, barba...)
+            ImGui::SameLine(); if (ImGui::Button(IcoL(kIcoDiag, TRS("Buscar dentro de: Cejas con hebras")).c_str(), ImVec2(0, 0))) MenuHangStartGroup(74, 0);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Deja el resto del mod como esta, pone en 0 las opciones de Cejas con hebras, prende la tarjeta y devuelve cada opcion de a una cada 4 segundos, anotando antes cada paso. Si la placa se reinicia, la ultima opcion anotada es la culpable. No guarda nada.")); }
         else { if (ImGui::Button(IcoL(kIcoX, TRS("Cancelar")).c_str(), ImVec2(0, 0))) MenuTestStop();
                ImGui::SameLine(); ImGui::ProgressBar(MenuTestProgress(), ImVec2(std::max(120.0f * UIK(), ImGui::GetContentRegionAvail().x), 0)); }
         ImGui::PushTextWrapPos(0); ImGui::TextUnformatted(Utf8(MenuTestStatus()).c_str()); ImGui::PopTextWrapPos();
@@ -1375,7 +1479,7 @@ static void DrawSectionExtras(const std::string& sname) {
     if (sname.rfind("Ilumin", 0) == 0) { ImGui::TextDisabled("%s", LightMeterSummary().c_str()); ImGui::Spacing(); }
     if (sname.rfind("Diagn", 0) == 0 || sname.rfind("Debug", 0) == 0) { const std::string gm = GpuMeterSummary();   // (07/11) medidor de VRAM y de ms de GPU (x375)
         if (!gm.empty()) { ImGui::TextWrapped("%s", gm.c_str()); ImGui::Spacing(); } }
-    if (sname.rfind("Cancha", 0) == 0) { ImGui::TextDisabled(TRS("Pasto: parcelas lejanas del juego escaladas: %d en 3 s. Extendido: %d parcelas/cuadro (anillos %d/%d/%d), variante %u idx, camara %s (%.0f, %.0f), estado: %s"), g_grassDbg.sparseLast, g_grassDbg.patches, g_grassDbg.ring[0], g_grassDbg.ring[1], g_grassDbg.ring[2], g_grassDbg.lod, g_grassDbg.cam ? "ok" : "no", g_grassDbg.ex, g_grassDbg.ez, g_grassDbg.why ? g_grassDbg.why : "-"); ImGui::Spacing(); }
+    if (sname.rfind("Pasto", 0) == 0) { ImGui::TextDisabled(TRS("Pasto: parcelas lejanas del juego escaladas: %d en 3 s. Extendido: %d parcelas/cuadro (anillos %d/%d/%d), variante %u idx, camara %s (%.0f, %.0f), estado: %s"), g_grassDbg.sparseLast, g_grassDbg.patches, g_grassDbg.ring[0], g_grassDbg.ring[1], g_grassDbg.ring[2], g_grassDbg.lod, g_grassDbg.cam ? "ok" : "no", g_grassDbg.ex, g_grassDbg.ez, g_grassDbg.why ? g_grassDbg.why : "-"); ImGui::Spacing(); }
 }
 static void SectionLabel(const MenuGroup& g) {
     int cat, ord; unsigned ico; SecInfo(SecKey(g), cat, ord, ico);
@@ -1493,6 +1597,28 @@ static void DrawSettingsPage() {
         ImGui::SetNextItemWidth(260 * UIK());
         if (ImGui::Combo("##bloqteclas", &bk, kBlk, 3)) { g_cfg.blockKeys = bk; SaveOption("bloquear_teclado", std::to_string(bk)); }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Que el juego no reciba las teclas mientras escribis en el menu (buscador, nombres). 'No al escribir' = solo con un campo de texto activo; 'No con el menu' = mientras el menu esta abierto."));
+    }
+    {   // (11/11) mouse en los menus nativos del juego: [PES21FX] mouse_menus
+        bool mm = g_cfg.menuMouse != 0;
+        row(TRS("Mouse en los menus del juego"));
+        if (ImGui::Checkbox("##mousemenus", &mm)) { g_cfg.menuMouse = mm ? 1 : 0; SaveOption("mouse_menus", mm ? "1" : "0"); }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Los menus del juego eligen la fila que esta debajo del mouse. Clic = aceptar, clic derecho = volver, rueda = subir y bajar. Los menus siguen siendo los del juego. Al usar el control la flecha se va sola."));
+        if (mm) {   // (11/11 v2) el juego muestra la fila elegida 2 cuadros despues: la flecha espera lo mismo
+            int rt = std::clamp(g_cfg.menuMouseDelay, 0, 4);
+            row(TRS("Flecha del mouse: retraso (cuadros)"));
+            ImGui::SetNextItemWidth(200 * UIK());
+            if (ImGui::SliderInt("##mousemenusret", &rt, 0, 4)) g_cfg.menuMouseDelay = rt;
+            if (ImGui::IsItemDeactivatedAfterEdit()) SaveOption("mouse_menus_retraso", std::to_string(g_cfg.menuMouseDelay));
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("El juego tarda 2 cuadros en marcar la fila elegida. Con 2 la flecha y la fila marcada van juntas; con 0 la flecha va mas pegada a la mano pero la fila la sigue de atras."));
+        }
+    }
+    {   // (11/11) cuadrito con la ultima tecla apretada: [PES21FX] ultima_tecla
+        const char* kEsq[5] = { TRS("No"), TRS("Arriba a la izquierda"), TRS("Arriba a la derecha"), TRS("Abajo a la izquierda"), TRS("Abajo a la derecha") };
+        int kh = std::clamp(g_cfg.keyHud, 0, 4);
+        row(TRS("Ultima tecla apretada (solo en el Motor)"));
+        ImGui::SetNextItemWidth(260 * UIK());
+        if (ImGui::Combo("##ultimatecla", &kh, kEsq, 5)) { g_cfg.keyHud = kh; SaveOption("ultima_tecla", std::to_string(kh)); }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Un icono de tecla semitransparente en una esquina con la ultima tecla del teclado que apretaste. Solo se ve dentro del Motor en tiempo real."));
     }
     {
         row(TRS("Tamano del menu"));
@@ -2173,7 +2299,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
     // la barra de botones
     const bool hint = false;
     if (!g_menuOpen) { g_blockGameKeys = FreeCamBlocksKeys(); g_menuTyping = false; }   // (31/10) con la camara libre el juego tampoco ve el teclado
-    const bool camFree = FreeCamActive(); const float camSlow = TiempoFactor();   // (1/11) aviso en pantalla
+    const bool camFree = FreeCamActive() && !MotorPageActive(); const float camSlow = TiempoFactor();   // (1/11) aviso en pantalla
     const bool camHud = !g_menuOpen && (camFree || camSlow != 1.0f);
     const bool lightIcons = g_cfg.live[319][0] > 0.5f && g_cfg.live[297][0] > 0.5f && g_cfg.live[378][2] < 0.5f && SSSSEditorLightAge() < 0.5;   // (08/11) con la luz fija al mundo (z378) el icono (relativo a la camara) mentiria: no se dibuja   // (1/11) iconos de la luz del editor
     const bool sunCompass = g_cfg.live[175][0] > 0.5f && g_cfg.live[93][3] > 0.5f;   // (2/11) brujula del sol, solo en partido
@@ -2184,7 +2310,10 @@ void OverlayPresent(IDXGISwapChain* sc) {
     const bool menuShown = g_menuOpen || s_menuVis > 0.0f;
     FrameTimeTick();   // (08/11) diagnostico: tiempo de cada cuadro
     const bool skelView = g_cfg.live[426][0] > 0.5f;   // (09/11) la vista del esqueleto se dibuja tambien con el menu cerrado
-    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView) return;
+    float mmx = 0, mmy = 0; const bool mmCur = !g_menuOpen && MenuMouseCursor(&mmx, &mmy);   // (11/11) flecha del mouse sobre los menus del juego
+    const bool keyHud = KeyHudPoll();   // (11/11) cuadrito con la ultima tecla apretada
+    const bool gizmo = MotorGizmoPoll();   // (11/11) gizmo de camara del Motor (motorgizmo.cpp)
+    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView && !mmCur && !keyHud && !gizmo) return;
     if (!s_rtv) {
         ID3D11Texture2D* bb = nullptr;
         if (FAILED(sc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb)) || !bb) return;
@@ -2215,6 +2344,14 @@ void OverlayPresent(IDXGISwapChain* sc) {
     if (lightIcons) DrawEditorLightIcons();
     if (sunCompass && !g_menuOpen) DrawSunCompass();
     if (g_cfg.live[426][0] > 0.5f) DrawSkeletonView();   // (09/11 f) vista del esqueleto (Diagnostico)
+    if (mmCur) {   // (11/11) el juego esconde el cursor de Windows: una flecha chica donde esta el mouse (los menus son los del juego)
+        ImDrawList* dl = ImGui::GetForegroundDrawList(); const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f);
+        const ImVec2 a(mmx, mmy), b(mmx, mmy + 19.0f * k), c(mmx + 5.2f * k, mmy + 14.6f * k), d(mmx + 13.5f * k, mmy + 13.5f * k);
+        dl->AddTriangleFilled(a, b, c, IM_COL32(255, 255, 255, 255)); dl->AddTriangleFilled(a, c, d, IM_COL32(255, 255, 255, 255));
+        const ImVec2 pts[4] = { a, b, c, d }; dl->AddPolyline(pts, 4, IM_COL32(0, 0, 0, 255), ImDrawFlags_Closed, 1.4f * k);
+    }
+    if (gizmo) MotorGizmoDraw();
+    if (keyHud) KeyHudDraw();
     InspectDrawOverlay();
     // (31/10) teclas del juego: con 1 se bloquean solo mientras hay un campo de texto activo (buscador, nombres de presets)
     g_menuTyping = g_menuOpen && ImGui::GetIO().WantTextInput;

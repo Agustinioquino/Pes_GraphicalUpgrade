@@ -13,6 +13,7 @@
 #include <string>
 #include <cmath>
 #include <algorithm>
+#include <cstdarg>
 
 namespace fx {
 
@@ -44,11 +45,118 @@ static MenuTestState s_t;
 static ID3D11Texture2D* s_stage = nullptr;
 static UINT s_stW = 0, s_stH = 0; static DXGI_FORMAT s_stF = DXGI_FORMAT_UNKNOWN;
 
-bool MenuTestActive() { return s_t.active; }
+// (11/11, hilo reinicio de placa) "buscar el cuelgue": la placa se reinicia (TDR 0x887A0020) al sacar "Ver original" dentro del
+// partido. Arranca con todos los interruptores prendidos APAGADOS y el mod prendido (solo lo que no tiene interruptor), y vuelve a
+// prender los grupos de a uno, acumulando, con kHangWait segundos entre cada uno. Cada paso queda en PES21FX.log y en
+// PES21FX\diagnostico\cuelgue_<fecha>.txt (con fflush) ANTES de aplicarlo: si la placa se reinicia, el ultimo "prendo" antes de
+// "PLACA DE VIDEO REINICIADA" es el culpable. No guarda nada en el ini; al terminar (o con Esc / Cancelar) deja todo como estaba.
+struct HangStep { int idx = -1, comp = 0; float val = 0, orig = 0; std::string label, section; };   // val = lo que se prende, orig = lo que vuelve al final
+struct HangState {
+    bool active = false;
+    std::vector<HangStep> steps; size_t si = 0;
+    double next = 0; bool bypassSaved = false; size_t nGroups = 0;
+    FILE* f = nullptr;
+};
+static HangState s_h;
+static const double kHangWait = 4.0, kHangFirst = 8.0;   // segundos por paso (el TDR del driver salta a los ~2 s de una pasada colgada)
+static void HangLine(const char* fmt, ...) {
+    char b[700]; va_list ap; va_start(ap, fmt); vsnprintf(b, sizeof b, fmt, ap); va_end(ap);
+    Log("buscar cuelgue: %s", b);
+    if (s_h.f) { SYSTEMTIME st; GetLocalTime(&st); fprintf(s_h.f, "[%02d:%02d:%02d.%03d] %s\r\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, b); fflush(s_h.f); }
+}
+static bool HangSkip(const MenuGroup& g) {   // solo diagnostico, camara y ajustes quedan como estan (la ropa SI se prueba: es su simulacion en la placa)
+    return g.section.rfind("Diagn", 0) == 0 || g.section.rfind("C\xe1mara", 0) == 0 || g.section.rfind("Camara", 0) == 0
+        || g.section.rfind("Ajustes", 0) == 0 || g.section.rfind("Debug", 0) == 0;
+}
+static void HangFinish(const char* why) {
+    if (!s_h.active) return;
+    for (const HangStep& h : s_h.steps) g_cfg.live[h.idx][h.comp] = h.orig;   // todo como estaba (los que faltaban prender tambien)
+    g_cfg.bypass = s_h.bypassSaved;
+    HangLine("%s (%d de %d grupos prendidos); todo vuelve a como estaba, no se guardo nada", why, (int)s_h.si, (int)s_h.steps.size());
+    if (s_h.f) { fclose(s_h.f); s_h.f = nullptr; }
+    s_h.active = false;
+}
+void MenuHangStart() {
+    if (s_t.active || s_h.active) return;
+    s_h = HangState();
+    SYSTEMTIME st; GetLocalTime(&st); wchar_t n[64];
+    swprintf(n, 64, L"cuelgue_%04d%02d%02d_%02d%02d%02d.txt", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    const std::wstring root = g_cfg.baseDir + L"diagnostico\\"; CreateDirectoryW(root.c_str(), nullptr);
+    s_h.f = _wfopen((root + n).c_str(), L"wb");
+    int noToggle = 0, off = 0;
+    for (int i = 0; i < (int)g_cfg.groups.size(); i++) {
+        const MenuGroup& g = g_cfg.groups[i];
+        if (HangSkip(g)) continue;
+        if (g.tIdx < 0 || g.tIdx >= kParamCount) { noToggle++; continue; }
+        if (g_cfg.live[g.tIdx][g.tComp] < 0.5f) { off++; continue; }
+        HangStep h; h.idx = g.tIdx; h.comp = g.tComp; h.val = h.orig = g_cfg.live[g.tIdx][g.tComp]; h.label = g.title; h.section = g.section;
+        s_h.steps.push_back(h);
+    }
+    s_h.nGroups = g_cfg.groups.size(); s_h.bypassSaved = g_cfg.bypass;
+    HangLine("inicio: %d grupos prendidos a probar, %d ya apagados (no se tocan), %d sin interruptor (quedan prendidos desde el paso 0); %.0f s por paso",
+             (int)s_h.steps.size(), off, noToggle, kHangWait);
+    for (const HangStep& h : s_h.steps) g_cfg.live[h.idx][h.comp] = 0.0f;
+    HangLine("paso 0: todos esos grupos APAGADOS y \"Ver original\" sacado (mod prendido solo con lo que no tiene interruptor)");
+    g_cfg.bypass = false;
+    s_h.active = true; s_h.si = 0; s_h.next = Now() + kHangFirst;
+    s_t.status = "Buscando el cuelgue: paso 0 (todo apagado, mod prendido). No toques nada; Esc corta.";
+}
+static void HangPresent() {
+    if (GetAsyncKeyState(VK_ESCAPE) & 0x8000) { HangFinish("cortada con Esc"); s_t.status = "Busqueda del cuelgue cortada (Esc). Todo quedo como estaba."; return; }
+    if (g_cfg.groups.size() != s_h.nGroups) { HangFinish("cortada: se recargo la configuracion"); s_t.status = "Busqueda cortada: se recargo la configuracion"; return; }
+    if (Now() < s_h.next) return;
+    if (s_h.si >= s_h.steps.size()) {
+        HangFinish("TERMINO SIN CUELGUE: con todos los grupos prendidos de nuevo la placa siguio andando");
+        s_t.status = "Listo: no hubo cuelgue con todo prendido de a uno. Registro en PES21FX\\diagnostico\\cuelgue_<fecha>.txt";
+        return;
+    }
+    const HangStep& h = s_h.steps[s_h.si];
+    HangLine("paso %d/%d: prendo \"%s\" (%s, %c%d = %g)", (int)s_h.si + 1, (int)s_h.steps.size(), h.label.c_str(), h.section.c_str(), "xyzw"[h.comp], h.idx, h.val);
+    g_cfg.live[h.idx][h.comp] = h.val;
+    char b[300]; snprintf(b, sizeof b, "Buscando el cuelgue: %d/%d prendi %s. No toques nada; Esc corta.", (int)s_h.si + 1, (int)s_h.steps.size(), h.label.c_str());
+    s_t.status = b;
+    s_h.si++; s_h.next = Now() + kHangWait;
+}
+// (11/11) "buscar dentro del grupo": la busqueda general dio "Cejas con hebras" (x74). Con el resto del mod como esta (prendido),
+// apaga las opciones de ese grupo (selectores y deslizadores que pueden ir a 0: hebras v3, pasada propia, sombra entre hebras, barba,
+// pestanas, borde mixto...), prende el interruptor del grupo y despues devuelve cada opcion de a una, con el mismo registro.
+void MenuHangStartGroup(int tIdx, int tComp) {
+    if (s_t.active || s_h.active) return;
+    int gi = -1; for (int i = 0; i < (int)g_cfg.groups.size(); i++) if (g_cfg.groups[i].tIdx == tIdx && g_cfg.groups[i].tComp == tComp) { gi = i; break; }
+    if (gi < 0) { s_t.status = "No encontre el grupo a probar"; return; }
+    const MenuGroup& g = g_cfg.groups[gi];
+    s_h = HangState();
+    SYSTEMTIME st; GetLocalTime(&st); wchar_t n[80];
+    swprintf(n, 80, L"cuelgue_grupo_%04d%02d%02d_%02d%02d%02d.txt", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    const std::wstring root = g_cfg.baseDir + L"diagnostico\\"; CreateDirectoryW(root.c_str(), nullptr);
+    s_h.f = _wfopen((root + n).c_str(), L"wb");
+    HangStep tg; tg.idx = tIdx; tg.comp = tComp; tg.orig = g_cfg.live[tIdx][tComp]; tg.val = 1.0f; tg.label = g.title + " (solo el interruptor, opciones en 0)"; tg.section = g.section;
+    std::vector<HangStep> subs;
+    for (const MenuSlider& sl : g.sliders) {
+        if (!sl.ext.empty() || sl.idx < 0 || sl.idx >= kParamCount || (sl.idx == tIdx && sl.comp == tComp)) continue;
+        const float v = g_cfg.live[sl.idx][sl.comp];
+        if (fabsf(v) < 1e-6f) continue;                                   // ya en 0: no se toca
+        const bool canZero = !sl.optVals.empty() ? std::find(sl.optVals.begin(), sl.optVals.end(), 0.0f) != sl.optVals.end() : (!sl.options.empty() || sl.lo <= 0.0f);
+        if (!canZero) continue;
+        HangStep h; h.idx = sl.idx; h.comp = sl.comp; h.val = h.orig = v; h.label = sl.label; h.section = g.title; subs.push_back(h);
+    }
+    s_h.steps.push_back(tg); for (auto& h : subs) s_h.steps.push_back(h);
+    s_h.nGroups = g_cfg.groups.size(); s_h.bypassSaved = g_cfg.bypass;
+    HangLine("inicio (dentro del grupo \"%s\"): el resto del mod queda como esta; %d opciones a probar; %.0f s por paso", g.title.c_str(), (int)subs.size(), kHangWait);
+    g_cfg.live[tIdx][tComp] = 0.0f;
+    for (auto& h : subs) { g_cfg.live[h.idx][h.comp] = 0.0f; HangLine("  en 0: \"%s\" (%c%d, era %g)", h.label.c_str(), "xyzw"[h.comp], h.idx, h.orig); }
+    HangLine("paso 0: \"Ver original\" sacado, el grupo apagado y sus opciones en 0");
+    g_cfg.bypass = false;
+    s_h.active = true; s_h.si = 0; s_h.next = Now() + kHangFirst;
+    s_t.status = "Buscando dentro del grupo: paso 0. No toques nada; Esc corta.";
+}
+bool MenuHangActive() { return s_h.active; }
+
+bool MenuTestActive() { return s_t.active || s_h.active; }
 int  MenuTestCount(int what) { return what == 0 ? s_t.tested : what == 1 ? s_t.changed : s_t.skipped; }
 float MenuTestNoise() { return s_t.noise; }
 const std::string& MenuTestStatus() { return s_t.status; }
-float MenuTestProgress() { return s_t.steps.empty() ? 0.f : (float)s_t.si / (float)s_t.steps.size(); }
+float MenuTestProgress() { if (s_h.active) return s_h.steps.empty() ? 0.f : (float)s_h.si / (float)s_h.steps.size(); return s_t.steps.empty() ? 0.f : (float)s_t.si / (float)s_t.steps.size(); }
 const std::wstring& MenuTestDir() { return s_t.dir; }
 size_t MenuTestResults() { return s_t.results.size(); }
 bool MenuTestResult_(size_t i, std::string& group, std::string& section, float& diff, int& state, float& cpuMs, float& gpuMs) {
@@ -69,6 +177,7 @@ static std::wstring Slug(const std::string& t, size_t max = 28) {
 static std::string W2A(const std::wstring& w) { std::string o; for (wchar_t c : w) o += (c < 128 ? (char)c : '_'); return o; }
 
 void MenuTestStart() {
+    if (s_h.active) return;
     s_t = MenuTestState();
     SYSTEMTIME st; GetLocalTime(&st); wchar_t n[32];
     swprintf(n, 32, L"%04d%02d%02d_%02d%02d%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
@@ -100,7 +209,7 @@ static void Finish(bool cancelled) {
     s_t.active = false;
     WriteReport(cancelled);
 }
-void MenuTestStop() { if (s_t.active) Finish(true); }
+void MenuTestStop() { if (s_h.active) { HangFinish("cortada con Cancelar"); s_t.status = "Busqueda del cuelgue cortada. Todo quedo como estaba."; return; } if (s_t.active) Finish(true); }
 
 static float Lum8(const unsigned char* p, bool bgr) { return bgr ? (0.0722f * p[0] + 0.7152f * p[1] + 0.2126f * p[2]) / 255.f : (0.2126f * p[0] + 0.7152f * p[1] + 0.0722f * p[2]) / 255.f; }
 static float Half(unsigned short h) {
@@ -184,6 +293,7 @@ static void MeasEnd(int frames) {
 static const int kSettle = 20, kMeasure = 30;   // (08/11 h) asentar 14 -> 20: recompilacion / recarga tras el cambio
 
 void MenuTestPresent(IDXGISwapChain* sc, ID3D11Texture2D* frame) {
+    if (s_h.active) { HangPresent(); return; }
     if (!s_t.active) return;
     if (GetAsyncKeyState(VK_ESCAPE) & 0x8000) { MenuTestStop(); Log("prueba automatica: cortada con Esc"); return; }
     if (g_cfg.groups.size() != s_t.nGroups) { MenuTestStop(); s_t.status = "Prueba cortada: se recargo la configuracion"; return; }
