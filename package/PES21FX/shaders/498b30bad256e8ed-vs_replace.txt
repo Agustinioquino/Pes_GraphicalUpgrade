@@ -385,9 +385,15 @@ void main(
           float2 gF = float2(PESFlatAt(uvRt + float2(tF.x, 0.0)) - PESFlatAt(uvRt - float2(tF.x, 0.0)), PESFlatAt(uvRt + float2(0.0, tF.y)) - PESFlatAt(uvRt - float2(0.0, tF.y)));
           float lgF = length(gF);
           float2 dW = lgF > 1e-3 ? -gF / lgF : float2(csR * F0.x + snR * F0.y, -snR * F0.x + csR * F0.y);   // hacia afuera de la pisada (en el centro: su propia cara)
+          // (12/11 20:00) y442 RASTRO DE LA PELOTA PEINADO: donde manda el rastro de la pelota (G) las hojas no caen hacia afuera sino a lo largo
+          // del camino (la tangente del rastro, siempre para el mismo lado), menos cruzadas: queda la franja peinada que deja la pelota
+          float4 P442b = IniParams.Load(int2(442, 0));
+          float2 fRG = PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, uvRt, 0).xy;
+          float kComb = saturate(P442b.y) * saturate((fRG.y - fRG.x) * 6.0) * (lgF > 1e-3 ? 1.0 : 0.0);
+          if (kComb > 0.001) { float2 tgC = float2(-dW.y, dW.x); tgC *= dot(tgC, float2(0.83, 0.55)) >= 0.0 ? 1.0 : -1.0; dW = normalize(lerp(dW, tgC, kComb) + 1e-5); }
           float2 dOu = float2(csR * dW.x - snR * dW.y, snR * dW.x + csR * dW.y);                          // de la cancha a la celda
           float2 dE = normalize(dOu + F0 * 0.30 + float2(-F0.y, F0.x) * (PESBu(sB, 30u) - 0.5) * 0.5);    // borde: hacia afuera, con su desvio
-          float aX = (PESBu(sB, 35u) - 0.5) * 1.5;                                                        // tumbada: cruzada hasta +-43 grados
+          float aX = (PESBu(sB, 35u) - 0.5) * 1.5 * (1.0 - 0.7 * kComb);                                  // tumbada: cruzada hasta +-43 grados (peinada: +-13)
           float2 dT = normalize(float2(dE.x * cos(aX) - dE.y * sin(aX), dE.x * sin(aX) + dE.y * cos(aX)));
           float kEm = smoothstep(0.03, 0.30, flB), kTm = smoothstep(0.40, 0.80, flB);
           float rA = 0.85 + 0.30 * PESBu(sB, 31u);
@@ -403,6 +409,11 @@ void main(
           float2 cS = root + F0 * (bnd * h * t * t + tilt * h * t);
           float2 pE = root + dE * cE.x, pT = root + dT * cT.x + float2(-dT.y, dT.x) * wvT;
           float2 cXZ = lerp(lerp(cS, pE, kEm), pT, kTm);
+          // (12/11 20:00) z442 REBOTE DE LAS HOJAS 3D: mientras el mapa se apaga (la hoja se levanta) la hoja no sube derecha: se pasa y vuelve
+          // (2 vaivenes a lo largo de la recuperacion, fase al azar por hoja) y se mece un poco de costado, como x413 en las tarjetas
+          float kRb = clamp(P442b.z, 0.0, 2.0);
+          if (kRb > 0.001) { float phR = flB * 12.566 + PESBu(sB, 40u) * 6.2832; float envR = saturate(flB * (1.0 - flB) * 4.0) * (1.0 - kTm);
+            cXZ += (dE * sin(phR) * 0.30 + float2(-dE.y, dE.x) * cos(phR * 0.5) * 0.12) * (envR * kRb * h * t); }
           float cY = lerp(lerp(yy, cE.y, kEm), cT.y, kTm);
           float2 dC = normalize(lerp(dE, dT, kTm));
           float2 Wl = float2(-dC.y, dC.x);
@@ -822,6 +833,48 @@ void main(
       r1.xz += dO * ((max(kB * 0.9, kNest * 0.75) - 0.35 * kLeanIn) * max(v0.y, 0.0));
     } else pesSinkF = max(pesSinkF, 0.7 * smoothstep(0.22, 0.10, dB) * saturate(W177.w));   // (02/11 paso 7) la pelota se apoya (capsula radio 0.112)
   }   // (02/11 paso 7) la pelota se apoya (capsula radio 0.112)
+  // (12/11 20:00, Agustin: "la reaccion de la pelota al moverse, como se aprecia en el original, que el pasto se resienta con la pelota y al
+  // moverse siga el movimiento") fila 442, en vivo con la capsula del juego (cb4[3] este cuadro, cb4[4] el anterior), sin esperar al mapa:
+  //  x LA PELOTA EMPUJA Y ARRASTRA EL PASTO
+  //    - proa: adelante y a los costados de la pelota que rueda las hojas se abren y se tumban hacia adelante / afuera (mas lejos cuanto mas rapida)
+  //    - estela pegada: detras de la pelota (hasta ~6 cuadros de recorrido) quedan acostadas en la direccion del movimiento y se levantan de a
+  //      poco: ya no queda un hueco de hojas paradas entre la pelota y su rastro (el mapa pes_flat llega unos cuadros tarde)
+  //    - rasante: pelota rapida a menos de ~1 m del piso: las hojas debajo de su camino se sacuden hacia donde va (el aire que empuja)
+  //  w ONDA AL PICAR: la pelota que sube despues de tocar el piso abre un anillo de hojas que se agranda mientras sube
+  // Todo en recorrido por CUADRO: en camara lenta la pelota avanza menos por cuadro y la estela es mas corta (como el atraso del mapa)
+  float4 P442 = IniParams.Load(int2(442, 0));
+  if ((pesIsExt || pesNatV) && (P442.x > 0.001 || P442.w > 0.001) && cb4[3].y > 0.05 && cb4[3].y < 1.2) {
+    float2 vB = cb4[3].xz - cb4[4].xz; float dF = length(vB);              // recorrido de este cuadro (m)
+    float vY = cb4[3].y - cb4[4].y;
+    if (dF < 1.5) {                                                        // salto de camara / saque: nada
+      float2 dirB = dF > 1e-4 ? vB / dF : float2(0.0, 0.0), latB = float2(-dirB.y, dirB.x);
+      float2 dP = r1.xz - cb4[3].xz; float dL = length(dP); float2 dU = dL > 1e-4 ? dP / dL : dirB;
+      float hW = max(v0.y, 0.0);
+      float kBall = clamp(P442.x, 0.0, 2.0);
+      if (kBall > 0.001 && dF > 0.002 && dL < 1.6) {
+        float spK = saturate(dF / 0.08);                                   // ~5 m/s a 60 cuadros por segundo = todo
+        float contact = smoothstep(0.30, 0.15, cb4[3].y);                 // rodando o apoyada
+        float al = dot(dP, dirB), lt = dot(dP, latB);
+        float rBow = 0.15 + 0.10 * spK;
+        float kBow = smoothstep(rBow, 0.09, dL) * smoothstep(-0.06, 0.0, al) * contact * spK;
+        float Lw = 0.10 + 6.0 * dF;
+        float kWake = smoothstep(0.13, 0.05, abs(lt)) * saturate(1.0 + al / Lw) * (1.0 - step(0.0, al)) * contact * spK;
+        float air = smoothstep(1.0, 0.35, cb4[3].y) * (1.0 - contact) * smoothstep(0.06, 0.20, dF);
+        float rnd = frac(sin(dot(floor(r1.xz * 40.0), float2(12.9898, 78.233))) * 43758.55);   // cada hoja un poco distinta
+        float kAir = air * smoothstep(0.30, 0.0, abs(lt)) * saturate(1.0 + al / (0.15 + 4.0 * dF)) * (1.0 - step(0.10, al)) * (0.6 + 0.4 * rnd);
+        float2 dsp = normalize(dU + dirB * 0.8) * (0.85 * kBow) + dirB * (0.80 * kWake + 0.55 * kAir) + latB * (sign(lt) * 0.25 * kAir);
+        r1.xz += dsp * kBall * hW;
+        pesSinkF = max(pesSinkF, saturate((0.30 * kBow + 0.60 * kWake) * kBall));
+      }
+      float kPq = clamp(P442.w, 0.0, 2.0) * smoothstep(0.010, 0.035, vY) * smoothstep(0.65, 0.20, cb4[3].y);
+      if (kPq > 0.001 && dL < 0.8) {
+        float rr = 0.12 + 0.9 * max(cb4[3].y - 0.11, 0.0);
+        float ring = exp(-((dL - rr) * (dL - rr)) / 0.005);
+        r1.xz += dU * (ring * kPq * 1.1 * hW);
+        pesSinkF = max(pesSinkF, saturate(0.40 * ring * kPq));
+      }
+    }
+  }
   r0.yz = cb4[3].xz + cb4[4].xz;
   r0.yz = -r0.yz * 0.5 + r1.xz;
   r0.xz = r0.yz * r0.xx;
