@@ -1952,8 +1952,19 @@ void AutoCapturePresent(ID3D11Texture2D* frame) {
     }
     if (count == 1) Log("captura automatica: primera imagen en capturas\\ (cada %.0f s, maximo %d)", g_cfg.autoCapSec, g_cfg.autoCapMax);
 }
+static std::atomic<bool> s_planBMode{false};   // Present enganchado por el plan B (vtable compartida de dxgi)
+static std::atomic<long> s_presentCalls{0};
+static thread_local int t_inPresent = 0;        // (12/11) otro mod que vuelve a llamar Present desde adentro: pasa derecho
+struct PresentDepth { PresentDepth() { ++t_inPresent; } ~PresentDepth() { --t_inPresent; } };
 static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT flags) {
+    if (t_inPresent) return o_Present(sc, sync, flags);
+    PresentDepth depth_;
+    s_presentCalls.fetch_add(1, std::memory_order_relaxed);
     ID3D11Device* d = nullptr;
+    if (s_planBMode.load(std::memory_order_relaxed) && g_dev.dev && SUCCEEDED(sc->GetDevice(__uuidof(ID3D11Device), (void**)&d)) && d) {
+        const bool otro = (d != g_dev.dev); d->Release(); d = nullptr;
+        if (otro) return o_Present(sc, sync, flags);   // plan B: la vtable es de todas las cadenas; se queda con la primera que presenta (el juego)
+    }
     if (SUCCEEDED(sc->GetDevice(__uuidof(ID3D11Device), (void**)&d)) && d) {
         if (!s_deviceHooked) {   // el juego creo el dispositivo antes que nosotros
             Log("AVISO: el dispositivo ya existia al cargar el mod; los shaders creados antes no se reemplazan");
@@ -2087,8 +2098,8 @@ static void HookSwapChain(IDXGISwapChain* sc) {
 // nosotros) el juego nunca paso por los CreateSwapChain enganchados: sin "cadena de intercambio", sin menu Insert y sin los
 // ganchos que se ponen en el primer Present. Si a los 15 s de crear el dispositivo no hay cadena, se arma una cadena de prueba
 // (ventana oculta, dispositivo aparte con el d3d11 de Windows) solo para leer de su vtable donde esta el codigo de Present y de
-// ResizeBuffers, y se engancha ese codigo con MinHook: pasa por ahi cualquier cadena, este quien este antes en la vtable (Sider
-// llama a ese mismo codigo). Si la cadena del juego ya se engancho por el camino normal no se hace nada (en 1.07.02 asi es siempre).
+// ResizeBuffers, y se cambia el puntero de esa vtable (compartida por todas las cadenas de dxgi), sin
+// meterse en el codigo de otro mod (v3). Si la cadena del juego ya se engancho por el camino normal no se hace nada (en 1.07.02 asi es siempre).
 }   // namespace fx
 HMODULE fx_RealD3D11();   // d3d11_proxy.cpp (fuera del namespace)
 namespace fx {
@@ -2115,16 +2126,28 @@ static DWORD WINAPI PresentPlanB(void*) {
         void* pres = vt[8]; void* resz = vt[13];
         std::lock_guard<std::recursive_mutex> lk(s_hookMutex);
         if (!s_scHooked) {
-            Log("Present: plan B: codigo de Present en %s, ResizeBuffers en %s", ModOff(pres).c_str(), ModOff(resz).c_str());
-            const bool ok = Hook(pres, (void*)&hk_Present, (void**)&o_Present, "IDXGISwapChain::Present (plan B)");
-            if (ok) Hook(resz, (void*)&hk_Resize, (void**)&o_Resize, "IDXGISwapChain::ResizeBuffers (plan B)");
-            if (ok) { s_scHooked = true; Log("Present enganchado (plan B)"); }
+            // (12/11 v3) NO se engancha con MinHook el codigo que esta en la vtable: en la PC CPY ahi estaba la funcion del
+            // cloth-mod (dsound.dll+0xeaf0) y meterse adentro de ella cerro el juego (0xc00000fd, pila desbordada). Se cambia el
+            // puntero de la vtable, igual que Sider y cloth-mod: la vtable de la cadena de dxgi es la misma para todas las cadenas
+            Log("Present: plan B: en la vtable estaba Present = %s, ResizeBuffers = %s; se encadena por la vtable", ModOff(pres).c_str(), ModOff(resz).c_str());
+            s_planBMode = true;
+            PatchSlot(&vt[8], (void*)&hk_Present, (void**)&o_Present);
+            PatchSlot(&vt[13], (void*)&hk_Resize, (void**)&o_Resize);
+            if (vt[8] == (void*)&hk_Present) { s_scHooked = true; Log("Present enganchado (plan B, vtable)"); }
+            else { s_planBMode = false; Log("Present: plan B: no se pudo cambiar la vtable"); }
         } else Log("Present: plan B: la cadena del juego se engancho mientras tanto, no se hace nada");
     } else Log("Present: plan B: no se pudo crear la cadena de prueba (%08X)", (unsigned)hr);
     if (sc) sc->Release();
     if (ctx) ctx->Release();
     if (dev) dev->Release();
     DestroyWindow(w); UnregisterClassW(wc.lpszClassName, wc.hInstance);
+    if (s_planBMode) {
+        const long c0 = s_presentCalls.load();
+        Sleep(10000);
+        const long n = s_presentCalls.load() - c0;
+        if (n > 0) Log("Present: plan B: el juego paso %ld veces por nuestro Present en 10 s", n);
+        else Log("Present: plan B: en 10 s el juego no paso por nuestro Present (su cadena no usa esta vtable)");
+    }
     return 0;
 }
 
