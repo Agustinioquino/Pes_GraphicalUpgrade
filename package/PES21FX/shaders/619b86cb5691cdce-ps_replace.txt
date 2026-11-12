@@ -556,7 +556,18 @@ void main(
         // (11/11 h) Agustin con la tanda 1: "le falta ... la pelota del rebote de la luz": el oliva oscuro venia sobre todo de la oclusion
         // ambiental de las hojas de delante (arreglado en pes_gtao_ps); el rebote vuelve a 85 % del verde, algo dorado, hasta 1.65x
         if (kL > 0.001) { float3 tg = TB.y > 0.01 ? TB.xyz * 1.35 : float3(0.14, 0.24, 0.07); tg = lerp(dot(tg, float3(0.2126, 0.7152, 0.0722)).xxx, tg, 0.85) * float3(1.06, 1.0, 0.86);
-          turf = lerp(turf, tg, saturate(0.7 * kL)) * (1.0 + 0.65 * kL); } }
+          turf = lerp(turf, tg, saturate(0.7 * kL)) * (1.0 + 0.65 * kL);
+          // (11/11 n, Agustin: "en los botines no noto el rebote de la luz del pasto", "y en la pelota") lo que la pelota y los botines
+          // reciben a la SOMBRA (abajo, el lado de atras) es casi todo la luz de ambiente del juego, gris / celeste: el rebote sumado quedaba
+          // chico al lado. Cerca del suelo esa luz viene sobre todo del pasto al sol: se tine con su verde (mismo brillo, otro color). Solo
+          // donde no da el sol directo (la cara al sol queda igual), mas abajo y mirando hacia el suelo mas; w407 2 = el doble
+          float3 Ls7 = normalize(pLc_dir.xyz);
+          float shP7 = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
+          float dir7 = saturate(dot(Nb, Ls7) * 3.0) * shP7;                    // 1 = le da el sol de lleno
+          float3 tgN = tg / max(dot(tg, float3(0.2126, 0.7152, 0.0722)), 1e-4);
+          tgN = lerp(float3(1.0, 1.0, 1.0), tgN, 0.75);
+          float kT7 = saturate(0.55 * kL) * saturate(0.35 + 0.9 * fGround) * (1.0 - dir7) * lerp(0.45, 1.0, shadeB) * smoothstep(0.0, 0.15, sunUp);
+          r2.xyz *= lerp(float3(1.0, 1.0, 1.0), tgN, kT7); } }
       r2.xyz += sunC * sunUp * turf * shadeB * skyTint * fGround3 * max(BG.x, 0.0) * saturate((120.0 - zb) / 40.0) * PESAmbGain();
     }
   }
@@ -735,6 +746,9 @@ void main(
           float fwd = saturate(dot(Ld, Vsk)), side = saturate(1.0 - abs(dot(Ld, Vsk)));
           float3 sunC = sc * g_psScene.m_exposure.zzz;
           float glow = (0.55 * pow(fwd, 2.0) + 0.30 * side) * lerp(0.6, 1.4, saturate(trC)) * clamp(PS4.z, 0.0, 2.0);
+          // (11/11 n, Agustin: "hacer un poco mas notorio las puntas con un traspaso de la luz a contraluz") natural: a contraluz la punta
+          // fina (trC alto) se enciende mas; de frente igual que antes
+          if (natP < 0.99) glow += 0.40 * pow(fwd, 2.0) * smoothstep(0.35, 0.9, saturate(trC)) * clamp(PS4.z, 0.0, 2.0);
           r2.xyz += sunC * glow * lit * 0.10 * (natP < 0.99 ? float3(0.95, 1.0, 0.74) : float3(0.80, 1.0, 0.30));   // (11/11 h) natural: brillo crema
         }
         // (08/11 ac) SOL BAJO (w415 de la DLL): amanecer / atardecer. La luz rasante pinta el pasto AL SOL con su propio tono: atardecer

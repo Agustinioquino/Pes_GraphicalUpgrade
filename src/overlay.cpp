@@ -941,7 +941,7 @@ static void DrawGroup(MenuGroup& g, int gid) {
                 // (31/10) AlwaysClamp: el valor escrito con Ctrl+clic tambien queda dentro del rango del slider
                 // (x318 "Claridad del ojo" se guardaba en -1.17 / 2.61 con rango 0..1); ademas se recorta lo que
                 // venga de afuera (teclas, Avanzado) para que el ini nunca guarde un valor fuera del rango
-                if (!isExt && (val < sl.lo || val > sl.hi)) { float cl = val < sl.lo ? sl.lo : sl.hi; Log("menu: %c%d = %g fuera del rango %g..%g del slider '%s': recortado a %g", "xyzw"[sl.comp], sl.idx, val, sl.lo, sl.hi, sl.label.c_str(), cl); val = cl; }
+                if (!isExt && (val < (std::min)(sl.lo, sl.hi) || val > (std::max)(sl.lo, sl.hi))) { float cl = std::clamp(val, (std::min)(sl.lo, sl.hi), (std::max)(sl.lo, sl.hi));   /* (11/11 n) slider al reves (lo > hi) */ Log("menu: %c%d = %g fuera del rango %g..%g del slider '%s': recortado a %g", "xyzw"[sl.comp], sl.idx, val, sl.lo, sl.hi, sl.label.c_str(), cl); val = cl; }
                 char tipb[300];   // (08/11) el rango del slider en el aviso
                 { char a[40], b[40]; snprintf(a, sizeof a, sl.fmt.c_str(), sl.lo); snprintf(b, sizeof b, sl.fmt.c_str(), sl.hi);
                   snprintf(tipb, sizeof tipb, TRS("Va de %s a %s. Arrastra, o la rueda del mouse para el ajuste fino (Shift: mas fino). Doble clic o clic derecho: volver a lo guardado. Toca el numero para escribirlo."), a, b); }
