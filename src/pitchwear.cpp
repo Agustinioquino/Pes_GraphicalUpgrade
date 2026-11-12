@@ -76,7 +76,17 @@ static void SimClockPoll() { int tk = g_simTick.load(std::memory_order_relaxed);
 // (12/11 16:45) y la REPETICION se toma del visor de repeticiones (rastro.cpp hk_rpl, 0x14217c0b0 con el objeto reproduciendo): no depende del tick
 static float s_tkTrust = 0.5f;
 static inline bool InReplay() { const unsigned long long r = g_replayMs.load(std::memory_order_relaxed); return r != 0 && GetTickCount64() - r < 300; }
-static inline float SimGate() { if (!WearReal()) return 1.f; if (InReplay()) return 0.f; if (!s_tkSeen || s_tkTrust < 0.15f) return 1.f; return (Now() - s_tkChangeT) < 0.25 ? 1.f : 0.f; }
+// (12/11 16:50, Agustin: para el video, el desgaste apareciendo en camara lenta) fila 441: x DESGASTE SOLO EN LA REPETICION (para grabar):
+// jugando no suma y en la repeticion (tambien en camara lenta: velocidades y pisadas van con el reloj del juego) va marcando a medida que
+// pisan. Necesita el gancho del visor de repeticiones; sin el, x441 no hace nada. y = pisadas en la posicion real del botin (ver FootPt)
+static inline bool ReplayMode() { return g_cfg.live[441][0] > 0.5f && g_replayHook.load(std::memory_order_relaxed) != 0; }
+static inline bool FootOn() { return g_cfg.live[441][1] > 0.5f && g_cfg.live[115][3] > 0.5f; }
+// (12/11 16:55, Agustin: "un slider para exagerar esas pisadas") z441 EXAGERAR LAS PISADAS (0 o 1 = normal, hasta 10): cada huella marca mas
+// (aplastado, huella del desgaste y gasto por pisada) y es mas grande (x1 + 0.12 por punto: 10 = ~2x de tamano); con mas de 1 tambien
+// gastan las pisadas comunes (no solo las fuertes)
+static inline float FootEx() { const float e = g_cfg.live[441][2]; return e > 1.f ? std::min(e, 10.f) : 1.f; }
+static inline float FootExR() { return 1.f + 0.12f * (FootEx() - 1.f); }
+static inline float SimGate() { if (ReplayMode()) return InReplay() ? 1.f : 0.f; if (!WearReal()) return 1.f; if (InReplay()) return 0.f; if (!s_tkSeen || s_tkTrust < 0.15f) return 1.f; return (Now() - s_tkChangeT) < 0.25 ? 1.f : 0.f; }
 static void WearCpuAdd(float u, float v, float k, float radM);
 // pincel de desgaste por una accion (cola: lo dibuja PitchWearPresent en este mismo cuadro)
 static void WearStamp(float x, float z, float k, float rad) {
@@ -90,6 +100,19 @@ static ID3D11Buffer* s_ballCb = nullptr;    // b12 del PS de la pelota
 static const int kBallSlots = 128;   // (2/11 paso 10) 64 desbordaba en silencio (22 x 2 botines + arbitros + pelota + repeticiones)
 static ID3D11Buffer* s_bdStage[kStages] = {}; static int s_bdFrame[kStages] = { -1, -1, -1 }; static std::atomic<int> s_bdW{0}; static std::atomic<int> s_bdCount{0};
 static UINT s_bdIdx[kStages][kBallSlots] = {};   // indice (vertices) de cada dibujo anotado, por anillo
+// (12/11 16:50, Agustin: "como sabe ... cual es la posicion de los pies al pisar") PISADAS REALES: de cada dibujo de botines (PS aadffecf)
+// se copian ademas sus huesos (VSBones b6, float4x3 m_boneMatrices[32]: hasta 32 x 48 B, traslacion en la columna w; no se sabe si la paleta
+// del botin es solo el pie o el cuerpo entero, por eso todos) y en Present se pasan al mundo con
+// m_world (como el hueso 0 del short). Se quedan los puntos a la altura del piso y cerca de un jugador seguido; el suelo es el 2.o mas bajo
+// (promedio lento). PISADA = un punto que venia arriba (> suelo + 7 cm) y baja a < suelo + 3.5 cm (con histeresis: vale en camara lenta; talon y punta = una). La pisada va al jugador mas cercano en
+// vez de la zancada estimada; si no se ven pies o no hubo pisadas en 2 s, vuelve la zancada (log "pisadas reales (15 s)")
+static ID3D11Buffer* s_ftStage[kStages] = {}; static UINT8 s_ftOk[kStages][kBallSlots] = {};
+struct FootPt { float x, y, z; int up; };   // up: venia levantado (subio a > suelo + 7 cm y todavia no bajo a < suelo + 3.5 cm)
+struct FootStrike { float x, z; double t; int used; };
+static std::vector<FootPt> s_ftPrev; static std::vector<FootStrike> s_ftStrikes; static float s_ftGround = 0.f; static bool s_ftGroundOk = false;
+static double s_ftPtsT = -1e9, s_ftStrikeT = -1e9; static int s_ftLogPts = 0, s_ftLogFrames = 0, s_ftLogStrikes = 0, s_ftLogUsed = 0, s_ftLogStride = 0;
+static const UINT kFtBones = 32, kFtSlotB = kFtBones * 48;   // bytes por dibujo en s_ftStage
+static std::atomic<int> s_ftNoB6{0};
 static std::atomic<UINT> s_ballIdx{0};      // indice de vertices del dibujo de la pelota (0 = aun no)
 static std::atomic<int> s_bdCalls{0}, s_bdOffX177{0}, s_bdNoStage{0}, s_bdNoCb{0}, s_bdNoted{0};   // (2/11 b) diagnostico: por que no se anota
 static std::atomic<int> s_ballIdxVotes{0}; static int s_ballLogged = 0;
@@ -206,7 +229,7 @@ static void EmitStrike(float x, float z, float tx, float tz, float inten, bool f
                 PushClip(kClipDust, x, 0.03f, z, dx * hs * 0.4f, vy * 0.35f, dz * hs * 0.4f, csz * 2.5f * (0.7f + 0.6f * Rand01()));
         }
         // hueco en el desgaste: donde se arranco el pasto queda la tierra
-        if (m > 0 && g_cfg.live[115][3] > 0.5f && !WearReal()) { float k = 0.03f * std::min((float)m * 1.5f, 4.f) * (fromBall ? 1.5f : 1.f); s_wearQueue.push_back({ x / 140.f + 0.5f, z / 79.f + 0.5f, k, 0.14f }); WearCpuAdd(x / 140.f + 0.5f, z / 79.f + 0.5f, k, 0.14f); }
+        if (m > 0 && g_cfg.live[115][3] > 0.5f && !WearReal() && SimGate() > 0.5f) { float k = 0.03f * std::min((float)m * 1.5f, 4.f) * (fromBall ? 1.5f : 1.f); s_wearQueue.push_back({ x / 140.f + 0.5f, z / 79.f + 0.5f, k, 0.14f }); WearCpuAdd(x / 140.f + 0.5f, z / 79.f + 0.5f, k, 0.14f); }
     }
     // tierra seca / pelada: polvo aunque no salga terron
     if (DustAmt() > 0.001f && (dry || w > 0.4f) && Rand01() < DustAmt() * 0.5f * I1)
@@ -426,8 +449,8 @@ static void PitchFlatPresent() {
         // (talon mas fuerte + punta hacia adelante). La marca entera en un cuadro (no por dt): se ve cada pisada por separado
         if (fpOn > 0.5f && p.printDue && newPl && sp > 0.3f && nb < kMaxPlayers - 16) {
             float ux = p.vx / sp, uz = p.vz / sp, kf = FpForce() * k * (0.55f + 0.45f * std::min(sp / 6.f, 1.f)) * (1.f + 1.5f * p.skid * kAct);
-            brush[nb][0] = p.printX / 140.f + 0.5f; brush[nb][1] = p.printZ / 79.f + 0.5f; brush[nb][2] = 0.75f * kf; brush[nb][3] = 0.13f; nb++;
-            if (nb < kMaxPlayers - 16) { brush[nb][0] = (p.printX + ux * 0.12f) / 140.f + 0.5f; brush[nb][1] = (p.printZ + uz * 0.12f) / 79.f + 0.5f; brush[nb][2] = 0.55f * kf; brush[nb][3] = 0.10f; nb++; }
+            brush[nb][0] = p.printX / 140.f + 0.5f; brush[nb][1] = p.printZ / 79.f + 0.5f; brush[nb][2] = 0.75f * kf * FootEx(); brush[nb][3] = 0.13f * FootExR(); nb++;
+            if (nb < kMaxPlayers - 16) { brush[nb][0] = (p.printX + ux * 0.12f) / 140.f + 0.5f; brush[nb][1] = (p.printZ + uz * 0.12f) / 79.f + 0.5f; brush[nb][2] = 0.55f * kf * FootEx(); brush[nb][3] = 0.10f * FootExR(); nb++; }
         }
         if (p.skid > 0.2f && kAct > 0.01f && sp > 1.f && nb < kMaxPlayers - 16) {   // marca de frenada: 2 pinceles detras, en la direccion de la que venia
             for (int e = 1; e <= 2 && nb < kMaxPlayers - 16; e++) { float bx = p.x - p.vx / sp * 0.35f * e, bz = p.z - p.vz / sp * 0.35f * e;
@@ -578,7 +601,8 @@ void PitchWearNotePlayer(ID3D11DeviceContext* c) {
 ID3D11Buffer* PitchBallDrawNote(ID3D11DeviceContext* c, UINT verts) {
     if (!g_dev.dev || verts == 0) return nullptr;
     const bool ballOn = g_cfg.live[177][0] >= 0.001f, bootOn = BootAmt() >= 0.001f;   // (11/11 4wp0pj) tambien se anota para los botines sucios
-    s_bdCalls++; if (!ballOn && !bootOn) { s_bdOffX177++; return nullptr; }
+    const bool footOn = FootOn();   // (12/11 16:50) y para las pisadas reales
+    s_bdCalls++; if (!ballOn && !bootOn && !footOn) { s_bdOffX177++; return nullptr; }
     UINT bi = s_ballIdx.load(std::memory_order_relaxed); int slot = -1; const UINT key = bootOn ? BootKey(c, verts) : 0u;
     {   // (2/11 paso 10) se anota siempre (antes se dejaba de anotar con 3 votos y un botin votado quedaba fijo para todo el partido)
         int w = s_bdW.load(); if (!s_bdStage[w]) s_bdNoStage++; else { int i = s_bdCount.fetch_add(1);
@@ -589,7 +613,15 @@ ID3D11Buffer* PitchBallDrawNote(ID3D11DeviceContext* c, UINT verts) {
                 if (!cb) s_bdNoCb++; else { D3D11_BUFFER_DESC d; cb->GetDesc(&d); UINT off = first * 16;
                     if (d.ByteWidth >= off + 128) { D3D11_BOX bx = { off, 0, 0, off + 128, 1, 1 }; c->CopySubresourceRegion(s_bdStage[w], 0, (UINT)i * 128, 0, 0, cb, 0, &bx); s_bdIdx[w][i] = verts; s_bdKey[w][i] = key; s_bdNoted++; }
                     else s_bdNoCb++;
-                    cb->Release(); } } }
+                    cb->Release(); }
+                s_ftOk[w][i] = 0;   // (12/11 16:50) pisadas reales: los huesos del botin (s_ftOk = cuantos)
+                if (footOn && s_ftStage[w]) { ID3D11Buffer* bb = nullptr; UINT f6 = 0, n6 = 0; ID3D11DeviceContext1* c1b = nullptr;
+                    if (SUCCEEDED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1b)) && c1b) { c1b->VSGetConstantBuffers1(6, 1, &bb, &f6, &n6); c1b->Release(); } else c->VSGetConstantBuffers(6, 1, &bb);
+                    if (bb) { D3D11_BUFFER_DESC d6; bb->GetDesc(&d6); const UINT o6 = f6 * 16;
+                        const UINT nB = d6.ByteWidth > o6 ? (std::min)(kFtBones, (d6.ByteWidth - o6) / 48u) : 0u;
+                        if (nB > 0) { D3D11_BOX b6 = { o6, 0, 0, o6 + nB * 48u, 1, 1 }; c->CopySubresourceRegion(s_ftStage[w], 0, (UINT)i * kFtSlotB, 0, 0, bb, 0, &b6); s_ftOk[w][i] = (UINT8)nB; }
+                        bb->Release(); }
+                    if (!s_ftOk[w][i]) s_ftNoB6++; } } }
     }
     if (ballOn && bi != 0 && verts == bi && s_ballIdxVotes.load(std::memory_order_relaxed) >= 3) return s_ballCb;   // (2/11 paso 10) b12 solo con el indice confirmado
     if (!bootOn) return nullptr;
@@ -600,6 +632,7 @@ ID3D11Buffer* PitchBallDrawNote(ID3D11DeviceContext* c, UINT verts) {
 static void BallDrawPresent() {
     if (!g_dev.dev || !g_dev.imm) return;
     for (int i = 0; i < kStages; i++) if (!s_bdStage[i]) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 128 * kBallSlots; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; g_dev.dev->CreateBuffer(&d, nullptr, &s_bdStage[i]); }
+    if (FootOn()) for (int i = 0; i < kStages; i++) if (!s_ftStage[i]) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = kFtSlotB * kBallSlots; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; g_dev.dev->CreateBuffer(&d, nullptr, &s_ftStage[i]); }   // (12/11 16:50)
     if (!s_ballCb) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 16; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER; g_dev.dev->CreateBuffer(&d, nullptr, &s_ballCb); }
     if (!s_bootAvgCb) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 16; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER; D3D11_SUBRESOURCE_DATA sd = { s_bootAvgV, 0, 0 }; g_dev.dev->CreateBuffer(&d, &sd, &s_bootAvgCb); }   // (11/11 4wp0pj)
     // publicar las manchas (b12: x 1 pelota, y verde, z tierra, w cal), escaladas por x177
@@ -616,7 +649,7 @@ static void BallDrawPresent() {
           Log("pelota: diagnostico (%d cuadros): dibujos aadffecf %d, saltados por x177 %d, sin staging %d, sin b5 %d, anotados %d, desbordes %d; cuadros sin anotaciones %d, sin pelota del pasto %d, lecturas que fallaron %d; indice %u votos %d cambios %d; x177 %.2f capsula %s (%.1f, %.2f, %.1f)",
               presents, s_bdCalls.load(), s_bdOffX177.load(), s_bdNoStage.load(), s_bdNoCb.load(), s_bdNoted.load(), s_bdOverflow.load(), noPending, noBall, mapFail, s_ballIdx.load(), s_ballIdxVotes.load(), s_ballChanges, g_cfg.live[177][0], s_ballOk ? "si" : "no", s_ball[0], s_ball[1], s_ball[2]); }
       if (pending < 0 || !s_bdStage[rd]) return;   // (11/11 4wp0pj) sin pelota del pasto igual se leen los botines
-      D3D11_MAPPED_SUBRESOURCE m; if (FAILED(g_dev.imm->Map(s_bdStage[rd], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) { mapFail++; memset(s_bdIdx[rd], 0, sizeof s_bdIdx[rd]); memset(s_bdKey[rd], 0, sizeof s_bdKey[rd]); return; }   // (2/11 paso 10) sin el memset los slots viejos volvian como candidatos
+      D3D11_MAPPED_SUBRESOURCE m; if (FAILED(g_dev.imm->Map(s_bdStage[rd], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) { mapFail++; memset(s_bdIdx[rd], 0, sizeof s_bdIdx[rd]); memset(s_bdKey[rd], 0, sizeof s_bdKey[rd]); memset(s_ftOk[rd], 0, sizeof s_ftOk[rd]); return; }   // (2/11 paso 10) sin el memset los slots viejos volvian como candidatos
     const float* q = (const float*)m.pData; UINT found = 0; int nf = 0; static int s_noMatch = 0; int nCand = 0; float bestD = 1e9f; int bestH = -1;
     for (int i = 0; i < kBallSlots && s_ballOk; i++) { if (!s_bdIdx[rd][i]) continue; nCand++; const float* r = q + i * 32;
         // candidatos a traslacion: fila 3 (m_world por filas), fila 7 (matriz en 4..7), columna w de 0..2 y de 4..6 (matriz traspuesta)
@@ -669,6 +702,44 @@ static void BallDrawPresent() {
         static double nextL = 0.0; if (tn >= nextL && g_cfg.live[58][3] > 0.5f) { nextL = tn + 15.0; float mx = 0.f, mg = 0.f; for (const BootDirt& b : s_bd) { mx = std::max(mx, b.dirt); mg = std::max(mg, b.grass); }
             Log("botines sucios (15 s): jugadores %d (activos %d) | tierra media %.2f max %.2f, pasto medio %.2f max %.2f, mojado %.2f | barridas %.1f s, caidas de salto %d, repeticion sin sumar %.1f s, cadera de pie media %.2f m | dibujos con su jugador %d, con el promedio %d, asignados %d | x430 %.2f y430 %.2f z430 %.2f w430 %.2f",
                 (int)s_bd.size(), nAct, s_bootAvgV[1], mx, s_bootAvgV[2], mg, wet, s_bootSlideT, s_bootLandN, s_bootReplayT, s_bootYn ? s_bootYb / s_bootYn : -1.f, s_bootHit.exchange(0), s_bootAvgN.exchange(0), s_bootAssigned.exchange(0), g_cfg.live[430][0], g_cfg.live[430][1], g_cfg.live[430][2], g_cfg.live[430][3]); s_bootSlideT = 0.f; s_bootLandN = 0; s_bootReplayT = 0.f; s_bootYb = 0.f; s_bootYn = 0; } }
+    if (FootOn() && s_ftStage[rd]) { D3D11_MAPPED_SUBRESOURCE mf;   // (12/11 16:50) pisadas reales (ver s_ftStage)
+      if (SUCCEEDED(g_dev.imm->Map(s_ftStage[rd], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mf))) {
+        const float* fq = (const float*)mf.pData; std::vector<FootPt> now; now.reserve(96);
+        auto nearPlayer = [](float x, float z) { for (const PlayerPrev& p : s_pl) { const float dx = p.x - x, dz = p.z - z; if (dx * dx + dz * dz < 1.2f * 1.2f) return true; } return false; };
+        auto okPt = [](float x, float y, float z) { return fabsf(x) < 80.f && fabsf(z) < 50.f && y > -0.3f && y < 0.6f && fabsf(x) + fabsf(z) > 0.02f; };
+        for (int i = 0; i < kBallSlots; i++) { if (!s_bdIdx[rd][i] || s_bdIdx[rd][i] == found || !s_ftOk[rd][i]) continue;
+            const float* r = q + i * 32; const float* B = fq + (size_t)i * (kFtSlotB / 4);
+            for (int kb = 0; kb < (int)s_ftOk[rd][i]; kb++) { const float* M = B + kb * 12; const float bx = M[3], by = M[7], bz = M[11];
+                if (fabsf(bx) + fabsf(by) + fabsf(bz) < 1e-4f || fabsf(bx) > 200.f || fabsf(by) > 200.f || fabsf(bz) > 200.f) continue;
+                // m_world en las filas 4..7 (como el short), en las filas 0..3, o el hueso ya en el mundo: el primero a la altura del piso cerca de un jugador
+                const float cand[3][3] = { { bx * r[16] + by * r[20] + bz * r[24] + r[28], bx * r[17] + by * r[21] + bz * r[25] + r[29], bx * r[18] + by * r[22] + bz * r[26] + r[30] },
+                                           { bx * r[0] + by * r[4] + bz * r[8] + r[12], bx * r[1] + by * r[5] + bz * r[9] + r[13], bx * r[2] + by * r[6] + bz * r[10] + r[14] }, { bx, by, bz } };
+                for (int kc = 0; kc < 3; kc++) { const float px = cand[kc][0], py = cand[kc][1], pz = cand[kc][2];
+                    if (!okPt(px, py, pz) || !nearPlayer(px, pz)) continue;
+                    bool dup = false; for (const FootPt& f : now) if (fabsf(f.x - px) + fabsf(f.y - py) + fabsf(f.z - pz) < 0.01f) { dup = true; break; }
+                    if (!dup) now.push_back({ px, py, pz, 0 }); break; } } }
+        g_dev.imm->Unmap(s_ftStage[rd], 0);
+        const double tf = Now(); s_ftLogFrames++; s_ftLogPts += (int)now.size();
+        if (now.size() >= 4) { float lo1 = 1e9f, lo2 = 1e9f; for (const FootPt& f : now) { if (f.y < lo1) { lo2 = lo1; lo1 = f.y; } else if (f.y < lo2) lo2 = f.y; }
+            s_ftGround = s_ftGroundOk ? s_ftGround + (lo2 - s_ftGround) * 0.02f : lo2; s_ftGroundOk = true; s_ftPtsT = tf; }
+        // con histeresis (no importa cuanto baja por cuadro: en camara lenta el pie baja de a poco); el talon y la punta del mismo pie
+        // (o el mismo pie apoyando de nuevo enseguida) son UNA pisada: a menos de 25 cm y 0.4 s de otra, no cuenta
+        if (s_ftGroundOk) for (FootPt& f : now) { float bd = 0.35f * 0.35f; const FootPt* pv = nullptr;
+            for (const FootPt& g : s_ftPrev) { const float dx = g.x - f.x, dz = g.z - f.z, d2 = dx * dx + dz * dz; if (d2 < bd) { bd = d2; pv = &g; } }
+            const float hgt = f.y - s_ftGround;
+            f.up = hgt > 0.07f || (pv && pv->up && hgt > 0.035f);
+            if (pv && pv->up && !f.up) { bool dupS = false;
+                for (const FootStrike& s : s_ftStrikes) { const float dx = s.x - f.x, dz = s.z - f.z; if (dx * dx + dz * dz < 0.25f * 0.25f && tf - s.t < 0.4) { dupS = true; break; } }
+                if (!dupS) { s_ftStrikes.push_back({ f.x, f.z, tf, 0 }); s_ftStrikeT = tf; s_ftLogStrikes++; } } }
+        s_ftPrev.swap(now);
+        s_ftStrikes.erase(std::remove_if(s_ftStrikes.begin(), s_ftStrikes.end(), [tf](const FootStrike& s) { return tf - s.t > 1.0; }), s_ftStrikes.end());   // las usadas quedan 1 s para no repetir
+      }
+      { static double nextF = 0.0; const double tn = Now(); if (tn >= nextF && g_cfg.live[58][3] > 0.5f) { nextF = tn + 15.0;
+          Log("pisadas reales (15 s): puntos de pie por cuadro %.1f (%d cuadros), suelo %.3f m, pisadas %d, usadas %d, por zancada %d, botines sin b6 %d -> %s",
+              s_ftLogFrames ? (float)s_ftLogPts / s_ftLogFrames : 0.f, s_ftLogFrames, s_ftGround, s_ftLogStrikes, s_ftLogUsed, s_ftLogStride, s_ftNoB6.exchange(0),
+              (tn - s_ftPtsT < 0.5 && tn - s_ftStrikeT < 2.0) ? "con el botin real" : "con la zancada (no se ven pies o no hubo pisadas)");
+          s_ftLogPts = s_ftLogFrames = s_ftLogStrikes = s_ftLogUsed = s_ftLogStride = 0; } } }
+    memset(s_ftOk[rd], 0, sizeof s_ftOk[rd]);
     g_dev.imm->Unmap(s_bdStage[rd], 0); memset(s_bdIdx[rd], 0, sizeof s_bdIdx[rd]); memset(s_bdKey[rd], 0, sizeof s_bdKey[rd]);
     if (found) {   // (2/11 paso 10) voto por el indice mas frecuente de los ultimos 10 cuadros con candidato (antes 3 seguidos, que un botin intercalado reiniciaba)
         UINT* hist = s_ballHist; s_ballHist[s_ballHp] = found; s_ballHp = (s_ballHp + 1) % 10;
@@ -808,6 +879,12 @@ void PitchWearPresent() {
     std::vector<PlayerPrev> plNow; plNow.reserve(cnt);
     const float kAct = std::clamp(g_cfg.live[177][1], 0.f, 2.f);   // (2/11) frenadas y arranques desgastan mas (y arrastran la marca)
     const bool real = WearReal(); const float aK = WearActK(), simK = SimGate();   // (12/11) desgaste real
+    // (12/11 16:50) pisadas reales: cada pisada del botin al jugador mas cercano (una por actualizacion; la que sobra queda para la siguiente)
+    const bool feetLive = FootOn() && (t - s_ftPtsT) < 0.5 && (t - s_ftStrikeT) < 2.0;
+    int strikeOf[kMaxPlayers]; for (int i = 0; i < kMaxPlayers; i++) strikeOf[i] = -1;
+    if (feetLive) for (size_t s = 0; s < s_ftStrikes.size(); s++) { FootStrike& fs = s_ftStrikes[s]; if (fs.used) continue; float bd = 0.9f * 0.9f; int bp = -1;
+        for (int i = 0; i < cnt; i++) { const float dx = pos[i][0] - fs.x, dz = pos[i][1] - fs.z, d2 = dx * dx + dz * dz; if (d2 < bd) { bd = d2; bp = i; } }
+        if (bp >= 0 && strikeOf[bp] < 0) { strikeOf[bp] = (int)s; fs.used = 1; } }
     for (int i = 0; i < cnt; i++) {
         float best = 1e9f; int bi = -1; for (size_t k = 0; k < s_pl.size(); k++) { float dx = s_pl[k].x - pos[i][0], dz = s_pl[k].z - pos[i][1]; float d2 = dx * dx + dz * dz; if (d2 < best) { best = d2; bi = (int)k; } }
         float speed = best < 1e8f ? sqrtf(best) / dtP : 0.f;           // m/s
@@ -838,8 +915,12 @@ void PitchWearPresent() {
             // (08/11) zancada: una huella cada media zancada (0.75 m parado / caminando .. 1.1 m al sprint), alternando el pie
             pn.stride = pp.stride + sS * dtP; pn.foot = pp.foot;
             float half = std::clamp(0.55f + 0.08f * sS, 0.6f, 1.15f);
-            if (pn.stride >= half && sS > 0.3f) { pn.stride -= half; pn.foot ^= 1; float side = pn.foot ? 0.11f : -0.11f;
-                pn.printX = pos[i][0] + (-hz) * side; pn.printZ = pos[i][1] + hx * side; pn.printDue = 1;
+            if (feetLive) pn.stride = std::min(pn.stride, half);   // con pies a la vista la zancada no se acumula (al volver no salen varias juntas)
+            const bool footHit = feetLive && strikeOf[i] >= 0;   // (12/11 16:50) pisada real del botin; sin pies a la vista, la zancada estimada
+            if (footHit || (!feetLive && pn.stride >= half && sS > 0.3f)) {
+                if (footHit) { pn.printX = s_ftStrikes[strikeOf[i]].x; pn.printZ = s_ftStrikes[strikeOf[i]].z; pn.stride = 0.f; pn.foot ^= 1; s_ftLogUsed++; }
+                else { pn.stride -= half; pn.foot ^= 1; float side = pn.foot ? 0.11f : -0.11f; pn.printX = pos[i][0] + (-hz) * side; pn.printZ = pos[i][1] + hx * side; if (FootOn()) s_ftLogStride++; }
+                pn.printDue = 1;
                 // (11/11) recortes v2: lo que arranca ESTE pie al pisar. Impulso / sprint -> atras; frenada -> adelante (patina); giro -> hacia
                 // afuera de la curva. Trotar o caminar (sin aceleracion) no arranca nada
                 float inten = std::max(std::max(push * 0.9f, brake * 1.1f), cutK) + sprint;
@@ -868,6 +949,7 @@ void PitchWearPresent() {
         // (12/11) desgaste real: parado / caminando casi nada, corriendo poco; lo que gasta son las acciones (frenada, giro, arranque) y se
         // acumula donde se insiste; nada con el partido detenido (pausa, repeticion)
         if (real) k = (0.08f + 0.50f * std::min(speed / 7.f, 1.f)) * rate * dtP * 0.08f * (1.f + 5.f * pn.skid * aK) * simK;
+        else k *= simK;   // (12/11 16:50) sin desgaste real SimGate es 1, salvo con x441 (solo en la repeticion)
         brush[nb][0] = pos[i][0] / 140.f + 0.5f; brush[nb][1] = pos[i][1] / 79.f + 0.5f; brush[nb][2] = k; brush[nb][3] = rad; nb++;
         WearCpuAdd(brush[nb - 1][0], brush[nb - 1][1], k, rad);
         if (pn.skid > 0.2f && kAct > 0.01f && speed > 1.f && nb < kWearBrushes) {   // arrastre detras del jugador que frena
@@ -890,13 +972,13 @@ void PitchWearPresent() {
     s_prev.assign(&pos[0][0], &pos[0][0] + cnt * 2); s_pl.swap(plNow); s_plGen++;
     // (08/11) huecos del pasto arrancado (cola de EmitStrike) y huellas en el desgaste (marcas que quedan)
     // (12/11) desgaste real: la pisada fuerte deja su marca aunque las huellas (x389) esten apagadas, mas cuanto mas fuerte
-    if (real && simK > 0.5f) for (const PlayerPrev& pp : s_pl) { if (!pp.printDue || pp.printK < 0.12f) continue;
-        WearStamp(pp.printX, pp.printZ, 0.022f * aK * std::min(pp.printK, 1.5f) * rate, 0.15f); }
-    for (const WearBrush& wb : s_wearQueue) { if (nb >= kWearBrushes) break; brush[nb][0] = wb.u; brush[nb][1] = wb.v; brush[nb][2] = wb.k * (real ? 1.f : rate); brush[nb][3] = wb.rad; nb++; }
+    if (real && simK > 0.5f) for (const PlayerPrev& pp : s_pl) { if (!pp.printDue || (pp.printK < 0.12f && FootEx() <= 1.f)) continue;
+        WearStamp(pp.printX, pp.printZ, 0.022f * aK * std::clamp(pp.printK, FootEx() > 1.f ? 0.3f : 0.f, 1.5f) * rate * FootEx(), 0.15f * FootExR()); }
+    for (const WearBrush& wb : s_wearQueue) { if (nb >= kWearBrushes) break; brush[nb][0] = wb.u; brush[nb][1] = wb.v; brush[nb][2] = wb.k * (real ? 1.f : rate * simK); brush[nb][3] = wb.rad; nb++; }
     s_wearQueue.clear();
     if (FpOn() > 0.5f) for (const PlayerPrev& pp : s_pl) { if (nb >= kWearBrushes) break; if (!pp.printDue) continue;
-        float kf = 0.012f * FpForce() * rate * (1.f + 2.f * pp.skid * kAct) * (real ? simK : 1.f); brush[nb][0] = pp.printX / 140.f + 0.5f; brush[nb][1] = pp.printZ / 79.f + 0.5f; brush[nb][2] = kf; brush[nb][3] = 0.14f; nb++;
-        WearCpuAdd(brush[nb - 1][0], brush[nb - 1][1], kf, 0.14f); }
+        float kf = 0.012f * FpForce() * rate * (1.f + 2.f * pp.skid * kAct) * simK * FootEx(); brush[nb][0] = pp.printX / 140.f + 0.5f; brush[nb][1] = pp.printZ / 79.f + 0.5f; brush[nb][2] = kf; brush[nb][3] = 0.14f * FootExR(); nb++;
+        WearCpuAdd(brush[nb - 1][0], brush[nb - 1][1], kf, 0.14f * FootExR()); }
     if (!s_vs || !s_ps) return;
     // subir pinceles y dibujar
     if (nb <= 0) return;
