@@ -1,0 +1,89 @@
+// PES 2021 - desenfoque de movimiento: composicion final [hash 24943e559ce781b9] - PES21 (20/10, 138)
+// El juego calcula el desenfoque de movimiento a media resolucion (960x540, 3 pasadas tipo Jimenez 2014) y aca lo mezcla
+// sobre la imagen con un muestreo del texel MAS CERCANO: escalones de 2x2 px en todos los bordes en movimiento (jugadores
+// corriendo, lineas de la cancha en un paneo) y un borde duro donde empieza / termina el desenfoque.
+// Reemplazo: B-spline bicubica de 4 lecturas (sin escalones), y la mezcla tiene en cuenta tambien la velocidad de los
+// vecinos a resolucion completa (sin cortes duros). 138: x on | y fuerza (1 = la del juego) | z velocidad minima (px)
+cbuffer cPSObject : register(b5)
+{
+  struct
+  {
+    float4x4 m_viewWorld;
+    float4x4 m_world;
+    float4 m_useWeightCount;
+    float4 m_localParam[9];
+  } g_psObject : packoffset(c0);
+}
+
+cbuffer cPSSystem : register(b0)
+{
+  struct
+  {
+    float4 m_param;
+    float4 m_renderInfo;
+    float4 m_renderBuffer;
+    float4 m_dominantLightDir;
+    float4 m_timeParam;
+  } g_psSystem : packoffset(c0);
+}
+
+SamplerState g_samplerPoint_Wrap_s : register(s8);
+SamplerState g_samplerLinear_Wrap_s : register(s10);
+Texture2D<float4> g_motionBlurBuffer : register(t0);
+Texture2D<float4> g_velocityBuffer : register(t1);
+Texture1D<float4> IniParams : register(t120);
+
+float PESCoverage(float w) {
+  uint q = (uint)((w + 0.05) * 100.0);
+  q = q > 50 ? q * 2 - 50 : q;
+  return min((float)q * 0.02, 1.0);
+}
+
+void main(
+  float2 v0 : TEXCOORD0,
+  float4 v1 : SV_Position0,
+  out float4 o0 : SV_Target0)
+{
+  float4 P = IniParams.Load(int2(138, 0));
+  float2 hs = g_psObject.m_localParam[0].xx;   // cb5[9].x: escala a media resolucion
+  float2 ts = g_psObject.m_localParam[0].zw;   // cb5[9].zw: tamano del texel de media resolucion
+  if (P.x < 0.5) {
+    // original del juego
+    float2 uvN = (floor(v1.xy * hs) + 0.5) * ts;
+    float4 m = g_motionBlurBuffer.Sample(g_samplerLinear_Wrap_s, uvN);
+    o0.xyz = m.xyz;
+    float2 vel = g_velocityBuffer.Sample(g_samplerPoint_Wrap_s, v1.xy * g_psSystem.m_renderBuffer.zw).xy;
+    o0.w = saturate((length(vel) - 3.0) * 0.1 + 0.25) * PESCoverage(m.w);
+    return;
+  }
+  // B-spline bicubica (4 lecturas bilineales) sobre la media resolucion
+  float2 st = v1.xy * hs - 0.5;
+  float2 i = floor(st), f = st - i;
+  float2 f2 = f * f, f3 = f2 * f;
+  float2 w0 = (-f3 + 3.0 * f2 - 3.0 * f + 1.0) / 6.0;
+  float2 w1 = (3.0 * f3 - 6.0 * f2 + 4.0) / 6.0;
+  float2 w2 = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) / 6.0;
+  float2 w3 = f3 / 6.0;
+  float2 g0 = w0 + w1, g1 = w2 + w3;
+  float2 h0 = (i - 1.0 + w1 / max(g0, 1e-5) + 0.5) * ts;
+  float2 h1 = (i + 1.0 + w3 / max(g1, 1e-5) + 0.5) * ts;
+  float2 lo = 0.5 * ts, hi = 1.0 - 0.5 * ts;   // el sampler es Wrap: no leer del otro lado de la pantalla
+  float4 a = g_motionBlurBuffer.SampleLevel(g_samplerLinear_Wrap_s, clamp(float2(h0.x, h0.y), lo, hi), 0);
+  float4 b = g_motionBlurBuffer.SampleLevel(g_samplerLinear_Wrap_s, clamp(float2(h1.x, h0.y), lo, hi), 0);
+  float4 c = g_motionBlurBuffer.SampleLevel(g_samplerLinear_Wrap_s, clamp(float2(h0.x, h1.y), lo, hi), 0);
+  float4 d = g_motionBlurBuffer.SampleLevel(g_samplerLinear_Wrap_s, clamp(float2(h1.x, h1.y), lo, hi), 0);
+  float4 m = g0.y * (g0.x * a + g1.x * b) + g1.y * (g0.x * c + g1.x * d);
+  o0.xyz = m.xyz;
+  // velocidad a resolucion completa: la propia y la mayor de 4 vecinos a 2 px (el borde del desenfoque no corta en seco)
+  float2 px = g_psSystem.m_renderBuffer.zw, uv = v1.xy * px;
+  float v = length(g_velocityBuffer.SampleLevel(g_samplerPoint_Wrap_s, uv, 0).xy);
+  float vn = 0.0;
+  vn = max(vn, length(g_velocityBuffer.SampleLevel(g_samplerPoint_Wrap_s, saturate(uv + float2( 2, 0) * px), 0).xy));
+  vn = max(vn, length(g_velocityBuffer.SampleLevel(g_samplerPoint_Wrap_s, saturate(uv + float2(-2, 0) * px), 0).xy));
+  vn = max(vn, length(g_velocityBuffer.SampleLevel(g_samplerPoint_Wrap_s, saturate(uv + float2(0,  2) * px), 0).xy));
+  vn = max(vn, length(g_velocityBuffer.SampleLevel(g_samplerPoint_Wrap_s, saturate(uv + float2(0, -2) * px), 0).xy));
+  v = max(v, vn * 0.35);
+  float vmin = P.z > 0.0 ? P.z : 3.0;
+  float k = saturate((v - vmin) * 0.1 + 0.25) * PESCoverage(m.w);
+  o0.w = saturate(k * clamp(P.y > 0.0 ? P.y : 1.0, 0.0, 1.5));
+}
