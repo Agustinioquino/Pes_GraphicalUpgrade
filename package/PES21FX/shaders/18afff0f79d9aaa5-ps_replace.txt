@@ -449,6 +449,18 @@ void main(
         if (pesNat) c = lerp(c, c * lerp(float3(1.26, 1.36, 0.86), float3(1.30, 1.42, 0.80), saturate(0.5 * kTpA)), saturate(tx * (0.95 + 0.35 * kTpA)));
         else c = lerp(c, c * float3(1.22, 1.30, 0.80) + float3(0.04, 0.06, 0.0), saturate(tx * 0.8));
         pesTxGb = saturate(tx);
+        // (12/11, Agustin con 2 fotos de pasto a contraluz: "que se pinten las puntas algunas dependiendo de donde esta el sol como si fuera a
+        // contra luz, sin mucho cambio") y437 PUNTAS ENCENDIDAS AL AZAR: ~1 de cada 3 hojas (al azar por hoja, fijo) lleva la punta encendida por
+        // la luz que la atraviesa: fuerte a contraluz, apenas de frente, nada sin sol ni en la sombra (lo pone la pasada del sol). Es el salpicado
+        // de puntas lima / amarillas de las fotos, no todo el pasto. Tramo en mm desde la punta (igual con hojas cortas o finas). 0 = como antes
+        float kRt = pesNat ? clamp(IniParams.Load(int2(437, 0)).y, 0.0, 2.0) : 0.0;
+        if (kRt > 0.001) {
+          float hR = frac(pesHvR * 23.17 + 0.61);
+          float pick = lerp(step(0.68, hR) * (0.6 + 0.4 * frac(hR * 7.3)), 0.26, pesTipAA);   // hoja de menos de un pixel: el promedio
+          float rt = pick * PESTipS(0.55, 1.0, relT, pesTipAA) * sunK * lerp(0.15, 1.0, back) * thin * kRt * pesCfT * (1.0 - pesPaintF) * (1.0 - saturate(v8.x));
+          c = lerp(c, c * float3(1.28, 1.38, 0.78), saturate(0.55 * rt));
+          pesTxGb = max(pesTxGb, saturate(0.6 * rt));
+        }
       }
       tz *= lerp(0.3, 1.0, saturate(IniParams.Load(int2(414,0)).w));   // (08/11 ab) puntas doradas fuertes solo con sol fuerte y despejado
       tz = saturate(tz * (1.0 + 0.30 * kShortP) * (1.0 + 0.40 * kTpA));   // (11/11 n) natural bajo: punta algo mas encendida; (12/11) z436
@@ -485,6 +497,13 @@ void main(
     // punta (los reflejos blancos de la foto); la seca y la pintada no
     if (pesNat) { float wax = pesCfT * PESTipS(0.15, 0.7, relT, pesTipAA) * (1.0 - saturate(v8.x)) * (1.0 - pesPaintF);
       o2.y = saturate(o2.y * (1.0 + 0.45 * wax)); o2.x *= 1.0 - 0.18 * wax; }
+    // (12/11, Agustin con la captura 11.20.21: "le falta el brillo en las puntas no?", "y ese estilo de humedad") w438 PUNTA HUMEDA: en el pasto
+    // largo (6-9.6 cm) el tramo de la punta se veia mojado: pelicula de agua brillante y lisa en la punta. Con las hojas angostas de 28-33 mm
+    // casi no quedaba. Brillo y lisura en el tramo de la punta (medido en mm desde la punta: igual con hojas cortas o finas) y mas hojas con
+    // rocio en la punta (x329: 1 de cada 8 -> 1 de cada 4 con w438 = 1). 0 = como antes. No en las secas ni en las pintadas
+    float pesWetT = pesNat ? clamp(IniParams.Load(int2(438, 0)).w, 0.0, 2.0) : 0.0;
+    if (pesWetT > 0.001) { float wt = pesWetT * pesCfT * PESTipS(0.25, 0.9, relT, pesTipAA) * (1.0 - saturate(v8.x)) * (1.0 - pesPaintF);
+      o2.y = saturate(o2.y + 0.22 * wt); o2.x = lerp(o2.x, 0.16, saturate(0.55 * wt)); }
     { float3 cg = o0.xyz; float sp = o2.y, rg = o2.x; PESGroundLook(cg, sp, rg, PESGround()); o0.xyz = cg; o2.y = sp; o2.x = rg; }   // suelo humedo / seco
     // (27/10 n) tanda 11, x329 "transpiracion": en la foto de Agustin algunas hojas sueltas tienen un brillo humedo puntual (rocio / riego) en la
     // punta, chispas con el sol de frente. Una de cada ~8 hojas del mod (al azar por hoja, v8.z) lleva en la punta mas brillo y menos rugosidad;
@@ -498,7 +517,7 @@ void main(
       if (P415.z > 0.5 && P415.x >= 0.0 && P415.x < 10.0) dewK *= 1.6; }
     float4 P329 = IniParams.Load(int2(329,0));
     if (pxA > 0.0 && P329.x > 0.001 && !pesFar) {   // (27/10 p) tambien en las parcelas del juego de muy cerca
-      float dew = lerp(step(saturate(1.0 - 0.12 * dewK), frac(pesHvR * 11.7 + 0.29)), saturate(0.12 * dewK), pesTipAA) * PESTipS(0.45, 1.0, relT, pesTipAA) * clamp(P329.x, 0.0, 2.0) * pesCf * (1.0 - pesPaintF) * sparkT * min(dewK, 1.5);   // (08/11 ac) mas hojas con gota cuando esta humedo   // (2/11) solo hojas que miden
+      float dew = lerp(step(saturate(1.0 - 0.12 * dewK * (1.0 + pesWetT)), frac(pesHvR * 11.7 + 0.29)), saturate(0.12 * dewK * (1.0 + pesWetT)), pesTipAA) * PESTipS(0.45, 1.0, relT, pesTipAA) * clamp(P329.x, 0.0, 2.0) * pesCf * (1.0 - pesPaintF) * sparkT * min(dewK, 1.5);   // (08/11 ac) mas hojas con gota cuando esta humedo   // (2/11) solo hojas que miden
       o2.y = saturate(o2.y + 0.45 * dew);
       o2.x = lerp(o2.x, lerp(0.12, 0.26, pesTipAA), saturate(dew));   // (12/11) x436: la gota que ya no mide un pixel es un brillo humedo, no un punto
     }
@@ -567,6 +586,10 @@ void main(
       float mvP = length(o3.xy);
       float sig2 = 0.15915494 * kSt * (1.0 + smoothstep(0.75, 4.0, mvP));
       float kern = min(2.0 * sig2 * (dot(dNx, dNx) + dot(dNy, dNy)), 0.18 * saturate(kSt));
+      // (12/11, "le falta el brillo en las puntas") hoja 3D que ya mide 2-4 px de ancho con la camara quieta: el cambio de la normal de un borde
+      // al otro (la V de la hoja angosta) es forma real de la hoja, no un serrucho que el TAA vaya a promediar: el filtro le apagaba el brillo
+      // de la punta y del rocio. Ahi baja al 20 % (en movimiento sigue entero)
+      if (pesBladeM) kern *= 1.0 - 0.8 * smoothstep(1.5, 4.0, 1.0 / max(pesFwU, 1e-4)) * (1.0 - smoothstep(0.75, 4.0, mvP));
       float rgA = saturate(o2.x), a2 = rgA * rgA * rgA * rgA;
       o2.x = sqrt(sqrt(saturate(a2 + kern)));
     }
