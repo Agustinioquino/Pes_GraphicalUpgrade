@@ -210,17 +210,24 @@ void main(
   // las sombras siguen siendo las del sol real del juego (el shadow map lo arma el motor).
   float4 pesLDir = g_psLight.m_lightDir0; float4 pesLCol = g_psLight.m_lightColor0; bool pesFreeSun = false; float4 pesP258 = IniParams.Load(int2(258,0)); bool pesShMis = pesP258.x > 0.5 || pesP258.y > 0.5;   // (04/11) y258 = 1: tampoco medir grosor con el shadow map del juego (sol_parche 0: manchas naranjas duras en la piel)   // (02/11) shadow map sin alinear con la luz (sol_parche 1 y sombra_parche 0): no medir grosor con el
   { float4 SF = IniParams.Load(int2(101,0));
-    if (SF.x > 0.5) { pesFreeSun = true;
-      float az = radians(SF.y), el = radians(SF.z);
-      float3 w = normalize(float3(cos(el) * sin(az), sin(el), cos(el) * cos(az)));   // mundo: Y arriba
-      float3 v = float3(dot(float3(g_psScene.m_view._m00, g_psScene.m_view._m01, g_psScene.m_view._m02), w),
-                        dot(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12), w),
-                        dot(float3(g_psScene.m_view._m20, g_psScene.m_view._m21, g_psScene.m_view._m22), w));
-      // el juego guarda la direccion HACIA el sol o desde el sol? se respeta el signo original (mismo sentido que m_lightDir0.y)
-      float sgn = (g_psLight.m_lightDir0.y < 0) ? -1.0 : 1.0;
-      pesLDir.xyz = normalize(v) * sgn;
+    if (SF.x > 0.5) {
+      // (12/11 hefeaf) w452 (la escribe la DLL): 2 = el sol libre ya esta en el motor (x450: las sombras lo siguen) -> no se gira
+      // nada aca y las sombras reales quedan encendidas; 1 = direccion armada por la DLL (azimut desde el sol del partido, giro)
+      float4 SD = IniParams.Load(int2(452,0));
+      if (SD.w < 1.5) { pesFreeSun = true;
+        float3 w;
+        if (SD.w > 0.5 && dot(SD.xyz, SD.xyz) > 0.25) w = normalize(SD.xyz);
+        else { float az = radians(SF.y), el = radians(SF.z); w = normalize(float3(cos(el) * sin(az), sin(el), cos(el) * cos(az))); }   // mundo: Y arriba
+        // (26/10) mundo -> vista: con las columnas (las filas _m0x.._m2x pasan de vista a mundo). (12/11) a748 / b8a2 / de64 / d514
+        // todavia usaban las filas: el sol libre giraba con la camara en esas pasadas; ahora todas iguales
+        float3 v = float3(dot(float3(g_psScene.m_view._m00, g_psScene.m_view._m10, g_psScene.m_view._m20), w),
+                          dot(float3(g_psScene.m_view._m01, g_psScene.m_view._m11, g_psScene.m_view._m21), w),
+                          dot(float3(g_psScene.m_view._m02, g_psScene.m_view._m12, g_psScene.m_view._m22), w));
+        float sgn = (g_psLight.m_lightDir0.y < 0) ? -1.0 : 1.0;   // se respeta el signo original
+        pesLDir.xyz = normalize(v) * sgn; }
       float warm = saturate(IniParams.Load(int2(102,0)).x);
       float3 tint = lerp(float3(1, 1, 1), float3(1.0, 0.62, 0.32), warm);
+      float4 ST = IniParams.Load(int2(453,0)); if (ST.w > 0.5) tint *= ST.xyz;   // (12/11) temperatura del sol (z450, K)
       pesLCol.xyz = g_psLight.m_lightColor0.xyz * max(SF.w, 0.0) * tint;
     } }
   float4 r0,r1,r2,r3,r4,r5,r6,r7,r8,r9,r10,r11,r12,r13,r14;

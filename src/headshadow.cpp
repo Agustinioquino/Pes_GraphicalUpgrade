@@ -76,7 +76,7 @@ void HeadShadowPresent() {
     float* I = g_cfg.live[kHsRowInfo];
     s_count = 0; I[0] = 0.0f;
     s_body = false; g_cfg.live[kHsRowBody][3] = 0.0f;
-    if (U[0] < 0.5f || g_cfg.live[101][0] > 0.5f) return;   // apagado, o "sol libre" (la luz no es la del LightCB)
+    if (U[0] < 0.5f || (g_cfg.live[101][0] > 0.5f && g_cfg.live[452][3] < 1.5f)) return;   // apagado, o "sol libre" solo en el shader (la luz no es la del LightCB); con w452 = 2 el motor ya tiene el sol libre
     if (!Ensure() || !g_dev.imm) return;
     std::vector<float> L, S; int lf = -1, sf = -1;
     if (!NamedCBRead("LightCB", L, &lf) || L.size() < 4 || !NamedCBRead("SceneCB", S, &sf) || S.size() < 88) return;
