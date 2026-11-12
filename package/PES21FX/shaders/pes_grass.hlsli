@@ -264,7 +264,9 @@ void PESFarTurf(inout float3 c, inout float spec, float3 V, float2 wxz, float px
 void PESGrassColorGrade(inout float3 c)
 {
   float4 C = IniParams.Load(int2(112, 0));
-  if (abs(C.x) < 0.01 && abs(C.y) < 0.001 && abs(C.z) < 0.001 && C.w < 0.001) return;
+  float4 C456 = IniParams.Load(int2(456, 0));   // (12/11 22:56) color del pasto elegible (ver el final)
+  const bool pre456 = C456.x > 0.5 && C456.y > 0.001;
+  if (abs(C.x) < 0.01 && abs(C.y) < 0.001 && abs(C.z) < 0.001 && C.w < 0.001 && !pre456) return;
   const float3 LW = float3(0.2126, 0.7152, 0.0722);
   float l = dot(c, LW);
   if (abs(C.x) > 0.01) {
@@ -304,6 +306,37 @@ void PESGrassColorGrade(inout float3 c)
       rt = lerp(float3(1.0, 1.0, 1.0), rt, kS);
       float3 cn = c * rt; c = max(cn * (dot(c, LW) / max(dot(cn, LW), 1e-5)), 0.0);
     } else { t *= l / dot(t, LW); c = max(lerp(c, t, clamp(C.w, 0.0, 1.0) * 0.85), 0.0); }
+  }
+  // (12/11 22:56, Agustin: "con respecto al verde, podrias hacer que se pueda cambiar por distintos colores" / "pero manteniendo lo
+  // demas") x456 COLOR DEL PASTO: 0 como esta, 1 natural al sol, 2 ingles (azulado profundo), 3 esmeralda, 4 oliva, 5 lima, 6 verano
+  // (amarillento), 7 personalizado (z456 tono en grados: 90 amarillento, 120 verde puro, 150 azulado; w456 saturacion 0..1.5).
+  // y456 cuanto (0..1). Cambia SOLO el tono del verde: el corrimiento que lleva el verde medio del pasto (r/g 0.40, b/g 0.25) al
+  // elegido se aplica a cada color con su misma claridad (las hojas, el dibujo, las puntas y la variedad se conservan) y solo en lo
+  // que es verde: las hojas secas / paja, la tierra del desgaste y el gris / blanco de las lineas quedan como estan. Va despues de
+  // todo lo de arriba (si se usan juntos, el elegido manda en el verde)
+  if (pre456) {
+    int pI = (int)round(clamp(C456.x, 0.0, 7.0));
+    float3 tP = gRef;
+    if (pI == 1) tP = float3(0.62, 1.0, 0.34);
+    else if (pI == 2) tP = float3(0.30, 1.0, 0.34);
+    else if (pI == 3) tP = float3(0.17, 1.0, 0.44);
+    else if (pI == 4) tP = float3(0.74, 1.0, 0.20);
+    else if (pI == 5) tP = float3(0.56, 1.0, 0.07);
+    else if (pI == 6) tP = float3(0.86, 1.0, 0.30);
+    else if (pI == 7) {
+      float hD = C456.z > 1.0 ? clamp(C456.z, 60.0, 180.0) : 112.0, sD = C456.w > 0.001 ? clamp(C456.w, 0.05, 1.5) : 0.75;
+      float3 hc = saturate(abs(frac(hD / 360.0 + float3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0);   // tono puro (rojo en 0)
+      hc = max(lerp(float3(1.0, 1.0, 1.0), hc, min(sD, 1.0)), 0.0); hc /= max(hc.g, 1e-3);
+      if (sD > 1.0) hc = max(lerp(float3(1.0, 1.0, 1.0), hc, sD), 0.02);   // mas de 1: aun mas saturado
+      tP = max(hc, 0.02);
+    }
+    float lP = dot(c, LW);
+    float rgP = c.r / max(c.g, 1e-4), bgP = c.b / max(c.g, 1e-4);
+    float mxP = max(c.r, max(c.g, c.b)), mnP = min(c.r, min(c.g, c.b));
+    float kSP = saturate(((mxP - mnP) / max(mxP, 1e-3) - 0.12) * 5.0);
+    float kG = kSP * smoothstep(1.02, 0.80, rgP) * smoothstep(1.10, 0.85, bgP) * step(mnP + 1e-4, c.g);   // verde (no paja, tierra ni gris)
+    float3 rtP = lerp(float3(1.0, 1.0, 1.0), tP / gRef, saturate(C456.y) * kG);
+    float3 cP = c * rtP; c = max(cP * (lP / max(dot(cP, LW), 1e-5)), 0.0);
   }
 }
 #endif
