@@ -51,14 +51,14 @@ float4 PesBootH(float2 uv, float dCov, float gCov) {
     float on = step(frac(h.y * 17.1 + h.x * 2.9), dCov * 1.15);
     hD = max(hD, sqrt(saturate(1.0 - dot(o, o) / 0.09)) * 0.45 * on);
   }
-  float2 g = uv * 30.0 + 11.3, ig = floor(g), fg = frac(g);   // hojitas de pasto: una por celda, girada, 0.5..0.9 de largo
+  float2 g = uv * 20.0 + 11.3, ig = floor(g), fg = frac(g);   // hojitas de pasto: una por celda, girada, 0.5..0.9 de largo
   [unroll] for (int j3 = -1; j3 <= 1; j3++) [unroll] for (int i3 = -1; i3 <= 1; i3++) {
     float2 c = ig + float2(i3, j3), h = PesH2(c + 31.0);
     float on = step(frac(h.x * 9.1 + h.y * 21.7), gCov);
-    float a = h.x * 6.2832, L = 0.25 + 0.2 * h.y; float2 dir = float2(cos(a), sin(a));
+    float a = h.x * 6.2832, L = 0.32 + 0.16 * h.y;   // (12/11) hojitas mas grandes y anchas: se tienen que ver float2 dir = float2(cos(a), sin(a));
     float2 o = fg - (float2(i3, j3) + 0.5 + 0.3 * (h - 0.5));
     float t = clamp(dot(o, dir), -L, L); float dd = length(o - dir * t);
-    float wdt = 0.035 + 0.03 * h.y * (1.0 - abs(t) / L);
+    float wdt = (0.05 + 0.04 * h.y) * (1.0 - 0.7 * abs(t) / L);
     hG = max(hG, saturate(1.0 - dd / wdt) * on);
   }
   return float4(hD, hG, rnd, rimD);
@@ -128,9 +128,16 @@ void main(
   float4 bH = 0.0; float bootCov = 0.0, bootWet = 0.0, bootRel = 0.0; float2 bootG = 0.0;
   if (pesBoot && (pBall.y + pBall.z) > 0.002) {
     bootWet = saturate(pBall.w);
-    float order = saturate(pesStn.w);
+    // (12/11, Agustin con capturas: "no todas las botas tienen esos detalles y se llenan todas las partes del botin") ZONA: la mascara del
+    // juego no alcanza (en muchos botines es pareja). Se suma la orientacion de la cara contra el "arriba" del mundo en espacio de vista
+    // (fila 435, la escribe la DLL desde m_view): suela y tapones (miran abajo) primero, costados despues, capellada y lengueta casi nunca
+    float3 upV = IniParams.Load(int2(435, 0)).xyz; float upL = length(upV);
+    float face = upL > 0.5 ? dot(normalize(v5), upV / upL) : 0.0;          // -1 suela .. 0 costado .. 1 capellada
+    float reg = saturate(0.5 - face * 0.75);                                // suela 1, costado 0.5, arriba 0
+    reg = reg * reg * (3.0 - 2.0 * reg);
+    float order = saturate(reg * (0.65 + 0.35 * saturate(pesStn.w)) * 1.15);
     float dCov = saturate(saturate(pBall.y) * 1.3 - (1.0 - order) * 0.85 + 0.05);
-    float gCov = saturate(saturate(pBall.z) * (BT.z > 0.001 ? saturate(BT.z) * 2.0 : 1.0) * 0.9 - (1.0 - order) * 0.7 + 0.05);
+    float gCov = saturate(saturate(pBall.z) * (BT.z > 0.001 ? saturate(BT.z) * 2.0 : 1.0) * 1.1 - (1.0 - order) * 0.6 + 0.08);
     bootRel = BT.y > 0.001 ? saturate(BT.y * 0.5) * 2.0 : 1.0;
     {   // paralaje (1 paso, con limite): el marco tangente (v3 / v4 / v5) llega en espacio de vista (m_viewWorld en el VS de personajes), la
         // camara mira hacia +z -> hacia la camara = (0, 0, -1). Los grumos altos se corren hacia el ojo y tapan lo de atras: se ven con volumen
@@ -146,12 +153,13 @@ void main(
       bootG = abs(det) > 1e-14 ? float2(dh.x * uy.y - dh.y * ux.y, dh.y * ux.x - dh.x * uy.x) / det : 0.0;
     }
     float lum = dot(o0.xyz, float3(0.3, 0.59, 0.11));
-    float3 dirtC = lerp(float3(0.19, 0.13, 0.08), float3(0.33, 0.25, 0.16), bH.z) * lerp(1.0, 0.62, bootWet);   // mojada: barro oscuro
-    float film = saturate(dCov * 1.4 - 0.15) * saturate(order * 1.5) * 0.45;                                     // capa fina entre grumos
-    float dA = saturate(max(film, bH.x * 2.2));
-    o0.xyz = lerp(o0.xyz, dirtC * (0.7 + 0.45 * bH.x) * (0.85 + 0.3 * lum), dA);
-    o0.xyz *= 1.0 - 0.35 * bH.w * saturate(bH.x * 4.0 + 0.3);                                                   // borde del grumo: sombra
-    float3 grassC = lerp(float3(0.10, 0.24, 0.05), float3(0.30, 0.31, 0.11), frac(bH.z * 5.3));                 // fresca .. seca
+    // (12/11) tierra MARRON (antes salia casi negra) y con borde suave; la capa fina (polvo / barro corrido) sigue la zona
+    float3 dirtC = lerp(float3(0.34, 0.24, 0.15), float3(0.50, 0.38, 0.25), bH.z) * lerp(1.0, 0.6, bootWet);    // mojada: barro oscuro
+    float film = saturate(dCov * 1.3 - 0.2) * order * 0.55;                                                     // capa fina entre grumos
+    float dA = saturate(max(film, smoothstep(0.0, 0.35, bH.x)));
+    o0.xyz = lerp(o0.xyz, dirtC * (0.8 + 0.35 * bH.x), dA);
+    o0.xyz *= 1.0 - 0.18 * bH.w * saturate(bH.x * 4.0 + 0.3);                                                   // borde del grumo: sombra suave
+    float3 grassC = lerp(float3(0.16, 0.36, 0.07), float3(0.38, 0.40, 0.14), frac(bH.z * 5.3));                 // fresca .. seca
     o0.xyz = lerp(o0.xyz, grassC * lerp(1.0, 0.8, bootWet), bH.y);
     bootCov = saturate(dA + bH.y);
   }

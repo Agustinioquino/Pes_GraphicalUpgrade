@@ -117,7 +117,7 @@ cbuffer PESHair : register(b11)
   float4 pesHairRoot;   // color raiz rgb, w = 1 si esta definido
   float4 pesHairTip;    // color punta rgb, w = 1 si esta definido
   float4 pesHairBrow;   // ceja: grosor, densidad, elevacion, largo (multiplicadores)
-  float4 pesHairMisc;   // x = 1 enlazado, y = 1 mapa de pelo propio del usuario
+  float4 pesHairMisc;   // x = 1 enlazado, y = 1 mapa de pelo propio del usuario, w = cuanto falta de las hebras (12/11, 0 = completas)
 }
 // (08/11, Agustin: "con esto puedes mejorar las arrugas tambien") pesos de arrugas del JUEGO (b4 m_materials[0].y / [3] / [4]) suavizados por la
 // DLL (expr.cpp WrinklePresent: lee el b4 de esta piel cada cuadro y lo sigue con el mismo resorte que los huesos, fila 397.x); sin DLL todo es 0.
@@ -726,7 +726,7 @@ void main(
         float pxM = max(IniParams.Load(int2(75, 0)).y, 0.5) / 934.0;          // pixel en el borde de la distancia de las hebras (pes_brow_gs)
         float lodCut = log2(max(pxM / texelM, 1.0)) - 0.5 + PE.y;
         float nearB = saturate(lodCut - r1.w + 0.5);                          // 1 = de cerca (hay hebras), 0 = lejos
-        float kB = saturate(bm.a * 1.4) * saturate(PE.x) * nearB;
+        float kB = saturate(bm.a * 1.4) * saturate(PE.x) * nearB * (pesHairMisc.x > 0.5 ? saturate(1.0 - pesHairMisc.w) : 1.0);   // (12/11) w = cuanto falta de las hebras (aparecen de a poco): la pintura vuelve igual
         if (kB > 0.001) {
           float3 skB = 0; float slB = -1;
           [unroll] for (int qB = 0; qB < 8; qB++) { float aB2 = qB * 0.785398;
