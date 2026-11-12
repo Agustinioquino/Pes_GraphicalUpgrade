@@ -2168,17 +2168,11 @@ static DWORD WINAPI PresentPlanB(void*) {
             // cambio de la vtable (v3: el cloth-mod vuelve a poner su puntero, Sider y cloth-mod quedan llamandose entre si,
             // pila desbordada en sider.dll). Se engancha el Present VERDADERO de dxgi.dll, el ultimo de la cadena: su direccion
             // se lee de la vtable de dxgi.dll en el ARCHIVO (la de memoria la pisan los otros mods). Nadie mira ese codigo.
+            // (12/11 v5) el plan B ya NO engancha nada: con el cloth-mod y Sider ya enganchados, cambiar la vtable (v3) o
+            // meterse en el Present (v2, v4) cerro el juego (pila desbordada). Solo deja anotado que paso para el log.
             void* realPres = DxgiSlotFromDisk(&vt[8]);
-            void* realResz = DxgiSlotFromDisk(&vt[13]);
-            Log("Present: plan B: en la vtable Present = %s, ResizeBuffers = %s; en dxgi.dll del disco Present = %s, ResizeBuffers = %s",
-                ModOff(pres).c_str(), ModOff(resz).c_str(), realPres ? ModOff(realPres).c_str() : "?", realResz ? ModOff(realResz).c_str() : "?");
-            if (realPres) {
-                s_planBMode = true;
-                const bool ok = Hook(realPres, (void*)&hk_Present, (void**)&o_Present, "dxgi Present (plan B)");
-                if (ok && realResz) Hook(realResz, (void*)&hk_Resize, (void**)&o_Resize, "dxgi ResizeBuffers (plan B)");
-                if (ok) { s_scHooked = true; Log("Present enganchado (plan B, dxgi)"); }
-                else s_planBMode = false;
-            } else Log("Present: plan B: no se encontro el Present de dxgi.dll en el disco: sin menu");
+            Log("Present: plan B (solo aviso, sin enganchar): en la vtable Present = %s, ResizeBuffers = %s; Present de dxgi.dll = %s. Sin menu",
+                ModOff(pres).c_str(), ModOff(resz).c_str(), realPres ? ModOff(realPres).c_str() : "?");
         } else Log("Present: plan B: la cadena del juego se engancho mientras tanto, no se hace nada");
     } else Log("Present: plan B: no se pudo crear la cadena de prueba (%08X)", (unsigned)hr);
     if (sc) sc->Release();
@@ -2261,6 +2255,10 @@ bool InstallHooks() {
 }
 
 // llamado por nuestro D3D11CreateDevice (somos el d3d11.dll de la carpeta del juego)
+void OnDeviceAndSwapChainCreated(ID3D11Device* d, IDXGISwapChain* sc) {
+    Log("D3D11CreateDeviceAndSwapChain: el juego creo dispositivo y cadena juntos");
+    OnSwapChain(d, sc);
+}
 void OnDeviceCreated(ID3D11Device* d) {
     if (!d) return;
     HookDevice(d);

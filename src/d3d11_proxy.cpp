@@ -41,5 +41,8 @@ extern "C" HRESULT WINAPI D3D11CreateDeviceAndSwapChain(IDXGIAdapter* a, D3D_DRI
     fx_EnsureInit();
     HRESULT hr = s_realCDSC(a, t, s, f, fl, n, v, sd, sc, d, ofl, c);
     if (SUCCEEDED(hr) && d && *d) fx::OnDeviceCreated(*d);
+    // (12/11) PES 2021 1.00 / CPY crea dispositivo y cadena juntos: la cadena no pasa por los CreateSwapChain enganchados
+    // (los ganchos de la fabrica se ponen al crear el dispositivo, despues). Se engancha aca, antes que Sider y cloth-mod
+    if (SUCCEEDED(hr) && d && *d && sc && *sc) fx::OnDeviceAndSwapChainCreated(*d, *sc);
     return hr;
 }
